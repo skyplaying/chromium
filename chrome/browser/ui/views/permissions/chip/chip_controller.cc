@@ -11,16 +11,21 @@
 #include "base/check.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/time/time.h"
+#include "chrome/browser/ui/content_settings/content_setting_image_view_delegate.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
+#include "chrome/browser/ui/omnibox/omnibox_controller.h"
+#include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
 #include "chrome/browser/ui/page_info/page_info_dialog.h"
 #include "chrome/browser/ui/views/content_setting_bubble_contents.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_view_views.h"
 #include "chrome/browser/ui/views/page_info/page_info_bubble_specification.h"
 #include "chrome/browser/ui/views/page_info/page_info_bubble_view.h"
+#include "chrome/browser/ui/views/permissions/chip/permission_chip_constants.h"
 #include "chrome/browser/ui/views/permissions/chip/permission_dashboard_controller.h"
 #include "chrome/browser/ui/views/permissions/chip/permission_dashboard_view.h"
 #include "chrome/browser/ui/views/permissions/chip/permission_prompt_chip_model.h"
@@ -38,59 +43,32 @@
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/visibility.h"
 #include "ui/base/ui_base_features.h"
+#include "ui/gfx/animation/animation.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/button_controller.h"
 #include "ui/views/widget/widget.h"
 
-namespace {
-
-constexpr auto kConfirmationDisplayDuration = base::Seconds(4);
-
-}  // namespace
-
-class BubbleButtonController : public views::ButtonController {
- public:
-  BubbleButtonController(
-      views::Button* button,
-      BubbleOwnerDelegate* bubble_owner,
-      std::unique_ptr<views::ButtonControllerDelegate> delegate)
-      : views::ButtonController(button, std::move(delegate)),
-        bubble_owner_(bubble_owner) {}
-
-  // TODO(crbug.com/40205454): Add keyboard support.
-  void OnMouseEntered(const ui::MouseEvent& event) override {
-    if (bubble_owner_->IsBubbleShowing() || bubble_owner_->IsAnimating()) {
-      return;
-    }
-    bubble_owner_->RestartTimersOnMouseHover();
-  }
-
- private:
-  raw_ptr<BubbleOwnerDelegate, DanglingUntriaged> bubble_owner_ = nullptr;
-};
-
 ChipController::ChipController(
     LocationBar* location_bar,
     ContentSettingImageViewDelegate* content_settings_image_delegate,
-    PermissionChipView* chip_view,
-    PermissionDashboardView* permission_dashboard_view,
+    PermissionChipInterface* chip,
+    PermissionDashboardInterface* permission_dashboard,
     PermissionDashboardController* permission_dashboard_controller)
     : location_bar_(location_bar),
       content_settings_image_delegate_(content_settings_image_delegate),
-      chip_(chip_view),
-      permission_dashboard_view_(permission_dashboard_view),
+      chip_(chip),
+      permission_dashboard_(permission_dashboard),
       permission_dashboard_controller_(permission_dashboard_controller) {
   chip_->SetVisible(false);
 }
 
 ChipController::~ChipController() {
-  views::Widget* current = GetBubbleWidget();
-  if (current) {
-    current->RemoveObserver(this);
-    current->Close();
+  if (chip_) {
+    chip_->SetBubbleOwner(nullptr);
   }
+  ResetPermissionPromptChip();
   if (active_chip_permission_request_manager_.has_value()) {
     active_chip_permission_request_manager_.value()->RemoveObserver(this);
   }
@@ -138,8 +116,7 @@ void ChipController::OnPromptRemoved() {
 void ChipController::OnRequestDecided(
     permissions::PermissionAction permission_action) {
   RemoveBubbleObserverAndResetTimersAndChipCallbacks();
-  if (!GetLocationBar()->IsDrawn() ||
-      GetLocationBar()->IsTopLevelFullscreen() ||
+  if (!GetLocationBar()->IsDrawn() || GetLocationBar()->IsFullscreen() ||
       permission_action == permissions::PermissionAction::IGNORED ||
       permission_action == permissions::PermissionAction::DISMISSED ||
       permission_action == permissions::PermissionAction::REVOKED ||
@@ -167,7 +144,7 @@ bool ChipController::IsBubbleShowing() {
 }
 
 bool ChipController::IsAnimating() const {
-  return chip_->is_animating();
+  return chip_->IsAnimating();
 }
 
 void ChipController::RestartTimersOnMouseHover() {
@@ -177,9 +154,9 @@ void ChipController::RestartTimersOnMouseHover() {
   }
 
   if (is_confirmation_showing_) {
-    collapse_timer_.Start(FROM_HERE, kConfirmationDisplayDuration, this,
-                          &ChipController::CollapseConfirmation);
-  } else if (chip_->is_fully_collapsed()) {
+    collapse_timer_.Start(FROM_HERE, kPermissionConfirmationDisplayDuration,
+                          this, &ChipController::CollapseConfirmation);
+  } else if (chip_->IsFullyCollapsed()) {
     // Quiet chip can collapse from a verbose state to an icon state. After it
     // is collapsed, it should be dismissed.
     StartDismissTimer();
@@ -249,7 +226,7 @@ void ChipController::OnWidgetDestroyed(views::Widget* widget) {
 
 void ChipController::OnWidgetActivationChanged(views::Widget* widget,
                                                bool active) {
-  // This logic prevents clickjacking. See https://crbug.com/1160485
+  // This logic prevents clickjacking. See https://crbug.com/40054242
   auto* prompt_bubble_widget = GetBubbleWidget();
   if (active && !parent_was_visible_when_activation_changed_) {
     // If the widget is active and the primary window wasn't active the last
@@ -301,9 +278,9 @@ void ChipController::InitializePermissionPrompt(
   // a request chip is shown --> only once a confirmation should be displayed,
   // the chip should become visible.
   chip_->SetVisible(false);
-  if (permission_dashboard_view_ &&
-      !permission_dashboard_view_->GetIndicatorChip()->GetVisible()) {
-    permission_dashboard_view_->SetVisible(false);
+  if (permission_dashboard_ &&
+      !permission_dashboard_->GetIndicatorChip()->GetVisible()) {
+    permission_dashboard_->SetVisible(false);
   }
   permission_prompt_model_ =
       std::make_unique<PermissionPromptChipModel>(delegate);
@@ -365,20 +342,19 @@ void ChipController::ShowPermissionUi(
 
   chip_->SetVisible(true);
 
-  if (permission_dashboard_view_) {
-    permission_dashboard_view_->SetVisible(true);
-    permission_dashboard_view_->UpdateDividerViewVisibility();
+  if (permission_dashboard_) {
+    permission_dashboard_->SetVisible(true);
   }
 
   SyncChipWithModel();
 
-  chip_->SetButtonController(std::make_unique<BubbleButtonController>(
-      chip_.get(), this,
-      std::make_unique<views::Button::DefaultButtonControllerDelegate>(
-          chip_.get())));
-  chip_->SetCallback(base::BindRepeating(
-      &ChipController::OnRequestChipButtonPressed, weak_factory_.GetWeakPtr()));
-  chip_->ResetAnimation();
+  chip_->SetBubbleOwner(this);
+  // Discard `is_pointer_interaction` (indicating pointer vs. keyboard event)
+  // as it is not needed when handling request chip presses.
+  chip_->SetPressedCallback(base::IgnoreArgs<bool>(
+      base::BindRepeating(&ChipController::OnRequestChipButtonPressed,
+                          weak_factory_.GetWeakPtr())));
+  chip_->ResetAnimation(PermissionChipInterface::AnimationState::kCollapsed);
   ObservePromptBubble();
 
   if (permission_prompt_model_->IsExpandAnimationAllowed()) {
@@ -425,7 +401,7 @@ void ChipController::RemoveBubbleObserverAndResetTimersAndChipCallbacks() {
   }
 
   // Reset button click callback
-  chip_->SetCallback(base::RepeatingCallback<void()>(base::DoNothing()));
+  chip_->SetPressedCallback(base::RepeatingCallback<void(bool)>());
 
   ResetTimers();
 }
@@ -457,11 +433,17 @@ void ChipController::ResetPermissionPromptChip() {
               ->web_contents()
               ->GetLastCommittedURL();
       bool should_ignore_omnibox_state_check =
-          visible_url == GURL(chrome::kChromeUINewTabURL) ||
+          visible_url == chrome::ChromeUINewTabURLAsGURL() ||
           committed_url.host() == chrome::kChromeUIOmniboxPopupHost ||
           committed_url.host() == chrome::kChromeUIContextualTasksHost;
 
-      if (GetLocationBar()->IsEditingOrEmpty() &&
+      const bool is_user_input_in_progress =
+          GetLocationBar() && GetLocationBar()->GetOmniboxController() &&
+          GetLocationBar()
+              ->GetOmniboxController()
+              ->edit_model()
+              ->user_input_in_progress();
+      if (is_user_input_in_progress &&
           active_chip_permission_request_manager_.value()
               ->IsRequestInProgress() &&
           !should_ignore_omnibox_state_check) {
@@ -498,9 +480,9 @@ void ChipController::ShowPageInfoDialog() {
   ResetTimers();
 
   std::unique_ptr<PageInfoBubbleSpecification> specification =
-      PageInfoBubbleSpecification::Builder(
-          chip_, chip_->GetWidget()->GetNativeWindow(), contents,
-          entry->GetVirtualURL())
+      PageInfoBubbleSpecification::Builder(chip_->GetAnchor(),
+                                           contents->GetTopLevelNativeWindow(),
+                                           contents, entry->GetVirtualURL())
           .AddInitializedCallback(
               GetPageInfoDialogCreatedCallbackForTesting()
                   ? std::move(GetPageInfoDialogCreatedCallbackForTesting())
@@ -535,12 +517,12 @@ bool ChipController::should_expand_for_testing() {
 }
 
 void ChipController::AnimateExpand() {
-  chip_->ResetAnimation();
+  chip_->ResetAnimation(PermissionChipInterface::AnimationState::kCollapsed);
   chip_->AnimateExpand(
       gfx::Animation::RichAnimationDuration(base::Milliseconds(350)));
   chip_->SetVisible(true);
-  if (permission_dashboard_view_) {
-    permission_dashboard_view_->SetVisible(true);
+  if (permission_dashboard_) {
+    permission_dashboard_->SetVisible(true);
   }
 }
 
@@ -564,14 +546,16 @@ void ChipController::HandleConfirmation(
       AnimateExpand();
     }
 
-    chip_->SetCallback(base::BindRepeating(&ChipController::ShowPageInfoDialog,
-                                           weak_factory_.GetWeakPtr()));
+    // Discard `is_pointer_interaction` (indicating pointer vs. keyboard event)
+    // as it is not needed when showing the page info dialog.
+    chip_->SetPressedCallback(base::IgnoreArgs<bool>(base::BindRepeating(
+        &ChipController::ShowPageInfoDialog, weak_factory_.GetWeakPtr())));
     AnnouncePermissionRequestForAccessibility(
         permission_prompt_model_->GetAccessibilityChipText());
 
     if (!do_no_collapse_for_testing_) {
-      collapse_timer_.Start(FROM_HERE, kConfirmationDisplayDuration, this,
-                            &ChipController::CollapseConfirmation);
+      collapse_timer_.Start(FROM_HERE, kPermissionConfirmationDisplayDuration,
+                            this, &ChipController::CollapseConfirmation);
     }
   } else {
     ResetPermissionPromptChip();
@@ -580,7 +564,7 @@ void ChipController::HandleConfirmation(
 
 void ChipController::AnnouncePermissionRequestForAccessibility(
     const std::u16string& text) {
-  chip_->GetViewAccessibility().AnnounceText(text);
+  chip_->AnnounceText(text);
 }
 
 void ChipController::CollapsePrompt(bool allow_restart) {
@@ -590,7 +574,7 @@ void ChipController::CollapsePrompt(bool allow_restart) {
     permission_prompt_model_->UpdateAutoCollapsePromptChipState(true);
     SyncChipWithModel();
 
-    if (!chip_->is_fully_collapsed()) {
+    if (!chip_->IsFullyCollapsed()) {
       chip_->AnimateCollapse(
           gfx::Animation::RichAnimationDuration(base::Milliseconds(250)));
     }
@@ -626,14 +610,11 @@ void ChipController::HideChip() {
   }
 
   chip_->SetVisible(false);
-  if (permission_dashboard_view_) {
-    // The request chip is gone, the divider view is no longer needed.
-    permission_dashboard_view_->UpdateDividerViewVisibility();
-
-    // Hide the parent view `permission_dashboard_view_` if no children are
+  if (permission_dashboard_) {
+    // Hide the parent view `permission_dashboard_` if no children are
     // visible.
-    if (!permission_dashboard_view_->GetIndicatorChip()->GetVisible()) {
-      permission_dashboard_view_->SetVisible(false);
+    if (!permission_dashboard_->GetIndicatorChip()->GetVisible()) {
+      permission_dashboard_->SetVisible(false);
     }
   }
   // When the chip visibility changed from visible -> hidden, the locationbar
@@ -644,11 +625,12 @@ void ChipController::HideChip() {
 void ChipController::OpenPermissionPromptBubble() {
   DCHECK(!IsBubbleShowing());
   if (!permission_prompt_model_ || !permission_prompt_model_->GetDelegate() ||
+      permission_prompt_model_->GetDelegate()->Requests().empty() ||
       !location_bar_->GetWebContents()) {
     return;
   }
 
-  Browser* browser = location_bar_->GetBrowser();
+  BrowserWindowInterface* browser = location_bar_->GetBrowser();
   if (!browser) {
     DLOG(WARNING) << "Permission prompt suppressed because the WebContents is "
                      "not attached to any Browser window.";
@@ -668,7 +650,8 @@ void ChipController::OpenPermissionPromptBubble() {
     // Loud prompt bubble.
     raw_ptr<PermissionPromptBubbleBaseView> prompt_bubble =
         CreatePermissionPromptBubbleView(
-            browser, permission_prompt_model_->GetDelegate(),
+            location_bar_->GetWebContents(),
+            permission_prompt_model_->GetDelegate(),
             PermissionPromptStyle::kChip);
     bubble_tracker_.SetView(prompt_bubble);
     prompt_bubble->Show();
@@ -684,13 +667,13 @@ void ChipController::OpenPermissionPromptBubble() {
               std::make_unique<ContentSettingQuietRequestBubbleModel>(
                   content_settings_image_delegate_
                       ->GetContentSettingBubbleModelDelegate(),
-                  web_contents);
+                  web_contents->GetPrimaryPage());
       ui::TrackedElement* anchor = location_bar_->GetAnchorOrNull();
       DCHECK(anchor);  // We should get here only if location bar is visible.
       ContentSettingBubbleContents* quiet_request_bubble =
           new ContentSettingBubbleContents(
-              std::move(content_setting_bubble_model), web_contents, anchor,
-              views::BubbleBorder::TOP_LEFT);
+              std::move(content_setting_bubble_model), web_contents,
+              views::BubbleAnchor(anchor), views::BubbleBorder::TOP_LEFT);
       quiet_request_bubble->set_close_on_deactivate(false);
       views::Widget* bubble_widget =
           views::BubbleDialogDelegateView::CreateBubble(quiet_request_bubble);

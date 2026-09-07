@@ -12,6 +12,7 @@
 #include "base/debug/crash_logging.h"
 #include "base/notreached.h"
 #include "base/process/memory.h"
+#include "base/win/delayload_helpers.h"
 
 FARPROC WINAPI HandleDelayLoadFailureCommon(unsigned reason,
                                             DelayLoadInfo* dll_info) {
@@ -21,12 +22,19 @@ FARPROC WINAPI HandleDelayLoadFailureCommon(unsigned reason,
     base::TerminateBecauseOutOfMemory(0);
   }
 
+  if (base::win::IsDelayLoadFailureSuppressed()) {
+    // Return zero from the failure hook so that a FACILITY_VISUALCPP
+    // ERROR_MOD_NOT_FOUND or ERROR_PROC_NOT_FOUND exception is raised as per
+    // https://learn.microsoft.com/en-us/cpp/build/reference/understanding-the-helper-function.
+    return nullptr;
+  }
+
   DEBUG_ALIAS_FOR_CSTR(dll_name, dll_info->szDll, 256);
   SCOPED_CRASH_KEY_STRING256("DelayLoad", "ModuleName", dll_name);
   SCOPED_CRASH_KEY_NUMBER("DelayLoad", "LastError", dll_info->dwLastError);
 
   // Deterministically crash here. Returning 0 from the hook would likely result
   // in the process crashing anyway, but in a form that might trigger undefined
-  // behavior or be hard to diagnose. See https://crbug.com/1320845.
+  // behavior or be hard to diagnose. See https://crbug.com/40223662.
   NOTREACHED();
 }

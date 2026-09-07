@@ -174,9 +174,6 @@ class PaintOpHelper {
       }
       case PaintOpType::kDrawRecord: {
         const auto& op = static_cast<const DrawRecordOp&>(base_op);
-        if (op.placeholder_id != ElementId()) {
-          str << "element_id=" << op.placeholder_id << ", ";
-        }
         str << "record=" << ToString(op.record);
         break;
       }
@@ -442,10 +439,6 @@ class PaintOpHelper {
   }
 
   static std::string ToString(const SkData& data) { return "<SkData>"; }
-
-  static std::string ToString(const ThreadsafePath& path) {
-    return ToString(static_cast<const SkPath&>(path));
-  }
 
   static std::string ToString(const SkPath& path) {
     // TODO(vmpstr): SkPath has a dump function which we can use here?

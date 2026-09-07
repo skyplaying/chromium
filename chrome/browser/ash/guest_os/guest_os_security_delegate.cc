@@ -34,6 +34,18 @@ void GuestOsSecurityDelegate::MakeServerWithFd(
       base::BindOnce(std::move(callback), cap_ptr));
 }
 
+bool GuestOsSecurityDelegate::CanAccessRemoteShell() const {
+  return false;
+}
+
+bool GuestOsSecurityDelegate::CanSetRestoreInfo() const {
+  return false;
+}
+
+bool GuestOsSecurityDelegate::CanSetSystemModal() const {
+  return false;
+}
+
 std::string GuestOsSecurityDelegate::GetVmName(ui::EndpointType target) const {
   return vm_name_;
 }

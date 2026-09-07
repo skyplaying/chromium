@@ -8,6 +8,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.lenient;
 
 import android.graphics.Rect;
 import android.view.View;
@@ -21,10 +22,11 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
+import org.mockito.quality.Strictness;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 
-/** Tests for {@link SimpleVerticalLayoutView}. */
+/** Tests for {@link SpacingRecyclerViewItemDecoration}. */
 @RunWith(BaseRobolectricTestRunner.class)
 public class SpacingRecyclerViewItemDecorationUnitTest {
     private static final int LEAD_IN_SPACE = 10;
@@ -34,18 +36,20 @@ public class SpacingRecyclerViewItemDecorationUnitTest {
     private static final int ITEM_LAST = 2;
     private static final int ITEM_COUNT = ITEM_LAST + 1;
 
-    public @Rule MockitoRule mMockitoRule = MockitoJUnit.rule();
-    private @Mock RecyclerView mRecyclerView;
-    private @Mock RecyclerView.Adapter mAdapter;
-    private @Mock View mChildView;
+    @Rule
+    public final MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
+
+    @Mock private RecyclerView mRecyclerView;
+    @Mock private RecyclerView.Adapter mAdapter;
+    @Mock private View mChildView;
     private SpacingRecyclerViewItemDecoration mDecoration;
     private Rect mOffsets;
 
     @Before
     public void setUp() {
         mDecoration = new SpacingRecyclerViewItemDecoration(LEAD_IN_SPACE, ELEMENT_SPACE);
-        doReturn(mAdapter).when(mRecyclerView).getAdapter();
-        doReturn(ITEM_COUNT).when(mAdapter).getItemCount();
+        lenient().doReturn(mAdapter).when(mRecyclerView).getAdapter();
+        lenient().doReturn(ITEM_COUNT).when(mAdapter).getItemCount();
         mOffsets = new Rect();
     }
 

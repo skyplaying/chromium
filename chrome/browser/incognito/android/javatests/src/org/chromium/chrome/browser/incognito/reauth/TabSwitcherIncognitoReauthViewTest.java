@@ -14,8 +14,8 @@ import static androidx.test.espresso.matcher.ViewMatchers.withText;
 import static org.hamcrest.core.IsNot.not;
 import static org.junit.Assert.assertTrue;
 
+import static org.chromium.base.test.transit.ViewFinder.waitForView;
 import static org.chromium.chrome.browser.tasks.tab_management.TabUiTestHelper.enterTabSwitcher;
-import static org.chromium.ui.test.util.ViewUtils.onViewWaiting;
 
 import androidx.test.filters.LargeTest;
 import androidx.test.filters.MediumTest;
@@ -120,7 +120,7 @@ public class TabSwitcherIncognitoReauthViewTest {
                 });
     }
 
-    private ChromeTabbedActivity openIncognitoReauth(ChromeTabbedActivity cta) {
+    private ChromeTabbedActivity openIncognitoReauth() {
         // Open incognito tab.
         var incognitoPage = mPage.openNewIncognitoTabOrWindowFast();
         var incognitoActivity = incognitoPage.getActivity();
@@ -138,7 +138,7 @@ public class TabSwitcherIncognitoReauthViewTest {
     @MediumTest
     @Feature("RenderTest")
     public void testIncognitoReauthView_HubRenderTest() throws IOException {
-        var cta = openIncognitoReauth(mActivityTestRule.getActivity());
+        var cta = openIncognitoReauth();
 
         onView(withId(R.id.hub_toolbar)).check(matches(isDisplayed()));
         onView(withId(R.id.toolbar_action_button)).check(matches(not(isEnabled())));
@@ -161,7 +161,7 @@ public class TabSwitcherIncognitoReauthViewTest {
     @DisabledTest(message = "crbug.com/330226530")
     public void testIncognitoReauthViewIsRestored_WhenActivityIsKilled() {
         final ChromeTabbedActivity cta = mActivityTestRule.getActivity();
-        openIncognitoReauth(cta);
+        openIncognitoReauth();
 
         // Need to wait for contentsState to be initialized for the tab to restore correctly.
         CriteriaHelper.pollUiThread(
@@ -171,9 +171,6 @@ public class TabSwitcherIncognitoReauthViewTest {
 
         mActivityTestRule.recreateActivity();
 
-        onViewWaiting(
-                        withId(R.id.incognito_reauth_unlock_incognito_button),
-                        true) // checkRootDialog=true ensures dialog is in focus, avoids flakiness.
-                .check(matches(isDisplayed()));
+        waitForView(withId(R.id.incognito_reauth_unlock_incognito_button));
     }
 }

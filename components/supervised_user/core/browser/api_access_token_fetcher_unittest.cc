@@ -60,7 +60,7 @@ class ApiAccessTokenFetcherTest
     account_id_ = identity_test_env_
                       .MakePrimaryAccountAvailable("bob@example.com",
                                                    ConsentLevel::kSignin)
-                      .account_id;
+                      .GetAccountId();
   }
   ~ApiAccessTokenFetcherTest() override {
     identity_test_env_.identity_manager()->RemoveDiagnosticsObserver(this);
@@ -100,8 +100,8 @@ TEST_P(ApiAccessTokenFetcherTest, AuthError) {
 
   service.GetToken(receiver.Receive());
   identity_test_env_.WaitForAccessTokenRequestIfNecessaryAndRespondWithError(
-      GoogleServiceAuthError(
-          GoogleServiceAuthError::State::INVALID_GAIA_CREDENTIALS));
+      GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
+          GoogleServiceAuthError::InvalidGaiaCredentialsReason::UNKNOWN));
 
   EXPECT_EQ(receiver.Get().error().state(),
             GoogleServiceAuthError::State::INVALID_GAIA_CREDENTIALS);

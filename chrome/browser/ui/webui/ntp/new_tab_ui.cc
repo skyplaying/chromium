@@ -11,6 +11,7 @@
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/i18n/rtl.h"
+#include "base/logging.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
@@ -21,7 +22,6 @@
 #include "chrome/browser/ui/webui/ntp/ntp_resource_cache_factory.h"
 #include "chrome/browser/ui/webui/theme_handler.h"
 #include "chrome/browser/ui/webui/theme_source.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/url_constants.h"
 #include "components/prefs/pref_service.h"
 #include "components/strings/grit/components_strings.h"
@@ -58,6 +58,8 @@ bool NewTabUIConfig::IsWebUIEnabled(content::BrowserContext* browser_context) {
     case NTPResourceCache::INCOGNITO:
       [[fallthrough]];
     case NTPResourceCache::GUEST:
+      [[fallthrough]];
+    case NTPResourceCache::ISOLATED:
       [[fallthrough]];
     case NTPResourceCache::NON_PRIMARY_OTR:
       return true;
@@ -109,7 +111,7 @@ NewTabUI::~NewTabUI() = default;
 // static
 bool NewTabUI::IsNewTab(const GURL& url) {
   return url.DeprecatedGetOriginAsURL() ==
-         GURL(chrome::kChromeUINewTabURL).DeprecatedGetOriginAsURL();
+         chrome::ChromeUINewTabURLAsGURL().DeprecatedGetOriginAsURL();
 }
 
 // static

@@ -7,7 +7,9 @@
 
 #include <string>
 
+#include "base/callback_list.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
 #include "components/omnibox/browser/aim_eligibility_service.h"
 
 class PrefService;
@@ -26,12 +28,18 @@ class ChromeAimEligibilityService : public AimEligibilityService {
       TemplateURLService* template_url_service,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       signin::IdentityManager* identity_manager,
-      bool is_off_the_record);
+      Configuration configuration);
   ~ChromeAimEligibilityService() override;
 
   // AimEligibilityService:
-  std::string GetCountryCode() const override;
-  std::string GetLocale() const override;
+  std::string GetLocaleImpl() const override;
+  variations::VariationsService* GetVariationsService() const override;
+
+ private:
+  void OnLocaleChanged(const std::string& new_locale);
+
+  base::CallbackListSubscription locale_change_subscription_;
+  base::WeakPtrFactory<ChromeAimEligibilityService> weak_factory_{this};
 };
 
 #endif  // CHROME_BROWSER_AUTOCOMPLETE_CHROME_AIM_ELIGIBILITY_SERVICE_H_

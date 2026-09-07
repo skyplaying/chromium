@@ -523,6 +523,33 @@ TEST_F(MappableSharedImageVideoFramePoolTest, CreateOneHardwareNV12Frame) {
   EXPECT_TRUE(frame->metadata().read_lock_fences_enabled);
 }
 
+TEST_F(MappableSharedImageVideoFramePoolTest, YV12Frame) {
+  gpu::SharedImageCapabilities caps;
+  caps.supports_scanout_shared_images = true;
+  sii_->SetCapabilities(caps);
+
+  scoped_refptr<VideoFrame> software_frame = CreateTestYUVVideoFrame(10);
+  scoped_refptr<VideoFrame> frame;
+  mock_gpu_factories_->SetVideoFrameOutputFormat(
+      media::GpuVideoAcceleratorFactories::OutputFormat::YV12);
+  mappable_shared_image_pool_->MaybeCreateHardwareFrame(
+      software_frame, base::BindOnce(MaybeCreateHardwareFrameCallback, &frame));
+
+  RunUntilIdle();
+
+  EXPECT_NE(software_frame.get(), frame.get());
+  EXPECT_EQ(PIXEL_FORMAT_YV12, frame->format());
+  EXPECT_TRUE(frame->HasSharedImage());
+#if BUILDFLAG(IS_WIN)
+  // Windows Direct Composition path only supports NV12 overlays.
+  EXPECT_FALSE(
+      frame->shared_image()->usage().Has(gpu::SHARED_IMAGE_USAGE_SCANOUT));
+#else
+  EXPECT_TRUE(
+      frame->shared_image()->usage().Has(gpu::SHARED_IMAGE_USAGE_SCANOUT));
+#endif
+}
+
 TEST_F(MappableSharedImageVideoFramePoolTest,
        CreateOneHardwareNV12FrameWithOddSize) {
   scoped_refptr<VideoFrame> software_frame =
@@ -662,6 +689,24 @@ TEST_F(MappableSharedImageVideoFramePoolTest, CreateOneHardwareXR30Frame) {
   EXPECT_TRUE(frame->HasSharedImage());
   EXPECT_EQ(1u, sii_->shared_image_count());
   EXPECT_TRUE(frame->metadata().read_lock_fences_enabled);
+}
+
+TEST_F(MappableSharedImageVideoFramePoolTest,
+       CreateOneHardwareXR30FrameWithOddSize) {
+  scoped_refptr<VideoFrame> software_frame = CreateTestYUVVideoFrame(9, 10);
+  scoped_refptr<VideoFrame> frame;
+  mock_gpu_factories_->SetVideoFrameOutputFormat(
+      media::GpuVideoAcceleratorFactories::OutputFormat::XR30);
+  mappable_shared_image_pool_->MaybeCreateHardwareFrame(
+      software_frame, base::BindOnce(MaybeCreateHardwareFrameCallback, &frame));
+
+  RunUntilIdle();
+
+  EXPECT_NE(software_frame.get(), frame.get());
+  EXPECT_EQ(PIXEL_FORMAT_XR30, frame->format());
+  EXPECT_TRUE(frame->HasSharedImage());
+  EXPECT_EQ(1u, sii_->shared_image_count());
+  EXPECT_EQ(gfx::Size(9, 9), frame->coded_size());
 }
 
 TEST_F(MappableSharedImageVideoFramePoolTest, CreateOneHardwareP010Frame) {
@@ -828,6 +873,24 @@ TEST_F(MappableSharedImageVideoFramePoolTest, CreateOneHardwareXB30Frame) {
   EXPECT_EQ(as_xr30(0, 543, 0), *static_cast<uint32_t*>(memory));
 }
 
+TEST_F(MappableSharedImageVideoFramePoolTest,
+       CreateOneHardwareXB30FrameWithOddSize) {
+  scoped_refptr<VideoFrame> software_frame = CreateTestYUVVideoFrame(9, 10);
+  scoped_refptr<VideoFrame> frame;
+  mock_gpu_factories_->SetVideoFrameOutputFormat(
+      media::GpuVideoAcceleratorFactories::OutputFormat::XB30);
+  mappable_shared_image_pool_->MaybeCreateHardwareFrame(
+      software_frame, base::BindOnce(MaybeCreateHardwareFrameCallback, &frame));
+
+  RunUntilIdle();
+
+  EXPECT_NE(software_frame.get(), frame.get());
+  EXPECT_EQ(PIXEL_FORMAT_XB30, frame->format());
+  EXPECT_TRUE(frame->HasSharedImage());
+  EXPECT_EQ(1u, sii_->shared_image_count());
+  EXPECT_EQ(gfx::Size(9, 9), frame->coded_size());
+}
+
 TEST_F(MappableSharedImageVideoFramePoolTest, CreateOneHardwareRGBAFrame) {
   scoped_refptr<VideoFrame> software_frame = CreateTestYUVAVideoFrame(10);
   scoped_refptr<VideoFrame> frame;
@@ -841,7 +904,7 @@ TEST_F(MappableSharedImageVideoFramePoolTest, CreateOneHardwareRGBAFrame) {
 
 TEST_F(MappableSharedImageVideoFramePoolTest, PreservesMetadata) {
   gfx::HDRMetadata hdr_metadata;
-  hdr_metadata.cta_861_3 = gfx::HdrMetadataCta861_3(5000, 1000);
+  hdr_metadata.SetCLLI(skhdr::ContentLightLevelInformation{5000, 1000});
 
   scoped_refptr<VideoFrame> software_frame = CreateTestYUVVideoFrame(10);
   software_frame->metadata().end_of_stream = true;
@@ -1059,6 +1122,26 @@ TEST_F(MappableSharedImageVideoFramePoolTest, AbortCopies) {
   EXPECT_EQ(0u, copy_task_runner_->NumPendingTasks());
   RunUntilIdle();
   ASSERT_FALSE(frame_2);
+}
+
+TEST_F(MappableSharedImageVideoFramePoolTest,
+       RespectColorSpaceForSharedImageBackedFrame) {
+  scoped_refptr<VideoFrame> software_frame = CreateTestYUVVideoFrame(10);
+  // Color space is invalid by default.
+  ASSERT_FALSE(software_frame->ColorSpace().IsValid());
+
+  scoped_refptr<VideoFrame> frame;
+  mappable_shared_image_pool_->MaybeCreateHardwareFrame(
+      software_frame, base::BindOnce(MaybeCreateHardwareFrameCallback, &frame));
+
+  RunUntilIdle();
+
+  EXPECT_NE(software_frame.get(), frame.get());
+  EXPECT_TRUE(frame->HasSharedImage());
+  // The color space should have been set to REC709 by default.
+  EXPECT_EQ(gfx::ColorSpace::CreateREC709(), frame->ColorSpace());
+  EXPECT_EQ(gfx::ColorSpace::CreateREC709(),
+            frame->shared_image()->color_space());
 }
 
 }  // namespace media

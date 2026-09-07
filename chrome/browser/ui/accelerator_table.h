@@ -14,6 +14,9 @@ class Accelerator;
 }
 
 // This contains the list of accelerators for the Aura implementation.
+//
+// For guidelines on proposing, adding, retiring, or swapping keyboard
+// shortcuts in Chrome, please see //docs/ui/learn/keyboard_shortcuts.md.
 struct AcceleratorMapping {
   ui::KeyboardCode keycode;
   int modifiers;
@@ -36,17 +39,15 @@ std::vector<AcceleratorMapping> GetAcceleratorList();
 // This function should be used only for testing. Clears the accelerator list.
 void ClearAcceleratorListForTesting();
 
-// Returns true on Ash and if the command id has an associated accelerator which
-// is handled by Ash. If the return is true the accelerator is returned via the
-// second argument.
-bool GetAshAcceleratorForCommandId(int command_id,
-                                   ui::Accelerator* accelerator);
-
 // Returns true if the command id has an associated standard
 // accelerator like cut, copy and paste. If the return is true the
 // accelerator is returned via the second argument.
 bool GetStandardAcceleratorForCommandId(int command_id,
                                         ui::Accelerator* accelerator);
+
+// Returns true if the command id has an associated accelerator. If the return
+// is true the accelerator is returned via the second argument.
+bool GetAcceleratorForCommandId(int command_id, ui::Accelerator* accelerator);
 
 // Returns true if the command identified by |command_id| should be executed
 // repeatedly while its accelerator keys are held down.

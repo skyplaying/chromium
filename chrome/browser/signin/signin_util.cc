@@ -7,7 +7,6 @@
 #include <memory>
 #include <string_view>
 
-#include "base/barrier_closure.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
@@ -18,7 +17,6 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/supports_user_data.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/enterprise/profile_management/profile_management_features.h"
 #include "chrome/browser/enterprise/util/managed_browser_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profiles_state.h"
@@ -28,7 +26,6 @@
 #include "chrome/browser/ui/webui/signin/signin_utils_desktop.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/google/core/common/google_util.h"
 #include "components/policy/core/browser/signin/profile_separation_policies.h"
 #include "components/prefs/pref_service.h"
@@ -41,16 +38,12 @@
 #include "components/sync/base/user_selectable_type.h"
 #include "components/sync/service/sync_service.h"
 #include "components/sync/service/sync_user_settings.h"
-#include "content/public/browser/storage_partition.h"
 #include "google_apis/gaia/gaia_auth_util.h"
 #include "google_apis/gaia/gaia_constants.h"
 #include "google_apis/gaia/gaia_id.h"
-#include "net/cookies/canonical_cookie.h"
-#include "services/network/public/mojom/cookie_manager.mojom.h"
 #include "ui/base/l10n/l10n_util.h"
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "components/strings/grit/components_strings.h"
 #include "ui/base/interaction/element_identifier.h"
@@ -84,75 +77,6 @@ ScopedForceSigninSetterForTesting::ScopedForceSigninSetterForTesting(
 ScopedForceSigninSetterForTesting::~ScopedForceSigninSetterForTesting() {
   ResetForceSigninForTesting();  // IN-TEST
 }
-
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
-CookiesMover::CookiesMover(base::WeakPtr<Profile> source_profile,
-                           base::WeakPtr<Profile> destination_profile,
-                           base::OnceCallback<void()> callback)
-    : url_(source_profile->GetPrefs()->GetString(
-          prefs::kSigninInterceptionIDPCookiesUrl)),
-      source_profile_(std::move(source_profile)),
-      destination_profile_(std::move(destination_profile)),
-      callback_(std::move(callback)) {
-  CHECK(callback_);
-}
-
-CookiesMover::~CookiesMover() = default;
-
-void CookiesMover::StartMovingCookies() {
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
-  bool allow_cookies_to_be_moved = base::FeatureList::IsEnabled(
-      profile_management::features::kThirdPartyProfileManagement);
-#else
-  bool allow_cookies_to_be_moved = false;
-#endif
-  if (!allow_cookies_to_be_moved || url_.is_empty() || !url_.is_valid()) {
-    std::move(callback_).Run();
-    return;
-  }
-
-  source_profile_->GetPrefs()->ClearPref(
-      prefs::kSigninInterceptionIDPCookiesUrl);
-  source_profile_->GetDefaultStoragePartition()
-      ->GetCookieManagerForBrowserProcess()
-      ->GetCookieList(url_, net::CookieOptions::MakeAllInclusive(),
-                      net::CookiePartitionKeyCollection::Todo(),
-                      base::BindOnce(&CookiesMover::OnCookiesReceived,
-                                     weak_pointer_factory_.GetWeakPtr()));
-}
-
-void CookiesMover::OnCookiesReceived(
-    const std::vector<net::CookieWithAccessResult>& included,
-    const std::vector<net::CookieWithAccessResult>& excluded) {
-  // If either profile was destroyed, stop the operation.
-  if (source_profile_.WasInvalidated() ||
-      destination_profile_.WasInvalidated()) {
-    std::move(callback_).Run();
-    return;
-  }
-  // We expected 2 * `cookies.size()` actions since we have to set the cookie at
-  // destination and delete it from the source.
-  base::RepeatingClosure barrier = base::BarrierClosure(
-      included.size() * 2, base::BindOnce(&CookiesMover::OnCookiesMoved,
-                                          weak_pointer_factory_.GetWeakPtr()));
-  auto* source_cookie_manager = source_profile_->GetDefaultStoragePartition()
-                                    ->GetCookieManagerForBrowserProcess();
-  auto* destination_cookie_manager =
-      destination_profile_->GetDefaultStoragePartition()
-          ->GetCookieManagerForBrowserProcess();
-  for (const auto& [cookie, _] : included) {
-    destination_cookie_manager->SetCanonicalCookie(
-        cookie, url_, net::CookieOptions::MakeAllInclusive(),
-        base::IgnoreArgs<net::CookieAccessResult>(barrier));
-    source_cookie_manager->DeleteCanonicalCookie(
-        cookie, base::IgnoreArgs<bool>(barrier));
-  }
-}
-
-void CookiesMover::OnCookiesMoved() {
-  std::move(callback_).Run();
-}
-#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
 
 bool IsForceSigninEnabled() {
   if (g_is_force_signin_enabled_cache == NOT_CACHED) {
@@ -188,7 +112,7 @@ bool IsProfileDeletionAllowed(Profile* profile) {
 // by policies set in `profile`.
 bool IsProfileSeparationEnforcedByProfile(
     Profile* profile,
-    const std::string& intercepted_account_email) {
+    std::string_view intercepted_account_email) {
   if (!intercepted_account_email.empty() &&
       !IsAccountExemptedFromEnterpriseProfileSeparation(
           profile, intercepted_account_email)) {
@@ -256,9 +180,8 @@ bool ProfileSeparationAllowsKeepingUnmanagedBrowsingDataInManagedProfile(
   return allowed_by_existing_profile && allowed_by_intercepted_account;
 }
 
-bool IsAccountExemptedFromEnterpriseProfileSeparation(
-    Profile* profile,
-    const std::string& email) {
+bool IsAccountExemptedFromEnterpriseProfileSeparation(Profile* profile,
+                                                      std::string_view email) {
   if (profile->GetPrefs()
           ->FindPreference(prefs::kProfileSeparationDomainExceptionList)
           ->IsDefaultValue()) {
@@ -314,8 +237,7 @@ PrimaryAccountError SetPrimaryAccountWithInvalidToken(
 
   auto set_primary_account_result =
       identity_manager->GetPrimaryAccountMutator()->SetPrimaryAccount(
-          account_id, signin::ConsentLevel::kSignin,
-          signin_metrics::AccessPoint::kUnknown);
+          account_id, signin::ConsentLevel::kSignin, access_point);
   DVLOG(1) << "Operation of setting account id <" << account_id.ToString()
            << "> received the following result: "
            << static_cast<int>(set_primary_account_result);
@@ -444,8 +366,8 @@ ShouldShowHistorySyncOptinResult ShouldShowHistorySyncOptinScreen(
   }
 
   syncer::UserSelectableTypeSet required_types(
-      {syncer::UserSelectableType::kHistory, syncer::UserSelectableType::kTabs,
-       syncer::UserSelectableType::kSavedTabGroups});
+      {syncer::UserSelectableType::kHistory,
+       syncer::UserSelectableType::kTabs});
   syncer::SyncService* sync_service =
       SyncServiceFactory::GetForProfile(&profile);
   if (!IsSyncingUserSelectableTypesAllowedByPolicy(sync_service,
@@ -481,24 +403,31 @@ void EnableHistorySync(syncer::SyncService* sync_service) {
 bool IsValidAccessPointForHistoryOptinScreen(
     signin_metrics::AccessPoint access_point) {
   switch (access_point) {
-    case (signin_metrics::AccessPoint::kExtensionInstallBubble):
-    case (signin_metrics::AccessPoint::kBookmarkBubble):
-    case (signin_metrics::AccessPoint::kRecentTabs):
-    case (signin_metrics::AccessPoint::kCollaborationJoinTabGroup):
-    case (signin_metrics::AccessPoint::kCollaborationShareTabGroup):
-    case (signin_metrics::AccessPoint::kPasswordBubble):
-    case (signin_metrics::AccessPoint::kAddressBubble):
+    case signin_metrics::AccessPoint::kExtensionInstallBubble:
+    case signin_metrics::AccessPoint::kBookmarkBubble:
+    case signin_metrics::AccessPoint::kRecentTabs:
+    case signin_metrics::AccessPoint::kCollaborationJoinTabGroup:
+    case signin_metrics::AccessPoint::kCollaborationShareTabGroup:
+    case signin_metrics::AccessPoint::kPasswordBubble:
+    case signin_metrics::AccessPoint::kAddressBubble:
+    case signin_metrics::AccessPoint::kSearchAIModeBubble:
+    case signin_metrics::AccessPoint::kIosAppBar:
+    case signin_metrics::AccessPoint::kIosGeminiButtonToolbar:
+    case signin_metrics::AccessPoint::kIndigo:
+    case signin_metrics::AccessPoint::kLevelUp:
+    case signin_metrics::AccessPoint::kSignoutUndoSnackbar:
+    case signin_metrics::AccessPoint::kComposeboxDriveContextMenuOptionBubble:
       return false;
     case signin_metrics::AccessPoint::kStartPage:
     case signin_metrics::AccessPoint::kMenu:
     case signin_metrics::AccessPoint::kSettings:
     case signin_metrics::AccessPoint::kSettingsYourSavedInfo:
+    case signin_metrics::AccessPoint::kSettingsAutofillAndPasswords:
     case signin_metrics::AccessPoint::kExtensions:
     case signin_metrics::AccessPoint::kBookmarkManager:
     case signin_metrics::AccessPoint::kAvatarBubbleSignIn:
     case signin_metrics::AccessPoint::kUserManager:
     case signin_metrics::AccessPoint::kFullscreenSigninPromo:
-    case signin_metrics::AccessPoint::kUnknown:
     case signin_metrics::AccessPoint::kAutofillDropdown:
     case signin_metrics::AccessPoint::kResigninInfobar:
     case signin_metrics::AccessPoint::kMachineLogon:
@@ -524,7 +453,6 @@ bool IsValidAccessPointForHistoryOptinScreen(
     case signin_metrics::AccessPoint::kSaveToPhotosIos:
     case signin_metrics::AccessPoint::kChromeSigninInterceptBubble:
     case signin_metrics::AccessPoint::kRestorePrimaryAccountOnProfileLoad:
-    case signin_metrics::AccessPoint::kTabOrganization:
     case signin_metrics::AccessPoint::kSaveToDriveIos:
     case signin_metrics::AccessPoint::kTipsNotification:
     case signin_metrics::AccessPoint::kNotificationsOptInScreenContentToggle:
@@ -559,6 +487,13 @@ bool IsValidAccessPointForHistoryOptinScreen(
     case signin_metrics::AccessPoint::kCredentialExchangeImport:
     case signin_metrics::AccessPoint::kSetSyncConsentFromSyncInternals:
     case signin_metrics::AccessPoint::kIosChromeWebView:
+    case signin_metrics::AccessPoint::kAshChromeSessionManager:
+    case signin_metrics::AccessPoint::kAshUserSessionManager:
+    case signin_metrics::AccessPoint::kAvatarPillExpandPromo:
+    case signin_metrics::AccessPoint::kIosPageActionMenu:
+    case signin_metrics::AccessPoint::kDeepLinkDefault:
+    case signin_metrics::AccessPoint::kAgeMismatchSignout:
+    case signin_metrics::AccessPoint::kOverflowMenu:
       return true;
   }
 }
@@ -600,7 +535,7 @@ bool ShouldShowAvatarSyncPromo(Profile* profile) {
   PrefService* pref_service = profile->GetPrefs();
   GaiaId previously_syncing_gaia_id =
       GaiaId(pref_service->GetString(prefs::kGoogleServicesLastSyncingGaiaId));
-  if (IsCrossAccountError(profile, account_info.gaia)) {
+  if (IsCrossAccountError(profile, account_info.GetGaiaId())) {
     return false;
   }
 
@@ -617,7 +552,8 @@ bool ShouldShowAvatarSyncPromo(Profile* profile) {
   return true;
 }
 
-void ShowErrorDialogWithMessage(Browser* browser, int error_message_id) {
+void ShowErrorDialogWithMessage(BrowserWindowInterface* browser,
+                                int error_message_id) {
   if (!browser) {
     return;
   }

@@ -16,7 +16,6 @@
 #include "base/command_line.h"
 #include "base/containers/adapters.h"
 #include "base/debug/alias.h"
-#include "base/feature_list.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/scoped_refptr.h"
@@ -38,6 +37,7 @@
 #include "base/trace_event/process_memory_dump.h"
 #include "base/trace_event/trace_event.h"
 #include "base/trace_event/traced_value.h"
+#include "base/tracing/protos/chrome_track_event.pbzero.h"
 #include "build/build_config.h"
 #include "partition_alloc/buildflags.h"
 #include "third_party/abseil-cpp/absl/base/dynamic_annotations.h"
@@ -58,15 +58,6 @@ namespace base::trace_event {
 namespace {
 
 MemoryDumpManager* g_memory_dump_manager_for_testing = nullptr;
-
-// When enabled, MemoryDumpManager::ContinueAsyncProcessDump() runs all
-// MemoryDumpProvider bound to a TaskRunner which RunsTasksInCurrentSequence(),
-// no matter their position in the list of providers. This minimizes the number
-// of PostTasks involved in a Memory Dump by grouping providers that run on the
-// same sequence, even if they are bound to different TaskRunner instances
-// (which previously resulted in a task post).
-BASE_FEATURE(kMemoryDumpProviderGroupBySequence,
-             base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Temporary (until scheduler is moved outside of here)
 // trampoline function to match the |request_dump_function| passed to Initialize
@@ -381,16 +372,14 @@ void MemoryDumpManager::ContinueAsyncProcessDump(
 
   auto& pending_providers = pmd_async_state->pending_dump_providers;
 
-  if (base::FeatureList::IsEnabled(kMemoryDumpProviderGroupBySequence)) {
-    // Move providers which can run on this sequence to the back of the list.
-    std::stable_partition(pending_providers.begin(), pending_providers.end(),
-                          [&](const MeasuredMemoryDumpProviderInfo& mdpinfo) {
-                            // Return true for providers which can't run on this
-                            // sequence, to keep them at the front.
-                            return !get_effective_task_runner(mdpinfo)
-                                        ->RunsTasksInCurrentSequence();
-                          });
-  }
+  // Move providers which can run on this sequence to the back of the list.
+  std::ranges::stable_partition(
+      pending_providers, [&](const MeasuredMemoryDumpProviderInfo& mdpinfo) {
+        // Return true for providers which can't run on this
+        // sequence, to keep them at the front.
+        return !get_effective_task_runner(mdpinfo)
+                    ->RunsTasksInCurrentSequence();
+      });
 
   // Refresh the number of following providers, following the above sort.
   for (size_t i = 0; i < pending_providers.size(); ++i) {
@@ -470,8 +459,12 @@ void MemoryDumpManager::InvokeOnMemoryDump(
   DCHECK(!mdpinfo->task_runner ||
          mdpinfo->task_runner->RunsTasksInCurrentSequence());
 
-  TRACE_EVENT1(kTraceCategory, "MemoryDumpManager::InvokeOnMemoryDump",
-               "dump_provider.name", mdpinfo->name.static_name());
+  TRACE_EVENT(kTraceCategory, "MemoryDumpManager::InvokeOnMemoryDump",
+              [&](perfetto::EventContext ctx) {
+                ctx.event<perfetto::protos::pbzero::ChromeTrackEvent>()
+                    ->set_memory_dump_provider()
+                    ->set_name(mdpinfo->name.histogram_name());
+              });
 
   // Do not add any other TRACE_EVENT macro (or function that might have them)
   // below this point. Under some rare circunstances, they can re-initialize
@@ -517,14 +510,7 @@ void MemoryDumpManager::InvokeOnMemoryDump(
   base::ElapsedLiveTimer memory_dump_timer;
   bool dump_successful =
       mdpinfo->dump_provider->OnMemoryDump(pmd->dump_args(), pmd);
-  const base::TimeDelta memory_dump_time = memory_dump_timer.Elapsed();
-  base::UmaHistogramMicrosecondsTimes(
-      base::StrCat({"Memory.DumpProvider.MemoryDumpTime2.",
-                    mdpinfo->name.histogram_name()}),
-      memory_dump_time);
-  // Aggregate all providers together without a suffix.
-  base::UmaHistogramMicrosecondsTimes("Memory.DumpProvider.MemoryDumpTime2",
-                                      memory_dump_time);
+  measured_mdpinfo.LogMemoryDumpTimeHistograms(memory_dump_timer.Elapsed());
 
   mdpinfo->consecutive_failures =
       dump_successful ? 0 : mdpinfo->consecutive_failures + 1;
@@ -613,22 +599,25 @@ MemoryDumpManager::ProcessMemoryDumpAsyncState::ProcessMemoryDumpAsyncState(
   for (scoped_refptr<MemoryDumpProviderInfo> provider :
        base::Reversed(dump_providers)) {
     ++provider_counts[provider->name.histogram_name()];
-    pending_dump_providers.emplace_back(std::move(provider));
+    pending_dump_providers.emplace_back(std::move(provider), req_args);
   }
   MemoryDumpArgs args = {req_args.level_of_detail, req_args.determinism,
                          req_args.dump_guid};
   process_memory_dump = std::make_unique<ProcessMemoryDump>(args);
 
-  // Log the count of objects for each provider type, and the total count
-  // without a suffix.
+  // Log the count of objects for each provider type.
   for (const auto& [provider_name, count] : provider_counts) {
-    base::UmaHistogramCounts100000(
-        base::StrCat({"Memory.DumpProvider.Count.", provider_name}),
-        static_cast<int>(count));
+    MeasuredMemoryDumpProviderInfo::LogProviderCountHistograms(
+        provider_name, req_args.level_of_detail, count);
   }
-  base::UmaHistogramCounts100000(
-      "Memory.DumpProvider.Count",
-      static_cast<int>(pending_dump_providers.size()));
+
+  base::UmaHistogramEnumeration(
+      base::StrCat({"Memory.Dump.Type.",
+                    MeasuredMemoryDumpProviderInfo::LevelOfDetailString(
+                        req_args.level_of_detail)}),
+      req_args.dump_type);
+  base::UmaHistogramEnumeration("Memory.Dump.Type.AllDetailLevels",
+                                req_args.dump_type);
 }
 
 MemoryDumpManager::ProcessMemoryDumpAsyncState::~ProcessMemoryDumpAsyncState() =

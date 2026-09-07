@@ -42,13 +42,13 @@ class ContextGroupTest : public GpuServiceTest {
     GpuServiceTest::SetUp();
     decoder_ = std::make_unique<MockGLES2Decoder>(
         &client_, &command_buffer_service_, &outputter_);
-    scoped_refptr<FeatureInfo> feature_info = new FeatureInfo;
-    group_ = scoped_refptr<ContextGroup>(new ContextGroup(
+    auto feature_info = base::MakeRefCounted<FeatureInfo>();
+    group_ = base::MakeRefCounted<ContextGroup>(
         gpu_preferences_, /*memory_tracker=*/nullptr,
         /*shader_translator_cache=*/nullptr,
         /*framebuffer_completeness_cache=*/nullptr, feature_info,
         /*progress_reporter=*/nullptr, GpuFeatureInfo(),
-        &shared_image_manager_));
+        &shared_image_manager_);
   }
 
   GpuPreferences gpu_preferences_;
@@ -107,6 +107,26 @@ TEST_F(ContextGroupTest, InitializeNoExtensions) {
   EXPECT_TRUE(group_->texture_manager() == nullptr);
   EXPECT_TRUE(group_->program_manager() == nullptr);
   EXPECT_TRUE(group_->shader_manager() == nullptr);
+}
+
+TEST_F(ContextGroupTest, MaxTextureImageUnits13Workaround) {
+  GpuDriverBugWorkarounds workarounds;
+  workarounds.max_texture_image_units_13 = true;
+  auto feature_info =
+      base::MakeRefCounted<FeatureInfo>(workarounds, GpuFeatureInfo());
+  auto group = base::MakeRefCounted<ContextGroup>(
+      gpu_preferences_, /*memory_tracker=*/nullptr,
+      /*shader_translator_cache=*/nullptr,
+      /*framebuffer_completeness_cache=*/nullptr, feature_info,
+      /*progress_reporter=*/nullptr, GpuFeatureInfo(), &shared_image_manager_);
+
+  TestHelper::SetupContextGroupInitExpectations(
+      gl_.get(), "ANGLE", "OpenGL ES 2.0", CONTEXT_TYPE_OPENGLES2);
+  group->Initialize(decoder_.get(), CONTEXT_TYPE_OPENGLES2);
+  EXPECT_EQ(static_cast<uint32_t>(TestHelper::kMaxTextureImageUnits),
+            group->max_texture_image_units());
+
+  group->Destroy(decoder_.get(), false);
 }
 
 TEST_F(ContextGroupTest, MultipleContexts) {

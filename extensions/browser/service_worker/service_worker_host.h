@@ -14,7 +14,9 @@
 #include "base/supports_user_data.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host_observer.h"
+#include "content/public/common/child_process_id.h"
 #include "extensions/browser/service_worker/worker_id.h"
+#include "extensions/common/api/messaging/signing_certificate.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/mojom/message_port.mojom.h"
 #include "extensions/common/mojom/service_worker.mojom.h"
@@ -63,7 +65,7 @@ class ServiceWorkerHost :
 
   static ServiceWorkerHost* GetWorkerFor(const WorkerId& worker);
   static void BindReceiver(
-      int render_process_id,
+      content::ChildProcessId render_process_id,
       mojo::PendingAssociatedReceiver<mojom::ServiceWorkerHost> receiver);
 
   // Returns all ServiceWorkerHosts associated with RenderProcessHost `rph`.
@@ -74,6 +76,7 @@ class ServiceWorkerHost :
   // mojom::ServiceWorkerHost:
   void DidInitializeServiceWorkerContext(
       const ExtensionId& extension_id,
+      const base::UnguessableToken& activation_token,
       int64_t service_worker_version_id,
       int worker_thread_id,
       const blink::ServiceWorkerToken& service_worker_token,
@@ -84,13 +87,15 @@ class ServiceWorkerHost :
       const base::UnguessableToken& activation_token,
       const GURL& service_worker_scope,
       int64_t service_worker_version_id,
-      int worker_thread_id) override;
+      int worker_thread_id,
+      const blink::ServiceWorkerToken& service_worker_token) override;
   void DidStopServiceWorkerContext(
       const ExtensionId& extension_id,
       const base::UnguessableToken& activation_token,
       const GURL& service_worker_scope,
       int64_t service_worker_version_id,
-      int worker_thread_id) override;
+      int worker_thread_id,
+      const blink::ServiceWorkerToken& service_worker_token) override;
   void RequestWorker(mojom::RequestParamsPtr params,
                      RequestWorkerCallback callback) override;
   void WorkerResponseAck(const base::Uuid& request_uuid) override;
@@ -104,6 +109,9 @@ class ServiceWorkerHost :
           port_host) override;
   void OpenChannelToNativeApp(
       const std::string& native_app_name,
+#if BUILDFLAG(IS_ANDROID)
+      const MojomSigningCertificates& android_certificates,
+#endif
       const PortId& port_id,
       mojo::PendingAssociatedRemote<extensions::mojom::MessagePort> port,
       mojo::PendingAssociatedReceiver<extensions::mojom::MessagePortHost>

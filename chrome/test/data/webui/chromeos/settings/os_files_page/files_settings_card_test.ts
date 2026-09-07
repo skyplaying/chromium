@@ -80,7 +80,7 @@ suite('<files-settings-card>', () => {
     await CrSettingsPrefs.initialized;
 
     filesSettingsCard = document.createElement('files-settings-card');
-    filesSettingsCard.prefs = prefElement.prefs;
+    filesSettingsCard.prefs = prefElement.prefs!;
     document.body.appendChild(filesSettingsCard);
     await flushTasks();
   }
@@ -136,6 +136,13 @@ suite('<files-settings-card>', () => {
     prefElement.remove();
     smbBrowserProxy.reset();
     Router.getInstance().resetRouteForTesting();
+  });
+
+  test('Card rendering does not depend on OneDriveBrowserProxy', async () => {
+    OneDriveBrowserProxy.setInstance(null);
+    await createFilesSettingsCard();
+    await flushTasks();
+    assertTrue(isVisible(filesSettingsCard));
   });
 
   test(

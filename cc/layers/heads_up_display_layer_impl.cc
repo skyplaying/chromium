@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/notreached.h"
@@ -67,7 +68,6 @@
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/geometry/size_conversions.h"
 #include "ui/gfx/geometry/skia_conversions.h"
-#include "ui/gl/trace_util.h"
 
 namespace cc {
 
@@ -312,7 +312,8 @@ void HeadsUpDisplayLayerImpl::UpdateHudTexture(
       ri->RasterCHROMIUM(
           display_item_list.get(), &image_provider, size, gfx::Rect(size),
           gfx::Rect(size), post_translate, post_scale, /*requires_clear=*/false,
-          /*raster_inducing_scroll_offsets=*/nullptr, &max_op_size_limit);
+          /*raster_inducing_scroll_offsets=*/nullptr, &max_op_size_limit,
+          base::RepeatingCallback<void(SkCanvas*, uint32_t)>());
       ri->EndRasterCHROMIUM();
     } else {
       // If not using |gpu_raster| but using gpu compositing, DrawHudContents()
@@ -468,15 +469,16 @@ void HeadsUpDisplayLayerImpl::GetContentsResourceId(
   }
 }
 
-void HeadsUpDisplayLayerImpl::PushPropertiesTo(LayerImpl* layer) {
-  LayerImpl::PushPropertiesTo(layer);
+void HeadsUpDisplayLayerImpl::CopyPropertiesTo(LayerImpl* layer) const {
+  LayerImpl::CopyPropertiesTo(layer);
+  static_cast<HeadsUpDisplayLayerImpl*>(layer)->SetHUDTypeface(typeface_);
+}
 
-  HeadsUpDisplayLayerImpl* layer_impl =
-      static_cast<HeadsUpDisplayLayerImpl*>(layer);
-
-  layer_impl->SetHUDTypeface(typeface_);
-  layer_impl->SetWebVitalsDebugRects(web_vitals_debug_rects_);
-  web_vitals_debug_rects_.clear();
+void HeadsUpDisplayLayerImpl::MovePropertiesToActiveLayer(
+    LayerImpl* active_layer) {
+  LayerImpl::MovePropertiesToActiveLayer(active_layer);
+  static_cast<HeadsUpDisplayLayerImpl*>(active_layer)
+      ->SetWebVitalsDebugRects(std::move(web_vitals_debug_rects_));
 }
 
 void HeadsUpDisplayLayerImpl::UpdateHudContents() {

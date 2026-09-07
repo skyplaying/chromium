@@ -6,8 +6,10 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
+#include "chrome/browser/glic/public/glic_perf_traits_tracker.h"
 #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
 #include "components/performance_manager/public/decorators/page_live_state_decorator.h"
+#include "components/performance_manager/public/features.h"
 #include "components/performance_manager/public/performance_manager.h"
 #include "components/permissions/permissions_client.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -27,8 +29,6 @@
 #include "chrome/browser/ui/android/tab_model/tab_model_observer.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 #else
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"  // nogncheck crbug.com/40147906
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
@@ -131,10 +131,9 @@ class ActiveTabObserver : public TabModelListObserver {
 
 #else
 
-// Encapsulates all of the "Active tab" tracking logic, which uses `BrowserList`
-// and is therefore not available on Android. This class keeps track of existing
-// Browsers and their tab strips, and updates PageLiveState data with whether
-// each tab is currently active or not.
+// Encapsulates all of the "Active tab" tracking logic. This class keeps track
+// of existing Browsers and their tab strips, and updates PageLiveState data
+// with whether each tab is currently active or not.
 class ActiveTabObserver : public TabStripModelObserver,
                           public BrowserCollectionObserver {
  public:
@@ -280,16 +279,12 @@ PageLiveStateDecoratorHelper::PageLiveStateDecoratorHelper() {
       ->GetMediaStreamCaptureIndicator()
       ->AddObserver(this);
 
-#if BUILDFLAG(IS_ANDROID)
-  if (base::FeatureList::IsEnabled(
-          chrome::android::kProcessRankPolicyAndroid)) {
-    active_tab_observer_ = std::make_unique<ActiveTabObserver>();
-  }
-#else
   active_tab_observer_ = std::make_unique<ActiveTabObserver>();
-#endif  // BUILDFLAG(IS_ANDROID)
 
   content::DevToolsAgentHost::AddObserver(this);
+
+  glic_perf_traits_observation_.Observe(
+      glic::GlicPerfTraitsTracker::GetInstance());
 }
 
 PageLiveStateDecoratorHelper::~PageLiveStateDecoratorHelper() {
@@ -384,6 +379,23 @@ void PageLiveStateDecoratorHelper::OnPageNodeCreatedForWebContents(
   // Start observing the WebContents. See comment on
   // |first_web_contents_observer_| for lifetime management details.
   new WebContentsObserver(web_contents, this);
+}
+
+void PageLiveStateDecoratorHelper::OnGlicActuationStateChanged(
+    content::WebContents* web_contents,
+    GlicActuationState state) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (base::FeatureList::IsEnabled(features::kGlicActuationPriorityVoter)) {
+    PageLiveStateDecorator::SetGlicActuationState(web_contents, state);
+  }
+}
+
+void PageLiveStateDecoratorHelper::OnIsGlicPinnedToVisibleInstanceChanged(
+    content::WebContents* web_contents,
+    bool is_pinned_to_visible) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  PageLiveStateDecorator::SetIsGlicPinnedToVisibleInstance(
+      web_contents, is_pinned_to_visible);
 }
 
 }  // namespace performance_manager

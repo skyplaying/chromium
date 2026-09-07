@@ -12,7 +12,7 @@
 #include "partition_alloc/address_pool_manager_types.h"
 #include "partition_alloc/build_config.h"
 #include "partition_alloc/buildflags.h"
-#include "partition_alloc/partition_address_space.h"
+#include "partition_alloc/internal/partition_address_space_internal.h"
 #include "partition_alloc/partition_alloc_base/compiler_specific.h"
 #include "partition_alloc/partition_alloc_base/component_export.h"
 #include "partition_alloc/partition_alloc_base/thread_annotations.h"
@@ -209,7 +209,7 @@ class PA_COMPONENT_EXPORT(PARTITION_ALLOC)
 
 #endif  // PA_BUILDFLAG(HAS_64_BIT_POINTERS)
 
-  PA_CONSTINIT static AddressPoolManager singleton_;
+  constinit static AddressPoolManager singleton_;
 };
 
 }  // namespace partition_alloc::internal

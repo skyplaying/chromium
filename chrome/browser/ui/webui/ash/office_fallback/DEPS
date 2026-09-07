@@ -15,8 +15,15 @@ include_rules = [
   "+chrome/browser/chromeos/upload_office_to_cloud",
   "+chrome/browser/profiles/profile.h",
   "+chrome/browser/ui/browser.h",
+  "+chrome/browser/ui/browser_window/public",
   "+chrome/browser/ui/webui/ash/system_web_dialog",
   "+chrome/common",
   "+chrome/grit",
   "+chrome/test/base",
 ]
+
+specific_include_rules = {
+  "office_fallback_ui\\.cc": [
+    "+chrome/browser/ui/webui/theme_source.h",
+  ],
+}

@@ -23,14 +23,11 @@ const uint64 kMaxMessageBytes = 67108864;  // 64 * 1024 * 1024
 // NOTE: To obtain this for message sending purposes use
 // `messaging_util::GetSerializationFormat()`.
 enum SerializationFormat {
-  // Serialized using the structured clone algorithm. (If
-  // `extensions_features::kStructuredCloningForMessaging` is enabled) Used for
+  // Serialized using the structured clone algorithm. Used for
   // standard extension messaging channels (`ChannelType::kSendMessage`,
   // `ChannelType::kConnect`) to support richer data types.
   kStructuredClone,
-  // Serialized using JSON. Used for all `ChannelType`s (if
-  // `extensions_features::kStructuredCloningForMessaging` is disabled).
-  // Otherwise only used for `ChannelType::kNative` messaging (which
+  // Serialized using JSON. Used for `ChannelType::kNative` messaging (which
   // requires JSON) and legacy methods (`ChannelType::kSendRequest`).
   kJson,
 };
@@ -111,11 +108,6 @@ union MessageData {
 struct Message {
   // The data payload of the message.
   MessageData data;
-  // The serialization format used for the message. This dictates which field
-  // in `data` is populated.
-  // TODO(crbug.com/40321352): Remove this field once structured cloning is
-  // fully implemented and we can rely on the union tag.
-  SerializationFormat format;
   // Whether the message was sent with a user gesture. This is determined by
   // the sender's context.
   bool user_gesture;

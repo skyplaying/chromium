@@ -4,11 +4,6 @@
 
 package org.chromium.chrome.browser.tasks.tab_management;
 
-import static org.chromium.ui.listmenu.ListItemType.MENU_ITEM;
-import static org.chromium.ui.listmenu.ListMenuItemProperties.CLICK_LISTENER;
-import static org.chromium.ui.listmenu.ListMenuItemProperties.ENABLED;
-import static org.chromium.ui.listmenu.ListMenuItemProperties.TITLE;
-
 import android.app.Activity;
 
 import androidx.annotation.LayoutRes;
@@ -18,13 +13,12 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.multiwindow.MultiInstanceManager;
 import org.chromium.chrome.browser.tabmodel.TabModel;
+import org.chromium.components.browser_ui.widget.ListItemBuilder;
 import org.chromium.components.collaboration.CollaborationService;
 import org.chromium.components.tab_group_sync.TabGroupSyncService;
 import org.chromium.ui.accessibility.AccessibilityState;
 import org.chromium.ui.base.LocalizationUtils;
-import org.chromium.ui.listmenu.ListMenuItemProperties;
 import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
-import org.chromium.ui.modelutil.PropertyModel;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -72,10 +66,10 @@ public abstract class TabStripReorderingHelper<T> extends TabOverflowMenuCoordin
         mReorderFunction = reorderFunction;
     }
 
-    /** Return whether the item with id {@param id} can be reordered towards the start. */
+    /** Return whether the item with id {@code id} can be reordered towards the start. */
     protected abstract boolean canItemMoveTowardStart(T id);
 
-    /** Return whether the item with id {@param id} can be reordered towards the end. */
+    /** Return whether the item with id {@code id} can be reordered towards the end. */
     protected abstract boolean canItemMoveTowardEnd(T id);
 
     /** Returns whether an a11y gesture service is on. (Can be overridden for testing.) */
@@ -92,7 +86,7 @@ public abstract class TabStripReorderingHelper<T> extends TabOverflowMenuCoordin
     }
 
     /**
-     * Returns list items for moving the item with id {@param id} to the left or to the right.
+     * Returns list items for moving the item with id {@code id} to the left or to the right.
      *
      * <p>We only return list items when an a11y service that performs gestures is on.
      *
@@ -102,32 +96,30 @@ public abstract class TabStripReorderingHelper<T> extends TabOverflowMenuCoordin
      * @param moveLeftString The string for moving an item of this type to the left. Note: this is
      *     truly left, not "start", so it is still left in RTL.
      * @param moveRightString The string for moving an item of this type to the right.
-     * @return A list of menu list items for reordering the item with id {@param id}.
+     * @param isIncognito Whether this tab strip item is in an incognito model.
+     * @param isVertical Whether the layout is vertical (where RTL flipping is skipped).
+     * @return A list of menu list items for reordering the item with id {@code id}.
      */
     protected List<ListItem> createReorderItems(
-            T id, String moveLeftString, String moveRightString) {
+            T id,
+            String moveLeftString,
+            String moveRightString,
+            boolean isIncognito,
+            boolean isVertical) {
         if (!isGesturesEnabled()) return List.of();
-        boolean isRtl = LocalizationUtils.isLayoutRtl();
+        boolean isRtl = LocalizationUtils.isLayoutRtl() && !isVertical;
         ListItem moveTowardsStartItem =
-                new ListItem(
-                        MENU_ITEM,
-                        new PropertyModel.Builder(ListMenuItemProperties.ALL_KEYS)
-                                .with(TITLE, isRtl ? moveRightString : moveLeftString)
-                                .with(ENABLED, true)
-                                .with(
-                                        CLICK_LISTENER,
-                                        v -> mReorderFunction.accept(id, /* toLeft= */ !isRtl))
-                                .build());
+                new ListItemBuilder()
+                        .withTitle(isRtl ? moveRightString : moveLeftString)
+                        .withClickListener(v -> mReorderFunction.accept(id, /* toLeft= */ !isRtl))
+                        .withIsIncognito(isIncognito)
+                        .build();
         ListItem moveTowardsEndItem =
-                new ListItem(
-                        MENU_ITEM,
-                        new PropertyModel.Builder(ListMenuItemProperties.ALL_KEYS)
-                                .with(TITLE, isRtl ? moveLeftString : moveRightString)
-                                .with(ENABLED, true)
-                                .with(
-                                        CLICK_LISTENER,
-                                        v -> mReorderFunction.accept(id, /* toLeft= */ isRtl))
-                                .build());
+                new ListItemBuilder()
+                        .withTitle(isRtl ? moveLeftString : moveRightString)
+                        .withClickListener(v -> mReorderFunction.accept(id, /* toLeft= */ isRtl))
+                        .withIsIncognito(isIncognito)
+                        .build();
 
         List<ListItem> result = new ArrayList<>();
         if (canItemMoveTowardStart(id)) {

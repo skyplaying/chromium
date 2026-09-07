@@ -20,6 +20,8 @@
 
 namespace omnibox {
 
+inline constexpr int kDefaultMaxTotalInputs = 10;
+
 // Represents a valid searchbox inputs state.
 // LINT.IfChange(InputState)
 struct InputState {
@@ -51,13 +53,14 @@ struct InputState {
   std::optional<SectionConfig> tools_section_config;
   std::optional<SectionConfig> model_section_config;
   // The max number of inputs of a given type.
-  std::map<InputType, int> max_instances;
+  std::map<InputType, int> max_inputs_by_type;
   int max_total_inputs = 0;
   std::string hint_text;
 
   // Returns whether both `TOOL_MODE_IMAGE_GEN` and `INPUT_TYPE_LENS_IMAGE` are
   // active. Needed for suggest requests with `TOOL_MODE_IMAGE_GEN_UPLOAD`.
   bool image_gen_upload_active = false;
+  bool is_canvas_query_submitted = false;
 };
 // LINT.ThenChange(//components/omnibox/composebox/composebox_query.mojom:InputState)
 

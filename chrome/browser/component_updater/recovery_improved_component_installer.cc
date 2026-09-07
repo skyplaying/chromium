@@ -11,9 +11,12 @@
 // The recovery component is built and used by Google Chrome only.
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
 
-#include <iterator>
+#include <cstdint>
+#include <memory>
+#include <string>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 #include "base/command_line.h"
 #include "base/files/file_path.h"
@@ -92,16 +95,17 @@ void RecoveryComponentActionHandler::Unpack() {
   update_client::Unpacker::Unpack(
       kRecoveryImprovedComponentId, "RecoveryComponentActionHandler", key_hash_,
       crx_path_, std::move(unzipper), verifier_format_,
+      /*is_foreground=*/true,
       base::BindOnce(&RecoveryComponentActionHandler::UnpackComplete, this));
 }
 
 void RecoveryComponentActionHandler::UnpackComplete(
     const update_client::Unpacker::Result& result) {
   if (result.error != update_client::UnpackerError::kNone) {
-    main_task_runner_->PostTask(
-        FROM_HERE,
-        base::BindOnce(std::move(callback_), false,
-                       static_cast<int>(result.error), result.extended_error));
+    main_task_runner_->PostTask(FROM_HERE,
+                                base::BindOnce(std::move(callback_), false,
+                                               std::to_underlying(result.error),
+                                               result.extended_error));
     return;
   }
 
@@ -149,7 +153,7 @@ void RecoveryComponentActionHandler::WaitForCommand(
         process_or_error->WaitForExitWithTimeout(kMaxWaitTime, &exit_code);
   } else {
     exit_code =
-        static_cast<int>(update_client::InstallError::LAUNCH_PROCESS_FAILED);
+        std::to_underlying(update_client::InstallError::LAUNCH_PROCESS_FAILED);
     extra_code1 = process_or_error.error();
   }
   base::DeletePathRecursively(unpack_path_);
@@ -196,8 +200,7 @@ base::FilePath RecoveryImprovedInstallerPolicy::GetRelativeInstallDir() const {
 
 void RecoveryImprovedInstallerPolicy::GetHash(
     std::vector<uint8_t>* hash) const {
-  hash->assign(std::begin(kRecoveryImprovedPublicKeySHA256),
-               std::end(kRecoveryImprovedPublicKeySHA256));
+  hash->assign_range(kRecoveryImprovedPublicKeySHA256);
 }
 
 std::string RecoveryImprovedInstallerPolicy::GetName() const {

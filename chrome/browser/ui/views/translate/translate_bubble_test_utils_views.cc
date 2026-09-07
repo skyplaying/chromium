@@ -3,30 +3,31 @@
 // found in the LICENSE file.
 
 #include "base/check_op.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/translate/translate_bubble_model.h"
 #include "chrome/browser/ui/translate/translate_bubble_test_utils.h"
 #include "chrome/browser/ui/views/translate/translate_bubble_controller.h"
 #include "chrome/browser/ui/views/translate/translate_bubble_view.h"
+#include "components/translate/core/common/translate_features.h"
 #include "ui/events/keycodes/dom/dom_code.h"
 #include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/combobox/combobox.h"
 
 namespace translate::test_utils {
 
-TranslateBubbleView* GetTranslateBubble(Browser* browser) {
+TranslateBubbleView* GetTranslateBubble(BrowserWindowInterface* browser) {
   return TranslateBubbleController::From(browser)->GetTranslateBubble();
 }
 
-const TranslateBubbleModel* GetCurrentModel(Browser* browser) {
+const TranslateBubbleModel* GetCurrentModel(BrowserWindowInterface* browser) {
   DCHECK(browser);
   TranslateBubbleView* view = GetTranslateBubble(browser);
 
   return view ? view->model() : nullptr;
 }
 
-void CloseCurrentBubble(Browser* browser) {
+void CloseCurrentBubble(BrowserWindowInterface* browser) {
   DCHECK(browser);
   TranslateBubbleController* controller =
       TranslateBubbleController::From(browser);
@@ -35,7 +36,7 @@ void CloseCurrentBubble(Browser* browser) {
   }
 }
 
-void PressTranslate(Browser* browser) {
+void PressTranslate(BrowserWindowInterface* browser) {
   DCHECK(browser);
   TranslateBubbleView* bubble = GetTranslateBubble(browser);
   DCHECK(bubble);
@@ -43,7 +44,7 @@ void PressTranslate(Browser* browser) {
   bubble->TabSelectedAt(1);
 }
 
-void PressRevert(Browser* browser) {
+void PressRevert(BrowserWindowInterface* browser) {
   DCHECK(browser);
   TranslateBubbleView* bubble = GetTranslateBubble(browser);
   DCHECK(bubble);
@@ -51,7 +52,7 @@ void PressRevert(Browser* browser) {
   bubble->TabSelectedAt(0);
 }
 
-void SelectTargetLanguageByDisplayName(Browser* browser,
+void SelectTargetLanguageByDisplayName(BrowserWindowInterface* browser,
                                        const std::u16string& display_name) {
   DCHECK(browser);
 
@@ -73,9 +74,13 @@ void SelectTargetLanguageByDisplayName(Browser* browser,
   }
   DCHECK_GE(language_index, 0);
 
-  // Simulate selecting the correct index of the target language combo box.
-  bubble->target_language_combobox_->SetSelectedIndex(language_index);
-  bubble->TargetLanguageChanged();
+  // Simulate selecting the correct index of the target language.
+  if (base::FeatureList::IsEnabled(translate::kTranslateLanguageSearchUI)) {
+    bubble->TargetLanguageChangedWithIndex(language_index);
+  } else {
+    bubble->target_language_combobox_->SetSelectedIndex(language_index);
+    bubble->TargetLanguageChanged();
+  }
 }
 
 }  // namespace translate::test_utils

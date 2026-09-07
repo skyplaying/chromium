@@ -9,6 +9,7 @@
 #include <functional>
 #include <limits>
 
+#include "base/byte_size.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -18,9 +19,7 @@
 #include "base/metrics/field_trial.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/no_destructor.h"
-#include "base/system/sys_info.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
@@ -717,7 +716,7 @@ SimpleBackendImpl::DiskStatResult SimpleBackendImpl::InitCacheStructureOnDisk(
   result.net_error = net::OK;
   SimpleCacheConsistencyResult consistency =
       FileStructureConsistent(file_operations.get(), path);
-  SIMPLE_CACHE_UMA(ENUMERATION, "ConsistencyResult", cache_type, consistency);
+  SIMPLE_CACHE_UMA(ENUMERATION, "ConsistencyResult2", cache_type, consistency);
 
   // If the cache structure is inconsistent make a single attempt at
   // recovering it.  Previously there were bugs that could cause a partially
@@ -725,7 +724,7 @@ SimpleBackendImpl::DiskStatResult SimpleBackendImpl::InitCacheStructureOnDisk(
   // that case we can delete the index files and start over.  Also, some
   // consistency failures may leave an empty directory directly and we can
   // retry those cases as well.
-  if (consistency != SimpleCacheConsistencyResult::kOK) {
+  if (!IsOK(consistency)) {
     bool deleted_files = disk_cache::DeleteIndexFilesIfCacheIsEmpty(path);
     SIMPLE_CACHE_UMA(BOOLEAN, "DidDeleteIndexFilesAfterFailedConsistency",
                      cache_type, deleted_files);
@@ -734,7 +733,7 @@ SimpleBackendImpl::DiskStatResult SimpleBackendImpl::InitCacheStructureOnDisk(
       consistency = FileStructureConsistent(file_operations.get(), path);
       SIMPLE_CACHE_UMA(ENUMERATION, "RetryConsistencyResult", cache_type,
                        consistency);
-      if (consistency == SimpleCacheConsistencyResult::kOK) {
+      if (IsOK(consistency)) {
         SIMPLE_CACHE_UMA(ENUMERATION,
                          "OriginalConsistencyResultBeforeSuccessfulRetry",
                          cache_type, orig_consistency);
@@ -746,7 +745,7 @@ SimpleBackendImpl::DiskStatResult SimpleBackendImpl::InitCacheStructureOnDisk(
     }
   }
 
-  if (consistency != SimpleCacheConsistencyResult::kOK) {
+  if (!IsOK(consistency)) {
     LOG(ERROR) << "Simple Cache Backend: wrong file structure on disk: "
                << static_cast<int>(consistency)
                << " path: " << path.LossyDisplayName();
@@ -765,9 +764,8 @@ SimpleBackendImpl::DiskStatResult SimpleBackendImpl::InitCacheStructureOnDisk(
     } else {
       result.cache_dir_mtime = file_info->last_modified;
       if (!result.max_size) {
-        int64_t available =
-            base::SysInfo::AmountOfFreeDiskSpace(path).value_or(-1);
-        result.max_size = disk_cache::PreferredCacheSize(available, cache_type);
+        result.max_size =
+            disk_cache::PreferredCacheSizeForPath(path, cache_type).InBytes();
         DCHECK(result.max_size);
       }
     }
@@ -915,8 +913,12 @@ void SimpleBackendImpl::DoomEntriesComplete(
     std::unique_ptr<std::vector<uint64_t>> entry_hashes,
     CompletionOnceCallback callback,
     int result) {
+  // Save `post_doom_waiting_` locally in case something invoked from us
+  // deletes `this`.
+  scoped_refptr<SimplePostOperationWaiterTable> post_doom_waiting =
+      post_doom_waiting_;
   for (const uint64_t& entry_hash : *entry_hashes)
-    post_doom_waiting_->OnOperationComplete(entry_hash);
+    post_doom_waiting->OnOperationComplete(entry_hash);
   std::move(callback).Run(result);
 }
 
@@ -925,6 +927,14 @@ uint32_t SimpleBackendImpl::GetNewEntryPriority(
   // Lower priority is better, so give high network priority the least bump.
   return ((net::RequestPriority::MAXIMUM_PRIORITY - request_priority) * 10000) +
          entry_count_++;
+}
+
+void SimpleBackendImpl::SetMaxBytes(base::ByteSize max_bytes) {
+  index_->SetMaxSize(max_bytes.InBytes());
+}
+
+base::ByteSize SimpleBackendImpl::GetMaxBytesForTesting() const {
+  return base::ByteSize(index_->max_size());
 }
 
 }  // namespace disk_cache

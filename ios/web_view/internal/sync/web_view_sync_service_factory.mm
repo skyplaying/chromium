@@ -14,14 +14,12 @@
 #import "components/autofill/core/browser/webdata/addresses/autofill_profile_sync_bridge.h"
 #import "components/autofill/core/common/autofill_features.h"
 #import "components/browser_sync/common_controller_builder.h"
-#import "components/sync/base/features.h"
 #import "components/keyed_service/ios/browser_state_dependency_manager.h"
 #import "components/metrics/demographics/user_demographics.h"
 #import "components/password_manager/core/browser/sharing/password_receiver_service.h"
 #import "components/password_manager/core/browser/sharing/password_sender_service.h"
-#import "components/plus_addresses/core/browser/settings/plus_address_setting_service.h"
-#import "components/plus_addresses/core/browser/webdata/plus_address_webdata_service.h"
 #import "components/sync/base/data_type.h"
+#import "components/sync/base/features.h"
 #import "components/sync/base/sync_util.h"
 #import "components/sync/engine/net/http_bridge.h"
 #import "components/sync/service/data_type_controller.h"
@@ -106,10 +104,7 @@ syncer::DataTypeController::TypeVector CreateControllers(
   controller_builder.SetPasskeyModel(nullptr);
   controller_builder.SetPasswordReceiverService(nullptr);
   controller_builder.SetPasswordSenderService(nullptr);
-  controller_builder.SetPlusAddressServices(nullptr, nullptr);
   controller_builder.SetPrefServiceSyncable(nullptr);
-  // TODO(crbug.com/330201909) implement for iOS.
-  controller_builder.SetProductSpecificationsService(nullptr);
   controller_builder.SetSendTabToSelfSyncService(nullptr);
   controller_builder.SetSessionSyncService(nullptr);
   controller_builder.SetSharingMessageBridge(nullptr);
@@ -119,6 +114,7 @@ syncer::DataTypeController::TypeVector CreateControllers(
   controller_builder.SetTabGroupSyncService(nullptr);
   controller_builder.SetTemplateURLService(nullptr);
   controller_builder.SetUserEventService(nullptr);
+  controller_builder.SetNotebooksService(nullptr);
 
   return controller_builder.Build(GetDisabledTypes(prefs), sync_service,
                                   version_info::Channel::STABLE);

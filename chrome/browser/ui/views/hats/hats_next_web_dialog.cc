@@ -4,12 +4,10 @@
 
 #include "chrome/browser/ui/views/hats/hats_next_web_dialog.h"
 
-#include "base/base64url.h"
 #include "base/feature_list.h"
 #include "base/json/json_writer.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/notimplemented.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/to_string.h"
@@ -26,19 +24,15 @@
 #include "chrome/browser/ui/hats/hats_service_desktop.h"
 #include "chrome/browser/ui/hats/hats_service_factory.h"
 #include "chrome/browser/ui/hats/survey_config.h"
-#include "chrome/browser/ui/ui_features.h"
-#include "chrome/browser/ui/views/frame/app_menu_button.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
 #include "chrome/browser/ui/views/frame/top_container_view.h"
-#include "chrome/browser/ui/webui/chrome_web_contents_handler.h"
+#include "chrome/browser/ui/views/toolbar/app_menu_control.h"
 #include "chrome/common/chrome_features.h"
-#include "chrome/common/chrome_isolated_world_ids.h"
-#include "chrome/common/pref_names.h"
-#include "chrome/common/webui_url_constants.h"
 #include "components/constrained_window/constrained_window_views.h"
-#include "components/version_info/version_info.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/host_zoom_map.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_ui.h"
@@ -50,9 +44,9 @@
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
-#include "ui/base/ui_base_types.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
-#include "ui/views/bubble/bubble_frame_view.h"
 #include "ui/views/controls/webview/web_dialog_view.h"
 #include "ui/views/controls/webview/webview.h"
 #include "ui/views/layout/fill_layout.h"
@@ -79,6 +73,17 @@ void LogUmaHistogramSparse(
     HatsNextWebDialog::SurveyHistogramEnumeration enumeration) {
   return LogUmaHistogramSparse(hats_histogram_name,
                                static_cast<int>(enumeration));
+}
+
+views::BubbleAnchor GetBubbleAnchor(BrowserWindowInterface* browser) {
+  if (browser->GetType() == BrowserWindowInterface::Type::TYPE_DEVTOOLS) {
+    return views::BubbleAnchor(
+        BrowserView::GetBrowserViewForBrowser(browser)->top_container());
+  }
+  auto* control = BrowserView::GetBrowserViewForBrowser(browser)
+                      ->toolbar_button_provider()
+                      ->GetAppMenuControl();
+  return control ? control->GetAnchor() : views::BubbleAnchor();
 }
 
 // WebView which contains the WebContents displaying the HaTS Next survey.
@@ -115,8 +120,11 @@ class HatsNextWebDialog::HatsWebView : public views::WebView {
       const GURL& opener_url,
       const std::string& frame_name,
       const GURL& target_url,
+      WindowOpenDisposition disposition,
+      const blink::mojom::WindowFeatures& window_features,
       const content::StoragePartitionConfig& partition_config,
-      content::SessionStorageNamespace* session_storage_namespace) override {
+      content::SessionStorageNamespaceHandle* session_storage_namespace)
+      override {
     // The HaTS Next WebDialog runs with a non-primary OTR profile. This profile
     // cannot open new browser windows, so they are instead opened in the
     // regular browser that initiated the HaTS survey.
@@ -357,17 +365,10 @@ HatsNextWebDialog::HatsNextWebDialog(
     base::OnceClosure failure_callback,
     const SurveyBitsData& product_specific_bits_data,
     const SurveyStringData& product_specific_string_data)
-    : BubbleDialogDelegateView(
-          browser->GetType() == BrowserWindowInterface::Type::TYPE_DEVTOOLS
-              ? static_cast<views::View*>(
-                    BrowserView::GetBrowserViewForBrowser(browser)
-                        ->top_container())
-              : BrowserView::GetBrowserViewForBrowser(browser)
-                    ->toolbar_button_provider()
-                    ->GetAppMenuButton(),
-          views::BubbleBorder::TOP_RIGHT,
-          views::BubbleBorder::DIALOG_SHADOW,
-          /*autosize=*/true),
+    : BubbleDialogDelegateView(GetBubbleAnchor(browser),
+                               views::BubbleBorder::TOP_RIGHT,
+                               views::BubbleBorder::DIALOG_SHADOW,
+                               /*autosize=*/true),
       otr_profile_(browser->GetProfile()->GetOffTheRecordProfile(
           Profile::OTRProfileID::CreateUnique("HaTSNext:WebDialog"),
           /*create_if_needed=*/true)),
@@ -386,8 +387,8 @@ HatsNextWebDialog::HatsNextWebDialog(
       failure_callback_(std::move(failure_callback)),
       product_specific_bits_data_(product_specific_bits_data),
       product_specific_string_data_(product_specific_string_data),
-      ukm_hats_builder_(browser->GetTabStripModel()
-                            ->GetActiveWebContents()
+      ukm_hats_builder_(browser->GetActiveTabInterface()
+                            ->GetContents()
                             ->GetPrimaryMainFrame()
                             ->GetPageUkmSourceId()) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);

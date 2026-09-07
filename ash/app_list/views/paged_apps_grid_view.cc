@@ -35,7 +35,7 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/compositor/animation_throughput_reporter.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_textured.h"
 #include "ui/compositor/paint_recorder.h"
 #include "ui/events/event.h"
 #include "ui/events/types/event_type.h"
@@ -130,7 +130,7 @@ class PagedAppsGridView::BackgroundCardLayer : public ui::LayerOwner,
                                                public ui::LayerDelegate {
  public:
   explicit BackgroundCardLayer(PagedAppsGridView* paged_apps_grid_view)
-      : LayerOwner(std::make_unique<ui::Layer>(ui::LAYER_TEXTURED)),
+      : LayerOwner(std::make_unique<ui::LayerTextured>()),
         paged_apps_grid_view_(paged_apps_grid_view) {
     layer()->SetFillsBoundsOpaquely(false);
     layer()->set_delegate(this);

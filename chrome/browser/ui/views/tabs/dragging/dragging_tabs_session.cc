@@ -9,12 +9,12 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/types/pass_key.h"
 #include "chrome/browser/ui/layout_constants.h"
-#include "chrome/browser/ui/tabs/features.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/tabs/dragging/drag_session_data.h"
 #include "chrome/browser/ui/views/tabs/dragging/tab_drag_context.h"
 #include "chrome/browser/ui/views/tabs/tab_slot_view.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
+#include "components/tab_groups/tab_group_id.h"
 #include "components/viz/common/frame_timing_details.h"
 #include "ui/compositor/compositor.h"
 #include "ui/views/widget/widget.h"
@@ -158,7 +158,7 @@ void DraggingTabsSession::MoveAttachedImpl(gfx::Point point_in_screen,
 
   // Snap the non-dragged tabs to their ideal bounds now, otherwise those tabs
   // will animate to those bounds after attach, which looks flickery/bad. See
-  // https://crbug.com/1360330.
+  // https://crbug.com/40862994.
   if (just_attached && !initial_move_) {
     drag_position_delegate_->ForceLayout();
   }
@@ -232,6 +232,14 @@ DraggingTabsSession::CalculateGroupForDraggedTabs(int to_index) {
     return std::nullopt;
   }
 
+  // When focus mode is active, dragging unpinned tabs within the tab strip
+  // must remain in the focused group.
+  const std::optional<tab_groups::TabGroupId> focused_group =
+      attached_model->GetFocusedGroup();
+  if (focused_group.has_value()) {
+    return focused_group;
+  }
+
   std::optional<tab_groups::TabGroupId> left_group =
       adjacent_indices.first.has_value()
           ? attached_model->GetTabGroupForTab(adjacent_indices.first.value())
@@ -302,7 +310,7 @@ DraggingTabsSession::CalculateGroupForDraggedTabs(int to_index) {
     // tabs are as far right as they can go without being pulled out into a new
     // window. In this case, since the dragged tabs can't move further right in
     // the tabstrip, it will never go "beyond" the left_group and therefore
-    // never leave it unless we add this check. See crbug.com/1134376.
+    // never leave it unless we add this check. See crbug.com/40723040.
     if (tab_bounds_in_drag_context_coords(selected_unpinned.back()).right() >=
         drag_position_delegate_->TabDragAreaEndX()) {
       return std::nullopt;
@@ -330,7 +338,7 @@ gfx::Point DraggingTabsSession::GetAttachedDragPoint(
   // If the width needed for the `attached_views_` is greater than what is
   // available in the tab drag area the attached drag point should simply be the
   // beginning of the tab strip. Once attached the `attached_views_` will simply
-  // overflow as usual (see https://crbug.com/1250184).
+  // overflow as usual (see https://crbug.com/40791711).
   const int max_x = std::max(
       0, drag_position_delegate_->GetTabDragAreaWidth() -
              TabStrip::GetSizeNeededForViews(drag_data_.attached_views()));

@@ -167,7 +167,7 @@ FontFace* FontFace::Create(ExecutionContext* context,
                            const FontFaceDescriptors* descriptors) {
   FontFace* font_face =
       MakeGarbageCollected<FontFace>(context, family, descriptors);
-  font_face->SetIsInvalidFontFamilyIfNeeded(family);
+  font_face->SetFontFamilyNeedsQuoting(family);
 
   const CSSValue* src = ParseCSSValue(context, source, AtRuleDescriptorID::Src);
   if (!src || !src->IsValueList()) {
@@ -264,7 +264,9 @@ FontFace::FontFace(ExecutionContext* context,
                         AtRuleDescriptorID::FontStyle);
   SetPropertyFromString(context, descriptors->weight(),
                         AtRuleDescriptorID::FontWeight);
-  SetPropertyFromString(context, descriptors->stretch(),
+  SetPropertyFromString(context,
+                        descriptors->hasWidth() ? descriptors->width()
+                                                : descriptors->stretch(),
                         AtRuleDescriptorID::FontStretch);
   SetPropertyFromString(context, descriptors->unicodeRange(),
                         AtRuleDescriptorID::UnicodeRange);
@@ -291,8 +293,8 @@ FontFace::FontFace(ExecutionContext* context,
 FontFace::~FontFace() = default;
 
 AtomicString FontFace::family() const {
-  return is_invalid_font_family_ ? AtomicString(SerializeFontFamily(family_))
-                                 : family_;
+  return font_family_needs_quoting_ ? AtomicString(SerializeFontFamily(family_))
+                                    : family_;
 }
 
 String FontFace::style() const {
@@ -356,8 +358,12 @@ void FontFace::setFamily(ExecutionContext* context,
 void FontFace::setStyle(ExecutionContext* context,
                         const String& s,
                         ExceptionState& exception_state) {
+  Member<const CSSValue> old_style = style_;
   SetPropertyFromString(context, s, AtRuleDescriptorID::FontStyle,
                         &exception_state);
+  if (old_style != style_) {
+    InvalidateFontFaceOnDescriptorUpdate();
+  }
 }
 
 void FontFace::setWeight(ExecutionContext* context,
@@ -376,8 +382,12 @@ void FontFace::setWeight(ExecutionContext* context,
 void FontFace::setStretch(ExecutionContext* context,
                           const String& s,
                           ExceptionState& exception_state) {
+  Member<const CSSValue> old_stretch = stretch_;
   SetPropertyFromString(context, s, AtRuleDescriptorID::FontStretch,
                         &exception_state);
+  if (old_stretch != stretch_) {
+    InvalidateFontFaceOnDescriptorUpdate();
+  }
 }
 
 void FontFace::setUnicodeRange(ExecutionContext* context,
@@ -406,15 +416,27 @@ void FontFace::setVariant(ExecutionContext* context,
 void FontFace::setFeatureSettings(ExecutionContext* context,
                                   const String& s,
                                   ExceptionState& exception_state) {
+  // Save old value to detect actual change.
+  Member<const CSSValue> old_feature_settings = feature_settings_;
   SetPropertyFromString(context, s, AtRuleDescriptorID::FontFeatureSettings,
                         &exception_state);
+
+  if (old_feature_settings != feature_settings_) {
+    InvalidateFontFaceOnDescriptorUpdate();
+  }
 }
 
 void FontFace::setVariationSettings(ExecutionContext* context,
                                     const String& s,
                                     ExceptionState& exception_state) {
+  // Save old value to detect actual change.
+  Member<const CSSValue> old_variation_settings = variation_settings_;
   SetPropertyFromString(context, s, AtRuleDescriptorID::FontVariationSettings,
                         &exception_state);
+
+  if (old_variation_settings != variation_settings_) {
+    InvalidateFontFaceOnDescriptorUpdate();
+  }
 }
 
 void FontFace::setDisplay(ExecutionContext* context,
@@ -531,8 +553,9 @@ void FontFace::SetFamilyValue(const CSSFontFamilyValue& family_value) {
   family_ = family_value.Value();
 }
 
-void FontFace::SetIsInvalidFontFamilyIfNeeded(const AtomicString& family_name) {
-  is_invalid_font_family_ = css_parsing_utils::IsInvalidFontFamily(family_name);
+void FontFace::SetFontFamilyNeedsQuoting(const AtomicString& family_name) {
+  font_family_needs_quoting_ =
+      css_parsing_utils::FontFamilyNeedsQuoting(family_name);
 }
 
 V8FontFaceLoadStatus FontFace::status() const {
@@ -1046,8 +1069,9 @@ void FontFace::InvalidateFontFaceOnDescriptorUpdate() {
 
   FontFaceCache* cache = font_selector->GetFontFaceCache();
 
-  cache->RemoveFontFace(this, /*css_connected=*/false);
-
+  if (!cache->RemoveFontFace(this, /*css_connected=*/false)) {
+    return;
+  }
   cache->AddFontFace(this, /*css_connected=*/false);
 
   font_selector->FontFaceInvalidated(

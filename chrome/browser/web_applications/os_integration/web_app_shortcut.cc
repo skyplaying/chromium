@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -39,9 +40,9 @@
 #include "chrome/browser/web_applications/web_app_icon_manager.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/common/chrome_constants.h"
+#include "chrome/grit/app_icon_resources.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
-#include "extensions/grit/extensions_browser_resources.h"
 #include "skia/ext/image_operations.h"
 #include "third_party/protobuf/src/google/protobuf/repeated_field.h"
 #include "third_party/re2/src/re2/re2.h"
@@ -64,18 +65,6 @@ namespace web_app {
 
 namespace {
 
-#if BUILDFLAG(IS_MAC)
-const int kDesiredIconSizesForShortcut[] = {16, 32, 128, 256, 512};
-#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-// Linux supports icons of any size. FreeDesktop Icon Theme Specification states
-// that "Minimally you should install a 48x48 icon in the hicolor theme."
-const int kDesiredIconSizesForShortcut[] = {16, 32, 48, 128, 256, 512};
-#elif BUILDFLAG(IS_WIN)
-const int* kDesiredIconSizesForShortcut = IconUtil::kIconDimensions;
-#else
-const int kDesiredIconSizesForShortcut[] = {32};
-#endif
-
 #if BUILDFLAG(IS_WIN)
 base::LazyThreadPoolCOMSTATaskRunner g_shortcuts_task_runner =
     LAZY_COM_STA_TASK_RUNNER_INITIALIZER(
@@ -88,14 +77,6 @@ base::LazyThreadPoolSequencedTaskRunner g_shortcuts_task_runner =
         base::TaskTraits({base::MayBlock(), base::TaskPriority::USER_VISIBLE,
                           base::TaskShutdownBehavior::BLOCK_SHUTDOWN}));
 #endif
-
-size_t GetNumDesiredIconSizesForShortcut() {
-#if BUILDFLAG(IS_WIN)
-  return IconUtil::kNumIconDimensions;
-#else
-  return std::size(kDesiredIconSizesForShortcut);
-#endif
-}
 
 void CreatePlatformShortcutsAndPostCallback(
     const base::FilePath& shortcut_data_path,
@@ -168,9 +149,8 @@ ConvertIconProtoDataToShortcutsMenuIcon(
   return shortcut_menu_item_icons;
 }
 
-gfx::ImageFamily PackageIconsIntoImageFamily(
-    bool allow_empty,
-    std::map<SquareSizePx, SkBitmap> icon_bitmaps) {
+gfx::ImageFamily PackageIconsIntoImageFamily(bool allow_empty,
+                                             OrderedSizeToBitmap icon_bitmaps) {
   gfx::ImageFamily image_family;
   for (auto& size_and_bitmap : icon_bitmaps) {
     image_family.Add(gfx::ImageSkia(
@@ -421,8 +401,22 @@ base::FilePath GetOsIntegrationResourcesDirectoryForApp(
 }
 
 base::span<const int> GetDesiredIconSizesForShortcut() {
-  return UNSAFE_TODO(base::span<const int>(
-      kDesiredIconSizesForShortcut, GetNumDesiredIconSizesForShortcut()));
+#if BUILDFLAG(IS_MAC)
+  static constexpr int kDesiredIconSizesForShortcut[] = {16, 32, 128, 256, 512};
+  return kDesiredIconSizesForShortcut;
+#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+  // Linux supports icons of any size. FreeDesktop Icon Theme Specification
+  // states that "Minimally you should install a 48x48 icon in the hicolor
+  // theme."
+  static constexpr int kDesiredIconSizesForShortcut[] = {16,  32,  48,
+                                                         128, 256, 512};
+  return kDesiredIconSizesForShortcut;
+#elif BUILDFLAG(IS_WIN)
+  return IconUtil::kIconDimensions;
+#else
+  static constexpr int kDesiredIconSizesForShortcut[] = {32};
+  return kDesiredIconSizesForShortcut;
+#endif
 }
 
 gfx::ImageSkia CreateDefaultApplicationIcon(int size) {
@@ -433,7 +427,7 @@ gfx::ImageSkia CreateDefaultApplicationIcon(int size) {
   // use IDR_WEB_APP_DEFAULT_ICON here.
   gfx::Image default_icon =
       ui::ResourceBundle::GetSharedInstance().GetImageNamed(
-          IDR_APP_DEFAULT_ICON);
+          IDR_WEB_APP_DEFAULT_ICON);
   SkBitmap bmp = skia::ImageOperations::Resize(
       *default_icon.ToSkBitmap(), skia::ImageOperations::RESIZE_BEST, size,
       size);

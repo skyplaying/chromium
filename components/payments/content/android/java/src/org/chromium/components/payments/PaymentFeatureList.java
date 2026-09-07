@@ -22,17 +22,17 @@ public abstract class PaymentFeatureList {
     public static final String ANDROID_PAYMENT_INTENTS_OMIT_DEPRECATED_PARAMETERS =
             "AndroidPaymentIntentsOmitDeprecatedParameters";
 
-    public static final String DEDUPLICATE_NATIVE_PAYMENT_APPS = "DeduplicateNativePaymentApps";
+    public static final String DELAY_NATIVE_PAYMENT_APP_SCRIM_SHOW =
+            "DelayNativePaymentAppScrimShow";
     public static final String ENFORCE_FULL_DELEGATION = "EnforceFullDelegation";
     public static final String GOOGLE_PAY_VIA_ANDROID_INTENTS = "GooglePayViaAndroidIntents";
     public static final String OMIT_PARAMETERS_IN_READY_TO_PAY = "OmitParametersInReadyToPay";
-    public static final String ALLOW_SHOW_WITHOUT_READY_TO_PAY = "AllowShowWithoutReadyToPay";
-    public static final String CAN_MAKE_PAYMENT_TRUE_WHEN_PRIVATE = "CanMakePaymentTrueWhenPrivate";
-    public static final String RESTRICT_IS_READY_TO_PAY_QUERY = "RestrictIsReadyToPayQuery";
     public static final String RECONNECT_ON_LOST_CONNECTION_TO_UPDATE_PAYMENT_DETAILS_SERVICE =
             "ReconnectOnLostConnectionToUpdatePaymentDetailsService";
     public static final String SERVICE_WORKER_PAYMENT_APPS = "ServiceWorkerPaymentApps";
     public static final String SHOW_READY_TO_PAY_DEBUG_INFO = "ShowReadyToPayDebugInfo";
+    public static final String SURFACE_WALLET_ERROR_CODE_FROM_INTENT =
+            "SurfaceWalletErrorCodeFromIntent";
     public static final String UPDATE_PAYMENT_DETAILS_INTENT_FILTER_IN_PAYMENT_APP =
             "UpdatePaymentDetailsIntentFilterInPaymentApp";
     public static final String WEB_PAYMENTS = "WebPayments";
@@ -41,8 +41,12 @@ public abstract class PaymentFeatureList {
     public static final String WEB_PAYMENTS_EXPERIMENTAL_FEATURES =
             "WebPaymentsExperimentalFeatures";
     public static final String WEB_PAYMENTS_SINGLE_APP_UI_SKIP = "WebPaymentsSingleAppUiSkip";
-    public static final String SECURE_PAYMENT_CONFIRMATION_FALLBACK =
-            "SecurePaymentConfirmationFallback";
+    public static final String PAYMENT_REQUEST_USE_RENDERER_URL_LOADER =
+            "PaymentRequestUseRendererUrlLoader";
+    public static final String PAYMENT_HANDLER_DIALOG_USE_INITIATOR_IN_URL_LOAD =
+            "PaymentHandlerDialogUseInitiatorInUrlLoad";
+    public static final String SECURE_PAYMENT_CONFIRMATION = "SecurePaymentConfirmationBrowser";
+    public static final String THREE_D_SECURE_TELEMETRY = "ThreeDSecureTelemetry";
 
     /**
      * Returns whether the specified feature is enabled or not.

@@ -51,11 +51,6 @@ class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_PERIPHERAL_NOTIFICATION)
     // block list is specified by the Pciguard Daemon.
     virtual void OnPeripheralBlockedReceived() = 0;
 
-    // Called to notify observers, primarily notification controllers, that the
-    // recently plugged in Thunderbolt/USB4 device is a billboard device that is
-    // not supported by the board.
-    virtual void OnBillboardDeviceConnected() = 0;
-
     // Called to notify user of possibly invalid dp cable. This signal will be
     // sent by typecd when the partner meets the conditions for DP alternate
     // mode, but the cable does not.
@@ -96,7 +91,7 @@ class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_PERIPHERAL_NOTIFICATION)
     kAltModeFallbackDueToPciguard = 3,
     kAltModeFallbackInGuestSession = 4,
     kPeripheralBlocked = 5,
-    kBillboardDevice = 6,
+    // [Deprecated] kBillboardDevice = 6,
     kInvalidDpCable = 7,
     kInvalidUSB4ValidTBTCable = 8,
     kInvalidUSB4Cable = 9,
@@ -148,17 +143,12 @@ class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_PERIPHERAL_NOTIFICATION)
   void NotifyLimitedPerformancePeripheralReceived();
   void NotifyGuestModeNotificationReceived(bool is_thunderbolt_only);
   void NotifyPeripheralBlockedReceived();
-  void OnBillboardDeviceConnected(bool billboard_is_supported);
   void NotifyInvalidDpCable();
   void NotifyInvalidUSB4ValidTBTCableWarning();
   void NotifyInvalidUSB4CableWarning();
   void NotifyInvalidTBTCableWarning();
   void NotifySpeedLimitingCableWarning();
   void NotifyUsbDeviceOrEndpointLimit();
-
-  // Called by unit tests to set up root_prefix_ for simulating the existence
-  // of a system folder.
-  void SetRootPrefixForTesting(const std::string& prefix);
 
   const bool is_guest_profile_;
   // Pcie tunneling refers to allowing Thunderbolt/USB4 peripherals to run at
@@ -169,11 +159,13 @@ class COMPONENT_EXPORT(CHROMEOS_ASH_COMPONENTS_PERIPHERAL_NOTIFICATION)
   bool is_pcie_tunneling_allowed_;
   base::ObserverList<Observer> observer_list_;
 
-  std::string root_prefix_ = "";
-
-  base::ScopedObservation<TypecdClient, TypecdClient::Observer>
+  // TODO(crbug.com/496467429): remove when the PeripheralNotificationManager is
+  // no longer outliving the TypecdClient and the PciguardClient it observes.
+  base::ScopedObservation<TypecdClient,
+                          TypecdClient::Observer>::LeakedDanglingUntriaged
       typecd_client_observation_{this};
-  base::ScopedObservation<PciguardClient, PciguardClient::Observer>
+  base::ScopedObservation<PciguardClient,
+                          PciguardClient::Observer>::LeakedDanglingUntriaged
       pciguard_client_observation_{this};
 
   // Used for callbacks.

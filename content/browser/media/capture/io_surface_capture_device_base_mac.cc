@@ -69,7 +69,7 @@ void IOSurfaceCaptureDeviceBase::SendLastReceivedIOSurfaceToClient() {
                                          last_received_capture_format_,
                                          gfx::ColorSpace::CreateREC709()),
       now, now - first_frame_time_, std::nullopt, last_visible_rect_,
-      last_received_metadata_);
+      last_visible_rect_.size(), last_received_metadata_);
 }
 
 void IOSurfaceCaptureDeviceBase::ComputeFrameSizeAndDestRect(
@@ -109,6 +109,15 @@ void IOSurfaceCaptureDeviceBase::ComputeFrameSizeAndDestRect(
     // frame.
     dest_rect_in_frame = gfx::RectF(gfx::SizeF(frame_size));
   }
+}
+
+}  // namespace content
+
+namespace content {
+void IOSurfaceCaptureDeviceBase::InvalidateBuffers() {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  CHECK(client_);
+  client_->InvalidateBuffers();
 }
 
 }  // namespace content

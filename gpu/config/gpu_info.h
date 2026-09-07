@@ -175,50 +175,11 @@ struct GPU_CONFIG_EXPORT VideoEncodeAcceleratorSupportedProfile {
   uint32_t max_framerate_numerator;
   uint32_t max_framerate_denominator;
   bool is_software_codec;
+  std::optional<uint8_t> chroma_sampling;
+  std::optional<uint8_t> bit_depth;
 };
 using VideoEncodeAcceleratorSupportedProfiles =
     std::vector<VideoEncodeAcceleratorSupportedProfile>;
-
-enum class ImageDecodeAcceleratorType {
-  kUnknown = 0,
-  kJpeg = 1,
-  kWebP = 2,
-  kMaxValue = kWebP,
-};
-
-enum class ImageDecodeAcceleratorSubsampling {
-  k420 = 0,
-  k422 = 1,
-  k444 = 2,
-  kMaxValue = k444,
-};
-
-// Specification of an image decoding profile supported by a hardware decoder.
-struct GPU_CONFIG_EXPORT ImageDecodeAcceleratorSupportedProfile {
-  ImageDecodeAcceleratorSupportedProfile();
-  ImageDecodeAcceleratorSupportedProfile(
-      const ImageDecodeAcceleratorSupportedProfile& other);
-  ImageDecodeAcceleratorSupportedProfile(
-      ImageDecodeAcceleratorSupportedProfile&& other);
-  ~ImageDecodeAcceleratorSupportedProfile();
-  ImageDecodeAcceleratorSupportedProfile& operator=(
-      const ImageDecodeAcceleratorSupportedProfile& other);
-  ImageDecodeAcceleratorSupportedProfile& operator=(
-      ImageDecodeAcceleratorSupportedProfile&& other);
-
-  // Fields common to all image types.
-  // Type of image to which this profile applies, e.g., JPEG.
-  ImageDecodeAcceleratorType image_type;
-  // Minimum and maximum supported pixel dimensions of the encoded image.
-  gfx::Size min_encoded_dimensions;
-  gfx::Size max_encoded_dimensions;
-
-  // Fields specific to `image_type` == kJpeg.
-  // The supported chroma subsampling formats, e.g. 4:2:0.
-  std::vector<ImageDecodeAcceleratorSubsampling> subsamplings;
-};
-using ImageDecodeAcceleratorSupportedProfiles =
-    std::vector<ImageDecodeAcceleratorSupportedProfile>;
 
 #if BUILDFLAG(IS_WIN)
 enum class OverlaySupport {

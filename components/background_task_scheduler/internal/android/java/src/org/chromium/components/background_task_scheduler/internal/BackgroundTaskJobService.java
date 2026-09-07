@@ -97,10 +97,6 @@ public class BackgroundTaskJobService extends JobService {
                                 notificationId,
                                 notification,
                                 JobService.JOB_END_NOTIFICATION_POLICY_DETACH);
-                        BackgroundTaskSchedulerUma.getInstance()
-                                .reportNotificationWasSet(
-                                        mParams.getJobId(),
-                                        SystemClock.uptimeMillis() - mTaskStartTimeMs);
                     });
         }
 
@@ -128,7 +124,6 @@ public class BackgroundTaskJobService extends JobService {
         }
 
         if (BackgroundTaskSchedulerJobService.didTaskExpire(params, mClock.currentTimeMillis())) {
-            BackgroundTaskSchedulerUma.getInstance().reportTaskExpired(params.getJobId());
             return false;
         }
 

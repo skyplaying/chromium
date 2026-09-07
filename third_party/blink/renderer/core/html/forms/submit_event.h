@@ -12,11 +12,10 @@
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
+#include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 
 namespace blink {
-
-class HTMLElement;
 class SubmitEventInit;
 
 class SubmitEvent : public Event {
@@ -28,8 +27,14 @@ class SubmitEvent : public Event {
   SubmitEvent(const AtomicString& type, const SubmitEventInit* event_init);
 
   void Trace(Visitor* visitor) const override;
-  HTMLElement* submitter() const { return submitter_.Get(); }
+  HTMLElement* submitter() const;
+  EventTarget* relatedTarget() const override { return related_target_.Get(); }
+  void SetRelatedTarget(EventTarget* related_target) override {
+    related_target_ = related_target;
+  }
   const AtomicString& InterfaceName() const override;
+
+  DispatchEventResult DispatchEvent(EventDispatcher&) override;
 
   bool agentInvoked() const { return agent_invoked_; }
   void respondWith(ScriptState*, ScriptPromise<IDLAny>, ExceptionState&);
@@ -77,7 +82,12 @@ class SubmitEvent : public Event {
   std::optional<PromiseResult> TakeRespondWithPromise();
 
  private:
+  // crbug.com/346835896: When ShadowRootReferenceTargetEnabled ships, the
+  // event's submitter will be managed by `related_target_` instead of
+  // `submitter_`. When the flag is cleaned up the `submitter_` member will be
+  // removed.
   Member<HTMLElement> submitter_;
+  Member<EventTarget> related_target_;
   MemberScriptPromise<IDLAny> respond_with_promise_;
   Member<ScriptState> respond_with_script_state_;
   bool agent_invoked_ = false;

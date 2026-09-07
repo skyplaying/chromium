@@ -5,10 +5,12 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_PAYMENTS_PAYMENTS_REQUEST_DETAILS_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_PAYMENTS_PAYMENTS_REQUEST_DETAILS_H_
 
-#include <memory>
+#include <stdint.h>
+
 #include <optional>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "base/values.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
@@ -17,6 +19,7 @@
 #include "components/autofill/core/browser/payments/card_unmask_challenge_option.h"
 #include "components/autofill/core/browser/payments/card_unmask_delegate.h"
 #include "components/autofill/core/browser/payments/client_behavior_constants.h"
+#include "components/autofill/core/browser/payments/legal_message_line.h"
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
 #include "components/autofill/core/browser/payments/payments_window_manager.h"
 #include "components/autofill/core/browser/payments/virtual_card_enrollment_flow.h"
@@ -351,6 +354,7 @@ struct UploadIbanRequestDetails {
   std::u16string value;
   std::u16string nickname;
   std::string risk_data;
+  std::vector<ClientBehaviorConstants> client_behavior_signals;
 };
 
 // A collection of information received in the response for an
@@ -510,13 +514,13 @@ struct GetBnplPaymentInstrumentForFetchingUrlRequestDetails {
   // The instrument ID is used by the server to identify a specific BNPL issuer.
   std::string instrument_id;
   // The fingerprint data for the user and the device.
-  std::string_view risk_data;
+  std::string risk_data;
   // The merchant domain (including the scheme).
   GURL merchant_domain;
   // The total purchase amount (in micros) from the merchant checkout page.
   int64_t total_amount = 0;
   // Currency of the amount represented by a three-letter currency code.
-  std::string_view currency;
+  std::string currency;
 };
 
 // Information retrieved from a BNPL FetchUrlRequest.
@@ -621,6 +625,87 @@ struct UpdateBnplPaymentInstrumentRequestDetails {
   // The type of the UpdateBnplPaymentInstrument request.
   UpdateBnplPaymentInstrumentType type =
       UpdateBnplPaymentInstrumentType::kUnknown;
+};
+
+// Information required to make a GetWalletReminderNotice request.
+struct GetWalletReminderNoticeRequestDetails {
+  GetWalletReminderNoticeRequestDetails();
+  GetWalletReminderNoticeRequestDetails(
+      const GetWalletReminderNoticeRequestDetails& other);
+  GetWalletReminderNoticeRequestDetails& operator=(
+      const GetWalletReminderNoticeRequestDetails& other);
+  GetWalletReminderNoticeRequestDetails(
+      GetWalletReminderNoticeRequestDetails&&);
+  GetWalletReminderNoticeRequestDetails& operator=(
+      GetWalletReminderNoticeRequestDetails&&);
+  ~GetWalletReminderNoticeRequestDetails();
+
+  // `app_locale` is the Chrome locale.
+  std::string app_locale;
+  // The billing customer number for the account this request is sent to.
+  int64_t billing_customer_number = 0;
+  // The billable service number defined to distinguish this request.
+  int billable_service_number = 0;
+};
+
+// Information retrieved from a GetWalletReminderNotice request.
+struct GetWalletReminderNoticeResponseDetails {
+  GetWalletReminderNoticeResponseDetails();
+  GetWalletReminderNoticeResponseDetails(
+      const GetWalletReminderNoticeResponseDetails& other);
+  GetWalletReminderNoticeResponseDetails& operator=(
+      const GetWalletReminderNoticeResponseDetails& other);
+  GetWalletReminderNoticeResponseDetails(
+      GetWalletReminderNoticeResponseDetails&&);
+  GetWalletReminderNoticeResponseDetails& operator=(
+      GetWalletReminderNoticeResponseDetails&&);
+  ~GetWalletReminderNoticeResponseDetails();
+
+  // Used to show the legal message.
+  LegalMessageLines legal_message_lines;
+  // An opaque token that will be sent back to the Payments server after the
+  // user is shown the reminder.
+  std::string acknowledgement_token;
+  // Used to track if the user has already been shown the reminder.
+  bool has_user_been_shown_reminder = false;
+};
+
+// Information required to make a RecordLegalReminderAcknowledgment request.
+struct RecordLegalReminderAcknowledgmentRequestDetails {
+  RecordLegalReminderAcknowledgmentRequestDetails();
+  RecordLegalReminderAcknowledgmentRequestDetails(
+      const RecordLegalReminderAcknowledgmentRequestDetails& other);
+  RecordLegalReminderAcknowledgmentRequestDetails& operator=(
+      const RecordLegalReminderAcknowledgmentRequestDetails& other);
+  RecordLegalReminderAcknowledgmentRequestDetails(
+      RecordLegalReminderAcknowledgmentRequestDetails&&);
+  RecordLegalReminderAcknowledgmentRequestDetails& operator=(
+      RecordLegalReminderAcknowledgmentRequestDetails&&);
+  ~RecordLegalReminderAcknowledgmentRequestDetails();
+
+  // Represents the feature recording the legal reminder acknowledgment. It
+  // should stay consistent with the same enum in Google Payments server code.
+  enum class FlowType {
+    // Unknown (should not be used).
+    kUnknown = 0,
+    // The legal reminder flow was triggered by using a server card.
+    kChromeDownstream = 1,
+    // The legal reminder flow was triggered by using a Wallet pass.
+    kWalletPass = 2,
+    kMaxValue = kWalletPass,
+  };
+
+  // `app_locale` is the Chrome locale.
+  std::string app_locale;
+  // The billing customer number for the account this request is sent to.
+  int64_t billing_customer_number = 0;
+  // The billable service number defined to distinguish this request.
+  int billable_service_number = 0;
+  // An opaque token that will be sent back to the Payments server after the
+  // user is shown the reminder.
+  std::string legal_message_token;
+  // Represents the feature recording the legal reminder acknowledgment.
+  FlowType flow_type = FlowType::kUnknown;
 };
 
 }  // namespace autofill::payments

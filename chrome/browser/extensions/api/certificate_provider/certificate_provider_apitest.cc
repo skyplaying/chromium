@@ -28,6 +28,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "base/test/test_future.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/values.h"
 #include "chrome/browser/ash/certificate_provider/certificate_provider_service.h"
 #include "chrome/browser/ash/certificate_provider/certificate_provider_service_factory.h"
@@ -35,7 +36,7 @@
 #include "chrome/browser/extensions/api/certificate_provider/certificate_provider_api.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/notifications/request_pin_view_chromeos.h"
 #include "chrome/common/chrome_paths.h"
@@ -83,6 +84,7 @@
 #include "third_party/boringssl/src/include/openssl/pool.h"
 #include "third_party/boringssl/src/include/openssl/rsa.h"
 #include "third_party/boringssl/src/include/openssl/ssl.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/textfield/textfield.h"
@@ -94,7 +96,7 @@ using testing::_;
 
 namespace {
 
-// TODO(https://issues.chromium.org/issues/434006732): switch to
+// TODO(https://crbug.com/434006732): switch to
 // crypto::sign::Sign() once that supports all the algorithms needed here.
 bool RsaSignRawData(uint16_t openssl_signature_algorithm,
                     const std::vector<uint8_t>& input,
@@ -133,8 +135,9 @@ bool RsaSignPrehashed(uint16_t openssl_signature_algorithm,
   // RSA-PSS is not supported for prehashed data.
   EXPECT_FALSE(SSL_is_signature_algorithm_rsa_pss(openssl_signature_algorithm));
   RSA* rsa_key = EVP_PKEY_get0_RSA(key.key());
-  if (!rsa_key)
+  if (!rsa_key) {
     return false;
+  }
   const int digest_algorithm_nid = EVP_MD_type(
       SSL_get_signature_algorithm_digest(openssl_signature_algorithm));
   unsigned len = 0;
@@ -298,8 +301,9 @@ class CertificateProviderApiTest : public extensions::ExtensionApiTest {
 
   std::unique_ptr<net::test_server::HttpResponse> OnHttpsServerRequested(
       const net::test_server::HttpRequest& request) const {
-    if (request.relative_url != kClientCertUrl)
+    if (request.relative_url != kClientCertUrl) {
       return nullptr;
+    }
     auto response = std::make_unique<net::test_server::BasicHttpResponse>();
     if (!request.ssl_info || !request.ssl_info->cert) {
       response->set_code(net::HTTP_FORBIDDEN);
@@ -563,8 +567,9 @@ class CertificateProviderRequestPinTest : public CertificateProviderApiTest {
   }
 
   bool SendCommand(const std::string& command) {
-    if (!command_request_listener_->WaitUntilSatisfied())
+    if (!command_request_listener_->WaitUntilSatisfied()) {
       return false;
+    }
     command_request_listener_->Reply(command);
     command_request_listener_->Reset();
     return true;
@@ -573,8 +578,9 @@ class CertificateProviderRequestPinTest : public CertificateProviderApiTest {
   bool SendCommandAndWaitForMessage(const std::string& command,
                                     const std::string& expected_message) {
     ExtensionTestMessageListener listener(expected_message);
-    if (!SendCommand(command))
+    if (!SendCommand(command)) {
       return false;
+    }
     return listener.WaitUntilSatisfied();
   }
 
@@ -872,7 +878,7 @@ IN_PROC_BROWSER_TEST_F(CertificateProviderApiMockedExtensionTest,
 
 // Test that the certificateProvider events are delivered correctly in the
 // scenario when the event listener is in a lazy background page that gets idle.
-// Disabled due to flakiness - https://crbug.com/1279724
+// Disabled due to flakiness - https://crbug.com/40811018
 IN_PROC_BROWSER_TEST_F(CertificateProviderApiTest,
                        DISABLED_LazyBackgroundPage) {
   ASSERT_TRUE(StartHttpsServer(net::SSL_PROTOCOL_VERSION_TLS1_2));
@@ -902,7 +908,8 @@ IN_PROC_BROWSER_TEST_F(CertificateProviderApiTest,
   // made by the test.
   const std::string client_cert_fingerprint = GetCertFingerprint1(
       *ash::TestCertificateProviderExtension::GetCertificate());
-  Browser* const incognito_browser = CreateIncognitoBrowser(profile());
+  BrowserWindowInterface* const incognito_browser =
+      CreateIncognitoBrowser(profile());
   ASSERT_TRUE(incognito_browser);
   ui_test_utils::NavigateToURLWithDisposition(
       incognito_browser, GetHttpsClientCertUrl(),
@@ -910,7 +917,7 @@ IN_PROC_BROWSER_TEST_F(CertificateProviderApiTest,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   EXPECT_EQ(test_certificate_provider_extension.certificate_request_count(), 1);
   EXPECT_EQ(GetPageTextContent(
-                incognito_browser->tab_strip_model()->GetActiveWebContents()),
+                incognito_browser->GetTabStripModel()->GetActiveWebContents()),
             "got client cert with fingerprint: " + client_cert_fingerprint);
   CheckCertificateProvidedByExtension(
       *ash::TestCertificateProviderExtension::GetCertificate(), *extension);
@@ -986,8 +993,9 @@ IN_PROC_BROWSER_TEST_F(CertificateProviderRequestPinTest,
                        ShowPinDialogWrongPinThreeTimes) {
   AddFakeSignRequest(kFakeSignRequestId);
   NavigateTo("basic.html");
-  for (int i = 0; i < kWrongPinAttemptsLimit; i++)
+  for (int i = 0; i < kWrongPinAttemptsLimit; i++) {
     EnterWrongPinAndWaitForMessage();
+  }
 
   // The textfield has to be disabled, as extension does not allow input now.
   EXPECT_FALSE(GetActivePinDialogView()->textfield_for_testing()->GetEnabled());

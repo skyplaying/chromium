@@ -11,22 +11,37 @@ import android.util.AttributeSet;
 import android.widget.LinearLayout;
 
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 
 /** Basic view that represents the bottom toolbar in the Hub. */
 @NullMarked
 public class HubBottomToolbarView extends LinearLayout {
+    private final HubColorMixerRegistrationHelper mColorMixerHelper =
+            new HubColorMixerRegistrationHelper();
+
     /** Default {@link LinearLayout} constructor called by inflation. */
     public HubBottomToolbarView(Context context, AttributeSet attributeSet) {
         super(context, attributeSet);
     }
 
-    void setColorMixer(HubColorMixer mixer) {
+    @Override
+    protected void onFinishInflate() {
+        super.onFinishInflate();
         Context context = getContext();
-
-        mixer.registerBlend(
+        HubViewColorBlend blend =
                 new SingleHubViewColorBlend(
                         PANE_COLOR_BLEND_ANIMATION_DURATION_MS,
-                        colorScheme -> HubColors.getBackgroundColor(context, colorScheme),
-                        this::setBackgroundColor));
+                        colorScheme -> HubColors.getHubBottomToolbarColor(context, colorScheme),
+                        this::setBackgroundColor);
+        mColorMixerHelper.registerBlend(blend);
+    }
+
+    void setColorMixer(@Nullable HubColorMixer mixer) {
+        mColorMixerHelper.setColorMixer(mixer);
+    }
+
+    /** Sets the color scheme directly on the view. */
+    void setColorScheme(@HubColorScheme int colorScheme) {
+        setBackgroundColor(HubColors.getHubBottomToolbarColor(getContext(), colorScheme));
     }
 }

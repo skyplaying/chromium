@@ -8,9 +8,12 @@
 #include <memory>
 
 #include "base/memory_coordinator/memory_consumer_registry.h"
+#include "content/common/buildflags.h"
 #include "content/common/content_export.h"
 #include "content/common/memory_coordinator/memory_consumer_registry.h"
+#include "content/common/memory_coordinator/memory_coordinator_policy.h"
 #include "content/common/memory_coordinator/memory_coordinator_policy_manager.h"
+#include "content/common/memory_coordinator/memory_pressure_listener_policy.h"
 #include "content/common/memory_coordinator/mojom/memory_coordinator.mojom.h"
 #include "content/public/common/child_process_id.h"
 #include "content/public/common/process_type.h"
@@ -37,6 +40,19 @@ class CONTENT_EXPORT BrowserMemoryCoordinator {
 
   MemoryConsumerRegistry& registry() { return registry_.Get(); }
 
+  MemoryCoordinatorPolicyManager& policy_manager_for_testing() {
+    return policy_manager_;
+  }
+
+#if BUILDFLAG(ENABLE_MEMORY_COORDINATOR_INTERNALS)
+  // Adds/removes a diagnostic observer. When the first observer is added,
+  // diagnostic reporting is enabled in all child processes.
+  void AddDiagnosticObserver(
+      MemoryCoordinatorPolicyManager::DiagnosticObserver* observer);
+  void RemoveDiagnosticObserver(
+      MemoryCoordinatorPolicyManager::DiagnosticObserver* observer);
+#endif
+
   // Connects a MemoryConsumerRegistry in a child process with the browser
   // process.
   void Bind(
@@ -44,20 +60,25 @@ class CONTENT_EXPORT BrowserMemoryCoordinator {
       ChildProcessId child_process_id,
       mojo::PendingReceiver<mojom::ChildMemoryConsumerRegistryHost> receiver);
 
-  // For testing only. Notifies all registered consumer groups.
-  void NotifyReleaseMemoryForTesting();
-  void NotifyUpdateMemoryLimitForTesting(int percentage);
-
  private:
   void OnHostDisconnected(ChildProcessId child_process_id);
 
   MemoryCoordinatorPolicyManager policy_manager_;
   base::ScopedMemoryConsumerRegistry<MemoryConsumerRegistry> registry_{
       PROCESS_TYPE_BROWSER, ChildProcessId(), policy_manager_};
-
   absl::flat_hash_map<ChildProcessId,
                       std::unique_ptr<ChildMemoryConsumerRegistryHost>>
       hosts_;
+
+  MemoryPressureListenerPolicy memory_pressure_listener_policy_{
+      policy_manager_};
+  MemoryCoordinatorPolicyRegistration
+      memory_pressure_listener_policy_registration_{
+          policy_manager_, memory_pressure_listener_policy_};
+
+#if BUILDFLAG(ENABLE_MEMORY_COORDINATOR_INTERNALS)
+  size_t diagnostic_observer_count_ = 0u;
+#endif
 };
 
 }  // namespace content

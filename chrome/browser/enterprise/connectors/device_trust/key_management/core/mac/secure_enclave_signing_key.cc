@@ -16,14 +16,15 @@
 #include "base/containers/span.h"
 #include "chrome/browser/enterprise/connectors/device_trust/key_management/core/mac/metrics_util.h"
 #include "chrome/browser/enterprise/connectors/device_trust/key_management/core/mac/secure_enclave_client.h"
-#include "crypto/signature_verifier.h"
+#include "crypto/sign.h"
 
 namespace enterprise_connectors {
 
 namespace {
 
 // An implementation of crypto::UnexportableSigningKey.
-class SecureEnclaveSigningKey : public crypto::StatefulUnexportableSigningKey {
+class SecureEnclaveSigningKey : public crypto::UnexportableSigningKey,
+                                public crypto::StatefulKey {
  public:
   SecureEnclaveSigningKey(base::apple::ScopedCFTypeRef<SecKeyRef> key,
                           std::unique_ptr<SecureEnclaveClient> client,
@@ -31,16 +32,15 @@ class SecureEnclaveSigningKey : public crypto::StatefulUnexportableSigningKey {
   ~SecureEnclaveSigningKey() override;
 
   // crypto::UnexportableSigningKey:
-  crypto::SignatureVerifier::SignatureAlgorithm Algorithm() const override;
+  crypto::sign::SignatureKind Algorithm() const override;
   std::vector<uint8_t> GetSubjectPublicKeyInfo() const override;
   std::vector<uint8_t> GetWrappedKey() const override;
   std::optional<std::vector<uint8_t>> SignSlowly(
       base::span<const uint8_t> data) override;
   SecKeyRef GetSecKeyRef() const override;
-  crypto::StatefulUnexportableSigningKey* AsStatefulUnexportableSigningKey()
-      override;
+  const crypto::StatefulKey* AsStatefulKey() const override;
 
-  // crypto::StatefulUnexportableSigningKey:
+  // crypto::StatefulKey:
   std::string GetKeyTag() const override;
   base::Time GetCreationTime() const override;
 
@@ -61,9 +61,8 @@ SecureEnclaveSigningKey::SecureEnclaveSigningKey(
 
 SecureEnclaveSigningKey::~SecureEnclaveSigningKey() = default;
 
-crypto::SignatureVerifier::SignatureAlgorithm
-SecureEnclaveSigningKey::Algorithm() const {
-  return crypto::SignatureVerifier::ECDSA_SHA256;
+crypto::sign::SignatureKind SecureEnclaveSigningKey::Algorithm() const {
+  return crypto::sign::ECDSA_SHA256;
 }
 
 std::vector<uint8_t> SecureEnclaveSigningKey::GetSubjectPublicKeyInfo() const {
@@ -103,8 +102,7 @@ SecKeyRef SecureEnclaveSigningKey::GetSecKeyRef() const {
   return key_.get();
 }
 
-crypto::StatefulUnexportableSigningKey*
-SecureEnclaveSigningKey::AsStatefulUnexportableSigningKey() {
+const crypto::StatefulKey* SecureEnclaveSigningKey::AsStatefulKey() const {
   return this;
 }
 

@@ -20,7 +20,7 @@
 #include "components/webapps/common/web_app_id.h"
 #include "url/gurl.h"
 
-class Browser;
+class BrowserWindowInterface;
 class PrefService;
 class Profile;
 
@@ -63,7 +63,7 @@ std::unique_ptr<WebApp> CreateWebApp(
 // Will check fail if the sync proto does not have the start_url and
 // relative_manifest_id unset.
 std::unique_ptr<WebApp> CreateWebAppFromSyncProto(
-    const sync_pb::WebAppSpecifics& sync_proto);
+    sync_pb::WebAppSpecifics& sync_proto);
 
 // Do not use this for installation! Instead, use the utilities in
 // web_app_install_test_util.h.
@@ -77,16 +77,16 @@ struct CreateRandomWebAppParams {
   int seed = 0;
   bool non_zero = false;
   bool allow_system_source = true;
-  // External management types are often managed by systems that synchronize
-  // their installed apps, so if a test is writing apps and then starting the
-  // system, the external app managers will touch & modify apps that apply to
-  // them. Setting this to 'true' will prevent a generated app from having one
-  // of these management sources.
-  bool only_non_external_management_types = false;
+  // External management types and migration fields are often managed by
+  // systems that synchronize or process installed apps at startup. If a test is
+  // writing apps and then starting the system, these managers will touch &
+  // modify apps. Setting this to 'true' will prevent generated apps from
+  // including these fields, thus avoiding side effects during test startup.
+  bool exclude_fields_with_side_effects = false;
   // When randomly generating an app, if it is randomly a sub-app, then this
   // manifest id is used for the parent id. Set this to an empty url to not
   // generate sub-apps.
-  webapps::ManifestId parent_manifest_id{GURL("https://www.appparent.com/")};
+  std::optional<webapps::ManifestId> parent_manifest_id{GURL("https://www.appparent.com/")};
 };
 std::unique_ptr<WebApp> CreateRandomWebApp(
     const CreateRandomWebAppParams& params);
@@ -103,7 +103,7 @@ void TestDeclineDialogCallback(
     std::unique_ptr<WebAppInstallInfo> web_app_info,
     WebAppInstallationAcceptanceCallback acceptance_callback);
 
-webapps::AppId InstallPwaForCurrentUrl(Browser* browser);
+webapps::AppId InstallPwaForCurrentUrl(BrowserWindowInterface* browser);
 
 void CheckServiceWorkerStatus(const GURL& url,
                               content::StoragePartition* storage_partition,

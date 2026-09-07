@@ -10,10 +10,11 @@
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
 #include "chrome/browser/ui/tabs/features.h"
+#include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
 #include "chrome/browser/ui/toolbar/app_menu_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
@@ -37,6 +38,7 @@
 #include "ui/views/style/typography.h"
 #include "ui/views/view_class_properties.h"
 #include "ui/views/widget/widget.h"
+#include "ui/webui/tracked_element/tracked_element_handler.h"
 
 namespace {
 DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kWebContentsElementId);
@@ -69,7 +71,8 @@ class InteractionTestUtilBrowserTest : public InteractiveBrowserTest {
 };
 
 IN_PROC_BROWSER_TEST_F(InteractionTestUtilBrowserTest, GetBrowserFromContext) {
-  Browser* const other_browser = CreateBrowser(browser()->profile());
+  BrowserWindowInterface* const other_browser =
+      CreateBrowser(browser()->GetProfile());
   EXPECT_EQ(browser(), InteractionTestUtilBrowser::GetBrowserFromContext(
                            BrowserElements::From(browser())->GetContext()));
   EXPECT_EQ(other_browser,
@@ -97,6 +100,49 @@ IN_PROC_BROWSER_TEST_F(InteractionTestUtilBrowserTest,
                              /*screenshot_name=*/"AppMenuButton",
                              /*baseline_cl=*/"6956367",
                              []() { return gfx::Rect(4, 4, 20, 20); }));
+}
+
+IN_PROC_BROWSER_TEST_F(InteractionTestUtilBrowserTest,
+                       CompareScreenshot_TrackedElementWebUI) {
+  DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTestWebUIElementId);
+  auto* const web_contents =
+      browser()->GetTabStripModel()->GetActiveWebContents();
+  auto handler = std::make_unique<ui::TrackedElementHandler>(
+      web_contents, BrowserElements::From(browser())->GetContext(),
+      std::vector<ui::ElementIdentifier>{kTestWebUIElementId});
+  handler->TrackedElementVisibilityChanged(
+      tracked_element::mojom::TrackedElementIdentifier::New(
+          kTestWebUIElementId.GetName(), "1"),
+      true, gfx::RectF(10, 10, 50, 20));
+
+  RunTestSequence(WaitForShow(kTestWebUIElementId),
+                  SetOnIncompatibleAction(OnIncompatibleAction::kSkipTest,
+                                          kSkipPixelTestsReason),
+                  Screenshot(kTestWebUIElementId,
+                             /*screenshot_name=*/"WebUIElement",
+                             /*baseline_cl=*/"1234567"));
+}
+
+IN_PROC_BROWSER_TEST_F(InteractionTestUtilBrowserTest,
+                       CompareScreenshot_TrackedElementWebUIWithClipBounds) {
+  DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTestWebUIElementId);
+  auto* const web_contents =
+      browser()->GetTabStripModel()->GetActiveWebContents();
+  auto handler = std::make_unique<ui::TrackedElementHandler>(
+      web_contents, BrowserElements::From(browser())->GetContext(),
+      std::vector<ui::ElementIdentifier>{kTestWebUIElementId});
+  handler->TrackedElementVisibilityChanged(
+      tracked_element::mojom::TrackedElementIdentifier::New(
+          kTestWebUIElementId.GetName(), "1"),
+      true, gfx::RectF(10, 10, 50, 20));
+
+  RunTestSequence(WaitForShow(kTestWebUIElementId),
+                  SetOnIncompatibleAction(OnIncompatibleAction::kSkipTest,
+                                          kSkipPixelTestsReason),
+                  Screenshot(kTestWebUIElementId,
+                             /*screenshot_name=*/"WebUIElement",
+                             /*baseline_cl=*/"1234567",
+                             []() { return gfx::Rect(2, 2, 10, 10); }));
 }
 
 class ScreenshotSurfaceTestDialog : public views::BubbleDialogDelegateView {
@@ -130,8 +176,9 @@ IN_PROC_BROWSER_TEST_F(InteractionTestUtilBrowserTest,
   RunTestSequence(
       WithView(kTopContainerElementId,
                [&widget](views::View* anchor) {
-                 widget = views::BubbleDialogDelegate::CreateBubble(
-                     std::make_unique<ScreenshotSurfaceTestDialog>(anchor));
+                 widget = views::BubbleDialogDelegate::CreateBubbleDeprecated(
+                     std::make_unique<ScreenshotSurfaceTestDialog>(anchor),
+                     views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
                  widget->Show();
                }),
       WaitForShow(ScreenshotSurfaceTestDialog::kTitleElementId),
@@ -207,19 +254,14 @@ class InteractionTestUtilBrowserSelectTabTest
       public testing::WithParamInterface<
           ui::test::InteractionTestUtil::InputType> {
  public:
-  InteractionTestUtilBrowserSelectTabTest() {
-    feature_list_.InitAndEnableFeature(tabs::kVerticalTabs);
-  }
+  InteractionTestUtilBrowserSelectTabTest() = default;
   ~InteractionTestUtilBrowserSelectTabTest() override = default;
 
   void SetVerticalTabsEnabled(bool enabled) {
-    browser()->profile()->GetPrefs()->SetBoolean(prefs::kVerticalTabsEnabled,
-                                                 enabled);
+    tabs::VerticalTabStripStateController::From(browser())
+        ->SetVerticalTabsEnabled(enabled);
     RunScheduledLayouts();
   }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_P(InteractionTestUtilBrowserSelectTabTest,

@@ -11,15 +11,18 @@
 #include "base/unguessable_token.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/web/web_performance_metrics_for_reporting.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_navigation_type.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/paint/timing/largest_contentful_paint_calculator.h"
 #include "third_party/blink/renderer/core/paint/timing/paint_timing_record.h"
 #include "third_party/blink/renderer/core/timing/performance_entry.h"
+#include "third_party/blink/renderer/core/timing/performance_event_timing.h"
 #include "third_party/blink/renderer/core/timing/performance_timeline_entry_id_generator.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/heap/prefinalizer.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 #include "ui/gfx/geometry/rect_f.h"
 
 namespace blink {
@@ -42,7 +45,8 @@ class CORE_EXPORT SoftNavigationContext
   // differentiate new interactions from previous ones.
   static uint64_t NextContextId() { return last_context_id_ + 1; }
 
-  explicit SoftNavigationContext(LocalDOMWindow& window);
+  SoftNavigationContext(LocalDOMWindow& window,
+                        PerformanceEventTiming* initial_event_timing);
 
   // LargestContentfulPaintCalculator::Delegate:
   void EmitLcpPerformanceEntry(const DOMPaintTimingInfo& paint_timing_info,
@@ -60,24 +64,29 @@ class CORE_EXPORT SoftNavigationContext
   }
 
   bool HasNavigationId() const {
-    return navigation_id_ != PerformanceTimelineEntryIdInfo::kNoId;
+    return navigation_id_ != PerformanceTimelineEntryIdInfo::kNone;
   }
-  uint64_t NavigationId() const { return navigation_id_; }
-  void SetNavigationId(uint64_t navigation_id) {
+  // The navigation id info contains the web-exposed navigationId and the
+  // monotonic ordinal offset.
+  PerformanceTimelineEntryIdInfo NavigationId() const { return navigation_id_; }
+
+  LocalDOMWindow* DomWindow() const { return window_.Get(); }
+  uint64_t InteractionId() const {
+    return initial_event_timing_ ? initial_event_timing_->interactionId() : 0;
+  }
+
+  base::TimeTicks SoftNavigationSlicingTime() const {
+    return soft_navigation_slicing_time_;
+  }
+  void OnSoftNavigationCommit(PerformanceTimelineEntryIdInfo navigation_id,
+                              base::TimeTicks soft_navigation_slicing_time) {
     navigation_id_ = navigation_id;
+    soft_navigation_slicing_time_ = soft_navigation_slicing_time;
   }
 
   // The time origin is used for calculating soft navigation timings, especially
-  // Soft LCP. It is the earlier of the processing end of the interaction and
-  // the url change time. Once the processing of the interaction has ended, it
-  // is guaranteed to be available; once the URL change time has been set,
-  // it's available and final. When not available it may be null.
+  // Soft LCP. It is the startTime of the first event timing entry.
   base::TimeTicks TimeOrigin() const;
-
-  // Indicates when the interaction processing is finished, which is after the
-  // event handler has finished executing.
-  base::TimeTicks ProcessingEnd() const { return processing_end_; }
-  void SetProcessingEnd(base::TimeTicks value) { processing_end_ = value; }
 
   // This is set to the time of the first URL change and is not updated
   // afterwards.
@@ -87,7 +96,15 @@ class CORE_EXPORT SoftNavigationContext
   // |same_document_metrics_token|, while also recording the UrlChangeTime() as
   // base::TimeTicks::Now().
   void AddUrl(const String& url,
+              V8NavigationType::Enum navigation_type,
               base::UnguessableToken same_document_metrics_token);
+
+  // Returns the type of the initial same document navigation (first call to
+  // `AddUrl()`). Must not be called before the URL is set.
+  V8NavigationType::Enum NavigationType() const {
+    CHECK(HasUrl());
+    return navigation_type_;
+  }
 
   base::UnguessableToken SameDocumentMetricsToken() const {
     return same_document_metrics_token_;
@@ -117,8 +134,13 @@ class CORE_EXPORT SoftNavigationContext
   // check for sufficient paints to emit a soft-nav entry.
   bool HasDomModification() const { return num_modified_dom_nodes_ > 0; }
 
+  PerformanceTimelineEntryIdInfo GetInteractionIdInfo() const;
+
   uint64_t PaintedArea() const { return painted_area_; }
   uint64_t ContextId() const { return context_id_; }
+  InteractionContentfulPaint* LargestIcpEntry() const {
+    return largest_icp_entry_.Get();
+  }
 
   // Reports a new contentful paint area to this context, and the Node painted.
   bool AddPaintedArea(PaintTimingRecord*);
@@ -126,44 +148,53 @@ class CORE_EXPORT SoftNavigationContext
   // Used to check if it is worthwhile to call `SatisfiesSoftNavPaintCriteria`.
   bool OnPaintFinished();
   void OnInputOrScroll();
-  void TryUpdateLcpCandidate();
-  const LargestContentfulPaintDetails& LatestLcpDetailsForUkm();
 
   bool SatisfiesSoftNavNonPaintCriteria() const;
   bool SatisfiesSoftNavPaintCriteria(uint64_t required_paint_area) const;
+
+  // Called by `SoftNavigationHeuristics` with the largest image and text
+  // records that were presented for this context in the last presented frame.
+  void OnFramePresented(LargestContentfulPaintCalculator::LcpCandidates*);
+
+  const LargestContentfulPaintDetails& LatestLcpDetailsForUkm();
 
   bool IsRecordingLargestContentfulPaint() const {
     return first_input_or_scroll_time_.is_null();
   }
 
-  // Emits the soft navigation performance entry and latest buffered ICP entry,
-  // if there is one. The context must not have been previously emitted.
-  // `WasEmitted()` returns true after this is called.
+  template <IsDerivedFromPaintTimingRecord T>
+  bool ShouldTrackForPaintTiming(const T& record) const {
+    if (!IsRecordingLargestContentfulPaint()) {
+      return false;
+    }
+    // We want to know about all painted text and images if they're valid LCP
+    // candidates.
+    return lcp_calculator_->IsEligibleForLcp(record);
+  }
+
+  SoftNavigationHeuristics* GetSoftNavigationHeuristics() const;
+
+  // Emits the soft navigation performance entry. The context must not have been
+  // previously emitted. `WasEmitted()` returns true after this is called.
   //
-  // Note: There are several reasons why we might have an FCP but not a pending
-  // ICP, all of which should be fixed:
-  //   1. crbug.com/383568320: For <video>, we set the paint timestamp for the
-  //      first video frame outside of paint, but require BeginMainFrame +
-  //      presentation feedback to emit the ICP entry. The soft nav entry can be
-  //      emitted in this gap.
+  // Note: There are a couple reasons why we might have an FCP but have not
+  // emitted an ICP, all of which should be fixed:
+  //  1. crbug.com/383568320: For <video>, we set the paint timestamp for the
+  //     first video frame outside of paint, but require BeginMainFrame +
+  //     presentation feedback to emit the ICP entry. The soft nav entry can be
+  //     emitted in this gap.
   //  2. crbug.com/454082773: If the FCP element is detached from the DOM before
   //     its presentation feedback is processed, we won't emit an ICP entry for
   //     this.
-  //  3. crbug.com/454082771, crbug.com/434160944: We overwrite image and text
-  //     candidates during paint, which affects which candidates we emit when
-  //     processing presentation feedback. For example, if we paint a text node
-  //     (FCP) in frame 1 and a larger image in frame 2, and the feedback for
-  //     frame 1 arrives after frame 2, the image blocks emitting the ICP entry
-  //     for the text. Moving more logic into presentation time, like we do for
-  //     hard LCP, in conjunction with emitting largest presented image/text
-  //     (vs. pending image) would fix this.
   void EmitSoftNavigation();
   bool WasEmitted() const { return was_emitted_; }
 
   void WriteIntoTrace(perfetto::TracedValue context) const;
+  const perfetto::NamedTrack& GetTracingTrack() const { return track_; }
 
   // Called when `SoftNavigationHeuristics` is shut down on frame detach.
   void Shutdown();
+  bool HasBeenShutdown() const { return !window_; }
 
   void Dispose();
 
@@ -173,26 +204,31 @@ class CORE_EXPORT SoftNavigationContext
   // largest value and can be used to identify the most recent context.
   const uint64_t context_id_ = ++last_context_id_;
 
-  uint64_t navigation_id_ = PerformanceTimelineEntryIdInfo::kNoId;
+  PerformanceTimelineEntryIdInfo navigation_id_ =
+      PerformanceTimelineEntryIdInfo::kNone;
   bool was_emitted_ = false;
 
   base::TimeTicks first_input_or_scroll_time_;
   base::TimeTicks url_change_time_;
-  base::TimeTicks processing_end_;
+  base::TimeTicks soft_navigation_slicing_time_;
 
   String initial_url_;
   base::UnguessableToken same_document_metrics_token_;
+  V8NavigationType::Enum navigation_type_ = V8NavigationType::Enum::kPush;
 
   Member<LocalDOMWindow> window_;
   Member<LargestContentfulPaintCalculator> lcp_calculator_;
+  Member<PerformanceEventTiming> initial_event_timing_;
   Member<PaintTimingRecord> first_image_or_text_;
-  Member<InteractionContentfulPaint> latest_unemitted_icp_entry_;
+  Member<InteractionContentfulPaint> largest_icp_entry_;
+  Member<LargestContentfulPaint> current_lcp_entry_;
 
   size_t num_modified_dom_nodes_ = 0;
   uint64_t painted_area_ = 0;
 
   size_t num_modified_dom_nodes_last_animation_frame_ = 0;
   uint64_t painted_area_last_animation_frame_ = 0;
+  const perfetto::NamedTrack track_;
 };
 
 }  // namespace blink

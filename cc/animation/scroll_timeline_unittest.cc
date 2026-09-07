@@ -36,7 +36,7 @@ void SetScrollOffset(PropertyTrees* property_trees,
   // Update both scroll and transform trees
   property_trees->scroll_tree_mutable().SetScrollOffset(scroller_id, offset);
   TransformNode* transform_node =
-      property_trees->transform_tree_mutable().FindNodeFromElementId(
+      property_trees->transform_tree_mutable().MutableFindNodeFromElementId(
           scroller_id);
   transform_node->SetScrollOffset(offset, DamageReason::kUntracked);
   transform_node->needs_local_transform_update = true;
@@ -93,10 +93,7 @@ class ScrollTimelineTest : public ::testing::Test,
                            public ProtectedSequenceSynchronizer {
  public:
   ScrollTimelineTest()
-      : property_trees_(*this),
-        scroller_id_(1),
-        container_size_(100, 100),
-        content_size_(500, 500) {
+      : scroller_id_(1), container_size_(100, 100), content_size_(500, 500) {
     // For simplicity we make the property_tree main thread; this avoids the
     // need to deal with the synced scroll offset code.
     property_trees_.set_is_main_thread(true);
@@ -157,8 +154,8 @@ TEST_F(ScrollTimelineTest, BasicCurrentTimeCalculations) {
 // had a few crashes caused by assuming that the id would be available in the
 // active tree before the activation happened; see http://crbug.com/853231
 TEST_F(ScrollTimelineTest, ActiveTimeIsSetOnlyAfterPromotion) {
-  PropertyTrees pending_tree(*this);
-  PropertyTrees active_tree(*this);
+  PropertyTrees pending_tree;
+  PropertyTrees active_tree;
 
   pending_tree.set_is_active(false);
   active_tree.set_is_active(true);
@@ -221,7 +218,7 @@ TEST_F(ScrollTimelineTest, CurrentTimeIsAdjustedForPixelSnapping) {
   // For simplicity emulate snapping by directly setting snap_amount of
   // transform node.
   TransformNode* transform_node =
-      property_trees().transform_tree_mutable().FindNodeFromElementId(
+      property_trees().transform_tree_mutable().MutableFindNodeFromElementId(
           scroller_id());
   transform_node->snap_amount = gfx::Vector2dF(0, 0.5);
 
@@ -438,6 +435,24 @@ TEST_F(ScrollTimelineTest, Activeness) {
       active_timeline->IsActive(scroll_tree(), false /*is_active_tree*/));
   EXPECT_TRUE(
       active_timeline->IsActive(scroll_tree(), true /*is_active_tree*/));
+}
+
+TEST_F(ScrollTimelineTest, ToScrollTimeline) {
+  ScrollTimeline::ScrollOffsets scroll_offsets(0, 100);
+  scoped_refptr<ScrollTimeline> scroll_timeline = ScrollTimeline::Create(
+      scroller_id(), ScrollTimeline::ScrollDown, scroll_offsets);
+  scoped_refptr<AnimationTimeline> plain_timeline =
+      AnimationTimeline::Create(1);
+
+  EXPECT_EQ(ToScrollTimeline(scroll_timeline.get()), scroll_timeline.get());
+  const AnimationTimeline* const_scroll_timeline = scroll_timeline.get();
+  EXPECT_EQ(ToScrollTimeline(const_scroll_timeline), scroll_timeline.get());
+
+#if GTEST_HAS_DEATH_TEST
+  EXPECT_DEATH_IF_SUPPORTED(ToScrollTimeline(plain_timeline.get()), "");
+  const AnimationTimeline* const_plain_timeline = plain_timeline.get();
+  EXPECT_DEATH_IF_SUPPORTED(ToScrollTimeline(const_plain_timeline), "");
+#endif
 }
 
 }  // namespace cc

@@ -131,14 +131,17 @@ constexpr APIPermissionInfo::InitInfo permissions_to_register[] = {
      APIPermissionInfo::kFlagRequiresManagementUIWarning},
     {APIPermissionID::kPrintingMetrics, "printingMetrics",
      APIPermissionInfo::kFlagRequiresManagementUIWarning},
+    {APIPermissionID::kProxy, "proxy",
+     APIPermissionInfo::kFlagImpliesFullURLAccess |
+         APIPermissionInfo::kFlagCannotBeOptional},
+    {APIPermissionID::kPublicSuffix, "publicSuffix",
+     APIPermissionInfo::kFlagDoesNotRequireManagedSessionFullLoginWarning},
     {APIPermissionID::kSerial, "serial",
      APIPermissionInfo::kFlagDoesNotRequireManagedSessionFullLoginWarning},
     {APIPermissionID::kSocket, "socket",
      APIPermissionInfo::kFlagCannotBeOptional |
          APIPermissionInfo::kFlagDoesNotRequireManagedSessionFullLoginWarning,
      &CreateAPIPermission<SocketPermission>},
-    {APIPermissionID::kSpeechRecognitionPrivate, "speechRecognitionPrivate",
-     APIPermissionInfo::kFlagDoesNotRequireManagedSessionFullLoginWarning},
     {APIPermissionID::kStorage, "storage",
      APIPermissionInfo::kFlagDoesNotRequireManagedSessionFullLoginWarning},
     {APIPermissionID::kSystemCpu, "system.cpu",
@@ -197,4 +200,3 @@ base::span<const Alias> GetPermissionAliases() {
 }
 
 } // namespace extensions::api_permissions
-

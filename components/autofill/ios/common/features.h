@@ -14,10 +14,6 @@
 // content.
 BASE_DECLARE_FEATURE(kAutofillAllowDefaultPreventedSubmission);
 
-// Enables correctly setting the is_user_edited bit in the parsed form fields
-// instead of using true by default.
-BASE_DECLARE_FEATURE(kAutofillCorrectUserEditedBitInParsedField);
-
 // Record form submissions events that are detected in the renderer before they
 // are processed. Act as a killswitch where the feature is enabled by default.
 BASE_DECLARE_FEATURE(kAutofillCountFormSubmissionInRenderer);
@@ -29,6 +25,9 @@ BASE_DECLARE_FEATURE(kAutofillCountFormSubmissionInRenderer);
 // prevented.
 BASE_DECLARE_FEATURE(kAutofillDedupeFormSubmission);
 
+// Enables Email Verification Protocol on iOS.
+BASE_DECLARE_FEATURE(kAutofillEmailVerification);
+
 // Fix for XHR form submission detection when autofill across iframes is
 // enabled.
 BASE_DECLARE_FEATURE(kAutofillFixXhrForXframe);
@@ -39,6 +38,11 @@ BASE_DECLARE_FEATURE(kAutofillExtractFullUrlOnIOs);
 // Listen to form submission events in capture mode before the events are
 // propagated.
 BASE_DECLARE_FEATURE(kAutofillFormSubmissionEventsInCaptureMode);
+
+// Detaches the listeners for the payments suggestion bottom sheet when the
+// listeners are invalidated (i.e. the field type is no longer a credit card
+// field). This can be used in combination with kAutofillPaymentsSheetV3Ios.
+BASE_DECLARE_FEATURE(kAutofillPaymentsSheetDetachInvalidatedListenersIos);
 
 // Enables the stateless version of the payments suggestion bottom sheet that
 // can directly pick the Autofill suggestions provider instead of intermediating
@@ -55,13 +59,8 @@ BASE_DECLARE_FEATURE(kAutofillPaymentsSheetV2Ios);
 // the FormSuggestionController.
 BASE_DECLARE_FEATURE(kAutofillPaymentsSheetV3Ios);
 
-// Enables the refill functionality to allow autofilling of dynamically
-// expanding forms.
-BASE_DECLARE_FEATURE(kAutofillRefillForFormsIos);
-
-// Enables Undo for Autofill operations on iOS. This will replace the Clear form
-// button with the Undo autofill button in the keyboard accessory.
-BASE_DECLARE_FEATURE(kAutofillUndoIos);
+// Rejects form submission events if they lack user gesture.
+BASE_DECLARE_FEATURE(kAutofillRejectFormSubmissionsWithoutUserGesture);
 
 // Reports JS errors that occur upon handling form submission in the renderer.
 BASE_DECLARE_FEATURE(kAutofillReportFormSubmissionErrors);
@@ -72,6 +71,12 @@ BASE_DECLARE_FEATURE(kAutofillReportFormSubmissionErrors);
 // badge. The badge may remain there after the infobar UI is dismissed from
 // timeout but will be dismissed once navigating from an explicit user gesture.
 BASE_DECLARE_FEATURE(kAutofillStickyInfobarIos);
+
+// Enables support for contenteditable elements in Autofill on iOS.
+BASE_DECLARE_FEATURE(kAutofillSupportContentEditableIos);
+
+// Enables support for <input type="date"> fields in Autofill.
+BASE_DECLARE_FEATURE_WITH_COUNTRY_RESTRICTIONS(kAutofillSupportDateInput);
 
 // Throttles the document form scanning done for taking recurrent snapshots of
 // the forms in the renderer by using scheduled batches. This doesn't throttle
@@ -86,6 +91,10 @@ extern const base::FeatureParam<int> kAutofillDocumentFormScanPeriodMs;
 // status quo with how the initial document scanning was triggered prior to
 // batching.
 BASE_DECLARE_FEATURE(kAutofillThrottleDocumentFormScanForceFirstScanIos);
+
+// Track password fields mutations to determine if an input had been a password
+// in its lifetime. It is used as a killswitch.
+BASE_DECLARE_FEATURE(kAutofillTrackPasswordFieldsIos);
 
 // Throttles the filtered document form scanning done for taking a snapshot of
 // specific forms on the spot. Throttles with scheduled batches.

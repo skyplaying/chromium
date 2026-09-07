@@ -7,9 +7,11 @@ found in the LICENSE file.
 
 <resources xmlns:tools="http://schemas.android.com/tools">
     <color name="modal_dialog_scrim_color">@color/black_alpha_65</color>
+    <color name="modal_dialog_scrim_color_lff">@color/black_alpha_40</color>
     <color name="toolbar_shadow_color">@color/black_alpha_11</color>
     <macro name="search_box_hint" tools:ignore="UnusedResources">@macro/default_text_color_secondary</macro>
     <macro name="ntp_search_box_hint" tools:ignore="UnusedResources">@macro/default_text_color</macro>
+    <color name="home_surface_search_box_background_color">@color/color_primary_with_alpha_15</color>
 
     <!-- Chip Colors -->
     <color name="default_chip_assistive_text_color">@color/default_text_color_baseline</color>
@@ -41,8 +43,4 @@ found in the LICENSE file.
     <color name="menu_chip_background_color_disabled_dark">@color/baseline_neutral_90_alpha_38</color>
     <color name="menu_chip_background_color_disabled_light">@color/white_alpha_6</color>
     <color name="menu_chip_background_color_disabled">@color/menu_chip_background_color_disabled_dark</color>
-    <color name="menu_footer_chip_background_color_dark">@color/baseline_primary_40_alpha_10</color>
-    <color name="menu_footer_chip_background_color_light">@color/baseline_primary_80_alpha_10</color>
-    <color name="menu_footer_chip_background_color_disabled_dark">@color/baseline_neutral_90</color>
-    <color name="menu_footer_chip_background_color_disabled_light">@color/white_alpha_6</color>
 </resources>

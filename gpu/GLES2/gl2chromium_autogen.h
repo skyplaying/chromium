@@ -165,7 +165,6 @@
 #define glScissor GLES2_GET_FUN(Scissor)
 #define glShaderBinary GLES2_GET_FUN(ShaderBinary)
 #define glShaderSource GLES2_GET_FUN(ShaderSource)
-#define glShallowFinishCHROMIUM GLES2_GET_FUN(ShallowFinishCHROMIUM)
 #define glOrderingBarrierCHROMIUM GLES2_GET_FUN(OrderingBarrierCHROMIUM)
 #define glMultiDrawArraysWEBGL GLES2_GET_FUN(MultiDrawArraysWEBGL)
 #define glMultiDrawArraysInstancedWEBGL \
@@ -279,14 +278,10 @@
 #define glBindVertexArrayOES GLES2_GET_FUN(BindVertexArrayOES)
 #define glFramebufferParameteri GLES2_GET_FUN(FramebufferParameteri)
 #define glGetMaxValueInBufferCHROMIUM GLES2_GET_FUN(GetMaxValueInBufferCHROMIUM)
-#define glEnableFeatureCHROMIUM GLES2_GET_FUN(EnableFeatureCHROMIUM)
 #define glMapBufferCHROMIUM GLES2_GET_FUN(MapBufferCHROMIUM)
 #define glUnmapBufferCHROMIUM GLES2_GET_FUN(UnmapBufferCHROMIUM)
 #define glMapBufferSubDataCHROMIUM GLES2_GET_FUN(MapBufferSubDataCHROMIUM)
 #define glUnmapBufferSubDataCHROMIUM GLES2_GET_FUN(UnmapBufferSubDataCHROMIUM)
-#define glMapBufferRange GLES2_GET_FUN(MapBufferRange)
-#define glUnmapBuffer GLES2_GET_FUN(UnmapBuffer)
-#define glFlushMappedBufferRange GLES2_GET_FUN(FlushMappedBufferRange)
 #define glMapTexSubImage2DCHROMIUM GLES2_GET_FUN(MapTexSubImage2DCHROMIUM)
 #define glUnmapTexSubImage2DCHROMIUM GLES2_GET_FUN(UnmapTexSubImage2DCHROMIUM)
 #define glGetRequestableExtensionsCHROMIUM \
@@ -319,6 +314,7 @@
 #define glFlushDriverCachesCHROMIUM GLES2_GET_FUN(FlushDriverCachesCHROMIUM)
 #define glGetLastFlushIdCHROMIUM GLES2_GET_FUN(GetLastFlushIdCHROMIUM)
 #define glSetActiveURLCHROMIUM GLES2_GET_FUN(SetActiveURLCHROMIUM)
+#define glGetBufferSubDataCHROMIUM GLES2_GET_FUN(GetBufferSubDataCHROMIUM)
 #define glContextVisibilityHintCHROMIUM \
   GLES2_GET_FUN(ContextVisibilityHintCHROMIUM)
 #define glGetGraphicsResetStatusKHR GLES2_GET_FUN(GetGraphicsResetStatusKHR)
@@ -371,6 +367,8 @@
   GLES2_GET_FUN(FramebufferPixelLocalClearValueuivANGLE)
 #define glBeginPixelLocalStorageANGLE GLES2_GET_FUN(BeginPixelLocalStorageANGLE)
 #define glEndPixelLocalStorageANGLE GLES2_GET_FUN(EndPixelLocalStorageANGLE)
+#define glEndPixelLocalStorageImplicitANGLE \
+  GLES2_GET_FUN(EndPixelLocalStorageImplicitANGLE)
 #define glPixelLocalStorageBarrierANGLE \
   GLES2_GET_FUN(PixelLocalStorageBarrierANGLE)
 #define glFramebufferPixelLocalStorageInterruptANGLE \
@@ -381,6 +379,8 @@
   GLES2_GET_FUN(GetFramebufferPixelLocalStorageParameterfvANGLE)
 #define glGetFramebufferPixelLocalStorageParameterivANGLE \
   GLES2_GET_FUN(GetFramebufferPixelLocalStorageParameterivANGLE)
+#define glGetFramebufferPixelLocalStorageParameteruivANGLE \
+  GLES2_GET_FUN(GetFramebufferPixelLocalStorageParameteruivANGLE)
 #define glClipControlEXT GLES2_GET_FUN(ClipControlEXT)
 #define glPolygonModeANGLE GLES2_GET_FUN(PolygonModeANGLE)
 #define glPolygonOffsetClampEXT GLES2_GET_FUN(PolygonOffsetClampEXT)

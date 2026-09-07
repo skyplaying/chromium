@@ -9,11 +9,17 @@
 
 #import "base/ios/block_types.h"
 
+enum class CustomLeadingViewType;
+
 // Commands for focusing the omnibox in various ways.
 @protocol OmniboxCommands
 // Give focus to the omnibox, if it is visible. No-op if it is not visible.
 // If current page is an NTP, first focus the NTP fakebox.
 - (void)focusOmnibox;
+// Inserts text to the omnibox without triggering autocomplete.
+// Use this method to insert target URL or search terms for alternative input
+// methods, such as QR code scanner or voice search.
+- (void)insertTextToOmnibox:(NSString*)string;
 // Focus the omnibox but skip the NTP check.
 - (void)focusOmniboxFromFakebox;
 // Moves the focus of VoiceOver to the omnibox, without activating it.
@@ -23,6 +29,8 @@
 // Cancels the omnibox edit session. The completion block is executed
 // once the cancellation (and any dismissal animation) has finished.
 - (void)cancelOmniboxEditWithCompletion:(ProceduralBlock)completion;
+// Sets the type of custom leading view to display in the location bar.
+- (void)setCustomLeadingViewType:(CustomLeadingViewType)type;
 @end
 
 #endif  // IOS_CHROME_BROWSER_SHARED_PUBLIC_COMMANDS_OMNIBOX_COMMANDS_H_

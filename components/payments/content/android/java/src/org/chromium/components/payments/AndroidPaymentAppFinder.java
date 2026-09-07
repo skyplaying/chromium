@@ -18,6 +18,7 @@ import org.chromium.base.Log;
 import org.chromium.build.annotations.Contract;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.components.embedder_support.util.UrlUtilities;
 import org.chromium.components.payments.PaymentManifestVerifier.ManifestVerifyCallback;
 import org.chromium.components.payments.intent.WebPaymentIntentHelper;
 import org.chromium.payments.mojom.PaymentDetailsModifier;
@@ -87,11 +88,11 @@ public class AndroidPaymentAppFinder implements ManifestVerifyCallback {
     /**
      * The app stores that supports app-store billing methods.
      *
-     * key: the app-store app's package name, e.g., "com.google.vendor" (Google Play Store).
+     * <p>key: the app-store app's package name, e.g., "com.google.vendor" (Google Play Store).
      * value: the app-store app's billing method identifier, e.g.,
      * "https://play.google.com/billing". Only valid GURLs are allowed.
      */
-    private final Map<String, GURL> mAppStores = new HashMap();
+    private final Map<String, GURL> mAppStores = new HashMap<>();
 
     /**
      * A mapping from an Android package name to the payment app with that package name. The apps
@@ -99,7 +100,7 @@ public class AndroidPaymentAppFinder implements ManifestVerifyCallback {
      * have been validated. The package names are used for identification because they are unique on
      * Android. Example contents:
      *
-     * {"com.bobpay.app.v1": androidPaymentApp1, "com.alicepay.app.v1": androidPaymentApp2}
+     * <p>{"com.bobpay.app.v1": androidPaymentApp1, "com.alicepay.app.v1": androidPaymentApp2}
      */
     private final Map<String, AndroidPaymentApp> mValidApps = new HashMap<>();
 
@@ -271,7 +272,7 @@ public class AndroidPaymentAppFinder implements ManifestVerifyCallback {
         for (GURL appStoreUriMethod : mAppStores.values()) {
             assert appStoreUriMethod != null;
             assert appStoreUriMethod.isValid();
-            String appStoreMethod = removeTrailingSlash(appStoreUriMethod.getSpec());
+            String appStoreMethod = UrlUtilities.stripTrailingSlash(appStoreUriMethod.getSpec());
             assert appStoreMethod != null;
             if (!mFactoryDelegate.getParams().getMethodData().containsKey(appStoreMethod)) continue;
             if (!paymentAppSupportsUriMethod(twaApp, appStoreUriMethod)) continue;
@@ -366,13 +367,9 @@ public class AndroidPaymentAppFinder implements ManifestVerifyCallback {
                     String.join(", ", getActivityPackageNames(allInstalledPaymentApps)));
         }
 
-        boolean isReadyToPayQueryRestricted =
-                !mFactoryDelegate.getParams().prefsCanMakePayment()
-                        && PaymentFeatureList.isEnabledOrExperimentalFeaturesEnabled(
-                                PaymentFeatureList.RESTRICT_IS_READY_TO_PAY_QUERY);
         if (mIsOffTheRecord) {
             Log.i(TAG, "Off the record, skipping isReadyToPay service registration.");
-        } else if (isReadyToPayQueryRestricted) {
+        } else if (!mFactoryDelegate.getParams().prefsCanMakePayment()) {
             Log.i(
                     TAG,
                     "Payment app checking disabled, skipping isReadyToPay service registration.");
@@ -826,12 +823,12 @@ public class AndroidPaymentAppFinder implements ManifestVerifyCallback {
                 isReadyToPay);
 
         app.setHasEnrolledInstrument(isReadyToPay);
-        if (isReadyToPay
-                || PaymentFeatureList.isEnabledOrExperimentalFeaturesEnabled(
-                        PaymentFeatureList.ALLOW_SHOW_WITHOUT_READY_TO_PAY)) {
-            onCanMakePaymentCalculated(true);
-            mFactoryDelegate.onPaymentAppCreated(app);
-        }
+
+        // Whether or not the underlying app reports that it has an enrolled instrument, we should
+        // still register the app. It is up to the website to ultimately decide if it wants to
+        // invoke the payment app via show().
+        onCanMakePaymentCalculated(true);
+        mFactoryDelegate.onPaymentAppCreated(app);
 
         if (--mPendingIsReadyToPayQueries == 0) {
             mFactoryDelegate.onDoneCreatingPaymentApps(mFactory);
@@ -912,8 +909,6 @@ public class AndroidPaymentAppFinder implements ManifestVerifyCallback {
                             mIsOffTheRecord,
                             webAppIdCanDeduped,
                             appSupportedDelegations,
-                            PaymentFeatureList.isEnabledOrExperimentalFeaturesEnabled(
-                                    PaymentFeatureList.ALLOW_SHOW_WITHOUT_READY_TO_PAY),
                             PaymentFeatureList.isEnabled(
                                     PaymentFeatureList.SHOW_READY_TO_PAY_DEBUG_INFO),
                             /* removeDeprecatedFields= */ PaymentFeatureList
@@ -968,19 +963,14 @@ public class AndroidPaymentAppFinder implements ManifestVerifyCallback {
      * whereas "https://google.com/pay/" is incorrect. This is important because matching payment
      * apps to payment requests happens by string equality. Note that GURL.getSpec() can append
      * trailing slashes in some instances.
+     *
      * @param url The URL to stringify.
      * @return The URL string without a trailing slash, or null if the input parameter is null.
      */
     @Contract("!null -> !null")
     private static @Nullable String urlToStringWithoutTrailingSlash(@Nullable GURL url) {
         if (url == null) return null;
-        return removeTrailingSlash(url.getSpec());
-    }
-
-    @Contract("!null -> !null")
-    private static @Nullable String removeTrailingSlash(@Nullable String string) {
-        if (string == null) return null;
-        return string.endsWith("/") ? string.substring(0, string.length() - 1) : string;
+        return UrlUtilities.stripTrailingSlash(url.getSpec());
     }
 
     /**
@@ -1000,10 +990,6 @@ public class AndroidPaymentAppFinder implements ManifestVerifyCallback {
      * <p>TODO(crbug.com/400531531): Stop special-casing individual payment apps in Chrome.
      */
     private boolean methodHandledByInternalFactory(String method) {
-        if (!PaymentFeatureList.isEnabled(PaymentFeatureList.DEDUPLICATE_NATIVE_PAYMENT_APPS)) {
-            return false;
-        }
-
         if (PaymentFeatureList.isEnabledOrExperimentalFeaturesEnabled(
                 PaymentFeatureList.GOOGLE_PAY_VIA_ANDROID_INTENTS)) {
             return false;

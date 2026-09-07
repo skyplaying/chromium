@@ -12,6 +12,7 @@
 #include "base/time/clock.h"
 #include "base/timer/timer.h"
 #include "ui/aura/window_observer.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/display/display_observer.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/unique_widget_ptr.h"
@@ -22,11 +23,7 @@ class PrefRegistrySimple;
 namespace ash {
 class MultitaskMenuNudgeControllerTest;
 class MultitaskMenuNudgeTest;
-}
-
-namespace ui {
-class Layer;
-}
+}  // namespace ash
 
 namespace chromeos {
 
@@ -146,7 +143,7 @@ class COMPONENT_EXPORT(CHROMEOS_UI_FRAME) MultitaskMenuNudgeController
   base::OneShotTimer clamshell_nudge_dismiss_timer_;
 
   views::UniqueWidgetPtr nudge_widget_;
-  std::unique_ptr<ui::Layer> pulse_layer_;
+  std::unique_ptr<ui::LayerSolidColor> pulse_layer_;
 
   // The time the nudge was shown. Null if it hasn't been shown this session.
   base::Time nudge_shown_time_;

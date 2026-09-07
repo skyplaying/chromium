@@ -22,7 +22,7 @@
 
 namespace {
 
-// In this file, we uses classes that implements the tow following traits.
+// In this file, we use classes that implement the following two traits.
 // Predicate to decide which identity to filter.
 // class Filter {
 // public:
@@ -36,7 +36,7 @@ namespace {
 // class Collector {
 //   // Returns whether iteration should continue or stop.
 //   virtual IteratorResult ForEach(id<SystemIdentity> identity);
-//   // Returns the result gathered thorugh the iteration.
+//   // Returns the result gathered through the iteration.
 //   virtual ResultType Result() const;
 // }
 
@@ -70,6 +70,19 @@ class KeepGaiaID {
 
  private:
   GaiaId gaia_id_;
+};
+
+// Filter class skipping identities that do not have the given email.
+class KeepEmail {
+ public:
+  explicit KeepEmail(NSString* email) : email_(email) { CHECK(email_); }
+
+  bool ShouldFilter(id<SystemIdentity> identity) const {
+    return ![email_ isEqualToString:identity.userEmail];
+  }
+
+ private:
+  NSString* email_;
 };
 
 // Filter skipping identities if either sub-filter match.
@@ -206,7 +219,7 @@ ChromeAccountManagerService::ChromeAccountManagerService(
         base::BindRepeating(&ChromeAccountManagerService::UpdateRestriction,
                             base::Unretained(this)));
 
-    // Force initialisation of `restriction_`.
+    // Force initialization of `restriction_`.
     UpdateRestriction();
   }
   GetApplicationContext()->GetAccountProfileMapper()->AddObserver(
@@ -302,13 +315,23 @@ ChromeAccountManagerService::GetIdentitiesOnDeviceWithGaiaIDs(
     const std::vector<AccountInfo>& account_infos) const {
   NSMutableArray<id<SystemIdentity>>* identities = [NSMutableArray array];
   for (const AccountInfo& account_info : account_infos) {
-    GaiaId gaia_id = account_info.gaia;
+    GaiaId gaia_id = account_info.GetGaiaId();
     id<SystemIdentity> identity = GetIdentityOnDeviceWithGaiaID(gaia_id);
     if (identity) {
       [identities addObject:identity];
     }
   }
   return identities;
+}
+
+id<SystemIdentity> ChromeAccountManagerService::GetIdentityOnDeviceWithEmail(
+    NSString* email) const {
+  if (!email.length) {
+    return nil;
+  }
+  return IterateOverAllIdentitiesOnDevice(
+      FindFirstIdentity{},
+      CombineOr{SkipRestricted{restriction_}, KeepEmail{email}});
 }
 
 NSArray<id<SystemIdentity>>*

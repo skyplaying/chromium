@@ -1,13 +1,14 @@
 <!DOCTYPE html>
 <html>
 <head>
+<meta name="timeout" content="long">
 <script src="/resources/testharness.js"></script>
 <script src="/resources/testharnessreport.js"></script>
 <script src="resources/testharness-adapter.js"></script>
 </head>
 <body>
 <script type="module">
-import {GeolocationMock} from './resources/geolocation-mock.js';
+import {GeolocationMock, GeolocationPermissionStatus} from './resources/geolocation-mock.js';
 
 description("Tests that watchPosition does not report position changes when the page is not visible.");
 
@@ -16,7 +17,7 @@ let error;
 let isPageVisible = true;
 
 const mock = new GeolocationMock();
-mock.setGeolocationPermission(true);
+mock.setGeolocationPermission(GeolocationPermissionStatus.GRANTED_PRECISE);
 
 let mockLatitude = 51.478;
 let mockLongitude = -0.166;

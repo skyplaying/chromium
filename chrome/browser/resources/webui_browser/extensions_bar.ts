@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import './extension_element.js';
+import './extension.js';
 
 import {CrIconButtonElement} from '//resources/cr_elements/cr_icon_button/cr_icon_button.js';
 import {assert} from '//resources/js/assert.js';
@@ -10,11 +10,13 @@ import {loadTimeData} from '//resources/js/load_time_data.js';
 import {TrackedElementManager} from '//resources/js/tracked_element/tracked_element_manager.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 import type {MenuSourceType} from '//resources/mojo/ui/base/mojom/menu_source_type.mojom-webui.js';
+import {PageCallbackRouter, PageHandlerFactory, PageHandlerRemote} from '/shared/extensions_bar.mojom-webui.js';
+import type {ExtensionActionInfo} from '/shared/extensions_bar_data_model.mojom-webui.js';
+import type {IconUpdate} from '/shared/icon_handle.mojom-webui.js';
+import {IconTable} from '/shared/icon_table.js';
 
-import {ExtensionElement} from './extension_element.js';
+import {ExtensionElement} from './extension.js';
 import {getCss} from './extensions_bar.css.js';
-import type {ExtensionActionInfo} from './extensions_bar.mojom-webui.js';
-import {PageCallbackRouter, PageHandlerFactory, PageHandlerRemote} from './extensions_bar.mojom-webui.js';
 
 export class ExtensionsBarElement extends CrLitElement {
   static get is() {
@@ -42,6 +44,7 @@ export class ExtensionsBarElement extends CrLitElement {
   private handler: PageHandlerRemote = new PageHandlerRemote();
 
   private buttons: Map<string, ExtensionElement> = new Map();
+  private iconTable_: IconTable = IconTable.getInstance();
   private extensionsMenuButton: CrIconButtonElement;
   private trackedElementManager: TrackedElementManager;
 
@@ -50,14 +53,14 @@ export class ExtensionsBarElement extends CrLitElement {
     this.trackedElementManager = TrackedElementManager.getInstance();
     this.extensionsMenuButton = new CrIconButtonElement();
     this.extensionsMenuButton.id = 'extensionsMenuButton';
-    this.extensionsMenuButton.ironIcon =
-        'webui-browser:ExtensionChromeRefreshIcon';
+    this.extensionsMenuButton.ironIcon = 'webui-browser:chrome-extension';
     this.extensionsMenuButton.title =
         loadTimeData.getString('tooltipExtensionsButton');
     this.extensionsMenuButton.addEventListener(
         'click', this.extensionMenuButtonClicked.bind(this));
     this.trackedElementManager.startTracking(
-        this.extensionsMenuButton, 'kExtensionsMenuButtonElementId');
+        this.extensionsMenuButton, 'kExtensionsMenuButtonElementId',
+        {secondaryId: 'ext:'});
 
     const factory = PageHandlerFactory.getRemote();
     factory.createPageHandler(
@@ -75,7 +78,10 @@ export class ExtensionsBarElement extends CrLitElement {
     this.shadowRoot.appendChild(this.extensionsMenuButton);
   }
 
-  private actionsAddedOrUpdated(updates: ExtensionActionInfo[]) {
+
+  private actionsAddedOrUpdated(
+      icons: IconUpdate[], updates: ExtensionActionInfo[]) {
+    this.iconTable_.applyUpdates(icons);
     for (const update of updates) {
       if (!this.buttons.has(update.id)) {
         const extensionButton = new ExtensionElement(update.id, this);
@@ -86,7 +92,7 @@ export class ExtensionsBarElement extends CrLitElement {
 
       const extensionButton = this.buttons.get(update.id);
       assert(extensionButton);
-      extensionButton.iconUrl = update.dataUrlForIcon;
+      extensionButton.iconHandle = update.icon;
       extensionButton.setAttribute('aria-label', update.accessibleName);
       extensionButton.setAttribute('title', update.tooltip);
       extensionButton.visible = update.isVisible;
@@ -96,7 +102,8 @@ export class ExtensionsBarElement extends CrLitElement {
     this.updateVisibility();
   }
 
-  private actionRemoved(actionId: string) {
+  private actionRemoved(icons: IconUpdate[], actionId: string) {
+    this.iconTable_.applyUpdates(icons);
     const extensionButton = this.buttons.get(actionId);
     assert(extensionButton);
     this.buttons.delete(actionId);

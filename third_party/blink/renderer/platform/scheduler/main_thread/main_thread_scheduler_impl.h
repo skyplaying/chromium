@@ -90,6 +90,7 @@ FORWARD_DECLARE_TEST(MainThreadSchedulerImplTest,
 }  // namespace main_thread_scheduler_impl_unittest
 
 PLATFORM_EXPORT BASE_DECLARE_FEATURE(kLowerPriorityForCompositorGestures);
+PLATFORM_EXPORT BASE_DECLARE_FEATURE(kBusyLoopAggressiveAfterCommittedLoad);
 
 class AgentGroupSchedulerImpl;
 class CPUTimeBudgetPool;
@@ -98,37 +99,7 @@ class PageSchedulerImpl;
 class WebRenderWidgetSchedulingState;
 class WidgetSchedulerImpl;
 
-#if BUILDFLAG(IS_ANDROID)
-PLATFORM_EXPORT BASE_DECLARE_FEATURE(kRestrictMainThreadBigCoreAffinity);
 
-// Must be created on the main thread, can be deleted from any thread.
-class PLATFORM_EXPORT ThreadAffinityBoost {
- public:
-  ThreadAffinityBoost();
-  ~ThreadAffinityBoost();
-  static void StopDelayed(std::unique_ptr<ThreadAffinityBoost> boost,
-                          base::TimeDelta delay);
-
-  using SetCanRunOnBigCoreFn =
-      base::RepeatingCallback<void(base::PlatformThreadId, bool)>;
-
-  static void SetTaskRunnerForTesting(base::TaskRunner* task_runner) {
-    task_runner_for_testing_ = task_runner;
-  }
-
-  static void SetCanRunOnBigCoreOverrideForTesting(SetCanRunOnBigCoreFn* cb) {
-    set_can_run_on_big_core_override_ = cb;
-  }
-
- private:
-  static base::Lock& lock();
-
-  const base::PlatformThreadId thread_id_;
-  static uint64_t depth_ GUARDED_BY(lock());
-  static base::TaskRunner* task_runner_for_testing_;
-  static SetCanRunOnBigCoreFn* set_can_run_on_big_core_override_;
-};
-#endif  // BUILDFLAG(IS_ANDROID)
 
 class PLATFORM_EXPORT MainThreadSchedulerImpl
     : public ThreadSchedulerBase,
@@ -250,6 +221,8 @@ class PLATFORM_EXPORT MainThreadSchedulerImpl
   void RemoveRAILModeObserver(RAILModeObserver const* observer) override;
   void ForEachMainThreadIsolate(
       base::FunctionRef<void(v8::Isolate* isolate)>) override;
+  void SetBatterySaverEnabled(bool enabled) override;
+  bool IsBatterySaverEnabled() const override;
   Vector<WebInputEventAttribution> GetPendingUserInputInfo(
       bool include_continuous) const override;
   void ExecuteAfterCurrentTaskForTesting(
@@ -312,6 +285,7 @@ class PLATFORM_EXPORT MainThreadSchedulerImpl
   }
 
   scoped_refptr<base::SingleThreadTaskRunner> DefaultTaskRunner();
+  scoped_refptr<MainThreadTaskQueue> DefaultTaskQueue();
 
   scoped_refptr<SingleThreadIdleTaskRunner> IdleTaskRunner();
   base::TimeTicks NowTicks() const;
@@ -339,6 +313,8 @@ class PLATFORM_EXPORT MainThreadSchedulerImpl
 
   // Snapshots this MainThreadSchedulerImpl for tracing.
   void CreateTraceEventObjectSnapshot() const;
+
+  perfetto::Track TracingTrack() const { return *tracing_track_; }
 
   // Called when one of associated page schedulers has changed audio state.
   void OnAudioStateChanged();
@@ -437,7 +413,6 @@ class PLATFORM_EXPORT MainThreadSchedulerImpl
   Vector<base::OnceClosure>& GetOnTaskCompletionCallbacks() override;
 
   scoped_refptr<MainThreadTaskQueue> ControlTaskQueue();
-  scoped_refptr<MainThreadTaskQueue> DefaultTaskQueue();
   scoped_refptr<MainThreadTaskQueue> V8TaskQueue();
 
   virtual void PerformMicrotaskCheckpoint();
@@ -674,7 +649,9 @@ class PLATFORM_EXPORT MainThreadSchedulerImpl
       MainThreadTaskQueue*,
       const base::sequence_manager::TaskQueue::TaskTiming&);
 
+#if BUILDFLAG(IS_ANDROID)
   void ApplyPerformanceState(bool prefer_efficient_scheduling);
+#endif
 
   // Computes the priority for compositing based on the current use case.
   // Returns nullopt if the use case does not need to set the priority.
@@ -687,6 +664,8 @@ class PLATFORM_EXPORT MainThreadSchedulerImpl
   void ShutdownAllQueues();
 
   bool AllPagesFrozen() const;
+
+  void MaybeSetBusyLoop();
 
   // Indicates that scheduler has been shutdown.
   // It should be accessed only on the main thread, but couldn't be a member
@@ -703,6 +682,9 @@ class PLATFORM_EXPORT MainThreadSchedulerImpl
   // This controller should be initialized before any TraceableVariables
   // because they require one to initialize themselves.
   TraceableVariableController tracing_controller_;
+
+  const base::trace_event::TrackRegistration<perfetto::NamedTrack>
+      tracing_track_;
 
   // Used for experiments on finch. On main thread instantiation, we cache
   // the values of base::Feature flags using this struct, since calling
@@ -753,6 +735,8 @@ class PLATFORM_EXPORT MainThreadSchedulerImpl
 
   MemoryPurgeManager memory_purge_manager_;
 
+  base::TimeTicks last_input_use_case_time_ = base::TimeTicks::Min();
+
   base::RepeatingClosure update_policy_closure_;
   DeadlineTaskRunner delayed_update_policy_runner_;
   CancelableClosureHolder end_renderer_hidden_idle_period_closure_;
@@ -767,43 +751,40 @@ class PLATFORM_EXPORT MainThreadSchedulerImpl
     ~MainThreadOnly();
 
     IdleTimeEstimator idle_time_estimator;
-    TraceableState<UseCase, "renderer.scheduler"> current_use_case;
+    TraceableState<UseCase, "renderer.scheduler.status"> current_use_case;
     Policy current_policy;
     base::TimeTicks current_policy_expiration_time;
     base::TimeTicks estimated_next_frame_begin;
     base::TimeTicks current_task_start_time;
     base::TimeTicks discrete_input_response_start_time;
     base::TimeDelta compositor_frame_interval;
-    TraceableCounter<int, TRACE_DISABLED_BY_DEFAULT("renderer.scheduler")>
+    TraceableCounter<int, "renderer.scheduler.status">
         renderer_pause_count;  // Renderer is paused if non-zero.
 
     bool renderer_hidden = false;
     std::optional<base::ScopedSampleMetadata> renderer_hidden_metadata;
     std::optional<base::ScopedSampleMetadata> renderer_frozen_metadata;
     bool renderer_backgrounded = kLaunchingProcessIsBackgrounded;
-    TraceableState<bool, "renderer.scheduler"> blocking_input_expected_soon;
-    TraceableState<bool, TRACE_DISABLED_BY_DEFAULT("renderer.scheduler.debug")>
+    // Whether the browser is in energy saver (battery saver) mode. Pushed from
+    // the browser via `SetBatterySaverEnabled()` and used to gate fullscreen
+    // video timer throttling.
+    bool battery_saver_enabled = false;
+    TraceableState<bool, "renderer.scheduler.status">
+        blocking_input_expected_soon;
+    TraceableState<bool, "renderer.scheduler.status">
         in_idle_period_for_testing;
     TraceableState<bool, "renderer"> is_audio_playing;
-    TraceableState<bool, TRACE_DISABLED_BY_DEFAULT("renderer.scheduler.debug")>
+    TraceableState<bool, "renderer.scheduler.status">
         compositor_will_send_main_frame_not_expected;
-    TraceableState<bool, TRACE_DISABLED_BY_DEFAULT("renderer.scheduler.debug")>
-        has_navigated;
-    TraceableState<bool, TRACE_DISABLED_BY_DEFAULT("renderer.scheduler.debug")>
-        pause_timers_for_webview;
+    TraceableState<bool, "renderer.scheduler.status"> has_navigated;
+    TraceableState<bool, "renderer.scheduler.status"> pause_timers_for_webview;
     // If true, indicates that CPU performance management is applied.
-    TraceableState<bool, "renderer.scheduler"> restrict_cpu_performance;
+    TraceableState<bool, "renderer.scheduler.status"> restrict_cpu_performance;
     base::TimeTicks background_status_changed_at;
     HashSet<PageSchedulerImpl*> page_schedulers;  // Not owned.
     base::ObserverList<RAILModeObserver>::Unchecked
         rail_mode_observers;  // Not owned.
     MainThreadMetricsHelper metrics_helper;
-    TraceableState<std::optional<TaskDescriptionForTracing>,
-                   TRACE_DISABLED_BY_DEFAULT("renderer.scheduler")>
-        task_description_for_tracing;  // Don't use except for tracing.
-    TraceableState<std::optional<TaskPriority>,
-                   TRACE_DISABLED_BY_DEFAULT("renderer.scheduler")>
-        task_priority_for_tracing;  // Only used for tracing.
 
     // Holds task queues that are currently running.
     // The queue for the inmost task is at the top of stack when there are
@@ -851,11 +832,15 @@ class PLATFORM_EXPORT MainThreadSchedulerImpl
     HashSet<scoped_refptr<WidgetSchedulerImpl>> widget_schedulers;
     raw_ptr<base::MessagePump> message_pump;
 
-#if BUILDFLAG(IS_ANDROID)
-    // Used to change thread affinity when KRestrictMainThreadAffinity is
-    // enabled.
-    std::unique_ptr<ThreadAffinityBoost> affinity_boost = nullptr;
-#endif  // BUILDFLAG(IS_ANDROID)
+    // Multiplier to apply to the message busy loop maximum duration
+    float busy_loop_scale_factor = 0.f;
+
+    // When busy looping is enabled, and the feature
+    // kBusyLoopAggressiveAfterCommittedLoad is enabled, holds the time of the
+    // last commit (unless it's too far in the past). When `is_null()`, this
+    // either means that the feature is not enabled, or the commit is too far in
+    // the past.
+    base::TimeTicks last_committed_load_time;
   };
 
   struct AnyThread {
@@ -864,23 +849,22 @@ class PLATFORM_EXPORT MainThreadSchedulerImpl
 
     PendingUserInput::Monitor pending_input_monitor;
     UserModel user_model;
-    TraceableState<bool, TRACE_DISABLED_BY_DEFAULT("renderer.scheduler")>
+    TraceableState<bool, "renderer.scheduler.status">
         awaiting_touch_start_response;
-    TraceableState<bool, TRACE_DISABLED_BY_DEFAULT("renderer.scheduler")>
+    TraceableState<bool, "renderer.scheduler.status">
         awaiting_discrete_input_response;
-    TraceableState<bool, TRACE_DISABLED_BY_DEFAULT("renderer.scheduler")>
+    TraceableState<bool, "renderer.scheduler.status">
         begin_main_frame_on_critical_path;
-    TraceableState<bool, TRACE_DISABLED_BY_DEFAULT("renderer.scheduler")>
+    TraceableState<bool, "renderer.scheduler.status">
         last_gesture_was_compositor_driven;
-    TraceableState<bool, TRACE_DISABLED_BY_DEFAULT("renderer.scheduler")>
-        default_gesture_prevented;
-    TraceableState<bool, TRACE_DISABLED_BY_DEFAULT("renderer.scheduler")>
+    TraceableState<bool, "renderer.scheduler.status"> default_gesture_prevented;
+    TraceableState<bool, "renderer.scheduler.status">
         have_seen_a_blocking_gesture;
-    TraceableState<bool, TRACE_DISABLED_BY_DEFAULT("renderer.scheduler")>
+    TraceableState<bool, "renderer.scheduler.status">
         waiting_for_any_main_frame_contentful_paint;
-    TraceableState<bool, TRACE_DISABLED_BY_DEFAULT("renderer.scheduler")>
+    TraceableState<bool, "renderer.scheduler.status">
         waiting_for_any_main_frame_meaningful_paint;
-    TraceableState<bool, TRACE_DISABLED_BY_DEFAULT("renderer.scheduler")>
+    TraceableState<bool, "renderer.scheduler.status">
         have_seen_input_since_navigation;
   };
 

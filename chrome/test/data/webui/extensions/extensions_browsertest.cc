@@ -3,7 +3,9 @@
 // found in the LICENSE file.
 
 #include "base/strings/stringprintf.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/buildflag.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/webui/extensions/extension_settings_test_base.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/webui_url_constants.h"
@@ -73,16 +75,6 @@ IN_PROC_BROWSER_TEST_F(CrExtensionsTest, HostPermissionsToggleList) {
 // V2 is not supported on desktop android, so tests are disabled.
 #if !BUILDFLAG(IS_ANDROID)
 IN_PROC_BROWSER_TEST_F(CrExtensionsTest,
-                       MAYBE(ExtensionsMV2DeprecationPanelWarningStage)) {
-  RunTest("extensions/mv2_deprecation_panel_warning_test.js", "mocha.run()");
-}
-
-IN_PROC_BROWSER_TEST_F(CrExtensionsTest,
-                       MAYBE(ExtensionsMV2DeprecationPanelDisabledStage)) {
-  RunTest("extensions/mv2_deprecation_panel_disabled_test.js", "mocha.run()");
-}
-
-IN_PROC_BROWSER_TEST_F(CrExtensionsTest,
                        MAYBE(ExtensionsMV2DeprecationPanelUnsupportedStage)) {
   RunTest("extensions/mv2_deprecation_panel_unsupported_test.js",
           "mocha.run()");
@@ -122,6 +114,10 @@ IN_PROC_BROWSER_TEST_F(CrExtensionsTest, SitePermissionsSiteGroup) {
   RunTest("extensions/site_permissions_site_group_test.js", "mocha.run()");
 }
 
+IN_PROC_BROWSER_TEST_F(CrExtensionsTest, ManagerWebuiRefresh2026) {
+  RunTest("extensions/manager_webui_refresh_2026_test.js", "mocha.run()");
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Extension Sidebar Tests
 
@@ -155,7 +151,7 @@ class CrExtensionsToolbarTest : public ExtensionsBrowserTest {
   void RunTestCase(const std::string& testCase) {
     ExtensionsBrowserTest::RunTest(
         "extensions/toolbar_test.js",
-        base::StringPrintf("runMochaTest('ExtensionToolbarTest', '%s');",
+        base::StringPrintf("runMochaTest('ExtensionsToolbarTest', '%s');",
                            testCase.c_str()));
   }
 };
@@ -262,6 +258,10 @@ IN_PROC_BROWSER_TEST_F(CrExtensionsItemsTest, ShowErrorAsWarningsButtonLabel) {
   RunTestCase("ShowErrorAsWarningsButtonLabel");
 }
 
+IN_PROC_BROWSER_TEST_F(CrExtensionsItemsTest, RateExtensionLinkVisibility) {
+  RunTestCase("RateExtensionLinkVisibility");
+}
+
 class CrExtensionsDetailViewTest : public ExtensionsBrowserTest {
  protected:
   void RunTestCase(const std::string& testCase) {
@@ -310,11 +310,6 @@ IN_PROC_BROWSER_TEST_F(CrExtensionsDetailViewTest,
   RunTestCase("MV2DeprecationDisabledExtension");
 }
 
-IN_PROC_BROWSER_TEST_F(CrExtensionsDetailViewTest,
-                       MV2DeprecationUnsupportedDisabledExtension) {
-  RunTestCase("MV2DeprecationUnsupportedDisabledExtension");
-}
-
 IN_PROC_BROWSER_TEST_F(CrExtensionsDetailViewTest, ClickableElements) {
   RunTestCase("ClickableElements");
 }
@@ -350,33 +345,14 @@ IN_PROC_BROWSER_TEST_F(CrExtensionsDetailViewTest, SafetyCheckWarning) {
   RunTestCase("SafetyCheckWarning");
 }
 
-IN_PROC_BROWSER_TEST_F(CrExtensionsDetailViewTest, Mv2DeprecationMessage_None) {
-  RunTestCase("Mv2DeprecationMessage_None");
+IN_PROC_BROWSER_TEST_F(CrExtensionsDetailViewTest,
+                       Mv2DeprecationMessage_Visibility) {
+  RunTestCase("Mv2DeprecationMessage_Visibility");
 }
 
 IN_PROC_BROWSER_TEST_F(CrExtensionsDetailViewTest,
-                       Mv2DeprecationMessage_Warning) {
-  RunTestCase("Mv2DeprecationMessage_Warning");
-}
-
-IN_PROC_BROWSER_TEST_F(CrExtensionsDetailViewTest,
-                       Mv2DeprecationMessage_DisableWithReEnable_Visbility) {
-  RunTestCase("Mv2DeprecationMessage_DisableWithReEnable_Visbility");
-}
-
-IN_PROC_BROWSER_TEST_F(CrExtensionsDetailViewTest,
-                       Mv2DeprecationMessage_DisableWithReEnable) {
-  RunTestCase("Mv2DeprecationMessage_DisableWithReEnable_Content");
-}
-
-IN_PROC_BROWSER_TEST_F(CrExtensionsDetailViewTest,
-                       Mv2DeprecationMessage_Unsupported_Visbility) {
-  RunTestCase("Mv2DeprecationMessage_Unsupported_Visbility");
-}
-
-IN_PROC_BROWSER_TEST_F(CrExtensionsDetailViewTest,
-                       Mv2DeprecationMessage_Unsupported) {
-  RunTestCase("Mv2DeprecationMessage_Unsupported_Content");
+                       Mv2DeprecationMessage_Content) {
+  RunTestCase("Mv2DeprecationMessage_Content");
 }
 
 IN_PROC_BROWSER_TEST_F(CrExtensionsDetailViewTest, PinnedToToolbar) {
@@ -392,10 +368,25 @@ IN_PROC_BROWSER_TEST_F(CrExtensionsDetailViewTest, UserScripts) {
   RunTestCase("UserScripts");
 }
 
+IN_PROC_BROWSER_TEST_F(CrExtensionsDetailViewTest,
+                       RateExtensionLinkVisibility) {
+  RunTestCase("RateExtensionLinkVisibility");
+}
+
+IN_PROC_BROWSER_TEST_F(CrExtensionsDetailViewTest, RateExtensionLinkClick) {
+  RunTestCase("RateExtensionLinkClick");
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Extension Item List Tests
 
 class CrExtensionsItemListTest : public ExtensionsBrowserTest {
+ public:
+  CrExtensionsItemListTest() {
+    scoped_feature_list_.InitAndDisableFeature(
+        features::kExtensionsPinnedByDefault);
+  }
+
  protected:
   void RunTestCase(const std::string& testCase) {
     ExtensionsBrowserTest::RunTest(
@@ -403,6 +394,9 @@ class CrExtensionsItemListTest : public ExtensionsBrowserTest {
         base::StringPrintf("runMochaTest('ExtensionItemListTest', '%s');",
                            testCase.c_str()));
   }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_F(CrExtensionsItemListTest, Filtering) {
@@ -436,28 +430,22 @@ IN_PROC_BROWSER_TEST_F(CrExtensionsItemListTest,
 }
 
 IN_PROC_BROWSER_TEST_F(CrExtensionsItemListTest,
-                       ManifestV2DeprecationPanel_None) {
-  RunTestCase("ManifestV2DeprecationPanel_None");
-}
-
-IN_PROC_BROWSER_TEST_F(CrExtensionsItemListTest,
-                       ManifestV2DeprecationPanel_Warning) {
-  RunTestCase("ManifestV2DeprecationPanel_Warning");
-}
-
-IN_PROC_BROWSER_TEST_F(CrExtensionsItemListTest,
-                       ManifestV2DeprecationPanel_DisableWithReEnable) {
-  RunTestCase("ManifestV2DeprecationPanel_DisableWithReEnable");
-}
-
-IN_PROC_BROWSER_TEST_F(CrExtensionsItemListTest,
-                       ManifestV2DeprecationPanel_Unsupported) {
-  RunTestCase("ManifestV2DeprecationPanel_Unsupported");
+                       ManifestV2DeprecationPanel_Visibility) {
+  RunTestCase("ManifestV2DeprecationPanel_Visibility");
 }
 
 IN_PROC_BROWSER_TEST_F(CrExtensionsItemListTest,
                        ManifestV2DeprecationPanel_TitleVisibility) {
   RunTestCase("ManifestV2DeprecationPanel_TitleVisibility");
+}
+
+IN_PROC_BROWSER_TEST_F(CrExtensionsItemListTest, PinnedToggle_Visibility) {
+  RunTestCase("PinnedToggle_Visibility");
+}
+
+IN_PROC_BROWSER_TEST_F(CrExtensionsItemListTest,
+                       PinnedToggle_StateAndInteraction) {
+  RunTestCase("PinnedToggle_StateAndInteraction");
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -524,6 +512,10 @@ IN_PROC_BROWSER_TEST_F(CrExtensionsManagerUnitTest, ProfileSettings) {
 
 IN_PROC_BROWSER_TEST_F(CrExtensionsManagerUnitTest, Uninstall) {
   RunTestCase("Uninstall");
+}
+
+IN_PROC_BROWSER_TEST_F(CrExtensionsManagerUnitTest, UninstallRaceCondition) {
+  RunTestCase("UninstallRaceCondition");
 }
 
 // Flaky since r621915: https://crbug.com/41435924
@@ -699,6 +691,11 @@ class CrExtensionsServiceUnitTest : public ExtensionsBrowserTest {
 IN_PROC_BROWSER_TEST_F(CrExtensionsServiceUnitTest,
                        CallingSetEnabledDoesNotGenerateARuntimeError) {
   RunTestCase("Calling setEnabled() does not cause a runtime error");
+}
+
+IN_PROC_BROWSER_TEST_F(CrExtensionsServiceUnitTest,
+                       CallingOpenReviewPageDoesNotGenerateARuntimeError) {
+  RunTestCase("Calling openReviewPage() does not cause a runtime error");
 }
 
 ////////////////////////////////////////////////////////////////////////////////

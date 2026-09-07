@@ -101,6 +101,7 @@ class ChildProcessSecurityPolicy {
   // capability to upload the requested file.
   virtual bool CanReadFile(ChildProcessId child_id,
                            const base::FilePath& file) = 0;
+
   virtual bool CanCreateReadWriteFile(int child_id,
                                       const base::FilePath& file) = 0;
 
@@ -173,6 +174,10 @@ class ChildProcessSecurityPolicy {
   // Grants the child process the capability to request URLs with the provided
   // origin.
   virtual void GrantRequestOrigin(int child_id, const url::Origin& origin) = 0;
+
+  // Grants the child process the capability to commit URLs of the provided
+  // scheme.
+  virtual void GrantCommitScheme(int child_id, const std::string& scheme) = 0;
 
   // Grants the child process the capability to request URLs of the provided
   // scheme.
@@ -250,6 +255,7 @@ class ChildProcessSecurityPolicy {
   // Defines available sources of isolated origins.  This should be specified
   // when adding isolated origins with the AddFutureIsolatedOrigins() call
   // below.
+  // LINT.IfChange(IsolatedOriginSource)
   enum class IsolatedOriginSource {
     // Used for origins that are hardcoded into the browser.
     BUILT_IN,
@@ -270,6 +276,7 @@ class ChildProcessSecurityPolicy {
     // Used for testing purposes.
     TEST
   };
+  // LINT.ThenChange(//content/browser/security/cpsp/child_process_security_policy_impl.rs:IsolatedOriginSource)
 
   // Add |origins| to the list of origins that require process isolation.  When
   // making process model decisions for such origins, the scheme+host tuple

@@ -23,6 +23,7 @@
 #include "content/browser/renderer_host/render_view_host_impl.h"
 #include "content/browser/site_instance_impl.h"
 #include "content/common/render_message_filter.mojom.h"
+#include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/preload_pipeline_info.h"
 #include "content/public/common/referrer_type_converters.h"
 #include "content/public/common/url_utils.h"
@@ -155,9 +156,13 @@ int TestWebContents::GetCurrentlyPlayingVideoCount() const {
 }
 
 void TestWebContents::SetTabSwitchStartTime(base::TimeTicks start_time,
-                                            bool destination_is_loaded) {
+                                            bool destination_is_loaded,
+                                            bool had_saved_frame_at_start,
+                                            bool destination_is_frozen) {
   tab_switch_start_time_ = start_time;
-  WebContentsImpl::SetTabSwitchStartTime(start_time, destination_is_loaded);
+  WebContentsImpl::SetTabSwitchStartTime(start_time, destination_is_loaded,
+                                         had_saved_frame_at_start,
+                                         destination_is_frozen);
 }
 
 const std::string& TestWebContents::GetSaveFrameHeaders() {
@@ -221,7 +226,8 @@ void TestWebContents::TestSetFaviconURL(
 
 void TestWebContents::TestUpdateFaviconURL(
     const std::vector<blink::mojom::FaviconURLPtr>& favicon_urls) {
-  GetPrimaryMainFrame()->UpdateFaviconURL(mojo::Clone(favicon_urls));
+  GetPrimaryMainFrame()->UpdateFaviconURL(
+      mojo::Clone(favicon_urls), blink::mojom::FaviconUpdateReason::kPageLoad);
 }
 
 void TestWebContents::SetLastCommittedURL(const GURL& url) {
@@ -387,7 +393,7 @@ void TestWebContents::AddPendingContents(
     const GURL& target_url) {
   // This is normally only done in WebContentsImpl::CreateNewWindow.
   GlobalRoutingID key(
-      contents->GetRenderViewHost()->GetProcess()->GetDeprecatedID(),
+      contents->GetRenderViewHost()->GetProcess()->GetID(),
       contents->GetRenderViewHost()->GetWidget()->GetRoutingID());
   AddWebContentsDestructionObserver(contents.get());
   pending_contents_[key] = CreatedWindow(std::move(contents), target_url);
@@ -398,7 +404,7 @@ FrameTree* TestWebContents::CreateNewWindow(
     const mojom::CreateNewWindowParams& params,
     bool is_new_browsing_instance,
     bool has_user_gesture,
-    SessionStorageNamespace* session_storage_namespace) {
+    SessionStorageNamespaceHandle* session_storage_namespace) {
   return nullptr;
 }
 
@@ -408,7 +414,8 @@ RenderWidgetHostImpl* TestWebContents::CreateNewPopupWidget(
     mojo::PendingAssociatedReceiver<blink::mojom::PopupWidgetHost>
         blink_popup_widget_host,
     mojo::PendingAssociatedReceiver<blink::mojom::WidgetHost> blink_widget_host,
-    mojo::PendingAssociatedRemote<blink::mojom::Widget> blink_widget) {
+    mojo::PendingAssociatedRemote<blink::mojom::Widget> blink_widget,
+    GlobalRenderFrameHostId creator_frame_id) {
   return nullptr;
 }
 
@@ -421,7 +428,7 @@ WebContents* TestWebContents::ShowCreatedWindow(
   return nullptr;
 }
 
-void TestWebContents::ShowCreatedWidget(int process_id,
+void TestWebContents::ShowCreatedWidget(ChildProcessId process_id,
                                         int route_id,
                                         const gfx::Rect& initial_rect,
                                         const gfx::Rect& initial_anchor_rect) {}
@@ -643,6 +650,12 @@ void TestWebContents::SetMediaCaptureRawDeviceIdsOpened(
 
 void TestWebContents::SetCurrentlyPlayingVideoCount(int count) {
   playing_video_count_ = count;
+}
+
+void TestWebContents::SetHasPictureInPictureDocument(
+    bool has_picture_in_picture_document) {
+  WebContentsImpl::SetHasPictureInPictureDocument(
+      has_picture_in_picture_document);
 }
 
 void TestWebContents::OnIgnoredUIEvent() {

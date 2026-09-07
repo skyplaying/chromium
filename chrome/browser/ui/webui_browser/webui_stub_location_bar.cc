@@ -5,28 +5,53 @@
 #include "chrome/browser/ui/webui_browser/webui_stub_location_bar.h"
 
 #include "base/notimplemented.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_command_controller.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/bubble_anchor_util_views.h"
+#include "chrome/browser/ui/views/permissions/chip/permission_dashboard_controller.h"
+#include "chrome/browser/ui/views/permissions/chip/webui_permission_dashboard.h"
 #include "chrome/browser/ui/webui_browser/webui_browser_window.h"
 #include "ui/views/bubble/bubble_border.h"
 
 WebUIStubLocationBar::WebUIStubLocationBar(WebUIBrowserWindow* window)
-    : LocationBar(window->browser()
-                      ->GetBrowserForMigrationOnly()
-                      ->command_controller()),
-      window_(window) {}
+    : LocationBar(chrome::BrowserCommandController::From(window->browser())),
+      window_(window) {
+  permission_dashboard_ = std::make_unique<WebUIPermissionDashboard>(this);
+  permission_dashboard_controller_ =
+      std::make_unique<PermissionDashboardController>(
+          /*location_bar=*/this,
+          /*content_settings_image_delegate=*/this,
+          permission_dashboard_.get());
+}
 
 WebUIStubLocationBar::~WebUIStubLocationBar() = default;
 
-void WebUIStubLocationBar::FocusLocation(bool is_user_initiated) {
+bool WebUIStubLocationBar::ShouldHideContentSettingImage() {
+  return false;
+}
+
+content::WebContents* WebUIStubLocationBar::GetContentSettingWebContents() {
+  return GetWebContents();
+}
+
+ContentSettingBubbleModelDelegate*
+WebUIStubLocationBar::GetContentSettingBubbleModelDelegate() {
+  return nullptr;
+}
+
+void WebUIStubLocationBar::FocusLocation(bool is_user_initiated,
+                                         bool clear_focus_if_failed) {
   NOTIMPLEMENTED();
 }
 
 void WebUIStubLocationBar::FocusSearch() {
+  NOTIMPLEMENTED();
+}
+
+void WebUIStubLocationBar::UpdateFocusBehavior(bool toolbar_visible) {
   NOTIMPLEMENTED();
 }
 
@@ -47,19 +72,32 @@ OmniboxView* WebUIStubLocationBar::GetOmniboxView() {
   return nullptr;
 }
 
+OmniboxPopupView* WebUIStubLocationBar::GetOmniboxPopupView() {
+  NOTIMPLEMENTED();
+  return nullptr;
+}
+
 OmniboxController* WebUIStubLocationBar::GetOmniboxController() {
   NOTIMPLEMENTED();
   return nullptr;
 }
 
-ChipController* WebUIStubLocationBar::GetChipController() {
+bool WebUIStubLocationBar::ShouldCloseOmniboxPopup(ui::MouseEvent* event) {
   NOTIMPLEMENTED();
-  return nullptr;
+  return false;
+}
+
+ChipController* WebUIStubLocationBar::GetChipController() {
+  return permission_dashboard_controller_->request_chip_controller();
+}
+
+PermissionDashboardController*
+WebUIStubLocationBar::GetPermissionDashboardController() {
+  return permission_dashboard_controller_.get();
 }
 
 content::WebContents* WebUIStubLocationBar::GetWebContents() {
-  NOTIMPLEMENTED();
-  return nullptr;
+  return GetBrowser()->tab_strip_model()->GetActiveWebContents();
 }
 
 LocationBarModel* WebUIStubLocationBar::GetLocationBarModel() {
@@ -69,29 +107,33 @@ LocationBarModel* WebUIStubLocationBar::GetLocationBarModel() {
 
 std::optional<bubble_anchor_util::AnchorConfiguration>
 WebUIStubLocationBar::GetChipAnchor() {
-  ui::TrackedElement* location_button =
-      BrowserElements::From(window_->browser())
-          ->GetElement(kLocationIconElementId);
-  CHECK(location_button) << "Location button not found";
-  return {{location_button, nullptr, views::BubbleBorder::TOP_LEFT}};
+  ui::TrackedElement* location_button = GetAnchorOrNull();
+  return {{views::BubbleAnchor(location_button), std::nullopt,
+           views::BubbleBorder::TOP_LEFT}};
 }
 
 ui::TrackedElement* WebUIStubLocationBar::GetAnchorOrNull() {
-  NOTIMPLEMENTED();
-  return nullptr;
+  return BrowserElements::From(window_->browser())
+      ->GetElement(kLocationIconElementId);
 }
 
-Browser* WebUIStubLocationBar::GetBrowser() {
-  NOTIMPLEMENTED();
-  return nullptr;
+BrowserWindowInterface* WebUIStubLocationBar::GetBrowser() {
+  return window_->browser();
 }
 
-void WebUIStubLocationBar::OnChanged() {
-  NOTIMPLEMENTED();
+Profile* WebUIStubLocationBar::GetProfile() {
+  return window_->browser()->GetProfile();
 }
+
+void WebUIStubLocationBar::OnChanged() {}
 
 void WebUIStubLocationBar::UpdateWithoutTabRestore() {
   NOTIMPLEMENTED();
+}
+
+bool WebUIStubLocationBar::IsInitialized() const {
+  NOTIMPLEMENTED();
+  return true;
 }
 
 bool WebUIStubLocationBar::IsVisible() const {
@@ -104,7 +146,7 @@ bool WebUIStubLocationBar::IsDrawn() const {
   return true;
 }
 
-bool WebUIStubLocationBar::IsTopLevelFullscreen() const {
+bool WebUIStubLocationBar::IsFullscreen() const {
   NOTIMPLEMENTED();
   return false;
 }
@@ -114,11 +156,26 @@ bool WebUIStubLocationBar::IsEditingOrEmpty() const {
   return false;
 }
 
+bool WebUIStubLocationBar::IsMouseHovered() const {
+  NOTIMPLEMENTED();
+  return false;
+}
+
+bool WebUIStubLocationBar::IsFocusWithin() const {
+  NOTIMPLEMENTED();
+  return false;
+}
+
 void WebUIStubLocationBar::InvalidateLayout() {
   NOTIMPLEMENTED();
 }
 
 gfx::Rect WebUIStubLocationBar::Bounds() const {
+  NOTIMPLEMENTED();
+  return gfx::Rect();
+}
+
+gfx::Rect WebUIStubLocationBar::BoundsInScreen() const {
   NOTIMPLEMENTED();
   return gfx::Rect();
 }
@@ -149,4 +206,8 @@ bool WebUIStubLocationBar::HasSecurityStateChanged() {
 LocationBarTesting* WebUIStubLocationBar::GetLocationBarForTesting() {
   NOTIMPLEMENTED();
   return nullptr;
+}
+
+void WebUIStubLocationBar::AnnounceAlert(const std::u16string& announcement) {
+  NOTIMPLEMENTED();
 }

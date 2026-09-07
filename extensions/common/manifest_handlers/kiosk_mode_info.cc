@@ -57,6 +57,9 @@ SecondaryKioskAppInfo::SecondaryKioskAppInfo(
 
 SecondaryKioskAppInfo::~SecondaryKioskAppInfo() = default;
 
+// static
+const char* KioskModeInfo::kManifestDataKey = keys::kKioskMode;
+
 KioskModeInfo::KioskModeInfo(
     KioskStatus kiosk_status,
     std::vector<SecondaryKioskAppInfo>&& secondary_apps,
@@ -70,26 +73,25 @@ KioskModeInfo::KioskModeInfo(
 KioskModeInfo::~KioskModeInfo() = default;
 
 // static
-KioskModeInfo* KioskModeInfo::Get(const Extension* extension) {
-  return static_cast<KioskModeInfo*>(
-      extension->GetManifestData(keys::kKioskMode));
+const KioskModeInfo* KioskModeInfo::Get(const Extension* extension) {
+  return extension->GetManifestData<KioskModeInfo>();
 }
 
 // static
 bool KioskModeInfo::IsKioskEnabled(const Extension* extension) {
-  KioskModeInfo* info = Get(extension);
+  const KioskModeInfo* info = Get(extension);
   return info && info->kiosk_status != NONE;
 }
 
 // static
 bool KioskModeInfo::IsKioskOnly(const Extension* extension) {
-  KioskModeInfo* info = Get(extension);
+  const KioskModeInfo* info = Get(extension);
   return info && info->kiosk_status == ONLY;
 }
 
 // static
 bool KioskModeInfo::HasSecondaryApps(const Extension* extension) {
-  KioskModeInfo* info = Get(extension);
+  const KioskModeInfo* info = Get(extension);
   return info && !info->secondary_apps.empty();
 }
 
@@ -200,10 +202,9 @@ bool KioskModeHandler::Parse(Extension* extension, std::u16string* error) {
     always_update = temp->GetBool();
   }
 
-  extension->SetManifestData(keys::kKioskMode,
-                             std::make_unique<KioskModeInfo>(
-                                 kiosk_status, std::move(secondary_apps),
-                                 required_platform_version, always_update));
+  extension->SetManifestData(std::make_unique<KioskModeInfo>(
+      kiosk_status, std::move(secondary_apps), required_platform_version,
+      always_update));
 
   return true;
 }

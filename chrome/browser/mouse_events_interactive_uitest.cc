@@ -9,10 +9,9 @@
 #include "build/build_config.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu_browsertest_util.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/test/base/chrome_test_utils.h"
+#include "chrome/test/base/chrome_test_path_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -126,7 +125,7 @@ IN_PROC_BROWSER_TEST_F(MouseEventsTest, MAYBE_TestOnMouseOut) {
 #if BUILDFLAG(IS_WIN)
 // Mac/Linux are flaky; http://crbug.com/40845791.
 IN_PROC_BROWSER_TEST_F(MouseEventsTest, MouseDownOnBrowserCaption) {
-  gfx::Rect browser_bounds = browser()->window()->GetBounds();
+  gfx::Rect browser_bounds = browser()->GetWindow()->GetBounds();
   ui_controls::SendMouseMove(browser_bounds.x() + 200, browser_bounds.y() + 10);
   ui_controls::SendMouseClick(ui_controls::LEFT);
 

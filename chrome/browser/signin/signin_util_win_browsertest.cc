@@ -4,7 +4,10 @@
 
 #include "chrome/browser/signin/signin_util_win.h"
 
+#include <windows.h>
+
 #include <stddef.h>
+#include <wincrypt.h>
 
 #include <memory>
 
@@ -16,7 +19,6 @@
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_reg_util_win.h"
-#include "base/win/wincrypt_shim.h"
 #include "build/build_config.h"
 #include "chrome/browser/first_run/first_run.h"
 #include "chrome/browser/profiles/profile_attributes_entry.h"
@@ -26,8 +28,10 @@
 #include "chrome/browser/profiles/profile_window.h"
 #include "chrome/browser/search_engine_choice/search_engine_choice_dialog_service.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
+#include "chrome/browser/ui/profiles/profile_ui_test_utils.h"
 #include "chrome/browser/ui/startup/first_run_service.h"
 #include "chrome/browser/ui/startup/startup_types.h"
 #include "chrome/browser/ui/ui_features.h"
@@ -35,6 +39,7 @@
 #include "chrome/browser/ui/webui/signin/turn_sync_on_helper.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/common/webui_url_constants.h"
 #include "chrome/credential_provider/common/gcp_strings.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/testing_browser_process.h"
@@ -43,12 +48,15 @@
 #include "components/keep_alive_registry/scoped_keep_alive.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/base/signin_pref_names.h"
+#include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
 #include "components/signin/public/identity_manager/primary_account_mutator.h"
 #include "components/sync/base/features.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
+#include "ui/views/controls/webview/webview.h"
 
 class SigninUIError;
 
@@ -262,7 +270,8 @@ IN_PROC_BROWSER_TEST_P(SigninUtilWinBrowserTestWithParams, Run) {
   Profile* profile = profile_manager->GetLastUsedProfile();
   ASSERT_EQ(ProfileManager::GetInitialProfileDir(), profile->GetBaseName());
 
-  Browser* browser = chrome::FindLastActiveWithProfile(profile);
+  BrowserWindowInterface* const browser =
+      ProfileBrowserCollection::GetForProfile(profile)->GetLastActiveBrowser();
   ASSERT_NE(nullptr, browser);
 
   AssertSigninStarted(GetParam().expect_is_started, profile);
@@ -486,7 +495,9 @@ IN_PROC_BROWSER_TEST_F(SigninUtilWinNoStartingWindowBrowserTest,
 
   Profile* profile = profile_manager->GetLastUsedProfile();
   ASSERT_EQ(ProfileManager::GetInitialProfileDir(), profile->GetBaseName());
-  ASSERT_EQ(nullptr, chrome::FindLastActiveWithProfile(profile));
+  ASSERT_EQ(
+      nullptr,
+      ProfileBrowserCollection::GetForProfile(profile)->GetLastActiveBrowser());
 
   // FRE completion is not set yet since no attempt to open a browser was done
   // yet.
@@ -502,15 +513,30 @@ IN_PROC_BROWSER_TEST_F(SigninUtilWinNoStartingWindowBrowserTest,
 
   // Attempt to run the first browser through the startup flow; simulating
   // opening the first browser after GCPW was done processing the refresh token
-  // set in the registry. This call is synchronous.
+  // set in the registry.
   profiles::FindOrCreateNewWindowForProfile(
       profile, chrome::startup::IsProcessStartup::kYes,
       chrome::startup::IsFirstRun::kYes, /*always_create=*/true);
-  Browser* first_browser = chrome::FindLastActiveWithProfile(profile);
+
+  if (switches::IsPreFirstRunDesktopRefreshEnabled()) {
+    profiles::testing::WaitForPickerUrl(
+        GURL(chrome::kChromeUIIntroURL)
+            .Resolve(chrome::kChromeUIIntroWelcomeSubPage));
+    ui_test_utils::BrowserCreatedObserver browser_created_observer;
+    CHECK(
+        content::ExecJs(ProfilePicker::GetWebViewForTesting()->GetWebContents(),
+                        "document.querySelector('welcome-app')"
+                        ".shadowRoot.querySelector('#acceptButton').click()"));
+    browser_created_observer.Wait();
+    profiles::testing::WaitForPickerClosed();
+  }
+
+  BrowserWindowInterface* const first_browser =
+      ProfileBrowserCollection::GetForProfile(profile)->GetLastActiveBrowser();
   EXPECT_TRUE(first_browser);
 
   // FRE should be marked as completed because it was bypassed by the already
-  // signed in profile without the user seeing the FRE screens.
+  // signed in profile without the user seeing the rest of the FRE screens.
   EXPECT_FALSE(ProfilePicker::IsFirstRunOpen());
   EXPECT_TRUE(IsFirstRunFinished());
 
@@ -685,9 +711,22 @@ class ExistingWinBrowserProfilesSigninUtilTest
   ExistingWinBrowserProfilesSigninUtilTest()
       : BrowserTestHelper(L"gaia_id_for_foo_gmail.com",
                           L"foo@gmail.com",
-                          "lst-123456") {}
+                          "lst-123456"),
+        // Prevent the browser from shutting down when no windows are open.
+        keep_alive_(std::make_unique<ScopedKeepAlive>(
+            KeepAliveOrigin::APP_CONTROLLER,
+            KeepAliveRestartOption::DISABLED)) {}
 
  protected:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    // Inherit base behavior (which may include other feature flags).
+    InProcessBrowserTest::SetUpCommandLine(command_line);
+
+    // Add this switch to prevent the initial window (and toolbar WebUI)
+    // from interfering with profile setup.
+    command_line->AppendSwitch(switches::kNoStartupWindow);
+  }
+
   bool SetUpUserDataDirectory() override {
     registry_override_.OverrideRegistry(HKEY_CURRENT_USER);
 
@@ -709,6 +748,10 @@ class ExistingWinBrowserProfilesSigninUtilTest
   base::test::ScopedFeatureList feature_list_{
       syncer::kReplaceSyncPromosWithSignInPromos};
   registry_util::RegistryOverrideManager registry_override_;
+
+  // Held throughout the test to prevent premature shutdown with
+  // kNoStartupWindow.
+  std::unique_ptr<ScopedKeepAlive> keep_alive_;
 };
 
 // In PRE_PRE_Run, browser starts for the first time with the initial profile
@@ -742,7 +785,14 @@ IN_PROC_BROWSER_TEST_P(ExistingWinBrowserProfilesSigninUtilTest, PRE_PRE_Run) {
         identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSignin));
   }
 
-  CreateAndSwitchToProfile(base::WideToUTF8(GetParam().current_profile));
+  base::FilePath path = profile_manager->user_data_dir().AppendASCII(
+      base::WideToUTF8(GetParam().current_profile));
+  profiles::testing::CreateProfileSync(profile_manager, path);
+
+  // Set the preference manually so the next run starts with this profile
+  // without opening a window now.
+  g_browser_process->local_state()->SetString(prefs::kProfileLastUsed,
+                                              path.BaseName().MaybeAsASCII());
 }
 
 // Browser starts with the |current_profile| profile created in the previous

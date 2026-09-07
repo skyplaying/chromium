@@ -4,29 +4,48 @@
 
 #include "components/autofill/core/browser/form_structure_rationalizer.h"
 
-#include <algorithm>
+#include <stddef.h>
 
+#include <algorithm>
+#include <array>
+#include <iterator>
+#include <map>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "base/check.h"
+#include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/containers/map_util.h"
-#include "base/containers/to_vector.h"
+#include "base/containers/span.h"
 #include "base/feature_list.h"
+#include "build/buildflag.h"
 #include "components/autofill/core/browser/autofill_field.h"
-#include "components/autofill/core/browser/data_model/data_model_utils.h"
-#include "components/autofill/core/browser/field_type_utils.h"
+#include "components/autofill/core/browser/autofill_format_string.h"
+#include "components/autofill/core/browser/autofill_type.h"
+#include "components/autofill/core/browser/country_type.h"
+#include "components/autofill/core/browser/data_model/data_model_util.h"
+#include "components/autofill/core/browser/field_type_util.h"
 #include "components/autofill/core/browser/field_types.h"
-#include "components/autofill/core/browser/form_parsing/autofill_parsing_utils.h"
+#include "components/autofill/core/browser/form_parsing/autofill_parsing_util.h"
 #include "components/autofill/core/browser/form_parsing/credit_card_field_parser.h"
+#include "components/autofill/core/browser/form_parsing/regex_patterns.h"
 #include "components/autofill/core/browser/form_structure_rationalization_engine.h"
-#include "components/autofill/core/browser/heuristic_source.h"
 #include "components/autofill/core/browser/logging/log_manager.h"
 #include "components/autofill/core/browser/proto/server.pb.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_internals/log_message.h"
 #include "components/autofill/core/common/autofill_internals/logging_scope.h"
-#include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/autofill/core/common/autofill_regexes.h"
+#include "components/autofill/core/common/form_field_data.h"
+#include "components/autofill/core/common/html_field_types.h"
+#include "components/autofill/core/common/language_code.h"
 #include "components/autofill/core/common/logging/log_buffer.h"
 #include "components/autofill/core/common/logging/log_macros.h"
+#include "url/origin.h"
 
 namespace autofill {
 
@@ -248,8 +267,10 @@ void FormStructureRationalizer::RationalizeAutocompleteAttributes(
                 features::kAutofillEnableExpirationDateImprovements)) {
           FieldType server_hint = field->server_type();
           FieldType forced_field_type =
-              field->server_type_prediction_is_override() ? field->server_type()
-                                                          : NO_SERVER_DATA;
+              field->PredictionSource() ==
+                      AutofillPredictionSource::kServerOverride
+                  ? field->server_type()
+                  : NO_SERVER_DATA;
           CreditCardFieldParser::ExpirationDateFormat format =
               CreditCardFieldParser::DetermineExpirationDateFormat(
                   *field, /*fallback_type=*/CREDIT_CARD_EXP_DATE_4_DIGIT_YEAR,
@@ -276,8 +297,10 @@ void FormStructureRationalizer::RationalizeAutocompleteAttributes(
                 features::kAutofillEnableExpirationDateImprovements)) {
           FieldType server_hint = field->server_type();
           FieldType forced_field_type =
-              field->server_type_prediction_is_override() ? field->server_type()
-                                                          : NO_SERVER_DATA;
+              field->PredictionSource() ==
+                      AutofillPredictionSource::kServerOverride
+                  ? field->server_type()
+                  : NO_SERVER_DATA;
           // The default for select or list elements does not really matter
           // because it's practically always chosen from the select options.
           // The default for text elements was chosen base on statistics from
@@ -554,8 +577,10 @@ void FormStructureRationalizer::RationalizeCreditCardFieldPredictions(
           current_field_type == CREDIT_CARD_EXP_DATE_4_DIGIT_YEAR) {
         FieldType server_hint = field->server_type();
         FieldType forced_field_type =
-            field->server_type_prediction_is_override() ? server_hint
-                                                        : NO_SERVER_DATA;
+            field->PredictionSource() ==
+                    AutofillPredictionSource::kServerOverride
+                ? server_hint
+                : NO_SERVER_DATA;
         CreditCardFieldParser::ExpirationDateFormat format =
             CreditCardFieldParser::DetermineExpirationDateFormat(
                 *field, /*fallback_type=*/CREDIT_CARD_EXP_DATE_4_DIGIT_YEAR,
@@ -695,7 +720,9 @@ void FormStructureRationalizer::RationalizeCreditCardNumberOffsets(
       continue;
     }
     // SAFETY: The iterators are from the same container.
-    Group fields = Group(UNSAFE_BUFFERS({begin, end}));
+    Group fields = base::span(fields_).subspan(
+        static_cast<size_t>(std::distance(fields_.begin(), begin)),
+        static_cast<size_t>(std::distance(begin, end)));
     if (has_reasonable_length(fields)) {
       size_t offset = 0;
       for (auto& field : fields) {
@@ -848,7 +875,8 @@ void FormStructureRationalizer::RationalizeStreetAddressAndAddressLine(
     if (previous_field.ComputedType().GetAddressType() !=
             ADDRESS_HOME_STREET_ADDRESS ||
         previous_field.section() != (*field)->section() ||
-        previous_field.server_type_prediction_is_override()) {
+        previous_field.PredictionSource() ==
+            AutofillPredictionSource::kServerOverride) {
       continue;
     }
     LOG_AF(log_manager)
@@ -927,10 +955,7 @@ void FormStructureRationalizer::RationalizePhoneNumberTrunkTypes(
                                type)
             : base::FindOrNull(kPhoneNumberConversionNotAfterCountryCodeField,
                                type);
-    if (new_type &&
-        (type != PHONE_HOME_WHOLE_NUMBER ||
-         base::FeatureList::IsEnabled(
-             features::kAutofillImprovePhoneNumberRationalization))) {
+    if (new_type) {
       field->SetTypeTo(AutofillType(*new_type),
                        AutofillPredictionSource::kRationalization);
       LOG_AF(log_manager)
@@ -994,10 +1019,11 @@ void FormStructureRationalizer::RationalizeRepeatedZipCodeFields(
   auto has_zip_type = [](const std::unique_ptr<AutofillField>& field) {
     FieldType type = field->ComputedType().GetAddressType();
     return field->is_visible() &&
-           (type == ADDRESS_HOME_ZIP || type == ADDRESS_HOME_ZIP_SUFFIX);
+           (type == ADDRESS_HOME_ZIP || type == ADDRESS_HOME_ZIP_PREFIX ||
+            type == ADDRESS_HOME_ZIP_SUFFIX);
   };
-  // Invariant: All fields in [begin, end[ are ADDRESS_HOME_ZIP or
-  // ADDRESS_HOME_ZIP_SUFFIX.
+  // Invariant: All fields in [begin, end[ are ADDRESS_HOME_ZIP,
+  // ADDRESS_HOME_ZIP_PREFIX or ADDRESS_HOME_ZIP_SUFFIX.
   auto begin = fields_.begin();
   auto end = begin;
   while ((begin = std::find_if(end, fields_.end(), has_zip_type)) !=
@@ -1011,7 +1037,21 @@ void FormStructureRationalizer::RationalizeRepeatedZipCodeFields(
     const bool is_max_length_small =
         first_zip.max_length() <= kMaxZipCodePartLength &&
         second_zip.max_length() <= kMaxZipCodePartLength;
-    if (second_zip.Type().GetAddressType() == ADDRESS_HOME_ZIP_SUFFIX) {
+    const bool is_first_prefix =
+        first_zip.Type().GetAddressType() == ADDRESS_HOME_ZIP_PREFIX;
+    const bool is_second_suffix =
+        second_zip.Type().GetAddressType() == ADDRESS_HOME_ZIP_SUFFIX;
+    if (is_first_prefix && is_second_suffix) {
+      continue;
+    }
+    if (is_first_prefix) {
+      LOG_AF(log_manager)
+          << LoggingScope::kRationalization << LogMessage::kRationalization
+          << "Zip Code Rationalization: Converting sequence of (zip_prefix, "
+             "zip) to (zip_prefix, zip_suffix)";
+      second_zip.SetTypeTo(AutofillType(ADDRESS_HOME_ZIP_SUFFIX),
+                           AutofillPredictionSource::kRationalization);
+    } else if (is_second_suffix) {
       LOG_AF(log_manager)
           << LoggingScope::kRationalization << LogMessage::kRationalization
           << "Zip Code Rationalization: Converting sequence of (zip, "
@@ -1026,6 +1066,17 @@ void FormStructureRationalizer::RationalizeRepeatedZipCodeFields(
       first_zip.SetTypeTo(AutofillType(ADDRESS_HOME_ZIP_PREFIX),
                           AutofillPredictionSource::kRationalization);
       second_zip.SetTypeTo(AutofillType(ADDRESS_HOME_ZIP_SUFFIX),
+                           AutofillPredictionSource::kRationalization);
+    } else if (second_zip.PredictionSource() ==
+               AutofillPredictionSource::kHeuristics) {
+      // Prevents filling the full zip code twice when repeated zip fields don't
+      // qualify as a prefix/suffix pair. This only applies to heuristics, since
+      // the confidence in other prediction sources is higher.
+      LOG_AF(log_manager)
+          << LoggingScope::kRationalization << LogMessage::kRationalization
+          << "Zip Code Rationalization: Converting sequence of (zip, "
+             "zip) to (zip, unknown)";
+      second_zip.SetTypeTo(AutofillType(UNKNOWN_TYPE),
                            AutofillPredictionSource::kRationalization);
     }
   }
@@ -1076,9 +1127,6 @@ void FormStructureRationalizer::RationalizePhoneCountryCode(
   constexpr static FieldTypeSet kRelevantPhoneTypes{
       PHONE_HOME_NUMBER, PHONE_HOME_NUMBER_PREFIX, PHONE_HOME_CITY_AND_NUMBER,
       PHONE_HOME_CITY_AND_NUMBER_WITHOUT_TRUNK_PREFIX};
-  bool improve_phone_number_rationalization_experiment_enabled =
-      base::FeatureList::IsEnabled(
-          features::kAutofillImprovePhoneNumberRationalization);
   if (std::ranges::any_of(fields_, [&](const auto& field) {
         FieldType computed_type = field->ComputedType().GetAddressType();
         FieldType rationalized_type =
@@ -1092,8 +1140,7 @@ void FormStructureRationalizer::RationalizePhoneCountryCode(
         // `kRelevantPhoneTypes`). Which is why we need to look at both
         // `computed_type` and `rationalized_type`.
         return (kRelevantPhoneTypes.contains(computed_type) ||
-                (improve_phone_number_rationalization_experiment_enabled &&
-                 kRelevantPhoneTypes.contains(rationalized_type)));
+                kRelevantPhoneTypes.contains(rationalized_type));
       })) {
     return;
   }

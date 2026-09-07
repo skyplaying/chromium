@@ -4,14 +4,32 @@
 
 #include "ui/display/mac/ca_display_link_mac.h"
 
-#import <AppKit/AppKit.h>
-#import <QuartzCore/CADisplayLink.h>
+#import <QuartzCore/QuartzCore.h>
 
+#include "base/containers/flat_set.h"
+#include "base/feature_list.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/metrics/histogram_macros.h"
+#include "base/no_destructor.h"
 #include "base/trace_event/trace_event.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "ui/display/mac/screen_utils_mac.h"
+
+extern "C" {
+// SLSGetDisplayLink() is an undocumented private function (SPI) in the
+// SkyLight framework that creates a CADisplayLink directly from a
+// CGDirectDisplayID without requiring NSApplication or AppKit objects
+// (e.g., NSScreen, NSWindow, or NSView).
+//
+// `framework_dirs = [ "$mac_sdk_path/System/Library/PrivateFrameworks" ]` is
+// added to //ui/display/BUILD.gn to link SkyLight.framework. Remove this
+// private framework dependency after Apple provides a public API for this.
+CADisplayLink* SLSGetDisplayLink(CGDirectDisplayID display_id,
+                                 id target,
+                                 SEL action) API_AVAILABLE(macos(14.0));
+}
 
 API_AVAILABLE(macos(14.0))
 @interface CADisplayLinkTarget : NSObject {
@@ -36,6 +54,20 @@ API_AVAILABLE(macos(14.0))
 namespace ui {
 
 namespace {
+struct CADisplayLinkGlobals {
+  CADisplayLinkGlobals() = default;
+  base::Lock lock;
+
+  // Indicates whether the display creation has been logged within the
+  // 'Viz.ExternalBeginFrameSourceMac.DisplayLink.Create2' histogram.
+  absl::flat_hash_set<CGDirectDisplayID> recorded_displays GUARDED_BY(lock);
+
+  static CADisplayLinkGlobals& Get() {
+    static base::NoDestructor<CADisplayLinkGlobals> instance;
+    return *instance;
+  }
+};
+
 API_AVAILABLE(macos(14.0))
 ui::VSyncParamsMac ComputeVSyncParametersMac(CADisplayLink* display_link,
                                              CGDirectDisplayID display_id) {
@@ -51,7 +83,7 @@ ui::VSyncParamsMac ComputeVSyncParametersMac(CADisplayLink* display_link,
   // Sanity check. Inputs should always be valid. Use the default values if this
   // is not the case.
   if (!interval.is_positive()) {
-    interval = display::GetNSScreenRefreshInterval(display_id);
+    interval = display::GetCGRefreshInterval(display_id);
   }
   if (callback_time.is_null() || target_time.is_null()) {
     callback_time = base::TimeTicks() + base::Seconds(CACurrentMediaTime());
@@ -77,7 +109,7 @@ struct ObjCState {
 };
 
 void CADisplayLinkMac::Step() {
-  TRACE_EVENT0("ui", "CADisplayLinkCallback");
+  TRACE_EVENT0("gpu", "CADisplayLinkCallback");
 
   if (@available(macos 14.0, *)) {
     if (!vsync_callback_) {
@@ -93,7 +125,7 @@ void CADisplayLinkMac::Step() {
 }
 
 base::TimeDelta CADisplayLinkMac::GetRefreshInterval() const {
-  return display::GetNSScreenRefreshInterval(display_id_);
+  return display::GetCGRefreshInterval(display_id_);
 }
 
 void CADisplayLinkMac::GetRefreshIntervalRange(
@@ -105,29 +137,51 @@ void CADisplayLinkMac::GetRefreshIntervalRange(
 }
 
 // static
+// This function is called from both the GPU and the Browser process.
+void CADisplayLinkMac::TryRecordDisplayLinkCreation(
+    CGDirectDisplayID display_id,
+    bool success,
+    bool in_gpu_process) {
+  auto& globals = CADisplayLinkGlobals::Get();
+  base::AutoLock lock(globals.lock);
+
+  auto [it, inserted] = globals.recorded_displays.insert(display_id);
+  if (inserted) {
+    UMA_HISTOGRAM_BOOLEAN("Viz.DisplayLink.Create.GPU.CADisplayLinkV2",
+                          success);
+    RecordDisplayLinkCreation(success);
+  }
+}
+
+// static
 scoped_refptr<DisplayLinkMac> CADisplayLinkMac::GetForDisplay(
-    CGDirectDisplayID display_id) {
+    CGDirectDisplayID display_id,
+    bool in_gpu_process) {
   if (@available(macos 14.0, *)) {
+    TRACE_EVENT("gpu", "CADisplayLinkMac::GetForDisplay");
+
     scoped_refptr<CADisplayLinkMac> display_link(
         new CADisplayLinkMac(display_id));
     auto* objc_state = display_link->objc_state_.get();
 
     NSScreen* screen = display::GetNSScreenFromDisplayID(display_id);
     if (!screen) {
-      RecordDisplayLinkCreation(false);
+      TryRecordDisplayLinkCreation(display_id, /*success=*/false,
+                                   in_gpu_process);
       return nullptr;
     }
 
     objc_state->target = [[CADisplayLinkTarget alloc] init];
-    objc_state->display_link = [screen displayLinkWithTarget:objc_state->target
-                                                    selector:@selector(step:)];
+    objc_state->display_link =
+        SLSGetDisplayLink(display_id, objc_state->target, @selector(step:));
 
     if (!objc_state->display_link) {
-      RecordDisplayLinkCreation(false);
+      TryRecordDisplayLinkCreation(display_id, /*success=*/false,
+                                   in_gpu_process);
       return nullptr;
     }
 
-    RecordDisplayLinkCreation(true);
+    TryRecordDisplayLinkCreation(display_id, /*success=*/true, in_gpu_process);
 
     // Pause CADisplaylink callback until a request for start.
     objc_state->display_link.paused = YES;
@@ -173,6 +227,7 @@ CADisplayLinkMac::~CADisplayLinkMac() {
 
 std::unique_ptr<VSyncCallbackMac> CADisplayLinkMac::RegisterCallback(
     VSyncCallbackMac::Callback callback) {
+  TRACE_EVENT("gpu", "CADisplayLinkMac::RegisterCallback");
   // Make CADisplayLink callbacks to run on the same RUNLOOP of the register
   // thread without PostTask accross threads.
   auto new_callback = base::WrapUnique(new VSyncCallbackMac(
@@ -190,6 +245,7 @@ std::unique_ptr<VSyncCallbackMac> CADisplayLinkMac::RegisterCallback(
 }
 
 void CADisplayLinkMac::UnregisterCallback(VSyncCallbackMac* callback) {
+  TRACE_EVENT("gpu", "CADisplayLinkMac::UnregisterCallback");
   vsync_callback_ = nullptr;
   if (@available(macos 14.0, *)) {
     objc_state_->display_link.paused = YES;

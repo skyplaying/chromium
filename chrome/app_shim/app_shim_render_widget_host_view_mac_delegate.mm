@@ -9,6 +9,7 @@
 #include "components/remote_cocoa/app_shim/native_widget_ns_window_bridge.h"
 #include "components/remote_cocoa/app_shim/ns_view_ids.h"
 #include "components/remote_cocoa/common/native_widget_ns_window_host.mojom.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/native_ui_types.h"
 
 @interface AppShimRenderWidgetHostViewMacDelegate () <HistorySwiperDelegate>
@@ -118,7 +119,7 @@
 - (void)backwardsSwipeNavigationLikely {
   // TODO(mcnee): It's unclear whether preloading predictions would be useful in
   // this context. For now we don't do any prediction. See
-  // https://crbug.com/1422266 for context.
+  // https://crbug.com/40259555 for context.
 }
 
 @end

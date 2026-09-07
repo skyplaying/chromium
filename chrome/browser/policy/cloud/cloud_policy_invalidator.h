@@ -25,7 +25,7 @@
 namespace base {
 class Clock;
 class SequencedTaskRunner;
-}
+}  // namespace base
 
 namespace policy {
 
@@ -41,15 +41,13 @@ class CloudPolicyInvalidator : public PolicyInvalidator {
   // |scope| indicates the invalidation scope that this invalidator
   // is responsible for.
   // |invalidation_listener| provides invalidations and is observed during the
-  // whole invaldiator's lifetime. Must remain valid until the invalidator is
+  // whole invalidator's lifetime. Must remain valid until the invalidator is
   // destroyed.
   // |core| is the cloud policy core which connects the various policy objects.
   // It must remain valid until Shutdown is called.
   // |task_runner| is used for scheduling delayed tasks. It must post tasks to
   // the main policy thread.
   // |clock| is used to get the current time.
-  // |highest_handled_invalidation_version| is the highest invalidation version
-  // that was handled already before this invalidator was created.
   // |device_local_account_id| is a unique identity for invalidator with
   // DeviceLocalAccount |scope| to have unique owner name. May be let empty
   // if scope is not DeviceLocalAccount.
@@ -63,31 +61,6 @@ class CloudPolicyInvalidator : public PolicyInvalidator {
   CloudPolicyInvalidator(const CloudPolicyInvalidator&) = delete;
   CloudPolicyInvalidator& operator=(const CloudPolicyInvalidator&) = delete;
   ~CloudPolicyInvalidator() override;
-
-  // InvalidationListener::Observer:
-  std::string GetType() const override;
-
- protected:
-  // Handles policy refresh depending on invalidations availability and incoming
-  // invalidations.
-  class CloudPolicyInvalidationHandler
-      : public PolicyInvalidator::PolicyInvalidationHandler {
-   public:
-    CloudPolicyInvalidationHandler(
-        PolicyInvalidationScope scope,
-        CloudPolicyCore* core,
-        const base::Clock* clock,
-        scoped_refptr<base::SequencedTaskRunner> task_runner);
-
-    ~CloudPolicyInvalidationHandler() override;
-    const char* GetPolicyRefreshMetricName(
-        PolicyInvalidationScope scope) override;
-    const char* GetPolicyInvalidationMetricName(
-        PolicyInvalidationScope scope) override;
-
-    // Returns the cloud policy store that is handled by this invalidator.
-    CloudPolicyStore* GetCloudPolicyStore() const override;
-  };
 };
 
 }  // namespace policy

@@ -50,26 +50,17 @@ namespace media {
     }                                                               \
   } while (0)
 
-const char kAudioMp4[] = "audio/mp4";
 const char kVideoMp4[] = "video/mp4";
-const char kAudioWebM[] = "audio/webm";
 const char kVideoWebM[] = "video/webm";
 const char kInvalidKeySystem[] = "invalid.keysystem";
 const MediaDrmBridge::SecurityLevel kDefault =
-    MediaDrmBridge::SECURITY_LEVEL_DEFAULT;
-const MediaDrmBridge::SecurityLevel kL1 = MediaDrmBridge::SECURITY_LEVEL_1;
-const MediaDrmBridge::SecurityLevel kL3 = MediaDrmBridge::SECURITY_LEVEL_3;
+    MediaDrmBridge::SECURITY_LEVEL_UNKNOWN;
+const MediaDrmBridge::SecurityLevel kL1 =
+    MediaDrmBridge::SECURITY_LEVEL_HW_SECURE_ALL;
+const MediaDrmBridge::SecurityLevel kL3 =
+    MediaDrmBridge::SECURITY_LEVEL_SW_SECURE_CRYPTO;
 const char kTestOrigin[] = "http://www.example.com";
 const char kEmptyOrigin[] = "";
-
-// Helper functions to avoid typing "MediaDrmBridge::" in tests.
-
-static bool IsKeySystemSupportedWithType(
-    const std::string& key_system,
-    const std::string& container_mime_type) {
-  return MediaDrmBridge::IsKeySystemSupportedWithType(key_system,
-                                                      container_mime_type);
-}
 
 namespace {
 
@@ -154,22 +145,34 @@ class MediaDrmBridgeTest : public ProvisionFetcher, public testing::Test {
 
 TEST_F(MediaDrmBridgeTest, IsKeySystemSupported_Widevine) {
   EXPECT_TRUE_IF_KEY_SYSTEM_AVAILABLE(
-      IsKeySystemSupportedWithType(kWidevineKeySystem, kAudioMp4),
+      MediaDrmBridge::IsKeySystemSupported(kWidevineKeySystem),
+      kWidevineKeySystem);
+}
+
+TEST_F(MediaDrmBridgeTest, GetSupportedContainers_Widevine) {
+  EXPECT_TRUE_IF_KEY_SYSTEM_AVAILABLE(
+      MediaDrmBridge::GetSupportedContainers(kWidevineKeySystem)
+          .contains(kVideoMp4),
       kWidevineKeySystem);
   EXPECT_TRUE_IF_KEY_SYSTEM_AVAILABLE(
-      IsKeySystemSupportedWithType(kWidevineKeySystem, kVideoMp4),
+      MediaDrmBridge::GetSupportedContainers(kWidevineKeySystem)
+          .contains(kVideoWebM),
+      kWidevineKeySystem);
+}
+
+TEST_F(MediaDrmBridgeTest, GetSupportedContainers_WidevineWithSecurityLevel) {
+  // Querying with explicit SECURITY_LEVEL_SW_SECURE_CRYPTO should be true
+  // if Widevine is available.
+  EXPECT_TRUE_IF_KEY_SYSTEM_AVAILABLE(
+      MediaDrmBridge::GetSupportedContainers(
+          kWidevineKeySystem, MediaDrmBridge::SECURITY_LEVEL_SW_SECURE_CRYPTO)
+          .contains(kVideoMp4),
       kWidevineKeySystem);
 
-  EXPECT_TRUE_IF_KEY_SYSTEM_AVAILABLE(
-      IsKeySystemSupportedWithType(kWidevineKeySystem, kAudioWebM),
-      kWidevineKeySystem);
-  EXPECT_TRUE_IF_KEY_SYSTEM_AVAILABLE(
-      IsKeySystemSupportedWithType(kWidevineKeySystem, kVideoWebM),
-      kWidevineKeySystem);
-
-  EXPECT_FALSE(IsKeySystemSupportedWithType(kWidevineKeySystem, "unknown"));
-  EXPECT_FALSE(IsKeySystemSupportedWithType(kWidevineKeySystem, "video/avi"));
-  EXPECT_FALSE(IsKeySystemSupportedWithType(kWidevineKeySystem, "audio/mp3"));
+  // Querying with explicit SECURITY_LEVEL_HW_SECURE_ALL may or may not be true
+  // depending on device support, but should not crash.
+  MediaDrmBridge::GetSupportedContainers(
+      kWidevineKeySystem, MediaDrmBridge::SECURITY_LEVEL_HW_SECURE_ALL);
 }
 
 TEST_F(MediaDrmBridgeTest, IsKeySystemSupported_ExternalClearKey) {
@@ -180,20 +183,32 @@ TEST_F(MediaDrmBridgeTest, IsKeySystemSupported_ExternalClearKey) {
                                         {});
   EXPECT_TRUE(base::FeatureList::IsEnabled(media::kExternalClearKeyForTesting));
   EXPECT_TRUE_IF_KEY_SYSTEM_AVAILABLE(
-      IsKeySystemSupportedWithType(kExternalClearKeyKeySystem, kVideoMp4),
+      MediaDrmBridge::IsKeySystemSupported(kExternalClearKeyKeySystem),
+      kExternalClearKeyKeySystem);
+}
+
+TEST_F(MediaDrmBridgeTest, GetSupportedContainers_ExternalClearKey) {
+  scoped_feature_list_.InitWithFeatures({media::kExternalClearKeyForTesting},
+                                        {});
+  EXPECT_TRUE_IF_KEY_SYSTEM_AVAILABLE(
+      MediaDrmBridge::GetSupportedContainers(kExternalClearKeyKeySystem)
+          .contains(kVideoMp4),
       kExternalClearKeyKeySystem);
 }
 
 // Invalid key system is NOT supported regardless whether MediaDrm is available.
 TEST_F(MediaDrmBridgeTest, IsKeySystemSupported_InvalidKeySystem) {
   EXPECT_FALSE(MediaDrmBridge::IsKeySystemSupported(kInvalidKeySystem));
-  EXPECT_FALSE(IsKeySystemSupportedWithType(kInvalidKeySystem, kAudioMp4));
-  EXPECT_FALSE(IsKeySystemSupportedWithType(kInvalidKeySystem, kVideoMp4));
-  EXPECT_FALSE(IsKeySystemSupportedWithType(kInvalidKeySystem, kAudioWebM));
-  EXPECT_FALSE(IsKeySystemSupportedWithType(kInvalidKeySystem, kVideoWebM));
-  EXPECT_FALSE(IsKeySystemSupportedWithType(kInvalidKeySystem, "unknown"));
-  EXPECT_FALSE(IsKeySystemSupportedWithType(kInvalidKeySystem, "video/avi"));
-  EXPECT_FALSE(IsKeySystemSupportedWithType(kInvalidKeySystem, "audio/mp3"));
+  EXPECT_TRUE(
+      MediaDrmBridge::GetSupportedContainers(kInvalidKeySystem).empty());
+  EXPECT_TRUE(
+      MediaDrmBridge::GetSupportedContainers(
+          kInvalidKeySystem, MediaDrmBridge::SECURITY_LEVEL_SW_SECURE_CRYPTO)
+          .empty());
+  EXPECT_TRUE(
+      MediaDrmBridge::GetSupportedContainers(
+          kInvalidKeySystem, MediaDrmBridge::SECURITY_LEVEL_HW_SECURE_ALL)
+          .empty());
 }
 
 TEST_F(MediaDrmBridgeTest, CreateWithoutSessionSupport_Widevine) {
@@ -404,6 +419,33 @@ TEST_F(MediaDrmBridgeTest, GetStatusForPolicyL3_Widevine) {
       HdcpVersion::kHdcpVersion2_3, std::make_unique<MockCdmKeyStatusPromise>(
                                         /*expect_success=*/true, &key_status));
   EXPECT_EQ(CdmKeyInformation::KeyStatus::OUTPUT_RESTRICTED, key_status);
+}
+
+TEST_F(MediaDrmBridgeTest, MaybeParseCdmVersion) {
+  // Widevine version string returned from MediaDrm pre Android 15.
+  auto old_wv_version_string =
+      MediaDrmBridge::MaybeParseCdmVersion("18.0.0@341113000");
+  EXPECT_TRUE(old_wv_version_string.IsValid());
+  EXPECT_EQ(old_wv_version_string.GetString(), "18.0.0");
+
+  // Version string with build tag that contain alphabets. This is the behavior
+  // from Android 15 onwards for Widevine.
+  base::Version current_wv_version_string =
+      MediaDrmBridge::MaybeParseCdmVersion("19.5.0@BV1A.250226.001");
+  EXPECT_TRUE(current_wv_version_string.IsValid());
+  EXPECT_EQ(current_wv_version_string.GetString(), "19.5.0");
+
+  // Empty string. This is returned by key systems that have not implemented or
+  // set the Version property. This is an invalid version, and is handled by
+  // callers of MediaDrmBridge::GetVersion.
+  base::Version empty_version = MediaDrmBridge::MaybeParseCdmVersion("");
+  EXPECT_FALSE(empty_version.IsValid());
+
+  // Invalid parsed string without an '@'. Verify that the parsing function
+  // does not crash, and it returns an invalid version.
+  base::Version invalid_version =
+      MediaDrmBridge::MaybeParseCdmVersion("invalid_version");
+  EXPECT_FALSE(invalid_version.IsValid());
 }
 
 }  // namespace media

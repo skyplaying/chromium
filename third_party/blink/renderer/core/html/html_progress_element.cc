@@ -104,7 +104,8 @@ void HTMLProgressElement::AttachLayoutTree(AttachContext& context) {
 }
 
 double HTMLProgressElement::value() const {
-  double value = GetFloatingPointAttribute(html_names::kValueAttr);
+  double value =
+      ParseHTMLFloatingPointNumber(getAttribute(html_names::kValueAttr), 0);
   // Otherwise, if the parsed value was greater than or equal to the maximum
   // value, then the current value of the progress bar is the maximum value
   // of the progress bar. Otherwise, if parsing the value attribute's value
@@ -118,7 +119,8 @@ void HTMLProgressElement::setValue(double value) {
 }
 
 double HTMLProgressElement::max() const {
-  double max = GetFloatingPointAttribute(html_names::kMaxAttr);
+  double max =
+      ParseHTMLFloatingPointNumber(getAttribute(html_names::kMaxAttr), 1);
   // Otherwise, if the element has no max attribute, or if it has one but
   // parsing it resulted in an error, or if the parsed value was less than or
   // equal to zero, then the maximum value of the progress bar is 1.0.
@@ -126,10 +128,10 @@ double HTMLProgressElement::max() const {
 }
 
 void HTMLProgressElement::setMax(double max) {
-  if (RuntimeEnabledFeatures::ProgressMaxIsPositiveEnabled() && max <= 0) {
+  if (max <= 0) {
     return;
   }
-  SetFloatingPointAttribute(html_names::kMaxAttr, max > 0 ? max : 1);
+  SetFloatingPointAttribute(html_names::kMaxAttr, max);
 }
 
 double HTMLProgressElement::position() const {
@@ -179,6 +181,14 @@ void HTMLProgressElement::SetInlineSizePercentage(double position) const {
                                  CSSPrimitiveValue::UnitType::kPercentage);
   value_->SetInlineStyleProperty(CSSPropertyID::kBlockSize, 100,
                                  CSSPrimitiveValue::UnitType::kPercentage);
+}
+
+bool HTMLProgressElement::SupportsBaseAppearanceInternal(
+    BaseAppearanceValue value) const {
+  if (!RuntimeEnabledFeatures::AppearanceBaseEnabled()) {
+    return false;
+  }
+  return value == Element::BaseAppearanceValue::kBase;
 }
 
 }  // namespace blink

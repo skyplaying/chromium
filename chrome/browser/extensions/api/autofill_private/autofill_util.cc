@@ -24,7 +24,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/extensions/api/autofill_private.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/grit/branded_strings.h"
 #include "components/autofill/core/browser/autofill_type.h"
 #include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
@@ -36,7 +35,7 @@
 #include "components/autofill/core/browser/data_model/payments/bnpl_issuer.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card.h"
 #include "components/autofill/core/browser/data_model/payments/iban.h"
-#include "components/autofill/core/browser/field_type_utils.h"
+#include "components/autofill/core/browser/field_type_util.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/geo/autofill_country.h"
 #include "components/autofill/core/browser/payments/constants.h"
@@ -128,6 +127,12 @@ autofill_private::AddressEntry ProfileToAddressEntry(
 }
 
 std::string CardNetworkToIconResourceIdString(const std::string& network) {
+  if (network == autofill::kAmericanExpressCard &&
+      base::FeatureList::IsEnabled(
+          autofill::features::kAutofillEnableNewAmexNetworkArt)) {
+    return "chrome://theme/IDR_AUTOFILL_METADATA_CC_AMEX_NEW";
+  }
+
   if (ShouldUseNewFopDisplay()) {
     static constexpr auto kNetworkToResourceIdStringMap =
         base::MakeFixedFlatMap<std::string_view, std::string_view>(
@@ -358,10 +363,6 @@ std::optional<api::autofill_private::AccountInfo> GetAccountInfo(
       adm.IsSyncFeatureEnabledForAutofill();
   api_account.is_eligible_for_address_account_storage =
       adm.IsEligibleForAddressAccountStorage();
-  api_account.is_autofill_sync_toggle_enabled =
-      adm.IsAutofillUserSelectableTypeEnabled();
-  api_account.is_autofill_sync_toggle_available =
-      adm.IsAutofillSyncToggleAvailable();
   return std::move(api_account);
 }
 

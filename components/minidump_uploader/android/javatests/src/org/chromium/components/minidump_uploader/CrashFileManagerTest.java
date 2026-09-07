@@ -16,7 +16,6 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Feature;
@@ -31,7 +30,6 @@ import java.util.regex.Pattern;
 
 /** Unittests for {@link CrashFileManager}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class CrashFileManagerTest {
     @Rule public CrashTestRule mTestRule = new CrashTestRule();
 
@@ -812,7 +810,7 @@ public class CrashFileManagerTest {
     }
 
     /**
-     * Utility method that creates (and closes) a file descriptor to {@param minidumpToCopy} and
+     * Utility method that creates (and closes) a file descriptor to {@code minidumpToCopy} and
      * calls CrashFileManager.copyMinidumpFromFD.
      */
     private static void createFdForandCopyFile(
@@ -838,7 +836,7 @@ public class CrashFileManagerTest {
         }
     }
 
-    /** Returns the oldest file in the set of files {@param files}. */
+    /** Returns the oldest file in the set of files {@code files}. */
     private static File getOldestFile(File[] files) {
         File oldestFile = null;
         for (File file : files) {

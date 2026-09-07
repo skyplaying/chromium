@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <set>
 #include <utility>
+#include <vector>
 
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -26,6 +27,7 @@
 #include "components/sync/model/metadata_batch.h"
 #include "components/sync/model/mutable_data_batch.h"
 #include "components/sync/protocol/session_specifics.pb.h"
+#include "components/sync_sessions/features.h"
 #include "components/sync_sessions/session_sync_prefs.h"
 #include "components/sync_sessions/sync_sessions_client.h"
 #include "components/sync_sessions/synced_window_delegate.h"
@@ -130,11 +132,6 @@ OpenTabsUIDelegate* SessionSyncBridge::GetOpenTabsUIDelegate() {
 bool SessionSyncBridge::IsLocalDataOutOfSyncForTest() const {
   return sessions_client_ &&
          sessions_client_->GetSessionSyncPrefs()->GetLocalDataOutOfSync();
-}
-
-std::unique_ptr<MetadataChangeList>
-SessionSyncBridge::CreateMetadataChangeList() {
-  return std::make_unique<syncer::InMemoryMetadataChangeList>();
 }
 
 std::optional<syncer::ModelError> SessionSyncBridge::MergeFullSyncData(
@@ -293,6 +290,14 @@ std::string SessionSyncBridge::GetStorageKey(
   return SessionStore::GetStorageKey(entity_data.specifics.session());
 }
 
+sync_pb::EntitySpecifics
+SessionSyncBridge::TrimAllSupportedFieldsFromRemoteSpecifics(
+    const sync_pb::EntitySpecifics& entity_specifics) const {
+  // Clears all fields by default to avoid the memory and I/O overhead of an
+  // additional copy of the data.
+  return sync_pb::EntitySpecifics();
+}
+
 bool SessionSyncBridge::IsEntityDataValid(
     const syncer::EntityData& entity_data) const {
   return SessionStore::AreValidSpecifics(entity_data.specifics.session());
@@ -306,8 +311,8 @@ void SessionSyncBridge::ApplyDisableSyncChanges(
 
   syncing_.reset();
 
-  recreate_empty_store_callback_ =
-      SessionStore::DeleteAllDataAndMetadata(std::move(store_));
+  recreate_empty_store_callback_ = SessionStore::DeleteAllDataAndMetadata(
+      std::move(delete_metadata_change_list), std::move(store_));
   CHECK(recreate_empty_store_callback_);
 
   // Ensure that we clear on-demand favicons that were downloaded using user

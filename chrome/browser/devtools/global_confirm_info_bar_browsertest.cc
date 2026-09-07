@@ -15,13 +15,14 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_utils.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
 #include "chrome/test/base/android/android_ui_test_utils.h"
 #else
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #endif
 
@@ -212,7 +213,7 @@ class TestConfirmInfoBarDelegateWithLink : public TestConfirmInfoBarDelegate {
 };
 
 // Verifies that clicking a link in a global infobar does not crash. Regression
-// test for http://crbug.com/1393765.
+// test for http://crbug.com/40881161.
 IN_PROC_BROWSER_TEST_F(GlobalConfirmInfoBarTest, ClickLink) {
   // Show an infobar with a link.
   ASSERT_EQ(1, GetTabCount());

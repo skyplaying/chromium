@@ -4,11 +4,14 @@
 
 #include "net/disk_cache/sql/sql_entry_impl.h"
 
+#include "base/functional/callback_helpers.h"
 #include "net/base/features.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
 #include "net/disk_cache/sql/entry_db_handle.h"
 #include "net/disk_cache/sql/sql_backend_impl.h"
+#include "net/disk_cache/sql/sql_shared_cache_handle.h"
+#include "net/disk_cache/sql/sql_shared_cache_manager.h"
 
 namespace disk_cache {
 
@@ -319,7 +322,8 @@ int SqlEntryImpl::WriteDataInternal(int64_t offset,
   }
 
   // Try to buffer the write if it's a sequential append.
-  if (offset == body_end_ && !sparse_write) {
+  if (offset == body_end_ && !sparse_write &&
+      !db_handle_->shared_cache_resource_id()) {
     const int entry_limit =
         net::features::kSqlDiskCacheMaxWriteBufferSizePerEntry.Get();
     if (write_buffer_.size + buf_len > entry_limit) {
@@ -363,6 +367,26 @@ int SqlEntryImpl::WriteDataInternal(int64_t offset,
   const auto old_body_end = body_end_;
   body_end_ = new_body_end;
 
+  if (db_handle_->shared_cache_resource_id()) {
+    if (offset == 0 && truncate) {
+      // Complete overwrite. No need to copy.
+      auto shared_cache_resource_id = *db_handle_->shared_cache_resource_id();
+      db_handle_->set_shared_cache_resource_id(std::nullopt);
+      db_handle_->SetSharedCacheBlobHandle(nullptr);
+      db_handle_->SetSharedCacheHandle(nullptr);
+
+      auto* manager = backend_->GetSharedCacheManager();
+      CHECK(manager);
+      manager->DeleteResources({shared_cache_resource_id},
+                               base::NullCallback());
+    } else {
+      return backend_->CopySharedCacheToBlobTableAndWrite(
+          key_, db_handle_, offset, base::WrapRefCounted(buf), buf_len,
+          old_body_end, truncate, last_used_, sparse_write,
+          head_ ? head_->size() : 0, std::move(callback));
+    }
+  }
+
   if (db_handle_->IsInitialState()) {
     // WriteEntryData creates an entry in the DB with `last_used_` set.
     // Unless `last_used_` is updated in the future, there is no need to write
@@ -373,6 +397,7 @@ int SqlEntryImpl::WriteDataInternal(int64_t offset,
   return backend_->WriteEntryData(
       key_, db_handle_, old_body_end, body_end_,
       EntryWriteBuffer(buf, buf_len, offset), truncate, last_used_,
+      sparse_write, head_ ? head_->size() : 0,
       /*copy_buffer_for_optimistic_write=*/true, std::move(callback));
 }
 
@@ -410,10 +435,13 @@ void SqlEntryImpl::FlushBuffer(bool force_flush_for_creation) {
 
   // We pass copy_buffer_for_optimistic_write=false because we are passing
   // ownership of the write buffer to the backend.
+  // Setting `sparse_write` to false, as FlushBuffer only flushes non-sparse
+  // data.
   backend_->WriteEntryData(
       key_, db_handle_, /*old_body_end=*/offset,
       /*body_end=*/body_end_, std::move(buffer),
       /*truncate=*/false, last_used_,
+      /*sparse_write=*/false, head_ ? head_->size() : 0,
       /*copy_buffer_for_optimistic_write=*/false,
       base::DoNothingWithBoundArgs(std::move(reservation)));
 }

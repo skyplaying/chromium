@@ -20,8 +20,6 @@ include_rules = [
   "+chrome/browser/ash/profiles",
   "+chrome/browser/ash/settings",
   "+chrome/browser/ash/system",
-  "+chrome/browser/browser_process.h",
-  "+chrome/browser/lifetime",
   "+chrome/browser/profiles",
   "+chrome/browser/ui/ash",
   "+chrome/browser/ui/ash/assistant",
@@ -30,8 +28,15 @@ include_rules = [
   "+chrome/browser/ui/exclusive_access",
   "+chrome/browser/ui/webui/ash/lock_screen_reauth",
   "+chrome/common/chrome_constants.h",
-  "+chrome/common/chrome_switches.h",
-  "+chrome/common/pref_names.h",
   "+chrome/grit",
   "+chrome/test/base",
 ]
+
+specific_include_rules = {
+  "lock_screen_reauth_manager_factory\\.cc": [
+    "+chrome/browser/browser_process.h",
+  ],
+  "screen_locker_unittest\\.cc": [
+    "+chrome/browser/global_features.h",
+  ],
+}

@@ -10,12 +10,12 @@
 #include "base/atomic_sequence_num.h"
 #include "base/clang_profiling_buildflags.h"
 #include "base/command_line.h"
+#include "base/feature_list.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/hash/hash.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_math.h"
 #include "base/path_service.h"
 #include "base/process/process_metrics.h"
@@ -29,6 +29,7 @@
 #include "content/public/browser/child_process_host_delegate.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/common/content_client.h"
+#include "content/public/common/content_features.h"
 #include "content/public/common/content_paths.h"
 #include "content/public/common/content_switches.h"
 #include "ipc/ipc_channel.h"
@@ -39,9 +40,8 @@
 #include "base/linux_util.h"
 #elif BUILDFLAG(IS_MAC)
 #include "base/apple/foundation_util.h"
-#include "base/feature_list.h"
+#include "base/strings/strcat.h"
 #include "content/browser/mac_helpers.h"
-#include "content/common/features.h"
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 
 namespace content {
@@ -56,60 +56,71 @@ std::unique_ptr<ChildProcessHost> ChildProcessHost::Create(
 
 // static
 base::FilePath ChildProcessHost::GetChildPath(int flags) {
-  base::FilePath child_path;
+  // The order of operations here is important; the first valid (non-empty) path
+  // found is returned.
+  base::FilePath child_path =
+      base::CommandLine::ForCurrentProcess()->GetSwitchValuePath(
+          switches::kBrowserSubprocessPath);
+  if (!child_path.empty()) {
+    return child_path;
+  }
 
-  child_path = base::CommandLine::ForCurrentProcess()->GetSwitchValuePath(
-      switches::kBrowserSubprocessPath);
+  if (GetContentClient()->browser()) {
+    child_path = GetContentClient()->browser()->GetChildProcessPath(flags);
+    if (!child_path.empty()) {
+      return child_path;
+    }
+  }
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   // Use /proc/self/exe rather than our known binary path so updates
   // can't swap out the binary from underneath us.
-  if (child_path.empty() && flags & CHILD_ALLOW_SELF) {
-    child_path = base::FilePath(base::kProcSelfExe);
+  if (flags & CHILD_ALLOW_SELF) {
+    return base::FilePath(base::kProcSelfExe);
   }
 #endif
 
   // On most platforms, the child executable is the same as the current
   // executable.
-  if (child_path.empty()) {
-    base::PathService::Get(CHILD_PROCESS_EXE, &child_path);
+  if (!base::PathService::Get(CHILD_PROCESS_EXE, &child_path)) {
+    return base::FilePath();
   }
 
 #if BUILDFLAG(IS_MAC)
-  std::string child_base_name = child_path.BaseName().value();
-
-  // An emergency override switch to re-allow third-party plugins;
-  // TODO(https://crbug.com/461717105): remove this.
-  if (base::FeatureList::IsEnabled(
-          features::kBlockThirdPartyInProcessPlugins) &&
-      flags == CHILD_PLUGIN) {
-    flags = CHILD_NORMAL;
-  }
-
-  if (flags != CHILD_NORMAL && base::apple::AmIBundled()) {
-    // This is a specialized helper, with the |child_path| at
-    // ../Framework.framework/Versions/X/Helpers/Chromium Helper.app/Contents/
-    // MacOS/Chromium Helper. Go back up to the "Helpers" directory to select
-    // a different variant.
-    child_path = child_path.DirName().DirName().DirName().DirName();
-
-    if (flags == CHILD_RENDERER) {
-      child_base_name += kMacHelperSuffix_renderer;
-    } else if (flags == CHILD_GPU) {
-      child_base_name += kMacHelperSuffix_gpu;
-    } else if (flags == CHILD_PLUGIN) {
-      child_base_name += kMacHelperSuffix_plugin;
-    } else if (flags > CHILD_EMBEDDER_FIRST) {
-      child_base_name +=
-          GetContentClient()->browser()->GetChildProcessSuffix(flags);
+  if (base::apple::AmIBundled()) {
+    std::string_view child_suffix;
+    if (base::FeatureList::IsEnabled(features::kAperitifHelpers)) {
+      if (flags == CHILD_NORMAL) {
+        child_suffix = " (Aperitif)";
+      } else if (flags == CHILD_RENDERER) {
+        child_suffix = " (Aperitif Renderer)";
+      } else if (flags == CHILD_GPU) {
+        child_suffix = " (Aperitif GPU)";
+      } else {
+        NOTREACHED();
+      }
     } else {
-      NOTREACHED();
+      if (flags == CHILD_RENDERER) {
+        child_suffix = kMacHelperSuffix_renderer;
+      } else if (flags == CHILD_GPU) {
+        child_suffix = kMacHelperSuffix_gpu;
+      } else if (flags != CHILD_NORMAL) {
+        NOTREACHED();
+      }
     }
 
-    child_path = child_path.Append(child_base_name + ".app")
-                     .Append("Contents")
-                     .Append("MacOS")
-                     .Append(child_base_name);
+    if (!child_suffix.empty()) {
+      std::string child_base_name =
+          base::StrCat({child_path.BaseName().value(), child_suffix});
+      child_path = child_path.DirName()
+                       .DirName()
+                       .DirName()
+                       .DirName()
+                       .Append(child_base_name + ".app")
+                       .Append("Contents")
+                       .Append("MacOS")
+                       .Append(child_base_name);
+    }
   }
 #endif  // BUILDFLAG(IS_MAC)
 
@@ -263,6 +274,14 @@ void ChildProcessHostImpl::BindHostReceiver(
   delegate_->BindHostReceiver(std::move(receiver));
 }
 
+void ChildProcessHostImpl::BindHostReceivers(
+    std::vector<mojo::GenericPendingReceiver> receivers) {
+  // Bind each receiver through the same per-item path.
+  for (auto& receiver : receivers) {
+    BindHostReceiver(std::move(receiver));
+  }
+}
+
 void ChildProcessHostImpl::OnChannelConnected(int32_t peer_pid) {
   // We ignore the `peer_pid` argument, which ultimately comes over IPC from the
   // remote process, in favor of the PID already known by the browser after
@@ -282,10 +301,6 @@ void ChildProcessHostImpl::OnChannelConnected(int32_t peer_pid) {
 
 void ChildProcessHostImpl::OnChannelError() {
   OnDisconnectedFromChildProcess();
-}
-
-void ChildProcessHostImpl::OnBadMessageReceived() {
-  delegate_->OnBadMessageReceived();
 }
 
 #if BUILDFLAG(CLANG_PROFILING_INSIDE_SANDBOX)

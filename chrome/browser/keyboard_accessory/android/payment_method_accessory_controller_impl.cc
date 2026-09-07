@@ -172,7 +172,7 @@ const CreditCard* UnwrapCardOrVirtualCard(
 
 PromoCodeInfo TranslateOffer(const AutofillOfferData* data) {
   DCHECK(data);
-  DCHECK(data->IsPromoCodeOffer());
+  DCHECK(data->IsGPayPromoCodeOffer());
 
   std::u16string promo_code = base::ASCIIToUTF16(data->GetPromoCode());
   std::u16string details_text =
@@ -184,10 +184,8 @@ PromoCodeInfo TranslateOffer(const AutofillOfferData* data) {
 
 IbanInfo TranslateIban(const Iban& data) {
   bool is_local = data.record_type() == Iban::kLocalIban;
-  std::string id_string;
-  if (!is_local) {
-    id_string = base::NumberToString(data.instrument_id());
-  }
+  std::string id_string =
+      is_local ? data.guid() : base::NumberToString(data.instrument_id());
   IbanInfo iban_info(data.GetIdentifierStringForAutofillDisplay(),
                      is_local ? data.value() : std::u16string(), id_string);
 
@@ -212,9 +210,7 @@ PaymentMethodAccessoryControllerImpl::GetSheetData() const {
 
   std::vector<UserInfo> info_to_add;
   bool allow_filling =
-      autofill_manager &&
-      !IsFormOrClientNonSecure(autofill_manager->client(),
-                               autofill_manager->last_query_form());
+      autofill_manager && autofill_manager->client().IsContextSecure();
 
   std::vector<const CachedServerCardInfo*> unmasked_cards =
       GetUnmaskedCreditCards();
@@ -252,8 +248,7 @@ PaymentMethodAccessoryControllerImpl::GetSheetData() const {
 
   AccessorySheetData data = CreateAccessorySheetData(
       AccessoryTabType::CREDIT_CARDS, GetTitle(has_suggestions),
-      /*plusAddressTitle=*/std::u16string(), std::move(info_to_add),
-      std::move(footer_commands));
+      std::move(info_to_add), std::move(footer_commands));
 
   for (auto* offer : GetPromoCodeOffers()) {
     data.add_promo_code_info(TranslateOffer(offer));
@@ -616,6 +611,9 @@ bool PaymentMethodAccessoryControllerImpl::FetchIfIban(
   std::vector<Iban> ibans = GetIbans();
   auto iban_iter =
       std::ranges::find_if(ibans, [&selection_id](const Iban& available_iban) {
+        if (available_iban.record_type() == Iban::kLocalIban) {
+          return available_iban.guid() == selection_id;
+        }
         return available_iban.record_type() == Iban::kServerIban &&
                base::NumberToString(available_iban.instrument_id()) ==
                    selection_id;
@@ -625,15 +623,28 @@ bool PaymentMethodAccessoryControllerImpl::FetchIfIban(
     return false;
   }
 
-  Suggestion::InstrumentId instrument_id(iban_iter->instrument_id());
+  Suggestion::Payload payload;
+  if (iban_iter->record_type() == Iban::kLocalIban) {
+    payload = Suggestion::Guid(iban_iter->guid());
+  } else {
+    payload = Suggestion::InstrumentId(iban_iter->instrument_id());
+  }
+
   GetAutofillManager()
       ->client()
       .GetPaymentsAutofillClient()
       ->GetIbanAccessManager()
       ->FetchValue(
-          instrument_id,
-          base::BindOnce(&PaymentMethodAccessoryControllerImpl::ApplyToField,
-                         weak_ptr_factory_.GetWeakPtr()));
+          payload,
+          base::BindOnce(
+              [](base::WeakPtr<PaymentMethodAccessoryControllerImpl> controller,
+                 base::expected<std::u16string,
+                                IbanAccessManager::FailureReason> result) {
+                if (controller && result.has_value()) {
+                  controller->ApplyToField(result.value());
+                }
+              },
+              weak_ptr_factory_.GetWeakPtr()));
   return true;
 }
 
@@ -644,8 +655,10 @@ void PaymentMethodAccessoryControllerImpl::OnValuablesDataChanged() {
 void PaymentMethodAccessoryControllerImpl::OnFillOrPreviewForm(
     AutofillManager& autofill_manager,
     FormGlobalId,
+    FieldGlobalId trigger_field_id,
     mojom::ActionPersistence action_persistence,
     const base::flat_set<FieldGlobalId>&,
+    const base::flat_map<FieldGlobalId, DenseSet<FieldFillingSkipReason>>&,
     const FillingPayload& filling_payload) {
   if (action_persistence == mojom::ActionPersistence::kFill &&
       std::holds_alternative<const CreditCard*>(filling_payload)) {

@@ -19,7 +19,7 @@ void DidFindRegistration(
     ServiceWorkerDeviceDelegateObserver::ServiceWorkerStartedCallback callback,
     blink::ServiceWorkerStatusCode service_worker_status,
     scoped_refptr<ServiceWorkerRegistration> service_worker_registration) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   if (service_worker_status != blink::ServiceWorkerStatusCode::kOk) {
     std::move(callback).Run(nullptr, service_worker_status);
     return;
@@ -62,15 +62,16 @@ void ServiceWorkerDeviceDelegateObserver::Register(int64_t registration_id) {
   auto registration = context_->GetLiveRegistration(registration_id);
   // We should have a live registration to reach this point.
   CHECK(registration);
-  if (registration_id_map_.contains(registration_id)) {
-    return;
-  }
-
   // By default, the
   // `registration_id_map_[registration_id].has_hid_event_handlers` is set to
   // false. It relies on the activated ServiceWorkerVersion to use
   // `UpdateHasEventHandlers` for updating it.
-  registration_id_map_[registration_id] = {registration->key(), false};
+  auto [it, inserted] = registration_id_map_.try_emplace(
+      registration_id, registration->key(), false);
+  if (!inserted) {
+    return;
+  }
+
   RegistrationAdded(registration_id);
 }
 

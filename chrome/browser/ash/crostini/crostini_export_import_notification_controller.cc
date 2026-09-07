@@ -8,19 +8,24 @@
 #include "ash/constants/url_constants.h"
 #include "ash/public/cpp/notification_utils.h"
 #include "ash/resources/vector_icons/vector_icons.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "ash/webui/settings/public/constants/routes.mojom.h"
+#include "base/check_deref.h"
 #include "chrome/browser/ash/crostini/crostini_export_import.h"
 #include "chrome/browser/ash/crostini/crostini_export_import_factory.h"
-#include "chrome/browser/notifications/notification_display_service.h"
-#include "chrome/browser/notifications/notification_display_service_factory.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
-#include "chrome/browser/ui/settings_window_manager_chromeos.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/grit/generated_resources.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
+#include "chromeos/ash/experiences/settings_ui/settings_app_manager.h"
+#include "components/user_manager/user.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
+#include "ui/message_center/message_center.h"
 #include "ui/message_center/public/cpp/notification.h"
 #include "ui/message_center/public/cpp/notification_delegate.h"
 
@@ -87,9 +92,15 @@ CrostiniExportImportNotificationController::
 void CrostiniExportImportNotificationController::ForceRedisplay() {
   hidden_ = false;
 
-  NotificationDisplayServiceFactory::GetForProfile(profile_)->Display(
-      NotificationHandler::Type::TRANSIENT, *notification_,
-      /*metadata=*/nullptr);
+  const user_manager::User& user = CHECK_DEREF(
+      ash::BrowserContextHelper::Get()->GetUserByBrowserContext(profile_));
+  auto notification = std::make_unique<message_center::Notification>(
+      ash::CreateUserScopedNotificationId(notification_->id(),
+                                          user.username_hash()),
+      *notification_);
+  notification->set_profile_id(user.GetAccountId().GetUserEmail());
+  message_center::MessageCenter::Get()->AddNotification(
+      std::move(notification));
 }
 
 void CrostiniExportImportNotificationController::SetStatusRunningUI(
@@ -188,8 +199,12 @@ void CrostiniExportImportNotificationController::SetStatusCancelledUI() {
   delegate_->SetCallback(
       CrostiniExportImportClickCloseDelegate::ButtonClickCallback());
 
-  NotificationDisplayServiceFactory::GetForProfile(profile_)->Close(
-      NotificationHandler::Type::TRANSIENT, notification_->id());
+  const user_manager::User& user = CHECK_DEREF(
+      ash::BrowserContextHelper::Get()->GetUserByBrowserContext(profile_));
+  message_center::MessageCenter::Get()->RemoveNotification(
+      ash::CreateUserScopedNotificationId(notification_->id(),
+                                          user.username_hash()),
+      /*by_user=*/false);
 }
 
 void CrostiniExportImportNotificationController::SetStatusFailedWithMessageUI(
@@ -199,18 +214,21 @@ void CrostiniExportImportNotificationController::SetStatusFailedWithMessageUI(
     case Status::FAILED_UNKNOWN_REASON:
       delegate_->SetCallback(base::BindRepeating(
           [](Profile* profile) {
-            chrome::SettingsWindowManager::GetInstance()->ShowOSSettings(
-                profile, chromeos::settings::mojom::
-                             kCrostiniBackupAndRestoreSubpagePath);
+            auto* user =
+                ash::BrowserContextHelper::Get()->GetUserByBrowserContext(
+                    profile);
+            ash::SettingsAppManager::Get()->Open(
+                CHECK_DEREF(user), {.sub_page = chromeos::settings::mojom::
+                                        kCrostiniBackupAndRestoreSubpagePath});
           },
           profile_));
       break;
     case Status::FAILED_ARCHITECTURE_MISMATCH:
       delegate_->SetCallback(base::BindRepeating(
           [](Profile* profile) {
-            NavigateParams params(profile,
-                                  GURL(chrome::kLinuxExportImportHelpURL),
-                                  ui::PAGE_TRANSITION_LINK);
+            NavigateParams params(
+                profile, GURL(ash::external_urls::kLinuxExportImportHelpURL),
+                ui::PAGE_TRANSITION_LINK);
             params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
             params.window_action = NavigateParams::WindowAction::kShowWindow;
             Navigate(&params);
@@ -220,8 +238,12 @@ void CrostiniExportImportNotificationController::SetStatusFailedWithMessageUI(
     case Status::FAILED_INSUFFICIENT_SPACE:
       delegate_->SetCallback(base::BindRepeating(
           [](Profile* profile) {
-            chrome::SettingsWindowManager::GetInstance()->ShowOSSettings(
-                profile, chromeos::settings::mojom::kStorageSubpagePath);
+            auto* user =
+                ash::BrowserContextHelper::Get()->GetUserByBrowserContext(
+                    profile);
+            ash::SettingsAppManager::Get()->Open(
+                CHECK_DEREF(user),
+                {.sub_page = chromeos::settings::mojom::kStorageSubpagePath});
           },
           profile_));
       break;

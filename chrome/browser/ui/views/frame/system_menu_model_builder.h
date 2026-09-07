@@ -15,7 +15,7 @@ namespace chromeos {
 class MoveToDesksMenuModel;
 }
 #endif
-class Browser;
+class BrowserWindowInterface;
 
 namespace ui {
 class AcceleratorProvider;
@@ -28,7 +28,11 @@ class SimpleMenuModel;
 class SystemMenuModelBuilder {
  public:
   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kToggleVerticalTabsElementId);
-  SystemMenuModelBuilder(ui::AcceleratorProvider* provider, Browser* browser);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kToggleVerticalTabsCollapseElementId);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(
+      kToggleVerticalTabsExpandOnHoverElementId);
+  SystemMenuModelBuilder(ui::AcceleratorProvider* provider,
+                         BrowserWindowInterface* browser);
 
   SystemMenuModelBuilder(const SystemMenuModelBuilder&) = delete;
   SystemMenuModelBuilder& operator=(const SystemMenuModelBuilder&) = delete;
@@ -42,7 +46,7 @@ class SystemMenuModelBuilder {
   ui::MenuModel* menu_model() { return menu_model_.get(); }
 
  private:
-  Browser* browser() { return menu_delegate_.browser(); }
+  BrowserWindowInterface* browser() { return menu_delegate_.browser(); }
 
   // Populates |model| with the appropriate contents.
   void BuildMenu(ui::SimpleMenuModel* model);

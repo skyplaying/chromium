@@ -17,7 +17,6 @@ import android.view.View;
 import android.view.inputmethod.EditorInfo;
 import android.widget.EditText;
 import android.widget.TextView;
-import android.widget.TextView.OnEditorActionListener;
 
 import androidx.appcompat.app.AlertDialog;
 import androidx.fragment.app.DialogFragment;
@@ -29,7 +28,6 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.settings.ProfileDependentSetting;
-import org.chromium.chrome.browser.sync.SyncServiceFactory;
 import org.chromium.chrome.browser.sync.settings.SyncSettingsUtils;
 import org.chromium.ui.text.SpanApplier;
 import org.chromium.ui.text.SpanApplier.SpanInfo;
@@ -61,14 +59,11 @@ public class PassphraseCreationDialogFragment extends DialogFragment
         mConfirmPassphrase = view.findViewById(R.id.confirm_passphrase);
 
         mConfirmPassphrase.setOnEditorActionListener(
-                new OnEditorActionListener() {
-                    @Override
-                    public boolean onEditorAction(TextView v, int actionId, KeyEvent event) {
-                        if (actionId == EditorInfo.IME_ACTION_DONE) {
-                            tryToSubmitPassphrase();
-                        }
-                        return false;
+                (TextView _, int actionId, KeyEvent _) -> {
+                    if (actionId == EditorInfo.IME_ACTION_DONE) {
+                        tryToSubmitPassphrase();
                     }
+                    return false;
                 });
 
         TextView instructionsView = view.findViewById(R.id.custom_passphrase_instructions);
@@ -88,13 +83,8 @@ public class PassphraseCreationDialogFragment extends DialogFragment
 
     private SpannableString getInstructionsText() {
         assert mProfile != null : "Profile should be non-null.";
-        boolean shouldReplaceSyncSettingsWithAccountSettings =
-                !assumeNonNull(SyncServiceFactory.getForProfile(mProfile)).hasSyncConsent();
         return SpanApplier.applySpans(
-                getString(
-                        shouldReplaceSyncSettingsWithAccountSettings
-                                ? R.string.sync_encryption_create_passphrase
-                                : R.string.legacy_sync_encryption_create_passphrase),
+                getString(R.string.sync_encryption_create_passphrase),
                 new SpanInfo(
                         "BEGIN_LINK",
                         "END_LINK",
@@ -115,14 +105,7 @@ public class PassphraseCreationDialogFragment extends DialogFragment
             // onCreate, when it is shown (in super.onStart()), so we have to do this here.
             // Otherwise the dialog will close when the button is clicked regardless of what else we
             // do.
-            d.getButton(Dialog.BUTTON_POSITIVE)
-                    .setOnClickListener(
-                            new View.OnClickListener() {
-                                @Override
-                                public void onClick(View v) {
-                                    tryToSubmitPassphrase();
-                                }
-                            });
+            d.getButton(Dialog.BUTTON_POSITIVE).setOnClickListener(_ -> tryToSubmitPassphrase());
         }
     }
 

@@ -4,17 +4,13 @@
 
 #include "chrome/browser/extensions/browser_window_util.h"
 
-#include <algorithm>
-#include <vector>
-
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/tab_list/tab_list_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "components/tabs/public/tab_interface.h"
+#include "extensions/buildflags/buildflags.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #endif
 
@@ -43,9 +39,8 @@ bool BrowserMatchesHelper(BrowserWindowInterface& browser,
 
 #if BUILDFLAG(IS_CHROMEOS)
   if (restrict_to_current_workspace) {
-    Browser* browser_for_migration = browser.GetBrowserForMigrationOnly();
-    if (!browser_for_migration->window() ||
-        !browser_for_migration->window()->IsOnCurrentWorkspace()) {
+    BrowserWindow* browser_window = BrowserWindow::FromBrowser(&browser);
+    if (!browser_window || !browser_window->IsOnCurrentWorkspace()) {
       return false;
     }
   }
@@ -60,24 +55,7 @@ BrowserWindowInterface* GetBrowserForTabContents(
     content::WebContents& tab_contents) {
   tabs::TabInterface* tab =
       tabs::TabInterface::MaybeGetFromContents(&tab_contents);
-  if (!tab) {
-    return nullptr;
-  }
-
-  std::vector<BrowserWindowInterface*> all_browsers =
-      GetAllBrowserWindowInterfaces();
-  for (auto* browser : all_browsers) {
-    TabListInterface* tab_list = TabListInterface::From(browser);
-    if (!tab_list) {
-      continue;
-    }
-    std::vector<tabs::TabInterface*> all_tabs = tab_list->GetAllTabs();
-    if (std::ranges::contains(all_tabs, tab)) {
-      return browser;  // Found it!
-    }
-  }
-
-  return nullptr;
+  return tab ? tab->GetBrowserWindowInterface() : nullptr;
 }
 
 BrowserWindowInterface* GetLastActiveBrowserWithProfile(

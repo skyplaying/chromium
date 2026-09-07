@@ -9,6 +9,7 @@
 #include "chrome/browser/actor/tools/tool_request.h"
 #include "chrome/browser/actor/tools/tools_test_util.h"
 #include "chrome/common/actor.mojom.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -63,7 +64,8 @@ class ActorDragAndReleaseToolBrowserTest : public ActorToolsTest {
 // Test the drag and release tool by moving the thumb on a range slider control.
 IN_PROC_BROWSER_TEST_F(ActorDragAndReleaseToolBrowserTest,
                        DragAndReleaseTool_Range) {
-  const GURL url = embedded_test_server()->GetURL("/actor/drag.html");
+  const GURL url =
+      embedded_https_test_server().GetURL("example.com", "/actor/drag.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   gfx::RectF range_rect = GetBoundingClientRect(*main_frame(), "#range");
@@ -90,7 +92,8 @@ IN_PROC_BROWSER_TEST_F(ActorDragAndReleaseToolBrowserTest,
 // Ensure the drag tool sends the expected mouse down, move and up events.
 IN_PROC_BROWSER_TEST_F(ActorDragAndReleaseToolBrowserTest,
                        DragAndReleaseTool_Events) {
-  const GURL url = embedded_test_server()->GetURL("/actor/drag.html");
+  const GURL url =
+      embedded_https_test_server().GetURL("example.com", "/actor/drag.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   // The dragLogger starts in the bottom right of the viewport. Scroll it to the
@@ -131,7 +134,8 @@ IN_PROC_BROWSER_TEST_F(ActorDragAndReleaseToolBrowserTest,
 // responds appropriately to setPointerCapture
 IN_PROC_BROWSER_TEST_F(ActorDragAndReleaseToolBrowserTest,
                        DragAndReleaseTool_PointerEvents) {
-  const GURL url = embedded_test_server()->GetURL("/actor/drag.html");
+  const GURL url =
+      embedded_https_test_server().GetURL("example.com", "/actor/drag.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   // Log starts off empty.
@@ -171,7 +175,8 @@ IN_PROC_BROWSER_TEST_F(ActorDragAndReleaseToolBrowserTest,
 // Ensure coordinates outside of the viewport are rejected.
 IN_PROC_BROWSER_TEST_F(ActorDragAndReleaseToolBrowserTest,
                        DragAndReleaseTool_Offscreen) {
-  const GURL url = embedded_test_server()->GetURL("/actor/drag.html");
+  const GURL url =
+      embedded_https_test_server().GetURL("example.com", "/actor/drag.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   // Log starts off empty.
@@ -225,7 +230,7 @@ IN_PROC_BROWSER_TEST_F(ActorDragAndReleaseToolBrowserTest,
 IN_PROC_BROWSER_TEST_F(ActorDragAndReleaseToolBrowserTest,
                        DragAndReleaseTool_CrossOriginSubframe) {
   const GURL url = embedded_https_test_server().GetURL(
-      "/actor/positioned_iframe_no_scroll.html");
+      "example.com", "/actor/positioned_iframe_no_scroll.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   const GURL cross_origin_iframe_url =

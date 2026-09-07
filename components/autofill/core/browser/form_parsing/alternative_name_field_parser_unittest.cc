@@ -9,7 +9,7 @@
 
 #include "base/test/scoped_feature_list.h"
 #include "components/autofill/core/browser/field_types.h"
-#include "components/autofill/core/browser/form_parsing/parsing_test_utils.h"
+#include "components/autofill/core/browser/form_parsing/parsing_test_util.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_regex_constants.h"
 #include "components/autofill/core/common/autofill_regexes.h"
@@ -33,10 +33,6 @@ class AlternativeNameFieldParserTest : public FormFieldParserTestBase,
                                          AutofillScanner& scanner) override {
     return AlternativeNameFieldParser::Parse(context, scanner);
   }
-
- private:
-  base::test::ScopedFeatureList scoped_features{
-      features::kAutofillSupportPhoneticNameForJP};
 };
 
 TEST_F(AlternativeNameFieldParserTest, FamilyGivenPhoneticName) {

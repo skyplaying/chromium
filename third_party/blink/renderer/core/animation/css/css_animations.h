@@ -85,6 +85,7 @@ class CORE_EXPORT CSSAnimations final {
                                             KeyframeEffect::Priority);
   static bool IsAnimatingFontAffectingProperties(const ElementAnimations*);
   static bool IsAnimatingLineHeightProperty(const ElementAnimations*);
+  static bool IsAnimatingZoomProperty(const ElementAnimations*);
   static bool IsAnimatingRevert(const ElementAnimations*);
   static bool IsAnimatingDisplayProperty(const ElementAnimations*);
   static void CalculateTimelineUpdate(CSSAnimationUpdate&,
@@ -99,7 +100,7 @@ class CORE_EXPORT CSSAnimations final {
                                        bool can_trigger_animations);
   static void CalculateCompositorAnimationUpdate(
       CSSAnimationUpdate&,
-      const Element& animating_element,
+      Element& animating_element,
       Element&,
       const ComputedStyle&,
       const ComputedStyle* parent_style,
@@ -524,7 +525,8 @@ class CORE_EXPORT CSSAnimations final {
 
     void MaybeDispatch(Document::ListenerType,
                        const AtomicString& event_name,
-                       const AnimationTimeDelta& elapsed_time);
+                       const AnimationTimeDelta& elapsed_time,
+                       Animation* animation);
     Member<Element> animation_target_;
     const AtomicString name_;
     Timing::Phase previous_phase_;
@@ -550,7 +552,8 @@ class CORE_EXPORT CSSAnimations final {
 
    private:
     void EnqueueEvent(const AtomicString& type,
-                      const AnimationTimeDelta& elapsed_time);
+                      const AnimationTimeDelta& elapsed_time,
+                      Animation* animation);
 
     const Element& TransitionTarget() const { return *transition_target_; }
     EventTarget* GetEventTarget() const;

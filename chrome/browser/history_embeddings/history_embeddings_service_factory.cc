@@ -13,20 +13,19 @@
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "chrome/browser/page_content_annotations/page_content_annotations_service_factory.h"
+#include "chrome/browser/page_content_annotations/page_embeddings_service_factory.h"
 #include "chrome/browser/passage_embeddings/chrome_passage_embeddings_service_controller.h"
 #include "chrome/browser/passage_embeddings/passage_embedder_model_observer_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_attributes_entry.h"
 #include "chrome/browser/profiles/profile_attributes_storage.h"
-#include "chrome/browser/profiles/profile_manager.h"
-#include "components/history/core/browser/history_service.h"
-#include "components/history_embeddings/history_embeddings_features.h"
-#include "components/history_embeddings/history_embeddings_service.h"
-#include "components/history_embeddings/ml_answerer.h"
-#include "components/history_embeddings/ml_intent_classifier.h"
-#include "components/history_embeddings/mock_answerer.h"
-#include "components/history_embeddings/mock_intent_classifier.h"
+#include "chrome/browser/profiles/profile_manager.h"  // nogncheck
+#include "components/history_embeddings/content/history_embeddings_service.h"
+#include "components/history_embeddings/core/history_embeddings_features.h"
+#include "components/history_embeddings/core/mock_answerer.h"
+#include "components/history_embeddings/core/mock_intent_classifier.h"
 #include "components/keyed_service/core/service_access_type.h"
+#include "components/passage_embeddings/core/passage_embeddings_service_controller.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/profiles/profile_helper.h"
@@ -52,6 +51,11 @@ bool IsEphemeralProfile(Profile* profile) {
 bool ShouldBuildServiceInstance(Profile* profile) {
   // Do NOT construct the service if the feature flag is disabled.
   if (!history_embeddings::IsHistoryEmbeddingsFeatureEnabled()) {
+    return false;
+  }
+
+  if (!passage_embeddings::PassageEmbedderModelObserverFactory::GetForProfile(
+          profile)) {
     return false;
   }
 
@@ -101,6 +105,8 @@ std::unique_ptr<KeyedService> HistoryEmbeddingsServiceFactory::
                                            ServiceAccessType::EXPLICIT_ACCESS),
       PageContentAnnotationsServiceFactory::GetForProfile(profile),
       OptimizationGuideKeyedServiceFactory::GetForProfile(profile),
+      page_content_annotations::PageEmbeddingsServiceFactory::GetForProfile(
+          profile),
       embedder_metadata_provider, embedder, std::move(answerer),
       std::move(intent_classifier));
 }
@@ -119,6 +125,8 @@ HistoryEmbeddingsServiceFactory::HistoryEmbeddingsServiceFactory()
   DependsOn(OptimizationGuideKeyedServiceFactory::GetInstance());
   DependsOn(
       passage_embeddings::PassageEmbedderModelObserverFactory::GetInstance());
+  DependsOn(
+      page_content_annotations::PageEmbeddingsServiceFactory::GetInstance());
 }
 
 HistoryEmbeddingsServiceFactory::~HistoryEmbeddingsServiceFactory() = default;
@@ -135,30 +143,20 @@ HistoryEmbeddingsServiceFactory::BuildServiceInstanceForBrowserContext(
       OptimizationGuideKeyedServiceFactory::GetForProfile(profile);
 
   auto* passage_embeddings_service_controller =
-      passage_embeddings::ChromePassageEmbeddingsServiceController::Get();
+      passage_embeddings::GetChromePassageEmbeddingsServiceController();
 
+  // TODO(crbug.com/553639147): Launch or remove the answerer functionality.
   std::unique_ptr<history_embeddings::Answerer> answerer;
   if (history_embeddings::IsHistoryEmbeddingsAnswersFeatureEnabled()) {
-    if (history_embeddings::GetFeatureParameters().use_ml_answerer) {
-      answerer = std::make_unique<history_embeddings::MlAnswerer>(
-          optimization_guide_keyed_service,
-          optimization_guide_keyed_service
-              ->GetModelQualityLogsUploaderService());
-    } else {
-      answerer = std::make_unique<history_embeddings::MockAnswerer>();
-    }
+    answerer = std::make_unique<history_embeddings::MockAnswerer>();
   }
 
+  // TODO(crbug.com/553639147): Launch or remove the intent classifier
+  // functionality.
   std::unique_ptr<history_embeddings::IntentClassifier> intent_classifier;
   if (history_embeddings::GetFeatureParameters().enable_intent_classifier) {
-    if (history_embeddings::GetFeatureParameters().use_ml_intent_classifier) {
-      intent_classifier =
-          std::make_unique<history_embeddings::MlIntentClassifier>(
-              optimization_guide_keyed_service);
-    } else {
-      intent_classifier =
-          std::make_unique<history_embeddings::MockIntentClassifier>();
-    }
+    intent_classifier =
+        std::make_unique<history_embeddings::MockIntentClassifier>();
   }
 
   return std::make_unique<history_embeddings::ChromeHistoryEmbeddingsService>(
@@ -166,7 +164,10 @@ HistoryEmbeddingsServiceFactory::BuildServiceInstanceForBrowserContext(
       HistoryServiceFactory::GetForProfile(profile,
                                            ServiceAccessType::EXPLICIT_ACCESS),
       PageContentAnnotationsServiceFactory::GetForProfile(profile),
-      optimization_guide_keyed_service, passage_embeddings_service_controller,
+      optimization_guide_keyed_service,
+      page_content_annotations::PageEmbeddingsServiceFactory::GetForProfile(
+          profile),
+      passage_embeddings_service_controller,
       passage_embeddings_service_controller->GetEmbedder(), std::move(answerer),
       std::move(intent_classifier));
 }

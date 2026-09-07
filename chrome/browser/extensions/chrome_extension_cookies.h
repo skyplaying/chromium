@@ -64,6 +64,7 @@ class ChromeExtensionCookies
   void CreateRestrictedCookieManager(
       const url::Origin& origin,
       const net::IsolationInfo& isolation_info,
+      bool prefer_bound_cookie_context,
       mojo::PendingReceiver<network::mojom::RestrictedCookieManager> receiver);
 
   // Deletes all cookies matching the host of `origin` and
@@ -89,14 +90,11 @@ class ChromeExtensionCookies
 
     ~IOData();
 
-    // Computes the First-Party Set metadata associated with this instance, and
-    // finishes creating the RestrictedCookieManager.
-    //
-    // The RestrictedCookieManager instance may be created either synchronously
-    // or asynchronously.
-    void ComputeFirstPartySetMetadataAndCreateRestrictedCookieManager(
+    // Creates the RestrictedCookieManager.
+    void CreateRestrictedCookieManager(
         const url::Origin& origin,
         const net::IsolationInfo& isolation_info,
+        bool prefer_bound_cookie_context,
         mojo::PendingReceiver<network::mojom::RestrictedCookieManager>
             receiver);
 
@@ -113,13 +111,6 @@ class ChromeExtensionCookies
    private:
     // Syncs `mojo_cookie_settings_` -> `network_cookie_settings_`.
     void UpdateNetworkCookieSettings();
-
-    // Asynchronously creates a RestrictedCookieManager.
-    void CreateRestrictedCookieManager(
-        const url::Origin& origin,
-        const net::IsolationInfo& isolation_info,
-        mojo::PendingReceiver<network::mojom::RestrictedCookieManager> receiver,
-        net::FirstPartySetMetadata first_party_set_metadata);
 
     content::CookieStoreConfig creation_config_;
 

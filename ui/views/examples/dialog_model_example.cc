@@ -20,6 +20,7 @@
 #include "ui/views/bubble/bubble_dialog_model_host.h"
 #include "ui/views/controls/button/checkbox.h"
 #include "ui/views/controls/button/label_button.h"
+#include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/examples/examples_window.h"
 #include "ui/views/layout/box_layout_view.h"
@@ -217,7 +218,9 @@ void DialogModelExample::ShowDialog() {
       std::move(dialog_model), show_dialog_button_, BubbleBorder::TOP_LEFT);
 
   // Creates and shows the dialog.
-  BubbleDialogDelegate::CreateBubble(std::move(bubble))->Show();
+  BubbleDialogDelegate::CreateBubbleDeprecated(
+      std::move(bubble), Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET)
+      ->Show();
 }
 
 }  // namespace views::examples

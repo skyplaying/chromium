@@ -12,8 +12,10 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.ui.modelutil.PropertyKey;
+import org.chromium.ui.modelutil.PropertyModel.WritableIntDefPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableIntPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableObjectPropertyKey;
+import org.chromium.ui.util.ViewVisibility;
 
 /** Properties for the NTP customization Chrome Colors bottom sheet. */
 @NullMarked
@@ -30,8 +32,8 @@ public class NtpChromeColorsProperties {
             new WritableIntPropertyKey();
     public static final WritableIntPropertyKey PRIMARY_COLOR_CIRCLE_VIEW_COLOR =
             new WritableIntPropertyKey();
-    public static final WritableIntPropertyKey CUSTOM_COLOR_PICKER_CONTAINER_VISIBILITY =
-            new WritableIntPropertyKey();
+    public static final WritableIntDefPropertyKey<ViewVisibility>
+            CUSTOM_COLOR_PICKER_CONTAINER_VISIBILITY = new WritableIntDefPropertyKey<>(View.GONE);
     public static final WritableObjectPropertyKey<RecyclerView.LayoutManager>
             RECYCLER_VIEW_LAYOUT_MANAGER = new WritableObjectPropertyKey<>();
     public static final WritableObjectPropertyKey<RecyclerView.Adapter> RECYCLER_VIEW_ADAPTER =
@@ -47,13 +49,13 @@ public class NtpChromeColorsProperties {
     // This value isn't updated when the DAILY_REFRESH_SWITCH_ON_CHECKED_CHANGE_LISTENER handles the
     // clicking of the toggle. We have to skip equality check to allow the refreshed state is set.
     public static final WritableObjectPropertyKey<Boolean> IS_DAILY_REFRESH_SWITCH_CHECKED =
-            new WritableObjectPropertyKey(/* skipEquality= */ true);
+            new WritableObjectPropertyKey<>(/* skipEquality= */ true);
 
     // This index isn't updated when the RECYCLER_VIEW_ADAPTER handles the highlighted items. We
     // have to skip equality check to allow the refreshed value is set. The default 0 is set when
     // user turns on daily refresh without choosing any color.
     public static final WritableObjectPropertyKey<Integer> HIGHLIGHTED_ITEM_INDEX =
-            new WritableObjectPropertyKey(/* skipEquality= */ true);
+            new WritableObjectPropertyKey<>(/* skipEquality= */ true);
 
     public static final PropertyKey[] ALL_KEYS =
             new PropertyKey[] {

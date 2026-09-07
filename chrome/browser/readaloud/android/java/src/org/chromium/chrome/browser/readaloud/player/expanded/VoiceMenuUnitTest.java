@@ -30,7 +30,6 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.readaloud.player.InteractionHandler;
@@ -42,9 +41,8 @@ import org.chromium.ui.modelutil.PropertyModel;
 
 import java.util.List;
 
-/** Unit tests for {@link VoiceMenuSheetContent}. */
+/** Unit tests for {@link VoiceMenu}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class VoiceMenuUnitTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Mock private InteractionHandler mInteractionHandler;
@@ -179,9 +177,8 @@ public class VoiceMenuUnitTest {
     }
 
     private static RadioButton getRadioButton(MenuItem item) {
-        return (RadioButton) item.findViewById(R.id.readaloud_radio_button);
+        return item.findViewById(R.id.readaloud_radio_button);
     }
-
 
     @Test
     public void testEmptyVoiceList() {

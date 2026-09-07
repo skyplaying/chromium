@@ -30,7 +30,8 @@ class Summarizer final : public ScriptWrappable,
   Summarizer(ScriptState* script_state,
              scoped_refptr<base::SequencedTaskRunner> task_runner,
              mojo::PendingRemote<mojom::blink::AISummarizer> pending_remote,
-             SummarizerCreateOptions* options);
+             SummarizerCreateOptions* options,
+             uint64_t context_window);
   void Trace(Visitor* visitor) const override;
 
   // AIWritingAssistanceBase:

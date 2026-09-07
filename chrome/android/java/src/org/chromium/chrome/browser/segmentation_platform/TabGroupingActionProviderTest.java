@@ -43,7 +43,6 @@ import java.util.Map;
 
 /** Unit tests for {@link TabGroupingActionProvider} */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class TabGroupingActionProviderTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -76,9 +75,7 @@ public class TabGroupingActionProviderTest {
         var provider = new TabGroupingActionProvider(mControllerSupplier);
         var signalAccumulator =
                 new SignalAccumulator(
-                        new Handler(),
-                        mTab,
-                        Map.of(AdaptiveToolbarButtonVariant.TAB_GROUPING, provider));
+                        new Handler(), Map.of(AdaptiveToolbarButtonVariant.TAB_GROUPING, provider));
         provider.getAction(mTab, signalAccumulator);
         Shadows.shadowOf(Looper.getMainLooper()).idle();
 
@@ -95,9 +92,7 @@ public class TabGroupingActionProviderTest {
         var provider = new TabGroupingActionProvider(mControllerSupplier);
         var signalAccumulator =
                 new SignalAccumulator(
-                        new Handler(),
-                        mTab,
-                        Map.of(AdaptiveToolbarButtonVariant.TAB_GROUPING, provider));
+                        new Handler(), Map.of(AdaptiveToolbarButtonVariant.TAB_GROUPING, provider));
         provider.getAction(mTab, signalAccumulator);
         Shadows.shadowOf(Looper.getMainLooper()).idle();
 

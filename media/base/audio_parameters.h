@@ -197,44 +197,52 @@ class MEDIA_EXPORT AudioParameters {
     ALLOW_DSP_NOISE_SUPPRESSION = 1 << 10,
     ALLOW_DSP_AUTOMATIC_GAIN_CONTROL = 1 << 11,
 
-    FUCHSIA_RENDER_USAGE_BACKGROUND = 1 << 12,
-    FUCHSIA_RENDER_USAGE_MEDIA = 1 << 13,
-    FUCHSIA_RENDER_USAGE_INTERRUPTION = 1 << 14,
-    FUCHSIA_RENDER_USAGE_SYSTEM_AGENT = 1 << 15,
-    FUCHSIA_RENDER_USAGE_COMMUNICATION = 1 << 16,
+    // Bits 12-15 are used to store the "usage" value describing an audio
+    // stream.
+    FUCHSIA_RENDER_USAGE_SHIFT = 12,
+    FUCHSIA_RENDER_USAGE_MASK = 0xF << FUCHSIA_RENDER_USAGE_SHIFT,
+    FUCHSIA_RENDER_USAGE_UNKNOWN = 0 << FUCHSIA_RENDER_USAGE_SHIFT,
+    FUCHSIA_RENDER_USAGE_BACKGROUND = 1 << FUCHSIA_RENDER_USAGE_SHIFT,
+    FUCHSIA_RENDER_USAGE_MEDIA = 2 << FUCHSIA_RENDER_USAGE_SHIFT,
+    FUCHSIA_RENDER_USAGE_INTERRUPTION = 3 << FUCHSIA_RENDER_USAGE_SHIFT,
+    FUCHSIA_RENDER_USAGE_SYSTEM_AGENT = 4 << FUCHSIA_RENDER_USAGE_SHIFT,
+    FUCHSIA_RENDER_USAGE_COMMUNICATION = 5 << FUCHSIA_RENDER_USAGE_SHIFT,
+    FUCHSIA_RENDER_USAGE_ACCESSIBILITY = 6 << FUCHSIA_RENDER_USAGE_SHIFT,
 
-    IGNORE_UI_GAINS = 1 << 17,
+    IGNORE_UI_GAINS = 1 << 16,
 
-    VOICE_ISOLATION_SUPPORTED = 1 << 18,  // Set when system voice isolation is
+    VOICE_ISOLATION_SUPPORTED = 1 << 17,  // Set when system voice isolation is
                                           // supported.
     CLIENT_CONTROLLED_VOICE_ISOLATION =
-        1 << 19,                // Set when client forces to
+        1 << 18,                // Set when client forces to
                                 // enable/disable the platform voice
                                 // isolation effects. False indicates
                                 // to use platform default state.
-    VOICE_ISOLATION = 1 << 20,  // Enable/Disable platform voice isolation.
+    VOICE_ISOLATION = 1 << 19,  // Enable/Disable platform voice isolation.
                                 // Only meaningful when
                                 // CLIENT_CONTROLLED_VOICE_ISOLATION is set.
 
-    DEEP_NOISE_SUPPRESSION = 1 << 21,  // Also called Voice Focus on Windows.
+    DEEP_NOISE_SUPPRESSION = 1 << 20,  // Also called Voice Focus on Windows.
   };
 
   struct HardwareCapabilities {
-    HardwareCapabilities(int min_frames_per_buffer,
-                         int max_frames_per_buffer,
-                         int default_frames_per_buffer,
-                         bool require_offload)
+    constexpr HardwareCapabilities(int min_frames_per_buffer,
+                                   int max_frames_per_buffer,
+                                   int default_frames_per_buffer,
+                                   bool require_offload)
         : min_frames_per_buffer(min_frames_per_buffer),
           max_frames_per_buffer(max_frames_per_buffer),
           default_frames_per_buffer(default_frames_per_buffer),
           require_audio_offload(require_offload) {}
-    HardwareCapabilities(int min_frames_per_buffer, int max_frames_per_buffer)
+    constexpr HardwareCapabilities(int min_frames_per_buffer,
+                                   int max_frames_per_buffer)
         : min_frames_per_buffer(min_frames_per_buffer),
           max_frames_per_buffer(max_frames_per_buffer) {}
-    HardwareCapabilities(int bitstream_formats, bool require_encapsulation)
+    constexpr HardwareCapabilities(int bitstream_formats,
+                                   bool require_encapsulation)
         : bitstream_formats(bitstream_formats),
           require_encapsulation(require_encapsulation) {}
-    HardwareCapabilities() = default;
+    constexpr HardwareCapabilities() = default;
 
     // Minimum and maximum buffer sizes supported by the audio hardware. Opening
     // a device with frames_per_buffer set to a value between min and max should
@@ -255,6 +263,7 @@ class MEDIA_EXPORT AudioParameters {
     bool require_encapsulation = false;
     // Require audio processing offload.
     bool require_audio_offload = false;
+    bool operator==(const HardwareCapabilities& other) const = default;
   };
 
   // Returns a string which contains the full bitmask for the given `mask`.
@@ -337,7 +346,7 @@ class MEDIA_EXPORT AudioParameters {
   }
   int frames_per_buffer() const { return frames_per_buffer_; }
 
-  std::optional<HardwareCapabilities> hardware_capabilities() const {
+  const std::optional<HardwareCapabilities>& hardware_capabilities() const {
     return hardware_capabilities_;
   }
 

@@ -23,11 +23,12 @@
 #include "components/password_manager/core/browser/features/password_manager_features_util.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/signin/public/base/signin_switches.h"
 #include "components/sync/base/data_type.h"
 #include "components/sync/base/user_selectable_type.h"
-#include "components/sync/engine/nigori/cross_user_sharing_public_key.h"
-#include "components/sync/engine/nigori/cross_user_sharing_public_private_key_pair.h"
+#include "components/sync/nigori/cross_user_sharing_public_key.h"
+#include "components/sync/nigori/cross_user_sharing_public_private_key_pair.h"
 #include "components/sync/protocol/nigori_specifics.pb.h"
 #include "components/sync/protocol/password_sharing_invitation_specifics.pb.h"
 #include "components/sync/protocol/sync_entity.pb.h"
@@ -39,6 +40,7 @@
 
 using password_manager::PasswordForm;
 using password_manager::PasswordStoreInterface;
+using password_manager::PasswordString;
 using password_manager::metrics_util::
     ProcessIncomingPasswordSharingInvitationResult;
 using password_sharing_helper::CreateDefaultIncomingInvitation;
@@ -57,6 +59,7 @@ using testing::Contains;
 using testing::Field;
 using testing::IsEmpty;
 using testing::Pointee;
+using testing::Property;
 using testing::SizeIs;
 using testing::UnorderedElementsAre;
 
@@ -66,7 +69,7 @@ constexpr char kPasswordValue[] = "password";
 constexpr char kUsernameValue[] = "username";
 
 MATCHER_P(HasPasswordValue, password_value, "") {
-  return base::UTF16ToUTF8(arg.password_value) == password_value;
+  return base::UTF16ToUTF8(arg.password_value.value()) == password_value;
 }
 
 MATCHER_P(HasUsernameElement, username_element, "") {
@@ -196,28 +199,6 @@ class SingleClientIncomingPasswordSharingInvitationTest
             /*creation_time=*/0, /*last_modified_time=*/0));
   }
 
-  bool SetupSyncTransportWithoutPasswordAccountStorage() {
-    if (!SetupClients()) {
-      return false;
-    }
-    if (!GetClient(0)->SignInPrimaryAccount()) {
-      return false;
-    }
-    if (!GetClient(0)->AwaitSyncTransportActive()) {
-      return false;
-    }
-
-#if !BUILDFLAG(IS_ANDROID)
-    // Explicitly opt out of account storage when signin is explicit.
-    // TODO(crbug.com/375024026): Revisit.
-    GetSyncService(0)->GetUserSettings()->SetSelectedType(
-        syncer::UserSelectableType::kPasswords, false);
-
-#endif
-
-    return true;
-  }
-
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
 };
@@ -262,7 +243,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientIncomingPasswordSharingInvitationTest,
             invitation_group_data.username_value());
   EXPECT_EQ(base::UTF16ToUTF8(password_form.password_element),
             invitation_group_element_data.password_element());
-  EXPECT_EQ(base::UTF16ToUTF8(password_form.password_value),
+  EXPECT_EQ(base::UTF16ToUTF8(password_form.password_value.value()),
             invitation_group_data.password_value());
   EXPECT_EQ(base::UTF16ToUTF8(password_form.display_name),
             invitation_group_element_data.display_name());
@@ -359,12 +340,14 @@ IN_PROC_BROWSER_TEST_P(SingleClientIncomingPasswordSharingInvitationTest,
 
   // Wait the invitation to be processed and the password stored.
   ASSERT_TRUE(password_forms_added_checker.Wait());
-  EXPECT_THAT(GetAllLogins(GetPasswordStoreInterface()),
-              Contains(Pointee(
-                  AllOf(Field(&PasswordForm::password_value,
-                              base::UTF8ToUTF16(std::string(kPasswordValue))),
-                        Field(&PasswordForm::type,
-                              PasswordForm::Type::kReceivedViaSharing)))));
+  EXPECT_THAT(
+      GetAllLogins(GetPasswordStoreInterface()),
+      Contains(Pointee(
+          AllOf(Field(&PasswordForm::password_value,
+                      Property(&PasswordString::value,
+                               base::UTF8ToUTF16(std::string(kPasswordValue)))),
+                Field(&PasswordForm::type,
+                      PasswordForm::Type::kReceivedViaSharing)))));
 
   // Check that all the invitations are deleted from the server.
   EXPECT_TRUE(ServerPasswordInvitationChecker(/*expected_count=*/0).Wait());
@@ -419,7 +402,8 @@ IN_PROC_BROWSER_TEST_P(
       GetAllLogins(GetPasswordStoreInterface()),
       Contains(Pointee(AllOf(
           Field(&PasswordForm::password_value,
-                base::UTF8ToUTF16(std::string(kLocalPasswordValue))),
+                Property(&PasswordString::value,
+                         base::UTF8ToUTF16(std::string(kLocalPasswordValue)))),
           Field(&PasswordForm::type, PasswordForm::Type::kFormSubmission)))));
 
   // Double check that the invitation has not been processed and stored locally
@@ -442,7 +426,14 @@ IN_PROC_BROWSER_TEST_P(
 // stopped when the Password data type is opted out in the transport mode.
 IN_PROC_BROWSER_TEST_P(SingleClientIncomingPasswordSharingInvitationTest,
                        ShouldStopReceivingPasswordsWhenPasswordsOptedOut) {
-  ASSERT_TRUE(SetupSyncTransportWithoutPasswordAccountStorage());
+  ASSERT_TRUE(SignIn());
+
+  // Explicitly opt out of account storage when signin is explicit.
+  // TODO(crbug.com/375024026): Revisit.
+  GetSyncService(0)->GetUserSettings()->SetSelectedType(
+      syncer::UserSelectableType::kPasswords, false);
+
+  ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
   ASSERT_FALSE(GetSyncService(0)->IsSyncFeatureEnabled());
 
   // Passwords and hence password sharing invitations should be disabled by
@@ -455,7 +446,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientIncomingPasswordSharingInvitationTest,
   // to become active.
   GetSyncService(0)->GetUserSettings()->SetSelectedType(
       syncer::UserSelectableType::kPasswords, true);
-  PasswordSyncActiveChecker(GetSyncService(0)).Wait();
+  ASSERT_TRUE(PasswordSyncActiveChecker(GetSyncService(0)).Wait());
 
   // Double check that both Passwords and Sharing Invitations are enabled.
   ASSERT_TRUE(GetSyncService(0)->GetActiveDataTypes().Has(syncer::PASSWORDS));

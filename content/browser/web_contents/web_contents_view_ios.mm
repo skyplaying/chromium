@@ -77,7 +77,9 @@ WebContentsViewIOS::WebContentsViewIOS(
   ui_view_->view_.backgroundColor = [UIColor lightGrayColor];
 }
 
-WebContentsViewIOS::~WebContentsViewIOS() {}
+WebContentsViewIOS::~WebContentsViewIOS() {
+  [ui_view_->view_ removeFromSuperview];
+}
 
 gfx::NativeView WebContentsViewIOS::GetNativeView() const {
   return gfx::NativeView(ui_view_->view_);
@@ -181,7 +183,7 @@ void WebContentsViewIOS::Resize(const gfx::Rect& new_bounds) {
 
 gfx::Size WebContentsViewIOS::GetSize() const {
   UIView* view = GetNativeView().Get();
-  DCHECK(view);
+  CHECK(view, base::NotFatalUntil::M158);
   CGRect frame = view.frame;
   return gfx::Size(frame.size.width, frame.size.height);
 }

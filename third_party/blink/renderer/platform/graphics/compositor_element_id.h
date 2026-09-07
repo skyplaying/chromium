@@ -27,6 +27,7 @@ enum class CompositorElementIdNamespace {
   kScroll,
   kStickyTranslation,
   kAnchorPositionScrollTranslation,
+  kElementCanvasTransform,
   kPrimaryEffect,
   kPrimaryTransform,
   kEffectFilter,
@@ -41,6 +42,7 @@ enum class CompositorElementIdNamespace {
   kViewTransitionScopeRoot,
   kViewTransitionElement,
   kElementCapture,
+  kUnboundedWrapperEffect,
   kDOMNodeId,
   // The following values are for internal usage only.
   kMax = kDOMNodeId,
@@ -53,9 +55,7 @@ static_assert(CompositorElementIdNamespace::kMax <
               CompositorElementIdNamespace::kMaxRepresentable);
 
 using CompositorElementId = cc::ElementId;
-using ScrollbarId = uint64_t;
 using UniqueObjectId = uint64_t;
-using SyntheticEffectId = uint64_t;
 
 // Call this to get a globally unique object id for a newly allocated object.
 UniqueObjectId PLATFORM_EXPORT NewUniqueObjectId();

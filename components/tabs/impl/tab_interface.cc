@@ -4,9 +4,20 @@
 
 #include "components/tabs/public/tab_interface.h"
 
+#include "components/tabs/public/tab_collection_types.h"
 #include "content/public/browser/web_contents_user_data.h"
 
 namespace tabs {
+
+void TabDeleter::operator()(TabInterface* tab) const {
+  if (tab) {
+    tab->DeleteSelf();
+  }
+}
+
+void TabInterface::DeleteSelf() {
+  delete this;
+}
 
 TabLookupFromWebContents::TabLookupFromWebContents(
     content::WebContents* contents,
@@ -32,6 +43,17 @@ const TabInterface* TabInterface::GetFromContents(
 TabInterface* TabInterface::MaybeGetFromContents(
     content::WebContents* web_contents) {
   TabLookupFromWebContents* lookup =
+      TabLookupFromWebContents::FromWebContents(web_contents);
+  if (!lookup) {
+    return nullptr;
+  }
+  return lookup->model();
+}
+
+// static
+const TabInterface* TabInterface::MaybeGetFromContents(
+    const content::WebContents* web_contents) {
+  const TabLookupFromWebContents* lookup =
       TabLookupFromWebContents::FromWebContents(web_contents);
   if (!lookup) {
     return nullptr;

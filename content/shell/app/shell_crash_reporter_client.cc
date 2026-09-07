@@ -24,17 +24,16 @@ namespace content {
 namespace {
 
 base::FilePath GetCrashDumpLocationInternal() {
+  const auto* command_line = base::CommandLine::ForCurrentProcess();
+  if (command_line->HasSwitch(switches::kCrashDumpsDir)) {
+    return command_line->GetSwitchValuePath(switches::kCrashDumpsDir);
+  }
   base::FilePath default_dir;
 #if BUILDFLAG(IS_IOS)
   CHECK(base::PathService::Get(base::DIR_CACHE, &default_dir));
   default_dir = default_dir.Append("Crashpad");
 #endif  // BUILDFLAG(IS_IOS)
-  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kCrashDumpsDir)) {
-    return default_dir;
-  }
-  return base::CommandLine::ForCurrentProcess()->GetSwitchValuePath(
-      switches::kCrashDumpsDir);
+  return default_dir;
 }
 
 }  // namespace
@@ -80,8 +79,7 @@ bool ShellCrashReporterClient::GetCrashDumpLocation(base::FilePath* crash_dir) {
 }
 
 void ShellCrashReporterClient::GetProductInfo(ProductInfo* product_info) {
-  product_info->product_name = "content_shell";
-  product_info->version = CONTENT_SHELL_VERSION;
+  *product_info = ProductInfo("content_shell", CONTENT_SHELL_VERSION, "");
 }
 
 bool ShellCrashReporterClient::EnableBreakpadForProcess(

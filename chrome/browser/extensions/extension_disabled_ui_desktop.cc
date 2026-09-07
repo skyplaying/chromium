@@ -9,7 +9,6 @@
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/scoped_observation.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -19,8 +18,8 @@
 #include "chrome/browser/extensions/extension_uninstall_dialog.h"
 #include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/global_error/global_error.h"
 #include "chrome/browser/ui/global_error/global_error_service.h"
 #include "chrome/browser/ui/global_error/global_error_service_factory.h"
@@ -35,7 +34,9 @@
 #include "extensions/common/extension.h"
 #include "extensions/common/icons/extension_icon_set.h"
 #include "extensions/common/permissions/permission_message.h"
+#include "extensions/common/permissions/permission_set.h"
 #include "extensions/common/permissions/permissions_data.h"
+#include "extensions/strings/grit/extensions_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/geometry/size.h"
 
@@ -63,14 +64,14 @@ class ExtensionDisabledGlobalError final
   bool HasMenuItem() override;
   int MenuItemCommandID() override;
   std::u16string MenuItemLabel() override;
-  void ExecuteMenuItem(Browser* browser) override;
+  void ExecuteMenuItem(BrowserWindowInterface* browser) override;
   std::u16string GetBubbleViewTitle() override;
   std::vector<std::u16string> GetBubbleViewMessages() override;
   std::u16string GetBubbleViewAcceptButtonLabel() override;
   std::u16string GetBubbleViewCancelButtonLabel() override;
-  void OnBubbleViewDidClose(Browser* browser) override {}
-  void BubbleViewAcceptButtonPressed(Browser* browser) override;
-  void BubbleViewCancelButtonPressed(Browser* browser) override;
+  void OnBubbleViewDidClose(BrowserWindowInterface* browser) override {}
+  void BubbleViewAcceptButtonPressed(BrowserWindowInterface* browser) override;
+  void BubbleViewCancelButtonPressed(BrowserWindowInterface* browser) override;
   base::WeakPtr<GlobalErrorWithStandardBubble> AsWeakPtr() override;
   bool ShouldCloseOnDeactivate() const override;
   bool ShouldShowCloseButton() const override;
@@ -143,7 +144,8 @@ std::u16string ExtensionDisabledGlobalError::MenuItemLabel() {
       extension_name);
 }
 
-void ExtensionDisabledGlobalError::ExecuteMenuItem(Browser* browser) {
+void ExtensionDisabledGlobalError::ExecuteMenuItem(
+    BrowserWindowInterface* browser) {
   ShowBubbleView(browser);
 }
 
@@ -162,6 +164,13 @@ ExtensionDisabledGlobalError::GetBubbleViewMessages() {
 
   std::unique_ptr<const PermissionSet> granted_permissions =
       ExtensionPrefs::Get(profile_)->GetGrantedPermissions(extension_->id());
+  // The granted-permissions pref may be missing or malformed (observed during
+  // install/uninstall/update races and on corrupted profiles). Fall back to an
+  // empty set so all current permissions are treated as newly granted, rather
+  // than dereferencing a null pointer.
+  if (!granted_permissions) {
+    granted_permissions = std::make_unique<PermissionSet>();
+  }
 
   PermissionMessages permission_warnings =
       extension_->permissions_data()->GetNewPermissionMessages(
@@ -198,7 +207,7 @@ std::u16string ExtensionDisabledGlobalError::GetBubbleViewCancelButtonLabel() {
 }
 
 void ExtensionDisabledGlobalError::BubbleViewAcceptButtonPressed(
-    Browser* browser) {
+    BrowserWindowInterface* browser) {
   // Delay extension reenabling so this bubble closes properly.
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
@@ -216,9 +225,9 @@ void ExtensionDisabledGlobalError::BubbleViewAcceptButtonPressed(
 }
 
 void ExtensionDisabledGlobalError::BubbleViewCancelButtonPressed(
-    Browser* browser) {
+    BrowserWindowInterface* browser) {
   uninstall_dialog_ = ExtensionUninstallDialog::Create(
-      profile_, browser->window()->GetNativeWindow(), this);
+      profile_, browser->GetWindow()->GetNativeWindow(), this);
   // Delay showing the uninstall dialog, so that this function returns
   // immediately, to close the bubble properly. See crbug.com/40184398.
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(

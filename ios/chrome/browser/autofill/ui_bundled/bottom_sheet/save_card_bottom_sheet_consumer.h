@@ -8,7 +8,8 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 
-#import "ios/chrome/browser/autofill/model/message/save_card_message_with_links.h"
+#import "ios/chrome/browser/autofill/model/message/autofill_legal_message_line.h"
+#import "ios/chrome/browser/autofill/ui_bundled/autofill_credit_card_ui_type.h"
 
 // Enum specifying the logo to be used for the image above the title of the
 // bottomsheet.
@@ -24,8 +25,6 @@ typedef NS_ENUM(NSInteger, AboveTitleImageLogoType) {
 };
 
 // Consumer interface for updating the save card bottomsheet UI.
-// TODO(crbug.com/406311602): Declare methods to set action button texts and to
-// show loading and confirmation.
 @protocol SaveCardBottomSheetConsumer <NSObject>
 
 // Sets the image to be displayed above the title of the bottomsheet.
@@ -49,7 +48,7 @@ typedef NS_ENUM(NSInteger, AboveTitleImageLogoType) {
 
 // Sets legal message to be displayed in the under title view of the
 // bottomsheet.
-- (void)setLegalMessages:(NSArray<SaveCardMessageWithLinks*>*)legalMessages;
+- (void)setLegalMessages:(NSArray<AutofillLegalMessageLine*>*)legalMessages;
 
 // Sets card information to be displayed in the under
 // title view of the bottomsheet.
@@ -64,6 +63,15 @@ typedef NS_ENUM(NSInteger, AboveTitleImageLogoType) {
 
 // Updates bottomsheet to show card upload is successful.
 - (void)showConfirmationState;
+
+@optional
+// Sets the validity state and error message for a specific field.
+- (void)setField:(AutofillCreditCardUIType)type
+         isValid:(BOOL)isValid
+    errorMessage:(NSString*)errorMessage;
+
+// Sets whether the save button should be enabled.
+- (void)setSaveButtonEnabled:(BOOL)enabled;
 
 @end
 

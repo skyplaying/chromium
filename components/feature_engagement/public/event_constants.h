@@ -67,18 +67,23 @@ extern const char kFocusHelpBubbleAcceleratorPromoRead[];
 // Th user clicked the extensions request access button in the toolbar.
 extern const char kExtensionsRequestAccessButtonClicked[];
 
-// The user has opened the cookie controls bubble.
-extern const char kCookieControlsBubbleShown[];
-
 // The user has accepted the Glic onboarding.
 extern const char kGlicOnboardingCompleted[];
 
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) ||
         // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
 
+#if BUILDFLAG(IS_WIN)
+// The search promotion was accepted by the user.
+extern const char kSearchPromotionAccepted[];
+#endif  // BUILDFLAG(IS_WIN)
+
 #if BUILDFLAG(IS_IOS)
 // The user has opened Chrome (cold start or from background).
 extern const char kChromeOpened[];
+
+// The user had at least one active session today.
+extern const char kChromeActiveSessionDay[];
 
 // The user has opened an incognito tab.
 extern const char kIncognitoTabOpened[];
@@ -169,9 +174,6 @@ extern const char kBlueDotPromoOverflowMenuDismissed[];
 
 // The user snoozed the Credential Provider Extension Promo.
 extern const char kCredentialProviderExtensionPromoSnoozed[];
-
-// The user tapped Remind Me Later on the Docking Promo.
-extern const char kDockingPromoRemindMeLater[];
 
 // The user opened an url from omnibox.
 extern const char kOpenUrlFromOmnibox[];
@@ -275,6 +277,9 @@ extern const char kMadeForIOSPromoTrigger[];
 
 // The stay safe default browser promo was triggered.
 extern const char kStaySafePromoTrigger[];
+
+// The default browser promos group was triggered.
+extern const char kDefaultBrowserPromosGroupTrigger[];
 
 // The tailored default browser promo group was triggered.
 extern const char kTailoredDefaultBrowserPromosGroupTrigger[];
@@ -412,8 +417,44 @@ extern const char kIOSGeminiFlowStartedNonPromo[];
 // Event fired when the Gemini consent is given.
 extern const char kIOSGeminiConsentGiven[];
 
+// Event fired when the user successfully switches to Gemini Live mode.
+extern const char kIOSGeminiLiveUsed[];
+
+// Event fired when the Gemini Live "New" badge is triggered.
+extern const char kIOSGeminiLiveNewBadgeTriggered[];
+
+// Event fired when the Gemini Live 1st-time IPH is triggered.
+extern const char kIOSGeminiLiveIPHTriggered[];
+
+// Event fired when the user taps the "What can Gemini do" suggestion chip.
+extern const char kIOSGeminiWhatCanGeminiDoTapped[];
+
+// Event fired when the "What can Gemini do" suggestion chip is shown to the
+// user. This is different from WhatCanGeminiDoTapped because it can be
+// triggered without the user tapping the chip.
+extern const char kIOSGeminiWhatCanGeminiDoTriggered[];
+
 // Event fired when the user pins a site to the most visited tile.
 extern const char kIOSPinMVTSiteUsed[];
+
+// Event fired on each foreground transition where no scene has a startup
+// parameter. This includes switching between two windows in multi-window mode
+// when the user opens Chrome from the icon.
+extern const char kIOSChromeOpenedFromIcon[];
+
+// Event fired when the Settings default browser card promo is clicked.
+extern const char kDefaultBrowserSettingsCardPromoUsed[];
+
+// Event fired when the Settings default browser cell promo is dismissed.
+extern const char kDefaultBrowserSettingsCellPromoUsed[];
+
+// Event fired when the Default Browser promo destination in the Overflow Menu
+// is used.
+extern const char kDefaultBrowserPromoOverflowMenuDestinationUsed[];
+
+// Event fired when the Default Browser promo shortcut in the Overflow Menu is
+// used.
+extern const char kDefaultBrowserPromoOverflowMenuShortcutsUsed[];
 
 #endif  // BUILDFLAG(IS_IOS)
 
@@ -422,6 +463,12 @@ extern const char kIOSPinMVTSiteUsed[];
 // The user has explicitly used the Install menu item under the App Menu.
 extern const char kPwaInstallMenuSelected[];
 #endif  // BUILDFLAG(IS_ANDROID)
+
+// The user clicked on the Send Tab to Self entry point in the omnibox
+// long-press menu.
+extern const char kSendTabToSelfOmniboxUsed[];
+
+extern const char kTabSearchComboButtonUsed[];
 
 }  // namespace events
 

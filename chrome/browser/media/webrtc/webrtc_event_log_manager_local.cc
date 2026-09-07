@@ -5,7 +5,8 @@
 #include "chrome/browser/media/webrtc/webrtc_event_log_manager_local.h"
 
 #include "base/files/file_util.h"
-#include "base/i18n/time_formatting.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
@@ -200,16 +201,34 @@ bool WebRtcLocalEventLogManager::DataChannelLogWrite(
 void WebRtcLocalEventLogManager::RenderProcessHostExitedDestroyed(
     int render_process_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(io_task_sequence_checker_);
+  StopLogging(render_process_id, StopLoggingAction::kStore, base::DoNothing());
+}
 
-  // Remove all of the peer connections associated with this render process.
+void WebRtcLocalEventLogManager::StopLogging(int render_process_id,
+                                             StopLoggingAction action,
+                                             base::OnceClosure callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(io_task_sequence_checker_);
+
   for (auto it = log_files_.begin(); it != log_files_.end();) {
     if (it->first.render_process_id == render_process_id) {
+      if (action == StopLoggingAction::kDelete) {
+        if (it->second.event_log) {
+          it->second.event_log->Delete();
+        }
+        // Data channel logs are not deleted because the only case for deleting
+        // logs is via the Diagnostic Logging Cancel API, which does not cover
+        // data channels.
+      }
       StopEventLogFileIfStarted(it);
       StopDataChannelLogFileIfStarted(it);
       it = log_files_.erase(it);
     } else {
       ++it;
     }
+  }
+
+  if (callback) {
+    std::move(callback).Run();
   }
 }
 
@@ -333,7 +352,8 @@ base::FilePath WebRtcLocalEventLogManager::GetFilePath(
   base::Time::Exploded exploded;
   now.LocalExplode(&exploded);
   const std::string timestamp =
-      base::UnlocalizedTimeFormatWithPattern(now, "yyyyMMdd_HHmm");
+      base::StringPrintf("%04d%02d%02d_%02d%02d", exploded.year, exploded.month,
+                         exploded.day_of_month, exploded.hour, exploded.minute);
   return base_path.InsertBeforeExtension(FILE_PATH_LITERAL("_"))
       .AddExtension(log_file_writer_factory_.Extension())
       .InsertBeforeExtensionASCII(base::StringPrintf(

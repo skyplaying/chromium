@@ -19,6 +19,7 @@
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/time/time.h"
 #include "components/google/core/common/google_util.h"
 #include "components/history/core/browser/features.h"
@@ -272,7 +273,10 @@ void VisitDatabase::FillVisitRow(sql::Statement& statement, VisitRow* visit) {
   visit->url_id = statement.ColumnInt64(1);
   visit->visit_time = statement.ColumnTime(2);
   visit->referring_visit = statement.ColumnInt64(3);
-  visit->external_referrer_url = GURL(statement.ColumnStringView(4));
+  // Skip GURL parsing for empty referrer URLs (the common case).
+  auto referrer_view = statement.ColumnStringView(4);
+  visit->external_referrer_url =
+      referrer_view.empty() ? GURL() : GURL(referrer_view);
   visit->transition = PageTransitionFromIntWithFallback(statement.ColumnInt(5));
   visit->segment_id = statement.ColumnInt64(6);
   visit->visit_duration = statement.ColumnTimeDelta(7);
@@ -285,9 +289,10 @@ void VisitDatabase::FillVisitRow(sql::Statement& statement, VisitRow* visit) {
   visit->is_known_to_sync = statement.ColumnBool(14);
   visit->consider_for_ntp_most_visited = statement.ColumnBool(15);
   visit->visited_link_id = statement.ColumnInt64(16);
-  std::string app_id = statement.ColumnString(17);
-  if (!app_id.empty()) {
-    visit->app_id = app_id;
+  // Use ColumnStringView to avoid allocating when the value is empty.
+  auto app_id_view = statement.ColumnStringView(17);
+  if (!app_id_view.empty()) {
+    visit->app_id = std::string(app_id_view);
   }
   if (statement.ColumnCount() > 18) {
     visit->source = VisitSourceFromInt(statement.ColumnInt(18));
@@ -302,9 +307,8 @@ bool VisitDatabase::FillVisitVector(sql::Statement& statement,
   }
 
   while (statement.Step()) {
-    VisitRow visit;
-    FillVisitRow(statement, &visit);
-    visits->push_back(visit);
+    visits->emplace_back();
+    FillVisitRow(statement, &visits->back());
   }
 
   return statement.Succeeded();
@@ -338,10 +342,8 @@ bool VisitDatabase::FillVisitVectorWithOptions(sql::Statement& statement,
       }
 
       bool is_actor_visit = false;
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
-      if (history::IsBrowsingHistoryActorIntegrationM2Enabled()) {
-        is_actor_visit = (visit.source == SOURCE_ACTOR);
-      }
+#if !BUILDFLAG(IS_IOS)
+      is_actor_visit = visit.source == SOURCE_ACTOR;
 #endif
 
       // Make sure the (URLID, is_actor_visit) is unique.
@@ -414,12 +416,13 @@ VisitID VisitDatabase::AddVisit(VisitRow* visit) {
 
   visit->visit_id = GetDB().GetLastInsertRowId();
 
-  if (visit->source != SOURCE_BROWSED) {
+  CHECK(visit->source.has_value());
+  if (visit->source.value() != SOURCE_BROWSED) {
     // Record the source of this visit when it is not browsed.
     sql::Statement statement1(GetDB().GetCachedStatement(
         SQL_FROM_HERE, "INSERT INTO visit_source (id, source) VALUES (?,?)"));
     statement1.BindInt64(0, visit->visit_id);
-    statement1.BindInt64(1, visit->source);
+    statement1.BindInt64(1, visit->source.value());
 
     if (!statement1.Run()) {
       DVLOG(0) << "Failed to execute visit_source insert statement:  "
@@ -605,16 +608,25 @@ bool VisitDatabase::PrepareVisibleVisitsQuery(
 
 // TODO(crbug.com/457641486) Clean up preprocessor statements once feature is
 // rolled out.
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
-  if (history::IsBrowsingHistoryActorIntegrationM2Enabled()) {
-    sql += ", IFNULL(visit_source.source,1)";
-    joins += " LEFT JOIN visit_source ON visits.id = visit_source.id";
+#if !BUILDFLAG(IS_IOS)
+  sql += ", IFNULL(visit_source.source, 1)";
+  joins += " LEFT JOIN visit_source ON visits.id = visit_source.id";
 
-    if (!options.include_actor_visits) {
+  if (history::IsBrowsingHistoryActorIntegrationM3Enabled()) {
+    CHECK(options.include_user_visits || options.include_actor_visits);
+
+    if (options.include_user_visits && !options.include_actor_visits) {
       where_clauses.push_back(
-          "(visit_source.source IS NULL OR visit_source.source!=?)");
+          "(visit_source.source IS NULL OR visit_source.source != ?)");
+      binding_values.push_back(SOURCE_ACTOR);
+    } else if (!options.include_user_visits && options.include_actor_visits) {
+      where_clauses.push_back("visit_source.source = ?");
       binding_values.push_back(SOURCE_ACTOR);
     }
+  } else if (!options.include_actor_visits) {
+    where_clauses.push_back(
+        "(visit_source.source IS NULL OR visit_source.source != ?)");
+    binding_values.push_back(SOURCE_ACTOR);
   }
 #endif
 
@@ -645,8 +657,32 @@ bool VisitDatabase::PrepareVisibleVisitsQuery(
   binding_values.push_back(options.EffectiveBeginTime());
   binding_values.push_back(options.EffectiveEndTime());
 
-  // This must be the last where clause added, as the App ID string is bound
-  // manually after the integer values in `binding_values` are bound.
+  if (options.restrict_to_synced_urls) {
+    where_clauses.push_back("visits.is_known_to_sync = 1");
+  }
+
+  if (!options.client_ids.empty()) {
+    std::vector<std::string> placeholders(options.client_ids.size(), "?");
+    std::string in_clause =
+        base::StringPrintf("visits.originator_cache_guid IN (%s)",
+                           base::JoinString(placeholders, ", ").c_str());
+
+    bool match_local_device =
+        !local_device_originator_cache_guid_.empty() &&
+        std::ranges::contains(options.client_ids,
+                              local_device_originator_cache_guid_);
+    if (match_local_device) {
+      where_clauses.push_back(
+          base::StringPrintf("(%s OR visits.originator_cache_guid IS NULL OR "
+                             "visits.originator_cache_guid = '')",
+                             in_clause.c_str()));
+    } else {
+      where_clauses.push_back(in_clause);
+    }
+  }
+
+  // String parameters (client_ids, app_id) are bound after integer values in
+  // `binding_values`.
   if (options.app_id) {
     where_clauses.push_back("visits.app_id = ?");
   }
@@ -671,6 +707,12 @@ bool VisitDatabase::PrepareVisibleVisitsQuery(
 
   for (int64_t value : binding_values) {
     out_statement.BindInt64(bind_index++, value);
+  }
+
+  if (!options.client_ids.empty()) {
+    for (const std::string& client_id : options.client_ids) {
+      out_statement.BindString(bind_index++, client_id);
+    }
   }
 
   if (options.app_id) {
@@ -1395,6 +1437,12 @@ bool VisitDatabase::GetIsUrlKnownToSync(URLID url_id, bool* is_known_to_sync) {
   statement.BindInt64(0, url_id);
   *is_known_to_sync = statement.Step();
   return true;
+}
+
+void VisitDatabase::SetLocalDeviceOriginatorCacheGuid(
+    std::string local_device_originator_cache_guid) {
+  local_device_originator_cache_guid_ =
+      std::move(local_device_originator_cache_guid);
 }
 
 bool VisitDatabase::MigrateVisitsWithoutDuration() {

@@ -7,7 +7,6 @@
 namespace features {
 
 BASE_FEATURE(kAILanguageModelOverrideConfiguration,
-             "kAILanguageModelOverrideConfiguration",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 // The number of tokens to use as a buffer for generating output. At least this

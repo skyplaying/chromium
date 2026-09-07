@@ -10,6 +10,7 @@
 #include <set>
 #include <string>
 
+#include "base/callback_list.h"
 #include "base/containers/span.h"
 #include "base/functional/callback.h"
 #include "base/i18n/rtl.h"
@@ -89,6 +90,7 @@ class InterfaceRegistry;
 class PageState;
 class WebAssociatedURLLoader;
 class WebAutofillClient;
+class WebRecordReplayClient;
 class WebContentCaptureClient;
 class WebContentSettingsClient;
 class WebLocalFrameClient;
@@ -107,7 +109,6 @@ class WebTextCheckClient;
 class WebURL;
 class WebView;
 struct FramePolicy;
-struct Impression;
 struct WebAssociatedURLLoaderOptions;
 struct WebConsoleMessage;
 struct WebIsolatedWorldInfo;
@@ -143,12 +144,13 @@ class BLINK_EXPORT WebLocalFrame : public WebFrame {
       CrossVariantMojoRemote<mojom::BrowserInterfaceBrokerInterfaceBase>,
       const LocalFrameToken& frame_token,
       const DocumentToken& document_token,
+      const InitiatorStateToken& initiator_state_token,
       std::unique_ptr<blink::WebPolicyContainer> policy_container,
       WebFrame* opener = nullptr,
       const WebString& name = WebString(),
       network::mojom::WebSandboxFlags = network::mojom::WebSandboxFlags::kNone,
-      const WebURL& base_url = WebURL());
-
+      const WebURL& base_url = WebURL(),
+      std::unique_ptr<base::UnguessableToken> sandbox_origin_token = nullptr);
   // Used to create a provisional local frame. Currently, it's possible for a
   // provisional navigation not to commit (i.e. it might turn into a download),
   // but this can only be determined by actually trying to load it. The loading
@@ -210,6 +212,9 @@ class BLINK_EXPORT WebLocalFrame : public WebFrame {
   virtual void SetAutofillClient(WebAutofillClient*) = 0;
   virtual WebAutofillClient* AutofillClient() = 0;
 
+  virtual void SetRecordReplayClient(WebRecordReplayClient*) = 0;
+  virtual WebRecordReplayClient* RecordReplayClient() = 0;
+
   virtual void SetContentCaptureClient(WebContentCaptureClient*) = 0;
   virtual WebContentCaptureClient* ContentCaptureClient() const = 0;
 
@@ -222,6 +227,7 @@ class BLINK_EXPORT WebLocalFrame : public WebFrame {
   }
 
   virtual WebDocument GetDocument() const = 0;
+  virtual InitiatorStateToken GetInitiatorStateToken() const = 0;
 
   // The name of this frame. If no name is given, empty string is returned.
   virtual WebString AssignedName() const = 0;
@@ -307,9 +313,6 @@ class BLINK_EXPORT WebLocalFrame : public WebFrame {
   // Navigation Ping --------------------------------------------------------
 
   virtual void SendPings(const WebURL& destination_url) = 0;
-
-  virtual void SendAttributionSrc(const std::optional<Impression>&,
-                                  bool did_navigate) = 0;
 
   // Navigation ----------------------------------------------------------
 
@@ -454,9 +457,11 @@ class BLINK_EXPORT WebLocalFrame : public WebFrame {
                                         v8::Local<v8::Value> argv[],
                                         WebScriptExecutionCallback) = 0;
 
-  // Executes the script in the main world of the page.
+  // Executes the script in the specified world of the page.
   // Use kMainDOMWorldId to execute in the main world; otherwise,
   // `world_id` must be a positive integer and less than kEmbedderWorldIdLimit.
+  // If `script_injector_id` is non-empty, the script is marked by the
+  // ExtensionScriptTracker.
   virtual void RequestExecuteScript(int32_t world_id,
                                     base::span<const WebScriptSource> sources,
                                     mojom::UserActivationOption,
@@ -465,7 +470,8 @@ class BLINK_EXPORT WebLocalFrame : public WebFrame {
                                     WebScriptExecutionCallback,
                                     BackForwardCacheAware,
                                     mojom::WantResultOption,
-                                    mojom::PromiseResultOption) = 0;
+                                    mojom::PromiseResultOption,
+                                    const WebString& script_injector_id) = 0;
 
   // Returns if devtools is connected to the frame.
   virtual bool IsInspectorConnected() = 0;
@@ -778,9 +784,9 @@ class BLINK_EXPORT WebLocalFrame : public WebFrame {
   virtual void DeprecatedStopLoading() = 0;
 
   // Invokes the given callback when the Blink determines it is in an idle
-  // period of network resource requests. Only one callback is currently
-  // supported at a time.
-  virtual void RequestNetworkIdleCallback(base::OnceClosure callback) = 0;
+  // period of network resource requests.
+  [[nodiscard]] virtual base::CallbackListSubscription
+  RequestNetworkIdleCallback(base::OnceClosure callback) = 0;
 
   // Geometry -----------------------------------------------------------------
 
@@ -893,7 +899,6 @@ class BLINK_EXPORT WebLocalFrame : public WebFrame {
   // created. This is not currently propagated when a frame navigates
   // cross-origin.
   virtual bool IsFrameCreatedByAdScript() = 0;
-
   // User activation -----------------------------------------------------------
 
   // See |blink::LocalFrame::NotifyUserActivation()|.

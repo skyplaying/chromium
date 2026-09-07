@@ -8,10 +8,12 @@
 #include <optional>
 
 #include "base/functional/callback.h"
+#include "base/memory/safe_ref.h"
 #include "base/supports_user_data.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/render_frame_host.h"
 #include "third_party/blink/public/mojom/manifest/manifest.mojom-forward.h"
+#include "third_party/blink/public/mojom/media/capture_handle_config.mojom.h"
 #include "third_party/perfetto/include/perfetto/tracing/traced_value_forward.h"
 #include "url/gurl.h"
 
@@ -101,12 +103,22 @@ class CONTENT_EXPORT Page : public base::SupportsUserData {
 
   virtual base::WeakPtr<Page> GetWeakPtr() = 0;
 
+  // Returns a SafeRef to this Page.
+  virtual base::SafeRef<Page> GetSafeRef() = 0;
+
   // Whether the most recent page scale factor sent by the main frame's renderer
   // is 1 (i.e. no magnification).
   virtual bool IsPageScaleFactorOne() = 0;
 
   // Returns the MIME type bound to the Page contents after a navigation.
   virtual const std::string& GetContentsMimeType() const = 0;
+
+  // Returns the capture handle configuration for this page.
+  virtual const blink::mojom::CaptureHandleConfig& GetCaptureHandleConfig() = 0;
+
+  // Sets the capture handle configuration for this page.
+  virtual void SetCaptureHandleConfig(
+      blink::mojom::CaptureHandleConfigPtr config) = 0;
 
 #if BUILDFLAG(IS_ANDROID)
   // Returns a reference to Page Java counterpart.

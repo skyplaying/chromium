@@ -25,7 +25,6 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -39,7 +38,6 @@ import org.chromium.ui.modelutil.SimpleRecyclerViewAdapter;
 
 /** Unit tests for {@link TabGroupListBottomSheetView}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class TabGroupListBottomSheetViewUnitTest {
     @Rule
     public ActivityScenarioRule<TestActivity> mActivityScenarioRule =
@@ -82,6 +80,20 @@ public class TabGroupListBottomSheetViewUnitTest {
         RecyclerView recyclerView =
                 mBottomSheetView.getContentView().findViewById(R.id.tab_group_parity_recycler_view);
         assertEquals(mAdapter, recyclerView.getAdapter());
+    }
+
+    @Test
+    public void testAddBottomPadding() {
+        RecyclerView recyclerView =
+                mBottomSheetView.getContentView().findViewById(R.id.tab_group_parity_recycler_view);
+
+        mBottomSheetView.addBottomPadding();
+
+        ViewGroup.MarginLayoutParams params =
+                (ViewGroup.MarginLayoutParams) recyclerView.getLayoutParams();
+        int expectedMargin =
+                mContext.getResources().getDimensionPixelSize(R.dimen.default_list_row_padding);
+        assertEquals(expectedMargin, params.bottomMargin);
     }
 
     @Test

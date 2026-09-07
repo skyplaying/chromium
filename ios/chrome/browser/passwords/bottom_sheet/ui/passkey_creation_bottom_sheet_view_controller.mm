@@ -9,9 +9,9 @@
 #import "base/check.h"
 #import "base/memory/raw_ptr.h"
 #import "base/strings/sys_string_conversions.h"
+#import "components/webauthn/ios/ios_passkey_client_commands.h"
 #import "ios/chrome/browser/favicon/model/favicon_loader.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/create_password_manager_title_view.h"
-#import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/common/ui/button_stack/button_stack_configuration.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
@@ -160,11 +160,11 @@ UILabel* CreateSubtitleLabel() {
   // The email for the passkey request.
   NSString* _email;
 
-  // URL of the current page the bottom sheet is being displayed on.
-  GURL _url;
+  // Relying party identifier of the passkey request.
+  NSString* _rpId;
 
   // The passkey creation handler for user actions.
-  __weak id<BrowserCoordinatorCommands> _handler;
+  __weak id<IOSPasskeyClientCommands> _handler;
 
   // The favicon loader.
   raw_ptr<FaviconLoader> _faviconLoader;
@@ -174,7 +174,7 @@ UILabel* CreateSubtitleLabel() {
 
 @implementation PasskeyCreationBottomSheetViewController
 
-- (instancetype)initWithHandler:(id<BrowserCoordinatorCommands>)handler
+- (instancetype)initWithHandler:(id<IOSPasskeyClientCommands>)handler
                   faviconLoader:(FaviconLoader*)faviconLoader {
   self = [super initWithConfiguration:SetUpButtons()];
   if (self) {
@@ -217,10 +217,12 @@ UILabel* CreateSubtitleLabel() {
 
 #pragma mark - PasskeyCreationBottomSheetConsumer
 
-- (void)setUsername:(NSString*)username email:(NSString*)email url:(GURL)url {
+- (void)setUsername:(NSString*)username
+              email:(NSString*)email
+               rpId:(NSString*)rpId {
   _username = username;
   _email = email;
-  _url = url;
+  _rpId = rpId;
 }
 
 #pragma mark - Private
@@ -249,8 +251,9 @@ UILabel* CreateSubtitleLabel() {
 
     faviconView.contentMode = UIViewContentModeScaleAspectFit;
     faviconView.tintColor = [UIColor colorNamed:kTextPrimaryColor];
+    GURL pageURL("https://" + base::SysNSStringToUTF8(_rpId));
     _faviconLoader->FaviconForPageUrl(
-        _url, kFaviconSize, kFaviconSize,
+        pageURL, kFaviconSize, kFaviconSize,
         /*fallback_to_google_server=*/true,
         ^(FaviconAttributes* attributes, bool cached) {
           [faviconView configureWithAttributes:attributes];
@@ -262,7 +265,7 @@ UILabel* CreateSubtitleLabel() {
   usernameLabel.text = _username;
 
   UILabel* domainLabel = CreateDomainLabel();
-  domainLabel.text = base::SysUTF8ToNSString(_url.host());
+  domainLabel.text = _rpId;
 
   UIStackView* textStack =
       CreateLabelsStackView(@[ usernameLabel, domainLabel ]);

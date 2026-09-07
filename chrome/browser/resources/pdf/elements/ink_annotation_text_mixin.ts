@@ -2,22 +2,25 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {assertNotReachedCase} from 'chrome://resources/js/assert.js';
-import type {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
+import {assert, assertNotReachedCase} from 'chrome://resources/js/assert.js';
+import type {CrLitElement, PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
 import type {Color, TextAttributes} from '../constants.js';
 import {TextTypeface} from '../constants.js';
 import {Ink2Manager} from '../ink2_manager.js';
-import {hexToColor} from '../pdf_viewer_utils.js';
+import {colorsEqual, hexToColor} from '../pdf_viewer_utils.js';
 
 import type {ColorOption} from './ink_color_selector.js';
 
 type Constructor<T> = new (...args: any[]) => T;
 
+// LINT.IfChange(TextSizes)
 export const TEXT_SIZES: number[] =
     [6, 8, 10, 12, 14, 16, 18, 20, 24, 28, 32, 40, 48, 64, 72, 100];
+// LINT.ThenChange(//pdf/pdfium/pdfium_ink_reader.cc:TextSizes)
 
 export const TEXT_COLORS: ColorOption[] = [
+  // LINT.IfChange(TextAnnotationColors)
   // Row 1:
   {label: 'annotationColorBlack', color: '#000000', blended: false},
   {label: 'ink2BrushColorDarkGrey2', color: '#5f6368', blended: false},
@@ -42,6 +45,7 @@ export const TEXT_COLORS: ColorOption[] = [
   {label: 'ink2BrushColorGreen3', color: '#188038', blended: false},
   {label: 'ink2TextColorCyan3', color: '#12a4af', blended: false},
   {label: 'ink2BrushColorBlue3', color: '#1967d2', blended: false},
+  // LINT.ThenChange(//pdf/pdf_ink_metrics_handler.cc:TextAnnotationColors)
 ];
 
 export const InkAnnotationTextMixin =
@@ -71,6 +75,20 @@ export const InkAnnotationTextMixin =
         ];
         accessor sizes: number[] = TEXT_SIZES;
 
+        override firstUpdated(changedProperties: PropertyValues<this>) {
+          super.firstUpdated(changedProperties);
+          const typefaceSelect =
+              this.shadowRoot.querySelector<HTMLSelectElement>(
+                  '#typefaceSelect');
+          assert(typefaceSelect);
+          typefaceSelect.value = this.currentTypeface;
+
+          const sizeSelect =
+              this.shadowRoot.querySelector<HTMLSelectElement>('#sizeSelect');
+          assert(sizeSelect);
+          sizeSelect.value = this.currentSize.toString();
+        }
+
         getLabelForTypeface(typeface: TextTypeface): string {
           switch (typeface) {
             case TextTypeface.SANS_SERIF:
@@ -82,14 +100,6 @@ export const InkAnnotationTextMixin =
             default:
               assertNotReachedCase(typeface);
           }
-        }
-
-        isSelectedTypeface(typeface: TextTypeface): boolean {
-          return typeface === this.currentTypeface;
-        }
-
-        isSelectedSize(size: number): boolean {
-          return size === this.currentSize;
         }
 
         onTypefaceSelected(e: Event) {
@@ -105,9 +115,7 @@ export const InkAnnotationTextMixin =
         onCurrentColorChanged(e: CustomEvent<{value: Color}>) {
           // Avoid poking the plugin if the value hasn't actually changed.
           const newColor = e.detail.value;
-          if (newColor.r !== this.currentColor.r ||
-              newColor.b !== this.currentColor.b ||
-              newColor.g !== this.currentColor.g) {
+          if (!colorsEqual(newColor, this.currentColor)) {
             Ink2Manager.getInstance().setTextColor(newColor);
           }
         }
@@ -129,10 +137,8 @@ export interface InkAnnotationTextMixinInterface {
   fontNames: TextTypeface[];
   sizes: number[];
   getLabelForTypeface(typeface: TextTypeface): string;
-  isSelectedTypeface(typeface: string): boolean;
-  isSelectedSize(size: number): boolean;
   onTypefaceSelected(e: Event): void;
   onCurrentColorChanged(e: CustomEvent<{value: Color}>): void;
-  onSizeSelected(e: CustomEvent<{value: number}>): void;
+  onSizeSelected(e: Event): void;
   onTextAttributesChanged(attributes: TextAttributes): void;
 }

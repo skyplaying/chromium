@@ -60,20 +60,6 @@ void UpdateItemForWebContents(NSMenuItem* item,
         gfx::ElideMenuItemTitle(tab_ui_helper->GetTitle()));
   }
 
-  if (base::FeatureList::IsEnabled(features::kShowTabGroupsMacSystemMenu)) {
-    std::optional<tab_groups::TabGroupColorId> tab_group_color_id;
-    std::optional<tab_groups::TabGroupId> group =
-        tab_strip_model->GetTabForWebContents(web_contents)->GetGroup();
-    if (group.has_value()) {
-      TabGroup* tab_group =
-          tab_strip_model->group_model()->GetTabGroup(group.value());
-      if (tab_group) {
-        tab_group_color_id = tab_group->visual_data()->color();
-      }
-    }
-
-    chrome::UpdateGroupIndicatorForMenuItem(item, tab_group_color_id);
-  }
 
   item.image = NSImageFromImageSkia(
       tab_ui_helper->GetFavicon().Rasterize(&web_contents->GetColorProvider()));
@@ -180,6 +166,8 @@ void TabMenuBridge::SetTabStripModel(TabStripModel* model) {
     AddDynamicItemsFromModel();
   } else {
     RemoveMenuItems(DynamicMenuItems());
+    menu_item_to_tab_.clear();
+    tab_to_menu_item_.clear();
   }
 }
 
@@ -209,6 +197,8 @@ void TabMenuBridge::AddDynamicItemsFromModel() {
   NSMutableArray* recyclable_items = DynamicMenuItems();
   NSMenu* tabMenu = menu_item_.submenu;
 
+  menu_item_to_tab_.clear();
+  tab_to_menu_item_.clear();
   dynamic_items_start_ = tabMenu.numberOfItems - recyclable_items.count;
   for (int i = 0; i < model_->count(); ++i) {
     NSMenuItem* item;
@@ -227,7 +217,11 @@ void TabMenuBridge::AddDynamicItemsFromModel() {
     if (model_->active_index() == i) {
       [item setState:NSControlStateValueOn];
     }
-    UpdateItemForWebContents(item, model_->GetWebContentsAt(i), model_);
+
+    tabs::TabInterface* tab = model_->GetTabAtIndex(i);
+    UpdateItemForWebContents(item, tab->GetContents(), model_);
+    menu_item_to_tab_[item] = tab;
+    tab_to_menu_item_[tab] = item;
 
     if ([item menu] == nil) {
       [tabMenu addItem:item];
@@ -243,7 +237,16 @@ void TabMenuBridge::OnDynamicItemChosen(NSMenuItem* item) {
   }
 
   DCHECK_EQ(item.target, menu_listener_);
-  int index = [menu_item_.submenu indexOfItem:item] - dynamic_items_start_;
+  auto it = menu_item_to_tab_.find(item);
+  if (it == menu_item_to_tab_.end()) {
+    return;
+  }
+
+  int index = model_->GetIndexOfTab(it->second);
+  if (index == TabStripModel::kNoTab) {
+    return;
+  }
+
   model_->ActivateTabAt(index,
                         TabStripUserGestureDetails(
                             TabStripUserGestureDetails::GestureType::kTabMenu));
@@ -258,6 +261,19 @@ void TabMenuBridge::OnTabStripModelChanged(
 
   if (!force_rebuild_menu_ && ![menu_listener_ isMenuOpen]) {
     [menu_listener_ setRebuildMenu:YES];
+    // When tabs are removed while the menu is not open, erase their entries
+    // from the map to release raw_ptr<TabInterface> before the tabs are freed.
+    // For other changes (moves, inserts, etc.), keep the existing map so that
+    // clicks on stale menu items can still activate the correct tab.
+    if (change.type() == TabStripModelChange::kRemoved) {
+      for (const auto& removed_tab : change.GetRemove()->contents) {
+        auto it = tab_to_menu_item_.find(removed_tab.tab);
+        if (it != tab_to_menu_item_.end()) {
+          menu_item_to_tab_.erase(it->second);
+          tab_to_menu_item_.erase(it);
+        }
+      }
+    }
     return;
   }
 
@@ -275,7 +291,6 @@ void TabMenuBridge::OnTabStripModelChanged(
 }
 
 void TabMenuBridge::OnTabChangedAt(tabs::TabInterface* tab,
-                                   int index,
                                    TabChangeType change_type) {
   DCHECK(model_);
 
@@ -290,25 +305,15 @@ void TabMenuBridge::OnTabChangedAt(tabs::TabInterface* tab,
     return;
   }
 
-  int menu_index = index + dynamic_items_start_;
-
-  // It might seem like this can't happen but actually it can:
-  // 1) Someone calls TabMenuModel::AddWebContents
-  // 2) Some other observer (not this) is notified of the add
-  // 3) That observer responds by doing something that eventually leads into
-  //    UpdateWebContentsStateAt, while this class still hasn't observed the
-  //    OnTabStripModelChanged (but the method that will notify us is on the
-  //    stack)
-  // 4) That UpdateWebContentsStateAt causes this object to observe a
-  //    TabChangedAt for an index it hasn't yet been informed exists
-  // As such, this code early-outs instead of DCHECKing. The newly-added
-  // WebContents will be picked up later anyway when this object does get
-  // notified of the addition.
-  if (menu_index < 0 || menu_index >= menu_item_.submenu.numberOfItems) {
+  auto it = tab_to_menu_item_.find(tab);
+  if (it == tab_to_menu_item_.end()) {
+    // If OnTabChangedAt fires before this observer has observed a newly added
+    // tab, it will not be in the map yet. Early-out safely here; the item will
+    // be created when we process the addition notification.
     return;
   }
 
-  NSMenuItem* item = [menu_item_.submenu itemAtIndex:menu_index];
+  NSMenuItem* item = it->second;
   UpdateItemForWebContents(item, tab->GetContents(), model_);
 }
 
@@ -344,4 +349,6 @@ void TabMenuBridge::TabGroupedStateChanged(
 void TabMenuBridge::OnTabStripModelDestroyed(TabStripModel* model) {
   model_->RemoveObserver(this);
   model_ = nullptr;
+  menu_item_to_tab_.clear();
+  tab_to_menu_item_.clear();
 }

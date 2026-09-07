@@ -25,16 +25,15 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import org.chromium.base.CallbackUtils;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.ApplicationTestUtils;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.DisableIf;
-import org.chromium.base.test.util.Features;
 import org.chromium.chrome.browser.browserservices.TrustedWebActivityTestUtil;
 import org.chromium.chrome.browser.browserservices.ui.controller.AuthTabVerifier;
 import org.chromium.chrome.browser.browserservices.ui.controller.CurrentPageVerifier.VerificationStatus;
 import org.chromium.chrome.browser.customtabs.CustomTabDelegateFactory.CustomTabNavigationDelegate;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabDelegateFactory;
@@ -145,7 +144,8 @@ public class CustomTabExternalNavigationTest {
         mTestAppActivityTestRule.startOnBlankPage();
         Context context = ApplicationProvider.getApplicationContext();
         Intent intent =
-                CustomTabsIntentTestUtils.createCustomTabIntent(context, url, false, builder -> {})
+                CustomTabsIntentTestUtils.createCustomTabIntent(
+                                context, url, false, CallbackUtils.emptyCallback())
                         .putExtra(AuthTabIntent.EXTRA_LAUNCH_AUTH_TAB, true)
                         .putExtra(AuthTabIntent.EXTRA_REDIRECT_SCHEME, CUSTOM_SCHEME)
                         .putExtra(
@@ -205,7 +205,6 @@ public class CustomTabExternalNavigationTest {
 
     @Test
     @SmallTest
-    @Features.EnableFeatures(ChromeFeatureList.CCT_AUTH_TAB)
     public void testAuthTabShouldReturnAsActivityResult_customScheme() throws TimeoutException {
         setUpAuthTab();
 
@@ -220,7 +219,6 @@ public class CustomTabExternalNavigationTest {
 
     @Test
     @SmallTest
-    @Features.EnableFeatures(ChromeFeatureList.CCT_AUTH_TAB)
     public void testAuthTabReturnAsActivityResult_httpsRedirectUrl() throws TimeoutException {
         setUpAuthTab();
         var result = getOverrideUrlLoadingResult(AUTH_TAB_OTHER_URL);
@@ -235,7 +233,6 @@ public class CustomTabExternalNavigationTest {
 
     @Test
     @SmallTest
-    @Features.EnableFeatures(ChromeFeatureList.CCT_AUTH_TAB)
     public void testAuthTabReturnAsActivityResult_httpsRedirectUrlDelayed()
             throws TimeoutException {
         // Set the testing flag to simulate the case where the result has not yet arrived.
@@ -265,7 +262,7 @@ public class CustomTabExternalNavigationTest {
     @DisableIf.Build(
             supported_abis_includes = "x86_64",
             sdk_is_less_than = VERSION_CODES.TIRAMISU,
-            message = "crbug.com/1188920")
+            message = "crbug.com/40755139")
     public void testIntentPickerNotShownForNormalUrl() throws TimeoutException {
         setUpTwa();
         final GURL testUrl = new GURL("http://customtabtest.com");
@@ -275,7 +272,9 @@ public class CustomTabExternalNavigationTest {
                 new ExternalNavigationParams.Builder(testUrl, false)
                         .setRedirectHandler(redirectHandler)
                         .build();
-        OverrideUrlLoadingResult result = mUrlHandler.shouldOverrideUrlLoading(params);
+        OverrideUrlLoadingResult result =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () -> mUrlHandler.shouldOverrideUrlLoading(params));
         assertEquals(OverrideUrlLoadingResultType.NO_OVERRIDE, result.getResultType());
     }
 
@@ -290,7 +289,6 @@ public class CustomTabExternalNavigationTest {
      */
     @Test
     @SmallTest
-    @Features.EnableFeatures({ChromeFeatureList.ANDROID_WEB_APP_LAUNCH_HANDLER})
     public void testShouldDisableExternalIntentRequestsForUrl() throws TimeoutException {
         setUpTwa();
         mNavigationDelegate.setTabLaunchTypeForTesting(TabLaunchType.FROM_LONGPRESS_FOREGROUND);
@@ -309,10 +307,10 @@ public class CustomTabExternalNavigationTest {
         ExternalNavigationParams params1 =
                 new ExternalNavigationParams.Builder(
                                 insideVerifiedOriginUrl,
-                                /* isIncognito */ false,
-                                /* referrer */ GURL.emptyGURL(),
-                                /* pageTransition */ 0,
-                                /* isRedirect */ false)
+                                /* isIncognito= */ false,
+                                /* referrer= */ null,
+                                /* pageTransition= */ 0,
+                                /* isRedirect= */ false)
                         .setRedirectHandler(RedirectHandler.create())
                         .setIsTabInPWA(false)
                         .setIsInitialNavigationInFrame(true)
@@ -323,10 +321,10 @@ public class CustomTabExternalNavigationTest {
         ExternalNavigationParams params2 =
                 new ExternalNavigationParams.Builder(
                                 outsideVerifiedOriginUrl,
-                                /* isIncognito */ false,
-                                /* referrer */ GURL.emptyGURL(),
-                                /* pageTransition */ 0,
-                                /* isRedirect */ false)
+                                /* isIncognito= */ false,
+                                /* referrer */ null,
+                                /* pageTransition= */ 0,
+                                /* isRedirect= */ false)
                         .setRedirectHandler(RedirectHandler.create())
                         .setIsTabInPWA(true)
                         .setIsInitialNavigationInFrame(true)
@@ -338,10 +336,10 @@ public class CustomTabExternalNavigationTest {
         ExternalNavigationParams params3 =
                 new ExternalNavigationParams.Builder(
                                 insideVerifiedOriginUrl,
-                                /* isIncognito */ false,
-                                /* referrer */ GURL.emptyGURL(),
-                                /* pageTransition */ 0,
-                                /* isRedirect */ false)
+                                /* isIncognito= */ false,
+                                /* referrer= */ null,
+                                /* pageTransition= */ 0,
+                                /* isRedirect= */ false)
                         .setRedirectHandler(RedirectHandler.create())
                         .setIsTabInPWA(true)
                         .setIsInitialNavigationInFrame(true)

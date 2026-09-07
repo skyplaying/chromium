@@ -20,6 +20,7 @@
 #include "components/strings/grit/components_strings.h"
 #include "components/url_formatter/elide_url.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "url/gurl.h"
 
 namespace {
 
@@ -35,10 +36,11 @@ class MockPermissionPromptAndroid
       : permissions::PermissionPromptAndroid(web_contents, delegate) {}
   ~MockPermissionPromptAndroid() override = default;
 
-  MOCK_METHOD(const std::vector<base::WeakPtr<permissions::PermissionRequest>>&,
-              Requests,
-              (),
-              (const, override));
+  MOCK_METHOD(
+      const std::vector<std::unique_ptr<permissions::PermissionRequest>>&,
+      Requests,
+      (),
+      (const, override));
 
   MOCK_METHOD(permissions::PermissionPromptDisposition,
               GetPromptDisposition,
@@ -83,7 +85,10 @@ class TestPermissionBlockedMessageDelegate
       : PermissionBlockedMessageDelegate(web_contents, std::move(delegate)) {}
   ~TestPermissionBlockedMessageDelegate() override = default;
 
-  void ResolveWithOSPrompt(ContentSettingsType content_settings_type) override {
+  void ResolveWithOSPrompt(ContentSettingsType content_settings_type,
+                           const GURL& requesting_origin) override {
+    EXPECT_EQ(requesting_origin,
+              GURL(permissions::MockPermissionRequest::kDefaultOrigin));
     // Simulate Java callback calling Accept on native.
     delegate_->Accept();
   }
@@ -134,9 +139,13 @@ class PermissionBlockedMessageDelegateAndroidTest
     TriggerDismiss(messages::DismissReason::PRIMARY_ACTION);
   }
 
+  void TriggerLoudSecondaryMenuItem(int command_id) {
+    controller_->HandleLoudUiSecondayMenuItemClicked(command_id);
+  }
+
   std::unique_ptr<MockDelegate> CreateDelegateWithPrompt(
       std::unique_ptr<MockPermissionPromptAndroid>& prompt_storage,
-      const std::vector<base::WeakPtr<permissions::PermissionRequest>>&
+      const std::vector<std::unique_ptr<permissions::PermissionRequest>>&
           requests) {
     prompt_storage =
         std::make_unique<MockPermissionPromptAndroid>(web_contents(), manager_);
@@ -277,8 +286,12 @@ TEST_F(PermissionBlockedMessageDelegateAndroidTest, LoudUI_Shown) {
   auto request = std::make_unique<permissions::MockPermissionRequest>(
       permissions::RequestType::kNotifications,
       permissions::PermissionRequestGestureType::GESTURE);
-  std::vector<base::WeakPtr<permissions::PermissionRequest>> requests;
-  requests.push_back(request->GetWeakPtr());
+  std::u16string origin = url_formatter::FormatUrlForSecurityDisplay(
+      request->requesting_origin(),
+      url_formatter::SchemeDisplay::OMIT_CRYPTOGRAPHIC);
+
+  std::vector<std::unique_ptr<permissions::PermissionRequest>> requests;
+  requests.push_back(std::move(request));
 
   std::unique_ptr<MockPermissionPromptAndroid> mock_prompt;
   auto delegate = CreateDelegateWithPrompt(mock_prompt, requests);
@@ -301,9 +314,6 @@ TEST_F(PermissionBlockedMessageDelegateAndroidTest, LoudUI_Shown) {
             message->GetTitle());
 
   // Verify Description contains origin
-  std::u16string origin = url_formatter::FormatUrlForSecurityDisplay(
-      request->requesting_origin(),
-      url_formatter::SchemeDisplay::OMIT_CRYPTOGRAPHIC);
   EXPECT_NE(std::u16string::npos, message->GetDescription().find(origin));
 
   // Verify Primary Button
@@ -319,8 +329,8 @@ TEST_F(PermissionBlockedMessageDelegateAndroidTest,
   auto request = std::make_unique<permissions::MockPermissionRequest>(
       permissions::RequestType::kNotifications,
       permissions::PermissionRequestGestureType::GESTURE);
-  std::vector<base::WeakPtr<permissions::PermissionRequest>> requests;
-  requests.push_back(request->GetWeakPtr());
+  std::vector<std::unique_ptr<permissions::PermissionRequest>> requests;
+  requests.push_back(std::move(request));
 
   std::unique_ptr<MockPermissionPromptAndroid> mock_prompt;
   auto delegate = CreateDelegateWithPrompt(mock_prompt, requests);
@@ -356,8 +366,8 @@ TEST_F(PermissionBlockedMessageDelegateAndroidTest, LoudUI_DismissByGesture) {
   auto request = std::make_unique<permissions::MockPermissionRequest>(
       permissions::RequestType::kNotifications,
       permissions::PermissionRequestGestureType::GESTURE);
-  std::vector<base::WeakPtr<permissions::PermissionRequest>> requests;
-  requests.push_back(request->GetWeakPtr());
+  std::vector<std::unique_ptr<permissions::PermissionRequest>> requests;
+  requests.push_back(std::move(request));
 
   std::unique_ptr<MockPermissionPromptAndroid> mock_prompt;
   auto delegate = CreateDelegateWithPrompt(mock_prompt, requests);
@@ -391,8 +401,8 @@ TEST_F(PermissionBlockedMessageDelegateAndroidTest, LoudUI_DismissByTimeout) {
   auto request = std::make_unique<permissions::MockPermissionRequest>(
       permissions::RequestType::kNotifications,
       permissions::PermissionRequestGestureType::GESTURE);
-  std::vector<base::WeakPtr<permissions::PermissionRequest>> requests;
-  requests.push_back(request->GetWeakPtr());
+  std::vector<std::unique_ptr<permissions::PermissionRequest>> requests;
+  requests.push_back(std::move(request));
 
   std::unique_ptr<MockPermissionPromptAndroid> mock_prompt;
   auto delegate = CreateDelegateWithPrompt(mock_prompt, requests);
@@ -438,6 +448,102 @@ TEST_F(PermissionBlockedMessageDelegateAndroidTest,
   EXPECT_CALL(*delegate, Accept).Times(0);
   EXPECT_CALL(*delegate, Deny).Times(0);
   EXPECT_CALL(*delegate, SwitchToLoudPrompt);
+
+  ShowMessage(std::move(delegate));
+
+  TriggerManageClick();
+  TriggerDismiss(messages::DismissReason::SECONDARY_ACTION);
+  TriggerDialogDismiss();
+}
+
+TEST_F(PermissionBlockedMessageDelegateAndroidTest, LoudUI_SecondaryMenu_Deny) {
+  base::HistogramTester histogram_tester;
+
+  auto request = std::make_unique<permissions::MockPermissionRequest>(
+      permissions::RequestType::kNotifications,
+      permissions::PermissionRequestGestureType::GESTURE);
+  std::vector<std::unique_ptr<permissions::PermissionRequest>> requests;
+  requests.push_back(std::move(request));
+
+  std::unique_ptr<MockPermissionPromptAndroid> mock_prompt;
+  auto delegate = CreateDelegateWithPrompt(mock_prompt, requests);
+
+  EXPECT_CALL(*delegate, ShouldUseQuietUI)
+      .WillRepeatedly(testing::Return(false));
+  EXPECT_CALL(*delegate, GetContentSettingsType)
+      .WillRepeatedly(testing::Return(ContentSettingsType::NOTIFICATIONS));
+
+  // Expect Deny() to be called on menu "Don't Allow"
+  EXPECT_CALL(*delegate, Deny()).Times(1);
+
+  ExpectEnqueued();
+
+  ShowMessage(std::move(delegate));
+
+  // Trigger Menu "Don't Allow" (kDeny = 0)
+  TriggerLoudSecondaryMenuItem(0);
+
+  // Verify Histogram
+  histogram_tester.ExpectBucketCount("Permissions.ClapperLoud.MessageUI.Deny",
+                                     true, 1);
+}
+
+TEST_F(PermissionBlockedMessageDelegateAndroidTest,
+       LoudUI_SecondaryMenu_Manage) {
+  base::HistogramTester histogram_tester;
+
+  auto request = std::make_unique<permissions::MockPermissionRequest>(
+      permissions::RequestType::kNotifications,
+      permissions::PermissionRequestGestureType::GESTURE);
+  std::vector<std::unique_ptr<permissions::PermissionRequest>> requests;
+  requests.push_back(std::move(request));
+
+  std::unique_ptr<MockPermissionPromptAndroid> mock_prompt;
+  auto delegate = CreateDelegateWithPrompt(mock_prompt, requests);
+
+  EXPECT_CALL(*delegate, ShouldUseQuietUI)
+      .WillRepeatedly(testing::Return(false));
+  EXPECT_CALL(*delegate, GetContentSettingsType)
+      .WillRepeatedly(testing::Return(ContentSettingsType::NOTIFICATIONS));
+
+  ExpectEnqueued();
+
+  ShowMessage(std::move(delegate));
+
+  // Expect message to be dismissed with SECONDARY_ACTION
+  EXPECT_CALL(message_dispatcher_bridge_, DismissMessage)
+      .WillOnce([](messages::MessageWrapper* message,
+                   messages::DismissReason dismiss_reason) {
+        EXPECT_EQ(messages::DismissReason::SECONDARY_ACTION, dismiss_reason);
+        message->HandleDismissCallback(base::android::AttachCurrentThread(),
+                                       static_cast<int>(dismiss_reason));
+      });
+
+  // Trigger Menu "Manage" (kManage = 1)
+  TriggerLoudSecondaryMenuItem(1);
+
+  // Verify Histogram
+  histogram_tester.ExpectBucketCount("Permissions.ClapperLoud.MessageUI.Manage",
+                                     true, 1);
+}
+
+TEST_F(PermissionBlockedMessageDelegateAndroidTest,
+       DismissByDialogDismissed_GestureGated) {
+  auto delegate = GetMockDelegate();
+
+  EXPECT_CALL(*delegate, ShouldUseQuietUI)
+      .WillRepeatedly(testing::Return(true));
+  EXPECT_CALL(*delegate, ReasonForUsingQuietUi)
+      .WillRepeatedly(testing::Return(std::optional<QuietUiReason>(
+          QuietUiReason::kTriggeredDueToLackOfGesture)));
+  EXPECT_CALL(*delegate, GetContentSettingsType)
+      .WillRepeatedly(testing::Return(ContentSettingsType::GEOLOCATION));
+
+  ExpectEnqueued();
+
+  EXPECT_CALL(*delegate, Accept).Times(0);
+  EXPECT_CALL(*delegate, Deny).Times(0);
+  EXPECT_CALL(*delegate, Dismiss);
 
   ShowMessage(std::move(delegate));
 

@@ -21,6 +21,7 @@ class TabGroupService;
 class TrustedVaultClientBackend;
 @class UIImage;
 @class UIWindow;
+@protocol ReauthenticationProtocol;
 
 namespace contextual_search {
 class ContextualSearchService;
@@ -59,19 +60,20 @@ class BulkLeakCheckServiceInterface;
 class RecipientsFetcher;
 }  // namespace password_manager
 
-namespace plus_addresses {
-class PlusAddressService;
-}  // namespace plus_addresses
-
 namespace tab_groups {
 class TabGroupSyncService;
 }  // namespace tab_groups
+
+class Browser;
 
 namespace tests_hook {
 
 // Returns true if Gemini eligibility check should be disabled as tests do
 // not have the required identity internal state to perform the verification.
 bool DisableGeminiEligibilityCheck();
+
+// Returns true if the passage embedder GPU execution should be enabled.
+bool EnablePassageEmbedderGpuExecution();
 
 // Returns true if app group access should be disabled as tests don't have the
 // required entitlements.
@@ -187,11 +189,6 @@ std::unique_ptr<ShareKitService> CreateShareKitService(
 std::unique_ptr<password_manager::BulkLeakCheckServiceInterface>
 GetOverriddenBulkLeakCheckService();
 
-// Returns a plus address service that should be used when testing. The real
-// factory will be used if this hook returns a nullptr.
-std::unique_ptr<plus_addresses::PlusAddressService>
-GetOverriddenPlusAddressService();
-
 // Returns a recipients fetcher instance that should be used in EG tests. The
 // real instance will be used if this hook returns a nullptr.
 std::unique_ptr<password_manager::RecipientsFetcher>
@@ -251,6 +248,12 @@ std::unique_ptr<AimEligibilityService> CreateAimEligibilityService(
 // The real factory will be used if this hook returns null.
 std::unique_ptr<contextual_search::ContextualSearchService>
 CreateContextualSearchService(ProfileIOS* profile);
+
+// Injects fake tabs into the given browser.
+void InjectFakeTabsInBrowser(Browser* browser);
+
+// Returns a fake reauthentication module to be used in tests.
+id<ReauthenticationProtocol> GetFakeReauthenticationModule();
 
 }  // namespace tests_hook
 

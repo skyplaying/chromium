@@ -17,7 +17,7 @@
 #include "extensions/buildflags/buildflags.h"
 
 #if !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #endif  // !BUILDFLAG(IS_ANDROID)
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
@@ -76,12 +76,6 @@ void ExtensionSettingsTestBase::SetAutoConfirmUninstall() {
 void ExtensionSettingsTestBase::SetDevModeEnabled(bool enabled) {
   GetProfile()->GetPrefs()->SetBoolean(prefs::kExtensionsUIDeveloperMode,
                                        enabled);
-}
-
-void ExtensionSettingsTestBase::SetSilenceDeprecatedManifestVersionWarnings(
-    bool silence) {
-  Extension::set_silence_deprecated_manifest_version_warnings_for_testing(
-      silence);
 }
 
 const Extension* ExtensionSettingsTestBase::InstallExtension(

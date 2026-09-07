@@ -30,27 +30,29 @@ import android.os.RemoteException;
 
 import org.junit.Assert;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
 import org.mockito.invocation.InvocationOnMock;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.mockito.stubbing.Answer;
-import org.robolectric.annotation.Config;
-import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.ApkInfo;
 import org.chromium.base.ChildBindingState;
 import org.chromium.base.library_loader.IRelroLibInfo;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.build.annotations.Nullable;
 
 import java.util.ArrayList;
 
 /** Unit tests for ChildProcessConnection. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class ChildProcessConnectionTest {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
+
     private static class ChildServiceConnectionMock implements ChildServiceConnection {
         private final Intent mBindIntent;
         private final ChildServiceConnectionDelegate mDelegate;
@@ -123,7 +125,6 @@ public class ChildProcessConnectionTest {
             return mImportanceInGroup;
         }
     }
-    ;
 
     private final ChildServiceConnectionFactory mServiceConnectionFactory =
             new ChildServiceConnectionFactory() {
@@ -162,12 +163,10 @@ public class ChildProcessConnectionTest {
 
     @Before
     public void setUp() throws RemoteException {
-        MockitoAnnotations.initMocks(this);
 
         mIChildProcessService = mock(IChildProcessService.class);
         ApplicationInfo appInfo = ApkInfo.getInstance().getBrowserApplicationInfo();
-        String[] appInfoStrings = ChildProcessService.convertToStrings(appInfo);
-        when(mIChildProcessService.getAppInfoStrings()).thenReturn(appInfoStrings);
+        when(mIChildProcessService.getSourceDir()).thenReturn(appInfo.sourceDir);
         // Capture the parameters passed to the IChildProcessService.setupConnection() call.
         doAnswer(
                         new Answer<Void>() {
@@ -416,10 +415,10 @@ public class ChildProcessConnectionTest {
                 /* zygoteInfoCallback= */ null);
         verify(mConnectionCallback, never()).onConnected(any());
         mFirstServiceConnection.notifyServiceConnected(mChildProcessServiceBinder);
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertNotNull(mConnectionParentProcess);
         sendPid(34);
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         verify(mConnectionCallback, times(1)).onConnected(connection);
     }
 
@@ -435,11 +434,11 @@ public class ChildProcessConnectionTest {
                 /* zygoteInfoCallback= */ null);
         verify(mConnectionCallback, never()).onConnected(any());
         mFirstServiceConnection.notifyServiceConnected(mChildProcessServiceBinder);
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertNotNull(mConnectionParentProcess);
 
         sendPid(34);
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertEquals(34, connection.getPid());
         sendPid(543);
         assertEquals(34, connection.getPid());
@@ -457,7 +456,7 @@ public class ChildProcessConnectionTest {
                 /* zygoteInfoCallback= */ null);
         verify(mConnectionCallback, never()).onConnected(any());
         mFirstServiceConnection.notifyServiceConnected(mChildProcessServiceBinder);
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertNotNull(mConnectionParentProcess);
 
         mConnectionParentProcess.finishSetupConnection(
@@ -466,7 +465,7 @@ public class ChildProcessConnectionTest {
                 /* zygotePid= */ ,
                 /* zygoteStartupTimeMillis= */ 789,
                 /* relroInfo= */ null);
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertTrue(connection.hasUsableZygoteInfo());
         assertEquals(456, connection.getZygotePid());
     }
@@ -483,7 +482,7 @@ public class ChildProcessConnectionTest {
                 mConnectionCallback,
                 /* zygoteInfoCallback= */ null);
         mFirstServiceConnection.notifyServiceConnected(mChildProcessServiceBinder);
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertNotNull(mConnectionParentProcess);
         assertNotNull(mFirstServiceConnection);
         mConnectionParentProcess.finishSetupConnection(
@@ -506,7 +505,7 @@ public class ChildProcessConnectionTest {
                 mConnectionCallback,
                 /* zygoteInfoCallback= */ null);
         mFirstServiceConnection.notifyServiceConnected(mChildProcessServiceBinder);
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertNotNull(mConnectionParentProcess);
         assertNotNull(mFirstServiceConnection);
 
@@ -515,7 +514,7 @@ public class ChildProcessConnectionTest {
                 /* zygotePid= */ 300,
                 /* zygoteStartupTimeMillis= */ -1,
                 /* relroInfo= */ null);
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertTrue(connection2.hasUsableZygoteInfo());
         assertEquals(300, connection2.getZygotePid());
         assertFalse(connection1.hasUsableZygoteInfo());
@@ -533,7 +532,7 @@ public class ChildProcessConnectionTest {
                 mZygoteInfoCallback);
         verify(mConnectionCallback, never()).onConnected(any());
         mFirstServiceConnection.notifyServiceConnected(mChildProcessServiceBinder);
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertNotNull(mConnectionParentProcess);
 
         IRelroLibInfo relroInfo = new IRelroLibInfo();
@@ -543,7 +542,7 @@ public class ChildProcessConnectionTest {
                 /* zygotePid= */ ,
                 /* zygoteStartupTimeMillis= */ 789,
                 relroInfo);
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertTrue(connection.hasUsableZygoteInfo());
         assertEquals(456, connection.getZygotePid());
         verify(mZygoteInfoCallback, times(1)).onReceivedZygoteInfo(connection, relroInfo);
@@ -564,7 +563,7 @@ public class ChildProcessConnectionTest {
                 mZygoteInfoCallback);
         verify(mConnectionCallback, never()).onConnected(any());
         mFirstServiceConnection.notifyServiceConnected(mChildProcessServiceBinder);
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertNotNull(mConnectionParentProcess);
         IRelroLibInfo relroInfo = new IRelroLibInfo();
         mConnectionParentProcess.finishSetupConnection(
@@ -591,10 +590,10 @@ public class ChildProcessConnectionTest {
                 mConnectionCallback,
                 /* zygoteInfoCallback= */ null);
         verify(mConnectionCallback, never()).onConnected(any());
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertNotNull(mConnectionParentProcess);
         sendPid(34);
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         verify(mConnectionCallback, times(1)).onConnected(connection);
     }
 
@@ -610,10 +609,10 @@ public class ChildProcessConnectionTest {
                 mConnectionCallback,
                 /* zygoteInfoCallback= */ null);
         verify(mConnectionCallback, never()).onConnected(any());
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertNotNull(mConnectionParentProcess);
         sendPid(34);
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         verify(mConnectionCallback, times(1)).onConnected(connection);
 
         // Add strong binding so that connection is oom protected.
@@ -646,10 +645,10 @@ public class ChildProcessConnectionTest {
                 mConnectionCallback,
                 /* zygoteInfoCallback= */ null);
         verify(mConnectionCallback, never()).onConnected(any());
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertNotNull(mConnectionParentProcess);
         sendPid(34);
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         verify(mConnectionCallback, times(1)).onConnected(connection);
         connection.removeVisibleBinding();
 
@@ -736,15 +735,15 @@ public class ChildProcessConnectionTest {
                 mConnectionCallback,
                 /* zygoteInfoCallback= */ null);
         verify(mConnectionCallback, never()).onConnected(any());
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertNotNull(mConnectionParentProcess);
         sendPid(34);
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         verify(mConnectionCallback, times(1)).onConnected(connection);
 
         String exceptionString = "test exception string";
         mConnectionParentProcess.reportExceptionInInit(exceptionString);
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         Assert.assertEquals(exceptionString, connection.getExceptionDuringInit());
         Assert.assertFalse(mFirstServiceConnection.isBound());
     }
@@ -788,7 +787,7 @@ public class ChildProcessConnectionTest {
                 /* zygoteInfoCallback= */ null);
 
         // Do not call onServiceConnected. Simulate timeout with ShadowLooper.
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         verify(mServiceCallback, never()).onChildStarted();
         verify(mServiceCallback, never()).onChildStartFailed(any());
         verify(mServiceCallback, never()).onChildProcessDied(any());

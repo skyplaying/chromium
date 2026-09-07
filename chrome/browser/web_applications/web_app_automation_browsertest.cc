@@ -5,7 +5,6 @@
 #include "base/files/file_util.h"
 #include "chrome/browser/chrome_browser_main.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
@@ -32,7 +31,9 @@ class WebAppAutomationBrowserTest : public WebAppBrowserTestBase {
   WebAppAutomationBrowserTest() = default;
   ~WebAppAutomationBrowserTest() override = default;
 
-  GURL test_url() { return https_server()->GetURL("/web_apps/basic.html"); }
+  GURL test_url() {
+    return embedded_https_test_server().GetURL("/web_apps/basic.html");
+  }
 
   WebAppProvider* provider() { return WebAppProvider::GetForTest(profile()); }
 

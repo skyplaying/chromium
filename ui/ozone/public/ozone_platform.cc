@@ -69,12 +69,13 @@ OzonePlatform::OzonePlatform() {
 OzonePlatform::~OzonePlatform() = default;
 
 // static
-void OzonePlatform::PreEarlyInitialization() {
+void OzonePlatform::PreSandboxStartup() {
   EnsureInstance();
-  if (g_instance->prearly_initialized_)
+  if (g_instance->presandboxstartup_initialized_) {
     return;
-  g_instance->prearly_initialized_ = true;
-  g_instance->PreEarlyInitialize();
+  }
+  g_instance->presandboxstartup_initialized_ = true;
+  g_instance->OnPreSandboxStartup();
 }
 
 // static
@@ -122,6 +123,11 @@ std::string OzonePlatform::GetPlatformNameForTest() {
 // static
 bool OzonePlatform::RunningOnWaylandForTest() {
   return OzonePlatform::GetPlatformNameForTest() == "wayland";
+}
+
+// static
+bool OzonePlatform::RunningOnX11ForTest() {
+  return OzonePlatform::GetPlatformNameForTest() == "x11";
 }
 
 PlatformClipboard* OzonePlatform::GetPlatformClipboard() {
@@ -213,6 +219,6 @@ void OzonePlatform::SetFailInitializeUIForTest(bool fail) {
   g_fail_initialize_ui_for_test = fail;
 }
 
-void OzonePlatform::PreEarlyInitialize() {}
+void OzonePlatform::OnPreSandboxStartup() {}
 
 }  // namespace ui

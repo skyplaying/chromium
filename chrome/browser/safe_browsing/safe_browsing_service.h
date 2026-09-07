@@ -79,6 +79,7 @@ class SafeBrowsingDatabaseManager;
 class SafeBrowsingPrefChangeHandler;
 class SafeBrowsingServiceFactory;
 class SafeBrowsingUIManager;
+class SecuritySettingsBundlePrefChangeHandler;
 class TriggerManager;
 
 // Construction needs to happen on the main thread.
@@ -251,15 +252,6 @@ class SafeBrowsingServiceImpl : public SafeBrowsingServiceInterface,
   // override it.
   virtual V4ProtocolConfig GetV4ProtocolConfig() const;
 
-  // Report the external app redirect to Safe Browsing if the following
-  // conditions are met:
-  // - User is opted in to ESB and not Incognito
-  // - The user has not redirected to this app recently
-  // - Neither the current page nor the destination app are allowlisted.
-  void ReportExternalAppRedirect(content::WebContents* web_contents,
-                                 std::string_view app_name,
-                                 std::string_view uri) override;
-
  protected:
   // Creates the safe browsing service.  Need to initialize before using.
   SafeBrowsingServiceImpl();
@@ -288,7 +280,8 @@ class SafeBrowsingServiceImpl : public SafeBrowsingServiceInterface,
   friend class SafeBrowsingUIManagerTest;
   friend class TestSafeBrowsingService;
   friend class TestSafeBrowsingServiceFactory;
-  friend class V4SafeBrowsingServiceTest;
+  friend class SBSafeBrowsingServiceTestBase;
+  friend class SBSafeBrowsingServiceTest;
   friend class SendNotificationsAcceptedTest;
 
   FRIEND_TEST_ALL_PREFIXES(
@@ -312,10 +305,16 @@ class SafeBrowsingServiceImpl : public SafeBrowsingServiceInterface,
                            EnhancedProtectionPrefChange_SingleProfile);
   FRIEND_TEST_ALL_PREFIXES(
       SafeBrowsingServiceTest,
+      BundlePrefChanged_MaybeShowEnhancedBundleSettingChangeNotificationCalledForProfile);
+  FRIEND_TEST_ALL_PREFIXES(
+      SafeBrowsingServiceTest,
       EnhancedProtectionPrefChange_SupportsMultipleProfiles);
-  FRIEND_TEST_ALL_PREFIXES(V4SafeBrowsingServiceTest,
+  FRIEND_TEST_ALL_PREFIXES(
+      SafeBrowsingServiceTest,
+      BundlePrefChanged_MaybeShowEnhancedBundleSettingChangeNotificationCalledForEachProfile);
+  FRIEND_TEST_ALL_PREFIXES(SBSafeBrowsingServiceTest,
                            NotificationsAcceptedReportSentWithCorrectOrigins);
-  FRIEND_TEST_ALL_PREFIXES(V4SafeBrowsingServiceTest,
+  FRIEND_TEST_ALL_PREFIXES(SBSafeBrowsingServiceTest,
                            NotificationsAcceptedReportSentWithReferrerChain);
 
   void SetDatabaseManagerForTest(SafeBrowsingDatabaseManager* database_manager);
@@ -345,6 +344,11 @@ class SafeBrowsingServiceImpl : public SafeBrowsingServiceInterface,
   // Protection setting changes when its preference value updates.
   void EnhancedProtectionPrefChange(Profile* profile);
 
+  // Potentially shows a toast about Enhanced Bundle
+  // setting changes when the bundled settings preference value updates.
+  // TODO(crbug.com/502677594): Rename the enhanced protection toast variable.
+  void SecuritySettingsBundlePrefChange(Profile* profile);
+
   // Maybe show a toast about Enhanced Protection setting changes. Called when
   // its preference value updates.
   void MaybeShowEnhancedProtectionSettingChangeToast(Profile* profile);
@@ -363,9 +367,6 @@ class SafeBrowsingServiceImpl : public SafeBrowsingServiceInterface,
   // use.
   network::mojom::NetworkContextParamsPtr CreateNetworkContextParams();
 
-  // Logs metrics related to cookies.
-  void RecordStartupCookieMetrics(Profile* profile);
-
   // Fills out_referrer_chain with the referrer chain value.
   void FillReferrerChain(Profile* profile,
                          content::RenderFrameHost* render_frame_host,
@@ -380,12 +381,6 @@ class SafeBrowsingServiceImpl : public SafeBrowsingServiceInterface,
   void SetUrlIsAllowlistedForTesting() {
     url_is_allowlisted_for_testing_ = true;
   }
-
-  void MaybeSendExternalAppRedirectReport(
-      Profile* profile,
-      const std::string& app_name,
-      std::unique_ptr<ClientSafeBrowsingReportRequest> report,
-      bool should_send);
 
   std::unique_ptr<ProxyConfigMonitor> proxy_config_monitor_;
 
@@ -439,8 +434,13 @@ class SafeBrowsingServiceImpl : public SafeBrowsingServiceInterface,
 
   // Manages the logic for handling preference changes, including displaying
   // specific UI elements in response to certain preference changes.
+  // TODO(crbug.com/502649234): Remove after bundled settings is launched.
   std::map<Profile*, std::unique_ptr<SafeBrowsingPrefChangeHandler>>
       pref_change_handlers_map_;
+
+  // Manages the logic for handling bundled settings preference changes.
+  std::map<Profile*, std::unique_ptr<SecuritySettingsBundlePrefChangeHandler>>
+      bundled_settings_pref_change_handlers_map_;
 };
 
 // TODO(crbug.com/41437292): Remove this once dependencies are using the

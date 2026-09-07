@@ -1,5 +1,5 @@
 include_rules = [
+  "+components/contextual_cueing",
   "+components/keyed_service/core",
-  "+pdf/mojom/pdf.mojom.h",
-  "+services/metrics/public/cpp"
+  "+components/private_insights",
 ]

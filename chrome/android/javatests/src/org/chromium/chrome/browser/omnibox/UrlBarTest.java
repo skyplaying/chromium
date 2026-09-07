@@ -5,8 +5,12 @@
 package org.chromium.chrome.browser.omnibox;
 
 import static org.hamcrest.core.IsEqual.equalTo;
-import static org.mockito.Mockito.mock;
 
+import static org.chromium.ui.test.util.MockitoHelper.clearInvocations;
+
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
 import android.text.TextUtils;
 import android.view.KeyEvent;
 import android.view.View;
@@ -15,11 +19,13 @@ import android.view.inputmethod.InputConnection;
 import androidx.test.filters.SmallTest;
 import androidx.test.platform.app.InstrumentationRegistry;
 
+import org.hamcrest.Matchers;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
@@ -29,6 +35,8 @@ import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.params.ParameterAnnotations.UseRunnerDelegate;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CallbackHelper;
+import org.chromium.base.test.util.Criteria;
+import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.ChromeJUnit4RunnerDelegate;
@@ -36,7 +44,10 @@ import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.ReusedCtaTransitTestRule;
 import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.chrome.test.util.OmniboxTestUtils;
+import org.chromium.components.omnibox.OmniboxCapabilities;
+import org.chromium.components.omnibox.TextSelection;
 import org.chromium.content_public.common.ContentUrlConstants;
+import org.chromium.url.GURL;
 
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -53,7 +64,6 @@ import java.util.concurrent.atomic.AtomicReference;
 @UseRunnerDelegate(ChromeJUnit4RunnerDelegate.class)
 @Batch(Batch.PER_CLASS)
 public class UrlBarTest {
-    public static final String EXAMPLE_STRING = "example string";
     private UrlBar mUrlBar;
 
     @Rule
@@ -64,6 +74,7 @@ public class UrlBarTest {
     private WebPageStation mStartingPage;
 
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Mock private Callback<String> mUrlTextChangeListener;
 
     @Before
     public void setUpTest() throws Exception {
@@ -209,9 +220,9 @@ public class UrlBarTest {
         final AtomicReference<String> requestedAutocompleteText = new AtomicReference<>();
         final AtomicBoolean didPreventInlineAutocomplete = new AtomicBoolean();
         mUrlBar.setTextChangeListener(
-                (textWithoutAutocomplete) -> {
+                (info) -> {
                     autocompleteHelper.notifyCalled();
-                    requestedAutocompleteText.set(textWithoutAutocomplete);
+                    requestedAutocompleteText.set(info);
                     didPreventInlineAutocomplete.set(!mUrlBar.shouldAutocomplete());
                     mUrlBar.setTextChangeListener(null);
                 });
@@ -239,7 +250,6 @@ public class UrlBarTest {
 
     @Test
     @SmallTest
-    // @DisableFeatures(OmniboxFeatureList.MULTILINE_EDIT_FIELD)
     public void testAutocompleteUpdatedOnSelection() throws TimeoutException {
         // Verify that setting a selection before the autocomplete clears it.
         verifySelectionState(
@@ -575,17 +585,17 @@ public class UrlBarTest {
     @SmallTest
     @DisabledTest(message = "Disabled because of b/333536371")
     public void testUrlTextChangeListener() {
-        Callback<String> listener = mock(Callback.class);
-        mUrlBar.setTextChangeListener(listener);
+        mUrlBar.setTextChangeListener(mUrlTextChangeListener);
 
         mOmnibox.setText("onomatop");
-        Mockito.verify(listener).onResult("onomatop");
+        Mockito.verify(mUrlTextChangeListener).onResult("onomatop");
 
         // Setting autocomplete does not send a change update.
         mOmnibox.setAutocompleteText("oeia", null);
 
+        clearInvocations(mUrlTextChangeListener);
         mOmnibox.setText("");
-        Mockito.verify(listener).onResult("");
+        Mockito.verify(mUrlTextChangeListener).onResult("");
     }
 
     @Test
@@ -666,5 +676,111 @@ public class UrlBarTest {
         mOmnibox.typeText("test", false);
         mOmnibox.clearFocus();
         mOmnibox.checkText(equalTo(ContentUrlConstants.ABOUT_BLANK_DISPLAY_URL), null);
+    }
+
+    @Test
+    @SmallTest
+    public void testCopyUrl_SchemePreservation() throws Exception {
+        // Force desktop mode.
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> OmniboxCapabilities.setHasDesktopExperienceForTesting(Boolean.TRUE));
+
+        mOmnibox.clearFocus();
+
+        String url = "https://www.foo.com/index.html";
+        mOmnibox.requestFocus();
+        LocationBarCoordinator locationBarCoordinator =
+                (LocationBarCoordinator)
+                        mActivityTestRule
+                                .getActivity()
+                                .getToolbarManager()
+                                .getToolbarLayoutForTesting()
+                                .getLocationBar();
+        UrlBarData urlBarData = UrlBarData.forUrlAndText(new GURL(url), "www.foo.com/index.html");
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    locationBarCoordinator
+                            .getMediatorForTesting()
+                            .setUrlBarText(
+                                    urlBarData,
+                                    UrlBar.ScrollType.NO_SCROLL,
+                                    TextSelection.SELECT_ALL);
+                });
+
+        String expectedStripped = "www.foo.com/index.html";
+        mOmnibox.checkText(equalTo(expectedStripped), null);
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> mUrlBar.setSelection(0, mUrlBar.getText().length()));
+        ThreadUtils.runOnUiThreadBlocking(() -> mUrlBar.onTextContextMenuItem(android.R.id.copy));
+
+        String clipboardText = getClipboardText();
+        Assert.assertEquals(url, clipboardText);
+
+        mOmnibox.setText("");
+        mOmnibox.typeText("bar", false);
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> mUrlBar.setSelection(0, mUrlBar.getText().length()));
+        ThreadUtils.runOnUiThreadBlocking(() -> mUrlBar.onTextContextMenuItem(android.R.id.copy));
+
+        clipboardText = getClipboardText();
+        Assert.assertEquals("bar", clipboardText);
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> OmniboxCapabilities.setHasDesktopExperienceForTesting((Boolean) null));
+    }
+
+    private String getClipboardText() {
+        return ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    ClipboardManager clipboard =
+                            (ClipboardManager)
+                                    mUrlBar.getContext()
+                                            .getSystemService(Context.CLIPBOARD_SERVICE);
+                    ClipData clip = clipboard.getPrimaryClip();
+                    if (clip != null && clip.getItemCount() > 0) {
+                        return clip.getItemAt(0).getText().toString();
+                    }
+                    return "";
+                });
+    }
+
+    @Test
+    @SmallTest
+    public void testUrlBarContextMenu() {
+        mOmnibox.requestFocus();
+        mOmnibox.setText("test context menu");
+
+        // Select all text to ensure copy/cut/share options are available.
+        ThreadUtils.runOnUiThreadBlocking(() -> mUrlBar.selectAll());
+
+        // Trigger context menu.
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    float x = mUrlBar.getWidth() / 2f;
+                    float y = mUrlBar.getHeight() / 2f;
+                    mUrlBar.showContextMenu(x, y);
+                });
+
+        CriteriaHelper.pollUiThread(
+                () -> {
+                    UrlBarContextMenuHelper helper = mUrlBar.getContextMenuHelperForTesting();
+                    Criteria.checkThat(
+                            "Helper should not be null", helper, Matchers.notNullValue());
+                    Criteria.checkThat(
+                            "ListMenu should not be empty",
+                            helper.getModelListForTesting().size(),
+                            Matchers.greaterThan(0));
+                });
+
+        // Dismiss it.
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    UrlBarContextMenuHelper helper = mUrlBar.getContextMenuHelperForTesting();
+                    if (helper != null) {
+                        helper.destroy();
+                    }
+                });
     }
 }

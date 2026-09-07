@@ -26,7 +26,8 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/api/file_system/consent_provider_impl.h"
 #include "chrome/browser/extensions/component_loader.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/common/chrome_paths.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_types.h"
@@ -43,8 +44,6 @@
 #include "storage/browser/file_system/external_mount_points.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/ui_base_types.h"
-
-// TODO(michaelpg): Port these tests to app_shell: crbug.com/40425056.
 
 using file_manager::VolumeManager;
 
@@ -109,8 +108,9 @@ class ScopedAddListenerObserver : public EventRouter::Observer {
   // EventRouter::Observer overrides.
   void OnListenerAdded(const EventListenerInfo& details) override {
     // Call the callback only once, as the listener may be added multiple times.
-    if (details.extension_id != extension_id_ || !callback_)
+    if (details.extension_id != extension_id_ || !callback_) {
       return;
+    }
 
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, std::move(callback_));
@@ -169,7 +169,8 @@ class FileSystemApiTestForDrive : public PlatformAppBrowserTest {
     SetUpTestFileHierarchy();
 
     integration_service_ = new drive::DriveIntegrationService(
-        g_browser_process->local_state(), profile, "",
+        g_browser_process->local_state(), profile,
+        IdentityManagerFactory::GetForProfile(profile), "",
         test_cache_root_.GetPath(),
         fake_drivefs_helper_->CreateFakeDriveFsListenerFactory());
     return integration_service_;
@@ -274,7 +275,8 @@ class FileSystemApiTestForRequestFileSystem : public PlatformAppBrowserTest {
         profile, drivefs_root_.GetPath().Append("drive-user"));
 
     return new drive::DriveIntegrationService(
-        g_browser_process->local_state(), profile, "", {},
+        g_browser_process->local_state(), profile,
+        IdentityManagerFactory::GetForProfile(profile), "", {},
         fake_drivefs_helper_->CreateFakeDriveFsListenerFactory());
   }
 
@@ -329,7 +331,7 @@ IN_PROC_BROWSER_TEST_F(FileSystemApiTestForDrive,
   ASSERT_TRUE(base::PathService::OverrideAndCreateIfNeeded(
       chrome::DIR_USER_DOCUMENTS, test_file.DirName(), true, false));
   const FileSystemChooseEntryFunction::TestOptions test_options{
-      .use_suggested_path = true};
+      .path_to_be_picked = &test_file};
   auto reset_options =
       FileSystemChooseEntryFunction::SetOptionsForTesting(test_options);
   ASSERT_TRUE(

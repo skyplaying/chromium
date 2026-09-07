@@ -7,29 +7,30 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
-#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/dialogs/browser_dialogs.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/grit/generated_resources.h"
 #include "content/public/browser/browser_thread.h"
+#include "ui/base/base_window.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/views/widget/widget.h"
 
 DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kCancelButtonId);
 
 // static
 DevToolsConnectionDialog* DevToolsConnectionDialog::Show(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     DevToolsConnectionDialog::AcceptCallback callback) {
   return new DevToolsConnectionDialog(browser, std::move(callback));
 }
 
 DevToolsConnectionDialog::DevToolsConnectionDialog(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     DevToolsConnectionDialog::AcceptCallback callback)
     : browser_(browser), callback_(std::move(callback)) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
@@ -39,8 +40,8 @@ DevToolsConnectionDialog::DevToolsConnectionDialog(
     return;
   }
 
-  if (browser->window()) {
-    browser->window()->Activate();
+  if (browser->GetWindow()) {
+    browser->GetWindow()->Activate();
   }
 
   views::Widget* widget = chrome::ShowBrowserModal(

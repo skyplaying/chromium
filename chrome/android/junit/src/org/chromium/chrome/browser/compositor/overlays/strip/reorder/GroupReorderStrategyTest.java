@@ -25,17 +25,14 @@ import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Feature;
-import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutGroupTitle;
 import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutTab;
 import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutUtils;
 import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutView;
 import org.chromium.chrome.browser.compositor.overlays.strip.reorder.ReorderDelegate.ReorderType;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabId;
 import org.chromium.chrome.browser.tab.TabSelectionType;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 
 import java.util.Arrays;
 import java.util.List;
@@ -85,7 +82,6 @@ public class GroupReorderStrategyTest extends ReorderStrategyTestBase {
                         mAnimationHost,
                         mScrollDelegate,
                         mModel,
-                        mTabGroupModelFilter,
                         mContainerView,
                         mGroupIdToHideSupplier,
                         mTabWidthSupplier,
@@ -232,7 +228,6 @@ public class GroupReorderStrategyTest extends ReorderStrategyTestBase {
 
     @Test
     @Feature("Pinned Tabs")
-    @EnableFeatures(ChromeFeatureList.ANDROID_PINNED_TABS_TABLET_TAB_STRIP)
     public void testUpdateReorder_fail_pinnedTabs() {
         //   <------------------
         // [PinnedTab1]  [ExpandedGroup]  [CollapsedGroup]
@@ -333,9 +328,8 @@ public class GroupReorderStrategyTest extends ReorderStrategyTestBase {
     @SuppressWarnings("DirectInvocationOnMock")
     private void verifySuccessfulDrag(int expectedIndex, float expectedOffset) {
         @TabId
-        int lastShownTabId =
-                mTabGroupModelFilter.getGroupLastShownTabId(mInteractingGroupTitle.getTabGroupId());
-        verify(mTabGroupModelFilter).moveRelatedTabs(lastShownTabId, expectedIndex);
+        int lastShownTabId = mModel.getGroupLastShownTabId(mInteractingGroupTitle.getTabGroupId());
+        verify(mModel).moveRelatedTabs(lastShownTabId, expectedIndex);
         verify(mAnimationHost).startAnimations(anyList(), isNull());
 
         for (StripLayoutView view : mDraggedGroup) {
@@ -346,9 +340,8 @@ public class GroupReorderStrategyTest extends ReorderStrategyTestBase {
     @SuppressWarnings("DirectInvocationOnMock")
     private void verifyFailedDrag(float expectedOffset) {
         @TabId
-        int lastShownTabId =
-                mTabGroupModelFilter.getGroupLastShownTabId(mInteractingGroupTitle.getTabGroupId());
-        verify(mTabGroupModelFilter, never()).moveRelatedTabs(eq(lastShownTabId), anyInt());
+        int lastShownTabId = mModel.getGroupLastShownTabId(mInteractingGroupTitle.getTabGroupId());
+        verify(mModel, never()).moveRelatedTabs(eq(lastShownTabId), anyInt());
         verify(mAnimationHost, never()).startAnimations(anyList(), isNull());
 
         for (StripLayoutView view : mDraggedGroup) {
@@ -359,9 +352,8 @@ public class GroupReorderStrategyTest extends ReorderStrategyTestBase {
     @SuppressWarnings("DirectInvocationOnMock")
     private void verifySuccessfulRestore(int initialIndex) {
         @TabId
-        int lastShownTabId =
-                mTabGroupModelFilter.getGroupLastShownTabId(mInteractingGroupTitle.getTabGroupId());
-        verify(mTabGroupModelFilter).moveRelatedTabs(lastShownTabId, initialIndex);
+        int lastShownTabId = mModel.getGroupLastShownTabId(mInteractingGroupTitle.getTabGroupId());
+        verify(mModel).moveRelatedTabs(lastShownTabId, initialIndex);
     }
 
     // ============================================================================================
@@ -370,7 +362,7 @@ public class GroupReorderStrategyTest extends ReorderStrategyTestBase {
 
     /**
      * Updates {@code mStripTabs} and the {@code idealX} for the dragged {@link StripLayoutView}s in
-     * response to a {@link TabGroupModelFilter#moveRelatedTabs}. This "fakes" a tab strip rebuild.
+     * response to a {@link TabModel#moveRelatedTabs}. This "fakes" a tab strip rebuild.
      */
     private void mockRebuildForViews(StripLayoutView[] draggedGroup, float deltaFromNewPosition) {
         doAnswer(
@@ -383,7 +375,7 @@ public class GroupReorderStrategyTest extends ReorderStrategyTestBase {
                             mStripTabs[index] = StripLayoutUtils.findTabById(mStripTabs, id);
                             return null;
                         })
-                .when(mTabGroupModelFilter)
+                .when(mModel)
                 .moveRelatedTabs(anyInt(), anyInt());
     }
 }

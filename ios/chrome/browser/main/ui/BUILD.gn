@@ -12,8 +12,11 @@ source_set("ui") {
   ]
   deps = [
     "//base",
+    "//ios/chrome/browser/browser_view/ui_bundled:safe_area_provider",
+    "//ios/chrome/browser/fullscreen/model",
     "//ios/chrome/browser/fullscreen/ui_bundled",
     "//ios/chrome/browser/fullscreen/ui_bundled:ui",
+    "//ios/chrome/browser/shared/coordinator/scene/state",
     "//ios/chrome/browser/shared/public/features",
     "//ios/chrome/browser/shared/ui/util",
     "//ios/chrome/browser/tab_switcher/tab_strip/ui:swift_constants_for_objective_c",

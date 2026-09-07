@@ -8,8 +8,9 @@ import android.content.Context;
 
 import org.chromium.base.DeviceInfo;
 import org.chromium.base.ResettersForTesting;
+import org.chromium.base.TriState;
+import org.chromium.base.TriStateUtils;
 import org.chromium.build.annotations.NullMarked;
-import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.ui.base.DeviceFormFactor;
 
@@ -17,15 +18,7 @@ import org.chromium.ui.base.DeviceFormFactor;
 @NullMarked
 public class BrowserControlsUtils {
 
-    private static @Nullable Boolean sSyncMinHeightWithTotalHeightForTesting;
-
-    // Disallow top browser controls from scrolling off on large tablets by setting min height
-    // equal to overall height.
-    // TODO(https://crbug.com/450970998): Replace with doSyncMinHeightWithTotalHeightV2.
-    public static boolean doSyncMinHeightWithTotalHeight(Context context) {
-        return ChromeFeatureList.sLockTopControlsOnLargeTablets.isEnabled()
-                && DeviceFormFactor.isNonMultiDisplayContextOnLargeTablet(context);
-    }
+    private static @TriState int sSyncMinHeightWithTotalHeightForTesting;
 
     /**
      * Disallow top browser controls from scrolling off by setting min height equal to overall
@@ -34,23 +27,16 @@ public class BrowserControlsUtils {
     // TODO(https://crbug.com/450970998): Move to TopControlsLockCoordinator after removing
     //  reference from BrowserControlsManager.
     public static boolean doSyncMinHeightWithTotalHeightV2(Context context) {
-        if (sSyncMinHeightWithTotalHeightForTesting != null) {
-            return sSyncMinHeightWithTotalHeightForTesting;
+        if (sSyncMinHeightWithTotalHeightForTesting != TriState.NOT_SET) {
+            return sSyncMinHeightWithTotalHeightForTesting == TriState.TRUE;
         }
 
-        if (!ChromeFeatureList.sLockTopControlsOnLargeTabletsV2.isEnabled()
-                || !ChromeFeatureList.sTopControlsRefactor.isEnabled()) {
+        if (!ChromeFeatureList.sLockTopControlsOnLargeTabletsV2.isEnabled()) {
             return false;
         }
 
         return DeviceInfo.isDesktop()
                 || DeviceFormFactor.isNonMultiDisplayContextOnLargeTablet(context);
-    }
-
-    /** Whether use TopControlsStacker to drive the y offset for top control layers. */
-    public static boolean isTopControlsRefactorOffsetEnabled() {
-        return ChromeFeatureList.sTopControlsRefactor.isEnabled()
-                && ChromeFeatureList.sTopControlsRefactorV2.isEnabled();
     }
 
     /** Whether force adjusting top chrome height is allowed based on feature flags. */
@@ -59,9 +45,15 @@ public class BrowserControlsUtils {
         // feature flag is launched. Once we are ready to cleanup the param
         // sLockTopControlsForceAdjustHeightOnStartup it's safe to assume this method to return
         // true always.
-        return isTopControlsRefactorOffsetEnabled()
-                && doSyncMinHeightWithTotalHeightV2(context)
+        return doSyncMinHeightWithTotalHeightV2(context)
                 && ChromeFeatureList.sLockTopControlsForceAdjustHeightOnStartup.getValue();
+    }
+
+    /** Returns whether the top-controls hairline needs an extra offset to stay hidden. */
+    public static boolean shouldContentOffsetHideTopControlsHairline(
+            int contentOffset, int topControlsMinHeight, int topControlsHairlineHeight) {
+        return contentOffset >= topControlsMinHeight
+                && contentOffset <= topControlsMinHeight + topControlsHairlineHeight;
     }
 
     /**
@@ -80,6 +72,35 @@ public class BrowserControlsUtils {
     }
 
     /**
+     * @return True if the top browser controls are completely off screen.
+     */
+    public static boolean areTopControlsOffScreen(BrowserControlsStateProvider stateProvider) {
+        return stateProvider.getTopControlHiddenRatio() == 1.0f;
+    }
+
+    /**
+     * @return True if the top browser controls are currently completely visible.
+     */
+    public static boolean areTopControlsFullyVisible(BrowserControlsStateProvider stateProvider) {
+        return stateProvider.getTopControlHiddenRatio() == 0.f;
+    }
+
+    /**
+     * @return True if the bottom browser controls are completely off screen.
+     */
+    public static boolean areBottomControlsOffScreen(BrowserControlsStateProvider stateProvider) {
+        return stateProvider.getBottomControlHiddenRatio() == 1.0f;
+    }
+
+    /**
+     * @return True if the bottom browser controls are currently completely visible.
+     */
+    public static boolean areBottomControlsFullyVisible(
+            BrowserControlsStateProvider stateProvider) {
+        return stateProvider.getBottomControlHiddenRatio() == 0.f;
+    }
+
+    /**
      * @return Whether the browser controls should be drawn as a texture.
      */
     public static boolean drawControlsAsTexture(BrowserControlsStateProvider stateProvider) {
@@ -88,9 +109,9 @@ public class BrowserControlsUtils {
 
     /**
      * TODO(jinsukkim): Move this to CompositorViewHolder.
-     * @return {@code true} if browser controls shrink Blink view's size. Note that this
-     *         is valid only when the browser controls are in idle state i.e. not scrolling
-     *         or animating.
+     *
+     * @return {@code true} if browser controls shrink Blink view's size. Note that this is valid
+     *     only when the browser controls are in idle state i.e. not scrolling or animating.
      */
     public static boolean controlsResizeView(BrowserControlsStateProvider stateProvider) {
         return stateProvider.getContentOffset() > stateProvider.getTopControlsMinHeight()
@@ -100,7 +121,7 @@ public class BrowserControlsUtils {
 
     /**
      * @return The content offset from the bottom of the screen, or the visible height of the bottom
-     *         controls, in px.
+     *     controls, in px.
      */
     public static int getBottomContentOffset(BrowserControlsStateProvider stateProvider) {
         return stateProvider.getBottomControlsHeight() - stateProvider.getBottomControlOffset();
@@ -119,7 +140,8 @@ public class BrowserControlsUtils {
     }
 
     public static void setsSyncMinHeightWithTotalHeightForTesting(boolean override) {
-        sSyncMinHeightWithTotalHeightForTesting = override;
-        ResettersForTesting.register(() -> sSyncMinHeightWithTotalHeightForTesting = null);
+        sSyncMinHeightWithTotalHeightForTesting = TriStateUtils.from(override);
+        ResettersForTesting.register(
+                () -> sSyncMinHeightWithTotalHeightForTesting = TriState.NOT_SET);
     }
 }

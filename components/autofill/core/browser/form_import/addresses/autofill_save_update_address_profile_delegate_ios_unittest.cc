@@ -11,7 +11,7 @@
 #include "base/test/scoped_feature_list.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile_test_api.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/ios/common/features.h"
 #include "components/strings/grit/components_strings.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -43,7 +43,7 @@ class AutofillSaveUpdateAddressProfileDelegateIOSTest : public testing::Test {
     profile_ = std::make_unique<AutofillProfile>(test::GetFullProfile());
     if (is_account_profile) {
       test_api(*profile_).set_record_type(
-          autofill::AutofillProfile::RecordType::kAccount);
+          AutofillProfile::RecordType::kAccount);
     }
     return std::make_unique<AutofillSaveUpdateAddressProfileDelegateIOS>(
         *profile_, original_profile, email,
@@ -226,7 +226,7 @@ TEST_P(DelegateStringsTest, TestStrings) {
   original_profile.SetInfo(NAME_FULL, u"John Doe", "en-US");
   if (is_home_work_profile()) {
     test_api(original_profile)
-        .set_record_type(autofill::AutofillProfile::RecordType::kAccountHome);
+        .set_record_type(AutofillProfile::RecordType::kAccountHome);
   }
 
   delegate_ = CreateAutofillSaveUpdateAddressProfileDelegate(

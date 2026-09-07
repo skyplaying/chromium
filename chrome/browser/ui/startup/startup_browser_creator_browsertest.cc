@@ -14,27 +14,35 @@
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/memory/raw_ptr.h"
 #include "base/path_service.h"
+#include "base/scoped_observation.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #include "base/test/mock_log.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/version_info/version_info.h"
+#include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/buildflags.h"
 #include "chrome/browser/chrome_browser_main.h"
+#include "chrome/browser/chrome_browser_main_extra_parts.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/extensions/launch_util.h"
 #include "chrome/browser/first_run/first_run.h"
+#include "chrome/browser/infobars/infobar_features.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/prefs/session_startup_pref.h"
 #include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
@@ -55,22 +63,27 @@
 #include "chrome/browser/signin/signin_promo.h"
 #include "chrome/browser/signin/signin_util.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/browser_list_observer.h"
+#include "chrome/browser/ui/browser_init_state.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/profiles/profile_ui_test_utils.h"
 #include "chrome/browser/ui/search/ntp_test_utils.h"
 #include "chrome/browser/ui/startup/launch_mode_recorder.h"
+#include "chrome/browser/ui/startup/profile_launch_observer.h"
 #include "chrome/browser/ui/startup/startup_browser_creator_impl.h"
 #include "chrome/browser/ui/startup/startup_types.h"
 #include "chrome/browser/ui/startup/web_app_startup_utils.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/toasts/toast_controller.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
+#include "chrome/browser/ui/window_metadata/window_metadata_controller.h"
 #include "chrome/browser/web_applications/test/os_integration_test_override_impl.h"
 #include "chrome/browser/web_applications/test/web_app_test_observers.h"
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
@@ -84,7 +97,7 @@
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/chrome_version.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/test/base/chrome_test_utils.h"
+#include "chrome/test/base/chrome_test_path_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/infobars/content/content_infobar_manager.h"
@@ -100,6 +113,7 @@
 #include "components/signin/public/base/signin_switches.h"
 #include "components/webapps/browser/install_result_code.h"
 #include "components/webapps/browser/installable/installable_metrics.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
@@ -110,9 +124,11 @@
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/test_management_policy.h"
 #include "google_apis/gaia/gaia_id.h"
+#include "net/base/features.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/abseil-cpp/absl/strings/ascii.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/views/controls/webview/webview.h"
 #include "url/gurl.h"
 
@@ -158,6 +174,10 @@ using testing::Return;
 #include "base/test/scoped_path_override.h"
 #endif  // BUILDFLAG(IS_WIN)
 
+#if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_switches.h"
+#endif
+
 using extensions::Extension;
 using testing::_;
 using web_app::WebAppProvider;
@@ -176,9 +196,10 @@ void DisableWhatsNewPage() {
                            version_info::GetMajorVersionNumberAsInt());
 }
 
-Browser* OpenNewBrowser(Profile* profile,
-                        const std::optional<std::string>&
-                            version_string_for_testing = std::nullopt) {
+BrowserWindowInterface* OpenNewBrowser(
+    Profile* profile,
+    const std::optional<std::string>& version_string_for_testing =
+        std::nullopt) {
   base::CommandLine dummy(base::CommandLine::NO_PROGRAM);
   StartupBrowserCreatorImpl creator(base::FilePath(), dummy,
                                     chrome::startup::IsFirstRun::kYes);
@@ -186,7 +207,7 @@ Browser* OpenNewBrowser(Profile* profile,
   ui_test_utils::BrowserCreatedObserver browser_created_observer;
   creator.Launch(profile, chrome::startup::IsProcessStartup::kNo,
                  /*restore_tabbed_browser=*/true);
-  Browser* new_browser = browser_created_observer.Wait();
+  BrowserWindowInterface* new_browser = browser_created_observer.Wait();
   ui_test_utils::WaitUntilBrowserBecomeActive(new_browser);
   return new_browser;
 }
@@ -209,36 +230,35 @@ struct StartupBrowserCreatorFlagTypeValue {
 
 typedef std::optional<policy::PolicyLevel> PolicyVariant;
 
-// This class waits until all browser windows are closed, and then runs
-// a quit closure.
-class AllBrowsersClosedWaiter : public BrowserListObserver {
+// Extra parts that facilitates observing the first Browser instance created
+// for the chrome process.
+class BrowserCreatedMainParts : public ChromeBrowserMainExtraParts,
+                                public BrowserCollectionObserver {
  public:
-  explicit AllBrowsersClosedWaiter(base::OnceClosure quit_closure);
-  AllBrowsersClosedWaiter(const AllBrowsersClosedWaiter&) = delete;
-  AllBrowsersClosedWaiter& operator=(const AllBrowsersClosedWaiter&) = delete;
-  ~AllBrowsersClosedWaiter() override;
+  explicit BrowserCreatedMainParts(base::OnceClosure first_browser_created_cb)
+      : first_browser_created_cb_(std::move(first_browser_created_cb)) {}
+  BrowserCreatedMainParts(const BrowserCreatedMainParts&) = delete;
+  BrowserCreatedMainParts& operator=(const BrowserCreatedMainParts&) = delete;
+  ~BrowserCreatedMainParts() override = default;
 
-  // BrowserListObserver:
-  void OnBrowserRemoved(Browser* browser) override;
+  // ChromeBrowserMainExtraParts:
+  void PreCreateThreads() override {
+    browser_collection_observation_.Observe(
+        GlobalBrowserCollection::GetInstance());
+  }
+
+  // BrowserCollectionObserver:
+  void OnBrowserCreated(BrowserWindowInterface* browser) override {
+    std::move(first_browser_created_cb_).Run();
+    browser_collection_observation_.Reset();
+  }
 
  private:
-  base::OnceClosure quit_closure_;
+  base::OnceClosure first_browser_created_cb_;
+
+  base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
+      browser_collection_observation_{this};
 };
-
-AllBrowsersClosedWaiter::AllBrowsersClosedWaiter(base::OnceClosure quit_closure)
-    : quit_closure_(std::move(quit_closure)) {
-  BrowserList::AddObserver(this);
-}
-
-AllBrowsersClosedWaiter::~AllBrowsersClosedWaiter() {
-  BrowserList::RemoveObserver(this);
-}
-
-void AllBrowsersClosedWaiter::OnBrowserRemoved(Browser* browser) {
-  if (chrome::GetTotalBrowserCount() == 0) {
-    std::move(quit_closure_).Run();
-  }
-}
 
 }  // namespace
 
@@ -258,7 +278,7 @@ class StartupBrowserCreatorTest : public extensions::ExtensionBrowserTest {
     command_line->AppendSwitchASCII(switches::kHomePage, url::kAboutBlankURL);
 #if BUILDFLAG(IS_CHROMEOS)
     // TODO(nkostylev): Investigate if we can remove this switch.
-    command_line->AppendSwitch(switches::kCreateBrowserOnStartupForTests);
+    command_line->AppendSwitch(ash::switches::kCreateBrowserOnStartupForTests);
 #endif
   }
 
@@ -274,12 +294,14 @@ class StartupBrowserCreatorTest : public extensions::ExtensionBrowserTest {
     ASSERT_TRUE(*out_app_extension);
 
     // Code that opens a new browser assumes we start with exactly one.
-    ASSERT_EQ(1u, chrome::GetBrowserCount(browser()->profile()));
+    ASSERT_EQ(1u,
+              ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                  ->GetSize());
   }
 
   void SetAppLaunchPref(const std::string& app_id,
                         extensions::LaunchType launch_type) {
-    extensions::SetLaunchType(browser()->profile(), app_id, launch_type);
+    extensions::SetLaunchType(browser()->GetProfile(), app_id, launch_type);
   }
 
   BrowserWindowInterface* FindOneOtherBrowserForProfile(
@@ -310,17 +332,6 @@ class StartupBrowserCreatorTest : public extensions::ExtensionBrowserTest {
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-class OpenURLsPopupObserver : public BrowserListObserver {
- public:
-  OpenURLsPopupObserver() = default;
-
-  void OnBrowserAdded(Browser* browser) override { added_browser_ = browser; }
-
-  void OnBrowserRemoved(Browser* browser) override {}
-
-  raw_ptr<Browser> added_browser_ = nullptr;
-};
-
 // Test that when there is a popup as the active browser any requests to
 // StartupBrowserCreatorImpl::OpenURLsInBrowser don't crash because there's no
 // explicit profile given.
@@ -333,13 +344,10 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, OpenURLsPopup) {
   // platform UI toolkit messages, and those messages are not sent during unit
   // testing sessions.
 
-  OpenURLsPopupObserver observer;
-  BrowserList::AddObserver(&observer);
-
-  Browser* popup = Browser::Create(
-      Browser::CreateParams(Browser::TYPE_POPUP, browser()->profile(), true));
-  ASSERT_TRUE(popup->is_type_popup());
-  ASSERT_EQ(popup, observer.added_browser_);
+  BrowserWindowInterface* popup = CreateBrowserWindow(BrowserWindowCreateParams(
+      BrowserWindowInterface::TYPE_POPUP, browser()->GetProfile(),
+      /*from_user_gesture=*/true));
+  ASSERT_EQ(popup->GetType(), BrowserWindowInterface::Type::TYPE_POPUP);
 
   base::CommandLine dummy(base::CommandLine::NO_PROGRAM);
   chrome::startup::IsFirstRun first_run =
@@ -348,9 +356,10 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, OpenURLsPopup) {
   StartupBrowserCreatorImpl launch(base::FilePath(), dummy, first_run);
   // This should create a new window, but re-use the profile from |popup|. If
   // it used a null or invalid profile, it would crash.
+  ui_test_utils::BrowserCreatedObserver browser_created_observer;
   launch.OpenURLsInBrowser(popup, chrome::startup::IsProcessStartup::kNo, urls);
-  ASSERT_NE(popup, observer.added_browser_);
-  BrowserList::RemoveObserver(&observer);
+  BrowserWindowInterface* created_browser = browser_created_observer.Wait();
+  ASSERT_NE(popup, created_browser);
 }
 
 // We don't do non-process-startup browser launches on ChromeOS.
@@ -368,7 +377,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
   urls.push_back(embedded_test_server()->GetURL("/title1.html"));
   urls.push_back(embedded_test_server()->GetURL("/title2.html"));
 
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
 
   DisableWhatsNewPage();
 
@@ -386,12 +395,12 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
   // Close the browser.
   CloseBrowserAsynchronously(browser());
 
-  Browser* new_browser = OpenNewBrowser(profile);
+  BrowserWindowInterface* new_browser = OpenNewBrowser(profile);
   ASSERT_TRUE(new_browser);
 
   std::vector<GURL> expected_urls(urls);
 
-  TabStripModel* tab_strip = new_browser->tab_strip_model();
+  TabStripModel* tab_strip = new_browser->GetTabStripModel();
   ASSERT_EQ(static_cast<int>(expected_urls.size()), tab_strip->count());
   for (size_t i = 0; i < expected_urls.size(); i++) {
     EXPECT_EQ(expected_urls[i],
@@ -421,25 +430,49 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, StartupURLsOnNewWindow) {
   // Set the startup preference to open these URLs.
   SessionStartupPref pref(SessionStartupPref::URLS);
   pref.urls = urls;
-  SessionStartupPref::SetStartupPref(browser()->profile(), pref);
+  SessionStartupPref::SetStartupPref(browser()->GetProfile(), pref);
 
   DisableWhatsNewPage();
 
-  Browser* new_browser = OpenNewBrowser(browser()->profile());
+  BrowserWindowInterface* new_browser = OpenNewBrowser(browser()->GetProfile());
   ASSERT_TRUE(new_browser);
 
   // The new browser should have exactly one tab (not the startup URLs).
-  TabStripModel* tab_strip = new_browser->tab_strip_model();
+  TabStripModel* tab_strip = new_browser->GetTabStripModel();
   ASSERT_EQ(1, tab_strip->count());
-  EXPECT_EQ(
-      chrome::kChromeUINewTabURL,
-      tab_strip->GetWebContentsAt(0)->GetVisibleURL().possibly_invalid_spec());
+  EXPECT_EQ(chrome::ChromeUINewTabURLAsGURL(),
+            tab_strip->GetWebContentsAt(0)->GetVisibleURL());
+}
+
+IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
+                       ClearsProfileSetsAfterActivation) {
+  Profile* profile = browser()->GetProfile();
+  StartupBrowserCreator::ClearLaunchedProfilesForTesting();
+
+  ProfileLaunchObserver* observer = ProfileLaunchObserver::GetInstance();
+  ASSERT_TRUE(observer->launched_profiles_.empty());
+  ASSERT_TRUE(observer->opened_profiles_.empty());
+
+  StartupBrowserCreator::Profiles last_opened_profiles = {profile};
+  base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
+  StartupBrowserCreator browser_creator;
+  browser_creator.LaunchBrowserForLastProfiles(
+      command_line, base::FilePath(), chrome::startup::IsProcessStartup::kNo,
+      chrome::startup::IsFirstRun::kNo,
+      {profile, StartupProfileMode::kBrowserWindow}, last_opened_profiles,
+      /*restore_tabbed_browser=*/true);
+
+  // Once activation has been scheduled, ProfileLaunchObserver has finished
+  // waiting for launched profiles to open. Do not keep raw Profile pointers
+  // around after it stops observing Profile destruction.
+  EXPECT_TRUE(observer->launched_profiles_.empty());
+  EXPECT_TRUE(observer->opened_profiles_.empty());
 }
 
 IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, OpenAppUrlShortcut) {
   // Add --app=<url> to the command line. Tests launching legacy apps which may
   // have been created by "Add to Desktop" in old versions of Chrome.
-  // TODO(mgiuca): Delete this feature (https://crbug.com/751029). We are
+  // TODO(mgiuca): Delete this feature (https://crbug.com/41337042). We are
   // keeping it for now to avoid disrupting existing workflows.
   base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
   GURL url = chrome_test_utils::GetTestUrl(
@@ -449,7 +482,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, OpenAppUrlShortcut) {
 
   ASSERT_TRUE(StartupBrowserCreator().ProcessCmdLineImpl(
       command_line, base::FilePath(), chrome::startup::IsProcessStartup::kNo,
-      {browser()->profile(), StartupProfileMode::kBrowserWindow}, {}));
+      {browser()->GetProfile(), StartupProfileMode::kBrowserWindow}, {}));
 
   BrowserWindowInterface* const new_browser =
       ui_test_utils::GetBrowserNotInSet({browser()});
@@ -493,7 +526,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
   ui_test_utils::NavigateToURLWithDisposition(
       browser(), GURL("http://localhost"), WindowOpenDisposition::CURRENT_TAB,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
-  TabStripModel* tab_strip = browser()->tab_strip_model();
+  TabStripModel* tab_strip = browser()->GetTabStripModel();
   EXPECT_EQ(1, tab_strip->count());  // Verify one tab is open.
 
   // Set the first tab as the active tab.
@@ -510,7 +543,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
   // Process the command line to simulate the launch.
   ASSERT_TRUE(StartupBrowserCreator().ProcessCmdLineImpl(
       command_line, base::FilePath(), chrome::startup::IsProcessStartup::kNo,
-      {browser()->profile(), StartupProfileMode::kBrowserWindow}, {}));
+      {browser()->GetProfile(), StartupProfileMode::kBrowserWindow}, {}));
 
   // Verify the behavior:
   // - The active tab's URL should be replaced by the first URL.
@@ -527,7 +560,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, OpenAppUrlIncognitoShortcut) {
   // legacy apps which may have been created by "Add to Desktop" in old versions
   // of Chrome. Some existing workflows (especially testing scenarios) also
   // use the --incognito command line.
-  // TODO(mgiuca): Delete this feature (https://crbug.com/751029). We are
+  // TODO(mgiuca): Delete this feature (https://crbug.com/41337042). We are
   // keeping it for now to avoid disrupting existing workflows.
   // IMPORTANT NOTE: This is being committed because it is an easy fix, but
   // this use case is not officially supported. If a future refactor or
@@ -541,11 +574,11 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, OpenAppUrlIncognitoShortcut) {
   command_line.AppendSwitchASCII(switches::kApp, url.spec());
   command_line.AppendSwitch(switches::kIncognito);
 
-  Browser* incognito = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito = CreateIncognitoBrowser();
 
   ASSERT_TRUE(StartupBrowserCreator().ProcessCmdLineImpl(
       command_line, base::FilePath(), chrome::startup::IsProcessStartup::kNo,
-      {incognito->profile(), StartupProfileMode::kBrowserWindow}, {}));
+      {incognito->GetProfile(), StartupProfileMode::kBrowserWindow}, {}));
 
   BrowserWindowInterface* const new_browser =
       ui_test_utils::GetBrowserNotInSet({incognito});
@@ -580,7 +613,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
   KeepAliveRegistry::GetInstance()->SetIsShuttingDown(true);
   web_app::startup::MaybeHandleWebAppLaunch(
       command_line, base::FilePath(FILE_PATH_LITERAL("\\path")),
-      browser()->profile(), chrome::startup::IsFirstRun::kNo);
+      browser()->GetProfile(), chrome::startup::IsFirstRun::kNo);
   base::RunLoop().RunUntilIdle();
 }
 
@@ -597,7 +630,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
 
   web_app::startup::MaybeHandleWebAppLaunch(
       command_line, base::FilePath(FILE_PATH_LITERAL("\\path")),
-      browser()->profile(), chrome::startup::IsFirstRun::kNo);
+      browser()->GetProfile(), chrome::startup::IsFirstRun::kNo);
   EXPECT_TRUE(KeepAliveRegistry::GetInstance()->IsOriginRegistered(
       KeepAliveOrigin::WEB_APP_INTENT_PICKER));
 
@@ -625,18 +658,84 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, ShowNonMilestoneUpdateToast) {
       CHROME_VERSION_BUILD, CHROME_VERSION_PATCH + 1);
 
   // Open a new browser and verify the toast is shown.
-  Browser* new_browser =
-      OpenNewBrowser(browser()->profile(), chrome_version_string_for_testing);
+  BrowserWindowInterface* new_browser = OpenNewBrowser(
+      browser()->GetProfile(), chrome_version_string_for_testing);
   ASSERT_TRUE(new_browser);
-  ASSERT_TRUE(
-      new_browser->GetFeatures().toast_controller()->GetToastViewForTesting());
+  ASSERT_TRUE(ToastController::From(new_browser)->GetToastViewForTesting());
 
   // Open another new browser and verify the toast is not shown.
-  Browser* new_browser2 =
-      OpenNewBrowser(browser()->profile(), chrome_version_string_for_testing);
+  BrowserWindowInterface* new_browser2 = OpenNewBrowser(
+      browser()->GetProfile(), chrome_version_string_for_testing);
   ASSERT_TRUE(new_browser2);
-  ASSERT_FALSE(
-      new_browser2->GetFeatures().toast_controller()->GetToastViewForTesting());
+  ASSERT_FALSE(ToastController::From(new_browser2)->GetToastViewForTesting());
+}
+
+IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
+                       StartupWithValidWindowNameUTF8Works) {
+  // Suffixes are e-acute, and e-acute followed by "100" red emoji.
+  std::vector<std::string> test_names = {"touche", "touch\xC3\xA9",
+                                         "touch\xC3\xA9\xF0\x9F\x92\xAF"};
+
+  for (const auto& expected_name : test_names) {
+    base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
+    command_line.AppendSwitch(switches::kOpenInNewWindow);
+#if BUILDFLAG(IS_WIN)
+    command_line.AppendSwitchNative(switches::kWindowName,
+                                    base::UTF8ToWide(expected_name));
+#else
+    command_line.AppendSwitchNative(switches::kWindowName, expected_name);
+#endif
+
+    ui_test_utils::BrowserCreatedObserver browser_created_observer;
+
+    ASSERT_TRUE(StartupBrowserCreator().Start(
+        command_line, base::FilePath(),
+        {browser()->GetProfile(), StartupProfileMode::kBrowserWindow}, {}));
+
+    BrowserWindowInterface* new_browser = browser_created_observer.Wait();
+    ASSERT_TRUE(new_browser);
+    EXPECT_EQ(expected_name,
+              WindowMetadataController::From(new_browser)->user_title());
+
+    CloseBrowserSynchronously(new_browser);
+  }
+}
+
+IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
+                       StartupWithInvalidWindowNameUTF8LeadsToDefault) {
+  // Test invalid UTF-8 sequence: should not fail startup, and window should act
+  // as if name empty.
+  base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
+  command_line.AppendSwitch(switches::kOpenInNewWindow);
+#if BUILDFLAG(IS_WIN)
+  // On Windows, command line is natively Wide. Pass an invalid UTF-16 string
+  // (unpaired surrogate) directly to test the conversion failure.
+  std::wstring invalid_wide = L"\xD800";
+  command_line.AppendSwitchNative(switches::kWindowName, invalid_wide);
+#else
+  std::string invalid_utf8 = "\xFF\xFF";
+  command_line.AppendSwitchNative(switches::kWindowName, invalid_utf8);
+#endif
+
+  ui_test_utils::BrowserCreatedObserver browser_created_observer;
+
+  ASSERT_TRUE(StartupBrowserCreator().Start(
+      command_line, base::FilePath(),
+      {browser()->GetProfile(), StartupProfileMode::kBrowserWindow}, {}));
+
+  BrowserWindowInterface* new_browser = browser_created_observer.Wait();
+  ASSERT_TRUE(new_browser);
+#if BUILDFLAG(IS_WIN)
+  // On Windows, the invalid UTF-16 is converted with "best effort" replacement,
+  // resulting in the Unicode replacement character "\xEF\xBF\xBD".
+  EXPECT_EQ("\xEF\xBF\xBD",
+            WindowMetadataController::From(new_browser)->user_title());
+#else
+  // On POSIX/Linux, the invalid UTF-8 is strictly rejected, falling back to "".
+  EXPECT_EQ("", WindowMetadataController::From(new_browser)->user_title());
+#endif
+
+  CloseBrowserSynchronously(new_browser);
 }
 
 namespace {
@@ -697,7 +796,9 @@ class StartupBrowserCreatorChromeAppShortcutTest
   }
 
   void ExpectBlockLaunch(const std::string& app_id, bool force_install_dialog) {
-    ASSERT_EQ(2u, chrome::GetBrowserCount(browser()->profile()));
+    ASSERT_EQ(2u,
+              ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                  ->GetSize());
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
     auto waiter = views::NamedWidgetShownWaiter(
         views::test::AnyWidgetTestPasskey{},
@@ -705,10 +806,10 @@ class StartupBrowserCreatorChromeAppShortcutTest
                              : "DeprecatedAppsDialogView");
 #endif
     // Should have opened the requested homepage about:blank in 1st window.
-    TabStripModel* tab_strip = browser()->tab_strip_model();
+    TabStripModel* tab_strip = browser()->GetTabStripModel();
     EXPECT_EQ(1, tab_strip->count());
-    EXPECT_FALSE(browser()->is_type_app());
-    EXPECT_TRUE(browser()->is_type_normal());
+    EXPECT_NE(browser()->GetType(), BrowserWindowInterface::Type::TYPE_APP);
+    EXPECT_EQ(browser()->GetType(), BrowserWindowInterface::Type::TYPE_NORMAL);
     EXPECT_EQ(GURL(url::kAboutBlankURL),
               tab_strip->GetWebContentsAt(0)->GetLastCommittedURL());
     // Should have opened the chrome://apps unsupported app flow in 2nd window.
@@ -736,21 +837,20 @@ class StartupBrowserCreatorChromeAppShortcutTest
   }
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
-
-  enum class ExpectedLaunchBehavior{kLaunchAnywaysInTab, kLaunchAnywaysInWindow,
-                                    kNoLaunch};
   void ExpectBlockLaunchWithLaunchBehavior(const std::string& app_id,
                                            bool force_install_dialog) {
-    EXPECT_EQ(2u, chrome::GetBrowserCount(browser()->profile()));
+    EXPECT_EQ(2u,
+              ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                  ->GetSize());
     auto waiter = views::NamedWidgetShownWaiter(
         views::test::AnyWidgetTestPasskey{},
         force_install_dialog ? "ForceInstalledDeprecatedAppsDialogView"
                              : "DeprecatedAppsDialogView");
     // Should have opened the requested homepage about:blank in 1st window.
-    TabStripModel* tab_strip = browser()->tab_strip_model();
+    TabStripModel* tab_strip = browser()->GetTabStripModel();
     EXPECT_EQ(1, tab_strip->count());
-    EXPECT_FALSE(browser()->is_type_app());
-    EXPECT_TRUE(browser()->is_type_normal());
+    EXPECT_NE(browser()->GetType(), BrowserWindowInterface::Type::TYPE_APP);
+    EXPECT_EQ(browser()->GetType(), BrowserWindowInterface::Type::TYPE_NORMAL);
     EXPECT_EQ(GURL(url::kAboutBlankURL),
               tab_strip->GetWebContentsAt(0)->GetLastCommittedURL());
     // Should have opened the chrome://apps unsupported app flow in 2nd window.
@@ -821,7 +921,7 @@ IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorChromeAppShortcutTest,
   ASSERT_NO_FATAL_FAILURE(LoadApp("app_with_tab_container", &extension_app));
 
   // When we start, the browser should already have an open tab.
-  TabStripModel* tab_strip = browser()->tab_strip_model();
+  TabStripModel* tab_strip = browser()->GetTabStripModel();
   EXPECT_EQ(1, tab_strip->count());
   ui_test_utils::TabAddedWaiter tab_waiter(browser());
 
@@ -831,20 +931,22 @@ IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorChromeAppShortcutTest,
 
   ASSERT_TRUE(StartupBrowserCreator().ProcessCmdLineImpl(
       command_line, base::FilePath(), chrome::startup::IsProcessStartup::kNo,
-      {browser()->profile(), StartupProfileMode::kBrowserWindow}, {}));
+      {browser()->GetProfile(), StartupProfileMode::kBrowserWindow}, {}));
 
   if (IsExpectedToAllowLaunch()) {
     // No pref was set, so the app should have opened in a tab in the existing
     // window.
     tab_waiter.Wait();
-    ASSERT_EQ(1u, chrome::GetBrowserCount(browser()->profile()));
+    ASSERT_EQ(1u,
+              ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                  ->GetSize());
     EXPECT_EQ(2, tab_strip->count());
     EXPECT_EQ(tab_strip->GetActiveWebContents(),
               tab_strip->GetWebContentsAt(1));
 
     // It should be a standard tabbed window, not an app window.
-    EXPECT_FALSE(browser()->is_type_app());
-    EXPECT_TRUE(browser()->is_type_normal());
+    EXPECT_NE(browser()->GetType(), BrowserWindowInterface::Type::TYPE_APP);
+    EXPECT_EQ(browser()->GetType(), BrowserWindowInterface::Type::TYPE_NORMAL);
 
     // It should have loaded the requested app.
     const std::u16string expected_title(
@@ -871,22 +973,24 @@ IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorChromeAppShortcutTest,
   ui_test_utils::BrowserCreatedObserver browser_created_observer;
   ASSERT_TRUE(StartupBrowserCreator().ProcessCmdLineImpl(
       command_line, base::FilePath(), chrome::startup::IsProcessStartup::kNo,
-      {browser()->profile(), StartupProfileMode::kBrowserWindow}, {}));
+      {browser()->GetProfile(), StartupProfileMode::kBrowserWindow}, {}));
 
   if (IsExpectedToAllowLaunch()) {
     // Pref was set to open in a window, so the app should have opened in a
     // window.  The launch should have created a new browser. Find the new
     // browser.
-    Browser* new_browser = browser_created_observer.Wait();
+    BrowserWindowInterface* new_browser = browser_created_observer.Wait();
     ASSERT_TRUE(new_browser);
 
     // Expect an app window.
-    EXPECT_TRUE(new_browser->is_type_app());
+    EXPECT_EQ(new_browser->GetType(), BrowserWindowInterface::Type::TYPE_APP);
 
     // The browser's app_name should include the app's ID.
-    EXPECT_NE(new_browser->app_name().find(extension_app->id()),
+    EXPECT_NE(BrowserInitState::From(new_browser)
+                  ->create_params()
+                  .app_name.find(extension_app->id()),
               std::string::npos)
-        << new_browser->app_name();
+        << BrowserInitState::From(new_browser)->create_params().app_name;
   } else {
     ExpectBlockLaunch(extension_app->id(), /*force_install_dialog=*/false);
   }
@@ -895,7 +999,7 @@ IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorChromeAppShortcutTest,
 IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorChromeAppShortcutTest,
                        OpenAppShortcutTabPref) {
   // When we start, the browser should already have an open tab.
-  TabStripModel* tab_strip = browser()->tab_strip_model();
+  TabStripModel* tab_strip = browser()->GetTabStripModel();
   EXPECT_EQ(1, tab_strip->count());
   ui_test_utils::TabAddedWaiter tab_waiter(browser());
 
@@ -910,22 +1014,25 @@ IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorChromeAppShortcutTest,
   command_line.AppendSwitchASCII(switches::kAppId, extension_app->id());
   ASSERT_TRUE(StartupBrowserCreator().ProcessCmdLineImpl(
       command_line, base::FilePath(), chrome::startup::IsProcessStartup::kNo,
-      {browser()->profile(), StartupProfileMode::kBrowserWindow}, {}));
+      {browser()->GetProfile(), StartupProfileMode::kBrowserWindow}, {}));
 
   if (IsExpectedToAllowLaunch()) {
     // When an app shortcut is open and the pref indicates a tab should open,
     // the tab is open in the existing browser window.
     tab_waiter.Wait();
-    ASSERT_EQ(1u, chrome::GetBrowserCount(browser()->profile()));
+    ASSERT_EQ(1u,
+              ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                  ->GetSize());
     EXPECT_EQ(2, tab_strip->count());
     EXPECT_EQ(tab_strip->GetActiveWebContents(),
               tab_strip->GetWebContentsAt(1));
 
     // The browser's app_name should not include the app's ID: it is in a normal
     // tabbed browser.
-    EXPECT_EQ(browser()->app_name().find(extension_app->id()),
+    EXPECT_EQ(BrowserInitState::From(browser())->create_params().app_name.find(
+                  extension_app->id()),
               std::string::npos)
-        << browser()->app_name();
+        << BrowserInitState::From(browser())->create_params().app_name;
 
     // It should have loaded the requested app.
     const std::u16string expected_title(
@@ -948,11 +1055,11 @@ IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorChromeAppShortcutTest,
   extensions::TestManagementPolicyProvider policy_provider(
       extensions::TestManagementPolicyProvider::MUST_REMAIN_INSTALLED);
   extensions::ExtensionSystem* extension_system =
-      extensions::ExtensionSystem::Get(browser()->profile());
+      extensions::ExtensionSystem::Get(browser()->GetProfile());
   extension_system->management_policy()->RegisterProvider(&policy_provider);
 
   // When we start, the browser should already have an open tab.
-  TabStripModel* tab_strip = browser()->tab_strip_model();
+  TabStripModel* tab_strip = browser()->GetTabStripModel();
   EXPECT_EQ(1, tab_strip->count());
   ui_test_utils::TabAddedWaiter tab_waiter(browser());
 
@@ -962,7 +1069,7 @@ IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorChromeAppShortcutTest,
 
   ASSERT_TRUE(StartupBrowserCreator().ProcessCmdLineImpl(
       command_line, base::FilePath(), chrome::startup::IsProcessStartup::kNo,
-      {browser()->profile(), StartupProfileMode::kBrowserWindow}, {}));
+      {browser()->GetProfile(), StartupProfileMode::kBrowserWindow}, {}));
 
   if (IsExpectedToAllowLaunch()) {
     tab_waiter.Wait();
@@ -972,14 +1079,16 @@ IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorChromeAppShortcutTest,
     //
     // No app launch pref was set, so the app should have opened in a tab in the
     // existing window.
-    ASSERT_EQ(1u, chrome::GetBrowserCount(browser()->profile()));
+    ASSERT_EQ(1u,
+              ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                  ->GetSize());
     EXPECT_EQ(2, tab_strip->count());
     EXPECT_EQ(tab_strip->GetActiveWebContents(),
               tab_strip->GetWebContentsAt(1));
 
     // It should be a standard tabbed window, not an app window.
-    EXPECT_FALSE(browser()->is_type_app());
-    EXPECT_TRUE(browser()->is_type_normal());
+    EXPECT_NE(browser()->GetType(), BrowserWindowInterface::Type::TYPE_APP);
+    EXPECT_EQ(browser()->GetType(), BrowserWindowInterface::Type::TYPE_NORMAL);
 
     // It should have loaded the requested app.
     const std::u16string expected_title(
@@ -1016,7 +1125,7 @@ IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorChromeAppShortcutTestWithLaunch,
   ASSERT_NO_FATAL_FAILURE(LoadApp("app_with_tab_container", &extension_app));
 
   // When we start, the browser should already have an open tab.
-  TabStripModel* tab_strip = browser()->tab_strip_model();
+  TabStripModel* tab_strip = browser()->GetTabStripModel();
   EXPECT_EQ(1, tab_strip->count());
   ui_test_utils::TabAddedWaiter tab_waiter(browser());
 
@@ -1026,12 +1135,13 @@ IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorChromeAppShortcutTestWithLaunch,
 
   ASSERT_TRUE(StartupBrowserCreator().ProcessCmdLineImpl(
       command_line, base::FilePath(), chrome::startup::IsProcessStartup::kNo,
-      {browser()->profile(), StartupProfileMode::kBrowserWindow}, {}));
+      {browser()->GetProfile(), StartupProfileMode::kBrowserWindow}, {}));
 
   ExpectBlockLaunchWithLaunchBehavior(extension_app->id(),
                                       /*force_install_dialog=*/false);
 
-  ASSERT_EQ(2u, chrome::GetBrowserCount(browser()->profile()));
+  ASSERT_EQ(2u, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
 }
 
 IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorChromeAppShortcutTestWithLaunch,
@@ -1048,18 +1158,19 @@ IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorChromeAppShortcutTestWithLaunch,
   ui_test_utils::BrowserCreatedObserver browser_created_observer;
   ASSERT_TRUE(StartupBrowserCreator().ProcessCmdLineImpl(
       command_line, base::FilePath(), chrome::startup::IsProcessStartup::kNo,
-      {browser()->profile(), StartupProfileMode::kBrowserWindow}, {}));
+      {browser()->GetProfile(), StartupProfileMode::kBrowserWindow}, {}));
 
   ExpectBlockLaunchWithLaunchBehavior(extension_app->id(),
                                       /*force_install_dialog=*/false);
 
-  ASSERT_EQ(2u, chrome::GetBrowserCount(browser()->profile()));
+  ASSERT_EQ(2u, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
 }
 
 IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorChromeAppShortcutTestWithLaunch,
                        OpenAppShortcutTabPref) {
   // When we start, the browser should already have an open tab.
-  TabStripModel* tab_strip = browser()->tab_strip_model();
+  TabStripModel* tab_strip = browser()->GetTabStripModel();
   EXPECT_EQ(1, tab_strip->count());
   ui_test_utils::TabAddedWaiter tab_waiter(browser());
 
@@ -1074,12 +1185,13 @@ IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorChromeAppShortcutTestWithLaunch,
   command_line.AppendSwitchASCII(switches::kAppId, extension_app->id());
   ASSERT_TRUE(StartupBrowserCreator().ProcessCmdLineImpl(
       command_line, base::FilePath(), chrome::startup::IsProcessStartup::kNo,
-      {browser()->profile(), StartupProfileMode::kBrowserWindow}, {}));
+      {browser()->GetProfile(), StartupProfileMode::kBrowserWindow}, {}));
 
   ExpectBlockLaunchWithLaunchBehavior(extension_app->id(),
                                       /*force_install_dialog=*/false);
 
-  ASSERT_EQ(2u, chrome::GetBrowserCount(browser()->profile()));
+  ASSERT_EQ(2u, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
 }
 
 IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorChromeAppShortcutTestWithLaunch,
@@ -1092,11 +1204,11 @@ IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorChromeAppShortcutTestWithLaunch,
   extensions::TestManagementPolicyProvider policy_provider(
       extensions::TestManagementPolicyProvider::MUST_REMAIN_INSTALLED);
   extensions::ExtensionSystem* extension_system =
-      extensions::ExtensionSystem::Get(browser()->profile());
+      extensions::ExtensionSystem::Get(browser()->GetProfile());
   extension_system->management_policy()->RegisterProvider(&policy_provider);
 
   // When we start, the browser should already have an open tab.
-  TabStripModel* tab_strip = browser()->tab_strip_model();
+  TabStripModel* tab_strip = browser()->GetTabStripModel();
   EXPECT_EQ(1, tab_strip->count());
   ui_test_utils::TabAddedWaiter tab_waiter(browser());
 
@@ -1106,12 +1218,13 @@ IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorChromeAppShortcutTestWithLaunch,
 
   ASSERT_TRUE(StartupBrowserCreator().ProcessCmdLineImpl(
       command_line, base::FilePath(), chrome::startup::IsProcessStartup::kNo,
-      {browser()->profile(), StartupProfileMode::kBrowserWindow}, {}));
+      {browser()->GetProfile(), StartupProfileMode::kBrowserWindow}, {}));
 
   ExpectBlockLaunchWithLaunchBehavior(extension_app->id(),
                                       /*force_install_dialog=*/true);
 
-  ASSERT_EQ(2u, chrome::GetBrowserCount(browser()->profile()));
+  ASSERT_EQ(2u, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
 }
 
 // These tests are specifically for testing what happens when the "Launch
@@ -1137,11 +1250,12 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, ValidNotificationLaunchId) {
 
   ASSERT_TRUE(StartupBrowserCreator().ProcessCmdLineImpl(
       command_line, base::FilePath(), chrome::startup::IsProcessStartup::kNo,
-      {browser()->profile(), StartupProfileMode::kBrowserWindow}, {}));
+      {browser()->GetProfile(), StartupProfileMode::kBrowserWindow}, {}));
 
   // The launch delegates to the notification system and doesn't open any new
   // browser window.
-  ASSERT_EQ(1u, chrome::GetBrowserCount(browser()->profile()));
+  ASSERT_EQ(1u, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
 }
 
 IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, InvalidNotificationLaunchId) {
@@ -1151,15 +1265,16 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, InvalidNotificationLaunchId) {
   StartupBrowserCreator browser_creator;
   ASSERT_FALSE(StartupBrowserCreator().ProcessCmdLineImpl(
       command_line, base::FilePath(), chrome::startup::IsProcessStartup::kNo,
-      {browser()->profile(), StartupProfileMode::kBrowserWindow}, {}));
+      {browser()->GetProfile(), StartupProfileMode::kBrowserWindow}, {}));
 
   // No new browser window is open.
-  ASSERT_EQ(1u, chrome::GetBrowserCount(browser()->profile()));
+  ASSERT_EQ(1u, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
 }
 
 IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
                        NotificationLaunchIdDisablesLastOpenProfiles) {
-  Profile* default_profile = browser()->profile();
+  Profile* default_profile = browser()->GetProfile();
 
   ProfileManager* profile_manager = g_browser_process->profile_manager();
   // Create another profile.
@@ -1188,7 +1303,8 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
 
   // When the kNotificationLaunchId switch is present, any last opened profile
   // is ignored. Thus there is no browser for other_profile.
-  ASSERT_EQ(0u, chrome::GetBrowserCount(&other_profile));
+  ASSERT_EQ(0u,
+            ProfileBrowserCollection::GetForProfile(&other_profile)->GetSize());
 }
 
 #endif  // BUILDFLAG(IS_WIN)
@@ -1218,6 +1334,38 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
 }
 
 #if !BUILDFLAG(IS_CHROMEOS)
+IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
+                       ReadingShouldRestoreLastSessionAfterRestart) {
+  // Tests that StartupBrowserCreator::ShouldRestoreLastSession caches the
+  // value of kRestoreLastSession during initial startup and returns false
+  // once the StartupBrowserCreator instance destructs.
+  StartupBrowserCreator::was_restore_last_session_read_ = false;
+  StartupBrowserCreator::restore_last_session_active_ = false;
+  base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
+  command_line.AppendSwitch(switches::kRestoreLastSession);
+
+  EXPECT_TRUE(StartupBrowserCreator::ShouldRestoreLastSession(command_line));
+  EXPECT_TRUE(StartupBrowserCreator::ShouldRestoreLastSession(command_line));
+
+  // Simulate destruction of the initial StartupBrowserCreator.
+  {
+    StartupBrowserCreator creator;
+  }
+  EXPECT_FALSE(StartupBrowserCreator::ShouldRestoreLastSession(command_line));
+}
+
+IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
+                       ReadingShouldRestoreLastSessionAfterNormalStart) {
+  // Tests that StartupBrowserCreator::ShouldRestoreLastSession returns false
+  // when kRestoreLastSession is absent.
+  StartupBrowserCreator::was_restore_last_session_read_ = false;
+  StartupBrowserCreator::restore_last_session_active_ = false;
+  base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
+
+  EXPECT_FALSE(StartupBrowserCreator::ShouldRestoreLastSession(command_line));
+  EXPECT_FALSE(StartupBrowserCreator::ShouldRestoreLastSession(command_line));
+}
+
 // If startup pref is set as LAST_AND_URLS, startup urls should be opened in a
 // new browser window separated from the last-session-restored browser. This
 // test does not apply to ChromeOS.
@@ -1247,9 +1395,10 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, StartupPrefSetAsLastAndURLs) {
   SessionStartupPref::SetStartupPref(&profile, startup_pref);
 
   // Open |t3_url| in a tab.
-  Browser* new_browser = Browser::Create(
-      Browser::CreateParams(Browser::TYPE_NORMAL, &profile, true));
-  TabStripModel* tab_strip_model = new_browser->tab_strip_model();
+  BrowserWindowInterface* new_browser = CreateBrowserWindow(
+      BrowserWindowCreateParams(BrowserWindowInterface::TYPE_NORMAL, &profile,
+                                /*from_user_gesture=*/true));
+  TabStripModel* tab_strip_model = new_browser->GetTabStripModel();
   ui_test_utils::NavigateToURLWithDisposition(
       new_browser, t3_url, WindowOpenDisposition::NEW_FOREGROUND_TAB,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
@@ -1270,13 +1419,13 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, StartupPrefSetAsLastAndURLs) {
 
   StartupBrowserCreator browser_creator;
   std::vector<Profile*> last_opened_profiles;
-  last_opened_profiles.push_back(browser()->profile());
+  last_opened_profiles.push_back(browser()->GetProfile());
   last_opened_profiles.push_back(&profile);
 
   base::RunLoop run_loop;
   browser_creator.Start(
       dummy, profile_manager->user_data_dir(),
-      {browser()->profile(), StartupProfileMode::kBrowserWindow},
+      {browser()->GetProfile(), StartupProfileMode::kBrowserWindow},
       last_opened_profiles);
   testing::SessionsRestoredWaiter restore_waiter(run_loop.QuitClosure(), 1);
   run_loop.Run();
@@ -1293,13 +1442,20 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, StartupPrefSetAsLastAndURLs) {
 
   // |profile| restored the last open pages and opened the urls in an active new
   // window.
-  ASSERT_EQ(2u, chrome::GetBrowserCount(&profile));
-  BrowserWindowInterface* const pref_urls_opened_browser =
-      chrome::FindLastActiveWithProfile(&profile);
-  ASSERT_TRUE(pref_urls_opened_browser);
+  ASSERT_EQ(2u, ProfileBrowserCollection::GetForProfile(&profile)->GetSize());
+
+  std::vector<BrowserWindowInterface*> profile_browsers;
+  ProfileBrowserCollection::GetForProfile(&profile)->ForEach(
+      [&profile_browsers](BrowserWindowInterface* browser) {
+        profile_browsers.push_back(browser);
+        return true;
+      });
+
   BrowserWindowInterface* const last_session_opened_browser =
-      FindOneOtherBrowserForProfile(&profile, pref_urls_opened_browser);
+      profile_browsers[0];
   ASSERT_TRUE(last_session_opened_browser);
+  BrowserWindowInterface* const pref_urls_opened_browser = profile_browsers[1];
+  ASSERT_TRUE(pref_urls_opened_browser);
   // Check the last-session-restored browser.
   EXPECT_NO_FATAL_FAILURE(
       wait_for_load_stop_for_browser(last_session_opened_browser));
@@ -1317,7 +1473,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, StartupPrefSetAsLastAndURLs) {
 }
 
 IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, StartupURLsForTwoProfiles) {
-  Profile* default_profile = browser()->profile();
+  Profile* default_profile = browser()->GetProfile();
 
   ProfileManager* profile_manager = g_browser_process->profile_manager();
   // Create another profile.
@@ -1371,7 +1527,8 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, StartupURLsForTwoProfiles) {
   ASSERT_EQ(1, tab_strip->count());
   EXPECT_EQ(urls1[0], tab_strip->GetWebContentsAt(0)->GetVisibleURL());
 
-  ASSERT_EQ(1u, chrome::GetBrowserCount(&other_profile));
+  ASSERT_EQ(1u,
+            ProfileBrowserCollection::GetForProfile(&other_profile)->GetSize());
   new_browser = FindOneOtherBrowserForProfile(&other_profile, nullptr);
   ASSERT_TRUE(new_browser);
   tab_strip = new_browser->GetTabStripModel();
@@ -1400,16 +1557,18 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, PRE_UpdateWithTwoProfiles) {
       &profile2, ProfileKeepAliveOrigin::kBrowserWindow);
 
   // Open some urls with the browsers, and close them.
-  Browser* browser1 = Browser::Create(
-      Browser::CreateParams(Browser::TYPE_NORMAL, &profile1, true));
-  chrome::NewTab(browser1);
+  BrowserWindowInterface* browser1 = CreateBrowserWindow(
+      BrowserWindowCreateParams(BrowserWindowInterface::TYPE_NORMAL, &profile1,
+                                /*from_user_gesture=*/true));
+  chrome::NewTab(browser1, NewTabTypes::kNoUserAction);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser1, embedded_test_server()->GetURL("/empty.html")));
   CloseBrowserSynchronously(browser1);
 
-  Browser* browser2 = Browser::Create(
-      Browser::CreateParams(Browser::TYPE_NORMAL, &profile2, true));
-  chrome::NewTab(browser2);
+  BrowserWindowInterface* browser2 = CreateBrowserWindow(
+      BrowserWindowCreateParams(BrowserWindowInterface::TYPE_NORMAL, &profile2,
+                                /*from_user_gesture=*/true));
+  chrome::NewTab(browser2, NewTabTypes::kNoUserAction);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser2, embedded_test_server()->GetURL("/form.html")));
   CloseBrowserSynchronously(browser2);
@@ -1471,7 +1630,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, UpdateWithTwoProfiles) {
   EXPECT_TRUE(profile2.restored_last_session());
 
   BrowserWindowInterface* new_browser = nullptr;
-  ASSERT_EQ(1u, chrome::GetBrowserCount(&profile1));
+  ASSERT_EQ(1u, ProfileBrowserCollection::GetForProfile(&profile1)->GetSize());
   new_browser = FindOneOtherBrowserForProfile(&profile1, nullptr);
   ASSERT_TRUE(new_browser);
   TabStripModel* tab_strip = new_browser->GetTabStripModel();
@@ -1479,7 +1638,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, UpdateWithTwoProfiles) {
   EXPECT_EQ("/empty.html",
             tab_strip->GetWebContentsAt(0)->GetLastCommittedURL().GetPath());
 
-  ASSERT_EQ(1u, chrome::GetBrowserCount(&profile2));
+  ASSERT_EQ(1u, ProfileBrowserCollection::GetForProfile(&profile2)->GetSize());
   new_browser = FindOneOtherBrowserForProfile(&profile2, nullptr);
   ASSERT_TRUE(new_browser);
   tab_strip = new_browser->GetTabStripModel();
@@ -1534,9 +1693,10 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
   SessionStartupPref::SetStartupPref(&profile_urls, pref_urls);
 
   // Open a page with profile_last.
-  Browser* browser_last = Browser::Create(
-      Browser::CreateParams(Browser::TYPE_NORMAL, &profile_last, true));
-  chrome::NewTab(browser_last);
+  BrowserWindowInterface* browser_last = CreateBrowserWindow(
+      BrowserWindowCreateParams(BrowserWindowInterface::TYPE_NORMAL,
+                                &profile_last, /*from_user_gesture=*/true));
+  chrome::NewTab(browser_last, NewTabTypes::kNoUserAction);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser_last, embedded_test_server()->GetURL("/empty.html")));
 
@@ -1569,7 +1729,8 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
   BrowserWindowInterface* new_browser = nullptr;
   // The last open profile (the profile_home1 in this case) will always be
   // launched, even if it will open just the NTP.
-  ASSERT_EQ(1u, chrome::GetBrowserCount(&profile_home1));
+  ASSERT_EQ(1u,
+            ProfileBrowserCollection::GetForProfile(&profile_home1)->GetSize());
   new_browser = FindOneOtherBrowserForProfile(&profile_home1, nullptr);
   ASSERT_TRUE(new_browser);
   TabStripModel* tab_strip = new_browser->GetTabStripModel();
@@ -1580,7 +1741,8 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
             tab_strip->GetWebContentsAt(0)->GetVisibleURL());
 
   // profile_urls opened the urls.
-  ASSERT_EQ(1u, chrome::GetBrowserCount(&profile_urls));
+  ASSERT_EQ(1u,
+            ProfileBrowserCollection::GetForProfile(&profile_urls)->GetSize());
   new_browser = FindOneOtherBrowserForProfile(&profile_urls, nullptr);
   ASSERT_TRUE(new_browser);
   tab_strip = new_browser->GetTabStripModel();
@@ -1588,7 +1750,8 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
   EXPECT_EQ(urls[0], tab_strip->GetWebContentsAt(0)->GetVisibleURL());
 
   // profile_last opened the last open pages.
-  ASSERT_EQ(1u, chrome::GetBrowserCount(&profile_last));
+  ASSERT_EQ(1u,
+            ProfileBrowserCollection::GetForProfile(&profile_last)->GetSize());
   new_browser = FindOneOtherBrowserForProfile(&profile_last, nullptr);
   ASSERT_TRUE(new_browser);
   tab_strip = new_browser->GetTabStripModel();
@@ -1597,7 +1760,8 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
             tab_strip->GetWebContentsAt(0)->GetLastCommittedURL().GetPath());
 
   // profile_home2 was not launched since it would've only opened the home page.
-  ASSERT_EQ(0u, chrome::GetBrowserCount(&profile_home2));
+  ASSERT_EQ(0u,
+            ProfileBrowserCollection::GetForProfile(&profile_home2)->GetSize());
 }
 
 // This tests that opening multiple profiles with session restore enabled,
@@ -1624,7 +1788,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, RestoreWithNoStartupWindow) {
   SessionStartupPref::SetStartupPref(&profile1, pref_last);
   SessionStartupPref::SetStartupPref(&profile2, pref_last);
 
-  Profile* default_profile = browser()->profile();
+  Profile* default_profile = browser()->GetProfile();
 
   // TODO(crbug.com/40594327): Adapt this test for DestroyProfileOnBrowserClose
   // if needed.
@@ -1638,22 +1802,23 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, RestoreWithNoStartupWindow) {
       &profile2, ProfileKeepAliveOrigin::kBrowserWindow);
 
   // Open a page with profile1 and profile2.
-  Browser* browser1 = Browser::Create({Browser::TYPE_NORMAL, &profile1, true});
-  chrome::NewTab(browser1);
+  BrowserWindowInterface* browser1 = CreateBrowserWindow(
+      BrowserWindowCreateParams(BrowserWindowInterface::TYPE_NORMAL, &profile1,
+                                /*from_user_gesture=*/true));
+  chrome::NewTab(browser1, NewTabTypes::kNoUserAction);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser1, embedded_test_server()->GetURL("/empty.html")));
 
-  Browser* browser2 = Browser::Create({Browser::TYPE_NORMAL, &profile2, true});
-  chrome::NewTab(browser2);
+  BrowserWindowInterface* browser2 = CreateBrowserWindow(
+      BrowserWindowCreateParams(BrowserWindowInterface::TYPE_NORMAL, &profile2,
+                                /*from_user_gesture=*/true));
+  chrome::NewTab(browser2, NewTabTypes::kNoUserAction);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser2, embedded_test_server()->GetURL("/empty.html")));
   // Exit the browser, saving the multi-profile session state.
   chrome::ExecuteCommand(browser(), IDC_EXIT);
-  {
-    base::RunLoop run_loop;
-    AllBrowsersClosedWaiter waiter(run_loop.QuitClosure());
-    run_loop.Run();
-  }
+  ASSERT_TRUE(base::test::RunUntil(
+      []() { return GlobalBrowserCollection::GetInstance()->IsEmpty(); }));
 
 #if BUILDFLAG(IS_MAC)
   // While we closed all the browsers above, this doesn't quit the Mac app,
@@ -1677,8 +1842,8 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, RestoreWithNoStartupWindow) {
   content::RunAllTasksUntilIdle();
 
   // No browser windows should be opened.
-  EXPECT_EQ(chrome::GetBrowserCount(&profile1), 0u);
-  EXPECT_EQ(chrome::GetBrowserCount(&profile2), 0u);
+  EXPECT_EQ(ProfileBrowserCollection::GetForProfile(&profile1)->GetSize(), 0u);
+  EXPECT_EQ(ProfileBrowserCollection::GetForProfile(&profile2)->GetSize(), 0u);
 
   base::CommandLine empty(base::CommandLine::NO_PROGRAM);
   base::RunLoop run_loop;
@@ -1689,11 +1854,11 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest, RestoreWithNoStartupWindow) {
   run_loop.Run();
 
   // profile1 and profile2 browser windows should be opened.
-  EXPECT_EQ(chrome::GetBrowserCount(&profile1), 1u);
-  EXPECT_EQ(chrome::GetBrowserCount(&profile2), 1u);
+  EXPECT_EQ(ProfileBrowserCollection::GetForProfile(&profile1)->GetSize(), 1u);
+  EXPECT_EQ(ProfileBrowserCollection::GetForProfile(&profile2)->GetSize(), 1u);
 }
 
-// Flaky. See https://crbug.com/819976.
+// Flaky. See https://crbug.com/41375379.
 IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
                        DISABLED_ProfilesLaunchedAfterCrash) {
   // After an unclean exit, all profiles will be launched. However, they won't
@@ -1740,6 +1905,19 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
   ExitTypeService::GetInstanceForProfile(&profile_urls)
       ->SetLastSessionExitTypeForTest(ExitType::kCrashed);
 
+#if !BUILDFLAG(IS_MAC) && !BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  // Use HistogramTester to make sure a bubble is shown when it's not on
+  // platform Mac OS X and it's not official Chrome build.
+  //
+  // On Mac OS X, an infobar is shown to restore the previous session, which
+  // is tested by function EnsureRestoreUIWasShown.
+  //
+  // Under a Google Chrome build, it is not tested because a task is posted to
+  // the file thread before the bubble is shown. It is difficult to make sure
+  // that the histogram check runs after all threads have finished their tasks.
+  base::HistogramTester histogram_tester;
+#endif  // !BUILDFLAG(IS_MAC) && !BUILDFLAG(GOOGLE_CHROME_BRANDING)
+
   base::CommandLine dummy(base::CommandLine::NO_PROGRAM);
   dummy.AppendSwitchASCII(switches::kTestType, "browser");
   StartupBrowserCreator browser_creator;
@@ -1759,7 +1937,8 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
 
   // The profile which normally opens the home page displays the new tab page.
   BrowserWindowInterface* new_browser = nullptr;
-  ASSERT_EQ(1u, chrome::GetBrowserCount(&profile_home));
+  ASSERT_EQ(1u,
+            ProfileBrowserCollection::GetForProfile(&profile_home)->GetSize());
   new_browser = FindOneOtherBrowserForProfile(&profile_home, nullptr);
   ASSERT_TRUE(new_browser);
   TabStripModel* tab_strip = new_browser->GetTabStripModel();
@@ -1771,7 +1950,8 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
   EnsureRestoreUIWasShown(tab_strip->GetWebContentsAt(0));
 
   // The profile which normally opens last open pages displays the new tab page.
-  ASSERT_EQ(1u, chrome::GetBrowserCount(&profile_last));
+  ASSERT_EQ(1u,
+            ProfileBrowserCollection::GetForProfile(&profile_last)->GetSize());
   new_browser = FindOneOtherBrowserForProfile(&profile_last, nullptr);
   ASSERT_TRUE(new_browser);
   tab_strip = new_browser->GetTabStripModel();
@@ -1780,13 +1960,20 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
   EnsureRestoreUIWasShown(tab_strip->GetWebContentsAt(0));
 
   // The profile which normally opens URLs displays the new tab page.
-  ASSERT_EQ(1u, chrome::GetBrowserCount(&profile_urls));
+  ASSERT_EQ(1u,
+            ProfileBrowserCollection::GetForProfile(&profile_urls)->GetSize());
   new_browser = FindOneOtherBrowserForProfile(&profile_urls, nullptr);
   ASSERT_TRUE(new_browser);
   tab_strip = new_browser->GetTabStripModel();
   ASSERT_EQ(1, tab_strip->count());
   EXPECT_TRUE(search::IsInstantNTP(tab_strip->GetWebContentsAt(0)));
   EnsureRestoreUIWasShown(tab_strip->GetWebContentsAt(0));
+
+#if !BUILDFLAG(IS_MAC) && !BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  // Each profile should have one session restore bubble shown, so we should
+  // observe count 3 in bucket 0 (which represents bubble shown).
+  histogram_tester.ExpectBucketCount("Session.SessionCrashed.Bubble", 0, 3);
+#endif  // !BUILDFLAG(IS_MAC) && !BUILDFLAG(GOOGLE_CHROME_BRANDING)
 }
 
 IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
@@ -1830,9 +2017,30 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
                         {&profile1, StartupProfileMode::kBrowserWindow},
                         last_opened_profiles);
 
-  ASSERT_EQ(0u, chrome::GetBrowserCount(&profile1));
-  ASSERT_EQ(1u, chrome::GetBrowserCount(&profile2));
+  ASSERT_EQ(0u, ProfileBrowserCollection::GetForProfile(&profile1)->GetSize());
+  ASSERT_EQ(1u, ProfileBrowserCollection::GetForProfile(&profile2)->GetSize());
 }
+
+#if BUILDFLAG(IS_LINUX)
+IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTest,
+                       RemoteActivationTokenPropagation) {
+  base::CommandLine cmd_line(base::CommandLine::NO_PROGRAM);
+  cmd_line.AppendSwitchASCII("xdg-activation-token", "test-token-123");
+
+  StartupProfilePathInfo path_info = {browser()->GetProfile()->GetPath(),
+                                      StartupProfileMode::kBrowserWindow};
+
+  ui_test_utils::BrowserCreatedObserver observer;
+
+  StartupBrowserCreator::ProcessCommandLineAlreadyRunning(cmd_line, {},
+                                                          path_info);
+
+  BrowserWindowInterface* new_browser = observer.Wait();
+  ASSERT_TRUE(new_browser);
+  EXPECT_EQ(BrowserInitState::From(new_browser)->create_params().startup_id,
+            "test-token-123");
+}
+#endif  // BUILDFLAG(IS_LINUX)
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 webapps::AppId InstallPWAWithName(Profile* profile,
@@ -1862,7 +2070,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserWithListAppsFeature,
                        ListAppsForAllProfiles) {
   ProfileManager* profile_manager = g_browser_process->profile_manager();
   base::FilePath user_data_dir = profile_manager->user_data_dir();
-  Profile* profile1 = browser()->profile();
+  Profile* profile1 = browser()->GetProfile();
 
   // Create a new profile.
   Profile& profile2 = profiles::testing::CreateProfileSync(
@@ -1888,9 +2096,9 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserWithListAppsFeature,
       InstallPWAWithName(&profile2, example_url4, app_name4);
 
   // Launch web apps for the two profiles.
-  Browser* app_browser1 =
+  BrowserWindowInterface* app_browser1 =
       web_app::LaunchWebAppBrowserAndWait(profile1, app_id1);
-  Browser* app_browser2 =
+  BrowserWindowInterface* app_browser2 =
       web_app::LaunchWebAppBrowserAndWait(&profile2, app_id3);
   ASSERT_NE(app_browser1, nullptr);
   ASSERT_NE(app_browser2, nullptr);
@@ -1941,7 +2149,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserWithListAppsFeature,
   command_line.AppendSwitchPath(switches::kListApps, output_path);
   ASSERT_TRUE(StartupBrowserCreator().ProcessCmdLineImpl(
       command_line, base::FilePath(), chrome::startup::IsProcessStartup::kNo,
-      {browser()->profile(), StartupProfileMode::kBrowserWindow}, {}));
+      {browser()->GetProfile(), StartupProfileMode::kBrowserWindow}, {}));
 
   content::RunAllTasksUntilIdle();
 
@@ -1953,9 +2161,29 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserWithListAppsFeature,
     base::ScopedAllowBlockingForTesting allow_blocking;
     std::string file_contents;
     ASSERT_TRUE(base::ReadFileToString(output_path, &file_contents));
-    // Normalize Windows line endings to Linux line endings used by golden data.
-    base::ReplaceSubstringsAfterOffset(&file_contents, 0, "\r\n", "\n");
-    ASSERT_EQ(expected_info, file_contents);
+    // Parse both expected and actual as JSON and compare structurally to avoid
+    // flakiness from non-deterministic profile ordering.
+    std::optional<base::Value> expected_value =
+        base::JSONReader::Read(expected_info, base::JSON_PARSE_RFC);
+    ASSERT_TRUE(expected_value.has_value()) << "Failed to parse expected JSON";
+    std::optional<base::Value> actual_value =
+        base::JSONReader::Read(file_contents, base::JSON_PARSE_RFC);
+    ASSERT_TRUE(actual_value.has_value()) << "Failed to parse actual JSON";
+    // Sort profile lists by profile_id for order-independent comparison.
+    auto sort_by_profile_id = [](base::Value& root) {
+      for (const char* key : {"installed_web_apps", "open_web_apps"}) {
+        base::ListValue* list = root.GetDict().FindList(key);
+        if (list) {
+          std::ranges::sort(*list, std::ranges::less{},
+                            [](const base::Value& v) {
+                              return *v.GetDict().FindString("profile_id");
+                            });
+        }
+      }
+    };
+    sort_by_profile_id(*expected_value);
+    sort_by_profile_id(*actual_value);
+    EXPECT_EQ(*expected_value, *actual_value);
   }
 }
 
@@ -1963,7 +2191,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserWithListAppsFeature,
                        ListAppsForGivenProfile) {
   ProfileManager* profile_manager = g_browser_process->profile_manager();
   base::FilePath user_data_dir = profile_manager->user_data_dir();
-  Profile* profile1 = browser()->profile();
+  Profile* profile1 = browser()->GetProfile();
 
   // Create a new profile.
   Profile& profile2 = profiles::testing::CreateProfileSync(
@@ -1989,9 +2217,9 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserWithListAppsFeature,
       InstallPWAWithName(&profile2, example_url4, app_name4);
 
   // Launch web apps for the two profiles.
-  Browser* app_browser1 =
+  BrowserWindowInterface* app_browser1 =
       web_app::LaunchWebAppBrowserAndWait(profile1, app_id1);
-  Browser* app_browser2 =
+  BrowserWindowInterface* app_browser2 =
       web_app::LaunchWebAppBrowserAndWait(&profile2, app_id3);
   ASSERT_NE(app_browser1, nullptr);
   ASSERT_NE(app_browser2, nullptr);
@@ -2029,7 +2257,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserWithListAppsFeature,
   command_line.AppendSwitchASCII(switches::kProfileBaseName, "New Profile 1");
   ASSERT_TRUE(StartupBrowserCreator().ProcessCmdLineImpl(
       command_line, base::FilePath(), chrome::startup::IsProcessStartup::kNo,
-      {browser()->profile(), StartupProfileMode::kBrowserWindow}, {}));
+      {browser()->GetProfile(), StartupProfileMode::kBrowserWindow}, {}));
 
   CloseBrowserSynchronously(app_browser1);
   CloseBrowserSynchronously(app_browser2);
@@ -2058,15 +2286,20 @@ webapps::AppId InstallPWA(Profile* profile, const GURL& start_url) {
   return web_app::test::InstallWebApp(profile, std::move(web_app_info));
 }
 
-class StartupBrowserCreatorRestartTest : public StartupBrowserCreatorTest,
-                                         public BrowserListObserver {
+class StartupBrowserCreatorRestartTest : public StartupBrowserCreatorTest {
  protected:
-  StartupBrowserCreatorRestartTest() { BrowserList::AddObserver(this); }
-  ~StartupBrowserCreatorRestartTest() override {
-    // We might have already been removed but it's safe to call again.
-    BrowserList::RemoveObserver(this);
-  }
+  StartupBrowserCreatorRestartTest() = default;
+  ~StartupBrowserCreatorRestartTest() override = default;
 
+  // InProcessBrowserTest:
+  void CreatedBrowserMainParts(
+      content::BrowserMainParts* browser_main_parts) override {
+    InProcessBrowserTest::CreatedBrowserMainParts(browser_main_parts);
+    static_cast<ChromeBrowserMainParts*>(browser_main_parts)
+        ->AddParts(std::make_unique<BrowserCreatedMainParts>(base::BindOnce(
+            &StartupBrowserCreatorRestartTest::OnFirstBrowserCreated,
+            base::Unretained(this))));
+  }
   void SetUpInProcessBrowserTestFixture() override {
     std::string_view test_name =
         ::testing::UnitTest::GetInstance()->current_test_info()->name();
@@ -2082,7 +2315,7 @@ class StartupBrowserCreatorRestartTest : public StartupBrowserCreatorTest,
     }
   }
 
-  void OnBrowserAdded(Browser* browser) override {
+  void OnFirstBrowserCreated() {
     std::string_view test_name =
         ::testing::UnitTest::GetInstance()->current_test_info()->name();
 
@@ -2092,7 +2325,6 @@ class StartupBrowserCreatorRestartTest : public StartupBrowserCreatorTest,
       EXPECT_TRUE(StartupBrowserCreator::WasRestarted());
       EXPECT_FALSE(browser_added_check_passed_);
       browser_added_check_passed_ = true;
-      BrowserList::RemoveObserver(this);
     }
   }
 
@@ -2119,7 +2351,7 @@ class StartupBrowserCreatorRestartTest : public StartupBrowserCreatorTest,
 IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorRestartTest,
                        PRE_ProfileRestartedAppRestore) {
   // Ensure services are started.
-  Profile* test_profile = browser()->profile();
+  Profile* test_profile = browser()->GetProfile();
 
   AppSessionServiceFactory::GetForProfileForSessionRestore(test_profile);
   SessionStartupPref pref_last(SessionStartupPref::LAST);
@@ -2128,11 +2360,11 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorRestartTest,
   // Install web app
   auto example_url = GURL("https://www.example.com");
   webapps::AppId app_id = InstallPWA(test_profile, example_url);
-  Browser* app_browser =
+  BrowserWindowInterface* app_browser =
       web_app::LaunchWebAppBrowserAndWait(test_profile, app_id);
 
   ASSERT_NE(app_browser, nullptr);
-  ASSERT_EQ(app_browser->type(), Browser::Type::TYPE_APP);
+  ASSERT_EQ(app_browser->GetType(), BrowserWindowInterface::Type::TYPE_APP);
   ASSERT_TRUE(web_app::AppBrowserController::IsForWebApp(app_browser, app_id));
 
   chrome::AttemptRestart();
@@ -2157,7 +2389,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorRestartTest,
 #endif
 IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorRestartTest,
                        MAYBE_ProfileRestartedAppRestore) {
-  Profile* test_profile = browser()->profile();
+  Profile* test_profile = browser()->GetProfile();
 
   // StartupBrowserCreator() has already run in SetUp(), so it would already be
   // reset by this point.
@@ -2165,11 +2397,11 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorRestartTest,
   EXPECT_TRUE(browser_added_check_passed_);
   // Now close the original (and last alive) tabbed browser window
   // note: there is still an app open
-  ASSERT_EQ(2u, chrome::GetTotalBrowserCount());
+  ASSERT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
   BrowserWindowInterface* const normal_browser =
       GetBrowsersForType(BrowserWindowInterface::Type::TYPE_NORMAL).front();
   CloseBrowserSynchronously(normal_browser);
-  ASSERT_EQ(1U, chrome::GetTotalBrowserCount());
+  ASSERT_EQ(1U, GlobalBrowserCollection::GetInstance()->GetSize());
 
   // Now hit the codepath that would get hit if someone opened chrome
   // from a desktop shortcut or similar.
@@ -2183,38 +2415,13 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorRestartTest,
 
   // We expect a browser to open, but we should NOT get a duplicate app.
   // Note at this point, the profile IsRestarted() is still true.
-  ASSERT_EQ(2u, chrome::GetTotalBrowserCount());
+  ASSERT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
   EXPECT_EQ(
       1u, GetBrowsersForType(BrowserWindowInterface::Type::TYPE_NORMAL).size());
   EXPECT_EQ(1u,
             GetBrowsersForType(BrowserWindowInterface::Type::TYPE_APP).size());
 }
 #endif  // !BUILDFLAG(IS_CHROMEOS)
-
-// An observer that returns back to test code after a new browser is added to
-// the BrowserList.
-class BrowserAddedObserver : public BrowserListObserver {
- public:
-  BrowserAddedObserver() { BrowserList::AddObserver(this); }
-
-  ~BrowserAddedObserver() override { BrowserList::RemoveObserver(this); }
-
-  Browser* Wait() {
-    run_loop_.Run();
-    return browser_;
-  }
-
- protected:
-  // BrowserListObserver:
-  void OnBrowserAdded(Browser* browser) override {
-    browser_ = browser;
-    run_loop_.Quit();
-  }
-
- private:
-  raw_ptr<Browser> browser_ = nullptr;
-  base::RunLoop run_loop_;
-};
 
 class StartupBrowserWithWebAppTest : public StartupBrowserCreatorTest {
  protected:
@@ -2257,13 +2464,17 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserWithWebAppTest,
   DisableWhatsNewPage();
 
   // Open some urls with the browsers, and close them.
-  Browser* browser1 = Browser::Create({Browser::TYPE_NORMAL, &profile1, true});
-  chrome::NewTab(browser1);
+  BrowserWindowInterface* browser1 = CreateBrowserWindow(
+      BrowserWindowCreateParams(BrowserWindowInterface::TYPE_NORMAL, &profile1,
+                                /*from_user_gesture=*/true));
+  chrome::NewTab(browser1, NewTabTypes::kNoUserAction);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser1, embedded_test_server()->GetURL("/title1.html")));
 
-  Browser* browser2 = Browser::Create({Browser::TYPE_NORMAL, &profile2, true});
-  chrome::NewTab(browser2);
+  BrowserWindowInterface* browser2 = CreateBrowserWindow(
+      BrowserWindowCreateParams(BrowserWindowInterface::TYPE_NORMAL, &profile2,
+                                /*from_user_gesture=*/true));
+  chrome::NewTab(browser2, NewTabTypes::kNoUserAction);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser2, embedded_test_server()->GetURL("/title2.html")));
 
@@ -2279,7 +2490,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserWithWebAppTest,
   // Install a web app that we will launch from the command line in
   // the PRE test.
   WebAppProvider* const provider =
-      WebAppProvider::GetForTest(browser()->profile());
+      WebAppProvider::GetForTest(browser()->GetProfile());
 
   // Install web app set to open as a standalone window.
   {
@@ -2303,7 +2514,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserWithWebAppTest,
 
 #if BUILDFLAG(IS_MAC)
     AppShimRegistry::Get()->OnAppInstalledForProfile(
-        kAppId, browser()->profile()->GetPath());
+        kAppId, browser()->GetProfile()->GetPath());
 #endif
   }
 }
@@ -2311,7 +2522,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserWithWebAppTest,
 IN_PROC_BROWSER_TEST_F(StartupBrowserWithWebAppTest,
                        PRE_LastUsedProfilesWithWebApp) {
   {
-    BrowserAddedObserver added_observer;
+    ui_test_utils::BrowserCreatedObserver browser_created_observer;
 
 #if BUILDFLAG(IS_MAC)
     // Simulate an app shim connecting and launching an app.
@@ -2322,13 +2533,14 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserWithWebAppTest,
     // Launching with an app opens the app window via a task, so the test
     // might start before the first browser is created.
     if (!browser()) {
-      SetBrowser(added_observer.Wait());
+      SetBrowser(browser_created_observer.Wait());
     }
   }
-  ASSERT_EQ(1u, chrome::GetBrowserCount(browser()->profile()));
+  ASSERT_EQ(1u, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
 
   // An app window should have been launched.
-  EXPECT_TRUE(browser()->is_type_app());
+  EXPECT_EQ(browser()->GetType(), BrowserWindowInterface::Type::TYPE_APP);
   CloseBrowserSynchronously(browser());
 }
 
@@ -2360,14 +2572,14 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserWithWebAppTest,
   EXPECT_TRUE(profile2.restored_last_session());
 
   BrowserWindowInterface* new_browser = nullptr;
-  ASSERT_EQ(1u, chrome::GetBrowserCount(&profile1));
+  ASSERT_EQ(1u, ProfileBrowserCollection::GetForProfile(&profile1)->GetSize());
   new_browser = FindOneOtherBrowserForProfile(&profile1, nullptr);
   ASSERT_TRUE(new_browser);
   TabStripModel* tab_strip = new_browser->GetTabStripModel();
   EXPECT_EQ("/title1.html",
             tab_strip->GetWebContentsAt(0)->GetLastCommittedURL().GetPath());
 
-  ASSERT_EQ(1u, chrome::GetBrowserCount(&profile2));
+  ASSERT_EQ(1u, ProfileBrowserCollection::GetForProfile(&profile2)->GetSize());
   new_browser = FindOneOtherBrowserForProfile(&profile2, nullptr);
   ASSERT_TRUE(new_browser);
   tab_strip = new_browser->GetTabStripModel();
@@ -2385,7 +2597,7 @@ class StartupBrowserCreatorTestWithGuestParam
 
   // Creates a browser for a new profile (which may be Guest, based on
   // `IsGuest()`).
-  Browser* CreateBrowser() {
+  BrowserWindowInterface* CreateBrowser() {
     if (IsGuest()) {
       profiles::SwitchToGuestProfile();
     } else {
@@ -2393,8 +2605,9 @@ class StartupBrowserCreatorTestWithGuestParam
                                         ->GenerateNextProfileDirectoryPath();
       profiles::SwitchToProfile(profile_path, /*always_create=*/true);
     }
-    Browser* test_browser = ui_test_utils::WaitForBrowserToOpen();
-    profiles::SetLastUsedProfile(test_browser->profile()->GetBaseName());
+    BrowserWindowInterface* test_browser =
+        ui_test_utils::WaitForBrowserToOpen();
+    profiles::SetLastUsedProfile(test_browser->GetProfile()->GetBaseName());
     return test_browser;
   }
 
@@ -2415,10 +2628,10 @@ IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorTestWithGuestParam,
   CloseBrowserSynchronously(browser());
 
   // Create a browser for a new profile.
-  Browser* test_browser = CreateBrowser();
+  BrowserWindowInterface* test_browser = CreateBrowser();
   ASSERT_TRUE(test_browser);
-  ASSERT_EQ(test_browser->profile()->IsGuestSession(), IsGuest());
-  TabStripModel* tab_strip = test_browser->tab_strip_model();
+  ASSERT_EQ(test_browser->GetProfile()->IsGuestSession(), IsGuest());
+  TabStripModel* tab_strip = test_browser->GetTabStripModel();
   int initial_tab_count = tab_strip->count();
 
   // Open a URL while a browser is already open.
@@ -2442,8 +2655,8 @@ IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorTestWithGuestParam,
 
   ProfileManager* profile_manager = g_browser_process->profile_manager();
   // Create a browser for a new profile.
-  Browser* test_browser = CreateBrowser();
-  Profile* last_profile = test_browser->profile();
+  BrowserWindowInterface* test_browser = CreateBrowser();
+  Profile* last_profile = test_browser->GetProfile();
   ASSERT_TRUE(test_browser);
   ASSERT_EQ(last_profile->IsGuestSession(), IsGuest());
 
@@ -2469,18 +2682,18 @@ IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorTestWithGuestParam,
   if (IsGuest()) {
     // The profile picker opens. There is no browser, the URL is not loaded.
     profiles::testing::WaitForPickerWidgetCreated();
-    EXPECT_EQ(0u, chrome::GetTotalBrowserCount());
+    EXPECT_EQ(0u, GlobalBrowserCollection::GetInstance()->GetSize());
   } else {
     // The last used profile is reopened and the URL is loaded.
-    Browser* browser = ui_test_utils::WaitForBrowserToOpen();
-    Profile* profile = browser->profile();
+    BrowserWindowInterface* browser = ui_test_utils::WaitForBrowserToOpen();
+    Profile* profile = browser->GetProfile();
     EXPECT_FALSE(profile->IsGuestSession());
-    TabStripModel* tab_strip = browser->tab_strip_model();
+    TabStripModel* tab_strip = browser->GetTabStripModel();
     EXPECT_EQ(
         tab_strip->GetWebContentsAt(tab_strip->count() - 1)->GetVisibleURL(),
         GetTestURL());
     EXPECT_FALSE(ProfilePicker::IsOpen());
-    EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
+    EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
     EXPECT_EQ(last_profile, profile);
   }
 }
@@ -2510,7 +2723,9 @@ class StartupBrowserWithRealWebAppTest : public StartupBrowserCreatorTest {
 
 IN_PROC_BROWSER_TEST_F(StartupBrowserWithRealWebAppTest,
                        PRE_PRE_LastUsedProfilesWithRealWebApp) {
-  ASSERT_EQ(1u, chrome::GetBrowserCount(GetDefaultProfile()));
+  ASSERT_EQ(
+      1u,
+      ProfileBrowserCollection::GetForProfile(GetDefaultProfile())->GetSize());
   // Simulate a browser restart by creating the profiles in the PRE_PRE part.
   ProfileManager* profile_manager = g_browser_process->profile_manager();
 
@@ -2524,12 +2739,14 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserWithRealWebAppTest,
 
   // Open some urls with the browsers, and close them.
   SessionServiceFactory::GetForProfileForSessionRestore(&profile1);
-  Browser* browser1 = Browser::Create({Browser::TYPE_NORMAL, &profile1, true});
-  chrome::NewTab(browser1);
+  BrowserWindowInterface* browser1 = CreateBrowserWindow(
+      BrowserWindowCreateParams(BrowserWindowInterface::TYPE_NORMAL, &profile1,
+                                /*from_user_gesture=*/true));
+  chrome::NewTab(browser1, NewTabTypes::kNoUserAction);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser1, embedded_https_test_server().GetURL("/title1.html")));
-  browser1->window()->Show();
-  browser1->window()->Maximize();
+  browser1->GetWindow()->Show();
+  browser1->GetWindow()->Maximize();
 
   // Set startup preferences to restore last session.
   SessionStartupPref pref1(SessionStartupPref::LAST);
@@ -2539,14 +2756,18 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserWithRealWebAppTest,
   SessionStartupPref::SetStartupPref(GetDefaultProfile(), pref1);
   GetDefaultProfile()->GetPrefs()->CommitPendingWrite();
 
-  ASSERT_EQ(1u, chrome::GetBrowserCount(GetDefaultProfile()));
-  ASSERT_EQ(1u, chrome::GetBrowserCount(&profile1));
-  ASSERT_EQ(2u, chrome::GetTotalBrowserCount());
+  ASSERT_EQ(
+      1u,
+      ProfileBrowserCollection::GetForProfile(GetDefaultProfile())->GetSize());
+  ASSERT_EQ(1u, ProfileBrowserCollection::GetForProfile(&profile1)->GetSize());
+  ASSERT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
 }
 
 IN_PROC_BROWSER_TEST_F(StartupBrowserWithRealWebAppTest,
                        PRE_LastUsedProfilesWithRealWebApp) {
-  ASSERT_EQ(1u, chrome::GetBrowserCount(GetDefaultProfile()));
+  ASSERT_EQ(
+      1u,
+      ProfileBrowserCollection::GetForProfile(GetDefaultProfile())->GetSize());
 
   ProfileManager* profile_manager = g_browser_process->profile_manager();
   base::FilePath dest_path = profile_manager->user_data_dir();
@@ -2555,7 +2776,8 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserWithRealWebAppTest,
 
   auto example_url = GURL("https://www.example.com");
   webapps::AppId new_app_id = InstallPWA(&profile1, example_url);
-  Browser* app = web_app::LaunchWebAppBrowserAndWait(&profile1, new_app_id);
+  BrowserWindowInterface* app =
+      web_app::LaunchWebAppBrowserAndWait(&profile1, new_app_id);
   ASSERT_TRUE(app);
 
   // destroy session services so we don't record this closure.
@@ -2572,8 +2794,10 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserWithRealWebAppTest,
     }
   }
 
-  ASSERT_EQ(1u, chrome::GetBrowserCount(GetDefaultProfile()));
-  ASSERT_EQ(2u, chrome::GetBrowserCount(&profile1));
+  ASSERT_EQ(
+      1u,
+      ProfileBrowserCollection::GetForProfile(GetDefaultProfile())->GetSize());
+  ASSERT_EQ(2u, ProfileBrowserCollection::GetForProfile(&profile1)->GetSize());
 
   // On ozone-linux, for some reason, these profile 1 windows come back in
   // the next test. To reliably ensure they don't, but don't destroy the
@@ -2592,7 +2816,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserWithRealWebAppTest,
 #define MAYBE_LastUsedProfilesWithRealWebApp LastUsedProfilesWithRealWebApp
 #endif
 // TODO(stahon@microsoft.com) App restores are disabled on mac.
-// see http://crbug.com/1194201
+// see http://crbug.com/40758309
 IN_PROC_BROWSER_TEST_F(StartupBrowserWithRealWebAppTest,
                        MAYBE_LastUsedProfilesWithRealWebApp) {
   // Make StartupBrowserCreator::WasRestarted() return true.
@@ -2609,8 +2833,9 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserWithRealWebAppTest,
       profile_manager, dest_path.Append(FILE_PATH_LITERAL("New Profile 1")));
 
   // At this point, nothing is open except the basic browser.
-  ASSERT_EQ(1u, chrome::GetBrowserCount(browser()->profile()));
-  ASSERT_EQ(1u, chrome::GetTotalBrowserCount());
+  ASSERT_EQ(1u, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
+  ASSERT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
 
   // Trigger the restore via StartupBrowserCreator.
   base::CommandLine dummy(base::CommandLine::NO_PROGRAM);
@@ -2621,9 +2846,11 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserWithRealWebAppTest,
                 /*restore_tabbed_browser=*/true);
 
   // We should get two windows from profile1.
-  ASSERT_EQ(3u, chrome::GetTotalBrowserCount());
-  ASSERT_EQ(1u, chrome::GetBrowserCount(GetDefaultProfile()));
-  ASSERT_EQ(2u, chrome::GetBrowserCount(&profile1));
+  ASSERT_EQ(3u, GlobalBrowserCollection::GetInstance()->GetSize());
+  ASSERT_EQ(
+      1u,
+      ProfileBrowserCollection::GetForProfile(GetDefaultProfile())->GetSize());
+  ASSERT_EQ(2u, ProfileBrowserCollection::GetForProfile(&profile1)->GetSize());
 
   while (SessionRestore::IsRestoring(&profile1)) {
     base::RunLoop().RunUntilIdle();
@@ -2639,9 +2866,11 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserWithRealWebAppTest,
   BrowserWindowInterface* new_browser = nullptr;
 
   // 2x profile1, 1x default profile here.
-  ASSERT_EQ(3u, chrome::GetTotalBrowserCount());
-  ASSERT_EQ(2u, chrome::GetBrowserCount(&profile1));
-  ASSERT_EQ(1u, chrome::GetBrowserCount(GetDefaultProfile()));
+  ASSERT_EQ(3u, GlobalBrowserCollection::GetInstance()->GetSize());
+  ASSERT_EQ(2u, ProfileBrowserCollection::GetForProfile(&profile1)->GetSize());
+  ASSERT_EQ(
+      1u,
+      ProfileBrowserCollection::GetForProfile(GetDefaultProfile())->GetSize());
   new_browser = FindOneOtherBrowserForProfile(&profile1, nullptr);
   if (new_browser->GetType() != BrowserWindowInterface::TYPE_NORMAL) {
     new_browser = FindOneOtherBrowserForProfile(&profile1, new_browser);
@@ -2670,7 +2899,7 @@ class StartupBrowserWebAppProtocolHandlingTest : public InProcessBrowserTest {
   }
 
   WebAppProvider* provider() {
-    return WebAppProvider::GetForTest(browser()->profile());
+    return WebAppProvider::GetForTest(browser()->GetProfile());
   }
 
   // Install a web app with `protocol_handlers` (and optionally `file_handlers`)
@@ -2687,7 +2916,7 @@ class StartupBrowserWebAppProtocolHandlingTest : public InProcessBrowserTest {
     info->protocol_handlers = protocol_handlers;
     info->file_handlers = file_handlers;
     webapps::AppId app_id =
-        web_app::test::InstallWebApp(browser()->profile(), std::move(info));
+        web_app::test::InstallWebApp(browser()->GetProfile(), std::move(info));
     return app_id;
   }
 
@@ -2701,7 +2930,7 @@ class StartupBrowserWebAppProtocolHandlingTest : public InProcessBrowserTest {
     StartupBrowserCreator browser_creator;
     browser_creator.Start(
         command_line, g_browser_process->profile_manager()->user_data_dir(),
-        {browser()->profile(), StartupProfileMode::kBrowserWindow},
+        {browser()->GetProfile(), StartupProfileMode::kBrowserWindow},
         last_opened_profiles);
   }
 
@@ -2738,7 +2967,8 @@ IN_PROC_BROWSER_TEST_F(
       views::Widget::ClosedReason::kEscKeyPressed);
 
   // Check that no extra window is launched.
-  ASSERT_EQ(1u, chrome::GetBrowserCount(browser()->profile()));
+  ASSERT_EQ(1u, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
 }
 
 IN_PROC_BROWSER_TEST_F(
@@ -2754,7 +2984,7 @@ IN_PROC_BROWSER_TEST_F(
   protocol_handler.protocol = "web+test";
   webapps::AppId app_id = InstallWebAppWithProtocolHandlers({protocol_handler});
   bool allowed_protocols_notified = false;
-  web_app::WebAppTestRegistryObserverAdapter observer(browser()->profile());
+  web_app::WebAppTestRegistryObserverAdapter observer(browser()->GetProfile());
   observer.SetWebAppProtocolSettingsChangedDelegate(
       base::BindLambdaForTesting([&]() { allowed_protocols_notified = true; }));
 
@@ -2780,7 +3010,8 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_TRUE(allowed_protocols_notified);
 
   // Check for new app window.
-  ASSERT_EQ(2u, chrome::GetBrowserCount(browser()->profile()));
+  ASSERT_EQ(2u, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
   BrowserWindowInterface* const app_browser =
       ui_test_utils::GetBrowserNotInSet({browser()});
   ASSERT_TRUE(app_browser);
@@ -2811,7 +3042,8 @@ IN_PROC_BROWSER_TEST_F(
   content::RunAllTasksUntilIdle();
 
   // Check an app window is launched.
-  ASSERT_EQ(2u, chrome::GetBrowserCount(browser()->profile()));
+  ASSERT_EQ(2u, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
   BrowserWindowInterface* const app_browser =
       ui_test_utils::GetBrowserNotInSet({browser()});
   ASSERT_TRUE(app_browser);
@@ -2858,7 +3090,8 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_TRUE(registrar.IsAllowedLaunchProtocol(app_id, "web+test"));
 
   // Check the first app window is created.
-  ASSERT_EQ(2u, chrome::GetBrowserCount(browser()->profile()));
+  ASSERT_EQ(2u, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
   BrowserWindowInterface* const app_browser1 =
       ui_test_utils::GetBrowserNotInSet({browser()});
   ASSERT_TRUE(app_browser1);
@@ -2875,7 +3108,8 @@ IN_PROC_BROWSER_TEST_F(
   // is skipped because we have the allowed protocol scheme for the same
   // app launch.
   // There should be 3 browser windows opened at the moment.
-  ASSERT_EQ(3u, chrome::GetBrowserCount(browser()->profile()));
+  ASSERT_EQ(3u, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
   ASSERT_TRUE(app_browser2);
   EXPECT_TRUE(web_app::AppBrowserController::IsForWebApp(app_browser2, app_id));
 
@@ -2917,7 +3151,8 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserWebAppProtocolHandlingTest,
   EXPECT_FALSE(registrar.IsAllowedLaunchProtocol(app_id, "web+test"));
 
   // Check the first app window is created.
-  ASSERT_EQ(2u, chrome::GetBrowserCount(browser()->profile()));
+  ASSERT_EQ(2u, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
   BrowserWindowInterface* const app_browser1 =
       ui_test_utils::GetBrowserNotInSet({browser()});
   ASSERT_TRUE(app_browser1);
@@ -2940,7 +3175,8 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserWebAppProtocolHandlingTest,
   }
 
   // There should be 3 browser windows opened at the moment.
-  ASSERT_EQ(3u, chrome::GetBrowserCount(browser()->profile()));
+  ASSERT_EQ(3u, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
   ASSERT_TRUE(app_browser2);
   EXPECT_TRUE(web_app::AppBrowserController::IsForWebApp(app_browser2, app_id));
 
@@ -2984,7 +3220,8 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_TRUE(registrar.IsDisallowedLaunchProtocol(app_id, "web+test"));
 
   // Check the no app window is created.
-  ASSERT_EQ(1u, chrome::GetBrowserCount(browser()->profile()));
+  ASSERT_EQ(1u, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
 }
 
 IN_PROC_BROWSER_TEST_F(
@@ -3015,7 +3252,8 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_FALSE(registrar.IsDisallowedLaunchProtocol(app_id, "web+test"));
 
   // Check the no app window is created.
-  ASSERT_EQ(1u, chrome::GetBrowserCount(browser()->profile()));
+  ASSERT_EQ(1u, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
 
   {
     views::NamedWidgetShownWaiter waiter(views::test::AnyWidgetTestPasskey{},
@@ -3029,7 +3267,8 @@ IN_PROC_BROWSER_TEST_F(
         views::Widget::ClosedReason::kCancelButtonClicked);
   }
   // There should be only 1 browser window opened at the moment.
-  ASSERT_EQ(1u, chrome::GetBrowserCount(browser()->profile()));
+  ASSERT_EQ(1u, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
 }
 
 class StartupBrowserWebAppProtocolAndFileHandlingTest
@@ -3066,7 +3305,8 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserWebAppProtocolAndFileHandlingTest,
   content::RunAllTasksUntilIdle();
 
   // Check an app window is launched.
-  ASSERT_EQ(2u, chrome::GetBrowserCount(browser()->profile()));
+  ASSERT_EQ(2u, ProfileBrowserCollection::GetForProfile(browser()->GetProfile())
+                    ->GetSize());
   BrowserWindowInterface* const app_browser =
       ui_test_utils::GetBrowserNotInSet({browser()});
   ASSERT_TRUE(app_browser);
@@ -3100,6 +3340,9 @@ class StartupBrowserCreatorFirstRunTest : public InProcessBrowserTest {
  protected:
   void SetUpCommandLine(base::CommandLine* command_line) override;
   void SetUpInProcessBrowserTestFixture() override;
+#if BUILDFLAG(IS_LINUX)
+  bool SetUpUserDataDirectory() override;
+#endif
 
   testing::NiceMock<policy::MockConfigurationPolicyProvider> provider_;
   policy::PolicyMap policy_map_;
@@ -3109,6 +3352,18 @@ void StartupBrowserCreatorFirstRunTest::SetUpCommandLine(
     base::CommandLine* command_line) {
   command_line->AppendSwitch(switches::kForceFirstRun);
 }
+
+#if BUILDFLAG(IS_LINUX)
+bool StartupBrowserCreatorFirstRunTest::SetUpUserDataDirectory() {
+  if (!InProcessBrowserTest::SetUpUserDataDirectory()) {
+    return false;
+  }
+  base::FilePath user_data_dir;
+  base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir);
+  base::WriteFile(user_data_dir.Append("EULA Accepted"), "");
+  return true;
+}
+#endif
 
 void StartupBrowserCreatorFirstRunTest::SetUpInProcessBrowserTestFixture() {
   // TODO(crbug.com/382086296): Confirm IS_CHROMEOS is needed here.
@@ -3144,7 +3399,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorFirstRunTest, AddFirstRunTabs) {
 
   StartupBrowserCreatorImpl launch(base::FilePath(), dummy, &browser_creator,
                                    chrome::startup::IsFirstRun::kYes);
-  launch.Launch(browser()->profile(), chrome::startup::IsProcessStartup::kNo,
+  launch.Launch(browser()->GetProfile(), chrome::startup::IsProcessStartup::kNo,
                 /*restore_tabbed_browser=*/true);
 
   // This should have created a new browser window.
@@ -3163,7 +3418,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorFirstRunTest, AddFirstRunTabs) {
 }
 
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING) && BUILDFLAG(IS_MAC)
-// http://crbug.com/314819
+// http://crbug.com/40339772
 #define MAYBE_RestoreOnStartupURLsPolicySpecified \
   DISABLED_RestoreOnStartupURLsPolicySpecified
 #else
@@ -3204,7 +3459,8 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorFirstRunTest,
   base::CommandLine dummy(base::CommandLine::NO_PROGRAM);
   StartupBrowserCreatorImpl launch(base::FilePath(), dummy, &browser_creator,
                                    chrome::startup::IsFirstRun::kYes);
-  launch.Launch(browser()->profile(), chrome::startup::IsProcessStartup::kYes,
+  launch.Launch(browser()->GetProfile(),
+                chrome::startup::IsProcessStartup::kYes,
                 /*restore_tabbed_browser=*/true);
 
   // This should have created a new browser window.
@@ -3221,7 +3477,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorFirstRunTest,
 }
 
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING) && BUILDFLAG(IS_MAC)
-// http://crbug.com/314819
+// http://crbug.com/40339772
 #define MAYBE_FirstRunTabsWithRestoreSession \
   DISABLED_FirstRunTabsWithRestoreSession
 #else
@@ -3245,13 +3501,14 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorFirstRunTest,
   StartupBrowserCreator browser_creator;
   browser_creator.AddFirstRunTabs(
       {embedded_test_server()->GetURL("/title1.html")});
-  browser()->profile()->GetPrefs()->SetInteger(prefs::kRestoreOnStartup, 1);
+  browser()->GetProfile()->GetPrefs()->SetInteger(prefs::kRestoreOnStartup, 1);
 
   // Do a process-startup browser launch.
   base::CommandLine dummy(base::CommandLine::NO_PROGRAM);
   StartupBrowserCreatorImpl launch(base::FilePath(), dummy, &browser_creator,
                                    chrome::startup::IsFirstRun::kYes);
-  launch.Launch(browser()->profile(), chrome::startup::IsProcessStartup::kYes,
+  launch.Launch(browser()->GetProfile(),
+                chrome::startup::IsProcessStartup::kYes,
                 /*restore_tabbed_browser=*/true);
 
   // This should have created a new browser window.
@@ -3270,14 +3527,20 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorFirstRunTest,
 
 // Validates that prefs::kWasRestarted is automatically reset after next browser
 // start.
-class StartupBrowserCreatorWasRestartedFlag : public InProcessBrowserTest,
-                                              public BrowserListObserver {
+class StartupBrowserCreatorWasRestartedFlag : public InProcessBrowserTest {
  public:
-  StartupBrowserCreatorWasRestartedFlag() { BrowserList::AddObserver(this); }
-  ~StartupBrowserCreatorWasRestartedFlag() override {
-    BrowserList::RemoveObserver(this);
-  }
+  StartupBrowserCreatorWasRestartedFlag() = default;
+  ~StartupBrowserCreatorWasRestartedFlag() override = default;
 
+  // InProcessBrowserTest:
+  void CreatedBrowserMainParts(
+      content::BrowserMainParts* browser_main_parts) override {
+    InProcessBrowserTest::CreatedBrowserMainParts(browser_main_parts);
+    static_cast<ChromeBrowserMainParts*>(browser_main_parts)
+        ->AddParts(std::make_unique<BrowserCreatedMainParts>(base::BindOnce(
+            &StartupBrowserCreatorWasRestartedFlag::OnFirstBrowserCreated,
+            base::Unretained(this))));
+  }
   bool SetUpUserDataDirectory() override {
     base::FilePath user_data_dir;
     base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir);
@@ -3299,7 +3562,7 @@ class StartupBrowserCreatorWasRestartedFlag : public InProcessBrowserTest,
  protected:
   // SetUpCommandLine is setting kWasRestarted, so these tests all start up
   // with WasRestarted() true.
-  void OnBrowserAdded(Browser* browser) override {
+  void OnFirstBrowserCreated() {
     EXPECT_TRUE(StartupBrowserCreator::WasRestarted());
     EXPECT_FALSE(
         g_browser_process->local_state()->GetBoolean(prefs::kWasRestarted));
@@ -3334,16 +3597,28 @@ class StartupBrowserCreatorInfobarsTest
     : public InProcessBrowserTest,
       public ::testing::WithParamInterface<
           std::tuple<StartupBrowserCreatorFlagTypeValue,
-                     CommandLineFlagSecurityWarningsPolicy>> {
+                     CommandLineFlagSecurityWarningsPolicy,
+                     bool>> {
  public:
   StartupBrowserCreatorInfobarsTest()
-      : flag_type_(std::get<0>(GetParam())), policy_(std::get<1>(GetParam())) {}
+      : flag_type_(std::get<0>(GetParam())),
+        policy_(std::get<1>(GetParam())),
+        use_migration_(std::get<2>(GetParam())) {
+    if (use_migration_) {
+      feature_list_.InitAndEnableFeatureWithParameters(
+          infobars::kCentralizedInfoBarFramework,
+          {{"MigratedBadFlags", "true"}});
+    } else {
+      feature_list_.InitAndDisableFeature(
+          infobars::kCentralizedInfoBarFramework);
+    }
+  }
 
  protected:
-  std::pair<Browser*, infobars::ContentInfoBarManager*>
+  std::pair<BrowserWindowInterface*, infobars::ContentInfoBarManager*>
   LaunchBrowserAndGetCreatedInfoBarManager(
       const base::CommandLine& command_line) {
-    BrowserAddedObserver added_observer;
+    ui_test_utils::BrowserCreatedObserver browser_created_observer;
 
     base::test::TestFuture<void> app_launch_done;
     if (command_line.HasSwitch(switches::kAppId)) {
@@ -3354,18 +3629,18 @@ class StartupBrowserCreatorInfobarsTest
     }
     EXPECT_TRUE(StartupBrowserCreator().ProcessCmdLineImpl(
         command_line, base::FilePath(), chrome::startup::IsProcessStartup::kNo,
-        {browser()->profile(), StartupProfileMode::kBrowserWindow}, {}));
+        {browser()->GetProfile(), StartupProfileMode::kBrowserWindow}, {}));
     EXPECT_TRUE(app_launch_done.Wait());
 
     // Wait until the new browser window has been created. Using
     // `FindOneOtherBrowser` is not sufficient here, because the window may be
     // created asynchronously.
-    Browser* new_browser = added_observer.Wait();
+    BrowserWindowInterface* new_browser = browser_created_observer.Wait();
     EXPECT_TRUE(new_browser);
 
     infobars::ContentInfoBarManager* infobar_manager =
         infobars::ContentInfoBarManager::FromWebContents(
-            new_browser->tab_strip_model()->GetWebContentsAt(0));
+            new_browser->GetTabStripModel()->GetWebContentsAt(0));
     EXPECT_TRUE(infobar_manager);
 
     return std::make_pair(new_browser, infobar_manager);
@@ -3373,8 +3648,10 @@ class StartupBrowserCreatorInfobarsTest
 
   const StartupBrowserCreatorFlagTypeValue flag_type_;
   const CommandLineFlagSecurityWarningsPolicy policy_;
+  const bool use_migration_;
 
  private:
+  base::test::ScopedFeatureList feature_list_;
   void SetUpInProcessBrowserTestFixture() override {
     policy_provider_.SetDefaultReturns(
         /*is_initialization_complete_return=*/true,
@@ -3407,7 +3684,7 @@ IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorInfobarsTest, CheckInfobar) {
   base::CommandLine::ForCurrentProcess()->AppendSwitch(flag_type_.flag);
   auto [browser, infobar_manager] =
       LaunchBrowserAndGetCreatedInfoBarManager(command_line);
-  EXPECT_TRUE(browser->is_type_normal());
+  EXPECT_EQ(browser->GetType(), BrowserWindowInterface::Type::TYPE_NORMAL);
 
   EXPECT_EQ(HasInfoBar(infobar_manager, flag_type_.infobar_identifier),
             policy_ != CommandLineFlagSecurityWarningsPolicy::kDisabled);
@@ -3422,7 +3699,7 @@ IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorInfobarsTest,
   // browser test's instead of the new process.
   base::CommandLine::ForCurrentProcess()->AppendSwitch(flag_type_.flag);
 
-  Profile* test_profile = browser()->profile();
+  Profile* test_profile = browser()->GetProfile();
   // Install web app
   GURL example_url("http://www.example.com");
   webapps::AppId app_id = InstallPWA(test_profile, example_url);
@@ -3432,7 +3709,7 @@ IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorInfobarsTest,
 
   auto [browser, infobar_manager] =
       LaunchBrowserAndGetCreatedInfoBarManager(command_line);
-  EXPECT_TRUE(browser->is_type_app());
+  EXPECT_EQ(browser->GetType(), BrowserWindowInterface::Type::TYPE_APP);
 
   EXPECT_EQ(HasInfoBar(infobar_manager, flag_type_.infobar_identifier),
             policy_ != CommandLineFlagSecurityWarningsPolicy::kDisabled);
@@ -3449,7 +3726,7 @@ IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorInfobarsTest,
 
   // Add --app=<url> to the command line. Tests launching legacy apps which may
   // have been created by "Add to Desktop" in old versions of Chrome.
-  // TODO(mgiuca): Delete this feature (https://crbug.com/751029). We are
+  // TODO(mgiuca): Delete this feature (https://crbug.com/41337042). We are
   // keeping it for now to avoid disrupting existing workflows.
   base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
   GURL url = chrome_test_utils::GetTestUrl(
@@ -3459,7 +3736,7 @@ IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorInfobarsTest,
 
   auto [browser, infobar_manager] =
       LaunchBrowserAndGetCreatedInfoBarManager(command_line);
-  EXPECT_TRUE(browser->is_type_app());
+  EXPECT_EQ(browser->GetType(), BrowserWindowInterface::Type::TYPE_APP);
 
   EXPECT_EQ(HasInfoBar(infobar_manager, flag_type_.infobar_identifier),
             policy_ != CommandLineFlagSecurityWarningsPolicy::kDisabled);
@@ -3483,7 +3760,7 @@ IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorInfobarsTest,
   command_line.AppendSwitch(flag_type_.flag);
   auto [browser, infobar_manager] =
       LaunchBrowserAndGetCreatedInfoBarManager(command_line);
-  EXPECT_TRUE(browser->is_type_normal());
+  EXPECT_EQ(browser->GetType(), BrowserWindowInterface::Type::TYPE_NORMAL);
 
   EXPECT_FALSE(HasInfoBar(infobar_manager, flag_type_.infobar_identifier));
 }
@@ -3503,7 +3780,8 @@ INSTANTIATE_TEST_SUITE_P(
                 infobars::InfoBarDelegate::BAD_FLAGS_INFOBAR_DELEGATE}),
         ::testing::Values(CommandLineFlagSecurityWarningsPolicy::kNoPolicy,
                           CommandLineFlagSecurityWarningsPolicy::kEnabled,
-                          CommandLineFlagSecurityWarningsPolicy::kDisabled)),
+                          CommandLineFlagSecurityWarningsPolicy::kDisabled),
+        ::testing::Bool()),
     [](const testing::TestParamInfo<
         StartupBrowserCreatorInfobarsTest::ParamType>& info) {
       std::string policyState;
@@ -3519,7 +3797,11 @@ INSTANTIATE_TEST_SUITE_P(
           break;
       }
 
-      std::string name = std::get<0>(info.param).flag + " " + policyState;
+      std::string migrationState =
+          std::get<2>(info.param) ? "migrated" : "legacy";
+
+      std::string name = std::get<0>(info.param).flag + "_" + policyState +
+                         "_" + migrationState;
       std::replace_if(
           name.begin(), name.end(),
           [](unsigned char c) { return !absl::ascii_isalnum(c); }, '_');
@@ -3543,7 +3825,7 @@ class StartupBrowserCreatorInfobarsWithoutStartupWindowTest
     command_line->AppendSwitch(switches::kKeepAliveForTest);
   }
 
-  std::pair<Browser*, infobars::ContentInfoBarManager*>
+  std::pair<BrowserWindowInterface*, infobars::ContentInfoBarManager*>
   LaunchBrowserAndGetCreatedInfoBarManager() {
     base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
     Profile* profile = ProfileManager::GetLastUsedProfileIfLoaded();
@@ -3553,7 +3835,7 @@ class StartupBrowserCreatorInfobarsWithoutStartupWindowTest
                                      chrome::startup::IsFirstRun::kNo);
     launch.Launch(profile, chrome::startup::IsProcessStartup::kNo,
                   /*restore_tabbed_browser=*/true);
-    Browser* new_browser = browser_created_observer.Wait();
+    BrowserWindowInterface* new_browser = browser_created_observer.Wait();
     if (!new_browser) {
       return std::make_pair(nullptr, nullptr);
     }
@@ -3561,7 +3843,7 @@ class StartupBrowserCreatorInfobarsWithoutStartupWindowTest
 
     return std::make_pair(
         new_browser, infobars::ContentInfoBarManager::FromWebContents(
-                         new_browser->tab_strip_model()->GetWebContentsAt(0)));
+                         new_browser->GetTabStripModel()->GetWebContentsAt(0)));
   }
 
   const StartupBrowserCreatorFlagTypeValue flag_type_;
@@ -3576,10 +3858,10 @@ IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorInfobarsWithoutStartupWindowTest,
   // browser test's instead of the new process.
   base::CommandLine::ForCurrentProcess()->AppendSwitch(flag_type_.flag);
 
-  EXPECT_EQ(0u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(0u, GlobalBrowserCollection::GetInstance()->GetSize());
   auto [browser, infobar_manager] = LaunchBrowserAndGetCreatedInfoBarManager();
   EXPECT_TRUE(browser);
-  EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
   ASSERT_TRUE(infobar_manager);
   EXPECT_TRUE(HasInfoBar(infobar_manager, flag_type_.infobar_identifier));
 
@@ -3587,11 +3869,11 @@ IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorInfobarsWithoutStartupWindowTest,
   // there.
   CloseBrowserSynchronously(browser);
 
-  EXPECT_EQ(0u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(0u, GlobalBrowserCollection::GetInstance()->GetSize());
   auto [browser2, infobar_manager2] =
       LaunchBrowserAndGetCreatedInfoBarManager();
   EXPECT_TRUE(browser2);
-  EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
   ASSERT_TRUE(infobar_manager2);
   EXPECT_EQ(flag_type_.is_global_infobar,
             HasInfoBar(infobar_manager2, flag_type_.infobar_identifier));
@@ -3624,15 +3906,29 @@ INSTANTIATE_TEST_SUITE_P(
 #if !BUILDFLAG(IS_CHROMEOS)
 
 // Verifies that infobars are not displayed in Kiosk mode.
-class StartupBrowserCreatorInfobarsKioskTest : public InProcessBrowserTest {
+class StartupBrowserCreatorInfobarsKioskTest
+    : public InProcessBrowserTest,
+      public ::testing::WithParamInterface<bool> {
  public:
-  StartupBrowserCreatorInfobarsKioskTest() = default;
+  StartupBrowserCreatorInfobarsKioskTest() {
+    if (GetParam()) {
+      feature_list_.InitAndEnableFeatureWithParameters(
+          infobars::kCentralizedInfoBarFramework,
+          {{"MigratedBadFlags", "true"}});
+    } else {
+      feature_list_.InitAndDisableFeature(
+          infobars::kCentralizedInfoBarFramework);
+    }
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
 
  protected:
   infobars::ContentInfoBarManager*
   LaunchKioskBrowserAndGetCreatedInfoBarManager(
       const std::string& extra_switch) {
-    Profile* profile = browser()->profile();
+    Profile* profile = browser()->GetProfile();
 
     // CommandLine::ForCurrentProcess is used to determine whether kiosk mode is
     // enabled instead of the command-line passed to StartupBrowserCreator. In
@@ -3661,7 +3957,7 @@ class StartupBrowserCreatorInfobarsKioskTest : public InProcessBrowserTest {
 };
 
 // Verify that the Automation Enabled infobar is still shown in Kiosk mode.
-IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorInfobarsKioskTest,
+IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorInfobarsKioskTest,
                        CheckInfobarForEnableAutomation) {
   // CommandLine::ForCurrentProcess is used to determine whether automation is
   // enabled instead of the command-line passed to StartupBrowserCreator. In
@@ -3682,7 +3978,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorInfobarsKioskTest,
 }
 
 // Verify that the Bad Flags infobar is not shown in kiosk mode.
-IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorInfobarsKioskTest,
+IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorInfobarsKioskTest,
                        CheckInfobarForBadFlag) {
   // BadFlagsPrompt::ShowBadFlagsPrompt uses CommandLine::ForCurrentProcess
   // instead of the command-line passed to StartupBrowserCreator. In browser
@@ -3692,7 +3988,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorInfobarsKioskTest,
 
   // Passing the kDisableWebSecurity argument here presently does not do
   // anything because of the aforementioned limitation.
-  // https://crbug.com/1060293
+  // https://crbug.com/40121975
   infobars::ContentInfoBarManager* infobar_manager =
       LaunchKioskBrowserAndGetCreatedInfoBarManager(
           switches::kDisableWebSecurity);
@@ -3701,6 +3997,10 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorInfobarsKioskTest,
   EXPECT_FALSE(HasInfoBar(
       infobar_manager, infobars::InfoBarDelegate::BAD_FLAGS_INFOBAR_DELEGATE));
 }
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         StartupBrowserCreatorInfobarsKioskTest,
+                         ::testing::Bool());
 
 // Checks the correct behavior of the profile picker on startup.
 class StartupBrowserCreatorPickerTestBase : public InProcessBrowserTest {
@@ -3757,7 +4057,7 @@ struct ProfilePickerSetup {
   std::optional<std::string> switch_value_ascii;
   std::optional<GURL> url_arg;
   ShutdownType shutdown_type = ShutdownType::kNormal;
-  std::optional<std::string> extra_switch_name = std::nullopt;
+  std::optional<std::string> extra_switch_name;
 };
 
 // Checks the correct behavior of the profile picker on startup. This feature is
@@ -3850,9 +4150,9 @@ IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorPickerTest, DISABLED_TestSetup) {
   // Check the browser window.
   if (setup_param.expected_to_show ||
       setup_param.switch_name == switches::kNoStartupWindow) {
-    EXPECT_EQ(0u, chrome::GetTotalBrowserCount());
+    EXPECT_EQ(0u, GlobalBrowserCollection::GetInstance()->GetSize());
   } else {
-    EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
+    EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
   }
 
   // No Guest profile was created.
@@ -3866,7 +4166,7 @@ INSTANTIATE_TEST_SUITE_P(
     All,
     StartupBrowserCreatorPickerTest,
     ::testing::Values(
-// Flaky: https://crbug.com/1126886
+// Flaky: https://crbug.com/40148327
 #if !BUILDFLAG(IS_OZONE) && !BUILDFLAG(IS_WIN)
         // Picker should be shown in normal multi-profile startup situation.
         ProfilePickerSetup{/*expected_to_show=*/true},
@@ -3911,7 +4211,7 @@ INSTANTIATE_TEST_SUITE_P(
                            /*switch_name=*/std::nullopt,
                            /*switch_value_ascii=*/std::nullopt,
                            /*url_arg=*/GURL("https://www.foo.com/")},
-        // Regression test for http://crbug.com/1166192
+        // Regression test for http://crbug.com/40741954
         // Picker should be shown after exit.
         ProfilePickerSetup{
             /*expected_to_show=*/true,
@@ -3919,7 +4219,7 @@ INSTANTIATE_TEST_SUITE_P(
             /*switch_value_ascii=*/std::nullopt,
             /*url_arg=*/std::nullopt,
             /*shutdown_type=*/ProfilePickerSetup::ShutdownType::kExit},
-        // Regression test for http://crbug.com/1245374
+        // Regression test for http://crbug.com/40196098
         // Picker should not be shown after restart.
         ProfilePickerSetup{
             /*expected_to_show=*/false,
@@ -3981,7 +4281,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorPickerProfileEmailTest, TestSetup) {
   EXPECT_FALSE(ProfilePicker::IsOpen());
 
   // Check the browser window.
-  EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
 
   // No Guest profile was created.
   for (const Profile* profile :
@@ -4042,7 +4342,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorPickerUnknownProfileEmail,
   EXPECT_TRUE(ProfilePicker::IsOpen());
 
   // Check the browser window.
-  EXPECT_EQ(0u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(0u, GlobalBrowserCollection::GetInstance()->GetSize());
 
   // No Guest profile was created.
   for (const Profile* profile :
@@ -4082,12 +4382,6 @@ class StartupBrowserCreatorPickerUnknownEmailCreateProfileIfNotExists
   // browser will be relaunched by the main test.
   upgrade_util::ScopedRelaunchChromeBrowserOverride relaunch_chrome_override_{
       base::BindRepeating([](const base::CommandLine&) { return true; })};
-
-  // The `kCreateProfileEmailIfNotExists` switch requires the
-  // `kCreateProfileIfNoneExists` feature to be enabled.
-  // TODO: Remove once enabled by default
-  base::test::ScopedFeatureList scoped_feature_list_{
-      features::kCreateProfileIfNoneExists};
 };
 
 IN_PROC_BROWSER_TEST_F(
@@ -4116,7 +4410,7 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_TRUE(ProfilePicker::IsOpen());
 
   // Check the browser window.
-  EXPECT_EQ(0u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(0u, GlobalBrowserCollection::GetInstance()->GetSize());
 
   // No Guest profile was created.
   for (const Profile* profile :
@@ -4148,8 +4442,8 @@ IN_PROC_BROWSER_TEST_F(GuestStartupBrowserCreatorPickerTest,
 IN_PROC_BROWSER_TEST_F(GuestStartupBrowserCreatorPickerTest,
                        SkipsPickerWithGuest) {
   // The picker is skipped which means a browser window is opened on startup.
-  EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
-  EXPECT_TRUE(browser()->profile()->IsGuestSession());
+  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
+  EXPECT_TRUE(browser()->GetProfile()->IsGuestSession());
 }
 
 class StartupBrowserCreatorPickerNoParamsTest
@@ -4169,7 +4463,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorPickerNoParamsTest,
                        ShowPickerWhenAlreadyLaunched) {
   // Preprequisite: The picker is shown on the first start-up
   profiles::testing::WaitForPickerWidgetCreated();
-  ASSERT_EQ(0u, chrome::GetTotalBrowserCount());
+  ASSERT_EQ(0u, GlobalBrowserCollection::GetInstance()->GetSize());
 
   // Close the picker.
   ScopedKeepAlive keep_alive(KeepAliveOrigin::BROWSER,
@@ -4190,7 +4484,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorPickerNoParamsTest,
 
   // The picker is shown again if no profile was previously opened.
   profiles::testing::WaitForPickerWidgetCreated();
-  EXPECT_EQ(0u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(0u, GlobalBrowserCollection::GetInstance()->GetSize());
 }
 
 class SearchQueryStartupBrowserCreatorPickerTest
@@ -4217,7 +4511,7 @@ IN_PROC_BROWSER_TEST_F(SearchQueryStartupBrowserCreatorPickerTest,
                        SkipsPickerWithCommandLineSearchQuery) {
   // A browser window is shown on start-up because the command line contains a
   // search query.
-  EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
 
   // Check the return value of `GetStartupProfilePath()` explicitly.
   base::FilePath current_dir = base::FilePath();
@@ -4279,7 +4573,7 @@ IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorPickerInfobarTest,
 
 IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorPickerInfobarTest,
                        ShowsEnableAutomationInfobar) {
-  EXPECT_EQ(0u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(0u, GlobalBrowserCollection::GetInstance()->GetSize());
 
   // We deliberately set the flag on the process command line instead of on the
   // command_line passed to the StartupBrowserCreator, because these flags are
@@ -4295,11 +4589,11 @@ IN_PROC_BROWSER_TEST_P(StartupBrowserCreatorPickerInfobarTest,
 
   ui_test_utils::BrowserCreatedObserver browser_created_observer;
   OpenProfileFromPicker(profile->GetPath(), false);
-  Browser* new_browser = browser_created_observer.Wait();
+  BrowserWindowInterface* new_browser = browser_created_observer.Wait();
   ui_test_utils::WaitUntilBrowserBecomeActive(new_browser);
   infobars::ContentInfoBarManager* infobar_manager =
       infobars::ContentInfoBarManager::FromWebContents(
-          new_browser->tab_strip_model()->GetWebContentsAt(0));
+          new_browser->GetTabStripModel()->GetWebContentsAt(0));
 
   EXPECT_TRUE(HasInfoBar(infobar_manager, flag_type_.infobar_identifier));
 }
@@ -4373,7 +4667,7 @@ IN_PROC_BROWSER_TEST_F(
 IN_PROC_BROWSER_TEST_F(
     StartupBrowserCreatorIwaCommandLineInstallProfilePickerErrorTest,
     DoesNotInstallIwaIfProfilePickerOpens) {
-  EXPECT_EQ(0u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(0u, GlobalBrowserCollection::GetInstance()->GetSize());
   // The `EXPECT_CALL` call in `SetUp()` will check that an error message about
   // the IWA not being installable is logged.
 }
@@ -4388,17 +4682,52 @@ class StartupBrowserCreatorOpenUrlsInNextProfileCreatedTest
     command_line->AppendSwitch(switches::kCreateProfileEmailIfNotExists);
     command_line->AppendArg("https://www.google.com");
   }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_{
-      features::kCreateProfileIfNoneExists};
 };
 
 IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorOpenUrlsInNextProfileCreatedTest,
                        OpenUrlsInNextProfileCreated) {
   ASSERT_TRUE(ProfilePicker::GetOpenCommandLineUrlsInNextProfileOpened());
   ASSERT_TRUE(ProfilePicker::IsOpen());
-  ASSERT_EQ(0u, chrome::GetTotalBrowserCount());
+  ASSERT_EQ(0u, GlobalBrowserCollection::GetInstance()->GetSize());
+}
+
+class StartupBrowserCreatorTestRootStoreFlagTest : public InProcessBrowserTest {
+ public:
+  StartupBrowserCreatorTestRootStoreFlagTest() {
+    scoped_feature_list_.InitAndEnableFeature(net::features::kTestRootStore);
+  }
+
+ protected:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    InProcessBrowserTest::SetUpCommandLine(command_line);
+    command_line->AppendSwitch(switches::kNoStartupWindow);
+    command_line->AppendSwitch(switches::kKeepAliveForTest);
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTestRootStoreFlagTest,
+                       CheckInfobarIsShown) {
+  base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
+  Profile* profile = ProfileManager::GetLastUsedProfileIfLoaded();
+
+  ui_test_utils::BrowserCreatedObserver browser_created_observer;
+  StartupBrowserCreatorImpl launch(base::FilePath(), command_line,
+                                   chrome::startup::IsFirstRun::kNo);
+  launch.Launch(profile, chrome::startup::IsProcessStartup::kNo,
+                /*restore_tabbed_browser=*/true);
+  BrowserWindowInterface* new_browser = browser_created_observer.Wait();
+  ASSERT_TRUE(new_browser);
+  ui_test_utils::WaitUntilBrowserBecomeActive(new_browser);
+
+  infobars::ContentInfoBarManager* infobar_manager =
+      infobars::ContentInfoBarManager::FromWebContents(
+          new_browser->GetTabStripModel()->GetWebContentsAt(0));
+  ASSERT_TRUE(infobar_manager);
+  EXPECT_TRUE(HasInfoBar(
+      infobar_manager, infobars::InfoBarDelegate::BAD_FLAGS_INFOBAR_DELEGATE));
 }
 
 #endif  // !BUILDFLAG(IS_CHROMEOS)

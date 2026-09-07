@@ -26,10 +26,6 @@
 #include "chrome/common/chrome_features.h"
 #include "components/webapps/common/web_app_id.h"
 
-namespace content {
-class WebContents;
-}
-
 namespace web_app {
 
 class LockDescription;
@@ -141,6 +137,10 @@ class WebAppCommand : public internal::CommandWithLock<LockType> {
 
   ~WebAppCommand() override = default;
 
+  // Binds the `args_for_shutdown` provided in constructor with the callback,
+  // and returns the result. This is called from the WebAppCommandManager during
+  // shutdown to call all of the callbacks of uncompleted commands with the
+  // appropriate shutdown values.
   base::OnceClosure TakeCallbackWithShutdownArgs(
       base::PassKey<WebAppCommandManager>) override {
     DCHECK_CALLED_ON_VALID_SEQUENCE(
@@ -148,26 +148,11 @@ class WebAppCommand : public internal::CommandWithLock<LockType> {
     CHECK(!callback_.is_null());
     internal::CommandBase::GetMutableDebugValue().Set("!command_result",
                                                       "kShutdown");
-    if constexpr (sizeof...(CallbackArgs) == 0) {
-      return std::move(callback_);
-    } else {
-      internal::CommandBase::GetMutableDebugValue().Set(
-          "!result", base::ToString(args_for_shutdown_));
+    internal::CommandBase::GetMutableDebugValue().Set(
+        "!result", base::ToString(args_for_shutdown_));
 
-      // We need to call BindOnce with both the callback and the shutdown args,
-      // so they must be concatenated into a tuple with both before calling
-      // std::apply.
-      // The below code is the C++ equivalent of
-      // `callback_.bind(...args_used_on_shutdown_)` in JavaScript.
-      std::tuple<CallbackType, CallbackArgs...> bind_arguments =
-          std::tuple_cat<std::tuple<CallbackType>, std::tuple<CallbackArgs...>>(
-              /*tuple1=*/{std::move(callback_)},
-              /*tuple2=*/std::move(args_for_shutdown_));
-      return std::apply(
-          &base::BindOnce<base::OnceCallback<void(CallbackArgs...)>,
-                          CallbackArgs...>,
-          std::move(bind_arguments));
-    }
+    return internal::BindTupleToOnceClosure(std::move(callback_),
+                                            std::move(args_for_shutdown_));
   }
 
  protected:

@@ -186,6 +186,19 @@ message CheckUserAccountRequest {
   optional bool enrollment_nudge_request = 2 [default = false];
 }
 
+enum FormFactor {
+  FORM_FACTOR_UNSPECIFIED = 0;
+  FORM_FACTOR_DESKTOP = 1;
+  FORM_FACTOR_PHONE = 2;
+  FORM_FACTOR_TABLET = 3;
+  FORM_FACTOR_TV = 4;
+  FORM_FACTOR_AUTOMOTIVE = 5;
+}
+
+message DeviceInfo {
+  optional FormFactor form_factor = 1;
+}
+
 // Request from device to server to register a device, user or browser.
 message DeviceRegisterRequest {
   reserved 5, 10;
@@ -401,7 +414,9 @@ message DeviceRegisterRequest {
   // Information from the device's SMBIOS.
   optional SmbiosInfo smbios_info = 23;
 
-  // Next id: 24.
+  optional DeviceInfo device_info = 24;
+
+  // Next id: 25.
 }
 
 // Identification of a device used during its registration.
@@ -705,6 +720,8 @@ message PolicyFetchRequest {
   // List of extension ids and version used to fetch the policy type
   // google/extension-install-cloud-policy/chrome/*.
   repeated ExtensionIdAndVersion extension_ids_and_version = 14;
+
+  optional DeviceInfo device_info = 15;
 }
 
 // This message customizes how the device behaves when it is disabled by its
@@ -982,6 +999,17 @@ message PolicyData {
 
   // Indicates whether the domains has CEC enabled.
   optional bool cec_enabled = 40;
+
+  // The Torus Unified Device ID (TUID) for the device. Torus creates this
+  // globally unique identifier when the device first enrolls, and DMServer
+  // includes it here on every subsequent policy fetch so on-device services
+  // can discover the device's TUID without making additional API calls.
+  // Populated from `ChromeOsDeviceInfo.unified_device_id` and should only be
+  // set for device policy.
+  optional string unified_device_id = 41;
+
+  // List of group ids of active experiments for this device or user.
+  repeated string available_group_ids = 42;
 }
 
 message ClientActionRequired {
@@ -1155,6 +1183,9 @@ message DevicePolicyRequest {
     // Policy fetch triggered by the ExtensionInstallPolicyService before an
     // extension is installed.
     EXTENSION_INSTALL = 103;
+    // Policy fetch triggered by the ExtensionInstallPolicyService during
+    // initialization.
+    EXTENSION_INSTALL_INITIALIZATION = 104;
   }
   optional Reason reason = 4;
 }
@@ -2289,6 +2320,35 @@ message AffiliationState {
   optional UnaffiliationReason unaffiliation_reason = 2;
 }
 
+// Certificate details
+message CertificateDetails {
+  // The set of supported signature algorithms.
+  enum SignatureAlgorithm {
+    SIGNATURE_ALGORITHM_UNKNOWN = 0;
+    RSA_PKCS1_SHA1 = 1;
+    RSA_PKCS1_SHA256 = 2;
+    ECDSA_SHA256 = 3;
+    RSA_PSS_SHA256 = 4;
+  }
+
+  reserved 3;
+
+  // The DER encoded enterprise certificate.
+  optional bytes certificate = 1;
+  // The challenge signed using the private key matching the certificate.
+  optional bytes challenge = 2;
+  // The algorithm used when signing the challenge
+  optional SignatureAlgorithm algorithm = 4;
+}
+
+// The signed certificate details for an MDM certificate.
+message SignedCertificateDetails {
+  // The serialized certificate details.
+  optional bytes data = 1;
+  // The signature of the certificate details data.
+  optional bytes signature = 2;
+}
+
 // Chrome user profile level status, used by activated Profiles. Profile name is
 // not listed here as they are in the ChromeUserProfileBasicInfo.
 message ChromeUserProfileInfo {
@@ -2335,6 +2395,12 @@ message ChromeUserProfileInfo {
 
   // Profile level security signals.
   optional ProfileSignalsReport profile_signals_report = 13;
+
+  // A list of MDM certificates and their details.
+  repeated SignedCertificateDetails certificates = 14;
+
+  // Whether certificates were truncated.
+  optional bool certificates_were_truncated = 15;
 }
 
 // Report browser level status.
@@ -2537,6 +2603,14 @@ message OSReport {
   // The user-visible security patch level. This value represents the date when
   // the device most recently applied a security patch. Android only.
   optional int64 security_patch_ms = 23;
+
+  message IosSpecificAttributes {
+    // Unique identifier for the vendor.
+    optional string vendor_id = 1;
+  }
+
+  // iOS specific attributes.
+  optional IosSpecificAttributes ios_specific_attributes = 24;
 }
 
 // Report the status of a Chrome installation on non-Chrome OS platform.
@@ -2603,6 +2677,8 @@ message AttestationPayload {
   optional string attestation_blob = 3;
   // Error from blob generation if there is one.
   optional string attestation_error = 4;
+  // Version of the content binding method used.
+  optional int32 content_binding_version = 5;
 }
 
 // Report user level status on all platforms. It includes the information of the
@@ -3290,6 +3366,9 @@ message RemoteCommand {
 
     // Query the geolocation of the device.
     QUERY_GEOLOCATION = 17;
+
+    // Immediately force an extension update check for a given profile.
+    BROWSER_EXTENSION_UPDATE_CHECK = 18;
 
     // Please update metrics after adding a new item - see the comment above.
   }
@@ -4960,6 +5039,22 @@ message GetUserEligiblePromotionsResponse {
   optional PromotionEligibilityList promotions = 1;
 }
 
+// Request to generate an attestation challenge.
+message GenerateChromeProfileChallengeRequest {}
+
+message GenerateChromeProfileChallengeResponse {
+  // Encrypted bytes of ChromeProfileChallengeData.
+  optional bytes challenge = 1;
+}
+
+message ChromeProfileChallengeData {
+  // A random value generated by the server.
+  optional bytes nonce = 1;
+
+  // The time the challenge was generated.
+  optional int64 creation_timestamp_ms = 2;
+}
+
 // Additional detail about the error which can be used to clarify user messaging
 // around the error or to influence Chrome's error-handling behavior.
 enum DeviceManagementErrorDetail {
@@ -5214,7 +5309,16 @@ message DeviceManagementRequest {
   optional DeterminePromotionEligibilityRequest
       determine_promotion_eligibility_request = 43;
 
-  // Next id: 44.
+  optional GenerateChromeProfileChallengeRequest
+      generate_chrome_profile_challenge_request = 44;
+
+  // Request to check whether a user account is managed and optionally fetch
+  // sign-in interception policies.
+  // HTTP query parameter 'request': 'user_management_status_and_policies'
+  optional UserManagementStatusAndPoliciesRequest
+      user_management_status_and_policies_request = 45;
+
+  // Next id: 46.
 }
 
 // Response from server to device.
@@ -5382,7 +5486,86 @@ message DeviceManagementResponse {
   optional GetUserEligiblePromotionsResponse
       get_user_eligible_promotions_response = 42;
 
-  // Next id: 43.
+  optional GenerateChromeProfileChallengeResponse
+      generate_chrome_profile_challenge_response = 44;
+
+  // Response to check user management status and policies request
+  // (`UserManagementStatusAndPoliciesRequest`).
+  optional UserManagementStatusAndPoliciesResponse
+      user_management_status_and_policies_response = 45;
+
+  // Next id: 46.
+}
+
+// Request from device to server to check if a user is managed and retrieve
+// sign-in experience policies.
+message UserManagementStatusAndPoliciesRequest {
+  // Whether to fetch sign-in experience policies for the user. Policies are
+  // fetched only if the user is managed and has management enabled.
+  optional bool should_fetch_policies = 1;
+}
+
+// Enterprise policies needed to customize the sign-in experience (such as
+// profile separation and branding).
+message SigninExperiencePolicies {
+  // Enums are explicitly defined here matching the policy integer enum values
+  // because generated policy protos (from policy definitions templates) are
+  // created at build time and do not export standalone proto enum types.
+  //
+  // NOTE: If new enum values are added to policy_templates.json / policy YAMLs
+  // for ProfileSeparationSettings or ProfileSeparationDataMigrationSettings,
+  // ensure these enums are updated accordingly.
+
+  // Values match the proto enum values of the `ProfileSeparationSettings`
+  // policy.
+  enum ProfileSeparationSettings {
+    SUGGESTED = 0;
+    ENFORCED = 1;
+    DISABLED = 2;
+  }
+
+  // Values match the proto enum values of the
+  // `ProfileSeparationDataMigrationSettings` policy.
+  enum ProfileSeparationDataMigrationSettings {
+    USER_OPT_IN = 1;
+    USER_OPT_OUT = 2;
+    ALWAYS_SEPARATE = 3;
+  }
+
+  // Value for the `SyncDisabled` policy.
+  optional bool sync_disabled = 1;
+
+  // Value for the `ProfileSeparationSettings` policy.
+  optional ProfileSeparationSettings profile_separation_settings = 2;
+
+  // Value for the `ProfileSeparationDataMigrationSettings` policy.
+  optional ProfileSeparationDataMigrationSettings profile_separation_data_migration_settings = 3;
+
+  // Value for the `BrowserThemeColor` policy.
+  optional string browser_theme_color = 4;
+
+  // Value for the `EnterpriseLogoUrl` policy.
+  optional string enterprise_logo_url = 5;
+
+  // Value for the `EnterpriseCustomLabel` policy.
+  optional string enterprise_custom_label = 6;
+
+  // Value for the `ManagedAccountsSigninRestriction` policy.
+  optional string managed_accounts_signin_restrictions = 7;
+}
+
+// Response from server to device for check user management status and policies
+// request (`UserManagementStatusAndPoliciesRequest`).
+message UserManagementStatusAndPoliciesResponse {
+  // Whether the user account is managed by an enterprise/domain.
+  optional bool is_account_managed = 1;
+
+  // Whether Chrome management is enabled for this user.
+  optional bool is_chrome_profile_management_enabled = 2;
+
+  // Sign-in experience policies for the user, populated when
+  // `should_fetch_policies` is true and management is enabled.
+  optional SigninExperiencePolicies signin_experience_policies = 3;
 }
 
 // Device State Information stored in the server is retrieval at
@@ -5390,6 +5573,25 @@ message DeviceManagementResponse {
 message DeviceStateRetrievalInfo {
   // Whether the device should retrieve initial state or not.
   optional bool has_initial_state = 1;
+}
+
+// Bucketed risk level for an extension/app.
+enum RiskLevel {
+  // Risk level not specified.
+  RISK_LEVEL_UNSPECIFIED = 0;
+  // Extension that represents a low risk.
+  RISK_LEVEL_LOW = 1;
+  // Extension that represents a medium risk.
+  RISK_LEVEL_MEDIUM = 2;
+  // Extension that represents a high risk.
+  RISK_LEVEL_HIGH = 3;
+}
+
+message ProviderRiskLevel {
+  // The provider of the risk level.
+  optional string provider = 1;
+  // The risk level of the extension.
+  optional RiskLevel risk_level = 2;
 }
 
 message ExtensionInstallPolicy {
@@ -5409,6 +5611,7 @@ message ExtensionInstallPolicy {
   optional string extension_version = 2;
   optional Action action = 3;
   repeated Reason reasons = 4;
+  repeated ProviderRiskLevel risk_levels = 5;
 }
 
 message ExtensionInstallPolicies {

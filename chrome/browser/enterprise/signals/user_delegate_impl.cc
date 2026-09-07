@@ -7,10 +7,10 @@
 #include <set>
 
 #include "base/check.h"
-#include "chrome/browser/enterprise/connectors/device_trust/common/common_types.h"
 #include "chrome/browser/enterprise/util/affiliation.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
+#include "components/enterprise/device_trust/core/common_types.h"
 #include "components/policy/core/common/policy_types.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
@@ -73,7 +73,7 @@ bool UserDelegateImpl::IsSameUser(const GaiaId& gaia_id) const {
          identity_manager_->GetPrimaryAccountId(
              signin::ConsentLevel::kSignin) ==
              identity_manager_->FindExtendedAccountInfoByGaiaId(gaia_id)
-                 .account_id;
+                 .GetAccountId();
 }
 
 std::set<policy::PolicyScope> UserDelegateImpl::GetPolicyScopesNeedingSignals()

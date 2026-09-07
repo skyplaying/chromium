@@ -5,7 +5,7 @@
 #import "ios/chrome/browser/intelligence/bwg/model/gemini_suggestion_handler.h"
 
 #import "base/functional/bind.h"
-#import "ios/chrome/browser/intelligence/bwg/model/bwg_tab_helper.h"
+#import "ios/chrome/browser/intelligence/bwg/model/gemini_tab_helper.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/web/public/web_state.h"
 
@@ -32,13 +32,13 @@
     return;
   }
 
-  BwgTabHelper* tabHelper = BwgTabHelper::FromWebState(webState);
+  GeminiTabHelper* tabHelper = GeminiTabHelper::FromWebState(webState);
   if (!tabHelper) {
     completion(nil);
     return;
   }
 
-  tabHelper->ExecuteZeroStateSuggestions(
+  tabHelper->FetchZeroStateSuggestionsAsStrings(
       base::BindOnce(^(NSArray<NSString*>* suggestions) {
         completion(suggestions);
       }));

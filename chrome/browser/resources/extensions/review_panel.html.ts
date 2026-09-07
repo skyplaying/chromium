@@ -21,13 +21,17 @@ export function getHtml(this: ExtensionsReviewPanelElement) {
       @expanded-changed="${this.onUnsafeExtensionsReviewListExpandedChanged_}"
       ?hidden="${!this.shouldShowUnsafeExtensions_}">
     <div class="panel-header" id="reviewPanelContainer">
-      <cr-icon aria-hidden="true" icon="extensions-icons:my_extensions"
+      <cr-icon aria-hidden="true"
+          icon="${
+              this.webuiRoundedIconsEnabled_ ?
+                  'extensions-icons:chrome-extension' :
+                  'extensions-icons:my_extensions-old'}"
           class="panel-header-icon">
       </cr-icon>
       <div class="panel-header-text">
         <h3 id="headingText">${this.headerString_}</h3>
         <div class="cr-secondary-text" id="secondaryText">
-            ${this.subtitleString_}
+          ${this.subtitleString_}
         </div>
       </div>
       <cr-button class="action-button bulk-action-button"
@@ -61,7 +65,8 @@ export function getHtml(this: ExtensionsReviewPanelElement) {
             aria-label="${this.getOptionMenuA11yLabel_(item.name)}"
             focus-type="makeExceptionMenuButton">
         </cr-icon-button>
-      </div>`)}
+      </div>
+    `)}
   </cr-collapse>
   <div class="header-with-icon completion-container"
       ?hidden="${!this.shouldShowCompletionInfo_}">

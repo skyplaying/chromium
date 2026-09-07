@@ -4,15 +4,16 @@
 
 #include "chrome/browser/thumbnail/cc/thumbnail_cache.h"
 
+#include <stddef.h>
+
 #include <algorithm>
 #include <cmath>
+#include <ranges>
 #include <utility>
 #include <vector>
 
 #include "base/android/application_status_listener.h"
 #include "base/android/path_utils.h"
-#include "base/big_endian.h"
-#include "base/containers/adapters.h"
 #include "base/containers/flat_set.h"
 #include "base/feature_list.h"
 #include "base/files/file.h"
@@ -126,7 +127,7 @@ void ThumbnailCache::Put(
     std::unique_ptr<ThumbnailCaptureTracker, base::OnTaskRunnerDeleter> tracker,
     const SkBitmap& bitmap,
     float thumbnail_scale) {
-  if (!ui_resource_provider_ || bitmap.empty() || thumbnail_scale <= 0) {
+  if (bitmap.empty() || thumbnail_scale <= 0) {
     tracker->MarkCaptureFailed();
     return;
   }
@@ -138,15 +139,18 @@ void ThumbnailCache::Put(
   }
 
   base::Time time_stamp = thumbnail_meta_data_[tab_id].capture_time();
-  std::unique_ptr<Thumbnail> thumbnail = Thumbnail::Create(
-      tab_id, time_stamp, thumbnail_scale, ui_resource_provider_, this);
-  thumbnail->SetBitmap(bitmap);
 
-  RemoveFromReadQueue(tab_id);
-  if (std::ranges::contains(visible_ids_, tab_id)) {
-    MakeSpaceForNewItemIfNecessary(tab_id);
-    cache_.Put(tab_id, std::move(thumbnail));
-    NotifyObserversOfThumbnailAddedToCache(tab_id);
+  if (ui_resource_provider_) {
+    std::unique_ptr<Thumbnail> thumbnail = Thumbnail::Create(
+        tab_id, time_stamp, thumbnail_scale, ui_resource_provider_, this);
+    thumbnail->SetBitmap(bitmap);
+
+    RemoveFromReadQueue(tab_id);
+    if (std::ranges::contains(visible_ids_, tab_id)) {
+      MakeSpaceForNewItemIfNecessary(tab_id);
+      cache_.Put(tab_id, std::move(thumbnail));
+      NotifyObserversOfThumbnailAddedToCache(tab_id);
+    }
   }
 
   CompressThumbnailIfNecessary(tab_id, std::move(tracker), time_stamp, bitmap,
@@ -158,6 +162,12 @@ void ThumbnailCache::Remove(TabId tab_id) {
   thumbnail_meta_data_.erase(tab_id);
   RemoveFromDisk(tab_id);
   RemoveFromReadQueue(tab_id);
+}
+
+void ThumbnailCache::RemoveAllTabThumbnailsExceptForIds(
+    std::vector<int> tab_ids) {
+  jpeg_helper_.DeleteAllExceptForIds(tab_ids);
+  etc1_helper_.DeleteAllExceptForIds(tab_ids);
 }
 
 Thumbnail* ThumbnailCache::Get(TabId tab_id, bool force_disk_read) {
@@ -401,8 +411,12 @@ void ThumbnailCache::CompressThumbnailIfNecessary(
           base::BindOnce(&ThumbnailCache::PostEtc1CompressionTask,
                          weak_factory_.GetWeakPtr(), tab_id, time_stamp, scale);
 
-  etc1_helper_.Compress(bitmap,
-                        ui_resource_provider_->SupportsETC1NonPowerOfTwo(),
+  // If there is no `ui_resource_provider_` assume that ETC1 compression does
+  // not support non-power of two as it is safer.
+  bool supports_etc1_non_power_of_two =
+      ui_resource_provider_ &&
+      ui_resource_provider_->SupportsETC1NonPowerOfTwo();
+  etc1_helper_.Compress(bitmap, supports_etc1_non_power_of_two,
                         std::move(post_compression_task));
 
   if (save_jpeg_thumbnails_) {
@@ -446,7 +460,7 @@ void ThumbnailCache::MakeSpaceForNewItemIfNecessary(TabId tab_id) {
 
   if (!found_key_to_remove) {
     // 2. Find the least important id we can remove.
-    for (const TabId& id : base::Reversed(visible_ids_)) {
+    for (const TabId& id : std::views::reverse(visible_ids_)) {
       if (cache_.Get(id)) {
         key_to_remove = id;
         found_key_to_remove = true;

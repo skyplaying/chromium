@@ -32,10 +32,11 @@ enum class StartupLaunchReason {
   kExtensions = 0,
   kGlic = 1,
   kForeground = 2,
+  kOmniboxEverywhere = 3,
 
   // Update these when adding/removing values.
   kMinValue = kExtensions,
-  kMaxValue = kForeground,
+  kMaxValue = kOmniboxEverywhere,
 };
 
 // StartupLaunchManager registers with the OS so that Chrome launches on device
@@ -60,7 +61,7 @@ class StartupLaunchManager : public StartupLaunchInfoBarManager::Observer {
 
     // Stores whether launch on startup is enabled for the client.
     // Null value implies client is not initialized yet.
-    std::optional<bool> launch_enabled_ = std::nullopt;
+    std::optional<bool> launch_enabled_;
   };
 
   explicit StartupLaunchManager(BrowserProcess* browser_process);
@@ -77,7 +78,6 @@ class StartupLaunchManager : public StartupLaunchInfoBarManager::Observer {
   // released or 1 minute has passed, a registry commit will occur.
   void CommitLaunchOnStartupState();
 
-#if BUILDFLAG(IS_WIN)
   // Sets the infobar manager. This is injected at runtime rather than in the
   // constructor to resolve circular dependencies between StartupLaunchManager
   // and the UI components that implement the infobar manager.
@@ -90,7 +90,6 @@ class StartupLaunchManager : public StartupLaunchInfoBarManager::Observer {
   // the preconditions (experiment state, not declined too many times) are met.
   // Requires a manager to be set via `SetInfoBarManager` beforehand.
   void MaybeShowInfoBars();
-#endif  // BUILDFLAG(IS_WIN)
 
  private:
   // Methods to unregister/register individual reasons with the launch manager.
@@ -131,17 +130,13 @@ class StartupLaunchManager : public StartupLaunchInfoBarManager::Observer {
   size_t lock_counter_ = 0;
 
   // Tracks active launch reasons.
-  base::EnumSet<StartupLaunchReason,
-                StartupLaunchReason::kMinValue,
-                StartupLaunchReason::kMaxValue>
-      registered_launch_reasons_;
+  base::EnumSet<StartupLaunchReason> registered_launch_reasons_;
 
   // Stores the callback to trigger `ForceReleaseAllLocks` when initializing.
   base::OneShotTimer fallback_timer_;
 
   PrefMember<bool> foreground_launch_on_login_;
 
-#if BUILDFLAG(IS_WIN)
   std::optional<StartupLaunchInfoBarManager::InfoBarType> infobar_type_ =
       std::nullopt;
 
@@ -150,7 +145,6 @@ class StartupLaunchManager : public StartupLaunchInfoBarManager::Observer {
   base::ScopedObservation<StartupLaunchInfoBarManager,
                           StartupLaunchInfoBarManager::Observer>
       infobar_manager_observation_{this};
-#endif
 
   ui::ScopedUnownedUserData<StartupLaunchManager> scoped_unowned_user_data_;
 };

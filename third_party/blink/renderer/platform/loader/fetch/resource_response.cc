@@ -43,7 +43,6 @@
 #include "third_party/blink/renderer/platform/loader/fetch/service_worker_router_info.h"
 #include "third_party/blink/renderer/platform/network/http_names.h"
 #include "third_party/blink/renderer/platform/network/http_parsers.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/assertions.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
@@ -90,6 +89,7 @@ ResourceResponse::ResourceResponse()
       was_fetched_via_spdy_(false),
       was_fetched_via_service_worker_(false),
       from_synthetic_response_(false),
+      intercepted_by_plugin_(false),
       did_service_worker_navigation_preload_(false),
       did_use_shared_dictionary_(false),
       async_revalidation_requested_(false),
@@ -118,7 +118,7 @@ ResourceResponse& ResourceResponse::operator=(const ResourceResponse&) =
 ResourceResponse::~ResourceResponse() = default;
 
 bool ResourceResponse::IsHTTP() const {
-  return current_request_url_.ProtocolIsInHTTPFamily();
+  return current_request_url_.ProtocolIsInHttpFamily();
 }
 
 bool ResourceResponse::ShouldPopulateResourceTiming() const {
@@ -161,10 +161,13 @@ KURL ResourceResponse::ResponseUrl() const {
   return CurrentRequestUrl();
 }
 
+bool ResourceResponse::HasMatchingServiceWorkerUrl() const {
+  return !url_list_via_service_worker_.empty() &&
+         url_list_via_service_worker_.back() == current_request_url_;
+}
+
 bool ResourceResponse::IsServiceWorkerPassThrough() const {
-  return cache_storage_cache_name_.empty() &&
-         !url_list_via_service_worker_.empty() &&
-         ResponseUrl() == CurrentRequestUrl();
+  return cache_storage_cache_name_.empty() && HasMatchingServiceWorkerUrl();
 }
 
 const AtomicString& ResourceResponse::MimeType() const {
@@ -227,16 +230,16 @@ const AtomicString& ResourceResponse::HttpHeaderField(
 }
 
 void ResourceResponse::UpdateHeaderParsedState(const AtomicString& name) {
-  if (EqualIgnoringASCIICase(name, http_names::kLowerAge)) {
+  if (EqualIgnoringAsciiCase(name, http_names::kLowerAge)) {
     have_parsed_age_header_ = false;
-  } else if (EqualIgnoringASCIICase(name, http_names::kLowerCacheControl) ||
-             EqualIgnoringASCIICase(name, http_names::kLowerPragma)) {
+  } else if (EqualIgnoringAsciiCase(name, http_names::kLowerCacheControl) ||
+             EqualIgnoringAsciiCase(name, http_names::kLowerPragma)) {
     cache_control_header_ = CacheControlHeader();
-  } else if (EqualIgnoringASCIICase(name, http_names::kLowerDate)) {
+  } else if (EqualIgnoringAsciiCase(name, http_names::kLowerDate)) {
     have_parsed_date_header_ = false;
-  } else if (EqualIgnoringASCIICase(name, http_names::kLowerExpires)) {
+  } else if (EqualIgnoringAsciiCase(name, http_names::kLowerExpires)) {
     have_parsed_expires_header_ = false;
-  } else if (EqualIgnoringASCIICase(name, http_names::kLowerLastModified)) {
+  } else if (EqualIgnoringAsciiCase(name, http_names::kLowerLastModified)) {
     have_parsed_last_modified_header_ = false;
   }
 }
@@ -431,17 +434,17 @@ std::optional<base::Time> ResourceResponse::LastModified() const {
 
 bool ResourceResponse::IsAttachment() const {
   static const char kAttachmentString[] = "attachment";
-  String value = http_header_fields_.Get(http_names::kContentDisposition);
-  wtf_size_t loc = value.find(';');
-  if (loc != kNotFound)
-    value = value.Left(loc);
-  value = value.StripWhiteSpace();
-  return EqualIgnoringASCIICase(value, kAttachmentString);
+  const AtomicString& header_value =
+      http_header_fields_.Get(http_names::kContentDisposition);
+  const StringView attachment_value = StringView(header_value)
+                                          .substr(0, header_value.find(';'))
+                                          .StripWhiteSpace();
+  return EqualIgnoringAsciiCase(attachment_value, kAttachmentString);
 }
 
 AtomicString ResourceResponse::HttpContentType() const {
   return ExtractMIMETypeFromMediaType(
-      HttpHeaderField(http_names::kContentType).LowerASCII());
+      HttpHeaderField(http_names::kContentType).ToAsciiLower());
 }
 
 AtomicString ResourceResponse::GetFilteredHttpContentEncoding() const {
@@ -450,14 +453,14 @@ AtomicString ResourceResponse::GetFilteredHttpContentEncoding() const {
   DEFINE_THREAD_SAFE_STATIC_LOCAL(const AtomicString, unknown_value,
                                   ("@unknown"));
   String content_encoding =
-      HttpHeaderField(http_names::kContentEncoding).LowerASCII();
+      HttpHeaderField(http_names::kContentEncoding).ToAsciiLower();
   if (content_encoding.IsNull() || content_encoding.empty()) {
     return g_empty_atom;
   }
   if (kSupportedContentEncodingValues.contains(content_encoding.Ascii())) {
     return AtomicString(content_encoding);
   }
-  if (content_encoding.find(',') != kNotFound) {
+  if (content_encoding.contains(',')) {
     return multiple_value;
   }
   return unknown_value;
@@ -527,16 +530,19 @@ void ResourceResponse::SetDecodedBodyLength(int64_t value) {
 
 network::mojom::CrossOriginEmbedderPolicyValue
 ResourceResponse::GetCrossOriginEmbedderPolicy() const {
-  const std::string value =
-      HttpHeaderField(http_names::kLowerCrossOriginEmbedderPolicy).Utf8();
-  using Item = net::structured_headers::Item;
-  const auto item = net::structured_headers::ParseItem(value);
-  if (!item || item->item.Type() != Item::kTokenType) {
+  const AtomicString& value =
+      HttpHeaderField(http_names::kLowerCrossOriginEmbedderPolicy);
+  if (value.IsNull()) {
     return network::mojom::CrossOriginEmbedderPolicyValue::kNone;
   }
-  if (item->item.GetString() == "require-corp") {
+  const auto item = net::structured_headers::ParseItem(value.Utf8());
+  const std::string* token = item ? item->item.GetIfToken() : nullptr;
+  if (!token) {
+    return network::mojom::CrossOriginEmbedderPolicyValue::kNone;
+  }
+  if (*token == "require-corp") {
     return network::mojom::CrossOriginEmbedderPolicyValue::kRequireCorp;
-  } else if (item->item.GetString() == "credentialless") {
+  } else if (*token == "credentialless") {
     return network::mojom::CrossOriginEmbedderPolicyValue::kCredentialless;
   } else {
     return network::mojom::CrossOriginEmbedderPolicyValue::kNone;

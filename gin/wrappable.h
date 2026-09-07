@@ -63,9 +63,6 @@ static_assert(sizeof(v8::CppHeapPointerTag) == sizeof(WrappablePointerTag),
               "which is used for subclasses of gin::Wrappable. They should "
               "therefore have the same underlying type.");
 
-GIN_EXPORT void* FromV8Impl(v8::Isolate* isolate,
-                            v8::Local<v8::Value> val,
-                            DeprecatedWrapperInfo* info);
 
 }  // namespace internal
 
@@ -140,97 +137,26 @@ struct Converter<T*> {
       return false;
     }
 
-    auto tag = static_cast<v8::CppHeapPointerTag>(T::kWrapperInfo.pointer_tag);
-    // We noticed call sites of `FromV8()` where the object in `val` and the
-    // type `T` don't match. This works at the moment because Object::Unwrap()
-    // returns nullptr if the tag does not match. However, this is not
-    // guaranteed and there may be a DCHECK that fails if the tag does not
-    // match. If this turns out to be a problem, then we could use a bigger tag
-    // range here and rely completely on the second type check below.
-    //
-    // The second type check is needed anyways because on systems without V8
-    // heap sandbox, Object::Unwrap does not check the tag.
-    v8::Object::Wrappable* wrappable =
-        v8::Object::Unwrap<v8::Object::Wrappable>(isolate, obj, {tag, tag});
-    if (!wrappable) {
+    // Because Unwrap requires us to pass the expected tag range, and this
+    // function might get passed any type of object, it first unwraps to a
+    // generic Wrappable. An explicit type check is then performed below between
+    // the expected type, and the dynamic type info from `GetWrapperTypeInfo()`.
+    v8::Object::Wrappable* any_wrappable =
+        v8::Object::Unwrap<v8::Object::Wrappable>(isolate, obj,
+                                                  v8::kObjectWrappableTagRange);
+    if (!any_wrappable) {
       *out = nullptr;
       return false;
     }
-    if (wrappable->GetWrapperTypeInfo() != &T::kWrapperInfo) {
+    // Perform a second type check to assert that we indeed have the expected
+    // type before casting.
+    if (any_wrappable->GetWrapperTypeInfo() != &T::kWrapperInfo) {
       *out = nullptr;
       return false;
     }
-    *out = static_cast<T*>(wrappable);
+    // This cast is only safe because we have the second type check above.
+    *out = static_cast<T*>(any_wrappable);
     return *out != nullptr;
-  }
-};
-
-// Non-template base class to share code between templates instances.
-class GIN_EXPORT DeprecatedWrappableBase {
- public:
-  DeprecatedWrappableBase(const DeprecatedWrappableBase&) = delete;
-  DeprecatedWrappableBase& operator=(const DeprecatedWrappableBase&) = delete;
-
- protected:
-  DeprecatedWrappableBase();
-  virtual ~DeprecatedWrappableBase();
-
-  // Overrides of this method should be declared final and not overridden again.
-  virtual ObjectTemplateBuilder GetObjectTemplateBuilder(v8::Isolate* isolate);
-
-  // Returns a readable type name that will be used in surfacing errors. The
-  // default implementation returns nullptr, which results in a generic error.
-  virtual const char* GetTypeName();
-
-  v8::MaybeLocal<v8::Object> GetWrapperImpl(
-      v8::Isolate* isolate,
-      DeprecatedWrapperInfo* wrapper_info);
-
- private:
-  static void FirstWeakCallback(
-      const v8::WeakCallbackInfo<DeprecatedWrappableBase>& data);
-  static void SecondWeakCallback(
-      const v8::WeakCallbackInfo<DeprecatedWrappableBase>& data);
-
-  bool dead_ = false;
-  v8::Global<v8::Object> wrapper_;  // Weak
-};
-
-template <typename T>
-class DeprecatedWrappable : public DeprecatedWrappableBase {
- public:
-  DeprecatedWrappable(const DeprecatedWrappable&) = delete;
-  DeprecatedWrappable& operator=(const DeprecatedWrappable&) = delete;
-
-  // Retrieve (or create) the v8 wrapper object corresponding to this object.
-  v8::MaybeLocal<v8::Object> GetWrapper(v8::Isolate* isolate) {
-    return GetWrapperImpl(isolate, &T::kWrapperInfo);
-  }
-
- protected:
-  DeprecatedWrappable() = default;
-  ~DeprecatedWrappable() override = default;
-};
-
-// This converter handles any subclass of DeprecatedWrappable.
-template <typename T>
-  requires(std::is_convertible_v<T*, DeprecatedWrappableBase*>)
-struct Converter<T*> {
-  static v8::MaybeLocal<v8::Value> ToV8(v8::Isolate* isolate, T* val) {
-    if (val == nullptr) {
-      return v8::Null(isolate);
-    }
-    v8::Local<v8::Object> wrapper;
-    if (!val->GetWrapper(isolate).ToLocal(&wrapper)) {
-      return v8::MaybeLocal<v8::Value>();
-    }
-    return v8::MaybeLocal<v8::Value>(wrapper);
-  }
-
-  static bool FromV8(v8::Isolate* isolate, v8::Local<v8::Value> val, T** out) {
-    *out = static_cast<T*>(static_cast<DeprecatedWrappableBase*>(
-        internal::FromV8Impl(isolate, val, &T::kWrapperInfo)));
-    return *out != NULL;
   }
 };
 

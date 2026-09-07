@@ -4,11 +4,10 @@
 
 #include "chrome/browser/apps/link_capturing/metrics/intent_handling_metrics.h"
 
-#include "base/metrics/histogram_macros.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "build/build_config.h"
-#include "chrome/browser/apps/link_capturing/intent_picker_info.h"
 #include "chrome/test/base/testing_profile.h"
+#include "components/apps/link_capturing/intent_picker_info.h"
 #include "components/prefs/testing_pref_service.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"

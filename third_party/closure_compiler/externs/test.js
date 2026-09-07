@@ -34,7 +34,7 @@ chrome.test = {};
  *     isLoggedIn: (boolean|undefined),
  *     isScreenLocked: (boolean|undefined)
  *   }|undefined)
- * }): void} callback
+ * }): void=} callback
  * @see https://developer.chrome.com/extensions/test#method-getConfig
  */
 chrome.test.getConfig = function(callback) {};
@@ -88,6 +88,26 @@ chrome.test.sendMessage = function(message, callback) {};
 chrome.test.sendScriptResult = function(result, callback) {};
 
 /**
+ * Notifies the browser process that a specific test case in the test code
+ * started running. The chrome.test API uses this internally.
+ * @param {string} testName
+ * @see https://developer.chrome.com/extensions/test#method-notifyTestStarted
+ */
+chrome.test.notifyTestStarted = function(testName) {};
+
+/**
+ * Notifies the browser process that a specific test case in the test code
+ * finished running. The chrome.test API uses this internally.
+ * @param {string} testName
+ * @param {boolean} result
+ * @param {number} remainingTests
+ * @param {string} assertionDescription
+ * @param {string=} message
+ * @see https://developer.chrome.com/extensions/test#method-notifyTestFinished
+ */
+chrome.test.notifyTestFinished = function(testName, result, remainingTests, assertionDescription, message) {};
+
+/**
  * @see https://developer.chrome.com/extensions/test#method-callbackAdded
  */
 chrome.test.callbackAdded = function() {};
@@ -113,43 +133,43 @@ chrome.test.succeed = function(message) {};
 chrome.test.getModuleSystem = function(context) {};
 
 /**
- * @param {(string|boolean)} test
+ * @param {boolean} test
  * @param {string=} message
  * @see https://developer.chrome.com/extensions/test#method-assertTrue
  */
 chrome.test.assertTrue = function(test, message) {};
 
 /**
- * @param {(string|boolean)} test
+ * @param {boolean} test
  * @param {string=} message
  * @see https://developer.chrome.com/extensions/test#method-assertFalse
  */
 chrome.test.assertFalse = function(test, message) {};
 
 /**
- * @param {*=} expected
- * @param {*=} actual
+ * @param {*=} value
+ * @param {*=} other_value
  * @see https://developer.chrome.com/extensions/test#method-checkDeepEq
  */
-chrome.test.checkDeepEq = function(expected, actual) {};
+chrome.test.checkDeepEq = function(value, other_value) {};
 
 /**
- * @param {*=} expected
- * @param {*=} actual
+ * @param {*=} value
+ * @param {*=} other_value
  * @param {string=} message A custom error message to print out with the test
  *     failure, if any.
  * @see https://developer.chrome.com/extensions/test#method-assertEq
  */
-chrome.test.assertEq = function(expected, actual, message) {};
+chrome.test.assertEq = function(value, other_value, message) {};
 
 /**
- * @param {*=} expected
- * @param {*=} actual
+ * @param {*=} value
+ * @param {*=} other_value
  * @param {string=} message A custom error message to print out with the test
  *     failure, if any.
  * @see https://developer.chrome.com/extensions/test#method-assertNe
  */
-chrome.test.assertNe = function(expected, actual, message) {};
+chrome.test.assertNe = function(value, other_value, message) {};
 
 /**
  * @see https://developer.chrome.com/extensions/test#method-assertNoLastError
@@ -163,13 +183,14 @@ chrome.test.assertNoLastError = function() {};
 chrome.test.assertLastError = function(expectedError) {};
 
 /**
+ * Asserts that a given function throws an error. If it does not, or if the
+ * thrown error doesn't match expectedError (if defined), the test fails.
  * @param {function(): void} fn
- * @param {?Object|undefined} self
- * @param {!Array<*>} args
- * @param {(string|RegExp)=} message
+ * @param {(string|RegExp)=} expectedError Expected error message or RegExp.
+ * @param {string=} message Custom failure message.
  * @see https://developer.chrome.com/extensions/test#method-assertThrows
  */
-chrome.test.assertThrows = function(fn, self, args, message) {};
+chrome.test.assertThrows = function(fn, expectedError, message) {};
 
 /**
  * @param {Promise} promise The promise to evaluate, which is expected to
@@ -233,6 +254,8 @@ chrome.test.callbackFail = function(expectedError, func) {};
 
 /**
  * @param {!Array<function(): void>} tests
+ * @return {Promise} A promise that resolves when all tests complete
+ *     successfully or rejects if any test failed.
  * @see https://developer.chrome.com/extensions/test#method-runTests
  */
 chrome.test.runTests = function(tests) {};
@@ -264,7 +287,7 @@ chrome.test.runWithUserGesture = function(functionToRun) {};
  * Sends a string message one round trip from the renderer to the browser
  * process and back.
  * @param {string} message
- * @param {function(string): void} callback
+ * @param {function(string): void=} callback
  * @see https://developer.chrome.com/extensions/test#method-waitForRoundTrip
  */
 chrome.test.waitForRoundTrip = function(message, callback) {};
@@ -292,3 +315,17 @@ chrome.test.setExceptionHandler = function(handler) {};
  * @see https://developer.chrome.com/extensions/test#event-onMessage
  */
 chrome.test.onMessage;
+
+/**
+ * Fired when a test is started, before any test logic has run.
+ * @type {!ChromeEvent}
+ * @see https://developer.chrome.com/extensions/test#event-onTestStarted
+ */
+chrome.test.onTestStarted;
+
+/**
+ * Fired when a test evaluates to success or failure.
+ * @type {!ChromeEvent}
+ * @see https://developer.chrome.com/extensions/test#event-onTestFinished
+ */
+chrome.test.onTestFinished;

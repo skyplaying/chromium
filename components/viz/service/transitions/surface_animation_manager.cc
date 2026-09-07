@@ -15,6 +15,7 @@
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/time/time.h"
+#include "cc/base/features.h"
 #include "cc/base/math_util.h"
 #include "components/viz/common/features.h"
 #include "components/viz/common/quads/compositor_frame.h"
@@ -46,6 +47,29 @@
 namespace viz {
 namespace {
 
+constexpr float kSnapErrorTolerance = 0.001f;
+
+void AdjustQuadTransformForPixelAlignment(
+    const gfx::Vector2dF& orig_pixel_alignment_offset,
+    gfx::Transform& quad_to_target_transform) {
+  if (!orig_pixel_alignment_offset.IsZero()) {
+    quad_to_target_transform.PostTranslate(-orig_pixel_alignment_offset);
+  }
+  if (quad_to_target_transform.IsScaleOrTranslation()) {
+    gfx::Vector2dF translation = quad_to_target_transform.To2dTranslation();
+    auto snap = [](float v) -> float {
+      float rounded = std::round(v);
+      return (std::abs(v - rounded) < kSnapErrorTolerance) ? rounded : v;
+    };
+    float sx = snap(translation.x());
+    float sy = snap(translation.y());
+    if (sx != translation.x() || sy != translation.y()) {
+      quad_to_target_transform.PostTranslate(
+          gfx::Vector2dF(sx - translation.x(), sy - translation.y()));
+    }
+  }
+}
+
 // This function swaps a SharedElementDrawQuad with a RenderPassDrawQuad.
 // |target_render_pass| is the render pass where the SharedElementDrawQuad is
 // drawn.
@@ -68,6 +92,21 @@ void ReplaceSharedElementWithRenderPass(
   gfx::Transform transform = GetViewTransitionTransform(
       shared_element_quad.rect, shared_pass_output_rect);
   copied_quad_state->quad_to_target_transform.PreConcat(transform);
+
+  if (base::FeatureList::IsEnabled(
+          features::kViewTransitionsNewRoundingChange)) {
+    // For live content, the shared element is being rendered in
+    // |shared_element_content_pass| in the current frame. Compute its pixel
+    // alignment offset from its current transform to root target so that we can
+    // adjust the quad transform to cancel out raster-time subpixel translation.
+    gfx::Vector2dF orig_pixel_alignment_offset =
+        TransitionUtils::ComputePixelAlignmentOffset(
+            shared_element_content_pass->transform_to_root_target);
+    AdjustQuadTransformForPixelAlignment(
+        orig_pixel_alignment_offset,
+        copied_quad_state->quad_to_target_transform);
+  }
+
   copied_quad_state->quad_layer_rect = shared_pass_output_rect;
   copied_quad_state->visible_quad_layer_rect = shared_pass_output_rect;
 
@@ -79,7 +118,6 @@ void ReplaceSharedElementWithRenderPass(
   auto* render_pass_quad =
       target_render_pass
           ->CreateAndAppendDrawQuad<CompositorRenderPassDrawQuad>();
-  gfx::RectF tex_coord_rect(gfx::Rect(shared_pass_output_rect.size()));
   render_pass_quad->SetNew(
       /*shared_quad_state=*/copied_quad_state,
       /*rect=*/shared_pass_output_rect,
@@ -88,7 +126,6 @@ void ReplaceSharedElementWithRenderPass(
       /*mask_resource_id=*/kInvalidResourceId,
       /*mask_uv_rect=*/gfx::RectF(),
       /*mask_texture_size=*/gfx::Size(),
-      /*tex_coord_rect=*/tex_coord_rect,
       /*force_anti_aliasing_off=*/false);
 }
 
@@ -103,10 +140,22 @@ void ReplaceSharedElementWithTexture(
     CompositorRenderPass* target_render_pass,
     const SharedElementDrawQuad& shared_element_quad,
     ResourceId resource_id,
-    const gfx::Size& resource_size) {
+    const gfx::Size& resource_size,
+    const gfx::Vector2dF& orig_pixel_alignment_offset) {
   auto* copied_quad_state =
       target_render_pass->CreateAndAppendSharedQuadState();
   *copied_quad_state = *shared_element_quad.shared_quad_state;
+
+  if (base::FeatureList::IsEnabled(
+          features::kViewTransitionsNewRoundingChange)) {
+    // For texture content, |orig_pixel_alignment_offset| was computed and saved
+    // by SurfaceSavedFrame when the texture was captured. Adjust the quad
+    // transform using this saved offset to cancel out raster-time subpixel
+    // translation.
+    AdjustQuadTransformForPixelAlignment(
+        orig_pixel_alignment_offset,
+        copied_quad_state->quad_to_target_transform);
+  }
 
   auto* texture_quad =
       target_render_pass->CreateAndAppendDrawQuad<TextureDrawQuad>();
@@ -229,25 +278,30 @@ void SurfaceAnimationManager::ReceiveFromChild(
 }
 
 void SurfaceAnimationManager::RefResources(
-    const std::vector<TransferableResource>& resources) {
-  if (transferable_resource_tracker_.is_empty())
+    std::vector<TransferableResource>& resources) {
+  if (transferable_resource_tracker_.is_empty()) {
     return;
-  for (const auto& resource : resources) {
-    if (resource.id >= kVizReservedRangeStartId)
-      transferable_resource_tracker_.RefResource(resource.id);
   }
+  std::erase_if(resources, [this](const TransferableResource& resource) {
+    if (resource.id >= kVizReservedRangeStartId) {
+      return transferable_resource_tracker_.RefResource(resource.id);
+    }
+    return false;
+  });
 }
 
 void SurfaceAnimationManager::UnrefResources(
-    const std::vector<ReturnedResourceViz>& resources) {
-  if (transferable_resource_tracker_.is_empty())
+    std::vector<ReturnedResourceViz>& resources) {
+  if (transferable_resource_tracker_.is_empty()) {
     return;
-  for (const auto& resource : resources) {
-    if (resource.id >= kVizReservedRangeStartId) {
-      transferable_resource_tracker_.UnrefResource(resource.id, resource.count,
-                                                   resource.sync_token);
-    }
   }
+  std::erase_if(resources, [this](const ReturnedResourceViz& resource) {
+    if (resource.id >= kVizReservedRangeStartId) {
+      return transferable_resource_tracker_.UnrefResource(
+          resource.id, resource.count, resource.sync_token);
+    }
+    return false;
+  });
 }
 
 // static
@@ -266,6 +320,11 @@ bool SurfaceAnimationManager::FilterSharedElementsWithRenderPassOrResource(
   }
 
   const auto& shared_element_quad = *SharedElementDrawQuad::MaterialCast(&quad);
+  if (!shared_element_quad.element_resource_id.IsValid()) {
+    LOG(ERROR)
+        << "Invalid ViewTransitionElementResourceId in SharedElementDrawQuad";
+    return true;
+  }
 
   // Look up the shared element in textures first. This ordering is important
   // since there can be situations where we created a texture _and_ we have a
@@ -290,17 +349,20 @@ bool SurfaceAnimationManager::FilterSharedElementsWithRenderPassOrResource(
         shared_element_quad.element_resource_id);
 
     if (texture_it != saved_textures->element_id_to_resource.end()) {
-      const auto& transferable_resource = texture_it->second;
-      if (transferable_resource.is_empty()) {
+      const auto& positioned_resource = texture_it->second;
+      if (positioned_resource.resource.is_empty()) {
         return true;
       }
 
-      resource_list->push_back(transferable_resource);
-      manager_it->second->RefResources({transferable_resource});
+      resource_list->push_back(positioned_resource.resource);
+      std::vector<TransferableResource> resources_to_ref = {
+          positioned_resource.resource};
+      manager_it->second->RefResources(resources_to_ref);
 
-      ReplaceSharedElementWithTexture(&copy_pass, shared_element_quad,
-                                      resource_list->back().id,
-                                      resource_list->back().GetSize());
+      ReplaceSharedElementWithTexture(
+          &copy_pass, shared_element_quad, resource_list->back().id,
+          resource_list->back().GetSize(),
+          positioned_resource.pixel_alignment_offset);
       return true;
     }
   }
@@ -391,16 +453,14 @@ void SurfaceAnimationManager::ReplaceSharedElementResources(
     resolved_frame.render_pass_list.push_back(std::move(pass_copy));
   }
 
-  if (features::ShouldAckCOREarlyForViewTransition()) {
-    // Add back the surface for old frame as reference surfaces to new
-    // `resolved_frame` metadata.
-    for (auto original_surface : original_surfaces) {
-      // For same document transitions, we can copy elements from same surface,
-      // but don't need to add itself to `referenced_surfaces`.
-      if (original_surface != surface->surface_id()) {
-        resolved_frame.metadata.referenced_surfaces.push_back(
-            SurfaceRange(original_surface));
-      }
+  // Add back the surface for old frame as reference surfaces to new
+  // `resolved_frame` metadata.
+  for (auto original_surface : original_surfaces) {
+    // For same document transitions, we can copy elements from same surface,
+    // but don't need to add itself to `referenced_surfaces`.
+    if (original_surface != surface->surface_id()) {
+      resolved_frame.metadata.referenced_surfaces.push_back(
+          SurfaceRange(original_surface));
     }
   }
 

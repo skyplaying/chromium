@@ -20,8 +20,10 @@
 #import "ios/chrome/browser/location_bar/badge/model/location_bar_badge_configuration.h"
 #import "ios/chrome/browser/location_bar/badge/ui/location_bar_badge_constants.h"
 #import "ios/chrome/browser/location_bar/badge/ui/location_bar_badge_mutator.h"
+#import "ios/chrome/browser/location_bar/ui_bundled/highlight_utils.h"
 #import "ios/chrome/browser/location_bar/ui_bundled/location_bar_constants.h"
 #import "ios/chrome/browser/location_bar/ui_bundled/location_bar_metrics.h"
+#import "ios/chrome/browser/price_insights/model/price_insights_model.h"
 #import "ios/chrome/browser/reader_mode/model/features.h"
 #import "ios/chrome/browser/reader_mode/ui/reader_mode_chip_visibility_delegate.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
@@ -250,6 +252,11 @@ const CGFloat kLeadingSeparatorSpace = 5.0;
   [self.visibilityDelegate setContextualPanelCurrentlyAnimating:animating];
 }
 
+- (void)setContextualPanelEntrypointState:
+    (ContextualPanelEntrypointState)state {
+  [self.visibilityDelegate setContextualPanelEntrypointState:state];
+}
+
 #pragma mark - IncognitoBadgeViewVisibilityDelegate
 
 - (void)setIncognitoBadgeViewHidden:(BOOL)hidden {
@@ -295,6 +302,22 @@ const CGFloat kLeadingSeparatorSpace = 5.0;
       RecordLensEntrypointHidden(IOSLocationBarLeadingIconType::kReaderMode);
     }
   }
+}
+
+// Updates the button container's configuration with the given background color.
+// Should only be used for pre-existing UIButtonConfigurations.
+- (void)updateButtonContainerBackgroundColor:(UIColor*)backgroundColor {
+  if (!_buttonContainer || !_buttonContainer.configuration) {
+    return;
+  }
+
+  if ([_buttonContainer.configuration.baseBackgroundColor
+          isEqual:backgroundColor]) {
+    return;
+  }
+
+  _buttonContainer.configuration =
+      [self buttonConfigurationWithBackgroundColor:backgroundColor];
 }
 
 // Returns the button configuration with the given background color.
@@ -500,71 +523,28 @@ const CGFloat kLeadingSeparatorSpace = 5.0;
 // Sets the proper visual features depending on current infobar badges status
 // and whether the Location Bar Badge is open.
 - (void)refreshEntrypointVisualElements {
-  BOOL shouldAccountForVisibleInfobarBadges =
-      _infobarBadgesCurrentlyShown && !IsReaderModeAvailable();
-  BOOL shouldShowMutedColors =
-      shouldAccountForVisibleInfobarBadges || _badgeTapped;
-  BOOL isInUnifiedContainer = [self useMultiBadge];
-
-  // Badge icon tint color.
-  if (isInUnifiedContainer) {
-    _badgeIcon.tintColor = [UIColor colorNamed:kSolidWhiteColor];
-    _label.textColor = [UIColor colorNamed:kSolidWhiteColor];
+  if ([self useMultiBadge]) {
+    [self refreshBadgeForUnifiedContainer];
   } else {
-    _badgeIcon.tintColor = shouldShowMutedColors
-                               ? [UIColor colorNamed:kGrey600Color]
-                               : [self defaultBadgeTintColor];
+    [self refreshBadgeForSingleBadgeContainer];
   }
-
-  // Button container shadow.
-  if (isInUnifiedContainer || shouldShowMutedColors) {
-    _buttonContainer.layer.shadowOpacity = 0;
-  } else {
-    _buttonContainer.layer.shadowOpacity = kBadgeContainerShadowOpacity;
-  }
-
-  // Button container background color.
-  UIColor* buttonContainerBackgroundColor;
-  if (isInUnifiedContainer) {
-    buttonContainerBackgroundColor = [UIColor clearColor];
-  } else {
-    UIColor* untappedBackgroundColor =
-        shouldAccountForVisibleInfobarBadges
-            ? nil
-            : [UIColor colorNamed:kBackgroundColor];
-    buttonContainerBackgroundColor = _badgeTapped
-                                         ? [UIColor colorNamed:kGrey100Color]
-                                         : untappedBackgroundColor;
-  }
-  _buttonContainer.configuration = [self
-      buttonConfigurationWithBackgroundColor:buttonContainerBackgroundColor];
-
 }
 
 // Applies the correct color to the badge (highlighted blue when the
 // in-product help is present), otherwise back to the normal colorset.
 - (void)updateBadgeHighlight:(BOOL)highlighted {
-  BOOL isInUnifiedContainer = [self useMultiBadge];
-  UIColor* defaultTintColor = isInUnifiedContainer
-                                  ? [UIColor colorNamed:kSolidWhiteColor]
-                                  : [self defaultBadgeTintColor];
-  _badgeIcon.tintColor =
-      highlighted ? [UIColor colorNamed:kBackgroundColor] : defaultTintColor;
-
-  // Update entrypoint container background.
-  UIColor* defaultBackgroundColor = isInUnifiedContainer
-                                        ? [UIColor clearColor]
-                                        : [UIColor colorNamed:kBackgroundColor];
-  UIColor* buttonContainerBackgroundColor =
-      highlighted ? [UIColor colorNamed:kBlue600Color] : defaultBackgroundColor;
-  _buttonContainer.configuration = [self
-      buttonConfigurationWithBackgroundColor:buttonContainerBackgroundColor];
+  if ([self useMultiBadge]) {
+    [self updateBadgeHighlightForUnifiedContainer:highlighted];
+  } else {
+    [self updateBadgeHighlightForSingleBadgeContainer:highlighted];
+  }
 }
 
 // Returns the default badge tint color. Ignores applying a tint color in favor
 // of using an image gradient layer.
 - (UIColor*)defaultBadgeTintColor {
   BOOL useImageGradient =
+      _badgeConfig &&
       _badgeConfig.badgeType == LocationBarBadgeType::kGeminiContextualCueChip;
   return useImageGradient ? nil : [UIColor colorNamed:kBlue600Color];
 }
@@ -630,7 +610,7 @@ const CGFloat kLeadingSeparatorSpace = 5.0;
 #pragma mark - ContextualPanelEntrypointConsumer
 
 - (void)setEntrypointConfig:(ContextualPanelItemConfiguration*)config {
-  if (IsAskGeminiChipEnabled() || IsProactiveSuggestionsFrameworkEnabled()) {
+  if (IsPageActionMenuEnabled() || IsProactiveSuggestionsFrameworkEnabled()) {
     LocationBarBadgeType badgeType;
     switch (config->item_type) {
       case ContextualPanelItemType::SamplePanelItem:
@@ -654,20 +634,8 @@ const CGFloat kLeadingSeparatorSpace = 5.0;
     NSString* accessibilityLabel =
         base::SysUTF8ToNSString(config->accessibility_label);
 
-    UIImage* image;
-    CGFloat symbolPointSize = kBadgeSymbolPointSize;
-    switch (config->image_type) {
-      case ContextualPanelItemConfiguration::EntrypointImageType::SFSymbol:
-        image = DefaultSymbolWithPointSize(
-            base::SysUTF8ToNSString(config->entrypoint_image_name),
-            symbolPointSize);
-        break;
-      case ContextualPanelItemConfiguration::EntrypointImageType::Image:
-        image = CustomSymbolWithPointSize(
-            base::SysUTF8ToNSString(config->entrypoint_image_name),
-            symbolPointSize);
-        break;
-    }
+    UIImage* image =
+        SymbolWithPointSize(config->entrypoint_symbol, kBadgeSymbolPointSize);
 
     LocationBarBadgeConfiguration* badgeConfig =
         [[LocationBarBadgeConfiguration alloc]
@@ -679,6 +647,12 @@ const CGFloat kLeadingSeparatorSpace = 5.0;
     if (config->accessibility_hint.size() > 0) {
       badgeConfig.accessibilityHint =
           base::SysUTF8ToNSString(config->accessibility_hint);
+    }
+
+    if (config->item_type == ContextualPanelItemType::PriceInsightsItem) {
+      PriceInsightsItemConfiguration* priceInsightsConfig =
+          static_cast<PriceInsightsItemConfiguration*>(config);
+      badgeConfig.active = priceInsightsConfig->is_subscribed;
     }
 
     [self setBadgeConfig:badgeConfig];
@@ -696,20 +670,8 @@ const CGFloat kLeadingSeparatorSpace = 5.0;
 
     _label.text = base::SysUTF8ToNSString(config->entrypoint_message);
 
-    UIImage* image;
-    CGFloat symbolPointSize = kBadgeSymbolPointSize;
-    switch (config->image_type) {
-      case ContextualPanelItemConfiguration::EntrypointImageType::SFSymbol:
-        image = DefaultSymbolWithPointSize(
-            base::SysUTF8ToNSString(config->entrypoint_image_name),
-            symbolPointSize);
-        break;
-      case ContextualPanelItemConfiguration::EntrypointImageType::Image:
-        image = CustomSymbolWithPointSize(
-            base::SysUTF8ToNSString(config->entrypoint_image_name),
-            symbolPointSize);
-        break;
-    }
+    UIImage* image =
+        SymbolWithPointSize(config->entrypoint_symbol, kBadgeSymbolPointSize);
 
     _badgeIcon.image = image;
   }
@@ -736,7 +698,9 @@ const CGFloat kLeadingSeparatorSpace = 5.0;
 }
 
 - (void)transitionToSmallEntrypoint {
-  [self collapseBadgeContainer];
+  if ([_badgeConfig isContextualPanelEntrypointBadge]) {
+    [self collapseBadgeContainer];
+  }
 }
 
 - (void)transitionToContextualPanelOpenedState:(BOOL)opened {
@@ -797,6 +761,11 @@ const CGFloat kLeadingSeparatorSpace = 5.0;
 
   [self updateAccessibilityStatus];
 
+  if (_badgeConfig.badgeType == LocationBarBadgeType::kReaderMode) {
+    [self.layoutGuideCenter referenceView:_buttonContainer
+                                underName:kReaderModeOptionsEntrypointGuide];
+  }
+
   __weak LocationBarBadgeViewController* weakSelf = self;
 
   [UIView animateWithDuration:kBadgeDisplayingAnimationTime
@@ -817,6 +786,10 @@ const CGFloat kLeadingSeparatorSpace = 5.0;
   [self transitionToContextualPanelOpenedState:NO];
 
   [self setLocationBarBadgeHidden:YES];
+  if (_badgeConfig.badgeType == LocationBarBadgeType::kReaderMode) {
+    [self.layoutGuideCenter referenceView:nil
+                                underName:kReaderModeOptionsEntrypointGuide];
+  }
   if (_badgeConfig.badgeType ==
       LocationBarBadgeType::kGeminiContextualCueChip) {
     if ([self.visibilityDelegate
@@ -831,6 +804,7 @@ const CGFloat kLeadingSeparatorSpace = 5.0;
   [self.view layoutIfNeeded];
 
   [self refreshVoiceOverBoundingBoxIfFocused];
+  _badgeConfig = nil;
 }
 
 - (void)collapseBadgeContainer {
@@ -944,6 +918,103 @@ const CGFloat kLeadingSeparatorSpace = 5.0;
   }
 
   [self updateAccessibilityStatus];
+}
+
+// Helper to determine if the badge is in the Price Insights "Available" state.
+- (BOOL)isAvailablePriceInsights {
+  return _badgeConfig.badgeType == LocationBarBadgeType::kPriceInsights &&
+         !_badgeConfig.isActive;
+}
+
+// Returns whether the badge style should be the active one.
+- (BOOL)isBadgeStyleActive {
+  return ![self isAvailablePriceInsights];
+}
+
+// Returns the foreground color for the unified container elements (icon and
+// text).
+- (UIColor*)foregroundColorForUnifiedContainer {
+  CHECK(!IsChromeNextIaEnabled());
+  return [self isBadgeStyleActive] ? [UIColor colorNamed:kSolidWhiteColor]
+                                   : [UIColor colorNamed:kBlue600Color];
+}
+
+// Helper to refresh entrypoint visual elements for the unified container.
+- (void)refreshBadgeForUnifiedContainer {
+  ContextualPanelEntrypointState state =
+      [self isAvailablePriceInsights]
+          ? ContextualPanelEntrypointState::kAvailable
+          : ContextualPanelEntrypointState::kActive;
+  [self.visibilityDelegate setContextualPanelEntrypointState:state];
+
+  if (IsChromeNextIaEnabled()) {
+    if ([self isBadgeStyleActive]) {
+      _label.textColor = [UIColor colorNamed:kSolidWhiteColor];
+      ConfigureIPHImageStyleForImageView(_badgeIcon);
+
+    } else {
+      _label.textColor = [UIColor colorNamed:kBlue600Color];
+      RemoveIPHImageStyleFromImageView(_badgeIcon);
+    }
+  } else {
+    UIColor* foregroundColor = [self foregroundColorForUnifiedContainer];
+    _badgeIcon.tintColor = foregroundColor;
+    _label.textColor = foregroundColor;
+  }
+
+  _buttonContainer.layer.shadowOpacity = 0;
+  [self updateButtonContainerBackgroundColor:[UIColor clearColor]];
+}
+
+// Helper to refresh entrypoint visual elements for the single badge container.
+- (void)refreshBadgeForSingleBadgeContainer {
+  BOOL shouldShowMutedColors = _badgeTapped;
+
+  _badgeIcon.tintColor = shouldShowMutedColors
+                             ? [UIColor colorNamed:kGrey600Color]
+                             : [self defaultBadgeTintColor];
+
+  _buttonContainer.layer.shadowOpacity =
+      shouldShowMutedColors ? 0 : kBadgeContainerShadowOpacity;
+
+  UIColor* untappedBackgroundColor = [UIColor colorNamed:kBackgroundColor];
+  UIColor* buttonContainerBackgroundColor =
+      _badgeTapped ? [UIColor colorNamed:kGrey100Color]
+                   : untappedBackgroundColor;
+  [self updateButtonContainerBackgroundColor:buttonContainerBackgroundColor];
+}
+
+// Helper to update badge highlight for the unified container.
+- (void)updateBadgeHighlightForUnifiedContainer:(BOOL)highlighted {
+  if (IsChromeNextIaEnabled()) {
+    if (highlighted) {
+      _badgeIcon.tintColor = [UIColor colorNamed:kBackgroundColor];
+    } else if ([self isBadgeStyleActive]) {
+      ConfigureIPHImageStyleForImageView(_badgeIcon);
+    } else {
+      RemoveIPHImageStyleFromImageView(_badgeIcon);
+    }
+  } else {
+    _badgeIcon.tintColor = highlighted
+                               ? [UIColor colorNamed:kBackgroundColor]
+                               : [self foregroundColorForUnifiedContainer];
+  }
+
+  // Update entrypoint container background.
+  UIColor* buttonContainerBackgroundColor =
+      highlighted ? [UIColor colorNamed:kBlue600Color] : [UIColor clearColor];
+  [self updateButtonContainerBackgroundColor:buttonContainerBackgroundColor];
+}
+
+// Helper to update badge highlight for the single badge container.
+- (void)updateBadgeHighlightForSingleBadgeContainer:(BOOL)highlighted {
+  _badgeIcon.tintColor = highlighted ? [UIColor colorNamed:kBackgroundColor]
+                                     : [self defaultBadgeTintColor];
+
+  UIColor* buttonContainerBackgroundColor =
+      highlighted ? [UIColor colorNamed:kBlue600Color]
+                  : [UIColor colorNamed:kBackgroundColor];
+  [self updateButtonContainerBackgroundColor:buttonContainerBackgroundColor];
 }
 
 @end

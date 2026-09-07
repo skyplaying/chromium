@@ -9,8 +9,10 @@
 #include <string>
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
+#include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/ash/base/locale_util.h"
 #include "chrome/browser/ash/login/screens/base_screen.h"
@@ -20,6 +22,9 @@
 #include "google_apis/gaia/gaia_id.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "google_apis/gaia/oauth2_api_call_flow.h"
+
+class PrefService;
+class ApplicationLocaleStorage;
 
 namespace signin {
 class PrimaryAccountAccessTokenFetcher;
@@ -48,8 +53,13 @@ class LocaleSwitchScreen : public BaseScreen,
   static std::string GetResultString(Result result);
 
   using ScreenExitCallback = base::RepeatingCallback<void(Result result)>;
-  explicit LocaleSwitchScreen(base::WeakPtr<LocaleSwitchView> view,
-                              const ScreenExitCallback& exit_callback);
+  // `local_state` must be non-null and must outlive `this`.
+  // `application_locale_storage` must be non-null and must be the one
+  // associated with browser process.
+  LocaleSwitchScreen(PrefService* local_state,
+                     ApplicationLocaleStorage* application_locale_storage,
+                     base::WeakPtr<LocaleSwitchView> view,
+                     const ScreenExitCallback& exit_callback);
   ~LocaleSwitchScreen() override;
 
   // signin::IdentityManager::Observer:
@@ -69,7 +79,11 @@ class LocaleSwitchScreen : public BaseScreen,
     exit_callback_ = callback;
   }
 
+  void set_timeout_for_testing(base::TimeDelta timeout) { timeout_ = timeout; }
+
  private:
+  static constexpr base::TimeDelta kWaitTimeout = base::Seconds(5);
+
   // BaseScreen:
   void ShowImpl() override;
   void HideImpl() override;
@@ -90,6 +104,9 @@ class LocaleSwitchScreen : public BaseScreen,
   void OnAccessTokenRequestCompleted(GoogleServiceAuthError error,
                                      signin::AccessTokenInfo access_token_info);
 
+  const raw_ref<PrefService> local_state_;
+  const raw_ref<ApplicationLocaleStorage> application_locale_storage_;
+
   std::string locale_;
   base::WeakPtr<LocaleSwitchView> view_ = nullptr;
   std::unique_ptr<signin::PrimaryAccountAccessTokenFetcher>
@@ -107,8 +124,15 @@ class LocaleSwitchScreen : public BaseScreen,
   std::unique_ptr<ScopedSessionRefresher> session_refresher_;
 
   base::OneShotTimer timeout_waiter_;
+  base::TimeDelta timeout_ = kWaitTimeout;
 
   bool refresh_token_loaded_ = false;
+
+  // Whether the required Account Capabilities have been loaded from the server.
+  //
+  // The only relevant downstream consumer of account capabilities is
+  // SyncConsentScreen, which provides AreCapabilitiesLoaded() to check if the
+  // required capabilities are available.
   bool account_capabilities_loaded_ = false;
 
   base::WeakPtrFactory<LocaleSwitchScreen> weak_factory_{this};

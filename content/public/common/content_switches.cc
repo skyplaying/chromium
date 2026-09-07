@@ -25,10 +25,6 @@ const char kAllowLoopbackInPeerConnection[] =
 // Allows plugins to be loaded in the command line for testing.
 const char kAllowCommandLinePlugins[] = "allow-command-line-plugins";
 
-// Causes the Attribution Report API to run without delays or noise.
-const char kAttributionReportingDebugMode[] =
-    "attribution-reporting-debug-mode";
-
 // Bypasses the dialog prompting the user for permission to capture
 // cameras and microphones. Useful in automatic tests of video-conferencing
 // Web applications.
@@ -64,9 +60,6 @@ const char kChangeStackGuardOnForkDisabled[] = "disable";
 
 // Disable antialiasing on 2d canvas.
 const char kDisable2dCanvasAntialiasing[]   = "disable-canvas-aa";
-
-// Disables Canvas2D rendering into a scanout buffer for overlay support.
-const char kDisable2dCanvasImageChromium[] = "disable-2d-canvas-image-chromium";
 
 // Disables client-visible 3D APIs, in particular WebGL.
 // This is controlled by policy and is kept separate from the other
@@ -105,6 +98,9 @@ const char kDisableBackgroundTimerThrottling[] =
 
 // Disables the BackForwardCache feature.
 const char kDisableBackForwardCache[] = "disable-back-forward-cache";
+
+// Delays execution of TaskPriority::BEST_EFFORT tasks until shutdown.
+const char kDisableBestEffortTasks[] = "disable-best-effort-tasks";
 
 // Disable one or more Blink runtime-enabled features.
 // Use names from runtime_enabled_features.json5, separated by commas.
@@ -269,9 +265,6 @@ const char kDisableThreadedCompositing[]    = "disable-threaded-compositing";
 // Disable V8 idle tasks.
 const char kDisableV8IdleTasks[]            = "disable-v8-idle-tasks";
 
-// Disables WebGL rendering into a scanout buffer for overlay support.
-const char kDisableWebGLImageChromium[]     = "disable-webgl-image-chromium";
-
 // Don't enforce the same-origin policy; meant for website testing only.
 // This switch has no effect unless --user-data-dir (as defined by the content
 // embedder) is also present.
@@ -333,6 +326,9 @@ const char kEnableExperimentalWebPlatformFeatures[] =
 // Enables blink runtime enabled features with status:"test" or
 // status:"experimental", which are enabled when running web tests.
 const char kEnableBlinkTestFeatures[] = "enable-blink-test-features";
+
+// Exposes the window.internals object in JavaScript for testing.
+const char kExposeInternalsForTesting[] = "expose-internals-for-testing";
 
 // Disables all RuntimeEnabledFeatures that can be enabled via OriginTrials.
 const char kDisableOriginTrialControlledBlinkFeatures[] =
@@ -431,22 +427,23 @@ const char kEnableVtune[]                   = "enable-vtune-support";
 const char kEnableWebGLDeveloperExtensions[] =
     "enable-webgl-developer-extensions";
 
-// Enables WebGL extensions not yet approved by the community.
-const char kEnableWebGLDraftExtensions[] = "enable-webgl-draft-extensions";
-
-// Enables WebGL rendering into a scanout buffer for overlay support.
-const char kEnableWebGLImageChromium[] = "enable-webgl-image-chromium";
-
 // Define an alias root directory which is replaced with the replacement string
 // in file URLs. The format is "/alias=/replacement", which would turn
 // file:///alias/some/path.html into file:///replacement/some/path.html.
 const char kFileUrlPathAlias[] = "file-url-path-alias";
+
+// Forces recording of NavigationTimeline UKM.
+// Useful for testing NavigationTimeline UKM recording in browser tests.
+const char kForceNavigationTimelineUkmRecordingForTesting[] =
+    "force-navigation-timeline-ukm-recording-for-testing";
 
 // This forces pages to be loaded as presentation receivers.  Useful for testing
 // behavior specific to presentation receivers.
 // Spec: https://www.w3.org/TR/presentation-api/#interface-presentationreceiver
 const char kForcePresentationReceiverForTesting[] =
     "force-presentation-receiver-for-testing";
+
+const char kGpuClientId[] = "gpu-client-id";
 
 // Extra command line options for launching the GPU process (normally used
 // for debugging). Use like renderer-cmd-prefix.
@@ -548,10 +545,6 @@ const char kOverrideLanguageDetection[] = "override-language-detection";
 // Renderer process that runs the non-PPAPI PDF plugin.
 const char kPdfRenderer[] = "pdf-renderer";
 
-// Causes the Private Aggregation API to run without reporting delays.
-const char kPrivateAggregationDeveloperMode[] =
-    "private-aggregation-developer-mode";
-
 // Enable the "Process Per Site" process model for all domains. This mode
 // consolidates same-site pages so that they share a single process.
 //
@@ -575,12 +568,6 @@ const char kProcessPerTab[]                 = "process-per-tab";
 // The value of this switch determines whether the process is started as a
 // renderer or plugin host.  If it's empty, it's the browser.
 const char kProcessType[]                   = "type";
-
-// Causes Protected Audiences Bidding and Auction API to supply the provided
-// debugging key to the trusted auction server. This tells the server that it
-// okay to log information about this user's auction to help with debugging.
-const char kProtectedAudiencesConsentedDebugToken[] =
-    "protected-audiences-consented-debug-token";
 
 // Handle to shared memory containing the pseudonymization salt, passed to
 // child processes at launch. See https://crbug.com/40850085.
@@ -630,6 +617,11 @@ const char kRendererProcess[]               = "renderer";
 
 // Time the browser launched the renderer process (in TimeTicks).
 const char kRendererProcessLaunchTimeTicks[] = "launch-time-ticks";
+
+// Time the browser process requested the GPU channel for the renderer (in
+// TimeTicks).
+const char kGpuChannelRequestStartTimeTicks[] =
+    "gpu-channel-request-start-time-ticks";
 
 // Overrides the default/calculated limit to the number of renderer processes.
 // Very high values for this setting can lead to high memory/resource usage
@@ -727,6 +719,9 @@ const char kTargetDeviceScaleForTesting[] = "target-device-scale-for-testing";
 // Type of the current test harness ("browser" or "ui" or "gpu").
 const char kTestType[]                      = "test-type";
 
+// Indicates that this RenderProcess is hosting a Top Chrome WebUI.
+const char kTopChromeWebUI[] = "top-chrome-webui";
+
 // Enable support for touch event feature detection.
 const char kTouchEventFeatureDetection[] = "touch-events";
 
@@ -739,10 +734,8 @@ const char kTouchEventFeatureDetectionEnabled[] = "enabled";
 //   disabled: touch events are disabled.
 const char kTouchEventFeatureDetectionDisabled[] = "disabled";
 
-// Accepts a number representing the time-ticks value at the Unix epoch.
-// Since different processes can produce a different value for this due to
-// system clock changes, this allows synchronizing them to a single value.
-const char kTimeTicksAtUnixEpoch[] = "time-ticks-at-unix-epoch";
+// Enables debug mode for unbounded windows (draws a red border).
+const char kUnboundedWindowDebug[] = "unbounded-window-debug";
 
 // Replaces the existing codecs supported in peer connection with a single fake
 // codec entry that create a fake video encoder and decoder.
@@ -920,6 +913,10 @@ const char kRendererWaitForJavaDebugger[] = "renderer-wait-for-java-debugger";
 
 // Disables debug crash dumps for OOPR.
 const char kDisableOoprDebugCrashDump[] = "disable-oopr-debug-crash-dump";
+
+// Enables/disables javaless renderers based on value given.
+// "enabled" or "disabled" are valid values.
+const char kJavalessRenderers[] = "javaless-renderers";
 #endif  // BUILDFLAG(IS_ANDROID)
 
 // Enable the aggressive flushing of DOM Storage to minimize data loss.

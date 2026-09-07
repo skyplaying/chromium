@@ -13,31 +13,28 @@
 #include "base/metrics/user_metrics_action.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/time/time.h"
-#include "chrome/browser/feature_engagement/tracker_factory.h"
+#include "chrome/browser/feature_engagement/non_iph_promo.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/commerce/commerce_page_action_controller.h"
 #include "chrome/browser/ui/commerce/discounts_page_action_controller.h"
-#include "chrome/browser/ui/commerce/price_tracking_page_action_controller.h"
 #include "chrome/browser/ui/page_action/page_action_icon_type.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
+#include "chrome/browser/ui/side_panel/side_panel_registry.h"
+#include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/tabs/tab_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/commerce/discounts_bubble_dialog_view.h"
 #include "chrome/browser/ui/views/commerce/discounts_page_action_view_controller.h"
-#include "chrome/browser/ui/views/commerce/price_insights_icon_view.h"
 #include "chrome/browser/ui/views/commerce/price_insights_page_action_view_controller.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_coordinator.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry_key.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_registry.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_web_ui_view.h"
 #include "chrome/browser/ui/webui/commerce/shopping_insights_side_panel_ui.h"
 #include "chrome/common/pref_names.h"
@@ -50,9 +47,9 @@
 #include "components/commerce/core/metrics/metrics_utils.h"
 #include "components/commerce/core/price_tracking_utils.h"
 #include "components/commerce/core/shopping_service.h"
+#include "components/feature_engagement/public/feature_constants.h"
 #include "components/image_fetcher/core/image_fetcher.h"
 #include "components/strings/grit/components_strings.h"
-#include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_details.h"
@@ -107,16 +104,6 @@ CommerceUiTabHelper::CommerceUiTabHelper(
   } else {
     CHECK_IS_TEST();
   }
-
-  auto* tracker = feature_engagement::TrackerFactory::GetForBrowserContext(
-      web_contents()->GetBrowserContext());
-
-  price_tracking_controller_ =
-      std::make_unique<PriceTrackingPageActionController>(
-          GetPageActionControllerNotificationCallback(base::BindRepeating(
-              &CommerceUiTabHelper::UpdatePriceTrackingIconView,
-              weak_ptr_factory_.GetWeakPtr())),
-          shopping_service_, image_fetcher_, tracker);
 
   discounts_page_action_controller_ =
       std::make_unique<DiscountsPageActionController>(
@@ -193,9 +180,6 @@ void CommerceUiTabHelper::DidFinishNavigation(
     UpdatePriceInsightsIconView();
   }
 
-  price_tracking_controller_->ResetForNewNavigation(
-      web_contents()->GetLastCommittedURL());
-
   if (is_price_insights_eligible) {
     // Price insights needs product info to get the product cluster title.
     shopping_service_->GetProductInfoForUrl(
@@ -231,19 +215,13 @@ void CommerceUiTabHelper::TriggerUpdateForIconView() {
           shopping_service_->GetAccountChecker())) {
     UpdatePriceInsightsIconView();
   }
-  UpdatePriceTrackingIconView();
 }
 
 void CommerceUiTabHelper::UpdatePriceInsightsIconView() {
-  if (IsPageActionMigrated(PageActionIconType::kPriceInsights)) {
-    PriceInsightsPageActionViewController::From(tab())->UpdatePageActionIcon(
-        ShouldShowPriceInsightsIconView(),
-        ShouldExpandPageActionIcon(PageActionIconType::kPriceInsights),
-        GetPriceInsightsIconLabelTypeForPage());
-    return;
-  }
-
-  UpdatePageActionIconView(PageActionIconType::kPriceInsights);
+  PriceInsightsPageActionViewController::From(tab())->UpdatePageActionIcon(
+      ShouldShowPriceInsightsIconView(),
+      ShouldExpandPageActionIcon(PageActionIconType::kPriceInsights),
+      GetPriceInsightsIconLabelTypeForPage());
 }
 
 void CommerceUiTabHelper::SetImageFetcherForTesting(
@@ -255,10 +233,6 @@ void CommerceUiTabHelper::SetImageFetcherForTesting(
 bool CommerceUiTabHelper::ShouldShowDiscountsIconView() {
   return discounts_page_action_controller_->ShouldShowForNavigation().value_or(
       false);
-}
-
-bool CommerceUiTabHelper::ShouldShowPriceTrackingIconView() {
-  return price_tracking_controller_->ShouldShowForNavigation().value_or(false);
 }
 
 bool CommerceUiTabHelper::ShouldShowPriceInsightsIconView() {
@@ -323,13 +297,9 @@ void CommerceUiTabHelper::MaybeComputePageActionToExpand() {
     return;
   }
 
-    if (commerce::IsPriceInsightsEligible(
-            shopping_service_->GetAccountChecker()) &&
-        !got_insights_response_for_page_) {
-      return;
-    }
-
-  if (!price_tracking_controller_->ShouldShowForNavigation().has_value()) {
+  if (commerce::IsPriceInsightsEligible(
+          shopping_service_->GetAccountChecker()) &&
+      !got_insights_response_for_page_) {
     return;
   }
 
@@ -347,7 +317,6 @@ void CommerceUiTabHelper::MaybeComputePageActionToExpand() {
   }
 
   UpdateDiscountsIconView();
-  UpdatePriceTrackingIconView();
   UpdatePriceInsightsIconView();
 
   if (ShouldShowDiscountsIconView()) {
@@ -407,7 +376,7 @@ void CommerceUiTabHelper::OnPriceInsightsIconClicked() {
 
   if (side_panel_ui->IsSidePanelEntryShowing(
           SidePanelEntryKey(SidePanelEntryId::kShoppingInsights))) {
-    side_panel_ui->Close(entry->type());
+    side_panel_ui->Close();
   } else {
     side_panel_ui->Show(SidePanelEntryId::kShoppingInsights);
     if (price_insights_info_.has_value()) {
@@ -424,29 +393,8 @@ void CommerceUiTabHelper::OnPriceInsightsIconClicked() {
   RecordPriceInsightsIconMetrics(true);
 }
 
-const gfx::Image& CommerceUiTabHelper::GetProductImage() {
-  return price_tracking_controller_->GetLastFetchedImage();
-}
-
-const GURL& CommerceUiTabHelper::GetProductImageURL() {
-  return price_tracking_controller_->GetLastFetchedImageUrl();
-}
-
-bool CommerceUiTabHelper::IsPriceTracking() {
-  return pending_tracking_state_.value_or(
-      price_tracking_controller_->IsPriceTrackingCurrentProduct());
-}
-
 const std::vector<DiscountInfo>& CommerceUiTabHelper::GetDiscounts() {
   return discounts_page_action_controller_->GetDiscounts();
-}
-
-void CommerceUiTabHelper::UpdatePriceTrackingIconView() {
-  if (IsPageActionMigrated(PageActionIconType::kPriceTracking)) {
-    return;
-  }
-
-  UpdatePageActionIconView(PageActionIconType::kPriceTracking);
 }
 
 void CommerceUiTabHelper::MakeShoppingInsightsSidePanelAvailable() {
@@ -468,7 +416,7 @@ void CommerceUiTabHelper::MakeShoppingInsightsSidePanelUnavailable() {
 
   auto* side_panel_ui = GetSidePanelUI();
   if (side_panel_ui && side_panel_ui->IsSidePanelEntryShowing(entry->key())) {
-    side_panel_ui->Close(entry->type());
+    side_panel_ui->Close();
     base::RecordAction(base::UserMetricsAction(
         "Commerce.PriceInsights.NavigationClosedSidePanel"));
   }
@@ -495,7 +443,7 @@ std::unique_ptr<views::View> CommerceUiTabHelper::CreateShoppingInsightsWebView(
 
 SidePanelUI* CommerceUiTabHelper::GetSidePanelUI() {
   if (BrowserWindowInterface* bwi = tab().GetBrowserWindowInterface()) {
-    return bwi->GetFeatures().side_panel_ui();
+    return SidePanelUI::From(bwi);
   }
 
   return nullptr;
@@ -514,20 +462,15 @@ CommerceUiTabHelper::GetPriceInsightsInfo() {
 void CommerceUiTabHelper::ShowDiscountBubble(
     const DiscountInfo& discount,
     base::OnceClosure one_bubble_closing_callback) {
-  discounts_bubble_coordinator_->Show(GetDiscountsIconView(),
+  discounts_bubble_coordinator_->Show(GetDiscountsBubbleAnchor(),
                                       tab().GetContents(), discount,
                                       std::move(one_bubble_closing_callback));
 }
 
 void CommerceUiTabHelper::UpdateDiscountsIconView() {
-  if (IsPageActionMigrated(PageActionIconType::kDiscounts)) {
-    DiscountsPageActionViewController::From(tab())->UpdatePageIcon(
-        ShouldShowDiscountsIconView(),
-        ShouldExpandPageActionIcon(PageActionIconType::kDiscounts));
-    return;
-  }
-
-  UpdatePageActionIconView(PageActionIconType::kDiscounts);
+  DiscountsPageActionViewController::From(tab())->UpdatePageIcon(
+      ShouldShowDiscountsIconView(),
+      ShouldExpandPageActionIcon(PageActionIconType::kDiscounts));
 }
 
 const DiscountsBubbleCoordinator&
@@ -535,25 +478,22 @@ CommerceUiTabHelper::GetDiscountsBubbleCoordinator() const {
   return *discounts_bubble_coordinator_;
 }
 
-views::View* CommerceUiTabHelper::GetDiscountsIconView() {
+views::BubbleAnchor CommerceUiTabHelper::GetDiscountsBubbleAnchor() {
   BrowserWindowInterface* bwi = tab().GetBrowserWindowInterface();
   CHECK(bwi);
 
-  // TODO(https://crbug.com/425953501): Remove GetBrowserForMigrationOnly since
-  // Browser* will not be needed once ToolBarButtonProvider is migrated to
-  // BrowserWindowInterface.
-  auto* browser_view =
-      BrowserView::GetBrowserViewForBrowser(bwi->GetBrowserForMigrationOnly());
+  auto* browser_view = BrowserView::GetBrowserViewForBrowser(bwi);
   if (!browser_view) {
-    return nullptr;
+    return views::BubbleAnchor();
   }
 
   auto* toolbar_button_provider = browser_view->toolbar_button_provider();
   if (!toolbar_button_provider) {
-    return nullptr;
+    return views::BubbleAnchor();
   }
 
-  return toolbar_button_provider->GetPageActionView(kActionCommerceDiscounts);
+  return toolbar_button_provider->GetPageActionBubbleAnchor(
+      kActionCommerceDiscounts);
 }
 
 void CommerceUiTabHelper::ComputePageActionToExpand() {
@@ -571,9 +511,6 @@ void CommerceUiTabHelper::ComputePageActionToExpand() {
     return;
   }
 
-  auto* tracker = feature_engagement::TrackerFactory::GetForBrowserContext(
-      web_contents()->GetBrowserContext());
-
   // TODO(b:301440117): Splitting the triggering logic for each icon into
   //                    delegates would make this much easier to test.
   if (discounts_page_action_controller_->WantsExpandedUi()) {
@@ -588,14 +525,10 @@ void CommerceUiTabHelper::ComputePageActionToExpand() {
         GetPriceInsightsIconLabelTypeForPage();
     bool icon_has_label = label_type != PriceInsightsIconLabelType::kNone;
 
-    if (icon_has_label && tracker &&
-        tracker->ShouldTriggerHelpUI(
+    if (icon_has_label &&
+        feature_engagement::NonIphPromo::RequestPermissionToShow(
+            web_contents()->GetBrowserContext(),
             feature_engagement::kIPHPriceInsightsPageActionIconLabelFeature)) {
-      // Note that `Dismiss()` in these cases does not dismiss the UI. It's
-      // telling the FE backend that the promo is done so that other promos can
-      // run. Showing the label should not block other promos from displaying.
-      tracker->Dismissed(
-          feature_engagement::kIPHPriceInsightsPageActionIconLabelFeature);
       page_action_to_expand_ = PageActionIconType::kPriceInsights;
       MaybeRecordShoppingInformationUKM(PageActionIconType::kPriceInsights);
       price_insights_label_type_ = label_type;
@@ -603,11 +536,6 @@ void CommerceUiTabHelper::ComputePageActionToExpand() {
     }
   }
 
-  if (price_tracking_controller_->WantsExpandedUi()) {
-    page_action_to_expand_ = PageActionIconType::kPriceTracking;
-    MaybeRecordShoppingInformationUKM(PageActionIconType::kPriceTracking);
-    return;
-  }
   MaybeRecordShoppingInformationUKM(std::nullopt);
 }
 
@@ -647,10 +575,6 @@ bool CommerceUiTabHelper::ShouldExpandPageActionIcon(PageActionIconType type) {
 bool CommerceUiTabHelper::IsPageActionIconExpanded(PageActionIconType type) {
   return page_action_expanded_.has_value() &&
          type == page_action_expanded_.value();
-}
-
-void CommerceUiTabHelper::OnPriceTrackingIconClicked() {
-  price_tracking_controller_->OnIconClicked();
 }
 
 void CommerceUiTabHelper::OnDiscountsCouponCodeCopied() {
@@ -733,9 +657,6 @@ void CommerceUiTabHelper::MaybeRecordShoppingInformationUKM(
     } else if (page_action_type == PageActionIconType::kPriceInsights) {
       promoted_feature =
           static_cast<int64_t>(ShoppingContextualFeature::kPriceInsights);
-    } else if (page_action_type == PageActionIconType::kPriceTracking) {
-      promoted_feature =
-          static_cast<int64_t>(ShoppingContextualFeature::kPriceTracking);
     } else {
       NOTREACHED();
     }
@@ -749,11 +670,6 @@ void CommerceUiTabHelper::MaybeRecordShoppingInformationUKM(
       .SetIsPriceTrackable(true)
       .SetIsShoppingContent(true)
       .Record(ukm::UkmRecorder::Get());
-}
-
-PriceTrackingPageActionController*
-CommerceUiTabHelper::GetPriceTrackingControllerForTesting() {
-  return price_tracking_controller_.get();
 }
 
 void CommerceUiTabHelper::OnPageActionControllerNotification(
@@ -771,21 +687,6 @@ CommerceUiTabHelper::GetPageActionControllerNotificationCallback(
       std::move(page_action_icon_update_callback));
 }
 
-void CommerceUiTabHelper::SetPriceTrackingControllerForTesting(
-    std::unique_ptr<PriceTrackingPageActionController> controller) {
-  price_tracking_controller_.reset(controller.release());
-}
 
-void CommerceUiTabHelper::UpdatePageActionIconView(PageActionIconType type) {
-  BrowserWindowInterface* bwi = tab().GetBrowserWindowInterface();
-  if (!bwi) {
-    return;
-  }
-
-  // TODO(https://crbug.com/376283687): Remove GetBrowserForMigrationOnly during
-  // the Discounts Page Actions Post Migration Cleanups since it will no longer
-  // be needed.
-  bwi->GetBrowserForMigrationOnly()->window()->UpdatePageActionIcon(type);
-}
 
 }  // namespace commerce

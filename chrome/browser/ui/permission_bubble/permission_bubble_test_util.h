@@ -31,7 +31,7 @@ class TestPermissionBubbleViewDelegate
   ~TestPermissionBubbleViewDelegate() override;
 
   const std::vector<std::unique_ptr<permissions::PermissionRequest>>& Requests()
-      override;
+      const override;
 
   GURL GetRequestingOrigin() const override;
 
@@ -63,6 +63,8 @@ class TestPermissionBubbleViewDelegate
   const permissions::PermissionPrompt* GetCurrentPrompt() const override;
   content::WebContents* GetAssociatedWebContents() override;
 
+  std::optional<permissions::GeolocationPromptType> GetGeolocationPromptType()
+      const override;
   base::WeakPtr<permissions::PermissionPrompt::Delegate> GetWeakPtr() override;
 
   void set_requests(

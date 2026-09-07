@@ -14,6 +14,7 @@
 
 #include "base/component_export.h"
 #include "base/memory/raw_ptr.h"
+#include "ui/accessibility/ax_node_id_forward.h"
 #include "ui/accessibility/platform/ax_platform_node_win.h"
 #include "ui/accessibility/platform/browser_accessibility_manager.h"
 #include "ui/display/win/screen_win.h"
@@ -78,10 +79,24 @@ class COMPONENT_EXPORT(AX_PLATFORM) BrowserAccessibilityManagerWin
   void FireWinAccessibilityEvent(LONG win_event, BrowserAccessibility* node);
   void FireUiaAccessibilityEvent(LONG uia_event, BrowserAccessibility* node);
   void FireUiaActiveTextPositionChangedEvent(BrowserAccessibility* node);
+
+  // Menu buttons expose ExpandCollapse, not Toggle (see IsToggleSupported),
+  // so they raise ExpandCollapseState instead of ToggleState.
+  static LONG GetCheckedStateChangedUiaProperty(
+      const BrowserAccessibility& node);
+
   void FireUiaPropertyChangedEvent(LONG uia_property,
                                    BrowserAccessibility* node);
   void FireUiaStructureChangedEvent(StructureChangeType change_type,
                                     BrowserAccessibility* node);
+  void FireUiaChangesEvent(BrowserAccessibility* node, int annotation_type_id);
+
+  // For testing only, register a function to be called when location change
+  // events are sent by SendLocationChangeEvents.
+  using LocationChangeEventCallbackForTesting =
+      base::RepeatingCallback<void(BrowserAccessibility* node)>;
+  void SetLocationChangeEventCallbackForTesting(
+      const LocationChangeEventCallbackForTesting& callback);
 
   gfx::Rect GetViewBoundsInScreenCoordinates() const override;
 
@@ -92,6 +107,9 @@ class COMPONENT_EXPORT(AX_PLATFORM) BrowserAccessibilityManagerWin
   void FinalizeAccessibilityEvents() override;
 
  protected:
+  void SendLocationChangeEvents(
+      const std::vector<AXLocationChange>& changes) override;
+
   // AXTreeObserver methods.
   void OnSubtreeWillBeDeleted(AXTree* tree, AXNode* node) override;
   void OnAtomicUpdateFinished(
@@ -107,7 +125,7 @@ class COMPONENT_EXPORT(AX_PLATFORM) BrowserAccessibilityManagerWin
     ~SelectionEvents();
   };
 
-  using SelectionEventsMap = std::map<BrowserAccessibility*, SelectionEvents>;
+  using SelectionEventsMap = std::map<AXNodeID, SelectionEvents>;
   using IsSelectedPredicate =
       base::RepeatingCallback<bool(BrowserAccessibility*)>;
   using FirePlatformSelectionEventsCallback =
@@ -129,7 +147,7 @@ class COMPONENT_EXPORT(AX_PLATFORM) BrowserAccessibilityManagerWin
       BrowserAccessibility* node,
       bool is_selected);
 
-  static void FinalizeSelectionEvents(
+  void FinalizeSelectionEvents(
       SelectionEventsMap& selection_events_map,
       IsSelectedPredicate is_selected_predicate,
       FirePlatformSelectionEventsCallback fire_platform_events_callback);
@@ -176,6 +194,19 @@ class COMPONENT_EXPORT(AX_PLATFORM) BrowserAccessibilityManagerWin
   // the map is cleared in |FinalizeAccessibilityEvents|.
   SelectionEventsMap ia2_selection_events_;
   SelectionEventsMap uia_selection_events_;
+
+  // Deferred kEndOfTest node. The TestComplete UIA event is fired at the end
+  // of FinalizeAccessibilityEvents, after all other finalized events, so that
+  // the UIA event recorder doesn't shut down before receiving them.
+  raw_ptr<BrowserAccessibility> end_of_test_node_ = nullptr;
+
+  // Cached tab for the JAWS kSelection workaround. See kWindowActivated
+  // handling in FireSourceEvent for details. Uses AXNodeID so GetFromID()
+  // returns null if the node is removed.
+  AXNodeID last_selected_tab_id_ = kInvalidAXNodeID;
+
+  LocationChangeEventCallbackForTesting
+      location_change_event_callback_for_testing_;
 };
 
 }  // namespace ui

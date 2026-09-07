@@ -454,14 +454,6 @@ class DebugDaemonClientImpl : public DebugDaemonClient {
                        weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
   }
 
-  void TestHostsConnectivity(
-      const std::vector<std::string>& hosts,
-      const base::flat_map<std::string, std::string>& options,
-      TestHostsConnectivityCallback callback) override {
-    NOTIMPLEMENTED_LOG_ONCE();
-    OnBytesResponse(std::move(callback), nullptr);
-  }
-
   void UploadCrashes(UploadCrashesCallback callback) override {
     dbus::MethodCall method_call(debugd::kDebugdInterface,
                                  debugd::kUploadCrashes);
@@ -538,30 +530,6 @@ class DebugDaemonClientImpl : public DebugDaemonClient {
     debugdaemon_proxy_->CallMethod(
         &method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
         base::BindOnce(&DebugDaemonClientImpl::OnSetOomScoreAdj,
-                       weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
-  }
-
-  void StartPluginVmDispatcher(const std::string& owner_id,
-                               const std::string& lang,
-                               PluginVmDispatcherCallback callback) override {
-    dbus::MethodCall method_call(debugd::kDebugdInterface,
-                                 debugd::kStartVmPluginDispatcher);
-    dbus::MessageWriter writer(&method_call);
-    writer.AppendString(owner_id);
-    writer.AppendString(lang);
-    debugdaemon_proxy_->CallMethodWithErrorResponse(
-        &method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
-        base::BindOnce(&DebugDaemonClientImpl::OnStartPluginVmDispatcher,
-                       weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
-  }
-
-  void StopPluginVmDispatcher(PluginVmDispatcherCallback callback) override {
-    dbus::MethodCall method_call(debugd::kDebugdInterface,
-                                 debugd::kStopVmPluginDispatcher);
-    dbus::MessageWriter writer(&method_call);
-    debugdaemon_proxy_->CallMethod(
-        &method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
-        base::BindOnce(&DebugDaemonClientImpl::OnStopPluginVmDispatcher,
                        weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
   }
 
@@ -910,31 +878,6 @@ class DebugDaemonClientImpl : public DebugDaemonClient {
       std::move(callback).Run(true, output);
     else
       std::move(callback).Run(false, "");
-  }
-
-  void OnStartPluginVmDispatcher(PluginVmDispatcherCallback callback,
-                                 dbus::Response* response,
-                                 dbus::ErrorResponse* error) {
-    if (error) {
-      LOG(ERROR) << "Failed to start dispatcher, DBus error "
-                 << error->GetErrorName();
-      std::move(callback).Run(false);
-      return;
-    }
-
-    bool result = false;
-    if (response) {
-      dbus::MessageReader reader(response);
-      reader.PopBool(&result);
-    }
-    std::move(callback).Run(result);
-  }
-
-  void OnStopPluginVmDispatcher(PluginVmDispatcherCallback callback,
-                                dbus::Response* response) {
-    // Debugd just sends back an empty response, so we just check if
-    // the response exists
-    std::move(callback).Run(response != nullptr);
   }
 
   void OnSetRlzPingSent(SetRlzPingSentCallback callback,

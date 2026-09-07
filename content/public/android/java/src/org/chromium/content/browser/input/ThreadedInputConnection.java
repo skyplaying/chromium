@@ -10,6 +10,7 @@ import static org.chromium.content.browser.input.StylusGestureConverter.createGe
 import android.annotation.SuppressLint;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.CancellationSignal;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.TextUtils;
@@ -24,14 +25,17 @@ import android.view.inputmethod.ExtractedTextRequest;
 import android.view.inputmethod.HandwritingGesture;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputContentInfo;
+import android.view.inputmethod.PreviewableHandwritingGesture;
 import android.view.inputmethod.SurroundingText;
 import android.view.inputmethod.TextAttribute;
+import android.webkit.MimeTypeMap;
 
 import androidx.annotation.RequiresApi;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.AconfigFlaggedApiDelegate;
 import org.chromium.base.ContextUtils;
+import org.chromium.base.FileUtils;
 import org.chromium.base.Log;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.task.PostTask;
@@ -43,6 +47,7 @@ import org.chromium.content_public.browser.ContentFeatureMap;
 import org.chromium.content_public.common.ContentFeatures;
 import org.chromium.net.MimeTypeFilter;
 
+import java.io.InputStream;
 import java.util.Arrays;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.Executor;
@@ -75,13 +80,7 @@ class ThreadedInputConnection extends BaseInputConnection implements ChromiumBas
                 }
             };
 
-    private final Runnable mProcessPendingInputStatesRunnable =
-            new Runnable() {
-                @Override
-                public void run() {
-                    processPendingInputStates();
-                }
-            };
+    private final Runnable mProcessPendingInputStatesRunnable = () -> processPendingInputStates();
 
     private final Runnable mRequestTextInputStateUpdate =
             new Runnable() {
@@ -92,13 +91,7 @@ class ThreadedInputConnection extends BaseInputConnection implements ChromiumBas
                 }
             };
 
-    private final Runnable mFinishComposingTextRunnable =
-            new Runnable() {
-                @Override
-                public void run() {
-                    finishComposingTextOnUiThread();
-                }
-            };
+    private final Runnable mFinishComposingTextRunnable = () -> finishComposingTextOnUiThread();
 
     private final ImeAdapterImpl mImeAdapter;
     private final Handler mHandler;
@@ -124,14 +117,11 @@ class ThreadedInputConnection extends BaseInputConnection implements ChromiumBas
         ImeUtils.checkOnUiThread();
 
         mHandler.post(
-                new Runnable() {
-                    @Override
-                    public void run() {
-                        mNumNestedBatchEdits = 0;
-                        mPendingAccent = 0;
-                        mCurrentExtractedTextRequestToken = 0;
-                        mShouldUpdateExtractedText = false;
-                    }
+                () -> {
+                    mNumNestedBatchEdits = 0;
+                    mPendingAccent = 0;
+                    mCurrentExtractedTextRequestToken = 0;
+                    mShouldUpdateExtractedText = false;
                 });
     }
 
@@ -181,13 +171,7 @@ class ThreadedInputConnection extends BaseInputConnection implements ChromiumBas
     @Override
     public boolean sendKeyEventOnUiThread(final KeyEvent event) {
         ImeUtils.checkOnUiThread();
-        mHandler.post(
-                new Runnable() {
-                    @Override
-                    public void run() {
-                        sendKeyEvent(event);
-                    }
-                });
+        mHandler.post(() -> sendKeyEvent(event));
         return true;
     }
 
@@ -365,13 +349,12 @@ class ThreadedInputConnection extends BaseInputConnection implements ChromiumBas
             final boolean isTextSuggestionSelected) {
         PostTask.postTask(
                 TaskTraits.UI_DEFAULT,
-                new Runnable() {
-                    @Override
-                    public void run() {
+                () ->
                         updateComposingTextOnUiThread(
-                                text, newCursorPosition, isPendingAccent, isTextSuggestionSelected);
-                    }
-                });
+                                text,
+                                newCursorPosition,
+                                isPendingAccent,
+                                isTextSuggestionSelected));
         return true;
     }
 
@@ -402,26 +385,16 @@ class ThreadedInputConnection extends BaseInputConnection implements ChromiumBas
             commitText("", 1);
             PostTask.postTask(
                     TaskTraits.UI_DEFAULT,
-                    new Runnable() {
-                        @Override
-                        public void run() {
+                    () ->
                             mImeAdapter.sendSyntheticKeyPress(
                                     KeyEvent.KEYCODE_ENTER,
-                                    KeyEvent.FLAG_SOFT_KEYBOARD | KeyEvent.FLAG_KEEP_TOUCH_MODE);
-                        }
-                    });
+                                    KeyEvent.FLAG_SOFT_KEYBOARD | KeyEvent.FLAG_KEEP_TOUCH_MODE));
             endBatchEdit();
             return true;
         }
 
         PostTask.postTask(
-                TaskTraits.UI_DEFAULT,
-                new Runnable() {
-                    @Override
-                    public void run() {
-                        commitTextOnUiThread(text, newCursorPosition);
-                    }
-                });
+                TaskTraits.UI_DEFAULT, () -> commitTextOnUiThread(text, newCursorPosition));
         return true;
     }
 
@@ -466,14 +439,7 @@ class ThreadedInputConnection extends BaseInputConnection implements ChromiumBas
     @Override
     public boolean performEditorAction(final int actionCode) {
         if (DEBUG_LOGS) Log.i(TAG, "performEditorAction [%d]", actionCode);
-        PostTask.postTask(
-                TaskTraits.UI_DEFAULT,
-                new Runnable() {
-                    @Override
-                    public void run() {
-                        mImeAdapter.performEditorAction(actionCode);
-                    }
-                });
+        PostTask.postTask(TaskTraits.UI_DEFAULT, () -> mImeAdapter.performEditorAction(actionCode));
         return true;
     }
 
@@ -483,14 +449,7 @@ class ThreadedInputConnection extends BaseInputConnection implements ChromiumBas
     @Override
     public boolean performContextMenuAction(final int id) {
         if (DEBUG_LOGS) Log.i(TAG, "performContextMenuAction [%d]", id);
-        PostTask.postTask(
-                TaskTraits.UI_DEFAULT,
-                new Runnable() {
-                    @Override
-                    public void run() {
-                        mImeAdapter.performContextMenuAction(id);
-                    }
-                });
+        PostTask.postTask(TaskTraits.UI_DEFAULT, () -> mImeAdapter.performContextMenuAction(id));
         return true;
     }
 
@@ -559,14 +518,11 @@ class ThreadedInputConnection extends BaseInputConnection implements ChromiumBas
         if (DEBUG_LOGS) Log.i(TAG, "deleteSurroundingText [%d %d]", beforeLength, afterLength);
         PostTask.postTask(
                 TaskTraits.UI_DEFAULT,
-                new Runnable() {
-                    @Override
-                    public void run() {
-                        if (mPendingAccent != 0) {
-                            finishComposingTextOnUiThread();
-                        }
-                        mImeAdapter.deleteSurroundingText(beforeLength, afterLength);
+                () -> {
+                    if (mPendingAccent != 0) {
+                        finishComposingTextOnUiThread();
                     }
+                    mImeAdapter.deleteSurroundingText(beforeLength, afterLength);
                 });
         return true;
     }
@@ -582,14 +538,11 @@ class ThreadedInputConnection extends BaseInputConnection implements ChromiumBas
         }
         PostTask.postTask(
                 TaskTraits.UI_DEFAULT,
-                new Runnable() {
-                    @Override
-                    public void run() {
-                        if (mPendingAccent != 0) {
-                            finishComposingTextOnUiThread();
-                        }
-                        mImeAdapter.deleteSurroundingTextInCodePoints(beforeLength, afterLength);
+                () -> {
+                    if (mPendingAccent != 0) {
+                        finishComposingTextOnUiThread();
                     }
+                    mImeAdapter.deleteSurroundingTextInCodePoints(beforeLength, afterLength);
                 });
         return true;
     }
@@ -602,12 +555,9 @@ class ThreadedInputConnection extends BaseInputConnection implements ChromiumBas
         if (DEBUG_LOGS) Log.i(TAG, "sendKeyEvent [%d %d]", event.getAction(), event.getKeyCode());
         PostTask.postTask(
                 TaskTraits.UI_DEFAULT,
-                new Runnable() {
-                    @Override
-                    public void run() {
-                        if (handleCombiningAccentOnUiThread(event)) return;
-                        mImeAdapter.sendKeyEvent(event);
-                    }
+                () -> {
+                    if (handleCombiningAccentOnUiThread(event)) return;
+                    mImeAdapter.sendKeyEvent(event);
                 });
         return true;
     }
@@ -698,13 +648,7 @@ class ThreadedInputConnection extends BaseInputConnection implements ChromiumBas
     public boolean setSelection(final int start, final int end) {
         if (DEBUG_LOGS) Log.i(TAG, "setSelection [%d %d]", start, end);
         PostTask.postTask(
-                TaskTraits.UI_DEFAULT,
-                new Runnable() {
-                    @Override
-                    public void run() {
-                        mImeAdapter.setEditableSelectionOffsets(start, end);
-                    }
-                });
+                TaskTraits.UI_DEFAULT, () -> mImeAdapter.setEditableSelectionOffsets(start, end));
         return true;
     }
 
@@ -714,14 +658,7 @@ class ThreadedInputConnection extends BaseInputConnection implements ChromiumBas
     @Override
     public boolean setComposingRegion(final int start, final int end) {
         if (DEBUG_LOGS) Log.i(TAG, "setComposingRegion [%d %d]", start, end);
-        PostTask.postTask(
-                TaskTraits.UI_DEFAULT,
-                new Runnable() {
-                    @Override
-                    public void run() {
-                        mImeAdapter.setComposingRegion(start, end);
-                    }
-                });
+        PostTask.postTask(TaskTraits.UI_DEFAULT, () -> mImeAdapter.setComposingRegion(start, end));
         return true;
     }
 
@@ -815,7 +752,9 @@ class ThreadedInputConnection extends BaseInputConnection implements ChromiumBas
                     "commitCorrection [%s]",
                     ImeUtils.getCorrectionInfoDebugString(correctionInfo));
         }
-        if (ContentFeatureMap.isEnabled(ContentFeatures.ANDROID_PK_AUTOCORRECT_UNDERLINE)) {
+        if (ContentFeatureMap.isEnabled(ContentFeatures.ANDROID_PK_AUTOCORRECT_UNDERLINE)
+                || ContentFeatureMap.isEnabled(
+                        ContentFeatures.ANDROID_PK_AUTOCORRECT_UNDERLINE_V2)) {
             PostTask.postTask(
                     TaskTraits.UI_DEFAULT, () -> mImeAdapter.commitCorrection(correctionInfo));
             return true;
@@ -851,13 +790,7 @@ class ThreadedInputConnection extends BaseInputConnection implements ChromiumBas
     public boolean performPrivateCommand(String action, Bundle data) {
         if (DEBUG_LOGS) Log.i(TAG, "performPrivateCommand [%s]", action);
         PostTask.postTask(
-                TaskTraits.UI_DEFAULT,
-                new Runnable() {
-                    @Override
-                    public void run() {
-                        mImeAdapter.performPrivateCommand(action, data);
-                    }
-                });
+                TaskTraits.UI_DEFAULT, () -> mImeAdapter.performPrivateCommand(action, data));
         return true;
     }
 
@@ -868,12 +801,37 @@ class ThreadedInputConnection extends BaseInputConnection implements ChromiumBas
     public boolean requestCursorUpdates(final int cursorUpdateMode) {
         if (DEBUG_LOGS) Log.i(TAG, "requestCursorUpdates [%x]", cursorUpdateMode);
         PostTask.postTask(
-                TaskTraits.UI_DEFAULT,
-                new Runnable() {
-                    @Override
-                    public void run() {
-                        mImeAdapter.onRequestCursorUpdates(cursorUpdateMode);
-                    }
+                TaskTraits.UI_DEFAULT, () -> mImeAdapter.onRequestCursorUpdates(cursorUpdateMode));
+        return true;
+    }
+
+    @Override
+    @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    public boolean previewHandwritingGesture(
+            PreviewableHandwritingGesture gesture, @Nullable CancellationSignal signal) {
+        if (!ContentFeatureMap.isEnabled(ContentFeatures.PREVIEW_HANDWRITING_GESTURE)) {
+            return false;
+        }
+        StylusWritingGestureData gestureData = StylusGestureConverter.previewGestureData(gesture);
+        if (gestureData == null) {
+            return false;
+        }
+        if (signal != null) {
+            signal.setOnCancelListener(
+                    () -> {
+                        // Post to the UI thread to interact with mImeAdapter
+                        PostTask.postTask(
+                                TaskTraits.UI_USER_BLOCKING,
+                                () -> {
+                                    mImeAdapter.cancelPreviewGesture();
+                                });
+                    });
+        }
+        // Callback should be run on the UI thread.
+        PostTask.postTask(
+                TaskTraits.UI_USER_BLOCKING,
+                () -> {
+                    mImeAdapter.previewGesture(gestureData);
                 });
         return true;
     }
@@ -921,25 +879,28 @@ class ThreadedInputConnection extends BaseInputConnection implements ChromiumBas
             return false;
         }
 
+        String extension = MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType);
+        if (extension == null) {
+            return false;
+        }
+
         PostTask.postTask(
                 TaskTraits.USER_BLOCKING_MAY_BLOCK,
                 () -> {
                     inputContentInfo.requestPermission();
-                    try {
-                        String dataUrl =
-                                ImeUtils.getDataUrlFromContentUri(
-                                        ContextUtils.getApplicationContext()
-                                                .getContentResolver()
-                                                .openInputStream(inputContentInfo.getContentUri()),
-                                        mimeType);
+                    try (InputStream inputStream =
+                            ContextUtils.getApplicationContext()
+                                    .getContentResolver()
+                                    .openInputStream(inputContentInfo.getContentUri())) {
+                        if (inputStream == null) {
+                            throw new Error("Failed to open input stream.");
+                        }
+                        byte[] bytes = FileUtils.readStream(inputStream);
 
                         PostTask.postTask(
                                 TaskTraits.UI_DEFAULT,
-                                new Runnable() {
-                                    @Override
-                                    public void run() {
-                                        mImeAdapter.commitContent(dataUrl);
-                                    }
+                                () -> {
+                                    mImeAdapter.commitContent(bytes, extension);
                                 });
                     } catch (Exception e) {
                         Log.e(TAG, "Failed to commit rich content.", e);

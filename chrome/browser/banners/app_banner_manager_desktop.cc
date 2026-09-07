@@ -26,6 +26,7 @@
 #include "chrome/browser/web_applications/web_app_pref_guardrails.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_ui_manager.h"
+#include "components/tabs/public/tab_interface.h"
 #include "components/webapps/browser/banners/app_banner_metrics.h"
 #include "components/webapps/browser/banners/app_banner_settings_helper.h"
 #include "components/webapps/browser/features.h"
@@ -61,21 +62,26 @@ AppBannerManagerDesktop::CreateAppBannerManagerForTesting
     AppBannerManagerDesktop::override_app_banner_manager_desktop_for_testing_ =
         nullptr;
 
-// static
-void AppBannerManagerDesktop::CreateForWebContents(
-    content::WebContents* web_contents) {
-  if (FromWebContents(web_contents))
-    return;
+DEFINE_USER_DATA(AppBannerManagerDesktop);
 
+// static
+std::unique_ptr<AppBannerManagerDesktop> AppBannerManagerDesktop::Create(
+    tabs::TabInterface& tab,
+    content::WebContents* web_contents) {
   if (override_app_banner_manager_desktop_for_testing_) {
-    web_contents->SetUserData(
-        UserDataKey(),
-        override_app_banner_manager_desktop_for_testing_(web_contents));
-    return;
+    return override_app_banner_manager_desktop_for_testing_(tab, web_contents);
   }
-  web_contents->SetUserData(
-      UserDataKey(),
-      base::WrapUnique(new AppBannerManagerDesktop(web_contents)));
+  return base::WrapUnique(new AppBannerManagerDesktop(tab, web_contents));
+}
+
+// static
+AppBannerManagerDesktop* AppBannerManagerDesktop::From(
+    tabs::TabInterface* tab) {
+  return Get(tab->GetUnownedUserDataHost());
+}
+
+void AppBannerManagerDesktop::DeregisterFromTabForDiscard() {
+  scoped_unowned_user_data_.reset();
 }
 
 TestAppBannerManagerDesktop*
@@ -84,9 +90,10 @@ AppBannerManagerDesktop::AsTestAppBannerManagerDesktopForTesting() {
 }
 
 AppBannerManagerDesktop::AppBannerManagerDesktop(
+    tabs::TabInterface& tab,
     content::WebContents* web_contents)
-    : AppBannerManager(web_contents),
-      content::WebContentsUserData<AppBannerManagerDesktop>(*web_contents) {
+    : app_banner_manager_(AppBannerManager::Create(this, web_contents)) {
+  scoped_unowned_user_data_.emplace(tab.GetUnownedUserDataHost(), *this);
   Profile* profile =
       Profile::FromBrowserContext(web_contents->GetBrowserContext());
   extension_registry_ = extensions::ExtensionRegistry::Get(profile);
@@ -136,19 +143,21 @@ AppBannerManagerDesktop::CanRunWebAppInstallableChecks(
 void AppBannerManagerDesktop::InvalidateWeakPtrsForThisNavigation() {
   weak_factory_.InvalidateWeakPtrs();
 }
+
 void AppBannerManagerDesktop::ResetCurrentPageData() {}
 
 void AppBannerManagerDesktop::InstallableWebAppStatusUpdate() {}
 
 bool AppBannerManagerDesktop::IsSupportedNonWebAppPlatform(
     const std::u16string& platform) const {
-  if (base::EqualsASCII(platform, kPlatformChromeWebStore))
+  if (base::EqualsASCII(platform, kPlatformChromeWebStore)) {
     return true;
+  }
 
 #if BUILDFLAG(IS_CHROMEOS)
   if (base::EqualsASCII(platform, kPlatformPlay) &&
-      arc::IsArcAllowedForProfile(
-          Profile::FromBrowserContext(web_contents()->GetBrowserContext()))) {
+      arc::IsArcAllowedForProfile(Profile::FromBrowserContext(
+          app_banner_manager_->web_contents()->GetBrowserContext()))) {
     return true;
   }
 #endif  // BUILDFLAG(IS_CHROMEOS)
@@ -172,8 +181,8 @@ bool AppBannerManagerDesktop::IsRelatedNonWebAppInstalled(
 
 #if BUILDFLAG(IS_CHROMEOS)
   if (base::EqualsASCII(platform, kPlatformPlay)) {
-    ArcAppListPrefs* arc_app_list_prefs =
-        ArcAppListPrefs::Get(web_contents()->GetBrowserContext());
+    ArcAppListPrefs* arc_app_list_prefs = ArcAppListPrefs::Get(
+        app_banner_manager_->web_contents()->GetBrowserContext());
     return arc_app_list_prefs && arc_app_list_prefs->GetPackage(id) != nullptr;
   }
 #endif  // BUILDFLAG(IS_CHROMEOS)
@@ -184,9 +193,7 @@ bool AppBannerManagerDesktop::IsRelatedNonWebAppInstalled(
 void AppBannerManagerDesktop::MaybeShowAmbientBadge(
     const InstallBannerConfig& config) {}
 
-void AppBannerManagerDesktop::OnMlInstallPrediction(
-    base::PassKey<MLInstallabilityPromoter>,
-    std::string result_label) {
+void AppBannerManagerDesktop::OnMlInstallPrediction(std::string result_label) {
   if (result_label == MLInstallabilityPromoter::kShowInstallPromptLabel) {
     CreateWebApp(
         WebappInstallSource::ML_PROMOTION,
@@ -196,47 +203,58 @@ void AppBannerManagerDesktop::OnMlInstallPrediction(
 }
 
 web_app::WebAppRegistrar& AppBannerManagerDesktop::registrar() const {
-  auto* provider = web_app::WebAppProvider::GetForWebApps(
-      Profile::FromBrowserContext(web_contents()->GetBrowserContext()));
+  auto* provider =
+      web_app::WebAppProvider::GetForWebApps(Profile::FromBrowserContext(
+          app_banner_manager_->web_contents()->GetBrowserContext()));
   DCHECK(provider);
   return provider->registrar_unsafe();
 }
 
-void AppBannerManagerDesktop::ShowBannerUi(WebappInstallSource install_source,
-                                           const InstallBannerConfig& config) {
+AppBannerManager::ShowBannerUiResult AppBannerManagerDesktop::ShowBannerUi(
+    WebappInstallSource install_source,
+    const InstallBannerConfig& config) {
   AppBannerSettingsHelper::RecordBannerEvent(
-      web_contents(), config,
-      AppBannerSettingsHelper::APP_BANNER_EVENT_DID_SHOW, GetCurrentTime());
+      app_banner_manager_->web_contents(), config,
+      AppBannerSettingsHelper::APP_BANNER_EVENT_DID_SHOW,
+      app_banner_manager_->GetCurrentTime());
   TrackDisplayEvent(DISPLAY_EVENT_WEB_APP_BANNER_CREATED);
+  std::optional<webapps::ManifestId> manifest_id =
+      webapps::ManifestId::Create(config.web_app_data.manifest().id);
+  if (!manifest_id.has_value()) {
+    return AppBannerManager::ShowBannerUiResult::kFailed;
+  }
   CreateWebApp(install_source,
                base::BindOnce(&AppBannerManagerDesktop::DidFinishCreatingWebApp,
-                              weak_factory_.GetWeakPtr(),
-                              config.web_app_data.manifest().id,
+                              weak_factory_.GetWeakPtr(), *manifest_id,
                               weak_factory_.GetWeakPtr()));
+  return AppBannerManager::ShowBannerUiResult::kShownAppInstallationDialog;
 }
 
 void AppBannerManagerDesktop::OnWebAppInstalledWithOsHooks(
     const webapps::AppId& installed_app_id) {
-  if (!validated_url()) {
+  std::optional<GURL> validated_url = app_banner_manager_->validated_url();
+  if (!validated_url) {
     return;
   }
   std::optional<webapps::AppId> app_id = registrar().FindBestAppWithUrlInScope(
-      validated_url().value(), web_app::WebAppFilter::OpensInDedicatedWindow());
+      validated_url.value(), web_app::WebAppFilter::OpensInDedicatedWindow());
   if (installed_app_id != app_id) {
     return;
   }
-  OnInstall(registrar().GetEffectiveDisplayModeFromManifest(*app_id),
-            /*set_current_web_app_not_installable=*/true);
+  app_banner_manager_->OnInstall(
+      registrar().GetEffectiveDisplayModeFromManifest(*app_id),
+      /*set_current_web_app_not_installable=*/true);
 }
 
 void AppBannerManagerDesktop::OnWebAppWillBeUninstalled(
     const webapps::AppId& app_id) {
-  if (!validated_url()) {
+  std::optional<GURL> validated_url = app_banner_manager_->validated_url();
+  if (!validated_url) {
     return;
   }
   // WebAppTabHelper has a app_id but it is reset during
   // OnWebAppWillBeUninstalled so use IsUrlInAppScope() instead.
-  if (registrar().IsUrlInAppScope(validated_url().value(), app_id)) {
+  if (registrar().IsUrlInAppScope(validated_url.value(), app_id)) {
     uninstalling_app_id_ = app_id;
   }
 }
@@ -245,7 +263,7 @@ void AppBannerManagerDesktop::OnWebAppUninstalled(
     const webapps::AppId& app_id,
     webapps::WebappUninstallSource uninstall_source) {
   if (uninstalling_app_id_ == app_id) {
-    RecheckInstallabilityForLoadedPage();
+    app_banner_manager_->RecheckInstallabilityForLoadedPage();
   }
 }
 
@@ -256,7 +274,7 @@ void AppBannerManagerDesktop::OnWebAppInstallManagerDestroyed() {
 void AppBannerManagerDesktop::CreateWebApp(
     WebappInstallSource install_source,
     web_app::WebAppInstalledCallback install_callback) {
-  content::WebContents* contents = web_contents();
+  content::WebContents* contents = app_banner_manager_->web_contents();
   DCHECK(contents);
 
   web_app::CreateWebAppFromManifest(contents, install_source,
@@ -268,22 +286,23 @@ void AppBannerManagerDesktop::DidFinishCreatingWebApp(
     base::WeakPtr<AppBannerManagerDesktop> is_navigation_current,
     const webapps::AppId& app_id,
     webapps::InstallResultCode code) {
-  content::WebContents* contents = web_contents();
-  if (!contents)
+  content::WebContents* contents = app_banner_manager_->web_contents();
+  if (!contents) {
     return;
+  }
 
   // Catch only kSuccessNewInstall and kUserInstallDeclined. Report nothing on
   // all other errors.
   if (code == webapps::InstallResultCode::kSuccessNewInstall) {
     if (is_navigation_current) {
-      SendBannerAccepted();
+      app_banner_manager_->SendBannerAccepted();
     }
     TrackUserResponse(USER_RESPONSE_WEB_APP_ACCEPTED);
     AppBannerSettingsHelper::RecordBannerInstallEvent(contents,
                                                       manifest_id.spec());
   } else if (code == webapps::InstallResultCode::kUserInstallDeclined) {
     if (is_navigation_current) {
-      SendBannerDismissed();
+      app_banner_manager_->SendBannerDismissed();
     }
     TrackUserResponse(USER_RESPONSE_WEB_APP_DISMISSED);
     AppBannerSettingsHelper::RecordBannerDismissEvent(contents,
@@ -300,7 +319,5 @@ void AppBannerManagerDesktop::DidCreateWebAppFromMLDialog(
     TrackUserResponse(USER_RESPONSE_WEB_APP_DISMISSED);
   }
 }
-
-WEB_CONTENTS_USER_DATA_KEY_IMPL(AppBannerManagerDesktop);
 
 }  // namespace webapps

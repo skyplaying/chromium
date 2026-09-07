@@ -24,7 +24,8 @@
 #include "chrome/browser/ash/file_manager/volume_manager.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/webui/ash/cloud_upload/cloud_upload_util.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chromeos/ash/components/drivefs/mojom/drivefs.mojom.h"
@@ -118,7 +119,8 @@ class DriveUploadHandlerTest
         std::make_unique<file_manager::test::FakeSimpleDriveFsHelper>(
             profile, drive_mount_point_);
     return new DriveIntegrationService(
-        g_browser_process->local_state(), profile, "", drive_mount_point_,
+        g_browser_process->local_state(), profile,
+        IdentityManagerFactory::GetForProfile(profile), "", drive_mount_point_,
         fake_drivefs_helpers_[profile]->CreateFakeDriveFsListenerFactory());
   }
 
@@ -264,7 +266,7 @@ class DriveUploadHandlerTest
     EndWait();
   }
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
   const base::FilePath source_file_path() { return source_file_path_; }
 

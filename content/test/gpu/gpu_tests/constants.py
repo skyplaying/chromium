@@ -12,8 +12,9 @@ import enum
 
 class GpuVendor(enum.IntEnum):
   AMD = 0x1002
-  APPLE = 0x106b
+  APPLE = 0x106B
   INTEL = 0x8086
+  MICROSOFT = 0x1414
   NVIDIA = 0x10DE
   # ACPI ID as opposed to a PCI-E ID like other vendors.
   QUALCOMM = 0x4D4F4351

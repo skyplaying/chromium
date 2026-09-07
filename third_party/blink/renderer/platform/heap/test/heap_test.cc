@@ -31,6 +31,7 @@
 #include <array>
 
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/synchronization/lock.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
@@ -1669,6 +1670,8 @@ int ThingWithDestructor::live_things_with_destructor_;
 // "keep alive" persistent reference that is set & cleared across
 // ref-counting operations.
 //
+}  // namespace
+
 class RefCountedAndGarbageCollected final
     : public GarbageCollected<RefCountedAndGarbageCollected> {
  public:
@@ -1694,9 +1697,11 @@ class RefCountedAndGarbageCollected final
 
  private:
   int ref_count_ = 0;
-  SelfKeepAlive<RefCountedAndGarbageCollected> keep_alive_;
+  SelfKeepAlive<RefCountedAndGarbageCollected> keep_alive_{{}};
 };
 int RefCountedAndGarbageCollected::destructor_calls_ = 0;
+
+namespace {
 
 static void HeapMapDestructorHelper(bool clear_maps) {
   ThingWithDestructor::live_things_with_destructor_ = 0;
@@ -2140,8 +2145,7 @@ TEST_F(HeapTest, RefCountedGarbageCollected) {
 
 TEST_F(HeapTest, CollectionNesting) {
   ClearOutOldGarbage();
-  int k;
-  int* key = &k;
+  std::array<int, 101> dummy_keys;
   IntWrapper::destructor_calls_ = 0;
   typedef GCedHeapVector<Member<IntWrapper>> IntVector;
   typedef GCedHeapDeque<Member<IntWrapper>> IntDeque;
@@ -2153,6 +2157,8 @@ TEST_F(HeapTest, CollectionNesting) {
                 "Failed to recognize HeapVector as traceable");
   static_assert(IsTraceableV<IntDeque>,
                 "Failed to recognize HeapDeque as traceable");
+
+  void* key = &dummy_keys[0];
 
   map->insert(key, MakeGarbageCollected<IntVector>());
   map2->insert(key, MakeGarbageCollected<IntDeque>());
@@ -2172,9 +2178,9 @@ TEST_F(HeapTest, CollectionNesting) {
   Persistent<GCedHeapHashMap<void*, Member<IntVector>>> keep_alive(map);
   Persistent<GCedHeapHashMap<void*, Member<IntDeque>>> keep_alive2(map2);
 
-  for (int i = 0; i < 100; i++) {
-    map->insert(UNSAFE_TODO(key + 1 + i), MakeGarbageCollected<IntVector>());
-    map2->insert(UNSAFE_TODO(key + 1 + i), MakeGarbageCollected<IntDeque>());
+  for (int& dummy_key : base::span(dummy_keys).subspan(1u)) {
+    map->insert(&dummy_key, MakeGarbageCollected<IntVector>());
+    map2->insert(&dummy_key, MakeGarbageCollected<IntDeque>());
   }
 
   PreciselyCollectGarbage();
@@ -3253,5 +3259,74 @@ TEST_F(HeapTest, ContainerAnnotationOnTinyBacking) {
   // one.
   vector.reserve(2);
 }
+
+namespace {
+struct alignas(8) AlignedElement {
+  DISALLOW_NEW();
+
+ public:
+  uint64_t value = 0;
+};
+}  // namespace
+
+TEST_F(HeapTest, HeapVectorBackingAlignment) {
+  // Regression test: https://crbug.com/540446275
+  // Verify that Oilpan allocates properly aligned backing stores for elements
+  // requiring 8-byte alignment (even on 32-bit platforms where default
+  // alignment might otherwise be 4 bytes).
+  HeapVector<AlignedElement> vector;
+  vector.reserve(10);
+  EXPECT_LE(10u, vector.capacity());
+  EXPECT_TRUE(vector.data());
+  EXPECT_EQ(0u, reinterpret_cast<uintptr_t>(vector.data()) % 8u);
+}
+
+TEST_F(HeapTest, NestedHeapVectorAlignment) {
+  // Regression test: https://crbug.com/540446275
+  // Verify that nested HeapVectors maintain runtime memory alignment matching
+  // alignof(HeapVector<T>), preventing libc++ hardening alignment aborts.
+  HeapVector<HeapVector<Member<IntWrapper>>> nested_vector;
+  nested_vector.reserve(5);
+  EXPECT_LE(5u, nested_vector.capacity());
+  EXPECT_TRUE(nested_vector.data());
+  EXPECT_EQ(0u, reinterpret_cast<uintptr_t>(nested_vector.data()) %
+                    alignof(HeapVector<Member<IntWrapper>>));
+}
+
+#if defined(ARCH_CPU_64_BITS)
+struct alignas(16) OverAlignedElement {
+  DISALLOW_NEW();
+
+ public:
+  OverAlignedElement() = default;
+  explicit OverAlignedElement(IntWrapper* w) : wrapper(w) {}
+
+  Member<IntWrapper> wrapper;
+  void Trace(Visitor* visitor) const { visitor->Trace(wrapper); }
+};
+
+template <>
+struct VectorTraits<OverAlignedElement> : VectorTraitsBase<OverAlignedElement> {
+  static constexpr bool kCanClearUnusedSlotsWithMemset = true;
+  static constexpr bool kCanMoveWithMemcpy = true;
+};
+
+class OverAlignedVectorHolder
+    : public GarbageCollected<OverAlignedVectorHolder> {
+ public:
+  void Trace(Visitor* visitor) const { visitor->Trace(vector); }
+  HeapVector<OverAlignedElement> vector;
+};
+
+TEST_F(HeapTest, OverAlignedHeapVectorTracingAndGC) {
+  Persistent<OverAlignedVectorHolder> holder =
+      MakeGarbageCollected<OverAlignedVectorHolder>();
+  holder->vector.push_back(
+      OverAlignedElement(MakeGarbageCollected<IntWrapper>(42)));
+  TestSupportingGC::PreciselyCollectGarbage();
+  EXPECT_EQ(1u, holder->vector.size());
+  EXPECT_EQ(42, holder->vector[0].wrapper->Value());
+}
+#endif  // defined(ARCH_CPU_64_BITS)
 
 }  // namespace blink

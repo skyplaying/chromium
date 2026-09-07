@@ -35,6 +35,7 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.DeviceInfo;
+import org.chromium.base.TriState;
 import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -118,19 +119,17 @@ class ShareSheetBottomSheetContent implements BottomSheetContent, OnItemClickLis
         mParams = params;
         mFeatureEngagementTracker = featureEngagementTracker;
 
-        // Set |mLinkGenerationState| to invalid value of |MAX| if |getLinkToTextSuccessful|
+        // Set |mLinkGenerationState| to invalid value of |COUNT| if |getLinkToTextSuccessful|
         // is not set in order to distinguish it from failure state. |getLinkToTextSuccessful| will
         // be set only for link to text.
-        if (mParams.getLinkToTextSuccessful() == null) {
-            mLinkGenerationState = LinkGeneration.MAX;
+        if (mParams.getLinkToTextSuccessful() == TriState.NOT_SET) {
+            mLinkGenerationState = LinkGeneration.COUNT;
+        } else if (mParams.getLinkToTextSuccessful() == TriState.TRUE) {
+            mLinkGenerationState = LinkGeneration.LINK;
+            mLinkToggleState = LinkToggleState.LINK;
         } else {
-            if (mParams.getLinkToTextSuccessful()) {
-                mLinkGenerationState = LinkGeneration.LINK;
-                mLinkToggleState = LinkToggleState.LINK;
-            } else {
-                mLinkGenerationState = LinkGeneration.FAILURE;
-                mLinkToggleState = LinkToggleState.NO_LINK;
-            }
+            mLinkGenerationState = LinkGeneration.FAILURE;
+            mLinkToggleState = LinkToggleState.NO_LINK;
         }
         createContentView();
     }
@@ -216,7 +215,7 @@ class ShareSheetBottomSheetContent implements BottomSheetContent, OnItemClickLis
                         ? ShareSheetBottomSheetContent::bindShareItem
                         : ShareSheetBottomSheetContent::bind3PShareItem;
         adapter.registerType(
-                SHARE_SHEET_ITEM, new LayoutViewBuilder(R.layout.share_sheet_item), viewBinder);
+                SHARE_SHEET_ITEM, new LayoutViewBuilder<>(R.layout.share_sheet_item), viewBinder);
         view.setAdapter(adapter);
         LinearLayoutManager layoutManager =
                 new LinearLayoutManager(mActivity, LinearLayoutManager.HORIZONTAL, false);
@@ -226,19 +225,19 @@ class ShareSheetBottomSheetContent implements BottomSheetContent, OnItemClickLis
     private static void bindShareItem(
             PropertyModel model, ViewGroup parent, PropertyKey propertyKey) {
         if (ShareSheetItemViewProperties.ICON.equals(propertyKey)) {
-            ImageView view = (ImageView) parent.findViewById(R.id.icon);
+            ImageView view = parent.findViewById(R.id.icon);
             view.setImageDrawable(model.get(ShareSheetItemViewProperties.ICON));
         } else if (ShareSheetItemViewProperties.LABEL.equals(propertyKey)) {
-            TextView view = (TextView) parent.findViewById(R.id.text);
+            TextView view = parent.findViewById(R.id.text);
             view.setText(model.get(ShareSheetItemViewProperties.LABEL));
         } else if (ShareSheetItemViewProperties.CONTENT_DESCRIPTION.equals(propertyKey)) {
-            TextView view = (TextView) parent.findViewById(R.id.text);
+            TextView view = parent.findViewById(R.id.text);
             view.setContentDescription(model.get(ShareSheetItemViewProperties.CONTENT_DESCRIPTION));
         } else if (ShareSheetItemViewProperties.CLICK_LISTENER.equals(propertyKey)) {
-            View layout = (View) parent.findViewById(R.id.layout);
+            View layout = parent.findViewById(R.id.layout);
             layout.setOnClickListener(model.get(ShareSheetItemViewProperties.CLICK_LISTENER));
         } else if (ShareSheetItemViewProperties.SHOW_NEW_BADGE.equals(propertyKey)) {
-            TextView newBadge = (TextView) parent.findViewById(R.id.display_new);
+            TextView newBadge = parent.findViewById(R.id.display_new);
             newBadge.setVisibility(
                     model.get(ShareSheetItemViewProperties.SHOW_NEW_BADGE)
                             ? View.VISIBLE
@@ -250,8 +249,8 @@ class ShareSheetBottomSheetContent implements BottomSheetContent, OnItemClickLis
             PropertyModel model, ViewGroup parent, PropertyKey propertyKey) {
         bindShareItem(model, parent, propertyKey);
         if (ShareSheetItemViewProperties.ICON.equals(propertyKey)) {
-            ImageView view = (ImageView) parent.findViewById(R.id.icon);
-            View layout = (View) parent.findViewById(R.id.layout);
+            ImageView view = parent.findViewById(R.id.icon);
+            View layout = parent.findViewById(R.id.layout);
 
             final int iconSize =
                     ContextUtils.getApplicationContext()
@@ -465,12 +464,11 @@ class ShareSheetBottomSheetContent implements BottomSheetContent, OnItemClickLis
         }
 
         ImageView linkToggleView = getContentView().findViewById(R.id.link_toggle_view);
-        linkToggleView.setColorFilter(
-                AppCompatResources.getColorStateList(mActivity, skillColor).getDefaultColor());
+        linkToggleView.setColorFilter(mActivity.getColorStateList(skillColor).getDefaultColor());
         linkToggleView.setVisibility(View.VISIBLE);
         linkToggleView.setImageDrawable(AppCompatResources.getDrawable(mActivity, drawable));
         // This is necessary in order to prevent voice over announcing the content description
-        // change. See https://crbug.com/1192666.
+        // change. See https://crbug.com/40757373.
         linkToggleView.setContentDescription(null);
         linkToggleView.setContentDescription(
                 mActivity.getResources().getString(contentDescription));

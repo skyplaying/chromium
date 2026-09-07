@@ -47,6 +47,8 @@
 #include "ash/wm/window_pin_util.h"
 #include "base/command_line.h"
 #include "base/functional/callback_helpers.h"
+#include "base/i18n/rtl.h"
+#include "base/i18n/test/scoped_rtl_for_testing.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/scoped_feature_list.h"
 #include "chromeos/ash/components/network/cellular_metrics_logger.h"
@@ -66,6 +68,7 @@
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/image/image_unittest_util.h"
+#include "ui/views/accessibility/view_accessibility.h"
 
 using session_manager::SessionState;
 using testing::NotNull;
@@ -149,8 +152,6 @@ TEST_F(StatusAreaWidgetTest, MultiDisplayIMENotActive) {
 }
 
 TEST_F(StatusAreaWidgetTest, HandleOnLocaleChange) {
-  base::i18n::SetRTLForTesting(false);
-
   StatusAreaWidget* status_area =
       StatusAreaWidgetTestHelper::GetStatusAreaWidget();
   TrayBackgroundView* ime_menu = status_area->ime_menu_tray();
@@ -158,33 +159,38 @@ TEST_F(StatusAreaWidgetTest, HandleOnLocaleChange) {
   TrayBackgroundView* dictation_button = status_area->dictation_button_tray();
   TrayBackgroundView* select_to_speak = status_area->select_to_speak_tray();
 
-  ime_menu->SetVisiblePreferred(true);
-  palette->SetVisiblePreferred(true);
-  dictation_button->SetVisiblePreferred(true);
-  select_to_speak->SetVisiblePreferred(true);
+  {
+    base::i18n::ScopedRTLForTesting scoped_rtl(false);
 
-  // From left to right: `dictation_button`, `select_to_speak`, `ime_menu`,
-  // palette.
-  EXPECT_GT(palette->layer()->bounds().x(), ime_menu->layer()->bounds().x());
-  EXPECT_GT(ime_menu->layer()->bounds().x(),
-            select_to_speak->layer()->bounds().x());
-  EXPECT_GT(select_to_speak->layer()->bounds().x(),
-            dictation_button->layer()->bounds().x());
+    ime_menu->SetVisiblePreferred(true);
+    palette->SetVisiblePreferred(true);
+    dictation_button->SetVisiblePreferred(true);
+    select_to_speak->SetVisiblePreferred(true);
+
+    // From left to right: `dictation_button`, `select_to_speak`, `ime_menu`,
+    // palette.
+    EXPECT_GT(palette->layer()->bounds().x(), ime_menu->layer()->bounds().x());
+    EXPECT_GT(ime_menu->layer()->bounds().x(),
+              select_to_speak->layer()->bounds().x());
+    EXPECT_GT(select_to_speak->layer()->bounds().x(),
+              dictation_button->layer()->bounds().x());
+  }
 
   // Switch to RTL mode.
-  base::i18n::SetRTLForTesting(true);
-  // Trigger the LocaleChangeObserver, which should cause a layout of the menu.
-  ash::LocaleUpdateController::Get()->OnLocaleChanged();
+  {
+    base::i18n::ScopedRTLForTesting scoped_rtl_true(true);
+    // Trigger the LocaleChangeObserver, which should cause a layout of the
+    // menu.
+    ash::LocaleUpdateController::Get()->OnLocaleChanged();
 
-  // From left to right: palette, ime_menu_, select_to_speak,
-  // dictation_button_.
-  EXPECT_LT(palette->layer()->bounds().x(), ime_menu->layer()->bounds().x());
-  EXPECT_LT(ime_menu->layer()->bounds().x(),
-            select_to_speak->layer()->bounds().x());
-  EXPECT_LT(select_to_speak->layer()->bounds().x(),
-            dictation_button->layer()->bounds().x());
-
-  base::i18n::SetRTLForTesting(false);
+    // From left to right: palette, ime_menu_, select_to_speak,
+    // dictation_button_.
+    EXPECT_LT(palette->layer()->bounds().x(), ime_menu->layer()->bounds().x());
+    EXPECT_LT(ime_menu->layer()->bounds().x(),
+              select_to_speak->layer()->bounds().x());
+    EXPECT_LT(select_to_speak->layer()->bounds().x(),
+              dictation_button->layer()->bounds().x());
+  }
 }
 
 TEST_F(StatusAreaWidgetTest, OpenTrayBubble) {
@@ -263,7 +269,7 @@ class LockedFullscreenStatusAreaWidgetTest
 TEST_P(LockedFullscreenStatusAreaWidgetTest,
        TrayBubbleVisibilityWithPinnedWindow) {
   // Create a window for testing purposes.
-  const std::unique_ptr<aura::Window> window = CreateTestWindow();
+  const std::unique_ptr<aura::Window> window = CreateWindowWithAppType();
 
   // Show the unified system tray bubble before pinning the window.
   auto* const status_area_widget = GetPrimaryShelf()->GetStatusAreaWidget();
@@ -369,9 +375,6 @@ class UnifiedStatusAreaWidgetTest : public AshTestBase {
 
     network_handler_test_helper_.InitializePrefs(&profile_prefs_,
                                                  local_state());
-
-    // Networking stubs may have asynchronous initialization.
-    base::RunLoop().RunUntilIdle();
   }
 
   void TearDown() override {
@@ -703,7 +706,7 @@ TEST_F(StatusAreaWidgetCollapseStateTest, AllTraysFitInCollapsedState) {
 TEST_F(StatusAreaWidgetCollapseStateTest,
        HideDragHandleOnOverlapInExpandedState) {
   std::unique_ptr<aura::Window> test_window =
-      CreateTestWindow(gfx::Rect(0, 0, 400, 400));
+      CreateWindowWithAppType(chromeos::AppType::NON_APP, {400, 400});
   ash::TabletModeControllerTestApi().EnterTabletMode();
   status_area_->UpdateCollapseState();
 
@@ -727,7 +730,7 @@ TEST_F(StatusAreaWidgetCollapseStateTest,
 TEST_F(StatusAreaWidgetCollapseStateTest,
        HideDragHandleWithNudgeOnOverlapInExpandedState) {
   std::unique_ptr<aura::Window> test_window =
-      CreateTestWindow(gfx::Rect(0, 0, 400, 400));
+      CreateWindowWithAppType(chromeos::AppType::NON_APP, {400, 400});
   ash::TabletModeControllerTestApi().EnterTabletMode();
   status_area_->UpdateCollapseState();
 
@@ -838,6 +841,8 @@ TEST_F(StatusAreaWidgetTest, AddCustomTrayIcons) {
             kExpectedViewId));
     EXPECT_TRUE(icon);
     EXPECT_EQ(icon->image_view()->GetTooltipText(), configuration.tool_tip);
+    EXPECT_EQ(icon->GetViewAccessibility().GetCachedName(),
+              configuration.tool_tip);
 
     ui::ImageModel actual_model = icon->image_view()->GetImageModel();
     ASSERT_TRUE(actual_model.IsImage());
@@ -860,6 +865,8 @@ TEST_F(StatusAreaWidgetTest, AddCustomTrayIcons) {
             kExpectedViewId));
     EXPECT_TRUE(icon);
     EXPECT_EQ(icon->image_view()->GetTooltipText(), configuration.tool_tip);
+    EXPECT_EQ(icon->GetViewAccessibility().GetCachedName(),
+              configuration.tool_tip);
 
     ui::ImageModel actual_model = icon->image_view()->GetImageModel();
     ASSERT_TRUE(actual_model.IsEmpty());
@@ -880,6 +887,7 @@ TEST_F(StatusAreaWidgetTest, AddCustomTrayIcons) {
             kExpectedViewId));
     EXPECT_TRUE(icon);
     EXPECT_TRUE(icon->image_view()->GetTooltipText().empty());
+    EXPECT_TRUE(icon->GetViewAccessibility().GetCachedName().empty());
 
     ui::ImageModel actual_model = icon->image_view()->GetImageModel();
     ASSERT_TRUE(actual_model.IsImage());
@@ -919,6 +927,8 @@ TEST_F(StatusAreaWidgetTest, UpdateCustomTrayIcon) {
             kExpectedViewId));
     EXPECT_TRUE(icon);
     EXPECT_EQ(icon->image_view()->GetTooltipText(), configuration.tool_tip);
+    EXPECT_EQ(icon->GetViewAccessibility().GetCachedName(),
+              configuration.tool_tip);
 
     ui::ImageModel actual_model = icon->image_view()->GetImageModel();
     ASSERT_TRUE(actual_model.IsImage());

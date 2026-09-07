@@ -31,17 +31,14 @@ extern NSString* const kNTPFeedHeaderIdentityDisc;
 // Represents the customization menu button of the feed header.
 extern NSString* const kNTPCustomizationMenuButtonIdentifier;
 
+// Represents the tools menu button of the feed header.
+extern NSString* const kNTPToolsMenuButtonIdentifier;
+
 // Represents the identity disc badge.
 extern NSString* const kNTPFeedHeaderIdentityDiscBadge;
 
 // Represents the MIA entry point.
 extern NSString* const kNTPMIAIdentifier;
-
-// Represents the Lens quick action.
-extern NSString* const kNTPLensQuickActionIdentifier;
-
-// Represents the Voice Search quick action.
-extern NSString* const kNTPVoiceSearchQuickActionIdentifier;
 
 // Represents the incognito quick action.
 extern NSString* const kNTPIncognitoQuickActionIdentifier;
@@ -62,5 +59,8 @@ extern const NSInteger kCustomizationNewBadgeMaxImpressionCount;
 
 // The bottom spacing underneath the Magic Stack.
 extern const float kBottomMagicStackPadding;
+
+// The horizontal margin on the leading and trailing sides of the NTP content.
+extern const CGFloat kNewTabPageHorizontalMargin;
 
 #endif  // IOS_CHROME_BROWSER_NTP_UI_BUNDLED_NEW_TAB_PAGE_CONSTANTS_H_

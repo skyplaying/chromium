@@ -9,7 +9,6 @@
 #include "chrome/browser/ash/policy/handlers/configuration_policy_handler_ash.h"
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chromeos/ash/experiences/arc/arc_prefs.h"
 #include "chromeos/ash/experiences/arc/session/arc_session_runner.h"
 #include "chromeos/ash/experiences/arc/test/arc_util_test_support.h"
@@ -38,10 +37,10 @@ class ArcPolicyTest : public PolicyTest {
         std::make_unique<arc::ArcSessionRunner>(
             base::BindRepeating(arc::FakeArcSession::Create)));
 
-    browser()->profile()->GetPrefs()->SetBoolean(arc::prefs::kArcSignedIn,
-                                                 true);
-    browser()->profile()->GetPrefs()->SetBoolean(arc::prefs::kArcTermsAccepted,
-                                                 true);
+    browser()->GetProfile()->GetPrefs()->SetBoolean(arc::prefs::kArcSignedIn,
+                                                    true);
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
+        arc::prefs::kArcTermsAccepted, true);
   }
 
   void TearDownOnMainThread() override {
@@ -60,7 +59,7 @@ class ArcPolicyTest : public PolicyTest {
                  POLICY_SOURCE_CLOUD, base::Value(enabled), nullptr);
     UpdateProviderPolicy(policies);
     if (browser()) {
-      const PrefService* const prefs = browser()->profile()->GetPrefs();
+      const PrefService* const prefs = browser()->GetProfile()->GetPrefs();
       EXPECT_EQ(prefs->GetBoolean(arc::prefs::kArcEnabled), enabled);
     }
   }
@@ -70,7 +69,7 @@ class ArcPolicyTest : public PolicyTest {
 
 // Test ArcEnabled policy.
 IN_PROC_BROWSER_TEST_F(ArcPolicyTest, ArcEnabled) {
-  const PrefService* const pref = browser()->profile()->GetPrefs();
+  const PrefService* const pref = browser()->GetProfile()->GetPrefs();
   const auto* const arc_session_manager = arc::ArcSessionManager::Get();
 
   // ARC is switched off by default.
@@ -88,7 +87,7 @@ IN_PROC_BROWSER_TEST_F(ArcPolicyTest, ArcEnabled) {
 
 // Test ArcBackupRestoreServiceEnabled policy.
 IN_PROC_BROWSER_TEST_F(ArcPolicyTest, ArcBackupRestoreServiceEnabled) {
-  PrefService* const pref = browser()->profile()->GetPrefs();
+  PrefService* const pref = browser()->GetProfile()->GetPrefs();
 
   // Enable ARC backup and restore in user prefs.
   pref->SetBoolean(arc::prefs::kArcBackupRestoreEnabled, true);
@@ -141,7 +140,7 @@ IN_PROC_BROWSER_TEST_F(ArcPolicyTest, ArcBackupRestoreServiceEnabled) {
 // DefaultGeolocationSetting policy.
 IN_PROC_BROWSER_TEST_F(ArcPolicyTest, ArcGoogleLocationServicesEnabled) {
   ASSERT_FALSE(ash::features::IsCrosPrivacyHubLocationEnabled());
-  PrefService* const pref = browser()->profile()->GetPrefs();
+  PrefService* const pref = browser()->GetProfile()->GetPrefs();
 
   // Values of the ArcGoogleLocationServicesEnabled policy to be tested.
   auto test_policy_values =
@@ -241,7 +240,7 @@ IN_PROC_BROWSER_TEST_P(ArcLocationPolicyWhenPhEnabledTest,
 
   // Check that `ArcGoogleLocationServicesEnabled` policy, as it's being
   // deprecated, no longer affects the underlying pref.
-  PrefService* prefs = browser()->profile()->GetPrefs();
+  PrefService* prefs = browser()->GetProfile()->GetPrefs();
   EXPECT_TRUE(prefs->FindPreference(arc::prefs::kArcLocationServiceEnabled)
                   ->IsDefaultValue());
   EXPECT_FALSE(

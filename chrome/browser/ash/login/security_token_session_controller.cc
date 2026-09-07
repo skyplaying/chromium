@@ -8,8 +8,10 @@
 #include <string_view>
 #include <vector>
 
+#include "ash/constants/ash_login_pref_names.h"
 #include "ash/constants/notifier_catalogs.h"
 #include "ash/public/cpp/notification_utils.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
 #include "base/functional/bind.h"
@@ -22,17 +24,12 @@
 #include "base/trace_event/trace_event.h"
 #include "chrome/browser/ash/certificate_provider/certificate_provider_service.h"
 #include "chrome/browser/ash/certificate_provider/certificate_provider_service_factory.h"
-#include "chrome/browser/ash/login/lock/screen_locker.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/browser_process.h"
+#include "chrome/browser/ash/login/lock/screen_locker_controller.h"
 #include "chrome/browser/enterprise/util/managed_browser_utils.h"
 #include "chrome/browser/extensions/forced_extensions/force_installed_tracker.h"
-#include "chrome/browser/lifetime/application_lifetime.h"
-#include "chrome/browser/notifications/system_notification_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/security_token_restriction/security_token_session_restriction_view.h"
-#include "chrome/common/pref_names.h"
-#include "chrome/grit/generated_resources.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_types.h"
 #include "chromeos/ash/components/login/auth/challenge_response/known_user_pref_utils.h"
 #include "chromeos/ash/components/login/auth/public/challenge_response_key.h"
 #include "chromeos/components/certificate_provider/certificate_info.h"
@@ -52,6 +49,7 @@
 #include "net/cert/x509_util.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/chromeos/devicetype_utils.h"
+#include "ui/message_center/message_center.h"
 #include "ui/message_center/public/cpp/notification.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/dialog_delegate.h"
@@ -62,8 +60,8 @@ namespace ash {
 namespace login {
 namespace {
 
-// Possible values of prefs::kSecurityTokenSessionBehavior. This needs to match
-// the values of the SecurityTokenSessionBehavior policy defined in
+// Possible values of ash::prefs::kSecurityTokenSessionBehavior. This needs to
+// match the values of the SecurityTokenSessionBehavior policy defined in
 // policy_templates.json.
 constexpr char kIgnorePrefValue[] = "IGNORE";
 constexpr char kLogoutPrefValue[] = "LOGOUT";
@@ -124,7 +122,7 @@ bool SanitizeDomain(const std::string& domain, std::string& sanitized_domain) {
 
 void DisplayNotification(const std::u16string& title,
                          const std::u16string& text) {
-  message_center::Notification notification = CreateSystemNotification(
+  auto notification = CreateSystemNotificationPtr(
       message_center::NOTIFICATION_TYPE_SIMPLE, kNotificationId, title, text,
       /*display_source=*/std::u16string(), /*origin_url=*/GURL(),
       message_center::NotifierId(message_center::NotifierType::SYSTEM_COMPONENT,
@@ -135,10 +133,11 @@ void DisplayNotification(const std::u16string& title,
           base::DoNothingAs<void()>()),
       chromeos::kEnterpriseIcon,
       message_center::SystemNotificationWarningLevel::NORMAL);
-  notification.set_fullscreen_visibility(
+  notification->set_fullscreen_visibility(
       message_center::FullscreenVisibility::OVER_USER);
-  notification.SetSystemPriority();
-  SystemNotificationHelper::GetInstance()->Display(notification);
+  notification->SetSystemPriority();
+  message_center::MessageCenter::Get()->AddNotification(
+      std::move(notification));
 }
 
 // Loads the persistently stored information about the challenge-response keys
@@ -192,7 +191,7 @@ SecurityTokenSessionController::SecurityTokenSessionController(
     PrefService* local_state,
     const user_manager::User* primary_user,
     chromeos::CertificateProviderService* certificate_provider_service)
-    : is_user_profile_(ProfileHelper::IsPrimaryProfile(profile)),
+    : is_user_profile_(IsUserBrowserContext(profile)),
       local_state_(local_state),
       primary_user_(primary_user),
       certificate_provider_service_(certificate_provider_service),
@@ -218,10 +217,11 @@ SecurityTokenSessionController::SecurityTokenSessionController(
       base::BindRepeating(
           &SecurityTokenSessionController::UpdateNotificationPref,
           weak_ptr_factory_.GetWeakPtr());
-  pref_change_registrar_.Add(prefs::kSecurityTokenSessionBehavior,
+  pref_change_registrar_.Add(ash::prefs::kSecurityTokenSessionBehavior,
                              behavior_pref_changed_callback);
-  pref_change_registrar_.Add(prefs::kSecurityTokenSessionNotificationSeconds,
-                             notification_pref_changed_callback);
+  pref_change_registrar_.Add(
+      ash::prefs::kSecurityTokenSessionNotificationSeconds,
+      notification_pref_changed_callback);
   certificate_provider_service_->AddObserver(this);
   extensions_tracker_.AddObserver(this);
 }
@@ -337,21 +337,21 @@ void SecurityTokenSessionController::RegisterLocalStatePrefs(
   // the values are available for the controller regardless of the profile it's
   // attached to (the policy stack has code to automatically copy the primary
   // profile's policies into the Local State).
-  registry->RegisterStringPref(prefs::kSecurityTokenSessionBehavior,
+  registry->RegisterStringPref(ash::prefs::kSecurityTokenSessionBehavior,
                                kIgnorePrefValue);
-  registry->RegisterIntegerPref(prefs::kSecurityTokenSessionNotificationSeconds,
-                                0);
+  registry->RegisterIntegerPref(
+      ash::prefs::kSecurityTokenSessionNotificationSeconds, 0);
   // Prefs that contain state that needs to be persisted across Chrome restarts.
   registry->RegisterStringPref(
-      prefs::kSecurityTokenSessionNotificationScheduledDomain, "");
+      ash::prefs::kSecurityTokenSessionNotificationScheduledDomain, "");
 }
 
 // static
-void SecurityTokenSessionController::MaybeDisplayLoginScreenNotification() {
-  PrefService* local_state = g_browser_process->local_state();
+void SecurityTokenSessionController::MaybeDisplayLoginScreenNotification(
+    PrefService& local_state) {
   const PrefService::Preference* scheduled_notification_domain =
-      local_state->FindPreference(
-          prefs::kSecurityTokenSessionNotificationScheduledDomain);
+      local_state.FindPreference(
+          ash::prefs::kSecurityTokenSessionNotificationScheduledDomain);
   if (!scheduled_notification_domain ||
       scheduled_notification_domain->IsDefaultValue() ||
       !scheduled_notification_domain->GetValue()->is_string()) {
@@ -361,8 +361,8 @@ void SecurityTokenSessionController::MaybeDisplayLoginScreenNotification() {
   // Sanitize `scheduled_notification_domain`, as values coming from local state
   // are not trusted.
   std::string domain = scheduled_notification_domain->GetValue()->GetString();
-  local_state->ClearPref(
-      prefs::kSecurityTokenSessionNotificationScheduledDomain);
+  local_state.ClearPref(
+      ash::prefs::kSecurityTokenSessionNotificationScheduledDomain);
   std::string sanitized_domain;
   if (!SanitizeDomain(domain, sanitized_domain)) {
     // The pref value is invalid.
@@ -389,7 +389,7 @@ void SecurityTokenSessionController::UpdateBehavior() {
 
 void SecurityTokenSessionController::UpdateNotificationPref() {
   notification_seconds_ = base::Seconds(local_state_->GetInteger(
-      prefs::kSecurityTokenSessionNotificationSeconds));
+      ash::prefs::kSecurityTokenSessionNotificationSeconds));
 }
 
 bool SecurityTokenSessionController::ShouldApplyPolicyInCurrentSessionState()
@@ -429,7 +429,7 @@ SecurityTokenSessionController::GetBehaviorFromPrefAndSessionState() const {
   // After passing the session state checks, use the policy value as the desired
   // behavior.
   return ParseBehaviorPrefValue(
-      local_state_->GetString(prefs::kSecurityTokenSessionBehavior));
+      local_state_->GetString(ash::prefs::kSecurityTokenSessionBehavior));
 }
 
 void SecurityTokenSessionController::TriggerAction() {
@@ -442,11 +442,11 @@ void SecurityTokenSessionController::TriggerAction() {
     case Behavior::kIgnore:
       return;
     case Behavior::kLock:
-      ScreenLocker::Show();
+      ScreenLockerController::Get().ShowLockScreen();
       AddLockNotification();
       return;
     case Behavior::kLogout:
-      chrome::AttemptExit();
+      session_manager::SessionManager::Get()->RequestSignOut();
       ScheduleLogoutNotification();
       return;
   }
@@ -550,7 +550,7 @@ void SecurityTokenSessionController::ScheduleLogoutNotification() {
   SetNotificationDisplayedKnownUserFlag();
 
   local_state_->SetString(
-      prefs::kSecurityTokenSessionNotificationScheduledDomain,
+      ash::prefs::kSecurityTokenSessionNotificationScheduledDomain,
       enterprise_util::GetDomainFromEmail(primary_user_->GetDisplayEmail()));
 }
 

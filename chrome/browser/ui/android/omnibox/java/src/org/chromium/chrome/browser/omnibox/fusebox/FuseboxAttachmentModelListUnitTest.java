@@ -4,21 +4,24 @@
 
 package org.chromium.chrome.browser.omnibox.fusebox;
 
+import static com.google.common.truth.Truth.assertThat;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import android.content.res.Resources;
+import android.os.SystemClock;
 
 import org.junit.Before;
 import org.junit.Rule;
@@ -27,54 +30,78 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
+import org.mockito.quality.Strictness;
 
 import org.chromium.base.ContextUtils;
-import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.browser.omnibox.fusebox.FuseboxAttachmentRecyclerViewAdapter.FuseboxAttachmentType;
+import org.chromium.chrome.browser.omnibox.fusebox.FuseboxMetrics.FuseboxAttachmentButtonType;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.browser.tabmodel.TabModelSelector;
-import org.chromium.components.contextual_search.FileUploadStatus;
+import org.chromium.components.contextual_search.ContextUploadErrorType;
+import org.chromium.components.contextual_search.ContextUploadStatus;
 import org.chromium.components.omnibox.OmniboxFeatures;
 import org.chromium.content_public.browser.RenderWidgetHostView;
 import org.chromium.content_public.browser.WebContents;
 
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @RunWith(BaseRobolectricTestRunner.class)
 public class FuseboxAttachmentModelListUnitTest {
-    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Rule
+    public final MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
 
     @Mock private ComposeboxQueryControllerBridge mComposeboxQueryControllerBridge;
-    @Mock private TabModelSelector mTabModelSelector;
     @Mock private FuseboxAttachmentModelList.FuseboxAttachmentChangeListener mListener;
+    @Mock private Tab mTab;
+    @Mock private Runnable mAttachmentUploadFailedListener;
+    @Mock private WebContents mWebContents;
+    @Mock private RenderWidgetHostView mRenderWidgetHostView;
 
     private Resources mResources;
     private FuseboxAttachmentModelList mFuseboxAttachmentModelList;
 
     private FuseboxAttachment createTestAttachment(String title) {
         return FuseboxAttachment.forFile(
-                /* thumbnail= */ null, title + ".txt", "mime/" + title, title.getBytes());
+                /* thumbnail= */ null,
+                title + ".txt",
+                "mime/" + title,
+                title.getBytes(),
+                SystemClock.elapsedRealtime(),
+                FuseboxAttachmentButtonType.FILES);
     }
 
     @Before
     public void setUp() {
         OmniboxFeatures.sMultiattachmentFusebox.setForTesting(true);
-        mFuseboxAttachmentModelList =
-                new FuseboxAttachmentModelList(
-                        ObservableSuppliers.createNonNull(mTabModelSelector));
+        mFuseboxAttachmentModelList = new FuseboxAttachmentModelList();
         mFuseboxAttachmentModelList.setComposeboxQueryControllerBridge(
                 mComposeboxQueryControllerBridge);
-        verify(mComposeboxQueryControllerBridge).setFileUploadObserver(mFuseboxAttachmentModelList);
+        verify(mComposeboxQueryControllerBridge)
+                .setContextUploadObserver(mFuseboxAttachmentModelList);
         mResources = ContextUtils.getApplicationContext().getResources();
         mFuseboxAttachmentModelList.addAttachmentChangeListener(mListener);
+        mFuseboxAttachmentModelList.setAttachmentUploadFailedListener(
+                mAttachmentUploadFailedListener);
+    }
+
+    private FuseboxAttachment createTabAttachment(Tab tab) {
+        return FuseboxAttachment.forTab(
+                tab,
+                /* bypassTabCache= */ false,
+                mResources,
+                FuseboxAttachmentButtonType.TAB_PICKER,
+                /* isSuggestedTab= */ false);
     }
 
     private FuseboxAttachment createTabAttachment(int tabId, String token) {
         Tab tab = mock(Tab.class);
         when(tab.getId()).thenReturn(tabId);
-        var attachment = FuseboxAttachment.forTab(tab, mResources);
-        when(mComposeboxQueryControllerBridge.addTabContextFromCache(tabId)).thenReturn(token);
+        var attachment = createTabAttachment(tab);
+        when(mComposeboxQueryControllerBridge.addTabContextFromCache(
+                        tabId, /* isSuggestedTab= */ false))
+                .thenReturn(token);
         return attachment;
     }
 
@@ -116,6 +143,17 @@ public class FuseboxAttachmentModelListUnitTest {
     }
 
     @Test
+    public void testAdd_withInvalidToken_notifiesUploadFailed() {
+        when(mComposeboxQueryControllerBridge.addFile(anyString(), anyString(), any()))
+                .thenReturn(null);
+
+        FuseboxAttachment attachment = createTestAttachment("test");
+        mFuseboxAttachmentModelList.add(attachment);
+
+        verify(mAttachmentUploadFailedListener).run();
+    }
+
+    @Test
     public void testAdd_withEmptyToken_doesNotAddItem() {
         when(mComposeboxQueryControllerBridge.addFile(anyString(), anyString(), any()))
                 .thenReturn("");
@@ -137,7 +175,7 @@ public class FuseboxAttachmentModelListUnitTest {
         FuseboxAttachment attachment = createTestAttachment("test");
 
         mFuseboxAttachmentModelList.setComposeboxQueryControllerBridge(null);
-        verify(mComposeboxQueryControllerBridge).setFileUploadObserver(null);
+        verify(mComposeboxQueryControllerBridge).setContextUploadObserver(null);
 
         assertFalse(mFuseboxAttachmentModelList.isSessionStarted());
         mFuseboxAttachmentModelList.add(attachment);
@@ -156,7 +194,7 @@ public class FuseboxAttachmentModelListUnitTest {
         FuseboxAttachment attachment = createTestAttachment("test");
         mFuseboxAttachmentModelList.add(attachment);
 
-        mFuseboxAttachmentModelList.remove(attachment);
+        mFuseboxAttachmentModelList.remove(attachment, /* isFailure= */ false);
         verify(mComposeboxQueryControllerBridge).notifySessionStarted();
         verify(mComposeboxQueryControllerBridge)
                 .addFile(eq("test.txt"), eq("mime/test"), eq("test".getBytes()));
@@ -176,11 +214,11 @@ public class FuseboxAttachmentModelListUnitTest {
         mFuseboxAttachmentModelList.add(firstAttachment);
         mFuseboxAttachmentModelList.add(secondAttachment);
 
-        mFuseboxAttachmentModelList.remove(firstAttachment);
+        mFuseboxAttachmentModelList.remove(firstAttachment, /* isFailure= */ false);
         verify(mComposeboxQueryControllerBridge, never()).notifySessionAbandoned();
         assertTrue(mFuseboxAttachmentModelList.isSessionStarted());
 
-        mFuseboxAttachmentModelList.remove(secondAttachment);
+        mFuseboxAttachmentModelList.remove(secondAttachment, /* isFailure= */ false);
         verify(mComposeboxQueryControllerBridge).notifySessionStarted();
         verify(mComposeboxQueryControllerBridge)
                 .addFile(eq("first.txt"), eq("mime/first"), eq("first".getBytes()));
@@ -252,7 +290,7 @@ public class FuseboxAttachmentModelListUnitTest {
         assertEquals(1, mFuseboxAttachmentModelList.size());
 
         mFuseboxAttachmentModelList.setComposeboxQueryControllerBridge(null);
-        verify(mComposeboxQueryControllerBridge).setFileUploadObserver(null);
+        verify(mComposeboxQueryControllerBridge).setContextUploadObserver(null);
 
         assertEquals(0, mFuseboxAttachmentModelList.size());
         verify(mComposeboxQueryControllerBridge).notifySessionStarted();
@@ -272,7 +310,7 @@ public class FuseboxAttachmentModelListUnitTest {
         assertEquals(1, mFuseboxAttachmentModelList.size());
 
         mFuseboxAttachmentModelList.destroy();
-        verify(mComposeboxQueryControllerBridge).setFileUploadObserver(null);
+        verify(mComposeboxQueryControllerBridge).setContextUploadObserver(null);
 
         assertEquals(0, mFuseboxAttachmentModelList.size());
         verify(mComposeboxQueryControllerBridge).notifySessionStarted();
@@ -326,8 +364,17 @@ public class FuseboxAttachmentModelListUnitTest {
         assertEquals("uploaded-token", attachment.getToken());
         assertFalse(attachment.isUploadComplete());
 
-        mFuseboxAttachmentModelList.onFileUploadStatusChanged(
-                "uploaded-token", FileUploadStatus.UPLOAD_SUCCESSFUL);
+        try (var ignored =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecord(
+                                "Omnibox.MobileFusebox.ContextUploadStatus",
+                                ContextUploadStatus.UPLOAD_SUCCESSFUL)
+                        .build()) {
+            mFuseboxAttachmentModelList.onContextUploadStatusChanged(
+                    "uploaded-token",
+                    ContextUploadStatus.UPLOAD_SUCCESSFUL,
+                    ContextUploadErrorType.UNKNOWN);
+        }
         assertTrue(attachment.isUploadComplete());
         verifyNoMoreInteractions(mComposeboxQueryControllerBridge);
     }
@@ -377,10 +424,27 @@ public class FuseboxAttachmentModelListUnitTest {
         assertFalse(preTokenizedAttachment.isUploadComplete());
         assertFalse(uploadedAttachment.isUploadComplete());
 
-        mFuseboxAttachmentModelList.onFileUploadStatusChanged(
-                "pretokenized-token", FileUploadStatus.UPLOAD_SUCCESSFUL);
-        mFuseboxAttachmentModelList.onFileUploadStatusChanged(
-                "uploaded-token", FileUploadStatus.UPLOAD_FAILED);
+        try (var ignored =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecord(
+                                "Omnibox.MobileFusebox.ContextUploadStatus",
+                                ContextUploadStatus.UPLOAD_SUCCESSFUL)
+                        .expectIntRecord(
+                                "Omnibox.MobileFusebox.ContextUploadStatus",
+                                ContextUploadStatus.UPLOAD_FAILED)
+                        .expectIntRecord(
+                                "Omnibox.MobileFusebox.ContextUploadError",
+                                ContextUploadErrorType.UNKNOWN)
+                        .build()) {
+            mFuseboxAttachmentModelList.onContextUploadStatusChanged(
+                    "pretokenized-token",
+                    ContextUploadStatus.UPLOAD_SUCCESSFUL,
+                    ContextUploadErrorType.UNKNOWN);
+            mFuseboxAttachmentModelList.onContextUploadStatusChanged(
+                    "uploaded-token",
+                    ContextUploadStatus.UPLOAD_FAILED,
+                    ContextUploadErrorType.UNKNOWN);
+        }
         assertTrue(uploadFailedNotified.get());
 
         assertTrue(preTokenizedAttachment.isUploadComplete());
@@ -394,7 +458,7 @@ public class FuseboxAttachmentModelListUnitTest {
     public void testMaxAttachments() {
         when(mComposeboxQueryControllerBridge.addFile(anyString(), anyString(), any()))
                 .thenReturn("pretokenized-token", "uploaded-token");
-        for (int i = 0; i < FuseboxAttachmentModelList.MAX_ATTACHMENTS; i++) {
+        for (int i = 0; i < FuseboxAttachmentModelList.getMaxAttachments(); i++) {
             FuseboxAttachment attachment = createTestAttachment("pretokenized");
             assertTrue(mFuseboxAttachmentModelList.add(attachment));
         }
@@ -415,7 +479,7 @@ public class FuseboxAttachmentModelListUnitTest {
     public void testRemove_tabAttachment_untracksTabId() {
         FuseboxAttachment attachment = createTabAttachment(1, "tab-token-1");
         mFuseboxAttachmentModelList.add(attachment);
-        mFuseboxAttachmentModelList.remove(attachment);
+        mFuseboxAttachmentModelList.remove(attachment, /* isFailure= */ false);
         assertFalse(mFuseboxAttachmentModelList.getAttachedTabIds().contains(1));
     }
 
@@ -436,18 +500,15 @@ public class FuseboxAttachmentModelListUnitTest {
 
     @Test
     public void testCurrentTabDirectlyFetchesContext() {
-        Tab tab = mock(Tab.class);
-        WebContents webContents = mock(WebContents.class);
-        RenderWidgetHostView renderWidgetHostView = mock(RenderWidgetHostView.class);
-        doReturn(1).when(tab).getId();
-        doReturn(true).when(tab).isInitialized();
-        doReturn(false).when(tab).isFrozen();
-        doReturn(webContents).when(tab).getWebContents();
-        doReturn(renderWidgetHostView).when(webContents).getRenderWidgetHostView();
-        when(mComposeboxQueryControllerBridge.addTabContext(tab)).thenReturn("token");
-        doReturn(tab).when(mTabModelSelector).getCurrentTab();
+        doReturn(1).when(mTab).getId();
+        doReturn(true).when(mTab).isInitialized();
+        doReturn(false).when(mTab).isFrozen();
+        doReturn(mWebContents).when(mTab).getWebContents();
+        doReturn(mRenderWidgetHostView).when(mWebContents).getRenderWidgetHostView();
+        when(mComposeboxQueryControllerBridge.addTabContext(mTab, /* isSuggestedTab= */ false))
+                .thenReturn("token");
 
-        FuseboxAttachment tabAttachment = FuseboxAttachment.forTab(tab, mResources);
+        FuseboxAttachment tabAttachment = createTabAttachment(mTab);
         mFuseboxAttachmentModelList.add(tabAttachment);
 
         assertEquals("token", tabAttachment.getToken());
@@ -455,19 +516,16 @@ public class FuseboxAttachmentModelListUnitTest {
 
     @Test
     public void testIncognitoTabDoesNotUseCache() {
-        Tab tab = mock(Tab.class);
-        WebContents webContents = mock(WebContents.class);
-        RenderWidgetHostView renderWidgetHostView = mock(RenderWidgetHostView.class);
-        doReturn(1).when(tab).getId();
-        doReturn(true).when(tab).isInitialized();
-        doReturn(false).when(tab).isFrozen();
-        doReturn(true).when(tab).isIncognitoBranded();
-        doReturn(webContents).when(tab).getWebContents();
-        doReturn(renderWidgetHostView).when(webContents).getRenderWidgetHostView();
-        when(mComposeboxQueryControllerBridge.addTabContext(tab)).thenReturn("token");
-        doReturn(null).when(mTabModelSelector).getCurrentTab();
+        doReturn(1).when(mTab).getId();
+        doReturn(true).when(mTab).isInitialized();
+        doReturn(false).when(mTab).isFrozen();
+        doReturn(true).when(mTab).isIncognitoBranded();
+        doReturn(mWebContents).when(mTab).getWebContents();
+        doReturn(mRenderWidgetHostView).when(mWebContents).getRenderWidgetHostView();
+        when(mComposeboxQueryControllerBridge.addTabContext(mTab, /* isSuggestedTab= */ false))
+                .thenReturn("token");
 
-        FuseboxAttachment tabAttachment = FuseboxAttachment.forTab(tab, mResources);
+        FuseboxAttachment tabAttachment = createTabAttachment(mTab);
         mFuseboxAttachmentModelList.add(tabAttachment);
 
         assertEquals("token", tabAttachment.getToken());
@@ -475,47 +533,45 @@ public class FuseboxAttachmentModelListUnitTest {
 
     @Test
     public void testRetryTabUpload_failedImmediately() {
-        Tab tab = mock(Tab.class);
-        WebContents webContents = mock(WebContents.class);
-        RenderWidgetHostView renderWidgetHostView = mock(RenderWidgetHostView.class);
-        doReturn(1).when(tab).getId();
-        doReturn(true).when(tab).isInitialized();
-        doReturn(false).when(tab).isFrozen();
-        doReturn(webContents).when(tab).getWebContents();
-        doReturn(renderWidgetHostView).when(webContents).getRenderWidgetHostView();
-        when(mComposeboxQueryControllerBridge.addTabContext(tab)).thenReturn("token2");
-        when(mComposeboxQueryControllerBridge.addTabContextFromCache(1)).thenReturn("");
-        doReturn(null).when(mTabModelSelector).getCurrentTab();
+        doReturn(1).when(mTab).getId();
+        doReturn(true).when(mTab).isInitialized();
+        doReturn(false).when(mTab).isFrozen();
+        doReturn(mWebContents).when(mTab).getWebContents();
+        doReturn(mRenderWidgetHostView).when(mWebContents).getRenderWidgetHostView();
+        when(mComposeboxQueryControllerBridge.addTabContext(mTab, /* isSuggestedTab= */ false))
+                .thenReturn("token2");
+        when(mComposeboxQueryControllerBridge.addTabContextFromCache(
+                        1, /* isSuggestedTab= */ false))
+                .thenReturn("");
 
-        FuseboxAttachment tabAttachment = FuseboxAttachment.forTab(tab, mResources);
+        FuseboxAttachment tabAttachment = createTabAttachment(mTab);
         mFuseboxAttachmentModelList.add(tabAttachment);
         assertEquals("token2", tabAttachment.getToken());
     }
 
     @Test
     public void testRetryTabUpload_failedAfterTokenGenerated() {
-        Tab tab = mock(Tab.class);
-        WebContents webContents = mock(WebContents.class);
-        RenderWidgetHostView renderWidgetHostView = mock(RenderWidgetHostView.class);
-        doReturn(1).when(tab).getId();
-        doReturn(true).when(tab).isInitialized();
-        doReturn(false).when(tab).isFrozen();
-        doReturn(webContents).when(tab).getWebContents();
-        doReturn(renderWidgetHostView).when(webContents).getRenderWidgetHostView();
-        when(mComposeboxQueryControllerBridge.addTabContextFromCache(1)).thenReturn("token");
-        doReturn(null).when(mTabModelSelector).getCurrentTab();
+        doReturn(1).when(mTab).getId();
+        doReturn(true).when(mTab).isInitialized();
+        doReturn(false).when(mTab).isFrozen();
+        doReturn(mWebContents).when(mTab).getWebContents();
+        doReturn(mRenderWidgetHostView).when(mWebContents).getRenderWidgetHostView();
+        when(mComposeboxQueryControllerBridge.addTabContextFromCache(
+                        1, /* isSuggestedTab= */ false))
+                .thenReturn("token");
 
-        FuseboxAttachment tabAttachment = FuseboxAttachment.forTab(tab, mResources);
+        FuseboxAttachment tabAttachment = createTabAttachment(mTab);
         mFuseboxAttachmentModelList.add(tabAttachment);
         assertEquals("token", tabAttachment.getToken());
 
-        when(mComposeboxQueryControllerBridge.addTabContext(tab)).thenReturn("token2");
-        mFuseboxAttachmentModelList.onFileUploadStatusChanged(
-                "token", FileUploadStatus.VALIDATION_FAILED);
+        when(mComposeboxQueryControllerBridge.addTabContext(mTab, /* isSuggestedTab= */ false))
+                .thenReturn("token2");
+        mFuseboxAttachmentModelList.onContextUploadStatusChanged(
+                "token", ContextUploadStatus.VALIDATION_FAILED, ContextUploadErrorType.UNKNOWN);
         assertEquals("token2", tabAttachment.getToken());
 
-        mFuseboxAttachmentModelList.onFileUploadStatusChanged(
-                "token2", FileUploadStatus.VALIDATION_FAILED);
+        mFuseboxAttachmentModelList.onContextUploadStatusChanged(
+                "token2", ContextUploadStatus.VALIDATION_FAILED, ContextUploadErrorType.UNKNOWN);
         assertTrue(mFuseboxAttachmentModelList.isEmpty());
     }
 
@@ -584,17 +640,98 @@ public class FuseboxAttachmentModelListUnitTest {
 
         // Add an attachment before starting the batch edit.
         mFuseboxAttachmentModelList.add(attachment1);
-        // Reset the listener to ignore the notification from the previous add.
-        reset(mListener);
+        // Clear invocations on listener to ignore the notification from the previous add.
+        clearInvocations(mListener);
 
         try (var token = mFuseboxAttachmentModelList.beginBatchEdit()) {
             mFuseboxAttachmentModelList.add(attachment2);
-            mFuseboxAttachmentModelList.remove(attachment1);
+            mFuseboxAttachmentModelList.remove(attachment1, /* isFailure= */ false);
             verify(mListener, never()).onAttachmentListChanged();
         }
 
         verify(mListener).onAttachmentListChanged();
         assertEquals(1, mFuseboxAttachmentModelList.size());
         assertEquals(attachment2, mFuseboxAttachmentModelList.get(0));
+    }
+
+    @Test
+    public void testNotifyAttachmentSucceeded() {
+        try (var ignored =
+                HistogramWatcher.newBuilder()
+                        .expectAnyRecord("Omnibox.MobileFusebox.AttachmentSucceeded")
+                        .expectAnyRecord("Omnibox.MobileFusebox.AttachmentSucceeded.Files")
+                        .build()) {
+            when(mComposeboxQueryControllerBridge.addFile(anyString(), anyString(), any()))
+                    .thenReturn("token1");
+            FuseboxAttachment attachment = createTestAttachment("test");
+            mFuseboxAttachmentModelList.add(attachment);
+            mFuseboxAttachmentModelList.onContextUploadStatusChanged(
+                    "token1",
+                    ContextUploadStatus.UPLOAD_SUCCESSFUL,
+                    ContextUploadErrorType.UNKNOWN);
+        }
+    }
+
+    @Test
+    public void testNotifyAttachmentFailed() {
+        try (var ignored =
+                HistogramWatcher.newBuilder()
+                        .expectAnyRecord("Omnibox.MobileFusebox.AttachmentFailed")
+                        .expectAnyRecord("Omnibox.MobileFusebox.AttachmentFailed.Files")
+                        .build()) {
+            when(mComposeboxQueryControllerBridge.addFile(anyString(), anyString(), any()))
+                    .thenReturn("token1");
+            FuseboxAttachment attachment = createTestAttachment("test");
+            mFuseboxAttachmentModelList.add(attachment);
+            mFuseboxAttachmentModelList.remove(attachment, /* isFailure= */ true);
+        }
+    }
+
+    @Test
+    public void testNotifyAttachmentAbandoned() {
+        try (var ignored =
+                HistogramWatcher.newBuilder()
+                        .expectAnyRecord("Omnibox.MobileFusebox.AttachmentAbandoned")
+                        .expectAnyRecord("Omnibox.MobileFusebox.AttachmentAbandoned.Files")
+                        .build()) {
+            when(mComposeboxQueryControllerBridge.addFile(anyString(), anyString(), any()))
+                    .thenReturn("token1");
+            FuseboxAttachment attachment = createTestAttachment("test");
+            mFuseboxAttachmentModelList.add(attachment);
+            mFuseboxAttachmentModelList.remove(attachment, /* isFailure= */ false);
+        }
+    }
+
+    @Test
+    public void testRemoveTabsNotInSet() {
+        mFuseboxAttachmentModelList.add(createTabAttachment(/* tabId= */ 1, "tab-token-1"));
+        mFuseboxAttachmentModelList.add(createTabAttachment(/* tabId= */ 2, "tab-token-1"));
+        mFuseboxAttachmentModelList.add(createTabAttachment(/* tabId= */ 3, "tab-token-1"));
+        assertThat(mFuseboxAttachmentModelList.getAttachedTabIds()).containsExactly(1, 2, 3);
+
+        mFuseboxAttachmentModelList.removeTabsNotInSet(Set.of(1, 3, 5));
+        assertThat(mFuseboxAttachmentModelList.getAttachedTabIds()).containsExactly(1, 3);
+
+        mFuseboxAttachmentModelList.removeTabsNotInSet(Set.of());
+        assertThat(mFuseboxAttachmentModelList.getAttachedTabIds()).isEmpty();
+    }
+
+    @Test
+    public void testRetryTabUpload_failedSynchronously_removesAttachment() {
+        doReturn(1).when(mTab).getId();
+        doReturn(true).when(mTab).isInitialized();
+        doReturn(false).when(mTab).isFrozen();
+        doReturn(null).when(mTab).getWebContents();
+        when(mComposeboxQueryControllerBridge.addTabContextFromCache(
+                        1, /* isSuggestedTab= */ false))
+                .thenReturn("token");
+        FuseboxAttachment tabAttachment = createTabAttachment(mTab);
+        mFuseboxAttachmentModelList.add(tabAttachment);
+
+        mFuseboxAttachmentModelList.onContextUploadStatusChanged(
+                "token", ContextUploadStatus.VALIDATION_FAILED, ContextUploadErrorType.UNKNOWN);
+
+        assertTrue(mFuseboxAttachmentModelList.isEmpty());
+        verify(mComposeboxQueryControllerBridge).removeAttachment("token");
     }
 }

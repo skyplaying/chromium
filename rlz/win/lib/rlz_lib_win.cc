@@ -150,13 +150,17 @@ bool CreateMachineState() {
   }
 
   // Add ALL-USERS ALL-ACCESS ACL.
+  // Use BuildExplicitAccessWithName to initialize the EXPLICIT_ACCESS
+  // structure. This is the recommended way by Microsoft to ensure all fields
+  // are correctly initialized and to maintain backward compatibility. Ref:
+  // https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-buildexplicitaccesswithnamew
   EXPLICIT_ACCESS ea;
-  UNSAFE_TODO(ZeroMemory(&ea, sizeof(EXPLICIT_ACCESS)));
-  ea.grfAccessPermissions = GENERIC_ALL | KEY_ALL_ACCESS;
-  ea.grfAccessMode = GRANT_ACCESS;
-  ea.grfInheritance= SUB_CONTAINERS_AND_OBJECTS_INHERIT;
-  ea.Trustee.TrusteeForm = TRUSTEE_IS_NAME;
-  ea.Trustee.ptstrName = const_cast<wchar_t*>(L"Everyone");
+  BuildExplicitAccessWithName(
+      &ea,
+      /*pTrusteeName=*/const_cast<wchar_t*>(L"Everyone"),
+      /*AccessPermissions=*/GENERIC_ALL | KEY_ALL_ACCESS,
+      /*AccessMode=*/GRANT_ACCESS,
+      /*Inheritance=*/SUB_CONTAINERS_AND_OBJECTS_INHERIT);
 
   ACL* new_dacl = NULL;
   result = SetEntriesInAcl(1, &ea, dacl, &new_dacl);
@@ -191,21 +195,21 @@ bool CreateMachineState() {
   return success;
 }
 
-bool SetMachineDealCode(const char* dcc) {
+bool SetMachineDealCode(std::string_view dcc) {
   return MachineDealCode::Set(dcc);
 }
 
-bool GetMachineDealCodeAsCgi(char* cgi, size_t cgi_size) {
-  return MachineDealCode::GetAsCgi(cgi, cgi_size);
+std::optional<std::string> GetMachineDealCodeAsCgi() {
+  return MachineDealCode::GetAsCgi();
 }
 
-bool GetMachineDealCode(char* dcc, size_t dcc_size) {
-  return MachineDealCode::Get(dcc, dcc_size);
+std::optional<std::string> GetMachineDealCode() {
+  return MachineDealCode::Get();
 }
 
 // Combined functions.
 
-bool SetMachineDealCodeFromPingResponse(const char* response) {
+bool SetMachineDealCodeFromPingResponse(std::string_view response) {
   return MachineDealCode::SetFromPingResponse(response);
 }
 

@@ -54,37 +54,6 @@ chromium-metrics-reviews@google.com.
   <int value="1" label="Keyboard"/>
 </enum>
 
-<enum name="AmbientDlcError">
-<!-- This enum needs to match DlcError in
-ash/ambient/util/time_of_day_utils.h -->
-
-  <summary>List of all the error types that DLC Service returns.</summary>
-  <int value="0" label="Unknown"/>
-  <int value="1" label="None"/>
-  <int value="2" label="Internal"/>
-  <int value="3" label="Busy"/>
-  <int value="4" label="Need reboot"/>
-  <int value="5" label="Invalid DLC"/>
-  <int value="6" label="Allocation"/>
-  <int value="7" label="No image found"/>
-</enum>
-
-<enum name="AmbientModeAnimationTheme">
-  <int value="0" label="Slide Show"/>
-  <int value="1" label="Feel The Breeze"/>
-  <int value="2" label="Float On By"/>
-  <int value="3" label="Video"/>
-</enum>
-
-<enum name="AmbientModeDurationOption">
-  <int value="0" label="Forever"/>
-  <int value="1" label="For 5 minutes"/>
-  <int value="2" label="For 10 minutes"/>
-  <int value="3" label="For 30 minutes"/>
-  <int value="4" label="For 1 hour"/>
-  <int value="5" label="Error: unknown duration value"/>
-</enum>
-
 <enum name="AmbientModePhotoSource">
   <int value="0" label="Default">
     This is when user clicked on the top level Screen Saver toggle but did not
@@ -105,16 +74,6 @@ ash/webui/personalization_app/mojom/personalization_app.mojom -->
   <int value="0" label="Google Photos"/>
   <int value="1" label="Art Gallery"/>
   <int value="2" label="Video"/>
-</enum>
-
-<enum name="AmbientModeVideo">
-  <int value="0" label="Clouds"/>
-  <int value="1" label="New Mexico"/>
-</enum>
-
-<enum name="AmbientUiMode">
-  <int value="0" label="Lock Screen"/>
-  <int value="1" label="In Session Idle"/>
 </enum>
 
 <enum name="AmbientVideoSessionStatus">
@@ -214,6 +173,8 @@ ash/webui/personalization_app/mojom/personalization_app.mojom -->
   <int value="2" label="Fingerprint"/>
 </enum>
 
+<!-- LINT.IfChange(AuthMethod) -->
+
 <enum name="AuthMethod">
   <int value="0" label="Password"/>
   <int value="1" label="PIN"/>
@@ -222,6 +183,10 @@ ash/webui/personalization_app/mojom/personalization_app.mojom -->
   <int value="4" label="Challenge-response"/>
   <int value="5" label="Nothing"/>
 </enum>
+
+<!-- LINT.ThenChange(//chrome/browser/ash/login/login_auth_recorder.h:AuthMethod) -->
+
+<!-- LINT.IfChange(AuthMethodSwitchType) -->
 
 <enum name="AuthMethodSwitchType">
   <int value="0" label="Password to PIN"/>
@@ -243,6 +208,8 @@ ash/webui/personalization_app/mojom/personalization_app.mojom -->
   <int value="16" label="Nothing to Fingerprint"/>
   <int value="17" label="Nothing to Challenge-response"/>
 </enum>
+
+<!-- LINT.ThenChange(//chrome/browser/ash/login/login_auth_recorder.h:AuthMethodSwitchType) -->
 
 <!-- LINT.IfChange(BabelOrcaReceivingStoppedReason) -->
 
@@ -422,12 +389,6 @@ ash/webui/personalization_app/mojom/personalization_app.mojom -->
   <int value="3" label="kTopRight"/>
 </enum>
 
-<enum name="CameraPrivacySwitchEvent">
-  <int value="0" label="Camera privacy switch toggled on"/>
-  <int value="1" label="Camera privacy switch toggled off"/>
-  <int value="2" label="Camera privacy switch on notification shown"/>
-</enum>
-
 <enum name="CaptureModeBarButtonType">
   <int value="0" label="Screen Capture Button"/>
   <int value="1" label="Screen Record Button"/>
@@ -586,12 +547,6 @@ ash/webui/personalization_app/mojom/personalization_app.mojom -->
   <int value="5" label="UserShutdown"/>
 </enum>
 
-<enum name="DataFetchEventSource">
-  <int value="0" label="PostLoginFullRestore"/>
-  <int value="1" label="Overview"/>
-  <int value="2" label="Calendar"/>
-</enum>
-
 <enum name="DemoModeApp">
   <summary>
     Pre-installed app or other window type available in Chrome OS Demo Mode.
@@ -673,11 +628,15 @@ ash/webui/personalization_app/mojom/personalization_app.mojom -->
   <int value="15" label="Google Built-in button click"/>
 </enum>
 
+<!-- LINT.IfChange(DemoModeHighlightsError) -->
+
 <enum name="DemoModeHighlightsError">
   <int value="0" label="Attract loop break timestamp is invalid"/>
   <int value="1" label="Page view duration is invalid"/>
   <int value="2" label="Details page view duration is invalid"/>
 </enum>
+
+<!-- LINT.ThenChange(//ash/webui/demo_mode_app_ui/resources/demo_mode_metrics_service.ts:DemoModeHighlightsError) -->
 
 <enum name="DemoModeIdleLogoutWarningEvent">
   <int value="0" label="Shown"/>
@@ -1529,21 +1488,6 @@ ash/webui/personalization_app/mojom/personalization_app.mojom -->
   <int value="1" label="Group Child"/>
 </enum>
 
-<enum name="HapticClickSensitivity">
-  <int value="1" label="1"/>
-  <int value="2" label="2"/>
-  <int value="3" label="3"/>
-  <int value="4" label="4"/>
-  <int value="5" label="5"/>
-</enum>
-
-<enum name="HotseatInAppGesture">
-  <int value="0" label="Swipe up the hotseat"/>
-  <int value="1" label="Swipe down the hotseat"/>
-  <int value="2" label="Fling up the hotseat to show homescreen"/>
-  <int value="3" label="Interact outside of shelf to hide hotseat"/>
-</enum>
-
 <enum name="KcerPkcs12MigrationEvent">
   <int value="0" label="MigrationStarted"/>
   <int value="1" label="NothingToMigrate"/>
@@ -1677,15 +1621,6 @@ ash/webui/personalization_app/mojom/personalization_app.mojom -->
   <int value="3" label="Gesture fling"/>
   <int value="4" label="Gesture scroll"/>
   <int value="5" label="Accelerator"/>
-</enum>
-
-<enum name="NotificationImageDragEndState">
-<!-- Defined in ash/system/message_center/ash_notification_drag_controller.h -->
-
-  <int value="0" label="InterruptedByNewDrag"/>
-  <int value="1" label="Cancelled"/>
-  <int value="2" label="CompletedWithDrop"/>
-  <int value="3" label="CompletedWithoutDrop"/>
 </enum>
 
 <enum name="NotificationViewType">
@@ -1891,7 +1826,7 @@ chromeos/ash/components/peripheral_notification/peripheral_notification_manager.
   <int value="3" label="Alt-mode fallback due to Pciguard"/>
   <int value="4" label="Alt-mode fallback in guest session"/>
   <int value="5" label="Peripheral blocked"/>
-  <int value="6" label="Billboard device"/>
+  <int value="6" label="(deprecated) Billboard device"/>
   <int value="7" label="Invalid DP alternate mode cable"/>
   <int value="8" label="USB4 device uses Thunderbolt due to the cable"/>
   <int value="9" label="USB4 device with incompatible cable"/>
@@ -1913,15 +1848,6 @@ chromeos/ash/components/peripheral_notification/peripheral_notification_manager.
   <int value="2" label="kLightPink"/>
   <int value="3" label="kDarkGreen"/>
   <int value="4" label="kLightPurple"/>
-</enum>
-
-<enum name="PersonalizationEntryPoint">
-  <int value="0" label="Home Screen"/>
-  <int value="1" label="System Tray"/>
-  <int value="2" label="Launcher search"/>
-  <int value="3" label="Settings"/>
-  <int value="4" label="Settings search"/>
-  <int value="5" label="Keyboard brightness slider"/>
 </enum>
 
 <enum name="PersonalizationKeyboardBacklightColor">
@@ -2010,32 +1936,56 @@ chromeos/ash/components/peripheral_notification/peripheral_notification_manager.
 
 <enum name="ProfileManagerCallersCodeLocation">
   <summary>List of known callers of ProfileManager methods.</summary>
+  <int value="-2137855052"
+      label="Show@chrome/browser/ui/webui/ash/emoji/emoji_ui.cc"/>
   <int value="-2110459035"
       label="CalculateRequiredSpace@chrome/browser/ash/login/screens/drive_pinning_screen.cc"/>
   <int value="-2092499396"
       label="GetNightLightTemperaturePercent@chrome/browser/ash/power/ml/adaptive_screen_brightness_manager.cc"/>
+  <int value="-1985805005"
+      label="IsCrosLocationOobeNegotiationNeeded@chrome/browser/ash/privacy_hub/privacy_hub_util.cc"/>
+  <int value="-1912121669"
+      label="IsAccessAllowed@chrome/browser/extensions/api/enterprise_device_attributes/enterprise_device_attributes_api.cc"/>
   <int value="-1903493274"
       label="GetPrefService@chrome/browser/ash/events/event_rewriter_delegate_impl.cc"/>
   <int value="-1890949485"
       label="GetProfile@chrome/browser/ui/ash/keyboard/chrome_keyboard_controller_client.cc"/>
   <int value="-1837780760"
       label="GetProfile@chrome/browser/ash/growth/campaigns_manager_client_impl.cc"/>
+  <int value="-1729971741"
+      label="ShouldShowSurvey@chrome/browser/ash/audio/audio_survey_handler.cc"/>
+  <int value="-1708239267"
+      label="Run@chrome/browser/extensions/api/enterprise_networking_attributes/enterprise_networking_attributes_api.cc"/>
   <int value="-1693908690"
       label="TriggerAccessibilityAlertWithMessage@chrome/browser/ui/ash/accessibility/accessibility_controller_client.cc"/>
+  <int value="-1631173654"
+      label="ShouldShowNotificationForVolume@chrome/browser/ash/extensions/file_manager/event_router.cc"/>
   <int value="-1619333235"
       label="profile@chrome/browser/ash/usb/cros_usb_detector.cc"/>
+  <int value="-1577126370"
+      label="AshWebViewImpl@chrome/browser/ui/ash/web_view/ash_web_view_impl.cc"/>
+  <int value="-1569713187"
+      label="OnUpdateVmProcessList@chrome/browser/task_manager/providers/vm/vm_process_task_provider.cc"/>
   <int value="-1566119484"
       label="SetActiveProfile@chrome/browser/ash/accessibility/accessibility_manager.cc"/>
   <int value="-1555475204"
       label="ShowImpl@chrome/browser/ash/login/screens/consolidated_consent_screen.cc"/>
   <int value="-1480802574"
       label="SetApplicationLocale@chrome/browser/ash/login/screens/welcome_screen.cc"/>
+  <int value="-1327712601"
+      label="Decorate@chrome/browser/enterprise/connectors/device_trust/signals/decorators/ash/ash_signals_decorator.cc"/>
+  <int value="-1064754214"
+      label="PopulateSyncLogs@chrome/browser/feedback/system_logs/log_sources/chrome_internal_log_source.cc"/>
   <int value="-940486992"
       label="GetPrimaryUserProfile@chrome/browser/extensions/profile_util.cc"/>
   <int value="-913390141"
       label="GetAccessibilityOffscreenDocumentHost@chrome/browser/ash/accessibility/event_handler_common.cc"/>
+  <int value="-904718659"
+      label="MaybeSkip@chrome/browser/ash/login/screens/edu_coexistence_login_screen.cc"/>
   <int value="-870974028"
       label="GetForPrimaryProfile@chrome/browser/chromeos/policy/dlp/dlp_rules_manager_factory.cc"/>
+  <int value="-791968558"
+      label="ShowImpl@chrome/browser/ash/login/screens/categories_selection_screen.cc"/>
   <int value="-731617597"
       label="ProvideSuggestedContentMetrics@chrome/browser/metrics/chromeos_metrics_provider.cc"/>
   <int value="-675029606"
@@ -2046,32 +1996,64 @@ chromeos/ash/components/peripheral_notification/peripheral_notification_manager.
       label="IsConsumerAutoUpdateToggleEligible@chrome/browser/metrics/update_engine_metrics_provider.cc"/>
   <int value="-536788605"
       label="OnSessionStateChanged@chrome/browser/ui/ash/keyboard/chrome_keyboard_controller_client.cc"/>
+  <int value="-511033371"
+      label="ParseFileSystemURL@chrome/browser/ash/fusebox/fusebox_server.cc"/>
+  <int value="-331991081"
+      label="PopulateOnboardingTime@chrome/browser/feedback/system_logs/log_sources/chrome_internal_log_source.cc"/>
   <int value="-209803414"
       label="MaybeLogTotalUniqueSettingsChanged@chrome/browser/ui/webui/ash/settings/services/metrics/os_settings_metrics_provider.cc"/>
   <int value="-194737180"
       label="Report@chrome/browser/net/network_annotation_monitor.cc"/>
   <int value="-68731622"
       label="GetAccessibilityExtensionHost@chrome/browser/ash/accessibility/event_handler_common.cc"/>
+  <int value="-39910134"
+      label="OnProcessSnapshotRefreshed@chrome/browser/task_manager/providers/vm/vm_process_task_provider.cc"/>
   <int value="56661016"
       label="ShowSystemDialog@chrome/browser/ui/webui/ash/system_web_dialog/system_web_dialog_delegate.cc"/>
+  <int value="169014653"
+      label="ShowImpl@chrome/browser/ash/login/screens/perks_discovery_screen.cc"/>
+  <int value="364261213"
+      label="GetDictationDefaultLocale@chrome/browser/ash/accessibility/accessibility_manager.cc"/>
   <int value="481917096"
       label="GetQuickStartBootstrapController@chrome/browser/ui/ash/login/login_display_host_common.cc"/>
+  <int value="537715731"
+      label="MaybeSkip@chrome/browser/ash/login/screens/perks_discovery_screen.cc"/>
   <int value="722232762"
       label="CheckIfSanitizeCompleted@chrome/browser/ui/ash/main_extra_parts/chrome_browser_main_extra_parts_ash.cc"/>
+  <int value="728530662"
+      label="Cleanup@chrome/browser/chromeos/extensions/login_screen/login/cleanup/files_cleanup_handler.cc"/>
   <int value="732366350"
       label="FinalizeSavedFile@chrome/browser/ui/ash/capture_mode/chrome_capture_mode_delegate.cc"/>
   <int value="750794365"
       label="GetActiveDriveIntegrationService@chrome/browser/ui/ash/projector/projector_drivefs_provider.cc"/>
+  <int value="771880384"
+      label="MaybeSkip@chrome/browser/ash/login/screens/terms_of_service_screen.cc"/>
   <int value="780067749"
       label="GetPinningManager@chrome/browser/ash/login/screens/drive_pinning_screen.cc"/>
+  <int value="856493232"
+      label="ShouldShowSurvey@chrome/browser/ash/camera/camera_general_survey_handler.cc"/>
   <int value="858037437"
       label="OnLoginOrLockScreenVisible@chrome/browser/ash/accessibility/magnification_manager.cc"/>
   <int value="874944526"
       label="HandleMediaAction@chrome/browser/ui/ash/media_client/media_client_impl.cc"/>
   <int value="930273683"
       label="IsDriveFsBulkPinningAvailable@chrome/browser/ash/drive/file_system_util.cc"/>
+  <int value="977176806"
+      label="GetUserProfile@chrome/browser/policy/messaging_layer/util/user_dm_token_retriever.cc"/>
+  <int value="1031614968"
+      label="CreateEnrollmentDialog@chrome/browser/ui/ash/network/enrollment_dialog_view.cc"/>
+  <int value="1036717894"
+      label="GetPrimaryUserProfile@chrome/browser/profiles/profile_manager.cc"/>
   <int value="1049620263"
       label="QuickStartController@chrome/browser/ash/login/quickstart_controller.cc"/>
+  <int value="1162630157"
+      label="LaunchDateAndTimeSettings@chrome/browser/ssl/ssl_error_controller_client.cc"/>
+  <int value="1167995213"
+      label="ShowNotification@chrome/browser/ui/ash/device_scheduled_reboot/reboot_notification_controller.cc"/>
+  <int value="1198256253"
+      label="GetProfile@chrome/browser/ui/ash/global_media_controls/media_notification_provider_impl.cc"/>
+  <int value="1231716986"
+      label="IsActiveContext@chrome/browser/extensions/chrome_extensions_browser_client.cc"/>
   <int value="1242947673"
       label="ReportUsageOptIn@chrome/browser/ash/login/screens/consolidated_consent_screen.cc"/>
   <int value="1243596510"
@@ -2082,12 +2064,26 @@ chromeos/ash/components/peripheral_notification/peripheral_notification_manager.
       label="TriggerAccessibilityAlert@chrome/browser/ui/ash/accessibility/accessibility_controller_client.cc"/>
   <int value="1429178683"
       label="GetPolicyAsJSON@chrome/browser/ash/policy/uploading/system_log_uploader.cc"/>
+  <int value="1458852142"
+      label="SelectFileWithFileManagerParams@chrome/browser/ui/views/select_file_dialog_extension/select_file_dialog_extension.cc"/>
+  <int value="1534824252"
+      label="UploadEventBasedLogs@chrome/browser/ash/policy/reporting/event_based_logs/event_based_log_uploader.cc"/>
+  <int value="1571512052"
+      label="GetUserProfile@chrome/browser/ash/net/network_diagnostics/network_diagnostics_util.cc"/>
   <int value="1599361431"
       label="ShowConsolidatedConsentScreen@chrome/browser/ash/login/wizard_controller.cc"/>
+  <int value="1648800109"
+      label="MaybeSkip@chrome/browser/ash/login/screens/categories_selection_screen.cc"/>
   <int value="1678260800"
       label="IsOobeDrivePinningAvailable@chrome/browser/ash/drive/file_system_util.cc"/>
+  <int value="1695988064"
+      label="GetProfile@chrome/browser/ash/growth/campaigns_manager_session.cc"/>
   <int value="1748098054"
       label="GetActiveUserProfile@chrome/browser/extensions/profile_util.cc"/>
+  <int value="1749285742"
+      label="IsUserEnterpriseManaged@chrome/browser/ash/login/screens/osauth/password_selection_screen.cc"/>
+  <int value="1762155108"
+      label="CloseRebootNotification@chrome/browser/ui/ash/device_scheduled_reboot/reboot_notification_controller.cc"/>
   <int value="1795207622"
       label="IsExtensionCommandRegistered@chrome/browser/ash/events/event_rewriter_delegate_impl.cc"/>
   <int value="1818454360"
@@ -2098,6 +2094,8 @@ chromeos/ash/components/peripheral_notification/peripheral_notification_manager.
       label="ShowDialog@chrome/browser/ui/webui/ash/diagnostics_dialog/diagnostics_dialog.cc"/>
   <int value="2000962309"
       label="Uses24HourFormat@chrome/browser/ui/ash/capture_mode/chrome_capture_mode_delegate.cc"/>
+  <int value="2033611328"
+      label="MaybeSkip@chrome/browser/ash/login/screens/recommend_apps_screen.cc"/>
 </enum>
 
 <enum name="ProjectorCreationFlow">
@@ -2146,27 +2144,6 @@ chromeos/ash/components/peripheral_notification/peripheral_notification_manager.
   <int value="18" label="Undo (Obsolete)"/>
   <int value="19" label="Toggle toolbar location to top center (Obsolete)"/>
   <int value="20" label="Toggle toolbar location to bottom center (Obsolete)"/>
-</enum>
-
-<enum name="QsButtonCatalogName">
-  <int value="0" label="Unknown"/>
-  <int value="1" label="SignOutButton"/>
-  <int value="2" label="LockButton"/>
-  <int value="3" label="PowerButton"/>
-  <int value="4" label="SettingsButton"/>
-  <int value="5" label="DateViewButton"/>
-  <int value="6" label="BatteryButton"/>
-  <int value="7" label="ManagedButton"/>
-  <int value="8" label="AvatarButton"/>
-  <int value="9" label="CollapseButton"/>
-  <int value="10" label="FeedBackButton"/>
-  <int value="11" label="VersionButton"/>
-  <int value="12" label="PowerOffMenuButton"/>
-  <int value="13" label="PowerRestartMenuButton"/>
-  <int value="14" label="PowerSignoutMenuButton"/>
-  <int value="15" label="PowerLockMenuButton"/>
-  <int value="16" label="SupervisedButton"/>
-  <int value="19" label="ExtendedUpdatesNoticeButton"/>
 </enum>
 
 <enum name="QsFeatureCatalogName">
@@ -2625,12 +2602,6 @@ chromeos/ash/components/peripheral_notification/peripheral_notification_manager.
   <int value="5" label="Session exit due to converting to tablet mode"/>
 </enum>
 
-<enum name="SwipeHomeToOverviewResult">
-  <int value="0" label="Remained on the home screen"/>
-  <int value="1" label="Transitioned to overview"/>
-  <int value="2" label="Went back on the home screen"/>
-</enum>
-
 <enum name="TasksUserAction">
   <int value="0" label="Active task list changed"/>
   <int value="1" label="Task marked complete"/>
@@ -2746,13 +2717,15 @@ chromeos/ash/components/peripheral_notification/peripheral_notification_manager.
   <int value="18" label="Status Area Overflow Button"/>
   <int value="19" label="Virtual Keyboard Tray, Status Area"/>
   <int value="20" label="Virtual Keyboard Tray, Accesibility Window"/>
-  <int value="21" label="WM Mode Button"/>
+  <int value="21" label="WM Mode Button (Deprecated)"/>
   <int value="22" label="Video Conferencing Tray"/>
   <int value="23" label="Focus Mode Tray"/>
   <int value="24" label="Pods Overflow"/>
   <int value="25" label="Mouse Keys, Status Area"/>
   <int value="26" label="Chrome Custom"/>
 </enum>
+
+<!-- LINT.IfChange(VideoConferenceAppType) -->
 
 <enum name="VideoConferenceAppType">
   <summary>
@@ -2766,7 +2739,14 @@ chromeos/ash/components/peripheral_notification/peripheral_notification_manager.
   <int value="4" label="Web App"/>
   <int value="5" label="ARC App"/>
   <int value="6" label="App Service Unknown"/>
+  <int value="7" label="Crostini VM"/>
+  <int value="8" label="Plugin VM (deprecated)"/>
+  <int value="9" label="Borealis"/>
+  <int value="10" label="Ash Client Unknown"/>
+  <int value="11" label="Ash Capture Mode"/>
 </enum>
+
+<!-- LINT.ThenChange(//ash/system/video_conference/video_conference_common.h:VideoConferenceAppType) -->
 
 <enum name="WallpaperCollection">
   <int value="-1993504462" label="Native American Artists"/>
@@ -2794,7 +2774,7 @@ chromeos/ash/components/peripheral_notification/peripheral_notification_manager.
 
 <enum name="WallpaperGooglePhotosSource">
   <int value="0" label="Photos"/>
-  <int value="1" label="Albums"/>
+  <int value="1" label="(Obsolete) Albums"/>
   <int value="2" label="Owned Albums"/>
   <int value="3" label="Shared Albums"/>
 </enum>
@@ -3224,11 +3204,6 @@ chromeos/ash/components/peripheral_notification/peripheral_notification_manager.
   <int value="1" label="Center Cropped"/>
   <int value="2" label="Stretch"/>
   <int value="3" label="Tile"/>
-</enum>
-
-<enum name="WallpaperMigrationFailureReason">
-  <int value="0" label="Failed to fetch online variants"/>
-  <int value="1" label="Failed to find a valid online variant"/>
 </enum>
 
 <enum name="WallpaperMigrationStatus">

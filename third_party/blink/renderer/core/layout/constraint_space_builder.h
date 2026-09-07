@@ -32,41 +32,52 @@ class CORE_EXPORT ConstraintSpaceBuilder final {
                          WritingDirectionMode writing_direction,
                          bool is_new_fc,
                          bool adjust_inline_size_if_needed = true)
-      : ConstraintSpaceBuilder(parent_space.GetWritingMode(),
+      : ConstraintSpaceBuilder(parent_space,
+                               parent_space.GetWritingMode(),
                                writing_direction,
                                is_new_fc,
-                               /* force_orthogonal_writing_mode_root */ false,
-                               adjust_inline_size_if_needed) {
+                               adjust_inline_size_if_needed,
+                               /* force_orthogonal_writing_mode_root */ false) {
+  }
+
+  // The setters on this builder are in the writing mode of parent_writing_mode.
+  ConstraintSpaceBuilder(const ConstraintSpace& parent_space,
+                         WritingMode parent_writing_mode,
+                         WritingDirectionMode writing_direction,
+                         bool is_new_fc,
+                         bool adjust_inline_size_if_needed = true,
+                         bool force_orthogonal_writing_mode_root = false)
+      : ConstraintSpaceBuilder(
+            writing_direction,
+            IsParallelWritingMode(parent_writing_mode,
+                                  writing_direction.GetWritingMode()),
+            is_new_fc,
+            adjust_inline_size_if_needed,
+            force_orthogonal_writing_mode_root) {
     if (parent_space.ShouldPropagateChildBreakValues())
       SetShouldPropagateChildBreakValues();
     if (parent_space.ShouldRepeat())
       SetShouldRepeat(true);
     SetIsInsideRepeatableContent(parent_space.IsInsideRepeatableContent());
+    SetContainsAnnotations(parent_space.ContainsAnnotations());
   }
 
   // The setters on this builder are in the writing mode of parent_writing_mode.
   //
-  // forced_orthogonal_writing_mode_root is set for constraint spaces created
-  // directly from a LayoutObject. In this case parent_writing_mode isn't
-  // actually the parent's, it's the same as out_writing_mode.
-  // When this occurs we would miss setting the kOrthogonalWritingModeRoot flag
-  // unless we force it.
+  // force_orthogonal_writing_mode_root is used when parent_writing_mode isn't
+  // actually the parents.
   ConstraintSpaceBuilder(WritingMode parent_writing_mode,
                          WritingDirectionMode writing_direction,
                          bool is_new_fc,
-                         bool force_orthogonal_writing_mode_root = false,
-                         bool adjust_inline_size_if_needed = true)
-      : space_(writing_direction),
-        is_in_parallel_flow_(
+                         bool adjust_inline_size_if_needed = true,
+                         bool force_orthogonal_writing_mode_root = false)
+      : ConstraintSpaceBuilder(
+            writing_direction,
             IsParallelWritingMode(parent_writing_mode,
-                                  writing_direction.GetWritingMode())),
-        is_new_fc_(is_new_fc),
-        force_orthogonal_writing_mode_root_(force_orthogonal_writing_mode_root),
-        adjust_inline_size_if_needed_(adjust_inline_size_if_needed) {
-    space_.bitfields_.is_new_formatting_context = is_new_fc_;
-    space_.bitfields_.is_orthogonal_writing_mode_root =
-        !is_in_parallel_flow_ || force_orthogonal_writing_mode_root_;
-  }
+                                  writing_direction.GetWritingMode()),
+            is_new_fc,
+            adjust_inline_size_if_needed,
+            force_orthogonal_writing_mode_root) {}
 
   // If inline size is indefinite, use the fallback size for available inline
   // size for orthogonal flow roots. See:
@@ -210,6 +221,13 @@ class CORE_EXPORT ConstraintSpaceBuilder final {
     EnsureRareData()->is_inside_repeatable_content = b;
   }
 
+  void SetIsInsideBreakAvoid(bool b) {
+    if (!b && !space_.rare_data_) {
+      return;
+    }
+    EnsureRareData()->is_inside_break_avoid = b;
+  }
+
   void DisableFurtherFragmentation() {
     if (space_.HasBlockFragmentation()) {
       rare_data_->block_direction_fragmentation_type = kFragmentNone;
@@ -247,8 +265,7 @@ class CORE_EXPORT ConstraintSpaceBuilder final {
   }
 
   void SetIsInitialBlockSizeIndefinite(bool b) {
-    if (is_in_parallel_flow_ || !force_orthogonal_writing_mode_root_)
-        [[likely]] {
+    if (is_in_parallel_flow_) [[likely]] {
       space_.bitfields_.is_initial_block_size_indefinite = b;
     }
   }
@@ -383,22 +400,40 @@ class CORE_EXPORT ConstraintSpaceBuilder final {
     space_.bitfields_.cache_slot = static_cast<unsigned>(slot);
   }
 
+  void SetContainsAnnotations(bool b) {
+    space_.bitfields_.contains_annotations = b;
+  }
   void SetBlockStartAnnotationSpace(LayoutUnit space) {
     if (space)
       EnsureRareData()->SetBlockStartAnnotationSpace(space);
   }
 
-  void SetIgnoreMarginsForStretch(WritingMode parent_mode,
-                                  LineLogicalBoxSides sides) {
-#if DCHECK_IS_ON()
-    DCHECK(!is_ignored_margins_set_);
-    is_ignored_margins_set_ = true;
-#endif
-    if (!sides.IsEmpty()) {
-      EnsureRareData()->ignore_margins_for_stretch =
-          PhysicalBoxSides(sides, parent_mode)
-              .ToLogical(space_.GetWritingDirection());
+  void SetPreviousSiblingBlockEndAnnotationSpace(LayoutUnit space) {
+    if (space) {
+      EnsureRareData()->SetPreviousSiblingBlockEndAnnotationSpace(space);
+    } else {
+      // We assume SetPreviousSiblingBlockEndAnnotationSpace() is called only
+      // once.
+      DCHECK_EQ(space, space_.PreviousSiblingBlockEndAnnotationSpace());
     }
+  }
+
+  void SetIgnoreMarginsForStretch(WritingDirectionMode parent_writing_direction,
+                                  LogicalBoxSides sides) {
+    if (sides.IsEmpty()) {
+      return;
+    }
+    const LogicalBoxSides converted =
+        sides.ToPhysical(parent_writing_direction)
+            .ToLogical(space_.GetWritingDirection());
+    space_.bitfields_.ignore_margins_for_stretch_inline_start =
+        converted.inline_start;
+    space_.bitfields_.ignore_margins_for_stretch_inline_end =
+        converted.inline_end;
+    space_.bitfields_.ignore_margins_for_stretch_block_start =
+        converted.block_start;
+    space_.bitfields_.ignore_margins_for_stretch_block_end =
+        converted.block_end;
   }
 
   void SetMarginStrut(const MarginStrut& margin_strut) {
@@ -544,19 +579,14 @@ class CORE_EXPORT ConstraintSpaceBuilder final {
     is_line_clamp_data_set_ = true;
 #endif
     DCHECK(!is_new_fc_);
-    if (data.state != LineClampData::kDisabled) {
+    if (data.IsLineClampContext()) {
       EnsureRareData()->SetLineClampData(data);
     }
   }
 
-  void SetLineClampEndMarginStrut(MarginStrut end_margin_strut) {
-#if DCHECK_IS_ON()
-    DCHECK(!is_line_clamp_end_margin_strut_set_);
-    is_line_clamp_end_margin_strut_set_ = true;
-#endif
-    DCHECK(!is_new_fc_);
-    if (!end_margin_strut.IsEmpty()) {
-      EnsureRareData()->SetLineClampEndMarginStrut(end_margin_strut);
+  void SetLineClampAncestorChain(const LineClampAncestorChain* data) {
+    if (data) {
+      EnsureRareData()->SetLineClampAncestorChain(data);
     }
   }
 
@@ -614,12 +644,12 @@ class CORE_EXPORT ConstraintSpaceBuilder final {
     EnsureRareData()->SetTargetStretchBlockSizes(target_stretch_block_sizes);
   }
 
-  void SetGridLayoutSubtree(GridLayoutSubtree&& grid_layout_subtree) {
+  void SetGridLayoutSubtree(const GridLayoutSubtree* grid_layout_subtree) {
 #if DCHECK_IS_ON()
     DCHECK(!is_grid_layout_subtree_set_);
     is_grid_layout_subtree_set_ = true;
 #endif
-    EnsureRareData()->SetGridLayoutSubtree(std::move(grid_layout_subtree));
+    EnsureRareData()->SetGridLayoutSubtree(grid_layout_subtree);
   }
 
   // Creates a new constraint space.
@@ -643,6 +673,21 @@ class CORE_EXPORT ConstraintSpaceBuilder final {
   }
 
  private:
+  ConstraintSpaceBuilder(WritingDirectionMode writing_direction,
+                         bool is_in_parallel_flow,
+                         bool is_new_fc,
+                         bool adjust_inline_size_if_needed,
+                         bool force_orthogonal_writing_mode_root)
+      : space_(writing_direction),
+        is_in_parallel_flow_(is_in_parallel_flow),
+        is_new_fc_(is_new_fc),
+        adjust_inline_size_if_needed_(adjust_inline_size_if_needed),
+        force_orthogonal_writing_mode_root_(
+            force_orthogonal_writing_mode_root) {
+    space_.bitfields_.is_new_formatting_context = is_new_fc_;
+    space_.bitfields_.is_orthogonal_writing_mode_root =
+        !is_in_parallel_flow_ || force_orthogonal_writing_mode_root_;
+  }
   ConstraintSpace space_;
   ConstraintSpace::RareData* rare_data_ = nullptr;
 
@@ -661,8 +706,8 @@ class CORE_EXPORT ConstraintSpaceBuilder final {
 
   bool is_in_parallel_flow_;
   bool is_new_fc_;
-  bool force_orthogonal_writing_mode_root_;
   bool adjust_inline_size_if_needed_;
+  bool force_orthogonal_writing_mode_root_;
 
 #if DCHECK_IS_ON()
   bool is_hidden_for_paint_set_ = false;
@@ -681,11 +726,9 @@ class CORE_EXPORT ConstraintSpaceBuilder final {
   bool is_table_cell_with_collapsed_borders_set_ = false;
   bool is_custom_layout_data_set_ = false;
   bool is_line_clamp_data_set_ = false;
-  bool is_line_clamp_end_margin_strut_set_ = false;
   bool is_table_row_data_set_ = false;
   bool is_table_section_data_set_ = false;
   bool is_grid_layout_subtree_set_ = false;
-  bool is_ignored_margins_set_ = false;
 
   bool to_constraint_space_called_ = false;
 #endif

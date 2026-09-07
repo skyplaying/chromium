@@ -48,9 +48,16 @@ class TabListBridge : public TabListInterface, public TabStripModelObserver {
   int GetActiveIndex() const override;
   tabs::TabInterface* GetActiveTab() override;
   void ActivateTab(tabs::TabHandle tab) override;
-  tabs::TabInterface* OpenTab(const GURL& url, int index) override;
+  tabs::TabInterface* OpenTab(const GURL& url,
+                              int index,
+                              bool foreground) override;
   void SetOpenerForTab(tabs::TabHandle target, tabs::TabHandle opener) override;
   tabs::TabInterface* GetOpenerForTab(tabs::TabHandle target) override;
+  tabs::TabInterface* InsertWebContentsAt(
+      int index,
+      std::unique_ptr<content::WebContents> web_contents,
+      bool should_pin,
+      std::optional<tab_groups::TabGroupId> group) override;
   content::WebContents* DiscardTab(tabs::TabHandle tab) override;
   tabs::TabInterface* DuplicateTab(tabs::TabHandle tab) override;
   tabs::TabInterface* GetTab(int index) override;
@@ -59,15 +66,20 @@ class TabListBridge : public TabListInterface, public TabStripModelObserver {
                      const std::set<tabs::TabHandle>& tabs) override;
   void MoveTab(tabs::TabHandle tab, int index) override;
   void CloseTab(tabs::TabHandle tab) override;
+  std::unique_ptr<content::WebContents> DetachWebContents(
+      tabs::TabHandle tab) override;
   std::vector<tabs::TabInterface*> GetAllTabs() override;
   void PinTab(tabs::TabHandle tab) override;
   void UnpinTab(tabs::TabHandle tab) override;
   bool ContainsTabGroup(tab_groups::TabGroupId group_id) override;
   std::vector<tab_groups::TabGroupId> ListTabGroups() override;
+  std::set<split_tabs::SplitTabId> ListSplits() override;
   std::optional<tab_groups::TabGroupVisualData> GetTabGroupVisualData(
       tab_groups::TabGroupId group_id) override;
   gfx::Range GetTabGroupTabIndices(tab_groups::TabGroupId group_id) override;
   std::optional<tab_groups::TabGroupId> CreateTabGroup(
+      const std::vector<tabs::TabHandle>& tabs) override;
+  std::optional<split_tabs::SplitTabId> CreateSplit(
       const std::vector<tabs::TabHandle>& tabs) override;
   void SetTabGroupVisualData(
       tab_groups::TabGroupId group_id,
@@ -76,11 +88,12 @@ class TabListBridge : public TabListInterface, public TabStripModelObserver {
       std::optional<tab_groups::TabGroupId> group_id,
       const std::set<tabs::TabHandle>& tabs) override;
   void Ungroup(const std::set<tabs::TabHandle>& tabs) override;
+  void Unsplit(split_tabs::SplitTabId split_id) override;
   void MoveGroupTo(tab_groups::TabGroupId group_id, int index) override;
   void MoveTabToWindow(tabs::TabHandle tab,
                        SessionID destination_window_id,
                        int destination_index) override;
-  void MoveTabGroupToWindow(tab_groups::TabGroupId group_id,
+  bool MoveTabGroupToWindow(tab_groups::TabGroupId group_id,
                             SessionID destination_window_id,
                             int destination_index) override;
   bool IsThisTabListEditable() override;

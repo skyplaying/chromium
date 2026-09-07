@@ -4,23 +4,11 @@
 
 assert(is_chromeos)
 
-# To be moved out of //chrome.
-static_library("browser_delegate") {
-  sources = [
-    "browser_controller.cc",
-    "browser_controller.h",
-    "browser_delegate.h",
-    "browser_type.h",
-  ]
-
-  public_deps = [
-    "//base",
-    "//components/account_id",
-    "//components/sessions:session_id",
-    "//components/webapps/common",
-    "//ui/gfx/geometry",
-    "//url",
-  ]
+# Forwarding group for staged migration to
+# //chromeos/ash/components/browser_delegate.
+# TODO(crbug.com/369689187): Remove once all uses are migrated.
+group("browser_delegate") {
+  public_deps = [ "//chromeos/ash/components/browser_delegate" ]
 }
 
 static_library("impl") {
@@ -36,21 +24,32 @@ static_library("impl") {
   public_deps = [
     ":browser_delegate",
     "//base",
-    "//chrome/browser/ui:browser_list",
     "//chrome/browser/ui/browser_window",
   ]
 
   deps = [
+    "//ash",
     "//chrome/browser:browser_public_dependencies",
+    "//chrome/browser/ash/boca/on_task",
+    "//chrome/browser/ash/profiles",
     "//chrome/browser/devtools",
+    "//chrome/browser/lifetime",
     "//chrome/browser/profiles:profile",
-    "//chrome/browser/ui:browser_navigator_params_headers",
+    "//chrome/browser/ui:browser_init_state",
     "//chrome/browser/ui/autofill",
+    "//chrome/browser/ui/browser_window:create_browser_window",
+    "//chrome/browser/ui/chromeos/locked_state",
     "//chrome/browser/ui/location_bar",
+    "//chrome/browser/ui/navigator",
+    "//chrome/browser/ui/tabs:tab_group",
     "//chrome/browser/ui/tabs:tab_strip",
+    "//chrome/browser/ui/views:simple_web_view_dialog",
+    "//chrome/browser/ui/views/frame:contents_web_view",
     "//chrome/browser/ui/web_applications",
     "//chrome/browser/ui/web_applications:launch_utils",
+    "//chrome/browser/ui/window_metadata",
     "//chrome/browser/web_applications",
+    "//chrome/common:chrome_features",
     "//chromeos/ash/components/browser_context_helper",
     "//components/sessions:session_id",
     "//ui/aura",

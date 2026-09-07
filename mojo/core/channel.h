@@ -50,6 +50,8 @@ constexpr bool IsAlignedForChannelMessage(size_t n) {
 class MOJO_SYSTEM_IMPL_EXPORT Channel
     : public base::RefCountedThreadSafe<Channel> {
  public:
+  static constexpr double kMetricSubsamplingProbability = 0.001;
+
   enum class HandlePolicy {
     // If a Channel is constructed in this mode, it will accept messages with
     // platform handle attachements.
@@ -524,10 +526,11 @@ class MOJO_SYSTEM_IMPL_EXPORT Channel
     // of the message.
     kOK,
     // The message could not be deserialized because |buffer| does not contain
-    // enough data. |size_hint| contains the amount of data missing.
+    // enough data. |size_hint| contains the amount of data missing. The missing
+    // data is expected to be received in a subsequent message.
     kNotEnoughData,
     // The message has associated handles that were not transferred in this
-    // message.
+    // message and should be received in a subsequent message.
     kMissingHandles,
     // An error occurred during processing.
     kError,
@@ -579,7 +582,7 @@ class MOJO_SYSTEM_IMPL_EXPORT Channel
                                 std::vector<PlatformHandle> handles);
 
  protected:
-  void RecordSentMessageMetrics(size_t payload_size);
+  void RecordSentMessageMetricsSubsampled(size_t payload_size);
 
   // Take delayed messages with increasing message count one by one and dispatch
   // them until there is a new gap.
@@ -591,10 +594,6 @@ class MOJO_SYSTEM_IMPL_EXPORT Channel
   // Records histograms counting sent messages per process type. Must be
   // subsampled.
   static void RecordSentMessageProcessType();
-
-  // Records histograms counting received messages per process type. Must be
-  // subsampled.
-  static void RecordReceivedMessageProcessType();
 
   // Used to store messaged for delayed dispatch. Such message reordering is
   // only needed when SupportsMultipleNotifiers() is true.

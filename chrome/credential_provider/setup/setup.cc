@@ -62,6 +62,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance,
                       HINSTANCE /*hPrevInstance*/,
                       wchar_t* lpCmdLine,
                       int /*nCmdShow*/) {
+  credential_provider::EnableSecureDllLoading();
+
   HRESULT hr = S_OK;
 
   // Initialize base.  Command line will be set from GetCommandLineW().
@@ -193,8 +195,8 @@ int APIENTRY wWinMain(HINSTANCE hInstance,
         if (base::StringToUint(parent_handle_str, &parent_handle_value)) {
           base::win::ScopedHandle parent_handle(
               base::win::Uint32ToHandle(parent_handle_value));
-          DWORD ret = ::WaitForSingleObject(parent_handle.Get(), 5000);
-          LOGFN(VERBOSE) << "Waited for parent(" << parent_handle.Get()
+          DWORD ret = ::WaitForSingleObject(parent_handle.get(), 5000);
+          LOGFN(VERBOSE) << "Waited for parent(" << parent_handle.get()
                          << "): ret=" << ret;
         }
       }

@@ -38,6 +38,7 @@
 #include "chrome/installer/util/util_constants.h"
 #include "chrome/windows_services/service_program/get_calling_process.h"
 #include "chrome/windows_services/service_program/scoped_client_impersonation.h"
+#include "content/public/common/content_switches.h"
 #include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
 
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
@@ -58,15 +59,15 @@ ProtectionLevel RemoveFlags(ProtectionLevel protection_level,
 }  // namespace
 
 HRESULT Elevator::RunRecoveryCRXElevated(const wchar_t* crx_path,
-                                         const wchar_t* browser_appid,
+                                         const wchar_t* /*browser_appid*/,
                                          const wchar_t* browser_version,
                                          const wchar_t* session_id,
                                          DWORD caller_proc_id,
                                          ULONG_PTR* proc_handle) {
   base::win::ScopedHandle scoped_proc_handle;
-  HRESULT hr = RunChromeRecoveryCRX(base::FilePath(crx_path), browser_appid,
-                                    browser_version, session_id, caller_proc_id,
-                                    &scoped_proc_handle);
+  HRESULT hr =
+      RunChromeRecoveryCRX(base::FilePath(crx_path), browser_version,
+                           session_id, caller_proc_id, &scoped_proc_handle);
   *proc_handle = base::win::HandleToUint32(scoped_proc_handle.Take());
   return hr;
 }
@@ -184,6 +185,8 @@ HRESULT Elevator::DecryptData(const BSTR ciphertext,
   base::win::ScopedLocalAlloc intermediate_freer(intermediate.pbData);
 
   std::string plaintext_str;
+  bool should_reencrypt = false;
+
   if (ScopedClientImpersonation impersonate; impersonate.is_valid()) {
     DATA_BLOB output = {};
     // Decrypt using the user store.
@@ -216,11 +219,13 @@ HRESULT Elevator::DecryptData(const BSTR ciphertext,
       *last_error = ::GetLastError();
       return validation_result;
     }
+    if (validation_result == kSuccessShouldReencrypt) {
+      should_reencrypt = true;
+    }
     plaintext_str = PopFromStringFront(mutable_plaintext);
   } else {
     return impersonate.result();
   }
-  bool should_reencrypt = false;
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   InternalFlags flags;
   auto post_process_result = PostProcessData(plaintext_str, &flags);
@@ -318,28 +323,79 @@ HRESULT Elevator::RunIsolatedChrome(DWORD flags,
 
     trusted_command_line.emplace(chrome_exe);
   }
-  const auto other_args = untrusted_command_line.GetArgs();
 
   const char* const kAllowedSwitches[] = {
       // Allow selection of profile.
-      ::switches::kProfileDirectory, ::switches::kUserDataDir};
+      ::switches::kProfileDirectory,
+      // Restarting browser.
+      ::switches::kRestart,
+      // Guest and incognito.
+      ::switches::kGuest,
+      ::switches::kIncognito,
+      // Restore last session.
+      ::switches::kRestoreLastSession,
+      // Window control.
+      ::switches::kOpenInNewWindow,
+      // For rendez-vous metrics.
+      ::switches::kSourceShortcut,
+      ::switches::kSourceAppId,
+      // Switches for launching apps and PWAs.
+      ::switches::kAppId,
+      ::switches::kApp,
+      ::switches::kPwaLauncherVersion,
+      ::switches::kAppRunOnOsLoginMode,
+      // Jumplist action.
+      ::switches::kWinJumplistAction,
+      // Do not de-elevate.
+      ::switches::kDoNotDeElevateOnLaunch,
+      // For notifications from the action center.
+      ::switches::kNotificationLaunchId,
+      ::switches::kNotificationInlineReply,
+      // Launch methods.
+      ::switches::kFromBrowserSwitcher,
+      ::switches::kFromInstaller,
+      // Icon related.
+      ::switches::kShowIcons,
+      ::switches::kHideIcons,
+      // Startup related.
+      ::switches::kStartupForegroundLaunch,
+      // Uninstall related.
+      ::switches::kUninstall,
+      ::switches::kUninstallAppId,
+      // Logging.
+      ::switches::kEnableLogging,
+      ::switches::kLoggingLevel,
+      ::switches::kLogFile,
+  };
 
-  trusted_command_line->CopySwitchesFrom(untrusted_command_line,
-                                         kAllowedSwitches);
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kAllowUntrustedSwitchesForTesting)) {
+    for (const auto& untrusted_switch : untrusted_command_line.GetSwitches()) {
+      trusted_command_line->AppendSwitchNative(untrusted_switch.first,
+                                               untrusted_switch.second);
+    }
+  } else {
+    trusted_command_line->CopySwitchesFrom(untrusted_command_line,
+                                           kAllowedSwitches);
+  }
 
   trusted_command_line->AppendSwitch(::switches::kIsolated);
-  for (const auto& arg : other_args) {
-    // Safety check.
-    if (arg[0] == L'-') {
-      continue;
+
+  if (!untrusted_command_line.GetArgs().empty()) {
+    // Additional arguments can come after a `--` to distinguish them from
+    // switches. The base::CommandLine argument parser already handles this
+    // internally, so ensure this behavior is matched when constructing the
+    // command line for the isolated process.
+    trusted_command_line->AppendArgNative(L"--");
+    for (const auto& arg : untrusted_command_line.GetArgs()) {
+      trusted_command_line->AppendArgNative(arg);
     }
-    trusted_command_line->AppendArgNative(arg);
   }
 
   std::wstring writeable_command_line(
       trusted_command_line->GetCommandLineString());
 
-  DWORD creation_flags = CREATE_UNICODE_ENVIRONMENT;
+  DWORD creation_flags = CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED;
   if (startup_information.has_extended_startup_info()) {
     creation_flags |= EXTENDED_STARTUPINFO_PRESENT;
   }
@@ -371,8 +427,33 @@ HRESULT Elevator::RunIsolatedChrome(DWORD flags,
   }
   base::win::ScopedProcessInformation process_info(temp_process_info);
 
-  HANDLE duplicate_proc_handle = nullptr;
+  // At this point, the process is launched. Any failures from this point on
+  // should terminate the process.
+  absl::Cleanup maybe_terminate = [&process_info, &success] {
+    if (!success) {
+      // Hold the last error, so it does not get overwritten by the call to
+      // TerminateProcess - this ensures that whatever last error was present
+      // from the previously failing API call is returned to the caller.
+      const auto gle = ::GetLastError();
+      ::TerminateProcess(process_info.process_handle(), gle);
+      ::SetLastError(gle);
+    }
+  };
 
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  {
+    HRESULT post_launch_status = PostLaunch(process_info);
+    if (FAILED(post_launch_status)) {
+      return post_launch_status;
+    }
+  }
+#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
+
+  if (::ResumeThread(process_info.thread_handle()) == static_cast<DWORD>(-1)) {
+    return kErrorCouldNotResumeThread;
+  }
+
+  HANDLE duplicate_proc_handle = nullptr;
   if (!::DuplicateHandle(
           /*hSourceProcessHandle=*/::GetCurrentProcess(),
           /*hSourceHandle=*/process_info.process_handle(),

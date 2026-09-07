@@ -6,6 +6,7 @@
 #include "base/test/gtest_util.h"
 #include "base/test/run_until.h"
 #include "base/test/test_future.h"
+#include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/actor/actor_keyed_service.h"
 #include "chrome/browser/actor/actor_test_util.h"
@@ -16,10 +17,11 @@
 #include "chrome/browser/actor/ui/actor_ui_window_controller.h"
 #include "chrome/browser/actor/ui/ui_event.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -41,17 +43,18 @@ namespace {
 using actor::mojom::ActionResultPtr;
 using base::test::TestFuture;
 
-ActorOverlayWebView* GetActorOverlayWebView(Browser* browser) {
-  return browser->GetBrowserView()
-      .GetActiveContentsContainerView()
+ActorOverlayWebView* GetActorOverlayWebView(BrowserWindowInterface* browser) {
+  return BrowserView::GetBrowserViewForBrowser(browser)
+      ->GetActiveContentsContainerView()
       ->actor_overlay_web_view();
 }
 
-bool IsActorOverlayVisible(Browser* browser) {
+bool IsActorOverlayVisible(BrowserWindowInterface* browser) {
   return GetActorOverlayWebView(browser)->GetVisible();
 }
 
-content::WebContents* GetActorOverlayWebViewWebContents(Browser* browser) {
+content::WebContents* GetActorOverlayWebViewWebContents(
+    BrowserWindowInterface* browser) {
   return GetActorOverlayWebView(browser)->web_contents();
 }
 
@@ -61,7 +64,7 @@ class ActorOverlayTest : public InProcessBrowserTest {
     feature_list_.InitWithFeaturesAndParameters(
         /*enabled_features=*/{{features::kGlicActorUi,
                                {{features::kGlicActorUiOverlayName, "true"}}},
-                              {features::kGlicActorUiOverlayMagicCursor, {}}},
+                              {features::kGlicActorUiMagicCursor, {}}},
         /*disabled_features=*/{});
     InProcessBrowserTest::SetUp();
   }
@@ -90,10 +93,11 @@ IN_PROC_BROWSER_TEST_F(ActorOverlayTest, PageLoadsWhenFeatureOn) {
 
 IN_PROC_BROWSER_TEST_F(ActorOverlayTest, PageDoesNotLoadInOTRBrowser) {
   GURL kUrl(chrome::kChromeUIActorOverlayURL);
-  Browser* otr_browser = OpenURLOffTheRecord(browser()->profile(), kUrl);
+  BrowserWindowInterface* otr_browser =
+      OpenURLOffTheRecord(browser()->GetProfile(), kUrl);
   ASSERT_TRUE(ui_test_utils::NavigateToURL(otr_browser, kUrl));
   content::WebContents* web_contents =
-      otr_browser->tab_strip_model()->GetActiveWebContents();
+      otr_browser->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(web_contents);
   EXPECT_NE(web_contents->GetTitle(), u"Actor Overlay");
   EXPECT_FALSE(ActorOverlayUI::IsActorOverlayWebContents(web_contents));
@@ -102,43 +106,42 @@ IN_PROC_BROWSER_TEST_F(ActorOverlayTest, PageDoesNotLoadInOTRBrowser) {
 // Verifies that the ActorUiWindowController and Actor Ui Tab Controller
 // should only exist for normal browser windows.
 IN_PROC_BROWSER_TEST_F(ActorOverlayTest, ControllerExistsForNormalBrowsers) {
-  Profile* const profile = browser()->profile();
+  Profile* const profile = browser()->GetProfile();
 
   // Normal browser window
-  Browser* const normal_browser = browser();
+  BrowserWindowInterface* const normal_browser = browser();
   ASSERT_NE(ActorUiWindowController::From(normal_browser), nullptr);
-  ASSERT_NE(ActorUiTabController::From(normal_browser->browser_window_features()
-                                           ->tab_strip_model()
-                                           ->GetActiveTab()),
+  ASSERT_NE(ActorUiTabController::From(
+                normal_browser->GetTabStripModel()->GetActiveTab()),
             nullptr);
 
   // Popup window
-  Browser* const popup_browser = CreateBrowserForPopup(profile);
+  BrowserWindowInterface* const popup_browser = CreateBrowserForPopup(profile);
   ASSERT_EQ(ActorUiWindowController::From(popup_browser), nullptr);
-  ASSERT_EQ(ActorUiTabController::From(popup_browser->browser_window_features()
-                                           ->tab_strip_model()
-                                           ->GetActiveTab()),
+  ASSERT_EQ(ActorUiTabController::From(
+                popup_browser->GetTabStripModel()->GetActiveTab()),
             nullptr);
 
   // App window
-  Browser* const app_browser = CreateBrowserForApp("test_app_name", profile);
+  BrowserWindowInterface* const app_browser =
+      CreateBrowserForApp("test_app_name", profile);
   ASSERT_EQ(ActorUiWindowController::From(app_browser), nullptr);
-  ASSERT_EQ(ActorUiTabController::From(app_browser->browser_window_features()
-                                           ->tab_strip_model()
-                                           ->GetActiveTab()),
+  ASSERT_EQ(ActorUiTabController::From(
+                app_browser->GetTabStripModel()->GetActiveTab()),
             nullptr);
 
   // Picture-in-Picture window
-  Browser* const pip_browser =
-      Browser::Create(Browser::CreateParams::CreateForPictureInPicture(
-          "test_app_name", false, profile, false));
+  BrowserWindowInterface* const pip_browser =
+      CreateBrowserWindow(BrowserWindowCreateParams::CreateForPictureInPicture(
+          "test_app_name", /*trusted_source=*/false, profile,
+          /*user_gesture=*/false));
   ASSERT_EQ(ActorUiWindowController::From(pip_browser), nullptr);
   // Tab Interface is null for Picture-in-Picture windows, so we don't test the
   // tab controller's existence.
 
   // DevTools window
-  Browser* const devtools_browser =
-      Browser::Create(Browser::CreateParams::CreateForDevTools(profile));
+  BrowserWindowInterface* const devtools_browser = CreateBrowserWindow(
+      BrowserWindowCreateParams::CreateForDevTools(profile));
   ASSERT_EQ(ActorUiWindowController::From(devtools_browser), nullptr);
   // Tab Interface is null for DevTools windows, so we don't test the tab
   // controller's existence.
@@ -177,7 +180,7 @@ IN_PROC_BROWSER_TEST_F(ActorOverlayTest, WebViewLifecycleAndVisibility) {
 }
 
 IN_PROC_BROWSER_TEST_F(ActorOverlayTest, SendStartEventAndStopEvent) {
-  Profile* const profile = browser()->profile();
+  Profile* const profile = browser()->GetProfile();
   ActorUiStateManagerInterface* state_manager =
       ActorKeyedService::Get(profile)->GetActorUiStateManager();
   ASSERT_NE(state_manager, nullptr);
@@ -199,7 +202,7 @@ IN_PROC_BROWSER_TEST_F(ActorOverlayTest, SendStartEventAndStopEvent) {
 }
 
 IN_PROC_BROWSER_TEST_F(ActorOverlayTest, OverlayHidesOnTabBackgrounding) {
-  Profile* const profile = browser()->profile();
+  Profile* const profile = browser()->GetProfile();
   ActorUiStateManagerInterface* state_manager =
       ActorKeyedService::Get(profile)->GetActorUiStateManager();
   ASSERT_NE(state_manager, nullptr);
@@ -236,7 +239,7 @@ IN_PROC_BROWSER_TEST_F(ActorOverlayTest, OverlayHidesOnTabBackgrounding) {
 #endif
 IN_PROC_BROWSER_TEST_F(ActorOverlayTest,
                        MAYBE_RepeatedlyMoveTabBetweenWindows) {
-  Profile* const profile = browser()->profile();
+  Profile* const profile = browser()->GetProfile();
   ActorUiStateManagerInterface* state_manager =
       ActorKeyedService::Get(profile)->GetActorUiStateManager();
   ASSERT_NE(state_manager, nullptr);
@@ -244,28 +247,22 @@ IN_PROC_BROWSER_TEST_F(ActorOverlayTest,
   ASSERT_EQ(browser()->tab_strip_model()->count(), 1);
   tabs::TabInterface* tab_1 = browser()->GetActiveTabInterface();
   ASSERT_NE(tab_1, nullptr);
-  tabs::TabInterface* tab_2 =
-      tabs::TabInterface::GetFromContents(&chrome::NewTab(browser()));
+  tabs::TabInterface* tab_2 = tabs::TabInterface::GetFromContents(
+      &chrome::NewTab(browser(), NewTabTypes::kNoUserAction));
   ASSERT_NE(tab_2, nullptr);
 
   ASSERT_EQ(browser()->tab_strip_model()->count(), 2);
-  tabs::TabInterface* tab_3 =
-      tabs::TabInterface::GetFromContents(&chrome::NewTab(browser()));
+  tabs::TabInterface* tab_3 = tabs::TabInterface::GetFromContents(
+      &chrome::NewTab(browser(), NewTabTypes::kNoUserAction));
   ASSERT_NE(tab_3, nullptr);
   ASSERT_EQ(browser()->tab_strip_model()->count(), 3);
   // We have 3 tabs {0, 1, 2}, so we're moving the last tab to a new window
   chrome::MoveTabsToNewWindow(browser(), {2});
   // Get references to both browser windows after the move.
-  Browser* browser_1 =
-      BrowserWindow::FindBrowserWindowWithWebContents(tab_1->GetContents())
-          ->AsBrowserView()
-          ->browser();
-  Browser* browser_2 =
-      BrowserWindow::FindBrowserWindowWithWebContents(tab_3->GetContents())
-          ->AsBrowserView()
-          ->browser();
-  ASSERT_EQ(browser_1->tab_strip_model()->count(), 2);
-  ASSERT_EQ(browser_2->tab_strip_model()->count(), 1);
+  BrowserWindowInterface* browser_1 = tab_1->GetBrowserWindowInterface();
+  BrowserWindowInterface* browser_2 = tab_3->GetBrowserWindowInterface();
+  ASSERT_EQ(browser_1->GetTabStripModel()->count(), 2);
+  ASSERT_EQ(browser_2->GetTabStripModel()->count(), 1);
   // Start actor actuation on tab_2, which is in browser_1.
   // This should make the Actor Overlay visible in browser_1.
   TestFuture<ActionResultPtr> result;
@@ -279,8 +276,8 @@ IN_PROC_BROWSER_TEST_F(ActorOverlayTest,
   // This verifies the overlay's persistence and correct re-parenting across
   // window changes. The number of iterations (10) is arbitrary and can be
   // adjusted.
-  Browser* source_browser;
-  Browser* target_browser;
+  BrowserWindowInterface* source_browser;
+  BrowserWindowInterface* target_browser;
   for (int i = 0; i < 10; ++i) {
     // Determine current source and target browsers for the move.
     source_browser = (i % 2 == 0) ? browser_1 : browser_2;
@@ -314,7 +311,7 @@ IN_PROC_BROWSER_TEST_F(ActorOverlayTest,
 }
 
 IN_PROC_BROWSER_TEST_F(ActorOverlayTest, RepeatedlyMoveActuatedTabToNewWindow) {
-  Profile* const profile = browser()->profile();
+  Profile* const profile = browser()->GetProfile();
   ActorUiStateManagerInterface* state_manager =
       ActorKeyedService::Get(profile)->GetActorUiStateManager();
   ASSERT_NE(state_manager, nullptr);
@@ -326,16 +323,13 @@ IN_PROC_BROWSER_TEST_F(ActorOverlayTest, RepeatedlyMoveActuatedTabToNewWindow) {
   state_manager->OnUiEvent(StartingToActOnTab(tab_1->GetHandle(), TaskId(1)),
                            result.GetCallback());
   ExpectOkResult(result);
-  Browser* browser_with_actuated_tab;
+  BrowserWindowInterface* browser_with_actuated_tab;
   // Loop to repeatedly move the actuated tab to new browser windows. This
   // verifies the overlay's persistence and re-parenting across window changes.
   // The number of iterations (5) is arbitrary and can be adjusted.
   for (int i = 0; i < 5; ++i) {
     // Get the current browser holding the actuated tab.
-    browser_with_actuated_tab =
-        BrowserWindow::FindBrowserWindowWithWebContents(tab_1->GetContents())
-            ->AsBrowserView()
-            ->browser();
+    browser_with_actuated_tab = tab_1->GetBrowserWindowInterface();
     ASSERT_NE(browser_with_actuated_tab, nullptr);
     // Verify the overlay is visible in the current browser.
     ASSERT_TRUE(base::test::RunUntil(
@@ -346,7 +340,7 @@ IN_PROC_BROWSER_TEST_F(ActorOverlayTest, RepeatedlyMoveActuatedTabToNewWindow) {
     // Add a new tab to ensure the source window always has at least two tabs
     // before moving one to a new window (simulates user behavior).
     tabs::TabInterface* new_tab = tabs::TabInterface::GetFromContents(
-        &chrome::NewTab(browser_with_actuated_tab));
+        &chrome::NewTab(browser_with_actuated_tab, NewTabTypes::kNoUserAction));
     ASSERT_NE(new_tab, nullptr);
     ASSERT_EQ(browser_with_actuated_tab->tab_strip_model()->count(), 2);
 
@@ -370,21 +364,17 @@ IN_PROC_BROWSER_TEST_F(ActorOverlayTest, RepeatedlyMoveActuatedTabToNewWindow) {
 
 IN_PROC_BROWSER_TEST_F(ActorOverlayTest,
                        InputAndA11yInputEventsIgnoredWhenOverlayVisible) {
-  Profile* const profile = browser()->profile();
+  Profile* const profile = browser()->GetProfile();
   ActorUiStateManagerInterface* state_manager =
       ActorKeyedService::Get(profile)->GetActorUiStateManager();
   ASSERT_NE(state_manager, nullptr);
   tabs::TabHandle tab_handle = browser()->GetActiveTabInterface()->GetHandle();
 
-  // Check initial state: Input and A11y Input should NOT be ignored by default.
+  // Check initial state: Input should NOT be ignored by default.
   EXPECT_FALSE(browser()
                    ->GetActiveTabInterface()
                    ->GetContents()
                    ->ShouldIgnoreInputEventsForTesting());
-  EXPECT_FALSE(browser()
-                   ->GetActiveTabInterface()
-                   ->GetContents()
-                   ->ShouldIgnoreA11yInputEventsForTesting());
 
   // Start actuating on the tab.
   TestFuture<ActionResultPtr> result;
@@ -396,48 +386,36 @@ IN_PROC_BROWSER_TEST_F(ActorOverlayTest,
   ASSERT_TRUE(
       base::test::RunUntil([&]() { return IsActorOverlayVisible(browser()); }));
 
-  // Check that input and a11y input should be ignored.
+  // Check that input should be ignored.
   EXPECT_TRUE(browser()
                   ->GetActiveTabInterface()
                   ->GetContents()
                   ->ShouldIgnoreInputEventsForTesting());
-  EXPECT_TRUE(browser()
-                  ->GetActiveTabInterface()
-                  ->GetContents()
-                  ->ShouldIgnoreA11yInputEventsForTesting());
 
   // Add a new tab, which is the new active tab
-  tabs::TabInterface* tab_2 =
-      tabs::TabInterface::GetFromContents(&chrome::NewTab(browser()));
+  tabs::TabInterface* tab_2 = tabs::TabInterface::GetFromContents(
+      &chrome::NewTab(browser(), NewTabTypes::kNoUserAction));
   ASSERT_NE(tab_2, nullptr);
   ASSERT_EQ(browser()->tab_strip_model()->count(), 2);
 
   // Wait for overlay to become invisible for the newly added tab.
   ASSERT_TRUE(base::test::RunUntil(
       [&]() { return !IsActorOverlayVisible(browser()); }));
-  // Check that input and a11y input is NOT ignored for newly added tab.
+  // Check that input is NOT ignored for newly added tab.
   EXPECT_FALSE(browser()
                    ->GetActiveTabInterface()
                    ->GetContents()
                    ->ShouldIgnoreInputEventsForTesting());
-  EXPECT_FALSE(browser()
-                   ->GetActiveTabInterface()
-                   ->GetContents()
-                   ->ShouldIgnoreA11yInputEventsForTesting());
   // Activate the actuating tab
   browser()->tab_strip_model()->ActivateTabAt(0);
   // Wait for overlay to become visible on actuating tab.
   ASSERT_TRUE(
       base::test::RunUntil([&]() { return IsActorOverlayVisible(browser()); }));
-  // Check that input and a11y input is ignored for actuating tab.
+  // Check that input is ignored for actuating tab.
   EXPECT_TRUE(browser()
                   ->GetActiveTabInterface()
                   ->GetContents()
                   ->ShouldIgnoreInputEventsForTesting());
-  EXPECT_TRUE(browser()
-                  ->GetActiveTabInterface()
-                  ->GetContents()
-                  ->ShouldIgnoreA11yInputEventsForTesting());
 
   // Stop actuating on the tab.
   state_manager->OnUiEvent(StoppedActingOnTab(tab_handle));
@@ -446,23 +424,18 @@ IN_PROC_BROWSER_TEST_F(ActorOverlayTest,
   ASSERT_TRUE(base::test::RunUntil(
       [&]() { return !IsActorOverlayVisible(browser()); }));
 
-  // Check that input and a11y input is NOT ignored for previously actuating
-  // tab.
+  // Check that input is NOT ignored for previously actuating tab.
   EXPECT_FALSE(browser()
                    ->GetActiveTabInterface()
                    ->GetContents()
                    ->ShouldIgnoreInputEventsForTesting());
-  EXPECT_FALSE(browser()
-                   ->GetActiveTabInterface()
-                   ->GetContents()
-                   ->ShouldIgnoreA11yInputEventsForTesting());
 }
 
 IN_PROC_BROWSER_TEST_F(ActorOverlayTest, OverlayIsIgnoredByAccessibility) {
-  views::WebView* overlay_web_view = browser()
-                                         ->GetBrowserView()
-                                         .GetActiveContentsContainerView()
-                                         ->actor_overlay_web_view();
+  views::WebView* overlay_web_view =
+      BrowserView::GetBrowserViewForBrowser(browser())
+          ->GetActiveContentsContainerView()
+          ->actor_overlay_web_view();
   ASSERT_NE(overlay_web_view, nullptr);
   EXPECT_EQ(overlay_web_view->GetFocusBehavior(),
             views::View::FocusBehavior::NEVER);
@@ -475,12 +448,12 @@ IN_PROC_BROWSER_TEST_F(ActorOverlayTest,
   // positive in this test.
   ASSERT_TRUE(chrome::IsCommandEnabled(browser(), IDC_FIND));
   // Add a second tab to the browser.
-  chrome::NewTab(browser());
+  chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
   ASSERT_EQ(browser()->tab_strip_model()->count(), 2);
   // Activate the first tab.
   browser()->tab_strip_model()->ActivateTabAt(0);
   // Start actuating on the first tab and wait for the overlay to be visible.
-  Profile* const profile = browser()->profile();
+  Profile* const profile = browser()->GetProfile();
   ActorUiStateManagerInterface* state_manager =
       ActorKeyedService::Get(profile)->GetActorUiStateManager();
   ASSERT_NE(state_manager, nullptr);
@@ -517,17 +490,17 @@ IN_PROC_BROWSER_TEST_F(ActorOverlayTest,
 
 IN_PROC_BROWSER_TEST_F(ActorOverlayTest,
                        FindInPageDisabledWhenOverlayVisibleMultiWindow) {
-  Browser* browser1 = browser();
+  BrowserWindowInterface* browser1 = browser();
   // Verify that the default state is enabled for first browser.
   ASSERT_TRUE(chrome::IsCommandEnabled(browser1, IDC_FIND));
   // Create a second browser window.
-  Profile* const profile = browser1->profile();
-  Browser* browser2 = CreateBrowser(profile);
+  Profile* const profile = browser1->GetProfile();
+  BrowserWindowInterface* browser2 = CreateBrowser(profile);
   ASSERT_NE(browser2, browser1);
   // Verify that the default state is enabled for the second browser.
   ASSERT_TRUE(chrome::IsCommandEnabled(browser2, IDC_FIND));
   // Activate the first browser window.
-  browser1->window()->Activate();
+  browser1->GetWindow()->Activate();
   // Start actuating on the first browser window and wait for overlay to
   // visible.
   ActorUiStateManagerInterface* state_manager =
@@ -543,11 +516,11 @@ IN_PROC_BROWSER_TEST_F(ActorOverlayTest,
   // Verify that the FIP command is disabled in the first browser.
   EXPECT_FALSE(chrome::IsCommandEnabled(browser1, IDC_FIND));
   // Activate the second browser window.
-  browser2->window()->Activate();
+  browser2->GetWindow()->Activate();
   // Verify that the FIP command is enabled in the second browser.
   EXPECT_TRUE(chrome::IsCommandEnabled(browser2, IDC_FIND));
   // Activate the first browser window again.
-  browser1->window()->Activate();
+  browser1->GetWindow()->Activate();
   // Verify that the FIP command is still disabled in the first browser.
   EXPECT_FALSE(chrome::IsCommandEnabled(browser1, IDC_FIND));
   // Stop actuating and wait for overlay to be hidden.
@@ -567,8 +540,7 @@ class ActorOverlaySplitViewTest
       override {
     return {
         {features::kGlicActorUi, {{features::kGlicActorUiOverlayName, "true"}}},
-        {features::kGlicActorUiOverlayMagicCursor, {}},
-        {features::kSideBySide, {}}};
+        {features::kGlicActorUiMagicCursor, {}}};
   }
 
   void CreateSplitView() {
@@ -576,7 +548,7 @@ class ActorOverlaySplitViewTest
     const int active_index = tab_strip_model->active_index();
 
     RunScheduledLayouts();
-    chrome::NewSplitTab(browser(),
+    chrome::NewSplitTab(browser(), split_tabs::SplitTabLayout::kSideBySide,
                         split_tabs::SplitTabCreatedSource::kToolbarButton);
     EXPECT_TRUE(content::WaitForLoadStop(
         tab_strip_model->GetWebContentsAt(active_index + 1)));
@@ -591,7 +563,7 @@ IN_PROC_BROWSER_TEST_F(ActorOverlaySplitViewTest,
   browser()->tab_strip_model()->ActivateTabAt(1);
   ASSERT_TRUE(chrome::IsCommandEnabled(browser(), IDC_FIND));
   // Start actuation on right split view tab and wait for overlay to be visible.
-  Profile* const profile = browser()->profile();
+  Profile* const profile = browser()->GetProfile();
   ActorUiStateManagerInterface* state_manager =
       ActorKeyedService::Get(profile)->GetActorUiStateManager();
   ASSERT_NE(state_manager, nullptr);
@@ -789,6 +761,66 @@ IN_PROC_BROWSER_TEST_F(ActorOverlayMagicCursorTest,
   EXPECT_FALSE(has_class);
 }
 
+// TODO(crbug.com/544197164): Re-enable when no longer flaky on Windows.
+#if BUILDFLAG(IS_WIN)
+#define MAYBE_OverlayWebViewIsTransparentAfterNavigation \
+  DISABLED_OverlayWebViewIsTransparentAfterNavigation
+#else
+#define MAYBE_OverlayWebViewIsTransparentAfterNavigation \
+  OverlayWebViewIsTransparentAfterNavigation
+#endif
+IN_PROC_BROWSER_TEST_F(ActorOverlayTest,
+                       MAYBE_OverlayWebViewIsTransparentAfterNavigation) {
+  Profile* const profile = browser()->GetProfile();
+  ActorUiStateManagerInterface* state_manager =
+      ActorKeyedService::Get(profile)->GetActorUiStateManager();
+  ASSERT_NE(state_manager, nullptr);
+  tabs::TabHandle tab_handle = browser()->GetActiveTabInterface()->GetHandle();
+  TestFuture<ActionResultPtr> result;
+  state_manager->OnUiEvent(StartingToActOnTab(tab_handle, TaskId(1)),
+                           result.GetCallback());
+  ExpectOkResult(result);
+  ASSERT_TRUE(
+      base::test::RunUntil([&]() { return IsActorOverlayVisible(browser()); }));
+  content::WebContents* overlay_web_contents =
+      GetActorOverlayWebViewWebContents(browser());
+  ASSERT_NE(overlay_web_contents, nullptr);
+
+  // RenderWidgetHostViewMac::GetBackgroundColor() overrides SK_ColorTRANSPARENT
+  // to SK_ColorWHITE to avoid macOS AppKit compositing bugs (crbug.com/735407).
+  // On non-Mac platforms (Aura), GetBackgroundColor() returns
+  // SK_ColorTRANSPARENT.
+  const SkColor expected_rwhv_color =
+#if BUILDFLAG(IS_MAC)
+      SK_ColorWHITE;
+#else
+      SK_ColorTRANSPARENT;
+#endif
+
+  // 1. Assert that the browser-side RenderWidgetHostView has the expected
+  // background color immediately upon navigation commit (before
+  // WaitForLoadStop).
+  content::RenderWidgetHostView* rwhv =
+      overlay_web_contents->GetRenderWidgetHostView();
+  ASSERT_NE(rwhv, nullptr);
+  EXPECT_EQ(rwhv->GetBackgroundColor(), expected_rwhv_color);
+
+  // 2. Wait for the overlay WebUI document to finish loading.
+  EXPECT_TRUE(content::WaitForLoadStop(overlay_web_contents));
+
+  // 3. Assert that Blink's document background color is transparent after load
+  // on all platforms. Without web_contents()->SetPageBaseBackgroundColor(
+  // SK_ColorTRANSPARENT) in ShowUI, Blink renders a solid white document
+  // canvas (SK_ColorWHITE).
+  EXPECT_EQ(overlay_web_contents->GetBackgroundColor(), SK_ColorTRANSPARENT);
+
+  // 4. Assert that the RenderWidgetHostView background color remains as
+  // expected after load.
+  rwhv = overlay_web_contents->GetRenderWidgetHostView();
+  ASSERT_NE(rwhv, nullptr);
+  EXPECT_EQ(rwhv->GetBackgroundColor(), expected_rwhv_color);
+}
+
 class ActorOverlayDisabledTest : public InProcessBrowserTest {
  public:
   void SetUp() override {
@@ -850,43 +882,42 @@ class GlicActorDisabledTest : public InProcessBrowserTest {
 // browser windows since the feature is disabled.
 IN_PROC_BROWSER_TEST_F(GlicActorDisabledTest,
                        ControllerDoesntExistsForNormalBrowsers) {
-  Profile* const profile = browser()->profile();
+  Profile* const profile = browser()->GetProfile();
 
   // Normal browser window
-  Browser* const normal_browser = browser();
+  BrowserWindowInterface* const normal_browser = browser();
   ASSERT_EQ(ActorUiWindowController::From(normal_browser), nullptr);
-  ASSERT_EQ(ActorUiTabController::From(normal_browser->browser_window_features()
-                                           ->tab_strip_model()
-                                           ->GetActiveTab()),
+  ASSERT_EQ(ActorUiTabController::From(
+                normal_browser->GetTabStripModel()->GetActiveTab()),
             nullptr);
 
   // Popup window
-  Browser* const popup_browser = CreateBrowserForPopup(profile);
+  BrowserWindowInterface* const popup_browser = CreateBrowserForPopup(profile);
   ASSERT_EQ(ActorUiWindowController::From(popup_browser), nullptr);
-  ASSERT_EQ(ActorUiTabController::From(popup_browser->browser_window_features()
-                                           ->tab_strip_model()
-                                           ->GetActiveTab()),
+  ASSERT_EQ(ActorUiTabController::From(
+                popup_browser->GetTabStripModel()->GetActiveTab()),
             nullptr);
 
   // App window
-  Browser* const app_browser = CreateBrowserForApp("test_app_name", profile);
+  BrowserWindowInterface* const app_browser =
+      CreateBrowserForApp("test_app_name", profile);
   ASSERT_EQ(ActorUiWindowController::From(app_browser), nullptr);
-  ASSERT_EQ(ActorUiTabController::From(app_browser->browser_window_features()
-                                           ->tab_strip_model()
-                                           ->GetActiveTab()),
+  ASSERT_EQ(ActorUiTabController::From(
+                app_browser->GetTabStripModel()->GetActiveTab()),
             nullptr);
 
   // Picture-in-Picture window
-  Browser* const pip_browser =
-      Browser::Create(Browser::CreateParams::CreateForPictureInPicture(
-          "test_app_name", false, profile, false));
+  BrowserWindowInterface* const pip_browser =
+      CreateBrowserWindow(BrowserWindowCreateParams::CreateForPictureInPicture(
+          "test_app_name", /*trusted_source=*/false, profile,
+          /*user_gesture=*/false));
   ASSERT_EQ(ActorUiWindowController::From(pip_browser), nullptr);
   // Tab Interface is null for Picture-in-Picture windows, so we don't test the
   // tab controller's existence.
 
   // DevTools window
-  Browser* const devtools_browser =
-      Browser::Create(Browser::CreateParams::CreateForDevTools(profile));
+  BrowserWindowInterface* const devtools_browser = CreateBrowserWindow(
+      BrowserWindowCreateParams::CreateForDevTools(profile));
   ASSERT_EQ(ActorUiWindowController::From(devtools_browser), nullptr);
   // Tab Interface is null for DevTools windows, so we don't test the tab
   // controller's existence.

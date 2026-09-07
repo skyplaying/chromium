@@ -42,6 +42,7 @@
 #include "ui/views/border.h"
 #include "ui/views/bubble/bubble_border.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
+#include "ui/views/controls/focus_ring.h"
 #include "ui/views/controls/highlight_path_generator.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/highlight_border.h"
@@ -72,8 +73,7 @@ class ResizeToggleMenuBubbleDialogDelegate
     SetArrow(views::BubbleBorder::Arrow::TOP_CENTER);
     SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
     set_parent_window(parent);
-    set_title_margins(gfx::Insets());
-    set_margins(gfx::Insets());
+    set_frame_margins({.contents = gfx::Insets(), .title = gfx::Insets()});
     SetAnchorRect(anchor_rect);
     SetTitle(l10n_util::GetStringUTF16(
         IDS_ARC_COMPAT_MODE_RESIZE_TOGGLE_MENU_TITLE));
@@ -196,9 +196,7 @@ ResizeToggleMenu::ResizeToggleMenu(
       base::BindRepeating(&ResizeToggleMenu::ApplyResizeCompatMode,
                           base::Unretained(this)));
   bubble_widget_ =
-      base::WrapUnique<views::Widget>(views::BubbleDialogDelegate::CreateBubble(
-          bubble_delegate_.get(),
-          views::Widget::InitParams::CLIENT_OWNS_WIDGET));
+      views::BubbleDialogDelegate::CreateBubble(bubble_delegate_.get());
   widget_observations_.AddObservation(widget_.get());
   widget_observations_.AddObservation(bubble_widget_.get());
   OverlayDialog::Show(widget_->GetNativeWindow(),

@@ -5,7 +5,9 @@
 #include "third_party/blink/renderer/core/permissions_policy/document_policy_parser.h"
 
 #include "net/http/structured_headers.h"
+#include "third_party/blink/public/common/permissions_policy/document_policy_enum_values.h"
 #include "third_party/blink/public/mojom/permissions_policy/policy_value.mojom-blink.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 namespace {
@@ -28,11 +30,12 @@ const char* PolicyValueTypeToString(mojom::blink::PolicyValueType type) {
 
 std::optional<PolicyValue> ItemToPolicyValue(
     const net::structured_headers::Item& item,
-    mojom::blink::PolicyValueType type) {
+    mojom::blink::PolicyValueType type,
+    mojom::blink::DocumentPolicyFeature feature) {
   switch (type) {
     case mojom::blink::PolicyValueType::kBool: {
-      if (item.is_boolean()) {
-        return PolicyValue::CreateBool(item.GetBoolean());
+      if (const bool* value = item.GetIfBoolean()) {
+        return PolicyValue::CreateBool(*value);
       } else {
         return std::nullopt;
       }
@@ -47,6 +50,18 @@ std::optional<PolicyValue> ItemToPolicyValue(
         default:
           return std::nullopt;
       }
+    case mojom::blink::PolicyValueType::kEnum: {
+      const std::string* token = item.GetIfToken();
+      if (!token) {
+        return std::nullopt;
+      }
+      std::optional<int32_t> enum_value =
+          DocumentPolicyEnumTokenToValue(feature, *token);
+      if (!enum_value) {
+        return std::nullopt;
+      }
+      return PolicyValue::CreateEnum(*enum_value);
+    }
     default:
       return std::nullopt;
   }
@@ -54,9 +69,11 @@ std::optional<PolicyValue> ItemToPolicyValue(
 
 std::optional<std::string> ItemToString(
     const net::structured_headers::Item& item) {
-  if (item.Type() != net::structured_headers::Item::ItemType::kTokenType)
+  const std::string* token = item.GetIfToken();
+  if (!token) {
     return std::nullopt;
-  return item.GetString();
+  }
+  return *token;
 }
 
 struct ParsedFeature {
@@ -73,12 +90,10 @@ std::optional<ParsedFeature> ParseFeature(
   ParsedFeature parsed_feature;
 
   const std::string& feature_name = directive.first;
-  if (directive.second.member_is_inner_list) {
-    logger.Warn(
-        String::Format("Parameter for feature %s should be single item, but "
-                       "get list of items(length=%d).",
-                       feature_name.c_str(),
-                       static_cast<uint32_t>(directive.second.member.size())));
+  const auto item_and_params = directive.second.GetWithParamsIfItem();
+  if (!item_and_params.has_value()) {
+    logger.Warn(StrCat({"Parameter for feature ", feature_name.c_str(),
+                        " should be single item, but got inner list."}));
     return std::nullopt;
   }
 
@@ -87,27 +102,27 @@ std::optional<ParsedFeature> ParseFeature(
   if (feature_iter != name_feature_map.end()) {
     parsed_feature.feature = feature_iter->second;
   } else {
-    logger.Warn(String::Format("Unrecognized document policy feature name %s.",
-                               feature_name.c_str()));
+    logger.Warn(StrCat({"Unrecognized document policy feature name ",
+                        feature_name.c_str(), "."}));
     return std::nullopt;
   }
 
   auto expected_policy_value_type =
       feature_info_map.at(parsed_feature.feature).default_value.Type();
-  const net::structured_headers::Item& item =
-      directive.second.member.front().item;
-  std::optional<PolicyValue> policy_value =
-      ItemToPolicyValue(item, expected_policy_value_type);
+  const net::structured_headers::Item& item = item_and_params->first;
+  const net::structured_headers::Parameters& params = item_and_params->second;
+  std::optional<PolicyValue> policy_value = ItemToPolicyValue(
+      item, expected_policy_value_type, parsed_feature.feature);
   if (!policy_value) {
-    logger.Warn(UNSAFE_TODO(String::Format(
-        "Parameter for feature %s should be %s, not %s.", feature_name.c_str(),
-        PolicyValueTypeToString(expected_policy_value_type),
-        net::structured_headers::ItemTypeToString(item.Type()).data())));
+    logger.Warn(StrCat(
+        {"Parameter for feature ", feature_name.c_str(), " should be ",
+         PolicyValueTypeToString(expected_policy_value_type), ", not ",
+         net::structured_headers::ItemTypeToString(item.Type()).data(), "."}));
     return std::nullopt;
   }
   parsed_feature.policy_value = *policy_value;
 
-  for (const auto& param : directive.second.params) {
+  for (const auto& param : params) {
     const std::string& param_name = param.first;
     // Handle "report-to" param. "report-to" is an optional param for
     // Document-Policy header that specifies the endpoint group that the policy
@@ -116,16 +131,15 @@ std::optional<ParsedFeature> ParseFeature(
     if (param_name == kReportTo) {
       parsed_feature.endpoint_group = ItemToString(param.second);
       if (!parsed_feature.endpoint_group) {
-        logger.Warn(String::Format(
-            "\"report-to\" parameter should be a token in feature %s.",
-            feature_name.c_str()));
+        logger.Warn(
+            StrCat({"\"report-to\" parameter should be a token in feature ",
+                    feature_name.c_str(), "."}));
         return std::nullopt;
       }
     } else {
       // Unrecognized param.
-      logger.Warn(
-          String::Format("Unrecognized parameter name %s for feature %s.",
-                         param_name.c_str(), feature_name.c_str()));
+      logger.Warn(StrCat({"Unrecognized parameter name ", param_name.c_str(),
+                          " for feature ", feature_name.c_str(), "."}));
     }
   }
 

@@ -33,6 +33,7 @@
 #include "services/network/pending_callback_chain.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/url_loader.h"
+#include "services/network/url_loader_util.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(ENABLE_WEBSOCKETS)
@@ -66,6 +67,13 @@ NetworkServiceNetworkDelegate::NetworkServiceNetworkDelegate(
 
 NetworkServiceNetworkDelegate::~NetworkServiceNetworkDelegate() = default;
 
+void NetworkServiceNetworkDelegate::
+    SetShouldForceIgnoreSiteForCookiesCallbackForTesting(
+        base::RepeatingCallback<void(const net::URLRequest&)> callback) {
+  should_force_ignore_site_for_cookies_callback_for_testing_ =
+      std::move(callback);
+}
+
 void NetworkServiceNetworkDelegate::MaybeTruncateReferrer(
     net::URLRequest* const request,
     const GURL& effective_url) {
@@ -73,14 +81,6 @@ void NetworkServiceNetworkDelegate::MaybeTruncateReferrer(
     request->SetReferrer(std::string());
     request->set_referrer_policy(net::ReferrerPolicy::NO_REFERRER);
     return;
-  }
-
-  if (base::FeatureList::IsEnabled(
-          net::features::kCapReferrerToOriginOnCrossOrigin)) {
-    if (!url::IsSameOriginWith(effective_url, GURL(request->referrer()))) {
-      auto capped_referrer = url::Origin::Create(GURL(request->referrer()));
-      request->SetReferrer(capped_referrer.GetURL().spec());
-    }
   }
 }
 
@@ -302,6 +302,16 @@ bool NetworkServiceNetworkDelegate::OnCanSetCookie(
   return true;
 }
 
+bool NetworkServiceNetworkDelegate::OnShouldForceIgnoreSiteForCookies(
+    const net::URLRequest& request) {
+  if (should_force_ignore_site_for_cookies_callback_for_testing_) {
+    should_force_ignore_site_for_cookies_callback_for_testing_.Run(request);
+  }
+  return url_loader_util::ShouldForceIgnoreSiteForCookies(
+      request.url_chain(), request.initiator(), request.site_for_cookies(),
+      network_context_->cors_origin_access_list());
+}
+
 net::NetworkDelegate::PrivacySetting
 NetworkServiceNetworkDelegate::OnForcePrivacyMode(
     const net::URLRequest& request) const {
@@ -417,7 +427,7 @@ int NetworkServiceNetworkDelegate::HandleClearSiteDataHeader(
   auto& cookie_settings = network_context_->cookie_manager()->cookie_settings();
   net::NetworkDelegate::PrivacySetting privacy_settings =
       cookie_settings.IsPrivacyModeEnabled(
-          request->url(), request->site_for_cookies(),
+          request->url(), request->isolation_info().site_for_cookies(),
           request->isolation_info().top_frame_origin(),
           request->cookie_setting_overrides());
   bool partitioned_state_allowed_only =

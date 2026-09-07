@@ -17,6 +17,7 @@
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/mediastream/webaudio_destination_consumer.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
@@ -32,7 +33,7 @@ constexpr uint32_t kMaxChannelCountSupported = 8;
 MediaStreamAudioDestinationHandler::MediaStreamAudioDestinationHandler(
     AudioNode& node,
     uint32_t number_of_channels,
-    WebAudioDestinationConsumer* webaudio_consumer)
+    scoped_refptr<WebAudioDestinationConsumer> webaudio_consumer)
     : AudioHandler(NodeType::kNodeTypeMediaStreamAudioDestination,
                    node,
                    node.context()->sampleRate()),
@@ -53,10 +54,10 @@ MediaStreamAudioDestinationHandler::MediaStreamAudioDestinationHandler(
 scoped_refptr<MediaStreamAudioDestinationHandler>
 MediaStreamAudioDestinationHandler::Create(
     AudioNode& node, uint32_t number_of_channels,
-    WebAudioDestinationConsumer* webaudio_consumer) {
+    scoped_refptr<WebAudioDestinationConsumer> webaudio_consumer) {
   return base::AdoptRef(
       new MediaStreamAudioDestinationHandler(
-          node, number_of_channels, webaudio_consumer));
+          node, number_of_channels, std::move(webaudio_consumer)));
 }
 
 MediaStreamAudioDestinationHandler::~MediaStreamAudioDestinationHandler() {
@@ -180,17 +181,15 @@ void MediaStreamAudioDestinationHandler::UpdatePullStatusIfNeeded() {
 }
 
 void MediaStreamAudioDestinationHandler::SendLogMessage(
-    const char* const function_name,
+    const String& function_name,
     const String& message) {
-  WebRtcLogMessage(
-      UNSAFE_TODO(String::Format("[WA]MSADH::%s %s [this=0x%" PRIXPTR "]",
-                                 function_name, message.Utf8().c_str(),
-                                 reinterpret_cast<uintptr_t>(this)))
-          .Utf8());
+  WebRtcLogMessage(Format("[WA]MSADH::{} {} [this=0x{:X}]", function_name,
+                          message, reinterpret_cast<uintptr_t>(this))
+                       .Utf8());
 }
 
 void MediaStreamAudioDestinationHandler::SetConsumer(
-    WebAudioDestinationConsumer* destination_consumer,
+    scoped_refptr<WebAudioDestinationConsumer> destination_consumer,
     int number_of_channels,
     float sample_rate) {
   if (!destination_consumer) {
@@ -198,7 +197,7 @@ void MediaStreamAudioDestinationHandler::SetConsumer(
   }
 
   base::AutoLock locker(consumer_lock_);
-  destination_consumer_ = destination_consumer;
+  destination_consumer_ = std::move(destination_consumer);
   destination_consumer_->SetFormat(number_of_channels, sample_rate);
 }
 
@@ -226,7 +225,7 @@ void MediaStreamAudioDestinationHandler::ConsumeAudio(
       consumer_bus_wrapper_.resize(number_of_channels);
     }
     for (unsigned i = 0; i < number_of_channels; ++i) {
-      consumer_bus_wrapper_[i] = input_bus->Channel(i)->Data();
+      consumer_bus_wrapper_[i] = input_bus->Channel(i)->Span().data();
     }
 
     destination_consumer_->ConsumeAudio(consumer_bus_wrapper_,

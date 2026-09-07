@@ -48,6 +48,14 @@ static_library("sync_wifi") {
   ]
 }
 
+static_library("wifi_configuration_sync_service_provider") {
+  public = [ "wifi_configuration_sync_service_provider.h" ]
+
+  sources = [ "wifi_configuration_sync_service_provider.cc" ]
+
+  deps = [ "//base" ]
+}
+
 static_library("network_eligibility_checker") {
   sources = [
     "network_eligibility_checker.cc",
@@ -85,6 +93,8 @@ source_set("test_support") {
     "//components/onc",
     "//components/prefs:test_support",
     "//components/proxy_config",
+    "//components/session_manager/core",
+    "//components/session_manager/test:test_support",
     "//components/sync:test_support",
     "//components/sync_preferences:test_support",
     "//components/user_manager:test_support",

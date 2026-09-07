@@ -3,13 +3,13 @@
 // found in the LICENSE file.
 
 chromium::import! {
-  "//mojo/public/rust/system:ffi_bindings" as mojo_ffi;
+  "//mojo/public/rust/c_mojo_api" as mojo_ffi;
 }
 
-use crate::message::RawMojoMessage;
+use crate::message::{ReadableWithHandlesMessage, SendableMessage};
 use crate::mojo_types::declare_trappable_typed_handle;
 use mojo_ffi::message_pipe;
-use mojo_ffi::{MojoResult, UntypedHandle};
+use mojo_ffi::MojoResult;
 
 declare_trappable_typed_handle!(MessageEndpoint);
 
@@ -27,12 +27,10 @@ impl MessageEndpoint {
     ///
     /// # Possible Error Codes:
     /// - `ShouldWait`: If there's no message but the other end of the pipe is
-    ///   still open
+    ///   still open.
     /// - `FailedPrecondition`: If there's no message and the other end of the
-    ///   pipe is closed
-    // FOR_RELEASE: Maybe replace the return type  with a dedicated enum instead
-    // of a MojoResult
-    pub fn read(&self) -> MojoResult<RawMojoMessage> {
+    ///   pipe is closed.
+    pub fn read(&self) -> MojoResult<ReadableWithHandlesMessage> {
         message_pipe::MojoReadMessage(&self.handle).map(|handle| handle.into())
     }
 
@@ -40,8 +38,7 @@ impl MessageEndpoint {
     ///
     /// # Possible Error Codes:
     /// - `FailedPrecondition`: If the other end of the message pipe is closed.
-    pub fn write(&self, msg: RawMojoMessage) -> MojoResult<()> {
-        msg.finalize_for_sending();
-        message_pipe::MojoWriteMessage(&self.handle, msg.message_handle)
+    pub fn write(&self, msg: SendableMessage) -> MojoResult<()> {
+        message_pipe::MojoWriteMessage(&self.handle, msg.into())
     }
 }

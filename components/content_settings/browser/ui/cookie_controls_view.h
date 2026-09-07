@@ -25,23 +25,11 @@ class CookieControlsObserver : public base::CheckedObserver {
       // The expiration time of the active UB exception if it is present.
       base::Time expiration) {}
 
-  // Called to update the user bypass entrypoint in the omnibox. This can impact
-  // any property of the entrypoint (i.e. the visibility, label, or icon).
+  // Called to update the cookie controls icon in the omnibox. This can impact
+  // any property of the icon, including the visibility and label.
   virtual void OnCookieControlsIconStatusChanged(
-      // Whether to show the user bypass icon.
-      bool icon_visible,
       // The state of the controls for the UI to change.
-      CookieControlsState controls_state,
-      // Whether we should highlight the user bypass icon.
-      bool should_highlight) {}
-
-  // Called when the current page has finished reloading, after the effective
-  // cookie setting was changed on the previous load via the controller.
-  virtual void OnFinishedPageReloadWithChangedSettings() {}
-
-  // Called when the number of recent page reloads exceeds the highlight
-  // heuristic. Intended for use in Clank PWA logic.
-  virtual void OnReloadThresholdExceeded() {}
+      CookieControlsState controls_state) {}
 
   // Called when the bubble should be closed (e.g. due to a successful page
   // reload or another UI element being shown).

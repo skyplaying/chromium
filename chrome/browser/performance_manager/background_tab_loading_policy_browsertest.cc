@@ -9,19 +9,20 @@
 #include <vector>
 
 #include "base/test/bind.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/test/base/chrome_test_utils.h"
+#include "chrome/test/base/chrome_test_path_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/performance_manager/public/performance_manager.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "ui/base/window_open_disposition.h"
 
 namespace performance_manager {
 
@@ -94,7 +95,7 @@ IN_PROC_BROWSER_TEST_F(BackgroundTabLoadingBrowserTest, RestoreTab) {
   // browser. Wait not only for the browser window to appear, but also for the
   // new tab to complete loading so that it is eligible for restoration when
   // the browser is closed below.
-  Browser* browser_to_restore = nullptr;
+  BrowserWindowInterface* browser_to_restore = nullptr;
   {
     ui_test_utils::BrowserCreatedObserver browser_created_observer;
     ui_test_utils::NavigateToURLWithDisposition(
@@ -107,33 +108,33 @@ IN_PROC_BROWSER_TEST_F(BackgroundTabLoadingBrowserTest, RestoreTab) {
   const int kDesiredNumberOfTabs = 3;
   AddNTabsToBrowser(
       browser_to_restore,
-      kDesiredNumberOfTabs - browser_to_restore->tab_strip_model()->count());
+      kDesiredNumberOfTabs - browser_to_restore->GetTabStripModel()->count());
   EXPECT_EQ(kDesiredNumberOfTabs,
-            browser_to_restore->tab_strip_model()->count())
+            browser_to_restore->GetTabStripModel()->count())
       << ::testing::PrintToString(
-             get_tab_titles(browser_to_restore->tab_strip_model()));
+             get_tab_titles(browser_to_restore->GetTabStripModel()));
 
   // Close and restore the browser; capturing the newly-restored browser.
   const int active_tab_index =
-      browser_to_restore->tab_strip_model()->active_index();
+      browser_to_restore->GetTabStripModel()->active_index();
   CloseBrowserSynchronously(std::exchange(browser_to_restore, nullptr));
-  Browser* restored_browser = nullptr;
+  BrowserWindowInterface* restored_browser = nullptr;
   {
     ui_test_utils::BrowserCreatedObserver browser_created_observer;
-    chrome::OpenWindowWithRestoredTabs(browser()->profile());
+    chrome::OpenWindowWithRestoredTabs(browser()->GetProfile());
     restored_browser = browser_created_observer.Wait();
   }
 
-  EXPECT_EQ(kDesiredNumberOfTabs, restored_browser->tab_strip_model()->count())
+  EXPECT_EQ(kDesiredNumberOfTabs, restored_browser->GetTabStripModel()->count())
       << ::testing::PrintToString(
-             get_tab_titles(restored_browser->tab_strip_model()));
+             get_tab_titles(restored_browser->GetTabStripModel()));
   EXPECT_EQ(active_tab_index,
-            restored_browser->tab_strip_model()->active_index());
+            restored_browser->GetTabStripModel()->active_index());
 
   // All tabs should be loaded by BackgroundTabLoadingPolicy.
   int index = 0;
   while (auto* web_contents =
-             restored_browser->tab_strip_model()->GetWebContentsAt(index++)) {
+             restored_browser->GetTabStripModel()->GetWebContentsAt(index++)) {
     EnsureTabFinishedRestoring(web_contents);
   }
 }
@@ -167,10 +168,10 @@ IN_PROC_BROWSER_TEST_F(BackgroundTabLoadingBrowserTest,
 
   // Restore recently closed window.
   browser_created_observer.emplace();
-  chrome::OpenWindowWithRestoredTabs(browser()->profile());
+  chrome::OpenWindowWithRestoredTabs(browser()->GetProfile());
   BrowserWindowInterface* const restored_browser =
       browser_created_observer->Wait();
-  ASSERT_EQ(2U, chrome::GetTotalBrowserCount());
+  ASSERT_EQ(2U, GlobalBrowserCollection::GetInstance()->GetSize());
 
   EXPECT_EQ(kDesiredNumberOfTabs,
             restored_browser->GetTabStripModel()->count());

@@ -16,14 +16,12 @@
 #include "base/notreached.h"
 #include "base/strings/string_split.h"
 #include "remoting/base/rsa_key_pair.h"
-#include "remoting/protocol/channel_authenticator.h"
 #include "remoting/protocol/credentials_type.h"
 #include "remoting/protocol/host_authentication_config.h"
 #include "remoting/protocol/pairing_host_authenticator.h"
 #include "remoting/protocol/pairing_registry.h"
 #include "remoting/protocol/session_authz_authenticator.h"
 #include "remoting/protocol/spake2_authenticator.h"
-#include "third_party/libjingle_xmpp/xmllite/xmlelement.h"
 
 namespace remoting::protocol {
 
@@ -106,7 +104,7 @@ void NegotiatingHostAuthenticator::ProcessMessage(
     CreateAuthenticator(
         MESSAGE_READY,
         base::BindOnce(&NegotiatingHostAuthenticator::UpdateState,
-                       base::Unretained(this), std::move(resume_callback)));
+                       weak_factory_.GetWeakPtr(), std::move(resume_callback)));
     return;
   }
 
@@ -118,7 +116,7 @@ void NegotiatingHostAuthenticator::ProcessMessage(
     CreateAuthenticator(
         WAITING_MESSAGE,
         base::BindOnce(&NegotiatingAuthenticatorBase::ProcessMessageInternal,
-                       base::Unretained(this), message,
+                       weak_factory_.GetWeakPtr(), message,
                        std::move(resume_callback)));
     return;
   }
@@ -136,6 +134,8 @@ void NegotiatingHostAuthenticator::CreateAuthenticator(
     base::OnceClosure resume_callback) {
   DCHECK(current_method_ != AuthenticationMethod::INVALID);
 
+  auto weak_this = weak_factory_.GetWeakPtr();
+
   switch (current_method_) {
     case AuthenticationMethod::INVALID:
       NOTREACHED();
@@ -149,8 +149,9 @@ void NegotiatingHostAuthenticator::CreateAuthenticator(
           base::BindRepeating(&Spake2Authenticator::CreateForHost, local_id_,
                               remote_id_, config_->local_cert,
                               config_->key_pair));
-      authenticator->Start(std::move(resume_callback));
+      SessionAuthzAuthenticator* auth_ptr = authenticator.get();
       current_authenticator_ = std::move(authenticator);
+      auth_ptr->Start(std::move(resume_callback));
       break;
     }
 
@@ -163,22 +164,23 @@ void NegotiatingHostAuthenticator::CreateAuthenticator(
           base::BindRepeating(&Spake2Authenticator::CreateForHost, local_id_,
                               remote_id_, config_->local_cert,
                               config_->key_pair));
-      authenticator->Start(std::move(resume_callback));
+      SessionAuthzAuthenticator* auth_ptr = authenticator.get();
       current_authenticator_ = std::move(authenticator);
+      auth_ptr->Start(std::move(resume_callback));
       break;
     }
 
     case AuthenticationMethod::PAIRED_SPAKE2_CURVE25519: {
-      PairingHostAuthenticator* pairing_authenticator =
-          new PairingHostAuthenticator(
-              config_->pairing_registry,
-              base::BindRepeating(&Spake2Authenticator::CreateForHost,
-                                  local_id_, remote_id_, config_->local_cert,
-                                  config_->key_pair),
-              config_->shared_secret_hash);
-      current_authenticator_.reset(pairing_authenticator);
-      pairing_authenticator->Initialize(client_id_, preferred_initial_state,
-                                        std::move(resume_callback));
+      auto pairing_authenticator = std::make_unique<PairingHostAuthenticator>(
+          config_->pairing_registry,
+          base::BindRepeating(&Spake2Authenticator::CreateForHost, local_id_,
+                              remote_id_, config_->local_cert,
+                              config_->key_pair),
+          config_->shared_secret_hash);
+      PairingHostAuthenticator* auth_ptr = pairing_authenticator.get();
+      current_authenticator_ = std::move(pairing_authenticator);
+      auth_ptr->Initialize(client_id_, preferred_initial_state,
+                           std::move(resume_callback));
       break;
     }
 
@@ -188,6 +190,10 @@ void NegotiatingHostAuthenticator::CreateAuthenticator(
           config_->shared_secret_hash, preferred_initial_state);
       std::move(resume_callback).Run();
       break;
+  }
+
+  if (!weak_this) {
+    return;
   }
 
   ChainStateChangeAfterAcceptedWithUnderlying(*current_authenticator_);

@@ -19,9 +19,6 @@
 #include "ui/views/view.h"
 
 namespace views {
-
-class MenuController;
-
 namespace test {
 
 // Test implementation of MenuDelegate that tracks calls to MenuDelegate, along
@@ -62,6 +59,8 @@ class TestMenuDelegate : public MenuDelegate {
                        int id,
                        const gfx::Point& p,
                        ui::mojom::MenuSourceType source_type) override;
+  bool IsItemChecked(int id) const override;
+  void SetItemChecked(int id, bool checked);
   void ExecuteCommand(int id) override;
   void OnMenuClosed(MenuItemView* menu) override;
   views::View::DropCallback GetDropCallback(
@@ -73,7 +72,7 @@ class TestMenuDelegate : public MenuDelegate {
   void WillHideMenu(MenuItemView* menu) override;
   bool ShouldExecuteCommandWithoutClosingMenu(int id,
                                               const ui::Event& e) override;
-  bool ShouldCloseOnDragComplete() override;
+  bool ShouldCloseOnDragDropCompleted() override;
 
  private:
   // Performs the drop operation and updates |output_drag_op| accordingly.
@@ -109,34 +108,7 @@ class TestMenuDelegate : public MenuDelegate {
   bool should_close_on_drag_complete_ = false;
 
   base::flat_set<int> commands_without_context_menus_;
-};
-
-// Test api which caches the currently active MenuController. Can be used to
-// toggle visibility, and to clear seletion states, without performing full
-// shutdown. This is used to simulate menus with varing states, such as during
-// drags, without performing the entire operation. Used to test strange shutdown
-// ordering.
-class MenuControllerTestApi {
- public:
-  MenuControllerTestApi();
-
-  MenuControllerTestApi(const MenuControllerTestApi&) = delete;
-  MenuControllerTestApi& operator=(const MenuControllerTestApi&) = delete;
-
-  ~MenuControllerTestApi();
-
-  MenuController* controller() { return controller_.get(); }
-
-  // Clears out the current and pending states, without notifying the associated
-  // menu items.
-  void ClearState();
-
-  // Toggles the internal showing state of |controller_| without attempting
-  // to change associated Widgets.
-  void SetShowing(bool showing);
-
- private:
-  base::WeakPtr<MenuController> controller_;
+  base::flat_set<int> checked_commands_;
 };
 
 // On platforms which have menu closure animations, these functions are

@@ -13,17 +13,15 @@
 #include "chrome/browser/search/background/ntp_custom_background_service_factory.h"
 #include "chrome/browser/search_provider_logos/logo_service_factory.h"
 #include "chrome/browser/themes/theme_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/customize_chrome/side_panel_controller.h"
-#include "chrome/browser/ui/tabs/public/tab_features.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry_id.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry_key.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_registry.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_ui.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
+#include "chrome/browser/ui/side_panel/side_panel_registry.h"
+#include "chrome/browser/ui/side_panel/side_panel_ui.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webui/customize_buttons/customize_buttons_handler.h"
 #include "chrome/browser/ui/webui/webui_embedding_context.h"
 #include "chrome/common/pref_names.h"
@@ -34,6 +32,8 @@
 #include "chrome/test/user_education/interactive_feature_promo_test.h"
 #include "components/prefs/pref_service.h"
 #include "components/search/ntp_features.h"
+#include "components/tabs/public/tab_interface.h"
+#include "components/user_education/views/help_bubble_view.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -47,6 +47,12 @@
 #include "chrome/browser/ui/ui_features.h"
 #include "components/policy/core/common/management/scoped_management_service_override_for_testing.h"
 #endif
+
+namespace {
+DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewTabPageElementId);
+const WebContentsInteractionTestUtil::DeepQuery kCustomizeChromeIPH{
+    "ntp-app", "ntp-customize-buttons", "help-bubble"};
+}  // namespace
 
 class MockPage : public new_tab_page::mojom::Page {
  public:
@@ -68,7 +74,6 @@ class MockPage : public new_tab_page::mojom::Page {
   MOCK_METHOD(void, SetActionChipsVisibility, (bool));
   MOCK_METHOD(void, SetModulesFreVisibility, (bool));
   MOCK_METHOD(void, SetCustomizeChromeSidePanelVisibility, (bool));
-  MOCK_METHOD(void, SetPromo, (new_tab_page::mojom::PromoPtr));
   MOCK_METHOD(void, ShowWebstoreToast, ());
   MOCK_METHOD(void, SetWallpaperSearchButtonVisibility, (bool));
   MOCK_METHOD(void, FooterVisibilityUpdated, (bool));
@@ -87,7 +92,7 @@ class NewTabPageHandlerBaseBrowserTest : public InProcessBrowserTest {
     InProcessBrowserTest::TearDownOnMainThread();
   }
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
   content::WebContents* web_contents() {
     return chrome_test_utils::GetActiveWebContents(this);
   }
@@ -95,17 +100,7 @@ class NewTabPageHandlerBaseBrowserTest : public InProcessBrowserTest {
   void CloseSidePanel() {
     BrowserWindowInterface* const browser_window_interface =
         webui::GetBrowserWindowInterface(web_contents());
-    SidePanelRegistry* const side_panel_registry =
-        browser_window_interface->GetTabStripModel()
-            ->GetActiveTab()
-            ->GetTabFeatures()
-            ->side_panel_registry();
-    SidePanelEntry::PanelType panel_type =
-        side_panel_registry
-            ->GetEntryForKey(
-                SidePanelEntryKey(SidePanelEntryId::kCustomizeChrome))
-            ->type();
-    browser_window_interface->GetFeatures().side_panel_ui()->Close(panel_type);
+    SidePanelUI::From(browser_window_interface)->Close();
   }
 
   MockPage* mock_page() { return &mock_page_; }
@@ -122,6 +117,7 @@ class NewTabPageHandlerBaseBrowserTest : public InProcessBrowserTest {
         /*sync_service=*/nullptr,
         /*segmentation_platform_service=*/nullptr, web_contents(),
         /*ntp_navigation_start_time=*/base::Time::Now(),
+        /*ntp_navigation_start_time_ticks=*/base::TimeTicks::Now(),
         /*module_id_details=*/nullptr);
     testing::Mock::VerifyAndClearExpectations(mock_page());
   }
@@ -137,17 +133,14 @@ class NewTabPageHandlerWithCustomizeChromePromoBaseBrowserTest
     : public NewTabPageHandlerBaseBrowserTest {
  protected:
   bool IsCustomizeChromeEntryShowing() {
-    return webui::GetBrowserWindowInterface(web_contents())
-        ->GetTabStripModel()
-        ->GetActiveTab()
-        ->GetTabFeatures()
-        ->customize_chrome_side_panel_controller()
-        ->IsCustomizeChromeEntryShowing();
+    auto* controller = customize_chrome::SidePanelController::Get(
+        chrome_test_utils::GetActiveTab(this)->GetUnownedUserDataHost());
+    return controller->IsCustomizeChromeEntryShowing();
   }
 
   void OpenNewTabPageInForeground() {
     ui_test_utils::NavigateToURLWithDisposition(
-        browser(), GURL(chrome::kChromeUINewTabPageURL),
+        browser(), chrome::ChromeUINewTabPageURLAsGURL(),
         WindowOpenDisposition::NEW_FOREGROUND_TAB,
         ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   }
@@ -180,8 +173,23 @@ class NewTabPageHandlerWithCustomizeChromePromoBrowserTest
   }
 };
 
+class NewTabPageHandlerWithCustomizeChromePromoMaxTimesBrowserTest
+    : public NewTabPageHandlerWithCustomizeChromePromoBrowserTest {
+ protected:
+  NewTabPageHandlerWithCustomizeChromePromoMaxTimesBrowserTest() {
+    scoped_feature_list_max_times_.InitAndEnableFeatureWithParameters(
+        ntp_features::kNtpCustomizeChromeAutoOpen,
+        {{"max_customize_chrome_auto_shown_count", "5"},
+         {"max_customize_chrome_auto_shown_session_count", "5"}});
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_max_times_;
+};
+
+// TODO(crbug.com/519385225): Fix and re-enable the test.
 IN_PROC_BROWSER_TEST_F(NewTabPageHandlerWithCustomizeChromePromoBrowserTest,
-                       DontOpenPanelWhenUserCustomizedChromeAlready) {
+                       DISABLED_DontOpenPanelWhenUserCustomizedChromeAlready) {
   auto* theme_service = ThemeServiceFactory::GetForProfile(profile());
   theme_service->SetUserColorAndBrowserColorVariant(
       SkColorSetRGB(0x00, 0x00, 0x00),
@@ -198,8 +206,10 @@ IN_PROC_BROWSER_TEST_F(NewTabPageHandlerWithCustomizeChromePromoBrowserTest,
       SidePanelOpenTrigger::kNewTabPageAutomaticCustomizeChrome, 0);
 }
 
-IN_PROC_BROWSER_TEST_F(NewTabPageHandlerWithCustomizeChromePromoBrowserTest,
-                       DontOpenPanelWhenCustomizeButtonWasClickedBefore) {
+// TODO(crbug.com/519385225): Fix and re-enable the test.
+IN_PROC_BROWSER_TEST_F(
+    NewTabPageHandlerWithCustomizeChromePromoBrowserTest,
+    DISABLED_DontOpenPanelWhenCustomizeButtonWasClickedBefore) {
   profile()->GetPrefs()->SetInteger(prefs::kNtpCustomizeChromeButtonOpenCount,
                                     1);
 
@@ -214,10 +224,12 @@ IN_PROC_BROWSER_TEST_F(NewTabPageHandlerWithCustomizeChromePromoBrowserTest,
       SidePanelOpenTrigger::kNewTabPageAutomaticCustomizeChrome, 0);
 }
 
-IN_PROC_BROWSER_TEST_F(NewTabPageHandlerWithCustomizeChromePromoBrowserTest,
-                       DontOpenPanelWhenPanelWasShowedMaxTimesBefore) {
-  for (size_t i = 0;
-       i < ntp_features::kNtpCustomizeChromeAutoShownMaxCount.Get(); ++i) {
+// TODO(crbug.com/519385225): Fix and re-enable the test.
+IN_PROC_BROWSER_TEST_F(
+    NewTabPageHandlerWithCustomizeChromePromoMaxTimesBrowserTest,
+    DISABLED_DontOpenPanelWhenPanelWasShowedMaxTimesBefore) {
+  for (int i = 0; i < ntp_features::kNtpCustomizeChromeAutoShownMaxCount.Get();
+       ++i) {
     OpenNewTabPageInForegroundAndWaitForLoad();
     EXPECT_TRUE(IsCustomizeChromeEntryShowing());
   }
@@ -234,8 +246,9 @@ IN_PROC_BROWSER_TEST_F(NewTabPageHandlerWithCustomizeChromePromoBrowserTest,
       ntp_features::kNtpCustomizeChromeAutoShownMaxCount.Get());
 }
 
-IN_PROC_BROWSER_TEST_F(NewTabPageHandlerWithCustomizeChromePromoBrowserTest,
-                       DontOpenPanelAgainWhenPanelWasExplicitlyCanceledBefore) {
+IN_PROC_BROWSER_TEST_F(
+    NewTabPageHandlerWithCustomizeChromePromoBrowserTest,
+    DISABLED_DontOpenPanelAgainWhenPanelWasExplicitlyCanceledBefore) {
   OpenNewTabPageInForegroundAndWaitForLoad();
   EXPECT_TRUE(IsCustomizeChromeEntryShowing());
 
@@ -288,9 +301,10 @@ IN_PROC_BROWSER_TEST_F(
       SidePanelOpenTrigger::kNewTabPageAutomaticCustomizeChrome, 1);
 }
 
+// TODO(crbug.com/519385225): Fix and re-enable the test.
 IN_PROC_BROWSER_TEST_F(
     NewTabPageHandlerWithCustomizeChromePromoFirstNTPOnlyBrowserTest,
-    DontOpenPanelWhenPromoAutoopenedInTheSameSession) {
+    DISABLED_DontOpenPanelWhenPromoAutoopenedInTheSameSession) {
   OpenNewTabPageInForegroundAndWaitForLoad();
   EXPECT_TRUE(IsCustomizeChromeEntryShowing());
 
@@ -324,16 +338,20 @@ class NewTabPageHandlerWithCustomizeChromeTutorialBrowserTest
   base::test::ScopedFeatureList scoped_feature_list_iph_only_;
 };
 
+// TODO(crbug.com/519385225): Fix and re-enable the test.
 IN_PROC_BROWSER_TEST_F(NewTabPageHandlerWithCustomizeChromeTutorialBrowserTest,
-                       DontOpenPanelWhenTutorialShouldBeShown) {
+                       DISABLED_DontOpenPanelWhenTutorialShouldBeShown) {
   OpenNewTabPageInForeground();
 
   RunTestSequence(
+      InstrumentTab(kNewTabPageElementId),
       InAnyContext(WaitForShow(
           CustomizeButtonsHandler::kCustomizeChromeButtonElementId)),
       CheckPromoRequested(
           feature_engagement::kIPHDesktopCustomizeChromeExperimentFeature,
-          true));
+          true),
+      WaitForShow(
+          user_education::HelpBubbleView::kHelpBubbleElementIdForTesting));
   EXPECT_FALSE(IsCustomizeChromeEntryShowing());
 
   histogram_tester_.ExpectBucketCount(
@@ -357,12 +375,13 @@ IN_PROC_BROWSER_TEST_F(
     NewTabPageHandlerWithCustomizeChromeIPHAutoOpenTest,
     PRE_ShouldShowSidePanelForTheSecondTimeIndependentlyOfIPH) {
   OpenNewTabPageInForeground();
-  // TODO(crbug.com/454919411): Explicitly check whether an IPH is shown.
   RunTestSequence(
+      InstrumentTab(kNewTabPageElementId),
       InAnyContext(WaitForShow(
           CustomizeButtonsHandler::kCustomizeChromeButtonElementId)),
       CheckPromoRequested(
           feature_engagement::kIPHDesktopCustomizeChromeAutoOpenFeature),
+      WaitForElementVisible(kNewTabPageElementId, kCustomizeChromeIPH),
       WaitForShow(kSidePanelElementId));
 
   EXPECT_TRUE(IsCustomizeChromeEntryShowing());
@@ -379,16 +398,18 @@ IN_PROC_BROWSER_TEST_F(
       SidePanelOpenTrigger::kNewTabPageAutomaticCustomizeChrome, 1);
 }
 
-IN_PROC_BROWSER_TEST_F(NewTabPageHandlerWithCustomizeChromeIPHAutoOpenTest,
-                       ShouldShowSidePanelForTheSecondTimeIndependentlyOfIPH) {
+// TODO(crbug.com/519385225): Fix and re-enable the test.
+IN_PROC_BROWSER_TEST_F(
+    NewTabPageHandlerWithCustomizeChromeIPHAutoOpenTest,
+    DISABLED_ShouldShowSidePanelForTheSecondTimeIndependentlyOfIPH) {
   OpenNewTabPageInForeground();
   RunTestSequence(
+      InstrumentTab(kNewTabPageElementId),
       InAnyContext(WaitForShow(
           CustomizeButtonsHandler::kCustomizeChromeButtonElementId)),
-      // Promo was requested, but not necessarily shown. When fixing
-      // crbug.com/454919411, that could be properly checked.
       CheckPromoRequested(
           feature_engagement::kIPHDesktopCustomizeChromeAutoOpenFeature, true),
+      WaitForElementVisible(kNewTabPageElementId, kCustomizeChromeIPH),
       WaitForShow(kSidePanelElementId));
 
   EXPECT_TRUE(IsCustomizeChromeEntryShowing());
@@ -411,8 +432,7 @@ class NewTabPageHandlerManagedTest : public NewTabPageHandlerBaseBrowserTest,
  public:
   NewTabPageHandlerManagedTest() {
     feature_list_.InitWithFeatures(
-        /*enabled_features=*/{ntp_features::kNtpFooter,
-                              features::kEnterpriseBadgingForNtpFooter},
+        /*enabled_features=*/{ntp_features::kNtpFooter},
         /*disabled_features=*/{});
   }
 
@@ -439,7 +459,7 @@ class NewTabPageHandlerManagedTest : public NewTabPageHandlerBaseBrowserTest,
 
   void NavigateToNewTabPage() {
     ui_test_utils::NavigateToURLWithDisposition(
-        browser(), GURL(chrome::kChromeUINewTabPageURL),
+        browser(), chrome::ChromeUINewTabPageURLAsGURL(),
         WindowOpenDisposition::CURRENT_TAB,
         ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   }

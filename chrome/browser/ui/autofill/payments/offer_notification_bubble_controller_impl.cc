@@ -8,17 +8,19 @@
 
 #include "base/check_deref.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/notimplemented.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
 #include "chrome/browser/ui/autofill/autofill_bubble_base.h"
 #include "chrome/browser/ui/autofill/autofill_bubble_handler.h"
 #include "chrome/browser/ui/autofill/payments/payments_ui_constants.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_actions.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/page_action/page_action_icon_type.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics.h"
 #include "components/autofill/core/browser/payments/offer_notification_options.h"
@@ -32,7 +34,7 @@
 #include "ui/base/l10n/l10n_util.h"
 
 #if !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/ui/views/page_action/page_action_controller.h"
+#include "chrome/browser/ui/page_action/page_action_controller.h"
 #endif  // BUILDFLAG(IS_ANDROID)
 
 namespace autofill {
@@ -78,6 +80,10 @@ std::u16string OfferNotificationBubbleControllerImpl::GetWindowTitle() const {
     case AutofillOfferData::OfferType::GPAY_PROMO_CODE_OFFER:
       return l10n_util::GetStringUTF16(
           IDS_AUTOFILL_GPAY_PROMO_CODE_OFFERS_REMINDER_TITLE);
+    case AutofillOfferData::OfferType::WALLET_DIRECT_OFFER:
+      // TODO(crbug.com/546252995): Implement UI for Wallet Direct Offers.
+      NOTIMPLEMENTED();
+      return std::u16string();
     case AutofillOfferData::OfferType::UNKNOWN:
       NOTREACHED();
   }
@@ -231,11 +237,9 @@ void OfferNotificationBubbleControllerImpl::DoShowBubble() {
     return;
   }
 
-  Browser* browser = chrome::FindBrowserWithTab(web_contents());
-  SetBubbleView(*browser->window()
-                     ->GetAutofillBubbleHandler()
-                     ->ShowOfferNotificationBubble(web_contents(), this,
-                                                   is_user_gesture_));
+  AutofillBubbleHandler* autofill_bubble_handler = GetAutofillBubbleHandler();
+  SetBubbleView(*autofill_bubble_handler->ShowOfferNotificationBubble(
+      web_contents(), this, is_user_gesture_));
   DCHECK(bubble_view());
 
   // Update |bubble_state_| after bubble is shown once. In OnVisibilityChanged()
@@ -261,12 +265,13 @@ OfferNotificationBubbleControllerImpl::GetBubbleControllerBaseWeakPtr() {
 }
 
 bool OfferNotificationBubbleControllerImpl::IsWebContentsActive() {
-  Browser* active_browser = chrome::FindBrowserWithActiveWindow();
+  BrowserWindowInterface* active_browser =
+      GlobalBrowserCollection::GetInstance()->GetActiveBrowser();
   if (!active_browser) {
     return false;
   }
 
-  return active_browser->tab_strip_model()->GetActiveWebContents() ==
+  return active_browser->GetTabStripModel()->GetActiveWebContents() ==
          web_contents();
 }
 
@@ -284,17 +289,23 @@ void OfferNotificationBubbleControllerImpl::UpdatePageActionIcon() {
 #if !BUILDFLAG(IS_ANDROID)
   AutofillBubbleControllerBase::UpdatePageActionIcon();
 
-  if (!IsPageActionMigrated(*GetPageActionIconType()) ||
-      web_contents()->IsBeingDestroyed()) {
+  if (web_contents()->IsBeingDestroyed()) {
     return;
   }
   actions::ActionId action_id = *GetActionIdForPageAction();
   auto* action = actions::ActionManager::Get().FindAction(
-      action_id, tab_interface_->GetBrowserWindowInterface()
-                     ->GetActions()
-                     ->root_action_item());
+      action_id,
+      BrowserActions::From(tab_interface_->GetBrowserWindowInterface())
+          ->root_action_item());
   action->SetEnabled(ShouldShowPageAction());
 #endif  // BUILDFLAG(IS_ANDROID)
+}
+
+AutofillBubbleHandler*
+OfferNotificationBubbleControllerImpl::GetAutofillBubbleHandler() {
+  BrowserWindowInterface* browser = tab_interface_->GetBrowserWindowInterface();
+  CHECK(browser);
+  return AutofillBubbleHandler::Get(browser->GetUnownedUserDataHost());
 }
 
 WEB_CONTENTS_USER_DATA_KEY_IMPL(OfferNotificationBubbleControllerImpl);

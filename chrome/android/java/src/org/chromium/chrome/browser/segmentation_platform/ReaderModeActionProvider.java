@@ -14,7 +14,6 @@ import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.chrome.browser.dom_distiller.DomDistillerTabUtils;
 import org.chromium.chrome.browser.dom_distiller.ReaderModeActionRateLimiter;
 import org.chromium.chrome.browser.dom_distiller.ReaderModeManager;
 import org.chromium.chrome.browser.dom_distiller.ReaderModeManager.DistillationStatus;
@@ -22,11 +21,10 @@ import org.chromium.chrome.browser.dom_distiller.ReaderModeMetrics;
 import org.chromium.chrome.browser.dom_distiller.TabDistillabilityProvider;
 import org.chromium.chrome.browser.dom_distiller.TabDistillabilityProvider.DistillabilityObserver;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabHidingType;
+import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarButtonVariant;
-import org.chromium.components.dom_distiller.core.DomDistillerFeatures;
 import org.chromium.components.dom_distiller.core.DomDistillerUrlUtils;
 import org.chromium.components.embedder_support.util.UrlConstants;
 import org.chromium.components.ukm.UkmRecorder;
@@ -39,8 +37,7 @@ import java.util.Objects;
 public class ReaderModeActionProvider implements ContextualPageActionController.ActionProvider {
     // DistillabilityObserver which automatically un/registers itself as an observer when there is a
     // result.
-    private class OneshotDistillabilityObserver extends EmptyTabObserver
-            implements DistillabilityObserver {
+    private class OneshotDistillabilityObserver implements TabObserver, DistillabilityObserver {
         private final Tab mTab;
         private final TabDistillabilityProvider mDistillabilityProvider;
         private final SignalAccumulator mSignalAccumulator;
@@ -57,9 +54,11 @@ public class ReaderModeActionProvider implements ContextualPageActionController.
 
             mTab.addObserver(this);
             if (!isTabPossiblyDistillable(mTab)) {
-                onIsPageDistillableResult(mTab, /* isDistillable= */ false, /* isLast= */ true, /* isMobileOptimized= */ false);
-            } else if (DomDistillerFeatures.shouldUseReadabilityTriggeringHeuristic()) {
-                useReadabilityHeuristic();
+                onIsPageDistillableResult(
+                        mTab,
+                        /* isDistillable= */ false,
+                        /* isLast= */ true,
+                        /* isMobileOptimized= */ false);
             } else {
                 useDistillabilityProvider();
             }
@@ -83,19 +82,6 @@ public class ReaderModeActionProvider implements ContextualPageActionController.
             }
         }
 
-        /** Uses the readability heurisitic to determine distillability. */
-        private void useReadabilityHeuristic() {
-            DomDistillerTabUtils.runReadabilityHeuristicsOnWebContents(
-                    mTab.getWebContents(),
-                    (readerable) -> {
-                        onIsPageDistillableResult(
-                                mTab,
-                                readerable,
-                                /* isLast= */ true,
-                                /* isMobileOptimized= */ false);
-                    });
-        }
-
         public void destroy() {
             if (mIsDestroyed) return;
             mIsDestroyed = true;
@@ -104,7 +90,7 @@ public class ReaderModeActionProvider implements ContextualPageActionController.
             mDistillabilityProvider.removeObserver(this);
         }
 
-        // EmptyTabObserver implementation.
+        // TabObserver implementation.
 
         @Override
         public void onHidden(Tab tab, @TabHidingType int type) {
@@ -142,6 +128,7 @@ public class ReaderModeActionProvider implements ContextualPageActionController.
 
     private @Nullable OneshotDistillabilityObserver mDistillabilityObserver;
     private @Nullable GURL mLastSeenUrl;
+    private int mLastTabId = Tab.INVALID_TAB_ID;
     private final OneshotSupplier<Boolean> mButtonVisibilitySupplier;
 
     public ReaderModeActionProvider(OneshotSupplier<Boolean> buttonVisibilitySupplier) {
@@ -157,18 +144,22 @@ public class ReaderModeActionProvider implements ContextualPageActionController.
 
         if (tab == null) return;
 
-        // If ReaderModeDistillInApp is enabled and we're on a reading mode page, always show the
-        // button to give users a way to exit outside of a "back" navigation.
-        if (DomDistillerFeatures.sReaderModeDistillInApp.isEnabled()
-                && DomDistillerUrlUtils.isDistilledPage(tab.getUrl())) {
+        boolean isSameTab = tab.getId() == mLastTabId;
+        mLastTabId = tab.getId();
+
+        // If we're on a reading mode page, always show the button to give users a way to exit
+        // outside of a "back" navigation.
+        if (DomDistillerUrlUtils.isDistilledPage(tab.getUrl())) {
+            mLastSeenUrl = tab.getUrl();
             signalAccumulator.setSignal(AdaptiveToolbarButtonVariant.READER_MODE, true);
             return;
         }
 
-        // If ReaderModeDistillInApp is enabled and the param for showing the CPA is disabled, don't
-        // show the button.
-        if (DomDistillerFeatures.sReaderModeDistillInApp.isEnabled()
-                && !DomDistillerFeatures.sReaderModeDistillInAppShowCpa.getValue()) {
+        boolean isExitingReaderMode =
+                isSameTab && DomDistillerUrlUtils.isExitingReaderMode(mLastSeenUrl, tab.getUrl());
+        mLastSeenUrl = tab.getUrl();
+
+        if (isExitingReaderMode) {
             signalAccumulator.setSignal(AdaptiveToolbarButtonVariant.READER_MODE, false);
             return;
         }
@@ -178,7 +169,6 @@ public class ReaderModeActionProvider implements ContextualPageActionController.
         if (tabDistillabilityProvider == null) return;
 
         // Distillability score isn't available yet. Start observing the provider.
-        mLastSeenUrl = tab.getUrl();
         mDistillabilityObserver =
                 new OneshotDistillabilityObserver(
                         tab, tabDistillabilityProvider, signalAccumulator);
@@ -198,8 +188,7 @@ public class ReaderModeActionProvider implements ContextualPageActionController.
         }
 
         // When on a distilled page, don't count the action as shown and return immediately.
-        if (DomDistillerFeatures.sReaderModeDistillInApp.isEnabled()
-                && DomDistillerUrlUtils.isDistilledPage(tab.getUrl())) {
+        if (DomDistillerUrlUtils.isDistilledPage(tab.getUrl())) {
             return;
         }
 

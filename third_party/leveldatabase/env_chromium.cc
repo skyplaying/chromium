@@ -481,7 +481,7 @@ Options::Options() {
 //
 // Currently log reuse is an experimental feature in leveldb. More info at:
 // https://github.com/google/leveldb/commit/251ebf5dc70129ad3
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Reusing logs on Chrome OS resulted in an unacceptably high leveldb
   // corruption rate (at least for Indexed DB). More info at
   // https://crbug.com/460568
@@ -1462,6 +1462,11 @@ leveldb::Status RewriteDB(const leveldb_env::Options& options,
 }
 
 std::string_view MakeStringView(const leveldb::Slice& s) {
+  // Workaround for crbug.com/493304613. May be possible to remove this after
+  // LevelDB is patched.
+  if (s.data() == nullptr) {
+    return std::string_view();
+  }
   return std::string_view(s.data(), s.size());
 }
 

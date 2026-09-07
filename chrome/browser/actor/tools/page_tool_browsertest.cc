@@ -17,13 +17,18 @@
 #include "base/test/test_future.h"
 #include "base/time/time.h"
 #include "base/values.h"
+#include "chrome/browser/actor/actor_keyed_service.h"
+#include "chrome/browser/actor/actor_metrics.h"
 #include "chrome/browser/actor/actor_task.h"
 #include "chrome/browser/actor/actor_test_util.h"
 #include "chrome/browser/actor/tools/tool_request.h"
 #include "chrome/browser/actor/tools/tools_test_util.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/common/actor.mojom.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_render_frame.mojom.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
+#include "components/enterprise/connectors/core/features.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -50,16 +55,38 @@ class ActorPageToolBrowserTest : public ActorToolsTest {
  public:
   void SetUpOnMainThread() override {
     ActorToolsTest::SetUpOnMainThread();
-    ASSERT_TRUE(embedded_test_server()->Start());
+    ASSERT_TRUE(embedded_https_test_server().Start());
   }
 };
 
-IN_PROC_BROWSER_TEST_F(ActorPageToolBrowserTest, RemovedElement) {
-  const GURL url = embedded_test_server()->GetURL("/actor/link.html");
+class ActorPageToolMagicCursorTest : public ActorPageToolBrowserTest,
+                                     public testing::WithParamInterface<bool> {
+ public:
+  ActorPageToolMagicCursorTest() {
+    if (GetParam()) {
+      feature_list_.InitWithFeatures(
+          {features::kGlicActorSplitValidateAndExecute,
+           features::kGlicActorUiMagicCursor},
+          {});
+    } else {
+      feature_list_.InitWithFeatures(
+          {}, {features::kGlicActorSplitValidateAndExecute,
+               features::kGlicActorUiMagicCursor});
+    }
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_P(ActorPageToolMagicCursorTest, RemovedElement) {
+  const GURL url =
+      embedded_https_test_server().GetURL("example.com", "/actor/link.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   std::optional<int> input_id = GetDOMNodeId(*main_frame(), "#link");
   ASSERT_TRUE(input_id);
+  base::HistogramTester histogram_tester;
   {
     // Click initially works.
     ActResultFuture result;
@@ -67,6 +94,9 @@ IN_PROC_BROWSER_TEST_F(ActorPageToolBrowserTest, RemovedElement) {
         MakeClickRequest(*main_frame(), input_id.value());
     actor_task().Act(ToRequestList(action), result.GetCallback());
     ExpectOkResult(result);
+
+    histogram_tester.ExpectBucketCount(
+        "Actor.PageTool.TimeOfUseObservationSuccess", true, 1);
   }
   ASSERT_TRUE(content::EvalJs(web_contents(), R"(
     let el = document.querySelector('#link');
@@ -82,6 +112,8 @@ IN_PROC_BROWSER_TEST_F(ActorPageToolBrowserTest, RemovedElement) {
     ExpectErrorResult(result, mojom::ActionResultCode::kInvalidDomNodeId);
   }
 }
+
+INSTANTIATE_TEST_SUITE_P(All, ActorPageToolMagicCursorTest, testing::Bool());
 
 class ActorPageToolTimeoutBrowserTest : public ActorPageToolBrowserTest {
  public:
@@ -111,7 +143,8 @@ class ActorPageToolTimeoutBrowserTest : public ActorPageToolBrowserTest {
 #define MAYBE_Timeout Timeout
 #endif
 IN_PROC_BROWSER_TEST_F(ActorPageToolTimeoutBrowserTest, MAYBE_Timeout) {
-  const GURL url = embedded_test_server()->GetURL("/actor/cancel_typing.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/cancel_typing.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   // Create a very long string (512KB) to type. This should take much longer
@@ -176,7 +209,8 @@ class ActorPageToolLongClickDelayBrowserTest
 // Click, then pause after mouse down. The click gets canceled, and the mouse
 // button is lifted.
 IN_PROC_BROWSER_TEST_P(ActorPageToolLongClickDelayBrowserTest, CancelClick) {
-  const GURL url = embedded_test_server()->GetURL("/actor/cancel_click.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/cancel_click.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   std::optional<int> button_id = GetDOMNodeId(*main_frame(), "#clickable");
@@ -192,6 +226,10 @@ IN_PROC_BROWSER_TEST_P(ActorPageToolLongClickDelayBrowserTest, CancelClick) {
     EXPECT_TRUE(content::ExecJs(main_frame(), R"(
       window.mousedownPromise = new Promise(resolve => {
         document.getElementById('clickable').addEventListener('mousedown',
+                                                              resolve);
+      });
+      window.clickPromise = new Promise(resolve => {
+        document.getElementById('clickable').addEventListener('click',
                                                               resolve);
       });)",
                                 content::EXECUTE_SCRIPT_NO_RESOLVE_PROMISES));
@@ -209,6 +247,10 @@ IN_PROC_BROWSER_TEST_P(ActorPageToolLongClickDelayBrowserTest, CancelClick) {
 
     ExpectErrorResult(result_for_cancel, mojom::ActionResultCode::kTaskPaused);
     FlushChromeRenderFrameForTesting(*main_frame());
+
+    // Wait for the simulated mouseup and click events to be dispatched to and
+    // processed by the renderer before checking the event log.
+    EXPECT_TRUE(content::ExecJs(main_frame(), "window.clickPromise"));
 
     const content::EvalJsResult eval_result =
         content::EvalJs(main_frame(), "event_log.join(',')");
@@ -254,7 +296,8 @@ class ActorPageToolLongMouseMoveDelayBrowserTest
 // mouse down or up.
 IN_PROC_BROWSER_TEST_F(ActorPageToolLongMouseMoveDelayBrowserTest,
                        CancelDuringMouseMove) {
-  const GURL url = embedded_test_server()->GetURL("/actor/cancel_click.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/cancel_click.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   std::optional<int> button_id = GetDOMNodeId(*main_frame(), "#clickable");
@@ -311,7 +354,8 @@ class ActorPageToolLongKeyDownDelayBrowserTest
 // Hold down a keyboard key, then pause. The key press gets canceled, and the
 // key is lifted.
 IN_PROC_BROWSER_TEST_F(ActorPageToolLongKeyDownDelayBrowserTest, CancelTyping) {
-  const GURL url = embedded_test_server()->GetURL("/actor/cancel_typing.html");
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/cancel_typing.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
 
   std::optional<int> input_id = GetDOMNodeId(*main_frame(), "#input");
@@ -348,6 +392,155 @@ IN_PROC_BROWSER_TEST_F(ActorPageToolLongKeyDownDelayBrowserTest, CancelTyping) {
               events_obj.ExtractString());
   }
 }
+
+class ActorPageToolMagicCursorRendererResolvedTest
+    : public ActorPageToolBrowserTest {
+ public:
+  ActorPageToolMagicCursorRendererResolvedTest() {
+    feature_list_.InitWithFeatures({features::kGlicActorSplitValidateAndExecute,
+                                    features::kGlicActorUiMagicCursor},
+                                   {});
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(ActorPageToolMagicCursorRendererResolvedTest,
+                       RecordsMatchOnSuccess) {
+  const GURL url =
+      embedded_https_test_server().GetURL("example.com", "/actor/link.html");
+  ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
+
+  std::optional<int> input_id = GetDOMNodeId(*main_frame(), "#link");
+  ASSERT_TRUE(input_id);
+
+  base::HistogramTester histogram_tester;
+
+  ActResultFuture result;
+  std::unique_ptr<ToolRequest> action =
+      MakeClickRequest(*main_frame(), input_id.value());
+  actor_task().Act(ToRequestList(action), result.GetCallback());
+
+  ExpectOkResult(result);
+
+  histogram_tester.ExpectUniqueSample(
+      "Actor.PageTool.SplitModeTimeOfUseFrameStatus",
+      SplitModeTimeOfUseFrameStatus::kMatch, 1);
+}
+
+class ActorPageToolContentScanningTest
+    : public ActorPageToolBrowserTest,
+      public testing::WithParamInterface<bool> {
+ public:
+  ActorPageToolContentScanningTest() {
+    std::vector<base::test::FeatureRef> enabled = {
+        enterprise_connectors::kGlicBulkDataEntrySupport};
+    std::vector<base::test::FeatureRef> disabled;
+    if (GetParam()) {
+      enabled.push_back(features::kGlicActorSplitValidateAndExecute);
+      enabled.push_back(features::kGlicActorUiMagicCursor);
+    } else {
+      disabled.push_back(features::kGlicActorSplitValidateAndExecute);
+      disabled.push_back(features::kGlicActorUiMagicCursor);
+    }
+    feature_list_.InitWithFeatures(enabled, disabled);
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_P(ActorPageToolContentScanningTest,
+                       ContentScanningBlocked) {
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/cancel_typing.html");
+  ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
+
+  std::optional<int> input_id = GetDOMNodeId(*main_frame(), "#input");
+  ASSERT_TRUE(input_id);
+
+  MockPolicyChecker blocked_checker(
+      EnterprisePolicyChecker::UrlBlockReason::kNotBlocked,
+      EnterprisePolicyChecker::ContentValidationReason::kBlocked);
+
+  TaskId task_id = ActorKeyedService::Get(GetProfile())
+                       ->CreateTask(TestTaskSourceInfo(), &blocked_checker);
+
+  std::unique_ptr<ToolRequest> action =
+      MakeTypeRequest(*main_frame(), input_id.value(), "sensitive data",
+                      /*follow_by_enter=*/false);
+
+  ActResultFuture result;
+  ActorKeyedService::Get(GetProfile())
+      ->GetTask(task_id)
+      ->Act(ToRequestList(action), result.GetCallback());
+
+  ExpectErrorResult(
+      result, mojom::ActionResultCode::kActionBlockedByEnterpriseContentScan);
+}
+
+IN_PROC_BROWSER_TEST_P(ActorPageToolContentScanningTest,
+                       ContentScanningAllowed) {
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/cancel_typing.html");
+  ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
+
+  std::optional<int> input_id = GetDOMNodeId(*main_frame(), "#input");
+  ASSERT_TRUE(input_id);
+
+  MockPolicyChecker allowed_checker(
+      EnterprisePolicyChecker::UrlBlockReason::kNotBlocked,
+      EnterprisePolicyChecker::ContentValidationReason::kAllowed);
+
+  TaskId task_id = ActorKeyedService::Get(GetProfile())
+                       ->CreateTask(TestTaskSourceInfo(), &allowed_checker);
+
+  std::unique_ptr<ToolRequest> action =
+      MakeTypeRequest(*main_frame(), input_id.value(), "safe data",
+                      /*follow_by_enter=*/false);
+
+  ActResultFuture result;
+  ActorKeyedService::Get(GetProfile())
+      ->GetTask(task_id)
+      ->Act(ToRequestList(action), result.GetCallback());
+
+  ExpectOkResult(result);
+}
+
+IN_PROC_BROWSER_TEST_P(ActorPageToolContentScanningTest,
+                       ContentScanningDropped) {
+  const GURL url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/cancel_typing.html");
+  ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
+
+  std::optional<int> input_id = GetDOMNodeId(*main_frame(), "#input");
+  ASSERT_TRUE(input_id);
+
+  MockPolicyChecker dropped_checker(
+      EnterprisePolicyChecker::UrlBlockReason::kNotBlocked, std::nullopt);
+
+  TaskId task_id = ActorKeyedService::Get(GetProfile())
+                       ->CreateTask(TestTaskSourceInfo(), &dropped_checker);
+
+  std::unique_ptr<ToolRequest> action =
+      MakeTypeRequest(*main_frame(), input_id.value(), "some data",
+                      /*follow_by_enter=*/false);
+
+  ActResultFuture result;
+  ActorKeyedService::Get(GetProfile())
+      ->GetTask(task_id)
+      ->Act(ToRequestList(action), result.GetCallback());
+
+  // Because the callback is dropped without being run,
+  // WrapCallbackWithDefaultInvokeIfNotRun should automatically invoke the
+  // fallback, resolving to kFrameWentAway and preventing a hang.
+  ExpectErrorResult(result, mojom::ActionResultCode::kFrameWentAway);
+}
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         ActorPageToolContentScanningTest,
+                         testing::Bool());
 
 }  // namespace
 

@@ -42,6 +42,7 @@ public class VoiceRecognitionUtil {
      *
      * <p>Note: this check does not perform strict policy checking.
      *
+     * @param androidPermissionDelegate Delegate used to query runtime permissions.
      * @return true if all the conditions permit execution of a voice search.
      */
     public static boolean isVoiceSearchEnabled(
@@ -59,7 +60,7 @@ public class VoiceRecognitionUtil {
 
         if (!isVoiceSearchPermittedByPolicy(/* strictPolicyCheck= */ false)) return false;
 
-        return isRecognitionIntentPresent(true);
+        return isRecognitionIntentPresent(/* useCachedValue= */ true);
     }
 
     /**

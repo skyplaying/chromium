@@ -27,6 +27,7 @@
 #include "net/base/data_url.h"
 #include "services/network/public/cpp/not_implemented_url_loader_factory.h"
 #include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
+#include "services/network/public/cpp/web_sandbox_flags.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "third_party/blink/public/common/features.h"
@@ -141,6 +142,7 @@ class MockFrameHost : public mojom::FrameHost {
 
   void CreateChildFrame(
       const blink::LocalFrameToken& frame_token,
+      const blink::InitiatorStateToken& initiator_state_token,
       mojo::PendingAssociatedRemote<mojom::Frame> frame_remote,
       mojo::PendingReceiver<blink::mojom::BrowserInterfaceBroker>
           browser_interface_broker_receiver,
@@ -187,6 +189,8 @@ class MockFrameHost : public mojom::FrameHost {
       mojo::PendingAssociatedRemote<mojom::NavigationClient>,
       mojo::PendingRemote<blink::mojom::NavigationStateKeepAliveHandle>,
       mojo::PendingReceiver<mojom::NavigationRendererCancellationListener>,
+      mojo::PendingReceiver<
+          mojom::NavigationRendererIgnoreDuplicateNavigationListener>,
       mojo::PendingReceiver<
           blink::mojom::NavigationResumeDeferredCommitListener>) override {}
 
@@ -273,6 +277,7 @@ void TestRenderFrame::Navigate(
       /*fetch_later_loader_factory=*/mojo::NullAssociatedRemote(),
       /*document_token=*/blink::DocumentToken(),
       /*devtools_navigation_token=*/base::UnguessableToken::Create(),
+      /*initiator_state_token=*/blink::InitiatorStateToken(),
       /*base_auction_nonce=*/base::Uuid::GenerateRandomV4(),
       blink::mojom::PolicyContainer::New(
           blink::mojom::PolicyContainerPolicies::New(),
@@ -309,7 +314,8 @@ void TestRenderFrame::NavigateWithError(
       /*has_stale_copy_in_cache=*/false, error_code,
       /*extended_error_code=*/0, resolve_error_info, error_page_content,
       std::move(pending_factory_bundle), blink::DocumentToken(),
-      base::UnguessableToken::Create(), CreateStubPolicyContainer(),
+      base::UnguessableToken::Create(), blink::InitiatorStateToken(),
+      CreateStubPolicyContainer(),
       /*alternative_error_page_info=*/nullptr,
       base::BindOnce(&MockFrameHost::DidCommitProvisionalLoad,
                      base::Unretained(mock_frame_host_.get())));
@@ -360,8 +366,8 @@ void TestRenderFrame::BeginNavigation(
         charset = "UTF-8";
       }
       blink::WebNavigationParams::FillStaticResponse(
-          navigation_params.get(), blink::WebString::FromUTF8(mime_type),
-          blink::WebString::FromUTF8(charset), data);
+          navigation_params.get(), blink::WebString::FromUtf8(mime_type),
+          blink::WebString::FromUtf8(charset), data);
     }
     if (url.IsAboutSrcdoc()) {
       navigation_params->fallback_base_url = info->requestor_base_url;
@@ -369,6 +375,14 @@ void TestRenderFrame::BeginNavigation(
 
     navigation_params->policy_container->policies.sandbox_flags =
         navigation_params->frame_policy->sandbox_flags;
+
+    if ((navigation_params->policy_container->policies.sandbox_flags &
+         network::mojom::WebSandboxFlags::kOrigin) !=
+        network::mojom::WebSandboxFlags::kNone) {
+      url::Origin requestor_origin = info->url_request.RequestorOrigin();
+      navigation_params->origin_to_commit =
+          blink::WebSecurityOrigin(requestor_origin.DeriveNewOpaqueOrigin());
+    }
 
     if (url.IsAboutSrcdoc()) {
       blink::TestWebFrameHelper::FillStaticResponseForSrcdocNavigation(

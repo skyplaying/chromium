@@ -212,9 +212,16 @@ class PrerenderBrowserAgent::Delegate final
   void OnAuthRequired(web::WebState* web_state,
                       NSURLProtectionSpace* protection_space,
                       NSURLCredential* proposed_credential,
-                      AuthCallback callback) final {
+                      HTTPAuthCallback callback) final {
     agent_->ScheduleCancelPrerender();
     std::move(callback).Run(nil, nil);
+  }
+
+  void OnAuthRequired(web::WebState* web_state,
+                      NSURLProtectionSpace* protection_space,
+                      ClientCertAuthCallback callback) final {
+    agent_->ScheduleCancelPrerender();
+    std::move(callback).Run(nil);
   }
 
   UIView* GetWebViewContainer(web::WebState* web_state) final {
@@ -358,16 +365,18 @@ class PrerenderBrowserAgent::ManageAccountsDelegate final
 
   // ManageAccountsDelegate implementation.
   void OnRestoreGaiaCookies() final { agent_->ScheduleCancelPrerender(); }
-  void OnManageAccounts(const GURL& url) final {
+  void OnManageAccounts(const GURL& url, web::WebState* web_state) final {
     agent_->ScheduleCancelPrerender();
   }
-  void OnAddAccount(const GURL& url, const std::string& prefilled_email) final {
+  void OnAddAccount(const GURL& url,
+                    const std::string& prefilled_email,
+                    web::WebState* web_state) final {
     agent_->ScheduleCancelPrerender();
   }
-  void OnShowConsistencyPromo(const GURL& url, web::WebState* webState) final {
+  void OnShowConsistencyPromo(const GURL& url, web::WebState* web_state) final {
     agent_->ScheduleCancelPrerender();
   }
-  void OnGoIncognito(const GURL& url) final {
+  void OnGoIncognito(const GURL& url, web::WebState* web_state) final {
     agent_->ScheduleCancelPrerender();
   }
   bool SigninEnabled() const final {

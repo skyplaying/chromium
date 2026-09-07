@@ -8,7 +8,6 @@
 #import <utility>
 
 #import "base/feature_list.h"
-#import "base/not_fatal_until.h"
 #import "base/strings/sys_string_conversions.h"
 #import "base/time/time.h"
 #import "components/autofill/core/common/form_data.h"
@@ -17,6 +16,8 @@
 #import "components/autofill/ios/browser/autofill_driver_ios.h"
 #import "components/autofill/ios/browser/form_suggestion.h"
 #import "components/password_manager/core/browser/features/password_features.h"
+#import "components/password_manager/core/browser/password_form.h"
+#import "components/password_manager/core/browser/password_form_cache.h"
 #import "components/password_manager/core/browser/password_manager_interface.h"
 #import "components/password_manager/core/browser/password_ui_utils.h"
 #import "components/password_manager/ios/account_select_fill_data.h"
@@ -63,6 +64,34 @@ base::TimeDelta GetFormExtractionTimeoutMs() {
 // that originally triggered the cleanup task has the time to expire.
 base::TimeDelta GetCleanupTaskPeriodMs() {
   return GetFormExtractionTimeoutMs() + base::Milliseconds(50);
+}
+
+// Determines the submission readiness state for the given form.
+password_manager::SubmissionReadinessState CalculateSubmissionReadiness(
+    password_manager::PasswordManagerInterface* password_manager,
+    password_manager::PasswordManagerDriver* driver,
+    autofill::FormRendererId form_renderer_id) {
+  if (!driver || !password_manager) {
+    return password_manager::SubmissionReadinessState::kNoInformation;
+  }
+  const password_manager::PasswordForm* form =
+      password_manager->GetPasswordFormCache()->GetPasswordForm(
+          driver, form_renderer_id);
+  if (!form) {
+    return password_manager::SubmissionReadinessState::kNoInformation;
+  }
+  autofill::FieldGlobalId username_field_id;
+  autofill::FieldGlobalId password_field_id;
+  for (const autofill::FormFieldData& field : form->form_data.fields()) {
+    if (field.renderer_id() == form->username_element_renderer_id) {
+      username_field_id = field.global_id();
+    }
+    if (field.renderer_id() == form->password_element_renderer_id) {
+      password_field_id = field.global_id();
+    }
+  }
+  return password_manager::CalculateSubmissionReadiness(
+      form->form_data, username_field_id, password_field_id);
 }
 
 }  // namespace
@@ -216,6 +245,17 @@ base::TimeDelta GetCleanupTaskPeriodMs() {
                                       formQuery.fieldRendererID,
                                       isPasswordField);
 
+    IOSPasswordManagerDriver* driver =
+        IOSPasswordManagerDriverFactory::FromWebStateAndWebFrame(
+            _webState.get(), [self frameWithId:frameId]);
+    password_manager::SubmissionReadinessState submission_readiness =
+        CalculateSubmissionReadiness(_passwordManager, driver,
+                                     formQuery.formRendererID);
+    bool should_trigger_submission =
+        password_manager::CalculateTriggerSubmission(submission_readiness) &&
+        base::FeatureList::IsEnabled(
+            password_manager::features::kIOSPasswordAutoSubmission);
+
     for (const auto& usernameAndRealm : usernameAndRealms) {
       NSString* username = SysUTF16ToNSString(usernameAndRealm.username);
       NSString* realm = nil;
@@ -232,6 +272,8 @@ base::TimeDelta GetCleanupTaskPeriodMs() {
       FormSuggestionMetadata metadata;
       metadata.is_single_username_form = is_single_username_form;
       metadata.likely_from_real_password_field = isPasswordField;
+      metadata.should_trigger_submission = should_trigger_submission;
+      metadata.submission_readiness = submission_readiness;
 
       [results
           addObject:[FormSuggestion suggestionWithValue:username
@@ -412,7 +454,7 @@ base::TimeDelta GetCleanupTaskPeriodMs() {
 
 - (BOOL)isPasswordFieldOnForm:(FormSuggestionProviderQuery*)formQuery
                      webFrame:(web::WebFrame*)webFrame {
-  if (![formQuery.fieldType isEqualToString:kObfuscatedFieldType]) {
+  if (formQuery.fieldType != FieldType::kObfuscated) {
     return NO;
   }
 

@@ -45,23 +45,23 @@ NSString* GetFilterTypeDisplayText(DownloadFilterType filterType) {
   }
 }
 
-// Returns the corresponding SF Symbol name for the given filter type.
-NSString* GetFilterTypeSymbolName(DownloadFilterType filterType) {
+// Returns the corresponding SF Symbol for the given filter type.
+Symbol GetFilterTypeSymbol(DownloadFilterType filterType) {
   switch (filterType) {
     case DownloadFilterType::kAll:
-      return kCheckmarkSymbol;
+      return SymbolCheckmark;
     case DownloadFilterType::kDocument:
-      return kTextJustifyLeftSymbol;
+      return SymbolTextJustifyLeft;
     case DownloadFilterType::kImage:
-      return kPhotoSymbol;
+      return SymbolPhoto;
     case DownloadFilterType::kVideo:
-      return kVideoSymbol;
+      return SymbolVideo;
     case DownloadFilterType::kAudio:
-      return kWaveformSymbol;
+      return SymbolWaveformMid;
     case DownloadFilterType::kPDF:
-      return kTextDocument;
+      return SymbolTextDocument;
     case DownloadFilterType::kOther:
-      return kDocSymbol;
+      return SymbolDoc;
   }
 }
 
@@ -86,6 +86,8 @@ NSString* GetFilterTypeSymbolName(DownloadFilterType filterType) {
     [self setupViews];
     [self registerForTraitChanges:@[ UITraitUserInterfaceStyle.class ]
                        withAction:@selector(updateBorderColor)];
+    self.isAccessibilityElement = YES;
+    self.accessibilityTraits = UIAccessibilityTraitButton;
   }
   return self;
 }
@@ -98,12 +100,14 @@ NSString* GetFilterTypeSymbolName(DownloadFilterType filterType) {
     _iconImageView.tintColor = [UIColor colorNamed:kInvertedTextPrimaryColor];
     self.layer.borderWidth = 0.0;
     self.layer.borderColor = [UIColor clearColor].CGColor;
+    self.accessibilityTraits |= UIAccessibilityTraitSelected;
   } else {
     self.backgroundColor = UIColor.clearColor;
     _titleLabel.textColor = [UIColor colorNamed:kTextPrimaryColor];
     _iconImageView.tintColor = [UIColor colorNamed:kTextPrimaryColor];
     self.layer.borderWidth = 1.0;
     [self updateBorderColor];
+    self.accessibilityTraits &= ~UIAccessibilityTraitSelected;
   }
 }
 
@@ -111,9 +115,11 @@ NSString* GetFilterTypeSymbolName(DownloadFilterType filterType) {
 
 - (void)configureWithFilterType:(DownloadFilterType)filterType {
   _filterType = filterType;
-  _titleLabel.text = GetFilterTypeDisplayText(filterType);
-  _iconImageView.image = DefaultSymbolWithPointSize(
-      GetFilterTypeSymbolName(filterType), kDownloadFilterIconSize);
+  NSString* text = GetFilterTypeDisplayText(filterType);
+  _titleLabel.text = text;
+  _iconImageView.image = SymbolWithPointSize(GetFilterTypeSymbol(filterType),
+                                             kDownloadFilterIconSize);
+  self.accessibilityLabel = text;
 }
 
 + (CGFloat)cellSizeForFilterType:(DownloadFilterType)filterType {

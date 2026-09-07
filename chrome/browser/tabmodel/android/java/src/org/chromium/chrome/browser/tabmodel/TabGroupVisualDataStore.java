@@ -26,7 +26,7 @@ import java.util.Set;
 /**
  * Helper class to handle persistence of tab group metadata. This includes the title, color, and
  * collapsed state. This is not intended to be used directly. All access should route through the
- * {@link TabGroupModelFilter}.
+ * {@link TabModel}.
  */
 @NullMarked
 public class TabGroupVisualDataStore {
@@ -36,9 +36,6 @@ public class TabGroupVisualDataStore {
     private static final String TAB_GROUP_TITLES_TOKEN_FILE_NAME = "tab_group_titles_token";
     private static final String TAB_GROUP_COLLAPSED_TOKEN_FILE_NAME = "tab_group_collapsed_token";
     private static final String TAB_GROUP_COLORS_TOKEN_FILE_NAME = "tab_group_colors_token";
-    private static final String COLOR_INITIAL_MIGRATION_CHECK = "migration_check";
-    private static final int COLOR_INITIAL_MIGRATION_NOT_DONE = 0;
-    private static final int COLOR_INITIAL_MIGRATION_DONE = 1;
     private static final Map<Token, TabGroupCollectionData> sGroupsCache = new HashMap<>();
 
     /**
@@ -78,7 +75,7 @@ public class TabGroupVisualDataStore {
 
     /**
      * This method stores tab group title with reference to {@code tabRootId}. Package protected as
-     * all access should route through the {@link TabGroupModelFilter}.
+     * all access should route through the {@link TabModel}.
      *
      * @param tabRootId The tab root ID which is used as reference to store group title.
      * @param title The tab group title to store.
@@ -95,7 +92,7 @@ public class TabGroupVisualDataStore {
     /**
      * This method deletes specific stored tab group title with reference to {@code tabRootId}.
      * While currently public, the intent is to make this package protected and force all access to
-     * go through the {@Link TabGroupModelFilter}.
+     * go through the {@link TabModel}.
      *
      * @param tabRootId The tab root ID whose related tab group title will be deleted.
      */
@@ -106,8 +103,8 @@ public class TabGroupVisualDataStore {
 
     /**
      * This method fetches tab group title with related tab group root ID. While currently public,
-     * the intent is to make this package protected and force all access to go through the {@Link
-     * TabGroupModelFilter}.
+     * the intent is to make this package protected and force all access to go through the {@link
+     * TabModel}.
      *
      * @param tabRootId The tab root ID whose related tab group title will be fetched.
      * @return The stored title of the target tab group, default value is {@link
@@ -127,27 +124,8 @@ public class TabGroupVisualDataStore {
     }
 
     /**
-     * Returns whether the initial migration of tab group colors has been done.
-     *
-     * @return Whether the initial migration of tab group colors has been done.
-     */
-    /* package */ static boolean isColorInitialMigrationDone() {
-        return getColorSharedPreferences()
-                        .getInt(COLOR_INITIAL_MIGRATION_CHECK, COLOR_INITIAL_MIGRATION_NOT_DONE)
-                == COLOR_INITIAL_MIGRATION_DONE;
-    }
-
-    /** This method sets the initial migration of tab group colors as done. */
-    /* package */ static void setColorInitialMigrationDone() {
-        getColorSharedPreferences()
-                .edit()
-                .putInt(COLOR_INITIAL_MIGRATION_CHECK, COLOR_INITIAL_MIGRATION_DONE)
-                .apply();
-    }
-
-    /**
      * This method stores tab group colors with reference to {@code tabRootId}. Package protected as
-     * all access should route through the {@link TabGroupModelFilter}.
+     * all access should route through the {@link TabModel}.
      *
      * @param tabRootId The tab root ID which is used as a reference to store group colors.
      * @param color The tab group color {@link TabGroupColorId} to store.
@@ -164,7 +142,7 @@ public class TabGroupVisualDataStore {
      * <p>This is used to determine if a storage update is required to flush potentially dirty
      * cached data to SharedPreferences, even if the incoming value matches the cached value.
      *
-     * <p>Package protected as all access should route through the {@link TabGroupModelFilter}.
+     * <p>Package protected as all access should route through the {@link TabModel}.
      *
      * @param tabGroupId The token identifier for the tab group.
      * @return True if the tab group data is currently cached, false otherwise.
@@ -176,7 +154,7 @@ public class TabGroupVisualDataStore {
     /**
      * This method deletes a specific stored tab group color with reference to {@code tabRootId}.
      * While currently public, the intent is to make this package protected and force all access to
-     * go through the {@Link TabGroupModelFilter}.
+     * go through the {@link TabModel}.
      *
      * @param tabRootId The tab root ID whose related tab group color will be deleted.
      */
@@ -188,7 +166,7 @@ public class TabGroupVisualDataStore {
     /**
      * This method fetches tab group colors for the related tab group root ID. While currently
      * public, the intent is to make thisUndo package protected and force all access to go through
-     * the {@Link TabGroupModelFilter}.
+     * the {@link TabModel}.
      *
      * @param tabRootId The tab root ID whose related tab group color will be fetched.
      * @return The stored color of the target tab group, default value is -1 (INVALID_COLOR_ID).

@@ -7,6 +7,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/compiler_specific.h"
@@ -87,11 +88,16 @@ class ScopedFeatureList final {
   // Constructs the instance in a non-initialized state.
   ScopedFeatureList();
 
-  // Shorthand for immediately initializing with InitAndEnableFeature().
+  // Shorthand for immediately initializing with `InitAndEnableFeature()`.
   explicit ScopedFeatureList(const Feature& enable_feature);
+  // Shorthand for immediately initializing with `InitWithFeatures()`.
+  explicit ScopedFeatureList(
+      const std::vector<FeatureRef>& enabled_features,
+      const std::vector<FeatureRef>& disabled_features = {});
 
   ScopedFeatureList(const ScopedFeatureList&) = delete;
   ScopedFeatureList& operator=(const ScopedFeatureList&) = delete;
+  ScopedFeatureList(ScopedFeatureList&&);
 
   ~ScopedFeatureList();
 
@@ -129,8 +135,8 @@ class ScopedFeatureList final {
   // with the given enabled and disabled features (comma-separated names).
   // Note: This creates a scoped global field trial list if there is not
   // currently one.
-  void InitFromCommandLine(const std::string& enable_features,
-                           const std::string& disable_features);
+  void InitFromCommandLine(std::string_view enable_features,
+                           std::string_view disable_features);
 
   // Initializes and registers a FeatureList instance based on the current
   // FeatureList and overridden with the given enabled and disabled features.

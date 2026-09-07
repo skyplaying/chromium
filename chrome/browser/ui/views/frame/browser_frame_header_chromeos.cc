@@ -7,6 +7,7 @@
 #include "base/check.h"
 #include "chrome/browser/ui/views/frame/browser_frame_view_chromeos.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/frame/safe_invoke/safe_invoke.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chromeos/ash/experiences/system_web_apps/types/system_web_app_delegate.h"
 #include "chromeos/ui/base/window_properties.h"
@@ -164,15 +165,23 @@ void BrowserFrameHeaderChromeOS::UpdateFrameColors() {
   auto* browser_frame_view = static_cast<BrowserFrameViewChromeOS*>(view());
 
   web_app::AppBrowserController* app_browser_controller =
-      browser_frame_view->GetBrowserView()->browser()->app_controller();
+      web_app::AppBrowserController::From(
+          browser_frame_view->GetBrowserView()->browser());
 
   // Please note, `app_browser_controller` may be null for non-PWA windows.
   if (!app_browser_controller ||
-      (app_browser_controller->system_app() &&
-       app_browser_controller->system_app()->UseSystemThemeColor())) {
+      SafeInvoke(app_browser_controller->system_app())
+          .Then(&ash::SystemWebAppDelegate::UseSystemThemeColor)
+          .value_or(false)) {
     button_colors = mode() == MODE_ACTIVE
                         ? ui::kColorSysPrimary
                         : ui::kColorFrameCaptionButtonUnfocused;
+  }
+
+  if (browser_frame_view->GetBrowserView()->ShouldDrawVerticalTabStrip()) {
+    button_colors = mode() == MODE_ACTIVE
+                        ? kColorVerticalTabsCaptionButtonForegroundActive
+                        : kColorVerticalTabsCaptionButtonForegroundInactive;
   }
 
   UpdateCaptionButtonColors(button_colors);

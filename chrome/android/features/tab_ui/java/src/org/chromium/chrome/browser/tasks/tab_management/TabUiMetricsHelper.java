@@ -142,6 +142,33 @@ public class TabUiMetricsHelper {
         int NUM_ENTRIES = 2;
     }
 
+    /**
+     * Converts a compile-time safe component ID to its UMA metrics string suffix.
+     *
+     * @param componentId The TabComponentId identifier.
+     * @return The string suffix for metrics logging.
+     */
+    public static String getComponentNameForMetrics(@TabComponentId int componentId) {
+        switch (componentId) {
+            case TabComponentId.GRID_TAB_SWITCHER:
+                return "GridTabSwitcher";
+            case TabComponentId.TAB_STRIP:
+                return "TabStrip";
+            case TabComponentId.TAB_GRID_DIALOG_FROM_STRIP:
+                return "TabGridDialogFromStrip";
+            case TabComponentId.TAB_GRID_DIALOG_IN_SWITCHER:
+                return "TabGridDialogInSwitcher";
+            case TabComponentId.TAB_LIST_EDITOR:
+                return "TabListEditor";
+            case TabComponentId.ARCHIVED_TABS_DIALOG:
+                return "ArchivedTabsDialog";
+            case TabComponentId.VERTICAL_TABS:
+                return "VerticalTabs";
+            default:
+                return "Unknown";
+        }
+    }
+
     // Histograms
     public static void recordEditorTimeSinceLastShownHistogram() {
         long timestampMillis = System.currentTimeMillis();
@@ -198,10 +225,10 @@ public class TabUiMetricsHelper {
                 RecordUserAction.record("TabGridDialog.RemoveFromGroup.TabMultiSelect");
                 break;
             case TabListEditorActionMetricGroups.UNSELECTED:
-                RecordUserAction.record("TabMultiSelect.TabUnselected");
+                RecordUserAction.record("TabMultiSelectV2.TabUnselected");
                 break;
             case TabListEditorActionMetricGroups.SELECTED:
-                RecordUserAction.record("TabMultiSelect.TabSelected");
+                RecordUserAction.record("TabMultiSelectV2.TabSelected");
                 break;
             case TabListEditorActionMetricGroups.PIN_TABS:
                 RecordUserAction.record("TabMultiSelectV2.TabsPinned");

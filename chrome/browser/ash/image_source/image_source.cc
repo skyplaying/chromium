@@ -8,7 +8,8 @@
 
 #include <vector>
 
-#include "base/compiler_specific.h"
+#include "ash/constants/ash_constants.h"
+#include "ash/constants/webui_url_constants.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
@@ -18,7 +19,6 @@
 #include "base/task/thread_pool.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "chrome/browser/ash/login/users/avatar/user_image_loader.h"
-#include "chrome/common/url_constants.h"
 #include "components/user_manager/user_image/user_image.h"
 #include "net/base/mime_util.h"
 
@@ -47,7 +47,7 @@ ImageSource::ImageSource() {
 ImageSource::~ImageSource() = default;
 
 std::string ImageSource::GetSource() {
-  return chrome::kChromeOSAssetHost;
+  return ash::kChromeUIChromeOSAssetHost;
 }
 
 void ImageSource::StartDataRequest(
@@ -60,7 +60,7 @@ void ImageSource::StartDataRequest(
     return;
   }
 
-  const base::FilePath asset_dir(chrome::kChromeOSAssetPath);
+  const base::FilePath asset_dir(ash::kChromeOSAssetPath);
   const base::FilePath image_path = asset_dir.AppendASCII(path);
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
@@ -101,8 +101,8 @@ bool ImageSource::IsAllowlisted(const std::string& path) const {
   if (components.empty())
     return false;
 
-  for (size_t i = 0; i < std::size(kAllowlistedDirectories); i++) {
-    if (components[0] == UNSAFE_TODO(kAllowlistedDirectories[i])) {
+  for (const char* directory : kAllowlistedDirectories) {
+    if (components[0] == directory) {
       return true;
     }
   }

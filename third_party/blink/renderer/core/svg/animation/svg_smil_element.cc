@@ -28,7 +28,6 @@
 #include <algorithm>
 
 #include "base/auto_reset.h"
-#include "base/compiler_specific.h"
 #include "base/time/time.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/bindings/core/v8/js_event_handler_for_content_attribute.h"
@@ -47,6 +46,8 @@
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
+#include "third_party/blink/renderer/platform/wtf/text/code_point_iterator.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
@@ -79,10 +80,11 @@ void SMILInstanceTimeList::Append(SMILTime time, SMILTimeOrigin origin) {
 void SMILInstanceTimeList::InsertSortedAndUnique(SMILTime time,
                                                  SMILTimeOrigin origin) {
   SMILTimeWithOrigin time_with_origin(time, origin);
-  auto position = std::lower_bound(instance_times_.begin(),
-                                   instance_times_.end(), time_with_origin);
+  auto times = AsSpan();
+  auto position = std::ranges::lower_bound(times, time, std::ranges::less(),
+                                           &SMILTimeWithOrigin::Time);
   // Don't add it if we already have one of those.
-  for (auto it = position; it != instance_times_.end(); UNSAFE_TODO(++it)) {
+  for (auto it = position; it != times.end(); ++it) {
     if (position->Time() != time)
       break;
     // If they share both time and origin, we don't need to add it,
@@ -90,9 +92,8 @@ void SMILInstanceTimeList::InsertSortedAndUnique(SMILTime time,
     if (position->Origin() == origin)
       return;
   }
-  instance_times_.insert(
-      static_cast<wtf_size_t>(position - instance_times_.begin()),
-      time_with_origin);
+  instance_times_.insert(CheckedDistance(times.begin(), position),
+                         time_with_origin);
   time_origins_.Put(origin);
 }
 
@@ -100,12 +101,12 @@ void SMILInstanceTimeList::RemoveWithOrigin(SMILTimeOrigin origin) {
   if (!time_origins_.Has(origin)) {
     return;
   }
-  auto tail = std::remove_if(instance_times_.begin(), instance_times_.end(),
-                             [origin](const SMILTimeWithOrigin& instance_time) {
-                               return instance_time.Origin() == origin;
-                             });
+  auto removed = std::ranges::remove_if(
+      instance_times_, [origin](const SMILTimeWithOrigin& instance_time) {
+        return instance_time.Origin() == origin;
+      });
   instance_times_.Shrink(
-      static_cast<wtf_size_t>(tail - instance_times_.begin()));
+      static_cast<wtf_size_t>(removed.begin() - instance_times_.begin()));
   time_origins_.Remove(origin);
 }
 
@@ -115,15 +116,15 @@ void SMILInstanceTimeList::RemoveBeforeWithOrigin(SMILTime before_time,
     return;
   }
 
-  auto tail = std::remove_if(
-      instance_times_.begin(), instance_times_.end(),
+  auto removed = std::ranges::remove_if(
+      instance_times_,
       [origin, before_time](const SMILTimeWithOrigin& instance_time) {
         return instance_time.Origin() == origin &&
                instance_time.Time() < before_time;
       });
 
   instance_times_.Shrink(
-      static_cast<wtf_size_t>(tail - instance_times_.begin()));
+      static_cast<wtf_size_t>(removed.begin() - instance_times_.begin()));
 
   // If we removed all instances of this origin, remove it from the set
   RemoveTimeOriginIfNotFound(origin);
@@ -164,16 +165,17 @@ void SMILInstanceTimeList::RemoveTimeOriginIfNotFound(SMILTimeOrigin origin) {
 }
 
 void SMILInstanceTimeList::Sort() {
-  std::sort(instance_times_.begin(), instance_times_.end());
+  std::ranges::sort(instance_times_, {}, &SMILTimeWithOrigin::Time);
 }
 
 SMILTime SMILInstanceTimeList::NextAfter(SMILTime time) const {
   // Find the value in |list| that is strictly greater than |time|.
-  auto next_item = std::lower_bound(
-      instance_times_.begin(), instance_times_.end(), time,
-      [](const SMILTimeWithOrigin& instance_time, const SMILTime& time) {
-        return instance_time.Time() <= time;
-      });
+  auto next_item = std::ranges::lower_bound(
+      instance_times_, time,
+      [](const SMILTime& instance_time, const SMILTime& time) {
+        return instance_time <= time;
+      },
+      &SMILTimeWithOrigin::Time);
   if (next_item == instance_times_.end())
     return SMILTime::Unresolved();
   return next_item->Time();
@@ -291,7 +293,6 @@ void SVGSMILElement::Condition::DisconnectEventBase(
 
 SVGSMILElement::SVGSMILElement(const QualifiedName& tag_name, Document& doc)
     : SVGElement(tag_name, doc),
-      SVGTests(this),
       target_element_(nullptr),
       conditions_connected_(false),
       has_end_event_conditions_(false),
@@ -443,31 +444,107 @@ SMILTime SVGSMILElement::ParseClockValue(const StringView& data) {
   if (parse == indefinite_value)
     return SMILTime::Indefinite();
 
-  double result = 0;
-  wtf_size_t double_point_one = parse.find(':');
-  wtf_size_t double_point_two = parse.find(':', double_point_one + 1);
-  if (double_point_one == 2 && double_point_two == 5 && parse.length() >= 8) {
-    auto parsed_hour = StringToUintStrict(parse.substr(0, 2));
-    auto parsed_min = StringToUintStrict(parse.substr(3, 2));
-    auto parsed_sec = StringToDouble(parse.substr(6));
-    if (!parsed_hour || !parsed_min || !parsed_sec) {
-      return SMILTime::Unresolved();
-    }
-    result += *parsed_hour * 60 * 60 + *parsed_min * 60 + *parsed_sec;
-  } else if (double_point_one == 2 && double_point_two == kNotFound &&
-             parse.length() >= 5) {
-    auto parsed_min = StringToUintStrict(parse.substr(0, 2));
-    auto parsed_sec = StringToDouble(parse.substr(3));
-    if (!parsed_min || !parsed_sec) {
-      return SMILTime::Unresolved();
-    }
-    result += *parsed_min * 60 + *parsed_sec;
-  } else {
+  wtf_size_t colon_one = parse.find(':');
+  if (colon_one == StringView::npos) {
     return ParseOffsetValue(parse);
   }
+  // The first field can be any length, but if it's a minutes value it has to
+  // be 2 digits. We're not abiding by that.
+  // Assume the format is mm:ss.ff...
+  StringView hour_part;
+  StringView minute_part = parse.substr(0, colon_one);
+  StringView seconds_part = parse.substr(colon_one + 1);
 
-  return SMILTime::FromSecondsD(result);
+  // If there's one more colon the format is hh:mm:ss.ff...
+  wtf_size_t colon_two = seconds_part.find(':');
+  if (colon_two == 2) {
+    hour_part = minute_part;
+    minute_part = seconds_part.substr(0, 2);
+    seconds_part = seconds_part.substr(3);
+  } else if (colon_two != StringView::npos) {
+    return SMILTime::Unresolved();
+  }
+
+  // The minutes field needs to be two digits.
+  if (minute_part.length() != 2) {
+    return SMILTime::Unresolved();
+  }
+  // Check if the seconds+fractions field contains a '.', and that it is at
+  // index 2 in that case.
+  auto dot_index = seconds_part.find('.');
+  if (dot_index == 2) {
+    // Fraction field need to be at least one digit.
+    if (seconds_part.length() < 4) {
+      return SMILTime::Unresolved();
+    }
+  } else if (dot_index == StringView::npos) {
+    // The seconds field needs to be two digits.
+    if (seconds_part.length() != 2) {
+      return SMILTime::Unresolved();
+    }
+  } else {
+    return SMILTime::Unresolved();
+  }
+
+  auto parsed_seconds = StringToDouble(seconds_part);
+  if (!parsed_seconds || *parsed_seconds >= 60) {
+    return SMILTime::Unresolved();
+  }
+  base::TimeDelta result = base::Seconds(*parsed_seconds);
+  auto parsed_minutes = StringToUintStrict(minute_part);
+  if (!parsed_minutes || *parsed_minutes >= 60) {
+    return SMILTime::Unresolved();
+  }
+  result += base::Minutes(*parsed_minutes);
+  if (!hour_part.IsNull()) {
+    auto parsed_hours = StringToUintStrict(hour_part);
+    if (!parsed_hours) {
+      return SMILTime::Unresolved();
+    }
+    result += base::Hours(*parsed_hours);
+  }
+  return SMILTime::FromTimeDelta(result);
 }
+
+namespace {
+
+wtf_size_t FindUnescapedDot(StringView string) {
+  wtf_size_t index = 0;
+  bool escaped = false;
+  for (UChar c : string) {
+    if (escaped) {
+      escaped = false;
+    } else if (c == '\\') {
+      escaped = true;
+    } else if (c == '.') {
+      return index;
+    }
+    index++;
+  }
+  return kNotFound;
+}
+
+AtomicString UnescapeSMILIdentifier(StringView string) {
+  if (!string.contains('\\')) {
+    return string.ToAtomicString();
+  }
+
+  StringBuilder builder;
+  bool escaped = false;
+  for (UChar c : string) {
+    if (escaped) {
+      builder.Append(c);
+      escaped = false;
+    } else if (c == '\\') {
+      escaped = true;
+    } else {
+      builder.Append(c);
+    }
+  }
+  return builder.ToAtomicString();
+}
+
+}  // namespace
 
 bool SVGSMILElement::ParseCondition(const StringView& value,
                                     BeginOrEnd begin_or_end) {
@@ -494,18 +571,23 @@ bool SVGSMILElement::ParseCondition(const StringView& value,
   }
   if (condition_string.empty())
     return false;
-  pos = condition_string.find('.');
+  wtf_size_t dot_index = FindUnescapedDot(condition_string);
 
   StringView base_id;
   StringView name_string;
-  if (pos == kNotFound) {
+  if (dot_index == kNotFound) {
     name_string = condition_string;
   } else {
-    base_id = condition_string.substr(0, pos);
-    name_string = condition_string.substr(pos + 1);
+    base_id = condition_string.substr(0, dot_index);
+    name_string = condition_string.substr(dot_index + 1);
   }
   if (name_string.empty())
     return false;
+
+  AtomicString resolved_base_id;
+  if (dot_index != kNotFound) {
+    resolved_base_id = UnescapeSMILIdentifier(base_id);
+  }
 
   Condition::Type type;
   int repeat = -1;
@@ -519,8 +601,9 @@ bool SVGSMILElement::ParseCondition(const StringView& value,
     name_string = "repeat";
     type = Condition::kSyncBase;
   } else if (name_string == "begin" || name_string == "end") {
-    if (base_id.empty())
+    if (resolved_base_id.empty()) {
       return false;
+    }
     UseCounter::Count(&GetDocument(),
                       WebFeature::kSVGSMILBeginOrEndSyncbaseValue);
     type = Condition::kSyncBase;
@@ -533,19 +616,13 @@ bool SVGSMILElement::ParseCondition(const StringView& value,
   }
 
   conditions_.push_back(MakeGarbageCollected<Condition>(
-      type, begin_or_end, base_id.ToAtomicString(),
-      name_string.ToAtomicString(), offset, repeat));
+      type, begin_or_end, resolved_base_id, name_string.ToAtomicString(),
+      offset, repeat));
 
-  if (RuntimeEnabledFeatures::SvgSmilPruneInstanceTimesEnabled()) {
-    if (begin_or_end == kEnd) {
-      has_end_attribute_specified_ = true;
-      if (type == Condition::kEventBase || type == Condition::kAccessKey ||
-          repeat != -1) {
-        has_end_event_conditions_ = true;
-      }
-    }
-  } else {
-    if (type == Condition::kEventBase && begin_or_end == kEnd) {
+  if (begin_or_end == kEnd) {
+    has_end_attribute_specified_ = true;
+    if (type == Condition::kEventBase || type == Condition::kAccessKey ||
+        repeat != -1) {
       has_end_event_conditions_ = true;
     }
   }
@@ -676,11 +753,25 @@ void SVGSMILElement::CollectStyleForPresentationAttribute(
 
 SVGAnimatedPropertyBase* SVGSMILElement::PropertyFromAttribute(
     const QualifiedName& attribute_name) const {
-  if (SVGAnimatedPropertyBase* property =
-          SVGTests::PropertyFromAttribute(attribute_name)) {
-    return property;
+  if (SVGTests::IsKnownAttribute(attribute_name)) {
+    return EnsureSvgTests().PropertyFromAttribute(this, attribute_name);
   }
   return SVGElement::PropertyFromAttribute(attribute_name);
+}
+
+SVGStringListTearOff* SVGSMILElement::requiredExtensions() {
+  return EnsureSvgTests().requiredExtensions(this);
+}
+
+SVGStringListTearOff* SVGSMILElement::systemLanguage() {
+  return EnsureSvgTests().systemLanguage(this);
+}
+
+SVGTests& SVGSMILElement::EnsureSvgTests() const {
+  if (!tests_) {
+    tests_ = MakeGarbageCollected<SVGTests>();
+  }
+  return *tests_;
 }
 
 void SVGSMILElement::ConnectConditions() {
@@ -851,10 +942,8 @@ SMILTime SVGSMILElement::ResolveActiveEnd(SMILTime resolved_begin) const {
     if (next_end.IsUnresolved()) {
       // Allow open ended intervals if there are pending end events conditions
       // or no end attribute is specified.
-      bool allow_open_ended =
-          RuntimeEnabledFeatures::SvgSmilPruneInstanceTimesEnabled()
-              ? (has_end_event_conditions_ || !has_end_attribute_specified_)
-              : has_end_event_conditions_;
+      const bool allow_open_ended =
+          (has_end_event_conditions_ || !has_end_attribute_specified_);
 
       if (!allow_open_ended) {
         return SMILTime::Unresolved();
@@ -894,19 +983,20 @@ SMILInterval SVGSMILElement::ResolveInterval(SMILTime begin_after,
   // http://www.w3.org/TR/SMIL3/smil-timing.html#q90.
   const size_t kMaxIterations = std::max(begin_times_.size() * 4, 1000000u);
   size_t current_iteration = 0;
-  for (auto search_start = begin_times_.begin();
-       search_start != begin_times_.end(); UNSAFE_TODO(++search_start)) {
+  auto begin_span = begin_times_.AsSpan();
+  for (auto search_start = begin_span.begin();
+       search_start != begin_span.end(); ++search_start) {
     // Find the (next) instance time in the 'begin' list that is greater or
     // equal to |begin_after|.
     auto begin_item = std::lower_bound(
-        search_start, begin_times_.end(), begin_after,
+        search_start, begin_span.end(), begin_after,
         [](const SMILTimeWithOrigin& instance_time, const SMILTime& time) {
           return instance_time.Time() < time;
         });
     // If there are no more 'begin' instance times, or we encountered the
     // special value "indefinite" (which doesn't yield an instance time in the
     // 'begin' list), we're done.
-    if (begin_item == begin_times_.end() || begin_item->Time().IsIndefinite())
+    if (begin_item == begin_span.end() || begin_item->Time().IsIndefinite())
       break;
     SMILTime temp_end = ResolveActiveEnd(begin_item->Time());
     if (temp_end.IsUnresolved())
@@ -986,8 +1076,6 @@ void SVGSMILElement::InstanceListChanged() {
         GetActiveInterval(previous_presentation_time);
     active_state_ =
         DetermineActiveState(active_interval, previous_presentation_time);
-    if (GetActiveState() != kActive)
-      EndedActiveInterval();
   }
   if (time_container_) {
     SMILTime next_interval_time;
@@ -1098,10 +1186,8 @@ void SVGSMILElement::UpdateInterval(SMILTime presentation_time) {
   }
   SetNewInterval(next_interval);
 
-  if (RuntimeEnabledFeatures::SvgSmilPruneInstanceTimesEnabled()) {
-    PruneOldInstanceTimes(begin_times_);
-    PruneOldInstanceTimes(end_times_);
-  }
+  PruneOldInstanceTimes(begin_times_);
+  PruneOldInstanceTimes(end_times_);
 }
 
 void SVGSMILElement::AddedToTimeContainer() {
@@ -1132,9 +1218,7 @@ void SVGSMILElement::AddedToTimeContainer() {
 
 void SVGSMILElement::RemovedFromTimeContainer() {
   DCHECK(time_container_);
-  // If the element is active reset to a clear state.
   if (GetActiveState() != kInactive) {
-    EndedActiveInterval();
     // Dispatch a 'endEvent' if the timeline has started and the interval is
     // (was) active.
     if (GetActiveState() == kActive && time_container_->IsStarted()) {
@@ -1255,7 +1339,6 @@ SVGSMILElement::EventDispatchMask SVGSMILElement::UpdateActiveState(
   unsigned events_to_dispatch = kDispatchNoEvent;
   if ((was_active && !is_active) || interval_restart) {
     events_to_dispatch |= kDispatchEndEvent;
-    EndedActiveInterval();
   }
 
   if (IsContributing(presentation_time)) {
@@ -1481,13 +1564,6 @@ void SVGSMILElement::PruneOldInstanceTimes(
   }
 }
 
-void SVGSMILElement::EndedActiveInterval() {
-  if (!RuntimeEnabledFeatures::SvgSmilPruneInstanceTimesEnabled()) {
-    begin_times_.RemoveWithOrigin(SMILTimeOrigin::kScript);
-    end_times_.RemoveWithOrigin(SMILTimeOrigin::kScript);
-  }
-}
-
 bool SVGSMILElement::HasValidTarget() const {
   return targetElement() && targetElement()->InActiveDocument();
 }
@@ -1517,8 +1593,8 @@ void SVGSMILElement::Trace(Visitor* visitor) const {
   visitor->Trace(time_container_);
   visitor->Trace(conditions_);
   visitor->Trace(sync_base_dependents_);
+  visitor->Trace(tests_);
   SVGElement::Trace(visitor);
-  SVGTests::Trace(visitor);
 }
 
 }  // namespace blink

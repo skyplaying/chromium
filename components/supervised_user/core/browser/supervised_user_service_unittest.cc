@@ -13,6 +13,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/gtest_util.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/values.h"
 #include "build/build_config.h"
@@ -20,6 +21,7 @@
 #include "components/supervised_user/core/browser/supervised_user_preferences.h"
 #include "components/supervised_user/core/browser/supervised_user_test_environment.h"
 #include "components/supervised_user/core/browser/supervised_user_utils.h"
+#include "components/supervised_user/core/common/features.h"
 #include "components/supervised_user/core/common/pref_names.h"
 #include "components/supervised_user/core/common/supervised_user_constants.h"
 #include "components/supervised_user/test_support/supervised_user_url_filter_test_utils.h"
@@ -98,7 +100,7 @@ TEST_F(SupervisedUserServiceTest, ManagedSiteListTypeMetricOnPrefsChange) {
   histogram_tester_.ExpectBucketCount(
       kManagedSiteListHistogramName,
       /*sample=*/
-      FamilyLinkUrlFilter::ManagedSiteList::kBlockedListOnly,
+      SupervisedUserMetricsService::ManagedSiteList::kBlockedListOnly,
       /*expected_count=*/1);
   histogram_tester_.ExpectBucketCount(kApprovedSitesCountHistogramName,
                                       /*sample=*/0, /*expected_count=*/2);
@@ -110,7 +112,7 @@ TEST_F(SupervisedUserServiceTest, ManagedSiteListTypeMetricOnPrefsChange) {
   histogram_tester_.ExpectBucketCount(
       kManagedSiteListHistogramName,
       /*sample=*/
-      FamilyLinkUrlFilter::ManagedSiteList::kApprovedListOnly,
+      SupervisedUserMetricsService::ManagedSiteList::kApprovedListOnly,
       /*expected_count=*/1);
   histogram_tester_.ExpectBucketCount(kApprovedSitesCountHistogramName,
                                       /*sample=*/1, /*expected_count=*/1);
@@ -125,7 +127,7 @@ TEST_F(SupervisedUserServiceTest, ManagedSiteListTypeMetricOnPrefsChange) {
   histogram_tester_.ExpectBucketCount(
       kManagedSiteListHistogramName,
       /*sample=*/
-      FamilyLinkUrlFilter::ManagedSiteList::kBoth,
+      SupervisedUserMetricsService::ManagedSiteList::kBoth,
       /*expected_count=*/1);
   histogram_tester_.ExpectBucketCount(kApprovedSitesCountHistogramName,
                                       /*sample=*/1, /*expected_count=*/2);
@@ -200,19 +202,8 @@ class SupervisedUserServiceWebFilterTypeTransitionsTest
 // state and 3 states of web filter type for Family Link. Each state can
 // transition to any other state. "FamilyUser.WebFilterType" is a legacy
 // histogram but is still asserted.
-class SupervisedUserServiceFamilyLinkWebFilterTypeTransitionsTest
-    : public SupervisedUserServiceWebFilterTypeTransitionsTest {
- protected:
-  void EnableParentalControls() {
-    ::supervised_user::EnableParentalControls(
-        *supervised_user_test_environment_->pref_service_syncable());
-  }
-
-  void DisableParentalControls() {
-    ::supervised_user::DisableParentalControls(
-        *supervised_user_test_environment_->pref_service_syncable());
-  }
-};
+using SupervisedUserServiceFamilyLinkWebFilterTypeTransitionsTest =
+    SupervisedUserServiceWebFilterTypeTransitionsTest;
 
 TEST_F(SupervisedUserServiceFamilyLinkWebFilterTypeTransitionsTest,
        FromUnsupervisedToSupervisedWithAllowAllSites) {
@@ -226,7 +217,7 @@ TEST_F(SupervisedUserServiceFamilyLinkWebFilterTypeTransitionsTest,
                                      0);
   histogram_tester_.ExpectTotalCount("FamilyUser.WebFilterType", 0);
 
-  EnableParentalControls();
+  supervised_user_test_environment_->EnableSupervisedAccount();
   EXPECT_EQ(GetWebFilterType(), WebFilterType::kAllowAllSites);
   histogram_tester_.ExpectBucketCount(
       "SupervisedUsers.WebFilterType.FamilyLink", WebFilterType::kAllowAllSites,
@@ -234,12 +225,15 @@ TEST_F(SupervisedUserServiceFamilyLinkWebFilterTypeTransitionsTest,
   histogram_tester_.ExpectBucketCount("FamilyUser.WebFilterType",
                                       WebFilterType::kAllowAllSites, 1);
 
+#if !BUILDFLAG(IS_CHROMEOS)
+  // Signing out of the supervised account on ChromeOS not supported.
   // Disable parental controls. No more metrics are emitted.
-  DisableParentalControls();
+  supervised_user_test_environment_->DisableSupervisedAccount();
   EXPECT_EQ(GetWebFilterType(), WebFilterType::kDisabled);
   histogram_tester_.ExpectTotalCount("SupervisedUsers.WebFilterType.FamilyLink",
                                      1);
   histogram_tester_.ExpectTotalCount("FamilyUser.WebFilterType", 1);
+#endif
 }
 
 TEST_F(SupervisedUserServiceFamilyLinkWebFilterTypeTransitionsTest,
@@ -254,7 +248,7 @@ TEST_F(SupervisedUserServiceFamilyLinkWebFilterTypeTransitionsTest,
                                      0);
   histogram_tester_.ExpectTotalCount("FamilyUser.WebFilterType", 0);
 
-  EnableParentalControls();
+  supervised_user_test_environment_->EnableSupervisedAccount();
   EXPECT_EQ(GetWebFilterType(), WebFilterType::kCertainSites);
   histogram_tester_.ExpectBucketCount(
       "SupervisedUsers.WebFilterType.FamilyLink", WebFilterType::kCertainSites,
@@ -262,12 +256,16 @@ TEST_F(SupervisedUserServiceFamilyLinkWebFilterTypeTransitionsTest,
   histogram_tester_.ExpectBucketCount("FamilyUser.WebFilterType",
                                       WebFilterType::kCertainSites, 1);
 
+#if !BUILDFLAG(IS_CHROMEOS)
+  // Signing out of the supervised account on ChromeOS not supported.
+
   // Disable parental controls. No more metrics are emitted.
-  DisableParentalControls();
+  supervised_user_test_environment_->DisableSupervisedAccount();
   EXPECT_EQ(GetWebFilterType(), WebFilterType::kDisabled);
   histogram_tester_.ExpectTotalCount("SupervisedUsers.WebFilterType.FamilyLink",
                                      1);
   histogram_tester_.ExpectTotalCount("FamilyUser.WebFilterType", 1);
+#endif
 }
 
 TEST_F(SupervisedUserServiceFamilyLinkWebFilterTypeTransitionsTest,
@@ -281,7 +279,7 @@ TEST_F(SupervisedUserServiceFamilyLinkWebFilterTypeTransitionsTest,
                                      0);
   histogram_tester_.ExpectTotalCount("FamilyUser.WebFilterType", 0);
 
-  EnableParentalControls();
+  supervised_user_test_environment_->EnableSupervisedAccount();
   EXPECT_EQ(GetWebFilterType(), WebFilterType::kTryToBlockMatureSites);
   histogram_tester_.ExpectBucketCount(
       "SupervisedUsers.WebFilterType.FamilyLink",
@@ -289,12 +287,16 @@ TEST_F(SupervisedUserServiceFamilyLinkWebFilterTypeTransitionsTest,
   histogram_tester_.ExpectBucketCount("FamilyUser.WebFilterType",
                                       WebFilterType::kTryToBlockMatureSites, 1);
 
+#if !BUILDFLAG(IS_CHROMEOS)
+  // Signing out of the supervised account on ChromeOS not supported.
+
   // Disable parental controls. No more metrics are emitted.
-  DisableParentalControls();
+  supervised_user_test_environment_->DisableSupervisedAccount();
   EXPECT_EQ(GetWebFilterType(), WebFilterType::kDisabled);
   histogram_tester_.ExpectTotalCount("SupervisedUsers.WebFilterType.FamilyLink",
                                      1);
   histogram_tester_.ExpectTotalCount("FamilyUser.WebFilterType", 1);
+#endif
 }
 
 TEST_F(SupervisedUserServiceFamilyLinkWebFilterTypeTransitionsTest,
@@ -309,7 +311,8 @@ TEST_F(SupervisedUserServiceFamilyLinkWebFilterTypeTransitionsTest,
   histogram_tester_.ExpectBucketCount("FamilyUser.WebFilterType",
                                       WebFilterType::kTryToBlockMatureSites, 1);
 
-  SetWebFilterType(WebFilterType::kAllowAllSites);
+  supervised_user_test_environment_->SetWebFilterType(
+      WebFilterType::kAllowAllSites);
   EXPECT_EQ(GetWebFilterType(), WebFilterType::kAllowAllSites);
   histogram_tester_.ExpectBucketCount(
       "SupervisedUsers.WebFilterType.FamilyLink", WebFilterType::kAllowAllSites,
@@ -411,11 +414,10 @@ class SupervisedUserServiceLocallySupervisedWebFilterTypeTransitionsTest
     supervised_user_test_environment_->device_parental_controls()
         .SetSearchContentFiltersEnabledForTesting(enabled);
   }
-  // Tells if the device supervision is enabled and had effect on the browser
-  // features.
-  bool IsDeviceSupervisionEffective() const {
-    return AreAndroidParentalControlsEffectiveForTesting(
-        *supervised_user_test_environment_->pref_service());
+  // Tells if the device supervision is enabled.
+  bool IsDeviceSupervisionEnabled() const {
+    return supervised_user_test_environment_->device_parental_controls()
+        .IsEnabled();
   }
 };
 
@@ -424,7 +426,7 @@ class SupervisedUserServiceLocallySupervisedWebFilterTypeTransitionsTest
 TEST_F(SupervisedUserServiceLocallySupervisedWebFilterTypeTransitionsTest,
        AllToBrowserToNoneToSearchToAll) {
   Initialize(InitialSupervisionState::kSupervisedWithAllContentFilters);
-  EXPECT_TRUE(IsDeviceSupervisionEffective());
+  EXPECT_TRUE(IsDeviceSupervisionEnabled());
   EXPECT_EQ(GetWebFilterType(), WebFilterType::kTryToBlockMatureSites);
   histogram_tester_.ExpectBucketCount(
       "SupervisedUsers.WebFilterType.LocallySupervised",
@@ -432,7 +434,7 @@ TEST_F(SupervisedUserServiceLocallySupervisedWebFilterTypeTransitionsTest,
 
   // Leaves only browser filter enabled - no change in web filter type.
   SetSearchFilterEnabled(false);
-  EXPECT_TRUE(IsDeviceSupervisionEffective());
+  EXPECT_TRUE(IsDeviceSupervisionEnabled());
   EXPECT_EQ(GetWebFilterType(), WebFilterType::kTryToBlockMatureSites);
   histogram_tester_.ExpectTotalCount(
       "SupervisedUsers.WebFilterType.LocallySupervised", 1);
@@ -440,23 +442,24 @@ TEST_F(SupervisedUserServiceLocallySupervisedWebFilterTypeTransitionsTest,
   // All filters disabled. Disabling supervision won't yield WebFilterType
   // metric.
   SetBrowserFilterEnabled(false);
-  EXPECT_FALSE(IsDeviceSupervisionEffective());
+  EXPECT_FALSE(IsDeviceSupervisionEnabled());
   EXPECT_EQ(GetWebFilterType(), WebFilterType::kDisabled);
   histogram_tester_.ExpectTotalCount(
       "SupervisedUsers.WebFilterType.LocallySupervised", 1);
 
   // Supervision is back on, but the browser filter is still disabled. This time
-  // WebFilterType metric is emitted to indicate disabled filter setting.
+  // WebFilterType metric is emitted to indicate that parental controls are
+  // on without web filtering: all sites are allowed.
   SetSearchFilterEnabled(true);
-  EXPECT_TRUE(IsDeviceSupervisionEffective());
-  EXPECT_EQ(GetWebFilterType(), WebFilterType::kDisabled);
+  EXPECT_TRUE(IsDeviceSupervisionEnabled());
+  EXPECT_EQ(GetWebFilterType(), WebFilterType::kAllowAllSites);
   histogram_tester_.ExpectBucketCount(
       "SupervisedUsers.WebFilterType.LocallySupervised",
-      WebFilterType::kDisabled, 1);
+      WebFilterType::kAllowAllSites, 1);
 
   // Back to where we started: both filters enabled.
   SetBrowserFilterEnabled(true);
-  EXPECT_TRUE(IsDeviceSupervisionEffective());
+  EXPECT_TRUE(IsDeviceSupervisionEnabled());
   EXPECT_EQ(GetWebFilterType(), WebFilterType::kTryToBlockMatureSites);
   histogram_tester_.ExpectBucketCount(
       "SupervisedUsers.WebFilterType.LocallySupervised",
@@ -469,36 +472,36 @@ TEST_F(SupervisedUserServiceLocallySupervisedWebFilterTypeTransitionsTest,
 TEST_F(SupervisedUserServiceLocallySupervisedWebFilterTypeTransitionsTest,
        NoneToBrowserToAllToSearchToNone) {
   Initialize(InitialSupervisionState::kUnsupervised);
-  EXPECT_FALSE(IsDeviceSupervisionEffective());
+  EXPECT_FALSE(IsDeviceSupervisionEnabled());
   EXPECT_EQ(GetWebFilterType(), WebFilterType::kDisabled);
   histogram_tester_.ExpectTotalCount(
       "SupervisedUsers.WebFilterType.LocallySupervised", 0);
 
   SetBrowserFilterEnabled(true);
-  EXPECT_TRUE(IsDeviceSupervisionEffective());
+  EXPECT_TRUE(IsDeviceSupervisionEnabled());
   EXPECT_EQ(GetWebFilterType(), WebFilterType::kTryToBlockMatureSites);
   histogram_tester_.ExpectTotalCount(
       "SupervisedUsers.WebFilterType.LocallySupervised", 1);
 
   // All filters enabled
   SetSearchFilterEnabled(true);
-  EXPECT_TRUE(IsDeviceSupervisionEffective());
+  EXPECT_TRUE(IsDeviceSupervisionEnabled());
   EXPECT_EQ(GetWebFilterType(), WebFilterType::kTryToBlockMatureSites);
   histogram_tester_.ExpectTotalCount(
       "SupervisedUsers.WebFilterType.LocallySupervised", 1);
 
-  // Leaves only the search filter enabled - disables browser filter.
+  // Leaves only the search filter enabled - disables the web filtering.
   SetBrowserFilterEnabled(false);
-  EXPECT_TRUE(IsDeviceSupervisionEffective());
-  EXPECT_EQ(GetWebFilterType(), WebFilterType::kDisabled);
+  EXPECT_TRUE(IsDeviceSupervisionEnabled());
+  EXPECT_EQ(GetWebFilterType(), WebFilterType::kAllowAllSites);
   histogram_tester_.ExpectBucketCount(
       "SupervisedUsers.WebFilterType.LocallySupervised",
-      WebFilterType::kDisabled, 1);
+      WebFilterType::kAllowAllSites, 1);
 
   // Back to where we started: unsupervised. Disabling supervision won't yield
   // WebFilterType metric.
   SetSearchFilterEnabled(false);
-  EXPECT_FALSE(IsDeviceSupervisionEffective());
+  EXPECT_FALSE(IsDeviceSupervisionEnabled());
   EXPECT_EQ(GetWebFilterType(), WebFilterType::kDisabled);
   histogram_tester_.ExpectTotalCount(
       "SupervisedUsers.WebFilterType.LocallySupervised", 2);
@@ -506,23 +509,5 @@ TEST_F(SupervisedUserServiceLocallySupervisedWebFilterTypeTransitionsTest,
 
 #endif  // BUILDFLAG(IS_ANDROID)
 
-// TODO(crbug.com/1364589): Failing consistently on linux-chromeos-dbg
-// due to failed timezone conversion assertion.
-#if BUILDFLAG(IS_CHROMEOS)
-#define MAYBE_DeprecatedFilterPolicy DISABLED_DeprecatedFilterPolicy
-#else
-#define MAYBE_DeprecatedFilterPolicy DeprecatedFilterPolicy
-#endif
-TEST_F(SupervisedUserServiceTest, MAYBE_DeprecatedFilterPolicy) {
-  Initialize(InitialSupervisionState::kFamilyLinkDefault);
-  ASSERT_EQ(supervised_user_test_environment_->pref_service()->GetInteger(
-                prefs::kDefaultSupervisedUserFilteringBehavior),
-            static_cast<int>(FilteringBehavior::kAllow));
-  EXPECT_DCHECK_DEATH(
-      supervised_user_test_environment_->pref_service_syncable()
-          ->SetSupervisedUserPref(
-              prefs::kDefaultSupervisedUserFilteringBehavior,
-              /* SupervisedUserURLFilter::WARN */ base::Value(1)));
-}
 }  // namespace
 }  // namespace supervised_user

@@ -5,6 +5,7 @@
 // This file implements the Windows service controlling Me2Me host processes
 // running within user sessions.
 
+#include <cstdlib>
 #include <memory>
 #include <utility>
 
@@ -34,6 +35,14 @@
 #include "ui/gfx/x/xlib_support.h"
 #endif
 
+#if BUILDFLAG(IS_POSIX)
+#include "base/files/file_descriptor_watcher_posix.h"
+#endif
+
+#if BUILDFLAG(IS_LINUX)
+#include "remoting/host/linux/systemd_user_env_setter.h"
+#endif
+
 #if BUILDFLAG(IS_WIN)
 #include "base/functional/bind.h"
 #include "remoting/host/win/session_interaction_strategy.h"
@@ -45,6 +54,14 @@
 namespace remoting {
 
 int DesktopProcessMain() {
+#if BUILDFLAG(IS_LINUX)
+  auto result = SetSystemdUserEnvironment();
+  if (!result.has_value()) {
+    LOG(ERROR) << "Failed to set systemd user environment: " << result.error();
+    return kInitializationFailed;
+  }
+#endif
+
   const base::CommandLine* command_line =
       base::CommandLine::ForCurrentProcess();
 
@@ -66,7 +83,8 @@ int DesktopProcessMain() {
 
   base::ThreadPoolInstance::CreateAndStartWithDefaultParams("Me2Me");
 
-  base::SingleThreadTaskExecutor main_task_executor(base::MessagePumpType::UI);
+  base::SingleThreadTaskExecutor main_task_executor(base::MessagePumpType::UI,
+                                                    /*is_main_thread=*/true);
   base::RunLoop run_loop;
   scoped_refptr<AutoThreadTaskRunner> ui_task_runner = new AutoThreadTaskRunner(
       main_task_executor.task_runner(), run_loop.QuitClosure());
@@ -84,6 +102,13 @@ int DesktopProcessMain() {
   scoped_refptr<AutoThreadTaskRunner> io_task_runner =
       AutoThread::CreateWithType("I/O thread", ui_task_runner,
                                  base::MessagePumpType::IO);
+
+#if BUILDFLAG(IS_POSIX)
+  // Allow the main thread (which is not an I/O thread) to use
+  // FileDescriptorWatcher. The constructor of FileDescriptorWatcher registers
+  // itself in a thread local storage.
+  base::FileDescriptorWatcher fd_watcher(io_task_runner->task_runner());
+#endif
 
   mojo::core::ScopedIPCSupport ipc_support(
       io_task_runner->task_runner(),

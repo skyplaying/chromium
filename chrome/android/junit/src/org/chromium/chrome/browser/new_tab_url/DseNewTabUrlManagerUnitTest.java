@@ -21,7 +21,6 @@ import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.shared_preferences.SharedPreferencesManager;
 import org.chromium.base.supplier.ObservableSuppliers;
@@ -41,7 +40,6 @@ import org.chromium.url.JUnitTestGURLs;
 
 /** Tests for {@link DseNewTabUrlManager}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class DseNewTabUrlManagerUnitTest {
     private static final String SEARCH_URL = JUnitTestGURLs.SEARCH_URL.getSpec();
     private static final String NEW_TAB_URL = JUnitTestGURLs.NTP_URL.getSpec();
@@ -97,21 +95,21 @@ public class DseNewTabUrlManagerUnitTest {
     }
 
     @Test
-    public void testGetDSENewTabUrl() {
-        String newTabUrl = DseNewTabUrlManager.getDSENewTabUrl(null);
+    public void testGetDseNewTabUrl() {
+        String newTabUrl = DseNewTabUrlManager.getDseNewTabUrl(null);
         assertNull(newTabUrl);
 
         mSharedPreferenceManager.writeString(ChromePreferenceKeys.DSE_NEW_TAB_URL, NEW_TAB_URL);
-        assertEquals(NEW_TAB_URL, DseNewTabUrlManager.getDSENewTabUrl(null));
+        assertEquals(NEW_TAB_URL, DseNewTabUrlManager.getDseNewTabUrl(null));
 
         doReturn(true).when(mTemplateUrlService).isDefaultSearchEngineGoogle();
-        assertNull(DseNewTabUrlManager.getDSENewTabUrl(mTemplateUrlService));
+        assertNull(DseNewTabUrlManager.getDseNewTabUrl(mTemplateUrlService));
 
         doReturn(false).when(mTemplateUrlService).isDefaultSearchEngineGoogle();
-        assertEquals(NEW_TAB_URL, DseNewTabUrlManager.getDSENewTabUrl(mTemplateUrlService));
+        assertEquals(NEW_TAB_URL, DseNewTabUrlManager.getDseNewTabUrl(mTemplateUrlService));
 
         doReturn(null).when(mTemplateUrl).getNewTabURL();
-        assertEquals(SEARCH_URL, DseNewTabUrlManager.getDSENewTabUrl(mTemplateUrlService));
+        assertEquals(SEARCH_URL, DseNewTabUrlManager.getDseNewTabUrl(mTemplateUrlService));
     }
 
     @Test

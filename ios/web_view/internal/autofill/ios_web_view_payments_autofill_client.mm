@@ -136,7 +136,8 @@ void IOSWebViewPaymentsAutofillClient::VirtualCardEnrollCompleted(
 }
 
 void IOSWebViewPaymentsAutofillClient::OnCardDataAvailable(
-    const FilledCardInformationBubbleOptions& options) {}
+    const FilledCardInformationBubbleOptions& options,
+    const url::Origin& origin) {}
 
 void IOSWebViewPaymentsAutofillClient::ConfirmSaveIbanLocally(
     const Iban& iban,
@@ -263,7 +264,8 @@ IOSWebViewPaymentsAutofillClient::GetCardUnmaskPromptModel() {
 
 VirtualCardEnrollmentManager*
 IOSWebViewPaymentsAutofillClient::GetVirtualCardEnrollmentManager() {
-  if (GetPrefService()->GetBoolean(ios_web_view::kCWVAutofillVCNUsageEnabled)) {
+  if (client_->GetPrefs()->GetBoolean(
+          ios_web_view::kCWVAutofillVCNUsageEnabled)) {
     if (!virtual_card_enrollment_manager_) {
       virtual_card_enrollment_manager_ =
           std::make_unique<VirtualCardEnrollmentManager>(
@@ -305,18 +307,8 @@ IOSWebViewPaymentsAutofillClient::GetRiskBasedAuthenticator() {
   return risk_based_authenticator_.get();
 }
 
-bool IOSWebViewPaymentsAutofillClient::IsRiskBasedAuthEffectivelyAvailable()
-    const {
-  return GetPrefService()->GetBoolean(
-      ios_web_view::kRiskBasedAuthenticationEnabled);
-}
-
 bool IOSWebViewPaymentsAutofillClient::IsMandatoryReauthEnabled() {
-  return false;
-}
-
-bool IOSWebViewPaymentsAutofillClient::IsUsingCustomCardIconEnabled() const {
-  return GetPrefService()->GetBoolean(ios_web_view::kUseCardCustomImageEnabled);
+  return true;
 }
 
 void IOSWebViewPaymentsAutofillClient::ShowMandatoryReauthOptInPrompt(
@@ -367,25 +359,25 @@ void IOSWebViewPaymentsAutofillClient::UpdateOfferNotification(
 void IOSWebViewPaymentsAutofillClient::DismissOfferNotification() {}
 
 bool IOSWebViewPaymentsAutofillClient::ShowTouchToFillCreditCard(
-    base::WeakPtr<TouchToFillDelegate> delegate,
+    base::WeakPtr<TouchToFillPaymentMethodDelegate> delegate,
     base::span<const Suggestion> suggestions) {
   return false;
 }
 
 bool IOSWebViewPaymentsAutofillClient::ShowTouchToFillIban(
-    base::WeakPtr<TouchToFillDelegate> delegate,
+    base::WeakPtr<TouchToFillPaymentMethodDelegate> delegate,
     base::span<const Iban> ibans_to_suggest) {
   return false;
 }
 
 bool IOSWebViewPaymentsAutofillClient::ShowTouchToFillAffiliatedLoyaltyCard(
-    base::WeakPtr<TouchToFillDelegate> delegate,
+    base::WeakPtr<TouchToFillPaymentMethodDelegate> delegate,
     std::vector<LoyaltyCard> loyalty_cards_to_suggest) {
   return false;
 }
 
 bool IOSWebViewPaymentsAutofillClient::ShowTouchToFillForAllLoyaltyCards(
-    base::WeakPtr<TouchToFillDelegate> delegate,
+    base::WeakPtr<TouchToFillPaymentMethodDelegate> delegate,
     std::vector<LoyaltyCard> loyalty_cards_to_suggest) {
   return false;
 }
@@ -460,7 +452,7 @@ void IOSWebViewPaymentsAutofillClient::ShowCreditCardSaveAndFillPendingDialog(
 
 void IOSWebViewPaymentsAutofillClient::HideCreditCardSaveAndFillDialog() {}
 
-bool IOSWebViewPaymentsAutofillClient::IsTabModalPopupDeprecated() const {
+bool IOSWebViewPaymentsAutofillClient::IsTabModalPopup() const {
   return false;
 }
 

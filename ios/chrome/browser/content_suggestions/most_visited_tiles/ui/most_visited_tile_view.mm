@@ -13,7 +13,7 @@
 #import "ios/chrome/browser/content_suggestions/most_visited_tiles/ui/most_visited_tiles_commands.h"
 #import "ios/chrome/browser/content_suggestions/public/content_suggestions_constants.h"
 #import "ios/chrome/browser/content_suggestions/ui/cells/content_suggestions_cells_constants.h"
-#import "ios/chrome/browser/content_suggestions/ui/content_suggestions_menu_elements_provider.h"
+#import "ios/chrome/browser/content_suggestions/ui/content_suggestions_actions_provider.h"
 #import "ios/chrome/browser/favicon/ui_bundled/favicon_attributes_with_payload.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_color_palette.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_feature.h"
@@ -33,9 +33,6 @@
 // Command handler for actions.
 @property(nonatomic, weak) id<MostVisitedTilesCommands> commandHandler;
 
-// Whether the incognito action should be available.
-@property(nonatomic, assign) BOOL incognitoAvailable;
-
 @end
 
 @implementation MostVisitedTileView
@@ -47,9 +44,14 @@
                      tileType:ContentSuggestionsTileType::kMostVisited];
   if (self) {
     self.imageContainerView.layer.cornerRadius =
-        kMagicStackImageContainerWidth / 2;
+        IsNewTabPageUICleanupEnabled()
+            ? kMostVisitedTileImageContainerSquareCornerRadius
+            : kMagicStackImageContainerWidth / 2;
     self.imageContainerView.layer.masksToBounds = NO;
     self.imageContainerView.clipsToBounds = YES;
+    if (IsNewTabPageUICleanupEnabled()) {
+      self.titleLabel.numberOfLines = 1;
+    }
 
     UIStackView* stackView = [[UIStackView alloc] init];
     stackView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -106,12 +108,7 @@
   BOOL hasPreviousItem = _configuration;
   _configuration = [item copy];
   // Update the layout according to `item`.
-  if (IsNTPBackgroundCustomizationEnabled()) {
-    [self applyBackgroundColors];
-  } else {
-    self.imageContainerView.backgroundColor =
-        [UIColor colorNamed:kGrey100Color];
-  }
+  [self applyBackgroundColors];
 
   if (item.isPinned) {
     self.titleLabel.attributedText = [self pinnedTitle:item.title];
@@ -122,13 +119,15 @@
     self.titleLabel.text = item.title;
     self.accessibilityLabel = item.title;
   }
-  _incognitoAvailable = item.incognitoAvailable;
   _commandHandler = item.commandHandler;
-  self.menuElementsProvider = item.menuElementsProvider;
   self.isAccessibilityElement = item;
   self.accessibilityTraits =
       item ? UIAccessibilityTraitButton : UIAccessibilityTraitNone;
-  self.accessibilityCustomActions = item ? [self customActions] : @[];
+  self.actionsProvider = item.actionsProvider;
+  self.accessibilityCustomActions =
+      item ? [self.actionsProvider accessibilityCustomActionsForItem:item
+                                                            fromView:self]
+           : @[];
   if (item) {
     [_faviconView configureWithAttributes:item.attributes];
     if (!hasPreviousItem) {
@@ -161,7 +160,7 @@
 - (UIContextMenuConfiguration*)contextMenuInteraction:
                                    (UIContextMenuInteraction*)interaction
                        configurationForMenuAtLocation:(CGPoint)location {
-  NSArray<UIMenuElement*>* elements = [self.menuElementsProvider
+  NSArray<UIMenuElement*>* elements = [self.actionsProvider
       defaultContextMenuElementsForItem:[self mostVisitedItem]
                                fromView:self];
   UIContextMenuActionProvider actionProvider =
@@ -188,102 +187,6 @@
       [UIBezierPath bezierPathWithRoundedRect:previewPath cornerRadius:12];
   return [[UITargetedPreview alloc] initWithView:self
                                       parameters:previewParameters];
-}
-
-#pragma mark - AccessibilityCustomAction
-
-// Custom action for a cell configured with this item.
-- (NSArray<UIAccessibilityCustomAction*>*)customActions {
-  // Initialize possible custom actions.
-  UIAccessibilityCustomAction* openInNewTab =
-      [[UIAccessibilityCustomAction alloc]
-          initWithName:l10n_util::GetNSString(
-                           IDS_IOS_CONTENT_CONTEXT_OPENLINKNEWTAB)
-                target:self
-              selector:@selector(openInNewTab)];
-    UIAccessibilityCustomAction* openInNewIncognitoTab =
-        [[UIAccessibilityCustomAction alloc]
-            initWithName:l10n_util::GetNSString(
-                             IDS_IOS_CONTENT_CONTEXT_OPENLINKNEWINCOGNITOTAB)
-                  target:self
-                selector:@selector(openInNewIncognitoTab)];
-    UIAccessibilityCustomAction* editMostVisited =
-        [[UIAccessibilityCustomAction alloc]
-            initWithName:
-                l10n_util::GetNSString(
-                    IDS_IOS_CONTENT_SUGGESTIONS_PIN_SITE_EDIT_PINNED_SITE_TITLE)
-                  target:self
-                selector:@selector(editMostVisited)];
-    UIAccessibilityCustomAction* pinOrUnpinMostVisited =
-        [[UIAccessibilityCustomAction alloc]
-            initWithName:l10n_util::GetNSString(
-                             [self mostVisitedItem].isPinned
-                                 ? IDS_IOS_CONTENT_SUGGESTIONS_UNPIN_SITE
-                                 : IDS_IOS_CONTENT_SUGGESTIONS_PIN_SITE)
-                  target:self
-                selector:@selector(pinOrUnpinMostVisited)];
-    UIAccessibilityCustomAction* removeMostVisited =
-        [[UIAccessibilityCustomAction alloc]
-            initWithName:l10n_util::GetNSString(
-                             IsContentSuggestionsCustomizable()
-                                 ? IDS_IOS_CONTENT_SUGGESTIONS_NEVER_SHOW_SITE
-                                 : IDS_IOS_CONTENT_SUGGESTIONS_REMOVE)
-                  target:self
-                selector:@selector(removeMostVisited)];
-    // Add actions accordingly.
-    NSMutableArray* actions = [NSMutableArray arrayWithObject:openInNewTab];
-    if (self.incognitoAvailable) {
-      [actions addObject:openInNewIncognitoTab];
-    }
-    if (IsContentSuggestionsCustomizable()) {
-      if ([self mostVisitedItem].isPinned) {
-        [actions addObject:editMostVisited];
-        [actions addObject:pinOrUnpinMostVisited];
-      } else {
-        [actions addObject:pinOrUnpinMostVisited];
-        [actions addObject:removeMostVisited];
-      }
-    } else {
-      [actions addObject:removeMostVisited];
-    }
-  return actions;
-}
-
-// Target for custom action.
-- (BOOL)openInNewTab {
-  DCHECK(self.commandHandler);
-  [self.commandHandler openNewTabWithMostVisitedItem:[self mostVisitedItem]
-                                           incognito:NO];
-  return YES;
-}
-
-// Target for custom action.
-- (BOOL)openInNewIncognitoTab {
-  DCHECK(self.commandHandler);
-  [self.commandHandler openNewTabWithMostVisitedItem:[self mostVisitedItem]
-                                           incognito:YES];
-  return YES;
-}
-
-// Target for custom action.
-- (BOOL)pinOrUnpinMostVisited {
-  DCHECK(self.commandHandler);
-  [self.commandHandler pinOrUnpinMostVisited:[self mostVisitedItem]];
-  return YES;
-}
-
-// Target for custom action.
-- (BOOL)editMostVisited {
-  DCHECK(self.commandHandler);
-  [self.commandHandler openModalToEditPinnedSite:[self mostVisitedItem]];
-  return YES;
-}
-
-// Target for custom action.
-- (BOOL)removeMostVisited {
-  DCHECK(self.commandHandler);
-  [self.commandHandler removeMostVisited:[self mostVisitedItem]];
-  return YES;
 }
 
 #pragma mark - NewTabPageColorUpdating
@@ -324,10 +227,14 @@
   [self.faviconView configureWithAttributes:configuration.attributes];
 
   if (colorPalette) {
-    self.imageContainerView.backgroundColor = colorPalette.tertiaryColor;
+    self.imageContainerView.backgroundColor = IsNewTabPageUICleanupEnabled()
+                                                  ? colorPalette.primaryColor
+                                                  : colorPalette.tertiaryColor;
   } else {
     self.imageContainerView.backgroundColor =
-        [UIColor colorNamed:kGrey100Color];
+        [UIColor colorNamed:IsNewTabPageUICleanupEnabled()
+                                ? kNTPRedesignTileBackgroundColor
+                                : kGrey100Color];
   }
 }
 
@@ -342,10 +249,8 @@
 // `applyBackgroundColors` function whenever one of the observed trait's values
 // change.
 - (void)registerViewForTraitChanges {
-  if (IsNTPBackgroundCustomizationEnabled()) {
-    [self registerForTraitChanges:@[ NewTabPageTrait.class ]
-                       withAction:@selector(applyBackgroundColors)];
-  }
+  [self registerForTraitChanges:@[ NewTabPageTrait.class ]
+                     withAction:@selector(applyBackgroundColors)];
 }
 
 // Returns an attributed string prepended by the "pin" symbol. Helper method to
@@ -356,7 +261,7 @@
                       scale:UIImageSymbolScaleSmall];
   NSTextAttachment* attachment = [[NSTextAttachment alloc] init];
   UIImage* originalSymbolImage =
-      DefaultSymbolWithConfiguration(kPinSymbol, symbolConfig);
+      SymbolWithConfiguration(SymbolPin, symbolConfig);
   attachment.image = [originalSymbolImage
       imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
   NSAttributedString* symbolString =

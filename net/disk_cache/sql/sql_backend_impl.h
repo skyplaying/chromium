@@ -12,23 +12,28 @@
 #include <variant>
 #include <vector>
 
+#include "base/byte_size.h"
 #include "base/files/file_path.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ref.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
+#include "base/timer/elapsed_timer.h"
 #include "base/types/expected.h"
 #include "base/types/strong_alias.h"
 #include "net/base/net_errors.h"
 #include "net/base/net_export.h"
+#include "net/disk_cache/backend_cleanup_tracker.h"
 #include "net/disk_cache/buildflags.h"
 #include "net/disk_cache/disk_cache.h"
 #include "net/disk_cache/sql/cache_entry_key.h"
 #include "net/disk_cache/sql/entry_db_handle.h"
 #include "net/disk_cache/sql/entry_write_buffer.h"
 #include "net/disk_cache/sql/exclusive_operation_coordinator.h"
+#include "net/disk_cache/sql/sql_async_task_manager.h"
 #include "net/disk_cache/sql/sql_persistent_store.h"
+#include "net/disk_cache/sql/sql_shared_cache_manager.h"
 #include "net/disk_cache/sql/sql_write_buffer_memory_monitor.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 
@@ -41,6 +46,8 @@ class SequencedTaskRunner;
 
 namespace disk_cache {
 
+class BackendCleanupTracker;
+class SharedCacheClientRemote;
 class SqlEntryImpl;
 
 // Provides a concrete implementation of the disk cache backend that stores
@@ -72,7 +79,8 @@ class NET_EXPORT_PRIVATE SqlBackendImpl final : public Backend {
 
   SqlBackendImpl(const base::FilePath& path,
                  int64_t max_bytes,
-                 net::CacheType cache_type);
+                 net::CacheType cache_type,
+                 scoped_refptr<BackendCleanupTracker> cleanup_tracker);
 
   SqlBackendImpl(const SqlBackendImpl&) = delete;
   SqlBackendImpl& operator=(const SqlBackendImpl&) = delete;
@@ -88,6 +96,8 @@ class NET_EXPORT_PRIVATE SqlBackendImpl final : public Backend {
   int64_t MaxFileSize() const override;
   base::expected<int32_t, net::Error> GetEntryCount(
       GetEntryCountCallback callback) const override;
+  void SetMaxBytes(base::ByteSize max_bytes) override;
+  base::ByteSize GetMaxBytesForTesting() const override;
   EntryResult OpenOrCreateEntry(const std::string& key,
                                 net::RequestPriority priority,
                                 EntryResultCallback callback) override;
@@ -117,6 +127,18 @@ class NET_EXPORT_PRIVATE SqlBackendImpl final : public Backend {
   void OnExternalCacheHit(const std::string& key) override;
   uint8_t GetEntryInMemoryData(const std::string& key) override;
   void OnBrowserIdle() override;
+
+  bool SupportsSharedCache() const override;
+  void RegisterSharedCacheClientRemote(
+      const net::NetworkIsolationKey& network_isolation_key,
+      std::unique_ptr<SharedCacheClientRemote> client) override;
+  void OnEntryEligibleForSharedCache(
+      const std::string& key,
+      const GURL& url,
+      std::unique_ptr<net::HttpResponseInfo> response_info,
+      const net::NetworkIsolationKey& network_isolation_key) override;
+  void ProcessAllSharedCacheEligibleEntriesForTest(
+      base::ScopedClosureRunner scoped_closure_runner) override;
 
   // Called by SqlEntryImpl when it's being closed and is not doomed.
   // Removes the entry from `active_entries_`.
@@ -157,6 +179,8 @@ class NET_EXPORT_PRIVATE SqlBackendImpl final : public Backend {
                      EntryWriteBuffer buffer,
                      bool truncate,
                      base::Time last_used,
+                     bool sparse_write,
+                     int64_t header_size,
                      bool copy_buffer_for_optimistic_write,
                      CompletionOnceCallback callback);
 
@@ -173,6 +197,22 @@ class NET_EXPORT_PRIVATE SqlBackendImpl final : public Backend {
                     int64_t body_end,
                     bool sparse_reading,
                     SqlPersistentStore::ReadResultOrErrorCallback callback);
+
+  // Copies data from Shared Cache to the main database blob table and then
+  // executes the write operation for `buffer`. Scheduled as a normal operation
+  // via `ExclusiveOperationCoordinator`.
+  int CopySharedCacheToBlobTableAndWrite(
+      const CacheEntryKey& key,
+      const scoped_refptr<EntryDbHandle>& db_handle,
+      int64_t offset,
+      scoped_refptr<net::IOBuffer> buffer,
+      int buf_len,
+      int64_t old_body_end,
+      bool truncate,
+      base::Time last_used,
+      bool sparse_write,
+      size_t header_size,
+      CompletionOnceCallback callback);
 
   // Finds the available contiguous range of data for a given entry. The
   // operation is scheduled via the `ExclusiveOperationCoordinator` to ensure
@@ -198,9 +238,8 @@ class NET_EXPORT_PRIVATE SqlBackendImpl final : public Backend {
     return write_buffer_monitor_;
   }
 
-  // Sends a dummy operation through the background task runner via the
-  // operation coordinator, for unit tests.
-  int FlushQueueForTest(CompletionOnceCallback callback);
+  // Runs the message loop until all tracked tasks are complete, for unit tests.
+  void RunUntilAllTasksCompleteForTest();
 
   std::vector<scoped_refptr<base::SequencedTaskRunner>>&
   GetBackgroundTaskRunnersForTest() {
@@ -208,6 +247,12 @@ class NET_EXPORT_PRIVATE SqlBackendImpl final : public Backend {
   }
 
   SqlPersistentStore* GetSqlStoreForTest() { return store_.get(); }
+
+  SqlAsyncTaskManager& async_task_manager() { return async_task_manager_; }
+
+  SqlSharedCacheManager* GetSharedCacheManager() const {
+    return store_ ? store_->GetSharedCacheManager() : nullptr;
+  }
 
   // Enables a strict corruption checking mode for testing purposes. When
   // enabled, any detected database corruption will cause an immediate crash
@@ -228,6 +273,41 @@ class NET_EXPORT_PRIVATE SqlBackendImpl final : public Backend {
 
   int64_t GetWriteBufferTotalSizeForTesting() {
     return write_buffer_monitor_.CurrentSize();
+  }
+
+  // Triggers a single pass of processing for currently eligible entries for
+  // shared cache. If processing is interrupted or aborted by pending normal
+  // operations, unprocessed entries are re-inserted into
+  // `shared_cache_eligible_entries_`, and `scoped_closure_runner` runs when
+  // this single pass completes (even if some entries remain unprocessed).
+  void ProcessSharedCacheEligibleEntriesForTest(
+      base::ScopedClosureRunner scoped_closure_runner,
+      base::RepeatingCallback<void(const CacheEntryKey&)>
+          on_entry_copied_callback);
+
+  // Continuously triggers processing of eligible entries in a loop until
+  // `shared_cache_eligible_entries_` becomes empty. Unlike
+  // `ProcessSharedCacheEligibleEntriesForTest`, if any pass is interrupted or
+  // aborted, remaining entries are automatically re-triggered for processing
+  // until no eligible entries remain. `scoped_closure_runner` runs only after
+  // all eligible entries have been processed.
+  void ProcessAllSharedCacheEligibleEntriesWithCallbackForTest(
+      base::ScopedClosureRunner scoped_closure_runner,
+      base::RepeatingCallback<void(const CacheEntryKey&)>
+          on_entry_copied_callback);
+
+  size_t GetSharedCacheEligibleEntriesCountForTest() {
+    return shared_cache_eligible_entries_.size();
+  }
+
+  const absl::flat_hash_map<CacheEntryKey,
+                            SqlPersistentStore::SharedCacheEligibleEntry>&
+  GetSharedCacheEligibleEntriesForTest() {
+    return shared_cache_eligible_entries_;
+  }
+
+  ExclusiveOperationCoordinator* GetExclusiveOperationCoordinatorForTest() {
+    return &exclusive_operation_coordinator_;
   }
 
   base::WeakPtr<SqlBackendImpl> GetWeakPtr();
@@ -277,10 +357,22 @@ class NET_EXPORT_PRIVATE SqlBackendImpl final : public Backend {
   };
 
   void OnInitialized(CompletionOnceCallback callback,
+                     base::ElapsedTimer init_start_time,
                      const std::vector<bool>& results);
+  void OnCheckFakeIndexFileFinished(CompletionOnceCallback callback,
+                                    base::ElapsedTimer init_start_time,
+                                    bool success);
+  void OnStoreInitialized(CompletionOnceCallback callback,
+                          base::ElapsedTimer init_start_time,
+                          SqlPersistentStore::Error error);
   void RunDelayedPostInitializationTasks();
 
   SqlEntryImpl* GetActiveEntry(const CacheEntryKey& key);
+
+  // Flushes the write buffers of all active entries.
+  // This is primarily used to ensure that lazy entry creations and pending
+  // writes are visible to subsequent asynchronous database operations.
+  void FlushActiveEntriesBuffers() const;
 
   // Checks if the cache size has exceeded the high watermark and, if so,
   // schedules an eviction task. This is typically called after operations that
@@ -312,13 +404,6 @@ class NET_EXPORT_PRIVATE SqlBackendImpl final : public Backend {
       EntryResultCallback callback,
       std::unique_ptr<ExclusiveOperationCoordinator::OperationHandle> handle,
       SqlPersistentStore::EntryInfoOrError result);
-  // Callback for store operations that return an optional<EntryInfo>
-  // (`Open()`).
-  void OnOptionalEntryOperationFinished(
-      const CacheEntryKey& key,
-      EntryResultCallback callback,
-      std::unique_ptr<ExclusiveOperationCoordinator::OperationHandle> handle,
-      SqlPersistentStore::OptionalEntryInfoOrError result);
 
   // Creates a new entry speculatively and returns it immediately. The actual
   // database insertion is performed in the background.
@@ -396,6 +481,8 @@ class NET_EXPORT_PRIVATE SqlBackendImpl final : public Backend {
       EntryWriteBuffer buffer,
       bool truncate,
       base::Time last_used,
+      bool sparse_write,
+      int64_t header_size,
       SqlPersistentStore::ResIdOrErrorCallback callback,
       PopInFlightEntryModificationRunner pop_in_flight_entry_modification,
       std::unique_ptr<ExclusiveOperationCoordinator::OperationHandle> handle);
@@ -410,6 +497,8 @@ class NET_EXPORT_PRIVATE SqlBackendImpl final : public Backend {
       EntryWriteBuffer buffer,
       bool truncate,
       base::Time last_used,
+      bool sparse_write,
+      int64_t header_size,
       SqlPersistentStore::ResIdOrErrorCallback callback,
       PopInFlightEntryModificationRunner pop_in_flight_entry_modification,
       std::unique_ptr<ExclusiveOperationCoordinator::OperationHandle> handle);
@@ -436,6 +525,76 @@ class NET_EXPORT_PRIVATE SqlBackendImpl final : public Backend {
       bool sparse_reading,
       SqlPersistentStore::ReadResultOrErrorCallback callback,
       std::unique_ptr<ExclusiveOperationCoordinator::OperationHandle> handle);
+
+  void HandleCopySharedCacheToBlobTableOperation(
+      const CacheEntryKey& key,
+      const scoped_refptr<EntryDbHandle>& db_handle,
+      int64_t offset,
+      scoped_refptr<net::IOBuffer> buffer,
+      int buf_len,
+      int64_t old_body_end,
+      bool truncate,
+      base::Time last_used,
+      bool sparse_write,
+      size_t header_size,
+      PopInFlightEntryModificationRunner pop_in_flight_entry_modification,
+      CompletionOnceCallback callback,
+      std::unique_ptr<ExclusiveOperationCoordinator::OperationHandle> handle);
+
+  void DoCopySharedCacheToBlobTableStep(
+      const CacheEntryKey& key,
+      const scoped_refptr<EntryDbHandle>& db_handle,
+      int64_t offset,
+      scoped_refptr<net::IOBuffer> buffer,
+      int buf_len,
+      int64_t old_body_end,
+      bool truncate,
+      base::Time last_used,
+      bool sparse_write,
+      size_t header_size,
+      int64_t copy_offset,
+      scoped_refptr<net::IOBuffer> copy_buffer,
+      PopInFlightEntryModificationRunner pop_in_flight_entry_modification,
+      CompletionOnceCallback callback,
+      std::unique_ptr<ExclusiveOperationCoordinator::OperationHandle> handle);
+
+  void OnReadFromSharedCacheForCopy(
+      const CacheEntryKey& key,
+      const scoped_refptr<EntryDbHandle>& db_handle,
+      int64_t offset,
+      scoped_refptr<net::IOBuffer> buffer,
+      int buf_len,
+      int64_t old_body_end,
+      bool truncate,
+      base::Time last_used,
+      bool sparse_write,
+      size_t header_size,
+      int64_t copy_offset,
+      scoped_refptr<net::IOBuffer> copy_buffer,
+      int bytes_to_read,
+      PopInFlightEntryModificationRunner pop_in_flight_entry_modification,
+      CompletionOnceCallback callback,
+      std::unique_ptr<ExclusiveOperationCoordinator::OperationHandle> handle,
+      SqlPersistentStore::ReadResultOrError result);
+
+  void OnWriteToBlobTableForCopy(
+      const CacheEntryKey& key,
+      const scoped_refptr<EntryDbHandle>& db_handle,
+      int64_t offset,
+      scoped_refptr<net::IOBuffer> buffer,
+      int buf_len,
+      int64_t old_body_end,
+      bool truncate,
+      base::Time last_used,
+      bool sparse_write,
+      size_t header_size,
+      int64_t copy_offset,
+      scoped_refptr<net::IOBuffer> copy_buffer,
+      int bytes_written,
+      PopInFlightEntryModificationRunner pop_in_flight_entry_modification,
+      CompletionOnceCallback callback,
+      std::unique_ptr<ExclusiveOperationCoordinator::OperationHandle> handle,
+      SqlPersistentStore::ResIdOrError result);
 
   // Handles the backend logic for `GetEntryAvailableRange()`. This method is
   // scheduled as a normal operation via the `ExclusiveOperationCoordinator`
@@ -490,6 +649,27 @@ class NET_EXPORT_PRIVATE SqlBackendImpl final : public Backend {
   void ApplyInFlightEntryModifications(
       const CacheEntryKey& key,
       SqlPersistentStore::EntryInfo& entry_info);
+
+  void ProcessSharedCacheEligibleEntries(
+      base::ScopedClosureRunner scoped_closure_runner,
+      base::RepeatingCallback<void(const CacheEntryKey&)>
+          on_entry_copied_callback);
+
+  void HandleProcessSharedCacheEligibleEntries(
+      base::ScopedClosureRunner scoped_closure_runner,
+      base::RepeatingCallback<void(const CacheEntryKey&)>
+          on_entry_copied_callback,
+      std::unique_ptr<ExclusiveOperationCoordinator::OperationHandle> handle);
+
+  void OnProcessSharedCacheEligibleEntriesComplete(
+      base::ScopedClosureRunner scoped_closure_runner,
+      std::unique_ptr<ExclusiveOperationCoordinator::OperationHandle> handle,
+      std::vector<SqlPersistentStore::SharedCacheEligibleEntry>
+          unprocessed_entries);
+
+  SqlAsyncTaskManager async_task_manager_;
+
+  scoped_refptr<BackendCleanupTracker> cleanup_tracker_;
 
   const base::FilePath path_;
 
@@ -547,6 +727,18 @@ class NET_EXPORT_PRIVATE SqlBackendImpl final : public Backend {
   // the reservation is effectively transferred to
   // `optimistic_write_buffer_monitor_`.
   SqlWriteBufferMemoryMonitor write_buffer_monitor_;
+
+  // Cached value of `net::features::kSqlDiskCacheReduceUma`.
+  const bool reduce_uma_;
+
+  // Entries that are eligible for the shared cache and pending processing.
+  // Entries are registered via `OnEntryEligibleForSharedCache` and processed
+  // asynchronously during browser idle time or via explicit test calls.
+  // Unprocessed entries (e.g., due to aborts from concurrent operations) are
+  // re-inserted here for subsequent processing.
+  absl::flat_hash_map<CacheEntryKey,
+                      SqlPersistentStore::SharedCacheEligibleEntry>
+      shared_cache_eligible_entries_;
 
   // Weak pointer factory for this class.
   base::WeakPtrFactory<SqlBackendImpl> weak_factory_{this};

@@ -13,9 +13,9 @@
 #include "base/test/gtest_util.h"
 #include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animator.h"
 #include "ui/compositor/layer_owner.h"
+#include "ui/compositor/layer_textured.h"
 #include "ui/compositor/property_change_reason.h"
 #include "ui/compositor/test/layer_animator_test_controller.h"
 #include "ui/compositor/test/test_layer_animation_delegate.h"
@@ -31,7 +31,8 @@ namespace {
 
 class TestAnimatibleLayerOwner : public ui::LayerOwner {
  public:
-  TestAnimatibleLayerOwner() : ui::LayerOwner(std::make_unique<ui::Layer>()) {
+  TestAnimatibleLayerOwner()
+      : ui::LayerOwner(std::make_unique<ui::LayerTextured>()) {
     layer()->GetAnimator()->set_disable_timer_for_test(true);
     layer()->GetAnimator()->SetDelegate(&delegate_);
   }

@@ -106,8 +106,13 @@ class RuntimeAPI : public BrowserContextKeyedAPI,
       const ExtensionId& extension_id,
       int seconds_from_now);
 
-  bool OpenOptionsPage(const Extension* extension,
-                       content::BrowserContext* browser_context);
+  // Opens the options page for an extension. On Android, this will open the
+  // options page asynchronously. After the option page attempts to open,
+  // the callback will execute with the result of the attempt. Returns true
+  // if the options page could be opened successfully, false otherwise.
+  void OpenOptionsPage(const Extension* extension,
+                       content::BrowserContext* browser_context,
+                       base::OnceCallback<void(bool)> callback);
 
  private:
   friend class BrowserContextKeyedAPIFactory<RuntimeAPI>;
@@ -116,6 +121,8 @@ class RuntimeAPI : public BrowserContextKeyedAPI,
   // ExtensionRegistryObserver implementation.
   void OnExtensionLoaded(content::BrowserContext* browser_context,
                          const Extension* extension) override;
+  void OnExtensionEnabled(content::BrowserContext* browser_context,
+                          const Extension* extension) override;
   void OnExtensionUninstalled(content::BrowserContext* browser_context,
                               const Extension* extension,
                               UninstallReason reason) override;
@@ -203,10 +210,20 @@ class RuntimeEventRouter {
                                      const ExtensionId& extension_id);
 
   // Dispatches the onInstalled event to the given extension.
-  static void DispatchOnInstalledEvent(void* context_id,
+  //
+  // `context_id` is intentionally a `MayBeDangling<void>` opaque handle: the
+  // posted task may outlive the BrowserContext during profile shutdown.
+  // Validity is checked via `ExtensionsBrowserClient::IsValidContext()`
+  // before any dereference. See `base::UnsafeDangling()` in
+  // base/functional/bind.h for the id-then-lookup pattern this implements.
+  static void DispatchOnInstalledEvent(MayBeDangling<void> context_id,
                                        const ExtensionId& extension_id,
                                        const base::Version& old_version,
                                        bool chrome_updated);
+
+  // Dispatches the onEnabled event to the given extension.
+  static void DispatchOnEnabledEvent(MayBeDangling<void> context_id,
+                                     const ExtensionId& extension_id);
 
   // Dispatches the onUpdateAvailable event to the given extension.
   static void DispatchOnUpdateAvailableEvent(content::BrowserContext* context,
@@ -250,6 +267,9 @@ class RuntimeOpenOptionsPageFunction : public ExtensionFunction {
  protected:
   ~RuntimeOpenOptionsPageFunction() override = default;
   ResponseAction Run() override;
+
+ private:
+  void OnOpenOptionsPageResult(bool success);
 };
 
 class RuntimeSetUninstallURLFunction : public ExtensionFunction {
@@ -348,6 +368,17 @@ class RuntimeGetContextsFunction : public ExtensionFunction {
   int GetTabId(content::WebContents& web_contents);
   int GetFrameId(content::RenderFrameHost& host);
   int GetWindowId(content::WebContents& web_contents);
+};
+
+class RuntimeMarkListenerRegistrationCompleteFunction
+    : public ExtensionFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("runtime.markListenerRegistrationComplete",
+                             RUNTIME_MARKLISTENERREGISTRATIONCOMPLETE)
+
+ protected:
+  ~RuntimeMarkListenerRegistrationCompleteFunction() override = default;
+  ResponseAction Run() override;
 };
 
 }  // namespace extensions

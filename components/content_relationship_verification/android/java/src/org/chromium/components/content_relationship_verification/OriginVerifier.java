@@ -10,6 +10,7 @@ import android.net.Uri;
 import android.os.SystemClock;
 import android.text.TextUtils;
 
+import androidx.annotation.IntDef;
 import androidx.annotation.VisibleForTesting;
 
 import org.jni_zero.CalledByNative;
@@ -20,6 +21,7 @@ import org.chromium.base.Log;
 import org.chromium.base.PackageUtils;
 import org.chromium.base.StrictModeContext;
 import org.chromium.base.ThreadUtils;
+import org.chromium.base.TriState;
 import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
 import org.chromium.build.annotations.NullMarked;
@@ -30,6 +32,8 @@ import org.chromium.components.embedder_support.util.UrlConstants;
 import org.chromium.content_public.browser.BrowserContextHandle;
 import org.chromium.content_public.browser.WebContents;
 
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -67,22 +71,31 @@ public abstract class OriginVerifier {
 
     public @Nullable WebContents mWebContents;
 
-    public enum VerifierResult {
-        ONLINE_SUCCESS,
-        ONLINE_FAILURE,
-        OFFLINE_SUCCESS,
-        OFFLINE_FAILURE,
-        HTTPS_FAILURE,
-        REQUEST_FAILURE,
+    @IntDef({
+        VerifierResult.ONLINE_SUCCESS,
+        VerifierResult.ONLINE_FAILURE,
+        VerifierResult.OFFLINE_SUCCESS,
+        VerifierResult.OFFLINE_FAILURE,
+        VerifierResult.HTTPS_FAILURE,
+        VerifierResult.REQUEST_FAILURE
+    })
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface VerifierResult {
+        int ONLINE_SUCCESS = 0;
+        int ONLINE_FAILURE = 1;
+        int OFFLINE_SUCCESS = 2;
+        int OFFLINE_FAILURE = 3;
+        int HTTPS_FAILURE = 4;
+        int REQUEST_FAILURE = 5;
     }
 
     /** Small helper class to post a result of origin verification. */
     public class VerifiedCallback implements Runnable {
         private final Origin mOrigin;
         private final boolean mResult;
-        private final @Nullable Boolean mOnline;
+        private final @TriState int mOnline;
 
-        public VerifiedCallback(Origin origin, boolean result, @Nullable Boolean online) {
+        public VerifiedCallback(Origin origin, boolean result, @TriState int online) {
             mOrigin = origin;
             mResult = result;
             mOnline = online;
@@ -108,16 +121,17 @@ public abstract class OriginVerifier {
     public interface OriginVerificationListener {
         /**
          * To be posted on the handler thread after the verification finishes.
+         *
          * @param packageName The package name for the origin verification query for this result.
          * @param origin The origin that was declared on the query for this result.
          * @param verified Whether the given origin was verified to correspond to the given package.
          * @param online Whether the device could connect to the internet to perform verification.
-         *               Will be {@code null} if internet was not required for check (eg
-         *               verification had already been attempted this Chrome lifetime and the
-         *               result was cached or the origin was not https).
+         *     Will be {@link TriState#NOT_SET} if internet was not required for check (eg
+         *     verification had already been attempted this Chrome lifetime and the result was
+         *     cached or the origin was not https).
          */
         void onOriginVerified(
-                String packageName, Origin origin, boolean verified, @Nullable Boolean online);
+                String packageName, Origin origin, boolean verified, @TriState int online);
     }
 
     /**
@@ -190,14 +204,15 @@ public abstract class OriginVerifier {
             Log.i(TAG, "Verification failed for %s as not https or localhost.", origin);
             recordResultMetrics(VerifierResult.HTTPS_FAILURE);
             PostTask.runOrPostTask(
-                    TaskTraits.UI_DEFAULT, new VerifiedCallback(origin, false, null));
+                    TaskTraits.UI_DEFAULT, new VerifiedCallback(origin, false, TriState.NOT_SET));
             return;
         }
 
         if (mPackageName != null
                 && mVerificationResultStore.shouldOverride(mPackageName, origin, mRelation)) {
             Log.i(TAG, "Verification succeeded for %s, it was overridden.", origin);
-            PostTask.runOrPostTask(TaskTraits.UI_DEFAULT, new VerifiedCallback(origin, true, null));
+            PostTask.runOrPostTask(
+                    TaskTraits.UI_DEFAULT, new VerifiedCallback(origin, true, TriState.NOT_SET));
             return;
         }
 
@@ -207,7 +222,8 @@ public abstract class OriginVerifier {
                     "Verification succeeded for %s, %s, it was allowlisted.",
                     mPackageName,
                     origin);
-            PostTask.runOrPostTask(TaskTraits.UI_DEFAULT, new VerifiedCallback(origin, true, null));
+            PostTask.runOrPostTask(
+                    TaskTraits.UI_DEFAULT, new VerifiedCallback(origin, true, TriState.NOT_SET));
             return;
         }
 
@@ -232,7 +248,7 @@ public abstract class OriginVerifier {
         if (!requestSent) {
             recordResultMetrics(VerifierResult.REQUEST_FAILURE);
             PostTask.runOrPostTask(
-                    TaskTraits.UI_DEFAULT, new VerifiedCallback(origin, false, false));
+                    TaskTraits.UI_DEFAULT, new VerifiedCallback(origin, false, TriState.FALSE));
         }
     }
 
@@ -253,11 +269,11 @@ public abstract class OriginVerifier {
         switch (result) {
             case RelationshipCheckResult.SUCCESS:
                 recordResultMetrics(VerifierResult.ONLINE_SUCCESS);
-                originVerified(origin, true, true);
+                originVerified(origin, true, TriState.TRUE);
                 break;
             case RelationshipCheckResult.FAILURE:
                 recordResultMetrics(VerifierResult.ONLINE_FAILURE);
-                originVerified(origin, false, true);
+                originVerified(origin, false, TriState.TRUE);
                 break;
             case RelationshipCheckResult.NO_CONNECTION:
                 Log.i(TAG, "Device is offline, checking saved verification result.");
@@ -266,7 +282,7 @@ public abstract class OriginVerifier {
                         storedResult
                                 ? VerifierResult.OFFLINE_SUCCESS
                                 : VerifierResult.OFFLINE_FAILURE);
-                originVerified(origin, storedResult, false);
+                originVerified(origin, storedResult, TriState.FALSE);
                 break;
             default:
                 assert false;
@@ -274,7 +290,7 @@ public abstract class OriginVerifier {
     }
 
     /** Deal with the result of an Origin check. Will be called on UI Thread. */
-    private void originVerified(Origin origin, boolean originVerified, @Nullable Boolean online) {
+    private void originVerified(Origin origin, boolean originVerified, @TriState int online) {
         if (originVerified) {
             assert mPackageName != null;
             Log.d(TAG, "Adding: %s for %s", mPackageName, origin);
@@ -304,9 +320,9 @@ public abstract class OriginVerifier {
             mListeners.remove(origin);
         }
 
-        if (online != null) {
+        if (online != TriState.NOT_SET) {
             long duration = SystemClock.uptimeMillis() - mVerificationStartTime;
-            recordVerificationTimeMetrics(duration, online);
+            recordVerificationTimeMetrics(duration, online == TriState.TRUE);
         }
 
         cleanUp();
@@ -370,7 +386,7 @@ public abstract class OriginVerifier {
     public abstract boolean wasPreviouslyVerified(Origin origin);
 
     /** Implement for logging of VerifierResult for different embedders. */
-    public abstract void recordResultMetrics(VerifierResult result);
+    public abstract void recordResultMetrics(@VerifierResult int result);
 
     /** Implement for logging of VerificationTimeMetrics for different embedders. */
     public abstract void recordVerificationTimeMetrics(long duration, boolean online);

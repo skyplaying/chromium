@@ -8,32 +8,30 @@
 #include <utility>
 
 #include "base/trace_event/trace_event.h"
-#include "components/signin/internal/identity_manager/account_fetcher_service.h"
+#include "components/signin/internal/identity_manager/account_info_util.h"
 #include "components/signin/internal/identity_manager/profile_oauth2_token_service.h"
 #include "google_apis/gaia/gaia_constants.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
-#include "third_party/perfetto/include/perfetto/tracing/track.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 
 AccountInfoFetcherGaia::AccountInfoFetcherGaia(
-    ProfileOAuth2TokenService* token_service,
+    ProfileOAuth2TokenService& token_service,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-    AccountFetcherService* service,
-    const CoreAccountId& account_id)
+    const CoreAccountId& account_id,
+    base::OnceCallback<void(std::optional<AccountInfo>)> callback)
     : OAuth2AccessTokenManager::Consumer("gaia_account_tracker"),
       token_service_(token_service),
       url_loader_factory_(std::move(url_loader_factory)),
-      service_(service),
-      account_id_(account_id) {
-  TRACE_EVENT_BEGIN("AccountFetcherService", "AccountIdFetcher",
-                    perfetto::Track::FromPointer(this), "account_id",
-                    account_id.ToString());
-
-  Start();
+      account_id_(account_id),
+      callback_(std::move(callback)) {
+  TRACE_EVENT_INSTANT("AccountFetcherService", "AccountIdFetcher",
+                      perfetto::Flow::FromPointer(this), "account_id",
+                      account_id.ToString());
 }
 
 AccountInfoFetcherGaia::~AccountInfoFetcherGaia() {
-  TRACE_EVENT_END("AccountFetcherService",
-                  /* AccountIdFetcher */ perfetto::Track::FromPointer(this));
+  TRACE_EVENT_INSTANT("AccountFetcherService", "~AccountInfoFetcherGaia",
+                      perfetto::TerminatingFlow::FromPointer(this));
 }
 
 void AccountInfoFetcherGaia::Start() {
@@ -48,7 +46,7 @@ void AccountInfoFetcherGaia::OnGetTokenSuccess(
     const OAuth2AccessTokenManager::Request* request,
     const OAuth2AccessTokenConsumer::TokenResponse& token_response) {
   TRACE_EVENT_INSTANT("AccountFetcherService", "OnGetTokenSuccess",
-                      perfetto::Track::FromPointer(this));
+                      perfetto::Flow::FromPointer(this));
   DCHECK_EQ(request, login_token_request_.get());
 
   gaia_oauth_client_ =
@@ -62,32 +60,32 @@ void AccountInfoFetcherGaia::OnGetTokenFailure(
     const OAuth2AccessTokenManager::Request* request,
     const GoogleServiceAuthError& error) {
   TRACE_EVENT_INSTANT("AccountFetcherService", "OnGetTokenFailure",
-                      perfetto::Track::FromPointer(this),
+                      perfetto::Flow::FromPointer(this),
                       "google_service_auth_error", error.ToString());
   LOG(ERROR) << "OnGetTokenFailure: " << error.ToString();
   DCHECK_EQ(request, login_token_request_.get());
-  service_->OnUserInfoFetchFailure(account_id_);
+  std::move(callback_).Run(std::nullopt);
 }
 
 void AccountInfoFetcherGaia::OnGetUserInfoResponse(
     const base::DictValue& user_info) {
   TRACE_EVENT_INSTANT("AccountFetcherService", "OnGetUserInfoResponse",
-                      perfetto::Track::FromPointer(this), "account_id",
+                      perfetto::Flow::FromPointer(this), "account_id",
                       account_id_.ToString());
-  service_->OnUserInfoFetchSuccess(account_id_, user_info);
+  std::move(callback_).Run(signin::AccountInfoFromUserInfo(user_info));
 }
 
 void AccountInfoFetcherGaia::OnOAuthError() {
   TRACE_EVENT_INSTANT("AccountFetcherService", "OnOAuthError",
-                      perfetto::Track::FromPointer(this));
+                      perfetto::Flow::FromPointer(this));
   LOG(ERROR) << "OnOAuthError";
-  service_->OnUserInfoFetchFailure(account_id_);
+  std::move(callback_).Run(std::nullopt);
 }
 
 void AccountInfoFetcherGaia::OnNetworkError(int response_code) {
   TRACE_EVENT_INSTANT("AccountFetcherService", "OnNetworkError",
-                      perfetto::Track::FromPointer(this), "response_code",
+                      perfetto::Flow::FromPointer(this), "response_code",
                       response_code);
   LOG(ERROR) << "OnNetworkError " << response_code;
-  service_->OnUserInfoFetchFailure(account_id_);
+  std::move(callback_).Run(std::nullopt);
 }

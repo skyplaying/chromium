@@ -110,48 +110,11 @@
     },
     {
       "id": 31,
-      "cr_bugs": [154715, 10068, 269829, 294779, 285292, 1018528],
-      "description": "The Mali-3xx/4xx/Txxx driver does not guarantee flush ordering",
+      "cr_bugs": [154715, 10068, 269829, 294779, 285292, 1018528, 179815, 179250, 229643, 230896, 163464, 233612, 289461, 369316, 678508],
+      "description": "Always use virtualized contexts on Android",
       "os": {
         "type": "android"
       },
-      "gl_vendor": "ARM.*",
-      "gl_renderer": "Mali-[T34].*",
-      "features": [
-        "use_virtualized_gl_contexts"
-      ]
-    },
-    {
-      "id": 32,
-      "cr_bugs": [179815],
-      "description": "Share groups are not working on (older?) Broadcom drivers",
-      "os": {
-        "type": "android"
-      },
-      "gl_vendor": "Broadcom.*",
-      "features": [
-        "use_virtualized_gl_contexts"
-      ]
-    },
-    {
-      "id": 33,
-      "description": "Share group-related crashes and poor context switching perf on Imagination drivers",
-      "os": {
-        "type": "android"
-      },
-      "gl_vendor": "Imagination.*",
-      "features": [
-        "use_virtualized_gl_contexts"
-      ]
-    },
-    {
-      "id": 34,
-      "cr_bugs": [179250, 229643, 230896],
-      "description": "Share groups are not working on (older?) Vivante drivers",
-      "os": {
-        "type": "android"
-      },
-      "gl_extensions": ".*GL_VIV_shader_binary.*",
       "features": [
         "use_virtualized_gl_contexts"
       ]
@@ -167,18 +130,6 @@
       "gl_vendor": "NVIDIA.*",
       "features": [
         "init_gl_position_in_vertex_shader"
-      ]
-    },
-    {
-      "id": 38,
-      "cr_bugs": [163464, 233612, 289461],
-      "description": "Non-virtual contexts on Qualcomm sometimes cause out-of-order frames",
-      "os": {
-        "type": "android"
-      },
-      "gl_vendor": "Qualcomm.*",
-      "features": [
-        "use_virtualized_gl_contexts"
       ]
     },
     {
@@ -307,23 +258,6 @@
       "gl_extensions": ".*GL_VIV_shader_binary.*",
       "disabled_extensions": [
         "GL_OES_standard_derivatives"
-      ]
-    },
-    {
-      "id": 72,
-      "description": "Use virtual contexts on NVIDIA with GLES 3.1",
-      "cr_bugs": [369316],
-      "os": {
-        "type": "android"
-      },
-      "gl_type": "gles",
-      "gl_version": {
-        "op": "=",
-        "value": "3.1"
-      },
-      "gl_vendor": "NVIDIA.*",
-      "features": [
-        "use_virtualized_gl_contexts"
       ]
     },
     {
@@ -1031,19 +965,6 @@
       "gl_renderer": "Adreno.*",
       "features": [
         "disable_program_caching_for_transform_feedback"
-      ]
-    },
-    {
-      "id": 213,
-      "description": "The Mali-Gxx driver does not guarantee flush ordering",
-      "cr_bugs": [678508],
-      "os": {
-        "type": "android"
-      },
-      "gl_vendor": "ARM.*",
-      "gl_renderer": "Mali-G.*",
-      "features": [
-        "use_virtualized_gl_contexts"
       ]
     },
     {
@@ -1999,18 +1920,6 @@
       },
       "features": [
         "disable_d3d11_video_decoder"
-      ]
-    },
-    {
-      "id": 329,
-      "cr_bugs": [1012464],
-      "description": "Limit D3D11VideoDecoder to 11.0 due to crashes on AMD",
-      "os": {
-        "type": "win"
-      },
-      "vendor_id": "0x1002",
-      "features": [
-        "limit_d3d11_video_decoder_to_11_0"
       ]
     },
     {
@@ -2983,38 +2892,6 @@
       ]
     },
     {
-      "id": 417,
-      "description": "Limit D3D11VideoDecoder to 11.0 due to failures on QC chipsets.",
-      "comment": [
-        "On QC chipsets calling ID3D11VideoContext1::SubmitDecoderBuffer1 with ",
-        "non-protected content can result in an E_INVALIDARG result and playback ",
-        "failure. Force the use of 11.0 to create an ID3D11VideoContext instead."
-      ],
-      "os": {
-        "type": "win"
-      },
-      "vendor_id": "0x4d4f4351",
-      "features": [
-        "limit_d3d11_video_decoder_to_11_0"
-      ]
-    },
-    {
-      "id": 418,
-      "description": "Uploading data or rendering to R8 EGL images generates driver errors.",
-      "cr_bugs": [1455752],
-      "os": {
-        "type": "android",
-        "version": {
-          "op": "<=",
-          "value": "9.0"
-        }
-      },
-      "gl_vendor": "ARM.*",
-      "features": [
-        "r8_egl_images_broken"
-      ]
-    },
-    {
       "id": 420,
       "cr_bugs": [1475546],
       "description": "GPU process crash when decoding HEVC on Intel with specific drivers.",
@@ -3180,36 +3057,6 @@
       ]
     },
     {
-      "id": 430,
-      "cr_bugs": [
-        341327464
-      ],
-      "description": "Block all Intel NPU drivers versions less than 4404 except those between 3159 and 4023 for WebNN",
-      "vendor_id": "0x8086",
-      "driver_version": {
-        "op": "<",
-        "value": "32.0.100.4404"
-      },
-      "os": {
-        "type": "win"
-      },
-      "multi_gpu_category": "npu",
-      "exceptions": [
-        {
-          "multi_gpu_category": "npu",
-          "vendor_id": "0x8086",
-          "driver_version": {
-            "op": "between",
-            "value": "32.0.100.3159",
-            "value2": "32.0.100.4023"
-          }
-        }
-      ],
-      "features": [
-        "disable_webnn_for_npu"
-      ]
-    },
-    {
       "id": 431,
       "cr_bugs": [
         1501767
@@ -3343,24 +3190,12 @@
     {
       "id": 437,
       "cr_bugs": [ 372358970 ],
-      "description": "AV1 RTC decoding may crash driver on some of the Intel devices",
+      "description": "AV1 RTC decoding may crash driver on some of the Intel devices with old drivers",
       "os": {
         "type": "win"
       },
       "vendor_id": "0x8086",
       "multi_gpu_category": "any",
-      "intel_gpu_series": [
-        "tigerlake",
-        "rocketlake",
-        "dg1",
-        "alderlake",
-        "alchemist",
-        "raptorlake",
-        "meteorlake",
-        "arrowlake",
-        "lunarlake",
-        "battlemage"
-      ],
       "features": [
         "use_first_valid_ref_for_av1_invalid_ref"
       ],
@@ -3368,24 +3203,6 @@
         "op": "<",
         "value": "32.0.101.6557"
       }
-    },
-    {
-      "id": 438,
-      "cr_bugs": [ 377047083 ],
-      "description": "Disable DirectML execution of metacommands on Intel GPUs with driver version between 31.0.101.5518 and 32.0.101.6083 due to stability bugs",
-      "os": {
-        "type": "win"
-      },
-      "vendor_id": "0x8086",
-      "driver_version": {
-        "schema": "intel_driver",
-        "op": "between",
-        "value": "31.0.101.5518",
-        "value2": "32.0.101.6083"
-      },
-      "features": [
-        "disable_dml_meta_commands_for_gpu"
-      ]
     },
     {
       "id": 440,
@@ -3815,6 +3632,288 @@
       "gl_vendor": "Imagination.*",
       "features": [
         "ensure_previous_framebuffer_not_deleted"
+      ]
+    },
+    {
+      "id": 472,
+      "description": "Validate GL_MAX_*_UNIFORM_BLOCKS at compile time instead of link time to work around compiler bugs.",
+      "os": {
+        "type": "android"
+      },
+      "gl_vendor": "Imagination.*",
+      "features": [
+        "validate_max_per_stage_uniform_blocks_at_compile_time"
+      ]
+    },
+    {
+      "id": 473,
+      "cr_bugs": [330694403],
+      "description": "The AMD Radeon 610M Integrated Graphics chip seems to reliably crash when attempting to initialize VAAPI",
+      "os": {
+        "type": "linux"
+      },
+      "vendor_id": "0x1002",
+      "device_id": ["0x1506"],
+      "features": [
+        "disable_vaapi"
+      ]
+    },
+    {
+      "id": 474,
+      "description": "Disable RGB to YUV hardware conversion on NVIDIA Linux",
+      "cr_bugs": [447709687],
+      "os": {
+        "type": "linux"
+      },
+      "gl_vendor": "NVIDIA.*",
+      "features": [
+        "disable_rgb_to_yuv_conversion"
+      ]
+    },
+    {
+      "id": 475,
+      "description": "Disable accelerated video decoding on AMD Strix Halo to prevent kernel hanging",
+      "cr_bugs": [447709687],
+      "os": {
+        "type": "linux"
+      },
+      "vendor_id": "0x1002",
+      "device_id": ["0x1586"],
+      "features": [
+        "disable_vaapi"
+      ]
+    },
+    {
+      "id": 476,
+      "description": "Qualcomm GPUs crash when invalidating incomplete framebuffers",
+      "cr_bugs": [507508103],
+      "os": {
+        "type": "android"
+      },
+      "gl_vendor": "Qualcomm.*",
+      "driver_version": {
+        "op": "<",
+        "value": "881"
+      },
+      "features": [
+        "dont_invalidate_incomplete_fbos"
+      ]
+    },
+    {
+      "id": 478,
+      "description": "Program binaries don't contain transform feedback varyings on Mali GPUs",
+      "cr_bugs": [510589906],
+      "os": {
+        "type": "linux"
+      },
+      "gl_vendor": "ARM.*",
+      "gl_renderer": "Mali.*",
+      "features": [
+        "disable_program_caching_for_transform_feedback"
+      ]
+    },
+    {
+      "id": 479,
+      "description": "D3D12 AV1 encoding high and professional profiles query causes unexpected driver behavior on some older drivers.",
+      "os": {
+        "type": "win"
+      },
+      "vendor_id": "0x8086",
+      "driver_version": {
+        "op": "<",
+        "value": "32.0.101.6559"
+      },
+      "features": [
+        "limit_d3d12_av1_profile_to_main"
+      ]
+    },
+    {
+      "id": 480,
+      "cr_bugs": [520656244],
+      "description": "Reattach FBO depth/stencil attachments when they are reallocated on Qualcomm GPUs",
+      "gl_vendor": "Qualcomm.*",
+      "driver_version": {
+        "op": "<",
+        "value": "878"
+      },
+      "features": [
+        "reattach_fbo_depth_stencil_on_reallocation"
+      ]
+    },
+    {
+      "id": 481,
+      "cr_bugs": [443107135],
+      "description": "Disable Media Foundation D3D video processing on Qualcomm GPUs.",
+      "os": {
+        "type": "win"
+      },
+      "vendor_id": "0x4d4f4351",
+      "features": [
+        "disable_media_foundation_d3d_video_processing"
+      ]
+    },
+    {
+      "id": 482,
+      "cr_bugs": [496807874],
+      "description": "Split full-image level 0 PBO uploads via TexSubImage2D into two calls to work around driver bugs.",
+      "os": {
+        "type": "android"
+      },
+      "gl_vendor": "Imagination.*",
+      "features": [
+        "split_level_0_pbo_full_sub_image_2d"
+      ]
+    },
+    {
+      "id": 483,
+      "cr_bugs": [528131939],
+      "description": "Reset texture base level before calling glCompressedTexSubImage2D for ASTC textures to work around PowerVR driver bug.",
+      "os": {
+        "type": "android"
+      },
+      "gl_vendor": "Imagination.*",
+      "features": [
+        "reset_base_level_for_astc_sub_image"
+      ]
+    },
+    {
+      "id": 484,
+      "cr_bugs": [529867799],
+      "description": "Pack large row length separately when packing into a pixel pack buffer to work around Mali driver bug.",
+      "gl_vendor": "ARM.*",
+      "features": [
+        "pack_large_row_length_separately_pack_buffer"
+      ]
+    },
+    {
+      "id": 485,
+      "cr_bugs": [529991907],
+      "description": "Limit the number of declared varying output components at compile time to work around a PowerVR driver bug.",
+      "os": {
+        "type": "android"
+      },
+      "gl_vendor": "Imagination.*",
+      "features": [
+        "limit_output_varyings_at_compile_time"
+      ]
+    },
+    {
+      "id": 486,
+      "cr_bugs": [534903095],
+      "description": "Changing BASE_LEVEL of NPOT immutable texture triggers driver bug on PowerVR GPUs.",
+      "os": {
+        "type": "android"
+      },
+      "gl_vendor": "Imagination.*",
+      "features": [
+        "dont_change_base_level_for_npot_immutable_textures"
+      ]
+    },
+    {
+      "id": 487,
+      "cr_bugs": [
+        499602793
+      ],
+      "description": "Reattach texture to FBO after layer count increase on PowerVR GPUs.",
+      "os": {
+        "type": "android"
+      },
+      "gl_vendor": "Imagination.*",
+      "features": [
+        "reattach_texture_to_fbo_after_layer_increase"
+      ]
+    },
+    {
+      "id": 488,
+      "cr_bugs": [534468209],
+      "description": "Flush pending GPU jobs/queries before unbinding or deleting a user framebuffer object on ARM Mali Valhall/Avalon GPUs to avoid driver crash.",
+      "gl_vendor": "ARM.*",
+      "features": [
+        "flush_queries_before_deleting_or_unbinding_fbo"
+      ]
+    },
+    {
+      "id": 489,
+      "cr_bugs": [530045332],
+      "description": "Lose context when 3D texture depth increases on Qualcomm GPUs",
+      "gl_vendor": "Qualcomm.*",
+      "features": [
+        "lose_gl_context_when_increase_texture_3d_depth"
+      ]
+    },
+    {
+      "id": 490,
+      "cr_bugs": [551573368],
+      "description": "Reset texture base level before calling glTexStorage2D to work around PowerVR driver bug.",
+      "os": {
+        "type": "android"
+      },
+      "gl_vendor": "Imagination.*",
+      "features": [
+        "reset_tex_storage_base_level"
+      ]
+    },
+    {
+      "id": 491,
+      "cr_bugs": [548085797],
+      "description": "Limit max texture image units to 13 on PowerVR GPUs.",
+      "os": {
+        "type": "android"
+      },
+      "gl_vendor": "Imagination.*",
+      "features": [
+        "max_texture_image_units_13"
+      ]
+    },
+    {
+      "id": 492,
+      "cr_bugs": [548127218],
+      "description": "Upload oversized nonzero mip levels via unpack buffer on PowerVR GPUs",
+      "os": {
+        "type": "android"
+      },
+      "gl_vendor": "Imagination.*",
+      "features": [
+        "upload_oversized_mip_levels_via_unpack_buffer"
+      ]
+    },
+    {
+      "id": 493,
+      "cr_bugs": [546252753],
+      "description": "Issue a glFinish before calling glBlitFramebuffer if the draw framebuffer has multiple color attachments or any color attachment's texture has base_level > 0.",
+      "os": {
+        "type": "android"
+      },
+      "gl_vendor": "ARM.*",
+      "gl_renderer": "Mali-G.*",
+      "features": [
+        "finish_before_blit_framebuffer_multi_attachment"
+      ]
+    },
+    {
+      "id": 494,
+      "cr_bugs": [553172761],
+      "description": "For texture formats which would be twiddled on the host CPU, upload via TexSubImage2D instead of TexImage2D.",
+      "gl_vendor": "Imagination.*",
+      "features": [
+        "use_tex_sub_image_for_host_twiddled_npot_uploads"
+      ]
+    },
+    {
+      "id": 495,
+      "cr_bugs": [41489840],
+      "description": "D3D12 device creation crashes in legacy Intel drivers during DX12 info collection.",
+      "os": {
+        "type": "win"
+      },
+      "vendor_id": "0x8086",
+      "multi_gpu_category": "primary",
+      "driver_version": {
+        "op": "<",
+        "value": "20.20.1.1"
+      },
+      "features": [
+        "disable_dx12_info_collection"
       ]
     }
   ]

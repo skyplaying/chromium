@@ -30,7 +30,9 @@ import org.robolectric.Robolectric;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.ui.default_browser_promo.DefaultBrowserPromoMetrics.DefaultBrowserPromoSourceType;
 import org.chromium.chrome.browser.ui.default_browser_promo.DefaultBrowserPromoUtils;
 import org.chromium.components.feature_engagement.Tracker;
 import org.chromium.ui.base.TestActivity;
@@ -47,8 +49,6 @@ public class DefaultBrowserPromoCardTest {
     public final MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
 
     private Activity mActivity;
-
-    private DefaultBrowserPromoCard mPromoCard;
 
     @Before
     public void setup() {
@@ -113,6 +113,12 @@ public class DefaultBrowserPromoCardTest {
 
     @Test
     public void testClickingPrimaryButton() {
+        var histogramWatcher =
+                HistogramWatcher.newBuilder()
+                        .expectIntRecord(
+                                "Android.DefaultBrowserPromo.Click",
+                                DefaultBrowserPromoSourceType.SETTING_CARD_PROMO)
+                        .build();
         when(mTestTracker.shouldTriggerHelpUi(any())).thenReturn(true);
         when(mMockDefaultBrowserPromoUtils.shouldShowNonRoleManagerPromo(any())).thenReturn(true);
 
@@ -121,5 +127,6 @@ public class DefaultBrowserPromoCardTest {
         ((Button) card.getView().findViewById(R.id.promo_primary_button)).performClick();
         verify(mActivity, times(1)).startActivity(any(), any());
         verify(mTestTracker, times(1)).notifyEvent("default_browser_promo_setting_card_used");
+        histogramWatcher.assertExpected();
     }
 }

@@ -22,10 +22,9 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
-import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.safe_browsing.SafeBrowsingBridge;
 import org.chromium.chrome.browser.safe_browsing.SafeBrowsingBridgeJni;
@@ -36,7 +35,6 @@ import org.chromium.ui.base.TestActivity;
 
 /** Unit tests for {@link SafeBrowsingSettingsFragment}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class SafeBrowsingSettingsFragmentUnitTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -97,7 +95,7 @@ public class SafeBrowsingSettingsFragmentUnitTest {
                 initialBackground.getColor());
 
         // Run delayed animation that reverts the color.
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
 
         ColorDrawable finalBackground = (ColorDrawable) mEnhancedProtectionButton.getBackground();
         assertEquals(SemanticColorUtils.getDefaultBgColor(mActivity), finalBackground.getColor());

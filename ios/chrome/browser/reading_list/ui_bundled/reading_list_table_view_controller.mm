@@ -327,8 +327,7 @@ BOOL IsAllSelected(NSUInteger selected_unread_count,
 
   [actions addObject:deleteAction];
 
-  if (send_tab_to_self::
-          IsSendTabIOSPushNotificationsEnabledWithTabReminders()) {
+  if (send_tab_to_self::AreIOSTabRemindersEnabled()) {
     UIContextualAction* remindAction =
         [self createRemindActionForIndexPath:indexPath];
 
@@ -483,7 +482,7 @@ BOOL IsAllSelected(NSUInteger selected_unread_count,
 }
 
 - (void)keyCommand_close {
-  CHECK(self.delegate.canDismiss, base::NotFatalUntil::M145);
+  CHECK(self.delegate.canDismiss);
   base::RecordAction(base::UserMetricsAction(kMobileKeyCommandClose));
   [self.delegate dismissReadingListListViewController:self];
 }
@@ -553,10 +552,6 @@ BOOL IsAllSelected(NSUInteger selected_unread_count,
                                      incognito:YES];
 }
 
-- (void)openItemOffline:(id<ReadingListListItem>)item {
-  [self.delegate readingListListViewController:self
-                       openItemOfflineInNewTab:item];
-}
 
 - (void)markItemRead:(id<ReadingListListItem>)item {
   TableViewModel* model = self.tableViewModel;
@@ -820,6 +815,10 @@ BOOL IsAllSelected(NSUInteger selected_unread_count,
         promoConfigurator:(SigninPromoViewConfigurator*)promoConfigurator
             promoDelegate:(id<SigninPromoViewDelegate>)promoDelegate
                 promoText:(NSString*)promoText {
+  if (self.editing) {
+    [self exitEditingModeAnimated:NO];
+  }
+
   if (promoEnabled) {
     CHECK(![self.tableViewModel
         hasSectionForSectionIdentifier:kSectionIdentifierSignInPromo]);
@@ -844,8 +843,7 @@ BOOL IsAllSelected(NSUInteger selected_unread_count,
 }
 
 - (void)configureSigninPromoWithConfigurator:
-            (SigninPromoViewConfigurator*)promoConfigurator
-                             identityChanged:(BOOL)identityChanged {
+    (SigninPromoViewConfigurator*)promoConfigurator {
   if (![self.tableViewModel
           hasSectionForSectionIdentifier:kSectionIdentifierSignInPromo]) {
     return;
@@ -1041,8 +1039,7 @@ BOOL IsAllSelected(NSUInteger selected_unread_count,
     }
 
     [[self.tableViewModel itemAtIndexPath:indexPath]
-        configureCell:[self.tableView cellForRowAtIndexPath:indexPath]
-           withStyler:self.styler];
+        configureCell:[self.tableView cellForRowAtIndexPath:indexPath]];
   }
 
   NSInteger sectionCreatedIndex = [self initializeTableViewSection:toSection];
@@ -1311,7 +1308,9 @@ BOOL IsAllSelected(NSUInteger selected_unread_count,
   // elements may be outdated and the layout triggered by this function will
   // generate access non-existing items.
   [self.tableView reloadData];
-  UIImage* emptyImage = [UIImage imageNamed:@"reading_list_empty"];
+  UIImage* emptyImage = [UIImage imageNamed:IsChromeNextIaEnabled()
+                                                ? @"reading_list_empty"
+                                                : @"reading_list_empty_legacy"];
   NSString* title =
       l10n_util::GetNSString(IDS_IOS_READING_LIST_NO_ENTRIES_TITLE);
   NSString* subtitle =

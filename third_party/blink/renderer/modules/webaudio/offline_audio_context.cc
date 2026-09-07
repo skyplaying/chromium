@@ -38,6 +38,7 @@
 #include "third_party/blink/renderer/modules/webaudio/audio_listener.h"
 #include "third_party/blink/renderer/modules/webaudio/deferred_task_handler.h"
 #include "third_party/blink/renderer/modules/webaudio/offline_audio_completion_event.h"
+#include "third_party/blink/renderer/modules/webaudio/offline_audio_destination_handler.h"
 #include "third_party/blink/renderer/modules/webaudio/offline_audio_destination_node.h"
 #include "third_party/blink/renderer/platform/audio/audio_utilities.h"
 #include "third_party/blink/renderer/platform/bindings/exception_messages.h"
@@ -51,7 +52,9 @@
 
 namespace blink {
 
-OfflineAudioContext* OfflineAudioContext::Create(
+namespace {
+
+OfflineAudioContext* CreateOfflineAudioContext(
     ExecutionContext* context,
     unsigned number_of_channels,
     unsigned number_of_frames,
@@ -123,6 +126,14 @@ OfflineAudioContext* OfflineAudioContext::Create(
       MakeGarbageCollected<OfflineAudioContext>(
           window, number_of_channels, number_of_frames, sample_rate,
           exception_state, render_quantum_frames);
+
+  if (audio_context->HasAllocationFailed()) {
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kNotSupportedError,
+        "The audio context could not be created due to memory limitations.");
+    return nullptr;
+  }
+
   audio_context->UpdateStateIfNeeded();
 
 #if DEBUG_AUDIONODE_REFERENCES
@@ -132,14 +143,17 @@ OfflineAudioContext* OfflineAudioContext::Create(
   return audio_context;
 }
 
+}  // namespace
+
 OfflineAudioContext* OfflineAudioContext::Create(
     ExecutionContext* context,
     unsigned number_of_channels,
     unsigned number_of_frames,
     float sample_rate,
     ExceptionState& exception_state) {
-  return Create(context, number_of_channels, number_of_frames, sample_rate,
-                /*render_quantum_frames=*/128, exception_state);
+  return CreateOfflineAudioContext(
+      context, number_of_channels, number_of_frames, sample_rate,
+      /*render_quantum_frames=*/128, exception_state);
 }
 
 OfflineAudioContext* OfflineAudioContext::Create(
@@ -155,8 +169,9 @@ OfflineAudioContext* OfflineAudioContext::Create(
       render_quantum_frames = options->renderSizeHint()->GetAsUnsignedLong();
     }
   }
-  return Create(context, options->numberOfChannels(), options->length(),
-                options->sampleRate(), render_quantum_frames, exception_state);
+  return CreateOfflineAudioContext(context, options->numberOfChannels(),
+                                   options->length(), options->sampleRate(),
+                                   render_quantum_frames, exception_state);
 }
 
 OfflineAudioContext::OfflineAudioContext(LocalDOMWindow* window,
@@ -185,6 +200,11 @@ void OfflineAudioContext::Trace(Visitor* visitor) const {
   visitor->Trace(complete_resolver_);
   visitor->Trace(scheduled_suspends_);
   BaseAudioContext::Trace(visitor);
+}
+
+OfflineAudioDestinationNode* OfflineAudioContext::destinationNode() const {
+  return static_cast<OfflineAudioDestinationNode*>(
+      BaseAudioContext::destinationNode());
 }
 
 ScriptPromise<AudioBuffer> OfflineAudioContext::startOfflineRendering(
@@ -244,14 +264,21 @@ ScriptPromise<AudioBuffer> OfflineAudioContext::startOfflineRendering(
     return EmptyPromise();
   }
 
+  DestinationHandler().InitializeOfflineRenderThread(render_target);
+  if (HasAllocationFailed()) {
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kNotSupportedError,
+        "The offline audio context could not be initialized due to memory "
+        "limitations.");
+    return EmptyPromise();
+  }
+
   // Start rendering and return the promise.
   is_rendering_started_ = true;
   SetContextState(V8AudioContextState::Enum::kRunning);
-  static_cast<OfflineAudioDestinationNode*>(destination())
+  destinationNode()
       ->SetDestinationBuffer(render_target);
-  DestinationHandler().InitializeOfflineRenderThread(render_target);
   DestinationHandler().StartRendering();
-
   return complete_resolver_->Promise();
 }
 
@@ -285,21 +312,20 @@ ScriptPromise<IDLUndefined> OfflineAudioContext::suspendContext(
     exception_state.ThrowDOMException(
         DOMExceptionCode::kInvalidStateError,
         StrCat({"cannot schedule a suspend at ",
-                String::NumberToStringECMAScript(when),
+                String::NumberToStringEcmaScript(when),
                 " seconds because it is greater than or equal to the "
                 "total render duration of ",
                 String::Number(total_render_frames_), " frames (",
-                String::NumberToStringECMAScript(total_render_duration),
+                String::NumberToStringEcmaScript(total_render_duration),
                 " seconds)"}));
     return EmptyPromise();
   }
 
   // Find the sample frame and round up to the nearest render quantum
-  // boundary.  This assumes the render quantum is a power of two.
+  // boundary.
   size_t frame = when * sampleRate();
-  frame = GetDeferredTaskHandler().RenderQuantumFrames() *
-          ((frame + GetDeferredTaskHandler().RenderQuantumFrames() - 1) /
-           GetDeferredTaskHandler().RenderQuantumFrames());
+  frame = audio_utilities::RoundUpToMultiple(
+      frame, GetDeferredTaskHandler().RenderQuantumFrames());
 
   // The specified suspend time is in the past; reject the promise.
   if (frame < CurrentSampleFrame()) {
@@ -322,7 +348,7 @@ ScriptPromise<IDLUndefined> OfflineAudioContext::suspendContext(
   {
     // Wait until the suspend map is available for the insertion. Here we should
     // use GraphAutoLocker because it locks the graph from the main thread.
-    DeferredTaskHandler::GraphAutoLocker locker(this);
+    DeferredTaskHandler::GraphAutoLocker locker(GetDeferredTaskHandler());
 
     // If there is a duplicate suspension at the same quantized frame,
     // reject the promise.
@@ -404,7 +430,7 @@ void OfflineAudioContext::FireCompletionEvent() {
   // Avoid firing the event if the document has already gone away.
   if (GetExecutionContext()) {
     AudioBuffer* rendered_buffer =
-        static_cast<OfflineAudioDestinationNode*>(destination())
+        destinationNode()
             ->DestinationBuffer();
     DCHECK(rendered_buffer);
     if (!rendered_buffer) {
@@ -423,8 +449,6 @@ void OfflineAudioContext::FireCompletionEvent() {
   }
 
   is_rendering_started_ = false;
-
-  PerformCleanupOnMainThread();
 }
 
 bool OfflineAudioContext::HandlePreRenderTasks(
@@ -444,7 +468,7 @@ bool OfflineAudioContext::HandlePreRenderTasks(
 
   {
     // OfflineGraphAutoLocker here locks the audio graph for this scope.
-    DeferredTaskHandler::OfflineGraphAutoLocker locker(this);
+    DeferredTaskHandler::GraphAutoLocker locker(GetDeferredTaskHandler());
     listener()->Handler().UpdateState();
     GetDeferredTaskHandler().HandleDeferredTasks();
     HandleStoppableSourceNodes();
@@ -459,7 +483,7 @@ void OfflineAudioContext::HandlePostRenderTasks() {
   // OfflineGraphAutoLocker here locks the audio graph for the same reason
   // above in `HandlePreRenderTasks()`.
   {
-    DeferredTaskHandler::OfflineGraphAutoLocker locker(this);
+    DeferredTaskHandler::GraphAutoLocker locker(GetDeferredTaskHandler());
 
     GetDeferredTaskHandler().BreakConnections();
     GetDeferredTaskHandler().HandleDeferredTasks();
@@ -468,8 +492,7 @@ void OfflineAudioContext::HandlePostRenderTasks() {
 }
 
 OfflineAudioDestinationHandler& OfflineAudioContext::DestinationHandler() {
-  return static_cast<OfflineAudioDestinationHandler&>(
-      destination()->GetAudioDestinationHandler());
+  return destinationNode()->GetAudioDestinationHandler();
 }
 
 void OfflineAudioContext::ResolveSuspendOnMainThread(size_t frame) {
@@ -486,7 +509,7 @@ void OfflineAudioContext::ResolveSuspendOnMainThread(size_t frame) {
 
   {
     // Wait until the suspend map is available for the removal.
-    DeferredTaskHandler::GraphAutoLocker locker(this);
+    DeferredTaskHandler::GraphAutoLocker locker(GetDeferredTaskHandler());
 
     // If the context is going away, m_scheduledSuspends could have had all its
     // entries removed.  Check for that here.
@@ -512,7 +535,7 @@ void OfflineAudioContext::RejectPendingResolvers() {
 
   {
     // Wait until the suspend map is available for removal.
-    DeferredTaskHandler::GraphAutoLocker locker(this);
+    DeferredTaskHandler::GraphAutoLocker locker(GetDeferredTaskHandler());
 
     // Offline context is going away so reject any promises that are still
     // pending.
@@ -523,10 +546,9 @@ void OfflineAudioContext::RejectPendingResolvers() {
     }
 
     scheduled_suspends_.clear();
-    DCHECK_EQ(pending_promises_resolvers_.size(), 0u);
   }
 
-  RejectPendingDecodeAudioDataResolvers();
+  BaseAudioContext::RejectPendingResolvers();
 }
 
 bool OfflineAudioContext::IsPullingAudioGraph() const {

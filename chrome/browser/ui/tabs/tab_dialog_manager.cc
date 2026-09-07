@@ -16,7 +16,6 @@
 #include "chrome/browser/ui/browser_window/public/desktop_browser_window_capabilities.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/ui_features.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/interaction/browser_elements_views.h"
 #include "components/back_forward_cache/back_forward_cache_disable.h"
 #include "components/tabs/public/tab_interface.h"
@@ -294,6 +293,9 @@ TabDialogManager::TabDialogManager(TabInterface* tab_interface)
   tab_subscriptions_.push_back(
       tab_interface_->RegisterWillDetach(base::BindRepeating(
           &TabDialogManager::TabWillDetach, base::Unretained(this))));
+  tab_subscriptions_.push_back(
+      tab_interface->RegisterWillDiscardContents(base::BindRepeating(
+          &TabDialogManager::OnDiscardContents, base::Unretained(this))));
 }
 
 TabDialogManager::~TabDialogManager() = default;
@@ -352,11 +354,15 @@ void TabDialogManager::ShowDialog(views::Widget* widget,
       std::make_unique<WebContentsModalDialogHostObserver>(this,
                                                            tab_interface_);
 
-  if (params_->should_show_inactive) {
-    widget_->ShowInactive();
-  } else {
+  // Only show as active if the primary window widget (usually the browser
+  // window) is painted as active. This prevents a background browser window
+  // from becoming foreground on showing the dialog.
+  if (GetHostWidget()->ShouldPaintAsActive()) {
     widget_->Show();
+  } else {
+    widget->ShowInactive();
   }
+
   UpdateDialogVisibility();
 }
 
@@ -399,15 +405,23 @@ bool TabDialogManager::MaybeActivateDialog() {
 
 void TabDialogManager::WidgetDestroyed(views::Widget* widget) {
   CHECK_EQ(widget, widget_.get());
+  // Check if we had blocked the web contents in this iteration.
+  const bool did_block_web_contents = params_ && params_->disable_input;
   widget_ = nullptr;
   params_.reset();
   tab_dialog_widget_observer_.reset();
   scoped_ignore_input_events_.reset();
   web_contents_modal_dialog_host_observer_.reset();
   bounds_animation_.reset();
-  tab_interface_->GetBrowserWindowInterface()
-      ->capabilities()
-      ->SetWebContentsBlocked(tab_interface_->GetContents(), /*blocked=*/false);
+  // Only clobber the blocked web contents bit if we were also the one that
+  // blocked it. Otherwise leave it alone, since it may have been set by some
+  // other legacy dialog.
+  if (did_block_web_contents) {
+    tab_interface_->GetBrowserWindowInterface()
+        ->capabilities()
+        ->SetWebContentsBlocked(tab_interface_->GetContents(),
+                                /*blocked=*/false);
+  }
   // Resetting ScopedTabModalUI may cause the showing of a new dialog.
   // Leaving it at the end of the function to prevent its side effects
   // from being overridden.
@@ -477,17 +491,12 @@ void TabDialogManager::UpdateModalDialogHost() {
 
 bool TabDialogManager::UpdateDialogVisibility(
     std::optional<bool> requested_visibility) {
-  if (!widget_) {
-    return false;
+  if (widget_) {
+    widget_->SetVisible(GetDialogWidgetVisibility() &&
+                        requested_visibility.value_or(true));
+    return widget_->IsVisible();
   }
-  const bool should_be_visible =
-      GetDialogWidgetVisibility() && requested_visibility.value_or(true);
-  if (should_be_visible) {
-    params_->should_show_inactive ? widget_->ShowInactive() : widget_->Show();
-  } else {
-    widget_->Hide();
-  }
-  return widget_->IsVisible();
+  return false;
 }
 
 bool TabDialogManager::IsDialogManaged(views::Widget* widget) {
@@ -558,9 +567,17 @@ void TabDialogManager::TabWillEnterBackground(TabInterface* tab_interface) {
 
 void TabDialogManager::TabWillDetach(TabInterface* tab_interface,
                                      TabInterface::DetachReason reason) {
-  if (widget_ && params_->close_on_detach) {
+  if (widget_ && (reason == TabInterface::DetachReason::kDelete ||
+                  params_->close_on_detach)) {
     CloseDialog();
   }
+}
+
+void TabDialogManager::OnDiscardContents(TabInterface* tab,
+                                         content::WebContents* old_contents,
+                                         content::WebContents* new_contents) {
+  CHECK_EQ(tab, tab_interface_);
+  Observe(new_contents);
 }
 
 bool TabDialogManager::GetDialogWidgetVisibility() {

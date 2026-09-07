@@ -16,6 +16,11 @@ namespace gpu {
 class ImageTransportSurfaceOverlayMacTest;
 }
 
+namespace viz {
+class ExternalBeginFrameSourceMacTest;
+class MockDisplayLinkMac;
+}
+
 namespace ui {
 
 // VSync parameters parsed from CVDisplayLinkOutputCallback's parameters.
@@ -40,10 +45,6 @@ class DISPLAY_EXPORT VSyncCallbackMac {
   using Callback = base::RepeatingCallback<void(VSyncParamsMac)>;
   ~VSyncCallbackMac();
 
-  // To prevent constantly switching VSync on and off, allow this max number of
-  // extra CVDisplayLink VSync running before stopping CVDisplayLink.
-  static constexpr int kMaxExtraVSyncs = 12;
-
   base::WeakPtr<VSyncCallbackMac> GetWeakPtr();
 
  private:
@@ -54,8 +55,10 @@ class DISPLAY_EXPORT VSyncCallbackMac {
   friend class ExternalDisplayLinkMac;
   friend struct MetalObjCState;
   friend struct ObjCState;
+  friend class viz::MockDisplayLinkMac;
 
   friend class gpu::ImageTransportSurfaceOverlayMacTest;
+  friend class viz::ExternalBeginFrameSourceMacTest;
 
   using UnregisterCallback = base::OnceCallback<void(VSyncCallbackMac*)>;
 
@@ -104,11 +107,6 @@ class DISPLAY_EXPORT DisplayLinkMac : public base::RefCounted<DisplayLinkMac> {
 
   static bool SupportsDisplayLinkMacInBrowser();
 
-  // For CADisplayLink and CVDisplayLink in GPU, always return true;
-  // For ExternalDisplayLinkMac, check whether the display id has been added in
-  // AddSupportedDisplayLinkId().
-  static bool IsDisplayLinkAllowed(int64_t display_id);
-
   // Register an observer callback.
   // * The specified callback will be called at every VSync tick, until the
   //   returned VSyncCallbackMac object is destroyed.
@@ -122,6 +120,8 @@ class DISPLAY_EXPORT DisplayLinkMac : public base::RefCounted<DisplayLinkMac> {
       PresentationCallbackMac::Callback callback);
 
   // Get the panel/monitor refresh interval
+  static base::TimeDelta GetScreenDefaultRefreshInterval(
+      int64_t vsync_display_id);
   virtual base::TimeDelta GetRefreshInterval() const = 0;
   virtual void GetRefreshIntervalRange(base::TimeDelta& min_interval,
                                        base::TimeDelta& max_interval,
@@ -132,6 +132,8 @@ class DISPLAY_EXPORT DisplayLinkMac : public base::RefCounted<DisplayLinkMac> {
   // Retrieves the current (“now”) time of a given display link. Returns
   // base::TimeTicks() if the current time is not available.
   virtual base::TimeTicks GetCurrentTime() const = 0;
+
+  virtual void OnSuspend() {}
 
  protected:
   friend class base::RefCounted<DisplayLinkMac>;
@@ -147,6 +149,8 @@ class DISPLAY_EXPORT DisplayLinkMac : public base::RefCounted<DisplayLinkMac> {
   // might be triggered before Viz receives the display addition IPC.
   static void RecordDisplayLinkCreation(bool success);
 };
+
+DISPLAY_EXPORT bool SkipPostTaskForCallbacks();
 
 }  // namespace ui
 

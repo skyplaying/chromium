@@ -27,6 +27,7 @@
 #include "chrome/test/interaction/webcontents_interaction_test_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/base_window.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/element_test_util.h"
 #include "ui/base/interaction/element_tracker.h"
@@ -37,9 +38,10 @@
 #include "ui/base/interaction/interactive_test_definitions.h"
 #include "ui/base/test/ui_controls.h"
 #include "ui/views/interaction/element_tracker_views.h"
-#include "ui/views/interaction/interactive_views_test.h"
+#include "ui/views/interaction/mouse/interactive_mouse_test.h"
 #include "ui/views/view.h"
 #include "ui/views/view_utils.h"
+#include "ui/webui/tracked_element/tracked_element_web_ui.h"
 #include "url/gurl.h"
 
 // Provides interactive test functionality for desktop browsers.
@@ -52,7 +54,7 @@
 // existing browser test class using `InteractiveBrowserTestT<T>` - or just use
 // `InteractiveBrowserTest`, which *is* a test fixture (preferred; see below).
 class InteractiveBrowserWindowTestApi
-    : virtual public ui::test::InteractiveTestApi {
+    : virtual public views::test::InteractiveMouseTestApi {
  public:
   InteractiveBrowserWindowTestApi();
   ~InteractiveBrowserWindowTestApi() override;
@@ -88,6 +90,10 @@ class InteractiveBrowserWindowTestApi
   // Takes a screenshot of the specified element, with name `screenshot_name`
   // (may be empty for tests that take only one screenshot) and `baseline_cl`,
   // which should be set to match the CL number when a screenshot should change.
+  //
+  // If `screenshot_name` is set, failures will not be reported until the end of
+  // the test, to allow all screenshots to be sampled. This will not prevent the
+  // test from failing for other reasons.
   //
   // If `clip_rect` is specified, it is the rectangle in `element`'s local
   // bounds to capture, otherwise all of `element` will be captured.
@@ -299,6 +305,14 @@ class InteractiveBrowserWindowTestApi
       const std::string& function,
       ExecuteJsMode mode = ExecuteJsMode::kWaitForCompletion);
 
+  // Execute javascript `function`, which should take a single DOM element as an
+  // argument, with the element at `webui_element`, which should be a
+  // `TrackedElementWebUI`.
+  [[nodiscard]] static StepBuilder ExecuteJsAt(
+      ElementSpecifier webui_element,
+      const std::string& function,
+      ExecuteJsMode mode = ExecuteJsMode::kWaitForCompletion);
+
   // Returns a matcher that matches truthy values.
   //
   // Use this if you don't want to compare specifically to "true", but just want
@@ -350,6 +364,17 @@ class InteractiveBrowserWindowTestApi
       const std::string& function);
 
   // Executes javascript `function`, which should take a single DOM element as
+  // an argument and returns a value, on the element specified by
+  // `webui_element`, which must be a ui::TrackedElementWebUI, and fails if the
+  // result is not truthy.
+  //
+  // If `function` instead returns a promise, the result of the promise is
+  // evaluated for truthiness. If the promise rejects, CheckJsResultAt() fails.
+  [[nodiscard]] static StepBuilder CheckJsResultAt(
+      ElementSpecifier webui_element,
+      const std::string& function);
+
+  // Executes javascript `function`, which should take a single DOM element as
   // an argument and returns a value, in WebContents `webcontents_id` on the
   // element specified by `where`, and fails if the result does not match
   // `matcher`, which can be a literal or a testing::Matcher.
@@ -363,6 +388,23 @@ class InteractiveBrowserWindowTestApi
   [[nodiscard]] static StepBuilder CheckJsResultAt(
       ui::ElementIdentifier webcontents_id,
       const DeepQuery& where,
+      const std::string& function,
+      T&& matcher);
+
+  // Executes javascript `function`, which should take a single DOM element as
+  // an argument and returns a value, on the element specified by
+  // `webui_element`, which must be a ui::TrackedElementWebUI, and fails if the
+  // result does not match `matcher`, which can be a literal or a
+  // testing::Matcher.
+  //
+  // If `function` instead returns a promise, the result of the promise is
+  // evaluated against `matcher`. If the promise rejects, CheckJsResultAt()
+  // fails.
+  //
+  // See notes on CheckJsResult() for what values and Matchers are supported.
+  template <typename T>
+  [[nodiscard]] static StepBuilder CheckJsResultAt(
+      ElementSpecifier webui_element,
       const std::string& function,
       T&& matcher);
 
@@ -455,6 +497,22 @@ class InteractiveBrowserWindowTestApi
                         ui_controls::kNoAccelerator, execute_mode);
   }
 
+  // Dumps the entire HTML tree of `web_contents`, up to the limits defined on
+  // `browser_test_impl()`. Override these values if you want to show more/fewer
+  // elements.
+  //
+  // Used for debugging Kombucha tests which act on web contents.
+  [[nodiscard]] StepBuilder DumpWebContents(ui::ElementIdentifier web_contents);
+
+  // Dumps the entire HTML tree of `web_contents` rooted at `where`, up to the
+  // limits defined on `browser_test_impl()`. Override these values if you want
+  // to show more/fewer elements.
+  //
+  // Used for debugging Kombucha tests which act on web contents.
+  [[nodiscard]] StepBuilder DumpWebContentsAt(
+      ui::ElementIdentifier web_contents,
+      const DeepQuery& where);
+
  protected:
   // Specifies how the `reference_element` should be used (or not) to generate a
   // target point for a mouse move.
@@ -525,8 +583,9 @@ class InteractiveBrowserWindowTestT : public T,
   void SetUpOnMainThread() override {
     T::SetUpOnMainThread();
     private_test_impl().DoTestSetUp();
-    private_test_impl().set_default_context(
-        BrowserElements::From(GetBrowserWindow())->GetContext());
+    private_test_impl().SetDefaultContext(
+        BrowserElements::From(GetBrowserWindow())->GetContext(),
+        GetBrowserWindow()->GetWindow()->GetNativeWindow());
   }
 
   void TearDownOnMainThread() override {
@@ -554,8 +613,10 @@ InteractiveBrowserWindowTestApi::Screenshot(ElementSpecifier element,
         options.region = ui::test::internal::UnwrapArgument<T>(clip_rect);
         const auto result = InteractionTestUtilBrowser::CompareScreenshot(
             el, screenshot_name, baseline_cl, options);
-        test->private_test_impl().HandleActionResult(seq, el, "Screenshot",
-                                                     result);
+        const std::string desc =
+            base::StringPrintf("Screenshot(%s)", screenshot_name);
+        test->private_test_impl().HandleActionResult(
+            seq, el, desc, result, /*defer_failure=*/!screenshot_name.empty());
       },
       base::Unretained(this), screenshot_name, baseline_cl,
       std::forward<T>(clip_rect)));
@@ -641,6 +702,49 @@ InteractiveBrowserWindowTestApi::CheckJsResultAt(
               internal::InteractiveBrowserTestPrivate::DeepQueryToString(where)
                   .c_str(),
               function.c_str())));
+}
+
+// static
+template <typename T>
+ui::InteractionSequence::StepBuilder
+InteractiveBrowserWindowTestApi::CheckJsResultAt(ElementSpecifier webui_element,
+                                                 const std::string& function,
+                                                 T&& value) {
+  return std::move(
+      CheckElement(webui_element,
+                   [function, value = ui::test::internal::MatcherTypeFor<T>(
+                                  std::forward<T>(value))](
+                       ui::TrackedElement* el) mutable {
+                     auto* const webui_el = el->AsA<ui::TrackedElementWebUI>();
+                     if (!webui_el) {
+                       LOG(ERROR) << *el << " is not a TrackedElementWebUI";
+                       return false;
+                     }
+                     const auto full_function = base::StringPrintf(
+                         R"(
+            (el, err) => {
+              if (err) {
+                throw err;
+              }
+              return (%s)(el);
+            }
+          )",
+                         function.c_str());
+                     std::string error_msg;
+                     base::Value result =
+                         WebContentsInteractionTestUtil::EvaluateAt(
+                             webui_el, full_function, &error_msg);
+                     if (!error_msg.empty()) {
+                       LOG(ERROR) << "CheckJsResult() failed: " << error_msg;
+                       return false;
+                     }
+
+                     auto m = internal::MakeValueMatcher(std::move(value));
+                     return ui::test::internal::MatchAndExplain(
+                         "CheckJsResultAt()", m, result);
+                   })
+          .SetDescription(base::StringPrintf("CheckJsResultAt(\"\n%s\n\")",
+                                             function.c_str())));
 }
 
 template <typename M>

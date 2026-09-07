@@ -35,12 +35,12 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
+import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.chrome.browser.bookmarks.BookmarkUiPrefs.BookmarkRowDisplayPref;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.components.bookmarks.BookmarkId;
 import org.chromium.components.bookmarks.BookmarkItem;
 import org.chromium.components.bookmarks.BookmarkType;
@@ -59,9 +59,11 @@ import org.chromium.url.GURL;
 import org.chromium.url.JUnitTestGURLs;
 
 /** Unit tests for {@link ImprovedBookmarkRowCoordinator}. */
-@Batch(Batch.UNIT_TESTS)
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
+@DisableFeatures({
+    ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_LAYOUT,
+    ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_DIALOG
+})
 public class ImprovedBookmarkRowCoordinatorTest {
     @Rule
     public ActivityScenarioRule<TestActivity> mActivityScenarioRule =
@@ -79,7 +81,6 @@ public class ImprovedBookmarkRowCoordinatorTest {
     @Mock private CurrencyFormatter.Natives mCurrencyFormatterJniMock;
 
     private Activity mActivity;
-    private PropertyModel mModel;
     private ImprovedBookmarkRowCoordinator mCoordinator;
 
     @Before
@@ -215,7 +216,7 @@ public class ImprovedBookmarkRowCoordinatorTest {
 
     @Test
     public void testFolder_compactConversionString() {
-        // Need to be careful when formatting user generating content, https://crbug.com/1509959.
+        // Need to be careful when formatting user generating content, https://crbug.com/41482558.
         BookmarkId folderId = new BookmarkId(100, BookmarkType.NORMAL);
         BookmarkItem folder =
                 new BookmarkItem(

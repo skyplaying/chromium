@@ -32,14 +32,16 @@
 #include "third_party/blink/renderer/platform/wtf/cross_thread_copier_base.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_copier_skia.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_copier_std.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
 namespace {
 
 bool IsTypeSupportedInternal(String type) {
-  if (!type.ContainsOnlyASCIIOrEmpty())
+  if (!type.ContainsOnlyAsciiOrEmpty()) {
     return false;
+  }
 
   // Disable ICO/CUR decoding since the underlying decoder does not operate like
   // the rest of our blink::ImageDecoders. Each frame is a different sized
@@ -54,7 +56,7 @@ bool IsTypeSupportedInternal(String type) {
   // Additionally, since the ICO/CUR formats are simple, it seems fine to allow
   // the parsing to happen in JS while decoding for the individual BMP or PNG
   // files can be done using this API.
-  const auto type_lower = type.LowerASCII();
+  const auto type_lower = type.ToAsciiLower();
   if (type_lower == "image/x-icon" || type_lower == "image/vnd.microsoft.icon")
     return false;
 
@@ -66,11 +68,10 @@ ImageDecoder::AnimationOption AnimationOptionFromIsAnimated(bool is_animated) {
                      : ImageDecoder::AnimationOption::kPreferStillImage;
 }
 
-DOMException* CreateUnsupportedImageTypeException(String type) {
+DOMException* CreateUnsupportedImageTypeException(const String& type) {
   return MakeGarbageCollected<DOMException>(
       DOMExceptionCode::kNotSupportedError,
-      String::Format("The provided image type (%s) is not supported",
-                     type.Ascii().c_str()));
+      StrCat({"The provided image type (", type, ") is not supported"}));
 }
 
 // Helper class for ensuring memory safe usage of ArrayBufferContents by the
@@ -159,6 +160,9 @@ ImageDecoderExternal::ImageDecoderExternal(ScriptState* script_state,
     return;
   }
 
+  // Do not report unhandled rejections of the completed promise.
+  completed_property_->MarkAsHandled();
+
   UseCounter::Count(GetExecutionContext(), WebFeature::kWebCodecs);
 
   // |data| is a required field.
@@ -174,7 +178,7 @@ ImageDecoderExternal::ImageDecoderExternal(ScriptState* script_state,
   if (init->hasDesiredWidth() && init->hasDesiredHeight())
     desired_size = SkISize::Make(init->desiredWidth(), init->desiredHeight());
 
-  mime_type_ = init->type().LowerASCII();
+  mime_type_ = init->type().ToAsciiLower();
   if (!IsTypeSupportedInternal(mime_type_)) {
     tracks_->OnTracksReady(CreateUnsupportedImageTypeException(mime_type_));
     return;
@@ -427,7 +431,7 @@ void ImageDecoderExternal::OnStateChange() {
     if (result == BytesConsumer::Result::kOk) {
       if (!buffer.empty()) {
         data.ReserveInitialCapacity(static_cast<wtf_size_t>(buffer.size()));
-        data.AppendSpan(buffer);
+        data.append_range(buffer);
         bytes_read_ += buffer.size();
       }
       result = consumer_->EndRead(buffer.size());
@@ -489,8 +493,7 @@ void ImageDecoderExternal::MaybeSatisfyPendingDecodes() {
     if (failed_) {
       request->exception = MakeGarbageCollected<DOMException>(
           DOMExceptionCode::kEncodingError,
-          String::Format("Failed to decode frame at index %d",
-                         request->frame_index));
+          Format("Failed to decode frame at index {}", request->frame_index));
       continue;
     }
 
@@ -530,7 +533,7 @@ void ImageDecoderExternal::MaybeSatisfyPendingDecodes() {
   // Copy completed requests to a new local vector to avoid reentrancy issues
   // when resolving and rejecting the promises.
   HeapVector<Member<DecodeRequest>> completed_decodes;
-  completed_decodes.AppendRange(new_end, pending_decodes_.end());
+  completed_decodes.Append(new_end, pending_decodes_.end());
   pending_decodes_.Shrink(
       static_cast<wtf_size_t>(new_end - pending_decodes_.begin()));
 
@@ -592,9 +595,9 @@ void ImageDecoderExternal::OnDecodeReady(
     // Once we're data complete, if no further image can be decoded, we should
     // reject the decode() since it can't be satisfied.
     if (data_complete_) {
-      request->range_error_message = String::Format(
-          "Unexpected end of image. Request for frame index %d "
-          "can't be satisfied.",
+      request->range_error_message = Format(
+          "Unexpected end of image. Request for frame index {} can't be "
+          "satisfied.",
           request->frame_index);
     }
 
@@ -605,7 +608,8 @@ void ImageDecoderExternal::OnDecodeReady(
   request->result = ImageDecodeResult::Create();
   request->result->setImage(
       MakeGarbageCollected<VideoFrame>(base::MakeRefCounted<VideoFrameHandle>(
-          std::move(result->frame), std::move(result->sk_image))));
+          std::move(result->frame), std::move(result->sk_image),
+          /*timestamp=*/std::nullopt, GetExecutionContext())));
   request->result->setComplete(result->complete);
   MaybeSatisfyPendingDecodes();
 }

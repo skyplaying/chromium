@@ -27,23 +27,22 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.ntp_customization.R;
 import org.chromium.components.browser_ui.widget.MaterialSwitchWithText;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
+import org.chromium.ui.widget.ButtonCompat;
 
 /** Unit tests for {@link NtpChromeColorsLayoutViewBinder}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class NtpChromeColorsLayoutViewBinderUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Mock private View mLayoutView;
     @Mock private View mBackButton;
-    @Mock private ImageView mSaveButton;
+    @Mock private ButtonCompat mSaveButton;
     @Mock private EditText mBackgroundColorInput;
     @Mock private EditText mPrimaryColorInput;
     @Mock private ImageView mBackgroundColorCircleView;
@@ -68,7 +67,7 @@ public class NtpChromeColorsLayoutViewBinderUnitTest {
                 mModel, mLayoutView, NtpChromeColorsLayoutViewBinder::bind);
 
         when(mLayoutView.findViewById(R.id.back_button)).thenReturn(mBackButton);
-        when(mLayoutView.findViewById(R.id.save_button)).thenReturn(mSaveButton);
+        when(mLayoutView.findViewById(R.id.save_color_button)).thenReturn(mSaveButton);
         when(mLayoutView.findViewById(R.id.background_color_input))
                 .thenReturn(mBackgroundColorInput);
         when(mLayoutView.findViewById(R.id.primary_color_input)).thenReturn(mPrimaryColorInput);
@@ -195,10 +194,10 @@ public class NtpChromeColorsLayoutViewBinderUnitTest {
 
         int index = 0;
         mModel.set(NtpChromeColorsProperties.HIGHLIGHTED_ITEM_INDEX, index);
-        verify(mAdapter).setSelectedPosition(eq(index));
+        verify(mAdapter).setSelectedPosition(eq(index), eq(false));
 
         // Verifies the setSelectedPosition() will be called again for the same index value.
         mModel.set(NtpChromeColorsProperties.HIGHLIGHTED_ITEM_INDEX, index);
-        verify(mAdapter, times(2)).setSelectedPosition(eq(index));
+        verify(mAdapter, times(2)).setSelectedPosition(eq(index), eq(false));
     }
 }

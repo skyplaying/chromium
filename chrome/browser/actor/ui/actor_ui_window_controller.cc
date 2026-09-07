@@ -11,7 +11,6 @@
 #include "chrome/browser/actor/ui/handoff_button_controller.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_command_controller.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_features.h"
@@ -31,6 +30,7 @@ ActorUiContentsContainerController::ActorUiContentsContainerController(
     : contents_container_view_(contents_container_view),
       overlay_(actor_overlay_web_view),
       window_controller_(window_controller) {
+  CHECK(base::FeatureList::IsEnabled(features::kGlicActorUi));
   CHECK(contents_container_view_);
   CHECK(window_controller_);
   if (features::kGlicActorUiHandoffButton.Get()) {
@@ -276,6 +276,9 @@ ActorUiWindowController::~ActorUiWindowController() = default;
 // static
 ActorUiWindowController* ActorUiWindowController::From(
     BrowserWindowInterface* browser_window_interface) {
+  if (!browser_window_interface) {
+    return nullptr;
+  }
   return Get(browser_window_interface->GetUnownedUserDataHost());
 }
 
@@ -415,5 +418,5 @@ void ActorUiWindowController::TearDown() {
 
 chrome::BrowserCommandController*
 ActorUiWindowController::GetCommandController() {
-  return browser_window_interface_->GetFeatures().browser_command_controller();
+  return chrome::BrowserCommandController::From(browser_window_interface_);
 }

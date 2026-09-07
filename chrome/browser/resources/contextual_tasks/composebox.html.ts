@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import '/strings.m.js';
-
 import {html} from '//resources/lit/v3_0/lit.rollup.js';
 
 import type {ContextualTasksComposeboxElement} from './composebox.js';
@@ -14,6 +12,11 @@ export function getHtml(this: ContextualTasksComposeboxElement) {
    *  Side panel has suggestions appear between header and composebox.
    *  Full tab has suggestions appear below the composebox (which is below the header).
    */
+
+  /*
+   * TODO(crbug.com/486996060): make suggestions component
+   * to dedupe logic
+   */
   return html`<!--_html_template_start_-->
     ${this.isSidePanel && this.enableNativeZeroStateSuggestions ? html`
       <cr-composebox-dropdown
@@ -21,32 +24,104 @@ export function getHtml(this: ContextualTasksComposeboxElement) {
           role="listbox"
           .result="${this.zeroStateSuggestions_}"
           .maxSuggestions="${5}"
-          ?hidden="${!this.isZeroState}">
+          .overrideClampLineNum="${3}"
+          .selectedMatchIndex="${this.selectedMatchIndex_}"
+          ?hidden="${!this.shouldShowSuggestions_()}"
+          @match-focusin="${this.onMatchFocusin_}"
+          @keydown="${this.onDropdownKeydown_}">
       </cr-composebox-dropdown>
+      ${this.showSuggestionsActivityLink_ &&
+          this.shouldShowSuggestions_() ? html`
+        <div id="suggestionActivity">
+          <localized-link
+              .localizedString="${this.i18nAdvanced('suggestionActivityLink')}"
+              @link-clicked="${this.onSuggestionActivityLinkClicked_}">
+          </localized-link>
+        </div>
+      `: ''}
     ` : ''}
     <div id="composeboxContainer"
       style="
         --composebox-height: ${this.composeboxHeight_}px;
         --composebox-dropdown-height: ${this.composeboxDropdownHeight_}px;"
         >
-      ${this.showOnboardingTooltip_ ? html`
-        <contextual-tasks-onboarding-tooltip id="onboardingTooltip"
-            @onboarding-tooltip-dismissed="${this.onTooltipDismissed_}">
-        </contextual-tasks-onboarding-tooltip>
-      ` : ''}
-      <cr-composebox
+      ${this.useFork_ ? html`
+        <contextual-tasks-inner-composebox
           id="composebox"
-          ?autofocus="${false}"
+          .inputState="${this.inputState_}"
+          .isSidePanel="${this.isSidePanel}"
+          .autofocus="${false}"
           carousel-on-top_
           entrypoint-name="ContextualTasks"
           searchbox-layout-mode="TallBottomContext"
-          .lensButtonDisabled="${false}"
-          .showLensButton="${this.showLensButton_}"
-          .disableCaretColorAnimation="${true}"
-          .isInCoBrowsingZeroState="${this.isZeroState}"
+          .lensButtonDisabled="${this.lensButtonDisabled_}"
+          .showLensButton="${this.shouldShowLensButton_()}"
+          .suggestionActivityEnabled="${false}"
+          .disableCaretColorAnimation="${!this.caretAnimationsEnabled_}"
+          .inputPlaceholderOverride="${this.getInputPlaceholder_()}"
+          .dropdownNeeded="${this.isDropdownNeeded_()}"
           .lensButtonTriggersOverlay="${true}"
-          @result-changed="${this.onSuggestionsResultReceived_}">
+          .enableCarouselScrolling="${true}"
+          .isFollowupQuery="${!this.isZeroState}"
+          .enableFileHint="${this.enableFileHint_}"
+          .isCanvasQuerySubmitted="${this.isCanvasQuerySubmitted()}"
+          .clearAllInputsWhenSubmittingQuery="${this.clearAllInputsWhenSubmittingQuery_}"
+          .queryZpsOnLoad="${false}"
+          .showVoiceSearch="${true}"
+          .usePecApi="${this.usePecApi_}"
+          .smartTabSharingVisible="${this.smartTabSharingVisible_}"
+          .contextManagementInComposeboxEnabled="${this.contextManagementInComposeboxEnabled_}"
+          .energyEffectAnimationEnabled="${this.energyEffectAnimationEnabled_}"
+          .energyEffectEnabled="${this.energyEffectAnimationEnabled_}"
+          .glifAnimationState="${this.glifAnimationState_}"
+          .disableFallbackGlifAnimation="${true}"
+          .isZeroState="${this.isZeroState}"
+          @result-changed="${this.onSuggestionsResultChanged_}"
+          @open-image-upload="${this.onOpenImageUpload_}"
+          @open-file-upload="${this.onOpenFileUpload_}"
+          @input-state-changed="${this.onInputStateChanged_}"
+          @show-suggestion-activity-link=
+              "${this.onShowSuggestionActivityLink_}">
+      </contextual-tasks-inner-composebox>
+    ` : html`
+      <cr-composebox
+          id="composebox"
+          .inputState="${this.inputState_}"
+          .isSidePanel="${this.isSidePanel}"
+          .autofocus="${false}"
+          carousel-on-top_
+          entrypoint-name="ContextualTasks"
+          searchbox-layout-mode="TallBottomContext"
+          .lensButtonDisabled="${this.lensButtonDisabled_}"
+          .showLensButton="${this.shouldShowLensButton_()}"
+          .suggestionActivityEnabled="${false}"
+          .disableCaretColorAnimation="${!this.caretAnimationsEnabled_}"
+          .inputPlaceholderOverride="${this.getInputPlaceholder_()}"
+          .dropdownNeeded="${this.isDropdownNeeded_()}"
+          .lensButtonTriggersOverlay="${true}"
+          .enableCarouselScrolling="${true}"
+          .isFollowupQuery="${!this.isZeroState}"
+          .enableFileHint="${this.enableFileHint_}"
+          .isCanvasQuerySubmitted="${this.isCanvasQuerySubmitted()}"
+          .clearAllInputsWhenSubmittingQuery="${this.clearAllInputsWhenSubmittingQuery_}"
+          .queryZpsOnLoad="${false}"
+          .showVoiceSearch="${true}"
+          .usePecApi="${this.usePecApi_}"
+          .smartTabSharingVisible="${this.smartTabSharingVisible_}"
+          .contextManagementInComposeboxEnabled="${this.contextManagementInComposeboxEnabled_}"
+          .energyEffectAnimationEnabled="${this.energyEffectAnimationEnabled_}"
+          .energyEffectEnabled="${this.energyEffectAnimationEnabled_}"
+          .glifAnimationState="${this.glifAnimationState_}"
+          .disableFallbackGlifAnimation="${true}"
+          .isZeroState="${this.isZeroState}"
+          @result-changed="${this.onSuggestionsResultChanged_}"
+          @open-image-upload="${this.onOpenImageUpload_}"
+          @open-file-upload="${this.onOpenFileUpload_}"
+          @input-state-changed="${this.onInputStateChanged_}"
+          @show-suggestion-activity-link=
+              "${this.onShowSuggestionActivityLink_}">
       </cr-composebox>
+    `}
     </div>
     ${!this.isSidePanel && this.enableNativeZeroStateSuggestions ? html`
       <cr-composebox-dropdown
@@ -54,9 +129,23 @@ export function getHtml(this: ContextualTasksComposeboxElement) {
           role="listbox"
           .result="${this.zeroStateSuggestions_}"
           .maxSuggestions="${5}"
-          ?hidden="${!this.isZeroState}">
+          .overrideClampLineNum="${3}"
+          .selectedMatchIndex="${this.selectedMatchIndex_}"
+          ?hidden="${!this.shouldShowSuggestions_()}"
+          @match-focusin="${this.onMatchFocusin_}"
+          @keydown="${this.onDropdownKeydown_}">
       </cr-composebox-dropdown>
+      ${this.showSuggestionsActivityLink_ &&
+          this.shouldShowSuggestions_() ? html`
+        <div id="suggestionActivity">
+          <localized-link
+              .localizedString="${this.i18nAdvanced('suggestionActivityLink')}"
+              @link-clicked="${this.onSuggestionActivityLinkClicked_}">
+          </localized-link>
+        </div>
+      `: ''}
     ` : ''}
+
   <!--_html_template_end_-->`;
 }
 // clang-format on

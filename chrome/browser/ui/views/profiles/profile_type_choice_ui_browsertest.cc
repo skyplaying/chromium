@@ -2,14 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <memory>
-
-#include "base/functional/callback_helpers.h"
 #include "base/strings/strcat.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/enterprise/browser_management/management_service_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/test/test_browser_ui.h"
 #include "chrome/browser/ui/views/profiles/profile_management_step_controller.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_view_test_utils.h"
@@ -29,7 +26,8 @@ namespace {
 struct ProfileTypeChoiceTestParam {
   PixelTestParam pixel_test_param;
   bool decline_signin_cta_experiment_enabled = false;
-  bool use_primary_and_tonal_buttons_for_promos = false;
+
+  bool use_refreshed_ui = false;
 };
 
 // To be passed as 4th argument to `INSTANTIATE_TEST_SUITE_P()`, allows the test
@@ -43,8 +41,11 @@ std::string ParamToTestSuffix(
 // Permutations of supported parameters.
 const ProfileTypeChoiceTestParam kTestParams[] = {
     {.pixel_test_param = {.test_suffix = "Regular"}},
-    {.pixel_test_param = {.test_suffix = "RegularUsePrimaryAndTonalButtons"},
-     .use_primary_and_tonal_buttons_for_promos = true},
+    {.pixel_test_param = {.test_suffix = "RegularRefreshedUI"},
+     .use_refreshed_ui = true},
+    {.pixel_test_param = {.test_suffix = "RegularRefreshedUIDarkMode",
+                          .use_dark_theme = true},
+     .use_refreshed_ui = true},
     {.pixel_test_param = {.test_suffix = "DarkRtlSmall",
                           .use_dark_theme = true,
                           .use_right_to_left_language = true,
@@ -74,8 +75,8 @@ class ProfileTypeChoiceUIPixelTest
     scoped_feature_list_.InitWithFeatureStates(
         {{switches::kProfileCreationDeclineSigninCTAExperiment,
           GetParam().decline_signin_cta_experiment_enabled},
-         {switches::kUsePrimaryAndTonalButtonsForPromos,
-          GetParam().use_primary_and_tonal_buttons_for_promos}});
+
+         {switches::kFirstRunDesktopRefresh, GetParam().use_refreshed_ui}});
   }
 
   void ShowUi(const std::string& name) override {
@@ -92,10 +93,9 @@ class ProfileTypeChoiceUIPixelTest
     observer.StartWatchingNewWebContents();
 
     profile_picker_view_ = new ProfileManagementStepTestView(
-        // We use `ProfilePicker::Params::ForFirstRun` here because it is the
-        // only constructor that lets us force a profile to use.
-        ProfilePicker::Params::ForFirstRun(browser()->profile()->GetPath(),
-                                           base::DoNothing()),
+        ProfilePicker::Params::ForTesting(
+            ProfilePicker::EntryPoint::kProfileMenuAddNewProfile,
+            browser()->GetProfile()->GetPath()),
         ProfileManagementFlowController::Step::kProfilePicker,
         /*step_controller_factory=*/
         base::BindLambdaForTesting(

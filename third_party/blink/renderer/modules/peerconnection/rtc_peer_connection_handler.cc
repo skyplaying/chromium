@@ -66,11 +66,13 @@
 #include "third_party/blink/renderer/platform/peerconnection/rtc_stats.h"
 #include "third_party/blink/renderer/platform/peerconnection/rtc_void_request.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
+#include "third_party/blink/renderer/platform/wtf/bind_post_task.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_copier_base.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_copier_std.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/blink/renderer/platform/wtf/text/base64.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "third_party/blink/renderer/platform/wtf/thread_safe_ref_counted.h"
 #include "third_party/webrtc/api/data_channel_interface.h"
@@ -98,7 +100,7 @@ RTCSessionDescriptionPlatform* CreateWebKitSessionDescription(
     const std::string& sdp,
     const std::string& type) {
   return MakeGarbageCollected<RTCSessionDescriptionPlatform>(
-      String::FromUTF8(type), String::FromUTF8(sdp));
+      String::FromUtf8(type), String::FromUtf8(sdp));
 }
 
 RTCSessionDescriptionPlatform* CreateWebKitSessionDescription(
@@ -161,12 +163,12 @@ class CreateSessionDescriptionRequest
   void OnSuccessUniquePtr(
       std::unique_ptr<webrtc::SessionDescriptionInterface> desc) {
     if (!main_thread_->BelongsToCurrentThread()) {
-      PostCrossThreadTask(
-          *main_thread_.get(), FROM_HERE,
+      BindPostTask(
+          main_thread_,
           CrossThreadBindOnce(
               &CreateSessionDescriptionRequest::OnSuccessUniquePtr,
-              webrtc::scoped_refptr<CreateSessionDescriptionRequest>(this),
-              std::move(desc)));
+              webrtc::scoped_refptr<CreateSessionDescriptionRequest>(this)))
+          .Run(std::move(desc));
       return;
     }
 
@@ -177,16 +179,16 @@ class CreateSessionDescriptionRequest
         std::string value;
         desc->ToString(&value);
         auto json = std::make_unique<JSONObject>();
-        json->SetString("type", String::FromUTF8(desc->type()));
+        json->SetString("type", String::FromUtf8(desc->type()));
         if (!value.empty()) {
-          json->SetString("sdp", String::FromUTF8(value));
+          json->SetString("sdp", String::FromUtf8(value));
         }
         json->WriteJSON(&result);
       }
       tracker->TrackSessionDescriptionCallback(handler_.get(), action_,
                                                "OnSuccess", result.ToString());
       tracker->TrackSessionId(handler_.get(),
-                              String::FromUTF8(desc->session_id()));
+                              String::FromUtf8(desc->session_id()));
     }
     webkit_request_->RequestSucceeded(
         CreateWebKitSessionDescription(desc.get()));
@@ -194,12 +196,12 @@ class CreateSessionDescriptionRequest
   }
   void OnFailure(webrtc::RTCError error) override {
     if (!main_thread_->BelongsToCurrentThread()) {
-      PostCrossThreadTask(
-          *main_thread_.get(), FROM_HERE,
+      BindPostTask(
+          main_thread_,
           CrossThreadBindOnce(
               &CreateSessionDescriptionRequest::OnFailure,
-              webrtc::scoped_refptr<CreateSessionDescriptionRequest>(this),
-              std::move(error)));
+              webrtc::scoped_refptr<CreateSessionDescriptionRequest>(this)))
+          .Run(std::move(error));
       return;
     }
 
@@ -207,7 +209,7 @@ class CreateSessionDescriptionRequest
     if (handler_ && tracker) {
       tracker->TrackSessionDescriptionCallback(
           handler_.get(), action_, "OnFailure",
-          String::FromUTF8(error.message()));
+          String::FromUtf8(error.message()));
     }
     // TODO(hta): Convert CreateSessionDescriptionRequest.OnFailure
     webkit_request_->RequestFailed(error);
@@ -226,25 +228,20 @@ class CreateSessionDescriptionRequest
   }
 
   const scoped_refptr<base::SingleThreadTaskRunner> main_thread_;
-  Persistent<RTCSessionDescriptionRequest> webkit_request_;
+  CrossThreadPersistent<RTCSessionDescriptionRequest> webkit_request_;
   const base::WeakPtr<RTCPeerConnectionHandler> handler_;
   const CrossThreadWeakPersistent<PeerConnectionTracker> tracker_;
   PeerConnectionTracker::Action action_;
 };
 
-using RTCStatsReportCallbackInternal =
-    CrossThreadOnceFunction<void(std::unique_ptr<RTCStatsReportPlatform>)>;
-
 void GetRTCStatsOnSignalingThread(
     const scoped_refptr<base::SingleThreadTaskRunner>& main_thread,
     webrtc::scoped_refptr<webrtc::PeerConnectionInterface>
         native_peer_connection,
-    RTCStatsReportCallbackInternal callback) {
+    RTCStatsReportCallback callback) {
   TRACE_EVENT0("webrtc", "GetRTCStatsOnSignalingThread");
   native_peer_connection->GetStats(
-      CreateRTCStatsCollectorCallback(
-          main_thread, ConvertToBaseOnceCallback(std::move(callback)))
-          .get());
+      CreateRTCStatsCollectorCallback(main_thread, std::move(callback)).get());
 }
 
 std::set<RTCPeerConnectionHandler*>* GetPeerConnectionHandlers() {
@@ -314,13 +311,13 @@ ParsedSessionDescription ParsedSessionDescription::Parse(const String& sdp_type,
 
 void ParsedSessionDescription::DoParse() {
   std::optional<webrtc::SdpType> maybe_type =
-      webrtc::SdpTypeFromString(type_.Utf8().c_str());
+      webrtc::SdpTypeFromString(type_.Utf8());
   if (!maybe_type.has_value()) {
     description_.reset();
     return;
   }
-  description_ = webrtc::CreateSessionDescription(*maybe_type,
-                                                  sdp_.Utf8().c_str(), &error_);
+  description_ =
+      webrtc::CreateSessionDescription(*maybe_type, sdp_.Utf8(), &error_);
 }
 
 // Processes the resulting state changes of a SetLocalDescription() or
@@ -337,7 +334,7 @@ class RTCPeerConnectionHandler::WebRtcSetDescriptionObserverImpl
       bool is_rollback)
       : handler_(handler),
         main_thread_(task_runner),
-        web_request_(web_request),
+        web_request_handle_(MakeUnwrappingCrossThreadHandle(web_request)),
         tracker_(tracker),
         action_(action),
         is_rollback_(is_rollback) {}
@@ -350,10 +347,10 @@ class RTCPeerConnectionHandler::WebRtcSetDescriptionObserverImpl
       if (tracker && handler_) {
         tracker->TrackSessionDescriptionCallback(
             handler_.get(), action_, "OnFailure",
-            String::FromUTF8(error.message()));
+            String::FromUtf8(error.message()));
       }
-      web_request_->RequestFailed(error);
-      web_request_ = nullptr;
+      web_request_handle_.GetOnCreationThread()->RequestFailed(error);
+      web_request_handle_.Clear();
       return;
     }
 
@@ -370,9 +367,10 @@ class RTCPeerConnectionHandler::WebRtcSetDescriptionObserverImpl
     auto current_remote_description =
         std::move(states.current_remote_description);
 
-    // Track result in chrome://webrtc-internals/.
+    // Result is computed while the description is still available but
+    // fired after the events.
+    StringBuilder result;
     if (tracker && handler_) {
-      StringBuilder result;
       if (action_ ==
           PeerConnectionTracker::kActionSetLocalDescriptionImplicit) {
         webrtc::SessionDescriptionInterface* created_session_description =
@@ -387,20 +385,18 @@ class RTCPeerConnectionHandler::WebRtcSetDescriptionObserverImpl
                    current_local_description) {
           created_session_description = current_local_description.get();
         }
-        RTC_DCHECK(created_session_description);
+        CHECK(created_session_description);
         std::string sdp;
         created_session_description->ToString(&sdp);
 
         auto json = std::make_unique<JSONObject>();
         json->SetString("type",
-                        String::FromUTF8(created_session_description->type()));
+                        String::FromUtf8(created_session_description->type()));
         if (!sdp.empty()) {
-          json->SetString("sdp", String::FromUTF8(sdp));
+          json->SetString("sdp", String::FromUtf8(sdp));
         }
         json->WriteJSON(&result);
       }
-      tracker->TrackSessionDescriptionCallback(handler_.get(), action_,
-                                               "OnSuccess", result.ToString());
       handler_->TrackSignalingChange(signaling_state);
     }
 
@@ -414,6 +410,11 @@ class RTCPeerConnectionHandler::WebRtcSetDescriptionObserverImpl
 
     // This fires JS events and could cause |handler_| to become null.
     ProcessStateChanges(std::move(states));
+
+    if (tracker && handler_) {
+      tracker->TrackSessionDescriptionCallback(handler_.get(), action_,
+                                               "OnSuccess", result.ToString());
+    }
     ResolvePromise();
   }
 
@@ -421,8 +422,8 @@ class RTCPeerConnectionHandler::WebRtcSetDescriptionObserverImpl
   ~WebRtcSetDescriptionObserverImpl() override {}
 
   void ResolvePromise() {
-    web_request_->RequestSucceeded();
-    web_request_ = nullptr;
+    web_request_handle_.GetOnCreationThread()->RequestSucceeded();
+    web_request_handle_.Clear();
   }
 
   void ProcessStateChanges(WebRtcSetDescriptionObserver::States states) {
@@ -441,7 +442,7 @@ class RTCPeerConnectionHandler::WebRtcSetDescriptionObserverImpl
 
   base::WeakPtr<RTCPeerConnectionHandler> handler_;
   scoped_refptr<base::SequencedTaskRunner> main_thread_;
-  Persistent<blink::RTCVoidRequest> web_request_;
+  UnwrappingCrossThreadHandle<blink::RTCVoidRequest> web_request_handle_;
   CrossThreadWeakPersistent<PeerConnectionTracker> tracker_;
   PeerConnectionTracker::Action action_;
   bool is_rollback_;
@@ -507,7 +508,7 @@ class RTCPeerConnectionHandler::Observer
   void OnWebRtcEventLogWrite(const Vector<uint8_t>& output) override {
     if (!main_thread_->BelongsToCurrentThread()) {
       PostCrossThreadTask(
-          *main_thread_.get(), FROM_HERE,
+          *main_thread_, FROM_HERE,
           CrossThreadBindOnce(
               &RTCPeerConnectionHandler::Observer::OnWebRtcEventLogWrite,
               WrapCrossThreadPersistent(this), output));
@@ -519,7 +520,7 @@ class RTCPeerConnectionHandler::Observer
   void OnWebRtcDataChannelLogWrite(const Vector<uint8_t>& output) override {
     if (!main_thread_->BelongsToCurrentThread()) {
       PostCrossThreadTask(
-          *main_thread_.get(), FROM_HERE,
+          *main_thread_, FROM_HERE,
           CrossThreadBindOnce(
               &RTCPeerConnectionHandler::Observer::OnWebRtcDataChannelLogWrite,
               WrapCrossThreadPersistent(this), output));
@@ -539,7 +540,7 @@ class RTCPeerConnectionHandler::Observer
   void OnDataChannel(
       webrtc::scoped_refptr<DataChannelInterface> data_channel) override {
     PostCrossThreadTask(
-        *main_thread_.get(), FROM_HERE,
+        *main_thread_, FROM_HERE,
         CrossThreadBindOnce(
             &RTCPeerConnectionHandler::Observer::OnDataChannelImpl,
             WrapCrossThreadPersistent(this), data_channel));
@@ -548,7 +549,7 @@ class RTCPeerConnectionHandler::Observer
   void OnNegotiationNeededEvent(uint32_t event_id) override {
     if (!main_thread_->BelongsToCurrentThread()) {
       PostCrossThreadTask(
-          *main_thread_.get(), FROM_HERE,
+          *main_thread_, FROM_HERE,
           CrossThreadBindOnce(
               &RTCPeerConnectionHandler::Observer::OnNegotiationNeededEvent,
               WrapCrossThreadPersistent(this), event_id));
@@ -563,7 +564,7 @@ class RTCPeerConnectionHandler::Observer
       PeerConnectionInterface::IceConnectionState new_state) override {
     if (!main_thread_->BelongsToCurrentThread()) {
       PostCrossThreadTask(
-          *main_thread_.get(), FROM_HERE,
+          *main_thread_, FROM_HERE,
           CrossThreadBindOnce(&RTCPeerConnectionHandler::Observer::
                                   OnStandardizedIceConnectionChange,
                               WrapCrossThreadPersistent(this), new_state));
@@ -576,7 +577,7 @@ class RTCPeerConnectionHandler::Observer
       PeerConnectionInterface::PeerConnectionState new_state) override {
     if (!main_thread_->BelongsToCurrentThread()) {
       PostCrossThreadTask(
-          *main_thread_.get(), FROM_HERE,
+          *main_thread_, FROM_HERE,
           CrossThreadBindOnce(
               &RTCPeerConnectionHandler::Observer::OnConnectionChange,
               WrapCrossThreadPersistent(this), new_state));
@@ -589,7 +590,7 @@ class RTCPeerConnectionHandler::Observer
       PeerConnectionInterface::IceGatheringState new_state) override {
     if (!main_thread_->BelongsToCurrentThread()) {
       PostCrossThreadTask(
-          *main_thread_.get(), FROM_HERE,
+          *main_thread_, FROM_HERE,
           CrossThreadBindOnce(
               &RTCPeerConnectionHandler::Observer::OnIceGatheringChange,
               WrapCrossThreadPersistent(this), new_state));
@@ -601,7 +602,7 @@ class RTCPeerConnectionHandler::Observer
   void OnIceCandidate(const IceCandidate* candidate) override {
     DCHECK(native_peer_connection_);
     std::string sdp = candidate->ToString();
-   DCHECK(!sdp.empty());
+    DCHECK(!sdp.empty());
     // The generated candidate may have been added to the pending or current
     // local description, take a snapshot and surface them to the main thread.
     // Remote descriptions are also surfaced because
@@ -620,15 +621,15 @@ class RTCPeerConnectionHandler::Observer
             native_peer_connection_->current_remote_description());
 
     PostCrossThreadTask(
-        *main_thread_.get(), FROM_HERE,
+        *main_thread_, FROM_HERE,
         CrossThreadBindOnce(
             &RTCPeerConnectionHandler::Observer::OnIceCandidateImpl,
-            WrapCrossThreadPersistent(this), String::FromUTF8(sdp),
-            String::FromUTF8(candidate->sdp_mid()),
+            WrapCrossThreadPersistent(this), String::FromUtf8(sdp),
+            String::FromUtf8(candidate->sdp_mid()),
             candidate->sdp_mline_index(), candidate->candidate().component(),
             candidate->candidate().address().family(),
-            String::FromUTF8(candidate->candidate().username()),
-            String::FromUTF8(candidate->server_url()),
+            String::FromUtf8(candidate->candidate().username()),
+            String::FromUtf8(candidate->server_url()),
             std::move(pending_local_description),
             std::move(current_local_description),
             std::move(pending_remote_description),
@@ -641,20 +642,20 @@ class RTCPeerConnectionHandler::Observer
                            int error_code,
                            const std::string& error_text) override {
     PostCrossThreadTask(
-        *main_thread_.get(), FROM_HERE,
+        *main_thread_, FROM_HERE,
         CrossThreadBindOnce(
             &RTCPeerConnectionHandler::Observer::OnIceCandidateErrorImpl,
             WrapCrossThreadPersistent(this),
-            port ? String::FromUTF8(address) : String(),
-            static_cast<uint16_t>(port),
-            String::Format("%s:%d", address.c_str(), port),
-            String::FromUTF8(url), error_code, String::FromUTF8(error_text)));
+            port ? String::FromUtf8(address) : String(),
+            static_cast<uint16_t>(port), Format("{}:{}", address, port),
+            String::FromUtf8(url), error_code, String::FromUtf8(error_text)));
   }
 
   void OnDataChannelImpl(webrtc::scoped_refptr<DataChannelInterface> channel) {
     DCHECK(main_thread_->BelongsToCurrentThread());
-    if (handler_)
+    if (handler_) {
       handler_->OnDataChannel(channel);
+    }
   }
 
   void OnIceCandidateImpl(const String& sdp,
@@ -706,7 +707,7 @@ class RTCPeerConnectionHandler::Observer
 
   void OnInterestingUsage(int usage_pattern) override {
     PostCrossThreadTask(
-        *main_thread_.get(), FROM_HERE,
+        *main_thread_, FROM_HERE,
         CrossThreadBindOnce(
             &RTCPeerConnectionHandler::Observer::OnInterestingUsageImpl,
             WrapCrossThreadPersistent(this), usage_pattern));
@@ -830,6 +831,7 @@ void RTCPeerConnectionHandler::CloseAndUnregister() {
   // Clear the pointer to client_ so that it does not interfere with
   // garbage collection.
   client_ = nullptr;
+  frame_ = nullptr;
   is_unregistered_ = true;
 
   // Reset the `PeerConnectionDependencyFactory` so we don't prevent it from
@@ -870,6 +872,10 @@ bool RTCPeerConnectionHandler::Initialize(
 
   // Configure optional SRTP configurations enabled via the command line.
   webrtc::CryptoOptions crypto_options;
+  if (RuntimeEnabledFeatures::RtcRtpHeaderEncryptionPolicyEnabled()) {
+    crypto_options.srtp.cryptex_policy =
+        configuration_.crypto_options.srtp.cryptex_policy;
+  }
   crypto_options.srtp.enable_gcm_crypto_suites = true;
   crypto_options.srtp.enable_encrypted_rtp_header_extensions =
       base::FeatureList::IsEnabled(kWebRtcEncryptedRtpHeaderExtensions);
@@ -891,13 +897,11 @@ bool RTCPeerConnectionHandler::Initialize(
   // Apply 40 ms worth of bursting. See webrtc::TaskQueuePacedSender.
   configuration_.pacer_burst_interval = webrtc::TimeDelta::Millis(40);
 
-  configuration_.set_stats_timestamp_with_environment_clock(true);
-
   peer_connection_observer_ =
       MakeGarbageCollected<Observer>(weak_factory_.GetWeakPtr(), task_runner_);
   native_peer_connection_ = dependency_factory_->CreatePeerConnection(
       configuration_, frame_, peer_connection_observer_, exception_state);
-  if (!native_peer_connection_.get()) {
+  if (!native_peer_connection_) {
     LOG(ERROR) << "Failed to initialize native PeerConnection.";
     return false;
   }
@@ -931,7 +935,7 @@ bool RTCPeerConnectionHandler::InitializeForTest(
 
   native_peer_connection_ = dependency_factory_->CreatePeerConnection(
       configuration_, nullptr, peer_connection_observer_, exception_state);
-  if (!native_peer_connection_.get()) {
+  if (!native_peer_connection_) {
     LOG(ERROR) << "Failed to initialize native PeerConnection.";
     return false;
   }
@@ -948,8 +952,9 @@ RTCPeerConnectionHandler::CreateOffer(RTCSessionDescriptionRequest* request,
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
   TRACE_EVENT0("webrtc", "RTCPeerConnectionHandler::createOffer");
 
-  if (peer_connection_tracker_)
+  if (peer_connection_tracker_) {
     peer_connection_tracker_->TrackCreateOffer(this, options);
+  }
 
   webrtc::PeerConnectionInterface::RTCOfferAnswerOptions webrtc_options;
   if (options) {
@@ -1015,8 +1020,9 @@ void RTCPeerConnectionHandler::CreateAnswer(
   native_peer_connection_->CreateAnswer(description_request.get(),
                                         webrtc_options);
 
-  if (peer_connection_tracker_)
+  if (peer_connection_tracker_) {
     peer_connection_tracker_->TrackCreateAnswer(this, options);
+  }
 }
 
 bool IsOfferOrAnswer(const webrtc::SessionDescriptionInterface* native_desc) {
@@ -1029,8 +1035,9 @@ void RTCPeerConnectionHandler::SetLocalDescription(
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
   TRACE_EVENT0("webrtc", "RTCPeerConnectionHandler::setLocalDescription");
 
-  if (peer_connection_tracker_)
+  if (peer_connection_tracker_) {
     peer_connection_tracker_->TrackSetSessionDescriptionImplicit(this);
+  }
 
   scoped_refptr<WebRtcSetDescriptionObserverImpl> content_observer =
       base::MakeRefCounted<WebRtcSetDescriptionObserverImpl>(
@@ -1047,7 +1054,7 @@ void RTCPeerConnectionHandler::SetLocalDescription(
                           .get());
 
   PostCrossThreadTask(
-      *signaling_thread().get(), FROM_HERE,
+      *signaling_thread(), FROM_HERE,
       CrossThreadBindOnce(
           &RunClosureWithTrace,
           CrossThreadBindOnce(
@@ -1094,7 +1101,7 @@ void RTCPeerConnectionHandler::SetLocalDescription(
     // https://crbug.com/1005251.
     if (request) {
       request->RequestFailed(webrtc::RTCError(
-          webrtc::RTCErrorType::INTERNAL_ERROR, reason_str.ToString().Utf8()));
+          webrtc::RTCErrorType::INTERNAL_ERROR, reason_str.Utf8()));
     }
     return;
   }
@@ -1122,7 +1129,7 @@ void RTCPeerConnectionHandler::SetLocalDescription(
                           .get());
 
   PostCrossThreadTask(
-      *signaling_thread().get(), FROM_HERE,
+      *signaling_thread(), FROM_HERE,
       CrossThreadBindOnce(
           &RunClosureWithTrace,
           CrossThreadBindOnce(
@@ -1169,9 +1176,8 @@ void RTCPeerConnectionHandler::SetRemoteDescription(
     // possible for |this| to be deleted after this line. See
     // https://crbug.com/1005251.
     if (request) {
-      request->RequestFailed(
-          webrtc::RTCError(webrtc::RTCErrorType::UNSUPPORTED_OPERATION,
-                           reason_str.ToString().Utf8()));
+      request->RequestFailed(webrtc::RTCError(
+          webrtc::RTCErrorType::UNSUPPORTED_OPERATION, reason_str.Utf8()));
     }
     return;
   }
@@ -1199,7 +1205,7 @@ void RTCPeerConnectionHandler::SetRemoteDescription(
                           .get());
 
   PostCrossThreadTask(
-      *signaling_thread().get(), FROM_HERE,
+      *signaling_thread(), FROM_HERE,
       CrossThreadBindOnce(
           &RunClosureWithTrace,
           CrossThreadBindOnce(
@@ -1232,9 +1238,12 @@ webrtc::RTCErrorType RTCPeerConnectionHandler::SetConfiguration(
   new_configuration.certificates = blink_config.certificates;
   new_configuration.ice_candidate_pool_size =
       blink_config.ice_candidate_pool_size;
+  new_configuration.always_negotiate_data_channels =
+      blink_config.always_negotiate_data_channels;
 
-  if (peer_connection_tracker_)
+  if (peer_connection_tracker_) {
     peer_connection_tracker_->TrackSetConfiguration(this, new_configuration);
+  }
 
   webrtc::RTCError webrtc_error =
       native_peer_connection_->SetConfiguration(new_configuration);
@@ -1290,10 +1299,11 @@ void RTCPeerConnectionHandler::AddIceCandidate(
               std::move(current_remote_description));
         }
         // Resolve promise.
-        if (result.ok())
+        if (result.ok()) {
           request->RequestSucceeded();
-        else
+        } else {
           request->RequestFailed(result);
+        }
       };
 
   native_peer_connection_->AddIceCandidate(
@@ -1351,7 +1361,7 @@ void RTCPeerConnectionHandler::EmitCurrentStateForTracker() {
   if (!peer_connection_tracker_) {
     return;
   }
-  RTC_DCHECK(native_peer_connection_);
+  CHECK(native_peer_connection_);
   const webrtc::SessionDescriptionInterface* local_desc =
       native_peer_connection_->local_description();
   // If the local desc is an answer, emit it after the offer.
@@ -1398,7 +1408,7 @@ void RTCPeerConnectionHandler::EmitCurrentStateForTracker() {
 void RTCPeerConnectionHandler::GetStats(RTCStatsReportCallback callback) {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
   PostCrossThreadTask(
-      *signaling_thread().get(), FROM_HERE,
+      *signaling_thread(), FROM_HERE,
       CrossThreadBindOnce(&GetRTCStatsOnSignalingThread, task_runner_,
                           native_peer_connection_,
                           CrossThreadBindOnce(std::move(callback))));
@@ -1436,10 +1446,10 @@ RTCPeerConnectionHandler::AddTransceiverWithTrack(
   std::unique_ptr<RTCRtpTransceiverPlatform> platform_transceiver =
       std::move(transceiver);
   if (peer_connection_tracker_) {
-    size_t transceiver_index = GetTransceiverIndex(*platform_transceiver.get());
+    size_t transceiver_index = GetTransceiverIndex(*platform_transceiver);
     peer_connection_tracker_->TrackAddTransceiver(
         this, PeerConnectionTracker::TransceiverUpdatedReason::kAddTransceiver,
-        *platform_transceiver.get(), transceiver_index);
+        *platform_transceiver, transceiver_index);
   }
   return platform_transceiver;
 }
@@ -1455,8 +1465,9 @@ void RTCPeerConnectionHandler::AddTransceiverWithTrackOnSignalingThread(
       init);
   std::vector<webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>>
       transceivers;
-  if (error_or_transceiver->ok())
+  if (error_or_transceiver->ok()) {
     transceivers.push_back(error_or_transceiver->value());
+  }
   transceiver_state_surfacer->Initialize(native_peer_connection_,
                                          track_adapter_map_, transceivers);
 }
@@ -1498,10 +1509,10 @@ RTCPeerConnectionHandler::AddTransceiverWithKind(
   std::unique_ptr<RTCRtpTransceiverPlatform> platform_transceiver =
       std::move(transceiver);
   if (peer_connection_tracker_) {
-    size_t transceiver_index = GetTransceiverIndex(*platform_transceiver.get());
+    size_t transceiver_index = GetTransceiverIndex(*platform_transceiver);
     peer_connection_tracker_->TrackAddTransceiver(
         this, PeerConnectionTracker::TransceiverUpdatedReason::kAddTransceiver,
-        *platform_transceiver.get(), transceiver_index);
+        *platform_transceiver, transceiver_index);
   }
   return std::move(platform_transceiver);
 }
@@ -1516,8 +1527,9 @@ void RTCPeerConnectionHandler::AddTransceiverWithMediaTypeOnSignalingThread(
       native_peer_connection_->AddTransceiver(media_type, init);
   std::vector<webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>>
       transceivers;
-  if (error_or_transceiver->ok())
+  if (error_or_transceiver->ok()) {
     transceivers.push_back(error_or_transceiver->value());
+  }
   transceiver_state_surfacer->Initialize(native_peer_connection_,
                                          track_adapter_map_, transceivers);
 }
@@ -1571,10 +1583,10 @@ RTCPeerConnectionHandler::AddTrack(
       std::move(transceiver_state), blink::TransceiverStateUpdateMode::kAll);
   platform_transceiver = std::move(transceiver);
   if (peer_connection_tracker_) {
-    size_t transceiver_index = GetTransceiverIndex(*platform_transceiver.get());
+    size_t transceiver_index = GetTransceiverIndex(*platform_transceiver);
     peer_connection_tracker_->TrackAddTransceiver(
         this, PeerConnectionTracker::TransceiverUpdatedReason::kAddTrack,
-        *platform_transceiver.get(), transceiver_index);
+        *platform_transceiver, transceiver_index);
   }
   for (const auto& stream_id : rtp_senders_.back()->state().stream_ids()) {
     if (GetLocalStreamUsageCount(rtp_senders_, stream_id) == 1u) {
@@ -1619,8 +1631,9 @@ RTCPeerConnectionHandler::RemoveTrack(blink::RTCRtpSenderPlatform* web_sender) {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
   TRACE_EVENT0("webrtc", "RTCPeerConnectionHandler::RemoveTrack");
   auto it = FindSender(web_sender->Id());
-  if (it == rtp_senders_.end())
+  if (it == rtp_senders_.end()) {
     return webrtc::RTCError(webrtc::RTCErrorType::INVALID_PARAMETER);
+  }
   const auto& sender = *it;
   auto webrtc_sender = sender->state().webrtc_sender();
 
@@ -1657,7 +1670,7 @@ RTCPeerConnectionHandler::RemoveTrack(blink::RTCRtpSenderPlatform* web_sender) {
     size_t transceiver_index = GetTransceiverIndex(*transceiver);
     peer_connection_tracker_->TrackModifyTransceiver(
         this, PeerConnectionTracker::TransceiverUpdatedReason::kRemoveTrack,
-        *transceiver.get(), transceiver_index);
+        *transceiver, transceiver_index);
   }
   std::unique_ptr<RTCRtpTransceiverPlatform> platform_transceiver =
       std::move(transceiver);
@@ -1704,17 +1717,20 @@ RTCPeerConnectionHandler::GetPlatformSenders() const {
 
 void RTCPeerConnectionHandler::CloseClientPeerConnection() {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
-  if (!is_closed_)
+  if (!is_closed_) {
     client_->ClosePeerConnection();
+  }
 }
 
 void RTCPeerConnectionHandler::OnThermalStateChange(
     mojom::blink::DeviceThermalState thermal_state) {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
-  if (is_closed_)
+  if (is_closed_) {
     return;
-  if (!base::FeatureList::IsEnabled(kWebRtcThermalResource))
+  }
+  if (!base::FeatureList::IsEnabled(kWebRtcThermalResource)) {
     return;
+  }
   if (!thermal_resource_) {
     thermal_resource_ = ThermalResource::Create(task_runner_);
     native_peer_connection_->AddAdaptationResource(
@@ -1795,8 +1811,9 @@ void RTCPeerConnectionHandler::Close() {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
   DVLOG(1) << "RTCPeerConnectionHandler::stop";
 
-  if (is_closed_ || !native_peer_connection_.get())
+  if (is_closed_ || !native_peer_connection_) {
     return;  // Already stopped.
+  }
 
   if (peer_connection_tracker_) {
     peer_connection_tracker_->TrackClose(this);
@@ -1819,7 +1836,7 @@ void RTCPeerConnectionHandler::RunSynchronousOnceClosureOnSignalingThread(
     const char* trace_event_name) {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
   scoped_refptr<base::SingleThreadTaskRunner> thread(signaling_thread());
-  if (!thread.get() || thread->BelongsToCurrentThread()) {
+  if (!thread || thread->BelongsToCurrentThread()) {
     TRACE_EVENT0("webrtc", trace_event_name);
     std::move(closure).Run();
   } else {
@@ -1875,12 +1892,14 @@ void RTCPeerConnectionHandler::TrackSignalingChange(
       new_state == webrtc::PeerConnectionInterface::kHaveRemoteOffer) {
     // Inject missing kStable in case of implicit rollback.
     auto stable_state = webrtc::PeerConnectionInterface::kStable;
-    if (peer_connection_tracker_)
+    if (peer_connection_tracker_) {
       peer_connection_tracker_->TrackSignalingStateChange(this, stable_state);
+    }
   }
   previous_signaling_state_ = new_state;
-  if (peer_connection_tracker_)
+  if (peer_connection_tracker_) {
     peer_connection_tracker_->TrackSignalingStateChange(this, new_state);
+  }
 }
 
 // Called any time the lower layer IceConnectionState changes, which is NOT in
@@ -1892,26 +1911,36 @@ void RTCPeerConnectionHandler::OnIceConnectionChange(
     webrtc::PeerConnectionInterface::IceConnectionState new_state) {
   TRACE_EVENT0("webrtc", "RTCPeerConnectionHandler::OnIceConnectionChange");
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
-  ReportICEState(new_state);
   track_metrics_.IceConnectionChange(new_state);
 }
 
 void RTCPeerConnectionHandler::TrackIceConnectionStateChange(
     webrtc::PeerConnectionInterface::IceConnectionState state) {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
-  if (!peer_connection_tracker_)
+  if (!peer_connection_tracker_) {
     return;
+  }
   peer_connection_tracker_->TrackIceConnectionStateChange(this, state);
+}
+
+void RTCPeerConnectionHandler::TrackOnTrack(const RTCTrackEvent& event) {
+  DCHECK(task_runner_->RunsTasksInCurrentSequence());
+  if (!peer_connection_tracker_) {
+    return;
+  }
+  peer_connection_tracker_->TrackOnTrack(this, event);
 }
 
 // Called any time the combined peerconnection state changes
 void RTCPeerConnectionHandler::OnConnectionChange(
     webrtc::PeerConnectionInterface::PeerConnectionState new_state) {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
-  if (peer_connection_tracker_)
+  if (peer_connection_tracker_) {
     peer_connection_tracker_->TrackConnectionStateChange(this, new_state);
-  if (!is_closed_)
+  }
+  if (!is_closed_) {
     client_->DidChangePeerConnectionState(new_state);
+  }
 }
 
 // Called any time the IceGatheringState changes
@@ -1919,29 +1948,34 @@ void RTCPeerConnectionHandler::OnIceGatheringChange(
     webrtc::PeerConnectionInterface::IceGatheringState new_state) {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
   TRACE_EVENT0("webrtc", "RTCPeerConnectionHandler::OnIceGatheringChange");
-  if (peer_connection_tracker_)
+  if (peer_connection_tracker_) {
     peer_connection_tracker_->TrackIceGatheringStateChange(this, new_state);
-  if (!is_closed_)
+  }
+  if (!is_closed_) {
     client_->DidChangeIceGatheringState(new_state);
+  }
 }
 
 void RTCPeerConnectionHandler::OnNegotiationNeededEvent(uint32_t event_id) {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
   TRACE_EVENT0("webrtc", "RTCPeerConnectionHandler::OnNegotiationNeededEvent");
-  if (is_closed_)
+  if (is_closed_) {
     return;
+  }
   if (!native_peer_connection_->ShouldFireNegotiationNeededEvent(event_id)) {
     return;
   }
-  if (peer_connection_tracker_)
+  if (peer_connection_tracker_) {
     peer_connection_tracker_->TrackOnRenegotiationNeeded(this);
+  }
   client_->NegotiationNeeded();
 }
 
 void RTCPeerConnectionHandler::OnModifySctpTransport(
     blink::WebRTCSctpTransportSnapshot state) {
-  if (client_)
+  if (client_) {
     client_->DidModifySctpTransport(state);
+  }
 }
 
 void RTCPeerConnectionHandler::OnModifyTransceivers(
@@ -1992,12 +2026,10 @@ void RTCPeerConnectionHandler::OnModifyTransceivers(
       size_t transceiver_index = GetTransceiverIndex(*platform_transceivers[i]);
       if (transceiver_is_new) {
         peer_connection_tracker_->TrackAddTransceiver(
-            this, update_reason, *platform_transceivers[i].get(),
-            transceiver_index);
+            this, update_reason, *platform_transceivers[i], transceiver_index);
       } else if (transceiver_was_modified) {
         peer_connection_tracker_->TrackModifyTransceiver(
-            this, update_reason, *platform_transceivers[i].get(),
-            transceiver_index);
+            this, update_reason, *platform_transceivers[i], transceiver_index);
       }
     }
   }
@@ -2030,8 +2062,9 @@ void RTCPeerConnectionHandler::OnDataChannel(
         this, channel.get(), PeerConnectionTracker::kSourceRemote);
   }
 
-  if (!is_closed_)
+  if (!is_closed_) {
     client_->DidAddRemoteDataChannel(std::move(channel));
+  }
 }
 
 void RTCPeerConnectionHandler::OnIceCandidate(const String& sdp,
@@ -2081,8 +2114,9 @@ void RTCPeerConnectionHandler::OnIceCandidateError(const String& address,
 }
 
 void RTCPeerConnectionHandler::OnInterestingUsage(int usage_pattern) {
-  if (client_)
+  if (client_) {
     client_->DidNoteInterestingUsage(usage_pattern);
+  }
 }
 
 RTCPeerConnectionHandler::FirstSessionDescription::FirstSessionDescription(
@@ -2139,8 +2173,9 @@ RTCPeerConnectionHandler::FindTransceiver(uintptr_t id) {
 wtf_size_t RTCPeerConnectionHandler::GetTransceiverIndex(
     const RTCRtpTransceiverPlatform& platform_transceiver) {
   for (wtf_size_t i = 0; i < rtp_transceivers_.size(); ++i) {
-    if (platform_transceiver.Id() == rtp_transceivers_[i]->Id())
+    if (platform_transceiver.Id() == rtp_transceivers_[i]->Id()) {
       return i;
+    }
   }
   NOTREACHED();
 }
@@ -2191,17 +2226,6 @@ scoped_refptr<base::SingleThreadTaskRunner>
 RTCPeerConnectionHandler::signaling_thread() const {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
   return signaling_thread_;
-}
-
-void RTCPeerConnectionHandler::ReportICEState(
-    webrtc::PeerConnectionInterface::IceConnectionState new_state) {
-  DCHECK(task_runner_->RunsTasksInCurrentSequence());
-  if (ice_state_seen_[new_state]) {
-    return;
-  }
-  ice_state_seen_[new_state] = true;
-  UMA_HISTOGRAM_ENUMERATION("WebRTC.PeerConnection.ConnectionState", new_state,
-                            webrtc::PeerConnectionInterface::kIceConnectionMax);
 }
 
 }  // namespace blink

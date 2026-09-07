@@ -23,7 +23,6 @@
 #include "components/omnibox/browser/omnibox_client.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/models/image_model.h"
-#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/range/range.h"
 
@@ -122,6 +121,12 @@ class OmniboxView {
   // If there is no selection, the range's values will both be equal to the
   // current cursor position.
   virtual gfx::Range GetSelectionBounds() const = 0;
+
+  // Changes the selection (directly on the view).
+  virtual void SetSelectionBounds(gfx::Range selection) = 0;
+
+  // Returns whether the view has any selection at all.
+  virtual bool HasSelection() const = 0;
 
   // Selects all the text in the edit.  Use this in place of SetSelAll() to
   // avoid selecting the "phantom newline" at the end of the edit.
@@ -258,6 +263,16 @@ class OmniboxView {
   void UpdateTextStyle(const std::u16string& display_text,
                        const bool text_is_url,
                        const AutocompleteSchemeClassifier& classifier);
+
+  // Given display text and match info, computes text that provides more context
+  // about the completion, to be provided via accessibility API.
+  //
+  // suggestion_text_prefix_length will be set to number of added labelling
+  // characters before the original editable text.
+  std::u16string ComputeFriendlySuggestionTextForAccessibility(
+      const std::u16string& display_text,
+      const AutocompleteMatch& match,
+      int& suggestion_text_prefix_length);
 
   virtual OmniboxController* controller();
   virtual const OmniboxController* controller() const;

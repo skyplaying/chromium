@@ -5,6 +5,7 @@
 package org.chromium.ui.test.util;
 
 import static androidx.test.espresso.matcher.ViewMatchers.isDescendantOfA;
+import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
 
 import static org.hamcrest.CoreMatchers.allOf;
 import static org.hamcrest.Matchers.greaterThan;
@@ -26,7 +27,6 @@ import android.view.ViewGroup;
 import android.widget.TextView;
 
 import androidx.annotation.IntDef;
-import androidx.appcompat.content.res.AppCompatResources;
 import androidx.test.espresso.NoMatchingViewException;
 import androidx.test.espresso.UiController;
 import androidx.test.espresso.ViewAction;
@@ -222,26 +222,6 @@ public class ViewUtils {
      * @param viewMatcher The matcher matching the view that should be waited for.
      * @return An interaction on the matching view.
      */
-    public static ViewInteraction onViewWaiting(
-            Matcher<View> viewMatcher, boolean checkRootDialog) {
-        ViewElement.Options.Builder optionsBuilder = ViewElement.newOptions();
-        if (checkRootDialog) {
-            optionsBuilder = optionsBuilder.inDialog();
-        }
-        ViewPresence<View> viewPresence =
-                ViewFinder.waitForView(viewMatcher, optionsBuilder.build());
-        return viewPresence.onView();
-    }
-
-    /**
-     * Waits until a visible view matches the given matcher. Fails if the matcher applies to
-     * multiple views. Times out after {@link CriteriaHelper#DEFAULT_MAX_TIME_TO_POLL} milliseconds.
-     *
-     * <p>By default, also waits for the view to be displayed >= 51% and enabled.
-     *
-     * @param viewMatcher The matcher matching the view that should be waited for.
-     * @return An interaction on the matching view.
-     */
     public static ViewInteraction onViewWaiting(Matcher<View> viewMatcher) {
         ViewPresence<View> viewPresence = ViewFinder.waitForView(viewMatcher);
         return viewPresence.onView();
@@ -281,9 +261,7 @@ public class ViewUtils {
                 this.mContext = imageView.getContext();
                 Drawable background = imageView.getBackground();
                 if (!(background instanceof ColorDrawable)) return false;
-                int expectedColor =
-                        AppCompatResources.getColorStateList(mContext, colorResId)
-                                .getDefaultColor();
+                int expectedColor = mContext.getColorStateList(colorResId).getDefaultColor();
                 return ((ColorDrawable) background).getColor() == expectedColor;
             }
 
@@ -331,6 +309,31 @@ public class ViewUtils {
                 }
                 Assert.assertTrue("Span index out of bounds", spans.length > spanIndex);
                 spans[spanIndex].onClick(view);
+            }
+        };
+    }
+
+    /**
+     * Creates a {@link ViewAction} that performs an accessibility action on the matched view.
+     *
+     * @param action The accessibility action to perform (e.g. AccessibilityNodeInfo.ACTION_CLICK).
+     * @return A {@link ViewAction} on the matching view.
+     */
+    public static ViewAction performAccessibilityAction(int action) {
+        return new ViewAction() {
+            @Override
+            public Matcher<View> getConstraints() {
+                return isDisplayed();
+            }
+
+            @Override
+            public String getDescription() {
+                return "perform accessibility action " + action;
+            }
+
+            @Override
+            public void perform(UiController uiController, View view) {
+                view.performAccessibilityAction(action, null);
             }
         };
     }

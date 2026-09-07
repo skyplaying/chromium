@@ -206,6 +206,7 @@ consoles.console_view(
     ("fuchsia-builder-perf-arm64", "p/chrome|arm64", "perf-arm"),
     ("fuchsia-fyi-arm64-size", "p/chrome|arm64", "size"),
     ("fuchsia-fyi-astro", "hardware", "ast"),
+    ("fuchsia-fyi-astro-qemu", "hardware", "emu-ast"),
     ("fuchsia-fyi-nelson", "hardware", "nsn"),
     ("fuchsia-fyi-sherlock", "hardware", "sher"),
     ("fuchsia-fyi-sherlock-qemu", "hardware", "emu-sher"),
@@ -216,6 +217,7 @@ consoles.console_view(
     ("fuchsia-perf-nsn", "hardware|perf", "nsn"),
     ("fuchsia-perf-shk", "hardware|perf", "sher"),
     ("fuchsia-webgl-astro", "hardware|webgl", "ast"),
+    ("fuchsia-webgl-astro-qemu", "hardware|webgl", "emu-ast"),
     ("fuchsia-webgl-nelson", "hardware|webgl", "nsn"),
     ("fuchsia-webgl-sherlock", "hardware|webgl", "sher"),
     ("fuchsia-webgl-sherlock-qemu", "hardware|webgl", "emu-sher"),
@@ -252,7 +254,6 @@ exec("./ci/chromium.mac.star")
 exec("./ci/chromium.memory.star")
 exec("./ci/chromium.memory.fyi.star")
 exec("./ci/chromium.prompt_eval.star")
-exec("./ci/chromium.rust.star")
 exec("./ci/chromium.swangle.star")
 exec("./ci/chromium.updater.star")
 exec("./ci/chromium.win.star")

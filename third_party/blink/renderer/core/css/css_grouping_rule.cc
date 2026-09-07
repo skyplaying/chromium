@@ -164,7 +164,7 @@ StyleRuleBase* ParseRuleForInsert(const ExecutionContext* execution_context,
 
   if (!new_rule->IsConditionRule() && !new_rule->IsScopeRule() &&
       !new_rule->IsStyleRule() && !new_rule->IsNestedDeclarationsRule() &&
-      !new_rule->IsApplyMixinRule()) {
+      !new_rule->IsApplyMixinRule() && !new_rule->IsPrivateRule()) {
     for (const CSSRule* current = &parent_rule; current != nullptr;
          current = current->parentRule()) {
       if (IsA<CSSStyleRule>(current)) {
@@ -173,7 +173,8 @@ StyleRuleBase* ParseRuleForInsert(const ExecutionContext* execution_context,
         exception_state.ThrowDOMException(
             DOMExceptionCode::kHierarchyRequestError,
             "Only conditional nested group rules, style rules, @scope rules,"
-            "@apply rules, and nested declaration rules may be nested.");
+            "@apply rules, @private rules, and nested declaration rules may be "
+            "nested.");
         return nullptr;
       }
     }
@@ -362,7 +363,7 @@ CSSRuleList* CSSGroupingRule::cssRules() const {
 
 void CSSGroupingRule::Reattach(StyleRuleBase* rule) {
   DCHECK(rule);
-  group_rule_ = static_cast<StyleRuleGroup*>(rule);
+  group_rule_ = To<StyleRuleGroup>(rule);
   for (unsigned i = 0; i < child_rule_cssom_wrappers_.size(); ++i) {
     if (child_rule_cssom_wrappers_[i]) {
       child_rule_cssom_wrappers_[i]->Reattach(

@@ -66,6 +66,13 @@ class MockOptimizationGuideKeyedService : public OptimizationGuideKeyedService {
        const google::protobuf::MessageLite&,
        const optimization_guide::ModelExecutionOptions&,
        optimization_guide::OptimizationGuideModelExecutionResultCallback));
+  MOCK_METHOD(
+      std::unique_ptr<optimization_guide::RemoteModelExecutionSession>,
+      StartStreamingSession,
+      (optimization_guide::ModelBasedCapabilityKey,
+       const optimization_guide::StreamingModelExecutionOptions&,
+       optimization_guide::OptimizationGuideModelExecutionStreamingCallback),
+      (override));
   MOCK_METHOD(void,
               AddOnDeviceModelAvailabilityChangeObserver,
               (optimization_guide::mojom::OnDeviceFeature feature,
@@ -75,10 +82,6 @@ class MockOptimizationGuideKeyedService : public OptimizationGuideKeyedService {
               RemoveOnDeviceModelAvailabilityChangeObserver,
               (optimization_guide::mojom::OnDeviceFeature feature,
                optimization_guide::OnDeviceModelAvailabilityObserver* observer),
-              (override));
-  MOCK_METHOD(on_device_model::Capabilities,
-              GetOnDeviceCapabilities,
-              (),
               (override));
   MOCK_METHOD(bool,
               ShouldFeatureBeCurrentlyEnabledForUser,
@@ -131,16 +134,6 @@ class MockOptimizationGuideKeyedService : public OptimizationGuideKeyedService {
                const on_device_model::Capabilities&,
                base::OnceCallback<
                    void(optimization_guide::OnDeviceModelEligibilityReason)>),
-              (override));
-
-  MOCK_METHOD(std::optional<optimization_guide::SamplingParamsConfig>,
-              GetSamplingParamsConfig,
-              (optimization_guide::mojom::OnDeviceFeature),
-              (override));
-
-  MOCK_METHOD(std::optional<const optimization_guide::proto::Any>,
-              GetFeatureMetadata,
-              (optimization_guide::mojom::OnDeviceFeature),
               (override));
 };
 

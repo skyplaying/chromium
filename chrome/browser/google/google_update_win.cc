@@ -35,7 +35,6 @@
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "base/version.h"
-#include "base/win/atl.h"
 #include "base/win/scoped_bstr.h"
 #include "base/win/win_util.h"
 #include "chrome/browser/google/google_update_app_command.h"
@@ -47,7 +46,6 @@
 #include "chrome/installer/util/helper.h"
 #include "chrome/installer/util/install_util.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/win/atl_module.h"
 
 namespace {
 
@@ -537,9 +535,6 @@ UpdateCheckResult UpdateCheckDriver::BeginUpdateCheckInternal() {
     }
 
     system_level_install_ = !InstallUtil::IsPerUserInstall();
-
-    // Make sure ATL is initialized in this module.
-    ui::win::CreateATLModuleIfNeeded();
 
     const GoogleUpdateErrorCode error_code =
         CanUpdateCurrentChrome(chrome_exe, system_level_install_);

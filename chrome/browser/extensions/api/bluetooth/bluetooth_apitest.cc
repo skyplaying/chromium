@@ -10,7 +10,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "content/public/test/browser_test.h"
 #include "device/bluetooth/bluetooth_adapter.h"
 #include "device/bluetooth/public/cpp/bluetooth_uuid.h"
@@ -23,6 +23,8 @@
 #include "extensions/test/extension_test_message_listener.h"
 #include "extensions/test/result_catcher.h"
 #include "testing/gmock/include/gmock/gmock.h"
+
+static_assert(BUILDFLAG(IS_CHROMEOS));
 
 using device::BluetoothAdapter;
 using device::BluetoothDevice;
@@ -131,6 +133,14 @@ class BluetoothApiTest : public ExtensionApiTest {
   scoped_refptr<const Extension> empty_extension_;
   bool fail_next_call_ = false;
 };
+
+// The sanity test doesn't use the MockBluetoothAdapter.
+using BluetoothApiSanityTest = ExtensionApiTest;
+
+IN_PROC_BROWSER_TEST_F(BluetoothApiSanityTest, Basics) {
+  ASSERT_TRUE(
+      RunExtensionTest("bluetooth/basics", {.launch_as_platform_app = true}));
+}
 
 IN_PROC_BROWSER_TEST_F(BluetoothApiTest, GetAdapterState) {
   EXPECT_CALL(*mock_adapter_, GetAddress())

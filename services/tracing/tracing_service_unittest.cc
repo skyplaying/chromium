@@ -133,6 +133,7 @@ class TestTracingClient : public mojom::TracingSessionClient {
  public:
   void StartTracing(mojom::TracingService* service,
                     base::OnceClosure on_tracing_enabled) {
+    on_tracing_enabled_callback_ = std::move(on_tracing_enabled);
     service->BindConsumerHost(consumer_host_.BindNewPipeAndPassReceiver());
 
     perfetto::TraceConfig perfetto_config =
@@ -143,11 +144,6 @@ class TestTracingClient : public mojom::TracingSessionClient {
         tracing_session_host_.BindNewPipeAndPassReceiver(),
         receiver_.BindNewPipeAndPassRemote(), std::move(perfetto_config),
         base::File());
-
-    tracing_session_host_->RequestBufferUsage(
-        base::BindOnce([](base::OnceClosure on_response, bool, float,
-                          bool) { std::move(on_response).Run(); },
-                       std::move(on_tracing_enabled)));
   }
 
   void StopTracing(base::OnceClosure on_tracing_stopped) {
@@ -156,12 +152,20 @@ class TestTracingClient : public mojom::TracingSessionClient {
   }
 
   // tracing::mojom::TracingSessionClient implementation:
-  void OnTracingEnabled() override {}
-  void OnTracingDisabled(bool) override {
-    std::move(tracing_disabled_callback_).Run();
+  void OnTracingEnabled() override {
+    if (on_tracing_enabled_callback_) {
+      std::move(on_tracing_enabled_callback_).Run();
+    }
+  }
+
+  void OnTracingDisabled(bool success) override {
+    if (tracing_disabled_callback_) {
+      std::move(tracing_disabled_callback_).Run();
+    }
   }
 
  private:
+  base::OnceClosure on_tracing_enabled_callback_;
   base::OnceClosure tracing_disabled_callback_;
 
   mojo::Remote<mojom::ConsumerHost> consumer_host_;
@@ -388,6 +392,92 @@ TEST_F(TracingServiceTest, PerfettoClientProducer) {
 
   // Read and verify the data.
   EXPECT_EQ(kNumPackets, ReadAndCountTestPackets(*session));
+}
+
+TEST_F(TracingServiceTest, PerfettoClientProducerReconnect) {
+  EnableClientApiConsumer();
+  EnableClientApiProducer();
+
+  perfetto::DataSourceDescriptor dsd;
+  dsd.set_name("com.example.custom_data_source_reconnect");
+  CustomDataSource::Events ds_events;
+  CustomDataSource::set_events(&ds_events);
+  CustomDataSource::Register(dsd);
+
+  // First tracing session.
+  {
+    auto session =
+        perfetto::Tracing::NewTrace(perfetto::BackendType::kCustomBackend);
+    perfetto::TraceConfig perfetto_config;
+    perfetto_config.add_buffers()->set_size_kb(1024);
+    auto* ds_cfg = perfetto_config.add_data_sources()->mutable_config();
+    ds_cfg->set_name("com.example.custom_data_source_reconnect");
+    session->Setup(perfetto_config);
+    session->Start();
+
+    ds_events.wait_for_setup_loop.Run();
+    ds_events.wait_for_start_loop.Run();
+
+    size_t kNumPackets = 10;
+    CustomDataSource::Trace([kNumPackets](CustomDataSource::TraceContext ctx) {
+      for (size_t i = 0; i < kNumPackets; i++) {
+        ctx.NewTracePacket()->set_for_testing()->set_str(
+            tracing::kPerfettoTestString);
+      }
+      ctx.Flush();
+    });
+
+    base::RunLoop wait_for_stop_loop;
+    session->SetOnStopCallback(
+        [&wait_for_stop_loop] { wait_for_stop_loop.Quit(); });
+    session->Stop();
+    ds_events.wait_for_stop_loop.Run();
+    wait_for_stop_loop.Run();
+
+    EXPECT_EQ(kNumPackets, ReadAndCountTestPackets(*session));
+  }
+
+  // Simulate Mojo disconnect by dropping the service's producer endpoints.
+  perfetto_service()->DisconnectAllProducersForTesting();
+
+  // Reconnect the producer.
+  EnableClientApiProducer();
+
+  // Second tracing session after reconnection.
+  {
+    CustomDataSource::Events ds_events_reconnect;
+    CustomDataSource::set_events(&ds_events_reconnect);
+
+    auto session =
+        perfetto::Tracing::NewTrace(perfetto::BackendType::kCustomBackend);
+    perfetto::TraceConfig perfetto_config;
+    perfetto_config.add_buffers()->set_size_kb(1024);
+    auto* ds_cfg = perfetto_config.add_data_sources()->mutable_config();
+    ds_cfg->set_name("com.example.custom_data_source_reconnect");
+    session->Setup(perfetto_config);
+    session->Start();
+
+    ds_events_reconnect.wait_for_setup_loop.Run();
+    ds_events_reconnect.wait_for_start_loop.Run();
+
+    size_t kNumPackets = 10;
+    CustomDataSource::Trace([kNumPackets](CustomDataSource::TraceContext ctx) {
+      for (size_t i = 0; i < kNumPackets; i++) {
+        ctx.NewTracePacket()->set_for_testing()->set_str(
+            tracing::kPerfettoTestString);
+      }
+      ctx.Flush();
+    });
+
+    base::RunLoop wait_for_stop_loop;
+    session->SetOnStopCallback(
+        [&wait_for_stop_loop] { wait_for_stop_loop.Quit(); });
+    session->Stop();
+    ds_events_reconnect.wait_for_stop_loop.Run();
+    wait_for_stop_loop.Run();
+
+    EXPECT_EQ(kNumPackets, ReadAndCountTestPackets(*session));
+  }
 }
 
 #if !BUILDFLAG(IS_WIN)

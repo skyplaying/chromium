@@ -12,10 +12,12 @@
 #include "chrome/browser/sync/test/integration/sync_service_impl_harness.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "components/bookmarks/browser/bookmark_model.h"
+#include "components/browser_sync/browser_sync_switches.h"
 #include "components/password_manager/core/browser/password_form.h"
+#include "components/signin/public/base/signin_switches.h"
 #include "components/sync/base/passphrase_enums.h"
-#include "components/sync/engine/nigori/key_derivation_params.h"
-#include "components/sync/engine/nigori/nigori.h"
+#include "components/sync/model/crypto/key_derivation_params.h"
+#include "components/sync/model/crypto/nigori.h"
 #include "components/sync/nigori/cryptographer_impl.h"
 #include "components/sync/service/sync_service_impl.h"
 #include "components/sync/test/fake_server_nigori_helper.h"
@@ -93,8 +95,10 @@ class SingleClientCustomPassphraseSyncTest
  public:
   SingleClientCustomPassphraseSyncTest() : SyncTest(SINGLE_CLIENT) {
     if (GetSetupSyncMode() == SetupSyncMode::kSyncTransportOnly) {
-      scoped_feature_list_.InitAndEnableFeature(
-          syncer::kReplaceSyncPromosWithSignInPromos);
+      scoped_feature_list_.InitWithFeatures(
+          {syncer::kReplaceSyncPromosWithSignInPromos,
+           switches::kSyncEnableBookmarksInTransportMode},
+          {});
     }
   }
 
@@ -308,39 +312,6 @@ IN_PROC_BROWSER_TEST_P(SingleClientCustomPassphraseSyncTest,
                                               /*passphrase=*/"hunter2"));
 }
 
-// PRE_* tests aren't supported on Android browser tests.
-#if !BUILDFLAG(IS_ANDROID)
-// Populates custom passphrase Nigori without keystore keys to the client.
-IN_PROC_BROWSER_TEST_P(SingleClientCustomPassphraseSyncTest,
-                       PRE_CanDecryptWithKeystoreKeys) {
-  const KeyParamsForTesting key_params =
-      Pbkdf2PassphraseKeyParamsForTesting("hunter2");
-  SetNigoriInFakeServer(BuildCustomPassphraseNigoriSpecifics(key_params),
-                        GetFakeServer());
-  ASSERT_TRUE(SetupSync(WAIT_FOR_SYNC_SETUP_TO_COMPLETE));
-  ASSERT_TRUE(GetSyncService()->GetUserSettings()->SetDecryptionPassphrase(
-      key_params.password));
-  ASSERT_TRUE(WaitForPassphraseAccepted());
-}
-
-// Client should be able to decrypt with keystore keys, regardless whether they
-// were stored in NigoriSpecifics. It's not a normal state, when the server
-// stores some data encrypted with keystore keys, but client is able to
-// reencrypt the data and recover from this state.
-IN_PROC_BROWSER_TEST_P(SingleClientCustomPassphraseSyncTest,
-                       CanDecryptWithKeystoreKeys) {
-  const password_manager::PasswordForm password_form =
-      passwords_helper::CreateTestPasswordForm(0, GetPasswordsStoreType());
-  passwords_helper::InjectKeystoreEncryptedServerPassword(password_form,
-                                                          GetFakeServer());
-  ASSERT_TRUE(SetupClients());
-  EXPECT_TRUE(PasswordFormsChecker(/*index=*/0,
-                                   /*expected_forms=*/{password_form},
-                                   GetPasswordsStoreType())
-                  .Wait());
-}
-#endif  // !BUILDFLAG(IS_ANDROID)
-
 IN_PROC_BROWSER_TEST_P(SingleClientCustomPassphraseSyncTest,
                        DoesNotLeakUnencryptedData) {
   const std::u16string title = u"Should be encrypted";
@@ -360,13 +331,11 @@ IN_PROC_BROWSER_TEST_P(SingleClientCustomPassphraseSyncTest,
             [](syncer::SyncUserSettings* user_settings) {
               user_settings->SetEncryptionPassphrase("hunter2");
 #if !BUILDFLAG(IS_CHROMEOS)
-              user_settings->SetInitialSyncFeatureSetupComplete(
-                  syncer::SyncFirstSetupCompleteSource::ADVANCED_FLOW_CONFIRM);
+              user_settings->SetInitialSyncFeatureSetupComplete();
 #endif  // !BUILDFLAG(IS_CHROMEOS)
             })));
   } else {
-    ASSERT_TRUE(GetClient(0)->SignInPrimaryAccount());
-    ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
+    ASSERT_TRUE(SignIn());
     GetSyncService()->GetUserSettings()->SetEncryptionPassphrase("hunter2");
   }
 
@@ -439,7 +408,7 @@ IN_PROC_BROWSER_TEST_P(
 }
 
 // Similar to the above, but passphrase is obtained by
-// SetEncryptionPassphrase(). Regression test for crbug.com/1298062.
+// SetEncryptionPassphrase(). Regression test for crbug.com/40822722.
 IN_PROC_BROWSER_TEST_P(
     SingleClientCustomPassphraseSyncTest,
     ShouldRestorePassphraseOnClientDataObsoleteResponseWhenPassphraseSetByEncryption) {

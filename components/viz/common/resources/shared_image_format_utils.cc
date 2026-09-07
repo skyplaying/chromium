@@ -15,6 +15,10 @@
 #include "components/viz/common/resources/shared_image_format.h"
 #include "third_party/skia/include/core/SkColorType.h"
 
+#if BUILDFLAG(IS_MAC)
+#include <CoreVideo/CVPixelBuffer.h>
+#endif  // BUILDFLAG(IS_MAC)
+
 namespace viz {
 namespace {
 

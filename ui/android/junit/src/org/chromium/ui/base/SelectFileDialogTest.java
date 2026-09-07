@@ -15,35 +15,33 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.when;
-import static org.robolectric.Shadows.shadowOf;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.ClipData;
 import android.content.ContentResolver;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
-import android.os.Looper;
 import android.provider.DocumentsContract;
 import android.provider.MediaStore;
 import android.webkit.MimeTypeMap;
 
 import androidx.core.content.ContextCompat;
 
-import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentMatcher;
 import org.mockito.ArgumentMatchers;
 import org.mockito.Mock;
 import org.mockito.Mockito;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.Shadows;
-import org.robolectric.android.util.concurrent.PausedExecutorService;
 import org.robolectric.annotation.Config;
-import org.robolectric.annotation.LooperMode;
 import org.robolectric.shadows.ShadowMimeTypeMap;
 
 import org.chromium.base.ContextUtils;
@@ -52,8 +50,8 @@ import org.chromium.base.FileProviderUtils;
 import org.chromium.base.FileUtils;
 import org.chromium.base.FileUtilsJni;
 import org.chromium.base.task.AsyncTask;
-import org.chromium.base.task.PostTask;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
@@ -71,34 +69,20 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Tests logic in the SelectFileDialog class. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 @DisableFeatures({
     UiAndroidFeatures.DEPRECATED_EXTERNAL_PICKER_FUNCTION,
-    UiAndroidFeatures.SELECT_FILE_OPEN_DOCUMENT
 })
 @EnableFeatures({UiAndroidFeatures.DISABLE_PHOTO_PICKER_FOR_VIDEO_CAPTURE})
-@LooperMode(LooperMode.Mode.PAUSED)
 public class SelectFileDialogTest {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
+
     // A callback that fires when the file selection pipeline shuts down as a result of an action.
     public final CallbackHelper mOnActionCallback = new CallbackHelper();
 
-    // The Executor to run tasks on during the test.
-    private final PausedExecutorService mExecutor = new PausedExecutorService();
-
     @Mock FileUtils.Natives mFileUtilsMocks;
 
-    @Before
-    public void setUp() throws Exception {
-        MockitoAnnotations.initMocks(this);
-        PostTask.setPrenativeThreadPoolExecutorForTesting(mExecutor);
-    }
-
     private void runAllAsyncTasks() {
-        // Run AsyncTasks
-        mExecutor.runAll();
-
-        // Wait for onPostExecute() of the AsyncTasks to run on the UI Thread.
-        shadowOf(Looper.getMainLooper()).idle();
+        RobolectricUtil.runAllBackgroundAndUi();
     }
 
     /** Argument matcher that matches Intents with the same action. */
@@ -346,19 +330,70 @@ public class SelectFileDialogTest {
     }
 
     @Test
-    @EnableFeatures({UiAndroidFeatures.SELECT_FILE_OPEN_DOCUMENT})
     public void testFileSystemAccessOpenDocument() throws Exception {
         verifyFileSystemAccessIntent(Intent.ACTION_OPEN_DOCUMENT);
     }
 
     @Test
-    @EnableFeatures({UiAndroidFeatures.SELECT_FILE_OPEN_DOCUMENT})
     public void testFileSystemAccessCreateDocument() throws Exception {
         verifyFileSystemAccessIntent(Intent.ACTION_CREATE_DOCUMENT);
     }
 
+    private void verifyCreateDocumentIntent(
+            String[] fileTypes,
+            String suggestedName,
+            String expectedMimeType,
+            String expectedTitle) {
+        TestSelectFileDialog selectFileDialog = new TestSelectFileDialog(0);
+        WindowAndroid windowAndroid = Mockito.mock(WindowAndroid.class);
+
+        IntentArgumentMatcher intentArgumentMatcher =
+                new IntentArgumentMatcher(Intent.ACTION_CREATE_DOCUMENT);
+        Mockito.doAnswer(
+                        (invocation) -> {
+                            Intent intent = (Intent) invocation.getArguments()[0];
+                            assertEquals(expectedMimeType, intent.getType());
+                            assertEquals(expectedTitle, intent.getExtra(Intent.EXTRA_TITLE));
+                            assertTrue(intent.hasCategory(Intent.CATEGORY_OPENABLE));
+                            return true;
+                        })
+                .when(windowAndroid)
+                .showIntent(
+                        ArgumentMatchers.argThat(intentArgumentMatcher),
+                        (WindowAndroid.IntentCallback) any(),
+                        anyInt());
+
+        selectFileDialog.selectFile(
+                Intent.ACTION_CREATE_DOCUMENT,
+                fileTypes,
+                /* capture= */ false,
+                /* multiple= */ false,
+                /* defaultDirectory= */ null,
+                suggestedName,
+                windowAndroid);
+    }
+
     @Test
-    @EnableFeatures({UiAndroidFeatures.SELECT_FILE_OPEN_DOCUMENT})
+    public void testCreateDocumentInfersMimeTypeFromSuggestedName() throws Exception {
+        ShadowMimeTypeMap shadowMimeTypeMap = Shadows.shadowOf(MimeTypeMap.getSingleton());
+        shadowMimeTypeMap.addExtensionMimeTypeMapping("webp", "image/webp");
+        shadowMimeTypeMap.addExtensionMimeTypeMapping("gz", "application/gzip");
+
+        verifyCreateDocumentIntent(new String[] {}, "images.webp", "image/webp", "images.webp");
+        verifyCreateDocumentIntent(new String[] {}, "my photo.webp", "image/webp", "my photo.webp");
+        verifyCreateDocumentIntent(
+                new String[] {}, "archive.tar.gz", "application/gzip", "archive.tar.gz");
+        verifyCreateDocumentIntent(
+                new String[] {".tar.gz"}, "archive.tar.gz", "application/gzip", "archive.tar.gz");
+        verifyCreateDocumentIntent(
+                new String[] {},
+                "archive.this_is_not_a_real_extension",
+                "application/octet-stream",
+                "archive.this_is_not_a_real_extension");
+        verifyCreateDocumentIntent(new String[] {}, "Makefile", "*/*", "Makefile");
+    }
+
+    @Test
     public void testFileSystemAccessOpenDocumentTree() throws Exception {
         verifyFileSystemAccessIntent(Intent.ACTION_OPEN_DOCUMENT_TREE);
     }
@@ -918,10 +953,12 @@ public class SelectFileDialogTest {
         shadowMimeTypeMap.addExtensionMimeTypeMapping("gif", "image/gif");
         shadowMimeTypeMap.addExtensionMimeTypeMapping("txt", "text/plain");
         shadowMimeTypeMap.addExtensionMimeTypeMapping("mpg", "video/mpeg");
+        shadowMimeTypeMap.addExtensionMimeTypeMapping("gz", "application/gzip");
 
         assertEquals("", SelectFileDialog.ensureMimeType(""));
         assertEquals("image/jpeg", SelectFileDialog.ensureMimeType(".jpg"));
         assertEquals("image/jpeg", SelectFileDialog.ensureMimeType("image/jpeg"));
+        assertEquals("application/gzip", SelectFileDialog.ensureMimeType(".tar.gz"));
         // Unknown extension, expect default response:
         assertEquals(
                 "application/octet-stream",
@@ -973,6 +1010,83 @@ public class SelectFileDialogTest {
         task.doInBackground();
         assertEquals("///storage/emulated/0/DCIM/Camera/IMG_0.jpg", task.mFilePaths[0].toString());
         assertEquals("///storage/emulated/0/DCIM/Camera/IMG_1.jpg", task.mFilePaths[1].toString());
+    }
+
+    @Test
+    public void testMultipleFileSelectorWithCaseVariantFileUris() {
+        SelectFileDialog selectFileDialog = new SelectFileDialog(0);
+        Uri[] filePathArray =
+                new Uri[] {
+                    Uri.parse("FILE:///storage/emulated/0/DCIM/Camera/IMG_0.jpg"),
+                    Uri.parse("File:///storage/emulated/0/DCIM/Camera/IMG_1.jpg")
+                };
+        SelectFileDialog.GetDisplayNameTask task =
+                selectFileDialog
+                .new GetDisplayNameTask(ContextUtils.getApplicationContext(), true, filePathArray);
+        task.doInBackground();
+        assertEquals("///storage/emulated/0/DCIM/Camera/IMG_0.jpg", task.mFilePaths[0].toString());
+        assertEquals("///storage/emulated/0/DCIM/Camera/IMG_1.jpg", task.mFilePaths[1].toString());
+    }
+
+    @Test
+    public void testMultipleFileSelectorWithCaseVariantAppDirUris() {
+        SelectFileDialog selectFileDialog = new SelectFileDialog(0);
+        File dataDir = ContextCompat.getDataDir(ContextUtils.getApplicationContext());
+        File appFile = new File(dataDir, "app_data.txt");
+        Uri[] filePathArray = new Uri[] {Uri.parse("FILE://" + appFile.getAbsolutePath())};
+        SelectFileDialog.GetDisplayNameTask task =
+                selectFileDialog
+                .new GetDisplayNameTask(ContextUtils.getApplicationContext(), true, filePathArray);
+        assertEquals(null, task.doInBackground());
+    }
+
+    @Test
+    @DisableFeatures({UiAndroidFeatures.CHECK_INTENT_CALLER_PERMISSION})
+    public void testIntentCompletedWithCaseVariantClipDataUri() {
+        TestSelectFileDialog selectFileDialog = new TestSelectFileDialog(0);
+        ClipData clipData =
+                ClipData.newUri(
+                        ContextUtils.getApplicationContext().getContentResolver(),
+                        "label",
+                        Uri.parse("FILE:///storage/emulated/0/DCIM/Camera/IMG_0.jpg"));
+        Intent intent = new Intent(Intent.ACTION_VIEW);
+        intent.setClipData(clipData);
+        selectFileDialog.onIntentCompleted(Activity.RESULT_OK, intent);
+        runAllAsyncTasks();
+        assertEquals(1, selectFileDialog.mFileSelectionSuccess);
+        assertEquals(0, selectFileDialog.mFileSelectionAborted);
+    }
+
+    @Test
+    @DisableFeatures({UiAndroidFeatures.CHECK_INTENT_CALLER_PERMISSION})
+    public void testIntentCompletedWithCaseVariantDataUri() {
+        TestSelectFileDialog selectFileDialog = new TestSelectFileDialog(0);
+        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse("CONTENT://com.example.test/xyz"));
+        selectFileDialog.onIntentCompleted(Activity.RESULT_OK, intent);
+        runAllAsyncTasks();
+        assertEquals(1, selectFileDialog.mFileSelectionSuccess);
+        assertEquals(0, selectFileDialog.mFileSelectionAborted);
+    }
+
+    @Test
+    public void testMultipleFileSelectorWithSchemelessUris() {
+        SelectFileDialog selectFileDialog = new SelectFileDialog(0);
+        Uri[] filePathArray =
+                new Uri[] {Uri.parse("/data/data/com.android.chrome/app_chrome/Default/Cookies")};
+        SelectFileDialog.GetDisplayNameTask task =
+                selectFileDialog
+                .new GetDisplayNameTask(ContextUtils.getApplicationContext(), true, filePathArray);
+        assertEquals(null, task.doInBackground());
+    }
+
+    @Test
+    public void testMultipleFileSelectorWithInvalidSchemeUris() {
+        SelectFileDialog selectFileDialog = new SelectFileDialog(0);
+        Uri[] filePathArray = new Uri[] {Uri.parse("http://example.com/test.jpg")};
+        SelectFileDialog.GetDisplayNameTask task =
+                selectFileDialog
+                .new GetDisplayNameTask(ContextUtils.getApplicationContext(), true, filePathArray);
+        assertEquals(null, task.doInBackground());
     }
 
     private void testFilePath(
@@ -1211,6 +1325,11 @@ public class SelectFileDialogTest {
         assertEquals(
                 SelectFileDialog.convertToSupportedMimeTypes(Arrays.asList("image/gif", ".", "")),
                 Arrays.asList("image/gif"));
+
+        // Compound extension (.tar.gz) resolves to application/gzip.
+        assertEquals(
+                SelectFileDialog.convertToSupportedMimeTypes(Arrays.asList(".tar.gz")),
+                Arrays.asList("application/gzip"));
     }
 
     ContentResolver getMockContentResolver(String mimeType) {
@@ -1411,7 +1530,7 @@ public class SelectFileDialogTest {
                                     : ContextUtils.getApplicationContext().getContentResolver(),
                             filesSelected,
                             useMediaPicker);
-            task.executeOnExecutor(mExecutor);
+            task.executeOnExecutor(RobolectricUtil.getPausedExecutor());
             runAllAsyncTasks();
             histogramWatcher.assertExpected(
                     "File: "
@@ -1553,6 +1672,59 @@ public class SelectFileDialogTest {
                 /* defaultDirectory= */ null,
                 /* suggestedName= */ null,
                 windowAndroid);
+
+        runAllAsyncTasks();
+    }
+
+    @Test
+    public void testExternalPickerMediaMimeTypeDesktopDoesNotUsePhotoPicker() throws Exception {
+        DeviceInfo.setIsDesktopForTesting(true);
+        assertTrue(DeviceInfo.isDesktop());
+
+        TestSelectFileDialog selectFileDialog = new TestSelectFileDialog(0);
+        WindowAndroid windowAndroid = Mockito.mock(WindowAndroid.class);
+
+        // Mock camera intent resolution.
+        IntentArgumentMatcher imageCaptureIntentArgumentMatcher =
+                new IntentArgumentMatcher(MediaStore.ACTION_IMAGE_CAPTURE);
+        when(windowAndroid.canResolveActivity(
+                        ArgumentMatchers.argThat(imageCaptureIntentArgumentMatcher)))
+                .thenReturn(true);
+
+        // Setup WindowAndroid#showIntent to succeed and validate the chooser intent.
+        IntentArgumentMatcher chooserIntentArgumentMatcher =
+                new IntentArgumentMatcher(Intent.ACTION_CHOOSER);
+        Mockito.doAnswer(
+                        (invocation) -> {
+                            Intent chooserIntent = (Intent) invocation.getArguments()[0];
+                            Intent getContentIntent =
+                                    (Intent) chooserIntent.getExtra(Intent.EXTRA_INTENT);
+                            assertEquals("*/*", getContentIntent.getType());
+                            String[] mimeTypes =
+                                    (String[]) getContentIntent.getExtra(Intent.EXTRA_MIME_TYPES);
+                            assertArrayEquals(
+                                    new String[] {"image/*", "type/nonexistent"}, mimeTypes);
+                            // On desktop, EXTRA_INITIAL_INTENTS should be null or empty.
+                            assertFalse(chooserIntent.hasExtra(Intent.EXTRA_INITIAL_INTENTS));
+                            return true;
+                        })
+                .when(windowAndroid)
+                .showIntent(
+                        ArgumentMatchers.argThat(chooserIntentArgumentMatcher),
+                        (WindowAndroid.IntentCallback) any(),
+                        anyInt());
+
+        selectFileDialog.selectFile(
+                Intent.ACTION_GET_CONTENT,
+                new String[] {"image/*"},
+                /* capture= */ false,
+                /* multiple= */ false,
+                /* defaultDirectory= */ null,
+                /* suggestedName= */ null,
+                windowAndroid);
+
+        // On desktop, redundant camera/audio permissions should not be requested.
+        Mockito.verify(windowAndroid, Mockito.never()).requestPermissions(any(), any());
 
         runAllAsyncTasks();
     }

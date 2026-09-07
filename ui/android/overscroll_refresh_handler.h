@@ -18,6 +18,9 @@ class UI_ANDROID_EXPORT OverscrollRefreshHandler {
   explicit OverscrollRefreshHandler(
       const base::android::JavaRef<jobject>& j_overscroll_refresh_handler);
 
+  OverscrollRefreshHandler(const OverscrollRefreshHandler&) = delete;
+  OverscrollRefreshHandler& operator=(const OverscrollRefreshHandler&) = delete;
+
   // Note: the following methods are virtual because this class is overridden
   // for testing in overscroll_refresh_unittest.cc
 
@@ -33,9 +36,9 @@ class UI_ANDROID_EXPORT OverscrollRefreshHandler {
   // Signals a pull update, where |x_delta| and |y_delta| are in device pixels.
   virtual void PullUpdate(float x_delta, float y_delta);
 
-  // Signals the release of the pull, and whether the release is allowed to
-  // trigger the refresh action.
-  virtual void PullRelease(bool allow_refresh);
+  // Signals the release of the pull, and whether the release is allowed to or
+  // force to trigger the refresh action.
+  virtual void PullRelease(OverscrollActivationStatus status);
 
   // Reset the active pull state.
   virtual void PullReset();
@@ -44,11 +47,7 @@ class UI_ANDROID_EXPORT OverscrollRefreshHandler {
   base::android::ScopedJavaLocalRef<jobject> GetRefreshHandlerChecked(
       JNIEnv* env) const;
 
-  // Weak reference to the Java object. The only implementation is
-  // SwipeRefreshHandler which strongly referenced by UserData on the
-  // corresponding WebContents so a weak reference is safe. This is used instead
-  // of a ScopedJavaGlobalRef to avoid an entry per tab in the global ref table.
-  JavaObjectWeakGlobalRef j_overscroll_refresh_handler_;
+  bool has_handler_ = false;
 };
 
 }  // namespace ui

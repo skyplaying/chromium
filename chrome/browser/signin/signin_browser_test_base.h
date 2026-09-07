@@ -16,7 +16,7 @@
 #include "chrome/browser/signin/chrome_signin_client_factory.h"
 #include "chrome/browser/signin/chrome_signin_client_test_util.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
@@ -62,7 +62,7 @@ class SigninBrowserTestBaseT : public T {
   }
 
   // Returns the profile attached to the `signin::IdentityTestEnvironment`. This
-  // may not be the same as `browser()->profile()`.
+  // may not be the same as `browser()->GetProfile()`.
   Profile* GetProfile() const { return profile_; }
 
   signin::IdentityTestEnvironment* identity_test_env() const {
@@ -85,7 +85,7 @@ class SigninBrowserTestBaseT : public T {
     ProfileManager* profile_manager = g_browser_process->profile_manager();
     base::FilePath profile_path =
         profile_manager->GenerateNextProfileDirectoryPath();
-    profile_ = use_main_profile_ ? this->browser()->profile()
+    profile_ = use_main_profile_ ? this->browser()->GetProfile()
                                  : &profiles::testing::CreateProfileSync(
                                        profile_manager, profile_path);
 

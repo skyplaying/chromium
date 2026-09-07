@@ -16,15 +16,16 @@
 #include "base/task/thread_pool.h"
 #include "base/test/bind.h"
 #include "base/test/gmock_expected_support.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/test/with_feature_override.h"
 #include "base/trace_event/memory_allocator_dump_guid.h"
 #include "base/uuid.h"
 #include "components/services/storage/dom_storage/async_dom_storage_database.h"
+#include "components/services/storage/dom_storage/db_status.h"
 #include "components/services/storage/dom_storage/dom_storage_database.h"
 #include "components/services/storage/dom_storage/features.h"
 #include "components/services/storage/dom_storage/test_support/dom_storage_database_testing.h"
-#include "storage/common/database/db_status.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
@@ -41,13 +42,23 @@ class SessionStorageMetadataTest : public base::test::WithFeatureOverride,
  public:
   SessionStorageMetadataTest()
       : base::test::WithFeatureOverride(kDomStorageSqlite) {
+    // Match the state of `kDomStorageSqliteInMemory` to the top level
+    // kDomStorageSqlite. That way in-memory databases will use the backend
+    // expected by the param state.
+    if (GetParam()) {
+      feature_list_.InitAndEnableFeature(kDomStorageSqliteInMemory);
+    } else {
+      feature_list_.InitAndDisableFeature(kDomStorageSqliteInMemory);
+    }
     // Create an in-memory database.
     base::RunLoop loop;
     database_ = AsyncDomStorageDatabase::Open(
         StorageType::kSessionStorage,
         /*database_path=*/base::FilePath(),
         /*memory_dump_id=*/std::nullopt,
-        base::BindLambdaForTesting([&](DbStatus) { loop.Quit(); }));
+        /*dir_to_destroy=*/base::FilePath(),
+        base::BindLambdaForTesting(
+            [&](AsyncDomStorageDatabase::OpenOutcome) { loop.Quit(); }));
     loop.Run();
   }
 
@@ -69,7 +80,6 @@ class SessionStorageMetadataTest : public base::test::WithFeatureOverride,
     metadata.map_metadata.push_back({map1_locator_.Clone()});
     metadata.map_metadata.push_back({map3_locator_.Clone()});
     metadata.map_metadata.push_back({map4_locator_.Clone()});
-    metadata.next_map_id = 5;
 
     ASSERT_NO_FATAL_FAILURE(PutMetadataSync(*database_, std::move(metadata)));
 
@@ -95,6 +105,7 @@ class SessionStorageMetadataTest : public base::test::WithFeatureOverride,
   }
 
  protected:
+  base::test::ScopedFeatureList feature_list_;
   base::test::TaskEnvironment task_environment_;
 
   const DomStorageDatabase::Key kKey1 = StdStringToUint8Vector("key1");
@@ -192,8 +203,6 @@ TEST_P(SessionStorageMetadataTest, ShallowCopies) {
   // 1 and map 3.
   DomStorageDatabase::Metadata all_metadata;
   ASSERT_NO_FATAL_FAILURE(ReadAllMetadataSync(*database_, &all_metadata));
-
-  EXPECT_EQ(all_metadata.next_map_id, 5);
   ASSERT_EQ(all_metadata.map_metadata.size(), 3u);
 
   DomStorageDatabase::MapMetadata expected_metadata[] = {
@@ -236,8 +245,6 @@ TEST_P(SessionStorageMetadataTest, TakeNamespace) {
   // Verify metadata and data was deleted from disk.
   DomStorageDatabase::Metadata all_metadata;
   ASSERT_NO_FATAL_FAILURE(ReadAllMetadataSync(*database_, &all_metadata));
-
-  EXPECT_EQ(all_metadata.next_map_id, 5);
   ASSERT_EQ(all_metadata.map_metadata.size(), 2u);
 
   // Two maps must remain in the database each used by session
@@ -279,8 +286,6 @@ TEST_P(SessionStorageMetadataTest, DeleteArea) {
   // Verify only the applicable data was deleted.
   DomStorageDatabase::Metadata all_metadata;
   ASSERT_NO_FATAL_FAILURE(ReadAllMetadataSync(*database_, &all_metadata));
-
-  EXPECT_EQ(all_metadata.next_map_id, 5);
   ASSERT_EQ(all_metadata.map_metadata.size(), 3u);
 
   // Three maps must remain in the database.  `test_namespace1_id_` and
@@ -318,8 +323,6 @@ TEST_P(SessionStorageMetadataTest, DeleteArea) {
   // Verify only the applicable data was deleted, which must delete map 4 from
   // the database.
   ASSERT_NO_FATAL_FAILURE(ReadAllMetadataSync(*database_, &all_metadata));
-
-  EXPECT_EQ(all_metadata.next_map_id, 5);
   ASSERT_EQ(all_metadata.map_metadata.size(), 2u);
 
   ExpectEqualsMapMetadataSpan(all_metadata.map_metadata,
@@ -332,8 +335,6 @@ TEST_P(SessionStorageMetadataTest, DeleteArea) {
 
 TEST_P(SessionStorageMetadataTest, InitializesNamespacesEmpty) {
   DomStorageDatabase::Metadata source;
-  source.next_map_id = 0;
-
   SessionStorageMetadata metadata;
   metadata.Initialize(std::move(source));
   EXPECT_EQ(metadata.namespace_storage_key_map().size(), 0u);
@@ -345,8 +346,6 @@ TEST_P(SessionStorageMetadataTest, InitializeNamespaces) {
       .map_locator{test_namespace3_id_, test_storage_key1_, /*map_id=*/1},
       .last_accessed{base::Time::Now()},
   });
-  source.next_map_id = 2;
-
   SessionStorageMetadata metadata;
   metadata.Initialize(std::move(source));
 

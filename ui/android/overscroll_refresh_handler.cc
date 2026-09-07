@@ -20,11 +20,22 @@ using base::android::ScopedJavaLocalRef;
 namespace ui {
 
 OverscrollRefreshHandler::OverscrollRefreshHandler(
-    const JavaRef<jobject>& j_overscroll_refresh_handler)
-    : j_overscroll_refresh_handler_(AttachCurrentThread(),
-                                    j_overscroll_refresh_handler) {}
+    const JavaRef<jobject>& j_overscroll_refresh_handler) {
+  if (j_overscroll_refresh_handler) {
+    has_handler_ = true;
+    auto* env = AttachCurrentThread();
+    Java_OverscrollRefreshHandler_setRef(env, reinterpret_cast<intptr_t>(this),
+                                         j_overscroll_refresh_handler);
+  }
+}
 
-OverscrollRefreshHandler::~OverscrollRefreshHandler() {}
+OverscrollRefreshHandler::~OverscrollRefreshHandler() {
+  if (has_handler_) {
+    auto* env = AttachCurrentThread();
+    Java_OverscrollRefreshHandler_removeRef(env,
+                                            reinterpret_cast<intptr_t>(this));
+  }
+}
 
 bool OverscrollRefreshHandler::PullStart(
     OverscrollAction type,
@@ -44,10 +55,10 @@ void OverscrollRefreshHandler::PullUpdate(float x_delta, float y_delta) {
                                      x_delta, y_delta);
 }
 
-void OverscrollRefreshHandler::PullRelease(bool allow_refresh) {
+void OverscrollRefreshHandler::PullRelease(OverscrollActivationStatus status) {
   auto* env = AttachCurrentThread();
   Java_OverscrollRefreshHandler_release(env, GetRefreshHandlerChecked(env),
-                                        allow_refresh);
+                                        std::to_underlying(status));
 }
 
 void OverscrollRefreshHandler::PullReset() {
@@ -57,7 +68,8 @@ void OverscrollRefreshHandler::PullReset() {
 
 ScopedJavaLocalRef<jobject> OverscrollRefreshHandler::GetRefreshHandlerChecked(
     JNIEnv* env) const {
-  auto refresh_handler = j_overscroll_refresh_handler_.get(env);
+  auto refresh_handler = Java_OverscrollRefreshHandler_getRef(
+      env, reinterpret_cast<intptr_t>(this));
   DCHECK(!refresh_handler.is_null());
   return refresh_handler;
 }

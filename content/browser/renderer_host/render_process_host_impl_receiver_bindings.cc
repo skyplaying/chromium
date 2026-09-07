@@ -13,6 +13,7 @@
 #include "components/metrics/single_sample_metrics.h"
 #include "components/viz/host/gpu_client.h"
 #include "content/browser/blob_storage/blob_registry_wrapper.h"
+#include "content/browser/blob_storage/chrome_blob_storage_context.h"
 #include "content/browser/compositor/surface_utils.h"
 #include "content/browser/field_trial_recorder.h"
 #include "content/browser/file_system/file_system_manager_impl.h"
@@ -78,7 +79,7 @@
 #include "content/public/common/font_cache_win.mojom.h"
 #endif
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #include "components/services/font_data/font_data_service_impl.h"
 #endif
 
@@ -219,18 +220,23 @@ void RenderProcessHostImpl::RegisterMojoInterfaces() {
       hyphenation::HyphenationImpl::GetTaskRunner());
 #endif
 #if BUILDFLAG(IS_ANDROID)
-  if (base::FeatureList::IsEnabled(features::kFontSrcLocalMatching)) {
-    registry->AddInterface(
-        base::BindRepeating(&FontUniqueNameLookupService::Create),
-        FontUniqueNameLookupService::GetTaskRunner());
-  }
-#endif
-
-#if BUILDFLAG(IS_WIN)
   registry->AddInterface(
-      base::BindRepeating(&DWriteFontProxyImpl::Create),
-      base::ThreadPool::CreateSequencedTaskRunner(
-          {base::TaskPriority::USER_BLOCKING, base::MayBlock()}));
+      base::BindRepeating(&FontUniqueNameLookupService::Create),
+      FontUniqueNameLookupService::GetTaskRunner());
+#endif
+#if BUILDFLAG(IS_WIN)
+  if (!base::FeatureList::IsEnabled(
+          features::kFontDataServiceForCSSLocalFonts)) {
+    // DWriteFontProxy is superseded by FontDataService.
+    registry->AddInterface(
+        base::BindRepeating(&DWriteFontProxyImpl::Create),
+        base::ThreadPool::CreateSequencedTaskRunner(
+            {base::TaskPriority::USER_BLOCKING, base::MayBlock()}));
+  } else {
+    // If we don't initialize DWriteFontProxy, we should have FontDataService
+    // enabled.
+    CHECK(features::IsFontDataServiceEnabled());
+  }
 #endif
 
   file_system_manager_impl_.reset(new FileSystemManagerImpl(
@@ -275,9 +281,9 @@ void RenderProcessHostImpl::RegisterMojoInterfaces() {
   associated_registry->AddInterface<mojom::RendererHost>(base::BindRepeating(
       &RenderProcessHostImpl::CreateRendererHost, base::Unretained(this)));
 
-  registry->AddInterface(base::BindRepeating(
-      &BlobRegistryWrapper::Bind, storage_partition_impl_->GetBlobRegistry(),
-      GetDeprecatedID()));
+  registry->AddInterface(
+      base::BindRepeating(&BlobRegistryWrapper::Bind,
+                          storage_partition_impl_->GetBlobRegistry(), GetID()));
 
 #if BUILDFLAG(ENABLE_PLUGINS)
   // Initialization can happen more than once (in the case of a child process
@@ -329,7 +335,7 @@ void RenderProcessHostImpl::RegisterMojoInterfaces() {
   GetContentClient()->browser()->ExposeInterfacesToRenderer(
       registry.get(), associated_interfaces_.get(), this);
 
-  DCHECK(child_host_pending_receiver_);
+  CHECK(child_host_pending_receiver_, base::NotFatalUntil::M154);
   io_thread_host_impl_.emplace(
       GetIOThreadTaskRunner({}), GetID(), instance_weak_factory_.GetWeakPtr(),
       std::move(registry), std::move(child_host_pending_receiver_));
@@ -345,7 +351,7 @@ void RenderProcessHostImpl::IOThreadHostImpl::BindHostReceiver(
     }
   }
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
   if (features::IsFontDataServiceEnabled()) {
     if (auto font_data_receiver =
             receiver.As<font_data_service::mojom::FontDataService>()) {
@@ -444,6 +450,16 @@ void RenderProcessHostImpl::IOThreadHostImpl::BindHostReceiver(
   GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE, base::BindOnce(&IOThreadHostImpl::BindHostReceiverOnUIThread,
                                 weak_host_, std::move(receiver)));
+}
+
+void RenderProcessHostImpl::IOThreadHostImpl::BindHostReceivers(
+    std::vector<mojo::GenericPendingReceiver> receivers) {
+  // Bind each receiver through the same per-item path, preserving the
+  // interceptor, interface filtering, BinderRegistry, and UI-thread
+  // fallthrough.
+  for (auto& receiver : receivers) {
+    BindHostReceiver(std::move(receiver));
+  }
 }
 
 // static

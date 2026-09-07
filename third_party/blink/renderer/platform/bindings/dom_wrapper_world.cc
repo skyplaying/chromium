@@ -108,6 +108,24 @@ DOMWrapperWorld* DOMWrapperWorld::EnsureIsolatedWorld(v8::Isolate* isolate,
       /*is_default_world_of_isolate=*/false);
 }
 
+DOMWrapperWorld* DOMWrapperWorld::EnsureInspectorIsolatedWorldWithName(
+    v8::Isolate* isolate,
+    const String& name) {
+  for (DOMWrapperWorld* world : GetWorldMap().Values()) {
+    if (world->GetWorldType() == WorldType::kInspectorIsolated &&
+        world->NonMainWorldHumanReadableName() == name) {
+      return world;
+    }
+  }
+  DOMWrapperWorld* world = DOMWrapperWorld::Create(
+      isolate, DOMWrapperWorld::WorldType::kInspectorIsolated);
+  if (world && !name.empty()) {
+    DOMWrapperWorld::SetNonMainWorldHumanReadableName(world->GetWorldId(),
+                                                      name);
+  }
+  return world;
+}
+
 DOMWrapperWorld::DOMWrapperWorld(PassKey,
                                  v8::Isolate* isolate,
                                  WorldType world_type,
@@ -125,7 +143,6 @@ DOMWrapperWorld::DOMWrapperWorld(PassKey,
       break;
     case WorldType::kIsolated:
     case WorldType::kInspectorIsolated:
-    case WorldType::kRegExp:
     case WorldType::kForV8ContextSnapshotNonMain:
     case WorldType::kWorkerOrWorklet:
     case WorldType::kShadowRealm: {
@@ -276,7 +293,6 @@ std::optional<int> DOMWrapperWorld::GenerateWorldIdForType(
       }
       return next_devtools_isolated_world_id++;
     }
-    case WorldType::kRegExp:
     case WorldType::kForV8ContextSnapshotNonMain:
     case WorldType::kWorkerOrWorklet:
     case WorldType::kShadowRealm: {

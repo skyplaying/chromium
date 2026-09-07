@@ -4,21 +4,21 @@
 
 #include "chrome/browser/ui/ash/desks/chrome_saved_desk_delegate.h"
 
+#include "ash/constants/chrome_webui_url_constants.h"
 #include "ash/constants/notifier_catalogs.h"
 #include "ash/constants/web_app_id_constants.h"
 #include "ash/public/cpp/desk_template.h"
 #include "ash/public/cpp/system/toast_data.h"
 #include "ash/public/cpp/system/toast_manager.h"
 #include "ash/public/cpp/window_properties.h"
+#include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/strings/grit/ash_strings.h"
 #include "base/check.h"
 #include "base/functional/bind.h"
 #include "base/i18n/number_formatting.h"
 #include "base/trace_event/trace_event.h"
-#include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
-#include "chrome/browser/apps/icon_standardizer.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
@@ -26,9 +26,9 @@
 #include "chrome/browser/ui/ash/desks/admin_template_service_factory.h"
 #include "chrome/browser/ui/ash/desks/chrome_desks_util.h"
 #include "chrome/browser/ui/ash/desks/desks_client.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/theme_resources.h"
+#include "chromeos/ash/components/browser_delegate/browser_controller.h"
+#include "chromeos/ash/components/browser_delegate/browser_delegate.h"
 #include "components/app_constants/constants.h"
 #include "components/app_restore/app_launch_info.h"
 #include "components/app_restore/app_restore_data.h"
@@ -43,7 +43,9 @@
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "components/services/app_service/public/cpp/intent.h"
 #include "components/services/app_service/public/cpp/types_util.h"
+#include "components/tabs/public/tab_interface.h"
 #include "components/user_manager/user_manager.h"
+#include "content/public/browser/web_contents.h"
 #include "extensions/browser/extension_registry.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/image_model.h"
@@ -51,28 +53,12 @@
 #include "ui/base/themed_vector_icon.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
+#include "ui/gfx/image/icon_standardizer.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/wm/core/window_properties.h"
 #include "url/gurl.h"
 
 namespace {
-
-// Returns the TabStripModel that associates with `window` if the given `window`
-// contains a browser frame, otherwise returns nullptr.
-TabStripModel* GetTabstripModelForWindowIfAny(aura::Window* window) {
-  BrowserView* browser_view =
-      BrowserView::GetBrowserViewForNativeWindow(window);
-  return browser_view ? browser_view->browser()->tab_strip_model() : nullptr;
-}
-
-// Returns the list of URLs that are open in `tab_strip_model`.
-std::vector<GURL> GetURLsIfApplicable(TabStripModel& tab_strip_model) {
-  std::vector<GURL> urls;
-  for (int i = 0; i < tab_strip_model.count(); ++i) {
-    urls.push_back(tab_strip_model.GetWebContentsAt(i)->GetLastCommittedURL());
-  }
-  return urls;
-}
 
 // Return true if `app_id` is available to launch from saved desk.
 bool IsAppAvailable(apps::AppServiceProxy& app_service_proxy,
@@ -197,7 +183,7 @@ void ImageResultToImageSkia(
   auto image =
       gfx::Image::CreateFrom1xPNGBytes(result.bitmap_data).AsImageSkia();
   image.EnsureRepsForSupportedScales();
-  std::move(callback).Run(apps::CreateStandardIconImage(image));
+  std::move(callback).Run(gfx::CreateStandardAppIconImage(image));
 }
 
 // Creates a callback for when a app icon image is retrieved which creates a
@@ -212,7 +198,7 @@ AppIconResultToImageSkia(
         auto image = icon_value->uncompressed;
         image.EnsureRepsForSupportedScales();
         std::move(image_skia_callback)
-            .Run(apps::CreateStandardIconImage(image));
+            .Run(gfx::CreateStandardAppIconImage(image));
       },
       std::move(callback));
 }
@@ -294,11 +280,16 @@ void ChromeSavedDeskDelegate::GetAppLaunchDataForSavedDesk(
         app_restore_data->browser_extra_info.app_type_browser;
   }
 
+  if (!app_launch_info->event_flag.has_value()) {
+    // Ensure event_flag is present even if `app_restore_data` is missing.
+    app_launch_info->event_flag = 0;
+  }
+
   if (app_id != app_constants::kChromeAppId &&
       (app_type == apps::AppType::kChromeApp ||
        app_type == apps::AppType::kWeb)) {
     // If these values are not present, we will not be able to restore the
-    // application. See http://crbug.com/1232520 for more information.
+    // application. See http://crbug.com/40191158 for more information.
     if (!app_launch_info->container.has_value() ||
         !app_launch_info->disposition.has_value()) {
       std::move(callback).Run({});
@@ -306,25 +297,28 @@ void ChromeSavedDeskDelegate::GetAppLaunchDataForSavedDesk(
     }
   }
 
-  if (auto* tab_strip_model = GetTabstripModelForWindowIfAny(window)) {
-    app_launch_info->browser_extra_info.urls =
-        GetURLsIfApplicable(*tab_strip_model);
-    app_launch_info->browser_extra_info.active_tab_index =
-        tab_strip_model->active_index();
-    int index_of_first_non_pinned_tab =
-        tab_strip_model->IndexOfFirstNonPinnedTab();
-    // Only set this field if there are pinned tabs. `IndexOfFirstNonPinnedTab`
-    // returns 0 if there are no pinned tabs.
-    if (index_of_first_non_pinned_tab > 0 &&
-        index_of_first_non_pinned_tab <= tab_strip_model->count()) {
+  // If `window` is a browser window, capture its tab and tab group information.
+  if (ash::BrowserDelegate* browser =
+          ash::BrowserController::GetInstance()->GetBrowserForWindow(window)) {
+    int32_t pinned_tab_count = 0;
+    int32_t current_index = 0;
+    for (tabs::TabInterface* tab : browser->GetTabIterator()) {
+      app_launch_info->browser_extra_info.urls.push_back(
+          tab->GetContents()->GetLastCommittedURL());
+      if (tab->IsActivated()) {
+        app_launch_info->browser_extra_info.active_tab_index = current_index;
+      }
+      if (tab->IsPinned()) {
+        pinned_tab_count++;
+      }
+      ++current_index;
+    }
+    if (pinned_tab_count > 0) {
       app_launch_info->browser_extra_info.first_non_pinned_tab_index =
-          index_of_first_non_pinned_tab;
+          pinned_tab_count;
     }
-    if (tab_strip_model->SupportsTabGroups()) {
-      app_launch_info->browser_extra_info.tab_group_infos =
-          chrome_desks_util::ConvertTabGroupsToTabGroupInfos(
-              tab_strip_model->group_model());
-    }
+    app_launch_info->browser_extra_info.tab_group_infos =
+        browser->GetTabGroupInfos();
     std::move(callback).Run(std::move(app_launch_info));
     return;
   }
@@ -343,9 +337,9 @@ ChromeSavedDeskDelegate::GetAdminTemplateService() {
 }
 
 bool ChromeSavedDeskDelegate::IsWindowPersistable(aura::Window* window) const {
-  BrowserView* browser_view =
-      BrowserView::GetBrowserViewForNativeWindow(window);
-  return !(browser_view && browser_view->GetIncognito()) &&
+  ash::BrowserDelegate* browser =
+      ash::BrowserController::GetInstance()->GetBrowserForWindow(window);
+  return !(browser && browser->IsOffTheRecord()) &&
          window->GetProperty(wm::kPersistableKey);
 }
 
@@ -355,20 +349,20 @@ ChromeSavedDeskDelegate::MaybeRetrieveIconForSpecialIdentifier(
     const ui::ColorProvider* color_provider) const {
   TRACE_EVENT0(
       "ui", "ChromeSavedDeskDelegate::MaybeRetrieveIconForSpecialIdentifier");
-  if (identifier == chrome::kChromeUINewTabURL) {
+  if (identifier == ash::chrome_urls::kChromeUINewTabURL) {
     ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
-    return apps::CreateStandardIconImage(
+    return gfx::CreateStandardAppIconImage(
         rb.GetImageNamed(IDR_PRODUCT_LOGO_32).AsImageSkia());
   } else if (identifier == ash::DeskTemplate::kIncognitoWindowIdentifier) {
     DCHECK(color_provider);
     gfx::ImageSkia icon =
         ui::ThemedVectorIcon(
-            ui::ImageModel::FromVectorIcon(kIncognitoProfileIcon,
+            ui::ImageModel::FromVectorIcon(ash::kIncognitoProfileIcon,
                                            ui::kColorAvatarIconIncognito)
                 .GetVectorIcon())
             .GetImageSkia(color_provider);
     icon.EnsureRepsForSupportedScales();
-    return apps::CreateStandardIconImage(icon);
+    return gfx::CreateStandardAppIconImage(icon);
   }
 
   return std::nullopt;

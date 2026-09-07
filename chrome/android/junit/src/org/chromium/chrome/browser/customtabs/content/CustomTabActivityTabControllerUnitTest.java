@@ -35,7 +35,6 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.app.tabmodel.AsyncTabParamsManagerSingleton;
@@ -46,7 +45,6 @@ import org.chromium.chrome.browser.cookies.CookiesFetcherJni;
 import org.chromium.chrome.browser.flags.ActivityType;
 import org.chromium.chrome.browser.privacy.settings.PrivacyPreferencesManagerImpl;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.components.embedder_support.util.ShadowUrlUtilities;
 import org.chromium.components.prefs.PrefService;
 import org.chromium.components.user_prefs.UserPrefsJni;
 import org.chromium.content_public.browser.WebContents;
@@ -54,9 +52,6 @@ import org.chromium.net.NetId;
 
 /** Tests for {@link CustomTabActivityTabController}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(
-        manifest = Config.NONE,
-        shadows = {ShadowUrlUtilities.class})
 public class CustomTabActivityTabControllerUnitTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -367,7 +362,7 @@ public class CustomTabActivityTabControllerUnitTest {
     // be restored using a different mechanism. See crbug.com/448865648.
     @Test
     public void doesNotUseTabFromIntent_IfActivityRecreated() {
-        Tab popupTab = env.prepareTransferredTab();
+        env.prepareTransferredTab();
         Tab savedTab = env.prepareTab();
         env.saveTab(savedTab);
         mTabController.setUpInitialTab(null);

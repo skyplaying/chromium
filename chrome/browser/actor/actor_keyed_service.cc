@@ -7,23 +7,36 @@
 #include <optional>
 #include <utility>
 
+#include "base/command_line.h"
 #include "base/containers/span.h"
 #include "base/feature_list.h"
+#include "base/files/file_util.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notimplemented.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/task/task_traits.h"
+#include "base/task/thread_pool.h"
 #include "base/trace_event/trace_event.h"
 #include "base/types/pass_key.h"
-#include "chrome/browser/actor/actor_features.h"
+#include "build/build_config.h"
+#include "build/buildflag.h"
+#include "chrome/browser/actor/actor_critical_action_logger.h"
 #include "chrome/browser/actor/actor_keyed_service_factory.h"
 #include "chrome/browser/actor/actor_metrics.h"
 #include "chrome/browser/actor/actor_proto_conversion.h"
 #include "chrome/browser/actor/actor_tab_data.h"
 #include "chrome/browser/actor/actor_task.h"
+#include "components/sessions/core/session_id.h"
+#include "ui/base/page_transition_types.h"
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/application_status_listener.h"
+#include "chrome/browser/actor/android/actor_keyed_service_android.h"
+#endif
 #include "chrome/browser/actor/actor_task_metadata.h"
-#include "chrome/browser/actor/aggregated_journal.h"
-#include "chrome/browser/actor/enterprise_policy_url_checker.h"
+#include "chrome/browser/actor/actor_util.h"
+#include "chrome/browser/actor/enterprise_policy_checker.h"
 #include "chrome/browser/actor/execution_engine.h"
+#include "chrome/browser/actor/tab_observation_strategy.h"
 #include "chrome/browser/actor/tools/tool_request.h"
 #include "chrome/browser/actor/ui/actor_ui_state_manager.h"
 #include "chrome/browser/actor/ui/event_dispatcher.h"
@@ -31,20 +44,31 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search/search.h"
 #include "chrome/browser/tab_list/tab_list_interface.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/tab_list/tab_removed_reason.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/common/actor.mojom.h"
 #include "chrome/common/actor/action_result.h"
-#include "chrome/common/actor/journal_details_builder.h"
-#include "chrome/common/actor/task_id.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/webui_url_constants.h"
+#include "components/actor/core/actor_features.h"
+#include "components/actor/core/actor_switches.h"
+#include "components/actor/core/aggregated_journal.h"
+#include "components/actor/core/aggregated_journal_file_serializer.h"
+#include "components/actor/core/journal_details_builder.h"
+#include "components/actor/core/task_id.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
+#include "components/optimization_guide/proto/features/common_quality_data.pb.h"
+#include "components/origin_gating/core/actor_container_config_slot.h"
 #include "components/tabs/public/tab_interface.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/download_item_utils.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "content/public/common/content_switches.h"
+#include "services/metrics/public/cpp/ukm_source_id.h"
 #include "third_party/abseil-cpp/absl/strings/str_format.h"
 #include "ui/base/window_open_disposition.h"
 
@@ -65,6 +89,7 @@ void OnCreateActorTabComplete(
   if (base::FeatureList::IsEnabled(actor::kActorBindCreatedTabToTask) && tab) {
     task.AddTab(
         tab->GetHandle(),
+        /*stop_task_on_detach=*/true,
         base::BindOnce(
             [](actor::ActorKeyedService::CreateActorTabCallback callback,
                tabs::TabHandle handle, actor::TaskId task_id,
@@ -84,6 +109,21 @@ void OnCreateActorTabComplete(
   } else {
     std::move(callback).Run(tab);
   }
+}
+
+base::FilePath ResolveActorTraceFilePath(const base::FilePath& path) {
+  if (base::DirectoryExists(path) || path.EndsWithSeparator()) {
+    if (!base::CreateDirectory(path)) {
+      return base::FilePath();
+    }
+    base::FilePath file_path = path.AppendASCII("actor_trace.pb");
+    return base::GetUniquePathWithSuffixFormat(file_path,
+                                               base::cstring_view("_%d"));
+  }
+  if (!base::CreateDirectory(path.DirName())) {
+    return base::FilePath();
+  }
+  return base::GetUniquePathWithSuffixFormat(path, base::cstring_view("_%d"));
 }
 
 }  // namespace
@@ -114,6 +154,43 @@ ActorKeyedService::ActorKeyedService(Profile* profile) : profile_(profile) {
   actor_ui_state_manager_ = std::make_unique<ui::ActorUiStateManager>(*this);
   profile_observation_.Observe(profile_);
   actor::InitActionBlocklist(profile_);
+
+  base::FilePath trace_path =
+      base::CommandLine::ForCurrentProcess()->GetSwitchValuePath(
+          switches::kActorTracePath);
+  if (!trace_path.empty()) {
+    InitializeTraceRecording(trace_path);
+  }
+}
+
+void ActorKeyedService::InitializeTraceRecording(
+    const base::FilePath& trace_path) {
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+      base::BindOnce(&ResolveActorTraceFilePath, trace_path),
+      base::BindOnce(&ActorKeyedService::OnTraceFilePathResolved,
+                     weak_ptr_factory_.GetWeakPtr()));
+}
+
+void ActorKeyedService::OnTraceFilePathResolved(
+    const base::FilePath& resolved_path) {
+  if (resolved_path.empty()) {
+    LOG(ERROR) << "Failed to resolve a path for actor trace recording.";
+    return;
+  }
+  VLOG(1) << "Actor trace recording to: " << resolved_path;
+  trace_file_serializer_ =
+      std::make_unique<AggregatedJournalFileSerializer>(journal_);
+  trace_file_serializer_->Init(
+      resolved_path, base::BindOnce(&ActorKeyedService::OnTraceFileInitDone,
+                                    weak_ptr_factory_.GetWeakPtr()));
+}
+
+void ActorKeyedService::OnTraceFileInitDone(bool success) {
+  if (!success) {
+    LOG(ERROR) << "Failed to initialize actor trace file recording.";
+    trace_file_serializer_.reset();
+  }
 }
 
 void ActorKeyedService::OnProfileInitializationComplete(Profile* profile) {
@@ -137,6 +214,7 @@ void ActorKeyedService::Shutdown() {
   // Ensure tasks get deleted synchronously to avoid dangling refs.
   CHECK(active_tasks_.empty());
   pending_delete_tasks_.clear();
+  trace_file_serializer_.reset();
 }
 
 // static
@@ -146,6 +224,7 @@ ActorKeyedService* ActorKeyedService::Get(content::BrowserContext* context) {
 
 void ActorKeyedService::SetActorUiStateManagerForTesting(
     std::unique_ptr<ui::ActorUiStateManagerInterface> ausm) {
+  CHECK(ausm);
   actor_ui_state_manager_ = std::move(ausm);
 }
 
@@ -187,9 +266,20 @@ void ActorKeyedService::CreateActorTab(TaskId task_id,
 
   BrowserWindowInterface* window_for_new_tab = nullptr;
   tabs::TabInterface* initiator_tab = initiator_tab_handle.Get();
+  if (initiator_tab && initiator_tab->GetProfile() != profile_.get()) {
+    GetJournal().Log(
+        GURL(), task_id, "CreateActorTab",
+        JournalDetailsBuilder()
+            .AddError("Initiator tab belongs to a different profile")
+            .Build());
+    std::move(callback).Run(nullptr);
+    return;
+  }
 
   // Special case: if the initiator tab is the NTP, no need to create a new
   // tab, reuse it.
+  // TODO(crbug.com/537432406): Check for about:blank URL in addition to NTP to
+  // reuse empty tabs.
   if (initiator_tab && search::IsNTPURL(initiator_tab->GetContents()
                                             ->GetPrimaryMainFrame()
                                             ->GetLastCommittedURL())) {
@@ -216,19 +306,59 @@ void ActorKeyedService::CreateActorTab(TaskId task_id,
     return;
   }
 
+#if BUILDFLAG(IS_ANDROID)
+  if (!base::android::ApplicationStatusListener::HasVisibleActivities()) {
+    CreateBackgroundTabForTask(
+        profile_, task_id,
+        base::BindOnce(
+            [](base::WeakPtr<ActorKeyedService> service, TaskId task_id,
+               CreateActorTabCallback callback, tabs::TabInterface* tab) {
+              if (!service) {
+                if (tab) {
+                  tab->Close();
+                }
+                std::move(callback).Run(nullptr);
+                return;
+              }
+              if (!tab) {
+                service->GetJournal().Log(
+                    GURL(), task_id, "CreateBackgroundTabForTask",
+                    JournalDetailsBuilder()
+                        .AddError("Background tab creation failed")
+                        .Build());
+              } else {
+                service->GetJournal().Log(
+                    GURL(), task_id, "CreateBackgroundTabForTask",
+                    JournalDetailsBuilder().Add("Success", true).Build());
+              }
+              ActorTask* task = service->GetTask(task_id);
+              if (!task) {
+                if (tab) {
+                  tab->Close();
+                }
+                std::move(callback).Run(nullptr);
+                return;
+              }
+              OnCreateActorTabComplete(*task, std::move(callback),
+                                       service->GetJournal(), tab);
+            },
+            weak_ptr_factory_.GetWeakPtr(), task_id, std::move(callback)));
+    return;
+  }
+#endif
+
   // If the initiating tab is still live, create the new tab in the same window.
-  if (initiator_tab) {
-    if (initiator_tab->IsInNormalWindow()) {
-      window_for_new_tab = initiator_tab->GetBrowserWindowInterface();
-      if (window_for_new_tab) {
-        GetJournal().Log(GURL(), task_id, "CreateActorTab",
-                         JournalDetailsBuilder()
-                             .Add("Using initiator_tab's window",
-                                  window_for_new_tab->GetSessionID().id())
-                             .Build());
-      }
+  // (Cross-profile initiator tabs were already rejected above.)
+  if (initiator_tab && initiator_tab->IsInNormalWindow()) {
+    window_for_new_tab = initiator_tab->GetBrowserWindowInterface();
+    if (window_for_new_tab) {
+      GetJournal().Log(GURL(), task_id, "CreateActorTab",
+                       JournalDetailsBuilder()
+                           .Add("Using initiator_tab's window",
+                                window_for_new_tab->GetSessionID().id())
+                           .Build());
     }
-  } else {
+  } else if (!initiator_tab) {
     // TODO(b/482430429): Figure out how to proceed from just a window ID on
     // Android.
 #if !BUILDFLAG(IS_ANDROID)
@@ -236,11 +366,17 @@ void ActorKeyedService::CreateActorTab(TaskId task_id,
     // task initiation).
     window_for_new_tab =
         BrowserWindowInterface::FromSessionID(initiator_window_id);
-    GetJournal().Log(
-        GURL(), task_id, "CreateActorTab",
-        JournalDetailsBuilder()
-            .Add("Using initiator_window", initiator_window_id.id())
-            .Build());
+    if (window_for_new_tab &&
+        window_for_new_tab->GetProfile() != profile_.get()) {
+      window_for_new_tab = nullptr;
+    }
+    if (window_for_new_tab) {
+      GetJournal().Log(
+          GURL(), task_id, "CreateActorTab",
+          JournalDetailsBuilder()
+              .Add("Using initiator_window", initiator_window_id.id())
+              .Build());
+    }
 #endif
   }
 
@@ -265,6 +401,14 @@ void ActorKeyedService::CreateActorTab(TaskId task_id,
         }
       }
     }
+#if BUILDFLAG(IS_ANDROID)
+    if (open_in_background) {
+      // Workaround for b/489440503. On Android we ignore
+      // WindowOpenDisposition::NEW_BACKGROUND_TAB when a tabstrip_index is set,
+      // so revert the index to its default value.
+      params.tabstrip_index = -1;
+    }
+#endif
   } else {
     GetJournal().Log(
         GURL(), task_id, "CreateActorTab",
@@ -276,6 +420,8 @@ void ActorKeyedService::CreateActorTab(TaskId task_id,
     params.window_action = NavigateParams::WindowAction::kShowWindow;
   }
 
+  // TODO(b/490182433) Use async version of Navigate() when b/490180494 is
+  // fixed. This is needed to support opening new windows on Android.
   base::WeakPtr<content::NavigationHandle> handle = Navigate(&params);
   if (!handle) {
     GetJournal().Log(
@@ -315,53 +461,88 @@ const std::map<TaskId, const ActorTask*> ActorKeyedService::GetActiveTasks()
   return active_tasks;
 }
 
+size_t ActorKeyedService::GetActiveTasksCount() const {
+  return active_tasks_.size();
+}
+
 void ActorKeyedService::ResetForTesting() {
   for (auto it = active_tasks_.begin(); it != active_tasks_.end();) {
-    StopTask((it++)->first, ActorTask::StoppedReason::kTaskComplete);
+    if (!it->second->IsCompleted()) {
+      StopTask((it++)->first, ActorTask::StoppedReason::kTaskComplete);
+    } else {
+      ++it;
+    }
   }
   active_tasks_.clear();
 }
 
 TaskId ActorKeyedService::CreateTask(
-    const EnterprisePolicyUrlChecker* policy_checker) {
-  return CreateTaskWithOptions(policy_checker, nullptr, nullptr);
+    const TaskSourceInfo& source_info,
+    const EnterprisePolicyChecker* policy_checker) {
+  return CreateTaskWithOptions(source_info, policy_checker, /*options=*/nullptr,
+                               /*delegate=*/nullptr, GetActorUiStateManager());
 }
 
 TaskId ActorKeyedService::CreateTaskWithOptions(
-    const EnterprisePolicyUrlChecker* policy_checker,
+    const TaskSourceInfo& source_info,
+    const EnterprisePolicyChecker* policy_checker,
     webui::mojom::TaskOptionsPtr options,
-    base::WeakPtr<ActorTaskDelegate> delegate) {
-  return CreateTaskImpl(ui::NewUiEventDispatcher(GetActorUiStateManager()),
-                        policy_checker, std::move(options),
-                        std::move(delegate));
+    base::WeakPtr<ActorTaskDelegate> delegate,
+    actor::ui::ActorUiStateManagerInterface* ui_state_manager,
+    std::optional<glic::mojom::InvocationSource> initial_invocation_source) {
+  CHECK(ui_state_manager);
+  return CreateTaskImpl(ui::NewUiEventDispatcher(ui_state_manager), source_info,
+                        policy_checker, std::move(options), std::move(delegate),
+                        ui_state_manager, initial_invocation_source);
 }
 
 TaskId ActorKeyedService::CreateTaskForTesting(
     std::unique_ptr<actor::ui::UiEventDispatcher> ui_event_dispatcher,
-    const EnterprisePolicyUrlChecker* policy_checker,
+    const TaskSourceInfo& source_info,
+    const EnterprisePolicyChecker* policy_checker,
     webui::mojom::TaskOptionsPtr options,
-    base::WeakPtr<ActorTaskDelegate> delegate) {
-  return CreateTaskImpl(std::move(ui_event_dispatcher), policy_checker,
-                        std::move(options), std::move(delegate));
+    base::WeakPtr<ActorTaskDelegate> delegate,
+    std::optional<glic::mojom::InvocationSource> initial_invocation_source) {
+  return CreateTaskImpl(std::move(ui_event_dispatcher), source_info,
+                        policy_checker, std::move(options), std::move(delegate),
+                        GetActorUiStateManager(), initial_invocation_source);
 }
 
 TaskId ActorKeyedService::CreateTaskImpl(
     std::unique_ptr<actor::ui::UiEventDispatcher> ui_event_dispatcher,
-    const EnterprisePolicyUrlChecker* policy_checker,
+    const TaskSourceInfo& source_info,
+    const EnterprisePolicyChecker* policy_checker,
     webui::mojom::TaskOptionsPtr options,
-    base::WeakPtr<ActorTaskDelegate> delegate) {
+    base::WeakPtr<ActorTaskDelegate> delegate,
+    actor::ui::ActorUiStateManagerInterface* ui_state_manager,
+    std::optional<glic::mojom::InvocationSource> initial_invocation_source) {
   TRACE_EVENT0("actor", "ActorKeyedService::CreateTask");
   GetJournal().Log(GURL(), TaskId(), "ActorKeyedService::CreateTask", {});
 
   const TaskId task_id = next_task_id_.GenerateNextId();
+  tabs::TabHandle initial_tab_handle = tabs::TabHandle::Null();
+  if (options && options->actuation_tab_id.has_value()) {
+    initial_tab_handle = tabs::TabHandle(options->actuation_tab_id.value());
+  }
+
+  CHECK(ui_state_manager);
   auto actor_task = std::make_unique<ActorTask>(
       base::PassKey<ActorKeyedService>(), *this, task_id,
-      std::move(ui_event_dispatcher), std::move(options), policy_checker,
-      std::move(delegate));
+      std::move(ui_event_dispatcher), std::move(options), source_info,
+      policy_checker, std::move(delegate), initial_invocation_source);
 
-  const ActorTask::State task_state = actor_task->GetState();
+  if (initial_tab_handle != tabs::TabHandle::Null()) {
+    actor_task->AddTab(initial_tab_handle, /*stop_task_on_detach=*/true,
+                       base::DoNothing());
+  }
+
   active_tasks_[task_id] = std::move(actor_task);
-  NotifyTaskStateChanged(task_id, task_state);
+
+#if !BUILDFLAG(IS_ANDROID)
+  ui_state_manager->LazyInitTabTracker();
+#endif
+
+  NotifyTaskStateChanged(*active_tasks_[task_id]);
   return task_id;
 }
 
@@ -370,15 +551,12 @@ base::CallbackListSubscription ActorKeyedService::AddTaskStateChangedCallback(
   return task_state_change_callback_list_.Add(std::move(callback));
 }
 
-void ActorKeyedService::NotifyTaskStateChanged(TaskId task_id,
-                                               ActorTask::State state) {
-  task_state_change_callback_list_.Notify(task_id, state);
-
-  if (ActorTask::IsCompletedState(state)) {
+void ActorKeyedService::NotifyTaskStateChanged(ActorTask& task) {
+  if (task.IsCompleted()) {
     // Remove a stopped task from the active_tasks_ list. Post this since this
     // call comes from the ActorTask so we don't want to delete it while it's on
     // the stack.
-    auto node = active_tasks_.extract(task_id);
+    auto node = active_tasks_.extract(task.id());
     if (!node.empty()) {
       pending_delete_tasks_.insert(std::move(node));
 
@@ -389,31 +567,78 @@ void ActorKeyedService::NotifyTaskStateChanged(TaskId task_id,
             }
             self->pending_delete_tasks_.erase(task_id);
           },
-          GetWeakPtr(), task_id));
+          GetWeakPtr(), task.id()));
     }
   }
+
+  task_state_change_callback_list_.Notify(task);
+}
+
+base::CallbackListSubscription
+ActorKeyedService::AddTaskVisibilityChangedCallback(
+    TaskVisibilityChangedCallback callback) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  return task_visibility_change_callback_list_.Add(std::move(callback));
+}
+
+void ActorKeyedService::NotifyTaskVisibilityChanged(ActorTask& task) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  task_visibility_change_callback_list_.Notify(task);
+}
+
+base::CallbackListSubscription
+ActorKeyedService::AddTaskStepProgressChangedCallback(
+    TaskStepProgressChangedCallback callback) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  return task_step_progress_change_callback_list_.Add(std::move(callback));
+}
+
+void ActorKeyedService::NotifyTaskStepProgressChanged(
+    ActorTask& task,
+    const std::string& step_progress) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  task_step_progress_change_callback_list_.Notify(task, step_progress);
 }
 
 void ActorKeyedService::RequestTabObservation(
     tabs::TabInterface& tab,
     TaskId task_id,
+    std::optional<page_content_annotations::ScreenshotOptions::
+                      ScreenshotCollectionOptions>
+        screenshot_collection_options,
     base::OnceCallback<void(TabObservationResult)> callback) {
   TRACE_EVENT0("actor", "ActorKeyedService::RequestTabObservation");
+  if (tab.GetProfile() != profile_.get()) {
+    journal_.Log(GURL(), task_id, "RequestTabObservation",
+                 JournalDetailsBuilder()
+                     .AddError("Cross-profile tab observation denied")
+                     .Build());
+    std::move(callback).Run(
+        base::unexpected(page_content_annotations::FetchPageContextErrorDetails{
+            .error_code = page_content_annotations::FetchPageContextError::
+                kPageContextNotEligible,
+            .message = "Cross-profile tab observation denied"}));
+    return;
+  }
   const GURL& last_committed_url = tab.GetContents()->GetLastCommittedURL();
   auto journal_entry = journal_.CreatePendingAsyncEntry(
       last_committed_url, task_id, MakeBrowserTrackUUID(task_id),
       "RequestTabObservation", {});
   page_content_annotations::FetchPageContextOptions options;
 
-  options.screenshot_options =
-      kFullPageScreenshot.Get()
-          // It's safe to dereference the optional here because
-          // kFullPageScreenshot being true implies
-          // kGlicTabScreenshotPaintPreviewBackend is enabled.
-          ? page_content_annotations::ScreenshotOptions::FullPage(
-                CreateOptionalPaintPreviewOptions().value())
-          : page_content_annotations::ScreenshotOptions::ViewportOnly(
-                CreateOptionalPaintPreviewOptions());
+  if (!base::FeatureList::IsEnabled(actor::kGlicActorSkipScreenshot)) {
+    options.screenshot_options =
+        kFullPageScreenshot.Get()
+            // It's safe to dereference the optional here because
+            // kFullPageScreenshot being true implies
+            // kGlicTabScreenshotPaintPreviewBackend is enabled.
+            ? page_content_annotations::ScreenshotOptions::FullPage(
+                  CreateOptionalPaintPreviewOptions().value(),
+                  std::move(screenshot_collection_options))
+            : page_content_annotations::ScreenshotOptions::ViewportOnly(
+                  CreateOptionalPaintPreviewOptions(),
+                  std::move(screenshot_collection_options));
+  }
 
   options.annotated_page_content_options =
       optimization_guide::ActionableAIPageContentOptions(
@@ -443,8 +668,7 @@ void ActorKeyedService::RequestTabObservation(
             }
 
             if (result.has_value() &&
-                result.value()->annotated_page_content_result.has_value() &&
-                result.value()->screenshot_result.has_value()) {
+                result.value()->annotated_page_content_result.has_value()) {
               auto& fetch_result = **result;
               size_t size = fetch_result.annotated_page_content_result->proto
                                 .ByteSizeLong();
@@ -455,14 +679,29 @@ void ActorKeyedService::RequestTabObservation(
                   last_committed_url, pending_journal_entry->GetTaskId(),
                   buffer);
 
-              auto& data = fetch_result.screenshot_result->screenshot_data;
-              pending_journal_entry->GetJournal().LogScreenshot(
-                  last_committed_url, pending_journal_entry->GetTaskId(),
-                  fetch_result.screenshot_result->mime_type,
-                  base::as_byte_span(data));
+              if (fetch_result.screenshot_result.has_value()) {
+                auto& data = fetch_result.screenshot_result->screenshot_data;
+                std::optional<std::vector<uint8_t>> iframe_data = std::nullopt;
+                if (fetch_result.annotated_page_content_result->proto
+                        .gemini_in_chrome_page_metadata()
+                        .screenshot_info()
+                        .iframe_info_size() > 0) {
+                  iframe_data = actor::GetScreenshotWithIframeBoundingBoxes(
+                      data, fetch_result.screenshot_result->mime_type,
+                      fetch_result.annotated_page_content_result->proto
+                          .gemini_in_chrome_page_metadata()
+                          .screenshot_info());
+                }
+                pending_journal_entry->GetJournal().LogScreenshot(
+                    last_committed_url, pending_journal_entry->GetTaskId(),
+                    fetch_result.screenshot_result->mime_type,
+                    base::as_byte_span(data), iframe_data);
+              }
+
               if (tab) {
                 actor::ActorTabData::From(tab.get())->DidObserveContent(
-                    fetch_result.annotated_page_content_result->proto);
+                    fetch_result.annotated_page_content_result->proto,
+                    actor::ApcSource::kActor);
               }
             }
 
@@ -484,11 +723,13 @@ std::optional<std::string> ActorKeyedService::ExtractErrorMessageIfFailed(
 
   page_content_annotations::FetchPageContextResult& fetch_result = **result;
 
-  // Context for actor observations should always have an APC and a screenshot,
-  // return failure if either is missing.
+  // Context for actor observations should always have an APC. It should also
+  // have a screenshot unless it was skipped.
   bool has_apc = fetch_result.annotated_page_content_result.has_value();
   bool has_screenshot = fetch_result.screenshot_result.has_value();
-  if (!has_apc || !has_screenshot) {
+  bool screenshot_required =
+      !base::FeatureList::IsEnabled(actor::kGlicActorSkipScreenshot);
+  if (!has_apc || (screenshot_required && !has_screenshot)) {
     return absl::StrFormat(
         "Fetch Error: APC[%s] screenshot[%s]",
         has_apc ? std::string("OK")
@@ -514,9 +755,10 @@ void ActorKeyedService::PerformActions(
                          .Add("task_id", task_id)
                          .AddError("Invalid Task")
                          .Build());
-    RunLater(base::BindOnce(std::move(callback),
-                            mojom::ActionResultCode::kTaskWentAway,
-                            std::nullopt, std::move(empty_results)));
+    RunLater(
+        base::BindOnce(std::move(callback),
+                       MakeResultVector(mojom::ActionResultCode::kTaskWentAway),
+                       TabObservationStrategy()));
     return;
   }
 
@@ -524,14 +766,36 @@ void ActorKeyedService::PerformActions(
     GetJournal().Log(
         GURL(), task_id, "ActorKeyedService::PerformActions",
         JournalDetailsBuilder().AddError("Empty Actions List").Build());
-    RunLater(base::BindOnce(std::move(callback),
-                            mojom::ActionResultCode::kEmptyActionSequence,
-                            std::nullopt, std::move(empty_results)));
+    RunLater(base::BindOnce(
+        std::move(callback),
+        MakeResultVector(mojom::ActionResultCode::kEmptyActionSequence),
+        TabObservationStrategy()));
     return;
   }
 
   task->GetExecutionEngine().AddWritableMainframeOrigins(
       task_metadata.added_writable_mainframe_origins());
+  if (task_metadata.agent_container_config().has_value()) {
+    JournalDetailsBuilder builder;
+    if (!task->GetExecutionEngine()
+             .origin_gating_checker()
+             .actor_container_config_slot()
+             .has_value()) {
+      origin_gating::ActorContainerConfig config = ConvertAgentContainerConfig(
+          task_metadata.agent_container_config().value());
+      builder.Add("status", "assigned")
+          .Add("active config", config.ToDebugValue());
+      task->GetExecutionEngine()
+          .origin_gating_checker()
+          .actor_container_config_slot()
+          .Assign(std::move(config));
+    } else {
+      builder.Add("status", "ignored config");
+    }
+    GetJournal().Log(GURL(), task_id, "ActorContainerConfigSlot::Assign",
+                     std::move(builder).Build());
+  }
+
   task->Act(
       std::move(actions),
       base::BindOnce(&ActorKeyedService::OnActionsFinished,
@@ -540,22 +804,19 @@ void ActorKeyedService::PerformActions(
 
 void ActorKeyedService::OnActionsFinished(
     PerformActionsCallback callback,
-    mojom::ActionResultPtr result,
-    std::optional<size_t> index_of_failed_action,
-    std::vector<ActionResultWithLatencyInfo> action_results) {
+    std::vector<ActionResultWithLatencyInfo> action_results,
+    TabObservationStrategy observation_strategy) {
   TRACE_EVENT0("actor", "ActorKeyedService::OnActionsFinished");
-  // If the result if Ok then we must not have a failed action.
-  CHECK(!IsOk(*result) || !index_of_failed_action);
 
   if (base::FeatureList::IsEnabled(
           actor::kGlicPerformActionsReturnsBeforeStateChange)) {
-    std::move(callback).Run(result->code, index_of_failed_action,
-                            std::move(action_results));
+    std::move(callback).Run(std::move(action_results),
+                            std::move(observation_strategy));
   } else {
     // RunLater is load bearing. See:
     // https://chromium-review.googlesource.com/c/chromium/src/+/7552225/comment/b0b7f011_71da3233/
-    RunLater(base::BindOnce(std::move(callback), result->code,
-                            index_of_failed_action, std::move(action_results)));
+    RunLater(base::BindOnce(std::move(callback), std::move(action_results),
+                            std::move(observation_strategy)));
   }
 }
 
@@ -588,6 +849,19 @@ ActorUiStateManagerInterface* ActorKeyedService::GetActorUiStateManager() {
   return actor_ui_state_manager_.get();
 }
 
+void ActorKeyedService::SetTabPendingActuation(tabs::TabHandle tab_handle) {
+  if (actor_ui_state_manager_) {
+    actor_ui_state_manager_->SetTabPendingActuation(tab_handle);
+  }
+}
+
+bool ActorKeyedService::ClearTabPendingActuation(tabs::TabHandle tab_handle) {
+  if (actor_ui_state_manager_) {
+    return actor_ui_state_manager_->ClearTabPendingActuation(tab_handle);
+  }
+  return false;
+}
+
 bool ActorKeyedService::IsActiveOnTab(const tabs::TabInterface& tab) const {
   tabs::TabHandle handle = tab.GetHandle();
   for (auto [task_id, task] : GetActiveTasks()) {
@@ -599,15 +873,16 @@ bool ActorKeyedService::IsActiveOnTab(const tabs::TabInterface& tab) const {
   return false;
 }
 
-TaskId ActorKeyedService::GetTaskFromTab(const tabs::TabInterface& tab) const {
+ActorTask* ActorKeyedService::GetTaskFromTab(
+    const tabs::TabInterface& tab) const {
   tabs::TabHandle handle = tab.GetHandle();
-  for (auto [task_id, task] : GetActiveTasks()) {
+  for (const auto& [task_id, task] : active_tasks_) {
     if (task->HasTab(handle)) {
-      return task_id;
+      return task.get();
     }
   }
 
-  return TaskId();
+  return nullptr;
 }
 
 Profile* ActorKeyedService::GetProfile() {
@@ -629,10 +904,66 @@ void ActorKeyedService::OnDownloadCreated(content::DownloadManager* manager,
                                           download::DownloadItem* item) {
   if (content::WebContents* web_contents =
           content::DownloadItemUtils::GetWebContents(item)) {
-    if (GetActingActorTaskForWebContents(web_contents)) {
+    if (const ActorTask* task =
+            GetActingActorTaskForWebContents(web_contents)) {
       RecordDirectDownloadTriggered(true);
+      int64_t navigation_id =
+          web_contents->GetPrimaryMainFrame()
+              ? web_contents->GetPrimaryMainFrame()->GetNavigationId()
+              : 0;
+      ActorCriticalActionLogger::LogAgentSelfReportedAction(
+          profile_, task->source_info().id.value_or(""),
+          critical_actions::ActionType::kDownload, item->GetURL(),
+          navigation_id, task->id());
     }
   }
 }
+
+void ActorKeyedService::AddObserver(BackgroundActuationObserver* observer) {
+  observers_.AddObserver(observer);
+}
+
+void ActorKeyedService::RemoveObserver(BackgroundActuationObserver* observer) {
+  observers_.RemoveObserver(observer);
+}
+
+void ActorKeyedService::NotifyBackgroundTabReady(
+    tabs::TabInterface* tab,
+    const std::string& glic_trigger_message_id) {
+  for (auto& observer : observers_) {
+    observer.OnBackgroundTabPrepared(tab, glic_trigger_message_id);
+  }
+}
+
+void ActorKeyedService::NotifyBackgroundSetupFailed(
+    const std::string& glic_trigger_message_id) {
+  for (auto& observer : observers_) {
+    observer.OnBackgroundSetupFailed(glic_trigger_message_id);
+  }
+}
+
+base::CallbackListSubscription
+ActorKeyedService::AddMessageTriggerTaskStoppedCallback(
+    MessageTriggerTaskStoppedCallback callback) {
+  return message_trigger_task_stopped_callbacks_.Add(std::move(callback));
+}
+
+void ActorKeyedService::OnMessageTriggerTaskStopped(
+    const std::string& message_id) {
+  message_trigger_task_stopped_callbacks_.Notify(message_id);
+}
+
+#if BUILDFLAG(IS_ANDROID)
+base::CallbackListSubscription
+ActorKeyedService::AddForegroundServiceStartedCallback(
+    EnsureForegroundServiceStartedCallback callback) {
+  return ensure_foreground_service_started_callbacks_.Add(std::move(callback));
+}
+
+void ActorKeyedService::EnsureForegroundServiceStarted(
+    const std::string& glic_trigger_message_id) {
+  ensure_foreground_service_started_callbacks_.Notify(glic_trigger_message_id);
+}
+#endif
 
 }  // namespace actor

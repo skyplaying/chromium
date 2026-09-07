@@ -8,7 +8,6 @@
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/time/clock.h"
 #include "base/time/default_clock.h"
 #include "base/time/time.h"
@@ -206,7 +205,7 @@ void ConnectionManagerImpl::OnMessageReceived(const std::string& payload) {
   NotifyMessageReceived(payload);
 }
 
-void ConnectionManagerImpl::OnNearbyConnectionStateChagned(
+void ConnectionManagerImpl::OnNearbyConnectionStateChanged(
     mojom::NearbyConnectionStep step,
     mojom::NearbyConnectionStepResult result) {
   if (secure_channel_structured_metrics_logger_) {

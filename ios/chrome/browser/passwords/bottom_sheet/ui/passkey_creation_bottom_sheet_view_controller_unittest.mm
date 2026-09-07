@@ -9,6 +9,7 @@
 #import "base/apple/foundation_util.h"
 #import "base/strings/sys_string_conversions.h"
 #import "components/password_manager/core/browser/features/password_features.h"
+#import "components/webauthn/ios/ios_passkey_client_commands.h"
 #import "ios/chrome/browser/favicon/model/test_favicon_loader.h"
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
 #import "ios/chrome/browser/shared/ui/bottom_sheet/table_view_bottom_sheet_view_controller.h"
@@ -21,13 +22,12 @@
 #import "third_party/ocmock/OCMock/OCMock.h"
 #import "third_party/ocmock/gtest_support.h"
 #import "ui/base/l10n/l10n_util.h"
-#import "url/gurl.h"
 
 // Tests for PasskeyCreationBottomSheetViewController.
 class PasskeyCreationBottomSheetViewControllerTest : public PlatformTest {
  protected:
   PasskeyCreationBottomSheetViewControllerTest() {
-    handler_ = OCMProtocolMock(@protocol(BrowserCoordinatorCommands));
+    handler_ = OCMProtocolMock(@protocol(IOSPasskeyClientCommands));
     view_controller_ = [[PasskeyCreationBottomSheetViewController alloc]
         initWithHandler:handler_
           faviconLoader:&favicon_loader_];
@@ -42,9 +42,9 @@ class PasskeyCreationBottomSheetViewControllerTest : public PlatformTest {
 TEST_F(PasskeyCreationBottomSheetViewControllerTest, BasicInformation) {
   NSString* username = @"user";
   NSString* email = @"email@example.com";
-  GURL url("https://example.com");
+  NSString* rpId = @"example.com";
 
-  [view_controller_ setUsername:username email:email url:url];
+  [view_controller_ setUsername:username email:email rpId:rpId];
   [view_controller_ loadView];
   [view_controller_ viewDidLoad];
 
@@ -71,7 +71,7 @@ TEST_F(PasskeyCreationBottomSheetViewControllerTest, BasicInformation) {
       base::apple::ObjCCast<UILabel>(labelsStackView.arrangedSubviews[1]);
 
   EXPECT_NSEQ(username, usernameLabel.text);
-  EXPECT_NSEQ(base::SysUTF8ToNSString(url.host()), domainLabel.text);
+  EXPECT_NSEQ(rpId, domainLabel.text);
 
   // Verifies the button stack configuration.
   EXPECT_NSEQ(

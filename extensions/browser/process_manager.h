@@ -72,9 +72,6 @@ class ProcessManager : public KeyedService,
     std::string extra_data;
     // The timeout behavior for the given request.
     content::ServiceWorkerExternalRequestTimeoutType timeout_type;
-    // The result of trying to start an external request with the service
-    // worker layer.
-    content::ServiceWorkerExternalRequestResult start_result;
   };
   using ServiceWorkerKeepaliveDataMap =
       std::map<base::Uuid, ServiceWorkerKeepaliveData>;
@@ -109,8 +106,10 @@ class ProcessManager : public KeyedService,
   // Workers.
   void StartTrackingServiceWorkerRunningInstance(const WorkerId& worker_id);
   void StopTrackingServiceWorkerRunningInstance(const WorkerId& worker_id);
-  void StopTrackingServiceWorkerRunningInstance(const ExtensionId& extension_id,
-                                                int64_t worker_version_id);
+  void StopTrackingServiceWorkerRunningInstance(
+      const ExtensionId& extension_id,
+      int64_t worker_version_id,
+      const blink::ServiceWorkerToken& service_worker_token);
 
   using FrameSet = std::set<content::RenderFrameHost*>;
   const FrameSet GetAllFrames() const;
@@ -173,7 +172,11 @@ class ProcessManager : public KeyedService,
   void IncrementLazyKeepaliveCount(const Extension* extension,
                                    Activity::Type activity_type,
                                    const std::string& extra_data);
-  void DecrementLazyKeepaliveCount(const Extension* extension,
+
+  // Decrements the keepalive count. Returns true if the specified activity was
+  // successfully matched and decremented; returns false if the activity was
+  // not found or if the keepalive count was already zero.
+  bool DecrementLazyKeepaliveCount(const Extension* extension,
                                    Activity::Type activity_type,
                                    const std::string& extra_data);
 
@@ -276,6 +279,9 @@ class ProcessManager : public KeyedService,
   }
 
   std::vector<WorkerId> GetAllWorkersIdsForTesting();
+  void ReleaseLazyKeepaliveCountForFrameForTesting(
+      content::RenderFrameHost* render_frame_host);
+  void CloseLazyBackgroundPageNowForTesting(const ExtensionId& extension_id);
 
  protected:
   // Not owned. Also used by IncognitoProcessManager.
@@ -331,7 +337,7 @@ class ProcessManager : public KeyedService,
   // Internal implementation of DecrementLazyKeepaliveCount with an
   // `extension_id` known to have a lazy background page.
   void DecrementLazyKeepaliveCount(const ExtensionId& extension_id);
-  void DecrementLazyKeepaliveCount(const ExtensionId& extension_id,
+  bool DecrementLazyKeepaliveCount(const ExtensionId& extension_id,
                                    Activity::Type activity_type,
                                    const std::string& extra_data);
 
@@ -386,7 +392,12 @@ class ProcessManager : public KeyedService,
   // True if we have created the startup set of background hosts.
   bool startup_background_hosts_created_;
 
-  base::ObserverList<ProcessManagerObserver> observer_list_;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      ProcessManagerObserver,
+      /*check_empty=*/false,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>
+      observer_list_;
 
   // ID Counter used to set ProcessManager::BackgroundPageData close_sequence_id
   // members. These IDs are tracked per extension in background_page_data_ and

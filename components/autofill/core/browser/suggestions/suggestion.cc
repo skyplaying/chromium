@@ -4,19 +4,36 @@
 
 #include "components/autofill/core/browser/suggestions/suggestion.h"
 
-#include <type_traits>
-#include <utility>
+#include <stddef.h>
 
+#include <map>
+#include <ostream>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+#include "base/containers/span.h"
 #include "base/containers/to_vector.h"
+#include "base/feature.h"
+#include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/utf_ostream_operators.h"
 #include "base/strings/utf_string_conversions.h"
-#include "components/autofill/core/browser/data_model/payments/credit_card.h"
+#include "build/buildflag.h"
+#include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
+#include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/browser/integrators/at_memory/memory_data_type.h"
 #include "components/autofill/core/browser/suggestions/suggestion_type.h"
+#include "components/autofill/core/common/dense_set.h"
+#include "url/gurl.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
+#include "components/autofill/android/main_autofill_jni_headers/AtMemoryPayload_jni.h"
+#include "components/autofill/android/main_autofill_jni_headers/AutofillAiPayload_jni.h"
 #include "components/autofill/android/main_autofill_jni_headers/AutofillProfilePayload_jni.h"
 #include "components/autofill/android/main_autofill_jni_headers/PaymentsPayload_jni.h"
 #endif  // BUILDFLAG(IS_ANDROID)
@@ -40,22 +57,45 @@ std::string ConvertMinorTextToPrintableString(Suggestion suggestion) {
 std::string_view ConvertAcceptabilityToPrintableString(
     Suggestion::Acceptability acceptability) {
   switch (acceptability) {
-    case Suggestion::Acceptability::kAcceptable:
-      return "kAcceptable";
-    case Suggestion::Acceptability::kUnacceptable:
-      return "kUnacceptable";
-    case Suggestion::Acceptability::kUnacceptableWithDeactivatedStyle:
-      return "kUnacceptableWithDeactivatedStyle";
+    case Suggestion::Acceptability::kSelectableAndAcceptable:
+      return "kSelectableAndAcceptable";
+    case Suggestion::Acceptability::kSelectableButUnacceptable:
+      return "kSelectableButUnacceptable";
+    case Suggestion::Acceptability::kUnselectableAndUnacceptable:
+      return "kUnselectableAndUnacceptable";
   }
   NOTREACHED();
 }
 
 std::string_view ConvertIconToPrintableString(Suggestion::Icon icon) {
   switch (icon) {
+    // kNoIcon is kept at the top of the list.
+    case Suggestion::Icon::kNoIcon:
+      return "kNoIcon";
+
+    // 1P Google services start
+    case Suggestion::Icon::kGmail:
+      return "kGmail";
+    case Suggestion::Icon::kGoogleCalendar:
+      return "kGoogleCalendar";
+    case Suggestion::Icon::kGooglePhotos:
+      return "kGooglePhotos";
+    // 1P Google services end
+
+    // Address profile icons start
+    case Suggestion::Icon::kHome:
+      return "kHome";
+    case Suggestion::Icon::kWork:
+      return "kWork";
+    // Address profile icons end
+
+    // Generic icons start
     case Suggestion::Icon::kAccount:
       return "kAccount";
-    case Suggestion::Icon::kClear:
-      return "kClear";
+    case Suggestion::Icon::kAndroidMessages:
+      return "kAndroidMessages";
+    case Suggestion::Icon::kClose:
+      return "kClose";
     case Suggestion::Icon::kCode:
       return "kCode";
     case Suggestion::Icon::kDelete:
@@ -70,6 +110,8 @@ std::string_view ConvertIconToPrintableString(Suggestion::Icon icon) {
       return "kError";
     case Suggestion::Icon::kFlight:
       return "kFlight";
+    case Suggestion::Icon::kFlightSpark:
+      return "kFlightSpark";
     case Suggestion::Icon::kGlobe:
       return "kGlobe";
     case Suggestion::Icon::kGoogle:
@@ -84,20 +126,34 @@ std::string_view ConvertIconToPrintableString(Suggestion::Icon icon) {
       return "kGoogleWallet";
     case Suggestion::Icon::kGoogleWalletMonochrome:
       return "kGoogleWalletMonochrome";
-    case Suggestion::Icon::kHome:
-      return "kHome";
     case Suggestion::Icon::kIdCard:
       return "kIdCard";
+    case Suggestion::Icon::kIdCard2:
+      return "kIdCard2";
+    case Suggestion::Icon::kIdCard2Spark:
+      return "kIdCard2Spark";
+    case Suggestion::Icon::kIdCardSpark:
+      return "kIdCardSpark";
     case Suggestion::Icon::kKey:
       return "kKey";
     case Suggestion::Icon::kLocation:
       return "kLocation";
+    case Suggestion::Icon::kLocationSpark:
+      return "kLocationSpark";
     case Suggestion::Icon::kLoyalty:
       return "kLoyalty";
     case Suggestion::Icon::kMagic:
       return "kMagic";
     case Suggestion::Icon::kOfferTag:
       return "kOfferTag";
+    case Suggestion::Icon::kOrder:
+      return "kOrder";
+    case Suggestion::Icon::kOrderSpark:
+      return "kOrderSpark";
+    case Suggestion::Icon::kPassport:
+      return "kPassport";
+    case Suggestion::Icon::kPassportSpark:
+      return "kPassportSpark";
     case Suggestion::Icon::kPenSpark:
       return "kPenSpark";
     case Suggestion::Icon::kPersonCheck:
@@ -106,18 +162,35 @@ std::string_view ConvertIconToPrintableString(Suggestion::Icon icon) {
       return "kQuestionMark";
     case Suggestion::Icon::kRecoveryPassword:
       return "kRecoveryPassword";
+    case Suggestion::Icon::kSadTab:
+      return "kSadTab";
     case Suggestion::Icon::kScanCreditCard:
       return "kScanCreditCard";
     case Suggestion::Icon::kSettings:
       return "kSettings";
+    case Suggestion::Icon::kShipment:
+      return "kShipment";
+    case Suggestion::Icon::kShipmentSpark:
+      return "kShipmentSpark";
+    case Suggestion::Icon::kSpark:
+      return "kSpark";
+    case Suggestion::Icon::kTextSpark:
+      return "kTextSpark";
     case Suggestion::Icon::kUndo:
       return "kUndo";
     case Suggestion::Icon::kVehicle:
       return "kVehicle";
-    case Suggestion::Icon::kWork:
-      return "kWork";
+    case Suggestion::Icon::kVehicleSpark:
+      return "kVehicleSpark";
+    // Generic icons end
+
+    // Payment method icons start
     case Suggestion::Icon::kCardGeneric:
       return "kCardGeneric";
+    case Suggestion::Icon::kCardGenericSpark:
+      return "kCardGenericSpark";
+    case Suggestion::Icon::kCardGenericVector:
+      return "kCardGenericVector";
     case Suggestion::Icon::kCardAmericanExpress:
       return "kCardAmericanExpress";
     case Suggestion::Icon::kCardDiners:
@@ -142,32 +215,19 @@ std::string_view ConvertIconToPrintableString(Suggestion::Icon icon) {
       return "kCardVisa";
     case Suggestion::Icon::kIban:
       return "kIban";
-    case Suggestion::Icon::kPlusAddress:
-      return "kPlusAddress";
-    case Suggestion::Icon::kNoIcon:
-      return "kNoIcon";
     case Suggestion::Icon::kBnplGeneric:
       return "kBnplGeneric";
-    case Suggestion::Icon::kBnplAffirmLinked:
-      return "kBnplAffirmLinked";
-    case Suggestion::Icon::kBnplAffirmUnlinked:
-      return "kBnplAffirmUnlinked";
-    case Suggestion::Icon::kBnplAfterpayLinked:
-      return "kBnplAfterpayLinked";
-    case Suggestion::Icon::kBnplAfterpayUnlinked:
-      return "kBnplAfterpayUnlinked";
-    case Suggestion::Icon::kBnplZipLinked:
-      return "kBnplZipLinked";
-    case Suggestion::Icon::kBnplZipUnlinked:
-      return "kBnplZipUnlinked";
-    case Suggestion::Icon::kBnplKlarnaLinked:
-      return "kBnplKlarnaLinked";
-    case Suggestion::Icon::kBnplKlarnaUnlinked:
-      return "kBnplKlarnaUnlinked";
+    case Suggestion::Icon::kBnplAffirm:
+      return "kBnplAffirm";
+    case Suggestion::Icon::kBnplAfterpay:
+      return "kBnplAfterpay";
+    case Suggestion::Icon::kBnplKlarna:
+      return "kBnplKlarna";
+    case Suggestion::Icon::kBnplZip:
+      return "kBnplZip";
     case Suggestion::Icon::kSaveAndFill:
       return "kSaveAndFill";
-    case Suggestion::Icon::kAndroidMessages:
-      return "kAndroidMessages";
+      // Payment method icons end
   }
   NOTREACHED();
 }
@@ -190,10 +250,14 @@ Suggestion::PasswordSuggestionDetails::PasswordSuggestionDetails(
 Suggestion::PasswordSuggestionDetails::PasswordSuggestionDetails(
     std::u16string_view username,
     std::u16string_view password,
-    std::u16string_view backup_password)
+    std::u16string_view backup_password,
+    std::string_view signon_realm,
+    bool is_cross_domain)
     : username(username),
       password(password),
-      backup_password(backup_password) {}
+      backup_password(backup_password),
+      signon_realm(signon_realm),
+      is_cross_domain(is_cross_domain) {}
 
 Suggestion::PasswordSuggestionDetails::PasswordSuggestionDetails(
     const PasswordSuggestionDetails&) = default;
@@ -207,30 +271,11 @@ Suggestion::PasswordSuggestionDetails::operator=(PasswordSuggestionDetails&&) =
     default;
 Suggestion::PasswordSuggestionDetails::~PasswordSuggestionDetails() = default;
 
-Suggestion::PlusAddressPayload::PlusAddressPayload() = default;
-
-Suggestion::PlusAddressPayload::PlusAddressPayload(
-    std::optional<std::u16string> address)
-    : address(std::move(address)) {}
-
-Suggestion::PlusAddressPayload::PlusAddressPayload(const PlusAddressPayload&) =
-    default;
-
-Suggestion::PlusAddressPayload::PlusAddressPayload(PlusAddressPayload&&) =
-    default;
-
-Suggestion::PlusAddressPayload& Suggestion::PlusAddressPayload::operator=(
-    const PlusAddressPayload&) = default;
-
-Suggestion::PlusAddressPayload& Suggestion::PlusAddressPayload::operator=(
-    PlusAddressPayload&&) = default;
-
-Suggestion::PlusAddressPayload::~PlusAddressPayload() = default;
-
 Suggestion::AutofillAiPayload::AutofillAiPayload() = default;
 
-Suggestion::AutofillAiPayload::AutofillAiPayload(EntityInstance::EntityId guid)
-    : guid(std::move(guid)) {}
+Suggestion::AutofillAiPayload::AutofillAiPayload(EntityInstance::EntityId guid,
+                                                 bool requires_server_fetch)
+    : guid(std::move(guid)), requires_server_fetch(requires_server_fetch) {}
 
 Suggestion::AutofillAiPayload::AutofillAiPayload(const AutofillAiPayload&) =
     default;
@@ -245,13 +290,18 @@ Suggestion::AutofillAiPayload& Suggestion::AutofillAiPayload::operator=(
 
 Suggestion::AutofillAiPayload::~AutofillAiPayload() = default;
 
+#if BUILDFLAG(IS_ANDROID)
+base::android::ScopedJavaLocalRef<jobject>
+Suggestion::AutofillAiPayload::CreateJavaObject() const {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  return Java_AutofillAiPayload_Constructor(env, guid.value(),
+                                            requires_server_fetch);
+}
+#endif  // BUILDFLAG(IS_ANDROID)
+
 Suggestion::AutofillProfilePayload::AutofillProfilePayload() = default;
 Suggestion::AutofillProfilePayload::AutofillProfilePayload(Guid guid)
-    : AutofillProfilePayload(std::move(guid), u"") {}
-Suggestion::AutofillProfilePayload::AutofillProfilePayload(
-    Guid guid,
-    std::u16string email_override)
-    : guid(std::move(guid)), email_override(std::move(email_override)) {}
+    : guid(std::move(guid)) {}
 
 Suggestion::AutofillProfilePayload::AutofillProfilePayload(
     const AutofillProfilePayload&) = default;
@@ -301,6 +351,44 @@ Suggestion::IdentityCredentialPayload::operator=(IdentityCredentialPayload&&) =
     default;
 
 Suggestion::IdentityCredentialPayload::~IdentityCredentialPayload() = default;
+
+Suggestion::AtMemoryPayload::AtMemoryPayload() = default;
+
+Suggestion::AtMemoryPayload::AtMemoryPayload(std::u16string value,
+                                             MemoryDataType memory_data_type)
+    : value(std::move(value)), memory_data_type(memory_data_type) {}
+
+Suggestion::AtMemoryPayload::AtMemoryPayload(const AtMemoryPayload&) = default;
+
+Suggestion::AtMemoryPayload::AtMemoryPayload(AtMemoryPayload&&) = default;
+
+Suggestion::AtMemoryPayload& Suggestion::AtMemoryPayload::operator=(
+    const AtMemoryPayload&) = default;
+
+Suggestion::AtMemoryPayload& Suggestion::AtMemoryPayload::operator=(
+    AtMemoryPayload&&) = default;
+
+Suggestion::AtMemoryPayload::~AtMemoryPayload() = default;
+
+#if BUILDFLAG(IS_ANDROID)
+base::android::ScopedJavaLocalRef<jobject>
+Suggestion::AtMemoryPayload::CreateJavaObject() const {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  return Java_AtMemoryPayload_Constructor(env, type_name);
+}
+#endif  // BUILDFLAG(IS_ANDROID)
+
+Suggestion::OpenGeminiPayload::OpenGeminiPayload() = default;
+Suggestion::OpenGeminiPayload::OpenGeminiPayload(std::u16string prompt)
+    : prompt(std::move(prompt)) {}
+Suggestion::OpenGeminiPayload::OpenGeminiPayload(const OpenGeminiPayload&) =
+    default;
+Suggestion::OpenGeminiPayload::OpenGeminiPayload(OpenGeminiPayload&&) = default;
+Suggestion::OpenGeminiPayload& Suggestion::OpenGeminiPayload::operator=(
+    const OpenGeminiPayload&) = default;
+Suggestion::OpenGeminiPayload& Suggestion::OpenGeminiPayload::operator=(
+    OpenGeminiPayload&&) = default;
+Suggestion::OpenGeminiPayload::~OpenGeminiPayload() = default;
 
 Suggestion::PaymentsPayload::PaymentsPayload() = default;
 
@@ -419,23 +507,32 @@ Suggestion& Suggestion::operator=(Suggestion&& other) = default;
 Suggestion::~Suggestion() = default;
 
 bool Suggestion::IsAcceptable() const {
+  using enum SuggestionType;
+  // LINT.IfChange(UnacceptableSuggestionTypes)
+  static constexpr auto kUnacceptableItemIds =
+      DenseSet({kSeparator, kInsecureContextPaymentDisabledMessage, kTitle,
+                kAtMemorySourceAttribution});
+  // LINT.ThenChange(/components/autofill/android/java/src/org/chromium/components/autofill/AutofillSuggestion.java:UnacceptableSuggestionTypes)
+  if (kUnacceptableItemIds.contains(type)) {
+    return false;
+  }
   switch (acceptability) {
-    case Acceptability::kAcceptable:
+    case Acceptability::kSelectableAndAcceptable:
       return true;
-    case Acceptability::kUnacceptable:
-    case Acceptability::kUnacceptableWithDeactivatedStyle:
+    case Acceptability::kSelectableButUnacceptable:
+    case Acceptability::kUnselectableAndUnacceptable:
       return false;
   }
   NOTREACHED();
 }
 
-bool Suggestion::HasDeactivatedStyle() const {
+bool Suggestion::IsSelectable() const {
   switch (acceptability) {
-    case Acceptability::kAcceptable:
-    case Acceptability::kUnacceptable:
-      return false;
-    case Acceptability::kUnacceptableWithDeactivatedStyle:
+    case Acceptability::kSelectableAndAcceptable:
+    case Acceptability::kSelectableButUnacceptable:
       return true;
+    case Acceptability::kUnselectableAndUnacceptable:
+      return false;
   }
   NOTREACHED();
 }
@@ -457,6 +554,7 @@ void PrintTo(const Suggestion& suggestion, std::ostream* os) {
 }  // namespace autofill
 
 #if BUILDFLAG(IS_ANDROID)
+DEFINE_JNI(AtMemoryPayload)
 DEFINE_JNI(AutofillProfilePayload)
 DEFINE_JNI(PaymentsPayload)
 #endif

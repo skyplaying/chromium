@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/navigation_predictor/navigation_predictor.h"
+
 #include <memory>
 #include <tuple>
 
@@ -12,12 +14,11 @@
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
-#include "chrome/browser/navigation_predictor/navigation_predictor.h"
 #include "chrome/browser/navigation_predictor/navigation_predictor_keyed_service.h"
 #include "chrome/browser/navigation_predictor/navigation_predictor_keyed_service_factory.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/subresource_filter/subresource_filter_browser_test_harness.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/search_test_utils.h"
@@ -132,7 +133,7 @@ class NavigationPredictorBrowserTest
  private:
   void EnsureLayout() {
     content::WebContents* web_contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
     content::RenderFrameHost* primary_rfh = web_contents->GetPrimaryMainFrame();
     if (primary_rfh->IsRenderFrameLive()) {
       EXPECT_EQ(true, EvalJsAfterLifecycleUpdate(primary_rfh, "", "true"));
@@ -245,12 +246,12 @@ IN_PROC_BROWSER_TEST_F(NavigationPredictorBrowserTest, PipelineOffTheRecord) {
   ResetUKM();
 
   const GURL& url = GetTestURL("/simple_page_with_anchors.html");
-  Browser* incognito = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito = CreateIncognitoBrowser();
   ASSERT_TRUE(ui_test_utils::NavigateToURL(incognito, url));
   base::RunLoop().RunUntilIdle();
 
   EXPECT_TRUE(
-      content::ExecJs(incognito->tab_strip_model()->GetActiveWebContents(),
+      content::ExecJs(incognito->GetTabStripModel()->GetActiveWebContents(),
                       "document.getElementById('google').click();"));
   base::RunLoop().RunUntilIdle();
 
@@ -277,7 +278,7 @@ IN_PROC_BROWSER_TEST_F(NavigationPredictorBrowserTest, PipelineHttp) {
   base::RunLoop().RunUntilIdle();
 
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   content::TestNavigationObserver click_nav_observer(web_contents);
   EXPECT_TRUE(content::ExecJs(web_contents,
                               "document.getElementById('google').click();"));
@@ -405,7 +406,7 @@ IN_PROC_BROWSER_TEST_P(NavigationPredictorSiteIsolationBrowserTest,
   const GURL& iframe_url =
       GetTestURL("b.test", "/iframe_simple_page_with_anchors.html");
   EXPECT_TRUE(content::NavigateIframeToURL(
-      browser()->tab_strip_model()->GetActiveWebContents(), "crossFrame",
+      browser()->GetTabStripModel()->GetActiveWebContents(), "crossFrame",
       iframe_url));
   WaitLinkEnteredViewport(1);
 
@@ -516,7 +517,7 @@ IN_PROC_BROWSER_TEST_F(NavigationPredictorBrowserTest, ClickAnchorElement) {
   WaitLinkEnteredViewport(1);
 
   EXPECT_TRUE(
-      content::ExecJs(browser()->tab_strip_model()->GetActiveWebContents(),
+      content::ExecJs(browser()->GetTabStripModel()->GetActiveWebContents(),
                       "document.getElementById('google').click();"));
   base::RunLoop().RunUntilIdle();
 
@@ -550,19 +551,24 @@ IN_PROC_BROWSER_TEST_F(NavigationPredictorBrowserTest,
 
   const GURL& url = GetTestURL("/simple_page_with_anchors.html");
 
-  Browser* incognito = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito = CreateIncognitoBrowser();
   ASSERT_TRUE(ui_test_utils::NavigateToURL(incognito, url));
   base::RunLoop().RunUntilIdle();
 
   EXPECT_TRUE(
-      content::ExecJs(incognito->tab_strip_model()->GetActiveWebContents(),
+      content::ExecJs(incognito->GetTabStripModel()->GetActiveWebContents(),
                       "document.getElementById('google').click();"));
   content::WaitForLoadStop(
-      incognito->tab_strip_model()->GetActiveWebContents());
+      incognito->GetTabStripModel()->GetActiveWebContents());
 
   auto entries = test_ukm_recorder->GetMergedEntriesByName(
       ukm::builders::PageLoad::kEntryName);
-  EXPECT_EQ(1u, entries.size());
+  // Check that the UKM recorder is actually alive and capturing data.
+  // We use EXPECT_GE rather than EXPECT_EQ(1) because other browser
+  // features (e.g. InitialWebUI, WebUIReloadButton) might cause background
+  // navigations that result in extra PageLoad entries. The exact number
+  // doesn't matter, as long as we verify no clicks are logged below.
+  EXPECT_GE(entries.size(), 1u);
 
   // Make sure no click has been logged.
   entries = test_ukm_recorder->GetMergedEntriesByName(
@@ -606,7 +612,7 @@ IN_PROC_BROWSER_TEST_F(NavigationPredictorBrowserTest, SingleObserver) {
 
   NavigationPredictorKeyedService* service =
       NavigationPredictorKeyedServiceFactory::GetForProfile(
-          browser()->profile());
+          browser()->GetProfile());
   EXPECT_NE(nullptr, service);
   service->AddObserver(&observer);
 
@@ -640,7 +646,7 @@ IN_PROC_BROWSER_TEST_F(NavigationPredictorBrowserTest,
 
   NavigationPredictorKeyedService* service =
       NavigationPredictorKeyedServiceFactory::GetForProfile(
-          browser()->profile());
+          browser()->GetProfile());
   EXPECT_NE(nullptr, service);
   service->AddObserver(&observer);
 
@@ -672,7 +678,7 @@ IN_PROC_BROWSER_TEST_F(NavigationPredictorBrowserTest, TwoObservers) {
 
   NavigationPredictorKeyedService* service =
       NavigationPredictorKeyedServiceFactory::GetForProfile(
-          browser()->profile());
+          browser()->GetProfile());
   service->AddObserver(&observer_1);
   service->AddObserver(&observer_2);
 
@@ -708,10 +714,10 @@ IN_PROC_BROWSER_TEST_F(NavigationPredictorBrowserTest, TwoObservers) {
 // Test that the navigation predictor keyed service is null for incognito
 // profiles.
 IN_PROC_BROWSER_TEST_F(NavigationPredictorBrowserTest, Incognito) {
-  Browser* incognito = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito = CreateIncognitoBrowser();
   NavigationPredictorKeyedService* incognito_service =
       NavigationPredictorKeyedServiceFactory::GetForProfile(
-          incognito->profile());
+          incognito->GetProfile());
   EXPECT_EQ(nullptr, incognito_service);
 }
 
@@ -736,7 +742,7 @@ class NavigationPredictorMPArchBrowserTest
   }
 
   content::WebContents* GetWebContents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
   net::EmbeddedTestServer* test_server() { return &test_server_; }

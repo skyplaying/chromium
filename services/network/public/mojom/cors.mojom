@@ -126,14 +126,14 @@ struct CorsErrorStatus {
   // The address space of the requested resource.
   // This defaults to kUnknown, and is overridden iff `cors_error` is one of:
   //
-  // - `kInsecurePrivateNetwork`
-  // - `kInvalidPrivateNetworkAccess`
+  // - `kInsecureLocalNetwork`
+  // - `kInvalidLocalNetworkAccess`
   // - `kLocalNetworkAccessPermissionDenied`
   IPAddressSpace resource_address_space = IPAddressSpace.kUnknown;
 
   // The other IP address space set on the URL request.
   // This defaults to kUnknown, and is overridden iff `cors_error` is
-  // `kInvalidPrivateNetworkAccess`, which happens in 2 situations:
+  // `kInvalidLocalNetworkAccess`, which happens in 2 situations:
   //
   //   * The request had a `required_address_space` set but the
   //     `resource_address_space` did not match. In this case, this will be set
@@ -141,7 +141,7 @@ struct CorsErrorStatus {
   // or
   //
   //   * The request connects to two different IP address spaces. See the
-  //     comment in services/network/private_network_access_checker.cc.
+  //     comment in services/network/local_network_access_checker.cc.
   //     In this case, this will be set to the second IP address space.
   //
   // TODO(crbug.com/394636065): consider using 2 separate fields for the two

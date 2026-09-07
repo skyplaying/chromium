@@ -11,8 +11,11 @@
 
 #include <ios>
 
+#include "absl/container/flat_hash_map.h"
 #include "base/check.h"
+#include "base/files/file_path.h"
 #include "base/logging.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/task/thread_pool.h"
 #include "components/tracing/common/etw_consumer_win.h"
 #include "third_party/perfetto/include/perfetto/ext/tracing/core/trace_writer.h"
@@ -33,16 +36,18 @@ ULONG EtwSystemFlagsFromSchedulerProvider(std::string_view keyword) {
   return 0;
 }
 
-ULONG EtwSystemFlagsFromFileProvider(std::string_view keyword) {
-  if (keyword == "FILE_IO") {
-    return EVENT_TRACE_FLAG_FILE_IO | EVENT_TRACE_FLAG_FILE_IO_INIT;
+ULONG EtwMemoryProviderFlagFromKeyword(std::string_view keyword) {
+  if (keyword == "MEMINFO") {
+    return 0x20U;  // KERNEL_MEM_KEYWORD_MEMINFO
   }
   return 0;
 }
 
-ULONG EtwMemoryProviderFlagFromKeyword(std::string_view keyword) {
-  if (keyword == "MEMINFO") {
-    return 0x20U;  // KERNEL_MEM_KEYWORD_MEMINFO
+ULONG EtwSystemFlagsFromSystemIOProvider(std::string_view keyword) {
+  if (keyword == "FILE_IO") {
+    return EVENT_TRACE_FLAG_FILE_IO | EVENT_TRACE_FLAG_FILE_IO_INIT;
+  } else if (keyword == "DISK_IO") {
+    return EVENT_TRACE_FLAG_DISK_IO | EVENT_TRACE_FLAG_DISK_IO_INIT;
   }
   return 0;
 }
@@ -124,11 +129,11 @@ void EtwSystemDataSource::OnStart(const StartArgs&) {
   // Enable process and thread events for categorization and filtering.
   p.EnableFlags = EVENT_TRACE_FLAG_PROCESS | EVENT_TRACE_FLAG_THREAD;
 
+  for (const auto& keyword : etw_config.system_io_provider_events()) {
+    p.EnableFlags |= EtwSystemFlagsFromSystemIOProvider(keyword);
+  }
   for (const auto& keyword : etw_config.scheduler_provider_events()) {
     p.EnableFlags |= EtwSystemFlagsFromSchedulerProvider(keyword);
-  }
-  for (const auto& keyword : etw_config.file_provider_events()) {
-    p.EnableFlags |= EtwSystemFlagsFromFileProvider(keyword);
   }
 
   // The ETW Session must be started (but not opened) before providers can be
@@ -157,9 +162,15 @@ void EtwSystemDataSource::OnStart(const StartArgs&) {
 
   bool privacy_filtering_enabled =
       data_source_config_.chrome_config().privacy_filtering_enabled();
-  consumer_ = {new EtwConsumer(client_pid_, CreateTraceWriter(),
-                               privacy_filtering_enabled),
-               base::OnTaskRunnerDeleter(consume_task_runner_)};
+  absl::flat_hash_map<base::FilePath, std::string> known_debug_ids;
+  for (const auto& entry : etw_config.stack_sampling_debug_ids()) {
+    known_debug_ids.emplace(base::FilePath(base::UTF8ToWide(entry.path())),
+                            entry.debug_id());
+  }
+  consumer_ = {
+      new EtwConsumer(client_pid_, CreateTraceWriter(),
+                      privacy_filtering_enabled, std::move(known_debug_ids)),
+      base::OnTaskRunnerDeleter(consume_task_runner_)};
   hr = consumer_->OpenRealtimeSession(kEtwSystemSessionName);
   if (FAILED(hr)) {
     etw_controller_.Stop(nullptr);
@@ -182,6 +193,14 @@ void EtwSystemDataSource::OnStop(const StopArgs& args) {
     consumer_.reset();
   }
   etw_controller_.Stop(nullptr);
+}
+
+void EtwSystemDataSource::WillClearIncrementalState(
+    const ClearIncrementalStateArgs& args) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (consumer_) {
+    consumer_->WillClearIncrementalState();
+  }
 }
 
 }  // namespace tracing

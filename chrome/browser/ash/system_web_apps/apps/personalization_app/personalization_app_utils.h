@@ -41,19 +41,19 @@ std::unique_ptr<content::WebUIController> CreatePersonalizationAppUI(
 // that there is a valid profile and user that has opened personalization app.
 // When calling this function outside of one of the personalization app
 // providers, be aware that it may return nullptr.
-const user_manager::User* GetUser(const Profile* profile);
+const user_manager::User* GetUser(Profile* profile);
 
 // This is also generally called after a user with a regular profile has opened
 // personalization app. In the case where this profile has no associated user
 // and account id, returns a special |EmptyAccountId| singleton.
-AccountId GetAccountId(const Profile* profile);
+AccountId GetAccountId(Profile* profile);
 
 // Controls whether the profile can see and open personalization app. Most
 // profiles can, but kiosk and guest cannot.
-bool CanSeeWallpaperOrPersonalizationApp(const Profile* profile);
+bool CanSeeWallpaperOrPersonalizationApp(Profile* profile);
 
-// Verifies if the current language settings are supported.
-bool IsSystemInSupportedLanguage();
+// Verifies if the language settings in `application_locale` are supported.
+bool IsSystemInSupportedLanguage(std::string_view application_locale);
 
 // Controls whether the profile can see and open SeaPen UI. Managed users have
 // age restrictions that underage users (<18) are not allowed to view and access
@@ -76,7 +76,8 @@ bool IsManagedSeaPenVcBackgroundEnabled(Profile* profile);
 
 // Controls whether users are eligible for SeaPen text input. The age
 // requirements are stricter than for SeaPen.
-bool IsEligibleForSeaPenTextInput(Profile* profile);
+bool IsEligibleForSeaPenTextInput(Profile* profile,
+                                  std::string_view application_locale);
 
 // Controls whether SeaPen Wallpaper Feedback is shown for managed profiles.
 bool IsManagedSeaPenWallpaperFeedbackEnabled(Profile* profile);

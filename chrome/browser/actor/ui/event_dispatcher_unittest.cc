@@ -9,13 +9,13 @@
 #include <string_view>
 
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "base/time/time.h"
 #include "chrome/browser/actor/actor_tab_data.h"
 #include "chrome/browser/actor/actor_test_util.h"
-#include "chrome/browser/actor/shared_types.h"
 #include "chrome/browser/actor/tools/click_tool_request.h"
 #include "chrome/browser/actor/tools/move_mouse_tool_request.h"
 #include "chrome/browser/actor/tools/type_tool_request.h"
@@ -27,6 +27,8 @@
 #include "chrome/common/actor.mojom-shared.h"
 #include "chrome/common/actor/action_result.h"
 #include "chrome/common/chrome_features.h"
+#include "components/actor/core/shared_types.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace actor::ui {
@@ -59,6 +61,11 @@ constexpr std::string_view kMouseClickFailureHistogram =
 
 class EventDispatcherTest : public ::testing::Test {
  public:
+  EventDispatcherTest() {
+    scoped_feature_list_.InitAndDisableFeature(
+        features::kGlicActorSplitValidateAndExecute);
+  }
+
   void SetUp() override {
     mock_state_manager_ = std::make_unique<MockActorUiStateManager>();
     dispatcher_ = NewUiEventDispatcher(mock_state_manager_.get());
@@ -70,6 +77,7 @@ class EventDispatcherTest : public ::testing::Test {
   base::HistogramTester histograms_;
   std::unique_ptr<MockActorUiStateManager> mock_state_manager_;
   std::unique_ptr<UiEventDispatcher> dispatcher_;
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 TEST_F(EventDispatcherTest, NoEventsToDispatch) {
@@ -368,6 +376,33 @@ TEST_F(EventDispatcherTest, AsyncActorTaskChange_OneEvent) {
   EXPECT_TRUE(IsOk(*result.Get()));
 }
 
+TEST_F(EventDispatcherTest, AsyncActorTaskChange_TwoEvents) {
+  std::vector<UiCompleteCallback> callbacks;
+  EXPECT_CALL(*mock_state_manager_,
+              OnUiEvent(VariantWith<StartingToActOnTab>(_), _))
+      .Times(2)
+      .WillRepeatedly(WithArgs<1>([&](UiCompleteCallback callback) {
+        callbacks.push_back(std::move(callback));
+      }));
+  TestFuture<ActionResultPtr> result1;
+  dispatcher_->OnActorTaskAsyncChange(
+      UiEventDispatcher::AddTab{.task_id = TaskId(992),
+                                .handle = tabs::TabHandle(998)},
+      result1.GetCallback());
+  TestFuture<ActionResultPtr> result2;
+  dispatcher_->OnActorTaskAsyncChange(
+      UiEventDispatcher::AddTab{.task_id = TaskId(992),
+                                .handle = tabs::TabHandle(998)},
+      result2.GetCallback());
+  ASSERT_TRUE(base::test::RunUntil([&]() { return callbacks.size() == 2; }));
+
+  // The events can be interleaved.
+  std::move(callbacks[1]).Run(MakeOkResult());
+  EXPECT_TRUE(IsOk(*result2.Get()));
+  std::move(callbacks[0]).Run(MakeOkResult());
+  EXPECT_TRUE(IsOk(*result1.Get()));
+}
+
 /* Verifies that with GlicActorSplitValidateAndExecute enabled, the event
  * dispatcher prioritizes renderer-resolved targets in ActorTabData over
  * explicit points or DOM calculations. */
@@ -375,12 +410,12 @@ TEST_F(EventDispatcherTest, AsyncActorTaskChange_OneEvent) {
 class EventDispatcherRendererResolvedTest : public EventDispatcherTest {
  public:
   EventDispatcherRendererResolvedTest() {
-    scoped_feature_list_.InitAndEnableFeature(
-        features::kGlicActorSplitValidateAndExecute);
+    scoped_feature_list_.Reset();
+    scoped_feature_list_.InitWithFeatures(
+        {features::kGlicActorSplitValidateAndExecute,
+         features::kGlicActorUiMagicCursor},
+        {});
   }
-
- protected:
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 TEST_F(EventDispatcherRendererResolvedTest, MissingActorTabData) {

@@ -12,7 +12,6 @@
 #include "base/rand_util.h"
 #include "base/test/fuzztest_support.h"
 #include "base/test/gmock_expected_support.h"
-#include "base/test/metrics/histogram_tester.h"
 #include "base/test/values_test_util.h"
 #include "base/version.h"
 #include "content/public/browser/first_party_sets_handler.h"
@@ -43,55 +42,27 @@ using ParseError = FirstPartySetsHandler::ParseError;
 using ParseWarningType = FirstPartySetsHandler::ParseWarningType;
 using ParseWarning = FirstPartySetsHandler::ParseWarning;
 
-constexpr char kPrimaryField[] = "primary";
-constexpr char kAssociatedSitesField[] = "associatedSites";
-constexpr char kCctldsField[] = "ccTLDs";
-constexpr char kReplacementsField[] = "replacements";
-constexpr char kAdditionsField[] = "additions";
-constexpr char kParsedSuccessfullyHistogram[] =
-    "Cookie.FirstPartySets.ComponentSetsParsedSuccessfully";
-constexpr char kNonfatalErrorsHistogram[] =
-    "Cookie.FirstPartySets.ComponentSetsNonfatalErrors";
-constexpr char kProcessedComponentHistogram[] =
-    "Cookie.FirstPartySets.ProcessedEntireComponent";
-
 const base::Version kVersion("1.0");
 
 const net::GlobalFirstPartySets kEmptySets =
-    net::GlobalFirstPartySets(kVersion, /*entries=*/{}, /*aliases=*/{});
+    net::GlobalFirstPartySets(kVersion, net::FirstPartySetsContextConfig());
 
 }  // namespace
 
 net::GlobalFirstPartySets ParseSets(const std::string& sets) {
   std::istringstream stream(sets);
   return FirstPartySetParser::ParseSetsFromStream(stream, kVersion,
-                                                  /*emit_errors=*/false,
-                                                  /*emit_metrics=*/true);
+                                                  /*emit_errors=*/false);
 }
 
 TEST(FirstPartySetParser, RejectsNonemptyMalformed) {
   // If the input isn't valid JSON, we should
   // reject it.
-  base::HistogramTester histogram_tester;
   EXPECT_EQ(ParseSets("certainly not valid JSON"), kEmptySets);
-  EXPECT_EQ(histogram_tester.GetTotalSum(kParsedSuccessfullyHistogram), 0);
-  EXPECT_EQ(histogram_tester.GetTotalSum(kNonfatalErrorsHistogram), 0);
-  histogram_tester.ExpectUniqueSample(kProcessedComponentHistogram,
-                                      /*sample=*/0,
-                                      /*expected_bucket_count=*/1);
 }
 
 TEST(FirstPartySetParser, AcceptsTrivial) {
-  base::HistogramTester histogram_tester;
   EXPECT_EQ(ParseSets(""), kEmptySets);
-  histogram_tester.ExpectUniqueSample(kProcessedComponentHistogram,
-                                      /*sample=*/1,
-                                      /*expected_bucket_count=*/1);
-  histogram_tester.ExpectUniqueSample(
-      kParsedSuccessfullyHistogram, /*sample=*/0, /*expected_bucket_count=*/1);
-  histogram_tester.ExpectUniqueSample(kProcessedComponentHistogram,
-                                      /*sample=*/1,
-                                      /*expected_bucket_count=*/1);
 }
 
 TEST(FirstPartySetParser, RejectsSingletonSet) {
@@ -107,7 +78,7 @@ TEST(FirstPartySetParser, AcceptsMinimal_Associated) {
 
   EXPECT_EQ(ParseSets(R"({"primary": "https://example.test",)"
                       R"("associatedSites": ["https://aaaa.test"]})"),
-            net::GlobalFirstPartySets(
+            net::GlobalFirstPartySets::CreateForTesting(
                 kVersion,
                 {
                     {example,
@@ -125,7 +96,7 @@ TEST(FirstPartySetParser, AcceptsMinimal_Service) {
   EXPECT_EQ(
       ParseSets(R"({"primary": "https://example.test",)"
                 R"("serviceSites": ["https://aaaa.test"]})"),
-      net::GlobalFirstPartySets(
+      net::GlobalFirstPartySets::CreateForTesting(
           kVersion,
           {
               {example,
@@ -136,7 +107,6 @@ TEST(FirstPartySetParser, AcceptsMinimal_Service) {
 }
 
 TEST(FirstPartySetParser, AcceptsMinimal_AllSubsets_WithCcTLDs) {
-  base::HistogramTester histogram_tester;
   net::SchemefulSite example(GURL("https://example.test"));
   net::SchemefulSite example_cctld(GURL("https://example.cctld"));
   net::SchemefulSite a(GURL("https://a.test"));
@@ -154,7 +124,7 @@ TEST(FirstPartySetParser, AcceptsMinimal_AllSubsets_WithCcTLDs) {
                 R"("https://b.test": ["https://b.cctld"])"
                 R"(})"
                 R"(})"),
-      net::GlobalFirstPartySets(
+      net::GlobalFirstPartySets::CreateForTesting(
           kVersion,
           {
               {example,
@@ -163,22 +133,11 @@ TEST(FirstPartySetParser, AcceptsMinimal_AllSubsets_WithCcTLDs) {
               {b, net::FirstPartySetEntry(example, net::SiteType::kService)},
           },
           {{example_cctld, example}, {a_cctld, a}, {b_cctld, b}}));
-  histogram_tester.ExpectUniqueSample(
-      kParsedSuccessfullyHistogram, /*sample=*/1, /*expected_bucket_count=*/1);
-  histogram_tester.ExpectUniqueSample(kNonfatalErrorsHistogram, /*sample=*/0,
-                                      /*expected_bucket_count=*/1);
-  histogram_tester.ExpectUniqueSample(kProcessedComponentHistogram,
-                                      /*sample=*/1,
-                                      /*expected_bucket_count=*/1);
 }
 
 TEST(FirstPartySetParser, RejectsMissingPrimary) {
-  base::HistogramTester histogram_tester;
   EXPECT_EQ(ParseSets(R"({"associatedSites": ["https://aaaa.test"]})"),
             kEmptySets);
-  histogram_tester.ExpectUniqueSample(kProcessedComponentHistogram,
-                                      /*sample=*/0,
-                                      /*expected_bucket_count=*/1);
 }
 
 TEST(FirstPartySetParser, RejectsTypeUnsafePrimary) {
@@ -213,7 +172,7 @@ TEST(FirstPartySetParser, PrimaryIsTLD) {
                 "\n"
                 R"({"primary": "https://example2.test", "associatedSites": )"
                 R"(["https://associatedsite2.test"]})"),
-      net::GlobalFirstPartySets(
+      net::GlobalFirstPartySets::CreateForTesting(
           kVersion,
           {
               {example2,
@@ -225,7 +184,6 @@ TEST(FirstPartySetParser, PrimaryIsTLD) {
 }
 
 TEST(FirstPartySetParser, PrimaryIsIPAddress) {
-  base::HistogramTester histogram_tester;
   net::SchemefulSite example2(GURL("https://example2.test"));
   net::SchemefulSite associated2(GURL("https://associatedsite2.test"));
   net::SchemefulSite example(GURL("https://example.test"));
@@ -240,7 +198,7 @@ TEST(FirstPartySetParser, PrimaryIsIPAddress) {
           "\n"
           R"({"primary": "https://example.test",)"
           R"("associatedSites": ["https://aaaa.test"]})"),
-      net::GlobalFirstPartySets(
+      net::GlobalFirstPartySets::CreateForTesting(
           kVersion,
           {
               {example2,
@@ -253,27 +211,19 @@ TEST(FirstPartySetParser, PrimaryIsIPAddress) {
                net::FirstPartySetEntry(example, net::SiteType::kAssociated)},
           },
           {}));
-  histogram_tester.ExpectUniqueSample(
-      kParsedSuccessfullyHistogram, /*sample=*/2, /*expected_bucket_count=*/1);
-  histogram_tester.ExpectUniqueSample(kNonfatalErrorsHistogram, /*sample=*/1,
-                                      /*expected_bucket_count=*/1);
-  histogram_tester.ExpectUniqueSample(kProcessedComponentHistogram,
-                                      /*sample=*/1,
-                                      /*expected_bucket_count=*/1);
 }
 
 TEST(FirstPartySetParser, PrimaryHasNoTLD) {
   const net::SchemefulSite example2(GURL("https://example2.test"));
   const net::SchemefulSite associated2(GURL("https://associatedsite2.test"));
 
-  base::HistogramTester histogram_tester;
   EXPECT_EQ(
       ParseSets(R"({"primary": "https://example.test..", "associatedSites": )"
                 R"(["https://associatedsite1.test"]})"
                 "\n"
                 R"({"primary": "https://example2.test", "associatedSites": )"
                 R"(["https://associatedsite2.test"]})"),
-      net::GlobalFirstPartySets(
+      net::GlobalFirstPartySets::CreateForTesting(
           kVersion,
           {
               {example2,
@@ -282,10 +232,6 @@ TEST(FirstPartySetParser, PrimaryHasNoTLD) {
                net::FirstPartySetEntry(example2, net::SiteType::kAssociated)},
           },
           {}));
-  histogram_tester.ExpectUniqueSample(
-      kParsedSuccessfullyHistogram, /*sample=*/1, /*expected_bucket_count=*/1);
-  histogram_tester.ExpectUniqueSample(kNonfatalErrorsHistogram, /*sample=*/1,
-                                      /*expected_bucket_count=*/1);
 }
 
 TEST(FirstPartySetParser, RejectsMissingAssociatedSites) {
@@ -326,7 +272,7 @@ TEST(FirstPartySetParser, AssociatedSiteIsTLD) {
                 "\n"
                 R"({"primary": "https://example2.test", "associatedSites": )"
                 R"(["https://associatedsite2.test"]})"),
-      net::GlobalFirstPartySets(
+      net::GlobalFirstPartySets::CreateForTesting(
           kVersion,
           {
               {example,
@@ -353,7 +299,7 @@ TEST(FirstPartySetParser, AssociatedSiteIsIPAddress) {
                 "\n"
                 R"({"primary": "https://example2.test", "associatedSites": )"
                 R"(["https://associatedsite2.test"]})"),
-      net::GlobalFirstPartySets(
+      net::GlobalFirstPartySets::CreateForTesting(
           kVersion,
           {
               {example,
@@ -385,7 +331,7 @@ TEST(FirstPartySetParser, AssociatedSiteHasNoTLD) {
                 "\n"
                 R"({"primary": "https://example3.test", "associatedSites": )"
                 R"(["https://associatedsite3.test"]})"),
-      net::GlobalFirstPartySets(
+      net::GlobalFirstPartySets::CreateForTesting(
           kVersion,
           {
               {example,
@@ -410,7 +356,7 @@ TEST(FirstPartySetParser, TruncatesSubdomain_Primary) {
 
   EXPECT_EQ(ParseSets(R"({"primary": "https://subdomain.example.test", )"
                       R"("associatedSites": ["https://aaaa.test"]})"),
-            net::GlobalFirstPartySets(
+            net::GlobalFirstPartySets::CreateForTesting(
                 kVersion,
                 {
                     {example,
@@ -432,7 +378,7 @@ TEST(FirstPartySetParser, TruncatesPrimaryInvalidWithAlias) {
           R"({"primary": "https://subdomain1..test",)"
           R"("serviceSites": ["https://subdomain2..test","https://foo.test"],)"
           R"("ccTLDs": {"https://foo.test": ["https://foo.cctld"]}})"),
-      net::GlobalFirstPartySets(kVersion, {}, {}));
+      net::GlobalFirstPartySets(kVersion, net::FirstPartySetsContextConfig()));
 }
 
 TEST(FirstPartySetParser, TruncatesSubdomain_AssociatedSite) {
@@ -441,7 +387,7 @@ TEST(FirstPartySetParser, TruncatesSubdomain_AssociatedSite) {
 
   EXPECT_EQ(ParseSets(R"({"primary": "https://example.test", )"
                       R"("associatedSites": ["https://subdomain.aaaa.test"]})"),
-            net::GlobalFirstPartySets(
+            net::GlobalFirstPartySets::CreateForTesting(
                 kVersion,
                 {
                     {example,
@@ -473,7 +419,7 @@ TEST(FirstPartySetParser, TruncatesSubdomain_RepeatedDomain) {
                 R"("associatedSites": [)"
                 R"("https://cccc.test"]})"
                 "\n"),
-      net::GlobalFirstPartySets(
+      net::GlobalFirstPartySets::CreateForTesting(
           kVersion,
           {
               {example,
@@ -521,7 +467,7 @@ TEST(FirstPartySetParser, TruncatesSubdomain_NondisjointSets) {
                 R"("associatedSites": [)"
                 R"("https://subdomain2.aaaa.test", "https://cccc.test"]})"
                 "\n"),
-      net::GlobalFirstPartySets(
+      net::GlobalFirstPartySets::CreateForTesting(
           kVersion,
           {
               {example,
@@ -551,7 +497,7 @@ TEST(FirstPartySetParser, TruncatesSubdomain_NondisjointSets) {
                 R"("associatedSites": [)"
                 R"("https://subdomain.aaaa.test", "https://bbbb.test"]})"
                 "\n"),
-      net::GlobalFirstPartySets(
+      net::GlobalFirstPartySets::CreateForTesting(
           kVersion,
           {
               {example,
@@ -577,7 +523,7 @@ TEST(FirstPartySetParser, TruncatesSubdomain_NondisjointSets) {
           R"("associatedSites": [)"
           R"("https://subdomain2.example3.cctld", "https://bbbb.test"]})"
           "\n"),
-      net::GlobalFirstPartySets(
+      net::GlobalFirstPartySets::CreateForTesting(
           kVersion,
           {
               {example,
@@ -589,7 +535,6 @@ TEST(FirstPartySetParser, TruncatesSubdomain_NondisjointSets) {
 }
 
 TEST(FirstPartySetParser, AcceptsMultipleSets) {
-  base::HistogramTester histogram_tester;
   net::SchemefulSite foo(GURL("https://foo.test"));
   net::SchemefulSite associated2(GURL("https://associatedsite2.test"));
   net::SchemefulSite example(GURL("https://example.test"));
@@ -600,7 +545,7 @@ TEST(FirstPartySetParser, AcceptsMultipleSets) {
                 "[\"https://associatedsite1.test\"]}\n"
                 "{\"primary\": \"https://foo.test\", \"associatedSites\": "
                 "[\"https://associatedsite2.test\"]}"),
-      net::GlobalFirstPartySets(
+      net::GlobalFirstPartySets::CreateForTesting(
           kVersion,
           {
               {example,
@@ -612,17 +557,9 @@ TEST(FirstPartySetParser, AcceptsMultipleSets) {
                net::FirstPartySetEntry(foo, net::SiteType::kAssociated)},
           },
           {}));
-  histogram_tester.ExpectUniqueSample(
-      kParsedSuccessfullyHistogram, /*sample=*/2, /*expected_bucket_count=*/1);
-  histogram_tester.ExpectUniqueSample(kNonfatalErrorsHistogram, /*sample=*/0,
-                                      /*expected_bucket_count=*/1);
-  histogram_tester.ExpectUniqueSample(kProcessedComponentHistogram,
-                                      /*sample=*/1,
-                                      /*expected_bucket_count=*/1);
 }
 
 TEST(FirstPartySetParser, AcceptsMultipleSetsWithWhitespace) {
-  base::HistogramTester histogram_tester;
   net::SchemefulSite foo(GURL("https://foo.test"));
   net::SchemefulSite associated1(GURL("https://associatedsite1.test"));
   net::SchemefulSite associated2(GURL("https://associatedsite2.test"));
@@ -635,7 +572,7 @@ TEST(FirstPartySetParser, AcceptsMultipleSetsWithWhitespace) {
 
       {"primary": "https://foo.test", "associatedSites": ["https://associatedsite2.test"]}
     )"),
-      net::GlobalFirstPartySets(
+      net::GlobalFirstPartySets::CreateForTesting(
           kVersion,
           {
               {example,
@@ -647,21 +584,15 @@ TEST(FirstPartySetParser, AcceptsMultipleSetsWithWhitespace) {
                net::FirstPartySetEntry(foo, net::SiteType::kAssociated)},
           },
           {}));
-  histogram_tester.ExpectUniqueSample(
-      kParsedSuccessfullyHistogram, /*sample=*/2, /*expected_bucket_count=*/1);
-  histogram_tester.ExpectUniqueSample(kNonfatalErrorsHistogram, /*sample=*/0,
-                                      /*expected_bucket_count=*/1);
 }
 
 TEST(FirstPartySetParser, RejectsInvalidSets_InvalidPrimary) {
-  base::HistogramTester histogram_tester;
   EXPECT_EQ(
       ParseSets(
           R"({"primary": 3, "associatedSites": ["https://associatedsite1.test"]}
     {"primary": "https://foo.test",)"
           R"("associatedSites": ["https://associatedsite2.test"]})"),
       kEmptySets);
-  EXPECT_EQ(histogram_tester.GetTotalSum(kParsedSuccessfullyHistogram), 0);
 }
 
 TEST(FirstPartySetParser, RejectsInvalidSets_InvalidAssociatedSite) {
@@ -678,7 +609,7 @@ TEST(FirstPartySetParser, AllowsTrailingCommas) {
   EXPECT_EQ(
       ParseSets(R"({"primary": "https://example.test", )"
                 R"("associatedSites": ["https://associatedsite1.test"],})"),
-      net::GlobalFirstPartySets(
+      net::GlobalFirstPartySets::CreateForTesting(
           kVersion,
           {
               {example,
@@ -759,7 +690,7 @@ TEST(FirstPartySetParser, Accepts_ccTLDAliases) {
           "[\"https://different_prefix.cctld\"]"  //
           "}"                                     //
           "}"),
-      net::GlobalFirstPartySets(
+      net::GlobalFirstPartySets::CreateForTesting(
           kVersion,
           {
               {example,
@@ -809,684 +740,19 @@ TEST(FirstPartySetParser, Rejects_NondisjointCcTLDAliases) {
             kEmptySets);
 }
 
-TEST(FirstPartySetParser, Logs_MultipleRejections) {
-  // 2 rejections should show up on the histogram as separate instances
-  base::HistogramTester histogram_tester;
-  EXPECT_EQ(ParseSets("certainly not valid JSON"), kEmptySets);
-  EXPECT_EQ(ParseSets("also not valid JSON"), kEmptySets);
-  histogram_tester.ExpectUniqueSample(kProcessedComponentHistogram,
-                                      /*sample=*/0,
-                                      /*expected_bucket_count=*/2);
-}
 
-TEST(FirstPartySetParser_ParseSetsFromEnterprisePolicyTest,
-     Accepts_MissingSetLists) {
-  EXPECT_EQ(
-      FirstPartySetParser::ParseSetsFromEnterprisePolicy(base::DictValue())
-          .first,
-      base::ok(FirstPartySetsOverridesPolicy(net::SetsMutation({}, {}, {}))));
-}
 
-TEST(FirstPartySetParser_ParseSetsFromEnterprisePolicyTest,
-     Accepts_EmptyLists) {
-  base::DictValue policy_value = base::test::ParseJsonDict(R"(
-              {
-                "replacements": [],
-                "additions": []
-              }
-            )");
-  EXPECT_EQ(
-      FirstPartySetParser::ParseSetsFromEnterprisePolicy(policy_value).first,
-      base::ok(FirstPartySetsOverridesPolicy(net::SetsMutation({}, {}, {}))));
-}
 
-TEST(FirstPartySetParser_ParseSetsFromEnterprisePolicyTest,
-     InvalidTypeError_MissingPrimary) {
-  base::DictValue policy_value = base::test::ParseJsonDict(R"(
-              {
-                "replacements": [
-                  {
-                    "associatedSites": ["https://associatedsite1.test"]
-                  }
-                ],
-                "additions": []
-              }
-            )");
-  EXPECT_THAT(
-      FirstPartySetParser::ParseSetsFromEnterprisePolicy(policy_value).first,
-      ErrorIs(
-          ParseError(ParseErrorType::kInvalidType,
-                     /*issue_path=*/{kReplacementsField, 0, kPrimaryField})));
-}
 
-TEST(FirstPartySetParser_ParseSetsFromEnterprisePolicyTest,
-     InvalidTypeError_WrongPrimaryType) {
-  base::DictValue policy_value = base::test::ParseJsonDict(R"(
-              {
-                "replacements": [
-                  {
-                    "primary": 123,
-                    "associatedSites": ["https://associatedsite1.test"]
-                  }
-                ],
-                "additions": []
-              }
-            )");
-  EXPECT_THAT(
-      FirstPartySetParser::ParseSetsFromEnterprisePolicy(policy_value).first,
-      ErrorIs(
-          ParseError(ParseErrorType::kInvalidType,
-                     /*issue_path=*/{kReplacementsField, 0, kPrimaryField})));
-}
 
-TEST(FirstPartySetParser_ParseSetsFromEnterprisePolicyTest,
-     InvalidTypeError_WrongAssociatedSitesFieldType) {
-  base::DictValue policy_value = base::test::ParseJsonDict(R"(
-              {
-                "replacements": [
-                  {
-                    "primary": "https://primary1.test",
-                    "associatedSites": 123
-                  }
-                ],
-                "additions": []
-              }
-            )");
-  EXPECT_THAT(
-      FirstPartySetParser::ParseSetsFromEnterprisePolicy(policy_value).first,
-      ErrorIs(ParseError(
-          ParseErrorType::kInvalidType,
-          /*issue_path=*/{kReplacementsField, 0, kAssociatedSitesField})));
-}
 
-TEST(FirstPartySetParser_ParseSetsFromEnterprisePolicyTest,
-     InvalidTypeError_WrongAssociatedSiteType) {
-  base::DictValue policy_value = base::test::ParseJsonDict(R"(
-              {
-          "replacements": [
-            {
-              "primary": "https://primary1.test",
-              "associatedSites": ["https://associatedsite1.test", 123,
-              "https://associatedsite2.test"]
-            }
-          ],
-          "additions": []
-        }
-            )");
-  EXPECT_THAT(
-      FirstPartySetParser::ParseSetsFromEnterprisePolicy(policy_value).first,
-      ErrorIs(ParseError(
-          ParseErrorType::kInvalidType,
-          /*issue_path=*/{kReplacementsField, 0, kAssociatedSitesField, 1})));
-}
 
-TEST(FirstPartySetParser_ParseSetsFromEnterprisePolicyTest,
-     InvalidOriginError_PrimaryOpaque) {
-  base::DictValue policy_value = base::test::ParseJsonDict(R"(
-              {
-                "replacements": [
-                  {
-                    "primary": "",
-                    "associatedSites": ["https://associatedsite1.test"]
-                  }
-                ],
-                "additions": []
-              }
-            )");
-  EXPECT_THAT(
-      FirstPartySetParser::ParseSetsFromEnterprisePolicy(policy_value).first,
-      ErrorIs(
-          ParseError(ParseErrorType::kInvalidOrigin,
-                     /*issue_path=*/{kReplacementsField, 0, kPrimaryField})));
-}
 
-TEST(FirstPartySetParser_ParseSetsFromEnterprisePolicyTest,
-     InvalidOriginError_AssociatedSiteOpaque) {
-  base::DictValue policy_value = base::test::ParseJsonDict(R"(
-               {
-                "replacements": [
-                  {
-                    "primary": "https://primary1.test",
-                    "associatedSites": [""]
-                  }
-                ],
-                "additions": []
-              }
-            )");
-  EXPECT_THAT(
-      FirstPartySetParser::ParseSetsFromEnterprisePolicy(policy_value).first,
-      ErrorIs(ParseError(
-          ParseErrorType::kInvalidOrigin,
-          /*issue_path=*/{kReplacementsField, 0, kAssociatedSitesField, 0})));
-}
 
-TEST(FirstPartySetParser_ParseSetsFromEnterprisePolicyTest, PrimaryNonHttps) {
-  base::DictValue policy_value = base::test::ParseJsonDict(R"(
-                 {
-                "replacements": [
-                  {
-                    "primary": "http://primary1.test",
-                    "associatedSites": ["https://associatedsite1.test"]
-                  }
-                ],
-                "additions": []
-              }
-            )");
-  EXPECT_THAT(
-      FirstPartySetParser::ParseSetsFromEnterprisePolicy(policy_value).first,
-      ErrorIs(
-          ParseError(ParseErrorType::kNonHttpsScheme,
-                     /*issue_path=*/{kReplacementsField, 0, kPrimaryField})));
-}
 
-TEST(FirstPartySetParser_ParseSetsFromEnterprisePolicyTest,
-     AssociatedSiteNonHttps) {
-  base::DictValue policy_value = base::test::ParseJsonDict(R"(
-               {
-                "replacements": [
-                  {
-                    "primary": "https://primary1.test",
-                    "associatedSites": ["http://associatedsite1.test"]
-                  }
-                ],
-                "additions": []
-              }
-            )");
-  EXPECT_THAT(
-      FirstPartySetParser::ParseSetsFromEnterprisePolicy(policy_value).first,
-      ErrorIs(ParseError(
-          ParseErrorType::kNonHttpsScheme,
-          /*issue_path=*/{kReplacementsField, 0, kAssociatedSitesField, 0})));
-}
 
-TEST(FirstPartySetParser_ParseSetsFromEnterprisePolicyTest,
-     PrimaryNonRegisteredDomain) {
-  const net::SchemefulSite primary2(GURL("https://primary2.test"));
-  const net::SchemefulSite primary3(GURL("https://primary3.test"));
-  const net::SchemefulSite associated2(GURL("https://associatedsite2.test"));
-  const net::SchemefulSite associated3(GURL("https://associatedsite3.test"));
 
-  // The invalid primary invalidates the set, but other sets are still parsed.
-  base::DictValue policy_value = base::test::ParseJsonDict(R"(
-                {
-                "replacements": [
-                  {
-                    "primary": "https://primary1.test..",
-                    "associatedSites": ["https://associatedsite1.test"]
-                  },
-                  {
-                    "primary": "https://primary2.test",
-                    "associatedSites": ["https://associatedsite2.test"]
-                  }
-                ],
-                "additions": [
-                  {
-                    "primary": "https://primary3.test",
-                    "associatedSites": ["https://associatedsite3.test"]
-                  }
-                ]
-              }
-            )");
-  EXPECT_EQ(
-      FirstPartySetParser::ParseSetsFromEnterprisePolicy(policy_value).first,
-      base::ok(FirstPartySetsOverridesPolicy(net::SetsMutation(
-          {
-              {
-                  {primary2,
-                   net::FirstPartySetEntry(primary2, net::SiteType::kPrimary)},
-                  {associated2, net::FirstPartySetEntry(
-                                    primary2, net::SiteType::kAssociated)},
-              },
-          },
-          {
-              {
-                  {primary3,
-                   net::FirstPartySetEntry(primary3, net::SiteType::kPrimary)},
-                  {associated3, net::FirstPartySetEntry(
-                                    primary3, net::SiteType::kAssociated)},
-              },
-          },
-          {}))));
-}
 
-TEST(FirstPartySetParser_ParseSetsFromEnterprisePolicyTest,
-     AssociatedSiteNonRegisteredDomain) {
-  const net::SchemefulSite primary1(GURL("https://primary1.test"));
-  const net::SchemefulSite primary2(GURL("https://primary2.test"));
-  const net::SchemefulSite associated1(GURL("https://associatedsite1.test"));
-  const net::SchemefulSite associated2(GURL("https://associatedsite2.test"));
-  const net::SchemefulSite associated3(GURL("https://associatedsite3.test"));
-
-  base::DictValue policy_value = base::test::ParseJsonDict(R"(
-              {
-                "replacements": [
-                  {
-                    "primary": "https://primary1.test",
-                    "associatedSites": [
-                      "https://associatedsite1.test..",
-                      "https://associatedsite2.test"
-                    ]
-                  }
-                ],
-                "additions": [
-                  {
-                    "primary": "https://primary2.test",
-                    "associatedSites": ["https://associatedsite3"]
-                  }
-                ]
-              }
-            )");
-
-  // The invalid associated site is ignored, but the rest of the set is still
-  // processed. If the set becomes a singleton as a result of ignoring a member
-  // site, the set is ignored entirely.
-  EXPECT_EQ(
-      FirstPartySetParser::ParseSetsFromEnterprisePolicy(policy_value).first,
-      base::ok(FirstPartySetsOverridesPolicy(net::SetsMutation(
-          {
-              {
-                  {primary1,
-                   net::FirstPartySetEntry(primary1, net::SiteType::kPrimary)},
-                  {associated2, net::FirstPartySetEntry(
-                                    primary1, net::SiteType::kAssociated)},
-              },
-          },
-          {}, {}))));
-}
-
-TEST(FirstPartySetParser_ParseSetsFromEnterprisePolicyTest,
-     SingletonSetError_EmptyAssociatedSites) {
-  const net::SchemefulSite primary2(GURL("https://primary2.test"));
-  const net::SchemefulSite associated2(GURL("https://associatedsite2.test"));
-
-  base::DictValue policy_value = base::test::ParseJsonDict(R"(
-             {
-                "replacements": [
-                  {
-                    "primary": "https://primary1.test",
-                    "associatedSites": []
-                  },
-                  {
-                    "primary": "https://primary2.test",
-                    "associatedSites": ["https://associatedsite2.test"]
-                  }
-                ],
-                "additions": []
-              }
-            )");
-  EXPECT_EQ(
-      FirstPartySetParser::ParseSetsFromEnterprisePolicy(policy_value).first,
-      base::ok(FirstPartySetsOverridesPolicy(net::SetsMutation(
-          {
-              {
-                  {primary2,
-                   net::FirstPartySetEntry(primary2, net::SiteType::kPrimary)},
-                  {associated2, net::FirstPartySetEntry(
-                                    primary2, net::SiteType::kAssociated)},
-              },
-          },
-          {}, {}))));
-}
-
-TEST(FirstPartySetParser_ParseSetsFromEnterprisePolicyTest,
-     RepeatedDomainError_WithinReplacements) {
-  base::DictValue policy_value = base::test::ParseJsonDict(R"(
-              {
-                "replacements": [
-                  {
-                    "primary": "https://primary1.test",
-                    "associatedSites": ["https://primary1.test"]
-                  }
-                ],
-                "additions": []
-              }
-            )");
-  EXPECT_THAT(
-      FirstPartySetParser::ParseSetsFromEnterprisePolicy(policy_value).first,
-      ErrorIs(ParseError(
-          ParseErrorType::kRepeatedDomain,
-          /*issue_path=*/{kReplacementsField, 0, kAssociatedSitesField, 0})));
-}
-
-TEST(FirstPartySetParser_ParseSetsFromEnterprisePolicyTest,
-     NonDisjointError_WithinReplacements) {
-  base::DictValue policy_value = base::test::ParseJsonDict(R"(
-                   {
-                "replacements": [
-                  {
-                    "primary": "https://primary1.test",
-                    "associatedSites": ["https://associatedsite1.test"]
-                  },
-                  {
-                    "primary": "https://primary2.test",
-                    "associatedSites": ["https://associatedsite1.test"]
-                  }
-                ],
-                "additions": []
-              }
-            )");
-  EXPECT_THAT(
-      FirstPartySetParser::ParseSetsFromEnterprisePolicy(policy_value).first,
-      ErrorIs(ParseError(
-          ParseErrorType::kNonDisjointSets,
-          /*issue_path=*/{kReplacementsField, 1, kAssociatedSitesField, 0})));
-}
-
-TEST(FirstPartySetParser_ParseSetsFromEnterprisePolicyTest,
-     NonDisjointError_WithinAdditions) {
-  base::DictValue policy_value = base::test::ParseJsonDict(R"(
-                   {
-                "replacements": [],
-                "additions": [
-                  {
-                    "primary": "https://primary1.test",
-                    "associatedSites": ["https://associatedsite1.test"]
-                  },
-                  {
-                    "primary": "https://primary2.test",
-                    "associatedSites": ["https://associatedsite1.test"]
-                  }
-                ]
-              }
-            )");
-  EXPECT_THAT(
-      FirstPartySetParser::ParseSetsFromEnterprisePolicy(policy_value).first,
-      ErrorIs(ParseError(
-          ParseErrorType::kNonDisjointSets,
-          /*issue_path=*/{kAdditionsField, 1, kAssociatedSitesField, 0})));
-}
-
-TEST(FirstPartySetParser_ParseSetsFromEnterprisePolicyTest,
-     NonDisjointError_AcrossBothLists) {
-  base::DictValue policy_value = base::test::ParseJsonDict(R"(
-               {
-                "replacements": [
-                  {
-                    "primary": "https://primary1.test",
-                    "associatedSites": ["https://associatedsite1.test"]
-                  }
-                ],
-                "additions": [
-                  {
-                    "primary": "https://primary2.test",
-                    "associatedSites": ["https://associatedsite1.test"]
-                  }
-                ]
-              }
-            )");
-  EXPECT_THAT(
-      FirstPartySetParser::ParseSetsFromEnterprisePolicy(policy_value).first,
-      ErrorIs(ParseError(
-          ParseErrorType::kNonDisjointSets,
-          /*issue_path=*/{kAdditionsField, 0, kAssociatedSitesField, 0})));
-}
-
-TEST(FirstPartySetParser_ParseSetsFromEnterprisePolicyTest, WarnsUntilError) {
-  base::DictValue policy_value = base::test::ParseJsonDict(R"(
-               {
-                "replacements": [
-                  {
-                    "primary": "https://primary1.test",
-                    "associatedSites": ["https://associatedsite1.test"],
-                    "ccTLDs": {
-                      "https://associatedsite1.cctld": ["https://associatedsite1.test"],
-                      "https://primary1.test": ["https://primary1-diff.cctld"]
-                    }
-                  }
-                ],
-                "additions": [
-                  {
-                    "primary": "http://primary2.test",
-                    "associatedSites": ["https://associatedsite2.test"],
-                    "ccTLDs": {
-                      "https://associatedsite2.test": ["https://associatedsite2-diff.cctld"]
-                    }
-                  }
-                ]
-              }
-            )");
-  // The ParseWarning in the ccTLDs field of "additions[0]" isn't added since
-  // the error arises first.
-  EXPECT_THAT(
-      FirstPartySetParser::ParseSetsFromEnterprisePolicy(policy_value),
-      Pair(ErrorIs(
-               ParseError(ParseErrorType::kNonHttpsScheme,
-                          /*issue_path=*/{kAdditionsField, 0, kPrimaryField})),
-           ElementsAre(ParseWarning(ParseWarningType::kCctldKeyNotCanonical,
-                                    {kReplacementsField, 0, kCctldsField,
-                                     "https://associatedsite1.cctld"}),
-                       ParseWarning(ParseWarningType::kAliasNotCctldVariant,
-                                    {kReplacementsField, 0, kCctldsField,
-                                     "https://primary1.test", 0}))));
-}
-
-TEST(FirstPartySetParser_ParseSetsFromEnterprisePolicyTest,
-     SuccessfulMapping_SameList) {
-  net::SchemefulSite primary1(GURL("https://primary1.test"));
-  net::SchemefulSite associated_site1(GURL("https://associatedsite1.test"));
-  net::SchemefulSite primary2(GURL("https://primary2.test"));
-  net::SchemefulSite associated_site2(GURL("https://associatedsite2.test"));
-
-  base::DictValue policy_value = base::test::ParseJsonDict(R"(
-             {
-                "replacements": [
-                  {
-                    "primary": "https://primary1.test",
-                    "associatedSites": ["https://associatedsite1.test"]
-                  },
-                  {
-                    "primary": "https://primary2.test",
-                    "associatedSites": ["https://associatedsite2.test"]
-                  }
-                ]
-              }
-            )");
-  const FirstPartySetsOverridesPolicy want_policy(net::SetsMutation(
-      {{
-           {primary1,
-            net::FirstPartySetEntry(primary1, net::SiteType::kPrimary)},
-           {associated_site1,
-            net::FirstPartySetEntry(primary1, net::SiteType::kAssociated)},
-       },
-       {
-           {primary2,
-            net::FirstPartySetEntry(primary2, net::SiteType::kPrimary)},
-           {associated_site2,
-            net::FirstPartySetEntry(primary2, net::SiteType::kAssociated)},
-       }},
-      {}, {}));
-  EXPECT_THAT(FirstPartySetParser::ParseSetsFromEnterprisePolicy(policy_value),
-              Pair(base::ok(std::cref(want_policy)), IsEmpty()));
-}
-
-TEST(FirstPartySetParser_ParseSetsFromEnterprisePolicyTest,
-     SuccessfulMapping_CrossList) {
-  net::SchemefulSite primary1(GURL("https://primary1.test"));
-  net::SchemefulSite associated_site1(GURL("https://associatedsite1.test"));
-  net::SchemefulSite primary2(GURL("https://primary2.test"));
-  net::SchemefulSite associated_site2(GURL("https://associatedsite2.test"));
-  net::SchemefulSite primary3(GURL("https://primary3.test"));
-  net::SchemefulSite associatedSite3(GURL("https://associatedsite3.test"));
-
-  base::DictValue policy_value = base::test::ParseJsonDict(R"(
-                {
-                "replacements": [
-                  {
-                    "primary": "https://primary1.test",
-                    "associatedSites": ["https://associatedsite1.test"]
-                  },
-                  {
-                    "primary": "https://primary2.test",
-                    "associatedSites": ["https://associatedsite2.test"]
-                  }
-                ],
-                "additions": [
-                  {
-                    "primary": "https://primary3.test",
-                    "associatedSites": ["https://associatedsite3.test"]
-                  }
-                ]
-              }
-            )");
-  const FirstPartySetsOverridesPolicy want_policy(net::SetsMutation(
-      {{
-           {primary1,
-            net::FirstPartySetEntry(primary1, net::SiteType::kPrimary)},
-           {associated_site1,
-            net::FirstPartySetEntry(primary1, net::SiteType::kAssociated)},
-       },
-       {
-           {primary2,
-            net::FirstPartySetEntry(primary2, net::SiteType::kPrimary)},
-           {associated_site2,
-            net::FirstPartySetEntry(primary2, net::SiteType::kAssociated)},
-       }},
-      {{
-          {primary3,
-           net::FirstPartySetEntry(primary3, net::SiteType::kPrimary)},
-          {associatedSite3,
-           net::FirstPartySetEntry(primary3, net::SiteType::kAssociated)},
-      }},
-      {}));
-  EXPECT_THAT(FirstPartySetParser::ParseSetsFromEnterprisePolicy(policy_value),
-              Pair(base::ok(std::cref(want_policy)), IsEmpty()));
-}
-
-TEST(FirstPartySetParser_ParseSetsFromEnterprisePolicyTest,
-     SuccessfulMapping_CrossList_TruncatesNonDisjoint) {
-  net::SchemefulSite primary1(GURL("https://primary1.test"));
-  net::SchemefulSite associated1(GURL("https://associated1.test"));
-  net::SchemefulSite primary2(GURL("https://primary2.test"));
-  net::SchemefulSite associated2(GURL("https://associated2.test"));
-  net::SchemefulSite primary3(GURL("https://primary3.test"));
-  net::SchemefulSite associated3(GURL("https://associated3.test"));
-
-  // The following sets are disjoint iff aaaa.test is on the Public Suffix List.
-  // If aaaa.test is not on the PSL, then two of the sets become singletons and
-  // should be deleted.
-  base::DictValue policy_value = base::test::ParseJsonDict(R"(
-                {
-                "replacements": [
-                  {
-                    "primary": "https://primary1.test",
-                    "associatedSites": [
-                      "https://associated1.test",
-                      "https://subdomain1.aaaa.test"
-                    ]
-                  },
-                  {
-                    "primary": "https://primary2.test",
-                    "associatedSites": [
-                      "https://subdomain2.aaaa.test"
-                    ]
-                  }
-                ],
-                "additions": [
-                  {
-                    "primary": "https://primary3.test",
-                    "associatedSites": [
-                      "https://subdomain3.aaaa.test"
-                    ]
-                  }
-                ]
-              }
-            )");
-  const FirstPartySetsOverridesPolicy want_policy(net::SetsMutation(
-      {{
-          {primary1,
-           net::FirstPartySetEntry(primary1, net::SiteType::kPrimary)},
-          {associated1,
-           net::FirstPartySetEntry(primary1, net::SiteType::kAssociated)},
-      }},
-      {}, {}));
-  EXPECT_THAT(FirstPartySetParser::ParseSetsFromEnterprisePolicy(policy_value),
-              Pair(base::ok(std::cref(want_policy)), IsEmpty()));
-}
-
-TEST(FirstPartySetParser_ParseSetsFromEnterprisePolicyTest,
-     SuccessfulMapping_CCTLDs) {
-  net::SchemefulSite primary1(GURL("https://primary1.test"));
-  net::SchemefulSite associated_site1(GURL("https://associatedsite1.test"));
-  net::SchemefulSite associated_site1_cctld(
-      GURL("https://associatedsite1.cctld"));
-  net::SchemefulSite primary2(GURL("https://primary2.test"));
-  net::SchemefulSite primary2_cctld(GURL("https://primary2.cctld"));
-  net::SchemefulSite associated_site2(GURL("https://associatedsite2.test"));
-  net::SchemefulSite primary3(GURL("https://primary3.test"));
-  net::SchemefulSite service3(GURL("https://service3.test"));
-  net::SchemefulSite service3_cctld(GURL("https://service3.cctld"));
-
-  base::DictValue policy_value = base::test::ParseJsonDict(R"(
-             {
-                "replacements": [
-                  {
-                    "primary": "https://primary1.test",
-                    "associatedSites": ["https://associatedsite1.test"],
-                    "ccTLDs": {
-                      "https://associatedsite1.test": ["https://associatedsite1.cctld"],
-                      "https://not_in_set.test": ["https://not_in_set.cctld"]
-                    }
-                  },
-                  {
-                    "primary": "https://primary2.test",
-                    "associatedSites": ["https://associatedsite2.test"],
-                    "ccTLDs": {
-                      "https://primary2.test": ["https://primary2.cctld"]
-                    }
-                  }
-                ],
-                "additions": [
-                  {
-                    "primary": "https://primary3.test",
-                    "serviceSites": ["https://service3.test"],
-                    "ccTLDs": {
-                      "https://service3.test": ["https://service3.cctld"]
-                    }
-                  }
-                ]
-              }
-            )");
-  const FirstPartySetsOverridesPolicy want_policy(net::SetsMutation(
-      /*replacement_sets=*/
-      {{
-           {primary1,
-            net::FirstPartySetEntry(primary1, net::SiteType::kPrimary)},
-           {associated_site1,
-            net::FirstPartySetEntry(primary1, net::SiteType::kAssociated)},
-           {associated_site1_cctld,
-            net::FirstPartySetEntry(primary1, net::SiteType::kAssociated)},
-       },
-       {
-           {primary2,
-            net::FirstPartySetEntry(primary2, net::SiteType::kPrimary)},
-           {primary2_cctld,
-            net::FirstPartySetEntry(primary2, net::SiteType::kPrimary)},
-           {associated_site2,
-            net::FirstPartySetEntry(primary2, net::SiteType::kAssociated)},
-       }},
-      /*addition_sets=*/
-      {{
-          {primary3,
-           net::FirstPartySetEntry(primary3, net::SiteType::kPrimary)},
-          {service3,
-           net::FirstPartySetEntry(primary3, net::SiteType::kService)},
-          {service3_cctld,
-           net::FirstPartySetEntry(primary3, net::SiteType::kService)},
-      }},
-      /*aliases=*/
-      {
-          {primary2_cctld, primary2},
-          {associated_site1_cctld, associated_site1},
-          {service3_cctld, service3},
-      }));
-
-  EXPECT_THAT(
-      FirstPartySetParser::ParseSetsFromEnterprisePolicy(policy_value),
-      Pair(base::ok(std::cref(want_policy)),
-           ElementsAre(ParseWarning(ParseWarningType::kCctldKeyNotCanonical,
-                                    {kReplacementsField, 0, kCctldsField,
-                                     "https://not_in_set.test"}))));
-}
 
 TEST(FirstPartySetParser, RespectsAssociatedSiteLimit) {
   net::SchemefulSite example(GURL("https://example.test"));
@@ -1502,7 +768,7 @@ TEST(FirstPartySetParser, RespectsAssociatedSiteLimit) {
           R"("associatedSites": ["https://a.test", "https://b.test",)"
           R"("https://c.test", "https://d.test", "https://e.test", "https://f.test"],)"
           R"(})"),
-      net::GlobalFirstPartySets(
+      net::GlobalFirstPartySets::CreateForTesting(
           kVersion,
           {
               {example,
@@ -1541,7 +807,7 @@ TEST(FirstPartySetParser, ServiceSitesAreNotCountedAgainstAssociatedSiteLimit) {
                 R"("https://e.test", "https://f.test", "https://g.test"],)"
                 R"("serviceSites": ["https://b.test", "https://c.test"],)"
                 R"(})"),
-      net::GlobalFirstPartySets(
+      net::GlobalFirstPartySets::CreateForTesting(
           kVersion,
           {
               {example,
@@ -1577,7 +843,7 @@ TEST(FirstPartySetParser, AliasesAreNotCountedAgainstAssociatedSiteLimit) {
           R"(  "https://a.test": ["https://a.cctld1", "https://a.cctld2"])"
           R"(})"
           R"(})"),
-      net::GlobalFirstPartySets(
+      net::GlobalFirstPartySets::CreateForTesting(
           kVersion,
           {
               {example,
@@ -1589,129 +855,6 @@ TEST(FirstPartySetParser, AliasesAreNotCountedAgainstAssociatedSiteLimit) {
               {e, net::FirstPartySetEntry(example, net::SiteType::kAssociated)},
           },
           {{a_cctld1, a}, {a_cctld2, a}}));
-}
-
-TEST(FirstPartySetParser, EnterprisePolicies_ExemptFromAssociatedSiteLimit) {
-  net::SchemefulSite primary1(GURL("https://primary1.test"));
-  net::SchemefulSite associated1(GURL("https://associated1.test"));
-  net::SchemefulSite associated2(GURL("https://associated2.test"));
-  net::SchemefulSite associated3(GURL("https://associated3.test"));
-  net::SchemefulSite associated4(GURL("https://associated4.test"));
-  net::SchemefulSite associated5(GURL("https://associated5.test"));
-  net::SchemefulSite associated6(GURL("https://associated6.test"));
-
-  base::DictValue policy_value = base::test::ParseJsonDict(R"(
-             {
-                "replacements": [
-                  {
-                    "primary": "https://primary1.test",
-                    "associatedSites": [
-                      "https://associated1.test",
-                      "https://associated2.test",
-                      "https://associated3.test",
-                      "https://associated4.test",
-                      "https://associated5.test",
-                      "https://associated6.test"
-                    ]
-                  }
-                ]
-              }
-            )");
-  EXPECT_EQ(
-      FirstPartySetParser::ParseSetsFromEnterprisePolicy(policy_value).first,
-      base::ok(FirstPartySetsOverridesPolicy(net::SetsMutation(
-          {{
-              {primary1,
-               net::FirstPartySetEntry(primary1, net::SiteType::kPrimary)},
-              {associated1,
-               net::FirstPartySetEntry(primary1, net::SiteType::kAssociated)},
-              {associated2,
-               net::FirstPartySetEntry(primary1, net::SiteType::kAssociated)},
-              {associated3,
-               net::FirstPartySetEntry(primary1, net::SiteType::kAssociated)},
-              {associated4,
-               net::FirstPartySetEntry(primary1, net::SiteType::kAssociated)},
-              {associated5,
-               net::FirstPartySetEntry(primary1, net::SiteType::kAssociated)},
-              {associated6,
-               net::FirstPartySetEntry(primary1, net::SiteType::kAssociated)},
-          }},
-          {}, {}))));
-}
-
-// Regression test for https://crbug.com/406036301.
-TEST(FirstPartySetParser,
-     EnterprisePolicies_AcceptsValidAndInvalidCctld_JustAdditions) {
-  net::SchemefulSite primary(GURL("https://primary.test"));
-  net::SchemefulSite alias(GURL("https://primary.foo"));
-
-  base::DictValue policy_dict = base::test::ParseJsonDict(R"(
-             {
-                "additions": [
-                  {
-                    "primary": "https://primary.test",
-                    "associatedSites": [
-                      "https://associated.test"
-                    ],
-                    "ccTLDs": {
-                      "https://primary.test": [
-                        "https://sub.associated.test",
-                        "https://primary.foo"
-                      ]
-                    }
-                  }
-                ]
-              }
-            )");
-
-  EXPECT_EQ(
-      FirstPartySetParser::ParseSetsFromEnterprisePolicy(policy_dict).first,
-      base::ok(FirstPartySetsOverridesPolicy(net::SetsMutation(
-          {},
-          {{
-              {primary,
-               net::FirstPartySetEntry(primary, net::SiteType::kPrimary)},
-              {alias,
-               net::FirstPartySetEntry(primary, net::SiteType::kPrimary)},
-          }},
-          {{alias, primary}}))));
-}
-
-// Regression test for https://crbug.com/406036301.
-TEST(FirstPartySetParser,
-     EnterprisePolicies_AcceptsValidAndInvalidCctld_JustReplacements) {
-  net::SchemefulSite primary(GURL("https://primary.test"));
-  net::SchemefulSite alias(GURL("https://primary.foo"));
-
-  base::DictValue policy_dict = base::test::ParseJsonDict(R"(
-             {
-                "replacements": [
-                  {
-                    "primary": "https://primary.test",
-                    "associatedSites": [
-                      "https://associated.test"
-                    ],
-                    "ccTLDs": {
-                      "https://primary.test": [
-                        "https://sub.associated.test",
-                        "https://primary.foo"
-                      ]
-                    }
-                  }
-                ]
-              }
-            )");
-
-  EXPECT_EQ(
-      FirstPartySetParser::ParseSetsFromEnterprisePolicy(policy_dict).first,
-      base::ok(FirstPartySetsOverridesPolicy(net::SetsMutation(
-          {{
-              {primary,
-               net::FirstPartySetEntry(primary, net::SiteType::kPrimary)},
-              {alias,
-               net::FirstPartySetEntry(primary, net::SiteType::kPrimary)},
-          }},
-          {}, {{alias, primary}}))));
 }
 
 TEST(FirstPartySetParser, ParseFromCommandLine_Invalid_MultipleSets) {
@@ -1773,8 +916,7 @@ TEST(FirstPartySetParser,
 
 void ParsesSetsCorrectly(std::string input) {
   std::istringstream stream(input);
-  FirstPartySetParser::ParseSetsFromStream(stream, base::Version("1.0"), false,
-                                           false);
+  FirstPartySetParser::ParseSetsFromStream(stream, base::Version("1.0"), false);
 }
 
 auto JsonDomain() {

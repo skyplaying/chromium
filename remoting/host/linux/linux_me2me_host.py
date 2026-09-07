@@ -18,17 +18,15 @@ import abc
 import argparse
 import atexit
 import base64
+import datetime
 import dbus
 import errno
-import fcntl
 import getpass
-import grp
 import hashlib
 import json
 import logging
 import os
 import platform
-import pwd
 import re
 import shlex
 import shutil
@@ -41,7 +39,6 @@ import syslog
 import tempfile
 import threading
 import time
-import uuid
 
 import psutil
 import xdg.BaseDirectory
@@ -99,21 +96,18 @@ if (os.path.basename(sys.argv[0]) == 'linux_me2me_host.py'):
 else:
   HOST_BINARY_PATH = os.path.join(SCRIPT_DIR, "chrome-remote-desktop-host")
 
-USER_SESSION_PATH = os.path.join(SCRIPT_DIR, "user-session")
-
 CRASH_UPLOADER_PATH = os.path.join(SCRIPT_DIR, "crash-uploader")
-
-CHROME_REMOTING_GROUP_NAME = "chrome-remote-desktop"
 
 HOME_DIR = os.environ["HOME"]
 CONFIG_DIR = os.path.join(HOME_DIR, ".config/chrome-remote-desktop")
 SESSION_FILE_PATH = os.path.join(HOME_DIR, ".chrome-remote-desktop-session")
 SYSTEM_SESSION_FILE_PATH = "/etc/chrome-remote-desktop-session"
 SYSTEM_PRE_SESSION_FILE_PATH = "/etc/chrome-remote-desktop-pre-session"
+PRE_SESSION_TIMEOUT_SECONDS = 30
 
 DEBIAN_XSESSION_PATH = "/etc/X11/Xsession"
 
-X_LOCK_FILE_TEMPLATE = "/tmp/.X%d-lock"
+X_SOCKET_FILE_TEMPLATE = "/tmp/.X11-unix/X%d"
 FIRST_X_DISPLAY_NUMBER = 20
 
 # Amount of time to wait between relaunching processes.
@@ -153,23 +147,10 @@ HOST_OFFLINE_REASON_HOST_RETRIES_EXCEEDED = "HOST_RETRIES_EXCEEDED"
 HOST_OFFLINE_REASON_CRASH_UPLOADER_RETRIES_EXCEEDED = (
   "CRASH_UPLOADER_RETRIES_EXCEEDED")
 
-# This is the file descriptor used to pass messages to the user_session binary
-# during startup. It must be kept in sync with kMessageFd in
-# remoting_user_session.cc.
-USER_SESSION_MESSAGE_FD = 202
-
 # This is the exit code used to signal to wrapper that it should restart instead
-# of exiting. It must be kept in sync with kRelaunchExitCode in
-# remoting_user_session.cc and RestartForceExitStatus in
+# of exiting. It must be kept in sync with RestartForceExitStatus in
 # chrome-remote-desktop@.service.
 RELAUNCH_EXIT_CODE = 41
-
-# This exit code is returned when a needed binary such as user-session or sg
-# cannot be found.
-COMMAND_NOT_FOUND_EXIT_CODE = 127
-
-# This exit code is returned when a needed binary exists but cannot be executed.
-COMMAND_NOT_EXECUTABLE_EXIT_CODE = 126
 
 # Globals needed by the atexit cleanup() handler.
 g_desktop = None
@@ -370,16 +351,26 @@ def terminate_process(pid, name):
 
   logging.info("Sending SIGTERM to %s proc (pid=%s)",
                name, pid)
+  psutil_proc = psutil.Process(pid)
   try:
-    psutil_proc = psutil.Process(pid)
     psutil_proc.terminate()
 
     # Use a short timeout, to avoid delaying service shutdown if the
     # process refuses to die for some reason.
     psutil_proc.wait(timeout=10)
   except psutil.TimeoutExpired:
-    logging.error("Timed out - sending SIGKILL")
-    psutil_proc.kill()
+    logging.error("Timed out - sending SIGKILL to %s proc (pid=%s)",
+                  name, pid)
+    try:
+      psutil_proc.kill()
+      psutil_proc.wait(timeout=10)
+    except psutil.TimeoutExpired:
+      logging.error(
+          "Timed out - process did not die after SIGKILL: %s proc (pid=%s)",
+          name, pid)
+    except psutil.NoSuchProcess:
+      # The process exited before or while sending SIGKILL, which is harmless.
+      pass
   except psutil.Error:
     logging.error("Error terminating process")
 
@@ -593,7 +584,6 @@ class Desktop(abc.ABC):
     self.pipewire_pulse_proc = None
     self.pipewire_session_manager = None
     self.pipewire_session_manager_proc = None
-    self.pre_session_proc = None
     self.session_proc = None
     self.host_proc = None
     self.child_env = None
@@ -684,9 +674,11 @@ class Desktop(abc.ABC):
     self.child_env["LD_LIBRARY_PATH"] = library_path
 
   def _setup_gnubby(self):
+    # LINT.IfChange(ssh_auth_sock_name)
     self.ssh_auth_sockname = os.path.join(
         xdg.BaseDirectory.get_runtime_dir(strict=False),
         "crd_ssh_auth_sock")
+    # LINT.ThenChange(//remoting/host/security_key/security_key_auth_handler_posix.cc:ssh_auth_sock_name)
     self.child_env["SSH_AUTH_SOCK"] = self.ssh_auth_sockname
 
   def _launch_pipewire(self, instance_name, runtime_path, sink_name):
@@ -767,30 +759,45 @@ class Desktop(abc.ABC):
 
     return False
 
-  def _launch_pre_session(self):
-    # Launch the pre-session script, if it exists. Returns true if the script
-    # was launched, false if it didn't exist.
+  def _run_pre_session(self):
+    # Runs the pre-session script synchronously, if it exists. Returns true if
+    # the script was run successfully or didn't exist, false if it failed.
     if os.path.exists(SYSTEM_PRE_SESSION_FILE_PATH):
       pre_session_command = bash_invocation_for_script(
           SYSTEM_PRE_SESSION_FILE_PATH)
 
-      logging.info("Launching pre-session: %s" % pre_session_command)
-      self.pre_session_proc = subprocess.Popen(pre_session_command,
-                                               stdin=subprocess.DEVNULL,
-                                               stdout=subprocess.PIPE,
-                                               stderr=subprocess.STDOUT,
-                                               cwd=HOME_DIR,
-                                               env=self.child_env)
+      logging.info("Running pre-session: %s" % pre_session_command)
+      try:
+        proc = subprocess.run(pre_session_command,
+                              stdin=subprocess.DEVNULL,
+                              stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT,
+                              timeout=PRE_SESSION_TIMEOUT_SECONDS,
+                              cwd=HOME_DIR,
+                              env=self.child_env,
+                              text=True,
+                              errors="replace")
+      except subprocess.TimeoutExpired as e:
+        logging.error("Pre-session timed out after %d seconds" %
+                      PRE_SESSION_TIMEOUT_SECONDS)
+        if e.output:
+          for line in e.output.splitlines():
+            logging.info("Pre-session output: %s" % line)
+        return False
+      except OSError as e:
+        logging.error("Could not run pre-session: %s" % e)
+        return False
 
-      if not self.pre_session_proc.pid:
-        raise Exception("Could not start pre-session")
+      if proc.stdout:
+        for line in proc.stdout.splitlines():
+          logging.info("Pre-session output: %s" % line)
 
-      output_filter_thread = SessionOutputFilterThread(
-          self.pre_session_proc.stdout, "Pre-session output: ", None)
-      output_filter_thread.start()
+      if proc.returncode != 0:
+        logging.error("Pre-session failed with code %d" % proc.returncode)
+        return False
 
-      return True
-    return False
+      logging.info("Pre-session finished successfully.")
+    return True
 
   def launch_session(self, server_args, backoff_time):
     """Launches process required for session and records the backoff time
@@ -798,39 +805,20 @@ class Desktop(abc.ABC):
     that time has passed."""
     logging.info("Setting up and launching session")
     self._setup_gnubby()
+    if not self._run_pre_session():
+      logging.error("Pre-session failed. Tearing down.")
+      self.session_inhibitor.record_started(MINIMUM_PROCESS_LIFETIME,
+                                            backoff_time)
+      self.session_inhibitor.record_stopped(expected=False)
+      return
     self._launch_server(server_args)
-    if not self._launch_pre_session():
-      # If there was no pre-session script, launch the session immediately.
-      self.launch_desktop_session()
+    self.launch_desktop_session()
     self.server_inhibitor.record_started(MINIMUM_PROCESS_LIFETIME,
-                                      backoff_time)
+                                         backoff_time)
     self.session_inhibitor.record_started(MINIMUM_PROCESS_LIFETIME,
-                                     backoff_time)
-
-  def _wait_for_setup_before_host_launch(self):
-    """
-    If a virtual desktop needs to do some setup before launching the host
-    process, it can override this method and ensure that the required setup is
-    done before returning from this process.
-
-    Returns:
-      True if setup completed successfully and the host process can be started.
-    """
-    return True
+                                          backoff_time)
 
   def launch_host(self, extra_start_host_args, backoff_time):
-    if not self._wait_for_setup_before_host_launch():
-      logging.error("Could not start the host process, since some required "
-                    "setup failed.")
-
-      # The failure might be temporary, for example, if the Wayland compositor
-      # takes a long time to start up after a fresh system boot. This should
-      # be consistent with launch_desktop_session().
-      sys.exit(RELAUNCH_EXIT_CODE)
-
-      # TODO: crbug.com/475260233 - Refactor both places to cleanly tear down
-      # and restart all processes, taking into account any inhibitors.
-
     logging.info("Launching host process")
 
     # Start remoting host
@@ -847,7 +835,6 @@ class Desktop(abc.ABC):
       _ = signum, frame
       logging.info("Host ready to receive connections.")
       self.host_ready = True
-      ParentProcessLogger.release_parent_if_connected(True)
 
     signal.signal(signal.SIGUSR1, sigusr1_handler)
     args.append("--signal-parent")
@@ -906,7 +893,6 @@ class Desktop(abc.ABC):
     for proc, name in [(self.host_proc, "host"),
                        (self.crash_uploader_proc, "crash-uploader"),
                        (self.session_proc, "session"),
-                       (self.pre_session_proc, "pre-session"),
                        (self.pipewire_proc, "pipewire"),
                        (self.pipewire_pulse_proc, "pipewire-pulse"),
                        (self.pipewire_session_manager_proc,
@@ -918,7 +904,6 @@ class Desktop(abc.ABC):
     self.pipewire_proc = None
     self.pipewire_pulse_proc = None
     self.pipewire_session_manager_proc = None
-    self.pre_session_proc = None
     self.session_proc = None
     self.host_proc = None
     self.crash_uploader_proc = None
@@ -944,25 +929,6 @@ class Desktop(abc.ABC):
       self.server_proc = None
       self.server_inhibitor.record_stopped(expected=False)
       tear_down = True
-
-    if (self.pre_session_proc is not None and
-        pid == self.pre_session_proc.pid):
-      self.pre_session_proc = None
-      if status == 0:
-        logging.info("Pre-session terminated successfully. Starting session.")
-        self.launch_desktop_session()
-      else:
-        logging.info("Pre-session failed. Tearing down.")
-        # The pre-session may have exited on its own or been brought down by
-        # the display server dying. Check if the display server is still running
-        # so we know whom to penalize.
-        if self.check_server_responding():
-          # Pre-session and session use the same inhibitor.
-          self.session_inhibitor.record_stopped(expected=False)
-        else:
-          self.server_inhibitor.record_stopped(expected=False)
-        # Either way, we want to tear down the session.
-        tear_down = True
 
     if self.pipewire_proc is not None and pid == self.pipewire_proc.pid:
       logging.info("PipeWire process terminated")
@@ -1177,10 +1143,6 @@ class WaylandSession(abc.ABC):
     """Returns the name of the binary to start the Wayland session."""
     pass
 
-  @abc.abstractmethod
-  def get_compositor_service(self):
-    """Returns the systemd service name for the Wayland compositor."""
-    pass
 
   @abc.abstractmethod
   def get_portal_services(self):
@@ -1208,9 +1170,6 @@ class GnomeWaylandSession(WaylandSession):
   def get_session_binary(self):
     return "gnome-session"
 
-  def get_compositor_service(self):
-    return "org.gnome.Shell@wayland"
-
   def get_portal_services(self):
     return ["xdg-desktop-portal-gnome", "xdg-desktop-portal-gtk"]
 
@@ -1230,9 +1189,6 @@ class KdeWaylandSession(WaylandSession):
 
   def get_session_binary(self):
     return "startplasma-wayland"
-
-  def get_compositor_service(self):
-    return "plasma-kwin_wayland.service"
 
   def get_portal_services(self):
     return ["plasma-xdg-desktop-portal-kde"]
@@ -1263,7 +1219,7 @@ class WaylandDesktop(Desktop):
   """Manage a single virtual wayland based desktop"""
 
   WL_SERVER_CHECK_DELAY_SECONDS = 1
-  WL_SERVER_CHECK_TIMEOUT_SECONDS = 30
+  WL_SERVER_CHECK_TIMEOUT_SECONDS = 60
   WL_SERVER_REPLY_TIMEOUT_SECONDS = 1
 
   def __init__(self, sizes, host_config, wayland_session):
@@ -1292,7 +1248,7 @@ class WaylandDesktop(Desktop):
   def _launch_server(self, *args, **kwargs):
     logging.info("Launching wayland server.")
     # Remove the display layout file, which will cause problems if it is applied
-    # right after the session is launched. See: http://crbug.com/444052254
+    # right after the session is launched. See: http://crbug.com/487749302
     display_layout_file = os.path.join(
         CONFIG_DIR, "host#%s.display_layout.pb" % g_host_hash)
     try:
@@ -1338,6 +1294,7 @@ class WaylandDesktop(Desktop):
     # "systemctl --user show-environment". That command may shell-escape its
     # output, and there may be issues with embedded newlines or invalid UTF-8
     # encoding.
+    bus = None
     try:
       # A private connection is needed. The systemd user "dbus" service runs
       # on-demand (whenever the dbus socket is accessed) so it may stop and
@@ -1354,6 +1311,9 @@ class WaylandDesktop(Desktop):
       # D-Bus errors should be rare - include exception info for debugging.
       logging.error("Failed to get Wayland socket name", exc_info=True)
       return False
+    finally:
+      if bus is not None:
+        bus.close()
 
     wayland_display_env = "WAYLAND_DISPLAY"
     wayland_env_prefix = wayland_display_env + "="
@@ -1363,34 +1323,33 @@ class WaylandDesktop(Desktop):
         self.child_env[wayland_display_env] = self._wayland_socket
         logging.info("Fetched Wayland socket name: %s" % self._wayland_socket)
         return True
-    logging.error("%s not found in systemd environment" % wayland_display_env)
     return False
 
   def _wait_for_wayland_compositor_running(self):
     """
-    Waits for the wayland service to become active. Returns true if this
-    happens within the allowed timeout, else false.
+    Waits for the Wayland display socket to be exported to systemd and for the
+    Wayland server to respond to connections. Returns true if this happens
+    within the allowed timeout, else false.
     """
+    self._wayland_socket = None
     start_time = time.time()
-    compositor_service = self._wayland_session.get_compositor_service()
     while time.time() - start_time < self.WL_SERVER_CHECK_TIMEOUT_SECONDS:
-      exit_code = subprocess.call(
-        # 'systemctl' is provided by the 'systemd' package. The service is of
-        # type 'notify', which means that it tells systemd when it is ready to
-        # accept Wayland connections.
-        ["systemctl", "--user", "is-active", compositor_service],
-        stdout=subprocess.DEVNULL)
-      if exit_code == 0:
-        logging.info("Wayland compositor (%s) became active in %s seconds: " %
-          (compositor_service, str(time.time() - start_time)))
-        # If the socket-name can't be fetched, treat it as a launch failure
-        # requiring a restart, since it will not be possible for this script,
-        # or a child process, to make a Wayland connection.
-        return self._fetch_wayland_socket_from_systemd()
+      if not self._wayland_socket:
+        if not self._fetch_wayland_socket_from_systemd():
+          time.sleep(self.WL_SERVER_CHECK_DELAY_SECONDS)
+          continue
+
+      if self.check_server_responding():
+        logging.info(
+            "Wayland compositor socket (%s) is active and responding in %s "
+            "seconds", self._wayland_socket,
+            time.time() - start_time)
+        return True
       time.sleep(self.WL_SERVER_CHECK_DELAY_SECONDS)
-    logging.error("Waited for Wayland compositor (%s) to become active, but it "
-                  "didn't happen in %s seconds" %
-                  (compositor_service, self.WL_SERVER_CHECK_TIMEOUT_SECONDS))
+    logging.error(
+        "Waited for Wayland compositor to become active and responding, "
+        "but it didn't happen in %s seconds",
+        self.WL_SERVER_CHECK_TIMEOUT_SECONDS)
     return False
 
   def launch_desktop_session(self):
@@ -1434,24 +1393,9 @@ class WaylandDesktop(Desktop):
 
     logging.info("Done restarting the portal services")
 
-  def _wait_for_setup_before_host_launch(self):
-    return self._wait_for_wayland_compositor_running()
-
   def cleanup(self):
     if self.host_proc is not None:
-      logging.info("Sending SIGTERM to host proc (pid=%s)", self.host_proc.pid)
-      try:
-        psutil_proc = psutil.Process(self.host_proc.pid)
-        psutil_proc.terminate()
-
-        # Use a short timeout, to avoid delaying service shutdown if the
-        # process refuses to die for some reason.
-        psutil_proc.wait(timeout=10)
-      except psutil.TimeoutExpired:
-        logging.error("Timed out - sending SIGKILL")
-        psutil_proc.kill()
-      except psutil.Error:
-        logging.error("Error terminating process")
+      terminate_process(self.host_proc.pid, "host")
       self.host_proc = None
     self._wayland_session.cleanup()
 
@@ -1476,18 +1420,18 @@ class WaylandDesktop(Desktop):
         # We don't want to wait forever for a reply so we set a timeout here.
         sock.settimeout(self.WL_SERVER_REPLY_TIMEOUT_SECONDS)
         while num_bytes_received < NUM_BYTES_EXPECTED:
-            data = sock.recv(NUM_BYTES_EXPECTED)
-            if len(data) == 0:  # Expect empty reply if server dies
-               break
-            num_bytes_received += len(data)
-            logging.debug("Wayland server replied with: %s" % data)
+          data = sock.recv(NUM_BYTES_EXPECTED)
+          if len(data) == 0:  # Expect empty reply if server dies
+            break
+          num_bytes_received += len(data)
+          logging.debug("Wayland server replied with: %s" % data)
         if not num_bytes_received:
           # If we don't receive a reply at all then the server is likely not
           # listening on the socket.
           return False
     except socket.error as err:
-        logging.error("Wayland server is not responding: %s" % err)
-        return False
+      logging.info("Wayland server is not responding: %s" % err)
+      return False
     return True
 
 
@@ -1545,9 +1489,9 @@ class XDesktop(Desktop):
   @staticmethod
   def get_unused_display_number():
     """Return a candidate display number for which there is currently no
-    X Server lock file"""
+    X Server domain socket"""
     display = FIRST_X_DISPLAY_NUMBER
-    while os.path.exists(X_LOCK_FILE_TEMPLATE % display):
+    while os.path.exists(X_SOCKET_FILE_TEMPLATE % display):
       display += 1
     return display
 
@@ -1926,204 +1870,6 @@ def choose_x_session():
   # If there's no configuration, show the user a session chooser.
   return [HOST_BINARY_PATH, "--type=xsession_chooser"]
 
-class ParentProcessLogger(object):
-  """Redirects logs to the parent process, until the host is ready or quits.
-
-  This class creates a pipe to allow logging from the daemon process to be
-  copied to the parent process. The daemon process adds a log-handler that
-  directs logging output to the pipe. The parent process reads from this pipe
-  and writes the content to stderr. When the pipe is no longer needed (for
-  example, the host signals successful launch or permanent failure), the daemon
-  removes the log-handler and closes the pipe, causing the the parent process
-  to reach end-of-file while reading the pipe and exit.
-
-  The file descriptor for the pipe to the parent process should be passed to
-  the constructor. The (grand-)child process should call start_logging() when
-  it starts, and then use logging.* to issue log statements, as usual. When the
-  child has either succesfully started the host or terminated, it must call
-  release_parent() to allow the parent to exit.
-  """
-
-  __instance = None
-
-  def __init__(self, write_fd):
-    """Constructor.
-
-    Constructs the singleton instance of ParentProcessLogger. This should be
-    called at most once.
-
-    write_fd: The write end of the pipe created by the parent process. If
-              write_fd is not a valid file descriptor, the constructor will
-              throw either IOError or OSError.
-    """
-    # Ensure write_pipe is closed on exec, otherwise it will be kept open by
-    # child processes (X, host), preventing the read pipe from EOF'ing.
-    old_flags = fcntl.fcntl(write_fd, fcntl.F_GETFD)
-    fcntl.fcntl(write_fd, fcntl.F_SETFD, old_flags | fcntl.FD_CLOEXEC)
-    self._write_file = os.fdopen(write_fd, 'w')
-    self._logging_handler = None
-    ParentProcessLogger.__instance = self
-
-  def _start_logging(self):
-    """Installs a logging handler that sends log entries to a pipe, prefixed
-    with the string 'MSG:'. This allows them to be distinguished by the parent
-    process from commands sent over the same pipe.
-
-    Must be called by the child process.
-    """
-    self._logging_handler = logging.StreamHandler(self._write_file)
-    self._logging_handler.setFormatter(logging.Formatter(fmt='MSG:%(message)s'))
-    logging.getLogger().addHandler(self._logging_handler)
-
-  def _release_parent(self, success):
-    """Uninstalls logging handler and closes the pipe, releasing the parent.
-
-    Must be called by the child process.
-
-    success: If true, write a "host ready" message to the parent process before
-             closing the pipe.
-    """
-    if self._logging_handler:
-      logging.getLogger().removeHandler(self._logging_handler)
-      self._logging_handler = None
-    if not self._write_file.closed:
-      if success:
-        try:
-          self._write_file.write("READY\n")
-          self._write_file.flush()
-        except IOError:
-          # A "broken pipe" IOError can happen if the receiving process
-          # (remoting_user_session) has exited (probably due to timeout waiting
-          # for the host to start).
-          # Trapping the error here means the host can continue running.
-          logging.info("Caught IOError writing READY message.")
-      try:
-        self._write_file.close()
-      except IOError:
-        pass
-
-  @staticmethod
-  def try_start_logging(write_fd):
-    """Attempt to initialize ParentProcessLogger and start forwarding log
-    messages.
-
-    Returns False if the file descriptor was invalid (safe to ignore).
-    """
-    try:
-      ParentProcessLogger(USER_SESSION_MESSAGE_FD)._start_logging()
-      return True
-    except (IOError, OSError):
-      # One of these will be thrown if the file descriptor is invalid, such as
-      # if the the fd got closed by the login shell. In that case, just continue
-      # without sending log messages.
-      return False
-
-  @staticmethod
-  def release_parent_if_connected(success):
-    """If ParentProcessLogger is active, stop logging and release the parent.
-
-    success: If true, signal to the parent that the script was successful.
-    """
-    instance = ParentProcessLogger.__instance
-    if instance is not None:
-      ParentProcessLogger.__instance = None
-      instance._release_parent(success)
-
-
-def run_command_with_group(command, group):
-  """Run a command with a different primary group."""
-
-  # This is implemented using sg, which is an odd character and will try to
-  # prompt for a password if it can't verify the user is a member of the given
-  # group, along with in a few other corner cases. (It will prompt in the
-  # non-member case even if the group doesn't have a password set.)
-  #
-  # To prevent sg from prompting the user for a password that doesn't exist,
-  # redirect stdin and detach sg from the TTY. It will still print something
-  # like "Password: crypt: Invalid argument", so redirect stdout and stderr, as
-  # well. Finally, have the shell unredirect them when executing user-session.
-  #
-  # It is also desirable to have some way to tell whether any errors are
-  # from sg or the command, which is done using a pipe.
-
-  def pre_exec(read_fd, write_fd):
-    os.close(read_fd)
-
-    # /bin/sh may be dash, which only allows redirecting file descriptors 0-9,
-    # the minimum required by POSIX. Since there may be files open elsewhere,
-    # move the relevant file descriptors to specific numbers under that limit.
-    # Because this runs in the child process, it doesn't matter if existing file
-    # descriptors are closed in the process. After, stdio will be redirected to
-    # /dev/null, write_fd will be moved to 6, and the old stdio will be moved
-    # to 7, 8, and 9.
-    if (write_fd != 6):
-      os.dup2(write_fd, 6)
-      os.close(write_fd)
-    os.dup2(0, 7)
-    os.dup2(1, 8)
-    os.dup2(2, 9)
-    devnull = os.open(os.devnull, os.O_RDWR)
-    os.dup2(devnull, 0)
-    os.dup2(devnull, 1)
-    os.dup2(devnull, 2)
-    os.close(devnull)
-
-    # os.setsid will detach subprocess from the TTY
-    os.setsid()
-
-  # Pipe to check whether sg successfully ran our command.
-  read_fd, write_fd = os.pipe()
-  try:
-    # sg invokes the provided argument using /bin/sh. In that shell, first write
-    # "success\n" to the pipe, which is checked later to determine whether sg
-    # itself succeeded, and then restore stdio, close the extra file
-    # descriptors, and exec the provided command.
-    process = subprocess.Popen(
-        ["sg", group,
-         "echo success >&6; exec {command} "
-           # Restore original stdio
-           "0<&7 1>&8 2>&9 "
-           # Close no-longer-needed file descriptors
-           "6>&- 7<&- 8>&- 9>&-"
-           .format(command=" ".join(map(shlex.quote, command)))],
-        # It'd be nice to use pass_fds instead close_fds=False. Unfortunately,
-        # pass_fds doesn't seem usable with remapping. It runs after preexec_fn,
-        # which does the remapping, but complains if the specified fds don't
-        # exist ahead of time.
-        close_fds=False, preexec_fn=lambda: pre_exec(read_fd, write_fd))
-    result = process.wait()
-  except OSError as e:
-    logging.error("Failed to execute sg: {}".format(e.strerror))
-    if e.errno == errno.ENOENT:
-      result = COMMAND_NOT_FOUND_EXIT_CODE
-    else:
-      result = COMMAND_NOT_EXECUTABLE_EXIT_CODE
-    # Skip pipe check, since sg was never executed.
-    os.close(read_fd)
-    return result
-  except KeyboardInterrupt:
-    # Because sg is in its own session, it won't have gotten the interrupt.
-    try:
-      os.killpg(os.getpgid(process.pid), signal.SIGINT)
-      result = process.wait()
-    except OSError:
-      logging.warning("Command may still be running")
-      result = 1
-  finally:
-    os.close(write_fd)
-
-  with os.fdopen(read_fd) as read_file:
-    contents = read_file.read()
-  if contents != "success\n":
-    # No success message means sg didn't execute the command. (Maybe the user
-    # is not a member of the group?)
-    logging.error("Failed to access {} group. Is the user a member?"
-                  .format(group))
-    result = COMMAND_NOT_EXECUTABLE_EXIT_CODE
-
-  return result
-
-
 def run_command_as_root(command):
   if os.getenv("DISPLAY"):
     # TODO(rickyz): Add a Polkit policy that includes a more friendly
@@ -2180,34 +1926,28 @@ def exec_self_via_login_shell():
   os.execv(args[0], args)
 
 
-def start_via_user_session(foreground):
-  # We need to invoke user-session
-  command = [USER_SESSION_PATH, "start"]
-  if foreground:
-    command += ["--foreground"]
-  command += ["--"] + sys.argv[1:]
-  try:
-    process = subprocess.Popen(command)
-    result = process.wait()
-  except OSError as e:
-    if e.errno == errno.EACCES:
-      # User may have just been added to the CRD group, in which case they
-      # won't be able to execute user-session directly until they log out and
-      # back in. In the mean time, we can try to switch to the CRD group and
-      # execute user-session.
-      result = run_command_with_group(command, CHROME_REMOTING_GROUP_NAME)
-    else:
-      logging.error("Could not execute {}: {}"
-                    .format(USER_SESSION_PATH, e.strerror))
-      if e.errno == errno.ENOENT:
-        result = COMMAND_NOT_FOUND_EXIT_CODE
-      else:
-        result = COMMAND_NOT_EXECUTABLE_EXIT_CODE
-  except KeyboardInterrupt:
-    # Child will have also gotten the interrupt. Wait for it to exit.
-    result = process.wait()
+def unset_crd_systemd_env_vars():
+    """Unsets environment variables set by this script that could interfere
+    with the multi-process host."""
 
-  return result
+    env_vars_to_unset = [
+        "CHROME_REMOTE_DESKTOP_SESSION",
+        "DISPLAY",
+        "GDK_BACKEND",
+        "PIPEWIRE_REMOTE",
+        "PULSE_RUNTIME_PATH",
+        "PULSE_SINK",
+        "SSH_AUTH_SOCK",
+    ]
+    # If we immediately unset these environment variables, something (probably
+    # a (sub)process of gnome-session) will add them back, so we wait for a
+    # second to allow the GNOME session to terminate cleanly.
+    logging.info(
+      "Waiting for one second before unsetting systemd environment variables.")
+    time.sleep(1)
+    logging.info("Unsetting systemd user environment variables.")
+    subprocess.call(["systemctl", "--user", "unset-environment"] +
+                    env_vars_to_unset)
 
 
 def cleanup():
@@ -2221,7 +1961,7 @@ def cleanup():
       os.rmdir(os.path.dirname(g_desktop.xorg_conf))
 
   g_desktop = None
-  ParentProcessLogger.release_parent_if_connected(False)
+  unset_crd_systemd_env_vars()
 
 
 class SignalHandler:
@@ -2459,12 +2199,9 @@ Web Store: https://chrome.google.com/remotedesktop"""
                       default=False, action="store_true",
                       help="Enable and start chrome-remote-desktop for the "
                       "current user.")
-  parser.add_argument("--add-user-as-root", dest="add_user_as_root",
-                      action="store", metavar="USER",
-                      help="Adds the specified user to the "
-                      "chrome-remote-desktop group (must be run as root).")
-  # The script is being run as a child process under the user-session binary.
-  # Don't daemonize and use the inherited environment.
+  # This flag is used when running the script from a build directory, or by the
+  # systemd unit. It indicates that the script should not attempt to start
+  # itself via systemd.
   parser.add_argument("--child-process", dest="child_process", default=False,
                       action="store_true",
                       help=argparse.SUPPRESS)
@@ -2537,56 +2274,14 @@ def main():
   if options.enable_and_start:
     user = getpass.getuser()
 
-    if os.path.isdir("/run/systemd/system"):
-      # While systemd will generally prompt for a password via polkit if run by
-      # a normal user, it won't properly fall back to prompting on the TTY if
-      # stdin is redirected, such as is done by the start-host binary.
-      # Additionally, some configurations can result in systemctl prompting the
-      # user for their password multiple times, which can be confusing and
-      # annoying. Running it as root avoids both issues.
-      return run_command_as_root(["systemctl", "enable", "--now",
-                                  "chrome-remote-desktop@" + user])
-    else:
-      try:
-        if user in grp.getgrnam(CHROME_REMOTING_GROUP_NAME).gr_mem:
-          logging.info("User '%s' is already a member of '%s'." %
-                       (user, CHROME_REMOTING_GROUP_NAME))
-          return 0
-      except KeyError:
-        logging.info("Group '%s' not found." % CHROME_REMOTING_GROUP_NAME)
-
-      if run_command_as_root([SCRIPT_PATH, '--add-user-as-root', user]) != 0:
-        logging.error("Failed to add user to group")
-        return 1
-
-      # Replace --enable-and-start with --start in the command-line arguments,
-      # which are used later to reinvoke the script as a child of user-session.
-      sys.argv = [arg if arg != "--enable-and-start" else "--start"
-                  for arg in sys.argv]
-      options.start = True
-
-  if options.add_user_as_root is not None:
-    if os.getuid() != 0:
-      logging.error("--add-user-as-root can only be specified as root.")
-      return 1;
-
-    user = options.add_user_as_root
-    try:
-      pwd.getpwnam(user)
-    except KeyError:
-      logging.error("user '%s' does not exist." % user)
-      return 1
-
-    try:
-      subprocess.check_call(["/usr/sbin/groupadd", "-f",
-                             CHROME_REMOTING_GROUP_NAME])
-      subprocess.check_call(["/usr/bin/gpasswd", "--add", user,
-                             CHROME_REMOTING_GROUP_NAME])
-    except (ValueError, OSError, subprocess.CalledProcessError) as e:
-      logging.error("Command failed: " + str(e))
-      return 1
-
-    return 0
+    # While systemd will generally prompt for a password via polkit if run by
+    # a normal user, it won't properly fall back to prompting on the TTY if
+    # stdin is redirected, such as is done by the start-host binary.
+    # Additionally, some configurations can result in systemctl prompting the
+    # user for their password multiple times, which can be confusing and
+    # annoying. Running it as root avoids both issues.
+    return run_command_as_root(["systemctl", "enable", "--now",
+                                "chrome-remote-desktop@" + user])
 
   if options.watch_resolution:
     watch_for_resolution_changes(tuple(options.watch_resolution))
@@ -2602,11 +2297,7 @@ def main():
   if get_daemon_proc(config_file, options.child_process) is not None:
     # Debian policy requires that services should "start" cleanly and return 0
     # if they are already running.
-    if options.child_process:
-      # If the script is running under user-session, try to relay the message.
-      ParentProcessLogger.try_start_logging(USER_SESSION_MESSAGE_FD)
     logging.info("Service already running.")
-    ParentProcessLogger.release_parent_if_connected(True)
     return 0
 
   if config_file != options.config:
@@ -2621,14 +2312,14 @@ def main():
     exec_self_via_login_shell()
 
   if not options.child_process:
-    if os.path.isdir("/run/systemd/system"):
-      return run_command_as_root(["systemctl", "start",
-                                  "chrome-remote-desktop@" + getpass.getuser()])
-    else:
-      return start_via_user_session(options.foreground)
+    return run_command_as_root(["systemctl", "start",
+                                "chrome-remote-desktop@" + getpass.getuser()])
 
-  # Start logging to user-session messaging pipe if it exists.
-  ParentProcessLogger.try_start_logging(USER_SESSION_MESSAGE_FD)
+  logging.info("CRD service is starting")
+  logging.info("Machine hostname: %s", socket.getfqdn())
+  uptime = datetime.timedelta(
+      seconds=int(time.clock_gettime(time.CLOCK_BOOTTIME)))
+  logging.info("Machine uptime: %s", uptime)
 
   if display_manager_is_gdm():
     # See https://gitlab.gnome.org/GNOME/gdm/-/issues/580 for details on the
@@ -2780,10 +2471,9 @@ def main():
           and not desktop.pipewire_inhibitor.disabled
           and desktop.pipewire_inhibitor.failures < MAX_LAUNCH_FAILURES):
         desktop.setup_audio(host.host_id, backoff_time)
-      if (desktop.server_proc is None and desktop.pre_session_proc is None and
-          desktop.session_proc is None):
+      if (desktop.server_proc is None and desktop.session_proc is None):
         desktop.launch_session(options.args, backoff_time)
-      if desktop.host_proc is None:
+      if desktop.server_proc is not None and desktop.host_proc is None:
         desktop.launch_host(extra_start_host_args, backoff_time)
       if desktop.crash_uploader_proc is None:
         desktop.launch_crash_uploader(backoff_time)

@@ -67,6 +67,7 @@ NSString* const kInactiveTabsDemoMode = @"InactiveTabsDemoMode";
 NSString* const kInactiveTabsTestMode = @"InactiveTabsTestMode";
 NSString* const kAsyncStartupOverrideResponse = @"AsyncStartupOverrideResponse";
 NSString* const kLensResultPanelGwsURL = @"LensResultPanelGwsURL";
+NSString* const kCobrowseGwsURL = @"CobrowseGwsURL";
 NSString* const kForceDisableAIMEligibility = @"ForceDisableAIMEligibility";
 NSString* const kForceDisableCreateImagesEligibility =
     @"ForceDisableCreateImagesEligibility";
@@ -77,6 +78,11 @@ NSString* const kForceDisableDeepSearchEligibility =
 NSString* const kForceDisablePdfUploadEligibility =
     @"ForceDisablePdfUploadEligibility";
 NSString* const kShowCatalogItems = @"ShowCatalogItems";
+NSString* const kForceMultiProfileForcedMigrationDone =
+    @"ForceMultiProfileForcedMigrationDone";
+NSString* const kShowBackendPromoDebugTools = @"ShowBackendPromoDebugTools";
+NSString* const kForcedPushNotificationType = @"ForcedPushNotificationType";
+NSString* const kForcedPushNotificationDelay = @"ForcedPushNotificationDelay";
 }  // namespace
 
 namespace experimental_flags {
@@ -368,6 +374,10 @@ NSString* GetLensResultPanelGwsURL() {
       stringForKey:kLensResultPanelGwsURL];
 }
 
+NSString* GetCobrowseGwsURL() {
+  return [[NSUserDefaults standardUserDefaults] stringForKey:kCobrowseGwsURL];
+}
+
 bool ShouldForceDisableComposeboxAIM() {
   return [[NSUserDefaults standardUserDefaults]
       boolForKey:kForceDisableAIMEligibility];
@@ -400,6 +410,25 @@ bool ShouldShowCatalogItems() {
 #else
   return [[NSUserDefaults standardUserDefaults] boolForKey:kShowCatalogItems];
 #endif
+}
+
+bool ShouldForceMultiProfileForcedMigrationDone() {
+  return [[NSUserDefaults standardUserDefaults]
+      boolForKey:kForceMultiProfileForcedMigrationDone];
+}
+
+bool ShouldShowBackendPromoDebugTools() {
+  return [[NSUserDefaults standardUserDefaults]
+      boolForKey:kShowBackendPromoDebugTools];
+}
+int GetForcedPushNotificationType() {
+  return [[NSUserDefaults standardUserDefaults]
+      integerForKey:kForcedPushNotificationType];
+}
+
+int GetForcedPushNotificationDelay() {
+  return [[NSUserDefaults standardUserDefaults]
+      integerForKey:kForcedPushNotificationDelay];
 }
 
 }  // namespace experimental_flags

@@ -10,8 +10,6 @@
 #include "base/environment.h"
 #include "base/memory/raw_ptr.h"
 #include "base/no_destructor.h"
-#include "base/task/thread_pool.h"
-#include "base/task/thread_pool/thread_pool_instance.h"
 #include "ui/gfx/font_render_params.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -20,10 +18,6 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
-
-namespace features {
-BASE_FEATURE(kFontConfigFontationsIndexing, base::FEATURE_ENABLED_BY_DEFAULT);
-}
 
 namespace gfx {
 
@@ -48,11 +42,11 @@ constexpr base::FilePath::CharType kImageloaderMountBase[] =
 class COMPONENT_EXPORT(GFX) GlobalFontConfig {
  public:
   GlobalFontConfig() {
-    if (base::FeatureList::IsEnabled(features::kFontConfigFontationsIndexing)) {
-      std::unique_ptr<base::Environment> environment =
-          base::Environment::Create();
-      environment->SetVar("FC_FONTATIONS", "1");
-    }
+    // Environment variable FC_FONTATIONS=1 is required here to use Fontations,
+    // instead of FreeType, indexing in FontConfig. Calling setenv here can race
+    // with getenv in a multithreaded context. Therefore, the setenv is done in
+    // ContentMainRunnerImpl::Initialize() to ensure it is configured before any
+    // threads are created, avoiding the race between setenv and getenv.
 
     // Without this call, the FontConfig library gets implicitly initialized
     // on the first call to FontConfig. Since it's not safe to initialize it
@@ -210,18 +204,6 @@ bool GetFontConfigPropertyAsBool(FcPattern* pattern, const char* property) {
 }
 
 }  // namespace
-
-void InitializeGlobalFontConfigAsync() {
-  if (base::ThreadPoolInstance::Get()) {
-    base::ThreadPool::PostTask(
-        FROM_HERE,
-        {base::MayBlock(), base::TaskPriority::USER_BLOCKING,
-         base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},
-        base::BindOnce([]() { GlobalFontConfig::GetInstance(); }));
-  } else {
-    GlobalFontConfig::GetInstance();
-  }
-}
 
 FcConfig* GetGlobalFontConfig() {
   return GlobalFontConfig::GetInstance()->Get();

@@ -16,11 +16,11 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.View.OnClickListener;
 import android.widget.Button;
+import android.widget.ImageView;
 import android.widget.TextView;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.R;
-import org.chromium.ui.widget.ChromeImageView;
 
 /** Manages the Android View representing the QrCode share panel. */
 @NullMarked
@@ -40,9 +40,9 @@ class QrCodeShareView {
                         LayoutInflater.from(context)
                                 .inflate(R.layout.qrcode_share_layout, null, false);
 
-        Button downloadButton = (Button) mView.findViewById(R.id.download);
+        Button downloadButton = mView.findViewById(R.id.download);
         downloadButton.setOnClickListener(listener);
-        Button settingsButton = (Button) mView.findViewById(R.id.settings);
+        Button settingsButton = mView.findViewById(R.id.settings);
         settingsButton.setOnClickListener(
                 new OnClickListener() {
                     @Override
@@ -64,7 +64,7 @@ class QrCodeShareView {
      * @param bitmap The {@link Bitmap} to display on share panel.
      */
     public void updateQrCodeBitmap(Bitmap bitmap) {
-        ChromeImageView qrcodeImageView = mView.findViewById(R.id.qrcode);
+        ImageView qrcodeImageView = mView.findViewById(R.id.qrcode);
         Drawable drawable = new BitmapDrawable(mContext.getResources(), bitmap);
         qrcodeImageView.setImageDrawable(drawable);
 
@@ -116,8 +116,8 @@ class QrCodeShareView {
             return;
         }
 
-        Button downloadButton = (Button) mView.findViewById(R.id.download);
-        Button settingsButton = (Button) mView.findViewById(R.id.settings);
+        Button downloadButton = mView.findViewById(R.id.download);
+        Button settingsButton = mView.findViewById(R.id.settings);
         if (mHasStoragePermission) {
             downloadButton.setVisibility(View.VISIBLE);
             settingsButton.setVisibility(View.GONE);

@@ -16,6 +16,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_avatar_icon_util.h"
 #include "chrome/browser/signin/account_consistency_mode_manager.h"
+#include "chrome/browser/signin/account_preview_data_service_factory.h"
 #include "chrome/browser/signin/chrome_signin_pref_names.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/signin_hats_util.h"
@@ -31,6 +32,7 @@
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/prefs/pref_service.h"
+#include "components/send_tab_to_self/features.h"
 #include "components/signin/public/base/signin_metrics.h"
 #include "components/signin/public/base/signin_prefs.h"
 #include "components/signin/public/base/signin_switches.h"
@@ -87,6 +89,19 @@ int GetSubtitleID(bool is_signin_promo,
             break;
         }
       } break;
+      case signin::SignInPromoType::kSearchAIMode: {
+        switch (signed_in_state) {
+          case SignedInState::kSignedOut:
+          case SignedInState::kWebOnlySignedIn:
+            return IDS_AI_SIGNIN_PROMO_SUBTITLE;
+          case SignedInState::kSignInPending:
+            return IDS_AI_VERIFY_PROMO_SUBTITLE;
+          case SignedInState::kSignedIn:
+          case SignedInState::kSyncing:
+          case SignedInState::kSyncPaused:
+            break;
+        }
+      } break;
       case signin::SignInPromoType::kBookmark: {
         if (!is_signin_promo) {
           return IDS_BOOKMARK_DICE_PROMO_SYNC_MESSAGE;
@@ -122,7 +137,36 @@ int GetSubtitleID(bool is_signin_promo,
           case SignedInState::kSyncPaused:
             break;
         }
-      }
+      } break;
+      case signin::SignInPromoType::kSendTabToSelf: {
+        switch (signed_in_state) {
+          case SignedInState::kSignedOut:
+          case SignedInState::kWebOnlySignedIn:
+            return base::FeatureList::IsEnabled(
+                       send_tab_to_self::kSendTabToSelfEnhancedDesktopUI)
+                       ? IDS_SEND_TAB_TO_SELF_SIGN_IN_PROMO_BODY
+                       : IDS_SEND_TAB_TO_SELF_SIGN_IN_PROMO_LABEL;
+          case SignedInState::kSignInPending:
+          case SignedInState::kSyncPaused:
+            return IDS_SEND_TAB_TO_SELF_VERIFY_ITS_YOU_PROMO_LABEL;
+          case SignedInState::kSignedIn:
+          case SignedInState::kSyncing:
+            break;
+        }
+      } break;
+      case signin::SignInPromoType::kComposeboxDriveContextMenuOption: {
+        switch (signed_in_state) {
+          case SignedInState::kSignedOut:
+          case SignedInState::kWebOnlySignedIn:
+            return IDS_COMPOSEBOX_DRIVE_CONTEXT_MENU_OPTION_SIGNIN_PROMO_SUBTITLE;
+          case SignedInState::kSignInPending:
+            return IDS_COMPOSEBOX_DRIVE_CONTEXT_MENU_OPTION_VERIFY_PROMO_SUBTITLE;
+          case SignedInState::kSignedIn:
+          case SignedInState::kSyncing:
+          case SignedInState::kSyncPaused:
+            break;
+        }
+      } break;
     }
   }
 
@@ -195,7 +239,9 @@ signin_metrics::PromoAction GetPromoAction(bool is_signin_promo,
 void IncrementContextualPromoDismissCountPerSignedOutProfile(
     Profile* profile,
     signin_metrics::AccessPoint access_point) {
-  if (!base::FeatureList::IsEnabled(switches::kSigninPromoLimitsExperiment)) {
+  signin::SignInPromoType promo_type =
+      signin::GetSignInPromoTypeFromAccessPoint(access_point);
+  if (signin::ShouldUseAutofillSignInPromoLimits(promo_type)) {
     int dismiss_count = profile->GetPrefs()->GetInteger(
         prefs::kAutofillSignInPromoDismissCountPerProfile);
     profile->GetPrefs()->SetInteger(
@@ -203,8 +249,6 @@ void IncrementContextualPromoDismissCountPerSignedOutProfile(
     return;
   }
 
-  signin::SignInPromoType promo_type =
-      signin::GetSignInPromoTypeFromAccessPoint(access_point);
   switch (promo_type) {
     case signin::SignInPromoType::kPassword:
       return profile->GetPrefs()->SetInteger(
@@ -220,6 +264,12 @@ void IncrementContextualPromoDismissCountPerSignedOutProfile(
               prefs::
                   kAddressSignInPromoDismissCountPerProfileForLimitsExperiment) +
               1);
+    case signin::SignInPromoType::kSearchAIMode:
+      return profile->GetPrefs()->SetInteger(
+          prefs::kSearchAIModeSignInPromoDismissCountPerProfile,
+          profile->GetPrefs()->GetInteger(
+              prefs::kSearchAIModeSignInPromoDismissCountPerProfile) +
+              1);
     case signin::SignInPromoType::kBookmark:
       CHECK(base::FeatureList::IsEnabled(syncer::kUnoPhase2FollowUp));
       return profile->GetPrefs()->SetInteger(
@@ -228,7 +278,12 @@ void IncrementContextualPromoDismissCountPerSignedOutProfile(
               prefs::
                   kBookmarkSignInPromoDismissCountPerProfileForLimitsExperiment) +
               1);
+    case signin::SignInPromoType::kComposeboxDriveContextMenuOption:
+      // Composebox Drive signin promo does not track dismiss counts as it is
+      // explicitly triggered by the user from the context menu.
+      return;
     case signin::SignInPromoType::kExtension:
+    case signin::SignInPromoType::kSendTabToSelf:
       NOTREACHED();
   }
 }
@@ -237,45 +292,73 @@ void IncrementContextualPromoDismissCountPerAccount(
     Profile* profile,
     signin_metrics::AccessPoint access_point,
     const AccountInfo& account) {
-  if (!base::FeatureList::IsEnabled(switches::kSigninPromoLimitsExperiment)) {
+  signin::SignInPromoType promo_type =
+      signin::GetSignInPromoTypeFromAccessPoint(access_point);
+  if (signin::ShouldUseAutofillSignInPromoLimits(promo_type)) {
     SigninPrefs(*profile->GetPrefs())
-        .IncrementAutofillSigninPromoDismissCount(account.gaia);
+        .IncrementAutofillSigninPromoDismissCount(account.GetGaiaId());
     return;
   }
 
-  signin::SignInPromoType promo_type =
-      signin::GetSignInPromoTypeFromAccessPoint(access_point);
   switch (promo_type) {
     case signin::SignInPromoType::kPassword:
       SigninPrefs(*profile->GetPrefs())
-          .IncrementPasswordSigninPromoDismissCount(account.gaia);
+          .IncrementPasswordSigninPromoDismissCount(account.GetGaiaId());
       break;
     case signin::SignInPromoType::kAddress:
       SigninPrefs(*profile->GetPrefs())
-          .IncrementAddressSigninPromoDismissCount(account.gaia);
+          .IncrementAddressSigninPromoDismissCount(account.GetGaiaId());
       break;
     case signin::SignInPromoType::kBookmark:
       CHECK(base::FeatureList::IsEnabled(syncer::kUnoPhase2FollowUp));
       SigninPrefs(*profile->GetPrefs())
-          .IncrementBookmarkSigninPromoDismissCount(account.gaia);
+          .IncrementBookmarkSigninPromoDismissCount(account.GetGaiaId());
+      break;
+    case signin::SignInPromoType::kSearchAIMode:
+      SigninPrefs(*profile->GetPrefs())
+          .IncrementSearchAIModeSigninPromoDismissCount(account.GetGaiaId());
+      break;
+    case signin::SignInPromoType::kComposeboxDriveContextMenuOption:
+      // Composebox Drive signin promo does not track dismiss counts as it is
+      // explicitly triggered by the user from the context menu.
       break;
     case signin::SignInPromoType::kExtension:
+    case signin::SignInPromoType::kSendTabToSelf:
       NOTREACHED();
   }
 }
 
+// Delegate factory method based on the presence of the `data_id`.
+std::unique_ptr<BubbleSignInPromoDelegate> CreateDelegate(
+    content::WebContents* web_contents,
+    signin_metrics::AccessPoint access_point,
+    std::optional<syncer::LocalDataItemModel::DataId> data_id) {
+  if (data_id.has_value()) {
+    return std::make_unique<BubbleSignInPromoForSyncableDataTypeDelegate>(
+        *web_contents, access_point, std::move(data_id.value()));
+  }
+  return std::make_unique<DefaultBubbleSignInPromoDelegate>(*web_contents,
+                                                            access_point);
+}
 }  // namespace
 
 BubbleSignInPromoView::BubbleSignInPromoView(
     content::WebContents* web_contents,
     signin_metrics::AccessPoint access_point,
-    syncer::LocalDataItemModel::DataId data_id,
+    std::optional<syncer::LocalDataItemModel::DataId> data_id,
     ui::ButtonStyle button_style)
-    : access_point_(access_point),
-      delegate_(
-          std::make_unique<BubbleSignInPromoDelegate>(*web_contents,
-                                                      access_point,
-                                                      std::move(data_id))) {
+    : BubbleSignInPromoView(web_contents,
+                            access_point,
+                            CreateDelegate(web_contents, access_point, data_id),
+                            button_style) {}
+
+BubbleSignInPromoView::BubbleSignInPromoView(
+    content::WebContents* web_contents,
+    signin_metrics::AccessPoint access_point,
+    std::unique_ptr<BubbleSignInPromoDelegate> delegate,
+    ui::ButtonStyle button_style)
+    : access_point_(access_point), delegate_(std::move(delegate)) {
+  CHECK(delegate_);
   Profile* profile =
       Profile::FromBrowserContext(web_contents->GetBrowserContext())
           ->GetOriginalProfile();
@@ -291,9 +374,10 @@ BubbleSignInPromoView::BubbleSignInPromoView(
 
   AccountInfo account;
   // Sync promos can be shown in incognito, they use an empty account list.
-  if (!Profile::FromBrowserContext(web_contents->GetBrowserContext())
-           ->IsOffTheRecord()) {
-    account = signin_ui_util::GetSingleAccountForPromos(identity_manager);
+  if (!profile->IsOffTheRecord()) {
+    account = signin_ui_util::GetSingleAccountForPromos(
+        identity_manager,
+        AccountPreviewDataServiceFactory::GetForProfile(profile));
   }
 
   // Set the layout.
@@ -419,9 +503,18 @@ gfx::Insets BubbleSignInPromoView::GetBubbleSigninPromoMargins() {
 
 void BubbleSignInPromoView::SignIn() {
   std::optional<AccountInfo> account = signin_button_view_->account();
-  delegate_->OnSignIn(account.value_or(AccountInfo()));
+  // Take ownership of the delegate before closing the widget, as closing may
+  // result in the immediate destruction of `this`.
+  std::unique_ptr<BubbleSignInPromoDelegate> delegate = std::move(delegate_);
+
+  // `CloseWithReason()` must be called before `OnSignIn()` to ensure that the
+  // `kAcceptButtonClicked` reason is recorded. Otherwise, the focus loss
+  // triggered by opening the sign-in tab could cause the widget to close with
+  // `kLostFocus` instead.
   GetWidget()->CloseWithReason(
       views::Widget::ClosedReason::kAcceptButtonClicked);
+
+  delegate->OnSignIn(account.value_or(AccountInfo()));
 }
 
 void BubbleSignInPromoView::AddedToWidget() {
@@ -461,7 +554,8 @@ void BubbleSignInPromoView::OnWidgetDestroying(views::Widget* widget) {
   Profile* profile = Profile::FromBrowserContext(
       delegate_->GetWebContents()->GetBrowserContext());
   AccountInfo account = signin_ui_util::GetSingleAccountForPromos(
-      IdentityManagerFactory::GetForProfile(profile));
+      IdentityManagerFactory::GetForProfile(profile),
+      AccountPreviewDataServiceFactory::GetForProfile(profile));
 
   // Count the number of times the promo was dismissed in order to not show it
   // anymore after 2 dismissals.

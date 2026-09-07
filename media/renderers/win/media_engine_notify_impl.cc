@@ -14,6 +14,13 @@ namespace media {
 
 namespace {
 
+constexpr char kSubsequentErrorUmaName[] =
+    "Media.MediaFoundation.MediaEngineError.SubsequentError";
+constexpr char kSubsequentEventUmaName[] =
+    "Media.MediaFoundation.MediaEngineError.SubsequentEvent";
+constexpr char kSubsequentEventOrErrorReportedUmaName[] =
+    "Media.MediaFoundation.MediaEngineError.SubsequentEventOrErrorReported";
+
 #define ENUM_TO_STRING(enum) \
   case enum:                 \
     return #enum
@@ -72,6 +79,7 @@ std::string MediaEngineEventToString(MF_MEDIA_ENGINE_EVENT event) {
     ENUM_TO_STRING(MF_MEDIA_ENGINE_EVENT_STREAMRENDERINGERROR);
     ENUM_TO_STRING(MF_MEDIA_ENGINE_EVENT_SUPPORTEDRATES_CHANGED);
     ENUM_TO_STRING(MF_MEDIA_ENGINE_EVENT_AUDIOENDPOINTCHANGE);
+    ENUM_TO_STRING(MF_MEDIA_ENGINE_EVENT_ENGINE_SEEK_REQUESTED);
     default:
       return "Unknown MF_MEDIA_ENGINE_EVENT";
   }
@@ -102,7 +110,13 @@ PipelineStatus MediaEngineErrorToPipelineStatus(
 }  // namespace
 
 MediaEngineNotifyImpl::MediaEngineNotifyImpl() = default;
-MediaEngineNotifyImpl::~MediaEngineNotifyImpl() = default;
+MediaEngineNotifyImpl::~MediaEngineNotifyImpl() {
+  DVLOG(1) << __func__;
+  base::AutoLock lock(lock_);
+  if (had_error_ && !is_subsequent_event_or_error_reported_) {
+    base::UmaHistogramBoolean(kSubsequentEventOrErrorReportedUmaName, false);
+  }
+}
 
 HRESULT MediaEngineNotifyImpl::RuntimeClassInitialize(
     ErrorCB error_cb,
@@ -114,6 +128,7 @@ HRESULT MediaEngineNotifyImpl::RuntimeClassInitialize(
     WaitingCB waiting_cb,
     FrameStepCompletedCB frame_step_completed_cb,
     TimeUpdateCB time_update_cb,
+    MFSeekRequestedCB mf_seek_requested_cb,
     std::optional<VideoDecoderConfig> video_decoder_config,
     std::optional<AudioDecoderConfig> audio_decoder_config) {
   DVLOG_FUNC(1);
@@ -127,6 +142,7 @@ HRESULT MediaEngineNotifyImpl::RuntimeClassInitialize(
   waiting_cb_ = std::move(waiting_cb);
   frame_step_completed_cb_ = std::move(frame_step_completed_cb);
   time_update_cb_ = std::move(time_update_cb);
+  mf_seek_requested_cb_ = std::move(mf_seek_requested_cb);
 
   audio_decoder_config_ = std::move(audio_decoder_config);
   video_decoder_config_ = std::move(video_decoder_config);
@@ -144,11 +160,34 @@ HRESULT MediaEngineNotifyImpl::EventNotify(DWORD event_code,
   DVLOG_FUNC(3) << "event=" << MediaEngineEventToString(event);
 
   base::AutoLock lock(lock_);
-  if (has_shutdown_)
+  if (had_error_) {
+    DVLOG_FUNC(3)
+        << "Error already reported, ignore all subsequent events or errors!";
+    if (!is_subsequent_event_or_error_reported_) {
+      if (event == MF_MEDIA_ENGINE_EVENT_ERROR) {
+        MF_MEDIA_ENGINE_ERR error = static_cast<MF_MEDIA_ENGINE_ERR>(param1);
+        HRESULT hr = param2;
+        base::UmaHistogramSparse(kSubsequentErrorUmaName, error);
+        base::UmaHistogramSparse(
+            base::StrCat({kSubsequentErrorUmaName, ".",
+                          MediaEngineErrorToString(error), ".Hresult"}),
+            hr);
+      } else {
+        base::UmaHistogramSparse(kSubsequentEventUmaName, event);
+      }
+      base::UmaHistogramBoolean(kSubsequentEventOrErrorReportedUmaName, true);
+      is_subsequent_event_or_error_reported_ = true;
+    }
     return S_OK;
+  }
+  if (has_shutdown_) {
+    return S_OK;
+  }
 
   switch (event) {
     case MF_MEDIA_ENGINE_EVENT_ERROR: {
+      had_error_ = true;
+
       // |param1| - A member of the MF_MEDIA_ENGINE_ERR enumeration.
       // |param2| - An HRESULT error code, or zero.
       MF_MEDIA_ENGINE_ERR error = static_cast<MF_MEDIA_ENGINE_ERR>(param1);
@@ -201,6 +240,9 @@ HRESULT MediaEngineNotifyImpl::EventNotify(DWORD event_code,
       break;
     case MF_MEDIA_ENGINE_EVENT_TIMEUPDATE:
       time_update_cb_.Run();
+      break;
+    case MF_MEDIA_ENGINE_EVENT_ENGINE_SEEK_REQUESTED:
+      mf_seek_requested_cb_.Run();
       break;
 
     default:

@@ -10,6 +10,7 @@ package lens;
 
 import "lens_overlay_client_context.proto";
 import "lens_overlay_cluster_info.proto";
+import "lens_overlay_content_metadata.proto";
 import "lens_overlay_deep_gleam_data.proto";
 import "lens_overlay_document.proto";
 import "lens_overlay_image_crop.proto";
@@ -46,8 +47,8 @@ message LensOverlayObjectsRequest {
   ImageData image_data = 3;
 
   // Optional. Data payload of the request.
-  // TODO(b/359638436): Mark required when clients have migrated to use Payload
-  // field.
+  // TODO(crbug.com/359638436): Mark required when clients have migrated to use
+  // Payload field.
   Payload payload = 4;
 
   // Optional. Viewport context for contextual search viewport requests.
@@ -131,13 +132,14 @@ message LensOverlayInteractionResponse {
   reserved 1, 2, 4;
 }
 
-// Next ID: 11
+// Next ID: 13
 message Payload {
   // Optional. The type of the request.
   RequestType request_type = 6;
 
   // Currently unset, use image_data in ObjectsRequest.
-  // TODO(b/359638436): Move ObjectsRequest clients onto Payload.ImageData.
+  // TODO(crbug.com/359638436): Move ObjectsRequest clients onto
+  // Payload.ImageData.
   ImageData image_data = 2;
 
   // Data for non-image payloads. May be sent with or without an image in the
@@ -169,6 +171,9 @@ message Payload {
 
   // Non-image content to be sent to the Lens server.
   Content content = 10;
+
+  // Optional. Metadata for the content.
+  LensOverlayContentMetadata content_metadata = 12;
 
   reserved 1;
 }

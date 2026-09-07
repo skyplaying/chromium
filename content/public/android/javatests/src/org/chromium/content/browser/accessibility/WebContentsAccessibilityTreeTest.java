@@ -8,17 +8,17 @@ import static org.chromium.content.browser.accessibility.AccessibilityContentShe
 import static org.chromium.content.browser.accessibility.AccessibilityContentShellActivityTestRule.RESULTS_NULL;
 
 import android.annotation.SuppressLint;
+import android.os.Build;
+import android.os.Build.VERSION_CODES_FULL;
 
 import androidx.test.filters.SmallTest;
 
 import org.junit.Assert;
-import org.junit.Before;
+import org.junit.Assume;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
-import org.chromium.base.AconfigFlaggedApiDelegate;
-import org.chromium.base.CommandLine;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
@@ -26,11 +26,13 @@ import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.base.test.util.MinAndroidSdkLevel;
 import org.chromium.base.test.util.Restriction;
 import org.chromium.base.test.util.TestAnimations;
+import org.chromium.content.common.ContentInternalFeatures;
 import org.chromium.content_public.browser.ContentFeatureList;
 import org.chromium.content_public.browser.test.ContentJUnit4ClassRunner;
-import org.chromium.content_public.common.ContentSwitches;
+import org.chromium.ui.accessibility.AccessibilityFeatures;
 import org.chromium.ui.test.util.DeviceRestriction;
 
 /** Tests for WebContentsAccessibilityImpl integration with accessibility services. */
@@ -38,10 +40,6 @@ import org.chromium.ui.test.util.DeviceRestriction;
 @SuppressLint("VisibleForTests")
 @Batch(Batch.PER_CLASS)
 @Restriction(DeviceRestriction.RESTRICTION_TYPE_NON_AUTO)
-@DisableFeatures({
-    ContentFeatureList.ACCESSIBILITY_UNIFIED_SNAPSHOTS,
-    ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API
-})
 @EnableFeatures({
     ContentFeatureList.ACCESSIBILITY_DEPRECATE_TYPE_ANNOUNCE,
     ContentFeatureList.ACCESSIBILITY_EXTENDED_SELECTION,
@@ -52,8 +50,15 @@ public class WebContentsAccessibilityTreeTest {
     // File path that holds all the relevant tests.
     private static final String BASE_ACCNAME_FILE_PATH = "content/test/data/accessibility/accname/";
     private static final String BASE_ARIA_FILE_PATH = "content/test/data/accessibility/aria/";
+    private static final String BASE_APG_PATTERN_FILE_PATH =
+            "content/test/data/accessibility/aria/apg-patterns/";
+    private static final String BASE_APG_PATTERN_THIRDPARTY_INPUT_PATH =
+            "third_party/aria-practices/src/content/patterns/";
+    private static final String BASE_APG_PATTERN_THIRDPARTY_EXPECTATION_PATH =
+            "content/test/data/accessibility/aria/apg-patterns-thirdparty/";
     private static final String BASE_CSS_FILE_PATH = "content/test/data/accessibility/css/";
     private static final String BASE_HTML_FILE_PATH = "content/test/data/accessibility/html/";
+    private static final String BASE_MATHML_FILE_PATH = "content/test/data/accessibility/mathml/";
     private static final String DEFAULT_FILE_SUFFIX = "-expected-android-external.txt";
     private static final String ASSIST_DATA_FILE_SUFFIX = "-expected-android-assist-data.txt";
 
@@ -63,21 +68,6 @@ public class WebContentsAccessibilityTreeTest {
     @Rule
     public AccessibilityContentShellActivityTestRule mActivityTestRule =
             new AccessibilityContentShellActivityTestRule();
-
-    @Before
-    public void setUp() {
-        // Needed for `interestfor` in test_nameFromPopovertargetAndInterestfor.
-        // TODO(crbug.com/326681249): Remove when the feature is launched.
-        CommandLine.getInstance()
-                .appendSwitchWithValue(
-                        ContentSwitches.ENABLE_BLINK_FEATURES, "HTMLInterestForAttribute");
-
-        if (AconfigFlaggedApiDelegate.getInstance() == null
-                || !AconfigFlaggedApiDelegate.getInstance()
-                        .isActionSetExtendedSelectionSupported()) {
-            AconfigFlaggedApiDelegate.setInstanceForTesting(new FakeAconfigFlaggedApiDelegate());
-        }
-    }
 
     /**
      * Perform a single test which will:
@@ -91,21 +81,29 @@ public class WebContentsAccessibilityTreeTest {
      * @param expectationFilePath directory that holds the test files
      */
     private void performTest(String inputFile, String expectationFile, String expectationFilePath) {
+        performTest(inputFile, expectationFilePath, expectationFile, expectationFilePath);
+    }
+
+    private void performTest(
+            String inputFile,
+            String inputFilePath,
+            String expectationFile,
+            String expectationFilePath) {
         // Build page from given file and enable testing framework.
-        mActivityTestRule.setupTestFromFile(expectationFilePath + inputFile);
+        mActivityTestRule.setupTestFromFile(inputFilePath + inputFile);
 
         // Create extra strings to print to logs along with potential error(s) for rebase tool.
         String accessibilityNodeInfoErrorPrefix =
                 String.format(
                         "\n\nTesting: %s%s\nExpected output: %s%s",
-                        expectationFilePath,
+                        inputFilePath,
                         inputFile,
                         expectationFilePath,
                         expectationFile + DEFAULT_FILE_SUFFIX);
         // String assistDataErrorPrefix =
         //         String.format(
         //                 "\n\nTesting: %s%s\nExpected output: %s%s",
-        //                 expectationFilePath,
+        //                 inputFilePath,
         //                 inputFile,
         //                 expectationFilePath,
         //                 expectationFile + ASSIST_DATA_FILE_SUFFIX);
@@ -183,9 +181,34 @@ public class WebContentsAccessibilityTreeTest {
         performTest(inputFile, expectationFile, BASE_ARIA_FILE_PATH);
     }
 
+    private String removeHtmlSuffix(String input) {
+        // ".html" has length 5.
+        return input.substring(0, input.length() - 5);
+    }
+
+    private void performApgPatternTest(String input) {
+        performApgPatternTest(input, removeHtmlSuffix(input));
+    }
+
+    private void performApgPatternTest(String inputFile, String expectationFile) {
+        performTest(inputFile, expectationFile, BASE_APG_PATTERN_FILE_PATH);
+    }
+
+    private void performApgPatternThirdPartyTest(String input) {
+        String filename = input.substring(input.lastIndexOf('/') + 1);
+        performApgPatternThirdPartyTest(input, removeHtmlSuffix(filename));
+    }
+
+    private void performApgPatternThirdPartyTest(String inputFile, String expectationFile) {
+        performTest(
+                inputFile,
+                BASE_APG_PATTERN_THIRDPARTY_INPUT_PATH,
+                expectationFile,
+                BASE_APG_PATTERN_THIRDPARTY_EXPECTATION_PATH);
+    }
+
     private void performCssTest(String input) {
-        // Remove the '.html' from the input file, and append the standard suffix.
-        performCssTest(input, input.substring(0, input.length() - 5));
+        performCssTest(input, removeHtmlSuffix(input));
     }
 
     private void performCssTest(String inputFile, String expectationFile) {
@@ -193,12 +216,16 @@ public class WebContentsAccessibilityTreeTest {
     }
 
     private void performHtmlTest(String input) {
-        // Remove the '.html' from the input file, and append the standard suffix.
-        performHtmlTest(input, input.substring(0, input.length() - 5));
+        performHtmlTest(input, removeHtmlSuffix(input));
     }
 
     private void performHtmlTest(String inputFile, String expectationFile) {
         performTest(inputFile, expectationFile, BASE_HTML_FILE_PATH);
+    }
+
+    private void performMathmlTest(String input) {
+        String expectationFile = removeHtmlSuffix(input);
+        performTest(input, expectationFile, BASE_MATHML_FILE_PATH);
     }
 
     private String generateViewStructureTree() {
@@ -217,21 +244,18 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_descComboboxFocusable() {
         performAccnameTest("desc-combobox-focusable.html");
     }
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_descFromContentOfDescribedbyElement() {
         performAccnameTest("desc-from-content-of-describedby-element.html");
     }
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_nameComboboxFocusable() {
         performAccnameTest("name-combobox-focusable.html");
     }
@@ -254,12 +278,6 @@ public class WebContentsAccessibilityTreeTest {
     @SmallTest
     public void test_annotationRoles() {
         performAriaTest("annotation-roles.html");
-    }
-
-    @Test
-    @SmallTest
-    public void test_ariaAlertdialog() {
-        performAriaTest("aria-alertdialog.html");
     }
 
     @Test
@@ -378,21 +396,18 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_ariaCombobox() {
         performAriaTest("aria-combobox.html");
     }
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_ariaComboboxImplicitHaspopup() {
         performAriaTest("aria-combobox-implicit-haspopup.html");
     }
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_ariaComboboxUneditable() {
         performAriaTest("aria-combobox-uneditable.html");
     }
@@ -431,6 +446,13 @@ public class WebContentsAccessibilityTreeTest {
     @SmallTest
     public void test_ariaDescribedby() {
         performAriaTest("aria-describedby.html");
+    }
+
+    @Test
+    @SmallTest
+    @DisabledTest(message = "Mac-only test for fieldset description fallback")
+    public void test_ariaFieldsetDescribedby() {
+        performAriaTest("aria-fieldset-describedby.html");
     }
 
     @Test
@@ -483,7 +505,6 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_ariaErrormessage() {
         performAriaTest("aria-errormessage.html");
     }
@@ -575,8 +596,11 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
+    @MinAndroidSdkLevel(Build.VERSION_CODES.BAKLAVA)
     public void test_ariaIllegalVal() {
+        Assume.assumeTrue(
+                "Requires Android 16 QPR2 (36.1) or higher",
+                Build.VERSION.SDK_INT_FULL >= VERSION_CODES_FULL.BAKLAVA_1);
         performAriaTest("aria-illegal-val.html");
     }
 
@@ -630,7 +654,6 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_ariaLabelledbyHeading() {
         performAriaTest("aria-labelledby-heading.html");
     }
@@ -663,6 +686,12 @@ public class WebContentsAccessibilityTreeTest {
     @SmallTest
     public void test_ariaList() {
         performAriaTest("aria-list.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaListLabeled() {
+        performAriaTest("aria-list-labeled.html");
     }
 
     @Test
@@ -785,6 +814,7 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
+    @DisabledTest(message = "https://crbug.com/517959931")
     public void test_ariaModal() {
         performAriaTest("aria-modal.html");
     }
@@ -917,7 +947,6 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_ariaReadonly() {
         performAriaTest("aria-readonly.html");
     }
@@ -1008,13 +1037,21 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
+    @MinAndroidSdkLevel(Build.VERSION_CODES.BAKLAVA)
     public void test_ariaSortAriaGrid() {
+        Assume.assumeTrue(
+                "Requires Android 16 QPR2 (36.1) or higher",
+                Build.VERSION.SDK_INT_FULL >= VERSION_CODES_FULL.BAKLAVA_1);
         performAriaTest("aria-sort-aria-grid.html");
     }
 
     @Test
     @SmallTest
+    @MinAndroidSdkLevel(Build.VERSION_CODES.BAKLAVA)
     public void test_ariaSortHtmlTable() {
+        Assume.assumeTrue(
+                "Requires Android 16 QPR2 (36.1) or higher",
+                Build.VERSION.SDK_INT_FULL >= VERSION_CODES_FULL.BAKLAVA_1);
         performAriaTest("aria-sort-html-table.html");
     }
 
@@ -1086,7 +1123,11 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
+    @MinAndroidSdkLevel(Build.VERSION_CODES.BAKLAVA)
     public void test_ariaTabpanel() {
+        Assume.assumeTrue(
+                "Requires Android 16 QPR2 (36.1) or higher",
+                Build.VERSION.SDK_INT_FULL >= VERSION_CODES_FULL.BAKLAVA_1);
         performAriaTest("aria-tabpanel.html");
     }
 
@@ -1104,14 +1145,12 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_ariaTextboxWithAriaTextboxChild() {
         performAriaTest("aria-textbox-with-aria-textbox-child.html");
     }
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_ariaTextboxWithNonTextChildren() {
         performAriaTest("aria-textbox-with-non-text-children.html");
     }
@@ -1196,12 +1235,6 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
-    public void test_ariaVirtualcontent() {
-        performAriaTest("aria-virtualcontent.html");
-    }
-
-    @Test
-    @SmallTest
     public void test_dpubRoles() {
         performAriaTest("dpub-roles.html");
     }
@@ -1210,6 +1243,12 @@ public class WebContentsAccessibilityTreeTest {
     @SmallTest
     public void test_graphicsRoles() {
         performAriaTest("graphics-roles.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_headingWithAriaLabel() {
+        performAriaTest("heading-with-aria-label.html");
     }
 
     @Test
@@ -1232,7 +1271,6 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_inputTextAriaPlaceholder() {
         performAriaTest("input-text-aria-placeholder.html");
     }
@@ -1245,49 +1283,42 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_supplementalDescriptionAnnotate() {
         performAriaTest("supplemental-description-annotate.html");
     }
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_supplementalDescriptionButtonLabel() {
         performAriaTest("supplemental-description-button-label.html");
     }
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_supplementalDescriptionImageButton() {
         performAriaTest("supplemental-description-image-button.html");
     }
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_supplementalDescriptionLinks() {
         performAriaTest("supplemental-description-links.html");
     }
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_supplementalDescriptionNav() {
         performAriaTest("supplemental-description-nav.html");
     }
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_supplementalDescriptionRegion() {
         performAriaTest("supplemental-description-region.html");
     }
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_supplementalDescriptionSelect() {
         performAriaTest("supplemental-description-select.html");
     }
@@ -1296,6 +1327,491 @@ public class WebContentsAccessibilityTreeTest {
     @SmallTest
     public void test_toggleButtonExpandCollapse() {
         performAriaTest("toggle-button-expand-collapse.html");
+    }
+
+    // ------------------ ARIA PATTERNS TESTS ------------------ //
+
+    @Test
+    @SmallTest
+    public void test_ariaAccordion() {
+        performApgPatternTest("aria-accordion.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaAlertdialog() {
+        performApgPatternTest("aria-alertdialog.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaBreadcrumb() {
+        performApgPatternTest("aria-breadcrumb.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaCarouselButtons() {
+        performApgPatternTest("aria-carousel-buttons.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaCarouselTabs() {
+        performApgPatternTest("aria-carousel-tabs.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaListboxGrouped() {
+        performApgPatternTest("aria-listbox-grouped.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaQuantitySpinbutton() {
+        performApgPatternTest("aria-quantity-spinbutton.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaSliderColorViewer() {
+        performApgPatternTest("aria-slider-color-viewer.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaSliderMultithumb() {
+        performApgPatternTest("aria-slider-multithumb.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaSliderRating() {
+        performApgPatternTest("aria-slider-rating.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaSliderVertical() {
+        performApgPatternTest("aria-slider-vertical.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaTreeviewFileDirectoryComputedProperties() {
+        performApgPatternTest("aria-treeview-file-directory-computed-properties.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaTreeviewFileDirectoryDeclaredProperties() {
+        performApgPatternTest("aria-treeview-file-directory-declared-properties.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyAccordion() {
+        performApgPatternThirdPartyTest("accordion/examples/accordion.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyAdvancedDataGrid() {
+        performApgPatternThirdPartyTest("grid/examples/advanced-data-grid.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyAlert() {
+        performApgPatternThirdPartyTest("alert/examples/alert.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyAlertdialog() {
+        performApgPatternThirdPartyTest("alertdialog/examples/alertdialog.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyBreadcrumb() {
+        performApgPatternThirdPartyTest("breadcrumb/examples/breadcrumb.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyButton() {
+        performApgPatternThirdPartyTest("button/examples/button.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyButtonIdl() {
+        performApgPatternThirdPartyTest("button/examples/button_idl.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyCarousel1PrevNext() {
+        performApgPatternThirdPartyTest("carousel/examples/carousel-1-prev-next.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyCarousel2Tablist() {
+        performApgPatternThirdPartyTest("carousel/examples/carousel-2-tablist.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyCheckbox() {
+        performApgPatternThirdPartyTest("checkbox/examples/checkbox.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyCheckboxMixed() {
+        performApgPatternThirdPartyTest("checkbox/examples/checkbox-mixed.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyComboboxAutocompleteBoth() {
+        performApgPatternThirdPartyTest("combobox/examples/combobox-autocomplete-both.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyComboboxAutocompleteList() {
+        performApgPatternThirdPartyTest("combobox/examples/combobox-autocomplete-list.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyComboboxAutocompleteNone() {
+        performApgPatternThirdPartyTest("combobox/examples/combobox-autocomplete-none.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyComboboxDatepicker() {
+        performApgPatternThirdPartyTest("combobox/examples/combobox-datepicker.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyComboboxSelectOnly() {
+        performApgPatternThirdPartyTest("combobox/examples/combobox-select-only.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyDataGrids() {
+        performApgPatternThirdPartyTest("grid/examples/data-grids.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyDatepickerDialog() {
+        performApgPatternThirdPartyTest("dialog-modal/examples/datepicker-dialog.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyDatepickerSpinbuttons() {
+        performApgPatternThirdPartyTest("spinbutton/examples/datepicker-spinbuttons.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyDialog() {
+        performApgPatternThirdPartyTest("dialog-modal/examples/dialog.html");
+    }
+
+    // TODO(crbug.com/545647752): disabled due to flakiness
+    @Test
+    @SmallTest
+    @DisabledTest(message = "b/545647752")
+    public void test_ariaApgPatternThirdPartyDisclosureCard() {
+        performApgPatternThirdPartyTest("disclosure/examples/disclosure-card.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyDisclosureFaq() {
+        performApgPatternThirdPartyTest("disclosure/examples/disclosure-faq.html");
+    }
+
+    // TODO(crbug.com/545647752): disabled due to flakiness
+    @Test
+    @SmallTest
+    @DisabledTest(message = "b/545647752")
+    public void test_ariaApgPatternThirdPartyDisclosureImageDescription() {
+        performApgPatternThirdPartyTest("disclosure/examples/disclosure-image-description.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyDisclosureNavigation() {
+        performApgPatternThirdPartyTest("disclosure/examples/disclosure-navigation.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyDisclosureNavigationHybrid() {
+        performApgPatternThirdPartyTest("disclosure/examples/disclosure-navigation-hybrid.html");
+    }
+
+    // TODO(crbug.com/545647752): disabled due to flakiness
+    @Test
+    @SmallTest
+    @DisabledTest(message = "b/545647752")
+    public void test_ariaApgPatternThirdPartyFeed() {
+        performApgPatternThirdPartyTest("feed/examples/feed.html");
+    }
+
+    // TODO(crbug.com/545647752): disabled due to flakiness
+    @Test
+    @SmallTest
+    @DisabledTest(message = "b/545647752")
+    public void test_ariaApgPatternThirdPartyFeedDisplay() {
+        performApgPatternThirdPartyTest("feed/examples/feed-display.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyGridCombo() {
+        performApgPatternThirdPartyTest("combobox/examples/grid-combo.html");
+    }
+
+    // TODO(crbug.com/545647752): disabled due to flakiness
+    @Test
+    @SmallTest
+    @DisabledTest(message = "b/545647752")
+    public void test_ariaApgPatternThirdPartyLayoutGrids() {
+        performApgPatternThirdPartyTest("grid/examples/layout-grids.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyLink() {
+        performApgPatternThirdPartyTest("link/examples/link.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyListboxCollapsible() {
+        performApgPatternThirdPartyTest("listbox/examples/listbox-collapsible.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyListboxGrouped() {
+        performApgPatternThirdPartyTest("listbox/examples/listbox-grouped.html");
+    }
+
+    // TODO(crbug.com/545647752): disabled due to flakiness
+    @Test
+    @SmallTest
+    @DisabledTest(message = "b/545647752")
+    public void test_ariaApgPatternThirdPartyListboxRearrangeable() {
+        performApgPatternThirdPartyTest("listbox/examples/listbox-rearrangeable.html");
+    }
+
+    // TODO(crbug.com/545647752): disabled due to flakiness
+    @Test
+    @SmallTest
+    @DisabledTest(message = "b/545647752")
+    public void test_ariaApgPatternThirdPartyListboxScrollable() {
+        performApgPatternThirdPartyTest("listbox/examples/listbox-scrollable.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyMenuButtonActions() {
+        performApgPatternThirdPartyTest("menu-button/examples/menu-button-actions.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyMenuButtonActionsActiveDescendant() {
+        performApgPatternThirdPartyTest(
+                "menu-button/examples/menu-button-actions-active-descendant.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyMenuButtonLinks() {
+        performApgPatternThirdPartyTest("menu-button/examples/menu-button-links.html");
+    }
+
+    // TODO(crbug.com/545647752): disabled due to flakiness
+    @Test
+    @SmallTest
+    @DisabledTest(message = "b/545647752")
+    public void test_ariaApgPatternThirdPartyMenubarEditor() {
+        performApgPatternThirdPartyTest("menubar/examples/menubar-editor.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyMenubarNavigation() {
+        performApgPatternThirdPartyTest("menubar/examples/menubar-navigation.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyMeter() {
+        performApgPatternThirdPartyTest("meter/examples/meter.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyQuantitySpinbutton() {
+        performApgPatternThirdPartyTest("spinbutton/examples/quantity-spinbutton.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyRadio() {
+        performApgPatternThirdPartyTest("radio/examples/radio.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyRadioActivedescendant() {
+        performApgPatternThirdPartyTest("radio/examples/radio-activedescendant.html");
+    }
+
+    // TODO(crbug.com/545647752): disabled due to flakiness
+    @Test
+    @SmallTest
+    @DisabledTest(message = "b/545647752")
+    public void test_ariaApgPatternThirdPartyRadioRating() {
+        performApgPatternThirdPartyTest("radio/examples/radio-rating.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartySliderColorViewer() {
+        performApgPatternThirdPartyTest("slider/examples/slider-color-viewer.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartySliderMultithumb() {
+        performApgPatternThirdPartyTest("slider-multithumb/examples/slider-multithumb.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartySliderRating() {
+        performApgPatternThirdPartyTest("slider/examples/slider-rating.html");
+    }
+
+    // TODO(crbug.com/545647752): disabled due to flakiness
+    @Test
+    @SmallTest
+    @DisabledTest(message = "b/545647752")
+    public void test_ariaApgPatternThirdPartySliderSeek() {
+        performApgPatternThirdPartyTest("slider/examples/slider-seek.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartySliderTemperature() {
+        performApgPatternThirdPartyTest("slider/examples/slider-temperature.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartySortableTable() {
+        performApgPatternThirdPartyTest("table/examples/sortable-table.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartySwitch() {
+        performApgPatternThirdPartyTest("switch/examples/switch.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartySwitchButton() {
+        performApgPatternThirdPartyTest("switch/examples/switch-button.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartySwitchCheckbox() {
+        performApgPatternThirdPartyTest("switch/examples/switch-checkbox.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyTable() {
+        performApgPatternThirdPartyTest("table/examples/table.html");
+    }
+
+    // TODO(crbug.com/545647752): disabled due to flakiness
+    @Test
+    @SmallTest
+    @DisabledTest(message = "b/545647752")
+    public void test_ariaApgPatternThirdPartyTabsActions() {
+        performApgPatternThirdPartyTest("tabs/examples/tabs-actions.html");
+    }
+
+    // TODO(crbug.com/545647752): disabled due to flakiness
+    @Test
+    @SmallTest
+    @DisabledTest(message = "b/545647752")
+    public void test_ariaApgPatternThirdPartyTabsAutomatic() {
+        performApgPatternThirdPartyTest("tabs/examples/tabs-automatic.html");
+    }
+
+    // TODO(crbug.com/545647752): disabled due to flakiness
+    @Test
+    @SmallTest
+    @DisabledTest(message = "b/545647752")
+    public void test_ariaApgPatternThirdPartyTabsManual() {
+        performApgPatternThirdPartyTest("tabs/examples/tabs-manual.html");
+    }
+
+    // TODO(crbug.com/545647752): disabled due to flakiness
+    @Test
+    @SmallTest
+    @DisabledTest(message = "b/545647752")
+    public void test_ariaApgPatternThirdPartyToolbar() {
+        performApgPatternThirdPartyTest("toolbar/examples/toolbar.html");
+    }
+
+    // TODO(crbug.com/545647752): disabled due to flakiness
+    @Test
+    @SmallTest
+    @DisabledTest(message = "b/545647752")
+    public void test_ariaApgPatternThirdPartyTreegrid1() {
+        performApgPatternThirdPartyTest("treegrid/examples/treegrid-1.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyTreeview1a() {
+        performApgPatternThirdPartyTest("treeview/examples/treeview-1a.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_ariaApgPatternThirdPartyTreeview1b() {
+        performApgPatternThirdPartyTest("treeview/examples/treeview-1b.html");
+    }
+
+    // TODO(crbug.com/545647752): disabled due to flakiness
+    @Test
+    @SmallTest
+    @DisabledTest(message = "b/545647752")
+    public void test_ariaApgPatternThirdPartyTreeviewNavigation() {
+        performApgPatternThirdPartyTest("treeview/examples/treeview-navigation.html");
     }
 
     // ------------------ CSS TESTS ------------------ //
@@ -1383,6 +1899,12 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
+    public void test_aEmptyPlaceholder() {
+        performHtmlTest("a-empty-placeholder.html");
+    }
+
+    @Test
+    @SmallTest
     public void test_aName() {
         performHtmlTest("a-name.html");
     }
@@ -1431,7 +1953,6 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_actions() {
         performHtmlTest("actions.html");
     }
@@ -1662,8 +2183,18 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
-    public void test_contenteditableDescendants() {
+    @DisableFeatures(ContentInternalFeatures.ACCESSIBILITY_EXPOSE_NON_ATOMIC_TEXT_FIELD_CHILDREN)
+    public void test_contenteditableDescendants_ExposeNonAtomicTextFieldChildrenFeatureDisabled() {
         performHtmlTest("contenteditable-descendants.html");
+    }
+
+    @Test
+    @SmallTest
+    @EnableFeatures(ContentInternalFeatures.ACCESSIBILITY_EXPOSE_NON_ATOMIC_TEXT_FIELD_CHILDREN)
+    public void test_contenteditableDescendants_ExposeNonAtomicTextFieldChildrenFeatureEnabled() {
+        performHtmlTest(
+                "contenteditable-descendants.html",
+                "contenteditable-descendants-expose-non-atomic-text-field-children-feature");
     }
 
     @Test
@@ -1674,9 +2205,35 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
-    public void test_contenteditableWithNoDescendants() {
+    @DisableFeatures(ContentInternalFeatures.ACCESSIBILITY_EXPOSE_NON_ATOMIC_TEXT_FIELD_CHILDREN)
+    public void
+            test_contenteditableWithNoDescendants_ExposeNonAtomicTextFieldChildrenFeatureDisabled() {
         performHtmlTest("contenteditable-with-no-descendants.html");
+    }
+
+    @Test
+    @SmallTest
+    @EnableFeatures(ContentInternalFeatures.ACCESSIBILITY_EXPOSE_NON_ATOMIC_TEXT_FIELD_CHILDREN)
+    public void
+            test_contenteditableWithNoDescendants_ExposeNonAtomicTextFieldChildrenFeatureEnabled() {
+        performHtmlTest("contenteditable-with-no-descendants.html");
+    }
+
+    @Test
+    @SmallTest
+    @EnableFeatures(ContentInternalFeatures.ACCESSIBILITY_EXPOSE_NON_ATOMIC_TEXT_FIELD_CHILDREN)
+    public void test_contenteditableMultiNode() {
+        performHtmlTest("contenteditable-multi-node.html");
+    }
+
+    @Test
+    @SmallTest
+    @EnableFeatures({
+        ContentInternalFeatures.ACCESSIBILITY_EXPOSE_NON_ATOMIC_TEXT_FIELD_CHILDREN,
+        ContentFeatureList.ACCESSIBILITY_EXTENDED_SELECTION
+    })
+    public void test_selectionInContenteditable() {
+        performHtmlTest("selection-in-contenteditable.html");
     }
 
     @Test
@@ -1687,21 +2244,18 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_customSelect() {
         performHtmlTest("custom-select.html");
     }
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_customSelectOpen() {
         performHtmlTest("custom-select-open.html");
     }
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_customSelectLabelElement() {
         performHtmlTest("custom-select-label-element.html");
     }
@@ -1714,14 +2268,12 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_customSelectSimple() {
         performHtmlTest("custom-select-simple.html");
     }
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_customSelectSimpleOpen() {
         performHtmlTest("custom-select-simple-open.html");
     }
@@ -1903,7 +2455,6 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_htmlVsAriaAttributes() {
         performHtmlTest("html-vs-aria-attributes.html");
     }
@@ -2041,14 +2592,12 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_inputDateWithPopupOpenMultipleForWin() {
         performHtmlTest("input-date-with-popup-open-multiple-for-win.html");
     }
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_inputDateWithPopupOpenMultiple() {
         performHtmlTest("input-date-with-popup-open-multiple.html");
     }
@@ -2061,7 +2610,6 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_inputDate() {
         performHtmlTest("input-date.html");
     }
@@ -2074,7 +2622,6 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_inputDatetime() {
         performHtmlTest("input-datetime.html");
     }
@@ -2087,7 +2634,6 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_inputFile() {
         performHtmlTest("input-file.html");
     }
@@ -2100,7 +2646,6 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_inputList() {
         performHtmlTest("input-list.html");
     }
@@ -2137,6 +2682,12 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
+    public void test_inputRadioSiblingWithSpan() {
+        performHtmlTest("input-radio-sibling-with-span.html");
+    }
+
+    @Test
+    @SmallTest
     public void test_inputRadio() {
         performHtmlTest("input-radio.html");
     }
@@ -2145,6 +2696,12 @@ public class WebContentsAccessibilityTreeTest {
     @SmallTest
     public void test_inputRange() {
         performHtmlTest("input-range.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_progressBar() {
+        performHtmlTest("progress-bar.html");
     }
 
     @Test
@@ -2179,7 +2736,6 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_inputTextNameCalc() {
         performHtmlTest("input-text-name-calc.html");
     }
@@ -2192,21 +2748,18 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_inputTextReadOnly() {
         performHtmlTest("input-text-read-only.html");
     }
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_inputTextValue() {
         performHtmlTest("input-text-value.html");
     }
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_inputText() {
         performHtmlTest("input-text.html");
     }
@@ -2219,35 +2772,30 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_inputTime() {
         performHtmlTest("input-time.html");
     }
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_inputTypesWithPlaceholder() {
         performHtmlTest("input-types-with-placeholder.html");
     }
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_inputTypesWithValueAndPlaceholder() {
         performHtmlTest("input-types-with-value-and-placeholder.html");
     }
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_inputTypesWithValue() {
         performHtmlTest("input-types-with-value.html");
     }
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_inputTypes() {
         performHtmlTest("input-types.html");
     }
@@ -2272,7 +2820,6 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_interactiveControlsWithLabels() {
         performHtmlTest("interactive-controls-with-labels.html");
     }
@@ -2370,8 +2917,27 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
+    @EnableFeatures(AccessibilityFeatures.ACCESSIBILITY_ANDROID_MATH)
+    @MinAndroidSdkLevel(Build.VERSION_CODES.CINNAMON_BUN)
+    public void test_mathIntent() {
+        performMathmlTest("intent.html");
+    }
+
+    @Test
+    @SmallTest
     public void test_menu() {
         performHtmlTest("menu.html");
+    }
+
+    @Test
+    @SmallTest
+    @MinAndroidSdkLevel(Build.VERSION_CODES.BAKLAVA)
+    @CommandLineFlags.Add({"enable-blink-features=MenuElements"})
+    public void test_menulistInvokerHaspopup() {
+        Assume.assumeTrue(
+                "Requires Android 16 QPR2 (36.1) or higher",
+                Build.VERSION.SDK_INT_FULL >= VERSION_CODES_FULL.BAKLAVA_1);
+        performHtmlTest("menulist-invoker-haspopup.html");
     }
 
     @Test
@@ -2396,6 +2962,12 @@ public class WebContentsAccessibilityTreeTest {
     @SmallTest
     public void test_nestedlist() {
         performHtmlTest("nestedlist.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_nonTextSelection() {
+        performHtmlTest("non-text-selection.html");
     }
 
     @Test
@@ -2436,14 +3008,12 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_optgroupMenulist() {
         performHtmlTest("optgroup-menulist.html");
     }
 
     @Test
     @SmallTest
-    @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_optgroupCustomMenulist() {
         performHtmlTest("optgroup-custom-menulist.html");
     }
@@ -2482,6 +3052,30 @@ public class WebContentsAccessibilityTreeTest {
     @SmallTest
     public void test_picture() {
         performHtmlTest("picture.html");
+    }
+
+    @Test
+    @SmallTest
+    public void testNameFromRelatedFieldset() {
+        performHtmlTest("name-from-related-fieldset.html");
+    }
+
+    @Test
+    @SmallTest
+    public void testNameFromRelatedLabelable() {
+        performHtmlTest("name-from-related-labelable.html");
+    }
+
+    @Test
+    @SmallTest
+    public void testNameFromRelatedSvg() {
+        performHtmlTest("name-from-related-svg.html");
+    }
+
+    @Test
+    @SmallTest
+    public void testNameFromRelatedTitle() {
+        performHtmlTest("name-from-related-title.html");
     }
 
     @Test
@@ -2577,7 +3171,6 @@ public class WebContentsAccessibilityTreeTest {
 
     @Test
     @SmallTest
-    // @EnableFeatures(ContentFeatureList.ACCESSIBILITY_POPULATE_SUPPLEMENTAL_DESCRIPTION_API)
     public void test_selectOpen() {
         performHtmlTest("select-open.html");
     }
@@ -2586,6 +3179,18 @@ public class WebContentsAccessibilityTreeTest {
     @SmallTest
     public void test_selectionContainer() {
         performHtmlTest("selection-container.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_selectionOverEditableWithFocus() {
+        performHtmlTest("selection-over-editable-with-focus.html");
+    }
+
+    @Test
+    @SmallTest
+    public void test_selectionOverEditableWithoutFocus() {
+        performHtmlTest("selection-over-editable-without-focus.html");
     }
 
     @Test

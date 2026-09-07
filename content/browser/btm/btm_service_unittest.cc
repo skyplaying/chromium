@@ -7,6 +7,7 @@
 #include <optional>
 #include <string_view>
 
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
@@ -373,10 +374,8 @@ class BtmServiceStateRemovalTest : public testing::Test {
   // |third_party_url| embedded by |first_party_url|.
   void Add3PCException(const GURL& first_party_url,
                        const GURL& third_party_url) {
-    browser_client_.GrantCookieAccessDueToHeuristic(
-        profile_.get(), net::SchemefulSite(first_party_url),
-        net::SchemefulSite(third_party_url), base::Days(1),
-        /*ignore_schemes=*/false);
+    browser_client_.SetThirdPartyCookieAccess(third_party_url, first_party_url,
+                                              CONTENT_SETTING_ALLOW);
 
     auto* client = GetContentClientForTesting()->browser();
     EXPECT_TRUE(client->IsFullCookieAccessAllowed(
@@ -804,7 +803,8 @@ TEST_F(
 
   // Exceptions to block third-party cookies.
   browser_client_.BlockThirdPartyCookiesOnSite(blocked_1p_url);
-  browser_client_.BlockThirdPartyCookies(redirect_url_1, scoped_blocked_1p_url);
+  browser_client_.SetThirdPartyCookieAccess(
+      redirect_url_1, scoped_blocked_1p_url, CONTENT_SETTING_BLOCK);
 
   int stateful_bounce_count = 0;
   BtmServiceImpl::StatefulBounceCallback increment_bounce =

@@ -51,6 +51,7 @@
 #include "third_party/blink/renderer/core/streams/writable_stream_transferring_optimizer.h"
 #include "third_party/blink/renderer/core/typed_arrays/array_buffer/array_buffer_contents.h"
 #include "third_party/blink/renderer/platform/bindings/v8_external_memory_accounter.h"
+#include "third_party/blink/renderer/platform/graphics/canvas_child_paint_record.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/partitions.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
@@ -104,7 +105,10 @@ class CORE_EXPORT SerializedScriptValue
 
   using ArrayBufferContentsArray = Vector<ArrayBufferContents, 1>;
   using SharedArrayBufferContentsArray = Vector<ArrayBufferContents, 1>;
+  using SharedImmutableArrayBufferContentsArray =
+      Vector<ArrayBufferContents, 1>;
   using ImageBitmapContentsArray = Vector<scoped_refptr<StaticBitmapImage>, 1>;
+  using ElementImageContentsArray = Vector<CanvasChildPaintRecord, 1>;
   using TransferredWasmModulesArray = Vector<v8::CompiledWasmModule>;
   using MessagePortChannelArray = Vector<MessagePortChannel>;
   using StreamArray = Vector<Stream>;
@@ -210,6 +214,9 @@ class CORE_EXPORT SerializedScriptValue
     return data_buffer_.as_span();
   }
 
+  bool HasDeserializationError() const { return deserialization_error_; }
+  void SetDeserializationError(bool error) { deserialization_error_ = error; }
+
   // Deserializes the value (in the current context). Returns a null value in
   // case of failure.
   struct DeserializeOptions {
@@ -266,6 +273,11 @@ class CORE_EXPORT SerializedScriptValue
       const ImageBitmapArray&,
       ExceptionState&);
 
+  static ElementImageContentsArray TransferElementImageContents(
+      v8::Isolate*,
+      const ElementImageArray&,
+      ExceptionState&);
+
   // Informs V8 about external memory allocated and owned by this object.
   // Large values should contribute to GC counters to eventually trigger a GC,
   // otherwise flood of postMessage() can cause OOM.
@@ -288,6 +300,16 @@ class CORE_EXPORT SerializedScriptValue
   SharedArrayBufferContentsArray& SharedArrayBuffersContents() {
     return shared_array_buffers_contents_;
   }
+  SharedImmutableArrayBufferContentsArray&
+  SharedImmutableArrayBuffersContents() {
+    return shared_immutable_array_buffers_contents_;
+  }
+  void MoveSharedImmutableBackingStores(
+      decltype(std::declval<v8::ValueSerializer>()
+                   .ReleaseSharedImmutableBackingStores()) backing_stores);
+  decltype(std::declval<v8::ValueSerializer>()
+               .ReleaseSharedImmutableBackingStores())
+  ReleaseSharedImmutableBackingStores() const;
   BlobDataHandleMap& BlobDataHandles() { return blob_data_handles_; }
   FileSystemAccessTokensArray& FileSystemAccessTokens() {
     return file_system_access_tokens_;
@@ -304,11 +326,32 @@ class CORE_EXPORT SerializedScriptValue
   }
   void SetImageBitmapContentsArray(ImageBitmapContentsArray contents);
 
+  ElementImageContentsArray& GetElementImageContentsArray() {
+    return element_image_contents_array_;
+  }
+  void SetElementImageContentsArray(ElementImageContentsArray contents);
+
   StreamArray& GetStreams() { return streams_; }
 
   const v8::SharedValueConveyor* MaybeGetSharedValueConveyor() const;
 
   bool IsLockedToAgentCluster() const;
+
+  enum class OriginCheckRequirement {
+    // No additional origin check is required.
+    kNone,
+
+    // The origins of the contexts must match, except that a related audio
+    // worklet is acceptable (for WebAssembly modules, which are subject to
+    // a Chromium-specific restriction).
+    kAllowRelatedAudioWorklet,
+
+    // The origins of the sender and receiver contexts must match.
+    kStrict,
+  };
+
+  // Returns the origin check required to receive this value.
+  OriginCheckRequirement GetOriginCheckRequirement() const;
 
   // Returns true after serializing script values that remote origins cannot
   // access.
@@ -392,6 +435,9 @@ class CORE_EXPORT SerializedScriptValue
   void TransferImageBitmaps(v8::Isolate*,
                             const ImageBitmapArray&,
                             ExceptionState&);
+  void TransferElementImages(v8::Isolate*,
+                             const ElementImageArray&,
+                             ExceptionState&);
   void TransferOffscreenCanvas(v8::Isolate*,
                                const OffscreenCanvasArray&,
                                ExceptionState&);
@@ -423,6 +469,7 @@ class CORE_EXPORT SerializedScriptValue
   // UnpackedSerializedScriptValue thereafter.
   ArrayBufferContentsArray array_buffer_contents_array_;
   ImageBitmapContentsArray image_bitmap_contents_array_;
+  ElementImageContentsArray element_image_contents_array_;
 
   // |streams_| is also single-use but is special-cased because it works
   // with ServiceWorkers.
@@ -433,12 +480,15 @@ class CORE_EXPORT SerializedScriptValue
   BlobDataHandleMap blob_data_handles_;
   MojoScopedHandleArray mojo_handles_;
   SharedArrayBufferContentsArray shared_array_buffers_contents_;
+  SharedImmutableArrayBufferContentsArray
+      shared_immutable_array_buffers_contents_;
   FileSystemAccessTokensArray file_system_access_tokens_;
   HashMap<const void* const*, std::unique_ptr<Attachment>> attachments_;
 
   std::optional<v8::SharedValueConveyor> shared_value_conveyor_;
   raw_ptr<v8::Isolate> isolate_;
   bool has_registered_external_allocation_;
+  bool deserialization_error_ = false;
 #if DCHECK_IS_ON()
   bool was_unpacked_ = false;
 #endif

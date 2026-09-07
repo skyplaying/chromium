@@ -164,6 +164,8 @@ class VIEWS_EXPORT DesktopWindowTreeHost {
   virtual void ClearNativeFocus() = 0;
 
   virtual bool IsMoveLoopSupported() const;
+  virtual void PrepareForMoveLoop(Widget::MoveLoopSource source) {}
+  virtual void SetBypassWindowManager(bool bypass) {}
   virtual Widget::MoveLoopResult RunMoveLoop(
       const gfx::Vector2d& drag_offset,
       Widget::MoveLoopSource source,
@@ -230,6 +232,11 @@ class VIEWS_EXPORT DesktopWindowTreeHost {
   // Allow or prevent screenshots of this window tree.
   virtual void SetAllowScreenshots(bool allow) = 0;
   virtual bool AreScreenshotsAllowed() = 0;
+
+#if BUILDFLAG(IS_WIN)
+  // Exclude this window from screen capture.
+  virtual void SetExcludeFromScreenCapture(bool exclude) {}
+#endif
 
   // Updates window shape by clipping the canvas before paint starts.
   virtual void UpdateWindowShapeIfNeeded(const ui::PaintContext& context);

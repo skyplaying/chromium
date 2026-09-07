@@ -7,12 +7,14 @@
 #include "base/files/file_util.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/path_service.h"
 #include "base/test/gtest_util.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
@@ -29,6 +31,7 @@
 #include "chrome/browser/sync/test/integration/sync_service_impl_harness.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "chrome/browser/sync/test/integration/themes_helper.h"
+#include "chrome/common/chrome_paths.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/browser_sync/browser_sync_switches.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
@@ -71,19 +74,16 @@ namespace {
 std::unique_ptr<syncer::LoopbackServerEntity> CreateTombstone(
     syncer::DataType data_type,
     std::string_view client_tag) {
-  const std::string client_tag_hash =
-      syncer::ClientTagHash::FromUnhashed(data_type, client_tag).value();
-
-  // For all data types except bookmarks, the server ID is built based on the
-  // client tag *hash*. For bookmarks, the non-hashed client tag (aka UUID) is
-  // used.
-  return syncer::PersistentTombstoneEntity::CreateNew(
-      syncer::LoopbackServerEntity::CreateId(
-          data_type, (data_type == syncer::BOOKMARKS) ? std::string(client_tag)
-                                                      : client_tag_hash),
-      client_tag_hash);
+  return syncer::PersistentTombstoneEntity::CreateNewForTest(
+      data_type, std::string(client_tag));
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
+
+base::FilePath GetTestFilePathForCacheGuid() {
+  base::FilePath user_data_path;
+  base::PathService::Get(chrome::DIR_USER_DATA, &user_data_path);
+  return user_data_path.AppendASCII("SyncTestTmpCacheGuid");
+}
 
 // Collects all the updated data types and used GetUpdates origins.
 class GetUpdatesObserver : public FakeServer::Observer {
@@ -161,7 +161,7 @@ INSTANTIATE_TEST_SUITE_P(,
                          GetSyncTestModes(),
                          testing::PrintToStringParamName());
 
-// Android doesn't currently support PRE_ tests, see crbug.com/1117345.
+// Android doesn't currently support PRE_ tests, see crbug.com/40145099.
 #if !BUILDFLAG(IS_ANDROID)
 IN_PROC_BROWSER_TEST_P(SingleClientCommonSyncTest,
                        PRE_ShouldNotIssueGetUpdatesOnBrowserRestart) {
@@ -286,8 +286,83 @@ IN_PROC_BROWSER_TEST_P(SingleClientCommonSyncTest,
 
 #endif  // !BUILDFLAG(IS_CHROMEOS)
 
-IN_PROC_BROWSER_TEST_P(SingleClientCommonSyncTest,
-                       E2E_ENABLED(ShouldCrashAwaitQuiescenceForE2ETest)) {
+// Regression test for crbug.com/40624424 that verifies the cache GUID is not
+// reset upon restart of the browser.
+IN_PROC_BROWSER_TEST_P(SingleClientCommonSyncTest, PRE_ReusesSameCacheGuid) {
+  if (GetSetupSyncMode() == SyncTest::SetupSyncMode::kSyncTheFeature) {
+    GTEST_SKIP() << "This test applies to transport mode only.";
+  }
+  ASSERT_TRUE(SignIn());
+
+  ASSERT_EQ(syncer::SyncService::TransportState::ACTIVE,
+            GetSyncService(0)->GetTransportState());
+
+  // On ChromeOS, IsInitialSyncFeatureSetupComplete() is always true.
+#if !BUILDFLAG(IS_CHROMEOS)
+  ASSERT_FALSE(GetSyncService(0)
+                   ->GetUserSettings()
+                   ->IsInitialSyncFeatureSetupComplete());
+  ASSERT_FALSE(GetSyncService(0)->IsSyncFeatureEnabled());
+#endif  // !BUILDFLAG(IS_CHROMEOS)
+
+  syncer::SyncTransportDataPrefs transport_data_prefs(
+      GetProfile(0)->GetPrefs(),
+      GetClient(0)->GetGaiaIdHashForPrimaryAccount());
+  const std::string cache_guid = transport_data_prefs.GetCacheGuid();
+  ASSERT_FALSE(cache_guid.empty());
+
+  // Save the cache GUID to file to remember after restart, for test
+  // verification purposes only.
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  ASSERT_TRUE(base::WriteFile(GetTestFilePathForCacheGuid(), cache_guid));
+}
+
+IN_PROC_BROWSER_TEST_P(SingleClientCommonSyncTest, ReusesSameCacheGuid) {
+  if (GetSetupSyncMode() == SyncTest::SetupSyncMode::kSyncTheFeature) {
+    GTEST_SKIP() << "This test applies to transport mode only.";
+  }
+
+  ASSERT_TRUE(SetupClients());
+  ASSERT_FALSE(GetSyncService(0)->HasDisableReason(
+      syncer::SyncService::DISABLE_REASON_NOT_SIGNED_IN));
+  ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
+
+  ASSERT_EQ(syncer::SyncService::TransportState::ACTIVE,
+            GetSyncService(0)->GetTransportState());
+
+  // On ChromeOS, IsInitialSyncFeatureSetupComplete() is always true.
+#if !BUILDFLAG(IS_CHROMEOS)
+  ASSERT_FALSE(GetSyncService(0)
+                   ->GetUserSettings()
+                   ->IsInitialSyncFeatureSetupComplete());
+  ASSERT_FALSE(GetSyncService(0)->IsSyncFeatureEnabled());
+#endif  // !BUILDFLAG(IS_CHROMEOS)
+
+  syncer::SyncTransportDataPrefs transport_data_prefs(
+      GetProfile(0)->GetPrefs(),
+      GetClient(0)->GetGaiaIdHashForPrimaryAccount());
+  ASSERT_FALSE(transport_data_prefs.GetCacheGuid().empty());
+
+  std::string old_cache_guid;
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  ASSERT_TRUE(
+      base::ReadFileToString(GetTestFilePathForCacheGuid(), &old_cache_guid));
+  ASSERT_FALSE(old_cache_guid.empty());
+
+  EXPECT_EQ(old_cache_guid, transport_data_prefs.GetCacheGuid());
+}
+
+// TODO(crbug.com/542347163): Re-enable test.
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#define MAYBE_ShouldCrashAwaitQuiescenceForE2ETest \
+  DISABLED_ShouldCrashAwaitQuiescenceForE2ETest
+#else
+#define MAYBE_ShouldCrashAwaitQuiescenceForE2ETest \
+  ShouldCrashAwaitQuiescenceForE2ETest
+#endif
+IN_PROC_BROWSER_TEST_P(
+    SingleClientCommonSyncTest,
+    E2E_ENABLED(MAYBE_ShouldCrashAwaitQuiescenceForE2ETest)) {
   ASSERT_TRUE(SetupSync());
   EXPECT_CHECK_DEATH_WITH(
       { EXPECT_TRUE(AwaitQuiescence()); },
@@ -317,8 +392,16 @@ class SingleClientGetUnsyncedTypesTest : public SyncTest {
   base::test::ScopedFeatureList feature_list_;
 };
 
+// TODO(crbug.com/505733920): Enable the test.
+#if BUILDFLAG(IS_MAC) && defined(ADDRESS_SANITIZER)
+#define MAYBE_ShouldGetTypesWithUnsyncedDataFromSyncService \
+  DISABLED_ShouldGetTypesWithUnsyncedDataFromSyncService
+#else
+#define MAYBE_ShouldGetTypesWithUnsyncedDataFromSyncService \
+  ShouldGetTypesWithUnsyncedDataFromSyncService
+#endif
 IN_PROC_BROWSER_TEST_F(SingleClientGetUnsyncedTypesTest,
-                       ShouldGetTypesWithUnsyncedDataFromSyncService) {
+                       MAYBE_ShouldGetTypesWithUnsyncedDataFromSyncService) {
   ASSERT_TRUE(SetupSync());
 
 #if !BUILDFLAG(IS_ANDROID)
@@ -379,7 +462,6 @@ IN_PROC_BROWSER_TEST_F(SingleClientGetUnsyncedTypesTest,
 IN_PROC_BROWSER_TEST_F(SingleClientGetUnsyncedTypesTest, HttpError) {
   ASSERT_TRUE(SetupSync());
 
-  ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
   ASSERT_TRUE(GetSyncService(0)->GetActiveDataTypes().Has(syncer::THEMES));
 
   // THEMES has no unsynced data.
@@ -422,7 +504,6 @@ IN_PROC_BROWSER_TEST_F(SingleClientGetUnsyncedTypesTest, SignInPendingState) {
 
   ASSERT_TRUE(SetupSync());
 
-  ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());
   ASSERT_TRUE(GetSyncService(0)->GetActiveDataTypes().Has(syncer::THEMES));
 
   // THEMES has no unsynced data.
@@ -462,7 +543,7 @@ IN_PROC_BROWSER_TEST_F(SingleClientGetUnsyncedTypesTest, SignInPendingState) {
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
-// Android doesn't currently support PRE_ tests, see crbug.com/1117345.
+// Android doesn't currently support PRE_ tests, see crbug.com/40145099.
 #if !BUILDFLAG(IS_ANDROID)
 class SingleClientFeatureToTransportSyncTest : public SyncTest {
  public:
@@ -479,10 +560,9 @@ class SingleClientFeatureToTransportSyncTest : public SyncTest {
 
   ~SingleClientFeatureToTransportSyncTest() override = default;
 
-  void BeforeSetupClient(int index,
-                         const base::FilePath& profile_path) override {
+  void OnProfileCreationStarted(Profile* profile) override {
     if (!content::IsPreTest()) {
-      base::FilePath prefs_path = profile_path.AppendASCII("Preferences");
+      base::FilePath prefs_path = profile->GetPath().AppendASCII("Preferences");
       std::string prefs_string;
       ASSERT_TRUE(base::ReadFileToString(prefs_path, &prefs_string));
       std::optional<base::Value> prefs = base::JSONReader::Read(
@@ -496,6 +576,8 @@ class SingleClientFeatureToTransportSyncTest : public SyncTest {
       ASSERT_TRUE(updated_prefs_string);
       ASSERT_TRUE(base::WriteFile(prefs_path, *updated_prefs_string));
     }
+
+    SyncTest::OnProfileCreationStarted(profile);
   }
 
   bool SetupClients() override {
@@ -624,8 +706,10 @@ class SingleClientPolicySyncTest
  public:
   SingleClientPolicySyncTest() : SyncTest(SINGLE_CLIENT) {
     if (GetSetupSyncMode() == SetupSyncMode::kSyncTransportOnly) {
-      scoped_feature_list_.InitAndEnableFeature(
-          syncer::kReplaceSyncPromosWithSignInPromos);
+      scoped_feature_list_.InitWithFeatures(
+          {syncer::kReplaceSyncPromosWithSignInPromos,
+           switches::kSyncEnableBookmarksInTransportMode},
+          {});
     }
   }
   ~SingleClientPolicySyncTest() override = default;
@@ -779,37 +863,26 @@ class SingleClientOldProgressMarkerSyncTest : public SyncTest {
 #if !BUILDFLAG(IS_ANDROID)
 IN_PROC_BROWSER_TEST_F(SingleClientOldProgressMarkerSyncTest,
                        PRE_OldProgressMarker) {
+  GetFakeServer()->InjectEntity(bookmarks_helper::CreateBookmarkServerEntity(
+      kBookmarkTitle1, kBookmarkUrl1, kBookmarkUuid1));
+  GetFakeServer()->InjectEntity(bookmarks_helper::CreateBookmarkServerEntity(
+      kBookmarkTitle2, kBookmarkUrl2));
+  GetFakeServer()->InjectEntity(
+      reading_list_helper::CreateTestReadingListEntity(kReadingListUrl1,
+                                                       "title1"));
+  GetFakeServer()->InjectEntity(
+      reading_list_helper::CreateTestReadingListEntity(kReadingListUrl2,
+                                                       "title2"));
+
   ASSERT_TRUE(SetupSyncWithMode(SetupSyncMode::kSyncTransportOnly));
 
-  // Add two bookmarks.
-  bookmarks::BookmarkModel* bookmark_model =
-      BookmarkModelFactory::GetForBrowserContext(GetProfile(0));
-  bookmark_model->AddURL(bookmark_model->account_bookmark_bar_node(), 0,
-                         kBookmarkTitle1, kBookmarkUrl1, nullptr, std::nullopt,
-                         kBookmarkUuid1);
-  bookmark_model->AddURL(bookmark_model->account_bookmark_bar_node(), 0,
-                         kBookmarkTitle2, kBookmarkUrl2);
+  EXPECT_TRUE(bookmarks_helper::HasNodeWithURL(0, kBookmarkUrl1));
+  EXPECT_TRUE(bookmarks_helper::HasNodeWithURL(0, kBookmarkUrl2));
 
-  // Add two reading list entries.
   ReadingListModel* reading_list_model =
       ReadingListModelFactory::GetForBrowserContext(GetProfile(0));
-  reading_list_model->AddOrReplaceEntry(kReadingListUrl1, "title1",
-                                        reading_list::ADDED_VIA_CURRENT_APP,
-                                        /*estimated_read_time=*/std::nullopt,
-                                        /*creation_time=*/std::nullopt);
-  reading_list_model->AddOrReplaceEntry(kReadingListUrl2, "title2",
-                                        reading_list::ADDED_VIA_CURRENT_APP,
-                                        /*estimated_read_time=*/std::nullopt,
-                                        /*creation_time=*/std::nullopt);
-
-  // Wait for everything to arrive on the server.
-  bookmarks_helper::ServerBookmarksEqualityChecker(
-      {{kBookmarkTitle1, kBookmarkUrl1}, {kBookmarkTitle2, kBookmarkUrl2}},
-      /*cryptographer=*/nullptr)
-      .Wait();
-  reading_list_helper::ServerReadingListURLsEqualityChecker(
-      {kReadingListUrl1, kReadingListUrl2})
-      .Wait();
+  EXPECT_TRUE(reading_list_model->GetEntryByURL(kReadingListUrl1));
+  EXPECT_TRUE(reading_list_model->GetEntryByURL(kReadingListUrl2));
 
   // Pretend that the last poll happened long ago, so that after restart, a poll
   // will get triggered immediately.
@@ -851,15 +924,16 @@ IN_PROC_BROWSER_TEST_F(SingleClientOldProgressMarkerSyncTest,
 
   // Verify that the changes were applied. Note that the outcome here is the
   // same as if the server had sent a regular incremental update.
-  bookmarks_helper::BookmarksUrlChecker(0, kBookmarkUrl1, 0).Wait();
-  bookmarks_helper::BookmarksUrlChecker(0, kBookmarkUrl2, 1).Wait();
-  bookmarks_helper::BookmarksUrlChecker(0, kBookmarkUrl3, 1).Wait();
+  ASSERT_TRUE(
+      bookmarks_helper::BookmarksUrlChecker(0, kBookmarkUrl3, 1).Wait());
+  EXPECT_FALSE(bookmarks_helper::HasNodeWithURL(0, kBookmarkUrl1));
+  EXPECT_TRUE(bookmarks_helper::HasNodeWithURL(0, kBookmarkUrl2));
 
   ReadingListModel* reading_list_model =
       ReadingListModelFactory::GetForBrowserContext(GetProfile(0));
-  reading_list_helper::LocalReadingListURLsEqualityChecker(
-      reading_list_model, {kReadingListUrl2, kReadingListUrl3})
-      .Wait();
+  ASSERT_TRUE(reading_list_helper::LocalReadingListURLsEqualityChecker(
+                  reading_list_model, {kReadingListUrl2, kReadingListUrl3})
+                  .Wait());
 
   // Verify via histograms that the server indeed sent a full update, not an
   // incremental one - in particular, that it did not send any tombstones. Note

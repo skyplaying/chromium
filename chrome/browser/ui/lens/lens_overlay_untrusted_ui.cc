@@ -10,6 +10,7 @@
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/lens/lens_overlay_controller.h"
 #include "chrome/browser/ui/lens/lens_overlay_theme_utils.h"
+#include "chrome/browser/ui/lens/lens_results_panel_router.h"
 #include "chrome/browser/ui/lens/lens_search_controller.h"
 #include "chrome/browser/ui/lens/lens_search_feature_flag_utils.h"
 #include "chrome/browser/ui/lens/lens_searchbox_controller.h"
@@ -23,12 +24,14 @@
 #include "chrome/grit/lens_untrusted_resources.h"
 #include "chrome/grit/lens_untrusted_resources_map.h"
 #include "components/lens/lens_features.h"
+#include "components/lens/lens_overlay_invocation_source.h"
 #include "components/prefs/pref_service.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/webui/tracked_element/tracked_element_handler_document_singleton.h"
 #include "ui/webui/webui_util.h"
 
 namespace lens {
@@ -46,7 +49,9 @@ constexpr int kCopyTextTimeoutMs = 500;
 constexpr int kTranslateTextTimeoutMs = 500;
 
 LensOverlayUntrustedUI::LensOverlayUntrustedUI(content::WebUI* web_ui)
-    : UntrustedTopChromeWebUIController(web_ui) {
+    : UntrustedTopChromeWebUIController(web_ui,
+                                        /*enable_chrome_send=*/false,
+                                        /*enable_chrome_histograms=*/true) {
   // Set up the chrome-untrusted://lens-overlay source.
   content::WebUIDataSource* html_source =
       content::WebUIDataSource::CreateAndAdd(
@@ -139,6 +144,7 @@ LensOverlayUntrustedUI::LensOverlayUntrustedUI(content::WebUI* web_ui)
   html_source->AddLocalizedString(
       "searchboxGhostLoaderNoSuggestText",
       IDS_GOOGLE_SEARCH_BOX_CONTEXTUAL_NO_SUGGEST_TEXT);
+  html_source->AddLocalizedString("close", IDS_CLOSE);
   html_source->AddLocalizedString(
       "searchButton", IDS_LENS_OVERLAY_SEARCH_LANGUAGE_PICKER_LABEL);
   html_source->AddLocalizedString(
@@ -173,30 +179,6 @@ LensOverlayUntrustedUI::LensOverlayUntrustedUI(content::WebUI* web_ui)
   html_source->AddLocalizedString(
       "tabToContinue", IDS_LENS_PERMISSION_BUBBLE_DIALOG_TAB_TO_CONTINUE);
 
-  // Add default theme colors.
-  const auto& palette = lens::kPaletteColors.at(lens::PaletteId::kFallback);
-  html_source->AddInteger("colorFallbackPrimary",
-                          palette.at(lens::ColorId::kPrimary));
-  html_source->AddInteger("colorFallbackShaderLayer1",
-                          palette.at(lens::ColorId::kShaderLayer1));
-  html_source->AddInteger("colorFallbackShaderLayer2",
-                          palette.at(lens::ColorId::kShaderLayer2));
-  html_source->AddInteger("colorFallbackShaderLayer3",
-                          palette.at(lens::ColorId::kShaderLayer3));
-  html_source->AddInteger("colorFallbackShaderLayer4",
-                          palette.at(lens::ColorId::kShaderLayer4));
-  html_source->AddInteger("colorFallbackShaderLayer5",
-                          palette.at(lens::ColorId::kShaderLayer5));
-  html_source->AddInteger("colorFallbackScrim",
-                          palette.at(lens::ColorId::kScrim));
-  html_source->AddInteger(
-      "colorFallbackSurfaceContainerHighestLight",
-      palette.at(lens::ColorId::kSurfaceContainerHighestLight));
-  html_source->AddInteger(
-      "colorFallbackSurfaceContainerHighestDark",
-      palette.at(lens::ColorId::kSurfaceContainerHighestDark));
-  html_source->AddInteger("colorFallbackSelectionElement",
-                          palette.at(lens::ColorId::kSelectionElement));
 
   // Add finch flags
   html_source->AddBoolean("enableDebuggingMode",
@@ -238,7 +220,8 @@ LensOverlayUntrustedUI::LensOverlayUntrustedUI(content::WebUI* web_ui)
       lens::LensOverlayShouldUseDarkMode(
           ThemeServiceFactory::GetForProfile(Profile::FromWebUI(web_ui))));
   html_source->AddBoolean("enableOverlayContextualSearchbox",
-                          lens::IsLensOverlayContextualSearchboxEnabled());
+                          lens::IsLensOverlayContextualSearchboxEnabled(
+                              Profile::FromWebUI(web_ui)));
   html_source->AddBoolean(
       "enableGhostLoader",
       lens::features::EnableContextualSearchboxGhostLoader());
@@ -288,12 +271,19 @@ LensOverlayUntrustedUI::LensOverlayUntrustedUI(content::WebUI* web_ui)
   html_source->AddBoolean(
       "enableKeyboardSelection",
       lens::features::IsLensOverlayKeyboardSelectionEnabled());
+  html_source->AddBoolean("enableMultiRegionSelection", false);
+  html_source->AddBoolean("lineSelection", false);
 
   LensOverlayController& controller = GetLensOverlayController();
   html_source->AddDouble("invocationTime",
                          controller.GetInvocationTimeSinceEpoch());
   html_source->AddString("invocationSource",
                          controller.GetInvocationSourceString());
+  html_source->AddBoolean(
+      "isRoutingToContextualTasks",
+      GetLensSearchController().should_route_to_contextual_tasks());
+  html_source->AddBoolean("isSidePanelOpen",
+                          controller.IsResultsSidePanelShowingOrWillOpen());
 
   // Allow FrameSrc from all Google subdomains as redirects can occur.
   GURL results_side_panel_url =
@@ -321,8 +311,8 @@ LensOverlayUntrustedUI::LensOverlayUntrustedUI(content::WebUI* web_ui)
   html_source->AddResourcePaths(kLensSharedResources);
 
   // Add required resources for the searchbox.
-  SearchboxHandler::SetupWebUIDataSource(html_source,
-                                         Profile::FromWebUI(web_ui));
+  html_source->AddLocalizedStrings(SearchboxHandler::GetWebUIDataSourceDict(
+      Profile::FromWebUI(web_ui), {.is_lens = true}));
   html_source->AddString(
       "searchboxDefaultIcon",
       lens::features::GetVisualSelectionUpdatesEnableGradientSuperG()
@@ -346,10 +336,6 @@ LensOverlayUntrustedUI::LensOverlayUntrustedUI(content::WebUI* web_ui)
   html_source->AddBoolean(
     "enableThumbnailSizingTweaks",
     lens::features::GetVisualSelectionUpdatesEnableThumbnailSizingTweaks());
-  html_source->AddBoolean("steadyComposeboxShowVoiceSearch", false);
-  html_source->AddBoolean("expandedComposeboxShowVoiceSearch", false);
-  html_source->AddBoolean("composeboxContextDragAndDropEnabled", false);
-  html_source->AddBoolean("composeboxShowRecentTabChip", false);
 
   // Determine if the cursor tooltip should appear.
   Profile* profile = Profile::FromWebUI(web_ui);
@@ -359,11 +345,27 @@ LensOverlayUntrustedUI::LensOverlayUntrustedUI(content::WebUI* web_ui)
       "canShowTooltipFromPrefs",
       lens_overlay_start_count <= kNumTimesToShowCursorTooltips);
 
-  html_source->AddBoolean(
-      "enablePrivacyNotice",
-      lens::features::IsLensOverlayNonBlockingPrivacyNoticeEnabled() &&
-          !MaybeIncrementPrivacyNoticeShownCountAndGrantPermissions(
-              profile->GetPrefs()));
+  if (controller.ShouldHideNonBlockingPrivacyNotice()) {
+    // Set both `enablePrivacyNotice` and `hasPermissionsForSession` to false so
+    // that the privacy notice will not appear but the overlay will still
+    // treat permissions as not granted (even if the user has granted
+    // permissions via other entrypoints). This is special behavior for certain
+    // types of invocations only.
+    html_source->AddBoolean("enablePrivacyNotice", false);
+    html_source->AddBoolean("hasPermissionsForSession", false);
+  } else {
+    // Otherwise, calculate `enablePrivacyNotice` and set
+    // `hasPermissionsForSession` to its inverse.
+    bool enable_privacy_notice =
+        lens::features::IsLensOverlayNonBlockingPrivacyNoticeEnabled() &&
+        !MaybeIncrementPrivacyNoticeShownCountAndGrantPermissions(profile);
+    html_source->AddBoolean("enablePrivacyNotice", enable_privacy_notice);
+    html_source->AddBoolean("hasPermissionsForSession", !enable_privacy_notice);
+  }
+
+  ui::TrackedElementHandlerDocumentSingleton::Register(
+      this,
+      std::vector<ui::ElementIdentifier>{kLensOverlayTranslateButtonElementId});
 }
 
 void LensOverlayUntrustedUI::BindInterface(
@@ -380,14 +382,9 @@ void LensOverlayUntrustedUI::BindInterface(
 }
 
 void LensOverlayUntrustedUI::BindInterface(
-    mojo::PendingReceiver<searchbox::mojom::PageHandler> receiver) {
-  LensSearchboxController* controller =
-      GetLensSearchController().lens_searchbox_controller();
-
-  auto handler = std::make_unique<LensSearchboxHandler>(
-      std::move(receiver), Profile::FromWebUI(web_ui()),
-      web_ui()->GetWebContents(), /*lens_searchbox_client=*/controller);
-  controller->SetContextualSearchboxHandler(std::move(handler));
+    mojo::PendingReceiver<searchbox::mojom::PageHandlerFactory> receiver) {
+  searchbox_page_factory_receiver_.reset();
+  searchbox_page_factory_receiver_.Bind(std::move(receiver));
 }
 
 void LensOverlayUntrustedUI::BindInterface(
@@ -411,6 +408,18 @@ LensOverlayController& LensOverlayUntrustedUI::GetLensOverlayController() {
       LensOverlayController::FromWebUIWebContents(web_ui()->GetWebContents());
   CHECK(controller);
   return *controller;
+}
+
+void LensOverlayUntrustedUI::CreatePageHandler(
+    mojo::PendingRemote<searchbox::mojom::Page> page,
+    mojo::PendingReceiver<searchbox::mojom::PageHandler> receiver) {
+  LensSearchboxController* controller =
+      GetLensSearchController().lens_searchbox_controller();
+
+  auto handler = std::make_unique<LensSearchboxHandler>(
+      std::move(receiver), std::move(page), Profile::FromWebUI(web_ui()),
+      web_ui()->GetWebContents(), /*lens_searchbox_client=*/controller);
+  controller->SetContextualSearchboxHandler(std::move(handler));
 }
 
 void LensOverlayUntrustedUI::CreatePageHandler(
@@ -438,8 +447,9 @@ void LensOverlayUntrustedUI::CreateHelpBubbleHandler(
     mojo::PendingRemote<help_bubble::mojom::HelpBubbleClient> client,
     mojo::PendingReceiver<help_bubble::mojom::HelpBubbleHandler> handler) {
   help_bubble_handler_ = std::make_unique<user_education::HelpBubbleHandler>(
-      std::move(handler), std::move(client), this,
-      std::vector<ui::ElementIdentifier>{kLensOverlayTranslateButtonElementId});
+      std::move(handler), std::move(client),
+      ui::TrackedElementHandlerDocumentSingleton::GetOrCreate(
+          web_ui()->GetRenderFrameHost()));
 }
 
 LensOverlayUntrustedUI::~LensOverlayUntrustedUI() = default;

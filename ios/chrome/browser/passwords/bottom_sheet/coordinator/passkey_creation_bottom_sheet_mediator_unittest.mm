@@ -76,9 +76,10 @@ class PasskeyCreationBottomSheetMediatorTest : public PlatformTest {
     mock_reauth_module_ = OCMProtocolMock(@protocol(ReauthenticationProtocol));
     OCMStub([mock_reauth_module_ canAttemptReauth]).andReturn(YES);
 
-    auto client = std::make_unique<webauthn::FakeIOSPasskeyClient>(web_state_);
+    auto client = std::make_unique<webauthn::FakeIOSPasskeyClient>();
     fake_client_ = client.get();
     webauthn::PasskeyTabHelper::CreateForWebState(web_state_, model_.get(),
+                                                  /*password_store=*/nullptr,
                                                   std::move(client));
   }
 
@@ -109,7 +110,8 @@ TEST_F(PasskeyCreationBottomSheetMediatorTest,
   // Creates mediator with the correct request ID.
   mediator_ = [[PasskeyCreationBottomSheetMediator alloc]
       initWithWebStateList:&web_state_list_
-                 requestID:params.RequestId()
+               requestInfo:webauthn::IOSPasskeyClient::RequestInfo(
+                               "", params.RequestId())
           accountForSaving:@"test@example.com"
               reauthModule:mock_reauth_module_
                   delegate:mock_delegate_];
@@ -118,6 +120,7 @@ TEST_F(PasskeyCreationBottomSheetMediatorTest,
 
   // Mock reauth module to say biometrics is NOT available.
   OCMStub([mock_reauth_module_ canAttemptReauthWithBiometrics]).andReturn(NO);
+  fake_client_->SetBiometricsEnabled(false);
   // Expect NO reauth attempt.
   [[mock_reauth_module_ reject] attemptReauthWithLocalizedReason:[OCMArg any]
                                             canReusePreviousAuth:YES
@@ -143,7 +146,8 @@ TEST_F(PasskeyCreationBottomSheetMediatorTest,
 
   mediator_ = [[PasskeyCreationBottomSheetMediator alloc]
       initWithWebStateList:&web_state_list_
-                 requestID:params.RequestId()
+               requestInfo:webauthn::IOSPasskeyClient::RequestInfo(
+                               "", params.RequestId())
           accountForSaving:@"test@example.com"
               reauthModule:mock_reauth_module_
                   delegate:mock_delegate_];
@@ -158,7 +162,7 @@ TEST_F(PasskeyCreationBottomSheetMediatorTest,
   __block void (^completionHandler)(ReauthenticationResult);
   OCMExpect([mock_reauth_module_
       attemptReauthWithLocalizedReason:[OCMArg any]
-                  canReusePreviousAuth:YES
+                  canReusePreviousAuth:NO
                                handler:[OCMArg checkWithBlock:^BOOL(id obj) {
                                  completionHandler = [obj copy];
                                  return YES;
@@ -188,7 +192,8 @@ TEST_F(PasskeyCreationBottomSheetMediatorTest, CreatePasskeyReauthFailure) {
 
   mediator_ = [[PasskeyCreationBottomSheetMediator alloc]
       initWithWebStateList:&web_state_list_
-                 requestID:params.RequestId()
+               requestInfo:webauthn::IOSPasskeyClient::RequestInfo(
+                               "", params.RequestId())
           accountForSaving:@"test@example.com"
               reauthModule:mock_reauth_module_
                   delegate:mock_delegate_];
@@ -203,7 +208,7 @@ TEST_F(PasskeyCreationBottomSheetMediatorTest, CreatePasskeyReauthFailure) {
   __block void (^completionHandler)(ReauthenticationResult);
   OCMExpect([mock_reauth_module_
       attemptReauthWithLocalizedReason:[OCMArg any]
-                  canReusePreviousAuth:YES
+                  canReusePreviousAuth:NO
                                handler:[OCMArg checkWithBlock:^BOOL(id obj) {
                                  completionHandler = [obj copy];
                                  return YES;
@@ -226,4 +231,48 @@ TEST_F(PasskeyCreationBottomSheetMediatorTest, CreatePasskeyReauthFailure) {
   [(OCMockObject*)mock_delegate_ verify];
   // Verify client did NOT fetch keys.
   EXPECT_FALSE(fake_client_->DidFetchKeys());
+}
+
+// Tests that createPasskey defers to the renderer and dismisses passkey
+// creation when reauth cannot be attempted.
+TEST_F(PasskeyCreationBottomSheetMediatorTest, CreatePasskeyReauthNotPossible) {
+  webauthn::PasskeyTabHelper* helper =
+      webauthn::PasskeyTabHelper::FromWebState(web_state_);
+
+  webauthn::RegistrationRequestParams params =
+      webauthn::BuildRegistrationRequestParams(
+          {}, device::UserVerificationRequirement::kRequired);
+
+  // Re-create the mock for this test to avoid the default YES stub from setUp.
+  mock_reauth_module_ = OCMProtocolMock(@protocol(ReauthenticationProtocol));
+  OCMStub([mock_reauth_module_ canAttemptReauth]).andReturn(NO);
+
+  mediator_ = [[PasskeyCreationBottomSheetMediator alloc]
+      initWithWebStateList:&web_state_list_
+               requestInfo:webauthn::IOSPasskeyClient::RequestInfo(
+                               "", params.RequestId())
+          accountForSaving:@"test@example.com"
+              reauthModule:mock_reauth_module_
+                  delegate:mock_delegate_];
+
+  helper->HandleCreateRequestedEvent(std::move(params));
+
+  // Expect dismissal on fallback to renderer.
+  [[mock_delegate_ expect] dismissPasskeyCreation];
+
+  [mediator_ createPasskey];
+
+  // Verify dismissal.
+  [(OCMockObject*)mock_delegate_ verify];
+  // Verify client did NOT fetch keys.
+  EXPECT_FALSE(fake_client_->DidFetchKeys());
+
+  // Verify that the request was deferred to the renderer.
+  web::WebFramesManager* frames_manager =
+      webauthn::PasskeyJavaScriptFeature::GetInstance()->GetWebFramesManager(
+          web_state_);
+  web::FakeWebFrame* main_frame =
+      static_cast<web::FakeWebFrame*>(frames_manager->GetMainWebFrame());
+  EXPECT_NE(main_frame->GetLastJavaScriptCall().find(u"deferToRenderer"),
+            std::u16string::npos);
 }

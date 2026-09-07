@@ -6,13 +6,17 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/strings/stringprintf.h"
+#include "base/test/run_until.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/popup_test_base.h"
+#include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "third_party/blink/public/common/features.h"
+#include "ui/base/base_window.h"
 #include "ui/display/display.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/native_ui_types.h"
@@ -71,20 +75,20 @@ class WidgetBoundsEqualWaiter final : public views::WidgetObserver {
 IN_PROC_BROWSER_TEST_F(PopupTest, OpenLeftAndTopZeroCoordinates) {
   // Attempt to open a popup at (0,0). Its bounds should match the request, but
   // be adjusted to meet minimum size and available display area constraints.
-  Browser* popup =
+  BrowserWindowInterface* popup =
       OpenPopup(browser(), "open('.', '', 'left=0,top=0,width=50,height=50')");
   const display::Display display = GetDisplayNearestBrowser(popup);
-  gfx::Rect expected(popup->window()->GetBounds().size());
+  gfx::Rect expected(popup->GetWindow()->GetBounds().size());
   expected.AdjustToFit(display.work_area());
 #if BUILDFLAG(IS_LINUX)
   // TODO(crbug.com/40815883) Desktop Linux window bounds are inaccurate.
   expected.Outset(50);
-  EXPECT_TRUE(expected.Contains(popup->window()->GetBounds()))
+  EXPECT_TRUE(expected.Contains(popup->GetWindow()->GetBounds()))
       << " expected: " << expected.ToString()
-      << " popup: " << popup->window()->GetBounds().ToString()
+      << " popup: " << popup->GetWindow()->GetBounds().ToString()
       << " work_area: " << display.work_area().ToString();
 #else
-  EXPECT_EQ(expected.ToString(), popup->window()->GetBounds().ToString())
+  EXPECT_EQ(expected.ToString(), popup->GetWindow()->GetBounds().ToString())
       << " work_area: " << display.work_area().ToString();
 #endif
 }
@@ -104,7 +108,7 @@ IN_PROC_BROWSER_TEST_F(PopupTest, OpenClampedToCurrentDisplay) {
   const display::Display display = GetDisplayNearestBrowser(browser());
   for (const char* const features : open_features) {
     const std::string script = "open('.', '', `" + std::string(features) + "`)";
-    Browser* popup = OpenPopup(browser(), script);
+    BrowserWindowInterface* popup = OpenPopup(browser(), script);
     // The popup should be constrained to the opener's available display space.
     EXPECT_EQ(display, GetDisplayNearestBrowser(popup));
     gfx::Rect work_area(display.work_area());
@@ -115,10 +119,10 @@ IN_PROC_BROWSER_TEST_F(PopupTest, OpenClampedToCurrentDisplay) {
     // work_area: 0,0 1280x800 popup: 1,20 1280x800
     work_area.Outset(50);
 #endif
-    EXPECT_TRUE(work_area.Contains(popup->window()->GetBounds()))
+    EXPECT_TRUE(work_area.Contains(popup->GetWindow()->GetBounds()))
         << " script: " << script
         << " work_area: " << display.work_area().ToString()
-        << " popup: " << popup->window()->GetBounds().ToString();
+        << " popup: " << popup->GetWindow()->GetBounds().ToString();
   }
 }
 
@@ -136,8 +140,8 @@ IN_PROC_BROWSER_TEST_F(PopupTest, MoveClampedToCurrentDisplay) {
   };
   const display::Display display = GetDisplayNearestBrowser(browser());
   for (const char* const script : kMoveScripts) {
-    Browser* popup = OpenPopup(browser(), kOpenPopup);
-    gfx::Rect popup_bounds = popup->window()->GetBounds();
+    BrowserWindowInterface* popup = OpenPopup(browser(), kOpenPopup);
+    gfx::Rect popup_bounds = popup->GetWindow()->GetBounds();
     content::WebContents* popup_contents =
         popup->tab_strip_model()->GetActiveWebContents();
     SCOPED_TRACE(testing::Message()
@@ -147,10 +151,10 @@ IN_PROC_BROWSER_TEST_F(PopupTest, MoveClampedToCurrentDisplay) {
     content::ExecuteScriptAsync(popup_contents, script);
     // Wait for a substantial move, bounds change during init.
     WaitForBoundsChange(popup, /*move_by=*/40, /*resize_by=*/0);
-    EXPECT_NE(popup_bounds.origin(), popup->window()->GetBounds().origin());
-    EXPECT_EQ(popup_bounds.size(), popup->window()->GetBounds().size());
-    EXPECT_TRUE(display.work_area().Contains(popup->window()->GetBounds()))
-        << " popup-after: " << popup->window()->GetBounds().ToString();
+    EXPECT_NE(popup_bounds.origin(), popup->GetWindow()->GetBounds().origin());
+    EXPECT_EQ(popup_bounds.size(), popup->GetWindow()->GetBounds().size());
+    EXPECT_TRUE(display.work_area().Contains(popup->GetWindow()->GetBounds()))
+        << " popup-after: " << popup->GetWindow()->GetBounds().ToString();
   }
 }
 
@@ -165,8 +169,8 @@ IN_PROC_BROWSER_TEST_F(PopupTest, ResizeClampedToCurrentDisplay) {
   };
   const display::Display display = GetDisplayNearestBrowser(browser());
   for (const char* const script : kResizeScripts) {
-    Browser* popup = OpenPopup(browser(), kOpenPopup);
-    gfx::Rect popup_bounds = popup->window()->GetBounds();
+    BrowserWindowInterface* popup = OpenPopup(browser(), kOpenPopup);
+    gfx::Rect popup_bounds = popup->GetWindow()->GetBounds();
     content::WebContents* popup_contents =
         popup->tab_strip_model()->GetActiveWebContents();
     SCOPED_TRACE(testing::Message()
@@ -176,31 +180,131 @@ IN_PROC_BROWSER_TEST_F(PopupTest, ResizeClampedToCurrentDisplay) {
     content::ExecuteScriptAsync(popup_contents, script);
     // Wait for a substantial resize, bounds change during init.
     WaitForBoundsChange(popup, /*move_by=*/0, /*resize_by=*/99);
-    EXPECT_NE(popup_bounds.size(), popup->window()->GetBounds().size());
-    EXPECT_TRUE(display.work_area().Contains(popup->window()->GetBounds()))
-        << " popup-after: " << popup->window()->GetBounds().ToString();
+    EXPECT_NE(popup_bounds.size(), popup->GetWindow()->GetBounds().size());
+    EXPECT_TRUE(display.work_area().Contains(popup->GetWindow()->GetBounds()))
+        << " popup-after: " << popup->GetWindow()->GetBounds().ToString();
   }
 }
 
 // Opens two popups with custom position and size, but one has noopener. They
-// should both have the same position and size. http://crbug.com/1011688
+// should both have the same position and size. http://crbug.com/40651776
 IN_PROC_BROWSER_TEST_F(PopupTest, NoopenerPositioning) {
   const char kFeatures[] =
       "left=${screen.availLeft},top=${screen.availTop},width=200,height=200";
-  Browser* noopener_popup = OpenPopup(
+  BrowserWindowInterface* noopener_popup = OpenPopup(
       browser(), "open('.', '', `noopener=1," + std::string(kFeatures) + "`)");
-  Browser* opener_popup =
+  BrowserWindowInterface* opener_popup =
       OpenPopup(browser(), "open('.', '', `" + std::string(kFeatures) + "`)");
 
   WidgetBoundsEqualWaiter(views::Widget::GetWidgetForNativeWindow(
-                              noopener_popup->window()->GetNativeWindow()),
+                              noopener_popup->GetWindow()->GetNativeWindow()),
                           views::Widget::GetWidgetForNativeWindow(
-                              opener_popup->window()->GetNativeWindow()))
+                              opener_popup->GetWindow()->GetNativeWindow()))
       .Wait();
 
-  EXPECT_EQ(noopener_popup->window()->GetBounds().ToString(),
-            opener_popup->window()->GetBounds().ToString());
+  EXPECT_EQ(noopener_popup->GetWindow()->GetBounds().ToString(),
+            opener_popup->GetWindow()->GetBounds().ToString());
 }
+
+// Regression test for https://crbug.com/512533947: a popup whose document
+// calls window.moveTo() during page load must not shrink on reload.
+IN_PROC_BROWSER_TEST_F(PopupTest, MoveToOnReloadDoesNotShrinkOuterBounds) {
+  BrowserWindowInterface* popup = OpenPopup(
+      browser(), "open('.', '', 'left=200,top=200,width=600,height=400')");
+  ASSERT_TRUE(popup);
+  content::WebContents* popup_contents =
+      popup->tab_strip_model()->GetActiveWebContents();
+
+  // Browser-initiated navigation to a data: URL whose inline script calls
+  // moveTo(0, 0) during parse, mirroring the reporter's popup.html.
+  constexpr char kPopupUrl[] =
+      "data:text/html,<script>window.moveTo(0,0)</script>hi";
+  ASSERT_TRUE(content::NavigateToURL(popup_contents, GURL(kPopupUrl)));
+  // The inline moveTo(0, 0) settles the popup near the screen origin.
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return popup->GetWindow()->GetBounds().x() < 100; }));
+  const gfx::Size initial_size = popup->GetWindow()->GetBounds().size();
+
+  // The bug is a race between the reload commit and the inline moveTo(0, 0),
+  // so it only reproduces intermittently. Repeat the cycle a few times to
+  // reliably surface it.
+  for (int i = 0; i < 3; ++i) {
+    SCOPED_TRACE(testing::Message() << "reload iteration: " << i);
+    // Shift the popup off the screen origin so the upcoming inline
+    // moveTo(0, 0) is observable as an origin change rather than a no-op.
+    const gfx::Rect shifted_bounds(200, 200, initial_size.width(),
+                                   initial_size.height());
+    popup->GetWindow()->SetBounds(shifted_bounds);
+    ASSERT_TRUE(base::test::RunUntil(
+        [&]() { return popup->GetWindow()->GetBounds().x() >= 100; }));
+
+    popup_contents->GetController().Reload(content::ReloadType::NORMAL,
+                                           /*check_for_repost=*/false);
+    EXPECT_TRUE(content::WaitForLoadStop(popup_contents));
+    // Wait for the post-reload inline moveTo(0, 0) to be applied by the
+    // browser; this is observable as the popup origin returning near zero.
+    ASSERT_TRUE(base::test::RunUntil(
+        [&]() { return popup->GetWindow()->GetBounds().x() < 100; }));
+
+    const gfx::Rect bounds_after = popup->GetWindow()->GetBounds();
+    EXPECT_EQ(initial_size, bounds_after.size())
+        << " initial-size: " << initial_size.ToString()
+        << " bounds-after: " << bounds_after.ToString();
+  }
+}
+
+// Parallel regression test for the resize side of crbug.com/512533947: a
+// popup whose document calls window.resizeTo() during page load must not
+// silently shift the outer origin on reload.
+IN_PROC_BROWSER_TEST_F(PopupTest, ResizeToOnReloadDoesNotShiftOuterBounds) {
+  BrowserWindowInterface* popup = OpenPopup(
+      browser(), "open('.', '', 'left=200,top=200,width=600,height=400')");
+  ASSERT_TRUE(popup);
+  content::WebContents* popup_contents =
+      popup->tab_strip_model()->GetActiveWebContents();
+
+  constexpr char kPopupUrl[] =
+      "data:text/html,<script>window.resizeTo(500,300)</script>hi";
+  ASSERT_TRUE(content::NavigateToURL(popup_contents, GURL(kPopupUrl)));
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return popup->GetWindow()->GetBounds().width() <= 500; }));
+  const gfx::Point initial_origin = popup->GetWindow()->GetBounds().origin();
+  const gfx::Size initial_size = popup->GetWindow()->GetBounds().size();
+
+  // The bug is a race between the reload commit and the inline
+  // resizeTo(500,300), so it only reproduces intermittently. Repeat the cycle
+  // a few times to reliably surface it.
+  for (int i = 0; i < 3; ++i) {
+    SCOPED_TRACE(testing::Message() << "reload iteration: " << i);
+    // Stretch the popup so the upcoming inline resizeTo(500,300) is
+    // observable as a size shrink rather than a no-op.
+    const gfx::Rect stretched_bounds(initial_origin,
+                                     gfx::Size(700, initial_size.height()));
+    popup->GetWindow()->SetBounds(stretched_bounds);
+    ASSERT_TRUE(base::test::RunUntil(
+        [&]() { return popup->GetWindow()->GetBounds().width() >= 700; }));
+
+    popup_contents->GetController().Reload(content::ReloadType::NORMAL,
+                                           /*check_for_repost=*/false);
+    EXPECT_TRUE(content::WaitForLoadStop(popup_contents));
+    // Wait for the post-reload inline resizeTo(500,300) to be applied by
+    // the browser; observable as the popup width returning under 700.
+    ASSERT_TRUE(base::test::RunUntil(
+        [&]() { return popup->GetWindow()->GetBounds().width() < 700; }));
+
+    const gfx::Rect bounds_after = popup->GetWindow()->GetBounds();
+    EXPECT_EQ(initial_origin, bounds_after.origin())
+        << " initial-origin: " << initial_origin.ToString()
+        << " bounds-after: " << bounds_after.ToString();
+  }
+}
+
+// TODO(crbug.com/512533947): Add bad-message browser tests verifying that
+// MoveWindowTo / ResizeWindowTo / SetWindowRect from a prerendered page or
+// from a subframe trigger ReportBadMessage via
+// RenderFrameHostImpl::ValidateOutermostMainFrameWindowChange. These tests
+// belong next to existing site_per_process_browsertest.cc bad-message
+// fixtures and require a forged subframe LocalMainFrameHost binding.
 
 // Tests for Additional Windowing Controls on popup windows.
 // https://chromestatus.com/feature/5201832664629248
@@ -208,7 +312,7 @@ IN_PROC_BROWSER_TEST_F(PopupTest, NoopenerPositioning) {
 class PopupTest_AdditionalWindowingControls : public PopupTest {
  private:
   base::test::ScopedFeatureList feature_list{
-      blink::features::kDesktopPWAsAdditionalWindowingControls};
+      blink::features::kDesktopPWAsAdditionalWindowingControlsOnMove};
 };
 
 // Ensure that moving a popup by moveTo/moveBy generates a `move` event.
@@ -237,17 +341,17 @@ IN_PROC_BROWSER_TEST_F(PopupTest_AdditionalWindowingControls,
     std::string script =
         base::StringPrintf(popup_script, move_command, move_command);
 
-    Browser* popup = OpenPopup(
+    BrowserWindowInterface* popup = OpenPopup(
         browser(), "open('.', '', 'left=0,top=0,width=50,height=50')");
     content::WebContents* popup_contents =
         popup->tab_strip_model()->GetActiveWebContents();
 
-    gfx::Rect bounds_before = popup->window()->GetBounds();
+    gfx::Rect bounds_before = popup->GetWindow()->GetBounds();
     SCOPED_TRACE(testing::Message()
                  << " move-command: " << move_command
                  << " popup-before: " << bounds_before.ToString());
     EXPECT_EQ(content::EvalJs(popup_contents, script), "move fired");
-    gfx::Rect bounds_after = popup->window()->GetBounds();
+    gfx::Rect bounds_after = popup->GetWindow()->GetBounds();
     EXPECT_NE(bounds_before.ToString(), bounds_after.ToString());
   }
 }

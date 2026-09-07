@@ -75,9 +75,6 @@ class VIZ_SERVICE_EXPORT RootCompositorFrameSinkImpl
 
   // mojom::DisplayPrivate:
   void SetDisplayVisible(bool visible) override;
-#if BUILDFLAG(IS_WIN)
-  void DisableSwapUntilResize(DisableSwapUntilResizeCallback callback) override;
-#endif
   void Resize(const gfx::Size& size) override;
   void SetDisplayColorMatrix(const gfx::Transform& color_matrix) override;
   void SetDisplayColorSpaces(
@@ -89,8 +86,10 @@ class VIZ_SERVICE_EXPORT RootCompositorFrameSinkImpl
   void SetDisplayVSyncParameters(base::TimeTicks timebase,
                                  base::TimeDelta interval) override;
   void ForceImmediateDrawAndSwapIfPossible() override;
-#if BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_MAC)
   void UpdateRefreshRate(float refresh_rate) override;
+#endif
+#if BUILDFLAG(IS_ANDROID)
   void SetAdaptiveRefreshRateInfo(
       mojom::AdaptiveRefreshRateInfoPtr info) override;
   void PreserveChildSurfaceControls() override;
@@ -152,7 +151,8 @@ class VIZ_SERVICE_EXPORT RootCompositorFrameSinkImpl
       std::unique_ptr<SyntheticBeginFrameSource> synthetic_begin_frame_source,
       std::unique_ptr<ExternalBeginFrameSource> external_begin_frame_source,
       std::unique_ptr<Display> display,
-      bool hw_support_for_multiple_refresh_rates);
+      bool hw_support_for_multiple_refresh_rates,
+      bool enable_video_conference_matcher);
 
   void UpdateFrameIntervalDeciderSettings();
   void FrameIntervalDeciderResultCallback(
@@ -165,7 +165,7 @@ class VIZ_SERVICE_EXPORT RootCompositorFrameSinkImpl
                               AggregatedRenderPassList* render_passes) override;
   void DisplayDidDrawAndSwap() override;
   void DisplayDidReceiveCALayerParams(
-      const gfx::CALayerParams& ca_layer_params) override;
+      gfx::CALayerParams ca_layer_params) override;
   void DisplayDidCompleteSwapWithSize(const gfx::Size& pixel_size) override;
   void DisplayAddChildWindowToBrowser(gpu::SurfaceHandle child_window) override;
   void SetWideColorEnabled(bool enabled) override;
@@ -251,6 +251,8 @@ class VIZ_SERVICE_EXPORT RootCompositorFrameSinkImpl
   // `FrameIntervalDecider`. Absent if the display does not support those
   // features.
   std::optional<base::TimeDelta> max_vsync_interval_ = std::nullopt;
+
+  bool enable_video_conference_matcher_ = false;
 };
 
 }  // namespace viz

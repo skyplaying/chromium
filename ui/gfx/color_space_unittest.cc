@@ -10,7 +10,11 @@
 #include <tuple>
 
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "skia/ext/skcolorspace_primaries.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/skia/include/core/SkColorSpace.h"
+#include "ui/gfx/display_color_spaces.h"
 #include "ui/gfx/skia_color_space_util.h"
 
 namespace gfx {
@@ -39,32 +43,32 @@ TEST(ColorSpace, RGBToYUV) {
       gfx::ColorSpace::CreateXYZD50(),
   };
 
-  SkV4 expected_yuvs[kNumColorSpaces][kNumTestRGBs] = {
+  std::array<std::array<SkV4, kNumTestRGBs>, kNumColorSpaces> expected_yuvs = {{
       // REC601
-      {
-          {0.3195f, 0.3518f, 0.9392f, 1.0000f},
-          {0.5669f, 0.2090f, 0.1322f, 1.0000f},
-          {0.1607f, 0.9392f, 0.4286f, 1.0000f},
-      },
+      {{
+          {0.3195f, 0.3537f, 0.9412f, 1.0000f},
+          {0.5669f, 0.2110f, 0.1342f, 1.0000f},
+          {0.1607f, 0.9412f, 0.4305f, 1.0000f},
+      }},
       // REC709
-      {
-          {0.2453f, 0.3994f, 0.9392f, 1.0000f},
-          {0.6770f, 0.1614f, 0.1011f, 1.0000f},
-          {0.1248f, 0.9392f, 0.4597f, 1.0000f},
-      },
+      {{
+          {0.2453f, 0.4013f, 0.9412f, 1.0000f},
+          {0.6770f, 0.1634f, 0.1030f, 1.0000f},
+          {0.1248f, 0.9412f, 0.4617f, 1.0000f},
+      }},
       // Jpeg
-      {
-          {0.2990f, 0.3313f, 1.0000f, 1.0000f},
-          {0.5870f, 0.1687f, 0.0813f, 1.0000f},
-          {0.1140f, 1.0000f, 0.4187f, 1.0000f},
-      },
+      {{
+          {0.2990f, 0.3332f, 1.0020f, 1.0000f},
+          {0.5870f, 0.1707f, 0.0833f, 1.0000f},
+          {0.1140f, 1.0020f, 0.4206f, 1.0000f},
+      }},
       // XYZD50
-      {
+      {{
           {1.0000f, 0.0000f, 0.0000f, 1.0000f},
           {0.0000f, 1.0000f, 0.0000f, 1.0000f},
           {0.0000f, 0.0000f, 1.0000f, 1.0000f},
-      },
-  };
+      }},
+  }};
 
   for (size_t i = 0; i < kNumColorSpaces; ++i) {
     SkM44 transfer = color_spaces[i].GetTransferMatrix(/*bit_depth=*/8);
@@ -76,7 +80,35 @@ TEST(ColorSpace, RGBToYUV) {
 
     for (size_t j = 0; j < kNumTestRGBs; ++j) {
       SkV4 yuv = range_adjust_inv * transfer * test_rgbs[j];
-      UNSAFE_TODO(EXPECT_LT(Diff(yuv, expected_yuvs[i][j]), kEpsilon));
+      EXPECT_LT(Diff(yuv, expected_yuvs[i][j]), kEpsilon);
+    }
+  }
+}
+
+TEST(ColorSpace, YUVTransformsUseBitDepthAwareChromaCenter) {
+  constexpr std::array<int, 4> kBitDepths = {8, 10, 12, 16};
+  constexpr std::array<ColorSpace::MatrixID, 3> kMatrixIDs = {
+      ColorSpace::MatrixID::BT2020_NCL, ColorSpace::MatrixID::YDZDX,
+      ColorSpace::MatrixID::YCOCG};
+
+  for (const auto matrix_id : kMatrixIDs) {
+    const ColorSpace color_space(ColorSpace::PrimaryID::BT2020,
+                                 ColorSpace::TransferID::BT2020_10, matrix_id,
+                                 ColorSpace::RangeID::LIMITED);
+    for (const int bit_depth : kBitDepths) {
+      const float expected =
+          static_cast<float>(1 << (bit_depth - 1)) / ((1 << bit_depth) - 1);
+      const SkM44 transfer = color_space.GetTransferMatrix(bit_depth);
+      EXPECT_FLOAT_EQ(transfer.rc(1, 3), expected);
+      EXPECT_FLOAT_EQ(transfer.rc(2, 3), expected);
+
+      if (matrix_id != ColorSpace::MatrixID::YCOCG) {
+        const SkV4 neutral = {0.f, expected, expected, 1.f};
+        const SkV4 adjusted =
+            color_space.GetRangeAdjustMatrix(bit_depth) * neutral;
+        EXPECT_NEAR(adjusted.y, expected, 1.0e-6f);
+        EXPECT_NEAR(adjusted.z, expected, 1.0e-6f);
+      }
     }
   }
 }
@@ -101,62 +133,69 @@ TEST(ColorSpace, RangeAdjust) {
                  ColorSpace::RangeID::LIMITED),
   };
 
-  SkV4 expected_yuvs[kNumColorSpaces][kNumBitDepths][kNumTestYUVs] = {
-      // REC601
-      {
-          // 8bpc
-          {
-              {235.f / 255.f, 239.5f / 255.f, 239.5f / 255.f, 1.0000f},
-              {16.f / 255.f, 15.5f / 255.f, 15.5f / 255.f, 1.0000f},
-          },
-          // 10bpc
-          {
-              {940.f / 1023.f, 959.5f / 1023.f, 959.5f / 1023.f, 1.0000f},
-              {64.f / 1023.f, 63.5f / 1023.f, 63.5f / 1023.f, 1.0000f},
-          },
-          // 12bpc
-          {
-              {3760.f / 4095.f, 3839.5f / 4095.f, 3839.5f / 4095.f, 1.0000f},
-              {256.f / 4095.f, 255.5f / 4095.f, 255.5f / 4095.f, 1.0000f},
-          },
-      },
-      // Jpeg
-      {
-          // 8bpc
-          {
-              {1.0000f, 1.0000f, 1.0000f, 1.0000f},
-              {0.0000f, 0.0000f, 0.0000f, 1.0000f},
-          },
-          // 10bpc
-          {
-              {1.0000f, 1.0000f, 1.0000f, 1.0000f},
-              {0.0000f, 0.0000f, 0.0000f, 1.0000f},
-          },
-          // 12bpc
-          {
-              {1.0000f, 1.0000f, 1.0000f, 1.0000f},
-              {0.0000f, 0.0000f, 0.0000f, 1.0000f},
-          },
-      },
-      // YCoCg
-      {
-          // 8bpc
-          {
-              {235.f / 255.f, 235.f / 255.f, 235.f / 255.f, 1.0000f},
-              {16.f / 255.f, 16.f / 255.f, 16.f / 255.f, 1.0000f},
-          },
-          // 10bpc
-          {
-              {940.f / 1023.f, 940.f / 1023.f, 940.f / 1023.f, 1.0000f},
-              {64.f / 1023.f, 64.f / 1023.f, 64.f / 1023.f, 1.0000f},
-          },
-          // 12bpc
-          {
-              {3760.f / 4095.f, 3760.f / 4095.f, 3760.f / 4095.f, 1.0000f},
-              {256.f / 4095.f, 256.f / 4095.f, 256.f / 4095.f, 1.0000f},
-          },
-      },
-  };
+  std::array<std::array<std::array<SkV4, kNumTestYUVs>, kNumBitDepths>,
+             kNumColorSpaces>
+      expected_yuvs = {{
+          // REC601
+          {{
+              // 8bpc
+              {{
+                  {235.f / 255.f, 239.5608f / 255.f, 239.5608f / 255.f,
+                   1.0000f},
+                  {16.f / 255.f, 15.5608f / 255.f, 15.5608f / 255.f, 1.0000f},
+              }},
+              // 10bpc
+              {{
+                  {940.f / 1023.f, 959.5621f / 1023.f, 959.5621f / 1023.f,
+                   1.0000f},
+                  {64.f / 1023.f, 63.5621f / 1023.f, 63.5621f / 1023.f,
+                   1.0000f},
+              }},
+              // 12bpc
+              {{
+                  {3760.f / 4095.f, 3839.5624f / 4095.f, 3839.5624f / 4095.f,
+                   1.0000f},
+                  {256.f / 4095.f, 255.5624f / 4095.f, 255.5624f / 4095.f,
+                   1.0000f},
+              }},
+          }},
+          // Jpeg
+          {{
+              // 8bpc
+              {{
+                  {1.0000f, 1.0000f, 1.0000f, 1.0000f},
+                  {0.0000f, 0.0000f, 0.0000f, 1.0000f},
+              }},
+              // 10bpc
+              {{
+                  {1.0000f, 1.0000f, 1.0000f, 1.0000f},
+                  {0.0000f, 0.0000f, 0.0000f, 1.0000f},
+              }},
+              // 12bpc
+              {{
+                  {1.0000f, 1.0000f, 1.0000f, 1.0000f},
+                  {0.0000f, 0.0000f, 0.0000f, 1.0000f},
+              }},
+          }},
+          // YCoCg
+          {{
+              // 8bpc
+              {{
+                  {235.f / 255.f, 235.f / 255.f, 235.f / 255.f, 1.0000f},
+                  {16.f / 255.f, 16.f / 255.f, 16.f / 255.f, 1.0000f},
+              }},
+              // 10bpc
+              {{
+                  {940.f / 1023.f, 940.f / 1023.f, 940.f / 1023.f, 1.0000f},
+                  {64.f / 1023.f, 64.f / 1023.f, 64.f / 1023.f, 1.0000f},
+              }},
+              // 12bpc
+              {{
+                  {3760.f / 4095.f, 3760.f / 4095.f, 3760.f / 4095.f, 1.0000f},
+                  {256.f / 4095.f, 256.f / 4095.f, 256.f / 4095.f, 1.0000f},
+              }},
+          }},
+      }};
 
   for (size_t i = 0; i < kNumColorSpaces; ++i) {
     for (size_t j = 0; j < kNumBitDepths; ++j) {
@@ -167,7 +206,7 @@ TEST(ColorSpace, RangeAdjust) {
 
       for (size_t k = 0; k < kNumTestYUVs; ++k) {
         SkV4 yuv = range_adjust_inv * test_yuvs[k];
-        UNSAFE_TODO(EXPECT_LT(Diff(yuv, expected_yuvs[i][j][k]), kEpsilon));
+        EXPECT_LT(Diff(yuv, expected_yuvs[i][j][k]), kEpsilon);
       }
     }
   }
@@ -236,6 +275,33 @@ TEST(ColorSpace, ConversionToAndFromSkColorSpace) {
     EXPECT_TRUE(SkColorSpace::Equals(
         sk_color_spaces[i].get(), from_sk_color_space.ToSkColorSpace().get()));
   }
+}
+
+TEST(ColorSpace, FromPrimariesAndTransferFn) {
+  // Creating with standard sRGB primaries and transfer function produces sRGB.
+  ColorSpace srgb(SkNamedPrimariesExt::kSRGB, SkNamedTransferFn::kSRGB);
+  EXPECT_EQ(srgb, ColorSpace::CreateSRGB());
+  EXPECT_EQ(srgb.GetPrimaryID(), ColorSpace::PrimaryID::BT709);
+  EXPECT_EQ(srgb.GetTransferID(), ColorSpace::TransferID::SRGB);
+
+  // Creating with Display P3 primaries and sRGB transfer function produces
+  // Display P3.
+  ColorSpace p3(SkNamedPrimariesExt::kP3, SkNamedTransferFn::kSRGB);
+  EXPECT_EQ(p3, ColorSpace::CreateDisplayP3D65());
+  EXPECT_EQ(p3.GetPrimaryID(), ColorSpace::PrimaryID::P3);
+  EXPECT_EQ(p3.GetTransferID(), ColorSpace::TransferID::SRGB);
+
+  // Creating with custom primaries.
+  ColorSpace custom(SkNamedPrimariesExt::kWideGamutColorSpin,
+                    SkNamedTransferFn::kSRGB);
+  EXPECT_TRUE(custom.IsValid());
+  EXPECT_EQ(custom.GetPrimaryID(),
+            ColorSpace::PrimaryID::WIDE_GAMUT_COLOR_SPIN);
+  EXPECT_EQ(custom.GetTransferID(), ColorSpace::TransferID::SRGB);
+
+  // Creating with invalid primaries produces an invalid ColorSpace.
+  ColorSpace invalid(SkNamedPrimariesExt::kInvalid, SkNamedTransferFn::kSRGB);
+  EXPECT_FALSE(invalid.IsValid());
 }
 
 TEST(ColorSpace, PQAndHLGToSkColorSpace) {
@@ -345,7 +411,8 @@ TEST(ColorSpaceUtil, SkcmsMatrixConvert) {
   skcms_Matrix3x3 in_m33 = SkNamedGamut::kSRGB;
   SkM44 m44 = SkM44FromSkcmsMatrix3x3(in_m33);
   skcms_Matrix3x3 out_m33 = SkcmsMatrix3x3FromSkM44(m44);
-  UNSAFE_TODO(EXPECT_EQ(memcmp(&in_m33, &out_m33, sizeof(in_m33)), 0));
+  EXPECT_TRUE(std::ranges::equal(base::span(in_m33.vals),
+                                 base::span(out_m33.vals), std::ranges::equal));
 }
 
 TEST(ColorSpace, AsHDR) {
@@ -375,6 +442,22 @@ TEST(ColorSpace, AsHDR) {
   EXPECT_TRUE(cs.GetTransferFunction(&fn));
   EXPECT_NEAR(fn.a, 0.5, kEpsilon);
   EXPECT_NEAR(fn.g, 2.5, kEpsilon);
+}
+
+TEST(DisplayColorSpacesTest,
+     RasterAndCompositeColorSpaceForHDRWithCustomLinear) {
+  skcms_Matrix3x3 primaries = SkNamedGamut::kSRGB;
+  skcms_TransferFunction near_linear_fn = {1.0f, 1.0f, 0.0f, 0.0f,
+                                           0.0f, 0.0f, 0.0f};
+  ColorSpace custom_linear_cs =
+      ColorSpace::CreateCustom(primaries, near_linear_fn);
+
+  DisplayColorSpaces display_color_spaces(custom_linear_cs);
+  display_color_spaces.SetHDRMaxLuminanceRelative(2.0f);
+
+  ColorSpace blend_cs = display_color_spaces.GetRasterAndCompositeColorSpace(
+      ContentColorUsage::kHDR);
+  EXPECT_TRUE(blend_cs.IsSuitableForBlending());
 }
 
 }  // namespace

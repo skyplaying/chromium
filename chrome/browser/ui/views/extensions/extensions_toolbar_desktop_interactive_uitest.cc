@@ -2,8 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/views/extensions/extensions_toolbar_desktop.h"
+
+#include <optional>
 #include <string>
 
+#include "base/auto_reset.h"
+#include "base/command_line.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/strings/string_util.h"
@@ -21,26 +26,30 @@
 #include "chrome/browser/extensions/extension_uninstall_dialog.h"
 #include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/extensions/extension_install_ui.h"
 #include "chrome/browser/ui/extensions/extension_post_install_dialog.h"
-#include "chrome/browser/ui/test/test_browser_dialog.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/toolbar/toolbar_action_view_model.h"
 #include "chrome/browser/ui/toolbar/toolbar_actions_model.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/extensions/extensions_menu_coordinator.h"
 #include "chrome/browser/ui/views/extensions/extensions_request_access_button.h"
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_button.h"
-#include "chrome/browser/ui/views/extensions/extensions_toolbar_desktop.h"
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_interactive_uitest.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
+#include "chrome/test/user_education/interactive_feature_promo_test.h"
+#include "components/feature_engagement/public/feature_constants.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -51,6 +60,7 @@
 #include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
+#include "extensions/browser/host_access_request_helper.h"
 #include "extensions/browser/permissions/scripting_permissions_modifier.h"
 #include "extensions/browser/permissions_manager.h"
 #include "extensions/browser/process_manager.h"
@@ -64,8 +74,10 @@
 #include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/views/bubble/bubble_dialog_model_host.h"
+#include "ui/views/bubble/bubble_frame_view.h"
 #include "ui/views/layout/animating_layout_manager_test_util.h"
 #include "ui/views/test/widget_test.h"
+#include "ui/views/views_switches.h"
 #include "ui/views/widget/widget.h"
 
 namespace {
@@ -81,7 +93,8 @@ views::Widget* CreateBubble(views::View* anchor_point) {
   auto bubble = std::make_unique<views::BubbleDialogModelHost>(
       std::move(dialog_model), anchor_point, views::BubbleBorder::TOP_RIGHT);
 
-  return views::BubbleDialogDelegate::CreateBubble(std::move(bubble));
+  return views::BubbleDialogDelegate::CreateBubbleDeprecated(
+      std::move(bubble), views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
 }
 
 }  // namespace
@@ -98,7 +111,15 @@ class ExtensionsToolbarDesktopUITest : public ExtensionsToolbarUITest {
     kTerminate,
   };
 
-  ExtensionsToolbarDesktopUITest() = default;
+  ExtensionsToolbarDesktopUITest()
+      : ExtensionsToolbarDesktopUITest(std::vector<base::test::FeatureRef>{},
+                                       std::vector<base::test::FeatureRef>{}) {}
+  ExtensionsToolbarDesktopUITest(
+      std::vector<base::test::FeatureRef> enabled_features,
+      std::vector<base::test::FeatureRef> disabled_features) {
+    disabled_features.push_back(features::kExtensionsPinnedByDefault);
+    feature_list_.InitWithFeatures(enabled_features, disabled_features);
+  }
   ExtensionsToolbarDesktopUITest(const ExtensionsToolbarDesktopUITest&) =
       delete;
   ExtensionsToolbarDesktopUITest& operator=(
@@ -107,12 +128,14 @@ class ExtensionsToolbarDesktopUITest : public ExtensionsToolbarUITest {
 
   void SetUpOnMainThread() override {
     ExtensionsToolbarUITest::SetUpOnMainThread();
+    base::CommandLine::ForCurrentProcess()->AppendSwitch(
+        views::switches::kDisableInputEventActivationProtectionForTesting);
     // InProcessBrowserTest will create the browser and request the hosting
     // NativeWidget's window activate. However, the NativeWidget's window can
     // resolve this activation request asynchronously. Showing the extension
     // popup is also done asynchronously.
     // Extension popups will close their bubble Widget if the hosting window
-    // recieves activation. If we do not wait for the activation first this
+    // receives activation. If we do not wait for the activation first this
     // results in a race condition whereby if the bubble is created first it is
     // immediately closed when the activation event is propagated. Thus ensure
     // we first wait for the browser window activation here.
@@ -135,10 +158,10 @@ class ExtensionsToolbarDesktopUITest : public ExtensionsToolbarUITest {
   void RemoveExtension(ExtensionRemovalMethod method,
                        const std::string& extension_id) {
     extensions::ExtensionService* const extension_service =
-        extensions::ExtensionSystem::Get(browser()->profile())
+        extensions::ExtensionSystem::Get(browser()->GetProfile())
             ->extension_service();
     extensions::ExtensionRegistrar* const registrar =
-        extensions::ExtensionRegistrar::Get(browser()->profile());
+        extensions::ExtensionRegistrar::Get(browser()->GetProfile());
     switch (method) {
       case ExtensionRemovalMethod::kDisable:
         registrar->DisableExtension(
@@ -187,6 +210,9 @@ class ExtensionsToolbarDesktopUITest : public ExtensionsToolbarUITest {
     views::test::WaitForAnimatingLayoutManager(GetExtensionsToolbarDesktop());
     EXPECT_EQ(expected_visibility, GetExtensionsToolbarDesktop()->IsDrawn());
   }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
 };
 
 // TODO(devlin): There are probably some tests from
@@ -274,7 +300,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsToolbarDesktopUITest,
     test_dir.WriteFile(FILE_PATH_LITERAL("popup.js"),
                        base::StringPrintf(kPopupJsTemplate, extension_name));
     scoped_refptr<const extensions::Extension> extension =
-        extensions::ChromeTestExtensionLoader(browser()->profile())
+        extensions::ChromeTestExtensionLoader(browser()->GetProfile())
             .LoadExtension(test_dir.UnpackedPath());
     test_dirs.push_back(std::move(test_dir));
     return extension;
@@ -530,7 +556,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsToolbarDesktopUITest,
 }
 
 // Verifies that dragging extension icons is disabled in incognito windows.
-// https://crbug.com/1203833.
+// https://crbug.com/40763731.
 IN_PROC_BROWSER_TEST_F(ExtensionsToolbarDesktopUITest,
                        IncognitoDraggingIsDisabled) {
   // Load an extension, pin it, and enable it in incognito.
@@ -549,7 +575,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsToolbarDesktopUITest,
     ASSERT_TRUE(observer.WaitForExtensionLoaded());
   }
 
-  Browser* incognito_browser = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito_browser = CreateIncognitoBrowser();
 
   views::test::WaitForAnimatingLayoutManager(GetExtensionsToolbarDesktop());
   views::test::WaitForAnimatingLayoutManager(
@@ -584,7 +610,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsToolbarDesktopUITest,
 }
 
 // Tests unloading an extension while the action is being slid out prior to the
-// popup being shown. Regression test for https://crbug.com/1345477.
+// popup being shown. Regression test for https://crbug.com/40853587.
 IN_PROC_BROWSER_TEST_F(ExtensionsToolbarDesktopUITest,
                        UnloadingExtensionWhileAboutToShowPopup) {
   // Load an extension.
@@ -631,14 +657,15 @@ class IncognitoExtensionsToolbarDesktopUITest
 // Regression test for crbug.com/40085916.
 IN_PROC_BROWSER_TEST_F(IncognitoExtensionsToolbarDesktopUITest,
                        TestExtensionFirstLoadedInIncognitoMode) {
-  EXPECT_TRUE(browser()->profile()->IsOffTheRecord());
+  EXPECT_TRUE(browser()->GetProfile()->IsOffTheRecord());
 
   scoped_refptr<const extensions::Extension> extension =
       LoadTestExtension("extensions/api_test/browser_action_with_icon",
                         /*allow_incognito=*/true);
   ASSERT_TRUE(extension);
-  Browser* second_browser = CreateBrowser(profile()->GetOriginalProfile());
-  EXPECT_FALSE(second_browser->profile()->IsOffTheRecord());
+  BrowserWindowInterface* second_browser =
+      CreateBrowser(profile()->GetOriginalProfile());
+  EXPECT_FALSE(second_browser->GetProfile()->IsOffTheRecord());
 
   CloseBrowserSynchronously(browser());
 
@@ -775,7 +802,7 @@ IN_PROC_BROWSER_TEST_P(ExtensionsToolbarRuntimeHostPermissionsBrowserTest,
   injection_listener.set_extension_id(extension()->id());
 
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   extensions::ExtensionActionRunner* runner =
       extensions::ExtensionActionRunner::GetForWebContents(web_contents);
   extensions::PermissionsManager* permissions_manager =
@@ -895,7 +922,7 @@ IN_PROC_BROWSER_TEST_P(ExtensionsToolbarRuntimeHostPermissionsBrowserTest,
 
   GURL url = embedded_test_server()->GetURL("example.com", "/title1.html");
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   extensions::ExtensionActionRunner* runner =
       extensions::ExtensionActionRunner::GetForWebContents(web_contents);
   extensions::BlockedActionWaiter blocked_action_waiter(runner);
@@ -939,10 +966,11 @@ IN_PROC_BROWSER_TEST_P(ExtensionsToolbarRuntimeHostPermissionsBrowserTest,
 class ExtensionsToolbarDesktopFeatureUITest
     : public ExtensionsToolbarDesktopUITest {
  public:
-  ExtensionsToolbarDesktopFeatureUITest() {
-    scoped_feature_list_.InitAndEnableFeature(
-        extensions_features::kExtensionsMenuAccessControl);
-  }
+  ExtensionsToolbarDesktopFeatureUITest()
+      : ExtensionsToolbarDesktopUITest(
+            std::vector<base::test::FeatureRef>{
+                extensions_features::kExtensionsMenuAccessControl},
+            std::vector<base::test::FeatureRef>{}) {}
   ExtensionsToolbarDesktopFeatureUITest(
       const ExtensionsToolbarDesktopFeatureUITest&) = delete;
   const ExtensionsToolbarDesktopFeatureUITest& operator=(
@@ -952,7 +980,7 @@ class ExtensionsToolbarDesktopFeatureUITest
   void SetUpOnMainThread() override {
     ExtensionsToolbarDesktopUITest::SetUpOnMainThread();
     ASSERT_TRUE(embedded_test_server()->Start());
-    web_contents_ = browser()->tab_strip_model()->GetActiveWebContents();
+    web_contents_ = browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
   void NavigateToUrl(const GURL& url) {
@@ -999,7 +1027,6 @@ class ExtensionsToolbarDesktopFeatureUITest
   content::WebContents* web_contents() { return web_contents_; }
 
  private:
-  base::test::ScopedFeatureList scoped_feature_list_;
 
   raw_ptr<content::WebContents, AcrossTasksDanglingUntriaged> web_contents_ =
       nullptr;
@@ -1045,16 +1072,16 @@ IN_PROC_BROWSER_TEST_P(
   NavigateToUrl(url);
 
   // Add site access requests for extensions A and B.
-  auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+  auto* web_contents = browser()->GetTabStripModel()->GetActiveWebContents();
   AddHostAccessRequest(*extensionA, web_contents);
   AddHostAccessRequest(*extensionB, web_contents);
   WaitForAnimation();
 
   // Verify request access button is visible because extensions A and B have
   // site access requests.
-  extensions::SitePermissionsHelper permissions_helper(browser()->profile());
+  extensions::SitePermissionsHelper permissions_helper(browser()->GetProfile());
   auto* permissions_manager =
-      extensions::PermissionsManager::Get(browser()->profile());
+      extensions::PermissionsManager::Get(browser()->GetProfile());
   EXPECT_TRUE(request_access_button()->GetVisible());
   EXPECT_THAT(
       request_access_button()->GetExtensionIdsForTesting(),
@@ -1171,7 +1198,7 @@ IN_PROC_BROWSER_TEST_F(
   NavigateToUrl(url);
 
   // Add site access requests for extensions A and B.
-  auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+  auto* web_contents = browser()->GetTabStripModel()->GetActiveWebContents();
   AddHostAccessRequest(*extensionA, web_contents);
   AddHostAccessRequest(*extensionB, web_contents);
   WaitForAnimation();
@@ -1182,9 +1209,9 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_THAT(
       request_access_button()->GetExtensionIdsForTesting(),
       testing::UnorderedElementsAre(extensionA->id(), extensionB->id()));
-  extensions::SitePermissionsHelper permissions_helper(browser()->profile());
+  extensions::SitePermissionsHelper permissions_helper(browser()->GetProfile());
   auto* permissions_manager =
-      extensions::PermissionsManager::Get(browser()->profile());
+      extensions::PermissionsManager::Get(browser()->GetProfile());
   EXPECT_EQ(permissions_helper.GetSiteInteraction(*extensionA, web_contents),
             SiteInteraction::kWithheld);
   EXPECT_EQ(permissions_helper.GetSiteInteraction(*extensionB, web_contents),
@@ -1245,7 +1272,7 @@ IN_PROC_BROWSER_TEST_F(
   GURL url = embedded_test_server()->GetURL("example.com", "/title1.html");
   NavigateToUrl(url);
   AddHostAccessRequest(*extension,
-                       browser()->tab_strip_model()->GetActiveWebContents());
+                       browser()->GetTabStripModel()->GetActiveWebContents());
   WaitForAnimation();
 
   // Verify request access button is visible because extension added a site
@@ -1289,7 +1316,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsToolbarDesktopFeatureUITest,
 
   // Add site access request for extension A. This should make the request
   // access button visible.
-  auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+  auto* web_contents = browser()->GetTabStripModel()->GetActiveWebContents();
   AddHostAccessRequest(*extensionA, web_contents);
 
   // Verify order of visible items in container:
@@ -1324,7 +1351,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsToolbarDesktopFeatureUITest,
   test_dir.WriteFile(FILE_PATH_LITERAL("popup.html"), kPopupHtml);
   test_dir.WriteFile(FILE_PATH_LITERAL("popup.js"), kPopupJsTemplate);
   scoped_refptr<const extensions::Extension> extensionB =
-      extensions::ChromeTestExtensionLoader(browser()->profile())
+      extensions::ChromeTestExtensionLoader(browser()->GetProfile())
           .LoadExtension(test_dir.UnpackedPath());
 
   // Trigger the extension B action.
@@ -1474,11 +1501,13 @@ class ExtensionsToolbarDesktopFeatureRolloutInteractiveTest
  public:
   ExtensionsToolbarDesktopFeatureRolloutInteractiveTest() {
     if (GetParam()) {
-      feature_list_.InitAndEnableFeature(
-          extensions_features::kExtensionsMenuAccessControl);
+      feature_list_.InitWithFeatures(
+          {extensions_features::kExtensionsMenuAccessControl},
+          {features::kExtensionsPinnedByDefault});
     } else {
-      feature_list_.InitAndDisableFeature(
-          extensions_features::kExtensionsMenuAccessControl);
+      feature_list_.InitWithFeatures(
+          {}, {extensions_features::kExtensionsMenuAccessControl,
+               features::kExtensionsPinnedByDefault});
     }
   }
   ExtensionsToolbarDesktopFeatureRolloutInteractiveTest(
@@ -1491,7 +1520,7 @@ class ExtensionsToolbarDesktopFeatureRolloutInteractiveTest
                                bool is_installed) {
     return CheckResult(
         [&]() {
-          return extensions::ExtensionRegistry::Get(browser()->profile())
+          return extensions::ExtensionRegistry::Get(browser()->GetProfile())
                      ->GetInstalledExtension(extension_id) != nullptr;
         },
         is_installed);
@@ -1522,10 +1551,10 @@ IN_PROC_BROWSER_TEST_P(ExtensionsToolbarDesktopFeatureRolloutInteractiveTest,
       // extension in the test doesn't go through the full install flow.
       Do([&]() {
         extensions::TriggerPostInstallDialog(
-            browser()->profile(), extension, SkBitmap(),
+            browser()->GetProfile(), extension, SkBitmap(),
             base::BindOnce(
-                [](Browser* b) {
-                  return b->tab_strip_model()->GetActiveWebContents();
+                [](BrowserWindowInterface* b) {
+                  return b->GetTabStripModel()->GetActiveWebContents();
                 },
                 browser()));
       }),
@@ -1609,8 +1638,9 @@ class ExtensionsToolbarDesktopFeatureInteractiveTest
     : public InteractiveBrowserTest {
  public:
   ExtensionsToolbarDesktopFeatureInteractiveTest() {
-    scoped_feature_list_.InitAndEnableFeature(
-        extensions_features::kExtensionsMenuAccessControl);
+    scoped_feature_list_.InitWithFeatures(
+        {extensions_features::kExtensionsMenuAccessControl},
+        {features::kExtensionsPinnedByDefault});
   }
   ExtensionsToolbarDesktopFeatureInteractiveTest(
       const ExtensionsToolbarDesktopFeatureInteractiveTest&) = delete;
@@ -1621,7 +1651,11 @@ class ExtensionsToolbarDesktopFeatureInteractiveTest
     InteractiveBrowserTest::SetUpOnMainThread();
     ASSERT_TRUE(embedded_test_server()->Start());
 
-    permissions_manager_ = PermissionsManager::Get(browser()->profile());
+    cooldown_reset_.emplace(
+        extensions::HostAccessRequestsHelper::SetCooldownForTesting(
+            base::TimeDelta()));
+
+    permissions_manager_ = PermissionsManager::Get(browser()->GetProfile());
   }
 
   void TearDownOnMainThread() override {
@@ -1643,7 +1677,7 @@ class ExtensionsToolbarDesktopFeatureInteractiveTest
             })",
         name.c_str(), host_permission.c_str()));
     scoped_refptr<const extensions::Extension> extension =
-        extensions::ChromeTestExtensionLoader(browser()->profile())
+        extensions::ChromeTestExtensionLoader(browser()->GetProfile())
             .LoadExtension(extension_dir.UnpackedPath());
     return extension;
   }
@@ -1652,7 +1686,7 @@ class ExtensionsToolbarDesktopFeatureInteractiveTest
   void AddHostAccessRequest(int tab_index,
                             const extensions::Extension& extension) {
     content::WebContents* web_contents =
-        browser()->tab_strip_model()->GetWebContentsAt(tab_index);
+        browser()->GetTabStripModel()->GetWebContentsAt(tab_index);
     CHECK(web_contents);
     int tab_id = extensions::ExtensionTabUtil::GetTabId(web_contents);
     permissions_manager_->AddHostAccessRequest(web_contents, tab_id, extension);
@@ -1662,7 +1696,7 @@ class ExtensionsToolbarDesktopFeatureInteractiveTest
   void RemoveHostAccessRequest(int tab_index,
                                const extensions::Extension& extension) {
     content::WebContents* web_contents =
-        browser()->tab_strip_model()->GetWebContentsAt(tab_index);
+        browser()->GetTabStripModel()->GetWebContentsAt(tab_index);
     CHECK(web_contents);
     int tab_id = extensions::ExtensionTabUtil::GetTabId(web_contents);
     permissions_manager_->RemoveHostAccessRequest(tab_id, extension.id());
@@ -1686,6 +1720,7 @@ class ExtensionsToolbarDesktopFeatureInteractiveTest
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
   raw_ptr<PermissionsManager> permissions_manager_;
+  std::optional<base::AutoReset<base::TimeDelta>> cooldown_reset_;
 };
 
 // Verifies extensions can add site access requests on active and inactive tabs,
@@ -1706,9 +1741,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionsToolbarDesktopFeatureInteractiveTest,
       InstallExtensionWithHostPermissions("Extension A", "<all_urls>");
   auto extensionB =
       InstallExtensionWithHostPermissions("Extension B", "<all_urls>");
-  extensions::ScriptingPermissionsModifier(browser()->profile(), extensionA)
+  extensions::ScriptingPermissionsModifier(browser()->GetProfile(), extensionA)
       .SetWithholdHostPermissions(true);
-  extensions::ScriptingPermissionsModifier(browser()->profile(), extensionB)
+  extensions::ScriptingPermissionsModifier(browser()->GetProfile(), extensionB)
       .SetWithholdHostPermissions(true);
 
   RunTestSequence(
@@ -1754,4 +1789,60 @@ IN_PROC_BROWSER_TEST_F(ExtensionsToolbarDesktopFeatureInteractiveTest,
       WaitForShow(kExtensionsRequestAccessButtonElementId),
       CheckView(kExtensionsRequestAccessButtonElementId,
                 CheckExtensionsInRequestAccessButton({extensionA->id()})));
+}
+
+class ExtensionsPinnedByDefaultInteractiveTest
+    : public InteractiveFeaturePromoTest {
+ public:
+  ExtensionsPinnedByDefaultInteractiveTest()
+      : InteractiveFeaturePromoTest(UseDefaultTrackerAllowingPromos(
+            {feature_engagement::kIPHExtensionsPinnedByDefaultFeature})) {
+    scoped_feature_list_.InitAndEnableFeature(
+        features::kExtensionsPinnedByDefault);
+  }
+
+  void SetUpOnMainThread() override {
+    InteractiveFeaturePromoTest::SetUpOnMainThread();
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
+        prefs::kExtensionsPinnedByDefault, true);
+  }
+
+  scoped_refptr<const extensions::Extension>
+  InstallExtensionWithHostPermissions(const std::string& name,
+                                      const std::string& host_permission) {
+    extensions::TestExtensionDir extension_dir;
+    extension_dir.WriteManifest(base::StringPrintf(
+        R"({
+              "name": "%s",
+              "manifest_version": 3,
+              "host_permissions": ["%s"],
+              "version": "0.1"
+            })",
+        name.c_str(), host_permission.c_str()));
+    scoped_refptr<const extensions::Extension> extension =
+        extensions::ChromeTestExtensionLoader(browser()->GetProfile())
+            .LoadExtension(extension_dir.UnpackedPath());
+    return extension;
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(ExtensionsPinnedByDefaultInteractiveTest,
+                       PromoShowsOnInstall) {
+  RunTestSequence(
+      Do([this]() {
+        scoped_refptr<const extensions::Extension> extension =
+            InstallExtensionWithHostPermissions("Extension", "<all_urls>");
+        auto install_ui = ExtensionInstallUI::Create(browser()->GetProfile());
+        install_ui->OnInstallSuccess(extension, nullptr);
+      }),
+      // The extension install dialog pops up. Wait for it and close it.
+      WaitForShow(views::BubbleFrameView::kCloseButtonElementId),
+      PressButton(views::BubbleFrameView::kCloseButtonElementId),
+      WaitForHide(views::BubbleFrameView::kCloseButtonElementId),
+      // Once closed, the native IPH is triggered.
+      WaitForPromo(feature_engagement::kIPHExtensionsPinnedByDefaultFeature),
+      PressClosePromoButton());
 }

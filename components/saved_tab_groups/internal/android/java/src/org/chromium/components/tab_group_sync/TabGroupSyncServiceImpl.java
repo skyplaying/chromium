@@ -6,6 +6,7 @@ package org.chromium.components.tab_group_sync;
 
 import org.jni_zero.CalledByNative;
 import org.jni_zero.JNINamespace;
+import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
 
 import org.chromium.base.Callback;
@@ -164,6 +165,12 @@ public class TabGroupSyncServiceImpl implements TabGroupSyncService {
     }
 
     @Override
+    public int getArchivedGroupCount() {
+        if (mNativePtr == 0) return 0;
+        return TabGroupSyncServiceImplJni.get().getArchivedGroupCount(mNativePtr);
+    }
+
+    @Override
     public void updateLocalTabGroupMapping(
             String syncId, LocalTabGroupId localId, @OpeningSource int openingSource) {
         if (mNativePtr == 0) return;
@@ -184,13 +191,7 @@ public class TabGroupSyncServiceImpl implements TabGroupSyncService {
     @Override
     public List<LocalTabGroupId> getDeletedGroupIds() {
         if (mNativePtr == 0) return new ArrayList<>();
-        List<LocalTabGroupId> deletedIds = new ArrayList<>();
-        Object[] objects = TabGroupSyncServiceImplJni.get().getDeletedGroupIds(mNativePtr);
-        for (Object obj : objects) {
-            assert obj instanceof LocalTabGroupId;
-            deletedIds.add((LocalTabGroupId) obj);
-        }
-        return deletedIds;
+        return TabGroupSyncServiceImplJni.get().getDeletedGroupIds(mNativePtr);
     }
 
     @Override
@@ -378,7 +379,10 @@ public class TabGroupSyncServiceImpl implements TabGroupSyncService {
         SavedTabGroup getGroupByLocalGroupId(
                 long nativeTabGroupSyncServiceAndroid, LocalTabGroupId localGroupId);
 
-        Object[] getDeletedGroupIds(long nativeTabGroupSyncServiceAndroid);
+        int getArchivedGroupCount(long nativeTabGroupSyncServiceAndroid);
+
+        @JniType("std::vector<ScopedJavaLocalRef<jobject>>")
+        List<LocalTabGroupId> getDeletedGroupIds(long nativeTabGroupSyncServiceAndroid);
 
         void updateLocalTabGroupMapping(
                 long nativeTabGroupSyncServiceAndroid,

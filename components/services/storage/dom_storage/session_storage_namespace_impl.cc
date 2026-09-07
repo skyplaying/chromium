@@ -10,6 +10,7 @@
 
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "third_party/blink/public/common/dom_storage/session_storage_namespace_id.h"
 
 namespace storage {
 
@@ -101,17 +102,6 @@ void SessionStorageNamespaceImpl::PopulateAsClone(
   }
 }
 
-void SessionStorageNamespaceImpl::Reset() {
-  database_ = nullptr;
-  pending_population_from_parent_namespace_.clear();
-  bind_waiting_on_population_ = false;
-  run_after_population_.clear();
-  state_ = State::kNotPopulated;
-  child_namespaces_waiting_for_clone_call_.clear();
-  storage_key_areas_.clear();
-  receivers_.Clear();
-}
-
 void SessionStorageNamespaceImpl::Bind(
     mojo::PendingReceiver<blink::mojom::SessionStorageNamespace> receiver) {
   if (!IsPopulated()) {
@@ -154,10 +144,9 @@ void SessionStorageNamespaceImpl::RemoveStorageKeyData(
     std::move(callback).Run();
     return;
   }
-  // Renderer process expects |source| to always be two newline separated
-  // strings.
-  it->second->DeleteAll("\n", /*new_observer=*/mojo::NullRemote(),
-                        std::move(callback));
+  it->second->DeleteAll(
+      /*source=*/nullptr,
+      /*new_observer=*/mojo::NullRemote(), std::move(callback));
   it->second->NotifyObserversAllDeleted();
   it->second->data_map()->storage_area()->ScheduleImmediateCommit();
 }
@@ -212,6 +201,14 @@ void SessionStorageNamespaceImpl::OpenArea(
 
 void SessionStorageNamespaceImpl::Clone(const std::string& clone_to_namespace) {
   DCHECK(IsPopulated());
+  // `clone_to_namespace` comes from the mojo peer and must be a valid session
+  // storage namespace ID. Reject invalid IDs here rather than crashing later
+  // when the shared map's metadata key is written.
+  if (clone_to_namespace.size() != blink::kSessionStorageNamespaceIdLength) {
+    receivers_.ReportBadMessage("Invalid session storage namespace ID.");
+    return;
+  }
+
   child_namespaces_waiting_for_clone_call_.erase(clone_to_namespace);
   delegate_->RegisterShallowClonedNamespace(namespace_id_, clone_to_namespace,
                                             storage_key_areas_);
@@ -267,6 +264,18 @@ void SessionStorageNamespaceImpl::CloneAllNamespacesWaitingForClone(
   child_namespaces_waiting_for_clone_call_.clear();
 }
 
+StorageAreaImpl* SessionStorageNamespaceImpl::GetStorageAreaForTesting(
+    const blink::StorageKey& storage_key) {
+  if (!IsPopulated()) {
+    return nullptr;
+  }
+  auto it = storage_key_areas_.find(storage_key);
+  if (it == storage_key_areas_.end()) {
+    return nullptr;
+  }
+  return it->second->data_map()->storage_area();
+}
+
 void SessionStorageNamespaceImpl::FlushAreasForTesting() {
   for (auto& area : storage_key_areas_)
     area.second->FlushForTesting();
@@ -274,12 +283,11 @@ void SessionStorageNamespaceImpl::FlushAreasForTesting() {
 
 void SessionStorageNamespaceImpl::FlushStorageKeyForTesting(
     const blink::StorageKey& storage_key) {
-  if (!IsPopulated())
+  StorageAreaImpl* storage_area = GetStorageAreaForTesting(storage_key);
+  if (!storage_area) {
     return;
-  auto it = storage_key_areas_.find(storage_key);
-  if (it == storage_key_areas_.end())
-    return;
-  it->second->data_map()->storage_area()->ScheduleImmediateCommit();
+  }
+  storage_area->ScheduleImmediateCommit();
 }
 
 }  // namespace storage

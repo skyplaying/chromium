@@ -12,26 +12,9 @@
 // the constant declarations, include the file
 // "account_capabilities_constants.h".
 
-// WARNING: Care must be taken to ensure that capabilities are fully available
-// server-side before they are added here. This is because (on some platforms)
-// if one individual capability fails to evaluate, the fetch will fail for all
-// other capabilities as well. To add a capability, please either:
-// 1. Wait for the server-side rollout to complete, then add the capability with
-//    the ACCOUNT_CAPABILITY() macro.
-// 2. Or (if the capability needs to be added to the client before the
-//    server-side rollout is complete), add the capability with the
-//    ACCOUNT_CAPABILITY_F() macro instead. You must then ensure that the flag
-//    is only enabled once the server-side rollout is complete.
-
 // Here we define the values using a macro ACCOUNT_CAPABILITY, so it can be
 // expanded differently in some places. The macro has the following signature:
 // ACCOUNT_CAPABILITY(cpp_label, java_label, name).
-
-// To define a new account capability that is flag-guarded, add a
-// ACCOUNT_CAPABILITY_F(cpp_label, java_label, name, feature_flag) macro
-// instead of ACCOUNT_CAPABILITY.
-// - The #include for the feature flag must be added to account_capabilities.cc
-//   and not to this file
 
 // Here we rely on build_config.h to not introduce any symbols that can be
 // textually inserted in the code. If that changes in the future, this header
@@ -42,8 +25,27 @@
 // found at go/capability-alias (eg. go/capability-alias/ge2dinbnmnqxa).
 
 // clang-format off
-// keep-sorted start newline_separated=yes sticky_prefixes=#if group_prefixes=#endif
+// keep-sorted start newline_separated=yes sticky_prefixes=#if,BUILDFLAG group_prefixes=#endif
 // clang-format on
+#if BUILDFLAG(IS_IOS)
+ACCOUNT_CAPABILITY(
+    kCanContextuallyShowHistorySyncOptInsWithoutMinorModeRestrictionsCapabilityName,
+    CAN_CONTEXTUALLY_SHOW_HISTORY_SYNC_OPT_INS_WITHOUT_MINOR_MODE_RESTRICTIONS_CAPABILITY_NAME,
+    "accountcapabilities/giztknjnmnqxa")
+#endif
+
+#if BUILDFLAG(IS_IOS)
+ACCOUNT_CAPABILITY(kCanContextuallyUseGeminiInChromeCapabilityName,
+                   CAN_CONTEXTUALLY_USE_GEMINI_IN_CHROME_NAME,
+                   "accountcapabilities/giztmobnmnqxa")
+#endif
+
+#if BUILDFLAG(IS_IOS)
+ACCOUNT_CAPABILITY(kCanContextuallyUseModelExecutionFeaturesName,
+                   CAN_CONTEXTUALLY_USE_MODEL_EXECUTION_FEATURES_NAME,
+                   "accountcapabilities/giztinznmnqxa")
+#endif
+
 ACCOUNT_CAPABILITY(kCanFetchFamilyMemberInfoCapabilityName,
                    CAN_FETCH_FAMILY_MEMBER_INFO_CAPABILITY_NAME,
                    "accountcapabilities/ge2dinbnmnqxa")
@@ -60,6 +62,10 @@ ACCOUNT_CAPABILITY(kCanMakeChromeSearchEngineChoiceScreenChoice,
                    "accountcapabilities/ge4tenznmnqxa")
 #endif
 
+ACCOUNT_CAPABILITY(kCanOverrideAccountInfoCapabilityName,
+                   CAN_OVERRIDE_ACCOUNT_INFO_CAPABILITY_NAME,
+                   "accountcapabilities/gmydknbnmnqxa")
+
 #if !BUILDFLAG(IS_IOS)
 ACCOUNT_CAPABILITY(kCanRunChromePrivacySandboxTrialsCapabilityName,
                    CAN_RUN_CHROME_PRIVACY_SANDBOX_TRIALS_CAPABILITY_NAME,
@@ -70,6 +76,19 @@ ACCOUNT_CAPABILITY(
     kCanShowHistorySyncOptInsWithoutMinorModeRestrictionsCapabilityName,
     CAN_SHOW_HISTORY_SYNC_OPT_INS_WITHOUT_MINOR_MODE_RESTRICTIONS_CAPABILITY_NAME,
     "accountcapabilities/gi2tklldmfya")
+
+#if BUILDFLAG(IS_IOS)
+ACCOUNT_CAPABILITY(kCanSignInToChromeCapabilityName,
+                   CAN_SIGN_IN_TO_CHROME_CAPABILITY_NAME,
+                   "accountcapabilities/giztambnmnqxa")
+#endif
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+    BUILDFLAG(IS_IOS)
+ACCOUNT_CAPABILITY(kCanSubmitFeedbackInChromeCapabilityName,
+                   CAN_SUBMIT_FEEDBACK_IN_CHROME_CAPABILITY_NAME,
+                   "accountcapabilities/gizdqmrnmnqxa")
+#endif
 
 #if BUILDFLAG(IS_CHROMEOS)
 ACCOUNT_CAPABILITY(kCanToggleAutoUpdatesName,
@@ -149,14 +168,30 @@ ACCOUNT_CAPABILITY(kIsSubjectToParentalControlsCapabilityName,
                    IS_SUBJECT_TO_PARENTAL_CONTROLS_CAPABILITY_NAME,
                    "accountcapabilities/guydolldmfya")
 
-#if !defined(NDEBUG)
-// This is a fake account capability, used for unit tests only.
-// To avoid additional fetches in production code, only define this in debug
-// builds.
-ACCOUNT_CAPABILITY_F(kFakeCapabilityForTestingName,
-                     FAKE_CAPABILITY_FOR_TESTING_NAME,
-                     "accountcapabilities/fakecapabilityfortesting",
-                     kEnableFakeCapabilityForTesting)
+ACCOUNT_CAPABILITY(kIsSubjectToUniversalOptOutCapabilityName,
+                   IS_SUBJECT_TO_UNIVERSAL_OPT_OUT_CAPABILITY_NAME,
+                   "accountcapabilities/gmydemrnmnqxa")
+
+#if BUILDFLAG(IS_IOS)
+ACCOUNT_CAPABILITY(kMustFetchAppleAgeRangeInChromeCapabilityName,
+                   MUST_FETCH_APPLE_AGE_RANGE_IN_CHROME_CAPABILITY_NAME,
+                   "accountcapabilities/gi3dkmbnmnqxa")
 #endif
+
+#if BUILDFLAG(IS_IOS)
+ACCOUNT_CAPABILITY(kMustSkipAppleAgeRangeInChromeCapabilityName,
+                   MUST_SKIP_APPLE_AGE_RANGE_IN_CHROME_CAPABILITY_NAME,
+                   "accountcapabilities/gi2tqnbnmnqxa")
+#endif
+
+ACCOUNT_CAPABILITY(
+    kSupportsWalletPrivatePassesInAutofillCapabilityName,
+    SUPPORTS_WALLET_PRIVATE_PASSES_IN_AUTOFILL_NAME,
+#if BUILDFLAG(IS_IOS)
+    "accountcapabilities/gmzdsnrnmnqxa"
+#else
+    "accountcapabilities/gi3dknrnmnqxa"
+#endif
+)
 
 // keep-sorted end

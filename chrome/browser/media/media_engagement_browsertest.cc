@@ -27,10 +27,11 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sessions/session_restore.h"
 #include "chrome/browser/sessions/session_restore_test_helper.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_navigator.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/recently_audible_helper.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -41,6 +42,7 @@
 #include "components/no_state_prefetch/browser/no_state_prefetch_handle.h"
 #include "components/no_state_prefetch/browser/no_state_prefetch_manager.h"
 #include "components/no_state_prefetch/common/no_state_prefetch_final_status.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
@@ -54,6 +56,8 @@
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "third_party/blink/public/mojom/autoplay/autoplay.mojom-test-utils.h"
 #include "third_party/blink/public/mojom/autoplay/autoplay.mojom.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/sessions/session_service_factory.h"
@@ -227,7 +231,7 @@ class MediaEngagementBrowserTest : public InProcessBrowserTest {
   }
 
   content::WebContents* GetWebContents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
   void ExecuteScript(const std::string& script) {
@@ -242,9 +246,9 @@ class MediaEngagementBrowserTest : public InProcessBrowserTest {
   }
 
   void CloseTab() {
-    const int previous_tab_count = browser()->tab_strip_model()->count();
-    browser()->tab_strip_model()->CloseWebContentsAt(0, 0);
-    EXPECT_EQ(previous_tab_count - 1, browser()->tab_strip_model()->count());
+    const int previous_tab_count = browser()->GetTabStripModel()->count();
+    browser()->GetTabStripModel()->CloseWebContentsAt(0, 0);
+    EXPECT_EQ(previous_tab_count - 1, browser()->GetTabStripModel()->count());
   }
 
   void LoadSubFrame(const GURL& url) {
@@ -286,7 +290,7 @@ class MediaEngagementBrowserTest : public InProcessBrowserTest {
   void CloseBrowser() { CloseAllBrowsers(); }
 
   MediaEngagementService* GetService() {
-    return MediaEngagementService::Get(browser()->profile());
+    return MediaEngagementService::Get(browser()->GetProfile());
   }
 
   // To be used only for a service that wasn't the one created by the test
@@ -350,7 +354,7 @@ IN_PROC_BROWSER_TEST_F(MediaEngagementBrowserTest, RecordEngagement) {
   ExpectScores(1, 1);
 }
 
-// Flaky tests on CrOS: http://crbug.com/1020131.
+// Flaky tests on CrOS: http://crbug.com/40656329.
 #if BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_RecordEngagement_AudioOnly DISABLED_RecordEngagement_AudioOnly
 #else
@@ -372,7 +376,7 @@ IN_PROC_BROWSER_TEST_F(MediaEngagementBrowserTest,
   ExpectScores(1, 0);
 }
 
-// Flaky tests on CrOS: http://crbug.com/1019671.
+// Flaky tests on CrOS: http://crbug.com/40656092.
 #if BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_DoNotRecordEngagement_NotTime_AudioOnly \
   DISABLED_DoNotRecordEngagement_NotTime_AudioOnly
@@ -396,7 +400,7 @@ IN_PROC_BROWSER_TEST_F(MediaEngagementBrowserTest,
   ExpectScores(1, 0);
 }
 
-// Flaky tests on CrOS: http://crbug.com/1019671.
+// Flaky tests on CrOS: http://crbug.com/40656092.
 #if BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_DoNotRecordEngagement_TabMuted_AudioOnly \
   DISABLED_DoNotRecordEngagement_TabMuted_AudioOnly
@@ -441,7 +445,7 @@ IN_PROC_BROWSER_TEST_F(MediaEngagementBrowserTest,
   ExpectScores(1, 0);
 }
 
-// Flaky tests on CrOS: http://crbug.com/1019671.
+// Flaky tests on CrOS: http://crbug.com/40656092.
 #if BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_DoNotRecordEngagement_PlaybackStopped_AudioOnly \
   DISABLED_DoNotRecordEngagement_PlaybackStopped_AudioOnly
@@ -468,7 +472,7 @@ IN_PROC_BROWSER_TEST_F(MediaEngagementBrowserTest,
   ExpectScores(1, 1);
 }
 
-// Flaky tests on CrOS: http://crbug.com/1019671.
+// Flaky tests on CrOS: http://crbug.com/40656092.
 #if BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_RecordEngagement_NotVisible_AudioOnly \
   DISABLED_RecordEngagement_NotVisible_AudioOnly
@@ -523,7 +527,7 @@ IN_PROC_BROWSER_TEST_F(MediaEngagementBrowserTest, RecordVisitOnBrowserClose) {
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || \
     BUILDFLAG(IS_MAC)
-// Flaky timeout. https://crbug.com/1014229
+// Flaky timeout. https://crbug.com/40653059
 #define MAYBE_RecordSingleVisitOnSameOrigin \
   DISABLED_RecordSingleVisitOnSameOrigin
 #else
@@ -545,7 +549,7 @@ IN_PROC_BROWSER_TEST_F(MediaEngagementBrowserTest,
 }
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-// Flaky: https://crbug.com/1115238
+// Flaky: https://crbug.com/40144269
 #define MAYBE_RecordVisitOnNewOrigin DISABLED_RecordVisitOnNewOrigin
 #else
 #define MAYBE_RecordVisitOnNewOrigin RecordVisitOnNewOrigin
@@ -560,7 +564,7 @@ IN_PROC_BROWSER_TEST_F(MediaEngagementBrowserTest,
   ExpectScores(1, 0);
 }
 
-// Flaky tests on CrOS: http://crbug.com/1019671.
+// Flaky tests on CrOS: http://crbug.com/40656092.
 #if BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_DoNotRecordEngagement_SilentAudioTrack_AudioOnly \
   DISABLED_DoNotRecordEngagement_SilentAudioTrack_AudioOnly
@@ -615,7 +619,7 @@ IN_PROC_BROWSER_TEST_F(MediaEngagementBrowserTest,
   ExpectScores(1, 1);
 }
 
-// Flaky tests on CrOS: http://crbug.com/1019671.
+// Flaky tests on CrOS: http://crbug.com/40656092.
 #if BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_MultipleElements DISABLED_MultipleElements
 #else
@@ -637,7 +641,7 @@ IN_PROC_BROWSER_TEST_F(MediaEngagementBrowserTest,
 }
 
 #if BUILDFLAG(IS_MAC)
-// https://crbug.com/1222896
+// https://crbug.com/40187393
 #define MAYBE_SessionNewTabNavigateSameURL DISABLED_SessionNewTabNavigateSameURL
 #else
 #define MAYBE_SessionNewTabNavigateSameURL SessionNewTabNavigateSameURL
@@ -653,13 +657,13 @@ IN_PROC_BROWSER_TEST_F(MediaEngagementBrowserTest,
   LoadTestPageAndWaitForPlayAndAudible(url, false);
   AdvanceMeaningfulPlaybackTime();
 
-  browser()->tab_strip_model()->CloseAllTabs();
+  browser()->GetTabStripModel()->CloseAllTabs();
 
   ExpectScores(2, 2);
 }
 
 #if BUILDFLAG(IS_MAC)
-// https://crbug.com/1222896
+// https://crbug.com/40187393
 #define MAYBE_SessionNewTabSameURL DISABLED_SessionNewTabSameURL
 #else
 #define MAYBE_SessionNewTabSameURL SessionNewTabSameURL
@@ -673,13 +677,13 @@ IN_PROC_BROWSER_TEST_F(MediaEngagementBrowserTest, MAYBE_SessionNewTabSameURL) {
   OpenTabAndWaitForPlayAndAudible(url);
   AdvanceMeaningfulPlaybackTime();
 
-  browser()->tab_strip_model()->CloseAllTabs();
+  browser()->GetTabStripModel()->CloseAllTabs();
 
   ExpectScores(1, 1);
 }
 
 #if BUILDFLAG(IS_MAC)
-// https://crbug.com/1222896
+// https://crbug.com/40187393
 #define MAYBE_SessionNewTabSameOrigin DISABLED_SessionNewTabSameOrigin
 #else
 #define MAYBE_SessionNewTabSameOrigin SessionNewTabSameOrigin
@@ -695,7 +699,7 @@ IN_PROC_BROWSER_TEST_F(MediaEngagementBrowserTest,
   OpenTabAndWaitForPlayAndAudible(other_url);
   AdvanceMeaningfulPlaybackTime();
 
-  browser()->tab_strip_model()->CloseAllTabs();
+  browser()->GetTabStripModel()->CloseAllTabs();
 
   ExpectScores(1, 1);
 }
@@ -710,7 +714,7 @@ IN_PROC_BROWSER_TEST_F(MediaEngagementBrowserTest, SessionNewTabCrossOrigin) {
   OpenTabAndWaitForPlayAndAudible(other_url);
   AdvanceMeaningfulPlaybackTime();
 
-  browser()->tab_strip_model()->CloseAllTabs();
+  browser()->GetTabStripModel()->CloseAllTabs();
 
   ExpectScores(http_server().base_url(), 1, 1);
   ExpectScores(http_server_origin2().base_url(), 1, 1);
@@ -740,7 +744,7 @@ IN_PROC_BROWSER_TEST_F(MediaEngagementBrowserTest,
   OpenTabAndWaitForPlayAndAudible(url);
   AdvanceMeaningfulPlaybackTime();
 
-  browser()->tab_strip_model()->CloseAllTabs();
+  browser()->GetTabStripModel()->CloseAllTabs();
 
   ExpectScores(1, 1);
 }
@@ -757,7 +761,7 @@ IN_PROC_BROWSER_TEST_F(MediaEngagementPreloadBrowserTest,
 }
 
 #if BUILDFLAG(IS_MAC)
-// https://crbug.com/1222896
+// https://crbug.com/40187393
 #define MAYBE_SessionNewTabNavigateSameURLWithOpener_Typed \
   DISABLED_SessionNewTabNavigateSameURLWithOpener_Typed
 #else
@@ -776,7 +780,7 @@ IN_PROC_BROWSER_TEST_F(MediaEngagementBrowserTest,
   WaitForWasRecentlyAudible();
   AdvanceMeaningfulPlaybackTime();
 
-  browser()->tab_strip_model()->CloseAllTabs();
+  browser()->GetTabStripModel()->CloseAllTabs();
 
   // The new tab should only count as the same visit if we visited that tab
   // through a link or reload (duplicate tab).
@@ -801,7 +805,7 @@ IN_PROC_BROWSER_TEST_F(MediaEngagementPreThirdPartyCookieDeprecationBrowserTest,
 
   prerender::NoStatePrefetchManager* no_state_prefetch_manager =
       prerender::NoStatePrefetchManagerFactory::GetForBrowserContext(
-          browser()->profile());
+          browser()->GetProfile());
   ASSERT_TRUE(no_state_prefetch_manager);
 
   prerender::test_utils::TestNoStatePrefetchContentsFactory*
@@ -834,7 +838,7 @@ class MediaEngagementSessionRestoreBrowserTest
     : public MediaEngagementBrowserTest {
  public:
   BrowserWindowInterface* QuitBrowserAndRestore() {
-    Profile* const profile = browser()->profile();
+    Profile* const profile = browser()->GetProfile();
 
     SessionStartupPref::SetStartupPref(
         profile, SessionStartupPref(SessionStartupPref::LAST));
@@ -880,8 +884,15 @@ IN_PROC_BROWSER_TEST_F(MediaEngagementSessionRestoreBrowserTest,
   ExpectScores(MediaEngagementService::Get(browser->GetProfile()), url, 1, 0);
 }
 
+// TODO(crbug.com/541174985): Flaky on LSAN builders.
+// TODO(crbug.com/551552509): Flaky on Linux.
+#if defined(LEAK_SANITIZER) || BUILDFLAG(IS_LINUX)
+#define MAYBE_RestoredSession_Playback_MEI DISABLED_RestoredSession_Playback_MEI
+#else
+#define MAYBE_RestoredSession_Playback_MEI RestoredSession_Playback_MEI
+#endif
 IN_PROC_BROWSER_TEST_F(MediaEngagementSessionRestoreBrowserTest,
-                       RestoredSession_Playback_MEI) {
+                       MAYBE_RestoredSession_Playback_MEI) {
   const GURL& url = http_server().GetURL("/engagement_test.html");
 
   LoadTestPageAndWaitForPlayAndAudible(url, false);

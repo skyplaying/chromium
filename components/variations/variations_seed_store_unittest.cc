@@ -33,7 +33,7 @@
 #include "components/variations/proto/study.pb.h"
 #include "components/variations/proto/variations_seed.pb.h"
 #include "components/variations/seed_reader_writer.h"
-#include "components/variations/variations_safe_seed_store_local_state.h"
+#include "components/variations/variations_safe_seed_store.h"
 #include "components/variations/variations_switches.h"
 #include "components/variations/variations_test_utils.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -80,18 +80,21 @@ class TestVariationsSeedStore : public VariationsSeedStore {
           std::make_unique<const MockEntropyProviders>(
               MockEntropyProviders::Results{
                   .low_entropy = kAlwaysUseLastGroup}))
-      : VariationsSeedStore(local_state,
-                            std::move(initial_seed),
-                            signature_verification_needed,
-                            std::make_unique<VariationsSafeSeedStoreLocalState>(
-                                local_state,
-                                seed_file_dir,
-                                channel,
-                                entropy_providers.get()),
-                            channel,
-                            seed_file_dir,
-                            entropy_providers.get(),
-                            use_first_run_prefs) {}
+      : VariationsSeedStore(
+            local_state,
+            std::move(initial_seed),
+            /*signature_verification_enabled_on_load=*/
+            signature_verification_needed,
+            /*signature_verification_enabled_on_receive=*/
+            signature_verification_needed,
+            std::make_unique<VariationsSafeSeedStore>(local_state,
+                                                      seed_file_dir,
+                                                      channel,
+                                                      entropy_providers.get()),
+            channel,
+            seed_file_dir,
+            entropy_providers.get(),
+            use_first_run_prefs) {}
   ~TestVariationsSeedStore() override = default;
 
   void SetSerialNumberForTesting(std::string_view serial_number) {
@@ -126,9 +129,7 @@ VariationsSeed CreateTestSeed() {
 // for testing.
 std::unique_ptr<ClientFilterableState> CreateTestClientFilterableState() {
   std::unique_ptr<ClientFilterableState> client_state =
-      std::make_unique<ClientFilterableState>(
-          base::BindOnce([] { return false; }),
-          base::BindOnce([] { return base::flat_set<uint64_t>(); }));
+      std::make_unique<ClientFilterableState>();
   client_state->locale = "es-MX";
   client_state->reference_date = WrapTime(1234554321);
   client_state->version = base::Version("1.2.3.4");
@@ -260,6 +261,7 @@ void SetAllSeedsAndSeedPrefsToNonDefaultValues(
           .seed_date = now - delta * 1,
           .client_fetch_time = now,
           .session_country_code = "us",
+          .session_geo_level1 = "us-ny",
       });
   seed_store.SetSerialNumberForTesting("123");
 
@@ -274,6 +276,7 @@ void SetAllSeedsAndSeedPrefsToNonDefaultValues(
           .seed_date = now - delta * 2,
           .client_fetch_time = now - delta * 3,
           .session_country_code = "gt",
+          .session_geo_level1 = "gt-16",
           .permanent_country_code = "mx",
       });
   prefs->SetString(prefs::kVariationsSafeSeedLocale, "en-MX");
@@ -419,7 +422,7 @@ class SeedStoreGroupTestBase : public ::testing::Test {
     temp_seed_file_path_ = temp_dir_.GetPath().Append(kSeedFilename);
 
     VariationsSeedStore::RegisterPrefs(prefs_.registry());
-    SetUpSeedFileTrial(std::string(field_trial_group));
+    SetUpSeedFileTrial(field_trial_group);
 
     const std::string_view seed_data_field = seed_fields_prefs.seed;
     std::string histogram_suffix =
@@ -823,7 +826,6 @@ TEST_P(LoadSeedDataControlAndDefaultGroupsTest, LoadSeedAsync_ValidSeed) {
       });
 
   base::HistogramTester histogram_tester;
-  VariationsSeed loaded_seed;
   // Check that loading a seed works correctly.
   base::RunLoop run_loop;
   seed_store.LoadSeed(base::BindLambdaForTesting(
@@ -864,7 +866,6 @@ TEST_P(LoadSeedDataControlAndDefaultGroupsTest,
       });
 
   base::HistogramTester histogram_tester;
-  VariationsSeed loaded_seed;
   // Check that loading a seed fails.
   base::RunLoop run_loop;
   seed_store.LoadSeed(base::BindLambdaForTesting(
@@ -896,7 +897,6 @@ TEST_P(LoadSeedDataControlAndDefaultGroupsTest, LoadSeedAsync_EmptySeed) {
   ASSERT_EQ(result, LoadSeedResult::kEmpty);
 
   base::HistogramTester histogram_tester;
-  VariationsSeed loaded_seed;
 
   // Verify that loading a seed fails.
   base::RunLoop run_loop;
@@ -1391,7 +1391,6 @@ TEST_F(LoadSeedDataSeedFilesGroupTest, LoadSeedAsync_ValidSeed) {
   histogram_tester.ExpectUniqueSample("Variations.SeedFileReadResult.Latest",
                                       LoadSeedResult::kSuccess, 1);
 
-  VariationsSeed loaded_seed;
   // Check that loading a seed works correctly.
   base::RunLoop run_loop;
   seed_store.LoadSeed(base::BindLambdaForTesting(
@@ -1430,7 +1429,6 @@ TEST_F(LoadSeedDataSeedFilesGroupTest, LoadSeedAsync_InvalidSignature) {
   histogram_tester.ExpectUniqueSample("Variations.SeedFileReadResult.Latest",
                                       LoadSeedResult::kSuccess, 1);
 
-  VariationsSeed loaded_seed;
   // Check that loading a seed fails because the signature is invalid.
   base::RunLoop run_loop;
   seed_store.LoadSeed(base::BindLambdaForTesting(
@@ -1472,6 +1470,7 @@ class StoreSeedDataGroupTest
 
   struct Params {
     std::string country_code;
+    std::string geo_level1;
     bool is_delta_compressed;
     bool is_gzip_compressed;
   };
@@ -1488,7 +1487,7 @@ class StoreSeedDataGroupTest
             &StoreSeedDataGroupTest::OnSeedStoreResult, base::Unretained(this),
             run_loop.QuitClosure()),
         seed_data, /*base64_seed_signature=*/std::string(), params.country_code,
-        base::Time::Now(), params.is_delta_compressed,
+        params.geo_level1, base::Time::Now(), params.is_delta_compressed,
         params.is_gzip_compressed, RequireSynchronousStores());
     // If we're testing synchronous stores, we shouldn't issue a Run() call so
     // that the test verifies that the operation completed synchronously.
@@ -1613,6 +1612,34 @@ TEST_P(StoreSeedDataAllGroupsTest, ParsedSeed) {
   EXPECT_EQ(serialized_seed, SerializeSeed(stored_seed_));
 }
 
+TEST_P(StoreSeedDataAllGroupsTest, GzipUncompressSizeLimit) {
+  TestVariationsSeedStore seed_store(&prefs_, temp_dir_.GetPath());
+  ASSERT_EQ(base::FieldTrialList::FindFullName(kSeedFileTrial),
+            GetParam().field_trial_group);
+
+  std::string compressed;
+  ASSERT_TRUE(compression::GzipCompress(CreateTooLargeData(), &compressed));
+
+  base::HistogramTester histogram_tester;
+
+  // Storing should fail because the uncompressed size exceeds the 50 MiB limit.
+  EXPECT_FALSE(
+      StoreSeedData(seed_store, compressed, {.is_gzip_compressed = true}));
+
+  histogram_tester.ExpectBucketCount("Variations.SeedStoreResult",
+                                     StoreSeedResult::kGzipFullCount, 1);
+  histogram_tester.ExpectBucketCount(
+      "Variations.SeedStoreResult",
+      StoreSeedResult::kUncompressedSizeLimitExceeded, 1);
+  histogram_tester.ExpectTotalCount("Variations.SeedStoreResult", 2);
+
+  // Check that trying to store a too-large seed leaves the local state
+  // unchanged and does not write to the seed file.
+  CheckRegularSeedAndSeedPrefsAreCleared(prefs_, seed_store);
+  EXPECT_FALSE(timer_.IsRunning());
+  EXPECT_FALSE(base::PathExists(temp_seed_file_path_));
+}
+
 TEST_P(StoreSeedDataAllGroupsTest, CountryCode) {
   TestVariationsSeedStore seed_store(&prefs_, temp_dir_.GetPath());
   ASSERT_EQ(base::FieldTrialList::FindFullName(kSeedFileTrial),
@@ -1627,6 +1654,33 @@ TEST_P(StoreSeedDataAllGroupsTest, CountryCode) {
   // Test with no country code specified - which should preserve the old value.
   ASSERT_TRUE(StoreSeedData(seed_store, seed));
   EXPECT_EQ("test_country", GetSeedInfo(seed_store).session_country_code);
+}
+
+TEST_P(StoreSeedDataAllGroupsTest, GeoLevelIgnoredWithoutCountry) {
+  TestVariationsSeedStore seed_store(&prefs_, temp_dir_.GetPath());
+  std::string seed = SerializeSeed(CreateTestSeed());
+
+  // Test with no country code specified - which should skip the geo level.
+  ASSERT_TRUE(
+      StoreSeedData(seed_store, seed, {.geo_level1 = "test_geo_level1"}));
+  EXPECT_EQ("", GetSeedInfo(seed_store).session_country_code);
+  EXPECT_EQ("", GetSeedInfo(seed_store).session_geo_level1);
+
+  // Test with a valid values.
+  ASSERT_TRUE(StoreSeedData(seed_store, seed,
+                            {
+                                .country_code = "test_country",
+                                .geo_level1 = "test_geo_level1",
+                            }));
+  EXPECT_EQ("test_country", GetSeedInfo(seed_store).session_country_code);
+  EXPECT_EQ("test_geo_level1", GetSeedInfo(seed_store).session_geo_level1);
+
+  // Test with no country code specified - which should preserve the old geo
+  // level.
+  ASSERT_TRUE(
+      StoreSeedData(seed_store, seed, {.geo_level1 = "test_geo_level2"}));
+  EXPECT_EQ("test_country", GetSeedInfo(seed_store).session_country_code);
+  EXPECT_EQ("test_geo_level1", GetSeedInfo(seed_store).session_geo_level1);
 }
 
 TEST_P(StoreSeedDataAllGroupsTest, GzippedSeed) {
@@ -2415,7 +2469,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .signature = TestSeedData().base64_signature,
                 .store_seed_result = StoreSeedResult::kFailedSignature,
                 .verify_signature_result =
-                    VerifySignatureResult::kInvalidSeed}),
+                    VerifySignatureResult::kInvalidSeedSignature}),
         ::testing::Values(kSeedFilesGroup,
                           kControlGroup,
                           kDefaultGroup,
@@ -3091,8 +3145,9 @@ TEST_P(LoadSeedDataAllGroupsTest, VerifySeedSignatureSignatureDoesNotMatch) {
 
   base::HistogramTester histogram_tester;
   ASSERT_FALSE(MakeSeedStoreLoadStoredSeed(seed_store));
-  histogram_tester.ExpectUniqueSample("Variations.LoadSeedSignature",
-                                      VerifySignatureResult::kInvalidSeed, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Variations.LoadSeedSignature",
+      VerifySignatureResult::kInvalidSeedSignature, 1);
 }
 
 TEST_P(LoadSeedDataAllGroupsTest, VerifySeedSignatureSeedDoesNotMatch) {
@@ -3111,8 +3166,9 @@ TEST_P(LoadSeedDataAllGroupsTest, VerifySeedSignatureSeedDoesNotMatch) {
 
   base::HistogramTester histogram_tester;
   ASSERT_FALSE(MakeSeedStoreLoadStoredSeed(seed_store));
-  histogram_tester.ExpectUniqueSample("Variations.LoadSeedSignature",
-                                      VerifySignatureResult::kInvalidSeed, 1);
+  histogram_tester.ExpectUniqueSample(
+      "Variations.LoadSeedSignature",
+      VerifySignatureResult::kInvalidSeedSignature, 1);
 }
 
 class VariationsSeedStoreTestAllGroups

@@ -125,7 +125,7 @@ IntersectionObserver& DisplayLockDocumentState::EnsureIntersectionObserver() {
         BindRepeating(
             &DisplayLockDocumentState::ProcessDisplayLockActivationObservation,
             WrapWeakPersistent(this)),
-        LocalFrameUkmAggregator::kDisplayLockIntersectionObserver,
+        LocalFrameMetricsAggregator::kDisplayLockIntersectionObserver,
         IntersectionObserver::Params{
             .margin = {Length::Percent(kViewportMarginPercentage)},
             .margin_target = IntersectionObserver::kApplyMarginToTarget,
@@ -208,6 +208,14 @@ void DisplayLockDocumentState::ElementAddedToTopLayer(Element* element) {
       context->ScheduleTopLayerCheck();
     }
     return;
+  }
+
+  // MarkAncestorContextsHaveTopLayerElement walks up from the element
+  // and notifies ancestor locks, but does not notify the element's own
+  // lock. If the top layer element itself has a content-visibility:auto
+  // lock, notify it as well.
+  if (auto* context = element->GetDisplayLockContext()) {
+    context->NotifyHasTopLayerElement();
   }
 
   if (MarkAncestorContextsHaveTopLayerElement(element)) {

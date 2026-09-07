@@ -19,9 +19,11 @@
 #include "base/containers/flat_map.h"
 #include "base/logging.h"
 #include "base/notimplemented.h"
+#include "base/numerics/checked_math.h"
 #include "base/numerics/clamped_math.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
+#include "skia/ext/color_profile.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/x/x11_util.h"
 #include "ui/display/util/display_util.h"
@@ -82,25 +84,41 @@ gfx::Rect GetWorkAreaSync(x11::Future<x11::GetPropertyReply> future) {
 x11::Future<x11::GetPropertyReply> GetIccProfileFuture(
     x11::Connection* connection,
     size_t monitor) {
+  // Limit the size of the ICC profile to 4MB. Most monitor profiles are
+  // much smaller than this (typically < 1MB). This prevents potential
+  // memory exhaustion and serves as a first-line defense against malicious
+  // profiles with massive CLUTs.
+  constexpr size_t kMaxIccProfileSize = 4 * 1024 * 1024;
+  // GetProperty takes the length in 4-byte multiples.
+  constexpr uint32_t kMaxIccProfileLongLength = kMaxIccProfileSize / 4;
+
   std::string atom_name = monitor == 0
                               ? "_ICC_PROFILE"
                               : base::StringPrintf("_ICC_PROFILE_%zu", monitor);
   auto future = connection->GetProperty({
       .window = connection->default_root(),
       .property = x11::GetAtom(atom_name.c_str()),
-      .long_length = std::numeric_limits<uint32_t>::max(),
+      .long_length = kMaxIccProfileLongLength,
   });
   future.IgnoreError();
   return future;
 }
 
-gfx::ICCProfile GetIccProfileSync(x11::Future<x11::GetPropertyReply> future) {
+sk_sp<skia::ColorProfile> GetIccProfileSync(
+    x11::Future<x11::GetPropertyReply> future) {
   auto response = future.Sync();
-  if (!response || !response->value_len) {
-    return gfx::ICCProfile();
+  if (!response || !response->value_len || response->bytes_after > 0) {
+    return nullptr;
   }
-  return gfx::ICCProfile::FromData(response->value->bytes(),
-                                   response->value_len * response->format / 8u);
+
+  base::CheckedNumeric<size_t> size = response->value_len;
+  size *= (response->format / 8u);
+  if (!size.IsValid()) {
+    return nullptr;
+  }
+
+  return skia::ColorProfile::Make(
+      UNSAFE_BUFFERS(base::span(response->value->bytes(), size.ValueOrDie())));
 }
 
 x11::Future<x11::RandR::GetOutputPropertyReply> GetEdidFuture(
@@ -380,7 +398,7 @@ std::vector<display::Display> BuildDisplaysFromXRandRInfo(
     crtcs.emplace(resources->crtcs[i], crtc_futures[i].Sync());
   }
 
-  std::vector<gfx::ICCProfile> iccs;
+  std::vector<sk_sp<skia::ColorProfile>> iccs;
   iccs.reserve(n_iccs);
   for (auto& future : icc_futures) {
     iccs.push_back(GetIccProfileSync(std::move(future)));
@@ -476,8 +494,11 @@ std::vector<display::Display> BuildDisplaysFromXRandRInfo(
     if (!display::HasForceDisplayColorProfile()) {
       const size_t monitor =
           monitor_iter == output_to_monitor.end() ? 0 : monitor_iter->second;
-      const auto& icc_profile = iccs[monitor < iccs.size() ? monitor : 0];
-      gfx::ColorSpace color_space = icc_profile.GetPrimariesOnlyColorSpace();
+      gfx::ColorSpace color_space;
+      if (const auto& icc_profile = iccs[monitor < iccs.size() ? monitor : 0]) {
+        color_space = gfx::ColorSpace(
+            icc_profile->GetSkColorSpace()->makeSRGBGamma().get());
+      }
 
       // Most folks do not have an ICC profile set up, but we still want to
       // detect if a display has a wide color gamut so that HDR videos can be

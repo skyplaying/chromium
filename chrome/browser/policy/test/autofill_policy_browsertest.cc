@@ -14,7 +14,7 @@
 #include "chrome/browser/autofill/personal_data_manager_factory.h"
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/ui/autofill/chrome_autofill_client.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/autofill/content/browser/test_autofill_client_injector.h"
 #include "components/autofill/content/browser/test_autofill_manager_injector.h"
@@ -25,7 +25,7 @@
 #include "components/autofill/core/browser/foundations/browser_autofill_manager.h"
 #include "components/autofill/core/browser/foundations/test_autofill_manager_waiter.h"
 #include "components/autofill/core/browser/suggestions/suggestion.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/policy_constants.h"
 #include "content/public/browser/render_frame_host.h"
@@ -56,7 +56,7 @@ class AutofillPolicyTest : public PolicyTest,
     InProcessBrowserTest::SetUpOnMainThread();
     // Wait for Personal Data Manager to be fully loaded to prevent that
     // spurious notifications deceive the tests.
-    autofill::WaitForPersonalDataManagerToBeLoaded(browser()->profile());
+    autofill::WaitForPersonalDataManagerToBeLoaded(browser()->GetProfile());
     ASSERT_TRUE(ImportAddress());
 
     PolicyMap policies;
@@ -75,7 +75,7 @@ class AutofillPolicyTest : public PolicyTest,
 
   autofill::PersonalDataManager* personal_data_manager() {
     return autofill::PersonalDataManagerFactory::GetForBrowserContext(
-        browser()->profile());
+        browser()->GetProfile());
   }
 
   [[nodiscard]] testing::AssertionResult ImportAddress() {
@@ -83,7 +83,7 @@ class AutofillPolicyTest : public PolicyTest,
         0u) {
       return testing::AssertionFailure() << "Should be empty profile.";
     }
-    autofill::AddTestProfile(browser()->profile(),
+    autofill::AddTestProfile(browser()->GetProfile(),
                              autofill::test::GetFullProfile());
     expected_suggestions_["name"] = u"John H. Doe";
     expected_suggestions_["street-address"] = u"666 Erebus St., Apt 8";

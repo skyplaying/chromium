@@ -18,6 +18,9 @@ interface PageHandler {
 
   // Invokes the C++ logic to close the dialog.
   Cancel();
+
+  // Signals that the UI is ready to be shown.
+  ShowUI();
 };
 
 // Used by the WebUI page to bootstrap bidirectional communication. This

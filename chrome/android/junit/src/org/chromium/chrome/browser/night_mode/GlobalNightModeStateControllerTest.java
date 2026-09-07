@@ -38,12 +38,12 @@ import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 
 /** Unit tests for {@link GlobalNightModeStateController}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE, shadows = ShadowAppCompatDelegate.class)
+@Config(shadows = ShadowAppCompatDelegate.class)
 public class GlobalNightModeStateControllerTest {
     /**
      * Shadow implementation of {@link androidx.appcompat.app.AppCompatDelegate} that bypass
-     * activity recreation. Used as a stop gap to stop test failure due to activity leaks.
-     * See https://crbug.com/1347906.
+     * activity recreation. Used as a stop gap to stop test failure due to activity leaks. See
+     * https://crbug.com/40854976.
      */
     @Implements(AppCompatDelegate.class)
     public static class ShadowAppCompatDelegate {

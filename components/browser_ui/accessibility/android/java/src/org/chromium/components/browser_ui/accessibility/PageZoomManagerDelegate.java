@@ -5,6 +5,7 @@
 package org.chromium.components.browser_ui.accessibility;
 
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.content_public.browser.BrowserContextHandle;
 import org.chromium.content_public.browser.WebContents;
 
@@ -15,7 +16,7 @@ public interface PageZoomManagerDelegate {
     /**
      * @return the WebContents that should be used for the zoom manager.
      */
-    WebContents getWebContents();
+    @Nullable WebContents getWebContents();
 
     /**
      * @return the BrowserContextHandle that should be used for the zoom manager.
@@ -42,4 +43,15 @@ public interface PageZoomManagerDelegate {
     void enterImmersiveMode();
 
     boolean isCurrentTabNull();
+
+    /**
+     * Returns true if page zoom is supported for the current tab.
+     */
+    boolean isPageZoomSupported();
+
+    /**
+     * Returns true if the window/activity for this manager currently has window focus, the current
+     * tab is not a native page, and the overflow menu is not showing.
+     */
+    boolean canShowPopupWindow();
 }

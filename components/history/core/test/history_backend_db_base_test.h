@@ -13,6 +13,7 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "components/history/core/test/history_unittest_base.h"
 #include "sql/init_status.h"
@@ -48,8 +49,10 @@ class HistoryBackendDBBaseTest : public HistoryUnitTestBase {
   [[nodiscard]] bool CreateBackendAndDatabase();
 
   void CreateDBVersion(int version);
+  void CreateDBFromSQLFile(const std::string& filename);
 
   int GetDatabaseVersion() const;
+
   bool SetDatabaseVersion(int version) const;
 
   void DeleteBackend();
@@ -61,6 +64,7 @@ class HistoryBackendDBBaseTest : public HistoryUnitTestBase {
 
   base::ScopedTempDir temp_dir_;
 
+  base::test::ScopedFeatureList scoped_feature_list_;
   base::test::SingleThreadTaskEnvironment task_environment_;
 
   // names of the database files

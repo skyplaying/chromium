@@ -10,11 +10,11 @@
 #include "base/run_loop.h"
 #include "base/threading/thread_restrictions.h"
 #include "chrome/browser/ui/ash/keyboard/chrome_keyboard_controller_client.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/test/base/chrome_test_utils.h"
+#include "chrome/test/base/chrome_test_path_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
@@ -97,7 +97,10 @@ DefaultKeyboardExtensionBrowserTest::GetKeyboardWebContents(
 
   GURL url = extensions::Extension::GetBaseURLFromExtensionId(id);
   for (content::WebContents* wc : content::GetAllWebContents()) {
-    if (url == wc->GetPrimaryMainFrame()->GetSiteInstance()->GetSiteURL()) {
+    if (url == wc->GetPrimaryMainFrame()
+                   ->GetSiteInstance()
+                   ->GetSecurityPrincipal()
+                   .GetDeprecatedSiteURL()) {
       // Waits for virtual keyboard to load.
       EXPECT_TRUE(content::WaitForLoadStop(wc));
       return wc;

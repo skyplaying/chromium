@@ -14,7 +14,6 @@ android_library("java") {
     "java/src/org/chromium/chrome/browser/magic_stack/HomeModulesMetricsUtils.java",
     "java/src/org/chromium/chrome/browser/magic_stack/HomeModulesRecyclerView.java",
     "java/src/org/chromium/chrome/browser/magic_stack/HomeModulesUtils.java",
-    "java/src/org/chromium/chrome/browser/magic_stack/ModuleConfigChecker.java",
     "java/src/org/chromium/chrome/browser/magic_stack/ModuleDelegate.java",
     "java/src/org/chromium/chrome/browser/magic_stack/ModuleDelegateHost.java",
     "java/src/org/chromium/chrome/browser/magic_stack/ModuleProvider.java",
@@ -25,7 +24,9 @@ android_library("java") {
     ":java_resources",
     "//base:base_java",
     "//base:base_shared_preferences_java",
+    "//chrome/android:new_tab_page_utils_java",
     "//chrome/browser/android/lifecycle:java",
+    "//chrome/browser/auxiliary_search:java",
     "//chrome/browser/flags:java",
     "//chrome/browser/preferences:java",
     "//chrome/browser/profiles/android:java",
@@ -67,6 +68,7 @@ android_resources("java_resources") {
   ]
   deps = [
     "//components/browser_ui/strings/android:browser_ui_strings_grd",
+    "//components/browser_ui/widget/android:java_resources",
     "//ui/android:ui_java_resources",
   ]
 }
@@ -96,6 +98,7 @@ robolectric_library("junit") {
     "//base:base_junit_test_support",
     "//base:base_shared_preferences_java",
     "//chrome/android:chrome_java",
+    "//chrome/android:new_tab_page_utils_java",
     "//chrome/browser/android/lifecycle:java",
     "//chrome/browser/educational_tip:java",
     "//chrome/browser/educational_tip:java_resources",
@@ -115,6 +118,7 @@ robolectric_library("junit") {
     "//components/browser_ui/widget/android:java",
     "//components/embedder_support/android:util_java",
     "//components/segmentation_platform/public:public_java",
+    "//third_party/android_deps:espresso_java",
     "//third_party/androidx:androidx_annotation_annotation_java",
     "//third_party/androidx:androidx_core_core_java",
     "//third_party/androidx:androidx_fragment_fragment_java",

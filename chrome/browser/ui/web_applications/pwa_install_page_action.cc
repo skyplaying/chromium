@@ -7,17 +7,20 @@
 #include <string>
 
 #include "base/auto_reset.h"
+#include "base/metrics/field_trial_params.h"
+#include "chrome/browser/banners/app_banner_manager_desktop.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/page_action/page_action_controller.h"
+#include "chrome/browser/ui/page_action/page_action_observer.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/user_education/browser_user_education_interface.h"
-#include "chrome/browser/ui/views/page_action/page_action_controller.h"
-#include "chrome/browser/ui/views/page_action/page_action_observer.h"
 #include "chrome/browser/web_applications/web_app_constants.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_pref_guardrails.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/feature_engagement/public/feature_constants.h"
 #include "components/site_engagement/content/site_engagement_service.h"
 #include "components/webapps/browser/banners/app_banner_manager.h"
 #include "content/public/browser/browser_thread.h"
@@ -73,9 +76,16 @@ void PwaInstallPageActionController::WillDiscardContents(
     content::WebContents* new_contents) {
   if (manager_) {
     manager_->RemoveObserver(this);
+    manager_ = nullptr;
   }
   if (new_contents) {
-    manager_ = webapps::AppBannerManager::FromWebContents(new_contents);
+    // Look the recreated manager up via the tab: during discard callbacks the
+    // new WebContents is not yet associated with the tab, so the
+    // WebContents-based lookup would return null.
+    webapps::AppBannerManagerDesktop* manager_desktop =
+        webapps::AppBannerManagerDesktop::From(tab_interface);
+    manager_ =
+        manager_desktop ? manager_desktop->app_banner_manager() : nullptr;
     if (manager_) {
       manager_->AddObserver(this);
     }

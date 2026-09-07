@@ -34,10 +34,7 @@
 
 namespace tabs {
 
-// Standardizes the underlying types backing the TabInterface to ensure
-// consistent handles.
-using TabCanonicalizer =
-    base::RepeatingCallback<const TabInterface*(const TabInterface*)>;
+class StorageRestoreOrchestrator;
 
 // Constructs an associater using the specified callbacks. This indirection is
 // required to minimize OS-specific coupling.
@@ -55,12 +52,33 @@ class TabStateStorageService : public KeyedService,
   // A scoped helper to batch storage operations. All operations performed on
   // the service while this object is alive will be batched and committed
   // when all ScopedBatches are destroyed.
-  using ScopedBatch = base::ScopedClosureRunner;
+  class ScopedBatch {
+   public:
+    ScopedBatch();
+    ~ScopedBatch();
+
+    ScopedBatch(ScopedBatch&&);
+    ScopedBatch& operator=(ScopedBatch&&);
+
+    ScopedBatch(const ScopedBatch&) = delete;
+    ScopedBatch& operator=(const ScopedBatch&) = delete;
+
+    // Registers a callback to be invoked upon the changes in this ScopedBatch
+    // being committed.
+    void AddCallback(base::OnceClosure callback);
+
+   private:
+    friend class TabStateStorageService;
+    explicit ScopedBatch(base::ScopedClosureRunner runner,
+                         TabStateStorageUpdaterBuilder* builder);
+
+    base::ScopedClosureRunner runner_;
+    raw_ptr<TabStateStorageUpdaterBuilder> builder_;
+  };
 
   TabStateStorageService(const base::FilePath& profile_path,
                          bool support_off_the_record_data,
                          std::unique_ptr<TabStoragePackager> packager,
-                         TabCanonicalizer tab_canonicalizer,
                          RestoreEntityTrackerFactory builder_factory);
   ~TabStateStorageService() override;
 
@@ -86,13 +104,26 @@ class TabStateStorageService : public KeyedService,
   void Save(const TabInterface* tab);
   void Save(const TabCollection* collection);
 
+  // Saves the tab state directly using an explicit window_tag and
+  // off-the-record status. This is used when a Tab lacks a parent
+  // TabCollection.
+  void Save(std::string window_tag,
+            bool is_off_the_record,
+            const TabInterface* tab);
+
   // These will silently fail if the collection has not already been saved to
   // the database.
   void SavePayload(const TabCollection* collection);
   void SaveChildren(const TabCollection* collection);
 
+  // Saves the divergent children of the collection to the database. This must
+  // only be used during restore orchestration.
+  void SaveDivergentChildren(const TabCollection* collection,
+                             base::PassKey<StorageRestoreOrchestrator>);
+
   void Remove(const TabInterface* tab);
   void Remove(const TabCollection* collection);
+  void Remove(StorageId id);
 
   void LoadAllNodes(std::string_view window_tag,
                     bool is_off_the_record,
@@ -102,9 +133,17 @@ class TabStateStorageService : public KeyedService,
                           bool is_off_the_record,
                           CountTabsForWindowCallback callback);
 
-  void ClearState();
+  void ClearAllWindows();
+  void ClearAllDivergenceWindows();
 
   void ClearWindow(std::string_view window_tag);
+
+  void ClearDivergentNodesForWindow(std::string_view window_tag,
+                                    bool is_off_the_record);
+
+  void ClearDivergenceWindow(std::string_view window_tag);
+
+  void ClearAllWindowsExcept(std::vector<std::string> window_tags);
 
   void ClearNodesForWindowExcept(std::string_view window_tag,
                                  bool is_off_the_record,
@@ -118,8 +157,6 @@ class TabStateStorageService : public KeyedService,
 
   // Generates a new key for encryption.
   std::vector<uint8_t> GenerateKey(std::string_view window_tag);
-
-  TabCanonicalizer GetCanonicalizer() const;
 
 #if defined(NDEBUG)
   void PrintAll();
@@ -160,7 +197,6 @@ class TabStateStorageService : public KeyedService,
   TabStateStorageBackend tab_backend_;
   std::unique_ptr<TabStoragePackager> packager_;
 
-  TabCanonicalizer tab_canonicalizer_;
   RestoreEntityTrackerFactory tracker_factory_;
 
   // Storage ids need to be unique across tabs and collections, but the handles

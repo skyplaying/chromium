@@ -45,9 +45,9 @@ import org.chromium.ui.util.AttrUtils;
 public class ChromeDialog extends ComponentDialog {
     private final boolean mIsFullScreen;
     private final Activity mActivity;
-    @Nullable private InsetObserver mInsetObserver;
-    @Nullable private EdgeToEdgeLayoutCoordinator mEdgeToEdgeLayoutCoordinator;
-    @Nullable private WindowInsetsConsumer mWindowInsetsConsumer;
+    private @Nullable InsetObserver mInsetObserver;
+    private @Nullable EdgeToEdgeLayoutCoordinator mEdgeToEdgeLayoutCoordinator;
+    private @Nullable WindowInsetsConsumer mWindowInsetsConsumer;
     private final boolean mShouldPadForWindowInsets;
     private final WindowSystemBarColorHelper mWindowColorHelper;
 
@@ -73,6 +73,7 @@ public class ChromeDialog extends ComponentDialog {
             mInsetObserver =
                     new InsetObserver(
                             new ImmutableWeakReference<>(getWindow().getDecorView().getRootView()),
+                            new ImmutableWeakReference<>(mActivity),
                             // Keyboard overlay mode is enabled by default and is currently only
                             // relevant to the DeferredImeWindowInsetApplicationCallback.
                             /* enableKeyboardOverlayMode= */ true,
@@ -190,6 +191,19 @@ public class ChromeDialog extends ComponentDialog {
             mEdgeToEdgeLayoutCoordinator.setNavigationBarColor(color);
         } else {
             mWindowColorHelper.setNavigationBarColor(color);
+        }
+    }
+
+    /**
+     * Set the status bar color.
+     *
+     * @param color Status bar color for the current dialog.
+     */
+    public void setStatusBarColor(int color) {
+        if (mEdgeToEdgeLayoutCoordinator != null) {
+            mEdgeToEdgeLayoutCoordinator.setStatusBarColor(color);
+        } else {
+            mWindowColorHelper.setStatusBarColor(color);
         }
     }
 

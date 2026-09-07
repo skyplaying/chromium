@@ -70,17 +70,20 @@ void WellKnownChangePasswordNavigationThrottle::MaybeCreateAndAdd(
   auto& handle = registry.GetNavigationHandle();
   auto* profile =
       Profile::FromBrowserContext(handle.GetWebContents()->GetBrowserContext());
-  // Create WellKnownChangePasswordNavigationThrottle only for regular or
-  // incognito profiles.
-  if (!profile->IsRegularProfile() && !profile->IsIncognitoProfile()) {
+  // Create WellKnownChangePasswordNavigationThrottle only for regular
+  // profiles or primary OTR profiles with a regular parent (e.g. incognito or
+  // enterprise isolated mode).
+  if (!profile->IsRegularProfile() &&
+      !profile->IsPrimaryOTRProfileWithRegularParent()) {
     return;
   }
 
   // Don't handle navigations in subframes or main frames that are in a nested
   // frame tree (e.g. fenced frames)
   if (handle.IsInOutermostMainFrame() &&
-      IsWellKnownChangePasswordUrl(handle.GetURL(),
-                                   registry.IsHTTPOrHTTPS()) &&
+      IsWellKnownChangePasswordUrl(
+          handle.GetURL(),
+          registry.GetNavigationHandle().GetURL().SchemeIsHTTPOrHTTPS()) &&
       IsTriggeredByGoogleOwnedUI(&handle)) {
     registry.AddThrottle(
         std::make_unique<WellKnownChangePasswordNavigationThrottle>(registry));

@@ -183,7 +183,7 @@ ClearSiteDataHandler::ClearSiteDataHandler(
       partitioned_state_allowed_only_(partitioned_state_allowed_only),
       callback_(std::move(callback)),
       delegate_(std::move(delegate)) {
-  DCHECK(delegate_);
+  CHECK(delegate_, base::NotFatalUntil::M159);
 }
 
 ClearSiteDataHandler::~ClearSiteDataHandler() = default;
@@ -240,6 +240,17 @@ bool ClearSiteDataHandler::Run() {
     return false;
   }
 
+  // We can't clear the client hints cache outside of first-party contexts, but
+  // there's no reason to early return on an attempt. Instead, we alert here and
+  // bypass the data clearing in SiteDataClearer::RunAndDestroySelfWhenDone.
+  if (clear_site_data_types.Has(ClearSiteDataType::kClientHints) &&
+      (storage_key_ && storage_key_->IsThirdPartyContext())) {
+    delegate_->AddMessage(url_,
+                          "It's not possible to clear the client hints cache "
+                          "from a third-party context.",
+                          blink::mojom::ConsoleMessageLevel::kWarning);
+  }
+
   ExecuteClearingTask(
       origin, clear_site_data_types, storage_buckets_to_remove,
       base::BindOnce(&ClearSiteDataHandler::TaskFinished,
@@ -256,9 +267,9 @@ bool ClearSiteDataHandler::ParseHeader(
     std::set<std::string>* storage_buckets_to_remove,
     ConsoleMessagesDelegate* delegate,
     const GURL& current_url) {
-  DCHECK(clear_site_data_types);
-  DCHECK(storage_buckets_to_remove);
-  DCHECK(delegate);
+  CHECK(clear_site_data_types, base::NotFatalUntil::M159);
+  CHECK(storage_buckets_to_remove, base::NotFatalUntil::M159);
+  CHECK(delegate, base::NotFatalUntil::M159);
 
   if (!base::IsStringASCII(header)) {
     delegate->AddMessage(current_url, "Must only contain ASCII characters.",
@@ -337,7 +348,8 @@ bool ClearSiteDataHandler::ParseHeader(
       }
     }
 
-    DCHECK_NE(data_type, ClearSiteDataType::kUndefined);
+    CHECK_NE(data_type, ClearSiteDataType::kUndefined,
+             base::NotFatalUntil::M159);
 
     if (clear_site_data_types->Has(data_type)) {
       continue;
@@ -406,7 +418,7 @@ void ClearSiteDataHandler::TaskFinished(
     std::unique_ptr<ConsoleMessagesDelegate> delegate,
     base::WeakPtr<WebContents> web_contents,
     base::OnceClosure callback) {
-  DCHECK(!clearing_started.is_null());
+  CHECK(!clearing_started.is_null(), base::NotFatalUntil::M159);
 
   // TODO(crbug.com/41409604): Delay output until next frame for navigations.
   delegate->OutputMessages(web_contents);

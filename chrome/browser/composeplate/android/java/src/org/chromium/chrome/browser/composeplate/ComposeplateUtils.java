@@ -13,15 +13,15 @@ import android.view.View;
 
 import androidx.annotation.StyleRes;
 import androidx.annotation.VisibleForTesting;
-import androidx.appcompat.content.res.AppCompatResources;
 
 import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
 
+import org.chromium.base.DeviceInfo;
 import org.chromium.base.ResettersForTesting;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.ntp.NewTabPageUtils;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.theme.ThemeUtils;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
@@ -30,22 +30,28 @@ import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 @NullMarked
 public class ComposeplateUtils {
 
-    private static boolean sIsEnabledForTesting;
+    private static @Nullable Boolean sIsEnabledForTesting;
 
     /**
      * Returns whether the composeplate can be enabled.
      *
-     * @param isTablet Whether the device is a tablet.
      * @param profile The current profile.
      */
-    public static boolean isComposeplateEnabled(boolean isTablet, Profile profile) {
-        if (sIsEnabledForTesting) return true;
-        if (!ComposeplateUtilsJni.get().isAimEntrypointEligible(profile)) return false;
+    public static boolean isComposeplateEnabled(Profile profile) {
+        if (sIsEnabledForTesting != null) {
+            return sIsEnabledForTesting;
+        }
 
-        if (!isTablet) return true;
+        return ComposeplateUtilsJni.get().isAimEntrypointEligible(profile);
+    }
 
-        return ChromeFeatureList.sAndroidComposeplateLFF.isEnabled()
-                && ComposeplateUtilsJni.get().isAimEntrypointLFFEligible(profile);
+    /**
+     * Returns whether the composeplate button can be shown on NTPs.
+     *
+     * @param profile The current profile.
+     */
+    public static boolean canShowComposeplateButtonOnNtp(Profile profile) {
+        return !DeviceInfo.isDesktop() && isComposeplateEnabled(profile);
     }
 
     /**
@@ -58,14 +64,80 @@ public class ComposeplateUtils {
     }
 
     /**
-     * Applies a white color with shadow to the default background drawable and set it as the new
-     * background of the view if apply equals to true; otherwise resets to the default background.
+     * Applies the appropriate background drawable for the Search Box.
+     *
+     * @param context Used to get resources.
+     * @param view The search box view instance to update.
+     * @param applyWhiteBackground Whether to apply a white background.
+     */
+    public static void applySearchBoxBackground(
+            Context context, View view, boolean applyWhiteBackground) {
+        if (applyWhiteBackground) {
+            if (NewTabPageUtils.isNtpAuroraEnabled()) {
+                // When Aurora is enabled on customized image theme, use white mixed with 2% primary
+                // tint.
+                view.setBackground(
+                        context.getDrawable(
+                                R.drawable.fake_search_box_white_with_primary_color_alpha_2));
+                return;
+            }
+            // When Aurora is disabled on customized image theme, use pure white.
+            applyWhiteBackground(context, view, /* apply= */ true);
+            return;
+        }
+
+        // Default theme without customized image theme:
+        if (NewTabPageUtils.isNtpAuroraEnabled()) {
+            view.setBackground(context.getDrawable(R.drawable.fake_search_box_background));
+            return;
+        }
+
+        // Default theme with Aurora disabled:
+        applyWhiteBackground(context, view, /* apply= */ false);
+    }
+
+    /**
+     * Applies the appropriate background drawable for Composeplate buttons.
+     *
+     * @param context Used to get resources.
+     * @param view The composeplate button view instance to update.
+     * @param applyWhiteBackground Whether to apply a white background.
+     */
+    public static void applyComposeplateBackground(
+            Context context, View view, boolean applyWhiteBackground) {
+        if (applyWhiteBackground) {
+            if (NewTabPageUtils.isNtpAuroraButtonColorEnabled()) {
+                // When Aurora button color is enabled on customized image theme, use tinted
+                // background.
+                view.setBackground(
+                        context.getDrawable(
+                                R.drawable.fake_search_box_white_with_primary_color_alpha_2));
+                return;
+            }
+            // When Aurora button color is disabled on customized image theme, use pure white.
+            applyWhiteBackground(context, view, /* apply= */ true);
+            return;
+        }
+
+        // Default theme without customized image theme:
+        if (NewTabPageUtils.isNtpAuroraButtonColorEnabled()) {
+            view.setBackground(context.getDrawable(R.drawable.composeplate_button_background));
+            return;
+        }
+
+        // Default theme with Aurora button color disabled:
+        applyWhiteBackground(context, view, /* apply= */ false);
+    }
+
+    /**
+     * Applies a white color to the default background drawable and set it as the new background of
+     * the view if apply equals to true; otherwise resets to the default background.
      *
      * @param context Used to get resources.
      * @param view The view instance to update.
      * @param apply Whether to apply or reset to the default background.
      */
-    public static void applyWhiteBackgroundAndShadow(Context context, View view, boolean apply) {
+    public static void applyWhiteBackground(Context context, View view, boolean apply) {
         Drawable background = context.getDrawable(R.drawable.home_surface_search_box_background);
         if (apply) {
             if (background == null) return;
@@ -74,20 +146,15 @@ public class ComposeplateUtils {
             GradientDrawable newBackground = (GradientDrawable) background.mutate();
             newBackground.setColor(Color.WHITE);
             view.setBackground(newBackground);
-            view.setElevation(
-                    context.getResources().getDimensionPixelSize(R.dimen.ntp_search_box_elevation));
-            view.setClipToOutline(true);
             return;
         }
 
-        // Rests to the default background drawable.
+        // Resets to the default background drawable.
         view.setBackground(background);
-        view.setElevation(0f);
-        view.setClipToOutline(false);
     }
 
-    public static void setIsEnabledForTesting(boolean isEnabledForTesting) {
-        boolean oldValue = sIsEnabledForTesting;
+    public static void setIsEnabledForTesting(@Nullable Boolean isEnabledForTesting) {
+        @Nullable Boolean oldValue = sIsEnabledForTesting;
         sIsEnabledForTesting = isEnabledForTesting;
         ResettersForTesting.register(() -> sIsEnabledForTesting = oldValue);
     }
@@ -102,7 +169,7 @@ public class ComposeplateUtils {
     public static @Nullable ColorStateList getSearchBoxIconColorTint(
             Context context, boolean shouldApplyWhiteBackgroundOnSearchBox) {
         if (shouldApplyWhiteBackgroundOnSearchBox) {
-            return AppCompatResources.getColorStateList(context, R.color.default_icon_color_dark);
+            return context.getColorStateList(R.color.default_icon_color_dark);
         }
 
         return ThemeUtils.getThemedToolbarIconTint(context, BrandedColorScheme.APP_DEFAULT);
@@ -125,8 +192,6 @@ public class ComposeplateUtils {
     @VisibleForTesting
     public interface Natives {
         boolean isAimEntrypointEligible(@JniType("Profile*") Profile profile);
-
-        boolean isAimEntrypointLFFEligible(@JniType("Profile*") Profile profile);
 
         boolean isEnabledByPolicy(@JniType("Profile*") Profile profile);
     }

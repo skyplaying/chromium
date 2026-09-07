@@ -10,24 +10,25 @@
 #include "base/test/gtest_util.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/time/time.h"
-#include "components/unexportable_keys/mock_unexportable_key.h"
 #include "content/public/test/browser_task_environment.h"
 #include "crypto/cose.h"
+#include "crypto/mock_unexportable_key.h"
+#include "crypto/sign.h"
 #include "crypto/test_support.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
-using crypto::SignatureVerifier;
+using crypto::MockUnexportableSigningKey;
 using testing::DoAll;
 using testing::Return;
-using unexportable_keys::MockUnexportableKey;
 
-static const SignatureVerifier::SignatureAlgorithm kAllSignatureAlgorithms[] = {
-    SignatureVerifier::SignatureAlgorithm::RSA_PKCS1_SHA1,
-    SignatureVerifier::SignatureAlgorithm::RSA_PKCS1_SHA256,
-    SignatureVerifier::SignatureAlgorithm::ECDSA_SHA256,
-    SignatureVerifier::SignatureAlgorithm::RSA_PSS_SHA256};
+constexpr crypto::sign::SignatureKind kAllSignatureAlgorithms[] = {
+    crypto::sign::RSA_PKCS1_SHA1,
+    crypto::sign::RSA_PKCS1_SHA256,
+    crypto::sign::ECDSA_SHA256,
+    crypto::sign::RSA_PSS_SHA256,
+};
 }  // namespace
 
 namespace payments {
@@ -35,10 +36,9 @@ namespace payments {
 class BrowserBoundKeyDesktopTest : public ::testing::Test {
  public:
   BrowserBoundKeyDesktopTest() {
-    auto key = std::make_unique<MockUnexportableKey>();
+    auto key = std::make_unique<MockUnexportableSigningKey>();
     EXPECT_CALL(*key, Algorithm())
-        .WillRepeatedly(
-            Return(SignatureVerifier::SignatureAlgorithm::ECDSA_SHA256));
+        .WillRepeatedly(Return(crypto::sign::ECDSA_SHA256));
     key_ = key.get();
     browser_bound_key_ =
         std::make_unique<BrowserBoundKeyDesktop>(std::move(key));
@@ -46,7 +46,7 @@ class BrowserBoundKeyDesktopTest : public ::testing::Test {
 
   ~BrowserBoundKeyDesktopTest() override = default;
 
-  MockUnexportableKey* key() { return key_; }
+  MockUnexportableSigningKey* key() { return key_; }
 
   BrowserBoundKeyDesktop* browser_bound_key() {
     return browser_bound_key_.get();
@@ -58,17 +58,17 @@ class BrowserBoundKeyDesktopTest : public ::testing::Test {
 
  private:
   std::unique_ptr<BrowserBoundKeyDesktop> browser_bound_key_;
-  raw_ptr<MockUnexportableKey> key_;
+  raw_ptr<MockUnexportableSigningKey> key_;
 };
 
 TEST_F(BrowserBoundKeyDesktopTest, UnexportableSigningKey_AlgorithmValidation) {
-  std::unique_ptr<MockUnexportableKey> key;
+  std::unique_ptr<MockUnexportableSigningKey> key;
   for (const auto algorithm : kAllSignatureAlgorithms) {
-    key = std::make_unique<MockUnexportableKey>();
+    key = std::make_unique<MockUnexportableSigningKey>();
     EXPECT_CALL(*key, Algorithm()).WillRepeatedly(Return(algorithm));
 
-    if (algorithm == SignatureVerifier::SignatureAlgorithm::ECDSA_SHA256 ||
-        algorithm == SignatureVerifier::SignatureAlgorithm::RSA_PKCS1_SHA256) {
+    if (algorithm == crypto::sign::ECDSA_SHA256 ||
+        algorithm == crypto::sign::RSA_PKCS1_SHA256) {
       EXPECT_NO_FATAL_FAILURE(BrowserBoundKeyDesktop(std::move(key)));
     } else {
       EXPECT_CHECK_DEATH(BrowserBoundKeyDesktop(std::move(key)));

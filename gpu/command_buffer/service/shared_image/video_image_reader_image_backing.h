@@ -28,11 +28,7 @@ class GPU_GLES2_EXPORT VideoImageReaderImageBacking
  public:
   VideoImageReaderImageBacking(
       const Mailbox& mailbox,
-      const gfx::Size& size,
-      const gfx::ColorSpace color_space,
-      GrSurfaceOrigin surface_origin,
-      SkAlphaType alpha_type,
-      std::string debug_label,
+      const SharedImageInfo& si_info,
       scoped_refptr<StreamTextureSharedImageInterface> stream_texture_sii,
       scoped_refptr<SharedContextState> shared_context_state,
       scoped_refptr<RefCountedLock> drdc_lock);
@@ -79,6 +75,10 @@ class GPU_GLES2_EXPORT VideoImageReaderImageBacking
       VideoDevice device) override;
 
  private:
+  template <typename T>
+  std::unique_ptr<T> ProduceGLTextureInternal(SharedImageManager* manager,
+                                              MemoryTypeTracker* tracker);
+
   // Helper class for observing SharedContext loss on gpu main thread and
   // cleaning up resources accordingly.
   class ContextLostObserverHelper
@@ -101,6 +101,7 @@ class GPU_GLES2_EXPORT VideoImageReaderImageBacking
     scoped_refptr<base::SingleThreadTaskRunner> gpu_main_task_runner_;
   };
 
+  class GLVideoImageRepresentationShared;
   class GLTextureVideoImageRepresentation;
   class GLTexturePassthroughVideoImageRepresentation;
   class SkiaGraphiteDawnImageRepresentation;

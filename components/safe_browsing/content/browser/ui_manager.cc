@@ -6,9 +6,9 @@
 
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/threading/thread.h"
 #include "base/threading/thread_restrictions.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/no_state_prefetch/browser/no_state_prefetch_contents.h"
 #include "components/prefs/pref_service.h"
@@ -255,7 +255,8 @@ void SafeBrowsingUIManager::SendThreatDetails(
 // If HaTS surveys are enabled, then this gets called when the report is ready.
 void SafeBrowsingUIManager::AttachThreatDetailsAndLaunchSurvey(
     content::BrowserContext* browser_context,
-    std::unique_ptr<ClientSafeBrowsingReportRequest> report) {
+    std::unique_ptr<ClientSafeBrowsingReportRequest> report,
+    bool is_tab_closed) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   if (shut_down_) {
@@ -264,7 +265,7 @@ void SafeBrowsingUIManager::AttachThreatDetailsAndLaunchSurvey(
 
   DVLOG(1) << "Adding threat details to survey response payload.";
   delegate_->GetPingManager(browser_context)
-      ->AttachThreatDetailsAndLaunchSurvey(std::move(report));
+      ->AttachThreatDetailsAndLaunchSurvey(std::move(report), is_tab_closed);
 }
 
 void SafeBrowsingUIManager::OnBlockingPageDone(

@@ -45,10 +45,8 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.RuntimeEnvironment;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.metrics.RecordHistogram;
-import org.chromium.base.task.test.CustomShadowAsyncTask;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.keyboard_accessory.AccessorySheetTrigger;
 import org.chromium.chrome.browser.keyboard_accessory.AccessorySheetVisualStateProvider;
@@ -65,9 +63,6 @@ import org.chromium.ui.test.util.modelutil.FakeViewProvider;
 
 /** Controller tests for the keyboard accessory bottom sheet component. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(
-        manifest = Config.NONE,
-        shadows = {CustomShadowAsyncTask.class})
 public class AccessorySheetControllerTest {
     private static final int DEFAULT_BG_COLOR = Color.LTGRAY;
 

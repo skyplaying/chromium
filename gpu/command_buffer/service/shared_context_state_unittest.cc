@@ -77,10 +77,10 @@ TEST_F(SharedContextStateTest, InitFailsIfLostContext) {
 
     GpuFeatureInfo gpu_feature_info;
     GpuDriverBugWorkarounds workarounds;
-    auto feature_info =
-        base::MakeRefCounted<gles2::FeatureInfo>(workarounds, gpu_feature_info);
     gles2::TestHelper::SetupFeatureInfoInitExpectationsWithGLVersion(
         &gl_interface, gl_extensions, "ANGLE", gl_version, context_type);
+    auto feature_info =
+        base::MakeRefCounted<gles2::FeatureInfo>(workarounds, gpu_feature_info);
     feature_info->Initialize(gpu::CONTEXT_TYPE_OPENGLES2,
                              false /* passthrough */,
                              gles2::DisallowedFeatures());
@@ -105,7 +105,7 @@ TEST_F(SharedContextStateTest, InitFailsIfLostContext) {
         GrContextType::kGL);
 
     bool result =
-        shared_context_state->InitializeGL(GpuPreferences(), feature_info);
+        shared_context_state->InitializeGLWithFeatureInfo(feature_info);
     EXPECT_FALSE(result);
   }
   gl::GLSurfaceTestSupport::ShutdownGL(display);
@@ -191,6 +191,42 @@ TEST_F(SharedContextStateTest, VulkanOptionsProviderSetsCustomOptions) {
     shared_context_state->InitializeGanesh(
         GpuPreferences(), workarounds, /*cache=*/nullptr,
         /*use_shader_cache_shm_count=*/nullptr, /*progress_reporter=*/nullptr);
+  }
+  gl::GLSurfaceTestSupport::ShutdownGL(display);
+}
+
+TEST_F(SharedContextStateTest, ThreadLocalStorageBasics) {
+  gl::SetGLGetProcAddressProc(gl::MockGLInterface::GetGLProcAddress);
+  auto* display = gl::GLSurfaceTestSupport::InitializeOneOffWithMockBindings();
+  ASSERT_TRUE(display);
+  {
+    NiceMock<gl::MockGLInterface> gl_interface;
+    gl::MockGLInterface::SetGLInterface(&gl_interface);
+
+    auto share_group = base::MakeRefCounted<gl::GLShareGroup>();
+    auto surface = base::MakeRefCounted<gl::GLSurfaceStub>();
+    auto context = base::MakeRefCounted<gl::GLContextStub>(share_group.get());
+    const char gl_version[] = "OpenGL ES 2.0";
+    context->SetGLVersionString(gl_version);
+    const char gl_extensions[] = "GL_KHR_robustness";
+    context->SetExtensionsString(gl_extensions);
+    context->Initialize(surface.get(), {});
+
+    auto shared_context_state = base::MakeRefCounted<SharedContextState>(
+        share_group.get(), surface, context,
+        false /* use_virtualized_gl_contexts */, base::DoNothing(),
+        GrContextType::kNone);
+
+    EXPECT_TRUE(shared_context_state->MakeCurrent(surface.get()));
+
+    EXPECT_EQ(SharedContextState::GetForCurrentThread(), nullptr);
+
+    SharedContextState::SetForCurrentThread(shared_context_state.get());
+    EXPECT_EQ(SharedContextState::GetForCurrentThread(),
+              shared_context_state.get());
+
+    SharedContextState::ClearForCurrentThread();
+    EXPECT_EQ(SharedContextState::GetForCurrentThread(), nullptr);
   }
   gl::GLSurfaceTestSupport::ShutdownGL(display);
 }

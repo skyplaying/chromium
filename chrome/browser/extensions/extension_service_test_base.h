@@ -41,6 +41,7 @@ static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 class Profile;
 class TestingProfile;
+class TestingProfileManager;
 
 namespace content {
 class BrowserContext;
@@ -82,6 +83,12 @@ class ExtensionServiceTestBase : public testing::Test {
     bool profile_is_supervised = false;
     bool profile_is_guest = false;
     bool enable_bookmark_model = false;
+
+    // If true, force desktop bookmarks behavior. This is currently only used
+    // for desktop Android.
+    // TODO(crbug.com/509156770): Remove this once DeviceInfo returns the
+    // correct value for is_desktop on desktop Android for tests.
+    bool force_desktop_bookmark_behavior = false;
     bool enable_install_limiter = false;
     // If true, a TestSyncService is created and used instead of a
     // default SyncService.
@@ -167,6 +174,10 @@ class ExtensionServiceTestBase : public testing::Test {
   // are commonly used and/or reimplemented. For instance, methods to install
   // extensions from various locations, etc.
 
+  TestingProfileManager* testing_profile_manager() {
+    return testing_profile_manager_.get();
+  }
+
   content::BrowserContext* browser_context();
   Profile* profile();
   TestingProfile* testing_profile();
@@ -249,7 +260,8 @@ class ExtensionServiceTestBase : public testing::Test {
 #endif
 
   // The associated testing profile.
-  std::unique_ptr<TestingProfile> profile_;
+  std::unique_ptr<TestingProfileManager> testing_profile_manager_;
+  raw_ptr<TestingProfile> profile_ = nullptr;
 
   // The directory into which extensions are installed.
   base::FilePath extensions_install_dir_;

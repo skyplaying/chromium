@@ -379,7 +379,6 @@ virtual void ShaderSource(GLuint shader,
                           GLsizei count,
                           const GLchar* const* str,
                           const GLint* length) = 0;
-virtual void ShallowFinishCHROMIUM() = 0;
 virtual void OrderingBarrierCHROMIUM() = 0;
 virtual void MultiDrawArraysWEBGL(GLenum mode,
                                   const GLint* firsts,
@@ -665,7 +664,6 @@ virtual GLuint GetMaxValueInBufferCHROMIUM(GLuint buffer_id,
                                            GLsizei count,
                                            GLenum type,
                                            GLuint offset) = 0;
-virtual GLboolean EnableFeatureCHROMIUM(const char* feature) = 0;
 virtual void* MapBufferCHROMIUM(GLuint target, GLenum access) = 0;
 virtual GLboolean UnmapBufferCHROMIUM(GLuint target) = 0;
 virtual void* MapBufferSubDataCHROMIUM(GLuint target,
@@ -673,14 +671,6 @@ virtual void* MapBufferSubDataCHROMIUM(GLuint target,
                                        GLsizeiptr size,
                                        GLenum access) = 0;
 virtual void UnmapBufferSubDataCHROMIUM(const void* mem) = 0;
-virtual void* MapBufferRange(GLenum target,
-                             GLintptr offset,
-                             GLsizeiptr size,
-                             GLbitfield access) = 0;
-virtual GLboolean UnmapBuffer(GLenum target) = 0;
-virtual void FlushMappedBufferRange(GLenum target,
-                                    GLintptr offset,
-                                    GLsizeiptr size) = 0;
 virtual void* MapTexSubImage2DCHROMIUM(GLenum target,
                                        GLint level,
                                        GLint xoffset,
@@ -775,6 +765,10 @@ virtual void DrawBuffersEXT(GLsizei count, const GLenum* bufs) = 0;
 virtual void FlushDriverCachesCHROMIUM() = 0;
 virtual GLuint GetLastFlushIdCHROMIUM() = 0;
 virtual void SetActiveURLCHROMIUM(const char* url) = 0;
+virtual void GetBufferSubDataCHROMIUM(GLenum target,
+                                      GLintptr offset,
+                                      GLsizeiptr size,
+                                      void* data) = 0;
 virtual void ContextVisibilityHintCHROMIUM(GLboolean visibility) = 0;
 virtual GLenum GetGraphicsResetStatusKHR() = 0;
 virtual void BlendBarrierKHR() = 0;
@@ -873,13 +867,14 @@ virtual void ColorMaskiOES(GLuint buf,
                            GLboolean a) = 0;
 virtual GLboolean IsEnablediOES(GLenum target, GLuint index) = 0;
 virtual void ProvokingVertexANGLE(GLenum provokeMode) = 0;
-virtual void FramebufferMemorylessPixelLocalStorageANGLE(
-    GLint plane,
-    GLenum internalformat) = 0;
+virtual void FramebufferMemorylessPixelLocalStorageANGLE(GLint plane,
+                                                         GLenum internalformat,
+                                                         GLbitfield usage) = 0;
 virtual void FramebufferTexturePixelLocalStorageANGLE(GLint plane,
                                                       GLuint backingtexture,
                                                       GLint level,
-                                                      GLint layer) = 0;
+                                                      GLint layer,
+                                                      GLbitfield usage) = 0;
 virtual void FramebufferPixelLocalClearValuefvANGLE(GLint plane,
                                                     const GLfloat* value) = 0;
 virtual void FramebufferPixelLocalClearValueivANGLE(GLint plane,
@@ -890,6 +885,7 @@ virtual void BeginPixelLocalStorageANGLE(GLsizei count,
                                          const GLenum* loadops) = 0;
 virtual void EndPixelLocalStorageANGLE(GLsizei count,
                                        const GLenum* storeops) = 0;
+virtual void EndPixelLocalStorageImplicitANGLE() = 0;
 virtual void PixelLocalStorageBarrierANGLE() = 0;
 virtual void FramebufferPixelLocalStorageInterruptANGLE() = 0;
 virtual void FramebufferPixelLocalStorageRestoreANGLE() = 0;
@@ -900,6 +896,10 @@ virtual void GetFramebufferPixelLocalStorageParameterfvANGLE(
 virtual void GetFramebufferPixelLocalStorageParameterivANGLE(GLint plane,
                                                              GLenum pname,
                                                              GLint* params) = 0;
+virtual void GetFramebufferPixelLocalStorageParameteruivANGLE(
+    GLint plane,
+    GLenum pname,
+    GLuint* params) = 0;
 virtual void ClipControlEXT(GLenum origin, GLenum depth) = 0;
 virtual void PolygonModeANGLE(GLenum face, GLenum mode) = 0;
 virtual void PolygonOffsetClampEXT(GLfloat factor,

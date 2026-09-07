@@ -40,10 +40,10 @@ are treated in different ways during painting:
     *   Replaced normal-flow stacking elements:
         [replaced elements](https://html.spec.whatwg.org/C/#replaced-elements)
         that do not have non-auto z-index but are stacking contexts for elements
-        below them. Right now the only example is SVG `<foreignObject>`. The
-        difference between these elements and regular stacking contexts is that
-        they paint in the foreground phase of the painting algorithm (as opposed
-        to the positioned descendants phase).
+        below them. Examples include SVG `<foreignObject>` and HTML `<video>`.
+        The difference between these elements and regular stacking contexts is
+        that they paint in the foreground phase of the painting algorithm (as
+        opposed to the positioned descendants phase).
 
     *   Elements that are not real stacking contexts but are treated as stacking
         contexts but don't manage other stacked elements. Their z-ordering are
@@ -539,6 +539,101 @@ of type cc::SolidColorScrollbarLayer, cc::PaintedScrollbarLayer or
 cc::PaintedOverlayScrollbarLayer depending on the type of the scrollbar.
 
 Custom scrollbars are still painted into drawing display items directly.
+
+## HTML-in-Canvas
+
+HTML-in-Canvas is a feature (enabled via the `CanvasDrawElement` runtime enabled
+feature flag) that allows rendering a DOM subtree (descendant of a `<canvas>`)
+into a canvas with the `layoutsubtree` attribute using `drawElementImage()`
+(or the similar WebGL/WebGPU APIs), while still supporting browser features
+like layout, hit testing, accessibility, etc. See the
+[explainer](https://github.com/WICG/html-in-canvas) for more information.
+
+### Stacking and layout
+*   **Layout subtree**: Specifying the `layoutsubtree` attribute on a `<canvas>`
+    element opts in its descendants to layout. Direct children of the canvas
+    are blockified and given static position in
+    `StyleAdjuster::AdjustStyleForDisplay`. Descendants with the `drawable`
+    attribute (and direct children during migration) imply `isolation: isolate`
+    in `StyleAdjuster::AdjustComputedStyle`, and establish a containing block for
+    fixed and absolute positioned descendants via
+    `LayoutObject::ComputeIsFixedContainer`.
+*   **Element helpers**: The DOM `Element` class provides helpers
+    `IsCanvasOrInCanvasSubtree()` and `IsInCanvasSubtree()` to easily identify
+    elements participating in this feature, as well as `CanvasForDrawing()` to
+    retrieve the associated canvas for drawable elements.
+
+### Canvas Transform
+*   **Canvas transform**: `getElementTransform()` on `HTMLCanvasElement` returns
+    the transform applied to an element mapping its border box, before CSS
+    transforms, to the canvas coordinate space. Canvas transforms are set via
+    `canvas.updateElementGeometry(element, { canvasTransform })` (or automatically
+    via `drawElementImage()`) and cleared via `canvas.clearElementGeometry(element)`.
+*   **PaintLayer transform**: When present, the canvas transform is
+    pre-concatenated before CSS transforms in `PaintLayer::UpdateTransform()`.
+*   **Property tree node**: An `ElementCanvasTransform` node is inserted
+    between `AnchorPositionScrollTranslation` and `Translate` so canvas
+    transforms apply before CSS transforms in `GeometryMapper`.
+
+### Painting
+*   **Special paint flags**: When painting the children of a `layoutsubtree`
+    canvas in `PaintLayerPainter::PaintChildren`, we apply special paint flags:
+    *   `PaintFlag::kOmitCompositingInfo`: Prevents compositing of descendants.
+    *   `PaintFlag::kPrivacyPreserving`: Ensures no sensitive or privacy-
+        sensitive information (such as cross-origin iframe/image data, visited
+        links, spelling markers, or system themes) is exposed during canvas
+        drawing or invalidations.
+*   **Fallback content prevention**: If `layoutsubtree` is not specified,
+    `PaintLayerPainter::PaintChildren` returns early, preventing canvas
+    fallback content from being rendered.
+*   **Hit Testing**: HTMLCanvasElement maintains a list of descendants that have
+    been drawn into the canvas, in the order of drawing. When a hit test reaches
+    the canvas's PaintLayer it iterates backwards through the list of
+    descendants (the last-drawn descendant is tested first). By design this
+    skips any hierarchy between the drawn descendant and the canvas element, so
+    intervening clips won't prevent the hit test from reaching the descendant.
+
+### Compositing and layerization
+*   **Child direct compositing reason**: Drawable elements in a `layoutsubtree`
+    canvas are given the direct compositing reason
+    `CompositingReason::kCanvasChild` in
+    `CompositingReasonFinder::DirectReasonsForPaintProperties`. This forces the
+    creation of an `EffectPaintPropertyNode` for the child (see
+    `EffectPaintPropertyNode::RequiresCompositingForCanvasChild()`), and
+    ultimately forces a `cc::Layer` to be created for each canvas child. This
+    cc::Layer has `DrawsContent()` set to false so that it participates in hit
+    testing but does not render.
+*   **Compositing disabled for other descendants**: Composited layers are
+    disabled for content *below* drawable elements in the canvas (with the
+    exception of direct children of nested `layoutsubtree` canvases; see below).
+    This ensures the full content is available in the canvas child's
+    `cc::Layer`, which is used via
+    `ContentLayerClientImpl::GetCanvasChildPaintRecord`. This also ensures the
+    content does not create additional layers which could render.
+
+### Nested HTML-in-Canvas
+HTML-in-Canvas supports nesting `layoutsubtree` canvases within other
+`layoutsubtree` canvases. This requires coordination across compositing,
+painting, and event dispatch:
+*   **Compositing for nested children**: While compositing is generally
+    suppressed for descendants of a canvas child, direct children of a *nested*
+    `layoutsubtree` canvas are still given the `CompositingReason::kCanvasChild`
+    direct compositing reason, while compositing for the nested canvas element
+    itself is suppressed.
+*   **Paint event ordering**: To ensure nested canvases are updated before their
+    parent canvases draw them, `RunCanvasOnpaintSteps` fires `paint` events in
+    reverse document order across frames, and in reverse tree order within each
+    document.
+*   **Placeholder recording**: When `HTMLCanvasPainter::PaintReplaced` paints a
+    nested `layoutsubtree` canvas, it records a `cc::CustomDataOp` containing
+    the nested canvas's `DOMNodeId` as a placeholder.
+*   **Snapshot placeholder swapping**: During layerization,
+    `PaintArtifactCompositor::GetCanvasChildPaintRecord` uses a callback
+    (`GetCanvasSnapshotCallback`, initialized in
+    `LocalFrameView::PushPaintArtifactToCompositor`) to retrieve the
+    unaccelerated snapshot of each nested canvas. It then calls
+    `cc::PaintRecord::ReplaceCustomData` to cleanly swap all `CustomDataOp`
+    placeholders with their actual rendered `cc::PaintRecord` snapshots.
 
 ## Pixel snapping and bluriness
 

@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <memory>
 #include <optional>
+#include <utility>
+#include <vector>
 
 #include "base/auto_reset.h"
 #include "base/command_line.h"
@@ -17,8 +19,9 @@
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted_memory.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/metrics/user_metrics.h"
+#include "base/no_destructor.h"
 #include "base/observer_list.h"
 #include "base/one_shot_event.h"
 #include "base/strings/string_number_conversions.h"
@@ -30,8 +33,12 @@
 #include "base/task/thread_pool.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/theme_installed_infobar_delegate.h"
+#include "chrome/browser/infobars/browser_infobar_manager.h"
+#include "chrome/browser/infobars/infobar_features.h"
+#include "chrome/browser/infobars/infobar_spec.h"
 #include "chrome/browser/new_tab_page/chrome_colors/chrome_colors_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search/background/ntp_custom_background_service.h"
@@ -43,14 +50,18 @@
 #include "chrome/browser/themes/theme_service_observer.h"
 #include "chrome/browser/themes/theme_service_utils.h"
 #include "chrome/browser/themes/theme_syncable_service.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/common/buildflags.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/infobars/content/content_infobar_manager.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
+#include "components/tabs/public/tab_interface.h"
 #include "components/themes/pref_names.h"
 #include "extensions/browser/extension_file_task_runner.h"
 #include "extensions/browser/extension_prefs.h"
@@ -62,11 +73,13 @@
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_set.h"
 #include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/base/mojom/themes.mojom.h"
 #include "ui/base/resource/resource_scale_factor.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
+#include "ui/color/color_provider_key.h"
 #include "ui/color/color_provider_manager.h"
 #include "ui/native_theme/native_theme.h"
 
@@ -76,6 +89,7 @@
 #endif
 
 #if BUILDFLAG(IS_LINUX)
+#include "base/time/time.h"
 #include "ui/linux/linux_ui.h"
 #include "ui/linux/linux_ui_factory.h"
 #include "ui/ozone/public/ozone_platform.h"  // nogncheck
@@ -103,6 +117,31 @@ void WritePackToDiskCallback(BrowserThemePack* pack,
   }
 
   pack->WriteToDisk(directory.Append(chrome::kThemePackFilename));
+}
+
+ui::ColorProviderKey::SchemeVariant GetSchemeVariant(
+    ui::mojom::BrowserColorVariant color_variant) {
+  using BCV = ui::mojom::BrowserColorVariant;
+  using SV = ui::ColorProviderKey::SchemeVariant;
+  static constexpr auto kSchemeVariantMap = base::MakeFixedFlatMap<BCV, SV>({
+      {BCV::kTonalSpot, SV::kTonalSpot},
+      {BCV::kNeutral, SV::kNeutral},
+      {BCV::kVibrant, SV::kVibrant},
+      {BCV::kExpressive, SV::kExpressive},
+  });
+  return kSchemeVariantMap.at(color_variant);
+}
+
+class DefaultThemeProviderDelegate : public BrowserThemeProviderDelegate {
+ public:
+  CustomThemeSupplier* GetThemeSupplier() const override { return nullptr; }
+  bool ShouldUseCustomFrame() const override { return false; }
+};
+
+const DefaultThemeProviderDelegate& GetDefaultThemeProviderDelegate() {
+  static const base::NoDestructor<DefaultThemeProviderDelegate>
+      kDefaultDelegate;
+  return *kDefaultDelegate;
 }
 
 }  // namespace
@@ -231,7 +270,8 @@ bool ThemeService::BrowserThemeProvider::HasCustomImage(int id) const {
   return theme_helper_->HasCustomImage(id, GetThemeSupplier());
 }
 
-base::RefCountedMemory* ThemeService::BrowserThemeProvider::GetRawData(
+scoped_refptr<base::RefCountedMemory>
+ThemeService::BrowserThemeProvider::GetRawData(
     int id,
     ui::ResourceScaleFactor scale_factor) const {
   return theme_helper_->GetRawData(id, GetThemeSupplier(), scale_factor);
@@ -272,11 +312,11 @@ void ThemeService::RegisterProfilePrefs(
                                 SK_ColorTRANSPARENT);
   registry->RegisterIntegerPref(
       prefs::kDeprecatedBrowserColorSchemeDoNotUse,
-      static_cast<int>(ThemeService::BrowserColorScheme::kSystem),
+      std::to_underlying(ThemeService::BrowserColorScheme::kSystem),
       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
   registry->RegisterIntegerPref(
       prefs::kBrowserColorScheme,
-      static_cast<int>(ThemeService::BrowserColorScheme::kSystem));
+      std::to_underlying(ThemeService::BrowserColorScheme::kSystem));
   registry->RegisterIntegerPref(
       prefs::kDeprecatedUserColorDoNotUse, SK_ColorTRANSPARENT,
       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
@@ -305,7 +345,10 @@ ThemeService::ThemeService(Profile* profile, const ThemeHelper& theme_helper)
     : profile_(profile),
       theme_helper_(theme_helper),
       original_theme_provider_(*theme_helper_, false, this),
-      incognito_theme_provider_(*theme_helper_, true, this) {}
+      incognito_theme_provider_(*theme_helper_, true, this),
+      default_theme_provider_(*theme_helper_,
+                              false,
+                              &GetDefaultThemeProviderDelegate()) {}
 
 ThemeService::~ThemeService() = default;
 
@@ -531,13 +574,19 @@ void ThemeService::RemoveUnusedThemes() {
   }
 
   std::string current_theme = GetThemeID();
+  std::string saved_local_theme;
+  if (theme_syncable_service_) {
+    saved_local_theme =
+        theme_syncable_service_->GetSavedLocalThemeExtensionID();
+  }
   std::vector<std::string> remove_list;
   const extensions::ExtensionSet extensions =
       extensions::ExtensionRegistry::Get(profile_)
           ->GenerateInstalledExtensionsSet();
   extensions::ExtensionPrefs* prefs = extensions::ExtensionPrefs::Get(profile_);
   for (const auto& extension : extensions) {
-    if (extension->is_theme() && extension->id() != current_theme) {
+    if (extension->is_theme() && extension->id() != current_theme &&
+        extension->id() != saved_local_theme) {
       // Only uninstall themes which are not disabled or are disabled with
       // reason DISABLE_USER_ACTION. We cannot blanket uninstall all disabled
       // themes because externally installed themes are initially disabled.
@@ -562,10 +611,17 @@ ThemeSyncableService* ThemeService::GetThemeSyncableService() const {
   return theme_syncable_service_.get();
 }
 
+const ui::ThemeProvider& ThemeService::GetDefaultThemeProvider() const {
+  return default_theme_provider_;
+}
+
 // static
 const ui::ThemeProvider& ThemeService::GetThemeProviderForProfile(
     Profile* profile) {
   ThemeService* service = ThemeServiceFactory::GetForProfile(profile);
+  if (profile->IsEnterpriseIsolatedModeProfile()) {
+    return service->default_theme_provider_;
+  }
   return profile->IsIncognitoProfile() ? service->incognito_theme_provider_
                                        : service->original_theme_provider_;
 }
@@ -657,6 +713,82 @@ bool ThemeService::BrowserUsesDarkColors() const {
          (color_scheme == BrowserColorScheme::kSystem &&
           ui::NativeTheme::GetInstanceForNativeUi()->preferred_color_scheme() ==
               ui::NativeTheme::PreferredColorScheme::kDark);
+}
+
+ui::ColorProviderKey ThemeService::GetColorProviderKey(
+    const ui::ColorProviderKey& base_key,
+    const Profile* profile) const {
+  DCHECK(profile);
+  DCHECK_EQ(profile->GetOriginalProfile(), profile_);
+
+  ui::ColorProviderKey key = base_key;
+  const bool is_incognito = profile->IsIncognitoProfile();
+  const bool is_isolated = profile->IsEnterpriseIsolatedModeProfile();
+
+  // color_mode.
+  if (is_incognito) {
+    key.color_mode = ui::ColorProviderKey::ColorMode::kDark;
+  } else if (is_isolated) {
+    key.color_mode = ui::ColorProviderKey::ColorMode::kLight;
+  } else {
+    const auto browser_color_scheme = GetBrowserColorScheme();
+    if (browser_color_scheme != ThemeService::BrowserColorScheme::kSystem) {
+      key.color_mode =
+          browser_color_scheme == ThemeService::BrowserColorScheme::kLight
+              ? ui::ColorProviderKey::ColorMode::kLight
+              : ui::ColorProviderKey::ColorMode::kDark;
+    }
+  }
+
+  // user_color.
+  if (is_isolated) {
+    key.user_color = std::nullopt;
+  } else if (!UsingDeviceTheme()) {
+    if (UsingPolicyTheme()) {
+      // For policy themes, use the policy color directly since it's not stored
+      // in the autogenerated theme preference.
+      key.user_color = GetPolicyThemeColor();
+    } else if (UsingAutogeneratedTheme()) {
+      key.user_color = GetAutogeneratedThemeColor();
+    } else if (auto user_color = GetUserColor()) {
+      key.user_color = user_color;
+    }
+  }
+
+  // user_color_source.
+  if (is_incognito) {
+    key.user_color_source = ui::ColorProviderKey::UserColorSource::kGrayscale;
+  } else if (is_isolated) {
+    key.user_color_source = ui::ColorProviderKey::UserColorSource::kBaseline;
+  } else if (UsingDeviceTheme()) {
+    key.user_color_source = ui::ColorProviderKey::UserColorSource::kAccent;
+  } else if (GetIsGrayscale()) {
+    key.user_color_source = ui::ColorProviderKey::UserColorSource::kGrayscale;
+  } else if (GetIsBaseline()) {
+    key.user_color_source = ui::ColorProviderKey::UserColorSource::kBaseline;
+  } else {
+    CHECK(key.user_color.has_value());
+    key.user_color_source = ui::ColorProviderKey::UserColorSource::kAccent;
+  }
+
+  // scheme_variant.
+  if (is_isolated) {
+    key.scheme_variant = std::nullopt;
+  } else if (!UsingDeviceTheme()) {
+    ui::mojom::BrowserColorVariant color_variant = GetBrowserColorVariant();
+    if (color_variant != ui::mojom::BrowserColorVariant::kSystem) {
+      key.scheme_variant = GetSchemeVariant(color_variant);
+    }
+  }
+
+  // custom_theme.
+  if (is_incognito || is_isolated) {
+    key.custom_theme = nullptr;
+  } else if (!key.custom_theme && !UsingDeviceTheme()) {
+    key.custom_theme = GetThemeSupplier();
+  }
+
+  return key;
 }
 
 void ThemeService::SetUserColor(std::optional<SkColor> user_color) {
@@ -823,6 +955,8 @@ void ThemeService::ClearThemeData(bool reset_all_settings) {
 }
 
 void ThemeService::InitFromPrefs() {
+  base::UmaHistogramEnumeration("ChromeColors.ColorSchemeOnLoad",
+                                GetBrowserColorScheme());
   FixInconsistentPreferencesIfNeeded();
   absl::Cleanup set_ready_cleanup = [this] { this->set_ready(); };
 
@@ -977,7 +1111,7 @@ void ThemeService::OnThemeBuiltFromExtension(
 
   if (!pack->is_valid()) {
     // TODO(erg): We've failed to install the theme; perhaps we should tell the
-    // user? http://crbug.com/34780
+    // user? http://crbug.com/41092094
     LOG(ERROR) << "Could not load theme.";
     return;
   }
@@ -1025,9 +1159,68 @@ void ThemeService::OnThemeBuiltFromExtension(
 
   // Offer to revert to the old theme.
   if (can_revert_theme && !suppress_infobar && extension->is_theme()) {
-    ThemeInstalledInfoBarDelegate::CreateForLastActiveTab(
-        profile_, extension->name(), extension->id(), std::move(reinstaller));
+    if (infobars::IsInfoBarMigrated(
+            infobars::InfoBarDelegate::THEME_INSTALLED_INFOBAR_DELEGATE)) {
+      ShowThemeInstalledInfoBar(profile_, extension->name(), extension->id(),
+                                std::move(reinstaller));
+    } else {
+      ThemeInstalledInfoBarDelegate::CreateForLastActiveTab(
+          profile_, extension->name(), extension->id(), std::move(reinstaller));
+    }
   }
+}
+
+// static
+void ThemeService::ShowThemeInstalledInfoBar(
+    Profile* profile,
+    const std::string& theme_name,
+    const std::string& theme_id,
+    std::unique_ptr<ThemeReinstaller> prev_theme_reinstaller) {
+  BrowserWindowInterface* browser =
+      ProfileBrowserCollection::GetForProfile(profile)->FindTabbedBrowser(
+          /*match_original_profiles=*/true);
+  if (!browser) {
+    return;
+  }
+  tabs::TabInterface* tab = browser->GetActiveTabInterface();
+  if (!tab) {
+    return;
+  }
+  content::WebContents* web_contents = tab->GetContents();
+  if (!web_contents) {
+    return;
+  }
+
+  auto* browser_infobar_manager =
+      infobars::BrowserInfoBarManager::From(g_browser_process);
+  if (!browser_infobar_manager) {
+    return;
+  }
+
+  browser_infobar_manager->Hide(
+      web_contents,
+      infobars::InfoBarDelegate::THEME_INSTALLED_INFOBAR_DELEGATE);
+
+  infobars::InfoBarShowParams params;
+  params.message_text = l10n_util::GetStringFUTF16(
+      IDS_THEME_INSTALL_INFOBAR_LABEL, base::UTF8ToUTF16(theme_name));
+  if (prev_theme_reinstaller) {
+    auto shared_reinstaller = base::MakeRefCounted<
+        base::RefCountedData<std::unique_ptr<ThemeReinstaller>>>(
+        std::move(prev_theme_reinstaller));
+    params.cancel_button_callback = base::BindRepeating(
+        [](scoped_refptr<base::RefCountedData<
+               std::unique_ptr<ThemeReinstaller>>> reinstaller,
+           content::WebContents*) {
+          if (reinstaller && reinstaller->data) {
+            reinstaller->data->Reinstall();
+          }
+        },
+        std::move(shared_reinstaller));
+  }
+  browser_infobar_manager->Show(
+      tab, infobars::InfoBarDelegate::THEME_INSTALLED_INFOBAR_DELEGATE,
+      std::move(params));
 }
 
 void ThemeService::HandlePolicyColorUpdate() {

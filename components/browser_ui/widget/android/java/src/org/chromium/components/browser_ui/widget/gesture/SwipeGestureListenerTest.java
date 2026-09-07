@@ -4,6 +4,7 @@
 
 package org.chromium.components.browser_ui.widget.gesture;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 
 import android.view.MotionEvent;
@@ -12,13 +13,14 @@ import androidx.test.filters.SmallTest;
 
 import org.junit.Assert;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.Mockito;
-import org.mockito.MockitoAnnotations;
-import org.robolectric.annotation.Config;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.components.browser_ui.widget.gesture.SwipeGestureListener.ScrollDirection;
@@ -29,15 +31,14 @@ import java.util.List;
 
 /** The Unittest of {@link SwipeGestureListener}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class SwipeGestureListenerTest {
     private SwipeGestureListener mListener;
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Mock private SwipeHandler mHandler;
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
         mListener = new SwipeGestureListener(null, mHandler, 1, 1);
     }
 
@@ -70,7 +71,7 @@ public class SwipeGestureListenerTest {
     }
 
     private void testSwipeByGivenDirection(int expectedDirection, List<MotionEvent> eventStream) {
-        Mockito.when(mHandler.isSwipeEnabled(anyInt())).thenReturn(true);
+        Mockito.when(mHandler.isSwipeEnabled(anyInt(), any())).thenReturn(true);
         for (MotionEvent event : eventStream) {
             mListener.onTouchEvent(event);
         }

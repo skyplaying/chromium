@@ -1,5 +1,4 @@
 include_rules = [
-  "+components/cbor",
   "+components/facilitated_payments/core",
   "+components/web_package",
   "+device/bluetooth/public",
@@ -13,4 +12,5 @@ include_rules = [
   "+third_party/zlib",
   "+tools/v8_context_snapshot/buildflags.h",
   "+ui/gfx",
+  "+third_party/rust/cxx/v1",
 ]

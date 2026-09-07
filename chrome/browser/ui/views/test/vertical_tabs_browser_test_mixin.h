@@ -8,18 +8,18 @@
 #include <concepts>
 
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/tabs/features.h"
 #include "chrome/browser/ui/tabs/split_tab_metrics.h"
 #include "chrome/browser/ui/tabs/tab_strip_api/tab_strip_service_feature.h"
 #include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
+#include "chrome/browser/ui/views/frame/base_tab_strip_region_view.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
 #include "chrome/browser/ui/views/interaction/browser_elements_views.h"
-#include "chrome/browser/ui/views/tabs/vertical/root_tab_collection_node.h"
-#include "chrome/browser/ui/views/tabs/vertical/tab_collection_node.h"
-#include "chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_controller.h"
+#include "chrome/browser/ui/views/tabs/common/root_tab_collection_node.h"
+#include "chrome/browser/ui/views/tabs/common/tab_collection_node.h"
+#include "chrome/browser/ui/views/tabs/common/tab_strip_collection_controller.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -44,7 +44,7 @@ class VerticalTabsBrowserTestMixin : public T {
   void SetUpCommandLine(base::CommandLine* command_line) override {
     T::SetUpCommandLine(command_line);
     scoped_feature_list_.InitWithFeaturesAndParameters(GetEnabledFeatures(),
-                                                       {});
+                                                       GetDisabledFeatures());
   }
 
   void SetUpOnMainThread() override {
@@ -52,50 +52,54 @@ class VerticalTabsBrowserTestMixin : public T {
     T::SetUpOnMainThread();
   }
 
-  TabStripModel* tab_strip_model() { return T::browser()->tab_strip_model(); }
+  TabStripModel* tab_strip_model() { return T::browser()->GetTabStripModel(); }
 
   tabs::VerticalTabStripStateController* vertical_tab_strip_state_controller() {
     return tabs::VerticalTabStripStateController::From(T::browser());
   }
 
-  VerticalTabStripController* vertical_tab_strip_controller() {
-    VerticalTabStripRegionView* const region_view =
-        T::browser()
-            ->GetBrowserView()
-            .vertical_tab_strip_region_view_for_testing();
-    return region_view ? region_view->GetVerticalTabStripController() : nullptr;
+  TabStripCollectionController* vertical_tab_strip_controller() {
+    auto* region_view = views::AsViewClass<BaseTabStripRegionView>(
+        BrowserView::GetBrowserViewForBrowser(T::browser())->tab_strip_view());
+    return region_view ? region_view->GetTabStripCollectionController()
+                       : nullptr;
+  }
+
+  TabHoverCardController* hover_card_controller() {
+    if (TabStripCollectionController* controller =
+            vertical_tab_strip_controller()) {
+      return controller->GetHoverCardController();
+    }
+    return nullptr;
   }
 
   void EnterVerticalTabsMode() {
-    T::browser()->profile()->GetPrefs()->SetBoolean(prefs::kVerticalTabsEnabled,
-                                                    true);
+    vertical_tab_strip_state_controller()->SetVerticalTabsEnabled(true);
     T::RunScheduledLayouts();
   }
 
   void ExitVerticalTabsMode() {
-    T::browser()->profile()->GetPrefs()->SetBoolean(prefs::kVerticalTabsEnabled,
-                                                    false);
+    vertical_tab_strip_state_controller()->SetVerticalTabsEnabled(false);
     T::RunScheduledLayouts();
   }
 
   tabs_api::TabStripService* tab_strip_service() {
-    return T::browser()
-        ->GetFeatures()
-        .tab_strip_service_feature()
-        ->GetTabStripService();
+    return TabStripServiceFeature::From(T::browser())->GetTabStripService();
   }
 
   virtual const std::vector<base::test::FeatureRefAndParams>
   GetEnabledFeatures() {
-    return {{tabs::kVerticalTabs, {}}};
+    return {{tabs::kVerticalTabsExpandOnHover, {}}};
+  }
+
+  virtual const std::vector<base::test::FeatureRef> GetDisabledFeatures() {
+    return {};
   }
 
   RootTabCollectionNode* root_node() {
-    VerticalTabStripRegionView* region_view =
-        T::browser()
-            ->GetBrowserView()
-            .vertical_tab_strip_region_view_for_testing();
-    return region_view->root_node_for_testing();
+    auto* region_view = views::AsViewClass<BaseTabStripRegionView>(
+        BrowserView::GetBrowserViewForBrowser(T::browser())->tab_strip_view());
+    return region_view ? region_view->root_node_for_testing() : nullptr;
   }
 
   TabCollectionNode* unpinned_collection_node() {
@@ -109,7 +113,7 @@ class VerticalTabsBrowserTestMixin : public T {
   void AppendPinnedTab() {
     std::unique_ptr<content::WebContents> contents =
         content::WebContents::Create(
-            content::WebContents::CreateParams(T::browser()->profile()));
+            content::WebContents::CreateParams(T::browser()->GetProfile()));
     tab_strip_model()->InsertWebContentsAt(
         tab_strip_model()->count(), std::move(contents),
         ADD_INHERIT_OPENER | ADD_ACTIVE | ADD_PINNED);

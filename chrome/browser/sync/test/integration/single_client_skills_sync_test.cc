@@ -10,13 +10,15 @@
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/skills/skills_service_factory.h"
 #include "chrome/browser/sync/test/integration/fake_server_match_status_checker.h"
+#include "chrome/browser/sync/test/integration/single_client_status_change_checker.h"
 #include "chrome/browser/sync/test/integration/status_change_checker.h"
 #include "chrome/browser/sync/test/integration/sync_service_impl_harness.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
+#include "components/prefs/pref_service.h"
 #include "components/skills/features.h"
 #include "components/skills/public/skill.h"
+#include "components/skills/public/skills_prefs.h"
 #include "components/skills/public/skills_service.h"
-#include "components/sync/base/client_tag_hash.h"
 #include "components/sync/base/data_type.h"
 #include "components/sync/base/features.h"
 #include "components/sync/engine/loopback_server/persistent_tombstone_entity.h"
@@ -29,6 +31,26 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
+
+class SkillSyncActiveChecker : public SingleClientStatusChangeChecker {
+ public:
+  explicit SkillSyncActiveChecker(syncer::SyncServiceImpl* service)
+      : SingleClientStatusChangeChecker(service) {}
+
+  bool IsExitConditionSatisfied(std::ostream* os) override {
+    return service()->GetActiveDataTypes().Has(syncer::SKILL);
+  }
+};
+
+class SkillSyncInactiveChecker : public SingleClientStatusChangeChecker {
+ public:
+  explicit SkillSyncInactiveChecker(syncer::SyncServiceImpl* service)
+      : SingleClientStatusChangeChecker(service) {}
+
+  bool IsExitConditionSatisfied(std::ostream* os) override {
+    return !service()->GetActiveDataTypes().Has(syncer::SKILL);
+  }
+};
 
 using syncer::test::HasUnknownField;
 using testing::AllOf;
@@ -108,11 +130,13 @@ class SkillsServiceChecker : public StatusChangeChecker,
   }
 
   // skills::SkillsService::Observer overrides.
-  void OnSkillUpdated(
-      std::string_view skill_id,
-      skills::SkillsService::UpdateSource update_source) override {
+  void OnSkillUpdated(std::string_view skill_id,
+                      skills::SkillsService::UpdateSource update_source,
+                      bool is_position_changed) override {
     CheckExitCondition();
   }
+
+  bool Require1PSkillRefresh() override { return false; }
 
   // StatusChangeChecker overrides.
   bool IsExitConditionSatisfied(std::ostream* os) override {
@@ -198,13 +222,9 @@ class SingleClientSkillsSyncTest
   }
 
   void InjectTombstoneToFakeServer(const std::string& skill_id) {
-    syncer::ClientTagHash client_tag_hash =
-        syncer::ClientTagHash::FromUnhashed(syncer::SKILL, skill_id);
-
-    fake_server_->InjectEntity(syncer::PersistentTombstoneEntity::CreateNew(
-        syncer::LoopbackServerEntity::CreateId(syncer::SKILL,
-                                               client_tag_hash.value()),
-        client_tag_hash.value()));
+    fake_server_->InjectEntity(
+        syncer::PersistentTombstoneEntity::CreateNewForTest(syncer::SKILL,
+                                                            skill_id));
   }
 
  private:
@@ -385,7 +405,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientSkillsSyncTest,
   EXPECT_TRUE(SkillsServiceChecker(GetSkillsService(), IsEmpty()).Wait());
 
   // Sign in again to re-enable sync and verify that the data was re-synced.
-  ASSERT_TRUE(GetClient(0)->SignInPrimaryAccount());
+  ASSERT_TRUE(SignIn());
 
   EXPECT_TRUE(SkillsServiceChecker(
                   GetSkillsService(),
@@ -397,5 +417,41 @@ IN_PROC_BROWSER_TEST_P(SingleClientSkillsSyncTest,
                   .Wait());
 }
 #endif  // !BUILDFLAG(IS_CHROMEOS)
+
+IN_PROC_BROWSER_TEST_P(SingleClientSkillsSyncTest,
+                       ShouldMirrorSyncOnPrefChange) {
+  ASSERT_TRUE(SetupSync());
+  EXPECT_TRUE(GetSyncService(0)->GetActiveDataTypes().Has(syncer::SKILL));
+
+  // Add some data to sync.
+  InjectSpecificsToFakeServer(CreateSkillSpecifics(
+      base::Uuid::GenerateRandomV4().AsLowercaseString(), "source_skill_id1",
+      "skill1", "icon1", "prompt1", "description1"));
+  ASSERT_TRUE(SkillsServiceChecker(GetSkillsService(),
+                                   UnorderedElementsAre(Pointee(HasSkill(
+                                       "source_skill_id1", "skill1", "icon1",
+                                       "prompt1", "description1"))))
+                  .Wait());
+
+  // Disable the pref.
+  GetProfile(0)->GetPrefs()->SetBoolean(skills::prefs::kChromeSkillsEnabled,
+                                        false);
+
+  // Verify that SKILL is no longer active and local data is cleared.
+  EXPECT_TRUE(SkillsServiceChecker(GetSkillsService(), IsEmpty()).Wait());
+  EXPECT_TRUE(SkillSyncInactiveChecker(GetSyncService(0)).Wait());
+
+  // Re-enable the pref.
+  GetProfile(0)->GetPrefs()->SetBoolean(skills::prefs::kChromeSkillsEnabled,
+                                        true);
+
+  // Verify that SKILL is active again and data is re-synced.
+  EXPECT_TRUE(SkillSyncActiveChecker(GetSyncService(0)).Wait());
+  EXPECT_TRUE(SkillsServiceChecker(GetSkillsService(),
+                                   UnorderedElementsAre(Pointee(HasSkill(
+                                       "source_skill_id1", "skill1", "icon1",
+                                       "prompt1", "description1"))))
+                  .Wait());
+}
 
 }  // namespace

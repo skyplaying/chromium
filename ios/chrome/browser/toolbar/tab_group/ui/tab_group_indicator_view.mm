@@ -18,9 +18,9 @@
 #import "ios/chrome/browser/toolbar/ui/toolbar_height_delegate.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
+#import "ios/chrome/common/ui/util/ui_util.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ui/base/l10n/l10n_util.h"
-#import "ui/gfx/ios/uikit_util.h"
 
 using tab_groups::SharingState;
 
@@ -40,7 +40,6 @@ NSString* const kDestructiveActionsMenuIdentifier =
 @implementation TabGroupIndicatorView {
   // Stores the tab group informations.
   NSString* _groupTitle;
-  UIColor* _groupColor;
   TabGroupColorPalette* _tabGroupColorPalette;
 
   // Tracks if the view is available.
@@ -94,16 +93,6 @@ NSString* const kDestructiveActionsMenuIdentifier =
 
 #pragma mark - TabGroupIndicatorConsumer
 
-- (void)setTabGroupTitle:(NSString*)groupTitle groupColor:(UIColor*)groupColor {
-  if (groupTitle == _groupTitle && groupColor == _groupColor) {
-    [self updateVisibility];
-    return;
-  }
-
-  [self setGroupTitle:groupTitle];
-  [self setGroupColor:groupColor];
-  [self updateVisibility];
-}
 
 - (void)setTabGroupTitle:(NSString*)groupTitle
     tabGroupColorPalette:(TabGroupColorPalette*)tabGroupColorPalette {
@@ -334,7 +323,7 @@ NSString* const kDestructiveActionsMenuIdentifier =
     [_separatorView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
     [_separatorView.topAnchor constraintEqualToAnchor:self.bottomAnchor],
     [_separatorView.heightAnchor
-        constraintEqualToConstant:ui::AlignValueToUpperPixel(
+        constraintEqualToConstant:AlignValueToUpperPixel(
                                       kToolbarSeparatorHeight)],
   ]];
 
@@ -365,11 +354,6 @@ NSString* const kDestructiveActionsMenuIdentifier =
   self.accessibilityLabel =
       l10n_util::GetNSStringF(IDS_IOS_TAB_GROUP_INDICATOR_ACCESSIBILITY_TITLE,
                               base::SysNSStringToUTF16(title));
-}
-
-- (void)setGroupColor:(UIColor*)color {
-  _groupColor = color;
-    _coloredDotView.backgroundColor = color;
 }
 
 - (void)setTabGroupColor:(TabGroupColorPalette*)tabGroupColorPalette {

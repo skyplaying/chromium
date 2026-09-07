@@ -15,6 +15,7 @@
 #include "chrome/browser/web_share_target/target_util.h"
 #include "content/public/browser/web_contents.h"
 #include "net/base/mime_util.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
 
@@ -44,12 +45,12 @@ void NavigateShareTargetPost(
 static void JNI_WebApkPostShareTargetNavigator_NativeLoadViewForShareTargetPost(
     JNIEnv* env,
     const bool java_is_multipart_encoding,
-    std::vector<std::string>& names,
-    std::vector<std::string>& values,
+    const std::vector<std::string>& names,
+    const std::vector<std::string>& values,
     const JavaRef<jbooleanArray>& java_is_value_file_uris,
-    std::vector<std::string>& filenames,
-    std::vector<std::string>& types,
-    std::string& url,
+    const std::vector<std::string>& filenames,
+    const std::vector<std::string>& types,
+    const std::string& url,
     const JavaRef<jobject>& java_web_contents) {
   std::vector<bool> is_value_file_uris;
 

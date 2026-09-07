@@ -7,7 +7,9 @@
 
 #include <string_view>
 
+#include "base/memory_coordinator/memory_limit.h"
 #include "base/memory_coordinator/traits.h"
+#include "content/common/buildflags.h"
 #include "content/public/common/child_process_id.h"
 #include "content/public/common/process_type.h"
 
@@ -22,18 +24,27 @@ class MemoryConsumerGroupController {
   virtual ~MemoryConsumerGroupController() = default;
 
   // Called when a new host is added/removed.
-  virtual void AddMemoryConsumerGroupHost(ChildProcessId child_process_id,
+  virtual void AddMemoryConsumerGroupHost(ProcessType process_type,
+                                          ChildProcessId child_process_id,
                                           MemoryConsumerGroupHost* host) = 0;
   virtual void RemoveMemoryConsumerGroupHost(
       ChildProcessId child_process_id) = 0;
 
   // Called when a new consumer group is added/removed to/from the host.
-  virtual void OnConsumerGroupAdded(std::string_view consumer_id,
+  virtual void OnConsumerGroupAdded(uint32_t consumer_id,
+                                    std::string_view consumer_name,
                                     base::MemoryConsumerTraits traits,
-                                    ProcessType process_type,
                                     ChildProcessId child_process_id) = 0;
-  virtual void OnConsumerGroupRemoved(std::string_view consumer_id,
+  virtual void OnConsumerGroupRemoved(uint32_t consumer_id,
                                       ChildProcessId child_process_id) = 0;
+
+#if BUILDFLAG(ENABLE_MEMORY_COORDINATOR_INTERNALS)
+  // Called when the aggregate memory limit for a consumer group changes in the
+  // child process.
+  virtual void OnMemoryLimitChanged(uint32_t consumer_id,
+                                    ChildProcessId child_process_id,
+                                    base::MemoryLimit memory_limit) = 0;
+#endif
 };
 
 }  // namespace content

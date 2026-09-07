@@ -7,6 +7,7 @@
 #include <dwmapi.h>
 
 #include <algorithm>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -18,6 +19,8 @@
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/trace_event.h"
 #include "base/win/win_util.h"
 #include "base/win/windows_version.h"
@@ -32,6 +35,7 @@
 #include "ui/base/cursor/cursor.h"
 #include "ui/base/cursor/platform_cursor.h"
 #include "ui/base/ime/input_method.h"
+#include "ui/base/mojom/menu_source_type.mojom-shared.h"
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/base/mojom/window_show_state.mojom.h"
 #include "ui/base/win/event_creation_utils.h"
@@ -49,6 +53,7 @@
 #include "ui/events/keycodes/dom/dom_keyboard_layout_map.h"
 #include "ui/events/platform/platform_event_source.h"
 #include "ui/gfx/geometry/insets.h"
+#include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/vector2d.h"
 #include "ui/gfx/native_ui_types.h"
 #include "ui/gfx/path_win.h"
@@ -60,6 +65,7 @@
 #include "ui/views/widget/desktop_aura/desktop_native_cursor_manager_win.h"
 #include "ui/views/widget/desktop_aura/desktop_native_widget_aura.h"
 #include "ui/views/widget/root_view.h"
+#include "ui/views/widget/widget_activation_delegate.h"
 #include "ui/views/widget/widget_delegate.h"
 #include "ui/views/widget/widget_hwnd_utils.h"
 #include "ui/views/win/fullscreen_handler.h"
@@ -102,9 +108,66 @@ void UpdateMouseLockRegion(aura::Window* window, bool locked) {
   ::ClipCursor(&window_rect);
 }
 
+// Applies display affinity to all active Win32 native system/popup menu
+// windows on the current thread.
+void ApplyAffinityToActiveSystemMenus(DWORD affinity) {
+  ::EnumThreadWindows(
+      ::GetCurrentThreadId(),
+      [](HWND hwnd, LPARAM lParam) -> BOOL {
+        constexpr wchar_t kSystemMenuClassName[] = L"#32768";
+        wchar_t class_name[32];
+        const int len = ::GetClassName(hwnd, class_name, std::size(class_name));
+        if (len > 0 &&
+            std::wstring_view(class_name, static_cast<size_t>(len)) ==
+                kSystemMenuClassName) {
+          ::SetWindowDisplayAffinity(hwnd, static_cast<DWORD>(lParam));
+        }
+        return TRUE;
+      },
+      static_cast<LPARAM>(affinity));
+}
+
+// Returns the display affinity value to use for excluding a window from screen
+// capture, based on the Windows OS version.
+DWORD GetExclusionAffinity() {
+  return (base::win::GetVersion() >= base::win::Version::WIN10_20H1)
+             ? WDA_EXCLUDEFROMCAPTURE
+             : WDA_MONITOR;
+}
+
+// Enumerates all top-level windows owned by the given hwnd on the current
+// thread and applies the given display affinity to them.
+void ApplyAffinityToOwnedWindows(HWND owner_hwnd, DWORD affinity) {
+  struct EnumData {
+    HWND owner;
+    DWORD affinity;
+  };
+  EnumData data{owner_hwnd, affinity};
+
+  ::EnumThreadWindows(
+      ::GetCurrentThreadId(),
+      [](HWND hwnd, LPARAM lParam) -> BOOL {
+        EnumData* enum_data = reinterpret_cast<EnumData*>(lParam);
+        HWND current_owner = ::GetWindow(hwnd, GW_OWNER);
+        // Guard against infinite loops if an external process or cyclic
+        // ownership breaks the assumption that the owner chain ends with null.
+        constexpr int kMaxOwnerDepth = 32;
+        for (int depth = 0; current_owner && depth < kMaxOwnerDepth; ++depth) {
+          if (current_owner == enum_data->owner) {
+            ::SetWindowDisplayAffinity(hwnd, enum_data->affinity);
+            break;
+          }
+          current_owner = ::GetWindow(current_owner, GW_OWNER);
+        }
+        return TRUE;
+      },
+      reinterpret_cast<LPARAM>(&data));
+}
+
 }  // namespace
 
-DEFINE_UI_CLASS_PROPERTY_KEY(aura::Window*, kContentWindowForRootWindow, NULL)
+DEFINE_OWNED_UI_CLASS_PROPERTY_KEY(base::WeakPtr<aura::Window>,
+                                   kContentWindowForRootWindow)
 
 // Identifies the DesktopWindowTreeHostWin associated with the
 // WindowEventDispatcher.
@@ -125,7 +188,8 @@ DesktopWindowTreeHostWin::DesktopWindowTreeHostWin(
       drag_drop_client_(nullptr),
       should_animate_window_close_(false),
       pending_close_(false),
-      has_non_client_view_(false) {}
+      has_non_client_view_(false),
+      is_modal_(native_widget_delegate_->IsModal()) {}
 
 DesktopWindowTreeHostWin::~DesktopWindowTreeHostWin() {
   ClearBackgroundPaintBrush();
@@ -136,6 +200,10 @@ DesktopWindowTreeHostWin::~DesktopWindowTreeHostWin() {
   // DestroyCompositor() is called from both places.
   DestroyCompositor();
   DestroyDispatcher();
+
+  if (HWNDMessageHandler* raw_handler = message_handler_.release()) {
+    raw_handler->DestroyHandler();
+  }
 }
 
 // static
@@ -145,7 +213,12 @@ aura::Window* DesktopWindowTreeHostWin::GetContentWindowForHWND(HWND hwnd) {
   // are not associated with WindowTreeHost instances.
   aura::WindowTreeHost* host =
       aura::WindowTreeHost::GetForAcceleratedWidget(hwnd);
-  return host ? host->window()->GetProperty(kContentWindowForRootWindow) : NULL;
+  if (!host) {
+    return nullptr;
+  }
+  base::WeakPtr<aura::Window>* weak_ptr =
+      host->window()->GetProperty(kContentWindowForRootWindow);
+  return weak_ptr ? weak_ptr->get() : nullptr;
 }
 
 void DesktopWindowTreeHostWin::StartTouchDrag(gfx::Point screen_point) {
@@ -164,6 +237,11 @@ void DesktopWindowTreeHostWin::FinishTouchDrag(gfx::Point screen_point) {
     ui::SendMouseEvent(screen_point,
                        (MOUSEEVENTF_LEFTUP | MOUSEEVENTF_VIRTUALDESK));
   }
+}
+
+bool DesktopWindowTreeHostWin::IsInNativeMoveResizeLoop() const {
+  return message_handler_ && (message_handler_->IsInNativeMoveResizeLoop() ||
+                              message_handler_->IsInNativeMenuLoop());
 }
 
 // DesktopWindowTreeHostWin, DesktopWindowTreeHost implementation:
@@ -185,6 +263,12 @@ void DesktopWindowTreeHostWin::Init(const Widget::InitParams& params) {
   HWND parent_hwnd = nullptr;
   if (params.parent && params.parent->GetHost()) {
     parent_hwnd = params.parent->GetHost()->GetAcceleratedWidget();
+  } else if (params.context && params.context->GetHost() &&
+             params.type != Widget::InitParams::TYPE_WINDOW &&
+             params.type != Widget::InitParams::TYPE_WINDOW_FRAMELESS) {
+    // Establish a Win32 owner (GW_OWNER) for subordinate popups (e.g. tooltips,
+    // menus, bubbles) to inherit display affinity and proper z-order stacking.
+    parent_hwnd = params.context->GetHost()->GetAcceleratedWidget();
   }
 
   remove_standard_frame_ = params.remove_standard_frame;
@@ -235,7 +319,8 @@ void DesktopWindowTreeHostWin::OnNativeWidgetCreated(
     is_cursor_visible_ = cursor_client->IsCursorVisible();
   }
 
-  window()->SetProperty(kContentWindowForRootWindow, content_window());
+  window()->SetProperty(kContentWindowForRootWindow,
+                        content_window()->GetWeakPtrAsWindow());
   window()->SetProperty(kDesktopWindowTreeHostKey, this);
 
   should_animate_window_close_ =
@@ -322,9 +407,22 @@ void DesktopWindowTreeHostWin::Show(ui::mojom::WindowShowState show_state,
     pixel_restore_bounds =
         display::win::GetScreenWin()->DIPToScreenRect(nullptr, restore_bounds);
   }
+
+  // Ensure the display affinity is updated on the HWND before ShowWindow is
+  // called so that DWM is already aware of exclusion when the window appears.
+  UpdateDisplayAffinity();
+
+  // Show content window first so that Widget::IsVisible() returns true during
+  // the synchronous HandleVisibilityChanged(true) triggered by ShowWindow().
+  content_window()->Show();
   message_handler_->Show(show_state, pixel_restore_bounds);
 
-  content_window()->Show();
+  if (WidgetActivationDelegate::Get()) {
+    WidgetActivationDelegate::Get()->MaybeActivate(
+        GetWidget(), GetWidget()->CanActivate() &&
+                         show_state != ui::mojom::WindowShowState::kInactive &&
+                         show_state != ui::mojom::WindowShowState::kMinimized);
+  }
 }
 
 bool DesktopWindowTreeHostWin::IsVisible() const {
@@ -428,14 +526,25 @@ void DesktopWindowTreeHostWin::SetParent(gfx::AcceleratedWidget parent) {
 }
 
 void DesktopWindowTreeHostWin::Activate() {
+  if (WidgetActivationDelegate::Get()) {
+    WidgetActivationDelegate::Get()->MaybeActivate(GetWidget(),
+                                                   /*activate=*/true);
+  }
   message_handler_->Activate();
 }
 
 void DesktopWindowTreeHostWin::Deactivate() {
-  message_handler_->Deactivate();
+  if (WidgetActivationDelegate::Get()) {
+    WidgetActivationDelegate::Get()->Deactivate(GetWidget());
+  } else {
+    message_handler_->Deactivate();
+  }
 }
 
 bool DesktopWindowTreeHostWin::IsActive() const {
+  if (WidgetActivationDelegate::Get()) {
+    return WidgetActivationDelegate::Get()->IsActive(GetWidget());
+  }
   return message_handler_->IsActive();
 }
 
@@ -846,6 +955,13 @@ FrameMode DesktopWindowTreeHostWin::GetFrameMode() const {
   return FrameMode::SYSTEM_DRAWN;
 }
 
+void DesktopWindowTreeHostWin::ShowCustomSystemMenu(
+    const gfx::Point& screen_point) {}
+
+bool DesktopWindowTreeHostWin::UsesNativeSystemMenu() const {
+  return true;
+}
+
 bool DesktopWindowTreeHostWin::HasFrame() const {
   return !remove_standard_frame_;
 }
@@ -903,7 +1019,7 @@ bool DesktopWindowTreeHostWin::WidgetSizeIsClientSize() const {
 }
 
 bool DesktopWindowTreeHostWin::IsModal() const {
-  return native_widget_delegate_ ? native_widget_delegate_->IsModal() : false;
+  return is_modal_;
 }
 
 int DesktopWindowTreeHostWin::GetInitialShowState() const {
@@ -1015,6 +1131,10 @@ DesktopWindowTreeHostWin::GetParentNativeViewAccessible() {
 }
 
 void DesktopWindowTreeHostWin::HandleActivationChanged(bool active) {
+  if (WidgetActivationDelegate::Get()) {
+    return;
+  }
+
   // This can be invoked from HWNDMessageHandler::Init(), at which point we're
   // not in a good state and need to ignore it.
   // TODO(beng): Do we need this still now the host owns the dispatcher?
@@ -1121,11 +1241,27 @@ void DesktopWindowTreeHostWin::HandleEndUserResize() {
   }
 }
 
+void DesktopWindowTreeHostWin::HandleBeginUserDrag() {
+  if (native_widget_delegate_) {
+    native_widget_delegate_->OnNativeWidgetUserDragStarted();
+  }
+}
+
+void DesktopWindowTreeHostWin::HandleEndUserDrag() {
+  if (native_widget_delegate_) {
+    native_widget_delegate_->OnNativeWidgetUserDragEnded();
+  }
+}
+
 void DesktopWindowTreeHostWin::HandleMove() {
   // Adding/removing a monitor, or changing the primary monitor can cause a
   // WM_MOVE message before `OnDisplayChanged()`. Without this call, we would
   // DCHECK due to stale `DisplayInfo`s. See https:://crbug.com/1413940.
+  auto weak_ptr = GetWeakPtr();
   display::win::GetScreenWin()->UpdateDisplayInfosIfNeeded();
+  if (!weak_ptr) {
+    return;
+  }
   CheckForMonitorChange();
   OnHostMovedInPixels();
 }
@@ -1142,7 +1278,7 @@ void DesktopWindowTreeHostWin::HandleVisibilityChanged(bool visible) {
     native_widget_delegate_->OnNativeWidgetVisibilityChanged(visible);
   }
   if (visible) {
-    UpdateAllowScreenshots();
+    UpdateDisplayAffinity();
   }
 }
 
@@ -1206,6 +1342,18 @@ void DesktopWindowTreeHostWin::HandleKeyEvent(ui::KeyEvent* event) {
       (event->flags() & ui::EF_ALT_DOWN) &&
       !(event->flags() & ui::EF_CONTROL_DOWN)) {
     if (Widget* widget = GetWidget(); widget && widget->non_client_view()) {
+      if (!UsesNativeSystemMenu()) {
+        // Show the Views version of the window frame context menu if it should
+        // be used instead of the OS native version. Default location for the
+        // menu is the origin (0, 0) of the browser.
+        gfx::Point point = widget->non_client_view()
+                               ->frame_view()
+                               ->GetKeyboardContextMenuLocation();
+        ShowCustomSystemMenu(point);
+        event->SetHandled();
+        return;
+      }
+
       return;
     }
   }
@@ -1323,6 +1471,17 @@ bool DesktopWindowTreeHostWin::PreHandleMSG(UINT message,
                                             WPARAM w_param,
                                             LPARAM l_param,
                                             LRESULT* result) {
+  if (message == WM_INITMENUPOPUP) {
+    // Intercept native popup menu initialization to propagate our capture
+    // exclusion state to the native menu window. Since sub-menu windows are
+    // created by Win32 after WM_INITMENUPOPUP returns, post a task to apply
+    // the affinity once the menu window has been created.
+    if (exclude_from_capture_ && IsCaptureExclusionAllowed()) {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(&ApplyAffinityToActiveSystemMenus,
+                                    GetExclusionAffinity()));
+    }
+  }
   return false;
 }
 
@@ -1338,22 +1497,6 @@ bool DesktopWindowTreeHostWin::HandleScrollEvent(ui::ScrollEvent* event) {
 bool DesktopWindowTreeHostWin::HandleGestureEvent(ui::GestureEvent* event) {
   SendEventToSink(event);
   return event->handled();
-}
-
-void DesktopWindowTreeHostWin::HandleWindowSizeChanging() {
-  if (compositor()) {
-    compositor()->DisableSwapUntilResize();
-  }
-}
-
-void DesktopWindowTreeHostWin::HandleWindowSizeUnchanged() {
-  // A resize may not have occurred if the window size happened not to have
-  // changed (can occur on Windows 10 when snapping a window to the side of
-  // the screen). In that case do a resize to the current size to reenable
-  // swaps.
-  if (compositor()) {
-    compositor()->ReenableSwap();
-  }
 }
 
 void DesktopWindowTreeHostWin::HandleWindowScaleFactorChanged(
@@ -1412,16 +1555,25 @@ void DesktopWindowTreeHostWin::SetAllowScreenshots(bool allow) {
     return;
   }
 
-  UpdateAllowScreenshots();
+  UpdateDisplayAffinity();
 }
 
 bool DesktopWindowTreeHostWin::AreScreenshotsAllowed() {
-  DWORD affinity;
-  if (GetWindowDisplayAffinity(GetHWND(), &affinity)) {
-    return affinity == WDA_NONE;
+  return allow_screenshots_;
+}
+
+void DesktopWindowTreeHostWin::SetExcludeFromScreenCapture(bool exclude) {
+  if (exclude_from_capture_ == exclude) {
+    return;
   }
 
-  return true;
+  exclude_from_capture_ = exclude;
+
+  if (!IsVisible()) {
+    return;
+  }
+
+  UpdateDisplayAffinity();
 }
 
 void DesktopWindowTreeHostWin::ClientDestroyedWidget() {
@@ -1484,6 +1636,17 @@ gfx::Rect DesktopWindowTreeHostWin::AdjustedContentBounds(
   gfx::Size maximum_size;
   GetMinMaxSize(&minimum_size, &maximum_size);
 
+  if (WidgetSizeIsClientSize()) {
+    // Constraints are sized to the client area, not the HWND (see
+    // OnGetMinMaxInfo), so inflate otherwise the max size will be too small.
+    display::win::ScreenWin* screen = display::win::GetScreenWin();
+    gfx::Size min_px = screen->DIPToScreenSize(GetHWND(), minimum_size);
+    gfx::Size max_px = screen->DIPToScreenSize(GetHWND(), maximum_size);
+    InflateClientSizeConstraintsInPixels(GetHWND(), min_px, max_px);
+    minimum_size = screen->ScreenToDIPSize(GetHWND(), min_px);
+    maximum_size = screen->ScreenToDIPSize(GetHWND(), max_px);
+  }
+
   gfx::Size bounds_size = bounds.size();
 
   if (!maximum_size.IsEmpty()) {
@@ -1503,19 +1666,57 @@ aura::Window* DesktopWindowTreeHostWin::content_window() {
   return desktop_native_widget_aura_->content_window();
 }
 
-void DesktopWindowTreeHostWin::UpdateAllowScreenshots() {
-  if (AreScreenshotsAllowed() == allow_screenshots_) {
-    return;
+void DesktopWindowTreeHostWin::UpdateDisplayAffinity() {
+  DWORD affinity = WDA_NONE;
+  if (exclude_from_capture_ && IsCaptureExclusionAllowed()) {
+    // `exclude_from_capture_` is used to exclude the window completely from
+    // screen capture. On Windows 10 20H1 and newer, we use
+    // WDA_EXCLUDEFROMCAPTURE which hides the window from capture while keeping
+    // it visible to the user.
+    affinity = GetExclusionAffinity();
+  } else if (!allow_screenshots_) {
+    // `allow_screenshots_` is used to avoid capturing sensitive content.
+    // When screenshots are not allowed, we set the affinity to WDA_MONITOR
+    // rather than WDA_EXCLUDEFROMCAPTURE. WDA_MONITOR obscures the window with
+    // a black rectangle in the capture, explicitly signaling to the user that
+    // the content is intentionally hidden. In contrast, WDA_EXCLUDEFROMCAPTURE
+    // completely removes the window from the capture stream, leaving no visual
+    // cue.
+    affinity = WDA_MONITOR;
+  } else {
+    // If we don't have our own exclusion state, check if we have a Win32 owner
+    // window that is excluded, and inherit its affinity. This ensures that
+    // newly created owned windows (like context menus or bubbles) inherit the
+    // capture exclusion state of their parent window.
+    HWND owner_hwnd = ::GetWindow(GetHWND(), GW_OWNER);
+    if (owner_hwnd) {
+      DWORD owner_affinity = WDA_NONE;
+      if (::GetWindowDisplayAffinity(owner_hwnd, &owner_affinity) &&
+          owner_affinity != WDA_NONE) {
+        affinity = owner_affinity;
+      }
+    }
   }
 
-  // When screenshots are not allowed, set the affinity to WDA_MONITOR.
-  // This is used instead of WDA_EXCLUDEFROMCAPTURE because the latter renders
-  // the window with "no content", which appears as a black rectangle on the
-  // screen, whereas the former completely removes the window from the screen.
-  // The former is better indication to the user that the contents of the window
-  // are being explicitly not shown.
-  SetWindowDisplayAffinity(GetHWND(),
-                           allow_screenshots_ ? WDA_NONE : WDA_MONITOR);
+  SetWindowDisplayAffinity(GetHWND(), affinity);
+
+  // Propagate the new display affinity to any active native system menu.
+  ApplyAffinityToActiveSystemMenus(affinity);
+
+  // Propagate the new display affinity to all owned windows on the current
+  // thread.
+  ApplyAffinityToOwnedWindows(GetHWND(), affinity);
+}
+
+bool DesktopWindowTreeHostWin::IsCaptureExclusionAllowed() const {
+  const bool is_remote_session = remote_session_for_testing_.value_or(
+      ::GetSystemMetrics(SM_REMOTESESSION) != 0);
+
+  // We allow exclusion if it's a local session, OR if the feature flag
+  // overrides the remote session restriction.
+  return !is_remote_session ||
+         base::FeatureList::IsEnabled(
+             views::features::kAllowWindowCaptureExclusionInRemoteSessions);
 }
 
 void DesktopWindowTreeHostWin::UpdateBackdropColorMode() {

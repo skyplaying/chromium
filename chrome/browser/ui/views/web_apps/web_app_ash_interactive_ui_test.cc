@@ -4,10 +4,13 @@
 
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/immersive_mode_controller_chromeos.h"
 #include "chrome/browser/ui/views/frame/top_container_view.h"
+#include "chrome/browser/ui/views/toolbar/app_menu_control.h"
 #include "chrome/browser/ui/views/web_apps/frame_toolbar/web_app_frame_toolbar_view.h"
 #include "chrome/browser/ui/views/web_apps/frame_toolbar/web_app_menu_button.h"
 #include "chrome/browser/ui/views/web_apps/frame_toolbar/web_app_toolbar_button_container.h"
@@ -17,6 +20,7 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "chromeos/ui/frame/immersive/immersive_fullscreen_controller_test_api.h"
 #include "content/public/test/browser_test.h"
+#include "ui/views/interaction/element_tracker_views.h"
 
 class WebAppAshInteractiveUITest : public web_app::WebAppBrowserTestBase {
  public:
@@ -35,7 +39,7 @@ class WebAppAshInteractiveUITest : public web_app::WebAppBrowserTestBase {
             GURL("https://test.org"));
     webapps::AppId app_id = InstallWebApp(std::move(web_app_info));
 
-    Browser* browser = LaunchWebAppBrowser(app_id);
+    BrowserWindowInterface* browser = LaunchWebAppBrowser(app_id);
     browser_view_ = BrowserView::GetBrowserViewForBrowser(browser);
 
     controller_ = ImmersiveModeController::From(browser);
@@ -47,8 +51,10 @@ class WebAppAshInteractiveUITest : public web_app::WebAppBrowserTestBase {
   }
 
   void CheckWebAppMenuClickable() {
-    AppMenuButton* menu_button =
-        browser_view_->toolbar_button_provider()->GetAppMenuButton();
+    AppMenuButton* menu_button = views::AsViewClass<AppMenuButton>(
+        views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
+            kToolbarAppMenuButtonElementId,
+            views::ElementTrackerViews::GetContextForView(browser_view_)));
 
     // Open the app menu by clicking on it.
     base::RunLoop open_loop;

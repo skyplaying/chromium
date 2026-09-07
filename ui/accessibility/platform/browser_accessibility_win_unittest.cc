@@ -27,7 +27,6 @@
 #include "ui/accessibility/platform/browser_accessibility_manager_win.h"
 #include "ui/accessibility/platform/test_ax_node_id_delegate.h"
 #include "ui/accessibility/platform/test_ax_platform_tree_manager_delegate.h"
-#include "ui/base/win/atl_module.h"
 
 namespace ui {
 
@@ -119,7 +118,6 @@ BrowserAccessibilityWinTest::BrowserAccessibilityWinTest() {}
 BrowserAccessibilityWinTest::~BrowserAccessibilityWinTest() {}
 
 void BrowserAccessibilityWinTest::SetUp() {
-  win::CreateATLModuleIfNeeded();
   test_browser_accessibility_delegate_ =
       std::make_unique<TestAXPlatformTreeManagerDelegate>();
 }
@@ -3582,7 +3580,6 @@ TEST_F(BrowserAccessibilityWinTest, DISABLED_TestIAccessible2Relations) {
 }
 
 TEST_F(BrowserAccessibilityWinTest, UIACreateExtraAnnouncementNodesFails) {
-  AXPlatform::GetInstance().SetUiaProviderEnabled(true);
   AXNodeData root_data;
   root_data.id = 1;
   root_data.role = ax::mojom::Role::kGenericContainer;
@@ -3616,7 +3613,7 @@ TEST_F(BrowserAccessibilityWinTest, UIACreateExtraAnnouncementNodesFails) {
 }
 
 TEST_F(BrowserAccessibilityWinTest, CreateExtraAnnouncementNodes) {
-  AXPlatform::GetInstance().SetUiaProviderEnabled(false);
+  AXPlatform::GetInstance().DisableActiveUiaProvider();
 
   // Create AXNodeData objects for a simple document tree.
   AXNodeData root_data;
@@ -3740,7 +3737,7 @@ TEST_F(BrowserAccessibilityWinTest, CreateExtraAnnouncementNodes) {
 }
 
 TEST_F(BrowserAccessibilityWinTest, GetExtraAnnouncementNodes) {
-  AXPlatform::GetInstance().SetUiaProviderEnabled(false);
+  AXPlatform::GetInstance().DisableActiveUiaProvider();
   AXNodeData root_data;
   root_data.id = 1;
   root_data.role = ax::mojom::Role::kGenericContainer;
@@ -3772,7 +3769,7 @@ TEST_F(BrowserAccessibilityWinTest, GetExtraAnnouncementNodes) {
 }
 
 TEST_F(BrowserAccessibilityWinTest, IA2AriaNotifyFallback) {
-  AXPlatform::GetInstance().SetUiaProviderEnabled(false);
+  AXPlatform::GetInstance().DisableActiveUiaProvider();
   AXNodeData root_data;
   root_data.id = 1;
   root_data.role = ax::mojom::Role::kGenericContainer;
@@ -3800,7 +3797,7 @@ TEST_F(BrowserAccessibilityWinTest, IA2AriaNotifyFallback) {
 }
 
 TEST_F(BrowserAccessibilityWinTest, PlatformGetChild) {
-  AXPlatform::GetInstance().SetUiaProviderEnabled(false);
+  AXPlatform::GetInstance().DisableActiveUiaProvider();
   AXNodeData root_data;
   root_data.id = 1;
   root_data.role = ax::mojom::Role::kGenericContainer;
@@ -3847,7 +3844,7 @@ TEST_F(BrowserAccessibilityWinTest, PlatformGetChild) {
 }
 
 TEST_F(BrowserAccessibilityWinTest, PlatformGetLastChild) {
-  AXPlatform::GetInstance().SetUiaProviderEnabled(false);
+  AXPlatform::GetInstance().DisableActiveUiaProvider();
   AXNodeData root_data;
   root_data.id = 1;
   root_data.role = ax::mojom::Role::kGenericContainer;
@@ -3885,7 +3882,7 @@ TEST_F(BrowserAccessibilityWinTest, PlatformGetLastChild) {
 }
 
 TEST_F(BrowserAccessibilityWinTest, PlatformGetSiblings) {
-  AXPlatform::GetInstance().SetUiaProviderEnabled(false);
+  AXPlatform::GetInstance().DisableActiveUiaProvider();
   AXNodeData root_data;
   root_data.id = 1;
   root_data.role = ax::mojom::Role::kGenericContainer;
@@ -4003,6 +4000,164 @@ TEST_F(BrowserAccessibilityWinTest, OnExtendedPropertiesUsedAfterDestruction) {
   EXPECT_HRESULT_FAILED(text_field_node->nActions(&n_actions));
 
   text_field_node->SetDelegateForTesting(pre_delegate);
+}
+
+// Regression test for type confusion fix: verify get_hyperlink uses
+// QueryInterface and returns correct results for valid hyperlinks.
+TEST_F(BrowserAccessibilityWinTest, TestHyperlinkSafeTypeCheck) {
+  AXNodeData root;
+  root.id = 1;
+  root.role = ax::mojom::Role::kRootWebArea;
+  root.AddState(ax::mojom::State::kFocusable);
+
+  AXNodeData text;
+  text.id = 2;
+  text.role = ax::mojom::Role::kStaticText;
+  text.SetName("Hello ");
+
+  AXNodeData link;
+  link.id = 3;
+  link.role = ax::mojom::Role::kLink;
+  link.AddState(ax::mojom::State::kFocusable);
+  link.AddState(ax::mojom::State::kLinked);
+  link.SetName("world");
+  link.SetNameFrom(ax::mojom::NameFrom::kContents);
+
+  root.child_ids = {text.id, link.id};
+
+  std::unique_ptr<BrowserAccessibilityManager> manager(
+      BrowserAccessibilityManager::Create(
+          MakeAXTreeUpdateForTesting(root, text, link), node_id_delegate_,
+          test_browser_accessibility_delegate_.get()));
+
+  BrowserAccessibilityComWin* root_obj =
+      ToBrowserAccessibilityWin(manager->GetBrowserAccessibilityRoot())
+          ->GetCOM();
+
+  LONG hyperlink_count = -1;
+  EXPECT_EQ(S_OK, root_obj->get_nHyperlinks(&hyperlink_count));
+  EXPECT_EQ(1, hyperlink_count);
+
+  Microsoft::WRL::ComPtr<IAccessibleHyperlink> hyperlink;
+  EXPECT_EQ(S_OK, root_obj->get_hyperlink(0, &hyperlink));
+  EXPECT_NE(nullptr, hyperlink.Get());
+  hyperlink.Reset();
+
+  EXPECT_EQ(E_INVALIDARG, root_obj->get_hyperlink(1, &hyperlink));
+  EXPECT_EQ(E_INVALIDARG, root_obj->get_hyperlink(-1, &hyperlink));
+
+  manager.reset();
+}
+
+TEST_F(BrowserAccessibilityWinTest, TestAriaActionStaleIdref) {
+  // Create a tree where kActionsIds references both a valid node (id=2) and
+  // a non-existent node (id=99). This simulates a stale IDREF where the
+  // target element was removed between accessibility tree snapshots.
+  AXNodeData root;
+  root.id = 1;
+  root.role = ax::mojom::Role::kGenericContainer;
+  root.AddAction(ax::mojom::Action::kDoDefault);
+  root.AddIntListAttribute(ax::mojom::IntListAttribute::kActionsIds, {2, 99});
+  root.child_ids.push_back(2);
+
+  AXNodeData child;
+  child.id = 2;
+  child.role = ax::mojom::Role::kButton;
+  child.SetName("Edit");
+  child.AddStringAttribute(ax::mojom::StringAttribute::kHtmlId, "edit");
+
+  std::unique_ptr<BrowserAccessibilityManager> manager(
+      BrowserAccessibilityManager::Create(
+          MakeAXTreeUpdateForTesting(root, child), node_id_delegate_,
+          test_browser_accessibility_delegate_.get()));
+
+  BrowserAccessibilityComWin* root_obj =
+      ToBrowserAccessibilityWin(manager->GetBrowserAccessibilityRoot())
+          ->GetCOM();
+  ASSERT_NE(nullptr, root_obj);
+
+  Microsoft::WRL::ComPtr<IAccessibleAction> action;
+  ASSERT_HRESULT_SUCCEEDED(root_obj->QueryInterface(IID_PPV_ARGS(&action)));
+
+  // nActions includes both blink actions and aria-actions (even stale ones),
+  // since the count is based on the serialized kActionsIds list.
+  LONG n_actions = 0;
+  EXPECT_EQ(S_OK, action->nActions(&n_actions));
+  ASSERT_GE(n_actions, 2);  // At least 2 aria-actions exist.
+
+  // The last two indices are our aria-actions (valid id=2, stale id=99).
+  LONG valid_aria_index = n_actions - 2;
+  LONG stale_aria_index = n_actions - 1;
+
+  // Valid aria-action target (id=2) should work normally.
+  base::win::ScopedBstr name;
+  EXPECT_EQ(S_OK, action->get_name(valid_aria_index, name.Receive()));
+  EXPECT_NE(nullptr, name.Get());
+  name.Release();
+
+  base::win::ScopedBstr localized_name;
+  EXPECT_EQ(S_OK, action->get_localizedName(valid_aria_index,
+                                            localized_name.Receive()));
+  EXPECT_NE(nullptr, localized_name.Get());
+  localized_name.Release();
+
+  // Stale aria-action target (id=99) — GetFromID returns null.
+  // Methods should return E_FAIL instead of crashing.
+  EXPECT_EQ(E_FAIL, action->get_name(stale_aria_index, name.Receive()));
+  EXPECT_EQ(nullptr, name.Get());
+
+  EXPECT_EQ(E_FAIL, action->get_localizedName(stale_aria_index,
+                                              localized_name.Receive()));
+  EXPECT_EQ(nullptr, localized_name.Get());
+
+  EXPECT_EQ(E_FAIL, action->doAction(stale_aria_index));
+
+  // get_description and get_keyBinding don't dereference GetFromID, so they
+  // should still return S_FALSE for valid-range indices.
+  base::win::ScopedBstr description;
+  EXPECT_EQ(S_FALSE,
+            action->get_description(stale_aria_index, description.Receive()));
+  EXPECT_EQ(nullptr, description.Get());
+
+  BSTR* key_bindings = nullptr;
+  LONG n_bindings = 0;
+  EXPECT_EQ(S_FALSE, action->get_keyBinding(stale_aria_index, 100,
+                                            &key_bindings, &n_bindings));
+  EXPECT_EQ(0, n_bindings);
+
+  manager.reset();
+}
+
+TEST_F(BrowserAccessibilityWinTest, NativeAdaptedWebContentsAccValue) {
+  AXNodeData root;
+  root.id = 1;
+  root.role = ax::mojom::Role::kGenericContainer;
+
+  AXTreeUpdate update = MakeAXTreeUpdateForTesting(root);
+  update.has_tree_data = true;
+  update.tree_data.url = "chrome://webui-toolbar.top";
+
+  // Simulate setting kNativeAdaptedWebContents mode on the delegate.
+  test_browser_accessibility_delegate_->AccessibilitySetAXMode(
+      ui::AXMode::kNativeAdaptedWebContents);
+
+  std::unique_ptr<BrowserAccessibilityManager> manager(
+      BrowserAccessibilityManager::Create(
+          update, node_id_delegate_,
+          test_browser_accessibility_delegate_.get()));
+
+  BrowserAccessibilityWin* root_accessible =
+      ToBrowserAccessibilityWin(manager->GetBrowserAccessibilityRoot());
+  ASSERT_NE(nullptr, root_accessible);
+
+  base::win::ScopedVariant childid_self(CHILDID_SELF);
+  base::win::ScopedBstr value;
+  HRESULT hr =
+      root_accessible->GetCOM()->get_accValue(childid_self, value.Receive());
+  EXPECT_EQ(S_OK, hr);
+
+  // For kNativeAdaptedWebContents it should return an empty value.
+  EXPECT_EQ(0u, value.Length());
 }
 
 }  // namespace ui

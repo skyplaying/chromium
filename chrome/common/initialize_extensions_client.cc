@@ -9,15 +9,16 @@
 
 #include "base/no_destructor.h"
 #include "build/build_config.h"
+#include "chrome/common/controlled_frame/controlled_frame.h"
 #include "chrome/common/extensions/chrome_extensions_client.h"
-#include "chrome/common/extensions/webstore_override.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extensions_client.h"
 #include "extensions/common/features/feature.h"
+#include "extensions/common/mime_handler_availability.h"
 #include "extensions/common/user_scripts_availability.h"
+#include "extensions/common/webstore_override.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "chrome/common/controlled_frame/controlled_frame.h"
 #include "chrome/common/controlled_frame/controlled_frame_api_provider.h"
 #endif
 
@@ -27,6 +28,7 @@
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/common/chromeos/extensions/chromeos_system_extensions_api_provider.h"
+#include "chromeos/ash/experiences/extensions/chromeos_extensions_api_provider.h"
 #endif
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
@@ -38,9 +40,8 @@ namespace {
 extensions::Feature::FeatureDelegatedAvailabilityCheckMap
 CombineAllAvailabilityCheckMaps() {
   extensions::Feature::FeatureDelegatedAvailabilityCheckMap map_list[] = {
-#if BUILDFLAG(ENABLE_EXTENSIONS)
       controlled_frame::CreateAvailabilityCheckMap(),
-#endif
+      extensions::mime_handler_availability::CreateAvailabilityCheckMap(),
       extensions::user_scripts_availability::CreateAvailabilityCheckMap(),
       extensions::webstore_override::CreateAvailabilityCheckMap(),
 
@@ -82,6 +83,8 @@ void EnsureExtensionsClientInitialized() {
         std::make_unique<controlled_frame::ControlledFrameAPIProvider>());
 #endif
 #if BUILDFLAG(IS_CHROMEOS)
+    extensions_client->AddAPIProvider(
+        std::make_unique<ash::ChromeOSExtensionsAPIProvider>());
     extensions_client->AddAPIProvider(
         std::make_unique<chromeos::ChromeOSSystemExtensionsAPIProvider>());
 #endif

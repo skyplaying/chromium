@@ -143,22 +143,47 @@ test_shorthand_contraction('view-timeline', {
 }, 'none, none');
 
 // Longhands with different lengths:
+// A longhand with its initial value can be omitted from the shorthand, so its
+// list length does not prevent shorthand serialization.
+test_shorthand_contraction('view-timeline', {
+  'view-timeline-name': '--a, --b, --c',
+  'view-timeline-axis': 'block',
+  'view-timeline-inset': 'auto',
+}, '--a, --b, --c');
+
+test_shorthand_contraction('view-timeline', {
+  'view-timeline-name': '--a, --b, --c',
+  'view-timeline-axis': 'block',
+  'view-timeline-inset': '1px, 2px, 3px',
+}, '--a 1px, --b 2px, --c 3px');
+
+test_shorthand_contraction('view-timeline', {
+  'view-timeline-name': '--a, --b, --c',
+  'view-timeline-axis': 'inline, inline, inline',
+  'view-timeline-inset': 'auto',
+}, '--a inline, --b inline, --c inline');
 
 test_shorthand_contraction('view-timeline', {
   'view-timeline-name': '--a, --b, --c',
   'view-timeline-axis': 'inline, inline',
   'view-timeline-inset': 'auto, auto',
-}, '--a inline, --b inline, --c inline');
+}, '');
+
+test_shorthand_contraction('view-timeline', {
+  'view-timeline-name': '--a, --b, --c, --d, --e, --f',
+  'view-timeline-axis': 'inline, x',
+  'view-timeline-inset': 'auto, 1px',
+}, '');
 
 test_shorthand_contraction('view-timeline', {
   'view-timeline-name': '--a, --b',
   'view-timeline-axis': 'inline, inline, inline',
   'view-timeline-inset': 'auto, auto, auto',
-}, '--a inline, --b inline');
+}, '');
 
 test_shorthand_contraction('view-timeline', {
   'view-timeline-name': '--a, --b',
   'view-timeline-axis': 'inline, inline',
   'view-timeline-inset': 'auto, auto, auto',
-}, '--a inline, --b inline');
+}, '');
 </script>

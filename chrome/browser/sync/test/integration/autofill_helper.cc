@@ -27,9 +27,10 @@
 #include "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
 #include "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
 #include "components/autofill/core/browser/data_manager/personal_data_manager.h"
-#include "components/autofill/core/browser/data_manager/personal_data_manager_test_utils.h"
+#include "components/autofill/core/browser/data_manager/personal_data_manager_test_util.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_i18n_api.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/browser/webdata/autocomplete/autocomplete_entry.h"
 #include "components/autofill/core/browser/webdata/autocomplete/autocomplete_table.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service.h"
@@ -93,7 +94,8 @@ void RemoveKeyDontBlockForSync(int profile, const AutocompleteKey& key) {
   wds->GetDBTaskRunner()->PostTask(
       FROM_HERE, base::BindOnce(add_observer_func, wds, &mock_observer));
 
-  wds->RemoveFormValueForElementName(key.name(), key.value());
+  wds->RemoveFormValueForElementNameAndLabel(key.name(), /*label=*/u"",
+                                             key.value());
   done_event.Wait();
 
   void (AutofillWebDataService::*remove_observer_func)(
@@ -338,11 +340,6 @@ std::set<AutocompleteKey> GetAllKeys(int profile) {
 
 bool KeysMatch(int profile_a, int profile_b) {
   return GetAllKeys(profile_a) == GetAllKeys(profile_b);
-}
-
-void SetCreditCards(int profile, std::vector<CreditCard>* credit_cards) {
-  GetPersonalDataManager(profile)->payments_data_manager().SetCreditCards(
-      credit_cards);
 }
 
 void AddProfile(int profile, const AutofillProfile& autofill_profile) {

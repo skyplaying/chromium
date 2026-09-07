@@ -22,7 +22,7 @@
 #include "gpu/ipc/service/shared_image_stub.h"
 #include "media/base/media_switches.h"
 #include "media/base/win/mf_helpers.h"
-#include "media/gpu/windows/d3d11_picture_buffer.h"
+#include "media/gpu/windows/d3d_picture_buffer.h"
 #include "media/gpu/windows/format_utils.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
 
@@ -63,7 +63,6 @@ D3D11Status DefaultTexture2DWrapper::BeginSharedImageAccess() {
 }
 
 D3D11Status DefaultTexture2DWrapper::ProcessTexture(
-    const gfx::ColorSpace& input_color_space,
     scoped_refptr<gpu::ClientSharedImage>& shared_image_dest) {
   // If we've received an error, then return it to our caller.  This is probably
   // from some previous operation.
@@ -74,12 +73,11 @@ D3D11Status DefaultTexture2DWrapper::ProcessTexture(
   }
 
   shared_image_dest = shared_image_;
-
-  // TODO(hitawala): Possibly optimize this method as input and stored color
-  // spaces should be same.
-  CHECK_EQ(input_color_space, output_color_space_);
-
   return D3D11Status::Codes::kOk;
+}
+
+const gfx::Size& DefaultTexture2DWrapper::GetSize() const {
+  return size_;
 }
 
 D3D11Status DefaultTexture2DWrapper::Init(
@@ -87,7 +85,7 @@ D3D11Status DefaultTexture2DWrapper::Init(
     GetCommandBufferHelperCB get_helper_cb,
     ComD3D11Texture2D texture,
     size_t array_slice,
-    scoped_refptr<media::D3D11PictureBuffer> picture_buffer,
+    scoped_refptr<media::D3DPictureBuffer> picture_buffer,
     Texture2DWrapper::PictureBufferGPUResourceInitDoneCB
         picture_buffer_gpu_resource_init_done_cb) {
   if (SharedImageFormatToDXGIFormat(output_si_format_) == DXGI_FORMAT_UNKNOWN) {
@@ -122,7 +120,7 @@ void DefaultTexture2DWrapper::OnError(D3D11Status status) {
 }
 
 void DefaultTexture2DWrapper::OnGPUResourceInitDone(
-    scoped_refptr<media::D3D11PictureBuffer> picture_buffer,
+    scoped_refptr<media::D3DPictureBuffer> picture_buffer,
     std::unique_ptr<gpu::VideoImageRepresentation> shared_image_rep,
     scoped_refptr<gpu::ClientSharedImage> client_shared_image) {
   DCHECK(shared_image_rep);
@@ -143,7 +141,7 @@ DefaultTexture2DWrapper::GpuResources::GpuResources(
     ComD3D11Device video_device,
     ComD3D11Texture2D texture,
     size_t array_slice,
-    scoped_refptr<media::D3D11PictureBuffer> picture_buffer,
+    scoped_refptr<media::D3DPictureBuffer> picture_buffer,
     GPUResourceInitCB gpu_resource_init_cb) {
   CHECK(texture);
 
@@ -158,10 +156,20 @@ DefaultTexture2DWrapper::GpuResources::GpuResources(
 
   // Usage flags to allow the display compositor to draw from it, video to
   // decode from it, and webgl/canvas to read from it.
-  gpu::SharedImageUsageSet usage =
-      gpu::SHARED_IMAGE_USAGE_VIDEO_DECODE |
-      gpu::SHARED_IMAGE_USAGE_GLES2_READ | gpu::SHARED_IMAGE_USAGE_RASTER_READ |
-      gpu::SHARED_IMAGE_USAGE_DISPLAY_READ | gpu::SHARED_IMAGE_USAGE_SCANOUT;
+  gpu::SharedImageUsageSet usage = gpu::SHARED_IMAGE_USAGE_VIDEO_DECODE |
+                                   gpu::SHARED_IMAGE_USAGE_GLES2_READ |
+                                   gpu::SHARED_IMAGE_USAGE_RASTER_READ |
+                                   gpu::SHARED_IMAGE_USAGE_DISPLAY_READ;
+
+  // The swapchain presenter currently only supports NV12 and P010 overlay,
+  // with BGRA only as fallback when DWM continuously fails to overlay submitted
+  // video. As a result, we should not allow overlay for non-NV12/P010 formats
+  // which may cause chroma downsampling when blitting into the back buffer.
+  // See https://crbugs.com/331679628 for more details.
+  if (output_si_format == viz::MultiPlaneFormat::kP010 ||
+      output_si_format == viz::MultiPlaneFormat::kNV12) {
+    usage |= gpu::SHARED_IMAGE_USAGE_SCANOUT;
+  }
 
   HRESULT hr = S_OK;
   scoped_refptr<gpu::DXGISharedHandleState> dxgi_shared_handle_state;

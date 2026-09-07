@@ -703,6 +703,9 @@ struct DecoderTextureState {
   bool force_int_or_srgb_cube_texture_complete;
   bool unpack_alignment_workaround_with_unpack_buffer;
   bool unpack_overlapping_rows_separately_unpack_buffer;
+  bool split_level_0_pbo_full_sub_image_2d;
+  bool upload_oversized_mip_levels_via_unpack_buffer;
+  bool use_tex_sub_image_for_host_twiddled_npot_uploads;
 };
 
 // This class keeps track of the textures and their sizes so we can do NPOT and
@@ -1174,6 +1177,11 @@ class GPU_GLES2_EXPORT TextureManager
       ContextState* state,
       const DoTexSubImageArguments& args,
       const PixelStoreParams& unpack_params);
+
+  void DoTexSubImageSplitLevel0PboWorkaround(
+      DecoderTextureState* texture_state,
+      ContextState* state,
+      const DoTexSubImageArguments& args);
 
   void DoCubeMapWorkaround(DecoderTextureState* texture_state,
                            ContextState* state,

@@ -13,6 +13,7 @@
 #include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "base/test/mock_callback.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "components/prefs/testing_pref_service.h"
@@ -34,6 +35,7 @@
 #include "components/sync/test/mock_commit_queue.h"
 #include "components/sync/test/mock_data_type_local_change_processor.h"
 #include "components/sync/test/test_matchers.h"
+#include "components/sync_sessions/features.h"
 #include "components/sync_sessions/mock_sync_sessions_client.h"
 #include "components/sync_sessions/session_sync_prefs.h"
 #include "components/sync_sessions/test_matchers.h"
@@ -1923,7 +1925,7 @@ TEST_F(SessionSyncBridgeTest, ShouldDoGarbageCollection) {
 
   // Construct a remote update.
   syncer::UpdateResponseDataList updates;
-  // Two entities belong to a recent session.
+  // The stale session contains the header and a tab.
   updates.push_back(SpecificsToUpdateResponse(
       CreateHeaderSpecificsWithOneTab(kStaleSessionTag, kWindowId, kTabId),
       stale_mtime));
@@ -1931,6 +1933,7 @@ TEST_F(SessionSyncBridgeTest, ShouldDoGarbageCollection) {
       CreateTabSpecifics(kStaleSessionTag, kWindowId, kTabId, kTabNodeId,
                          "http://baz.com/"),
       stale_mtime));
+  // Two entities belong to a recent session.
   updates.push_back(SpecificsToUpdateResponse(
       CreateHeaderSpecificsWithOneTab(kRecentSessionTag, kWindowId, kTabId),
       recent_mtime));
@@ -1970,6 +1973,5 @@ TEST_F(SessionSyncBridgeTest, ShouldReturnBrowserTypeInGetData) {
   EXPECT_EQ(sync_pb::SyncEnums_BrowserType_TYPE_CUSTOM_TAB,
             tab_data->specifics.session().tab().browser_type());
 }
-
 }  // namespace
 }  // namespace sync_sessions

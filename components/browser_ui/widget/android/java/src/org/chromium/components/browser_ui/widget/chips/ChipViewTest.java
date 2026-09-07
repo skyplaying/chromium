@@ -11,8 +11,10 @@ import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.lessThan;
 import static org.hamcrest.Matchers.nullValue;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -38,8 +40,6 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
 import org.robolectric.annotation.Config;
-import org.robolectric.annotation.LooperMode;
-import org.robolectric.shadows.ShadowLooper;
 import org.robolectric.shadows.ShadowView;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -48,16 +48,14 @@ import org.chromium.ui.widget.LoadingView;
 
 /** Tests for {@link ChipViewTest}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(
-        manifest = Config.NONE,
-        shadows = {ShadowView.class})
-@LooperMode(LooperMode.Mode.LEGACY)
+@Config(shadows = {ShadowView.class})
 public final class ChipViewTest {
 
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     private Activity mActivity;
     private ChipView mChipView;
+    private ChipView mTwoLineChipView;
 
     @Before
     public void setup() {
@@ -67,6 +65,12 @@ public final class ChipViewTest {
         mActivity = Robolectric.buildActivity(Activity.class).setup().get();
         mActivity.getTheme().applyStyle(R.style.Theme_BrowserUI_DayNight, true);
         mChipView = new ChipView(mActivity, null);
+        mActivity.setContentView(mChipView);
+        mTwoLineChipView =
+                (ChipView)
+                        mActivity
+                                .getLayoutInflater()
+                                .inflate(R.layout.two_line_chip_view_test_item, null);
     }
 
     @Test
@@ -147,15 +151,10 @@ public final class ChipViewTest {
     @Test
     @SmallTest
     public void setTwoLineChip() {
-        ChipView twoLineChip =
-                (ChipView)
-                        mActivity
-                                .getLayoutInflater()
-                                .inflate(R.layout.two_line_chip_view_test_item, null);
-        twoLineChip.getPrimaryTextView().setText("Primary text");
-        twoLineChip.getSecondaryTextView().setText("Secondary text");
+        mTwoLineChipView.getPrimaryTextView().setText("Primary text");
+        mTwoLineChipView.getSecondaryTextView().setText("Secondary text");
 
-        LinearLayout textWrapper = twoLineChip.findViewById(R.id.chip_view_text_wrapper);
+        LinearLayout textWrapper = mTwoLineChipView.findViewById(R.id.chip_view_text_wrapper);
         assertNotNull(textWrapper);
         assertEquals(LinearLayout.VERTICAL, textWrapper.getOrientation());
         assertEquals(2, textWrapper.getChildCount());
@@ -165,49 +164,50 @@ public final class ChipViewTest {
         // information, see crbug.com/450830784.
         assertEquals(
                 LayoutParams.WRAP_CONTENT,
-                twoLineChip.getPrimaryTextView().getLayoutParams().width);
+                mTwoLineChipView.getPrimaryTextView().getLayoutParams().width);
         assertEquals(
                 LayoutParams.WRAP_CONTENT,
-                twoLineChip.getSecondaryTextView().getLayoutParams().width);
+                mTwoLineChipView.getSecondaryTextView().getLayoutParams().width);
     }
 
     @Test
     @SmallTest
     public void setMaxWidthWithTwoLineChip() {
-        ChipView twoLineChip =
-                (ChipView)
-                        mActivity
-                                .getLayoutInflater()
-                                .inflate(R.layout.two_line_chip_view_test_item, null);
-        twoLineChip.getPrimaryTextView().setText("Primary text");
-        twoLineChip.getSecondaryTextView().setText("SecondaryText");
-        assertThat(twoLineChip.getPrimaryTextView().getEllipsize(), nullValue());
-        assertThat(twoLineChip.getSecondaryTextView().getEllipsize(), nullValue());
-        measureChip(twoLineChip);
+        mTwoLineChipView.getPrimaryTextView().setText("Primary text");
+        mTwoLineChipView.getSecondaryTextView().setText("SecondaryText");
+        assertThat(mTwoLineChipView.getPrimaryTextView().getEllipsize(), nullValue());
+        assertThat(mTwoLineChipView.getSecondaryTextView().getEllipsize(), nullValue());
+        measureChip(mTwoLineChipView);
 
-        final int fullPrimaryTextWidth = twoLineChip.getPrimaryTextView().getMeasuredWidth();
-        final int fullSecondaryTextWidth = twoLineChip.getSecondaryTextView().getMeasuredWidth();
-        twoLineChip.setMaxWidth((int) (0.8 * twoLineChip.getMeasuredWidth()));
-        measureChip(twoLineChip);
+        final int fullPrimaryTextWidth = mTwoLineChipView.getPrimaryTextView().getMeasuredWidth();
+        final int fullSecondaryTextWidth =
+                mTwoLineChipView.getSecondaryTextView().getMeasuredWidth();
+        mTwoLineChipView.setMaxWidth((int) (0.8 * mTwoLineChipView.getMeasuredWidth()));
+        measureChip(mTwoLineChipView);
 
         // Make sure that both the primary and secondary text width is reduced.
         assertThat(
-                twoLineChip.getPrimaryTextView().getMeasuredWidth(),
+                mTwoLineChipView.getPrimaryTextView().getMeasuredWidth(),
                 lessThan(fullPrimaryTextWidth));
-        assertThat(twoLineChip.getPrimaryTextView().getEllipsize(), is(TextUtils.TruncateAt.END));
         assertThat(
-                twoLineChip.getSecondaryTextView().getMeasuredWidth(),
+                mTwoLineChipView.getPrimaryTextView().getEllipsize(), is(TextUtils.TruncateAt.END));
+        assertThat(
+                mTwoLineChipView.getSecondaryTextView().getMeasuredWidth(),
                 lessThan(fullSecondaryTextWidth));
-        assertThat(twoLineChip.getSecondaryTextView().getEllipsize(), is(TextUtils.TruncateAt.END));
-
-        twoLineChip.setMaxWidth(Integer.MAX_VALUE);
-        measureChip(twoLineChip);
-        // Make sure that both the allowed text width and the truncation method are reset.
-        assertThat(twoLineChip.getPrimaryTextView().getMeasuredWidth(), is(fullPrimaryTextWidth));
-        assertThat(twoLineChip.getPrimaryTextView().getEllipsize(), nullValue());
         assertThat(
-                twoLineChip.getSecondaryTextView().getMeasuredWidth(), is(fullSecondaryTextWidth));
-        assertThat(twoLineChip.getSecondaryTextView().getEllipsize(), nullValue());
+                mTwoLineChipView.getSecondaryTextView().getEllipsize(),
+                is(TextUtils.TruncateAt.END));
+
+        mTwoLineChipView.setMaxWidth(Integer.MAX_VALUE);
+        measureChip(mTwoLineChipView);
+        // Make sure that both the allowed text width and the truncation method are reset.
+        assertThat(
+                mTwoLineChipView.getPrimaryTextView().getMeasuredWidth(), is(fullPrimaryTextWidth));
+        assertThat(mTwoLineChipView.getPrimaryTextView().getEllipsize(), nullValue());
+        assertThat(
+                mTwoLineChipView.getSecondaryTextView().getMeasuredWidth(),
+                is(fullSecondaryTextWidth));
+        assertThat(mTwoLineChipView.getSecondaryTextView().getEllipsize(), nullValue());
     }
 
     @Test
@@ -226,17 +226,41 @@ public final class ChipViewTest {
 
         LoadingView.Observer firstObserver = mock(LoadingView.Observer.class);
         mChipView.showLoadingView(firstObserver);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
         assertEquals(View.VISIBLE, loadingView.getVisibility());
         // The start icon shouldn't be visible when the loading view is displayed.
         assertEquals(View.GONE, startIcon.getVisibility());
         verify(firstObserver).onShowLoadingUiComplete();
 
         LoadingView.Observer secondObserver = mock(LoadingView.Observer.class);
-        mChipView.hideLoadingView(secondObserver);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        mChipView.hideLoadingView(secondObserver, /* skipDelay= */ true);
         assertEquals(View.GONE, loadingView.getVisibility());
         // The start icon should be visible again when the loading view becomes hidden.
+        assertEquals(View.VISIBLE, startIcon.getVisibility());
+        verify(secondObserver).onHideLoadingUiComplete();
+    }
+
+    @Test
+    @SmallTest
+    public void loadingViewNullObserver() {
+        // Calling show/hide with null should not crash.
+        mChipView.showLoadingView(null);
+        mChipView.hideLoadingView(null);
+    }
+
+    @Test
+    @SmallTest
+    public void loadingViewSkipDelay() {
+        mChipView.setIconWithTint(R.drawable.ic_settings_gear_24dp, /* tintWithTextColor= */ false);
+        LoadingView loadingView = mChipView.findViewById(R.id.chip_view_loading_view);
+        ImageView startIcon = mChipView.findViewById(R.id.chip_view_start_icon);
+
+        LoadingView.Observer firstObserver = mock(LoadingView.Observer.class);
+        mChipView.showLoadingView(firstObserver);
+        assertEquals(View.VISIBLE, loadingView.getVisibility());
+
+        LoadingView.Observer secondObserver = mock(LoadingView.Observer.class);
+        mChipView.hideLoadingView(secondObserver, /* skipDelay= */ true);
+        assertEquals(View.GONE, loadingView.getVisibility());
         assertEquals(View.VISIBLE, startIcon.getVisibility());
         verify(secondObserver).onHideLoadingUiComplete();
     }
@@ -313,6 +337,124 @@ public final class ChipViewTest {
                         mActivity, R.drawable.test_ic_arrow_downward_black_24dp),
                 /* tintWithTextColor= */ true);
         assertEquals(View.VISIBLE, startIcon.getVisibility());
+    }
+
+    @Test
+    @SmallTest
+    public void compactMode() {
+        mChipView.getPrimaryTextView().setText("Primary text");
+        int defaultStartPadding =
+                mActivity.getResources().getDimensionPixelSize(R.dimen.chip_view_start_padding);
+        int defaultEndPadding =
+                mActivity.getResources().getDimensionPixelSize(R.dimen.chip_view_end_padding);
+        int compactPadding =
+                mActivity.getResources().getDimensionPixelSize(R.dimen.chip_view_compact_padding);
+
+        mChipView.setIsCompact(true);
+        assertTrue(mChipView.isCompact());
+        assertEquals(View.GONE, mChipView.getPrimaryTextView().getVisibility());
+        assertEquals(compactPadding, mChipView.getPaddingStart());
+        assertEquals(compactPadding, mChipView.getPaddingEnd());
+
+        mChipView.setIsCompact(false);
+        assertFalse(mChipView.isCompact());
+        assertEquals(View.VISIBLE, mChipView.getPrimaryTextView().getVisibility());
+        assertEquals(defaultStartPadding, mChipView.getPaddingStart());
+        assertEquals(defaultEndPadding, mChipView.getPaddingEnd());
+    }
+
+    @Test
+    @SmallTest
+    public void compactWidthDelta_matchesMeasuredDelta_primaryTextOnly() {
+        mChipView.setIcon(R.drawable.test_ic_arrow_downward_black_24dp, false);
+        mChipView.setText("Primary text");
+
+        mChipView.setIsCompact(true);
+        measureChip(mChipView);
+        int compactWidth = mChipView.getMeasuredWidth();
+
+        mChipView.setIsCompact(false);
+        measureChip(mChipView);
+        int expandedWidth = mChipView.getMeasuredWidth();
+
+        int expectedDelta = expandedWidth - compactWidth;
+        assertEquals(expectedDelta, mChipView.getCompactWidthDelta());
+    }
+
+    @Test
+    @SmallTest
+    public void compactWidthDelta_matchesMeasuredDelta_withRemoveIcon() {
+        mChipView.setIcon(R.drawable.test_ic_arrow_downward_black_24dp, false);
+        mChipView.setText("Primary text");
+        mChipView.addRemoveIcon();
+
+        mChipView.setIsCompact(true);
+        measureChip(mChipView);
+        int compactWidth = mChipView.getMeasuredWidth();
+
+        mChipView.setIsCompact(false);
+        measureChip(mChipView);
+        int expandedWidth = mChipView.getMeasuredWidth();
+
+        int expectedDelta = expandedWidth - compactWidth;
+        assertEquals(expectedDelta, mChipView.getCompactWidthDelta());
+    }
+
+    @Test
+    @SmallTest
+    public void compactWidthDelta_matchesMeasuredDelta_primaryAndSecondaryText() {
+        mChipView.setIcon(R.drawable.test_ic_arrow_downward_black_24dp, false);
+        mChipView.setText("Primary text");
+        mChipView.getSecondaryTextView().setText("Secondary text");
+
+        mChipView.setIsCompact(true);
+        measureChip(mChipView);
+        int compactWidth = mChipView.getMeasuredWidth();
+
+        mChipView.setIsCompact(false);
+        measureChip(mChipView);
+        int expandedWidth = mChipView.getMeasuredWidth();
+
+        int expectedDelta = expandedWidth - compactWidth;
+        assertEquals(expectedDelta, mChipView.getCompactWidthDelta());
+    }
+
+    @Test
+    @SmallTest
+    public void compactWidthDelta_matchesMeasuredDelta_twoLineWrapper_primaryLonger() {
+        mTwoLineChipView.setIcon(R.drawable.test_ic_arrow_downward_black_24dp, false);
+        mTwoLineChipView.getPrimaryTextView().setText("A very long primary text label");
+        mTwoLineChipView.getSecondaryTextView().setText("Short");
+
+        mTwoLineChipView.setIsCompact(true);
+        measureChip(mTwoLineChipView);
+        int compactWidth = mTwoLineChipView.getMeasuredWidth();
+
+        mTwoLineChipView.setIsCompact(false);
+        measureChip(mTwoLineChipView);
+        int expandedWidth = mTwoLineChipView.getMeasuredWidth();
+
+        int expectedDelta = expandedWidth - compactWidth;
+        assertEquals(expectedDelta, mTwoLineChipView.getCompactWidthDelta());
+    }
+
+    @Test
+    @SmallTest
+    public void compactWidthDelta_matchesMeasuredDelta_twoLineWrapper_secondaryLonger() {
+        mTwoLineChipView.setIcon(R.drawable.test_ic_arrow_downward_black_24dp, false);
+        mTwoLineChipView.getPrimaryTextView().setText("Short");
+        mTwoLineChipView.getSecondaryTextView().setText("A very long secondary text label");
+
+        mTwoLineChipView.setIsCompact(true);
+        measureChip(mTwoLineChipView);
+        int compactWidth = mTwoLineChipView.getMeasuredWidth();
+
+        mTwoLineChipView.setIsCompact(false);
+        measureChip(mTwoLineChipView);
+        int expandedWidth = mTwoLineChipView.getMeasuredWidth();
+
+        int expectedDelta = expandedWidth - compactWidth;
+        assertEquals(expectedDelta, mTwoLineChipView.getCompactWidthDelta());
     }
 
     private void measureChip(ChipView chip) {

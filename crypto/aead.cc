@@ -22,18 +22,51 @@ namespace {
 
 const EVP_AEAD* AeadForAlgorithm(Aead::AeadAlgorithm algorithm) {
   switch (algorithm) {
-    case Aead::AES_128_CTR_HMAC_SHA256:
+    case aead::AES_128_CTR_HMAC_SHA256:
       return EVP_aead_aes_128_ctr_hmac_sha256();
-    case Aead::AES_256_GCM:
+    case aead::AES_128_GCM:
+      return EVP_aead_aes_128_gcm();
+    case aead::AES_256_GCM:
       return EVP_aead_aes_256_gcm();
-    case Aead::AES_256_GCM_SIV:
+    case aead::AES_256_GCM_SIV:
       return EVP_aead_aes_256_gcm_siv();
-    case Aead::CHACHA20_POLY1305:
+    case aead::CHACHA20_POLY1305:
       return EVP_aead_chacha20_poly1305();
   }
 }
 
 }  // namespace
+
+namespace aead {
+
+size_t KeySizeFor(Algorithm algorithm) {
+  return EVP_AEAD_key_length(AeadForAlgorithm(algorithm));
+}
+
+size_t NonceSizeFor(Algorithm algorithm) {
+  return EVP_AEAD_nonce_length(AeadForAlgorithm(algorithm));
+}
+
+std::vector<uint8_t> Seal(Algorithm algorithm,
+                          base::span<const uint8_t> key,
+                          base::span<const uint8_t> plaintext,
+                          base::span<const uint8_t> nonce,
+                          base::span<const uint8_t> associated_data) {
+  Aead aead(algorithm, key);
+  return aead.Seal(plaintext, nonce, associated_data);
+}
+
+std::optional<std::vector<uint8_t>> Open(
+    Algorithm algorithm,
+    base::span<const uint8_t> key,
+    base::span<const uint8_t> ciphertext,
+    base::span<const uint8_t> nonce,
+    base::span<const uint8_t> associated_data) {
+  Aead aead(algorithm, key);
+  return aead.Open(ciphertext, nonce, associated_data);
+}
+
+}  // namespace aead
 
 Aead::Aead(AeadAlgorithm algorithm) : algorithm_(algorithm) {}
 
@@ -149,11 +182,11 @@ bool Aead::Open(std::string_view ciphertext,
 }
 
 size_t Aead::KeyLength() const {
-  return EVP_AEAD_key_length(AeadForAlgorithm(algorithm_));
+  return aead::KeySizeFor(algorithm_);
 }
 
 size_t Aead::NonceLength() const {
-  return EVP_AEAD_nonce_length(AeadForAlgorithm(algorithm_));
+  return aead::NonceSizeFor(algorithm_);
 }
 
 std::optional<size_t> Aead::Seal(base::span<const uint8_t> plaintext,

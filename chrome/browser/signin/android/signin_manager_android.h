@@ -5,17 +5,18 @@
 #ifndef CHROME_BROWSER_SIGNIN_ANDROID_SIGNIN_MANAGER_ANDROID_H_
 #define CHROME_BROWSER_SIGNIN_ANDROID_SIGNIN_MANAGER_ANDROID_H_
 
-#include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "base/android/scoped_java_ref.h"
+#include "base/functional/callback_forward.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/threading/thread_checker.h"
 #include "base/time/time.h"
 #include "components/keyed_service/core/keyed_service.h"
-#include "components/prefs/pref_member.h"
 #include "google_apis/gaia/gaia_id.h"
 
 namespace policy {
@@ -35,8 +36,6 @@ class Profile;
 enum class ClearedTypes {
   // Clear the service worker caches for Google domains.
   kGoogleServiceWorkerCaches,
-  // Clear all the sync data.
-  kSyncData,
   // Clear all the profile data.
   kAllData
 };
@@ -63,8 +62,6 @@ class SigninManagerAndroid : public KeyedService {
 
   base::android::ScopedJavaLocalRef<jobject> GetJavaObject();
 
-  bool IsForceSigninEnabled(JNIEnv* env);
-
   // Registers a CloudPolicyClient for fetching policy for a user and fetches
   // the policy if necessary.
   void FetchAndApplyCloudPolicy(JNIEnv* env,
@@ -73,8 +70,6 @@ class SigninManagerAndroid : public KeyedService {
 
   void StopApplyingCloudPolicy(JNIEnv* env);
 
-  base::android::ScopedJavaLocalRef<jstring> GetManagementDomain(JNIEnv* env);
-
   // Delete all data for this profile.
   void WipeProfileData(JNIEnv* env, const base::RepeatingClosure& callback);
 
@@ -82,8 +77,12 @@ class SigninManagerAndroid : public KeyedService {
   void WipeGoogleServiceWorkerCaches(JNIEnv* env,
                                      const base::RepeatingClosure& callback);
 
-  // Delete sync data for this profile.
-  void WipeSyncUserData(JNIEnv* env, const base::RepeatingClosure& callback);
+  // Configures the AccountExtensionTracker to uninstall signed-in account
+  // extensions during the next sign-out event.
+  void SetUninstallAccountExtensionsOnSignout(JNIEnv* env, bool uninstall);
+
+  // Returns true if there are any signed-in account extensions installed.
+  bool HasSignedInAccountExtensions(JNIEnv* env);
 
   void SetUserAcceptedAccountManagement(JNIEnv* env,
                                         bool accepted_account_management);
@@ -138,10 +137,6 @@ class SigninManagerAndroid : public KeyedService {
                        base::OnceClosure callback);
 
   const raw_ptr<Profile> profile_ = nullptr;
-
-  // Handler for prefs::kForceBrowserSignin. This preference is set in Local
-  // State, not in user prefs.
-  BooleanPrefMember force_browser_signin_;
 
   const raw_ptr<signin::IdentityManager> identity_manager_ = nullptr;
   const raw_ptr<policy::UserCloudPolicyManager> user_cloud_policy_manager_ =

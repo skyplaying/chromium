@@ -34,14 +34,13 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.RuntimeEnvironment;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
+import org.chromium.base.CallbackUtils;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableNullableObservableSupplier;
-import org.chromium.base.task.test.CustomShadowAsyncTask;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.keyboard_accessory.AccessoryAction;
 import org.chromium.chrome.browser.keyboard_accessory.AccessoryTabType;
@@ -52,16 +51,13 @@ import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData
 import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData.OptionToggle;
 import org.chromium.chrome.browser.keyboard_accessory.data.KeyboardAccessoryData.UserInfo;
 import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.chrome.browser.util.ChromeAccessibilityUtil;
+import org.chromium.ui.accessibility.AccessibilityStateTestHelper;
 import org.chromium.ui.modelutil.ListObservable;
 
 import java.util.concurrent.atomic.AtomicReference;
 
 /** Controller tests for the password accessory sheet. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(
-        manifest = Config.NONE,
-        shadows = {CustomShadowAsyncTask.class})
 public class PasswordAccessorySheetControllerTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -85,7 +81,7 @@ public class PasswordAccessorySheetControllerTest {
 
     @After
     public void tearDown() {
-        ChromeAccessibilityUtil.get().setAccessibilityEnabledForTesting(false);
+        AccessibilityStateTestHelper.setAccessibilityEnabledForTesting(false);
     }
 
     @Test
@@ -107,7 +103,7 @@ public class PasswordAccessorySheetControllerTest {
 
     @Test
     public void testRequestDefaultFocus() {
-        ChromeAccessibilityUtil.get().setAccessibilityEnabledForTesting(true);
+        AccessibilityStateTestHelper.setAccessibilityEnabledForTesting(true);
 
         when(mMockView.getParent()).thenReturn(mMockView);
         KeyboardAccessoryData.Tab tab = mCoordinator.getTab();
@@ -130,7 +126,6 @@ public class PasswordAccessorySheetControllerTest {
                 new AccessorySheetData(
                         AccessoryTabType.PASSWORDS,
                         /* userInfoTitle= */ "Passwords",
-                        /* plusAddressTitle= */ "",
                         /* warning= */ ""));
         verify(mMockItemListObserver).onItemRangeInserted(mSheetDataPieces, 0, 1);
         assertThat(mSheetDataPieces.size(), is(1));
@@ -140,7 +135,6 @@ public class PasswordAccessorySheetControllerTest {
                 new AccessorySheetData(
                         AccessoryTabType.PASSWORDS,
                         /* userInfoTitle= */ "Other Passwords",
-                        /* plusAddressTitle= */ "",
                         /* warning= */ ""));
         verify(mMockItemListObserver).onItemRangeChanged(mSheetDataPieces, 0, 1, null);
         assertThat(mSheetDataPieces.size(), is(1));
@@ -163,13 +157,13 @@ public class PasswordAccessorySheetControllerTest {
                 new AccessorySheetData(
                         AccessoryTabType.PASSWORDS,
                         /* userInfoTitle= */ "", // Backend sends no title if a password exists.
-                        /* plusAddressTitle= */ "",
                         /* warning= */ "");
         mCoordinator.registerDataProvider(testProvider);
 
         // Providing a User Info doesn't add a separator, even with footers present:
         testData.getUserInfoList().add(new UserInfo("example.com", true));
-        testData.getFooterCommands().add(new FooterCommand("Manage passwords", result -> {}));
+        testData.getFooterCommands()
+                .add(new FooterCommand("Manage passwords", CallbackUtils.emptyCallback()));
         testProvider.set(testData);
 
         assertThat(mSheetDataPieces.size(), is(2));
@@ -185,25 +179,21 @@ public class PasswordAccessorySheetControllerTest {
                 new AccessorySheetData(
                         AccessoryTabType.PASSWORDS,
                         /* userInfoTitle= */ "No passwords for this domain",
-                        /* plusAddressTitle= */ "No plus addresses for this domain",
                         /* warning= */ "");
         mCoordinator.registerDataProvider(testProvider);
 
         // Providing only FooterCommands and no User Info shows the title as empty state:
-        testData.getFooterCommands().add(new FooterCommand("Manage passwords", result -> {}));
+        testData.getFooterCommands()
+                .add(new FooterCommand("Manage passwords", CallbackUtils.emptyCallback()));
         testProvider.set(testData);
 
-        assertThat(mSheetDataPieces.size(), is(4));
+        assertThat(mSheetDataPieces.size(), is(3));
         assertThat(getType(mSheetDataPieces.get(0)), is(TITLE));
         assertThat(
                 mSheetDataPieces.get(0).getDataPiece(),
                 is(equalTo("No passwords for this domain")));
-        assertThat(getType(mSheetDataPieces.get(1)), is(TITLE));
-        assertThat(
-                mSheetDataPieces.get(1).getDataPiece(),
-                is(equalTo("No plus addresses for this domain")));
-        assertThat(getType(mSheetDataPieces.get(2)), is(DIVIDER));
-        assertThat(getType(mSheetDataPieces.get(3)), is(FOOTER_COMMAND));
+        assertThat(getType(mSheetDataPieces.get(1)), is(DIVIDER));
+        assertThat(getType(mSheetDataPieces.get(2)), is(FOOTER_COMMAND));
     }
 
     @Test
@@ -214,7 +204,6 @@ public class PasswordAccessorySheetControllerTest {
                 new AccessorySheetData(
                         AccessoryTabType.PASSWORDS,
                         /* userInfoTitle= */ "Passwords",
-                        /* plusAddressTitle= */ "",
                         /* warning= */ "");
         AtomicReference<Boolean> toggleEnabled = new AtomicReference<>();
         testData.setOptionToggle(
@@ -342,14 +331,13 @@ public class PasswordAccessorySheetControllerTest {
                 new AccessorySheetData(
                         AccessoryTabType.PASSWORDS,
                         /* userInfoTitle= */ "Passwords",
-                        /* plusAddressTitle= */ "",
                         /* warning= */ "");
         testData.setOptionToggle(
                 new OptionToggle(
                         "Save passwords for this site",
                         toggleEnabled,
                         AccessoryAction.TOGGLE_SAVE_PASSWORDS,
-                        (Boolean enabled) -> {}));
+                        CallbackUtils.emptyCallback()));
         mCoordinator.registerDataProvider(testProvider);
         testProvider.set(testData);
     }

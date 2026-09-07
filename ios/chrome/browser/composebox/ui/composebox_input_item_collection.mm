@@ -16,16 +16,12 @@
 
   // The ordered list of items for display.
   NSMutableArray<ComposeboxInputItem*>* _containedItems;
-
-  // The limit of attachments.
-  size_t _attachmentLimit;
 }
 
-- (instancetype)initWithAttachmentLimit:(size_t)attachmentLimit {
+- (instancetype)init {
   self = [super init];
   if (self) {
     _containedItems = [[NSMutableArray alloc] init];
-    _attachmentLimit = attachmentLimit;
   }
 
   return self;
@@ -45,22 +41,12 @@
   return self.imagesCount > 0;
 }
 
+- (BOOL)hasFile {
+  return self.filesCount > 0;
+}
+
 - (BOOL)hasTabOrFile {
   return self.tabsCount > 0 || self.filesCount > 0;
-}
-
-- (BOOL)canAddMoreAttachments {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(_sequenceChecker);
-  return self.count < _attachmentLimit;
-}
-
-- (size_t)availableSlots {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(_sequenceChecker);
-  return _attachmentLimit - self.count;
-}
-
-- (size_t)nonTabAttachmentCount {
-  return self.imagesCount + self.filesCount;
 }
 
 - (size_t)imagesCount {
@@ -78,7 +64,7 @@
   DCHECK_CALLED_ON_VALID_SEQUENCE(_sequenceChecker);
   NSUInteger result = 0;
   for (ComposeboxInputItem* item in _containedItems) {
-    if (item.type == ComposeboxInputItemType::kComposeboxInputItemTypeFile) {
+    if (item.type == ComposeboxInputItemType::kComposeboxInputItemTypeTab) {
       result++;
     }
   }
@@ -89,7 +75,9 @@
   DCHECK_CALLED_ON_VALID_SEQUENCE(_sequenceChecker);
   NSUInteger result = 0;
   for (ComposeboxInputItem* item in _containedItems) {
-    if (item.type == ComposeboxInputItemType::kComposeboxInputItemTypeTab) {
+    if (item.type == ComposeboxInputItemType::kComposeboxInputItemTypeRawFile ||
+        item.type == ComposeboxInputItemType::kComposeboxInputItemTypePDF ||
+        item.type == ComposeboxInputItemType::kComposeboxInputItemTypeDrive) {
       result++;
     }
   }
@@ -112,12 +100,22 @@
 }
 
 - (void)replaceWithItems:(NSArray<ComposeboxInputItem*>*)updatedItems {
-  _containedItems = [updatedItems copy];
+  _containedItems = [[NSMutableArray alloc] initWithArray:updatedItems
+                                                copyItems:YES];
   [_delegate composeboxInputItemCollectionDidUpdateItems:self];
 }
 
 - (void)removeItem:(ComposeboxInputItem*)item {
   [_containedItems removeObject:item];
+  [_delegate composeboxInputItemCollectionDidUpdateItems:self];
+}
+
+- (void)removeItems:(NSArray<ComposeboxInputItem*>*)items {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(_sequenceChecker);
+  if (items.count == 0) {
+    return;
+  }
+  [_containedItems removeObjectsInArray:items];
   [_delegate composeboxInputItemCollectionDidUpdateItems:self];
 }
 

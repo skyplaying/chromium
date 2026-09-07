@@ -26,11 +26,13 @@ from collections import OrderedDict
 
 # idl_parser expects to be able to import certain files in its directory,
 # so let's set things up the way it wants.
-_idl_generators_path = os.path.join(os.path.dirname(os.path.realpath(__file__)),
-                                    os.pardir, os.pardir, 'tools')
+_idl_generators_path = os.path.join(
+  os.path.dirname(os.path.realpath(__file__)), os.pardir, os.pardir, 'tools'
+)
 sys.path.insert(0, _idl_generators_path)
 try:
   import idl_parser
+
   importlib.reload(idl_parser)
   from idl_parser import idl_parser, idl_lexer, idl_node
 finally:
@@ -38,12 +40,16 @@ finally:
 
 IDLNode = idl_node.IDLNode  # Used for type hints.
 
+# Currently we only explicitly support these buffer source types, but more could
+# be added here if there was a use case for them.
+_SUPPORTED_BUFFER_SOURCE_TYPES = ['ArrayBuffer', 'Uint8Array']
+
 
 class SchemaCompilerError(Exception):
-
   def __init__(self, message: str, node: IDLNode):
     super().__init__(
-        node.GetLogLine(f'Error processing node {node}: {message}'))
+      node.GetLogLine(f'Error processing node {node}: {message}')
+    )
 
 
 class UndefinedType:
@@ -62,7 +68,8 @@ def GetChildWithName(node: IDLNode, name: str) -> Optional[IDLNode]:
     name was not found.
   """
   return next(
-      (child for child in node.GetChildren() if child.GetName() == name), None)
+    (child for child in node.GetChildren() if child.GetName() == name), None
+  )
 
 
 def GetTypeName(node: IDLNode) -> str:
@@ -81,7 +88,8 @@ def GetTypeName(node: IDLNode) -> str:
     if child_node.GetClass() == 'Type':
       return child_node.GetOneOf('Typeref').GetName()
   raise SchemaCompilerError(
-      'Could not find Type node when looking for Typeref name.', node)
+    'Could not find Type node when looking for Typeref name.', node
+  )
 
 
 def GetExtendedAttributes(node: IDLNode) -> Optional[List[IDLNode]]:
@@ -151,6 +159,29 @@ def AddCommonExtendedAttributeProperties(node: IDLNode, properties: dict):
     properties['nocompile'] = True
 
 
+def AddEventOptionsExtendedAttributes(node: IDLNode, properties: dict):
+  """Looks for event option extended attributes and adds them to properties.
+
+  Extracts extended attributes that are only specific to Event definitions.
+  TODO(crbug.com/487746350): Add support for declarative event related
+  properties (`supportsListeners`, `supportsRules`) to this function as
+  required for WebIDL schema conversions.
+
+  Args:
+    node: The IDLNode to look for the extended attributes on.
+    properties: The object to add the associated key value pairs to.
+  """
+  if (value := GetExtendedAttributeValue(node, 'maxListeners')) is not None:
+    if 'options' not in properties:
+      properties['options'] = {}
+    properties['options']['maxListeners'] = int(value)
+
+  if HasExtendedAttribute(node, 'supportsFilters'):
+    if 'options' not in properties:
+      properties['options'] = {}
+    properties['options']['supportsFilters'] = True
+
+
 def _ExtractNodeComment(node: IDLNode) -> str:
   """Extract contiguous file comments above a node and return them as a string.
 
@@ -181,9 +212,20 @@ def _ExtractNodeComment(node: IDLNode) -> str:
   if ext_attribute_node is not None:
     return _ExtractNodeComment(ext_attribute_node)
 
-  # Since we do the logic above for extended attributes, the 'parent' is
-  # actually the grandparent for them.
-  if node.GetClass() == 'ExtAttributes':
+  # Similarly to extended attributes, the type can also be on a preceding line
+  # from the identifier, so we also check for it. However, in some cases (like
+  # callback definitions) the type can be after the identifier, so we only use
+  # it if it's on a preceding or the same line.
+  type_node = node.GetOneOf('Type')
+  if type_node is not None:
+    _, type_line_number = type_node.GetFileAndLine()
+    _, node_line_number = node.GetFileAndLine()
+    if type_line_number <= node_line_number:
+      return _ExtractNodeComment(type_node)
+
+  # Since we do the logic above for extended attributes and types, the 'parent'
+  # is actually the grandparent for them.
+  if node.GetClass() in ['ExtAttributes', 'Type']:
     parent_node = node.GetParent().GetParent()
   else:
     parent_node = node.GetParent()
@@ -199,8 +241,9 @@ def _ExtractNodeComment(node: IDLNode) -> str:
   # In theory the IDL parser shouldn't annotate any of our nodes with line
   # number 0, but in case it does we throw an error to make it obvious.
   assert line_number > 0, node.GetLogLine(
-      'Attempted to extract a description comment for an IDL node, but the line'
-      ' number of the node was reported as 0: %s.' % (node.GetName()))
+    'Attempted to extract a description comment for an IDL node, but the line'
+    ' number of the node was reported as 0: %s.' % (node.GetName())
+  )
 
   # Look through the lines above the current node and extract every consecutive
   # line that is a comment until a blank or non-comment line is found.
@@ -222,15 +265,16 @@ def _ExtractNodeComment(node: IDLNode) -> str:
       # description from a file comment. If this happens, it likely means there
       # should be a blank newline.
       raise SchemaCompilerError(
-          'Reached top of file when trying to parse description from file'
-          ' comment. Make sure there is a blank line before the comment.',
-          node,
+        'Reached top of file when trying to parse description from file'
+        ' comment. Make sure there is a blank line before the comment.',
+        node,
       )
   return ''.join(lines)
 
 
 class DescriptionData(NamedTuple):
   """Structured tuple to wrap documentation comment strings."""
+
   description: str
   parameter_descriptions: OrderedDict[str, str]
 
@@ -304,16 +348,17 @@ def ProcessNodeDescription(node: IDLNode) -> DescriptionData:
   parameter_matches = list(re.finditer(r' *\|([^|]*)\| *: *', comment))
 
   # Get the parent comment (everything before the first parameter comment).
-  first_parameter_location = (parameter_matches[0].start()
-                              if parameter_matches else len(comment))
+  first_parameter_location = (
+    parameter_matches[0].start() if parameter_matches else len(comment)
+  )
   description = format_description(comment[:first_parameter_location])
 
   # Now extract any parameter comments.
   parameter_descriptions = OrderedDict()
   # Shorthand to iterate over parameter_matches with both element N and N+1.
-  for (current_param,
-       next_param) in itertools.zip_longest(parameter_matches,
-                                            parameter_matches[1:]):
+  for current_param, next_param in itertools.zip_longest(
+    parameter_matches, parameter_matches[1:]
+  ):
     param_name = current_param.group(1)
 
     # A parameter's comment goes from the end of its introduction to the
@@ -321,12 +366,13 @@ def ProcessNodeDescription(node: IDLNode) -> DescriptionData:
     param_comment_start = current_param.end()
     param_comment_end = next_param.start() if next_param else len(comment)
     parameter_descriptions[param_name] = format_description(
-        comment[param_comment_start:param_comment_end])
+      comment[param_comment_start:param_comment_end]
+    )
 
   return DescriptionData(description, parameter_descriptions)
 
 
-class Type():
+class Type:
   """Given an IDL node of class Type, extracts core type information.
 
   This class is used to extract core type information from an IDL Type node,
@@ -338,9 +384,11 @@ class Type():
     type_node: The IDLNode for the Type to be processed.
   """
 
-  def __init__(self,
-               type_node: IDLNode,
-               descriptions: Optional[OrderedDict[str, str]] = None) -> None:
+  def __init__(
+    self,
+    type_node: IDLNode,
+    descriptions: Optional[OrderedDict[str, str]] = None,
+  ) -> None:
     assert type_node.GetClass() in ['Type', 'Const']
     self.descriptions = descriptions
     self.type_node = type_node
@@ -374,15 +422,16 @@ class Type():
       # have an 'instanceOf' extended attribute.
       if properties['type'] == 'object':
         properties['additionalProperties'] = {'type': 'any'}
-        if instance_of := GetExtendedAttributeValue(self.type_node.GetParent(),
-                                                    'instanceOf'):
+        if instance_of := GetExtendedAttributeValue(
+          self.type_node.GetParent(), 'instanceOf'
+        ):
           properties['isInstanceOf'] = instance_of
     elif type_details.IsA('Typeref'):
       # Some common types don't actually have a custom class backing them and
       # are just Typerefs with a string name.
-      if type_details.GetName() == 'ArrayBuffer':
+      if type_details.GetName() in _SUPPORTED_BUFFER_SOURCE_TYPES:
         properties['type'] = 'binary'
-        properties['isInstanceOf'] = 'ArrayBuffer'
+        properties['isInstanceOf'] = type_details.GetName()
       else:
         # Other Typerefs will either be referencing a custom type defined as a
         # Dictionary/Enum or a function defined as a Callback in the schema
@@ -397,26 +446,44 @@ class Type():
           parent = parent.GetParent()
 
         referenced_type = GetChildWithName(parent, type_name)
-        # TODO(crbug.com/450443604): Add support for shared types, which are
-        # defined in a separate file that is referenced by several different
-        # schemas.
         if referenced_type is None:
           raise SchemaCompilerError(
-              'Could not find definition of referenced type "%s" for node.' %
-              type_name,
-              type_details,
+            'Could not find definition of referenced type "%s" for node.'
+            % type_name,
+            type_details,
           )
 
         if referenced_type.GetClass() in ['Dictionary', 'Enum']:
           properties['$ref'] = type_name
         elif referenced_type.GetClass() == 'Callback':
           properties = Operation(referenced_type).process()
+        elif referenced_type.GetClass() == 'Typedef':
+          # Typedefs can be used for declaring shared Types referencing Types
+          # defined in other API namespaces, or for defining local aliases
+          # with specific extended attributes like [instanceOf].
+          if shared_type_name := GetExtendedAttributeValue(
+            referenced_type, 'ExternalExtensionType'
+          ):
+            # TODO(crbug.com/486928682): Eventually it would be good to follow
+            # the way Blink does this, by having shared types use globally
+            # unique names and be defined in their own files. Then all the
+            # relevant type files for an API schema could also be passed to the
+            # IDL parser and our `referenced_type` code above could search
+            # through those.
+            properties['$ref'] = shared_type_name
+          else:
+            # If it's not an external type, we process the underlying type of
+            # the typedef and apply any extended attributes from the typedef
+            # itself.
+            typedef_type_node = referenced_type.GetOneOf('Type')
+            properties.update(Type(typedef_type_node).Process())
+
         else:
           raise SchemaCompilerError(
-              'Found a Typeref node referencing a node of type "%s", but we'
-              ' only support Typerefs that reference Dictionary, Enum or'
-              ' Callback class nodes.' % referenced_type.GetClass(),
-              type_details,
+            'Found a Typeref node referencing a node of type "%s", but we'
+            ' only support Typerefs that reference Dictionary, Enum or'
+            ' Callback class nodes.' % referenced_type.GetClass(),
+            type_details,
           )
 
     elif type_details.IsA('Undefined'):
@@ -426,7 +493,8 @@ class Type():
       # this similar to how we represent arguments for Operations, with a
       # 'parameters' list that has a single element for the type.
       properties['parameters'] = self._ExtractParametersFromPromiseType(
-          type_details, self.descriptions)
+        type_details, self.descriptions
+      )
       # TODO(crbug.com/428187556): It would be nice to explicitly mark these as
       # 'type' = 'promise' as well once we're done migrating schemas to WebIDL.
     elif type_details.IsA('Sequence'):
@@ -438,11 +506,12 @@ class Type():
       properties['type'] = 'any'
     elif type_details.IsA('UnionType'):
       properties['choices'] = [
-          Type(node).Process() for node in type_details.GetListOf('Type')
+        Type(node).Process() for node in type_details.GetListOf('Type')
       ]
     else:
-      raise SchemaCompilerError('Unsupported type class when processing type.',
-                                type_details)
+      raise SchemaCompilerError(
+        'Unsupported type class when processing type.', type_details
+      )
     return properties
 
   def _TranslateBasicType(self, type_details: IDLNode) -> str:
@@ -464,8 +533,9 @@ class Type():
     type_name = type_details.GetName()
     if type_name == 'void':
       raise SchemaCompilerError(
-          'Usage of "void" in IDL is deprecated, use "Undefined" instead.',
-          type_details)
+        'Usage of "void" in IDL is deprecated, use "Undefined" instead.',
+        type_details,
+      )
     if type_name == 'boolean':
       return 'boolean'
     if type_name == 'double':
@@ -478,12 +548,14 @@ class Type():
       return 'object'
 
     raise SchemaCompilerError(
-        'Unsupported basic type found when processing type.', type_details)
+      'Unsupported basic type found when processing type.', type_details
+    )
 
   def _ExtractParametersFromPromiseType(
-      self,
-      type_details: IDLNode,
-      descriptions: Optional[OrderedDict[str, str]] = None) -> List[dict]:
+    self,
+    type_details: IDLNode,
+    descriptions: Optional[OrderedDict[str, str]] = None,
+  ) -> List[dict]:
     """Extracts details for the type a promise will resolve to.
 
     Returns:
@@ -516,14 +588,15 @@ class TypedProperty(ABC):
       typed property which will be returned when calling Process.
   """
 
-  def __init__(self,
-               node: IDLNode,
-               descriptions: Optional[OrderedDict[str, str]] = None) -> None:
+  def __init__(
+    self, node: IDLNode, descriptions: Optional[OrderedDict[str, str]] = None
+  ) -> None:
     self.node = node
     self.descriptions = descriptions
     self.type_node = node.GetOneOf('Type')
     assert self.type_node is not None, self.type_node.GetLogLine(
-        'Could not find Type node on IDLNode named: %s.' % (node.GetName()))
+      'Could not find Type node on IDLNode named: %s.' % (node.GetName())
+    )
     self.properties = Type(self.type_node, descriptions).Process()
 
   @abstractmethod
@@ -597,7 +670,13 @@ class DictionaryMember(TypedProperty):
   def Process(self) -> dict:
     # TODO(crbug.com/340297705): Add support for extended attributes on custom
     # type members.
-    self.properties['name'] = self.node.GetName()
+    name = self.node.GetName()
+    self.properties['name'] = name
+    # If this member is for a callback with a return (e.g. has a 'returns'
+    # property) the name specified on the 'returns' is actually inherited from
+    # the member name.
+    if 'returns' in self.properties:
+      self.properties['returns']['name'] = name
 
     if not self.node.GetProperty('REQUIRED'):
       self.properties['optional'] = True
@@ -630,7 +709,7 @@ class Operation:
     properties['type'] = 'function'
 
     description_data = ProcessNodeDescription(self.node)
-    if (description_data.description):
+    if description_data.description:
       properties['description'] = description_data.description
 
     AddCommonExtendedAttributeProperties(self.node, properties)
@@ -641,38 +720,60 @@ class Operation:
     arguments_node = self.node.GetOneOf('Arguments')
     for argument in arguments_node.GetListOf('Argument'):
       parameters.append(
-          FunctionArgument(argument,
-                           description_data.parameter_descriptions).Process())
+        FunctionArgument(
+          argument, description_data.parameter_descriptions
+        ).Process()
+      )
     properties['parameters'] = parameters
 
     # Return type processing.
     return_type = FunctionReturn(
-        self.node, description_data.parameter_descriptions).Process()
-    if 'type' in return_type and return_type['type'] is UndefinedType:
-      # This is an Undefined return, so we don't add anything.
-      pass
-    # If no type was specified but there is a parameters property, we can infer
-    # this is a promise definition for an asynchronous return.
-    elif 'type' not in return_type and 'parameters' in return_type:
-      # TODO(tjudkins): The optionality of the callback is only relevant for
-      # contexts that don't support promise based calls and for the few
-      # functions which don't support promise based calls, as the callback is
-      # always inherently optional when using a promise based call instead. It
-      # would be nice to just get rid of the 'optional' property here and always
-      # treat it as optional when we remove the context restrictions for promise
-      # based calls.
-      if not HasExtendedAttribute(self.node, 'requiredCallback'):
-        return_type['optional'] = True
-      # For legacy reasons Promise based returns are represented on a
-      # "returns_async" property.
-      # TODO(crbug.com/428187556): Once we've migrated schemas to WebIDL, we
-      # should be able to just use the 'returns' field with 'type' = 'promise'
-      # instead of the 'returns_async' property.
-      properties['returns_async'] = return_type
+      self.node, description_data.parameter_descriptions
+    ).Process()
+
+    # A few functions with asynchronous returns don't support promises and
+    # instead use a trailing callback parameter. We need to pop this off and put
+    # it into the `returns_async` field.
+    # Note: We only do this for normal Operation definitions which are not
+    # marked with the `trailingCallbackIsFunctionParameter` extended attribute.
+    if (
+      self.node.GetClass() == 'Operation'
+      and not HasExtendedAttribute(
+        self.node, 'trailingCallbackIsFunctionParameter'
+      )
+      and len(parameters) > 0
+      and parameters[-1].get('type') == 'function'
+    ):
+      # Pop the callback from the parameters and format it as returns_async.
+      returns_async = parameters.pop()
+      returns_async.pop('type')
+      returns_async['does_not_support_promises'] = True
+
+      properties['returns_async'] = returns_async
+
+      # Add any synchronous return if it's not Undefined for functions with both
+      # a synchronous and asynchronous return.
+      if 'type' not in return_type or return_type['type'] is not UndefinedType:
+        properties['returns'] = return_type
+
+    # Otherwise we process the returns/returns_async normally.
     else:
-      # Otherwise this is a typed return using either the 'type' key or '$ref'
-      # key to reference the underlying type.
-      properties['returns'] = return_type
+      if 'type' in return_type and return_type['type'] is UndefinedType:
+        # This is an Undefined return, so we don't add anything.
+        pass
+      # If no type was specified but there is a parameters property, we can
+      # infer this is a promise definition for an asynchronous return.
+      elif 'type' not in return_type and 'parameters' in return_type:
+        # For legacy reasons Promise based returns are represented on a
+        # "returns_async" property.
+        # TODO(crbug.com/428187556): Once we've migrated schemas to WebIDL, we
+        # should be able to just use the 'returns' field with 'type' = 'promise'
+        # instead of the 'returns_async' property.
+        properties['returns_async'] = return_type
+      else:
+        # Otherwise this is a typed return using either the 'type' key or '$ref'
+        # key to reference the underlying type.
+        properties['returns'] = return_type
 
     return properties
 
@@ -694,14 +795,17 @@ class Dictionary:
     properties = OrderedDict()
     for property_node in self.node.GetListOf('Key'):
       properties[property_node.GetName()] = DictionaryMember(
-          property_node).Process()
+        property_node
+      ).Process()
 
     result = {
-        'id': self.node.GetName(),
-        'properties': properties,
-        'type': 'object'
+      'id': self.node.GetName(),
+      'properties': properties,
+      'type': 'object',
     }
     AddCommonExtendedAttributeProperties(self.node, result)
+    if HasExtendedAttribute(self.node, 'ignoreAdditionalProperties'):
+      result['ignoreAdditionalProperties'] = True
 
     return result
 
@@ -728,10 +832,10 @@ class Enum:
         enum_value['description'] = value_description
       enum.append(enum_value)
     result = {
-        'id': self.node.GetName(),
-        'description': ProcessNodeDescription(self.node).description,
-        'type': 'string',
-        'enum': enum
+      'id': self.node.GetName(),
+      'description': ProcessNodeDescription(self.node).description,
+      'type': 'string',
+      'enum': enum,
     }
     AddCommonExtendedAttributeProperties(self.node, result)
 
@@ -775,27 +879,32 @@ class Event:
     event_interface = GetChildWithName(parent, interface_name)
     if event_interface is None or event_interface.GetClass() != 'Interface':
       raise SchemaCompilerError(
-          'Could not find Interface definition for event.', self.node)
+        'Could not find Interface definition for event.', self.node
+      )
     self._VerifyEventDefinition(event_interface)
     add_listener_operation = GetChildWithName(event_interface, 'addListener')
     callback_name = GetTypeName(
-        add_listener_operation.GetOneOf('Arguments').GetOneOf('Argument'))
+      add_listener_operation.GetOneOf('Arguments').GetOneOf('Argument')
+    )
     callback_node = GetChildWithName(parent, callback_name)
     parameter_descriptions = ProcessNodeDescription(
-        callback_node).parameter_descriptions
+      callback_node
+    ).parameter_descriptions
 
     description = ProcessNodeDescription(self.node).description
-    if (description):
+    if description:
       properties['description'] = description
 
     parameters = []
     arguments_node = callback_node.GetOneOf('Arguments')
     for argument in arguments_node.GetListOf('Argument'):
       parameters.append(
-          FunctionArgument(argument, parameter_descriptions).Process())
+        FunctionArgument(argument, parameter_descriptions).Process()
+      )
     properties['parameters'] = parameters
 
     AddCommonExtendedAttributeProperties(self.node, properties)
+    AddEventOptionsExtendedAttributes(self.node, properties)
 
     return properties
 
@@ -817,20 +926,24 @@ class Event:
     inherit_node = GetChildWithName(event, 'ExtensionEvent')
     if inherit_node is None or inherit_node.GetClass() != 'Inherit':
       raise SchemaCompilerError(
-          'Event Interface missing ExtensionEvent Inheritance.', event)
+        'Event Interface missing ExtensionEvent Inheritance.', event
+      )
 
     add_listener = GetChildWithName(event, 'addListener')
     if add_listener is None or add_listener.GetClass() != 'Operation':
       raise SchemaCompilerError(
-          'Event Interface missing addListener Operation definition.', event)
+        'Event Interface missing addListener Operation definition.', event
+      )
     remove_listener = GetChildWithName(event, 'removeListener')
     if remove_listener is None or remove_listener.GetClass() != 'Operation':
       raise SchemaCompilerError(
-          'Event Interface missing removeListener Operation definition.', event)
+        'Event Interface missing removeListener Operation definition.', event
+      )
     has_listener = GetChildWithName(event, 'hasListener')
     if has_listener is None or has_listener.GetClass() != 'Operation':
       raise SchemaCompilerError(
-          'Event Interface missing hasListener Operation definition.', event)
+        'Event Interface missing hasListener Operation definition.', event
+      )
 
 
 class Property:
@@ -855,24 +968,25 @@ class Property:
       value = GetExtendedAttributeValue(self.node, 'StringValue')
       if value is None:
         raise SchemaCompilerError(
-            'If using a const of type DOMString, you must specify the extended'
-            ' attribute "StringValue" for the value.',
-            self.node,
+          'If using a const of type DOMString, you must specify the extended'
+          ' attribute "StringValue" for the value.',
+          self.node,
         )
     # The IDL Parser always returns values as strings, so cast to their real
     # type.
     properties['value'] = self._CastFromType(properties['type'], value)
 
     description_data = ProcessNodeDescription(self.node)
-    if (description_data.description):
+    if description_data.description:
       properties['description'] = description_data.description
 
     AddCommonExtendedAttributeProperties(self.node, properties)
 
     return (self.node.GetName(), properties)
 
-  def _CastFromType(self, type_name: str,
-                    string_value: str) -> Union[int, float, str]:
+  def _CastFromType(
+    self, type_name: str, string_value: str
+  ) -> Union[int, float, str]:
     """Casts from a string value to a real Python type based on type name.
 
     Args:
@@ -939,9 +1053,9 @@ class Namespace:
         if node.GetName() == 'ExtensionManifest':
           if not node.GetProperty('PARTIAL'):
             raise SchemaCompilerError(
-                'If using an "ExtensionManifest" dictionary to define manifest '
-                'keys, it must be declared "partial".',
-                node,
+              'If using an "ExtensionManifest" dictionary to define manifest '
+              'keys, it must be declared "partial".',
+              node,
             )
           manifest_keys = Dictionary(node).process()['properties']
           continue
@@ -960,17 +1074,17 @@ class Namespace:
       properties[property_key] = property_value
 
     result = {
-        'namespace': self.name,
-        'functions': functions,
-        'types': types,
-        'events': events,
-        'properties': properties,
-        'manifest_keys': manifest_keys,
-        'description': description,
-        'nodoc': False,
-        'platforms': None,
-        'deprecated': None,
-        'compiler_options': {},
+      'namespace': self.name,
+      'functions': functions,
+      'types': types,
+      'events': events,
+      'properties': properties,
+      'manifest_keys': manifest_keys,
+      'description': description,
+      'nodoc': False,
+      'platforms': None,
+      'deprecated': None,
+      'compiler_options': {},
     }
 
     # Several special attributes specific to the schema compilation process are
@@ -978,8 +1092,9 @@ class Namespace:
     AddCommonExtendedAttributeProperties(self.namespace, result)
     if platforms := GetExtendedAttributeValue(self.namespace, 'platforms'):
       result['platforms'] = platforms
-    if implemented_in := GetExtendedAttributeValue(self.namespace,
-                                                   'implemented_in'):
+    if implemented_in := GetExtendedAttributeValue(
+      self.namespace, 'implemented_in'
+    ):
       result['compiler_options']['implemented_in'] = implemented_in
     if HasExtendedAttribute(self.namespace, 'generate_error_messages'):
       result['compiler_options']['generate_error_messages'] = True
@@ -1017,9 +1132,9 @@ class IDLSchema:
       attributes = browser_node.GetListOf('Attribute')
       if len(attributes) != 1:
         raise SchemaCompilerError(
-            'The partial Browser interface should have exactly one attribute '
-            'for the name the API will be exposed under.',
-            browser_node,
+          'The partial Browser interface should have exactly one attribute '
+          'for the name the API will be exposed under.',
+          browser_node,
         )
       api_name = attributes[0].GetName()
       idl_type = GetTypeName(attributes[0])
@@ -1043,21 +1158,25 @@ class IDLSchema:
       namespace_node = GetChildWithName(self.idl, 'ExtensionManifest')
       if namespace_node is None or namespace_node.GetClass() != 'Dictionary':
         raise SchemaCompilerError(
-            'Schema must contain either a paritial Browser interface (for '
-            'APIs) or a partial ExtensionManifest dictionary (for manifest '
-            'stubs).', self.idl)
+          'Schema must contain either a partial Browser interface (for '
+          'APIs) or a partial ExtensionManifest dictionary (for manifest '
+          'stubs).',
+          self.idl,
+        )
 
       # For manifest stub schemas, the namespace name is specified on an
       # extended attribute.
       api_name = GetExtendedAttributeValue(namespace_node, 'Namespace')
       if not api_name:
         raise SchemaCompilerError(
-            'ExtensionManifest stub schemas must specify a [Namespace=...] '
-            'extended attribute.', namespace_node)
+          'ExtensionManifest stub schemas must specify a [Namespace=...] '
+          'extended attribute.',
+          namespace_node,
+        )
 
     namespace = Namespace(
-        api_name,
-        namespace_node,
+      api_name,
+      namespace_node,
     )
     namespaces.append(namespace.process())
 
@@ -1099,8 +1218,9 @@ def Main():
     for i, char in enumerate(contents):
       if not char.isascii():
         raise Exception(
-            'Non-ascii character "%s" (ord %d) found at offset %d.' %
-            (char, ord(char), i))
+          'Non-ascii character "%s" (ord %d) found at offset %d.'
+          % (char, ord(char), i)
+        )
     idl = idl_parser.IDLParser().ParseData(contents, '<stdin>')
     schema = IDLSchema(idl).process()
     print(json.dumps(schema, indent=2))

@@ -17,7 +17,6 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.profiles.Profile;
@@ -31,7 +30,6 @@ import org.chromium.chrome.test.util.browser.tabmodel.MockTabModel;
 
 /** Tests for the TabModelTabObserver. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class TabModelTabObserverUnitTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
     private MockTabModel mTabModel;
@@ -48,7 +46,8 @@ public class TabModelTabObserverUnitTest {
         mTabModel.setIndex(0, TabSelectionType.FROM_USER);
         mTabModelTabObserver = new TabModelTabObserver(mTabModel);
 
-        assertTrue(TabModelUtils.getCurrentTab(mTabModel).hasObserver(mTabModelTabObserver));
+        assertTrue(
+                TabModelUtils.getCurrentTab(mTabModel).hasObserverForTesting(mTabModelTabObserver));
     }
 
     @Test
@@ -59,7 +58,7 @@ public class TabModelTabObserverUnitTest {
         mTabModel.addTab(mTab, 1, TabLaunchType.FROM_LINK, TabCreationState.LIVE_IN_FOREGROUND);
         mTabModel.setIndex(1, TabSelectionType.FROM_USER);
         assertEquals(2, mTabModel.getCount());
-        assertTrue(mTabModel.getTabAt(1).hasObserver(mTabModelTabObserver));
+        assertTrue(mTabModel.getTabAt(1).hasObserverForTesting(mTabModelTabObserver));
     }
 
     @Test
@@ -67,6 +66,6 @@ public class TabModelTabObserverUnitTest {
     public void testDestroyRemovesObservers() {
         assertEquals(1, mTabModel.getCount());
         mTabModelTabObserver.destroy();
-        assertFalse(mTabModel.getTabAt(0).hasObserver(mTabModelTabObserver));
+        assertFalse(mTabModel.getTabAt(0).hasObserverForTesting(mTabModelTabObserver));
     }
 }

@@ -21,9 +21,9 @@ import org.chromium.build.annotations.EnsuresNonNull;
 import org.chromium.build.annotations.MonotonicNonNull;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabHidingType;
+import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.chrome.browser.tab.TabSelectionType;
 import org.chromium.chrome.browser.tabmodel.TabModelObserver;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
@@ -56,8 +56,8 @@ import java.util.Map;
  * listening to network changes.
  */
 @NullMarked
-public class OfflinePageTabObserver extends EmptyTabObserver
-        implements NetworkChangeNotifier.ConnectionTypeObserver {
+public class OfflinePageTabObserver
+        implements TabObserver, NetworkChangeNotifier.ConnectionTypeObserver {
     private static final String TAG = "OfflinePageTO";
 
     /** Class for keeping the state of observed tabs. */
@@ -172,7 +172,7 @@ public class OfflinePageTabObserver extends EmptyTabObserver
         mIsObservingNetworkChanges = false;
     }
 
-    // Methods from EmptyTabObserver
+    // Methods from TabObserver
     @Override
     public void onPageLoadFinished(Tab tab, GURL url) {
         Log.d(TAG, "onPageLoadFinished");
@@ -295,18 +295,16 @@ public class OfflinePageTabObserver extends EmptyTabObserver
     public void onConnectionTypeChanged(int connectionType) {
         Log.d(
                 TAG,
-                "Got connectivity event, connectionType: "
-                        + connectionType
-                        + ", is connected: "
-                        + OfflinePageUtils.isConnected()
-                        + ", controller: "
-                        + mSnackbarController);
+                "Got connectivity event, connectionType: %d, is connected: %b, controller: %s",
+                connectionType,
+                OfflinePageUtils.isConnected(),
+                mSnackbarController);
         maybeShowReloadSnackbar(mCurrentTab, true);
 
         // Since we are loosing the connection, next time we connect, we still want to show a
         // snackbar. This works in event that onConnectionTypeChanged happens, while Chrome is not
         // visible. Making it visible after that would not trigger the snackbar, even though
-        // connection state changed. See http://crbug.com/651410
+        // connection state changed. See http://crbug.com/41278137
         if (!OfflinePageUtils.isConnected()) {
             for (TabState tabState : mObservedTabs.values()) {
                 tabState.wasSnackbarSeen = false;
@@ -341,7 +339,7 @@ public class OfflinePageTabObserver extends EmptyTabObserver
     }
 
     void maybeShowReloadSnackbar(@Nullable Tab tab, boolean isNetworkEvent) {
-        // Exclude Offline Previews, as there is a seperate UI for previews.
+        // Exclude Offline Previews, as there is a separate UI for previews.
         if (tab == null
                 || tab.isFrozen()
                 || tab.isHidden()

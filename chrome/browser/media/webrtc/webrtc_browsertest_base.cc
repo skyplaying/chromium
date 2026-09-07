@@ -23,8 +23,8 @@
 #include "chrome/browser/extensions/chrome_test_extension_loader.h"
 #include "chrome/browser/media/webrtc/webrtc_browsertest_common.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -259,7 +259,7 @@ WebRtcTestBase::OpenPageAndGetUserMediaInNewTabWithConstraints(
   chrome::AddTabAt(browser(), GURL(url::kAboutBlankURL), -1, true);
   EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
   content::WebContents* new_tab =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   // Accept if necessary, but don't expect a prompt (because auto-accept is also
   // okay).
   permissions::PermissionRequestManager::FromWebContents(new_tab)
@@ -283,7 +283,7 @@ content::WebContents* WebRtcTestBase::OpenTestPageInNewTab(
   GURL url = embedded_test_server()->GetURL(test_page);
   EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
   content::WebContents* new_tab =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   // Accept if necessary, but don't expect a prompt (because auto-accept is also
   // okay).
   permissions::PermissionRequestManager::FromWebContents(new_tab)
@@ -561,7 +561,7 @@ std::string WebRtcTestBase::GetDesktopMediaStream(content::WebContents* tab) {
 std::optional<std::string> WebRtcTestBase::LoadDesktopCaptureExtension() {
   std::optional<std::string> extension_id;
   if (!desktop_capture_extension_.get()) {
-    extensions::ChromeTestExtensionLoader loader(browser()->profile());
+    extensions::ChromeTestExtensionLoader loader(browser()->GetProfile());
     base::FilePath extension_path;
     EXPECT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &extension_path));
     extension_path = extension_path.AppendASCII("extensions/desktop_capture");
@@ -570,7 +570,7 @@ std::optional<std::string> WebRtcTestBase::LoadDesktopCaptureExtension() {
               << desktop_capture_extension_->id();
 
     extensions::ExtensionRegistry* registry =
-        extensions::ExtensionRegistry::Get(browser()->profile());
+        extensions::ExtensionRegistry::Get(browser()->GetProfile());
 
     EXPECT_TRUE(registry->enabled_extensions().GetByID(
         desktop_capture_extension_->id()));

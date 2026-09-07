@@ -47,6 +47,22 @@
 #include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/mouse_constants.h"
 
+class ToolbarActionView::ContextMenuObserver
+    : public ExtensionContextMenuController::Observer {
+ public:
+  explicit ContextMenuObserver(ToolbarActionView* owner) : owner_(owner) {}
+  ContextMenuObserver(const ContextMenuObserver&) = delete;
+  ContextMenuObserver& operator=(const ContextMenuObserver&) = delete;
+  ~ContextMenuObserver() override = default;
+
+  // ExtensionContextMenuController::Observer:
+  void OnContextMenuShown() override { owner_->OnContextMenuShown(); }
+  void OnContextMenuClosed() override { owner_->OnContextMenuClosed(); }
+
+ private:
+  const raw_ptr<ToolbarActionView> owner_;
+};
+
 using views::LabelButtonBorder;
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -58,7 +74,7 @@ ToolbarActionView::ToolbarActionView(ToolbarActionViewModel* view_model,
                                      base::Unretained(this))),
       view_model_(view_model),
       delegate_(delegate) {
-  ConfigureInkDropForToolbar(this);
+  ConfigureInkDrop(this);
   SetHideInkDropWhenShowingContextMenu(false);
   SetShowInkDropWhenHotTracked(true);
   SetID(VIEW_ID_BROWSER_ACTION);
@@ -77,8 +93,9 @@ ToolbarActionView::ToolbarActionView(ToolbarActionViewModel* view_model,
   button_controller()->set_notify_action(
       views::ButtonController::NotifyAction::kOnRelease);
 
+  context_menu_observer_ = std::make_unique<ContextMenuObserver>(this);
   context_menu_controller_ = std::make_unique<ExtensionContextMenuController>(
-      view_model, this,
+      view_model, context_menu_observer_.get(),
       extensions::ExtensionContextMenuModel::ContextMenuSource::kToolbarAction);
   set_context_menu_controller(context_menu_controller_.get());
 
@@ -145,13 +162,26 @@ bool ToolbarActionView::OnKeyPressed(const ui::KeyEvent& event) {
 
 // Linux enter/leave events are sometimes flaky, so we don't want to "miss"
 // an enter event and fail to hover the button. This is effectively a no-op if
-// the button is already showing the hover card (crbug.com/1326272).
+// the button is already showing the hover card (crbug.com/40840442).
 void ToolbarActionView::OnMouseMoved(const ui::MouseEvent& event) {
   MaybeUpdateHoverCardStatus(event);
 }
 
 void ToolbarActionView::OnMouseEntered(const ui::MouseEvent& event) {
   MaybeUpdateHoverCardStatus(event);
+}
+
+void ToolbarActionView::OnFocus() {
+  MenuButton::OnFocus();
+  delegate_->UpdateHoverCard(this, ToolbarActionHoverCardUpdateType::kFocus);
+}
+
+void ToolbarActionView::OnBlur() {
+  MenuButton::OnBlur();
+  if (!delegate_->IsFocusOnExtensionAction()) {
+    delegate_->UpdateHoverCard(nullptr,
+                               ToolbarActionHoverCardUpdateType::kFocus);
+  }
 }
 
 void ToolbarActionView::MaybeUpdateHoverCardStatus(
@@ -215,7 +245,7 @@ bool ToolbarActionView::OnMousePressed(const ui::MouseEvent& event) {
       // This event is likely to trigger the MenuButton action.
       // TODO(bruthig): The ACTION_PENDING triggering logic should be in
       // MenuButton::OnPressed() however there is a bug with the pressed state
-      // logic in MenuButton. See http://crbug.com/567252.
+      // logic in MenuButton. See http://crbug.com/41227327.
       views::InkDrop::Get(this)->AnimateToState(
           views::InkDropState::ACTION_PENDING, &event);
     }
@@ -286,7 +316,7 @@ views::Button* ToolbarActionView::GetReferenceButtonForPopupInternal() {
 }
 
 views::BubbleAnchor ToolbarActionView::GetReferenceButtonForPopup() {
-  return GetReferenceButtonForPopupInternal();
+  return views::BubbleAnchor(GetReferenceButtonForPopupInternal());
 }
 
 void ToolbarActionView::ShowContextMenuAsFallback() {

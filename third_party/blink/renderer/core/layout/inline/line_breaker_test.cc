@@ -21,6 +21,7 @@
 #include "third_party/blink/renderer/core/layout/unpositioned_float.h"
 #include "third_party/blink/renderer/platform/fonts/shaping/shape_result_view.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 
 namespace blink {
 
@@ -556,7 +557,7 @@ TEST_F(LineBreakerTest, IdeographicTrailingSpaces) {
     <div id="container">xxx&#x3000;&#x3000;&#x3000;&#x3000;xxx&#x3000;&#x3000;&#x3000;&#x3000;</div>
   )HTML");
 
-  String expectedLine = String::FromUTF8("xxx\u3000\u3000\u3000\u3000");
+  String expectedLine = String::FromUtf8("xxx\u3000\u3000\u3000\u3000");
 
   // The ideographic spaces overflows the line at 60px but fully fits at 90px.
   for (LayoutUnit width : {LayoutUnit(60), LayoutUnit(90)}) {
@@ -1287,20 +1288,18 @@ INSTANTIATE_TEST_SUITE_P(LineBreakerTest,
 
 TEST_P(CanBreakInsideTest, Data) {
   const auto& data = GetParam();
-  SetBodyInnerHTML(
-      UNSAFE_TODO(String::Format(R"HTML(
+  SetBodyInnerHTML(StrCat({
+      R"HTML(
     <!DOCTYPE html>
     <style>
     #target {
       font-size: 10px;
       width: 800px;
-      %s
-    }
-    %s
+      )HTML",
+      data.target_css, "\n    }\n    ", data.style, R"HTML(
     </style>
-    <div id="target">%s</div>
-  )HTML",
-                                 data.target_css, data.style, data.html)));
+    <div id="target">)HTML",
+      data.html, "</div>\n"}));
   InlineNode target = GetInlineNodeByElementId("target");
   std::array<LineInfo, 1> line_info_list;
   const LayoutUnit available_width = LayoutUnit(800);
@@ -1327,6 +1326,22 @@ TEST_F(LineBreakerTest, SplitTrailingBidiCrCrash) {
   )HTML");
   ComputeMinMaxSizes(node);
   // Pass if no CHECK failure.
+}
+
+TEST_F(LineBreakerTest, BidiControlEnterFlag) {
+  ScopedLineBreakBidiControlEnterForTest flag(false);
+  LoadAhem();
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      #container {
+        font: 10px/1 Ahem;
+        width: 40px;
+      }
+    </style>
+    <div id="container">xxx-<bdi>xx</bdi></div>
+  )HTML");
+  Element* container = GetDocument().getElementById(AtomicString("container"));
+  EXPECT_EQ(10, container->OffsetHeight());
 }
 
 }  // namespace

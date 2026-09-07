@@ -12,20 +12,24 @@ import android.content.ServiceConnection;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.hardware.display.DisplayManager;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.OutcomeReceiver;
+import android.os.ParcelFileDescriptor;
 import android.util.Pair;
 import android.util.SparseArray;
 import android.view.Display;
+import android.view.View;
 import android.view.ViewConfiguration;
-import android.view.Window;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.TextAttribute;
 import android.webkit.WebViewDelegate;
+import android.window.TrustedPresentationThresholds;
 
 import androidx.core.view.accessibility.AccessibilityNodeInfoCompat;
 
+import org.chromium.base.hid.HidManager;
 import org.chromium.base.serial.SerialManager;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -132,18 +136,6 @@ public interface AconfigFlaggedApiDelegate {
             Executor executor,
             DisplayTopologyListener displayTopologyListener) {}
 
-    /**
-     * Calls the {@link android.view.WindowManager.LayoutParams#setKeyboardCaptureEnabled(boolean
-     * hasCapture)} method if supported.
-     *
-     * @param window {@link android.view.Window} on which the method should be called.
-     * @param hasCapture whether keyboard capture should be enabled or disabled.
-     * @return boolean indicating whether the android API was invoked.
-     */
-    default boolean setKeyboardCaptureEnabled(Window window, boolean hasCapture) {
-        return false;
-    }
-
     /** Returns whether rebindService() is available or not. */
     default boolean isUpdateServiceBindingApiAvailable() {
         return false;
@@ -191,27 +183,15 @@ public interface AconfigFlaggedApiDelegate {
     }
 
     /**
-     * Calls the {@link android.view.ViewConfiguration#getTextCursorBlinkIntervalMillis()} method if
-     * an implementation is available, otherwise returns a default value.
-     *
-     * @param viewConfiguration The {@link android.view.ViewConfiguration} instance to use.
+     * Gets the system text cursor blink interval in milliseconds if available, otherwise returns a
+     * default value.
      */
-    default int getTextCursorBlinkInterval(ViewConfiguration viewConfiguration) {
+    default int getTextCursorBlinkInterval() {
         return DEFAULT_TEXT_CURSOR_BLINK_INTERVAL_MS;
     }
 
-    /**
-     * Checks if the Selection Action Menu Client is available, based on the API level and Aconfig
-     * flags. If the client is available, this method returns it wrapped in a {@code
-     * SelectionActionMenuClientWrapper}. This does not check if the client has been overridden and
-     * calling this method may return the default client. If the client is unavailable, this method
-     * returns null.
-     *
-     * @param delegate the WebViewDelegate used to get the client object.
-     */
-    default @Nullable SelectionActionMenuClientWrapper getSelectionActionMenuClient(
-            WebViewDelegate delegate) {
-        return null;
+    default int getTextCursorBlinkInterval(ViewConfiguration viewConfiguration) {
+        return getTextCursorBlinkInterval();
     }
 
     /**
@@ -253,7 +233,7 @@ public interface AconfigFlaggedApiDelegate {
      */
     default void setSelection(
             AccessibilityNodeInfoCompat info,
-            android.view.View view,
+            View view,
             int startVirtualDescendantId,
             int startOffset,
             int endVirtualDescendantId,
@@ -328,11 +308,6 @@ public interface AconfigFlaggedApiDelegate {
         return null;
     }
 
-    /** Checks if native-only services are available on this build of Android */
-    default boolean areNativeOnlyServicesEnabled() {
-        return false;
-    }
-
     /** Checks if {@link android.content.pm.webapp.WebAppManager} service is available. */
     default boolean isWebAppServiceEnabled() {
         return false;
@@ -360,8 +335,8 @@ public interface AconfigFlaggedApiDelegate {
         return false;
     }
 
-    /** Whether the feature to split the Android setting 'Show passwords' is enabled. */
-    default boolean isShowPasswordsSplitEnabled() {
+    /** Whether temporal layer encoding is enabled. */
+    default boolean isTemporalLayerEncodingEnabled() {
         return false;
     }
 
@@ -460,5 +435,95 @@ public interface AconfigFlaggedApiDelegate {
     /** Gets an Android SerialManager wrapped in an intermediary object. */
     default @Nullable SerialManager getSerialManager() {
         return null;
+    }
+
+    /** Gets an Android HidManager wrapped in an intermediary object. */
+    default @Nullable HidManager getHidManager() {
+        return null;
+    }
+
+    /** Checks whether content restriction is supported and enabled for WebViews. */
+    default boolean isContentRestrictionEnabled() {
+        return false;
+    }
+
+    /**
+     * Calls the platform to determine if the content should be allowed or blocked.
+     *
+     * @param uri The URI of the content to be classified.
+     * @param requestBody The request body of the content to be classified. Can be null for requests
+     *     that have no body (for ex. GET requests).
+     * @param mimeType The MIME type of the content to be classified.
+     * @param executor The executor to run the callback on.
+     * @return A promise fulfilled with the boolean classification result (true if allowed),
+     *     rejected otherwise with {@link UnsupportedOperationException} if not supported or with
+     *     the exception received from the API call.
+     */
+    default Promise<Boolean> requestContentRestrictionClassification(
+            Uri uri,
+            @Nullable ParcelFileDescriptor requestBody,
+            String mimeType,
+            Executor executor) {
+        Promise<Boolean> promise = new Promise<>();
+        promise.reject(new UnsupportedOperationException("Not supported"));
+        return promise;
+    }
+
+    /**
+     * Sends an intent to the Android platform to display a dialog about the restricted content.
+     *
+     * @param uri The URI of the content being restricted.
+     * @return true if the intent was sent successfully, false otherwise.
+     */
+    default boolean sendShowRestrictedContentIntent(Uri uri) {
+        return false;
+    }
+
+    /**
+     * Checks if the Native WebView Zygote is enabled.
+     *
+     * @param delegate the WebViewDelegate used to check the state.
+     */
+    default boolean isNativeWebViewZygoteEnabled(WebViewDelegate delegate) {
+        return false;
+    }
+
+    /** Checks if the system contacts picker is enabled. */
+    default boolean isSystemContactsPickerEnabled() {
+        return false;
+    }
+
+    /** Returns the ACTION_PICK_CONTACTS intent action string if supported. */
+    default @Nullable String getSystemContactsPickerAction() {
+        return null;
+    }
+
+    /** Returns the EXTRA_USE_SYSTEM_CONTACTS_PICKER intent extra string if supported. */
+    default @Nullable String getSystemContactsPickerExtraUseSystemContactsPicker() {
+        return null;
+    }
+
+    /** Returns the EXTRA_PICK_CONTACTS_REQUESTED_DATA_FIELDS intent extra string if supported. */
+    default @Nullable String getSystemContactsPickerExtraRequestedDataFields() {
+        return null;
+    }
+
+    /** Returns the Contacts Picker session provider authority string if supported. */
+    default @Nullable String getSystemContactsPickerAuthority() {
+        return null;
+    }
+
+    /**
+     * Creates a {@link android.window.TrustedPresentationThresholds} instance using the upcoming
+     * strict occlusion API if supported, otherwise returns {@code null}.
+     */
+    default @Nullable TrustedPresentationThresholds createTrustedPresentationThresholdsStrictMode(
+            float minAlpha, float minFraction, int stabilityRequirementMs) {
+        return null;
+    }
+
+    /** Returns whether the new strict occlusion API is available. */
+    default boolean isStrictOcclusionAvailable() {
+        return false;
     }
 }

@@ -8,8 +8,8 @@
 #include <span>  // std::size.
 #include <string_view>
 
+#include "base/memory/singleton.h"
 #include "base/strings/stringprintf.h"
-#include "chrome/browser/extensions/pref_transformer_interface.h"
 #include "chrome/browser/prefetch/pref_names.h"
 #include "chrome/browser/preloading/preloading_prefs.h"
 #include "chrome/common/pref_names.h"
@@ -22,6 +22,7 @@
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "components/spellcheck/browser/pref_names.h"
 #include "components/translate/core/browser/translate_pref_names.h"
+#include "extensions/browser/pref_transformer_interface.h"
 #include "extensions/buildflags/buildflags.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -47,6 +48,8 @@ const PrefMappingEntry kMappings[] = {
     {"autofillAddressEnabled", autofill::prefs::kAutofillProfileEnabled,
      APIPermissionID::kPrivacy, APIPermissionID::kPrivacy},
     {"autofillCreditCardEnabled", autofill::prefs::kAutofillCreditCardEnabled,
+     APIPermissionID::kPrivacy, APIPermissionID::kPrivacy},
+    {"autofillSettings", autofill::prefs::kAutofillTypesBlocked,
      APIPermissionID::kPrivacy, APIPermissionID::kPrivacy},
     {"hyperlinkAuditingEnabled", prefs::kEnableHyperlinkAuditing,
      APIPermissionID::kPrivacy, APIPermissionID::kPrivacy},

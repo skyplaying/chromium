@@ -221,7 +221,7 @@ void PolicyMap::Entry::ClearMessage(MessageType type, int message_id) {
 }
 
 void PolicyMap::Entry::AddConflictingPolicy(Entry&& conflict) {
-  // Move all of the newly conflicting Entry's conflicts into this Entry.
+  // Move all of the newly conflicting Entries conflicts into this Entry.
   std::move(conflict.conflicts.begin(), conflict.conflicts.end(),
             std::back_inserter(conflicts));
 
@@ -301,6 +301,10 @@ void PolicyMap::Entry::SetIsDefaultValue() {
 
 bool PolicyMap::Entry::IsDefaultValue() const {
   return is_default_value_;
+}
+
+bool PolicyMap::Entry::UsesLocalStateAndProfilePrefs() const {
+  return details && details->uses_local_state_and_profile_prefs;
 }
 
 PolicyMap::EntryConflict::EntryConflict() = default;
@@ -462,45 +466,75 @@ PolicyMap PolicyMap::CloneIf(
 }
 
 void PolicyMap::MergePolicy(const std::string& policy_name,
-                            const PolicyMap& other,
+                            const Entry& other_policy,
+                            Entry* movable_other_policy,
                             bool using_default_precedence) {
-  const Entry* other_policy = other.GetUntrusted(policy_name);
-  if (!other_policy) {
-    return;
-  }
-
   Entry* policy = GetMutableUntrusted(policy_name);
-  Entry other_policy_copy = other_policy->DeepCopy();
+  auto take_other_policy = [&other_policy, movable_other_policy]() {
+    return movable_other_policy ? std::move(*movable_other_policy)
+                                : other_policy.DeepCopy();
+  };
 
   if (!policy) {
-    Set(policy_name, std::move(other_policy_copy));
+    Set(policy_name, take_other_policy());
     return;
   }
 
+  // EntryHasHigherPriority() only examines metadata fields (level, scope,
+  // source, details), so the priority check can use the original entry
+  // without a deep copy.
 #if BUILDFLAG(IS_CHROMEOS)
   const bool other_is_higher_priority =
-      EntryHasHigherPriority(other_policy_copy, *policy);
+      EntryHasHigherPriority(other_policy, *policy);
 #else   // BUILDFLAG(IS_CHROMEOS)
-  const bool other_is_higher_priority = EntryHasHigherPriority(
-      other_policy_copy, *policy, using_default_precedence);
+  const bool other_is_higher_priority =
+      EntryHasHigherPriority(other_policy, *policy, using_default_precedence);
 #endif  // BUILDFLAG(IS_CHROMEOS)
+
+  // Determine whether the lower-priority entry is an enterprise default being
+  // overwritten. This check also uses only metadata fields.
+  const Entry& higher_ref = other_is_higher_priority ? other_policy : *policy;
+  const Entry& lower_ref = other_is_higher_priority ? *policy : other_policy;
+  const bool overwriting_default_policy =
+      higher_ref.source != lower_ref.source &&
+      lower_ref.source == POLICY_SOURCE_ENTERPRISE_DEFAULT;
+
+  if (overwriting_default_policy) {
+    // No conflict recording is needed. Only retain the incoming entry if it
+    // has higher priority and needs to replace the existing one.
+    if (other_is_higher_priority) {
+      *policy = take_other_policy();
+    }
+    return;
+  }
+
+  Entry other_policy_copy = take_other_policy();
 
   Entry& higher_policy = other_is_higher_priority ? other_policy_copy : *policy;
   Entry& conflicting_policy =
       other_is_higher_priority ? *policy : other_policy_copy;
 
-  const bool overwriting_default_policy =
-      higher_policy.source != conflicting_policy.source &&
-      conflicting_policy.source == POLICY_SOURCE_ENTERPRISE_DEFAULT;
-  if (!overwriting_default_policy) {
-    policy->value_unsafe() &&
-            *other_policy_copy.value_unsafe() == *policy->value_unsafe()
-        ? higher_policy.AddMessage(MessageType::kInfo,
-                                   IDS_POLICY_CONFLICT_SAME_VALUE)
-        : higher_policy.AddMessage(MessageType::kWarning,
-                                   IDS_POLICY_CONFLICT_DIFF_VALUE);
-    higher_policy.AddConflictingPolicy(std::move(conflicting_policy));
+  const bool is_scope_conflict =
+      higher_policy.scope != conflicting_policy.scope;
+  bool are_values_equal =
+      (!policy->value_unsafe() && !other_policy_copy.value_unsafe()) ||
+      (policy->value_unsafe() && other_policy_copy.value_unsafe() &&
+       *policy->value_unsafe() == *other_policy_copy.value_unsafe());
+  if (higher_policy.UsesLocalStateAndProfilePrefs() && is_scope_conflict) {
+    higher_policy.AddMessage(
+        MessageType::kInfo,
+        are_values_equal ? IDS_POLICY_USES_SAME_LOCAL_STATE_AND_PROFILE_PREFS
+                         : IDS_POLICY_USES_LOCAL_STATE_AND_PROFILE_PREFS);
+  } else {
+    if (are_values_equal) {
+      higher_policy.AddMessage(MessageType::kInfo,
+                               IDS_POLICY_CONFLICT_SAME_VALUE);
+    } else {
+      higher_policy.AddMessage(MessageType::kWarning,
+                               IDS_POLICY_CONFLICT_DIFF_VALUE);
+    }
   }
+  higher_policy.AddConflictingPolicy(std::move(conflicting_policy));
 
   if (other_is_higher_priority) {
     *policy = std::move(other_policy_copy);
@@ -508,7 +542,30 @@ void PolicyMap::MergePolicy(const std::string& policy_name,
 }
 
 void PolicyMap::MergeFrom(const PolicyMap& other) {
+  MergeFromInternal(other, nullptr);
+}
+
+void PolicyMap::MergeFrom(PolicyMap&& other) {
+  MergeFromInternal(other, &other);
+}
+
+void PolicyMap::MergeFromInternal(const PolicyMap& other,
+                                  PolicyMap* movable_other) {
   DCHECK_NE(this, &other);
+  auto merge_policy = [this, &other, movable_other](
+                          const std::string& policy_name,
+                          bool using_default_precedence) {
+    const Entry* other_policy = other.GetUntrusted(policy_name);
+    if (!other_policy) {
+      return;
+    }
+    Entry* movable_other_policy =
+        movable_other ? movable_other->GetMutableUntrusted(policy_name)
+                      : nullptr;
+    MergePolicy(policy_name, *other_policy, movable_other_policy,
+                using_default_precedence);
+  };
+
   // Set affiliation IDs before merging policy values because user affiliation
   // affects the policy precedence check.
   SetUserAffiliationIds(
@@ -522,7 +579,7 @@ void PolicyMap::MergeFrom(const PolicyMap& other) {
   for (auto* policy : metapolicy::kPrecedence) {
     // Default precedence is used during merging of precedence metapolicies to
     // prevent circular dependencies.
-    MergePolicy(policy, other, true);
+    merge_policy(policy, true);
   }
 
   UpdateStoredComputedMetapolicies();
@@ -539,7 +596,7 @@ void PolicyMap::MergeFrom(const PolicyMap& other) {
 #endif
 
     // External factors, such as the values of metapolicies, are considered.
-    MergePolicy(policy_and_entry.first, other, false);
+    merge_policy(policy_and_entry.first, false);
   }
 }
 
@@ -676,19 +733,18 @@ const base::flat_set<std::string>& PolicyMap::GetDeviceAffiliationIds() const {
 
 #if !BUILDFLAG(IS_CHROMEOS)
 void PolicyMap::UpdateStoredComputedMetapolicies() {
+  const base::Value* cloud_policy_overrides_platform_policy = GetValue(
+      key::kCloudPolicyOverridesPlatformPolicy, base::Value::Type::BOOLEAN);
   cloud_policy_overrides_platform_policy_ =
-      GetValue(key::kCloudPolicyOverridesPlatformPolicy,
-               base::Value::Type::BOOLEAN) &&
-      GetValue(key::kCloudPolicyOverridesPlatformPolicy,
-               base::Value::Type::BOOLEAN)
-          ->GetBool();
+      cloud_policy_overrides_platform_policy &&
+      cloud_policy_overrides_platform_policy->GetBool();
 
+  const base::Value* cloud_user_policy_overrides_cloud_machine_policy =
+      GetValue(key::kCloudUserPolicyOverridesCloudMachinePolicy,
+               base::Value::Type::BOOLEAN);
   cloud_user_policy_overrides_cloud_machine_policy_ =
-      GetValue(key::kCloudUserPolicyOverridesCloudMachinePolicy,
-               base::Value::Type::BOOLEAN) &&
-      GetValue(key::kCloudUserPolicyOverridesCloudMachinePolicy,
-               base::Value::Type::BOOLEAN)
-          ->GetBool();
+      cloud_user_policy_overrides_cloud_machine_policy &&
+      cloud_user_policy_overrides_cloud_machine_policy->GetBool();
 }
 #endif
 

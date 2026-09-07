@@ -12,6 +12,7 @@
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "chrome/common/actor.mojom.h"
 #include "chrome/common/actor/action_result.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
 #include "components/sessions/core/session_id.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/page_navigator.h"
@@ -43,6 +44,14 @@ TabManagementTool::TabManagementTool(TaskId task_id,
 TabManagementTool::~TabManagementTool() = default;
 
 void TabManagementTool::Validate(ToolCallback callback) {
+  if (action_ == kCreate) {
+    if (window_id_.has_value()) {
+      PostResponseTask(
+          std::move(callback),
+          ValidateWindowId(SessionID::FromSerializedValue(window_id_.value())));
+      return;
+    }
+  }
   PostResponseTask(std::move(callback), MakeOkResult());
 }
 
@@ -50,21 +59,16 @@ void TabManagementTool::Invoke(ToolCallback callback) {
   callback_ = std::move(callback);
   CHECK(window_id_.has_value() || target_tab_.has_value());
 
-  if (target_tab_.has_value() && !target_tab_->Get()) {
-    PostResponseTask(std::move(callback_),
-                     MakeResult(mojom::ActionResultCode::kTabWentAway));
-    return;
-  }
-
   BrowserWindowInterface* browser_window_interface =
       window_id_.has_value()
           ? BrowserWindowInterface::FromSessionID(
                 SessionID::FromSerializedValue(window_id_.value()))
           : target_tab_.value().Get()->GetBrowserWindowInterface();
 
-  if (!browser_window_interface) {
-    PostResponseTask(std::move(callback_),
-                     MakeResult(mojom::ActionResultCode::kWindowWentAway));
+  mojom::ActionResultPtr window_result =
+      ValidateBrowserWindow(browser_window_interface);
+  if (!IsOk(*window_result)) {
+    PostResponseTask(std::move(callback_), std::move(window_result));
     return;
   }
 
@@ -161,7 +165,8 @@ void TabManagementTool::UpdateTaskAfterInvoke(ActorTask& task,
                                               mojom::ActionResultPtr result,
                                               ToolCallback callback) const {
   if (action_ == kCreate && target_tab_) {
-    task.AddTab(*target_tab_, std::move(callback));
+    task.AddTab(*target_tab_, /*stop_task_on_detach=*/true,
+                std::move(callback));
   } else {
     std::move(callback).Run(std::move(result));
   }
@@ -222,8 +227,8 @@ void TabManagementTool::OnTabStripModelChanged(
       return;
     }
     // Our single tab should have been deleted, rather than moved elsewhere.
-    if (change.GetRemove()->contents[0].remove_reason !=
-        TabRemovedReason::kDeleted) {
+    if (!TabRemoveReasonUtils::WillDeleteTab(
+            change.GetRemove()->contents[0].remove_reason)) {
       PostResponseTask(std::move(callback_),
                        MakeResult(mojom::ActionResultCode::kTabWentAway));
       return;

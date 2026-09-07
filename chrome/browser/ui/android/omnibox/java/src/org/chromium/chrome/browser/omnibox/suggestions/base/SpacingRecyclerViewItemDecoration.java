@@ -37,7 +37,9 @@ public class SpacingRecyclerViewItemDecoration extends ItemDecoration {
     @Override
     public void getItemOffsets(
             Rect outRect, View view, RecyclerView parent, RecyclerView.State state) {
-        outRect.left = outRect.right = mElementSpace / 2;
+        int space = mElementSpace / 2;
+        outRect.left = space;
+        outRect.right = space;
 
         int childCount = assumeNonNull(parent.getAdapter()).getItemCount();
         int itemPosition = parent.getChildAdapterPosition(view);
@@ -74,6 +76,7 @@ public class SpacingRecyclerViewItemDecoration extends ItemDecoration {
      *
      * <p>This call is intended to be used by derived classes. Keep this call protected.
      *
+     * @param elementSpace Spacing in pixels between consecutive elements in the list.
      * @return true if element space has been updated
      */
     @VisibleForTesting(otherwise = VisibleForTesting.PROTECTED)

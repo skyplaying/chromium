@@ -28,7 +28,6 @@ export interface CrUrlListItemElement {
     badges: HTMLSlotElement,
     button: HTMLElement,
     content: HTMLSlotElement,
-    description: HTMLSlotElement,
     metadata: HTMLElement,
     customIcon: HTMLSlotElement,
   };
@@ -217,6 +216,22 @@ export class CrUrlListItemElement extends CrUrlListItemElementBase {
     return this.itemAriaLabel || this.title;
   }
 
+  protected getAnchorAriaDescription_(): string|undefined {
+    return this.asAnchor ? this.getItemAriaDescription_() : undefined;
+  }
+
+  protected getAnchorAriaLabel_(): string|undefined {
+    return this.asAnchor ? this.getItemAriaLabel_() : undefined;
+  }
+
+  protected getButtonAriaDescription_(): string|undefined {
+    return !this.asAnchor ? this.getItemAriaDescription_() : undefined;
+  }
+
+  protected getButtonAriaLabel_(): string|undefined {
+    return !this.asAnchor ? this.getItemAriaLabel_() : undefined;
+  }
+
   protected getDisplayedCount_(): string {
     if (this.count && this.count > 999) {
       // The square to display the count only fits 3 characters.
@@ -234,11 +249,11 @@ export class CrUrlListItemElement extends CrUrlListItemElementBase {
     return index <= 1;
   }
 
-  protected onBadgesSlotChange_() {
+  protected onBadgesSlotchange_() {
     this.hasBadges = this.$.badges.assignedElements({flatten: true}).length > 0;
   }
 
-  protected onContentSlotChange_() {
+  protected onContentSlotchange_() {
     this.hasSlottedContent_ =
         this.$.content.assignedElements({flatten: true}).length > 0;
   }

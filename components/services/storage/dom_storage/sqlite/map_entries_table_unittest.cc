@@ -10,13 +10,14 @@
 #include <vector>
 
 #include "base/test/gmock_expected_support.h"
+#include "base/test/metrics/histogram_tester.h"
+#include "components/services/storage/dom_storage/db_status.h"
 #include "components/services/storage/dom_storage/dom_storage_database.h"
 #include "components/services/storage/public/cpp/compression.h"
 #include "sql/database.h"
 #include "sql/statement.h"
 #include "sql/test/test_helpers.h"
 #include "sql/transaction.h"
-#include "storage/common/database/db_status.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
 
@@ -66,7 +67,6 @@ class MapEntriesTableTest : public testing::Test {
 
 MapEntriesTableTest::MapEntriesTableTest()
     : database_(sql::DatabaseOptions()
-                    .set_exclusive_locking(true)
                     .set_wal_mode(true)
                     .set_mmap_enabled(false),
                 sql::test::kTestTag) {}
@@ -347,6 +347,8 @@ TEST_F(MapEntriesTableTest, CloneEmptyMap) {
 // Verifies that a large value is compressed when stored and decompressed
 // correctly when read back.
 TEST_F(MapEntriesTableTest, LargeValueStoredCompressed) {
+  base::HistogramTester histogram_tester;
+
   std::vector<uint8_t> large_value(1024, 'A');
   std::map<DomStorageDatabase::Key, DomStorageDatabase::Value> expected_entries{
       {ToBytes("key"), large_value},
@@ -362,6 +364,14 @@ TEST_F(MapEntriesTableTest, LargeValueStoredCompressed) {
               CompressionType::kUncompressed);
   }
 
+  // Verify compression histograms were recorded.
+  histogram_tester.ExpectTotalCount("Storage.DomStorage.Compression.Ratio", 1);
+  histogram_tester.ExpectUniqueSample(
+      "Storage.DomStorage.Compression.PrecompressionValueSize.Compressed", 1024,
+      1);
+  histogram_tester.ExpectTotalCount(
+      "Storage.DomStorage.Compression.PrecompressionValueSize.Uncompressed", 0);
+
   // Verify the decompressed value matches the original.
   ASSERT_OK_AND_ASSIGN(
       (std::map<DomStorageDatabase::Key, DomStorageDatabase::Value>
@@ -371,8 +381,10 @@ TEST_F(MapEntriesTableTest, LargeValueStoredCompressed) {
 }
 
 // Verifies that small values below the compression threshold are stored
-// uncompressed.
+// uncompressed and no compression histograms are recorded.
 TEST_F(MapEntriesTableTest, SmallValueStoredUncompressed) {
+  base::HistogramTester histogram_tester;
+
   std::map<DomStorageDatabase::Key, DomStorageDatabase::Value> expected_entries{
       {ToBytes("key"), ToBytes("small")},
   };
@@ -387,6 +399,13 @@ TEST_F(MapEntriesTableTest, SmallValueStoredUncompressed) {
               CompressionType::kUncompressed);
   }
 
+  // Verify no compression histograms were recorded (value < 64 bytes).
+  histogram_tester.ExpectTotalCount("Storage.DomStorage.Compression.Ratio", 0);
+  histogram_tester.ExpectTotalCount(
+      "Storage.DomStorage.Compression.PrecompressionValueSize.Compressed", 0);
+  histogram_tester.ExpectTotalCount(
+      "Storage.DomStorage.Compression.PrecompressionValueSize.Uncompressed", 0);
+
   ASSERT_OK_AND_ASSIGN(
       (std::map<DomStorageDatabase::Key, DomStorageDatabase::Value>
            actual_entries),
@@ -397,6 +416,8 @@ TEST_F(MapEntriesTableTest, SmallValueStoredUncompressed) {
 // Verifies that a large value that doesn't compress well is stored
 // uncompressed.
 TEST_F(MapEntriesTableTest, LargeIncompressibleValueStoredUncompressed) {
+  base::HistogramTester histogram_tester;
+
   // Create a value that doesn't compress well (sequential byte values).
   std::vector<uint8_t> incompressible_value(256);
   for (size_t i = 0; i < incompressible_value.size(); ++i) {
@@ -415,6 +436,14 @@ TEST_F(MapEntriesTableTest, LargeIncompressibleValueStoredUncompressed) {
     EXPECT_EQ(static_cast<CompressionType>(statement.ColumnInt(0)),
               CompressionType::kUncompressed);
   }
+
+  // Verify compression histograms were recorded with the uncompressed variant.
+  histogram_tester.ExpectTotalCount("Storage.DomStorage.Compression.Ratio", 1);
+  histogram_tester.ExpectUniqueSample(
+      "Storage.DomStorage.Compression.PrecompressionValueSize.Uncompressed",
+      256, 1);
+  histogram_tester.ExpectTotalCount(
+      "Storage.DomStorage.Compression.PrecompressionValueSize.Compressed", 0);
 
   // Verify the value reads back correctly regardless of compression decision.
   ASSERT_OK_AND_ASSIGN(

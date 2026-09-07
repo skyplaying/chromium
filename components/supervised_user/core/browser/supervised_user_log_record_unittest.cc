@@ -8,6 +8,7 @@
 #include <optional>
 #include <ostream>
 
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/test/with_feature_override.h"
 #include "build/buildflag.h"
@@ -19,6 +20,7 @@
 #include "components/signin/public/identity_manager/identity_test_environment.h"
 #include "components/supervised_user/core/browser/supervised_user_preferences.h"
 #include "components/supervised_user/core/browser/supervised_user_test_environment.h"
+#include "components/supervised_user/core/common/features.h"
 #include "components/supervised_user/core/common/pref_names.h"
 #include "components/supervised_user/core/common/supervised_user_constants.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -100,7 +102,7 @@ class SupervisedUserLogRecordTest : public ::testing::Test {
     AccountInfo account_info =
         GetIdentityTestEnv()->MakePrimaryAccountAvailable(
             kEmail, signin::ConsentLevel::kSignin);
-    AccountCapabilitiesTestMutator mutator(&account_info.capabilities);
+    AccountCapabilitiesTestMutator mutator(&account_info);
     mutator.set_can_fetch_family_member_info(true);
     mutator.set_is_subject_to_parental_controls(false);
     mutator.set_is_opted_in_to_parental_supervision(false);
@@ -119,7 +121,7 @@ class SupervisedUserLogRecordTest : public ::testing::Test {
     AccountInfo account_info =
         GetIdentityTestEnv()->MakePrimaryAccountAvailable(
             kEmail, signin::ConsentLevel::kSignin);
-    AccountCapabilitiesTestMutator mutator(&account_info.capabilities);
+    AccountCapabilitiesTestMutator mutator(&account_info);
     mutator.set_can_fetch_family_member_info(true);
     mutator.set_is_subject_to_parental_controls(
         is_subject_to_parental_controls);
@@ -127,7 +129,7 @@ class SupervisedUserLogRecordTest : public ::testing::Test {
         is_opted_in_to_parental_supervision);
     GetIdentityTestEnv()->UpdateAccountInfoForAccount(account_info);
 
-    EnableParentalControls(*supervised_user_test_environment_.pref_service());
+    supervised_user_test_environment_.EnableSupervisedAccount();
     // Set the Family Link `Permissions` switch to default value. In prod it's
     // done by the `SupervisedUserPrefStore`, but that requires fully
     // operational Profile.
@@ -240,7 +242,7 @@ TEST_F(SupervisedUserLogRecordTest, SupervisionEnabledByPolicy) {
 TEST_F(SupervisedUserLogRecordTest, NotSupervised) {
   AccountInfo account_info = GetIdentityTestEnv()->MakePrimaryAccountAvailable(
       kEmail, signin::ConsentLevel::kSignin);
-  AccountCapabilitiesTestMutator mutator(&account_info.capabilities);
+  AccountCapabilitiesTestMutator mutator(&account_info);
   mutator.set_is_subject_to_parental_controls(false);
   mutator.set_is_opted_in_to_parental_supervision(false);
   GetIdentityTestEnv()->UpdateAccountInfoForAccount(account_info);
@@ -260,7 +262,7 @@ TEST_F(SupervisedUserLogRecordTest, SignedOutHasNoWebFilter) {
 TEST_F(SupervisedUserLogRecordTest, NotSupervisedHasNoWebFilter) {
   AccountInfo account_info = GetIdentityTestEnv()->MakePrimaryAccountAvailable(
       kEmail, signin::ConsentLevel::kSignin);
-  AccountCapabilitiesTestMutator mutator(&account_info.capabilities);
+  AccountCapabilitiesTestMutator mutator(&account_info);
   mutator.set_is_subject_to_parental_controls(false);
   mutator.set_is_opted_in_to_parental_supervision(false);
   GetIdentityTestEnv()->UpdateAccountInfoForAccount(account_info);
@@ -324,9 +326,8 @@ TEST_F(SupervisedUserLogRecordTest, RegularUserWithSearchFilterEnabled) {
 
   std::optional<SupervisedUserLogRecord::Segment> supervision_status =
       CreateSupervisedUserLogRecord()->GetSupervisionStatusForPrimaryAccount();
-  EXPECT_THAT(
-      supervision_status,
-      Optional(SupervisedUserLogRecord::Segment::kSupervisionEnabledLocally));
+  EXPECT_THAT(supervision_status,
+              Optional(SupervisedUserLogRecord::Segment::kUnsupervised));
 }
 
 TEST_F(SupervisedUserLogRecordTest, RegularUserWithContentFiltersEnabled) {
@@ -335,9 +336,8 @@ TEST_F(SupervisedUserLogRecordTest, RegularUserWithContentFiltersEnabled) {
 
   std::optional<SupervisedUserLogRecord::Segment> supervision_status =
       CreateSupervisedUserLogRecord()->GetSupervisionStatusForPrimaryAccount();
-  EXPECT_THAT(
-      supervision_status,
-      Optional(SupervisedUserLogRecord::Segment::kSupervisionEnabledLocally));
+  EXPECT_THAT(supervision_status,
+              Optional(SupervisedUserLogRecord::Segment::kUnsupervised));
 }
 
 TEST_F(SupervisedUserLogRecordTest, RegularUserWithAllLocalFiltersEnabled) {
@@ -347,9 +347,8 @@ TEST_F(SupervisedUserLogRecordTest, RegularUserWithAllLocalFiltersEnabled) {
 
   std::optional<SupervisedUserLogRecord::Segment> supervision_status =
       CreateSupervisedUserLogRecord()->GetSupervisionStatusForPrimaryAccount();
-  EXPECT_THAT(
-      supervision_status,
-      Optional(SupervisedUserLogRecord::Segment::kSupervisionEnabledLocally));
+  EXPECT_THAT(supervision_status,
+              Optional(SupervisedUserLogRecord::Segment::kUnsupervised));
 }
 #endif  // BUILDFLAG(IS_ANDROID)
 }  // namespace

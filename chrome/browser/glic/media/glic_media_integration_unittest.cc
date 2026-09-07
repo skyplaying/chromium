@@ -4,19 +4,27 @@
 
 #include "chrome/browser/glic/media/glic_media_integration.h"
 
+#include "base/command_line.h"
+#include "base/strings/string_util.h"
 #include "base/test/mock_callback.h"
 #include "base/test/scoped_feature_list.h"
+#include "build/build_config.h"
 #include "chrome/browser/accessibility/live_caption/live_caption_controller_factory.h"
 #include "chrome/browser/glic/glic_pref_names.h"
 #include "chrome/browser/glic/media/glic_media_context.h"
+#include "chrome/browser/glic/public/glic_keyed_service.h"
 #include "chrome/browser/glic/public/glic_keyed_service_factory.h"
+#include "chrome/browser/glic/test_support/glic_test_environment.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/prefs/browser_prefs.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
+#include "chrome/test/base/testing_browser_process.h"
+#include "chrome/test/base/testing_profile_manager.h"
 #include "components/live_caption/live_caption_controller.h"
 #include "components/live_caption/pref_names.h"
 #include "components/optimization_guide/content/browser/media_transcript_provider.h"
 #include "components/soda/mock_soda_installer.h"
+#include "components/soda/soda_installer.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test_utils.h"
@@ -27,18 +35,45 @@
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_features.h"
+#include "chrome/browser/ash/test/glic_user_session_test_helper.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
+#include "components/user_manager/test_helper.h"
 #endif
 
 using content::WebContents;
 
 namespace glic {
 
+// Glic media integration requires SODA which is currently not supported on
+// non-x86 Linux.
+#if !BUILDFLAG(IS_LINUX) || defined(ARCH_CPU_X86_FAMILY)
+
 class GlicMediaIntegrationTest : public ChromeRenderViewHostTestHarness {
  public:
+  void SetUp() override {
+    // This must occur before base class SetUp() to ensure that the
+    // TestingProfileManager is available when the profile is created,
+    // allowing GlicKeyedServiceFactory to find it.
+    profile_manager_ =
+        TestingBrowserProcess::GetGlobal()->SetUpGlobalFeaturesForTesting(
+            /*profile_manager=*/true);
+#if BUILDFLAG(IS_CHROMEOS)
+    glic_user_session_test_helper_.PreProfileSetUp(
+        profile_manager_->profile_manager());
+#endif
+    ChromeRenderViewHostTestHarness::SetUp();
+    glic_test_env_.SetupProfile(profile());
+  }
+
   void TearDown() override {
     live_caption_controller_ = nullptr;
     pref_registry_ = nullptr;
     ChromeRenderViewHostTestHarness::TearDown();
+    profile_manager_ = nullptr;
+    TestingBrowserProcess::GetGlobal()->TearDownGlobalFeaturesForTesting();
+#if BUILDFLAG(IS_CHROMEOS)
+    glic_user_session_test_helper_.PostProfileTearDown();
+#endif
   }
 
   // ChromeRenderViewHostTestHarness
@@ -47,11 +82,28 @@ class GlicMediaIntegrationTest : public ChromeRenderViewHostTestHarness {
         std::make_unique<sync_preferences::TestingPrefServiceSyncable>();
     pref_registry_ = pref_service->registry();
     RegisterUserProfilePrefs(pref_registry_);
+    speech::SodaInstaller::RegisterLocalStatePrefs(pref_registry_);
 
-    auto profile = TestingProfile::Builder()
-                       .SetPrefService(std::move(pref_service))
-                       .AddTestingFactories(GetTestingFactories())
-                       .Build();
+    TestingProfile::Builder builder;
+    builder.SetPrefService(std::move(pref_service));
+    builder.AddTestingFactories(GetTestingFactories());
+
+#if BUILDFLAG(IS_CHROMEOS)
+    // This is hacky, but appears to be the only way to get the necessary
+    // profile state setup correctly on ChromeOS.
+    // TODO(b/501476411): Find a cleaner way to do this.
+    const AccountId account_id(AccountId::FromUserEmailGaiaId(
+        TestingProfile::kDefaultProfileUserName, GaiaId("1234567890")));
+    std::string hash =
+        user_manager::TestHelper::GetFakeUsernameHash(account_id);
+    // Construct the absolute directory path to match BrowserContextHelper
+    // expectations.
+    base::FilePath path =
+        profile_manager_->profiles_dir().AppendASCII("u-" + hash);
+    builder.SetPath(path);
+#endif
+
+    auto profile = builder.Build();
 
     // Set up soda Installer
     soda_installer_.NeverDownloadSodaForTesting();
@@ -130,8 +182,7 @@ class GlicMediaIntegrationTest : public ChromeRenderViewHostTestHarness {
   std::unique_ptr<captions::LiveCaptionController>
   CreateLiveCaptionController() {
     return std::make_unique<captions::LiveCaptionController>(
-        pref_service(),
-        /*global_prefs=*/nullptr, "application_locale", browser_context(),
+        pref_service(), pref_service(), "application_locale", browser_context(),
         /*delegate=*/nullptr);
   }
 
@@ -147,13 +198,18 @@ class GlicMediaIntegrationTest : public ChromeRenderViewHostTestHarness {
   }
 
   void SetFreCompleted() {
-    pref_service()->SetInteger(
-        glic::prefs::kGlicCompletedFre,
-        static_cast<int>(glic::prefs::FreStatus::kCompleted));
+    glic::GlicKeyedService::Get(profile())->enabling().SetCompletedFre(
+        glic::prefs::FreStatus::kCompleted);
   }
 
  private:
+  GlicUnitTestEnvironment glic_test_env_;
+  raw_ptr<TestingProfileManager> profile_manager_ = nullptr;
   std::optional<base::test::ScopedFeatureList> scoped_feature_list_;
+#if BUILDFLAG(IS_CHROMEOS)
+  ash::GlicUserSessionTestHelper glic_user_session_test_helper_;
+#endif
+  base::test::ScopedFeatureList feature_list_;
   raw_ptr<captions::LiveCaptionController> live_caption_controller_ = nullptr;
   raw_ptr<user_prefs::PrefRegistrySyncable> pref_registry_ = nullptr;
   speech::MockSodaInstaller soda_installer_;
@@ -168,6 +224,9 @@ TEST_F(GlicMediaIntegrationTest, GetWithNullReturnsNull) {
 }
 
 TEST_F(GlicMediaIntegrationTest, GetReturnsNullIfSwitchIsOff) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(media::kHeadlessLiveCaption);
+
   EXPECT_EQ(GlicMediaIntegration::GetFor(web_contents()), nullptr);
   EXPECT_EQ(GetMediaTranscriptProvider(), nullptr);
 }
@@ -218,14 +277,19 @@ TEST_F(GlicMediaIntegrationTest, ContextContainsTranscript) {
   }
 
   {
-    // Expect a leaf node with the entire context when we query with the
-    // WebContents instead.
+    // AppendContext is a legacy path and no longer contains transcripts when
+    // kAnnotatedPageContentWithMediaData is enabled.
     optimization_guide::proto::ContentNode root_node;
     integration->AppendContext(web_contents(), &root_node);
     EXPECT_EQ(root_node.children_nodes_size(), 0);
-    EXPECT_TRUE(root_node.has_content_attributes());
-    EXPECT_EQ(root_node.content_attributes().text_data().text_content(),
-              "ABCDEFGHIJ");
+    if (base::FeatureList::IsEnabled(
+            optimization_guide::features::kAnnotatedPageContentWithMediaData)) {
+      EXPECT_FALSE(root_node.has_content_attributes());
+    } else {
+      EXPECT_TRUE(root_node.has_content_attributes());
+      EXPECT_EQ(root_node.content_attributes().text_data().text_content(),
+                "ABCDEFGHIJ");
+    }
   }
 }
 
@@ -234,13 +298,37 @@ TEST_F(GlicMediaIntegrationTest, ContextContainsNoTranscript) {
 
   // Send no strings.
 
-  // Expect a leaf node with no text.
+  // Expect no content attributes when there is no transcript.
   optimization_guide::proto::ContentNode root_node;
   integration->AppendContextForFrame(rfh(), &root_node);
   EXPECT_EQ(root_node.children_nodes_size(), 0);
+  EXPECT_FALSE(root_node.has_content_attributes());
+}
+
+TEST_F(GlicMediaIntegrationTest, ContextTruncatesUTF8Correctly) {
+  auto* integration = GetIntegration();
+
+  // Create a 20002-byte string: one 4-byte character + 19998 'A's.
+  // max_size_bytes_ is 20000. 20002 - 20000 = 2.
+  // The truncation index falls in the middle of the 4-byte character.
+  std::string test_cap = "𐍈";
+  test_cap.append(19998, 'A');
+
+  live_caption_controller()->DispatchTranscription(
+      rfh(), nullptr,
+      media::SpeechRecognitionResult(test_cap, /*is_final=*/true));
+
+  optimization_guide::proto::ContentNode root_node;
+  integration->AppendContextForFrame(rfh(), &root_node);
+
+  EXPECT_EQ(root_node.children_nodes_size(), 0);
   EXPECT_TRUE(root_node.has_content_attributes());
-  EXPECT_EQ(root_node.content_attributes().text_data().text_content().length(),
-            0u);
+
+  // The 4-byte character should be entirely removed to avoid invalid UTF-8.
+  std::string result_text =
+      root_node.content_attributes().text_data().text_content();
+  EXPECT_TRUE(base::IsStringUTF8(result_text));
+  EXPECT_EQ(result_text, std::string(19998, 'A'));
 }
 
 TEST_F(GlicMediaIntegrationTest, HeadlessPrefTurnsOnAndOff) {
@@ -370,12 +458,11 @@ TEST_F(GlicMediaIntegrationTest, ExcludedOriginsDontReturnTranscriptions) {
   // Exclude the origin after adding the transcript.
   integration->SetExcludedOrigins({excluded_origin});
 
-  // Expect an empty transcript.
+  // Expect no content attributes when the origin is excluded.
   optimization_guide::proto::ContentNode root_node;
-  integration->AppendContext(web_contents(), &root_node);
+  integration->AppendContextForFrame(rfh(), &root_node);
   EXPECT_EQ(root_node.children_nodes_size(), 0);
-  EXPECT_TRUE(root_node.has_content_attributes());
-  EXPECT_EQ(root_node.content_attributes().text_data().text_content(), "");
+  EXPECT_FALSE(root_node.has_content_attributes());
 }
 
 TEST_F(GlicMediaIntegrationTest, DefaultExcludedOriginsStopTranscription) {
@@ -441,9 +528,56 @@ TEST_F(GlicMediaIntegrationTest,
 
   // Expect an empty transcript.
   optimization_guide::proto::ContentNode root_node;
-  integration->AppendContext(web_contents(), &root_node);
+  integration->AppendContextForFrame(rfh(), &root_node);
   EXPECT_EQ(root_node.children_nodes_size(), 0);
   EXPECT_FALSE(root_node.has_content_attributes());
 }
+
+TEST_F(GlicMediaIntegrationTest, PrefToggleAddsAndRemovesListener) {
+  // Ensure the pref is enabled initially.
+  pref_service()->SetBoolean(glic::prefs::kGlicMediaUnderstandingEnabled, true);
+
+  auto* integration = GetIntegration();
+  ASSERT_NE(integration, nullptr);
+
+  const url::Origin other_origin =
+      url::Origin::Create(GURL("https://example.com"));
+  SetCommittedOriginOnAllFrames(other_origin);
+
+  // 1. With pref enabled, dispatching transcription should succeed.
+  EXPECT_TRUE(live_caption_controller()->DispatchTranscription(
+      rfh(), nullptr,
+      media::SpeechRecognitionResult("transcript 1", /*is_final=*/true)));
+  EXPECT_EQ(GetContext()->GetTranscriptChunks().size(), 1u);
+
+  // 2. Disable the pref.
+  pref_service()->SetBoolean(glic::prefs::kGlicMediaUnderstandingEnabled,
+                             false);
+
+  // Wait for the asynchronous removal to process.
+  task_environment()->RunUntilIdle();
+
+  // 3. Now the listener should be removed, so DispatchTranscription returns
+  // false.
+  EXPECT_FALSE(live_caption_controller()->DispatchTranscription(
+      rfh(), nullptr,
+      media::SpeechRecognitionResult("transcript 2", /*is_final=*/true)));
+
+  // 4. Disabling the pref should have cleared the transcripts.
+  ASSERT_NE(GetContext(), nullptr);
+  EXPECT_FALSE(GetContext()->HasTranscriptChunks());
+  EXPECT_EQ(GetContext()->GetTranscriptChunks().size(), 0u);
+
+  // 5. Enable the pref again.
+  pref_service()->SetBoolean(glic::prefs::kGlicMediaUnderstandingEnabled, true);
+
+  // The listener is added back synchronously.
+  EXPECT_TRUE(live_caption_controller()->DispatchTranscription(
+      rfh(), nullptr,
+      media::SpeechRecognitionResult("transcript 3", /*is_final=*/true)));
+  EXPECT_EQ(GetContext()->GetTranscriptChunks().size(), 1u);
+}
+
+#endif  // !BUILDFLAG(IS_LINUX) || defined(ARCH_CPU_X86_FAMILY)
 
 }  // namespace glic

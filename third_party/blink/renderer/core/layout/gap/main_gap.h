@@ -38,9 +38,9 @@ class CORE_EXPORT MainGap {
         range_of_cross_gaps_before_(other.range_of_cross_gaps_before_),
         range_of_cross_gaps_after_(other.range_of_cross_gaps_after_),
         gap_segment_state_ranges_(other.gap_segment_state_ranges_),
+        has_blocked_range_(other.has_blocked_range_),
         spanner_main_gap_type_(other.spanner_main_gap_type_) {}
 
-  void SetGapOffset(LayoutUnit offset) { gap_offset_ = offset; }
   LayoutUnit GetGapOffset() const { return gap_offset_; }
 
   bool HasCrossGapsBefore() const {
@@ -53,8 +53,10 @@ class CORE_EXPORT MainGap {
 
   wtf_size_t GetCrossGapBeforeStart() const;
   wtf_size_t GetCrossGapBeforeEnd() const;
+  wtf_size_t GetCrossGapBeforeCount() const;
   wtf_size_t GetCrossGapAfterStart() const;
   wtf_size_t GetCrossGapAfterEnd() const;
+  wtf_size_t GetCrossGapAfterCount() const;
 
   void IncrementRangeOfCrossGapsBefore(wtf_size_t cross_gap_index) {
     range_of_cross_gaps_before_.Increment(cross_gap_index);
@@ -62,17 +64,6 @@ class CORE_EXPORT MainGap {
 
   void IncrementRangeOfCrossGapsAfter(wtf_size_t cross_gap_index) {
     range_of_cross_gaps_after_.Increment(cross_gap_index);
-  }
-
-  void SetRangeOfCrossGapsBefore(const CrossGapRange& range) {
-    range_of_cross_gaps_before_ = range;
-  }
-  const CrossGapRange& RangeOfCrossGapsBefore() const {
-    return range_of_cross_gaps_before_;
-  }
-
-  void SetRangeOfCrossGapsAfter(const CrossGapRange& range) {
-    range_of_cross_gaps_after_ = range;
   }
 
   blink::String ToString(bool verbose = false) const;
@@ -91,10 +82,23 @@ class CORE_EXPORT MainGap {
     return gap_segment_state_ranges_.has_value();
   }
 
+  // Returns true if any gap segment range has a `kBlocked` state, indicating
+  // that a spanning item crosses this gap.
+  bool HasBlockedRange() const { return has_blocked_range_; }
+
   const GapSegmentStateRanges& GetGapSegmentStateRanges() const;
 
   void AddGapSegmentStateRange(
       const GapSegmentStateRange& gap_segment_state_range);
+
+  bool operator==(const MainGap& other) const {
+    return gap_offset_ == other.gap_offset_ &&
+           range_of_cross_gaps_before_ == other.range_of_cross_gaps_before_ &&
+           range_of_cross_gaps_after_ == other.range_of_cross_gaps_after_ &&
+           gap_segment_state_ranges_ == other.gap_segment_state_ranges_ &&
+           has_blocked_range_ == other.has_blocked_range_ &&
+           spanner_main_gap_type_ == other.spanner_main_gap_type_;
+  }
 
  private:
   // This represents the midpoint offset (block or inline) of the gap. If the main
@@ -103,11 +107,11 @@ class CORE_EXPORT MainGap {
 
   // In Grid, because rows and columns neatly align, we can avoid duplication by
   // storing cross gaps once and share them across all main gaps. As a result,
-  // each main gap can be mapped to all cross gaps. Unlike Grid, each flex line
-  // will have independent intersections introduced by the item flow. As such,
-  // we cannot share cross axis gap intersections across gaps in the main axis.
-  // As a result, each main gap is mapped to cross gaps that intersect it (i.e.
-  // falling either before or after that main gap).
+  // each main gap can be mapped to all cross gaps.
+  // For Flex and grid-lanes, these ranges contain the contiguous `CrossGap`
+  // runs on each side of this `MainGap`. A grid-lanes `CrossGap` belongs to one
+  // lane, so it appears in the "before" range of the following main gap and the
+  // "after" range of the preceding `MainGap`.
   CrossGapRange range_of_cross_gaps_before_;
   CrossGapRange range_of_cross_gaps_after_;
 
@@ -116,6 +120,10 @@ class CORE_EXPORT MainGap {
   // the presence of spanning items or empty cells can break it into multiple
   // state-specific sub‑ranges.
   std::optional<GapSegmentStateRanges> gap_segment_state_ranges_;
+
+  // Set to true when any gap segment range has a `kBlocked` state. This avoids
+  // iterating all ranges to check for spanning items at fragmentation time.
+  bool has_blocked_range_ = false;
 
   // Only used for multicol.
   SpannerMainGapType spanner_main_gap_type_ = SpannerMainGapType::kNone;

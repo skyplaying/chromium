@@ -15,7 +15,6 @@
 #include "media/base/decoder_factory.h"
 #include "media/base/media_log.h"
 #include "media/base/media_switches.h"
-#include "media/base/supported_types.h"
 #include "media/media_buildflags.h"
 #include "media/video/gpu_video_accelerator_factories.h"
 
@@ -27,6 +26,8 @@
 #if BUILDFLAG(ENABLE_DAV1D_DECODER)
 #include "media/filters/dav1d_video_decoder.h"
 #endif
+
+#include "media/filters/opus_audio_decoder.h"
 
 #if BUILDFLAG(ENABLE_FFMPEG)
 #include "media/filters/ffmpeg_audio_decoder.h"
@@ -46,6 +47,10 @@
 
 #if BUILDFLAG(ENABLE_SYMPHONIA)
 #include "media/filters/symphonia_audio_decoder.h"
+#endif
+
+#if BUILDFLAG(ENABLE_IAMF_TOOLS)
+#include "media/filters/iamf_audio_decoder.h"
 #endif
 
 namespace media {
@@ -79,11 +84,25 @@ void DefaultDecoderFactory::CreateAudioDecoders(
 #endif  // BUILDFLAG(ENABLE_PLATFORM_DTS_AUDIO) && BUILDFLAG(IS_WIN)
 
 #if BUILDFLAG(ENABLE_SYMPHONIA)
-  if (base::FeatureList::IsEnabled(kSymphoniaAudioDecoding)) {
+  if (base::FeatureList::IsEnabled(kSymphoniaAudioDecoding) ||
+      base::FeatureList::IsEnabled(kSymphoniaMp3Decoding) ||
+      base::FeatureList::IsEnabled(kSymphoniaPcmDecoding) ||
+      base::FeatureList::IsEnabled(kSymphoniaVorbisDecoding)) {
     audio_decoders->push_back(
         std::make_unique<SymphoniaAudioDecoder>(task_runner, media_log));
   }
 #endif
+
+#if BUILDFLAG(ENABLE_IAMF_TOOLS)
+  if (base::FeatureList::IsEnabled(kIamfAudioDecoding)) {
+    audio_decoders->push_back(
+        std::make_unique<IamfAudioDecoder>(task_runner, media_log));
+  }
+#endif
+
+  if (base::FeatureList::IsEnabled(kDirectOpusAudioDecoding)) {
+    audio_decoders->push_back(std::make_unique<OpusAudioDecoder>(task_runner));
+  }
 
 #if BUILDFLAG(ENABLE_FFMPEG)
   audio_decoders->push_back(
@@ -137,7 +156,8 @@ void DefaultDecoderFactory::CreateVideoDecoders(
 #endif
 
 #if BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS)
-  video_decoders->push_back(std::make_unique<FFmpegVideoDecoder>(media_log));
+  video_decoders->push_back(
+      std::make_unique<FFmpegVideoDecoder>(media_log->Clone()));
 #endif
 }
 

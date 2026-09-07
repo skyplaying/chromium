@@ -38,6 +38,8 @@ inline constexpr char kBocaOnTaskUnlockedSessionDurationPercentage[] =
     "Ash.Boca.OnTask.UnlockedSessionDurationPercentage";
 inline constexpr char kBocaOnTaskNumOfTabsWhenSessionEnded[] =
     "Ash.Boca.OnTask.NumberOfTabsWhenSessionEnded";
+inline constexpr char kBocaOnTaskOAuthTriggered[] =
+    "Ash.Boca.OnTask.OAuthTriggered";
 inline constexpr char kBocaOnTaskMaxNumOfTabsDuringSession[] =
     "Ash.Boca.OnTask.MaxNumberOfTabsDuringSession";
 inline constexpr char kBocaSpotlightGoogleApiCallErrorCodeTemplate[] =
@@ -84,6 +86,10 @@ inline constexpr char
         "Ash.Boca.ScreenShare.PresentOwnScreenOutOfSession.FailureReason";
 inline constexpr char kBocaScreenSharePresentStudentScreenFailureReason[] =
     "Ash.Boca.ScreenShare.PresentStudentScreen.FailureReason";
+inline constexpr char kBocaTeacherGetGeminiStatusEnabled[] =
+    "Ash.Boca.TeacherGetGeminiStatus.Enabled";
+inline constexpr char kBocaStudentGeminiStatusEnabled[] =
+    "Ash.Boca.StudentGeminiStatus.Enabled";
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
@@ -131,6 +137,9 @@ void RecordNumOfActiveStudentsWhenSessionEnded(int num_of_active_students);
 
 // Records the number of tabs sent by the provider when a session ends.
 void RecordOnTaskNumOfTabsWhenSessionEnded(int num_of_tabs);
+
+// Records when an OAuth flow is triggered during the OnTask session.
+void RecordOnTaskOAuthTriggered();
 
 // Records the max number of tabs sent by the provider in a session.
 void RecordOnTaskMaxNumOfTabsDuringSession(int max_num_of_tabs);
@@ -256,6 +265,12 @@ void RecordPresentOwnScreenFailureReason(
 // Records the reason that presenting a student screen failed.
 void RecordPresentStudentScreenFailureReason(
     BocaPresentStudentScreenFailureReason reason);
+
+// Records whether Gemini is enabled/disabled for the teacher.
+void RecordTeacherGetGeminiStatusEnabled(bool enabled);
+
+// Records whether Gemini is enabled/disabled for the student/consumer.
+void RecordStudentGeminiStatusEnabled(bool enabled);
 
 }  // namespace ash::boca
 

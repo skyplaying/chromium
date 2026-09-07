@@ -18,7 +18,6 @@
 #include "ash/webui/personalization_app/mojom/personalization_app.mojom.h"
 #include "ash/webui/personalization_app/personalization_app_url_constants.h"
 #include "ash/webui/personalization_app/proto/backdrop_wallpaper.pb.h"
-#include "ash/webui/system_apps/public/system_web_app_type.h"
 #include "base/check_is_test.h"
 #include "base/command_line.h"
 #include "base/containers/extend.h"
@@ -38,28 +37,24 @@
 #include "chrome/browser/ash/file_manager/volume.h"
 #include "chrome/browser/ash/file_manager/volume_manager.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
+#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/wallpaper/wallpaper_drivefs_delegate_impl.h"
 #include "chrome/browser/ash/wallpaper_handlers/google_photos_wallpaper_handlers.h"
 #include "chrome/browser/ash/wallpaper_handlers/wallpaper_fetcher_delegate.h"
 #include "chrome/browser/ash/wallpaper_handlers/wallpaper_handlers.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/frame/contents_web_view.h"
-#include "chrome/browser/ui/webui/ash/settings/pref_names.h"
-#include "chrome/common/pref_names.h"
+#include "chromeos/ash/components/browser_delegate/browser_controller.h"
+#include "chromeos/ash/components/browser_delegate/browser_delegate.h"
 #include "chromeos/ash/components/cryptohome/system_salt_getter.h"
 #include "chromeos/ash/components/policy/device_local_account/device_local_account_type.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
+#include "chromeos/ash/components/system_web_apps/system_web_app_type.h"
 #include "chromeos/ui/base/window_properties.h"
 #include "components/account_id/account_id.h"
 #include "components/prefs/pref_service.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "components/session_manager/core/session_manager.h"
-#include "components/sync/service/sync_service.h"
-#include "components/sync/service/sync_user_settings.h"
 #include "components/user_manager/known_user.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/browser/render_widget_host_view.h"
@@ -344,23 +339,6 @@ void WallpaperControllerClientImpl::GetFilesId(
                      std::move(files_id_callback)));
 }
 
-bool WallpaperControllerClientImpl::IsWallpaperSyncEnabled(
-    const AccountId& account_id) const {
-  Profile* profile = ProfileHelper::Get()->GetProfileByAccountId(account_id);
-  if (!profile) {
-    return false;
-  }
-
-  syncer::SyncService* sync_service =
-      SyncServiceFactory::GetForProfile(profile);
-  if (!sync_service) {
-    return false;
-  }
-  syncer::SyncUserSettings* user_settings = sync_service->GetUserSettings();
-  return user_settings->IsSyncAllOsTypesEnabled() ||
-         profile->GetPrefs()->GetBoolean(
-             ash::settings::prefs::kSyncOsWallpaper);
-}
 
 void WallpaperControllerClientImpl::CancelPreviewWallpaper(Profile* profile) {
   wallpaper_controller_->CancelPreviewWallpaper();
@@ -394,27 +372,19 @@ void WallpaperControllerClientImpl::MakeTransparent(
       SK_ColorTRANSPARENT);
 
   // Turn off the web contents background.
-  std::vector<ContentsWebView*> contents_views =
-      BrowserView::GetBrowserViewForNativeWindow(
-          web_contents->GetTopLevelNativeWindow())
-          ->GetAllVisibleContentsWebViews();
-  for (ContentsWebView* contents_view : contents_views) {
-    contents_view->SetBackgroundVisible(false);
-  }
+  ash::BrowserController::GetInstance()
+      ->GetBrowserForTab(web_contents)
+      ->SetContentsBackgroundVisible(false);
 }
 
 void WallpaperControllerClientImpl::MakeOpaque(
     content::WebContents* web_contents) {
-  // Reversing `contents_web_view` is sufficient to make the view opaque,
-  // as `window_backdrop`, `top_level_window` and `web_contents` are not
+  // Making the contents background visible is sufficient to make the view
+  // opaque, as `window_backdrop`, `top_level_window` and `web_contents` are not
   // highly impactful to the animated theme change effect.
-  std::vector<ContentsWebView*> contents_views =
-      BrowserView::GetBrowserViewForNativeWindow(
-          web_contents->GetTopLevelNativeWindow())
-          ->GetAllVisibleContentsWebViews();
-  for (ContentsWebView* contents_view : contents_views) {
-    contents_view->SetBackgroundVisible(true);
-  }
+  ash::BrowserController::GetInstance()
+      ->GetBrowserForTab(web_contents)
+      ->SetContentsBackgroundVisible(true);
 }
 
 void WallpaperControllerClientImpl::OnVolumeMounted(
@@ -658,7 +628,12 @@ void WallpaperControllerClientImpl::OnGooglePhotosDailyAlbumFetched(
         return ids.Peek(base::PersistentHash(photo->id)) == ids.end();
       });
 
-  DCHECK(selected_itr != photos.end());
+  // If all photos are in the cache (e.g. repeated IDs in the album caused by a
+  // compromised network process), fallback to the first photo.
+  if (selected_itr == photos.end()) {
+    selected_itr = photos.begin();
+  }
+
   auto& selected = *selected_itr;
 
   ids.Put(base::PersistentHash(selected->id));

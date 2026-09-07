@@ -28,7 +28,6 @@ import org.mockito.Mockito;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
 import org.chromium.base.DiscardableReferencePool;
@@ -38,7 +37,6 @@ import org.chromium.components.browser_ui.util.BitmapCache;
 /** Unit tests for InMemoryCachedImageFetcher. */
 @SuppressWarnings("unchecked")
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class InMemoryCachedImageFetcherTest {
     private static final String UMA_CLIENT_NAME = "TestUmaClient";
     private static final String URL = "http://foo.bar";
@@ -60,9 +58,6 @@ public class InMemoryCachedImageFetcherTest {
     @Mock private ImageFetcherBridge mBridge;
     @Mock private CachedImageFetcher mMockImageFetcher;
     @Mock private Callback<Bitmap> mCallback;
-    @Mock private Runtime mRuntime;
-    @Captor private ArgumentCaptor<Integer> mWidthCaptor;
-    @Captor private ArgumentCaptor<Integer> mHeightCaptor;
     @Captor private ArgumentCaptor<Callback<Bitmap>> mCallbackCaptor;
 
     @Before
@@ -191,49 +186,46 @@ public class InMemoryCachedImageFetcherTest {
 
     @Test
     public void testDetermineCacheSize_clientRequestedSmallerThanAvailable() {
-        long totalMemory = 200L;
-        long allocatedMemory = 100L;
+        long maxMemory = 200L;
+        long totalMemory = 100L;
+        long freeMemory = 0L;
         int clientRequest = 10;
-        doReturn(totalMemory).when(mRuntime).maxMemory();
-        doReturn(allocatedMemory).when(mRuntime).totalMemory();
-        doReturn(0L).when(mRuntime).freeMemory();
 
         // We calculate the in-memory cache size as a percentage of available memory.
         Assert.assertEquals(
                 "Cache size should be bounded by the space requested by the client.",
                 clientRequest,
-                InMemoryCachedImageFetcher.determineCacheSize(mRuntime, clientRequest));
+                InMemoryCachedImageFetcher.determineCacheSize(
+                        totalMemory, freeMemory, maxMemory, clientRequest));
     }
 
     @Test
     public void testDetermineCacheSize_clientRequestedLargerThanAvailable() {
-        long totalMemory = 200L;
-        long allocatedMemory = 120L;
+        long maxMemory = 200L;
+        long totalMemory = 120L;
+        long freeMemory = 0L;
         int clientRequest = 100;
-        doReturn(totalMemory).when(mRuntime).maxMemory();
-        doReturn(allocatedMemory).when(mRuntime).totalMemory();
-        doReturn(0L).when(mRuntime).freeMemory();
 
         // We calculate the in-memory cache size as a percentage of available memory.
         Assert.assertEquals(
                 "Client requests should be bounded by 1/8th of the available memory.",
                 10,
-                InMemoryCachedImageFetcher.determineCacheSize(mRuntime, clientRequest));
+                InMemoryCachedImageFetcher.determineCacheSize(
+                        totalMemory, freeMemory, maxMemory, clientRequest));
     }
 
     @Test
     public void testDetermineCacheSize_freeMemoryLowerBound() {
-        long totalMemory = 200L;
-        long allocatedMemory = 199L;
+        long maxMemory = 200L;
+        long totalMemory = 199L;
+        long freeMemory = 0L;
         int clientRequest = 10;
-        doReturn(totalMemory).when(mRuntime).maxMemory();
-        doReturn(allocatedMemory).when(mRuntime).totalMemory();
-        doReturn(0L).when(mRuntime).freeMemory();
 
         // We calculate the in-memory cache size as a percentage of available memory.
         Assert.assertEquals(
                 "The minimum cache size is 1.",
                 1,
-                InMemoryCachedImageFetcher.determineCacheSize(mRuntime, clientRequest));
+                InMemoryCachedImageFetcher.determineCacheSize(
+                        totalMemory, freeMemory, maxMemory, clientRequest));
     }
 }

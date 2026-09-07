@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "base/check_op.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/no_destructor.h"
@@ -20,10 +21,10 @@
 #include "chromecast/tracing/system_tracer.h"
 #include "chromecast/tracing/system_tracing_common.h"
 #include "content/public/browser/browser_thread.h"
+#include "services/tracing/public/cpp/perfetto/perfetto_data_source_names.h"
 #include "services/tracing/public/cpp/perfetto/perfetto_traced_process.h"
 #include "services/tracing/public/cpp/perfetto/system_trace_writer.h"
 #include "services/tracing/public/mojom/constants.mojom.h"
-#include "services/tracing/public/mojom/perfetto_service.mojom.h"
 
 namespace content {
 namespace {
@@ -101,7 +102,7 @@ class CastSystemTracingSession {
                             const std::string& categories,
                             SuccessCallback callback) {
     DCHECK_CALLED_ON_VALID_SEQUENCE(worker_sequence_checker_);
-    DCHECK(!is_tracing_);
+    CHECK(!is_tracing_, base::NotFatalUntil::M159);
     system_tracer_ = chromecast::SystemTracer::Create();
     system_tracer_->StartTracing(
         categories,
@@ -171,7 +172,7 @@ class CastDataSource : public tracing::PerfettoTracedProcess::DataSourceBase {
   void StartTracingImpl(
       const perfetto::DataSourceConfig& data_source_config) override {
     DCHECK_CALLED_ON_VALID_SEQUENCE(perfetto_sequence_checker_);
-    DCHECK(!session_);
+    CHECK(!session_, base::NotFatalUntil::M159);
     target_buffer_ = data_source_config.target_buffer();
     session_ = std::make_unique<CastSystemTracingSession>(worker_task_runner_);
     session_->StartTracing(data_source_config.chrome_config().trace_config(),
@@ -182,7 +183,7 @@ class CastDataSource : public tracing::PerfettoTracedProcess::DataSourceBase {
   // Called from the tracing::PerfettoProducer on its sequence.
   void StopTracingImpl(base::OnceClosure stop_complete_callback) override {
     DCHECK_CALLED_ON_VALID_SEQUENCE(perfetto_sequence_checker_);
-    DCHECK(session_);
+    CHECK(session_, base::NotFatalUntil::M159);
     if (!session_started_) {
       session_started_callback_ =
           base::BindOnce(&CastDataSource::StopTracing, base::Unretained(this),
@@ -210,13 +211,13 @@ class CastDataSource : public tracing::PerfettoTracedProcess::DataSourceBase {
       tracing::SystemTraceWriter<std::string, DataSourceProxy>;
 
   CastDataSource()
-      : DataSourceBase(tracing::mojom::kSystemTraceDataSourceName),
+      : DataSourceBase(tracing::kSystemTraceDataSourceName),
         worker_task_runner_(base::ThreadPool::CreateSequencedTaskRunner(
             {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
              base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN})) {
     DETACH_FROM_SEQUENCE(perfetto_sequence_checker_);
     perfetto::DataSourceDescriptor dsd;
-    dsd.set_name(tracing::mojom::kSystemTraceDataSourceName);
+    dsd.set_name(tracing::kSystemTraceDataSourceName);
     DataSourceProxy::Register(dsd, this);
   }
 
@@ -235,8 +236,8 @@ class CastDataSource : public tracing::PerfettoTracedProcess::DataSourceBase {
     if (!stop_complete_callback_) {
       return;
     }
-    DCHECK(trace_writer_);
-    DCHECK(session_);
+    CHECK(trace_writer_, base::NotFatalUntil::M159);
+    CHECK(session_, base::NotFatalUntil::M159);
 
     if (status != chromecast::SystemTracer::Status::FAIL) {
       trace_writer_->WriteData(trace_data);
@@ -249,7 +250,7 @@ class CastDataSource : public tracing::PerfettoTracedProcess::DataSourceBase {
   }
 
   void OnTraceDataCommitted() {
-    DCHECK(stop_complete_callback_);
+    CHECK(stop_complete_callback_, base::NotFatalUntil::M159);
     trace_writer_.reset();
     session_.reset();
     session_started_ = false;
@@ -271,8 +272,12 @@ class CastDataSource : public tracing::PerfettoTracedProcess::DataSourceBase {
 
 }  // namespace
 
+BASE_FEATURE(kCastTracingDataSource, base::FEATURE_DISABLED_BY_DEFAULT);
+
 void RegisterCastTracingDataSource() {
-  CastDataSource::GetInstance();
+  if (base::FeatureList::IsEnabled(kCastTracingDataSource)) {
+    CastDataSource::GetInstance();
+  }
 }
 
 }  // namespace content

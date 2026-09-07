@@ -111,16 +111,23 @@ AIRewriter::ToProtoOptions(
 }
 
 // static
-base::flat_set<std::string_view> AIRewriter::GetSupportedLanguageBaseCodes() {
+std::optional<base::flat_set<std::string>>
+AIRewriter::GetEnabledLanguageBaseCodes() {
   // Comma-separated language codes to enable; or "*" enables all supported.
   const base::FeatureParam<std::string> kAIRewriterAPILanguagesEnabled{
-      &blink::features::kAIWriterAPI, "langs", /*default=*/"en,es,ja"};
+      &blink::features::kAIWriterAPI, "langs",
+      /*default_value=*/"en,es,ja,de,fr"};
+  return on_device_ai::GetEnabledLanguagesForFeature(
+      GetDefaultSupportedLanguageBaseCodes(), kAIRewriterAPILanguagesEnabled);
+}
+
+// static
+base::flat_set<std::string> AIRewriter::GetDefaultSupportedLanguageBaseCodes() {
   // TODO(crbug.com/394841624): Get supported languages from the model config.
   auto kSupportedBaseLanguages =
-      base::MakeFixedFlatSet<std::string_view>({"en", "ja", "es"});
-  return on_device_ai::RestrictSupportedLanguagesForFeature(
-      base::MakeFlatSet<std::string_view>(kSupportedBaseLanguages),
-      kAIRewriterAPILanguagesEnabled);
+      base::MakeFixedFlatSet<std::string_view>({"en", "ja", "es", "de", "fr"});
+  return base::flat_set<std::string>(kSupportedBaseLanguages.begin(),
+                                     kSupportedBaseLanguages.end());
 }
 
 void AIRewriter::Rewrite(
@@ -150,6 +157,7 @@ void AIRewriter::DidGetExecutionInputSizeForRewrite(
     return;
   }
 
+  // TODO(crbug.com/494980521): Catch real crash disconnects to surface errors.
   if (!session_wrapper_.session()) {
     on_device_ai::SendStreamingStatus(
         responder,
@@ -160,16 +168,17 @@ void AIRewriter::DidGetExecutionInputSizeForRewrite(
   if (!result.has_value()) {
     on_device_ai::SendStreamingStatus(
         responder,
-        blink::mojom::ModelStreamingResponseStatus::kErrorGenericFailure);
+        blink::mojom::ModelStreamingResponseStatus::kErrorFailedToCountTokens);
     return;
   }
 
-  uint32_t quota = blink::mojom::kWritingAssistanceMaxInputTokenSize;
-  if (result.value() > quota) {
+  uint32_t context_window_size = session_wrapper_.GetInputContextLimit(
+      blink::mojom::kWritingAssistanceMaxInputTokenSize);
+  if (result.value() > context_window_size) {
     on_device_ai::SendStreamingStatus(
         responder,
         blink::mojom::ModelStreamingResponseStatus::kErrorInputTooLarge,
-        blink::mojom::QuotaErrorInfo::New(result.value(), quota));
+        blink::mojom::QuotaErrorInfo::New(result.value(), context_window_size));
     return;
   }
 

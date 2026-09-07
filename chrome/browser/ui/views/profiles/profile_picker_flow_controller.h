@@ -15,9 +15,14 @@
 #include "components/signin/public/base/signin_buildflags.h"
 
 struct CoreAccountInfo;
+class BrowserWindowInterface;
 class Profile;
 class ProfilePickerPostSignInAdapter;
 class ForceSigninUIError;
+
+namespace signin {
+enum class DeviceSignalsDisclaimerResult;
+}
 
 class ProfilePickerFlowController : public ProfileManagementFlowControllerImpl {
  public:
@@ -41,6 +46,8 @@ class ProfilePickerFlowController : public ProfileManagementFlowControllerImpl {
   void CancelSigninFlow() override;
 
   std::u16string GetFallbackAccessibleWindowTitle() const override;
+
+  void OnWindowClosing() override;
 
   // Switch to the flow that is shown when the user decides to create a profile
   // without signing in.
@@ -75,12 +82,26 @@ class ProfilePickerFlowController : public ProfileManagementFlowControllerImpl {
       const CoreAccountInfo& account_info,
       std::unique_ptr<content::WebContents> contents) override;
 
-  // Callback after loading a profile and opening a browser.
+  // Callback after loading the profile but before opening the browser.
+  void OnProfileLoadedForPicking(
+      bool open_command_line_urls,
+      base::OnceCallback<void(BrowserWindowInterface*)>
+          pick_profile_complete_callback,
+      Profile* profile);
+
+  // Callback after loading the profile and opening the browser.
   void OnSwitchToProfileComplete(
       bool open_settings,
       bool exit_flow_after_profile_picked,
       base::OnceCallback<void(bool)> pick_profile_complete_callback,
-      Browser* browser);
+      BrowserWindowInterface* browser);
+
+  void OnDeviceSignalsDisclaimerResult(
+      Profile* profile,
+      bool open_command_line_urls,
+      base::OnceCallback<void(BrowserWindowInterface*)>
+          pick_profile_complete_callback,
+      signin::DeviceSignalsDisclaimerResult result);
 
   const ProfilePicker::EntryPoint entry_point_;
   const GURL selected_profile_target_url_;
@@ -104,6 +125,8 @@ class ProfilePickerFlowController : public ProfileManagementFlowControllerImpl {
 
   // Email to be prefilled in the profile creation flow.
   std::string initial_email_;
+
+  bool signals_disclaimer_result_recorded_ = false;
 
   base::WeakPtrFactory<ProfilePickerFlowController> weak_ptr_factory_{this};
 };

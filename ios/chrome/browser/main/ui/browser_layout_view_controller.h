@@ -7,10 +7,13 @@
 
 #import <UIKit/UIKit.h>
 
+#import "ios/chrome/browser/fullscreen/model/fullscreen_browser_agent_observer_bridge.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_ui_element.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/transitions/tab_grid_transition_context_provider.h"
 
 @protocol BrowserLayoutConsumer;
+@class SafeAreaProvider;
+@class SceneLayoutState;
 
 // A container view controller that manages the layout of the browser.
 // It is designed to contain an instance of BrowserViewController ("BVC") as a
@@ -19,7 +22,12 @@
 // containing view controller handles forwarding calls to the BVC instance where
 // needed.
 @interface BrowserLayoutViewController
-    : UIViewController <FullscreenUIElement, TabGridTransitionContextProvider>
+    : UIViewController <FullscreenBrowserAgentObserving,
+                        FullscreenUIElement,
+                        TabGridTransitionContextProvider>
+
+// The safe area provider.
+@property(nonatomic, weak) SafeAreaProvider* safeAreaProvider;
 
 // The browserViewController instance being contained. If this is set, the
 // current BVC (if any) will be removed as a child view controller, and the new
@@ -32,8 +40,19 @@
 // color.
 @property(nonatomic, assign) BOOL incognito;
 
+// The container used for infobar banner overlays.
+@property(nonatomic, weak)
+    UIViewController* infobarBannerOverlayContainerViewController;
+
+// The container used for infobar modal overlays.
+@property(nonatomic, weak)
+    UIViewController* infobarModalOverlayContainerViewController;
+
 // The TabStripViewController instance, managed by the container's coordinator.
 @property(nonatomic, weak) UIViewController* tabStripViewController;
+
+// The layout state.
+@property(nonatomic, weak) SceneLayoutState* layoutState;
 
 @end
 

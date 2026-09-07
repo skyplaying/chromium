@@ -10,7 +10,6 @@ import android.content.res.Resources;
 import android.graphics.drawable.Drawable;
 
 import androidx.annotation.ColorInt;
-import androidx.appcompat.content.res.AppCompatResources;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.bookmarks.BookmarkUiPrefs.BookmarkRowDisplayPref;
@@ -46,11 +45,13 @@ public class BookmarkViewUtils {
             return UiUtils.getTintedDrawable(context, R.drawable.ic_toolbar_24dp, tint);
         }
 
+        boolean useOutline =
+                displayPref == BookmarkRowDisplayPref.VISUAL
+                        || BookmarkUtils.isDesktopBookmarksLayoutEnabled()
+                        || BookmarkUtils.isDesktopBookmarksDialogEnabled();
         return UiUtils.getTintedDrawable(
                 context,
-                displayPref == BookmarkRowDisplayPref.VISUAL
-                        ? R.drawable.ic_folder_outline_24dp
-                        : R.drawable.ic_folder_blue_24dp,
+                useOutline ? R.drawable.ic_folder_outline_24dp : R.drawable.ic_folder_blue_24dp,
                 tint);
     }
 
@@ -127,6 +128,11 @@ public class BookmarkViewUtils {
     /** Returns the size to use when displaying an image. */
     public static int getImageIconSize(
             Resources resources, @BookmarkRowDisplayPref int displayPref) {
+        if (BookmarkUtils.isDesktopBookmarksLayoutEnabled()
+                || BookmarkUtils.isDesktopBookmarksDialogEnabled()) {
+            return resources.getDimensionPixelSize(
+                    R.dimen.improved_bookmark_start_image_size_desktop);
+        }
         return displayPref == BookmarkRowDisplayPref.VISUAL
                 ? resources.getDimensionPixelSize(R.dimen.improved_bookmark_start_image_size_visual)
                 : resources.getDimensionPixelSize(
@@ -155,8 +161,7 @@ public class BookmarkViewUtils {
             return ColorStateList.valueOf(
                     SemanticColorUtils.getDefaultIconColorOnAccent1Container(context));
         } else {
-            return AppCompatResources.getColorStateList(
-                    context, R.color.default_icon_color_secondary_tint_list);
+            return context.getColorStateList(R.color.default_icon_color_secondary_tint_list);
         }
     }
 

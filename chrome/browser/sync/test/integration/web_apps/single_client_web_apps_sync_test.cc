@@ -4,6 +4,7 @@
 
 #include <utility>
 
+#include "base/containers/span.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
@@ -27,7 +28,6 @@
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_sync_bridge.h"
-#include "chrome/common/chrome_features.h"
 #include "components/services/app_service/public/cpp/icon_info.h"
 #include "components/sync/base/data_type.h"
 #include "components/sync/base/user_selectable_type.h"
@@ -239,8 +239,8 @@ IN_PROC_BROWSER_TEST_P(SingleClientWebAppsSyncTest,
 
   // Start listening for incoming changes from sync.
   WebAppTestRegistryObserverAdapter registry_observer{&registrar_unsafe()};
-  base::test::TestFuture<const std::vector<const WebApp*>&>
-      updated_from_sync_future;
+  base::test::TestFuture<base::span<const WebApp* const>>
+       updated_from_sync_future;
   registry_observer.SetWebAppWillBeUpdatedFromSyncDelegate(
       updated_from_sync_future.GetRepeatingCallback());
 
@@ -399,8 +399,8 @@ IN_PROC_BROWSER_TEST_P(SingleClientWebAppsSyncTest,
 
   // Start listening for incoming changes from sync.
   WebAppTestRegistryObserverAdapter registry_observer{&registrar_unsafe()};
-  base::test::TestFuture<const std::vector<const WebApp*>&>
-      updated_from_sync_future;
+  base::test::TestFuture<base::span<const WebApp* const>>
+       updated_from_sync_future;
   registry_observer.SetWebAppWillBeUpdatedFromSyncDelegate(
       updated_from_sync_future.GetRepeatingCallback());
 
@@ -636,13 +636,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientWebAppsSyncTest,
   ASSERT_TRUE(SetupSync());
   AwaitWebAppQuiescence();
 
-#if BUILDFLAG(IS_CHROMEOS)
-  // On Chrome OS it is not possible to install apps before signing in to
-  // sync. So in that case we do expect the app to exist in sync.
-  EXPECT_EQ(1, GetNumWebAppsInSync());
-#else
   EXPECT_EQ(0, GetNumWebAppsInSync());
-#endif
 }
 
 }  // namespace

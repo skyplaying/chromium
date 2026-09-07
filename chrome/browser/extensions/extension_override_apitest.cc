@@ -7,16 +7,20 @@
 #include <memory>
 #include <utility>
 
+#include "base/check.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/extension_apitest.h"
+#include "chrome/browser/extensions/extension_url_overrides.h"
 #include "chrome/browser/extensions/extension_util.h"
-#include "chrome/browser/extensions/extension_web_ui.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/tab_list/tab_list_interface.h"
+#include "chrome/browser/ui/extensions/settings_api_bubble_helpers.h"
 #include "chrome/common/url_constants.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
@@ -48,8 +52,8 @@ class ExtensionOverrideTest : public ExtensionApiTest {
 
   bool CheckHistoryOverridesContainsNoDupes() {
     // There should be no duplicate entries in the preferences.
-    const base::DictValue& overrides =
-        profile()->GetPrefs()->GetDict(ExtensionWebUI::kExtensionURLOverrides);
+    const base::DictValue& overrides = profile()->GetPrefs()->GetDict(
+        ExtensionUrlOverrides::kExtensionURLOverrides);
 
     const base::ListValue* values = overrides.FindList("history");
     if (!values)
@@ -125,6 +129,21 @@ class ExtensionOverrideTest : public ExtensionApiTest {
         observer.WaitForExtensionLoaded();
     EXPECT_TRUE(extension);
     return extension;
+  }
+
+  // Opens an incognito window, navigates to the `url` in a new tab, waits for
+  // load to stop, and returns the WebContents.
+  content::WebContents* OpenUrlInIncognitoWindow(const GURL& url) {
+    auto* browser = CreateIncognitoBrowserWindow();
+    CHECK(browser);
+    auto* tab_list = TabListInterface::From(browser);
+    CHECK(tab_list);
+    auto* tab = tab_list->OpenTab(url, /*index=*/-1);
+    CHECK(tab);
+    auto* web_contents = tab->GetContents();
+    CHECK(web_contents);
+    content::WaitForLoadStop(web_contents);
+    return web_contents;
   }
 };
 
@@ -213,7 +232,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionOverrideTest, OverrideBookmarks) {
     // Navigate an incognito tab to the bookmarks, first without enabling the
     // extension in incognito. We should get the default bookmarks page.
     auto* incognito_web_contents =
-        PlatformOpenURLOffTheRecord(profile(), GURL("chrome://bookmarks/"));
+        OpenUrlInIncognitoWindow(GURL("chrome://bookmarks/"));
     EXPECT_TRUE(ExtensionDoesNotControlPage(incognito_web_contents));
 
     // Now enable the extension in incognito mode.
@@ -221,25 +240,24 @@ IN_PROC_BROWSER_TEST_F(ExtensionOverrideTest, OverrideBookmarks) {
 
     // Even after enabling in incognito, the extension still shouldn't override
     // the bookmarks page, as only "incognito": "split" extensions can override
-    // incognito chrome pages.
-#if BUILDFLAG(IS_ANDROID)
-    // This is a bit strange, but we actually expect this NavigateToURL call to
-    // fail on Android for the bookmarks page if it is not being overridden by
-    // an extension. Instead it is swapped out with a Android NativePage, so the
-    // web contents doesn't finish the navigation like NavigateToUrl expects.
-    ASSERT_FALSE(
-        NavigateToURL(incognito_web_contents, GURL("chrome://bookmarks/")));
-#else
-    ASSERT_TRUE(
-        NavigateToURL(incognito_web_contents, GURL("chrome://bookmarks/")));
-#endif  // BUILDFLAG(IS_ANDROID)
+    // incognito chrome pages. Intentionally ignore the return value, as on some
+    // platforms (Android) the final URL (chrome-native://...) may not match the
+    // input URL.
+    std::ignore =
+        NavigateToURL(incognito_web_contents, GURL("chrome://bookmarks/"));
     EXPECT_TRUE(ExtensionDoesNotControlPage(incognito_web_contents));
   }
 }
 
 // Test for overriding the Bookmarks page with an "incognito": "split"
 // extension.
-IN_PROC_BROWSER_TEST_F(ExtensionOverrideTest, OverrideBookmarksSplitMode) {
+// TODO(crbug.com/531593528): Flaky on Android.
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_OverrideBookmarksSplitMode DISABLED_OverrideBookmarksSplitMode
+#else
+#define MAYBE_OverrideBookmarksSplitMode OverrideBookmarksSplitMode
+#endif
+IN_PROC_BROWSER_TEST_F(ExtensionOverrideTest, MAYBE_OverrideBookmarksSplitMode) {
   scoped_refptr<const Extension> extension =
       LoadExtension(data_dir().AppendASCII("bookmarks_split_mode"));
   {
@@ -255,7 +273,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionOverrideTest, OverrideBookmarksSplitMode) {
     // Navigate an incognito tab to the bookmarks page, first without enabling
     // the extension in incognito. We should get the default bookmarks page.
     auto* incognito_web_contents =
-        PlatformOpenURLOffTheRecord(profile(), GURL("chrome://bookmarks/"));
+        OpenUrlInIncognitoWindow(GURL("chrome://bookmarks/"));
     EXPECT_TRUE(ExtensionDoesNotControlPage(incognito_web_contents));
 
     // Now enable the extension in incognito mode.
@@ -409,6 +427,10 @@ IN_PROC_BROWSER_TEST_F(ExtensionOverrideTest,
 IN_PROC_BROWSER_TEST_F(
     ExtensionOverrideTest,
     MAYBE_SubframeNavigationInOverridenNTPDoesNotAffectFocus) {
+  // Disable the "NTP overridden" dialog so it does not interfere with page
+  // focus.
+  extensions::SetNtpPostInstallUiEnabledForTesting(false);
+
   // Load an extension that overrides the new tab page.
   const Extension* extension = LoadExtension(data_dir().AppendASCII("newtab"));
 
@@ -416,7 +438,7 @@ IN_PROC_BROWSER_TEST_F(
   // will call chrome.test.sendMessage('controlled by first').
   ExtensionTestMessageListener listener("controlled by first");
   auto* contents = GetActiveWebContents();
-  ASSERT_TRUE(NavigateToURL(contents, GURL(chrome::kChromeUINewTabURL)));
+  ASSERT_TRUE(NavigateToURL(contents, chrome::ChromeUINewTabURLAsGURL()));
   EXPECT_TRUE(ExtensionControlsPage(contents, extension->id()));
   EXPECT_TRUE(listener.WaitUntilSatisfied());
 
@@ -450,7 +472,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionOverrideTest, OverrideHistory) {
   }
 }
 
-// Regression test for http://crbug.com/41442.
+// Regression test for http://crbug.com/40384582.
 IN_PROC_BROWSER_TEST_F(ExtensionOverrideTest, ShouldNotCreateDuplicateEntries) {
   const Extension* extension =
       LoadExtension(test_data_dir_.AppendASCII("override/history"));
@@ -459,7 +481,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionOverrideTest, ShouldNotCreateDuplicateEntries) {
   // Simulate several LoadExtension() calls happening over the lifetime of
   // a preferences file without corresponding UnloadExtension() calls.
   for (size_t i = 0; i < 3; ++i) {
-    ExtensionWebUI::RegisterOrActivateChromeURLOverrides(
+    ExtensionUrlOverrides::RegisterOrActivateChromeURLOverrides(
         profile(), URLOverrides::GetChromeURLOverrides(extension));
   }
 
@@ -483,13 +505,13 @@ IN_PROC_BROWSER_TEST_F(ExtensionOverrideTest, ShouldCleanUpDuplicateEntries) {
 
   {
     ScopedDictPrefUpdate update(profile()->GetPrefs(),
-                                ExtensionWebUI::kExtensionURLOverrides);
+                                ExtensionUrlOverrides::kExtensionURLOverrides);
     update->Set("history", std::move(list));
   }
 
   ASSERT_FALSE(CheckHistoryOverridesContainsNoDupes());
 
-  ExtensionWebUI::InitializeChromeURLOverrides(profile());
+  ExtensionUrlOverrides::InitializeChromeURLOverrides(profile());
 
   ASSERT_TRUE(CheckHistoryOverridesContainsNoDupes());
 }

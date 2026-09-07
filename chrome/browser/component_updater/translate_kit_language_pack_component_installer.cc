@@ -5,8 +5,10 @@
 #include "chrome/browser/component_updater/translate_kit_language_pack_component_installer.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -17,6 +19,7 @@
 #include "base/functional/callback.h"
 #include "base/functional/callback_forward.h"
 #include "base/logging.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_split.h"
 #include "chrome/browser/browser_process.h"
@@ -105,8 +108,7 @@ TranslateKitLanguagePackComponentInstallerPolicy::GetRelativeInstallDir()
 void TranslateKitLanguagePackComponentInstallerPolicy::GetHash(
     std::vector<uint8_t>* hash) const {
   auto const& config = GetConfig();
-  hash->assign(std::begin(config.public_key_sha),
-               std::end(config.public_key_sha));
+  hash->assign_range(config.public_key_sha);
 }
 
 std::string TranslateKitLanguagePackComponentInstallerPolicy::GetName() const {
@@ -140,9 +142,8 @@ void TranslateKitLanguagePackComponentInstallerPolicy::UpdateComponentOnDemand(
       base::BindOnce([](update_client::Error error) {
         if (error != update_client::Error::NONE &&
             error != update_client::Error::UPDATE_IN_PROGRESS) {
-          // TODO(crbug.com/358030919): Add UMA.
-          LOG(ERROR) << "Failed to update TranslateKit language pack:"
-                     << static_cast<int>(error);
+          base::UmaHistogramEnumeration(
+              "ComponentUpdater.TranslateKit.LanguagePack.UpdateError", error);
         }
       }));
 }
@@ -208,7 +209,7 @@ void RegisterTranslateKitLanguagePackComponentsForAutoDownload(
   }
 
   base::flat_set<LanguagePackKey> keys_to_register;
-  for (const std::string_view& pair :
+  for (std::string_view pair :
        base::SplitStringPiece(language_pairs_str, ",", base::TRIM_WHITESPACE,
                               base::SPLIT_WANT_NONEMPTY)) {
     std::vector<std::string_view> languages = base::SplitStringPiece(

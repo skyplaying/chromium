@@ -23,6 +23,8 @@ static const char kScriptMessageResponseApiNameKey[] = "api";
 static const char kScriptMessageResponseLineNumberKey[] = "line_number";
 static const char kScriptMessageResponseMessageKey[] = "message";
 static const char kScriptMessageResponseStackKey[] = "stack";
+static const char kScriptMessageResponseCrashKeys[] = "crashKeys";
+
 }  // namespace
 
 namespace web {
@@ -49,7 +51,8 @@ void ScriptErrorMessageHandlerJavaScriptFeature::ScriptMessageReceived(
   ScriptErrorDetails details(script_message.is_main_frame());
 
   const base::DictValue* script_dict =
-      script_message.body() ? script_message.body()->GetIfDict() : nullptr;
+      script_message.legacy_body() ? script_message.legacy_body()->GetIfDict()
+                                   : nullptr;
   if (!script_dict) {
     return;
   }
@@ -80,6 +83,14 @@ void ScriptErrorMessageHandlerJavaScriptFeature::ScriptMessageReceived(
 
   if (script_message.request_url()) {
     details.url = script_message.request_url().value();
+  }
+
+  const base::DictValue* crash_keys =
+      script_dict->FindDict(kScriptMessageResponseCrashKeys);
+  if (crash_keys) {
+    for (auto ck = crash_keys->begin(); ck != crash_keys->end(); ++ck) {
+      details.crash_keys.insert({ck->first, ck->second.GetString()});
+    }
   }
 
   if (log_message &&

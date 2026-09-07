@@ -12,7 +12,14 @@ typedef NS_ENUM(NSInteger, ChromeButtonStyle) {
   ChromeButtonStylePrimary,
   ChromeButtonStylePrimaryDestructive,
   ChromeButtonStyleSecondary,
+  ChromeButtonStyleSecondaryDestructive,
   ChromeButtonStyleTertiary,
+};
+
+// Sizes for the buttons.
+typedef NS_ENUM(NSInteger, ChromeButtonSize) {
+  ChromeButtonSizeRegular,
+  ChromeButtonSizeSmall,
 };
 
 // Image for the primary buttons.
@@ -23,6 +30,8 @@ typedef NS_ENUM(NSInteger, PrimaryButtonImage) {
   PrimaryButtonImageSpinner,
   // Confirmation state, a checkmark is shown.
   PrimaryButtonImageCheckmark,
+  // Custom image.
+  PrimaryButtonImageCustom,
 };
 
 // A chrome implementation of a UIButton.
@@ -32,6 +41,10 @@ typedef NS_ENUM(NSInteger, PrimaryButtonImage) {
 // appearance to match the new style.
 @property(nonatomic, assign) ChromeButtonStyle style;
 
+// The button's size style. Setting this property will update the button's
+// layout format to match the new size. Default is ChromeButtonSizeRegular.
+@property(nonatomic, assign) ChromeButtonSize buttonSize;
+
 // The button's title.
 @property(nonatomic, copy) NSString* title;
 
@@ -39,6 +52,8 @@ typedef NS_ENUM(NSInteger, PrimaryButtonImage) {
 @property(nonatomic, copy) UIFont* font;
 
 // The button's image. This property can only be set for primary style buttons.
+// When setting PrimaryButtonImageCustom, the caller must configure the custom
+// image directly via the `configuration` property before setting this value.
 @property(nonatomic, assign) PrimaryButtonImage primaryButtonImage;
 
 // Whether the button has a tuned-down state. Default is NO. Takes precedence
@@ -47,7 +62,9 @@ typedef NS_ENUM(NSInteger, PrimaryButtonImage) {
 
 // Designated init.
 - (instancetype)initWithStyle:(ChromeButtonStyle)style
+                   buttonSize:(ChromeButtonSize)buttonSize
     NS_DESIGNATED_INITIALIZER;
+- (instancetype)initWithStyle:(ChromeButtonStyle)style;
 - (instancetype)init NS_UNAVAILABLE;
 - (instancetype)initWithFrame:(CGRect)frame NS_UNAVAILABLE;
 - (instancetype)initWithCoder:(NSCoder*)coder NS_UNAVAILABLE;

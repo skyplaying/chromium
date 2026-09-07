@@ -20,6 +20,7 @@
 #include "chrome/common/actor/action_result.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/renderer/actor/tool_base.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
 #include "content/public/renderer/render_frame.h"
 #include "third_party/blink/public/common/input/web_coalesced_input_event.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
@@ -32,7 +33,6 @@
 namespace actor {
 
 using ::blink::WebInputEvent;
-using ::blink::WebLocalFrame;
 using ::blink::WebMouseEvent;
 using ::blink::WebWidget;
 
@@ -52,10 +52,18 @@ ClickDispatcher::ClickDispatcher(
     // No button for move
     mouse_move.button = WebMouseEvent::Button::kNoButton;
     mouse_move.SetPositionInWidget(target.widget_point);
+    mouse_move.SetPositionInScreen(
+        target.widget_point +
+        gfx::Vector2dF(widget->ViewRect().OffsetFromOrigin()));
 
     // Mouse move is considered optional, so we don't check this result.
+    base::WeakPtr<ClickDispatcher> weak_this = weak_ptr_factory_.GetWeakPtr();
     widget->HandleInputEvent(
         blink::WebCoalescedInputEvent(mouse_move, ui::LatencyInfo()));
+
+    if (!weak_this) {
+      return;
+    }
 
     base::TimeDelta delay = features::kGlicActorMoveBeforeClickDelay.Get();
     base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
@@ -96,14 +104,20 @@ void ClickDispatcher::DoMouseDown(WebMouseEvent::Button button,
   mouse_down.button = button;
   mouse_down.click_count = count;
   mouse_down.SetPositionInWidget(target.widget_point);
-  // TODO(crbug.com/402082828): Find a way to set screen position.
-  //   const gfx::Rect offset =
-  //     render_frame_host_->GetRenderWidgetHost()->GetView()->GetViewBounds();
-  //   mouse_event_.SetPositionInScreen(point.x() + offset.x(),
-  //                                    point.y() + offset.y());
 
+  gfx::PointF screen_point =
+      target.widget_point +
+      gfx::Vector2dF(widget->ViewRect().OffsetFromOrigin());
+  mouse_down.SetPositionInScreen(screen_point);
+  mouse_down.UpdateEventModifiersToMatchButton();
+
+  base::WeakPtr<ClickDispatcher> weak_this = weak_ptr_factory_.GetWeakPtr();
   blink::WebInputEventResult result = widget->HandleInputEvent(
       blink::WebCoalescedInputEvent(mouse_down, ui::LatencyInfo()));
+
+  if (!weak_this) {
+    return;
+  }
 
   if (result == blink::WebInputEventResult::kHandledSuppressed) {
     Finish(MakeResult(mojom::ActionResultCode::kClickSuppressed,
@@ -113,6 +127,7 @@ void ClickDispatcher::DoMouseDown(WebMouseEvent::Button button,
 
   mouse_up_event_ = mouse_down;
   mouse_up_event_->SetType(WebInputEvent::Type::kMouseUp);
+  mouse_up_event_->UpdateEventModifiersToMatchButton();
 
   const base::TimeDelta delay = features::kGlicActorClickDelay.Get();
 
@@ -124,7 +139,11 @@ void ClickDispatcher::DoMouseDown(WebMouseEvent::Button button,
 }
 
 void ClickDispatcher::DoMouseUp() {
+  base::WeakPtr<ClickDispatcher> weak_this = weak_ptr_factory_.GetWeakPtr();
   DoMouseUpImpl();
+  if (!weak_this) {
+    return;
+  }
   Finish(MakeOkResult());
 }
 
@@ -139,9 +158,15 @@ void ClickDispatcher::DoMouseUpImpl() {
   }
 
   mouse_up_event_->SetTimeStamp(ui::EventTimeForNow());
+  base::WeakPtr<ClickDispatcher> weak_this = weak_ptr_factory_.GetWeakPtr();
   blink::WebInputEventResult result =
       widget->HandleInputEvent(blink::WebCoalescedInputEvent(
           std::move(*mouse_up_event_), ui::LatencyInfo()));
+
+  if (!weak_this) {
+    return;
+  }
+
   mouse_up_event_.reset();
   if (result == blink::WebInputEventResult::kHandledSuppressed) {
     Finish(MakeResult(mojom::ActionResultCode::kClickSuppressed,

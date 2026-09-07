@@ -31,8 +31,9 @@ void AIWritingAssistanceCreateClient<
             client_remote) {
   HeapMojoRemote<mojom::blink::AIManager>& ai_manager_remote =
       AIInterfaceProxy::GetAIManagerRemote(GetExecutionContext());
-  ai_manager_remote->CreateSummarizer(std::move(client_remote),
-                                      ToMojoSummarizerCreateOptions(options_));
+  ai_manager_remote->CreateSummarizer(
+      std::move(client_remote), ToMojoSummarizerCreateOptions(options_),
+      monitor_ ? monitor_->BindRemote() : mojo::NullRemote());
 }
 
 template <>
@@ -153,7 +154,8 @@ Summarizer::Summarizer(
     ScriptState* script_state,
     scoped_refptr<base::SequencedTaskRunner> task_runner,
     mojo::PendingRemote<mojom::blink::AISummarizer> pending_remote,
-    SummarizerCreateOptions* options)
+    SummarizerCreateOptions* options,
+    uint64_t context_window)
     : AIWritingAssistanceBase<Summarizer,
                               mojom::blink::AISummarizer,
                               mojom::blink::AIManagerCreateSummarizerClient,
@@ -164,6 +166,7 @@ Summarizer::Summarizer(
           task_runner,
           std::move(pending_remote),
           std::move(options),
+          context_window,
           /*echo_whitespace_input=*/false) {}
 
 void Summarizer::Trace(Visitor* visitor) const {

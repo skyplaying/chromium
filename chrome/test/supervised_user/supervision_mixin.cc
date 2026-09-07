@@ -16,9 +16,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
-#include "chrome/test/supervised_user/child_account_test_utils.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/base/signin_switches.h"
@@ -137,7 +135,7 @@ void SupervisionMixin::SetParentalControlsAccountCapability(
   CHECK_EQ(account_info.email, email_);
   AccountInfo account = identity_manager->FindExtendedAccountInfo(account_info);
 
-  AccountCapabilitiesTestMutator mutator(&account.capabilities);
+  AccountCapabilitiesTestMutator mutator(&account);
   mutator.set_is_subject_to_parental_controls(is_supervised_profile);
   mutator.set_can_fetch_family_member_info(is_supervised_profile);
   signin::UpdateAccountInfoForAccount(identity_manager, account);
@@ -201,7 +199,7 @@ void SupervisionMixin::ConfigureIdentityTestEnvironment() {
                 .WithGaiaId(FakeGaia::GetDefaultGaiaId())
                 .WithRefreshToken(FakeGaiaMixin::kFakeRefreshToken)
                 .Build(email_));
-    CHECK(!account_info.account_id.empty());
+    CHECK(!account_info.GetAccountId().empty());
   } else {
     GetIdentityTestEnvironment()->SetRefreshTokenForPrimaryAccount();
   }
@@ -216,7 +214,7 @@ Profile* SupervisionMixin::GetProfile() const {
 #if BUILDFLAG(IS_CHROMEOS)
   return ProfileManager::GetActiveUserProfile();
 #else
-  return test_base_->browser()->profile();
+  return test_base_->browser()->GetProfile();
 #endif
 }
 

@@ -9,6 +9,7 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
+#include "base/test/bind.h"
 #include "build/build_config.h"
 #include "content/browser/bluetooth/bluetooth_adapter_factory_wrapper.h"
 #include "content/browser/bluetooth/web_bluetooth_service_impl.h"
@@ -146,10 +147,22 @@ class TestBluetoothDelegate : public BluetoothDelegate {
     device_to_select_ = device_address;
   }
 
+  void block_globally_disabled() { block_globally_disabled_ = true; }
+  bool checked_allow_web_bluetooth() const {
+    return checked_allow_web_bluetooth_;
+  }
+
+  void set_run_bluetooth_chooser_callback(base::OnceClosure callback) {
+    run_bluetooth_chooser_callback_ = std::move(callback);
+  }
+
   // BluetoothDelegate:
   std::unique_ptr<BluetoothChooser> RunBluetoothChooser(
       RenderFrameHost* frame,
       const BluetoothChooser::EventHandler& event_handler) override {
+    if (run_bluetooth_chooser_callback_) {
+      std::move(run_bluetooth_chooser_callback_).Run();
+    }
     return std::make_unique<FakeBluetoothChooser>(event_handler,
                                                   device_to_select_);
   }
@@ -175,59 +188,16 @@ class TestBluetoothDelegate : public BluetoothDelegate {
     NOTREACHED();
   }
 
-  blink::WebBluetoothDeviceId GetWebBluetoothDeviceId(
-      RenderFrameHost* frame,
-      const std::string& device_address) override {
-    return blink::WebBluetoothDeviceId();
+  AllowWebBluetoothResult AllowWebBluetooth(
+      content::BrowserContext* browser_context,
+      const url::Origin& requesting_origin,
+      const url::Origin& embedding_origin) override {
+    checked_allow_web_bluetooth_ = true;
+    if (block_globally_disabled_) {
+      return AllowWebBluetoothResult::kBlockGloballyDisabled;
+    }
+    return AllowWebBluetoothResult::kAllow;
   }
-  std::string GetDeviceAddress(RenderFrameHost* frame,
-                               const blink::WebBluetoothDeviceId&) override {
-    return std::string();
-  }
-  blink::WebBluetoothDeviceId AddScannedDevice(
-      RenderFrameHost* frame,
-      const std::string& device_address) override {
-    return blink::WebBluetoothDeviceId();
-  }
-  blink::WebBluetoothDeviceId GrantServiceAccessPermission(
-      RenderFrameHost* frame,
-      const device::BluetoothDevice* device,
-      const blink::mojom::WebBluetoothRequestDeviceOptions* options) override {
-    return blink::WebBluetoothDeviceId();
-  }
-  bool HasDevicePermission(
-      RenderFrameHost* frame,
-      const blink::WebBluetoothDeviceId& device_id) override {
-    return false;
-  }
-  void RevokeDevicePermissionWebInitiated(
-      RenderFrameHost* frame,
-      const blink::WebBluetoothDeviceId& device_id) override {}
-  bool IsAllowedToAccessService(RenderFrameHost* frame,
-                                const blink::WebBluetoothDeviceId& device_id,
-                                const device::BluetoothUUID& service) override {
-    return false;
-  }
-  bool MayUseBluetooth(RenderFrameHost* rfh) override { return true; }
-  bool IsAllowedToAccessAtLeastOneService(
-      RenderFrameHost* frame,
-      const blink::WebBluetoothDeviceId& device_id) override {
-    return false;
-  }
-  bool IsAllowedToAccessManufacturerData(
-      RenderFrameHost* frame,
-      const blink::WebBluetoothDeviceId& device_id,
-      const uint16_t manufacturer_code) override {
-    return false;
-  }
-  std::vector<blink::mojom::WebBluetoothDevicePtr> GetPermittedDevices(
-      RenderFrameHost* frame) override {
-    return {};
-  }
-
-  void AddFramePermissionObserver(FramePermissionObserver* observer) override {}
-  void RemoveFramePermissionObserver(
-      FramePermissionObserver* observer) override {}
 
   void WaitForShowBluetoothScanningPrompt() {
     if (showed_bluetooth_scanning_prompt_)
@@ -252,9 +222,12 @@ class TestBluetoothDelegate : public BluetoothDelegate {
 
  private:
   std::string device_to_select_;
+  base::OnceClosure run_bluetooth_chooser_callback_;
   raw_ptr<FakeBluetoothScanningPrompt, DanglingUntriaged> prompt_ = nullptr;
   base::OnceClosure quit_on_scanning_prompt_;
   bool showed_bluetooth_scanning_prompt_ = false;
+  bool checked_allow_web_bluetooth_ = false;
+  bool block_globally_disabled_ = false;
 };
 
 class TestContentBrowserClient : public ContentBrowserTestContentBrowserClient {
@@ -266,22 +239,9 @@ class TestContentBrowserClient : public ContentBrowserTestContentBrowserClient {
 
   TestBluetoothDelegate* bluetooth_delegate() { return &bluetooth_delegate_; }
 
-  AllowWebBluetoothResult AllowWebBluetooth(
-      content::BrowserContext* browser_context,
-      const url::Origin& requesting_origin,
-      const url::Origin& embedding_origin) override {
-    checked_allow_web_bluetooth_ = true;
-
-    if (block_globally_disabled_)
-      return AllowWebBluetoothResult::BLOCK_GLOBALLY_DISABLED;
-
-    return ContentBrowserClient::AllowWebBluetooth(
-        browser_context, requesting_origin, embedding_origin);
+  bool checked_allow_web_bluetooth() {
+    return bluetooth_delegate_.checked_allow_web_bluetooth();
   }
-
-  void block_globally_disabled() { block_globally_disabled_ = true; }
-
-  bool checked_allow_web_bluetooth() { return checked_allow_web_bluetooth_; }
 
  protected:
   // ChromeContentBrowserClient:
@@ -291,8 +251,6 @@ class TestContentBrowserClient : public ContentBrowserTestContentBrowserClient {
 
  private:
   TestBluetoothDelegate bluetooth_delegate_;
-  bool checked_allow_web_bluetooth_ = false;
-  bool block_globally_disabled_ = false;
 };
 
 }  // namespace
@@ -317,6 +275,11 @@ class WebBluetoothServiceImplBrowserTest : public ContentBrowserTest {
     // Hook up the test bluetooth delegate.
     browser_client_ = std::make_unique<TestContentBrowserClient>();
     SetFakeBlueboothAdapter();
+  }
+
+  void TearDownOnMainThread() override {
+    BluetoothAdapterFactoryWrapper::Get().SetBluetoothAdapterOverride(nullptr);
+    ContentBrowserTest::TearDownOnMainThread();
   }
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
@@ -355,7 +318,9 @@ class WebBluetoothServiceImplBrowserTest : public ContentBrowserTest {
     return browser_client_->checked_allow_web_bluetooth();
   }
 
-  void BlockGloballyDisabled() { browser_client_->block_globally_disabled(); }
+  void BlockGloballyDisabled() {
+    browser_client_->bluetooth_delegate()->block_globally_disabled();
+  }
 
   WebBluetoothServiceImpl* GetWebBluetoothServiceOverride(
       RenderFrameHost* render_frame_host) {
@@ -622,8 +587,6 @@ IN_PROC_BROWSER_TEST_F(WebBluetoothServiceImplBrowserTest,
   GURL url = embedded_test_server()->GetURL("/page_with_blank_iframe.html");
   EXPECT_TRUE(NavigateToURL(shell(), url));
 
-  EXPECT_CALL(*adapter(), AddObserver(_));
-
   RenderFrameHost* sub_frame = ChildFrameAt(GetWebContents(), 0);
   ASSERT_TRUE(sub_frame);
 
@@ -647,7 +610,6 @@ IN_PROC_BROWSER_TEST_F(WebBluetoothServiceImplBrowserTest,
       console_observer.messages();
   EXPECT_EQ(messages.size(), 1u);
   EXPECT_EQ(messages.back().source_frame, sub_frame);
-  EXPECT_CALL(*adapter(), RemoveObserver(_));
 }
 
 class WebBluetoothServiceImplFencedFramesBrowserTest
@@ -720,6 +682,51 @@ IN_PROC_BROWSER_TEST_F(WebBluetoothServiceImplFencedFramesBrowserTest,
 
   EXPECT_CALL(*adapter(), RemoveObserver(GetWebBluetoothServiceOverride(
                               GetWebContents()->GetPrimaryMainFrame())));
+}
+
+IN_PROC_BROWSER_TEST_F(WebBluetoothServiceImplBrowserTest,
+                       FrameDetachDuringRunBluetoothChooser) {
+  // Setup the fake device.
+  AddFakeDevice(kDeviceAddress);
+  SetDeviceToSelect(kDeviceAddress);
+
+  EXPECT_TRUE(NavigateToURL(
+      shell(), embedded_test_server()->GetURL("/simple_page.html")));
+
+  // Add an iframe and wait for it to load.
+  EXPECT_TRUE(ExecJs(GetWebContents(), R"(
+    new Promise(resolve => {
+      let iframe = document.createElement('iframe');
+      iframe.src = '/simple_page.html';
+      iframe.onload = resolve;
+      document.body.appendChild(iframe);
+    });
+  )"));
+
+  RenderFrameHost* child_rfh =
+      ChildFrameAt(GetWebContents()->GetPrimaryMainFrame(), 0);
+  ASSERT_TRUE(child_rfh);
+
+  GetBluetoothDelegate()->set_run_bluetooth_chooser_callback(
+      base::BindLambdaForTesting([&]() {
+        // Synchronously detach the iframe during RunBluetoothChooser.
+        EXPECT_TRUE(ExecJs(GetWebContents(),
+                           "document.querySelector('iframe').remove();"));
+      }));
+
+  auto result = content::EvalJs(child_rfh, R"(
+    (async() => {
+      try {
+        await navigator.bluetooth.requestDevice({
+          filters: [{name: 'Test Device', services: ['heart_rate']}]});
+        return "";
+      } catch(e) {
+        return `${e.name}: ${e.message}`;
+      }
+    })()
+  )");
+  EXPECT_THAT(result,
+              EvalJsResult::ErrorIs(testing::HasSubstr("RenderFrame deleted")));
 }
 
 }  // namespace content

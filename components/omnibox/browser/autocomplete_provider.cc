@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <string>
 
+#include "base/i18n/icubridge/date_time_formatter.h"
+#include "base/i18n/icubridge/icu_bridge.h"
 #include "base/i18n/time_formatting.h"
 #include "base/notreached.h"
 #include "base/strings/string_util.h"
@@ -91,6 +93,8 @@ const char* AutocompleteProvider::TypeToString(Type type) {
       return "ContextualSearch";
     case TYPE_TAB_GROUP:
       return "TabGroup";
+    case TYPE_CROSS_DEVICE_TAB:
+      return "CrossDeviceTab";
     default:
       DUMP_WILL_BE_NOTREACHED()
           << "Unhandled AutocompleteProvider::Type " << type;
@@ -114,7 +118,10 @@ const std::u16string AutocompleteProvider::LocalizedLastModifiedString(
     }
 
     // Same year but not the same day: use abbreviated month/day ("Jan 1").
-    return base::LocalizedTimeFormatWithPattern(modified_time, "MMMd");
+    using base::i18n::IcuBridge;
+    using base::i18n::datetime_options::MD;
+    return IcuBridge::GetInstance().date_time_formatter().Format(modified_time,
+                                                                 MD::Medium());
   }
 
   // No shorthand; display full MM/DD/YYYY.
@@ -204,6 +211,8 @@ AutocompleteProvider::AsOmniboxEventProviderType() const {
       return metrics::OmniboxEventProto::CONTEXTUAL_SEARCH_PROVIDER;
     case TYPE_TAB_GROUP:
       return metrics::OmniboxEventProto::TAB_GROUP_PROVIDER;
+    case TYPE_CROSS_DEVICE_TAB:
+      return metrics::OmniboxEventProto::CROSS_DEVICE_TAB;
     default:
       // TODO(crbug.com/40940012) This was a NOTREACHED that we converted to
       //   help debug crbug.com/1499235 since NOTREACHED's don't log their
@@ -245,7 +254,7 @@ AutocompleteProvider::AdjustedInputAndStarterPackKeyword
 AutocompleteProvider::AdjustInputForStarterPackKeyword(
     const AutocompleteInput& input,
     const TemplateURLService* turl_service) {
-  if (input.prefer_keyword()) {
+  if (input.in_keyword_mode()) {
     AutocompleteInput keyword_input = input;
     const TemplateURL* template_url =
         AutocompleteInput::GetSubstitutingTemplateURLForInput(turl_service,

@@ -11,7 +11,9 @@
 #include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
 #include "base/notimplemented.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "build/build_config.h"
 #include "build/buildflag.h"
 #include "ui/accessibility/accessibility_features.h"
 #include "ui/accessibility/ax_enums.mojom.h"
@@ -149,6 +151,12 @@ void ViewAccessibility::AddVirtualChildViewAt(
   DCHECK(!virtual_view->virtual_parent_view()) << "This |view| already has an "
                                                   "AXVirtualView parent. Call "
                                                   "RemoveChildView first.";
+  // The first virtual child hides the real children. Notify before the insert,
+  // while GetChildren still returns them.
+  if (virtual_children_.empty()) {
+    NotifyChildrenRemoved();
+  }
+
   virtual_view->set_parent_view(this);
   auto insert_iterator =
       virtual_children_.begin() + static_cast<ptrdiff_t>(index);
@@ -156,8 +164,11 @@ void ViewAccessibility::AddVirtualChildViewAt(
 
   AXVirtualView* added_view = virtual_children_[index].get();
   added_view->OnViewHasNewAncestor(view_);
+  added_view->OnOwnerViewChanged();
 
   AXUpdateNotifier::Get()->NotifyChildAdded(added_view, this);
+  added_view->OnVirtualViewAddedToWidget();
+  FireLiveRegionChangedIfNeeded(LiveRegionEventTrigger::kAdditions);
 }
 
 std::unique_ptr<AXVirtualView> ViewAccessibility::RemoveVirtualChildView(
@@ -168,11 +179,18 @@ std::unique_ptr<AXVirtualView> ViewAccessibility::RemoveVirtualChildView(
     return {};
   }
 
+  AXVirtualView* child_to_remove = virtual_children_[cur_index.value()].get();
+  child_to_remove->OnVirtualViewRemovedFromWidget();
+
   std::unique_ptr<AXVirtualView> child =
       std::move(virtual_children_[cur_index.value()]);
   virtual_children_.erase(virtual_children_.begin() +
                           static_cast<ptrdiff_t>(cur_index.value()));
+
+  FireLiveRegionChangedIfNeeded(LiveRegionEventTrigger::kRemovals);
+
   child->set_parent_view(nullptr);
+  child->OnOwnerViewChanged();
 
   // If the removed child (or any of its descendants) was the active descendant,
   // clear it.
@@ -188,6 +206,11 @@ std::unique_ptr<AXVirtualView> ViewAccessibility::RemoveVirtualChildView(
   }
 
   AXUpdateNotifier::Get()->NotifyChildRemoved(child.get(), this);
+
+  // Removing the last virtual child exposes the real children again.
+  if (virtual_children_.empty()) {
+    NotifyChildrenAdded();
+  }
 
   return child;
 }
@@ -232,6 +255,17 @@ void ViewAccessibility::GetAccessibleNodeData(ui::AXNodeData* data) const {
   }
 
   *data = data_;
+
+  // Expose the View's id as the author-unique id. Virtual views have no
+  // backing View and retain their existing identity.
+  if (view_) {
+    const int view_id = view_->GetID();
+    if (view_id &&
+        !data->HasStringAttribute(ax::mojom::StringAttribute::kHtmlId)) {
+      data->AddStringAttribute(ax::mojom::StringAttribute::kHtmlId,
+                               "view_" + base::NumberToString(view_id));
+    }
+  }
 }
 
 void ViewAccessibility::NotifyEvent(ax::mojom::Event event_type,
@@ -289,18 +323,42 @@ void ViewAccessibility::FireFocusAfterMenuClose() {
   NotifyEvent(ax::mojom::Event::kFocusAfterMenuClose, true);
 }
 
+void ViewAccessibility::NotifyTransientFocus() {
+  if (IsViewsAccessibilityTreeEnabled()) {
+    if (!ready_to_notify_events_) {
+      return;
+    }
+
+    Widget* const widget = GetWidget();
+    if (!widget || !widget->GetNativeView()) {
+      return;
+    }
+
+    if (auto* ax_manager = widget->ax_manager()) {
+      ax_manager->OnTransientFocusRequested(*this);
+    }
+    return;
+  }
+
+  NotifyEvent(ax::mojom::Event::kFocus, true);
+}
+
 void ViewAccessibility::SetIsLeaf(bool value) {
   if (value == ViewAccessibility::IsLeaf()) {
     return;
   }
 
+  // GetChildren returns nothing for a leaf, so notify while it still returns
+  // the children being hidden, and only once it returns the ones being shown.
   if (value) {
+    NotifyChildrenRemoved();
     PruneSubtree();
+    is_leaf_ = value;
   } else {
+    is_leaf_ = value;
     UnpruneSubtree();
+    NotifyChildrenAdded();
   }
-
-  is_leaf_ = value;
 }
 
 bool ViewAccessibility::IsLeaf() const {
@@ -502,6 +560,7 @@ void ViewAccessibility::SetName(std::u16string name,
                            base::UTF16ToUTF8(name));
 
   NotifyEvent(ax::mojom::Event::kTextChanged, true);
+  FireLiveRegionChangedIfNeeded(LiveRegionEventTrigger::kText);
   NotifyDataChanged();
 }
 
@@ -800,10 +859,12 @@ void ViewAccessibility::SetIsEnabled(bool is_enabled) {
   OnIntAttributeChanged(ax::mojom::IntAttribute::kRestriction,
                         static_cast<int32_t>(data_.GetRestriction()));
 
-  // TODO(crbug.com/40896388): We need a specific enabled-changed event for
-  // this. Some platforms have specific state-changed events and this generic
-  // event does not suggest what changed.
-  NotifyEvent(ax::mojom::Event::kStateChanged, true);
+  // Ignored nodes are not exposed to the platform accessibility tree. Firing
+  // state-change events on them is incorrect and produces noise that may
+  // confuse assistive technologies.
+  if (!GetIsIgnored()) {
+    NotifyEvent(ax::mojom::Event::kEnabledChanged, true);
+  }
   NotifyDataChanged();
 }
 
@@ -1027,7 +1088,7 @@ void ViewAccessibility::OnTooltipTextChanged(
 }
 
 void ViewAccessibility::OnViewAddedToWidget() {
-  if (ViewAccessibility* parent = GetUnignoredParent()) {
+  if (ViewAccessibility* parent = GetViewAccessibilityParent()) {
     AXUpdateNotifier::Get()->NotifyChildAdded(this, parent);
   }
 
@@ -1063,7 +1124,7 @@ void ViewAccessibility::OnViewRemovedFromWidget() {
   // Unregister virtual children before this view itself.
   OnVirtualViewRemovedFromWidget();
 
-  if (ViewAccessibility* parent = GetUnignoredParent()) {
+  if (ViewAccessibility* parent = GetViewAccessibilityParent()) {
     AXUpdateNotifier::Get()->NotifyChildRemoved(this, parent);
   }
 }
@@ -1079,6 +1140,20 @@ void ViewAccessibility::OnVirtualViewRemovedFromWidget() {
   for (const auto& virtual_child : virtual_children()) {
     virtual_child->OnVirtualViewRemovedFromWidget();
     AXUpdateNotifier::Get()->NotifyChildRemoved(virtual_child.get(), this);
+  }
+}
+
+void ViewAccessibility::NotifyChildrenAdded() {
+  for (ViewAccessibility* child : GetChildren()) {
+    AXUpdateNotifier::Get()->NotifyChildAdded(child, this);
+    child->NotifyChildrenAdded();
+  }
+}
+
+void ViewAccessibility::NotifyChildrenRemoved() {
+  for (ViewAccessibility* child : GetChildren()) {
+    child->NotifyChildrenRemoved();
+    AXUpdateNotifier::Get()->NotifyChildRemoved(child, this);
   }
 }
 
@@ -1164,12 +1239,14 @@ void ViewAccessibility::SetIsSelected(bool selected) {
   data_.AddBoolAttribute(ax::mojom::BoolAttribute::kSelected, selected);
 
   OnBoolAttributeChanged(ax::mojom::BoolAttribute::kSelected, selected);
+  NotifyEvent(ax::mojom::Event::kSelection, true);
 
-  // We only want to send the notification if the view gets selected,
-  // this is since the event serves to notify of a selection being made, not of
-  // a selection being unmade.
-  if (selected) {
-    NotifyEvent(ax::mojom::Event::kSelection, true);
+  for (ViewAccessibility* ancestor = GetViewAccessibilityParent(); ancestor;
+       ancestor = ancestor->GetViewAccessibilityParent()) {
+    if (ui::IsContainerWithSelectableChildren(ancestor->GetCachedRole())) {
+      ancestor->NotifyEvent(ax::mojom::Event::kSelectedChildrenChanged, true);
+      break;
+    }
   }
 
   NotifyDataChanged();
@@ -1253,19 +1330,204 @@ void ViewAccessibility::SetShowContextMenu(bool show_context_menu) {
   NotifyDataChanged();
 }
 
-void ViewAccessibility::SetContainerLiveStatus(const std::string& status) {
+// static
+const char* ViewAccessibility::LiveRegionStatusToString(
+    LiveRegionStatus status) {
+  switch (status) {
+    case LiveRegionStatus::kPolite:
+      return "polite";
+    case LiveRegionStatus::kAssertive:
+      return "assertive";
+    case LiveRegionStatus::kOff:
+      return "off";
+  }
+}
+
+namespace {
+
+struct LiveRegionRelevantEntry {
+  uint8_t mask;
+  const char* name;
+};
+
+constexpr LiveRegionRelevantEntry kLiveRegionRelevantEntries[] = {
+    {ViewAccessibility::kLiveRegionRelevantAdditions, "additions"},
+    {ViewAccessibility::kLiveRegionRelevantText, "text"},
+    {ViewAccessibility::kLiveRegionRelevantRemovals, "removals"},
+};
+
+}  // namespace
+
+// static
+std::string ViewAccessibility::LiveRegionRelevantToString(uint8_t relevant) {
+  if (!relevant) {
+    relevant = kLiveRegionRelevantDefault;
+  } else if (relevant == kLiveRegionRelevantAll) {
+    return "all";
+  }
+
+  std::string result;
+  for (const auto& entry : kLiveRegionRelevantEntries) {
+    if (relevant & entry.mask) {
+      if (!result.empty()) {
+        result += " ";
+      }
+      result += entry.name;
+    }
+  }
+  return result;
+}
+
+// static
+uint8_t ViewAccessibility::LiveRegionRelevantFromString(
+    const std::string& relevant) {
+  if (relevant == "all") {
+    return kLiveRegionRelevantAll;
+  }
+  uint8_t result = 0;
+  for (const auto& entry : kLiveRegionRelevantEntries) {
+    if (relevant.find(entry.name) != std::string::npos) {
+      result |= entry.mask;
+    }
+  }
+  return result;
+}
+
+void ViewAccessibility::SetLiveRegionContainer(LiveRegionStatus live_status,
+                                               uint8_t relevant,
+                                               bool atomic) {
+  const char* live_status_str = LiveRegionStatusToString(live_status);
+  const std::string relevant_str = LiveRegionRelevantToString(relevant);
+
+  data_.AddStringAttribute(ax::mojom::StringAttribute::kLiveStatus,
+                           live_status_str);
+  data_.AddStringAttribute(ax::mojom::StringAttribute::kLiveRelevant,
+                           relevant_str);
+  data_.AddBoolAttribute(ax::mojom::BoolAttribute::kLiveAtomic, atomic);
   data_.AddStringAttribute(ax::mojom::StringAttribute::kContainerLiveStatus,
-                           status);
+                           live_status_str);
+  data_.AddStringAttribute(ax::mojom::StringAttribute::kContainerLiveRelevant,
+                           relevant_str);
+
+  UpdateContainerLiveStatusRecursive();
   NotifyDataChanged();
 }
 
-void ViewAccessibility::RemoveContainerLiveStatus() {
-  if (!data_.HasStringAttribute(
-          ax::mojom::StringAttribute::kContainerLiveStatus)) {
+void ViewAccessibility::RemoveLiveRegionContainer() {
+  data_.RemoveStringAttribute(ax::mojom::StringAttribute::kLiveStatus);
+  data_.RemoveStringAttribute(ax::mojom::StringAttribute::kLiveRelevant);
+  data_.RemoveBoolAttribute(ax::mojom::BoolAttribute::kLiveAtomic);
+  data_.RemoveStringAttribute(ax::mojom::StringAttribute::kContainerLiveStatus);
+  data_.RemoveStringAttribute(
+      ax::mojom::StringAttribute::kContainerLiveRelevant);
+
+  UpdateContainerLiveStatusRecursive();
+  NotifyDataChanged();
+}
+
+void ViewAccessibility::UpdateContainerLiveStatus() {
+  std::string status =
+      data_.GetStringAttribute(ax::mojom::StringAttribute::kLiveStatus);
+  std::string relevant;
+  if (status.empty()) {
+    ViewAccessibility* parent = GetViewAccessibilityParent();
+    if (parent) {
+      status = parent->data_.GetStringAttribute(
+          ax::mojom::StringAttribute::kContainerLiveStatus);
+      relevant = parent->data_.GetStringAttribute(
+          ax::mojom::StringAttribute::kContainerLiveRelevant);
+    }
+  } else {
+    relevant =
+        data_.GetStringAttribute(ax::mojom::StringAttribute::kLiveRelevant);
+  }
+
+  if (status.empty()) {
+    data_.RemoveStringAttribute(
+        ax::mojom::StringAttribute::kContainerLiveStatus);
+    data_.RemoveStringAttribute(
+        ax::mojom::StringAttribute::kContainerLiveRelevant);
+  } else {
+    data_.AddStringAttribute(ax::mojom::StringAttribute::kContainerLiveStatus,
+                             status);
+    if (!relevant.empty()) {
+      data_.AddStringAttribute(
+          ax::mojom::StringAttribute::kContainerLiveRelevant, relevant);
+    }
+  }
+}
+
+void ViewAccessibility::UpdateContainerLiveStatusRecursive() {
+  UpdateContainerLiveStatus();
+
+  if (view_) {
+    internal::ScopedChildrenLock lock(view_);
+    for (auto& child : view_->children()) {
+      child->GetViewAccessibility().UpdateContainerLiveStatusRecursive();
+    }
+  }
+
+  for (auto& child : virtual_children()) {
+    child->UpdateContainerLiveStatusRecursive();
+  }
+}
+
+void ViewAccessibility::FireLiveRegionChangedIfNeeded(
+    LiveRegionEventTrigger trigger) {
+  std::string container_live_status = data_.GetStringAttribute(
+      ax::mojom::StringAttribute::kContainerLiveStatus);
+  if (container_live_status.empty() || container_live_status == "off") {
     return;
   }
-  data_.RemoveStringAttribute(ax::mojom::StringAttribute::kContainerLiveStatus);
-  NotifyDataChanged();
+
+  // Walk up ancestors to find the live region root (the view with kLiveStatus).
+  ViewAccessibility* live_region_root = this;
+  while (live_region_root) {
+    if (live_region_root->data_.HasStringAttribute(
+            ax::mojom::StringAttribute::kLiveStatus)) {
+      break;
+    }
+    live_region_root = live_region_root->GetViewAccessibilityParent();
+  }
+
+  if (!live_region_root) {
+    return;
+  }
+
+  // Check if the trigger type is included in the aria-relevant attribute.
+  const std::string relevant_str = live_region_root->data_.GetStringAttribute(
+      ax::mojom::StringAttribute::kContainerLiveRelevant);
+  const uint8_t relevant = relevant_str.empty()
+                               ? kLiveRegionRelevantDefault
+                               : LiveRegionRelevantFromString(relevant_str);
+  uint8_t trigger_bit = 0;
+  switch (trigger) {
+    case LiveRegionEventTrigger::kAdditions:
+      trigger_bit = kLiveRegionRelevantAdditions;
+      break;
+    case LiveRegionEventTrigger::kText:
+      trigger_bit = kLiveRegionRelevantText;
+      break;
+    case LiveRegionEventTrigger::kRemovals:
+      trigger_bit = kLiveRegionRelevantRemovals;
+      break;
+  }
+  if (!(relevant & trigger_bit)) {
+    return;
+  }
+
+  // Only fire for text changes on the container itself (not descendants),
+  // and only when there is content to announce.
+  if (trigger == LiveRegionEventTrigger::kText) {
+    if (this != live_region_root) {
+      return;
+    }
+    if (live_region_root->GetCachedName().empty()) {
+      return;
+    }
+  }
+
+  live_region_root->NotifyEvent(ax::mojom::Event::kLiveRegionChanged, true);
 }
 
 void ViewAccessibility::SetValue(const std::string& value) {
@@ -1278,11 +1540,16 @@ void ViewAccessibility::SetValue(const std::string& value) {
     OnStringAttributeChanged(ax::mojom::StringAttribute::kValue, value);
     NotifyEvent(ax::mojom::Event::kValueChanged, true);
 
-    // Only fire a text changed event on text fields and select elements to
-    // mimic what is done in the web content.
+    // TODO(crbug.com/40672441): Remove this once ViewsAX is enabled on
+    // Windows. Only fire a text changed event on text fields and select
+    // elements on Windows so that UIA fires UIA_Text_TextChangedEventId.
+    // On macOS and Linux, this incorrectly maps to title/name-changed
+    // events rather than value-changed events.
+#if BUILDFLAG(IS_WIN)
     if (data_.IsTextField() || ui::IsSelectElement(data_.role)) {
       NotifyEvent(ax::mojom::Event::kTextChanged, true);
     }
+#endif
   }
 
   NotifyDataChanged();
@@ -1309,9 +1576,52 @@ std::u16string ViewAccessibility::GetValue() const {
       data_.GetStringAttribute(ax::mojom::StringAttribute::kValue));
 }
 
+void ViewAccessibility::SetValueForRange(float value) {
+  if (data_.HasFloatAttribute(ax::mojom::FloatAttribute::kValueForRange) &&
+      data_.GetFloatAttribute(ax::mojom::FloatAttribute::kValueForRange) ==
+          value) {
+    return;
+  }
+  data_.AddFloatAttribute(ax::mojom::FloatAttribute::kValueForRange, value);
+  NotifyDataChanged();
+}
+
+void ViewAccessibility::SetMinValueForRange(float value) {
+  if (data_.HasFloatAttribute(ax::mojom::FloatAttribute::kMinValueForRange) &&
+      data_.GetFloatAttribute(ax::mojom::FloatAttribute::kMinValueForRange) ==
+          value) {
+    return;
+  }
+  data_.AddFloatAttribute(ax::mojom::FloatAttribute::kMinValueForRange, value);
+  NotifyDataChanged();
+}
+
+void ViewAccessibility::SetMaxValueForRange(float value) {
+  if (data_.HasFloatAttribute(ax::mojom::FloatAttribute::kMaxValueForRange) &&
+      data_.GetFloatAttribute(ax::mojom::FloatAttribute::kMaxValueForRange) ==
+          value) {
+    return;
+  }
+  data_.AddFloatAttribute(ax::mojom::FloatAttribute::kMaxValueForRange, value);
+  NotifyDataChanged();
+}
+
 void ViewAccessibility::SetDefaultActionVerb(
     const ax::mojom::DefaultActionVerb default_action_verb) {
+  if (data_.GetDefaultActionVerb() == default_action_verb) {
+    return;
+  }
+
+  if (default_action_verb == ax::mojom::DefaultActionVerb::kNone) {
+    RemoveDefaultActionVerb();
+    return;
+  }
+
   data_.SetDefaultActionVerb(default_action_verb);
+
+  OnIntAttributeChanged(ax::mojom::IntAttribute::kDefaultActionVerb,
+                        static_cast<int32_t>(default_action_verb));
+  NotifyDataChanged();
 }
 
 ax::mojom::DefaultActionVerb ViewAccessibility::GetDefaultActionVerb() const {
@@ -1435,6 +1745,7 @@ void ViewAccessibility::OnViewHasNewAncestor(const View* new_ancestor) {
   is_invisible_by_inheritance_ = parent_invisible;
 
   UpdateInvisibleState();
+  UpdateContainerLiveStatus();
 
   // We only want to propagate the `ancestor_focusable` value if it's true. This
   // is because if this view is unfocusable, and it gets added to a tree with a
@@ -1454,6 +1765,32 @@ void ViewAccessibility::OnViewHasNewAncestor(const View* new_ancestor) {
   for (auto& child : virtual_children()) {
     child->OnViewHasNewAncestor(ancestor_focusable);
   }
+}
+
+void ViewAccessibility::OnViewParentChanged() {
+  CHECK(view_);
+  if (view_->parent()) {
+    OnViewHasNewAncestor(view_->parent());
+  }
+
+  UpdateOffsetContainerId();
+}
+
+ui::AXNodeID ViewAccessibility::GetOffsetContainerId() const {
+  CHECK(view_);
+  const ViewAccessibility* parent = GetViewAccessibilityParent();
+  return parent ? static_cast<ui::AXNodeID>(parent->GetUniqueId())
+                : ui::kInvalidAXNodeID;
+}
+
+void ViewAccessibility::UpdateOffsetContainerId() {
+  const ui::AXNodeID offset_container_id = GetOffsetContainerId();
+  if (data_.relative_bounds.offset_container_id == offset_container_id) {
+    return;
+  }
+
+  data_.relative_bounds.offset_container_id = offset_container_id;
+  NotifyDataChanged();
 }
 
 void ViewAccessibility::SetRootViewURL(const std::string& url) {
@@ -1481,30 +1818,34 @@ void ViewAccessibility::UpdateInvisibleState() {
 }
 
 void ViewAccessibility::SetChildTreeID(ui::AXTreeID tree_id) {
-  CHECK(view_);
-  if (tree_id != ui::AXTreeIDUnknown()) {
-    data_.AddChildTreeId(tree_id);
+  CHECK_NE(tree_id, ui::AXTreeIDUnknown())
+      << "Call RemoveChildTreeID to remove the bridge to a child tree.";
 
-    const views::Widget* widget = GetWidget();
-    if (widget && widget->GetNativeView() && display::Screen::Get()) {
-      // TODO(accessibility): There potentially could be an issue where the
-      // device scale factor changes from the time the tree ID is set to the
-      // time `GetAccessibleNodeData` is queried. If this ever pops up, a
-      // potential solution could be to make ViewAccessibility a DisplayObserver
-      // and add `this` as an observer when the tree ID is set. Then, when the
-      // display changes, we can update the scale factor in the cache, probably
-      // by implementing `OnDisplayMetricsChanged`.
-      const float scale_factor =
-          display::Screen::Get()
-              ->GetDisplayNearestView(widget->GetNativeView())
-              .device_scale_factor();
-      SetChildTreeScaleFactor(scale_factor);
-    }
+  // The child tree hides the children. Notify before the attribute changes,
+  // while GetChildren still returns them.
+  NotifyChildrenRemoved();
 
-    OnStringAttributeChanged(ax::mojom::StringAttribute::kChildTreeId,
-                             tree_id.ToString());
-    NotifyDataChanged();
+  data_.AddChildTreeId(tree_id);
+
+  const views::Widget* widget = GetWidget();
+  if (widget && widget->GetNativeView() && display::Screen::Get()) {
+    // TODO(accessibility): There potentially could be an issue where the
+    // device scale factor changes from the time the tree ID is set to the
+    // time `GetAccessibleNodeData` is queried. If this ever pops up, a
+    // potential solution could be to make ViewAccessibility a DisplayObserver
+    // and add `this` as an observer when the tree ID is set. Then, when the
+    // display changes, we can update the scale factor in the cache, probably
+    // by implementing `OnDisplayMetricsChanged`.
+    const float scale_factor =
+        display::Screen::Get()
+            ->GetDisplayNearestView(widget->GetNativeView())
+            .device_scale_factor();
+    SetChildTreeScaleFactor(scale_factor);
   }
+
+  OnStringAttributeChanged(ax::mojom::StringAttribute::kChildTreeId,
+                           tree_id.ToString());
+  NotifyDataChanged();
 }
 
 ui::AXTreeID ViewAccessibility::GetChildTreeID() const {
@@ -1513,7 +1854,15 @@ ui::AXTreeID ViewAccessibility::GetChildTreeID() const {
 }
 
 void ViewAccessibility::RemoveChildTreeID() {
+  const bool had_child_tree_id = data_.HasChildTreeID();
+
   data_.RemoveStringAttribute(ax::mojom::StringAttribute::kChildTreeId);
+
+  // Callers remove the child tree id repeatedly, so only notify when this call
+  // is the one that exposes the children again.
+  if (had_child_tree_id) {
+    NotifyChildrenAdded();
+  }
 
   OnStringAttributeChanged(ax::mojom::StringAttribute::kChildTreeId,
                            std::string());
@@ -1546,27 +1895,89 @@ gfx::NativeViewAccessible ViewAccessibility::GetNativeObject() const {
 }
 
 void ViewAccessibility::AnnounceAlert(std::u16string_view text) {
-  if (auto* const widget = GetWidget()) {
-    if (auto* const root_view =
-            static_cast<internal::RootView*>(widget->GetRootView())) {
-      root_view->AnnounceTextAs(std::u16string(text),
-                                ui::AXPlatformNode::AnnouncementType::kAlert);
-    }
-  }
+  Announce(text, ax::mojom::AriaNotificationPriority::kHigh);
 }
 
 void ViewAccessibility::AnnouncePolitely(std::u16string_view text) {
-  if (auto* const widget = GetWidget()) {
-    if (auto* const root_view =
-            static_cast<internal::RootView*>(widget->GetRootView())) {
-      root_view->AnnounceTextAs(std::u16string(text),
-                                ui::AXPlatformNode::AnnouncementType::kPolite);
-    }
-  }
+  Announce(text, ax::mojom::AriaNotificationPriority::kNormal);
 }
 
 void ViewAccessibility::AnnounceText(std::u16string_view text) {
   AnnounceAlert(text);
+}
+
+void ViewAccessibility::Announce(std::u16string_view text,
+                                 ax::mojom::AriaNotificationPriority priority) {
+  if (text.empty()) {
+    return;
+  }
+
+  auto* widget = GetWidget();
+  if (!widget) {
+    return;
+  }
+
+  auto* root_view = static_cast<internal::RootView*>(widget->GetRootView());
+  if (!root_view) {
+    return;
+  }
+
+  if (IsViewsAccessibilityTreeEnabled()) {
+    if (auto* manager = widget->ax_manager();
+        manager && manager->is_enabled()) {
+      root_view->GetViewAccessibility().AddAriaNotification(text, priority);
+    }
+    return;
+  }
+
+  root_view->AnnounceTextAs(
+      std::u16string(text),
+      priority == ax::mojom::AriaNotificationPriority::kHigh
+          ? ui::AXPlatformNode::AnnouncementType::kAlert
+          : ui::AXPlatformNode::AnnouncementType::kPolite);
+}
+
+void ViewAccessibility::AddAriaNotification(
+    std::u16string_view text,
+    ax::mojom::AriaNotificationPriority priority) {
+  auto announcements = data_.GetStringListAttribute(
+      ax::mojom::StringListAttribute::kAriaNotificationAnnouncements);
+  auto priority_properties = data_.GetIntListAttribute(
+      ax::mojom::IntListAttribute::kAriaNotificationPriorityProperties);
+  auto interrupt_properties = data_.GetIntListAttribute(
+      ax::mojom::IntListAttribute::kAriaNotificationInterruptProperties);
+  auto types = data_.GetStringListAttribute(
+      ax::mojom::StringListAttribute::kAriaNotificationTypes);
+
+  announcements.push_back(base::UTF16ToUTF8(text));
+  priority_properties.push_back(static_cast<int32_t>(priority));
+  interrupt_properties.push_back(
+      static_cast<int32_t>(ax::mojom::AriaNotificationInterrupt::kNone));
+  types.emplace_back();
+
+  data_.AddStringListAttribute(
+      ax::mojom::StringListAttribute::kAriaNotificationAnnouncements,
+      announcements);
+  data_.AddIntListAttribute(
+      ax::mojom::IntListAttribute::kAriaNotificationPriorityProperties,
+      priority_properties);
+  data_.AddIntListAttribute(
+      ax::mojom::IntListAttribute::kAriaNotificationInterruptProperties,
+      interrupt_properties);
+  data_.AddStringListAttribute(
+      ax::mojom::StringListAttribute::kAriaNotificationTypes, types);
+  NotifyDataChanged();
+}
+
+void ViewAccessibility::ClearPendingAriaNotifications() {
+  data_.RemoveStringListAttribute(
+      ax::mojom::StringListAttribute::kAriaNotificationAnnouncements);
+  data_.RemoveIntListAttribute(
+      ax::mojom::IntListAttribute::kAriaNotificationPriorityProperties);
+  data_.RemoveIntListAttribute(
+      ax::mojom::IntListAttribute::kAriaNotificationInterruptProperties);
+  data_.RemoveStringListAttribute(
+      ax::mojom::StringListAttribute::kAriaNotificationTypes);
 }
 
 ui::AXPlatformNodeId ViewAccessibility::GetUniqueId() const {
@@ -1583,6 +1994,14 @@ Widget* ViewAccessibility::GetWidget() const {
     return nullptr;
   }
   return view_->GetWidget();
+}
+
+bool ViewAccessibility::IsRootViewForWidget() const {
+  if (!view_) {
+    return false;
+  }
+  const Widget* widget = view_->GetWidget();
+  return widget && widget->GetRootView() == view_;
 }
 
 AXAuraObjWrapper* ViewAccessibility::GetOrCreateWrapper(AXAuraObjCache* cache) {
@@ -1617,7 +2036,13 @@ ViewAccessibility* ViewAccessibility::GetUnignoredParent() const {
 gfx::NativeViewAccessible ViewAccessibility::GetFocusedDescendant() {
   CHECK(view_);
   if (ViewAccessibility* active_descendant = GetActiveDescendantView()) {
-    return active_descendant->GetNativeObject();
+    // Only redirect focus for virtual view active descendants. Redirecting
+    // focus for real view descendants (e.g., OmniboxResultView) causes
+    // get_accState to return focused=0, which breaks JAWS character-by-
+    // character navigation in textfields.
+    if (!active_descendant->view()) {
+      return active_descendant->GetNativeObject();
+    }
   }
   return view_->GetNativeViewAccessible();
 }
@@ -1632,24 +2057,32 @@ std::vector<raw_ptr<ViewAccessibility>> ViewAccessibility::GetChildren() const {
     return out;
   }
 
+  WidgetAXManager* ax_manager =
+      IsRootViewForWidget() ? view_->GetWidget()->ax_manager() : nullptr;
+  const size_t child_widget_count =
+      ax_manager ? ax_manager->child_widget_tree_host_count() : 0u;
+
   // The virtual children always override any real children the view might have.
   if (!virtual_children_.empty()) {
-    out.reserve(virtual_children_.size());
+    out.reserve(virtual_children_.size() + child_widget_count);
     for (auto& v : virtual_children_) {
       out.push_back(v.get());
     }
-    return out;
+  } else if (view_) {
+    const auto& view_children = view_->children();
+    out.reserve(view_children.size() + child_widget_count);
+    for (auto child_view : view_children) {
+      out.push_back(&child_view->GetViewAccessibility());
+    }
   }
 
-  if (!view_) {
-    return out;
+  // Child Widgets don't have a corresponding view or virtual view. They are
+  // attached on the RootView through ignored virtual views maintained by the
+  // widget manager.
+  if (ax_manager) {
+    ax_manager->AppendChildWidgetTreeHosts(out);
   }
 
-  const auto& view_children = view_->children();
-  out.reserve(view_children.size());
-  for (auto child_view : view_children) {
-    out.push_back(&child_view->GetViewAccessibility());
-  }
   return out;
 }
 
@@ -1895,7 +2328,9 @@ void ViewAccessibility::SetDataForClosedWidget(ui::AXNodeData* data) const {
 }
 
 void ViewAccessibility::OnRoleChanged(ax::mojom::Role role) {
-  GetOrCreateAXAttributeChangedCallbacks()->NotifyRoleChanged(role);
+  if (attribute_changed_callbacks_) {
+    attribute_changed_callbacks_->NotifyRoleChanged(role);
+  }
 }
 
 base::CallbackListSubscription ViewAccessibility::AddRoleChangedCallback(
@@ -1907,8 +2342,10 @@ base::CallbackListSubscription ViewAccessibility::AddRoleChangedCallback(
 void ViewAccessibility::OnStringAttributeChanged(
     ax::mojom::StringAttribute attribute,
     const std::optional<std::string>& value) {
-  GetOrCreateAXAttributeChangedCallbacks()->NotifyStringAttributeChanged(
-      attribute, value);
+  if (attribute_changed_callbacks_) {
+    attribute_changed_callbacks_->NotifyStringAttributeChanged(attribute,
+                                                               value);
+  }
 }
 
 base::CallbackListSubscription
@@ -1921,8 +2358,9 @@ ViewAccessibility::AddStringAttributeChangedCallback(
 
 void ViewAccessibility::OnIntAttributeChanged(ax::mojom::IntAttribute attribute,
                                               std::optional<int> value) {
-  GetOrCreateAXAttributeChangedCallbacks()->NotifyIntAttributeChanged(attribute,
-                                                                      value);
+  if (attribute_changed_callbacks_) {
+    attribute_changed_callbacks_->NotifyIntAttributeChanged(attribute, value);
+  }
 }
 
 base::CallbackListSubscription
@@ -1936,8 +2374,9 @@ ViewAccessibility::AddIntAttributeChangedCallback(
 void ViewAccessibility::OnBoolAttributeChanged(
     ax::mojom::BoolAttribute attribute,
     std::optional<bool> value) {
-  GetOrCreateAXAttributeChangedCallbacks()->NotifyBoolAttributeChanged(
-      attribute, value);
+  if (attribute_changed_callbacks_) {
+    attribute_changed_callbacks_->NotifyBoolAttributeChanged(attribute, value);
+  }
 }
 
 base::CallbackListSubscription
@@ -1949,7 +2388,9 @@ ViewAccessibility::AddBoolAttributeChangedCallback(
 }
 
 void ViewAccessibility::OnStateChanged(ax::mojom::State state, bool value) {
-  GetOrCreateAXAttributeChangedCallbacks()->NotifyStateChanged(state, value);
+  if (attribute_changed_callbacks_) {
+    attribute_changed_callbacks_->NotifyStateChanged(state, value);
+  }
 }
 
 base::CallbackListSubscription ViewAccessibility::AddStateChangedCallback(
@@ -1962,8 +2403,10 @@ base::CallbackListSubscription ViewAccessibility::AddStateChangedCallback(
 void ViewAccessibility::OnIntListAttributeChanged(
     ax::mojom::IntListAttribute attribute,
     const std::optional<std::vector<int>>& value) {
-  GetOrCreateAXAttributeChangedCallbacks()->NotifyIntListAttributeChanged(
-      attribute, value);
+  if (attribute_changed_callbacks_) {
+    attribute_changed_callbacks_->NotifyIntListAttributeChanged(attribute,
+                                                                value);
+  }
 }
 
 base::CallbackListSubscription
@@ -2107,41 +2550,6 @@ void ViewAccessibility::SetTextSelStart(int32_t text_sel_start) {
 
 void ViewAccessibility::SetTextSelEnd(int32_t text_sel_end) {
   data_.AddIntAttribute(ax::mojom::IntAttribute::kTextSelEnd, text_sel_end);
-  NotifyDataChanged();
-}
-
-void ViewAccessibility::SetLiveAtomic(bool live_atomic) {
-  data_.AddBoolAttribute(ax::mojom::BoolAttribute::kLiveAtomic, live_atomic);
-  NotifyDataChanged();
-}
-
-void ViewAccessibility::SetLiveStatus(const std::string& live_status) {
-  data_.AddStringAttribute(ax::mojom::StringAttribute::kLiveStatus,
-                           live_status);
-  NotifyDataChanged();
-}
-
-void ViewAccessibility::SetLiveRelevant(const std::string& live_relevant) {
-  data_.AddStringAttribute(ax::mojom::StringAttribute::kLiveRelevant,
-                           live_relevant);
-  NotifyDataChanged();
-}
-
-void ViewAccessibility::RemoveLiveRelevant() {
-  data_.RemoveStringAttribute(ax::mojom::StringAttribute::kLiveRelevant);
-  NotifyDataChanged();
-}
-
-void ViewAccessibility::SetContainerLiveRelevant(
-    const std::string& live_relevant) {
-  data_.AddStringAttribute(ax::mojom::StringAttribute::kContainerLiveRelevant,
-                           live_relevant);
-  NotifyDataChanged();
-}
-
-void ViewAccessibility::RemoveContainerLiveRelevant() {
-  data_.RemoveStringAttribute(
-      ax::mojom::StringAttribute::kContainerLiveRelevant);
   NotifyDataChanged();
 }
 

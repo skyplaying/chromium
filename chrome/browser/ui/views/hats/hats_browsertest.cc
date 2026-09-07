@@ -17,15 +17,15 @@
 #include "base/version.h"
 #include "chrome/browser/devtools/devtools_window_testing.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/hats/hats_service_desktop.h"
 #include "chrome/browser/ui/hats/hats_service_factory.h"
 #include "chrome/browser/ui/hats/mock_hats_service.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/hats/hats_next_web_dialog.h"
 #include "chrome/browser/ui/zoom/chrome_zoom_level_prefs.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/scoped_browser_locale.h"
@@ -107,7 +107,7 @@ class HatsNextWebDialogBrowserTest : public InProcessBrowserTest {
  public:
   void SetUpOnMainThread() override {
     HatsServiceFactory::GetInstance()->SetTestingFactoryAndUse(
-        browser()->profile(), base::BindRepeating(&BuildMockHatsService));
+        browser()->GetProfile(), base::BindRepeating(&BuildMockHatsService));
   }
 
   // Open a blank tab in the main browser, inspect it, and return the devtools
@@ -123,7 +123,7 @@ class HatsNextWebDialogBrowserTest : public InProcessBrowserTest {
 
   MockHatsService* hats_service() {
     return static_cast<MockHatsService*>(HatsServiceFactory::GetForProfile(
-        browser()->profile(), /*create_if_necessary=*/false));
+        browser()->GetProfile(), /*create_if_necessary=*/false));
   }
 
   base::OnceClosure GetSuccessClosure() {
@@ -161,7 +161,8 @@ IN_PROC_BROWSER_TEST_F(HatsNextWebDialogBrowserTest, SurveyLoaded) {
   // Check that no record of a survey being shown is present.
   {
     const base::DictValue& pref_data =
-        browser()->profile()->GetPrefs()->GetDict(prefs::kHatsSurveyMetadata);
+        browser()->GetProfile()->GetPrefs()->GetDict(
+            prefs::kHatsSurveyMetadata);
     std::optional<base::Time> last_survey_started_time =
         base::ValueToTime(pref_data.FindByDottedPath(kLastSurveyStartedTime));
     std::optional<int> last_major_version =
@@ -185,7 +186,8 @@ IN_PROC_BROWSER_TEST_F(HatsNextWebDialogBrowserTest, SurveyLoaded) {
   // Check that a record of the survey being shown has been recorded.
   {
     const base::DictValue& pref_data =
-        browser()->profile()->GetPrefs()->GetDict(prefs::kHatsSurveyMetadata);
+        browser()->GetProfile()->GetPrefs()->GetDict(
+            prefs::kHatsSurveyMetadata);
     std::optional<base::Time> last_survey_started_time =
         base::ValueToTime(pref_data.FindByDottedPath(kLastSurveyStartedTime));
     std::optional<int> last_major_version =
@@ -219,7 +221,8 @@ IN_PROC_BROWSER_TEST_F(HatsNextWebDialogBrowserTest,
   // Check that no record of a survey being shown is present.
   {
     const base::DictValue& pref_data =
-        browser()->profile()->GetPrefs()->GetDict(prefs::kHatsSurveyMetadata);
+        browser()->GetProfile()->GetPrefs()->GetDict(
+            prefs::kHatsSurveyMetadata);
     std::optional<base::Time> last_survey_started_time =
         base::ValueToTime(pref_data.FindByDottedPath(kLastSurveyStartedTime));
     std::optional<int> last_major_version =
@@ -243,7 +246,8 @@ IN_PROC_BROWSER_TEST_F(HatsNextWebDialogBrowserTest,
   // Check that a record of the survey being shown has been recorded.
   {
     const base::DictValue& pref_data =
-        browser()->profile()->GetPrefs()->GetDict(prefs::kHatsSurveyMetadata);
+        browser()->GetProfile()->GetPrefs()->GetDict(
+            prefs::kHatsSurveyMetadata);
     std::optional<base::Time> last_survey_started_time =
         base::ValueToTime(pref_data.FindByDottedPath(kLastSurveyStartedTime));
     std::optional<int> last_major_version =
@@ -365,7 +369,7 @@ IN_PROC_BROWSER_TEST_F(HatsNextWebDialogBrowserTest, NewWebContents) {
   // been opened in the regular browser and is active.
   EXPECT_EQ(
       GURL("http://foo.com"),
-      browser()->tab_strip_model()->GetActiveWebContents()->GetVisibleURL());
+      browser()->GetTabStripModel()->GetActiveWebContents()->GetVisibleURL());
 }
 
 // The devtools browser for undocked devtools has no tab strip and can't open
@@ -390,7 +394,7 @@ IN_PROC_BROWSER_TEST_F(HatsNextWebDialogBrowserTest,
   // been opened in the regular browser and is active.
   EXPECT_EQ(
       GURL("http://foo.com"),
-      browser()->tab_strip_model()->GetActiveWebContents()->GetVisibleURL());
+      browser()->GetTabStripModel()->GetActiveWebContents()->GetVisibleURL());
 }
 
 IN_PROC_BROWSER_TEST_F(HatsNextWebDialogBrowserTest, DialogResize) {
@@ -430,7 +434,7 @@ IN_PROC_BROWSER_TEST_F(HatsNextWebDialogBrowserTest, MaximumSize) {
 
 IN_PROC_BROWSER_TEST_F(HatsNextWebDialogBrowserTest, ZoomLevel) {
   // Ensure that the dialog correctly resets the zoom level to default.
-  browser()->profile()->GetZoomLevelPrefs()->SetDefaultZoomLevelPref(
+  browser()->GetProfile()->GetZoomLevelPrefs()->SetDefaultZoomLevelPref(
       blink::ZoomFactorToZoomLevel(5.0f));
 
   ScopedBrowserLocale browser_locale(kTestLocale);

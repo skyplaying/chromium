@@ -10,8 +10,10 @@ import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
@@ -27,10 +29,14 @@ import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
+import org.robolectric.RuntimeEnvironment;
 
 import org.chromium.base.Callback;
 import org.chromium.base.Token;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.chrome.browser.actor.ActorKeyedService;
+import org.chromium.chrome.browser.actor.ActorKeyedServiceFactory;
+import org.chromium.chrome.browser.actor.StoppedReason;
 import org.chromium.chrome.browser.data_sharing.DataSharingServiceFactory;
 import org.chromium.chrome.browser.data_sharing.DataSharingTabGroupUtils.GroupsPendingDestroy;
 import org.chromium.chrome.browser.profiles.Profile;
@@ -40,6 +46,7 @@ import org.chromium.chrome.browser.tab_ui.ActionConfirmationManager;
 import org.chromium.chrome.browser.tab_ui.ActionConfirmationManager.MaybeBlockingResult;
 import org.chromium.chrome.browser.tabmodel.TabModelActionListener.DialogType;
 import org.chromium.chrome.browser.tabmodel.TabModelRemover.TabModelRemoverFlowHandler;
+import org.chromium.chrome.browser.ui.native_page.BeforeUnloadCallback;
 import org.chromium.chrome.test.util.browser.tabmodel.MockTabModel;
 import org.chromium.components.browser_ui.widget.ActionConfirmationResult;
 import org.chromium.components.data_sharing.DataSharingService;
@@ -48,6 +55,7 @@ import org.chromium.components.tab_group_sync.LocalTabGroupId;
 import org.chromium.components.tab_group_sync.SavedTabGroup;
 import org.chromium.components.tab_group_sync.SavedTabGroupTab;
 import org.chromium.components.tab_group_sync.TabGroupSyncService;
+import org.chromium.ui.modaldialog.ModalDialogManager;
 
 import java.util.List;
 
@@ -63,7 +71,6 @@ public class TabRemoverImplUnitTest {
 
     @Mock private Profile mProfile;
     @Mock private ActionConfirmationManager mActionConfirmationManager;
-    @Mock private TabGroupModelFilterInternal mTabGroupModelFilter;
     @Mock private TabModelRemover mTabModelRemover;
     @Mock private Runnable mUndoRunnable;
     @Mock private TabRemover mMockTabRemover;
@@ -74,6 +81,8 @@ public class TabRemoverImplUnitTest {
     @Mock private TabGroupSyncService mTabGroupSyncService;
     @Mock private Callback<TabClosureParams> mTabClosureCallback;
     @Mock private Runnable mFinishBlocking;
+    @Mock private ActorKeyedService mActorKeyedService;
+    @Mock private ModalDialogManager mModalDialogManager;
 
     @Captor private ArgumentCaptor<TabModelRemoverFlowHandler> mHandlerCaptor;
     @Captor private ArgumentCaptor<Callback<@ActionConfirmationResult Integer>> mOnResultCaptor;
@@ -86,14 +95,14 @@ public class TabRemoverImplUnitTest {
     public void setUp() {
         DataSharingServiceFactory.setForTesting(mDataSharingService);
         TabGroupSyncServiceFactory.setForTesting(mTabGroupSyncService);
+        ActorKeyedServiceFactory.setForTesting(mActorKeyedService);
         when(mTabGroupSyncService.getAllGroupIds()).thenReturn(new String[] {});
         when(mTabGroupSyncService.isObservingLocalChanges()).thenReturn(true);
 
         when(mProfile.isOffTheRecord()).thenReturn(false);
         mTabModel = spy(new MockTabModel(mProfile, null));
         mTabModel.setTabRemoverForTesting(mMockTabRemover);
-        when(mTabGroupModelFilter.getTabModel()).thenReturn(mTabModel);
-        when(mTabModelRemover.getTabGroupModelFilter()).thenReturn(mTabGroupModelFilter);
+        when(mTabModelRemover.getTabModelInternal()).thenReturn(mTabModel);
         when(mTabModelRemover.getActionConfirmationManager())
                 .thenReturn(mActionConfirmationManager);
         mTabRemoverImpl = new TabRemoverImpl(mTabModelRemover);
@@ -128,6 +137,103 @@ public class TabRemoverImplUnitTest {
     }
 
     @Test
+    public void testPrepareCloseTabs_BeforeUnload_Proceed() {
+        Tab tab0 = mTabModel.addTab(/* id= */ 0);
+        BeforeUnloadCallback callback =
+                (onProceed, onCancel) -> {
+                    onProceed.run();
+                    return true;
+                };
+        tab0.getUserDataHost().setUserData(BeforeUnloadCallback.class, callback);
+        TabClosureParams params = TabClosureParams.closeTab(tab0).build();
+
+        mTabRemoverImpl.prepareCloseTabs(
+                params, /* allowDialog= */ true, mListener, mTabClosureCallback);
+        verify(mTabModelRemover).doTabRemovalFlow(mHandlerCaptor.capture(), eq(true));
+    }
+
+    @Test
+    public void testPrepareCloseTabs_BeforeUnload_Cancel() {
+        Tab tab0 = mTabModel.addTab(/* id= */ 0);
+        BeforeUnloadCallback callback =
+                (onProceed, onCancel) -> {
+                    onCancel.run();
+                    return true;
+                };
+        tab0.getUserDataHost().setUserData(BeforeUnloadCallback.class, callback);
+        TabClosureParams params = TabClosureParams.closeTab(tab0).build();
+
+        mTabRemoverImpl.prepareCloseTabs(
+                params, /* allowDialog= */ true, mListener, mTabClosureCallback);
+        verify(mListener)
+                .onConfirmationDialogResult(
+                        DialogType.NONE, ActionConfirmationResult.CONFIRMATION_NEGATIVE);
+        verify(mTabModelRemover, never()).doTabRemovalFlow(any(), anyBoolean());
+    }
+
+    @Test
+    public void testPrepareCloseTabs_BeforeUnload_DisallowedDialog() {
+        Tab tab0 = mTabModel.addTab(/* id= */ 0);
+        BeforeUnloadCallback callback = mock(BeforeUnloadCallback.class);
+        tab0.getUserDataHost().setUserData(BeforeUnloadCallback.class, callback);
+        TabClosureParams params = TabClosureParams.closeTab(tab0).build();
+
+        mTabRemoverImpl.prepareCloseTabs(
+                params, /* allowDialog= */ false, mListener, mTabClosureCallback);
+        verify(callback, never()).handleBeforeUnload(any(), any());
+        verify(mTabModelRemover).doTabRemovalFlow(mHandlerCaptor.capture(), eq(false));
+    }
+
+    @Test
+    public void testPrepareCloseTabs_MultipleTabs_BeforeUnload_ProceedAll() {
+        Tab tab0 = mTabModel.addTab(/* id= */ 0);
+        Tab tab1 = mTabModel.addTab(/* id= */ 1);
+        BeforeUnloadCallback callback0 =
+                (onProceed, onCancel) -> {
+                    onProceed.run();
+                    return true;
+                };
+        BeforeUnloadCallback callback1 =
+                (onProceed, onCancel) -> {
+                    onProceed.run();
+                    return true;
+                };
+        tab0.getUserDataHost().setUserData(BeforeUnloadCallback.class, callback0);
+        tab1.getUserDataHost().setUserData(BeforeUnloadCallback.class, callback1);
+        TabClosureParams params = TabClosureParams.closeTabs(List.of(tab0, tab1)).build();
+
+        mTabRemoverImpl.prepareCloseTabs(
+                params, /* allowDialog= */ true, mListener, mTabClosureCallback);
+        verify(mTabModelRemover).doTabRemovalFlow(mHandlerCaptor.capture(), eq(true));
+    }
+
+    @Test
+    public void testPrepareCloseTabs_MultipleTabs_BeforeUnload_CancelSecondTab() {
+        Tab tab0 = mTabModel.addTab(/* id= */ 0);
+        Tab tab1 = mTabModel.addTab(/* id= */ 1);
+        BeforeUnloadCallback callback0 =
+                (onProceed, onCancel) -> {
+                    onProceed.run();
+                    return true;
+                };
+        BeforeUnloadCallback callback1 =
+                (onProceed, onCancel) -> {
+                    onCancel.run();
+                    return true;
+                };
+        tab0.getUserDataHost().setUserData(BeforeUnloadCallback.class, callback0);
+        tab1.getUserDataHost().setUserData(BeforeUnloadCallback.class, callback1);
+        TabClosureParams params = TabClosureParams.closeTabs(List.of(tab0, tab1)).build();
+
+        mTabRemoverImpl.prepareCloseTabs(
+                params, /* allowDialog= */ true, mListener, mTabClosureCallback);
+        verify(mListener)
+                .onConfirmationDialogResult(
+                        DialogType.NONE, ActionConfirmationResult.CONFIRMATION_NEGATIVE);
+        verify(mTabModelRemover, never()).doTabRemovalFlow(any(), anyBoolean());
+    }
+
+    @Test
     public void testCloseTabsHandler_NoDialog() {
         Tab tab0 = mTabModel.addTab(/* id= */ 0);
         tab0.setTabGroupId(TAB_GROUP_ID.tabGroupId);
@@ -150,6 +256,22 @@ public class TabRemoverImplUnitTest {
                 .onConfirmationDialogResult(
                         DialogType.NONE, ActionConfirmationResult.IMMEDIATE_CONTINUE);
         verifyNoMoreInteractions(mListener);
+    }
+
+    @Test
+    public void testCloseTabsHandler_getOngoingActorTasks() {
+        Tab tab0 = mTabModel.addTab(/* id= */ 0);
+        TabClosureParams params = TabClosureParams.closeTab(tab0).build();
+
+        mTabRemoverImpl.closeTabs(params, /* allowDialog= */ false, mListener);
+        verify(mTabModelRemover).doTabRemovalFlow(mHandlerCaptor.capture(), eq(false));
+        TabModelRemoverFlowHandler handler = mHandlerCaptor.getValue();
+
+        when(mActorKeyedService.getActiveTaskIdOnTab(0, true)).thenReturn(123);
+
+        List<Integer> taskIds = handler.getOngoingActorTasks();
+        assertEquals(1, taskIds.size());
+        assertEquals(Integer.valueOf(123), taskIds.get(0));
     }
 
     @Test
@@ -203,11 +325,9 @@ public class TabRemoverImplUnitTest {
         int id = 0;
         Tab tab0 = mTabModel.addTab(id);
         tab0.setTabGroupId(TAB_GROUP_ID.tabGroupId);
-        when(mTabGroupModelFilter.getTabsInGroup(TAB_GROUP_ID.tabGroupId))
-                .thenReturn(List.of(tab0));
+        when(mTabModel.getTabsInGroup(TAB_GROUP_ID.tabGroupId)).thenReturn(List.of(tab0));
         TabClosureParams params =
-                TabClosureParams.forCloseTabGroup(mTabGroupModelFilter, TAB_GROUP_ID.tabGroupId)
-                        .build();
+                TabClosureParams.forCloseTabGroup(mTabModel, TAB_GROUP_ID.tabGroupId).build();
 
         mTabRemoverImpl.closeTabs(params, /* allowDialog= */ true, mListener);
         verify(mTabModelRemover).doTabRemovalFlow(mHandlerCaptor.capture(), eq(true));
@@ -550,6 +670,40 @@ public class TabRemoverImplUnitTest {
                                 (TabClosureParams placeholderCloseParams) -> {
                                     return placeholderCloseParams.tabs.equals(placeholderTabs);
                                 }));
+    }
+
+    @Test
+    public void testCloseTabs_ActorTaskDeletion() {
+        // Use a real TabModelRemover to test the full flow, but mock the ActionConfirmationManager.
+        TabModelRemover realRemover =
+                spy(
+                        new TabModelRemover(
+                                RuntimeEnvironment.application,
+                                mModalDialogManager,
+                                () -> mTabModel));
+        when(realRemover.getActionConfirmationManager()).thenReturn(mActionConfirmationManager);
+        TabRemoverImpl realTabRemoverImpl = new TabRemoverImpl(realRemover);
+
+        Tab tab0 = mTabModel.addTab(/* id= */ 0);
+        TabClosureParams params = TabClosureParams.closeTab(tab0).build();
+
+        // Setup ongoing task.
+        when(mActorKeyedService.getActiveTaskIdOnTab(0, true)).thenReturn(123);
+
+        realTabRemoverImpl.closeTabs(params, /* allowDialog= */ true, mListener);
+
+        // Capture the callback passed to ActionConfirmationManager.
+        verify(mActionConfirmationManager)
+                .processActorTaskDeletionAttempt(mOnResultCaptor.capture());
+
+        // Confirm the dialog.
+        mOnResultCaptor.getValue().onResult(ActionConfirmationResult.CONFIRMATION_POSITIVE);
+
+        // Verify task is stopped.
+        verify(mActorKeyedService).stopTask(123, StoppedReason.STOPPED_BY_USER);
+
+        // Verify the action is performed.
+        verify(mTabModel).closeTabs(any(TabClosureParams.class));
     }
 
     @Test

@@ -36,6 +36,7 @@
 #include "components/reporting/util/statusor.h"
 #include "services/network/public/cpp/data_element.h"
 #include "services/network/public/cpp/resource_request.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/test/test_network_connection_tracker.h"
 
@@ -73,15 +74,10 @@ class FakeDelegate : public EncryptedReportingClient::Delegate {
 ReportingServerConnector::TestEnvironment::TestEnvironment()
     : store_(std::make_unique<::policy::MockCloudPolicyStore>(
           ::policy::dm_protocol::kChromeDevicePolicyType)),
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-      extension_install_store_(std::make_unique<::policy::MockCloudPolicyStore>(
-          ::policy::dm_protocol::kChromeMachineLevelExtensionCloudPolicyType)),
-#endif
       core_(std::make_unique<::policy::CloudPolicyCore>(
           ::policy::dm_protocol::kChromeDevicePolicyType,
           std::string(),
           store_.get(),
-          extension_install_store_.get(),
           base::SingleThreadTaskRunner::GetCurrentDefault(),
           network::TestNetworkConnectionTracker::CreateGetter())) {
 #if BUILDFLAG(IS_CHROMEOS)

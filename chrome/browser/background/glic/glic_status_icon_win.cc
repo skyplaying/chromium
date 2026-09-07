@@ -9,22 +9,25 @@
 #include "base/functional/bind.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/win/registry.h"
-#include "chrome/app/vector_icons/vector_icons.h"
-#include "chrome/browser/background/glic/glic_controller.h"
 #include "chrome/browser/background/glic/glic_status_icon.h"
 #include "chrome/browser/glic/resources/glic_resources.h"
 #include "chrome/browser/glic/resources/grit/glic_browser_resources.h"
 #include "chrome/browser/status_icons/status_icon.h"
 #include "chrome/browser/status_icons/status_tray.h"
-#include "chrome/grit/generated_resources.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/image/image_skia.h"
 
 namespace glic {
 
-GlicStatusIconWin::GlicStatusIconWin(GlicController* controller,
+GlicStatusIconWin::GlicStatusIconWin(GlicBackgroundDelegate* delegate,
                                      StatusTray* status_tray)
-    : GlicStatusIcon(controller, status_tray) {
+    : GlicStatusIcon(delegate, status_tray) {}
+
+GlicStatusIconWin::~GlicStatusIconWin() = default;
+
+void GlicStatusIconWin::Init() {
+  GlicStatusIcon::Init();
+
   if (hkcu_themes_regkey_.Open(
           HKEY_CURRENT_USER,
           L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
@@ -40,8 +43,6 @@ GlicStatusIconWin::GlicStatusIconWin(GlicController* controller,
     native_theme_observer_.Observe(ui::NativeTheme::GetInstanceForNativeUi());
   }
 }
-
-GlicStatusIconWin::~GlicStatusIconWin() = default;
 
 void GlicStatusIconWin::OnNativeThemeUpdated(ui::NativeTheme* observed_theme) {
   CHECK(!hkcu_themes_regkey_.Valid());

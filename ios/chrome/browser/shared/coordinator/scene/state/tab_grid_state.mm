@@ -7,7 +7,7 @@
 #import "base/ios/crb_protocol_observers.h"
 
 @interface TabGridStateObserverList
-    : CRBProtocolObservers <TabGridStateObserver>
+    : CRBProtocolObservers <TabGridStateObserving>
 @end
 @implementation TabGridStateObserverList
 @end
@@ -20,9 +20,17 @@
   self = [super init];
   if (self) {
     _observers = [TabGridStateObserverList
-        observersWithProtocol:@protocol(TabGridStateObserver)];
+        observersWithProtocol:@protocol(TabGridStateObserving)];
   }
   return self;
+}
+
+- (void)setMode:(TabGridMode)mode {
+  if (_mode == mode) {
+    return;
+  }
+  _mode = mode;
+  [_observers tabGridStateModeDidChange:self];
 }
 
 - (void)setTabGridVisible:(BOOL)tabGridVisible {
@@ -64,11 +72,11 @@
   }
 }
 
-- (void)addObserver:(id<TabGridStateObserver>)observer {
+- (void)addObserver:(id<TabGridStateObserving>)observer {
   [_observers addObserver:observer];
 }
 
-- (void)removeObserver:(id<TabGridStateObserver>)observer {
+- (void)removeObserver:(id<TabGridStateObserving>)observer {
   [_observers removeObserver:observer];
 }
 

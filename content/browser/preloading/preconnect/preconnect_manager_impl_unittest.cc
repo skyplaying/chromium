@@ -28,6 +28,7 @@
 #include "net/base/network_anonymization_key.h"
 #include "net/dns/public/resolve_error_info.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
+#include "services/network/public/cpp/constants.h"
 #include "services/network/public/mojom/connection_change_observer_client.mojom.h"
 #include "services/network/test/test_network_context.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -175,7 +176,7 @@ class MockNetworkContext : public network::TestNetworkContext {
           const GURL& url,
           network::mojom::CredentialsMode credentials_mode,
           const net::NetworkAnonymizationKey& network_anonymization_key,
-          const std::optional<base::UnguessableToken>& network_restrictions_id,
+          const base::UnguessableToken& network_restrictions_id,
           const net::MutableNetworkTrafficAnnotationTag& traffic_annotation,
           const std::optional<net::ConnectionKeepAliveConfig>& keepalive_config,
           mojo::PendingRemote<network::mojom::ConnectionChangeObserverClient>
@@ -201,7 +202,7 @@ class MockNetworkContext : public network::TestNetworkContext {
 net::NetworkAnonymizationKey CreateNetworkAnonymizationKey(
     const GURL& main_frame_url) {
   net::SchemefulSite site = net::SchemefulSite(main_frame_url);
-  return net::NetworkAnonymizationKey::CreateSameSite(site);
+  return net::NetworkAnonymizationKey::CreateSameSite(std::move(site));
 }
 
 }  // namespace
@@ -836,9 +837,6 @@ TEST_F(PreconnectManagerImplTest, TestQueueingMetricsRecorded) {
   preconnect_manager_->Start(main_frame_url, requests,
                              TRAFFIC_ANNOTATION_FOR_TESTS);
 
-  // The number of queued jobs should have been recorded.
-  histogram_tester.ExpectUniqueSample(
-      "Navigation.Preconnect.PreresolveJobQueueLength", num_preresolves + 1, 1);
   // Each job that was actually executed should have had its queueing time
   // recorded.
   histogram_tester.ExpectTotalCount(
@@ -975,7 +973,7 @@ TEST_F(PreconnectManagerImplTest, TestStartPreresolveHost) {
   preconnect_manager_->StartPreresolveHost(
       url, network_anonymization_key, TRAFFIC_ANNOTATION_FOR_TESTS,
       /*storage_partition_config=*/nullptr,
-      /*network_restrictions_id=*/std::nullopt);
+      network::GetTestNetworkRestrictionsId());
   mock_network_context_->CompleteHostLookup(origin.GetHost(),
                                             network_anonymization_key, net::OK);
 
@@ -984,7 +982,7 @@ TEST_F(PreconnectManagerImplTest, TestStartPreresolveHost) {
   preconnect_manager_->StartPreresolveHost(
       non_http_url, network_anonymization_key, TRAFFIC_ANNOTATION_FOR_TESTS,
       /*storage_partition_config=*/nullptr,
-      /*network_restrictions_id=*/std::nullopt);
+      network::GetTestNetworkRestrictionsId());
 }
 
 TEST_F(PreconnectManagerImplTest, TestStartPreresolveHostDisabled) {
@@ -1001,7 +999,7 @@ TEST_F(PreconnectManagerImplTest, TestStartPreresolveHostDisabled) {
   preconnect_manager_->StartPreresolveHost(
       url, network_anonymization_key, TRAFFIC_ANNOTATION_FOR_TESTS,
       /*storage_partition_config=*/nullptr,
-      /*network_restrictions_id=*/std::nullopt);
+      network::GetTestNetworkRestrictionsId());
 }
 
 TEST_F(PreconnectManagerImplTest, TestStartPreresolveHosts) {
@@ -1016,7 +1014,7 @@ TEST_F(PreconnectManagerImplTest, TestStartPreresolveHosts) {
   preconnect_manager_->StartPreresolveHosts(
       {cdn, fonts}, network_anonymization_key, TRAFFIC_ANNOTATION_FOR_TESTS,
       /*storage_partition_config=*/nullptr,
-      /*network_restrictions_id=*/std::nullopt);
+      network::GetTestNetworkRestrictionsId());
   mock_network_context_->CompleteHostLookup(cdn.GetHost(),
                                             network_anonymization_key, net::OK);
   mock_network_context_->CompleteHostLookup(fonts.GetHost(),
@@ -1037,7 +1035,7 @@ TEST_F(PreconnectManagerImplTest, TestStartPreresolveHostsDisabled) {
   preconnect_manager_->StartPreresolveHosts(
       {cdn, fonts}, network_anonymization_key, TRAFFIC_ANNOTATION_FOR_TESTS,
       /*storage_partition_config=*/nullptr,
-      /*network_restrictions_id=*/std::nullopt);
+      network::GetTestNetworkRestrictionsId());
 }
 
 TEST_F(PreconnectManagerImplTest, TestStartPreconnectUrl) {
@@ -1054,6 +1052,7 @@ TEST_F(PreconnectManagerImplTest, TestStartPreconnectUrl) {
       url, allow_credentials, network_anonymization_key,
       TRAFFIC_ANNOTATION_FOR_TESTS,
       /*storage_partition_config=*/nullptr,
+      network::GetTestNetworkRestrictionsId(),
       /*keepalive_config=*/std::nullopt, mojo::NullRemote());
 
   EXPECT_CALL(
@@ -1072,6 +1071,7 @@ TEST_F(PreconnectManagerImplTest, TestStartPreconnectUrl) {
       non_http_url, allow_credentials, network_anonymization_key,
       TRAFFIC_ANNOTATION_FOR_TESTS,
       /*storage_partition_config=*/nullptr,
+      network::GetTestNetworkRestrictionsId(),
       /*keepalive_config=*/std::nullopt, mojo::NullRemote());
 }
 
@@ -1091,6 +1091,7 @@ TEST_F(PreconnectManagerImplTest, TestStartPreconnectUrlDisabled) {
       url, allow_credentials, network_anonymization_key,
       TRAFFIC_ANNOTATION_FOR_TESTS,
       /*storage_partition_config=*/nullptr,
+      network::GetTestNetworkRestrictionsId(),
       /*keepalive_config=*/std::nullopt, mojo::NullRemote());
 }
 
@@ -1102,7 +1103,7 @@ TEST_F(PreconnectManagerImplTest,
   net::SchemefulSite requesting_site =
       net::SchemefulSite(GURL("http://foo.test"));
   auto network_anonymization_key =
-      net::NetworkAnonymizationKey::CreateSameSite(requesting_site);
+      net::NetworkAnonymizationKey::CreateSameSite(std::move(requesting_site));
 
   EXPECT_CALL(*mock_delegate_, IsPreconnectEnabled()).WillOnce(Return(true));
   EXPECT_CALL(*mock_network_context_, ResolveHostProxy(origin.GetHost()));
@@ -1110,6 +1111,7 @@ TEST_F(PreconnectManagerImplTest,
       url, allow_credentials, network_anonymization_key,
       TRAFFIC_ANNOTATION_FOR_TESTS,
       /*storage_partition_config=*/nullptr,
+      network::GetTestNetworkRestrictionsId(),
       /*keepalive_config=*/std::nullopt, mojo::NullRemote());
 
   EXPECT_CALL(
@@ -1121,6 +1123,69 @@ TEST_F(PreconnectManagerImplTest,
           _, _));
   mock_network_context_->CompleteHostLookup(origin.GetHost(),
                                             network_anonymization_key, net::OK);
+}
+
+TEST_F(PreconnectManagerImplTest, TestStartPreconnectUrlFastPath) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(kPreconnectManagerDirectFastPath);
+
+  GURL url("http://cdn.google.com/script.js");
+  net::NetworkAnonymizationKey network_anonymization_key =
+      CreateNetworkAnonymizationKey(url);
+  GURL origin("http://cdn.google.com");
+  bool allow_credentials = false;
+
+  EXPECT_CALL(*mock_delegate_, IsPreconnectEnabled())
+      .WillRepeatedly(Return(true));
+
+  // In the fast path, PreconnectSockets is called immediately during
+  // StartPreconnectUrl without invoking ResolveHostProxy or requiring
+  // CompleteHostLookup.
+  EXPECT_CALL(
+      *mock_network_context_,
+      PreconnectSockets(
+          1, origin, network::mojom::CredentialsMode::kOmit,
+          network_anonymization_key, _,
+          net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS),
+          _, _));
+  preconnect_manager_->StartPreconnectUrl(
+      url, allow_credentials, network_anonymization_key,
+      TRAFFIC_ANNOTATION_FOR_TESTS,
+      /*storage_partition_config=*/nullptr,
+      network::GetTestNetworkRestrictionsId(),
+      /*keepalive_config=*/std::nullopt, mojo::NullRemote());
+
+  // Non http url shouldn't be preconnected.
+  GURL non_http_url("file:///tmp/index.html");
+  preconnect_manager_->StartPreconnectUrl(
+      non_http_url, allow_credentials, network_anonymization_key,
+      TRAFFIC_ANNOTATION_FOR_TESTS,
+      /*storage_partition_config=*/nullptr,
+      network::GetTestNetworkRestrictionsId(),
+      /*keepalive_config=*/std::nullopt, mojo::NullRemote());
+}
+
+TEST_F(PreconnectManagerImplTest,
+       TestStartPreconnectUrlFastPath_PreconnectDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(kPreconnectManagerDirectFastPath);
+
+  GURL url("http://cdn.google.com/script.js");
+  net::NetworkAnonymizationKey network_anonymization_key =
+      CreateNetworkAnonymizationKey(url);
+  GURL origin("http://cdn.google.com");
+  bool allow_credentials = false;
+
+  EXPECT_CALL(*mock_delegate_, IsPreconnectEnabled())
+      .WillOnce(testing::Return(false));
+
+  // PreconnectSockets should not be called when delegate returns false.
+  preconnect_manager_->StartPreconnectUrl(
+      url, allow_credentials, network_anonymization_key,
+      TRAFFIC_ANNOTATION_FOR_TESTS,
+      /*storage_partition_config=*/nullptr,
+      network::GetTestNetworkRestrictionsId(),
+      /*keepalive_config=*/std::nullopt, mojo::NullRemote());
 }
 
 TEST_F(PreconnectManagerImplTest, TestDetachedRequestHasHigherPriority) {
@@ -1155,7 +1220,7 @@ TEST_F(PreconnectManagerImplTest, TestDetachedRequestHasHigherPriority) {
       detached_preresolve, network_anonymization_key,
       TRAFFIC_ANNOTATION_FOR_TESTS,
       /*storage_partition_config=*/nullptr,
-      /*network_restrictions_id=*/std::nullopt);
+      network::GetTestNetworkRestrictionsId());
   Mock::VerifyAndClearExpectations(preconnect_manager_.get());
 
   EXPECT_CALL(*mock_network_context_,

@@ -8,12 +8,13 @@
 
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <vector>
 
-#include "base/containers/adapters.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
@@ -21,6 +22,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/threading/platform_thread.h"
 #include "base/time/time.h"
+#include "base/uuid.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/buildflags.h"
@@ -33,9 +35,9 @@
 #include "chrome/browser/sessions/session_service_log.h"
 #include "chrome/browser/sessions/session_service_test_helper.h"
 #include "chrome/browser/signin/signin_util.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/url_constants.h"
-#include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
@@ -53,7 +55,9 @@
 #include "components/tab_groups/tab_group_visual_data.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/test/browser_task_environment.h"
 #include "content/public/test/web_contents_tester.h"
+#include "services/network/public/cpp/resource_request_body.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/page_state/page_state.h"
@@ -62,7 +66,9 @@
 #include "ui/base/mojom/window_show_state.mojom.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chromeos/components/kiosk/kiosk_test_utils.h"
+#include "components/user_manager/scoped_user_manager.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 using content::NavigationEntry;
@@ -70,18 +76,21 @@ using sessions::ContentTestHelper;
 using sessions::SerializedNavigationEntry;
 using sessions::SerializedNavigationEntryTestHelper;
 
-class SessionServiceTest : public BrowserWithTestWindowTest {
+class SessionServiceTest : public testing::Test {
  public:
   SessionServiceTest() : window_bounds(0, 1, 2, 3) {}
 
  protected:
   void SetUp() override {
-    BrowserWithTestWindowTest::SetUp();
+    profile_manager_ = std::make_unique<TestingProfileManager>(
+        TestingBrowserProcess::GetGlobal());
+    ASSERT_TRUE(profile_manager_->SetUp());
+    profile_ = profile_manager_->CreateTestingProfile("test_profile");
 
-    session_service_ = std::make_unique<SessionService>(browser()->profile());
+    session_service_ = std::make_unique<SessionService>(profile_.get());
     helper_.SetService(session_service_.get());
 
-    service()->SetWindowType(window_id, Browser::TYPE_NORMAL);
+    service()->SetWindowType(window_id, BrowserWindowInterface::TYPE_NORMAL);
     service()->SetWindowBounds(window_id, window_bounds,
                                ui::mojom::WindowShowState::kNormal);
     service()->SetWindowWorkspace(window_id, window_workspace);
@@ -89,13 +98,12 @@ class SessionServiceTest : public BrowserWithTestWindowTest {
 
   void TearDown() override {
     DestroySessionService();
-    BrowserWithTestWindowTest::TearDown();
   }
 
   std::optional<SessionServiceEvent> FindMostRecentEventOfType(
       SessionServiceEventLogType type) {
-    auto events = GetSessionServiceEvents(browser()->profile());
-    for (const SessionServiceEvent& event : base::Reversed(events)) {
+    auto events = GetSessionServiceEvents(profile_.get());
+    for (const SessionServiceEvent& event : std::views::reverse(events)) {
       if (event.type == type)
         return event;
     }
@@ -137,7 +145,7 @@ class SessionServiceTest : public BrowserWithTestWindowTest {
       std::set<SessionID>* discarded_window_ids) {
     DestroySessionService();
 
-    session_service_ = std::make_unique<SessionService>(browser()->profile());
+    session_service_ = std::make_unique<SessionService>(profile_.get());
     helper_.SetService(session_service_.get());
 
     SessionID dummy_active_window_id = SessionID::InvalidValue();
@@ -199,7 +207,7 @@ class SessionServiceTest : public BrowserWithTestWindowTest {
     UpdateNavigation(window_id, tab1_id, *nav1, true);
 
     const gfx::Rect window2_bounds(3, 4, 5, 6);
-    service()->SetWindowType(window2_id, Browser::TYPE_NORMAL);
+    service()->SetWindowType(window2_id, BrowserWindowInterface::TYPE_NORMAL);
     service()->SetWindowBounds(window2_id, window2_bounds,
                                ui::mojom::WindowShowState::kMaximized);
     helper_.PrepareTabInWindow(window2_id, tab2_id, 0, true);
@@ -216,6 +224,9 @@ class SessionServiceTest : public BrowserWithTestWindowTest {
 
   std::unique_ptr<SessionService> session_service_;
   SessionServiceTestHelper helper_;
+  content::BrowserTaskEnvironment task_environment_;
+  std::unique_ptr<TestingProfileManager> profile_manager_;
+  raw_ptr<TestingProfile> profile_;
 };
 
 class MockSessionServiceBaseObserver : public SessionServiceBaseObserver {
@@ -437,7 +448,7 @@ TEST_F(SessionServiceTest, WindowWithNoTabsGetsPruned) {
   UpdateNavigation(window_id, tab1_id, nav1, true);
 
   const gfx::Rect window2_bounds(3, 4, 5, 6);
-  service()->SetWindowType(window2_id, Browser::TYPE_NORMAL);
+  service()->SetWindowType(window2_id, BrowserWindowInterface::TYPE_NORMAL);
   service()->SetWindowBounds(window2_id, window2_bounds,
                              ui::mojom::WindowShowState::kNormal);
   helper_.PrepareTabInWindow(window2_id, tab2_id, 0, true);
@@ -566,7 +577,7 @@ TEST_F(SessionServiceTest, WindowCloseCommittedAfterNavigate) {
   SessionID tab2_id = SessionID::NewUnique();
   ASSERT_NE(window2_id, window_id);
 
-  service()->SetWindowType(window2_id, Browser::TYPE_NORMAL);
+  service()->SetWindowType(window2_id, BrowserWindowInterface::TYPE_NORMAL);
   service()->SetWindowBounds(window2_id, window_bounds,
                              ui::mojom::WindowShowState::kNormal);
 
@@ -1299,9 +1310,9 @@ TEST_F(SessionServiceTest, SplitTabDataSaved) {
       split_tabs::SplitTabId::GenerateNew()};
 
   const std::array<split_tabs::SplitTabVisualData, kNumSplitTabs> visual_data =
-      {split_tabs::SplitTabVisualData(split_tabs::SplitTabLayout::kHorizontal,
+      {split_tabs::SplitTabVisualData(split_tabs::SplitTabLayout::kStacked,
                                       0.2),
-       split_tabs::SplitTabVisualData(split_tabs::SplitTabLayout::kVertical,
+       split_tabs::SplitTabVisualData(split_tabs::SplitTabLayout::kSideBySide,
                                       0.7)};
 
   int tab_ndx = 0;
@@ -1340,121 +1351,6 @@ TEST_F(SessionServiceTest, SplitTabDataSaved) {
     EXPECT_EQ(visual_data[split_ndx],
               split_tab_map[split_id]->split_visual_data_);
   }
-}
-
-TEST_F(SessionServiceTest, Workspace) {
-  auto* test_browser_window =
-      static_cast<TestBrowserWindow*>(browser()->window());
-  test_browser_window->set_workspace(window_workspace);
-  AddTab(browser(), GURL("http://foo/1"));
-  // Force a reset, to verify that SessionService::BuildCommandsForBrowser
-  // handles workspaces correctly.
-  service()->ResetFromCurrentBrowsers();
-
-  sessions::CommandStorageManager* command_storage_manager =
-      service()->GetCommandStorageManagerForTest();
-  const std::vector<std::unique_ptr<sessions::SessionCommand>>&
-      pending_commands = command_storage_manager->pending_commands();
-  bool found_workspace_command = false;
-  std::unique_ptr<sessions::SessionCommand> workspace_command =
-      sessions::CreateSetWindowWorkspaceCommand(browser()->session_id(),
-                                                window_workspace);
-  for (const auto& command : pending_commands) {
-    if (command->id() == workspace_command->id() &&
-        command->contents() == workspace_command->contents()) {
-      found_workspace_command = true;
-      break;
-    }
-  }
-  EXPECT_TRUE(found_workspace_command);
-}
-
-// Tests that the workspace is saved in the browser session during
-// `SessionService::WindowOpened(),` called in `Browser()` constructor to
-// save the current workspace to newly created browser.
-TEST_F(SessionServiceTest, WorkspaceSavedOnOpened) {
-  const std::string workspace = "xyz";
-  auto* test_browser_window =
-      static_cast<TestBrowserWindow*>(browser()->window());
-  test_browser_window->set_workspace(workspace);
-  service()->WindowOpened(browser());
-
-  sessions::CommandStorageManager* command_storage_manager =
-      service()->GetCommandStorageManagerForTest();
-  const std::vector<std::unique_ptr<sessions::SessionCommand>>&
-      pending_commands = command_storage_manager->pending_commands();
-  bool found_workspace_command = false;
-  std::unique_ptr<sessions::SessionCommand> workspace_command =
-      sessions::CreateSetWindowWorkspaceCommand(browser()->session_id(),
-                                                workspace);
-  for (const auto& command : pending_commands) {
-    if (command->id() == workspace_command->id() &&
-        command->contents() == workspace_command->contents()) {
-      found_workspace_command = true;
-      break;
-    }
-  }
-  EXPECT_TRUE(found_workspace_command);
-}
-
-// Tests that the visible on all workspaces state is saved during
-// SessionService::BuildCommandsForBrowser.
-TEST_F(SessionServiceTest, VisibleOnAllWorkspaces) {
-  auto* test_browser_window =
-      static_cast<TestBrowserWindow*>(browser()->window());
-  test_browser_window->set_visible_on_all_workspaces(true);
-  // Force a reset, to verify that SessionService::BuildCommandsForBrowser
-  // handles workspaces correctly.
-  AddTab(browser(), GURL("http://foo/1"));
-  service()->ResetFromCurrentBrowsers();
-
-  sessions::CommandStorageManager* command_storage_manager =
-      service()->GetCommandStorageManagerForTest();
-  const std::vector<std::unique_ptr<sessions::SessionCommand>>&
-      pending_commands = command_storage_manager->pending_commands();
-  bool found_visible_on_all_workspaces_command = false;
-  std::unique_ptr<sessions::SessionCommand> visible_on_all_workspaces_command =
-      sessions::CreateSetWindowVisibleOnAllWorkspacesCommand(
-          browser()->session_id(),
-          /*visible_on_all_workspaces=*/true);
-  for (const auto& command : pending_commands) {
-    if (command->id() == visible_on_all_workspaces_command->id() &&
-        command->contents() == visible_on_all_workspaces_command->contents()) {
-      found_visible_on_all_workspaces_command = true;
-      break;
-    }
-  }
-  EXPECT_TRUE(found_visible_on_all_workspaces_command);
-}
-
-TEST_F(SessionServiceTest, PinnedAfterReset) {
-  AddTab(browser(), GURL("http://foo/1"));
-  browser()->tab_strip_model()->SetTabPinned(0, true);
-  // Force a reset, to verify that SessionService::BuildCommandsForBrowser
-  // handles pinned tabs correctly.
-  service()->ResetFromCurrentBrowsers();
-
-  sessions::CommandStorageManager* command_storage_manager =
-      service()->GetCommandStorageManagerForTest();
-  const std::vector<std::unique_ptr<sessions::SessionCommand>>&
-      pending_commands = command_storage_manager->pending_commands();
-  bool found_pinned_command = false;
-
-  sessions::SessionTabHelper* session_tab_helper =
-      sessions::SessionTabHelper::FromWebContents(
-          browser()->tab_strip_model()->GetWebContentsAt(0));
-  std::unique_ptr<sessions::SessionCommand> pinned_command =
-      sessions::CreatePinnedStateCommand(session_tab_helper->session_id(),
-                                         true);
-
-  for (const auto& command : pending_commands) {
-    if (command->id() == pinned_command->id() &&
-        command->contents() == pinned_command->contents()) {
-      found_pinned_command = true;
-      break;
-    }
-  }
-  EXPECT_TRUE(found_pinned_command);
 }
 
 // Functions used by GetSessionsAndDestroy.
@@ -1506,23 +1402,6 @@ TEST_F(SessionServiceTest, GetSessionsAndDestroy) {
   run_loop.Run();
 }
 
-TEST_F(SessionServiceTest, LogExit) {
-  EXPECT_FALSE(FindMostRecentEventOfType(SessionServiceEventLogType::kExit));
-  helper_.SetHasOpenTrackableBrowsers(false);
-  service()->WindowClosing(window_id);
-  auto exit_event =
-      FindMostRecentEventOfType(SessionServiceEventLogType::kExit);
-  ASSERT_TRUE(exit_event);
-  EXPECT_EQ(1, exit_event->data.exit.window_count);
-  EXPECT_EQ(browser()->tab_strip_model()->count(),
-            exit_event->data.exit.tab_count);
-
-  // Create another window, which should remove the exit.
-  SessionID window2_id = SessionID::NewUnique();
-  service()->SetWindowType(window2_id, Browser::TYPE_NORMAL);
-  EXPECT_FALSE(FindMostRecentEventOfType(SessionServiceEventLogType::kExit));
-}
-
 TEST_F(SessionServiceTest, OnErrorWritingSessionCommands) {
   helper_.SaveNow();
   EXPECT_FALSE(helper_.HasPendingReset());
@@ -1563,7 +1442,7 @@ TEST_F(SessionServiceTest, DisableSaving) {
 
   // Schedule another command, it should not trigger any saving.
   const SessionID window2_id = SessionID::NewUnique();
-  service()->SetWindowType(window2_id, Browser::TYPE_NORMAL);
+  service()->SetWindowType(window2_id, BrowserWindowInterface::TYPE_NORMAL);
   EXPECT_FALSE(helper_.command_storage_manager()->HasPendingSave());
   EXPECT_TRUE(helper_.command_storage_manager()->pending_commands().empty());
   helper_.SaveNow();
@@ -1586,32 +1465,33 @@ TEST_F(SessionServiceTest, ObserverNotifiedOnDestruction) {
 }
 
 #if BUILDFLAG(IS_CHROMEOS)
-class SessionServiceKioskTest : public SessionServiceTest {
- public:
-  std::optional<std::string> GetDefaultProfileName() override {
-    return "test@kiosk-apps.device-local.localhost";
-  }
-
-  void LogIn(std::string_view email, const GaiaId& gaia_id) override {
-    chromeos::SetUpFakeChromeAppKioskSession(std::string(email));
-  }
-};
-
+// These preparation is necessary for `ShouldRestore` function to return true
+// in the regular user session.
 TEST_F(SessionServiceTest, OpenedWindowNotRestored) {
-  // These preparation is necessary for `ShouldRestore` function to return true
-  // in the regular user session.
   helper_.SetHasOpenTrackableBrowsers(false);
   service()->WindowClosing(window_id);
   service()->WindowClosed(window_id);
   // Make sure `ShouldRestore` returns true for the regular user session.
-  EXPECT_TRUE(session_service_->ShouldRestore(browser()));
+  EXPECT_TRUE(session_service_->ShouldRestore(nullptr));
 }
+
+class SessionServiceKioskTest : public SessionServiceTest {
+ protected:
+  void SetUp() override {
+    SessionServiceTest::SetUp();
+    chromeos::SetUpFakeChromeAppKioskSession(
+        "test@kiosk-apps.device-local.localhost");
+  }
+
+  user_manager::TypedScopedUserManager<ash::FakeChromeUserManager>
+      fake_user_manager_{std::make_unique<ash::FakeChromeUserManager>()};
+};
 
 TEST_F(SessionServiceKioskTest, OpenedWindowNotRestored) {
   helper_.SetHasOpenTrackableBrowsers(false);
   service()->WindowClosing(window_id);
   service()->WindowClosed(window_id);
   // Make sure `ShouldRestore` returns true for the kiosk user session.
-  EXPECT_FALSE(session_service_->ShouldRestore(browser()));
+  EXPECT_FALSE(session_service_->ShouldRestore(nullptr));
 }
-#endif  //  BUILDFLAG(IS_CHROMEOS)
+#endif  // BUILDFLAG(IS_CHROMEOS)

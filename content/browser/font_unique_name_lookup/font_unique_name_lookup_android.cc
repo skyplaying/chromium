@@ -14,7 +14,6 @@
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/files/memory_mapped_file.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/no_destructor.h"
 #include "base/path_service.h"
 #include "base/strings/cstring_view.h"
@@ -137,7 +136,8 @@ FontUniqueNameLookup::FontUniqueNameLookup(
 FontUniqueNameLookup::~FontUniqueNameLookup() = default;
 
 base::ReadOnlySharedMemoryRegion FontUniqueNameLookup::DuplicateMemoryRegion() {
-  DCHECK(proto_storage_.IsValid() && proto_storage_.mapping.size());
+  CHECK(proto_storage_.IsValid() && proto_storage_.mapping.size(),
+        base::NotFatalUntil::M159);
   return proto_storage_.region.Duplicate();
 }
 

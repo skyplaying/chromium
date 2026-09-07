@@ -10,6 +10,8 @@
 
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
+#include "build/android_buildflags.h"
+#include "content/browser/renderer_host/frame_tree_node.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/service_worker/service_worker_context_core.h"
 #include "content/browser/service_worker/service_worker_usb_delegate_observer.h"
@@ -25,6 +27,8 @@
 #include "services/device/public/mojom/usb_enumeration_options.mojom.h"
 #include "services/device/public/mojom/usb_manager_client.mojom.h"
 #include "third_party/blink/public/common/features_generated.h"
+#include "third_party/blink/public/mojom/frame/user_activation_notification_type.mojom.h"
+#include "third_party/blink/public/mojom/frame/user_activation_update_types.mojom.h"
 
 namespace content {
 
@@ -38,7 +42,7 @@ class DocumentHelper : public DocumentService<blink::mojom::WebUsbService> {
                  mojo::PendingReceiver<blink::mojom::WebUsbService> receiver)
       : DocumentService(render_frame_host, std::move(receiver)),
         service_(std::move(service)) {
-    DCHECK(service_);
+    CHECK(service_, base::NotFatalUntil::M158);
   }
 
   DocumentHelper(const DocumentHelper&) = delete;
@@ -112,13 +116,13 @@ class WebUsbServiceImpl::UsbDeviceClient
 
   // device::mojom::UsbDeviceClient implementation:
   void OnDeviceOpened() override {
-    DCHECK(!opened_);
+    CHECK(!opened_, base::NotFatalUntil::M158);
     opened_ = true;
     service_->IncrementConnectionCount();
   }
 
   void OnDeviceClosed() override {
-    DCHECK(opened_);
+    CHECK(opened_, base::NotFatalUntil::M158);
     opened_ = false;
     service_->DecrementConnectionCount();
   }
@@ -141,9 +145,10 @@ WebUsbServiceImpl::WebUsbServiceImpl(
   if (delegate && render_frame_host_) {
     delegate->AddObserver(GetBrowserContext(), this);
   } else if (service_worker_version_) {
-#if !BUILDFLAG(IS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID)
     // For service worker case, it relies on ServiceWorkerUsbDelegateObserver to
-    // be the broker between UsbDelegate and UsbService.
+    // be the broker between UsbDelegate and UsbService. This is limited to
+    // platforms that support extensions.
     auto context = service_worker_version_->context();
     if (context) {
       context->usb_delegate_observer()->RegisterUsbService(
@@ -152,7 +157,7 @@ WebUsbServiceImpl::WebUsbServiceImpl(
     }
 #else
     NOTREACHED();
-#endif  // !BUILDFLAG(IS_ANDROID)
+#endif  // !BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID)
   }
 }
 
@@ -210,7 +215,7 @@ void WebUsbServiceImpl::Create(
     base::WeakPtr<ServiceWorkerVersion> service_worker_version,
     const url::Origin& origin,
     mojo::PendingReceiver<blink::mojom::WebUsbService> pending_receiver) {
-  DCHECK(service_worker_version);
+  CHECK(service_worker_version, base::NotFatalUntil::M158);
 
   // Avoid creating the WebUsbService if there is no USB delegate to provide
   // the implementation or if `origin` is not eligible to access WebUSB from a
@@ -287,7 +292,7 @@ void WebUsbServiceImpl::OnGetDevices(
     GetDevicesCallback callback,
     std::vector<device::mojom::UsbDeviceInfoPtr> device_info_list) {
   auto* delegate = GetContentClient()->browser()->GetUsbDelegate();
-  DCHECK(delegate);
+  CHECK(delegate, base::NotFatalUntil::M158);
 
   std::vector<device::mojom::UsbDeviceInfoPtr> device_infos;
   for (auto& device_info : device_info_list) {
@@ -337,8 +342,38 @@ void WebUsbServiceImpl::GetPermission(
     return;
   }
 
-  usb_chooser_ = delegate->RunChooser(*render_frame_host_, std::move(options),
+  // Device chooser requests require a RenderFrameHost context.
+  if (!render_frame_host_) {
+    mojo::ReportBadMessage(
+        "GetPermission is not allowed from a service worker.");
+    std::move(callback).Run(nullptr);
+    return;
+  }
+
+  // Ensure the requesting document is still active and consume transient user
+  // activation to prevent stale/pending-deletion frames from opening choosers
+  // or consuming user gestures from newly committed documents.
+  if (!render_frame_host_->IsActive() ||
+      !FrameTreeNode::From(render_frame_host_)
+           ->UpdateUserActivationState(
+               blink::mojom::UserActivationUpdateType::
+                   kConsumeTransientActivation,
+               blink::mojom::UserActivationNotificationType::kNone)) {
+    std::move(callback).Run(nullptr);
+    return;
+  }
+
+  // The delegate's chooser implementation may spin a nested message loop (e.g.
+  // to drop fullscreen), during which the frame may be detached and the
+  // service destroyed. Check that the service is still alive before accessing
+  // member variables.
+  base::WeakPtr<WebUsbServiceImpl> weak_this = weak_factory_.GetWeakPtr();
+  auto chooser = delegate->RunChooser(*render_frame_host_, std::move(options),
                                       std::move(callback));
+  if (!weak_this) {
+    return;
+  }
+  usb_chooser_ = std::move(chooser);
 }
 
 void WebUsbServiceImpl::ForgetDevice(const std::string& guid,
@@ -360,9 +395,9 @@ void WebUsbServiceImpl::ForgetDevice(const std::string& guid,
 void WebUsbServiceImpl::SetClient(
     mojo::PendingAssociatedRemote<device::mojom::UsbDeviceManagerClient>
         client) {
-  DCHECK(client);
+  CHECK(client, base::NotFatalUntil::M158);
   clients_.Add(std::move(client));
-#if !BUILDFLAG(IS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID)
   if (service_worker_version_ && service_worker_version_->context()) {
     // WebUsbService is expected to have only one DeviceManagerClient when it is
     // for a service worker. One renderer side of a service worker has its own
@@ -380,7 +415,7 @@ void WebUsbServiceImpl::SetClient(
         ->usb_delegate_observer()
         ->ProcessPendingCallbacks(service_worker_version_.get());
   }
-#endif  // !BUILDFLAG(IS_ANDROID)
+#endif  // !BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID)
 }
 
 void WebUsbServiceImpl::OnPermissionRevoked(const url::Origin& origin) {
@@ -434,7 +469,7 @@ void WebUsbServiceImpl::OnDeviceManagerConnectionError() {
 
 // device::mojom::UsbDeviceClient implementation:
 void WebUsbServiceImpl::IncrementConnectionCount() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M158);
 
   auto* delegate = GetContentClient()->browser()->GetUsbDelegate();
   if (delegate) {
@@ -457,14 +492,14 @@ void WebUsbServiceImpl::IncrementConnectionCount() {
 }
 
 void WebUsbServiceImpl::DecrementConnectionCount() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M158);
 
   auto* delegate = GetContentClient()->browser()->GetUsbDelegate();
   if (delegate) {
     delegate->DecrementConnectionCount(GetBrowserContext(), origin_);
   }
 
-  DCHECK_GT(connection_count_, 0);
+  CHECK_GT(connection_count_, 0, base::NotFatalUntil::M158);
   if (--connection_count_ == 0) {
     if (render_frame_host_) {
       auto* web_contents = static_cast<WebContentsImpl*>(

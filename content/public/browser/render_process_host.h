@@ -38,6 +38,7 @@
 #include "services/network/public/mojom/network_context.mojom-forward.h"
 #include "services/network/public/mojom/restricted_cookie_manager.mojom-forward.h"
 #include "services/network/public/mojom/url_loader_factory.mojom-forward.h"
+#include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/mojom/background_sync/background_sync.mojom.h"
 #include "third_party/blink/public/mojom/buckets/bucket_manager_host.mojom-forward.h"
 #include "third_party/blink/public/mojom/cache_storage/cache_storage.mojom-forward.h"
@@ -229,17 +230,33 @@ class CONTENT_EXPORT RenderProcessHost : public IPC::Listener,
   // rendering and may be backgrounded unnecessarily without this call.
   virtual void OnImmersiveXrSessionStarted() = 0;
   virtual void OnImmersiveXrSessionStopped() = 0;
+  virtual bool HasImmersiveXrSessionForTesting() const = 0;
 
-#if !BUILDFLAG(IS_ANDROID)
-  // Returns true if the process is for an initial WebUI.
-  virtual bool IsForInitialWebUI() const = 0;
-#endif  // !BUILDFLAG(IS_ANDROID)
+  // Returns true if the process is hosting a Top Chrome WebUI, e.g., Tab
+  // Search, Side Panel, Initial WebUI. High-privilege WebUIs that share
+  // processes use this to ensure they don't share with non-Top Chrome WebUIs.
+  //
+  // This function is defined on all platforms, but is expected to always return
+  // false on platforms that do not support Top Chrome WebUIs, e.g., Android.
+  virtual bool IsForTopChromeWebUI() const = 0;
+
+  // Returns true if the GPU channel should be established early for this
+  // process during process initialization. This is for internal use only, and
+  // is only exposed here to support MockRenderProcessHost usage in tests.
+  virtual bool ShouldSendGpuChannelEarly() const = 0;
 
   // Indicates whether the current RenderProcessHost is exclusively hosting
   // guest RenderFrames. Not all guest RenderFrames are created equal.  A guest,
   // as indicated by BrowserPluginGuest::IsGuest, may coexist with other
   // non-guest RenderFrames in the same process if IsForGuestsOnly() is false.
   virtual bool IsForGuestsOnly() = 0;
+
+  // Indicates whether the current RenderProcessHost hosts privileged content
+  // (a WebContents created with PrivilegedParams). Privileged content always
+  // requires a dedicated process, so a process either hosts only privileged
+  // content or none. This is set when the process is created, before the
+  // process lock is applied, so it is reliable during process setup.
+  virtual bool IsPrivileged() = 0;
 
   // Indicates whether the current RenderProcessHost is running with JavaScript
   // JIT disabled.
@@ -279,6 +296,11 @@ class CONTENT_EXPORT RenderProcessHost : public IPC::Listener,
   // non-zero |page_count| value is provided, then a fast shutdown will only
   // happen if the count matches the active view count. Returns true if it was
   // able to do fast shutdown.
+  // If `use_outermost_main_frame_check` is true `page_count` will check
+  // resident counts of outermost main frames, instead of resident
+  // RenderWidgetHosts.
+  // TODO(crbug.com/463513005): Make this behavior default and remove
+  // `page_count`.
   // If |skip_unload_handlers| is false and this renderer has any RenderViews
   // with unload handlers, then this function does nothing. Otherwise, the
   // function will ignore checking for those handlers.
@@ -292,11 +314,13 @@ class CONTENT_EXPORT RenderProcessHost : public IPC::Listener,
   // If |ignore_pending_reuse| is false and this renderer has any pending reuse
   // ref counts, then this function does nothing. Otherwise, the function will
   // ignore checking for pending reuse references.
-  virtual bool FastShutdownIfPossible(size_t page_count = 0,
-                                      bool skip_unload_handlers = false,
-                                      bool ignore_workers = false,
-                                      bool ignore_keep_alive = false,
-                                      bool ignore_pending_reuse = false) = 0;
+  virtual bool FastShutdownIfPossible(
+      size_t page_count = 0,
+      bool skip_unload_handlers = false,
+      bool ignore_workers = false,
+      bool ignore_keep_alive = false,
+      bool ignore_pending_reuse = false,
+      bool use_outermost_main_frame_check = false) = 0;
 
   // Returns true if fast shutdown was started for the renderer.
   virtual bool FastShutdownStarted() = 0;
@@ -390,14 +414,13 @@ class CONTENT_EXPORT RenderProcessHost : public IPC::Listener,
   virtual void RemovePriorityClient(
       RenderProcessHostPriorityClient* priority_client) = 0;
 
-#if !BUILDFLAG(IS_ANDROID)
-  // Sets a process priority override. This overrides the entire built-in
-  // priority setting mechanism for the process.
-  // TODO(pmonette): Make this work well on Android.
+  // Sets a process priority override. On Desktop platforms, this overrides the
+  // entire built-in priority setting mechanism for the process. On Android,
+  // this boost the effective importance of the process.
+  // TODO(b/400850388): Make this work well on Android.
   virtual void SetPriorityOverride(base::Process::Priority priority) = 0;
   virtual bool HasPriorityOverride() = 0;
   virtual void ClearPriorityOverride() = 0;
-#endif
 
 #if BUILDFLAG(IS_ANDROID)
   // Sets whether to consider the process as a spare renderer when
@@ -416,6 +439,7 @@ class CONTENT_EXPORT RenderProcessHost : public IPC::Listener,
   virtual bool ShouldThrottleNavigationForSpareRendererGraduation() = 0;
 
   // Return the highest importance of all widgets in this process.
+  // It might be boosted by the priority override.
   virtual ChildProcessImportance GetEffectiveImportance() = 0;
 
   // Return the highest binding this process has.
@@ -500,6 +524,9 @@ class CONTENT_EXPORT RenderProcessHost : public IPC::Listener,
 
   // Returns the priority of this process.
   virtual base::Process::Priority GetPriority() const = 0;
+
+  // Returns the time when this process was launched.
+  virtual base::TimeTicks GetProcessLaunchedTime() const = 0;
 
   // Returns a list of durations for active KeepAlive requests.
   // For debugging only. TODO(wjmaclean): Remove once the causes behind
@@ -756,8 +783,24 @@ class CONTENT_EXPORT RenderProcessHost : public IPC::Listener,
   // be posted back on the UI thread).
   void PostTaskWhenProcessIsReady(base::OnceClosure task);
 
-  // Forces the renderer process to crash ASAP.
-  virtual void ForceCrash() {}
+  // Tells the renderer process that it is hung and should crash itself.
+  virtual void CrashHungProcess() {}
+
+  // Note: The following two methods are exposed here rather than kept
+  // internal to RenderProcessHostImpl so that callers like
+  // RenderFrameHostImpl::MaybeGenerateCrashReport() can inspect unresponsive
+  // state without unsafe downcasts, ensuring compatibility with test
+  // environments where GetProcess() returns a MockRenderProcessHost.
+
+  // Returns the JavaScript call stack captured while the renderer process was
+  // unresponsive, if any.
+  virtual const std::string& GetUnresponsiveDocumentJavascriptCallStack()
+      const = 0;
+
+  // Returns the frame token of the document that was unresponsive when the
+  // JavaScript call stack was captured.
+  virtual const blink::LocalFrameToken& GetUnresponsiveDocumentToken()
+      const = 0;
 
   // Returns a string that contains information useful for debugging
   // crashes related to RenderProcessHost objects staying alive longer than

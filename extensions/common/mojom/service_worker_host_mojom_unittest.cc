@@ -28,7 +28,7 @@ class TestEventDispatcherImpl : public mojom::EventDispatcher {
 
   // mojom::EventDispatcher overrides:
   void DispatchEvent(mojom::DispatchEventParamsPtr params,
-                     base::ListValue event_args,
+                     const scoped_refptr<const EventArgs>& event_args,
                      DispatchEventCallback callback) override {}
 
   mojo::AssociatedReceiver<mojom::EventDispatcher>& receiver() {
@@ -52,6 +52,7 @@ class TestServiceWorkerHostImpl : public mojom::ServiceWorkerHost {
   // mojom::ServiceWorkerHost:
   void DidInitializeServiceWorkerContext(
       const ExtensionId& extension_id,
+      const base::UnguessableToken& activation_token,
       int64_t service_worker_version_id,
       int worker_thread_id,
       const blink::ServiceWorkerToken& service_worker_token,
@@ -62,13 +63,15 @@ class TestServiceWorkerHostImpl : public mojom::ServiceWorkerHost {
       const base::UnguessableToken& activation_token,
       const GURL& service_worker_scope,
       int64_t service_worker_version_id,
-      int worker_thread_id) override {}
+      int worker_thread_id,
+      const blink::ServiceWorkerToken& service_worker_token) override {}
   void DidStopServiceWorkerContext(
       const ExtensionId& extension_id,
       const base::UnguessableToken& activation_token,
       const GURL& service_worker_scope,
       int64_t service_worker_version_id,
-      int worker_thread_id) override {}
+      int worker_thread_id,
+      const blink::ServiceWorkerToken& service_worker_token) override {}
   void RequestWorker(mojom::RequestParamsPtr params,
                      RequestWorkerCallback callback) override {}
   void WorkerResponseAck(const base::Uuid& request_uuid) override {}
@@ -82,10 +85,14 @@ class TestServiceWorkerHostImpl : public mojom::ServiceWorkerHost {
       override {}
   void OpenChannelToNativeApp(
       const std::string& native_app_name,
+#if BUILDFLAG(IS_ANDROID)
+      const std::vector<std::vector<uint8_t>>& android_certificates,
+#endif
       const PortId& port_id,
       mojo::PendingAssociatedRemote<mojom::MessagePort> port,
       mojo::PendingAssociatedReceiver<mojom::MessagePortHost> port_host)
-      override {}
+      override {
+  }
   void OpenChannelToTab(int32_t tab_id,
                         int32_t frame_id,
                         const std::optional<std::string>& document_id,
@@ -110,13 +117,14 @@ class ServiceWorkerHostMojomExtensionIdTest : public testing::Test {
 
   void DidInitializeServiceWorkerContext(
       const ExtensionId& extension_id,
+      const base::UnguessableToken& activation_token,
       int64_t service_worker_version_id,
       int worker_thread_id,
       const blink::ServiceWorkerToken& service_worker_token,
       mojo::PendingAssociatedRemote<mojom::EventDispatcher> event_dispatcher) {
     service_worker_host_remote_->DidInitializeServiceWorkerContext(
-        extension_id, service_worker_version_id, worker_thread_id,
-        service_worker_token, std::move(event_dispatcher));
+        extension_id, activation_token, service_worker_version_id,
+        worker_thread_id, service_worker_token, std::move(event_dispatcher));
     service_worker_host_remote_.FlushForTesting();
   }
 
@@ -125,10 +133,11 @@ class ServiceWorkerHostMojomExtensionIdTest : public testing::Test {
       const base::UnguessableToken& activation_token,
       const GURL& service_worker_scope,
       int64_t service_worker_version_id,
-      int worker_thread_id) {
+      int worker_thread_id,
+      const blink::ServiceWorkerToken& service_worker_token) {
     service_worker_host_remote_->DidStartServiceWorkerContext(
         extension_id, activation_token, service_worker_scope,
-        service_worker_version_id, worker_thread_id);
+        service_worker_version_id, worker_thread_id, service_worker_token);
     service_worker_host_remote_.FlushForTesting();
   }
 
@@ -137,10 +146,11 @@ class ServiceWorkerHostMojomExtensionIdTest : public testing::Test {
       const base::UnguessableToken& activation_token,
       const GURL& service_worker_scope,
       int64_t service_worker_version_id,
-      int worker_thread_id) {
+      int worker_thread_id,
+      const blink::ServiceWorkerToken& service_worker_token) {
     service_worker_host_remote_->DidStopServiceWorkerContext(
         extension_id, activation_token, service_worker_scope,
-        service_worker_version_id, worker_thread_id);
+        service_worker_version_id, worker_thread_id, service_worker_token);
     service_worker_host_remote_.FlushForTesting();
   }
 
@@ -174,7 +184,9 @@ TEST_F(ServiceWorkerHostMojomExtensionIdTest, ValidExtensionId) {
   ExtensionId valid_extension_id(32, 'a');
 
   DidInitializeServiceWorkerContext(
-      valid_extension_id, /*service_worker_version_id=*/0,
+      valid_extension_id,
+      /*activation_token=*/base::UnguessableToken::Create(),
+      /*service_worker_version_id=*/0,
       /*worker_thread_id=*/0,
       /*service_worker_token=*/blink::ServiceWorkerToken(),
       test_event_dispatcher_impl()->receiver().BindNewEndpointAndPassRemote());
@@ -186,7 +198,8 @@ TEST_F(ServiceWorkerHostMojomExtensionIdTest, ValidExtensionId) {
       /*activation_token=*/base::UnguessableToken::Create(),
       /*service_worker_scope=*/GURL("test_scope"),
       /*service_worker_version_id=*/0,
-      /*worker_thread_id=*/0);
+      /*worker_thread_id=*/0,
+      /*service_worker_token=*/blink::ServiceWorkerToken());
   EXPECT_TRUE(PipeConnected());
 
   ASSERT_TRUE(PipeConnected());
@@ -195,7 +208,8 @@ TEST_F(ServiceWorkerHostMojomExtensionIdTest, ValidExtensionId) {
       /*activation_token=*/base::UnguessableToken::Create(),
       /*service_worker_scope=*/GURL("test_scope"),
       /*service_worker_version_id=*/0,
-      /*worker_thread_id=*/0);
+      /*worker_thread_id=*/0,
+      /*service_worker_token=*/blink::ServiceWorkerToken());
   EXPECT_TRUE(PipeConnected());
 }
 
@@ -206,7 +220,9 @@ TEST_F(ServiceWorkerHostMojomExtensionIdTest, InvalidExtensionId) {
   ExtensionId invalid_extension_id = "invalid_id";
 
   DidInitializeServiceWorkerContext(
-      invalid_extension_id, /*service_worker_version_id=*/0,
+      invalid_extension_id,
+      /*activation_token=*/base::UnguessableToken::Create(),
+      /*service_worker_version_id=*/0,
       /*worker_thread_id=*/0,
       /*service_worker_token=*/blink::ServiceWorkerToken(),
       test_event_dispatcher_impl()->receiver().BindNewEndpointAndPassRemote());
@@ -219,7 +235,8 @@ TEST_F(ServiceWorkerHostMojomExtensionIdTest, InvalidExtensionId) {
       /*activation_token=*/base::UnguessableToken::Create(),
       /*service_worker_scope=*/GURL("test_scope"),
       /*service_worker_version_id=*/0,
-      /*worker_thread_id=*/0);
+      /*worker_thread_id=*/0,
+      /*service_worker_token=*/blink::ServiceWorkerToken());
   EXPECT_FALSE(PipeConnected());
   RebindServiceWorkerHost();
 
@@ -229,7 +246,8 @@ TEST_F(ServiceWorkerHostMojomExtensionIdTest, InvalidExtensionId) {
       /*activation_token=*/base::UnguessableToken::Create(),
       /*service_worker_scope=*/GURL("test_scope"),
       /*service_worker_version_id=*/0,
-      /*worker_thread_id=*/0);
+      /*worker_thread_id=*/0,
+      /*service_worker_token=*/blink::ServiceWorkerToken());
   EXPECT_FALSE(PipeConnected());
 }
 

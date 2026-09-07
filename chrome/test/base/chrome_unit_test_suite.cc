@@ -35,6 +35,7 @@
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/resource/resource_handle.h"
 #include "ui/base/ui_base_paths.h"
+#include "ui/gfx/font_util.h"
 #include "ui/gl/test/gl_surface_test_support.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -156,6 +157,8 @@ void ChromeUnitTestSuite::Initialize() {
 
   ChromeTestSuite::Initialize();
 
+  gfx::InitializeFonts();
+
   // This needs to run after ChromeTestSuite::Initialize which calls content's
   // intialization which calls base's which initializes ICU.
   InitializeResourceBundle();
@@ -181,7 +184,6 @@ void ChromeUnitTestSuite::InitializeProviders() {
   content::RegisterPathProvider();
   ui::RegisterPathProvider();
   component_updater::RegisterPathProvider(chrome::DIR_COMPONENTS,
-                                          chrome::DIR_INTERNAL_PLUGINS,
                                           chrome::DIR_USER_DATA);
 
 #if BUILDFLAG(IS_CHROMEOS)

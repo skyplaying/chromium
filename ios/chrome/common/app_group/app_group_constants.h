@@ -45,6 +45,13 @@ extern NSString* const kChromeCapabilitiesPreference;
 // Show default browser promo capability.
 extern NSString* const kChromeShowDefaultBrowserPromoCapability;
 
+// Capability declaring whether the current version of Chrome supports AI
+// summarization.
+extern NSString* const kChromeSupportsAISummarizationCapability;
+
+// Capability declaring whether the active user is eligible for Gemini.
+extern NSString* const kChromeUserIsEligibleForGeminiCapability;
+
 // Capability declaring a list of supported bundle IDs that can open incognito
 // links in chrome.
 extern NSString* const kChromeSupportOpenLinksParametersFromCapability;
@@ -173,12 +180,6 @@ extern NSString* const kOpenCommandSourceShareExtension;
 extern NSString* const kOpenCommandSourceCredentialsExtension;
 extern NSString* const kOpenCommandSourceOpenExtension;
 
-// The value of the key for the sharedDefaults used by the Shortcuts Widget.
-extern NSString* const kSuggestedItems;
-// The value of the key for the sharedDefaults last modification date used by
-// the Shortcuts Widget.
-extern NSString* const kSuggestedItemsLastModificationDate;
-
 // NSUserDefaults key containing a dictionary with most visited sites data for a
 // given gaiaID. Used by the Shortcuts Widget.
 extern NSString* const kSuggestedItemsForMultiprofile;
@@ -210,8 +211,10 @@ extern NSString* const kOpenExtensionOutcomes;
 // Name of NSUserDefault key containing info about registered profiles to be
 // passed to widgets.
 extern NSString* const kAccountsOnDevice;
-// Names of keys in dictionary saved in kAccountsOnDevice.
+// Names of keys in dictionary saved in kAccountsOnDevice for the email.
 extern NSString* const kEmail;
+// Names of keys in dictionary saved in kAccountsOnDevice for the name or an
+// empty string.
 extern NSString* const kFullName;
 // Key used to save info for widgets when no account is signed-in.
 extern NSString* const kNoAccount;

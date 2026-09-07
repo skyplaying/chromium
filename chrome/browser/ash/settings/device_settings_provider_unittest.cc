@@ -18,6 +18,7 @@
 #include "chrome/browser/ash/ownership/owner_key_loader.h"
 #include "chrome/browser/ash/policy/core/device_local_account.h"
 #include "chrome/browser/ash/settings/device_settings_test_helper.h"
+#include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
@@ -307,13 +308,6 @@ class DeviceSettingsProviderTest : public DeviceSettingsTestBase {
     BuildAndInstallDevicePolicy();
   }
 
-  void SetPluginVmAllowedSetting(bool plugin_vm_allowed) {
-    em::PluginVmAllowedProto* proto =
-        device_policy_->payload().mutable_plugin_vm_allowed();
-    proto->set_plugin_vm_allowed(plugin_vm_allowed);
-    BuildAndInstallDevicePolicy();
-  }
-
   void SetDeviceRebootOnUserSignout(
       em::DeviceRebootOnUserSignoutProto::RebootOnSignoutMode value) {
     EXPECT_CALL(*this, SettingChanged(_)).Times(AtLeast(1));
@@ -517,7 +511,7 @@ TEST_F(DeviceSettingsProviderTest, InitializationTestUnowned) {
 
 TEST_F(DeviceSettingsProviderTestEnterprise, NoPolicyDefaultsOn) {
   // Missing policy should default to reporting enabled for enterprise-enrolled
-  // devices, see crbug/456186.
+  // devices, see crbug.com/41156165.
   SetMetricsReportingSettings(kRemoveMetricsPolicy);
   const base::Value* saved_value = provider_->Get(kStatsReportingPref);
   ASSERT_TRUE(saved_value);
@@ -527,7 +521,7 @@ TEST_F(DeviceSettingsProviderTestEnterprise, NoPolicyDefaultsOn) {
 
 TEST_F(DeviceSettingsProviderTest, NoPolicyDefaultsOff) {
   // Missing policy should default to reporting enabled for non-enterprise-
-  // enrolled devices, see crbug/456186.
+  // enrolled devices, see crbug.com/41156165.
   SetMetricsReportingSettings(kRemoveMetricsPolicy);
   const base::Value* saved_value = provider_->Get(kStatsReportingPref);
   ASSERT_TRUE(saved_value);
@@ -802,13 +796,40 @@ TEST_F(DeviceSettingsProviderTest, DecodeDeviceState) {
       .mutable_device_state()
       ->mutable_disabled_state()
       ->set_message(kDisabledMessage);
+  device_policy_->policy_data()
+      .mutable_device_state()
+      ->mutable_disabled_state()
+      ->set_location_tracking_enabled(true);
   BuildAndInstallDevicePolicy();
 
   // Verify that the device state has been decoded correctly.
-  EXPECT_TRUE(provider_->Get(kDeviceDisabled));
+  const base::Value* value = provider_->Get(kDeviceDisabled);
+  ASSERT_TRUE(value);
+  EXPECT_TRUE(value->GetBool());
   const base::Value expected_disabled_message_value(kDisabledMessage);
   EXPECT_EQ(expected_disabled_message_value,
             *provider_->Get(kDeviceDisabledMessage));
+  value = provider_->Get(kDeviceDisabledLocationTrackingEnabled);
+  ASSERT_TRUE(value);
+  EXPECT_TRUE(value->GetBool());
+
+  // Verify that location tracking can be disabled.
+  device_policy_->policy_data()
+      .mutable_device_state()
+      ->mutable_disabled_state()
+      ->set_location_tracking_enabled(false);
+  BuildAndInstallDevicePolicy();
+  value = provider_->Get(kDeviceDisabledLocationTrackingEnabled);
+  ASSERT_TRUE(value);
+  EXPECT_FALSE(value->GetBool());
+
+  // Verify that clearing the field works.
+  device_policy_->policy_data()
+      .mutable_device_state()
+      ->mutable_disabled_state()
+      ->clear_location_tracking_enabled();
+  BuildAndInstallDevicePolicy();
+  EXPECT_FALSE(provider_->Get(kDeviceDisabledLocationTrackingEnabled));
 
   // Verify that a change to the device state triggers a notification.
   device_policy_->policy_data().mutable_device_state()->clear_device_mode();
@@ -816,6 +837,7 @@ TEST_F(DeviceSettingsProviderTest, DecodeDeviceState) {
 
   // Verify that the updated state has been decoded correctly.
   EXPECT_FALSE(provider_->Get(kDeviceDisabled));
+  EXPECT_FALSE(provider_->Get(kDeviceDisabledLocationTrackingEnabled));
 }
 
 TEST_F(DeviceSettingsProviderTest, DecodeReportingSettings) {
@@ -978,14 +1000,6 @@ TEST_F(DeviceSettingsProviderTest, DeviceScheduledUpdateCheckTests) {
   base::Value expected_value(std::move(expected_dict));
   SetDeviceScheduledUpdateCheck(json_string);
   VerifyPolicyValue(kDeviceScheduledUpdateCheck, &expected_value);
-}
-
-TEST_F(DeviceSettingsProviderTest, DecodePluginVmAllowedSetting) {
-  SetPluginVmAllowedSetting(true);
-  EXPECT_EQ(base::Value(true), *provider_->Get(kPluginVmAllowed));
-
-  SetPluginVmAllowedSetting(false);
-  EXPECT_EQ(base::Value(false), *provider_->Get(kPluginVmAllowed));
 }
 
 TEST_F(DeviceSettingsProviderTest, DeviceRebootAfterUserSignout) {

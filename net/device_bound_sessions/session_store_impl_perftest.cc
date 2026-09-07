@@ -21,6 +21,7 @@
 #include "components/unexportable_keys/unexportable_key_service_impl.h"
 #include "components/unexportable_keys/unexportable_key_task_manager.h"
 #include "crypto/scoped_fake_unexportable_key_provider.h"
+#include "crypto/sign.h"
 #include "crypto/unexportable_key.h"
 #include "net/base/schemeful_site.h"
 #include "net/base/test_completion_callback.h"
@@ -42,8 +43,8 @@ static constexpr char kMetricOperationDurationMs[] = "operation_duration";
 static const int kNumSites = 200;
 static const int kSessionsPerSite = 5;
 
-constexpr crypto::SignatureVerifier::SignatureAlgorithm
-    kAcceptableAlgorithms[] = {crypto::SignatureVerifier::ECDSA_SHA256};
+constexpr crypto::sign::SignatureKind kAcceptableAlgorithms[] = {
+    crypto::sign::ECDSA_SHA256};
 constexpr unexportable_keys::BackgroundTaskPriority kTaskPriority =
     unexportable_keys::BackgroundTaskPriority::kUserBlocking;
 constexpr unexportable_keys::BackgroundTaskOrigin kTaskOrigin =
@@ -83,13 +84,14 @@ class DBSCSessionStorePerfTest : public testing::Test {
     return loaded_sessions;
   }
 
-  unexportable_keys::UnexportableKeyId GenerateNewKey() {
-    base::test::TestFuture<
-        unexportable_keys::ServiceErrorOr<unexportable_keys::UnexportableKeyId>>
+  unexportable_keys::UnexportableSigningKeyId GenerateNewSigningKey() {
+    base::test::TestFuture<unexportable_keys::ServiceErrorOr<
+        unexportable_keys::UnexportableSigningKeyId>>
         generate_future;
     key_service_.GenerateSigningKeySlowlyAsync(
         kAcceptableAlgorithms, kTaskPriority, generate_future.GetCallback());
-    unexportable_keys::ServiceErrorOr<unexportable_keys::UnexportableKeyId>
+    unexportable_keys::ServiceErrorOr<
+        unexportable_keys::UnexportableSigningKeyId>
         key_id = generate_future.Get();
     CHECK(key_id.has_value());
     return *key_id;
@@ -114,14 +116,15 @@ class DBSCSessionStorePerfTest : public testing::Test {
                          refresh_url,
                          std::move(scope),
                          std::move(cookie_credentials),
-                         GenerateNewKey(),
+                         GenerateNewSigningKey(),
                          /*allowed_refresh_initiators=*/{}};
     auto session_or_error = Session::CreateIfValid(params);
     ASSERT_TRUE(session_or_error.has_value());
     std::unique_ptr<Session> session = std::move(*session_or_error);
     ASSERT_TRUE(session);
 
-    store_->SaveSession(SchemefulSite(GURL(url_str)), *session);
+    store_->SaveSession(SchemefulSite(GURL(url_str)), *session,
+                        SessionStore::SaveSessionMode::kNewSession);
   }
 
   unsigned int NumSessionsInStore() { return store_->GetAllSessions().size(); }

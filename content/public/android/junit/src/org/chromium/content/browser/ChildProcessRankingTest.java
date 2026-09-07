@@ -9,14 +9,13 @@ import android.content.ComponentName;
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
-import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.ChildBindingState;
 import org.chromium.base.FeatureOverrides;
 import org.chromium.base.process_launcher.ChildProcessConnection;
 import org.chromium.base.process_launcher.TestChildProcessConnection;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.content.common.ContentInternalFeatures;
@@ -25,7 +24,6 @@ import org.chromium.content_public.browser.ContentFeatureList;
 
 /** Unit tests for ChildProessRanking */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class ChildProcessRankingTest {
     private TestChildProcessConnection createConnection() {
         TestChildProcessConnection connection =
@@ -41,7 +39,7 @@ public class ChildProcessRankingTest {
     private void assertRankingAndRemoveAll(
             ChildProcessRanking ranking, ChildProcessConnection[] connections) {
         int index = connections.length;
-        ChildProcessConnection reverseIterationArray[] =
+        ChildProcessConnection[] reverseIterationArray =
                 new ChildProcessConnection[connections.length];
         for (ChildProcessConnection c : ranking) {
             reverseIterationArray[--index] = c;
@@ -50,7 +48,7 @@ public class ChildProcessRankingTest {
         Assert.assertEquals(0, index);
 
         index = connections.length;
-        ChildProcessConnection reverseRemoveArray[] =
+        ChildProcessConnection[] reverseRemoveArray =
                 new ChildProcessConnection[connections.length];
         for (int i = 0; i < connections.length; ++i) {
             ChildProcessConnection c = ranking.getLowestRankedConnection();
@@ -198,7 +196,7 @@ public class ChildProcessRankingTest {
                 /* frameDepth= */ 0,
                 /* intersectsViewport= */ false,
                 /* isSpareRenderer= */ false,
-                ChildProcessImportance.PERCEPTIBLE);
+                ChildProcessImportance.NOT_PERCEPTIBLE);
         ranking.addConnection(
                 c3,
                 /* visible= */ true,
@@ -235,7 +233,7 @@ public class ChildProcessRankingTest {
                 /* frameDepth= */ 0,
                 /* intersectsViewport= */ false,
                 /* isSpareRenderer= */ false,
-                ChildProcessImportance.PERCEPTIBLE);
+                ChildProcessImportance.NOT_PERCEPTIBLE);
 
         assertRankingAndRemoveAll(
                 ranking, new ChildProcessConnection[] {c7, c6, c5, c4, c3, c2, c1});
@@ -476,7 +474,7 @@ public class ChildProcessRankingTest {
         assertInGroupOrderedByImportance(new ChildProcessConnection[] {c3, c2});
         Assert.assertFalse(c1.getAndResetRebindCalled());
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         Assert.assertTrue(c1.getAndResetRebindCalled());
     }
 
@@ -518,7 +516,7 @@ public class ChildProcessRankingTest {
                 /* isSpareRenderer= */ false,
                 ChildProcessImportance.NORMAL);
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         assertNotInGroup(new ChildProcessConnection[] {c1});
         assertInGroupOrderedByImportance(new ChildProcessConnection[] {c2, c3});
         c1.getAndResetRebindCalled();
@@ -532,7 +530,7 @@ public class ChildProcessRankingTest {
                 /* intersectsViewport= */ false,
                 /* isSpareRenderer= */ false,
                 /* importance= */ ChildProcessImportance.NORMAL);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         Assert.assertFalse(c1.getAndResetRebindCalled());
 
         // Adding c4 to low rank group should not cause rebind on high rank connections while there
@@ -547,7 +545,7 @@ public class ChildProcessRankingTest {
                 /* intersectsViewport= */ false,
                 /* isSpareRenderer= */ false,
                 ChildProcessImportance.NORMAL);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         Assert.assertFalse(c1.getAndResetRebindCalled());
 
         // When low rank connection is updated to high rank, it should not cause rebind on high rank
@@ -560,25 +558,25 @@ public class ChildProcessRankingTest {
                 /* intersectsViewport= */ true,
                 /* isSpareRenderer= */ false,
                 /* importance= */ ChildProcessImportance.MODERATE);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         Assert.assertFalse(c1.getAndResetRebindCalled());
 
         // Removal of low rank connection should not cause rebind on high rank connections while
         // there is no conflict.
         ranking.removeConnection(c3);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         Assert.assertFalse(c1.getAndResetRebindCalled());
 
         // Binding status change on low rank connection should not cause rebind on high rank
         // connections while there is no conflict.
         c4.removeNotPerceptibleBinding();
         ranking.onLowRankConnectionMayBeUpdated(c4);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         Assert.assertFalse(c1.getAndResetRebindCalled());
 
         // When the app goes to background, it causes rebind on high rank connections.
         ranking.onSentToBackground();
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         Assert.assertTrue(c1.getAndResetRebindCalled());
 
         // Adding a new low rank connection causes rebind on high rank connections while the app is
@@ -593,7 +591,7 @@ public class ChildProcessRankingTest {
                 /* intersectsViewport= */ false,
                 /* isSpareRenderer= */ false,
                 ChildProcessImportance.NORMAL);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         Assert.assertTrue(c1.getAndResetRebindCalled());
 
         // If a change does not change the ranking order between low rank connections,
@@ -607,7 +605,7 @@ public class ChildProcessRankingTest {
                 /* intersectsViewport= */ false,
                 /* isSpareRenderer= */ false,
                 /* importance= */ ChildProcessImportance.NORMAL);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         Assert.assertFalse(c1.getAndResetRebindCalled());
         Assert.assertFalse(c4.getAndResetRebindCalled());
 
@@ -621,25 +619,25 @@ public class ChildProcessRankingTest {
                 /* intersectsViewport= */ false,
                 /* isSpareRenderer= */ false,
                 /* importance= */ ChildProcessImportance.NORMAL);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         Assert.assertTrue(c1.getAndResetRebindCalled());
         Assert.assertTrue(c5.getAndResetRebindCalled());
 
         // onLowRankConnectionMayBeUpdated() of low rank connection causes rebind on high rank
         // connections while the app is in background.
         ranking.onLowRankConnectionMayBeUpdated(c4);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         Assert.assertTrue(c1.getAndResetRebindCalled());
 
         // onLowRankConnectionMayBeUpdated() of high rank connection does not cause rebind on high
         // rank connections while the app is in background.
         ranking.onLowRankConnectionMayBeUpdated(c2);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         Assert.assertFalse(c1.getAndResetRebindCalled());
 
         // When the app is brought to foreground, it does not cause rebind on high rank connections.
         ranking.onBroughtToForeground();
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         Assert.assertFalse(c1.getAndResetRebindCalled());
 
         // Updates on low rank connection does not cause rebind on high rank connections anymore.
@@ -650,7 +648,7 @@ public class ChildProcessRankingTest {
                 /* intersectsViewport= */ false,
                 /* isSpareRenderer= */ false,
                 /* importance= */ ChildProcessImportance.NORMAL);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         Assert.assertFalse(c1.getAndResetRebindCalled());
     }
 
@@ -701,7 +699,7 @@ public class ChildProcessRankingTest {
                 /* isSpareRenderer= */ false,
                 ChildProcessImportance.NORMAL);
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         assertNotInGroup(new ChildProcessConnection[] {c1, c2});
         assertInGroupOrderedByImportance(new ChildProcessConnection[] {c3, c4});
         c1.getAndResetRebindCalled();
@@ -718,7 +716,7 @@ public class ChildProcessRankingTest {
                 /* intersectsViewport= */ false,
                 /* isSpareRenderer= */ false,
                 ChildProcessImportance.NORMAL);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         Assert.assertTrue(c1.getAndResetRebindCalled());
         Assert.assertTrue(c2.getAndResetRebindCalled());
 
@@ -732,7 +730,7 @@ public class ChildProcessRankingTest {
                 /* intersectsViewport= */ false,
                 /* isSpareRenderer= */ false,
                 ChildProcessImportance.NORMAL);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         Assert.assertTrue(c1.getAndResetRebindCalled());
         Assert.assertTrue(c2.getAndResetRebindCalled());
 
@@ -745,7 +743,7 @@ public class ChildProcessRankingTest {
                 /* intersectsViewport= */ true,
                 /* isSpareRenderer= */ false,
                 /* importance= */ ChildProcessImportance.MODERATE);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         Assert.assertFalse(c1.getAndResetRebindCalled());
         Assert.assertFalse(c2.getAndResetRebindCalled());
 
@@ -757,20 +755,20 @@ public class ChildProcessRankingTest {
                 /* intersectsViewport= */ false,
                 /* isSpareRenderer= */ false,
                 /* importance= */ ChildProcessImportance.NORMAL);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         Assert.assertTrue(c1.getAndResetRebindCalled());
         Assert.assertTrue(c2.getAndResetRebindCalled());
 
         // Removal of low rank connection should cause rebind on high rank connections.
         ranking.removeConnection(c4);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         Assert.assertTrue(c1.getAndResetRebindCalled());
         Assert.assertTrue(c2.getAndResetRebindCalled());
 
         // Binding status change on low rank connection should cause rebind on high rank
         // connections.
         ranking.onLowRankConnectionMayBeUpdated(c5);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         Assert.assertTrue(c1.getAndResetRebindCalled());
         Assert.assertTrue(c2.getAndResetRebindCalled());
 
@@ -779,13 +777,13 @@ public class ChildProcessRankingTest {
         c5.addVisibleBinding();
         c5.removeStrongBinding();
         ranking.onLowRankConnectionMayBeUpdated(c5);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         Assert.assertFalse(c1.getAndResetRebindCalled());
         Assert.assertTrue(c2.getAndResetRebindCalled());
 
         // low rank connection update causes rebind on conflicting high rank connections.
         ranking.onLowRankConnectionMayBeUpdated(c6);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         Assert.assertFalse(c1.getAndResetRebindCalled());
         Assert.assertTrue(c2.getAndResetRebindCalled());
     }
@@ -837,7 +835,7 @@ public class ChildProcessRankingTest {
                 /* isSpareRenderer= */ false,
                 ChildProcessImportance.NORMAL);
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         assertNotInGroup(new ChildProcessConnection[] {c1, c2});
         c1.getAndResetRebindCalled();
         c2.getAndResetRebindCalled();
@@ -845,13 +843,13 @@ public class ChildProcessRankingTest {
         // With immediate window focus lost, no rebind is called.
         ranking.onWindowFocusChanged(false);
         ranking.onWindowFocusChanged(true);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         Assert.assertFalse(c1.getAndResetRebindCalled());
         Assert.assertFalse(c2.getAndResetRebindCalled());
 
         // When the app is not focused, it causes rebind on high rank connections.
         ranking.onWindowFocusChanged(false);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         Assert.assertTrue(c1.getAndResetRebindCalled());
         Assert.assertTrue(c2.getAndResetRebindCalled());
 
@@ -863,7 +861,7 @@ public class ChildProcessRankingTest {
                 /* intersectsViewport= */ false,
                 /* isSpareRenderer= */ false,
                 /* importance= */ ChildProcessImportance.NORMAL);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         Assert.assertTrue(c1.getAndResetRebindCalled());
         Assert.assertTrue(c2.getAndResetRebindCalled());
 
@@ -877,7 +875,7 @@ public class ChildProcessRankingTest {
                 /* intersectsViewport= */ false,
                 /* isSpareRenderer= */ false,
                 /* importance= */ ChildProcessImportance.NORMAL);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         Assert.assertFalse(c1.getAndResetRebindCalled());
         Assert.assertFalse(c2.getAndResetRebindCalled());
     }

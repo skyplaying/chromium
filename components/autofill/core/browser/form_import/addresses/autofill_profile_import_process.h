@@ -9,10 +9,13 @@
 #include <string>
 #include <vector>
 
+#include "base/containers/flat_set.h"
 #include "base/containers/span.h"
-#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
+#include "base/types/optional_ref.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
+#include "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "url/origin.h"
 
@@ -76,6 +79,29 @@ enum class AutofillProfileImportType {
   kMaxValue = kHomeWorkNameEmailMerge
 };
 
+// LINT.IfChange(ProfileCountrySource)
+
+// Specifies the source of the country in the imported profile.
+enum class ProfileCountrySource {
+  // The submitted form contained a dedicated country field that contained a
+  // valid country which was used to set the profile country.
+  kExplicitlyObserved = 0,
+  // The profile country was inferred using variations services to get the
+  // latest reported country or, if not possible, using the app locale.
+  kDefaultCountryCodeForNewAddress = 1,
+  // The profile country was inferred from a phone number in international
+  // format in the submitted form.
+  kPhoneNumberRegionCode = 2,
+  // The profile has no country.
+  kNoCountry = 3,
+  // The profile country was set, but its exact origin cannot be determined.
+  kCountryMerged = 4,
+
+  kMaxValue = kCountryMerged,
+};
+
+// LINT.ThenChange(//tools/metrics/histograms/metadata/autofill/enums.xml:AutofillAddressProfileImportCountrySource)
+
 // Specifies the status of the imported phone number.
 enum class PhoneImportStatus {
   // Phone number is not present. Default.
@@ -100,8 +126,9 @@ struct ProfileImportMetadata {
 
   // Tracks if the form section contains an invalid country.
   bool observed_invalid_country = false;
-  // Whether the profile's country was complemented automatically.
-  bool did_complement_country = false;
+  // Source of the country in a profile.
+  ProfileCountrySource country_source =
+      ProfileCountrySource::kExplicitlyObserved;
   // Whether the form originally contained a phone number and if that phone
   // number is considered valid by libphonenumber.
   PhoneImportStatus phone_import_status = PhoneImportStatus::kNone;
@@ -115,6 +142,10 @@ struct ProfileImportMetadata {
   base::flat_set<std::string> unedited_autofilled_profile_guids;
   // Tracks if the submitted form contained non-empty split zip fields.
   bool observed_split_zip = false;
+  // The source of submission that triggered the current profile import. In the
+  // case of multi-step import, this would be the source of the last submission
+  // that occurred so far.
+  mojom::SubmissionSource submission_source = mojom::SubmissionSource::NONE;
 };
 
 // This class holds the state associated with the import of an AutofillProfile
@@ -293,13 +324,13 @@ class ProfileImportProcess {
   bool QualifiesForUpdateProfilePrompt(const ImportCandidate& candidate) const;
   bool QualifiesForMigrateProfilePrompt(const ImportCandidate& profile) const;
 
-  // Merges the `mergeable_profiles` with the `observed_profile_` and determines
-  // how the merged profile differs from the original one (see
+  // Merges `existing_profiles` with `observed_profile` and determines how
+  // the merged profile differs from the original one (see
   // `ImportCandidate::Change`). Constructs one `ImportCandidate` per
-  // `mergeable_profiles` and returns the result, preserving relative order.
-  // Assumes that mergeability has already been determined.
+  // mergeable profile and returns the result, preserving relative order.
   std::vector<ImportCandidate> GetImportCandidates(
-      base::span<const AutofillProfile*> mergeable_profiles) const;
+      base::span<const AutofillProfile* const> existing_profiles,
+      const AutofillProfile& observed_profile) const;
 
   // For new profile imports, sets the source of the `import_candidate_`
   // correctly, depending on the user's account storage eligiblity.
@@ -327,6 +358,10 @@ class ProfileImportProcess {
 
   // Records Home and Work superset metrics after the import was applied.
   void LogHomeAndWorkSupersetMetrics() const;
+
+  // Records details about silent profile updates.
+  void LogSilentUpdateMergeCategory(
+      const std::vector<const AutofillProfile*>& existing_profiles) const;
 
   // Indicates if the user is already prompted.
   bool prompt_shown_{false};

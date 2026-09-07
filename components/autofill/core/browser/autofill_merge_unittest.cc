@@ -25,12 +25,13 @@
 #include "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
 #include "components/autofill/core/browser/data_manager/addresses/address_data_manager_test_api.h"
 #include "components/autofill/core/browser/data_manager/test_personal_data_manager.h"
+#include "components/autofill/core/browser/form_import/addresses/address_form_data_importer_test_api.h"
 #include "components/autofill/core/browser/form_import/form_data_importer.h"
 #include "components/autofill/core/browser/form_import/form_data_importer_test_api.h"
 #include "components/autofill/core/browser/form_parsing/determine_regex_types.h"
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/foundations/test_autofill_client.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/form_data.h"
 #include "components/autofill/core/common/form_data_test_api.h"
@@ -252,7 +253,7 @@ void AutofillMergeTest::MergeProfiles(const std::string& profiles,
               .ExtractFormData(*form_structure,
                                /*profile_autofill_enabled=*/true,
                                /*payment_methods_autofill_enabled=*/true);
-      test_api(*form_data_importer_)
+      test_api(form_data_importer_->GetAddressFormDataImporter())
           .ProcessExtractedAddressProfiles(
               extracted_data.extracted_address_profiles,
               /*allow_prompt=*/true, ukm_source_id());

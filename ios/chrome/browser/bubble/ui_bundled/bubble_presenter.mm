@@ -19,6 +19,7 @@
 #import "components/omnibox/browser/omnibox_pref_names.h"
 #import "components/prefs/pref_service.h"
 #import "components/segmentation_platform/embedder/default_model/device_switcher_result_dispatcher.h"
+#import "components/strings/grit/components_strings.h"
 #import "ios/chrome/browser/bubble/model/utils.h"
 #import "ios/chrome/browser/bubble/ui_bundled/bubble_constants.h"
 #import "ios/chrome/browser/bubble/ui_bundled/bubble_presenter_delegate.h"
@@ -30,12 +31,15 @@
 #import "ios/chrome/browser/feature_engagement/model/tracker_factory.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/animated_scoped_fullscreen_disabler.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_controller.h"
-#import "ios/chrome/browser/intelligence/bwg/utils/bwg_constants.h"
+#import "ios/chrome/browser/fullscreen/ui_bundled/scoped_fullscreen_disabler.h"
+#import "ios/chrome/browser/intelligence/bwg/utils/gemini_constants.h"
+#import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/ntp/model/new_tab_page_tab_helper.h"
 #import "ios/chrome/browser/ntp/shared/metrics/feed_metrics_recorder.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_presenter.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_presenter_observer_bridge.h"
 #import "ios/chrome/browser/segmentation_platform/model/segmentation_platform_service_factory.h"
+#import "ios/chrome/browser/shared/coordinator/scene/state/scene_layout_state.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
@@ -43,8 +47,8 @@
 #import "ios/chrome/browser/shared/model/url/url_util.h"
 #import "ios/chrome/browser/shared/model/utils/first_run_util.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
-#import "ios/chrome/browser/shared/public/commands/bwg_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/gemini_commands.h"
 #import "ios/chrome/browser/shared/public/commands/page_action_menu_entry_point_commands.h"
 #import "ios/chrome/browser/shared/public/commands/popup_menu_commands.h"
 #import "ios/chrome/browser/shared/public/commands/tab_strip_commands.h"
@@ -81,10 +85,22 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
          view_fitting_size.height <= guide_size.height;
 }
 
+// Max leeway for the bubble arrow to move on its axis.
+constexpr CGFloat kMaxLeeway = 20;
+// Additional margin between the bubble and the border of the screen, used to
+// slightly move what the arrow is pointing to.
+constexpr CGFloat kAdditionalBorderMargin = 4;
+
 }  // namespace
 
 @interface BubblePresenter () <GestureInProductHelpViewDelegate,
                                OverlayPresenterObserving>
+
+// Returns whether the guide is in the bottom half of the root view.
+- (BOOL)isGuideAtBottom:(GuideName*)guideName;
+
+// Returns whether the guide is in the leading half of the root view.
+- (BOOL)isGuideAtLeading:(GuideName*)guideName;
 
 @end
 
@@ -93,6 +109,7 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
   LayoutGuideCenter* _layoutGuideCenter;
   raw_ptr<WebStateList> _webStateList;
   raw_ptr<feature_engagement::Tracker> _engagementTracker;
+  SceneLayoutState* _layoutState;
 
   // Overlay observing.
   raw_ptr<OverlayPresenter> _webContentOverlayPresenter;
@@ -106,7 +123,9 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
   // The fullscreen controller and disabler to block fullscreen momentarily for
   // some bubbles while they present.
   raw_ptr<FullscreenController> _fullscreenController;
-  std::unique_ptr<AnimatedScopedFullscreenDisabler> _animatedFullscreenDisabler;
+  std::unique_ptr<ScopedFullscreenDisabler> _fullscreenDisabler;
+  std::unique_ptr<AnimatedScopedFullscreenDisabler>
+      _legacyAnimatedFullscreenDisabler;
 
   // List of existing bubble view presenters.
   BubbleViewControllerPresenter* _bottomToolbarTipBubblePresenter;
@@ -129,6 +148,7 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
   BubbleViewControllerPresenter* _readerModeOptionsBubblePresenter;
   BubbleViewControllerPresenter* _geminiImageRemixBubblePresenter;
   BubbleViewControllerPresenter* _pinSiteToMostVisitedTilesBubblePresenter;
+  BubbleViewControllerPresenter* _sendTabToSelfOmniboxBubblePresenter;
 
   // List of existing gestural IPH views.
   GestureInProductHelpView* _pullToRefreshGestureIPH;
@@ -143,6 +163,7 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
                      webStateList:(raw_ptr<WebStateList>)webStateList
              fullscreenController:
                  (raw_ptr<FullscreenController>)fullscreenController
+                      layoutState:(SceneLayoutState*)layoutState
     overlayPresenterForWebContent:
         (raw_ptr<OverlayPresenter>)webContentOverlayPresenter
                     infobarBanner:(raw_ptr<OverlayPresenter>)bannerPresenter
@@ -155,6 +176,7 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
     _engagementTracker = engagementTracker;
     _webStateList = webStateList;
     _fullscreenController = fullscreenController;
+    _layoutState = layoutState;
 
     _overlayPresenterObserver =
         std::make_unique<OverlayPresenterObserverBridge>(self);
@@ -187,6 +209,7 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
   [self disconnectOverlayPresenters];
   _webStateList = nullptr;
   _engagementTracker = nullptr;
+  self.geminiHandler = nil;
 }
 
 - (void)hideAllHelpBubbles {
@@ -199,17 +222,18 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
   [_whatsNewBubblePresenter dismissAnimated:NO];
   [_lensKeyboardPresenter dismissAnimated:NO];
   [_defaultPageModeTipBubblePresenter dismissAnimated:NO];
-  [_lensOverlayEntrypointBubblePresenter dismissAnimated:NO];
   [_pageActionMenuBubblePresenter dismissAnimated:NO];
   [_readerModeOptionsBubblePresenter dismissAnimated:NO];
   [_geminiImageRemixBubblePresenter dismissAnimated:NO];
   [_pinSiteToMostVisitedTilesBubblePresenter dismissAnimated:NO];
+  [self hideBubblesPointingToOmnibox];
   [self hideAllGestureInProductHelpViewsForReason:IPHDismissalReasonType::
                                                       kUnknown];
 }
 
 - (void)hideBubblesPointingToOmnibox {
   [_lensOverlayEntrypointBubblePresenter dismissAnimated:NO];
+  [_sendTabToSelfOmniboxBubblePresenter dismissAnimated:NO];
 }
 
 - (void)handleTapOutsideOfVisibleGestureInProductHelp {
@@ -345,9 +369,16 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
     return;
   }
 
-  BubbleArrowDirection arrowDirection =
-      IsSplitToolbarMode(self.rootViewController) ? BubbleArrowDirectionDown
-                                                  : BubbleArrowDirectionUp;
+  BubbleArrowDirection arrowDirection;
+  if (IsChromeNextIaEnabled()) {
+    arrowDirection = [self isBottomOmnibox] ? BubbleArrowDirectionDown
+                                            : BubbleArrowDirectionUp;
+
+  } else {
+    arrowDirection = IsSplitToolbarMode(self.rootViewController)
+                         ? BubbleArrowDirectionDown
+                         : BubbleArrowDirectionUp;
+  }
   NSString* text = l10n_util::GetNSString(IDS_IOS_DEFAULT_PAGE_MODE_TIP);
   CGPoint toolsMenuAnchor = [self anchorPointToGuide:kToolsMenuGuide
                                            direction:arrowDirection];
@@ -375,9 +406,21 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
   if (![self canPresentBubble]) {
     return;
   }
-  BubbleArrowDirection arrowDirection =
-      IsSplitToolbarMode(self.rootViewController) ? BubbleArrowDirectionDown
-                                                  : BubbleArrowDirectionUp;
+  BubbleArrowDirection arrowDirection;
+  BubbleAlignment alignment;
+  if (IsChromeNextIaEnabled()) {
+    arrowDirection = [self isGuideAtBottom:kToolsMenuGuide]
+                         ? BubbleArrowDirectionDown
+                         : BubbleArrowDirectionUp;
+    alignment = [self isGuideAtLeading:kToolsMenuGuide]
+                    ? BubbleAlignmentTopOrLeading
+                    : BubbleAlignmentBottomOrTrailing;
+  } else {
+    arrowDirection = IsSplitToolbarMode(self.rootViewController)
+                         ? BubbleArrowDirectionDown
+                         : BubbleArrowDirectionUp;
+    alignment = BubbleAlignmentBottomOrTrailing;
+  }
   NSString* text = l10n_util::GetNSString(IDS_IOS_WHATS_NEW_IPH_TEXT);
   CGPoint toolsMenuAnchor = [self anchorPointToGuide:kToolsMenuGuide
                                            direction:arrowDirection];
@@ -388,7 +431,7 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
   BubbleViewControllerPresenter* presenter = [self
       presentBubbleForFeature:feature_engagement::kIPHWhatsNewFeature
                     direction:arrowDirection
-                    alignment:BubbleAlignmentBottomOrTrailing
+                    alignment:alignment
                          text:text
         voiceOverAnnouncement:l10n_util::GetNSString(IDS_IOS_WHATS_NEW_IPH_TEXT)
                   anchorPoint:toolsMenuAnchor];
@@ -451,7 +494,11 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
 }
 
 - (void)presentLensOverlayTipBubble {
-  if (![self canPresentBubble]) {
+  BOOL checkTabScrolledToTop = YES;
+  if (IsChromeNextIaEnabled() && ![self isBottomOmnibox]) {
+    checkTabScrolledToTop = NO;
+  }
+  if (![self canPresentBubbleWithCheckTabScrolledToTop:checkTabScrolledToTop]) {
     return;
   }
 
@@ -460,32 +507,25 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
     return;
   }
 
-  BOOL isBottomOmnibox = IsBottomOmniboxAvailable() &&
-                         GetApplicationContext()->GetLocalState()->GetBoolean(
-                             omnibox::kIsOmniboxInBottomPosition);
   BubbleArrowDirection arrowDirection =
-      isBottomOmnibox ? BubbleArrowDirectionDown : BubbleArrowDirectionUp;
+      [self isGuideAtBottom:kLensOverlayEntrypointGuide]
+          ? BubbleArrowDirectionDown
+          : BubbleArrowDirectionUp;
   NSString* text = l10n_util::GetNSString(IDS_IOS_LENS_OVERLAY_TOOLTIP_TEXT);
 
   CGPoint lensOverlayEntrypointAnchor =
       [self anchorPointToGuide:kLensOverlayEntrypointGuide
                      direction:arrowDirection];
-  // To prevent the bubble from extending beyond the screen's edge, an offset is
-  // added, with the anchor point positioned at the top left corner.
-  // TODO(crbug.com/365049480): Remove this offset once the bubble view margins
-  // are fixed.
-  CGFloat anchorXOffset = UseRTLLayout() ? -2 : 2;
 
-  BubbleViewControllerPresenter* presenter = [self
-      presentBubbleForFeature:feature_engagement::
-                                  kIPHiOSLensOverlayEntrypointTipFeature
-                    direction:arrowDirection
-                    alignment:BubbleAlignmentTopOrLeading
-                         text:text
-        voiceOverAnnouncement:text
-                  anchorPoint:CGPoint(
-                                  lensOverlayEntrypointAnchor.x + anchorXOffset,
-                                  lensOverlayEntrypointAnchor.y)];
+  BubbleViewControllerPresenter* presenter =
+      [self presentBubbleForFeature:feature_engagement::
+                                        kIPHiOSLensOverlayEntrypointTipFeature
+                          direction:arrowDirection
+                          alignment:BubbleAlignmentTopOrLeading
+                               text:text
+              voiceOverAnnouncement:text
+                        anchorPoint:CGPoint(lensOverlayEntrypointAnchor.x,
+                                            lensOverlayEntrypointAnchor.y)];
 
   if (presenter) {
     _lensOverlayEntrypointBubblePresenter = presenter;
@@ -508,9 +548,21 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
     return;
   }
 
-  BubbleArrowDirection arrowDirection =
-      IsSplitToolbarMode(self.rootViewController) ? BubbleArrowDirectionDown
-                                                  : BubbleArrowDirectionUp;
+  BubbleArrowDirection arrowDirection;
+  BubbleAlignment alignment;
+  if (IsChromeNextIaEnabled()) {
+    arrowDirection = [self isGuideAtBottom:kToolsMenuGuide]
+                         ? BubbleArrowDirectionDown
+                         : BubbleArrowDirectionUp;
+    alignment = [self isGuideAtLeading:kToolsMenuGuide]
+                    ? BubbleAlignmentTopOrLeading
+                    : BubbleAlignmentBottomOrTrailing;
+  } else {
+    arrowDirection = IsSplitToolbarMode(self.rootViewController)
+                         ? BubbleArrowDirectionDown
+                         : BubbleArrowDirectionUp;
+    alignment = BubbleAlignmentBottomOrTrailing;
+  }
   NSString* text =
       l10n_util::GetNSString(IDS_IOS_SETTINGS_IN_OVERFLOW_MENU_IPH_TEXT);
 
@@ -524,7 +576,7 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
       [self presentBubbleForFeature:
                 feature_engagement::kIPHiOSSettingsInOverflowMenuBubbleFeature
                           direction:arrowDirection
-                          alignment:BubbleAlignmentBottomOrTrailing
+                          alignment:alignment
                                text:text
               voiceOverAnnouncement:text
                         anchorPoint:toolsMenuAnchor];
@@ -603,7 +655,6 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
   if (UIAccessibilityIsVoiceOverRunning() ||
       (![self.delegate isOverscrollActionsSupportedForBubblePresenter:self]) ||
       (![self canPresentBubble])) {
-    // TODO(crbug.com/41494458): Add voice over announcement once fixed.
     return;
   }
   const base::Feature& pullToRefreshFeature =
@@ -631,7 +682,6 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
   }
   const base::Feature& backForwardSwipeFeature =
       feature_engagement::kIPHiOSSwipeBackForwardFeature;
-
   if (!_engagementTracker->WouldTriggerHelpUI(backForwardSwipeFeature)) {
     return;
   }
@@ -704,9 +754,8 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
   }
   UILayoutGuide* guide = [[UILayoutGuide alloc] init];
   [self.rootViewController.view addLayoutGuide:guide];
-  AddSameConstraintsToSides(
-      guide, contentAreaGuide,
-      LayoutSides::kLeading | LayoutSides::kTrailing | LayoutSides::kBottom);
+  AddSameConstraintsToSides(guide, contentAreaGuide,
+                            LayoutSides::kBottom | LayoutSides::kHorizontal);
   NSLayoutConstraint* topConstraintForBottomEdgeSwipe = [guide.topAnchor
       constraintEqualToAnchor:self.rootViewController.view.topAnchor];
   NSLayoutConstraint* topConstraintForTopEdgeSwipe =
@@ -736,7 +785,11 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
   toolbarSwipeGestureIPH.delegate = self;
   [self.rootViewController.view addSubview:toolbarSwipeGestureIPH];
   AddSameConstraints(toolbarSwipeGestureIPH, guide);
-
+  if (IsPageActionMenuEnabled()) {
+    [self.geminiHandler
+        hideFloatyIfInvokedAnimated:NO
+                         fromSource:gemini::FloatyUpdateSource::GestureIph];
+  }
   [toolbarSwipeGestureIPH startAnimation];
   _toolbarSwipeGestureIPH = toolbarSwipeGestureIPH;
 }
@@ -780,42 +833,67 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
   }
 }
 
-- (void)presentPageActionMenuBubble {
+- (void)presentPageActionMenuBubbleForFeature:(const base::Feature&)feature {
   if (![self canPresentBubbleWithCheckTabScrolledToTop:NO]) {
     return;
   }
 
-  web::WebState* currentWebState = _webStateList->GetActiveWebState();
-  if (currentWebState && IsUrlNtp(currentWebState->GetVisibleURL())) {
-    return;
+  BOOL nextIAEnabled = IsChromeNextIaEnabled();
+
+  GuideName* anchorGuide;
+  BubbleArrowDirection arrowDirection;
+  BubbleAlignment alignment = BubbleAlignmentTopOrLeading;
+
+  if (nextIAEnabled) {
+    // In Next IA, the Assistant button is located in the App Bar.
+    anchorGuide = kAppBarAssistantButtonGuide;
+    switch (_layoutState.appBarPosition) {
+      case AppBarPosition::kLeft:
+        // AppBar position is actual left/right, not leading/trailing, so RTL
+        // must be handled specially.
+        arrowDirection = UseRTLLayout() ? BubbleArrowDirectionTrailing
+                                        : BubbleArrowDirectionLeading;
+        break;
+      case AppBarPosition::kRight:
+        // AppBar position is actual left/right, not leading/trailing, so RTL
+        // must be handled specially.
+        arrowDirection = UseRTLLayout() ? BubbleArrowDirectionLeading
+                                        : BubbleArrowDirectionTrailing;
+        break;
+      case AppBarPosition::kBottom:
+        arrowDirection = BubbleArrowDirectionDown;
+        break;
+      case AppBarPosition::kNone:
+        // No App Bar position means the app is on iPad, where the Assistant
+        // Button is in the toolbar.
+        arrowDirection = BubbleArrowDirectionUp;
+        alignment = BubbleAlignmentBottomOrTrailing;
+        break;
+    }
+  } else {
+    anchorGuide = kPageActionMenuEntrypointGuide;
+    arrowDirection = [self isGuideAtBottom:anchorGuide]
+                         ? BubbleArrowDirectionDown
+                         : BubbleArrowDirectionUp;
   }
 
-  BOOL isBottomOmnibox = IsBottomOmniboxAvailable() &&
-                         GetApplicationContext()->GetLocalState()->GetBoolean(
-                             omnibox::kIsOmniboxInBottomPosition);
-  BubbleArrowDirection arrowDirection =
-      isBottomOmnibox ? BubbleArrowDirectionDown : BubbleArrowDirectionUp;
+  UIView* anchorView = [_layoutGuideCenter referencedViewUnderName:anchorGuide];
+  CGRect anchorFrameInWindow = [anchorView convertRect:anchorView.bounds
+                                                toView:nil];
+  CGPoint anchorPointInWindow =
+      bubble_util::AnchorPoint(anchorFrameInWindow, arrowDirection);
+
   NSString* text = l10n_util::GetNSString(IDS_IOS_BWG_IPH_TEXT);
-
-  CGPoint pageActionMenuEntrypointAnchor =
-      [self anchorPointToGuide:kPageActionMenuEntrypointGuide
-                     direction:arrowDirection];
-
-  // To prevent the bubble from extending beyond the screen's edge, an offset is
-  // added, with the anchor point positioned at the top left corner.
-  // TODO(crbug.com/365049480): Remove this offset once the bubble view margins
-  // are fixed.
-  CGFloat anchorXOffset = UseRTLLayout() ? -2 : 2;
 
   __weak __typeof(self) weakSelf = self;
   BubbleViewControllerPresenter* presenter = [self
-      presentBubbleForFeature:feature_engagement::kIPHIOSPageActionMenu
+      presentBubbleForFeature:feature
       direction:arrowDirection
-      alignment:BubbleAlignmentTopOrLeading
+      alignment:alignment
       text:text
       voiceOverAnnouncement:text
-      anchorPoint:CGPoint(pageActionMenuEntrypointAnchor.x + anchorXOffset,
-                          pageActionMenuEntrypointAnchor.y)
+      anchorPoint:anchorPointInWindow
+      anchorViewFrame:anchorFrameInWindow
       presentAction:^{
         [weakSelf.pageActionMenuEntryPointHandler
             toggleEntryPointHighlight:YES];
@@ -824,12 +902,19 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
         [weakSelf.pageActionMenuEntryPointHandler toggleEntryPointHighlight:NO];
       }];
 
-  if (presenter) {
+  if (presenter &&
+      feature.name == feature_engagement::kIPHIOSPageActionMenu.name) {
     _pageActionMenuBubblePresenter = presenter;
   }
 }
 
 - (void)presentReaderModeOptionsBubble {
+  UIView* referencedView = [_layoutGuideCenter
+      referencedViewUnderName:kReaderModeOptionsEntrypointGuide];
+  if (!referencedView) {
+    return;
+  }
+
   if (![self canPresentBubbleWithCheckTabScrolledToTop:NO]) {
     return;
   }
@@ -839,11 +924,10 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
     return;
   }
 
-  BOOL isBottomOmnibox = IsBottomOmniboxAvailable() &&
-                         GetApplicationContext()->GetLocalState()->GetBoolean(
-                             omnibox::kIsOmniboxInBottomPosition);
   BubbleArrowDirection arrowDirection =
-      isBottomOmnibox ? BubbleArrowDirectionDown : BubbleArrowDirectionUp;
+      [self isGuideAtBottom:kReaderModeOptionsEntrypointGuide]
+          ? BubbleArrowDirectionDown
+          : BubbleArrowDirectionUp;
   NSString* text =
       l10n_util::GetNSString(IDS_IOS_READER_MODE_OPTIONS_IPH_DESCRIPTION);
 
@@ -851,64 +935,110 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
       [self anchorPointToGuide:kReaderModeOptionsEntrypointGuide
                      direction:arrowDirection];
 
-  // An adjusted x offset to ensure that the bubble frame is on-screen.
-  CGFloat anchorXOffset = UseRTLLayout() ? -38 : 38;
-
-  BubbleViewControllerPresenter* presenter = [self
-      presentBubbleForFeature:feature_engagement::
-                                  kIPHiOSReaderModeOptionsFeature
-                    direction:arrowDirection
-                    alignment:BubbleAlignmentTopOrLeading
-                         text:text
-        voiceOverAnnouncement:text
-                  anchorPoint:CGPoint(readerModeOptionsAnchor.x + anchorXOffset,
-                                      readerModeOptionsAnchor.y)];
+  BubbleViewControllerPresenter* presenter =
+      [self presentBubbleForFeature:feature_engagement::
+                                        kIPHiOSReaderModeOptionsFeature
+                          direction:arrowDirection
+                          alignment:BubbleAlignmentTopOrLeading
+                               text:text
+              voiceOverAnnouncement:text
+                        anchorPoint:readerModeOptionsAnchor];
 
   if (presenter) {
     _readerModeOptionsBubblePresenter = presenter;
   }
 }
 
-- (void)presentGeminiImageRemixBubbleWithBWGHandler:(id<BWGCommands>)BWGHandler
-                    pageActionMenuEntryPointHandler:
-                        (id<PageActionMenuEntryPointCommands>)
-                            pageActionMenuEntryPointHandler {
+- (void)presentSendTabToSelfOmniboxBubble {
   if (![self canPresentBubbleWithCheckTabScrolledToTop:NO]) {
     return;
   }
 
-  BOOL isBottomOmnibox = IsBottomOmniboxAvailable() &&
-                         GetApplicationContext()->GetLocalState()->GetBoolean(
-                             prefs::kBottomOmnibox);
+  BOOL isBottomOmnibox = [self isBottomOmnibox];
   BubbleArrowDirection arrowDirection =
       isBottomOmnibox ? BubbleArrowDirectionDown : BubbleArrowDirectionUp;
+  GuideName* guideName =
+      isBottomOmnibox ? kSecondaryToolbarGuide : kTopOmniboxGuide;
+  NSString* text =
+      l10n_util::GetNSString(IDS_SEND_TAB_TO_SELF_OMNIBOX_IPH_TEXT);
+
+  CGPoint omniboxAnchor = [self anchorPointToGuide:guideName
+                                         direction:arrowDirection];
+
+  BubbleViewControllerPresenter* presenter =
+      [self presentBubbleForFeature:feature_engagement::kIPHSendTabToSelfOmnibox
+                          direction:arrowDirection
+                          alignment:BubbleAlignmentCenter
+                               text:text
+              voiceOverAnnouncement:text
+                        anchorPoint:omniboxAnchor];
+  if (presenter) {
+    _sendTabToSelfOmniboxBubblePresenter = presenter;
+  }
+}
+
+- (void)presentGeminiImageRemixBubbleWithGeminiHandler:
+            (id<GeminiCommands>)geminiHandler
+                       pageActionMenuEntryPointHandler:
+                           (id<PageActionMenuEntryPointCommands>)
+                               pageActionMenuEntryPointHandler {
+  if (![self canPresentBubbleWithCheckTabScrolledToTop:NO]) {
+    return;
+  }
+
+  BOOL nextIAEnabled = IsChromeNextIaEnabled();
+  BubbleArrowDirection arrowDirection;
+  BubbleAlignment alignment = BubbleAlignmentTopOrLeading;
+  if (nextIAEnabled) {
+    switch (_layoutState.appBarPosition) {
+      case AppBarPosition::kLeft:
+        arrowDirection = BubbleArrowDirectionLeading;
+        break;
+      case AppBarPosition::kRight:
+        arrowDirection = BubbleArrowDirectionTrailing;
+        break;
+      case AppBarPosition::kBottom:
+        arrowDirection = BubbleArrowDirectionDown;
+        break;
+      case AppBarPosition::kNone:
+        // No App Bar position means the app is on iPad, where the Assistant
+        // Button is in the toolbar.
+        arrowDirection = BubbleArrowDirectionUp;
+        alignment = BubbleAlignmentBottomOrTrailing;
+        break;
+    }
+  } else {
+    arrowDirection = [self isGuideAtBottom:kPageActionMenuEntrypointGuide]
+                         ? BubbleArrowDirectionDown
+                         : BubbleArrowDirectionUp;
+  }
   NSString* text =
       l10n_util::GetNSString(IDS_IOS_GEMINI_IMAGE_REMIX_ENTRY_POINT_IPH);
 
+  GuideName* anchorGuide = nextIAEnabled ? kAppBarAssistantButtonGuide
+                                         : kPageActionMenuEntrypointGuide;
+
   CGPoint pageActionMenuEntrypointAnchor =
-      [self anchorPointToGuide:kPageActionMenuEntrypointGuide
-                     direction:arrowDirection];
-  // To prevent the bubble from extending beyond the screen's edge, an offset is
-  // added, with the anchor point positioned at the top left corner.
-  // TODO(crbug.com/365049480): Remove this offset once the bubble view margins
-  // are fixed.
-  CGFloat anchorXOffset = UseRTLLayout() ? -2 : 2;
+      [self anchorPointToGuide:anchorGuide direction:arrowDirection];
 
   BubbleViewControllerPresenter* presenter = [self
       presentBubbleForFeature:feature_engagement::kIPHiOSGeminiImageRemixFeature
       direction:arrowDirection
-      alignment:BubbleAlignmentTopOrLeading
+      alignment:alignment
       text:text
       voiceOverAnnouncement:text
-      anchorPoint:CGPoint(pageActionMenuEntrypointAnchor.x + anchorXOffset,
+      anchorPoint:CGPoint(pageActionMenuEntrypointAnchor.x,
                           pageActionMenuEntrypointAnchor.y)
-      anchorViewFrame:
-          [self anchorViewFrameForGuide:kPageActionMenuEntrypointGuide]
+      anchorViewFrame:[self anchorViewFrameForGuide:anchorGuide]
       presentAction:^{
-        [pageActionMenuEntryPointHandler toggleEntryPointHighlight:YES];
+        if (!nextIAEnabled) {
+          [pageActionMenuEntryPointHandler toggleEntryPointHighlight:YES];
+        }
       }
       dismissAction:^(IPHDismissalReasonType reason) {
-        [pageActionMenuEntryPointHandler toggleEntryPointHighlight:NO];
+        if (!nextIAEnabled) {
+          [pageActionMenuEntryPointHandler toggleEntryPointHighlight:NO];
+        }
         base::UmaHistogramEnumeration(
             "IOS.Gemini.ImageRemix.IPH.DismissalReason", reason);
 
@@ -916,8 +1046,13 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
             reason == IPHDismissalReasonType::kTappedAnchorView) {
           base::RecordAction(
               base::UserMetricsAction("MobileGeminiImageRemixIPHTapped"));
-          [BWGHandler
-              startGeminiFlowWithEntryPoint:gemini::EntryPoint::ImageRemixIPH];
+          [geminiHandler
+              startGeminiEntryFlowWithStartupState:
+                  [[GeminiStartupState alloc]
+                      initWithEntryPoint:gemini::EntryPoint::ImageRemixIPH]
+                                baseViewController:self.rootViewController
+                          showSnackbarOnCompletion:YES
+                                        completion:nil];
         }
       }];
 
@@ -950,6 +1085,12 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
   if (reason == IPHDismissalReasonType::kTappedClose && _engagementTracker &&
       !dismissButtonTappedEvent.empty()) {
     _engagementTracker->NotifyEvent(dismissButtonTappedEvent);
+  }
+  if (IsPageActionMenuEnabled()) {
+    [self.geminiHandler
+        updateFloatyVisibilityIfEligibleAnimated:NO
+                                      fromSource:gemini::FloatyUpdateSource::
+                                                     GestureIph];
   }
 }
 
@@ -1090,6 +1231,32 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
 
 #pragma mark - Private Utils
 
+// Returns whether the guide is in the bottom half of the root view.
+- (BOOL)isGuideAtBottom:(GuideName*)guideName {
+  CGRect frameInWindow = [self anchorViewFrameForGuide:guideName];
+  if (CGRectIsEmpty(frameInWindow)) {
+    return NO;
+  }
+  CGRect frameInView = [self.rootViewController.view convertRect:frameInWindow
+                                                        fromView:nil];
+  CGFloat viewHeight = self.rootViewController.view.bounds.size.height;
+  return CGRectGetMidY(frameInView) > viewHeight / 2;
+}
+
+// Returns whether the guide is in the leading half of the root view.
+- (BOOL)isGuideAtLeading:(GuideName*)guideName {
+  CGRect frameInWindow = [self anchorViewFrameForGuide:guideName];
+  if (CGRectIsEmpty(frameInWindow)) {
+    return NO;
+  }
+  CGRect frameInView = [self.rootViewController.view convertRect:frameInWindow
+                                                        fromView:nil];
+  CGFloat viewWidth = self.rootViewController.view.bounds.size.width;
+  bool isRTL = base::i18n::IsRTL();
+  return isRTL ? (CGRectGetMidX(frameInView) > viewWidth / 2)
+               : (CGRectGetMidX(frameInView) < viewWidth / 2);
+}
+
 // Returns the anchor point for a bubble with an `arrowDirection` pointing to a
 // `guideName`. The point is in the window coordinates.
 - (CGPoint)anchorPointToGuide:(GuideName*)guideName
@@ -1097,11 +1264,52 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
   UILayoutGuide* guide = [_layoutGuideCenter makeLayoutGuideNamed:guideName];
   DCHECK(guide);
   [self.rootViewController.view addLayoutGuide:guide];
+  [self.rootViewController.view layoutIfNeeded];
+
   CGPoint anchorPoint =
       bubble_util::AnchorPoint(guide.layoutFrame, arrowDirection);
-  CGPoint anchorPointInWindow =
-      [guide.owningView convertPoint:anchorPoint
-                              toView:guide.owningView.window];
+
+  UIView* rootView = self.rootViewController.view;
+  CGPoint anchorPointInRootView = [guide.owningView convertPoint:anchorPoint
+                                                          toView:rootView];
+
+  const CGFloat kEdgeThreshold =
+      bubble_util::BubbleDefaultAlignmentOffset() + kAdditionalBorderMargin;
+
+  if (arrowDirection == BubbleArrowDirectionUp ||
+      arrowDirection == BubbleArrowDirectionDown) {
+    CGFloat leeway = MIN(kMaxLeeway, guide.layoutFrame.size.width / 2.0f);
+
+    if (anchorPointInRootView.x < kEdgeThreshold) {
+      // Close to left edge.
+      CGFloat shift = kEdgeThreshold - anchorPointInRootView.x;
+      anchorPointInRootView.x += MIN(leeway, shift);
+    } else if (anchorPointInRootView.x >
+               CGRectGetMaxX(rootView.bounds) - kEdgeThreshold) {
+      // Close to right edge.
+      CGFloat shift = anchorPointInRootView.x -
+                      (CGRectGetMaxX(rootView.bounds) - kEdgeThreshold);
+      anchorPointInRootView.x -= MIN(leeway, shift);
+    }
+  } else {
+    CGFloat leeway = MIN(kMaxLeeway, guide.layoutFrame.size.height / 2.0f);
+
+    if (anchorPointInRootView.y < kEdgeThreshold) {
+      // Close to top edge.
+      CGFloat shift = kEdgeThreshold - anchorPointInRootView.y;
+      anchorPointInRootView.y += MIN(leeway, shift);
+    } else if (anchorPointInRootView.y >
+               CGRectGetMaxY(rootView.bounds) - kEdgeThreshold) {
+      // Close to bottom edge.
+      CGFloat shift = anchorPointInRootView.y -
+                      (CGRectGetMaxY(rootView.bounds) - kEdgeThreshold);
+      anchorPointInRootView.y -= MIN(leeway, shift);
+    }
+  }
+
+  CGPoint anchorPointInWindow = [rootView convertPoint:anchorPointInRootView
+                                                toView:rootView.window];
+
   [self.rootViewController.view removeLayoutGuide:guide];
   return anchorPointInWindow;
 }
@@ -1112,6 +1320,7 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
   UILayoutGuide* guide = [_layoutGuideCenter makeLayoutGuideNamed:guideName];
   CHECK(guide);
   [self.rootViewController.view addLayoutGuide:guide];
+  [self.rootViewController.view layoutIfNeeded];
   CGRect frame = guide.layoutFrame;
   CGRect frameInWindow = [guide.owningView convertRect:frame
                                                 toView:guide.owningView.window];
@@ -1259,16 +1468,15 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
                                 : UISwipeGestureRecognizerDirectionLeft;
   switch (direction) {
     case UISwipeGestureRecognizerDirectionUp:
-      AddSameConstraintsToSides(
-          boundingSizeGuide, contentAreaGuide,
-          LayoutSides::kLeading | LayoutSides::kTrailing | LayoutSides::kTop);
+      AddSameConstraintsToSides(boundingSizeGuide, contentAreaGuide,
+                                LayoutSides::kTop | LayoutSides::kHorizontal);
       AddSameConstraintsToSides(boundingSizeGuide, safeAreaGuide,
                                 LayoutSides::kBottom);
       break;
     case UISwipeGestureRecognizerDirectionDown:
-      AddSameConstraintsToSides(boundingSizeGuide, contentAreaGuide,
-                                LayoutSides::kLeading | LayoutSides::kTrailing |
-                                    LayoutSides::kBottom);
+      AddSameConstraintsToSides(
+          boundingSizeGuide, contentAreaGuide,
+          LayoutSides::kBottom | LayoutSides::kHorizontal);
       AddSameConstraintsToSides(boundingSizeGuide, safeAreaGuide,
                                 LayoutSides::kTop);
       break;
@@ -1277,13 +1485,13 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
       if (isDirectionLeading) {
         AddSameConstraintsToSides(
             boundingSizeGuide, contentAreaGuide,
-            LayoutSides::kTop | LayoutSides::kBottom | LayoutSides::kLeading);
+            LayoutSides::kLeading | LayoutSides::kVertical);
         AddSameConstraintsToSides(boundingSizeGuide, safeAreaGuide,
                                   LayoutSides::kTrailing);
       } else {
         AddSameConstraintsToSides(
             boundingSizeGuide, contentAreaGuide,
-            LayoutSides::kTop | LayoutSides::kBottom | LayoutSides::kTrailing);
+            LayoutSides::kTrailing | LayoutSides::kVertical);
         AddSameConstraintsToSides(boundingSizeGuide, safeAreaGuide,
                                   LayoutSides::kLeading);
       }
@@ -1300,6 +1508,11 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
     [self.rootViewController.view addSubview:gestureIPHView];
     gestureIPHView.delegate = self;
     AddSameConstraints(gestureIPHView, contentAreaGuide);
+    if (IsPageActionMenuEnabled()) {
+      [self.geminiHandler
+          hideFloatyIfInvokedAnimated:NO
+                           fromSource:gemini::FloatyUpdateSource::GestureIph];
+    }
     return gestureIPHView;
   }
   return nil;
@@ -1307,14 +1520,21 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
 
 // Stops the animated fullscreen disabler.
 - (void)stopAnimatedFullscreenDisabler {
-  _animatedFullscreenDisabler = nullptr;
+  _fullscreenDisabler = nullptr;
+  _legacyAnimatedFullscreenDisabler = nullptr;
 }
 
 // Creates and starts the animated fullscreen disabler.
 - (void)startAnimatedFullscreenDisabler {
-  _animatedFullscreenDisabler =
-      std::make_unique<AnimatedScopedFullscreenDisabler>(_fullscreenController);
-  _animatedFullscreenDisabler->StartAnimation();
+  if (IsFullscreenRefactoringEnabled()) {
+    _fullscreenDisabler =
+        std::make_unique<ScopedFullscreenDisabler>(self.fullscreenHandler);
+  } else {
+    _legacyAnimatedFullscreenDisabler =
+        std::make_unique<AnimatedScopedFullscreenDisabler>(
+            _fullscreenController);
+    _legacyAnimatedFullscreenDisabler->StartAnimation();
+  }
 }
 
 - (void)featureDismissed:(const base::Feature&)feature {
@@ -1371,6 +1591,13 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
 // inform the FET of dismissal in this case. The client is responsible for
 // informing the FET.
 - (BOOL)shouldForcePresentBubbleForFeature:(const base::Feature&)feature {
+  // When Level Up is enabled, the Page Action Menu bubble is triggered
+  // on-demand when the user selects the Gemini task, bypassing standard FET
+  // engagement limits.
+  if (IsLevelUpEnabled() &&
+      feature.name == feature_engagement::kIPHIOSPageActionMenu.name) {
+    return YES;
+  }
   // The background customization feature bubble is tied in with other IPH, so
   // the feature engagement tracker is checked externally to this class.
   if (feature.name ==
@@ -1396,6 +1623,77 @@ BOOL CanGestureInProductHelpViewFitInGuide(GestureInProductHelpView* view,
     _infobarModalPresenter = nullptr;
   }
   _overlayPresenterObserver = nullptr;
+}
+
+// Returns whether the omnibox is in the bottom position.
+- (BOOL)isBottomOmnibox {
+  return IsBottomOmniboxAvailable() &&
+         GetApplicationContext()->GetLocalState()->GetBoolean(
+             omnibox::kIsOmniboxInBottomPosition);
+}
+
+#pragma mark - Testing
+
+- (BubbleViewControllerPresenter*)bubblePresenterForFeatureForTesting:
+    (const base::Feature&)feature {
+  if (feature.name == feature_engagement::kIPHSendTabToSelfOmnibox.name) {
+    return _sendTabToSelfOmniboxBubblePresenter;
+  }
+  if (feature.name ==
+      feature_engagement::kIPHiOSReaderModeOptionsFeature.name) {
+    return _readerModeOptionsBubblePresenter;
+  }
+  if (feature.name == feature_engagement::kIPHDiscoverFeedHeaderFeature.name) {
+    return _discoverFeedHeaderMenuTipBubblePresenter;
+  }
+  if (feature.name ==
+      feature_engagement::kIPHHomeCustomizationMenuFeature.name) {
+    return _homeCustomizationMenuTipBubblePresenter;
+  }
+  if (feature.name ==
+      feature_engagement::kIPHiOSPromoBackgroundCustomizationFeature.name) {
+    return _homeBackgroundCustomizationMenuTipBubblePresenter;
+  }
+  if (feature.name == feature_engagement::kIPHDefaultSiteViewFeature.name) {
+    return _defaultPageModeTipBubblePresenter;
+  }
+  if (feature.name == feature_engagement::kIPHWhatsNewFeature.name) {
+    return _whatsNewBubblePresenter;
+  }
+  if (feature.name ==
+      feature_engagement::kIPHPriceNotificationsWhileBrowsingFeature.name) {
+    return _priceNotificationsWhileBrowsingBubbleTipPresenter;
+  }
+  if (feature.name == feature_engagement::kIPHiOSLensKeyboardFeature.name) {
+    return _lensKeyboardPresenter;
+  }
+  if (feature.name ==
+      feature_engagement::kIPHiOSLensOverlayEntrypointTipFeature.name) {
+    return _lensOverlayEntrypointBubblePresenter;
+  }
+  if (feature.name ==
+      feature_engagement::kIPHiOSSettingsInOverflowMenuBubbleFeature.name) {
+    return _settingsInOverflowMenuBubblePresenter;
+  }
+  if (feature.name ==
+      feature_engagement::kIPHiOSSwitchAccountsWithNTPAccountParticleDiscFeature
+          .name) {
+    return _switchAccountWithNTPIdentityDiscBubblePresenter;
+  }
+  if (feature.name == feature_engagement::kIPHiOSFeedSwipeStaticFeature.name) {
+    return _feedSwipeBubblePresenter;
+  }
+  if (feature.name == feature_engagement::kIPHIOSPageActionMenu.name) {
+    return _pageActionMenuBubblePresenter;
+  }
+  if (feature.name == feature_engagement::kIPHiOSGeminiImageRemixFeature.name) {
+    return _geminiImageRemixBubblePresenter;
+  }
+  if (feature.name ==
+      feature_engagement::kIPHiOSPinMostVisitedSiteFeature.name) {
+    return _pinSiteToMostVisitedTilesBubblePresenter;
+  }
+  return nil;
 }
 
 @end

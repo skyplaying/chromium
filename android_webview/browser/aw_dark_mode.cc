@@ -8,7 +8,6 @@
 #include "android_webview/common/aw_features.h"
 #include "base/android/scoped_java_ref.h"
 #include "base/memory/ptr_util.h"
-#include "base/metrics/histogram_macros.h"
 #include "content/public/browser/navigation_details.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/common/web_preferences/web_preferences.h"
@@ -23,7 +22,7 @@ using base::android::ScopedJavaLocalRef;
 namespace android_webview {
 namespace {
 const void* const kAwDarkModeUserDataKey = &kAwDarkModeUserDataKey;
-bool sShouldEnableSimplifiedDarkMode = false;
+bool sEnableLegacyDarkMode = false;
 
 bool IsForceDarkEnabled(content::WebContents* web_contents) {
   AwContents* contents = AwContents::FromWebContents(web_contents);
@@ -41,8 +40,12 @@ static int64_t JNI_AwDarkMode_Init(JNIEnv* env,
   return reinterpret_cast<intptr_t>(new AwDarkMode(env, obj, web_contents));
 }
 
-static void JNI_AwDarkMode_EnableSimplifiedDarkMode(JNIEnv* env) {
-  sShouldEnableSimplifiedDarkMode = true;
+static void JNI_AwDarkMode_EnableLegacyDarkMode(JNIEnv* env) {
+  sEnableLegacyDarkMode = true;
+}
+
+static void JNI_AwDarkMode_ResetForTesting(JNIEnv* env) {
+  sEnableLegacyDarkMode = false;
 }
 
 AwDarkMode* AwDarkMode::FromWebContents(content::WebContents* contents) {
@@ -69,9 +72,9 @@ void AwDarkMode::PopulateWebPreferences(
     int force_dark_mode,
     int force_dark_behavior,
     bool algorithmic_darkening_allowed) {
-  if (!sShouldEnableSimplifiedDarkMode) {
-    PopulateWebPreferencesForPreT(web_prefs, force_dark_mode,
-                                  force_dark_behavior);
+  if (sEnableLegacyDarkMode) {
+    PopulateWebPreferencesForLegacy(web_prefs, force_dark_mode,
+                                    force_dark_behavior);
     return;
   }
   prefers_dark_from_theme_ = IsAppUsingDarkTheme();
@@ -91,7 +94,7 @@ void AwDarkMode::PopulateWebPreferences(
   }
 }
 
-void AwDarkMode::PopulateWebPreferencesForPreT(
+void AwDarkMode::PopulateWebPreferencesForLegacy(
     blink::web_pref::WebPreferences* web_prefs,
     int force_dark_mode,
     int force_dark_behavior) {
@@ -160,23 +163,6 @@ bool AwDarkMode::IsAppUsingDarkTheme() {
 
 void AwDarkMode::DetachFromJavaObject(JNIEnv* env) {
   jobj_.reset();
-}
-
-void AwDarkMode::NavigationEntryCommitted(
-    const content::LoadCommittedDetails& load_details) {
-  if (!load_details.is_main_frame)
-    return;
-  UMA_HISTOGRAM_BOOLEAN("Android.WebView.DarkMode.PrefersDarkFromTheme",
-                        prefers_dark_from_theme_);
-}
-
-void AwDarkMode::InferredColorSchemeUpdated(
-    std::optional<blink::mojom::PreferredColorScheme> color_scheme) {
-  if (prefers_dark_from_theme_ && color_scheme.has_value()) {
-    UMA_HISTOGRAM_BOOLEAN(
-        "Android.WebView.DarkMode.PageDarkenedAccordingToAppTheme",
-        color_scheme.value() == blink::mojom::PreferredColorScheme::kDark);
-  }
 }
 
 }  // namespace android_webview

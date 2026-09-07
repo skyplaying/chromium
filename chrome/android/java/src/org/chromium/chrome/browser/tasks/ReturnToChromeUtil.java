@@ -17,6 +17,7 @@ import android.text.format.DateUtils;
 
 import androidx.annotation.IntDef;
 
+import org.chromium.base.DeviceInfo;
 import org.chromium.base.IntentUtils;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.build.annotations.NullMarked;
@@ -25,7 +26,6 @@ import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeInactivityTracker;
 import org.chromium.chrome.browser.app.ChromeActivity;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
-import org.chromium.chrome.browser.magic_stack.HomeModulesMetricsUtils;
 import org.chromium.chrome.browser.ntp.NewTabPage;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
@@ -38,15 +38,12 @@ import org.chromium.chrome.browser.tabmodel.TabModelUtils;
 import org.chromium.chrome.browser.ui.native_page.NativePage;
 import org.chromium.chrome.browser.url_constants.UrlConstantResolver;
 import org.chromium.chrome.browser.url_constants.UrlConstantResolverFactory;
-import org.chromium.chrome.browser.util.BrowserUiUtils;
-import org.chromium.chrome.browser.util.BrowserUiUtils.ModuleTypeOnStartAndNtp;
 import org.chromium.components.cached_flags.IntCachedFeatureParam;
 import org.chromium.components.embedder_support.util.UrlUtilities;
 import org.chromium.content_public.browser.LoadUrlParams;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
-import java.util.Locale;
 
 /**
  * This is a utility class for managing features related to returning to Chrome after haven't used
@@ -118,6 +115,7 @@ public final class ReturnToChromeUtil {
      * Gets the return time interval. The return time is in the unit of milliseconds.
      *
      * @param returnTime The return time parameter based on form factor, either phones or tablets.
+     * @return The return time threshold in milliseconds.
      */
     private static long getReturnTime(IntCachedFeatureParam returnTime) {
         return returnTime.getValue() * DateUtils.SECOND_IN_MILLIS;
@@ -129,6 +127,11 @@ public final class ReturnToChromeUtil {
             Bundle bundle,
             PersistableBundle persistableBundle,
             ChromeInactivityTracker inactivityTracker) {
+        // If the device is android desktop, don't show a NTP homepage.
+        if (DeviceInfo.isDesktop()) {
+            return false;
+        }
+
         // If the current session is due to recreated, don't show a NTP homepage.
         if (isFromRecreate(bundle) || isFromUpdate(persistableBundle)) {
             return false;
@@ -156,12 +159,13 @@ public final class ReturnToChromeUtil {
      * Tab).
      *
      * @param tabCreator The {@link TabCreator} object.
+     * @param homeSurfaceTracker Tracker recording whether a tab acts as the home surface.
      * @param tabModelSelector The {@link TabModelSelector} object.
-     * @param homeSurfaceTracker The {@link HomeSurfaceTracker} object.
      * @param lastActiveTabUrl The URL of the last active Tab. It is non-null in cold startup before
      *     the Tab is restored.
      * @param lastActiveTab The object of the last active Tab. It is non-null after TabModel is
      *     initialized, e.g., in warm startup.
+     * @return The newly created NTP tab, or {@code null} if creation failed.
      */
     public static @Nullable Tab createNewTabAndShowHomeSurfaceUi(
             TabCreator tabCreator,
@@ -203,16 +207,6 @@ public final class ReturnToChromeUtil {
                         public void willAddTab(Tab tab, int type) {
                             boolean isTabExpected =
                                     TextUtils.equals(lastActiveTabUrl, tab.getUrl().getSpec());
-                            assert isTabExpected
-                                    : String.format(
-                                            Locale.ENGLISH,
-                                            "The URL of first Tab restored doesn't match the URL of"
-                                                + " the last active Tab read from the Tab state"
-                                                + " metadata file! Existing Tab count = %d. Last"
-                                                + " active tab = %s. First tab = %s.",
-                                            tabModelSelector.getModel(false).getCount(),
-                                            lastActiveTabUrl,
-                                            tab.getUrl().getSpec());
                             if (!isTabExpected) {
                                 return;
                             }
@@ -243,7 +237,7 @@ public final class ReturnToChromeUtil {
      * @param shouldShowNtpHomeSurfaceOnStartup Whether to show a NTP as home surface on startup.
      * @param currentTabModel The object of the current {@link TabModel}.
      * @param tabCreator The {@link TabCreator} object.
-     * @param homeSurfaceTracker The {@link HomeSurfaceTracker} object.
+     * @param homeSurfaceTracker Tracker recording whether a tab acts as the home surface.
      * @return whether an NTP was shown.
      */
     public static boolean setInitialOverviewStateOnResumeWithNtp(
@@ -299,19 +293,6 @@ public final class ReturnToChromeUtil {
         return true;
     }
 
-    /**
-     * Records user clicks on the tab switcher button in New tab page.
-     *
-     * @param currentTab Current tab or null if none exists.
-     */
-    public static void recordClickTabSwitcher(@Nullable Tab currentTab) {
-        if (currentTab != null
-                && !currentTab.isIncognito()
-                && UrlUtilities.isNtpUrl(currentTab.getUrl())) {
-            BrowserUiUtils.recordModuleClickHistogram(ModuleTypeOnStartAndNtp.TAB_SWITCHER_BUTTON);
-        }
-    }
-
     /** Recorded when the home surface NTP is shown at startup. */
     public static void recordHomeSurfaceShownAtStartup() {
         RecordHistogram.recordBooleanHistogram(HOME_SURFACE_SHOWN_AT_STARTUP_UMA, true);
@@ -326,6 +307,7 @@ public final class ReturnToChromeUtil {
      * Returns the start position of the context menu of a home module.
      *
      * @param resources The {@link Resources} instance to load Android resources from.
+     * @return The calculated start position point for the context menu.
      */
     public static Point calculateContextMenuStartPosition(Resources resources) {
         // On the single tab module, the x starts from the right of the tab thumbnail.
@@ -350,7 +332,7 @@ public final class ReturnToChromeUtil {
         }
 
         // It is possible to get null after casting ntpTab.getNativePage() to NewTabPage, early
-        // exit here. See https://crbug.com/1449900.
+        // exit here. See https://crbug.com/40915054.
         if (!(nativePage instanceof NewTabPage)) {
             recordFailToShowHomeSurfaceReasonUma(FailToShowHomeSurfaceReason.NOT_A_NTP_NATIVE_PAGE);
             if (nativePage.isFrozen()) {
@@ -363,11 +345,7 @@ public final class ReturnToChromeUtil {
         // This cast is now guaranteed to succeed to a non-null value.
         NewTabPage newTabPage = (NewTabPage) nativePage;
         homeSurfaceTracker.updateHomeSurfaceAndTrackingTabs(ntpTab, lastActiveTab);
-        if (HomeModulesMetricsUtils.useMagicStack()) {
-            newTabPage.showMagicStack(lastActiveTab);
-        } else {
-            newTabPage.showHomeSurfaceUi(lastActiveTab);
-        }
+        newTabPage.showHomeSurfaceUiOnNtp(lastActiveTab);
     }
 
     // TODO(crbug.com/40270227): Removes this histogram once we understand the root cause of

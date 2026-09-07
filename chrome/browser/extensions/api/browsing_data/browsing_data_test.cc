@@ -12,6 +12,7 @@
 #include "base/test/test_future.h"
 #include "base/values.h"
 #include "chrome/browser/extensions/api/browsing_data/browsing_data_api.h"
+#include "chrome/browser/extensions/browsing_data_test_utils.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/account_reconcilor_factory.h"
@@ -45,7 +46,7 @@
 #include "url/gurl.h"
 
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #endif
 
 #if !BUILDFLAG(IS_ANDROID)
@@ -57,6 +58,7 @@ static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 using extensions::api_test_utils::RunFunctionAndReturnSingleResult;
 
 namespace {
+namespace utils = extensions::browsing_data_test_utils;
 
 class ExtensionBrowsingDataTest : public PlatformBrowserTest {
  public:
@@ -81,7 +83,7 @@ class ExtensionBrowsingDataTestWithStoragePartitioning
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-// TODO(http://crbug.com/1266606): appcache is a noop and should be removed.
+// TODO(http://crbug.com/40802227): appcache is a noop and should be removed.
 const char kRemoveEverythingArguments[] =
     R"([{"since": 1000}, {
     "appcache": true, "cache": true, "cookies": true,
@@ -101,7 +103,7 @@ bool SetGaiaCookieForProfile(Profile* profile) {
       "SAPISID", std::string(), "." + google_url.GetHost(), "/", base::Time(),
       base::Time(), base::Time(), base::Time(),
       /*secure=*/true, false, net::CookieSameSite::NO_RESTRICTION,
-      net::COOKIE_PRIORITY_DEFAULT);
+      net::COOKIE_PRIORITY_DEFAULT, net::CookieSourceType::kOther);
 
   base::test::TestFuture<net::CookieAccessResult> set_cookie_future;
   network::mojom::CookieManager* cookie_manager =
@@ -144,13 +146,13 @@ IN_PROC_BROWSER_TEST_F(ExtensionBrowsingDataTest, Syncing) {
       function.get(), kRemoveEverythingArguments, GetProfile()));
   // Check that the Sync token was not revoked.
   EXPECT_TRUE(identity_manager->HasAccountWithRefreshToken(
-      primary_account_info.account_id));
+      primary_account_info.GetAccountId()));
   EXPECT_FALSE(
       identity_manager->HasAccountWithRefreshTokenInPersistentErrorState(
-          primary_account_info.account_id));
+          primary_account_info.GetAccountId()));
   // Check that the secondary token was revoked.
   EXPECT_FALSE(identity_manager->HasAccountWithRefreshToken(
-      secondary_account_info.account_id));
+      secondary_account_info.GetAccountId()));
 }
 
 // Test that Sync remained in error when browsing data is cleared if Sync was in
@@ -166,7 +168,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionBrowsingDataTest, SyncError) {
   AccountInfo account_info = signin::MakePrimaryAccountAvailable(
       identity_manager, kAccountEmail, signin::ConsentLevel::kSignin);
   signin::UpdatePersistentErrorOfRefreshTokenForAccount(
-      identity_manager, account_info.account_id,
+      identity_manager, account_info.GetAccountId(),
       GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
           GoogleServiceAuthError::InvalidGaiaCredentialsReason::
               CREDENTIALS_REJECTED_BY_SERVER));
@@ -176,13 +178,14 @@ IN_PROC_BROWSER_TEST_F(ExtensionBrowsingDataTest, SyncError) {
   EXPECT_FALSE(RunFunctionAndReturnSingleResult(
       function.get(), kRemoveEverythingArguments, GetProfile()));
   // Check that the account was not removed and Sync remains in auth error.
-  EXPECT_TRUE(
-      identity_manager->HasAccountWithRefreshToken(account_info.account_id));
-  EXPECT_EQ(GoogleServiceAuthError::InvalidGaiaCredentialsReason::
-                CREDENTIALS_REJECTED_BY_SERVER,
-            identity_manager
-                ->GetErrorStateOfRefreshTokenForAccount(account_info.account_id)
-                .GetInvalidGaiaCredentialsReason());
+  EXPECT_TRUE(identity_manager->HasAccountWithRefreshToken(
+      account_info.GetAccountId()));
+  EXPECT_EQ(
+      GoogleServiceAuthError::InvalidGaiaCredentialsReason::
+          CREDENTIALS_REJECTED_BY_SERVER,
+      identity_manager
+          ->GetErrorStateOfRefreshTokenForAccount(account_info.GetAccountId())
+          .GetInvalidGaiaCredentialsReason());
 }
 
 // Test that the tokens are revoked when browsing data is cleared when there is
@@ -201,44 +204,10 @@ IN_PROC_BROWSER_TEST_F(ExtensionBrowsingDataTest, NotSyncing) {
   EXPECT_FALSE(RunFunctionAndReturnSingleResult(
       function.get(), kRemoveEverythingArguments, GetProfile()));
   // Check that the account was removed.
-  EXPECT_FALSE(
-      identity_manager->HasAccountWithRefreshToken(account_info.account_id));
+  EXPECT_FALSE(identity_manager->HasAccountWithRefreshToken(
+      account_info.GetAccountId()));
 }
 #endif
-
-void CreateLocalStorageForKey(Profile* profile, const blink::StorageKey& key) {
-  auto* local_storage_control =
-      profile->GetDefaultStoragePartition()->GetLocalStorageControl();
-  mojo::Remote<blink::mojom::StorageArea> area;
-  local_storage_control->BindStorageArea(key,
-                                         area.BindNewPipeAndPassReceiver());
-  {
-    base::test::TestFuture<bool> put_future;
-    area->Put({'k', 'e', 'y'}, {'v', 'a', 'l', 'u', 'e'}, std::nullopt,
-              "source", put_future.GetCallback());
-    ASSERT_TRUE(put_future.Get());
-  }
-}
-
-std::vector<storage::mojom::StorageUsageInfoPtr> GetLocalStorage(
-    Profile* profile) {
-  auto* local_storage_control =
-      profile->GetDefaultStoragePartition()->GetLocalStorageControl();
-  base::test::TestFuture<std::vector<storage::mojom::StorageUsageInfoPtr>>
-      get_usage_future;
-  local_storage_control->GetUsage(get_usage_future.GetCallback());
-  return get_usage_future.Take();
-}
-
-bool UsageInfosHasStorageKey(
-    const std::vector<storage::mojom::StorageUsageInfoPtr>& usage_infos,
-    const blink::StorageKey& key) {
-  auto it = std::ranges::find_if(
-      usage_infos, [&key](const storage::mojom::StorageUsageInfoPtr& info) {
-        return info->storage_key == key;
-      });
-  return it != usage_infos.end();
-}
 
 IN_PROC_BROWSER_TEST_F(ExtensionBrowsingDataTest, DeleteLocalStorageAll) {
   const blink::StorageKey key1 =
@@ -246,20 +215,20 @@ IN_PROC_BROWSER_TEST_F(ExtensionBrowsingDataTest, DeleteLocalStorageAll) {
   const blink::StorageKey key2 =
       blink::StorageKey::CreateFromStringForTesting("https://other.com");
   // Create some local storage for each of the origins.
-  CreateLocalStorageForKey(GetProfile(), key1);
-  CreateLocalStorageForKey(GetProfile(), key2);
+  utils::CreateLocalStorageForKey(GetProfile(), key1);
+  utils::CreateLocalStorageForKey(GetProfile(), key2);
   // Verify that the data is actually stored.
-  auto usage_infos = GetLocalStorage(GetProfile());
+  auto usage_infos = utils::GetLocalStorageInfo(GetProfile());
   EXPECT_EQ(2U, usage_infos.size());
-  EXPECT_TRUE(UsageInfosHasStorageKey(usage_infos, key1));
-  EXPECT_TRUE(UsageInfosHasStorageKey(usage_infos, key2));
+  EXPECT_TRUE(utils::UsageInfosHasStorageKey(usage_infos, key1));
+  EXPECT_TRUE(utils::UsageInfosHasStorageKey(usage_infos, key2));
 
   // Clear the data for everything.
   auto function = base::MakeRefCounted<BrowsingDataRemoveFunction>();
   EXPECT_FALSE(RunFunctionAndReturnSingleResult(
       function.get(), kRemoveEverythingArguments, GetProfile()));
 
-  usage_infos = GetLocalStorage(GetProfile());
+  usage_infos = utils::GetLocalStorageInfo(GetProfile());
   EXPECT_EQ(0U, usage_infos.size());
 }
 
@@ -270,20 +239,20 @@ IN_PROC_BROWSER_TEST_F(ExtensionBrowsingDataTest, DeleteLocalStorageIncognito) {
       blink::StorageKey::CreateFromStringForTesting("https://other.com");
   // Create some local storage for each of the origins.
   auto* incognito_profile = GetProfile()->GetPrimaryOTRProfile(true);
-  CreateLocalStorageForKey(incognito_profile, key1);
-  CreateLocalStorageForKey(incognito_profile, key2);
+  utils::CreateLocalStorageForKey(incognito_profile, key1);
+  utils::CreateLocalStorageForKey(incognito_profile, key2);
   // Verify that the data is actually stored.
-  auto usage_infos = GetLocalStorage(incognito_profile);
+  auto usage_infos = utils::GetLocalStorageInfo(incognito_profile);
   EXPECT_EQ(2U, usage_infos.size());
-  EXPECT_TRUE(UsageInfosHasStorageKey(usage_infos, key1));
-  EXPECT_TRUE(UsageInfosHasStorageKey(usage_infos, key2));
+  EXPECT_TRUE(utils::UsageInfosHasStorageKey(usage_infos, key1));
+  EXPECT_TRUE(utils::UsageInfosHasStorageKey(usage_infos, key2));
 
   // Clear the data for everything.
   auto function = base::MakeRefCounted<BrowsingDataRemoveFunction>();
   EXPECT_FALSE(RunFunctionAndReturnSingleResult(
       function.get(), kRemoveEverythingArguments, incognito_profile));
 
-  usage_infos = GetLocalStorage(incognito_profile);
+  usage_infos = utils::GetLocalStorageInfo(incognito_profile);
   EXPECT_EQ(0U, usage_infos.size());
 }
 
@@ -293,13 +262,13 @@ IN_PROC_BROWSER_TEST_F(ExtensionBrowsingDataTest, DeleteLocalStorageOrigin) {
   const blink::StorageKey key2 =
       blink::StorageKey::CreateFromStringForTesting("https://other.com");
   // Create some local storage for each of the origins.
-  CreateLocalStorageForKey(GetProfile(), key1);
-  CreateLocalStorageForKey(GetProfile(), key2);
+  utils::CreateLocalStorageForKey(GetProfile(), key1);
+  utils::CreateLocalStorageForKey(GetProfile(), key2);
   // Verify that the data is actually stored.
-  auto usage_infos = GetLocalStorage(GetProfile());
+  auto usage_infos = utils::GetLocalStorageInfo(GetProfile());
   EXPECT_EQ(2U, usage_infos.size());
-  EXPECT_TRUE(UsageInfosHasStorageKey(usage_infos, key1));
-  EXPECT_TRUE(UsageInfosHasStorageKey(usage_infos, key2));
+  EXPECT_TRUE(utils::UsageInfosHasStorageKey(usage_infos, key1));
+  EXPECT_TRUE(utils::UsageInfosHasStorageKey(usage_infos, key2));
 
   // Clear the data only for example.com.
   auto function = base::MakeRefCounted<BrowsingDataRemoveFunction>();
@@ -312,10 +281,10 @@ IN_PROC_BROWSER_TEST_F(ExtensionBrowsingDataTest, DeleteLocalStorageOrigin) {
   EXPECT_FALSE(RunFunctionAndReturnSingleResult(function.get(), removeArgs,
                                                 GetProfile()));
 
-  usage_infos = GetLocalStorage(GetProfile());
+  usage_infos = utils::GetLocalStorageInfo(GetProfile());
   EXPECT_EQ(1U, usage_infos.size());
-  EXPECT_FALSE(UsageInfosHasStorageKey(usage_infos, key1));
-  EXPECT_TRUE(UsageInfosHasStorageKey(usage_infos, key2));
+  EXPECT_FALSE(utils::UsageInfosHasStorageKey(usage_infos, key1));
+  EXPECT_TRUE(utils::UsageInfosHasStorageKey(usage_infos, key2));
 }
 
 IN_PROC_BROWSER_TEST_F(ExtensionBrowsingDataTestWithStoragePartitioning,
@@ -367,14 +336,14 @@ IN_PROC_BROWSER_TEST_F(ExtensionBrowsingDataTestWithStoragePartitioning,
                                          key5, key6, key7, key8};
   // Create some local storage for each of the keys.
   for (const auto& key : keys) {
-    CreateLocalStorageForKey(GetProfile(), key);
+    utils::CreateLocalStorageForKey(GetProfile(), key);
   }
 
   // Verify that the data is actually stored.
-  auto usage_infos = GetLocalStorage(GetProfile());
+  auto usage_infos = utils::GetLocalStorageInfo(GetProfile());
   EXPECT_EQ(keys.size(), usage_infos.size());
   for (const auto& key : keys) {
-    EXPECT_TRUE(UsageInfosHasStorageKey(usage_infos, key));
+    EXPECT_TRUE(utils::UsageInfosHasStorageKey(usage_infos, key));
   }
 
   // Clear the data for example.com.
@@ -388,16 +357,16 @@ IN_PROC_BROWSER_TEST_F(ExtensionBrowsingDataTestWithStoragePartitioning,
   EXPECT_FALSE(RunFunctionAndReturnSingleResult(function.get(), removeArgs,
                                                 GetProfile()));
 
-  usage_infos = GetLocalStorage(GetProfile());
+  usage_infos = utils::GetLocalStorageInfo(GetProfile());
   EXPECT_EQ(3U, usage_infos.size());
-  EXPECT_FALSE(UsageInfosHasStorageKey(usage_infos, key1));
-  EXPECT_FALSE(UsageInfosHasStorageKey(usage_infos, key2));
-  EXPECT_FALSE(UsageInfosHasStorageKey(usage_infos, key3));
-  EXPECT_TRUE(UsageInfosHasStorageKey(usage_infos, key4));
-  EXPECT_TRUE(UsageInfosHasStorageKey(usage_infos, key5));
-  EXPECT_TRUE(UsageInfosHasStorageKey(usage_infos, key6));
-  EXPECT_FALSE(UsageInfosHasStorageKey(usage_infos, key7));
-  EXPECT_FALSE(UsageInfosHasStorageKey(usage_infos, key8));
+  EXPECT_FALSE(utils::UsageInfosHasStorageKey(usage_infos, key1));
+  EXPECT_FALSE(utils::UsageInfosHasStorageKey(usage_infos, key2));
+  EXPECT_FALSE(utils::UsageInfosHasStorageKey(usage_infos, key3));
+  EXPECT_TRUE(utils::UsageInfosHasStorageKey(usage_infos, key4));
+  EXPECT_TRUE(utils::UsageInfosHasStorageKey(usage_infos, key5));
+  EXPECT_TRUE(utils::UsageInfosHasStorageKey(usage_infos, key6));
+  EXPECT_FALSE(utils::UsageInfosHasStorageKey(usage_infos, key7));
+  EXPECT_FALSE(utils::UsageInfosHasStorageKey(usage_infos, key8));
 }
 
 using BrowsingDataApiTest = extensions::ExtensionApiTest;
@@ -420,12 +389,14 @@ IN_PROC_BROWSER_TEST_F(BrowsingDataApiTest, ValidateFilters) {
           chrome.test.succeed();
       },
       async function emptyOriginsFilter() {
+          // Define the expected error regex for empty `origins` list.
           const expectedError = new RegExp(
               '.* Array must have at least 1 items; found 0.');
+          // Verify `chrome.browsingData.remove` throws when `origins` is empty.
           chrome.test.assertThrows(
-              chrome.browsingData.remove,
-              chrome.browsingData,
-              [{'origins': []}, {'cookies': true}],
+              chrome.browsingData.remove.bind(
+                  null, /* options */ {'origins': []},
+                  /* dataToRemove */ {'cookies': true}),
               expectedError);
           chrome.test.succeed();
       },
@@ -464,7 +435,7 @@ IN_PROC_BROWSER_TEST_F(BrowsingDataApiTest, UnsupportedDataType) {
   ASSERT_TRUE(extension);
 
   content::WebContentsConsoleObserver console_observer(
-      browser()->tab_strip_model()->GetActiveWebContents());
+      chrome_test_utils::GetActiveWebContents(this));
   console_observer.SetPattern(
       "Requested data type(s) are not supported: passwords.");
 
@@ -505,7 +476,7 @@ IN_PROC_BROWSER_TEST_F(BrowsingDataApiTest, MultipleUnsupportedDataTypes) {
   ASSERT_TRUE(extension);
 
   content::WebContentsConsoleObserver console_observer(
-      browser()->tab_strip_model()->GetActiveWebContents());
+      chrome_test_utils::GetActiveWebContents(this));
   console_observer.SetPattern(
       "Requested data type(s) are not supported: passwords, pluginData.");
 

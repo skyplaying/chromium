@@ -21,10 +21,9 @@
 #include "components/history/core/browser/history_service.h"
 #include "components/history/core/browser/url_row.h"
 #include "components/history/core/test/history_service_test_util.h"
-#include "components/history_embeddings/answerer.h"
-#include "components/history_embeddings/history_embeddings_features.h"
-#include "components/history_embeddings/history_embeddings_search.h"
-#include "components/history_embeddings/history_embeddings_service.h"
+#include "components/history_embeddings/core/answerer.h"
+#include "components/history_embeddings/core/history_embeddings_features.h"
+#include "components/history_embeddings/core/history_embeddings_search.h"
 #include "components/omnibox/browser/autocomplete_enums.h"
 #include "components/omnibox/browser/autocomplete_input.h"
 #include "components/omnibox/browser/autocomplete_match.h"
@@ -63,9 +62,13 @@ history_embeddings::ScoredUrlRow CreateScoredUrlRow(
       history_embeddings::ScoredUrl(0, 0, {}, score, 0));
   scored_url_row.row = history::URLRow{GURL{url}};
   scored_url_row.row.set_title(title);
-  scored_url_row.passages_embeddings.passages.add_passages("passage");
-  scored_url_row.passages_embeddings.embeddings.emplace_back(
-      std::vector<float>(768, 1.0f));
+  scored_url_row.url_data.passages.add_passages("passage");
+  std::vector<float> data(768, 0.0f);
+  data[0] = 1.0f;
+  scored_url_row.url_data.passage_embeddings.emplace_back(
+      history_embeddings::PassageEmbedding(
+          passage_embeddings::Embedding(std::move(data)), 1));
+
   scored_url_row.scores.push_back(score);
   return scored_url_row;
 }
@@ -114,6 +117,7 @@ class MockHistoryEmbeddingsSearch
                std::optional<base::Time> time_range_start,
                size_t count,
                bool skip_answering,
+               std::vector<history::URLID> url_id_filter,
                history_embeddings::SearchResultCallback callback),
               (override));
 };
@@ -126,10 +130,6 @@ class HistoryEmbeddingsProviderTest : public testing::Test,
 
     os_crypt_ = os_crypt_async::GetTestOSCryptAsyncForTesting(
         /*is_sync_for_unittests=*/true);
-
-    auto feature_parameters = history_embeddings::GetFeatureParameters();
-    feature_parameters.use_ml_answerer = false;
-    history_embeddings::SetFeatureParametersForTesting(feature_parameters);
 
     CHECK(history_dir_.CreateUniqueTempDir());
     client_ = std::make_unique<FakeAutocompleteProviderClient>();
@@ -148,11 +148,12 @@ class HistoryEmbeddingsProviderTest : public testing::Test,
     // can be ran to simulate `Search()` responding asyncly.
     ON_CALL(*history_embeddings_search_,
             Search(testing::_, testing::_, testing::_, testing::_, testing::_,
-                   testing::_))
+                   testing::_, testing::_))
         .WillByDefault(
             [&](history_embeddings::SearchResult* previous_search_result,
                 std::string query, std::optional<base::Time> time_range_start,
                 size_t count, bool skip_answering,
+                std::vector<history::URLID> url_id_filter,
                 history_embeddings::SearchResultCallback callback) {
               search_callbacks_.push_back(base::BindOnce(
                   [](history_embeddings::SearchResultCallback callback,
@@ -204,7 +205,7 @@ TEST_F(HistoryEmbeddingsProviderTest, Start) {
       .WillOnce(testing::Return(false));
   EXPECT_CALL(*history_embeddings_search_,
               Search(testing::_, testing::_, testing::_, testing::_, testing::_,
-                     testing::_))
+                     testing::_, testing::_))
       .Times(0);
   history_embeddings_provider_->Start(long_input, false);
   EXPECT_FALSE(trigger_service->GetFeatureTriggeredInSession(trigger_feature));
@@ -226,7 +227,7 @@ TEST_F(HistoryEmbeddingsProviderTest, Start) {
 
   EXPECT_CALL(*history_embeddings_search_,
               Search(testing::_, testing::_, testing::_, testing::_, testing::_,
-                     testing::_))
+                     testing::_, testing::_))
       .Times(0);
   history_embeddings_provider_->Start(short_input, false);
   EXPECT_FALSE(trigger_service->GetFeatureTriggeredInSession(trigger_feature));
@@ -235,16 +236,17 @@ TEST_F(HistoryEmbeddingsProviderTest, Start) {
   // Sync queries should be blocked.
   EXPECT_CALL(*history_embeddings_search_,
               Search(testing::_, testing::_, testing::_, testing::_, testing::_,
-                     testing::_))
+                     testing::_, testing::_))
       .Times(0);
   history_embeddings_provider_->Start(sync_long_input, false);
   EXPECT_FALSE(trigger_service->GetFeatureTriggeredInSession(trigger_feature));
   trigger_service->ResetSession();
 
   // Long queries should pass.
-  EXPECT_CALL(*history_embeddings_search_,
-              Search(testing::_, "query query query",
-                     std::optional<base::Time>{}, 3u, false, testing::_))
+  EXPECT_CALL(
+      *history_embeddings_search_,
+      Search(testing::_, "query query query", std::optional<base::Time>{}, 3u,
+             false, testing::_, testing::_))
       .Times(1);
   history_embeddings_provider_->Start(long_input, false);
   EXPECT_TRUE(trigger_service->GetFeatureTriggeredInSession(trigger_feature));
@@ -497,8 +499,7 @@ TEST_F(HistoryEmbeddingsProviderTest,
 
   history_embeddings_provider_->done_ = false;
   history_embeddings_provider_->input_ = CreateAutocompleteInput(u"query");
-  history_embeddings_provider_->input_.set_keyword_mode_entry_method(
-      metrics::OmniboxEventProto_KeywordModeEntryMethod_TAB);
+  history_embeddings_provider_->input_.set_in_keyword_mode(true);
   history_embeddings_provider_->OnReceivedSearchResult(result.Clone());
 
   // Set up expected matches.

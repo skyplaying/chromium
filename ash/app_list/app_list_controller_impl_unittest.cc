@@ -62,6 +62,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "components/services/app_service/public/cpp/app.h"
 #include "components/services/app_service/public/cpp/app_registry_cache.h"
@@ -71,6 +72,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/test/layer_animation_stopped_waiter.h"
+#include "ui/display/manager/display_manager.h"
 #include "ui/display/screen.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/keycodes/keyboard_codes_posix.h"
@@ -157,7 +159,7 @@ class ShelfItemFactoryFake : public ShelfModel::ShelfItemFactory {
 
 class AppListControllerImplTest : public AshTestBase {
  public:
-  AppListControllerImplTest() = default;
+  AppListControllerImplTest() { set_add_default_shelf_icon(false); }
 
   AppListControllerImplTest(const AppListControllerImplTest&) = delete;
   AppListControllerImplTest& operator=(const AppListControllerImplTest&) =
@@ -369,6 +371,7 @@ TEST_F(AppListControllerImplTest, PageResetByTimerInTabletMode) {
   // Once the app list is closed, the page should be reset when the timer is
   // skipped.
   EXPECT_EQ(0, apps_grid_view->pagination_model()->selected_page());
+  GetAppListView()->SetSkipPageResetTimerForTesting(false);
 }
 
 TEST_F(AppListControllerImplTest, PagePersistanceTabletModeTest) {
@@ -486,7 +489,7 @@ TEST_F(AppListControllerImplTest,
 
   // Create |window1| which contains a textfield as child view.
   std::unique_ptr<aura::Window> window1 =
-      AshTestBase::CreateTestWindow(gfx::Rect(0, 0, 200, 200));
+      CreateWindowWithAppType(chromeos::AppType::NON_APP, {200, 200});
   auto* widget = views::Widget::GetWidgetForNativeView(window1.get());
   std::unique_ptr<views::Textfield> text_field =
       std::make_unique<views::Textfield>();
@@ -497,7 +500,7 @@ TEST_F(AppListControllerImplTest,
 
   // Note that the bounds of |text_field| cannot be too small. Otherwise, it
   // may not receive the gesture event.
-  text_field->SetBoundsRect(gfx::Rect(0, 0, 100, 100));
+  text_field->SetBoundsRect(gfx::Rect(100, 100));
   const auto* text_field_p = text_field.get();
   widget->GetRootView()->AddChildView(std::move(text_field));
   wm::ActivateWindow(window1.get());
@@ -505,7 +508,7 @@ TEST_F(AppListControllerImplTest,
 
   // Create |window2|.
   std::unique_ptr<aura::Window> window2 =
-      AshTestBase::CreateTestWindow(gfx::Rect(200, 0, 200, 200));
+      CreateWindowWithAppType(chromeos::AppType::NON_APP, {200, 0, 200, 200});
   window2->Show();
 
   // Tap at the textfield in |window1|. The virtual keyboard should be visible.
@@ -543,8 +546,8 @@ TEST_F(AppListControllerImplTest,
   ash::TabletModeControllerTestApi().EnterTabletMode();
   ash::TabletModeControllerTestApi().LeaveTabletMode();
 
-  std::unique_ptr<aura::Window> w(
-      AshTestBase::CreateTestWindow(gfx::Rect(0, 0, 400, 400)));
+  std::unique_ptr<aura::Window> w =
+      CreateWindowWithAppType(chromeos::AppType::NON_APP, {400, 400});
   EnterOverview();
 
   // Press home button - verify overview exits and the app list is shown.
@@ -829,9 +832,11 @@ TEST_F(AppListControllerImplTest, DragItemFromAppsGridView) {
 }
 
 TEST_F(AppListControllerImplTest, OnlyMinimizeCycleListWindows) {
-  std::unique_ptr<aura::Window> w1(CreateTestWindow(gfx::Rect(0, 0, 400, 400)));
-  std::unique_ptr<aura::Window> w2(CreateTestWindow(
-      gfx::Rect(0, 0, 400, 400), aura::client::WINDOW_TYPE_POPUP));
+  std::unique_ptr<aura::Window> w1 =
+      CreateWindowWithAppType(chromeos::AppType::NON_APP, {400, 400});
+  std::unique_ptr<aura::Window> w2 =
+      CreateTestWindowInShell({.bounds = gfx::Rect(400, 400),
+                               .window_type = aura::client::WINDOW_TYPE_POPUP});
 
   ash::TabletModeControllerTestApi().EnterTabletMode();
   std::unique_ptr<ui::Event> test_event = std::make_unique<ui::KeyEvent>(
@@ -957,6 +962,51 @@ TEST_F(AppListControllerImplTest, HideContinueSectionUpdatesPref) {
   controller->SetHideContinueSection(false);
   EXPECT_FALSE(controller->ShouldHideContinueSection());
   EXPECT_FALSE(prefs->GetBoolean(prefs::kLauncherContinueSectionHidden));
+}
+
+TEST_F(AppListControllerImplTest, ShowAppListOnPrimaryDisplay) {
+  UpdateDisplay("600x500,600x500");
+
+  const display::Display first_display = GetPrimaryDisplay();
+  const display::Display second_display = GetSecondaryDisplay();
+  auto* controller = Shell::Get()->app_list_controller();
+
+  // Enter Tablet Mode:
+  TabletModeControllerTestApi().EnterTabletMode();
+
+  ASSERT_TRUE(base::test::RunUntil(
+      [&] { return display_manager()->IsInMirrorMode(); }));
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
+
+  // First display is primary by default.
+  EXPECT_EQ(controller->GetDisplayIdToShowAppListOn(), first_display.id());
+
+  // Exit Tablet Mode:
+  TabletModeControllerTestApi().LeaveTabletMode();
+  ASSERT_TRUE(base::test::RunUntil(
+      [&] { return !display_manager()->IsInMirrorMode(); }));
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
+
+  // Set second display as primary:
+  Shell::Get()->window_tree_host_manager()->SetPrimaryDisplayId(
+      second_display.id());
+  EXPECT_EQ(second_display.id(), GetPrimaryDisplay().id());
+
+  // Enter Tablet Mode:
+  TabletModeControllerTestApi().EnterTabletMode();
+
+  ASSERT_TRUE(base::test::RunUntil(
+      [&] { return display_manager()->IsInMirrorMode(); }));
+  EXPECT_TRUE(display::Screen::Get()->InTabletMode());
+
+  // The second display should now be returned.
+  EXPECT_EQ(controller->GetDisplayIdToShowAppListOn(), second_display.id());
+
+  // Exit Tablet Mode:
+  TabletModeControllerTestApi().LeaveTabletMode();
+  ASSERT_TRUE(base::test::RunUntil(
+      [&] { return !display_manager()->IsInMirrorMode(); }));
+  EXPECT_FALSE(display::Screen::Get()->InTabletMode());
 }
 
 // AppListControllerImpl test that start in inactive session.
@@ -1288,7 +1338,8 @@ TEST_F(AppListControllerImplKioskTest,
 TEST_F(AppListControllerImplKioskTest,
        DoNotMinimizeAppWindowInTabletModeWhenGoHomeCalled) {
   // Emulation of a Kiosk app window.
-  std::unique_ptr<aura::Window> w(CreateTestWindow(gfx::Rect(0, 0, 400, 400)));
+  std::unique_ptr<aura::Window> w =
+      CreateWindowWithAppType(chromeos::AppType::NON_APP, {400, 400});
   ash::TabletModeControllerTestApi().EnterTabletMode();
 
   Shell::Get()->app_list_controller()->GoHome(GetPrimaryDisplay().id());
@@ -1300,7 +1351,8 @@ TEST_F(AppListControllerImplKioskTest,
 TEST_F(AppListControllerImplKioskTest,
        DoNotShowAppListInTabletModeWhenPressHomeButton) {
   // Emulation of a Kiosk app window.
-  std::unique_ptr<aura::Window> w(CreateTestWindow(gfx::Rect(0, 0, 400, 400)));
+  std::unique_ptr<aura::Window> w =
+      CreateWindowWithAppType(chromeos::AppType::NON_APP, {400, 400});
   ash::TabletModeControllerTestApi().EnterTabletMode();
 
   PressHomeButton();

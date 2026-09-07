@@ -10,6 +10,9 @@ import {WebUiListenerMixinLit} from '//resources/cr_elements/web_ui_listener_mix
 import {loadTimeData} from '//resources/js/load_time_data.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 
+// <if expr="is_chromeos">
+import {AudioBrowserProxyImpl} from './audio_browser_proxy.js';
+// </if>
 import {getCss} from './language_toast.css.js';
 import {getHtml} from './language_toast.html.js';
 import {NotificationType} from './voice_language_conversions.js';
@@ -46,11 +49,12 @@ export class LanguageToastElement extends LanguageToastElementBase implements
       toastMessage_: {type: String},
       showErrors: {type: Boolean},
       numAvailableVoices: {type: Number},
+      toastDuration_: {type: Number},
     };
   }
 
   protected notifications_: Map<string, NotificationType> = new Map();
-  protected toastDuration_: number = toastDurationMs;
+  protected accessor toastDuration_: number = toastDurationMs;
   protected accessor toastTitle_: string = '';
   protected accessor toastMessage_: string = '';
 
@@ -99,7 +103,8 @@ export class LanguageToastElement extends LanguageToastElementBase implements
         // Only show a notification for a newly completed download.
         if (language && previousNotification === NotificationType.DOWNLOADING) {
           const lang =
-              chrome.readingMode.getDisplayNameForLocale(language, language) ||
+              AudioBrowserProxyImpl.getInstance().getDisplayNameForLocale(
+                  language, language) ||
               language;
           this.toastTitle_ =
               loadTimeData.getStringF('readingModeVoiceDownloadedTitle', lang);

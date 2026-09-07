@@ -5,103 +5,67 @@
 package org.chromium.chrome.browser.share.send_tab_to_self;
 
 import static org.chromium.build.NullUtil.assertNonNull;
-import static org.chromium.build.NullUtil.assumeNonNull;
 
+import android.app.Activity;
 import android.content.Context;
+import android.content.Intent;
+import android.net.Uri;
+import android.provider.Browser;
 
+import org.chromium.base.Callback;
+import org.chromium.base.IntentUtils;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.OneshotSupplierImpl;
+import org.chromium.base.supplier.SupplierUtils;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.browserservices.intents.WebappConstants;
+import org.chromium.chrome.browser.document.ChromeLauncherActivity;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
-import org.chromium.chrome.browser.sync.SyncServiceFactory;
+import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
+import org.chromium.chrome.browser.ui.signin.BottomSheetSigninAndHistorySyncConfig;
+import org.chromium.chrome.browser.ui.signin.BottomSheetSigninAndHistorySyncConfig.NoAccountSigninMode;
+import org.chromium.chrome.browser.ui.signin.BottomSheetSigninAndHistorySyncConfig.WithAccountSigninMode;
+import org.chromium.chrome.browser.ui.signin.BottomSheetSigninAndHistorySyncCoordinator;
+import org.chromium.chrome.browser.ui.signin.DelegateContext;
+import org.chromium.chrome.browser.ui.signin.SigninAndHistorySyncActivityLauncher;
+import org.chromium.chrome.browser.ui.signin.SigninAndHistorySyncCoordinator;
 import org.chromium.chrome.browser.ui.signin.account_picker.AccountPickerBottomSheetCoordinator;
 import org.chromium.chrome.browser.ui.signin.account_picker.AccountPickerBottomSheetStrings;
 import org.chromium.chrome.browser.ui.signin.account_picker.AccountPickerDelegate;
 import org.chromium.chrome.browser.ui.signin.account_picker.AccountPickerLaunchMode;
+import org.chromium.chrome.browser.ui.signin.account_picker.PostSigninOperationResult;
+import org.chromium.chrome.browser.ui.signin.history_sync.HistorySyncConfig;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
-import org.chromium.components.browser_ui.bottomsheet.EmptyBottomSheetObserver;
 import org.chromium.components.browser_ui.device_lock.DeviceLockActivityLauncher;
+import org.chromium.components.embedder_support.util.UrlConstants;
+import org.chromium.components.signin.SigninFeatureMap;
 import org.chromium.components.signin.base.CoreAccountInfo;
 import org.chromium.components.signin.metrics.SigninAccessPoint;
-import org.chromium.components.sync.SyncService;
+import org.chromium.ui.base.ActivityResultTracker;
 import org.chromium.ui.base.WindowAndroid;
+import org.chromium.ui.modaldialog.ModalDialogManager;
+import org.chromium.ui.modelutil.PropertyModel;
+import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
 
+import java.util.Collections;
 import java.util.List;
+import java.util.function.Supplier;
 
 /** Coordinator for displaying the send tab to self feature. */
 @NullMarked
-public class SendTabToSelfCoordinator {
+public class SendTabToSelfCoordinator
+        implements BottomSheetSigninAndHistorySyncCoordinator.Delegate {
+
+
     /**
-     * Waits for Sync to download the list of target devices after sign-in. Aborts if the
-     * user dismisses the sign-in bottom sheet ("account picker") before success.
+     * Performs sign-in for the promo shown to signed-out users. TODO(crbug.com/448227402): Remove
+     * this class after migration to the activity-less sign-in flow is complete.
      */
-    private static class TargetDeviceListWaiter extends EmptyBottomSheetObserver
-            implements SyncService.SyncStateChangedListener {
-        private final BottomSheetController mBottomSheetController;
-        private final String mUrl;
-        private final Runnable mGotDeviceListCallback;
-        private final Profile mProfile;
-
-        /**
-         * Note there's no need for a notion for a failure callback because in that case the
-         * account picker bottom sheet was closed and there's nothing left to do (simply don't
-         * show any other bottom sheet).
-         */
-        public TargetDeviceListWaiter(
-                BottomSheetController bottomSheetController,
-                String url,
-                Runnable gotDeviceListCallback,
-                Profile profile) {
-            mBottomSheetController = bottomSheetController;
-            mUrl = url;
-            mGotDeviceListCallback = gotDeviceListCallback;
-            mProfile = profile;
-
-            assumeNonNull(SyncServiceFactory.getForProfile(mProfile))
-                    .addSyncStateChangedListener(this);
-            mBottomSheetController.addObserver(this);
-            notifyAndDestroyIfDone();
-        }
-
-        private void destroy() {
-            assumeNonNull(SyncServiceFactory.getForProfile(mProfile))
-                    .removeSyncStateChangedListener(this);
-            mBottomSheetController.removeObserver(this);
-        }
-
-        @Override
-        public void syncStateChanged() {
-            notifyAndDestroyIfDone();
-        }
-
-        @Override
-        public void onSheetClosed(int reason) {
-            // The account picker doesn't dismiss itself, so this must mean the user did.
-            destroy();
-        }
-
-        private void notifyAndDestroyIfDone() {
-            @EntryPointDisplayReason
-            Integer displayReason =
-                    SendTabToSelfAndroidBridge.getEntryPointDisplayReason(mProfile, mUrl);
-            // The model is starting up, keep waiting.
-            if (displayReason == null) return;
-
-            switch (displayReason) {
-                case EntryPointDisplayReason.OFFER_SIGN_IN:
-                    return;
-                case EntryPointDisplayReason.INFORM_NO_TARGET_DEVICE:
-                case EntryPointDisplayReason.OFFER_FEATURE:
-                    break;
-            }
-
-            destroy();
-            mGotDeviceListCallback.run();
-        }
-    }
-
-    /** Performs sign-in for the promo shown to signed-out users. */
     private static class SendTabToSelfAccountPickerDelegate implements AccountPickerDelegate {
         private final Runnable mOnSignInCompleteCallback;
 
@@ -142,50 +106,89 @@ public class SendTabToSelfCoordinator {
     private final @Nullable WindowAndroid mWindowAndroid;
     private final String mUrl;
     private final String mTitle;
-    private final BottomSheetController mController;
+    private final BottomSheetController mBottomSheetController;
     private final Profile mProfile;
     private final DeviceLockActivityLauncher mDeviceLockActivityLauncher;
+    private final Supplier<@Nullable Tab> mTabProvider;
+    private final Activity mActivity;
+    private final SigninAndHistorySyncActivityLauncher mSigninAndHistorySyncActivityLauncher;
+    private final ActivityResultTracker mActivityResultTracker;
+    private final MonotonicObservableSupplier<ModalDialogManager> mModalDialogManagerSupplier;
+    private final SnackbarManager mSnackbarManager;
+    private @Nullable BottomSheetSigninAndHistorySyncCoordinator mSigninCoordinator;
+    private @Nullable PropertyModelChangeProcessor mChangeProcessor;
+    private @Nullable EnhancedTargetDevicePickerView mView;
+
+    private final @ShareEntryPoint int mEntryPoint;
+    private long mNativeTargetDeviceListWaiterPtr;
 
     public SendTabToSelfCoordinator(
             Context context,
             @Nullable WindowAndroid windowAndroid,
             String url,
             String title,
-            BottomSheetController controller,
+            BottomSheetController bottomSheetController,
             Profile profile,
-            DeviceLockActivityLauncher deviceLockActivityLauncher) {
+            DeviceLockActivityLauncher deviceLockActivityLauncher,
+            Supplier<@Nullable Tab> tabProvider,
+            Activity activity,
+            SigninAndHistorySyncActivityLauncher signinAndHistorySyncActivityLauncher,
+            ActivityResultTracker activityResultTracker,
+            MonotonicObservableSupplier<ModalDialogManager> modalDialogManagerSupplier,
+            SnackbarManager snackbarManager,
+            @ShareEntryPoint int entryPoint) {
         mContext = context;
         mWindowAndroid = windowAndroid;
         mUrl = url;
         mTitle = title;
-        mController = controller;
+        mBottomSheetController = bottomSheetController;
         mProfile = profile;
         mDeviceLockActivityLauncher = deviceLockActivityLauncher;
+        mTabProvider = tabProvider;
+        mActivity = activity;
+        mSigninAndHistorySyncActivityLauncher = signinAndHistorySyncActivityLauncher;
+        mActivityResultTracker = activityResultTracker;
+        mModalDialogManagerSupplier = modalDialogManagerSupplier;
+        mSnackbarManager = snackbarManager;
+        mEntryPoint = entryPoint;
     }
 
     public void show() {
+        if (mActivity.isFinishing() || mActivity.isDestroyed()) {
+            return;
+        }
+
         @EntryPointDisplayReason
         Integer displayReason =
                 SendTabToSelfAndroidBridge.getEntryPointDisplayReason(mProfile, mUrl);
-        assert displayReason != null;
+        // Do not show the UI if the model is not ready or the URL is unsupported.
+        if (displayReason == null) return;
 
-        MetricsRecorder.recordCrossDeviceTabJourney();
+        List<TargetDeviceInfo> targetDevices =
+                displayReason == EntryPointDisplayReason.OFFER_FEATURE
+                        ? SendTabToSelfAndroidBridge.getAllTargetDeviceInfos(mProfile)
+                        : Collections.emptyList();
+        SendTabToSelfAndroidBridge.recordTargetDeviceCount(
+                mEntryPoint, displayReason, targetDevices.size());
+
+        SendTabToSelfMetricsRecorder.recordCrossDeviceTabJourney();
+        SendTabToSelfMetricsRecorder.recordEntryPointInvoked(mEntryPoint);
         switch (displayReason) {
             case EntryPointDisplayReason.INFORM_NO_TARGET_DEVICE:
-                mController.requestShowContent(
+                mBottomSheetController.requestShowContent(
                         new NoTargetDeviceBottomSheetContent(mContext, mProfile), true);
                 return;
             case EntryPointDisplayReason.OFFER_FEATURE:
-                List<TargetDeviceInfo> targetDevices =
-                        SendTabToSelfAndroidBridge.getAllTargetDeviceInfos(mProfile);
-                mController.requestShowContent(
-                        new DevicePickerBottomSheetContent(
-                                mContext, mUrl, mTitle, mController, targetDevices, mProfile),
-                        true);
+                if (ChromeFeatureList.isEnabled(
+                        ChromeFeatureList.SEND_TAB_TO_SELF_ENHANCED_BOTTOMSHEET)) {
+                    showEnhancedTargetDevicePicker(targetDevices);
+                } else {
+                    showLegacyTargetDevicePicker(targetDevices);
+                }
                 return;
             case EntryPointDisplayReason.OFFER_SIGN_IN:
                 {
-                    AccountPickerBottomSheetStrings strings =
+                    AccountPickerBottomSheetStrings bottomSheetStrings =
                             new AccountPickerBottomSheetStrings.Builder(
                                             mContext.getString(
                                                     R.string
@@ -196,32 +199,204 @@ public class SendTabToSelfCoordinator {
                                                             .signin_account_picker_bottom_sheet_subtitle_for_send_tab_to_self))
                                     .setDismissButtonString(mContext.getString(R.string.cancel))
                                     .build();
-                    var identityManager =
-                            IdentityServicesProvider.get().getIdentityManager(mProfile);
-                    var signinManager = IdentityServicesProvider.get().getSigninManager(mProfile);
-                    new AccountPickerBottomSheetCoordinator(
-                            assertNonNull(mWindowAndroid),
-                            assertNonNull(identityManager),
-                            assertNonNull(signinManager),
-                            mController,
-                            new SendTabToSelfAccountPickerDelegate(this::onSignInComplete),
-                            strings,
-                            mDeviceLockActivityLauncher,
-                            AccountPickerLaunchMode.DEFAULT,
-                            /* isWebSignin= */ false,
-                            SigninAccessPoint.SEND_TAB_TO_SELF_PROMO,
-                            /* selectedAccountId= */ null);
+                    if (SigninFeatureMap.getInstance().isActivitylessSigninAllEntryPointEnabled()) {
+                        OneshotSupplierImpl<Profile> profileSupplier = new OneshotSupplierImpl<>();
+                        profileSupplier.set(mProfile);
+                        SupplierUtils.waitForAll(
+                                () -> {
+                                    // The BottomSheetSigninAndHistorySyncCoordinator is created on
+                                    // demand when the user taps on the Send Tab to Self option,
+                                    // rather than when the activity is created. This means that if
+                                    // the Chrome Activity is killed during the "Add account" flow,
+                                    // the sign-in process will not resume after the account is
+                                    // added. This is a known limitation and differs from other
+                                    // sign-in entry points due to the complexity of the Send Tab to
+                                    // Self feature. This implementation may be subject to change in
+                                    // the future.
+                                    mSigninCoordinator =
+                                            mSigninAndHistorySyncActivityLauncher
+                                                    .createBottomSheetSigninCoordinatorAndObserveAddAccountResult(
+                                                            assertNonNull(mWindowAndroid),
+                                                            mActivity,
+                                                            mActivityResultTracker,
+                                                            this,
+                                                            mDeviceLockActivityLauncher,
+                                                            profileSupplier,
+                                                            () -> mBottomSheetController,
+                                                            SupplierUtils.asNonNull(
+                                                                    mModalDialogManagerSupplier),
+                                                            SupplierUtils.of(mSnackbarManager),
+                                                            SigninAccessPoint
+                                                                    .SEND_TAB_TO_SELF_PROMO);
+                                    BottomSheetSigninAndHistorySyncConfig config =
+                                            new BottomSheetSigninAndHistorySyncConfig.Builder(
+                                                            bottomSheetStrings,
+                                                            NoAccountSigninMode.BOTTOM_SHEET,
+                                                            WithAccountSigninMode
+                                                                    .DEFAULT_ACCOUNT_BOTTOM_SHEET,
+                                                            HistorySyncConfig.OptInMode.NONE,
+                                                            mContext.getString(
+                                                                    R.string.history_sync_title),
+                                                            mContext.getString(
+                                                                    R.string.history_sync_subtitle))
+                                                    .build();
+                                    assert mSigninCoordinator != null;
+                                    mSigninCoordinator.startSigninFlow(config);
+                                },
+                                mModalDialogManagerSupplier);
+                    } else {
+                        var identityManager =
+                                IdentityServicesProvider.get().getIdentityManager(mProfile);
+                        var signinManager =
+                                IdentityServicesProvider.get().getSigninManager(mProfile);
+                        var accountPreviewDataService =
+                                IdentityServicesProvider.get()
+                                        .getAccountPreviewDataService(mProfile);
+                        new AccountPickerBottomSheetCoordinator(
+                                assertNonNull(mWindowAndroid),
+                                assertNonNull(identityManager),
+                                assertNonNull(signinManager),
+                                accountPreviewDataService,
+                                assertNonNull(mModalDialogManagerSupplier.get()),
+                                mBottomSheetController,
+                                new SendTabToSelfAccountPickerDelegate(this::onSignInComplete),
+                                bottomSheetStrings,
+                                mDeviceLockActivityLauncher,
+                                AccountPickerLaunchMode.DEFAULT,
+                                /* isWebSignin= */ false,
+                                SigninAccessPoint.SEND_TAB_TO_SELF_PROMO,
+                                /* selectedAccountId= */ null);
+                    }
                     return;
                 }
         }
     }
 
-    private void onSignInComplete() {
-        new TargetDeviceListWaiter(mController, mUrl, this::onTargetDeviceListReady, mProfile);
+    /** Implements {@link BottomSheetSigninAndHistorySyncCoordinator.Delegate}. */
+    @Override
+    public void runPostSigninAction(
+            CoreAccountInfo signedInAccount,
+            @Nullable DelegateContext delegateContext,
+            Callback<@PostSigninOperationResult Integer> onComplete) {
+        assert SigninFeatureMap.getInstance().isActivitylessSigninAllEntryPointEnabled();
+        waitForTargetDeviceList(onComplete);
     }
 
-    private void onTargetDeviceListReady() {
-        mController.hideContent(mController.getCurrentSheetContent(), /* animate= */ true);
-        show();
+    /** Implements {@link BottomSheetSigninAndHistorySyncCoordinator.Delegate}. */
+    @Override
+    public void onFlowComplete(SigninAndHistorySyncCoordinator.Result result) {
+        assert SigninFeatureMap.getInstance().isActivitylessSigninAllEntryPointEnabled();
+        if (result.hasSignedIn) {
+            show();
+        }
+        if (mSigninCoordinator != null) {
+            mSigninCoordinator.destroy();
+            mSigninCoordinator = null;
+        }
+        destroyTargetDeviceListWaiter();
+    }
+
+    private void onSignInComplete() {
+        assert !SigninFeatureMap.getInstance().isActivitylessSigninAllEntryPointEnabled();
+        waitForTargetDeviceList(
+                result -> {
+                    if (mActivity.isFinishing() || mActivity.isDestroyed()) {
+                        return;
+                    }
+                    mBottomSheetController.hideContent(
+                            mBottomSheetController.getCurrentSheetContent(), /* animate= */ true);
+                    show();
+                });
+    }
+
+    private void waitForTargetDeviceList(Callback<@PostSigninOperationResult Integer> onComplete) {
+        destroyTargetDeviceListWaiter();
+        mNativeTargetDeviceListWaiterPtr =
+                SendTabToSelfAndroidBridge.addTargetDeviceListWaiter(
+                        mProfile,
+                        mUrl,
+                        () -> {
+                            destroyTargetDeviceListWaiter();
+                            onComplete.onResult(PostSigninOperationResult.SUCCESS);
+                        });
+    }
+
+    private void destroyTargetDeviceListWaiter() {
+        if (mNativeTargetDeviceListWaiterPtr != 0) {
+            SendTabToSelfAndroidBridge.removeTargetDeviceListWaiter(
+                    mNativeTargetDeviceListWaiterPtr);
+            mNativeTargetDeviceListWaiterPtr = 0;
+        }
+    }
+
+    private void showEnhancedTargetDevicePicker(List<TargetDeviceInfo> targetDevices) {
+        if (mChangeProcessor != null) {
+            mChangeProcessor.destroy();
+            mChangeProcessor = null;
+        }
+        if (mView != null) {
+            mView.destroy();
+            mView = null;
+        }
+
+        mView = new EnhancedTargetDevicePickerView(mContext, mBottomSheetController);
+
+        PropertyModel model = EnhancedTargetDevicePickerProperties.createDefaultModel();
+
+        new EnhancedTargetDevicePickerMediator(
+                mUrl, mTitle, targetDevices, mProfile, mTabProvider, model, mEntryPoint);
+
+        mChangeProcessor =
+                PropertyModelChangeProcessor.create(
+                        model, mView, EnhancedTargetDevicePickerViewBinder::bind);
+
+        model.set(
+                EnhancedTargetDevicePickerProperties.DISMISS_CALLBACK,
+                reason -> {
+                    if (mChangeProcessor != null) {
+                        mChangeProcessor.destroy();
+                        mChangeProcessor = null;
+                    }
+                    if (mView != null) {
+                        mView.destroy();
+                        mView = null;
+                    }
+                });
+
+        model.set(
+                EnhancedTargetDevicePickerProperties.MANAGE_DEVICES_CALLBACK,
+                () -> {
+                    openManageDevicesPage();
+                    model.set(EnhancedTargetDevicePickerProperties.VISIBLE, false);
+                });
+
+        model.set(EnhancedTargetDevicePickerProperties.VISIBLE, true);
+    }
+
+    private void openManageDevicesPage() {
+        Intent intent =
+                new Intent()
+                        .setAction(Intent.ACTION_VIEW)
+                        .setData(Uri.parse(UrlConstants.GOOGLE_ACCOUNT_DEVICE_ACTIVITY_URL))
+                        .setClass(mContext, ChromeLauncherActivity.class)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        .putExtra(Browser.EXTRA_APPLICATION_ID, mContext.getPackageName())
+                        .putExtra(WebappConstants.REUSE_URL_MATCHING_TAB_ELSE_NEW_TAB, true);
+        IntentUtils.addTrustedIntentExtras(intent);
+        mContext.startActivity(intent);
+    }
+
+    private void showLegacyTargetDevicePicker(List<TargetDeviceInfo> targetDevices) {
+        mBottomSheetController.requestShowContent(
+                new DevicePickerBottomSheetContent(
+                        mContext,
+                        mUrl,
+                        mTitle,
+                        mBottomSheetController,
+                        targetDevices,
+                        mProfile,
+                        mTabProvider,
+                        mEntryPoint),
+                true);
     }
 }

@@ -9,7 +9,7 @@ import logging
 import sys
 from xml.dom import minidom
 
-import setup_modules
+import setup_modules  # pylint: disable=unused-import
 
 import chromium_src.tools.metrics.common.enums as enums
 import chromium_src.tools.metrics.histograms.histogram_configuration_model as histogram_configuration_model
@@ -17,7 +17,8 @@ import chromium_src.tools.metrics.histograms.histogram_paths as histogram_paths
 
 
 def _remove_enum_nodes_not_in_list(
-    enum_names: set[str], filepath: str) -> tuple[list[minidom.Element], str]:
+  enum_names: set[str], filepath: str
+) -> tuple[list[minidom.Element], str]:
   """Returns the <enum> nodes not corresponding to the specified names."""
   with io.open(filepath, 'r', encoding='utf-8') as f:
     document = minidom.parse(f)
@@ -28,7 +29,9 @@ def _remove_enum_nodes_not_in_list(
       enum_nodes.append(enum_node)
 
   for node in enum_nodes:
-    node.parentNode.removeChild(node)
+    parent = node.parentNode
+    if parent:
+      parent.removeChild(node)
 
   xml_with_nodes_removed = histogram_configuration_model.PrettifyTree(document)
   return enum_nodes, xml_with_nodes_removed
@@ -40,7 +43,8 @@ def _remove_unused_enums():
 
   for enum_file in histogram_paths.ENUMS_XMLS:
     enum_nodes, updated_enum_xml = _remove_enum_nodes_not_in_list(
-        enum_names, enum_file)
+      enum_names, enum_file
+    )
     if not enum_nodes:
       logging.info(f'All enums in {enum_file} are referenced')
       continue
@@ -56,7 +60,7 @@ def _remove_unused_enums():
 
 
 if __name__ == '__main__':
-  logging.basicConfig(level=logging.INFO,
-                      stream=sys.stderr,
-                      format='%(message)s')
+  logging.basicConfig(
+    level=logging.INFO, stream=sys.stderr, format='%(message)s'
+  )
   _remove_unused_enums()

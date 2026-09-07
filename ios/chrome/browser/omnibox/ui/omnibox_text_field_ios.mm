@@ -7,6 +7,7 @@
 #import <CoreText/CoreText.h>
 
 #import "base/apple/foundation_util.h"
+#import "base/check_is_test.h"
 #import "base/check_op.h"
 #import "base/command_line.h"
 #import "base/ios/ios_util.h"
@@ -22,8 +23,6 @@
 #import "ios/chrome/browser/omnibox/ui/omnibox_text_input_delegate.h"
 #import "ios/chrome/browser/shared/public/features/system_flags.h"
 #import "ios/chrome/browser/shared/ui/util/animation_util.h"
-#import "ios/chrome/browser/shared/ui/util/dynamic_type_util.h"
-#import "ios/chrome/browser/shared/ui/util/reversed_animation.h"
 #import "ios/chrome/browser/shared/ui/util/rtl_geometry.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/public/toolbar_constants.h"
@@ -37,7 +36,6 @@
 #import "ui/base/l10n/l10n_util_mac.h"
 #import "ui/gfx/color_palette.h"
 #import "ui/gfx/image/image.h"
-#import "ui/gfx/ios/NSString+CrStringDrawing.h"
 #import "ui/gfx/scoped_cg_context_save_gstate_mac.h"
 
 using enum OmniboxKeyboardAction;
@@ -155,9 +153,7 @@ NSString* const kOmniboxFadeAnimationKey = @"OmniboxFadeAnimation";
                   action:@selector(textFieldDidChange:)
         forControlEvents:UIControlEventEditingChanged];
 
-    NSArray<UITrait>* traits = TraitCollectionSetForTraits(
-        @[ UITraitPreferredContentSizeCategory.class ]);
-    [self registerForTraitChanges:(traits)
+    [self registerForTraitChanges:@[ UITraitPreferredContentSizeCategory.class ]
                        withAction:@selector(updateTextProperitesOnTraitChange)];
   }
   return self;
@@ -531,11 +527,6 @@ NSString* const kOmniboxFadeAnimationKey = @"OmniboxFadeAnimation";
 - (void)beginFloatingCursorAtPoint:(CGPoint)point {
   // Exit preedit because it blocks the view of the textfield.
   [self exitPreEditState];
-  // Remove selection and put the caret at the end of the string.
-  if (!base::FeatureList::IsEnabled(kBeginCursorAtPointTentativeFix)) {
-    self.selectedTextRange = [self textRangeFromPosition:self.endOfDocument
-                                              toPosition:self.endOfDocument];
-  }
   [super beginFloatingCursorAtPoint:point];
 }
 
@@ -783,10 +774,8 @@ NSString* const kOmniboxFadeAnimationKey = @"OmniboxFadeAnimation";
 #pragma mark - UIAccessibilityElement
 
 - (NSString*)accessibilityValue {
-  if (NSClassFromString(@"XCTest")) {
-    return [NSString stringWithFormat:@"%@||||%@||||%@", self.userText ?: @"",
-                                      self.autocompleteText ?: @"",
-                                      self.attributedAdditionalText ?: @""];
+  if (self.text.length == 0) {
+    return self.attributedPlaceholder.string;
   }
   return self.text;
 }
@@ -960,7 +949,7 @@ NSString* const kOmniboxFadeAnimationKey = @"OmniboxFadeAnimation";
   }
 
   CHECK_LE(self.attributedAdditionalText.length, self.attributedText.length,
-           base::NotFatalUntil::M150);
+           base::NotFatalUntil::M160);
   /// This should not happen, tracking occurences with NotFatalUntil
   /// crbug.com/421229993.
   if (self.attributedText.length < self.attributedAdditionalText.length) {
@@ -1146,6 +1135,14 @@ NSString* const kOmniboxFadeAnimationKey = @"OmniboxFadeAnimation";
 - (void)setCustomPlaceholderText:(NSString*)customPlaceholderText {
   _customPlaceholderText = [customPlaceholderText copy];
   [self updatePlaceholder];
+}
+
+- (NSString*)textValueForTesting {
+  CHECK_IS_TEST();
+  return
+      [NSString stringWithFormat:@"%@||||%@||||%@", self.userText ?: @"",
+                                 self.autocompleteText ?: @"",
+                                 self.attributedAdditionalText.string ?: @""];
 }
 
 #pragma mark - UITextFieldDelegate

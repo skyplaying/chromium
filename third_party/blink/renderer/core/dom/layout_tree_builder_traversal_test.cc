@@ -22,7 +22,7 @@ class LayoutTreeBuilderTraversalTest : public RenderingTest {
 };
 
 void LayoutTreeBuilderTraversalTest::SetupSampleHTML(const char* main_html) {
-  SetBodyInnerHTML(String::FromUTF8(main_html));
+  SetBodyInnerHTML(String::FromUtf8(main_html));
 }
 
 TEST_F(LayoutTreeBuilderTraversalTest, emptySubTree) {
@@ -98,13 +98,9 @@ TEST_F(LayoutTreeBuilderTraversalTest, displayContentsChildren) {
 
   EXPECT_EQ(inner->GetLayoutObject(),
             LayoutTreeBuilderTraversal::NextSiblingLayoutObject(*first));
-  EXPECT_EQ(first->GetLayoutObject(),
-            LayoutTreeBuilderTraversal::PreviousSiblingLayoutObject(*inner));
 
   EXPECT_EQ(last->GetLayoutObject(),
             LayoutTreeBuilderTraversal::NextSiblingLayoutObject(*inner));
-  EXPECT_EQ(inner->GetLayoutObject(),
-            LayoutTreeBuilderTraversal::PreviousSiblingLayoutObject(*last));
 }
 
 TEST_F(LayoutTreeBuilderTraversalTest, displayContentsChildrenNested) {
@@ -132,38 +128,12 @@ TEST_F(LayoutTreeBuilderTraversalTest, displayContentsChildrenNested) {
 
   EXPECT_EQ(inner->GetLayoutObject(),
             LayoutTreeBuilderTraversal::NextSiblingLayoutObject(*first));
-  EXPECT_EQ(first->GetLayoutObject(),
-            LayoutTreeBuilderTraversal::PreviousSiblingLayoutObject(*inner));
 
   EXPECT_EQ(sibling->GetLayoutObject(),
             LayoutTreeBuilderTraversal::NextSiblingLayoutObject(*inner));
-  EXPECT_EQ(inner->GetLayoutObject(),
-            LayoutTreeBuilderTraversal::PreviousSiblingLayoutObject(*sibling));
 
   EXPECT_EQ(last->GetLayoutObject(),
             LayoutTreeBuilderTraversal::NextSiblingLayoutObject(*sibling));
-  EXPECT_EQ(sibling->GetLayoutObject(),
-            LayoutTreeBuilderTraversal::PreviousSiblingLayoutObject(*last));
-}
-
-TEST_F(LayoutTreeBuilderTraversalTest, limits) {
-  const char* const kHtml =
-      "<div></div>"
-      "<div style='display: contents'></div>"
-      "<div style='display: contents'>"
-      "<div style='display: contents'>"
-      "</div>"
-      "</div>"
-      "<div id='shouldNotBeFound'></div>";
-
-  SetupSampleHTML(kHtml);
-
-  Element* first = GetDocument().QuerySelector(AtomicString("div"));
-
-  EXPECT_TRUE(first->GetLayoutObject());
-  LayoutObject* next_sibling =
-      LayoutTreeBuilderTraversal::NextSiblingLayoutObject(*first, 2);
-  EXPECT_FALSE(next_sibling);  // Should not overrecurse
 }
 
 TEST_F(LayoutTreeBuilderTraversalTest, ColumnScrollMarkers) {
@@ -255,6 +225,87 @@ TEST_F(LayoutTreeBuilderTraversalTest, ColumnScrollMarkers) {
             LayoutTreeBuilderTraversal::Previous(*first_column, nullptr));
   EXPECT_EQ(scroll_marker_group,
             LayoutTreeBuilderTraversal::Previous(*marker, nullptr));
+}
+
+TEST_F(LayoutTreeBuilderTraversalTest, FixedPositionedScrollButton) {
+  SetupSampleHTML(R"(
+      <style>
+        #container {
+          width: 200px;
+          height: 200px;
+        }
+        #scroller {
+          overflow: auto;
+          width: 100px;
+          height: 100px;
+        }
+        #scroller::scroll-button(inline-end) {
+          content: '>';
+          width: 20px;
+          height: 20px;
+          position: fixed;
+        }
+      </style>
+      <div id="container">
+        <div id="scroller">
+          <div style="width: 200px; height: 200px;"></div>
+        </div>
+      </div>
+  )");
+  UpdateAllLifecyclePhasesForTest();
+
+  Element* scroller = GetDocument().QuerySelector(AtomicString("#scroller"));
+  PseudoElement* scroll_button =
+      scroller->GetPseudoElement(kPseudoIdScrollButtonInlineEnd);
+  ASSERT_TRUE(scroll_button);
+
+  LayoutObject* scroll_button_layout = scroll_button->GetLayoutObject();
+  ASSERT_TRUE(scroll_button_layout);
+
+  EXPECT_EQ(scroll_button_layout->Parent(),
+            scroller->GetLayoutObject()->Parent());
+}
+
+TEST_F(LayoutTreeBuilderTraversalTest, InFlowScrollButtons) {
+  SetupSampleHTML(R"(
+      <style>
+        #container {
+          width: 200px;
+          height: 200px;
+        }
+        #scroller {
+          overflow: auto;
+          width: 100px;
+          height: 100px;
+        }
+        #scroller::scroll-button(inline-end) {
+          content: '>';
+          width: 20px;
+          height: 20px;
+        }
+      </style>
+      <div id="container">
+        <div id="scroller">
+          <div style="width: 200px; height: 200px;"></div>
+        </div>
+      </div>
+  )");
+  UpdateAllLifecyclePhasesForTest();
+
+  Element* scroller = GetDocument().QuerySelector(AtomicString("#scroller"));
+  PseudoElement* scroll_button =
+      scroller->GetPseudoElement(kPseudoIdScrollButtonInlineEnd);
+  ASSERT_TRUE(scroll_button);
+
+  LayoutObject* scroll_button_layout = scroll_button->GetLayoutObject();
+  ASSERT_TRUE(scroll_button_layout);
+
+  EXPECT_TRUE(scroll_button_layout->Parent()->IsAnonymous());
+  EXPECT_EQ(scroll_button_layout->Parent()->Parent(),
+            scroller->GetLayoutObject()->Parent());
+
+  EXPECT_EQ(LayoutTreeBuilderTraversal::NextSiblingLayoutObject(*scroller),
+            scroll_button_layout);
 }
 
 }  // namespace blink

@@ -29,8 +29,10 @@
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory_coordinator/memory_consumer_registry.h"
+#include "base/memory_coordinator/memory_coordinator_features.h"
 #include "base/memory_coordinator/traits.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/numerics/clamped_math.h"
 #include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/platform/platform.h"
@@ -51,25 +53,17 @@ namespace blink {
 namespace {
 
 // The set of traits that describes the behavior of MemoryCache.
-constexpr base::MemoryConsumerTraits kMemoryCacheTraits = {
-    .supports_memory_limit =
-        base::MemoryConsumerTraits::SupportsMemoryLimit::kYes,
-    .in_process = base::MemoryConsumerTraits::InProcess::kYes,
-    .estimated_memory_usage =
-        base::MemoryConsumerTraits::EstimatedMemoryUsage::kMedium,
-    .release_memory_cost =
-        base::MemoryConsumerTraits::ReleaseMemoryCost::kRequiresTraversal,
-    .recreate_memory_cost = base::MemoryConsumerTraits::RecreateMemoryCost::kNA,
-    .information_retention =
-        base::MemoryConsumerTraits::InformationRetention::kLossless,
-    .memory_release_behavior =
-        base::MemoryConsumerTraits::MemoryReleaseBehavior::kIdempotent,
-    .execution_type = base::MemoryConsumerTraits::ExecutionType::kAsynchronous,
-    .release_gc_references =
-        base::MemoryConsumerTraits::ReleaseGCReferences::kYes,
-    .garbage_collects_v8_heap =
-        base::MemoryConsumerTraits::GarbageCollectsV8Heap::kNo,
-};
+constexpr base::MemoryConsumerTraits kMemoryCacheTraits(
+    // Strong reference budget is platform-specific; frees tens of MBs.
+    base::MemoryConsumerTraits::EstimatedMemoryUsage::kMedium,
+    // Pruning requires sorting or traversing HeapLinkedHashSet of resources.
+    base::MemoryConsumerTraits::ReleaseMemoryCost::kRequiresTraversal,
+    // Cached resources reload from network/disk cache.
+    base::MemoryConsumerTraits::InformationRetention::kLossless,
+    // Synchronously prunes the references inline.
+    base::MemoryConsumerTraits::ExecutionType::kSynchronous,
+    // Holds references managed by Blink Oilpan GC.
+    base::MemoryConsumerTraits::ReleaseGCReferences::kYes);
 
 // Use function-local statics to cache the feature parameters. This avoids
 // global constructors and ensures the .Get() call happens only once.
@@ -142,20 +136,11 @@ int GetResourceTypePriority(ResourceType type) {
 static Persistent<MemoryCache>* g_memory_cache;
 
 static constexpr base::TimeDelta kDefaultStrongReferencePruneDelay =
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+    base::Minutes(60);
+#else
     base::Minutes(5);
-
-// Feature to control the duration for which a strong reference may remain
-// in the MemoryCache after its last access.
-BASE_FEATURE(kMemoryCacheChangeStrongReferencePruneDelay,
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-// Parameter defining the delay after which a strong reference is removed
-// from the MemoryCache after its last access.
-BASE_FEATURE_PARAM(base::TimeDelta,
-                   kMemoryCacheStrongReferencePruneDelay,
-                   &kMemoryCacheChangeStrongReferencePruneDelay,
-                   "strong_reference_prune_delay",
-                   kDefaultStrongReferencePruneDelay);
+#endif
 
 ScopedMemoryCacheForTesting::ScopedMemoryCacheForTesting(
     Persistent<MemoryCache> cache) {
@@ -202,22 +187,17 @@ MemoryCache* MemoryCache::Get() {
 
 MemoryCache::MemoryCache(
     scoped_refptr<base::SingleThreadTaskRunner> task_runner)
-    : memory_pressure_listener_registration_(
-          FROM_HERE,
-          base::MemoryPressureListenerTag::kMemoryCache,
-          this),
-      memory_consumer_registration_(
+    : memory_consumer_registration_(
           "MemoryCache",
           kMemoryCacheTraits,
           this,
-          MemoryConsumerRegistration::CheckUnregister::kDisabled,
-          MemoryConsumerRegistration::CheckRegistryExists::kDisabled),
+          MemoryConsumerRegistration::CheckUnregister::kDisabled),
       strong_references_max_size_(
           features::kMemoryCacheStrongReferenceTotalSizeThresholdParam.Get()),
-      strong_references_prune_duration_(
-          kMemoryCacheStrongReferencePruneDelay.Get()),
+      strong_references_prune_duration_(kDefaultStrongReferencePruneDelay),
       task_runner_(std::move(task_runner)) {
   MemoryCacheDumpProvider::Instance()->SetMemoryCache(this);
+  OnUpdateMemoryLimit();
 }
 
 MemoryCache::~MemoryCache() = default;
@@ -226,11 +206,11 @@ void MemoryCache::Trace(Visitor* visitor) const {
   visitor->Trace(resource_maps_);
   visitor->Trace(strong_references_);
   visitor->Trace(tiered_strong_references_);
+  visitor->Trace(data_uri_strong_references_);
   MemoryCacheDumpClient::Trace(visitor);
 }
 
 void MemoryCache::Dispose() {
-  memory_pressure_listener_registration_.Dispose();
   memory_consumer_registration_.Dispose();
 }
 
@@ -240,8 +220,9 @@ KURL MemoryCache::RemoveFragmentIdentifierIfNeeded(const KURL& original_url) {
   // Strip away fragment identifier from HTTP URLs. Data URLs must be
   // unmodified. For file and custom URLs clients may expect resources to be
   // unique even when they differ by the fragment identifier only.
-  if (!original_url.ProtocolIsInHTTPFamily())
+  if (!original_url.ProtocolIsInHttpFamily()) {
     return original_url;
+  }
   KURL url = original_url;
   url.RemoveFragmentIdentifier();
   return url;
@@ -285,11 +266,13 @@ void MemoryCache::AddInternal(ResourceMap* resource_map,
   if (it != resource_map->end()) {
     Resource* old_resource = it->value->GetResource();
     CHECK_NE(old_resource, resource);
+    RemoveDataURIStrongReference(old_resource);
     Update(old_resource, old_resource->size(), 0);
     strong_references_.erase(old_resource);
   }
   resource_map->Set(url, entry);
   Update(resource, 0, resource->size());
+  AddOrTouchDataURIStrongReference(resource);
 }
 
 void MemoryCache::Remove(Resource* resource) {
@@ -327,12 +310,13 @@ void MemoryCache::RemoveInternal(ResourceMap* resource_map,
   Resource* resource = it->value->GetResource();
   DCHECK(resource);
 
+  RemoveDataURIStrongReference(resource);
   Update(resource, resource->size(), 0);
   resource_map->erase(it);
   if (base::FeatureList::IsEnabled(features::kMemoryCacheIntelligentPruning)) {
     // If intelligent pruning is on, the resource can only be in the new
     // tiered vector. We perform a "lazy" remove for performance.
-    size_t index = tiered_strong_references_.Find(resource);
+    wtf_size_t index = tiered_strong_references_.Find(resource);
     if (index != kNotFound) {
       tiered_strong_references_[index] = nullptr;
     }
@@ -360,13 +344,12 @@ bool MemoryCache::Contains(const Resource* resource) const {
   return resource == resources_it->value->GetResource();
 }
 
-Resource* MemoryCache::ResourceForURLForTesting(
-    const KURL& resource_url) const {
+Resource* MemoryCache::ResourceForURLForTesting(const KURL& resource_url) {
   return ResourceForURL(resource_url, DefaultCacheIdentifier());
 }
 
 Resource* MemoryCache::ResourceForURL(const KURL& resource_url,
-                                      const String& cache_identifier) const {
+                                      const String& cache_identifier) {
   DCHECK(IsMainThread());
   if (!resource_url.IsValid() || resource_url.IsNull())
     return nullptr;
@@ -388,6 +371,9 @@ Resource* MemoryCache::ResourceForURL(const KURL& resource_url,
   if (resource &&
       base::FeatureList::IsEnabled(features::kMemoryCacheIntelligentPruning)) {
     resource->UpdateMemoryCacheLastAccessedTime();
+  }
+  if (resource) {
+    AddOrTouchDataURIStrongReference(resource);
   }
 
   return resource;
@@ -417,6 +403,23 @@ void MemoryCache::Update(Resource* resource, size_t old_size, size_t new_size) {
   }
   if (strong_references_.Contains(resource)) {
     PruneStrongReferences();
+  }
+  if (data_uri_strong_references_.Contains(resource)) {
+    if (new_size > old_size) {
+      data_uri_strong_references_total_bytes_ = base::ClampAdd(
+          data_uri_strong_references_total_bytes_, new_size - old_size);
+      const size_t max_total_size = static_cast<size_t>(
+          features::kDataURIMemoryCacheTotalSizeThresholdParam.Get());
+      if (new_size > max_total_size) {
+        RemoveDataURIStrongReference(resource);
+      } else {
+        PruneDataURIStrongReferences();
+      }
+    } else {
+      const size_t data_uri_delta = old_size - new_size;
+      CHECK_LT(data_uri_delta, data_uri_strong_references_total_bytes_);
+      data_uri_strong_references_total_bytes_ -= data_uri_delta;
+    }
   }
 }
 
@@ -476,6 +479,7 @@ void MemoryCache::EvictResources() {
     resource_map_iter = resource_maps_.begin();
   }
   ClearStrongReferences();
+  ClearDataURIStrongReferences();
 }
 
 void MemoryCache::EvictResourcesForCacheIdentifier(
@@ -553,30 +557,57 @@ bool MemoryCache::OnMemoryDump(WebMemoryDumpLevelOfDetail level_of_detail,
   return true;
 }
 
-void MemoryCache::OnMemoryPressure(base::MemoryPressureLevel level) {
-  if (level == base::MEMORY_PRESSURE_LEVEL_NONE) {
-    return;
-  }
 
-  if (base::FeatureList::IsEnabled(
-          features::kReleaseResourceStrongReferencesOnMemoryPressure)) {
-    ClearStrongReferences();
-  }
+
+size_t MemoryCache::GetTargetStrongReferencesMaxSize() const {
+  const size_t baseline = static_cast<size_t>(
+      features::kMemoryCacheStrongReferenceTotalSizeThresholdParam.Get());
+  return base::ScaleByMemoryLimit(baseline, memory_limit());
 }
 
 void MemoryCache::OnReleaseMemory() {
-  if (base::FeatureList::IsEnabled(features::kMemoryCacheStrongReference)) {
-    PruneStrongReferences();
+  if (!base::FeatureList::IsEnabled(features::kMemoryCacheStrongReference)) {
+    return;
+  }
+
+  strong_references_max_size_ = GetTargetStrongReferencesMaxSize();
+  PruneStrongReferences();
+
+  if (!base::FeatureList::IsEnabled(base::kStatefulMemoryPressure)) {
+    const size_t baseline = static_cast<size_t>(
+        features::kMemoryCacheStrongReferenceTotalSizeThresholdParam.Get());
+    strong_references_max_size_ = baseline;
   }
 }
 
 void MemoryCache::OnUpdateMemoryLimit() {
-  // It is important to not do any memory management in this function. The max
-  // size is updated to the requested limit without calling
-  // PruneStrongReferences().
-  strong_references_max_size_ =
-      features::kMemoryCacheStrongReferenceTotalSizeThresholdParam.Get() *
-      memory_limit_ratio();
+  if (!base::FeatureList::IsEnabled(features::kMemoryCacheStrongReference) ||
+      !base::FeatureList::IsEnabled(base::kStatefulMemoryPressure)) {
+    return;
+  }
+
+  // IMPORTANT: Ensure no memory is released during this call.
+  // By using std::max, we ensure the limit is not reduced below the current
+  // size of held strong references, preventing premature eviction before
+  // OnReleaseMemory().
+  strong_references_max_size_ = std::max(GetStrongReferencesTotalSize(),
+                                         GetTargetStrongReferencesMaxSize());
+}
+
+size_t MemoryCache::GetStrongReferencesTotalSize() const {
+  size_t total_size = 0;
+  if (base::FeatureList::IsEnabled(features::kMemoryCacheIntelligentPruning)) {
+    for (const Resource* resource : tiered_strong_references_) {
+      if (resource) {
+        total_size += resource->size();
+      }
+    }
+  } else {
+    for (const Resource* resource : strong_references_) {
+      total_size += resource->size();
+    }
+  }
+  return total_size;
 }
 
 bool MemoryCache::HasStrongReferenceForTesting(Resource* resource) const {
@@ -711,21 +742,110 @@ void MemoryCache::PruneStrongReferences() {
   }
 }
 
+void MemoryCache::AddOrTouchDataURIStrongReference(Resource* resource) {
+  if (!base::FeatureList::IsEnabled(features::kDataURIMemoryCache)) {
+    return;
+  }
+  if (!resource->Url().ProtocolIsData()) {
+    return;
+  }
+
+  const size_t max_total_size = static_cast<size_t>(
+      features::kDataURIMemoryCacheTotalSizeThresholdParam.Get());
+  if (resource->size() > max_total_size) {
+    RemoveDataURIStrongReference(resource);
+    return;
+  }
+
+  // Appends, or moves to the end if already present (LRU touch).
+  auto result = data_uri_strong_references_.AppendOrMoveToLast(resource);
+  if (result.is_new_entry) {
+    data_uri_strong_references_total_bytes_ = base::ClampAdd(
+        data_uri_strong_references_total_bytes_, resource->size());
+    PruneDataURIStrongReferences();
+  }
+}
+
+void MemoryCache::PruneDataURIStrongReferences() {
+  DCHECK(IsMainThread());
+  const size_t max_total_size = static_cast<size_t>(
+      features::kDataURIMemoryCacheTotalSizeThresholdParam.Get());
+
+#if DCHECK_IS_ON()
+  // The total is maintained incrementally by the callers. Recompute it from
+  // live sizes to catch any path that changes a resource's size without
+  // reporting it.
+  size_t expected_total_size = 0;
+  for (const Resource* resource : data_uri_strong_references_) {
+    DCHECK(resource->Url().ProtocolIsData());
+    expected_total_size = base::ClampAdd(expected_total_size, resource->size());
+  }
+  DCHECK_EQ(expected_total_size, data_uri_strong_references_total_bytes_);
+#endif
+
+  while (data_uri_strong_references_total_bytes_ > max_total_size &&
+         !data_uri_strong_references_.empty()) {
+    Resource* front_resource = data_uri_strong_references_.front();
+    CHECK_LE(front_resource->size(), data_uri_strong_references_total_bytes_);
+    data_uri_strong_references_total_bytes_ -= front_resource->size();
+    data_uri_strong_references_.erase(data_uri_strong_references_.begin());
+  }
+  if (data_uri_strong_references_.empty()) {
+    data_uri_strong_references_total_bytes_ = 0;
+  }
+  CHECK_LE(data_uri_strong_references_total_bytes_, max_total_size);
+}
+
+void MemoryCache::RemoveDataURIStrongReference(Resource* resource) {
+  DCHECK(IsMainThread());
+  if (resource->Url().ProtocolIsData()) {
+    auto it = data_uri_strong_references_.find(resource);
+    if (it != data_uri_strong_references_.end()) {
+      CHECK_GE(data_uri_strong_references_total_bytes_, resource->size());
+      data_uri_strong_references_total_bytes_ -= resource->size();
+      data_uri_strong_references_.erase(it);
+    }
+  }
+}
+
 void MemoryCache::ClearStrongReferences() {
   strong_references_.clear();
   tiered_strong_references_.clear();
+  // Data URI strong references are intentionally NOT cleared here. They have
+  // their own size budget and are designed to survive memory pressure to
+  // persist across navigations. They are cleared in EvictResources() when the
+  // cache is fully emptied.
+}
+
+void MemoryCache::ClearDataURIStrongReferences() {
+  data_uri_strong_references_.clear();
+  data_uri_strong_references_total_bytes_ = 0;
 }
 
 double MemoryCache::CalculateResourceValue(const Resource* resource) const {
-  double cost_score = resource->EncodedSize() * GetCostWeight();
-  // Use log1p to apply diminishing returns to the hit count. This prevents a
-  // high frequency from dominating the resource's score and is numerically
-  // stable for low hit counts.
+  // Use time-decayed frequency score.
   double frequency_score =
-      std::log1p(resource->MemoryCacheHitCount()) * GetFrequencyWeight();
+      std::log1p(resource->DecayedHitScore()) * GetFrequencyWeight();
   double type_score =
       GetResourceTypePriority(resource->GetType()) * GetTypeWeight();
 
+  features::MemoryCacheCostScoringModel model =
+      features::kMemoryCacheCostScoringModel.Get();
+
+  if (model == features::MemoryCacheCostScoringModel::kValueDensity) {
+    // Value-density (additive with inverse size)
+    double size_bytes = static_cast<double>(resource->EncodedSize());
+    double cost_factor = (size_bytes > 0) ? (1.0 / size_bytes) : 1.0;
+    double cost_score = cost_factor * GetCostWeight();
+    return frequency_score + type_score + cost_score;
+  } else if (model == features::MemoryCacheCostScoringModel::kLogPenalty) {
+    // Log penalty
+    double cost_penalty = std::log1p(resource->EncodedSize()) * GetCostWeight();
+    return frequency_score + type_score - cost_penalty;
+  }
+
+  // Default Model kOriginal: Original behavior (cost increases score)
+  double cost_score = resource->EncodedSize() * GetCostWeight();
   return frequency_score + cost_score + type_score;
 }
 

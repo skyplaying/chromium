@@ -13,6 +13,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/bind.h"
+#include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
 #include "chrome/browser/enterprise/browser_management/management_service_factory.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
@@ -165,8 +166,9 @@ class ExtensionManagementTest : public extensions::ExtensionBrowserTest {
     extensions::ExtensionHost* ext_host =
         manager->GetBackgroundHostForExtension(extension->id());
     EXPECT_TRUE(ext_host);
-    if (!ext_host)
+    if (!ext_host) {
       return false;
+    }
 
     std::string version_from_bg =
         content::EvalJs(ext_host->host_contents(), "version()").ExtractString();
@@ -593,7 +595,7 @@ const char kForceInstallNotEmptyHelp[] =
 
 }
 
-// See http://crbug.com/57378 for flakiness details.
+// See http://crbug.com/41231588 for flakiness details.
 IN_PROC_BROWSER_TEST_F(ExtensionManagementTest, ExternalPolicyRefresh) {
   // Mark as enterprise managed.
   policy::ScopedDomainEnterpriseManagement scoped_domain;

@@ -10,13 +10,13 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <ranges>
 #include <set>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
-#include "base/containers/adapters.h"
 #include "base/containers/flat_set.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
@@ -501,10 +501,18 @@ Status ParseBoolean(const base::DictValue& params,
   return Status(kOk);
 }
 
-Status GetNonNegativeDouble(const base::DictValue& dict,
-                            const std::string& parent,
-                            const std::string& child,
-                            double* attribute) {
+// Parse a double as centimeters, and convert it to inches. [*] Only
+// non-negative values are allowed.
+//
+// [*] The webdriver API uses centimeters for printing, which is unfortunate,
+// but not something we can do anything about. Internally in the engine we use
+// CSS pixels. In the middle we have the devtools Page.printToPDF API which
+// wants stuff in inches. At least inches convert nicely to CSS pixels, whereas
+// centimeters don't...
+Status GetNonNegativeDoubleAsInches(const base::DictValue& dict,
+                                    const std::string& parent,
+                                    const std::string& child,
+                                    double* attribute) {
   bool has_value;
   std::string attribute_str = "'" + parent + "." + child + "'";
   if (!GetOptionalDouble(dict, child, attribute, &has_value)) {
@@ -538,11 +546,12 @@ Status ParsePage(const base::DictValue& params, Page* page) {
     return Status(kOk);
 
   Status status =
-      GetNonNegativeDouble(*page_dict, "page", "width", &page->width);
+      GetNonNegativeDoubleAsInches(*page_dict, "page", "width", &page->width);
   if (status.IsError())
     return status;
 
-  status = GetNonNegativeDouble(*page_dict, "page", "height", &page->height);
+  status =
+      GetNonNegativeDoubleAsInches(*page_dict, "page", "height", &page->height);
   if (status.IsError())
     return status;
 
@@ -572,21 +581,22 @@ Status ParseMargin(const base::DictValue& params, Margin* margin) {
     return Status(kOk);
 
   Status status =
-      GetNonNegativeDouble(*margin_dict, "margin", "top", &margin->top);
+      GetNonNegativeDoubleAsInches(*margin_dict, "margin", "top", &margin->top);
   if (status.IsError())
     return status;
 
-  status =
-      GetNonNegativeDouble(*margin_dict, "margin", "bottom", &margin->bottom);
+  status = GetNonNegativeDoubleAsInches(*margin_dict, "margin", "bottom",
+                                        &margin->bottom);
   if (status.IsError())
     return status;
 
-  status = GetNonNegativeDouble(*margin_dict, "margin", "left", &margin->left);
+  status = GetNonNegativeDoubleAsInches(*margin_dict, "margin", "left",
+                                        &margin->left);
   if (status.IsError())
     return status;
 
-  status =
-      GetNonNegativeDouble(*margin_dict, "margin", "right", &margin->right);
+  status = GetNonNegativeDoubleAsInches(*margin_dict, "margin", "right",
+                                        &margin->right);
   if (status.IsError())
     return status;
 
@@ -1551,6 +1561,11 @@ Status ProcessInputActionSequence(Session* session,
               return Status(kInvalidArgument,
                             "if 'origin' is a string, it must be either "
                             "'viewport' or 'pointer'");
+            if (*subtype == "scroll" && origin == "pointer") {
+              return Status(kInvalidArgument,
+                            "'pointer' origin is not supported for wheel "
+                            "scroll actions");
+            }
             action_dict.Set("origin", origin);
           }
         } else {
@@ -1991,7 +2006,7 @@ Status ExecuteReleaseActions(Session* session,
                              std::unique_ptr<base::Value>* value,
                              Timeout* timeout) {
   for (const InputCancelListEntry& entry :
-       base::Reversed(session->input_cancel_list)) {
+       std::views::reverse(session->input_cancel_list)) {
     if (entry.key_event) {
       base::DictValue* pressed = entry.input_state->FindDict("pressed");
       if (!pressed->Find(entry.key_event->key))
@@ -3036,4 +3051,28 @@ Status ExecuteClearDisplayFeatures(Session* session,
                                    Timeout* timeout) {
   return web_view->SendCommand("Emulation.clearDisplayFeaturesOverride",
                                base::DictValue());
+}
+
+Status ExecuteGetGlobalPrivacyControl(Session* session,
+                                      WebView* web_view,
+                                      const base::DictValue& params,
+                                      std::unique_ptr<base::Value>* value,
+                                      Timeout* timeout) {
+  base::DictValue result;
+  const Status status = session->chrome->Client()->SendCommandAndGetResult(
+      "Browser.getGlobalPrivacyControl", params, &result);
+  *value = std::make_unique<base::Value>(std::move(result));
+  return status;
+}
+
+Status ExecuteSetGlobalPrivacyControl(Session* session,
+                                      WebView* web_view,
+                                      const base::DictValue& params,
+                                      std::unique_ptr<base::Value>* value,
+                                      Timeout* timeout) {
+  base::DictValue result;
+  const Status status = session->chrome->Client()->SendCommandAndGetResult(
+      "Browser.setGlobalPrivacyControl", params, &result);
+  *value = std::make_unique<base::Value>(std::move(result));
+  return status;
 }

@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "base/check_deref.h"
 #include "base/check_op.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
@@ -21,6 +22,7 @@
 #include "chrome/browser/enterprise/signin/profile_management_disclaimer_service_factory.h"
 #include "chrome/browser/enterprise/util/managed_browser_utils.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/regional_capabilities/regional_capabilities_service_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/signin_promo_util.h"
 #include "chrome/browser/signin/signin_util.h"
@@ -30,6 +32,7 @@
 #include "chrome/browser/ui/webui/signin/history_sync_optin_service.h"
 #include "chrome/browser/ui/webui/signin/history_sync_optin_service_factory.h"
 #include "chrome/browser/ui/webui/signin/turn_sync_on_helper_policy_fetch_tracker.h"
+#include "components/regional_capabilities/regional_capabilities_service.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/base/signin_metrics.h"
 #include "components/signin/public/base/signin_switches.h"
@@ -50,6 +53,18 @@ constexpr char kHistorySyncOptIntAccessPointActionPrefix[] =
     "Signin_HistorySync_";
 constexpr char kOtherManagedProfileCreationHistogramName[] =
     "Signin.ManagedUserProfileCreationConflict";
+constexpr char kSyncServiceStartupAwaitCompleteHistogramName[] =
+    "Signin.HistorySyncOptin.SyncStartupAwaitTime.Complete";
+constexpr char kSyncServiceStartupAwaitTimeoutHistogramName[] =
+    "Signin.HistorySyncOptin.SyncStartupAwaitTime.Timeout";
+
+base::TimeDelta GetElapsedTime(const base::OneShotTimer& timer) {
+  CHECK(timer.IsRunning());
+  base::TimeTicks now = base::TimeTicks::Now();
+  base::TimeTicks start_time =
+      timer.desired_run_time() - timer.GetCurrentDelay();
+  return now - start_time;
+}
 
 // LINT.IfChange(FlowEventToString)
 std::string_view GetHistorySyncSkipReasonMetricName(
@@ -91,6 +106,16 @@ std::string_view UserChoiceToStringMetric(
 }
 // LINT.ThenChange(/tools/metrics/histograms/metadata/signin/histograms.xml:Signin.HistorySyncOptIn)
 
+void RecordSyncServiceStartupCompletionMetrics(base::TimeDelta elapsed_time) {
+  base::UmaHistogramTimes(kSyncServiceStartupAwaitCompleteHistogramName,
+                          elapsed_time);
+}
+
+void RecordSyncServiceStartupTimeoutMetrics(base::TimeDelta elapsed_time) {
+  base::UmaHistogramTimes(kSyncServiceStartupAwaitTimeoutHistogramName,
+                          elapsed_time);
+}
+
 void RecordMetricsForHistorySyncUserChoice(
     HistorySyncOptinHelper::ScreenChoiceResult user_choice,
     Profile* profile,
@@ -111,7 +136,10 @@ void RecordMetricsForHistorySyncUserChoice(
                           kHistorySyncOptinExpansionPillOnStartup) {
     signin::RecordAvatarButtonPromoAcceptedAtPromoShownCount(
         signin::ProfileMenuAvatarButtonPromoInfo::Type::kHistorySyncPromo,
-        IdentityManagerFactory::GetForProfile(profile), *profile->GetPrefs());
+        IdentityManagerFactory::GetForProfile(profile)
+            ->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin)
+            .gaia,
+        *profile->GetPrefs());
   }
 }
 
@@ -266,8 +294,10 @@ void SyncServiceStartupStateObserverImpl::OnStateChanged(
     syncer::SyncService* sync) {
   if (!IsSyncStartupInPendingState(sync)) {
     // The sync service has finished starting up, so we can stop observing.
-    // TODO(crbug.com/475175073): Consider adding metrics for the startup
-    // tracking time.
+    if (sync_startup_complete_metrics_callback_) {
+      std::move(sync_startup_complete_metrics_callback_)
+          .Run(GetElapsedTime(sync_service_startup_timeout_timer_));
+    }
     sync_service_startup_timeout_timer_.Stop();
     sync_service_observation_.Reset();
     std::move(on_state_updated_callback_).Run();
@@ -281,6 +311,10 @@ void SyncServiceStartupStateObserverImpl::OnSyncShutdown(
 }
 
 void SyncServiceStartupStateObserverImpl::OnSyncServiceStartupTimeout() {
+  if (timeout_metrics_callback_) {
+    std::move(timeout_metrics_callback_)
+        .Run(sync_service_startup_timeout_timer_.GetCurrentDelay());
+  }
   sync_service_startup_timeout_timer_.Stop();
   sync_service_observation_.Reset();
   CHECK(!on_state_updated_callback_.is_null());
@@ -382,6 +416,25 @@ void SyncServiceStartupStateLegacyObserverImpl::
 }
 }  // namespace
 
+BASE_FEATURE(kEnableAwaitSyncServiceStartupOnHistorySync,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+const int kAwaitSyncServiceStartupInProfilePickerTimeoutDefaultValue = 10;
+const base::FeatureParam<int>
+    kAwaitSyncServiceStartupInProfilePickerTimeoutSeconds{
+        &kEnableAwaitSyncServiceStartupOnHistorySync,
+        /*name=*/"AwaitSyncServiceStartupInProfilePickerTimeoutSeconds",
+        kAwaitSyncServiceStartupInProfilePickerTimeoutDefaultValue};
+
+const int kAwaitSyncServiceStartupInBrowserTimeoutDefaultValue = 3;
+const base::FeatureParam<int> kAwaitSyncServiceStartupInBrowserTimeoutSeconds{
+    &kEnableAwaitSyncServiceStartupOnHistorySync,
+    /*name=*/"AwaitSyncServiceStartupInBrowserTimeoutSeconds",
+    kAwaitSyncServiceStartupInBrowserTimeoutDefaultValue};
+
+SyncServiceStartupStateObserver::SyncServiceStartupStateObserver() = default;
+SyncServiceStartupStateObserver::~SyncServiceStartupStateObserver() = default;
+
 // static
 std::unique_ptr<SyncServiceStartupStateObserver>
 SyncServiceStartupStateObserver::
@@ -391,9 +444,9 @@ SyncServiceStartupStateObserver::
         const CoreAccountInfo& account_info,
         base::TimeDelta startup_delay,
         base::OnceClosure callback) {
-  if (base::FeatureList::IsEnabled(syncer::kEnableAwaitSyncServiceStartup) &&
-      base::FeatureList::IsEnabled(
-          syncer::kReplaceSyncPromosWithSignInPromos)) {
+  if (base::FeatureList::IsEnabled(
+          kEnableAwaitSyncServiceStartupOnHistorySync) &&
+      syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
     return SyncServiceStartupStateObserverImpl::
         MaybeCreateSyncServiceStateObserverForAccountWithClouldPolicies(
             sync_service, profile, account_info, startup_delay,
@@ -402,6 +455,18 @@ SyncServiceStartupStateObserver::
   return SyncServiceStartupStateLegacyObserverImpl::
       MaybeCreateSyncServiceStateObserverForAccountWithClouldPolicies(
           sync_service, profile, account_info, std::move(callback));
+}
+
+void SyncServiceStartupStateObserver::SetSyncStartupCompleteMetricsCallback(
+    base::OnceCallback<void(base::TimeDelta)> callback) {
+  CHECK(callback);
+  sync_startup_complete_metrics_callback_ = std::move(callback);
+}
+
+void SyncServiceStartupStateObserver::SetTimeoutMetricsCallback(
+    base::OnceCallback<void(base::TimeDelta)> callback) {
+  CHECK(callback);
+  timeout_metrics_callback_ = std::move(callback);
 }
 
 HistorySyncOptinPolicyHelper::HistorySyncOptinPolicyHelper(
@@ -475,8 +540,7 @@ HistorySyncOptinHelper::HistorySyncOptinHelper(
               &HistorySyncOptinHelper::ResumeShowHistorySyncOptinScreenFlow,
               base::Unretained(this)))),
       access_point_(access_point) {
-  CHECK(
-      base::FeatureList::IsEnabled(syncer::kReplaceSyncPromosWithSignInPromos));
+  CHECK(syncer::IsReplaceSyncPromosWithSignInPromosEnabled());
   CHECK(delegate);
 }
 
@@ -553,6 +617,29 @@ void HistorySyncOptinHelper::ResumeShowHistorySyncOptinScreenFlow(
     }
   }
 
+  MaybeShowSignInCelebration(maybe_managed_account);
+}
+
+void HistorySyncOptinHelper::MaybeShowSignInCelebration(
+    signin::Tribool maybe_managed_account) {
+  if (maybe_managed_account != signin::Tribool::kFalse) {
+    AwaitSyncStartupAndShowHistorySyncScreen();
+    return;
+  }
+
+  if (access_point() == signin_metrics::AccessPoint::kForYouFre) {
+    const bool is_in_search_engine_choice_region =
+        CHECK_DEREF(regional_capabilities::RegionalCapabilitiesServiceFactory::
+                        GetForProfile(profile_))
+            .IsInSearchEngineChoiceScreenRegion();
+    if (switches::IsFirstRunDesktopRevampEnabled(
+            is_in_search_engine_choice_region)) {
+      delegate_->ShowSignInCelebration(base::BindOnce(
+          &HistorySyncOptinHelper::AwaitSyncStartupAndShowHistorySyncScreen,
+          weak_ptr_factory_.GetWeakPtr()));
+      return;
+    }
+  }
   AwaitSyncStartupAndShowHistorySyncScreen();
 }
 
@@ -569,6 +656,10 @@ void HistorySyncOptinHelper::AwaitSyncStartupAndShowHistorySyncScreen() {
             base::BindOnce(&HistorySyncOptinHelper::ShowHistorySyncOptinScreen,
                            weak_ptr_factory_.GetWeakPtr()));
     if (sync_startup_state_observer_) {
+      sync_startup_state_observer_->SetSyncStartupCompleteMetricsCallback(
+          base::BindOnce(&RecordSyncServiceStartupCompletionMetrics));
+      sync_startup_state_observer_->SetTimeoutMetricsCallback(
+          base::BindOnce(&RecordSyncServiceStartupTimeoutMetrics));
       return;
     }
   }
@@ -690,10 +781,7 @@ void HistorySyncOptinHelperInBrowser::
 }
 
 base::TimeDelta HistorySyncOptinHelperInBrowser::GetSyncStartupDelay() {
-  // TODO(crbug.com/475175073): Specify the right value before enabling
-  // `syncer::kEnableAwaitSyncServiceStartup`.
-  return base::Seconds(
-      syncer::kAwaitSyncServiceStartupInBrowserTimeoutSeconds.Get());
+  return base::Seconds(kAwaitSyncServiceStartupInBrowserTimeoutSeconds.Get());
 }
 
 void HistorySyncOptinHelperInBrowser::OnManagementAccepted(
@@ -796,7 +884,7 @@ void HistorySyncOptinHelperInProfilePicker::
 
 base::TimeDelta HistorySyncOptinHelperInProfilePicker::GetSyncStartupDelay() {
   return base::Seconds(
-      syncer::kAwaitSyncServiceStartupInProfilePickerTimeoutSeconds.Get());
+      kAwaitSyncServiceStartupInProfilePickerTimeoutSeconds.Get());
 }
 
 void HistorySyncOptinHelperInProfilePicker::MaybeShowAccountManagementScreen(
@@ -835,9 +923,9 @@ void HistorySyncOptinHelperInProfilePicker::OnAccountManagementScreenClosed(
           HistorySyncSkipReason::kManagementRejected);
       return;
     case signin::SIGNIN_CHOICE_NEW_PROFILE:
+      FetchPoliciesAndUpdateManagedDisclaimerState();
       // Mark the user having accepted the management.
       enterprise_util::SetUserAcceptedAccountManagement(profile(), true);
-      FetchPoliciesAndUpdateManagedDisclaimerState();
       return;
   }
 }

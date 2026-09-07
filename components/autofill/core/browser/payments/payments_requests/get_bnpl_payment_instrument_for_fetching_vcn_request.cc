@@ -4,10 +4,19 @@
 
 #include "components/autofill/core/browser/payments/payments_requests/get_bnpl_payment_instrument_for_fetching_vcn_request.h"
 
+#include <optional>
+#include <string>
+#include <utility>
+
+#include "base/functional/callback.h"
 #include "base/json/json_writer.h"
 #include "base/strings/escape.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
+#include "base/values.h"
+#include "components/autofill/core/browser/payments/payments_autofill_client.h"
+#include "components/autofill/core/browser/payments/payments_request_details.h"
+#include "components/autofill/core/browser/payments/payments_requests/payments_request.h"
 
 namespace autofill::payments {
 
@@ -49,12 +58,13 @@ std::string GetBnplPaymentInstrumentForFetchingVcnRequest::GetRequestContent() {
           .Set("context",
                Dict()
                    .Set("billable_service",
-                        payments::kUnmaskPaymentMethodBillableServiceNumber)
+                        kUnmaskPaymentMethodBillableServiceNumber)
                    .Set("customer_context",
                         BuildCustomerContextDictionary(
                             request_details_.billing_customer_number)))
           .Set("chrome_user_context",
-               Dict().Set("full_sync_enabled", full_sync_enabled_))
+               BuildChromeUserContext(/*client_behavior_signals=*/{},
+                                      full_sync_enabled_))
           .Set("instrument_id", request_details_.instrument_id)
           .Set("risk_data_encoded",
                BuildRiskDictionary(request_details_.risk_data))

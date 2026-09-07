@@ -157,7 +157,8 @@ void InstallMigrateToAppCommand::OnManifestFetched(
 }
 
 void InstallMigrateToAppCommand::OnAppLockAcquired() {
-  webapps::AppId target_app_id = GenerateAppIdFromManifestId(manifest_->id);
+  webapps::AppId target_app_id =
+      GenerateAppIdFromManifestId(target_manifest_id_);
   std::optional<proto::InstallState> install_state =
       shared_web_contents_with_app_lock_->registrar().GetInstallState(
           target_app_id);
@@ -166,6 +167,7 @@ void InstallMigrateToAppCommand::OnAppLockAcquired() {
       install_state.has_value() ? base::ToString(*install_state) : "nullopt");
   if (install_state.has_value()) {
     update_job_ = ManifestUpdateJob::CreateAndStart(
+        *profile_, shared_web_contents_with_app_lock_.get(),
         shared_web_contents_with_app_lock_.get(),
         &shared_web_contents_with_app_lock_->shared_web_contents(),
         GetMutableDebugValue().EnsureDict("ManifestUpdateJob"),
@@ -180,6 +182,7 @@ void InstallMigrateToAppCommand::OnAppLockAcquired() {
         shared_web_contents_with_app_lock_->shared_web_contents().GetWeakPtr(),
         profile_, data_retriever_.get(),
         GetMutableDebugValue().EnsureDict("MigrationTargetInstallJob"),
+        shared_web_contents_with_app_lock_.get(),
         shared_web_contents_with_app_lock_.get(),
         base::BindOnce(&InstallMigrateToAppCommand::OnInstallJobFinished,
                        weak_factory_.GetWeakPtr()));
@@ -232,6 +235,7 @@ void InstallMigrateToAppCommand::OnUpdateJobFinished(
         kPendingUpdateRecorded_AppHasSecurityUpdateDueToThrottle:
     case ManifestUpdateJobResult::
         kPendingUpdateRecorded_AppHasNonSecurityAndSecurityChanges:
+    case ManifestUpdateJobResult::kSilentlyUpdatedDueToSmallIconComparison:
       command_result = InstallMigrateToAppResult::kSuccessAlreadyInstalled;
       break;
     case ManifestUpdateJobResult::kIconDownloadFailed:

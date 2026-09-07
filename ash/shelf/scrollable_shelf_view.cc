@@ -5,6 +5,7 @@
 #include "ash/shelf/scrollable_shelf_view.h"
 
 #include <algorithm>
+#include <memory>
 
 #include "ash/app_list/app_list_controller_impl.h"
 #include "ash/public/cpp/shelf_config.h"
@@ -368,15 +369,13 @@ void ScrollableShelfView::Init() {
       ScrollArrowView::kRight, GetShelf()->IsHorizontalAlignment(), shelf_view_,
       this));
 
-  focus_search_ = std::make_unique<ScrollableShelfFocusSearch>(this);
-
   GetShelf()->tooltip()->set_shelf_tooltip_delegate(this);
 
   set_context_menu_controller(this);
 
   // Initializes |shelf_view_| after scrollable shelf view's children are
   // initialized.
-  shelf_view_->Init(focus_search_.get());
+  shelf_view_->Init(std::make_unique<ScrollableShelfFocusSearch>(this));
 }
 
 void ScrollableShelfView::OnFocusRingActivationChanged(bool activated) {
@@ -410,7 +409,7 @@ void ScrollableShelfView::UpdateAccessiblePreviousAndNextFocus() {
 }
 
 views::FocusSearch* ScrollableShelfView::GetFocusSearch() {
-  return focus_search_.get();
+  return shelf_view_->GetFocusSearch();
 }
 
 views::FocusTraversable* ScrollableShelfView::GetFocusTraversableParent() {
@@ -1143,14 +1142,6 @@ bool ScrollableShelfView::ShouldHideTooltip(const gfx::Point& cursor_location,
   gfx::Point location_in_shelf_view = cursor_location;
   views::View::ConvertPointToTarget(this, shelf_view_, &location_in_shelf_view);
   return shelf_view_->ShouldHideTooltip(location_in_shelf_view, delegate_view);
-}
-
-const std::vector<aura::Window*> ScrollableShelfView::GetOpenWindowsForView(
-    views::View* view) {
-  if (!view || view->parent() != shelf_view_)
-    return std::vector<aura::Window*>();
-
-  return shelf_view_->GetOpenWindowsForView(view);
 }
 
 std::u16string ScrollableShelfView::GetTitleForView(

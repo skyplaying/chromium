@@ -4,6 +4,7 @@
 
 #include "base/debug/stack_trace.h"
 
+#include <ptrauth.h>
 #include <stddef.h>
 
 #include <limits>
@@ -11,6 +12,7 @@
 #include <string>
 
 #include "base/allocator/buildflags.h"
+#include "base/containers/span.h"
 #include "base/debug/debugging_buildflags.h"
 #include "base/immediate_crash.h"
 #include "base/logging.h"
@@ -52,7 +54,7 @@ TEST_F(StackTraceTest, OutputToStream) {
   // Dump the trace into a string.
   std::ostringstream os;
   trace.OutputToStream(&os);
-  std::string backtrace_message = os.str();
+  std::string backtrace_message = std::move(os).str();
 
   // ToString() should produce the same output.
   EXPECT_EQ(backtrace_message, trace.ToString());
@@ -101,7 +103,15 @@ TEST_F(StackTraceTest, OutputToStream) {
       << backtrace_message;
 }
 
-#if !defined(OFFICIAL_BUILD) && !defined(NO_UNWIND_TABLES)
+#if BUILDFLAG(IS_ANDROID)
+TEST_F(StackTraceTest, AndroidBuildIdInOutput) {
+  StackTrace trace;
+  std::string trace_string = trace.ToString();
+  EXPECT_THAT(trace_string, testing::HasSubstr(" (BuildId: "));
+}
+#endif
+
+#if !defined(OFFICIAL_BUILD) && !BUILDFLAG(EXCLUDE_UNWIND_TABLES)
 // Disabled in Official builds, where Link-Time Optimization can result in two
 // or fewer stack frames being available, causing the test to fail.
 TEST_F(StackTraceTest, TruncatedTrace) {
@@ -112,14 +122,14 @@ TEST_F(StackTraceTest, TruncatedTrace) {
   StackTrace truncated(2);
   EXPECT_EQ(2u, truncated.addresses().size());
 }
-#endif  // !defined(OFFICIAL_BUILD) && !defined(NO_UNWIND_TABLES)
+#endif  // !defined(OFFICIAL_BUILD) && !BUILDFLAG(EXCLUDE_UNWIND_TABLES)
 
 // The test is used for manual testing, e.g., to see the raw output.
 TEST_F(StackTraceTest, DebugOutputToStream) {
   StackTrace trace;
   std::ostringstream os;
   trace.OutputToStream(&os);
-  VLOG(1) << os.str();
+  VLOG(1) << os.view();
 }
 
 // The test is used for manual testing, e.g., to see the raw output.
@@ -145,7 +155,7 @@ TEST_F(StackTraceTest, DebugOutputToStreamWithPrefix) {
   cstring_view prefix_string = "[test]";
   std::ostringstream os;
   trace.OutputToStreamWithPrefix(&os, prefix_string);
-  std::string backtrace_message = os.str();
+  std::string backtrace_message = std::move(os).str();
 
   // ToStringWithPrefix() should produce the same output.
   EXPECT_EQ(backtrace_message, trace.ToStringWithPrefix(prefix_string));
@@ -173,23 +183,27 @@ namespace {
 // In an actual implementation, this could cause infinite recursion into the
 // signal handler or other problems. Because malloc() is not guaranteed to be
 // async signal safe.
-void* BadMalloc(size_t, AllocToken, void*) {
+void* BadMalloc(size_t, allocator_shim::AllocToken, void*) {
   base::ImmediateCrash();
 }
 
-void* BadCalloc(size_t, size_t, AllocToken, void* context) {
+void* BadCalloc(size_t, size_t, allocator_shim::AllocToken, void* context) {
   base::ImmediateCrash();
 }
 
-void* BadAlignedAlloc(size_t, size_t, AllocToken, void*) {
+void* BadAlignedAlloc(size_t, size_t, allocator_shim::AllocToken, void*) {
   base::ImmediateCrash();
 }
 
-void* BadAlignedRealloc(void*, size_t, size_t, AllocToken, void*) {
+void* BadAlignedRealloc(void*,
+                        size_t,
+                        size_t,
+                        allocator_shim::AllocToken,
+                        void*) {
   base::ImmediateCrash();
 }
 
-void* BadRealloc(void*, size_t, AllocToken, void*) {
+void* BadRealloc(void*, size_t, allocator_shim::AllocToken, void*) {
   base::ImmediateCrash();
 }
 
@@ -203,6 +217,7 @@ allocator_shim::AllocatorDispatch g_bad_malloc_dispatch = {
     &BadCalloc,         /* alloc_zero_initialized_function */
     &BadCalloc,         /* alloc_zero_initialized_unchecked_function */
     &BadAlignedAlloc,   /* alloc_aligned_function */
+    &BadAlignedAlloc,   /* alloc_aligned_unchecked_function */
     &BadRealloc,        /* realloc_function */
     &BadRealloc,        /* realloc_unchecked_function */
     &BadFree,           /* free_function */
@@ -346,8 +361,10 @@ code_start:
 
   constexpr size_t frame_index = Depth - 1;
   const void* frame = frames[frame_index];
-  EXPECT_GE(frame, &&code_start) << "For frame at index " << frame_index;
-  EXPECT_LE(frame, &&code_end) << "For frame at index " << frame_index;
+  const void* start = ptrauth_strip(&&code_start, ptrauth_key_function_pointer);
+  const void* end = ptrauth_strip(&&code_end, ptrauth_key_function_pointer);
+  EXPECT_GE(frame, start) << "For frame at index " << frame_index;
+  EXPECT_LE(frame, end) << "For frame at index " << frame_index;
 code_end:
   return;
 }
@@ -362,8 +379,10 @@ code_start:
   ASSERT_EQ(frames.size(), count);
 
   const void* frame = frames[0];
-  EXPECT_GE(frame, &&code_start) << "For the top frame";
-  EXPECT_LE(frame, &&code_end) << "For the top frame";
+  const void* start = ptrauth_strip(&&code_start, ptrauth_key_function_pointer);
+  const void* end = ptrauth_strip(&&code_end, ptrauth_key_function_pointer);
+  EXPECT_GE(frame, start) << "For the top frame";
+  EXPECT_LE(frame, end) << "For the top frame";
 code_end:
   return;
 }

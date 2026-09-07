@@ -10,17 +10,22 @@ import subprocess
 def _get_changed_files():
     """Returns the file to status for the current branch"""
     result = subprocess.run(
-        ['git', 'status', '--short'],
+        ['git', 'status', '--short', '--untracked-files'],
         check=True,
         capture_output=True,
         text=True,
     )
-    lines = result.stdout.strip().splitlines()
-    lines = [line.strip() for line in lines]
-    file_statuses = {
-        line[line.index(' ') + 1:].strip(): line[:line.index(' ')]
-        for line in lines if line
-    }
+    lines = result.stdout.splitlines()
+    file_statuses = {}
+    for line in lines:
+        if not line:
+            continue
+        # git status --short output format is "XY PATH"
+        # XY is 2 characters, followed by a space, then the path.
+        # We must not strip the line before this, as X might be a space.
+        status = line[:2].strip()
+        path = line[3:].strip()
+        file_statuses[path] = status
     return file_statuses
 
 
@@ -33,7 +38,7 @@ def _check_files_status(context, expected_statuses, verb):
     files_with_status = {
         file
         for file, status in file_statuses.items()
-        if status in expected_statuses
+        if any(expected in status for expected in expected_statuses)
     }
 
     files_without_status = [
@@ -44,15 +49,16 @@ def _check_files_status(context, expected_statuses, verb):
         actual_files = '\n'.join(files_with_status)
         return {
             'pass': False,
-            'reason':
-            f'Expected {verb} files were not {verb}:\n{unexected_files}'
-            f'\nActual {verb} files:\n{actual_files}',
-            'score': 0
+            'reason': (
+                f'Expected {verb} files were not {verb}:\n{unexected_files}'
+                f'\nActual {verb} files:\n{actual_files}'
+            ),
+            'score': 0,
         }
     return {
         'pass': True,
         'reason': f'All expected {verb} files were {verb}.',
-        'score': 1
+        'score': 1,
     }
 
 
@@ -77,7 +83,7 @@ def check_files_exist(_: str, context):
         return {
             'pass': False,
             'reason': f'Expected files do not exist:\n{non_existent_files}',
-            'score': 0
+            'score': 0,
         }
     return {'pass': True, 'reason': 'All expected files exist.', 'score': 1}
 
@@ -106,13 +112,15 @@ def check_file_content(_: str, context):
             if s not in content:
                 errors.append(
                     f'Expected to find "{s}" in {file_path}, but it was not '
-                    'found.')
+                    'found.'
+                )
 
         for s in config.get('absent', []):
             if s in content:
                 errors.append(
                     f'Expected to not find "{s}" in {file_path}, but it was '
-                    'found.')
+                    'found.'
+                )
 
     if errors:
         return {'pass': False, 'reason': '\n'.join(errors), 'score': 0}
@@ -120,5 +128,5 @@ def check_file_content(_: str, context):
     return {
         'pass': True,
         'reason': 'All file content checks passed.',
-        'score': 1
+        'score': 1,
     }

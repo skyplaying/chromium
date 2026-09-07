@@ -5,11 +5,13 @@
 #ifndef CONTENT_BROWSER_INDEXED_DB_INSTANCE_SQLITE_BACKING_STORE_IMPL_H_
 #define CONTENT_BROWSER_INDEXED_DB_INSTANCE_SQLITE_BACKING_STORE_IMPL_H_
 
+#include <atomic>
 #include <memory>
 #include <string>
 #include <unordered_map>
 
 #include "base/files/file_path.h"
+#include "base/functional/callback.h"
 #include "base/functional/function_ref.h"
 #include "base/memory/raw_ref.h"
 #include "base/memory/scoped_refptr.h"
@@ -19,6 +21,7 @@
 #include "components/services/storage/public/mojom/blob_storage_context.mojom-forward.h"
 #include "content/browser/indexed_db/instance/backing_store.h"
 #include "content/common/content_export.h"
+#include "net/base/net_errors.h"
 
 namespace content::indexed_db::sqlite {
 
@@ -31,11 +34,17 @@ class CONTENT_EXPORT BackingStoreImpl : public BackingStore {
   // assumed to already exist. `lock_database` will be called to acquire locks
   // on the given database for cleanup purposes. It is guaranteed to be called
   // when no other operation on the database is ongoing, and hence locks are
-  // expected to be granted synchronously.
-  BackingStoreImpl(base::FilePath directory,
-                   storage::mojom::BlobStorageContext& blob_storage_context,
-                   base::RepeatingCallback<std::vector<PartitionedLock>(
-                       const std::u16string& name)> lock_database);
+  // expected to be granted synchronously. `on_blob_activity` will be
+  // called whenever a blob is read from the database, with `nullopt` if the
+  // read is not finished, and when a read is complete, with the final result of
+  // each read (i.e. each mojom::Blob request).
+  BackingStoreImpl(
+      base::FilePath directory,
+      storage::mojom::BlobStorageContext& blob_storage_context,
+      base::RepeatingCallback<std::vector<PartitionedLock>(
+          const std::u16string& name)> lock_database,
+      base::RepeatingCallback<void(std::optional<net::Error>)> on_blob_activity,
+      base::RepeatingClosure on_can_close);
   BackingStoreImpl(const BackingStoreImpl&) = delete;
   BackingStoreImpl& operator=(const BackingStoreImpl&) = delete;
   ~BackingStoreImpl() override;
@@ -58,7 +67,13 @@ class CONTENT_EXPORT BackingStoreImpl : public BackingStore {
   // No PartitionedLockManager-level locks are taken on either backing store,
   // and it's up to the caller to ensure there will be no other simultaneous
   // operations.
-  Status MigrateFrom(BackingStore& source);
+  //
+  // If there are any pre-existing SQLite databases in `directory_`, this will
+  // attempt to delete them, and refuse to proceed unless that succeeds.
+  //
+  // `verify` hard-CHECKs that migration succeeded, or at least that it looks
+  // successful. This does extra work; use with caution.
+  Status MigrateFrom(BackingStore& source, bool verify = false);
 
   // BackingStore:
   bool CanOpportunisticallyClose() const override;
@@ -68,6 +83,7 @@ class CONTENT_EXPORT BackingStoreImpl : public BackingStore {
       override;
   void StartPreCloseTasks(base::OnceClosure on_done) override;
   void StopPreCloseTasks() override;
+  void RunIdleTasks(bool long_idle) override;
   uint64_t EstimateSize(bool write_in_progress) const override;
   StatusOr<bool> DatabaseExists(std::u16string_view name) override;
   StatusOr<std::vector<blink::mojom::IDBNameAndVersionPtr>>
@@ -77,6 +93,9 @@ class CONTENT_EXPORT BackingStoreImpl : public BackingStore {
   uintptr_t GetIdentifierForMemoryDump() override;
   void FlushForTesting() override;
 
+  bool ReportMemoryUsage(base::trace_event::ProcessMemoryDump* pmd,
+                         const std::string& dump_name) override;
+
   // Destroys the `DatabaseConnection` for `name`. If `locks` are provided, they
   // are used for cleanup, else locks are acquired.
   void DestroyConnection(const std::u16string& name,
@@ -84,6 +103,11 @@ class CONTENT_EXPORT BackingStoreImpl : public BackingStore {
 
   storage::mojom::BlobStorageContext& blob_storage_context() {
     return *blob_storage_context_;
+  }
+
+  const base::RepeatingCallback<void(std::optional<net::Error>)>&
+  on_blob_activity() const {
+    return on_blob_activity_;
   }
 
  private:
@@ -109,6 +133,11 @@ class CONTENT_EXPORT BackingStoreImpl : public BackingStore {
       const std::u16string& name)>
       lock_database_;
 
+  base::RepeatingCallback<void(std::optional<net::Error>)> on_blob_activity_;
+
+  // To be called when `CanOpportunisticallyClose()` becomes true.
+  base::RepeatingClosure on_can_close_;
+
   std::unordered_map<std::u16string, std::unique_ptr<DatabaseConnection>>
       open_connections_;
 
@@ -125,7 +154,7 @@ class CONTENT_EXPORT BackingStoreImpl : public BackingStore {
   // other databases. Set while and only while `cleanups_in_progress_` is not 0.
   scoped_refptr<base::SequencedTaskRunner> cleanup_task_runner_;
 
-  bool is_force_closing_ = false;
+  std::unique_ptr<std::atomic_bool> is_force_closing_;
 
   base::WeakPtrFactory<BackingStoreImpl> weak_factory_{this};
 };

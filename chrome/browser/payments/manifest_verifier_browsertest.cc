@@ -12,7 +12,6 @@
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/payments/content/test_payment_manifest_downloader.h"
@@ -21,7 +20,10 @@
 #include "components/payments/core/const_csp_checker.h"
 #include "components/webdata_services/web_data_service_wrapper_factory.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/browser/weak_document_ptr.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
@@ -66,10 +68,11 @@ class ManifestVerifierBrowserTest : public InProcessBrowserTest {
     test_downloader_ = std::make_unique<TestDownloader>(
         const_csp_checker_->GetWeakPtr(),
         browser()
-            ->profile()
+            ->GetProfile()
             ->GetDefaultStoragePartition()
             ->GetURLLoaderFactoryForBrowserProcess(),
-        std::move(renderer_url_loader_factory));
+        std::move(renderer_url_loader_factory),
+        web_contents->GetPrimaryMainFrame()->GetWeakDocumentPtr());
     test_downloader_->AddTestServerURL("https://", https_server_->GetURL("/"));
   }
 
@@ -80,7 +83,7 @@ class ManifestVerifierBrowserTest : public InProcessBrowserTest {
         std::make_unique<ErrorLogger>());
     auto cache = webdata_services::WebDataServiceWrapperFactory::
         GetWebPaymentsWebDataServiceForBrowserContext(
-            browser()->profile(), ServiceAccessType::EXPLICIT_ACCESS);
+            browser()->GetProfile(), ServiceAccessType::EXPLICIT_ACCESS);
 
     ManifestVerifier verifier(
         url::Origin::Create(https_server_->GetURL("/payment_handler.html")),
@@ -447,7 +450,7 @@ IN_PROC_BROWSER_TEST_F(ManifestVerifierBrowserTest,
                        SinglePaymentMethodName404) {
   std::string expected_pattern =
       "Unable to download payment manifest "
-      "\"https://127.0.0.1:\\d+/404.test/webpay\". HTTP 404 Not Found.";
+      "\"https://127.0.0.1:\\d+/404.test/webpay\".";
   {
     content::InstalledPaymentAppsFinder::PaymentApps apps;
     apps[0] = std::make_unique<content::StoredPaymentApp>();
@@ -486,8 +489,7 @@ IN_PROC_BROWSER_TEST_F(ManifestVerifierBrowserTest,
                        MultiplePaymentMethodName404) {
   std::string expected_pattern =
       "Unable to download payment manifest "
-      "\"https://127.0.0.1:\\d+/404(aswell)?.test/webpay\". HTTP 404 Not "
-      "Found.";
+      "\"https://127.0.0.1:\\d+/404(aswell)?.test/webpay\".";
   {
     content::InstalledPaymentAppsFinder::PaymentApps apps;
     apps[0] = std::make_unique<content::StoredPaymentApp>();

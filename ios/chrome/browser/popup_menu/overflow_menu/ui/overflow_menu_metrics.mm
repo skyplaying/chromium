@@ -5,6 +5,7 @@
 #import "ios/chrome/browser/popup_menu/overflow_menu/ui/overflow_menu_metrics.h"
 
 #import "base/metrics/histogram_functions.h"
+#import "base/notreached.h"
 #import "ios/chrome/browser/popup_menu/overflow_menu/public/overflow_menu_constants.h"
 #import "ios/chrome/browser/popup_menu/overflow_menu/ui/ui_swift.h"
 
@@ -33,6 +34,12 @@ IOSOverflowMenuDestination HistogramDestinationFromDestination(
       return IOSOverflowMenuDestination::kSpotlightDebugger;
     case overflow_menu::Destination::PriceNotifications:
       return IOSOverflowMenuDestination::kPriceNotifications;
+    case overflow_menu::Destination::Cobalt:
+      return IOSOverflowMenuDestination::kCobalt;
+    case overflow_menu::Destination::LevelUp:
+      return IOSOverflowMenuDestination::kLevelUp;
+    case overflow_menu::Destination::DefaultBrowser:
+      return IOSOverflowMenuDestination::kDefaultBrowser;
   }
 }
 
@@ -79,12 +86,20 @@ IOSOverflowMenuAction HistogramActionFromActionType(
       return IOSOverflowMenuAction::kReaderMode;
     case overflow_menu::ActionType::AskBWG:
       return IOSOverflowMenuAction::kAskBWG;
-    case overflow_menu::ActionType::HideToolbars:
-      return IOSOverflowMenuAction::kHideToolbars;
-    case overflow_menu::ActionType::TabGroup:
-      return IOSOverflowMenuAction::kTabGroup;
+    case overflow_menu::ActionType::HideToolbarsDeprecated:
+      NOTREACHED();
+    case overflow_menu::ActionType::TabGroupDeprecated:
+      NOTREACHED();
     case overflow_menu::ActionType::ShareThisPage:
       return IOSOverflowMenuAction::kShareThisPage;
+    case overflow_menu::ActionType::SigninDeprecated:
+      NOTREACHED();
+    case overflow_menu::ActionType::Identity:
+      return IOSOverflowMenuAction::kIdentity;
+    case overflow_menu::ActionType::CustomizeHomePage:
+      return IOSOverflowMenuAction::kCustomizeHomePage;
+    case overflow_menu::ActionType::DefaultBrowser:
+      return IOSOverflowMenuAction::kDefaultBrowser;
   }
 }
 

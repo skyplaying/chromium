@@ -33,6 +33,9 @@ class COMPONENT_EXPORT(GOOGLE_APIS) ApiKeyCache {
   const std::string& api_key_non_stable() const { return api_key_non_stable_; }
   const std::string& api_key_remoting() const { return api_key_remoting_; }
   const std::string& api_key_soda() const { return api_key_soda_; }
+  const std::string& api_key_partial_translate() const {
+    return api_key_partial_translate_;
+  }
 #if !BUILDFLAG(IS_ANDROID)
   const std::string& api_key_hats() const { return api_key_hats_; }
 #endif
@@ -50,6 +53,12 @@ class COMPONENT_EXPORT(GOOGLE_APIS) ApiKeyCache {
 #endif
 
   const std::string& metrics_key() const { return metrics_key_; }
+
+#if BUILDFLAG(SUPPORT_CDM_SERVER_CERTIFICATE)
+  const std::string& cdm_server_certificate() const {
+    return cdm_server_certificate_;
+  }
+#endif
 
   const std::string& GetClientID(OAuth2Client client) const;
   const std::string& GetClientSecret(OAuth2Client client) const;
@@ -69,6 +78,7 @@ class COMPONENT_EXPORT(GOOGLE_APIS) ApiKeyCache {
   std::string api_key_non_stable_;
   std::string api_key_remoting_;
   std::string api_key_soda_;
+  std::string api_key_partial_translate_;
 #if !BUILDFLAG(IS_ANDROID)
   std::string api_key_hats_;
 #endif
@@ -82,6 +92,11 @@ class COMPONENT_EXPORT(GOOGLE_APIS) ApiKeyCache {
 #endif
 
   std::string metrics_key_;
+
+#if BUILDFLAG(SUPPORT_CDM_SERVER_CERTIFICATE)
+  std::string cdm_server_certificate_;
+#endif
+
   std::array<std::string, CLIENT_NUM_ITEMS> client_ids_;
   std::array<std::string, CLIENT_NUM_ITEMS> client_secrets_;
 

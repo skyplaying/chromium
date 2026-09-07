@@ -18,10 +18,6 @@ class DownloadHistory;
 class DownloadUIController;
 class Profile;
 
-namespace content {
-class DownloadManager;
-}
-
 namespace extensions {
 class ExtensionDownloadsEventRouter;
 }
@@ -39,6 +35,7 @@ class DownloadCoreServiceImpl : public DownloadCoreService {
   // DownloadCoreService
   ChromeDownloadManagerDelegate* GetDownloadManagerDelegate() override;
   DownloadHistory* GetDownloadHistory() override;
+  void InitializeHistory() override;
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   extensions::ExtensionDownloadsEventRouter* GetExtensionEventRouter() override;
 #endif

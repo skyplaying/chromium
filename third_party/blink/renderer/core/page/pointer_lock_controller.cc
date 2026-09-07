@@ -114,6 +114,31 @@ void PointerLockController::RequestPointerLock(
     return;
   }
 
+  // Rate limit pointer lock requests if the page has been unlocking too
+  // frequently. This prevents abuse where a page rapidly locks/unlocks the
+  // pointer to deny user input or bog down the browser process with too many
+  // inter-process messages. Uses a sliding window over the timestamps of
+  // recent requests: if more than `kMaxLocksInWindow` requests have landed
+  // within the trailing `kLockRateLimitWindow`, reject this request until
+  // enough age out of the window.
+  if (RuntimeEnabledFeatures::RateLimitPointerLockRequestsEnabled() &&
+      element_ == nullptr && !lock_pending_) {
+    const base::TimeTicks now = base::TimeTicks::Now();
+    while (!recent_lock_request_timestamps_.empty() &&
+           now - recent_lock_request_timestamps_.front() >=
+               kLockRateLimitWindow) {
+      recent_lock_request_timestamps_.pop_front();
+    }
+    if (recent_lock_request_timestamps_.size() >= kMaxLocksInWindow) {
+      EnqueueEvent(event_type_names::kPointerlockerror, target);
+      resolver->RejectWithDOMException(
+          DOMExceptionCode::kNotAllowedError,
+          "Too many pointer lock requests in a short window of time.");
+      return;
+    }
+    recent_lock_request_timestamps_.push_back(now);
+  }
+
   bool unadjusted_movement_requested = options && options->unadjustedMovement();
   if (element_) {
     if (element_->GetDocument() != target->GetDocument()) {
@@ -210,8 +235,9 @@ void PointerLockController::ProcessResult(
     ResultCallback callback,
     bool unadjusted_movement_requested,
     mojom::blink::PointerLockResult result) {
-  if (result == mojom::blink::PointerLockResult::kSuccess)
+  if (result == mojom::blink::PointerLockResult::kSuccess) {
     current_unadjusted_movement_setting_ = unadjusted_movement_requested;
+  }
   std::move(callback).Run(result);
 }
 
@@ -270,6 +296,7 @@ void PointerLockController::ExitPointerLock() {
   if (pointer_lock_document && pointer_lock_document->GetFrame()) {
     LocalFrame* frame = pointer_lock_document->GetFrame();
     frame->GetEventHandler().ResetMousePositionForPointerUnlock();
+    frame->GetWidgetForLocalRoot()->SetPointerLocked(false);
   }
 
   ClearElement();
@@ -332,6 +359,7 @@ void PointerLockController::DidAcquirePointerLock() {
     // sends all mouse events to the initial target of the drag.
     // If Lock is entered it supersedes any in progress Capture.
     frame->GetWidgetForLocalRoot()->MouseCaptureLost();
+    frame->GetWidgetForLocalRoot()->SetPointerLocked(true);
     // Acquiring the mouse pointer lock is a strong indication of a high-end web
     // experience, which would benefit from higher framerates. In particular,
     // this is the case for gaming, where pointer lock is essential for most

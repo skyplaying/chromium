@@ -18,6 +18,8 @@
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/chrome_test_utils.h"
@@ -25,6 +27,7 @@
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/policy_constants.h"
 #include "components/prefs/pref_service.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/network_service_instance.h"
 #include "content/public/browser/network_service_util.h"
@@ -75,6 +78,7 @@
 
 #if !BUILDFLAG(IS_ANDROID)
 // Used by DisableWithNewProfile test. See the comment in above that test.
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/ui_test_utils.h"
 #endif
 
@@ -124,19 +128,6 @@ net::SSLServerConfig GetServerConfigForPreferSlowCiphersTest() {
 
 bool GetLocalStateBooleanPref(const std::string& pref_name) {
   return g_browser_process->local_state()->GetBoolean(pref_name);
-}
-
-std::optional<bool> GetManagedBooleanPref(PrefService* prefs,
-                                          const std::string_view pref_name) {
-  if (prefs->IsManagedPreference(pref_name)) {
-    return prefs->GetBoolean(pref_name);
-  }
-  return std::nullopt;
-}
-
-std::optional<bool> GetLocalStateManagedBooleanPref(
-    const std::string_view pref_name) {
-  return GetManagedBooleanPref(g_browser_process->local_state(), pref_name);
 }
 
 std::optional<std::string> GetManagedStringPref(
@@ -204,152 +195,6 @@ class SSLPolicyTest : public PolicyTest {
   net::EmbeddedTestServer https_server_{net::EmbeddedTestServer::TYPE_HTTPS};
 };
 
-IN_PROC_BROWSER_TEST_F(SSLPolicyTest, PostQuantumEnabledPolicy) {
-  net::SSLServerConfig ssl_config;
-  ssl_config.curves_for_testing = {NID_X25519MLKEM768};
-  ASSERT_TRUE(StartTestServer(ssl_config));
-
-  // Should be able to load a page from the test server because policy is in
-  // the default state and feature is enabled.
-  EXPECT_EQ(
-      GetLocalStateManagedBooleanPref(prefs::kPostQuantumKeyAgreementEnabled),
-      std::nullopt);
-  LoadResult result = LoadPage("/title2.html");
-  EXPECT_TRUE(result.success);
-  EXPECT_EQ(u"Title Of Awesomeness", result.title);
-
-  // Disable the policy.
-  PolicyMap policies;
-  SetPolicy(&policies, key::kPostQuantumKeyAgreementEnabled,
-            base::Value(false));
-  UpdateProviderPolicy(policies);
-  content::FlushNetworkServiceInstanceForTesting();
-
-  // Page loads should now fail.
-  EXPECT_EQ(
-      GetLocalStateManagedBooleanPref(prefs::kPostQuantumKeyAgreementEnabled),
-      false);
-  result = LoadPage("/title3.html");
-  EXPECT_FALSE(result.success);
-
-  // Enable the policy.
-  PolicyMap policies2;
-  SetPolicy(&policies2, key::kPostQuantumKeyAgreementEnabled,
-            base::Value(true));
-  UpdateProviderPolicy(policies2);
-  content::FlushNetworkServiceInstanceForTesting();
-
-  // Page load should now succeed.
-  EXPECT_EQ(
-      GetLocalStateManagedBooleanPref(prefs::kPostQuantumKeyAgreementEnabled),
-      true);
-  result = LoadPage("/title2.html");
-  EXPECT_TRUE(result.success);
-  EXPECT_EQ(u"Title Of Awesomeness", result.title);
-}
-
-#if BUILDFLAG(IS_CHROMEOS)
-IN_PROC_BROWSER_TEST_F(SSLPolicyTest, DevicePostQuantumEnabledPolicy) {
-  net::SSLServerConfig ssl_config;
-  ssl_config.curves_for_testing = {NID_X25519MLKEM768};
-  ASSERT_TRUE(StartTestServer(ssl_config));
-
-  // Should be able to load a page from the test server because policy is in
-  // the default state and feature is enabled.
-  EXPECT_EQ(
-      GetLocalStateManagedBooleanPref(prefs::kPostQuantumKeyAgreementEnabled),
-      std::nullopt);
-  EXPECT_EQ(GetLocalStateManagedBooleanPref(
-                prefs::kDevicePostQuantumKeyAgreementEnabled),
-            std::nullopt);
-  LoadResult result = LoadPage("/title2.html");
-  EXPECT_TRUE(result.success);
-  EXPECT_EQ(u"Title Of Awesomeness", result.title);
-
-  {
-    // Disable the device policy.
-    PolicyMap policies;
-    SetPolicy(&policies, key::kDevicePostQuantumKeyAgreementEnabled,
-              base::Value(false));
-    UpdateProviderPolicy(policies);
-    content::FlushNetworkServiceInstanceForTesting();
-  }
-
-  // Page loads should now fail.
-  EXPECT_EQ(
-      GetLocalStateManagedBooleanPref(prefs::kPostQuantumKeyAgreementEnabled),
-      std::nullopt);
-  EXPECT_EQ(GetLocalStateManagedBooleanPref(
-                prefs::kDevicePostQuantumKeyAgreementEnabled),
-            false);
-  result = LoadPage("/title3.html");
-  EXPECT_FALSE(result.success);
-
-  {
-    // Try enabling the non-device policy, while the device policy is disabled.
-    PolicyMap policies;
-    SetPolicy(&policies, key::kPostQuantumKeyAgreementEnabled,
-              base::Value(true));
-    SetPolicy(&policies, key::kDevicePostQuantumKeyAgreementEnabled,
-              base::Value(false));
-    UpdateProviderPolicy(policies);
-    content::FlushNetworkServiceInstanceForTesting();
-  }
-
-  // Page loads should still fail since the device policy takes precedence.
-  EXPECT_EQ(
-      GetLocalStateManagedBooleanPref(prefs::kPostQuantumKeyAgreementEnabled),
-      true);
-  EXPECT_EQ(GetLocalStateManagedBooleanPref(
-                prefs::kDevicePostQuantumKeyAgreementEnabled),
-            false);
-  result = LoadPage("/title3.html");
-  EXPECT_FALSE(result.success);
-
-  {
-    // Enable the device policy.
-    PolicyMap policies;
-    SetPolicy(&policies, key::kDevicePostQuantumKeyAgreementEnabled,
-              base::Value(true));
-    UpdateProviderPolicy(policies);
-    content::FlushNetworkServiceInstanceForTesting();
-  }
-
-  // Page load should now succeed.
-  EXPECT_EQ(
-      GetLocalStateManagedBooleanPref(prefs::kPostQuantumKeyAgreementEnabled),
-      std::nullopt);
-  EXPECT_EQ(GetLocalStateManagedBooleanPref(
-                prefs::kDevicePostQuantumKeyAgreementEnabled),
-            true);
-  result = LoadPage("/title2.html");
-  EXPECT_TRUE(result.success);
-  EXPECT_EQ(u"Title Of Awesomeness", result.title);
-
-  {
-    // Try disabling the non-device policy, while the device policy is enabled.
-    PolicyMap policies;
-    SetPolicy(&policies, key::kPostQuantumKeyAgreementEnabled,
-              base::Value(false));
-    SetPolicy(&policies, key::kDevicePostQuantumKeyAgreementEnabled,
-              base::Value(true));
-    UpdateProviderPolicy(policies);
-    content::FlushNetworkServiceInstanceForTesting();
-  }
-
-  // Page load should still succeed since the device policy takes precedence.
-  EXPECT_EQ(
-      GetLocalStateManagedBooleanPref(prefs::kPostQuantumKeyAgreementEnabled),
-      false);
-  EXPECT_EQ(GetLocalStateManagedBooleanPref(
-                prefs::kDevicePostQuantumKeyAgreementEnabled),
-            true);
-  result = LoadPage("/title2.html");
-  EXPECT_TRUE(result.success);
-  EXPECT_EQ(u"Title Of Awesomeness", result.title);
-}
-#endif  // BUILDFLAG(IS_CHROMEOS)
-
 IN_PROC_BROWSER_TEST_F(SSLPolicyTest, PreferSlowKexAlgorithmsPolicy) {
   net::SSLServerConfig ssl_config;
   ssl_config.curves_for_testing = {NID_ML_KEM_1024};
@@ -389,31 +234,6 @@ IN_PROC_BROWSER_TEST_F(SSLPolicyTest, PreferSlowKexAlgorithmsPolicy) {
   EXPECT_EQ(GetLocalStateManagedStringPref(prefs::kPreferSlowKexAlgorithms),
             "bogus");
   result = LoadPage("/title2.html");
-  EXPECT_FALSE(result.success);
-}
-
-IN_PROC_BROWSER_TEST_F(SSLPolicyTest,
-                       PostQuantumDisabledOverridesPreferSlowKexAlgorithms) {
-  net::SSLServerConfig ssl_config;
-  ssl_config.curves_for_testing = {NID_ML_KEM_1024};
-  ASSERT_TRUE(StartTestServer(ssl_config));
-
-  PolicyMap policies;
-  SetPolicy(&policies, key::kPreferSlowKexAlgorithms, base::Value("cnsa2"));
-  SetPolicy(&policies, key::kPostQuantumKeyAgreementEnabled,
-            base::Value(false));
-  UpdateProviderPolicy(policies);
-  content::FlushNetworkServiceInstanceForTesting();
-
-  // Should fail to load a page from the test server because setting
-  // PostQuantumKeyAgreementEnabled to disabled takes precedence over the
-  // PreferSlowKexAlgorithms policy.
-  EXPECT_EQ(GetLocalStateManagedStringPref(prefs::kPreferSlowKexAlgorithms),
-            "cnsa2");
-  EXPECT_FALSE(
-      GetLocalStateManagedBooleanPref(prefs::kPostQuantumKeyAgreementEnabled)
-          .value());
-  LoadResult result = LoadPage("/title2.html");
   EXPECT_FALSE(result.success);
 }
 
@@ -852,7 +672,7 @@ class ECHPolicyTest : public SSLPolicyTest {
     host_resolver()->AddRule(kDohServerHostname, "127.0.0.1");
 
     // The net stack doesn't enable DoH when it can't find a system DNS config
-    // (see https://crbug.com/1251715).
+    // (see https://crbug.com/40198483).
     SetReplaceSystemDnsConfig();
 
     // Via policy, configure the network service to use `doh_server_`.
@@ -1146,9 +966,10 @@ IN_PROC_BROWSER_TEST_P(TLS13EarlyDataPolicyEnabledByDefaultTest,
   EXPECT_FALSE(GetLocalStateBooleanPref(prefs::kTLS13EarlyDataEnabled));
   content::FlushNetworkServiceInstanceForTesting();
 
-  Browser* incognito_browser = Browser::Create(Browser::CreateParams(
-      browser()->profile()->GetPrimaryOTRProfile(/*create_if_needed=*/true),
-      true));
+  BrowserWindowInterface* incognito_browser = CreateBrowserWindow(
+      BrowserWindowCreateParams(browser()->GetProfile()->GetPrimaryOTRProfile(
+                                    /*create_if_needed=*/true),
+                                /*from_user_gesture=*/true));
 
   auto* render_frame_host = ui_test_utils::NavigateToURLWithDisposition(
       incognito_browser, GetTestPageURL(),
@@ -1181,7 +1002,7 @@ IN_PROC_BROWSER_TEST_P(TLS13EarlyDataPolicyEnabledByDefaultTest,
                                       profile_future.GetCallback());
   Profile* new_profile = profile_future.Get();
 
-  Browser* new_browser = CreateBrowser(new_profile);
+  BrowserWindowInterface* new_browser = CreateBrowser(new_profile);
 
   auto* render_frame_host = ui_test_utils::NavigateToURLWithDisposition(
       new_browser, GetTestPageURL(), WindowOpenDisposition::CURRENT_TAB,

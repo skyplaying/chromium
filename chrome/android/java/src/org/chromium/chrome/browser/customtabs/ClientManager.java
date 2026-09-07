@@ -27,6 +27,7 @@ import androidx.browser.customtabs.PostMessageServiceConnection;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.SysUtils;
+import org.chromium.base.TriState;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
@@ -205,6 +206,7 @@ class ClientManager {
     /** Per-session values. */
     private static class SessionParams {
         public final int uid;
+        public final int pid;
         private @Nullable BrowserCallbackWrapper mCallback;
         private @Nullable EngagementSignalsCallback mEngagementSignalsCallback;
         public final DisconnectCallback disconnectCallback;
@@ -234,12 +236,14 @@ class ClientManager {
         public SessionParams(
                 Context context,
                 int uid,
+                int pid,
                 BrowserCallbackWrapper callback,
                 DisconnectCallback disconnectCallback,
                 @Nullable PostMessageHandler postMessageHandler,
                 @Nullable PostMessageServiceConnection serviceConnection,
                 @Nullable EngagementSignalsHandler engagementSignalsHandler) {
             this.uid = uid;
+            this.pid = pid;
             mPackageName = getPackageName(context, uid);
             mCallback = callback;
             this.disconnectCallback = disconnectCallback;
@@ -374,6 +378,7 @@ class ClientManager {
     public synchronized boolean newSession(
             SessionHolder<?> session,
             int uid,
+            int pid,
             DisconnectCallback onDisconnect,
             @Nullable PostMessageHandler postMessageHandler,
             @Nullable PostMessageServiceConnection serviceConnection,
@@ -403,6 +408,7 @@ class ClientManager {
                     new SessionParams(
                             ContextUtils.getApplicationContext(),
                             uid,
+                            pid,
                             callbackWrapper,
                             onDisconnect,
                             postMessageHandler,
@@ -616,9 +622,10 @@ class ClientManager {
                     BrowserCallbackWrapper callback = getCallbackForSession(session);
                     if (callback != null) {
                         Bundle extras = null;
-                        if (verified && online != null) {
+                        if (verified && online != TriState.NOT_SET) {
                             extras = new Bundle();
-                            extras.putBoolean(CustomTabsCallback.ONLINE_EXTRAS_KEY, online);
+                            extras.putBoolean(
+                                    CustomTabsCallback.ONLINE_EXTRAS_KEY, online == TriState.TRUE);
                         }
                         callback.onRelationshipValidationResult(
                                 relation, origin.uri(), verified, extras);
@@ -708,7 +715,21 @@ class ClientManager {
      * @return The package name associated with the client owning the given session.
      */
     public @Nullable String getClientPackageNameForSession(@Nullable SessionHolder<?> session) {
-        return callOnSession(session, null, params -> params.getPackageName());
+        return callOnSession(session, null, SessionParams::getPackageName);
+    }
+
+    /**
+     * @return The UID associated with the client owning the given session.
+     */
+    public int getClientUidForSession(@Nullable SessionHolder<?> session) {
+        return callOnSession(session, -1, params -> params.uid);
+    }
+
+    /**
+     * @return The PID associated with the client owning the given session.
+     */
+    public int getClientPidForSession(@Nullable SessionHolder<?> session) {
+        return callOnSession(session, -1, params -> params.pid);
     }
 
     /**
@@ -727,7 +748,7 @@ class ClientManager {
      */
     public @Nullable BrowserCallbackWrapper getCallbackForSession(
             @Nullable SessionHolder<?> session) {
-        return callOnSession(session, null, params -> params.getCallback());
+        return callOnSession(session, null, SessionParams::getCallback);
     }
 
     /**
@@ -978,9 +999,7 @@ class ClientManager {
             @Nullable SessionHolder<?> session, boolean isInForeground) {
         callOnSession(
                 session,
-                params -> {
-                    params.mCustomTabIsInForeground = isInForeground;
-                });
+                (SessionParams params) -> params.mCustomTabIsInForeground = isInForeground);
     }
 
     public void setEngagementSignalsCallbackForSession(

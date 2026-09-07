@@ -14,15 +14,23 @@
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "crypto/crypto_export.h"
-#include "crypto/signature_verifier.h"
+#include "crypto/sign.h"
 
 #if BUILDFLAG(IS_APPLE)
 #import <Security/Security.h>
 #endif  // BUILDFLAG(IS_APPLE)
 
+#if BUILDFLAG(IS_WIN)
+#include "base/win/windows_types.h"
+
+// NCRYPT_KEY_HANDLE is defined in <ncrypt.h>, but including it here would pull
+// in Windows headers. We use an alias instead.
+using NCRYPT_KEY_HANDLE = ULONG_PTR;
+#endif  // BUILDFLAG(IS_WIN)
+
 namespace crypto {
 
-class StatefulUnexportableSigningKey;
+class StatefulKey;
 class StatefulUnexportableKeyProvider;
 
 // UnexportableSigningKey provides a hardware-backed signing oracle on platforms
@@ -35,10 +43,10 @@ class StatefulUnexportableKeyProvider;
 // API.
 class CRYPTO_EXPORT UnexportableSigningKey {
  public:
-  virtual ~UnexportableSigningKey();
+  virtual ~UnexportableSigningKey() = default;
 
   // Algorithm returns the algorithm of the key in this object.
-  virtual SignatureVerifier::SignatureAlgorithm Algorithm() const = 0;
+  virtual sign::SignatureKind Algorithm() const = 0;
 
   // GetSubjectPublicKeyInfo returns an SPKI that contains the public key of
   // this object.
@@ -61,13 +69,6 @@ class CRYPTO_EXPORT UnexportableSigningKey {
   // wrapped key.
   virtual std::vector<uint8_t> GetWrappedKey() const = 0;
 
-  // SignSlowly returns a signature of |data|, or |nullopt| if an error occurs
-  // during signing.
-  //
-  // Note: this may take a second or more to run.
-  virtual std::optional<std::vector<uint8_t>> SignSlowly(
-      base::span<const uint8_t> data) = 0;
-
   // Returns true if the underlying key is stored in "hardware". Something like
   // ARM TrustZone would count as hardware for these purposes. Ideally all
   // implementations of this class would return true here, because software
@@ -79,24 +80,80 @@ class CRYPTO_EXPORT UnexportableSigningKey {
   // Returns the underlying reference to a Keychain key owned by the current
   // instance.
   virtual SecKeyRef GetSecKeyRef() const = 0;
-#elif BUILDFLAG(IS_WIN)
+#endif  // BUILDFLAG(IS_APPLE)
+
+#if BUILDFLAG(IS_WIN)
+  // Returns the underlying NCrypt key handle owned by the current instance.
+  virtual NCRYPT_KEY_HANDLE GetNCryptKeyHandle() const = 0;
+#endif  // BUILDFLAG(IS_WIN)
+
+  // Typesafe downcast to `StatefulKey`. Returns nullptr if the key is not
+  // stateful.
+  virtual const StatefulKey* AsStatefulKey() const LIFETIME_BOUND;
+
+  // SignSlowly returns a signature of |data|, or |nullopt| if an error occurs
+  // during signing.
+  //
+  // Note: this may take a second or more to run.
+  virtual std::optional<std::vector<uint8_t>> SignSlowly(
+      base::span<const uint8_t> data) = 0;
+
+#if BUILDFLAG(IS_WIN)
   // Will verify whether the key can be used to sign TLS 1.3 payloads as
   // required by the spec. Specifically, it will verify whether RSA keys
   // support the RSA-PSS algorithm with the expected salt lengths.
   virtual bool SupportsTls13() = 0;
-#endif  // BUILDFLAG(IS_APPLE)
-
-  // Typesafe downcast to `StatefulUnexportableSigningKey`. Returns nullptr if
-  // the key is not stateful.
-  virtual StatefulUnexportableSigningKey* AsStatefulUnexportableSigningKey()
-      LIFETIME_BOUND = 0;
+#endif  // BUILDFLAG(IS_WIN)
 };
 
-// StatefulUnexportableSigningKey is an interface for keys that are backed by
-// some permanent state, such as the keychain on macOS.
-class CRYPTO_EXPORT StatefulUnexportableSigningKey
-    : public UnexportableSigningKey {
+// An attestation/certification statement proving the binding of an
+// unexportable signing key to the hardware-backed attestation key of the
+// device.
+//
+// Because Apple's Secure Enclave does not provide a platform API for hardware
+// key attestation, a custom, software-based format is used on macOS/iOS
+// (Format::kSecureEnclave) where the browser acts as a proxy to attest the key.
+// This provides future compatibility when a native attestation API becomes
+// available.
+struct CRYPTO_EXPORT AttestationStatement {
+  enum Format {
+    // TPM 2.0 platform attestation format.
+    // `statement` is a binary TPMS_ATTEST structure.
+    // `signature` is a binary TPMT_SIGNATURE structure.
+    // `subject_key` is the TPM 2.0 `TPMT_PUBLIC` binary structure of the
+    // certified key.
+    kTpm,
+    // Custom Secure Enclave format used on macOS/iOS.
+    // `statement` is the concatenation of the server's challenge and the
+    // SHA-256 hash of the signing key's Subject PublicKey Info (SPKI).
+    // TODO(crbug.com/406190025): Make this generic once we use the
+    // crypto::sign algorithms.
+    // `signature` is the signature over `statement` signed using the Secure
+    // Enclave attestation key in raw IEEE P1363 format (concatenation of
+    // big-endian `r` and `s`, 64 bytes for P-256).
+    kSecureEnclave,
+  };
+  Format format = kTpm;
+  std::vector<uint8_t> statement;
+  std::vector<uint8_t> signature;
+  std::vector<uint8_t> subject_key;
+};
+
+class CRYPTO_EXPORT UnexportableAttestationKey : public UnexportableSigningKey {
  public:
+  // Performs an attestation/certification over the given signing key using
+  // the attestation key (e.g., an AIK certifying a generated RSA binding key).
+  virtual std::optional<AttestationStatement> CertifySlowly(
+      const UnexportableSigningKey& signing_key,
+      base::span<const uint8_t> challenge) = 0;
+};
+
+// StatefulKey is an interface for keys that are backed by some permanent state,
+// such as the keychain on macOS.
+class CRYPTO_EXPORT StatefulKey {
+ public:
+  virtual ~StatefulKey() = default;
+
   // Returns the tag of the stateful key stored by the platform. For example,
   // on macOS, this is the application tag set when creating the key.
   virtual std::string GetKeyTag() const = 0;
@@ -149,9 +206,14 @@ class CRYPTO_EXPORT UnexportableKeyProvider {
   // SelectAlgorithm returns which signature algorithm from
   // |acceptable_algorithms| would be used if |acceptable_algorithms| was passed
   // to |GenerateSigningKeySlowly|.
-  virtual std::optional<SignatureVerifier::SignatureAlgorithm> SelectAlgorithm(
-      base::span<const SignatureVerifier::SignatureAlgorithm>
-          acceptable_algorithms) = 0;
+  //
+  // Note: on Windows, calling this function may trigger a synchronous load of
+  // `ncrypt.dll`. This loading happens only once per process lifetime.
+  // Therefore, it is acceptable to call this function on the UI thread after it
+  // has been invoked at least once (e.g., during initialization on a background
+  // thread) to avoid blocking the UI thread and causing potential hangs.
+  virtual std::optional<sign::SignatureKind> SelectAlgorithm(
+      base::span<const sign::SignatureKind> acceptable_algorithms) = 0;
 
   // GenerateSigningKeySlowly creates a new opaque signing key in hardware. The
   // first supported value of |acceptable_algorithms| determines the type of the
@@ -161,8 +223,7 @@ class CRYPTO_EXPORT UnexportableKeyProvider {
   //
   // Note: this may take one or two seconds to run.
   virtual std::unique_ptr<UnexportableSigningKey> GenerateSigningKeySlowly(
-      base::span<const SignatureVerifier::SignatureAlgorithm>
-          acceptable_algorithms) = 0;
+      base::span<const sign::SignatureKind> acceptable_algorithms) = 0;
 
   // FromWrappedSigningKey creates an |UnexportableSigningKey| from
   // |wrapped_key|, which must have resulted from calling |GetWrappedKey| on a
@@ -176,6 +237,15 @@ class CRYPTO_EXPORT UnexportableKeyProvider {
   virtual std::unique_ptr<UnexportableSigningKey> FromWrappedSigningKeySlowly(
       base::span<const uint8_t> wrapped_key) = 0;
 
+  // Generates a new hardware-backed attestation key (e.g., an AIK).
+  virtual std::unique_ptr<UnexportableAttestationKey>
+  GenerateAttestationKeySlowly(
+      base::span<const sign::SignatureKind> acceptable_algorithms);
+
+  // Reconstructs an attestation key from a previously wrapped key.
+  virtual std::unique_ptr<UnexportableAttestationKey>
+  FromWrappedAttestationKeySlowly(base::span<const uint8_t> wrapped_key);
+
   // Typesafe downcast to `StatefulUnexportableKeyProvider`. Returns nullptr if
   // the provider is not stateful.
   virtual StatefulUnexportableKeyProvider* AsStatefulUnexportableKeyProvider()
@@ -187,7 +257,7 @@ class CRYPTO_EXPORT UnexportableKeyProvider {
 class CRYPTO_EXPORT StatefulUnexportableKeyProvider
     : public UnexportableKeyProvider {
  public:
-  // `GetAllSigningKeysSlowly()` returns all previously stored keys matching
+  // `GetAllKeysSlowly()` returns all previously stored keys matching
   // `Config` or nullopt in case of failures.
   //
   // NOTE: For macOS this will perform prefix matching on
@@ -198,7 +268,7 @@ class CRYPTO_EXPORT StatefulUnexportableKeyProvider
   // This can sometimes block, and therefore must not be called from the UI
   // thread.
   virtual std::optional<std::vector<std::unique_ptr<UnexportableSigningKey>>>
-  GetAllSigningKeysSlowly() = 0;
+  GetAllKeysSlowly() = 0;
 
   // Deletes all state associated with all signing keys matching `Config` that
   // match one of the provided wrapped keys. Returns the number of keys deleted,
@@ -213,18 +283,18 @@ class CRYPTO_EXPORT StatefulUnexportableKeyProvider
   virtual std::optional<size_t> DeleteWrappedKeysSlowly(
       base::span<const base::span<const uint8_t>> wrapped_keys) = 0;
 
-  // Deletes all state associated with the provided signing keys. Returns the
-  // number of keys deleted, or nullopt if unsuccessful. This can sometimes
-  // block, and therefore must not be called from the UI thread.
+  // Deletes all state associated with the provided keys. Returns the number of
+  // keys deleted, or nullopt if unsuccessful. This can sometimes block, and
+  // therefore must not be called from the UI thread.
   //
   // NOTE: For macOS this will perform prefix matching on
   // `Config::application_tag`. That is, only matching keys where the
   // application tag starts with the `Config::application_tag` will be deleted.
-  virtual std::optional<size_t> DeleteSigningKeysSlowly(
-      base::span<const StatefulUnexportableSigningKey* const> signing_keys) = 0;
+  virtual std::optional<size_t> DeleteKeysSlowly(
+      base::span<const UnexportableSigningKey* const> keys) = 0;
 
-  // `DeleteAllSigningKeysSlowly()` deletes all state associated with all
-  // signing keys matching `UnexportableKeyProvider::Config`.
+  // `DeleteAllKeysSlowly()` deletes all state associated with all keys matching
+  // `UnexportableKeyProvider::Config`.
   //
   // NOTE: For macOS, this will perform prefix matching iff
   // `Config::application_tag` is set. That is, if `Config::application_tag` is
@@ -233,7 +303,7 @@ class CRYPTO_EXPORT StatefulUnexportableKeyProvider
   //
   // Returns the number of keys deleted, or nullopt if unsuccessful. This can
   // sometimes block, and therefore must not be called from the UI thread.
-  virtual std::optional<size_t> DeleteAllSigningKeysSlowly() = 0;
+  virtual std::optional<size_t> DeleteAllKeysSlowly() = 0;
 };
 
 // This is an experimental API as it uses an unofficial Windows API.
@@ -261,7 +331,7 @@ class CRYPTO_EXPORT VirtualUnexportableSigningKey {
   virtual ~VirtualUnexportableSigningKey();
 
   // Algorithm returns the algorithm of the key in this object.
-  virtual SignatureVerifier::SignatureAlgorithm Algorithm() const = 0;
+  virtual sign::SignatureKind Algorithm() const = 0;
 
   // GetSubjectPublicKeyInfo returns an SPKI that contains the public key of
   // this object.
@@ -296,9 +366,8 @@ class CRYPTO_EXPORT VirtualUnexportableKeyProvider {
   // SelectAlgorithm returns which signature algorithm from
   // |acceptable_algorithms| would be used if |acceptable_algorithms| was passed
   // to |GenerateSigningKeySlowly|.
-  virtual std::optional<SignatureVerifier::SignatureAlgorithm> SelectAlgorithm(
-      base::span<const SignatureVerifier::SignatureAlgorithm>
-          acceptable_algorithms) = 0;
+  virtual std::optional<sign::SignatureKind> SelectAlgorithm(
+      base::span<const sign::SignatureKind> acceptable_algorithms) = 0;
 
   // GenerateSigningKey creates a new opaque signing key in a virtual machine.
   // The first supported value of |acceptable_algorithms| determines the type of
@@ -312,8 +381,7 @@ class CRYPTO_EXPORT VirtualUnexportableKeyProvider {
   //
   // Note: This may take milliseconds to run.
   virtual std::unique_ptr<VirtualUnexportableSigningKey> GenerateSigningKey(
-      base::span<const SignatureVerifier::SignatureAlgorithm>
-          acceptable_algorithms,
+      base::span<const sign::SignatureKind> acceptable_algorithms,
       std::string name) = 0;
 
   // FromKeyName creates an |UnexportableSigningKey| from |name|, which is the

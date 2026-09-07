@@ -277,8 +277,11 @@ void InProgressDownloadManager::DownloadUrl(
       params->download_source());
 
   // Start the new download, the download should be saved to the file path
-  // specifcied in the |params|.
-  BeginDownload(std::move(params), url_loader_factory_->Clone(),
+  // specified in the |params|.
+  std::unique_ptr<network::PendingSharedURLLoaderFactory> factory =
+      params->url_loader_factory() ? params->take_url_loader_factory()
+                                   : url_loader_factory_->Clone();
+  BeginDownload(std::move(params), std::move(factory),
                 true /* is_new_download */,
                 std::string() /* serialized_embedder_download_data */,
                 GURL() /* tab_url */, GURL() /* tab_referral_url */);
@@ -288,7 +291,7 @@ bool InProgressDownloadManager::CanDownload(DownloadUrlParameters* params) {
   if (!params->is_transient())
     return false;
 
-  if (!url_loader_factory_)
+  if (!url_loader_factory_ && !params->url_loader_factory())
     return false;
 
   if (params->require_safety_checks())
@@ -463,10 +466,27 @@ void InProgressDownloadManager::DetermineDownloadTarget(
 void InProgressDownloadManager::ResumeInterruptedDownload(
     std::unique_ptr<DownloadUrlParameters> params,
     const std::string& serialized_embedder_download_data) {
-  if (!url_loader_factory_)
+  if (!url_loader_factory_ && !params->url_loader_factory())
     return;
 
-  BeginDownload(std::move(params), url_loader_factory_->Clone(), false,
+  // If the original response came from a Service Worker, the bytes on disk
+  // came from event.respondWith(); resuming against `url_loader_factory_`
+  // would fetch unrelated network bytes and corrupt the file. The IPDM has
+  // no SW context, so defer: DownloadManagerImpl::ImportInProgressDownloads
+  // will reattach as the delegate, and the next resume runs through
+  // DownloadManagerImpl which restarts the download against the SW.
+  // `skip_service_worker_interception` is set by
+  // DownloadItemImpl::ResumeInterruptedDownload to true exactly when the
+  // original was network-fetched, so the negation identifies SW-fetched.
+  if (!params->skip_service_worker_interception()) {
+    return;
+  }
+
+  std::unique_ptr<network::PendingSharedURLLoaderFactory> factory =
+      params->url_loader_factory() ? params->take_url_loader_factory()
+                                   : url_loader_factory_->Clone();
+
+  BeginDownload(std::move(params), std::move(factory), false,
                 serialized_embedder_download_data, GURL(), GURL());
 }
 
@@ -606,9 +626,25 @@ void InProgressDownloadManager::OnDBInitialized(
     bool success,
     std::unique_ptr<std::vector<DownloadDBEntry>> entries) {
 #if BUILDFLAG(IS_ANDROID)
-  // Retrieve display names for all downloads from media store if needed.
+  // Retrieve display names for content URI downloads if needed.
   if (base::android::android_info::sdk_int() >=
       base::android::android_info::SDK_VERSION_Q) {
+    std::vector<base::FilePath> content_uris;
+    if (entries) {
+      for (const auto& entry : *entries) {
+        if (entry.download_info && entry.download_info->in_progress_info) {
+          const base::FilePath& path =
+              entry.download_info->in_progress_info->target_path;
+          if (path.IsContentUri()) {
+            content_uris.push_back(path);
+          }
+        }
+      }
+    }
+    if (content_uris.empty()) {
+      OnDownloadNamesRetrieved(std::move(entries), nullptr);
+      return;
+    }
     DownloadCollectionBridge::GetDisplayNamesCallback callback =
         base::BindOnce(&InProgressDownloadManager::OnDownloadNamesRetrieved,
                        weak_factory_.GetWeakPtr(), std::move(entries));
@@ -616,6 +652,7 @@ void InProgressDownloadManager::OnDBInitialized(
         FROM_HERE,
         base::BindOnce(
             &DownloadCollectionBridge::GetDisplayNamesForDownloads,
+            std::move(content_uris),
             base::BindOnce(&OnDownloadDisplayNamesReturned, std::move(callback),
                            base::SingleThreadTaskRunner::GetCurrentDefault())));
     return;

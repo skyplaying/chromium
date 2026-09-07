@@ -13,10 +13,6 @@
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ui/views/autofill/popup/popup_view_views.h"
 
-namespace content {
-struct NativeWebKeyboardEvent;
-}  // namespace content
-
 namespace gfx {
 class Rect;
 }  // namespace gfx
@@ -48,6 +44,12 @@ class PopupViewViewsTestApi {
 
   const std::vector<PopupViewViews::RowPointer>& rows() const&& {
     return view_->rows_;
+  }
+
+  views::TabbedPane* tabbed_pane() { return view_->tabbed_pane_; }
+
+  PopupBnplFootnoteView* GetBnplFootnoteView() const&& {
+    return view_->GetBnplFootnoteView();
   }
 
   void SetSearchQuery(const std::u16string& query) {

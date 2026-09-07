@@ -15,9 +15,9 @@ import android.app.Activity;
 import android.view.View;
 import android.widget.FrameLayout;
 
-import androidx.test.ext.junit.rules.ActivityScenarioRule;
 import androidx.test.filters.SmallTest;
 
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -27,7 +27,8 @@ import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.LooperMode;
+import org.robolectric.Robolectric;
+import org.robolectric.android.controller.ActivityController;
 import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -37,40 +38,37 @@ import java.util.function.DoubleConsumer;
 
 /** Unit tests for {@link FadeHubLayoutAnimationFactoryImpl}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@LooperMode(LooperMode.Mode.PAUSED)
 public class FadeHubLayoutAnimationFactoryImplUnitTest {
     private static final long DURATION_MS = 500L;
     private static final long TIMEOUT_MS = 100L;
     private static final float FLOAT_TOLERANCE = 0.001f;
-
-    @Rule
-    public ActivityScenarioRule<TestActivity> mActivityScenarioRule =
-            new ActivityScenarioRule<>(TestActivity.class);
 
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Spy private HubLayoutAnimationListener mListener;
     @Mock private DoubleConsumer mOnAlphaChange;
 
+    private ActivityController<TestActivity> mActivityController;
     private Activity mActivity;
     private FrameLayout mRootView;
     private HubContainerView mHubContainerView;
 
     @Before
     public void setUp() {
-        mActivityScenarioRule
-                .getScenario()
-                .onActivity(
-                        (activity) -> {
-                            mActivity = activity;
-                            mRootView = new FrameLayout(mActivity);
-                            mActivity.setContentView(mRootView);
+        mActivityController = Robolectric.buildActivity(TestActivity.class).setup();
+        mActivity = mActivityController.get();
+        mRootView = new FrameLayout(mActivity);
+        mActivity.setContentView(mRootView);
 
-                            mHubContainerView = new HubContainerView(mActivity);
-                            mHubContainerView.setVisibility(View.INVISIBLE);
-                            mRootView.addView(mHubContainerView);
-                        });
+        mHubContainerView = new HubContainerView(mActivity);
+        mHubContainerView.setVisibility(View.INVISIBLE);
+        mRootView.addView(mHubContainerView);
         ShadowLooper.runUiThreadTasks();
+    }
+
+    @After
+    public void tearDown() {
+        mActivityController.close();
     }
 
     @Test
@@ -124,7 +122,7 @@ public class FadeHubLayoutAnimationFactoryImplUnitTest {
         HubLayoutAnimationRunner runner =
                 HubLayoutAnimationRunnerFactory.createHubLayoutAnimationRunner(animatorProvider);
 
-        HubLayoutAnimationListener mListener =
+        HubLayoutAnimationListener listener =
                 spy(
                         new HubLayoutAnimationListener() {
                             @Override
@@ -147,15 +145,15 @@ public class FadeHubLayoutAnimationFactoryImplUnitTest {
                                 assertEquals(1.0f, mHubContainerView.getAlpha(), FLOAT_TOLERANCE);
                             }
                         });
-        runner.addListener(mListener);
+        runner.addListener(listener);
 
         runner.runWithWaitForAnimatorTimeout(TIMEOUT_MS);
 
         ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
 
-        verify(mListener).beforeStart();
-        verify(mListener).onEnd(eq(false));
-        verify(mListener).afterEnd();
+        verify(listener).beforeStart();
+        verify(listener).onEnd(eq(false));
+        verify(listener).afterEnd();
         verify(mOnAlphaChange, atLeast(3)).accept(anyDouble());
     }
 

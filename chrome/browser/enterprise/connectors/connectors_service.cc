@@ -8,11 +8,12 @@
 #include <variant>
 
 #include "base/check_op.h"
-#include "base/memory/singleton.h"
 #include "base/no_destructor.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/enterprise/browser_management/management_identity.h"
+#include "chrome/browser/enterprise/connectors/common.h"
 #include "chrome/browser/enterprise/connectors/connectors_manager.h"
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
 #include "chrome/browser/policy/dm_token_utils.h"
@@ -20,7 +21,6 @@
 #include "chrome/browser/profiles/reporting_util.h"
 #include "chrome/browser/safe_browsing/cloud_content_scanning/deep_scanning_utils.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/ui/managed_ui.h"
 #include "components/enterprise/browser/controller/browser_dm_token_storage.h"
 #include "components/enterprise/buildflags/buildflags.h"
 #include "components/enterprise/common/proto/connectors.pb.h"
@@ -43,8 +43,8 @@
 #include "google_apis/gaia/gaia_auth_util.h"
 
 #if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
-#include "chrome/browser/extensions/chrome_content_browser_client_extensions_part.h"
-#include "extensions/browser/extension_registry_factory.h"
+#include "chrome/browser/extensions/chrome_content_browser_client_extensions_part.h"  // nogncheck crbug.com/40147906
+#include "extensions/browser/extension_registry_factory.h"  // nogncheck crbug.com/40147906
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -52,15 +52,10 @@
 #include "chrome/browser/ash/settings/device_settings_service.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/components/mgs/managed_guest_session_utils.h"
-#include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
 #include "extensions/common/constants.h"
 #else
 #include "components/policy/core/common/cloud/profile_cloud_policy_manager.h"
-#endif
-
-#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
-#include "chrome/browser/enterprise/connectors/common.h"
 #endif
 
 namespace enterprise_connectors {
@@ -78,6 +73,32 @@ std::string GetClientId(Profile* profile) {
   client_id = policy::BrowserDMTokenStorage::Get()->RetrieveClientId();
 #endif
   return client_id;
+}
+
+std::string GetDeviceClientId(Profile* profile) {
+#if BUILDFLAG(IS_CHROMEOS)
+  auto* device_settings_service = ash::DeviceSettingsService::Get();
+  const auto* policy_data = device_settings_service->policy_data();
+  if (policy_data && policy_data->has_device_id()) {
+    return policy_data->device_id();
+  }
+#endif
+  // This actually won't return the device client ID for ChromeOS, it's just
+  // a fallback in that case.
+  return GetClientId(profile);
+}
+
+std::string MaybeGetProfileEmail(Profile* profile) {
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+  auto* identity_manager = IdentityManagerFactory::GetForProfile(profile);
+  if (!identity_manager) {
+    return std::string();
+  }
+
+  return GetProfileEmail(identity_manager);
+#else
+  return std::string();
+#endif
 }
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -192,13 +213,17 @@ std::string ConnectorsService::GetManagementDomain() {
     return std::string();
   }
 
-  std::optional<policy::PolicyScope> scope = std::nullopt;
+  std::optional<policy::PolicyScope> scope;
   for (const char* scope_pref :
        {enterprise_connectors::kEnterpriseRealTimeUrlCheckScope,
+#if !BUILDFLAG(IS_ANDROID)
         AnalysisConnectorScopePref(AnalysisConnector::FILE_ATTACHED),
+#endif
         AnalysisConnectorScopePref(AnalysisConnector::FILE_DOWNLOADED),
+#if !BUILDFLAG(IS_ANDROID)
         AnalysisConnectorScopePref(AnalysisConnector::BULK_DATA_ENTRY),
         AnalysisConnectorScopePref(AnalysisConnector::PRINT),
+#endif
         kOnSecurityEventScopePref}) {
     std::optional<DmToken> dm_token = GetDmToken(scope_pref);
     if (dm_token.has_value()) {
@@ -239,27 +264,17 @@ std::string ConnectorsService::GetManagementDomain() {
 #endif
 }
 
-std::string ConnectorsService::GetRealTimeUrlCheckIdentifier() const {
-  auto dm_token = GetDmToken(kEnterpriseRealTimeUrlCheckScope);
-  if (!dm_token) {
-    return std::string();
-  }
+bool ConnectorsService::IsProfileAffiliated() const {
+  return IsAffiliated(Profile::FromBrowserContext(context_));
+}
 
-  Profile* profile = Profile::FromBrowserContext(context_);
-  if (dm_token->scope == policy::POLICY_SCOPE_MACHINE) {
-    return GetClientId(profile);
-  }
+std::string ConnectorsService::GetProfileEmail() const {
+  return MaybeGetProfileEmail(Profile::FromBrowserContext(context_));
+}
 
-#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
-  auto* identity_manager = IdentityManagerFactory::GetForProfile(profile);
-  if (!identity_manager) {
-    return std::string();
-  }
-
-  return GetProfileEmail(identity_manager);
-#else
-  return std::string();
-#endif
+std::string ConnectorsService::GetDeviceClientId() const {
+  return ::enterprise_connectors::GetDeviceClientId(
+      Profile::FromBrowserContext(context_));
 }
 
 std::optional<ConnectorsService::DmToken> ConnectorsService::GetDmToken(
@@ -396,7 +411,8 @@ bool ConnectorsService::IsURLExemptFromAnalysis(const GURL& url,
 
 // static
 ConnectorsServiceFactory* ConnectorsServiceFactory::GetInstance() {
-  return base::Singleton<ConnectorsServiceFactory>::get();
+  static base::NoDestructor<ConnectorsServiceFactory> instance;
+  return instance.get();
 }
 
 ConnectorsService* ConnectorsServiceFactory::GetForBrowserContext(
@@ -427,11 +443,14 @@ ConnectorsServiceFactory::BuildServiceInstanceForBrowserContext(
 
 content::BrowserContext* ConnectorsServiceFactory::GetBrowserContextToUse(
     content::BrowserContext* context) const {
+  Profile* profile = Profile::FromBrowserContext(context);
+  if (!profile) {
+    return nullptr;
+  }
+
 #if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
-  // Do not construct the connectors service if the extensions are disabled for
-  // the given context.
-  if (extensions::ChromeContentBrowserClientExtensionsPart::
-          AreExtensionsDisabledForProfile(context)) {
+  // Do not construct the connectors service for the system profile.
+  if (profile->IsSystemProfile()) {
     return nullptr;
   }
 #endif
@@ -440,9 +459,9 @@ content::BrowserContext* ConnectorsServiceFactory::GetBrowserContextToUse(
   // profiles, besides incognito.
   // However, the primary/main profile might not exist in tests - then the
   // provided |context| is still used.
-  if (context && !context->IsOffTheRecord() &&
-      !Profile::FromBrowserContext(context)->AsTestingProfile() &&
-      !context->ShutdownStarted()) {
+  if (!profile->IsOffTheRecord() &&
+      !profile->AsTestingProfile() &&
+      !profile->ShutdownStarted()) {
 #if BUILDFLAG(IS_CHROMEOS)
     auto* user_manager = user_manager::UserManager::Get();
     if (auto* primary_user = user_manager->GetPrimaryUser()) {
@@ -454,7 +473,7 @@ content::BrowserContext* ConnectorsServiceFactory::GetBrowserContextToUse(
     }
 #endif
   }
-  return context;
+  return profile;
 }
 
 }  // namespace enterprise_connectors

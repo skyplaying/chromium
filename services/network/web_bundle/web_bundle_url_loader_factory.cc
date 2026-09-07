@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <optional>
 
+#include "base/byte_size.h"
 #include "base/functional/callback.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notimplemented.h"
@@ -261,11 +262,12 @@ class WebBundleURLLoaderFactory::URLLoader : public mojom::URLLoader {
   void OnWriteCompleted(MojoResult result) {
     URLLoaderCompletionStatus status(
         result == MOJO_RESULT_OK ? net::OK : net::ERR_INVALID_WEB_BUNDLE);
-    status.encoded_data_length = body_length_ + headers_bytes_;
+    status.encoded_data_length =
+        base::ByteSize(body_length_) + base::ByteSize(headers_bytes_);
     // For these values we use the same `body_length_` as we don't currently
     // provide encoding in WebBundles.
-    status.encoded_body_length = body_length_;
-    status.decoded_body_length = body_length_;
+    status.encoded_body_length = base::ByteSize(body_length_);
+    status.decoded_body_length = base::ByteSize(body_length_);
     client_->OnComplete(status);
     deleteThis();
   }
@@ -302,9 +304,9 @@ class WebBundleURLLoaderFactory::URLLoader : public mojom::URLLoader {
     URLLoaderCompletionStatus status;
     status.error_code = error_code;
     status.completion_time = base::TimeTicks::Now();
-    status.encoded_data_length = 0;
-    status.encoded_body_length = 0;
-    status.decoded_body_length = 0;
+    status.encoded_data_length = base::ByteSize(0);
+    status.encoded_body_length = base::ByteSize(0);
+    status.decoded_body_length = base::ByteSize(0);
     status.blocked_by_response_reason = reason;
     client_->OnComplete(status);
 
@@ -329,9 +331,7 @@ class WebBundleURLLoaderFactory::URLLoader : public mojom::URLLoader {
  private:
   // mojom::URLLoader
   void FollowRedirect(
-      const std::vector<std::string>& removed_headers,
-      const net::HttpRequestHeaders& modified_headers,
-      const net::HttpRequestHeaders& modified_cors_exempt_headers,
+      network::HttpRequestHeadersUpdateParams headers_update_params,
       const std::optional<GURL>& new_url) override {
     NOTREACHED();
   }
@@ -547,14 +547,14 @@ WebBundleURLLoaderFactory::WebBundleURLLoaderFactory(
     std::unique_ptr<WebBundleMemoryQuotaConsumer>
         web_bundle_memory_quota_consumer,
     const CrossOriginEmbedderPolicy& cross_origin_embedder_policy,
-    mojom::CrossOriginEmbedderPolicyReporter* coep_reporter)
+    mojo::PendingRemote<mojom::CrossOriginEmbedderPolicyReporter> coep_reporter)
     : bundle_url_(bundle_url),
       web_bundle_handle_(std::move(web_bundle_handle)),
       web_bundle_memory_quota_consumer_(
           std::move(web_bundle_memory_quota_consumer)),
 
       cross_origin_embedder_policy_(cross_origin_embedder_policy),
-      coep_reporter_(coep_reporter) {
+      coep_reporter_(std::move(coep_reporter)) {
   if (bundle_url != web_bundle_token_params.bundle_url) {
     // This happens when WebBundle request is redirected by WebRequest extension
     // API.
@@ -663,7 +663,7 @@ void WebBundleURLLoaderFactory::StartLoader(base::WeakPtr<URLLoader> loader) {
     return;
   }
   loader->trusted_header_client()->OnBeforeSendHeaders(
-      loader->request_headers(),
+      loader->url(), loader->request_headers(),
       base::BindOnce(&WebBundleURLLoaderFactory::OnBeforeSendHeadersComplete,
                      weak_ptr_factory_.GetWeakPtr(), loader->GetWeakPtr()));
 }
@@ -671,7 +671,8 @@ void WebBundleURLLoaderFactory::StartLoader(base::WeakPtr<URLLoader> loader) {
 void WebBundleURLLoaderFactory::OnBeforeSendHeadersComplete(
     base::WeakPtr<URLLoader> loader,
     int result,
-    const std::optional<net::HttpRequestHeaders>& headers) {
+    const std::optional<net::HttpRequestHeaders>& headers,
+    std::optional<base::DictValue> extended_net_log_events) {
   if (!loader)
     return;
   QueueOrStartLoader(loader);
@@ -858,7 +859,8 @@ void WebBundleURLLoaderFactory::SendResponseToLoader(
               loader->url(), loader->url(), loader->request_initiator(),
               *response_head, loader->request_mode(),
               loader->request_destination(), cross_origin_embedder_policy_,
-              coep_reporter_, DocumentIsolationPolicy(), nullptr)) {
+              coep_reporter_ ? coep_reporter_.get() : nullptr,
+              DocumentIsolationPolicy(), nullptr)) {
     loader->CompleteBlockedResponse(net::ERR_BLOCKED_BY_RESPONSE,
                                     blocked_reason);
     return;

@@ -6,6 +6,7 @@
 
 #include "third_party/blink/public/mojom/frame/frame.mojom-blink.h"
 #include "third_party/blink/public/mojom/permissions/permission.mojom-blink.h"
+#include "third_party/blink/public/mojom/permissions/permission_status.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_throw_dom_exception.h"
@@ -26,19 +27,20 @@ using mojom::blink::PermissionName;
 namespace {
 
 using AdditionalWindowingControlsActionCallback =
-    base::OnceCallback<void(mojom::blink::PermissionStatus)>;
+    base::OnceCallback<void(mojom::blink::PermissionStatusWithDetailsPtr)>;
 using ui::mojom::blink::WindowShowState;
 
-bool IsPermissionGranted(ScriptPromiseResolver<IDLUndefined>* resolver,
-                         mojom::blink::PermissionStatus status) {
+bool IsPermissionGranted(
+    ScriptPromiseResolver<IDLUndefined>* resolver,
+    const mojom::blink::PermissionStatusWithDetails& status) {
   if (!resolver->GetScriptState()->ContextIsValid()) {
     return false;
   }
 
-  if (status != mojom::blink::PermissionStatus::GRANTED) {
+  if (status.status != mojom::blink::PermissionStatus::GRANTED) {
     resolver->RejectWithDOMException(
         DOMExceptionCode::kNotAllowedError,
-        status == mojom::blink::PermissionStatus::DENIED
+        status.status == mojom::blink::PermissionStatus::DENIED
             ? "Permission denied."
             : "Permission decision deferred.");
     return false;
@@ -47,7 +49,8 @@ bool IsPermissionGranted(ScriptPromiseResolver<IDLUndefined>* resolver,
 }
 
 bool CanUseWindowingControls(LocalDOMWindow* window,
-                             ExceptionState& exception_state) {
+                             ExceptionState& exception_state,
+                             bool require_user_activation) {
   auto* frame = window->GetFrame();
   if (!frame || !frame->IsOutermostMainFrame() ||
       frame->GetPage()->IsPrerendering()) {
@@ -56,24 +59,48 @@ bool CanUseWindowingControls(LocalDOMWindow* window,
         "API is only supported in primary top-level browsing contexts.");
     return false;
   }
+  if (!window->document()->IsInWebAppScope()) {
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                      "API is only supported in web apps.");
+    return false;
+  }
+  if (require_user_activation && !window->IsIsolatedContext() &&
+      !LocalFrame::HasTransientUserActivation(frame)) {
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kNotAllowedError,
+        "API requires transient user activation.");
+    return false;
+  }
   return true;
 }
 
 bool IsMaximized(LocalDOMWindow* window) {
-  return window->GetFrame()->GetWidgetForLocalRoot()->WindowShowState() ==
-         WindowShowState::kMaximized;
+  if (auto* frame = window->GetFrame()) {
+    if (auto* widget = frame->GetWidgetForLocalRoot()) {
+      return widget->WindowShowState() == WindowShowState::kMaximized;
+    }
+  }
+  return false;
 }
 
 bool IsMinimized(LocalDOMWindow* window) {
-  return window->GetFrame()->GetWidgetForLocalRoot()->WindowShowState() ==
-         WindowShowState::kMinimized;
+  if (auto* frame = window->GetFrame()) {
+    if (auto* widget = frame->GetWidgetForLocalRoot()) {
+      return widget->WindowShowState() == WindowShowState::kMinimized;
+    }
+  }
+  return false;
 }
 
 bool IsNormal(LocalDOMWindow* window) {
-  WindowShowState show_state =
-      window->GetFrame()->GetWidgetForLocalRoot()->WindowShowState();
-  return show_state == WindowShowState::kDefault ||
-         show_state == WindowShowState::kNormal;
+  if (auto* frame = window->GetFrame()) {
+    if (auto* widget = frame->GetWidgetForLocalRoot()) {
+      WindowShowState show_state = widget->WindowShowState();
+      return show_state == WindowShowState::kDefault ||
+             show_state == WindowShowState::kNormal;
+    }
+  }
+  return false;
 }
 
 ScriptPromise<IDLUndefined> MaybePromptWindowManagementPermission(
@@ -87,17 +114,8 @@ ScriptPromise<IDLUndefined> MaybePromptWindowManagementPermission(
   auto permission_descriptor = PermissionDescriptor::New();
   permission_descriptor->name = PermissionName::WINDOW_MANAGEMENT;
 
-  // Only allow the user prompts when the frame has a transient activation.
-  // Otherwise, resolve or reject the promise with the current permission state.
-  if (LocalFrame::HasTransientUserActivation(window->GetFrame())) {
-    LocalFrame::ConsumeTransientUserActivation(window->GetFrame());
-    permission_service->RequestPermission(std::move(permission_descriptor),
-                                          /*user_gesture=*/true,
-                                          std::move(callback));
-  } else {
-    permission_service->HasPermission(std::move(permission_descriptor),
-                                      std::move(callback));
-  }
+  permission_service->RequestPermission(std::move(permission_descriptor),
+                                        std::move(callback));
 
   return resolver->Promise();
 }
@@ -138,15 +156,18 @@ base::OnceCallback<void(bool)> GetSetResizableCallback(
     ScriptPromiseResolver<IDLUndefined>* resolver) {
   return GetWindowEventCallback(
       resolver, resizable ? "Could not set the window to be resizable."
-                          : "Coult not set the window to be non-resizable.");
+                          : "Could not set the window to be non-resizable.");
 }
 
 void OnMaximizePermissionRequestComplete(
     ScriptPromiseResolver<IDLUndefined>* resolver,
     LocalDOMWindow* window,
-    mojom::blink::PermissionStatus status) {
-  if (!IsPermissionGranted(resolver, status)) {
+    mojom::blink::PermissionStatusWithDetailsPtr status) {
+  if (!IsPermissionGranted(resolver, *status)) {
     return;
+  }
+  if (!window->IsIsolatedContext()) {
+    LocalFrame::ConsumeTransientUserActivation(window->GetFrame());
   }
 
   if (IsMaximized(window)) {
@@ -160,9 +181,12 @@ void OnMaximizePermissionRequestComplete(
 void OnMinimizePermissionRequestComplete(
     ScriptPromiseResolver<IDLUndefined>* resolver,
     LocalDOMWindow* window,
-    mojom::blink::PermissionStatus status) {
-  if (!IsPermissionGranted(resolver, status)) {
+    mojom::blink::PermissionStatusWithDetailsPtr status) {
+  if (!IsPermissionGranted(resolver, *status)) {
     return;
+  }
+  if (!window->IsIsolatedContext()) {
+    LocalFrame::ConsumeTransientUserActivation(window->GetFrame());
   }
 
   if (IsMinimized(window)) {
@@ -176,9 +200,12 @@ void OnMinimizePermissionRequestComplete(
 void OnRestorePermissionRequestComplete(
     ScriptPromiseResolver<IDLUndefined>* resolver,
     LocalDOMWindow* window,
-    mojom::blink::PermissionStatus status) {
-  if (!IsPermissionGranted(resolver, status)) {
+    mojom::blink::PermissionStatusWithDetailsPtr status) {
+  if (!IsPermissionGranted(resolver, *status)) {
     return;
+  }
+  if (!window->IsIsolatedContext()) {
+    LocalFrame::ConsumeTransientUserActivation(window->GetFrame());
   }
 
   if (IsNormal(window)) {
@@ -193,8 +220,8 @@ void OnSetResizablePermissionRequestComplete(
     ScriptPromiseResolver<IDLUndefined>* resolver,
     LocalDOMWindow* window,
     bool resizable,
-    mojom::blink::PermissionStatus status) {
-  if (!IsPermissionGranted(resolver, status)) {
+    mojom::blink::PermissionStatusWithDetailsPtr status) {
+  if (!IsPermissionGranted(resolver, *status)) {
     return;
   }
 
@@ -210,7 +237,8 @@ ScriptPromise<IDLUndefined> AdditionalWindowingControls::maximize(
     ScriptState* script_state,
     LocalDOMWindow& window,
     ExceptionState& exception_state) {
-  if (!CanUseWindowingControls(&window, exception_state)) {
+  if (!CanUseWindowingControls(&window, exception_state,
+                               /*require_user_activation=*/true)) {
     return EmptyPromise();
   }
 
@@ -227,7 +255,8 @@ ScriptPromise<IDLUndefined> AdditionalWindowingControls::minimize(
     ScriptState* script_state,
     LocalDOMWindow& window,
     ExceptionState& exception_state) {
-  if (!CanUseWindowingControls(&window, exception_state)) {
+  if (!CanUseWindowingControls(&window, exception_state,
+                               /*require_user_activation=*/true)) {
     return EmptyPromise();
   }
 
@@ -244,7 +273,8 @@ ScriptPromise<IDLUndefined> AdditionalWindowingControls::restore(
     ScriptState* script_state,
     LocalDOMWindow& window,
     ExceptionState& exception_state) {
-  if (!CanUseWindowingControls(&window, exception_state)) {
+  if (!CanUseWindowingControls(&window, exception_state,
+                               /*require_user_activation=*/true)) {
     return EmptyPromise();
   }
 
@@ -262,7 +292,8 @@ ScriptPromise<IDLUndefined> AdditionalWindowingControls::setResizable(
     LocalDOMWindow& window,
     bool resizable,
     ExceptionState& exception_state) {
-  if (!CanUseWindowingControls(&window, exception_state)) {
+  if (!CanUseWindowingControls(&window, exception_state,
+                               /*require_user_activation=*/false)) {
     return EmptyPromise();
   }
 

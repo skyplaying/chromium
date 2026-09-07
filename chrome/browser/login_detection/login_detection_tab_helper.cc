@@ -10,6 +10,7 @@
 #include "chrome/browser/login_detection/login_detection_prefs.h"
 #include "chrome/browser/login_detection/login_detection_type.h"
 #include "chrome/browser/login_detection/login_detection_util.h"
+#include "chrome/browser/password_manager/chrome_password_manager_client.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
 #include "components/prefs/pref_service.h"
@@ -22,6 +23,8 @@
 #include "content/public/browser/web_contents.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 
 namespace login_detection {
 
@@ -177,6 +180,12 @@ void LoginDetectionTabHelper::ProcessNewSignedInSite(
   prefs::SaveSiteToOAuthSignedInList(GetPrefs(web_contents()), signedin_site);
   site_isolation::SiteIsolationPolicy::IsolateNewOAuthURL(
       web_contents()->GetBrowserContext(), signedin_site);
+
+  ChromePasswordManagerClient* password_manager_client =
+      ChromePasswordManagerClient::FromWebContents(web_contents());
+  if (password_manager_client) {
+    password_manager_client->OnNonFedCmFederatedLogin();
+  }
 }
 
 WEB_CONTENTS_USER_DATA_KEY_IMPL(LoginDetectionTabHelper);

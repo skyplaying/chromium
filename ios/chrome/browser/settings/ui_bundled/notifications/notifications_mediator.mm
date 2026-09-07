@@ -10,7 +10,6 @@
 #import "base/notreached.h"
 #import "base/strings/sys_string_conversions.h"
 #import "components/prefs/pref_service.h"
-#import "components/send_tab_to_self/features.h"
 #import "components/sync_device_info/device_info_sync_service.h"
 #import "google_apis/gaia/gaia_id.h"
 #import "ios/chrome/browser/push_notification/coordinator/notifications_alert_presenter.h"
@@ -145,10 +144,10 @@
 - (TableViewSwitchItem*)tipsNotificationsItem {
   if (!_tipsNotificationsItem) {
 #if BUILDFLAG(IOS_USE_BRANDED_ASSETS)
-    UIImage* image = MakeSymbolMulticolor(
-        CustomSettingsRootSymbol(kMulticolorChromeballSymbol));
+    UIImage* image =
+        MakeSymbolMulticolor(SettingsRootSymbol(SymbolMulticolorChromeball));
 #else
-    UIImage* image = CustomSettingsRootSymbol(kChromeProductSymbol);
+    UIImage* image = SettingsRootSymbol(SymbolChromeProduct);
 #endif  // BUILDFLAG(IOS_USE_BRANDED_ASSETS)
     _tipsNotificationsItem = [self
              switchItemWithType:NotificationsItemIdentifier::ItemIdentifierTips
@@ -241,10 +240,7 @@
   [_consumer setTipsNotificationsItem:self.tipsNotificationsItem];
   [_consumer setTipsNotificationsFooterItem:self.tipsNotificationsFooterItem];
   [_consumer setSafetyCheckItem:self.safetyCheckItem];
-  if (base::FeatureList::IsEnabled(
-          send_tab_to_self::kSendTabToSelfIOSPushNotifications)) {
     [_consumer setSendTabNotificationsItem:self.sendTabNotificationsItem];
-  }
 }
 
 #pragma mark - Private methods
@@ -268,6 +264,7 @@
   detailItem.iconImage = symbol;
   detailItem.iconTintColor = tint;
   detailItem.iconBackgroundColor = backgroundColor;
+  detailItem.selectionStyle = UITableViewCellSelectionStyleNone;
 
   return detailItem;
 }
@@ -303,6 +300,7 @@
   detailItem.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
   detailItem.accessibilityTraits |= UIAccessibilityTraitButton;
   detailItem.accessibilityIdentifier = accessibilityIdentifier;
+  detailItem.selectionStyle = UITableViewCellSelectionStyleNone;
 
   return detailItem;
 }

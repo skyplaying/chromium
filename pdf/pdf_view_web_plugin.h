@@ -8,12 +8,14 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "base/containers/flat_set.h"
 #include "base/containers/queue.h"
+#include "base/containers/span.h"
 #include "base/functional/callback_forward.h"
 #include "base/i18n/rtl.h"
 #include "base/memory/raw_ptr.h"
@@ -314,6 +316,8 @@ class PdfViewWebPlugin final : public PDFiumEngineClient,
   bool CanUndo() const override;
   bool CanRedo() const override;
   bool CanCopy() const override;
+  std::optional<base::i18n::TextDirection> GetFocusedFormTextDirection()
+      const override;
   bool ExecuteEditCommand(const blink::WebString& name,
                           const blink::WebString& value) override;
   blink::WebURL LinkAtPosition(const gfx::Point& /*position*/) const override;
@@ -387,14 +391,14 @@ class PdfViewWebPlugin final : public PDFiumEngineClient,
              const std::string& body) override;
   void Print() override;
   void SubmitForm(const std::string& url,
-                  const void* data,
-                  int length) override;
+                  base::span<const uint8_t> data) override;
   std::unique_ptr<UrlLoader> CreateUrlLoader() override;
   v8::Isolate* GetIsolate() override;
   std::vector<SearchStringResult> SearchString(const std::u16string& needle,
                                                const std::u16string& haystack,
                                                bool case_sensitive) override;
   void DocumentLoadComplete() override;
+  void OnFirstContentPainted() override;
   void DocumentLoadFailed() override;
   void DocumentHasUnsupportedFeature(const std::string& feature) override;
   void DocumentLoadProgress(uint32_t available, uint32_t doc_size) override;
@@ -421,12 +425,14 @@ class PdfViewWebPlugin final : public PDFiumEngineClient,
   // pdf::mojom::PdfListener:
   void SetCaretPosition(const gfx::PointF& position) override;
   void MoveRangeSelectionExtent(const gfx::PointF& extent) override;
-  void SetSelectionBounds(const gfx::PointF& base,
-                          const gfx::PointF& extent) override;
+  void SetSelectionBase(const gfx::PointF& base) override;
   void GetPdfBytes(uint32_t size_limit, GetPdfBytesCallback callback) override;
   void GetPageText(int32_t page_index, GetPageTextCallback callback) override;
   void GetMostVisiblePageIndex(
       GetMostVisiblePageIndexCallback callback) override;
+  void HasMeaningfulText(HasMeaningfulTextCallback callback) override;
+  void HasJavaScript(HasJavaScriptCallback callback) override;
+  void IsPasswordProtected(IsPasswordProtectedCallback callback) override;
 #if BUILDFLAG(ENABLE_PDF_SAVE_TO_DRIVE)
   void GetSaveDataBufferHandlerForDrive(
       pdf::mojom::SaveRequestType request_type,
@@ -450,7 +456,8 @@ class PdfViewWebPlugin final : public PDFiumEngineClient,
   void OnPaint(const std::vector<gfx::Rect>& paint_rects,
                std::vector<PaintReadyRect>& ready,
                std::vector<gfx::Rect>& pending) override;
-  SkBitmap* InstallBuffer(SkImageInfo image_info, void* data) override;
+  SkBitmap* InstallBuffer(SkImageInfo image_info,
+                          base::span<uint8_t> data) override;
   void UpdateSnapshot(sk_sp<SkImage> snapshot) override;
   void UpdateScale(float scale) override;
   void UpdateLayerTransform(float scale,
@@ -724,6 +731,8 @@ class PdfViewWebPlugin final : public PDFiumEngineClient,
   bool Paste(const blink::WebString& value);
   bool Undo();
   bool Redo();
+
+  bool SetFocusedFormTextDirection(base::i18n::TextDirection direction);
 
   bool HandleWebInputEvent(const blink::WebInputEvent& event);
 

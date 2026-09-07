@@ -34,7 +34,6 @@
 #include "base/compiler_specific.h"
 #include "base/memory/values_equivalent.h"
 #include "base/notreached.h"
-#include "base/strings/to_string.h"
 #include "build/build_config.h"
 #include "third_party/blink/public/platform/web_font_description.h"
 #include "third_party/blink/renderer/platform/geometry/evaluation_input.h"
@@ -42,6 +41,7 @@
 #include "third_party/blink/renderer/platform/wtf/hash_functions.h"
 #include "third_party/blink/renderer/platform/wtf/size_assertions.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string_hash.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_hash.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_hasher.h"
 
@@ -65,6 +65,8 @@ struct SameSizeAsFontDescription {
   FontSizeAdjust size_adjust_;
   ResolvedFontFeatures resolved_font_features_;
   FontSelectionRequest selection_request_;
+  FontSelectionValue original_slope_;
+  FontDescription::StyleSyntax style_syntax_;
   FieldsAsUnsignedType bitfields;
   AtomicString language_override_;
 };
@@ -140,6 +142,7 @@ bool FontDescription::operator==(const FontDescription& other) const {
          letter_spacing_ == other.letter_spacing_ &&
          word_spacing_ == other.word_spacing_ &&
          font_selection_request_ == other.font_selection_request_ &&
+         style_syntax_ == other.style_syntax_ &&
          fields_as_unsigned_.parts[0] == other.fields_as_unsigned_.parts[0] &&
          fields_as_unsigned_.parts[1] == other.fields_as_unsigned_.parts[1] &&
          (feature_settings_ == other.feature_settings_ ||
@@ -425,6 +428,7 @@ unsigned FontDescription::StyleHashWithoutFamilyList() const {
   AddIntToHash(hash, fields_as_unsigned_.parts[0]);
   AddIntToHash(hash, fields_as_unsigned_.parts[1]);
   AddIntToHash(hash, font_selection_request_.GetHash());
+  AddIntToHash(hash, static_cast<unsigned>(style_syntax_));
   AddIntToHash(hash, size_adjust_.GetHash());
 
   return hash;
@@ -450,6 +454,9 @@ void FontDescription::SetOrientation(FontOrientation orientation) {
 void FontDescription::SetStyle(FontSelectionValue value) {
   font_selection_request_.slope = value;
   original_slope = value;
+  // Since this value did not come from authored CSS, serialization falls
+  // back to the slope alone.
+  style_syntax_ = StyleSyntax::kImplicitAngle;
   UpdateSyntheticOblique();
 }
 
@@ -547,17 +554,6 @@ void FontDescription::UpdateFromSkiaFontStyle(const SkFontStyle& font_style) {
     SetStyle(kItalicSlopeValue);
   else
     SetStyle(kNormalSlopeValue);
-}
-
-int FontDescription::MinimumPrefixWidthToHyphenate() const {
-  // If the maximum width available for the prefix before the hyphen is small,
-  // then it is very unlikely that an hyphenation opportunity exists, so do not
-  // bother to look for it.  These are heuristic numbers for performance added
-  // in http://wkb.ug/45606
-  const int kMinimumPrefixWidthNumerator = 5;
-  const int kMinimumPrefixWidthDenominator = 4;
-  return ComputedPixelSize() * kMinimumPrefixWidthNumerator /
-         kMinimumPrefixWidthDenominator;
 }
 
 ResolvedFontFeatures FontDescription::ResolveFontFeatures() const {
@@ -761,33 +757,25 @@ String FontDescription::ToString(
 }
 
 String FontDescription::VariantLigatures::ToString() const {
-  return UNSAFE_TODO(String::Format(
-      "common=%s, discretionary=%s, historical=%s, contextual=%s",
-      FontDescription::ToString(static_cast<LigaturesState>(common))
-          .Ascii()
-          .data(),
-      FontDescription::ToString(static_cast<LigaturesState>(discretionary))
-          .Ascii()
-          .data(),
-      FontDescription::ToString(static_cast<LigaturesState>(historical))
-          .Ascii()
-          .data(),
-      FontDescription::ToString(static_cast<LigaturesState>(contextual))
-          .Ascii()
-          .data()));
+  return StrCat(
+      {"common=",
+       FontDescription::ToString(static_cast<LigaturesState>(common)),
+       ", discretionary=",
+       FontDescription::ToString(static_cast<LigaturesState>(discretionary)),
+       ", historical=",
+       FontDescription::ToString(static_cast<LigaturesState>(historical)),
+       ", contextual=",
+       FontDescription::ToString(static_cast<LigaturesState>(contextual))});
 }
 
 String FontDescription::Size::ToString() const {
-  return String::Format(
-      "keyword_size=%u, specified_size=%f, is_absolute_size=%s", keyword, value,
-      base::ToString(is_absolute).c_str());
+  return Format("keyword_size={}, specified_size={:f}, is_absolute_size={}",
+                keyword, value, is_absolute);
 }
 
 String FontDescription::FamilyDescription::ToString() const {
-  return String::Format(
-      "generic_family=%s, family=[%s]",
-      FontDescription::ToString(generic_family).Ascii().c_str(),
-      family.ToString().Ascii().c_str());
+  return StrCat({"generic_family=", FontDescription::ToString(generic_family),
+                 ", family=[", family.ToString(), "]"});
 }
 
 String FontDescription::ToString(FontVariantPosition variant_position) {
@@ -803,59 +791,45 @@ String FontDescription::ToString(FontVariantPosition variant_position) {
 }
 
 String FontDescription::ToString() const {
-  return UNSAFE_TODO(String::Format(
-      "family_list=[%s], feature_settings=[%s], variation_settings=[%s], "
-      "locale=%s, "
-      "specified_size=%f, computed_size=%f, adjusted_size=%f, "
-      "size_adjust=%s, letter_spacing=%f, word_spacing=%f, "
-      "font_selection_request=[%s], "
-      "typesetting_features=[%s], "
-      "orientation=%s, width_variant=%s, variant_caps=%s, "
-      "is_absolute_size=%s, generic_family=%s, kerning=%s, "
-      "variant_ligatures=[%s], "
-      "keyword_size=%u, font_smoothing=%s, text_rendering=%s, "
-      "synthetic_bold=%s, synthetic_italic=%s, subpixel_positioning=%s, "
-      "subpixel_ascent_descent=%s, variant_numeric=[%s], "
-      "variant_east_asian=[%s], font_optical_sizing=%s, "
-      "font_synthesis_weight=%s, font_synthesis_style=%s, "
-      "font_synthesis_small_caps=%s, font_variant_position=%s, "
-      "font_variant_emoji=%s",
-      family_list_.ToString().Ascii().c_str(),
-      (feature_settings_ ? feature_settings_->ToString().Ascii().c_str() : ""),
-      (variation_settings_ ? variation_settings_->ToString().Ascii().c_str()
-                           : ""),
+  return Format(
+      "family_list=[{}], feature_settings=[{}], variation_settings=[{}], "
+      "locale={}, specified_size={:f}, computed_size={:f}, adjusted_size={:f}, "
+      "size_adjust={}, letter_spacing={:f}, word_spacing={:f}, "
+      "font_selection_request=[{}], typesetting_features=[{}], orientation={}, "
+      "width_variant={}, variant_caps={}, is_absolute_size={}, "
+      "generic_family={}, kerning={}, variant_ligatures=[{}], keyword_size={}, "
+      "font_smoothing={}, text_rendering={}, synthetic_bold={}, "
+      "synthetic_italic={}, subpixel_positioning={}, "
+      "subpixel_ascent_descent={}, variant_numeric=[{}], "
+      "variant_east_asian=[{}], font_optical_sizing={}, "
+      "font_synthesis_weight={}, font_synthesis_style={}, "
+      "font_synthesis_small_caps={}, font_variant_position={}, "
+      "font_variant_emoji={}",
+      family_list_.ToString(),
+      (feature_settings_ ? feature_settings_->ToString() : ""),
+      (variation_settings_ ? variation_settings_->ToString() : ""),
       // TODO(wkorman): Locale has additional internal fields such as
       // hyphenation and script. Consider adding a more detailed
       // string method.
-      (locale_ ? locale_->LocaleString().Ascii().c_str() : ""), specified_size_,
-      computed_size_, adjusted_size_, size_adjust_.ToString().Ascii().c_str(),
-      LetterSpacing(), WordSpacing(),
-      font_selection_request_.ToString().Ascii().c_str(),
+      (locale_ ? locale_->LocaleString() : g_empty_atom), specified_size_,
+      computed_size_, adjusted_size_, size_adjust_.ToString(), LetterSpacing(),
+      WordSpacing(), font_selection_request_.ToString(),
       blink::ToString(
-          static_cast<TypesettingFeatures>(fields_.typesetting_features_))
-          .Ascii()
-          .data(),
-      blink::ToString(Orientation()).Ascii().c_str(),
-      blink::ToString(WidthVariant()).Ascii().c_str(),
-      FontDescription::ToString(VariantCaps()).Ascii().c_str(),
-      base::ToString(IsAbsoluteSize()).c_str(),
-      FontDescription::ToString(GenericFamily()).Ascii().c_str(),
-      FontDescription::ToString(Kerning()).Ascii().c_str(),
-      GetVariantLigatures().ToString().Ascii().c_str(), KeywordSize(),
-      blink::ToString(FontSmoothing()).Ascii().c_str(),
-      blink::ToString(TextRendering()).Ascii().c_str(),
-      base::ToString(IsSyntheticBold()).c_str(),
-      base::ToString(IsSyntheticItalic()).c_str(),
-      base::ToString(UseSubpixelPositioning()).c_str(),
-      base::ToString(SubpixelAscentDescent()).c_str(),
-      VariantNumeric().ToString().Ascii().c_str(),
-      VariantEastAsian().ToString().Ascii().c_str(),
-      blink::ToString(FontOpticalSizing()).Ascii().c_str(),
-      FontDescription::ToString(GetFontSynthesisWeight()).Ascii().c_str(),
-      FontDescription::ToString(GetFontSynthesisStyle()).Ascii().c_str(),
-      FontDescription::ToString(GetFontSynthesisSmallCaps()).Ascii().c_str(),
-      FontDescription::ToString(VariantPosition()).Ascii().c_str(),
-      blink::ToString(VariantEmoji()).Ascii().c_str()));
+          static_cast<TypesettingFeatures>(fields_.typesetting_features_)),
+      blink::ToString(Orientation()), blink::ToString(WidthVariant()),
+      FontDescription::ToString(VariantCaps()), IsAbsoluteSize(),
+      FontDescription::ToString(GenericFamily()),
+      FontDescription::ToString(Kerning()), GetVariantLigatures().ToString(),
+      KeywordSize(), blink::ToString(FontSmoothing()),
+      blink::ToString(TextRendering()), IsSyntheticBold(), IsSyntheticItalic(),
+      UseSubpixelPositioning(), SubpixelAscentDescent(),
+      VariantNumeric().ToString(), VariantEastAsian().ToString(),
+      blink::ToString(FontOpticalSizing()),
+      FontDescription::ToString(GetFontSynthesisWeight()),
+      FontDescription::ToString(GetFontSynthesisStyle()),
+      FontDescription::ToString(GetFontSynthesisSmallCaps()),
+      FontDescription::ToString(VariantPosition()),
+      blink::ToString(VariantEmoji()));
 }
 
 }  // namespace blink

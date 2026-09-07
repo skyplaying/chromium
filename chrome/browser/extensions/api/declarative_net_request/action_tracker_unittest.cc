@@ -15,6 +15,7 @@
 #include "extensions/browser/api/web_request/web_request_info.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_util.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/api/declarative_net_request/constants.h"
 #include "extensions/common/api/declarative_net_request/test_utils.h"
 #include "extensions/common/constants.h"
@@ -90,11 +91,11 @@ class ActionTrackerTest : public DNRTestBase {
       std::string_view url,
       WebRequestResourceType web_request_type,
       int tab_id) {
-    const int kRendererId = 1;
+    const content::ChildProcessId kRendererId(1);
     WebRequestInfoInitParams info;
     info.url = GURL(url);
     info.web_request_type = web_request_type;
-    info.render_process_id = kRendererId;
+    info.global_id.child_id = kRendererId;
     info.frame_data.tab_id = tab_id;
 
     if (web_request_type == WebRequestResourceType::MAIN_FRAME) {

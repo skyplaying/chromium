@@ -17,9 +17,10 @@
 #include "chrome/browser/extensions/extension_ui_util.h"
 #include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/extensions/extension_action_view_model.h"
 #include "chrome/browser/ui/extensions/extensions_menu_view_model.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "chrome/browser/ui/toolbar/toolbar_action_view_model.h"
 #include "chrome/browser/ui/toolbar/toolbar_actions_model.h"
@@ -30,7 +31,6 @@
 #include "chrome/browser/ui/views/extensions/extensions_menu_entry_view.h"
 #include "chrome/browser/ui/views/extensions/extensions_menu_main_page_view.h"
 #include "chrome/browser/ui/views/extensions/extensions_menu_site_permissions_page_view.h"
-#include "chrome/grit/generated_resources.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/permissions/active_tab_permission_granter.h"
@@ -40,6 +40,7 @@
 #include "ui/base/metadata/metadata_types.h"
 #include "ui/views/view_utils.h"
 #include "ui/views/widget/widget.h"
+#include "url/origin.h"
 
 namespace {
 
@@ -87,7 +88,7 @@ ExtensionsMenuSitePermissionsPageView* GetSitePermissionsPage(
 }  // namespace
 
 ExtensionsMenuDelegateDesktop::ExtensionsMenuDelegateDesktop(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     ExtensionsContainer* extensions_container,
     ExtensionsContainerViews* extensions_container_views,
     views::View* bubble_contents)
@@ -97,7 +98,7 @@ ExtensionsMenuDelegateDesktop::ExtensionsMenuDelegateDesktop(
       bubble_contents_(bubble_contents),
       menu_model_(std::make_unique<ExtensionsMenuViewModel>(browser_,
                                                             /*delegate=*/this)),
-      toolbar_model_(ToolbarActionsModel::Get(browser_->profile())) {
+      toolbar_model_(ToolbarActionsModel::Get(browser_->GetProfile())) {
   menu_model_observation_.Observe(menu_model_.get());
 }
 
@@ -122,17 +123,12 @@ void ExtensionsMenuDelegateDesktop::OnPageNavigation() {
     return;
   }
 
+  // If the site permissions page is open, navigate back to the main page.
+  // This prevents the extension from gaining permissions to a new origin
+  // that the user didn't intend to authorize during a race condition.
   auto* site_permissions_page = GetSitePermissionsPage(current_page_.view());
   CHECK(site_permissions_page);
-  if (menu_model_->CanShowSitePermissionsPage(
-          site_permissions_page->extension_id())) {
-    // Update site permissions page if it is open and the extension can have
-    // one.
-    UpdateSitePermissionsPage(site_permissions_page);
-  } else {
-    // Otherwise navigate back to the main page.
-    OpenMainPage();
-  }
+  OpenMainPage();
 }
 
 void ExtensionsMenuDelegateDesktop::OnHostAccessRequestAdded(
@@ -274,10 +270,14 @@ void ExtensionsMenuDelegateDesktop::OnActionRemoved(
   auto* main_page = GetMainPage(current_page_.view());
   CHECK(main_page);
   main_page->RemoveMenuEntry(index);
+  if (main_page->GetMenuEntries().empty()) {
+    CloseBubble();
+  }
 }
 
 void ExtensionsMenuDelegateDesktop::OnActionUpdated(
-    const ToolbarActionsModel::ActionId& action_id) {
+    const ToolbarActionsModel::ActionId& action_id,
+    int index) {
   CHECK(current_page_);
 
   // Update the main page if it is open since an action update can affect the
@@ -306,7 +306,8 @@ void ExtensionsMenuDelegateDesktop::OnActionUpdated(
 }
 
 void ExtensionsMenuDelegateDesktop::OnActionIconUpdated(
-    const ToolbarActionsModel::ActionId& action_id) {
+    const ToolbarActionsModel::ActionId& action_id,
+    int index) {
   CHECK(current_page_);
 
   // Update the icon for the extension entry in the main page.
@@ -333,10 +334,15 @@ void ExtensionsMenuDelegateDesktop::OnActionIconUpdated(
     return;
   }
 
-  // Update the icon for the extension's site permission page
+  // Update the site permissions page if it can be shown for the updated action,
+  // otherwise go back to the main page.
   // TODO(crbug.com/431902556): consider updating only the icon and not the
   // whole site permissions page.
-  UpdateSitePermissionsPage(site_permissions_page);
+  if (menu_model_->CanShowSitePermissionsPage(action_id)) {
+    UpdateSitePermissionsPage(site_permissions_page);
+  } else {
+    OpenMainPage();
+  }
 }
 
 void ExtensionsMenuDelegateDesktop::OnActionsInitialized() {
@@ -378,8 +384,8 @@ void ExtensionsMenuDelegateDesktop::OnUserPermissionsSettingsChanged() {
     // Site permissions page can only be opened when site setting is set to
     // "customize by extension". Thus, when site settings changed, we have to
     // return to main page.
-    DCHECK_NE(PermissionsManager::Get(browser_->profile())
-                  ->GetUserSiteSetting(browser_->tab_strip_model()
+    DCHECK_NE(PermissionsManager::Get(browser_->GetProfile())
+                  ->GetUserSiteSetting(browser_->GetTabStripModel()
                                            ->GetActiveWebContents()
                                            ->GetPrimaryMainFrame()
                                            ->GetLastCommittedOrigin()),
@@ -403,6 +409,10 @@ void ExtensionsMenuDelegateDesktop::OpenMainPage() {
   auto main_page = std::make_unique<ExtensionsMenuMainPageView>(browser_, this);
   UpdateMainPage(main_page.get());
   PopulateMainPage(main_page.get());
+  if (main_page->GetMenuEntries().empty()) {
+    CloseBubble();
+    return;
+  }
 
   SwitchToPage(std::move(main_page));
 }
@@ -429,8 +439,9 @@ void ExtensionsMenuDelegateDesktop::CloseBubble() {
 
 void ExtensionsMenuDelegateDesktop::OnSiteAccessSelected(
     const extensions::ExtensionId& extension_id,
+    const url::Origin& origin,
     PermissionsManager::UserSiteAccess site_access) {
-  menu_model_->UpdateSiteAccess(extension_id, site_access);
+  menu_model_->UpdateSiteAccess(extension_id, origin, site_access);
 }
 
 void ExtensionsMenuDelegateDesktop::OnActionButtonClicked(
@@ -448,11 +459,12 @@ void ExtensionsMenuDelegateDesktop::OnSiteSettingsToggleButtonPressed(
 
 void ExtensionsMenuDelegateDesktop::OnExtensionToggleSelected(
     const extensions::ExtensionId& extension_id,
+    const url::Origin& origin,
     bool is_on) {
   if (is_on) {
-    menu_model_->GrantSiteAccess(extension_id);
+    menu_model_->GrantSiteAccess(extension_id, origin);
   } else {
-    menu_model_->RevokeSiteAccess(extension_id);
+    menu_model_->RevokeSiteAccess(extension_id, origin);
   }
 }
 

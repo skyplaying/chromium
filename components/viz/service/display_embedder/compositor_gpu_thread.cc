@@ -6,16 +6,18 @@
 
 #include <utility>
 
+#include "base/allocator/partition_alloc_support.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory_coordinator/utils.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/bind_post_task.h"
 #include "build/build_config.h"
 #include "components/viz/common/features.h"
-#include "components/viz/common/gpu/vulkan_context_provider.h"
 #include "components/viz/common/switches.h"
 #include "gpu/command_buffer/service/feature_info.h"
+#include "gpu/command_buffer/service/vulkan_context_provider.h"
 #include "gpu/config/gpu_finch_features.h"
 #include "gpu/ipc/common/gpu_client_ids.h"
 #include "gpu/ipc/service/gpu_channel_manager.h"
@@ -27,7 +29,7 @@
 #include "ui/gl/init/gl_factory.h"
 
 #if BUILDFLAG(ENABLE_VULKAN)
-#include "components/viz/common/gpu/vulkan_in_process_context_provider.h"
+#include "gpu/command_buffer/service/vulkan_in_process_context_provider.h"
 #include "gpu/vulkan/vulkan_device_queue.h"
 #include "gpu/vulkan/vulkan_implementation.h"
 #endif
@@ -76,7 +78,7 @@ std::unique_ptr<CompositorGpuThread> CompositorGpuThread::Create(
         device_queue->enabled_device_features_2(),
         device_queue->vma_allocator());
     compositor_gpu_thread->vulkan_context_provider_ =
-        VulkanInProcessContextProvider::CreateForCompositorGpuThread(
+        gpu::VulkanInProcessContextProvider::CreateForCompositorGpuThread(
             params.vulkan_implementation,
             std::move(compositor_thread_device_queue),
             params.gpu_channel_manager->gpu_preferences()
@@ -176,23 +178,18 @@ CompositorGpuThread::GetSharedContextState() {
 #else
       /*vulkan_context_provider=*/nullptr,
 #endif
-      /*metal_context_provider=*/nullptr,
 #if BUILDFLAG(SKIA_USE_DAWN)
       dawn_context_provider_.get(),
 #else
       /*dawn_context_provider=*/nullptr,
 #endif
-      /*peak_memory_monitor=*/
       gpu_channel_manager_->peak_memory_monitor(),
       /*direct_rendering_display_compositor_enabled=*/true,
       /*created_on_compositor_gpu_thread=*/true);
 
-  auto gles2_feature_info = base::MakeRefCounted<gpu::gles2::FeatureInfo>(
-      workarounds, gpu_feature_info);
-
   // Initialize GL.
-  if (!shared_context_state->InitializeGL(gpu_preferences,
-                                          std::move(gles2_feature_info))) {
+  if (!shared_context_state->InitializeGL(gpu_preferences, workarounds,
+                                          gpu_feature_info)) {
     LOG(ERROR) << "Failed to initialize GL for DrDC SharedContextState";
     return nullptr;
   }
@@ -206,6 +203,9 @@ CompositorGpuThread::GetSharedContextState() {
     LOG(ERROR) << "Failed to Initialize Skia for DrDC SharedContextState";
   }
   shared_context_state_ = std::move(shared_context_state);
+  // Register as the active SharedContextState on the CompositorGpuThread so
+  // downstream operations running on this thread can retrieve it.
+  gpu::SharedContextState::SetForCurrentThread(shared_context_state_.get());
   return shared_context_state_;
 }
 
@@ -232,6 +232,8 @@ bool CompositorGpuThread::Initialize() {
 }
 
 void CompositorGpuThread::Init() {
+  base::allocator::ReconfigureSchedulerLoopQuarantineBranch(
+      base::allocator::SchedulerLoopQuarantineBranchType::kCompositorGpu);
   const auto& gpu_preferences = gpu_channel_manager_->gpu_preferences();
   if (enable_watchdog_ && gpu_channel_manager_->watchdog()) {
     watchdog_thread_ = gpu::GpuWatchdogThread::Create(
@@ -250,6 +252,9 @@ void CompositorGpuThread::CleanUp() {
   weak_ptr_factory_.InvalidateWeakPtrs();
   if (shared_context_state_) {
     shared_context_state_->MakeCurrent(nullptr);
+    // Clear the thread-local pointer before the compositor context is
+    // destroyed.
+    gpu::SharedContextState::ClearForCurrentThread();
     shared_context_state_ = nullptr;
   }
 
@@ -271,7 +276,7 @@ void CompositorGpuThread::OnBackgroundedOnCompositorGpuThread() {
   DCHECK(task_runner()->BelongsToCurrentThread());
 
   if (shared_context_state_) {
-    shared_context_state_->PurgeMemory(base::MEMORY_PRESSURE_LEVEL_CRITICAL);
+    shared_context_state_->PurgeMemory(base::kCriticalMemoryPressureThreshold);
   }
 }
 
@@ -294,6 +299,8 @@ void CompositorGpuThread::LoseContext() {
 
   if (shared_context_state_) {
     shared_context_state_->MarkContextLost();
+    // Clear the thread-local pointer when the compositor context is lost.
+    gpu::SharedContextState::ClearForCurrentThread();
     shared_context_state_.reset();
   }
 }

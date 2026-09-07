@@ -6,8 +6,10 @@
 
 #include <memory>
 
+#include "components/viz/common/surfaces/tracked_element_rects.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/dom/events/native_event_listener.h"
 #include "third_party/blink/renderer/core/dom/text.h"
 #include "third_party/blink/renderer/core/editing/frame_selection.h"
 #include "third_party/blink/renderer/core/editing/position.h"
@@ -16,6 +18,7 @@
 #include "third_party/blink/renderer/core/html/forms/html_text_area_element.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/core/testing/dummy_page_holder.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 
@@ -174,6 +177,99 @@ TEST_F(TextControlElementTest, TextAreaPlaceholderElementNewlineBehavior) {
   AssertPlaceholderTextIs("p0", "first line \nsecond line");
   AssertPlaceholderTextIs("p1", "\n");
   AssertPlaceholderTextIs("p1", "\n");
+}
+
+TEST_F(TextControlElementTest, TrackPasswordTrackingElementRectJSHeuristic) {
+  ScopedAIPageContentTrackedElementsPasswordForTest scoped_feature(true);
+
+  viz::TrackedElementFeature tracking_feature =
+      viz::TrackedElementFeature::kPasswordTracking;
+
+  GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(
+      "<input id=test type=text>");
+  auto* input =
+      To<HTMLInputElement>(GetDocument().getElementById(AtomicString("test")));
+  GetDocument().UpdateStyleAndLayoutTree();
+  EXPECT_FALSE(input->GetTrackedElementSubRect(tracking_feature));
+
+  // Programmatic value change to a masked pattern should trigger tracking.
+  input->SetValue("****a");
+  GetDocument().UpdateStyleAndLayoutTree();
+  EXPECT_TRUE(input->GetTrackedElementSubRect(tracking_feature));
+
+  input->SetValue(AtomicString(""));
+  GetDocument().UpdateStyleAndLayoutTree();
+  EXPECT_FALSE(input->GetTrackedElementSubRect(tracking_feature));
+}
+
+namespace {
+class ChangeEventListener final : public NativeEventListener {
+ public:
+  bool invoked = false;
+  void Invoke(ExecutionContext*, Event*) override { invoked = true; }
+};
+}  // namespace
+
+TEST_F(TextControlElementTest, InputChangeEventOnElementRemoval) {
+  {
+    ScopedOmitBlurEventOnElementRemovalForTest scoped_feature(true);
+    GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(
+        "<input id=test type=text value=initial>");
+    auto* input = To<HTMLInputElement>(
+        GetDocument().getElementById(AtomicString("test")));
+    auto* listener = MakeGarbageCollected<ChangeEventListener>();
+    input->addEventListener(event_type_names::kChange, listener);
+    input->Focus();
+    input->SetValueBeforeFirstUserEditIfNotSet();
+    input->SetValue("modified");
+    input->remove();
+    EXPECT_FALSE(listener->invoked);
+  }
+  {
+    ScopedOmitBlurEventOnElementRemovalForTest scoped_feature(false);
+    GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(
+        "<input id=test type=text value=initial>");
+    auto* input = To<HTMLInputElement>(
+        GetDocument().getElementById(AtomicString("test")));
+    auto* listener = MakeGarbageCollected<ChangeEventListener>();
+    input->addEventListener(event_type_names::kChange, listener);
+    input->Focus();
+    input->SetValueBeforeFirstUserEditIfNotSet();
+    input->SetValue("modified");
+    input->remove();
+    EXPECT_TRUE(listener->invoked);
+  }
+}
+
+TEST_F(TextControlElementTest, TextAreaChangeEventOnElementRemoval) {
+  {
+    ScopedOmitBlurEventOnElementRemovalForTest scoped_feature(true);
+    GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(
+        "<textarea id=test>initial</textarea>");
+    auto* textarea = To<HTMLTextAreaElement>(
+        GetDocument().getElementById(AtomicString("test")));
+    auto* listener = MakeGarbageCollected<ChangeEventListener>();
+    textarea->addEventListener(event_type_names::kChange, listener);
+    textarea->Focus();
+    textarea->SetValueBeforeFirstUserEditIfNotSet();
+    textarea->SetValue("modified");
+    textarea->remove();
+    EXPECT_FALSE(listener->invoked);
+  }
+  {
+    ScopedOmitBlurEventOnElementRemovalForTest scoped_feature(false);
+    GetDocument().body()->SetInnerHTMLWithoutTrustedTypes(
+        "<textarea id=test>initial</textarea>");
+    auto* textarea = To<HTMLTextAreaElement>(
+        GetDocument().getElementById(AtomicString("test")));
+    auto* listener = MakeGarbageCollected<ChangeEventListener>();
+    textarea->addEventListener(event_type_names::kChange, listener);
+    textarea->Focus();
+    textarea->SetValueBeforeFirstUserEditIfNotSet();
+    textarea->SetValue("modified");
+    textarea->remove();
+    EXPECT_TRUE(listener->invoked);
+  }
 }
 
 }  // namespace blink

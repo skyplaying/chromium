@@ -10,10 +10,6 @@
 
 namespace enterprise_connectors {
 
-// Controls whether enterprise features will attempt to attach the active
-// content area user email to DLP/reporting requests on Workspace sites.
-BASE_DECLARE_FEATURE(kEnterpriseActiveUserDetection);
-
 // Controls whether the iFrame parent url chain initiated from the active frame
 // will be attached to DLP scan requests.
 BASE_DECLARE_FEATURE(kEnterpriseIframeDlpRulesSupport);
@@ -33,18 +29,35 @@ BASE_DECLARE_FEATURE_PARAM(size_t, kMaxContentAnalysisFileSizeMB);
 
 // The default maximum number of concurrent active requests. This is used to
 // limit the number of requests that are actively being uploaded. This is set to
-// default of 15 because it was determined to be a good value through
-// experiments. See http://crbug.com/329293309.
-inline constexpr int kDefaultMaxParallelActiveRequests = 15;
-
-// Controls enabling and count of concurrent upload limit for content analysis.
-BASE_DECLARE_FEATURE(kEnableNewUploadCountLimit);
-BASE_DECLARE_FEATURE_PARAM(size_t, kParallelContentAnalysisRequestCountMax);
+// default of 30 because it was determined to be a good value through
+// experiments. See http://crbug.com/444472089.
+inline constexpr int kDefaultMaxParallelActiveRequests = 30;
 
 // Controls whether encrypted file upload is enabled.
 BASE_DECLARE_FEATURE(kEnableEncryptedFileUpload);
 
 BASE_DECLARE_FEATURE(kDlpScanPastedImages);
+
+// Controls enabling bulk data entry support in Glic actuation logic.
+BASE_DECLARE_FEATURE(kGlicBulkDataEntrySupport);
+
+#if BUILDFLAG(IS_ANDROID)
+// Controls whether WebProtect download on Clank is enabled.
+BASE_DECLARE_FEATURE(kEnableDownloadEnterpriseScanOnClank);
+#endif
+
+// Controls whether cancellation of uploads is enabled for content analysis.
+BASE_DECLARE_FEATURE(kEnableCancelUploadOnContentAnalysis);
+
+// Controls whether the audit-only network request connector policy will be
+// applied if set.
+BASE_DECLARE_FEATURE(kEnableAuditOnlyNetworkRequestConnector);
+
+// Controls whether copy to clipboard is enabled for content analysis.
+BASE_DECLARE_FEATURE(kContentAnalysisClipboardCopy);
+
+// Controls whether virtual file DLP scanning is enabled.
+BASE_DECLARE_FEATURE(kEnableDlpFileSystemApi);
 
 }  // namespace enterprise_connectors
 

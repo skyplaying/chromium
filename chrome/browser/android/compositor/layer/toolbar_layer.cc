@@ -87,25 +87,17 @@ void ToolbarLayer::PushResource(int toolbar_resource_id,
   bool url_bar_visible = resource->location_bar_content_rect().width() != 0;
   url_bar_background_layer_->SetHideLayerAndSubtree(!url_bar_visible);
   if (url_bar_visible) {
-    ui::NinePatchResource* url_bar_background_resource;
-    if (base::FeatureList::IsEnabled(
-            chrome::android::kMvcUpdateViewWhenModelChanged)) {
-      // Because the ToolbarLayer is not updated every frame, even if visible,
-      // we need keep the tint in the cache until the layer is destroyed.
-      url_bar_background_resource = ui::NinePatchResource::From(
-          resource_manager_->GetAndRetainStaticResourceWithTint(
-              url_bar_background_resource_id,
-              toolbar_textbox_background_color));
-      DCHECK(last_url_bar_background_resource_id_ == kInvalidResourceId ||
-             last_url_bar_background_resource_id_ ==
-                 url_bar_background_resource_id);
-      last_url_bar_background_resource_id_ = url_bar_background_resource_id;
-    } else {
-      url_bar_background_resource = ui::NinePatchResource::From(
-          resource_manager_->GetStaticResourceWithTint(
-              url_bar_background_resource_id,
-              toolbar_textbox_background_color));
-    }
+    // Because the ToolbarLayer is not updated every frame, even if visible,
+    // we need keep the tint in the cache until the layer is destroyed.
+    ui::NinePatchResource* url_bar_background_resource =
+        ui::NinePatchResource::From(
+            resource_manager_->GetAndRetainStaticResourceWithTint(
+                url_bar_background_resource_id,
+                toolbar_textbox_background_color));
+    DCHECK(last_url_bar_background_resource_id_ == kInvalidResourceId ||
+           last_url_bar_background_resource_id_ ==
+               url_bar_background_resource_id);
+    last_url_bar_background_resource_id_ = url_bar_background_resource_id;
 
     gfx::Size draw_size(url_bar_background_resource->DrawSize(
         resource->location_bar_content_rect().size()));
@@ -153,9 +145,7 @@ void ToolbarLayer::PushResource(int toolbar_resource_id,
   // always at the bottom of the browser controls. This is no longer the case
   // as for 2025.
   // TODO(https://crbug.com/454338286): Rename / remove in favor of y_Offset.
-  if (!base::FeatureList::IsEnabled(chrome::android::kTopControlsRefactor) ||
-      !base::FeatureList::IsEnabled(chrome::android::kTopControlsRefactorV2) ||
-      kInvalidContentOffset != legacy_content_offset) {
+  if (kInvalidContentOffset != legacy_content_offset) {
     y_offset = legacy_content_offset - layer_->bounds().height();
   }
 

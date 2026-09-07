@@ -17,6 +17,7 @@
 #include "base/functional/concurrent_callbacks.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
+#include "build/build_config.h"
 #include "components/autofill/core/common/form_data.h"
 #include "components/autofill/core/common/form_field_data.h"
 #include "components/autofill/core/common/unique_ids.h"
@@ -34,29 +35,6 @@
 namespace {
 
 using DriverFormKey = actor_login::ActorLoginFormFinder::DriverFormKey;
-
-bool IsElementFocusable(autofill::FieldRendererId renderer_id,
-                        const autofill::FormData& form_data) {
-  auto field = std::ranges::find(form_data.fields(), renderer_id,
-                                 &autofill::FormFieldData::renderer_id);
-  CHECK(field != form_data.fields().end());
-  return field->is_focusable();
-}
-
-bool IsLoginForm(const password_manager::PasswordForm& form) {
-  const bool has_focusable_username =
-      form.HasUsernameElement() &&
-      IsElementFocusable(form.username_element_renderer_id, form.form_data);
-  const bool has_focusable_password =
-      form.HasPasswordElement() &&
-      IsElementFocusable(form.password_element_renderer_id, form.form_data);
-  const bool has_focusable_new_password =
-      form.HasNewPasswordElement() &&
-      IsElementFocusable(form.new_password_element_renderer_id, form.form_data);
-
-  return (has_focusable_username || has_focusable_password) &&
-         !has_focusable_new_password;
-}
 
 void OnCheckViewAreaVisibleFinished(
     actor_login::LoginFieldType type,
@@ -89,13 +67,9 @@ GetFieldType(const autofill::FormFieldData& field,
 
 bool IsFormOriginSupported(const url::Origin& form_origin,
                            const url::Origin& main_frame_origin) {
-  if (base::FeatureList::IsEnabled(
-          password_manager::features::kActorLoginSameSiteIframeSupport)) {
-    return net::registry_controlled_domains::SameDomainOrHost(
-        form_origin, main_frame_origin,
-        net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
-  }
-  return form_origin.IsSameOriginWith(main_frame_origin);
+  return net::registry_controlled_domains::SameDomainOrHost(
+      form_origin, main_frame_origin,
+      net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
 }
 
 bool IsValidFrameAndOriginToFill(
@@ -111,13 +85,23 @@ bool IsValidFrameAndOriginToFill(
     return false;
   }
 
-  bool is_same_origin =
-      driver->GetLastCommittedOrigin().IsSameOriginWith(main_frame_origin);
+  // TODO(crbug.com/539923959): The following is done to provide a close-enough
+  // value for iOS. Remove the flag guard once iOS has implemented
+  // `IOSPasswordManagerDriver::HasCrossOriginAncestor()`; this relies on the
+  // ancestors of a web frame being trackable.
+#if BUILDFLAG(IS_IOS)
+  bool has_cross_origin_ancestor =
+      !driver->GetLastCommittedOrigin().IsSameOriginWith(main_frame_origin);
+#else
+  bool has_cross_origin_ancestor = driver->HasCrossOriginAncestor();
+#endif
 
   // We can fill a form if its frame context is considered safe and not overly
-  // nested. A "fillable context" is either the primary main frame itself, or
-  // a direct child of the primary main frame that is not a fenced frame.
-  return is_same_origin || driver->IsInPrimaryMainFrame() ||
+  // nested. A "fillable context" is either the primary main frame itself,
+  // a direct child of the primary main frame that is not a fenced frame, or
+  // a nested frame that is same-origin with the main frame and has no
+  // cross-origin ancestors.
+  return !has_cross_origin_ancestor || driver->IsInPrimaryMainFrame() ||
          driver->IsDirectChildOfPrimaryMainFrame();
 }
 
@@ -204,45 +188,6 @@ ActorLoginFormFinder::GetSigninFormManager(
     }
   }
   return signin_form_manager;
-}
-
-FormFinderResult ActorLoginFormFinder::GetEligibleLoginFormManagers(
-    const url::Origin& origin) {
-  std::vector<password_manager::PasswordFormManager*> eligible_form_managers;
-  password_manager::PasswordFormCache* form_cache =
-      client_->GetPasswordManager()->GetPasswordFormCache();
-  if (!form_cache) {
-    return FormFinderResult(std::move(eligible_form_managers),
-                            /*parsed_forms_details=*/{});
-  }
-  for (const auto& manager : form_cache->GetFormManagers()) {
-    if (!manager->GetDriver()) {
-      continue;
-    }
-
-    if (!IsValidFrameAndOriginToFill(manager->GetDriver(), origin)) {
-      continue;
-    }
-
-    const password_manager::PasswordForm* parsed_form =
-        manager->GetParsedObservedForm();
-
-    if (!parsed_form) {
-      continue;
-    }
-
-    ParsedFormDetails form_details;
-    SetFormData(*form_details.mutable_form_data(), *parsed_form);
-    parsed_forms_details_.emplace_back(std::move(form_details));
-
-    if (!IsLoginForm(*parsed_form)) {
-      continue;
-    }
-
-    eligible_form_managers.emplace_back(manager.get());
-  }
-  return FormFinderResult(std::move(eligible_form_managers),
-                          std::move(parsed_forms_details_));
 }
 
 void ActorLoginFormFinder::GetEligibleLoginFormManagersAsync(
@@ -401,7 +346,6 @@ void ActorLoginFormFinder::OnAllEligibleChecksCompleted(
     EligibleManagersCallback callback,
     std::vector<std::pair<DriverFormKey, bool>> results) {
   std::vector<password_manager::PasswordFormManager*> eligible_managers;
-
   password_manager::PasswordFormCache* form_cache =
       client_->GetPasswordManager()->GetPasswordFormCache();
   CHECK(form_cache);

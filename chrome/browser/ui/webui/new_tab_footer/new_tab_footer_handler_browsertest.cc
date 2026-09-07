@@ -10,49 +10,29 @@
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search/background/ntp_custom_background_service_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webui/new_tab_footer/mock_new_tab_footer_document.h"
 #include "chrome/browser/ui/webui/new_tab_footer/new_tab_footer.mojom.h"
 #include "chrome/browser/ui/webui/top_chrome/top_chrome_web_ui_controller.h"
+#include "chrome/browser/ui/webui/top_chrome/top_chrome_web_ui_controller_test_support.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/chrome_test_utils.h"
+#include "chrome/test/base/ui_test_utils.h"
 #include "components/search/ntp_features.h"
+#include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "extensions/common/extension.h"
 #include "extensions/test/test_extension_dir.h"
+#include "mojo/public/cpp/bindings/remote.h"
+#include "mojo/public/cpp/test_support/test_utils.h"
 #include "net/base/url_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/models/menu_model.h"
 #include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
-
-class TestEmbedder final : public TopChromeWebUIController::Embedder {
- public:
-  TestEmbedder() = default;
-  ~TestEmbedder() = default;
-
-  void ShowUI() override {}
-  void CloseUI() override {}
-  void HideContextMenu() override {}
-
-  void ShowContextMenu(gfx::Point point,
-                       std::unique_ptr<ui::MenuModel> menu_model) override {
-    context_menu_shown_ = true;
-  }
-
-  bool context_menu_shown() const { return context_menu_shown_; }
-
-  base::WeakPtr<TestEmbedder> GetWeakPtr() {
-    return weak_factory_.GetWeakPtr();
-  }
-
- private:
-  bool context_menu_shown_;
-
-  base::WeakPtrFactory<TestEmbedder> weak_factory_{this};
-};
 
 class NewTabFooterHandlerBrowserTest : public extensions::ExtensionBrowserTest {
  public:
@@ -65,19 +45,23 @@ class NewTabFooterHandlerBrowserTest : public extensions::ExtensionBrowserTest {
     InProcessBrowserTest::SetUpOnMainThread();
     embedder_ = std::make_unique<TestEmbedder>();
     handler_ = std::make_unique<NewTabFooterHandler>(
-        mojo::PendingReceiver<new_tab_footer::mojom::NewTabFooterHandler>(),
+        handler_remote_.BindNewPipeAndPassReceiver(),
         document_.BindAndGetRemote(), embedder_->GetWeakPtr(),
         NtpCustomBackgroundServiceFactory::GetForProfile(profile()),
         web_contents());
   }
 
   void TearDownOnMainThread() override {
+    handler_remote_.reset();
     handler_.reset();
     InProcessBrowserTest::TearDownOnMainThread();
   }
 
   TestEmbedder& embedder() { return *embedder_; }
   NewTabFooterHandler& handler() { return *handler_; }
+  mojo::Remote<new_tab_footer::mojom::NewTabFooterHandler>& handler_remote() {
+    return handler_remote_;
+  }
   content::WebContents* web_contents() {
     return chrome_test_utils::GetActiveWebContents(this);
   }
@@ -86,16 +70,17 @@ class NewTabFooterHandlerBrowserTest : public extensions::ExtensionBrowserTest {
   base::test::ScopedFeatureList feature_list_;
   std::unique_ptr<TestEmbedder> embedder_;
   std::unique_ptr<NewTabFooterHandler> handler_;
+  mojo::Remote<new_tab_footer::mojom::NewTabFooterHandler> handler_remote_;
   testing::NiceMock<MockNewTabFooterDocument> document_;
 };
 
 IN_PROC_BROWSER_TEST_F(NewTabFooterHandlerBrowserTest, OpenUrlInCurrentTab) {
   const GURL url = GURL("https://google.com");
-  EXPECT_EQ(1, browser()->tab_strip_model()->count());
+  EXPECT_EQ(1, browser()->GetTabStripModel()->count());
   handler().OpenUrlInCurrentTab(url);
 
   WaitForLoadStop(web_contents());
-  EXPECT_EQ(1, browser()->tab_strip_model()->count());
+  EXPECT_EQ(1, browser()->GetTabStripModel()->count());
   EXPECT_EQ(url, web_contents()->GetLastCommittedURL());
 }
 
@@ -122,11 +107,11 @@ IN_PROC_BROWSER_TEST_F(NewTabFooterHandlerBrowserTest,
   // Page extension ID.
   handler().UpdateNtpExtensionName();
 
-  EXPECT_EQ(1, browser()->tab_strip_model()->count());
+  EXPECT_EQ(1, browser()->GetTabStripModel()->count());
   handler().OpenExtensionOptionsPageWithFallback();
   WaitForLoadStop(web_contents());
 
-  EXPECT_EQ(1, browser()->tab_strip_model()->count());
+  EXPECT_EQ(1, browser()->GetTabStripModel()->count());
   const GURL expected_url = net::AppendOrReplaceQueryParameter(
       GURL(chrome::kChromeUIExtensionsURL), "id", extension->id());
   EXPECT_EQ(expected_url, web_contents()->GetLastCommittedURL());
@@ -134,23 +119,57 @@ IN_PROC_BROWSER_TEST_F(NewTabFooterHandlerBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(NewTabFooterHandlerBrowserTest,
                        OpenExtensionOptionsPage_UseFallback) {
-  EXPECT_EQ(1, browser()->tab_strip_model()->count());
+  EXPECT_EQ(1, browser()->GetTabStripModel()->count());
   handler().OpenExtensionOptionsPageWithFallback();
 
   WaitForLoadStop(web_contents());
-  EXPECT_EQ(1, browser()->tab_strip_model()->count());
+  EXPECT_EQ(1, browser()->GetTabStripModel()->count());
   const GURL expected_url = GURL(chrome::kChromeUIExtensionsURL);
   EXPECT_EQ(expected_url, web_contents()->GetLastCommittedURL());
 }
 
 IN_PROC_BROWSER_TEST_F(NewTabFooterHandlerBrowserTest, OpenManagementPage) {
-  EXPECT_EQ(1, browser()->tab_strip_model()->count());
+  EXPECT_EQ(1, browser()->GetTabStripModel()->count());
   handler().OpenManagementPage();
 
   WaitForLoadStop(web_contents());
-  EXPECT_EQ(1, browser()->tab_strip_model()->count());
+  EXPECT_EQ(1, browser()->GetTabStripModel()->count());
   const GURL expected_url = GURL(chrome::kChromeUIManagementURL);
   EXPECT_EQ(expected_url, web_contents()->GetLastCommittedURL());
+}
+
+// One test per rejected scheme: ReportBadMessage breaks the pipe, so reusing a
+// single Remote across iterations doesn't work.
+IN_PROC_BROWSER_TEST_F(NewTabFooterHandlerBrowserTest,
+                       OpenUrlInCurrentTab_RejectsHttp) {
+  mojo::test::BadMessageObserver bad_message_observer;
+  handler_remote()->OpenUrlInCurrentTab(GURL("http://example.test/"));
+  EXPECT_EQ("OpenUrlInCurrentTab: scheme must be https",
+             bad_message_observer.WaitForBadMessage());
+}
+
+IN_PROC_BROWSER_TEST_F(NewTabFooterHandlerBrowserTest,
+                       OpenUrlInCurrentTab_RejectsWss) {
+  mojo::test::BadMessageObserver bad_message_observer;
+  handler_remote()->OpenUrlInCurrentTab(GURL("wss://example.test/"));
+  EXPECT_EQ("OpenUrlInCurrentTab: scheme must be https",
+             bad_message_observer.WaitForBadMessage());
+}
+
+IN_PROC_BROWSER_TEST_F(NewTabFooterHandlerBrowserTest,
+                       OpenUrlInCurrentTab_RejectsChromeScheme) {
+  mojo::test::BadMessageObserver bad_message_observer;
+  handler_remote()->OpenUrlInCurrentTab(GURL("chrome://version/"));
+  EXPECT_EQ("OpenUrlInCurrentTab: scheme must be https",
+             bad_message_observer.WaitForBadMessage());
+}
+
+IN_PROC_BROWSER_TEST_F(NewTabFooterHandlerBrowserTest,
+                       OpenUrlInCurrentTab_RejectsJavascript) {
+  mojo::test::BadMessageObserver bad_message_observer;
+  handler_remote()->OpenUrlInCurrentTab(GURL("javascript:void(0);"));
+  EXPECT_EQ("OpenUrlInCurrentTab: scheme must be https",
+             bad_message_observer.WaitForBadMessage());
 }
 
 IN_PROC_BROWSER_TEST_F(NewTabFooterHandlerBrowserTest, ShowContextMenu) {
@@ -159,4 +178,35 @@ IN_PROC_BROWSER_TEST_F(NewTabFooterHandlerBrowserTest, ShowContextMenu) {
   handler().ShowContextMenu(gfx::Point());
 
   EXPECT_TRUE(embedder().context_menu_shown());
+}
+
+IN_PROC_BROWSER_TEST_F(NewTabFooterHandlerBrowserTest, TargetTypeIsNotPage) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), GURL(chrome::kChromeUINewTabFooterURL)));
+  EXPECT_EQ(1, browser()->GetTabStripModel()->count());
+  content::WebContents* footer_contents = web_contents();
+
+  scoped_refptr<content::DevToolsAgentHost> agent_host =
+      content::DevToolsAgentHost::GetOrCreateFor(footer_contents);
+  EXPECT_NE(content::DevToolsAgentHost::kTypePage, agent_host->GetType());
+  EXPECT_EQ(content::DevToolsAgentHost::kTypeBrowserUI, agent_host->GetType());
+}
+
+IN_PROC_BROWSER_TEST_F(NewTabFooterHandlerBrowserTest, TabTargetIsNotCreated) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), GURL(chrome::kChromeUINewTabFooterURL)));
+  EXPECT_EQ(1, browser()->GetTabStripModel()->count());
+
+  content::DevToolsAgentHost::List agent_hosts =
+      content::DevToolsAgentHost::GetOrCreateAll();
+
+  int tab_targets_for_footer = 0;
+  for (const auto& agent_host : agent_hosts) {
+    if (agent_host->GetType() == content::DevToolsAgentHost::kTypeTab &&
+        agent_host->GetURL().host() == chrome::kChromeUINewTabFooterHost) {
+      tab_targets_for_footer++;
+    }
+  }
+
+  EXPECT_EQ(0, tab_targets_for_footer);
 }

@@ -203,7 +203,7 @@ class NetworkTelemetrySamplerBrowserTest
     telemetry_info->network_interface_result =
         std::move(network_interface_result);
     ::ash::cros_healthd::FakeCrosHealthd::Get()
-        ->SetProbeTelemetryInfoResponseForTesting(telemetry_info);
+        ->SetProbeTelemetryInfoResponseForTesting(std::move(telemetry_info));
   }
 
   void SetReportNetworkStatusPolicy(bool enabled) {
@@ -307,7 +307,6 @@ IN_PROC_BROWSER_TEST_F(NetworkTelemetrySamplerBrowserTest, MAYBE_Default) {
   SetReportNetworkStatusPolicy(false);
   {
     // Reporting is disabled, no network telemetry data should be collected.
-    MetricData record_data;
     test::MockClock::Get().Advance(
         metrics::kDefaultNetworkTelemetryCollectionRate);
     base::RunLoop().RunUntilIdle();
@@ -364,7 +363,6 @@ IN_PROC_BROWSER_TEST_F(NetworkTelemetrySamplerBrowserTest, MAYBE_Default) {
   Deprovision();
   {
     // Device is deprovisioned, no network telemetry data should be collected.
-    MetricData record_data;
     test::MockClock::Get().Advance(collection_rate);
     base::RunLoop().RunUntilIdle();
 

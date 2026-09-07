@@ -113,6 +113,12 @@ public class RenderFrameHostImpl implements RenderFrameHost {
     }
 
     @Override
+    public boolean isOutermostMainFrame() {
+        if (mNativeRenderFrameHostAndroid == 0) return false;
+        return RenderFrameHostImplJni.get().isOutermostMainFrame(mNativeRenderFrameHostAndroid);
+    }
+
+    @Override
     public void getCanonicalUrlForSharing(Callback<@Nullable GURL> callback) {
         if (mNativeRenderFrameHostAndroid == 0) {
             callback.onResult(null);
@@ -213,6 +219,7 @@ public class RenderFrameHostImpl implements RenderFrameHost {
             Origin effectiveOrigin,
             boolean isPaymentCredentialGetAssertion,
             @Nullable Origin remoteDesktopClientOverrideOrigin,
+            @Nullable String appId,
             Callback<RenderFrameHost.WebAuthSecurityChecksResults> callback) {
         if (mNativeRenderFrameHostAndroid == 0) {
             var result =
@@ -228,6 +235,7 @@ public class RenderFrameHostImpl implements RenderFrameHost {
                         effectiveOrigin,
                         isPaymentCredentialGetAssertion,
                         remoteDesktopClientOverrideOrigin,
+                        appId,
                         callback);
     }
 
@@ -248,6 +256,7 @@ public class RenderFrameHostImpl implements RenderFrameHost {
             Origin effectiveOrigin,
             boolean isPaymentCredentialCreation,
             @Nullable Origin remoteDesktopClientOverrideOrigin,
+            @Nullable String appId,
             Callback<RenderFrameHost.WebAuthSecurityChecksResults> callback) {
         if (mNativeRenderFrameHostAndroid == 0) {
             var result =
@@ -264,6 +273,7 @@ public class RenderFrameHostImpl implements RenderFrameHost {
                         effectiveOrigin,
                         isPaymentCredentialCreation,
                         remoteDesktopClientOverrideOrigin,
+                        appId,
                         callback);
     }
 
@@ -333,6 +343,8 @@ public class RenderFrameHostImpl implements RenderFrameHost {
 
         RenderFrameHost getMainFrame(long nativeRenderFrameHostAndroid);
 
+        boolean isOutermostMainFrame(long nativeRenderFrameHostAndroid);
+
         void getCanonicalUrlForSharing(
                 long nativeRenderFrameHostAndroid,
                 @JniType("base::OnceCallback<void(const std::optional<GURL>&)>")
@@ -370,6 +382,7 @@ public class RenderFrameHostImpl implements RenderFrameHost {
                 Origin effectiveOrigin,
                 boolean isPaymentCredentialGetAssertion,
                 @Nullable Origin remoteDesktopClientOverrideOrigin,
+                @Nullable String appId,
                 Callback<RenderFrameHost.WebAuthSecurityChecksResults> callback);
 
         void performMakeCredentialWebAuthSecurityChecks(
@@ -378,6 +391,7 @@ public class RenderFrameHostImpl implements RenderFrameHost {
                 Origin effectiveOrigin,
                 boolean isPaymentCredentialCreation,
                 @Nullable Origin remoteDesktopClientOverrideOrigin,
+                @Nullable String appId,
                 Callback<RenderFrameHost.WebAuthSecurityChecksResults> callback);
 
         void performReportWebAuthSecurityChecks(

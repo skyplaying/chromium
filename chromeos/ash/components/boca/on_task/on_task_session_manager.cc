@@ -25,6 +25,7 @@
 #include "chromeos/ash/components/boca/on_task/on_task_blocklist.h"
 #include "chromeos/ash/components/boca/on_task/on_task_notifications_manager.h"
 #include "chromeos/ash/components/boca/on_task/on_task_system_web_app_manager.h"
+#include "chromeos/ash/components/boca/proto/bundle.pb.h"
 #include "chromeos/strings/grit/chromeos_strings.h"
 #include "components/sessions/core/session_id.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -46,7 +47,8 @@ OnTaskSessionManager::OnTaskSessionManager(
     std::unique_ptr<OnTaskSystemWebAppManager> system_web_app_manager,
     std::unique_ptr<OnTaskExtensionsManager> extensions_manager,
     BocaSessionManager* boca_session_manager)
-    : active_tab_tracker_(std::make_unique<ActiveTabTracker>()),
+    : active_tab_tracker_(
+          std::make_unique<ActiveTabTracker>(boca_session_manager)),
       system_web_app_manager_(std::move(system_web_app_manager)),
       extensions_manager_(std::move(extensions_manager)),
       system_web_app_launch_helper_(
@@ -104,7 +106,7 @@ void OnTaskSessionManager::OnSessionEnded(const std::string& session_id) {
     }
   }
   active_session_id_ = std::nullopt;
-  provider_url_set_.clear();
+  provider_url_map_.clear();
   provider_url_tab_ids_map_.clear();
   provider_url_restriction_level_map_.clear();
   should_lock_window_ = false;
@@ -156,12 +158,17 @@ void OnTaskSessionManager::OnBundleUpdated(const ::boca::Bundle& bundle) {
 
   // Process bundle content.
   bool has_new_content = false;
-  provider_url_set_.clear();
+  provider_url_map_.clear();
   active_tab_url_ = GURL();
   for (const ::boca::ContentConfig& content_config : bundle.content_configs()) {
     CHECK(content_config.has_url());
     const GURL url(content_config.url());
-    provider_url_set_.insert(url);
+    if (!url.SchemeIsHTTPOrHTTPS()) {
+      LOG(WARNING) << "Bypassing URL with non-HTTP/HTTPS scheme: "
+                   << url.possibly_invalid_spec();
+      continue;
+    }
+    provider_url_map_.insert({url, content_config.url_type()});
 
     ::boca::LockedNavigationOptions::NavigationType restriction_level;
     if (content_config.has_locked_navigation_options()) {
@@ -196,12 +203,13 @@ void OnTaskSessionManager::OnBundleUpdated(const ::boca::Bundle& bundle) {
     system_web_app_launch_helper_->AddTab(
         url, restriction_level,
         base::BindOnce(&OnTaskSessionManager::OnBundleTabAdded,
-                       weak_ptr_factory_.GetWeakPtr(), url, restriction_level));
+                       weak_ptr_factory_.GetWeakPtr(), url, restriction_level,
+                       content_config.url_type()));
   }
 
   bool has_removed_content = false;
   for (auto const& [provider_sent_url, tab_ids] : provider_url_tab_ids_map_) {
-    if (!provider_url_set_.contains(provider_sent_url)) {
+    if (!provider_url_map_.contains(provider_sent_url)) {
       has_removed_content = true;
       system_web_app_launch_helper_->RemoveTab(
           tab_ids,
@@ -285,9 +293,10 @@ void OnTaskSessionManager::OnAppReloaded() {
   // clear stale tab ids that were tracked with the previous instance.
   for (auto& [provider_sent_url, tab_ids] : provider_url_tab_ids_map_) {
     tab_ids.clear();
-    if (!provider_url_set_.contains(provider_sent_url)) {
+    if (!provider_url_map_.contains(provider_sent_url)) {
       continue;
     }
+    ::boca::UrlType url_type = provider_url_map_.at(provider_sent_url);
     ::boca::LockedNavigationOptions::NavigationType restriction_level =
         ::boca::LockedNavigationOptions::DOMAIN_NAVIGATION;  // Default
                                                              // restriction.
@@ -299,7 +308,7 @@ void OnTaskSessionManager::OnAppReloaded() {
         provider_sent_url, restriction_level,
         base::BindOnce(&OnTaskSessionManager::OnBundleTabAdded,
                        weak_ptr_factory_.GetWeakPtr(), provider_sent_url,
-                       restriction_level));
+                       restriction_level, url_type));
   }
 
   // Also lock window if necessary.
@@ -347,7 +356,6 @@ void OnTaskSessionManager::LockOrUnlockWindow(bool lock_window) {
   should_lock_window_ = lock_window;
   notifications_manager_->ConfigureForLockedMode(should_lock_window_);
   if (should_lock_window_) {
-    system_web_app_manager_->SetAllChromeTabsMuted(/*muted=*/true);
     extensions_manager_->DisableExtensions();
     if (locked_mode_state_changed && !enter_pause_mode_) {
       // Show notification before locking the window.
@@ -377,9 +385,6 @@ void OnTaskSessionManager::LockOrUnlockWindow(bool lock_window) {
       EnterLockedMode();
     }
   } else {
-    if (features::IsBocaOnTaskUnmuteBrowserTabsOnUnlockEnabled()) {
-      system_web_app_manager_->SetAllChromeTabsMuted(/*muted=*/false);
-    }
     // Re-enable extensions before attempting to unlock the window.
     extensions_manager_->ReEnableExtensions();
 
@@ -392,7 +397,7 @@ void OnTaskSessionManager::LockOrUnlockWindow(bool lock_window) {
     system_web_app_launch_helper_->SetPinStateForActiveSWAWindow(
         /*pinned=*/false,
         base::BindRepeating(&OnTaskSessionManager::OnSetPinStateOnBocaSWAWindow,
-                            weak_ptr_factory_.GetWeakPtr()));
+                            weak_ptr_factory_.GetWeakPtr(), /*pinned=*/false));
   }
 }
 
@@ -408,7 +413,7 @@ void OnTaskSessionManager::EnterLockedMode() {
   system_web_app_launch_helper_->SetPinStateForActiveSWAWindow(
       /*pinned=*/true,
       base::BindRepeating(&OnTaskSessionManager::OnSetPinStateOnBocaSWAWindow,
-                          weak_ptr_factory_.GetWeakPtr()));
+                          weak_ptr_factory_.GetWeakPtr(), /*pinned=*/true));
 }
 
 void OnTaskSessionManager::SetActiveTabTrackerForTesting(
@@ -620,9 +625,11 @@ void OnTaskSessionManager::SystemWebAppLaunchHelper::OnBocaSWALaunched(
 void OnTaskSessionManager::OnBundleTabAdded(
     GURL url,
     ::boca::LockedNavigationOptions::NavigationType restriction_level,
+    ::boca::UrlType url_type,
     SessionID tab_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (tab_id.is_valid()) {
+    boca_session_manager_->OnNewTabAdded(tab_id.id(), url_type);
     // Ensure parent tab association with the right URL in case it is
     // accidentally added by `OnTabAdded` while observing new tab additions.
     for (auto& [provider_sent_url, tab_ids] : provider_url_tab_ids_map_) {
@@ -646,22 +653,31 @@ void OnTaskSessionManager::OnBundleTabRemoved(GURL url) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (auto it = provider_url_tab_ids_map_.find(url);
       it != provider_url_tab_ids_map_.end()) {
+    for (const SessionID& tab_id : it->second) {
+      boca_session_manager_->OnTabRemoved(tab_id.id());
+    }
     // TODO(b/368105857): Remove child tabs.
     provider_url_tab_ids_map_.erase(it);
     provider_url_restriction_level_map_.erase(url);
   }
 }
 
-void OnTaskSessionManager::OnSetPinStateOnBocaSWAWindow() {
+void OnTaskSessionManager::OnSetPinStateOnBocaSWAWindow(bool pinned) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   lock_in_progress_ = false;
   // TODO (b/370871395): Move `SetWindowTrackerForSystemWebAppWindow` to
-  // `OnTaskSystemWebAppManager` eliminating the need for this callback.
+  // `OnTaskSystemWebAppManager`.
   if (const SessionID window_id =
           system_web_app_manager_->GetActiveSystemWebAppWindowID();
       window_id.is_valid()) {
     system_web_app_manager_->SetWindowTrackerForSystemWebAppWindow(
         window_id, {active_tab_tracker_.get(), this});
+  }
+
+  if (pinned) {
+    system_web_app_manager_->SetAllChromeTabsMuted(/*muted=*/true);
+  } else if (features::IsBocaOnTaskUnmuteBrowserTabsOnUnlockEnabled()) {
+    system_web_app_manager_->SetAllChromeTabsMuted(/*muted=*/false);
   }
 }
 

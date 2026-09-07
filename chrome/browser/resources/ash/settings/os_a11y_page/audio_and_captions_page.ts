@@ -89,15 +89,6 @@ export class SettingsAudioAndCaptionsPageElement extends
         },
       },
 
-      isAccessibilityFlashNotificationFeatureEnabled_: {
-        readOnly: true,
-        type: Boolean,
-        value() {
-          return loadTimeData.getBoolean(
-              'isAccessibilityFlashNotificationFeatureEnabled');
-        },
-      },
-
       notificationColorOptions_: {
         readOnly: true,
         type: Array,
@@ -137,8 +128,8 @@ export class SettingsAudioAndCaptionsPageElement extends
     };
   }
 
-  languages: LanguagesModel;
-  languageHelper: LanguageHelper;
+  declare languages: LanguagesModel;
+  declare languageHelper: LanguageHelper;
 
   // DeepLinkingMixin override
   override supportedSettingIds = new Set<Setting>([
@@ -149,9 +140,8 @@ export class SettingsAudioAndCaptionsPageElement extends
   ]);
 
   private audioAndCaptionsBrowserProxy_: AudioAndCaptionsPageBrowserProxy;
-  private readonly isAccessibilityFlashNotificationFeatureEnabled_: boolean;
-  private isKioskModeActive_: boolean;
-  private readonly notificationColorOptions_:
+  declare private isKioskModeActive_: boolean;
+  declare private readonly notificationColorOptions_:
       Array<{value: number, name: string}>;
 
   constructor() {

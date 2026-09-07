@@ -13,6 +13,7 @@
 @protocol FormSuggestionClient;
 @class LayoutGuideCenter;
 @protocol FormInputAccessoryViewControllerDelegate;
+@protocol AutofillSuggestionContextMenuHandler;
 
 // The maximum number of suggestions to show in the keyboard accessory.
 inline constexpr NSUInteger kKeyboardAccessorySuggestionsLimit = 30;
@@ -22,8 +23,16 @@ inline constexpr NSUInteger kKeyboardAccessorySuggestionsLimit = 30;
 @interface FormInputAccessoryViewController
     : UIViewController <FormInputAccessoryConsumer>
 
+// Whether context menu interaction is enabled for suggestions. Defaults to NO,
+// which disables the long-press context menu on suggestions.
+@property(nonatomic, assign) BOOL isContextMenuEnabled;
+
 // Client in charge of handling actions in suggestions.
 @property(nonatomic, weak) id<FormSuggestionClient> formSuggestionClient;
+
+// Handler for suggestions context menu actions.
+@property(nonatomic, weak) id<AutofillSuggestionContextMenuHandler>
+    contextMenuHandler;
 
 // The view controller to show the branding logo.
 @property(nonatomic, strong) BrandingViewController* brandingViewController;
@@ -34,6 +43,9 @@ inline constexpr NSUInteger kKeyboardAccessorySuggestionsLimit = 30;
 // Tells the view to restore the manual fallback icons to a clean state. That
 // means no icon selected and the manual fallback view is unlocked.
 - (void)reset;
+
+// Resets the autofill suggestions loading states.
+- (void)resetLoadingStates;
 
 // Instances an object with the desired delegate.
 //

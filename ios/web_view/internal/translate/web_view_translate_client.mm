@@ -7,6 +7,7 @@
 #import <vector>
 
 #import "base/check.h"
+#import "base/functional/callback.h"
 #import "base/notreached.h"
 #import "components/infobars/core/infobar.h"
 #import "components/language/core/browser/language_model_manager.h"
@@ -132,6 +133,10 @@ WebViewTranslateClient::GetAcceptLanguagesService() {
 
 bool WebViewTranslateClient::IsTranslatableURL(const GURL& url) {
   return !url.is_empty() && !url.SchemeIs(url::kFtpScheme);
+}
+
+bool WebViewTranslateClient::IsReadingModeOpen() const {
+  return false;
 }
 
 }  // namespace ios_web_view

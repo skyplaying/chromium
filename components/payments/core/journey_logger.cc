@@ -2,16 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-
 #include "components/payments/core/journey_logger.h"
 
 #include <algorithm>
 #include <vector>
 
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/string_number_conversions.h"
+#include "components/payments/core/features.h"
+#include "components/payments/core/payment_request_metrics.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
 #include "third_party/re2/src/re2/re2.h"
@@ -116,6 +117,18 @@ void JourneyLogger::SetPayClicked() {
   SetEvent2Occurred(Event2::kPayClicked);
 }
 
+void JourneyLogger::SetCanMakePaymentCalled() {
+  SetEvent2Occurred(Event2::kCanMakePaymentCalled);
+}
+
+void JourneyLogger::SetHasEnrolledInstrumentCalled() {
+  SetEvent2Occurred(Event2::kHasEnrolledInstrumentCalled);
+}
+
+void JourneyLogger::SetInitiatedInCrossSiteIframe() {
+  SetEvent2Occurred(Event2::kInitiatedInCrossSiteIframe);
+}
+
 void JourneyLogger::SetSelectedMethod(PaymentMethodCategory category) {
   switch (category) {
     case PaymentMethodCategory::kBasicCard:
@@ -208,11 +221,6 @@ void JourneyLogger::SetNotShown() {
   RecordJourneyStatsHistograms(COMPLETION_STATUS_COULD_NOT_SHOW);
 }
 
-void JourneyLogger::SetNoMatchingCredentialsShown() {
-  SetShown();
-  SetEvent2Occurred(Event2::kNoMatchingCredentials);
-}
-
 void JourneyLogger::RecordCheckoutStep(CheckoutFunnelStep step) {
   base::UmaHistogramEnumeration("PaymentRequest.CheckoutFunnel", step);
 }
@@ -295,10 +303,21 @@ void JourneyLogger::RecordEventsMetric(CompletionStatus completion_status) {
     return;
 
   // Record the events in UKM.
-  ukm::builders::PaymentRequest_CheckoutEvents(payment_request_source_id_)
-      .SetCompletionStatus(completion_status)
-      .SetEvents2(events2_)
-      .Record(ukm::UkmRecorder::Get());
+  ukm::builders::PaymentRequest_CheckoutEvents ukm_builder(
+      payment_request_source_id_);
+  ukm_builder.SetCompletionStatus(completion_status).SetEvents2(events2_);
+
+  if (base::FeatureList::IsEnabled(
+          features::kPaymentRequestRejectTooSmallWindows)) {
+    base::UmaHistogramEnumeration(
+        "PaymentRequest.WindowSizeCheckRejectionReason",
+        window_size_check_rejection_reason_);
+
+    ukm_builder.SetWindowSizeCheckRejectionReason(
+        base::checked_cast<int64_t>(window_size_check_rejection_reason_));
+  }
+
+  ukm_builder.Record(ukm::UkmRecorder::Get());
 
   if (payment_app_source_id_ == ukm::kInvalidSourceId)
     return;
@@ -388,6 +407,49 @@ bool JourneyLogger::WasPaymentRequestTriggered() {
 void JourneyLogger::SetPaymentAppUkmSourceId(
     ukm::SourceId payment_app_source_id) {
   payment_app_source_id_ = payment_app_source_id;
+}
+
+void JourneyLogger::SetPaymentAppWindowOpened() {
+  was_payment_app_window_opened_ = true;
+}
+
+void JourneyLogger::SetPaymentAppUserInteractionCaptured() {
+  was_payment_app_user_interaction_captured_ = true;
+}
+
+void JourneyLogger::RecordRespondWithResolvedStatus() {
+  base::UmaHistogramBoolean(
+      "PaymentRequest.MandatoryPaymentAppUi."
+      "RespondWithResolvedBeforeOpenWindow",
+      !was_payment_app_window_opened_);
+  base::UmaHistogramBoolean(
+      "PaymentRequest.MandatoryPaymentAppUi."
+      "RespondWithResolvedBeforeUserGesture",
+      !was_payment_app_user_interaction_captured_);
+}
+
+void JourneyLogger::RecordRespondWithRejectedStatus() {
+  base::UmaHistogramBoolean(
+      "PaymentRequest.MandatoryPaymentAppUi."
+      "RespondWithRejectedBeforeOpenWindow",
+      !was_payment_app_window_opened_);
+  base::UmaHistogramBoolean(
+      "PaymentRequest.MandatoryPaymentAppUi."
+      "RespondWithRejectedBeforeUserGesture",
+      !was_payment_app_user_interaction_captured_);
+}
+
+void JourneyLogger::RecordPaymentHandlerPausedResolutionOutcome(
+    PaymentHandlerPausedResolutionOutcome outcome) {
+  base::UmaHistogramEnumeration(
+      "PaymentRequest.MandatoryPaymentAppUi."
+      "PaymentHandlerPausedResolutionOutcome",
+      outcome);
+}
+
+void JourneyLogger::SetWindowSizeCheckRejectionReason(
+    WindowSizeCheckRejectionReason reason) {
+  window_size_check_rejection_reason_ = reason;
 }
 
 base::WeakPtr<JourneyLogger> JourneyLogger::GetWeakPtr() {

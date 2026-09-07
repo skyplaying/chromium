@@ -70,15 +70,6 @@ LocalNetworkAccessChecker::~LocalNetworkAccessChecker() = default;
 
 LocalNetworkAccessCheckResult LocalNetworkAccessChecker::Check(
     const net::TransportInfo& transport_info) {
-  // If the request URL host was a private IP, record whether we ended up
-  // connecting to that IP address, unless connecting through a proxy.
-  // See https://crbug.com/1381471#c2.
-  if (request_url_private_ip_.has_value() &&
-      transport_info.type != net::TransportType::kProxied) {
-    base::UmaHistogramBoolean(
-        "Security.PrivateNetworkAccess.PrivateIpResolveMatch",
-        *request_url_private_ip_ == transport_info.endpoint.address());
-  }
 
   mojom::IPAddressSpace resource_address_space =
       TransportInfoToIPAddressSpace(transport_info);
@@ -124,6 +115,22 @@ Result LocalNetworkAccessChecker::CheckAddressSpace(
 
   Policy policy = client_security_state_->local_network_access_request_policy;
 
+  // `required_address_space_` is the IP address space the website claimed the
+  // subresource to be. If it doesn't meet the real situation, then we should
+  // fail the request.
+  //
+  // Note: This check must occur before the check for Policy::kAllow below, as
+  // otherwise sites could use targetAddressSpace to bypass mixed content
+  // blocking in embedders with a kAllow policy.
+  //
+  // TODO(crbug.com/395895368): consider collapsing the address spaces for LNA
+  // checks.
+  if (base::FeatureList::IsEnabled(features::kLocalNetworkAccessChecks) &&
+      required_address_space_ != mojom::IPAddressSpace::kUnknown &&
+      resource_address_space != required_address_space_) {
+    return Result::kBlockedByRequiredIpAddressSpaceMismatch;
+  }
+
   if (policy == Policy::kAllow) {
     return Result::kAllowedByPolicyAllow;
   }
@@ -142,21 +149,8 @@ Result LocalNetworkAccessChecker::CheckAddressSpace(
     return Result::kBlockedByInconsistentIpAddressSpace;
   }
 
-  // `required_address_space_` is the IP address space the website claimed the
-  // subresource to be. If it doesn't meet the real situation, then we should
-  // fail the request.
-  //
-  // TODO(crbug.com/395895368): consider collapsing the address spaces for LNA
-  // checks.
-  if (base::FeatureList::IsEnabled(features::kLocalNetworkAccessChecks) &&
-      required_address_space_ != mojom::IPAddressSpace::kUnknown &&
-      resource_address_space != required_address_space_) {
-    return Result::kBlockedByRequiredIpAddressSpaceMismatch;
-  }
-
   // Currently for LNA we are only blocking public -> local/private/loopback
-  // requests. Requests from local -> loopback (or private -> local in PNA
-  // terminology) are not blocked at present.
+  // requests. Requests from local -> loopback are not blocked at present.
   if (base::FeatureList::IsEnabled(features::kLocalNetworkAccessChecks)) {
     if (!IsLessPublicAddressSpaceLNA(
             resource_address_space, client_security_state_->ip_address_space)) {
@@ -213,8 +207,6 @@ mojom::IPAddressSpace LocalNetworkAccessChecker::ClientAddressSpace() const {
 
 void LocalNetworkAccessChecker::SetRequestUrl(const GURL& url) {
   is_request_url_scheme_http_ = url.scheme() == url::kHttpScheme;
-  request_url_private_ip_ = ParsePrivateIpFromUrl(url);
-
   is_potentially_trustworthy_same_origin_ =
       IsUrlPotentiallyTrustworthy(url) && request_initiator_.has_value() &&
       request_initiator_.value().IsSameOriginWith(url);

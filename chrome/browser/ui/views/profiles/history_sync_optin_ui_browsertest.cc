@@ -10,8 +10,8 @@
 #include "base/strings/strcat.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/signin/signin_browser_test_base.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/signin/signin_view_controller.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/test/test_browser_ui.h"
@@ -23,6 +23,7 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/signin/public/base/signin_switches.h"
 #include "components/sync/base/features.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "ui/gfx/scoped_animation_duration_scale_mode.h"
@@ -32,9 +33,14 @@
 // Tests for the chrome://history-sync-optin WebUI page.
 namespace {
 
+using HistorySyncOptinPixelTestParam = std::tuple<PixelTestParam, bool>;
+
 std::string ParamToTestSuffix(
-    const testing::TestParamInfo<PixelTestParam>& info) {
-  return info.param.test_suffix;
+    const testing::TestParamInfo<HistorySyncOptinPixelTestParam>& info) {
+  const PixelTestParam& pixel_param = std::get<0>(info.param);
+  bool is_ui_refresh_enabled = std::get<1>(info.param);
+  return base::StrCat(
+      {pixel_param.test_suffix, is_ui_refresh_enabled ? "Refresh" : ""});
 }
 
 const PixelTestParam kDialogTestParams[] = {
@@ -46,13 +52,20 @@ const PixelTestParam kDialogTestParams[] = {
 
 class HistorySyncOptinUIDialogPixelTest
     : public ProfilesPixelTestBaseT<DialogBrowserTest>,
-      public testing::WithParamInterface<PixelTestParam> {
+      public testing::WithParamInterface<HistorySyncOptinPixelTestParam> {
  public:
   HistorySyncOptinUIDialogPixelTest()
-      : ProfilesPixelTestBaseT<DialogBrowserTest>(GetParam()) {
-    scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{syncer::kReplaceSyncPromosWithSignInPromos},
-        /*disabled_features=*/{});
+      : ProfilesPixelTestBaseT<DialogBrowserTest>(std::get<0>(GetParam())) {
+    std::vector<base::test::FeatureRef> enabled_features = {
+        syncer::kReplaceSyncPromosWithSignInPromos};
+    std::vector<base::test::FeatureRef> disabled_features = {};
+    bool is_ui_refresh_enabled = std::get<1>(GetParam());
+    if (is_ui_refresh_enabled) {
+      enabled_features.push_back(switches::kFirstRunDesktopRefresh);
+    } else {
+      disabled_features.push_back(switches::kFirstRunDesktopRefresh);
+    }
+    scoped_feature_list_.InitWithFeatures(enabled_features, disabled_features);
   }
 
   ~HistorySyncOptinUIDialogPixelTest() override = default;
@@ -75,7 +88,7 @@ class HistorySyncOptinUIDialogPixelTest
         views::test::AnyWidgetTestPasskey{},
         "SigninViewControllerDelegateViews");
 
-    auto* controller = browser()->GetFeatures().signin_view_controller();
+    auto* controller = SigninViewController::From(browser());
     controller->ShowModalHistorySyncOptInDialog(
         should_close_modal_dialog_,
         HistorySyncOptinHelper::FlowCompletedCallback(base::DoNothing()));
@@ -94,7 +107,8 @@ IN_PROC_BROWSER_TEST_P(HistorySyncOptinUIDialogPixelTest, InvokeUi_default) {
 
 INSTANTIATE_TEST_SUITE_P(,
                          HistorySyncOptinUIDialogPixelTest,
-                         testing::ValuesIn(kDialogTestParams),
+                         testing::Combine(testing::ValuesIn(kDialogTestParams),
+                                          testing::Bool()),
                          &ParamToTestSuffix);
 
 // Creates a step to represent the history-sync-optin.
@@ -120,8 +134,6 @@ class HistorySyncOptinStepControllerForTest
             &HistorySyncOptinStepControllerForTest::OnHistorySyncOptinLoaded,
             weak_ptr_factory_.GetWeakPtr(), std::move(step_shown_callback)));
   }
-
-  void OnNavigateBackRequested() override { NOTREACHED(); }
 
   void OnHistorySyncOptinLoaded(
       StepSwitchFinishedCallback step_shown_callback) {
@@ -156,14 +168,21 @@ const PixelTestParam kWindowTestParams[] = {
 
 class HistorySyncOptinUIWindowPixelTest
     : public ProfilesPixelTestBaseT<UiBrowserTest>,
-      public testing::WithParamInterface<PixelTestParam>,
+      public testing::WithParamInterface<HistorySyncOptinPixelTestParam>,
       public views::ViewObserver {
  public:
   HistorySyncOptinUIWindowPixelTest()
-      : ProfilesPixelTestBaseT<UiBrowserTest>(GetParam()) {
-    scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{syncer::kReplaceSyncPromosWithSignInPromos},
-        /*disabled_features=*/{});
+      : ProfilesPixelTestBaseT<UiBrowserTest>(std::get<0>(GetParam())) {
+    std::vector<base::test::FeatureRef> enabled_features = {
+        syncer::kReplaceSyncPromosWithSignInPromos};
+    std::vector<base::test::FeatureRef> disabled_features = {};
+    bool is_ui_refresh_enabled = std::get<1>(GetParam());
+    if (is_ui_refresh_enabled) {
+      enabled_features.push_back(switches::kFirstRunDesktopRefresh);
+    } else {
+      disabled_features.push_back(switches::kFirstRunDesktopRefresh);
+    }
+    scoped_feature_list_.InitWithFeatures(enabled_features, disabled_features);
   }
 
   ~HistorySyncOptinUIWindowPixelTest() override {
@@ -179,7 +198,7 @@ class HistorySyncOptinUIWindowPixelTest
 
     SignInWithAccount();
     profile_picker_view_ = new ProfileManagementStepTestView(
-        ProfilePicker::Params::ForFirstRun(browser()->profile()->GetPath(),
+        ProfilePicker::Params::ForFirstRun(browser()->GetProfile()->GetPath(),
                                            base::DoNothing()),
         ProfileManagementFlowController::Step::kPostSignInFlow,
         /*step_controller_factory=*/
@@ -188,7 +207,7 @@ class HistorySyncOptinUIWindowPixelTest
               new HistorySyncOptinStepControllerForTest(host));
         }));
     profile_picker_view_->views::View::AddObserver(this);
-    profile_picker_view_->ShowAndWait(GetParam().window_size);
+    profile_picker_view_->ShowAndWait(std::get<0>(GetParam()).window_size);
   }
 
   bool VerifyUi() override {
@@ -234,5 +253,6 @@ IN_PROC_BROWSER_TEST_P(HistorySyncOptinUIWindowPixelTest, InvokeUi_default) {
 
 INSTANTIATE_TEST_SUITE_P(,
                          HistorySyncOptinUIWindowPixelTest,
-                         testing::ValuesIn(kWindowTestParams),
+                         testing::Combine(testing::ValuesIn(kWindowTestParams),
+                                          testing::Bool()),
                          &ParamToTestSuffix);

@@ -9,16 +9,17 @@
 #include "base/test/run_until.h"
 #include "base/test/test_future.h"
 #include "base/test/with_feature_override.h"
+#include "base/threading/thread_restrictions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/download/download_test_file_activity_observer.h"
 #include "chrome/browser/pdf/pdf_extension_test_base.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu_test_util.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/common/chrome_content_client.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/test/base/chrome_test_utils.h"
+#include "chrome/test/base/chrome_test_path_utils.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
 #include "components/policy/core/common/policy_map.h"
@@ -84,7 +85,7 @@ void TriggerDownloadButton(content::RenderFrameHost* extension_host) {
 // cases that saving takes more than the 1s delay.
 void CompareFileContent(const base::FilePath& test_file_path,
                         const base::FilePath& save_path,
-                        base::OnceCallback<void(void)> callback,
+                        base::OnceClosure callback,
                         bool wait_before_compare) {
   if (!wait_before_compare && base::ContentsEqual(test_file_path, save_path)) {
     std::move(callback).Run();
@@ -138,14 +139,14 @@ class PDFExtensionDownloadTest : public base::test::WithFeatureOverride,
   void SetUpOnMainThread() override {
     PDFExtensionTestBase::SetUpOnMainThread();
 
-    browser()->profile()->GetPrefs()->SetBoolean(prefs::kPromptForDownload,
-                                                 false);
+    browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kPromptForDownload,
+                                                    false);
     DownloadPrefs::FromDownloadManager(GetDownloadManager())
         ->ResetAutoOpenByUser();
 
     file_activity_observer_ =
         std::make_unique<DownloadTestFileActivityObserver>(
-            browser()->profile());
+            browser()->GetProfile());
     file_activity_observer_->EnableFileChooser(true);
   }
 
@@ -184,7 +185,7 @@ class PDFExtensionDownloadTest : public base::test::WithFeatureOverride,
 
  private:
   content::DownloadManager* GetDownloadManager() {
-    return browser()->profile()->GetDownloadManager();
+    return browser()->GetProfile()->GetDownloadManager();
   }
 
   std::unique_ptr<content::DownloadTestObserver> CreateDownloadWaiter() {

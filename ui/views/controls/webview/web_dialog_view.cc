@@ -78,7 +78,8 @@ WebDialogView::WebDialogView(content::BrowserContext* context,
   SetCanMinimize(!delegate_ || delegate_->can_minimize());
   SetCanResize(!delegate_ || delegate_->can_resize());
   SetModalType(GetDialogModalType());
-  web_view_->set_allow_accelerators(true);
+  web_view_->set_allow_accelerators(!delegate_ ||
+                                    delegate_->allow_accelerators());
   AddChildViewRaw(web_view_.get());
   set_contents_view(web_view_);
   SetLayoutManager(std::make_unique<views::FillLayout>());
@@ -421,10 +422,6 @@ void WebDialogView::SetContentsBounds(WebContents* source,
 bool WebDialogView::HandleKeyboardEvent(
     content::WebContents* source,
     const input::NativeWebKeyboardEvent& event) {
-  if (!event.os_event) {
-    return false;
-  }
-
   return unhandled_keyboard_event_handler_.HandleKeyboardEvent(
       event, GetFocusManager());
 }
@@ -522,7 +519,7 @@ void WebDialogView::SetWebViewCornersRadii(const gfx::RoundedCornersF& radii) {
   views::NativeViewHost* host = web_view_->holder();
   DCHECK(host);
 
-  host->SetCornerRadii(radii);
+  host->SetNativeViewCornerRadii(radii);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -541,7 +538,10 @@ void WebDialogView::InitDialog() {
   WebDialogUI::SetDelegate(web_contents, this);
 
   if (!disable_url_load_for_test_) {
-    web_view_->LoadInitialURL(GetDialogContentURL());
+    auto policy = (delegate_ && delegate_->ShouldDisableHttpsUpgrades())
+                      ? views::WebView::HttpsUpgradePolicy::kNoUpgrade
+                      : views::WebView::HttpsUpgradePolicy::kAllowUpgrade;
+    web_view_->LoadInitialURL(delegate_->GetDialogContentURL(), policy);
   }
 }
 

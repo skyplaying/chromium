@@ -12,12 +12,14 @@
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/read_anything/read_anything_controller.h"
 #include "chrome/browser/ui/read_anything/read_anything_enums.h"
+#include "components/find_in_page/find_tab_helper.h"
 #include "components/input/native_web_keyboard_event.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/context_menu_params.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 
 ReadAnythingImmersiveWebView::ReadAnythingImmersiveWebView(
@@ -30,15 +32,6 @@ ReadAnythingImmersiveWebView::ReadAnythingImmersiveWebView(
       trigger_(trigger) {
   SetWebContents(contents_wrapper_->web_contents());
   contents_wrapper_->SetHost(weak_factory_.GetWeakPtr());
-  // Calling ReadAnythingImmersiveWebView::ShowUI is not necessary if it's not
-  // been shown yet- the WebUI will call ShowUI when it is ready. If the UI has
-  // been shown once, the reused WebUI will be available but won't send a new
-  // "showUI" message. Manually call ShowUI() to make the view visible.
-  auto* controller =
-      ReadAnythingControllerGlue::FromWebContents(web_contents())->controller();
-  if (controller && controller->has_shown_ui()) {
-    ShowUI();
-  }
 }
 
 ReadAnythingImmersiveWebView::~ReadAnythingImmersiveWebView() = default;
@@ -47,6 +40,70 @@ bool ReadAnythingImmersiveWebView::HandleContextMenu(
     content::RenderFrameHost& render_frame_host,
     const content::ContextMenuParams& params) {
   return false;
+}
+
+// content::WebContentsDelegate:
+// This is called when the WebContents wants to open a link in a new tab,
+// such as with the "Search Google for" context menu option. We forward the
+// request to the main browser window to handle the navigation.
+content::WebContents* ReadAnythingImmersiveWebView::OpenURLFromTab(
+    content::WebContents* source,
+    const content::OpenURLParams& params,
+    base::OnceCallback<void(content::NavigationHandle&)>
+        navigation_handle_callback) {
+  // Reading Mode only renders links from distilled web content, so restrict
+  // forwarded navigations to web schemes.
+  if (!params.url.SchemeIsHTTPOrHTTPS()) {
+    return nullptr;
+  }
+  auto* controller =
+      ReadAnythingControllerGlue::FromWebContents(web_contents())->controller();
+  if (controller && controller->tab() &&
+      controller->tab()->GetBrowserWindowInterface()) {
+    content::OpenURLParams modified_params = params;
+    content::RenderFrameHost* source_rfh = nullptr;
+    if (params.initiator_frame_token.has_value()) {
+      source_rfh = content::RenderFrameHost::FromFrameToken(
+          content::GlobalRenderFrameHostToken(
+              params.initiator_process_id,
+              params.initiator_frame_token.value()));
+    }
+
+    // Check that user_gesture is really true, by confirming that there was a
+    // recent activation in the RM rfh
+    if (modified_params.user_gesture &&
+        (!source_rfh || !source_rfh->HasTransientUserActivation())) {
+      modified_params.user_gesture = false;
+    }
+
+    // If a compromised renderer requests a CURRENT_TAB navigation, it
+    // bypasses the popup blocker, and also has other security risks like
+    // spoofing the original webpage. Set to NEW_FOREGROUND_TAB to make sure
+    // the popup blocker runs on links opened from the untrusted webui. We
+    // strictly allow-list dispositions that open new windows/tabs, and demote
+    // all others.
+    switch (modified_params.disposition) {
+      case WindowOpenDisposition::NEW_FOREGROUND_TAB:
+      case WindowOpenDisposition::NEW_BACKGROUND_TAB:
+      case WindowOpenDisposition::NEW_POPUP:
+      case WindowOpenDisposition::NEW_WINDOW:
+      case WindowOpenDisposition::SAVE_TO_DISK:
+      case WindowOpenDisposition::OFF_THE_RECORD:
+        break;
+      default:
+        modified_params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+        break;
+    }
+
+    // Pass the main tab's WebContents as the source so the navigation pipeline
+    // has the correct context to evaluate disposition and blocking rules.
+    content::WebContents* tab_contents = controller->tab()->GetContents();
+    if (tab_contents && tab_contents->GetDelegate()) {
+      return tab_contents->GetDelegate()->OpenURLFromTab(
+          tab_contents, modified_params, std::move(navigation_handle_callback));
+    }
+  }
+  return nullptr;
 }
 
 bool ReadAnythingImmersiveWebView::HandleKeyboardEvent(
@@ -58,16 +115,32 @@ bool ReadAnythingImmersiveWebView::HandleKeyboardEvent(
             ->controller();
     if (controller && controller->tab() &&
         controller->tab()->GetBrowserWindowInterface()) {
-      controller->tab()
-          ->GetBrowserWindowInterface()
-          ->GetExclusiveAccessManager()
+      ExclusiveAccessManager::From(
+          controller->tab()->GetBrowserWindowInterface())
           ->HandleUserKeyEvent(event);
       return true;
     }
   }
-  // Return false to signal that the event was not handled and allow it to
-  // propagate
-  return false;
+  // Call the unhandled keyboard event handler to allow for default handling
+  // and propagation.
+  return unhandled_keyboard_event_handler_.HandleKeyboardEvent(
+      event, GetFocusManager());
+}
+
+void ReadAnythingImmersiveWebView::FindReply(content::WebContents* web_contents,
+                                             int request_id,
+                                             int number_of_matches,
+                                             const gfx::Rect& selection_rect,
+                                             int active_match_ordinal,
+                                             bool final_update) {
+  find_in_page::FindTabHelper* find_tab_helper =
+      find_in_page::FindTabHelper::FromWebContents(web_contents);
+  if (!find_tab_helper) {
+    return;
+  }
+  find_tab_helper->HandleFindReply(request_id, number_of_matches,
+                                   selection_rect, active_match_ordinal,
+                                   final_update);
 }
 
 std::unique_ptr<WebUIContentsWrapperT<ReadAnythingUntrustedUI>>
@@ -94,10 +167,12 @@ ReadAnythingImmersiveWebView::CloseAndTakeContentsWrapper() {
 // Called by the WebUI on its embedder (this class) when the WebUI is ready to
 // be shown.
 void ReadAnythingImmersiveWebView::ShowUI() {
+  // Call SetVisible before running on_show_ui_callback_, in case the callback
+  // relies on the visibility of the view.
+  SetVisible(true);
   if (on_show_ui_callback_) {
     std::move(on_show_ui_callback_).Run();
   }
-  SetVisible(true);
   auto* read_anything_controller = ReadAnythingControllerGlue::FromWebContents(
                                        contents_wrapper_->web_contents())
                                        ->controller();

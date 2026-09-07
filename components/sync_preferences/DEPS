@@ -17,12 +17,13 @@ include_rules = [
   "-ios",
 ]
 specific_include_rules = {
-  "common_syncable_prefs_database\.cc": [
+  "common_syncable_prefs_database\\.cc": [
     "+components/autofill",
     "+components/bookmarks",
     "+components/browsing_data",
     "+components/commerce",
     "+components/content_settings",
+    "+components/contextual_search",
     "+components/desktop_to_mobile_promos",
     "+components/dom_distiller",
     "+components/language",
@@ -31,13 +32,12 @@ specific_include_rules = {
     "+components/omnibox",
     "+components/password_manager",
     "+components/payments",
-    "+components/plus_addresses/core/browser",
-    "+components/plus_addresses/core/common",
     "+components/privacy_sandbox",
     "+components/safe_browsing",
     "+components/saved_tab_groups/public",
     "+components/search_engines",
     "+components/sharing_message",
+    "+components/subscription_eligibility",
     "+components/translate",
     "+components/variations",
     "+components/sharing_message",

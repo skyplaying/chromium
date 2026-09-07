@@ -20,7 +20,6 @@ import static org.mockito.Mockito.when;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
-import android.graphics.Rect;
 import android.view.ContextThemeWrapper;
 
 import androidx.browser.customtabs.CustomTabsIntent;
@@ -38,7 +37,6 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.blink.mojom.DisplayMode;
@@ -61,11 +59,7 @@ import org.chromium.components.security_state.SecurityStateModelJni;
 
 /** Tests for {@link TrustedWebActivityBrowserControlsVisibilityManager}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class TrustedWebActivityBrowserControlsVisibilityManagerTest {
-    private static final Rect APP_WINDOW_RECT = new Rect(0, 0, 1600, 800);
-    private static final Rect WIDEST_UNOCCLUDED_RECT = new Rect(0, 10, 1580, 760);
-
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Mock public TabObserverRegistrar mTabObserverRegistrar;
     @Mock public CustomTabActivityTabProvider mTabProvider;
@@ -98,6 +92,25 @@ public class TrustedWebActivityBrowserControlsVisibilityManagerTest {
         mController.updateIsInAppMode(true);
         assertEquals(BrowserControlsState.SHOWN, getLastBrowserControlsState());
         assertFalse(getLastCloseButtonVisibility());
+    }
+
+    /** Browser controls should be shown for pages with mixed content warnings. */
+    @Test
+    public void testWarningSecurityLevel() {
+        mController = buildController(mock(BrowserServicesIntentDataProvider.class));
+        setTabSecurityLevel(ConnectionSecurityLevel.WARNING);
+        mController.updateIsInAppMode(true);
+        assertEquals(BrowserControlsState.SHOWN, getLastBrowserControlsState());
+        assertFalse(getLastCloseButtonVisibility());
+    }
+
+    /** Browser controls should be hidden for HTTP connections and mixed forms. */
+    @Test
+    public void testNoneSecurityLevel() {
+        mController = buildController(mock(BrowserServicesIntentDataProvider.class));
+        setTabSecurityLevel(ConnectionSecurityLevel.NONE);
+        mController.updateIsInAppMode(true);
+        assertEquals(BrowserControlsState.HIDDEN, getLastBrowserControlsState());
     }
 
     /** Browser controls should not be shown for WebAPKs with 'minimal-ui' display mode. */
@@ -201,13 +214,16 @@ public class TrustedWebActivityBrowserControlsVisibilityManagerTest {
 
     private TrustedWebActivityBrowserControlsVisibilityManager buildController(
             BrowserServicesIntentDataProvider intentDataProvider) {
-        return spy(
-                new TrustedWebActivityBrowserControlsVisibilityManager(
-                        mTabObserverRegistrar,
-                        mTabProvider,
-                        mToolbarCoordinator,
-                        mCloseButtonVisibilityManager,
-                        intentDataProvider));
+        TrustedWebActivityBrowserControlsVisibilityManager controller =
+                spy(
+                        new TrustedWebActivityBrowserControlsVisibilityManager(
+                                mTabObserverRegistrar,
+                                mTabProvider,
+                                mToolbarCoordinator,
+                                mCloseButtonVisibilityManager,
+                                intentDataProvider));
+        doReturn(ConnectionSecurityLevel.SECURE).when(controller).getSecurityLevel(any());
+        return controller;
     }
 
     /** Returns the current browser controls state. */

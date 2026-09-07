@@ -16,6 +16,7 @@
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/weborigin/security_policy.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_impl.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
@@ -32,7 +33,7 @@ bool PaymentsValidators::IsValidCurrencyCodeFormat(
     const String& code,
     String* optional_error_message) {
   auto* regexp = MakeGarbageCollected<ScriptRegexp>(isolate, "^[A-Z]{3}$",
-                                                    kTextCaseASCIIInsensitive);
+                                                    kTextCaseAsciiInsensitive);
   if (regexp->Match(code) == 0)
     return true;
 
@@ -95,8 +96,8 @@ bool PaymentsValidators::IsValidErrorMsgFormat(const String& error,
 
   if (optional_error_message) {
     *optional_error_message =
-        String::Format("Error message should be at most %zu characters long",
-                       kMaximumStringLength);
+        Format("Error message should be at most {} characters long",
+               kMaximumStringLength);
   }
 
   return false;
@@ -159,7 +160,7 @@ bool PaymentsValidators::IsValidPaymentValidationErrorsFormat(
 
 bool PaymentsValidators::IsValidMethodFormat(v8::Isolate* isolate,
                                              const String& identifier) {
-  KURL url(NullURL(), identifier);
+  KURL url(NullUrl(), identifier);
   if (!url.IsValid()) {
     // Syntax for a valid standardized PMI:
     // https://www.w3.org/TR/payment-method-id/#dfn-syntax-of-a-standardized-payment-method-identifier
@@ -174,7 +175,7 @@ bool PaymentsValidators::IsValidMethodFormat(v8::Isolate* isolate,
     return false;
 
   // TODO(http://crbug.com/1200225): Align this with the specification.
-  return url.ProtocolIsInHTTPFamily() &&
+  return url.ProtocolIsInHttpFamily() &&
          network::IsUrlPotentiallyTrustworthy(GURL(url));
 }
 
@@ -200,9 +201,9 @@ void PaymentsValidators::ValidateAndStringifyObject(
 
   if (output.length() > kMaxJSONStringLength) {
     exception_state.ThrowTypeError(
-        String::Format("JSON serialization of PaymentRequest objects should be "
-                       "no longer than %zu characters",
-                       kMaxJSONStringLength));
+        Format("JSON serialization of PaymentRequest objects should be no "
+               "longer than {} characters",
+               kMaxJSONStringLength));
   }
 }
 

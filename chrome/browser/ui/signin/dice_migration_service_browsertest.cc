@@ -73,7 +73,7 @@ class DiceMigrationServiceBrowserTest : public InProcessBrowserTest {
     timer.FireNow();
   }
 
-  Profile* GetProfile() { return browser()->profile(); }
+  Profile* GetProfile() { return browser()->GetProfile(); }
 
   PrefService* GetPrefs() { return GetProfile()->GetPrefs(); }
 
@@ -150,8 +150,7 @@ IN_PROC_BROWSER_TEST_F(DiceMigrationServiceBrowserTest,
                                       signin::ConsentLevel::kSync);
   // TODO(crbug.com/464457988): Mark sync setup as complete by default in the
   // sign-in helper method.
-  GetSyncService()->GetUserSettings()->SetInitialSyncFeatureSetupComplete(
-      syncer::SyncFirstSetupCompleteSource::BASIC_FLOW);
+  GetSyncService()->GetUserSettings()->SetInitialSyncFeatureSetupComplete();
   ASSERT_TRUE(GetSyncService()->IsSyncFeatureEnabled());
 }
 

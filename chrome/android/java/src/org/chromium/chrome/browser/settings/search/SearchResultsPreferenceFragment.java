@@ -6,13 +6,13 @@ package org.chromium.chrome.browser.settings.search;
 
 import static org.chromium.build.NullUtil.assumeNonNull;
 
+import android.content.Context;
 import android.os.Bundle;
 import android.text.TextUtils;
 import android.view.View;
 import android.widget.TextView;
 
 import androidx.preference.Preference;
-import androidx.preference.PreferenceCategory;
 import androidx.preference.PreferenceScreen;
 import androidx.recyclerview.widget.RecyclerView;
 
@@ -24,6 +24,7 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
 import org.chromium.chrome.browser.settings.MainSettings;
+import org.chromium.components.browser_ui.settings.ChromeBasePreferenceCategory;
 import org.chromium.components.browser_ui.settings.search.SettingsIndexData;
 
 import java.util.ArrayList;
@@ -45,22 +46,16 @@ public class SearchResultsPreferenceFragment extends ChromeBaseSettingsFragment 
          * Callback method invoked when a setting entry is selected.
          *
          * @param preferenceFragment Package name of the Fragment containing the chosen setting.
-         * @param key A unique key associated with the chosen setting.
-         * @param extras The additional args required to launch the pref.
          * @param highlight Whether or not to highlight the item.
-         * @param highlightKey The key to highlight if it is different from {@code key}.
-         * @param subViewPos Position of the view to highlight among the child views.
+         * @param entry Entry data from the index.
          */
         void onSelected(
                 @Nullable String preferenceFragment,
-                String key,
-                Bundle extras,
                 boolean highlight,
-                @Nullable String highlightKey,
-                int subViewPos);
+                SettingsIndexData.Entry entry);
     }
 
-    private @Nullable ArrayList<SettingsIndexData.Entry> mPreferenceData;
+    protected @Nullable ArrayList<SettingsIndexData.Entry> mPreferenceData;
     private @Nullable SelectedCallback mSelectedCallback;
 
     /**
@@ -93,50 +88,55 @@ public class SearchResultsPreferenceFragment extends ChromeBaseSettingsFragment 
 
         PreferenceScreen screen = getPreferenceManager().createPreferenceScreen(requireContext());
         setPreferenceScreen(screen);
+        buildPreferences(screen);
+    }
 
+    protected void buildPreferences(PreferenceScreen screen) {
         String prevGroup = null;
-        for (SettingsIndexData.Entry info : mPreferenceData) {
+        for (SettingsIndexData.Entry info : assumeNonNull(mPreferenceData)) {
             String group = info.header;
 
             // The results are grouped by the top level setting categories. Build the category
             // header above the group.
             if (!TextUtils.equals(group, prevGroup)) {
-                PreferenceCategory prefGroup = new PreferenceCategory(requireContext());
+                var prefGroup = new ChromeBasePreferenceCategory(requireContext());
                 prefGroup.setTitle(group);
                 prefGroup.setIconSpaceReserved(false);
                 screen.addPreference(prefGroup);
             }
-            Preference preference = new Preference(requireContext());
-            preference.setKey(info.key);
-            preference.setTitle(info.title);
-            preference.setSummary(info.summary);
-            preference.setOnPreferenceClickListener(
-                    pref -> {
-                        // For top-level entries, open the fragment itself, not MainSettings,
-                        // and no need to scroll/highlight the item.
-                        String mainSettingsFragment = MainSettings.class.getName();
-                        var isMain = TextUtils.equals(info.parentFragment, mainSettingsFragment);
-                        String fragment = isMain ? info.fragment : info.parentFragment;
-                        assumeNonNull(mSelectedCallback)
-                                .onSelected(
-                                        fragment,
-                                        info.key,
-                                        info.extras,
-                                        !isMain,
-                                        info.highlightKey,
-                                        info.subViewPos);
-                        return true;
-                    });
-            preference.setIconSpaceReserved(false);
-            screen.addPreference(preference);
+            addPreference(screen, info);
             prevGroup = group;
         }
     }
 
+    protected void addPreference(PreferenceScreen screen, SettingsIndexData.Entry info) {
+        Preference preference = new Preference(requireContext());
+        preference.setKey(info.key);
+        boolean useSummaryAsTitle = (info.title == null);
+        preference.setTitle(useSummaryAsTitle ? info.summary : info.title);
+        preference.setSummary(useSummaryAsTitle ? null : info.summary);
+        preference.setOnPreferenceClickListener(
+                pref -> {
+                    // For top-level entries, open the fragment itself, not MainSettings,
+                    // and no need to scroll/highlight the item.
+                    String mainSettingsFragment = MainSettings.class.getName();
+                    var isMain = TextUtils.equals(info.parentFragment, mainSettingsFragment);
+                    String fragment = isMain ? info.fragment : info.parentFragment;
+                    assumeNonNull(mSelectedCallback).onSelected(fragment, !isMain, info);
+                    return true;
+                });
+        preference.setIconSpaceReserved(false);
+        screen.addPreference(preference);
+    }
+
     @Override
     public MonotonicObservableSupplier<String> getPageTitle() {
+        return getSharedPageTitle(assumeNonNull(getContext()));
+    }
+
+    public static MonotonicObservableSupplier<String> getSharedPageTitle(Context context) {
         if (sTitleSupplier == null) {
-            var title = assumeNonNull(getContext()).getString(R.string.search_in_settings_results);
+            var title = context.getString(R.string.search_in_settings_results);
             sTitleSupplier = ObservableSuppliers.createMonotonic();
             sTitleSupplier.set(title);
         }

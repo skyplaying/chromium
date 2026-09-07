@@ -55,7 +55,7 @@ base::FileErrorOr<int> FileSystemAccessRegularFileDelegate::Read(
   CHECK_GE(offset, 0);
 
   if (std::optional<size_t> bytes_read = backing_file_.Read(offset, data)) {
-    return bytes_read.value();
+    return base::checked_cast<int>(bytes_read.value());
   }
   return base::unexpected(base::File::GetLastFileError());
 }
@@ -91,18 +91,22 @@ base::FileErrorOr<int> FileSystemAccessRegularFileDelegate::Write(
     capacity_tracker_->OnFileContentsModified(new_file_size);
   }
 
-  // Only return an error if no bytes were written. Partial writes should return
-  // the number of bytes written.
-  return bytes_written.has_value() ? *bytes_written
-                                   : base::File::GetLastFileError();
+  if (!bytes_written.has_value()) {
+    return base::unexpected(base::File::GetLastFileError());
+  }
+
+  // Partial writes should return the number of bytes written.
+  return base::checked_cast<int>(*bytes_written);
 }
 
 base::FileErrorOr<int64_t> FileSystemAccessRegularFileDelegate::GetLength() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  int64_t length = backing_file_.GetLength();
+  const int64_t length = backing_file_.GetLength();
 
-  // If the length is negative, the file operation failed.
-  return length >= 0 ? length : base::File::GetLastFileError();
+  if (length < 0) {
+    return base::unexpected(base::File::GetLastFileError());
+  }
+  return length;
 }
 
 base::FileErrorOr<bool> FileSystemAccessRegularFileDelegate::SetLength(

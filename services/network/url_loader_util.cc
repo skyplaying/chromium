@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <optional>
 
-#include "base/containers/enum_set.h"
+#include "base/byte_size.h"
 #include "base/containers/to_vector.h"
 #include "base/feature_list.h"
 #include "base/metrics/histogram_functions.h"
@@ -23,8 +23,6 @@
 #include "net/http/http_response_info.h"
 #include "net/storage_access_api/status.h"
 #include "net/url_request/url_request.h"
-#include "services/network/ad_heuristic_cookie_overrides.h"
-#include "services/network/attribution/attribution_request_helper.h"
 #include "services/network/chunked_data_pipe_upload_data_stream.h"
 #include "services/network/cookie_manager.h"
 #include "services/network/cookie_settings.h"
@@ -58,12 +56,7 @@ namespace {
 // cookies.
 constexpr uint64_t kAllowedDevToolsCookieSettingOverrides =
     1u << static_cast<int>(
-        net::CookieSettingOverride::kForceDisableThirdPartyCookies) |
-    1u << static_cast<int>(
-        net::CookieSettingOverride::kForceEnableThirdPartyCookieMitigations) |
-    1u << static_cast<int>(net::CookieSettingOverride::kSkipTPCDMetadataGrant) |
-    1u << static_cast<int>(
-        net::CookieSettingOverride::kSkipTPCDHeuristicsGrant);
+        net::CookieSettingOverride::kForceDisableThirdPartyCookies);
 
 const char* GetDestinationTypePartString(
     network::mojom::RequestDestination destination) {
@@ -179,67 +172,6 @@ bool WebPoliciesAllowCredentials(
   return false;
 }
 
-bool ShouldForceIgnoreSiteForCookies(
-    const ResourceRequest& request,
-    const cors::OriginAccessList& origin_access_list) {
-  // Ignore site for cookies in requests from an initiator covered by the
-  // same-origin-policy exclusions in `origin_access_list_` (typically requests
-  // initiated by Chrome Extensions).
-  if (request.request_initiator.has_value() &&
-      cors::OriginAccessList::AccessState::kAllowed ==
-          origin_access_list.CheckAccessState(request.request_initiator.value(),
-                                              request.url)) {
-    return true;
-  }
-
-  // Convert `site_for_cookies` into an origin (an opaque origin if
-  // `net::SiteForCookies::IsNull()` returns true).
-  //
-  // Note that `site_for_cookies` is a _site_ rather than an _origin_, but for
-  // Chrome Extensions the _site_ and _origin_ of a host are the same extension
-  // id.  Thanks to this, for Chrome Extensions, we can pass a _site_ into
-  // OriginAccessChecks (which normally expect an _origin_).
-  url::Origin site_origin =
-      url::Origin::Create(request.site_for_cookies.RepresentativeUrl());
-
-  // If `site_for_cookies` represents an origin that is granted access to the
-  // initiator and the target by `origin_access_list_` (typically such
-  // `site_for_cookies` represents a Chrome Extension), then we also should
-  // force ignoring of site for cookies if the initiator and the target are
-  // same-site.
-  //
-  // Ideally we would walk up the frame tree and check that each ancestor is
-  // first-party to the main frame (treating the `origin_access_list_`
-  // exceptions as "first-party").  But walking up the tree is not possible in
-  // //services/network and so we make do with just checking the direct
-  // initiator of the request.
-  //
-  // We also check same-siteness between the initiator and the requested URL,
-  // because setting `force_ignore_site_for_cookies` to true causes Strict
-  // cookies to be attached, and having the initiator be same-site to the
-  // request URL is a requirement for Strict cookies (see
-  // net::cookie_util::ComputeSameSiteContext).
-  if (!site_origin.opaque() && request.request_initiator.has_value()) {
-    bool site_can_access_target =
-        cors::OriginAccessList::AccessState::kAllowed ==
-        origin_access_list.CheckAccessState(site_origin, request.url);
-    bool site_can_access_initiator =
-        cors::OriginAccessList::AccessState::kAllowed ==
-        origin_access_list.CheckAccessState(
-            site_origin, request.request_initiator->GetURL());
-    net::SiteForCookies site_of_initiator =
-        net::SiteForCookies::FromOrigin(request.request_initiator.value());
-    bool are_initiator_and_target_same_site =
-        site_of_initiator.IsFirstParty(request.url);
-    if (site_can_access_initiator && site_can_access_target &&
-        are_initiator_and_target_same_site) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
 // A subclass of net::UploadBytesElementReader which owns
 // ResourceRequestBody.
 class BytesElementReader : public net::UploadBytesElementReader {
@@ -287,6 +219,88 @@ class FileElementReader : public net::UploadFileElementReader {
 
 }  // namespace
 
+bool ShouldForceIgnoreSiteForCookies(
+    const std::vector<GURL>& url_chain,
+    const std::optional<url::Origin>& request_initiator,
+    const net::SiteForCookies& site_for_cookies,
+    const cors::OriginAccessList& origin_access_list) {
+  if (url_chain.empty()) {
+    return false;
+  }
+
+  // This decision may be queried again after a redirect. One authorization
+  // path must cover every hop so a request cannot gain or retain the SameSite
+  // bypass across an origin access boundary.
+
+  // Ignore site for cookies in requests from an initiator covered by the
+  // same-origin-policy exclusions in `origin_access_list` (typically requests
+  // initiated by Chrome Extensions).
+  if (request_initiator.has_value()) {
+    bool initiator_can_access_entire_chain = true;
+    for (const GURL& url : url_chain) {
+      if (cors::OriginAccessList::AccessState::kAllowed !=
+          origin_access_list.CheckAccessState(request_initiator.value(), url)) {
+        initiator_can_access_entire_chain = false;
+        break;
+      }
+    }
+    if (initiator_can_access_entire_chain) {
+      return true;
+    }
+  }
+
+  // Convert `site_for_cookies` into an origin (an opaque origin if
+  // `net::SiteForCookies::IsNull()` returns true).
+  //
+  // Note that `site_for_cookies` is a _site_ rather than an _origin_, but for
+  // Chrome Extensions the _site_ and _origin_ of a host are the same extension
+  // id.  Thanks to this, for Chrome Extensions, we can pass a _site_ into
+  // OriginAccessChecks (which normally expect an _origin_).
+  url::Origin site_origin =
+      url::Origin::Create(site_for_cookies.RepresentativeUrl());
+
+  // If `site_for_cookies` represents an origin (typically a Chrome Extension),
+  // it can force ignoring of site for cookies only if `origin_access_list`
+  // grants it access to the initiator and every URL in `url_chain`. The
+  // initiator must also be same-site to every URL in the chain. All URLs must
+  // pass this path; permissions from the two paths must not be combined across
+  // redirect hops.
+  //
+  // Ideally we would walk up the frame tree and check that each ancestor is
+  // first-party to the main frame (treating the `origin_access_list`
+  // exceptions as "first-party").  But walking up the tree is not possible in
+  // //services/network and so we make do with just checking the direct
+  // initiator of the request.
+  //
+  // We also check that the initiator is same-site to every URL in the chain,
+  // because setting `force_ignore_site_for_cookies` to true causes Strict
+  // cookies to be attached, and this is a requirement for Strict cookies (see
+  // net::cookie_util::ComputeSameSiteContext).
+  if (!site_origin.opaque() && request_initiator.has_value()) {
+    bool site_can_access_initiator =
+        cors::OriginAccessList::AccessState::kAllowed ==
+        origin_access_list.CheckAccessState(site_origin,
+                                            request_initiator->GetURL());
+    if (site_can_access_initiator) {
+      net::SiteForCookies site_of_initiator =
+          net::SiteForCookies::FromOrigin(request_initiator.value());
+      for (const GURL& url : url_chain) {
+        bool site_can_access_target =
+            cors::OriginAccessList::AccessState::kAllowed ==
+            origin_access_list.CheckAccessState(site_origin, url);
+        bool are_initiator_and_target_same_site =
+            site_of_initiator.IsFirstParty(url);
+        if (!site_can_access_target || !are_initiator_and_target_same_site) {
+          return false;
+        }
+      }
+      return true;
+    }
+  }
+
+  return false;
+}
+
 // Returns if `request` is fetch upload request with a streaming body.
 bool HasFetchStreamingUploadBody(const ResourceRequest& request) {
   const ResourceRequestBody* request_body = request.request_body.get();
@@ -297,9 +311,8 @@ bool HasFetchStreamingUploadBody(const ResourceRequest& request) {
   if (elements->size() != 1u) {
     return false;
   }
-  const auto& element = elements->front();
-  return element.type() == mojom::DataElementDataView::Tag::kChunkedDataPipe &&
-         element.As<network::DataElementChunkedDataPipe>().read_only_once();
+  const auto* element = elements->front().TryAs<DataElementChunkedDataPipe>();
+  return element && element->read_only_once();
 }
 
 std::unique_ptr<net::UploadDataStream> CreateUploadDataStream(
@@ -308,15 +321,14 @@ std::unique_ptr<net::UploadDataStream> CreateUploadDataStream(
     base::SequencedTaskRunner* file_task_runner) {
   // In the case of a chunked upload, there will just be one element.
   if (body->elements()->size() == 1) {
-    if (body->elements()->begin()->type() ==
-        network::mojom::DataElementDataView::Tag::kChunkedDataPipe) {
-      auto& element =
-          body->elements_mutable()->at(0).As<DataElementChunkedDataPipe>();
-      const bool has_null_source = element.read_only_once().value();
+    if (auto* element = body->elements_mutable()
+                            ->front()
+                            .TryAs<DataElementChunkedDataPipe>()) {
+      const bool has_null_source = element->read_only_once().value();
       auto upload_data_stream =
           std::make_unique<ChunkedDataPipeUploadDataStream>(
-              body, element.ReleaseChunkedDataPipeGetter(), has_null_source);
-      if (element.read_only_once()) {
+              body, element->ReleaseChunkedDataPipeGetter(), has_null_source);
+      if (element->read_only_once()) {
         upload_data_stream->EnableCache();
       }
       return upload_data_stream;
@@ -368,8 +380,6 @@ net::CookieSettingOverrides CalculateCookieSettingOverrides(
         net::CookieSettingOverride::kTopLevelStorageAccessGrantEligible);
   }
 
-  AddAdsHeuristicCookieSettingOverrides(request.is_ad_tagged, overrides,
-                                        emit_metrics);
   // Only apply the DevTools overrides if the request is from devtools enabled
   // context.
   if (request.devtools_request_id.has_value()) {
@@ -481,9 +491,18 @@ void ConfigureUrlRequest(const ResourceRequest& request,
                          net::URLRequest& url_request,
                          SharedResourceChecker& shared_resource_checker) {
   url_request.set_method(request.method);
-  url_request.set_site_for_cookies(request.site_for_cookies);
-  url_request.set_force_ignore_site_for_cookies(
-      ShouldForceIgnoreSiteForCookies(request, origin_access_list));
+
+  // When the factory holds an authoritative `site_for_cookies` that the
+  // renderer cannot compute (e.g., a subframe whose effective top frame
+  // for storage partitioning differs from the actual top frame), use it
+  // instead of the renderer-provided value.
+  net::SiteForCookies effective_site_for_cookies = request.site_for_cookies;
+  if (factory_params.prefer_factory_site_for_cookies &&
+      !factory_params.isolation_info.site_for_cookies().IsNull()) {
+    effective_site_for_cookies =
+        factory_params.isolation_info.site_for_cookies();
+  }
+  url_request.set_site_for_cookies(effective_site_for_cookies);
   if (!request.navigation_redirect_chain.empty()) {
     DCHECK_EQ(request.mode, mojom::RequestMode::kNavigate);
     url_request.SetURLChain(request.navigation_redirect_chain);
@@ -529,7 +548,6 @@ void ConfigureUrlRequest(const ResourceRequest& request,
   // They are non-empty when the values are given by the UA code, therefore
   // they should be ignored by CORS checks.
   net::HttpRequestHeaders merged_headers = request.headers;
-  merged_headers.MergeFrom(ComputeAttributionReportingHeaders(request));
   merged_headers.MergeFrom(request.cors_exempt_headers);
   // This should be ensured by the CorsURLLoaderFactory(), which is called
   // before URLLoaders are created.
@@ -576,8 +594,10 @@ void ConfigureUrlRequest(const ResourceRequest& request,
     url_request.set_socket_tag(request.socket_tag);
   }
 
-  url_request.set_allows_device_bound_session_registration(
-      request.allows_device_bound_session_registration);
+  url_request.set_device_bound_session_mode(
+      request.allows_device_bound_sessions
+          ? net::DeviceBoundSessionMode::kAllowed
+          : net::DeviceBoundSessionMode::kDisabled);
 
   if (base::FeatureList::IsEnabled(features::kSendSameSiteLaxForFedCM) &&
       (request.destination == mojom::RequestDestination::kWebIdentity ||
@@ -586,6 +606,16 @@ void ConfigureUrlRequest(const ResourceRequest& request,
     CHECK(request.redirect_mode == mojom::RedirectMode::kError ||
           request.credentials_mode == mojom::CredentialsMode::kOmit);
     url_request.set_ignore_unsafe_method_for_same_site_lax(true);
+  }
+
+  if (base::FeatureList::IsEnabled(
+          features::kAllowUnsafeRedirectSchemesForManualMode)) {
+    // Allow unsafe redirect schemes for fetch() with redirect: "manual".
+    // We identify fetch() by checking for empty destination (per fetch spec).
+    // Navigations also use kManual but have non-empty destinations.
+    url_request.set_treat_all_redirects_as_safe(
+        request.redirect_mode == mojom::RedirectMode::kManual &&
+        request.destination == mojom::RequestDestination::kEmpty);
   }
 }
 
@@ -676,7 +706,10 @@ mojom::URLResponseHeadPtr BuildResponseHead(
   response->was_in_prefetch_cache =
       !(url_request.load_flags() & net::LOAD_PREFETCH) &&
       response_info.unused_since_prefetch;
+  response->did_send_available_dictionary =
+      response_info.did_send_available_dictionary;
   response->did_use_shared_dictionary = response_info.did_use_shared_dictionary;
+  response->is_shared_resource = url_request.is_shared_resource();
   response->did_use_server_http_auth = response_info.did_use_server_http_auth;
   response->device_bound_session_usage =
       static_cast<network::mojom::DeviceBoundSessionUsage>(
@@ -714,7 +747,7 @@ mojom::URLResponseHeadPtr BuildResponseHead(
   response->request_cookies = request_cookies;
   response->request_start = url_request.creation_time();
   response->response_start = response_start;
-  response->encoded_data_length = url_request.GetTotalReceivedBytes();
+  response->encoded_data_length = url_request.GetTotalReceivedBytes().InBytes();
   response->auth_challenge_info = url_request.auth_challenge_info();
   response->has_range_requested = url_request.extra_request_headers().HasHeader(
       net::HttpRequestHeaders::kRange);

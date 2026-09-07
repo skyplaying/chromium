@@ -25,7 +25,6 @@
 namespace sync_pb {
 class SessionSpecifics;
 enum SyncEnums_BrowserType : int;
-enum SyncEnums_DeviceType : int;
 }  // namespace sync_pb
 
 namespace sync_sessions {
@@ -46,6 +45,7 @@ class SyncedSessionTracker {
     PRESENTABLE  // Have one window with at least one tab with syncable content.
   };
 
+  // `sessions_client` must not be null and must outlive this object.
   explicit SyncedSessionTracker(SyncSessionsClient* sessions_client);
 
   SyncedSessionTracker(const SyncedSessionTracker&) = delete;
@@ -117,6 +117,12 @@ class SyncedSessionTracker {
   // longer owned. See ResetSessionTracking(...)..
   void CleanupSession(const std::string& session_tag);
 
+  // Attempts to update the session name for the given session tag using
+  // the preferred device name from DeviceInfo. If DeviceInfo is not available,
+  // the session name remains unchanged. `session_tag` must represent an
+  // existing session.
+  void TryUpdateSessionNameFromDeviceInfo(const std::string& session_tag);
+
   // Adds the window with id |window_id| to the session specified by
   // |session_tag|. If none existed for that session, creates one. Similarly, if
   // the session did not exist yet, creates it. Ownership of the SessionWindow
@@ -173,7 +179,7 @@ class SyncedSessionTracker {
   void InitLocalSession(
       const std::string& local_session_tag,
       const std::string& local_session_name,
-      sync_pb::SyncEnums_DeviceType local_device_type,
+      syncer::DeviceInfo::DeviceType local_device_type,
       syncer::DeviceInfo::FormFactor local_device_form_factor);
 
   // Populate the start-time of the local session. This should be called once,
@@ -214,6 +220,7 @@ class SyncedSessionTracker {
   // overwritten. Reassociating a tab with a node it is already mapped to will
   // have no effect.
   void ReassociateLocalTab(int tab_node_id, SessionID new_tab_id);
+
 
   // **** Methods for querying/manipulating overall state ****.
 
@@ -320,7 +327,7 @@ void SerializeTrackerToSpecifics(
 // entities.
 void SerializePartialTrackerToSpecifics(
     const SyncedSessionTracker& tracker,
-    const std::map<std::string, std::set<int>>& session_tag_to_node_ids,
+    const std::map<std::string, std::set<int>>& session_tag_to_tab_node_ids,
     const base::RepeatingCallback<void(const std::string& session_name,
                                        sync_pb::SessionSpecifics* specifics)>&
         output_cb);

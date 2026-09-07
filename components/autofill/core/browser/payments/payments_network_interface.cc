@@ -4,21 +4,27 @@
 
 #include "components/autofill/core/browser/payments/payments_network_interface.h"
 
+#include <stdint.h>
+
 #include <memory>
-#include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "base/functional/bind.h"
-#include "base/strings/string_number_conversions.h"
-#include "base/strings/string_split.h"
+#include "base/functional/callback.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "components/autofill/core/browser/autofill_type.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/metrics/payments/credit_card_save_metrics.h"
 #include "components/autofill/core/browser/payments/account_info_getter.h"
 #include "components/autofill/core/browser/payments/client_behavior_constants.h"
+#include "components/autofill/core/browser/payments/legal_message_line.h"
+#include "components/autofill/core/browser/payments/payments_autofill_client.h"
+#include "components/autofill/core/browser/payments/payments_network_interface_base.h"
+#include "components/autofill/core/browser/payments/payments_request_details.h"
 #include "components/autofill/core/browser/payments/payments_requests/create_bnpl_payment_instrument_request.h"
 #include "components/autofill/core/browser/payments/payments_requests/get_bnpl_payment_instrument_for_fetching_url_request.h"
 #include "components/autofill/core/browser/payments/payments_requests/get_bnpl_payment_instrument_for_fetching_vcn_request.h"
@@ -28,8 +34,9 @@
 #include "components/autofill/core/browser/payments/payments_requests/get_details_for_update_bnpl_payment_instrument_request.h"
 #include "components/autofill/core/browser/payments/payments_requests/get_iban_upload_details_request.h"
 #include "components/autofill/core/browser/payments/payments_requests/get_unmask_details_request.h"
+#include "components/autofill/core/browser/payments/payments_requests/get_wallet_reminder_notice_request.h"
 #include "components/autofill/core/browser/payments/payments_requests/opt_change_request.h"
-#include "components/autofill/core/browser/payments/payments_requests/payments_request.h"
+#include "components/autofill/core/browser/payments/payments_requests/record_legal_reminder_acknowledgment_request.h"
 #include "components/autofill/core/browser/payments/payments_requests/select_challenge_option_request.h"
 #include "components/autofill/core/browser/payments/payments_requests/unmask_card_request.h"
 #include "components/autofill/core/browser/payments/payments_requests/unmask_iban_request.h"
@@ -37,9 +44,6 @@
 #include "components/autofill/core/browser/payments/payments_requests/update_virtual_card_enrollment_request.h"
 #include "components/autofill/core/browser/payments/payments_requests/upload_card_request.h"
 #include "components/autofill/core/browser/payments/payments_requests/upload_iban_request.h"
-#include "components/autofill/core/browser/studies/autofill_experiments.h"
-#include "components/autofill/core/common/autofill_features.h"
-#include "components/autofill/core/common/autofill_payments_features.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 
 namespace autofill::payments {
@@ -147,6 +151,7 @@ void PaymentsNetworkInterface::UploadCard(
 
 void PaymentsNetworkInterface::GetIbanUploadDetails(
     const std::string& app_locale,
+    const std::vector<ClientBehaviorConstants>& client_behavior_signals,
     int64_t billing_customer_number,
     const std::string& country_code,
     base::OnceCallback<void(PaymentsRpcResult,
@@ -155,7 +160,8 @@ void PaymentsNetworkInterface::GetIbanUploadDetails(
                             std::unique_ptr<base::DictValue>)> callback) {
   IssueRequest(std::make_unique<GetIbanUploadDetailsRequest>(
       account_info_getter_->IsSyncFeatureEnabledForPaymentsServerMetrics(),
-      app_locale, billing_customer_number, country_code, std::move(callback)));
+      app_locale, client_behavior_signals, billing_customer_number,
+      country_code, std::move(callback)));
 }
 
 void PaymentsNetworkInterface::UploadIban(
@@ -259,6 +265,22 @@ void PaymentsNetworkInterface::UpdateBnplPaymentInstrument(
       /*full_sync_enabled=*/
       account_info_getter_->IsSyncFeatureEnabledForPaymentsServerMetrics(),
       std::move(callback)));
+}
+
+void PaymentsNetworkInterface::GetWalletReminderNotice(
+    const GetWalletReminderNoticeRequestDetails& request_details,
+    base::OnceCallback<void(PaymentsRpcResult,
+                            const GetWalletReminderNoticeResponseDetails&)>
+        callback) {
+  IssueRequest(std::make_unique<GetWalletReminderNoticeRequest>(
+      request_details, std::move(callback)));
+}
+
+void PaymentsNetworkInterface::RecordLegalReminderAcknowledgment(
+    const RecordLegalReminderAcknowledgmentRequestDetails& request_details,
+    base::OnceCallback<void(PaymentsRpcResult)> callback) {
+  IssueRequest(std::make_unique<RecordLegalReminderAcknowledgmentRequest>(
+      request_details, std::move(callback)));
 }
 
 }  // namespace autofill::payments

@@ -4,10 +4,20 @@
 
 #include "components/autofill/core/browser/payments/payments_requests/upload_iban_request.h"
 
+#include <string>
+#include <utility>
+
+#include "base/functional/callback.h"
 #include "base/json/json_writer.h"
+#include "base/logging.h"
 #include "base/notimplemented.h"
 #include "base/strings/escape.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
+#include "base/values.h"
+#include "components/autofill/core/browser/payments/payments_autofill_client.h"
+#include "components/autofill/core/browser/payments/payments_request_details.h"
+#include "components/autofill/core/browser/payments/payments_requests/payments_request.h"
 
 namespace autofill::payments {
 
@@ -25,8 +35,8 @@ const char kUploadIbanRequestFormat[] =
 UploadIbanRequest::UploadIbanRequest(
     const UploadIbanRequestDetails& details,
     bool full_sync_enabled,
-    base::OnceCallback<
-        void(payments::PaymentsAutofillClient::PaymentsRpcResult)> callback)
+    base::OnceCallback<void(PaymentsAutofillClient::PaymentsRpcResult)>
+        callback)
     : request_details_(details),
       full_sync_enabled_(full_sync_enabled),
       callback_(std::move(callback)) {}
@@ -64,9 +74,9 @@ std::string UploadIbanRequest::GetRequestContent() {
                     request_details_.billing_customer_number));
   }
   request_dict.Set("context", std::move(context));
-  base::DictValue chrome_user_context;
-  chrome_user_context.Set("full_sync_enabled", full_sync_enabled_);
-  request_dict.Set("chrome_user_context", std::move(chrome_user_context));
+  request_dict.Set("chrome_user_context",
+                   BuildChromeUserContext(/*client_behavior_signals=*/{},
+                                          full_sync_enabled_));
   request_dict.Set("context_token", request_details_.context_token);
 
   std::string json_request = base::WriteJson(request_dict).value();

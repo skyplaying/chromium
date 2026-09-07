@@ -94,6 +94,9 @@ class TestConfiguration : public Configuration {
   ~TestConfiguration() override = default;
 
   // Configuration implementation.
+  bool HasFeatureConfig(const base::Feature& feature) const override {
+    return true;
+  }
   const FeatureConfig& GetFeatureConfig(
       const base::Feature& feature) const override {
     return config_;
@@ -1220,6 +1223,24 @@ TEST_F(FeatureConfigConditionValidatorTest, TestConcurrentPromosBlockingNone) {
       kFeatureConfigTestFeatureBar, FeatureConfig(),
       {kFeatureConfigTestFeatureFoo.name, kFeatureConfigTestFeatureBar.name});
   ConditionValidator::Result result = GetResult(non_blocking_config);
+  EXPECT_TRUE(result.NoErrors());
+  EXPECT_TRUE(result.currently_showing_ok);
+}
+
+TEST_F(FeatureConfigConditionValidatorTest,
+       TestConcurrentPromosSelfBlockingEvenWhenBlockedByNone) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures({kFeatureConfigTestFeatureFoo}, {});
+
+  FeatureConfig non_blocking_config = GetNonBlockingFeatureConfig();
+  validator_.NotifyIsShowing(kFeatureConfigTestFeatureFoo, non_blocking_config,
+                             {kFeatureConfigTestFeatureFoo.name});
+  ConditionValidator::Result result = GetResult(non_blocking_config);
+  EXPECT_FALSE(result.NoErrors());
+  EXPECT_FALSE(result.currently_showing_ok);
+
+  validator_.NotifyDismissed(kFeatureConfigTestFeatureFoo);
+  result = GetResult(non_blocking_config);
   EXPECT_TRUE(result.NoErrors());
   EXPECT_TRUE(result.currently_showing_ok);
 }

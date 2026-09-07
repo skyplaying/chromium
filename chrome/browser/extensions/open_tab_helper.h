@@ -32,11 +32,14 @@ class OpenTabHelper {
     std::optional<bool> pinned;
     std::optional<int> index;
     std::optional<int> bookmark_id;
+    std::optional<int> split_with_tab_id;
   };
 
 #if !BUILDFLAG(IS_ANDROID)
   // Finds the current browser or creates a new browser that's appropriate to
   // show the given `validated_url`. Returns an error on failure.
+  // This variant is only available on non-Android platforms. On Android, window
+  // creation / initialization is an async process.
   static base::expected<BrowserWindowInterface*, std::string>
   FindOrCreateBrowser(const GURL& validated_url,
                       ExtensionFunction& function,

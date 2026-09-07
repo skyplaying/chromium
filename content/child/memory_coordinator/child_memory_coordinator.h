@@ -9,13 +9,15 @@
 #include "content/child/memory_coordinator/browser_memory_coordinator_bridge.h"
 #include "content/common/content_export.h"
 #include "content/common/memory_coordinator/memory_consumer_registry.h"
+#include "content/common/memory_coordinator/memory_coordinator_policy.h"
 #include "content/common/memory_coordinator/memory_coordinator_policy_manager.h"
+#include "content/common/memory_coordinator/memory_pressure_listener_policy.h"
 #include "content/common/memory_coordinator/mojom/memory_coordinator.mojom-forward.h"
 
 namespace content {
 
 // ChildMemoryCoordinator is a singleton that owns both the
-// ChildMemoryConsumerRegistry and the MemoryCoordinatorPolicyManager.
+// MemoryConsumerRegistry and the MemoryCoordinatorPolicyManager.
 class CONTENT_EXPORT ChildMemoryCoordinator {
  public:
   static ChildMemoryCoordinator& Get();
@@ -39,7 +41,17 @@ class CONTENT_EXPORT ChildMemoryCoordinator {
   base::ScopedMemoryConsumerRegistry<MemoryConsumerRegistry> registry_{
       PROCESS_TYPE_UNKNOWN, ChildProcessId(), policy_manager_};
 
-  BrowserMemoryCoordinatorBridge browser_memory_coordinator_bridge_;
+  BrowserMemoryCoordinatorBridge browser_memory_coordinator_bridge_{
+      policy_manager_};
+  MemoryCoordinatorPolicyRegistration
+      browser_memory_coordinator_bridge_registration_{
+          policy_manager_, browser_memory_coordinator_bridge_};
+
+  MemoryPressureListenerPolicy memory_pressure_listener_policy_{
+      policy_manager_};
+  MemoryCoordinatorPolicyRegistration
+      memory_pressure_listener_policy_registration_{
+          policy_manager_, memory_pressure_listener_policy_};
 };
 
 }  // namespace content

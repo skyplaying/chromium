@@ -4,12 +4,13 @@
 
 #include "base/feature_list.h"
 #include "base/strings/stringprintf.h"
+#include "chrome/browser/extensions/chrome_app_deprecation.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/web_apps/force_installed_preinstalled_deprecated_app_dialog_view.h"
 #include "chrome/browser/ui/webui/app_home/app_home.mojom.h"
 #include "chrome/browser/ui/webui/app_home/app_home_page_handler.h"
-#include "chrome/browser/web_applications/extension_status_utils.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/extensions/extension_constants.h"
@@ -53,14 +54,14 @@ class ForceInstalledDeprecatedAppsDialogViewBrowserTest
     // Install a test policy provider which will mark the app as
     // force-installed.
     extensions::ExtensionSystem* extension_system =
-        extensions::ExtensionSystem::Get(browser()->profile());
+        extensions::ExtensionSystem::Get(browser()->GetProfile());
     extension_system->management_policy()->RegisterProvider(&policy_provider_);
   }
 
   webapps::AppHomePageHandler CreateLauncherHandler(
       content::TestWebUI* web_ui) {
     content::WebContents* web_contents =
-        browser()->tab_strip_model()->GetWebContentsAt(0);
+        browser()->GetTabStripModel()->GetWebContentsAt(0);
     DCHECK(web_contents);
     test_web_ui_.set_web_contents(web_contents);
     mojo::PendingReceiver<app_home::mojom::Page> page;
@@ -93,7 +94,7 @@ IN_PROC_BROWSER_TEST_F(ForceInstalledDeprecatedAppsDialogViewBrowserTest,
                        DialogLaunchedForForceInstalledApp) {
   content::TestWebUI test_web_ui;
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetWebContentsAt(0);
+      browser()->GetTabStripModel()->GetWebContentsAt(0);
   CHECK(web_contents);
   test_web_ui.set_web_contents(web_contents);
   auto handler = CreateLauncherHandler(&test_web_ui);
@@ -110,7 +111,8 @@ IN_PROC_BROWSER_TEST_F(ForceInstalledDeprecatedAppsDialogViewBrowserTest,
                        DialogLaunchedForForceInstalledPreinstalledApp) {
   ASSERT_TRUE(embedded_test_server()->Start());
   // Set app as a preinstalled app.
-  extensions::SetPreinstalledAppIdForTesting(app_id_.c_str());
+  extensions::chrome_app_deprecation::SetPreinstalledAppIdForTesting(
+      app_id_.c_str());
   auto link_config_reset = ForceInstalledPreinstalledDeprecatedAppDialogView::
       SetOverrideLinkConfigForTesting(
           {.link = GURL(embedded_test_server()->GetURL("/")),
@@ -122,7 +124,7 @@ IN_PROC_BROWSER_TEST_F(ForceInstalledDeprecatedAppsDialogViewBrowserTest,
 
   content::TestWebUI test_web_ui;
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetWebContentsAt(0);
+      browser()->GetTabStripModel()->GetWebContentsAt(0);
   CHECK(web_contents);
   test_web_ui.set_web_contents(web_contents);
   auto handler = CreateLauncherHandler(&test_web_ui);

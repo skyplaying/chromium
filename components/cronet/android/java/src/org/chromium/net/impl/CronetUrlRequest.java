@@ -632,7 +632,6 @@ public final class CronetUrlRequest extends ExperimentalUrlRequest {
 
         // Have to do this after creating responseInfo.
         mUrlChain.add(newLocation);
-
         Runnable task =
                 new Runnable() {
                     @Override
@@ -1127,7 +1126,9 @@ public final class CronetUrlRequest extends ExperimentalUrlRequest {
                 mMetrics.getConnectDurationInMicroseconds(),
                 mMetrics.getTimeToWriteFirstByteInMicroseconds(),
                 mMetrics.getTimeToReceiveHeaderLastByteMicroseconds(),
-                isProxied);
+                isProxied,
+                // go/cronet-cans currently only supports bidirectional streams.
+                /* isAdaptiveNetworkStream= */ false);
     }
 
     // Maybe report metrics. This method should only be called on Callback's executor thread and

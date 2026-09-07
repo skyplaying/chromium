@@ -28,6 +28,7 @@
 #include "ui/base/ui_base_features.h"
 #include "ui/compositor/compositor.h"
 #include "ui/compositor/layer.h"
+#include "ui/compositor/layer_test_api.h"
 #include "ui/compositor/layer_type.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/events/test/event_generator.h"
@@ -643,6 +644,41 @@ TEST_F(ScrollViewTest, AccessibleProperties) {
   ui::AXNodeData data;
   scroll_view_->GetViewAccessibility().GetAccessibleNodeData(&data);
   EXPECT_EQ(data.role, ax::mojom::Role::kScrollView);
+}
+
+TEST_F(ScrollViewTest, ContentOverflowing) {
+  View* contents = InstallContents();
+  const gfx::Size viewport_size =
+      ScrollViewTestApi(scroll_view_.get()).contents_viewport()->size();
+
+  // Disable scrollbars to avoid conflicts with content view size.
+  scroll_view_->SetHorizontalScrollBarMode(
+      ScrollView::ScrollBarMode::kDisabled);
+  scroll_view_->SetVerticalScrollBarMode(ScrollView::ScrollBarMode::kDisabled);
+
+  EXPECT_FALSE(scroll_view_->IsHorizontalContentOverflowing());
+  EXPECT_FALSE(scroll_view_->IsVerticalContentOverflowing());
+
+  // Size the contents such that vertical scrollbar is needed.
+  contents->SetBoundsRect(
+      gfx::Rect(viewport_size.width(), viewport_size.height() + 100));
+  InvalidateAndRunScheduledLayoutOnScrollView();
+  EXPECT_FALSE(scroll_view_->IsHorizontalContentOverflowing());
+  EXPECT_TRUE(scroll_view_->IsVerticalContentOverflowing());
+
+  // Size the contents such that horizontal scrollbar is needed.
+  contents->SetBoundsRect(
+      gfx::Rect(viewport_size.width() + 100, viewport_size.height()));
+  InvalidateAndRunScheduledLayoutOnScrollView();
+  EXPECT_TRUE(scroll_view_->IsHorizontalContentOverflowing());
+  EXPECT_FALSE(scroll_view_->IsVerticalContentOverflowing());
+
+  // Size the contents such that both scrollbars are needed.
+  contents->SetBoundsRect(
+      gfx::Rect(viewport_size.width() + 100, viewport_size.height() + 100));
+  InvalidateAndRunScheduledLayoutOnScrollView();
+  EXPECT_TRUE(scroll_view_->IsHorizontalContentOverflowing());
+  EXPECT_TRUE(scroll_view_->IsVerticalContentOverflowing());
 }
 
 // Verifies the scrollbars are added as necessary.
@@ -1508,13 +1544,13 @@ TEST_F(ScrollViewTest, ContentsViewportLayerUsed_ScrollWithLayersDisabled) {
   child->SetPaintToLayer();
 
   // When contents does not have a layer, contents_viewport is TEXTURED layer.
-  EXPECT_EQ(test_api.contents_viewport()->layer()->type(), ui::LAYER_TEXTURED);
+  EXPECT_TRUE(test_api.contents_viewport()->layer()->AsTextured());
   contents->SetPaintToLayer();
   // When contents is a TEXTURED layer.
-  EXPECT_EQ(test_api.contents_viewport()->layer()->type(), ui::LAYER_NOT_DRAWN);
+  EXPECT_TRUE(test_api.contents_viewport()->layer()->AsNotDrawn());
   contents->SetPaintToLayer(ui::LAYER_NOT_DRAWN);
   // When contents is a NOT_DRAWN layer.
-  EXPECT_EQ(test_api.contents_viewport()->layer()->type(), ui::LAYER_TEXTURED);
+  EXPECT_TRUE(test_api.contents_viewport()->layer()->AsTextured());
 }
 
 // Validates the layer of contents_viewport_, when contents_ does not have a
@@ -1536,7 +1572,7 @@ TEST_F(
   child->SetPaintToLayer();
   // TEXTURED layer needed for contents_viewport since a descendant view has a
   // layer.
-  EXPECT_EQ(test_api.contents_viewport()->layer()->type(), ui::LAYER_TEXTURED);
+  EXPECT_TRUE(test_api.contents_viewport()->layer()->AsTextured());
 }
 
 // Validates if scroll_with_layers is enabled, we disallow to change the layer
@@ -1582,7 +1618,7 @@ TEST_F(
   child->SetPaintToLayer();
 
   scroll_view.SetContents(std::move(a_view));
-  EXPECT_EQ(test_api.contents_viewport()->layer()->type(), ui::LAYER_TEXTURED);
+  EXPECT_TRUE(test_api.contents_viewport()->layer()->AsTextured());
 }
 
 // Validates correct behavior of layers used for contents_viewport used when
@@ -1594,16 +1630,16 @@ TEST_F(ScrollViewTest, ContentsViewportLayerUsed_ScrollWithLayersEnabled) {
   // scroll_with_layer feature ensures that contents_viewport always have a
   // layer.
   ASSERT_TRUE(test_api.contents_viewport()->layer());
-  EXPECT_EQ(test_api.contents_viewport()->layer()->type(), ui::LAYER_NOT_DRAWN);
+  EXPECT_TRUE(test_api.contents_viewport()->layer()->AsNotDrawn());
   // scroll_with_layer feature enables a layer on content before adding to
   // contents_viewport_.
   View* contents = scroll_view.SetContents(std::make_unique<View>());
-  EXPECT_EQ(test_api.contents_viewport()->layer()->type(), ui::LAYER_NOT_DRAWN);
+  EXPECT_TRUE(test_api.contents_viewport()->layer()->AsNotDrawn());
 
   View* child = contents->AddChildView(std::make_unique<View>());
   child->SetPaintToLayer();
 
-  EXPECT_EQ(test_api.contents_viewport()->layer()->type(), ui::LAYER_NOT_DRAWN);
+  EXPECT_TRUE(test_api.contents_viewport()->layer()->AsNotDrawn());
 }
 
 // Validates if correct layers are used for contents_viewport used when
@@ -1618,18 +1654,18 @@ TEST_F(
   // scroll_with_layer feature ensures that contents_viewport always have a
   // layer.
   ASSERT_TRUE(test_api.contents_viewport()->layer());
-  EXPECT_EQ(test_api.contents_viewport()->layer()->type(), ui::LAYER_NOT_DRAWN);
+  EXPECT_TRUE(test_api.contents_viewport()->layer()->AsNotDrawn());
 
   // changing the layer type that the scrollview enables on contents.
   scroll_view.SetContentsLayerType(ui::LAYER_NOT_DRAWN);
 
   View* contents = scroll_view.SetContents(std::make_unique<View>());
-  EXPECT_EQ(test_api.contents_viewport()->layer()->type(), ui::LAYER_TEXTURED);
+  EXPECT_TRUE(test_api.contents_viewport()->layer()->AsTextured());
 
   View* child = contents->AddChildView(std::make_unique<View>());
   child->SetPaintToLayer();
 
-  EXPECT_EQ(test_api.contents_viewport()->layer()->type(), ui::LAYER_TEXTURED);
+  EXPECT_TRUE(test_api.contents_viewport()->layer()->AsTextured());
 }
 
 TEST_F(ScrollViewTest,
@@ -1643,6 +1679,26 @@ TEST_F(ScrollViewTest,
 
   EXPECT_EQ(test_api.contents_viewport()->layer()->rounded_corner_radii(),
             corner_radii);
+}
+
+TEST_F(ScrollViewTest, ScrollSynchronization) {
+  ScrollView scroll_view(ScrollView::ScrollWithLayers::kEnabled);
+  auto contents = std::make_unique<FixedView>();
+  contents->SetPreferredSize(gfx::Size(100, 200));
+  scroll_view.SetContents(std::move(contents));
+  scroll_view.SetBoundsRect(gfx::Rect(0, 0, 100, 100));
+  views::test::RunScheduledLayout(&scroll_view);
+
+  ASSERT_TRUE(scroll_view.contents()->layer());
+  EXPECT_FALSE(scroll_view.contents()->layer()->main_side_scrolling_enabled());
+
+  {
+    auto synchronizer = scroll_view.EnableScrollSynchronization();
+    EXPECT_TRUE(
+        scroll_view.contents()->layer()->main_side_scrolling_enabled());
+  }
+
+  EXPECT_FALSE(scroll_view.contents()->layer()->main_side_scrolling_enabled());
 }
 
 #if BUILDFLAG(IS_MAC)
@@ -2591,6 +2647,85 @@ TEST_F(ScrollViewTest, TestOpacityGradientVerticalTopAndBottom) {
   EXPECT_EQ(gradient.steps()[3].alpha, 0);
 }
 
+TEST_F(ScrollViewTest, TestOpacityGradientVerticalLeading) {
+  ScrollViewTestApi test_api(scroll_view_.get());
+
+  // Set up with vertical scrollbar.
+  auto contents = std::make_unique<FixedView>();
+  contents->SetPreferredSize(gfx::Size(kWidth, kMaxHeight * 5));
+  scroll_view_->SetOverflowGradientMask(
+      ScrollView::GradientDirection::kVerticalLeading);
+  scroll_view_->SetContents(std::move(contents));
+  scroll_view_->ClipHeightTo(0, kMaxHeight);
+
+  // Make sure the size is set such that no horizontal scrollbar gets shown.
+  scroll_view_->SetSize(gfx::Size(
+      kWidth + test_api.GetScrollBar(VERTICAL)->GetThickness(), kMaxHeight));
+
+  // Scroll to middle so we have both top and bottom overflow.
+  int offset = kMaxHeight * 3;
+  scroll_view_->ScrollToPosition(test_api.GetScrollBar(VERTICAL), offset);
+  views::test::RunScheduledLayout(scroll_view_.get());
+
+  EXPECT_TRUE(scroll_view_->layer() &&
+              scroll_view_->layer()->HasGradientMask());
+
+  const gfx::LinearGradient gradient = scroll_view_->layer()->gradient_mask();
+  EXPECT_EQ(4u, gradient.step_count());
+
+  // Top (leading) should be faded out.
+  EXPECT_FLOAT_EQ(gradient.steps()[0].fraction, 0.);
+  EXPECT_EQ(gradient.steps()[0].alpha, 0);
+
+  // Bottom (trailing) should NOT be faded out (it is suppressed).
+  EXPECT_FLOAT_EQ(gradient.steps()[3].fraction, 1.0);
+  EXPECT_EQ(gradient.steps()[3].alpha, 255);
+
+  // Scroll to top so only bottom overflow exists.
+  scroll_view_->ScrollToPosition(test_api.GetScrollBar(VERTICAL), 0);
+  views::test::RunScheduledLayout(scroll_view_.get());
+
+  // Since bottom is suppressed and top has no overflow, there should be no
+  // gradient mask.
+  EXPECT_FALSE(scroll_view_->layer() &&
+               scroll_view_->layer()->HasGradientMask());
+}
+
+TEST_F(ScrollViewTest, TestOpacityGradientVerticalTrailing) {
+  ScrollViewTestApi test_api(scroll_view_.get());
+
+  // Set up with vertical scrollbar.
+  auto contents = std::make_unique<FixedView>();
+  contents->SetPreferredSize(gfx::Size(kWidth, kMaxHeight * 5));
+  scroll_view_->SetOverflowGradientMask(
+      ScrollView::GradientDirection::kVerticalTrailing);
+  scroll_view_->SetContents(std::move(contents));
+  scroll_view_->ClipHeightTo(0, kMaxHeight);
+
+  // Make sure the size is set such that no horizontal scrollbar gets shown.
+  scroll_view_->SetSize(gfx::Size(
+      kWidth + test_api.GetScrollBar(VERTICAL)->GetThickness(), kMaxHeight));
+
+  // Scroll to middle so we have both top and bottom overflow.
+  int offset = kMaxHeight * 3;
+  scroll_view_->ScrollToPosition(test_api.GetScrollBar(VERTICAL), offset);
+  views::test::RunScheduledLayout(scroll_view_.get());
+
+  EXPECT_TRUE(scroll_view_->layer() &&
+              scroll_view_->layer()->HasGradientMask());
+
+  const gfx::LinearGradient gradient = scroll_view_->layer()->gradient_mask();
+  EXPECT_EQ(4u, gradient.step_count());
+
+  // Top (leading) should NOT be faded out (it is suppressed).
+  EXPECT_FLOAT_EQ(gradient.steps()[0].fraction, 0.);
+  EXPECT_EQ(gradient.steps()[0].alpha, 255);
+
+  // Bottom (trailing) should be faded out.
+  EXPECT_FLOAT_EQ(gradient.steps()[3].fraction, 1.0);
+  EXPECT_EQ(gradient.steps()[3].alpha, 0);
+}
+
 TEST_F(ScrollViewTest, TestOpacityGradientVerticalTop) {
   ScrollViewTestApi test_api(scroll_view_.get());
 
@@ -3059,8 +3194,8 @@ TEST_P(WidgetScrollViewTestRTLAndLayers, ScrollOffsetUsingLayers) {
   EXPECT_TRUE(compositor);
 
   // But setting on the impl side should fail since the layer isn't committed.
-  cc::ElementId element_id =
-      container->layer()->cc_layer_for_testing()->element_id();
+  ui::LayerTestApi layer_test_api(container->layer());
+  cc::ElementId element_id = layer_test_api.cc_layer()->element_id();
   EXPECT_FALSE(compositor->ScrollLayerTo(element_id, gfx::PointF(0, 0)));
   EXPECT_EQ(gfx::PointF(0, offset.y()), test_api.CurrentOffset());
 

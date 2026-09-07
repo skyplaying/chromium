@@ -35,8 +35,8 @@ import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bu
 import {PasskeysBrowserProxyImpl} from './passkeys_browser_proxy.js';
 // </if>
 import type {ActorLoginPermission} from './password_manager.mojom-webui.js';
-import type {BlockedSite, BlockedSitesListChangedListener, CredentialsChangedListener, ShouldShowAccountStorageToggleChangedListener} from './password_manager_proxy.js';
-import {PasswordManagerImpl} from './password_manager_proxy.js';
+import type {BlockedSite, BlockedSitesListChangedListener, CredentialsChangedListener} from './password_manager_proxy.js';
+import {PasswordManagerActionableError, PasswordManagerImpl} from './password_manager_proxy.js';
 import type {PrefToggleButtonElement} from './prefs/pref_toggle_button.js';
 import type {Route} from './router.js';
 import {Page, RouteObserverMixin, Router, UrlParam} from './router.js';
@@ -46,7 +46,6 @@ import {UserUtilMixin} from './user_utils_mixin.js';
 
 export interface SettingsSectionElement {
   $: {
-    accountStorageToggle: PrefToggleButtonElement,
     autosigninToggle: PrefToggleButtonElement,
     blockedSitesList: HTMLElement,
     passkeyUpgradeToggle: PrefToggleButtonElement,
@@ -60,8 +59,6 @@ const PASSWORD_MANAGER_ADD_SHORTCUT_ELEMENT_ID =
     'PasswordManagerUI::kAddShortcutElementId';
 const PASSWORD_MANAGER_ADD_SHORTCUT_CUSTOM_EVENT_ID =
     'PasswordManagerUI::kAddShortcutCustomEventId';
-export const PASSWORD_MANAGER_ACCOUNT_STORE_TOGGLE_ELEMENT_ID =
-    'PasswordManagerUI::kAccountStoreToggleElementId';
 
 const SettingsSectionElementBase = HelpBubbleMixin(RouteObserverMixin(
     PrefsMixin(UserUtilMixin(WebUiListenerMixin(I18nMixin(PolymerElement))))));
@@ -96,10 +93,18 @@ export class SettingsSectionElement extends SettingsSectionElementBase {
         },
       },
 
+      isFedCmEmbedderInitiatedLoginEnabled_: {
+        type: Boolean,
+        value() {
+          return loadTimeData.getBoolean('fedCmEmbedderInitiatedLoginEnabled');
+        },
+      },
+
       shouldShowActorLoginPermissions_: {
         type: Boolean,
         computed: 'computeShouldShowActorLoginPermissions_(' +
-            'actorLoginPermissions_.length, isActorLoginPermissionsEnabled_)',
+            'actorLoginPermissions_.length, isActorLoginPermissionsEnabled_, ' +
+            'isFedCmEmbedderInitiatedLoginEnabled_)',
       },
 
       // <if expr="is_win or is_macosx or is_chromeos">
@@ -187,11 +192,6 @@ export class SettingsSectionElement extends SettingsSectionElementBase {
         type: Number,
         value: 0,
       },
-
-      shouldShowAccountStorageSettingToggle_: {
-        type: Boolean,
-        value: false,
-      },
     };
   }
 
@@ -201,12 +201,14 @@ export class SettingsSectionElement extends SettingsSectionElementBase {
           'isSyncingPasswords, isAccountStoreUser)',
       'updateIsCloudAuthenticatorConnected_(' +
           'isSyncingPasswords, isAccountStoreUser)',
+      'updateTrustedVaultBannerState_(actionableError)',
     ];
   }
 
   declare private blockedSites_: BlockedSite[];
   declare private actorLoginPermissions_: ActorLoginPermission[];
   declare private isActorLoginPermissionsEnabled_: boolean;
+  declare private isFedCmEmbedderInitiatedLoginEnabled_: boolean;
   declare private shouldShowActorLoginPermissions_: boolean;
   // <if expr="is_win or is_macosx or is_chromeos">
   declare private isBiometricAuthenticationForFillingToggleVisible_: boolean;
@@ -228,14 +230,11 @@ export class SettingsSectionElement extends SettingsSectionElementBase {
   // This variable depend on the sync service API, which the Batch Upload Dialog
   // uses.
   declare private localPasswordCount_: number;
-  declare private shouldShowAccountStorageSettingToggle_: boolean;
 
   private setBlockedSitesListListener_: BlockedSitesListChangedListener|null =
       null;
   private setCredentialsChangedListener_: CredentialsChangedListener|null =
       null;
-  private shouldShowAccountStorageSettingToggleListener_:
-      ShouldShowAccountStorageToggleChangedListener|null = null;
 
   override ready() {
     super.ready();
@@ -285,18 +284,16 @@ export class SettingsSectionElement extends SettingsSectionElementBase {
     PasswordManagerImpl.getInstance().addSavedPasswordListChangedListener(
         this.setCredentialsChangedListener_);
 
-    this.shouldShowAccountStorageSettingToggleListener_ = show => {
-      this.shouldShowAccountStorageSettingToggle_ = show;
-    };
-    PasswordManagerImpl.getInstance()
-        .shouldShowAccountStorageSettingToggle()
-        .then(this.shouldShowAccountStorageSettingToggleListener_);
-    PasswordManagerImpl.getInstance()
-        .addShouldShowAccountStorageSettingToggleListener(
-            this.shouldShowAccountStorageSettingToggleListener_);
-
     const trustedVaultStateChanged = (state: TrustedVaultBannerState) => {
+      // Set the state provided by the backend.
       this.trustedVaultBannerState_ = state;
+
+      // If we are currently in the error state, override the visual state to
+      // OPTED_IN.
+      if (this.actionableError ===
+          PasswordManagerActionableError.kTrustedVaultKeyNeeded) {
+        this.trustedVaultBannerState_ = TrustedVaultBannerState.OPTED_IN;
+      }
     };
     syncBrowserProxy.getTrustedVaultBannerState().then(
         trustedVaultStateChanged);
@@ -315,11 +312,6 @@ export class SettingsSectionElement extends SettingsSectionElementBase {
       this.hasPasskeys_ = hasPasskeys;
     });
     // </if>
-
-    const accountStorageToggleRoot = this.$.accountStorageToggle.shadowRoot;
-    this.registerHelpBubble(
-        PASSWORD_MANAGER_ACCOUNT_STORE_TOGGLE_ELEMENT_ID,
-        accountStorageToggleRoot!.querySelector('#control')!);
   }
 
   override disconnectedCallback() {
@@ -333,12 +325,6 @@ export class SettingsSectionElement extends SettingsSectionElementBase {
     PasswordManagerImpl.getInstance().removeSavedPasswordListChangedListener(
         this.setCredentialsChangedListener_);
     this.setCredentialsChangedListener_ = null;
-
-    assert(this.shouldShowAccountStorageSettingToggleListener_);
-    PasswordManagerImpl.getInstance()
-        .removeShouldShowAccountStorageSettingToggleListener(
-            this.shouldShowAccountStorageSettingToggleListener_);
-    this.shouldShowAccountStorageSettingToggleListener_ = null;
 
     this.$.toast.hide();
   }
@@ -471,18 +457,6 @@ export class SettingsSectionElement extends SettingsSectionElementBase {
     return this.i18n('removeBlockedAriaDescription', blockedSite.urls.shown);
   }
 
-  private changeAccountStorageEnabled_() {
-    if (this.isAccountStoreUser) {
-      this.disableAccountStorage();
-    } else {
-      this.enableAccountStorage();
-    }
-  }
-
-  private getAccountStorageSubLabel_(accountEmail: string): string {
-    return this.i18n('accountStorageToggleSubLabel', accountEmail);
-  }
-
   // <if expr="is_win or is_macosx">
   private onManagePasskeysClick_() {
     PasskeysBrowserProxyImpl.getInstance().managePasskeys();
@@ -507,8 +481,10 @@ export class SettingsSectionElement extends SettingsSectionElementBase {
 
   private computeShouldShowActorLoginPermissions_(
       actorLoginPermissionsLength: number,
-      isActorLoginPermissionsEnabled: boolean): boolean {
-    return actorLoginPermissionsLength > 0 && isActorLoginPermissionsEnabled;
+      isActorLoginPermissionsEnabled: boolean,
+      isFedCmEmbedderInitiatedLoginEnabled: boolean): boolean {
+    return actorLoginPermissionsLength > 0 && isActorLoginPermissionsEnabled &&
+        !isFedCmEmbedderInitiatedLoginEnabled;
   }
 
   private onMovePasswordsClicked_(e: Event) {
@@ -524,11 +500,11 @@ export class SettingsSectionElement extends SettingsSectionElementBase {
     return this.localPasswordCount_ > 0;
   }
 
-  private getAriaLabelMovePasswordsButton_(): string {
+  private getAriaDescriptionMovePasswordsButton_(movePasswordsLabel: string):
+      string {
     return [
-      this.movePasswordsLabel_,
+      movePasswordsLabel,
       this.i18n('movePasswordsInSettingsSubLabel'),
-      this.i18n('moveSinglePasswordButton'),
     ].join('. ');
   }
 
@@ -558,6 +534,18 @@ export class SettingsSectionElement extends SettingsSectionElementBase {
             connected && (this.isSyncingPasswords || this.isAccountStoreUser));
   }
 
+  private updateTrustedVaultBannerState_(
+      error: PasswordManagerActionableError) {
+    if (error === PasswordManagerActionableError.kTrustedVaultKeyNeeded) {
+      this.trustedVaultBannerState_ = TrustedVaultBannerState.OPTED_IN;
+    } else if (
+        this.trustedVaultBannerState_ === TrustedVaultBannerState.OPTED_IN) {
+      // Re-fetch the state from the browser if we no longer require unlock.
+      SyncBrowserProxyImpl.getInstance().getTrustedVaultBannerState().then(
+          state => this.trustedVaultBannerState_ = state);
+    }
+  }
+
   private onDisconnectCloudAuthenticatorClick_() {
     this.showDisconnectCloudAuthenticatorDialog_ = true;
   }
@@ -580,7 +568,7 @@ export class SettingsSectionElement extends SettingsSectionElementBase {
     this.$.toast.show();
   }
 
-  private getAriaLabelForCloudAuthenticatorButton_(): string {
+  private getAriaDescriptionForCloudAuthenticatorButton_(): string {
     return [
       this.i18n('disconnectCloudAuthenticatorTitle'),
       this.i18n('disconnectCloudAuthenticatorDescription'),

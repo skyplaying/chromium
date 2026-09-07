@@ -21,10 +21,9 @@
 #include "components/download/public/common/download_target_info.h"
 #include "components/safe_browsing/content/common/proto/download_file_types.pb.h"
 #include "components/safe_browsing/core/common/features.h"
-#include "content/public/browser/download_manager_delegate.h"
 
 #if BUILDFLAG(IS_ANDROID)
-#include "components/safe_browsing/android/safe_browsing_api_handler_util.h"
+#include "components/safe_browsing/android/safe_browsing_api_handler_util.h"  // nogncheck crbug.com/40147906
 #endif
 
 class Profile;
@@ -367,6 +366,11 @@ class DownloadTargetDeterminer : public download::DownloadItem::Observer {
   // headers and sniffed mime type.
   base::FilePath GenerateFileName() const;
 
+  // Returns the display name of the file. For regular file paths, this is
+  // `virtual_path_.BaseName()`. For Android content URIs, returns the
+  // selected or resolved display name, falling back to `GenerateFileName()`.
+  base::FilePath GetFileDisplayName() const;
+
   // download::DownloadItem::Observer
   void OnDownloadDestroyed(download::DownloadItem* download) override;
 
@@ -382,6 +386,10 @@ class DownloadTargetDeterminer : public download::DownloadItem::Observer {
   base::FilePath virtual_path_;
   base::FilePath local_path_;
   base::FilePath intermediate_path_;
+  // The directory that should contain the downloaded file. This is used as the
+  // containment directory during path reservation to ensure the suggested path
+  // does not escape it.
+  base::FilePath containment_directory_;
   std::string mime_type_;
   bool is_filetype_handled_safely_ = false;
   download::DownloadItem::InsecureDownloadStatus insecure_download_status_;
@@ -391,6 +399,9 @@ class DownloadTargetDeterminer : public download::DownloadItem::Observer {
   // enabled, we suppress warning based only on the file type since Play
   // Protect will give higher quality warnings.
   bool is_app_verification_enabled_;
+
+  // The display name selected by the user for Content URIs.
+  base::FilePath display_name_;
 #endif
 #if BUILDFLAG(IS_MAC)
   // A list of tags specified by the user to be set on the file upon the

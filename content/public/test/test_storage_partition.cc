@@ -29,12 +29,13 @@ const base::FilePath& TestStoragePartition::GetPath() const {
 network::mojom::NetworkContext* TestStoragePartition::GetNetworkContext() {
   return network_context_;
 }
-cert_verifier::mojom::CertVerifierServiceUpdater*
-TestStoragePartition::GetCertVerifierServiceUpdater() {
-  return nullptr;
+
+bool TestStoragePartition::IsNetworkContextInitialized() {
+  return network_context_ != nullptr;
 }
 
-storage::SharedStorageManager* TestStoragePartition::GetSharedStorageManager() {
+cert_verifier::mojom::CertVerifierServiceUpdater*
+TestStoragePartition::GetCertVerifierServiceUpdater() {
   return nullptr;
 }
 
@@ -140,18 +141,6 @@ TestStoragePartition::GetPlatformNotificationContext() {
   return platform_notification_context_;
 }
 
-InterestGroupManager* TestStoragePartition::GetInterestGroupManager() {
-  return nullptr;
-}
-
-AttributionDataModel* TestStoragePartition::GetAttributionDataModel() {
-  return nullptr;
-}
-
-PrivateAggregationDataModel*
-TestStoragePartition::GetPrivateAggregationDataModel() {
-  return nullptr;
-}
 
 #if BUILDFLAG(ENABLE_LIBRARY_CDMS)
 CdmStorageDataModel* TestStoragePartition::GetCdmStorageDataModel() {
@@ -161,12 +150,13 @@ CdmStorageDataModel* TestStoragePartition::GetCdmStorageDataModel() {
 
 network::mojom::DeviceBoundSessionManager*
 TestStoragePartition::GetDeviceBoundSessionManager() {
-  return device_bound_session_manager_;
+  return device_bound_session_manager_.get();
 }
 
-BrowsingTopicsSiteDataManager*
-TestStoragePartition::GetBrowsingTopicsSiteDataManager() {
-  return browsing_topics_site_data_manager_;
+void TestStoragePartition::OverrideDeviceBoundSessionManagerForTesting(
+    std::unique_ptr<network::mojom::DeviceBoundSessionManager>
+        device_bound_session_manager) {
+  device_bound_session_manager_ = std::move(device_bound_session_manager);
 }
 
 DevToolsBackgroundServicesContext*
@@ -205,7 +195,6 @@ ZoomLevelDelegate* TestStoragePartition::GetZoomLevelDelegate() {
 
 void TestStoragePartition::ClearDataForOrigin(
     uint32_t remove_mask,
-    uint32_t quota_storage_remove_mask,
     const GURL& storage_origin,
     base::OnceClosure callback) {}
 
@@ -215,7 +204,6 @@ void TestStoragePartition::ClearDataForBuckets(
     base::OnceClosure callback) {}
 
 void TestStoragePartition::ClearData(uint32_t remove_mask,
-                                     uint32_t quota_storage_remove_mask,
                                      const blink::StorageKey& storage_key,
                                      const base::Time begin,
                                      const base::Time end,
@@ -223,7 +211,6 @@ void TestStoragePartition::ClearData(uint32_t remove_mask,
 
 void TestStoragePartition::ClearData(
     uint32_t remove_mask,
-    uint32_t quota_storage_remove_mask,
     BrowsingDataFilterBuilder* filter_builder,
     StorageKeyPolicyMatcherFunction storage_key_policy_matcher,
     network::mojom::CookieDeletionFilterPtr cookie_deletion_filter,
@@ -242,6 +229,8 @@ void TestStoragePartition::Flush() {}
 
 void TestStoragePartition::ResetURLLoaderFactories() {}
 
+void TestStoragePartition::ClearBluetoothAllowedDevicesMap() {}
+
 void TestStoragePartition::AddObserver(DataRemovalObserver* observer) {
   data_removal_observer_count_++;
 }
@@ -253,8 +242,6 @@ void TestStoragePartition::RemoveObserver(DataRemovalObserver* observer) {
 int TestStoragePartition::GetDataRemovalObserverCount() {
   return data_removal_observer_count_;
 }
-
-void TestStoragePartition::ClearBluetoothAllowedDevicesMapForTesting() {}
 
 void TestStoragePartition::FlushNetworkInterfaceForTesting() {}
 

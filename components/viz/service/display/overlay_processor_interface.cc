@@ -26,7 +26,6 @@
 #include "components/viz/service/display/overlay_processor_android.h"
 #include "components/viz/service/display/overlay_processor_surface_control.h"
 #elif BUILDFLAG(IS_OZONE)
-#include "components/viz/service/display/overlay_processor_delegated.h"
 #include "components/viz/service/display/overlay_processor_ozone.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_manager.h"
 #include "ui/ozone/public/overlay_manager_ozone.h"
@@ -234,23 +233,6 @@ OverlayCandidate OverlayProcessorInterface::CreatePrimaryPlane(
   return overlay_plane;
 }
 
-void OverlayProcessorInterface::ProcessForOverlays(
-    DisplayResourceProvider* resource_provider,
-    AggregatedRenderPassList* render_passes,
-    const SkM44& output_color_matrix,
-    SurfaceDamageRectList surface_damage_rect_list,
-    const PrimaryPlaneParams& primary_plane_params,
-    CandidateList* overlay_candidates,
-    gfx::Rect* damage_rect,
-    std::vector<gfx::Rect>* content_bounds) {
-  // By default, call the other overload with empty filter maps.
-  ProcessForOverlays(resource_provider, render_passes, output_color_matrix,
-                     /*render_pass_filters=*/{},
-                     /*render_pass_backdrop_filters=*/{},
-                     surface_damage_rect_list, primary_plane_params,
-                     overlay_candidates, damage_rect, content_bounds);
-}
-
 void OverlayProcessorInterface::ScheduleOverlays(
     DisplayResourceProvider* display_resource_provider) {}
 
@@ -258,10 +240,6 @@ void OverlayProcessorInterface::OverlayPresentationComplete() {}
 
 gfx::CALayerResult OverlayProcessorInterface::GetCALayerErrorCode() const {
   return gfx::kCALayerSuccess;
-}
-
-gfx::RectF OverlayProcessorInterface::GetUnassignedDamage() const {
-  return gfx::RectF();
 }
 
 bool OverlayProcessorInterface::SupportsFlipRotateTransform() const {

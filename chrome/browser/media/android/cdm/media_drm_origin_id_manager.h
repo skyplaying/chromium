@@ -18,6 +18,10 @@
 #include "components/keyed_service/core/keyed_service.h"
 #include "media/base/media_drm_storage.h"
 
+namespace base {
+class TickClock;
+}
+
 class MediaDrmOriginIdManagerFactory;
 class PrefRegistrySimple;
 class PrefService;
@@ -72,13 +76,16 @@ class MediaDrmOriginIdManager : public KeyedService {
     provisioning_result_cb_for_testing_ = cb;
   }
 
+  // Overrides the clock used by `backoff_entry_` for testing purposes, allowing
+  // unit tests to simulate advancing mock time under time-based backoff.
+  void SetTickClockForTesting(const base::TickClock* clock);  // IN-TEST
+
  private:
   class NetworkObserver;
   friend class MediaDrmOriginIdManagerFactory;
 
   // Complete the pre-provisioning steps.
-  void ResumePreProvisionIfNecessary(
-      bool is_per_application_provisioning_supported);
+  void ResumePreProvisionIfNecessary();
 
   // Asynchronously call StartProvisioning() on a sequence using different
   // priorities, depending on |run_in_background|.
@@ -87,10 +94,6 @@ class MediaDrmOriginIdManager : public KeyedService {
   // Called when provisioning of |origin_id| is done. The provisioning of
   // |origin_id| was successful if |origin_id| is not nullopt.
   void OriginIdProvisioned(const MediaDrmOriginId& origin_id);
-
-  // Check if per application provisioning is supported or not. Uses
-  // `is_per_application_provisioning_supported_`, and if not set, sets it.
-  bool IsPerApplicationProvisioningSupported();
 
   // If called, record the current number of pre-provisioned origin IDs to UMA.
   void RecordCountOfPreprovisionedOriginIds();
@@ -104,17 +107,14 @@ class MediaDrmOriginIdManager : public KeyedService {
   // false otherwise.
   bool is_provisioning_ = false;
 
-  // True if per-application provisioning is supported. If nullopt, then
-  // support has not yet been determined.
-  std::optional<bool> is_per_application_provisioning_supported_;
-
   // When testing don't call MediaDrm to provision the origin ID, just call
   // this CB and use the value returned to indicate if provisioning succeeded or
   // failed so that tests can verify that the preference is used correctly.
   ProvisioningResultCB provisioning_result_cb_for_testing_;
 
-  // When set, watch for network changes and call PreProvisionIfNecessary()
-  // when connected to a network.
+  // When set, watches for network changes to attempt pre-provisioning when
+  // connected, managing exponential backoff and scheduled retries if attempts
+  // fail.
   std::unique_ptr<NetworkObserver> network_observer_;
 
   THREAD_CHECKER(thread_checker_);

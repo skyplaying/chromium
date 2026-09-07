@@ -5,7 +5,9 @@
 #include "chrome/browser/glic/host/context/glic_delegating_sharing_manager.h"
 
 #include "base/test/bind.h"
+#include "base/test/gmock_expected_support.h"
 #include "base/test/gtest_util.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/glic/host/context/glic_empty_focused_browser_manager.h"
 #include "chrome/browser/glic/host/context/glic_empty_focused_tab_manager.h"
@@ -14,12 +16,11 @@
 #include "chrome/browser/glic/host/glic_features.mojom-features.h"
 #include "chrome/browser/glic/public/context/glic_sharing_manager.h"
 #include "chrome/browser/glic/public/glic_keyed_service.h"
-#include "chrome/browser/glic/test_support/non_interactive_glic_test.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/glic/public/glic_keyed_service_factory.h"
+#include "chrome/browser/glic/test_support/glic_browser_test.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_features.h"
-#include "chrome/test/base/ui_test_utils.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
@@ -31,46 +32,36 @@ namespace glic {
 
 namespace {
 
-class GlicDelegatingSharingManagerBrowserTest : public NonInteractiveGlicTest {
+class GlicDelegatingSharingManagerBrowserTest : public GlicBrowserTest {
  public:
   GlicDelegatingSharingManagerBrowserTest() {
     scoped_feature_list_.InitWithFeatures(
-        {features::kGlic, features::kGlicMultiInstance,
-         mojom::features::kGlicMultiTab, features::kGlicMultitabUnderlines},
-        {});
+        /*enabled_features=*/
+        {features::kGlic},
+        /*disabled_features=*/
+        // TODO(crbug.com/452061489): Fix tests that fail when the WebUI Omnibox
+        // is enabled and then remove these two Features.
+        {omnibox::internal::kWebUIOmniboxPopup,
+         omnibox::internal::kWebUIOmniboxAimPopup});
   }
   ~GlicDelegatingSharingManagerBrowserTest() override = default;
 
   void SetUpOnMainThread() override {
-    NonInteractiveGlicTest::SetUpOnMainThread();
+    GlicBrowserTest::SetUpOnMainThread();
     // No delegate initially.
   }
 
   void TearDownOnMainThread() override {
     manager_.SetDelegate(nullptr);
-    NonInteractiveGlicTest::TearDownOnMainThread();
+    GlicBrowserTest::TearDownOnMainThread();
   }
 
-  // Setup tabs for test and return handles. Uses current tab, but if count > 1
-  // then additional tabs will be created.
+  // Setup tabs for test and return handles.
   std::vector<tabs::TabHandle> SetupTabs(int count) {
-    EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("about:blank")));
-    for (int i = 0; i < count - 1; ++i) {
-      EXPECT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
-          browser(), GURL("about:blank"),
-          WindowOpenDisposition::NEW_FOREGROUND_TAB,
-          ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
-    }
-    TabStripModel* tab_strip = browser()->tab_strip_model();
-
     std::vector<tabs::TabHandle> handles;
     for (int i = 0; i < count; ++i) {
-      tabs::TabInterface* tab =
-          tabs::TabInterface::GetFromContents(tab_strip->GetWebContentsAt(i));
-      EXPECT_TRUE(tab);
-      if (tab) {
-        handles.push_back(tab->GetHandle());
-      }
+      auto* tab = CreateAndActivateTab(GURL("about:blank"));
+      handles.push_back(tab->GetHandle());
     }
     return handles;
   }
@@ -123,10 +114,6 @@ IN_PROC_BROWSER_TEST_F(GlicDelegatingSharingManagerBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(GlicDelegatingSharingManagerBrowserTest,
                        DelegatedBehavior) {
-  GlicKeyedService* service =
-      GlicKeyedServiceFactory::GetGlicKeyedService(browser()->profile());
-  ASSERT_TRUE(service);
-
   // Open a tab and verify we can pin it via delegation.
   std::vector<tabs::TabHandle> handles = SetupTabs(1);
   ASSERT_FALSE(handles.empty());
@@ -134,14 +121,10 @@ IN_PROC_BROWSER_TEST_F(GlicDelegatingSharingManagerBrowserTest,
   tabs::TabInterface* tab = handle.Get();
   ASSERT_TRUE(tab);
 
-  service->ToggleUI(browser(), false,
-                    mojom::InvocationSource::kTopChromeButton);
-
-  auto* instance = service->GetInstanceForActiveTab(browser());
-  ASSERT_TRUE(instance);
+  ASSERT_OK_AND_ASSIGN(auto* instance, OpenGlicForActiveTab());
 
   // Use the real sharing manager as delegation target.
-  auto& real_manager = instance->host().sharing_manager();
+  auto& real_manager = instance->host().GetSharingManagerInternal();
 
   // Ensure the tab in unpinned (may be pinned by default)
   real_manager.UnpinTabs({handle}, GlicUnpinTrigger::kUnknown);
@@ -184,10 +167,6 @@ IN_PROC_BROWSER_TEST_F(GlicDelegatingSharingManagerBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(GlicDelegatingSharingManagerBrowserTest,
                        PinnedTabSubscriptionForwarding) {
-  GlicKeyedService* service =
-      GlicKeyedServiceFactory::GetGlicKeyedService(browser()->profile());
-  ASSERT_TRUE(service);
-
   // Open a tab and verify we can pin it via delegation.
   std::vector<tabs::TabHandle> handles = SetupTabs(1);
   ASSERT_FALSE(handles.empty());
@@ -195,14 +174,10 @@ IN_PROC_BROWSER_TEST_F(GlicDelegatingSharingManagerBrowserTest,
   tabs::TabInterface* tab = handle.Get();
   ASSERT_TRUE(tab);
 
-  service->ToggleUI(browser(), false,
-                    mojom::InvocationSource::kTopChromeButton);
-
-  auto* instance = service->GetInstanceForActiveTab(browser());
-  ASSERT_TRUE(instance);
+  ASSERT_OK_AND_ASSIGN(auto* instance, OpenGlicForActiveTab());
 
   // Use the real sharing manager as delegation target.
-  auto& real_manager = instance->host().sharing_manager();
+  auto& real_manager = instance->host().GetSharingManagerInternal();
 
   // Ensure the tab is unpinned initially.
   real_manager.UnpinTabs({handle}, GlicUnpinTrigger::kUnknown);
@@ -217,7 +192,7 @@ IN_PROC_BROWSER_TEST_F(GlicDelegatingSharingManagerBrowserTest,
   auto pin_event_sub = manager_.AddTabPinningStatusEventCallback(
       pin_event_future.GetRepeatingCallback());
 
-  base::test::TestFuture<const std::vector<content::WebContents*>&>
+  base::test::TestFuture<const std::vector<tabs::TabInterface*>&>
       pinned_tabs_future;
   auto pinned_tabs_sub = manager_.AddPinnedTabsChangedCallback(
       pinned_tabs_future.GetRepeatingCallback());
@@ -225,8 +200,11 @@ IN_PROC_BROWSER_TEST_F(GlicDelegatingSharingManagerBrowserTest,
   base::test::TestFuture<std::string, TabDataChangeCauseSet> tab_data_future;
   auto tab_data_sub = manager_.AddPinnedTabDataChangedCallback(
       base::BindLambdaForTesting([&](const TabDataChange& change) {
-        tab_data_future.SetValue(change.tab_data->title.value_or(""),
-                                 change.causes);
+        if (change.causes.Has(TabDataChangeCause::kTitle) &&
+            !tab_data_future.IsReady()) {
+          tab_data_future.SetValue(change.tab_data->title.value_or(""),
+                                   change.causes);
+        }
       }));
 
   // 1. PIN via manager_ (delegating)
@@ -242,7 +220,7 @@ IN_PROC_BROWSER_TEST_F(GlicDelegatingSharingManagerBrowserTest,
   // Verify Pinned Tabs List Changed
   auto pinned_tabs = pinned_tabs_future.Take();
   EXPECT_EQ(pinned_tabs.size(), 1u);
-  EXPECT_EQ(pinned_tabs[0], tab->GetContents());
+  EXPECT_EQ(pinned_tabs[0], tab);
 
   // 2. MODIFY Tab Title (triggers PinnedTabDataChanged)
   std::u16string new_title = u"New Title";
@@ -276,10 +254,6 @@ IN_PROC_BROWSER_TEST_F(GlicDelegatingSharingManagerBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(GlicDelegatingSharingManagerBrowserTest,
                        FocusedTabSubscriptionForwarding) {
-  GlicKeyedService* service =
-      GlicKeyedServiceFactory::GetGlicKeyedService(browser()->profile());
-  ASSERT_TRUE(service);
-
   // Open a tab.
   std::vector<tabs::TabHandle> handles = SetupTabs(1);
   ASSERT_FALSE(handles.empty());
@@ -287,12 +261,8 @@ IN_PROC_BROWSER_TEST_F(GlicDelegatingSharingManagerBrowserTest,
   tabs::TabInterface* tab1 = handle1.Get();
   ASSERT_TRUE(tab1);
 
-  service->ToggleUI(browser(), false,
-                    mojom::InvocationSource::kTopChromeButton);
-
-  GlicInstance* instance = service->GetInstanceForActiveTab(browser());
-  ASSERT_TRUE(instance);
-  auto& real_manager = instance->host().sharing_manager();
+  ASSERT_OK_AND_ASSIGN(auto* instance, OpenGlicForActiveTab());
+  auto& real_manager = instance->host().GetSharingManagerInternal();
 
   // Ensure clean state.
   real_manager.UnpinAllTabs(GlicUnpinTrigger::kUnknown);
@@ -356,10 +326,7 @@ IN_PROC_BROWSER_TEST_F(GlicDelegatingSharingManagerBrowserTest,
   EXPECT_EQ(focus_tab3, tab1);
 
   // 5. Open new Tab 2 (Active). Not pinned. Should lose focus.
-  ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GURL("about:blank"), WindowOpenDisposition::NEW_FOREGROUND_TAB,
-      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
-  tabs::TabInterface* tab2 = browser()->tab_strip_model()->GetActiveTab();
+  tabs::TabInterface* tab2 = CreateAndActivateTab(GURL("about:blank"));
   ASSERT_NE(tab1, tab2);
   tabs::TabHandle handle2 = tab2->GetHandle();
 
@@ -389,25 +356,26 @@ IN_PROC_BROWSER_TEST_F(GlicDelegatingSharingManagerBrowserTest,
   EXPECT_EQ(title, "Focused Title");
 }
 
+// TODO(crbug.com/494010921): This test is flaky on Android. It occasionally
+// fails to open Glic for a tab, but the flake hasn't reproed locally.
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_DelegateSwapTriggersPinNotifications \
+  DISABLED_DelegateSwapTriggersPinNotifications
+#else
+#define MAYBE_DelegateSwapTriggersPinNotifications \
+  DelegateSwapTriggersPinNotifications
+#endif
 IN_PROC_BROWSER_TEST_F(GlicDelegatingSharingManagerBrowserTest,
-                       DelegateSwapTriggersPinNotifications) {
-  GlicKeyedService* service =
-      GlicKeyedServiceFactory::GetGlicKeyedService(browser()->profile());
-  ASSERT_TRUE(service);
-
+                       MAYBE_DelegateSwapTriggersPinNotifications) {
   // Create 5 tabs.
   std::vector<tabs::TabHandle> handles = SetupTabs(5);
   ASSERT_EQ(handles.size(), 5u);
 
-  TabStripModel* tab_strip = browser()->tab_strip_model();
-
   // Setup manager 1.
-  tab_strip->ActivateTabAt(0);
-  service->ToggleUI(browser(), /*prevent_close=*/false,
-                    mojom::InvocationSource::kTopChromeButton);
-  auto* instance1 = service->GetInstanceForActiveTab(browser());
-  ASSERT_TRUE(instance1);
-  GlicSharingManager& manager1 = instance1->host().sharing_manager();
+  GetTabListInterface()->ActivateTab(handles[0]);
+  ASSERT_OK_AND_ASSIGN(auto* instance1, OpenGlicForActiveTab());
+  GlicSharingManagerInternal& manager1 =
+      instance1->host().GetSharingManagerInternal();
 
   // Pin tabs 0, 1, 2.
   manager1.UnpinAllTabs(GlicUnpinTrigger::kUnknown);
@@ -417,12 +385,10 @@ IN_PROC_BROWSER_TEST_F(GlicDelegatingSharingManagerBrowserTest,
   EXPECT_EQ(manager1.GetPinnedTabs().size(), 3u);
 
   // Setup manager 2.
-  tab_strip->ActivateTabAt(3);
-  service->ToggleUI(browser(), /*prevent_close=*/false,
-                    mojom::InvocationSource::kTopChromeButton);
-  auto* instance2 = service->GetInstanceForActiveTab(browser());
-  ASSERT_TRUE(instance2);
-  GlicSharingManager& manager2 = instance2->host().sharing_manager();
+  GetTabListInterface()->ActivateTab(handles[3]);
+  ASSERT_OK_AND_ASSIGN(auto* instance2, OpenGlicForActiveTab());
+  GlicSharingManagerInternal& manager2 =
+      instance2->host().GetSharingManagerInternal();
 
   // Ensure separate instances.
   ASSERT_NE(&manager1, &manager2);
@@ -439,9 +405,8 @@ IN_PROC_BROWSER_TEST_F(GlicDelegatingSharingManagerBrowserTest,
 
   // Verify initial state.
   EXPECT_THAT(manager_.GetPinnedTabs(),
-              testing::UnorderedElementsAre(handles[0].Get()->GetContents(),
-                                            handles[1].Get()->GetContents(),
-                                            handles[2].Get()->GetContents()));
+              testing::UnorderedElementsAre(handles[0].Get(), handles[1].Get(),
+                                            handles[2].Get()));
 
   // Set up subscription for tab pinning status changes.
   base::test::TestFuture<tabs::TabInterface*, bool> pin_status_future(
@@ -492,20 +457,14 @@ IN_PROC_BROWSER_TEST_F(GlicDelegatingSharingManagerBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(GlicDelegatingSharingManagerBrowserTest,
                        SetSameDelegateDoesNotTriggerPinNotifications) {
-  GlicKeyedService* service =
-      GlicKeyedServiceFactory::GetGlicKeyedService(browser()->profile());
-  ASSERT_TRUE(service);
-
   // Create 3 tabs.
   std::vector<tabs::TabHandle> handles = SetupTabs(3);
   ASSERT_EQ(handles.size(), 3u);
 
   // Setup manager.
-  service->ToggleUI(browser(), /*prevent_close=*/false,
-                    mojom::InvocationSource::kTopChromeButton);
-  auto* instance = service->GetInstanceForActiveTab(browser());
-  ASSERT_TRUE(instance);
-  GlicSharingManager& manager = instance->host().sharing_manager();
+  ASSERT_OK_AND_ASSIGN(auto* instance, OpenGlicForActiveTab());
+  GlicSharingManagerInternal& manager =
+      instance->host().GetSharingManagerInternal();
 
   // Pin tabs 0, 1.
   manager.UnpinAllTabs(GlicUnpinTrigger::kUnknown);
@@ -516,9 +475,9 @@ IN_PROC_BROWSER_TEST_F(GlicDelegatingSharingManagerBrowserTest,
   manager_.SetDelegate(&manager);
 
   // Verify initial state.
-  EXPECT_THAT(manager_.GetPinnedTabs(),
-              testing::UnorderedElementsAre(handles[0].Get()->GetContents(),
-                                            handles[1].Get()->GetContents()));
+  EXPECT_THAT(
+      manager_.GetPinnedTabs(),
+      testing::UnorderedElementsAre(handles[0].Get(), handles[1].Get()));
 
   // Setup subscription to consume status changes.
   bool callback_called = false;
@@ -540,19 +499,16 @@ IN_PROC_BROWSER_TEST_F(GlicDelegatingSharingManagerBrowserTest,
   EXPECT_FALSE(callback_called);
 
   // Verify state is still correct.
-  EXPECT_THAT(manager_.GetPinnedTabs(),
-              testing::UnorderedElementsAre(handles[0].Get()->GetContents(),
-                                            handles[1].Get()->GetContents()));
+  EXPECT_THAT(
+      manager_.GetPinnedTabs(),
+      testing::UnorderedElementsAre(handles[0].Get(), handles[1].Get()));
 }
 
 class GlicStablePinningDelegatingSharingManagerBrowserTest
-    : public NonInteractiveGlicTest {
+    : public GlicBrowserTest {
  public:
   GlicStablePinningDelegatingSharingManagerBrowserTest() {
-    scoped_feature_list_.InitWithFeatures(
-        {features::kGlic, features::kGlicMultiInstance,
-         mojom::features::kGlicMultiTab, features::kGlicMultitabUnderlines},
-        {});
+    scoped_feature_list_.InitWithFeatures({features::kGlic}, {});
   }
 
   std::unique_ptr<GlicSharingManagerImpl> CreateSharingManager(
@@ -560,7 +516,7 @@ class GlicStablePinningDelegatingSharingManagerBrowserTest
     return std::make_unique<GlicSharingManagerImpl>(
         std::make_unique<GlicEmptyFocusedTabManager>(),
         std::make_unique<GlicEmptyFocusedBrowserManager>(), pinned_tab_manager,
-        browser()->profile(), /*metrics=*/nullptr);
+        GetProfile(), /*metrics=*/nullptr);
   }
 
  private:
@@ -568,9 +524,16 @@ class GlicStablePinningDelegatingSharingManagerBrowserTest
 };
 
 // TODO(b:479854184): make this work on Android.
-#if !BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_StablePinningDelegateSwap DISABLED_StablePinningDelegateSwap
+// TODO(crbug.com/542347163): Re-enable test.
+#elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#define MAYBE_StablePinningDelegateSwap DISABLED_StablePinningDelegateSwap
+#else
+#define MAYBE_StablePinningDelegateSwap StablePinningDelegateSwap
+#endif
 IN_PROC_BROWSER_TEST_F(GlicStablePinningDelegatingSharingManagerBrowserTest,
-                       StablePinningDelegateSwap) {
+                       MAYBE_StablePinningDelegateSwap) {
   // Subclass to access protected members for verification.
   class TestStableManager : public GlicStablePinningDelegatingSharingManager {
    public:
@@ -597,7 +560,6 @@ IN_PROC_BROWSER_TEST_F(GlicStablePinningDelegatingSharingManagerBrowserTest,
   // Swapping to manager2 should crash (different pinned manager).
   EXPECT_CHECK_DEATH(stable_manager.SetDelegate(manager2.get()));
 }
-#endif  // !BUILDFLAG(IS_ANDROID)
 
 // Spy class to intercept window activation changes.
 class SpyFocusedBrowserManager : public GlicEmptyFocusedBrowserManager {
@@ -624,7 +586,7 @@ IN_PROC_BROWSER_TEST_F(GlicStablePinningDelegatingSharingManagerBrowserTest,
   SpyFocusedBrowserManager* spy1 = focused_browser_manager1.get();
   auto manager1 = std::make_unique<GlicSharingManagerImpl>(
       std::make_unique<GlicEmptyFocusedTabManager>(),
-      std::move(focused_browser_manager1), &pinned_mgr, browser()->profile(),
+      std::move(focused_browser_manager1), &pinned_mgr, GetProfile(),
       /*metrics=*/nullptr);
 
   GlicStablePinningDelegatingSharingManager stable_manager(manager1.get());
@@ -638,7 +600,7 @@ IN_PROC_BROWSER_TEST_F(GlicStablePinningDelegatingSharingManagerBrowserTest,
   SpyFocusedBrowserManager* spy2 = focused_browser_manager2.get();
   auto manager2 = std::make_unique<GlicSharingManagerImpl>(
       std::make_unique<GlicEmptyFocusedTabManager>(),
-      std::move(focused_browser_manager2), &pinned_mgr, browser()->profile(),
+      std::move(focused_browser_manager2), &pinned_mgr, GetProfile(),
       /*metrics=*/nullptr);
 
   // Set delegate. Should propagate cached "true" state.

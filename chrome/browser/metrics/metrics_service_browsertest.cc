@@ -26,7 +26,7 @@
 #include "chrome/browser/metrics/chrome_metrics_service_accessor.h"
 #include "chrome/browser/metrics/chrome_metrics_service_client.h"
 #include "chrome/browser/metrics/chrome_metrics_services_manager_client.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/url_constants.h"
@@ -127,7 +127,7 @@ class MetricsServiceBrowserTest : public InProcessBrowserTest {
 
     // Kill the process for one of the tabs by navigating to |crashy_url|.
     content::RenderProcessHostWatcher observer(
-        browser()->tab_strip_model()->GetActiveWebContents(),
+        browser()->GetTabStripModel()->GetActiveWebContents(),
         content::RenderProcessHostWatcher::WATCH_FOR_PROCESS_EXIT);
     // Opens one tab.
     ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL(crashy_url)));
@@ -181,11 +181,12 @@ IN_PROC_BROWSER_TEST_F(MetricsServiceBrowserTest, CloseRenderersNormally) {
 
 // Child crashes fail the process on ASan (see crbug.com/40383003,
 // crbug.com/40363314).
+// TODO(crbug.com/487848164): Flaky on Windows.
 // Note to sheriffs: Do not disable these tests if they starts to flake. If
 // either of these tests start to fail then changes likely need to be made
 // elsewhere in crash processing, metrics analysis, and dashboards. Please
 // consult Stability Team before disabling.
-#if defined(ADDRESS_SANITIZER)
+#if defined(ADDRESS_SANITIZER) || BUILDFLAG(IS_WIN)
 #define MAYBE_CrashRenderers DISABLED_CrashRenderers
 #define MAYBE_CheckCrashRenderers DISABLED_CheckCrashRenderers
 #else
@@ -216,7 +217,7 @@ IN_PROC_BROWSER_TEST_F(MetricsServiceBrowserTest, MAYBE_CrashRenderers) {
 
 // Test is disabled on Windows AMR64 because
 // TerminateWithHeapCorruption() isn't expected to work there.
-// See: https://crbug.com/1054423
+// See: https://crbug.com/40119520
 #if BUILDFLAG(IS_WIN)
 // TODO(crbug.com/380550755): Unfortuntely, it's flaky on non-arm64.
 // Previously, this was turned off only if defined(ARCH_CPU_ARM64).
@@ -260,11 +261,13 @@ IN_PROC_BROWSER_TEST_F(MetricsServiceBrowserTest, MAYBE_CheckCrashRenderers) {
 #elif BUILDFLAG(IS_MAC)
   VerifyRendererExitCodeIsSignal(histogram_tester, SIGTRAP);
 #elif BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-#if defined(OFFICIAL_BUILD)
+#if defined(ARCH_CPU_ARM64)
+  VerifyRendererExitCodeIsSignal(histogram_tester, SIGTRAP);
+#elif defined(OFFICIAL_BUILD)
   VerifyRendererExitCodeIsSignal(histogram_tester, SIGILL);
 #else
   VerifyRendererExitCodeIsSignal(histogram_tester, SIGSEGV);
-#endif  // defined(OFFICIAL_BUILD)
+#endif  // defined(ARCH_CPU_ARM64)
 #endif
 }
 

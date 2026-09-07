@@ -16,6 +16,7 @@
 #include "android_webview/browser/aw_metrics_service_client_delegate.h"
 #include "android_webview/browser/metrics/android_metrics_provider.h"
 #include "android_webview/browser/metrics/aw_metrics_service_client.h"
+#include "android_webview/browser/safe_browsing/aw_url_checker_delegate_impl.h"
 #include "android_webview/browser/supervised_user/aw_supervised_user_url_classifier.h"
 #include "android_webview/browser/tracing/aw_tracing_delegate.h"
 #include "android_webview/browser/variations/aw_entropy_providers.h"
@@ -55,7 +56,7 @@
 #include "components/variations/pref_names.h"
 #include "components/variations/service/safe_seed_manager.h"
 #include "components/variations/service/variations_service.h"
-#include "components/variations/variations_safe_seed_store_local_state.h"
+#include "components/variations/variations_safe_seed_store.h"
 #include "components/variations/variations_switches.h"
 #include "content/public/common/content_switch_dependent_feature_overrides.h"
 #include "net/base/features.h"
@@ -68,9 +69,14 @@ namespace {
 bool g_signature_verification_enabled = true;
 
 // A list of Finch study names that should use the nonembedded low entropy
-// source.
+// source. IMPORTANT: Any experiment listed here must not be part of a layer.
 const char* const kNonembeddedLowEntropySourceAllowlist[] = {
+    "DefaultPassthroughCommandDecoder",
+    "WebViewFasterGetDefaultUserAgent",
+    "WebViewStartupNonBlockingWebViewConstructor",
+    "WebViewStaticMethodsNotTriggerStartup",
     "WebViewTestNonembeddedLowEntropySource",
+    "WebViewProfileStoreNotTriggerStartup"
 };
 
 // These prefs go in the JsonPrefStore, and will persist across runs. Other
@@ -78,6 +84,9 @@ const char* const kNonembeddedLowEntropySourceAllowlist[] = {
 const char* const kPersistentPrefsAllowlist[] = {
     // Restricted content blocking.
     android_webview::prefs::kShouldBlockRestrictedContent,
+
+    // Safe Browsing user opt-in.
+    android_webview::prefs::kSafeBrowsingUserOptIn,
 
     // Last known value of the app's cache quota.
     android_webview::prefs::kLastKnownAppCacheQuota,
@@ -189,6 +198,7 @@ std::unique_ptr<PrefService> AwFeatureListCreator::CreatePrefService() {
   AwTracingDelegate::RegisterPrefs(pref_registry.get());
   AwBrowserContextStore::RegisterPrefs(pref_registry.get());
   AwSupervisedUserUrlClassifier::RegisterPrefs(pref_registry.get());
+  AwUrlCheckerDelegateImpl::RegisterPrefs(pref_registry.get());
 
   PrefServiceFactory pref_service_factory;
 
@@ -245,12 +255,9 @@ void AwFeatureListCreator::SetUpFieldTrials() {
     seed->country = seed_proto->country();
     seed->date = seed_date;
     seed->is_gzip_compressed = seed_proto->is_gzip_compressed();
-    // Use the cached flag to gate the nonembedded low entropy source logic.
-    // This is required because entropy provider selection happens before
-    // the variations framework is fully initialized.
-    if (CachedFlags::IsEnabled(
-            features::kWebViewUseNonembeddedLowEntropySource) &&
-        seed_proto->has_low_entropy_source()) {
+    // Reading without checking for presence would result in a default value of
+    // 0, which would be indistinguishable from a valid low entropy source.
+    if (seed_proto->has_low_entropy_source()) {
       nonembedded_low_entropy_source = seed_proto->low_entropy_source();
     }
   }
@@ -258,8 +265,12 @@ void AwFeatureListCreator::SetUpFieldTrials() {
   client_ = std::make_unique<AwVariationsServiceClient>();
   auto seed_store = std::make_unique<variations::VariationsSeedStore>(
       local_state_.get(), /*initial_seed=*/std::move(seed),
-      /*signature_verification_enabled=*/g_signature_verification_enabled,
-      std::make_unique<variations::VariationsSafeSeedStoreLocalState>(
+      /*signature_verification_enabled_on_load=*/
+      client_->EnableSignatureVerificationOnLoad() &&
+          g_signature_verification_enabled,
+      /*signature_verification_enabled_on_receive=*/
+      g_signature_verification_enabled,
+      std::make_unique<variations::VariationsSafeSeedStore>(
           local_state_.get(), client_->GetVariationsSeedFileDir(),
           client_->GetChannelForVariations(), /*entropy_providers=*/nullptr),
       client_->GetChannelForVariations(), client_->GetVariationsSeedFileDir(),
@@ -321,10 +332,7 @@ void AwFeatureListCreator::SetUpFieldTrials() {
   // variation_ids can be overridden by calls to ForceVariationIds in other
   // places.
   variations_field_trial_creator_->SetUpFieldTrials(
-      variation_ids,
-      command_line->GetSwitchValueASCII(
-          variations::switches::kForceVariationIds),
-      GetSwitchDependentFeatureOverrides(*command_line),
+      variation_ids, GetSwitchDependentFeatureOverrides(*command_line),
       std::move(feature_list), metrics_client->metrics_state_manager(),
       aw_field_trials_.get(), &ignored_safe_seed_manager,
       /*add_entropy_source_to_variations_ids=*/true, *entropy_providers);

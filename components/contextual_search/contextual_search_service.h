@@ -7,6 +7,9 @@
 
 #include <map>
 #include <memory>
+#include <optional>
+#include <string>
+#include <vector>
 
 #include "base/memory/weak_ptr.h"
 #include "base/unguessable_token.h"
@@ -39,13 +42,20 @@ class ContextualSearchService : public KeyedService {
   using SessionId = base::UnguessableToken;
   class SessionHandle;
 
+  using GetAuthHeadersCallback = base::RepeatingCallback<void(
+      std::optional<size_t>,
+      base::OnceCallback<void(std::vector<std::string>)>)>;
+
   ContextualSearchService(
       signin::IdentityManager* identity_manager,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       TemplateURLService* template_url_service,
       variations::VariationsClient* variations_client,
       version_info::Channel channel,
-      const std::string& locale);
+      const std::string& locale,
+      std::unique_ptr<ContextualSearchSessionHandle::TabValidator>
+          tab_validator,
+      GetAuthHeadersCallback get_auth_headers_callback);
   ~ContextualSearchService() override;
 
   // KeyedService:
@@ -89,11 +99,16 @@ class ContextualSearchService : public KeyedService {
   ContextualSearchMetricsRecorder* GetSessionMetricsRecorder(
       const SessionId& session_id);
 
+  // Called by SessionHandle to retrieve the tab validator.
+  ContextualSearchSessionHandle::TabValidator* GetTabValidator() const;
+
   // Called by SessionHandle to manage ref counts.
   void ReleaseSession(const SessionId& session_id);
 
   // Map of active sessions, keyed by the session ID.
   std::map<SessionId, ContextualSearchSessionEntry> sessions_;
+
+  std::unique_ptr<ContextualSearchSessionHandle::TabValidator> tab_validator_;
 
   raw_ptr<signin::IdentityManager> identity_manager_;
   const scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
@@ -101,6 +116,7 @@ class ContextualSearchService : public KeyedService {
   const raw_ptr<variations::VariationsClient> variations_client_;
   const version_info::Channel channel_;
   const std::string locale_;
+  GetAuthHeadersCallback get_auth_headers_callback_;
 
   base::WeakPtrFactory<ContextualSearchService> weak_ptr_factory_{this};
 };

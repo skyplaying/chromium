@@ -2,22 +2,50 @@
 
 ## How to run Clippy lints against Rust code in Chromium
 
-To opt into running Clippy, please set `enable_rust_clippy = true` in `args.gn`.
-With this `args.gn` setting building a 1st-party Rust library will also
-invoke Clippy.
+When building locally, Clippy is disabled by default to avoid adding build
+overhead to Chromium engineers primarily working with C, C++, or Java.
 
-Clippy is disabled by default to avoid adding build overhead to
-Chromium engineers primarily working with C, C++, or Java.
+However, Clippy warnings are enforced by the CQ. Therefore, it is strongly
+recommended that engineers working with Rust code enable Clippy warnings by
+setting  `enable_rust_clippy = true` in their `args.gn`.
 
-> TODO(https://crbug.com/41484295): Another, _temporary_ reason for disabling
-> Clippy by default, is that we don't yet enforce Clippy-cleaniness and
-> therefore Chromium is not yet Clippy-clean.
-> Once Clippy is enabled on some CQ bots, then we should:
->
-> - Delete this snippet that talks about "temporary reason"
-> - Mention CQ coverage (the fact that it exists + which bots).
-> - Encourage everyone working with Rust sources to "shift left"
->   and set `enable_rust_clippy = true`.
+Doing so allows you to fix Clippy warnings as they occur, rather than waiting to
+discover them until after uploading a CL and running it through the CQ.  It also
+lets you verify that you've fixed all the problems when rebuilding locally.
+
+## Chromium policy
+
+Chromium has a relaxed, non-strict Clippy policy.
+Clippy is a tool that hopefully helps to improve the quality of Chromium code,
+but ultimately we trust the judgement of Chromium engineers.
+
+* We hope that *most* Clippy violations
+  point out actual opportunities for improving the code
+  (e.g. catching common mistakes, teaching idiomatic Rust patterns, etc.).
+* If a Clippy lint doesn’t seem useful in a certain scenario,
+  then use your best judgement
+  and feel free to suppress the lint using the `#[allow(...)]` macro.
+    - We recommend leaving a short comment
+      that will help future readers understand
+      why the lint was suppressed.
+    - We recommend consulting with the
+      [@security team](https://groups.google.com/u/1/a/chromium.org/g/security)
+      before suppressing `unsafe`-related lints like
+      [`clippy::missing_safety_doc`](https://rust-lang.github.io/rust-clippy/master/index.html?search=safe#missing_safety_doc)
+      or
+      [`clippy::clippy::undocumented_unsafe_blocks`](https://rust-lang.github.io/rust-clippy/master/index.html?search=safe#undocumented_unsafe_blocks).
+    - We recommend applying suppression to a single item,
+      but it is okay to suppress at a module, or crate level if it makes sense
+      (e.g. if all functions in a given test module
+      have to violate a certain lint)
+* If a Clippy lint is frequently suppressed, then
+  one option on the table is
+  disabling the lint globally in Chromium - please talk with
+  [@chrome-rust](https://groups.google.com/a/google.com/g/chrome-rust)
+  if you find yourself oftentimes disabling a particular lint.
+
+For a list of Clippy lints that apply by default to Chromium targets please
+see the `//build/config/compiler:default_clippy_lints` target.
 
 ## Known issues
 
@@ -26,19 +54,84 @@ Chromium engineers primarily working with C, C++, or Java.
   `clippy::missing_safety_doc` triggers on `cxx::bridge`-generated code
   ([Example `#[allow(...)]` used as a workaround](https://source.chromium.org/chromium/chromium/src/+/main:mojo/public/rust/sequences/cxx.rs;l=24-25;drc=3abf739f4b711e4339c793af95ab482ca3a6c7fc))
 
+## Clippy coverage in Chromium CQ/CI
+
+Clippy is enabled on a subset of CQ bots:
+`android-arm64-rel`,
+`linux-chromeos-rel`,
+`linux-rel`,
+`mac-rel`,
+`win-rel`.
+
+TODO(https://crbug.com/41484295): Add other bots and target platforms
+if additional code needs to be covered by Clippy (`ios-simulator`?).
+
 ## Future work
 
 Next steps:
 
-* Experiment with tooling for automatically applying
-  fixes suggested by Clippy (and/or `rustc`)
-* Add a very brief section documenting the Chromium policy for Clippy.
-  Initial draft: https://docs.google.com/document/d/1S3gs-PV_lrS6Sshw7x-We0WkQN28cskL02F9ZS6L6oo/edit?usp=sharing
-* Enable Clippy on some CQ bots + do a broader announcement
 * Figure out how Chromium-specific lints can be added
 * Consider opting into additional lints.  Examples:
     - [`undocumented_unsafe_blocks`](https://rust-lang.github.io/rust-clippy/master/index.html#undocumented_unsafe_blocks)
     - [`multiple_unsafe_ops_per_block`](https://rust-lang.github.io/rust-clippy/master/index.html?groups=restriction#multiple_unsafe_ops_per_block)
+
+## Automatically applying fix suggestions
+
+### IDE integration
+
+TODO: See if/how this works + write this section.
+
+
+### Command-line
+
+When build fails because of Clippy, then
+a note toward the end spells out a command
+for using `build/rust/apply_fixes.py`
+to apply machine-applicable fix suggestions
+from this particular Clippy invocation.
+
+Example:
+
+```
+$ autoninja -C out/rel ...
+...
+error: this expression creates a reference which is immediately dereferenced by the compiler
+   --> ../../third_party/blink/renderer/core/xml/parser/xml_ffi.rs:271:33
+    |
+271 |                 q_name.push_str(&pref);
+    |                                 ^^^^^ help: change this to: `pref`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_borrow
+    = note: `-D clippy::needless-borrow` implied by `-D clippy::style`
+    = help: to override `-D clippy::style` add `#[allow(clippy::needless_borrow)]`
+
+error: aborting due to 1 previous error
+
+NOTE: See `//docs/rust/clippy.md` for more Clippy info.
+NOTE: To apply machine-applicable fix suggestions (if any) run: build/rust/apply_fixes.py out/rel clippy-driver obj/third_party/blink/renderer/core/xml_ffi.rustflags.json
+...
+
+$ build/rust/apply_fixes.py out/rel clippy-driver obj/third_party/blink/renderer/core/xml_ffi.rustflags.json
+Invoking clippy-driver to repro the build problem...
+Looking for machine-applicable fixes...
+Applying fixes to `../../third_party/blink/renderer/core/xml/parser/xml_ffi.rs`...
+  Applying a fix on line 271...
+
+$ git diff
+diff --git a/third_party/blink/renderer/core/xml/parser/xml_ffi.rs b/third_party/blink/renderer/core/xml/parser/xml_ffi.rs
+index 707c74bf87784..b02eaf1266d2c 100644
+--- a/third_party/blink/renderer/core/xml/parser/xml_ffi.rs
++++ b/third_party/blink/renderer/core/xml/parser/xml_ffi.rs
+@@ -268,7 +268,7 @@ fn attributes_next<'a>(
+         match &name.prefix {
+             Some(pref) => {
+                 let mut q_name = String::with_capacity(pref.len() + 1 + name.local_name.len());
+-                q_name.push_str(&pref);
++                q_name.push_str(pref);
+                 q_name.push(':');
+                 q_name.push_str(&name.local_name);
+                 attribute_view.as_mut().Populate(
+```
 
 ## Implementation detail: When exactly does Clippy run?
 

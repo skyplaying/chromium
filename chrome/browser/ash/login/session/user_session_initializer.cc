@@ -6,8 +6,9 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
+#include "ash/constants/chrome_pref_names.h"
 #include "ash/system/media/media_notification_provider.h"
-#include "base/debug/crash_logging.h"
+#include "base/check_deref.h"
 #include "base/files/file_util.h"
 #include "base/path_service.h"
 #include "base/system/sys_info.h"
@@ -30,8 +31,6 @@
 #include "chrome/browser/ash/guest_os/guest_os_session_tracker_factory.h"
 #include "chrome/browser/ash/login/startup_utils.h"
 #include "chrome/browser/ash/phonehub/phone_hub_manager_factory.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_manager.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_manager_factory.h"
 #include "chrome/browser/ash/policy/reporting/app_install_event_log_manager_wrapper.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/browser_process.h"
@@ -49,8 +48,6 @@
 #include "chrome/browser/ui/ash/holding_space/holding_space_keyed_service_factory.h"
 #include "chrome/browser/ui/ash/media_client/media_client_impl.h"
 #include "chrome/browser/ui/webui/ash/settings/pages/privacy/peripheral_data_access_handler.h"
-#include "chrome/common/chrome_features.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/audio/cras_audio_handler.h"
 #include "chromeos/ash/components/boca/boca_role_util.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
@@ -70,6 +67,7 @@
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "media/base/media_switches.h"
+#include "rlz/buildflags/buildflags.h"
 
 #if BUILDFLAG(ENABLE_RLZ)
 #include "chrome/browser/rlz/chrome_rlz_tracker_delegate.h"
@@ -131,7 +129,9 @@ void OnGotNSSCertDatabaseForUser(net::NSSCertDatabase* database) {
 }  // namespace
 
 UserSessionInitializer::UserSessionInitializer(
-    session_manager::SessionManager* session_manager) {
+    PrefService* local_state,
+    session_manager::SessionManager* session_manager)
+    : local_state_(CHECK_DEREF(local_state)) {
   CHECK(session_manager);
   DCHECK(!g_instance);
   g_instance = this;
@@ -150,33 +150,8 @@ UserSessionInitializer* UserSessionInitializer::Get() {
 }
 
 void UserSessionInitializer::OnUserProfileLoaded(const AccountId& account_id) {
-  // TODO(b/371636008): Remove after fixing the crash.
-  using user_manager::UserManager;
-  SCOPED_CRASH_KEY_NUMBER("UserSessionInitializer", "LoggedInUsers",
-                          UserManager::Get()->GetLoggedInUsers().size());
-  SCOPED_CRASH_KEY_NUMBER(
-      "UserSessionInitializer", "LoadedProfiles",
-      g_browser_process->profile_manager()->GetLoadedProfiles().size());
-  SCOPED_CRASH_KEY_BOOL("UserSessionInitializer", "FindUser",
-                        UserManager::Get()->FindUser(account_id) != nullptr);
-  if (auto* found_user = UserManager::Get()->FindUser(account_id);
-      found_user != nullptr) {
-    SCOPED_CRASH_KEY_NUMBER("UserSessionInitializer", "UserType",
-                            static_cast<int>(found_user->GetType()));
-    SCOPED_CRASH_KEY_BOOL("UserSessionInitializer", "ProfileCreated",
-                          found_user->is_profile_created());
-    SCOPED_CRASH_KEY_BOOL("UserSessionInitializer", "IsPrimary",
-                          UserManager::Get()->GetPrimaryUser() == found_user);
-    SCOPED_CRASH_KEY_BOOL("UserSessionInitializer", "IsActive",
-                          UserManager::Get()->GetActiveUser() == found_user);
-    SCOPED_CRASH_KEY_NUMBER("UserSessionInitializer", "NameHashSize",
-                            found_user->username_hash().size());
-  }
-
   Profile* profile = ProfileHelper::Get()->GetProfileByAccountId(account_id);
-  CHECK(profile);
   user_manager::User* user = ProfileHelper::Get()->GetUserByProfile(profile);
-  CHECK(user);
 
   if (user_manager::UserManager::Get()->GetPrimaryUser() == user) {
     // TODO(https://crbug.com/1208416): Investigate why OnUserProfileLoaded
@@ -216,11 +191,8 @@ void UserSessionInitializer::InitRlz(Profile* profile) {
   // if it is empty.  The latter is to correct a problem in older builds where
   // an empty brand code would be persisted if the first login after OOBE was
   // a guest session.
-  if (!g_browser_process->local_state()->HasPrefPath(::prefs::kRLZBrand) ||
-      g_browser_process->local_state()
-          ->GetValue(::prefs::kRLZBrand)
-          .GetString()
-          .empty()) {
+  if (!local_state_->HasPrefPath(ash::prefs::kRLZBrand) ||
+      local_state_->GetValue(ash::prefs::kRLZBrand).GetString().empty()) {
     // Read brand code asynchronously from an OEM data and repost ourselves.
     google_brand::chromeos::InitBrand(base::BindOnce(
         &UserSessionInitializer::InitRlz, weak_factory_.GetWeakPtr(), profile));
@@ -283,11 +255,18 @@ void UserSessionInitializer::InitializePrimaryProfileServices(
     // regular users only. `AppInstallEventLogManagerWrapper` and
     // `ExtensionInstallEventLogManagerWrapper` manages their own lifetime and
     // self-destruct on logout.
-    policy::AppInstallEventLogManagerWrapper::CreateForProfile(profile);
+    policy::AppInstallEventLogManagerWrapper::CreateForProfile(
+        &local_state_.get(), profile);
   }
 
   arc::ArcServiceLauncher::Get()->OnPrimaryUserProfilePrepared(profile);
   guest_os::GuestOsSessionTrackerFactory::GetForProfile(profile);
+
+  crostini::CrostiniManager* crostini_manager =
+      crostini::CrostiniManager::GetForProfile(profile);
+  if (crostini_manager) {
+    crostini_manager->OnUserProfilePrepared();
+  }
 
   if (::captions::IsLiveCaptionFeatureSupported()) {
     SystemLiveCaptionServiceFactory::GetInstance()->GetForProfile(profile);
@@ -318,8 +297,7 @@ void UserSessionInitializer::OnUserSessionStarted(bool is_primary_user) {
     BocaManagerFactory::GetInstance()->GetForProfile(profile);
   }
 
-  screen_ai::dlc_installer::ManageInstallation(
-      g_browser_process->local_state());
+  screen_ai::dlc_installer::ManageInstallation(&local_state_.get());
 
   if (is_primary_user) {
     DCHECK_EQ(primary_profile_, profile);
@@ -331,11 +309,6 @@ void UserSessionInitializer::OnUserSessionStarted(bool is_primary_user) {
     // primary profile.
     phonehub::PhoneHubManagerFactory::GetForProfile(profile);
     eche_app::EcheAppManagerFactory::GetForProfile(profile);
-
-    plugin_vm::PluginVmManager* plugin_vm_manager =
-        plugin_vm::PluginVmManagerFactory::GetForProfile(primary_profile_);
-    if (plugin_vm_manager)
-      plugin_vm_manager->OnPrimaryUserSessionStarted();
 
     VmCameraMicManager::Get()->OnPrimaryUserSessionStarted(primary_profile_);
 
@@ -418,27 +391,25 @@ void UserSessionInitializer::InitRlzImpl(Profile* profile,
   //     sessions have ever been used on this device. This is the only
   //     situation where the enrollment state is NOT KNOWN at this point.
 
-  PrefService* local_state = g_browser_process->local_state();
   if (params.disabled || (profile->IsGuestSession() &&
                           !InstallAttributes::Get()->IsDeviceLocked())) {
     // Empty brand code means an organic install (no RLZ pings are sent).
     google_brand::chromeos::ClearBrandForCurrentSession();
   }
-  if (params.disabled != local_state->GetBoolean(::prefs::kRLZDisabled)) {
+  if (params.disabled != local_state_->GetBoolean(ash::prefs::kRLZDisabled)) {
     // When switching to RLZ enabled/disabled state, clear all recorded events.
     rlz::RLZTracker::ClearRlzState();
-    local_state->SetBoolean(::prefs::kRLZDisabled, params.disabled);
+    local_state_->SetBoolean(ash::prefs::kRLZDisabled, params.disabled);
   }
   // Init the RLZ library.
   int ping_delay =
-      profile->GetPrefs()->GetInteger(::prefs::kRlzPingDelaySeconds);
+      profile->GetPrefs()->GetInteger(ash::chrome_prefs::kRlzPingDelaySeconds);
   // Negative ping delay means to send ping immediately after a first search is
   // recorded.
   bool send_ping_immediately = ping_delay < 0;
   base::TimeDelta delay =
       base::Seconds(abs(ping_delay)) - params.time_since_oobe_completion;
-  rlz::RLZTracker::SetRlzDelegate(
-      base::WrapUnique(new ChromeRLZTrackerDelegate));
+  rlz::RLZTracker::SetRlzDelegate(std::make_unique<ChromeRLZTrackerDelegate>());
   rlz::RLZTracker::InitRlzDelayed(
       user_manager::UserManager::Get()->IsCurrentUserNew(),
       send_ping_immediately, delay,

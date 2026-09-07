@@ -19,16 +19,15 @@
 #include "chrome/browser/actor/ui/event_dispatcher.h"
 #include "chrome/browser/actor/ui/test_support/mock_event_dispatcher.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webid/account_selection_view.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/browser/webid/identity_request_account.h"
 #include "content/public/browser/webid/identity_request_dialog_controller.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/mojom/webid/federated_auth_request.mojom.h"
+#include "third_party/blink/public/mojom/webid/federated_request.mojom.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -59,6 +58,8 @@ class MockAccountSelectionView : public AccountSelectionView {
 
   MockAccountSelectionView(const MockAccountSelectionView&) = delete;
   MockAccountSelectionView& operator=(const MockAccountSelectionView&) = delete;
+
+  MOCK_METHOD(void, OnPageActionClicked, (), (override));
 
   MOCK_METHOD(
       bool,
@@ -106,7 +107,7 @@ class MockAccountSelectionView : public AccountSelectionView {
                blink::mojom::RpMode),
               (override));
 
-  MOCK_METHOD(void, SetCanShowWidget, (bool can_show_widget), (override));
+  MOCK_METHOD(void, SetCanShowUi, (bool can_show_ui), (override));
 
   MOCK_METHOD(std::string, GetTitle, (), (const, override));
 
@@ -116,7 +117,10 @@ class MockAccountSelectionView : public AccountSelectionView {
 
   MOCK_METHOD(content::WebContents*,
               ShowModalDialog,
-              (const GURL& url, blink::mojom::RpMode rp_mode),
+              (const GURL& url,
+               blink::mojom::RpMode rp_mode,
+               content::IdentityRequestDialogController::ShownModalAsyncCallback
+                   on_shown_async),
               (override));
 
   MOCK_METHOD(void, CloseModalDialog, (), (override));
@@ -176,11 +180,11 @@ class IdentityDialogControllerBrowserTest : public InProcessBrowserTest {
 
   TaskId SimulateNewActiveActorTask() {
     actor::ActorKeyedService* actor_service =
-        actor::ActorKeyedService::Get(browser()->profile());
+        actor::ActorKeyedService::Get(browser()->GetProfile());
     CHECK(actor_service);
 
-    actor::TaskId task_id =
-        actor_service->CreateTask(actor::NoEnterprisePolicyChecker());
+    actor::TaskId task_id = actor_service->CreateTask(
+        actor::TestTaskSourceInfo(), actor::NoEnterprisePolicyChecker());
 
     // Perform an arbitrary action in a tab to put the task into
     // UnderActorControl state and add the tab to the task.
@@ -203,7 +207,7 @@ class IdentityDialogControllerBrowserTest : public InProcessBrowserTest {
   void SimulateActorTaskFinished(IdentityDialogController* controller,
                                  TaskId task_id) {
     actor::ActorKeyedService* actor_service =
-        actor::ActorKeyedService::Get(browser()->profile());
+        actor::ActorKeyedService::Get(browser()->GetProfile());
     EXPECT_NE(actor_service, nullptr);
     actor_service->StopTask(task_id,
                             actor::ActorTask::StoppedReason::kTaskComplete);
@@ -211,7 +215,7 @@ class IdentityDialogControllerBrowserTest : public InProcessBrowserTest {
 };
 
 IN_PROC_BROWSER_TEST_F(IdentityDialogControllerBrowserTest,
-                       ActorTaskStateChangesCanShowWidget) {
+                       ActorTaskStateChangesCanShowUi) {
   std::unique_ptr<IdentityDialogController> controller =
       std::make_unique<IdentityDialogController>(web_contents_);
   auto mock_view = std::make_unique<MockAccountSelectionView>();
@@ -219,14 +223,14 @@ IN_PROC_BROWSER_TEST_F(IdentityDialogControllerBrowserTest,
   controller->SetAccountSelectionViewForTesting(std::move(mock_view));
 
   // Simulate an actor task starting and acting on the page. Since the task is
-  // active SetCanShowWidget is called with `false` each time the task changes
+  // active SetCanShowUi is called with `false` each time the task changes
   // state (kCreated->kActing->kReflecting).
-  EXPECT_CALL(*view_ptr, SetCanShowWidget(false)).Times(2);
+  EXPECT_CALL(*view_ptr, SetCanShowUi(false)).Times(2);
   TaskId task_id = SimulateNewActiveActorTask();
 
   // Simulate the actor task finishing. This should restore visibility. We
-  // expect SetCanShowWidget(true) to be called.
-  EXPECT_CALL(*view_ptr, SetCanShowWidget(true)).Times(1);
+  // expect SetCanShowUi(true) to be called.
+  EXPECT_CALL(*view_ptr, SetCanShowUi(true)).Times(1);
   SimulateActorTaskFinished(controller.get(), task_id);
 
   // The task ID should be cleared.
@@ -241,9 +245,9 @@ IN_PROC_BROWSER_TEST_F(IdentityDialogControllerBrowserTest,
   MockAccountSelectionView* view_ptr = mock_view.get();
   controller->SetAccountSelectionViewForTesting(std::move(mock_view));
 
-  // Expect SetCanShowWidget(false) to be called when we get an active actor
+  // Expect SetCanShowUi(false) to be called when we get an active actor
   // task. It's called each time ActorTask transitions state.
-  EXPECT_CALL(*view_ptr, SetCanShowWidget(false)).Times(2);
+  EXPECT_CALL(*view_ptr, SetCanShowUi(false)).Times(2);
 
   // Simulate an actor task being active.
   SimulateNewActiveActorTask();
@@ -253,14 +257,13 @@ IN_PROC_BROWSER_TEST_F(IdentityDialogControllerBrowserTest,
   IdentityProviderDataPtr idp_data = CreateIdentityProviderData(accounts);
 
   EXPECT_CALL(*view_ptr, Show).WillOnce(testing::Return(true));
-  controller->ShowAccountsDialog(
+  EXPECT_TRUE(controller->ShowAccountsDialog(
       content::RelyingPartyData(kTopFrameEtldPlusOne,
                                 /*iframe_for_display=*/u""),
-      {idp_data}, accounts, blink::mojom::RpMode::kActive,
+      {idp_data}, accounts, /*filtered_accounts=*/{},
+      blink::mojom::RpMode::kPassive,
       /*on_selected=*/base::DoNothing(),
       /*on_add_account=*/base::DoNothing(),
       /*dismiss_callback=*/base::DoNothing(),
-      /*accounts_displayed_callback=*/base::DoNothing());
-
-  EXPECT_FALSE(controller->DidShowUi());
+      /*accounts_displayed_callback=*/base::DoNothing()));
 }

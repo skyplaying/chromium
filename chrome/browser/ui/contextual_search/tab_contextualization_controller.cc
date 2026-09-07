@@ -16,6 +16,7 @@
 #include "components/page_content_annotations/core/page_content_extraction_types.h"
 #include "components/sessions/content/session_tab_helper.h"
 #include "components/viz/common/frame_sinks/copy_output_result.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host_view.h"
@@ -28,6 +29,10 @@
 #include "components/pdf/browser/pdf_document_helper.h"
 #include "pdf/mojom/pdf.mojom.h"
 #endif  // BUILDFLAG(ENABLE_PDF)
+
+#if BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/flags/android/chrome_feature_list.h"
+#endif  // BUILDFLAG(IS_ANDROID)
 
 namespace lens {
 
@@ -77,6 +82,26 @@ void TabContextualizationController::OnPageContextEligibilityAPILoaded(
 
 void TabContextualizationController::PrimaryPageChanged(content::Page& page) {
   is_page_context_eligible_ = false;
+  pending_page_context_timer_.Stop();
+}
+
+void TabContextualizationController::DidFinishLoad(
+    content::RenderFrameHost* render_frame_host,
+    const GURL& validated_url) {
+  if (render_frame_host && render_frame_host->IsInPrimaryMainFrame()) {
+    FlushPendingPageContextCallbacks();
+  }
+}
+
+void TabContextualizationController::FlushPendingPageContextCallbacks() {
+  pending_page_context_timer_.Stop();
+  std::vector<GetPageContextCallback> callbacks =
+      std::move(pending_page_context_callbacks_);
+  pending_page_context_callbacks_.clear();
+
+  for (auto& callback : callbacks) {
+    FetchPageContextInternal(std::move(callback));
+  }
 }
 
 void TabContextualizationController::OnEligibilityChecked(
@@ -103,7 +128,10 @@ void TabContextualizationController::GetAnnotatedPageContent(
       optimization_guide::DefaultAIPageContentOptions(
           /*on_critical_path=*/true);
   ai_page_content_options->max_meta_elements = 20;
-  ai_page_content_options->include_same_site_only = true;
+  ai_page_content_options->include_same_site_only =
+      base::FeatureList::IsEnabled(
+          lens::features::
+              kLensRestrictAnnotatedPageContentToSameSiteFramesForNextQueries);
   optimization_guide::GetAIPageContent(tab_->GetContents(),
                                        std::move(ai_page_content_options),
                                        std::move(callback));
@@ -186,17 +214,56 @@ bool TabContextualizationController::GetCurrentPageContextEligibility() {
 
 void TabContextualizationController::GetPageContext(
     GetPageContextCallback callback) {
-  auto contextual_input_data = std::make_unique<lens::ContextualInputData>();
-
-  // TODO(crbug.com/439595898): Get contextual input bytes using APC. Also,
-  // populate the mime type, tab eligibility, and pdf current page.
-  contextual_input_data->context_input = {};
+  // If the tab doesn't have an active renderer (e.g. tabs after restart on
+  // android), or if the tab was discarded, first load the tab on-demand.
+  tab_->LoadIfNeeded();
 
   content::WebContents* web_contents = tab_->GetContents();
   if (!web_contents) {
     std::move(callback).Run(nullptr);
     return;
   }
+
+  Observe(web_contents);
+
+  if (web_contents->IsLoading()) {
+    pending_page_context_callbacks_.push_back(std::move(callback));
+#if BUILDFLAG(IS_ANDROID)
+    if (base::FeatureList::IsEnabled(
+            chrome::android::
+                kOnDemandBackgroundTabContextCaptureOptimization)) {
+      int timeout_sec =
+          chrome::android::
+              kOnDemandBackgroundTabContextCaptureOverallFlushTimeoutSeconds
+                  .Get();
+      if (timeout_sec > 0 && !pending_page_context_timer_.IsRunning()) {
+        pending_page_context_timer_.Start(
+            FROM_HERE, base::Seconds(timeout_sec),
+            base::BindOnce(&TabContextualizationController::
+                               FlushPendingPageContextCallbacks,
+                           weak_ptr_factory_.GetWeakPtr()));
+      }
+    }
+#endif  // BUILDFLAG(IS_ANDROID)
+    return;
+  }
+
+  FetchPageContextInternal(std::move(callback));
+}
+
+void TabContextualizationController::FetchPageContextInternal(
+    GetPageContextCallback callback) {
+  content::WebContents* web_contents = tab_->GetContents();
+  if (!web_contents) {
+    std::move(callback).Run(nullptr);
+    return;
+  }
+
+  auto contextual_input_data = std::make_unique<lens::ContextualInputData>();
+
+  // TODO(crbug.com/439595898): Get contextual input bytes using APC. Also,
+  // populate the mime type, tab eligibility, and pdf current page.
+  contextual_input_data->context_input = {};
 
   contextual_input_data->tab_session_id =
       sessions::SessionTabHelper::IdForTab(web_contents);
@@ -207,7 +274,7 @@ void TabContextualizationController::GetPageContext(
 #if BUILDFLAG(ENABLE_PDF)
   // Capture the PDF bytes if the PDF helper exists.
   pdf::PDFDocumentHelper* pdf_helper =
-      pdf::PDFDocumentHelper::MaybeGetForWebContents(web_contents);
+      pdf::PDFDocumentHelper::MaybeGetForWebContents(*web_contents);
   if (pdf_helper) {
     // Fetch the PDF bytes then run the callback.
     pdf_helper->GetPdfBytes(
@@ -269,7 +336,7 @@ void TabContextualizationController::OnPdfBytesReceived(
 
   // Get the most visible page index if the PDF helper exists.
   pdf::PDFDocumentHelper* pdf_helper =
-      pdf::PDFDocumentHelper::MaybeGetForWebContents(web_contents);
+      pdf::PDFDocumentHelper::MaybeGetForWebContents(*web_contents);
   if (pdf_helper) {
     // TODO(crbug.com/443743308): Parallelize the PDF page index fetch with the
     // PDF bytes fetch.

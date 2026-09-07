@@ -11,8 +11,16 @@
 #include "chrome/browser/glic/test_support/glic_test_util.h"
 #include "chrome/browser/glic/test_support/interactive_glic_test.h"
 
+#if defined(TOOLKIT_VIEWS)
+#include "ui/views/test/mock_activation_controller.h"
+#endif
+
 namespace glic {
 
+// =============================================================================
+// DEPRECATED: Do not use this test fixture for new code.
+// Please use `chrome/browser/glic/test_support/glic_browser_test.h` instead.
+// =============================================================================
 // Like InteractiveGlicTest, but expected to be used in a non-interactive
 // browser test. Non-interactive browser tests can be run in parallel, and so
 // are more efficient to run, but can be flaky if tests are sensitive to focus
@@ -26,17 +34,17 @@ class NonInteractiveGlicTest
                          const GlicTestEnvironmentConfig& glic_config);
   ~NonInteractiveGlicTest() override;
 
+  void SetUp() override;
+
   void SetUpOnMainThread() override;
 
   void TearDownOnMainThread() override;
 
-  // Returns this fixture's `BrowserActivator` instance so that tests can
-  // customize how browser windows should be activated, if needed.
-  BrowserActivator& browser_activator() { return *browser_activator_; }
-
  private:
   base::test::ScopedFeatureList features_;
-  std::optional<BrowserActivator> browser_activator_;
+#if defined(USE_MOCK_ACTIVATION_CONTROLLER)
+  std::unique_ptr<views::test::MockActivationController> activation_controller_;
+#endif
 };
 
 }  // namespace glic

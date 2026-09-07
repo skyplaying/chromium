@@ -9,7 +9,7 @@ found in the LICENSE file.
        xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Background outline shown when the tab is a drop target for drag & drop. -->
-    <org.chromium.ui.widget.ChromeImageView
+    <ImageView
         android:id="@+id/background_view"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
@@ -90,10 +90,10 @@ found in the LICENSE file.
           android:singleLine="true"
           android:textAppearance="@style/TextAppearance.TextMediumThick.Primary"/>
         <ImageView
-            android:id="@+id/media_indicator_icon"
+            android:id="@+id/alert_indicator_icon"
             android:layout_height="@dimen/tab_grid_close_button_size"
             android:layout_width="@dimen/tab_grid_close_button_size"
-            android:layout_marginEnd="@dimen/tab_grid_card_media_indicator_margin_end"
+            android:layout_marginEnd="@dimen/tab_grid_card_alert_indicator_margin_end"
             android:importantForAccessibility="no"
             app:layout_constraintTop_toTopOf="@id/tab_title"
             app:layout_constraintBottom_toBottomOf="@id/tab_title"
@@ -118,6 +118,19 @@ found in the LICENSE file.
           app:cornerRadiusTopEnd="@dimen/tab_grid_card_thumbnail_corner_radius_top"
           app:cornerRadiusBottomStart="@dimen/tab_grid_card_thumbnail_corner_radius_bottom"
           app:cornerRadiusBottomEnd="@dimen/tab_grid_card_thumbnail_corner_radius_bottom"/>
+
+        <com.google.android.material.progressindicator.CircularProgressIndicator
+          android:id="@+id/fetch_thumbnail_spinner"
+          android:layout_width="wrap_content"
+          android:layout_height="wrap_content"
+          android:indeterminate="true"
+          android:visibility="gone"
+          app:indicatorSize="@dimen/tab_grid_thumbnail_fetch_spinner_size"
+          app:trackThickness="@dimen/tab_grid_thumbnail_fetch_spinner_thickness"
+          app:layout_constraintTop_toTopOf="@id/tab_thumbnail"
+          app:layout_constraintBottom_toBottomOf="@id/tab_thumbnail"
+          app:layout_constraintStart_toStartOf="@id/tab_thumbnail"
+          app:layout_constraintEnd_toEndOf="@id/tab_thumbnail" />
 
         <!-- Legacy layout for price cards. To be removed in favor of tab_card_label. -->
         <org.chromium.chrome.browser.tasks.tab_management.PriceCardView
@@ -151,7 +164,7 @@ found in the LICENSE file.
           the card while still fulfilling the minimum 48dp touch target size. ContentDescription is
           set depending on what the content of this button is.
         -->
-        <org.chromium.ui.widget.ChromeImageView
+        <ImageView
             android:id="@+id/action_button"
             android:layout_width="@dimen/tab_list_card_action_button_size"
             android:layout_height="@dimen/tab_list_card_action_button_size"

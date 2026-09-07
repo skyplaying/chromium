@@ -14,6 +14,7 @@ import androidx.annotation.VisibleForTesting;
 import org.chromium.base.ActivityState;
 import org.chromium.base.ApplicationState;
 import org.chromium.base.ApplicationStatus;
+import org.chromium.base.ApplicationStatus.ActivityStateListener;
 import org.chromium.base.Log;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.TraceEvent;
@@ -31,8 +32,7 @@ import java.lang.annotation.RetentionPolicy;
 /** Computes and records metrics for what caused Chrome to be launched. */
 @NullMarked
 public abstract class LaunchCauseMetrics
-        implements ApplicationStatus.ApplicationStateListener,
-                ApplicationStatus.ActivityStateListener {
+        implements ApplicationStatus.ApplicationStateListener, ActivityStateListener {
     private static final boolean DEBUG = false;
     private static final String TAG = "LaunchCauseMetrics";
 
@@ -52,7 +52,7 @@ public abstract class LaunchCauseMetrics
     @SuppressLint("StaticFieldLeak")
     private static @Nullable Activity sLastResumedActivity;
 
-    private static ApplicationStatus.@Nullable ActivityStateListener sAppActivityListener;
+    private static @Nullable ActivityStateListener sAppActivityListener;
 
     static {
         doStaticInit();
@@ -60,13 +60,10 @@ public abstract class LaunchCauseMetrics
 
     private static void doStaticInit() {
         sAppActivityListener =
-                new ApplicationStatus.ActivityStateListener() {
-                    @Override
-                    public void onActivityStateChange(Activity activity, int newState) {
-                        if (newState == ActivityState.RESUMED) sLastResumedActivity = activity;
-                        if (newState == ActivityState.DESTROYED) {
-                            if (activity == sLastResumedActivity) sLastResumedActivity = null;
-                        }
+                (Activity activity, int newState) -> {
+                    if (newState == ActivityState.RESUMED) sLastResumedActivity = activity;
+                    if (newState == ActivityState.DESTROYED) {
+                        if (activity == sLastResumedActivity) sLastResumedActivity = null;
                     }
                 };
         ApplicationStatus.registerStateListenerForAllActivities(sAppActivityListener);
@@ -119,6 +116,8 @@ public abstract class LaunchCauseMetrics
         LaunchCause.NFC,
         LaunchCause.AUTH_TAB,
         LaunchCause.RECREATION,
+        LaunchCause.HANDOFF,
+        LaunchCause.DEV_TOOLS,
     })
     @Retention(RetentionPolicy.SOURCE)
     public @interface LaunchCause {
@@ -144,8 +143,10 @@ public abstract class LaunchCauseMetrics
         int NFC = 18;
         int AUTH_TAB = 19;
         int RECREATION = 20;
+        int HANDOFF = 21;
+        int DEV_TOOLS = 22;
 
-        int NUM_ENTRIES = 22;
+        int NUM_ENTRIES = 24;
     }
 
     /**
@@ -192,11 +193,9 @@ public abstract class LaunchCauseMetrics
     protected abstract @LaunchCause int computeIntentLaunchCause();
 
     /**
-     * Computes and returns the cause of an Intentional transition between Chrome Activity
-     * types, or other if the transition wasn't Intentional.
-     *
-     * Intentional here means that the user knew they were transitioning between Chrome Activities,
-     * and made an explicit choice to do so.
+     * Computes and returns the cause of an Intentional transition between Chrome Activity types, or
+     * other if the transition wasn't Intentional. Intentional here means that the user knew they
+     * were transitioning between Chrome Activities, and made an explicit choice to do so.
      */
     protected @LaunchCause int getIntentionalTransitionCauseOrOther() {
         return LaunchCause.OTHER;
@@ -380,6 +379,6 @@ public abstract class LaunchCauseMetrics
                 launchCause = "HOME_SCREEN_SHORTCUT";
                 break;
         }
-        Log.d(TAG, "Launch Cause: " + launchCause);
+        Log.d(TAG, "Launch Cause: %s", launchCause);
     }
 }

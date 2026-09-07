@@ -10,6 +10,8 @@
 #include <numeric>
 #include <utility>
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -22,7 +24,6 @@
 #include "build/build_config.h"
 #include "ui/accessibility/platform/inspect/ax_inspect_utils_win.h"
 #include "ui/accessibility/platform/uia_registrar_win.h"
-#include "ui/base/win/atl_module.h"
 
 namespace ui {
 
@@ -65,10 +66,10 @@ std::string UiaIdentifierToStringPretty(int32_t id) {
 }  // namespace
 
 // static
-volatile base::subtle::Atomic32 AXEventRecorderWinUia::instantiated_ = 0;
+std::atomic<bool> AXEventRecorderWinUia::instantiated_;
 
 AXEventRecorderWinUia::AXEventRecorderWinUia(const AXTreeSelector& selector) {
-  CHECK(!base::subtle::NoBarrier_AtomicExchange(&instantiated_, 1))
+  CHECK(!instantiated_.exchange(true, std::memory_order_relaxed))
       << "There can be only one instance at a time.";
 
   // Find the root content window
@@ -97,7 +98,7 @@ AXEventRecorderWinUia::~AXEventRecorderWinUia() {
   thread_.SendShutdownSignal();
   WaitForDoneRecording();
 
-  base::subtle::NoBarrier_AtomicExchange(&instantiated_, 0);
+  instantiated_.store(false, std::memory_order_relaxed);
 }
 
 void AXEventRecorderWinUia::WaitForDoneRecording() {
@@ -134,9 +135,10 @@ void AXEventRecorderWinUia::Thread::ThreadMain() {
   base::win::ScopedCOMInitializer com_init{
       base::win::ScopedCOMInitializer::kMTA};
 
-  // Create an instance of the CUIAutomation class.
-  CoCreateInstance(CLSID_CUIAutomation, NULL, CLSCTX_INPROC_SERVER,
-                   IID_IUIAutomation, &uia_);
+  // Create an instance of the CUIAutomation8 class, which natively supports the
+  // IUIAutomation4 interface needed for AddChangesEventHandler.
+  CoCreateInstance(CLSID_CUIAutomation8, nullptr, CLSCTX_INPROC_SERVER,
+                   IID_PPV_ARGS(&uia_));
   CHECK(uia_.Get());
 
   // Register the custom event to mark the end of the test.
@@ -147,11 +149,8 @@ void AXEventRecorderWinUia::Thread::ThreadMain() {
   CHECK(root_.Get());
 
   // Create the event handler
-  win::CreateATLModuleIfNeeded();
-  CHECK(
-      SUCCEEDED(CComObject<EventHandler>::CreateInstance(&uia_event_handler_)));
-  uia_event_handler_->AddRef();
-  uia_event_handler_->Init(this, root_);
+  uia_event_handler_ = Microsoft::WRL::Make<Thread::EventHandler>(this, root_);
+  CHECK(uia_event_handler_);
 
   // Create a cache request to avoid cross-thread issues when logging.
   CHECK(SUCCEEDED(uia_->CreateCacheRequest(&cache_request_)));
@@ -182,17 +181,30 @@ void AXEventRecorderWinUia::Thread::ThreadMain() {
                                         cache_request_.Get(),
                                         uia_event_handler_.Get());
 
-  // Subscribe to all automation events (except structure-change events and
-  // live-region events, which are handled elsewhere).
+  // Subscribe to all automation events (except structure-change events,
+  // live-region events, and changes events, which are handled elsewhere).
   static const EVENTID kMinEvent = UIA_ToolTipOpenedEventId;
   static const EVENTID kMaxEvent = UIA_ActiveTextPositionChangedEventId;
   for (EVENTID event_id = kMinEvent; event_id <= kMaxEvent; ++event_id) {
     if (event_id != UIA_StructureChangedEventId &&
-        event_id != UIA_LiveRegionChangedEventId) {
+        event_id != UIA_LiveRegionChangedEventId &&
+        event_id != UIA_ChangesEventId) {
       uia_->AddAutomationEventHandler(
           event_id, root_.Get(), TreeScope::TreeScope_Subtree,
           cache_request_.Get(), uia_event_handler_.Get());
     }
+  }
+
+  // Subscribe to changes events (e.g., annotation type changes for spelling,
+  // grammar, and highlights).
+  {
+    int change_types[] = {AnnotationType_SpellingError,
+                          AnnotationType_GrammarError,
+                          AnnotationType_Highlighted};
+    uia_->AddChangesEventHandler(root_.Get(), TreeScope::TreeScope_Subtree,
+                                 change_types, std::size(change_types),
+                                 cache_request_.Get(),
+                                 uia_event_handler_.Get());
   }
 
   // Subscribe to live-region change events.  This must be the last event we
@@ -232,7 +244,10 @@ void AXEventRecorderWinUia::Thread::OnEvent(const std::string& event) {
   owner_->OnEvent(event);
 }
 
-AXEventRecorderWinUia::Thread::EventHandler::EventHandler() {
+AXEventRecorderWinUia::Thread::EventHandler::EventHandler(
+    AXEventRecorderWinUia::Thread* owner,
+    Microsoft::WRL::ComPtr<IUIAutomationElement> root)
+    : owner_(owner), root_(std::move(root)) {
   // Some events are duplicated between UIAutomationCore.dll and RPCRT4.dll.
   // Before WIN10_19H1, events are mainly sent from RPCRT4.dll, with a few
   // duplicates sent from UIAutomationCore.dll.
@@ -245,13 +260,6 @@ AXEventRecorderWinUia::Thread::EventHandler::EventHandler() {
 }
 
 AXEventRecorderWinUia::Thread::EventHandler::~EventHandler() = default;
-
-void AXEventRecorderWinUia::Thread::EventHandler::Init(
-    AXEventRecorderWinUia::Thread* owner,
-    Microsoft::WRL::ComPtr<IUIAutomationElement> root) {
-  owner_ = owner;
-  root_ = root;
-}
 
 void AXEventRecorderWinUia::Thread::EventHandler::CleanUp() {
   owner_ = nullptr;
@@ -401,6 +409,45 @@ AXEventRecorderWinUia::Thread::EventHandler::HandleAutomationEvent(
         base::StringPrintf("%s %s", event_str.c_str(), sender_info.c_str());
     owner_->OnEvent(log);
   }
+  return S_OK;
+}
+
+IFACEMETHODIMP
+AXEventRecorderWinUia::Thread::EventHandler::HandleChangesEvent(
+    IUIAutomationElement* sender,
+    UiaChangeInfo* uia_changes,
+    int changes_count) {
+  if (!owner_ || !IsCallerFromAllowedModule(RETURN_ADDRESS())) {
+    return S_OK;
+  }
+
+  // SAFETY: `uia_changes` points to an array of `changes_count` elements
+  // provided by the UIA framework.
+  auto changes = UNSAFE_BUFFERS(base::span<UiaChangeInfo>(
+      uia_changes, static_cast<size_t>(changes_count)));
+  for (const auto& change : changes) {
+    std::string change_type_str;
+    switch (change.uiaId) {
+      case AnnotationType_SpellingError:
+        change_type_str = "AnnotationType_SpellingError";
+        break;
+      case AnnotationType_GrammarError:
+        change_type_str = "AnnotationType_GrammarError";
+        break;
+      case AnnotationType_Highlighted:
+        change_type_str = "AnnotationType_Highlighted";
+        break;
+      default:
+        change_type_str = base::StringPrintf("ChangeId_%d", change.uiaId);
+        break;
+    }
+
+    std::string log =
+        base::StringPrintf("Changes/%s %s", change_type_str.c_str(),
+                           GetSenderInfo(sender).c_str());
+    owner_->OnEvent(log);
+  }
+
   return S_OK;
 }
 

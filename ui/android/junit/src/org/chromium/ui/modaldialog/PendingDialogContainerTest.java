@@ -15,11 +15,12 @@ import static org.mockito.Mockito.verify;
 import androidx.test.filters.SmallTest;
 
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
-import org.robolectric.annotation.Config;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.ui.modaldialog.ModalDialogManager.ModalDialogPriority;
@@ -31,15 +32,14 @@ import java.util.function.Consumer;
 
 /** Robolectric tests for testing the functionalities of {@link PendingDialogContainer}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class PendingDialogContainerTest {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     private PendingDialogContainer mPendingDialogContainer;
 
     @Mock private Consumer<PropertyModel> mPropertyModelConsumerMock;
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
         mPendingDialogContainer = new PendingDialogContainer();
     }
 

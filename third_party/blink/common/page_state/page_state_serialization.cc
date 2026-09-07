@@ -10,6 +10,7 @@
 
 #include "base/containers/span.h"
 #include "base/containers/to_vector.h"
+#include "base/memory/stack_allocated.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notimplemented.h"
 #include "base/pickle.h"
@@ -48,14 +49,13 @@ void AppendDataToRequestBody(
 void AppendFileRangeToRequestBody(
     const scoped_refptr<network::ResourceRequestBody>& request_body,
     const std::optional<std::u16string>& file_path,
-    int file_start,
-    int file_length,
+    uint64_t file_start,
+    uint64_t file_length,
     base::Time file_modification_time) {
   request_body->AppendFileRange(
       file_path ? base::FilePath::FromUTF16Unsafe(*file_path)
                 : base::FilePath(),
-      static_cast<uint64_t>(file_start), static_cast<uint64_t>(file_length),
-      file_modification_time);
+      file_start, file_length, file_modification_time);
 }
 
 //----------------------------------------------------------------------------
@@ -63,10 +63,9 @@ void AppendFileRangeToRequestBody(
 void AppendReferencedFilesFromHttpBody(
     const std::vector<network::DataElement>& elements,
     std::vector<std::optional<std::u16string>>* referenced_files) {
-  for (size_t i = 0; i < elements.size(); ++i) {
-    if (elements[i].type() == network::DataElement::Tag::kFile) {
-      referenced_files->emplace_back(
-          elements[i].As<network::DataElementFile>().path().AsUTF16Unsafe());
+  for (const auto& element : elements) {
+    if (const auto* file = element.TryAs<network::DataElementFile>()) {
+      referenced_files->emplace_back(file->path().AsUTF16Unsafe());
     }
   }
 }
@@ -83,6 +82,9 @@ bool AppendReferencedFilesFromDocumentState(
   //
   // For reference, see FormController::formStatesFromStateVector in
   // third_party/WebKit/Source/core/html/forms/FormController.cpp.
+  //
+  // Support for PageState version 14 was added to allow validation of the file
+  // list.
 
   size_t index = 0;
 
@@ -117,11 +119,37 @@ bool AppendReferencedFilesFromDocumentState(
       return false;
 
     if (type && base::EqualsASCII(*type, "file")) {
-      if (value_size != 2)
+      // `value_size` is expected to be either:
+      // - 0 for an empty file form field
+      // - 2 for legacy PageState versions that only contain file path and
+      //   display name.
+      // - A multiple of 3 for modern PageStates, which contain a list of
+      //   (file path, name, relative path) triples within a single item.
+      //   (See File::AppendToControlState.)
+      //
+      // Extract the file path(s) for sizes 2 and 3, and continue with
+      // validation for the zero-size empty file case. Any other values of
+      // `value_size` should be considered invalid.
+      if (value_size == 2) {
+        // PageState version < 14.
+        referenced_files->emplace_back(document_state[index++]);
+        index++;  // Skip over display name.
+      } else if (value_size > 2 && value_size % 3 == 0) {
+        // PageState version >= 14.
+        // Add the file path from each group of three.
+        for (size_t i = 0; i < value_size / 3; ++i) {
+          // Double-check bounds for the 3 elements we will look at.
+          if (index + 2 >= document_state.size()) {
+            return false;
+          }
+          referenced_files->emplace_back(document_state[index++]);
+          index++;  // Skip over name.
+          index++;  // Skip over relative path.
+        }
+      } else if (value_size != 0) {
         return false;
-
-      referenced_files->emplace_back(document_state[index++]);
-      index++;  // Skip over display name.
+      }
+      // If value_size is 0, the file form field is empty, so continue.
     } else {
       index += value_size;
     }
@@ -163,6 +191,9 @@ struct SerializeObject {
 };
 
 struct DeserializeObject {
+  STACK_ALLOCATED();
+
+ public:
   explicit DeserializeObject(base::span<const uint8_t> data)
       : iter(base::PickleIterator::WithData(data)) {}
 
@@ -443,7 +474,8 @@ void ReadResourceRequestBody(
       int64_t file_length = ReadInteger64(obj);
       double file_modification_time = ReadReal(obj);
       AppendFileRangeToRequestBody(
-          request_body, file_path, file_start, file_length,
+          request_body, file_path, static_cast<uint64_t>(file_start),
+          static_cast<uint64_t>(file_length),
           base::Time::FromSecondsSinceUnixEpoch(file_modification_time));
     } else if (type == HTTPBodyElementType::kTypeBlob) {
       // Skip obsolete blob values.
@@ -1033,6 +1065,47 @@ void LegacyEncodePageStateForTesting(const ExplodedPageState& exploded,
   obj.version = version;
   WriteLegacyPageState(exploded, &obj);
   *encoded = obj.GetAsString();
+}
+
+bool VerifyReferencedFilesInPageState(const std::string& encoded) {
+  ExplodedPageState exploded;
+  if (!DecodePageState(encoded, &exploded)) {
+    // If the PageState can't be decoded at all, then there are no usable files
+    // in it and it is safe to leave the `files` set empty and return true.
+    return true;
+  }
+
+  return VerifyReferencedFilesInPageState(exploded);
+}
+
+bool VerifyReferencedFilesInPageState(const ExplodedPageState& exploded) {
+  // TODO(crbug.com/40241973): Refactor to avoid sending PageState objects to
+  // the browser process, so that this use of RecursivelyAppendReferencedFiles
+  // is not needed. This may also depend on persistently storing per-frame
+  // referenced file lists.
+  std::vector<std::optional<std::u16string>> all_files;
+  if (!RecursivelyAppendReferencedFiles(exploded.top, &all_files)) {
+    // If the PageState can be decoded but this function failed due to an issue
+    // parsing the DocumentState, it is important to return false to indicate
+    // that the PageState is not safe to use. Some files could otherwise be
+    // present and usable without showing up in the list.
+    return false;
+  }
+
+  // Convert the referenced files list to a set to confirm that `all_files` is a
+  // subset of `referenced_files`.
+  // TODO(crbug.com/499019935): Check if all_files and exploded.referenced_files
+  // are equal, rather than the former being a subset of the latter.
+  std::set<std::optional<std::u16string>> referenced_file_set(
+      exploded.referenced_files.begin(), exploded.referenced_files.end());
+  for (const std::optional<std::u16string>& file : all_files) {
+    if (file && !referenced_file_set.contains(file)) {
+      // Found a file that was not in the list to be validated, so the renderer
+      // should be killed.
+      return false;
+    }
+  }
+  return true;
 }
 
 #if BUILDFLAG(IS_ANDROID)

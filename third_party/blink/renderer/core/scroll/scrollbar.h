@@ -26,6 +26,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_SCROLL_SCROLLBAR_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_SCROLL_SCROLLBAR_H_
 
+#include "base/memory/raw_ref.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/mojom/css/preferred_contrast.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/frame/color_scheme.mojom-blink-forward.h"
@@ -164,10 +165,7 @@ class CORE_EXPORT Scrollbar : public GarbageCollected<Scrollbar>,
   void MouseUp(const WebMouseEvent&);
   void MouseDown(const WebMouseEvent&);
 
-  ScrollbarTheme& GetTheme() const { return theme_; }
-
-  gfx::Rect ConvertToContainingEmbeddedContentView(const gfx::Rect&) const;
-  gfx::Point ConvertFromContainingEmbeddedContentView(const gfx::Point&) const;
+  ScrollbarTheme& GetTheme() const { return *theme_; }
 
   void MoveThumb(int pos, bool dragging_document = false);
 
@@ -262,7 +260,8 @@ class CORE_EXPORT Scrollbar : public GarbageCollected<Scrollbar>,
 
   Member<ScrollableArea> scrollable_area_;
   ScrollbarOrientation orientation_;
-  ScrollbarTheme& theme_;
+  const raw_ref<ScrollbarTheme, UnprotectedInRelease | DanglingUntriaged>
+      theme_;
 
   int visible_size_;
   int total_size_;
@@ -299,10 +298,10 @@ class CORE_EXPORT Scrollbar : public GarbageCollected<Scrollbar>,
   // This is set based on the event modifiers. In scenarios like scrolling or
   // layout, the element that the cursor is over can change without the cursor
   // itself moving. In these cases, a "fake" mouse move may be dispatched (see
-  // MouseEventManager::RecomputeMouseHoverState) in order to apply hover etc.
-  // Such mouse events do not have the modifier set and hence, maintaining this
-  // additional state is necessary.
-  bool scrollbar_manipulation_in_progress_on_cc_thread_;
+  // MouseEventManager::RecomputeMouseHoverStateIfNeeded) in order to apply
+  // hover etc. Such mouse events do not have the modifier set and hence,
+  // maintaining this additional state is necessary.
+  bool scrollbar_manipulation_in_progress_on_cc_thread_ = false;
 
   gfx::Rect frame_rect_;
   WeakMember<const LayoutObject> style_source_;
@@ -311,7 +310,7 @@ class CORE_EXPORT Scrollbar : public GarbageCollected<Scrollbar>,
   // GestureScrollUpdate but hasn't yet updated the scroll position on main.
   // Scrollbar::MouseMoved needs this to calculate deltas during thumb drags.
   // In particular we often process two mousemoves in the same frame thanks to
-  // MouseEventManager::RecomputeMouseHoverState sending fake ones.
+  // MouseEventManager::RecomputeMouseHoverStateIfNeeded sending fake ones.
   ScrollOffset pending_injected_delta_;
 };
 

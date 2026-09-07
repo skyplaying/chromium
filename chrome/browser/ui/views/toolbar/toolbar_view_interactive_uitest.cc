@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+
 #include <stddef.h>
 
 #include "base/functional/bind.h"
@@ -16,28 +18,39 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_window.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_command_controller.h"
-#include "chrome/browser/ui/browser_element_identifiers.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/layout_constants.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
+#include "chrome/browser/ui/tabs/split_view_layout_menu_model.h"
 #include "chrome/browser/ui/tabs/tab_menu_model.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/view_ids.h"
+#include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
+#include "chrome/browser/ui/views/test/vertical_tabs_interactive_test_mixin.h"
 #include "chrome/browser/ui/views/toolbar/reload_button.h"
+#include "chrome/browser/ui/views/toolbar/toolbar_accessibility_test.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_button.h"
-#include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+#include "chrome/browser/ui/views/toolbar/webui_and_views_toolbar_interactive_uitest_base.h"
 #include "chrome/browser/ui/views/toolbar/webui_toolbar_web_view.h"
 #include "chrome/browser/ui/waap/initial_web_ui_manager.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "chrome/test/base/web_view_focus_helper.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/bookmark_utils.h"
+#include "components/strings/grit/components_strings.h"
 #include "content/public/browser/focused_node_details.h"
+#include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_entry.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -45,10 +58,13 @@
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "ui/base/interaction/element_identifier.h"
+#include "ui/base/interaction/element_tracker.h"
 #include "ui/base/mojom/menu_source_type.mojom.h"
 #include "ui/base/test/ui_controls.h"
+#include "ui/base/ui_base_switches.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/views/focus/focus_manager.h"
+#include "ui/views/interaction/element_tracker_views.h"
 #include "ui/views/test/widget_activation_waiter.h"
 #include "ui/views/test/widget_test.h"
 #include "ui/views/view.h"
@@ -72,79 +88,13 @@ function getDeepActiveElement() {
 getDeepActiveElement().ariaLabel || getDeepActiveElement().tagName
   )JS";
 
-class WebViewFocusManager : views::FocusChangeListener,
-                            content::WebContentsObserver {
- public:
-  explicit WebViewFocusManager(views::FocusManager* focus_manager,
-                               content::WebContents* web_contents)
-      : focus_manager_(focus_manager) {
-    focus_manager->AddFocusChangeListener(this);
-    Observe(web_contents);
-  }
-
-  ~WebViewFocusManager() override {
-    focus_manager_->RemoveFocusChangeListener(this);
-  }
-
-  void AdvanceFocus(bool reverse) {
-    base::Time start = base::Time::Now();
-    // Try-bots sometimes don't register these key presses (even with if the
-    // view is copyable), so we try multiple times to avoid flakes.
-    do {
-      run_loop_ = std::make_unique<base::RunLoop>();
-      ASSERT_TRUE(ui_test_utils::SendKeyPressToWindowSync(
-          web_contents()->GetTopLevelNativeWindow(), ui::VKEY_TAB, false,
-          reverse, false, false));
-      base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
-          FROM_HERE, run_loop_->QuitClosure(), base::Seconds(1));
-      run_loop_->Run();
-      run_loop_.reset();
-    } while (!done_ && (base::Time::Now() < start + base::Seconds(5)));
-  }
-
- private:
-  // content::WebContentsObserver overrides
-  void OnFocusChangedInPage(
-      const content::FocusedNodeDetails& details) override {
-    if (details.node_bounds_in_screen.IsEmpty()) {
-      // Focus is leaving the web contents
-      return;
-    }
-    Done();
-  }
-
-  // views::FocusChangeListener
-  void OnDidChangeFocus(views::View* focused_before,
-                        views::View* focused_now) override {
-    Done();
-  }
-
-  void Done() {
-    done_ = true;
-    if (run_loop_) {
-      run_loop_->Quit();
-    }
-  }
-
-  bool done_ = false;
-  std::unique_ptr<base::RunLoop> run_loop_;
-  raw_ptr<views::FocusManager> focus_manager_;
-};
-
-void AdvanceFocus(views::FocusManager* focus_manager, bool reverse) {
-  views::View* view = focus_manager->GetFocusedView();
-  if (views::WebView* web_view = views::AsViewClass<views::WebView>(view)) {
-    WebViewFocusManager web_view_focus_manager(focus_manager,
-                                               web_view->web_contents());
-    web_view_focus_manager.AdvanceFocus(reverse);
-  } else {
-    focus_manager->AdvanceFocus(reverse);
-  }
-}
-
 int GetIDForFocusedViewElement(const views::View* view) {
   const std::string kReloadControlName =
       base::UTF16ToUTF8(l10n_util::GetStringUTF16(IDS_ACCNAME_RELOAD));
+  const std::string kBackControlName =
+      base::UTF16ToUTF8(l10n_util::GetStringUTF16(IDS_ACCNAME_BACK));
+  const std::string kForwardControlName =
+      base::UTF16ToUTF8(l10n_util::GetStringUTF16(IDS_ACCNAME_FORWARD));
 
   if (const views::WebView* web_view =
           views::AsViewClass<views::WebView>(view)) {
@@ -153,6 +103,10 @@ int GetIDForFocusedViewElement(const views::View* view) {
             .ExtractString();
     if (element_name == kReloadControlName) {
       return VIEW_ID_RELOAD_BUTTON;
+    } else if (element_name == kBackControlName) {
+      return VIEW_ID_BACK_BUTTON;
+    } else if (element_name == kForwardControlName) {
+      return VIEW_ID_FORWARD_BUTTON;
     } else {
       ADD_FAILURE() << "Unexpected focused element: " << element_name;
       return VIEW_ID_NONE;
@@ -164,39 +118,62 @@ int GetIDForFocusedViewElement(const views::View* view) {
 
 }  // namespace
 
-class ToolbarViewTest : public InteractiveBrowserTest,
-                        public ::testing::WithParamInterface<bool> {
+class ToolbarViewTest : public ToolbarAccessibilityTest {
  public:
   ToolbarViewTest() {
     if (GetParam()) {
       feature_list_.InitWithFeatures(
-          {features::kInitialWebUI, features::kWebUIReloadButton}, {});
+          {features::kInitialWebUI, features::kWebUIReloadButton,
+           features::kWebUIBackForwardButton, features::kWebUISplitTabsButton,
+           features::kWebUIHomeButton},
+          {});
     } else {
       feature_list_.InitWithFeatures(
-          {}, {features::kInitialWebUI, features::kWebUIReloadButton});
+          {}, {features::kInitialWebUI, features::kWebUIReloadButton,
+               features::kWebUIBackForwardButton,
+               features::kWebUISplitTabsButton, features::kWebUIHomeButton});
     }
+    webui_omnibox_feature_list_.InitWithFeatures(
+        /*enabled_features=*/{},
+        /*disabled_features=*/
+        // TODO(crbug.com/452061489): Fix tests that fail when the WebUI Omnibox
+        // is enabled and then remove these two Features.
+        {omnibox::internal::kWebUIOmniboxPopup,
+         omnibox::internal::kWebUIOmniboxAimPopup});
+
+    // TODO(crbug.com/557287887): Make SplitViewLayoutMenuModel work with
+    // OpenSideBySideTab.
+    spit_view_horizontal_feature_list_.InitWithFeaturesAndParameters(
+        /*enabled_features=*/{{tabs::kSplitViewHorizontal,
+                               {{"split_view_horizontal_direct_tab_access",
+                                 "false"}}}},
+        /*disabled_features=*/{});
   }
   ToolbarViewTest(const ToolbarViewTest&) = delete;
   ToolbarViewTest& operator=(const ToolbarViewTest&) = delete;
 
   void SetUpOnMainThread() override {
-    InteractiveBrowserTest::SetUpOnMainThread();
+    ToolbarAccessibilityTest::SetUpOnMainThread();
     host_resolver()->AddRule("*", "127.0.0.1");
 
-    WaitForInitialWebUICanShow(browser());
+    WaitForInitialWebUI();
   }
 
-  void WaitForInitialWebUICanShow(Browser* browser) {
-    // Wait for the toolbar to load. Note that we can't wait for the widget to
-    // become visible instead because the Widget will always be visible on Mac
-    // OS.
-    ASSERT_TRUE(base::test::RunUntil([browser]() {
-      InitialWebUIManager* manager = InitialWebUIManager::From(browser);
-      return !manager || !manager->ShouldDeferShow();
-    }));
+  auto ExpectBackForwardButtonEnabled(ui::ElementIdentifier id, bool enabled) {
+    if (features::IsWebUIBackForwardButtonEnabled()) {
+      return Steps(CheckResult(
+          [this, id]() {
+            return chrome::BrowserCommandController::From(browser())
+                ->IsCommandEnabled(
+                    id == kToolbarBackButtonElementId ? IDC_BACK : IDC_FORWARD);
+          },
+          enabled));
+    } else {
+      return Steps(CheckViewProperty(id, &views::View::GetEnabled, enabled));
+    }
   }
 
-  void RunToolbarCycleFocusTest(Browser* browser);
+  void RunToolbarCycleFocusTest(BrowserWindowInterface* browser);
 
   void SetLocationBarSecurityLevelForTesting(
       security_state::SecurityLevel security_level) {
@@ -214,18 +191,39 @@ class ToolbarViewTest : public InteractiveBrowserTest,
 
     return Steps(NameDescendantViewByType<Tab>(kTabStripElementId, kTabToHover,
                                                tab_index),
-                 MoveMouseTo(kTabToHover),
-                 MayInvolveNativeContextMenu(
-                     ClickMouse(ui_controls::RIGHT),
-                     SelectMenuItem(TabMenuModel::kSplitTabsMenuItem)));
+                 MoveMouseTo(kTabToHover), ClickMouse(ui_controls::RIGHT),
+                 SelectMenuItem(TabMenuModel::kSplitTabsMenuItem));
   }
 
  private:
   base::test::ScopedFeatureList feature_list_;
+  base::test::ScopedFeatureList webui_omnibox_feature_list_;
+  base::test::ScopedFeatureList spit_view_horizontal_feature_list_;
 };
 
-void ToolbarViewTest::RunToolbarCycleFocusTest(Browser* browser) {
-  gfx::NativeWindow window = browser->window()->GetNativeWindow();
+void ToolbarViewTest::RunToolbarCycleFocusTest(
+    BrowserWindowInterface* browser) {
+  // Navigate to a few URLs so that the back and forward buttons are enabled
+  // and focusable.
+  ASSERT_TRUE(embedded_test_server()->Start());
+  const GURL url1 = embedded_test_server()->GetURL("/title1.html");
+  const GURL url2 = embedded_test_server()->GetURL("/title2.html");
+
+  // Move mouse off of toolbar. Having the mouse over the reload button when a
+  // page finishes loading may temporarily disable the reload button, making it
+  // no longer focusable, which will cause walking through focusable elements to
+  // skip over it, and the test will then fail.
+  RunTestSequence(InstrumentToolbar(), MoveMouseOffOfReloadButton());
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser, url1));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser, url2));
+  // Navigate back once so forward is enabled too.
+  content::TestNavigationObserver back_nav_observer(
+      browser->GetTabStripModel()->GetActiveWebContents());
+  chrome::BrowserCommandController::From(browser)->ExecuteCommand(IDC_BACK);
+  back_nav_observer.Wait();
+
+  gfx::NativeWindow window = browser->GetWindow()->GetNativeWindow();
   views::Widget* widget = views::Widget::GetWidgetForNativeWindow(window);
 
   ToolbarButtonProvider* toolbar_button_provider =
@@ -246,7 +244,7 @@ void ToolbarViewTest::RunToolbarCycleFocusTest(Browser* browser) {
 
   // Send focus to the toolbar as if the user pressed Alt+Shift+T. This should
   // happen after the browser window activation.
-  CommandUpdater* updater = browser->command_controller();
+  CommandUpdater* updater = chrome::BrowserCommandController::From(browser);
   updater->ExecuteCommand(IDC_FOCUS_TOOLBAR);
 
   views::FocusManager* focus_manager = widget->GetFocusManager();
@@ -257,17 +255,25 @@ void ToolbarViewTest::RunToolbarCycleFocusTest(Browser* browser) {
 
   // Press Tab to cycle through all of the controls in the toolbar until
   // we end up back where we started.
+  bool found_back = false;
+  bool found_forward = false;
   bool found_reload = false;
   bool found_location_bar = false;
   bool found_app_menu = false;
   const views::View* view = first_view;
   do {
-    AdvanceFocus(focus_manager, false);
+    ui_test_utils::AdvanceFocus(focus_manager, false);
 
     view = focus_manager->GetFocusedView();
     int id = GetIDForFocusedViewElement(view);
     ids.push_back(id);
 
+    if (id == VIEW_ID_BACK_BUTTON) {
+      found_back = true;
+    }
+    if (id == VIEW_ID_FORWARD_BUTTON) {
+      found_forward = true;
+    }
     if (id == VIEW_ID_RELOAD_BUTTON) {
       found_reload = true;
     }
@@ -283,6 +289,8 @@ void ToolbarViewTest::RunToolbarCycleFocusTest(Browser* browser) {
   } while (view != first_view || GetIDForFocusedViewElement(view) != first_id);
 
   // Make sure we found a few key items.
+  ASSERT_TRUE(found_back);
+  ASSERT_TRUE(found_forward);
   ASSERT_TRUE(found_reload);
   ASSERT_TRUE(found_app_menu);
   ASSERT_TRUE(found_location_bar);
@@ -290,7 +298,7 @@ void ToolbarViewTest::RunToolbarCycleFocusTest(Browser* browser) {
   // Now press Shift-Tab to cycle backwards.
   std::vector<int> reverse_ids;
   do {
-    AdvanceFocus(focus_manager, true);
+    ui_test_utils::AdvanceFocus(focus_manager, true);
 
     view = focus_manager->GetFocusedView();
     reverse_ids.push_back(GetIDForFocusedViewElement(view));
@@ -316,61 +324,154 @@ IN_PROC_BROWSER_TEST_P(ToolbarViewTest, ToolbarCycleFocus) {
 }
 
 IN_PROC_BROWSER_TEST_P(ToolbarViewTest, ToolbarCycleFocusWithBookmarkBar) {
-  CommandUpdater* updater = browser()->command_controller();
+  CommandUpdater* updater = chrome::BrowserCommandController::From(browser());
   updater->ExecuteCommand(IDC_SHOW_BOOKMARK_BAR);
 
   BookmarkModel* model =
-      BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+      BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
   bookmarks::AddIfNotBookmarked(model, GURL("http://foo.com"), u"Foo");
 
   // We want to specifically test the case where the bookmark bar is
   // already showing when a window opens, so create a second browser
   // window with the same profile.
-  Browser* second_browser = CreateBrowser(browser()->profile());
-  WaitForInitialWebUICanShow(second_browser);
+  BrowserWindowInterface* second_browser =
+      CreateBrowser(browser()->GetProfile());
+  WaitForInitialWebUI(second_browser);
   RunToolbarCycleFocusTest(second_browser);
 }
 
-IN_PROC_BROWSER_TEST_P(ToolbarViewTest, BackButtonUpdate) {
-  ToolbarButtonProvider* toolbar_button_provider =
-      BrowserView::GetBrowserViewForBrowser(browser())->toolbar();
-  ToolbarButton* back_button = toolbar_button_provider->GetBackButton();
-  EXPECT_FALSE(back_button->GetEnabled());
+IN_PROC_BROWSER_TEST_P(ToolbarViewTest, BackForwardButtonUpdate) {
+  DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kWebContentsId);
+  ASSERT_TRUE(embedded_test_server()->Start());
+  const GURL url = embedded_test_server()->GetURL("/title1.html");
 
-  // Navigate to title1.html. Back button should be enabled.
-  GURL url = chrome_test_utils::GetTestUrl(
-      base::FilePath(), base::FilePath(FILE_PATH_LITERAL("title1.html")));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
-  EXPECT_TRUE(back_button->GetEnabled());
+  RunTestSequence(
+      InstrumentTab(kWebContentsId),
+      ExpectBackForwardButtonEnabled(kToolbarBackButtonElementId, false),
+      ExpectBackForwardButtonEnabled(kToolbarForwardButtonElementId, false),
 
-  // Delete old navigations. Back button will be disabled.
-  auto& controller =
-      browser()->tab_strip_model()->GetActiveWebContents()->GetController();
-  controller.DeleteNavigationEntries(base::BindRepeating(
-      [&](content::NavigationEntry* entry) { return true; }));
-  EXPECT_FALSE(back_button->GetEnabled());
+      NavigateWebContents(kWebContentsId, url),
+      ExpectBackForwardButtonEnabled(kToolbarBackButtonElementId, true),
+      ExpectBackForwardButtonEnabled(kToolbarForwardButtonElementId, false),
+
+      Do([this]() {
+        auto& controller = browser()
+                               ->GetTabStripModel()
+                               ->GetActiveWebContents()
+                               ->GetController();
+        controller.DeleteNavigationEntries(base::BindRepeating(
+            [&](content::NavigationEntry* entry) { return true; }));
+      }),
+
+      ExpectBackForwardButtonEnabled(kToolbarBackButtonElementId, false),
+      ExpectBackForwardButtonEnabled(kToolbarForwardButtonElementId, false));
 }
 
-IN_PROC_BROWSER_TEST_P(ToolbarViewTest, BackButtonHoverThenClick) {
-  ToolbarButtonProvider* toolbar_button_provider =
-      BrowserView::GetBrowserViewForBrowser(browser())->toolbar();
-  ToolbarButton* back_button = toolbar_button_provider->GetBackButton();
-  EXPECT_FALSE(back_button->GetEnabled());
+// TODO(crbug.com/548345902): Re-enable once fixed. Failing at step 9:
+// WaitForWebContentsNavigation(kWebContentsId, GURL(url::kAboutBlankURL))
+#if BUILDFLAG(IS_CHROMEOS) && defined(MEMORY_SANITIZER)
+#define MAYBE_BackButtonHoverThenClick DISABLED_BackButtonHoverThenClick
+#else
+#define MAYBE_BackButtonHoverThenClick BackButtonHoverThenClick
+#endif
+IN_PROC_BROWSER_TEST_P(ToolbarViewTest, MAYBE_BackButtonHoverThenClick) {
+  DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kWebContentsId);
+  ASSERT_TRUE(embedded_test_server()->Start());
+  const GURL url1 = embedded_test_server()->GetURL("/title1.html");
 
-  // Navigate to title1.html. Back button should be enabled.
-  GURL url = chrome_test_utils::GetTestUrl(
-      base::FilePath(), base::FilePath(FILE_PATH_LITERAL("title1.html")));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
-  EXPECT_TRUE(back_button->GetEnabled());
+  RunTestSequence(
+      InstrumentTab(kWebContentsId),
+      ExpectBackForwardButtonEnabled(kToolbarBackButtonElementId, false),
 
-  // Mouse over and click on the back button. This should navigate back in
-  // session history.
-  content::TestNavigationObserver back_nav_observer(
-      browser()->tab_strip_model()->GetActiveWebContents());
-  ui_test_utils::ClickOnView(back_button);
-  back_nav_observer.Wait();
+      NavigateWebContents(kWebContentsId, url1),
+      ExpectBackForwardButtonEnabled(kToolbarBackButtonElementId, true),
 
-  EXPECT_FALSE(back_button->GetEnabled());
+      // Click on the back button. This should navigate back in
+      // session history.
+      MoveMouseToElement(kToolbarBackButtonElementId), ClickMouse(),
+      WaitForWebContentsNavigation(kWebContentsId, GURL(url::kAboutBlankURL)),
+
+      ExpectBackForwardButtonEnabled(kToolbarBackButtonElementId, false));
+}
+
+// Verifies that when the browser window is in standard (unmaximized) mode,
+// the back button is inset from toolbar edge by exact standard interior
+// margin (TOOLBAR_INTERIOR_MARGIN.left). In this mode, Fitts' law target
+// stretching is inactive, and the margin space outside button is not
+// clickable.
+IN_PROC_BROWSER_TEST_P(ToolbarViewTest, BackButtonDistanceFromEdge) {
+  auto restore_if_maximized = Do([this]() {
+    if (browser()->GetWindow() && (browser()->GetWindow()->IsMaximized() ||
+                                   browser()->GetWindow()->IsFullscreen())) {
+      browser()->GetWindow()->Restore();
+      ASSERT_TRUE(base::test::RunUntil([this]() {
+        return !browser()->GetWindow()->IsMaximized() &&
+               !browser()->GetWindow()->IsFullscreen();
+      }));
+    }
+    auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
+    if (browser_view && browser_view->toolbar()) {
+      browser_view->toolbar()->InvalidateLayout();
+    }
+    if (browser_view && browser_view->GetWidget()) {
+      browser_view->InvalidateLayout();
+      browser_view->GetWidget()->LayoutRootViewIfNecessary();
+    }
+  });
+  int expected_margin =
+      GetLayoutInsets(LayoutInset::TOOLBAR_INTERIOR_MARGIN).left();
+  const int default_margin =
+      GetLayoutConstant(LayoutConstant::kToolbarIconDefaultMargin);
+  if (features::IsWebUIBackForwardButtonEnabled()) {
+    // For WebUI: Verify that the internal #buttonWrapper element starts at
+    // one of valid boundary offsets depending on platform and rollout state:
+    // - `expected_margin` (6px): Default unmaximized non-touch margin.
+    // - `default_margin` (2px): Standard icon gap during intermediate rollout
+    //   phases when adjacent container boundaries override edge spacing.
+    // - `0`: Touch UI mode on Ash (where TOOLBAR_INTERIOR_MARGIN is 0) or
+    //   when running under maximized window Fitts' law target stretching
+    //   where outer margins collapse directly into inner wrapper padding.
+    RunTestSequence(
+        std::move(restore_if_maximized), WaitForToolbarLoaded(),
+        CheckJsResultAt(
+            WebUIToolbarId(),
+            WebUIAndViewsToolbarInteractiveUiTestBase::
+                WebUIBackForwardButtonDeepQuery(),
+            [expected_margin, default_margin]() {
+              return base::StringPrintf(
+                  "el => { const left = Math.round("
+                  "el.shadowRoot.querySelector('#buttonWrapper')"
+                  ".getBoundingClientRect().left); return left === %d || "
+                  "left === %d || left === 0; }",
+                  expected_margin, default_margin);
+            }(),
+            true));
+  } else {
+    // For native C++: Verify that `GetScreenBounds().x()` is inset from
+    // `ToolbarView` left edge by `expected_margin`, `default_margin`, or `0`.
+    // As noted above, these fallback tolerances accommodate unmaximized mode,
+    // intermediate rollout spacing, touch UI, or maximized Fitts' law modes.
+    RunTestSequence(
+        std::move(restore_if_maximized),
+        WaitForElementNonzeroSize(kToolbarBackButtonElementId),
+        CheckResult(
+            [this, expected_margin, default_margin]() -> bool {
+              ui::ElementContext context =
+                  BrowserView::GetBrowserViewForBrowser(browser())
+                      ->GetElementContext();
+              ui::TrackedElement* back_el =
+                  ui::ElementTracker::GetElementTracker()->GetUniqueElement(
+                      kToolbarBackButtonElementId, context);
+              ui::TrackedElement* toolbar_el =
+                  ui::ElementTracker::GetElementTracker()->GetUniqueElement(
+                      ToolbarView::kToolbarElementId, context);
+              const int margin = back_el->GetScreenBounds().x() -
+                                 toolbar_el->GetScreenBounds().x();
+              return margin == expected_margin || margin == default_margin ||
+                     margin == 0;
+            },
+            true));
+  }
 }
 
 // TODO(crbug.com/40252318): The ui test utils do not seem to adequately
@@ -381,42 +482,39 @@ IN_PROC_BROWSER_TEST_P(ToolbarViewTest, BackButtonHoverThenClick) {
 #define MAYBE_BackButtonHoverMetricsLogged BackButtonHoverMetricsLogged
 #endif
 IN_PROC_BROWSER_TEST_P(ToolbarViewTest, MAYBE_BackButtonHoverMetricsLogged) {
+  DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kWebContentsId);
   ASSERT_TRUE(embedded_test_server()->Start());
-  ToolbarButtonProvider* toolbar_button_provider =
-      BrowserView::GetBrowserViewForBrowser(browser())->toolbar();
-
-  // Set the initial mouse position to a known state. If the mouse happens to
-  // be over the back button at the start of the test, then the mouse movement
-  // done by the test wouldn't be seen as a mouse enter.
-  // The choice of using the reload button as the starting position is
-  // arbitrary.
-  ASSERT_TRUE(RunTestSequence(MoveMouseTo(
-      kReloadButtonElementId, base::BindOnce([](ui::TrackedElement* el) {
-        return el->GetScreenBounds().CenterPoint();
-      }))));
 
   const GURL first_url =
       embedded_test_server()->GetURL("a.test", "/title1.html");
   const GURL cross_site_url =
       embedded_test_server()->GetURL("b.test", "/title2.html");
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), first_url));
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), cross_site_url));
-
-  ToolbarButton* back_button = toolbar_button_provider->GetBackButton();
-  EXPECT_TRUE(back_button->GetEnabled());
 
   base::HistogramTester histogram_tester;
 
-  content::TestNavigationObserver back_nav_observer(
-      browser()->tab_strip_model()->GetActiveWebContents());
-  ui_test_utils::ClickOnView(back_button);
-  back_nav_observer.Wait();
+  RunTestSequence(
+      InstrumentTab(kWebContentsId),
+      NavigateWebContents(kWebContentsId, first_url),
+      NavigateWebContents(kWebContentsId, cross_site_url),
 
-  // content/ internal tests cover the details of various navigation scenarios
-  // in relation to this histogram. It's enough for this test confirm that a
-  // sample was added, rather than its specific value.
-  histogram_tester.ExpectTotalCount(
-      "Preloading.PrerenderBackNavigationEligibility.BackButtonHover", 1);
+      // Set the initial mouse position to a known state. If the mouse happens
+      // to be over the back button at the start of the test, then the mouse
+      // movement done by the test wouldn't be seen as a mouse enter. The choice
+      // of using the reload button as the starting position is arbitrary.
+      MoveMouseToElement(kReloadButtonElementId),
+
+      ExpectBackForwardButtonEnabled(kToolbarBackButtonElementId, true),
+
+      // Mouse over and click on the back button. This should navigate back in
+      // session history and log a hover metric.
+      MoveMouseToElement(kToolbarBackButtonElementId), ClickMouse(),
+      WaitForWebContentsNavigation(kWebContentsId, first_url),
+
+      Check([&]() {
+        histogram_tester.ExpectTotalCount(
+            "Preloading.PrerenderBackNavigationEligibility.BackButtonHover", 1);
+        return true;
+      }));
 }
 
 IN_PROC_BROWSER_TEST_P(ToolbarViewTest,
@@ -444,7 +542,7 @@ IN_PROC_BROWSER_TEST_P(ToolbarViewTest,
   Profile* guest = g_browser_process->profile_manager()->GetProfileByPath(
       ProfileManager::GetGuestProfilePath());
   ASSERT_TRUE(guest);
-  Browser* target_browser = chrome::FindAnyBrowser(guest, true);
+  BrowserWindowInterface* target_browser = ui_test_utils::FindAnyBrowser(guest);
   ASSERT_TRUE(target_browser);
   ExtensionsToolbarDesktop* extensions_container =
       BrowserView::GetBrowserViewForBrowser(target_browser)
@@ -453,11 +551,22 @@ IN_PROC_BROWSER_TEST_P(ToolbarViewTest,
   EXPECT_EQ(nullptr, extensions_container);
 }
 
-// Verifies that the identifiers for the pop-up menus are properly assigned so
-// that the menu can be located by tests when it is shown.
+// Verifies that the identifiers for the pop-up menus are properly
+// assigned so that the menu can be located by tests when it is shown.
 //
 // The back button is just one example for which the menu identifier is defined.
-IN_PROC_BROWSER_TEST_P(ToolbarViewTest, BackButtonMenu) {
+//
+// TODO: crbug.com/494279213 - Re-enable this test on Windows.
+#if BUILDFLAG(IS_WIN)
+#define MAYBE_BackButtonMenu DISABLED_BackButtonMenu
+#else
+#define MAYBE_BackButtonMenu BackButtonMenu
+#endif
+IN_PROC_BROWSER_TEST_P(ToolbarViewTest, MAYBE_BackButtonMenu) {
+  // TODO(crbug.com/470038385): Support WebUI back button in this test.
+  if (features::IsWebUIBackForwardButtonEnabled()) {
+    return;
+  }
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kWebContentsId);
   ASSERT_TRUE(embedded_test_server()->Start());
   const GURL url1 = embedded_test_server()->GetURL("/title1.html");
@@ -469,7 +578,7 @@ IN_PROC_BROWSER_TEST_P(ToolbarViewTest, BackButtonMenu) {
       NavigateWebContents(kWebContentsId, url3),
       // Show the context menu.
       MoveMouseTo(kToolbarBackButtonElementId), ClickMouse(ui_controls::RIGHT),
-      Log("Logging to probe crbug.com/1489499. Waiting for back button menu."),
+      Log("Logging to probe crbug.com/40074126. Waiting for back button menu."),
       // Dismiss the context menu by clicking on it.
       Log("Moving mouse to menu."),
       MoveMouseTo(kToolbarBackButtonMenuElementId),
@@ -520,7 +629,40 @@ IN_PROC_BROWSER_TEST_P(ToolbarViewTest, SecurityStateChanged) {
   EXPECT_TRUE(browser_view->UpdateToolbarSecurityState());
 }
 
+class ToolbarViewVerticalTabsRTLTest
+    : public VerticalTabsInteractiveTestMixin<ToolbarViewTest> {
+ public:
+  ToolbarViewVerticalTabsRTLTest() = default;
+
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    ToolbarViewTest::SetUpCommandLine(command_line);
+    command_line->AppendSwitchASCII("force-ui-direction", "rtl");
+  }
+};
+
+IN_PROC_BROWSER_TEST_P(ToolbarViewVerticalTabsRTLTest, ReloadButtonWorks) {
+  DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTabId);
+
+  ASSERT_TRUE(embedded_test_server()->Start());
+  const GURL url = embedded_test_server()->GetURL("/title1.html");
+
+  RunTestSequence(
+      EnterVerticalTabsMode(),
+      WaitForShow(kVerticalTabStripTopContainerElementId),
+      InstrumentTab(kTabId), NavigateWebContents(kTabId, url),
+      WaitForShow(kReloadButtonElementId),
+      WaitForViewProperty(kReloadButtonElementId, ReloadButton, VisibleMode,
+                          ReloadControl::Mode::kReload),
+      PressButton(kReloadButtonElementId),
+      WaitForWebContentsNavigation(kTabId));
+}
+
 INSTANTIATE_TEST_SUITE_P(
     /* no prefix */,
     ToolbarViewTest,
     ::testing::Values(false, true));
+
+INSTANTIATE_TEST_SUITE_P(
+    /* no prefix */,
+    ToolbarViewVerticalTabsRTLTest,
+    ::testing::Values(false));

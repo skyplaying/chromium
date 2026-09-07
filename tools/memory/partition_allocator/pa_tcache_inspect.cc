@@ -40,10 +40,10 @@
 #include "base/values.h"
 #include "build/build_config.h"
 #include "partition_alloc/bucket_lookup.h"
+#include "partition_alloc/internal/partition_root_internal.h"  // nogncheck
+#include "partition_alloc/internal/thread_cache_internal.h"    // nogncheck
 #include "partition_alloc/partition_alloc_base/threading/platform_thread.h"
-#include "partition_alloc/partition_root.h"
 #include "partition_alloc/partition_stats.h"
-#include "partition_alloc/thread_cache.h"
 #include "tools/memory/partition_allocator/inspect_utils.h"
 
 namespace partition_alloc::tools {
@@ -139,25 +139,25 @@ class ThreadCacheInspector {
   size_t CachedMemory() const;
   uintptr_t GetRootAddress();
 
-  const std::vector<RawBuffer<ThreadCache>>& thread_caches() const {
+  const std::vector<RawBuffer<internal::ThreadCache>>& thread_caches() const {
     return thread_caches_;
   }
 
-  static bool should_purge(const RawBuffer<ThreadCache>& tcache) {
+  static bool should_purge(const RawBuffer<internal::ThreadCache>& tcache) {
     return tcache.get()->should_purge_;
   }
 
   std::vector<BucketStats> AccumulateThreadCacheBuckets();
-  std::uint16_t largest_active_bucket_index() {
-    return registry_.get()->largest_active_bucket_index_;
+  std::uint16_t active_bucket_count() {
+    return registry_.get()->active_bucket_count_;
   }
 
  private:
   uintptr_t registry_addr_;
   pid_t pid_;
   RemoteProcessMemoryReader reader_;
-  RawBuffer<ThreadCacheRegistry> registry_;
-  std::vector<RawBuffer<ThreadCache>> thread_caches_;
+  RawBuffer<internal::ThreadCacheRegistry> registry_;
+  std::vector<RawBuffer<internal::ThreadCache>> thread_caches_;
 };
 
 class PartitionRootInspector {
@@ -203,15 +203,16 @@ bool ThreadCacheInspector::GetAllThreadCaches() NO_THREAD_SAFETY_ANALYSIS {
   // This is going to take a while, make sure that the metadata don't change.
   ScopedSigStopper stopper{pid_};
 
-  auto registry = RawBuffer<ThreadCacheRegistry>::ReadFromProcessMemory(
-      reader_, registry_addr_);
+  auto registry =
+      RawBuffer<internal::ThreadCacheRegistry>::ReadFromProcessMemory(
+          reader_, registry_addr_);
   if (!registry.has_value())
     return false;
 
   registry_ = *registry;
-  ThreadCache* head = registry_.get()->list_head_;
+  internal::ThreadCache* head = registry_.get()->list_head_;
   while (head) {
-    auto tcache = RawBuffer<ThreadCache>::ReadFromProcessMemory(
+    auto tcache = RawBuffer<internal::ThreadCache>::ReadFromProcessMemory(
         reader_, reinterpret_cast<uintptr_t>(head));
     if (!tcache.has_value()) {
       LOG(WARNING) << "Failed to read a ThreadCache";
@@ -241,15 +242,15 @@ uintptr_t ThreadCacheInspector::GetRootAddress() {
 
 std::vector<ThreadCacheInspector::BucketStats>
 ThreadCacheInspector::AccumulateThreadCacheBuckets() {
-  std::vector<BucketStats> result(ThreadCache::kBucketCount);
+  std::vector<BucketStats> result(internal::ThreadCache::kBucketCount);
   for (auto& tcache : thread_caches_) {
-    for (int i = 0; i < ThreadCache::kBucketCount; i++) {
+    for (int i = 0; i < internal::ThreadCache::kBucketCount; i++) {
       result[i].count += tcache.get()->buckets_[i].count;
       result[i].per_thread_limit = tcache.get()->buckets_[i].limit;
     }
   }
 
-  for (int i = 0; i < ThreadCache::kBucketCount; i++) {
+  for (int i = 0; i < internal::ThreadCache::kBucketCount; i++) {
     result[i].size = BucketIndexLookup::GetBucketSize(i);
   }
   return result;
@@ -417,8 +418,7 @@ void DisplayPerBucketData(ThreadCacheInspector& inspector) {
     size_t bucket_index = index;
     auto& bucket = bucket_stats[bucket_index];
     total_memory += bucket.size * bucket.count;
-    DisplayBucket(bucket,
-                  inspector.largest_active_bucket_index() == bucket_index);
+    DisplayBucket(bucket, inspector.active_bucket_count() - 1 == bucket_index);
 
     std::cout << "\t| ";
 
@@ -426,7 +426,7 @@ void DisplayPerBucketData(ThreadCacheInspector& inspector) {
     bucket = bucket_stats[bucket_index];
     total_memory += bucket.size * bucket.count;
     DisplayBucket(bucket_stats[bucket_index],
-                  inspector.largest_active_bucket_index() == bucket_index);
+                  inspector.active_bucket_count() - 1 == bucket_index);
 
     std::cout << "\n";
   }

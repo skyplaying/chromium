@@ -4,6 +4,7 @@
 
 #include "chrome/browser/autofill/autofill_uitest.h"
 
+#include <optional>
 #include <string>
 
 #include "base/functional/bind.h"
@@ -14,14 +15,13 @@
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/autofill/chrome_autofill_client.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "components/autofill/content/browser/content_autofill_driver.h"
 #include "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #include "components/autofill/core/browser/data_manager/personal_data_manager_observer.h"
 #include "components/autofill/core/browser/foundations/browser_autofill_manager_test_api.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/test/browser_test_utils.h"
@@ -155,7 +155,7 @@ void AutofillUiTest::SetUpOnMainThread() {
 
   // Wait for Personal Data Manager to be fully loaded to prevent that
   // spurious notifications deceive the tests.
-  WaitForPersonalDataManagerToBeLoaded(browser()->profile());
+  WaitForPersonalDataManagerToBeLoaded(browser()->GetProfile());
 
   // Disable the caret blinking to not generate any compositor frames from just
   // a blinking cursor.
@@ -176,8 +176,8 @@ void AutofillUiTest::TearDownOnMainThread() {
   // Make sure to close any showing popups prior to tearing down the UI.
   BrowserAutofillManager* autofill_manager = GetBrowserAutofillManager();
   if (autofill_manager)
-    autofill_manager->client().HideAutofillSuggestions(
-        SuggestionHidingReason::kTabGone);
+    autofill_manager->client().HideSuggestions(SuggestionHidingReason::kTabGone,
+                                               /*product=*/std::nullopt);
   current_main_rfh_ = nullptr;
   InProcessBrowserTest::TearDownOnMainThread();
 }
@@ -265,13 +265,6 @@ testing::AssertionResult AutofillUiTest::SendKeyToPopupAndWait(
   testing::AssertionResult result = test_delegate()->Wait();
   widget->RemoveKeyPressEventCallback(key_press_event_sink_);
   return result;
-}
-
-void AutofillUiTest::DoNothingAndWait(base::TimeDelta timeout,
-                                      base::Location location) {
-  test_delegate()->SetExpectations({ObservedUiEvents::kNoEvent}, timeout,
-                                   location);
-  ASSERT_FALSE(test_delegate()->Wait());
 }
 
 void AutofillUiTest::DoNothingAndWaitAndIgnoreEvents(base::TimeDelta timeout) {

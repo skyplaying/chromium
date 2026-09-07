@@ -13,6 +13,7 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
+import org.mockito.quality.Strictness;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.omnibox.R;
@@ -20,6 +21,7 @@ import org.chromium.chrome.browser.omnibox.suggestions.SuggestionHost;
 import org.chromium.components.browser_ui.widget.chips.ChipProperties;
 import org.chromium.components.omnibox.AutocompleteMatchBuilder;
 import org.chromium.components.omnibox.OmniboxSuggestionType;
+import org.chromium.components.omnibox.action.ActionPresentationMode;
 import org.chromium.components.omnibox.action.OmniboxAction;
 import org.chromium.components.omnibox.action.OmniboxActionDelegate;
 import org.chromium.components.omnibox.action.OmniboxActionId;
@@ -34,9 +36,11 @@ import java.util.List;
 public class ActionChipsProcessorUnitTest {
     private static final int MATCH_POS = 1234;
 
-    public @Rule MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Rule
+    public final MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
 
-    private @Mock SuggestionHost mSuggestionHost;
+    @Mock private SuggestionHost mSuggestionHost;
+    @Mock private OmniboxActionDelegate mActionDelegate;
 
     private ActionChipsProcessor mProcessor;
     private PropertyModel mModel;
@@ -44,7 +48,7 @@ public class ActionChipsProcessorUnitTest {
 
     @Before
     public void setUp() {
-        mProcessor = new ActionChipsProcessor(mSuggestionHost);
+        mProcessor = new ActionChipsProcessor(mSuggestionHost, mActionDelegate);
         mModel = new PropertyModel(ActionChipsProperties.ALL_UNIQUE_KEYS);
     }
 
@@ -56,10 +60,12 @@ public class ActionChipsProcessorUnitTest {
                 "accessibility hint",
                 OmniboxAction.DEFAULT_ICON,
                 textAppearance,
-                /* showAsActionButton= */ false,
+                ActionPresentationMode.CHIP,
                 WindowOpenDisposition.CURRENT_TAB) {
             @Override
-            public void execute(OmniboxActionDelegate delegate) {}
+            public boolean execute(OmniboxActionDelegate delegate) {
+                return true;
+            }
         };
     }
 

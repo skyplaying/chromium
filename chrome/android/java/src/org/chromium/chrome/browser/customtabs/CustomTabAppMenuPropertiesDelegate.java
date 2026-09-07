@@ -5,7 +5,11 @@
 package org.chromium.chrome.browser.customtabs;
 
 import android.content.Context;
+import android.content.Intent;
+import android.content.pm.ResolveInfo;
 import android.content.res.Resources;
+import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -16,12 +20,15 @@ import androidx.annotation.VisibleForTesting;
 import androidx.appcompat.content.res.AppCompatResources;
 
 import org.chromium.base.ContextUtils;
+import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.NullableObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ActivityTabProvider;
-import org.chromium.chrome.browser.DefaultBrowserInfo;
+import org.chromium.chrome.browser.DefaultBrowserMenuUtils;
+import org.chromium.chrome.browser.IntentHandler;
+import org.chromium.chrome.browser.app.appmenu.AppMenuItemUtils;
 import org.chromium.chrome.browser.app.appmenu.AppMenuPropertiesDelegateImpl;
 import org.chromium.chrome.browser.bookmarks.BookmarkModel;
 import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
@@ -39,7 +46,11 @@ import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.toolbar.ToolbarManager;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuHandler;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuItemProperties;
+import org.chromium.chrome.browser.ui.web_app_header.WebAppHeaderLayoutCoordinator;
+import org.chromium.chrome.browser.util.DefaultBrowserInfo;
+import org.chromium.components.browser_ui.accessibility.PageZoomManager;
 import org.chromium.components.embedder_support.util.UrlConstants;
+import org.chromium.components.embedder_support.util.UrlUtilities;
 import org.chromium.ui.modelutil.MVCListAdapter;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.url.GURL;
@@ -53,6 +64,8 @@ import java.util.function.Supplier;
 /** App menu properties delegate for {@link CustomTabActivity}. */
 @NullMarked
 public class CustomTabAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateImpl {
+    private static final String HELP_URL =
+            "https://support.google.com/googlebook?p=web_powered_apps";
     private static final String CUSTOM_MENU_ITEM_ID_KEY = "CustomMenuItemId";
     private static final String SHOW_OPEN_IN_BROWSER_MENU_TOP_PARAM =
             "show_open_in_browser_menu_top";
@@ -73,6 +86,9 @@ public class CustomTabAppMenuPropertiesDelegate extends AppMenuPropertiesDelegat
     private final List<String> mMenuEntries;
     private final Map<Integer, Integer> mItemIdToIndexMap = new HashMap<>();
     private final Supplier<ContextualPageActionController> mContextualPageActionControllerSupplier;
+
+    private final Supplier<@Nullable WebAppHeaderLayoutCoordinator>
+            mWebAppHeaderLayoutCoordinatorSupplier;
 
     private boolean mHasClientPackage;
 
@@ -95,10 +111,13 @@ public class CustomTabAppMenuPropertiesDelegate extends AppMenuPropertiesDelegat
             boolean isIncognitoBranded,
             boolean isOffTheRecord,
             boolean isStartIconMenu,
-            Supplier<ReadAloudController> readAloudControllerSupplier,
+            MonotonicObservableSupplier<ReadAloudController> readAloudControllerSupplier,
             Supplier<ContextualPageActionController> contextualPageActionControllerSupplier,
             boolean hasClientPackage,
-            @Nullable OpenInAppMenuItemProvider openInAppMenuItemProvider) {
+            @Nullable PageZoomManager pageZoomManager,
+            @Nullable OpenInAppMenuItemProvider openInAppMenuItemProvider,
+            Supplier<@Nullable WebAppHeaderLayoutCoordinator>
+                    webAppHeaderLayoutCoordinatorSupplier) {
         super(
                 context,
                 activityTabProvider,
@@ -109,6 +128,7 @@ public class CustomTabAppMenuPropertiesDelegate extends AppMenuPropertiesDelegat
                 null,
                 bookmarkModelSupplier,
                 readAloudControllerSupplier,
+                pageZoomManager,
                 openInAppMenuItemProvider);
         mVerifier = verifier;
         mUiType = uiType;
@@ -122,6 +142,7 @@ public class CustomTabAppMenuPropertiesDelegate extends AppMenuPropertiesDelegat
         mIsStartIconMenu = isStartIconMenu;
         mContextualPageActionControllerSupplier = contextualPageActionControllerSupplier;
         mHasClientPackage = hasClientPackage;
+        mWebAppHeaderLayoutCoordinatorSupplier = webAppHeaderLayoutCoordinatorSupplier;
     }
 
     @Override
@@ -142,7 +163,6 @@ public class CustomTabAppMenuPropertiesDelegate extends AppMenuPropertiesDelegat
         boolean addToHomeScreenVisible = true;
         boolean requestDesktopSiteVisible = true;
         boolean tryAddingReadAloud = true;
-        boolean readerModePrefsVisible = false;
         boolean translateVisible = true;
         // When the icon row is visible, site info is a button in that row.
         // This is a separate menu item row for the site info shown within the icon row.
@@ -172,15 +192,6 @@ public class CustomTabAppMenuPropertiesDelegate extends AppMenuPropertiesDelegat
             requestDesktopSiteVisible = false;
             addToHomeScreenVisible = false;
             tryAddingReadAloud = false;
-        } else if (mUiType == CustomTabsUiType.READER_MODE) {
-            // Only 'find in page' and the reader mode preference are shown for Reader Mode UI.
-            iconRowVisible = false;
-            bookmarkItemVisible = false; // Set to skip initialization.
-            downloadItemVisible = false; // Set to skip initialization.
-            requestDesktopSiteVisible = false;
-            addToHomeScreenVisible = false;
-            tryAddingReadAloud = false;
-            readerModePrefsVisible = true;
         } else if (mUiType == CustomTabsUiType.MINIMAL_UI_WEBAPP) {
             requestDesktopSiteVisible = false;
             // For Webapps & WebAPKs Verifier#wasPreviouslyVerified() performs verification
@@ -241,10 +252,7 @@ public class CustomTabAppMenuPropertiesDelegate extends AppMenuPropertiesDelegat
         if (CustomTabIntentDataProvider.isOpenInBrowserDisallowed(mUiType, mIsIncognitoBranded)) {
             openInChromeItemVisible = false;
         }
-        boolean isNativePage =
-                url.getScheme().equals(UrlConstants.CHROME_SCHEME)
-                        || url.getScheme().equals(UrlConstants.CHROME_NATIVE_SCHEME)
-                        || currentTab.isNativePage();
+        boolean isNativePage = UrlUtilities.isChromeScheme(url) || currentTab.isNativePage();
         boolean isFileScheme = url.getScheme().equals(UrlConstants.FILE_SCHEME);
         boolean isContentScheme = url.getScheme().equals(UrlConstants.CONTENT_SCHEME);
         // TODO(crbug.com/384992232): Hide open in Chrome for blob and data url until such view
@@ -260,6 +268,9 @@ public class CustomTabAppMenuPropertiesDelegate extends AppMenuPropertiesDelegat
         // --- Icon Row ---
         if (iconRowVisible) {
             List<PropertyModel> iconModels = new ArrayList<>();
+            if (ChromeFeatureList.sThreeDotMenuBackButton.isEnabled()) {
+                iconModels.add(buildBackwardActionModel(currentTab));
+            }
             iconModels.add(buildForwardActionModel(currentTab));
 
             if (bookmarkItemVisible) {
@@ -270,13 +281,16 @@ public class CustomTabAppMenuPropertiesDelegate extends AppMenuPropertiesDelegat
                 iconModels.add(buildDownloadActionModel(currentTab));
             }
 
-            iconModels.add(buildPageInfoModel(currentTab));
+            if (!ChromeFeatureList.sThreeDotMenuBackButton.isEnabled()) {
+                iconModels.add(buildPageInfoModel(currentTab));
+            }
             iconModels.add(buildReloadModel(currentTab));
 
             modelList.add(
                     new MVCListAdapter.ListItem(
                             AppMenuHandler.AppMenuItemType.BUTTON_ROW,
-                            buildModelForIconRow(R.id.icon_row_menu_id, iconModels)));
+                            AppMenuItemUtils.buildModelForIconRow(
+                                    R.id.icon_row_menu_id, iconModels, isMenuIconAtStart())));
         }
 
         // --- App Specific Items / Divider ---
@@ -299,7 +313,8 @@ public class CustomTabAppMenuPropertiesDelegate extends AppMenuPropertiesDelegat
             modelList.add(
                     new MVCListAdapter.ListItem(
                             AppMenuHandler.AppMenuItemType.STANDARD,
-                            buildBaseModelForTextItem(id)
+                            AppMenuItemUtils.buildBaseModelForTextItem(
+                                            getAppMenuItemTheme(), id, isMenuIconAtStart())
                                     .with(AppMenuItemProperties.TITLE, mMenuEntries.get(i))
                                     .build()));
             mItemIdToIndexMap.put(id, i);
@@ -309,7 +324,7 @@ public class CustomTabAppMenuPropertiesDelegate extends AppMenuPropertiesDelegat
             modelList.add(
                     new MVCListAdapter.ListItem(
                             AppMenuHandler.AppMenuItemType.DIVIDER,
-                            buildModelForDivider(R.id.divider_line_id)));
+                            AppMenuItemUtils.buildModelForDivider(R.id.divider_line_id)));
         }
 
         // --- App info row ---
@@ -317,8 +332,13 @@ public class CustomTabAppMenuPropertiesDelegate extends AppMenuPropertiesDelegat
             modelList.add(
                     new MVCListAdapter.ListItem(
                             AppMenuHandler.AppMenuItemType.STANDARD,
-                            buildModelForStandardMenuItem(
-                                    R.id.info_menu_id, R.string.menu_app_info, 0)));
+                            AppMenuItemUtils.buildModelForStandardMenuItem(
+                                    mContext,
+                                    getAppMenuItemTheme(),
+                                    R.id.info_menu_id,
+                                    R.string.menu_app_info,
+                                    0,
+                                    isMenuIconAtStart())));
         }
 
         // --- Open in browser ---
@@ -339,8 +359,9 @@ public class CustomTabAppMenuPropertiesDelegate extends AppMenuPropertiesDelegat
         }
 
         // --- Reader Mode ---
+        boolean shouldShowIconBeforeItem = shouldShowIconBeforeItem();
         if (shouldShowReaderModeItem()) {
-            modelList.add(buildReaderModeItem(currentTab));
+            modelList.add(buildReaderModeItem(currentTab, shouldShowIconBeforeItem));
         }
 
         // --- Share ---
@@ -353,8 +374,13 @@ public class CustomTabAppMenuPropertiesDelegate extends AppMenuPropertiesDelegat
             modelList.add(
                     new MVCListAdapter.ListItem(
                             AppMenuHandler.AppMenuItemType.STANDARD,
-                            buildModelForStandardMenuItem(
-                                    R.id.open_history_menu_id, R.string.chrome_history, 0)));
+                            AppMenuItemUtils.buildModelForStandardMenuItem(
+                                    mContext,
+                                    getAppMenuItemTheme(),
+                                    R.id.open_history_menu_id,
+                                    R.string.chrome_history,
+                                    0,
+                                    isMenuIconAtStart())));
         }
 
         // --- Find in Page ---
@@ -362,13 +388,13 @@ public class CustomTabAppMenuPropertiesDelegate extends AppMenuPropertiesDelegat
             modelList.add(
                     new MVCListAdapter.ListItem(
                             AppMenuHandler.AppMenuItemType.STANDARD,
-                            buildModelForStandardMenuItem(
-                                    R.id.find_in_page_id, R.string.menu_find_in_page, 0)));
-        }
-
-        // --- Reader Mode Prefs ---
-        if (readerModePrefsVisible) {
-            modelList.add(buildReaderModePrefsItem());
+                            AppMenuItemUtils.buildModelForStandardMenuItem(
+                                    mContext,
+                                    getAppMenuItemTheme(),
+                                    R.id.find_in_page_id,
+                                    R.string.menu_find_in_page,
+                                    0,
+                                    isMenuIconAtStart())));
         }
 
         // --- Price Tracking / Price Insights ---
@@ -384,10 +410,13 @@ public class CustomTabAppMenuPropertiesDelegate extends AppMenuPropertiesDelegat
                 modelList.add(
                         new MVCListAdapter.ListItem(
                                 AppMenuHandler.AppMenuItemType.STANDARD,
-                                buildModelForStandardMenuItem(
+                                AppMenuItemUtils.buildModelForStandardMenuItem(
+                                        mContext,
+                                        getAppMenuItemTheme(),
                                         R.id.price_insights_menu_id,
                                         R.string.price_insights_title,
-                                        R.drawable.ic_trending_down_24dp)));
+                                        R.drawable.ic_trending_down_24dp,
+                                        isMenuIconAtStart())));
             }
         }
 
@@ -413,6 +442,16 @@ public class CustomTabAppMenuPropertiesDelegate extends AppMenuPropertiesDelegat
             modelList.add(buildTranslateMenuItem(currentTab, false));
         }
 
+        // --- Site controls ---
+        if (shouldShowPageInfoItem()) {
+            modelList.add(buildPageInfoItem(currentTab, shouldShowIconBeforeItem));
+        }
+
+        // --- Extensions ---
+        if (shouldShowExtensionsItem()) {
+            modelList.add(buildExtensionsParentItem());
+        }
+
         // --- Open with ---
         if (shouldShowOpenWithItem(currentTab)) {
             modelList.add(buildOpenWithItem(currentTab, false));
@@ -425,11 +464,9 @@ public class CustomTabAppMenuPropertiesDelegate extends AppMenuPropertiesDelegat
 
         // --- Zoom ---
         if (zoomVisible) {
-            modelList.add(
-                    new MVCListAdapter.ListItem(
-                            AppMenuHandler.AppMenuItemType.STANDARD,
-                            buildModelForStandardMenuItem(
-                                    R.id.page_zoom_id, R.string.page_zoom_menu_title, 0)));
+            if (shouldShowPageZoomItem(currentTab)) {
+                modelList.add(buildPageZoomItem(currentTab));
+            }
         }
         return modelList;
     }
@@ -442,10 +479,11 @@ public class CustomTabAppMenuPropertiesDelegate extends AppMenuPropertiesDelegat
         } else if (mIsOpenedByChrome) {
             title = context.getString(R.string.menu_open_in_new_tab);
         } else {
-            title = DefaultBrowserInfo.getTitleOpenInDefaultBrowser(false);
+            title = DefaultBrowserMenuUtils.getTitleOpenInDefaultBrowser(false);
         }
         PropertyModel model =
-                buildBaseModelForTextItem(R.id.open_in_browser_id)
+                AppMenuItemUtils.buildBaseModelForTextItem(
+                                getAppMenuItemTheme(), R.id.open_in_browser_id, isMenuIconAtStart())
                         .with(AppMenuItemProperties.TITLE, title)
                         .build();
         if (showIcon) {
@@ -481,13 +519,14 @@ public class CustomTabAppMenuPropertiesDelegate extends AppMenuPropertiesDelegat
     }
 
     @Override
-    public @Nullable Bundle getBundleForMenuItem(int itemId) {
+    public @Nullable Bundle getBundleForMenuItem(PropertyModel model) {
+        int itemId = model.get(AppMenuItemProperties.MENU_ITEM_ID);
         if (!mItemIdToIndexMap.containsKey(itemId)) {
             return null;
         }
 
         Bundle itemBundle = new Bundle();
-        itemBundle.putInt(CUSTOM_MENU_ITEM_ID_KEY, mItemIdToIndexMap.get(itemId).intValue());
+        itemBundle.putInt(CUSTOM_MENU_ITEM_ID_KEY, mItemIdToIndexMap.get(itemId));
         return itemBundle;
     }
 
@@ -509,12 +548,47 @@ public class CustomTabAppMenuPropertiesDelegate extends AppMenuPropertiesDelegat
             footerTextView.setText(footerText);
         }
 
+        if (ChromeFeatureList.sDesktopAndroidTWADisclosuresHelpLink.isEnabled() && mIsTablet) {
+            footer.setFocusable(true);
+            footer.setOnClickListener(
+                    v -> {
+                        openHelpArticle();
+                        appMenuHandler.hideAppMenu();
+                    });
+        }
+
         return footer;
+    }
+
+    private void openHelpArticle() {
+        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(HELP_URL));
+        intent.addCategory(Intent.CATEGORY_BROWSABLE);
+        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        intent.putExtra(IntentHandler.EXTRA_FROM_OPEN_IN_BROWSER, true);
+        ResolveInfo resolveInfo = DefaultBrowserInfo.getDefaultWebBrowserInfo();
+        if (resolveInfo != null && resolveInfo.match != 0 && resolveInfo.activityInfo != null) {
+            intent.setPackage(resolveInfo.activityInfo.packageName);
+        }
+        mContext.startActivity(intent);
     }
 
     @Override
     public boolean isMenuIconAtStart() {
         return mIsStartIconMenu;
+    }
+
+    @Override
+    protected boolean shouldShowExtensionsItem() {
+        if (mUiType != CustomTabsUiType.TRUSTED_WEB_ACTIVITY || !super.shouldShowExtensionsItem()) {
+            return false;
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+            return false;
+        }
+        WebAppHeaderLayoutCoordinator headerCoordinator =
+                mWebAppHeaderLayoutCoordinatorSupplier.get();
+        return headerCoordinator != null
+                && headerCoordinator.getExtensionsToolbarCoordinator() != null;
     }
 
     void setHasClientPackageForTesting(boolean hasClientPackage) {

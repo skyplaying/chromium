@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include "base/gtest_prod_util.h"
@@ -42,6 +43,7 @@ struct FrameMetadata;
 class PaintImageGenerator;
 class PaintWorkletInput;
 class TextureBacking;
+class TextureBackingContext;
 
 enum class ImageType {
   kPNG,
@@ -105,9 +107,6 @@ struct CC_PAINT_EXPORT ImageHeaderMetadata {
   // The subsampling format used for the chroma planes, e.g., YUV 4:2:0.
   YUVSubsampling yuv_subsampling = YUVSubsampling::kUnknown;
 
-  // Any HDR metadata included with the image.
-  gfx::HDRMetadata hdr_metadata;
-
   // The visible size of the image (i.e., the area that contains meaningful
   // pixels).
   gfx::Size image_size;
@@ -151,15 +150,21 @@ struct CC_PAINT_EXPORT ImageHeaderMetadata {
 // scale or animation frame.
 class CC_PAINT_EXPORT PaintImage {
  public:
-  using Id = int;
+  using Id = int64_t;
   using AnimationSequenceId = uint32_t;
+  enum class AnimationSyncSequence : AnimationSequenceId {
+    // All instances of the image animation together on a shared timeline.
+    kShared = 0,
+    // This instance drives its own independent image animation timeline.
+    kOwn = 1,
+  };
 
   // A ContentId is used to identify the content for which images which can be
   // lazily generated (generator/record backed images). As opposed to Id, which
   // stays constant for the same image, the content id can be updated when the
   // backing encoded data for this image changes. For instance, in the case of
   // images which can be progressively updated as more encoded data is received.
-  using ContentId = int;
+  using ContentId = int64_t;
 
   // A GeneratorClientId can be used to namespace different clients that are
   // using the output of a PaintImageGenerator.
@@ -171,7 +176,7 @@ class CC_PAINT_EXPORT PaintImage {
   // parallel. This is particularly important for animated images, where
   // compositors displaying the same image can request decodes for different
   // frames from this image.
-  using GeneratorClientId = int;
+  using GeneratorClientId = int64_t;
   static const GeneratorClientId kDefaultGeneratorClientId;
 
   // The default frame index to use if no index is provided. For multi-frame
@@ -297,18 +302,24 @@ class CC_PAINT_EXPORT PaintImage {
   // Returned mailbox must not outlive this PaintImage.
   gpu::Mailbox GetMailbox() const;
 
+  void BindTextureBacking(scoped_refptr<TextureBackingContext>) const;
+  void UnbindTextureBacking() const;
+
   Id stable_id() const { return id_; }
+  Id sync_animation_target_id() const { return sync_animation_target_id_; }
   SkImageInfo GetSkImageInfo(AuxImage aux_image = AuxImage::kDefault) const;
   AnimationType animation_type() const { return animation_type_; }
   CompletionState completion_state() const { return completion_state_; }
   bool is_multipart() const { return is_multipart_; }
   bool is_high_bit_depth() const { return is_high_bit_depth_; }
-  bool may_be_lcp_candidate() const { return may_be_lcp_candidate_; }
   bool no_cache() const { return no_cache_; }
   int repetition_count() const { return repetition_count_; }
   bool ShouldAnimate() const;
   AnimationSequenceId reset_animation_sequence_id() const {
     return reset_animation_sequence_id_;
+  }
+  AnimationSequenceId sync_animation_sequence_id() const {
+    return sync_animation_sequence_id_;
   }
   DecodingMode decoding_mode() const { return decoding_mode_; }
 
@@ -389,12 +400,13 @@ class CC_PAINT_EXPORT PaintImage {
     return gainmap_info_.value();
   }
 
-  gfx::HDRMetadata GetHDRMetadata() const {
-    if (const auto* image_metadata = GetImageHeaderMetadata()) {
-      return image_metadata->hdr_metadata;
-    }
-    return gfx::HDRMetadata();
-  }
+  const gfx::HDRMetadata& GetHDRMetadata() const { return hdr_metadata_; }
+
+  // Returns the maximum HDR headroom in log2 space required to render this
+  // image at full HDR brightness, taking into account gainmap ratio max
+  // metadata or the image's color space. Returns 0.0f if the image is SDR (e.g.
+  // 0.5f corresponds to 2^0.5 ~= 1.41x SDR white).
+  float GetMaximumRenderedHdrHeadroom() const;
 
   std::string ToString() const;
 
@@ -465,12 +477,6 @@ class CC_PAINT_EXPORT PaintImage {
   // Whether this image has more than 8 bits per color channel.
   bool is_high_bit_depth_ = false;
 
-  // Whether this image may untimately be a candidate for Largest Contentful
-  // Paint. The final LCP contribution of an image is unknown until we present
-  // it, but this flag is intended for metrics on when we do not present the
-  // image when the system claims.
-  bool may_be_lcp_candidate_ = false;
-
   // Indicates that the image is unlikely to be re-used past the first frame it
   // appears in. Used as a hint to avoid caching it downstream, but is not a
   // mandate.
@@ -481,6 +487,13 @@ class CC_PAINT_EXPORT PaintImage {
   // will reset this animation in the compositor for the first frame which has a
   // recording with a PaintImage storing the updated sequence id.
   AnimationSequenceId reset_animation_sequence_id_ = 0u;
+
+  // The target paint image id to synchronize the frame index.
+  PaintImage::Id sync_animation_target_id_ = kInvalidId;
+  // An incrementing sequence number by the painter to indicate if the animation
+  // should be synced. This will track if it is up-to-date already synced or
+  // not.
+  PaintImage::AnimationSequenceId sync_animation_sequence_id_ = 0;
 
   DecodingMode decoding_mode_ = DecodingMode::kSync;
 
@@ -494,6 +507,20 @@ class CC_PAINT_EXPORT PaintImage {
 
   // The input parameters that are needed to execute the JS paint callback.
   scoped_refptr<DeferredPaintRecord> deferred_paint_record_;
+};
+
+// Lookup table to get the animation frame to be used for rasterization.
+class CC_PAINT_EXPORT AnimatedImageFrameIndexMap
+    : public base::RefCountedThreadSafe<AnimatedImageFrameIndexMap>,
+      public base::flat_map<PaintImage::Id, size_t> {
+ public:
+  AnimatedImageFrameIndexMap();
+  AnimatedImageFrameIndexMap(base::sorted_unique_t sorted_unique,
+                             container_type entries);
+
+ private:
+  friend class base::RefCountedThreadSafe<AnimatedImageFrameIndexMap>;
+  ~AnimatedImageFrameIndexMap();
 };
 
 }  // namespace cc

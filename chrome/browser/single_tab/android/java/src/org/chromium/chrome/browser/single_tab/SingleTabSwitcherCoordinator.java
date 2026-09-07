@@ -20,11 +20,11 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.magic_stack.ModuleDelegate;
 import org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType;
 import org.chromium.chrome.browser.magic_stack.ModuleProvider;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.chrome.browser.tab_ui.TabContentManager;
 import org.chromium.chrome.browser.tab_ui.TabListFaviconProvider;
+import org.chromium.chrome.browser.tab_ui.TabListMode;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.components.browser_ui.widget.displaystyle.UiConfig;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -77,7 +77,7 @@ public class SingleTabSwitcherCoordinator implements ModuleProvider {
         mTabListFaviconProvider =
                 new TabListFaviconProvider(
                         activity,
-                        /* isTabStrip= */ false,
+                        TabListMode.GRID,
                         org.chromium.chrome.browser.tab_ui.R.dimen
                                 .favicon_corner_radius_for_single_tab_switcher,
                         /* tabWebContentsFaviconDelegate= */ null);
@@ -104,7 +104,7 @@ public class SingleTabSwitcherCoordinator implements ModuleProvider {
         if (mLastActiveTab == null) return;
 
         mLastActiveTabObserver =
-                new EmptyTabObserver() {
+                new TabObserver() {
                     @Override
                     public void onClosingStateChanged(Tab tab, boolean closing) {
                         if (closing) {

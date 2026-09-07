@@ -34,7 +34,7 @@ const APIPermissionInfo* PermissionsInfo::GetByID(
 }
 
 const APIPermissionInfo* PermissionsInfo::GetByName(
-    const std::string& name) const {
+    std::string_view name) const {
   auto i = name_map_.find(name);
   return (i == name_map_.end()) ? nullptr : i->second;
 }
@@ -72,9 +72,10 @@ PermissionsInfo::~PermissionsInfo() {
 }
 
 void PermissionsInfo::RegisterAlias(const Alias& alias) {
-  DCHECK(name_map_.contains(alias.real_name));
-  DCHECK(!name_map_.contains(alias.name));
-  name_map_[alias.name] = name_map_[alias.real_name];
+  auto it = name_map_.find(alias.real_name);
+  DCHECK(it != name_map_.end());
+  auto emplace = name_map_.emplace(alias.name, it->second);
+  DCHECK(emplace.second);
 }
 
 void PermissionsInfo::RegisterPermission(

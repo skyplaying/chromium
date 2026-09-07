@@ -88,6 +88,8 @@ export enum VisitContextMenuAction {
   MORE_FROM_THIS_SITE_CLICKED = 0,
   REMOVE_FROM_HISTORY_CLICKED = 1,
   REMOVE_BOOKMARK_CLICKED = 2,
-  MAX_VALUE = 3,
+  REVIEW_GEMINI_ACTIVITY_CLICKED = 3,
+  GO_TO_GEMINI_CHAT_CLICKED = 4,
+  MAX_VALUE = 5,
 }
 // LINT.ThenChange(/tools/metrics/histograms/metadata/history/enums.xml:VisitContextMenuAction)

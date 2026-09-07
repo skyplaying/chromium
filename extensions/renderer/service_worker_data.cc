@@ -111,21 +111,33 @@ mojom::RendererHost* ServiceWorkerData::GetRendererHost() {
   return renderer_host_.get();
 }
 
+mojom::WebRequestHost* ServiceWorkerData::GetWebRequestHost() {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  CHECK(bindings_system_);
+  if (!web_request_host_.is_bound()) {
+    proxy_->GetRemoteAssociatedInterface(
+        web_request_host_.BindNewEndpointAndPassReceiver());
+  }
+  return web_request_host_.get();
+}
+
 void ServiceWorkerData::Init() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   CHECK(bindings_system_);
   const int thread_id = content::WorkerThread::GetCurrentId();
   const ExtensionId& extension_id = context_->GetExtensionID();
   CHECK(!extension_id.empty());
+  CHECK(activation_sequence_.has_value());
   GetServiceWorkerHost()->DidInitializeServiceWorkerContext(
-      extension_id, service_worker_version_id_, thread_id,
-      service_worker_token_,
+      extension_id, *activation_sequence_, service_worker_version_id_,
+      thread_id, service_worker_token_,
       event_dispatcher_receiver_.BindNewEndpointAndPassRemote());
 }
 
-void ServiceWorkerData::DispatchEvent(mojom::DispatchEventParamsPtr params,
-                                      base::ListValue event_args,
-                                      DispatchEventCallback callback) {
+void ServiceWorkerData::DispatchEvent(
+    mojom::DispatchEventParamsPtr params,
+    const scoped_refptr<const EventArgs>& event_args,
+    DispatchEventCallback callback) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   ScriptContext* script_context = context();
   // Note |scoped_extension_interaction| requires a HandleScope.
@@ -138,9 +150,13 @@ void ServiceWorkerData::DispatchEvent(mojom::DispatchEventParamsPtr params,
             script_context->v8_context());
   }
 
-  bindings_system()->DispatchEventInContext(params->event_name, event_args,
-                                            std::move(params->filtering_info),
-                                            context());
+  CHECK(event_args);
+  const base::ListValue& args = event_args->data;
+  bindings_system()->DispatchEventInContext(
+      params->event_name, args, std::move(params->filtering_info), context());
+  // The worker has a single context, so one dispatch notifies every listener.
+  bindings_system()->DidDispatchEvent(*params->host_id, params->event_name,
+                                      args);
 
   std::move(callback).Run(
       // False since this is only possibly true for lazy background page.

@@ -12,6 +12,7 @@
 #include "base/functional/bind.h"
 #include "build/build_config.h"
 #include "components/permissions/permission_util.h"
+#include "components/permissions/permissions_client.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/permission_controller.h"
 #include "content/public/browser/permission_descriptor_util.h"
@@ -62,10 +63,10 @@ void MediaStreamDevicesController::RequestPermissions(
       request.render_process_id, request.render_frame_id);
   // The RFH may have been destroyed by the time the request is processed.
   if (!rfh) {
-    std::move(callback).Run(
-        blink::mojom::StreamDevicesSet(),
-        blink::mojom::MediaStreamRequestResult::FAILED_DUE_TO_SHUTDOWN, false,
-        {}, {});
+    std::move(callback).Run(blink::mojom::StreamDevicesSet(),
+                            blink::mojom::MediaStreamRequestResult::
+                                FAILED_DUE_TO_SHUTDOWN_NO_RFH_IN_CONTROLLER,
+                            false, {}, {});
     return;
   }
 
@@ -99,7 +100,17 @@ void MediaStreamDevicesController::RequestPermissions(
     content::PermissionResult permission_result =
         permission_controller->GetPermissionResultForCurrentDocument(
             audio_descriptor, rfh);
-    if (permission_result.status == blink::mojom::PermissionStatus::DENIED) {
+    // Check if web contents has allowlisted capability to ignore the denied
+    // status and denied reason.
+    bool web_contents_has_allowlisted_permission =
+        permissions::PermissionsClient::AllowEmbeddedPermissionPromptForSurface(
+            web_contents) &&
+        permissions::PermissionsClient::Get()
+            ->IsPrivilegedInternalWebUIOrNewTabPage(
+                web_contents, request.url_origin.GetURL(),
+                /*already_overrode_requester=*/false);
+    if (permission_result.status == blink::mojom::PermissionStatus::DENIED &&
+        !web_contents_has_allowlisted_permission) {
       controller->denial_reason_ = blink::mojom::MediaStreamRequestResult::
           PERMISSION_DENIED_BY_CONTROLLER;
       // If `rfh` is a fenced frame, it will have no permission policy as well.
@@ -162,7 +173,8 @@ void MediaStreamDevicesController::RequestPermissions(
   }
 
   content::PermissionRequestDescription permission_request_description{
-      std::move(permission_types), request.user_gesture};
+      std::move(permission_types), request.user_gesture,
+      request.security_origin};
   permission_request_description.requested_audio_capture_device_ids =
       requested_audio_capture_device_ids;
   permission_request_description.requested_video_capture_device_ids =
@@ -184,10 +196,10 @@ void MediaStreamDevicesController::RequestPermissions(
 
 MediaStreamDevicesController::~MediaStreamDevicesController() {
   if (!callback_.is_null()) {
-    std::move(callback_).Run(
-        blink::mojom::StreamDevicesSet(),
-        blink::mojom::MediaStreamRequestResult::FAILED_DUE_TO_SHUTDOWN, false,
-        {}, {});
+    std::move(callback_).Run(blink::mojom::StreamDevicesSet(),
+                             blink::mojom::MediaStreamRequestResult::
+                                 FAILED_DUE_TO_SHUTDOWN_CONTROLLER_DESTRUCTOR,
+                             false, {}, {});
   }
 }
 
@@ -211,6 +223,14 @@ MediaStreamDevicesController::MediaStreamDevicesController(
                                      request, &denial_reason_);
   video_setting_ = GetContentSetting(blink::PermissionType::VIDEO_CAPTURE,
                                      request, &denial_reason_);
+
+#if BUILDFLAG(IS_ANDROID)
+  content::RenderFrameHost* initial_rfh = content::RenderFrameHost::FromID(
+      request_.render_process_id, request_.render_frame_id);
+  if (initial_rfh && initial_rfh == web_contents_->GetPrimaryMainFrame()) {
+    request_main_frame_url_ = initial_rfh->GetLastCommittedURL();
+  }
+#endif
 }
 
 bool MediaStreamDevicesController::ShouldRequestAudio() const {
@@ -414,19 +434,47 @@ bool MediaStreamDevicesController::IsUserAcceptAllowedOnAndroid(
     }
   }
 
-  // Don't approve device requests if the tab was hidden.
-  // TODO(qinmin): Add a test for this. http://crbug.com/396869.
+  // Don't approve device requests if the tab was hidden, unless there is an
+  // active Picture-in-Picture document.
   // TODO(raymes): Shouldn't this apply to all permissions not just audio/video?
-  return web_contents_->GetRenderWidgetHostView()->IsShowing();
+  return web_contents_->GetRenderWidgetHostView()->IsShowing() ||
+         web_contents_->HasPictureInPictureDocument();
 }
 #endif
+
+content::RenderFrameHost*
+MediaStreamDevicesController::GetTargetRenderFrameHost() const {
+  content::RenderFrameHost* rfh = content::RenderFrameHost::FromID(
+      request_.render_process_id, request_.render_frame_id);
+#if BUILDFLAG(IS_ANDROID)
+  // On Android, presenting the OS-level permission dialog can pause/resume the
+  // activity and invalidate or replace the original RenderFrameHost. If the
+  // request originally came from the primary main frame, ensure the frame is
+  // active and has not navigated away. If the original RenderFrameHost is no
+  // longer active, fall back to the active primary main frame if the URL has
+  // not changed.
+  if (request_main_frame_url_.has_value() && web_contents_) {
+    content::RenderFrameHost* main_rfh = web_contents_->GetPrimaryMainFrame();
+    if (rfh && rfh->IsActive() && rfh == main_rfh) {
+      return (rfh->GetLastCommittedURL() == *request_main_frame_url_) ? rfh
+                                                                      : nullptr;
+    }
+    if (main_rfh && main_rfh->IsActive() &&
+        main_rfh->GetLastCommittedURL() == *request_main_frame_url_) {
+      return main_rfh;
+    }
+    return nullptr;
+  }
+#endif
+  return rfh;
+}
 
 bool MediaStreamDevicesController::PermissionIsBlockedForReason(
     blink::PermissionType permission,
     content::PermissionStatusSource reason) const {
-  content::RenderFrameHost* rfh = content::RenderFrameHost::FromID(
-      request_.render_process_id, request_.render_frame_id);
-  if (rfh->GetLastCommittedOrigin().GetURL() != request_.security_origin) {
+  content::RenderFrameHost* rfh = GetTargetRenderFrameHost();
+  if (!rfh ||
+      rfh->GetLastCommittedOrigin().GetURL() != request_.security_origin) {
     return false;
   }
 
@@ -448,8 +496,8 @@ bool MediaStreamDevicesController::PermissionIsBlockedForReason(
 
 void MediaStreamDevicesController::PromptAnsweredGroupedRequest(
     const std::vector<content::PermissionResult>& permission_result) {
-  if (content::RenderFrameHost::FromID(request_.render_process_id,
-                                       request_.render_frame_id) == nullptr) {
+  content::RenderFrameHost* rfh = GetTargetRenderFrameHost();
+  if (!rfh) {
     // The frame requesting media devices was removed while we were waiting for
     // a user response on permissions. Nothing more to do.
     return;

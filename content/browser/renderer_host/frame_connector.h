@@ -146,8 +146,6 @@ class FrameConnector : public input::ChildFrameInputHelper::Delegate {
   // Returns the state of the frame's intersection with the top-level viewport.
   virtual const blink::mojom::ViewportIntersectionState&
   GetIntersectionState() = 0;
-  // Return the latest capture sequence number for this subframe.
-  virtual uint32_t GetCaptureSequenceNumber() = 0;
   // Return the rect in DIP that the RenderWidgetHostViewChildFrame's content
   // will render into.
   virtual const gfx::Rect& GetRectInParentViewInDip() = 0;
@@ -207,24 +205,14 @@ class FrameConnector : public input::ChildFrameInputHelper::Delegate {
   // if not.
   virtual void SetLocalFrameSize(const gfx::Size& local_frame_size) = 0;
 
-  // Called to resize the child renderer. |rect_in_parent_view| is in physical
+  // Called to resize the child renderer. `rect_in_parent_view` is in physical
   // pixels.
   virtual void SetRectInParentView(const gfx::Rect& rect_in_parent_view) = 0;
 
-  virtual void SetIsInert(bool inert) = 0;
-
-  // Handlers for messages received from the parent frame called
-  // from RenderFrameProxyHost to be sent to |view_|.
-  virtual void OnSetInheritedEffectiveTouchAction(cc::TouchAction) = 0;
+  // Handler for visibility updates received from the parent frame to be sent to
+  // `view_`.
   virtual void OnVisibilityChanged(
       blink::mojom::FrameVisibility visibility) = 0;
-
-  virtual void UpdateRenderThrottlingStatus(bool is_throttled,
-                                            bool subtree_throttled,
-                                            bool display_locked) = 0;
-  virtual void UpdateViewportIntersection(
-      const blink::mojom::ViewportIntersectionState& intersection_state,
-      const std::optional<blink::FrameVisualProperties>& visual_properties) = 0;
 
   // Returns whether the child widget is actually visible to the user.  This is
   // different from the IsHidden override, and takes into account viewport
@@ -242,6 +230,15 @@ class FrameConnector : public input::ChildFrameInputHelper::Delegate {
 
   // Returns the embedder's visibility.
   virtual Visibility EmbedderVisibility() = 0;
+
+  // Instructs the frame connector to keep its surface alive (or release it).
+  // This is typically used to ensure the surface is not discarded when the
+  // frame is hidden, for example, to allow it to be captured during tab
+  // capture.
+  virtual void SetKeepSurfaceAlive(bool keep_alive) = 0;
+
+  // Returns true if the frame connector is currently keeping the surface alive.
+  virtual bool IsKeepingAlive() const = 0;
 };
 
 }  // namespace content

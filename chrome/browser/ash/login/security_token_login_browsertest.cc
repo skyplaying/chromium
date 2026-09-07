@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include "ash/constants/ash_login_pref_names.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/public/cpp/login_screen_test_api.h"
 #include "ash/public/cpp/session/session_controller.h"
@@ -38,11 +39,8 @@
 #include "chrome/browser/ash/login/users/test_users.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/notifications/notification_display_service.h"
-#include "chrome/browser/notifications/notification_display_service_factory.h"
 #include "chrome/browser/policy/extension_force_install_mixin.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
 #include "chromeos/ash/components/dbus/cryptohome/key.pb.h"
 #include "chromeos/ash/components/dbus/cryptohome/rpc.pb.h"
@@ -65,6 +63,7 @@
 #include "net/base/net_errors.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/boringssl/src/include/openssl/ssl.h"
+#include "ui/message_center/message_center.h"
 #include "ui/views/test/widget_test.h"
 #include "ui/views/widget/any_widget_observer.h"
 
@@ -247,8 +246,7 @@ class ChromeSessionObserver : public SessionObserver {
 
 // Tests the challenge-response based login (e.g., using a smart card) for an
 // existing user.
-class SecurityTokenLoginTest : public MixinBasedInProcessBrowserTest,
-                               public LocalStateMixin::Delegate {
+class SecurityTokenLoginTest : public MixinBasedInProcessBrowserTest {
  protected:
   SecurityTokenLoginTest() {
     auto cryptohome_client =
@@ -300,9 +298,21 @@ class SecurityTokenLoginTest : public MixinBasedInProcessBrowserTest,
     WaitForLoginScreenWidgetShown();
   }
 
-  // LocalStateMixin::Delegate:
+  void SetUpLocalStatePrefService(PrefService* local_state) override {
+    MixinBasedInProcessBrowserTest::SetUpLocalStatePrefService(local_state);
 
-  void SetUpLocalState() override { RegisterChallengeResponseKey(); }
+    ChallengeResponseKey challenge_response_key;
+    challenge_response_key.set_public_key_spki_der(
+        TestCertificateProviderExtension::GetCertificateSpki());
+    challenge_response_key.set_extension_id(
+        TestCertificateProviderExtension::extension_id());
+
+    base::ListValue challenge_response_keys_list =
+        SerializeChallengeResponseKeysForKnownUser({challenge_response_key});
+    user_manager::KnownUser(local_state)
+        .SetChallengeResponseKeys(GetChallengeResponseAccountId(),
+                                  std::move(challenge_response_keys_list));
+  }
 
   AccountId GetChallengeResponseAccountId() const {
     return login_manager_mixin_.users()[0].account_id;
@@ -386,20 +396,6 @@ class SecurityTokenLoginTest : public MixinBasedInProcessBrowserTest,
   }
 
  private:
-  void RegisterChallengeResponseKey() {
-    ChallengeResponseKey challenge_response_key;
-    challenge_response_key.set_public_key_spki_der(
-        TestCertificateProviderExtension::GetCertificateSpki());
-    challenge_response_key.set_extension_id(
-        TestCertificateProviderExtension::extension_id());
-
-    base::ListValue challenge_response_keys_list =
-        SerializeChallengeResponseKeysForKnownUser({challenge_response_key});
-    user_manager::KnownUser(g_browser_process->local_state())
-        .SetChallengeResponseKeys(GetChallengeResponseAccountId(),
-                                  std::move(challenge_response_keys_list));
-  }
-
   // Bypass "signin_screen" feature only enabled for allowlisted extensions.
   extensions::SimpleFeature::ScopedThreadUnsafeAllowlistForTest
       feature_allowlist_{TestCertificateProviderExtension::extension_id()};
@@ -412,7 +408,6 @@ class SecurityTokenLoginTest : public MixinBasedInProcessBrowserTest,
                                          {},
                                          nullptr,
                                          &cryptohome_mixin_};
-  LocalStateMixin local_state_mixin_{&mixin_host_, this};
   ExtensionForceInstallMixin extension_force_install_mixin_{&mixin_host_};
   testing::NiceMock<policy::MockConfigurationPolicyProvider> policy_provider_;
 
@@ -601,25 +596,9 @@ class SecurityTokenSessionBehaviorTest : public SecurityTokenLoginTest {
     user_certificate_provider_extension()->TriggerSetCertificates();
   }
 
-  bool ProfileHasNotification(Profile* profile,
-                              const std::string& notification_id) {
-    NotificationDisplayService* notification_display_service =
-        NotificationDisplayServiceFactory::GetForProfile(profile);
-    if (!notification_display_service) {
-      ADD_FAILURE() << "NotificationDisplayService could not be found.";
-      return false;
-    }
-    base::RunLoop run_loop;
-    bool has_notification = false;
-    notification_display_service->GetDisplayed(
-        base::BindLambdaForTesting([&](std::set<std::string> notification_ids,
-                                       bool /* supports_synchronization */) {
-          has_notification = notification_ids.count(notification_id) >= 1;
-          run_loop.Quit();
-        }));
-
-    run_loop.Run();
-    return has_notification;
+  bool HasNotification(const std::string& notification_id) {
+    return message_center::MessageCenter::Get()->FindNotificationById(
+               notification_id) != nullptr;
   }
 
   bool GetNotificationDisplayedKnownUserFlag() const {
@@ -649,7 +628,7 @@ class SecurityTokenSessionBehaviorTest : public SecurityTokenLoginTest {
 IN_PROC_BROWSER_TEST_F(SecurityTokenSessionBehaviorTest, Lock) {
   Login();
   g_browser_process->local_state()->SetString(
-      prefs::kSecurityTokenSessionBehavior, "LOCK");
+      ash::prefs::kSecurityTokenSessionBehavior, "LOCK");
   PrepareUserCertificateProviderExtension();
   SetSecurityTokenAvailability(/*available_on_login_screen=*/false,
                                /*available_in_session=*/true);
@@ -659,8 +638,8 @@ IN_PROC_BROWSER_TEST_F(SecurityTokenSessionBehaviorTest, Lock) {
                                /*available_in_session=*/false);
   chrome_session_observer.WaitForSessionLocked();
 
-  EXPECT_TRUE(ProfileHasNotification(
-      profile(), "security_token_session_controller_notification"));
+  EXPECT_TRUE(
+      HasNotification("security_token_session_controller_notification"));
   EXPECT_TRUE(GetNotificationDisplayedKnownUserFlag());
 }
 
@@ -669,7 +648,7 @@ IN_PROC_BROWSER_TEST_F(SecurityTokenSessionBehaviorTest, PRE_Logout) {
   Login();
   ChromeSessionObserver chrome_session_observer;
   g_browser_process->local_state()->SetString(
-      prefs::kSecurityTokenSessionBehavior, "LOGOUT");
+      ash::prefs::kSecurityTokenSessionBehavior, "LOGOUT");
   PrepareUserCertificateProviderExtension(
       /*immediately_provide_certificates=*/false);
   SetSecurityTokenAvailability(/*available_on_login_screen=*/false,
@@ -692,8 +671,7 @@ IN_PROC_BROWSER_TEST_F(SecurityTokenSessionBehaviorTest, PRE_Logout) {
 IN_PROC_BROWSER_TEST_F(SecurityTokenSessionBehaviorTest, Logout) {
   // Check login screen notification is displayed.
   EXPECT_TRUE(
-      ProfileHasNotification(GetOriginalSigninProfile(),
-                             "security_token_session_controller_notification"));
+      HasNotification("security_token_session_controller_notification"));
 }
 
 // Test that entering a session with a missing certificate logs user out only
@@ -704,7 +682,7 @@ IN_PROC_BROWSER_TEST_F(SecurityTokenSessionBehaviorTest,
   Login();
   ChromeSessionObserver chrome_session_observer;
   g_browser_process->local_state()->SetString(
-      prefs::kSecurityTokenSessionBehavior, "LOGOUT");
+      ash::prefs::kSecurityTokenSessionBehavior, "LOGOUT");
   PrepareUserCertificateProviderExtension(
       /*immediately_provide_certificates=*/false);
   SetSecurityTokenAvailability(/*available_on_login_screen=*/false,
@@ -723,7 +701,7 @@ IN_PROC_BROWSER_TEST_F(SecurityTokenSessionBehaviorTest,
   Login();
   ChromeSessionObserver chrome_session_observer;
   g_browser_process->local_state()->SetString(
-      prefs::kSecurityTokenSessionBehavior, "LOCK");
+      ash::prefs::kSecurityTokenSessionBehavior, "LOCK");
   login::SecurityTokenSessionControllerFactory::GetForBrowserContext(profile())
       ->SetSessionActivationTimeoutForTest(base::Seconds(0));
 
@@ -740,7 +718,7 @@ IN_PROC_BROWSER_TEST_F(SecurityTokenSessionBehaviorTest,
                        LockScreenWhileLogoutPolicy) {
   Login();
   g_browser_process->local_state()->SetString(
-      prefs::kSecurityTokenSessionBehavior, "LOGOUT");
+      ash::prefs::kSecurityTokenSessionBehavior, "LOGOUT");
   PrepareUserCertificateProviderExtension();
   SetSecurityTokenAvailability(/*available_on_login_screen=*/false,
                                /*available_in_session=*/true);
@@ -756,7 +734,7 @@ IN_PROC_BROWSER_TEST_F(SecurityTokenSessionBehaviorTest,
 IN_PROC_BROWSER_TEST_F(SecurityTokenSessionBehaviorTest, LogoutFromLockScreen) {
   Login();
   g_browser_process->local_state()->SetString(
-      prefs::kSecurityTokenSessionBehavior, "LOGOUT");
+      ash::prefs::kSecurityTokenSessionBehavior, "LOGOUT");
   PrepareUserCertificateProviderExtension();
   SetSecurityTokenAvailability(/*available_on_login_screen=*/false,
                                /*available_in_session=*/true);
@@ -776,9 +754,9 @@ IN_PROC_BROWSER_TEST_F(SecurityTokenSessionBehaviorTest, LogoutFromLockScreen) {
 IN_PROC_BROWSER_TEST_F(SecurityTokenSessionBehaviorTest, NotificationSeconds) {
   Login();
   g_browser_process->local_state()->SetString(
-      prefs::kSecurityTokenSessionBehavior, "LOCK");
+      ash::prefs::kSecurityTokenSessionBehavior, "LOCK");
   g_browser_process->local_state()->SetInteger(
-      prefs::kSecurityTokenSessionNotificationSeconds, 1);
+      ash::prefs::kSecurityTokenSessionNotificationSeconds, 1);
   PrepareUserCertificateProviderExtension();
   ChromeSessionObserver chrome_session_observer;
 
@@ -852,7 +830,7 @@ IN_PROC_BROWSER_TEST_F(SecurityTokenSessionBehaviorSamlTest, Logout) {
       user_manager::UserManager::Get()->GetActiveUser());
   PrepareUserCertificateProviderExtension(profile);
   g_browser_process->local_state()->SetString(
-      prefs::kSecurityTokenSessionBehavior, "LOGOUT");
+      ash::prefs::kSecurityTokenSessionBehavior, "LOGOUT");
 
   // Removal of the certificate should lead to the end of the current session.
   ChromeSessionObserver chrome_session_observer;

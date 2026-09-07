@@ -577,6 +577,71 @@ TEST(TabTargets, TabNoPageAcquiredInitially) {
   ASSERT_EQ(kNoActivePage, tab_view.GetActivePage(&page).code());
 }
 
+namespace {
+
+class LockStateCapturingClient : public StubDevToolsClient {
+ public:
+  Status SendCommand(const std::string& method,
+                     const base::DictValue& params) override {
+    owner_locked_during_send_ = owner_ != nullptr && owner_->IsLocked();
+    return Status(kOk);
+  }
+
+  Status SendCommandFromWebSocket(const std::string& method,
+                                  const base::DictValue& params,
+                                  const int client_cmd_id) override {
+    owner_locked_during_send_ = owner_ != nullptr && owner_->IsLocked();
+    return Status(kOk);
+  }
+
+  Status SendCommandAndGetResult(const std::string& method,
+                                 const base::DictValue& params,
+                                 base::DictValue* result) override {
+    owner_locked_during_send_ = owner_ != nullptr && owner_->IsLocked();
+    return Status(kOk);
+  }
+
+  bool OwnerLockedDuringSend() const { return owner_locked_during_send_; }
+
+  void Reset() { owner_locked_during_send_ = false; }
+
+ private:
+  bool owner_locked_during_send_ = false;
+};
+
+}  // namespace
+
+TEST(SendCommand, OwnerIsLockedWhileSending) {
+  // The owning WebView must remain locked for the entire duration of
+  // SendCommand and friends, so that it cannot be deleted by PageTracker if a
+  // primary page swap detaches the page while the command is awaiting its
+  // response.
+  std::unique_ptr<LockStateCapturingClient> client_uptr =
+      std::make_unique<LockStateCapturingClient>();
+  LockStateCapturingClient* client_ptr = client_uptr.get();
+  BrowserInfo browser_info;
+  WebViewImpl view(client_ptr->GetId(), true, nullptr, nullptr, &browser_info,
+                   std::move(client_uptr), std::nullopt,
+                   PageLoadStrategy::kEager, true);
+
+  base::DictValue params;
+  EXPECT_TRUE(StatusOk(view.SendCommand("method", params)));
+  EXPECT_TRUE(client_ptr->OwnerLockedDuringSend());
+  EXPECT_FALSE(view.IsLocked());
+
+  client_ptr->Reset();
+  EXPECT_TRUE(StatusOk(view.SendCommandFromWebSocket("method", params, 1)));
+  EXPECT_TRUE(client_ptr->OwnerLockedDuringSend());
+  EXPECT_FALSE(view.IsLocked());
+
+  client_ptr->Reset();
+  std::unique_ptr<base::Value> result;
+  EXPECT_TRUE(
+      StatusOk(view.SendCommandAndGetResult("method", params, &result)));
+  EXPECT_TRUE(client_ptr->OwnerLockedDuringSend());
+  EXPECT_FALSE(view.IsLocked());
+}
+
 TEST(CreateChild, IsPendingNavigation_NoErrors) {
   std::unique_ptr<MockSyncWebSocket> socket_uptr =
       std::make_unique<MockSyncWebSocket>(SyncWebSocket::StatusCode::kOk);
@@ -1286,6 +1351,54 @@ INSTANTIATE_TEST_SUITE_P(
                       "Cannot find context with specified id",
                       "Execution context was destroyed.",
                       "Inspected target navigated or closed"));
+
+// The top frame is briefly absent from the frame tracker while its execution
+// context is swapped mid-navigation; it must not be treated as destroyed.
+TEST(NavigationPending, TopFrameStaysPendingWhenContextCleared) {
+  std::unique_ptr<StubSyncWebSocket> socket_uptr =
+      std::make_unique<StubSyncWebSocket>();
+  StubSyncWebSocket* socket = socket_uptr.get();
+  std::unique_ptr<DevToolsClientImpl> client_uptr =
+      std::make_unique<DevToolsClientImpl>("root", "");
+  DevToolsClientImpl* client_ptr = client_uptr.get();
+  BrowserInfo browser_info;
+  WebViewImpl view(client_ptr->GetId(), true, nullptr, nullptr, &browser_info,
+                   std::move(client_uptr), std::nullopt,
+                   PageLoadStrategy::kNormal, true);
+  EXPECT_TRUE(socket->Connect(kDefaultUrl));
+  EXPECT_TRUE(StatusOk(client_ptr->SetSocket(std::move(socket_uptr))));
+
+  // "root" (the top frame) is intentionally left unregistered.
+  Timeout timeout{base::Milliseconds(100)};
+  socket->SetResponseLimit(3);
+  socket->AddCommandHandler(
+      "Runtime.evaluate",
+      base::BindRepeating(&ReturnError, -32000,
+                          std::string("Execution context was destroyed.")));
+  // Empty frame id resolves to the top frame, so the call keeps waiting.
+  Status status = view.WaitForPendingNavigations("", timeout, false);
+  EXPECT_EQ(kTimeout, status.code());
+}
+
+TEST(NavigationPending, UnknownSubframeDoesNotStayPending) {
+  std::unique_ptr<StubSyncWebSocket> socket_uptr =
+      std::make_unique<StubSyncWebSocket>();
+  StubSyncWebSocket* socket = socket_uptr.get();
+  std::unique_ptr<DevToolsClientImpl> client_uptr =
+      std::make_unique<DevToolsClientImpl>("root", "");
+  DevToolsClientImpl* client_ptr = client_uptr.get();
+  BrowserInfo browser_info;
+  WebViewImpl view(client_ptr->GetId(), true, nullptr, nullptr, &browser_info,
+                   std::move(client_uptr), std::nullopt,
+                   PageLoadStrategy::kNormal, true);
+  EXPECT_TRUE(socket->Connect(kDefaultUrl));
+  EXPECT_TRUE(StatusOk(client_ptr->SetSocket(std::move(socket_uptr))));
+
+  // An unregistered subframe has been destroyed, so the wait completes.
+  Status status = view.WaitForPendingNavigations(
+      "child", Timeout(base::Milliseconds(100)), false);
+  EXPECT_EQ(kOk, status.code());
+}
 
 namespace {
 

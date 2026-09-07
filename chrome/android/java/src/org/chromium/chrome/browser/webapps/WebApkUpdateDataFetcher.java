@@ -24,8 +24,8 @@ import org.chromium.chrome.browser.browserservices.intents.WebApkExtras;
 import org.chromium.chrome.browser.browserservices.intents.WebApkShareTarget;
 import org.chromium.chrome.browser.browserservices.intents.WebappIcon;
 import org.chromium.chrome.browser.browserservices.intents.WebappInfo;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.components.webapps.WebApkDistributor;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.webapk.lib.common.splash.SplashLayout;
@@ -39,7 +39,7 @@ import java.util.List;
  * constructor.
  */
 @NullMarked
-public class WebApkUpdateDataFetcher extends EmptyTabObserver {
+public class WebApkUpdateDataFetcher implements TabObserver {
     /** Observes fetching of the Web Manifest. */
     public interface Observer {
         /**
@@ -123,7 +123,7 @@ public class WebApkUpdateDataFetcher extends EmptyTabObserver {
             @JniType("std::u16string") String name,
             @JniType("std::u16string") String shortName,
             @JniType("std::string") String manifestUrl,
-            String manifestId,
+            @JniType("std::string") String manifestId,
             @JniType("std::string") String primaryIconUrl,
             @JniType("std::string") String primaryIconMurmur2Hash,
             Bitmap primaryIconBitmap,
@@ -132,7 +132,7 @@ public class WebApkUpdateDataFetcher extends EmptyTabObserver {
             @JniType("std::string") String splashIconMurmur2Hash,
             byte[] splashIconData,
             boolean isSplashIconMaskable,
-            String[] iconUrls,
+            @JniType("std::vector<std::string>") String[] iconUrls,
             @DisplayMode.EnumType int displayMode,
             int orientation,
             long themeColor,
@@ -144,7 +144,7 @@ public class WebApkUpdateDataFetcher extends EmptyTabObserver {
             @JniType("std::u16string") String shareParamsText,
             boolean isShareMethodPost,
             boolean isShareEncTypeMultipart,
-            String[] shareParamsFileNames,
+            @JniType("std::vector<std::u16string>") String[] shareParamsFileNames,
             String[][] shareParamsAccepts,
             String[][] shortcuts,
             byte[][] shortcutIconData) {
@@ -233,10 +233,10 @@ public class WebApkUpdateDataFetcher extends EmptyTabObserver {
     interface Natives {
         long initialize(
                 WebApkUpdateDataFetcher self,
-                @Nullable @JniType("std::string") String startUrl,
-                @Nullable @JniType("std::string") String scope,
-                @Nullable @JniType("std::string") String webManifestUrl,
-                @Nullable String webManifestId);
+                @JniType("std::string") @Nullable String startUrl,
+                @JniType("std::string") @Nullable String scope,
+                @JniType("std::string") @Nullable String webManifestUrl,
+                @JniType("std::string") @Nullable String webManifestId);
 
         void replaceWebContents(
                 long nativeWebApkUpdateDataFetcher, @Nullable WebContents webContents);

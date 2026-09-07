@@ -159,12 +159,10 @@ FakeServiceEndpointRequest::CallOnServiceEndpointsUpdated() {
   return *this;
 }
 
-FakeServiceEndpointRequest&
-FakeServiceEndpointRequest::CallOnServiceEndpointRequestFinished(int rv) {
+void FakeServiceEndpointRequest::CallOnServiceEndpointRequestFinished(int rv) {
   CHECK(delegate_);
   resolution_.set_crypto_ready(true);
   delegate_->OnServiceEndpointRequestFinished(rv);
-  return *this;
 }
 
 int FakeServiceEndpointRequest::Start(Delegate* delegate) {
@@ -200,13 +198,18 @@ const HostCache::EntryStaleness* FakeServiceEndpointRequest::GetStaleInfo()
   return nullptr;
 }
 
-bool FakeServiceEndpointRequest::IsStaleWhileRefresing() const {
-  return false;
+bool FakeServiceEndpointRequest::IsStaleWhileRefreshing() const {
+  return is_stale_while_refreshing_;
 }
 
 void FakeServiceEndpointRequest::ChangeRequestPriority(
     RequestPriority priority) {
   resolution_.set_priority(priority);
+}
+
+std::optional<ResolutionDetails>
+FakeServiceEndpointRequest::GetResolutionDetails() const {
+  return std::nullopt;
 }
 
 void FakeServiceEndpointRequest::CompleteAsync(int rv) {
@@ -244,6 +247,7 @@ std::unique_ptr<HostResolver::ResolveHostRequest>
 FakeServiceEndpointResolver::CreateRequest(
     url::SchemeHostPort host,
     NetworkAnonymizationKey network_anonymization_key,
+    handles::NetworkHandle target_network,
     NetLogWithSource net_log,
     std::optional<ResolveHostParameters> optional_parameters) {
   NOTREACHED();
@@ -253,6 +257,7 @@ std::unique_ptr<HostResolver::ResolveHostRequest>
 FakeServiceEndpointResolver::CreateRequest(
     const HostPortPair& host,
     const NetworkAnonymizationKey& network_anonymization_key,
+    handles::NetworkHandle target_network,
     const NetLogWithSource& net_log,
     const std::optional<ResolveHostParameters>& optional_parameters) {
   NOTREACHED();
@@ -262,6 +267,7 @@ std::unique_ptr<HostResolver::ServiceEndpointRequest>
 FakeServiceEndpointResolver::CreateServiceEndpointRequest(
     Host host,
     NetworkAnonymizationKey network_anonymization_key,
+    handles::NetworkHandle target_network,
     NetLogWithSource net_log,
     ResolveHostParameters parameters) {
   if (requests_.empty() && default_resolution_.has_value()) {
@@ -269,6 +275,7 @@ FakeServiceEndpointResolver::CreateServiceEndpointRequest(
         std::make_unique<FakeServiceEndpointRequest>();
     request->resolution_ = *default_resolution_;
     request->set_priority(parameters.initial_priority);
+    request->resolve_host_params_ = parameters;
     return request;
   }
 
@@ -277,6 +284,7 @@ FakeServiceEndpointResolver::CreateServiceEndpointRequest(
       std::move(requests_.front());
   requests_.pop_front();
   request->set_priority(parameters.initial_priority);
+  request->resolve_host_params_ = parameters;
   return request;
 }
 
@@ -418,21 +426,23 @@ StreamKeyBuilder& StreamKeyBuilder::from_key(const HttpStreamKey& key) {
   privacy_mode_ = key.privacy_mode();
   secure_dns_policy_ = key.secure_dns_policy();
   disable_cert_network_fetches_ = key.disable_cert_network_fetches();
+  target_network_ = key.target_network();
   return *this;
 }
 
 HttpStreamKey StreamKeyBuilder::Build() const {
   return HttpStreamKey(destination_, privacy_mode_, SocketTag(),
                        NetworkAnonymizationKey(), secure_dns_policy_,
-                       disable_cert_network_fetches_, alt_service_);
+                       disable_cert_network_fetches_, target_network_,
+                       alt_service_);
 }
 
 HttpStreamKey GroupIdToHttpStreamKey(
     const ClientSocketPool::GroupId& group_id) {
-  return HttpStreamKey(group_id.destination(), group_id.privacy_mode(),
-                       SocketTag(), group_id.network_anonymization_key(),
-                       group_id.secure_dns_policy(),
-                       group_id.disable_cert_network_fetches());
+  return HttpStreamKey(
+      group_id.destination(), group_id.privacy_mode(), SocketTag(),
+      group_id.network_anonymization_key(), group_id.secure_dns_policy(),
+      group_id.disable_cert_network_fetches(), group_id.target_network());
 }
 
 void WaitForAttemptManagerComplete(

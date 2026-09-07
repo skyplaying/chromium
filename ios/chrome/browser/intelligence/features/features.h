@@ -6,7 +6,7 @@
 #define IOS_CHROME_BROWSER_INTELLIGENCE_FEATURES_FEATURES_H_
 
 #import "base/feature_list.h"
-#import "ios/chrome/browser/intelligence/actuation/actuation_util.h"
+#import "components/optimization_guide/proto/features/actions_data.pb.h"
 
 namespace base {
 class TimeDelta;
@@ -42,65 +42,28 @@ BASE_DECLARE_FEATURE(kPageActionMenu);
 // launched ones.
 BASE_DECLARE_FEATURE(kGeminiKillSwitch);
 
+// TODO(crbug.com/494235953): Clean up when feature is enabled by default.
 // Returns true if the page action menu is enabled.
 bool IsPageActionMenuEnabled();
 
-// Feature flag controlling the Ask Gemini chip.
-BASE_DECLARE_FEATURE(kAskGeminiChip);
+// Feature flag controlling the Ask Gemini auth flow in the Page Action Menu.
+BASE_DECLARE_FEATURE(kPageActionMenuAuthFlow);
 
-// Returns true if the Ask Gemini chip is enabled.
-bool IsAskGeminiChipEnabled();
+// Returns true if the Ask Gemini auth flow in the Page Action Menu is enabled.
+bool IsPageActionMenuAuthFlowEnabled();
+
+// Feature flag controlling if the Ask Gemini chip should ignore FET and time
+// criteria.
+BASE_DECLARE_FEATURE(kAskGeminiChipIgnoreCriteria);
 
 // Returns true if the Ask Gemini chip should be shown without checking the FET
 // and time criteria.
-bool IsAskGeminiChipIgnoreCriteria();
-extern const char kAskGeminiChipIgnoreCriteria[];
-
-// Returns true if the Ask Gemini chip should prepopulate the Gemini Floaty with
-// a prompt.
-bool IsAskGeminiChipPrepopulateFloatyEnabled();
-extern const char kAskGeminiChipPrepopulateFloaty[];
-
-// A variation that combines `kAskGeminiChipIgnoreCriteria` and
-// `kAskGeminiChipPrepopulateFloaty`.
-extern const char kAskGeminiChipPrepopulateAndIgnoreCriteria[];
-
-// Returns true if the Ask Gemini chip should allow non-consented users.
-bool IsAskGeminiChipAllowNonconsentedUsersEnabled();
-extern const char kAskGeminiChipAllowNonconsentedUsers[];
+bool IsAskGeminiChipIgnoreCriteriaEnabled();
 
 // Whether the omnibox entry point opens the BWG overlay immediately, skipping
 // the AI hub.
 bool IsDirectBWGEntryPoint();
 extern const char kPageActionMenuDirectEntryPointParam[];
-
-// The BWG session validity duration in minutes.
-const base::TimeDelta BWGSessionValidityDuration();
-extern const char kBWGSessionValidityDurationParam[];
-
-// Holds the variations of the BWG Promo Consent flow.
-enum class BWGPromoConsentVariations {
-  kDisabled = 0,
-  kSinglePage = 1,
-  kDoublePage = 2,
-  kSkipConsent = 3,
-  kForceFRE = 4,
-  kSkipNewUserDelay = 5,
-};
-extern const char kBWGPromoConsentParams[];
-
-// Returns the variation of the BWG Promo Consent flow.
-BWGPromoConsentVariations BWGPromoConsentVariationsParam();
-
-// Returns YES if the promo should be forced.
-bool ShouldForceBWGPromo();
-
-// Returns YES if the Chrome FRE recency check should be skipped when evaluating
-// whether to show the Gemini on-navigation promo.
-bool ShouldSkipBWGPromoNewUserDelay();
-
-// Feature flag to enable BWG Promo Consent.
-BASE_DECLARE_FEATURE(kBWGPromoConsent);
 
 // Feature flag to enable Explain Gemini in Edit Menu.
 BASE_DECLARE_FEATURE(kExplainGeminiEditMenu);
@@ -112,16 +75,17 @@ enum class PositionForExplainGeminiEditMenu {
   kDisabled = 0,
   kAfterEdit = 1,
   kAfterSearch = 2,
+  kAdjacent = 3,
 };
 
 // Returns the position of Explain Gemini in the EditMenu.
 PositionForExplainGeminiEditMenu ExplainGeminiEditMenuPosition();
 
-// Feature flag to enable Precise Location in BWG Settings Menu.
-BASE_DECLARE_FEATURE(kBWGPreciseLocation);
+// Feature flag to enable Precise Location in Gemini Settings Menu.
+BASE_DECLARE_FEATURE(kGeminiPreciseLocation);
 
 // Returns true if the precise location setting is enabled.
-bool IsBWGPreciseLocationEnabled();
+bool IsGeminiPreciseLocationEnabled();
 
 // Feature flag to show the AI Hub new badge.
 BASE_DECLARE_FEATURE(kAIHubNewBadge);
@@ -207,45 +171,24 @@ BASE_DECLARE_FEATURE(kZeroStateSuggestions);
 // Returns true if zero-state suggestions are enabled.
 bool IsZeroStateSuggestionsEnabled();
 
-// Parameter names for the zero-state suggestions placement.
-extern const char kZeroStateSuggestionsPlacementAIHub[];
-extern const char kZeroStateSuggestionsPlacementAskGemini[];
+// Feature flag to enable the 'What can Gemini do' static chip.
+BASE_DECLARE_FEATURE(kZeroStateSuggestionsWCGD);
 
-// Returns true if zero-state suggestions should be executed in the AI Hub.
-bool IsZeroStateSuggestionsAIHubEnabled();
+// Returns true if the 'What can Gemini do' static chip is enabled.
+bool IsZeroStateSuggestionsWCGDEnabled();
 
-// Returns true if zero-state suggestions should be executed in the Ask Gemini
-// overlay.
-bool IsZeroStateSuggestionsAskGeminiEnabled();
+// Feature flag to enable centralization of zero-state suggestions.
+BASE_DECLARE_FEATURE(kZeroStateSuggestionsCentralization);
 
-// Feature flag for showing full chat history in the floaty.
-BASE_DECLARE_FEATURE(kGeminiFullChatHistory);
-bool IsGeminiFullChatHistoryEnabled();
-
-// Feature flag for the redesigned loading state UI.
-BASE_DECLARE_FEATURE(kGeminiLoadingStateRedesign);
-bool IsGeminiLoadingStateRedesignEnabled();
-
-// Feature flag for the floaty latency improvements.
-BASE_DECLARE_FEATURE(kGeminiLatencyImprovement);
-bool IsGeminiLatencyImprovementEnabled();
-
-// Feature flag for showing the Gemini floaty immediately.
-//
-// This feature exists so the overlay can open without having to wait for the
-// page to finish loading.
-BASE_DECLARE_FEATURE(kGeminiImmediateOverlay);
-bool IsGeminiImmediateOverlayEnabled();
+// Returns true if centralization of zero-state suggestions is enabled.
+bool IsZeroStateSuggestionsCentralizationEnabled();
 
 // Feature flag to use the new refactored version of the page context extractor.
 // Acts as a killswitch where the feature is enabled by default.
 BASE_DECLARE_FEATURE(kPageContextExtractorRefactored);
 
-// Feature flag to enable the refactored FRE flow (Gemini architecture).
-BASE_DECLARE_FEATURE(kGeminiRefactoredFRE);
-
-// Returns true if the Gemini refactored FRE is enabled.
-bool IsGeminiRefactoredFREEnabled();
+// Returns true if the refactored page context extractor is enabled.
+bool IsPageContextExtractorRefactoredEnabled();
 
 // Feature flag to enable the updated eligibility checks for Gemini.
 BASE_DECLARE_FEATURE(kGeminiUpdatedEligibility);
@@ -253,23 +196,11 @@ BASE_DECLARE_FEATURE(kGeminiUpdatedEligibility);
 // Returns true if the updated eligibiliy checks for Gemini are enabled.
 bool IsGeminiUpdatedEligibilityEnabled();
 
-// Feature flag for enabling the image remixing tool in the Gemini floaty.
-BASE_DECLARE_FEATURE(kGeminiImageRemixTool);
-bool IsGeminiImageRemixToolEnabled();
+// Feature flag to enable the updated Gemini consent.
+BASE_DECLARE_FEATURE(kGeminiUpdatedConsent);
 
-// Returns true if the Gemini FRE should show the image remix row.
-bool IsGeminiImageRemixToolShowFRERowEnabled();
-extern const char kGeminiImageRemixToolShowFRERow[];
-
-// Returns true if the image remix tool should appear above
-// search image with Google (entry point will be in that same section).
-bool IsGeminiImageRemixToolShowAboveSearchImageEnabled();
-extern const char kGeminiImageRemixToolShowAboveSearchImage[];
-
-// Returns true if the image remix tool should appear below
-// search image with Google (entry point will be in that same section).
-bool IsGeminiImageRemixToolShowBelowSearchImageEnabled();
-extern const char kGeminiImageRemixToolShowBelowSearchImage[];
+// Returns true if the updated Gemini consent is enabled.
+bool IsGeminiUpdatedConsentEnabled();
 
 // Feature flag for enabling the Gemini eligibility ablation experiment.
 BASE_DECLARE_FEATURE(kGeminiEligibilityAblation);
@@ -279,34 +210,53 @@ bool IsGeminiEligibilityAblationEnabled();
 BASE_DECLARE_FEATURE(kGeminiLive);
 bool IsGeminiLiveEnabled();
 
-// Feature flag for Gemini Personalization.
-BASE_DECLARE_FEATURE(kGeminiPersonalization);
-bool IsGeminiPersonalizationEnabled();
+// Feature flag for Gemini Live Dormant Reasons.
+BASE_DECLARE_FEATURE(kGeminiLiveDormantReasons);
+bool IsGeminiLiveDormantReasonsEnabled();
 
-// Feature flag for Gemini Copresence.
-BASE_DECLARE_FEATURE(kGeminiCopresence);
-bool IsGeminiCopresenceEnabled();
+// Returns true if the Gemini chat persistence is enabled.
+bool IsGeminiChatPersistenceEnabled();
+BASE_DECLARE_FEATURE(kGeminiChatPersistence);
+
+// Feature flag for Gemini configurable parameters.
+BASE_DECLARE_FEATURE(kGeminiConfigParams);
 
 // The threshold interval for displaying the response ready state in seconds.
-extern const char kGeminiCopresenceResponseReadyInterval[];
-double GetGeminiCopresenceResponseReadyInterval();
+extern const char kGeminiResponseReadyInterval[];
+double GetGeminiResponseReadyInterval();
 
-// Feature flag for Gemini Dynamic Resizing.
-BASE_DECLARE_FEATURE(kGeminiResponseViewDynamicResizing);
+// The Gemini session validity duration in minutes.
+base::TimeDelta GetGeminiSessionValidityDuration();
+extern const char kGeminiSessionValidityDuration[];
 
-// Returns true if Gemini Dynamic Resizing is enabled.
-bool IsGeminiResponseViewDynamicResizingEnabled();
-
-// Feature flag for Gemini Dynamic Settings.
-BASE_DECLARE_FEATURE(kGeminiDynamicSettings);
-bool IsGeminiDynamicSettingsEnabled();
-
-// Feature flag for Actuation tools.
-BASE_DECLARE_FEATURE(kActuationTools);
-bool IsActuationEnabled();
+// Feature flag for Actor tools.
+BASE_DECLARE_FEATURE(kActorTools);
+bool IsActorEnabled();
+extern const char kActorToolsPageStabilityParam[];
+bool IsPageStabilityEnabled();
+base::TimeDelta GetActorObservationDelayTimeout();
+// Used to configure how long the PageStabilityMonitor in Chrome for iOS waits.
+base::TimeDelta GetActorPageStabilityMinWait();
+base::TimeDelta GetActorPageStabilityTimeout();
+// The maximum number of mutations allowed within a post-interaction observation
+// window for the page to be considered stable.
+int GetActorPageStabilityMutationCap();
+// The post-interaction observation window duration for page stability checking.
+base::TimeDelta GetActorPageStabilityWindowDuration();
+// The amount of time to wait for LCP if it hasn't occurred yet.
+//
+// Based on the Desktop equivalent at
+// https://source.chromium.org/chromium/chromium/src/+/main:chrome/common/chrome_features.cc;l=422;drc=9c4f58fb857251ee67e9d98abcfcacef0500e51d.
+base::TimeDelta GetActorPageStabilityLcpDelay();
+// The amount of time to wait for Autofill to finish parsing and predicting form
+// fields on the page.
+//
+// Based on the Desktop equivalent at
+// https://source.chromium.org/chromium/chromium/src/+/main:chrome/common/chrome_features.cc;l=428;drc=9c4f58fb857251ee67e9d98abcfcacef0500e51d.
+base::TimeDelta GetActorPageStabilityAutofillPredictionsTimeout();
 
 // Returns true if the specified tool is disabled via the "DisabledTools"
-// feature parameter of the `kActuationTools` feature.
+// feature parameter of the `kActorTools` feature.
 bool IsToolDisabled(optimization_guide::proto::Action::ActionCase tool);
 
 // Feature flag for Model based page classification experiment.
@@ -319,5 +269,292 @@ bool IsModelBasedPageClassificationEnabled();
 int GetModelBasedPageClassificationExecutionRate();
 
 extern const char kModelBasedPageClassificationExecutionRateParam[];
+
+// Enables the PageActionMenuIcon feature.
+BASE_DECLARE_FEATURE(kPageActionMenuIcon);
+
+// Param for the page action menu icon variations.
+extern const char kPageActionMenuIconParams[];
+
+// Icon to use for the page action menu entry point.
+enum class PageActionMenuIconVariations {
+  kDefault = 0,
+  kSparkles1 = 1,
+  kSparkles2 = 2,
+};
+
+PageActionMenuIconVariations GetPageActionMenuIcon();
+
+// Feature flag for enabling Project Aureus (quota enforcement and usage
+// limits).
+BASE_DECLARE_FEATURE(kGeminiAureus);
+bool IsGeminiAureusEnabled();
+
+// Feature flag for enabling Gemini actor.
+BASE_DECLARE_FEATURE(kGeminiActor);
+bool IsGeminiActorEnabled();
+
+// Parameter to enable or disable backgrounding in Gemini Actor.
+extern const char kGeminiActorBackgroundingParam[];
+
+// Returns true if backgrounding for Gemini Actor is enabled. This requires:
+// 1. Compile flag `IOS_BACKGROUND_CONTINUED_PROCESSING_ENABLED` is enabled.
+// 2. `IsGeminiActorEnabled()` and `kGeminiActorBackgroundingParam` (default
+// true) are both true.
+bool IsGeminiActorBackgroundingEnabled();
+
+// Enables the GeminiUnaryMigration feature.
+BASE_DECLARE_FEATURE(kGeminiUnaryMigration);
+
+// Returns true if the GeminiUnaryMigration feature is enabled.
+bool IsGeminiUnaryMigrationEnabled();
+
+// Enables the GeminiBinaryMigration feature.
+BASE_DECLARE_FEATURE(kGeminiBinaryMigration);
+
+// Returns true if the GeminiBinaryMigration feature is enabled.
+bool IsGeminiBinaryMigrationEnabled();
+
+// Enables the PageContextIPCOptimization feature.
+BASE_DECLARE_FEATURE(kPageContextIPCOptimization);
+
+// Returns true if the PageContextIPCOptimization feature is enabled.
+bool IsPageContextIPCOptimizationEnabled();
+
+// Returns true if the actionable optimization is enabled within the IPC
+// optimization.
+bool IsPageContextIPCOptimizationActionableEnabled();
+
+// Enables the PageContextPdf feature. This allows PDFs to be used as context
+// for prompts for Gemini only. Other providers would have separate flags.
+BASE_DECLARE_FEATURE(kPageContextPdf);
+
+// Returns true if the PageContextPdf feature is enabled.
+bool IsPageContextPDFEnabled();
+
+// Enables the GeminiClientMigration feature.
+BASE_DECLARE_FEATURE(kGeminiClientMigration);
+
+// Returns true if the GeminiClientMigration feature is enabled.
+bool IsGeminiClientMigrationEnabled();
+
+// Enables the GeminiMultiTabContext feature.
+BASE_DECLARE_FEATURE(kGeminiMultiTabContext);
+
+// Returns true if the GeminiMultiTabContext feature is enabled.
+bool IsGeminiMultiTabContextEnabled();
+
+// Enables the GeminiScreenContextMigration feature.
+BASE_DECLARE_FEATURE(kGeminiScreenContextMigration);
+
+// Returns true if the GeminiScreenContextMigration feature is enabled.
+bool IsGeminiScreenContextMigrationEnabled();
+
+
+// Feature flag controlling the generalized Gemini entry flow outside of the
+// Page Action Menu.
+BASE_DECLARE_FEATURE(kGeneralizedGeminiEntryFlow);
+
+// Returns true if the generalized Gemini entry flow is enabled.
+bool IsGeneralizedGeminiEntryFlowEnabled();
+
+// Feature flag controlling Gemini Luminous.
+BASE_DECLARE_FEATURE(kGeminiLuminous);
+
+// Returns true if Gemini Luminous is enabled.
+bool IsGeminiLuminousEnabled();
+
+// Feature flag controlling App Switcher AI summarization.
+BASE_DECLARE_FEATURE(kAppSwitcherAISummarization);
+
+// Returns true if App Switcher AI summarization is enabled.
+bool IsAppSwitcherAISummarizationEnabled();
+
+// Feature flag controlling Gemini contextual suggestions cues framework.
+BASE_DECLARE_FEATURE(kGeminiContextualSuggestionsCues);
+
+// Returns true if Gemini contextual suggestions cues framework is enabled.
+bool IsGeminiContextualSuggestionsCuesEnabled();
+
+// Feature parameter for enabling on-device category classifier in Gemini
+// contextual suggestions cues.
+extern const char kGeminiContextualSuggestionsCuesOnDeviceClassifierParam[];
+
+// Returns true if on-device category classifier is enabled for Gemini
+// contextual suggestions cues.
+bool IsGeminiContextualSuggestionsCuesOnDeviceClassifierEnabled();
+
+// Feature parameter for allowing GPU / Neural Engine execution in Gemini
+// contextual suggestions cues.
+extern const char kGeminiContextualSuggestionsCuesAllowGpuExecutionParam[];
+
+// Returns true if GPU / Neural Engine execution is allowed for Gemini
+// contextual suggestions cues.
+bool IsGeminiContextualSuggestionsCuesAllowGpuExecutionEnabled();
+
+// Feature parameter for using Title and URL only (matching Desktop) for
+// category classification.
+extern const char kGeminiContextualSuggestionsCuesTitleAndUrlOnlyParam[];
+
+// Returns true if category classification should only use Title and URL
+// instead of extracting APC and generating passages.
+bool IsGeminiContextualSuggestionsCuesTitleAndUrlOnlyEnabled();
+
+// Feature parameter for enabling server model execution in Gemini contextual
+// suggestions cues.
+extern const char kGeminiContextualSuggestionsCuesServerModelExecutionParam[];
+
+// Returns true if server model execution is enabled for Gemini contextual
+// suggestions cues.
+bool IsGeminiContextualSuggestionsCuesServerModelExecutionEnabled();
+
+#pragma mark - Debugging Features
+
+// Holds the variations of the BWG Promo Consent flow for debugging.
+enum class BWGPromoConsentVariations {
+  kDisabled = 0,
+  kSinglePage = 1,
+  kDoublePage = 2,
+  kSkipConsent = 3,
+  kForceFRE = 4,
+  kSkipNewUserDelay = 5,
+};
+extern const char kBWGPromoConsentParams[];
+
+// Returns the variation of the BWG Promo Consent flow.
+BWGPromoConsentVariations BWGPromoConsentVariationsParam();
+
+// Returns YES if the promo should be forced.
+bool ShouldForceBWGPromo();
+
+// Returns YES if the Chrome FRE recency check should be skipped when evaluating
+// whether to show the Gemini on-navigation promo.
+bool ShouldSkipBWGPromoNewUserDelay();
+
+// Feature flag to enable BWG Promo Consent for debugging.
+BASE_DECLARE_FEATURE(kBWGPromoConsent);
+
+// Feature flag to enable the ActorServiceLogging feature for debugging.
+BASE_DECLARE_FEATURE(kActorServiceLogging);
+bool IsActorServiceLoggingEnabled();
+
+// Feature flag to enable the iOS bottom sheet migration.
+BASE_DECLARE_FEATURE(kIOSGeminiBottomSheetMigration);
+
+// Helper function to check if `kIOSGeminiBottomSheetMigration` is enabled.
+bool IsIOSGeminiBottomSheetMigrationEnabled();
+
+// Enables the GeminiQuizzes feature.
+BASE_DECLARE_FEATURE(kGeminiQuizzes);
+
+// Returns true if the GeminiQuizzes feature is enabled.
+bool IsGeminiQuizzesEnabled();
+
+// Feature flag to enable the Gemini FRE UI refactoring.
+BASE_DECLARE_FEATURE(kGeminiFRERefactor);
+
+// Helper function to check if `kGeminiFRERefactor` is enabled.
+bool IsGeminiFRERefactorEnabled();
+
+// Feature flag to control the Gemini coordinator teardown crash fix.
+BASE_DECLARE_FEATURE(kGeminiCoordinatorTeardownFix);
+
+// Returns true if the Gemini coordinator teardown crash fix is enabled.
+bool IsGeminiCoordinatorTeardownFixEnabled();
+
+// Feature flag to enable the Gemini FRE experiment.
+BASE_DECLARE_FEATURE(kGeminiFREExperiment);
+
+// Variations of the Lightweight FRE promo title/string.
+enum class GeminiLightweightFREVariant {
+  kConvenience = 0,
+  kPageSharing = 1,
+  kDiverse = 2,
+};
+
+// Feature parameter for Gemini FRE experiment variations.
+extern const char kGeminiFREExperimentParam[];
+extern const char kGeminiFREExperimentParamVisualRich[];
+extern const char kGeminiFREExperimentParamLightweightConvenience[];
+extern const char kGeminiFREExperimentParamLightweightPageSharing[];
+extern const char kGeminiFREExperimentParamLightweightDiverse[];
+
+// Returns true if the Gemini FRE experiment is enabled (any variation).
+bool IsGeminiFREExperimentEnabled();
+
+// Returns true if the Visual Rich variant is enabled.
+bool IsGeminiVisualRichFREEnabled();
+
+// Returns true if any Lightweight variant is enabled.
+bool IsGeminiLightweightFREEnabled();
+
+// Returns the specific Lightweight variant configured for the experiment.
+GeminiLightweightFREVariant GetGeminiLightweightFREVariant();
+
+// Feature flag for Gemini Experimental Guided Onboarding.
+// Meant for experiments only.
+BASE_DECLARE_FEATURE(kGeminiExperimentalGuidedOnboarding);
+
+// Feature parameter to force Gemini Experimental Guided Onboarding for
+// debugging.
+extern const char kGeminiExperimentalGuidedOnboardingForceParam[];
+
+// Returns true if Gemini Experimental Guided Onboarding is enabled.
+bool IsGeminiExperimentalGuidedOnboardingEnabled();
+
+// Returns true if Gemini Experimental Guided Onboarding should be forced for
+// debugging.
+bool ShouldForceGeminiExperimentalGuidedOnboarding();
+
+// Controls whether blacked out bounding boxes for sensitive payment fields are
+// applied to the screenshot in `PageContext`. Matches Blink's
+// `kGlicScreenshotSensitivePaymentRedaction`.
+// Note: When enabled, this feature enforces screenshot payment redactions on
+// `PageContext` extractions that use rich extraction, overriding any local
+// `PageContextWrapperConfig` setting. It has no effect on light extractions.
+BASE_DECLARE_FEATURE(kPageContextScreenshotSensitivePaymentRedaction);
+
+// Returns true if `kPageContextScreenshotSensitivePaymentRedaction` is enabled.
+bool IsPageContextScreenshotSensitivePaymentRedactionEnabled();
+
+// Controls whether Autofill credit card redactions are applied to clear
+// sensitive field values in the `AnnotatedPageContent` (APC) proto. Matches
+// Blink's `kAnnotatedPageContentAutofillCreditCardRedactions`.
+// Note: When enabled, this feature enforces field value redactions on
+// `PageContext` extractions that use rich extraction, overriding any local
+// `PageContextWrapperConfig` setting. It has no effect on light extractions.
+BASE_DECLARE_FEATURE(kPageContextAutofillCreditCardRedactions);
+
+// Returns true if `kPageContextAutofillCreditCardRedactions` is
+// enabled.
+bool IsPageContextAutofillCreditCardRedactionsEnabled();
+
+// Controls whether Autofill OTP redactions are applied to clear sensitive
+// field values in the APC proto and screenshot. Matches Blink's
+// `kAnnotatedPageContentAutofillOtpRedactions`.
+// Note: When enabled, this feature enforces redactions on
+// `PageContext` extractions that use rich extraction, overriding any local
+// `PageContextWrapperConfig` setting. It has no effect on light extractions.
+BASE_DECLARE_FEATURE(kPageContextAutofillOtpRedactions);
+
+// Returns true if `kPageContextAutofillOtpRedactions` is enabled.
+bool IsPageContextAutofillOtpRedactionsEnabled();
+
+// Controls whether blacked out bounding boxes for password fields are applied
+// to the screenshot in `PageContext`. Matches Blink's
+// `kGlicScreenshotPasswordRedaction` behavior.
+// Note: When enabled, this feature enforces screenshot password redactions on
+// `PageContext` extractions that use rich extraction, overriding any local
+// `PageContextWrapperConfig` setting. It has no effect on light extractions.
+BASE_DECLARE_FEATURE(kPageContextScreenshotPasswordRedaction);
+
+// Returns true if `kPageContextScreenshotPasswordRedaction` is enabled.
+bool IsPageContextScreenshotPasswordRedactionEnabled();
+
+// When enabled, the "Get insights with Gemini chip" is disabled.
+BASE_DECLARE_FEATURE(kGeminiInsightsChipAblation);
+
+// Returns true if the `GeminiInsightsChipAblation` feature is enabled.
+bool IsGeminiInsightsChipAblationEnabled();
 
 #endif  // IOS_CHROME_BROWSER_INTELLIGENCE_FEATURES_FEATURES_H_

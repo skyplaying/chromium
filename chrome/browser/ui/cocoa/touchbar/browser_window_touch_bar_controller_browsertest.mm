@@ -10,10 +10,10 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/bookmarks/bookmark_tab_helper.h"
 #include "chrome/browser/ui/bookmarks/bookmark_tab_helper_observer.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
 #import "chrome/browser/ui/cocoa/touchbar/browser_window_default_touch_bar.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_native_widget_mac.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/common/pref_names.h"
@@ -169,7 +169,7 @@ class BrowserWindowTouchBarControllerTest : public InProcessBrowserTest {
   }
 
   gfx::NativeWindow native_window() const {
-    return browser()->window()->GetNativeWindow();
+    return browser()->GetWindow()->GetNativeWindow();
   }
 
   NSWindow* ns_window() const { return native_window().GetNativeNSWindow(); }
@@ -206,7 +206,7 @@ IN_PROC_BROWSER_TEST_F(BrowserWindowTouchBarControllerTest, TabChanges) {
   [TouchBarInvalidationWatcher touchBarInvalidFlag] = NO;
   ASSERT_FALSE([TouchBarInvalidationWatcher touchBarInvalidFlag]);
   std::unique_ptr<content::WebContents> contents = content::WebContents::Create(
-      content::WebContents::CreateParams(browser()->profile()));
+      content::WebContents::CreateParams(browser()->GetProfile()));
   browser()->tab_strip_model()->AppendWebContents(std::move(contents), true);
 
   EXPECT_TRUE([TouchBarInvalidationWatcher touchBarInvalidFlag]);
@@ -277,7 +277,7 @@ IN_PROC_BROWSER_TEST_F(BrowserWindowTouchBarControllerTest,
   [[maybe_unused]] TouchBarInvalidationWatcher* invalidationWatcher =
       [TouchBarInvalidationWatcher newWatcher];
 
-  PrefService* prefs = browser()->profile()->GetPrefs();
+  PrefService* prefs = browser()->GetProfile()->GetPrefs();
   DCHECK(prefs);
 
   EXPECT_FALSE(browser_touch_bar_controller());
@@ -322,7 +322,7 @@ IN_PROC_BROWSER_TEST_F(BrowserWindowTouchBarControllerTest,
   BookmarkTabHelperObserver* observer =
       [[browser_touch_bar_controller() defaultTouchBar] bookmarkTabObserver];
   std::unique_ptr<content::WebContents> contents = content::WebContents::Create(
-      content::WebContents::CreateParams(browser()->profile()));
+      content::WebContents::CreateParams(browser()->GetProfile()));
   browser()->tab_strip_model()->AppendWebContents(std::move(contents), true);
 
   BookmarkTabHelper* tab_helper = BookmarkTabHelper::FromWebContents(

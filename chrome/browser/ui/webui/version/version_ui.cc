@@ -94,6 +94,8 @@ void CreateAndAddVersionUIDataSource(Profile* profile) {
       {version_ui::kCopyVariationsLabel, IDS_VERSION_UI_COPY_VARIATIONS_LABEL},
       {version_ui::kCopyVariationsNotice,
        IDS_VERSION_UI_COPY_VARIATIONS_NOTICE},
+      {version_ui::kVariationsSourceName,
+       IDS_VERSION_UI_VARIATIONS_SOURCE_NAME},
       {version_ui::kVariationsSeedName, IDS_VERSION_UI_VARIATIONS_SEED_NAME},
 #if BUILDFLAG(IS_CHROMEOS)
       {version_ui::kARC, IDS_ARC_LABEL},
@@ -177,7 +179,7 @@ int VersionUI::VersionProcessorVariation() {
   // bitness. Search the code for "generate_resource_allowlist" for more
   // information. Therefore, make sure both the IDS_VERSION_UI_32BIT and
   // IDS_VERSION_UI_64BIT strings are marked as always used so that they’re
-  // never stripped. https://crbug.com/1119479
+  // never stripped. https://crbug.com/40145503
   IDS_VERSION_UI_32BIT;
   IDS_VERSION_UI_64BIT;
 #endif  // BUILDFLAG(IS_ANDROID)
@@ -207,6 +209,18 @@ int VersionUI::VersionProcessorVariation() {
   return IDS_VERSION_UI_64BIT;
 #endif  // defined(ARCH_CPU_X86)
 #endif  // defined(ARCH_CPU_ARM64)
+#elif BUILDFLAG(IS_LINUX)
+#if defined(ARCH_CPU_X86_64)
+  return IDS_VERSION_UI_64BIT_INTEL;
+#elif defined(ARCH_CPU_ARM64)
+  return IDS_VERSION_UI_64BIT_ARM;
+#elif defined(ARCH_CPU_64_BITS)
+  return IDS_VERSION_UI_64BIT;
+#elif defined(ARCH_CPU_32_BITS)
+  return IDS_VERSION_UI_32BIT;
+#else
+#error Update for a processor that is neither 32-bit nor 64-bit.
+#endif
 #elif defined(ARCH_CPU_64_BITS)
   return IDS_VERSION_UI_64BIT;
 #elif defined(ARCH_CPU_32_BITS)
@@ -217,7 +231,7 @@ int VersionUI::VersionProcessorVariation() {
 }
 
 // static
-base::RefCountedMemory* VersionUI::GetFaviconResourceBytes(
+scoped_refptr<base::RefCountedMemory> VersionUI::GetFaviconResourceBytes(
     ui::ResourceScaleFactor scale_factor) {
   return ui::ResourceBundle::GetSharedInstance().LoadDataResourceBytesForScale(
       IDR_PRODUCT_FAVICON, scale_factor);
@@ -304,11 +318,17 @@ void VersionUI::AddVersionDetailStrings(content::WebUIDataSource* html_source) {
                          version_utils::win::GetCohortVersionInfo());
 #endif  // BUILDFLAG(IS_WIN)
 
+  auto* variations_service = g_browser_process->variations_service();
+  html_source->AddString(version_ui::kVariationsSource,
+                         variations_service
+                             ? version_ui::VariationsSourceToUiString(
+                                   variations_service->GetVariationsSource())
+                             : std::string());
+
   html_source->AddString(
       version_ui::kVariationsSeed,
-      g_browser_process->variations_service()
-          ? version_ui::SeedTypeToUiString(
-                g_browser_process->variations_service()->GetSeedType())
+      variations_service
+          ? version_ui::SeedTypeToUiString(variations_service->GetSeedType())
           : std::string());
 
   html_source->AddString(version_ui::kSanitizer,

@@ -15,6 +15,7 @@ namespace ash {
 // Current values should not be renumbered or removed. Please keep in sync with
 // "NotificationCatalogName" in tools/metrics/histograms/enums.xml.
 // To deprecate comment out the entry.
+// LINT.IfChange(NotificationCatalogName)
 enum class NotificationCatalogName {
   kNone = 0,
   kTestCatalogName = 1,
@@ -72,7 +73,7 @@ enum class NotificationCatalogName {
   kSessionLengthTimeout = 53,
   kLocaleUpdate = 54,
   kTracing = 55,
-  kPcieBillboardDevice = 56,
+  // [Deprecated] kPcieBillboardDevice = 56,
   kPcieLimitedPerformance = 57,
   kPcieGuestMode = 58,
   kPciePeripheralBlocked = 59,
@@ -96,7 +97,7 @@ enum class NotificationCatalogName {
   kPhoneHubTetherFailed = 77,
   kCapsLock = 78,
   kNightLight = 79,
-  kPluginVMUninstaller = 80,
+  // [Deprecated] kPluginVMUninstaller = 80,
   // [Deprecated] kTPMAutoUpdate = 81,
   kIt2MeConfirmation = 82,
   kHPSNotify = 83,
@@ -106,7 +107,7 @@ enum class NotificationCatalogName {
   kEasyUnlockChromebookAdded = 87,
   kEasyUnlockPairingChange = 88,
   kEasyUnlockPairingChangeApplied = 89,
-  kEasyUnlockSmartLockSignInRemoved = 90,
+  // [Deprecated] kEasyUnlockSmartLockSignInRemoved = 90,
   kSystemProxy = 91,
   kDlpPolicy = 92,
   kPacketCapture = 93,
@@ -219,8 +220,13 @@ enum class NotificationCatalogName {
   kArcDlcInstall = 200,
   kIncompatibleCharger = 201,
   kCameraUpload = 202,
-  kMaxValue = kCameraUpload
+  kFrozenUpdateNotification = 203,
+  kDeviceCommandGeolocation = 204,
+  kLocalAuthFactorsComplexity = 205,
+  kIsolatedWebAppUpdate = 206,
+  kMaxValue = kIsolatedWebAppUpdate
 };
+// LINT.ThenChange(//tools/metrics/histograms/enums.xml:NotificationCatalogName)
 
 // A living catalog that registers system nudges.
 // Current values should not be renumbered or removed. Please keep in sync with

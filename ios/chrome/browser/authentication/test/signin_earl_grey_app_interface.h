@@ -96,9 +96,6 @@ enum class UserSelectableType;
 // `url` that triggered the web sign-in/consistency dialog.
 + (void)triggerConsistencyPromoSigninDialogWithURL:(NSURL*)url;
 
-// Presents the signed-in accounts view controller if it needs to be presented.
-+ (void)presentSignInAccountsViewControllerIfNecessary;
-
 + (void)setSelectedType:(syncer::UserSelectableType)type enabled:(BOOL)enabled;
 
 // Returns if the data type is enabled for the sync service.
@@ -118,11 +115,20 @@ enum class UserSelectableType;
     (policy::ProfileSeparationDataMigrationSettings)
         profileSeparationDataMigrationSettings;
 
-// Returns whether the feature to put each managed account into its own separate
-// profile is enabled. This depends on the `kSeparateProfilesForManagedAccounts`
-// feature flag, plus some additional conditions which can't be directly checked
-// in the test app.
-+ (BOOL)areSeparateProfilesForManagedAccountsEnabled;
+// Triggers a persistent MDM error for the provided identity.
++ (void)setMDMErrorForIdentity:(FakeSystemIdentity*)fakeIdentity
+                userActionable:(BOOL)userActionable;
+
+// Clears the persistent MDM error for the provided identity.
++ (void)clearMDMErrorForIdentity:(FakeSystemIdentity*)fakeIdentity;
+
+// Resets the recorded MDM notification display status in
+// `FakeSystemIdentityManager`.
++ (void)resetMDMNotificationDisplayed;
+
+// Returns YES if `DisplayMDMNotification()` was called on
+// `FakeSystemIdentityManager`.
++ (BOOL)wasMDMNotificationDisplayed;
 
 @end
 

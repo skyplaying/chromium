@@ -9,13 +9,18 @@ import android.content.SharedPreferences;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.ContextUtils;
+import org.chromium.base.DeviceInfo;
 import org.chromium.base.ObserverList;
 import org.chromium.base.shared_preferences.SharedPreferencesManager;
+import org.chromium.base.supplier.NonNullObservableSupplier;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
 import org.chromium.build.BuildConfig;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.ui.base.DeviceFormFactor;
 
@@ -28,6 +33,9 @@ public class TabArchiveSettings {
     public interface Observer {
         // Called when a setting was changed.
         void onSettingChanged();
+
+        // Called when the archived tab count is changed.
+        default void onArchivedTabCountChanged(int count) {}
     }
 
     // The default time to consider a tab as inactive.
@@ -71,22 +79,29 @@ public class TabArchiveSettings {
 
     private final SharedPreferencesManager mPrefsManager;
     private final ObserverList<Observer> mObservers = new ObserverList<>();
+    private final SettableNonNullObservableSupplier<Integer> mArchivedTabCountSupplier;
 
     /**
      * Constructor.
      *
      * @param prefsManager The {@link SharedPreferencesManager} used to read/write settings.
      */
+    @SuppressWarnings("UseSharedPreferencesManagerFromChromeCheck")
     public TabArchiveSettings(SharedPreferencesManager prefsManager) {
         mPrefsManager = prefsManager;
+        int initialCount =
+                mPrefsManager.readInt(ChromePreferenceKeys.TAB_DECLUTTER_ARCHIVED_TAB_COUNT, 0);
+        mArchivedTabCountSupplier = ObservableSuppliers.createNonNull(initialCount);
         ContextUtils.getAppSharedPreferences()
                 .registerOnSharedPreferenceChangeListener(mPrefsListener);
     }
 
     /** Destroys the object, unregistering observers. */
+    @SuppressWarnings("UseSharedPreferencesManagerFromChromeCheck")
     public void destroy() {
         ContextUtils.getAppSharedPreferences()
                 .unregisterOnSharedPreferenceChangeListener(mPrefsListener);
+        mArchivedTabCountSupplier.destroy();
     }
 
     /** Adds the given observer to the list. */
@@ -99,13 +114,33 @@ public class TabArchiveSettings {
         mObservers.removeObserver(obs);
     }
 
+    /** Returns whether archiving is forcefully disabled. */
+    public static boolean isArchiveForceDisabled() {
+        return DeviceInfo.isDesktop()
+                && ChromeFeatureList.sAndroidTabDeclutterArchiveOnDesktop.isEnabled()
+                && ChromeFeatureList.sAndroidTabDeclutterArchiveOnDesktopForceDisable.getValue();
+    }
+
+    public static boolean isArchiveDisabledByDefault() {
+        return DeviceInfo.isDesktop()
+                && ChromeFeatureList.sAndroidTabDeclutterArchiveOnDesktop.isEnabled()
+                && ChromeFeatureList.sAndroidTabDeclutterArchiveOnDesktopDisableByDefault
+                        .getValue();
+    }
+
     /** Returns whether archive is enabled in settings. */
     public boolean getArchiveEnabled() {
+        if (isArchiveForceDisabled()) {
+            return false;
+        }
+
+        boolean defaultValue = isArchiveDisabledByDefault() ? false : !BuildConfig.IS_FOR_TEST;
+
         // Turn off the archive feature by default for tests since we can't control when tabs
         // are created, and tabs disappearing from tests is very unexpected. For archive tests,
         // this will need to be turned on manually.
         return mPrefsManager.readBoolean(
-                ChromePreferenceKeys.TAB_DECLUTTER_ARCHIVE_ENABLED, !BuildConfig.IS_FOR_TEST);
+                ChromePreferenceKeys.TAB_DECLUTTER_ARCHIVE_ENABLED, defaultValue);
     }
 
     /** Sets whether archive is enabled in settings. */
@@ -163,9 +198,7 @@ public class TabArchiveSettings {
     /** Returns whether archiving of duplicate tabs is enabled. */
     public boolean isArchiveDuplicateTabsEnabled() {
         // Default to true for phones, false for tablets and desktop.
-        boolean defaultValue =
-                !DeviceFormFactor.isNonMultiDisplayContextOnTablet(
-                        ContextUtils.getApplicationContext());
+        boolean defaultValue = !DeviceInfo.isDesktop() && !DeviceFormFactor.isTablet();
         return getArchiveEnabled()
                 && mPrefsManager.readBoolean(
                         ChromePreferenceKeys.TAB_DECLUTTER_ARCHIVE_DUPLICATE_TABS_ENABLED,
@@ -233,9 +266,40 @@ public class TabArchiveSettings {
         return DEFAULT_MAX_SIMULTANEOUS_ARCHIVES;
     }
 
+    /** Returns a supplier for the archived tab count. */
+    public NonNullObservableSupplier<Integer> getArchivedTabCountSupplier() {
+        return mArchivedTabCountSupplier;
+    }
+
+    /** Returns the cached archived tab count. */
+    public int getArchivedTabCount() {
+        return mArchivedTabCountSupplier.get();
+    }
+
+    /** Sets the cached archived tab count and updates the supplier and observers. */
+    public void setArchivedTabCount(int count) {
+        if (mArchivedTabCountSupplier.get() == count) return;
+        mPrefsManager.writeInt(ChromePreferenceKeys.TAB_DECLUTTER_ARCHIVED_TAB_COUNT, count);
+        mArchivedTabCountSupplier.set(count);
+        for (Observer obs : mObservers) {
+            obs.onArchivedTabCountChanged(count);
+        }
+    }
+
     // Private methods.
 
     private void maybeNotifyObservers(@Nullable String key) {
+        if (ChromePreferenceKeys.TAB_DECLUTTER_ARCHIVED_TAB_COUNT.equals(key)) {
+            int count =
+                    mPrefsManager.readInt(ChromePreferenceKeys.TAB_DECLUTTER_ARCHIVED_TAB_COUNT, 0);
+            if (mArchivedTabCountSupplier.get() == count) return;
+            mArchivedTabCountSupplier.set(count);
+            for (Observer obs : mObservers) {
+                obs.onArchivedTabCountChanged(count);
+            }
+            return;
+        }
+
         if (!PREF_KEYS_FOR_NOTIFICATIONS.contains(key)) return;
 
         for (Observer obs : mObservers) {
@@ -252,5 +316,7 @@ public class TabArchiveSettings {
         mPrefsManager.removeKey(ChromePreferenceKeys.TAB_DECLUTTER_AUTO_DELETE_TIME_DELTA_HOURS);
         mPrefsManager.removeKey(ChromePreferenceKeys.TAB_DECLUTTER_DIALOG_IPH_DISMISS_COUNT);
         mPrefsManager.removeKey(ChromePreferenceKeys.TAB_DECLUTTER_AUTO_DELETE_DECISION_MADE);
+        mPrefsManager.removeKey(ChromePreferenceKeys.TAB_DECLUTTER_ARCHIVED_TAB_COUNT);
+        mArchivedTabCountSupplier.set(0);
     }
 }

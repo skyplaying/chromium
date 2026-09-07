@@ -35,10 +35,10 @@ class TabGroupModel {
   TabGroupModel();
   ~TabGroupModel();
 
-  // Returns whether a tab group with the given |id| exists.
+  // Returns whether a tab group with the given `id` exists.
   bool ContainsTabGroup(const tab_groups::TabGroupId& id) const;
 
-  // Returns the tab group with the given |id|. The group must exist.
+  // Returns the tab group with the given `id`. The group must exist.
   TabGroup* GetTabGroup(const tab_groups::TabGroupId& id) const;
 
   // Registers a tab group. It will initially be empty,
@@ -55,6 +55,8 @@ class TabGroupModel {
   // first color in the set. Used to initialize a new group's color, which
   // should be as distinct from the other groups as possible.
   tab_groups::TabGroupColorId GetNextColor(base::PassKey<TabStripModel>) const;
+
+  static std::vector<tab_groups::TabGroupColorId> GetColorOrdering();
 
   std::vector<tab_groups::TabGroupId> ListTabGroups() const;
 

@@ -73,10 +73,21 @@ class BLINK_COMMON_EXPORT DocumentPolicy {
     FeatureEndpointMap endpoint_map;
   };
 
+  struct DocumentPolicyBundle {
+    ParsedDocumentPolicy policy;
+    // The Report-Only Document-Policy header value.
+    std::string report_only_header;
+  };
+
   static std::unique_ptr<DocumentPolicy> CreateWithHeaderPolicy(
       const ParsedDocumentPolicy& header_policy);
 
   static std::unique_ptr<DocumentPolicy> CopyStateFrom(const DocumentPolicy*);
+
+  // Returns the current policy state as a ParsedDocumentPolicy. Default values
+  // are omitted to preserve its sparse representation, and endpoint mappings
+  // are retained for non-default features.
+  ParsedDocumentPolicy GetParsedPolicy() const;
 
   DocumentPolicy(const DocumentPolicy&) = delete;
   DocumentPolicy& operator=(const DocumentPolicy&) = delete;

@@ -19,15 +19,18 @@ import './settings_section.js';
 import './shared_style.css.js';
 import './side_bar.js';
 import './toolbar.js';
+import './dialogs/trusted_vault_error_dialog.js';
 
 import type {CrToastElement} from '//resources/cr_elements/cr_toast/cr_toast.js';
 import {focusWithoutInk} from '//resources/js/focus_without_ink.js';
 import {loadTimeData} from '//resources/js/load_time_data.js';
 import type {SettingsPrefsElement} from '/shared/settings/prefs/prefs.js';
+import {ColorChangeUpdater, COLORS_CSS_SELECTOR} from 'chrome://resources/cr_components/color_change_listener/colors_css_updater.js';
 import type {CrDrawerElement} from 'chrome://resources/cr_elements/cr_drawer/cr_drawer.js';
 import type {CrPageSelectorElement} from 'chrome://resources/cr_elements/cr_page_selector/cr_page_selector.js';
 import {FindShortcutMixin} from 'chrome://resources/cr_elements/find_shortcut_mixin.js';
 import {I18nMixin} from 'chrome://resources/cr_elements/i18n_mixin.js';
+import {assert} from 'chrome://resources/js/assert.js';
 import {EventTracker} from 'chrome://resources/js/event_tracker.js';
 import {PluralStringProxyImpl} from 'chrome://resources/js/plural_string_proxy.js';
 import {getDeepActiveElement, listenOnce} from 'chrome://resources/js/util.js';
@@ -46,6 +49,7 @@ import {Page, RouteObserverMixin, Router} from './router.js';
 import type {SettingsSectionElement} from './settings_section.js';
 import type {PasswordManagerSideBarElement} from './side_bar.js';
 import type {PasswordManagerToolbarElement} from './toolbar.js';
+import {UserUtilMixin} from './user_utils_mixin.js';
 
 /**
  * Checks if an HTML element is an editable. An editable is either a text
@@ -81,8 +85,8 @@ export interface PasswordManagerAppElement {
   };
 }
 
-const PasswordManagerAppElementBase =
-    FindShortcutMixin(I18nMixin(RouteObserverMixin(PolymerElement)));
+const PasswordManagerAppElementBase = UserUtilMixin(
+    FindShortcutMixin(I18nMixin(RouteObserverMixin(PolymerElement))));
 
 export class PasswordManagerAppElement extends PasswordManagerAppElementBase {
   static get is() {
@@ -128,6 +132,8 @@ export class PasswordManagerAppElement extends PasswordManagerAppElementBase {
         value: Page,
       },
 
+      showTrustedVaultErrorDialog_: Boolean,
+
       toastMessage_: String,
 
       /**
@@ -151,11 +157,18 @@ export class PasswordManagerAppElement extends PasswordManagerAppElementBase {
     };
   }
 
-  declare private prefs_: {[key: string]: any};
+  static get observers() {
+    return [
+      'onActionableErrorChanged_(actionableError)',
+    ];
+  }
+
+  declare private prefs_: {[key: string]: unknown};
   declare private selectedPage_: Page;
   declare private narrow_: boolean;
   declare private collapsed_: boolean;
   declare private pageTitle_: string;
+  declare private showTrustedVaultErrorDialog_: boolean;
   declare private toastMessage_: string;
   declare private showUndo_: boolean;
   declare private focusConfig_: FocusConfig;
@@ -163,6 +176,13 @@ export class PasswordManagerAppElement extends PasswordManagerAppElementBase {
 
   override connectedCallback() {
     super.connectedCallback();
+
+    const enableWebuiRefresh2026 =
+        loadTimeData.getString('webuiRefresh2026') !== '';
+    if (enableWebuiRefresh2026) {
+      this.addThemedColors_();
+      ColorChangeUpdater.forDocument().start();
+    }
 
     const narrowQuery = window.matchMedia('(max-width: 1300px)');
     this.narrow_ = narrowQuery.matches;
@@ -175,6 +195,10 @@ export class PasswordManagerAppElement extends PasswordManagerAppElementBase {
     this.eventTracker_.add(
         collapsedQuery, 'change',
         (e: MediaQueryListEvent) => this.collapsed_ = e.matches);
+
+    this.eventTracker_.add(
+        this, 'show-trusted-vault-error-dialog',
+        () => this.showTrustedVaultErrorDialog_ = true);
   }
 
   override disconnectedCallback() {
@@ -374,6 +398,23 @@ export class PasswordManagerAppElement extends PasswordManagerAppElementBase {
       }
       handler();
     }
+  }
+
+  // TODO(crub.com/509908129): Add static stylesheet in password_manager.html
+  private addThemedColors_() {
+    assert(document.body.querySelector(COLORS_CSS_SELECTOR) === null);
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = 'chrome://theme/colors.css?sets=ui,chrome';
+    document.body.appendChild(link);
+  }
+
+  private onActionableErrorChanged_() {
+    this.showTrustedVaultErrorDialog_ = this.isTrustedVaultKeyNeeded();
+  }
+
+  private onTrustedVaultErrorDialogClose_() {
+    this.showTrustedVaultErrorDialog_ = false;
   }
 }
 declare global {

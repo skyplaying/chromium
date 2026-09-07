@@ -13,7 +13,6 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/no_destructor.h"
-#include "base/scoped_multi_source_observation.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/element_tracker.h"
 #include "ui/views/interaction/element_tracker_widget_state.h"
@@ -39,9 +38,10 @@ class VIEWS_EXPORT TrackedElementViews : public ui::TrackedElement {
   // TrackedElement:
   gfx::Rect GetScreenBounds() const override;
   gfx::NativeView GetNativeView() const override;
+  std::string GetSecondaryIdentifier() const override;
   std::string ToString() const override;
 
-  DECLARE_FRAMEWORK_SPECIFIC_METADATA()
+  DECLARE_SAFE_CAST_TARGET()
 
  private:
   const raw_ptr<View> view_;
@@ -134,15 +134,16 @@ class VIEWS_EXPORT ElementTrackerViews
                             ui::ElementContext context,
                             bool require_visible = false);
 
-  // Returns a list of all visible Views with identifier `id` in `context`.
-  // The list may be empty. Ignores any non-Views elements which might match.
+  // Returns a list of all Views with identifier `id` in `context`. The list
+  // may be empty. Ignores any non-Views elements which might match.
   ViewList GetAllMatchingViews(ui::ElementIdentifier id,
-                               ui::ElementContext context);
+                               ui::ElementContext context,
+                               bool require_visible = false);
 
-  // Returns a list of all visible Views with identifier `id` in any context.
-  // Order is not guaranteed. Ignores any non-Views elements with the same
-  // identifier.
-  ViewList GetAllMatchingViewsInAnyContext(ui::ElementIdentifier id);
+  // Returns a list of all Views with identifier `id` in any context. Order is
+  // not guaranteed. Ignores any non-Views elements with the same identifier.
+  ViewList GetAllMatchingViewsInAnyContext(ui::ElementIdentifier id,
+                                           bool require_visible = false);
 
   // Returns a widget that matches the given context. A valid
   // TrackedElementViews must exist within the widget.

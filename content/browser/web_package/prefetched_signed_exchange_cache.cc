@@ -99,9 +99,7 @@ class RedirectResponseURLLoader : public network::mojom::URLLoader {
  private:
   // network::mojom::URLLoader overrides:
   void FollowRedirect(
-      const std::vector<std::string>& removed_headers,
-      const net::HttpRequestHeaders& modified_headers,
-      const net::HttpRequestHeaders& modified_cors_exempt_headers,
+      network::HttpRequestHeadersUpdateParams headers_update_params,
       const std::optional<GURL>& new_url) override {
     NOTREACHED();
   }
@@ -449,6 +447,7 @@ PrefetchedSignedExchangeCache::MaybeCreateInterceptor(
                 : -1,
             render_frame_host ? render_frame_host->GetRoutingID()
                               : IPC::mojom::kRoutingIdNone,
+            /*prefer_bound_cookie_context=*/false,
             /*cookie_setting_overrides=*/
             render_frame_host ? render_frame_host->GetCookieSettingOverrides()
                               : net::CookieSettingOverrides(),
@@ -552,6 +551,10 @@ void PrefetchedSignedExchangeCache::AddObserverForTesting(
 void PrefetchedSignedExchangeCache::RemoveObserverForTesting(
     const TestObserver* observer) {
   test_observers_.RemoveObserver(observer);
+}
+
+void PrefetchedSignedExchangeCache::AddEntryForTesting(const GURL& url) {
+  exchanges_[url] = nullptr;
 }
 
 }  // namespace content

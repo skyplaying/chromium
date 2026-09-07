@@ -10,14 +10,11 @@
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "chrome/browser/ui/tabs/tab_strip_model_delegate.h"
-#include "chrome/common/chrome_features.h"
-
-#if BUILDFLAG(ENABLE_GLIC)
 #include "chrome/browser/glic/host/glic.mojom.h"                    // nogncheck
 #include "chrome/browser/glic/public/glic_keyed_service_factory.h"  // nogncheck
-#endif
+#include "chrome/browser/ui/tabs/tab_strip_model_delegate.h"
 
+class BrowserWindowInterface;
 class GURL;
 
 namespace tab_groups {
@@ -32,7 +29,7 @@ namespace chrome {
 
 class BrowserTabStripModelDelegate : public TabStripModelDelegate {
  public:
-  explicit BrowserTabStripModelDelegate(Browser* browser);
+  explicit BrowserTabStripModelDelegate(BrowserWindowInterface* browser);
 
   BrowserTabStripModelDelegate(const BrowserTabStripModelDelegate&) = delete;
   BrowserTabStripModelDelegate& operator=(const BrowserTabStripModelDelegate&) =
@@ -47,9 +44,10 @@ class BrowserTabStripModelDelegate : public TabStripModelDelegate {
                 bool foreground,
                 std::optional<tab_groups::TabGroupId> group,
                 bool pinned) override;
-  Browser* CreateNewStripWithTabs(std::vector<NewStripContents> tabs,
-                                  const gfx::Rect& window_bounds,
-                                  bool maximize) override;
+  BrowserWindowInterface* CreateNewStripWithTabs(
+      std::vector<NewStripContents> tabs,
+      const gfx::Rect& window_bounds,
+      bool maximize) override;
   void WillAddWebContents(content::WebContents* contents) override;
   int GetDragActions() const override;
   bool CanDuplicateContentsAt(int index) override;
@@ -64,9 +62,13 @@ class BrowserTabStripModelDelegate : public TabStripModelDelegate {
   std::optional<SessionID> CreateHistoricalTab(
       content::WebContents* contents) override;
   void CreateHistoricalGroup(const tab_groups::TabGroupId& group) override;
+  void CreateHistoricalSplit(const split_tabs::SplitTabId& split_id) override;
   void GroupAdded(const tab_groups::TabGroupId& group) override;
   void WillCloseGroup(const tab_groups::TabGroupId& group) override;
+  void WillCloseSplit(const split_tabs::SplitTabId& split_id) override;
   void GroupCloseStopped(const tab_groups::TabGroupId& group) override;
+  void SplitClosed(const split_tabs::SplitTabId& split_id) override;
+  void SplitCloseStopped(const split_tabs::SplitTabId& split_id) override;
   bool RunUnloadListenerBeforeClosing(content::WebContents* contents) override;
   bool ShouldRunUnloadListenerBeforeClosing(
       content::WebContents* contents) override;
@@ -81,6 +83,7 @@ class BrowserTabStripModelDelegate : public TabStripModelDelegate {
   bool IsNormalWindow() override;
   BrowserWindowInterface* GetBrowserWindowInterface() override;
   void NewSplitTab(std::vector<int> indices,
+                   split_tabs::SplitTabLayout layout,
                    split_tabs::SplitTabCreatedSource source) override;
   void OnGroupsDestruction(const std::vector<tab_groups::TabGroupId>& group_ids,
                            base::OnceCallback<void()> close_callback,
@@ -88,14 +91,11 @@ class BrowserTabStripModelDelegate : public TabStripModelDelegate {
   void OnRemovingAllTabsFromGroups(
       const std::vector<tab_groups::TabGroupId>& group_ids,
       base::OnceCallback<void()> callback) override;
-#if BUILDFLAG(ENABLE_GLIC)
-  bool IsTabGlicPinned(tabs::TabHandle tab_handle) override;
-  bool GlicPinTabs(base::span<const tabs::TabHandle> tab_handles) override;
-  bool GlicUnpinTabs(base::span<const tabs::TabHandle> tab_handles) override;
-  void OpenGlicWindowFromSharedTab() override;
   void GlicUnpinTabsFromAllConversations(
       base::span<const tabs::TabHandle> tab_handles) override;
-#endif
+  void CloseTab(const tabs::TabInterface* tab,
+                CloseTabSource source,
+                base::OnceCallback<void(CloseTabSource)> on_approved) override;
 
   void CloseFrame();
 
@@ -103,7 +103,7 @@ class BrowserTabStripModelDelegate : public TabStripModelDelegate {
   // historical tabs or groups.
   bool BrowserSupportsHistoricalEntries();
 
-  const raw_ptr<Browser> browser_;
+  const raw_ptr<BrowserWindowInterface> browser_;
 
   // The following factory is used to close the frame at a later time.
   base::WeakPtrFactory<BrowserTabStripModelDelegate> weak_factory_{this};

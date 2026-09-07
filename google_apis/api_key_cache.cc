@@ -174,6 +174,13 @@ ApiKeyCache::ApiKeyCache(const DefaultApiKeys& default_api_keys)
       std::string(), environment.get(), command_line, gaia_config,
       default_api_keys.allow_override_via_environment,
       default_api_keys.allow_unset_values);
+
+  api_key_partial_translate_ = CalculateKeyValue(
+      default_api_keys.google_api_key_partial_translate,
+      STRINGIZE_NO_EXPANSION(GOOGLE_API_KEY_PARTIAL_TRANSLATE), std::string(),
+      nullptr, std::string(), environment.get(), command_line, gaia_config,
+      default_api_keys.allow_override_via_environment,
+      default_api_keys.allow_unset_values);
 #if !BUILDFLAG(IS_ANDROID)
   api_key_hats_ = CalculateKeyValue(
       default_api_keys.google_api_key_hats,
@@ -234,6 +241,17 @@ ApiKeyCache::ApiKeyCache(const DefaultApiKeys& default_api_keys)
       nullptr, std::string(), environment.get(), command_line, gaia_config,
       default_api_keys.allow_override_via_environment,
       default_api_keys.allow_unset_values);
+
+#if BUILDFLAG(SUPPORT_CDM_SERVER_CERTIFICATE)
+  // As the CDM server certificate is only used for a prototype feature,
+  // we allow unset values.
+  cdm_server_certificate_ = CalculateKeyValue(
+      default_api_keys.google_cdm_server_certificate,
+      STRINGIZE_NO_EXPANSION(GOOGLE_CDM_SERVER_CERTIFICATE), std::string(),
+      nullptr, std::string(), environment.get(), command_line, gaia_config,
+      default_api_keys.allow_override_via_environment,
+      /*allow_unset_values=*/true);
+#endif
 
   std::string default_client_id = CalculateKeyValue(
       default_api_keys.google_default_client_id,

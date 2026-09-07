@@ -5,6 +5,7 @@
 package org.chromium.components.autofill;
 
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.components.autofill.autofill_ai.EntityTypeName;
 
 /** An interface to handle the touch interaction with an autofill popup or keyboard accessory. */
 @NullMarked
@@ -13,12 +14,23 @@ public interface AutofillDelegate {
     void dismissed();
 
     /**
-     * Handles the selection of an Autofill suggestion from an AutofillPopup or
+     * Handles the acceptance of an Autofill suggestion from an AutofillPopup or
      * AutofillKeyboardAccessory.
      *
-     * @param listIndex The index of the selected Autofill suggestion.
+     * @param listIndex The index of the accepted Autofill suggestion.
      */
-    void suggestionSelected(int listIndex);
+    void suggestionAccepted(int listIndex);
+
+    /**
+     * Handles the acceptance of an Autofill suggestion, with metadata about whether the suggestion
+     * triggers a loading state.
+     *
+     * @param listIndex The index of the accepted Autofill suggestion.
+     * @param showLoadingOnAcceptance True if the suggestion shows a loading UI on acceptance.
+     */
+    default void suggestionAccepted(int listIndex, boolean showLoadingOnAcceptance) {
+        suggestionAccepted(listIndex);
+    }
 
     /**
      * Initiates the deletion process for an item. (A confirm dialog should be shown.)
@@ -32,4 +44,19 @@ public interface AutofillDelegate {
      * TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED} accessibility event.
      */
     void accessibilityFocusCleared();
+
+    /**
+     * Opens settings for the given entity type.
+     *
+     * @param entityType The entity type for which to open settings.
+     */
+    default void openSettingsForEntityType(@EntityTypeName int entityType) {}
+
+    /**
+     * Handles the selection state change of an Autofill suggestion.
+     *
+     * @param listIndex The index of the Autofill suggestion.
+     * @param isSelected True if the suggestion is selected, false otherwise.
+     */
+    default void suggestionSelectionStateChanged(int listIndex, boolean isSelected) {}
 }

@@ -9,7 +9,6 @@
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/apps/platform_apps/app_browsertest_util.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/version_info/version_info.h"
@@ -124,7 +123,7 @@ IN_PROC_BROWSER_TEST_F(AppWindowApiTest, SetShapeNoPerm) {
       << message_;
 }
 
-// Fails on Ozone/X11.  https://crbug.com/1109112
+// Fails on Ozone/X11.  https://crbug.com/40707825
 #if BUILDFLAG(IS_OZONE)
 #define MAYBE_AlphaEnabledHasPermissions DISABLED_AlphaEnabledHasPermissions
 #else

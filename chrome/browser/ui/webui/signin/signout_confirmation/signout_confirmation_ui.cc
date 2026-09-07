@@ -8,8 +8,8 @@
 #include "base/feature_list.h"
 #include "base/functional/callback_helpers.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/webui/plural_string_handler.h"
 #include "chrome/browser/ui/webui/signin/signout_confirmation/signout_confirmation_handler.h"
 #include "chrome/common/webui_url_constants.h"
@@ -17,6 +17,7 @@
 #include "chrome/grit/signin_signout_confirmation_resources.h"
 #include "chrome/grit/signin_signout_confirmation_resources_map.h"
 #include "components/sync/base/features.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "ui/webui/webui_util.h"
 
@@ -51,12 +52,16 @@ SignoutConfirmationUI::SignoutConfirmationUI(content::WebUI* web_ui)
   web_ui->AddMessageHandler(std::move(plural_string_handler));
 }
 
-SignoutConfirmationUI::~SignoutConfirmationUI() = default;
+SignoutConfirmationUI::~SignoutConfirmationUI() {
+  for (Observer& observer : observers_) {
+    observer.OnSignoutConfirmationUIDestroying(this);
+  }
+}
 
 WEB_UI_CONTROLLER_TYPE_IMPL(SignoutConfirmationUI)
 
 void SignoutConfirmationUI::Initialize(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     ChromeSignoutConfirmationPromptVariant variant,
     size_t unsynced_data_count,
     SignoutConfirmationCallback callback) {
@@ -103,7 +108,8 @@ void SignoutConfirmationUI::CreateSignoutConfirmationHandler(
   // handler with sample data.
   if (!initialize_handler_callback_) {
     CHECK_IS_TEST();
-    Browser* browser = chrome::FindLastActive();
+    BrowserWindowInterface* browser =
+        GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
     Initialize(browser, ChromeSignoutConfirmationPromptVariant::kNoUnsyncedData,
                /*unsynced_data_count=*/0, base::DoNothing());
   }
@@ -123,7 +129,7 @@ void SignoutConfirmationUI::RemoveObserver(Observer* observer) {
 }
 
 void SignoutConfirmationUI::OnMojoHandlersReady(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     ChromeSignoutConfirmationPromptVariant variant,
     size_t unsynced_data_count,
     SignoutConfirmationCallback callback,

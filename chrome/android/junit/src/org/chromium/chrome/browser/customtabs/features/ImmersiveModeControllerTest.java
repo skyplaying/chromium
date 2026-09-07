@@ -10,6 +10,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -26,13 +27,15 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.shadows.ShadowLooper;
+import org.robolectric.annotation.Config;
 
 import org.chromium.base.UnownedUserDataHost;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.chrome.browser.customtabs.CustomTabActivity;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.ui.base.ActivityWindowAndroid;
+import org.chromium.ui.edge_to_edge.EdgeToEdgeStateProvider;
 
 /** Tests for {@link ImmersiveModeController}. */
 @RunWith(BaseRobolectricTestRunner.class)
@@ -50,6 +53,7 @@ public class ImmersiveModeControllerTest {
     @Mock public Window mWindow;
     @Mock public WindowInsetsController mInsetsController;
     @Mock public View mDecorView;
+    @Mock public EdgeToEdgeStateProvider mEdgeToEdgeStateProvider;
     private final WindowManager.LayoutParams mLayoutParams = new WindowManager.LayoutParams();
     public UnownedUserDataHost mWindowUserDataHost = new UnownedUserDataHost();
 
@@ -68,6 +72,7 @@ public class ImmersiveModeControllerTest {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             when(mWindow.getInsetsController()).thenReturn(mInsetsController);
+            when(mDecorView.getWindowInsetsController()).thenReturn(mInsetsController);
         }
 
         // Reflect mSystemUiVisibility in the DecorView.
@@ -81,13 +86,15 @@ public class ImmersiveModeControllerTest {
                 .setSystemUiVisibility(anyInt());
 
         when(mWindowAndroid.getUnownedUserDataHost()).thenReturn(mWindowUserDataHost);
-        mController = new ImmersiveModeController(mActivity, mWindowAndroid, mLifecycleDispatcher);
+        mController =
+                new ImmersiveModeController(
+                        mActivity, mWindowAndroid, mEdgeToEdgeStateProvider, mLifecycleDispatcher);
     }
 
     @Test
     public void enterImmersiveMode() {
         mController.enterImmersiveMode(LAYOUT, NOT_STICKY);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         if (isUsingWindowInsetsController()) {
             verify(mInsetsController).hide(anyInt());
             verify(mInsetsController)
@@ -102,7 +109,7 @@ public class ImmersiveModeControllerTest {
     @Test
     public void enterImmersiveMode_sticky() {
         mController.enterImmersiveMode(LAYOUT, STICKY);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         if (isUsingWindowInsetsController()) {
             verify(mInsetsController).hide(anyInt());
             verify(mInsetsController)
@@ -116,6 +123,24 @@ public class ImmersiveModeControllerTest {
     }
 
     @Test
+    // Pin to a single recent SDK: Android 11 (R) has WindowInsetsController quirks, and one SDK
+    // is enough to exercise the re-apply path here.
+    @Config(sdk = Build.VERSION_CODES.VANILLA_ICE_CREAM)
+    public void reApplyImmersiveMode_onResume() {
+        mController.enterImmersiveMode(LAYOUT, NOT_STICKY);
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
+        mController.onResumeWithNative();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
+        // Verifying hide() is called twice is enough to prove the re-apply happened on resume.
+        // We deliberately do not also assert setSystemBarsBehavior() because Robolectric's
+        // WindowInsetsControllerCompat$Impl30 does not forward that call to the underlying mock
+        // on SDK 31-34, even though production code does invoke it.
+        if (isUsingWindowInsetsController()) {
+            verify(mInsetsController, times(2)).hide(anyInt());
+        }
+    }
+
+    @Test
     public void setsLayoutParams() {
         mController.enterImmersiveMode(LAYOUT, NOT_STICKY);
         assertEquals(LAYOUT, mLayoutParams.layoutInDisplayCutoutMode);
@@ -124,7 +149,7 @@ public class ImmersiveModeControllerTest {
     @Test
     public void exitImmersiveMode() {
         mController.enterImmersiveMode(LAYOUT, NOT_STICKY);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         mController.exitImmersiveMode();
         if (isUsingWindowInsetsController()) {
             verify(mInsetsController).show(anyInt());
@@ -137,7 +162,7 @@ public class ImmersiveModeControllerTest {
     @Test
     public void exitImmersiveMode_sticky() {
         mController.enterImmersiveMode(LAYOUT, STICKY);
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         mController.exitImmersiveMode();
         if (isUsingWindowInsetsController()) {
             verify(mInsetsController).show(anyInt());

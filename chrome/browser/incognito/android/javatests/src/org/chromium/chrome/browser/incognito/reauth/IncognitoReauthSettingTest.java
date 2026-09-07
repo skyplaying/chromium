@@ -14,8 +14,6 @@ import static androidx.test.espresso.matcher.ViewMatchers.hasDescendant;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
 import static androidx.test.espresso.matcher.ViewMatchers.withText;
 
-import static org.hamcrest.CoreMatchers.allOf;
-
 import android.app.Activity;
 import android.app.Instrumentation;
 import android.content.Intent;
@@ -28,6 +26,7 @@ import androidx.test.espresso.intent.Intents;
 import androidx.test.filters.LargeTest;
 
 import org.hamcrest.Matcher;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
@@ -37,7 +36,7 @@ import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.incognito.R;
 import org.chromium.chrome.browser.privacy.settings.PrivacySettings;
-import org.chromium.chrome.browser.settings.SettingsActivityTestRule;
+import org.chromium.chrome.browser.settings.SettingsTestRule;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 
 /**
@@ -48,10 +47,9 @@ import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @DisableFeatures(ChromeFeatureList.SETTINGS_MULTI_COLUMN)
 public class IncognitoReauthSettingTest {
-    private final SettingsActivityTestRule<PrivacySettings> mSettingsActivityTestRule =
-            new SettingsActivityTestRule<>(PrivacySettings.class);
-
-    private PrivacySettings mPrivacySettings;
+    @Rule
+    public final SettingsTestRule<PrivacySettings> mSettingsTestRule =
+            new SettingsTestRule<>(PrivacySettings.class);
 
     private void scrollToSetting(Matcher<View> matcher) {
         onView(withId(R.id.recycler_view))
@@ -59,8 +57,7 @@ public class IncognitoReauthSettingTest {
     }
 
     private void startSettings() {
-        mSettingsActivityTestRule.startSettingsActivity();
-        mPrivacySettings = mSettingsActivityTestRule.getFragment();
+        mSettingsTestRule.startSettingsActivity();
     }
 
     @Test
@@ -80,7 +77,7 @@ public class IncognitoReauthSettingTest {
         summaryText = summaryText.replaceAll("</?link>", "");
         scrollToSetting(withText(summaryText));
         onView(withText(summaryText)).perform(click());
-        intended(allOf(hasAction(Settings.ACTION_SECURITY_SETTINGS)));
+        intended(hasAction(Settings.ACTION_SECURITY_SETTINGS));
         Intents.release();
     }
 }

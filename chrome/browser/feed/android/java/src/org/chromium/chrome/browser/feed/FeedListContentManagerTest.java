@@ -28,7 +28,6 @@ import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.Robolectric;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.xsurface.ListContentManagerObserver;
@@ -41,7 +40,6 @@ import java.util.Map;
 
 /** Unit tests for {@link FeedListContentManager}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class FeedListContentManagerTest implements ListContentManagerObserver {
     private FeedListContentManager mManager;
     private Context mContext;
@@ -304,6 +302,23 @@ public class FeedListContentManagerTest implements ListContentManagerObserver {
         assertEquals(
                 Map.of("HKEY1", "someHandler", LoggingParameters.KEY, mLoggingParametersA),
                 mManager.getContextValues(0));
+    }
+
+    @Test
+    @SmallTest
+    public void testDestroy() {
+        mManager.setHandlers(Map.of("HKEY1", "someHandler"));
+        FeedListContentManager.FeedContent c1 = createExternalViewContent("a");
+        addContents(0, Arrays.asList(new FeedListContentManager.FeedContent[] {c1}));
+        assertEquals(1, mManager.getItemCount());
+        assertEquals("someHandler", mManager.getContextValues(-1).get("HKEY1"));
+        assertFalse(mManager.isObserversEmptyForTesting());
+
+        mManager.destroy();
+
+        assertEquals(0, mManager.getItemCount());
+        assertTrue(mManager.getContextValues(-1).isEmpty());
+        assertTrue(mManager.isObserversEmptyForTesting());
     }
 
     @Test

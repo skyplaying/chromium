@@ -16,17 +16,16 @@ import android.os.Handler;
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Unit tests for {@link ObservableSupplierImpl}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class ObservableSupplierImplTest {
     private static final String TEST_STRING_1 = "Test";
     private static final String TEST_STRING_2 = "Test2";
@@ -66,7 +65,7 @@ public class ObservableSupplierImplTest {
         Callback<String> supplierObserver = ignored -> called.set(true);
 
         mSupplier.addSyncObserverAndPostIfNonNull(supplierObserver);
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertTrue(called.get());
     }
 
@@ -78,11 +77,11 @@ public class ObservableSupplierImplTest {
         Callback<String> supplierObserver = ignored -> called.set(true);
 
         mSupplier.addSyncObserver(supplierObserver);
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertFalse(called.get());
 
         mSupplier.set(TEST_STRING_2);
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertTrue(called.get());
     }
 
@@ -92,11 +91,11 @@ public class ObservableSupplierImplTest {
         Callback<String> supplierObserver = ignored -> called.set(true);
 
         mSupplier.addSyncObserverAndCallIfNonNull(supplierObserver);
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertFalse(called.get());
 
         mSupplier.set(TEST_STRING_2);
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertTrue(called.get());
     }
 
@@ -107,7 +106,7 @@ public class ObservableSupplierImplTest {
         Callback<String> supplierObserver = ignored -> called.set(true);
 
         mSupplier.addSyncObserverAndPostIfNonNull(supplierObserver);
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertTrue(called.get());
     }
 
@@ -308,6 +307,37 @@ public class ObservableSupplierImplTest {
     }
 
     @Test
+    public void testAddSyncObserverAndCall_NullValue() {
+        AtomicBoolean calledWithNull = new AtomicBoolean(false);
+        mSupplier.addSyncObserverAndCall(
+                (result) -> {
+                    if (result == null) {
+                        calledWithNull.set(true);
+                    }
+                });
+        assertTrue(
+                "addSyncObserverAndCall should notify observer even if value is null",
+                calledWithNull.get());
+    }
+
+    @Test
+    public void testAddSyncObserverAndPost_NullValue() {
+        AtomicBoolean calledWithNull = new AtomicBoolean(false);
+        mSupplier.addSyncObserverAndPost(
+                (result) -> {
+                    if (result == null) {
+                        calledWithNull.set(true);
+                    }
+                });
+        assertFalse("addSyncObserverAndPost should not notify synchronously", calledWithNull.get());
+        ShadowLooper.idleMainLooper();
+        assertTrue(
+                "addSyncObserverAndPost should notify observer after main looper idles even if"
+                        + " value is null",
+                calledWithNull.get());
+    }
+
+    @Test
     public void testMonotonicNonNull() {
         SettableMonotonicObservableSupplier<String> supplier =
                 ObservableSuppliers.createMonotonic();
@@ -327,6 +357,67 @@ public class ObservableSupplierImplTest {
         // set() should be ignored.
         mSupplier.set("bar");
         assertNull(mSupplier.get());
+    }
+
+    @Test
+    public void testUpcast_Nullable() {
+        SettableNullableObservableSupplier<String> stringSupplier =
+                ObservableSuppliers.createNullable();
+        NullableObservableSupplier<CharSequence> charSequenceSupplier =
+                SupplierUtils.upcast(stringSupplier, CharSequence.class);
+
+        assertEquals(stringSupplier, charSequenceSupplier);
+
+        stringSupplier.set("foo");
+        assertEquals("foo", charSequenceSupplier.get());
+
+        stringSupplier.set(null);
+        assertNull(charSequenceSupplier.get());
+    }
+
+    @Test
+    public void testUpcast_Monotonic() {
+        SettableMonotonicObservableSupplier<String> stringSupplier =
+                ObservableSuppliers.createMonotonic();
+        MonotonicObservableSupplier<CharSequence> charSequenceSupplier =
+                SupplierUtils.upcast(stringSupplier, CharSequence.class);
+
+        assertEquals(stringSupplier, charSequenceSupplier);
+
+        stringSupplier.set("foo");
+        assertEquals("foo", charSequenceSupplier.get());
+    }
+
+    @Test
+    public void testUpcast_NonNull() {
+        SettableNonNullObservableSupplier<String> stringSupplier =
+                ObservableSuppliers.createNonNull("initial");
+        NonNullObservableSupplier<CharSequence> charSequenceSupplier =
+                SupplierUtils.upcast(stringSupplier, CharSequence.class);
+
+        assertEquals(stringSupplier, charSequenceSupplier);
+        assertEquals("initial", charSequenceSupplier.get());
+
+        stringSupplier.set("foo");
+        assertEquals("foo", charSequenceSupplier.get());
+    }
+
+    @Test
+    public void testAllowsSetToNull() {
+        assertTrue(
+                BaseObservableSupplierImpl.allowsSetToNull(ObservableSuppliers.createNullable()));
+        assertTrue(
+                BaseObservableSupplierImpl.allowsSetToNull(
+                        ObservableSuppliers.createNullable("initial")));
+        assertFalse(
+                BaseObservableSupplierImpl.allowsSetToNull(ObservableSuppliers.createMonotonic()));
+        assertFalse(
+                BaseObservableSupplierImpl.allowsSetToNull(
+                        ObservableSuppliers.createMonotonic("initial")));
+        assertFalse(
+                BaseObservableSupplierImpl.allowsSetToNull(
+                        ObservableSuppliers.createNonNull("initial")));
+        assertFalse(BaseObservableSupplierImpl.allowsSetToNull(ObservableSuppliers.alwaysNull()));
     }
 
     private void checkState(

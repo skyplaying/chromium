@@ -13,7 +13,7 @@
 #include "components/keyed_service/core/keyed_service.h"
 #include "extensions/buildflags/buildflags.h"
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "chrome/browser/policy/cloud/extension_install_policy_invalidator.h"
 #endif
 
@@ -40,6 +40,8 @@ class UserCloudPolicyInvalidator : public KeyedService, public ProfileObserver {
   UserCloudPolicyInvalidator& operator=(const UserCloudPolicyInvalidator&) =
       delete;
 
+  void StartExtensionInstallInvalidator();
+
   // KeyedService:
   void Shutdown() override;
 
@@ -47,10 +49,11 @@ class UserCloudPolicyInvalidator : public KeyedService, public ProfileObserver {
   void OnProfileInitializationComplete(Profile* profile) override;
 
  private:
+  raw_ptr<Profile> profile_;
   base::ScopedObservation<Profile, ProfileObserver> profile_observation_{this};
   raw_ptr<CloudPolicyManager> policy_manager_;
   std::unique_ptr<CloudPolicyInvalidator> invalidator_;
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   std::unique_ptr<ExtensionInstallPolicyInvalidator>
       extension_install_invalidator_;
 #endif

@@ -12,7 +12,7 @@
 #include "content/public/browser/content_browser_client.h"
 
 // Must come after all headers that specialize FromJniType() / ToJniType().
-#include "content/public/android/content_jni_headers/Page_jni.h"
+#include "content/public/android/content_jni_headers/PageImpl_jni.h"
 
 using base::android::AttachCurrentThread;
 using base::android::JavaRef;
@@ -22,32 +22,33 @@ namespace content {
 
 PageProxy::PageProxy(PageImpl* cpp_page) {
   JNIEnv* env = AttachCurrentThread();
-  java_page_ = JavaObjectWeakGlobalRef(
-      env, Java_Page_Constructor(
-               env, reinterpret_cast<intptr_t>(this),
-               cpp_page->GetMainDocument().lifecycle_state() ==
-                   RenderFrameHostImpl::LifecycleStateImpl::kPrerendering));
+  Java_PageImpl_Constructor(
+      env, reinterpret_cast<intptr_t>(this),
+      cpp_page->GetMainDocument().lifecycle_state() ==
+          RenderFrameHostImpl::LifecycleStateImpl::kPrerendering);
 }
 
 PageProxy::~PageProxy() {
   JNIEnv* env = AttachCurrentThread();
-  ScopedJavaLocalRef<jobject> java_page = java_page_.get(env);
-  CHECK(!java_page.is_null());
-  Java_Page_destroy(env, java_page);
+  ScopedJavaLocalRef<jobject> java_page = GetJavaPage();
+  if (!java_page.is_null()) {
+    Java_PageImpl_destroy(env, java_page);
+  }
 }
 
 void PageProxy::WillDeletePage(bool is_prerendering) {
   JNIEnv* env = AttachCurrentThread();
-  Java_Page_willDeletePage(env, GetJavaPage(), is_prerendering);
+  ScopedJavaLocalRef<jobject> java_page = GetJavaPage();
+  if (!java_page.is_null()) {
+    Java_PageImpl_willDeletePage(env, java_page, is_prerendering);
+  }
 }
 
 base::android::ScopedJavaLocalRef<jobject> PageProxy::GetJavaPage() const {
   JNIEnv* env = AttachCurrentThread();
-  ScopedJavaLocalRef<jobject> java_page = java_page_.get(env);
-  CHECK(!java_page.is_null());
-  return java_page;
+  return Java_PageImpl_getJavaObject(env, reinterpret_cast<intptr_t>(this));
 }
 
 }  // namespace content
 
-DEFINE_JNI(Page)
+DEFINE_JNI(PageImpl)

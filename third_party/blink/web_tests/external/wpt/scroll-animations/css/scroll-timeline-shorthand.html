@@ -96,14 +96,25 @@ test_shorthand_contraction('scroll-timeline', {
 }, 'none, none');
 
 // Longhands with different lengths:
+// A longhand with its initial value can be omitted from the shorthand, so its
+// list length does not prevent shorthand serialization.
+test_shorthand_contraction('scroll-timeline', {
+  'scroll-timeline-name': '--a, --b, --c',
+  'scroll-timeline-axis': 'block',
+}, '--a, --b, --c');
 
 test_shorthand_contraction('scroll-timeline', {
   'scroll-timeline-name': '--a, --b, --c',
   'scroll-timeline-axis': 'inline, inline',
-}, '--a inline, --b inline, --c inline');
+}, '');
+
+test_shorthand_contraction('scroll-timeline', {
+  'scroll-timeline-name': '--a, --b, --c, --d, --e, --f',
+  'scroll-timeline-axis': 'inline, x',
+}, '');
 
 test_shorthand_contraction('scroll-timeline', {
   'scroll-timeline-name': '--a, --b',
   'scroll-timeline-axis': 'inline, inline, inline',
-}, '--a inline, --b inline');
+}, '');
 </script>

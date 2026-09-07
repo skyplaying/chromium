@@ -5,8 +5,15 @@
 #include "components/autofill/core/browser/payments/payments_requests/opt_change_request.h"
 
 #include <string>
+#include <utility>
 
+#include "base/functional/callback.h"
 #include "base/json/json_writer.h"
+#include "base/logging.h"
+#include "base/notreached.h"
+#include "components/autofill/core/browser/payments/payments_autofill_client.h"
+#include "components/autofill/core/browser/payments/payments_request_details.h"
+#include "components/autofill/core/browser/payments/payments_requests/payments_request.h"
 
 namespace autofill::payments {
 
@@ -41,9 +48,9 @@ std::string OptChangeRequest::GetRequestContent() {
   context.Set("billable_service", kUnmaskPaymentMethodBillableServiceNumber);
   request_dict.Set("context", std::move(context));
 
-  base::DictValue chrome_user_context;
-  chrome_user_context.Set("full_sync_enabled", full_sync_enabled_);
-  request_dict.Set("chrome_user_context", std::move(chrome_user_context));
+  request_dict.Set("chrome_user_context",
+                   BuildChromeUserContext(/*client_behavior_signals=*/{},
+                                          full_sync_enabled_));
 
   std::string reason;
   switch (request_details_.reason) {

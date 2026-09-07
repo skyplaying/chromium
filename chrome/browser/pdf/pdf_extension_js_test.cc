@@ -16,14 +16,15 @@
 #include "base/test/run_until.h"
 #include "base/test/with_feature_override.h"
 #include "base/threading/thread_restrictions.h"
-#include "build/branding_buildflags.h"
 #include "build/build_config.h"
+#include "build/config/coverage/buildflags.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/pdf/pdf_extension_test_base.h"
 #include "chrome/browser/pdf/pdf_extension_test_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/common/buildflags.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/devtools_agent_coverage_observer.h"
 #include "chrome/test/base/test_switches.h"
@@ -43,6 +44,7 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
 #include "url/gurl.h"
 
@@ -59,7 +61,7 @@ class PDFExtensionJSTestBase : public PDFExtensionTestBase {
         pak_path, ui::kScaleFactorNone);
 
     // Register the chrome://webui-test data source.
-    webui::CreateAndAddWebUITestDataSource(browser()->profile());
+    webui::CreateAndAddWebUITestDataSource(browser()->GetProfile());
 
     base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
     if (command_line->HasSwitch(switches::kDevtoolsCodeCoverage)) {
@@ -346,7 +348,7 @@ class PDFExtensionContentSettingJSTest : public PDFExtensionJSTest {
  protected:
   void SetPdfJavaScript(bool enabled) {
     auto* map =
-        HostContentSettingsMapFactory::GetForProfile(browser()->profile());
+        HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile());
     map->SetContentSettingCustomScope(
         ContentSettingsPattern::Wildcard(), ContentSettingsPattern::Wildcard(),
         ContentSettingsType::JAVASCRIPT,
@@ -402,7 +404,13 @@ IN_PROC_BROWSER_TEST_P(PDFExtensionContentSettingJSTest, Beep) {
   RunTestsInJsModule("beep_test.js", "test-beep.pdf");
 }
 
-IN_PROC_BROWSER_TEST_P(PDFExtensionContentSettingJSTest, NoBeep) {
+#if BUILDFLAG(USE_JAVASCRIPT_COVERAGE)
+// TODO(crbug.com/481394108): Test fails with JS coverage turned on.
+#define MAYBE_NoBeep DISABLED_NoBeep
+#else
+#define MAYBE_NoBeep NoBeep
+#endif
+IN_PROC_BROWSER_TEST_P(PDFExtensionContentSettingJSTest, MAYBE_NoBeep) {
   SetPdfJavaScript(/*enabled=*/false);
   RunTestsInJsModule("nobeep_test.js", "test-beep.pdf");
 }
@@ -415,12 +423,18 @@ IN_PROC_BROWSER_TEST_P(PDFExtensionContentSettingJSTest, BeepThenNoBeep) {
   RunTestsInJsModuleNewTab("nobeep_test.js", "test-beep.pdf");
 
   // Make sure there are two PDFs in the same process.
-  const int tab_count = browser()->tab_strip_model()->count();
+  const int tab_count = browser()->GetTabStripModel()->count();
   EXPECT_EQ(2, tab_count);
   EXPECT_EQ(1, CountPDFProcesses());
 }
 
-IN_PROC_BROWSER_TEST_P(PDFExtensionContentSettingJSTest, NoBeepThenBeep) {
+#if BUILDFLAG(USE_JAVASCRIPT_COVERAGE)
+// TODO(crbug.com/481394108): Test fails with JS coverage turned on.
+#define MAYBE_NoBeepThenBeep DISABLED_NoBeepThenBeep
+#else
+#define MAYBE_NoBeepThenBeep NoBeepThenBeep
+#endif
+IN_PROC_BROWSER_TEST_P(PDFExtensionContentSettingJSTest, MAYBE_NoBeepThenBeep) {
   content::RenderProcessHost::SetMaxRendererProcessCount(1);
 
   SetPdfJavaScript(/*enabled=*/false);
@@ -429,7 +443,7 @@ IN_PROC_BROWSER_TEST_P(PDFExtensionContentSettingJSTest, NoBeepThenBeep) {
   RunTestsInJsModuleNewTab("beep_test.js", "test-beep.pdf");
 
   // Make sure there are two PDFs in the same process.
-  const int tab_count = browser()->tab_strip_model()->count();
+  const int tab_count = browser()->GetTabStripModel()->count();
   EXPECT_EQ(2, tab_count);
   EXPECT_EQ(1, CountPDFProcesses());
 }
@@ -457,7 +471,7 @@ class PDFExtensionWebUICodeCacheJSTest : public PDFExtensionJSTest {
   }
 };
 
-// Regression test for https://crbug.com/1239148.
+// Regression test for https://crbug.com/40193740.
 IN_PROC_BROWSER_TEST_P(PDFExtensionWebUICodeCacheJSTest, Basic) {
   RunTestsInJsModule("basic_test.js", "test.pdf");
 }
@@ -532,24 +546,32 @@ class PDFExtensionJSInk2Test : public PDFExtensionJSTest {
 };
 
 IN_PROC_BROWSER_TEST_P(PDFExtensionJSInk2Test, Ink2) {
+  // TODO(crbug.com/40268279): Test hangs with GuestView PDF. Remove once
+  // GuestView PDF is fully deprecated.
+  if (!UseOopif()) {
+    GTEST_SKIP();
+  }
+
   // One of the tests checks if the side panel is visible, so make the window
   // wide enough.
   GetActiveWebContents()->Resize({0, 0, 960, 100});
   RunTestsInJsModule("ink2_test.js", "test.pdf");
 }
 
-// Params: kPdfOopif, kPdfGetSaveDataInBlocks
-class PDFExtensionJSInk2SaveTest
-    : public PDFExtensionJSTestBase,
-      public testing::WithParamInterface<std::tuple<bool, bool>> {
+// Params: kPdfGetSaveDataInBlocks
+class PDFExtensionJSInk2SaveTest : public PDFExtensionJSTestBase,
+                                   public testing::WithParamInterface<bool> {
  protected:
-  bool UseOopif() const override { return get<0>(GetParam()); }
-  bool IsPdfGetSaveDataInBlocksEnabled() const { return get<1>(GetParam()); }
+  bool UseOopif() const override { return true; }
+  bool IsPdfGetSaveDataInBlocksEnabled() const { return GetParam(); }
 
   std::vector<base::test::FeatureRefAndParams> GetEnabledFeatures()
       const override {
     auto enabled = PDFExtensionJSTestBase::GetEnabledFeatures();
     enabled.push_back({chrome_pdf::features::kPdfInk2, {}});
+#if BUILDFLAG(ENABLE_PDF_SAVE_TO_DRIVE)
+    enabled.push_back({chrome_pdf::features::kPdfSaveToDrive, {}});
+#endif
     if (IsPdfGetSaveDataInBlocksEnabled()) {
       enabled.push_back({chrome_pdf::features::kPdfGetSaveDataInBlocks, {}});
     }
@@ -569,12 +591,14 @@ IN_PROC_BROWSER_TEST_P(PDFExtensionJSInk2SaveTest, Ink2Save) {
   RunTestsInJsModule("ink2_save_test.js", "test.pdf");
 }
 
-INSTANTIATE_TEST_SUITE_P(All,
-                         PDFExtensionJSInk2SaveTest,
-                         testing::Combine(testing::Bool(), testing::Bool()));
+INSTANTIATE_TEST_SUITE_P(All, PDFExtensionJSInk2SaveTest, testing::Bool());
 
 IN_PROC_BROWSER_TEST_P(PDFExtensionJSInk2Test, Ink2Manager) {
   RunTestsInJsModule("ink2_manager_test.js", "test.pdf");
+}
+
+IN_PROC_BROWSER_TEST_P(PDFExtensionJSInk2Test, UndoRedoStack) {
+  RunTestsInJsModule("undo_redo_stack_test.js", "test.pdf");
 }
 
 IN_PROC_BROWSER_TEST_P(PDFExtensionJSInk2Test, Ink2AnnotationBrushMixin) {
@@ -617,6 +641,14 @@ IN_PROC_BROWSER_TEST_P(PDFExtensionJSInk2Test, Ink2ViewerToolbar) {
   RunTestsInJsModule("ink2_viewer_toolbar_test.js", "test.pdf");
 }
 
+IN_PROC_BROWSER_TEST_P(PDFExtensionJSInk2Test, CaretBrowsingMode) {
+  RunTestsInJsModule("caret_browsing_mode_test.js", "test-bookmarks.pdf");
+}
+
+IN_PROC_BROWSER_TEST_P(PDFExtensionJSInk2Test, InkTextAnnotationUtils) {
+  RunTestsInJsModule("ink_text_annotation_utils_test.js", "test.pdf");
+}
+
 class PDFExtensionJSInk2TextTest : public PDFExtensionJSTest {
  protected:
   std::vector<base::test::FeatureRefAndParams> GetEnabledFeatures()
@@ -624,7 +656,9 @@ class PDFExtensionJSInk2TextTest : public PDFExtensionJSTest {
     auto enabled = PDFExtensionJSTest::GetEnabledFeatures();
     enabled.push_back(
         {chrome_pdf::features::kPdfInk2,
-         {{chrome_pdf::features::kPdfInk2TextAnnotations.name, "true"}}});
+         {{chrome_pdf::features::kPdfInk2TextAnnotations.name, "true"},
+          {chrome_pdf::features::kPdfInk2TextAnnotationsExtraStyles.name,
+           "true"}}});
     return enabled;
   }
 };
@@ -643,9 +677,20 @@ IN_PROC_BROWSER_TEST_P(PDFExtensionJSInk2Test, Ink2TextAlignmentSelector) {
   RunTestsInJsModule("ink2_text_alignment_selector_test.js", "test.pdf");
 }
 
-// TODO(crbug.com/440552067): Deflake and re-enable.
-IN_PROC_BROWSER_TEST_P(PDFExtensionJSInk2TextTest, DISABLED_Ink2TextBoxTest) {
-  RunTestsInJsModule("ink2_text_box_test.js", "test.pdf");
+IN_PROC_BROWSER_TEST_P(PDFExtensionJSInk2TextTest, Ink2TextBoxBasic) {
+  RunTestsInJsModule("ink2_text_box_basic_test.js", "test.pdf");
+}
+
+IN_PROC_BROWSER_TEST_P(PDFExtensionJSInk2TextTest, Ink2TextBoxCommit) {
+  RunTestsInJsModule("ink2_text_box_commit_test.js", "test.pdf");
+}
+
+IN_PROC_BROWSER_TEST_P(PDFExtensionJSInk2TextTest, Ink2TextBoxKeyboard) {
+  RunTestsInJsModule("ink2_text_box_keyboard_test.js", "test.pdf");
+}
+
+IN_PROC_BROWSER_TEST_P(PDFExtensionJSInk2TextTest, Ink2TextBoxViewport) {
+  RunTestsInJsModule("ink2_text_box_viewport_test.js", "test.pdf");
 }
 
 IN_PROC_BROWSER_TEST_P(PDFExtensionJSInk2TextTest, Ink2TextSidePanel) {
@@ -658,20 +703,34 @@ IN_PROC_BROWSER_TEST_P(PDFExtensionJSInk2TextTest, Ink2TextStylesSelector) {
   RunTestsInJsModule("ink2_text_styles_selector_test.js", "test.pdf");
 }
 
-class PDFExtensionJSCaretBrowsingModeTest : public PDFExtensionJSTest {
- protected:
-  std::vector<base::test::FeatureRefAndParams> GetEnabledFeatures()
-      const override {
-    auto enabled = PDFExtensionJSTest::GetEnabledFeatures();
-    enabled.push_back(
-        {chrome_pdf::features::kPdfInk2,
-         {{chrome_pdf::features::kPdfInk2TextHighlighting.name, "true"}}});
-    return enabled;
-  }
-};
+IN_PROC_BROWSER_TEST_P(PDFExtensionJSInk2TextTest, InkTextAnnotations) {
+  RunTestsInJsModule("ink2_text_annotations_test.js", "test.pdf");
+}
 
-IN_PROC_BROWSER_TEST_P(PDFExtensionJSCaretBrowsingModeTest, CaretBrowsingMode) {
-  RunTestsInJsModule("caret_browsing_mode_test.js", "test-bookmarks.pdf");
+IN_PROC_BROWSER_TEST_P(PDFExtensionJSInk2TextTest,
+                       Ink2TextStateManagementBottomToolbar) {
+  // TODO(crbug.com/40268279): Test hangs with GuestView PDF. Remove once
+  // GuestView PDF is fully deprecated.
+  if (!UseOopif()) {
+    GTEST_SKIP();
+  }
+
+  // The window must be smaller than 960px to show the bottom toolbar.
+  GetActiveWebContents()->Resize({0, 0, 959, 1000});
+  RunTestsInJsModule("ink2_text_state_management_test.js", "test.pdf");
+}
+
+IN_PROC_BROWSER_TEST_P(PDFExtensionJSInk2TextTest,
+                       Ink2TextStateManagementSidePanel) {
+  // TODO(crbug.com/40268279): Test hangs with GuestView PDF. Remove once
+  // GuestView PDF is fully deprecated.
+  if (!UseOopif()) {
+    GTEST_SKIP();
+  }
+
+  // The window must be at least 960px to show the text side panel.
+  GetActiveWebContents()->Resize({0, 0, 1200, 1000});
+  RunTestsInJsModule("ink2_text_state_management_test.js", "test.pdf");
 }
 
 class PDFExtensionJSInk2BeforeUnloadTest : public PDFExtensionJSTestBase {
@@ -790,7 +849,6 @@ INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(PDFExtensionJSNoInk2Test);
 #if BUILDFLAG(ENABLE_PDF_INK2)
 INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(PDFExtensionJSInk2Test);
 INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(PDFExtensionJSInk2TextTest);
-INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(PDFExtensionJSCaretBrowsingModeTest);
 #endif  // BUILDFLAG(ENABLE_PDF_INK2)
 #if BUILDFLAG(ENABLE_PDF_SAVE_TO_DRIVE)
 INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(PDFExtensionJSSaveToDriveTest);

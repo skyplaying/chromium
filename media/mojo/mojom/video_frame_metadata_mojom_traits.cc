@@ -8,6 +8,7 @@
 
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
+#include "base/notreached.h"
 #include "build/build_config.h"
 #include "media/base/capture_version.h"
 #include "mojo/public/cpp/base/time_mojom_traits.h"
@@ -54,19 +55,16 @@ EnumTraits<media::mojom::EffectState, intermediate::EffectState>::ToMojom(
 }
 
 // static
-bool EnumTraits<media::mojom::EffectState, intermediate::EffectState>::
-    FromMojom(media::mojom::EffectState input,
-              intermediate::EffectState* output) {
+intermediate::EffectState
+EnumTraits<media::mojom::EffectState, intermediate::EffectState>::FromMojom(
+    media::mojom::EffectState input) {
   switch (input) {
     case media::mojom::EffectState::kUnknown:
-      *output = intermediate::EffectState::kUnknown;
-      return true;
+      return intermediate::EffectState::kUnknown;
     case media::mojom::EffectState::kDisabled:
-      *output = intermediate::EffectState::kDisabled;
-      return true;
+      return intermediate::EffectState::kDisabled;
     case media::mojom::EffectState::kEnabled:
-      *output = intermediate::EffectState::kEnabled;
-      return true;
+      return intermediate::EffectState::kEnabled;
   }
   NOTREACHED();
 }
@@ -92,7 +90,6 @@ bool StructTraits<media::mojom::VideoFrameMetadataDataView,
   output->background_blur = FromMojom(input.background_blur());
 
   // bool.
-  output->allow_overlay = input.allow_overlay();
   output->copy_required = input.copy_required();
   output->end_of_stream = input.end_of_stream();
   output->in_surface_view = input.in_surface_view();
@@ -134,6 +131,10 @@ bool StructTraits<media::mojom::VideoFrameMetadataDataView,
   READ_AND_ASSIGN_OPT(base::TimeDelta, frame_duration, FrameDuration);
   READ_AND_ASSIGN_OPT(base::TimeDelta, wallclock_frame_duration,
                       WallclockFrameDuration);
+
+#if BUILDFLAG(IS_ANDROID)
+  READ_AND_ASSIGN_OPT(gpu::VulkanYCbCrInfo, ycbcr_info, YcbcrInfo);
+#endif
 
   if (!input.ReadCaptureVersion(&output->capture_version)) {
     return false;

@@ -63,6 +63,7 @@ export function createHistoryEntry(
     title: urlStr,
     url: urlStr,
     isActorVisit: false,
+    criticalActions: [],
   };
 }
 
@@ -200,8 +201,8 @@ export function createWindow(tabUrls: string[]): ForeignSessionWindow {
       remoteIconUrlForUma: '',
       sessionId: 456,
       timestamp: 0,
+      timestampDisplayStr: '',
       title: tabUrl,
-      type: 'tab',
       url: tabUrl,
       windowId: 0,
     };

@@ -15,7 +15,6 @@
 #include "chrome/browser/ui/autofill/autofill_popup_controller_impl_test_api.h"
 #include "chrome/browser/ui/autofill/autofill_suggestion_controller.h"
 #include "chrome/browser/ui/autofill/chrome_autofill_client.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/webauthn/chrome_authenticator_request_delegate.h"
 #include "chrome/browser/webauthn/chrome_web_authentication_delegate.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -80,7 +79,7 @@ class WebAuthnMacAutofillIntegrationTest : public CertVerifierBrowserTest {
     // Set up the fake keychain.
     config_ =
         ChromeWebAuthenticationDelegate::TouchIdAuthenticatorConfigForProfile(
-            browser()->profile());
+            browser()->GetProfile());
     touch_id_test_environment_ =
         std::make_unique<device::fido::mac::ScopedTouchIdTestEnvironment>(
             config_);

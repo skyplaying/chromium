@@ -104,7 +104,7 @@ FormControlState FormControlState::Deserialize(
   if (index >= state_vector.size()) {
     return FormControlState(kTypeFailure);
   }
-  unsigned value_size = StringToUint(state_vector[index++]).value_or(0);
+  unsigned value_size = StringToUintLoose(state_vector[index++]).value_or(0);
   if (!value_size) {
     return FormControlState();
   }
@@ -150,7 +150,7 @@ class SavedFormState {
 };
 
 static bool IsNotFormControlTypeCharacter(UChar ch) {
-  return ch != '-' && (ch > 'z' || ch < 'a');
+  return ch != '-' && !IsAsciiLower(ch);
 }
 
 std::unique_ptr<SavedFormState> SavedFormState::Deserialize(
@@ -159,7 +159,7 @@ std::unique_ptr<SavedFormState> SavedFormState::Deserialize(
   if (index >= state_vector.size()) {
     return nullptr;
   }
-  wtf_size_t item_count = StringToUint(state_vector[index++]).value_or(0);
+  wtf_size_t item_count = StringToUintLoose(state_vector[index++]).value_or(0);
   if (!item_count) {
     return nullptr;
   }
@@ -237,7 +237,7 @@ Vector<String> SavedFormState::GetReferencedFilePaths() const {
     }
     const Deque<FormControlState>& queue = form_control.value;
     for (const FormControlState& form_control_state : queue) {
-      to_return.AppendVector(
+      to_return.append_range(
           HTMLInputElement::FilesFromFileInputFormControlState(
               form_control_state));
     }
@@ -420,6 +420,21 @@ void FormController::Trace(Visitor* visitor) const {
   visitor->Trace(document_);
   visitor->Trace(document_state_);
   visitor->Trace(form_key_generator_);
+  visitor->Trace(last_autofill_invalidation_insertion_point_);
+}
+
+bool FormController::ShouldInvalidateAncestorFormsForAutofill(
+    const ContainerNode& insertion_point) {
+  DCHECK_EQ(document_.Get(), &insertion_point.GetDocument());
+  // The DOM tree version stays fixed throughout a subtree notification.
+  const uint64_t dom_tree_version = document_->DomTreeVersion();
+  if (last_autofill_invalidation_insertion_point_ == &insertion_point &&
+      last_autofill_invalidation_dom_tree_version_ == dom_tree_version) {
+    return false;
+  }
+  last_autofill_invalidation_insertion_point_ = &insertion_point;
+  last_autofill_invalidation_dom_tree_version_ = dom_tree_version;
+  return true;
 }
 
 DocumentState* FormController::ControlStates() const {
@@ -492,8 +507,10 @@ void FormController::RestoreControlStateIn(HTMLFormElement& form) {
   if (!document_->HasFinishedParsing())
     return;
   EventQueueScope scope;
-  const ListedElement::List& elements = form.ListedElements();
-  for (const auto& control : elements) {
+  // Make a copy of the list because the DOM could be modified during
+  // restoration of a <select> with a <selectedcontent> element.
+  ListedElement::List elements_copy(form.ListedElements());
+  for (const auto& control : elements_copy) {
     if (!control->ClassSupportsStateRestore())
       continue;
     if (OwnerFormForState(*control) != &form)
@@ -550,7 +567,11 @@ void FormController::RestoreAllControlsInDocumentOrder() {
     return;
   HeapHashSet<Member<HTMLFormElement>> finished_forms;
   EventQueueScope scope;
-  for (auto& control : document_state_->GetControlList()) {
+  // Make a copy of the list because the DOM could be modified during
+  // restoration of a <select> with a <selectedcontent> element.
+  DocumentState::ControlList control_list_copy(
+      document_state_->GetControlList());
+  for (auto& control : control_list_copy) {
     auto* owner = OwnerFormForState(*control);
     if (!owner)
       RestoreControlStateFor(*control);
@@ -566,7 +587,7 @@ Vector<String> FormController::GetReferencedFilePaths(
   SavedFormStateMap map;
   ControlStatesFromStateVector(state_vector, map);
   for (const auto& saved_form_state : map)
-    to_return.AppendVector(saved_form_state.value->GetReferencedFilePaths());
+    to_return.append_range(saved_form_state.value->GetReferencedFilePaths());
   return to_return;
 }
 

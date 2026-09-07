@@ -33,6 +33,7 @@
 #include "media/renderers/win/media_foundation_protection_manager.h"
 #include "media/renderers/win/media_foundation_renderer_extension.h"
 #include "media/renderers/win/media_foundation_source_wrapper.h"
+#include "ui/gfx/geometry/rect.h"
 
 namespace media {
 
@@ -66,8 +67,9 @@ class MEDIA_EXPORT MediaFoundationRenderer
     kFailedToInitDCompTextureWrapper = 14,
     kFailedToSetPlaybackRate = 15,
     kFailedToGetMediaEngineEx = 16,
+    kFailedToSetOutputRect = 17,
     // Add new values here and update `kMaxValue`. Never reuse existing values.
-    kMaxValue = kFailedToGetMediaEngineEx,
+    kMaxValue = kFailedToSetOutputRect,
   };
 
   // An enum for recording MediaFoundationRenderer playback detected rendered
@@ -119,6 +121,10 @@ class MEDIA_EXPORT MediaFoundationRenderer
                      SetOutputRectCB callback) override;
 
   void SetGpuProcessAdapterLuid(LUID gpu_process_adapter_luid);
+  void SetTargetWindowRect(const gfx::Rect& target_window_rect);
+
+  MediaEngineNotifyImpl* GetMediaEngineNotifyForTesting() const;
+  IMFMediaEngine* GetMediaEngineForTesting() const;
 
  private:
   enum class StopSendingStatisticsReason {
@@ -154,6 +160,7 @@ class MEDIA_EXPORT MediaFoundationRenderer
   void OnWaiting();
   void OnFrameStepCompleted();
   void OnTimeUpdate();
+  void OnMFSeekRequested();
 
   // Callback for `content_protection_manager_`.
   void OnProtectionManagerWaiting(WaitingReason reason);
@@ -191,6 +198,12 @@ class MEDIA_EXPORT MediaFoundationRenderer
   // device created for Media Foundation Renderer must match in order to share
   // handles between the two processes for Frame Server mode.
   LUID gpu_process_adapter_luid_;
+
+  // Target window rectangle for GPU adapter selection in multi-adapter
+  // systems. The virtual video window will be positioned at this rect to
+  // ensure Media Foundation selects the correct GPU adapter for HWDRM
+  // playback.
+  gfx::Rect target_window_rect_;
 
   // This is used for testing.
   const bool is_testing_;
@@ -242,8 +255,13 @@ class MEDIA_EXPORT MediaFoundationRenderer
   Microsoft::WRL::ComPtr<MediaFoundationProtectionManager>
       content_protection_manager_;
 
+  // True between Flush() and StartPlayingFrom(), while the Media Engine is
+  // paused for a seek.
+  bool awaiting_start_playing_from_ = false;
+
   bool has_reported_playing_ = false;
   bool has_reported_significant_playback_ = false;
+  bool had_error_ = false;
 
   // Value saved from last call to SetLatencyHint(). Latency hint can only be
   // used to determine real-time mode on MediaEngine creation.
@@ -260,6 +278,10 @@ class MEDIA_EXPORT MediaFoundationRenderer
 
   // Whether reporting for multi-GPU histogram has been done or not.
   bool has_reported_multi_gpu_histogram_ = false;
+
+  // Number of times the Media Engine asked Chromium to seek. Reported to a
+  // histogram when this MediaFoundationRenderer is destroyed.
+  int mf_seek_requested_count_ = 0;
 
   // NOTE: Weak pointers must be invalidated before all other member variables.
   base::WeakPtrFactory<MediaFoundationRenderer> weak_factory_{this};

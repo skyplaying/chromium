@@ -14,8 +14,8 @@
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/heuristic_source.h"
 #include "components/autofill/core/browser/ml_model/field_classification_model_handler.h"
-#include "components/autofill/core/browser/test_utils/autofill_form_test_utils.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_form_test_util.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/browser/test_utils/field_prediction_test_matchers.h"
 #include "components/autofill/core/common/autofill_clock.h"
 #include "components/autofill/core/common/autofill_features.h"
@@ -119,24 +119,6 @@ TEST_F(AutofillFieldTest, IsFieldFillable) {
   EXPECT_TRUE(field.IsFieldFillable());
 }
 
-TEST_F(AutofillFieldTest, LoyaltyCardPredictionsIgnoredIfFlagIsDisabled) {
-  base::test::ScopedFeatureList feature_;
-  feature_.InitWithFeatures(
-      /*enabled_features=*/{},
-      /*disabled_features=*/{
-          features::kAutofillEnableLoyaltyCardsFilling,
-          features::kAutofillEnableEmailOrLoyaltyCardsFilling});
-
-  AutofillField field;
-  EXPECT_THAT(field.Type().GetTypes(), ElementsAre(UNKNOWN_TYPE));
-
-  // Both types set.
-  field.set_heuristic_type(GetActiveHeuristicSource(), NAME_FIRST);
-  field.set_server_predictions({CreateFieldPrediction(LOYALTY_MEMBERSHIP_ID)});
-
-  EXPECT_THAT(field.Type().GetTypes(), ElementsAre(NAME_FIRST));
-}
-
 TEST_F(AutofillFieldTest, NoPredictions) {
   AutofillField field;
   EXPECT_THAT(field.Type().GetTypes(), ElementsAre(UNKNOWN_TYPE));
@@ -178,7 +160,7 @@ TEST_F(AutofillFieldTest, UnionTypesFromServerTypes) {
 
   constexpr FieldType kInvalidFieldType =
       static_cast<FieldType>(15);  // nocheck
-  ASSERT_EQ(ToSafeFieldType(kInvalidFieldType, NO_SERVER_DATA), NO_SERVER_DATA);
+  ASSERT_FALSE(ToSafeFieldType(kInvalidFieldType));
 
   EXPECT_THAT(f(), ElementsAre(UNKNOWN_TYPE));
 
@@ -324,8 +306,6 @@ TEST_F(AutofillFieldTest, UnionTypesFromHtmlAndServerTypes) {
 // of `AutofillField` coming from `FormFieldData` and leaves other information
 // unchanged.
 TEST_F(AutofillFieldTest, UpdateFieldData) {
-  base::test::ScopedFeatureList scoped_feature_list{
-      features::kAutofillFixFormEquality};
   FormFieldData field = test::GetFormFieldData(
       {.role = NAME_FULL, .autocomplete_attribute = "name"});
 
@@ -339,7 +319,7 @@ TEST_F(AutofillFieldTest, UpdateFieldData) {
 
   // Update information in `AutofillField` that come from `FormFieldData`.
   field.set_value(u"John Doe");
-  field.set_is_autofilled(true);
+  field.set_is_autofilled_according_to_renderer(true);
   ASSERT_FALSE(
       FormFieldData::IdenticalAndEquivalentDomElements(field, autofill_field));
 
@@ -378,14 +358,14 @@ class AutofillFieldTest_MLPredictions : public AutofillFieldTest {
 TEST_F(AutofillFieldTest_MLPredictions, PredictionsUsed) {
   field().set_heuristic_type(kMlSource, ADDRESS_HOME_STREET_ADDRESS);
   field().set_heuristic_type(kRegexSource, ADDRESS_HOME_LINE1);
-  EXPECT_EQ(ADDRESS_HOME_STREET_ADDRESS, field().heuristic_type());
+  EXPECT_EQ(field().heuristic_type(), ADDRESS_HOME_STREET_ADDRESS);
 }
 
 // Test that the regex prediction is used if the model returned NO_SERVER_DATA.
 TEST_F(AutofillFieldTest_MLPredictions, FallbackToRegex_OnNoServerData) {
   field().set_heuristic_type(kMlSource, NO_SERVER_DATA);
   field().set_heuristic_type(kRegexSource, ADDRESS_HOME_LINE1);
-  EXPECT_EQ(ADDRESS_HOME_LINE1, field().heuristic_type());
+  EXPECT_EQ(field().heuristic_type(), ADDRESS_HOME_LINE1);
 }
 
 // Test that the regex prediction is used if the regex prediction is a type
@@ -393,11 +373,11 @@ TEST_F(AutofillFieldTest_MLPredictions, FallbackToRegex_OnNoServerData) {
 TEST_F(AutofillFieldTest_MLPredictions, FallbackToRegex_OnUnsupportedType) {
   field().set_heuristic_type(kMlSource, NAME_FIRST);
   field().set_heuristic_type(kRegexSource, IBAN_VALUE);
-  EXPECT_EQ(IBAN_VALUE, field().heuristic_type());
+  EXPECT_EQ(field().heuristic_type(), IBAN_VALUE);
 
   field().set_heuristic_type(kMlSource, NAME_FIRST);
   field().set_heuristic_type(kRegexSource, PASSPORT_NUMBER);
-  EXPECT_EQ(PASSPORT_NUMBER, field().heuristic_type());
+  EXPECT_EQ(field().heuristic_type(), PASSPORT_NUMBER);
 }
 
 class AutofillFieldWithAutofillAiTest : public base::test::WithFeatureOverride,
@@ -613,18 +593,12 @@ class AutofillPredictionPreferenceTest
     : public testing::TestWithParam<AutofillPredictionPreferenceTestParams> {
  public:
   AutofillPredictionPreferenceTest() = default;
-
- private:
-  base::test::ScopedFeatureList feature_{
-      features::kAutofillEnableEmailOrLoyaltyCardsFilling};
 };
 
 // Tests the correctness of local heuristic overrides while computing the
 // overall field type.
 TEST_P(AutofillPredictionPreferenceTest,
        AutofillPredictionPreferenceTestParams) {
-  base::test::ScopedFeatureList scoped_feature_list{
-      features::kAutofillPreferPhoneCountryCodeTypeOverCountryHtmlType};
   AutofillPredictionPreferenceTestParams test_case = GetParam();
   AutofillField field;
   field.set_form_control_type(test_case.form_control_type);
@@ -802,42 +776,6 @@ INSTANTIATE_TEST_SUITE_P(
             .server_type = NAME_LAST_SECOND,
             .heuristic_type = ALTERNATIVE_FAMILY_NAME,
             .expected_result = ALTERNATIVE_FAMILY_NAME,
-            .expected_source = AutofillPredictionSource::kHeuristics},
-        AutofillPredictionPreferenceTestParams{
-            .html_field_type = HtmlFieldType::kUnspecified,
-            .server_type = NAME_LAST_CORE,
-            .heuristic_type = ALTERNATIVE_FAMILY_NAME,
-            .expected_result = ALTERNATIVE_FAMILY_NAME,
-            .expected_source = AutofillPredictionSource::kHeuristics},
-        AutofillPredictionPreferenceTestParams{
-            .html_field_type = HtmlFieldType::kAdditionalName,
-            .server_type = NAME_LAST_PREFIX,
-            .heuristic_type = NAME_LAST_PREFIX,
-            .expected_result = NAME_LAST_PREFIX,
-            .expected_source = AutofillPredictionSource::kHeuristics},
-        AutofillPredictionPreferenceTestParams{
-            .html_field_type = HtmlFieldType::kAdditionalNameInitial,
-            .server_type = NAME_LAST_PREFIX,
-            .heuristic_type = NAME_LAST_PREFIX,
-            .expected_result = NAME_LAST_PREFIX,
-            .expected_source = AutofillPredictionSource::kHeuristics},
-        AutofillPredictionPreferenceTestParams{
-            .html_field_type = HtmlFieldType::kFamilyName,
-            .server_type = NAME_LAST_CORE,
-            .heuristic_type = NAME_LAST_CORE,
-            .expected_result = NAME_LAST_CORE,
-            .expected_source = AutofillPredictionSource::kHeuristics},
-        AutofillPredictionPreferenceTestParams{
-            .html_field_type = HtmlFieldType::kUnspecified,
-            .server_type = NAME_MIDDLE,
-            .heuristic_type = NAME_LAST_PREFIX,
-            .expected_result = NAME_LAST_PREFIX,
-            .expected_source = AutofillPredictionSource::kHeuristics},
-        AutofillPredictionPreferenceTestParams{
-            .html_field_type = HtmlFieldType::kUnspecified,
-            .server_type = NAME_LAST,
-            .heuristic_type = NAME_LAST_CORE,
-            .expected_result = NAME_LAST_CORE,
             .expected_source = AutofillPredictionSource::kHeuristics},
         AutofillPredictionPreferenceTestParams{
             .html_field_type = HtmlFieldType::kUnspecified,
@@ -1039,6 +977,61 @@ INSTANTIATE_TEST_SUITE_P(
             .password_manager_predicted_type = PASSWORD,
             .expected_result = PHONE_HOME_NUMBER,
             .expected_source = AutofillPredictionSource::kHeuristics}));
+
+// Tests the behavior of `AutofillField::last_modifier()` when the purpose is to
+// figure out whether a field was last modified by autofill.
+TEST_F(AutofillFieldTest, IsLastModifierAutofill) {
+  AutofillField field;
+  EXPECT_NE(field.last_modifier(), FieldModifier::kAutofill);
+
+  field.AddFieldModifier(FieldModifier::kUser);
+  EXPECT_NE(field.last_modifier(), FieldModifier::kAutofill);
+
+  field.AddFieldModifier(FieldModifier::kAutofill);
+  EXPECT_EQ(field.last_modifier(), FieldModifier::kAutofill);
+
+  field.AddFieldModifier(FieldModifier::kUser);
+  EXPECT_NE(field.last_modifier(), FieldModifier::kAutofill);
+}
+
+// Tests the behavior of `AutofillField::[last|all]_modifier()` when the purpose
+// is to figure out whether a field was previously autofilled (but now is not).
+TEST_F(AutofillFieldTest, PreviouslyAutofilled) {
+  AutofillField field;
+  auto previously_autofilled = [](const AutofillField& field) {
+    return field.all_modifiers().contains(FieldModifier::kAutofill) &&
+           field.last_modifier() != FieldModifier::kAutofill;
+  };
+  EXPECT_FALSE(previously_autofilled(field));
+
+  field.AddFieldModifier(FieldModifier::kUser);
+  EXPECT_FALSE(previously_autofilled(field));
+
+  field.AddFieldModifier(FieldModifier::kAutofill);
+  EXPECT_FALSE(previously_autofilled(field));
+
+  field.AddFieldModifier(FieldModifier::kUser);
+  EXPECT_TRUE(previously_autofilled(field));
+
+  field.AddFieldModifier(FieldModifier::kAutofill);
+  EXPECT_FALSE(previously_autofilled(field));
+}
+
+// Tests the behavior of `AutofillField::[last|all]_modifier()` when the purpose
+// is to figure out whether a field was ever edited by the user.
+TEST_F(AutofillFieldTest, IsUserEdited) {
+  AutofillField field;
+  EXPECT_FALSE(field.all_modifiers().contains(FieldModifier::kUser));
+
+  field.AddFieldModifier(FieldModifier::kAutofill);
+  EXPECT_FALSE(field.all_modifiers().contains(FieldModifier::kUser));
+
+  field.AddFieldModifier(FieldModifier::kUser);
+  EXPECT_TRUE(field.all_modifiers().contains(FieldModifier::kUser));
+
+  field.AddFieldModifier(FieldModifier::kAutofill);
+  EXPECT_TRUE(field.all_modifiers().contains(FieldModifier::kUser));
+}
 
 }  // namespace
 }  // namespace autofill

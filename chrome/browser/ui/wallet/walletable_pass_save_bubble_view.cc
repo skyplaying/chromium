@@ -13,7 +13,6 @@
 #include "chrome/browser/ui/wallet/walletable_pass_save_bubble_controller.h"
 #include "chrome/grit/browser_resources.h"
 #include "components/strings/grit/components_strings.h"
-#include "components/vector_icons/vector_icons.h"
 #include "components/wallet/core/browser/data_models/wallet_pass.h"
 #include "third_party/abseil-cpp/absl/functional/overload.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -43,10 +42,10 @@ std::unique_ptr<views::BoxLayoutView> GetAttributesContainer() {
 }  // namespace
 
 WalletablePassSaveBubbleView::WalletablePassSaveBubbleView(
-    views::View* anchor_view,
+    views::BubbleAnchor anchor,
     content::WebContents* web_contents,
     WalletablePassSaveBubbleController* controller)
-    : WalletablePassBubbleViewBase(anchor_view, web_contents, controller),
+    : WalletablePassBubbleViewBase(anchor, web_contents, controller),
       controller_(controller->GetWeakPtr()) {
   set_fixed_width(autofill::kAutofillAiBubbleWidth);
   SetLayoutManager(std::make_unique<views::FlexLayout>())

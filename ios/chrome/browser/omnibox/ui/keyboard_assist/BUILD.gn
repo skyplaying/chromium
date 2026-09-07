@@ -39,7 +39,6 @@ source_set("keyboard_assist") {
     "//ios/chrome/browser/shared/ui/elements",
     "//ios/chrome/browser/shared/ui/symbols",
     "//ios/chrome/browser/shared/ui/util",
-    "//ios/chrome/browser/shared/ui/util",
     "//ios/chrome/browser/shared/ui/util:util_swift",
     "//ios/chrome/browser/voice/model",
     "//ios/chrome/common/ui/colors",
@@ -53,4 +52,18 @@ source_set("keyboard_assist") {
   allow_circular_includes_from =
       [ "//ios/chrome/browser/omnibox/ui:omnibox_internal" ]
   frameworks = [ "UIKit.framework" ]
+}
+
+source_set("unit_tests") {
+  testonly = true
+  sources = [ "omnibox_input_assistant_items_unittest.mm" ]
+  deps = [
+    ":keyboard_assist",
+    "//base/test:test_support",
+    "//ios/chrome/app/strings",
+    "//ios/chrome/browser/shared/ui/util",
+    "//ios/chrome/browser/shared/ui/util:util_swift",
+    "//testing/gtest",
+    "//ui/base",
+  ]
 }

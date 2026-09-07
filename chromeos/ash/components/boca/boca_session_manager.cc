@@ -14,6 +14,7 @@
 #include "ash/constants/ash_pref_names.h"
 #include "ash/public/cpp/network_config_service.h"
 #include "base/check.h"
+#include "base/check_is_test.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
@@ -74,6 +75,7 @@ BocaSessionManager::BocaSessionManager(
     SessionClientImpl* session_client_impl,
     const PrefService* pref_service,
     AccountId account_id,
+    signin::IdentityManager* identity_manager,
     bool is_producer,
     std::unique_ptr<SpotlightRemotingClientManager> remoting_client_manager)
     : is_producer_(is_producer),
@@ -100,12 +102,12 @@ BocaSessionManager::BocaSessionManager(
   cros_network_config_->AddObserver(
       cros_network_config_observer_.BindNewPipeAndPassRemote());
   //  Register BocaSessionManager for the current profile.
-  if (BocaAppClient::HasInstance()) {
-    BocaAppClient::Get()->AddSessionManager(this);
-    identity_manager_ = BocaAppClient::Get()->GetIdentityManager();
-    if (identity_manager_) {
-      identity_manager_->AddObserver(this);
-    }
+  if (identity_manager) {
+    identity_manager_observation_.Observe(identity_manager);
+  } else {
+    // TODO: Consider getting rid of this CHECK_IS_TEST after resolving
+    // testing complexity.
+    CHECK_IS_TEST();
   }
   if (user_manager::UserManager::IsInitialized()) {
     user_manager::UserManager::Get()->AddSessionStateObserver(this);
@@ -124,9 +126,6 @@ BocaSessionManager::BocaSessionManager(
 }
 
 BocaSessionManager::~BocaSessionManager() {
-  if (identity_manager_) {
-    identity_manager_->RemoveObserver(this);
-  }
   if (indefinite_timer_.IsRunning()) {
     indefinite_timer_.Stop();
   }
@@ -277,7 +276,7 @@ const ::boca::Session* BocaSessionManager::GetPreviousSession() {
   return previous_session_.get();
 }
 
-void BocaSessionManager::UpdateTabActivity(std::u16string title) {
+void BocaSessionManager::UpdateTabActivity(const std::u16string& title) {
   if (!current_session_ ||
       current_session_->session_state() != ::boca::Session::ACTIVE) {
     return;
@@ -285,7 +284,7 @@ void BocaSessionManager::UpdateTabActivity(std::u16string title) {
   if (title == active_tab_title_) {
     return;
   }
-  active_tab_title_ = std::move(title);
+  active_tab_title_ = title;
   auto session_id = current_session_->session_id();
   auto gaia_id = account_id_.GetGaiaId();
   auto device_id = BocaAppClient::Get()->GetDeviceId();
@@ -406,6 +405,15 @@ void BocaSessionManager::StartCrdClient(
     SpotlightCrdStateUpdatedCallback crd_state_callback) {
   CHECK(ash::features::IsBocaSpotlightRobotRequesterEnabled());
 
+  if (!remoting_client_manager_) {
+    LOG(ERROR) << "[Boca] Failed to start CRD client: remoting_client_manager "
+                  "is null.";
+    if (crd_state_callback) {
+      crd_state_callback.Run(CrdConnectionState::kFailed);
+    }
+    return;
+  }
+
   remoting_client_manager_->StartCrdClient(
       crd_connection_code, std::move(done_callback),
       std::move(frame_received_callback),
@@ -499,6 +507,26 @@ void BocaSessionManager::CleanupPresenters() {
   teacher_screen_presenter_.reset();
 }
 
+void BocaSessionManager::OnNewTabAdded(int32_t id, ::boca::UrlType url_type) {
+  if (url_type == ::boca::URL_TYPE_GEMINI_REGULAR ||
+      url_type == ::boca::URL_TYPE_GEMINI_GUIDED_LEARNING) {
+    gemini_tab_ = {id, url_type};
+  }
+}
+
+void BocaSessionManager::OnTabRemoved(int32_t id) {
+  if (gemini_tab_.has_value() && gemini_tab_->id == id) {
+    gemini_tab_.reset();
+  }
+}
+
+::boca::UrlType BocaSessionManager::GetTabUrlType(int32_t id) {
+  if (gemini_tab_.has_value() && gemini_tab_->id == id) {
+    return gemini_tab_->gemini_url_type;
+  }
+  return ::boca::URL_TYPE_UNSPECIFIED;
+}
+
 void BocaSessionManager::LoadInitialNetworkState() {
   cros_network_config_->GetNetworkStateList(
       chromeos::network_config::mojom::NetworkFilter::New(
@@ -540,8 +568,8 @@ void BocaSessionManager::OnActiveNetworksChanged(
   }
 
   // Explicitly trigger a session reload either when go back online, or stay
-  // online but managed network status changed. Do not reset session if changing
-  // from online to offline.
+  // online but managed network status changed. Do not reset session if
+  // changing from online to offline.
   bool should_load_session = false;
 
   bool should_disable_on_non_managed_network =
@@ -577,8 +605,7 @@ void BocaSessionManager::OnRefreshTokenUpdatedForAccount(
 
 void BocaSessionManager::OnIdentityManagerShutdown(
     signin::IdentityManager* identity_manager) {
-  identity_manager_->RemoveObserver(this);
-  identity_manager_ = nullptr;
+  identity_manager_observation_.Reset();
 }
 
 void BocaSessionManager::ActiveUserChanged(user_manager::User* active_user) {
@@ -634,6 +661,7 @@ void BocaSessionManager::NotifySessionUpdate() {
       VLOG(1) << "[Boca] notifying session ended";
       StartSessionPolling(/*in_session=*/false);
       observer.OnSessionEnded(previous_session_->session_id());
+      gemini_tab_.reset();
       if (is_producer_) {
         notification_handler_.HandleSessionEndedNotification(
             message_center::MessageCenter::Get());

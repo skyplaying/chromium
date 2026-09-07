@@ -18,7 +18,7 @@
 #import "components/autofill/core/browser/foundations/browser_autofill_manager.h"
 #import "components/autofill/core/browser/foundations/test_autofill_client.h"
 #import "components/autofill/core/browser/foundations/test_autofill_manager_waiter.h"
-#import "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#import "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #import "components/autofill/core/common/autofill_features.h"
 #import "components/autofill/core/common/form_data.h"
 #import "components/autofill/core/common/form_data_test_api.h"
@@ -48,11 +48,12 @@
 #import "net/test/embedded_test_server/request_handler_util.h"
 #import "testing/gmock/include/gmock/gmock.h"
 #import "testing/gtest/include/gtest/gtest.h"
+#import "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 #import "url/gurl.h"
 
-using autofill::test::NewFrameCatcher;
-using base::test::ios::kWaitForJSCompletionTimeout;
-using net::test_server::EmbeddedTestServer;
+using ::autofill::test::NewFrameCatcher;
+using ::base::test::ios::kWaitForJSCompletionTimeout;
+using ::net::test_server::EmbeddedTestServer;
 using ::testing::AllOf;
 using ::testing::AssertionFailure;
 using ::testing::AssertionResult;
@@ -63,7 +64,7 @@ using ::testing::IsTrue;
 using ::testing::Property;
 using ::testing::SizeIs;
 using ::testing::UnorderedElementsAre;
-using testing::VariantWith;
+using ::testing::VariantWith;
 
 namespace autofill {
 
@@ -99,11 +100,10 @@ void SetFillDataForField(
     const std::u16string& value,
     FieldType field_type,
     FormFieldData* field,
-    base::flat_map<FieldGlobalId, FieldType>* field_type_map) {
+    absl::flat_hash_map<FieldGlobalId, FieldType>* field_type_map) {
   CHECK(field);
   field->set_value(value);
-  field->set_is_autofilled(true);
-  field->set_is_user_edited(false);
+  field->set_is_autofilled_according_to_renderer(true);
   (*field_type_map)[field->global_id()] = field_type;
 }
 
@@ -237,7 +237,7 @@ struct TestCreditCardForm {
   // Set the fill data in `fields` that map with the fields in this test form.
   [[nodiscard]] AssertionResult SetFillData(
       std::vector<FormFieldData>* fields,
-      base::flat_map<FieldGlobalId, FieldType>* field_type_map) {
+      absl::flat_hash_map<FieldGlobalId, FieldType>* field_type_map) {
     auto fields_to_fill = {
         std::make_pair(FieldType::CREDIT_CARD_NAME_FULL, &name_field),
         std::make_pair(FieldType::CREDIT_CARD_NUMBER, &cc_number_field),
@@ -312,22 +312,28 @@ class TestAutofillManager : public BrowserAutofillManager {
     return text_field_did_change_forms_waiter_.Wait(min_num_awaited_calls);
   }
 
-  void OnFormsSeen(const std::vector<FormData>& updated_forms,
-                   const std::vector<FormGlobalId>& removed_forms) override {
+  void OnFormsSeen(std::vector<FormData> updated_forms,
+                   std::vector<FormGlobalId> removed_forms,
+                   AutofillManager::RendererEventPassKey pass_key) override {
     base::Extend(seen_forms_, updated_forms);
     base::Extend(removed_forms_, removed_forms);
-    BrowserAutofillManager::OnFormsSeen(updated_forms, removed_forms);
+    BrowserAutofillManager::OnFormsSeen(std::move(updated_forms),
+                                        std::move(removed_forms), pass_key);
   }
 
-  void OnDidAutofillForm(const FormData& form) override {
+  void OnDidAutofillForm(
+      const FormData& form,
+      AutofillManager::RendererEventPassKey pass_key) override {
     filled_forms_.push_back(form);
-    BrowserAutofillManager::OnDidAutofillForm(form);
+    BrowserAutofillManager::OnDidAutofillForm(form, pass_key);
   }
 
-  void OnFormSubmitted(const FormData& form,
-                       const mojom::SubmissionSource source) override {
+  void OnFormSubmitted(
+      const FormData& form,
+      const mojom::SubmissionSource source,
+      AutofillManager::RendererEventPassKey pass_key) override {
     submitted_forms_.emplace_back(form);
-    BrowserAutofillManager::OnFormSubmitted(form, source);
+    BrowserAutofillManager::OnFormSubmitted(form, source, pass_key);
   }
 
   void OnAskForValuesToFill(
@@ -335,18 +341,22 @@ class TestAutofillManager : public BrowserAutofillManager {
       const FieldGlobalId& field_id,
       const gfx::Rect& caret_bounds,
       AutofillSuggestionTriggerSource trigger_source,
-      std::optional<PasswordSuggestionRequest> password_request) override {
+      std::optional<PasswordSuggestionRequest> password_request,
+      AutofillManager::RendererEventPassKey pass_key) override {
     ask_for_filldata_forms_.emplace_back(form);
-    BrowserAutofillManager::OnAskForValuesToFill(form, field_id, caret_bounds,
-                                                 trigger_source,
-                                                 std::move(password_request));
+    BrowserAutofillManager::OnAskForValuesToFill(
+        form, field_id, caret_bounds, trigger_source,
+        std::move(password_request), pass_key);
   }
 
-  void OnTextFieldValueChanged(const FormData& form,
-                               const FieldGlobalId& field_id,
-                               const base::TimeTicks timestamp) override {
+  void OnTextFieldValueChanged(
+      const FormData& form,
+      const FieldGlobalId& field_id,
+      const base::TimeTicks timestamp,
+      AutofillManager::RendererEventPassKey pass_key) override {
     text_field_did_change_forms_.emplace_back(form);
-    BrowserAutofillManager::OnTextFieldValueChanged(form, field_id, timestamp);
+    BrowserAutofillManager::OnTextFieldValueChanged(form, field_id, timestamp,
+                                                    pass_key);
   }
 
   const std::vector<FormData>& seen_forms() { return seen_forms_; }
@@ -399,7 +409,7 @@ class TestAutofillManager : public BrowserAutofillManager {
 };
 
 // A mock child frame registrar observer.
-class MockRegistrarObserver : public autofill::ChildFrameRegistrarObserver {
+class MockRegistrarObserver : public ChildFrameRegistrarObserver {
  public:
   MOCK_METHOD(void,
               OnDidDoubleRegistration,
@@ -422,16 +432,15 @@ class AutofillAcrossIframesTest : public AutofillTestWithWebState {
          FormHandlersJavaScriptFeature::GetInstance()});
 
     // We need an AutofillAgent to exist or else the form will never get parsed.
-    prefs_ = autofill::test::PrefServiceForTesting();
+    prefs_ = test::PrefServiceForTesting();
     autofill_agent_ = [[AutofillAgent alloc] initWithPrefService:prefs_.get()
                                                         webState:web_state()];
 
-    autofill_client_ = std::make_unique<autofill::TestAutofillClientIOS>(
-        web_state(), autofill_agent_);
+    autofill_client_ =
+        std::make_unique<TestAutofillClientIOS>(web_state(), autofill_agent_);
 
     // Password autofill agent needs to exist before any call to fill data.
-    autofill::PasswordAutofillAgent::CreateForWebState(web_state(),
-                                                       &delegate_mock_);
+    PasswordAutofillAgent::CreateForWebState(web_state(), &delegate_mock_);
 
     autofill_manager_injector_ =
         std::make_unique<TestAutofillManagerInjector<TestAutofillManager>>(
@@ -510,8 +519,8 @@ class AutofillAcrossIframesTest : public AutofillTestWithWebState {
     return GetWebFramesManagerForAutofill(web_state());
   }
 
-  autofill::ChildFrameRegistrar* registrar() {
-    return autofill::ChildFrameRegistrar::GetOrCreateForWebState(web_state());
+  ChildFrameRegistrar* registrar() {
+    return ChildFrameRegistrar::GetOrCreateForWebState(web_state());
   }
 
   // Serve document with `contents` accessible at `path` on main origin server.
@@ -626,7 +635,7 @@ class AutofillAcrossIframesTest : public AutofillTestWithWebState {
                      const std::vector<TestFieldInfo>& expected_filled_fields) {
     std::vector<FormFieldData> fields = browser_form.fields();
 
-    base::flat_map<FieldGlobalId, FieldType> field_type_map;
+    absl::flat_hash_map<FieldGlobalId, FieldType> field_type_map;
     ASSERT_TRUE(cc_form_info.SetFillData(&fields, &field_type_map));
 
     // Extract the global ids of the fields that are expected to be filled.
@@ -645,11 +654,10 @@ class AutofillAcrossIframesTest : public AutofillTestWithWebState {
     url::Origin trigger_origin = trigger_frame->GetSecurityOrigin();
     base::flat_set<FieldGlobalId> filled_field_ids =
         GetDriverForFrame(trigger_frame)
-            ->ApplyFormAction(mojom::FormActionType::kFill,
-                              mojom::ActionPersistence::kFill, fields,
-                              FillId::Create(),
-                              /*supports_refill=*/false, trigger_origin,
-                              field_type_map, Section());
+            ->ApplyFormAction(
+                mojom::FormActionType::kFill, mojom::ActionPersistence::kFill,
+                fields, FillId::Create(),
+                /*supports_refill=*/false, trigger_origin, field_type_map);
 
     // Verify that filled fields correspond to the expected ones by comparing
     // their global ids.
@@ -675,9 +683,9 @@ class AutofillAcrossIframesTest : public AutofillTestWithWebState {
   std::unique_ptr<TestAutofillManagerInjector<TestAutofillManager>>
       autofill_manager_injector_;
   std::unique_ptr<PrefService> prefs_;
-  std::unique_ptr<autofill::TestAutofillClientIOS> autofill_client_;
+  std::unique_ptr<TestAutofillClientIOS> autofill_client_;
   AutofillAgent* autofill_agent_;
-  autofill::MockPasswordAutofillAgentDelegate delegate_mock_;
+  MockPasswordAutofillAgentDelegate delegate_mock_;
 
   EmbeddedTestServer test_server_;
   std::string main_frame_html_;
@@ -742,8 +750,7 @@ TEST_F(AutofillAcrossIframesTest, WithChildFrames) {
   EXPECT_EQ(-1, remote_token1.predecessor);
   EXPECT_EQ(0, remote_token2.predecessor);
 
-  auto* registrar =
-      autofill::ChildFrameRegistrar::GetOrCreateForWebState(web_state());
+  auto* registrar = ChildFrameRegistrar::GetOrCreateForWebState(web_state());
   ASSERT_TRUE(registrar);
 
   // Get the frame tokens from the registrar. Wrap this in a block because the
@@ -872,8 +879,7 @@ TEST_F(AutofillAcrossIframesTest, Resolve) {
   EXPECT_THAT(remote_token.token, VariantWith<RemoteFrameToken>(IsTrue()));
 
   // Wait for the child frame to register itself.
-  auto* registrar =
-      autofill::ChildFrameRegistrar::GetOrCreateForWebState(web_state());
+  auto* registrar = ChildFrameRegistrar::GetOrCreateForWebState(web_state());
   ASSERT_TRUE(registrar);
   ASSERT_TRUE(base::test::ios::WaitUntilConditionOrTimeout(
       kWaitForJSCompletionTimeout, ^bool {
@@ -916,8 +922,7 @@ TEST_F(AutofillAcrossIframesTest, SetAndGetParent) {
   EXPECT_THAT(remote_token.token, VariantWith<RemoteFrameToken>(IsTrue()));
 
   // Wait for the child frame to register itself.
-  auto* registrar =
-      autofill::ChildFrameRegistrar::GetOrCreateForWebState(web_state());
+  auto* registrar = ChildFrameRegistrar::GetOrCreateForWebState(web_state());
   ASSERT_TRUE(registrar);
   ASSERT_TRUE(base::test::ios::WaitUntilConditionOrTimeout(
       kWaitForJSCompletionTimeout, ^bool {
@@ -1009,7 +1014,7 @@ TEST_F(AutofillAcrossIframesTest, Fill_MainFrameForm) {
 
   // Copy the extracted form and put a name and phone number in it.
   FormData form = main_frame_manager().seen_forms()[0];
-  base::flat_map<FieldGlobalId, FieldType> field_type_map;
+  absl::flat_hash_map<FieldGlobalId, FieldType> field_type_map;
 
   for (FormFieldData& field : test_api(form).fields()) {
     if (field.placeholder() == kNamePlaceholder) {
@@ -1022,15 +1027,13 @@ TEST_F(AutofillAcrossIframesTest, Fill_MainFrameForm) {
       ADD_FAILURE() << "Found unexpected field with placeholder: "
                     << field.placeholder();
     }
-    field.set_is_autofilled(true);
-    field.set_is_user_edited(false);
+    field.set_is_autofilled_according_to_renderer(true);
   }
 
   main_frame_driver()->ApplyFormAction(
       mojom::FormActionType::kFill, mojom::ActionPersistence::kFill,
       form.fields(), FillId::Create(),
-      /*supports_refill=*/false, form.main_frame_origin(), field_type_map,
-      Section());
+      /*supports_refill=*/false, form.main_frame_origin(), field_type_map);
 
   ASSERT_TRUE(main_frame_manager().WaitForFormsFilled(1));
   ASSERT_EQ(main_frame_manager().filled_forms().size(), 1u);
@@ -1076,7 +1079,7 @@ TEST_F(AutofillAcrossIframesTest, Fill_MultiFrameForm) {
   ASSERT_EQ(form.child_frames().size(), 2u);
   ASSERT_EQ(form.fields().size(), 2u);
 
-  base::flat_map<FieldGlobalId, FieldType> field_type_map;
+  absl::flat_hash_map<FieldGlobalId, FieldType> field_type_map;
 
   std::vector<FormFieldData> fields = form.fields();
 
@@ -1096,7 +1099,7 @@ TEST_F(AutofillAcrossIframesTest, Fill_MultiFrameForm) {
       main_frame_driver()->ApplyFormAction(
           mojom::FormActionType::kFill, mojom::ActionPersistence::kFill, fields,
           FillId::Create(), /*supports_refill=*/false, form.main_frame_origin(),
-          field_type_map, Section());
+          field_type_map);
 
   EXPECT_THAT(filled_field_ids, UnorderedElementsAre(name_field->global_id(),
                                                      phone_field->global_id()));
@@ -1484,7 +1487,7 @@ TEST_F(AutofillAcrossIframesTest, UpdateOnFrameDeletion) {
       WaitForMainFrame(),
       u"document.forms[0].getElementsByTagName('iframe')[0].remove();"));
 
-  base::flat_map<FieldGlobalId, FieldType> field_type_map;
+  absl::flat_hash_map<FieldGlobalId, FieldType> field_type_map;
 
   std::vector<FormFieldData> fields = form.fields();
 
@@ -1505,7 +1508,7 @@ TEST_F(AutofillAcrossIframesTest, UpdateOnFrameDeletion) {
   ASSERT_THAT(main_frame_driver()->ApplyFormAction(
                   mojom::FormActionType::kFill, mojom::ActionPersistence::kFill,
                   fields, FillId::Create(), /*supports_refill=*/false,
-                  form.main_frame_origin(), field_type_map, Section()),
+                  form.main_frame_origin(), field_type_map),
               SizeIs(1));
 
   // Wait on the fill to be done.
@@ -1721,8 +1724,7 @@ TEST_F(AutofillAcrossIframesTest, FrameDoubleRegistration_Notify) {
   ASSERT_EQ(spoofy_form.fields().size(), 1u);
 
   MockRegistrarObserver registrar_observer;
-  base::ScopedObservation<autofill::ChildFrameRegistrar,
-                          autofill::ChildFrameRegistrarObserver>
+  base::ScopedObservation<ChildFrameRegistrar, ChildFrameRegistrarObserver>
       registrar_scoped_observation{&registrar_observer};
   registrar_scoped_observation.Observe(registrar());
 
@@ -1795,7 +1797,7 @@ TEST_F(AutofillAcrossIframesTest, FrameDoubleRegistration_Unregister) {
     driver->Unregister();
   }
 
-  base::flat_map<FieldGlobalId, FieldType> field_type_map;
+  absl::flat_hash_map<FieldGlobalId, FieldType> field_type_map;
 
   // Set fill data for both fields.
   SetFillDataForField(kFakeName, FieldType::NAME_FULL, name_field,
@@ -1809,7 +1811,7 @@ TEST_F(AutofillAcrossIframesTest, FrameDoubleRegistration_Unregister) {
                   mojom::FormActionType::kFill, mojom::ActionPersistence::kFill,
                   fields_to_fill, FillId::Create(),
                   /*supports_refill=*/false, browser_form.main_frame_origin(),
-                  field_type_map, Section()),
+                  field_type_map),
               UnorderedElementsAre(phone_field->global_id()));
 
   main_frame_manager().ResetTestState();

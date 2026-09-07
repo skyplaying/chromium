@@ -20,6 +20,7 @@
 #include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/path_service.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
@@ -30,6 +31,7 @@
 #include "base/time/time.h"
 #include "base/win/scoped_localalloc.h"
 #include "build/branding_buildflags.h"
+#include "build/build_config.h"
 #include "chrome/updater/test/test_scope.h"
 #include "chrome/updater/test/unit_test_util_win.h"
 #include "chrome/updater/updater_branding.h"
@@ -345,7 +347,7 @@ TEST_P(AppCommandFormatComponentsAndCommandLineTest, TestCases) {
   std::wstring cmd = base::StrCat({L"process.exe ", command_line.value()});
   int num_args = 0;
   base::win::ScopedLocalAllocTyped<wchar_t*> argv_handle(
-      ::CommandLineToArgvW(&cmd[0], &num_args));
+      ::CommandLineToArgvW(cmd.c_str(), &num_args));
   ASSERT_TRUE(argv_handle);
   EXPECT_EQ(num_args, 2) << "substitution '" << GetParam().substitutions[0]
                          << "' gave command line '" << cmd

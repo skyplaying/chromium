@@ -6,6 +6,7 @@
 
 #include <deque>
 
+#include "base/memory/raw_ptr.h"
 #include "base/notimplemented.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/scoped_feature_list.h"
@@ -146,7 +147,7 @@ class MockScriptedIdleTaskControllerScheduler final : public ThreadScheduler {
   v8::Isolate* GetIsolate() { return isolate_; }
 
  private:
-  v8::Isolate* isolate_;
+  raw_ptr<v8::Isolate, UnprotectedInRelease | DanglingUntriaged> isolate_;
   bool should_yield_;
   std::deque<Thread::IdleTask> idle_tasks_;
   scoped_refptr<TestTaskRunner> task_runner_ =
@@ -243,7 +244,9 @@ class IdleTaskControllerFrameScheduler : public FrameScheduler {
   }
 
  private:
-  MockScriptedIdleTaskControllerScheduler* scripted_idle_scheduler_;
+  raw_ptr<MockScriptedIdleTaskControllerScheduler,
+          UnprotectedInRelease | DanglingUntriaged>
+      scripted_idle_scheduler_;
   std::unique_ptr<PageScheduler> page_scheduler_;
   base::WeakPtrFactory<FrameScheduler> weak_ptr_factory_{this};
 };
@@ -406,8 +409,6 @@ TEST_F(ScriptedIdleTaskControllerTest,
 
 TEST_F(ScriptedIdleTaskControllerTest,
        SchedulerTasksCleanedUpdOnTimeoutTaskRun) {
-  base::test::ScopedFeatureList feature_list(kRemoveCancelledScriptedIdleTasks);
-
   InitializeScheduler(ShouldYield(false));
 
   // Register many idle tasks with a timeout.
@@ -428,8 +429,6 @@ TEST_F(ScriptedIdleTaskControllerTest,
 
 TEST_F(ScriptedIdleTaskControllerTest,
        SchedulerTasksCleanedUpOnExecutionContextDeleted) {
-  base::test::ScopedFeatureList feature_list(kRemoveCancelledScriptedIdleTasks);
-
   InitializeScheduler(ShouldYield(false));
 
   // Register many idle tasks with a timeout.
@@ -448,8 +447,6 @@ TEST_F(ScriptedIdleTaskControllerTest,
 
 TEST_F(ScriptedIdleTaskControllerTest,
        SchedulerTasksRemovedOnManyIdleTasksCancelled) {
-  base::test::ScopedFeatureList feature_list(kRemoveCancelledScriptedIdleTasks);
-
   InitializeScheduler(ShouldYield(false));
 
   // Register 1 idle task which will not be cancelled.

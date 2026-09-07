@@ -45,16 +45,6 @@ MojoBinderPolicyApplier::CreateForSameOriginPrerendering(
       std::move(cancel_callback));
 }
 
-// static
-std::unique_ptr<MojoBinderPolicyApplier>
-MojoBinderPolicyApplier::CreateForPreview(
-    base::OnceCallback<void(const std::string& interface_name)>
-        cancel_callback) {
-  return std::make_unique<MojoBinderPolicyApplier>(
-      MojoBinderPolicyMapImpl::GetInstanceForPreview(),
-      std::move(cancel_callback));
-}
-
 void MojoBinderPolicyApplier::ApplyPolicyToNonAssociatedBinder(
     const std::string& interface_name,
     base::OnceClosure binder_callback) {
@@ -93,7 +83,7 @@ void MojoBinderPolicyApplier::ApplyPolicyToNonAssociatedBinder(
     return;
   }
 
-  DCHECK_EQ(mode_, Mode::kEnforce);
+  CHECK_EQ(mode_, Mode::kEnforce, base::NotFatalUntil::M159);
   switch (policy) {
     case MojoBinderNonAssociatedPolicy::kGrant:
       std::move(binder_callback).Run();
@@ -141,7 +131,7 @@ bool MojoBinderPolicyApplier::ApplyPolicyToAssociatedBinder(
 }
 
 void MojoBinderPolicyApplier::PrepareToGrantAll() {
-  DCHECK_EQ(mode_, Mode::kEnforce);
+  CHECK_EQ(mode_, Mode::kEnforce, base::NotFatalUntil::M159);
 
   // The remote side would think its status has changed after the browser
   // executes this method, so it is safe to send some synchronous method, so the
@@ -155,7 +145,7 @@ void MojoBinderPolicyApplier::PrepareToGrantAll() {
 }
 
 void MojoBinderPolicyApplier::GrantAll() {
-  DCHECK_NE(mode_, Mode::kGrantAll);
+  CHECK_NE(mode_, Mode::kGrantAll, base::NotFatalUntil::M159);
 
   // Check that we are in a Mojo message dispatch, since the deferred binders
   // might call mojo::ReportBadMessage().
@@ -169,7 +159,7 @@ void MojoBinderPolicyApplier::GrantAll() {
   // there are still subtle problems with running all these callbacks at once:
   // for example, mojo::GetMessageCallback()/mojo::ReportBadMessage() can only
   // be called once per message dispatch.
-  DCHECK(mojo::IsInMessageDispatch());
+  CHECK(mojo::IsInMessageDispatch(), base::NotFatalUntil::M159);
 
   mode_ = Mode::kGrantAll;
 

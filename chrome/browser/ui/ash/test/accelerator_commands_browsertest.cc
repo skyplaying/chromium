@@ -11,11 +11,11 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/browser_widget.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chromeos/ui/base/window_properties.h"
 #include "content/public/test/browser_test.h"
@@ -24,6 +24,7 @@
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_observer.h"
+#include "ui/base/base_window.h"
 #include "ui/base/mojom/window_show_state.mojom.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
@@ -81,9 +82,9 @@ class AcceleratorCommandsFullscreenBrowserTest
 IN_PROC_BROWSER_TEST_P(AcceleratorCommandsFullscreenBrowserTest,
                        ToggleFullscreen) {
   // 1) Browser windows.
-  aura::Window* window = browser()->window()->GetNativeWindow();
+  aura::Window* window = browser()->GetWindow()->GetNativeWindow();
   views::Widget* widget = views::Widget::GetWidgetForNativeWindow(window);
-  ASSERT_TRUE(browser()->is_type_normal());
+  ASSERT_EQ(browser()->GetType(), BrowserWindowInterface::Type::TYPE_NORMAL);
   ASSERT_TRUE(widget->IsActive());
   SetToInitialShowState(widget);
   EXPECT_TRUE(IsInitialShowState(widget));
@@ -103,16 +104,19 @@ IN_PROC_BROWSER_TEST_P(AcceleratorCommandsFullscreenBrowserTest,
   EXPECT_TRUE(IsInitialShowState(widget));
 
   // 3) Hosted apps.
-  Browser::CreateParams browser_create_params(
-      Browser::CreateParams::CreateForApp("Test", true /* trusted_source */,
-                                          gfx::Rect(), browser()->profile(),
-                                          true));
+  BrowserWindowCreateParams browser_create_params(
+      BrowserWindowCreateParams::CreateForApp(
+          "Test", /*trusted_source=*/true, gfx::Rect(), browser()->GetProfile(),
+          /*user_gesture=*/true));
 
-  Browser* app_host_browser = Browser::Create(browser_create_params);
-  ASSERT_FALSE(app_host_browser->is_type_popup());
-  ASSERT_TRUE(app_host_browser->is_type_app());
+  BrowserWindowInterface* app_host_browser =
+      CreateBrowserWindow(std::move(browser_create_params));
+  ASSERT_NE(app_host_browser->GetType(),
+            BrowserWindowInterface::Type::TYPE_POPUP);
+  ASSERT_EQ(app_host_browser->GetType(),
+            BrowserWindowInterface::Type::TYPE_APP);
   AddBlankTabAndShow(app_host_browser);
-  window = app_host_browser->window()->GetNativeWindow();
+  window = app_host_browser->GetWindow()->GetNativeWindow();
   widget = views::Widget::GetWidgetForNativeWindow(window);
   ASSERT_TRUE(widget->IsActive());
   SetToInitialShowState(widget);
@@ -126,13 +130,15 @@ IN_PROC_BROWSER_TEST_P(AcceleratorCommandsFullscreenBrowserTest,
   EXPECT_TRUE(IsInitialShowState(widget));
 
   // 4) Popup browser windows.
-  browser_create_params =
-      Browser::CreateParams(Browser::TYPE_POPUP, browser()->profile(), true);
-  Browser* popup_browser = Browser::Create(browser_create_params);
-  ASSERT_TRUE(popup_browser->is_type_popup());
-  ASSERT_FALSE(popup_browser->is_type_app());
+  browser_create_params = BrowserWindowCreateParams(
+      BrowserWindowInterface::TYPE_POPUP, browser()->GetProfile(),
+      /*from_user_gesture=*/true);
+  BrowserWindowInterface* popup_browser =
+      CreateBrowserWindow(std::move(browser_create_params));
+  ASSERT_EQ(popup_browser->GetType(), BrowserWindowInterface::Type::TYPE_POPUP);
+  ASSERT_NE(popup_browser->GetType(), BrowserWindowInterface::Type::TYPE_APP);
   AddBlankTabAndShow(popup_browser);
-  window = popup_browser->window()->GetNativeWindow();
+  window = popup_browser->GetWindow()->GetNativeWindow();
   widget = views::Widget::GetWidgetForNativeWindow(window);
   ASSERT_TRUE(widget->IsActive());
   SetToInitialShowState(widget);
@@ -147,7 +153,7 @@ IN_PROC_BROWSER_TEST_P(AcceleratorCommandsFullscreenBrowserTest,
 
   // 5) Miscellaneous windows (e.g. task manager).
   views::Widget::InitParams params(
-      views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
+      views::Widget::InitParams::CLIENT_OWNS_WIDGET);
   params.delegate =
       new views::WidgetDelegateView(views::WidgetDelegateView::CreatePassKey());
   params.delegate->SetCanMaximize(true);
@@ -230,7 +236,7 @@ IN_PROC_BROWSER_TEST_P(AcceleratorCommandsPlatformAppFullscreenBrowserTest,
     extensions::AppWindow::CreateParams params;
     params.frame = extensions::AppWindow::FRAME_CHROME;
     extensions::AppWindow* app_window =
-        CreateAppWindowFromParams(browser()->profile(), extension, params);
+        CreateAppWindowFromParams(browser()->GetProfile(), extension, params);
     extensions::NativeAppWindow* native_app_window =
         app_window->GetBaseWindow();
     SetToInitialShowState(app_window);
@@ -254,7 +260,7 @@ IN_PROC_BROWSER_TEST_P(AcceleratorCommandsPlatformAppFullscreenBrowserTest,
     extensions::AppWindow::CreateParams params;
     params.frame = extensions::AppWindow::FRAME_NONE;
     extensions::AppWindow* app_window =
-        CreateAppWindowFromParams(browser()->profile(), extension, params);
+        CreateAppWindowFromParams(browser()->GetProfile(), extension, params);
     extensions::NativeAppWindow* native_app_window =
         app_window->GetBaseWindow();
     ASSERT_TRUE(app_window->GetBaseWindow()->IsActive());

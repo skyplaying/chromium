@@ -175,7 +175,7 @@ std::u16string SaveUpdateAddressProfileFlowManager::GetMessageRecordTypeNotice()
                    IDS_AUTOFILL_SAVE_IN_ACCOUNT_MESSAGE_ADDRESS_MIGRATION_RECORD_TYPE_NOTICE)
              : l10n_util::GetStringFUTF16(
                    IDS_AUTOFILL_SAVE_IN_ACCOUNT_MESSAGE_ADDRESS_RECORD_TYPE_NOTICE,
-                   base::UTF8ToUTF16(account->email));
+                   base::UTF8ToUTF16(account->GetEmail()));
 }
 
 std::u16string
@@ -193,8 +193,8 @@ void SaveUpdateAddressProfileFlowManager::ShowPromptWithDetails(
     const AutofillProfile* original_profile,
     SaveUpdateAddressProfilePromptMode prompt_mode,
     AutofillClient::AddressProfileSavePromptCallback callback) {
-  autofill::PersonalDataManager* personal_data =
-      autofill::PersonalDataManagerFactory::GetForBrowserContext(
+  PersonalDataManager* personal_data =
+      PersonalDataManagerFactory::GetForBrowserContext(
           owner_->GetWebContents().GetBrowserContext());
   save_update_address_profile_prompt_controller_ = std::make_unique<
       SaveUpdateAddressProfilePromptController>(

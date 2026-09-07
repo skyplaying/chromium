@@ -54,9 +54,9 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
-import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.ContextUtils;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
 import org.chromium.chrome.browser.customtabs.features.toolbar.CustomTabToolbar;
@@ -71,7 +71,6 @@ import org.chromium.components.browser_ui.widget.TouchEventProvider;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.BooleanSupplier;
-import java.util.function.Supplier;
 
 /**
  * A TestRule that sets up the mocks and contains helper methods for JUnit/Robolectric tests scoped
@@ -95,6 +94,8 @@ public class PartialCustomTabTestRule implements TestRule {
     static final int DEVICE_WIDTH_COMPACT_PORTRAIT = DEVICE_HEIGHT_COMPACT;
     static final int DEVICE_HEIGHT_COMPACT_PORTRAIT = DEVICE_WIDTH_COMPACT;
 
+    private static final int DEFAULT_BG_COLOR = Color.LTGRAY;
+
     @Mock Activity mActivity;
     @Mock Window mWindow;
     @Mock WindowManager mWindowManager;
@@ -117,6 +118,7 @@ public class PartialCustomTabTestRule implements TestRule {
     @Mock FullscreenManager mFullscreenManager;
     @Mock ViewStub mHandleViewStub;
     @Mock ImageView mHandleView;
+    @Mock FrameLayout mContentBackground;
     @Mock ActivityLifecycleDispatcher mActivityLifecycleDispatcher;
     @Mock LinearLayout mNavbar;
     @Mock ViewPropertyAnimator mViewAnimator;
@@ -154,9 +156,13 @@ public class PartialCustomTabTestRule implements TestRule {
 
     @SuppressWarnings("DirectInvocationOnMock")
     private void setUp() {
+        // MockitoRule is not processed recursively in JUnit 4, and these are
+        // TestRule or TestWatcher implementations. Manual initialization is
+        // required.
         MockitoAnnotations.initMocks(this);
         mConfiguration.orientation = Configuration.ORIENTATION_PORTRAIT;
         SemanticColorUtils.setDividerLineBgColorForTesting(Color.LTGRAY);
+        SemanticColorUtils.setDefaultBgColorForTesting(DEFAULT_BG_COLOR);
 
         setUpActivityAndWindowMocks();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -184,6 +190,8 @@ public class PartialCustomTabTestRule implements TestRule {
         when(mActivity.findViewById(android.R.id.content)).thenReturn(mContentFrame);
         when(mActivity.findViewById(R.id.custom_tabs_handle_view_stub)).thenReturn(mHandleViewStub);
         when(mActivity.findViewById(R.id.custom_tabs_handle_view)).thenReturn(mHandleView);
+        when(mActivity.findViewById(R.id.custom_tabs_content_background))
+                .thenReturn(mContentBackground);
         when(mActivity.findViewById(R.id.drag_bar)).thenReturn(mDragBar);
         when(mActivity.findViewById(R.id.drag_handle)).thenReturn(mDragHandlebar);
 
@@ -199,6 +207,7 @@ public class PartialCustomTabTestRule implements TestRule {
     @SuppressWarnings("DirectInvocationOnMock")
     private void setUpModernAndroidMocks() {
         when(mWindow.getInsetsController()).thenReturn(mWindowInsetsController);
+        when(mDecorView.getWindowInsetsController()).thenReturn(mWindowInsetsController);
         when(mWindowManager.getCurrentWindowMetrics()).thenReturn(mWindowMetrics);
         doAnswer(
                         invocation -> {
@@ -273,7 +282,7 @@ public class PartialCustomTabTestRule implements TestRule {
                         anyInt(),
                         any(Context.class),
                         any(BooleanSupplier.class),
-                        any(Supplier.class),
+                        any(),
                         any(PartialCustomTabHandleStrategy.DragEventCallback.class)))
                 .thenReturn(null);
     }
@@ -326,7 +335,7 @@ public class PartialCustomTabTestRule implements TestRule {
 
     public static void waitForAnimationToFinish() {
         shadowOf(Looper.getMainLooper()).idle();
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
     }
 
     public void configPortraitMode() {

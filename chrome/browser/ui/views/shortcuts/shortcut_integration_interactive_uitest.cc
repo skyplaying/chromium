@@ -12,6 +12,8 @@
 #include "chrome/browser/shortcuts/shortcut_creation_test_support.h"
 #include "chrome/browser/signin/signin_util.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
 #include "chrome/browser/ui/profiles/profile_picker.h"
 #include "chrome/browser/ui/views/shortcuts/shortcut_integration_interaction_test_base.h"
@@ -151,13 +153,13 @@ class ShortcutIntegrationMultiProfileInteractiveUiTest
     profile2_browser_ =
         chrome::OpenEmptyWindow(profile2(),
                                 /*should_trigger_session_restore=*/false)
-            ->AsWeakPtr();
+            ->GetWeakPtr();
   }
 
-  Profile* profile1() { return browser()->profile(); }
+  Profile* profile1() { return browser()->GetProfile(); }
   Profile* profile2() { return profile2_.get(); }
-  Browser* profile1_browser() { return browser(); }
-  Browser* profile2_browser() { return profile2_browser_.get(); }
+  BrowserWindowInterface* profile1_browser() { return browser(); }
+  BrowserWindowInterface* profile2_browser() { return profile2_browser_.get(); }
 
   GURL profile1_shortcut_url() {
     return embedded_https_test_server().GetURL("/shortcuts/page_icons.html");
@@ -194,6 +196,9 @@ class ShortcutIntegrationMultiProfileInteractiveUiTest
   // Creates shortcuts in both profiles.
   [[nodiscard]] MultiStep CreateShortcuts() {
     return Steps(
+        SetOnIncompatibleAction(
+            OnIncompatibleAction::kIgnoreAndContinue,
+            "ActivateSurface() may fail on Wayland compositors."),
         InstrumentTab(kProfile1TabId, /*tab_index=*/std::nullopt,
                       profile1_browser()),
         InstrumentTab(kProfile2TabId, /*tab_index=*/std::nullopt,
@@ -203,12 +208,14 @@ class ShortcutIntegrationMultiProfileInteractiveUiTest
 
         InstrumentNextShortcut(kProfile2ShortcutId),
         InContext(BrowserElements::From(profile2_browser())->GetContext(),
-                  ShowAndAcceptCreateShortcutDialog()),
+                  Steps(ActivateSurface(kToolbarAppMenuButtonElementId),
+                        ShowAndAcceptCreateShortcutDialog())),
         InAnyContext(WaitForShow(kProfile2ShortcutId)),
 
         InstrumentNextShortcut(kProfile1ShortcutId),
         InContext(BrowserElements::From(profile1_browser())->GetContext(),
-                  ShowAndAcceptCreateShortcutDialog()),
+                  Steps(ActivateSurface(kToolbarAppMenuButtonElementId),
+                        ShowAndAcceptCreateShortcutDialog())),
         InAnyContext(WaitForShow(kProfile1ShortcutId)));
   }
 
@@ -220,7 +227,7 @@ class ShortcutIntegrationMultiProfileInteractiveUiTest
 
  private:
   base::WeakPtr<Profile> profile2_;
-  base::WeakPtr<Browser> profile2_browser_;
+  base::WeakPtr<BrowserWindowInterface> profile2_browser_;
 };
 
 IN_PROC_BROWSER_TEST_F(ShortcutIntegrationMultiProfileInteractiveUiTest,
@@ -299,7 +306,7 @@ IN_PROC_BROWSER_TEST_F(ShortcutIntegrationMultiProfileInteractiveUiTest,
 
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kProfilePickerViewId);
   ProfilePicker::AddOnProfilePickerOpenedCallbackForTesting(
-      base::BindLambdaForTesting([kProfilePickerViewId] {
+      base::BindLambdaForTesting([] {
         ProfilePicker::GetViewForTesting()->SetProperty(
             views::kElementIdentifierKey, kProfilePickerViewId);
       }));

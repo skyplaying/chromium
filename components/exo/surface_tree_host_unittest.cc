@@ -22,6 +22,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/aura/layout_manager.h"
 #include "ui/aura/window.h"
+#include "ui/compositor/layer_surface.h"
 #include "ui/display/display.h"
 #include "ui/display/test/display_manager_test_api.h"
 #include "ui/display/types/display_constants.h"
@@ -321,6 +322,8 @@ class FakeRasterContextProvider
   }
   void AddObserver(viz::ContextLostObserver* obs) override { ADD_FAILURE(); }
   void RemoveObserver(viz::ContextLostObserver* obs) override { ADD_FAILURE(); }
+  bool IsLost() override { return false; }
+
   base::Lock* GetLock() override {
     ADD_FAILURE();
     return nullptr;

@@ -8,6 +8,7 @@
 #include <limits>
 #include <variant>
 
+#include "base/mac/mac_util.h"
 #include "base/metrics/histogram_macros.h"
 #include "build/build_config.h"
 #include "components/viz/common/features.h"
@@ -19,6 +20,7 @@
 #include "components/viz/service/display/display_resource_provider.h"
 #include "ui/base/cocoa/remote_layer_api.h"
 #include "ui/gfx/buffer_types.h"
+#include "ui/gfx/geometry/rrect_f.h"
 #include "ui/gl/gl_bindings.h"
 
 namespace viz {
@@ -78,30 +80,52 @@ bool FilterOperationSupported(const cc::FilterOperation& operation) {
   }
 }
 
+// Returns whether the specified `RRectF` is representable as a single radius
+// plus a bitmask of which corners the radius applies to (with the other corners
+// being square). This is the most specific corner format supported by CALayer.
+bool IsMaskableRRect(const gfx::RRectF& rrect) {
+  // Certain simple types of rrects are always supported.
+  if (rrect.GetType() <= gfx::RRectF::Type::kSingle) {
+    return true;
+  }
+
+  // Verify that if there are rounded corners, all have simple radii (x == y)
+  // and all corners which are rounded have the same simple radius.
+  using Corner = gfx::RRectF::Corner;
+  float found = 0.0f;
+  for (auto corner : {Corner::kUpperLeft, Corner::kUpperRight,
+                      Corner::kLowerRight, Corner::kLowerLeft}) {
+    const auto radii = rrect.GetCornerRadii(corner);
+    const float radius = radii.x();
+    if (radius != radii.y()) {
+      return false;
+    }
+    if (radius > 0.0f) {
+      if (found > 0.0f && found != radius) {
+        return false;
+      }
+      found = radius;
+    }
+  }
+  return true;
+}
+
 gfx::CALayerResult FromRenderPassQuad(
     const DisplayResourceProvider* resource_provider,
     const AggregatedRenderPassDrawQuad* quad,
-    const base::flat_map<AggregatedRenderPassId,
-                         raw_ptr<cc::FilterOperations, CtnExperimental>>&
-        render_pass_filters,
-    const base::flat_map<AggregatedRenderPassId,
-                         raw_ptr<cc::FilterOperations, CtnExperimental>>&
-        render_pass_backdrop_filters,
     OverlayCandidate* ca_layer_overlay) {
-  if (render_pass_backdrop_filters.count(quad->render_pass_id)) {
+  if (!quad->backdrop_filters.IsEmpty()) {
     return gfx::kCALayerFailedRenderPassBackdropFilters;
   }
 
-  auto* shared_quad_state = quad->shared_quad_state;
+  const SharedQuadState* shared_quad_state = quad->shared_quad_state;
   if (shared_quad_state->sorting_context_id != 0)
     return gfx::kCALayerFailedRenderPassSortingContextId;
 
-  auto it = render_pass_filters.find(quad->render_pass_id);
-  if (it != render_pass_filters.end()) {
-    for (const auto& operation : it->second->operations()) {
-      bool success = FilterOperationSupported(operation);
-      if (!success)
-        return gfx::kCALayerFailedRenderPassFilterOperation;
+  for (const auto& operation : quad->filters.operations()) {
+    bool success = FilterOperationSupported(operation);
+    if (!success) {
+      return gfx::kCALayerFailedRenderPassFilterOperation;
     }
   }
 
@@ -195,12 +219,6 @@ class CALayerOverlayProcessorInternal {
       const DisplayResourceProvider* resource_provider,
       const gfx::RectF& display_rect,
       const DrawQuad* quad,
-      const base::flat_map<AggregatedRenderPassId,
-                           raw_ptr<cc::FilterOperations, CtnExperimental>>&
-          render_pass_filters,
-      const base::flat_map<AggregatedRenderPassId,
-                           raw_ptr<cc::FilterOperations, CtnExperimental>>&
-          render_pass_backdrop_filters,
       OverlayCandidate* ca_layer_overlay,
       bool* skip,
       bool* render_pass_draw_quad,
@@ -216,13 +234,13 @@ class CALayerOverlayProcessorInternal {
     }
 
     // Support rounded corner bounds when they have the same rect as the clip
-    // rect, and all corners have the same radius. Note that it is entirely
-    // possible to make rounded corner rects independent of clip rect (by adding
-    // another CALayer to the tree). Handling non-single border radii is also,
-    // but requires APIs not supported on all macOS versions.
+    // rect, and all corners have the same radius or are zero. Note that it is
+    // entirely possible to make rounded corner rects independent of clip rect
+    // (by adding another CALayer to the tree). Handling non-single border radii
+    // is also, but requires APIs not supported on all macOS versions.
     if (quad->shared_quad_state->mask_filter_info.HasRoundedCorners()) {
-      if (quad->shared_quad_state->mask_filter_info.rounded_corner_bounds()
-              .GetType() > gfx::RRectF::Type::kSingle) {
+      if (!IsMaskableRRect(quad->shared_quad_state->mask_filter_info
+                               .rounded_corner_bounds())) {
         return gfx::kCALayerFailedQuadRoundedCornerNotUniform;
       }
     }
@@ -274,7 +292,6 @@ class CALayerOverlayProcessorInternal {
       case DrawQuad::Material::kAggregatedRenderPass:
         return FromRenderPassQuad(
             resource_provider, AggregatedRenderPassDrawQuad::MaterialCast(quad),
-            render_pass_filters, render_pass_backdrop_filters,
             ca_layer_overlay);
       case DrawQuad::Material::kSurfaceContent:
         return gfx::kCALayerFailedSurfaceContent;
@@ -358,12 +375,6 @@ void CALayerOverlayProcessor::PutForcedOverlayContentIntoUnderlays(
     AggregatedRenderPass* render_pass,
     const gfx::RectF& display_rect,
     QuadList* quad_list,
-    const base::flat_map<AggregatedRenderPassId,
-                         raw_ptr<cc::FilterOperations, CtnExperimental>>&
-        render_pass_filters,
-    const base::flat_map<AggregatedRenderPassId,
-                         raw_ptr<cc::FilterOperations, CtnExperimental>>&
-        render_pass_backdrop_filters,
     OverlayCandidateList* ca_layer_overlays) const {
   bool failed = false;
 
@@ -394,9 +405,8 @@ void CALayerOverlayProcessor::PutForcedOverlayContentIntoUnderlays(
 
     if (force_quad_to_overlay) {
       if (!PutQuadInSeparateOverlay(it, resource_provider, render_pass,
-                                    display_rect, quad, render_pass_filters,
-                                    render_pass_backdrop_filters,
-                                    protected_video_type, ca_layer_overlays)) {
+                                    display_rect, quad, protected_video_type,
+                                    ca_layer_overlays)) {
         failed = true;
         break;
       }
@@ -410,12 +420,6 @@ bool CALayerOverlayProcessor::ProcessForCALayerOverlays(
     AggregatedRenderPass* render_pass,
     const DisplayResourceProvider* resource_provider,
     const gfx::RectF& display_rect,
-    const base::flat_map<AggregatedRenderPassId,
-                         raw_ptr<cc::FilterOperations, CtnExperimental>>&
-        render_pass_filters,
-    const base::flat_map<AggregatedRenderPassId,
-                         raw_ptr<cc::FilterOperations, CtnExperimental>>&
-        render_pass_backdrop_filters,
     OverlayCandidateList* ca_layer_overlays) {
   const QuadList& quad_list = render_pass->quad_list;
   gfx::CALayerResult result = gfx::kCALayerSuccess;
@@ -451,10 +455,9 @@ bool CALayerOverlayProcessor::ProcessForCALayerOverlays(
     OverlayCandidate ca_layer;
     bool skip = false;
     bool render_pass_draw_quad = false;
-    result = processor.FromDrawQuad(
-        resource_provider, display_rect, quad, render_pass_filters,
-        render_pass_backdrop_filters, &ca_layer, &skip, &render_pass_draw_quad,
-        yuv_draw_quad_count);
+    result = processor.FromDrawQuad(resource_provider, display_rect, quad,
+                                    &ca_layer, &skip, &render_pass_draw_quad,
+                                    yuv_draw_quad_count);
     if (result != gfx::kCALayerSuccess)
       break;
 
@@ -501,12 +504,6 @@ bool CALayerOverlayProcessor::PutQuadInSeparateOverlay(
     AggregatedRenderPass* render_pass,
     const gfx::RectF& display_rect,
     const DrawQuad* quad,
-    const base::flat_map<AggregatedRenderPassId,
-                         raw_ptr<cc::FilterOperations, CtnExperimental>>&
-        render_pass_filters,
-    const base::flat_map<AggregatedRenderPassId,
-                         raw_ptr<cc::FilterOperations, CtnExperimental>>&
-        render_pass_backdrop_filters,
     gfx::ProtectedVideoType protected_video_type,
     OverlayCandidateList* ca_layer_overlays) const {
   CALayerOverlayProcessorInternal processor;
@@ -515,9 +512,8 @@ bool CALayerOverlayProcessor::PutQuadInSeparateOverlay(
   bool render_pass_draw_quad = false;
   int yuv_draw_quad_count = 0;
   gfx::CALayerResult result = processor.FromDrawQuad(
-      resource_provider, display_rect, quad, render_pass_filters,
-      render_pass_backdrop_filters, &ca_layer, &skip, &render_pass_draw_quad,
-      yuv_draw_quad_count);
+      resource_provider, display_rect, quad, &ca_layer, &skip,
+      &render_pass_draw_quad, yuv_draw_quad_count);
   if (result != gfx::kCALayerSuccess)
     return false;
 

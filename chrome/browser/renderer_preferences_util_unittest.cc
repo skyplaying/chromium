@@ -7,13 +7,13 @@
 #include <array>
 
 #include "base/memory/raw_ptr.h"
-#include "base/test/scoped_feature_list.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
 #include "components/prefs/pref_service.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
-#include "content/public/common/content_features.h"
+#include "components/universal_optout/features.h"
+#include "components/universal_optout/prefs.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/peerconnection/webrtc_ip_handling_policy.h"
@@ -133,30 +133,29 @@ TEST_F(RendererPreferencesUtilTest, WebRTCIPHandlingURLValidEntries) {
             blink::mojom::WebRtcIpHandlingPolicy::kDefault);
 }
 
-#if BUILDFLAG(IS_ANDROID)
-TEST_F(RendererPreferencesUtilTest, CaretBrowsingAndroidKillSwitch) {
-  // Case 1: Feature Enabled, Pref Enabled -> Result: Enabled
-  {
-    base::test::ScopedFeatureList feature_list;
-    feature_list.InitAndEnableFeature(features::kAndroidCaretBrowsing);
-    pref_service_->SetBoolean(prefs::kCaretBrowsingEnabled, true);
-
-    blink::RendererPreferences renderer_preferences;
-    renderer_preferences_util::UpdateFromSystemSettings(&renderer_preferences,
-                                                        &profile_);
-    EXPECT_TRUE(renderer_preferences.caret_browsing_enabled);
-  }
-
-  // Case 2: Feature Disabled, Pref Enabled -> Result: Disabled
-  {
-    base::test::ScopedFeatureList feature_list;
-    feature_list.InitAndDisableFeature(features::kAndroidCaretBrowsing);
-    pref_service_->SetBoolean(prefs::kCaretBrowsingEnabled, true);
-
-    blink::RendererPreferences renderer_preferences;
-    renderer_preferences_util::UpdateFromSystemSettings(&renderer_preferences,
-                                                        &profile_);
-    EXPECT_FALSE(renderer_preferences.caret_browsing_enabled);
+TEST_F(RendererPreferencesUtilTest, AutofillAtMemoryTriggerString) {
+  blink::RendererPreferences renderer_preferences;
+  renderer_preferences_util::UpdateFromSystemSettings(&renderer_preferences,
+                                                      &profile_);
+  if constexpr (BUILDFLAG(IS_ANDROID)) {
+    EXPECT_TRUE(renderer_preferences.autofill_trigger_string.empty());
+  } else {
+    EXPECT_EQ(renderer_preferences.autofill_trigger_string, u"@@");
   }
 }
-#endif
+
+TEST_F(RendererPreferencesUtilTest, GlobalPrivacyControlSettingEnabled) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      {universal_optout::features::kUniversalOptOut,
+       universal_optout::features::kUniversalOptOutSettings},
+      {});
+
+  pref_service_->SetBoolean(universal_optout::prefs::kUniversalOptOutEnabled,
+                            true);
+  blink::RendererPreferences renderer_preferences;
+  renderer_preferences_util::UpdateFromSystemSettings(&renderer_preferences,
+                                                      &profile_);
+  EXPECT_EQ(renderer_preferences.is_global_privacy_control_setting_enabled,
+            true);
+}

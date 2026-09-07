@@ -8,6 +8,8 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "base/types/pass_key.h"
+#include "content/public/browser/browser_task_traits.h"
+#include "content/public/browser/browser_thread.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "storage/browser/file_system/file_observers.h"
 #include "storage/browser/file_system/task_runner_bound_observer_list.h"
@@ -28,8 +30,8 @@ FileSystemAccessFileModificationHostImpl::
       url_(url),
       receiver_(this, std::move(receiver)),
       granted_capacity_(file_size) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(manager_);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+  CHECK(manager_, base::NotFatalUntil::M159);
   // base::Unretained is safe here because this
   // FileSystemAccessFileModificationHostImpl owns `receiver_`. So, the
   // unretained FileSystemAccessFileModificationHostImpl is guaranteed to
@@ -52,8 +54,8 @@ FileSystemAccessFileModificationHostImpl::
       url_(url),
       receiver_(this, std::move(receiver)),
       granted_capacity_(file_size) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(manager_);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+  CHECK(manager_, base::NotFatalUntil::M159);
   // base::Unretained is safe here because this
   // FileSystemAccessFileModificationHostImpl owns `receiver_`. So, the
   // unretained FileSystemAccessFileModificationHostImpl is guaranteed to
@@ -123,10 +125,19 @@ void FileSystemAccessFileModificationHostImpl::DidGetUsageAndQuota(
 void FileSystemAccessFileModificationHostImpl::OnContentsModified() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  if (const storage::ChangeObserverList* change_observers =
-          manager_->context()->GetChangeObservers(url_.type())) {
-    change_observers->Notify(&storage::FileChangeObserver::OnModifyFile, url_);
-  }
+  scoped_refptr<storage::FileSystemContext> context =
+      base::WrapRefCounted(manager_->context());
+  GetIOThreadTaskRunner({})->PostTask(
+      FROM_HERE, base::BindOnce(
+                     [](scoped_refptr<storage::FileSystemContext> context,
+                        storage::FileSystemURL url) {
+                       if (const storage::ChangeObserverList* change_observers =
+                               context->GetChangeObservers(url.type())) {
+                         change_observers->Notify(
+                             &storage::FileChangeObserver::OnModifyFile, url);
+                       }
+                     },
+                     std::move(context), url_));
 }
 
 }  // namespace content

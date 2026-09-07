@@ -12,8 +12,6 @@ import static org.junit.Assert.assertThrows;
 import static org.chromium.net.CronetTestRule.getTestStorage;
 import static org.chromium.net.truth.UrlResponseInfoSubject.assertThat;
 
-import android.os.Build;
-
 import androidx.annotation.OptIn;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.filters.LargeTest;
@@ -88,15 +86,6 @@ public class ExperimentalOptionsTest {
     @Before
     public void setUp() throws Exception {
         mHangingUrlLatch = new CountDownLatch(1);
-        // TODO(crbug.com/40284777): Fallback to MockCertVerifier when custom CAs are not supported.
-        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.M) {
-            mTestRule
-                    .getTestFramework()
-                    .applyEngineBuilderPatch(
-                            (builder) ->
-                                    CronetTestUtil.setMockCertVerifierForTesting(
-                                            builder, QuicTestServer.createMockCertVerifier()));
-        }
         assertThat(
                         Http2TestServer.startHttp2TestServer(
                                 mTestRule.getTestFramework().getContext(), mHangingUrlLatch))
@@ -284,16 +273,15 @@ public class ExperimentalOptionsTest {
     // Experimental options should be specified through a JSON compliant string. When that is not
     // the case building a Cronet engine should fail.
     public void testWrongJsonExperimentalOptions() throws Exception {
+        CronetTestFramework cronetTestFramework = mTestRule.getTestFramework();
         IllegalArgumentException e =
                 assertThrows(
                         IllegalArgumentException.class,
                         () ->
-                                mTestRule
-                                        .getTestFramework()
-                                        .applyEngineBuilderPatch(
-                                                (builder) ->
-                                                        builder.setExperimentalOptions(
-                                                                "Not a serialized JSON object")));
+                                cronetTestFramework.applyEngineBuilderPatch(
+                                        builder ->
+                                                builder.setExperimentalOptions(
+                                                        "Not a serialized JSON object")));
         // The top level exception is a side effect of using applyEngineBuilderPatch
         assertThat(e).hasCauseThat().isInstanceOf(IllegalArgumentException.class);
         assertThat(e)
@@ -550,6 +538,27 @@ public class ExperimentalOptionsTest {
     }
 
     @Test
+    @SmallTest
+    @Flags(
+            stringFlags = {
+                @StringFlag(
+                        name = "CronetExperimentalOption_QUIC_KEY_connection_options",
+                        value = "FLAG")
+            })
+    public void testExperimentalOptionsFlagOverridesBuilderOptions() {
+        mTestRule
+                .getTestFramework()
+                .applyEngineBuilderPatch(
+                        (builder) -> {
+                            builder.setQuicOptions(
+                                    QuicOptions.builder().addConnectionOption("ABCD").build());
+                        });
+        ExperimentalCronetEngine cronetEngine = mTestRule.getTestFramework().startEngine();
+        String[] copts = CronetTestUtil.nativeGetConnectionOptions(cronetEngine);
+        assertThat(copts).asList().containsExactly("FLAG");
+    }
+
+    @Test
     @MediumTest
     public void testDetectBrokenConnection() throws Exception {
         String url = Http2TestServer.getEchoMethodUrl();
@@ -621,7 +630,7 @@ public class ExperimentalOptionsTest {
         cronetEngine.shutdown();
     }
 
-    @NativeMethods("cronet_tests")
+    @NativeMethods
     interface Natives {
         // Sets a host cache entry with hostname "host-cache-test-host" and an AddressList
         // containing the provided address.

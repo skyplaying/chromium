@@ -21,7 +21,7 @@ namespace testing {
 
 // This class is used to implement a test credential based off a
 // CGaiaCredential.
-class ATL_NO_VTABLE CTestGaiaCredential
+class __declspec(novtable) CTestGaiaCredential
     : public CTestCredentialBase<CGaiaCredential> {
  public:
   DECLARE_NO_REGISTRY()
@@ -43,7 +43,7 @@ CTestGaiaCredential::~CTestGaiaCredential() = default;
 
 // This class is used to implement a test credential based off a
 // COtherUserGaiaCredential.
-class ATL_NO_VTABLE CTestOtherUserGaiaCredential
+class __declspec(novtable) CTestOtherUserGaiaCredential
     : public CTestCredentialBase<COtherUserGaiaCredential> {
  public:
   DECLARE_NO_REGISTRY()
@@ -292,15 +292,15 @@ CTestGaiaCredentialProvider::CTestGaiaCredentialProvider() {
 
 CTestGaiaCredentialProvider::~CTestGaiaCredentialProvider() = default;
 
-const CComBSTR& CTestGaiaCredentialProvider::username() const {
+const base::win::ScopedBstr& CTestGaiaCredentialProvider::username() const {
   return username_;
 }
 
-const CComBSTR& CTestGaiaCredentialProvider::password() const {
+const base::win::ScopedBstr& CTestGaiaCredentialProvider::password() const {
   return password_;
 }
 
-const CComBSTR& CTestGaiaCredentialProvider::sid() const {
+const base::win::ScopedBstr& CTestGaiaCredentialProvider::sid() const {
   return sid_;
 }
 
@@ -318,9 +318,9 @@ HRESULT CTestGaiaCredentialProvider::OnUserAuthenticatedImpl(
     BSTR password,
     BSTR sid,
     BOOL fire_credentials_changed) {
-  username_ = username;
-  password_ = password;
-  sid_ = sid;
+  username_.Reset(::SysAllocString(username));
+  password_.Reset(::SysAllocString(password));
+  sid_.Reset(::SysAllocString(sid));
   credentials_changed_fired_ = fire_credentials_changed;
   return CGaiaCredentialProvider::OnUserAuthenticatedImpl(
       credential, username, password, sid, fire_credentials_changed);

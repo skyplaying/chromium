@@ -9,28 +9,35 @@
 #include "base/functional/callback_helpers.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/mock_callback.h"
+#include "base/test/scoped_command_line.h"
 #include "base/test/task_environment.h"
+#include "base/test/test_future.h"
 #include "base/values.h"
+#include "build/branding_buildflags.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/enterprise/browser_management/management_identity.h"
 #include "chrome/browser/enterprise/browser_management/management_service_factory.h"
 #include "chrome/browser/profiles/profile_attributes_entry.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_test_util.h"
-#include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/managed_ui.h"
+#include "chrome/browser/ui/browser_window/test/mock_browser_window_interface.h"
 #include "chrome/browser/ui/webui/signin/signin_utils.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
-#include "chrome/test/base/browser_with_test_window_test.h"
+#include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
+#include "chrome/test/base/testing_profile_manager.h"
 #include "components/policy/core/common/management/scoped_management_service_override_for_testing.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/base/signin_pref_names.h"
 #include "components/user_manager/user_names.h"
 #include "content/public/test/browser_task_environment.h"
+#include "content/public/test/test_web_contents_factory.h"
 #include "content/public/test/test_web_ui.h"
 #include "content/public/test/web_contents_tester.h"
 #include "google_apis/gaia/gaia_id.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/l10n/l10n_util.h"
 #if !BUILDFLAG(IS_CHROMEOS)
@@ -52,24 +59,24 @@ ProfileAttributesEntry* GetProfileEntry(Profile* profile) {
 
 }  // namespace
 
-class ManagedUserProfileNoticeHandlerTestBase
-    : public BrowserWithTestWindowTest {
+class ManagedUserProfileNoticeHandlerTestBase : public testing::Test {
  public:
-  ManagedUserProfileNoticeHandlerTestBase() = default;
+  ManagedUserProfileNoticeHandlerTestBase()
+      : profile_manager_(TestingBrowserProcess::GetGlobal()) {}
   ManagedUserProfileNoticeHandlerTestBase(
       const ManagedUserProfileNoticeHandlerTestBase&) = delete;
-  ManagedUserProfileNoticeHandler& operator=(
+  ManagedUserProfileNoticeHandlerTestBase& operator=(
       const ManagedUserProfileNoticeHandlerTestBase&) = delete;
   ~ManagedUserProfileNoticeHandlerTestBase() override = default;
 
-  // BrowserWithTestWindowTest:
   void SetUp() override {
-    BrowserWithTestWindowTest::SetUp();
-    chrome::NewTab(browser());
+    testing::Test::SetUp();
+    ASSERT_TRUE(profile_manager_.SetUp());
+    profile_ = profile_manager_.CreateTestingProfile("Primary Profile");
 
     web_ui_ = std::make_unique<content::TestWebUI>();
     web_ui_->set_web_contents(
-        browser()->tab_strip_model()->GetActiveWebContents());
+        web_contents_factory_.CreateWebContents(profile_));
 
     account_info_.email = user_manager::kStubUserEmail;
     account_info_.gaia = GaiaId(user_manager::kStubUserId);
@@ -83,7 +90,7 @@ class ManagedUserProfileNoticeHandlerTestBase
     message_handler_.reset();
 
     message_handler_ = std::make_unique<ManagedUserProfileNoticeHandler>(
-        /*browser=*/nullptr, screen_type, std::move(dialog_params));
+        &mock_browser_window_interface_, screen_type, std::move(dialog_params));
     message_handler_->set_web_ui_for_test(web_ui());
     message_handler_->RegisterMessages();
   }
@@ -92,7 +99,8 @@ class ManagedUserProfileNoticeHandlerTestBase
 
   void TearDown() override {
     message_handler_.reset();
-    BrowserWithTestWindowTest::TearDown();
+    web_ui_.reset();
+    testing::Test::TearDown();
   }
 
   content::TestWebUI* web_ui() { return web_ui_.get(); }
@@ -100,6 +108,11 @@ class ManagedUserProfileNoticeHandlerTestBase
   ManagedUserProfileNoticeHandler* handler() { return message_handler_.get(); }
 
  private:
+  content::BrowserTaskEnvironment task_environment_;
+  TestingProfileManager profile_manager_;
+  raw_ptr<TestingProfile> profile_ = nullptr;
+  content::TestWebContentsFactory web_contents_factory_;
+  testing::NiceMock<MockBrowserWindowInterface> mock_browser_window_interface_;
   std::unique_ptr<content::TestWebUI> web_ui_;
   AccountInfo account_info_;
 
@@ -603,3 +616,138 @@ TEST_F(ManagedUserProfileNoticeHandleCancelTest, HandleCancelNoUseAfterFree) {
   EXPECT_EQ(handler(), nullptr);
 }
 #endif  // !BUILDFLAG(IS_CHROMEOS)
+
+#if BUILDFLAG(CHROME_FOR_TESTING)
+class ManagedUserProfileNoticeHandlerAutoApproveTest
+    : public ManagedUserProfileNoticeHandlerTestBase,
+      public testing::WithParamInterface<const char*> {};
+
+TEST_P(ManagedUserProfileNoticeHandlerAutoApproveTest, AutoApprove) {
+  base::test::ScopedCommandLine scoped_command_line;
+  scoped_command_line.GetProcessCommandLine()->AppendSwitchASCII(
+      switches::kEnterpriseSigninDialogBehaviorForTesting, GetParam());
+
+  base::test::TestFuture<signin::SigninChoice> choice_future;
+  base::test::TestFuture<void> done_future;
+
+  InitializeHandler(
+      ManagedUserProfileNoticeUI::ScreenType::kEntepriseAccountSyncEnabled,
+      std::make_unique<signin::EnterpriseProfileCreationDialogParams>(
+          account_info(),
+          /*is_oidc_account=*/false,
+          /*user_already_signed_in=*/false,
+          /*profile_creation_required_by_policy=*/false,
+          /*show_link_data_option=*/false,
+          /*process_user_choice_callback=*/
+          choice_future.GetCallback(), done_future.GetCallback()));
+
+  signin::SigninChoice expected_choice = signin::SIGNIN_CHOICE_CANCEL;
+  if (std::string(GetParam()) == "accept-new-profile") {
+    expected_choice = signin::SIGNIN_CHOICE_NEW_PROFILE;
+  } else if (std::string(GetParam()) == "accept-link-data" ||
+             std::string(GetParam()) == "accept-current-profile") {
+    expected_choice = signin::SIGNIN_CHOICE_CONTINUE;
+  }
+
+  base::ListValue args;
+  args.Append("callback-id");
+  web_ui()->HandleReceivedMessage("initialized", args);
+
+  EXPECT_EQ(expected_choice, choice_future.Get());
+  EXPECT_TRUE(done_future.Wait());
+}
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         ManagedUserProfileNoticeHandlerAutoApproveTest,
+                         testing::Values("accept-new-profile",
+                                         "accept-link-data",
+                                         "accept-current-profile",
+                                         "cancel"));
+#endif
+
+TEST_F(ManagedUserProfileNoticeHandlerTestBase, OnExtendedAccountInfoRemoved) {
+  base::MockCallback<signin::SigninChoiceCallback>
+      mock_process_user_choice_callback;
+  base::MockCallback<base::OnceClosure> mock_done_callback;
+
+  InitializeHandler(
+      ManagedUserProfileNoticeUI::ScreenType::kEnterpriseAccountCreation,
+      std::make_unique<signin::EnterpriseProfileCreationDialogParams>(
+          account_info(),
+          /*is_oidc_account=*/false,
+          /*user_already_signed_in=*/false,
+          /*profile_creation_required_by_policy=*/false,
+          /*show_link_data_option=*/false,
+          /*process_user_choice_callback=*/
+          mock_process_user_choice_callback.Get(), mock_done_callback.Get()));
+
+  EXPECT_CALL(mock_process_user_choice_callback,
+              Run(signin::SIGNIN_CHOICE_CANCEL));
+  EXPECT_CALL(mock_done_callback, Run());
+
+  handler()->OnExtendedAccountInfoRemoved(account_info());
+  DeleteHandler();
+}
+
+TEST_F(ManagedUserProfileNoticeHandlerTestBase,
+       OnOtherExtendedAccountInfoRemoved) {
+  base::MockCallback<signin::SigninChoiceCallback>
+      mock_process_user_choice_callback;
+  base::MockCallback<base::OnceClosure> mock_done_callback;
+
+  InitializeHandler(
+      ManagedUserProfileNoticeUI::ScreenType::kEnterpriseAccountCreation,
+      std::make_unique<signin::EnterpriseProfileCreationDialogParams>(
+          account_info(),
+          /*is_oidc_account=*/false,
+          /*user_already_signed_in=*/false,
+          /*profile_creation_required_by_policy=*/false,
+          /*show_link_data_option=*/false,
+          /*process_user_choice_callback=*/
+          mock_process_user_choice_callback.Get(), mock_done_callback.Get()));
+
+  EXPECT_CALL(mock_process_user_choice_callback, Run(_)).Times(0);
+  EXPECT_CALL(mock_done_callback, Run()).Times(0);
+
+  AccountInfo other_info;
+  other_info.account_id = CoreAccountId::FromGaiaId(GaiaId("other"));
+  handler()->OnExtendedAccountInfoRemoved(other_info);
+
+  testing::Mock::VerifyAndClearExpectations(&mock_process_user_choice_callback);
+  testing::Mock::VerifyAndClearExpectations(&mock_done_callback);
+
+  EXPECT_CALL(mock_process_user_choice_callback,
+              Run(signin::SIGNIN_CHOICE_CANCEL));
+  EXPECT_CALL(mock_done_callback, Run());
+
+  // This will delete the handler and trigger the `mock_done_callback` to be
+  // called.
+  DeleteHandler();
+}
+
+TEST_F(ManagedUserProfileNoticeHandlerTestBase, OnIdentityManagerShutdown) {
+  base::MockCallback<signin::SigninChoiceCallback>
+      mock_process_user_choice_callback;
+  base::MockCallback<base::OnceClosure> mock_done_callback;
+
+  InitializeHandler(
+      ManagedUserProfileNoticeUI::ScreenType::kEnterpriseAccountCreation,
+      std::make_unique<signin::EnterpriseProfileCreationDialogParams>(
+          account_info(),
+          /*is_oidc_account=*/false,
+          /*user_already_signed_in=*/false,
+          /*profile_creation_required_by_policy=*/false,
+          /*show_link_data_option=*/false,
+          /*process_user_choice_callback=*/
+          mock_process_user_choice_callback.Get(), mock_done_callback.Get()));
+
+  EXPECT_CALL(mock_process_user_choice_callback,
+              Run(signin::SIGNIN_CHOICE_CANCEL));
+  EXPECT_CALL(mock_done_callback, Run());
+
+  handler()->OnIdentityManagerShutdown(nullptr);
+  // This will delete the handler and trigger the `mock_done_callback` to be
+  // called.
+  DeleteHandler();
+}
+

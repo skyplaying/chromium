@@ -15,6 +15,7 @@
 #include "components/safe_browsing/core/browser/tailored_security_service/tailored_security_service.h"
 #include "components/safe_browsing/core/browser/tailored_security_service/tailored_security_service_observer.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
+#include "components/user_education/product_messaging/product_messaging_controller.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/safe_browsing/tailored_security/consented_message_android.h"
@@ -24,12 +25,16 @@
 #include "chrome/browser/ui/views/safe_browsing/tailored_security_desktop_dialog_manager.h"
 #endif
 
-class Browser;
+class BrowserWindowInterface;
 class Profile;
 
 #if !BUILDFLAG(IS_ANDROID)
-DECLARE_REQUIRED_NOTICE_IDENTIFIER(kEnabledEnhancedBrowsingNotice);
-DECLARE_REQUIRED_NOTICE_IDENTIFIER(kDisabledEnhancedBrowsingNotice);
+DECLARE_PRODUCT_MESSAGE_KEY(
+    kEnabledEnhancedBrowsingNotice,
+    user_education::ProductMessageType::kLegalOrComplianceNotice);
+DECLARE_PRODUCT_MESSAGE_KEY(
+    kDisabledEnhancedBrowsingNotice,
+    user_education::ProductMessageType::kLegalOrComplianceNotice);
 #endif
 
 namespace safe_browsing {
@@ -72,7 +77,7 @@ class ChromeTailoredSecurityService : public TailoredSecurityService,
 #if !BUILDFLAG(IS_ANDROID)
   void TriggerDialogDisplay(
       bool is_enabled,
-      user_education::RequiredNoticePriorityHandle messaging_priority_handle);
+      user_education::ProductMessagingHandle messaging_priority_handle);
   void ReleaseEnabledQueueHandle();
   void ReleaseDisabledQueueHandle();
   void QueueNotice(bool is_enabled);
@@ -83,7 +88,8 @@ class ChromeTailoredSecurityService : public TailoredSecurityService,
   // Shows a dialog on the provided `browser`. If `show_enable_dialog` is
   // true, display the enabled dialog; otherwise show the disabled dialog.
   // This method is virtual to support testing.
-  virtual void DisplayDesktopDialog(Browser* browser, bool show_enable_dialog);
+  virtual void DisplayDesktopDialog(BrowserWindowInterface* browser,
+                                    bool show_enable_dialog);
 #endif
 
   scoped_refptr<network::SharedURLLoaderFactory> GetURLLoaderFactory() override;
@@ -152,8 +158,8 @@ class ChromeTailoredSecurityService : public TailoredSecurityService,
   std::unique_ptr<MessageRetryHandler> retry_handler_;
 
 #if !BUILDFLAG(IS_ANDROID)
-  user_education::RequiredNoticePriorityHandle enabled_notice_handle_;
-  user_education::RequiredNoticePriorityHandle disabled_notice_handle_;
+  user_education::ProductMessagingHandle enabled_notice_handle_;
+  user_education::ProductMessagingHandle disabled_notice_handle_;
   base::WeakPtrFactory<ChromeTailoredSecurityService> weak_factory_{this};
 #endif
 };

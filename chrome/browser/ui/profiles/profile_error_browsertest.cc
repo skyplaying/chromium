@@ -10,7 +10,6 @@
 #include "base/strings/string_util.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/simple_message_box_internal.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_constants.h"
@@ -76,7 +75,7 @@ class ProfileErrorBrowserTest : public InProcessBrowserTest,
 // won't be able to corrupt it.
 #define MAYBE_CorruptedProfile DISABLED_CorruptedProfile
 #else
-// http://crbug.com/527145
+// http://crbug.com/41198880
 #define MAYBE_CorruptedProfile DISABLED_CorruptedProfile
 #endif
 

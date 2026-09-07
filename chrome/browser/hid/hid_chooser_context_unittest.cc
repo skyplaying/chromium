@@ -31,6 +31,7 @@
 #include "components/permissions/test/object_permission_context_base_mock_permission_observer.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "content/public/test/browser_task_environment.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_features.h"
 #include "google_apis/gaia/gaia_id.h"
 #include "services/device/public/cpp/device_features.h"
@@ -66,14 +67,18 @@ constexpr char kTestUserEmail[] = "user@example.com";
 constexpr uint16_t kTestUsagePage = device::mojom::kPageGenericDesktop;
 constexpr uint16_t kTestUsage = device::mojom::kGenericDesktopGamePad;
 
+#if BUILDFLAG(ENABLE_EXTENSIONS)
 constexpr char kTestExtensionId[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 // Main text fixture.
 class HidChooserContextTestBase {
  public:
   HidChooserContextTestBase() {
+#if !BUILDFLAG(IS_ANDROID)
     scoped_feature_list_.InitAndEnableFeature(
         features::kSecurityKeyHidInterfacesAreFido);
+#endif  // !BUILDFLAG(IS_ANDROID)
   }
 
   HidChooserContextTestBase(const HidChooserContextTestBase&) = delete;
@@ -133,6 +138,7 @@ class HidChooserContextTestBase {
   }
 
   HidChooserContext* context() { return context_; }
+  TestingProfile* profile() { return profile_; }
   permissions::MockPermissionObserver& permission_observer() {
     return permission_observer_;
   }
@@ -183,6 +189,7 @@ class HidChooserContextTestBase {
     return ConnectDeviceBlocking(CreateDevice(kTestSerialNumber));
   }
 
+#if BUILDFLAG(ENABLE_EXTENSIONS)
   device::mojom::HidDeviceInfoPtr ConnectFidoDeviceBlocking() {
     auto device = CreateDevice(/*serial_number=*/"");
     device->collections[0]->usage->usage_page = device::mojom::kPageFido;
@@ -208,6 +215,7 @@ class HidChooserContextTestBase {
     device->collections[0]->usage->usage = 1;
     return ConnectDeviceBlocking(std::move(device));
   }
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
   device::mojom::HidDeviceInfoPtr ConnectDeviceBlocking(
       device::mojom::HidDeviceInfoPtr device) {
@@ -254,27 +262,27 @@ class HidChooserContextTestBase {
       const url::Origin& origin,
       const device::mojom::HidDeviceInfo& device,
       const std::optional<url::Origin>& embedding_origin = std::nullopt) {
-    base::RunLoop loop;
     EXPECT_CALL(permission_observer_,
                 OnObjectPermissionChanged(
                     std::make_optional(ContentSettingsType::HID_GUARD),
-                    ContentSettingsType::HID_CHOOSER_DATA))
-        .WillOnce(RunClosure(loop.QuitClosure()));
+                    ContentSettingsType::HID_CHOOSER_DATA));
     context()->GrantDevicePermission(origin, device, embedding_origin);
-    loop.Run();
+    context()->FlushScheduledSaveSettingsCalls();
+    EXPECT_TRUE(
+        testing::Mock::VerifyAndClearExpectations(&permission_observer_));
   }
 
   void RevokeObjectPermissionBlocking(const url::Origin& origin,
                                       const base::DictValue& object) {
-    base::RunLoop loop;
     EXPECT_CALL(permission_observer_,
                 OnObjectPermissionChanged(
                     std::make_optional(ContentSettingsType::HID_GUARD),
                     ContentSettingsType::HID_CHOOSER_DATA))
-        .Times(testing::AtLeast(1))
-        .WillOnce(RunClosure(loop.QuitClosure()));
+        .Times(testing::AtLeast(1));
     context()->RevokeObjectPermission(origin, object);
-    loop.Run();
+    context()->FlushScheduledSaveSettingsCalls();
+    EXPECT_TRUE(
+        testing::Mock::VerifyAndClearExpectations(&permission_observer_));
   }
 
   void SetDynamicBlocklist(std::string_view value) {
@@ -1235,6 +1243,101 @@ TEST_P(HidChooserContextAffiliatedTest, BlocklistOverridesPolicy) {
   EXPECT_EQ(0u, context()->GetAllGrantedObjects().size());
 }
 
+TEST_F(HidChooserContextTest, ClearBrowsingDataStaleCache) {
+  const auto kOrigin = url::Origin::Create(GURL("https://google.com"));
+
+  // Connect a persistent device.
+  auto device = ConnectPersistentUsbDeviceBlocking();
+
+  // Grant permission.
+  GrantDevicePermissionBlocking(kOrigin, *device);
+  EXPECT_TRUE(context()->HasDevicePermission(kOrigin, *device));
+
+  // Simulate Clear Browsing Data.
+  // Clearing HID_CHOOSER_DATA triggers one OnObjectPermissionChanged call
+  // from NotifyPermissionRevoked().
+  EXPECT_CALL(permission_observer(),
+              OnObjectPermissionChanged(
+                  std::make_optional(ContentSettingsType::HID_GUARD),
+                  ContentSettingsType::HID_CHOOSER_DATA));
+  EXPECT_CALL(permission_observer(), OnPermissionRevoked(kOrigin));
+
+  auto* map = HostContentSettingsMapFactory::GetForProfile(profile());
+  map->ClearSettingsForOneTypeWithPredicate(
+      ContentSettingsType::HID_CHOOSER_DATA, base::Time(), base::Time::Max(),
+      HostContentSettingsMap::PatternSourcePredicate());
+
+  // Check if the permission is still returned.
+  EXPECT_FALSE(context()->HasDevicePermission(kOrigin, *device));
+}
+
+TEST_F(HidChooserContextTest, ClearBrowsingDataEphemeralDevice) {
+  const auto kOrigin = url::Origin::Create(GURL("https://google.com"));
+
+  // Connect an ephemeral device.
+  auto device = ConnectEphemeralDeviceBlocking();
+
+  // Grant permission.
+  GrantDevicePermissionBlocking(kOrigin, *device);
+  EXPECT_TRUE(context()->HasDevicePermission(kOrigin, *device));
+
+  // Simulate Clear Browsing Data.
+  // Clearing HID_CHOOSER_DATA triggers one OnObjectPermissionChanged call
+  // from NotifyPermissionRevoked().
+  EXPECT_CALL(permission_observer(),
+              OnObjectPermissionChanged(
+                  std::make_optional(ContentSettingsType::HID_GUARD),
+                  ContentSettingsType::HID_CHOOSER_DATA));
+  EXPECT_CALL(permission_observer(), OnPermissionRevoked(kOrigin));
+
+  auto* map = HostContentSettingsMapFactory::GetForProfile(profile());
+  map->ClearSettingsForOneTypeWithPredicate(
+      ContentSettingsType::HID_CHOOSER_DATA, base::Time(), base::Time::Max(),
+      HostContentSettingsMap::PatternSourcePredicate());
+  map->ClearSettingsForOneTypeWithPredicate(
+      ContentSettingsType::HID_GUARD, base::Time(), base::Time::Max(),
+      HostContentSettingsMap::PatternSourcePredicate());
+
+  // Check if the permission is still returned.
+  EXPECT_FALSE(context()->HasDevicePermission(kOrigin, *device));
+}
+
+TEST_F(HidChooserContextTest, ClearBrowsingDataRegressionFromBlock) {
+  const auto kOrigin = url::Origin::Create(GURL("https://google.com"));
+
+  // Connect a persistent device.
+  auto device = ConnectPersistentUsbDeviceBlocking();
+
+  // Grant permission.
+  GrantDevicePermissionBlocking(kOrigin, *device);
+  EXPECT_TRUE(context()->HasDevicePermission(kOrigin, *device));
+
+  // Block the origin via guard setting.
+  SetContentSettingDefaultForOrigin(kOrigin, CONTENT_SETTING_BLOCK);
+  EXPECT_FALSE(context()->HasDevicePermission(kOrigin, *device));
+
+  // Simulate Clear Browsing Data.
+  // Clearing HID_CHOOSER_DATA triggers one OnObjectPermissionChanged call
+  // from NotifyPermissionRevoked().
+  EXPECT_CALL(permission_observer(),
+              OnObjectPermissionChanged(
+                  std::make_optional(ContentSettingsType::HID_GUARD),
+                  ContentSettingsType::HID_CHOOSER_DATA));
+  EXPECT_CALL(permission_observer(), OnPermissionRevoked(kOrigin));
+
+  auto* map = HostContentSettingsMapFactory::GetForProfile(profile());
+  map->ClearSettingsForOneTypeWithPredicate(
+      ContentSettingsType::HID_CHOOSER_DATA, base::Time(), base::Time::Max(),
+      HostContentSettingsMap::PatternSourcePredicate());
+  map->ClearSettingsForOneTypeWithPredicate(
+      ContentSettingsType::HID_GUARD, base::Time(), base::Time::Max(),
+      HostContentSettingsMap::PatternSourcePredicate());
+
+  // Check if the permission is still returned.
+  EXPECT_FALSE(context()->HasDevicePermission(kOrigin, *device));
+}
+
+#if BUILDFLAG(ENABLE_EXTENSIONS)
 TEST_F(HidChooserContextTest, FidoAllowlistOverridesBlocklistDeviceIdRule) {
   const auto kFidoAllowedOrigin = url::Origin::Create(
       GURL("chrome-extension://ckcendljdlmgnhghiaomidhiiclmapok"));
@@ -1309,6 +1412,7 @@ TEST_P(HidChooserContextAffiliatedTest,
                                  kFidoAndPolicyAllowedOrigin, *device));
   EXPECT_FALSE(context()->HasDevicePermission(kOtherOrigin, *device));
 }
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 // Boolean parameter means if user is affiliated on the device. Affiliated
 // users belong to the domain that owns the device and is only meaningful
@@ -1370,6 +1474,7 @@ TEST_F(HidChooserContextLoginScreenTest, ApplyPolicyOnLoginScreen) {
 #endif
 }
 
+#if BUILDFLAG(ENABLE_EXTENSIONS)
 class HidChooserContextWebViewTest : public HidChooserContextTest {
  public:
   HidChooserContextWebViewTest() {
@@ -1477,3 +1582,4 @@ TEST_F(HidChooserContextWebViewTest, WebsitePermissionDoesNotLeakToWebView) {
   EXPECT_FALSE(context()->HasDevicePermission(kWebViewOrigin, *device,
                                               kEmbeddingOrigin));
 }
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS)

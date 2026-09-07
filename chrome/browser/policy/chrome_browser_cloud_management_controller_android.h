@@ -52,11 +52,16 @@ class ChromeBrowserCloudManagementControllerAndroid
       override;
   std::unique_ptr<enterprise_reporting::ReportingDelegateFactory>
   GetReportingDelegateFactory() override;
+  std::unique_ptr<enterprise_reporting::SaasUsageReportingDelegateFactory>
+  GetSaasUsageReportingDelegateFactory() override;
+  std::unique_ptr<enterprise_reporting::BrowserLaunchEventController>
+  CreateBrowserLaunchEventController() override;
   void SetGaiaURLLoaderFactory(scoped_refptr<network::SharedURLLoaderFactory>
                                    url_loader_factory) override;
   bool ReadyToCreatePolicyManager() override;
   bool ReadyToInit() override;
   std::unique_ptr<ClientDataDelegate> CreateClientDataDelegate() override;
+  bool CanStartExtensionInstallPolicyInvalidator() const override;
   void DeferInitialization(base::OnceClosure callback) override;
   std::unique_ptr<client_certificates::CertificateProvisioningService>
   CreateCertificateProvisioningService() override;

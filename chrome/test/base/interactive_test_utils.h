@@ -9,6 +9,7 @@
 
 #include "base/callback_list.h"
 #include "base/run_loop.h"
+#include "base/scoped_observation.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/view_ids.h"
 #include "ui/base/test/ui_controls.h"
@@ -18,7 +19,6 @@
 #include "ui/gfx/native_ui_types.h"
 #include "ui/views/widget/widget_observer.h"
 
-class Browser;
 class BrowserWindowInterface;
 
 namespace display {
@@ -33,6 +33,8 @@ class Widget;
 #endif
 
 namespace ui_test_utils {
+
+#if !BUILDFLAG(IS_ANDROID)
 
 // Use in browser interactive uitests to wait until a browser is set to active.
 // To use, create and call WaitForActivation(). Since on some platforms, the
@@ -57,6 +59,8 @@ class BrowserActivationWaiter : public views::WidgetObserver {
  private:
   bool observed_ = false;
   base::RunLoop run_loop_;
+  base::ScopedObservation<views::Widget, views::WidgetObserver> observation_{
+      this};
 };
 
 
@@ -66,14 +70,14 @@ class BrowserActivationWaiter : public views::WidgetObserver {
     const BrowserWindowInterface* browser);
 
 // Returns true if the View is focused.
-bool IsViewFocused(const Browser* browser, ViewID vid);
+bool IsViewFocused(const BrowserWindowInterface* browser, ViewID vid);
 
 // Simulates a mouse click on a View in the browser.
 void ClickOnView(views::View* view);
-void ClickOnView(const Browser* browser, ViewID vid);
+void ClickOnView(const BrowserWindowInterface* browser, ViewID vid);
 
 // Makes focus shift to the given View without clicking it.
-void FocusView(const Browser* browser, ViewID vid);
+void FocusView(const BrowserWindowInterface* browser, ViewID vid);
 
 // A collection of utilities that are used from interactive_ui_tests. These are
 // separated from ui_test_utils.h to ensure that browser_tests don't use them,
@@ -84,6 +88,8 @@ void HideNativeWindow(gfx::NativeWindow window);
 
 // Show and focus a native window. Returns true on success.
 [[nodiscard]] bool ShowAndFocusNativeWindow(gfx::NativeWindow window);
+
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 // Sends key press and release events to a `browser` or `window`. Waits until at
 // least the key release (or key press, depending on `wait_for`) events have
@@ -109,6 +115,8 @@ void HideNativeWindow(gfx::NativeWindow window);
     bool alt,
     bool command,
     ui_controls::KeyEventType wait_for = ui_controls::kKeyRelease);
+
+#if !BUILDFLAG(IS_ANDROID)
 
 // Sends a move event blocking until received. Returns true if the event was
 // successfully received. This uses ui_controls::SendMouse***NotifyWhenDone,
@@ -145,8 +153,12 @@ gfx::Point GetCenterInScreenCoordinates(const views::View* view);
 
 // Blocks until the given view is focused (or not focused, depending on
 // |focused|). Returns immediately if the state is already correct.
-void WaitForViewFocus(Browser* browser, ViewID vid, bool focused);
-void WaitForViewFocus(Browser* browser, views::View* view, bool focused);
+void WaitForViewFocus(BrowserWindowInterface* browser,
+                      ViewID vid,
+                      bool focused);
+void WaitForViewFocus(BrowserWindowInterface* browser,
+                      views::View* view,
+                      bool focused);
 #endif
 
 #if BUILDFLAG(IS_MAC)
@@ -178,6 +190,8 @@ display::Display GetSecondaryDisplay(display::Screen* screen);
 // second one is the other display.
 std::pair<display::Display, display::Display> GetDisplays(
     display::Screen* screen);
+
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 }  // namespace ui_test_utils
 

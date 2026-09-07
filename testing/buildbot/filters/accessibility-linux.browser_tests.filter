@@ -2,13 +2,6 @@
 # followed by tests which are also flaky on other bots. Tests which are not
 # appropriate for this bot should be placed at the end of this file.
 
-# Flaky mostly on the accessibility bot, due to a timeout: crbug.com/483542952
--HistogramsInternalsUIBrowserTest.NoDummyHistograms
--HistogramsInternalsUIBrowserTest.RefreshHistograms
--HistogramsInternalsUIBrowserTest.StopMonitoring
--HistogramsInternalsUIBrowserTest.SubprocessCheckbox
--PrefsInternalsTest.TestPrefsAreServed
-
 # Flaky on Linux: crbug.com/483413077
 -AccessCodeCastTest.PasscodeInput
 -AccessCodeCastTest.PasscodeInput__PasscodeInputElementTest_cursor_is_rendered_correctly
@@ -48,6 +41,20 @@
 
 # Recently starting failing on Linux: crbug.com/483514148
 -BrowsingDataRemoverBrowserTest.StorageRemovedFromDisk
+
+# Flaky on multiple bots: crbug.com/479257786, crbug.com/487147580
+-ContextualTasksBrowserTest.App
+
+# Flaky on multiple bots: crbug.com/486274196
+-ContextualTasksBrowserTest.App__ContextualTasksAppTest_sets_basic_mode_when_navigating_from_AI_page
+-ContextualTasksBrowserTest.App__ContextualTasksAppTest_restores_basic_mode_state_after_navigation_when_starting_in_basic_mode
+
+# Flaky on multiple bots: crbug.com/487150533
+-ContextualTasksBrowserTest.App__ContextualTasksAppTest_updates_clip_path_on_post_message
+
+# Flaky on most bots: crbug.com/480689282, crbug.om/485413321
+-ContextualTasksBrowserTest.Composebox
+-ContextualTasksBrowserTest.Composebox__ContextualTasksComposeboxTest_Composebox_upload_disabled_when_uploading_files_with_contextMenu
 
 # Flaky on most bots: crbug.com/483298485
 -CrElementsTest.CrToast
@@ -89,8 +96,14 @@
 # Flaky on most bots: crbug.com/483506399
 -GlicInstanceCoordinatorBrowserTest.DeactivationWhenSwitchingToUnboundTab
 
+# Flaky on Linux: crbug.com/487897248
+-GlicInstanceCoordinatorBrowserTest.TabContentsDaisyChaining
+
 # Flaky on Linux: crbug.com/350991033, which was closed as a duplicate of restricted-access crbug.com/377951068
 -LensOverlayControllerContextualFeaturesDisabledTest.PreselectionToastOmniboxFocusState
+
+# Flaky on Linux: crbug.com/460308418
+-LensOverlayControllerReinvocationBrowserTest.NotifiesSidePanelOfOverlayVisibilityChanges
 
 # Flaky on most bots: crbug.com/474801547
 -MLPromotionBrowserTest.MLPipelineNoCrashForExistingTracker
@@ -115,6 +128,9 @@
 # Flaky on some Linux and Mac bots: crbug.com/483651797
 -PrerenderPageLoadMetricsObserverBrowserTest.ResponseBodyReceivedAfterActivation
 
+# Flaky on most bots: crbug.com/485416863
+-ProfilePickerEnterpriseCreationFlowBrowserTest.CreateSignedInProfileWithSuggestedTwoFactorAuthSetup
+
 # Flaky on most bots: crbug.com/375344340
 -PreviewBrowserTest.ErrorOnNonHttpsUrl
 -PreviewBrowserTest.ErrorOnRedirectionToNonHttpsUrl
@@ -125,6 +141,9 @@
 -PreviewBrowserTest.ZoomIsDurableForHost
 -PreviewBrowserTest.ZoomUsageRecordedOnCancel
 -PreviewBrowserTest.ZoomUsageRecordedOnPromoteToNewTab
+
+# Flaky on Linux: crbug.com/487944765
+-ProfileManagementDisclaimerServiceBrowserFocusBrowserTest.Test/Managed_EnforcedByPolicy_Cancel
 
 # Flaky on most bots: crbug.com/483092903
 -RecentActivityBubbleDialogViewActionBrowserTest.HandlesActionFocusTab
@@ -154,8 +173,14 @@
 -SkillsBrowserTest.UserSkillsPage
 -SkillsBrowserTest.UserSkillsPage__UserSkillsPage_CopySkillInstructionsToClipboard
 
+# Flaky on most bots: crbug.com/487944774
+-SkillsInteractiveUiTest.UpdateSkillPreviews
+
 # Flaky on Linux: crbug.com/483092911
 -SSLUITestWithWebApps.InAppTestHTTPSExpiredCertAndPreviouslyProceeded
+
+# Flaky on all bots: crbug.com/484997712
+-StartupBrowserWithListAppsFeature.ListAppsForAllProfiles
 
 # Flaky on Linux: crbug.com/483092912
 -TabRestoreTest.RestoreGroupWithUnloadHandlerRejected
@@ -166,6 +191,12 @@
 
 # Flaky on Linux: crbug.com/483903191
 -TranslateBubbleViewBrowserTest.OpeningFindBarClosesTranslateBubble
+
+# Flaky on most bots: crbug.com/486311611
+-UpdaterAppTest.EventListTest
+
+# Flay on most bots: crbug.com/486316383
+-UpdaterAppTest.EventListTest__EventListElement_handles_parse_errors
 
 # Flaky on Linux, skipped on most other bots: crbug.com/483298489
 -WebAppEngagementBrowserTest.CommandLineWindowByAppId
@@ -196,6 +227,7 @@
 -AccessibilityLabelsBrowserTest.NotEnabledWithoutScreenReader
 -All/PdfOcrControllerBrowserTest.NotEnabledWithoutScreenReader/0
 -AXMainNodeAnnotatorControllerBrowserTest.NotEnabledWithoutScreenReader
+-DownloadToolbarUIControllerBrowserTest.AutoCloseDelayDefaultAndAccessibility
 -PersistentBackground/AutomationApiTestWithContextType.ImageLabels/0
 -PersistentBackground/AutomationApiTestWithContextType.TestRendererAccessibilityEnabled/0
 -ServiceWorker/AutomationApiTestWithContextType.ImageLabels/0
@@ -204,3 +236,17 @@
 # WebUI TabStrip tests are not activated in Screen Reader mode.
 -WebUITabStripContainerViewTest.*
 -WebUITabStripDevToolsTest.*
+
+# Flaky at least on Linux: crbug.com/502373073
+-PasswordGenerationInteractiveTest.PopupShownManuallyAndPasswordErased
+-PasswordGenerationInteractiveTest.PopupShownAndPasswordSelected
+
+# Times out on Linux accessibility: crbug.com/546479367
+-PKIMetadataComponentChromeRootStoreMtcMetadataTest.Revocation*
+
+# Flaky: crbug.com/546808320
+-CrComponentsSearchboxTest.SearchboxIconTest
+-CrComponentsSearchboxTest.SearchboxIconTest__CrComponentsSearchboxIconTest_inSearchbox_renders_favicon_for_navigation_match
+
+# Times out on Linux accessibility: https://crbug.com/553341288
+-TranslateManagerBrowserTest.IsReadingModeOpen

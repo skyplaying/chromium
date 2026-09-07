@@ -114,6 +114,7 @@ class PageInfo : private content_settings::CookieControlsObserver,
     SAFE_BROWSING_STATUS_BILLING,
     SAFE_BROWSING_STATUS_MANAGED_POLICY_WARN,
     SAFE_BROWSING_STATUS_MANAGED_POLICY_BLOCK,
+    SAFE_BROWSING_STATUS_WARNABLE_SUSPICIOUS_SITE,
   };
 
   // Events for UMA. Do not reorder or change! Exposed in header so enum is
@@ -157,6 +158,11 @@ class PageInfo : private content_settings::CookieControlsObserver,
     base::Time last_used;
     // Whether the permission is in use.
     bool is_in_use = false;
+
+#if BUILDFLAG(IS_ANDROID)
+    // Whether the permission was requested in this session.
+    bool is_requested = false;
+#endif  // BUILDFLAG(IS_ANDROID)
   };
 
   // Creates a PageInfo for the passed |url| using the given |ssl| status
@@ -176,16 +182,6 @@ class PageInfo : private content_settings::CookieControlsObserver,
   // Called when the third-party blocking toggle in the cookies subpage gets
   // clicked.
   void OnThirdPartyToggleClicked(bool block_third_party_cookies);
-
-  // Checks whether this permission is currently the factory default, as set by
-  // Chrome. Specifically, that the following three conditions are true:
-  //   - The current active setting comes from the default or pref provider.
-  //   - The setting is the factory default setting (as opposed to a global
-  //     default setting set by the user).
-  //   - The setting is a wildcard setting applying to all origins (which can
-  //     only be set from the default provider).
-  static bool IsPermissionFactoryDefault(const PermissionInfo& info,
-                                         bool is_incognito);
 
   // Returns whether this page info is for an internal page.
   static bool IsFileOrInternalPage(const GURL& url);
@@ -246,8 +242,13 @@ class PageInfo : private content_settings::CookieControlsObserver,
   // Handles opening the connection help center page and records the event.
   void OpenConnectionHelpCenterPage(const ui::Event& event);
 
-  // Handles opening the Safe Browsing help center page.
-  void OpenSafeBrowsingHelpCenterPage(const ui::Event& event);
+  // Handles opening the Safe Browsing help center page and records the event.
+  void OpenSafeBrowsingHelpCenterPage(const ui::Event* event = nullptr,
+                                      bool is_suspicious_site = false);
+
+  // Notifies delegate of Suspicious Site Warning user actions.
+  void OnSuspiciousSiteBackToSafety();
+  void OnSuspiciousSiteMarkAsSafe();
 
   // Handles opening the settings page for a permission.
   void OpenContentSettingsExceptions(ContentSettingsType content_settings_type);
@@ -283,6 +284,8 @@ class PageInfo : private content_settings::CookieControlsObserver,
   const SafeBrowsingStatus& safe_browsing_status() const {
     return safe_browsing_status_;
   }
+
+  const GURL& site_url() const { return site_url_; }
 
   // For most sites, this returns a human-friendly string based on site origin,
   // without scheme, the username and password, the path or trivial subdomains.
@@ -355,8 +358,6 @@ class PageInfo : private content_settings::CookieControlsObserver,
   // presented in a headset.
   void PresentPageFeatureInfo();
 
-  // Sets (presents) the information about ad personalization in the |ui_|.
-  void PresentAdPersonalizationData();
 
 #if BUILDFLAG(FULL_SAFE_BROWSING)
   // Records a password reuse event. If FULL_SAFE_BROWSING is defined, this

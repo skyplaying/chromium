@@ -11,22 +11,23 @@
 #include "chrome/browser/devtools/chrome_devtools_manager_delegate.h"
 #include "chrome/browser/devtools/devtools_browser_context_manager.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/browser_window/public/desktop_browser_window_capabilities.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/webui_url_constants.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/common/url_utils.h"
+#include "ui/base/base_window.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/geometry/rect.h"
 
 namespace {
@@ -35,12 +36,7 @@ NavigateParams CreateNavigateParams(Profile* profile,
                                     ui::PageTransition transition,
                                     bool new_window,
                                     bool background,
-                                    BrowserWindowInterface* bwi) {
-  Browser* browser = nullptr;
-  if (!new_window && bwi) {
-    browser = bwi->GetBrowserForMigrationOnly();
-  }
-
+                                    BrowserWindowInterface* browser) {
   DCHECK(new_window || browser);
   NavigateParams params(profile, url, transition);
   if (new_window) {
@@ -165,12 +161,18 @@ protocol::Response TargetHandler::CreateTarget(
     gurl = GURL(url::kAboutBlankURL);
   }
 
-  if (!is_trusted_ && gurl.SchemeIs(content::kChromeUIUntrustedScheme)) {
-    return protocol::Response::ServerError(
-        "Refusing to create a target with the specified URL");
+  GURL inner_url = gurl;
+  if (gurl.SchemeIs(content::kViewSourceScheme)) {
+    inner_url = GURL(gurl.GetContent());
   }
 
-  if (!may_read_local_files_ && gurl.SchemeIsFile()) {
+  if (!is_trusted_ && (inner_url.SchemeIs(content::kChromeUIUntrustedScheme) ||
+                       inner_url.SchemeIs(content::kChromeDevToolsScheme))) {
+    return protocol::Response::ServerError(
+        "Navigating to a URL with a privileged scheme is not allowed");
+  }
+
+  if (!may_read_local_files_ && inner_url.SchemeIsFile()) {
     return protocol::Response::ServerError(
         "Creating a target with a local URL is not allowed");
   }
@@ -238,8 +240,7 @@ protocol::Response TargetHandler::CreateTarget(
     } else if (*window_state == protocol::Target::WindowStateEnum::Maximized) {
       params.browser->GetWindow()->Maximize();
     } else if (*window_state == protocol::Target::WindowStateEnum::Fullscreen) {
-      params.browser->GetFeatures()
-          .exclusive_access_manager()
+      ExclusiveAccessManager::From(params.browser)
           ->fullscreen_controller()
           ->ToggleBrowserFullscreenMode(/*user_initiated=*/false);
     } else {

@@ -6,11 +6,14 @@
 
 #include <utility>
 
+#include "base/check.h"
+#include "base/check_op.h"
 #include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/logging.h"
 #include "base/memory/raw_ptr.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/notreached.h"
 #include "base/observer_list.h"
 #include "base/one_shot_event.h"
 #include "base/strings/string_util.h"
@@ -29,9 +32,9 @@
 #include "chrome/browser/notifications/notification_display_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
@@ -45,6 +48,7 @@
 #include "extensions/browser/image_loader.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension.h"
+#include "extensions/common/extension_features.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/extension_set.h"
 #include "extensions/common/icons/extension_icon_set.h"
@@ -53,6 +57,7 @@
 #include "extensions/grit/extensions_browser_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/image/image.h"
 #include "ui/message_center/public/cpp/notification.h"
 #include "ui/message_center/public/cpp/notification_delegate.h"
@@ -147,14 +152,21 @@ class CrashNotificationDelegate : public message_center::NotificationDelegate {
   extensions::ExtensionId extension_id_;
 };
 
-void ReloadExtension(const std::string& extension_id, Profile* profile) {
-  if (g_browser_process->IsShuttingDown() ||
-      !g_browser_process->profile_manager()->IsValidProfile(profile)) {
+void ReloadExtension(const std::string& extension_id,
+                     base::WeakPtr<Profile> profile) {
+  if (!profile) {
     return;
   }
 
-  auto* extension_registrar = extensions::ExtensionRegistrar::Get(profile);
-  auto* extension_registry = extensions::ExtensionRegistry::Get(profile);
+  if (g_browser_process->IsShuttingDown() ||
+      !g_browser_process->profile_manager() ||
+      !g_browser_process->profile_manager()->IsValidProfile(profile.get())) {
+    return;
+  }
+
+  auto* extension_registrar =
+      extensions::ExtensionRegistrar::Get(profile.get());
+  auto* extension_registry = extensions::ExtensionRegistry::Get(profile.get());
   if (!extension_registrar || !extension_registry) {
     return;
   }
@@ -197,6 +209,8 @@ const net::BackoffEntry::Policy kExtensionReloadBackoffPolicy = {
 };
 
 int BackgroundContentsService::restart_delay_in_ms_ = 3000;  // 3 seconds.
+// Used to simulate browser shutdown without destroying the real browser
+// process in browser tests.
 
 BackgroundContentsService::BackgroundContentsService(Profile* profile)
     : profile_(profile) {
@@ -242,6 +256,7 @@ void BackgroundContentsService::ShowBalloonForTesting(
 std::vector<BackgroundContents*>
 BackgroundContentsService::GetBackgroundContents() const {
   std::vector<BackgroundContents*> contents;
+  contents.reserve(contents_map_.size());
   for (auto it = contents_map_.begin(); it != contents_map_.end(); ++it)
     contents.push_back(it->second.contents.get());
   return contents;
@@ -410,7 +425,8 @@ void BackgroundContentsService::RestartForceInstalledExtensionOnCrash(
   // OnExtensionUnloaded() notification and checked the unload reason.
   DCHECK_GT(restart_delay, 0);
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-      FROM_HERE, base::BindOnce(&ReloadExtension, extension->id(), profile_),
+      FROM_HERE,
+      base::BindOnce(&ReloadExtension, extension->id(), profile_->GetWeakPtr()),
       base::Milliseconds(restart_delay));
 }
 
@@ -497,12 +513,22 @@ void BackgroundContentsService::LoadBackgroundContentsFromDictionary(
   if (!dict)
     return;
 
-  const std::string* maybe_frame_name = dict->FindString(kUrlKey);
-  const std::string* maybe_url = dict->FindString(kFrameNameKey);
+  const std::string* maybe_url = dict->FindString(kUrlKey);
+  const std::string* maybe_frame_name = dict->FindString(kFrameNameKey);
   std::string frame_name = maybe_frame_name ? *maybe_frame_name : std::string();
   std::string url = maybe_url ? *maybe_url : std::string();
 
-  LoadBackgroundContents(GURL(url), frame_name, extension_id);
+  GURL gurl(url);
+  const Extension* extension = extensions::ExtensionRegistry::Get(profile_)
+                                   ->enabled_extensions()
+                                   .GetByID(extension_id);
+  if (base::FeatureList::IsEnabled(
+          extensions_features::kBlockBackgroundContentsOffExtentNavigation) &&
+      extension && !extension->web_extent().MatchesURL(gurl)) {
+    return;
+  }
+
+  LoadBackgroundContents(gurl, frame_name, extension_id);
 }
 
 void BackgroundContentsService::LoadBackgroundContentsFromManifests() {
@@ -543,7 +569,7 @@ BackgroundContents* BackgroundContentsService::CreateBackgroundContents(
     const std::string& frame_name,
     const std::string& application_id,
     const content::StoragePartitionConfig& partition_config,
-    content::SessionStorageNamespace* session_storage_namespace) {
+    content::SessionStorageNamespaceHandle* session_storage_namespace) {
   auto contents = std::make_unique<BackgroundContents>(
       std::move(site), opener, is_new_browsing_instance, this, partition_config,
       session_storage_namespace);
@@ -639,6 +665,11 @@ bool BackgroundContentsService::IsTracked(
   return !GetParentApplicationId(background_contents).empty();
 }
 
+bool BackgroundContentsService::IsTracked(
+    content::WebContents* web_contents) const {
+  return !GetParentApplicationId(web_contents).empty();
+}
+
 void BackgroundContentsService::AddObserver(
     BackgroundContentsServiceObserver* observer) {
   observers_.AddObserver(observer);
@@ -664,14 +695,27 @@ const std::string& BackgroundContentsService::GetParentApplicationId(
   return base::EmptyString();
 }
 
+const std::string& BackgroundContentsService::GetParentApplicationId(
+    content::WebContents* contents) const {
+  for (const auto& [id, background_contents_info] : contents_map_) {
+    if (background_contents_info.contents &&
+        background_contents_info.contents->web_contents() == contents) {
+      return id;
+    }
+  }
+  return base::EmptyString();
+}
+
 void BackgroundContentsService::AddWebContents(
     std::unique_ptr<WebContents> new_contents,
     const GURL& target_url,
     WindowOpenDisposition disposition,
     const blink::mojom::WindowFeatures& window_features,
     bool* was_blocked) {
-  Browser* browser = chrome::FindLastActiveWithProfile(
-      Profile::FromBrowserContext(new_contents->GetBrowserContext()));
+  BrowserWindowInterface* const browser =
+      ProfileBrowserCollection::GetForProfile(
+          Profile::FromBrowserContext(new_contents->GetBrowserContext()))
+          ->GetLastActiveBrowser();
   if (browser) {
     chrome::AddWebContents(browser, nullptr, std::move(new_contents),
                            target_url, disposition, window_features);
@@ -688,8 +732,17 @@ void BackgroundContentsService::OnBackgroundContentsNavigated(
       extensions::ExtensionRegistry::Get(profile_);
   const Extension* extension =
       extension_registry->enabled_extensions().GetByID(appid);
-  if (extension && BackgroundInfo::HasBackgroundPage(extension))
-    return;
+  if (extension) {
+    if (BackgroundInfo::HasBackgroundPage(extension)) {
+      return;
+    }
+    if (base::FeatureList::IsEnabled(
+            extensions_features::kBlockBackgroundContentsOffExtentNavigation) &&
+        !extension->web_extent().MatchesURL(contents->GetURL())) {
+      UnregisterBackgroundContents(contents);
+      return;
+    }
+  }
   RegisterBackgroundContents(contents);
 }
 

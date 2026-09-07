@@ -7,6 +7,7 @@
 
 #include <array>
 
+#include "base/memory/raw_ptr.h"
 #include "third_party/blink/public/mojom/preloading/anchor_element_interaction_host.mojom-blink.h"
 #include "third_party/blink/public/mojom/speculation_rules/speculation_rules.mojom-blink.h"
 #include "third_party/blink/renderer/core/html/anchor_element_viewport_position_tracker.h"
@@ -95,7 +96,8 @@ class BLINK_EXPORT AnchorElementInteractionTracker
     Deque<MousePositionAndTimeStamp> mouse_position_and_timestamps_;
     HeapTaskRunnerTimer<AnchorElementInteractionTracker::MouseMotionEstimator>
         update_timer_;
-    const base::TickClock* clock_;
+    raw_ptr<const base::TickClock, UnprotectedInRelease | DanglingUntriaged>
+        clock_;
   };
 
   explicit AnchorElementInteractionTracker(Document& document);
@@ -134,6 +136,8 @@ class BLINK_EXPORT AnchorElementInteractionTracker
   void AnchorPositionsUpdated(
       HeapVector<Member<AnchorPositionUpdate>>& position_updates) override;
 
+  bool IsPreloadingEligible();
+
   Member<MouseMotionEstimator> mouse_motion_estimator_;
   HeapMojoRemote<mojom::blink::AnchorElementInteractionHost> interaction_host_;
   // This hashmap contains the anchor element's url, whether the pointer event
@@ -151,7 +155,8 @@ class BLINK_EXPORT AnchorElementInteractionTracker
       hover_event_candidates_;
 
   HeapTaskRunnerTimer<AnchorElementInteractionTracker> hover_timer_;
-  const base::TickClock* clock_;
+  raw_ptr<const base::TickClock, UnprotectedInRelease | DanglingUntriaged>
+      clock_;
   Member<Document> document_;
   // Stores y-coordinate of the two most recent pointerdowns (first entry is
   // the most recent pointer down).

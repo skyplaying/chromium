@@ -58,6 +58,10 @@ crypto::UnexportableKeyProvider::Config GetConfigForUserDataDir(
 // - The bundle and team identifiers to scope it to the application.
 // - A hash of the current profile's user data directory.
 // - The profile's name to uniquely identify the profile.
+//
+// NOTE: This tag will end in the separator "." following the profile name,
+// since profile names could be a prefix of other profile names. For example,
+// "Profile 1" and "Profile 10".
 crypto::UnexportableKeyProvider::Config GetConfigForProfilePath(
     const base::FilePath& profile_path);
 
@@ -111,7 +115,7 @@ std::string GetApplicationTag(crypto::UnexportableKeyProvider::Config config);
 // where the tag is prefixed by one of the `active_application_tag_prefixes`.
 // Returns the number of keys removed.
 size_t FilterUnexportableKeysByActiveApplicationTags(
-    std::vector<UnexportableKeyId>& key_ids,
+    std::vector<UnexportableSigningKeyId>& key_ids,
     UnexportableKeyService& key_service,
     const base::flat_set<std::string>& active_application_tag_prefixes);
 

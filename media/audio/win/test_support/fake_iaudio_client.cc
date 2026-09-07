@@ -133,6 +133,7 @@ IFACEMETHODIMP FakeIAudioClient::Initialize(AUDCLNT_SHAREMODE share_mode,
       (format->nSamplesPerSec * kSamplingPeriodMs.InMicroseconds()) /
       base::Time::kMicrosecondsPerSecond);
   frame_size_bytes_ = (format->wBitsPerSample / 8) * format->nChannels;
+
   return S_OK;
 }
 

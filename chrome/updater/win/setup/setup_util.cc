@@ -14,7 +14,6 @@
 #include <cstring>
 #include <optional>
 #include <string>
-#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -38,7 +37,7 @@
 #include "chrome/updater/app/server/win/updater_internal_idl.h"
 #include "chrome/updater/app/server/win/updater_legacy_idl.h"
 #include "chrome/updater/constants.h"
-#include "chrome/updater/updater_scope.h"
+#include "chrome/updater/get_updater_scope.h"
 #include "chrome/updater/util/util.h"
 #include "chrome/updater/util/win_util.h"
 #include "chrome/updater/win/task_scheduler.h"
@@ -427,14 +426,14 @@ void AddComServiceWorkItems(const base::FilePath& com_service_path,
 
   const std::wstring language = base::UTF8ToWide(GetTagLanguage());
   list->AddWorkItem(new installer::InstallServiceWorkItem(
-      GetServiceName(internal_service).c_str(),
+      GetServiceName(internal_service),
       GetLocalizedString(internal_service
                              ? IDS_INTERNAL_UPDATER_SERVICE_DISPLAY_NAME_BASE
                              : IDS_UPDATER_SERVICE_DISPLAY_NAME_BASE,
                          language),
       GetLocalizedString(IDS_UPDATER_SERVICE_DESCRIPTION_BASE, language),
       SERVICE_AUTO_START, com_service_command, com_switch, UPDATER_KEY, clsids,
-      {}));
+      {}, {}));
 
   for (const auto& clsid : clsids) {
     AddInstallComProgIdWorkItems(UpdaterScope::kSystem, clsid, list);
@@ -521,8 +520,9 @@ HRESULT RegisterTypeLibs(UpdaterScope scope, bool is_internal) {
     std::wstring typelib_path_str = typelib_path.value().c_str();
     const HRESULT hr =
         IsSystemInstall(scope)
-            ? ::RegisterTypeLib(type_lib.Get(), &typelib_path_str[0], nullptr)
-            : ::RegisterTypeLibForUser(type_lib.Get(), &typelib_path_str[0],
+            ? ::RegisterTypeLib(type_lib.Get(), typelib_path_str.data(),
+                                nullptr)
+            : ::RegisterTypeLibForUser(type_lib.Get(), typelib_path_str.data(),
                                        nullptr);
     if (FAILED(hr)) {
       LOG(ERROR) << __func__ << " ::GetTypeInfoOfGuid failed" << ", "
@@ -723,7 +723,9 @@ void RegisterWakeTaskWorkItem::RollbackImpl() {
   if (!task_scheduler) {
     return;
   }
-  std::ignore = task_scheduler->DeleteTask(task_name_);
+  if (!task_scheduler->DeleteTask(task_name_)) {
+    VLOG(1) << "Rollback failed to delete task: " << task_name_;
+  }
 }
 
 }  // namespace updater

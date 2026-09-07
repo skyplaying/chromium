@@ -25,6 +25,7 @@
 
 #include "third_party/blink/renderer/modules/webaudio/panner_node.h"
 
+#include "third_party/blink/renderer/bindings/modules/v8/v8_automation_rate.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_panner_options.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_graph_tracer.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_listener.h"
@@ -53,42 +54,42 @@ PannerNode::PannerNode(BaseAudioContext& context)
           Uuid(),
           AudioParamHandler::AudioParamType::kParamTypePannerPositionX,
           kDefaultPositionXValue,
-          AudioParamHandler::AutomationRate::kAudio,
+          V8AutomationRate::Enum::kARate,
           AudioParamHandler::AutomationRateMode::kVariable)),
       position_y_(AudioParam::Create(
           context,
           Uuid(),
           AudioParamHandler::AudioParamType::kParamTypePannerPositionY,
           kDefaultPositionYValue,
-          AudioParamHandler::AutomationRate::kAudio,
+          V8AutomationRate::Enum::kARate,
           AudioParamHandler::AutomationRateMode::kVariable)),
       position_z_(AudioParam::Create(
           context,
           Uuid(),
           AudioParamHandler::AudioParamType::kParamTypePannerPositionZ,
           kDefaultPositionZValue,
-          AudioParamHandler::AutomationRate::kAudio,
+          V8AutomationRate::Enum::kARate,
           AudioParamHandler::AutomationRateMode::kVariable)),
       orientation_x_(AudioParam::Create(
           context,
           Uuid(),
           AudioParamHandler::AudioParamType::kParamTypePannerOrientationX,
           kDefaultOrientationXValue,
-          AudioParamHandler::AutomationRate::kAudio,
+          V8AutomationRate::Enum::kARate,
           AudioParamHandler::AutomationRateMode::kVariable)),
       orientation_y_(AudioParam::Create(
           context,
           Uuid(),
           AudioParamHandler::AudioParamType::kParamTypePannerOrientationY,
           kDefaultOrientationYValue,
-          AudioParamHandler::AutomationRate::kAudio,
+          V8AutomationRate::Enum::kARate,
           AudioParamHandler::AutomationRateMode::kVariable)),
       orientation_z_(AudioParam::Create(
           context,
           Uuid(),
           AudioParamHandler::AudioParamType::kParamTypePannerOrientationZ,
           kDefaultOrientationZValue,
-          AudioParamHandler::AutomationRate::kAudio,
+          V8AutomationRate::Enum::kARate,
           AudioParamHandler::AutomationRateMode::kVariable)),
       listener_(context.listener()) {
   SetHandler(PannerHandler::Create(
@@ -101,7 +102,14 @@ PannerNode* PannerNode::Create(BaseAudioContext& context,
                                ExceptionState& exception_state) {
   DCHECK(IsMainThread());
 
-  return MakeGarbageCollected<PannerNode>(context);
+  auto* node = MakeGarbageCollected<PannerNode>(context);
+  if (!node->GetPannerHandler().InitializeSampleAccurateArrays()) {
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kNotSupportedError,
+        "Failed to initialize PannerNode due to insufficient memory.");
+    return nullptr;
+  }
+  return node;
 }
 
 PannerNode* PannerNode::Create(BaseAudioContext* context,

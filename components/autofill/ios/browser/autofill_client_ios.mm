@@ -7,6 +7,7 @@
 #import "base/containers/flat_set.h"
 #import "base/memory/weak_ptr.h"
 #import "base/no_destructor.h"
+#import "components/autofill/ios/browser/autofill_driver_ios.h"
 #import "ios/web/public/web_state_user_data.h"
 
 namespace autofill {
@@ -60,6 +61,19 @@ AutofillClientIOS::~AutofillClientIOS() {
 
 AutofillDriverIOSFactory& AutofillClientIOS::GetAutofillDriverFactory() {
   return autofill_driver_factory_;
+}
+
+std::u16string_view AutofillClientIOS::GetPageTitle() const {
+  CHECK(web_state());
+  return web_state()->GetTitle();
+}
+
+AutofillManager* AutofillClientIOS::GetAutofillManagerForPrimaryMainFrame() {
+  if (AutofillDriverIOS* driver =
+          GetAutofillDriverFactory().DriverForMainFrame()) {
+    return &driver->GetAutofillManager();
+  }
+  return nullptr;
 }
 
 base::WeakPtr<AutofillClientIOS> AutofillClientIOS::AsWeakPtr() {

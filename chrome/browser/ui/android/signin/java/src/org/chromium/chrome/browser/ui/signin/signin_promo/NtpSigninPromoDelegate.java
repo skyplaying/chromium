@@ -19,6 +19,7 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.signin.services.DisplayableProfileData;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
 import org.chromium.chrome.browser.signin.services.SigninManager;
 import org.chromium.chrome.browser.signin.services.SigninPreferencesManager;
@@ -28,13 +29,12 @@ import org.chromium.chrome.browser.ui.signin.SigninSurveyController;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
 import org.chromium.components.signin.SigninFeatureMap;
 import org.chromium.components.signin.SigninFeatures;
-import org.chromium.components.signin.base.CoreAccountInfo;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.components.signin.metrics.SigninAccessPoint;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
+import java.util.function.BooleanSupplier;
 
 /** {@link SigninPromoDelegate} for ntp signin promo. */
 @NullMarked
@@ -95,8 +95,10 @@ public class NtpSigninPromoDelegate extends SigninPromoDelegate {
             Context context,
             Profile profile,
             SigninAndHistorySyncActivityLauncher launcher,
-            Runnable onPromoStateChange) {
+            Runnable onPromoStateChange,
+            BooleanSupplier isSetupListActiveSupplier) {
         super(context, profile, launcher, onPromoStateChange);
+        // TODO(crbug.com/469425754): Deprecate isSetupListActiveSupplier.
         resetNtpSyncPromoLimitsIfHiddenForTooLong();
     }
 
@@ -175,7 +177,7 @@ public class NtpSigninPromoDelegate extends SigninPromoDelegate {
     }
 
     @Override
-    boolean refreshPromoState(@Nullable CoreAccountInfo visibleAccount) {
+    boolean refreshPromoState(@Nullable DisplayableProfileData visibleAccount) {
         @PromoState int newState = computePromoState(visibleAccount);
         boolean wasStateChanged = mPromoState != newState;
         mPromoState = newState;
@@ -241,7 +243,7 @@ public class NtpSigninPromoDelegate extends SigninPromoDelegate {
                 SigninPreferencesManager.SigninPromoAccessPointId.NTP);
     }
 
-    private @PromoState int computePromoState(@Nullable CoreAccountInfo visibleAccount) {
+    private @PromoState int computePromoState(@Nullable DisplayableProfileData visibleAccount) {
         if (SigninFeatureMap.isEnabled(SigninFeatures.ENABLE_SEAMLESS_SIGNIN)
                 && isPromoSuppressed()) {
             return PromoState.NONE;
@@ -251,7 +253,8 @@ public class NtpSigninPromoDelegate extends SigninPromoDelegate {
         assumeNonNull(identityManager);
         SigninManager signinManager = IdentityServicesProvider.get().getSigninManager(mProfile);
         assumeNonNull(signinManager);
-        if (identityManager.hasPrimaryAccount(ConsentLevel.SIGNIN)
+        if (!signinManager.isSigninSupported(/* requireUpdatedPlayServices= */ true)
+                || identityManager.hasPrimaryAccount()
                 || !signinManager.isSigninAllowed()) {
             return PromoState.NONE;
         }
@@ -269,7 +272,8 @@ public class NtpSigninPromoDelegate extends SigninPromoDelegate {
             return PromoState.SIGNIN;
         }
         // Don't show the promo if account image is not available yet.
-        return identityManager.findExtendedAccountInfoByAccountId(visibleAccount.getId()) == null
+        return identityManager.findExtendedAccountInfoByAccountId(visibleAccount.getAccountId())
+                        == null
                 ? PromoState.NONE
                 : PromoState.SIGNIN;
     }

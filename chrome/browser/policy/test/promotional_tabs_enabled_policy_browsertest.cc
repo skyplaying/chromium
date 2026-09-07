@@ -18,7 +18,6 @@
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/prefs/session_startup_pref.h"
 #include "chrome/browser/search/search.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/webui/whats_new/whats_new_ui.h"
@@ -171,7 +170,7 @@ class PromotionalTabsEnabledPolicyWhatsNewTest
   }
 };
 
-// This is disabled due to flakiness: https://crbug.com/1362518
+// This is disabled due to flakiness: https://crbug.com/40864308
 #define MAYBE_RunTest DISABLED_RunTest
 IN_PROC_BROWSER_TEST_P(PromotionalTabsEnabledPolicyWhatsNewTest,
                        MAYBE_RunTest) {
@@ -188,8 +187,8 @@ IN_PROC_BROWSER_TEST_P(PromotionalTabsEnabledPolicyWhatsNewTest,
   if (promotions_disabled) {
     // Only the NTP should show.
     EXPECT_EQ(tab_strip->count(), 1);
-    if (url.possibly_invalid_spec() != chrome::kChromeUINewTabURL) {
-      EXPECT_PRED2(search::IsNTPOrRelatedURL, url, browser()->profile());
+    if (url != chrome::ChromeUINewTabURLAsGURL()) {
+      EXPECT_PRED2(search::IsNTPOrRelatedURL, url, browser()->GetProfile());
     }
   } else {
     EXPECT_EQ(tab_strip->count(), 2);
@@ -199,7 +198,7 @@ IN_PROC_BROWSER_TEST_P(PromotionalTabsEnabledPolicyWhatsNewTest,
     // The second tab should be the NTP.
     const auto& url_tab1 =
         tab_strip->GetWebContentsAt(1)->GetLastCommittedURL();
-    EXPECT_EQ(url_tab1.possibly_invalid_spec(), chrome::kChromeUINewTabURL);
+    EXPECT_EQ(url_tab1, chrome::ChromeUINewTabURLAsGURL());
   }
 }
 
@@ -246,8 +245,8 @@ IN_PROC_BROWSER_TEST_P(PromotionalTabsEnabledPolicyWhatsNewInvalidTest,
   // Only the NTP should show. There are no other relevant tabs since
   // What's New has already been shown or promotional tabs are disabled.
   EXPECT_EQ(tab_strip->count(), 1);
-  if (url.possibly_invalid_spec() != chrome::kChromeUINewTabURL) {
-    EXPECT_PRED2(search::IsNTPOrRelatedURL, url, browser()->profile());
+  if (url != chrome::ChromeUINewTabURLAsGURL()) {
+    EXPECT_PRED2(search::IsNTPOrRelatedURL, url, browser()->GetProfile());
   }
 }
 

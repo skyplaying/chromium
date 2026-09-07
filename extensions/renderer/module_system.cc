@@ -7,6 +7,7 @@
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/trace_event/trace_event.h"
@@ -14,6 +15,7 @@
 #include "extensions/common/extension.h"
 #include "extensions/common/mojom/context_type.mojom.h"
 #include "extensions/renderer/console.h"
+#include "extensions/renderer/renderer_extension_registry.h"
 #include "extensions/renderer/safe_builtins.h"
 #include "extensions/renderer/script_context.h"
 #include "extensions/renderer/script_context_set.h"
@@ -143,6 +145,14 @@ bool ContextNeedsMojoBindings(ScriptContext* context) {
     if (context->GetAvailability(api).is_available())
       return true;
   }
+
+  const Extension* extension = context->extension();
+  if (context->IsForServiceWorker() && extension &&
+      RendererExtensionRegistry::Get()->IsMojoJsEnabledForServiceWorker(
+          extension->id())) {
+    return true;
+  }
+
   return false;
 }
 
@@ -187,18 +197,9 @@ ModuleSystem::ModuleSystem(ScriptContext* context, const SourceMap* source_map)
       exception_handler_(new DefaultExceptionHandler(context)) {
   v8::Local<v8::Object> global(context->v8_context()->Global());
   v8::Isolate* isolate = context->isolate();
-  // Note: Ensure setting private succeeds with CHECK.
-  // TODO(crbug.com/40058107): remove checks once investigation finished.
   CHECK(SetPrivate(global, kModulesField, v8::Object::New(isolate)));
   CHECK(SetPrivate(global, kModuleSystem,
                    v8::External::New(isolate, this, gin::kModuleSystemTag)));
-  {
-    // Note: Ensure privates that were set above can be read immediately.
-    // TODO(crbug.com/40058107): remove checks once investigation finished.
-    v8::Local<v8::Value> dummy_value;
-    CHECK(GetPrivate(global, kModulesField, &dummy_value));
-    CHECK(GetPrivate(global, kModuleSystem, &dummy_value));
-  }
 
   if (context_->context_type() == mojom::ContextType::kPrivilegedExtension &&
       ContextNeedsMojoBindings(context_) &&
@@ -210,8 +211,7 @@ ModuleSystem::ModuleSystem(ScriptContext* context, const SourceMap* source_map)
   }
 }
 
-ModuleSystem::~ModuleSystem() {
-}
+ModuleSystem::~ModuleSystem() = default;
 
 void ModuleSystem::AddRoutes() {
   RouteHandlerFunction(
@@ -228,10 +228,6 @@ void ModuleSystem::AddRoutes() {
 }
 
 void ModuleSystem::Invalidate() {
-  // TODO(crbug.com/40058107): remove checks once investigation finished.
-  CHECK(!has_been_invalidated_);
-  has_been_invalidated_ = true;
-
   v8::Isolate* isolate = GetIsolate();
   // Clear the module system properties from the global context. It's polite,
   // and we use this as a signal in lazy handlers that we no longer exist.
@@ -241,11 +237,7 @@ void ModuleSystem::Invalidate() {
     if (!isolate->IsExecutionTerminating()) {
       v8::HandleScope scope(GetIsolate());
       v8::Local<v8::Object> global = context()->v8_context()->Global();
-      // TODO(crbug.com/40058107): remove checks once investigation finished.
-      v8::Local<v8::Value> dummy_value;
-      CHECK(GetPrivate(global, kModulesField, &dummy_value));
       DeletePrivate(global, kModulesField);
-      CHECK(GetPrivate(global, kModuleSystem, &dummy_value));
       DeletePrivate(global, kModuleSystem);
     }
   }
@@ -274,8 +266,7 @@ void ModuleSystem::HandleException(const v8::TryCatch& try_catch) {
   exception_handler_->HandleUncaughtException(try_catch);
 }
 
-v8::MaybeLocal<v8::Object> ModuleSystem::Require(
-    const std::string& module_name) {
+v8::MaybeLocal<v8::Object> ModuleSystem::Require(std::string_view module_name) {
   v8::Local<v8::String> v8_module_name;
   if (!ToV8String(GetIsolate(), module_name, &v8_module_name))
     return v8::MaybeLocal<v8::Object>();
@@ -513,7 +504,7 @@ void ModuleSystem::SetLazyField(v8::Local<v8::Object> object,
 }
 
 void ModuleSystem::OnNativeBindingCreated(
-    const std::string& api_name,
+    std::string_view api_name,
     v8::Local<v8::Value> api_bridge_value) {
   DCHECK(!get_internal_api_.IsEmpty());
   v8::HandleScope scope(GetIsolate());
@@ -615,8 +606,9 @@ void ModuleSystem::LoadScript(const v8::FunctionCallbackInfo<v8::Value>& args) {
     Fatal(context_, "No source for loadScript(" + module_name + ")");
 
   v8::Local<v8::String> v8_module_name;
-  if (!ToV8String(GetIsolate(), module_name.c_str(), &v8_module_name))
+  if (!ToV8String(GetIsolate(), module_name, &v8_module_name)) {
     Warn(GetIsolate(), "module_name is too long");
+  }
 
   RunString(source, v8_module_name);
   args.GetReturnValue().Set(v8::Undefined(GetIsolate()));
@@ -629,7 +621,7 @@ v8::Local<v8::String> ModuleSystem::WrapSource(v8::Local<v8::String> source) {
       GetIsolate(),
       "(function(require, requireNative, loadScript, exports, console, "
       "privates, apiBridge, bindingUtil, getInternalApi, $Array, $Function, "
-      "$JSON, $Object, $RegExp, $String, $Error, $Promise) {"
+      "$JSON, $Object, $RegExp, $String, $Error, $Promise, $Symbol) {"
       "'use strict';");
   v8::Local<v8::String> right = ToV8StringUnsafe(GetIsolate(), "\n})");
   return handle_scope.Escape(v8::Local<v8::String>(v8::String::Concat(
@@ -655,7 +647,7 @@ void ModuleSystem::Private(const v8::FunctionCallbackInfo<v8::Value>& args) {
           ToV8StringUnsafe(GetIsolate(), "Failed to create privates"));
       return;
     }
-    v8::Maybe<bool> maybe = privates.As<v8::Object>()->SetPrototypeV2(
+    v8::Maybe<bool> maybe = privates.As<v8::Object>()->SetPrototype(
         context()->v8_context(), v8::Null(args.GetIsolate()));
     CHECK(maybe.IsJust() && maybe.FromJust());
     SetPrivate(obj, "privates", privates);
@@ -663,13 +655,13 @@ void ModuleSystem::Private(const v8::FunctionCallbackInfo<v8::Value>& args) {
   args.GetReturnValue().Set(privates);
 }
 
-v8::Local<v8::Value> ModuleSystem::LoadModule(const std::string& module_name) {
+v8::Local<v8::Value> ModuleSystem::LoadModule(std::string_view module_name) {
   return LoadModuleWithNativeAPIBridge(module_name,
                                        v8::Undefined(GetIsolate()));
 }
 
 v8::Local<v8::Value> ModuleSystem::LoadModuleWithNativeAPIBridge(
-    const std::string& module_name,
+    std::string_view module_name,
     v8::Local<v8::Value> api_bridge) {
   v8::EscapableHandleScope handle_scope(GetIsolate());
   v8::Local<v8::Context> v8_context = context()->v8_context();
@@ -678,19 +670,20 @@ v8::Local<v8::Value> ModuleSystem::LoadModuleWithNativeAPIBridge(
   v8::Local<v8::String> source =
       source_map_->GetSource(GetIsolate(), module_name);
   if (source.IsEmpty()) {
-    Fatal(context_, "No source for require(" + module_name + ")");
+    Fatal(context_, base::StrCat({"No source for require(", module_name, ")"}));
     return v8::Undefined(GetIsolate());
   }
   v8::Local<v8::String> wrapped_source(WrapSource(source));
   v8::Local<v8::String> v8_module_name;
-  if (!ToV8String(GetIsolate(), module_name.c_str(), &v8_module_name)) {
+  if (!ToV8String(GetIsolate(), module_name, &v8_module_name)) {
     NOTREACHED() << "module_name is too long";
   }
   // Modules are wrapped in (function(){...}) so they always return functions.
   v8::Local<v8::Value> func_as_value =
       RunString(wrapped_source, v8_module_name);
   if (func_as_value.IsEmpty() || func_as_value->IsUndefined()) {
-    Fatal(context_, "Bad source for require(" + module_name + ")");
+    Fatal(context_,
+          base::StrCat({"Bad source for require(", module_name, ")"}));
     return v8::Undefined(GetIsolate());
   }
 
@@ -764,6 +757,7 @@ v8::Local<v8::Value> ModuleSystem::LoadModuleWithNativeAPIBridge(
       context_->safe_builtins()->GetString(),
       context_->safe_builtins()->GetError(),
       context_->safe_builtins()->GetPromise(),
+      context_->safe_builtins()->GetSymbol(),
   };
   {
     v8::TryCatch try_catch(GetIsolate());
@@ -790,8 +784,8 @@ v8::Local<v8::Function> ModuleSystem::GetModuleFunction(
     const std::string& method_name) {
   v8::Local<v8::String> v8_module_name;
   v8::Local<v8::String> v8_method_name;
-  if (!ToV8String(GetIsolate(), module_name.c_str(), &v8_module_name) ||
-      !ToV8String(GetIsolate(), method_name.c_str(), &v8_method_name)) {
+  if (!ToV8String(GetIsolate(), module_name, &v8_module_name) ||
+      !ToV8String(GetIsolate(), method_name, &v8_method_name)) {
     return v8::Local<v8::Function>();
   }
 

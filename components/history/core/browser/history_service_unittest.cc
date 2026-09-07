@@ -121,16 +121,13 @@ class HistoryServiceTest : public testing::Test {
     history_dir_ = temp_dir_.GetPath().AppendASCII("HistoryServiceTest");
     ASSERT_TRUE(base::CreateDirectory(history_dir_));
     history_service_ = std::make_unique<history::HistoryService>();
-    if (!history_service_->Init(
-            TestHistoryDatabaseParamsForPath(history_dir_))) {
-      history_service_.reset();
-      ADD_FAILURE();
-    }
+    history_service_->Init(TestHistoryDatabaseParamsForPath(history_dir_));
   }
 
   void TearDown() override {
-    if (history_service_)
+    if (history_service_) {
       CleanupHistoryService();
+    }
 
     // Make sure we don't have any event pending that could disrupt the next
     // test.
@@ -257,6 +254,46 @@ TEST_F(HistoryServiceTest, RemoveNotification) {
   // This won't actually delete the URL, rather it'll empty out the visits.
   // This triggers blocking on the BookmarkModel.
   history_service_->DeleteURLs({url});
+}
+
+TEST_F(HistoryServiceTest, QueryUrlIds) {
+  ASSERT_TRUE(history_service_.get());
+
+  const GURL url_a("http://www.a.com/");
+  const GURL url_b("http://www.b.com/");
+  const GURL url_unknown("http://www.unknown.com/");
+
+  history_service_->AddPage(url_a, base::Time::Now(), 0, 0, GURL(),
+                            history::RedirectList(), ui::PAGE_TRANSITION_LINK,
+                            history::SOURCE_BROWSED,
+                            VisitResponseCodeCategory::kNot404, false);
+  history_service_->AddPage(url_b, base::Time::Now(), 0, 0, GURL(),
+                            history::RedirectList(), ui::PAGE_TRANSITION_LINK,
+                            history::SOURCE_BROWSED,
+                            VisitResponseCodeCategory::kNot404, false);
+
+  ASSERT_TRUE(QueryURLAndVisits(url_a));
+  const URLID id_a = query_url_result_.row.id();
+  ASSERT_NE(0, id_a);
+  ASSERT_TRUE(QueryURLAndVisits(url_b));
+  const URLID id_b = query_url_result_.row.id();
+  ASSERT_NE(0, id_b);
+
+  base::test::TestFuture<std::optional<std::vector<URLID>>> future;
+  history_service_->QueryUrlIds({url_a, url_unknown, url_b},
+                                future.GetCallback(), &tracker_);
+  const std::optional<std::vector<URLID>> ids = future.Take();
+  ASSERT_TRUE(ids.has_value());
+  EXPECT_THAT(*ids, testing::ElementsAre(id_a, 0, id_b));
+}
+
+TEST_F(HistoryServiceTest, QueryUrlIdsEmpty) {
+  ASSERT_TRUE(history_service_.get());
+  base::test::TestFuture<std::optional<std::vector<URLID>>> future;
+  history_service_->QueryUrlIds({}, future.GetCallback(), &tracker_);
+  const std::optional<std::vector<URLID>> ids = future.Take();
+  ASSERT_TRUE(ids.has_value());
+  EXPECT_THAT(*ids, testing::IsEmpty());
 }
 
 TEST_F(HistoryServiceTest, AddPage) {
@@ -456,7 +493,7 @@ TEST_F(HistoryServiceTest, MakeIntranetURLsTyped) {
   EXPECT_TRUE(ui::PageTransitionCoreTypeIs(
       query_url_result_.visits[0].transition, ui::PAGE_TRANSITION_TYPED));
 
-  // As should one with an intranet URL at the tail.
+  // But a chain with an intranet URL at the tail should NOT be promoted.
   history::RedirectList redirects2 = {GURL("http://first2.com/"),
                                       GURL("http://second2.com/"),
                                       GURL("http://intranet2/path")};
@@ -469,9 +506,9 @@ TEST_F(HistoryServiceTest, MakeIntranetURLsTyped) {
   EXPECT_EQ(0, query_url_result_.row.typed_count());
   ASSERT_EQ(1U, query_url_result_.visits.size());
   EXPECT_TRUE(ui::PageTransitionCoreTypeIs(
-      query_url_result_.visits[0].transition, ui::PAGE_TRANSITION_TYPED));
+      query_url_result_.visits[0].transition, ui::PAGE_TRANSITION_LINK));
 
-  // But not one with an intranet URL in the middle.
+  // Nor one with an intranet URL in the middle.
   history::RedirectList redirects3 = {GURL("http://first3.com/"),
                                       GURL("http://intranet3/path"),
                                       GURL("http://third3.com/")};
@@ -1113,10 +1150,6 @@ TEST_F(HistoryServiceTest, GetDomainDiversityBitmaskTest) {
 }
 
 TEST_F(HistoryServiceTest, GetDomainDiversity404sTest) {
-  // Allow 404 visits to be saved to History.
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(history::kVisitedLinksOn404);
-
   HistoryService* history = history_service_.get();
   ASSERT_TRUE(history);
 
@@ -1173,10 +1206,6 @@ TEST_F(HistoryServiceTest, GetDomainDiversity404sTest) {
 // Gets unique local and synced domains visited and the last visited domain
 // within a time range.
 TEST_F(HistoryServiceTest, GetUniqueDomainsVisited) {
-  // Allow 404 visits to be saved to History.
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(history::kVisitedLinksOn404);
-
   base::Time base_time = base::Time::Now();
   HistoryService* history = history_service_.get();
   ASSERT_TRUE(history);
@@ -1386,10 +1415,6 @@ TEST_F(HistoryServiceTest, GetDomainDiversityLocalVsSynced) {
 }
 
 TEST_F(HistoryServiceTest, GetMostRecentVisitsForGurl) {
-  // Allow 404s to be saved to history.
-  base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(history::kVisitedLinksOn404);
-
   HistoryService* history = history_service_.get();
   ASSERT_TRUE(history);
 
@@ -1469,11 +1494,7 @@ class OrderingHistoryServiceTest : public HistoryServiceTest {
     // Set up the HistoryService.
     history_service_ = std::make_unique<history::HistoryService>(
         nullptr, std::move(visit_delegate), nullptr, nullptr);
-    if (!history_service_->Init(
-            TestHistoryDatabaseParamsForPath(history_dir_))) {
-      history_service_.reset();
-      ADD_FAILURE();
-    }
+    history_service_->Init(TestHistoryDatabaseParamsForPath(history_dir_));
   }
 
   base::RunLoop run_loop_;

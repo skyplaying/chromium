@@ -13,6 +13,7 @@
 #include "ash/wm/window_properties.h"
 #include "ash/wm/wm_constants.h"
 #include "base/memory/raw_ptr.h"
+#include "cc/paint/display_item_list.h"
 #include "chromeos/ui/frame/frame_utils.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/client/screen_position_client.h"
@@ -108,7 +109,6 @@ class DragWindowController::DragWindowDetails {
     const float opacity =
         GetDragWindowOpacity(root_window_, original_window, is_touch_dragging);
     if (opacity == 0.f) {
-      shadow_.reset();
       widget_.reset();
       return;
     }
@@ -180,9 +180,6 @@ class DragWindowController::DragWindowDetails {
 
   // Contains a WindowMirrorView which is a copy of the original window.
   std::unique_ptr<views::Widget> widget_;
-
-  // Optional custom shadow if one is given.
-  std::unique_ptr<ui::Shadow> shadow_;
 };
 
 DragWindowController::DragWindowController(aura::Window* window,
@@ -238,18 +235,6 @@ const aura::Window* DragWindowController::GetDragWindowForTest(
     if (details->widget_) {
       if (index == 0)
         return details->widget_->GetNativeWindow();
-      index--;
-    }
-  }
-  return nullptr;
-}
-
-const ui::Shadow* DragWindowController::GetDragWindowShadowForTest(
-    size_t index) const {
-  for (const std::unique_ptr<DragWindowDetails>& details : drag_windows_) {
-    if (details->widget_) {
-      if (index == 0)
-        return details->shadow_.get();
       index--;
     }
   }

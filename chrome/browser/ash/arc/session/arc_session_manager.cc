@@ -9,6 +9,7 @@
 
 #include "ash/constants/ash_switches.h"
 #include "base/check_deref.h"
+#include "base/check_is_test.h"
 #include "base/command_line.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/feature_list.h"
@@ -18,6 +19,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/run_loop.h"
 #include "base/strings/string_split.h"
+#include "base/system/sys_info.h"
 #include "base/task/task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
@@ -45,12 +47,12 @@
 #include "chrome/browser/ash/login/demo_mode/demo_components.h"
 #include "chrome/browser/ash/login/demo_mode/demo_session.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/multi_user/multi_user_util.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/webui/ash/diagnostics_dialog/diagnostics_dialog.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
 #include "chromeos/ash/components/dbus/dlcservice/dlcservice_client.h"
 #include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
@@ -395,15 +397,6 @@ void ReportProvisioningStartTime(const base::TimeTicks& start_time,
   }
 }
 
-// Returns whether ARCVM /data migration is in progress and should be resumed.
-bool ArcVmDataMigrationIsInProgress(PrefService* prefs) {
-  if (!base::FeatureList::IsEnabled(kEnableArcVmDataMigration)) {
-    return false;
-  }
-  return GetArcVmDataMigrationStatus(prefs) ==
-         ArcVmDataMigrationStatus::kStarted;
-}
-
 // The result status of deferring ARC activation until user session start up
 // task completion, used for UMA.
 enum class DeferArcActivationResult {
@@ -514,19 +507,26 @@ class ArcSessionManager::ScopedOptInFlowTracker {
 ArcSessionManager::ArcSessionManager(
     PrefService* local_state,
     const ApplicationLocaleStorage* application_locale_storage,
+    metrics::MetricsService* metrics_service,
     std::unique_ptr<ArcSessionRunner> arc_session_runner,
     std::unique_ptr<AdbSideloadingAvailabilityDelegateImpl>
         adb_sideloading_availability_delegate,
     ArcDlcInstaller* arc_dlc_installer)
     : local_state_(CHECK_DEREF(local_state)),
       application_locale_storage_(CHECK_DEREF(application_locale_storage)),
+      metrics_service_(metrics_service),
       arc_session_runner_(std::move(arc_session_runner)),
       adb_sideloading_availability_delegate_(
           std::move(adb_sideloading_availability_delegate)),
       android_management_checker_factory_(
           ArcRequirementChecker::GetDefaultAndroidManagementCheckerFactory()),
       arc_dlc_installer_(arc_dlc_installer),
-      attempt_restart_callback_(base::BindRepeating(chrome::AttemptRestart)) {
+      attempt_restart_callback_(base::BindRepeating(
+          []() { session_manager::SessionManager::Get()->RequestRestart(); })) {
+  if (!metrics_service_) {
+    CHECK_IS_TEST();
+  }
+
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   DCHECK(!g_arc_session_manager);
   g_arc_session_manager = this;
@@ -716,9 +716,11 @@ void ArcSessionManager::OnProvisioningFinished(
 
     prefs->SetBoolean(prefs::kArcSignedIn, true);
 
-    if (ShouldLaunchPlayStoreApp(
-            profile_,
-            prefs->GetBoolean(prefs::kArcProvisioningInitiatedFromOobe))) {
+    const bool was_provisioning_initiated_from_oobe =
+        prefs->GetBoolean(prefs::kArcProvisioningInitiatedFromOobe);
+
+    if (ShouldLaunchPlayStoreApp(profile_,
+                                 was_provisioning_initiated_from_oobe)) {
       playstore_launcher_ = std::make_unique<ArcAppLauncher>(
           profile_, kPlayStoreAppId,
           apps_util::MakeIntentForActivity(
@@ -732,6 +734,24 @@ void ArcSessionManager::OnProvisioningFinished(
     for (auto& observer : observer_list_) {
       observer.OnArcInitialStart();
     }
+
+    // On low-end (4GB RAM) devices, shut down ARCVM after post-OOBE
+    // provisioning to free system resources. ARCVM will be re-activated
+    // on-demand when the user launches an ARC app.
+    if (base::FeatureList::IsEnabled(arc::kShutDownArcPostOobeProvisioning) &&
+        was_provisioning_initiated_from_oobe && IsArcVmEnabled() &&
+        base::SysInfo::Is4GbDevice()) {
+      VLOG(1) << "Shutting down ARCVM post-OOBE provisioning on 4GB device.";
+      activation_is_allowed_ = false;
+      // Set is_activation_delayed_ so that even when ArcSessionManager is
+      // notified on completion of OOBE (e.g.
+      // OnUserSessionStartUpTaskCompleted), ARC won't run immediately at that
+      // time.
+      is_activation_delayed_ = true;
+      is_post_oobe_shutdown_4gb_device_ = true;
+      ShutdownSession();
+    }
+
     return;
   }
 
@@ -870,29 +890,36 @@ void ArcSessionManager::Initialize() {
       multi_user_util::GetAccountIdFromProfile(profile_));
   data_remover_ = std::make_unique<ArcDataRemover>(prefs, cryptohome_id);
 
-  if (ArcVmDataMigrationIsInProgress(prefs)) {
-    const int auto_resume_count =
-        prefs->GetInteger(prefs::kArcVmDataMigrationAutoResumeCount);
-    if (auto_resume_count <= kArcVmDataMigrationMaxAutoResumeCount) {
-      // |auto_resume_count| == kArcVmDataMigrationMaxAutoResumeCount means that
-      // this is the first ARC session in which auto-resume is disabled.
-      // Report to UMA and increment the pref value so that we can track the
-      // number of users who hit the maximum number of auto-resumes.
-      base::UmaHistogramExactLinear("Arc.VmDataMigration.AutoResumeCount",
-                                    auto_resume_count,
-                                    kArcVmDataMigrationMaxAutoResumeCount);
-      prefs->SetInteger(prefs::kArcVmDataMigrationAutoResumeCount,
-                        auto_resume_count + 1);
-      if (auto_resume_count < kArcVmDataMigrationMaxAutoResumeCount) {
-        VLOG(1) << "ARCVM /data migration is in progress. Restarting Chrome "
-                   "session to resume the migration. Auto-resume count: "
-                << auto_resume_count;
-        attempt_restart_callback_.Run();
-        return;
+  // ARCVM /data migration is deprecated. We handle state modifications here.
+  if (base::FeatureList::IsEnabled(kEnableArcVmDataMigration)) {
+    const auto migration_status = GetArcVmDataMigrationStatus(prefs);
+    if (migration_status == ArcVmDataMigrationStatus::kStarted) {
+      // If a user had an incomplete migration, we abandon it and wipe their
+      // /data to force a fresh boot.
+      LOG(WARNING) << "ARCVM /data migration was in progress. "
+                   << "Wiping data and abandoning migration.";
+      SetArcVmDataMigrationStatus(prefs, ArcVmDataMigrationStatus::kFinished);
+      data_remover_->Schedule();
+    } else if (migration_status != ArcVmDataMigrationStatus::kFinished &&
+               !prefs->GetBoolean(prefs::kArcSignedIn)) {
+      // If ARC has not been fully provisioned for this profile (or ARC was
+      // disabled and data removal was scheduled), we safely assume there is no
+      // valid virtio-fs /data to migrate. We mark the migration as
+      // finished so they boot entirely fresh onto virtio-blk.
+      if (migration_status == ArcVmDataMigrationStatus::kUnnotified ||
+          !prefs->GetBoolean(prefs::kArcTermsAccepted)) {
+        VLOG(1) << "ARC has not been provisioned. Forcing migration status to "
+                   "kFinished to boot with virtio-blk.";
+      } else {
+        LOG(WARNING)
+            << "ARC signed-in state is false but terms are accepted and "
+            << "migration status is " << static_cast<int>(migration_status)
+            << ". "
+            << "This is likely an anomaly. Forcing migration status to "
+               "kFinished.";
       }
+      SetArcVmDataMigrationStatus(prefs, ArcVmDataMigrationStatus::kFinished);
     }
-    LOG(WARNING) << "Skipping auto-resume of ARCVM /data migration, because it "
-                    "has reached the maximum number of retries";
   }
 
   observer_list_.Notify(&ArcSessionManagerObserver::OnInitialized);
@@ -950,6 +977,7 @@ void ArcSessionManager::Shutdown() {
   fast_app_reinstall_starter_.reset();
   arc_ui_availability_reporter_.reset();
   profile_ = nullptr;
+  metrics_service_ = nullptr;
   state_ = State::NOT_INITIALIZED;
   if (scoped_opt_in_tracker_) {
     scoped_opt_in_tracker_->TrackShutdown();
@@ -1005,6 +1033,7 @@ void ArcSessionManager::ResetArcState() {
   arc_sign_in_timer_.Stop();
   playstore_launcher_.reset();
   requirement_checker_.reset();
+  activation_necessity_checker_.reset();
 }
 
 void ArcSessionManager::AddObserver(ArcSessionManagerObserver* observer) {
@@ -1154,6 +1183,9 @@ void ArcSessionManager::AllowActivation(AllowActivationReason reason) {
   }
 
   activation_is_allowed_ = true;
+  // Cancel any pending necessity check since activation is now explicitly
+  // allowed.
+  activation_necessity_checker_.reset();
   if (state_ == State::READY) {
     StartArcForRegularBoot();
   }
@@ -1182,7 +1214,8 @@ void ArcSessionManager::OnVmStarted(
             guest_os::GuestOsServiceFactory::GetForProfile(profile())
                 ->MountProviderRegistry()
                 ->Register(std::make_unique<ArcMountProvider>(
-                    profile(), vm_signal.vm_info().cid())));
+                    &local_state_.get(), profile(),
+                    vm_signal.vm_info().cid())));
   }
 }
 
@@ -1253,23 +1286,8 @@ void ArcSessionManager::RequestEnableImpl() {
     // If the next step was the ToS negotiation, show a notification instead.
     // Otherwise, be silent now. Users are notified when clicking ARC app icons.
     if (!skip_terms_of_service_negotiation && g_ui_enabled) {
-      arc::ShowArcMigrationGuideNotification(profile_);
-    }
-    return;
-  }
-
-  if (ArcVmDataMigrationIsInProgress(prefs)) {
-    VLOG(1) << "Skipping request to enable ARC because ARCVM /data migration "
-               "is in progress";
-    // Auto-resume should be disabled only when |auto_resume_enabled| is larger
-    // than kArcVmDataMigrationMaxAutoResumeCount. This is because the value is
-    // incremented in Initialize() when it is smaller than or equal to
-    // kArcVmDataMigrationMaxAutoResumeCount. See Initialize() for detail.
-    const bool auto_resume_enabled =
-        prefs->GetInteger(prefs::kArcVmDataMigrationAutoResumeCount) <=
-        kArcVmDataMigrationMaxAutoResumeCount;
-    for (auto& observer : observer_list_) {
-      observer.OnArcSessionBlockedByArcVmDataMigration(auto_resume_enabled);
+      arc::ShowArcMigrationGuideNotification(CHECK_DEREF(
+          ash::BrowserContextHelper::Get()->GetUserByBrowserContext(profile_)));
     }
     return;
   }
@@ -1304,8 +1322,7 @@ void ArcSessionManager::RequestEnableImpl() {
     } else {
       DCHECK(!activation_necessity_checker_);
       activation_necessity_checker_ =
-          std::make_unique<ArcActivationNecessityChecker>(
-              profile_, adb_sideloading_availability_delegate_.get());
+          std::make_unique<ArcActivationNecessityChecker>(profile_);
       activation_necessity_checker_->Check(
           base::BindOnce(&ArcSessionManager::OnActivationNecessityChecked,
                          weak_ptr_factory_.GetWeakPtr()));
@@ -1443,11 +1460,6 @@ void ArcSessionManager::RequestArcDataRemoval() {
   prefs->SetInteger(prefs::kArcManagementTransition,
                     static_cast<int>(ArcManagementTransition::NO_TRANSITION));
 
-  if (ArcVmDataMigrationIsInProgress(prefs)) {
-    VLOG(1) << "Skipping ARC /data removal because ARCVM /data migration is "
-               "in progress";
-    return;
-  }
 
   // To support 1) case above, maybe start data removal.
   if (state_ == State::STOPPED) {
@@ -1506,7 +1518,8 @@ void ArcSessionManager::MaybeStartTermsOfServiceNegotiation() {
   skipped_terms_of_service_negotiation_ =
       !is_terms_of_service_negotiation_needed;
   requirement_checker_ = std::make_unique<ArcRequirementChecker>(
-      profile_, support_host_.get(), android_management_checker_factory_);
+      metrics_service_, profile_, support_host_.get(),
+      android_management_checker_factory_);
   requirement_checker_->AddObserver(this);
   requirement_checker_->StartRequirementChecks(
       is_terms_of_service_negotiation_needed,
@@ -1592,7 +1605,8 @@ void ArcSessionManager::StartBackgroundRequirementChecks() {
   }
 
   requirement_checker_ = std::make_unique<ArcRequirementChecker>(
-      profile_, support_host_.get(), android_management_checker_factory_);
+      metrics_service_, profile_, support_host_.get(),
+      android_management_checker_factory_);
   requirement_checker_->StartBackgroundChecks(
       base::BindOnce(&ArcSessionManager::OnBackgroundRequirementChecksDone,
                      weak_ptr_factory_.GetWeakPtr()));
@@ -1759,59 +1773,18 @@ void ArcSessionManager::OnArcDataRemoved(std::optional<bool> result) {
     // We may have to avoid it.
   }
 
-  if (!base::FeatureList::IsEnabled(kEnableArcVmDataMigration) ||
-      GetArcVmDataMigrationStatus(profile_->GetPrefs()) ==
-          ArcVmDataMigrationStatus::kFinished) {
-    // No need to check the necessity of ARCVM /data migration.
-    MaybeReenableArc();
+  // If ARCVM was shut down post-OOBE provisioning on low-end devices,
+  // transition the state to READY so that subsequent app launches
+  // (or AllowActivation calls) can re-activate ARCVM on demand.
+  if (is_post_oobe_shutdown_4gb_device_) {
+    is_post_oobe_shutdown_4gb_device_ = false;
+    if (enable_requested_ && profile_ && IsArcProvisioned(profile_)) {
+      state_ = State::READY;
+    }
     return;
   }
 
-  CheckArcVmDataMigrationNecessity(base::BindOnce(
-      &ArcSessionManager::MaybeReenableArc, weak_ptr_factory_.GetWeakPtr()));
-}
-
-void ArcSessionManager::CheckArcVmDataMigrationNecessity(
-    base::OnceClosure callback) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-
-  DCHECK_EQ(state_, State::STOPPED);
-  state_ = State::CHECKING_DATA_MIGRATION_NECESSITY;
-
-  DCHECK(profile_);
-  DCHECK(!arc_vm_data_migration_necessity_checker_);
-  arc_vm_data_migration_necessity_checker_ =
-      std::make_unique<ArcVmDataMigrationNecessityChecker>(profile_);
-  arc_vm_data_migration_necessity_checker_->Check(
-      base::BindOnce(&ArcSessionManager::OnArcVmDataMigrationNecessityChecked,
-                     weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
-}
-
-void ArcSessionManager::OnArcVmDataMigrationNecessityChecked(
-    base::OnceClosure callback,
-    std::optional<bool> result) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-
-  DCHECK_EQ(state_, State::CHECKING_DATA_MIGRATION_NECESSITY);
-  state_ = State::STOPPED;
-
-  DCHECK(profile_);
-  DCHECK(arc_vm_data_migration_necessity_checker_);
-  arc_vm_data_migration_necessity_checker_.reset();
-
-  // We assume that the migration is needed when |result| has no value, i.e.,
-  // when ArcVmDataMigrationNecessityChecker could not determine the necessity.
-  if (!result.value_or(true)) {
-    VLOG(1) << "No need to perform ARCVM /data migration. Marking the migration"
-            << " as finished";
-    base::UmaHistogramEnumeration(
-        GetHistogramNameByUserType(kArcVmDataMigrationFinishReasonHistogramName,
-                                   profile_),
-        ArcVmDataMigrationFinishReason::kNoDataToMigrate);
-    SetArcVmDataMigrationStatus(profile_->GetPrefs(),
-                                ArcVmDataMigrationStatus::kFinished);
-  }
-  std::move(callback).Run();
+  MaybeReenableArc();
 }
 
 void ArcSessionManager::MaybeReenableArc() {

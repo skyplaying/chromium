@@ -53,6 +53,7 @@ component("gpu") {
     "//media/gpu/test/*",
     "//media/gpu/vaapi/*",
     "//media/mojo/*",
+    "//media/parsers:unit_tests",
     "//remoting/codec:encoder",
     "//third_party/blink/renderer/modules:unit_tests",
     "//third_party/blink/renderer/modules/mediarecorder",
@@ -104,9 +105,6 @@ component("gpu") {
   ]
   libs = []
   ldflags = []
-
-  # V4L2 and VAAPI for video acceleration should not be enabled simultaneously.
-  assert(!(use_v4l2_codec && use_vaapi))
 
   if (use_linux_video_acceleration) {
     public_deps += [
@@ -167,8 +165,6 @@ component("gpu") {
       "android/video_frame_factory.h",
       "android/video_frame_factory_impl.cc",
       "android/video_frame_factory_impl.h",
-      "android/video_frame_gl_surface_renderer.cc",
-      "android/video_frame_gl_surface_renderer.h",
     ]
     if (proprietary_codecs) {
       sources += [
@@ -180,13 +176,7 @@ component("gpu") {
       "aaudio",
       "mediandk",
     ]
-    deps += [
-      # TODO(crbug.com/40552063): This can be removed once CdmManager is removed.
-      "//gpu/ipc/common",
-      "//media/mojo:buildflags",
-      "//services/service_manager/public/cpp",
-      "//third_party/libgav1:libgav1_parser",
-    ]
+    deps += [ "//third_party/libgav1:libgav1_parser" ]
     if (enable_vulkan) {
       deps += [ "//gpu/vulkan" ]
     }
@@ -212,34 +202,19 @@ component("gpu") {
       "windows/av1_guids.h",
       "windows/av1_video_rate_control_wrapper.cc",
       "windows/av1_video_rate_control_wrapper.h",
-      "windows/d3d11_av1_accelerator.cc",
-      "windows/d3d11_av1_accelerator.h",
       "windows/d3d11_copying_texture_wrapper.cc",
       "windows/d3d11_copying_texture_wrapper.h",
-      "windows/d3d11_decoder_configurator.cc",
-      "windows/d3d11_decoder_configurator.h",
-      "windows/d3d11_h264_accelerator.cc",
-      "windows/d3d11_h264_accelerator.h",
-      "windows/d3d11_picture_buffer.cc",
-      "windows/d3d11_picture_buffer.h",
       "windows/d3d11_status.h",
       "windows/d3d11_texture_selector.cc",
       "windows/d3d11_texture_selector.h",
       "windows/d3d11_texture_wrapper.cc",
       "windows/d3d11_texture_wrapper.h",
-      "windows/d3d11_video_decoder.cc",
-      "windows/d3d11_video_decoder.h",
-      "windows/d3d11_video_decoder_client.h",
       "windows/d3d11_video_decoder_wrapper.cc",
       "windows/d3d11_video_decoder_wrapper.h",
       "windows/d3d11_video_device_format_support.cc",
       "windows/d3d11_video_device_format_support.h",
-      "windows/d3d11_video_frame_mailbox_release_helper.cc",
-      "windows/d3d11_video_frame_mailbox_release_helper.h",
       "windows/d3d11_video_processor_proxy.cc",
       "windows/d3d11_video_processor_proxy.h",
-      "windows/d3d11_vp9_accelerator.cc",
-      "windows/d3d11_vp9_accelerator.h",
       "windows/d3d11_vp9_picture.cc",
       "windows/d3d11_vp9_picture.h",
       "windows/d3d12_copy_command_list_wrapper.cc",
@@ -266,9 +241,24 @@ component("gpu") {
       "windows/d3d12_video_helpers.h",
       "windows/d3d12_video_processor_wrapper.cc",
       "windows/d3d12_video_processor_wrapper.h",
+      "windows/d3d_av1_accelerator.cc",
+      "windows/d3d_av1_accelerator.h",
       "windows/d3d_com_defs.h",
+      "windows/d3d_decoder_configurator.cc",
+      "windows/d3d_decoder_configurator.h",
+      "windows/d3d_h264_accelerator.cc",
+      "windows/d3d_h264_accelerator.h",
+      "windows/d3d_picture_buffer.cc",
+      "windows/d3d_picture_buffer.h",
+      "windows/d3d_video_decoder.cc",
+      "windows/d3d_video_decoder.h",
+      "windows/d3d_video_decoder_client.h",
       "windows/d3d_video_decoder_wrapper.cc",
       "windows/d3d_video_decoder_wrapper.h",
+      "windows/d3d_video_frame_mailbox_release_helper.cc",
+      "windows/d3d_video_frame_mailbox_release_helper.h",
+      "windows/d3d_vp9_accelerator.cc",
+      "windows/d3d_vp9_accelerator.h",
       "windows/format_utils.cc",
       "windows/format_utils.h",
       "windows/h264_video_rate_control_wrapper.cc",
@@ -286,6 +276,8 @@ component("gpu") {
       "windows/mf_video_encoder_util.h",
       "windows/mf_video_processor_accelerator.cc",
       "windows/mf_video_processor_accelerator.h",
+      "windows/packed_yuv_utils.cc",
+      "windows/packed_yuv_utils.h",
       "windows/scoped_d3d_buffers.cc",
       "windows/scoped_d3d_buffers.h",
       "windows/supported_profile_helpers.cc",
@@ -297,10 +289,10 @@ component("gpu") {
     ]
     if (enable_hevc_parser_and_hw_decoder) {
       sources += [
-        "windows/d3d11_h265_accelerator.cc",
-        "windows/d3d11_h265_accelerator.h",
         "windows/d3d12_video_encode_h265_delegate.cc",
         "windows/d3d12_video_encode_h265_delegate.h",
+        "windows/d3d_h265_accelerator.cc",
+        "windows/d3d_h265_accelerator.h",
       ]
     }
     deps += [
@@ -353,6 +345,8 @@ source_set("common") {
     "gpu_video_decode_accelerator_helpers.h",
     "gpu_video_encode_accelerator_helpers.cc",
     "gpu_video_encode_accelerator_helpers.h",
+    "h264_builder.cc",
+    "h264_builder.h",
     "h264_decoder.cc",
     "h264_decoder.h",
     "h264_dpb.cc",
@@ -380,6 +374,13 @@ source_set("common") {
       "h265_decoder.h",
       "h265_dpb.cc",
       "h265_dpb.h",
+    ]
+  }
+
+  if (enable_platform_dolby_vision) {
+    sources += [
+      "dolby_vision_metadata.cc",
+      "dolby_vision_metadata.h",
     ]
   }
 
@@ -418,17 +419,16 @@ source_set("common") {
     sources += [
       "av1_builder.cc",
       "av1_builder.h",
-      "h264_builder.cc",
-      "h264_builder.h",
       "svc_layers.cc",
       "svc_layers.h",
     ]
-    if (enable_hevc_parser_and_hw_decoder) {
-      sources += [
-        "h265_builder.cc",
-        "h265_builder.h",
-      ]
-    }
+  }
+
+  if (enable_hevc_parser_and_hw_decoder) {
+    sources += [
+      "h265_builder.cc",
+      "h265_builder.h",
+    ]
   }
 
   if (use_av1_hw_decoder) {
@@ -439,13 +439,16 @@ source_set("common") {
       "av1_picture.cc",
       "av1_picture.h",
     ]
-    public_deps += [ "//third_party/libgav1:libgav1_parser" ]
+    public_deps += [
+      "//third_party/libgav1:libgav1_parser",
+      "//third_party/libgav1:libgav1_utils_constants",
+    ]
   }
 }
 
 if (is_linux || is_chromeos) {
-  # The buffer validation functionality is in its own component so that it can be
-  # depended on without pulling the entire //media/gpu target.
+  # The buffer validation functionality is in its own component so that it can
+  # be depended on without pulling the entire //media/gpu target.
   component("buffer_validation") {
     defines = [ "IS_MEDIA_GPU_BUFFER_VALIDATION_IMPL" ]
     sources = [
@@ -587,7 +590,6 @@ source_set("android_video_decode_accelerator_unittests") {
       "android/promotion_hint_aggregator_impl_unittest.cc",
       "android/surface_chooser_helper_unittest.cc",
       "android/video_frame_factory_impl_unittest.cc",
-      "android/video_frame_gl_surface_renderer_test.cc",
     ]
     deps = [
       ":gpu",
@@ -631,6 +633,7 @@ source_set("unit_tests") {
     "//media/gpu:test_support",
     "//testing/gmock",
     "//testing/gtest",
+    "//third_party/fuzztest",
     "//ui/gl:test_support",
   ]
   sources = [
@@ -642,8 +645,20 @@ source_set("unit_tests") {
     "h264_ratectrl_rtc_unittest.cc",
     "hrd_buffer_unittest.cc",
   ]
+  if (use_libgav1_parser) {
+    # h264_builder_unittest.cc includes TemporalScalabilityIdExtractor, whose
+    # public header contains libgav1 types.
+    sources += [ "h264_builder_unittest.cc" ]
+    deps += [ "//third_party/libgav1:libgav1_parser" ]
+  }
   if (enable_hevc_parser_and_hw_decoder) {
-    sources += [ "h265_decoder_unittest.cc" ]
+    sources += [
+      "h265_builder_unittest.cc",
+      "h265_decoder_unittest.cc",
+    ]
+  }
+  if (enable_platform_dolby_vision) {
+    sources += [ "dolby_vision_metadata_unittest.cc" ]
   }
   if (is_linux || is_chromeos) {
     sources += [ "buffer_validation_unittest.cc" ]
@@ -675,11 +690,8 @@ source_set("unit_tests") {
   if (is_win) {
     sources += [
       "windows/d3d11_copying_texture_wrapper_unittest.cc",
-      "windows/d3d11_decoder_configurator_unittest.cc",
-      "windows/d3d11_picture_buffer_unittest.cc",
       "windows/d3d11_texture_selector_unittest.cc",
       "windows/d3d11_texture_wrapper_unittest.cc",
-      "windows/d3d11_video_decoder_unittest.cc",
       "windows/d3d11_video_device_format_support_unittest.cc",
       "windows/d3d11_video_processor_proxy_unittest.cc",
       "windows/d3d12_helpers_unittest.cc",
@@ -688,8 +700,14 @@ source_set("unit_tests") {
       "windows/d3d12_video_encode_delegate_unittest.cc",
       "windows/d3d12_video_encode_delegate_unittest.h",
       "windows/d3d12_video_encode_h264_delegate_unittest.cc",
+      "windows/d3d12_video_processor_wrapper_unittest.cc",
+      "windows/d3d_picture_buffer_unittest.cc",
+      "windows/d3d_video_decoder_configurator_unittest.cc",
+      "windows/d3d_video_decoder_unittest.cc",
+      "windows/media_foundation_video_encode_accelerator_win_unittest.cc",
       "windows/mf_audio_encoder_unittest.cc",
       "windows/mf_video_processor_accelerator_unittest.cc",
+      "windows/packed_yuv_utils_unittest.cc",
       "windows/scoped_d3d_buffers_unittest.cc",
       "windows/supported_profile_helpers_unittest.cc",
     ]
@@ -700,10 +718,7 @@ source_set("unit_tests") {
     ]
 
     if (enable_hevc_parser_and_hw_decoder) {
-      sources += [
-        "h265_builder_unittest.cc",
-        "windows/d3d12_video_encode_h265_delegate_unittest.cc",
-      ]
+      sources += [ "windows/d3d12_video_encode_h265_delegate_unittest.cc" ]
     }
   }
 
@@ -714,7 +729,6 @@ source_set("unit_tests") {
   if (is_win || use_vaapi) {
     sources += [
       "av1_builder_unittest.cc",
-      "h264_builder_unittest.cc",
       "svc_layers_unittest.cc",
     ]
   }
@@ -731,6 +745,7 @@ if (enable_hevc_parser_and_hw_decoder) {
       ":gpu",
       "//base",
       "//media:test_support",
+      "//testing/libfuzzer:libfuzzer_base_wrappers",
     ]
   }
 }
@@ -741,6 +756,7 @@ fuzzer_test("media_h264_decoder_fuzzer") {
     ":gpu",
     "//base",
     "//media:test_support",
+    "//testing/libfuzzer:libfuzzer_base_wrappers",
   ]
   seed_corpuses = [ "//media/test/data" ]
 }
@@ -754,18 +770,22 @@ if (use_v4l2_codec || use_vaapi) {
       ":gpu",
       "//base",
       "//media:test_support",
+      "//testing/libfuzzer:libfuzzer_base_wrappers",
     ]
     seed_corpuses = [ "//media/test/data" ]
   }
 }
 
-if (use_av1_hw_decoder) {
-  fuzzer_test("media_av1_decoder_fuzzer") {
-    sources = [ "av1_decoder_fuzzertest.cc" ]
+if (is_win) {
+  fuzzer_test("media_d3d12_video_encode_delegate_fuzzer") {
+    sources = [ "windows/d3d12_video_encode_delegate_fuzzer.cc" ]
     deps = [
-      ":common",
+      ":gpu",
       "//base",
       "//media:test_support",
+      "//media/base/win:test_support",
+      "//testing/gmock",
+      "//testing/gtest",
     ]
   }
 }
@@ -776,13 +796,28 @@ fuzzer_test("media_vp9_decoder_fuzzer") {
     ":gpu",
     "//base",
     "//media:test_support",
+    "//testing/libfuzzer:libfuzzer_base_wrappers",
   ]
   seed_corpuses = [ "//media/test/data" ]
 }
 
 if (is_win || use_vaapi) {
+  fuzzer_test("media_h264_parser_structural_fuzzer") {
+    sources = [ "fuzzers/h264_parser_structural_fuzzer.cc" ]
+    deps = [
+      ":common",
+      ":gpu",
+      "//base",
+      "//media",
+      "//media:test_support",
+    ]
+  }
+
   group("stream_builder_fuzzers") {
     testonly = true
-    public_deps = [ "//media/gpu/fuzzers/av1_builder:av1_builder_fuzzer" ]
+    public_deps = [
+      ":media_h264_parser_structural_fuzzer",
+      "//media/gpu/fuzzers/av1_builder:av1_builder_fuzzer",
+    ]
   }
 }

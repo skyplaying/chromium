@@ -7,9 +7,18 @@
 #include <string_view>
 
 #include "base/compiler_specific.h"
+#include "base/logging.h"
+#include "base/notreached.h"
+#include "remoting/base/buildflags.h"
 #include "remoting/base/source_location.h"
 
+#if BUILDFLAG(REMOTING_MULTI_PROCESS)
+#include "remoting/host/mojom/desktop_session.mojom-shared.h"
+#endif  // BUILDFLAG(REMOTING_MULTI_PROCESS)
+
 namespace mojo {
+
+#if BUILDFLAG(REMOTING_MULTI_PROCESS)
 
 // static
 bool mojo::StructTraits<remoting::mojom::AudioPacketDataView,
@@ -97,6 +106,7 @@ bool mojo::StructTraits<remoting::mojom::DesktopEnvironmentOptionsDataView,
   out_options->set_enable_notifications(data_view.enable_notifications());
   out_options->set_terminate_upon_input(data_view.terminate_upon_input());
   out_options->set_enable_remote_webauthn(data_view.enable_remote_webauthn());
+  out_options->set_enable_security_key(data_view.enable_security_key());
 
   if (!data_view.ReadDesktopCaptureOptions(
           out_options->desktop_capture_options())) {
@@ -376,6 +386,16 @@ bool mojo::StructTraits<remoting::mojom::MouseEventDataView,
     out_event->set_delta_y(data_view.delta_y().value());
   }
 
+  remoting::mojom::FractionalCoordinateDataView fractional_coordinate_data_view;
+  data_view.GetFractionalCoordinateDataView(&fractional_coordinate_data_view);
+
+  if (!fractional_coordinate_data_view.is_null()) {
+    mojo::StructTraits<remoting::mojom::FractionalCoordinateDataView,
+                       ::remoting::protocol::FractionalCoordinate>::
+        Read(fractional_coordinate_data_view,
+             out_event->mutable_fractional_coordinate());
+  }
+
   return true;
 }
 
@@ -479,7 +499,10 @@ bool mojo::StructTraits<remoting::mojom::VideoTrackLayoutDataView,
                         ::remoting::protocol::VideoTrackLayout>::
     Read(remoting::mojom::VideoTrackLayoutDataView data_view,
          ::remoting::protocol::VideoTrackLayout* out_track) {
-  out_track->set_screen_id(data_view.screen_id());
+  std::optional<int64_t> screen_id = data_view.screen_id();
+  if (screen_id.has_value()) {
+    out_track->set_screen_id(screen_id.value());
+  }
 
   std::string media_stream_id;
   if (!data_view.ReadMediaStreamId(&media_stream_id)) {
@@ -535,8 +558,18 @@ bool mojo::StructTraits<remoting::mojom::VideoLayoutDataView,
 
   out_layout->set_primary_screen_id(data_view.primary_screen_id());
 
+  std::optional<::remoting::protocol::VideoLayout::PixelType> pixel_type;
+  if (!data_view.ReadPixelType(&pixel_type)) {
+    return false;
+  }
+  if (pixel_type.has_value()) {
+    out_layout->set_pixel_type(pixel_type.value());
+  }
+
   return true;
 }
+
+#endif  // BUILDFLAG(REMOTING_MULTI_PROCESS)
 
 // static
 bool mojo::StructTraits<remoting::mojom::SourceLocationDataView,
@@ -558,6 +591,82 @@ bool mojo::StructTraits<remoting::mojom::SourceLocationDataView,
 }
 
 // static
+bool mojo::StructTraits<
+    remoting::mojom::PortRangeDataView,
+    ::remoting::PortRange>::Read(remoting::mojom::PortRangeDataView data_view,
+                                 ::remoting::PortRange* out_range) {
+  auto port_range =
+      ::remoting::PortRange::Create(data_view.min_port(), data_view.max_port());
+  if (!port_range) {
+    return false;
+  }
+  *out_range = *std::move(port_range);
+  return true;
+}
+
+// static
+bool mojo::StructTraits<remoting::mojom::SessionPoliciesDataView,
+                        ::remoting::SessionPolicies>::
+    Read(remoting::mojom::SessionPoliciesDataView data_view,
+         ::remoting::SessionPolicies* out_policies) {
+  if (auto clipboard_size = data_view.clipboard_size_bytes();
+      clipboard_size.has_value()) {
+    // This check is needed because the Windows host is still 32-bit.
+    if (!base::IsValueInRangeForNumericType<size_t>(*clipboard_size)) {
+      return false;
+    }
+    out_policies->clipboard_size_bytes =
+        base::checked_cast<size_t>(*clipboard_size);
+  } else {
+    out_policies->clipboard_size_bytes = std::nullopt;
+  }
+  out_policies->allow_stun_connections = data_view.allow_stun_connections();
+  out_policies->allow_relayed_connections =
+      data_view.allow_relayed_connections();
+  if (!data_view.ReadHostUdpPortRange(&out_policies->host_udp_port_range)) {
+    return false;
+  }
+  out_policies->allow_file_transfer = data_view.allow_file_transfer();
+  out_policies->allow_uri_forwarding = data_view.allow_uri_forwarding();
+  if (!data_view.ReadMaximumSessionDuration(
+          &out_policies->maximum_session_duration)) {
+    return false;
+  }
+  out_policies->curtain_required = data_view.curtain_required();
+  out_policies->host_username_match_required =
+      data_view.host_username_match_required();
+  out_policies->allow_remote_input = data_view.allow_remote_input();
+  out_policies->allow_webauthn_forwarding =
+      data_view.allow_webauthn_forwarding();
+  out_policies->allow_gnubby_forwarding = data_view.allow_gnubby_forwarding();
+  out_policies->allow_terminal_mode = data_view.allow_terminal_mode();
+  return true;
+}
+
+// static
+bool mojo::StructTraits<remoting::mojom::SessionOptionsDataView,
+                        ::remoting::SessionOptions>::
+    Read(remoting::mojom::SessionOptionsDataView data_view,
+         ::remoting::SessionOptions* out_options) {
+  out_options->detect_updated_region = data_view.detect_updated_region();
+  out_options->capture_video_on_dedicated_thread =
+      data_view.capture_video_on_dedicated_thread();
+#if BUILDFLAG(IS_MAC)
+  out_options->enable_sck_capturer = data_view.enable_sck_capturer();
+#endif  // BUILDFLAG(IS_MAC)
+#if BUILDFLAG(IS_WIN)
+  out_options->allow_dxgi_capturer = data_view.allow_dxgi_capturer();
+#endif  // BUILDFLAG(IS_WIN)
+  out_options->disable_udp = data_view.disable_udp();
+  out_options->vp9_encoder_speed = data_view.vp9_encoder_speed();
+  out_options->av1_active_map = data_view.av1_active_map();
+  out_options->av1_encoder_speed = data_view.av1_encoder_speed();
+  return true;
+}
+
+#if BUILDFLAG(REMOTING_MULTI_PROCESS)
+
+// static
 bool mojo::StructTraits<remoting::mojom::FractionalCoordinateDataView,
                         ::remoting::protocol::FractionalCoordinate>::
     Read(remoting::mojom::FractionalCoordinateDataView data_view,
@@ -567,5 +676,287 @@ bool mojo::StructTraits<remoting::mojom::FractionalCoordinateDataView,
   out_coordinate->set_y(data_view.y());
   return true;
 }
+
+// static
+bool mojo::StructTraits<remoting::mojom::MicrophoneControlDataView,
+                        ::remoting::protocol::MicrophoneControl>::
+    Read(remoting::mojom::MicrophoneControlDataView data_view,
+         ::remoting::protocol::MicrophoneControl* out_control) {
+  out_control->set_enable(data_view.enable());
+  return true;
+}
+
+// static
+bool mojo::StructTraits<remoting::mojom::IpcFifoBufferReaderDataView,
+                        std::unique_ptr<remoting::IpcFifoBufferReader>>::
+    Read(remoting::mojom::IpcFifoBufferReaderDataView data_view,
+         std::unique_ptr<remoting::IpcFifoBufferReader>* out_reader) {
+  mojo::ScopedDataPipeConsumerHandle consumer_handle =
+      data_view.TakeConsumerHandle();
+  if (!consumer_handle.is_valid()) {
+    return false;
+  }
+  *out_reader = std::make_unique<remoting::IpcFifoBufferReader>(
+      std::move(consumer_handle));
+  return true;
+}
+
+// static
+bool mojo::StructTraits<remoting::mojom::AudioSampleInfoDataView,
+                        ::remoting::protocol::AudioSampleInfo>::
+    Read(remoting::mojom::AudioSampleInfoDataView data_view,
+         ::remoting::protocol::AudioSampleInfo* out_info) {
+  out_info->sampling_rate = data_view.sampling_rate();
+  out_info->channels = data_view.channels();
+  return true;
+}
+
+// static
+bool mojo::StructTraits<remoting::mojom::WebrtcSocketAddressDataView,
+                        ::webrtc::SocketAddress>::
+    Read(remoting::mojom::WebrtcSocketAddressDataView data_view,
+         ::webrtc::SocketAddress* out_address) {
+  std::string_view hostname_view;
+  if (!data_view.ReadHostname(&hostname_view)) {
+    return false;
+  }
+
+  ::webrtc::SocketAddress temp;
+  temp.SetIP(hostname_view);
+  temp.SetPort(data_view.port());
+
+  *out_address = std::move(temp);
+  return true;
+}
+
+// static
+bool mojo::StructTraits<remoting::mojom::WebrtcCandidateDataView,
+                        ::webrtc::Candidate>::
+    Read(remoting::mojom::WebrtcCandidateDataView data_view,
+         ::webrtc::Candidate* out_candidate) {
+  ::webrtc::Candidate temp;
+
+  std::string_view foundation_view;
+  if (!data_view.ReadFoundation(&foundation_view)) {
+    return false;
+  }
+  temp.set_foundation(foundation_view);
+
+  temp.set_component(data_view.component());
+
+  std::string_view protocol_view;
+  if (!data_view.ReadProtocol(&protocol_view)) {
+    return false;
+  }
+  temp.set_protocol(protocol_view);
+
+  temp.set_priority(data_view.priority());
+
+  ::webrtc::SocketAddress address;
+  if (!data_view.ReadAddress(&address)) {
+    return false;
+  }
+  temp.set_address(address);
+
+  ::webrtc::IceCandidateType candidate_type;
+  if (!data_view.ReadType(&candidate_type)) {
+    return false;
+  }
+  temp.set_type(candidate_type);
+
+  std::string_view tcptype_view;
+  if (!data_view.ReadTcptype(&tcptype_view)) {
+    return false;
+  }
+  temp.set_tcptype(tcptype_view);
+
+  ::webrtc::SocketAddress related_address;
+  if (!data_view.ReadRelatedAddress(&related_address)) {
+    return false;
+  }
+  temp.set_related_address(related_address);
+
+  std::string_view username_view;
+  if (!data_view.ReadUsername(&username_view)) {
+    return false;
+  }
+  temp.set_username(username_view);
+
+  std::string_view password_view;
+  if (!data_view.ReadPassword(&password_view)) {
+    return false;
+  }
+  temp.set_password(password_view);
+
+  temp.set_generation(data_view.generation());
+  temp.set_network_id(data_view.network_id());
+  temp.set_network_cost(data_view.network_cost());
+
+  *out_candidate = std::move(temp);
+  return true;
+}
+
+// static
+bool mojo::StructTraits<remoting::mojom::SessionDescriptionDataView,
+                        ::remoting::SessionDescription>::
+    Read(remoting::mojom::SessionDescriptionDataView data_view,
+         ::remoting::SessionDescription* out_description) {
+  ::remoting::SessionDescription temp;
+
+  if (!data_view.ReadType(&temp.type) || !data_view.ReadSdp(&temp.sdp) ||
+      !data_view.ReadSignature(&temp.signature)) {
+    return false;
+  }
+
+  *out_description = std::move(temp);
+  return true;
+}
+
+// static
+bool mojo::StructTraits<remoting::mojom::NamedCandidateDataView,
+                        ::remoting::IceTransportInfo::NamedCandidate>::
+    Read(remoting::mojom::NamedCandidateDataView data_view,
+         ::remoting::IceTransportInfo::NamedCandidate* out_candidate) {
+  ::remoting::IceTransportInfo::NamedCandidate temp;
+
+  if (!data_view.ReadSdpMid(&temp.name)) {
+    return false;
+  }
+
+  temp.sdp_m_line_index = data_view.sdp_m_line_index();
+
+  if (!data_view.ReadCandidate(&temp.candidate)) {
+    return false;
+  }
+
+  *out_candidate = std::move(temp);
+  return true;
+}
+
+// static
+bool mojo::StructTraits<remoting::mojom::JingleTransportInfoDataView,
+                        ::remoting::JingleTransportInfo>::
+    Read(remoting::mojom::JingleTransportInfoDataView data_view,
+         ::remoting::JingleTransportInfo* out_transport_info) {
+  ::remoting::JingleTransportInfo temp;
+
+  if (!data_view.ReadCandidates(&temp.candidates) ||
+      !data_view.ReadSessionDescription(&temp.session_description)) {
+    return false;
+  }
+
+  *out_transport_info = std::move(temp);
+  return true;
+}
+
+// static
+remoting::mojom::WebrtcProtocolType mojo::EnumTraits<
+    remoting::mojom::WebrtcProtocolType,
+    ::webrtc::ProtocolType>::ToMojom(::webrtc::ProtocolType protocol) {
+  switch (protocol) {
+    case ::webrtc::PROTO_UDP:
+      return remoting::mojom::WebrtcProtocolType::kUdp;
+    case ::webrtc::PROTO_DTLS:
+      return remoting::mojom::WebrtcProtocolType::kDtls;
+    case ::webrtc::PROTO_TCP:
+      return remoting::mojom::WebrtcProtocolType::kTcp;
+    case ::webrtc::PROTO_SSLTCP:
+      return remoting::mojom::WebrtcProtocolType::kSslTcp;
+    case ::webrtc::PROTO_TLS:
+      return remoting::mojom::WebrtcProtocolType::kTls;
+  }
+  NOTREACHED();
+}
+
+// static
+std::optional<::webrtc::ProtocolType>
+mojo::EnumTraits<remoting::mojom::WebrtcProtocolType, ::webrtc::ProtocolType>::
+    FromMojom(remoting::mojom::WebrtcProtocolType input) {
+  switch (input) {
+    case remoting::mojom::WebrtcProtocolType::kUdp:
+      return ::webrtc::PROTO_UDP;
+    case remoting::mojom::WebrtcProtocolType::kDtls:
+      return ::webrtc::PROTO_DTLS;
+    case remoting::mojom::WebrtcProtocolType::kTcp:
+      return ::webrtc::PROTO_TCP;
+    case remoting::mojom::WebrtcProtocolType::kSslTcp:
+      return ::webrtc::PROTO_SSLTCP;
+    case remoting::mojom::WebrtcProtocolType::kTls:
+      return ::webrtc::PROTO_TLS;
+  }
+  return std::nullopt;
+}
+
+// static
+bool mojo::StructTraits<remoting::mojom::WebrtcRelayServerConfigDataView,
+                        ::webrtc::RelayServerConfig>::
+    Read(remoting::mojom::WebrtcRelayServerConfigDataView data_view,
+         ::webrtc::RelayServerConfig* out_config) {
+  std::string username;
+  if (!data_view.ReadUsername(&username)) {
+    return false;
+  }
+  std::string password;
+  if (!data_view.ReadPassword(&password)) {
+    return false;
+  }
+
+  mojo::ArrayDataView<remoting::mojom::WebrtcProtocolAddressDataView>
+      ports_data;
+  data_view.GetPortsDataView(&ports_data);
+  std::vector<::webrtc::ProtocolAddress> ports;
+  ports.reserve(ports_data.size());
+  for (size_t i = 0; i < ports_data.size(); ++i) {
+    remoting::mojom::WebrtcProtocolAddressDataView port_data;
+    ports_data.GetDataView(i, &port_data);
+
+    ::webrtc::SocketAddress address;
+    if (!port_data.ReadAddress(&address)) {
+      return false;
+    }
+    ::webrtc::ProtocolType proto;
+    if (!port_data.ReadProtocol(&proto)) {
+      return false;
+    }
+    ports.emplace_back(std::move(address), proto);
+  }
+
+  out_config->credentials.username = std::move(username);
+  out_config->credentials.password = std::move(password);
+  out_config->ports = std::move(ports);
+  return true;
+}
+
+// static
+bool mojo::StructTraits<remoting::mojom::IceConfigDataView,
+                        ::remoting::protocol::IceConfig>::
+    Read(remoting::mojom::IceConfigDataView data_view,
+         ::remoting::protocol::IceConfig* out_config) {
+  if (!data_view.ReadExpirationTime(&out_config->expiration_time) ||
+      !data_view.ReadStunServers(&out_config->stun_servers) ||
+      !data_view.ReadTurnServers(&out_config->turn_servers)) {
+    return false;
+  }
+  out_config->max_bitrate_kbps = data_view.max_bitrate_kbps();
+  return true;
+}
+
+// static
+bool mojo::StructTraits<remoting::mojom::PairingResponseDataView,
+                        ::remoting::protocol::PairingResponse>::
+    Read(remoting::mojom::PairingResponseDataView data_view,
+         ::remoting::protocol::PairingResponse* out_response) {
+  std::string client_id;
+  std::string shared_secret;
+  if (!data_view.ReadClientId(&client_id) ||
+      !data_view.ReadSharedSecret(&shared_secret)) {
+    return false;
+  }
+  out_response->set_client_id(std::move(client_id));
+  out_response->set_shared_secret(std::move(shared_secret));
+  return true;
+}
+
+#endif  // BUILDFLAG(REMOTING_MULTI_PROCESS)
 
 }  // namespace mojo

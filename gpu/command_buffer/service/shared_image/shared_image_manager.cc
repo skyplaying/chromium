@@ -36,9 +36,10 @@
 #endif
 
 #if BUILDFLAG(IS_OZONE)
-#include "components/viz/common/gpu/vulkan_context_provider.h"
+#include "gpu/command_buffer/service/vulkan_context_provider.h"
 #include "gpu/config/gpu_finch_features.h"
 #include "ui/ozone/public/ozone_platform.h"
+#include "ui/ozone/public/surface_factory_ozone.h"
 #endif
 
 #if DCHECK_IS_ON()
@@ -94,7 +95,7 @@ class SCOPED_LOCKABLE SharedImageManager::AutoLock {
 SharedImageManager::SharedImageManager(
     bool thread_safe,
     bool display_context_on_another_thread,
-    viz::VulkanContextProvider* vulkan_context_provider,
+    VulkanContextProvider* vulkan_context_provider,
     scoped_refptr<base::SingleThreadTaskRunner> io_runner)
     : display_context_on_another_thread_(display_context_on_another_thread)
 #if BUILDFLAG(IS_WIN)
@@ -152,7 +153,13 @@ SharedImageManager::Register(std::unique_ptr<SharedImageBacking> backing,
     return nullptr;
   }
 
-  UMA_HISTOGRAM_ENUMERATION("GPU.SharedImage.BackingType", backing->GetType());
+  // Log UMA only for standalone backings created outside SI Factory.
+  // CompoundImageBacking logs UMA for its own constituent elements when
+  // created.
+  if (backing->GetType() != SharedImageBackingType::kCompound) {
+    UMA_HISTOGRAM_ENUMERATION("GPU.SharedImage.BackingType",
+                              backing->GetType());
+  }
   UMA_HISTOGRAM_ENUMERATION("GPU.SharedImage.SharedImageFormat",
                             viz::GetSharedImageFormatUMA(backing->format()));
 
@@ -243,7 +250,8 @@ SharedImageManager::ProduceGLTexturePassthrough(const Mailbox& mailbox,
 std::unique_ptr<SkiaImageRepresentation> SharedImageManager::ProduceSkia(
     const Mailbox& mailbox,
     MemoryTypeTracker* tracker,
-    scoped_refptr<SharedContextState> context_state) {
+    scoped_refptr<SharedContextState> context_state,
+    SharedImageUsageSet required_usages) {
   CALLED_ON_VALID_THREAD();
 
   AutoLock autolock(this);
@@ -251,6 +259,14 @@ std::unique_ptr<SkiaImageRepresentation> SharedImageManager::ProduceSkia(
   if (!backing) {
     LOG(ERROR) << "SharedImageManager::ProduceSkia: Trying to Produce a "
                   "Skia representation from a non-existent mailbox.";
+    return nullptr;
+  }
+
+  // Required usages must be verified before creating the representation to
+  // avoid potentially creating a representation on the wrong thread.
+  if (!required_usages.empty() && !backing->usage().HasAll(required_usages)) {
+    LOG(ERROR) << "SharedImageManager::ProduceSkia: Trying to Produce a "
+                  "Skia representation from backing without required usages.";
     return nullptr;
   }
 
@@ -405,7 +421,9 @@ std::unique_ptr<RasterImageRepresentation> SharedImageManager::ProduceRaster(
     return nullptr;
   }
 
-  EnforceSharedImageUsage(backing, {SHARED_IMAGE_USAGE_RAW_DRAW});
+  // TODO(b/349290188): Add back this enforcement when we plan on shipping
+  // RawDraw.
+  // EnforceSharedImageUsage(backing, {SHARED_IMAGE_USAGE_RAW_DRAW});
   // This is expected to fail based on the SharedImageBacking type, so don't log
   // error here. Caller is expected to handle nullptr.
   return backing->ProduceRaster(this, tracker);
@@ -542,6 +560,20 @@ void SharedImageManager::OnRepresentationDestroyed(
   }
 }
 
+bool SharedImageManager::UpdateSharedImage(
+    const Mailbox& mailbox,
+    std::unique_ptr<gfx::GpuFence> in_fence) {
+  AutoLock autolock(this);
+  auto* backing = GetBacking(mailbox);
+  if (!backing) {
+    LOG(ERROR)
+        << "SharedImageManager::UpdateSharedImage: Non-existent mailbox.";
+    return false;
+  }
+  backing->Update(std::move(in_fence));
+  return true;
+}
+
 void SharedImageManager::SetPurgeable(const Mailbox& mailbox, bool purgeable) {
   AutoLock autolock(this);
   auto* backing = GetBacking(mailbox);
@@ -628,6 +660,51 @@ bool SharedImageManager::SupportsScanoutImages() {
   return supports_overlays_on_ozone_;
 #elif BUILDFLAG(IS_WIN)
   return gl::DirectCompositionTextureSupported();
+#else
+  return false;
+#endif
+}
+
+void SharedImageManager::QueryMultiplanarTextureSamplingSupport() {
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
+  auto* ozone_platform = ui::OzonePlatform::GetInstance();
+  auto* surface_factory = ozone_platform->GetSurfaceFactoryOzone();
+  supports_ycbcr_nv12_sampling_ =
+      surface_factory->IsFormatSupportedForTexturing(
+          viz::MultiPlaneFormat::kNV12) &&
+      ozone_platform->IsNativePixmapConfigSupported(
+          viz::MultiPlaneFormat::kNV12,
+          gfx::BufferUsage::GPU_READ_CPU_READ_WRITE);
+  supports_ycbcr_p010_sampling_ =
+      surface_factory->IsFormatSupportedForTexturing(
+          viz::MultiPlaneFormat::kP010);
+  is_texture_sampling_queried_ = true;
+#endif  // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
+}
+
+bool SharedImageManager::SupportsNV12TextureSampling() {
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
+  AutoLock autolock(this);
+  if (!is_texture_sampling_queried_) {
+    QueryMultiplanarTextureSamplingSupport();
+  }
+  return supports_ycbcr_nv12_sampling_;
+#elif BUILDFLAG(IS_APPLE)
+  return true;
+#else
+  return false;
+#endif
+}
+
+bool SharedImageManager::SupportsP010TextureSampling() {
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
+  AutoLock autolock(this);
+  if (!is_texture_sampling_queried_) {
+    QueryMultiplanarTextureSamplingSupport();
+  }
+  return supports_ycbcr_p010_sampling_;
+#elif BUILDFLAG(IS_APPLE)
+  return true;
 #else
   return false;
 #endif

@@ -17,10 +17,9 @@
 #include "chrome/browser/profile_resetter/triggered_profile_resetter_factory.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/signin/signin_promo.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/startup/startup_browser_creator.h"
 #include "chrome/browser/ui/startup/startup_browser_creator_impl.h"
@@ -108,7 +107,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTriggeredResetTest,
   urls.push_back(embedded_test_server()->GetURL("/title1.html"));
   urls.push_back(embedded_test_server()->GetURL("/title2.html"));
 
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
 
   // Avoid showing the What's New page.
   PrefService* pref_service = g_browser_process->local_state();
@@ -178,7 +177,8 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTriggeredResetFirstRunTest,
   base::CommandLine dummy(base::CommandLine::NO_PROGRAM);
   StartupBrowserCreatorImpl launch(base::FilePath(), dummy, &browser_creator,
                                    chrome::startup::IsFirstRun::kYes);
-  launch.Launch(browser()->profile(), chrome::startup::IsProcessStartup::kYes,
+  launch.Launch(browser()->GetProfile(),
+                chrome::startup::IsProcessStartup::kYes,
                 /*restore_tabbed_browser=*/true);
 
   // This should have created a new browser window.
@@ -198,7 +198,7 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTriggeredResetFirstRunTest,
 IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTriggeredResetTest,
                        TestMultiProfile) {
   SessionStartupPref pref(SessionStartupPref::DEFAULT);
-  SessionStartupPref::SetStartupPref(browser()->profile(), pref);
+  SessionStartupPref::SetStartupPref(browser()->GetProfile(), pref);
 
   // Keep the browser process running while browsers are closed.
   ScopedKeepAlive keep_alive(KeepAliveOrigin::BROWSER,
@@ -216,7 +216,8 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTriggeredResetTest,
   {
     StartupBrowserCreatorImpl launch(base::FilePath(), dummy,
                                      chrome::startup::IsFirstRun::kNo);
-    launch.Launch(browser()->profile(), chrome::startup::IsProcessStartup::kNo,
+    launch.Launch(browser()->GetProfile(),
+                  chrome::startup::IsProcessStartup::kNo,
                   /*restore_tabbed_browser=*/true);
   }
 
@@ -260,12 +261,13 @@ IN_PROC_BROWSER_TEST_F(StartupBrowserCreatorTriggeredResetTest,
                   /*restore_tabbed_browser=*/true);
   }
 
-  Browser* other_profile_browser =
-      chrome::FindBrowserWithProfile(other_profile_ptr);
+  BrowserWindowInterface* other_profile_browser =
+      ProfileBrowserCollection::GetForProfile(other_profile_ptr)
+          ->GetLastActiveBrowser();
   ASSERT_NE(nullptr, other_profile_browser);
 
   // Check for the expected reset dialog in the second browser too.
-  TabStripModel* other_tab_strip = other_profile_browser->tab_strip_model();
+  TabStripModel* other_tab_strip = other_profile_browser->GetTabStripModel();
   ASSERT_LT(0, other_tab_strip->count());
   EXPECT_EQ(GetTriggeredResetSettingsURL(),
             other_tab_strip->GetActiveWebContents()->GetVisibleURL());

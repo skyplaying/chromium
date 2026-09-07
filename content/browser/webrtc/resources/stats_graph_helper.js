@@ -49,11 +49,14 @@ function isStatBlocklisted(report, statName) {
   if (report.type === 'candidate-pair' && statName === 'priority') {
     return true;
   }
-  // The mid/rid and ssrcs associated with a sender/receiver do not change
-  // over time; plotting uninteresting.
-  if (['inbound-rtp', 'outbound-rtp',
-        'remote-inbound-rtp', 'remote-outbound-rtp'].includes(report.type) &&
-      ['mid', 'rid', 'ssrc', 'rtxSsrc', 'fecSsrc'].includes(statName)) {
+  // The mid/rid, encoding index and ssrcs associated with a sender/receiver do
+  // not change over time; plotting uninteresting.
+  if ([
+        'inbound-rtp', 'outbound-rtp', 'remote-inbound-rtp',
+        'remote-outbound-rtp'
+      ].includes(report.type) &&
+      ['mid', 'rid', 'encodingIndex', 'ssrc', 'rtxSsrc', 'fecSsrc'].includes(
+          statName)) {
     return true;
   }
   // Last packet sent/received timestamps on candidate-pair and inbound-rtp
@@ -123,15 +126,6 @@ export function drawSingleRtcStats(peerConnectionElement, rtcStats) {
     if (!graphViews[graphViewId]) {
       graphViews[graphViewId] = createStatsGraphView(
           peerConnectionElement, rtcStats, graphType);
-      const searchParameters = new URLSearchParams(window.location.search);
-      if (searchParameters.has('statsInterval')) {
-        const statsInterval = Math.max(
-            parseInt(searchParameters.get('statsInterval'), 10),
-            100);
-        if (isFinite(statsInterval)) {
-          graphViews[graphViewId].setScale(statsInterval);
-        }
-      }
       const date = new Date(rtcStats.timestamp);
       graphViews[graphViewId].setDateRange(date, date);
     }

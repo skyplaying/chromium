@@ -22,6 +22,7 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import org.chromium.base.CallbackUtils;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseActivityTestRule;
 import org.chromium.base.test.params.ParameterAnnotations;
@@ -51,8 +52,6 @@ public class AutoPipPermissionDialogViewRenderTest {
     public static BaseActivityTestRule<BlankUiTestActivity> sActivityTestRule =
             new BaseActivityTestRule<>(BlankUiTestActivity.class);
 
-    private static Activity sActivity;
-
     private final @ColorInt int mFakeBgColor;
     private FrameLayout mContentView;
     private AutoPipPermissionDialogView mView;
@@ -73,7 +72,7 @@ public class AutoPipPermissionDialogViewRenderTest {
 
     @BeforeClass
     public static void setupSuite() {
-        sActivity = sActivityTestRule.launchActivity(null);
+        sActivityTestRule.launchActivity(null);
     }
 
     // This helper function waits until the view is rendered trying to prevent flakiness.
@@ -98,7 +97,7 @@ public class AutoPipPermissionDialogViewRenderTest {
     private void setUpViews() {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    Activity activity = sActivity;
+                    Activity activity = sActivityTestRule.getActivity();
                     mContentView = new FrameLayout(activity);
                     mView =
                             new AutoPipPermissionDialogView(
@@ -106,7 +105,7 @@ public class AutoPipPermissionDialogViewRenderTest {
                                     "Allow while visiting the site",
                                     "Allow this time",
                                     "Don't allow",
-                                    (result) -> {});
+                                    CallbackUtils.emptyCallback());
                     mContentView.setBackgroundColor(mFakeBgColor);
                     activity.setContentView(mContentView);
                     mContentView.addView(mView, MATCH_PARENT, WRAP_CONTENT);

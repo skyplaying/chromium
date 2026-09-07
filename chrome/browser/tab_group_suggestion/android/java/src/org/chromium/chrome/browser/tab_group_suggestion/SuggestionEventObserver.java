@@ -17,6 +17,7 @@ import org.chromium.chrome.browser.hub.PaneId;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabCreationState;
 import org.chromium.chrome.browser.tab.TabLaunchType;
+import org.chromium.chrome.browser.tab.TabSelectionType;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelObserver;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
@@ -26,6 +27,8 @@ import org.chromium.components.visited_url_ranking.url_grouping.TabSelectionCaus
 import org.chromium.content_public.browser.NavigationController;
 import org.chromium.content_public.browser.NavigationHandle;
 import org.chromium.content_public.browser.NavigationHistory;
+
+import java.util.List;
 
 /** Observer for events that are relevant to TabGroup suggestion triggering or calculation. */
 @NullMarked
@@ -38,25 +41,19 @@ public class SuggestionEventObserver {
     private final TabModelObserver mTabModelObserver =
             new TabModelObserver() {
                 @Override
-                public void didSelectTab(
-                        Tab tab,
-                        @org.chromium.chrome.browser.tab.TabSelectionType int type,
-                        int lastId) {
+                public void didSelectTab(Tab tab, @TabSelectionType int type, int lastId) {
                     @TabSelectionCause
                     int selectionType =
                             switch (type) {
-                                case org.chromium.chrome.browser.tab.TabSelectionType.FROM_CLOSE ->
+                                case TabSelectionType.FROM_CLOSE ->
                                         TabSelectionCause.FROM_CLOSE_ACTIVE_TAB;
-                                case org.chromium.chrome.browser.tab.TabSelectionType.FROM_EXIT ->
-                                        TabSelectionCause.FROM_APP_EXIT;
-                                case org.chromium.chrome.browser.tab.TabSelectionType.FROM_NEW ->
-                                        TabSelectionCause.FROM_NEW_TAB;
-                                case org.chromium.chrome.browser.tab.TabSelectionType.FROM_USER ->
+                                case TabSelectionType.FROM_EXIT -> TabSelectionCause.FROM_APP_EXIT;
+                                case TabSelectionType.FROM_NEW -> TabSelectionCause.FROM_NEW_TAB;
+                                case TabSelectionType.FROM_DRAG, TabSelectionType.FROM_USER ->
                                         TabSelectionCause.FROM_USER;
-                                case org.chromium.chrome.browser.tab.TabSelectionType
-                                                .FROM_OMNIBOX ->
+                                case TabSelectionType.FROM_OMNIBOX ->
                                         TabSelectionCause.FROM_OMNIBOX;
-                                case org.chromium.chrome.browser.tab.TabSelectionType.FROM_UNDO ->
+                                case TabSelectionType.FROM_UNDO ->
                                         TabSelectionCause.FROM_UNDO_CLOSURE;
                                 default ->
                                         throw new IllegalArgumentException(
@@ -80,6 +77,14 @@ public class SuggestionEventObserver {
                 @Override
                 public void willCloseTab(Tab tab, boolean didCloseAlone) {
                     mGroupSuggestionsService.willCloseTab(tab.getId());
+                }
+
+                @Override
+                public void willCloseTabs(
+                        List<Tab> tabs, boolean isAllTabs, boolean allowUndo) {
+                    for (Tab tab : tabs) {
+                        mGroupSuggestionsService.willCloseTab(tab.getId());
+                    }
                 }
 
                 @Override

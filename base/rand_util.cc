@@ -28,11 +28,6 @@ namespace {
 std::atomic<bool> g_subsampling_always_sample = false;
 std::atomic<bool> g_subsampling_never_sample = false;
 
-MetricsSubSampler* GetSharedSubsampler() {
-  static thread_local MetricsSubSampler g_shared_subsampler;
-  return &g_shared_subsampler;
-}
-
 }  // namespace
 
 uint64_t RandUint64() {
@@ -41,7 +36,7 @@ uint64_t RandUint64() {
   return number;
 }
 
-int RandInt(int min, int max) {
+int RandIntInclusive(int min, int max) {
   DCHECK_LE(min, max);
 
   uint64_t range = static_cast<uint64_t>(max) - static_cast<uint64_t>(min) + 1;
@@ -52,10 +47,6 @@ int RandInt(int min, int max) {
   DCHECK_GE(result, min);
   DCHECK_LE(result, max);
   return result;
-}
-
-int RandIntInclusive(int min, int max) {
-  return RandInt(min, max);
 }
 
 double RandDouble() {
@@ -197,6 +188,12 @@ void MetricsSubSampler::Reseed() {
   generator_ = InsecureRandomGenerator();
 }
 
+// static
+MetricsSubSampler& MetricsSubSampler::GetSharedMetricsSubsampler() {
+  static thread_local MetricsSubSampler g_shared_subsampler;
+  return g_shared_subsampler;
+}
+
 MetricsSubSampler::ScopedAlwaysSampleForTesting::
     ScopedAlwaysSampleForTesting() {
   DCHECK(!g_subsampling_always_sample.load(std::memory_order_relaxed));
@@ -224,11 +221,12 @@ MetricsSubSampler::ScopedNeverSampleForTesting::~ScopedNeverSampleForTesting() {
 }
 
 bool ShouldRecordSubsampledMetric(double probability) {
-  return GetSharedSubsampler()->ShouldSample(probability);
+  return MetricsSubSampler::GetSharedMetricsSubsampler().ShouldSample(
+      probability);
 }
 
 void ReseedSharedMetricsSubsampler() {
-  GetSharedSubsampler()->Reseed();
+  MetricsSubSampler::GetSharedMetricsSubsampler().Reseed();
 }
 
 }  // namespace base

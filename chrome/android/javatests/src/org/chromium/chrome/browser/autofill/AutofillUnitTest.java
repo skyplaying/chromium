@@ -26,8 +26,7 @@ import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.Feature;
 import org.chromium.components.autofill.AutofillDelegate;
 import org.chromium.components.autofill.AutofillPopup;
-import org.chromium.components.autofill.AutofillSuggestion;
-import org.chromium.components.autofill.SuggestionType;
+import org.chromium.components.autofill.AutofillPopup.AutofillDropdownItem;
 import org.chromium.content_public.browser.test.util.TouchCommon;
 import org.chromium.ui.base.ViewAndroidDelegate;
 import org.chromium.ui.test.util.BlankUiTestActivity;
@@ -35,8 +34,8 @@ import org.chromium.ui.test.util.BlankUiTestActivity;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Tests the Autofill's java code for creating the AutofillPopup object, opening and selecting
- * popups.
+ * Tests the Autofill's java code for creating the AutofillPopup object, opening and accepting
+ * suggestions in popups.
  */
 @RunWith(BaseJUnit4ClassRunner.class)
 @Batch(Batch.UNIT_TESTS)
@@ -70,7 +69,7 @@ public class AutofillUnitTest {
                                     sActivityTestRule.getActivity(),
                                     anchorView,
                                     mMockAutofillCallback);
-                    mAutofillPopup.filterAndShow(new AutofillSuggestion[0], /* isRtl= */ false);
+                    mAutofillPopup.filterAndShow(new AutofillDropdownItem[0], /* isRtl= */ false);
                 });
     }
 
@@ -78,14 +77,14 @@ public class AutofillUnitTest {
     private static final int CHECK_INTERVAL_MS = 100;
 
     private class MockAutofillCallback implements AutofillDelegate {
-        private final AtomicBoolean mGotPopupSelection = new AtomicBoolean(false);
+        private final AtomicBoolean mGotPopupAcceptance = new AtomicBoolean(false);
         public int mListIndex = -1;
 
         @Override
-        public void suggestionSelected(int listIndex) {
+        public void suggestionAccepted(int listIndex) {
             mListIndex = listIndex;
             mAutofillPopup.dismiss();
-            mGotPopupSelection.set(true);
+            mGotPopupAcceptance.set(true);
         }
 
         @Override
@@ -93,7 +92,7 @@ public class AutofillUnitTest {
 
         public void waitForCallback() {
             CriteriaHelper.pollInstrumentationThread(
-                    mGotPopupSelection::get, CALLBACK_TIMEOUT_MS, CHECK_INTERVAL_MS);
+                    mGotPopupAcceptance::get, CALLBACK_TIMEOUT_MS, CHECK_INTERVAL_MS);
         }
 
         @Override
@@ -103,59 +102,24 @@ public class AutofillUnitTest {
         public void accessibilityFocusCleared() {}
     }
 
-    private AutofillSuggestion[] createTwoAutofillSuggestionArray() {
-        return new AutofillSuggestion[] {
-            new AutofillSuggestion.Builder()
-                    .setLabel("Sherlock Holmes")
-                    .setSubLabel("221B Baker Street")
-                    .setSuggestionType(SuggestionType.ADDRESS_ENTRY)
-                    .setFeatureForIph("")
-                    .build(),
-            new AutofillSuggestion.Builder()
-                    .setLabel("Arthur Dent")
-                    .setSubLabel("West Country")
-                    .setSuggestionType(SuggestionType.ADDRESS_ENTRY)
-                    .setFeatureForIph("")
-                    .build()
+    private AutofillDropdownItem[] createTwoAutofillDropdownItemArray() {
+        return new AutofillDropdownItem[] {
+            new AutofillDropdownItem("Sherlock Holmes", "221B Baker Street"),
+            new AutofillDropdownItem("Arthur Dent", "West Country")
         };
     }
 
-    private AutofillSuggestion[] createFiveAutofillSuggestionArray() {
-        return new AutofillSuggestion[] {
-            new AutofillSuggestion.Builder()
-                    .setLabel("Sherlock Holmes")
-                    .setSubLabel("221B Baker Street")
-                    .setSuggestionType(SuggestionType.ADDRESS_ENTRY)
-                    .setFeatureForIph("")
-                    .build(),
-            new AutofillSuggestion.Builder()
-                    .setLabel("Arthur Dent")
-                    .setSubLabel("West Country")
-                    .setSuggestionType(SuggestionType.ADDRESS_ENTRY)
-                    .setFeatureForIph("")
-                    .build(),
-            new AutofillSuggestion.Builder()
-                    .setLabel("Arthos")
-                    .setSubLabel("France")
-                    .setSuggestionType(SuggestionType.ADDRESS_ENTRY)
-                    .setFeatureForIph("")
-                    .build(),
-            new AutofillSuggestion.Builder()
-                    .setLabel("Porthos")
-                    .setSubLabel("France")
-                    .setSuggestionType(SuggestionType.ADDRESS_ENTRY)
-                    .setFeatureForIph("")
-                    .build(),
-            new AutofillSuggestion.Builder()
-                    .setLabel("Aramis")
-                    .setSubLabel("France")
-                    .setSuggestionType(SuggestionType.ADDRESS_ENTRY)
-                    .setFeatureForIph("")
-                    .build()
+    private AutofillDropdownItem[] createFiveAutofillDropdownItemArray() {
+        return new AutofillDropdownItem[] {
+            new AutofillDropdownItem("Sherlock Holmes", "221B Baker Street"),
+            new AutofillDropdownItem("Arthur Dent", "West Country"),
+            new AutofillDropdownItem("Arthos", "France"),
+            new AutofillDropdownItem("Porthos", "France"),
+            new AutofillDropdownItem("Aramis", "France")
         };
     }
 
-    public void openAutofillPopupAndWaitUntilReady(final AutofillSuggestion[] suggestions) {
+    public void openAutofillPopupAndWaitUntilReady(final AutofillDropdownItem[] suggestions) {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> mAutofillPopup.filterAndShow(suggestions, /* isRtl= */ false));
         CriteriaHelper.pollInstrumentationThread(
@@ -169,10 +133,10 @@ public class AutofillUnitTest {
     @SmallTest
     @Feature({"autofill"})
     public void testAutofillWithDifferentNumberSuggestions() {
-        openAutofillPopupAndWaitUntilReady(createTwoAutofillSuggestionArray());
+        openAutofillPopupAndWaitUntilReady(createTwoAutofillDropdownItemArray());
         assertEquals(2, mAutofillPopup.getListView().getCount());
 
-        openAutofillPopupAndWaitUntilReady(createFiveAutofillSuggestionArray());
+        openAutofillPopupAndWaitUntilReady(createFiveAutofillDropdownItemArray());
         assertEquals(5, mAutofillPopup.getListView().getCount());
     }
 
@@ -180,7 +144,7 @@ public class AutofillUnitTest {
     @SmallTest
     @Feature({"autofill"})
     public void testAutofillClickFirstSuggestion() {
-        AutofillSuggestion[] suggestions = createTwoAutofillSuggestionArray();
+        AutofillDropdownItem[] suggestions = createTwoAutofillDropdownItemArray();
         openAutofillPopupAndWaitUntilReady(suggestions);
         assertEquals(2, mAutofillPopup.getListView().getCount());
 

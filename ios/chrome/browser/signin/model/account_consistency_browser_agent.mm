@@ -6,16 +6,23 @@
 
 #import <UIKit/UIKit.h>
 
+#import "base/check.h"
 #import "base/functional/callback_helpers.h"
 #import "base/metrics/histogram_functions.h"
+#import "base/not_fatal_until.h"
 #import "base/strings/sys_string_conversions.h"
 #import "components/signin/core/browser/account_reconcilor.h"
 #import "components/signin/ios/browser/account_consistency_service.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "ios/chrome/browser/authentication/ui_bundled/continuation.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_coordinator.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_utils.h"
+#import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
+#import "ios/chrome/browser/shared/model/browser/browser.h"
+#import "ios/chrome/browser/shared/model/browser/browser_provider.h"
+#import "ios/chrome/browser/shared/model/browser/browser_provider_interface.h"
 #import "ios/chrome/browser/shared/model/profile/features.h"
 #import "ios/chrome/browser/shared/model/profile/profile_attributes_storage_ios.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
@@ -50,13 +57,11 @@ AccountConsistencyBrowserAgent::AccountConsistencyBrowserAgent(
 }
 
 AccountConsistencyBrowserAgent::~AccountConsistencyBrowserAgent() {
-  StopSigninCoordinator(SigninCoordinatorResultInterrupted, nil);
+  StopSigninCoordinator();
   StopObserving();
 }
 
-void AccountConsistencyBrowserAgent::StopSigninCoordinator(
-    SigninCoordinatorResult result,
-    id<SystemIdentity> identity) {
+void AccountConsistencyBrowserAgent::StopSigninCoordinator() {
   [add_account_coordinator_ stop];
   add_account_coordinator_ = nil;
 }
@@ -91,24 +96,33 @@ void AccountConsistencyBrowserAgent::OnActiveWebStateChanged(
 }
 
 void AccountConsistencyBrowserAgent::OnRestoreGaiaCookies() {
+  AccountReconcilor* reconcilor =
+      ios::AccountReconcilorFactory::GetForProfile(browser_->GetProfile());
+  CHECK(reconcilor);
   signin_metrics::LogAccountReconcilorStateOnGaiaResponse(
-      ios::AccountReconcilorFactory::GetForProfile(browser_->GetProfile())
-          ->GetState());
+      reconcilor->GetState());
   [application_handler_
       showSigninAccountNotificationFromViewController:base_view_controller_];
 }
 
-void AccountConsistencyBrowserAgent::OnManageAccounts(const GURL& url) {
+void AccountConsistencyBrowserAgent::OnManageAccounts(
+    const GURL& url,
+    web::WebState* web_state) {
   Browser::Type browser_type = browser_->type();
   base::UmaHistogramEnumeration("Signin.ShowManageAccountFromGaia.BrowserType",
                                 browser_type);
   if (browser_type != Browser::Type::kRegular) {
     return;
   }
+  AccountReconcilor* reconcilor =
+      ios::AccountReconcilorFactory::GetForProfile(browser_->GetProfile());
+  CHECK(reconcilor);
   signin_metrics::LogAccountReconcilorStateOnGaiaResponse(
-      ios::AccountReconcilorFactory::GetForProfile(browser_->GetProfile())
-          ->GetState());
+      reconcilor->GetState());
 
+  if (!IsActiveWebState(web_state)) {
+    return;
+  }
   size_t num_profiles = GetApplicationContext()
                             ->GetProfileManager()
                             ->GetProfileAttributesStorage()
@@ -127,21 +141,27 @@ void AccountConsistencyBrowserAgent::OnManageAccounts(const GURL& url) {
 void AccountConsistencyBrowserAgent::OnShowConsistencyPromo(
     const GURL& url,
     web::WebState* web_state) {
-  signin_metrics::LogAccountReconcilorStateOnGaiaResponse(
-      ios::AccountReconcilorFactory::GetForProfile(browser_->GetProfile())
-          ->GetState());
-  web::WebState* current_web_state =
-      browser_->GetWebStateList()->GetActiveWebState();
-  if (current_web_state == web_state) {
-    [application_handler_
-        showWebSigninPromoFromViewController:base_view_controller_
-                                         URL:url];
+  if (!IsActiveWebState(web_state)) {
+    return;
   }
+  AccountReconcilor* reconcilor =
+      ios::AccountReconcilorFactory::GetForProfile(browser_->GetProfile());
+  CHECK(reconcilor);
+  signin_metrics::LogAccountReconcilorStateOnGaiaResponse(
+      reconcilor->GetState());
+  [application_handler_
+      showWebSigninPromoFromViewController:base_view_controller_
+                                       URL:url];
 }
 
 void AccountConsistencyBrowserAgent::OnAddAccount(
     const GURL& url,
-    const std::string& prefilled_email) {
+    const std::string& prefilled_email,
+    web::WebState* web_state) {
+  if (!IsActiveWebState(web_state)) {
+    return;
+  }
+
   if ([base_view_controller_ presentedViewController]) {
     // If the base view controller is already presenting a view, the sign-in
     // should not appear on top of it.
@@ -210,12 +230,17 @@ void AccountConsistencyBrowserAgent::OnAddUnkwownAccount(const GURL& url) {
   }
 }
 
-void AccountConsistencyBrowserAgent::OnGoIncognito(const GURL& url) {
+void AccountConsistencyBrowserAgent::OnGoIncognito(const GURL& url,
+                                                   web::WebState* web_state) {
+  if (!IsActiveWebState(web_state)) {
+    return;
+  }
+
   // The user taps on go incognito from the mobile U-turn webpage (the web
-  // page that displays all users accounts available in the content area). As
+  // page that displays all user accounts available in the content area). As
   // the user chooses to go to incognito, the mobile U-turn page is no longer
-  // neeeded. The current solution is to go back in history. This has the
-  // advantage of keeping the current browsing session and give a good user
+  // needed. The current solution is to go back in history. This has the
+  // advantage of keeping the current browsing session and giving a good user
   // experience when the user comes back from incognito.
   WebNavigationBrowserAgent::FromBrowser(browser_)->GoBack();
 
@@ -237,9 +262,6 @@ bool AccountConsistencyBrowserAgent::SigninEnabled() const {
 }
 
 bool AccountConsistencyBrowserAgent::CanShowAccountMenu() const {
-  if (!AreSeparateProfilesForManagedAccountsEnabled()) {
-    return false;
-  }
   ProfileIOS* profile = browser_->GetProfile()->GetOriginalProfile();
   signin::IdentityManager* identity_manager =
       IdentityManagerFactory::GetForProfile(profile);
@@ -248,6 +270,18 @@ bool AccountConsistencyBrowserAgent::CanShowAccountMenu() const {
 }
 
 void AccountConsistencyBrowserAgent::ShowAccountMenu(const GURL& url) {
-  CHECK(AreSeparateProfilesForManagedAccountsEnabled());
   [application_handler_ showAccountMenuFromWebWithURL:url];
+}
+
+bool AccountConsistencyBrowserAgent::IsActiveWebState(
+    web::WebState* web_state) {
+  if (web_state != browser_->GetWebStateList()->GetActiveWebState()) {
+    return false;
+  }
+  SceneState* scene_state = browser_->GetSceneState();
+  if (!scene_state) {
+    return false;
+  }
+  return browser_ ==
+         scene_state.browserProviderInterface.currentBrowserProvider.browser;
 }

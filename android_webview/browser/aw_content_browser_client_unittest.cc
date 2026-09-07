@@ -8,7 +8,6 @@
 #include <vector>
 
 #include "android_webview/browser/aw_feature_list_creator.h"
-#include "android_webview/common/aw_switches.h"
 #include "base/android/yield_to_looper_checker.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
@@ -18,9 +17,13 @@
 #include "base/test/bind.h"
 #include "base/test/gmock_callback_support.h"
 #include "base/test/mock_callback.h"
+#include "base/unguessable_token.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/storage_key/storage_key.h"
+#include "url/gurl.h"
+#include "url/origin.h"
 
 namespace android_webview {
 
@@ -31,99 +34,52 @@ using StrictMockTask =
     testing::StrictMock<base::MockCallback<base::RepeatingCallback<void()>>>;
 using base::android::YieldToLooperChecker;
 
-enum class StartupTaskExperiment {
-  kNone,
-  kUseStartupTasksLogic,
-  kUseStartupTasksLogicP2,
-  kStartupTasksYieldToNative,
+class TestAwContentBrowserClient : public AwContentBrowserClient {
+ public:
+  explicit TestAwContentBrowserClient(AwFeatureListCreator* creator)
+      : AwContentBrowserClient(creator) {}
+
+  MOCK_METHOD(bool,
+              AreThirdPartyCookiesGenerallyAllowed,
+              (content::BrowserContext*, content::WebContents*),
+              (override));
 };
 
-std::string StartupTaskExperimentToString(
-    const ::testing::TestParamInfo<StartupTaskExperiment>& info) {
-  switch (info.param) {
-    case StartupTaskExperiment::kNone:
-      return "NoExperiment";
-    case StartupTaskExperiment::kUseStartupTasksLogic:
-      return "UseStartupTasksLogic";
-    case StartupTaskExperiment::kUseStartupTasksLogicP2:
-      return "UseStartupTasksLogicP2";
-    case StartupTaskExperiment::kStartupTasksYieldToNative:
-      return "StartupTasksYieldToNative";
-  }
-}
-
-class AwContentBrowserClientTest
-    : public testing::TestWithParam<StartupTaskExperiment> {
- public:
-  AwContentBrowserClientTest() {
-    switch (GetParam()) {
-      case StartupTaskExperiment::kNone:
-        break;
-      case StartupTaskExperiment::kUseStartupTasksLogic:
-        client_.set_startup_tasks_logic_enabled_for_testing(true);
-        break;
-      case StartupTaskExperiment::kUseStartupTasksLogicP2:
-        client_.set_startup_tasks_logic_p2_enabled_for_testing(true);
-        break;
-      case StartupTaskExperiment::kStartupTasksYieldToNative:
-        client_
-            .set_startup_tasks_yield_to_native_experiment_enabled_for_testing(
-                true);
-        break;
-      default:
-        CHECK(false) << "Unhandled experiment";
-    }
-  }
-
-  bool IsAnyExperimentEnabled() {
-    return GetParam() != StartupTaskExperiment::kNone;
-  }
-
+class AwContentBrowserClientTest : public testing::Test {
  protected:
   content::BrowserTaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
-  AwContentBrowserClient client_{
-      std::make_unique<AwFeatureListCreator>().get()};
+  std::unique_ptr<AwFeatureListCreator> feature_list_creator_{
+      std::make_unique<AwFeatureListCreator>()};
+  TestAwContentBrowserClient client_{feature_list_creator_.get()};
   scoped_refptr<base::SequencedTaskRunner> task_runner_ =
       base::ThreadPool::CreateSequencedTaskRunner({});
 };
 
-TEST_P(AwContentBrowserClientTest, ClientTaskNotRunBeforeStartupComplete) {
+TEST_F(AwContentBrowserClientTest, ClientTaskNotRunBeforeStartupComplete) {
   StrictMockTask client_task;
+  StrictMockTask loop_quitting_task;
 
-  if (IsAnyExperimentEnabled()) {
-    StrictMockTask loop_quitting_task;
+  client_.PostAfterStartupTask(FROM_HERE, task_runner_, client_task.Get());
 
-    client_.PostAfterStartupTask(FROM_HERE, task_runner_, client_task.Get());
+  // Run loop to confirm that client task is not executed.
+  base::RunLoop run_loop;
+  EXPECT_CALL(loop_quitting_task, Run)
+      .WillOnce(base::test::RunOnceClosure(run_loop.QuitClosure()));
+  task_runner_->PostTask(FROM_HERE, loop_quitting_task.Get());
+  run_loop.Run();
 
-    // Run loop to confirm that client task is not executed.
-    base::RunLoop run_loop;
-    EXPECT_CALL(loop_quitting_task, Run)
-        .WillOnce(base::test::RunOnceClosure(run_loop.QuitClosure()));
-    task_runner_->PostTask(FROM_HERE, loop_quitting_task.Get());
-    run_loop.Run();
-
-    base::RunLoop task_run_loop;
-    EXPECT_CALL(client_task, Run)
-        .WillOnce(base::test::RunOnceClosure(task_run_loop.QuitClosure()));
-    client_.OnStartupComplete();
-    task_run_loop.Run();
-  } else {
-    base::RunLoop run_loop;
-    EXPECT_CALL(client_task, Run)
-        .WillOnce(base::test::RunOnceClosure(run_loop.QuitClosure()));
-    client_.PostAfterStartupTask(FROM_HERE, task_runner_, client_task.Get());
-    run_loop.Run();
-  }
+  base::RunLoop task_run_loop;
+  EXPECT_CALL(client_task, Run)
+      .WillOnce(base::test::RunOnceClosure(task_run_loop.QuitClosure()));
+  client_.OnStartupComplete();
+  task_run_loop.Run();
 }
 
-TEST_P(AwContentBrowserClientTest, TaskRunAfterStartupComplete) {
+TEST_F(AwContentBrowserClientTest, TaskRunAfterStartupComplete) {
   StrictMockTask task;
 
-  // Task should run without startup complete call if no experiment
-  if (IsAnyExperimentEnabled()) {
-    client_.OnStartupComplete();
-  }
+  client_.OnStartupComplete();
 
   base::RunLoop run_loop;
   EXPECT_CALL(task, Run).WillOnce(
@@ -133,7 +89,7 @@ TEST_P(AwContentBrowserClientTest, TaskRunAfterStartupComplete) {
   run_loop.Run();
 }
 
-TEST_P(AwContentBrowserClientTest, MultipleTasksBeforeStartup) {
+TEST_F(AwContentBrowserClientTest, MultipleTasksBeforeStartup) {
   StrictMockTask task1;
   StrictMockTask task2;
   StrictMockTask task3;
@@ -153,60 +109,57 @@ TEST_P(AwContentBrowserClientTest, MultipleTasksBeforeStartup) {
     client_.PostAfterStartupTask(FROM_HERE, task_runner_, task3.Get());
   };
 
-  if (IsAnyExperimentEnabled()) {
-    // AfterStartupTasks only running after startup is marked as complete.
-    post_after_startup_tasks();
-    setup_call_expectations();
-    client_.OnStartupComplete();
-    run_loop.Run();
-  } else {
-    // AfterStartupTasks run without startup complete.
-    setup_call_expectations();
-    post_after_startup_tasks();
-    run_loop.Run();
-  }
+  // AfterStartupTasks only running after startup is marked as complete.
+  post_after_startup_tasks();
+  setup_call_expectations();
+  client_.OnStartupComplete();
+  run_loop.Run();
 }
 
-TEST_P(AwContentBrowserClientTest,
+TEST_F(AwContentBrowserClientTest,
        OnUiTaskRunnerReadyCallbackRunAfterStartupComplete) {
   StrictMockTask task;
 
-  if (IsAnyExperimentEnabled()) {
-    client_.OnUiTaskRunnerReady(task.Get());
+  client_.OnUiTaskRunnerReady(task.Get());
 
-    base::RunLoop run_loop;
-    EXPECT_CALL(task, Run).WillOnce(
-        base::test::RunOnceClosure(run_loop.QuitClosure()));
+  base::RunLoop run_loop;
+  EXPECT_CALL(task, Run).WillOnce(
+      base::test::RunOnceClosure(run_loop.QuitClosure()));
 
-    client_.OnStartupComplete();
+  client_.OnStartupComplete();
 
-    run_loop.Run();
-  } else {
-    EXPECT_CALL(task, Run).Times(1);
-    client_.OnUiTaskRunnerReady(task.Get());
-  }
+  run_loop.Run();
 }
 
-TEST_P(AwContentBrowserClientTest, StartupStatesSetCorrectly) {
-  const bool yield_to_native_experiment =
-      GetParam() == StartupTaskExperiment::kStartupTasksYieldToNative;
-
+TEST_F(AwContentBrowserClientTest, StartupStatesSetCorrectly) {
   client_.OnUiTaskRunnerReady(base::DoNothing());
-  EXPECT_EQ(yield_to_native_experiment,
-            YieldToLooperChecker::GetInstance().ShouldYield());
+  EXPECT_TRUE(YieldToLooperChecker::GetInstance().ShouldYield());
 
   client_.OnStartupComplete();
   EXPECT_FALSE(YieldToLooperChecker::GetInstance().ShouldYield());
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    ,
-    AwContentBrowserClientTest,
-    ::testing::Values(StartupTaskExperiment::kNone,
-                      StartupTaskExperiment::kUseStartupTasksLogic,
-                      StartupTaskExperiment::kUseStartupTasksLogicP2,
-                      StartupTaskExperiment::kStartupTasksYieldToNative),
-    StartupTaskExperimentToString);
+TEST_F(AwContentBrowserClientTest, IsFullCookieAccessAllowed) {
+  GURL url("https://example.com");
+  blink::StorageKey storage_key_without_nonce =
+      blink::StorageKey::CreateFirstParty(url::Origin::Create(url));
+  blink::StorageKey storage_key_with_nonce = blink::StorageKey::CreateWithNonce(
+      url::Origin::Create(url), base::UnguessableToken::Create());
+
+  // By default, AreThirdPartyCookiesGenerallyAllowed returns true if third
+  // party cookies are allowed, but we mock it here to isolate the test.
+  EXPECT_CALL(client_,
+              AreThirdPartyCookiesGenerallyAllowed(testing::_, testing::_))
+      .WillRepeatedly(testing::Return(true));
+
+  EXPECT_TRUE(client_.IsFullCookieAccessAllowed(nullptr, nullptr, url,
+                                                storage_key_without_nonce,
+                                                net::CookieSettingOverrides()));
+
+  EXPECT_FALSE(client_.IsFullCookieAccessAllowed(
+      nullptr, nullptr, url, storage_key_with_nonce,
+      net::CookieSettingOverrides()));
+}
 
 }  // namespace
 

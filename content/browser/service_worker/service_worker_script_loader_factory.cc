@@ -10,6 +10,7 @@
 #include <string>
 #include <utility>
 
+#include "base/byte_size.h"
 #include "base/debug/crash_logging.h"
 #include "base/functional/callback_helpers.h"
 #include "base/strings/string_number_conversions.h"
@@ -18,9 +19,11 @@
 #include "content/browser/service_worker/service_worker_context_core.h"
 #include "content/browser/service_worker/service_worker_host.h"
 #include "content/browser/service_worker/service_worker_installed_script_loader.h"
+#include "content/browser/service_worker/service_worker_metrics.h"
 #include "content/browser/service_worker/service_worker_new_script_loader.h"
 #include "content/browser/service_worker/service_worker_updated_script_loader.h"
 #include "content/browser/service_worker/service_worker_version.h"
+#include "content/common/features.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "net/base/hash_value.h"
@@ -38,8 +41,10 @@ ServiceWorkerScriptLoaderFactory::ServiceWorkerScriptLoaderFactory(
       worker_host_(worker_host),
       loader_factory_for_new_scripts_(
           std::move(loader_factory_for_new_scripts)) {
-  DCHECK(loader_factory_for_new_scripts_ ||
-         ServiceWorkerVersion::IsInstalled(worker_host_->version()->status()));
+  CHECK(
+      loader_factory_for_new_scripts_ ||
+          ServiceWorkerVersion::IsInstalled(worker_host_->version()->status()),
+      base::NotFatalUntil::M159);
 }
 
 ServiceWorkerScriptLoaderFactory::~ServiceWorkerScriptLoaderFactory() = default;
@@ -199,6 +204,17 @@ bool ServiceWorkerScriptLoaderFactory::CheckIfScriptRequestIsValid(
 
   // TODO(falken): Make sure we don't handle a redirected request.
 
+  if (resource_request.destination ==
+          network::mojom::RequestDestination::kServiceWorker &&
+      resource_request.mode == network::mojom::RequestMode::kSameOrigin &&
+      resource_request.url != version->script_url()) {
+    if (base::FeatureList::IsEnabled(
+            features::kServiceWorkerVerifyMainScriptUrl)) {
+      mojo::ReportBadMessage("SWSLF_FORGED_MAIN_SCRIPT_REQUEST");
+      return false;
+    }
+  }
+
   return true;
 }
 
@@ -233,15 +249,8 @@ void ServiceWorkerScriptLoaderFactory::CopyScript(
   scoped_refptr<ServiceWorkerVersion> version = worker_host_->version();
   version->script_cache_map()->NotifyStartedCaching(url, new_resource_id);
 
-  auto split_callback = base::SplitOnceCallback(std::move(callback));
-  net::Error error = cache_writer_->StartCopy(
-      base::BindOnce(std::move(split_callback.first), new_resource_id));
-
-  // Run the callback directly if the operation completed or failed
-  // synchronously.
-  if (net::ERR_IO_PENDING != error) {
-    std::move(split_callback.second).Run(new_resource_id, error);
-  }
+  cache_writer_->StartCopy(
+      base::BindOnce(std::move(callback), new_resource_id));
 }
 
 void ServiceWorkerScriptLoaderFactory::OnCopyScriptFinished(
@@ -257,9 +266,10 @@ void ServiceWorkerScriptLoaderFactory::OnCopyScriptFinished(
     return;
   }
 
-  int64_t resource_size = cache_writer_->bytes_written();
-  DCHECK_EQ(cache_writer_->checksum_update_timing(),
-            ServiceWorkerCacheWriter::ChecksumUpdateTiming::kCacheMismatch);
+  base::ByteSize resource_size = cache_writer_->bytes_written();
+  CHECK_EQ(cache_writer_->checksum_update_timing(),
+           ServiceWorkerCacheWriter::ChecksumUpdateTiming::kCacheMismatch,
+           base::NotFatalUntil::M159);
   std::string sha256_checksum = cache_writer_->GetSha256Checksum();
   cache_writer_.reset();
   scoped_refptr<ServiceWorkerVersion> version = worker_host_->version();
@@ -319,12 +329,14 @@ void ServiceWorkerScriptLoaderFactory::OnResourceIdAssignedForNewScriptLoader(
 
   // Note: We do not need to run throttles because they have been already by
   // the ResourceFetcher on the renderer-side.
+  scoped_refptr<ServiceWorkerVersion> version = worker_host_->version();
   mojo::MakeSelfOwnedReceiver(
       ServiceWorkerNewScriptLoader::CreateAndStart(
-          request_id, options, resource_request, std::move(client),
-          worker_host_->version(), loader_factory_for_new_scripts_,
-          traffic_annotation, resource_id, /*is_throttle_needed=*/false,
-          /*requesting_frame_id=*/GlobalRenderFrameHostId()),
+          request_id, options, resource_request, std::move(client), version,
+          loader_factory_for_new_scripts_, traffic_annotation, resource_id,
+          /*is_throttle_needed=*/false,
+          /*requesting_frame_id=*/GlobalRenderFrameHostId(),
+          version->network_restrictions_id()),
       std::move(receiver));
 }
 

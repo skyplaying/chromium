@@ -4,11 +4,13 @@
 
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
 
+#include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notimplemented.h"
 #include "build/android_buildflags.h"
 #include "chrome/browser/android/tab_android.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/flags/android/chrome_feature_list.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/glue/synced_window_delegate_android.h"
 #include "chrome/browser/sync/session_sync_service_factory.h"
@@ -32,44 +34,30 @@ sync_sessions::OpenTabsUIDelegate* GetOpenTabsUIDelegate(Profile* profile) {
   return service->GetOpenTabsUIDelegate();
 }
 
-// Returns the initial |SessionID| for |TabModel|.
-//
-// On desktop Android, |BrowserWindowInterface| should be the source of truth
-// for |SessionID|, so we use the invalid value as the initial |SessionID| and
-// set a valid |SessionID| during
-// |TabModelJniBridge::AssociateWithBrowserWindow|. This aligns with the
-// implementation on other desktop platforms.
-//
-// On other Android platforms, there is no |BrowserWindowInterface|, and
-// |TabModel| has been the source of truth for |SessionID|, so we can use
-// |SessionID:NewUnique|.
-//
-// TODO(http://crbug.com/444518651): remove the if-def when
-// |BrowserWindowInterface| is compiled and running on all Android builds.
-SessionID GetInitialSessionId() {
-#if BUILDFLAG(IS_DESKTOP_ANDROID)
-  return SessionID::InvalidValue();
-#else
-  return SessionID::NewUnique();
-#endif
-}
 }  // namespace
 
 TabModel::TabModel(Profile* profile,
                    ActivityType activity_type,
+                   std::optional<chrome::android::CustomTabProfileType>
+                       custom_tab_profile_type,
                    TabModelType tab_model_type)
     : profile_(profile),
       activity_type_(activity_type),
+      custom_tab_profile_type_(custom_tab_profile_type),
       tab_model_type_(tab_model_type),
       live_tab_context_(new AndroidLiveTabContext(this)),
       synced_window_delegate_(new browser_sync::SyncedWindowDelegateAndroid(
           this,
           activity_type == ActivityType::kTabbed)),
-      session_id_(GetInitialSessionId()) {}
+      session_id_(SessionID::InvalidValue()) {}
 
 TabModel::~TabModel() = default;
 
-Profile* TabModel::GetProfile() const {
+Profile* TabModel::GetProfile() {
+  return profile_;
+}
+
+const Profile* TabModel::GetProfile() const {
   return profile_;
 }
 
@@ -155,20 +143,25 @@ void TabModel::RecordActualSyncedTabsHistogram() {
                                percent_synced);
 }
 
-// TODO(http://crbug.com/444518651): remove the if-def when
-// |BrowserWindowInterface| is compiled and running on all Android builds.
-#if BUILDFLAG(IS_DESKTOP_ANDROID)
 void TabModel::SetSessionId(SessionID session_id) {
   session_id_ = session_id;
 }
-#endif
+
+bool TabModel::IsEmptyRegularModelForEphemeralOrIncognitoCct() const {
+  return !IsOffTheRecord() && custom_tab_profile_type_.has_value() &&
+         (custom_tab_profile_type_.value() ==
+              chrome::android::CustomTabProfileType::kEphemeral ||
+          custom_tab_profile_type_.value() ==
+              chrome::android::CustomTabProfileType::kIncognito);
+}
 
 // static
 // From //chrome/browser/tab_list/tab_list_interface.h
 bool TabListInterface::CanEditTabList(Profile& profile) {
   for (TabModel* model : TabModelList::models()) {
     if (model->GetProfile() != &profile ||
-        model->GetTabModelType() != TabModel::TabModelType::kStandard) {
+        model->GetTabModelType() != TabModel::TabModelType::kStandard ||
+        model->IsEmptyRegularModelForEphemeralOrIncognitoCct()) {
       continue;
     }
 

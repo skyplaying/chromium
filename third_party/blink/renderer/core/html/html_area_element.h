@@ -43,6 +43,10 @@ class CORE_EXPORT HTMLAreaElement final : public HTMLAnchorElementBase {
   explicit HTMLAreaElement(Document&);
   ~HTMLAreaElement() override;
 
+  ElementType GetElementType() const final {
+    return ElementType::kHTMLAreaElement;
+  }
+
   bool IsDefault() const { return shape_ == kDefault; }
 
   // |containerObject| in the following functions is an object (normally a
@@ -72,7 +76,8 @@ class CORE_EXPORT HTMLAreaElement final : public HTMLAnchorElementBase {
                             UpdateBehavior::kStyleAndLayout) const override;
   void UpdateSelectionOnFocus(SelectionBehaviorOnFocus,
                               const FocusOptions*) override;
-  void SetFocused(bool, mojom::blink::FocusType) override;
+  using HTMLAnchorElementBase::SetFocused;
+  void SetFocused(bool, mojom::blink::FocusType, BlurEventBehavior) override;
 
   enum Shape { kDefault, kPoly, kRect, kCircle };
   void InvalidateCachedPath();

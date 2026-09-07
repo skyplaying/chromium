@@ -7,6 +7,7 @@
 #include <algorithm>
 
 #include "base/auto_reset.h"
+#include "base/byte_size.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/string_util.h"
 #include "base/task/sequenced_task_runner.h"
@@ -35,8 +36,10 @@
 #include "components/media_router/common/test/test_helper.h"
 #include "components/sessions/content/session_tab_helper.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
+#include "components/sync/base/features.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/network_service_instance.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test_utils.h"
@@ -183,11 +186,10 @@ void AccessCodeCastIntegrationBrowserTest::OnWillCreateBrowserContextServices(
 
 void AccessCodeCastIntegrationBrowserTest::SetUpOnMainThread() {
   InProcessBrowserTest::SetUpOnMainThread();
-  network_connection_tracker_ =
-      network::TestNetworkConnectionTracker::CreateInstance();
+  CHECK(network::TestNetworkConnectionTracker::HasInstance());
   content::SetNetworkConnectionTrackerForTesting(nullptr);
   content::SetNetworkConnectionTrackerForTesting(
-      network_connection_tracker_.get());
+      network::TestNetworkConnectionTracker::GetInstance());
   network::TestNetworkConnectionTracker::GetInstance()->SetConnectionType(
       net::NetworkChangeNotifier::ConnectionType::CONNECTION_WIFI);
   url_loader_interceptor_ =
@@ -197,12 +199,12 @@ void AccessCodeCastIntegrationBrowserTest::SetUpOnMainThread() {
   identity_test_environment_ =
       std::make_unique<signin::IdentityTestEnvironment>();
   // In case of multiple BrowserContext created, we should reassign
-  // `media_router_` to the one associated with `browser()->profile()`.
+  // `media_router_` to the one associated with `browser()->GetProfile()`.
   if (browser()) {
     media_router_ = static_cast<TestMediaRouter*>(
         media_router::MediaRouterFactory::GetInstance()
             ->MediaRouterFactory::GetApiForBrowserContext(
-                browser()->profile()));
+                browser()->GetProfile()));
   }
 
   // Support multiple sites on the test server.
@@ -217,14 +219,20 @@ void AccessCodeCastIntegrationBrowserTest::SetUpPrimaryAccountWithHostedDomain(
     Profile* profile,
     bool sign_in_account) {
   ASSERT_TRUE(identity_test_environment_);
+
+  signin::ConsentLevel consent_level =
+      syncer::IsReplaceSyncPromosWithSignInPromosEnabled()
+          ? signin::ConsentLevel::kSignin
+          : signin::ConsentLevel::kSync;
+
   // Ensure that the stub user is signed in.
   identity_test_environment_->MakePrimaryAccountAvailable(
-      user_manager::kStubUserEmail, signin::ConsentLevel::kSync);
+      user_manager::kStubUserEmail, consent_level);
 
   if (sign_in_account) {
     signin::MakePrimaryAccountAvailable(
         IdentityManagerFactory::GetForProfile(profile),
-        user_manager::kStubUserEmail, signin::ConsentLevel::kSync);
+        user_manager::kStubUserEmail, consent_level);
   }
 
   identity_test_environment_->SetAutomaticIssueOfAccessTokens(true);
@@ -238,7 +246,7 @@ void AccessCodeCastIntegrationBrowserTest::SetUpPrimaryAccountWithHostedDomain(
 }
 
 void AccessCodeCastIntegrationBrowserTest::EnableAccessCodeCasting() {
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       media_router::prefs::kAccessCodeCastEnabled, true);
   base::RunLoop().RunUntilIdle();
 }
@@ -525,7 +533,7 @@ bool AccessCodeCastIntegrationBrowserTest::InterceptRequest(
       static_cast<int>(response_code_), GetHttpReasonPhrase(response_code_)));
 
   network::URLLoaderCompletionStatus status(error_);
-  status.decoded_body_length = response_data_.size();
+  status.decoded_body_length = base::ByteSize(response_data_.size());
 
   content::URLLoaderInterceptor::WriteResponse(headers, response_data_,
                                                params->client.get());
@@ -565,7 +573,7 @@ void AccessCodeCastIntegrationBrowserTest::ExpectStartRouteCallFromTabMirroring(
   if (!media_router) {
     media_router = static_cast<TestMediaRouter*>(
         media_router::MediaRouterFactory::GetInstance()
-            ->GetApiForBrowserContext(browser()->profile()));
+            ->GetApiForBrowserContext(browser()->GetProfile()));
   }
   EXPECT_CALL(*media_router, CreateRouteInternal(media_source_id, sink_name, _,
                                                  web_contents, _, timeout));

@@ -60,6 +60,8 @@ DisallowedFeatures GetDisallowedFeatures(ContextType context_type) {
     adjusted_disallowed_features.ext_float_blend = true;
     adjusted_disallowed_features.oes_fbo_render_mipmap = true;
     adjusted_disallowed_features.oes_draw_buffers_indexed = true;
+    adjusted_disallowed_features.webgl_compressed_texture_etc = true;
+    adjusted_disallowed_features.webgl_compressed_texture_etc1 = true;
   }
   return adjusted_disallowed_features;
 }
@@ -409,6 +411,9 @@ ContextGroup::InitializeWithCompleteFramebufferForWorkarounds(
                << kMinTextureImageUnits << ").";
     return was_lost ? gpu::ContextResult::kTransientFailure
                     : gpu::ContextResult::kFatalFailure;
+  }
+  if (feature_info_->workarounds().max_texture_image_units_13) {
+    max_texture_image_units_ = std::min(max_texture_image_units_, 13u);
   }
   if (!QueryGLFeatureU(GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS,
                        kMinVertexTextureImageUnits,

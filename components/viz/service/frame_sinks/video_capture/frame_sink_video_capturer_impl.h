@@ -134,6 +134,7 @@ class VIZ_SERVICE_EXPORT FrameSinkVideoCapturerImpl final
   // event triggers a frame capture in the meantime, and will result in a frame
   // sent to the consumer with a delay of up to one second.
   void RequestRefreshFrame() final;
+  void InvalidateBuffers() final;
   void CreateOverlay(int32_t stacking_index,
                      mojo::PendingReceiver<mojom::FrameSinkVideoCaptureOverlay>
                          receiver) final;
@@ -238,11 +239,6 @@ class VIZ_SERVICE_EXPORT FrameSinkVideoCapturerImpl final
   // method to be called again in the near future, once the target becomes known
   // to the frame sink manager.
   void ResolveTarget();
-
-  // If the target is resolved, returns true.
-  // Otherwise, makes one attempt to resolve the target, and returns
-  // true iff the attempt was successful.
-  bool TryResolveTarget();
 
   // Helper method that actually implements the refresh logic. `event` is used
   // to determine if the refresh is urgent for scheduling purposes.

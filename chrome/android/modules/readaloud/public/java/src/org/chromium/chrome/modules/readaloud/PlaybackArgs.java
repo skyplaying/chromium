@@ -7,23 +7,18 @@ package org.chromium.chrome.modules.readaloud;
 import androidx.annotation.IntDef;
 import androidx.annotation.VisibleForTesting;
 
+import com.google.common.collect.ImmutableList;
+
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.util.List;
-import java.util.Locale;
-
-import com.google.common.collect.ImmutableList;
-
 
 /** Encapsulates information about the playback being requested. */
 @NullMarked
 public class PlaybackArgs {
-    /** TODO(basiaz): Delete after source lands e2e */
-    private final String mUrl;
-
     /* Can represent either page url or plain text */
     private final String mSource;
     /* if false, the surce is plain text rather than url of a website. */
@@ -42,6 +37,9 @@ public class PlaybackArgs {
         CLASSIC(1),
         OVERVIEW(2);
 
+        // For histogram logging.
+        public static final int COUNT = 3;
+
         private final int mValue;
 
         PlaybackMode(int value) {
@@ -59,11 +57,6 @@ public class PlaybackArgs {
                 }
             }
             throw new IllegalArgumentException("Unknown value: " + value);
-        }
-
-        @Override
-        public String toString() {
-            return String.format(Locale.US, "%s (%d)", this.name(), this.getValue());
         }
     }
 
@@ -99,11 +92,6 @@ public class PlaybackArgs {
                 }
             }
             throw new IllegalArgumentException("Unknown value: " + value);
-        }
-
-        @Override
-        public String toString() {
-            return String.format(Locale.US, "%s (%d)", this.name(), this.getValue());
         }
     }
 
@@ -258,12 +246,6 @@ public class PlaybackArgs {
             return mAccentRegionCode;
         }
 
-        // TODO(iwells): Remove this method when it is no longer called internally.
-
-        public @Nullable String getDescription() {
-            return mDisplayName;
-        }
-
         public @Nullable String getDisplayName() {
             return mDisplayName;
         }
@@ -279,24 +261,6 @@ public class PlaybackArgs {
         public @Tone int getTone() {
             return mTone;
         }
-
-        @Override
-        public String toString() {
-            return "PlaybackVoice{"
-                    + "language="
-                    + mLanguage
-                    + " accent="
-                    + mAccentRegionCode
-                    + " id="
-                    + mVoiceId
-                    + " displayName="
-                    + mDisplayName
-                    + " pitch="
-                    + mPitch
-                    + " tone="
-                    + mTone
-                    + "}";
-        }
     }
 
     public PlaybackArgs(
@@ -308,34 +272,33 @@ public class PlaybackArgs {
     }
 
     public PlaybackArgs(
-            String mSource,
+            String source,
             boolean isUrl,
             @Nullable String language,
             List<PlaybackVoice> voices,
             long dateModifiedMsSinceEpoch) {
-        this(mSource, isUrl, language, voices, dateModifiedMsSinceEpoch, ImmutableList.of(PlaybackMode.UNSPECIFIED));
+        this(
+                source,
+                isUrl,
+                language,
+                voices,
+                dateModifiedMsSinceEpoch,
+                ImmutableList.of(PlaybackMode.UNSPECIFIED));
     }
 
     public PlaybackArgs(
-            String mSource,
+            String source,
             boolean isUrl,
             @Nullable String language,
             List<PlaybackVoice> voices,
             long dateModifiedMsSinceEpoch,
             List<PlaybackMode> playbackModes) {
-        this.mUrl = mSource;
-        this.mSource = mSource;
-        this.mIsSourceUrl = isUrl;
-        this.mLanguage = language;
-        this.mVoices = voices;
-        this.mDateModifiedMsSinceEpoch = dateModifiedMsSinceEpoch;
-        this.mPlaybackModes = playbackModes;
-    }
-
-    /** Returns the URL of the playback page. */
-    @Deprecated
-    public String getUrl() {
-        return mUrl;
+        mSource = source;
+        mIsSourceUrl = isUrl;
+        mLanguage = language;
+        mVoices = voices;
+        mDateModifiedMsSinceEpoch = dateModifiedMsSinceEpoch;
+        mPlaybackModes = playbackModes;
     }
 
     /** Returns the source which can either be an URL or plain text */
@@ -371,33 +334,5 @@ public class PlaybackArgs {
     /** Returns the requested playback modes. */
     public List<PlaybackMode> getPlaybackModes() {
         return mPlaybackModes;
-    }
-
-    // Override toString() to help with debug logging.
-    @Override
-    public String toString() {
-        String voicesString = "";
-        for (PlaybackVoice voice : mVoices) {
-            voicesString += "\t\t" + voice + "\n";
-        }
-
-        return "PlaybackArgs{\n"
-                + "\t"
-                + (mIsSourceUrl ? "url=" : "text=")
-                + mSource
-                + "\n"
-                + "\tlanguage="
-                + mLanguage
-                + "\n"
-                + "\tvoices={\n"
-                + voicesString
-                + "\t}\n"
-                + "\tdateModifiedMs="
-                + mDateModifiedMsSinceEpoch
-                + "\n"
-                + "\tplaybackModes="
-                + mPlaybackModes
-                + "\n"
-                + "}";
     }
 }

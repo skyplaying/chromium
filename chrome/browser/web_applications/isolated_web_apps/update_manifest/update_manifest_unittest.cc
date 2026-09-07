@@ -74,6 +74,24 @@ INSTANTIATE_TEST_SUITE_P(
                     "a channel name can even have emoji 🚂",
                     "日本"));
 
+TEST(UpdateManifestTest, ErrorToString) {
+  EXPECT_EQ(UpdateManifest::ErrorToString(
+                UpdateManifest::JsonFormatError::kRootNotADictionary),
+            "Root is not a dictionary");
+  EXPECT_EQ(UpdateManifest::ErrorToString(
+                UpdateManifest::JsonFormatError::kChannelsNotADictionary),
+            "'channels' field is not a dictionary");
+  EXPECT_EQ(UpdateManifest::ErrorToString(
+                UpdateManifest::JsonFormatError::kChannelNotADictionary),
+            "Channel entry is not a dictionary");
+  EXPECT_EQ(UpdateManifest::ErrorToString(
+                UpdateManifest::JsonFormatError::kVersionsNotAnArray),
+            "'versions' field is not an array");
+  EXPECT_EQ(UpdateManifest::ErrorToString(
+                UpdateManifest::JsonFormatError::kVersionEntryNotADictionary),
+            "Version entry is not a dictionary");
+}
+
 TEST(UpdateManifestTest, FailsToParseManifestWithoutKeys) {
   auto update_manifest = UpdateManifest::CreateFromJson(
       base::Value(base::DictValue()), GURL("https://c.de/um.json"));
@@ -792,6 +810,97 @@ TEST(UpdateManifestParsesChannelMetadataTest, ChannelName) {
                                       /*display_name=*/std::nullopt)));
     EXPECT_THAT(channel_metadata.GetDisplayName(), Eq("another_name"));
   }
+}
+
+TEST(UpdateManifestParsesChannelMetadataTest, ChannelNameInvalidNotAString) {
+  ASSERT_OK_AND_ASSIGN(base::Value json,
+                       base::JSONReader::ReadAndReturnValueWithError(
+                           R"({
+    "channels": {
+      "default": {
+        "name": []
+      }
+    },
+    "versions": []
+  })",
+                           base::JSON_PARSE_CHROMIUM_EXTENSIONS));
+  ASSERT_OK_AND_ASSIGN(
+      auto update_manifest,
+      UpdateManifest::CreateFromJson(json, GURL("https://c.de/um.json")));
+
+  auto channel_metadata =
+      update_manifest.GetChannelMetadata(UpdateChannel::default_channel());
+  EXPECT_THAT(channel_metadata,
+              Eq(UpdateManifest::ChannelMetadata(
+                  /*update_channel=*/UpdateChannel::default_channel(),
+                  /*display_name=*/std::nullopt)));
+  EXPECT_THAT(channel_metadata.GetDisplayName(), Eq("default"));
+}
+
+TEST(UpdateManifestParsesChannelMetadataTest, ChannelNameInvalidEmpty) {
+  ASSERT_OK_AND_ASSIGN(base::Value json,
+                       base::JSONReader::ReadAndReturnValueWithError(
+                           R"({
+    "channels": {
+      "default": {
+        "name": ""
+      }
+    },
+    "versions": []
+  })",
+                           base::JSON_PARSE_CHROMIUM_EXTENSIONS));
+  ASSERT_OK_AND_ASSIGN(
+      auto update_manifest,
+      UpdateManifest::CreateFromJson(json, GURL("https://c.de/um.json")));
+
+  auto channel_metadata =
+      update_manifest.GetChannelMetadata(UpdateChannel::default_channel());
+  EXPECT_THAT(channel_metadata,
+              Eq(UpdateManifest::ChannelMetadata(
+                  /*update_channel=*/UpdateChannel::default_channel(),
+                  /*display_name=*/std::nullopt)));
+}
+
+TEST(UpdateManifestParsesChannelMetadataTest, ChannelNameInvalidTooLong) {
+  std::string too_long_name(257, 'a');
+  ASSERT_OK_AND_ASSIGN(
+      auto update_manifest,
+      UpdateManifest::CreateFromJson(
+          base::Value(
+              base::DictValue()
+                  .Set("versions", base::ListValue())
+                  .Set("channels", base::DictValue().Set(
+                                       "default", base::DictValue().Set(
+                                                      "name", too_long_name)))),
+          GURL("https://c.de/um.json")));
+
+  auto channel_metadata =
+      update_manifest.GetChannelMetadata(UpdateChannel::default_channel());
+  EXPECT_THAT(channel_metadata,
+              Eq(UpdateManifest::ChannelMetadata(
+                  /*update_channel=*/UpdateChannel::default_channel(),
+                  /*display_name=*/std::nullopt)));
+}
+
+TEST(UpdateManifestParsesChannelMetadataTest, ChannelNameValidMaxLength) {
+  std::string max_length_name(256, 'a');
+  ASSERT_OK_AND_ASSIGN(
+      auto update_manifest,
+      UpdateManifest::CreateFromJson(
+          base::Value(base::DictValue()
+                          .Set("versions", base::ListValue())
+                          .Set("channels",
+                               base::DictValue().Set(
+                                   "default", base::DictValue().Set(
+                                                  "name", max_length_name)))),
+          GURL("https://c.de/um.json")));
+
+  auto channel_metadata =
+      update_manifest.GetChannelMetadata(UpdateChannel::default_channel());
+  EXPECT_THAT(channel_metadata,
+              Eq(UpdateManifest::ChannelMetadata(
+                  /*update_channel=*/UpdateChannel::default_channel(),
+                  /*display_name=*/max_length_name)));
 }
 
 }  // namespace

@@ -11,7 +11,6 @@
 #include "components/omnibox/browser/actions/omnibox_action.h"
 #include "components/omnibox/browser/actions/omnibox_pedal.h"
 #include "components/omnibox/browser/autocomplete_match.h"
-#include "components/omnibox/browser/suggestion_answer.h"
 #include "components/omnibox/common/omnibox_feature_configs.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/omnibox_proto/rich_answer_template.pb.h"
@@ -89,53 +88,21 @@ TEST(AutocompleteMatchTypeTest, AccessibilityLabelPedal) {
 
 namespace {
 
-bool ParseJsonToAnswerData(const std::string& answer_json,
-                           omnibox::RichAnswerTemplate* answer_template) {
-  std::optional<base::DictValue> value = base::JSONReader::ReadDict(
-      answer_json, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
-  if (!value) {
-    return false;
-  }
-
-  return omnibox::answer_data_parser::ParseJsonToAnswerData(*value,
-                                                            answer_template);
-}
-
 }  // namespace
 
-TEST(AutocompleteMatchTypeTest, AccessibilityLabelAnswer) {
-  const std::u16string& kSearch = u"weather";
-  const std::u16string& kSearchDesc = u"Google Search";
-
+TEST(AutocompleteMatchTypeTest, AccessibilityLabelThreadsHistory) {
   AutocompleteMatch match;
-  match.answer_type = omnibox::ANSWER_TYPE_WEATHER;
   match.type = AutocompleteMatchType::SEARCH_WHAT_YOU_TYPED;
-  match.description = kSearchDesc;
+  match.subtypes.insert(
+      omnibox::SuggestSubtype::SUBTYPE_AI_MODE_MORE_THREADS_ENTRYPOINT);
 
-  // No addititional accessibility text found in the answer data.
-  std::string answer_json =
-      "{ \"l\": ["
-      "  { \"il\": { \"t\": [{ \"t\": \"text\", \"tt\": 8 }] } }, "
-      "  { \"il\": { \"t\": [{ \"t\": \"sunny with a chance of hail\", \"tt\": "
-      "5 }] } }] }";
+  std::u16string label_with_header =
+      AutocompleteMatchType::ToAccessibilityLabel(
+          match,
+          /*header_text=*/u"menu item",
+          /*match_text=*/u"View your AI Mode history",
+          /*match_index=*/0,
+          /*total_matches=*/1);
 
-  omnibox::RichAnswerTemplate answer_template;
-  ASSERT_TRUE(ParseJsonToAnswerData(answer_json, &answer_template));
-  ASSERT_FALSE(answer_template.answers(0).subhead().has_a11y_text());
-  match.answer_template = answer_template;
-  EXPECT_EQ(
-      kSearch + u", answer, sunny with a chance of hail, 4 of 6",
-      AutocompleteMatchType::ToAccessibilityLabel(match, u"", kSearch, 3, 6));
-
-  answer_template.Clear();
-  // Accessibility text found in the answer data.
-  omnibox::AnswerData* answer_data = answer_template.add_answers();
-  answer_data->mutable_headline()->set_text("headline");
-  answer_data->mutable_subhead()->set_text("subhead");
-  answer_data->mutable_subhead()->set_a11y_text("accessibility text");
-  match.answer_template = answer_template;
-
-  EXPECT_EQ(
-      kSearch + u", answer, accessibility text, 4 of 6",
-      AutocompleteMatchType::ToAccessibilityLabel(match, u"", kSearch, 3, 6));
+  EXPECT_EQ(label_with_header, u"View your AI Mode history, menu item, 1 of 1");
 }

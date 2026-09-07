@@ -60,6 +60,10 @@ class MEDIA_EXPORT AudioManagerAndroid : public AudioManagerBase {
     // state reported by the OS.
     virtual void InitScoStateListener() = 0;
 
+    // Initializes the microphone mute state listener and returns the current
+    // system microphone mute state.
+    virtual bool InitMicrophoneMuteStateListener() = 0;
+
     // Returns metadata about the available audio devices as reported by the
     // Android framework, filtered to input devices if `inputs` is true, and to
     // output devices otherwise.
@@ -114,8 +118,8 @@ class MEDIA_EXPORT AudioManagerAndroid : public AudioManagerBase {
   // Implementation of AudioManager.
   bool HasAudioOutputDevices() override;
   bool HasAudioInputDevices() override;
-  void GetAudioInputDeviceNames(AudioDeviceNames* device_names) override;
-  void GetAudioOutputDeviceNames(AudioDeviceNames* device_names) override;
+  bool GetAudioInputDeviceNames(AudioDeviceNames* device_names) override;
+  bool GetAudioOutputDeviceNames(AudioDeviceNames* device_names) override;
   AudioParameters GetInputStreamParameters(
       const std::string& device_id) override;
 
@@ -160,6 +164,14 @@ class MEDIA_EXPORT AudioManagerAndroid : public AudioManagerBase {
   // changes. Note that this is called on the main thread.
   void OnScoStateChanged(JNIEnv* env, bool state);
 
+  // Called by the Java `AudioManagerAndroid` on the main thread when the system
+  // microphone mute state changes.
+  void OnMicrophoneMuteStateChanged(JNIEnv* env, bool muted);
+
+  [[nodiscard]] std::optional<base::CallbackListSubscription>
+  AddInputMuteStateChangeCallback(
+      base::RepeatingCallback<void(bool)> callback) override;
+
   // Sets a volume that applies to all this manager's output audio streams.
   // This overrides other SetVolume calls (e.g. through AudioHostMsg_SetVolume).
   // TODO(https://crbug.com/422733084): this functionality is likely unused.
@@ -173,17 +185,26 @@ class MEDIA_EXPORT AudioManagerAndroid : public AudioManagerBase {
   // otherwise accounting for.
   base::TimeDelta GetOutputLatency();
 
+  bool IsMicrophoneMuted();
+
   // Returns a bitmask of audio encoding formats supported by all connected HDMI
   // output devices.
   static AudioParameters::Format GetHdmiOutputEncodingFormats();
 
-  // Called by an `AAudioInputStream` when it is started, i.e. it begins
-  // providing audio data.
-  void OnStartAAudioInputStream(AAudioInputStream* stream);
+  // Acquires the Bluetooth SCO state for an AAudio input stream.
+  // Must be called on the audio thread before attempting to start the stream
+  // to ensure SCO is active.
+  void AcquireScoState(AAudioInputStream* stream);
 
-  // Called by an `AAudioInputStream` when it is stopped, i.e. it stops
-  // providing audio data.
-  void OnStopAAudioInputStream(AAudioInputStream* stream);
+  // Releases the Bluetooth SCO state for an AAudio input stream when it is
+  // stopped or fails to start. Must be called on the audio thread.
+  void ReleaseScoState(AAudioInputStream* stream);
+
+  // Called by an `AAudioInputStream` when its underlying audio device is
+  // changed, i.e. it stops and restarts providing audio data.
+  void OnAAudioInputStreamDeviceChanged(AAudioInputStream* stream);
+
+  bool IsUsingBluetoothSco(AAudioInputStream* stream);
 
   void SetJniDelegateForTesting(std::unique_ptr<JniDelegate> jni_delegate);
 
@@ -243,6 +264,7 @@ class MEDIA_EXPORT AudioManagerAndroid : public AudioManagerBase {
   void DoSetMuteOnAudioThread(bool muted);
   void DoSetVolumeOnAudioThread(double volume);
   void OnScoStateChangedOnAudioThread(bool state);
+  void OnMicrophoneMuteStateChangedOnAudioThread(bool muted);
 
   std::unique_ptr<JniDelegate> jni_delegate_;
 
@@ -251,6 +273,10 @@ class MEDIA_EXPORT AudioManagerAndroid : public AudioManagerBase {
   // it can initially be assumed to be `false` here.
   bool is_bluetooth_sco_enabled_ = false;
 
+  bool is_microphone_muted_ = false;
+  base::RepeatingCallbackList<void(bool)>
+      microphone_mute_state_change_callbacks_;
+
   // Most recently fetched device data. See `GetDeviceCache` for more details.
   DeviceCache input_device_cache_;
   DeviceCache output_device_cache_;
@@ -258,6 +284,9 @@ class MEDIA_EXPORT AudioManagerAndroid : public AudioManagerBase {
   OutputStreams output_streams_;
   BluetoothOutputStreams bluetooth_output_streams_;
 
+  // The set of active input streams that have acquired the Bluetooth SCO state.
+  // The global SCO state is turned on when this set transitions from empty to
+  // non-empty, and turned off when it transitions back to empty.
   InputStreams input_streams_requiring_sco_;
 
   // Enabled when first input stream is created and set to false when last

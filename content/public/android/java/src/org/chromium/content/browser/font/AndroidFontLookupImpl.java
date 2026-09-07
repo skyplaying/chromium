@@ -37,6 +37,7 @@ import org.chromium.services.service_manager.InterfaceFactory;
 
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Locale;
@@ -57,15 +58,15 @@ public class AndroidFontLookupImpl implements AndroidFontLookup {
     static final String MATCH_LOCAL_FONT_BY_UNIQUE_NAME_HISTOGRAM =
             "Android.FontLookup.MatchLocalFontByUniqueName.Time";
 
-    static final String FETCH_ALL_FONT_FILES_HISTOGRAM =
-            "Android.FontLookup.FetchAllFontFiles.Time";
-
     @VisibleForTesting
     static final String GMS_FONT_REQUEST_HISTOGRAM = "Android.FontLookup.GmsFontRequest.Time";
 
     private static final String GOOGLE_SANS_REGULAR = "google sans regular";
     private static final String GOOGLE_SANS_MEDIUM = "google sans medium";
     private static final String GOOGLE_SANS_BOLD = "google sans bold";
+    private static final String GOOGLE_SANS_TEXT_REGULAR = "google sans text regular";
+    private static final String GOOGLE_SANS_TEXT_MEDIUM = "google sans text medium";
+    private static final String GOOGLE_SANS_TEXT_BOLD = "google sans text bold";
     private static final String NOTO_COLOR_EMOJI_COMPAT = "noto color emoji compat";
     private static final String GOOGLE_SANS_FLEX = "google sans flex regular";
 
@@ -106,7 +107,7 @@ public class AndroidFontLookupImpl implements AndroidFontLookup {
         mAppContext = appContext;
         mFontsContract = fontsContract;
         mFullFontNameToQuery = fullFontNameToQuery;
-        mExpectedFonts = new HashSet<>(mFullFontNameToQuery.keySet());
+        mExpectedFonts = Collections.synchronizedSet(new HashSet<>(mFullFontNameToQuery.keySet()));
     }
 
     /**
@@ -160,7 +161,6 @@ public class AndroidFontLookupImpl implements AndroidFontLookup {
     /** Fetches all available font files from the {@link #mExpectedFonts} array. */
     @Override
     public void fetchAllFontFiles(FetchAllFontFiles_Response callback) {
-        long startTimeMs = SystemClock.elapsedRealtime();
         Core core = CoreImpl.getInstance();
         Executor executor = ExecutorFactory.getExecutorForCurrentThread(core);
 
@@ -175,9 +175,6 @@ public class AndroidFontLookupImpl implements AndroidFontLookup {
                             result.put(font, file);
                         }
                     }
-                    RecordHistogram.recordTimesHistogram(
-                            FETCH_ALL_FONT_FILES_HISTOGRAM,
-                            SystemClock.elapsedRealtime() - startTimeMs);
                     executor.execute(() -> callback.call(result));
                 });
     }
@@ -318,6 +315,9 @@ public class AndroidFontLookupImpl implements AndroidFontLookup {
         map.put(GOOGLE_SANS_REGULAR, createFontQuery("Google Sans", 400));
         map.put(GOOGLE_SANS_MEDIUM, createFontQuery("Google Sans", 500));
         map.put(GOOGLE_SANS_BOLD, createFontQuery("Google Sans", 700));
+        map.put(GOOGLE_SANS_TEXT_REGULAR, createFontQuery("Google Sans Text", 400));
+        map.put(GOOGLE_SANS_TEXT_MEDIUM, createFontQuery("Google Sans Text", 500));
+        map.put(GOOGLE_SANS_TEXT_BOLD, createFontQuery("Google Sans Text", 700));
         map.put(NOTO_COLOR_EMOJI_COMPAT, createFontQuery("Noto Color Emoji Compat", 400));
         map.put(GOOGLE_SANS_FLEX, createFontQuery("Google Sans Flex", 400));
         return map;

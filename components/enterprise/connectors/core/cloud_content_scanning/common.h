@@ -8,11 +8,9 @@
 #include <string>
 
 #include "base/functional/callback.h"
+#include "components/enterprise/connectors/core/common.h"
 
 namespace enterprise_connectors {
-
-// Callback to be called when the hash of a file has been computed.
-using OnGotHashCallback = base::OnceCallback<void(std::string)>;
 
 // The result of uploading a scanning request to the WebProtect server.
 //
@@ -54,7 +52,10 @@ enum class ScanRequestUploadResult {
   // The server did not return all the results for the synchronous requests
   kIncompleteResponse = 10,
 
-  kMaxValue = kIncompleteResponse,
+  // The user cancelled the request.
+  kUserCancelled = 11,
+
+  kMaxValue = kUserCancelled,
 };
 
 std::string ScanRequestUploadResultToString(ScanRequestUploadResult result);

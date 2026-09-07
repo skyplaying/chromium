@@ -8,35 +8,32 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.Mockito;
-import org.mockito.MockitoAnnotations;
 import org.mockito.invocation.InvocationOnMock;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.mockito.stubbing.Answer;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.content_public.browser.WebContentsObserver;
 
 /** Unit tests for {@link WebContentsObserverProxy}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class WebContentsObserverProxyTest {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Mock private WebContentsObserver mWebContentsObserver;
     @Mock private WebContentsObserver mWebContentsObserver2;
     @Mock private WebContentsObserverProxy.Natives mWebContentsObserverProxyJni;
 
-    private WebContentsImpl mWebContentsImpl;
-    private static final long M_NATIVE_WEB_CONTENTS_ANDROID = 1;
-
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
         WebContentsObserverProxyJni.setInstanceForTesting(mWebContentsObserverProxyJni);
-        when(mWebContentsObserverProxyJni.init(any(), any())).thenReturn(1L);
+        when(mWebContentsObserverProxyJni.init(any())).thenReturn(1L);
     }
 
     @Test

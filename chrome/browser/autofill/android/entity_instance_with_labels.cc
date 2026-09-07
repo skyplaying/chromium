@@ -5,6 +5,7 @@
 #include "chrome/browser/autofill/android/entity_instance_with_labels.h"
 
 #include "base/android/jni_string.h"
+#include "chrome/browser/autofill/android/entity_type_android.h"
 
 // Must come after all headers that specialize FromJniType() / ToJniType().
 #include "components/autofill/android/main_autofill_jni_headers/EntityInstanceWithLabels_jni.h"
@@ -13,13 +14,17 @@ namespace autofill {
 
 EntityInstanceWithLabels::EntityInstanceWithLabels(
     std::string guid,
+    EntityTypeAndroid entity_type,
     std::u16string entity_instance_label,
     std::u16string entity_instance_sublabel,
-    bool stored_in_wallet)
+    bool stored_in_wallet,
+    std::optional<std::string> wallet_entity_url)
     : guid(std::move(guid)),
+      entity_type(std::move(entity_type)),
       entity_instance_label(std::move(entity_instance_label)),
       entity_instance_sublabel(std::move(entity_instance_sublabel)),
-      stored_in_wallet(stored_in_wallet) {}
+      stored_in_wallet(stored_in_wallet),
+      wallet_entity_url(std::move(wallet_entity_url)) {}
 EntityInstanceWithLabels::~EntityInstanceWithLabels() = default;
 EntityInstanceWithLabels::EntityInstanceWithLabels(
     const EntityInstanceWithLabels&) = default;
@@ -42,10 +47,12 @@ EntityInstanceWithLabels FromJniType<EntityInstanceWithLabels>(
     const JavaRef<jobject>& jobj) {
   EntityInstanceWithLabels instance(
       autofill::Java_EntityInstanceWithLabels_getGuid(env, jobj),
+      autofill::Java_EntityInstanceWithLabels_getEntityType(env, jobj),
       autofill::Java_EntityInstanceWithLabels_getEntityInstanceLabel(env, jobj),
       autofill::Java_EntityInstanceWithLabels_getEntityInstanceSubLabel(env,
                                                                         jobj),
-      autofill::Java_EntityInstanceWithLabels_isStoredInWallet(env, jobj));
+      autofill::Java_EntityInstanceWithLabels_isStoredInWallet(env, jobj),
+      autofill::Java_EntityInstanceWithLabels_getWalletEntityUrl(env, jobj));
   return instance;
 }
 
@@ -54,9 +61,10 @@ ScopedJavaLocalRef<jobject> ToJniType<EntityInstanceWithLabels>(
     JNIEnv* env,
     const EntityInstanceWithLabels& native_instance) {
   return autofill::Java_EntityInstanceWithLabels_Constructor(
-      env, native_instance.guid, native_instance.entity_instance_label,
+      env, native_instance.guid, native_instance.entity_type,
+      native_instance.entity_instance_label,
       native_instance.entity_instance_sublabel,
-      native_instance.stored_in_wallet);
+      native_instance.stored_in_wallet, native_instance.wallet_entity_url);
 }
 
 }  // namespace jni_zero

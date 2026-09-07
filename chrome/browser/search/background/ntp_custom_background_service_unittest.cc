@@ -22,7 +22,6 @@
 #include "chrome/browser/global_features.h"
 #include "chrome/browser/search/background/ntp_background_service_factory.h"
 #include "chrome/browser/search/background/ntp_custom_background_service_factory.h"
-#include "chrome/browser/search/background/ntp_custom_background_service_observer.h"
 #include "chrome/browser/search/background/theme_delegate.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/common/chrome_paths.h"
@@ -33,10 +32,12 @@
 #include "chrome/test/base/testing_profile.h"
 #include "components/application_locale_storage/application_locale_storage.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
+#include "components/themes/ntp_custom_background_service_observer.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_utils.h"
 #include "net/http/http_status_code.h"
 #include "services/data_decoder/public/cpp/test_support/in_process_data_decoder.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -623,7 +624,7 @@ TEST_F(NtpCustomBackgroundServiceTest, RefreshesBackgroundAfter24Hours) {
   EXPECT_TRUE(custom_background_service_->IsCustomBackgroundSet());
 }
 
-// TODO (crbug/1520873): Fix and re-enable or remove if no longer relevant.
+// TODO (crbug.com/41493847): Fix and re-enable or remove if no longer relevant.
 TEST_F(NtpCustomBackgroundServiceTest,
        DISABLED_TestUpdateCustomBackgroundColor) {
   EXPECT_CALL(observer_, OnCustomBackgroundImageUpdated).Times(2);

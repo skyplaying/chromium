@@ -10,14 +10,15 @@
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/find_bar/find_bar.h"
 #include "chrome/browser/ui/find_bar/find_bar_controller.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/view_ids.h"
-#include "chrome/test/base/chrome_test_utils.h"
+#include "chrome/test/base/chrome_test_path_utils.h"
 #include "chrome/test/base/find_result_waiter.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
@@ -96,7 +97,7 @@ IN_PROC_BROWSER_TEST_F(FindBarPlatformHelperMacInteractiveUITest,
 // Tests that the pasteboard is not updated from an incognito find bar.
 IN_PROC_BROWSER_TEST_F(FindBarPlatformHelperMacInteractiveUITest,
                        IncognitoPasteboardNotUpdatedFromFindBar) {
-  Browser* browser_incognito = CreateIncognitoBrowser();
+  BrowserWindowInterface* browser_incognito = CreateIncognitoBrowser();
   FindBarController* find_bar_controller =
       browser_incognito->GetFeatures().GetFindBarController();
   ASSERT_NE(nullptr, find_bar_controller);
@@ -131,8 +132,8 @@ IN_PROC_BROWSER_TEST_F(FindBarPlatformHelperMacInteractiveUITest,
 
 // Equivalent to browser_tests
 // FindInPageControllerTest.GlobalPasteBoardClearMatches.
-// TODO(http://crbug.com/843878): Remove when referenced bug is fixed.
-// Flaky. crbug.com/864585
+// TODO(http://crbug.com/41389476): Remove when referenced bug is fixed.
+// Flaky. crbug.com/41402159
 IN_PROC_BROWSER_TEST_F(FindBarPlatformHelperMacInteractiveUITest,
                        DISABLED_GlobalPasteBoardClearMatches) {
   FindBarController* find_bar_controller =
@@ -188,7 +189,7 @@ IN_PROC_BROWSER_TEST_F(FindBarPlatformHelperMacInteractiveUITest,
 
 // Equivalent to browser_tests
 // FindInPageControllerTest.IncognitoFindNextShared.
-// TODO(http://crbug.com/843878): Remove when referenced bug is fixed.
+// TODO(http://crbug.com/41389476): Remove when referenced bug is fixed.
 IN_PROC_BROWSER_TEST_F(FindBarPlatformHelperMacInteractiveUITest,
                        IncognitoFindNextShared) {
   chrome::Find(browser());
@@ -202,13 +203,13 @@ IN_PROC_BROWSER_TEST_F(FindBarPlatformHelperMacInteractiveUITest,
   ASSERT_TRUE(ui_test_utils::SendKeyPressSync(browser(), ui::VKEY_R, false,
                                               false, false, false));
 
-  Browser* browser_incognito = CreateIncognitoBrowser();
+  BrowserWindowInterface* browser_incognito = CreateIncognitoBrowser();
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser_incognito,
                                            GURL("data:text/plain,bar")));
 
   ASSERT_TRUE(chrome::ExecuteCommand(browser_incognito, IDC_FIND_NEXT));
   content::WebContents* web_contents_incognito =
-      browser_incognito->tab_strip_model()->GetActiveWebContents();
+      browser_incognito->GetTabStripModel()->GetActiveWebContents();
   ui_test_utils::FindResultWaiter(web_contents_incognito).Wait();
 
   FindBarController* find_bar_controller =
@@ -219,7 +220,7 @@ IN_PROC_BROWSER_TEST_F(FindBarPlatformHelperMacInteractiveUITest,
 
 // Equivalent to browser_tests
 // FindInPageControllerTest.PreferPreviousSearch.
-// TODO(http://crbug.com/843878): Remove when referenced bug is fixed.
+// TODO(http://crbug.com/41389476): Remove when referenced bug is fixed.
 IN_PROC_BROWSER_TEST_F(FindBarPlatformHelperMacInteractiveUITest,
                        PreferPreviousSearch) {
   FindBarController* find_bar_controller =

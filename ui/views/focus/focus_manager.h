@@ -159,6 +159,11 @@ class VIEWS_EXPORT FocusManager : public ViewObserver {
   // further.
   bool OnKeyEvent(const ui::KeyEvent& event);
 
+  // Returns true if the focused view wants to process the key event as is
+  // (and there is no priority handler registered for the accelerator).
+  bool ShouldSkipAcceleratorProcessing(
+      const ui::Accelerator& accelerator) const;
+
   // Returns true is the specified is part of the hierarchy of the window
   // associated with this FocusManager.
   bool ContainsView(View* view);
@@ -172,7 +177,7 @@ class VIEWS_EXPORT FocusManager : public ViewObserver {
 
   // Low-level methods to force the focus to change (and optionally provide
   // a reason). If the focus change should only happen if the view is
-  // currenty focusable, enabled, and visible, call view->RequestFocus().
+  // currently focusable, enabled, and visible, call view->RequestFocus().
   void SetFocusedViewWithReason(View* view, FocusChangeReason reason);
   void SetFocusedView(View* view);
 
@@ -264,6 +269,7 @@ class VIEWS_EXPORT FocusManager : public ViewObserver {
   // the focused view is about to change.
   void AddFocusChangeListener(FocusChangeListener* listener);
   void RemoveFocusChangeListener(FocusChangeListener* listener);
+  bool HasFocusChangeListener(const FocusChangeListener* listener) const;
 
   // Whether the given |accelerator| is registered.
   bool IsAcceleratorRegistered(const ui::Accelerator& accelerator) const;
@@ -360,7 +366,11 @@ class VIEWS_EXPORT FocusManager : public ViewObserver {
       FocusChangeReason::kDirectFocusChange;
 
   // The list of registered FocusChange listeners.
-  base::ObserverList<FocusChangeListener, true>::Unchecked
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      FocusChangeListener,
+      /*check_empty=*/false,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>::Unchecked
       focus_change_listeners_;
 
   // This is true if full keyboard accessibility is needed. This causes

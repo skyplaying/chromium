@@ -14,12 +14,15 @@
 #include "base/threading/thread_checker.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/focus/browser_focus_controller.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/user_education/user_education_types.h"
 #include "chrome/browser/user_education/user_education_service.h"
 #include "chrome/browser/user_education/user_education_service_factory.h"
+#include "components/tabs/public/tab_interface.h"
 #include "components/user_education/common/feature_promo/feature_promo_controller.h"
 #include "components/user_education/common/help_bubble/help_bubble_factory_registry.h"
 #include "components/user_education/common/help_bubble/help_bubble_params.h"
@@ -36,8 +39,8 @@ constexpr base::TimeDelta kShowPromoInPageTimeout = base::Seconds(30);
 
 class ShowPromoInPageImpl : public ShowPromoInPage {
  public:
-  explicit ShowPromoInPageImpl(Browser* browser, Params params)
-      : browser_(browser->AsWeakPtr()), callback_(std::move(params.callback)) {
+  explicit ShowPromoInPageImpl(BrowserWindowInterface* browser, Params params)
+      : browser_(browser->GetWeakPtr()), callback_(std::move(params.callback)) {
     DCHECK(callback_);
     DCHECK(browser_);
     DCHECK(!params.bubble_text.empty());
@@ -107,9 +110,9 @@ class ShowPromoInPageImpl : public ShowPromoInPage {
     // opened in another window. It's an edge case but an important one since a
     // HelpBubbleFactoryRegistry is needed to create the help bubble.
     if (browser_) {
-      auto& factory =
-          UserEducationServiceFactory::GetForBrowserContext(browser_->profile())
-              ->help_bubble_factory_registry();
+      auto& factory = UserEducationServiceFactory::GetForBrowserContext(
+                          browser_->GetProfile())
+                          ->help_bubble_factory_registry();
       help_bubble_ =
           factory.CreateHelpBubble(anchor_element, std::move(bubble_params_));
       DCHECK(help_bubble_);
@@ -119,9 +122,11 @@ class ShowPromoInPageImpl : public ShowPromoInPage {
       if (help_bubble_) {
         if (auto* const bubble =
                 help_bubble_->AsA<user_education::HelpBubbleWebUI>()) {
-          if (browser_->tab_strip_model()->GetActiveWebContents() ==
-              bubble->GetWebContents()) {
-            browser_->window()->FocusWebContentsPane();
+          if (browser_->GetActiveTabInterface() &&
+              browser_->GetActiveTabInterface()->GetContents() ==
+                  bubble->GetWebContents()) {
+            BrowserFocusController::From(browser_.get())
+                ->FocusWebContentsPane();
           }
         }
       }
@@ -132,15 +137,12 @@ class ShowPromoInPageImpl : public ShowPromoInPage {
       delete this;
       return;
     }
-    help_bubble_closed_subscription_ = help_bubble_->AddOnCloseCallback(
+    help_bubble_closed_subscription_ = help_bubble_->AddOnClosedCallback(
         base::BindOnce(&ShowPromoInPageImpl::OnBubbleClosed, GetWeakPtr()));
     std::move(callback_).Run(this, true);
   }
 
-  void OnBubbleClosed(user_education::HelpBubble*,
-                      user_education::HelpBubble::CloseReason) {
-    delete this;
-  }
+  void OnBubbleClosed(user_education::HelpBubble::CloseReason) { delete this; }
 
   void OnTimeout() {
     DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
@@ -150,7 +152,7 @@ class ShowPromoInPageImpl : public ShowPromoInPage {
     delete this;
   }
 
-  const base::WeakPtr<Browser> browser_;
+  const base::WeakPtr<BrowserWindowInterface> browser_;
   std::unique_ptr<user_education::HelpBubble> help_bubble_;
   base::CallbackListSubscription help_bubble_closed_subscription_;
   user_education::HelpBubbleParams bubble_params_;
@@ -173,7 +175,8 @@ ShowPromoInPage::Params::~Params() = default;
 ShowPromoInPage::ShowPromoInPage() = default;
 ShowPromoInPage::~ShowPromoInPage() = default;
 
-base::WeakPtr<ShowPromoInPage> ShowPromoInPage::Start(Browser* browser,
-                                                      Params params) {
+base::WeakPtr<ShowPromoInPage> ShowPromoInPage::Start(
+    BrowserWindowInterface* browser,
+    Params params) {
   return (new ShowPromoInPageImpl(browser, std::move(params)))->GetWeakPtr();
 }

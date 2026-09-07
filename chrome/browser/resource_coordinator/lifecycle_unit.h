@@ -14,7 +14,6 @@
 #include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "chrome/browser/resource_coordinator/lifecycle_unit_state.mojom-forward.h"
-#include "content/public/browser/visibility.h"
 
 namespace resource_coordinator {
 
@@ -80,6 +79,10 @@ class LifecycleUnit {
 
   // Returns the last time at which the state of this LifecycleUnit changed.
   virtual base::TimeTicks GetStateChangeTime() const = 0;
+
+  // Returns the wall-clock time at which the state of this LifecycleUnit last
+  // changed. Stamped together with `GetStateChangeTime()`.
+  virtual base::Time GetStateChangeWallTime() const = 0;
 
   // Request that the LifecycleUnit be loaded, return true if the request is
   // successful.

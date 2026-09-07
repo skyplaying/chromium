@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "ash/public/cpp/app_menu_constants.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "base/functional/callback_helpers.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/menu_util.h"
@@ -36,6 +37,8 @@
 #include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "components/services/app_service/public/cpp/intent.h"
+#include "ui/base/window_open_disposition.h"
+#include "ui/display/types/display_constants.h"
 
 namespace apps {
 
@@ -60,7 +63,7 @@ void OnLaunchFailed(const std::string& app_id,
                     const std::string& reason) {
   LOG(ERROR) << "Failed to launch Bruschetta app " << app_id << ": " << reason;
   RemoveSpinner(app_id);
-  std::move(callback).Run(ConvertBoolToLaunchResult(false));
+  std::move(callback).Run(LaunchResult::kFailed);
 }
 
 void OnSharePathForLaunchApplication(
@@ -88,7 +91,7 @@ void OnSharePathForLaunchApplication(
               return;
             }
             RemoveSpinner(app_id);
-            std::move(callback).Run(ConvertBoolToLaunchResult(success));
+            std::move(callback).Run(LaunchResult::kSuccess);
           },
           app_id, std::move(callback)));
 }

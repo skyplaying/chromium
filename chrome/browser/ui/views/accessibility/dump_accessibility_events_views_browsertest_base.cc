@@ -8,19 +8,18 @@
 #include <utility>
 
 #include "base/command_line.h"
-#include "base/files/file_util.h"
 #include "base/functional/callback_helpers.h"
 #include "base/path_service.h"
 #include "base/strings/escape.h"
 #include "base/strings/string_split.h"
-#include "base/strings/string_util.h"
-#include "base/test/bind.h"
+#include "base/test/run_until.h"
 #include "build/build_config.h"
 #include "content/public/browser/browser_accessibility_state.h"
 #include "ui/accessibility/accessibility_features.h"
 #include "ui/accessibility/ax_tree_manager.h"
 #include "ui/accessibility/platform/inspect/ax_inspect_scenario.h"
 #include "ui/accessibility/platform/inspect/ax_tree_formatter.h"
+#include "ui/views/accessibility/tree/widget_ax_manager_test_api.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/widget/widget.h"
 
@@ -29,6 +28,7 @@
 #endif
 
 #if BUILDFLAG(IS_WIN)
+#include "ui/accessibility/platform/ax_platform_node_win.h"
 #include "ui/accessibility/platform/inspect/ax_event_recorder_win.h"
 #include "ui/accessibility/platform/inspect/ax_event_recorder_win_uia.h"
 #endif
@@ -58,6 +58,65 @@ void CleanupViewsAXEventRecorderMac();
 #endif
 
 namespace views {
+
+#if BUILDFLAG(IS_WIN)
+namespace {
+
+void WaitForNoGhostAXPlatformNodeWin() {
+  EXPECT_TRUE(base::test::RunUntil(
+      [] { return ui::AXPlatformNodeWin::GetCounts().ghost_nodes == 0u; }));
+}
+
+}  // namespace
+#endif
+
+// --- EventRecordingSession implementation ---
+
+EventRecordingSession::EventRecordingSession() = default;
+
+EventRecordingSession::EventRecordingSession(
+    DumpAccessibilityEventsViewsTestBase* test,
+    std::string test_name)
+    : test_(test), test_name_(std::move(test_name)) {}
+
+EventRecordingSession::~EventRecordingSession() {
+  if (test_ && !compared_) {
+    test_->StopRecordingAndCompare(test_name_);
+  }
+}
+
+EventRecordingSession::EventRecordingSession(EventRecordingSession&& other)
+    : test_(other.test_),
+      test_name_(std::move(other.test_name_)),
+      compared_(other.compared_) {
+  other.test_ = nullptr;
+  other.compared_ = true;
+}
+
+EventRecordingSession& EventRecordingSession::operator=(
+    EventRecordingSession&& other) {
+  if (this != &other) {
+    // If this session hasn't compared yet, do it now before overwriting.
+    if (test_ && !compared_) {
+      test_->StopRecordingAndCompare(test_name_);
+    }
+    test_ = other.test_;
+    test_name_ = std::move(other.test_name_);
+    compared_ = other.compared_;
+    other.test_ = nullptr;
+    other.compared_ = true;
+  }
+  return *this;
+}
+
+void EventRecordingSession::StopAndCompare() {
+  CHECK(test_) << "Cannot StopAndCompare on an invalid session.";
+  CHECK(!compared_) << "StopAndCompare already called on this session.";
+  test_->StopRecordingAndCompare(test_name_);
+  compared_ = true;
+}
+
+// --- DumpAccessibilityEventsViewsTestBase implementation ---
 
 DumpAccessibilityEventsViewsTestBase::DumpAccessibilityEventsViewsTestBase()
     : test_helper_(GetParam().api_type) {}
@@ -98,6 +157,15 @@ void DumpAccessibilityEventsViewsTestBase::SetUpOnMainThread() {
   SetUpTestWidget();
   SetUpTestViews();
 
+  // When ViewsAX is enabled, view additions and property changes during
+  // SetUpTestViews() are queued as async tasks via WidgetAXManager. Flush
+  // them now so BrowserAccessibilityManager has the complete initial tree
+  // before the test body runs. Without this, the first SendPendingUpdate()
+  // would batch initial node additions together with test-triggered changes,
+  // and AXEventGenerator wouldn't detect attribute changes on newly-added
+  // nodes (since there's no previous state to compare against).
+  WaitForPendingSerialization();
+
 #if BUILDFLAG(IS_LINUX)
   // On Wayland, widget activation is asynchronous (compositor-controlled).
   // FocusManager::SetFocusedViewWithReason() defers focus changes when
@@ -116,7 +184,11 @@ void DumpAccessibilityEventsViewsTestBase::SetUpOnMainThread() {
   }
 #endif
 
-  BeginRecordingEvents();
+  // Flush any remaining async events generated during setup (e.g.
+  // OnActivationChanged() above queues kWindowActivated via WidgetAXManager
+  // when ViewsAX is enabled). Without this, StopRecordingAndCompare()'s
+  // wait would process stale setup events during recording.
+  WaitForPendingSerialization();
 }
 
 void DumpAccessibilityEventsViewsTestBase::TearDown() {
@@ -126,8 +198,16 @@ void DumpAccessibilityEventsViewsTestBase::TearDown() {
 }
 
 void DumpAccessibilityEventsViewsTestBase::TearDownOnMainThread() {
+  // EventRecordingSession objects handle comparison automatically via their
+  // destructor (which fires at the end of the test body, before this method).
+  // This method only needs to clean up platform state.
   if (event_recorder_) {
-    event_recorder_->StopListeningToEvents();
+    if (recording_events_) {
+      // Safety net: if recording is still active (e.g., test exited early
+      // without the session being destroyed), stop it.
+      event_recorder_->StopListeningToEvents();
+      recording_events_ = false;
+    }
     event_recorder_.reset();
   }
 
@@ -138,6 +218,11 @@ void DumpAccessibilityEventsViewsTestBase::TearDownOnMainThread() {
 #endif
 
   widget_.reset();
+
+#if BUILDFLAG(IS_WIN)
+  // Let COM/UIA releases finish before gtest's platform-node leak listener.
+  WaitForNoGhostAXPlatformNodeWin();
+#endif
 
   InProcessBrowserTest::TearDownOnMainThread();
 }
@@ -184,50 +269,74 @@ void DumpAccessibilityEventsViewsTestBase::ChooseFeatures(
     std::vector<base::test::FeatureRef>* enabled_features,
     std::vector<base::test::FeatureRef>* disabled_features) {}
 
-void DumpAccessibilityEventsViewsTestBase::BeginRecordingEvents() {
-  CHECK(!recording_events_) << "Already recording events. Did you forget to "
-                               "call EndTestAndCompareEvents()?";
+EventRecordingSession
+DumpAccessibilityEventsViewsTestBase::BeginRecordingEvents(
+    const std::string& test_name) {
+  CHECK(!recording_events_) << "Already recording events.";
 
-  event_recorder_ = CreateEventRecorder();
-  if (!event_recorder_) {
-    GTEST_SKIP() << "Event recorder not available for "
-                 << GetTestParams().ToString();
+  // Check whether an expectation file exists for this platform.
+  base::FilePath expected_file = GetExpectationFilePath(test_name);
+  if (expected_file.empty()) {
+    return EventRecordingSession();
   }
 
-  std::vector<ui::AXPropertyFilter> filters = DefaultFilters();
-  filters.insert(filters.end(), additional_filters_.begin(),
-                 additional_filters_.end());
-  event_recorder_->SetPropertyFilters(filters);
+  // Create the event recorder if needed.
+  if (!event_recorder_) {
+    event_recorder_ = CreateEventRecorder();
+    if (!event_recorder_) {
+      return EventRecordingSession();
+    }
+  }
+
+  // Event filters are applied later in FilterEventLogs(). Passing them to the
+  // recorder's formatter can suppress element properties in formatted output.
+  event_recorder_->SetPropertyFilters({});
   event_recorder_->ListenToEvents(base::DoNothing());
-
   recording_events_ = true;
+
+  return EventRecordingSession(this, test_name);
 }
 
-void DumpAccessibilityEventsViewsTestBase::EndTestAndCompareEvents(
+void DumpAccessibilityEventsViewsTestBase::StopRecordingAndCompare(
     const std::string& test_name) {
-  CHECK(recording_events_) << "Not recording events. Did you forget to call "
-                              "BeginRecordingEvents()?";
+  if (recording_events_) {
+    // Fire the end-of-test event on the root view. This is needed for UIA
+    // tests which wait for this event before collecting results.
+    views::View* root_view = GetTargetRootView();
+    CHECK(root_view);
+    root_view->GetViewAccessibility().NotifyEvent(ax::mojom::Event::kEndOfTest,
+                                                  true);
 
-  // Fire the end-of-test event on the root view. This is needed for UIA tests
-  // which wait for this event before collecting results.
-  views::View* root_view = GetTargetRootView();
-  CHECK(root_view);
-  root_view->GetViewAccessibility().NotifyEvent(ax::mojom::Event::kEndOfTest,
-                                                true);
+    // When ViewsAX is enabled, events are processed asynchronously via
+    // WidgetAXManager::SendPendingUpdate() (a posted task). Wait for the
+    // pending serialization to complete so BrowserAccessibilityManager
+    // processes tree updates and fires auto-generated platform events (e.g.
+    // ATK state-change events on Linux) before we stop the recorder.
+    WaitForPendingSerialization();
 
-  event_recorder_->StopListeningToEvents();
-  event_recorder_->WaitForDoneRecording();
-  recording_events_ = false;
+    event_recorder_->StopListeningToEvents();
+    event_recorder_->WaitForDoneRecording();
+    recording_events_ = false;
+  }
 
-  EXPECT_TRUE(ValidateAgainstExpectation(test_name, CollectEventLogs()));
+  std::vector<std::string> event_logs = CollectEventLogs();
+
+  // Release platform recorder references before gtest's end-of-test leak
+  // listener runs. On Windows, formatted event targets can keep COM wrappers
+  // alive until the recorder is destroyed.
+  event_recorder_.reset();
+
+  EXPECT_TRUE(ValidateAgainstExpectation(test_name, event_logs));
 }
 
-void DumpAccessibilityEventsViewsTestBase::RunEventTest(
-    const std::string& test_name,
-    base::OnceClosure action) {
-  BeginRecordingEvents();
-  std::move(action).Run();
-  EndTestAndCompareEvents(test_name);
+void DumpAccessibilityEventsViewsTestBase::WaitForPendingSerialization() {
+  if (!IsViewsAXEnabled() || !widget_ || !widget_->ax_manager()) {
+    return;
+  }
+  WidgetAXManagerTestApi test_api(widget_->ax_manager());
+  if (test_api.processing_update_posted()) {
+    test_api.WaitForNextSerialization();
+  }
 }
 
 std::unique_ptr<ui::AXEventRecorder>
@@ -290,33 +399,7 @@ base::FilePath DumpAccessibilityEventsViewsTestBase::GetExpectationDirectory()
 
 std::vector<ui::AXPropertyFilter>
 DumpAccessibilityEventsViewsTestBase::DefaultFilters() const {
-  std::vector<ui::AXPropertyFilter> filters;
-
-#if BUILDFLAG(IS_WIN)
-  // Suppress noisy location change events.
-  filters.emplace_back("EVENT_OBJECT_LOCATIONCHANGE*",
-                       ui::AXPropertyFilter::DENY);
-  // Suppress system events that may be noisy.
-  filters.emplace_back("EVENT_SYSTEM_*", ui::AXPropertyFilter::DENY);
-  // Allow show/hide and state changes by default.
-  filters.emplace_back("EVENT_OBJECT_SHOW*", ui::AXPropertyFilter::ALLOW);
-  filters.emplace_back("EVENT_OBJECT_HIDE*", ui::AXPropertyFilter::ALLOW);
-  filters.emplace_back("EVENT_OBJECT_STATECHANGE*",
-                       ui::AXPropertyFilter::ALLOW);
-  filters.emplace_back("EVENT_OBJECT_FOCUS*", ui::AXPropertyFilter::ALLOW);
-  filters.emplace_back("IA2_EVENT_*", ui::AXPropertyFilter::ALLOW);
-#elif BUILDFLAG(IS_MAC)
-  filters.emplace_back("AXFocusedUIElementChanged*",
-                       ui::AXPropertyFilter::ALLOW);
-  filters.emplace_back("AXSelectedChildrenChanged*",
-                       ui::AXPropertyFilter::ALLOW);
-  filters.emplace_back("AXValueChanged*", ui::AXPropertyFilter::ALLOW);
-#elif BUILDFLAG(IS_LINUX)
-  filters.emplace_back("STATE-CHANGE:*", ui::AXPropertyFilter::ALLOW);
-  filters.emplace_back("FOCUS-EVENT:*", ui::AXPropertyFilter::ALLOW);
-#endif
-
-  return filters;
+  return {};
 }
 
 void DumpAccessibilityEventsViewsTestBase::AddPropertyFilter(
@@ -350,6 +433,21 @@ void DumpAccessibilityEventsViewsTestBase::SetFilters(
 
 void DumpAccessibilityEventsViewsTestBase::OnDiffFailed() {}
 
+bool DumpAccessibilityEventsViewsTestBase::WaitForCapturedEvent(
+    const std::string& event_prefix) {
+  if (!event_recorder_) {
+    return false;
+  }
+  return base::test::RunUntil([&]() {
+    for (const auto& log : event_recorder_->GetEventLogs()) {
+      if (log.starts_with(event_prefix)) {
+        return true;
+      }
+    }
+    return false;
+  });
+}
+
 base::FilePath DumpAccessibilityEventsViewsTestBase::GetExpectationFilePath(
     const std::string& test_name) const {
   base::FilePath expectation_dir = GetExpectationDirectory();
@@ -379,14 +477,16 @@ DumpAccessibilityEventsViewsTestBase::CollectEventLogs() {
 std::vector<std::string> DumpAccessibilityEventsViewsTestBase::FilterEventLogs(
     const std::vector<std::string>& event_logs) const {
   // Build the combined filter list: default filters + any filters added via
-  // AddPropertyFilter() in individual tests.
+  // AddPropertyFilter() in individual tests. Views event tests deny events by
+  // default; tests and subclasses opt in only the platform events they assert.
   std::vector<ui::AXPropertyFilter> filters = DefaultFilters();
   filters.insert(filters.end(), additional_filters_.begin(),
                  additional_filters_.end());
 
   std::vector<std::string> filtered;
   for (const auto& event_log : event_logs) {
-    if (ui::AXTreeFormatter::MatchesPropertyFilters(filters, event_log, true)) {
+    if (ui::AXTreeFormatter::MatchesPropertyFilters(filters, event_log,
+                                                    false)) {
       filtered.push_back(base::EscapeNonASCII(event_log));
     }
   }

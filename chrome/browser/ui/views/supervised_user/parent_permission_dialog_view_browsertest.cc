@@ -31,10 +31,11 @@
 #include "chrome/browser/supervised_user/supervised_user_extensions_metrics_recorder.h"
 #include "chrome/browser/supervised_user/supervised_user_service_factory.h"
 #include "chrome/browser/supervised_user/supervised_user_test_util.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/supervised_user/parent_permission_dialog.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -105,11 +106,11 @@ class ParentPermissionDialogViewHarness
   // T is either std::u16string for regular dialogs, or const
   // extensions::Extension*  for extension dialogs.
   template <typename T>
-  void ShowUi(T dialog_input, Browser* browser) {
+  void ShowUi(T dialog_input, BrowserWindowInterface* browser) {
     gfx::ImageSkia icon = gfx::ImageSkia::CreateFrom1xBitmap(
         *gfx::Image(extensions::util::GetDefaultExtensionIcon()).ToSkBitmap());
     content::WebContents* contents =
-        browser->tab_strip_model()->GetActiveWebContents();
+        browser->GetTabStripModel()->GetActiveWebContents();
 
     dialog_ = CreatePermissionDialog(
         dialog_input, browser, contents, icon,
@@ -133,7 +134,7 @@ class ParentPermissionDialogViewHarness
   template <typename T>
   std::unique_ptr<ParentPermissionDialog> CreatePermissionDialog(
       T dialog_input,
-      Browser* browser,
+      BrowserWindowInterface* browser,
       content::WebContents* contents,
       gfx::ImageSkia icon,
       ParentPermissionDialog::DoneCallback done_callback);
@@ -141,24 +142,24 @@ class ParentPermissionDialogViewHarness
   template <>
   std::unique_ptr<ParentPermissionDialog> CreatePermissionDialog(
       std::u16string dialog_input,
-      Browser* browser,
+      BrowserWindowInterface* browser,
       content::WebContents* contents,
       gfx::ImageSkia icon,
       ParentPermissionDialog::DoneCallback done_callback) {
     return ParentPermissionDialog::CreateParentPermissionDialog(
-        browser->profile(), contents->GetTopLevelNativeWindow(), icon,
+        browser->GetProfile(), contents->GetTopLevelNativeWindow(), icon,
         dialog_input, std::move(done_callback));
   }
 
   template <>
   std::unique_ptr<ParentPermissionDialog> CreatePermissionDialog(
       const extensions::Extension* dialog_input,
-      Browser* browser,
+      BrowserWindowInterface* browser,
       content::WebContents* contents,
       gfx::ImageSkia icon,
       ParentPermissionDialog::DoneCallback done_callback) {
     return ParentPermissionDialog::CreateParentPermissionDialogForExtension(
-        browser->profile(), contents->GetTopLevelNativeWindow(), icon,
+        browser->GetProfile(), contents->GetTopLevelNativeWindow(), icon,
         dialog_input, std::move(done_callback));
   }
 
@@ -232,11 +233,11 @@ class ParentPermissionDialogViewTest
 
     supervised_user_test_util::
         SetSupervisedUserExtensionsMayRequestPermissionsPref(
-            browser()->profile(), /*enabled=*/true);
+            browser()->GetProfile(), /*enabled=*/true);
 
     supervised_user_extensions_delegate_ =
         std::make_unique<extensions::SupervisedUserExtensionsDelegateImpl>(
-            browser()->profile());
+            browser()->GetProfile());
 
     test_extension_ = AddAndDisableExtensionWithName("test extension");
   }
@@ -251,11 +252,11 @@ class ParentPermissionDialogViewTest
   }
 
   extensions::ExtensionRegistrar* extension_registrar() {
-    return extensions::ExtensionRegistrar::Get(browser()->profile());
+    return extensions::ExtensionRegistrar::Get(browser()->GetProfile());
   }
 
   extensions::ExtensionService* extension_service() {
-    return extensions::ExtensionSystem::Get(browser()->profile())
+    return extensions::ExtensionSystem::Get(browser()->GetProfile())
         ->extension_service();
   }
 

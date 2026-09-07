@@ -61,6 +61,12 @@ public interface AccountSelectionComponent {
 
         /** Called to associate the popup with the delegate. */
         void setPopupComponent(AccountSelectionComponent popupComponent);
+
+        /** Called when the native app returns a token result. */
+        void onNativeAppResult(String token);
+
+        /** Called when the native app completes login. */
+        void onNativeAppLoginFinished();
     }
 
     /**
@@ -145,6 +151,12 @@ public interface AccountSelectionComponent {
      * to.
      */
     void close();
+
+    /**
+     * Sets whether the widget/bottomsheet can be displayed. If false, hides the bottomsheet.
+     * Applies to both active mode (modal) and passive mode (widget/bottom sheet).
+     */
+    void setCanShowUi(boolean canShowUi);
 
     /** Gets the sheet's title. */
     String getTitle();

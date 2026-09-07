@@ -16,10 +16,12 @@
 #import "components/autofill/core/browser/payments/autofill_save_card_ui_info.h"
 #import "components/autofill/core/browser/payments/multiple_request_payments_network_interface.h"
 #import "components/autofill/core/browser/payments/payments_autofill_client.h"
+#import "components/autofill/core/browser/payments/wallet_reminder_notice_manager.h"
 #import "components/autofill/core/browser/ui/payments/autofill_progress_ui_type.h"
 #import "components/autofill/core/browser/ui/payments/card_expiration_date_fix_flow_controller_impl.h"
 #import "components/autofill/core/browser/ui/payments/card_name_fix_flow_controller_impl.h"
 #import "components/infobars/core/infobar_manager.h"
+#import "ios/chrome/browser/autofill/wallet_reminder_notice/ui/wallet_reminder_notice_ui_delegate_ios.h"
 
 class GURL;
 
@@ -56,6 +58,7 @@ namespace payments {
 
 struct BnplIssuerContext;
 struct BnplTosModel;
+class IosBnplUiDelegate;
 class MandatoryReauthManager;
 
 // Chrome iOS implementation of PaymentsAutofillClient. Owned by the
@@ -64,7 +67,7 @@ class MandatoryReauthManager;
 class IOSChromePaymentsAutofillClient : public PaymentsAutofillClient {
  public:
   explicit IOSChromePaymentsAutofillClient(
-      autofill::ChromeAutofillClientIOS* client,
+      ChromeAutofillClientIOS* client,
       web::WebState* web_state,
       infobars::InfoBarManager* infobar_manager,
       PrefService* pref_service);
@@ -106,8 +109,8 @@ class IOSChromePaymentsAutofillClient : public PaymentsAutofillClient {
       base::OnceClosure accept_virtual_card_callback,
       base::OnceClosure decline_virtual_card_callback) override;
   void VirtualCardEnrollCompleted(PaymentsRpcResult result) override;
-  void OnCardDataAvailable(
-      const FilledCardInformationBubbleOptions& options) override;
+  void OnCardDataAvailable(const FilledCardInformationBubbleOptions& options,
+                           const url::Origin& origin) override;
   void ConfirmSaveIbanLocally(const Iban& iban,
                               bool should_show_prompt,
                               SaveIbanPromptCallback callback) override;
@@ -154,9 +157,7 @@ class IOSChromePaymentsAutofillClient : public PaymentsAutofillClient {
   CreditCardCvcAuthenticator& GetCvcAuthenticator() override;
   CreditCardOtpAuthenticator* GetOtpAuthenticator() override;
   CreditCardRiskBasedAuthenticator* GetRiskBasedAuthenticator() override;
-  bool IsRiskBasedAuthEffectivelyAvailable() const override;
   bool IsMandatoryReauthEnabled() override;
-  bool IsUsingCustomCardIconEnabled() const override;
   void ShowMandatoryReauthOptInPrompt(
       base::OnceClosure accept_mandatory_reauth_callback,
       base::OnceClosure cancel_mandatory_reauth_callback,
@@ -174,29 +175,29 @@ class IOSChromePaymentsAutofillClient : public PaymentsAutofillClient {
       const OfferNotificationOptions& options) override;
   void DismissOfferNotification() override;
   bool ShowTouchToFillCreditCard(
-      base::WeakPtr<TouchToFillDelegate> delegate,
+      base::WeakPtr<TouchToFillPaymentMethodDelegate> delegate,
       base::span<const Suggestion> suggestions) override;
   bool ShowTouchToFillIban(
-      base::WeakPtr<TouchToFillDelegate> delegate,
-      base::span<const autofill::Iban> ibans_to_suggest) override;
+      base::WeakPtr<TouchToFillPaymentMethodDelegate> delegate,
+      base::span<const Iban> ibans_to_suggest) override;
   bool ShowTouchToFillAffiliatedLoyaltyCard(
-      base::WeakPtr<TouchToFillDelegate> delegate,
-      std::vector<autofill::LoyaltyCard> loyalty_cards_to_suggest) override;
+      base::WeakPtr<TouchToFillPaymentMethodDelegate> delegate,
+      std::vector<LoyaltyCard> loyalty_cards_to_suggest) override;
   bool ShowTouchToFillForAllLoyaltyCards(
-      base::WeakPtr<TouchToFillDelegate> delegate,
-      std::vector<autofill::LoyaltyCard> loyalty_cards_to_suggest) override;
+      base::WeakPtr<TouchToFillPaymentMethodDelegate> delegate,
+      std::vector<LoyaltyCard> loyalty_cards_to_suggest) override;
   bool OnPurchaseAmountExtracted(
       base::span<const payments::BnplIssuerContext> bnpl_issuer_contexts,
       std::optional<int64_t> extracted_amount,
       bool is_amount_supported_by_any_issuer,
       const std::optional<std::string>& app_locale,
-      base::OnceCallback<void(autofill::BnplIssuer)> selected_issuer_callback,
+      base::OnceCallback<void(BnplIssuer)> selected_issuer_callback,
       base::OnceClosure cancel_callback) override;
   bool ShowTouchToFillProgress(base::OnceClosure cancel_callback) override;
   bool ShowTouchToFillBnplIssuers(
       base::span<const payments::BnplIssuerContext> bnpl_issuer_contexts,
       const std::string& app_locale,
-      base::OnceCallback<void(autofill::BnplIssuer)> selected_issuer_callback,
+      base::OnceCallback<void(BnplIssuer)> selected_issuer_callback,
       base::OnceClosure cancel_callback) override;
   bool ShowTouchToFillError(const AutofillErrorDialogContext& context) override;
   bool ShowTouchToFillBnplTos(BnplTosModel model,
@@ -216,9 +217,11 @@ class IOSChromePaymentsAutofillClient : public PaymentsAutofillClient {
   void ShowCreditCardSaveAndFillPendingDialog(
       CardSaveAndFillDialogCallback callback) override;
   void HideCreditCardSaveAndFillDialog() override;
-  bool IsTabModalPopupDeprecated() const override;
+  bool IsTabModalPopup() const override;
   BnplStrategy* GetBnplStrategy() override;
   BnplUiDelegate* GetBnplUiDelegate() override;
+  WalletReminderNoticeUiDelegate* GetWalletReminderNoticeUiDelegate() override;
+  WalletReminderNoticeManager* GetWalletReminderNoticeManager() override;
 
   // Begin IOSChromePaymentsAutofillClient-specific section.
 
@@ -228,7 +231,7 @@ class IOSChromePaymentsAutofillClient : public PaymentsAutofillClient {
       AutofillSaveCardUiInfo ui_info,
       std::unique_ptr<AutofillSaveCardDelegate> save_card_delegate);
 
-  const raw_ref<autofill::ChromeAutofillClientIOS, DanglingUntriaged> client_;
+  const raw_ref<ChromeAutofillClientIOS, DanglingUntriaged> client_;
 
   const raw_ref<infobars::InfoBarManager, DanglingUntriaged> infobar_manager_;
 
@@ -284,6 +287,23 @@ class IOSChromePaymentsAutofillClient : public PaymentsAutofillClient {
   // the infobar for uploading the card to server.
   bool show_save_card_bottom_sheet_for_upload_;
 
+  // The BnplUiDelegate used to handle the UI in the BNPL flow depending on the
+  // platform.
+  // Lazily initialized: access only through `GetBnplUiDelegate()`.
+  std::unique_ptr<IosBnplUiDelegate> bnpl_ui_delegate_;
+
+  // The WalletReminderNoticeUiDelegate used to handle the UI in the Wallet
+  // Reminder Notice flow on iOS.
+  // Lazily initialized: access only through
+  // `GetWalletReminderNoticeUiDelegate()`.
+  std::optional<WalletReminderNoticeUiDelegateIOS>
+      wallet_reminder_notice_ui_delegate_;
+
+  // The WalletReminderNoticeManager used to orchestrate the Wallet Reminder
+  // Notice flow.
+  // Lazily initialized: access only through
+  // `GetWalletReminderNoticeManager()`.
+  std::optional<WalletReminderNoticeManager> wallet_reminder_notice_manager_;
 };
 
 }  // namespace payments

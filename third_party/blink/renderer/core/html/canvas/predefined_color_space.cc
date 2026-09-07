@@ -6,6 +6,8 @@
 
 #include "third_party/blink/renderer/bindings/core/v8/v8_canvas_high_dynamic_range_options.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_canvas_smpte_st_2086_metadata.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_canvas_tone_mapping.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_canvas_tone_mapping_mode.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_predefined_color_space.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
@@ -90,6 +92,9 @@ V8PredefinedColorSpace PredefinedColorSpaceToV8(
   }
 }
 
+// TODO(https://crbug.com/448552449): Remove ParseCanvasHighDynamicRangeOptions.
+// The experimental HTMLCanvasElement-level HDR API will be removed once its
+// replacements are added.
 void ParseCanvasHighDynamicRangeOptions(
     const CanvasHighDynamicRangeOptions* options,
     gfx::HDRMetadata& hdr_metadata) {
@@ -111,22 +116,60 @@ void ParseCanvasHighDynamicRangeOptions(
     }
   }
   if (options->hasSmpteSt2086Metadata()) {
-    auto& smpte_st_2086 = hdr_metadata.smpte_st_2086.emplace();
     const auto* v8_metadata = options->smpteSt2086Metadata();
-    smpte_st_2086.primaries = {
-        v8_metadata->redPrimaryX(),   v8_metadata->redPrimaryY(),
-        v8_metadata->greenPrimaryX(), v8_metadata->greenPrimaryY(),
-        v8_metadata->bluePrimaryX(),  v8_metadata->bluePrimaryY(),
-        v8_metadata->whitePointX(),   v8_metadata->whitePointY(),
-    };
-    smpte_st_2086.luminance_min = v8_metadata->minimumLuminance();
-    smpte_st_2086.luminance_max = v8_metadata->maximumLuminance();
+    hdr_metadata.SetMDCV({
+        .fDisplayPrimaries =
+            {
+                v8_metadata->redPrimaryX(),
+                v8_metadata->redPrimaryY(),
+                v8_metadata->greenPrimaryX(),
+                v8_metadata->greenPrimaryY(),
+                v8_metadata->bluePrimaryX(),
+                v8_metadata->bluePrimaryY(),
+                v8_metadata->whitePointX(),
+                v8_metadata->whitePointY(),
+            },
+        .fMaximumDisplayMasteringLuminance = v8_metadata->maximumLuminance(),
+        .fMinimumDisplayMasteringLuminance = v8_metadata->minimumLuminance(),
+    });
   }
-  if (options->hasAgtm()) {
-    auto span = options->agtm().RawByteSpan();
-    auto data = SkData::MakeWithCopy(span.data(), span.size());
-    hdr_metadata.setSerializedAgtm(std::move(data));
+  if (gfx::HdrMetadataAgtm::IsEnabled()) {
+    if (options->hasAgtm()) {
+      auto span = options->agtm().RawByteSpan();
+      hdr_metadata.SetSerializedAgtm(span);
+    }
   }
+}
+
+void ParseCanvasToneMapping(const CanvasToneMapping* tone_mapping,
+                            gfx::HDRMetadata& hdr_metadata) {
+  hdr_metadata = gfx::HDRMetadata();
+  if (!tone_mapping) {
+    return;
+  }
+  if (tone_mapping->hasMode()) {
+    switch (tone_mapping->mode().AsEnum()) {
+      case V8CanvasToneMappingMode::Enum::kStandard:
+        break;
+      case V8CanvasToneMappingMode::Enum::kExtended:
+        hdr_metadata.extended_range.emplace(
+            /*current_headroom=*/gfx::HdrMetadataExtendedRange::
+                kDefaultHdrHeadroom,
+            /*desired_headroom=*/gfx::HdrMetadataExtendedRange::
+                kDefaultHdrHeadroom);
+        break;
+    }
+  }
+}
+
+CanvasToneMapping* CanvasToneMappingToV8(const gfx::HDRMetadata& hdr_metadata) {
+  CanvasToneMapping* tone_mapping = CanvasToneMapping::Create();
+  if (hdr_metadata.extended_range.has_value()) {
+    tone_mapping->setMode(V8CanvasToneMappingMode::Enum::kExtended);
+  } else {
+    tone_mapping->setMode(V8CanvasToneMappingMode::Enum::kStandard);
+  }
+  return tone_mapping;
 }
 
 }  // namespace blink

@@ -11,6 +11,7 @@
 #import "components/infobars/core/infobar_delegate.h"
 #import "components/infobars/core/infobar_manager.h"
 #import "components/optimization_guide/proto/hints.pb.h"
+#import "components/sync/test/test_sync_service.h"
 #import "components/ukm/ios/ukm_url_recorder.h"
 #import "components/ukm/test_ukm_recorder.h"
 #import "ios/chrome/browser/browser_content/model/edit_menu_tab_helper.h"
@@ -28,6 +29,7 @@
 #import "ios/chrome/browser/reader_mode/model/reader_mode_test.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/snapshots/model/snapshot_source_tab_helper.h"
+#import "ios/chrome/browser/sync/model/sync_service_factory.h"
 #import "ios/chrome/browser/web/model/web_view_proxy/web_view_proxy_tab_helper.h"
 #import "ios/chrome/browser/web_selection/model/web_selection_tab_helper.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
@@ -753,31 +755,13 @@ TEST_F(ReaderModeTabHelperTest, TestDistillationCompletedAfterTimeout) {
   EXPECT_TRUE(reader_mode_tab_helper()->IsActive());
 }
 
-class ReaderModeTabHelperOptimizationGuideTest
-    : public ReaderModeTabHelperTest {
- public:
-  void SetUp() override {
-    feature_list_.InitAndEnableFeature(
-        kEnableReaderModeOptimizationGuideEligibility);
-
-    ReaderModeTabHelperTest::SetUp();
-  }
-
-  void TearDown() override {
-    ReaderModeTabHelperTest::TearDown();
-    feature_list_.Reset();
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
 // Tests that reader mode is eligible when the OptimizationGuideService provides
 // a hint on an eligible page.
-TEST_F(ReaderModeTabHelperOptimizationGuideTest, EligibilityForEligiblePage) {
+TEST_F(ReaderModeTabHelperTest, EligibilityForEligiblePage) {
   GURL test_url("https://test.url/");
   SetReaderModeState(web_state(), test_url,
-                     ReaderModeHeuristicResult::kReaderModeEligible, "");
+                     ReaderModeHeuristicResult::kReaderModeEligible, "",
+                     /*mock_opt_guide=*/false);
 
   // Prepare optimization guide metadata.
   OptimizationGuideService* optimization_guide_service =
@@ -800,7 +784,7 @@ TEST_F(ReaderModeTabHelperOptimizationGuideTest, EligibilityForEligiblePage) {
 
 // Tests that reader mode is not eligible when the heuristic is not eligible
 // regardless of the OptimizationGuideService hint.
-TEST_F(ReaderModeTabHelperOptimizationGuideTest,
+TEST_F(ReaderModeTabHelperTest,
        EligibilityForNotEligiblePage) {
   GURL test_url("https://test.url/");
   SetReaderModeState(
@@ -830,11 +814,12 @@ TEST_F(ReaderModeTabHelperOptimizationGuideTest,
 
 // Tests that reader mode is not eligible when the OptimizationGuideService hint
 // returns ineligibility.
-TEST_F(ReaderModeTabHelperOptimizationGuideTest,
+TEST_F(ReaderModeTabHelperTest,
        NotEligibleWithOptimizationGuide) {
   GURL test_url("https://test.url/");
   SetReaderModeState(web_state(), test_url,
-                     ReaderModeHeuristicResult::kReaderModeEligible, "");
+                     ReaderModeHeuristicResult::kReaderModeEligible, "",
+                     /*mock_opt_guide=*/false);
 
   // No optimization guide metadata provided.
   LoadWebpage(web_state(), test_url);
@@ -892,15 +877,6 @@ TEST_P(ReaderModeTabHelperWithEligibilityTest, TriggerHeuristicOnPageLoad) {
 TEST_P(ReaderModeTabHelperWithEligibilityTest,
        TriggerReadabilityHeuristicOnPageLoad) {
   ReaderModeHeuristicResult eligibility = GetEligibility();
-  if (eligibility ==
-          ReaderModeHeuristicResult::kReaderModeNotEligibleContentOnly ||
-      eligibility ==
-          ReaderModeHeuristicResult::kReaderModeNotEligibleContentLength) {
-    GTEST_SKIP() << "Does not provide content and length heuristics.";
-  }
-
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(kEnableReadabilityHeuristic);
 
   histogram_tester_.ExpectTotalCount(kReaderModeHeuristicResultHistogram, 0);
   ASSERT_EQ(0u, GetHeuristicResultEntries().size());
@@ -991,13 +967,60 @@ TEST_F(ReaderModeTabHelperTest, AddsInfobarWhenActivated) {
   EXPECT_EQ(0u, infobar_manager->infobars().size());
 }
 
+// Tests that when Reader Mode cancels a request, the request is forwarded to
+// the navigation manager with the correct
+// ReferrerPolicyStrictOriginWhenCrossOrigin policy.
+TEST_F(ReaderModeTabHelperTest, ReaderModeContentDidCancelRequestForwarding) {
+  web_state()->WasShown();
+  GURL test_url("https://test.url/");
+  LoadWebpage(web_state(), test_url);
+  SetReaderModeState(web_state(), test_url,
+                     ReaderModeHeuristicResult::kReaderModeEligible, "Content");
+  WaitForPageLoadDelayAndRunUntilIdle();
+
+  // Activate Reader Mode.
+  reader_mode_tab_helper()->ActivateReader(
+      ReaderModeAccessPoint::kContextualChip);
+  WaitForAvailableReaderModeContentInWebState(web_state());
+
+  // Ensure the host tab navigation manager has not been called yet.
+  web::FakeNavigationManager* navigation_manager =
+      static_cast<web::FakeNavigationManager*>(
+          web_state()->GetNavigationManager());
+  ASSERT_FALSE(navigation_manager->LoadURLWithParamsWasCalled());
+
+  // Simulate a navigation cancellation with a referrer.
+  NSMutableURLRequest* request = [NSMutableURLRequest
+      requestWithURL:[NSURL URLWithString:@"https://destination.url/"]];
+  [request setValue:@"https://referrer.url/" forHTTPHeaderField:@"Referer"];
+
+  web::WebStatePolicyDecider::RequestInfo request_info(
+      ui::PageTransition::PAGE_TRANSITION_LINK,
+      /*target_frame_is_main=*/true,
+      /*target_frame_is_cross_origin=*/true,
+      /*target_window_is_cross_origin=*/false,
+      /*is_user_initiated=*/true,
+      /*user_tapped_recently=*/true);
+
+  reader_mode_tab_helper()->ReaderModeContentDidCancelRequest(nil, request,
+                                                              request_info);
+
+  // Verify that the host WebState's navigation manager loaded the request
+  // with web::ReferrerPolicyStrictOriginWhenCrossOrigin.
+  EXPECT_TRUE(navigation_manager->LoadURLWithParamsWasCalled());
+  web::NavigationManager::WebLoadParams load_params =
+      navigation_manager->GetLastLoadURLWithParams().value();
+  EXPECT_EQ(GURL("https://destination.url/"), load_params.url);
+  EXPECT_EQ(GURL("https://referrer.url/"), load_params.referrer.url);
+  EXPECT_EQ(web::ReferrerPolicyStrictOriginWhenCrossOrigin,
+            load_params.referrer.policy);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     All,
     ReaderModeTabHelperWithEligibilityTest,
     ::testing::Values(
         ReaderModeHeuristicResult::kMalformedResponse,
         ReaderModeHeuristicResult::kReaderModeEligible,
-        ReaderModeHeuristicResult::kReaderModeNotEligibleContentOnly,
-        ReaderModeHeuristicResult::kReaderModeNotEligibleContentLength,
         ReaderModeHeuristicResult::kReaderModeNotEligibleContentAndLength),
     ReaderModeTest::TestParametersReaderModeHeuristicResultToString);

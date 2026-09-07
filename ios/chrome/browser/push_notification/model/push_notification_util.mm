@@ -12,6 +12,7 @@
 #import "base/metrics/histogram_functions.h"
 #import "base/task/sequenced_task_runner.h"
 #import "components/prefs/pref_service.h"
+#import "ios/chrome/browser/push_notification/model/constants.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
@@ -74,11 +75,7 @@ const char kNotificationAutorizationStatusChangedToDenied[] =
 const char kNotificationAutorizationStatusChangedToProvisional[] =
     "IOS.PushNotification.NotificationAutorizationStatusChangedToProvisional";
 
-// Key for the pre-rendered payload from Chime.
-NSString* const kPrerenderedPayloadKey = @"$";
 
-// Key for the client id in the payload.
-NSString* const kClientIdFieldKey = @"n";
 
 // The options to use when requesting notification authorization.
 constexpr UNAuthorizationOptions kAuthorizationOptions =
@@ -101,8 +98,7 @@ UNAuthorizationOptions AuthorizationOptions() {
 
 @implementation PushNotificationUtil
 
-+ (void)registerDeviceWithAPNSWithProvisionalNotificationsAvailable:
-    (BOOL)provisionalNotificationsAvailable {
++ (void)registerDeviceWithAPNS {
   [PushNotificationUtil
       getPermissionSettings:^(UNNotificationSettings* settings) {
         // Logs the users iOS settings' push notification permission status over
@@ -110,7 +106,7 @@ UNAuthorizationOptions AuthorizationOptions() {
         [PushNotificationUtil
             logPermissionSettingsMetrics:settings.authorizationStatus];
         if (settings.authorizationStatus == UNAuthorizationStatusAuthorized ||
-            provisionalNotificationsAvailable) {
+            settings.authorizationStatus == UNAuthorizationStatusProvisional) {
           [[UIApplication sharedApplication] registerForRemoteNotifications];
         }
       }];
@@ -284,7 +280,8 @@ UNAuthorizationOptions AuthorizationOptions() {
         numberWithInt:static_cast<int>(PushNotificationClientId::kSendTab)],
   };
 
-  NSString* payloadText = userInfo[kPrerenderedPayloadKey][kClientIdFieldKey];
+  NSString* payloadText =
+      userInfo[kSerializedChimePayloadKey][kChimeNotificationClientIdKey];
   if (payloadText.length) {
     // Removes the unstable prefix from the chime client id.
     NSString* resultingClient =
@@ -362,8 +359,7 @@ UNAuthorizationOptions AuthorizationOptions() {
                            granted:(BOOL)granted
                              error:(NSError*)error {
   if (granted) {
-    [PushNotificationUtil
-        registerDeviceWithAPNSWithProvisionalNotificationsAvailable:NO];
+    [PushNotificationUtil registerDeviceWithAPNS];
     base::UmaHistogramEnumeration(kEnabledPermissionsHistogram,
                                   PermissionPromptAction::ACCEPTED);
   } else if (!error) {
@@ -387,8 +383,7 @@ UNAuthorizationOptions AuthorizationOptions() {
                                       granted:(BOOL)granted
                                         error:(NSError*)error {
   if (granted) {
-    [PushNotificationUtil
-        registerDeviceWithAPNSWithProvisionalNotificationsAvailable:NO];
+    [PushNotificationUtil registerDeviceWithAPNS];
     base::UmaHistogramEnumeration(kProvisionalEnabledPermissionsHistogram,
                                   ProvisionalPermissionAction::ENABLED);
   } else if (!granted || error) {

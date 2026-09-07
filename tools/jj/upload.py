@@ -8,6 +8,7 @@ import argparse
 import json
 import logging
 import pathlib
+import subprocess
 import tempfile
 from util import jj_log
 from util import run_command
@@ -15,9 +16,8 @@ from util import run_jj
 from util import join_revsets
 from util import percent_encode_for_git_ref
 from util import split_description
-
-_IMMUTABLE_PARENTS = 'parents.filter(|p| p.immutable()).map(|p| p.commit_id())'
-_MUTABLE_PARENTS = 'parents.filter(|p| !p.immutable()).map(|p| p.commit_id())'
+from util import IMMUTABLE_PARENTS
+from util import MUTABLE_PARENTS
 
 
 def fatal(*args, **kwargs):
@@ -25,26 +25,12 @@ def fatal(*args, **kwargs):
   exit(1)
 
 
-def _collect_ids(values):
-  ids = set()
-  for value in values:
-    if value:
-      ids.update(value.split(' '))
-  return ids
-
-
 def get_refspec_opts(args) -> list[str]:
   # Extra options that can be specified at push time. Doc:
   # https://gerrit-review.googlesource.com/Documentation/user-upload.html
   refspec_opts = []
-  if args.topic:
-    # Documentation on Gerrit topics is here:
-    # https://gerrit-review.googlesource.com/Documentation/user-upload.html#topic
-    refspec_opts.append(f'topic={args.topic}')
 
   # Code mostly stolen from `git_cl.py`
-  if args.private:
-    refspec_opts.append('private')
   if args.send_mail:
     refspec_opts.append('ready')
     refspec_opts.append('notify=ALL')
@@ -58,14 +44,12 @@ def get_refspec_opts(args) -> list[str]:
     refspec_opts.append('l=Commit-Queue+1')
   if args.title:
     refspec_opts.append(f'm={percent_encode_for_git_ref(args.title)}')
-  for cc in args.cc:
-    refspec_opts.append(f'cc={cc}')
   for reviewer in args.reviewers:
     refspec_opts.append(f'r={reviewer}')
   return refspec_opts
 
 
-def main(args):
+def main(args, unknown_args):
   logging.basicConfig(level=logging.getLevelNamesMapping()[args.verbosity])
 
   revs = args.revisions + args.revision
@@ -86,14 +70,14 @@ def main(args):
     snapshot_taken = True
 
   to_upload = jj_log(
-      revisions=f'mutable()::({rev})',
-      templates={
-          'commit_id': 'commit_id',
-          'empty': 'empty',
-          'desc': 'description',
-          'mutable_parents': _MUTABLE_PARENTS,
-      },
-      ignore_working_copy=snapshot_taken,
+    revisions=f'mutable()::({rev})',
+    templates={
+      'commit_id': 'commit_id',
+      'empty': 'empty',
+      'desc': 'description',
+      'mutable_parents': MUTABLE_PARENTS,
+    },
+    ignore_working_copy=snapshot_taken,
   )
   snapshot_taken = True
   if implicit_revs:
@@ -101,8 +85,10 @@ def main(args):
     wc = to_upload[0]
     if not split_description(wc['desc'])[0] and wc['empty'] == 'true':
       revs = ['parents(@)']
-      logging.info('No revisions provided and working copy is empty and ' +
-                   'descriptionless, uploading parents(@)')
+      logging.info(
+        'No revisions provided and working copy is empty and '
+        + 'descriptionless, uploading parents(@)'
+      )
       to_upload.remove(wc)
     else:
       revs = '@'
@@ -119,41 +105,52 @@ def main(args):
       fatal('Attempting to upload change with an empty description %s', name)
     if 'Bug' not in trailers and 'Fixed' not in trailers:
       logging.warning(
-          'Change %s has no associated Bug. If this change has an associated ' +
-          'bug, run `jj bug add [--inherit]`', name)
+        'Change %s has no associated Bug. If this change has an associated '
+        + 'bug, run `jj bug add [--inherit]`',
+        name,
+      )
+
+  if not args.bypass_hooks:
+    jj_root = run_jj(
+      ['root'], ignore_working_copy=True, stdout=subprocess.PIPE, text=True
+    ).stdout.strip()
+    if not (pathlib.Path(jj_root) / '.git').exists():
+      logging.warning(
+        '`git cl presubmit` will be skipped because this is a '
+        'standalone jj workspace that is not a git working tree'
+      )
+      args.bypass_hooks = True
 
   if not args.bypass_hooks:
     # Find the commits that `git cl presubmit` will actually run on
     got_presubmits = jj_log(
-        revisions=f'mutable()::@',
-        templates={
-            'empty': 'empty',
-            'immutable_parents': _IMMUTABLE_PARENTS
-        },
-        ignore_working_copy=snapshot_taken,
+      revisions=f'mutable()::@',
+      templates={'empty': 'empty', 'immutable_parents': IMMUTABLE_PARENTS},
+      ignore_working_copy=snapshot_taken,
     )
 
     # We could simplify this with another call to jj_log, but each call to
     # jj_log can take a nontrivial amount of time.
-    immutable_parents = _collect_ids(c['immutable_parents']
-                                     for c in got_presubmits)
+    immutable_parents = {
+      commit_id for c in got_presubmits for commit_id in c['immutable_parents']
+    }
     if len(immutable_parents) != 1:
       fatal(
-          '%s has multiple different immutable parents of mutable ancestors. ' +
-          'Fix with a rebase or jj simplify-parents.',
-          rev,
+        '%s has multiple different immutable parents of mutable ancestors. '
+        + 'Fix with a rebase or jj simplify-parents.',
+        rev,
       )
 
     want_presubmits = {x['name'] for x in to_upload if x['empty'] == 'false'}
     got_presubmits = {
-        x['name']
-        for x in got_presubmits if x['empty'] == 'false'
+      x['name'] for x in got_presubmits if x['empty'] == 'false'
     }
 
     if want_presubmits.intersection(got_presubmits):
       for change in got_presubmits - want_presubmits:
-        logging.warning("Running presubmit on additional non-empty revision %s",
-                        change)
+        logging.warning(
+          "Running presubmit on additional non-empty revision %s", change
+        )
       for change in want_presubmits - got_presubmits:
         logging.warning("Presubmits will be skipped for %s", change)
 
@@ -168,40 +165,71 @@ def main(args):
       # This isn't any worse with jj than with git, but it is very annoying.
       # In particular, if you're uploading any commit except @-, expect some
       # weirdness.
-      with tempfile.NamedTemporaryFile(suffix='.json') as out:
-        out = pathlib.Path(out.name)
-        run_command([
-            'git',
-            'cl',
-            'presubmit',
-            # Allows it to run with a dirty tree and on no branch
-            '--force',
-            '--parallel',
+      with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as f:
+        out = pathlib.Path(f.name)
+      try:
+        presubmit_cmd = [
+          'git',
+          'cl',
+          'presubmit',
+          # Allows it to run with a dirty tree and on no branch
+          '--force',
+        ]
+        if args.parallel:
+          presubmit_cmd.append('--parallel')
+        presubmit_cmd.extend(
+          [
             # Unfortunately, upload skips certain checks which would be
             # useful. However, it also skips certain checks we really don't
             # want to run. CheckTreeIsOpen(), for example.
             '--upload',
             f'--json={out}',
-            next(iter(immutable_parents))
-        ])
+            next(iter(immutable_parents)),
+          ]
+        )
+        run_command(
+          [
+            'git',
+            'update-ref',
+            '--no-deref',
+            'HEAD',
+            to_upload[0]['commit_id'],
+          ],
+          cwd=jj_root,
+        )
+        run_command(presubmit_cmd, cwd=jj_root)
         results = json.loads(out.read_text())
         if results.get('errors', []) or results.get('warnings', []):
           if not args.allow_warnings:
-            fatal('git cl presubmit had warnings.\n' +
-                  'Hint: maybe you want --allow-warnings?')
+            fatal(
+              'git cl presubmit had warnings.\n'
+              + 'Hint: maybe you want --allow-warnings?'
+            )
+      finally:
+        # On Windows, NamedTemporaryFile cannot be opened by another process
+        # while it is still open by the creating process. We use delete=False
+        # so we can close the file before passing it to `git cl presubmit`,
+        # then manually clean it up in the finally block.
+        out.unlink(missing_ok=True)
     else:
       # For consistency's sake, we warn if the intersection of commits is small,
       # so we should also warn if the intersection is emmpty.
-      logging.warning('git cl presubmit only supports running on the ' +
-                      'revision @. `git cl presubmit` will be skipped')
+      logging.warning(
+        'git cl presubmit only supports running on the '
+        + 'revision @. `git cl presubmit` will be skipped'
+      )
 
   refspec = get_refspec_opts(args)
   refspec_suffix = '%' + ','.join(refspec) if refspec else ''
 
   cmd = [
-      'gerrit', 'upload', '--remote', 'origin', '--remote-branch',
-      args.target_branch + refspec_suffix
-  ]
+    'gerrit',
+    'upload',
+    '--remote',
+    'origin',
+    '--remote-branch',
+    args.target_branch + refspec_suffix,
+  ] + unknown_args
   for rev in revs:
     cmd.extend(['-r', rev])
   if args.upload:
@@ -213,101 +241,108 @@ def main(args):
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument(
-      '--verbosity',
-      help='Verbosity of logging',
-      default='INFO',
-      choices=logging.getLevelNamesMapping().keys(),
-      type=lambda x: x.upper(),
+    '--verbosity',
+    help='Verbosity of logging',
+    default='INFO',
+    choices=logging.getLevelNamesMapping().keys(),
+    type=lambda x: x.upper(),
   )
 
   # Alternative form so users can write `upload -r foo` as well as `upload foo``
-  parser.add_argument('-r',
-                      '--revision',
-                      help=None,
-                      action='append',
-                      default=[])
+  parser.add_argument(
+    '-r', '--revision', help=None, action='append', default=[]
+  )
   parser.add_argument('revisions', help='Revisions to upload', nargs='*')
   parser.add_argument(
-      '--no-fix',
-      help='Skips running `jj fix` before uploading',
-      action='store_false',
-      dest='fix',
+    '--no-fix',
+    help='Skips running `jj fix` before uploading',
+    action='store_false',
+    dest='fix',
   )
-  parser.add_argument('--no-upload',
-                      help='Doesn\'t actually upload the change to gerrit',
-                      action='store_false',
-                      dest='upload')
   parser.add_argument(
-      '--allow-warnings',
-      help='Prevents presubmit warnings from blocking upload',
-      action='store_true',
+    '--no-upload',
+    help='Doesn\'t actually upload the change to gerrit',
+    action='store_false',
+    dest='upload',
+  )
+  parser.add_argument(
+    '--allow-warnings',
+    help='Prevents presubmit warnings from blocking upload',
+    action='store_true',
+  )
+  parser.add_argument(
+    '--parallel',
+    help='Runs git cl presubmit checks in parallel',
+    action='store_true',
   )
 
   # These args are directly copied from git_cl.py
-  parser.add_argument('--bypass-hooks',
-                      action='store_true',
-                      help='bypass upload presubmit hook')
+  parser.add_argument(
+    '--bypass-hooks', action='store_true', help='bypass upload presubmit hook'
+  )
   # We use -R instead of the -r that git cl upload uses because -r in jj means
   # revision.
-  parser.add_argument('-R',
-                      '--reviewers',
-                      action='append',
-                      default=[],
-                      help='reviewer email addresses')
-  parser.add_argument('--cc',
-                      action='append',
-                      default=[],
-                      help='cc email addresses')
-  parser.add_argument('-s',
-                      '--send-mail',
-                      '--send-email',
-                      dest='send_mail',
-                      action='store_true',
-                      help='send email to reviewer(s) and cc(s) immediately')
-  parser.add_argument('--target_branch',
-                      '--target-branch',
-                      metavar='TARGET',
-                      help='Apply CL to remote branch TARGET.',
-                      default='main')
-  parser.add_argument('--topic',
-                      default=None,
-                      help='Topic to specify when uploading')
-
   parser.add_argument(
-      '-c',
-      '--use-commit-queue',
-      action='store_true',
-      default=False,
-      help='tell the CQ to commit this patchset; implies --send-mail',
+    '-R',
+    '--reviewers',
+    action='append',
+    default=[],
+    help='reviewer email addresses',
   )
   parser.add_argument(
-      '-d',
-      '--dry-run',
-      '--cq-dry-run',
-      action='store_true',
-      dest='cq_dry_run',
-      default=False,
-      help='Send the patchset to do a CQ dry run right after upload.',
+    '-s',
+    '--send-mail',
+    '--send-email',
+    dest='send_mail',
+    action='store_true',
+    help='send email to reviewer(s) and cc(s) immediately',
   )
   parser.add_argument(
-      '-a',
-      '--auto-submit',
-      '--enable-auto-submit',
-      action='store_true',
-      dest='enable_auto_submit',
-      help='Sends your change to the CQ after an approval. Only '
-      'works on repos that have the Auto-Submit label '
-      'enabled')
-  parser.add_argument('-t',
-                      '--title',
-                      dest='title',
-                      default="",
-                      help='Adds a title for the patchset.')
-  parser.add_argument('--enable-owners-override',
-                      action='store_true',
-                      help='Adds the Owners-Override label to your change.')
-  parser.add_argument('--private',
-                      action='store_true',
-                      help='Set the review private.')
+    '--target_branch',
+    '--target-branch',
+    metavar='TARGET',
+    help='Apply CL to remote branch TARGET.',
+    default='main',
+  )
 
-  main(parser.parse_args())
+  parser.add_argument(
+    '-c',
+    '--use-commit-queue',
+    action='store_true',
+    default=False,
+    help='tell the CQ to commit this patchset; implies --send-mail',
+  )
+  parser.add_argument(
+    '-d',
+    '--dry-run',
+    '--cq-dry-run',
+    action='store_true',
+    dest='cq_dry_run',
+    default=False,
+    help='Send the patchset to do a CQ dry run right after upload.',
+  )
+  parser.add_argument(
+    '-a',
+    '--auto-submit',
+    '--enable-auto-submit',
+    action='store_true',
+    dest='enable_auto_submit',
+    help='Sends your change to the CQ after an approval. Only '
+    'works on repos that have the Auto-Submit label '
+    'enabled',
+  )
+  parser.add_argument(
+    '-t',
+    '--title',
+    dest='title',
+    default="",
+    help='Adds a title for the patchset.',
+  )
+  parser.add_argument(
+    '--enable-owners-override',
+    action='store_true',
+    help='Adds the Owners-Override label to your change.',
+  )
+
+  args, unknown_args = parser.parse_known_args()
+  main(args, unknown_args)

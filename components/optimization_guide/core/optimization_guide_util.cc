@@ -14,6 +14,7 @@
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/core/optimization_guide_logger.h"
 #include "components/optimization_guide/core/optimization_guide_prefs.h"
+#include "components/optimization_guide/proto/features/common_quality_data.pb.h"
 #include "components/prefs/pref_service.h"
 #include "google_apis/common/api_key_request_util.h"
 #include "net/base/url_util.h"
@@ -69,8 +70,6 @@ std::string_view GetStringNameForModelExecutionFeature(
   switch (feature) {
     case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_WALLPAPER_SEARCH:
       return "WallpaperSearch";
-    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_TAB_ORGANIZATION:
-      return "TabOrganization";
     case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_COMPOSE:
       return "Compose";
     case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_TEST:
@@ -120,6 +119,9 @@ std::string_view GetStringNameForModelExecutionFeature(
         MODEL_EXECUTION_FEATURE_ON_DEVICE_SPEECH_RECOGNITION:
       return "OnDeviceSpeechRecognition";
     case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_ON_DEVICE_SPEECH_RECOGNITION_TINY_GEMMA:
+      return "SpeechRecognitionSmallExpertModel";
+    case proto::ModelExecutionFeature::
         MODEL_EXECUTION_FEATURE_IOS_SMART_TAB_GROUPING:
       return "IosSmartTabGrouping";
     case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_SKILLS:
@@ -127,6 +129,35 @@ std::string_view GetStringNameForModelExecutionFeature(
     case proto::ModelExecutionFeature::
         MODEL_EXECUTION_FEATURE_GEMINI_ANTISCAM_PROTECTION:
       return "GeminiAntiscamProtection";
+    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_CLASSIFIER:
+      return "Classifier";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_CONTENT_ANNOTATION:
+      return "ContentAnnotation";
+    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_FINDS:
+      return "Finds";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_ANNOTATION_REDUCER_ONE_P_RESOLVER:
+      return "AnnotationReducerOnePResolver";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_ANNOTATION_REDUCER_QUERY_CLASSIFIER:
+      return "AnnotationReducerQueryClassifier";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_CONTEXTUAL_CUEING:
+      return "ContextualCueing";
+    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_UPDATER_CHAT:
+      return "UpdaterChat";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_CARD_RECOMMENDATIONS:
+      return "CardRecommendations";
+    case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_CONTEXT_HUB:
+      return "ContextHub";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_READ_ALOUD_GENERATE_TEXT:
+      return "ReadAloudGenerateText";
+    case proto::ModelExecutionFeature::
+        MODEL_EXECUTION_FEATURE_READ_ALOUD_SYNTHESIZE:
+      return "ReadAloudSynthesize";
     case proto::ModelExecutionFeature::MODEL_EXECUTION_FEATURE_UNSPECIFIED:
       return "Unknown";
       // Must be in sync with the ModelExecutionFeature variant in
@@ -219,12 +250,6 @@ void PopulateServerTimeoutRequestHeader(
   CHECK(timeout.is_positive());
   resource_request->headers.SetHeader(
       kServerTimeoutHeader, base::NumberToString(timeout.InSeconds()));
-}
-
-bool ShouldStartModelValidator() {
-  return switches::ShouldValidateModel() ||
-         switches::ShouldValidateModelExecution() ||
-         switches::GetOnDeviceValidationRequestOverride();
 }
 
 }  // namespace optimization_guide

@@ -5,7 +5,7 @@
 
 import unittest
 
-import setup_modules
+import setup_modules  # pylint: disable=unused-import
 
 import chromium_src.tools.metrics.histograms.pretty_print as pretty_print
 
@@ -97,11 +97,11 @@ PRETTY_XML = """
 
 
 class PrettyPrintHistogramsXmlTest(unittest.TestCase):
-
   def testPrettyPrinting(self):
     result = pretty_print.PrettyPrintHistograms(ORIGINAL_XML)
     self.maxDiff = None
     self.assertMultiLineEqual(PRETTY_XML, result.strip())
+
 
 if __name__ == '__main__':
   unittest.main()

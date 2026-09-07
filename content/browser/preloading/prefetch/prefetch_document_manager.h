@@ -9,9 +9,9 @@
 
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
+#include "content/browser/preloading/prefetch/prefetch_container.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/document_user_data.h"
-#include "content/public/browser/prefetch_metrics.h"
 #include "third_party/blink/public/mojom/speculation_rules/speculation_rules.mojom.h"
 #include "third_party/blink/public/mojom/tokens/tokens.mojom.h"
 #include "url/gurl.h"
@@ -68,7 +68,7 @@ class CONTENT_EXPORT PrefetchDocumentManager
                    const PrefetchType& prefetch_type,
                    const PreloadingPredictor& enacting_predictor,
                    const blink::mojom::Referrer& referrer,
-                   std::optional<SpeculationRulesTags> speculation_rules_tags,
+                   SpeculationRulesTags speculation_rules_tags,
                    const network::mojom::NoVarySearchPtr& no_vary_search_hint,
                    scoped_refptr<PreloadPipelineInfo> preload_pipeline_info);
 
@@ -78,18 +78,6 @@ class CONTENT_EXPORT PrefetchDocumentManager
   bool HaveCanaryChecksStarted() const { return have_canary_checks_started_; }
   void OnCanaryChecksStarted() { have_canary_checks_started_ = true; }
 
-  // Returns metrics for prefetches requested by the associated page load.
-  PrefetchReferringPageMetrics& GetReferringPageMetrics() {
-    return referring_page_metrics_;
-  }
-
-  // Updates metrics when the eligibility check for a prefetch requested by this
-  // page load is completed.
-  void OnEligibilityCheckComplete(bool is_eligible);
-
-  // Updates metrics when the response for a prefetch requested by this page
-  // load is received.
-  void OnPrefetchSuccessful(PrefetchContainer* prefetch);
 
   // Whether the prefetch attempt for target |url| failed or discarded
   bool IsPrefetchAttemptFailedOrDiscarded(const GURL& url);
@@ -108,8 +96,9 @@ class CONTENT_EXPORT PrefetchDocumentManager
   // See documentation for |prefetch_destruction_callback_|.
   void SetPrefetchDestructionCallback(PrefetchDestructionCallback callback);
 
-  // Called when a PrefetchContainer started by |this| is being destroyed.
-  void PrefetchWillBeDestroyed(PrefetchContainer* prefetch);
+  // TODO(crbug.com/480271813): Override `PrefetchContainer::Observer`.
+  void OnWillBeDestroyed(const PrefetchContainer& prefetch_container);
+  void OnPrefetchCompletedOrFailed(const PrefetchContainer& prefetch_container);
 
   base::WeakPtr<PrefetchDocumentManager> GetWeakPtr() {
     return weak_method_factory_.GetWeakPtr();
@@ -136,6 +125,10 @@ class CONTENT_EXPORT PrefetchDocumentManager
   bool IsPrefetchAttemptFailedOrDiscardedInternal(
       const GURL& url,
       PreloadingType planned_max_preloading_type);
+
+  // Calculates the prefetch concurrency limit based on eagerness and active
+  // heuristics.
+  size_t GetPrefetchLimit(blink::mojom::SpeculationEagerness eagerness) const;
 
   blink::DocumentToken document_token_;
 
@@ -164,8 +157,6 @@ class CONTENT_EXPORT PrefetchDocumentManager
   std::vector<base::WeakPtr<PrefetchContainer>>
       completed_non_immediate_prefetches_;
 
-  // Metrics related to the prefetches requested by this page load.
-  PrefetchReferringPageMetrics referring_page_metrics_;
 
   // Callback that is run when a prefetch started by |this| is being destroyed.
   PrefetchDestructionCallback prefetch_destruction_callback_;

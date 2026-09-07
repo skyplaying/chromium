@@ -5,6 +5,7 @@
 #include "content/browser/indexed_db/indexed_db_reporting.h"
 
 #include <string>
+#include <string_view>
 
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
@@ -17,11 +18,11 @@ namespace content::indexed_db {
 
 namespace {
 
-std::string BucketLocatorToCustomHistogramSuffix(
+std::string_view BucketLocatorToCustomHistogramSuffix(
     const storage::BucketLocator& bucket_locator) {
   if (bucket_locator.storage_key.origin().host() == "docs.google.com")
     return ".Docs";
-  return std::string();
+  return {};
 }
 
 void ParseAndReportIOErrorDetails(const std::string& histogram_name,
@@ -39,7 +40,7 @@ void ParseAndReportIOErrorDetails(const std::string& histogram_name,
       ->Add(method);
 
   if (result == leveldb_env::METHOD_AND_BFE) {
-    DCHECK_LT(error, 0);
+    CHECK_LT(error, 0, base::NotFatalUntil::M158);
     base::LinearHistogram::FactoryGet(
         base::StrCat(
             {histogram_name, ".BFE.", leveldb_env::MethodIDToString(method)}),
@@ -52,7 +53,7 @@ void ParseAndReportIOErrorDetails(const std::string& histogram_name,
 void ParseAndReportCorruptionDetails(const std::string& histogram_name,
                                      const leveldb::Status& status) {
   int error = leveldb_env::GetCorruptionCode(status);
-  DCHECK_GE(error, 0);
+  CHECK_GE(error, 0, base::NotFatalUntil::M158);
   const int kNumPatterns = leveldb_env::GetNumCorruptionCodes();
   base::LinearHistogram::FactoryGet(
       base::StrCat({histogram_name, ".Corruption"}), 1, kNumPatterns,
@@ -66,7 +67,7 @@ void ReportOpenStatus(BackingStoreOpenResult result,
                       const storage::BucketLocator& bucket_locator) {
   base::UmaHistogramEnumeration("WebCore.IndexedDB.BackingStore.OpenStatus",
                                 result, INDEXED_DB_BACKING_STORE_OPEN_MAX);
-  const std::string suffix =
+  const std::string_view suffix =
       BucketLocatorToCustomHistogramSuffix(bucket_locator);
   // Data from the WebCore.IndexedDB.BackingStore.OpenStatus histogram is used
   // to generate a graph. So as not to alter the meaning of that graph,
@@ -117,6 +118,18 @@ void ReportLevelDBError(const std::string& histogram_name,
     ParseAndReportIOErrorDetails(histogram_name, s);
   else
     ParseAndReportCorruptionDetails(histogram_name, s);
+}
+
+void ReportBadMessage(
+    BadMessageReason reason,
+    std::string_view message,
+    base::OnceCallback<void(std::string_view)> report_bad_message_callback) {
+  base::UmaHistogramEnumeration("IndexedDB.BadMessageReason", reason);
+  if (report_bad_message_callback) {
+    std::move(report_bad_message_callback).Run(message);
+  } else {
+    mojo::ReportBadMessage(message);
+  }
 }
 
 }  // namespace content::indexed_db

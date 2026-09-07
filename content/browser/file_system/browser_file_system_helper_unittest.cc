@@ -13,10 +13,11 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/null_task_runner.h"
-#include "content/browser/child_process_security_policy_impl.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/public/common/child_process_id.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/drop_data.h"
+#include "content/public/common/url_constants.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_browser_context.h"
 #include "content/public/test/test_utils.h"
@@ -53,7 +54,7 @@ TEST(BrowserFileSystemHelperTest,
   TestBrowserContext browser_context;
   ChildProcessSecurityPolicyImpl* p =
       ChildProcessSecurityPolicyImpl::GetInstance();
-  p->AddForTesting(kRendererID, &browser_context);
+  p->AddForTesting(kRendererProcess, &browser_context);
 
   // Prepare |original_file| FileSystemURL that comes from a |sensitive_origin|.
   // This attempts to simulate for unit testing the drive URL from
@@ -144,7 +145,7 @@ TEST(BrowserFileSystemHelperTest,
   EXPECT_FALSE(p->CanCopyIntoFileSystemFile(kRendererProcess, dropped_file));
   EXPECT_FALSE(p->CanDeleteFileSystemFile(kRendererProcess, dropped_file));
 
-  p->Remove(kRendererID);
+  p->Remove(kRendererProcess);
 }
 
 TEST(BrowserFileSystemHelperTest, PrepareDropDataForChildProcess_LocalFiles) {
@@ -173,7 +174,7 @@ TEST(BrowserFileSystemHelperTest, PrepareDropDataForChildProcess_LocalFiles) {
   TestBrowserContext browser_context;
   ChildProcessSecurityPolicyImpl* p =
       ChildProcessSecurityPolicyImpl::GetInstance();
-  p->AddForTesting(kRendererID, &browser_context);
+  p->AddForTesting(kRendererProcess, &browser_context);
 
   // Prepare content::DropData containing some local files.
   const base::FilePath kDraggedFile =
@@ -224,9 +225,59 @@ TEST(BrowserFileSystemHelperTest, PrepareDropDataForChildProcess_LocalFiles) {
   EXPECT_FALSE(
       p->CanCommitURL(kRendererID, net::FilePathToFileURL(kOtherFile)));
 
-  p->Remove(kRendererID);
+  p->Remove(kRendererProcess);
   SetBrowserClientForTesting(old_browser_client);
 }
+
+#if BUILDFLAG(IS_CHROMEOS)
+TEST(BrowserFileSystemHelperTest, PrepareDropDataForChildProcess_ExternalFile) {
+  // Install a custom ContentBrowserClient that overrides IsHandledURL() to
+  // return `true` for externalfile URLs. This is necessary for
+  // ChildProcessSecurityPolicy::CanRequestURL() checks to work more accurately.
+  class ExternalFileTestBrowserClient : public ContentBrowserClient {
+   public:
+    ExternalFileTestBrowserClient() = default;
+
+    bool IsHandledURL(const GURL& url) override {
+      return url.SchemeIs(content::kExternalFileScheme);
+    }
+  } test_browser_client;
+  auto* old_browser_client = SetBrowserClientForTesting(&test_browser_client);
+
+  // We need the task environment to use a separate IO thread so that the
+  // ChildProcessSecurityPolicy checks do the right thing.
+  BrowserTaskEnvironment task_environment{
+      content::BrowserTaskEnvironment::REAL_IO_THREAD};
+  TestBrowserContext browser_context;
+  ChildProcessSecurityPolicyImpl* p =
+      ChildProcessSecurityPolicyImpl::GetInstance();
+
+  p->AddForTesting(kRendererProcess, &browser_context);
+
+  // Prepare content::DropData containing an externalfile: URL.
+  const GURL kExternalFileUrl(
+      std::string(content::kExternalFileScheme) +
+      ":arc-content/testuser%40gmail.com-hash/root/dir/testfile.jpg");
+
+  DropData drop_data;
+  drop_data.url_infos.push_back({kExternalFileUrl, std::u16string()});
+
+  // Verify that initially no access is granted using the integer constant.
+  EXPECT_FALSE(p->CanRequestURL(kRendererID, kExternalFileUrl));
+  EXPECT_FALSE(p->CanCommitURL(kRendererID, kExternalFileUrl));
+
+  // Invoke the API under test using the strongly-typed object constant.
+  PrepareDropDataForChildProcess(&drop_data, p, kRendererProcess, nullptr);
+
+  // Verify that the new fix correctly grants ONLY Request access, not Commit
+  // access.
+  EXPECT_TRUE(p->CanRequestURL(kRendererID, kExternalFileUrl));
+  EXPECT_FALSE(p->CanCommitURL(kRendererID, kExternalFileUrl));
+
+  p->Remove(kRendererProcess);
+  SetBrowserClientForTesting(old_browser_client);
+}
+#endif
 
 }  // namespace browser_file_system_helper_unittest
 }  // namespace content

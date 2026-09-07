@@ -11,17 +11,21 @@
 #include "third_party/skia/include/core/SkRRect.h"
 #include "ui/actions/actions.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/ui_base_features.h"
+#include "ui/compositor/layer.h"
 #include "ui/gfx/canvas.h"
-#include "ui/gfx/geometry/rrect_f.h"
 #include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/views/actions/action_view_interface.h"
+#include "ui/views/animation/ink_drop.h"
 #include "ui/views/background.h"
 #include "ui/views/controls/button/label_button_border.h"
 #include "ui/views/controls/highlight_path_generator.h"
-#include "ui/views/layout/layout_provider.h"
 #include "ui/views/view_class_properties.h"
+#include "ui/views/widget/widget.h"
 
 namespace {
+constexpr int kButtonWithLabelPadding = 5;
+
 class TabStripFlatEdgeButtonActionViewInterface
     : public views::LabelButtonActionViewInterface {
  public:
@@ -34,8 +38,11 @@ class TabStripFlatEdgeButtonActionViewInterface
   // views::LabelButtonActionViewInterface:
   void ActionItemChangedImpl(actions::ActionItem* action_item) override {
     // Calling ButtonActionViewInterface instead of
-    // LabelButtonActionViewInterface to avoid the text of the button being set.
+    // LabelButtonActionViewInterface to avoid the text of the button being set
+    // by default. We will set it manually if there is space.
     ButtonActionViewInterface::ActionItemChangedImpl(action_item);
+    action_view_->SetLabelText(std::u16string(action_item->GetText()));
+
     if (action_item->GetImage().IsVectorIcon()) {
       action_view_->UpdateIcon(action_item->GetImage());
     }
@@ -43,6 +50,7 @@ class TabStripFlatEdgeButtonActionViewInterface
 
   void OnViewChangedImpl(actions::ActionItem* action_item) override {
     ButtonActionViewInterface::OnViewChangedImpl(action_item);
+
     if (action_item->GetImage().IsVectorIcon()) {
       action_view_->UpdateIcon(action_item->GetImage());
     }
@@ -59,14 +67,33 @@ class TabStripFlatEdgeButtonActionViewInterface
 }  // namespace
 
 TabStripFlatEdgeButton::TabStripFlatEdgeButton() {
-  ConfigureInkDropForToolbar(
+  ConfigureInkDrop(
       this, std::make_unique<views::RoundRectHighlightPathGenerator>(
-                GetToolbarInkDropInsets(this), GetButtonCornerRadii()));
+                gfx::Insets(), GetButtonCornerRadii()));
+  ConfigureToolbarInkdropForRefresh2023(
+      this, kColorTabStripControlButtonInkDrop,
+      kColorTabStripControlButtonInkDropRipple);
   SetIconSize(
-      GetLayoutConstant(LayoutConstant::kVerticalTabStripBottomButtonIconSize));
+      GetLayoutConstant(LayoutConstant::kVerticalTabStripComboButtonIconSize));
+  SetImageLabelSpacing(kButtonWithLabelPadding);
+  SetInsets(gfx::Insets());
 }
 
 TabStripFlatEdgeButton::~TabStripFlatEdgeButton() = default;
+
+gfx::Size TabStripFlatEdgeButton::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
+  const int raw_button_size = GetLayoutConstant(
+      LayoutConstant::kVerticalTabStripTopContainerButtonSize);
+  gfx::Size size(raw_button_size, raw_button_size);
+
+  if (expansion_orientation_ == views::LayoutOrientation::kHorizontal) {
+    size.set_width(size.width() * expansion_factor_);
+  } else {
+    size.set_height(size.height() * expansion_factor_);
+  }
+  return size;
+}
 
 std::unique_ptr<views::ActionViewInterface>
 TabStripFlatEdgeButton::GetActionViewInterface() {
@@ -92,6 +119,50 @@ void TabStripFlatEdgeButton::SetInsets(const gfx::Insets& insets) {
   SetBorder(std::move(border));
 }
 
+void TabStripFlatEdgeButton::SetIconOpacity(float opacity) {
+  if (!image_container_view()->layer()) {
+    image_container_view()->SetPaintToLayer();
+    image_container_view()->layer()->SetFillsBoundsOpaquely(false);
+  }
+  image_container_view()->layer()->SetOpacity(opacity);
+}
+
+void TabStripFlatEdgeButton::SetExpansionFactor(float factor) {
+  if (expansion_factor_ == factor) {
+    return;
+  }
+  expansion_factor_ = factor;
+  PreferredSizeChanged();
+}
+
+void TabStripFlatEdgeButton::SetExpansionOrientation(
+    views::LayoutOrientation orientation) {
+  if (expansion_orientation_ == orientation) {
+    return;
+  }
+  expansion_orientation_ = orientation;
+  PreferredSizeChanged();
+}
+
+void TabStripFlatEdgeButton::SetFlatEdgeFactor(float factor) {
+  if (flat_edge_factor_ == factor) {
+    return;
+  }
+  flat_edge_factor_ = factor;
+
+  UpdateHighlightPathAndInkDrop();
+}
+
+void TabStripFlatEdgeButton::SetShouldShowLabel(bool show_label) {
+  should_show_label_ = show_label;
+  if (should_show_label_) {
+    label()->SetPaintToLayer();
+    label()->SetSkipSubpixelRenderingOpacityCheck(true);
+    label()->layer()->SetFillsBoundsOpaquely(false);
+    label()->SetSubpixelRenderingEnabled(false);
+  }
+}
+
 base::CallbackListSubscription
 TabStripFlatEdgeButton::RegisterWillInvokeActionCallback(
     base::RepeatingClosure callback) {
@@ -103,6 +174,9 @@ void TabStripFlatEdgeButton::NotifyWillInvokeAction() {
 }
 
 void TabStripFlatEdgeButton::OnPaintBackground(gfx::Canvas* canvas) {
+  if (paint_transparent_for_glass_ && features::IsGlassFrameEnabled()) {
+    return;
+  }
   const SkColor color = GetColorProvider()->GetColor(GetBackgroundColor());
 
   cc::PaintFlags flags;
@@ -111,6 +185,18 @@ void TabStripFlatEdgeButton::OnPaintBackground(gfx::Canvas* canvas) {
   flags.setColor(color);
 
   canvas->sk_canvas()->drawRRect(GetButtonShape(), flags);
+}
+
+void TabStripFlatEdgeButton::OnThemeChanged() {
+  views::LabelButton::OnThemeChanged();
+  const std::optional<ui::ImageModel>& model =
+      GetImageModel(views::Button::STATE_NORMAL);
+  if (model && model->IsVectorIcon()) {
+    UpdateIcon(*model);
+  }
+  if (should_show_label_) {
+    UpdateLabelColor();
+  }
 }
 
 bool TabStripFlatEdgeButton::GetHitTestMask(SkPath* mask) const {
@@ -124,10 +210,37 @@ void TabStripFlatEdgeButton::SetFlatEdge(FlatEdge flat_edge) {
   }
   flat_edge_ = flat_edge;
 
+  UpdateHighlightPathAndInkDrop();
+}
+
+void TabStripFlatEdgeButton::SetCornerRadius(float corner_radius) {
+  if (corner_radius_ == corner_radius) {
+    return;
+  }
+  corner_radius_ = corner_radius;
+
+  UpdateHighlightPathAndInkDrop();
+}
+
+void TabStripFlatEdgeButton::UpdateHighlightPathAndInkDrop() {
   SetProperty(views::kHighlightPathGeneratorKey,
               std::make_unique<views::RoundRectHighlightPathGenerator>(
-                  GetToolbarInkDropInsets(this), GetButtonCornerRadii()));
+                  gfx::Insets(), GetButtonCornerRadii()));
+  // The ink drop doesn't automatically pick up on rounded corner changes, so
+  // we need to manually notify it here.
+  if (GetWidget() && views::InkDrop::Get(this)->HasInkDrop()) {
+    views::InkDrop::Get(this)->GetInkDrop()->HostSizeChanged(size());
+  }
 
+  SchedulePaint();
+}
+
+void TabStripFlatEdgeButton::SetPaintTransparentForGlass(
+    bool paint_transparent) {
+  if (paint_transparent_for_glass_ == paint_transparent) {
+    return;
+  }
+  paint_transparent_for_glass_ = paint_transparent;
   SchedulePaint();
 }
 
@@ -136,12 +249,30 @@ void TabStripFlatEdgeButton::SetIconSize(int icon_size) {
     return;
   }
   icon_size_ = icon_size;
+
+  const std::optional<ui::ImageModel>& model =
+      GetImageModel(views::Button::STATE_NORMAL);
+  if (model && model->IsVectorIcon()) {
+    UpdateIcon(*model);
+  }
+}
+
+void TabStripFlatEdgeButton::SetLabelText(const std::u16string& text) {
+  if (label_text_ == text) {
+    return;
+  }
+  label_text_ = text;
+  UpdateLabel(width() > CalculatePreferredSize({}).width());
+}
+
+void TabStripFlatEdgeButton::OnBoundsChanged(const gfx::Rect& previous_bounds) {
+  UpdateLabel(width() > CalculatePreferredSize({}).width());
 }
 
 void TabStripFlatEdgeButton::AddedToWidget() {
   paint_as_active_subscription_ =
       GetWidget()->RegisterPaintAsActiveChangedCallback(base::BindRepeating(
-          &View::NotifyViewControllerCallback, base::Unretained(this)));
+          &TabStripFlatEdgeButton::OnThemeChanged, base::Unretained(this)));
 }
 
 void TabStripFlatEdgeButton::RemovedFromWidget() {
@@ -161,20 +292,27 @@ ui::ColorId TabStripFlatEdgeButton::GetBackgroundColor() const {
 }
 
 gfx::RoundedCornersF TabStripFlatEdgeButton::GetButtonCornerRadii() const {
-  int radius = views::LayoutProvider::Get()->GetCornerRadiusMetric(
-      views::Emphasis::kHigh);
+  constexpr float kFlatRadius = 2.0f;
+  const float rounded_radius = corner_radius_.value_or(10.0f);
+  float flat_radius = kFlatRadius + ((rounded_radius - kFlatRadius) *
+                                     (1.0f - flat_edge_factor_));
 
   switch (flat_edge_) {
     case FlatEdge::kNone:
-      return gfx::RoundedCornersF(radius, radius, radius, radius);
+      return gfx::RoundedCornersF(rounded_radius, rounded_radius,
+                                  rounded_radius, rounded_radius);
     case FlatEdge::kTop:
-      return gfx::RoundedCornersF(0, 0, radius, radius);
+      return gfx::RoundedCornersF(flat_radius, flat_radius, rounded_radius,
+                                  rounded_radius);
     case FlatEdge::kLeft:
-      return gfx::RoundedCornersF(0, radius, radius, 0);
+      return gfx::RoundedCornersF(flat_radius, rounded_radius, rounded_radius,
+                                  flat_radius);
     case FlatEdge::kBottom:
-      return gfx::RoundedCornersF(radius, radius, 0, 0);
+      return gfx::RoundedCornersF(rounded_radius, rounded_radius, flat_radius,
+                                  flat_radius);
     case FlatEdge::kRight:
-      return gfx::RoundedCornersF(radius, 0, 0, radius);
+      return gfx::RoundedCornersF(rounded_radius, flat_radius, flat_radius,
+                                  rounded_radius);
   }
 }
 
@@ -191,6 +329,32 @@ SkRRect TabStripFlatEdgeButton::GetButtonShape() const {
   SkRRect rrect;
   rrect.setRectRadii(rect, radii);
   return rrect;
+}
+
+void TabStripFlatEdgeButton::UpdateLabel(bool should_show) {
+  if (!should_show_label_) {
+    return;
+  }
+  if (should_show == GetText().empty()) {
+    SetHorizontalAlignment(should_show ? gfx::ALIGN_LEFT : gfx::ALIGN_CENTER);
+    SetInsets(should_show ? gfx::Insets::VH(0, kButtonWithLabelPadding)
+                          : gfx::Insets());
+  }
+  auto label = should_show ? label_text_ : std::u16string();
+  if (label != GetText()) {
+    SetText(label);
+  }
+  if (should_show) {
+    UpdateLabelColor();
+  }
+}
+
+void TabStripFlatEdgeButton::UpdateLabelColor() {
+  const ui::ColorId color_id = GetForegroundColor();
+  SetTextColor(views::Button::STATE_NORMAL, color_id);
+  SetTextColor(views::Button::STATE_HOVERED, color_id);
+  SetTextColor(views::Button::STATE_PRESSED, color_id);
+  SetTextColor(views::Button::STATE_DISABLED, color_id);
 }
 
 BEGIN_METADATA(TabStripFlatEdgeButton)

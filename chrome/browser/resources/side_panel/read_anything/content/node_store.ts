@@ -4,8 +4,15 @@
 
 import {assert} from '//resources/js/assert.js';
 
+import type {VisualBrowserProxy} from '../app/visual_browser_proxy.js';
+import {VisualBrowserProxyImpl} from '../app/visual_browser_proxy.js';
+import type {AudioBrowserProxy} from '../read_aloud/audio_browser_proxy.js';
+import {AudioBrowserProxyImpl} from '../read_aloud/audio_browser_proxy.js';
 import type {AncestorNode, ReadAloudNode} from '../read_aloud/read_aloud_types.js';
-import {getWordCount, isDistilledByReadability, isRectMostlyVisible} from '../shared/common.js';
+import {getWordCount, isDistilledByReadability} from '../shared/common.js';
+import type {MetricsBrowserProxy} from '../shared/metrics_browser_proxy.js';
+import {MetricsBrowserProxyImpl} from '../shared/metrics_browser_proxy.js';
+import {isRectMostlyVisible} from '../shared/rect_calculations.js';
 
 // A two-way map where each key is unique and each value is unique. The keys are
 // DOM nodes and the values are numbers, representing AXNodeIDs.
@@ -79,6 +86,19 @@ export class NodeStore {
   // index down the pipeline, so we store that info here.
   private textNodeToAncestor_: Map<Node, AncestorNode> = new Map();
 
+  // Key: a DOM node in the reading mode panel
+  // Value: the character offset where this node's text begins within its
+  // source AXNode. This is used to synchronize AX node character offsets
+  // between the main panel and the side panel.
+  private axNodeOffset_: Map<Node, number> = new Map();
+
+  private audioBrowserProxy_: AudioBrowserProxy =
+      AudioBrowserProxyImpl.getInstance();
+  private metricsBrowserProxy_: MetricsBrowserProxy =
+      MetricsBrowserProxyImpl.getInstance();
+  private visualBrowserProxy_: VisualBrowserProxy =
+      VisualBrowserProxyImpl.getInstance();
+
   clear() {
     this.hiddenImageNodesIds_.clear();
     this.imageNodeIdsToFetch_.clear();
@@ -87,6 +107,7 @@ export class NodeStore {
 
   clearDomNodes() {
     this.domNodeToAxNodeIdMap_.clear();
+    this.axNodeOffset_.clear();
     this.textNodesSeen_.clear();
     this.wordsSeenLastSavedTime_ = Date.now();
     clearTimeout(this.countWordsTimer_);
@@ -183,7 +204,7 @@ export class NodeStore {
     this.wordsSeenLastSavedTime_ = Date.now();
     textShownSinceLastSave.forEach(node => this.textNodesSeen_.add(node));
     const wordsSeen = this.estimateWordCount_(this.textNodesSeen_);
-    chrome.readingMode.updateWordsSeen(wordsSeen);
+    this.metricsBrowserProxy_.updateWordsSeen(wordsSeen);
   }
 
   hasAnyNode(nodes: ReadAloudNode[]): boolean {
@@ -200,6 +221,7 @@ export class NodeStore {
 
   removeDomNode(domNode: Node): void {
     this.domNodeToAxNodeIdMap_.delete(domNode);
+    this.axNodeOffset_.delete(domNode);
   }
 
   getAxId(domNode: Node): number|undefined {
@@ -221,32 +243,57 @@ export class NodeStore {
     // highlighting to work with Readability and with the TS text segmentation
     // model.
     if (!isDistilledByReadability() &&
-        !chrome.readingMode.isTsTextSegmentationEnabled) {
+        this.audioBrowserProxy_.isPhraseHighlightingEnabled()) {
       assert(
           nodeId !== undefined,
           'trying to replace an element that doesn\'t exist');
     }
 
     if (nodeId !== undefined) {
+      const offset = this.getAxNodeOffset(current);
+
       // Update map.
       this.removeDomNode(current);
       this.setDomNode(replacer, nodeId);
+
+      // Transfer the offset if it exists.
+      if (offset > 0) {
+        this.setAxNodeOffset(replacer, offset);
+        this.axNodeOffset_.delete(current);
+      }
     }
     // Replace element in DOM.
     current.replaceWith(replacer);
+  }
+
+  setAxNodeOffset(node: Node, offset: number) {
+    this.axNodeOffset_.set(node, offset);
+  }
+
+  getAxNodeOffset(node: Node): number {
+    return this.axNodeOffset_.get(node) || 0;
   }
 
   hideImageNode(nodeId: number): void {
     this.hiddenImageNodesIds_.add(nodeId);
   }
 
-  // TODO: crbug.com/440400392- Handle hidden image node ids for read aloud
-  // when non-AXNode-based read aloud nodes are used.
   areNodesAllHidden(nodes: ReadAloudNode[]): boolean {
     return nodes.every(node => {
       const domNode = node && node.domNode();
       const id = domNode && this.getAxId(domNode);
-      return !!id && this.hiddenImageNodesIds_.has(id);
+      if (id !== undefined && this.hiddenImageNodesIds_.has(id)) {
+        return true;
+      }
+
+      // Handle hidden images for Readability or other non-AX-based methods.
+      if (isDistilledByReadability() && domNode) {
+        const element =
+            (domNode instanceof Element) ? domNode : domNode.parentElement;
+        return !!element && !element.checkVisibility();
+      }
+
+      return false;
     });
   }
 
@@ -260,7 +307,7 @@ export class NodeStore {
 
   fetchImages(): void {
     for (const nodeId of this.imageNodeIdsToFetch_) {
-      chrome.readingMode.requestImageData(nodeId);
+      this.visualBrowserProxy_.requestImageData(nodeId);
     }
 
     this.imageNodeIdsToFetch_.clear();

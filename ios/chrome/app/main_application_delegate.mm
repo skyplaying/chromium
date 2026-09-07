@@ -14,7 +14,6 @@
 #import "base/metrics/user_metrics.h"
 #import "base/strings/sys_string_conversions.h"
 #import "components/download/public/background_service/background_download_service.h"
-#import "components/send_tab_to_self/features.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "ios/chrome/app/application_delegate/app_state.h"
 #import "ios/chrome/app/application_delegate/memory_warning_helper.h"
@@ -32,7 +31,6 @@
 #import "ios/chrome/browser/keyboard/ui_bundled/menu_builder.h"
 #import "ios/chrome/browser/push_notification/model/push_notification_delegate.h"
 #import "ios/chrome/browser/push_notification/model/push_notification_util.h"
-#import "ios/chrome/browser/shared/coordinator/scene/scene_controller.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_delegate.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
@@ -224,26 +222,10 @@ constexpr base::TimeDelta kMainIntentCheckDelay = base::Seconds(1);
   // APNS and retrieval of the device's APNS token.
   base::UmaHistogramBoolean("IOS.PushNotification.APNSDeviceRegistration",
                             true);
+  __weak MainApplicationDelegate* weakSelf = self;
   web::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE, base::BindOnce(^{
-        if ([self provisionalNotificationTypesEnabled]) {
-          // TODO(crbug.com/341906612) Remove use of
-          // browserProviderInterfaceDoNotUse.
-          Browser* browser =
-              self.mainController.browserProviderInterfaceDoNotUse
-                  .mainBrowserProvider.browser;
-          [self.pushNotificationDelegate
-              applicationDidRegisterWithAPNS:deviceToken
-                                     profile:browser->GetProfile()];
-          // Logs when a Registration succeeded with a loaded BrowserState.
-          base::UmaHistogramBoolean(
-              "ContentNotifications.Registration.BrowserStateUnavailable",
-              false);
-        } else {
-          [self.pushNotificationDelegate
-              applicationDidRegisterWithAPNS:deviceToken
-                                     profile:nil];
-        }
+        [weakSelf handleAPNSDeviceRegistration:deviceToken];
       }));
 }
 
@@ -328,9 +310,7 @@ constexpr base::TimeDelta kMainIntentCheckDelay = base::Seconds(1);
       });
 
   if (_mainController.isColdStart) {
-    [PushNotificationUtil
-        registerDeviceWithAPNSWithProvisionalNotificationsAvailable:
-            [self provisionalNotificationTypesEnabled]];
+    [PushNotificationUtil registerDeviceWithAPNS];
   }
 
   [_mainController
@@ -390,26 +370,27 @@ constexpr base::TimeDelta kMainIntentCheckDelay = base::Seconds(1);
   }
 }
 
-// `YES` if Content or Send Tab notifications are enabled or registered. Called
-// before register device With APNS.
-- (BOOL)provisionalNotificationTypesEnabled {
-  // TODO(crbug.com/341903881) Do not use
-  // mainController.browserProviderInterfaceDoNotUse.
-  Browser* browser = _mainController.browserProviderInterfaceDoNotUse
+// Handles APNS device registration on the UI thread when the device token is
+// received from iOS.
+- (void)handleAPNSDeviceRegistration:(NSData*)deviceToken {
+  // TODO(crbug.com/341906612) Remove use of
+  // browserProviderInterfaceDoNotUse.
+  Browser* browser = self.mainController.browserProviderInterfaceDoNotUse
                          .mainBrowserProvider.browser;
-
-  if (!browser) {
+  if (browser) {
+    [self.pushNotificationDelegate
+        applicationDidRegisterWithAPNS:deviceToken
+                               profile:browser->GetProfile()];
+    // Logs when a Registration succeeded with a loaded BrowserState.
+    base::UmaHistogramBoolean(
+        "ContentNotifications.Registration.BrowserStateUnavailable", false);
+  } else {
+    [self.pushNotificationDelegate applicationDidRegisterWithAPNS:deviceToken
+                                                          profile:nil];
+    // Logs when a Registration succeeded without a loaded BrowserState.
     base::UmaHistogramBoolean(
         "ContentNotifications.Registration.BrowserStateUnavailable", true);
-    return NO;
   }
-
-  ProfileIOS* profile = browser->GetProfile();
-
-  return IsContentNotificationEnabled(profile) ||
-         IsContentNotificationRegistered(profile) ||
-         base::FeatureList::IsEnabled(
-             send_tab_to_self::kSendTabToSelfIOSPushNotifications);
 }
 
 @end

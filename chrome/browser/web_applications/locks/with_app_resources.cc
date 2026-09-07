@@ -16,12 +16,6 @@ ExtensionsManager& WithAppResources::extensions_manager() {
   return lock_manager_->provider().extensions_manager();
 }
 
-IsolatedWebAppDevInstallManager&
-WithAppResources::isolated_web_app_dev_install_manager() {
-  CHECK(lock_manager_);
-  return lock_manager_->provider().isolated_web_app_dev_install_manager();
-}
-
 WebAppRegistrar& WithAppResources::registrar() {
   CHECK(lock_manager_);
   return lock_manager_->provider().registrar_unsafe();
@@ -29,10 +23,6 @@ WebAppRegistrar& WithAppResources::registrar() {
 WebAppSyncBridge& WithAppResources::sync_bridge() {
   CHECK(lock_manager_);
   return lock_manager_->provider().sync_bridge_unsafe();
-}
-WebAppInstallFinalizer& WithAppResources::install_finalizer() {
-  CHECK(lock_manager_);
-  return lock_manager_->provider().install_finalizer();
 }
 OsIntegrationManager& WithAppResources::os_integration_manager() {
   CHECK(lock_manager_);
@@ -53,6 +43,10 @@ WebAppTranslationManager& WithAppResources::translation_manager() {
 WebAppUiManager& WithAppResources::ui_manager() {
   CHECK(lock_manager_);
   return lock_manager_->provider().ui_manager();
+}
+WebAppIsolationDelegate& WithAppResources::isolation_delegate() {
+  CHECK(lock_manager_);
+  return lock_manager_->provider().isolation_delegate();
 }
 
 WithAppResources::WithAppResources() = default;

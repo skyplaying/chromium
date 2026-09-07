@@ -63,7 +63,7 @@ chromium-metrics-reviews@google.com.
 </variants>
 
 <histogram name="WebCore.DistillabilityUs" units="microseconds"
-    expires_after="2026-05-31">
+    expires_after="2027-02-07">
   <owner>wychen@chromium.org</owner>
   <owner>gilmanmh@google.com</owner>
   <summary>
@@ -80,7 +80,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="WebCore.Document.execCommand" enum="MappedEditingCommands"
-    expires_after="2026-05-08">
+    expires_after="2027-01-17">
   <owner>kojii@chromium.org</owner>
   <owner>tkent@chromium.org</owner>
   <summary>
@@ -89,19 +89,9 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
-<histogram name="WebCore.Editing.Commands" enum="MappedEditingCommands"
-    expires_after="2026-05-08">
-  <owner>kojii@chromium.org</owner>
-  <owner>tkent@chromium.org</owner>
-  <summary>
-    Counts the number of times each Editor::Command::execute is called. This
-    doesn't count commands not supported by Blink.
-  </summary>
-</histogram>
-
 <histogram
     name="WebCore.Editing.SpellCheckUserActionLimitation.{Source}.{Action}"
-    enum="Boolean" expires_after="2026-07-05">
+    enum="Boolean" expires_after="2027-01-10">
   <owner>arichiv@chromium.org</owner>
   <owner>katabolism-finch@google.com</owner>
   <summary>
@@ -126,30 +116,6 @@ chromium-metrics-reviews@google.com.
   <summary>
     Records how long one find-in-page task took from invocation start to end.
     Emitted when a find-in-page task finished running.
-  </summary>
-</histogram>
-
-<histogram name="WebCore.Framebust.ClickThroughPosition"
-    enum="ListItemPosition" expires_after="M110">
-  <owner>csharrison@chromium.org</owner>
-  <owner>japhet@chromium.org</owner>
-  <summary>
-    The position of the URL in the framebust UI list (desktop only) when it is
-    clicked. Note that this UI surface is shared with the tab-under
-    intervention, so elements in the list could come from either features. This
-    metric will only be logged when a URL from the framebust (3p redirect)
-    intervention is clicked.
-  </summary>
-</histogram>
-
-<histogram name="WebCore.Framebust.InterventionOutcome"
-    enum="FramebustInterventionOutcome" expires_after="M110">
-  <owner>csharrison@chromium.org</owner>
-  <owner>japhet@chromium.org</owner>
-  <summary>
-    The (android only) outcome of a particular framebust infobar. Recorded when
-    the user either closes the infobar or declines the intervention by clicking
-    the link.
   </summary>
 </histogram>
 
@@ -277,7 +243,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="WebCore.IndexedDB.RequestDuration2.{RequestType}" units="ms"
-    expires_after="2026-07-19">
+    expires_after="2026-09-20">
   <owner>estade@chromium.org</owner>
   <owner>chrome-owp-storage@google.com</owner>
   <summary>
@@ -306,7 +272,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="WebCore.IndexedDB.Transaction.{TransactionType}.TimeQueued"
-    units="ms" expires_after="2026-07-19">
+    units="ms" expires_after="2026-09-20">
   <owner>estade@chromium.org</owner>
   <owner>chrome-owp-storage@google.com</owner>
   <summary>
@@ -327,24 +293,6 @@ chromium-metrics-reviews@google.com.
     aborted, specifically recording the reason for the abort. This can be
     triggered by javascript code on the renderer, errors or force closes on the
     backend, or by the transaction timeout timer.
-  </summary>
-</histogram>
-
-<histogram name="WebCore.ResourceFetcher.ActionUponResourceRequest"
-    enum="ActionUponResourceRequest" expires_after="M85">
-  <owner>clamy@chromium.org</owner>
-  <summary>
-    The resulting action (e.g. load resource, use resource from in-memory
-    cache...) upon a resource request.
-  </summary>
-</histogram>
-
-<histogram name="WebCore.ResourceFetcher.ResourceHasClientUponCacheHit"
-    enum="ResourceHasClient" expires_after="M85">
-  <owner>clamy@chromium.org</owner>
-  <summary>
-    Whether the resource in the cache is being used by at least one client (live
-    resource) or not (dead resource) upon a cache hit.
   </summary>
 </histogram>
 
@@ -480,7 +428,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="WebCore.Scripts.V8CompileHintsStatus"
-    enum="V8CompileHintsStatus" expires_after="2025-03-30">
+    enum="V8CompileHintsStatus" expires_after="2027-03-06">
   <owner>marja@chromium.org</owner>
   <owner>v8-loading@google.com</owner>
   <owner>chrome-intelligence-core@google.com</owner>
@@ -492,7 +440,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="WebCore.Scripts.V8CrowdsourcedCompileHints.ModelQuality"
-    enum="V8CompileHintsModelQuality" expires_after="2025-05-25">
+    enum="V8CompileHintsModelQuality" expires_after="2027-03-06">
   <owner>marja@chromium.org</owner>
   <owner>v8-loading@google.com</owner>
   <owner>chrome-intelligence-core@google.com</owner>
@@ -502,7 +450,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="WebCore.Scripts.V8LocalCompileHintsGenerated"
-    enum="V8LocalCompileHintsGenerated" expires_after="2025-02-10">
+    enum="V8LocalCompileHintsGenerated" expires_after="2027-03-06">
   <owner>marja@chromium.org</owner>
   <owner>v8-runtime@google.com</owner>
   <summary>
@@ -513,7 +461,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="WebCore.Scripts.V8LocalCompileHintsObsoletedByCodeCache"
-    enum="BooleanYesNo" expires_after="2025-03-30">
+    enum="BooleanYesNo" expires_after="2027-03-06">
   <owner>marja@chromium.org</owner>
   <owner>v8-runtime@google.com</owner>
   <summary>

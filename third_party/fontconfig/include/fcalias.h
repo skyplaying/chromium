@@ -48,6 +48,8 @@ extern __typeof (FcConfigBuildFonts) IA__FcConfigBuildFonts FC_ATTRIBUTE_VISIBIL
 #define FcConfigBuildFonts IA__FcConfigBuildFonts
 extern __typeof (FcConfigGetFontDirs) IA__FcConfigGetFontDirs FC_ATTRIBUTE_VISIBILITY_HIDDEN;
 #define FcConfigGetFontDirs IA__FcConfigGetFontDirs
+extern __typeof (FcConfigGetAppFonts) IA__FcConfigGetAppFonts FC_ATTRIBUTE_VISIBILITY_HIDDEN;
+#define FcConfigGetAppFonts IA__FcConfigGetAppFonts
 extern __typeof (FcConfigGetConfigDirs) IA__FcConfigGetConfigDirs FC_ATTRIBUTE_VISIBILITY_HIDDEN;
 #define FcConfigGetConfigDirs IA__FcConfigGetConfigDirs
 extern __typeof (FcConfigGetConfigFiles) IA__FcConfigGetConfigFiles FC_ATTRIBUTE_VISIBILITY_HIDDEN;
@@ -66,6 +68,8 @@ extern __typeof (FcConfigGetFonts) IA__FcConfigGetFonts FC_ATTRIBUTE_VISIBILITY_
 #define FcConfigGetFonts IA__FcConfigGetFonts
 extern __typeof (FcConfigAcceptFont) IA__FcConfigAcceptFont FC_ATTRIBUTE_VISIBILITY_HIDDEN;
 #define FcConfigAcceptFont IA__FcConfigAcceptFont
+extern __typeof (FcConfigAcceptFilename) IA__FcConfigAcceptFilename FC_ATTRIBUTE_VISIBILITY_HIDDEN;
+#define FcConfigAcceptFilename IA__FcConfigAcceptFilename
 extern __typeof (FcConfigAcceptFilter) IA__FcConfigAcceptFilter FC_ATTRIBUTE_VISIBILITY_HIDDEN;
 #define FcConfigAcceptFilter IA__FcConfigAcceptFilter
 extern __typeof (FcConfigAppFontAddFile) IA__FcConfigAppFontAddFile FC_ATTRIBUTE_VISIBILITY_HIDDEN;
@@ -76,6 +80,10 @@ extern __typeof (FcConfigAppFontClear) IA__FcConfigAppFontClear FC_ATTRIBUTE_VIS
 #define FcConfigAppFontClear IA__FcConfigAppFontClear
 extern __typeof (FcConfigPreferAppFont) IA__FcConfigPreferAppFont FC_ATTRIBUTE_VISIBILITY_HIDDEN;
 #define FcConfigPreferAppFont IA__FcConfigPreferAppFont
+extern __typeof (FcConfigSetWarningFlags) IA__FcConfigSetWarningFlags FC_ATTRIBUTE_VISIBILITY_HIDDEN;
+#define FcConfigSetWarningFlags IA__FcConfigSetWarningFlags
+extern __typeof (FcConfigGetWarningFlags) IA__FcConfigGetWarningFlags FC_ATTRIBUTE_VISIBILITY_HIDDEN;
+#define FcConfigGetWarningFlags IA__FcConfigGetWarningFlags
 extern __typeof (FcConfigSubstituteWithPat) IA__FcConfigSubstituteWithPat FC_ATTRIBUTE_VISIBILITY_HIDDEN;
 #define FcConfigSubstituteWithPat IA__FcConfigSubstituteWithPat
 extern __typeof (FcConfigSubstitute) IA__FcConfigSubstitute FC_ATTRIBUTE_VISIBILITY_HIDDEN;

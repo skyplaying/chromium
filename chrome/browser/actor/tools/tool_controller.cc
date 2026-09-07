@@ -13,14 +13,15 @@
 #include "base/state_transitions.h"
 #include "chrome/browser/actor/actor_tab_data.h"
 #include "chrome/browser/actor/actor_task.h"
-#include "chrome/browser/actor/aggregated_journal.h"
 #include "chrome/browser/actor/tools/tool.h"
 #include "chrome/browser/actor/tools/tool_callbacks.h"
 #include "chrome/browser/actor/tools/tool_request.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/common/actor.mojom-forward.h"
 #include "chrome/common/actor/action_result.h"
-#include "chrome/common/actor/journal_details_builder.h"
 #include "chrome/common/chrome_features.h"
+#include "components/actor/core/aggregated_journal.h"
+#include "components/actor/core/journal_details_builder.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/abseil-cpp/absl/strings/str_format.h"
@@ -61,7 +62,7 @@ void ToolController::SetState(State state) {
       base::StateTransitions<State>({
           {State::kInit, {State::kCreating}},
           {State::kReady, {State::kCreating}},
-          {State::kCreating, {State::kValidating}},
+          {State::kCreating, {State::kValidating, State::kReady}},
           {State::kValidating, {State::kPostValidate, State::kReady}},
           {State::kPostValidate, {State::kInvokable, State::kReady}},
           {State::kInvokable, {State::kPreInvoke, State::kReady}},
@@ -119,6 +120,7 @@ void ToolController::CreateToolAndValidate(
                       .Build());
     PostResponseTask(std::move(result_callback),
                      std::move(create_result.result));
+    Cancel();
     return;
   }
 
@@ -136,6 +138,17 @@ void ToolController::CreateToolAndValidate(
                         std::move(journal_event));
 
   SetState(State::kValidating);
+
+  tabs::TabHandle target_tab_handle = active_state_->tool->GetTargetTab();
+  if (target_tab_handle != tabs::TabHandle::Null()) {
+    mojom::ActionResultPtr tab_result =
+        ValidateTargetTab(target_tab_handle.Get());
+    if (!IsOk(*tab_result)) {
+      PostValidate(std::move(tab_result));
+      return;
+    }
+  }
+
   active_state_->tool->Validate(base::BindOnce(&ToolController::PostValidate,
                                                weak_ptr_factory_.GetWeakPtr()));
 }
@@ -184,6 +197,19 @@ void ToolController::Invoke(ResultCallback result_callback) {
 
   Tool& tool = *active_state_->tool;
 
+  tabs::TabHandle target_tab_handle = tool.GetTargetTab();
+  if (target_tab_handle != tabs::TabHandle::Null()) {
+    mojom::ActionResultPtr tab_result =
+        ValidateTargetTab(target_tab_handle.Get());
+    if (!IsOk(*tab_result)) {
+      journal().Log(
+          tool.JournalURL(), task_->id(), "Tab Validation Failed",
+          JournalDetailsBuilder().AddError(ToDebugString(*tab_result)).Build());
+      CompleteToolRequest(std::move(tab_result));
+      return;
+    }
+  }
+
   const optimization_guide::proto::AnnotatedPageContent*
       last_observed_page_content = nullptr;
 
@@ -213,6 +239,12 @@ void ToolController::Invoke(ResultCallback result_callback) {
       tool.GetObservationDelayer(observation_page_stability_config_);
   tool.Invoke(base::BindOnce(&ToolController::DidFinishToolInvoke,
                              weak_ptr_factory_.GetWeakPtr()));
+}
+
+void ToolController::Pause() {
+  if (active_state_ && state_ == State::kInvoking) {
+    active_state_->tool->NotifyPaused();
+  }
 }
 
 void ToolController::Cancel() {
@@ -315,6 +347,21 @@ void ToolController::CompleteToolRequest(mojom::ActionResultPtr result) {
   PostResponseTask(std::move(active_state_->completion_callback),
                    std::move(result));
   active_state_.reset();
+}
+
+mojom::ActionResultPtr ToolController::ValidateTargetTab(
+    const tabs::TabInterface* tab) const {
+  if (!tab) {
+    return MakeResult(mojom::ActionResultCode::kTabWentAway,
+                      /*requires_page_stabilization=*/false,
+                      "The target tab is no longer present.");
+  }
+  if (tab->GetProfile() != &tool_delegate_->GetProfile()) {
+    return MakeResult(mojom::ActionResultCode::kActionTargetCrossProfile,
+                      /*requires_page_stabilization=*/false,
+                      "The target tab belongs to a different profile.");
+  }
+  return MakeOkResult();
 }
 
 }  // namespace actor

@@ -5,6 +5,7 @@
 #ifndef BASE_PROCESS_PROCESS_H_
 #define BASE_PROCESS_PROCESS_H_
 
+#include <iosfwd>
 #include <string_view>
 
 #include "base/base_export.h"
@@ -178,13 +179,6 @@ class BASE_EXPORT Process {
   // is not required.
   bool WaitForExitWithTimeout(TimeDelta timeout, int* exit_code) const;
 
-  // Indicates that the process has exited with the specified |exit_code|.
-  // This should be called if process exit is observed outside of this class.
-  // (i.e. Not because Terminate or WaitForExit, above, was called.)
-  // Note that nothing prevents this being called multiple times for a dead
-  // process though that should be avoided.
-  void Exited(int exit_code) const;
-
   // The different priorities that a process can have.
   enum class Priority {
     kMinValue = 0,
@@ -331,6 +325,9 @@ class BASE_EXPORT Process {
 
 BASE_EXPORT const char* ProcessPriorityToString(
     Process::Priority process_priority);
+
+BASE_EXPORT std::ostream& operator<<(std::ostream& os,
+                                     Process::Priority priority);
 
 #if BUILDFLAG(IS_CHROMEOS)
 // Exposed for testing.

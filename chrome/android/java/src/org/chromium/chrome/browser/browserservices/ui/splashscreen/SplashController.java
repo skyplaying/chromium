@@ -9,6 +9,7 @@ import static org.chromium.build.NullUtil.assumeNonNull;
 import android.app.Activity;
 import android.app.ActivityManager;
 import android.graphics.PixelFormat;
+import android.os.Build;
 import android.os.SystemClock;
 import android.view.View;
 import android.view.ViewGroup;
@@ -16,6 +17,7 @@ import android.view.ViewPropertyAnimator;
 import android.view.ViewTreeObserver;
 
 import org.chromium.base.ObserverList;
+import org.chromium.base.ThreadUtils;
 import org.chromium.base.TraceEvent;
 import org.chromium.build.annotations.MonotonicNonNull;
 import org.chromium.build.annotations.NullMarked;
@@ -258,21 +260,19 @@ public class SplashController extends CustomTabTabObserver
         }
         // Delay hiding the splash screen till the compositor has finished drawing the next frame.
         // Without this callback we were seeing a short flash of white between the splash screen and
-        // the web content (crbug.com/734500).
+        // the web content (crbug.com/40526382).
         assumeNonNull(mCompositorViewHolder.get())
                 .getCompositorView()
                 .surfaceRedrawNeededAsync(
-                        () -> {
-                            animateHideSplash(tab);
-                        });
+                        () -> ThreadUtils.runOnUiThread(() -> animateHideSplash(tab)));
     }
 
     private void removeTranslucency() {
         // Removing translucency is important for performance, otherwise the windows under Chrome
         // will continue being drawn (e.g. launcher with wallpaper). Without removing translucency,
         // we also see visual glitches in the following cases:
-        // - closing activity (example: https://crbug.com/856544#c41)
-        // - send activity to the background (example: https://crbug.com/856544#c30)
+        // - closing activity (example: https://crbug.com/40582399#comment42)
+        // - send activity to the background (example: https://crbug.com/40582399#comment31)
 
         mRemovedTranslucency = true;
 
@@ -287,7 +287,7 @@ public class SplashController extends CustomTabTabObserver
         // When in desktop windowing mode (where Activities have a border and caption bar), we've
         // got to update the task description for convertFromTranslucent to take effect. This was
         // fixed in Android 16, see https://crbug.com/390368429.
-        if (android.os.Build.VERSION.SDK_INT <= android.os.Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
             mActivity.setTaskDescription(new ActivityManager.TaskDescription());
         }
 
@@ -316,10 +316,7 @@ public class SplashController extends CustomTabTabObserver
                         .animate()
                         .alpha(0f)
                         .setDuration(mSplashHideAnimationDurationMs)
-                        .withEndAction(
-                                () -> {
-                                    hideSplashNow(tab);
-                                });
+                        .withEndAction(() -> hideSplashNow(tab));
     }
 
     private void hideSplashNow(Tab tab) {
@@ -370,10 +367,7 @@ public class SplashController extends CustomTabTabObserver
     @RequiresNonNull("mParentView")
     private void recordTraceEventsShowedSplash() {
         SingleShotOnDrawListener.install(
-                mParentView,
-                () -> {
-                    TraceEvent.startAsync("SplashScreen.visible", hashCode());
-                });
+                mParentView, () -> TraceEvent.startAsync("SplashScreen.visible", hashCode()));
     }
 
     private void recordTraceEventsStartedHidingSplash() {
@@ -385,8 +379,6 @@ public class SplashController extends CustomTabTabObserver
         TraceEvent.finishAsync("SplashScreen.hidingAnimation", hashCode());
         SingleShotOnDrawListener.install(
                 mParentView,
-                () -> {
-                    TraceEvent.finishAsync("WebappSplashScreen.visible", hashCode());
-                });
+                () -> TraceEvent.finishAsync("WebappSplashScreen.visible", hashCode()));
     }
 }

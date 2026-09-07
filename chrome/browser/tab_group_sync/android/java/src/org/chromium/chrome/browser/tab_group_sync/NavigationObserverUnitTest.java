@@ -23,9 +23,9 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Token;
+import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tabmodel.TabModel;
@@ -42,7 +42,6 @@ import java.util.List;
 
 /** Unit tests for the {@link NavigationObserver}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class NavigationObserverUnitTest {
     private static final int TAB_ID_1 = 5;
     private static final int TAB_ID_2 = 6;
@@ -69,6 +68,9 @@ public class NavigationObserverUnitTest {
         TabGroupSyncUtilsJni.setInstanceForTesting(mTabGroupSyncUtilsJni);
         mTabModels = new ArrayList<>();
         doReturn(mTabModels).when(mTabModelSelector).getModels();
+        doReturn(ObservableSuppliers.createMonotonic())
+                .when(mTabModelSelector)
+                .getCurrentTabModelSupplier();
 
         mNavigationTracker = new NavigationTracker();
         mNavigationObserver =
@@ -98,8 +100,8 @@ public class NavigationObserverUnitTest {
                 NavigationHandle.createForTesting(
                         new GURL("unused"),
                         /* isInPrimaryMainFrame= */ true,
-                        /*isSameDocument*/ false,
-                        /*isRendererInitiated*/ false,
+                        /* isSameDocument= */ false,
+                        /* isRendererInitiated= */ false,
                         transition,
                         /* hasUserGesture= */ false,
                         /* isReload= */ false);
@@ -276,8 +278,8 @@ public class NavigationObserverUnitTest {
                 NavigationHandle.createForTesting(
                         mTestUrl,
                         /* isInPrimaryMainFrame= */ true,
-                        /*isSameDocument*/ false,
-                        /*isRendererInitiated*/ false,
+                        /* isSameDocument= */ false,
+                        /* isRendererInitiated= */ false,
                         PageTransition.LINK,
                         /* hasUserGesture= */ false,
                         /* isReload= */ false);

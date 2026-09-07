@@ -9,6 +9,10 @@ import android.content.Context;
 import android.graphics.Paint;
 import android.text.TextUtils;
 import android.text.method.LinkMovementMethod;
+import android.text.style.ForegroundColorSpan;
+import android.text.style.RelativeSizeSpan;
+import android.text.style.SuperscriptSpan;
+import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.LinearLayout;
@@ -16,13 +20,21 @@ import android.widget.TextView;
 
 import androidx.annotation.VisibleForTesting;
 import androidx.appcompat.content.res.AppCompatResources;
+import androidx.fragment.app.FragmentActivity;
 
 import org.jni_zero.CalledByNative;
 import org.jni_zero.JniType;
 
+import org.chromium.base.ResettersForTesting;
+import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.autofill.R;
+import org.chromium.chrome.browser.autofill.editors.autofill_ai.EntityEditorCoordinator;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.components.autofill.autofill_ai.EntityInstance;
+import org.chromium.components.browser_ui.styles.SemanticColorUtils;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.modaldialog.DialogDismissalCause;
 import org.chromium.ui.modaldialog.ModalDialogManager;
@@ -31,32 +43,39 @@ import org.chromium.ui.modaldialog.SimpleModalDialogController;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.text.ChromeClickableSpan;
 import org.chromium.ui.text.SpanApplier;
+import org.chromium.ui.text.SpanApplier.SpanInfo;
 
 import java.util.List;
 
-/**
- * Prompt that asks users to confirm saving an entity imported from a form submission.
- *
- * <p>TODO: crbug.com/460410690 - Write render tests.
- */
+/** Prompt that asks users to confirm saving an entity imported from a form submission. */
 @NullMarked
-public class AutofillAiSaveUpdateEntityPrompt {
+public class AutofillAiSaveUpdateEntityPrompt implements EntityEditorCoordinator.Delegate {
+    @VisibleForTesting
+    public static final String ENTITY_EDITOR_OPENED_HISTOGRAM =
+            "Autofill.Ai.EntityEditor.OpenedFromSaveUpdatePrompt";
+
     private final AutofillAiSaveUpdateEntityPromptController mController;
     private final ModalDialogManager mModalDialogManager;
     private final Context mContext;
     private final PropertyModel mDialogModel;
     private final View mDialogView;
+    private EntityEditorCoordinator mEntityEditor;
+    private boolean mEditorClosingPending;
+    private boolean mEditorWasOpened;
+    private boolean mPromptDismissed;
 
     /** Save prompt to confirm saving an entity imported from a form submission. */
     public AutofillAiSaveUpdateEntityPrompt(
             AutofillAiSaveUpdateEntityPromptController controller,
             ModalDialogManager modalDialogManager,
-            Context context) {
+            FragmentActivity activity,
+            Profile profile,
+            EntityInstance entityInstance) {
         mController = controller;
         mModalDialogManager = modalDialogManager;
-        mContext = context;
+        mContext = activity;
 
-        LayoutInflater inflater = LayoutInflater.from(mContext);
+        LayoutInflater inflater = LayoutInflater.from(activity);
         mDialogView = inflater.inflate(R.layout.autofill_ai_save_entity_prompt, null);
 
         PropertyModel.Builder builder =
@@ -70,12 +89,25 @@ public class AutofillAiSaveUpdateEntityPrompt {
                                 ModalDialogProperties.ButtonStyles.PRIMARY_FILLED_NEGATIVE_OUTLINE)
                         .with(ModalDialogProperties.CUSTOM_VIEW, mDialogView);
         mDialogModel = builder.build();
+        mEntityEditor = new EntityEditorCoordinator(activity, this, profile, entityInstance);
+    }
+
+    @Override
+    public void onDone(
+            EntityInstance entityInstance, int descriptionStringId, int acceptButtonStringId) {
+        mEditorClosingPending = true;
+        mController.onUserEdited(entityInstance);
+        maybeDismissSaveUpdatePrompt(DialogDismissalCause.ACTION_ON_CONTENT);
     }
 
     /** Shows the dialog for saving an address. */
     @CalledByNative
     @VisibleForTesting
     void show() {
+        if (mPromptDismissed) {
+            // The save/update prompt object is not intended to be reusable.
+            return;
+        }
         mModalDialogManager.showDialog(mDialogModel, ModalDialogManager.ModalDialogType.APP);
     }
 
@@ -88,12 +120,24 @@ public class AutofillAiSaveUpdateEntityPrompt {
      */
     @CalledByNative
     private static @Nullable AutofillAiSaveUpdateEntityPrompt create(
-            WindowAndroid windowAndroid, AutofillAiSaveUpdateEntityPromptController controller) {
+            WindowAndroid windowAndroid,
+            AutofillAiSaveUpdateEntityPromptController controller,
+            Profile browserProfile,
+            @JniType("autofill::EntityInstanceAndroid") EntityInstance entityInstance) {
         @Nullable Activity activity = windowAndroid.getActivity().get();
         @Nullable ModalDialogManager modalDialogManager = windowAndroid.getModalDialogManager();
-        if (activity == null || modalDialogManager == null) return null;
+        if (activity == null
+                || modalDialogManager == null
+                || !(activity instanceof FragmentActivity)) {
+            return null;
+        }
 
-        return new AutofillAiSaveUpdateEntityPrompt(controller, modalDialogManager, activity);
+        return new AutofillAiSaveUpdateEntityPrompt(
+                controller,
+                modalDialogManager,
+                (FragmentActivity) activity,
+                browserProfile,
+                entityInstance);
     }
 
     /**
@@ -117,6 +161,10 @@ public class AutofillAiSaveUpdateEntityPrompt {
             mDialogModel.set(
                     ModalDialogProperties.TITLE_END_ICON,
                     AppCompatResources.getDrawable(mContext, R.drawable.google_wallet_24dp));
+            if (ChromeFeatureList.isEnabled(
+                    ChromeFeatureList.AUTOFILL_AI_WALLET_PASS_BRANDING_2026)) {
+                mDialogModel.set(ModalDialogProperties.TITLE_END_ICON_GRAVITY, Gravity.TOP);
+            }
         }
     }
 
@@ -124,31 +172,138 @@ public class AutofillAiSaveUpdateEntityPrompt {
     @VisibleForTesting
     void setEntityUpdateDetails(
             @JniType("std::vector<autofill::EntityAttributeUpdateDetails>")
-                    List<EntityAttributeUpdateDetails> updateDetailsList) {
+                    List<EntityAttributeUpdateDetails> updateDetailsList,
+            boolean isUpdatePrompt) {
         LinearLayout attributeList = mDialogView.findViewById(R.id.autofill_ai_attribute_infos);
         attributeList.removeAllViews();
 
-        for (EntityAttributeUpdateDetails updateDetails : updateDetailsList) {
-            LayoutInflater inflater = LayoutInflater.from(mContext);
-            View attributeInfo = inflater.inflate(R.layout.autofill_ai_attribute_info, null);
+        if (updateDetailsList.isEmpty()) {
+            return;
+        }
+        int startIndex = 0;
+        LayoutInflater inflater = LayoutInflater.from(mContext);
+        if (ChromeFeatureList.isEnabled(
+                ChromeFeatureList.AUTOFILL_AI_EDIT_ENTITIES_FROM_SAVE_UPDATE_PROMPT)) {
+            startIndex = 1;
+            View attributeInfoWithEditButton =
+                    inflater.inflate(
+                            R.layout.autofill_ai_attribute_info_with_edit_button,
+                            attributeList,
+                            /* attachToRoot= */ false);
+            attributeList.addView(attributeInfoWithEditButton);
+            setAttributeDetails(
+                    attributeInfoWithEditButton, updateDetailsList.get(0), isUpdatePrompt);
 
-            TextView attributeName = attributeInfo.findViewById(R.id.attribute_name);
-            TextView attributeValue = attributeInfo.findViewById(R.id.attribute_value);
-            TextView oldAttributeValue = attributeInfo.findViewById(R.id.old_attribute_value);
-            oldAttributeValue.setPaintFlags(
-                    oldAttributeValue.getPaintFlags() | Paint.STRIKE_THRU_TEXT_FLAG);
+            attributeInfoWithEditButton
+                    .findViewById(R.id.edit_button)
+                    .setOnClickListener(
+                            v -> {
+                                mEditorClosingPending = false;
+                                mEditorWasOpened = true;
+                                mEntityEditor.showEditorDialog();
+                            });
+        }
 
-            attributeName.setText(updateDetails.getAttributeName());
-            attributeValue.setText(updateDetails.getAttributeValue());
-            showTextIfNotEmpty(oldAttributeValue, updateDetails.getOldAttributeValue());
-
+        for (int i = startIndex; i < updateDetailsList.size(); i++) {
+            View attributeInfo =
+                    inflater.inflate(
+                            R.layout.autofill_ai_attribute_info,
+                            attributeList,
+                            /* attachToRoot= */ false);
             attributeList.addView(attributeInfo);
+            setAttributeDetails(attributeInfo, updateDetailsList.get(i), isUpdatePrompt);
         }
     }
 
+    private void setAttributeDetails(
+            View attributeInfo,
+            EntityAttributeUpdateDetails updateDetails,
+            boolean isUpdatePrompt) {
+        TextView attributeName = attributeInfo.findViewById(R.id.attribute_name);
+        TextView attributeValue = attributeInfo.findViewById(R.id.attribute_value);
+
+        attributeName.setText(updateDetails.getAttributeName());
+        attributeValue.setText(updateDetails.getAttributeValue());
+
+        if (isUpdatePrompt) {
+            setBadgeAndAxLabelsInUpdatePrompt(attributeInfo, updateDetails);
+        }
+    }
+
+    private void setBadgeAndAxLabelsInUpdatePrompt(
+            View attributeInfo, EntityAttributeUpdateDetails updateDetails) {
+        switch (updateDetails.getUpdateType()) {
+            case EntityAttributeUpdateType.NEW_ENTITY_ATTRIBUTE_ADDED:
+                configureAddedAttribute(attributeInfo, updateDetails);
+                break;
+            case EntityAttributeUpdateType.NEW_ENTITY_ATTRIBUTE_UPDATED:
+                configureUpdatedAttribute(attributeInfo, updateDetails);
+                break;
+            case EntityAttributeUpdateType.NEW_ENTITY_ATTRIBUTE_UNCHANGED:
+                // No custom accessibility label needed.
+                break;
+            default:
+                assert false : "Unhandled attribute update type: " + updateDetails.getUpdateType();
+        }
+    }
+
+    private void configureAddedAttribute(
+            View attributeInfo, EntityAttributeUpdateDetails updateDetails) {
+        TextView attributeName = attributeInfo.findViewById(R.id.attribute_name);
+        attributeName.setContentDescription(
+                mContext.getString(
+                                R.string
+                                        .autofill_ai_save_or_update_entity_new_attribute_accessibility_name)
+                        .replace("$1", updateDetails.getAttributeName()));
+
+        TextView attributeValue = attributeInfo.findViewById(R.id.attribute_value);
+        attributeValue.setText(
+                SpanApplier.applySpans(
+                        mContext.getString(
+                                        R.string
+                                                .autofill_ai_save_or_update_entity_new_attribute_with_badge)
+                                .replace("$1", updateDetails.getAttributeValue()),
+                        new SpanInfo(
+                                "<new>",
+                                "</new>",
+                                new SuperscriptSpan(),
+                                new RelativeSizeSpan(0.6f),
+                                new ForegroundColorSpan(
+                                        SemanticColorUtils.getDefaultTextColorAccent1(mContext)))));
+    }
+
+    private void configureUpdatedAttribute(
+            View attributeInfo, EntityAttributeUpdateDetails updateDetails) {
+        TextView attributeName = attributeInfo.findViewById(R.id.attribute_name);
+        attributeName.setContentDescription(
+                mContext.getString(
+                                R.string
+                                        .autofill_ai_save_or_update_entity_updated_attribute_accessibility_name)
+                        .replace("$1", updateDetails.getAttributeName())
+                        .replace("$2", updateDetails.getOldAttributeValue()));
+
+        // Show the old attribute value with the strikethrough text and use corresponding
+        // accessibility label for the attribute name text view.
+        TextView oldAttributeValue = attributeInfo.findViewById(R.id.old_attribute_value);
+        oldAttributeValue.setPaintFlags(
+                oldAttributeValue.getPaintFlags() | Paint.STRIKE_THRU_TEXT_FLAG);
+        oldAttributeValue.setVisibility(View.VISIBLE);
+        oldAttributeValue.setText(updateDetails.getOldAttributeValue());
+    }
+
+    /**
+     * Sets the source notice message in the prompt.
+     *
+     * @param sourceNotice the full source notice string.
+     * @param insertManageInfoLink whether to insert a link to manage info. This value will be false
+     *     for local entities and true for entities stored in wallet. In the case it is true,
+     *     `sourceNotice` is expected to have a `R.string.autofill_manage_your_info_link` substring,
+     *     which will be turned into a clickable link.
+     */
     @CalledByNative
     @VisibleForTesting
-    void setSourceNotice(@JniType("std::u16string") String sourceNotice, boolean insertWalletLink) {
+    void setSourceNotice(
+            @JniType("std::u16string") String sourceNotice, boolean insertManageInfoLink) {
         TextView sourceNoticeView = mDialogView.findViewById(R.id.autofill_ai_entity_source_notice);
         if (TextUtils.isEmpty(sourceNotice)) {
             // The source notice can be empty if the C++ controller fails to retrieve the email
@@ -157,7 +312,7 @@ public class AutofillAiSaveUpdateEntityPrompt {
             return;
         }
 
-        if (!insertWalletLink) {
+        if (!insertManageInfoLink) {
             // Local entity source notice doesn't need a link.
             sourceNoticeView.setText(sourceNotice);
             return;
@@ -170,11 +325,7 @@ public class AutofillAiSaveUpdateEntityPrompt {
                                 "<link>",
                                 "</link>",
                                 new ChromeClickableSpan(
-                                        mContext,
-                                        view -> {
-                                            // TODO: crbug.com/460410690 - Record user actions.
-                                            mController.openManagePasses();
-                                        })));
+                                        mContext, _ -> mController.onWalletLinkClicked())));
         sourceNoticeView.setText(sourceNoticeWithLink, TextView.BufferType.SPANNABLE);
         sourceNoticeView.setMovementMethod(LinkMovementMethod.getInstance());
     }
@@ -183,10 +334,27 @@ public class AutofillAiSaveUpdateEntityPrompt {
     @CalledByNative
     @VisibleForTesting
     void dismiss() {
-        mModalDialogManager.dismissDialog(mDialogModel, DialogDismissalCause.DISMISSED_BY_NATIVE);
+        // The user can close the editor by clicking the "Cancel" or back button. This starts an
+        // exit animation which dismissed the editor. The prompt stays displayed during this period.
+        // The native side can try to dismiss the prompt during the time frame. Do not dismiss the
+        // editor again in this case.
+        if (!mEditorClosingPending && mEntityEditor.isShowing()) {
+            mEntityEditor.dismiss();
+        }
+        maybeDismissSaveUpdatePrompt(DialogDismissalCause.DISMISSED_BY_NATIVE);
+    }
+
+    private void maybeDismissSaveUpdatePrompt(@DialogDismissalCause int dismissalCause) {
+        if (mPromptDismissed) {
+            return;
+        }
+        // `SimpleModalDialogController` doesn't allow multiple calls to `onDismiss`. Make sure to
+        // call the `ModalDialogManager#dismissDialog` only once.
+        mModalDialogManager.dismissDialog(mDialogModel, dismissalCause);
     }
 
     private void onDismiss(@DialogDismissalCause int dismissalCause) {
+        mPromptDismissed = true;
         switch (dismissalCause) {
             case DialogDismissalCause.POSITIVE_BUTTON_CLICKED:
                 mController.onUserAccepted();
@@ -200,15 +368,17 @@ public class AutofillAiSaveUpdateEntityPrompt {
                 break;
         }
         mController.onPromptDismissed();
+        if (ChromeFeatureList.isEnabled(
+                ChromeFeatureList.AUTOFILL_AI_EDIT_ENTITIES_FROM_SAVE_UPDATE_PROMPT)) {
+            RecordHistogram.recordBooleanHistogram(
+                    ENTITY_EDITOR_OPENED_HISTOGRAM, mEditorWasOpened);
+        }
     }
 
-    private void showTextIfNotEmpty(TextView textView, CharSequence text) {
-        if (TextUtils.isEmpty(text)) {
-            textView.setVisibility(View.GONE);
-        } else {
-            textView.setVisibility(View.VISIBLE);
-            textView.setText(text);
-        }
+    void setEntityEditorForTesting(EntityEditorCoordinator entityEditor) {
+        EntityEditorCoordinator oldValue = mEntityEditor;
+        mEntityEditor = entityEditor;
+        ResettersForTesting.register(() -> mEntityEditor = oldValue);
     }
 
     View getDialogViewForTesting() {

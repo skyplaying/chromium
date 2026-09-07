@@ -11,7 +11,7 @@
 #import "base/strings/sys_string_conversions.h"
 #import "components/autofill/core/browser/form_import/addresses/autofill_save_update_address_profile_delegate_ios.h"
 #import "components/autofill/core/browser/foundations/autofill_client.h"
-#import "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#import "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #import "ios/chrome/browser/autofill/ui_bundled/autofill_credit_card_ui_type_util.h"
 #import "ios/chrome/browser/infobars/model/infobar_ios.h"
 #import "ios/chrome/browser/infobars/ui_bundled/modals/autofill_address_profile/infobar_save_address_profile_modal_consumer.h"
@@ -67,10 +67,9 @@ class SaveAddressProfileInfobarModalOverlayMediatorTest : public PlatformTest {
   }
 
  protected:
-  raw_ptr<autofill::AutofillSaveUpdateAddressProfileDelegateIOS,
-          DanglingUntriaged>
-      delegate_;
   std::unique_ptr<InfoBarIOS> infobar_;
+  raw_ptr<autofill::AutofillSaveUpdateAddressProfileDelegateIOS> delegate_ =
+      nullptr;
   MockOverlayRequestCallbackReceiver callback_receiver_;
   FakeOverlayRequestCallbackInstaller callback_installer_;
   std::unique_ptr<OverlayRequest> request_;

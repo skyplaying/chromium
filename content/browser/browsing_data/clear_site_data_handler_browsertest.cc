@@ -25,7 +25,6 @@
 #include "build/build_config.h"
 #include "content/browser/browsing_data/browsing_data_browsertest_utils.h"
 #include "content/browser/browsing_data/browsing_data_filter_builder_impl.h"
-#include "content/browser/browsing_data/shared_storage_clear_site_data_tester.h"
 #include "content/browser/browsing_data/storage_bucket_clear_site_data_tester.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -151,9 +150,13 @@ class TestBrowsingDataRemoverDelegate : public MockBrowsingDataRemoverDelegate {
       uint64_t data_type_mask =
           (storage ? BrowsingDataRemover::DATA_TYPE_DOM_STORAGE |
                          BrowsingDataRemover::DATA_TYPE_PRIVACY_SANDBOX |
-                         BrowsingDataRemover::DATA_TYPE_DEVICE_BOUND_SESSIONS
+                         BrowsingDataRemover::DATA_TYPE_DEVICE_BOUND_SESSIONS |
+                         BrowsingDataRemover::
+                             DATA_TYPE_DECLARATIVE_PERFORMANCE_OBSERVER
                    : 0) |
-          (cache ? BrowsingDataRemover::DATA_TYPE_CACHE : 0);
+          (cache ? BrowsingDataRemover::DATA_TYPE_CACHE |
+                       BrowsingDataRemover::DATA_TYPE_LOGICAL_CLEAR
+                 : 0);
       data_type_mask &=
           ~BrowsingDataRemover::DATA_TYPE_PRIVACY_SANDBOX_INTERNAL;
       data_type_mask &=
@@ -263,8 +266,8 @@ class ClearSiteDataHandlerBrowserTest : public ContentBrowserTest {
     }
     std::unique_ptr<net::CanonicalCookie> cookie(
         net::CanonicalCookie::CreateForTesting(
-            url, cookie_line, base::Time::Now(), /*server_time=*/std::nullopt,
-            cookie_partition_key));
+            url, cookie_line, base::Time::Now(), net::CookieSourceType::kOther,
+            /*server_time=*/std::nullopt, cookie_partition_key));
 
     base::RunLoop run_loop;
     cookie_manager->SetCanonicalCookie(
@@ -676,6 +679,103 @@ IN_PROC_BROWSER_TEST_F(ClearSiteDataHandlerBrowserTest, ServiceWorker) {
   AddQuery(&url, "origin4", origin4.spec());
   EXPECT_TRUE(NavigateToURL(shell(), url));
   WaitForTitle(shell(), "done");
+  delegate()->VerifyAndClearExpectations();
+}
+
+// Verifies that when a same-origin subresource fetch initiated by a service
+// worker receives a `Clear-Site-Data` header, the deletion filter is scoped to
+// the worker's `blink::StorageKey` (using the worker's top-level site).
+//
+// The test uses `"cache"` because `"storage"` deletion unregisters and
+// terminates the active service worker instance, preventing it from completing
+// the fetch and reporting the result back to the page. Using `"cache"` covers
+// the same `blink::StorageKey` derivation path as `"storage"` because
+// `StoragePartitionImpl::CalculateStorageKey()` resolves the key independently
+// of the cleared data types. Comparing this test with the cross-origin test
+// below verifies that same-origin requests retain a same-site ancestor chain
+// bit while cross-origin requests are scoped as cross-site under the worker's
+// top-level site.
+IN_PROC_BROWSER_TEST_F(ClearSiteDataHandlerBrowserTest,
+                       ServiceWorkerSameOriginFetchUsesWorkerStorageKey) {
+  GURL origin1 = https_server()->GetURL("origin1.com", "/");
+
+  GURL url = origin1;
+  AddQuery(&url, "file", "worker_setup.html");
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+  WaitForTitle(shell(), "service worker is ready");
+
+  const char kFetchScript[] =
+      "(async () => {"
+      "  const reg = await navigator.serviceWorker.ready;"
+      "  return new Promise(resolve => {"
+      "    const channel = new MessageChannel();"
+      "    channel.port1.onmessage = e => {"
+      "      resolve(e.data.status === 200 || e.data.status === 0);"
+      "    };"
+      "    reg.active.postMessage({action: 'fetch', url: $1, mode: 'no-cors'},"
+      "                           [channel.port2]);"
+      "  });"
+      "})();";
+
+  GURL same_origin_url = https_server()->GetURL("origin1.com", "/resource");
+  AddQuery(&same_origin_url, "header", "\"cache\"");
+
+  // Expect a deletion call for `origin1.com` matching the `"cache"` directive
+  // in the `Clear-Site-Data` response header. The deletion filter's top-level
+  // site partition must match the worker's top-level site (`origin1.com`).
+  delegate()->ExpectClearSiteDataCall(
+      storage_partition_config(), url::Origin::Create(origin1),
+      net::SchemefulSite(origin1),
+      /*cookies=*/false, /*storage=*/false, /*cache=*/true);
+
+  EXPECT_TRUE(
+      EvalJs(shell()->web_contents(), JsReplace(kFetchScript, same_origin_url))
+          .ExtractBool());
+  delegate()->VerifyAndClearExpectations();
+}
+
+// Verifies that when a cross-origin subresource fetch initiated by a service
+// worker receives a `Clear-Site-Data` header, the deletion filter is scoped to
+// the target origin while preserving the worker's top-level site partition.
+IN_PROC_BROWSER_TEST_F(ClearSiteDataHandlerBrowserTest,
+                       ServiceWorkerCrossOriginFetchUsesWorkerStorageKey) {
+  GURL origin1 = https_server()->GetURL("origin1.com", "/");
+  GURL origin2 = https_server()->GetURL("origin2.com", "/");
+
+  GURL url = origin1;
+  AddQuery(&url, "file", "worker_setup.html");
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+  WaitForTitle(shell(), "service worker is ready");
+
+  const char kFetchScript[] =
+      "(async () => {"
+      "  const reg = await navigator.serviceWorker.ready;"
+      "  return new Promise(resolve => {"
+      "    const channel = new MessageChannel();"
+      "    channel.port1.onmessage = e => {"
+      "      resolve(e.data.status === 200 || e.data.status === 0);"
+      "    };"
+      "    reg.active.postMessage({action: 'fetch', url: $1, mode: 'no-cors'},"
+      "                           [channel.port2]);"
+      "  });"
+      "})();";
+
+  GURL cross_origin_url = https_server()->GetURL("origin2.com", "/resource");
+  AddQuery(&cross_origin_url, "header", "\"storage\"");
+
+  // Expect a deletion call for target origin `origin2.com` matching the
+  // `"storage"` directive in the `Clear-Site-Data` response header. Although
+  // the fetch target is cross-origin, the deletion filter's top-level site
+  // partition must remain `origin1.com` (the hosting worker's site) to preserve
+  // third-party partition isolation.
+  delegate()->ExpectClearSiteDataCall(
+      storage_partition_config(), url::Origin::Create(cross_origin_url),
+      net::SchemefulSite(origin1),
+      /*cookies=*/false, /*storage=*/true, /*cache=*/false);
+
+  EXPECT_TRUE(
+      EvalJs(shell()->web_contents(), JsReplace(kFetchScript, cross_origin_url))
+          .ExtractBool());
   delegate()->VerifyAndClearExpectations();
 }
 
@@ -1145,61 +1245,5 @@ IN_PROC_BROWSER_TEST_P(ClearSiteDataHandlerStorageBucketsBrowserTest,
   delegate()->VerifyAndClearExpectations();
 }
 
-class ClearSiteDataHandlerSharedStorageBrowserTest
-    : public ClearSiteDataHandlerBrowserTest {
- public:
-  ClearSiteDataHandlerSharedStorageBrowserTest() {
-    feature_list_.InitAndEnableFeature(network::features::kSharedStorageAPI);
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
-// Integration test for the deletion of shared storage.
-IN_PROC_BROWSER_TEST_F(ClearSiteDataHandlerSharedStorageBrowserTest,
-                       SharedStorageIntegrationTest) {
-  SharedStorageClearSiteDataTester tester(storage_partition());
-
-  GURL url1 = https_server()->GetURL("origin1.com", "/");
-  const url::Origin kOrigin1 = url::Origin::Create(url1);
-  tester.AddConsecutiveSharedStorageEntries(kOrigin1, u"key", u"value", 10);
-
-  GURL url2 = https_server()->GetURL("origin2.com", "/");
-  const url::Origin kOrigin2 = url::Origin::Create(url2);
-  tester.AddConsecutiveSharedStorageEntries(kOrigin2, u"key", u"value", 5);
-
-  // There are 15 entries for two origins.
-  EXPECT_THAT(tester.GetSharedStorageOrigins(),
-              testing::UnorderedElementsAre(kOrigin1, kOrigin2));
-
-  // Note that u"key" concatenated with a single digit has 4 char16_t's and
-  // hence 8 bytes. Similarly, u"value" concatenated with one digit has
-  // 6 char16_t's and hence 12 bytes. A pair of these together thus has
-  // 20 bytes.
-  const int kNumBytesPerEntry = 20;
-  EXPECT_EQ(10 * kNumBytesPerEntry,
-            tester.GetSharedStorageNumBytesForOrigin(kOrigin1));
-  EXPECT_EQ(5 * kNumBytesPerEntry,
-            tester.GetSharedStorageNumBytesForOrigin(kOrigin2));
-  EXPECT_EQ(15 * kNumBytesPerEntry, tester.GetSharedStorageTotalBytes());
-
-  // Let Clear-Site-Data delete the shared storage of "origin1.com".
-  delegate()->ExpectClearSiteDataCall(storage_partition_config(), kOrigin1,
-                                      net::SchemefulSite(kOrigin1),
-                                      /*cookies=*/false,
-                                      /*storage=*/true, /*cache=*/false);
-  AddQuery(&url1, "header", "\"storage\"");
-  EXPECT_TRUE(NavigateToURL(shell(), url1));
-  delegate()->VerifyAndClearExpectations();
-
-  // There are now only 5 entries for one origin.
-  EXPECT_THAT(tester.GetSharedStorageOrigins(),
-              testing::UnorderedElementsAre(kOrigin2));
-  EXPECT_EQ(0, tester.GetSharedStorageNumBytesForOrigin(kOrigin1));
-  EXPECT_EQ(5 * kNumBytesPerEntry,
-            tester.GetSharedStorageNumBytesForOrigin(kOrigin2));
-  EXPECT_EQ(5 * kNumBytesPerEntry, tester.GetSharedStorageTotalBytes());
-}
 
 }  // namespace content

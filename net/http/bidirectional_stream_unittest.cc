@@ -24,6 +24,7 @@
 #include "net/base/load_timing_info.h"
 #include "net/base/load_timing_info_test_util.h"
 #include "net/base/net_errors.h"
+#include "net/base/network_handle.h"
 #include "net/base/session_usage.h"
 #include "net/dns/public/secure_dns_policy.h"
 #include "net/http/bidirectional_stream_request_info.h"
@@ -407,7 +408,7 @@ class BidirectionalStreamTest : public TestWithTaskEnvironment {
     // bidirectional streams.
     // TODO(crbug.com/346835898): Support bidirectional streams in
     // HappyEyeballsV3.
-    feature_list_.InitAndDisableFeature(features::kHappyEyeballsV3);
+    AddScopedFeatureList().InitAndDisableFeature(features::kHappyEyeballsV3);
     ssl_data_.next_proto = NextProto::kProtoHTTP2;
     ssl_data_.ssl_info.cert =
         ImportCertFromFile(GetTestCertsDirectory(), "ok_cert.pem");
@@ -439,7 +440,8 @@ class BidirectionalStreamTest : public TestWithTaskEnvironment {
                        ProxyChain::Direct(), SessionUsage::kDestination,
                        socket_tag, NetworkAnonymizationKey(),
                        SecureDnsPolicy::kAllow,
-                       /*disable_cert_verification_network_fetches=*/false);
+                       /*disable_cert_verification_network_fetches=*/false,
+                       handles::kInvalidNetworkHandle);
     session_ =
         CreateSpdySession(http_session_.get(), key,
                           NetLogWithSource::Make(NetLogSourceType::NONE));
@@ -457,7 +459,6 @@ class BidirectionalStreamTest : public TestWithTaskEnvironment {
  private:
   SSLSocketDataProvider ssl_data_;
   base::WeakPtr<SpdySession> session_;
-  base::test::ScopedFeatureList feature_list_;
 };
 
 TEST_F(BidirectionalStreamTest, CreateInsecureStream) {
@@ -633,7 +634,8 @@ TEST_F(BidirectionalStreamTest, ClientAuthRequestIgnored) {
                      ProxyChain::Direct(), SessionUsage::kDestination,
                      SocketTag(), NetworkAnonymizationKey(),
                      SecureDnsPolicy::kAllow,
-                     /*disable_cert_verification_network_fetches=*/false);
+                     /*disable_cert_verification_network_fetches=*/false,
+                     handles::kInvalidNetworkHandle);
   auto request_info = std::make_unique<BidirectionalStreamRequestInfo>();
   request_info->method = "GET";
   request_info->url = default_url_;

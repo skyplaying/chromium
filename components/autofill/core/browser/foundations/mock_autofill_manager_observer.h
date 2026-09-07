@@ -47,11 +47,10 @@ class MockAutofillManagerObserver : public AutofillManager::Observer {
               OnBeforeTextFieldValueChanged,
               (AutofillManager&, FormGlobalId, FieldGlobalId),
               (override));
-  MOCK_METHOD(
-      void,
-      OnAfterTextFieldValueChanged,
-      (AutofillManager&, FormGlobalId, FieldGlobalId, const std::u16string&),
-      (override));
+  MOCK_METHOD(void,
+              OnAfterTextFieldValueChanged,
+              (AutofillManager&, FormGlobalId, FieldGlobalId),
+              (override));
 
   MOCK_METHOD(void,
               OnBeforeTextFieldDidScroll,
@@ -124,11 +123,11 @@ class MockAutofillManagerObserver : public AutofillManager::Observer {
 
   MOCK_METHOD(void,
               OnBeforeLoadedServerPredictions,
-              (AutofillManager&),
+              (AutofillManager&, base::span<const FormGlobalId>),
               (override));
   MOCK_METHOD(void,
               OnAfterLoadedServerPredictions,
-              (AutofillManager&),
+              (AutofillManager&, base::span<const FormGlobalId>),
               (override));
 
   MOCK_METHOD(void,
@@ -137,13 +136,25 @@ class MockAutofillManagerObserver : public AutofillManager::Observer {
               (override));
 
   MOCK_METHOD(void,
-              OnFillOrPreviewForm,
-              (AutofillManager&,
-               FormGlobalId,
-               mojom::ActionPersistence,
-               (const base::flat_set<FieldGlobalId>&),
-               (const FillingPayload&)),
+              OnSuggestionsShown,
+              (AutofillManager&, base::span<const Suggestion>),
               (override));
+  MOCK_METHOD(void,
+              OnSuggestionsHidden,
+              (AutofillManager&, SuggestionHidingReason),
+              (override));
+
+  MOCK_METHOD(
+      void,
+      OnFillOrPreviewForm,
+      (AutofillManager&,
+       FormGlobalId,
+       FieldGlobalId,
+       mojom::ActionPersistence,
+       (const base::flat_set<FieldGlobalId>&),
+       (const base::flat_map<FieldGlobalId, DenseSet<FieldFillingSkipReason>>&),
+       (const FillingPayload&)),
+      (override));
 
   MOCK_METHOD(void,
               OnBeforeFormSubmitted,

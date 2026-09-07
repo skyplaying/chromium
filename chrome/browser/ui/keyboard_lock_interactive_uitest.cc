@@ -5,12 +5,12 @@
 #include "base/run_loop.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/fullscreen_keyboard_browsertest_base.h"
-#include "chrome/test/base/chrome_test_utils.h"
+#include "chrome/test/base/chrome_test_path_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -26,6 +26,7 @@
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "third_party/blink/public/common/features.h"
 #include "ui/base/ui_base_features.h"
+#include "ui/base/window_open_disposition.h"
 
 #if BUILDFLAG(IS_MAC)
 #include "ui/base/test/scoped_fake_nswindow_fullscreen.h"
@@ -116,7 +117,7 @@ class KeyboardLockInteractiveBrowserTest
 #endif
 
   ExclusiveAccessManager* GetExclusiveAccessManager() {
-    return browser()->GetFeatures().exclusive_access_manager();
+    return ExclusiveAccessManager::From(browser());
   }
 
   KeyboardLockController* GetKeyboardLockController() {
@@ -254,7 +255,7 @@ void KeyboardLockInteractiveBrowserTest::
   WaitForKeyboardLock();
 }
 
-// https://crbug.com/1382717 Flaky on Linux
+// https://crbug.com/40877439 Flaky on Linux
 #if BUILDFLAG(IS_LINUX)
 #define MAYBE_RequestedButNotActive DISABLED_RequestedButNotActive
 #else
@@ -308,7 +309,7 @@ IN_PROC_BROWSER_TEST_F(KeyboardLockInteractiveBrowserTest,
   ASSERT_NO_FATAL_FAILURE(SendShortcutsAndExpectPrevented());
 }
 
-// https://crbug.com/1382699 Flaky on Linux
+// https://crbug.com/40877427 Flaky on Linux
 #if BUILDFLAG(IS_LINUX)
 #define MAYBE_ActiveWithSomeKeysLocked DISABLED_ActiveWithSomeKeysLocked
 #else
@@ -339,8 +340,8 @@ IN_PROC_BROWSER_TEST_F(KeyboardLockInteractiveBrowserTest,
   ASSERT_EQ(initial_browser_count + 1, GetBrowserCount());
 }
 
-// https://crbug.com/1108391 Flakey on ChromeOS.
-// https://crbug.com/1121172 Also flaky on Mac
+// https://crbug.com/40707442 Flakey on ChromeOS.
+// https://crbug.com/40715327 Also flaky on Mac
 #if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC)
 #define MAYBE_SubsequentLockCallSupersedesPreviousCall \
   DISABLED_SubsequentLockCallSupersedesPreviousCall
@@ -527,7 +528,7 @@ IN_PROC_BROWSER_TEST_F(KeyboardLockInteractiveBrowserTest,
 }
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-// BringBrowserWindowToFront hangs on Linux: http://crbug.com/163931
+// BringBrowserWindowToFront hangs on Linux: http://crbug.com/40295645
 #define MAYBE_GainAndLoseFocusInWindowMode DISABLED_GainAndLoseFocusInWindowMode
 #else
 #define MAYBE_GainAndLoseFocusInWindowMode GainAndLoseFocusInWindowMode
@@ -588,7 +589,7 @@ IN_PROC_BROWSER_TEST_F(KeyboardLockInteractiveBrowserTest,
 }
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-// BringBrowserWindowToFront hangs on Linux: http://crbug.com/163931
+// BringBrowserWindowToFront hangs on Linux: http://crbug.com/40295645
 #define MAYBE_GainAndLoseFocusInFullscreen DISABLED_GainAndLoseFocusInFullscreen
 #else
 #define MAYBE_GainAndLoseFocusInFullscreen GainAndLoseFocusInFullscreen

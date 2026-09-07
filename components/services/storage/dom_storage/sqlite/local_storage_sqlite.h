@@ -6,6 +6,7 @@
 #define COMPONENTS_SERVICES_STORAGE_DOM_STORAGE_SQLITE_LOCAL_STORAGE_SQLITE_H_
 
 #include "base/trace_event/memory_allocator_dump_guid.h"
+#include "base/trace_event/memory_dump_provider.h"
 #include "components/services/storage/dom_storage/dom_storage_database.h"
 
 namespace sql {
@@ -34,7 +35,8 @@ class MapEntriesTable;
 // The `maps_by_storage_key` index supports query by `storage_key` to find the
 // map ID efficiently.  Each `storage_key` in `maps` must be unique, limiting
 // each `storage_key` to a single persisted map.
-class LocalStorageSqlite : public DomStorageDatabase {
+class LocalStorageSqlite : public DomStorageDatabase,
+                           private base::trace_event::MemoryDumpProvider {
  private:
   using PassKey = base::PassKey<DomStorageDatabaseFactory>;
 
@@ -47,12 +49,10 @@ class LocalStorageSqlite : public DomStorageDatabase {
   LocalStorageSqlite(const LocalStorageSqlite&) = delete;
   LocalStorageSqlite& operator=(const LocalStorageSqlite&) = delete;
 
-  DbStatus Open(PassKey,
-                const base::FilePath& database_path,
-                const std::optional<base::trace_event::MemoryAllocatorDumpGuid>&
-                    memory_dump_id);
-
   // The `DomStorageDatabase` interface:
+  DbStatus Open(const base::FilePath& database_path,
+                const std::optional<base::trace_event::MemoryAllocatorDumpGuid>&
+                    memory_dump_id) override;
   StatusOr<std::map<Key, Value>> ReadMapKeyValues(
       MapLocator map_locator) override;
   DbStatus UpdateMaps(std::vector<MapBatchUpdate> map_updates) override;
@@ -66,7 +66,7 @@ class LocalStorageSqlite : public DomStorageDatabase {
   DbStatus DeleteSessions(std::vector<std::string> session_ids,
                           std::vector<MapLocator> maps_to_delete) override;
   DbStatus PurgeOrigins(std::set<url::Origin> origins) override;
-  DbStatus RewriteDB() override;
+  DbStatus CleanUpStaleData() override;
   void MakeAllCommitsFailForTesting() override;
   void SetDestructionCallbackForTesting(base::OnceClosure callback) override;
   DbStatus PutVersionForTesting(int64_t version) override;
@@ -94,10 +94,16 @@ class LocalStorageSqlite : public DomStorageDatabase {
   DbStatus DeleteMapMetadata(
       const std::vector<blink::StorageKey>& metadata_to_delete);
 
+  // base::trace_event::MemoryDumpProvider implementation:
+  bool OnMemoryDump(const base::trace_event::MemoryDumpArgs& args,
+                    base::trace_event::ProcessMemoryDump* pmd) override;
+
   // `Open()` creates `database_`, `meta_table_` and `map_entries_table_`.
   std::unique_ptr<sql::Database> database_;
   std::unique_ptr<sql::MetaTable> meta_table_;
   std::unique_ptr<MapEntriesTable> map_entries_table_;
+
+  std::optional<base::trace_event::MemoryAllocatorDumpGuid> memory_dump_id_;
 
   // Simulates I/O failure in `PutMetadata()` and `UpdateMaps()` by force
   // returning an IOError. Set to true by `MakeAllCommitsFailForTesting()`.

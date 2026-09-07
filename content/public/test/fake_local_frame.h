@@ -75,7 +75,9 @@ class FakeLocalFrame : public blink::mojom::LocalFrame {
   void ReportBlinkFeatureUsage(
       const std::vector<blink::mojom::WebFeature>&) override;
   void RenderFallbackContent() override;
-  void BeforeUnload(bool is_reload, BeforeUnloadCallback callback) override;
+  void BeforeUnload(bool is_reload,
+                    bool force_to_proceed,
+                    BeforeUnloadCallback callback) override;
   void MediaPlayerActionAt(const gfx::Point& location,
                            blink::mojom::MediaPlayerActionPtr action) override;
   void RequestVideoFrameAtWithBoundsHint(
@@ -92,8 +94,6 @@ class FakeLocalFrame : public blink::mojom::LocalFrame {
   void ReportContentSecurityPolicyViolation(
       network::mojom::CSPViolationPtr violation) override;
   void DidUpdateFramePolicy(const blink::FramePolicy& frame_policy) override;
-  void OnFrameVisibilityChanged(
-      blink::mojom::FrameVisibility visibility) override;
   void PostMessageEvent(
       const std::optional<blink::RemoteFrameToken>& source_frame_token,
       const std::optional<url::Origin>& source_origin,
@@ -180,6 +180,7 @@ class FakeLocalFrame : public blink::mojom::LocalFrame {
       base::TimeTicks redirect_time,
       base::TimeTicks request_start,
       base::TimeTicks response_start,
+      base::TimeTicks completion_time,
       uint32_t response_code,
       const std::string& mime_type,
       const net::LoadTimingInfo& load_timing_info,
@@ -188,10 +189,17 @@ class FakeLocalFrame : public blink::mojom::LocalFrame {
       bool is_secure_transport,
       bool is_validated,
       const std::string& normalized_server_timing,
-      const ::network::URLLoaderCompletionStatus& completion_status) override;
+      blink::mojom::SubframeResourceLengthsPtr resource_lengths) override;
   void UpdatePrerenderURL(const ::GURL& matched_url,
                           UpdatePrerenderURLCallback callback) override;
   void GetScrollPosition(GetScrollPositionCallback callback) override;
+  void InvokeScriptToolForInspector(
+      const base::UnguessableToken& invocation_id,
+      const std::string& tool_name,
+      const std::string& input_arguments,
+      InvokeScriptToolForInspectorCallback callback) override;
+  void NotifyInspectorOfCrossDocumentScriptToolResult(
+      const base::UnguessableToken& invocation_id) override;
 #if BUILDFLAG(IS_ANDROID)
   void PerformFullContentSpellCheck() override;
 #endif

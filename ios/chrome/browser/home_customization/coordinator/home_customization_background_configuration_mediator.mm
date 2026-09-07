@@ -37,7 +37,6 @@
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_color_palette.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_color_palette_util.h"
 #import "ios/chrome/browser/ntp/ui_bundled/theme_utils.h"
-#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/grit/ios_strings.h"
@@ -86,15 +85,12 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
 @interface HomeCustomizationBackgroundConfigurationMediator () <
     HomeBackgroundCustomizationServiceObserving> {
   // The image fetcher used to download individual background preset images.
-  raw_ptr<image_fetcher::ImageFetcher, DanglingUntriaged> _imageFetcher;
+  raw_ptr<image_fetcher::ImageFetcher> _imageFetcher;
   // The service that provides the background images.
-  raw_ptr<HomeBackgroundImageService, DanglingUntriaged>
-      _homeBackgroundImageService;
+  raw_ptr<HomeBackgroundImageService> _homeBackgroundImageService;
   // Used to get and observe the background state.
-  raw_ptr<HomeBackgroundCustomizationService, DanglingUntriaged>
-      _backgroundCustomizationService;
-  raw_ptr<UserUploadedImageManager, DanglingUntriaged>
-      _userUploadedImageManager;
+  raw_ptr<HomeBackgroundCustomizationService> _backgroundCustomizationService;
+  raw_ptr<UserUploadedImageManager> _userUploadedImageManager;
 
   // Observer for the customization service.
   std::unique_ptr<HomeBackgroundCustomizationServiceObserverBridge>
@@ -238,37 +234,34 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
     }
   }
 
-  BOOL isCustomColor = IsNTPBackgroundColorSliderEnabled() &&
-                       !selectedColorID && colorTheme && colorTheme->color();
+  BOOL isCustomColor = !selectedColorID && colorTheme && colorTheme->color();
   BOOL isDefaultBackground =
       !selectedColorID &&
       !_backgroundCustomizationService->GetCurrentCustomBackground();
 
-  if (IsNTPBackgroundColorSliderEnabled()) {
-    // The hue slider displays either the custom color or the default red, since
-    // hue = 0% represents red on the color wheel.
-    UIColor* hueSliderColor =
-        isCustomColor ? skia::UIColorFromSkColor(colorTheme->color())
-                      : UIColor.redColor;
+  // The hue slider displays either the custom color or the default red, since
+  // hue = 0% represents red on the color wheel.
+  UIColor* hueSliderColor = isCustomColor
+                                ? skia::UIColorFromSkColor(colorTheme->color())
+                                : UIColor.redColor;
 
-    BackgroundCustomizationConfigurationItem* customHueConfiguration =
-        [[BackgroundCustomizationConfigurationItem alloc]
-            initWithBackgroundColor:hueSliderColor
-                       colorVariant:ui::ColorProviderKey::SchemeVariant::
-                                        kTonalSpot
-                  accessibilityName:
-                      l10n_util::GetNSString(
-                          IDS_IOS_HOME_CUSTOMIZATION_BACKGROUND_COLOR_CUSTOM_ACCESSIBILITY_LABEL)];
-    customHueConfiguration.isCustomColor = isCustomColor;
-    collectionConfiguration
-        .configurations[customHueConfiguration.configurationID] =
-        customHueConfiguration;
-    [collectionConfiguration.configurationOrder
-        addObject:customHueConfiguration.configurationID];
+  BackgroundCustomizationConfigurationItem* customHueConfiguration =
+      [[BackgroundCustomizationConfigurationItem alloc]
+          initWithBackgroundColor:hueSliderColor
+                     colorVariant:ui::ColorProviderKey::SchemeVariant::
+                                      kTonalSpot
+                accessibilityName:
+                    l10n_util::GetNSString(
+                        IDS_IOS_HOME_CUSTOMIZATION_BACKGROUND_COLOR_CUSTOM_ACCESSIBILITY_LABEL)];
+  customHueConfiguration.isCustomColor = isCustomColor;
+  collectionConfiguration
+      .configurations[customHueConfiguration.configurationID] =
+      customHueConfiguration;
+  [collectionConfiguration.configurationOrder
+      addObject:customHueConfiguration.configurationID];
 
-    if (isCustomColor) {
-      selectedColorID = customHueConfiguration.configurationID;
-    }
+  if (isCustomColor) {
+    selectedColorID = customHueConfiguration.configurationID;
   }
 
   if (!isCustomColor && isDefaultBackground) {
@@ -302,6 +295,14 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
       BackgroundSelectionOutcome::kCanceledAfterSelected;
 }
 
+- (void)disconnect {
+  _backgroundCustomizationServiceObserverBridge.reset();
+  _backgroundCustomizationService = nullptr;
+  _imageFetcher = nullptr;
+  _homeBackgroundImageService = nullptr;
+  _userUploadedImageManager = nullptr;
+}
+
 #pragma mark - HomeCustomizationBackgroundConfigurationMutator
 
 - (void)fetchBackgroundCustomizationThumbnailURLImage:(GURL)thumbnailURL
@@ -311,11 +312,11 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
   CHECK(!thumbnailURL.is_empty());
   CHECK(thumbnailURL.is_valid());
 
-  _imageFetcher->FetchImage(
+  _imageFetcher->FetchImageData(
       thumbnailURL,
-      base::BindOnce(^(const gfx::Image& image,
+      base::BindOnce(^(const std::string& image_data,
                        const image_fetcher::RequestMetadata& metadata) {
-        if (image.IsEmpty()) {
+        if (image_data.empty()) {
           // Image fetch failed or returned empty.
           NSDictionary<NSErrorUserInfoKey, id>* userInfo = @{
             NSURLErrorFailingURLErrorKey : net::NSURLWithGURL(thumbnailURL)
@@ -332,10 +333,13 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
           completion(nil, fetchError);
           return;
         }
-        UIImage* uiImage = image.ToUIImage();
-        base::UmaHistogramBoolean(
-            "IOS.HomeCustomization.Background.Gallery.ImageDownloadSuccessful",
-            true);
+
+        UIImage* uiImage =
+            [UIImage imageWithData:[NSData dataWithBytes:image_data.data()
+                                                  length:image_data.length()]];
+        base::UmaHistogramBoolean("IOS.HomeCustomization.Background.Gallery."
+                                  "ImageDownloadSuccessful",
+                                  true);
         if (completion) {
           completion(uiImage, nil);
         }
@@ -345,6 +349,7 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
 }
 
 - (void)fetchBackgroundCustomizationUserUploadedImage:(NSString*)imagePath
+                                           targetSize:(CGSize)targetSize
                                            completion:
                                                (UserUploadImageCompletion)
                                                    completion {
@@ -353,7 +358,7 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
 
   base::FilePath path = base::FilePath(base::SysNSStringToUTF8(imagePath));
 
-  _userUploadedImageManager->LoadUserUploadedImage(path,
+  _userUploadedImageManager->LoadUserUploadedImage(path, targetSize,
                                                    base::BindOnce(completion));
 }
 

@@ -14,7 +14,6 @@
 #include "base/base_paths.h"
 #include "base/base_paths_win.h"
 #include "base/command_line.h"
-#include "base/compiler_specific.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -1036,8 +1035,9 @@ class ShellUtilRegistryTest : public testing::Test {
 
   static const std::set<std::wstring> FileExtensions() {
     std::set<std::wstring> file_extensions;
-    for (size_t i = 0; i < std::size(kTestFileExtensions); ++i)
-      file_extensions.insert(UNSAFE_TODO(kTestFileExtensions[i]));
+    for (const wchar_t* extension : kTestFileExtensions) {
+      file_extensions.insert(extension);
+    }
     return file_extensions;
   }
 
@@ -1318,6 +1318,28 @@ TEST_F(ShellUtilRegistryTest, ToAndFromCommandLineArgument) {
             parsed_protocol_associations.value().associations);
   EXPECT_EQ(protocol_associations.associations[L"web+test"],
             parsed_protocol_associations.value().associations[L"web+test"]);
+}
+
+TEST_F(ShellUtilRegistryTest, AddAppProtocolAssociations_InvalidProtocols) {
+  // Create test protocol associations with valid and invalid protocols.
+  const std::wstring app_progid = L"app_progid1";
+  const std::vector<std::wstring> app_protocols = {
+      L"web+test", L"invalid\\protocol", L"invalid/protocol"};
+
+  ASSERT_TRUE(ShellUtil::AddAppProtocolAssociations(app_protocols, app_progid));
+
+  // Ensure that classes were created only for the valid protocol.
+  base::win::RegKey key;
+  ASSERT_EQ(ERROR_SUCCESS, key.Open(HKEY_CURRENT_USER,
+                                    L"Software\\Classes\\web+test", KEY_READ));
+  EXPECT_TRUE(key.HasValue(L"URL Protocol"));
+
+  ASSERT_NE(ERROR_SUCCESS,
+            key.Open(HKEY_CURRENT_USER, L"Software\\Classes\\invalid\\protocol",
+                     KEY_READ));
+  ASSERT_NE(ERROR_SUCCESS,
+            key.Open(HKEY_CURRENT_USER, L"Software\\Classes\\invalid/protocol",
+                     KEY_READ));
 }
 
 TEST_F(ShellUtilRegistryTest, RemoveAppProtocolAssociations) {

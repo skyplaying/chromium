@@ -7,11 +7,15 @@ package org.chromium.chrome.browser.hub;
 import static org.chromium.chrome.browser.hub.HubColorMixer.COLOR_MIXER;
 
 import android.content.Context;
+import android.view.View;
 import android.view.ViewGroup;
 
 import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.NonNullObservableSupplier;
+import org.chromium.base.supplier.NullableObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeControllerFactory;
 import org.chromium.ui.edge_to_edge.EdgeToEdgePadAdjuster;
@@ -30,6 +34,8 @@ public class HubBottomToolbarCoordinator {
     /** The delegate that provides bottom toolbar functionality. */
     private final HubBottomToolbarDelegate mDelegate;
 
+    private final PropertyModel mModel;
+
     private @Nullable EdgeToEdgePadAdjuster mEdgeToEdgePadAdjuster;
 
     /**
@@ -40,6 +46,9 @@ public class HubBottomToolbarCoordinator {
      * @param paneManager Interact with the current and all {@link Pane}s.
      * @param hubColorMixer Mixes the Hub Overview Color.
      * @param delegate The delegate that provides bottom toolbar functionality.
+     * @param edgeToEdgeSupplier The supplier of {@link EdgeToEdgeController}.
+     * @param currentTabSupplier The supplier of the current tab.
+     * @param isHidingSupplier Supplies whether the Hub is currently hiding / exiting.
      */
     public HubBottomToolbarCoordinator(
             Context context,
@@ -47,10 +56,12 @@ public class HubBottomToolbarCoordinator {
             PaneManager paneManager,
             HubColorMixer hubColorMixer,
             HubBottomToolbarDelegate delegate,
-            MonotonicObservableSupplier<EdgeToEdgeController> edgeToEdgeSupplier) {
+            MonotonicObservableSupplier<EdgeToEdgeController> edgeToEdgeSupplier,
+            NullableObservableSupplier<Tab> currentTabSupplier,
+            NonNullObservableSupplier<Boolean> isHidingSupplier) {
         mDelegate = delegate;
 
-        PropertyModel model =
+        mModel =
                 new PropertyModel.Builder(HubBottomToolbarProperties.ALL_BOTTOM_KEYS)
                         .with(COLOR_MIXER, hubColorMixer)
                         .build();
@@ -62,10 +73,12 @@ public class HubBottomToolbarCoordinator {
 
         if (hubBottomToolbarView != null) {
             PropertyModelChangeProcessor.create(
-                    model, hubBottomToolbarView, HubBottomToolbarViewBinder::bind);
+                    mModel, hubBottomToolbarView, HubBottomToolbarViewBinder::bind);
         }
 
-        mMediator = new HubBottomToolbarMediator(model, mDelegate);
+        mMediator =
+                new HubBottomToolbarMediator(
+                        mModel, mDelegate, currentTabSupplier, isHidingSupplier);
 
         if (hubBottomToolbarView != null) {
             mEdgeToEdgePadAdjuster =
@@ -76,11 +89,17 @@ public class HubBottomToolbarCoordinator {
 
     /** Cleans up observers and resources. */
     public void destroy() {
+        mModel.set(COLOR_MIXER, null);
         mMediator.destroy();
         mDelegate.destroy();
         if (mEdgeToEdgePadAdjuster != null) {
             mEdgeToEdgePadAdjuster.destroy();
             mEdgeToEdgePadAdjuster = null;
         }
+    }
+
+    /** Attaches the provided bottom bar view to the container. */
+    public void attachBottomBarView(View view) {
+        mDelegate.attachBottomBarView(view);
     }
 }

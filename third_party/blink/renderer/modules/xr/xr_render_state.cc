@@ -27,8 +27,9 @@ constexpr double kDefaultFieldOfView = M_PI * 0.5;
 }  // namespace
 
 XRRenderState::XRRenderState(bool immersive) : immersive_(immersive) {
-  if (!immersive_)
+  if (!immersive_) {
     inline_vertical_fov_ = kDefaultFieldOfView;
+  }
 }
 
 void XRRenderState::Update(const XRRenderStateInit* init) {
@@ -103,8 +104,9 @@ HTMLCanvasElement* XRRenderState::output_canvas() const {
 }
 
 std::optional<double> XRRenderState::inlineVerticalFieldOfView() const {
-  if (immersive_)
+  if (immersive_) {
     return std::nullopt;
+  }
   return inline_vertical_fov_;
 }
 

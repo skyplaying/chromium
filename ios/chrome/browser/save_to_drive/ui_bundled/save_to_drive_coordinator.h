@@ -5,7 +5,7 @@
 #ifndef IOS_CHROME_BROWSER_SAVE_TO_DRIVE_UI_BUNDLED_SAVE_TO_DRIVE_COORDINATOR_H_
 #define IOS_CHROME_BROWSER_SAVE_TO_DRIVE_UI_BUNDLED_SAVE_TO_DRIVE_COORDINATOR_H_
 
-#import "ios/chrome/browser/shared/coordinator/chrome_coordinator/chrome_coordinator.h"
+#import "ios/chrome/browser/shared/coordinator/chrome_coordinator/animated_coordinator.h"
 
 namespace web {
 class DownloadTask;
@@ -14,7 +14,8 @@ class DownloadTask;
 // Presents a view which lets the user select a destination for their download
 // e.g. "Files" or "Drive". If the user selects "Drive" as destination, the view
 // also lets the user select the Drive account to be used.
-@interface SaveToDriveCoordinator : ChromeCoordinator
+// This should not be started if sign-in is disabled.
+@interface SaveToDriveCoordinator : AnimatedCoordinator
 
 - (instancetype)initWithBaseViewController:(UIViewController*)viewController
                                    browser:(Browser*)browser

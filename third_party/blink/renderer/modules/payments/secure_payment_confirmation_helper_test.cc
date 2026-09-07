@@ -39,7 +39,7 @@ constexpr char kPngImageDataUrl[] =
 
 Vector<uint8_t> CreateVector(base::span<const uint8_t> buffer) {
   Vector<uint8_t> vector;
-  vector.AppendSpan(buffer);
+  vector.append_range(buffer);
   return vector;
 }
 
@@ -117,6 +117,7 @@ TEST(SecurePaymentConfirmationHelperTest, Parse_OptionalFields) {
   request->instrument()->setDetails("instrument details");
   request->setPayeeOrigin("https://merchant.example");
   request->setTimeout(5 * 60 * 1000);  // 5 minutes
+  request->setLocale({"en-US", "fr-FR"});
 
   PaymentEntityLogo* logo1 = PaymentEntityLogo::Create(scope.GetIsolate());
   logo1->setUrl("https://entity1.example/icon.png");
@@ -145,6 +146,7 @@ TEST(SecurePaymentConfirmationHelperTest, Parse_OptionalFields) {
   // into the request as above it will still be present and we can test that the
   // mojo parsing works correctly.
   EXPECT_EQ(parsed_request->payment_entities_logos.size(), 2u);
+  EXPECT_THAT(parsed_request->locales, testing::ElementsAre("en-US", "fr-FR"));
 }
 
 // Test that parsing a SecurePaymentConfirmationRequest with an empty
@@ -314,7 +316,7 @@ TEST(SecurePaymentConfirmationHelperTest, Parse_TooLargeInstrumentDetails) {
   SecurePaymentConfirmationRequest* request =
       CreateSecurePaymentConfirmationRequest(scope);
 
-  request->instrument()->setDetails(String::FromUTF8(std::string(4097, '.')));
+  request->instrument()->setDetails(String::FromUtf8(std::string(4097, '.')));
 
   ScriptValue script_value(scope.GetIsolate(),
                            ToV8Traits<SecurePaymentConfirmationRequest>::ToV8(
@@ -462,9 +464,30 @@ TEST(SecurePaymentConfirmationHelperTest, Parse_NotHttpsPayeeOrigin) {
             scope.GetExceptionState().CodeAs<ESErrorType>());
 }
 
-// Test that extensions are converted while parsing a
+// Test that an empty extensions block is successfully converted while parsing a
 // SecurePaymentConfirmationRequest.
-TEST(SecurePaymentConfirmationHelperTest, Parse_Extensions) {
+TEST(SecurePaymentConfirmationHelperTest, Parse_EmptyExtensions_Success) {
+  test::TaskEnvironment task_environment;
+  V8TestingScope scope;
+  SecurePaymentConfirmationRequest* request =
+      CreateSecurePaymentConfirmationRequest(scope);
+  AuthenticationExtensionsClientInputs* extensions =
+      AuthenticationExtensionsClientInputs::Create(scope.GetIsolate());
+  request->setExtensions(extensions);
+  ScriptValue script_value(scope.GetIsolate(),
+                           ToV8Traits<SecurePaymentConfirmationRequest>::ToV8(
+                               scope.GetScriptState(), request));
+
+  ::payments::mojom::blink::SecurePaymentConfirmationRequestPtr parsed_request =
+      SecurePaymentConfirmationHelper::ParseSecurePaymentConfirmationData(
+          script_value, *scope.GetExecutionContext(), ASSERT_NO_EXCEPTION);
+
+  ASSERT_FALSE(parsed_request->extensions.is_null());
+}
+
+// Test that any non-empty extensions block throws a TypeError while parsing a
+// SecurePaymentConfirmationRequest in a third-party context.
+TEST(SecurePaymentConfirmationHelperTest, Parse_NonEmptyExtensions_Throws) {
   test::TaskEnvironment task_environment;
   V8TestingScope scope;
   SecurePaymentConfirmationRequest* request =
@@ -477,10 +500,35 @@ TEST(SecurePaymentConfirmationHelperTest, Parse_Extensions) {
                            ToV8Traits<SecurePaymentConfirmationRequest>::ToV8(
                                scope.GetScriptState(), request));
 
+  SecurePaymentConfirmationHelper::ParseSecurePaymentConfirmationData(
+      script_value, *scope.GetExecutionContext(), scope.GetExceptionState());
+  EXPECT_TRUE(scope.GetExceptionState().HadException());
+  EXPECT_EQ(ESErrorType::kTypeError,
+            scope.GetExceptionState().CodeAs<ESErrorType>());
+}
+
+// Test that a non-empty extensions block does NOT throw when in a first-party
+// context.
+TEST(SecurePaymentConfirmationHelperTest,
+     Parse_NonEmptyExtensions_FirstParty_Success) {
+  test::TaskEnvironment task_environment;
+  PaymentRequestV8TestingScope scope;
+  SecurePaymentConfirmationRequest* request =
+      CreateSecurePaymentConfirmationRequest(scope);
+  // PaymentRequestV8TestingScope defaults to "https://www.example.com/".
+  // Set the RP ID to "example.com" to make it a first-party context.
+  request->setRpId("example.com");
+  AuthenticationExtensionsClientInputs* extensions =
+      AuthenticationExtensionsClientInputs::Create(scope.GetIsolate());
+  extensions->setPrf(CreatePrfInputs(scope.GetIsolate()));
+  request->setExtensions(extensions);
+  ScriptValue script_value(scope.GetIsolate(),
+                           ToV8Traits<SecurePaymentConfirmationRequest>::ToV8(
+                               scope.GetScriptState(), request));
+
   ::payments::mojom::blink::SecurePaymentConfirmationRequestPtr parsed_request =
       SecurePaymentConfirmationHelper::ParseSecurePaymentConfirmationData(
-          script_value, *scope.GetExecutionContext(),
-          scope.GetExceptionState());
+          script_value, *scope.GetExecutionContext(), ASSERT_NO_EXCEPTION);
 
   ASSERT_FALSE(parsed_request->extensions.is_null());
   Vector<uint8_t> prf_expected = CreateVector(kPrfInputData);
@@ -598,9 +646,6 @@ TEST(SecurePaymentConfirmationHelperTest, Parse_BrowserBroundPubKeyCredParams) {
   request_cred_params.push_back(std::move(cred_param_1));
   request->setBrowserBoundPubKeyCredParams(std::move(request_cred_params));
 
-  // browserBoundPubKeyCredParams() are behind the
-  // SecurePaymentConfirmationBrowserBoundKeys runtime features flag. This test
-  // needs the flag's status at "test" or greater.
   ScriptValue script_value(scope.GetIsolate(),
                            ToV8Traits<SecurePaymentConfirmationRequest>::ToV8(
                                scope.GetScriptState(), request));
@@ -611,6 +656,25 @@ TEST(SecurePaymentConfirmationHelperTest, Parse_BrowserBroundPubKeyCredParams) {
   EXPECT_THAT(parsed_request->browser_bound_pub_key_cred_params,
               testing::ElementsAre(EqPublicKeyCredentialParameters(
                   blink::mojom::PublicKeyCredentialType::PUBLIC_KEY, -9)));
+}
+
+// Test that parsing a SecurePaymentConfirmationRequest without a locale
+// list sets the locales in the mojo output to an empty list.
+TEST(SecurePaymentConfirmationHelperTest, Parse_EmptyLocales) {
+  test::TaskEnvironment task_environment;
+  V8TestingScope scope;
+  SecurePaymentConfirmationRequest* request =
+      CreateSecurePaymentConfirmationRequest(scope);
+
+  ScriptValue script_value(scope.GetIsolate(),
+                           ToV8Traits<SecurePaymentConfirmationRequest>::ToV8(
+                               scope.GetScriptState(), request));
+  ::payments::mojom::blink::SecurePaymentConfirmationRequestPtr parsed_request =
+      SecurePaymentConfirmationHelper::ParseSecurePaymentConfirmationData(
+          script_value, *scope.GetExecutionContext(), ASSERT_NO_EXCEPTION);
+  ASSERT_TRUE(parsed_request);
+
+  EXPECT_TRUE(parsed_request->locales.empty());
 }
 
 }  // namespace blink

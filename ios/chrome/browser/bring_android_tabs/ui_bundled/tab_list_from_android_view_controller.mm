@@ -130,7 +130,8 @@ typedef NS_ENUM(NSInteger, SectionIdentifier) {
                         indexPath:(NSIndexPath*)indexPath {
   item.faviconAttributes = attributes;
   if (!cached && attributes.faviconImage) {
-    if ([self.tableViewModel itemAtIndexPath:indexPath] != item) {
+    if (![self.tableViewModel hasItemAtIndexPath:indexPath] ||
+        [self.tableViewModel itemAtIndexPath:indexPath] != item) {
       return;
     }
     LegacyTableViewCell* cell =
@@ -143,7 +144,7 @@ typedef NS_ENUM(NSInteger, SectionIdentifier) {
     // row instead of just updating the cell, it creates a visible
     // jank. Use the item configuration method instead. See
     // crbug.com/479692041 for more info.
-    [item configureCell:cell withStyler:self.styler];
+    [item configureCell:cell];
   }
 }
 

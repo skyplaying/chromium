@@ -26,7 +26,6 @@ import org.chromium.base.Log;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
-import org.chromium.chrome.browser.readaloud.ReadAloudFeatures;
 import org.chromium.chrome.browser.readaloud.player.Colors;
 import org.chromium.chrome.browser.readaloud.player.InteractionHandler;
 import org.chromium.chrome.browser.readaloud.player.PlayerProperties;
@@ -289,11 +288,7 @@ public class ExpandedPlayerSheetContent implements BottomSheetContent {
             mModeSelectorButton.setContentDescription(mContext.getString(R.string.readaloud_playback_mode_selector_classic));
             chromeNowPlaying.setText(
                     mContext.getString(R.string.readaloud_chrome_now_playing_audio_overview));
-            if (ReadAloudFeatures.isAudioOverviewsFeedbackAllowed()) {
-                showFeedbackButtons();
-            } else {
-              hideFeedbackButtons();
-            }
+            showFeedbackButtons();
             hideMoreOptions();
         } else {
             mIsModeActive = false;
@@ -629,9 +624,9 @@ public class ExpandedPlayerSheetContent implements BottomSheetContent {
     }
 
     @Override
-    public boolean canSuppressInAnyState() {
+    public boolean canBeSuppressed(BottomSheetContent nextContent) {
         // Always immediately hide if a higher-priority sheet content wants to show.
-        return true;
+        return nextContent.getPriority() <= ContentPriority.HIGH;
     }
 
     private void setOnClickListener(int id, Runnable onClick) {
@@ -664,7 +659,7 @@ public class ExpandedPlayerSheetContent implements BottomSheetContent {
         if (orientation == Configuration.ORIENTATION_PORTRAIT) {
             errorParams.height =
                     mContext.getResources()
-                            .getDimensionPixelSize(R.dimen.error_layour_portrait_height);
+                            .getDimensionPixelSize(R.dimen.error_layout_portrait_height);
             bottomPadding =
                     mContext.getResources()
                             .getDimensionPixelSize(R.dimen.readaloud_controls_portrait_padding);
@@ -676,7 +671,7 @@ public class ExpandedPlayerSheetContent implements BottomSheetContent {
 
             errorParams.height =
                     mContext.getResources()
-                            .getDimensionPixelSize(R.dimen.error_layour_landscape_height);
+                            .getDimensionPixelSize(R.dimen.error_layout_landscape_height);
             topMargin =
                     mContext.getResources()
                             .getDimensionPixelSize(R.dimen.readaloud_now_playing_spacing_landscape);

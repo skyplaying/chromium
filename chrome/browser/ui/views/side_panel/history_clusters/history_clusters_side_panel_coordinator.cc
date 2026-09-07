@@ -9,18 +9,17 @@
 #include "base/functional/callback_helpers.h"
 #include "base/strings/escape.h"
 #include "base/strings/stringprintf.h"
-#include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/history_clusters/history_clusters_metrics_logger.h"
 #include "chrome/browser/history_clusters/history_clusters_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry.h"
+#include "chrome/browser/ui/side_panel/side_panel_registry.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/side_panel/history_clusters/history_clusters_side_panel_utils.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_coordinator.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_registry.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_web_ui_view.h"
 #include "chrome/browser/ui/webui/side_panel/history_clusters/history_clusters_side_panel_ui.h"
 #include "chrome/common/webui_url_constants.h"
@@ -31,7 +30,6 @@
 #include "components/omnibox/browser/actions/history_clusters_action.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/strings/grit/components_strings.h"
-#include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
@@ -43,10 +41,20 @@ BEGIN_TEMPLATE_METADATA(SidePanelWebUIViewT_HistoryClustersSidePanelUI,
                         SidePanelWebUIViewT)
 END_METADATA
 
+DEFINE_USER_DATA(HistoryClustersSidePanelCoordinator);
+
+// static
+HistoryClustersSidePanelCoordinator* HistoryClustersSidePanelCoordinator::From(
+    BrowserWindowInterface* browser) {
+  return Get(browser->GetUnownedUserDataHost());
+}
+
 HistoryClustersSidePanelCoordinator::HistoryClustersSidePanelCoordinator(
     BrowserWindowInterface* browser,
     Profile* profile)
-    : browser_(CHECK_DEREF(browser)), profile_(CHECK_DEREF(profile)) {
+    : scoped_unowned_user_data_(browser->GetUnownedUserDataHost(), *this),
+      browser_(CHECK_DEREF(browser)),
+      profile_(CHECK_DEREF(profile)) {
   pref_change_registrar_.Init(profile_->GetPrefs());
   base::RepeatingClosure callback(base::BindRepeating(
       &HistoryClustersSidePanelCoordinator::OnHistoryClustersPreferenceChanged,
@@ -147,8 +155,8 @@ bool HistoryClustersSidePanelCoordinator::Show(const std::string& query) {
     initial_query_ = query;
   }
 
-  browser_->GetFeatures().side_panel_ui()->Show(
-      SidePanelEntry::Id::kHistoryClusters);
+  SidePanelUI::From(&browser_.get())
+      ->Show(SidePanelEntry::Id::kHistoryClusters);
 
   return true;
 }

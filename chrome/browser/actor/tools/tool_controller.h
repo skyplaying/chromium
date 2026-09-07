@@ -12,12 +12,14 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
-#include "chrome/browser/actor/aggregated_journal.h"
 #include "chrome/browser/actor/tools/observation_delay_controller.h"
 #include "chrome/browser/actor/tools/tool_delegate.h"
 #include "chrome/common/actor.mojom-forward.h"
-#include "chrome/common/actor/task_id.h"
-#include "content/public/browser/weak_document_ptr.h"
+#include "components/actor/core/aggregated_journal.h"
+
+namespace tabs {
+class TabInterface;
+}
 
 namespace actor {
 
@@ -56,6 +58,7 @@ class ToolController {
       const ToolRequest& request,
       ResultCallback callback);
   void Invoke(ResultCallback result_callback);
+  void Pause();
   void Cancel();
 
   static std::string StateToString(State state);
@@ -77,6 +80,8 @@ class ToolController {
   void ObservationDelayComplete(
       mojom::ActionResultPtr action_result,
       ObservationDelayController::Result observation_result);
+
+  mojom::ActionResultPtr ValidateTargetTab(const tabs::TabInterface* tab) const;
 
   AggregatedJournal& journal() { return tool_delegate_->GetJournal(); }
 

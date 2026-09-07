@@ -25,7 +25,7 @@
 
 @interface AccountPickerConfirmationScreenMediator () <
     AuthenticationServiceObserving,
-    IdentityManagerObserverBridgeDelegate> {
+    IdentityManagerObserving> {
 }
 
 @end
@@ -116,8 +116,8 @@
 
   // If the user is signed-in, present the signed-in account, otherwise the
   // default account on the device.
-  id<SystemIdentity> identity = GetPrimarySystemIdentity(
-      signin::ConsentLevel::kSignin, _identityManager, _accountManagerService);
+  id<SystemIdentity> identity =
+      GetPrimarySystemIdentity(_identityManager, _accountManagerService);
   if (!identity) {
     identity = signin::GetDefaultIdentityOnDevice(_identityManager,
                                                   _accountManagerService);
@@ -140,7 +140,6 @@
       GetApplicationContext()->GetIdentityAvatarProvider()->GetIdentityAvatar(
           selectedIdentity, IdentityAvatarSize::TableViewIcon);
   [_consumer showDefaultAccountWithFullName:selectedIdentity.userFullName
-                                  givenName:selectedIdentity.userGivenName
                                       email:selectedIdentity.userEmail
                                      avatar:avatar
                                     managed:[self isIdentityKnownToBeManaged:
@@ -160,7 +159,7 @@
 // called asynchronously when the management status if retrieved and the
 // identity is managed.
 - (BOOL)isIdentityKnownToBeManaged:(id<SystemIdentity>)identity {
-  CHECK(identity, base::NotFatalUntil::M147);
+  CHECK(identity);
   if (std::optional<BOOL> managed = IsIdentityManaged(identity);
       managed.has_value()) {
     return managed.value();
@@ -177,11 +176,11 @@
 
 #pragma mark -  IdentityManagerObserver
 
-- (void)onAccountsOnDeviceChanged {
+- (void)accountsOnDeviceDidChange {
   [self selectDefaultIdentity];
 }
 
-- (void)onExtendedAccountInfoUpdated:(const AccountInfo&)info {
+- (void)extendedAccountInfoDidUpdate:(const AccountInfo&)info {
   id<SystemIdentity> identity =
       _accountManagerService->GetIdentityOnDeviceWithGaiaID(info.gaia);
   [self handleIdentityUpdated:identity];

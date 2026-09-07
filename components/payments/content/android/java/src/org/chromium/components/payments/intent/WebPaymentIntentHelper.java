@@ -16,11 +16,14 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.components.payments.Address;
 import org.chromium.components.payments.ErrorStrings;
 import org.chromium.components.payments.PayerData;
+import org.chromium.components.payments.PaymentAppError;
+import org.chromium.components.payments.PaymentFeatureList;
 import org.chromium.components.payments.intent.WebPaymentIntentHelperType.PaymentDetailsModifier;
 import org.chromium.components.payments.intent.WebPaymentIntentHelperType.PaymentItem;
 import org.chromium.components.payments.intent.WebPaymentIntentHelperType.PaymentMethodData;
 import org.chromium.components.payments.intent.WebPaymentIntentHelperType.PaymentOptions;
 import org.chromium.components.payments.intent.WebPaymentIntentHelperType.PaymentShippingOption;
+import org.chromium.payments.mojom.PaymentEventResponseType;
 
 import java.io.IOException;
 import java.io.StringWriter;
@@ -34,6 +37,12 @@ import java.util.Map;
 public class WebPaymentIntentHelper {
     /** The action name for the Pay Intent. */
     public static final String ACTION_PAY = "org.chromium.intent.action.PAY";
+
+    /**
+     * The result code for internal app error, which is {@link Activity.RESULT_FIRST_USER}, i.e.
+     * 0x00000001.
+     */
+    public static final int RESULT_INTERNAL_APP_ERROR = Activity.RESULT_FIRST_USER;
 
     /**
      * The name of the intent for the service that updates the payment method, the shipping address,
@@ -85,6 +94,8 @@ public class WebPaymentIntentHelper {
     public static final String EXTRA_RESPONSE_PAYER_EMAIL = "payerEmail";
     public static final String EXTRA_RESPONSE_PAYER_PHONE = "payerPhone";
     public static final String EXTRA_SHIPPING_OPTION_ID = "shippingOptionId";
+    public static final String EXTRA_WALLET_ERROR_CODE =
+            "com.google.android.gms.wallet.EXTRA_ERROR_CODE";
 
     // Shipping address bundle used in payment response and shippingAddressChange.
     public static final String EXTRA_SHIPPING_ADDRESS = "shippingAddress";
@@ -93,8 +104,10 @@ public class WebPaymentIntentHelper {
 
     /** Invoked to report error for {@link #parsePaymentResponse}. */
     public interface PaymentErrorCallback {
-        /** @param errorString The string that explains the error. */
-        void onPaymentError(String errorString);
+        /**
+         * @param error The {@link PaymentAppError} object.
+         */
+        void onPaymentError(PaymentAppError error);
     }
 
     /** Invoked to receive parsed data for {@link #parsePaymentResponse}. */
@@ -139,34 +152,76 @@ public class WebPaymentIntentHelper {
             PaymentErrorCallback errorCallback,
             PaymentSuccessCallback successCallback) {
         if (resultCode == Activity.RESULT_CANCELED) {
-            errorCallback.onPaymentError(ErrorStrings.RESULT_CANCELED);
+            errorCallback.onPaymentError(
+                    new PaymentAppError(
+                            PaymentEventResponseType.PAYMENT_HANDLER_WINDOW_CLOSING,
+                            ErrorStrings.RESULT_CANCELED));
+            return;
+        }
+        if (resultCode == RESULT_INTERNAL_APP_ERROR) {
+            String errorMessage = ErrorStrings.RESULT_INTERNAL_APP_ERROR;
+            // Temporary workaround to support Google Pay intent-based errors by surfacing the
+            // status code in the error message, matching the legacy pattern so the frontend can
+            // detect status code 409 and cleanly trigger silent fallback.
+            // TODO(https://github.com/w3c/payment-request/issues/1076): Standardize payment app
+            // error reporting and remove custom error message with wallet error code.
+            if (PaymentFeatureList.isEnabledOrExperimentalFeaturesEnabled(
+                            PaymentFeatureList.SURFACE_WALLET_ERROR_CODE_FROM_INTENT)
+                    && data != null
+                    && data.hasExtra(EXTRA_WALLET_ERROR_CODE)) {
+                int errorCode = data.getIntExtra(EXTRA_WALLET_ERROR_CODE, 0);
+                errorMessage =
+                        String.format(
+                                Locale.US,
+                                "Internal payment app returned error with status code: %d",
+                                errorCode);
+            }
+            errorCallback.onPaymentError(
+                    new PaymentAppError(
+                            PaymentEventResponseType.PAYMENT_EVENT_INTERNAL_ERROR, errorMessage));
             return;
         }
         if (resultCode != Activity.RESULT_OK) {
             errorCallback.onPaymentError(
-                    String.format(
-                            Locale.US, ErrorStrings.UNRECOGNIZED_ACTIVITY_RESULT, resultCode));
+                    new PaymentAppError(
+                            PaymentEventResponseType.PAYMENT_EVENT_INTERNAL_ERROR,
+                            String.format(
+                                    Locale.US,
+                                    ErrorStrings.UNRECOGNIZED_ACTIVITY_RESULT,
+                                    resultCode)));
             return;
         }
 
         if (data == null) {
-            errorCallback.onPaymentError(ErrorStrings.MISSING_INTENT_DATA);
+            errorCallback.onPaymentError(
+                    new PaymentAppError(
+                            PaymentEventResponseType.PAYMENT_EVENT_INTERNAL_ERROR,
+                            ErrorStrings.MISSING_INTENT_DATA));
             return;
         }
         if (data.getExtras() == null) {
-            errorCallback.onPaymentError(ErrorStrings.MISSING_INTENT_EXTRAS);
+            errorCallback.onPaymentError(
+                    new PaymentAppError(
+                            PaymentEventResponseType.PAYMENT_EVENT_INTERNAL_ERROR,
+                            ErrorStrings.MISSING_INTENT_EXTRAS));
             return;
         }
 
         String details = getPaymentIntentDetails(data);
         if (TextUtils.isEmpty(details)) {
-            errorCallback.onPaymentError(ErrorStrings.MISSING_DETAILS_FROM_PAYMENT_APP);
+            errorCallback.onPaymentError(
+                    new PaymentAppError(
+                            PaymentEventResponseType.PAYMENT_DETAILS_ABSENT,
+                            ErrorStrings.MISSING_DETAILS_FROM_PAYMENT_APP));
             return;
         }
 
         String methodName = data.getExtras().getString(EXTRA_RESPONSE_METHOD_NAME);
         if (TextUtils.isEmpty(methodName)) {
-            errorCallback.onPaymentError(ErrorStrings.MISSING_METHOD_NAME_FROM_PAYMENT_APP);
+            errorCallback.onPaymentError(
+                    new PaymentAppError(
+                            PaymentEventResponseType.PAYMENT_METHOD_NAME_EMPTY,
+                            ErrorStrings.MISSING_METHOD_NAME_FROM_PAYMENT_APP));
             return;
         }
 
@@ -180,7 +235,10 @@ public class WebPaymentIntentHelper {
         if (requestedPaymentOptions.requestShipping) {
             Bundle addressBundle = data.getExtras().getBundle(EXTRA_SHIPPING_ADDRESS);
             if (addressBundle == null || addressBundle.isEmpty()) {
-                errorCallback.onPaymentError(ErrorStrings.SHIPPING_ADDRESS_INVALID);
+                errorCallback.onPaymentError(
+                        new PaymentAppError(
+                                PaymentEventResponseType.SHIPPING_ADDRESS_INVALID,
+                                ErrorStrings.SHIPPING_ADDRESS_INVALID));
                 return;
             }
             shippingAddress = Address.createFromBundle(addressBundle);
@@ -193,7 +251,10 @@ public class WebPaymentIntentHelper {
                         ? getStringOrEmpty(data, EXTRA_RESPONSE_PAYER_NAME)
                         : "";
         if (requestedPaymentOptions.requestPayerName && TextUtils.isEmpty(payerName)) {
-            errorCallback.onPaymentError(ErrorStrings.PAYER_NAME_EMPTY);
+            errorCallback.onPaymentError(
+                    new PaymentAppError(
+                            PaymentEventResponseType.PAYER_NAME_EMPTY,
+                            ErrorStrings.PAYER_NAME_EMPTY));
             return;
         }
 
@@ -202,7 +263,10 @@ public class WebPaymentIntentHelper {
                         ? getStringOrEmpty(data, EXTRA_RESPONSE_PAYER_PHONE)
                         : "";
         if (requestedPaymentOptions.requestPayerPhone && TextUtils.isEmpty(payerPhone)) {
-            errorCallback.onPaymentError(ErrorStrings.PAYER_PHONE_EMPTY);
+            errorCallback.onPaymentError(
+                    new PaymentAppError(
+                            PaymentEventResponseType.PAYER_PHONE_EMPTY,
+                            ErrorStrings.PAYER_PHONE_EMPTY));
             return;
         }
 
@@ -211,7 +275,10 @@ public class WebPaymentIntentHelper {
                         ? getStringOrEmpty(data, EXTRA_RESPONSE_PAYER_EMAIL)
                         : "";
         if (requestedPaymentOptions.requestPayerEmail && TextUtils.isEmpty(payerEmail)) {
-            errorCallback.onPaymentError(ErrorStrings.PAYER_EMAIL_EMPTY);
+            errorCallback.onPaymentError(
+                    new PaymentAppError(
+                            PaymentEventResponseType.PAYER_EMAIL_EMPTY,
+                            ErrorStrings.PAYER_EMAIL_EMPTY));
             return;
         }
 
@@ -221,7 +288,10 @@ public class WebPaymentIntentHelper {
                         : "";
         if (requestedPaymentOptions.requestShipping
                 && TextUtils.isEmpty(selectedShippingOptionId)) {
-            errorCallback.onPaymentError(ErrorStrings.SHIPPING_OPTION_EMPTY);
+            errorCallback.onPaymentError(
+                    new PaymentAppError(
+                            PaymentEventResponseType.SHIPPING_OPTION_EMPTY,
+                            ErrorStrings.SHIPPING_OPTION_EMPTY));
             return;
         }
 

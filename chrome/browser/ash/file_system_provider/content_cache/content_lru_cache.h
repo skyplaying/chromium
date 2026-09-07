@@ -7,7 +7,7 @@
 
 #include <list>
 
-#include "base/containers/lru_cache.h"
+#include "base/containers/hashing_lru_cache.h"
 #include "base/files/file_path.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/file_system_provider/content_cache/cache_file_context.h"
@@ -22,7 +22,7 @@ class ContentLRUCache
   ContentLRUCache(const ContentLRUCache&) = delete;
   ContentLRUCache& operator=(const ContentLRUCache&) = delete;
 
-  ~ContentLRUCache();
+  ~ContentLRUCache() override;
 
   // Initialize the LRU cache in the supplied order.
   void Init(std::list<PathContextPair> initial_order);

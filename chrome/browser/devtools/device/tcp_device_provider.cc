@@ -19,6 +19,7 @@
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "net/base/completion_repeating_callback.h"
 #include "net/base/net_errors.h"
+#include "net/base/network_handle.h"
 #include "net/base/network_isolation_key.h"
 #include "net/dns/public/host_resolver_results.h"
 #include "net/dns/public/resolve_error_info.h"
@@ -44,29 +45,32 @@ class ResolveHostAndOpenSocket final : public network::ResolveHostClientBase {
   ResolveHostAndOpenSocket(const net::HostPortPair& address,
                            AndroidDeviceManager::SocketCallback callback)
       : callback_(std::move(callback)) {
-    mojo::Remote<network::mojom::HostResolver> resolver;
-    content::GetUIThreadTaskRunner({})->PostTask(
-        FROM_HERE, base::BindOnce(
-                       [](mojo::PendingReceiver<network::mojom::HostResolver>
-                              pending_receiver) {
-                         g_browser_process->system_network_context_manager()
-                             ->GetContext()
-                             ->CreateHostResolver(std::nullopt,
-                                                  std::move(pending_receiver));
-                       },
-                       resolver.BindNewPipeAndPassReceiver()));
-    // Intentionally using a HostPortPair because scheme isn't specified.
-    // Fine to use a transient NetworkAnonymizationKey here - this is for
-    // debugging, so performance doesn't matter, and it doesn't need to share a
-    // DNS cache with anything else.
-    resolver->ResolveHost(
-        network::mojom::HostResolverHost::NewHostPortPair(address),
-        net::NetworkAnonymizationKey::CreateTransient(), nullptr,
-        receiver_.BindNewPipeAndPassRemote());
+    mojo::PendingRemote<network::mojom::ResolveHostClient> response_client =
+        receiver_.BindNewPipeAndPassRemote();
     receiver_.set_disconnect_handler(base::BindOnce(
         &ResolveHostAndOpenSocket::OnComplete, base::Unretained(this),
         net::ERR_NAME_NOT_RESOLVED, net::ResolveErrorInfo(net::ERR_FAILED),
         net::AddressList(), net::HostResolverEndpointResults()));
+
+    content::GetUIThreadTaskRunner({})->PostTask(
+        FROM_HERE,
+        base::BindOnce(
+            [](const net::HostPortPair& address,
+               mojo::PendingRemote<network::mojom::ResolveHostClient>
+                   response_client) {
+              // Intentionally using a HostPortPair because scheme isn't specified.
+              // Fine to use a transient NetworkAnonymizationKey here - this is for
+              // debugging, so performance doesn't matter, and it doesn't need to
+              // share a DNS cache with anything else.
+              g_browser_process->system_network_context_manager()
+                  ->GetContext()
+                  ->ResolveHost(
+                      network::mojom::HostResolverHost::NewHostPortPair(
+                          address),
+                      net::NetworkAnonymizationKey::CreateTransient(), nullptr,
+                      std::move(response_client));
+            },
+            address, std::move(response_client)));
   }
 
  private:
@@ -83,7 +87,11 @@ class ResolveHostAndOpenSocket final : public network::ResolveHostClientBase {
       return;
     }
     std::unique_ptr<net::StreamSocket> socket(new net::TCPClientSocket(
-        resolved_addresses, nullptr, nullptr, nullptr, net::NetLogSource()));
+        resolved_addresses, nullptr, nullptr, nullptr, net::NetLogSource(),
+        // There are currently no use cases for targeting a network when
+        // forwarding via devtools. This will need to be reconsidered if a need
+        // arises.
+        net::handles::kInvalidNetworkHandle));
     net::StreamSocket* socket_ptr = socket.get();
     auto split_callback = base::SplitOnceCallback(base::BindOnce(
         &RunSocketCallback, std::move(callback_), std::move(socket)));

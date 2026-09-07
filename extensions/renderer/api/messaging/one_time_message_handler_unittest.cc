@@ -11,12 +11,10 @@
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/gmock_callback_support.h"
-#include "base/test/with_feature_override.h"
 #include "extensions/common/api/messaging/message.h"
 #include "extensions/common/api/messaging/port_id.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_builder.h"
-#include "extensions/common/extension_features.h"
 #include "extensions/common/mojom/context_type.mojom.h"
 #include "extensions/common/mojom/message_port.mojom-shared.h"
 #include "extensions/renderer/api/messaging/message_target.h"
@@ -29,7 +27,11 @@
 #include "extensions/renderer/native_extension_bindings_system.h"
 #include "extensions/renderer/native_extension_bindings_system_test_base.h"
 #include "extensions/renderer/script_context.h"
+#include "gin/arguments.h"
+#include "gin/converter.h"
 #include "gin/data_object_builder.h"
+#include "gin/function_template.h"
+#include "gin/public/context_holder.h"
 
 namespace extensions {
 
@@ -102,8 +104,7 @@ class OneTimeMessageHandlerTest : public NativeExtensionBindingsSystemUnittest {
 TEST_F(OneTimeMessageHandlerTest, SendMessageAndDontExpectReply) {
   const PortId port_id(script_context()->context_id(), 0, true,
                        mojom::SerializationFormat::kJson);
-  Message message("\"Hello\"", mojom::SerializationFormat::kJson,
-                  /*user_gesture=*/false);
+  Message message("\"Hello\"", /*user_gesture=*/false);
 
   v8::HandleScope handle_scope(isolate());
 
@@ -160,8 +161,7 @@ TEST_F(OneTimeMessageHandlerTest, SendMessageAndDontExpectReply) {
 TEST_F(OneTimeMessageHandlerTest, SendMessageAndExpectCallbackReply) {
   const PortId port_id(script_context()->context_id(), 0, true,
                        mojom::SerializationFormat::kJson);
-  Message message("\"Hello\"", mojom::SerializationFormat::kJson,
-                  /*user_gesture=*/false);
+  Message message("\"Hello\"", /*user_gesture=*/false);
 
   v8::HandleScope handle_scope(isolate());
   v8::Local<v8::Context> context = MainContext();
@@ -228,8 +228,7 @@ TEST_F(OneTimeMessageHandlerTest, SendMessageAndExpectCallbackReply) {
                   /*close_channel=*/true,
                   /*error_message=*/testing::Eq(std::nullopt)))
       .WillOnce(base::test::RunClosure(run_loop->QuitClosure()));
-  Message reply("\"Hi\"", mojom::SerializationFormat::kJson,
-                /*user_gesture=*/false);
+  Message reply("\"Hi\"", /*user_gesture=*/false);
   message_handler()->DeliverMessage(script_context(), std::move(reply),
                                     port_id);
   run_loop->Run();
@@ -248,8 +247,7 @@ TEST_F(OneTimeMessageHandlerTest, SendMessageAndExpectCallbackReply) {
 TEST_F(OneTimeMessageHandlerTest, SendMessageAndExpectPromiseReply) {
   const PortId port_id(script_context()->context_id(), 0, true,
                        mojom::SerializationFormat::kJson);
-  Message message("\"Hello\"", mojom::SerializationFormat::kJson,
-                  /*user_gesture=*/false);
+  Message message("\"Hello\"", /*user_gesture=*/false);
 
   v8::HandleScope handle_scope(isolate());
   v8::Local<v8::Context> context = MainContext();
@@ -309,8 +307,7 @@ TEST_F(OneTimeMessageHandlerTest, SendMessageAndExpectPromiseReply) {
                   /*close_channel=*/true,
                   /*error_message=*/testing::Eq(std::nullopt)))
       .WillOnce(base::test::RunClosure(run_loop.QuitClosure()));
-  Message reply("\"Hi\"", mojom::SerializationFormat::kJson,
-                /*user_gesture=*/false);
+  Message reply("\"Hi\"", /*user_gesture=*/false);
   message_handler()->DeliverMessage(script_context(), std::move(reply),
                                     port_id);
   run_loop.Run();
@@ -330,8 +327,7 @@ TEST_F(OneTimeMessageHandlerTest, SendMessageAndExpectPromiseReply) {
 TEST_F(OneTimeMessageHandlerTest, DisconnectOpenerCallback) {
   const PortId port_id(script_context()->context_id(), 0, true,
                        mojom::SerializationFormat::kJson);
-  Message message("\"Hello\"", mojom::SerializationFormat::kJson,
-                  /*user_gesture=*/false);
+  Message message("\"Hello\"", /*user_gesture=*/false);
 
   v8::HandleScope handle_scope(isolate());
   v8::Local<v8::Context> context = MainContext();
@@ -372,8 +368,7 @@ TEST_F(OneTimeMessageHandlerTest, DisconnectOpenerCallback) {
 TEST_F(OneTimeMessageHandlerTest, DisconnectOpenerPromise) {
   const PortId port_id(script_context()->context_id(), 0, true,
                        mojom::SerializationFormat::kJson);
-  Message message("\"Hello\"", mojom::SerializationFormat::kJson,
-                  /*user_gesture=*/false);
+  Message message("\"Hello\"", /*user_gesture=*/false);
 
   v8::HandleScope handle_scope(isolate());
   v8::Local<v8::Context> context = MainContext();
@@ -460,8 +455,7 @@ TEST_F(OneTimeMessageHandlerTest, DeliverMessageToReceiverWithNoReply) {
   base::RunLoop run_loop;
   EXPECT_CALL(mock_message_port_host, ResponsePending())
       .WillOnce(base::test::RunClosure(run_loop.QuitClosure()));
-  Message message("\"Hi\"", mojom::SerializationFormat::kJson,
-                  /*user_gesture=*/false);
+  Message message("\"Hi\"", /*user_gesture=*/false);
   message_handler()->DeliverMessage(script_context(), std::move(message),
                                     port_id);
 
@@ -515,8 +509,7 @@ TEST_F(OneTimeMessageHandlerTest, DeliverMessageToReceiverAndReply) {
   mock_message_port_host.BindReceiver(std::move(message_port_host_receiver));
   EXPECT_TRUE(message_handler()->HasPort(script_context(), port_id));
 
-  Message message("\"Hi\"", mojom::SerializationFormat::kJson,
-                  /*user_gesture=*/false);
+  Message message("\"Hi\"", /*user_gesture=*/false);
 
   base::RunLoop run_loop;
   // When the listener replies, we should post the reply to the message port and
@@ -535,6 +528,157 @@ TEST_F(OneTimeMessageHandlerTest, DeliverMessageToReceiverAndReply) {
   ::testing::Mock::VerifyAndClearExpectations(ipc_message_sender());
   ::testing::Mock::VerifyAndClearExpectations(&mock_message_port_host);
   EXPECT_FALSE(message_handler()->HasPort(script_context(), port_id));
+}
+
+// Tests delivering a message to an `onMessage` listener that returns a rejected
+// promise. The message channel should be closed with an expected error message.
+TEST_F(OneTimeMessageHandlerTest, DeliverMessageToReceiverAndPromiseRejects) {
+  v8::HandleScope handle_scope(isolate());
+  v8::Local<v8::Context> context = MainContext();
+
+  // Register an `onMessage` listener once that delegates to
+  // `globalThis.testListener`. This allows multiple test cases in the loop to
+  // execute sequentially in the same context without registering multiple
+  // listeners or needing to remove them.
+  constexpr char kRegisterDelegatingListener[] =
+      "(function() {\n"
+      "  chrome.runtime.onMessage.addListener(\n"
+      "      function(message, sender, reply) {\n"
+      "    return globalThis.testListener(message, sender, reply);\n"
+      "  });\n"
+      "})";
+  v8::Local<v8::Function> add_listener =
+      FunctionFromString(context, kRegisterDelegatingListener);
+  RunFunctionOnGlobal(add_listener, context, /*argc=*/0, /*argv=*/nullptr);
+
+  struct PromiseRejectionTestCase {
+    const char* test_name;
+    const char* listener_script;
+    const char* expected_error_message;
+  };
+  const PromiseRejectionTestCase kTestCases[] = {
+      {
+          /*test_name=*/"Error",
+          /*listener_script=*/
+          "(function() {\n"
+          "  globalThis.testListener = function(message, sender, reply) {\n"
+          "    return Promise.reject(new Error('test reject'));\n"
+          "  };\n"
+          "})",
+          /*expected_error_message=*/"test reject",
+      },
+      {
+          /*test_name=*/"SubclassError",
+          /*listener_script=*/
+          "(function() {\n"
+          "  globalThis.testListener = function(message, sender, reply) {\n"
+          "    return Promise.reject(new TypeError('type error reject'));\n"
+          "  };\n"
+          "})",
+          /*expected_error_message=*/"type error reject",
+      },
+      {
+          /*test_name=*/"EmptyError",
+          /*listener_script=*/
+          "(function() {\n"
+          "  globalThis.testListener = function(message, sender, reply) {\n"
+          "    return Promise.reject(new Error(''));\n"
+          "  };\n"
+          "})",
+          /*expected_error_message=*/"",
+      },
+      {
+          /*test_name=*/"ErrorWithoutMessageArgument",
+          /*listener_script=*/
+          "(function() {\n"
+          "  globalThis.testListener = function(message, sender, reply) {\n"
+          "    return Promise.reject(new Error());\n"
+          "  };\n"
+          "})",
+          /*expected_error_message=*/"",
+      },
+      {
+          /*test_name=*/"ErrorThrowingGetter",
+          /*listener_script=*/
+          "(function() {\n"
+          "  globalThis.testListener = function(message, sender, reply) {\n"
+          "    const err = new Error();\n"
+          "    Object.defineProperty(err, 'message', {\n"
+          "      get() { throw new Error('getter throw'); }\n"
+          "    });\n"
+          "    return Promise.reject(err);\n"
+          "  };\n"
+          "})",
+          /*expected_error_message=*/
+          "A runtime.onMessage listener's promise rejected without an Error",
+      },
+      {
+          /*test_name=*/"NonError",
+          /*listener_script=*/
+          "(function() {\n"
+          "  globalThis.testListener = function(message, sender, reply) {\n"
+          "    return Promise.reject('non-error reject');\n"
+          "  };\n"
+          "})",
+          /*expected_error_message=*/
+          "A runtime.onMessage listener's promise rejected without an Error",
+      },
+  };
+
+  for (const auto& test_case : kTestCases) {
+    SCOPED_TRACE(test_case.test_name);
+
+    // Update `globalThis.testListener` with the test case implementation.
+    v8::Local<v8::Function> set_test_listener =
+        FunctionFromString(context, test_case.listener_script);
+    RunFunctionOnGlobal(set_test_listener, context, /*argc=*/0,
+                        /*argv=*/nullptr);
+
+    // Set up the receiver message port and bind `mock_message_port_host`.
+    base::UnguessableToken other_context_id = base::UnguessableToken::Create();
+    const PortId port_id(other_context_id, /*port_number=*/0,
+                         /*is_opener=*/false,
+                         mojom::SerializationFormat::kJson);
+    mojo::PendingAssociatedRemote<mojom::MessagePort> message_port_remote;
+    mojo::PendingAssociatedReceiver<mojom::MessagePortHost>
+        message_port_host_receiver;
+    MockMessagePortHost mock_message_port_host;
+
+    EXPECT_FALSE(message_handler()->HasPort(script_context(), port_id));
+    v8::Local<v8::Object> sender = v8::Object::New(isolate());
+    message_handler()->AddReceiverForTesting(
+        script_context(), port_id, sender, messaging_util::kOnMessageEvent,
+        message_port_remote, message_port_host_receiver);
+    message_port_remote.EnableUnassociatedUsage();
+    message_port_host_receiver.EnableUnassociatedUsage();
+    mock_message_port_host.BindReceiver(std::move(message_port_host_receiver));
+    EXPECT_TRUE(message_handler()->HasPort(script_context(), port_id));
+
+    Message message("\"Hi\"", /*user_gesture=*/false);
+
+    // Expect `OneTimeMessageHandler` to close the port with the expected error
+    // message without an `Uncaught Error` prefix.
+    base::RunLoop port_close_wait_loop;
+    EXPECT_CALL(mock_message_port_host,
+                ClosePort(/*close_channel=*/true,
+                          /*error_message=*/testing::Optional(
+                              std::string(test_case.expected_error_message))))
+        .WillOnce(base::test::RunClosure(port_close_wait_loop.QuitClosure()));
+
+    // Deliver the message to the listener, which triggers the promise
+    // rejection.
+    message_handler()->DeliverMessage(script_context(), std::move(message),
+                                      port_id);
+    {
+      SCOPED_TRACE("waiting for message port to close");
+      port_close_wait_loop.Run();
+    }
+
+    // Verify that all expectations are met and the port is no longer tracked.
+    testing::Mock::VerifyAndClearExpectations(ipc_message_sender());
+    testing::Mock::VerifyAndClearExpectations(&mock_message_port_host);
+    EXPECT_FALSE(message_handler()->HasPort(script_context(), port_id));
+  }
 }
 
 // Tests that nothing breaks when trying to call the reply callback multiple
@@ -570,8 +714,7 @@ TEST_F(OneTimeMessageHandlerTest, TryReplyingMultipleTimes) {
   message_port_remote.EnableUnassociatedUsage();
   message_port_host_receiver.EnableUnassociatedUsage();
   mock_message_port_host.BindReceiver(std::move(message_port_host_receiver));
-  Message message("\"Hi\"", mojom::SerializationFormat::kJson,
-                  /*user_gesture=*/false);
+  Message message("\"Hi\"", /*user_gesture=*/false);
 
   EXPECT_CALL(mock_message_port_host, ResponsePending());
   message_handler()->DeliverMessage(script_context(), std::move(message),
@@ -644,8 +787,7 @@ TEST_F(OneTimeMessageHandlerTest, SendMessageInListener) {
   // closed.
   const PortId listener_created_port_id(script_context()->context_id(), 0, true,
                                         mojom::SerializationFormat::kJson);
-  Message listener_sent_message("\"foo\"", mojom::SerializationFormat::kJson,
-                                /*user_gesture=*/false);
+  Message listener_sent_message("\"foo\"", /*user_gesture=*/false);
   MessageTarget target(MessageTarget::ForExtension(extension()->id()));
   MockMessagePortHost listener_mock_message_port_host;
   base::RunLoop run_loop;
@@ -675,8 +817,7 @@ TEST_F(OneTimeMessageHandlerTest, SendMessageInListener) {
                   /*error_message=*/testing::Eq(std::nullopt)))
       .WillOnce(base::test::RunClosure(run_loop.QuitClosure()));
 
-  Message message("\"Hi\"", mojom::SerializationFormat::kJson,
-                  /*user_gesture=*/false);
+  Message message("\"Hi\"", /*user_gesture=*/false);
   message_handler()->DeliverMessage(script_context(), std::move(message),
                                     original_port_id);
   run_loop.Run();
@@ -705,8 +846,7 @@ TEST_F(OneTimeMessageHandlerTest, SendMessageInCallback) {
   // a reply.
   const PortId original_port_id(script_context()->context_id(), 0, true,
                                 mojom::SerializationFormat::kJson);
-  Message original_message("\"foo\"", mojom::SerializationFormat::kJson,
-                           /*user_gesture=*/false);
+  Message original_message("\"foo\"", /*user_gesture=*/false);
   MessageTarget target(MessageTarget::ForExtension(extension()->id()));
   MockMessagePortHost mock_message_port_host;
   auto run_loop = std::make_unique<base::RunLoop>();
@@ -767,8 +907,7 @@ TEST_F(OneTimeMessageHandlerTest, SendMessageInCallback) {
                   /*close_channel=*/true,
                   /*error_message=*/testing::Eq(std::nullopt)))
       .WillOnce(base::test::RunClosure(run_loop->QuitClosure()));
-  Message reply("\"reply\"", mojom::SerializationFormat::kJson,
-                /*user_gesture=*/false);
+  Message reply("\"reply\"", /*user_gesture=*/false);
   message_handler()->DeliverMessage(script_context(), std::move(reply),
                                     original_port_id);
   run_loop->Run();
@@ -777,23 +916,13 @@ TEST_F(OneTimeMessageHandlerTest, SendMessageInCallback) {
   ::testing::Mock::VerifyAndClearExpectations(&mock_message_port_host1);
 }
 
-class PolyfillSupportOneTimeMessageHandlerTest
-    : public base::test::WithFeatureOverride,
-      public OneTimeMessageHandlerTest {
- public:
-  PolyfillSupportOneTimeMessageHandlerTest()
-      : base::test::WithFeatureOverride(
-            extensions_features::kExtensionBrowserNamespaceAndPolyfillSupport) {
-  }
-};
+using PolyfillSupportOneTimeMessageHandlerTest = OneTimeMessageHandlerTest;
 
 // runtime.onMessage requires that a listener indicate it will send an
-// asynchronous response to a message. It can do this by either by returning
-// `true` or returning a promise if
-// `extensions_features::kExtensionBrowserNamespaceAndPolyfillSupport` is
-// enabled. Verify that we close the port if the listeners don't indicate an
-// async response.
-TEST_P(PolyfillSupportOneTimeMessageHandlerTest,
+// asynchronous response to a message. It can do this by either returning
+// `true` or returning a promise. Verify that we close the port if the
+// listeners don't indicate an async response.
+TEST_F(PolyfillSupportOneTimeMessageHandlerTest,
        ChannelClosedIfAsyncNotIndicated) {
   v8::HandleScope handle_scope(isolate());
   v8::Local<v8::Context> context = MainContext();
@@ -806,8 +935,8 @@ TEST_P(PolyfillSupportOneTimeMessageHandlerTest,
     RunFunctionOnGlobal(add_listener, context, 0, nullptr);
   };
 
-  // Add listeners that return truthy values, but not explicitly `true` (or a
-  // promise if the polyfill support feature is enabled).
+  // Add listeners that return truthy values, but not explicitly `true` or a
+  // promise.
   register_listener("function(message, reply, sender) { }");
   register_listener("function(message, reply, sender) { return {}; }");
 
@@ -834,8 +963,7 @@ TEST_P(PolyfillSupportOneTimeMessageHandlerTest,
 
   // Dispatch the message. Since none of these listeners return `true`, the port
   // should close.
-  Message message("\"Hi\"", mojom::SerializationFormat::kJson,
-                  /*user_gesture=*/false);
+  Message message("\"Hi\"", /*user_gesture=*/false);
   EXPECT_CALL(mock_message_port_host,
               ClosePort(
                   /*close_channel=*/false,
@@ -874,17 +1002,10 @@ TEST_P(PolyfillSupportOneTimeMessageHandlerTest,
   ::testing::Mock::VerifyAndClearExpectations(&mock_message_port_host);
 }
 
-INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(
-    PolyfillSupportOneTimeMessageHandlerTest);
-
 class OneTimeMessageHandlerGarbageCollectionTest
-    : public base::test::WithFeatureOverride,
-      public OneTimeMessageHandlerTest {
+    : public OneTimeMessageHandlerTest {
  public:
-  OneTimeMessageHandlerGarbageCollectionTest()
-      : WithFeatureOverride(
-            extensions_features::kExtensionBrowserNamespaceAndPolyfillSupport) {
-  }
+  OneTimeMessageHandlerGarbageCollectionTest() = default;
 
   OneTimeMessageHandlerGarbageCollectionTest(
       const OneTimeMessageHandlerGarbageCollectionTest&) = delete;
@@ -929,8 +1050,7 @@ void OneTimeMessageHandlerGarbageCollectionTest::RunTest(
   message_port_host_receiver.EnableUnassociatedUsage();
   mock_message_port_host.BindReceiver(std::move(message_port_host_receiver));
 
-  Message message("\"Hi\"", mojom::SerializationFormat::kJson,
-                  /*user_gesture=*/false);
+  Message message("\"Hi\"", /*user_gesture=*/false);
   base::RunLoop close_port_run_loop;
 
   EXPECT_CALL(mock_message_port_host, ResponsePending());
@@ -962,7 +1082,7 @@ void OneTimeMessageHandlerGarbageCollectionTest::RunTest(
 // Tests that when a listener indicates an asynchronous response by returning
 // true, but never responds, we cleanup the C++ callback data stored when v8
 // garbage collects the v8 functions that would've called the C++ callbacks.
-TEST_P(OneTimeMessageHandlerGarbageCollectionTest,
+TEST_F(OneTimeMessageHandlerGarbageCollectionTest,
        DelayedCallbackCleanupOnReturnTrue) {
   constexpr char kRegisterListener[] = R"(
     (function() {
@@ -977,18 +1097,12 @@ TEST_P(OneTimeMessageHandlerGarbageCollectionTest,
           /*pending_callbacks_before_collection=*/1);
 }
 
-// A version of OneTimeMessageHandlerGarbageCollectionTest that only runs with
-// promise support for testing functionality that isn't relevant when the
-// feature is disabled.
-using OneTimeMessageHandlerGarbageCollectionTestWithPromises =
-    OneTimeMessageHandlerGarbageCollectionTest;
-
 // Tests that when a listener indicates an asynchronous response by returning
 // a promise, but the promise never settles, we cleanup the C++ callback data
 // stored when v8 garbage collects the v8 functions that would've called the
-// C++ callbacks. The promise feature being enabled means the returned promise
-// is treated as an asynchronous reply similar to returning true.
-TEST_P(OneTimeMessageHandlerGarbageCollectionTestWithPromises,
+// C++ callbacks. Returning a promise is treated as an asynchronous reply
+// similar to returning `true`.
+TEST_F(OneTimeMessageHandlerGarbageCollectionTest,
        DelayedCallbackCleanupOnReturnPromise) {
   constexpr char kRegisterListener[] = R"(
     (function() {
@@ -998,20 +1112,105 @@ TEST_P(OneTimeMessageHandlerGarbageCollectionTestWithPromises,
       });
     });
   )";
-  // When the listener returns a promise and the feature is enabled, the
-  // port is kept open, and two callbacks are created (one for promise
-  // resolve, one for promise reject).
+  // When the listener returns a promise, the port is kept open, and two
+  // callbacks are created (one for promise resolve, one for promise reject).
   RunTest(kRegisterListener, /*pending_callbacks_before_collection=*/2);
 }
 
 // TODO(crbug.com/40753031): Test callbacks cleanup up when a synchronous and
 // asynchronously reply happens from the listener.
 
-INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(
-    OneTimeMessageHandlerGarbageCollectionTest);
+// Verifies that destroying the OneTimeMessageHandler during a reply callback
+// doesn't cause a crash.
+// Partial regression test for https://crbug.com/480978108.
+//
+// Note: This test simulates the destruction of the OneTimeMessageHandler during
+// the reply callback since unfortunately there doesn't seem to be a way to
+// feasibly reproduce the destruction at the exact right time in an automated
+// test. In production, this can happen if a one time message reply callback
+// triggers a nested message loop (debugger halts reply callback, etc.) and then
+// the worker thread processes a task to destroy the worker (and thus the
+// `OneTimeMessageHandler`). This could happen due to idle timeout, extension
+// reload, etc. While this test artificially destroys the handler, it exercises
+// the same safety check that prevents a crash when we try to close the message
+// port (in `OneTimeMessageHandler::DeliverReplyToOpener`) during this brief
+// post-worker-destruction window
+TEST_F(OneTimeMessageHandlerTest, ReplyCallbackDestroysOneTimeMessageHandler) {
+  const PortId port_id(script_context()->context_id(), /*port_number=*/0,
+                       /*is_opener=*/true, mojom::SerializationFormat::kJson);
+  Message message("\"Hello\"", /*user_gesture=*/false);
 
-INSTANTIATE_TEST_SUITE_P(All,
-                         OneTimeMessageHandlerGarbageCollectionTestWithPromises,
-                         testing::Values(true));
+  v8::HandleScope handle_scope(isolate());
+  v8::Local<v8::Context> context = MainContext();
+
+  std::unique_ptr<OneTimeMessageHandler> handler =
+      std::make_unique<OneTimeMessageHandler>(bindings_system());
+
+  // Bind a function that destroys the handler.
+  auto destroy_handler = [](std::unique_ptr<OneTimeMessageHandler>* handler_ptr,
+                            gin::Arguments* arguments) {
+    handler_ptr->reset();
+  };
+
+  v8::Local<v8::FunctionTemplate> func_tmpl = gin::CreateFunctionTemplate(
+      isolate(),
+      base::BindRepeating(destroy_handler, base::Unretained(&handler)));
+
+  v8::Local<v8::Function> func =
+      func_tmpl->GetFunction(context).ToLocalChecked();
+  func->SetName(gin::StringToSymbol(isolate(), "destroyHandler"));
+
+  context->Global()
+      ->Set(context, gin::StringToSymbol(isolate(), "destroyHandler"), func)
+      .Check();
+
+  constexpr char kScript[] = "(function(reply) { destroyHandler(); })";
+  v8::Local<v8::Function> callback = FunctionFromString(context, kScript);
+
+  MessageTarget target(MessageTarget::ForExtension(extension()->id()));
+  MockMessagePortHost mock_message_port_host;
+  EXPECT_CALL(*ipc_message_sender(),
+              SendOpenMessageChannel(script_context(), port_id, target,
+                                     mojom::ChannelType::kSendMessage,
+                                     messaging_util::kSendMessageChannel,
+                                     testing::_, testing::_))
+      .WillOnce([&mock_message_port_host](
+                    ScriptContext* script_context, const PortId& port_id,
+                    const MessageTarget& target,
+                    mojom::ChannelType channel_type,
+                    const std::string& channel_name,
+                    mojo::PendingAssociatedRemote<mojom::MessagePort> port,
+                    mojo::PendingAssociatedReceiver<mojom::MessagePortHost>
+                        port_host) {
+        port.EnableUnassociatedUsage();
+        port_host.EnableUnassociatedUsage();
+        mock_message_port_host.BindReceiver(std::move(port_host));
+      });
+  EXPECT_CALL(mock_message_port_host,
+              PostMessage(testing::Property(&Message::data, message.data())));
+
+  mojo::PendingAssociatedRemote<mojom::MessagePort> message_port;
+  mojo::PendingAssociatedReceiver<mojom::MessagePortHost>
+      message_port_host_receiver;
+  messaging_service()->BindPortForTesting(
+      script_context(), port_id, message_port, message_port_host_receiver);
+
+  handler->SendMessage(script_context(), port_id, target,
+                       mojom::ChannelType::kSendMessage, std::move(message),
+                       binding::AsyncResponseType::kCallback, callback,
+                       &mock_message_port_host, std::move(message_port),
+                       std::move(message_port_host_receiver));
+
+  ::testing::Mock::VerifyAndClearExpectations(ipc_message_sender());
+  ::testing::Mock::VerifyAndClearExpectations(&mock_message_port_host);
+
+  Message reply("\"Hi\"", /*user_gesture=*/false);
+
+  // DeliverMessage will trigger the crash if the fix is not present.
+  // Note: handler might be destroyed during this call, so use a raw pointer
+  // to invoke it (which simulates 'this').
+  OneTimeMessageHandler* handler_raw = handler.get();
+  handler_raw->DeliverMessage(script_context(), std::move(reply), port_id);
+}
 
 }  // namespace extensions

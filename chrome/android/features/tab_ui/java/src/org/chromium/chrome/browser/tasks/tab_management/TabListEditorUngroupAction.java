@@ -12,7 +12,8 @@ import androidx.appcompat.content.res.AppCompatResources;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
+import org.chromium.chrome.browser.tabmodel.TabModel;
+import org.chromium.chrome.browser.tasks.tab_management.TabListMediator.TabListLayoutType;
 import org.chromium.chrome.tab_ui.R;
 import org.chromium.components.browser_ui.util.motion.MotionEventInfo;
 
@@ -63,13 +64,13 @@ public class TabListEditorUngroupAction extends TabListEditorAction {
             List<Tab> tabsToUngroup,
             List<String> tabGroupSyncIds,
             @Nullable MotionEventInfo triggeringMotion) {
-        assert !editorSupportsActionOnRelatedTabs()
-                : "Ungrouping is not supported when actions apply to related tabs.";
+        assert getLayoutType() != TabListLayoutType.GROUPED
+                : "Ungrouping is only supported when child tabs are displayed.";
 
         if (tabsToUngroup == null || tabsToUngroup.isEmpty()) return false;
 
-        TabGroupModelFilter filter = getTabGroupModelFilter();
-        filter.getTabUngrouper()
+        TabModel tabModel = getTabModel();
+        tabModel.getTabUngrouper()
                 .ungroupTabs(tabsToUngroup, /* trailing= */ true, /* allowDialog= */ true);
 
         return true;

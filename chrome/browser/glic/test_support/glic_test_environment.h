@@ -19,7 +19,6 @@
 #include "chrome/browser/profiles/profile_keyed_service_factory.h"
 #include "chrome/browser/profiles/profile_observer.h"
 #include "chrome/browser/ui/ui_features.h"
-#include "chrome/common/chrome_features.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "url/gurl.h"
 
@@ -47,6 +46,10 @@ struct GlicTestEnvironmentConfig {
   bool force_signin_and_glic_capability = true;
   // The default FRE status saved to prefs after profile creation.
   std::optional<prefs::FreStatus> fre_status = prefs::FreStatus::kCompleted;
+  // If set, overrides the default result of cookie sync.
+  std::optional<bool> override_cookie_sync_result;
+  // The hosted domain of the default account. Empty for consumer accounts.
+  std::string default_account_hosted_domain;
 };
 
 namespace internal {
@@ -113,9 +116,7 @@ class GlicTestEnvironment : public ProfileObserver {
   void SetGlicPagePath(const std::string& path);
   void AddMockGlicQueryParam(const std::string_view& key,
                              const std::string_view& value);
-  void SetGlicFreUrlOverride(const GURL& url);
   GURL GetGuestURL() const;
-  const std::optional<GURL>& GetGlicFreUrl() const;
 
  private:
   void OnWillCreateBrowserContextKeyedServices(
@@ -129,11 +130,12 @@ class GlicTestEnvironment : public ProfileObserver {
   internal::GlicTestEnvironmentShared shared_;
   std::unique_ptr<IdentityTestEnvironmentProfileAdaptor> adaptor_;
 
+  bool StartTestServerIfNeeded(
+      net::test_server::EmbeddedTestServer* http_server);
+
   // URL configuration state.
   std::string glic_page_path_ = "/glic/test_client/index.html";
   std::map<std::string, std::string> mock_glic_query_params_;
-  std::optional<GURL> glic_fre_url_;
-  std::optional<GURL> glic_fre_url_override_;
   GURL guest_url_;
   net::test_server::EmbeddedTestServerHandle test_server_handle_;
 };
@@ -156,13 +158,11 @@ class GlicTestEnvironmentService : public KeyedService {
   // default, this class replaces this step with an immediately fake success.
   // Change the result of this operation here.
   void SetResultForFutureCookieSync(bool result);
-  void SetResultForFutureCookieSyncInFre(bool result);
 
  private:
   raw_ptr<Profile> profile_;
   // Null during teardown.
   base::WeakPtr<internal::TestCookieSynchronizer> cookie_synchronizer_;
-  base::WeakPtr<internal::TestCookieSynchronizer> fre_cookie_synchronizer_;
 };
 
 // For testing Glic in unit tests.

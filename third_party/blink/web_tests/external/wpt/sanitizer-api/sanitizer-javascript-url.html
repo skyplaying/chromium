@@ -17,11 +17,6 @@
 | <area>
 
 #data
-<base href="javascript:alert(1)"></base>
-#document
-| <base>
-
-#data
 <button formaction="javascript:alert(1)"></button>
 #document
 | <button>
@@ -83,19 +78,19 @@
 | <svg svg>
 |   <svg animate>
 
-
 #data
 <svg><animateMotion attributeName="href"></svg>
 #document
 | <svg svg>
 |   <svg animateMotion>
+|     attributeName="href"
 
 #data
 <svg><animateMotion attributeName="xlink:href"></svg>
 #document
 | <svg svg>
 |   <svg animateMotion>
-
+|     attributeName="xlink:href"
 
 #data
 <svg><animateTransform attributeName="href"></svg>
@@ -143,6 +138,49 @@
 | <svg svg>
 |   <svg set>
 |     attributeName=" href "
+</script>
+
+<script id="url-normalization" type="html5lib-testcases">
+#data
+<a href="JaVaScRiPt:alert(1)"></a>
+#document
+| <a>
+
+#data
+<a href=" javascript:alert(1)"></a>
+#document
+| <a>
+
+#data
+<a href="&#10;javascript:alert(1)"></a>
+#document
+| <a>
+
+#data
+<a href="java&#9;script:alert(1)"></a>
+#document
+| <a>
+
+#data
+<a href="java&#10;script:alert(1)"></a>
+#document
+| <a>
+
+#data
+<a href="java&#13;script:alert(1)"></a>
+#document
+| <a>
+
+#data
+<a href="javascript&#58;alert(1)"></a>
+#document
+| <a>
+
+#data
+<svg><a xlink:href="java&#9;script:alert(1)"></a></svg>
+#document
+| <svg svg>
+|   <svg a>
 </script>
 
 <script>

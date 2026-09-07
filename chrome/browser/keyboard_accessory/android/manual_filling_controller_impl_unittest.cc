@@ -14,17 +14,14 @@
 #include "chrome/browser/keyboard_accessory/android/accessory_controller.h"
 #include "chrome/browser/keyboard_accessory/android/accessory_sheet_data.h"
 #include "chrome/browser/keyboard_accessory/android/accessory_sheet_enums.h"
-#include "chrome/browser/keyboard_accessory/android/affiliated_plus_profiles_cache.h"
 #include "chrome/browser/keyboard_accessory/test_utils/android/mock_address_accessory_controller.h"
+#include "chrome/browser/keyboard_accessory/test_utils/android/mock_at_memory_accessory_controller.h"
 #include "chrome/browser/keyboard_accessory/test_utils/android/mock_password_accessory_controller.h"
 #include "chrome/browser/keyboard_accessory/test_utils/android/mock_payment_method_accessory_controller.h"
-#include "chrome/browser/plus_addresses/plus_address_service_factory.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "components/autofill/content/browser/test_autofill_client_injector.h"
 #include "components/autofill/content/browser/test_content_autofill_client.h"
-#include "components/plus_addresses/core/browser/fake_plus_address_service.h"
-#include "components/plus_addresses/core/browser/plus_address_types.h"
-#include "components/plus_addresses/core/common/features.h"
+#include "components/autofill/core/common/autofill_features.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -36,7 +33,6 @@ using autofill::AccessoryTabType;
 using autofill::TestAutofillClientInjector;
 using autofill::TestContentAutofillClient;
 using autofill::mojom::FocusedFieldType;
-using plus_addresses::FakePlusAddressService;
 using testing::_;
 using testing::AnyNumber;
 using testing::AtLeast;
@@ -47,12 +43,12 @@ using testing::SaveArg;
 using FillingSource = ManualFillingController::FillingSource;
 using IsFillingSourceAvailable = AccessoryController::IsFillingSourceAvailable;
 using WaitForKeyboard = ManualFillingViewInterface::WaitForKeyboard;
-using IsCredentialFieldOrHasAutofillSuggestions =
-    ManualFillingViewInterface::IsCredentialFieldOrHasAutofillSuggestions;
+using ShouldShowOnLargeFormFactor =
+    ManualFillingViewInterface::ShouldShowOnLargeFormFactor;
+using IsContentEditable = ManualFillingViewInterface::IsContentEditable;
 
 AccessorySheetData filled_passwords_sheet() {
-  return AccessorySheetData::Builder(AccessoryTabType::PASSWORDS, u"Pwds",
-                                     /*plus_address_title=*/std::u16string())
+  return AccessorySheetData::Builder(AccessoryTabType::PASSWORDS, u"Pwds")
       .AddUserInfo("example.com", autofill::UserInfo::IsExactMatch(true))
       .AppendField(AccessorySuggestionType::kCredentialUsername, u"Ben", u"Ben",
                    false, true)
@@ -63,48 +59,38 @@ AccessorySheetData filled_passwords_sheet() {
 
 AccessorySheetData populate_sheet(AccessoryTabType type) {
   constexpr char16_t kTitle[] = u"Suggestions available!";
-  return AccessorySheetData::Builder(type, kTitle,
-                                     /*plus_address_title=*/std::u16string())
-      .AddUserInfo()
-      .Build();
+  return AccessorySheetData::Builder(type, kTitle).AddUserInfo().Build();
 }
 
 std::vector<uint8_t> test_passkey_id() {
   return {23, 24, 25, 26, 27};
 }
 
-std::unique_ptr<KeyedService> BuildFakePlusAddressService(
-    content::BrowserContext* context) {
-  return std::make_unique<FakePlusAddressService>();
-}
-
 constexpr autofill::FieldRendererId kFocusedFieldId(123);
-
-}  // namespace
 
 // Fixture that tests the manual filling experience with the most recent version
 // of the keyboard accessory and all its fallback sheets.
 class ManualFillingControllerTest : public ChromeRenderViewHostTestHarness {
  public:
-
   void SetUp() override {
     ChromeRenderViewHostTestHarness::SetUp();
 
-    PlusAddressServiceFactory::GetInstance()->SetTestingFactory(
-        GetBrowserContext(), base::BindRepeating(&BuildFakePlusAddressService));
-
     EXPECT_CALL(mock_pwd_controller_, RegisterFillingSourceObserver)
         .WillOnce(SaveArg<0>(&pwd_source_observer_));
-    EXPECT_CALL(mock_pwd_controller_, RegisterPlusProfilesProvider);
+
     EXPECT_CALL(mock_payment_method_controller_, RegisterFillingSourceObserver)
         .WillOnce(SaveArg<0>(&cc_source_observer_));
     EXPECT_CALL(mock_address_controller_, RegisterFillingSourceObserver)
         .WillOnce(SaveArg<0>(&address_source_observer_));
-    EXPECT_CALL(mock_address_controller_, RegisterPlusProfilesProvider);
+    EXPECT_CALL(mock_at_memory_controller_, RegisterFillingSourceObserver)
+        .WillOnce(SaveArg<0>(&at_memory_source_observer_));
+    ON_CALL(mock_at_memory_controller_, IsAtMemoryAvailable)
+        .WillByDefault(Return(true));
     ManualFillingControllerImpl::CreateForWebContentsForTesting(
         web_contents(), mock_pwd_controller_.AsWeakPtr(),
         mock_address_controller_.AsWeakPtr(),
         mock_payment_method_controller_.AsWeakPtr(),
+        mock_at_memory_controller_.AsWeakPtr(),
         std::make_unique<NiceMock<MockManualFillingView>>());
   }
 
@@ -136,37 +122,57 @@ class ManualFillingControllerTest : public ChromeRenderViewHostTestHarness {
     address_source_observer_.Run(&mock_address_controller_, source_available);
   }
 
+  void NotifyAtMemorySourceObserver(IsFillingSourceAvailable source_available) {
+    at_memory_source_observer_.Run(&mock_at_memory_controller_,
+                                   source_available);
+  }
+
  protected:
-  base::test::ScopedFeatureList features_{
-      plus_addresses::features::kPlusAddressesEnabled};
   NiceMock<MockPasswordAccessoryController> mock_pwd_controller_;
   NiceMock<MockAddressAccessoryController> mock_address_controller_;
   NiceMock<MockPaymentMethodAccessoryController>
       mock_payment_method_controller_;
+  NiceMock<MockAtMemoryAccessoryController> mock_at_memory_controller_;
 
   AccessoryController::FillingSourceObserver pwd_source_observer_;
   AccessoryController::FillingSourceObserver cc_source_observer_;
   AccessoryController::FillingSourceObserver address_source_observer_;
+  AccessoryController::FillingSourceObserver at_memory_source_observer_;
 
-  TestAutofillClientInjector<TestContentAutofillClient>
+  TestAutofillClientInjector<autofill::TestContentAutofillClient>
       autofill_client_injector_;
 };
 
 TEST_F(ManualFillingControllerTest, ShowsAccessoryForAutofillOnSearchField) {
+  base::test::ScopedFeatureList feature_list(
+      autofill::features::kAutofillEnableKeyboardAccessoryOnSearchFields);
+
   FocusFieldAndClearExpectations(FocusedFieldType::kFillableSearchField);
 
-  EXPECT_CALL(*view(), Show(WaitForKeyboard(true),
-                            IsCredentialFieldOrHasAutofillSuggestions(true)));
+  EXPECT_CALL(*view(),
+              Show(WaitForKeyboard(true), ShouldShowOnLargeFormFactor(false),
+                   IsContentEditable(false)));
   controller()->UpdateSourceAvailability(FillingSource::PASSWORD_FALLBACKS,
                                          /*has_suggestions=*/true);
+  testing::Mock::VerifyAndClearExpectations(view());
+
+  EXPECT_CALL(*view(),
+              Show(WaitForKeyboard(true), ShouldShowOnLargeFormFactor(true),
+                   IsContentEditable(false)));
   controller()->UpdateSourceAvailability(FillingSource::AUTOFILL,
                                          /*has_suggestions=*/true);
   testing::Mock::VerifyAndClearExpectations(view());
 
-  // Hiding autofill hides the accessory because fallbacks alone don't provide
-  // sufficient value and might be confusing.
-  EXPECT_CALL(*view(), Hide());
+  // Hiding autofill doesn't hide the accessory because fallbacks are still
+  // available.
+  EXPECT_CALL(*view(), Hide()).Times(0);
+  EXPECT_CALL(*view(), Show).Times(0);
   controller()->UpdateSourceAvailability(FillingSource::AUTOFILL,
+                                         /*has_suggestions=*/false);
+  testing::Mock::VerifyAndClearExpectations(view());
+
+  EXPECT_CALL(*view(), Hide());
+  controller()->UpdateSourceAvailability(FillingSource::PASSWORD_FALLBACKS,
                                          /*has_suggestions=*/false);
 }
 
@@ -190,8 +196,9 @@ TEST_F(ManualFillingControllerTest,
       .WillRepeatedly(Return(filled_passwords_sheet()));
   EXPECT_CALL(*view(), OnItemsAvailable(filled_passwords_sheet()))
       .Times(AnyNumber());
-  EXPECT_CALL(*view(), Show(WaitForKeyboard(true),
-                            IsCredentialFieldOrHasAutofillSuggestions(true)));
+  EXPECT_CALL(*view(),
+              Show(WaitForKeyboard(true), ShouldShowOnLargeFormFactor(false),
+                   IsContentEditable(false)));
 
   NotifyPasswordSourceObserver(IsFillingSourceAvailable(true));
   FocusFieldAndClearExpectations(FocusedFieldType::kFillableUsernameField);
@@ -222,8 +229,9 @@ TEST_F(ManualFillingControllerTest,
       .Times(AtLeast(1))
       .WillRepeatedly(Return(kTestAddressSheet));
   EXPECT_CALL(*view(), OnItemsAvailable(kTestAddressSheet)).Times(AnyNumber());
-  EXPECT_CALL(*view(), Show(WaitForKeyboard(true),
-                            IsCredentialFieldOrHasAutofillSuggestions(false)));
+  EXPECT_CALL(*view(),
+              Show(WaitForKeyboard(true), ShouldShowOnLargeFormFactor(false),
+                   IsContentEditable(false)));
 
   NotifyAddressSourceObserver(IsFillingSourceAvailable(true));
   FocusFieldAndClearExpectations(FocusedFieldType::kFillableNonSearchField);
@@ -256,8 +264,9 @@ TEST_F(ManualFillingControllerTest,
       .WillRepeatedly(Return(kTestCreditCardSheet));
   EXPECT_CALL(*view(), OnItemsAvailable(kTestCreditCardSheet))
       .Times(AnyNumber());
-  EXPECT_CALL(*view(), Show(WaitForKeyboard(true),
-                            IsCredentialFieldOrHasAutofillSuggestions(false)));
+  EXPECT_CALL(*view(),
+              Show(WaitForKeyboard(true), ShouldShowOnLargeFormFactor(false),
+                   IsContentEditable(false)));
 
   NotifyCreditCardSourceObserver(IsFillingSourceAvailable(true));
   FocusFieldAndClearExpectations(FocusedFieldType::kFillableNonSearchField);
@@ -269,10 +278,12 @@ TEST_F(ManualFillingControllerTest,
 TEST_F(ManualFillingControllerTest, HidesAccessoryWithoutAvailableSources) {
   FocusFieldAndClearExpectations(FocusedFieldType::kFillableNonSearchField);
 
-  EXPECT_CALL(*view(), Show(WaitForKeyboard(true),
-                            IsCredentialFieldOrHasAutofillSuggestions(false)));
-  EXPECT_CALL(*view(), Show(WaitForKeyboard(true),
-                            IsCredentialFieldOrHasAutofillSuggestions(true)));
+  EXPECT_CALL(*view(),
+              Show(WaitForKeyboard(true), ShouldShowOnLargeFormFactor(false),
+                   IsContentEditable(false)));
+  EXPECT_CALL(*view(),
+              Show(WaitForKeyboard(true), ShouldShowOnLargeFormFactor(true),
+                   IsContentEditable(false)));
   controller()->UpdateSourceAvailability(FillingSource::PASSWORD_FALLBACKS,
                                          /*has_suggestions=*/true);
   controller()->UpdateSourceAvailability(FillingSource::AUTOFILL,
@@ -284,8 +295,9 @@ TEST_F(ManualFillingControllerTest, HidesAccessoryWithoutAvailableSources) {
 
   // Hiding just one of two active filling sources won't have any effect at all.
   EXPECT_CALL(*view(), Hide()).Times(0);
-  EXPECT_CALL(*view(), Show(WaitForKeyboard(true),
-                            IsCredentialFieldOrHasAutofillSuggestions(true)))
+  EXPECT_CALL(*view(),
+              Show(WaitForKeyboard(true), ShouldShowOnLargeFormFactor(true),
+                   IsContentEditable(false)))
       .Times(0);
   controller()->UpdateSourceAvailability(FillingSource::PASSWORD_FALLBACKS,
                                          /*has_suggestions=*/false);
@@ -294,31 +306,6 @@ TEST_F(ManualFillingControllerTest, HidesAccessoryWithoutAvailableSources) {
   EXPECT_CALL(*view(), Hide());
   controller()->UpdateSourceAvailability(FillingSource::AUTOFILL,
                                          /*has_suggestions=*/false);
-}
-
-TEST_F(ManualFillingControllerTest, FetchesAffiliatedPlusProfilesWhenShown) {
-  FocusFieldAndClearExpectations(FocusedFieldType::kFillableNonSearchField);
-
-  // Not plus profiles should be fetched before the first call to `Show()`.
-  EXPECT_TRUE(controller()->plus_profiles_cache());
-  EXPECT_EQ(
-      controller()->plus_profiles_cache()->GetAffiliatedPlusProfiles().size(),
-      0u);
-
-  EXPECT_CALL(*view(), Show(WaitForKeyboard(true),
-                            IsCredentialFieldOrHasAutofillSuggestions(false)));
-  controller()->UpdateSourceAvailability(FillingSource::ADDRESS_FALLBACKS,
-                                         /*has_suggestions=*/true);
-  EXPECT_EQ(
-      controller()->plus_profiles_cache()->GetAffiliatedPlusProfiles().size(),
-      1u);
-
-  EXPECT_CALL(*view(), Hide());
-  controller()->UpdateSourceAvailability(FillingSource::ADDRESS_FALLBACKS,
-                                         /*has_suggestions=*/false);
-  EXPECT_EQ(
-      controller()->plus_profiles_cache()->GetAffiliatedPlusProfiles().size(),
-      0u);
 }
 
 TEST_F(ManualFillingControllerTest, ForwardsCredManActionToPasswordController) {
@@ -341,8 +328,9 @@ TEST_F(ManualFillingControllerTest,
        ShowsAccessoryWhenAutofillSourceAvailableOnUnknownField) {
   FocusFieldAndClearExpectations(FocusedFieldType::kUnknown);
 
-  EXPECT_CALL(*view(), Show(WaitForKeyboard(false),
-                            IsCredentialFieldOrHasAutofillSuggestions(true)));
+  EXPECT_CALL(*view(),
+              Show(WaitForKeyboard(false), ShouldShowOnLargeFormFactor(true),
+                   IsContentEditable(false)));
   controller()->UpdateSourceAvailability(FillingSource::AUTOFILL,
                                          /*has_suggestions=*/true);
   // Noop duplicate call.
@@ -359,10 +347,22 @@ TEST_F(ManualFillingControllerTest,
        ShowsAccessoryWhenAutofillSourceNotAvailableOnCredentialFields) {
   FocusFieldAndClearExpectations(FocusedFieldType::kFillablePasswordField);
 
-  EXPECT_CALL(*view(), Show(WaitForKeyboard(true),
-                            IsCredentialFieldOrHasAutofillSuggestions(true)));
+  EXPECT_CALL(*view(),
+              Show(WaitForKeyboard(true), ShouldShowOnLargeFormFactor(false),
+                   IsContentEditable(false)));
 
   controller()->UpdateSourceAvailability(FillingSource::PASSWORD_FALLBACKS,
+                                         /*has_suggestions=*/true);
+}
+
+TEST_F(ManualFillingControllerTest,
+       ShowsAccessoryWhenAutofillSourceAvailableOnCredentialFields) {
+  FocusFieldAndClearExpectations(FocusedFieldType::kFillablePasswordField);
+
+  EXPECT_CALL(*view(),
+              Show(WaitForKeyboard(true), ShouldShowOnLargeFormFactor(true),
+                   IsContentEditable(false)));
+  controller()->UpdateSourceAvailability(FillingSource::AUTOFILL,
                                          /*has_suggestions=*/true);
 }
 
@@ -370,8 +370,9 @@ TEST_F(ManualFillingControllerTest,
        ShowsAccessoryWhenAutofillSourceAvailableOnNonCredentialFields) {
   FocusFieldAndClearExpectations(FocusedFieldType::kFillableNonSearchField);
 
-  EXPECT_CALL(*view(), Show(WaitForKeyboard(true),
-                            IsCredentialFieldOrHasAutofillSuggestions(true)));
+  EXPECT_CALL(*view(),
+              Show(WaitForKeyboard(true), ShouldShowOnLargeFormFactor(true),
+                   IsContentEditable(false)));
   controller()->UpdateSourceAvailability(FillingSource::AUTOFILL,
                                          /*has_suggestions=*/true);
 }
@@ -380,8 +381,9 @@ TEST_F(ManualFillingControllerTest,
        ShowsAccessoryWhenAutofillSourceNotAvailableNonCredentialFields) {
   FocusFieldAndClearExpectations(FocusedFieldType::kFillableNonSearchField);
 
-  EXPECT_CALL(*view(), Show(WaitForKeyboard(true),
-                            IsCredentialFieldOrHasAutofillSuggestions(false)));
+  EXPECT_CALL(*view(),
+              Show(WaitForKeyboard(true), ShouldShowOnLargeFormFactor(false),
+                   IsContentEditable(false)));
   controller()->UpdateSourceAvailability(FillingSource::PASSWORD_FALLBACKS,
                                          /*has_suggestions=*/true);
 }
@@ -503,3 +505,140 @@ TEST_F(ManualFillingControllerTest, LogsHistogramOnOptionSelected) {
       "AccessoryActionSelected2",
       AccessoryAction::MANAGE_CREDIT_CARDS, 3);
 }
+
+// Tests that focusing a contenteditable element shows the keyboard accessory.
+TEST_F(ManualFillingControllerTest, ShowsAccessoryForContentEditableField) {
+  EXPECT_CALL(*view(),
+              Show(WaitForKeyboard(true), ShouldShowOnLargeFormFactor(false),
+                   IsContentEditable(true)));
+
+  controller()->NotifyFocusedInputChanged(
+      kFocusedFieldId, FocusedFieldType::kContenteditableField);
+}
+
+// Tests that when sheet data is available for AtMemory, it is forwarded to the
+// view when the AtMemory filling source is updated.
+TEST_F(ManualFillingControllerTest,
+       ShowsAccessoryForContentEditableWithSheetData) {
+  const AccessorySheetData kTestSheet =
+      AccessorySheetData::Builder(AccessoryTabType::ALL, u"AtMemory").Build();
+
+  FocusFieldAndClearExpectations(FocusedFieldType::kContenteditableField);
+
+  EXPECT_CALL(mock_at_memory_controller_, GetSheetData)
+      .Times(AtLeast(1))
+      .WillRepeatedly(Return(kTestSheet));
+  EXPECT_CALL(*view(), OnItemsAvailable(kTestSheet)).Times(AtLeast(1));
+  EXPECT_CALL(*view(),
+              Show(WaitForKeyboard(true), ShouldShowOnLargeFormFactor(false),
+                   IsContentEditable(true)));
+
+  NotifyAtMemorySourceObserver(IsFillingSourceAvailable(true));
+}
+
+// Tests that the keyboard accessory is hidden when focus shifts away from a
+// contenteditable element.
+TEST_F(ManualFillingControllerTest,
+       HidesAccessoryWhenFocusLeavesContentEditable) {
+  EXPECT_CALL(*view(),
+              Show(WaitForKeyboard(true), ShouldShowOnLargeFormFactor(false),
+                   IsContentEditable(true)));
+
+  controller()->NotifyFocusedInputChanged(
+      kFocusedFieldId, FocusedFieldType::kContenteditableField);
+  testing::Mock::VerifyAndClearExpectations(view());
+
+  EXPECT_CALL(*view(), Hide());
+  controller()->NotifyFocusedInputChanged(autofill::FieldRendererId(),
+                                          FocusedFieldType::kUnknown);
+}
+
+// Tests that on contenteditable fields, non-AtMemory sheets (passwords,
+// addresses, credit cards) are not forwarded to the view, while AtMemory
+// sheet data is still forwarded.
+TEST_F(ManualFillingControllerTest,
+       HidesOtherAccessoryTabsOnContentEditableField) {
+  const AccessorySheetData kTestAddressSheet =
+      populate_sheet(AccessoryTabType::ADDRESSES);
+  const AccessorySheetData kTestCreditCardSheet =
+      populate_sheet(AccessoryTabType::CREDIT_CARDS);
+  const AccessorySheetData kTestAtMemorySheet =
+      AccessorySheetData::Builder(AccessoryTabType::ALL, u"AtMemory").Build();
+
+  EXPECT_CALL(mock_pwd_controller_, GetSheetData)
+      .WillRepeatedly(Return(filled_passwords_sheet()));
+  EXPECT_CALL(mock_address_controller_, GetSheetData)
+      .WillRepeatedly(Return(kTestAddressSheet));
+  EXPECT_CALL(mock_payment_method_controller_, GetSheetData)
+      .WillRepeatedly(Return(kTestCreditCardSheet));
+  EXPECT_CALL(mock_at_memory_controller_, GetSheetData)
+      .WillRepeatedly(Return(kTestAtMemorySheet));
+
+  // None of the fallback sheets should be sent to the view on contenteditable,
+  // but the AtMemory sheet should be forwarded.
+  EXPECT_CALL(*view(), OnItemsAvailable(filled_passwords_sheet())).Times(0);
+  EXPECT_CALL(*view(), OnItemsAvailable(kTestAddressSheet)).Times(0);
+  EXPECT_CALL(*view(), OnItemsAvailable(kTestCreditCardSheet)).Times(0);
+  EXPECT_CALL(*view(), OnItemsAvailable(kTestAtMemorySheet)).Times(AtLeast(1));
+  EXPECT_CALL(*view(),
+              Show(WaitForKeyboard(true), ShouldShowOnLargeFormFactor(false),
+                   IsContentEditable(true)));
+
+  controller()->UpdateSourceAvailability(FillingSource::PASSWORD_FALLBACKS,
+                                         /*has_suggestions=*/true);
+  controller()->UpdateSourceAvailability(FillingSource::ADDRESS_FALLBACKS,
+                                         /*has_suggestions=*/true);
+  controller()->UpdateSourceAvailability(FillingSource::CREDIT_CARD_FALLBACKS,
+                                         /*has_suggestions=*/true);
+  NotifyAtMemorySourceObserver(IsFillingSourceAvailable(true));
+
+  controller()->NotifyFocusedInputChanged(
+      kFocusedFieldId, FocusedFieldType::kContenteditableField);
+}
+
+// Tests that when focus leaves contenteditable and moves to a fillable field,
+// non-AtMemory sheets are forwarded to the view again.
+TEST_F(ManualFillingControllerTest,
+       ShowsOtherAccessoryTabsWhenFocusLeavesContentEditable) {
+  const AccessorySheetData kTestAddressSheet =
+      populate_sheet(AccessoryTabType::ADDRESSES);
+
+  EXPECT_CALL(mock_address_controller_, GetSheetData)
+      .WillRepeatedly(Return(kTestAddressSheet));
+
+  controller()->UpdateSourceAvailability(FillingSource::ADDRESS_FALLBACKS,
+                                         /*has_suggestions=*/true);
+
+  // Focus contenteditable: address sheet is suppressed.
+  EXPECT_CALL(*view(), OnItemsAvailable(kTestAddressSheet)).Times(0);
+  EXPECT_CALL(*view(),
+              Show(WaitForKeyboard(true), ShouldShowOnLargeFormFactor(false),
+                   IsContentEditable(true)));
+  controller()->NotifyFocusedInputChanged(
+      kFocusedFieldId, FocusedFieldType::kContenteditableField);
+  testing::Mock::VerifyAndClearExpectations(view());
+
+  // Focus regular fillable field: address sheet is forwarded.
+  EXPECT_CALL(*view(), OnItemsAvailable(kTestAddressSheet)).Times(AtLeast(1));
+  EXPECT_CALL(*view(),
+              Show(WaitForKeyboard(true), ShouldShowOnLargeFormFactor(false),
+                   IsContentEditable(false)));
+  controller()->NotifyFocusedInputChanged(
+      kFocusedFieldId, FocusedFieldType::kFillableNonSearchField);
+}
+
+// Tests that on contenteditable fields, if AtMemory is not available, the
+// accessory is hidden.
+TEST_F(ManualFillingControllerTest,
+       HidesAccessoryOnContentEditableWhenAtMemoryNotAvailable) {
+  EXPECT_CALL(mock_at_memory_controller_, IsAtMemoryAvailable)
+      .WillRepeatedly(Return(false));
+
+  EXPECT_CALL(*view(), Hide());
+  EXPECT_CALL(*view(), Show).Times(0);
+
+  controller()->NotifyFocusedInputChanged(
+      kFocusedFieldId, FocusedFieldType::kContenteditableField);
+}
+
+}  // namespace

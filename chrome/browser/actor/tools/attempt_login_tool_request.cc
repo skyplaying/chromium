@@ -10,7 +10,11 @@
 #include "chrome/browser/actor/tools/tool.h"
 #include "chrome/browser/actor/tools/tool_request_visitor_functor.h"
 #include "chrome/common/actor/action_result.h"
+#include "components/actor/core/actor_features.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
+#include "components/password_manager/core/browser/features/password_features.h"
 #include "components/tabs/public/tab_interface.h"
+#include "content/public/common/content_features.h"
 
 namespace actor {
 
@@ -39,9 +43,9 @@ ToolRequest::CreateToolResult AttemptLoginToolRequest::CreateTool(
                                          "The tab is no longer present.")};
   }
 
-  return {std::make_unique<AttemptLoginTool>(task_id, tool_delegate, *tab,
-                                             password_button_,
-                                             sign_in_with_google_button_),
+  return {std::make_unique<AttemptLoginTool>(
+              task_id, tool_delegate, *tab, password_button_,
+              sign_in_with_google_button_, RequiresOpeningWebContents()),
           MakeOkResult()};
 }
 
@@ -51,6 +55,26 @@ void AttemptLoginToolRequest::Apply(ToolRequestVisitorFunctor& f) const {
 
 std::string_view AttemptLoginToolRequest::Name() const {
   return kName;
+}
+
+bool AttemptLoginToolRequest::RequiresOpeningWebContents() const {
+  return base::FeatureList::IsEnabled(features::kFedCmEmbedderInitiatedLogin);
+}
+
+ObservationDelayController::PageStabilityConfig
+AttemptLoginToolRequest::GetLoginObservationPageStabilityConfig() {
+  ObservationDelayController::PageStabilityConfig config{
+      .supports_paint_stability = true,
+  };
+  if (base::FeatureList::IsEnabled(kActorLoginObservationStartDelay)) {
+    config.start_delay = kActorLoginObservationStartDelayDuration.Get();
+  }
+  return config;
+}
+
+ObservationDelayController::PageStabilityConfig
+AttemptLoginToolRequest::GetObservationPageStabilityConfig() const {
+  return GetLoginObservationPageStabilityConfig();
 }
 
 }  // namespace actor

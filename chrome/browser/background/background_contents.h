@@ -22,7 +22,7 @@
 class Profile;
 
 namespace content {
-class SessionStorageNamespace;
+class SessionStorageNamespaceHandle;
 }
 
 namespace extensions {
@@ -31,7 +31,7 @@ class ExtensionHostDelegate;
 
 // This class maintains a WebContents used in the background. It can host a
 // renderer, but does not have any visible display.
-// TODO(atwilson): Unify this with background pages; http://crbug.com/77790
+// TODO(atwilson): Unify this with background pages; http://crbug.com/41351554
 class BackgroundContents : public extensions::DeferredStartRenderHost,
                            public content::WebContentsDelegate,
                            public content::WebContentsObserver {
@@ -66,7 +66,7 @@ class BackgroundContents : public extensions::DeferredStartRenderHost,
       bool is_new_browsing_instance,
       Delegate* delegate,
       const content::StoragePartitionConfig& partition_config,
-      content::SessionStorageNamespace* session_storage_namespace);
+      content::SessionStorageNamespaceHandle* session_storage_namespace);
 
   BackgroundContents(const BackgroundContents&) = delete;
   BackgroundContents& operator=(const BackgroundContents&) = delete;
@@ -96,6 +96,8 @@ class BackgroundContents : public extensions::DeferredStartRenderHost,
   void PrimaryMainFrameRenderProcessGone(
       base::TerminationStatus status) override;
   void PrimaryPageChanged(content::Page& page) override;
+
+  const GURL& GetInitialURLForTesting() const { return initial_url_; }
 
  protected:
   // Exposed for testing.

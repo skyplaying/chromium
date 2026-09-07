@@ -15,6 +15,7 @@
 #include "base/posix/safe_strerror.h"
 #include "base/synchronization/lock.h"
 #include "base/synchronization/lock_metrics_recorder.h"
+#include "base/synchronization/lock_subtle.h"
 #include "base/synchronization/synchronization_buildflags.h"
 #include "base/system/sys_info.h"
 #include "build/build_config.h"
@@ -37,6 +38,11 @@ namespace base {
 
 namespace internal {
 namespace {
+
+#if BUILDFLAG(IS_POSIX)
+// static
+std::atomic<int> g_spin_count{0};
+#endif  // BUILDFLAG(IS_POSIX)
 
 #if BUILDFLAG(ENABLE_MUTEX_PRIORITY_INHERITANCE) && BUILDFLAG(IS_ANDROID)
 bool IsMutexPriorityInheritanceEnabled() {
@@ -127,11 +133,47 @@ LockImpl::~LockImpl() {
   DCHECK_EQ(rv, 0) << ". " << SystemErrorCodeToString(rv);
 }
 
-void LockImpl::LockInternal() {
-  LockMetricsRecorder::ScopedLockAcquisitionTimer timer;
+void LockImpl::LockInternal(const LockMetricTagList& tags) {
+#if BUILDFLAG(IS_POSIX)
+  if (TrySpin()) {
+    return;
+  }
+#endif  // BUILDFLAG(IS_POSIX)
+
+  LockMetricsRecorder::ScopedLockAcquisitionTimer timer(tags);
   int rv = pthread_mutex_lock(&native_handle_);
   DCHECK_EQ(rv, 0) << ". " << SystemErrorCodeToString(rv);
 }
+
+#if BUILDFLAG(IS_POSIX)
+bool LockImpl::TrySpin() {
+  // Logic same as in SpinningMutex::AcquireSpinThenBlock() in partition_alloc.
+  int tries = 0;
+  int backoff = 1;
+  const int spin_count = g_spin_count.load(std::memory_order_relaxed);
+
+  while (tries < spin_count) {
+    if (Try()) [[likely]] {
+      return true;
+    }
+
+    for (int yields = 0; yields < backoff; yields++) {
+      subtle::YieldProcessor();
+    }
+    tries += backoff;
+
+    constexpr int kMaxBackoff = 16;
+    backoff = std::min(kMaxBackoff, backoff << 1);
+  }
+
+  return false;
+}
+
+// static
+void LockImpl::SetTrySpinCount(int spin_count) {
+  g_spin_count.store(spin_count, std::memory_order_relaxed);
+}
+#endif  // BUILDFLAG(IS_POSIX)
 
 // static
 bool LockImpl::PriorityInheritanceAvailable() {

@@ -10,6 +10,7 @@
 #include "base/logging.h"
 #include "base/macros/concat.h"
 #include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "build/build_config.h"
 #include "google_apis/gaia/gaia_config.h"
@@ -28,8 +29,11 @@ namespace {
 const char kDefaultGoogleUrl[] = "http://google.com";
 const char kDefaultGaiaUrl[] = "https://accounts.google.com";
 const char kDefaultGoogleApisBaseUrl[] = "https://www.googleapis.com";
+const char kDefaultOAuth2MtlsBaseUrl[] = "https://oauth2.mtls.googleapis.com";
 const char kDefaultOAuthAccountManagerBaseUrl[] =
     "https://oauthaccountmanager.googleapis.com";
+const char kDefaultOAuthAccountManagerMtlsBaseUrl[] =
+    "https://oauthaccountmanager.mtls.googleapis.com";
 const char kDefaultAccountCapabilitiesBaseUrl[] =
     "https://accountcapabilities-pa.googleapis.com";
 constexpr char kDefaultClassroomApiBaseUrl[] =
@@ -37,6 +41,8 @@ constexpr char kDefaultClassroomApiBaseUrl[] =
 constexpr char kDefaultTasksApiBaseUrl[] = "https://tasks.googleapis.com";
 constexpr std::string_view kDefaultPeopleApiBaseUrl =
     "https://people.googleapis.com";
+constexpr std::string_view kDefaultKidsManagementApiBaseUrl =
+    "https://kidsmanagement-pa.googleapis.com";
 
 // API calls from accounts.google.com
 const char kEmbeddedSetupChromeOsUrlSuffix[] = "embedded/setup/v2/chromeos";
@@ -68,6 +74,9 @@ const char kSigninChromeSyncKeysRetrievalUrl[] = "encryption/unlock/desktop";
 // internally as ClientDecryptableKeyDataInputs.
 const char kSigninChromeSyncKeysRecoverabilityUrlSuffix[] =
     "?kdi=CAIaDgoKY2hyb21lc3luYxAB";
+
+const char kSigninChromePasskeyUnlockDesktopEmbeddedUrl[] =
+    "encryption/unlock/desktopembedded";
 
 // This kdi parameter allows to open the passkey unlock flow.
 // The kdi parameter here was generated from the following protobuf:
@@ -106,14 +115,16 @@ const char kOAuth2TokenInfoUrlSuffix[] = "oauth2/v2/tokeninfo";
 const char kOAuthUserInfoUrlSuffix[] = "oauth2/v1/userinfo";
 const char kReAuthApiUrlSuffix[] = "reauth/v1beta/users/";
 
+// API calls from oauth2.mtls.googleapis.com
+const char kMtlsOAuth2TokenUrlSuffix[] = "token";
+
 // API calls from oauthaccountmanager.googleapis.com
 const char kOAuth2IssueTokenUrlSuffix[] = "v1/issuetoken";
+const char kOAuth2UpgradeTokenUrlSuffix[] = "v1/upgradetoken";
 
 // API calls from accountcapabilities-pa.googleapis.com
 const char kAccountCapabilitiesBatchGetUrlSuffix[] =
     "v1/accountcapabilities:batchGet";
-const char kAccountCapabilitiesGetAllVisibleUrlSuffix[] =
-    "v1/accountcapabilities:getAllVisible";
 
 const char kRotateBoundCookiesUrlSuffix[] = "RotateBoundCookies";
 
@@ -255,12 +266,24 @@ const GURL& GaiaUrls::reauth_chrome_dice() const {
   return reauth_chrome_dice_;
 }
 
-const GURL& GaiaUrls::signin_chrome_sync_keys_retrieval_url() const {
-  return signin_chrome_sync_keys_retrieval_url_;
+GURL GaiaUrls::SigninChromeSyncKeysRetrievalUrl(size_t account_index) const {
+  if (!base::FeatureList::IsEnabled(
+          gaia::features::kSigninChromeSyncKeysUrlUsesAccountIndex)) {
+    return signin_chrome_sync_keys_retrieval_url_;
+  }
+  return net::AppendQueryParameter(signin_chrome_sync_keys_retrieval_url_,
+                                   "authuser",
+                                   base::NumberToString(account_index));
 }
 
-const GURL& GaiaUrls::signin_chrome_passkey_unlock_url() const {
-  return signin_chrome_passkey_unlock_url_;
+GURL GaiaUrls::SigninChromePasskeyUnlockUrl(size_t account_index) const {
+  if (!base::FeatureList::IsEnabled(
+          gaia::features::kSigninChromePasskeyUnlockUrlUsesAccountIndex)) {
+    return signin_chrome_passkey_unlock_url_;
+  }
+  return net::AppendQueryParameter(signin_chrome_passkey_unlock_url_,
+                                   "authuser",
+                                   base::NumberToString(account_index));
 }
 
 const std::string_view GaiaUrls::signin_chrome_passkey_unlock_kdi_parameter()
@@ -268,9 +291,26 @@ const std::string_view GaiaUrls::signin_chrome_passkey_unlock_kdi_parameter()
   return kPasskeyUnlockUrlKdiParameter;
 }
 
-const GURL& GaiaUrls::signin_chrome_sync_keys_recoverability_degraded_url()
-    const {
-  return signin_chrome_sync_keys_recoverability_degraded_url_;
+GURL GaiaUrls::SigninChromeSyncKeysRecoverabilityDegradedUrl(
+    size_t account_index) const {
+  if (!base::FeatureList::IsEnabled(
+          gaia::features::kSigninChromeSyncKeysUrlUsesAccountIndex)) {
+    return signin_chrome_sync_keys_recoverability_degraded_url_;
+  }
+  return net::AppendQueryParameter(
+      signin_chrome_sync_keys_recoverability_degraded_url_, "authuser",
+      base::NumberToString(account_index));
+}
+
+GURL GaiaUrls::SigninChromePasskeyUnlockDesktopEmbeddedUrl(
+    size_t account_index) const {
+  if (!base::FeatureList::IsEnabled(
+          gaia::features::kSigninChromePasskeyUnlockUrlUsesAccountIndex)) {
+    return signin_chrome_passkey_unlock_desktop_embedded_url_;
+  }
+  return net::AppendQueryParameter(
+      signin_chrome_passkey_unlock_desktop_embedded_url_, "authuser",
+      base::NumberToString(account_index));
 }
 
 const GURL& GaiaUrls::service_logout_url() const {
@@ -301,10 +341,6 @@ const GURL& GaiaUrls::account_capabilities_batch_get_url() const {
   return account_capabilities_batch_get_url_;
 }
 
-const GURL& GaiaUrls::account_capabilities_get_all_visible_url() const {
-  return account_capabilities_get_all_visible_url_;
-}
-
 const std::string& GaiaUrls::oauth2_chrome_client_id() const {
   return google_apis::GetOAuth2ClientID(google_apis::CLIENT_MAIN);
 }
@@ -317,8 +353,20 @@ const GURL& GaiaUrls::oauth2_token_url() const {
   return oauth2_token_url_;
 }
 
+const GURL& GaiaUrls::mtls_oauth2_token_url() const {
+  return mtls_oauth2_token_url_;
+}
+
 const GURL& GaiaUrls::oauth2_issue_token_url() const {
   return oauth2_issue_token_url_;
+}
+
+const GURL& GaiaUrls::mtls_oauth2_issue_token_url() const {
+  return mtls_oauth2_issue_token_url_;
+}
+
+const GURL& GaiaUrls::oauth2_upgrade_token_url() const {
+  return oauth2_upgrade_token_url_;
 }
 
 const GURL& GaiaUrls::oauth2_token_info_url() const {
@@ -347,6 +395,10 @@ const GURL& GaiaUrls::tasks_api_origin_url() const {
 
 const GURL& GaiaUrls::people_api_origin_url() const {
   return people_api_origin_url_;
+}
+
+const GURL& GaiaUrls::kids_management_api_origin_url() const {
+  return kids_management_api_origin_url_;
 }
 
 const GURL& GaiaUrls::blank_page_url() const {
@@ -401,9 +453,16 @@ void GaiaUrls::InitializeDefault() {
   SetDefaultURLIfInvalid(&lso_origin_url_, switches::kLsoUrl, kDefaultGaiaUrl);
   SetDefaultURLIfInvalid(&google_apis_origin_url_, switches::kGoogleApisUrl,
                          kDefaultGoogleApisBaseUrl);
+  if (!oauth2_mtls_origin_url_.is_valid()) {
+    oauth2_mtls_origin_url_ = GURL(kDefaultOAuth2MtlsBaseUrl);
+  }
   SetDefaultURLIfInvalid(&oauth_account_manager_origin_url_,
                          switches::kOAuthAccountManagerUrl,
                          kDefaultOAuthAccountManagerBaseUrl);
+  if (!oauth_account_manager_mtls_origin_url_.is_valid()) {
+    oauth_account_manager_mtls_origin_url_ =
+        GURL(kDefaultOAuthAccountManagerMtlsBaseUrl);
+  }
   if (!account_capabilities_origin_url_.is_valid()) {
     account_capabilities_origin_url_ = GURL(kDefaultAccountCapabilitiesBaseUrl);
   }
@@ -420,6 +479,9 @@ void GaiaUrls::InitializeDefault() {
   }
   if (!people_api_origin_url_.is_valid()) {
     people_api_origin_url_ = GURL(kDefaultPeopleApiBaseUrl);
+  }
+  if (!kids_management_api_origin_url_.is_valid()) {
+    kids_management_api_origin_url_ = GURL(kDefaultKidsManagementApiBaseUrl);
   }
 
   CHECK(!gaia_origin_.opaque());
@@ -451,6 +513,10 @@ void GaiaUrls::InitializeDefault() {
       &signin_chrome_sync_keys_recoverability_degraded_url_, gaia_url,
       base::StrCat({kSigninChromeSyncKeysRetrievalUrl,
                     kSigninChromeSyncKeysRecoverabilityUrlSuffix}));
+  ResolveURLIfInvalid(
+      &signin_chrome_passkey_unlock_desktop_embedded_url_, gaia_url,
+      base::StrCat({kSigninChromePasskeyUnlockDesktopEmbeddedUrl,
+                    "?kdi=", kPasskeyUnlockUrlKdiParameter}));
   ResolveURLIfInvalid(&service_logout_url_, gaia_url, kServiceLogoutUrlSuffix);
   ResolveURLIfInvalid(&blank_page_url_, gaia_url, kBlankPageSuffix);
   ResolveURLIfInvalid(&oauth_multilogin_url_, gaia_url, kOAuthMultiloginSuffix);
@@ -481,14 +547,23 @@ void GaiaUrls::InitializeDefault() {
   ResolveURLIfInvalid(&oauth2_issue_token_url_,
                       oauth_account_manager_origin_url_,
                       kOAuth2IssueTokenUrlSuffix);
+  ResolveURLIfInvalid(&oauth2_upgrade_token_url_,
+                      oauth_account_manager_origin_url_,
+                      kOAuth2UpgradeTokenUrlSuffix);
+
+  // URLs from |google_apis_mtls_origin_url_|.
+  ResolveURLIfInvalid(&mtls_oauth2_token_url_, oauth2_mtls_origin_url_,
+                      kMtlsOAuth2TokenUrlSuffix);
+
+  // URLs from |oauth_account_manager_mtls_origin_url_|.
+  ResolveURLIfInvalid(&mtls_oauth2_issue_token_url_,
+                      oauth_account_manager_mtls_origin_url_,
+                      kOAuth2IssueTokenUrlSuffix);
 
   // URLs from |account_capabilities_origin_url_|.
   ResolveURLIfInvalid(&account_capabilities_batch_get_url_,
                       account_capabilities_origin_url_,
                       kAccountCapabilitiesBatchGetUrlSuffix);
-  ResolveURLIfInvalid(&account_capabilities_get_all_visible_url_,
-                      account_capabilities_origin_url_,
-                      kAccountCapabilitiesGetAllVisibleUrlSuffix);
 }
 
 void GaiaUrls::InitializeFromConfig() {
@@ -506,11 +581,15 @@ void GaiaUrls::InitializeFromConfig() {
 
   config->GetURLIfExists(URL_KEY_AND_PTR(lso_origin_url));
   config->GetURLIfExists(URL_KEY_AND_PTR(google_apis_origin_url));
+  config->GetURLIfExists(URL_KEY_AND_PTR(oauth2_mtls_origin_url));
   config->GetURLIfExists(URL_KEY_AND_PTR(oauth_account_manager_origin_url));
+  config->GetURLIfExists(
+      URL_KEY_AND_PTR(oauth_account_manager_mtls_origin_url));
   config->GetURLIfExists(URL_KEY_AND_PTR(account_capabilities_origin_url));
   config->GetURLIfExists(URL_KEY_AND_PTR(classroom_api_origin_url));
   config->GetURLIfExists(URL_KEY_AND_PTR(tasks_api_origin_url));
   config->GetURLIfExists(URL_KEY_AND_PTR(people_api_origin_url));
+  config->GetURLIfExists(URL_KEY_AND_PTR(kids_management_api_origin_url));
   config->GetURLIfExists(URL_KEY_AND_PTR(embedded_setup_chromeos_url));
   config->GetURLIfExists(
       URL_KEY_AND_PTR(embedded_setup_chromeos_kid_signup_url));
@@ -526,6 +605,8 @@ void GaiaUrls::InitializeFromConfig() {
       URL_KEY_AND_PTR(signin_chrome_sync_keys_retrieval_url));
   config->GetURLIfExists(
       URL_KEY_AND_PTR(signin_chrome_sync_keys_recoverability_degraded_url));
+  config->GetURLIfExists(
+      URL_KEY_AND_PTR(signin_chrome_passkey_unlock_desktop_embedded_url));
   config->GetURLIfExists(URL_KEY_AND_PTR(service_logout_url));
   config->GetURLIfExists(URL_KEY_AND_PTR(blank_page_url));
   config->GetURLIfExists(URL_KEY_AND_PTR(oauth_multilogin_url));
@@ -535,11 +616,12 @@ void GaiaUrls::InitializeFromConfig() {
   config->GetURLIfExists(URL_KEY_AND_PTR(add_account_url));
   config->GetURLIfExists(URL_KEY_AND_PTR(reauth_url));
   config->GetURLIfExists(URL_KEY_AND_PTR(account_capabilities_batch_get_url));
-  config->GetURLIfExists(
-      URL_KEY_AND_PTR(account_capabilities_get_all_visible_url));
   config->GetURLIfExists(URL_KEY_AND_PTR(get_check_connection_info_url));
   config->GetURLIfExists(URL_KEY_AND_PTR(oauth2_token_url));
+  config->GetURLIfExists(URL_KEY_AND_PTR(mtls_oauth2_token_url));
   config->GetURLIfExists(URL_KEY_AND_PTR(oauth2_issue_token_url));
+  config->GetURLIfExists(URL_KEY_AND_PTR(mtls_oauth2_issue_token_url));
+  config->GetURLIfExists(URL_KEY_AND_PTR(oauth2_upgrade_token_url));
   config->GetURLIfExists(URL_KEY_AND_PTR(oauth2_token_info_url));
   config->GetURLIfExists(URL_KEY_AND_PTR(oauth2_revoke_url));
   config->GetURLIfExists(URL_KEY_AND_PTR(reauth_api_url));

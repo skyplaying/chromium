@@ -16,7 +16,7 @@ namespace actor::ui {
 
 class MockActorUiTabController : public ActorUiTabControllerInterface {
  public:
-  explicit MockActorUiTabController(tabs::MockTabInterface& mock_tab);
+  explicit MockActorUiTabController(tabs::TabInterface& tab);
   ~MockActorUiTabController() override;
 
   // Sets up the default mock expectations to connect a mock tab to a mock
@@ -31,9 +31,6 @@ class MockActorUiTabController : public ActorUiTabControllerInterface {
               (const UiTabState& ui_tab_state, UiResultCallback callback),
               (override));
 
-  MOCK_METHOD(void, OnWebContentsAttached, (), (override));
-  MOCK_METHOD(void, OnViewBoundsChanged, (), (override));
-
   MOCK_METHOD(base::WeakPtr<ActorUiTabControllerInterface>,
               GetWeakPtr,
               (),
@@ -42,6 +39,12 @@ class MockActorUiTabController : public ActorUiTabControllerInterface {
   MOCK_METHOD(void, SetActorTaskPaused, (), (override));
 
   MOCK_METHOD(void, SetActorTaskResume, (), (override));
+
+  MOCK_METHOD(UiTabState, GetCurrentUiTabState, (), (const, override));
+
+#if !BUILDFLAG(IS_ANDROID)
+  MOCK_METHOD(void, OnWebContentsAttached, (), (override));
+  MOCK_METHOD(void, OnViewBoundsChanged, (), (override));
 
   MOCK_METHOD(void,
               OnOverlayHoverStatusChanged,
@@ -57,8 +60,6 @@ class MockActorUiTabController : public ActorUiTabControllerInterface {
               (HandoffButtonController * controller),
               (override));
 
-  MOCK_METHOD(UiTabState, GetCurrentUiTabState, (), (const, override));
-
   MOCK_METHOD(void, OnImmersiveModeChanged, (), (override));
 
   using ActorOverlayStateChangeCallback =
@@ -68,24 +69,17 @@ class MockActorUiTabController : public ActorUiTabControllerInterface {
               (ActorOverlayStateChangeCallback callback),
               (override));
 
-  using ActorTabIndicatorStateChangedCallback =
-      base::RepeatingCallback<void(TabIndicatorStatus)>;
-  MOCK_METHOD(base::ScopedClosureRunner,
-              RegisterActorTabIndicatorStateChangedCallback,
-              (ActorTabIndicatorStateChangedCallback callback),
-              (override));
-
   using ActorOverlayBackgroundChangeCallback =
       base::RepeatingCallback<void(bool)>;
   MOCK_METHOD(base::ScopedClosureRunner,
               RegisterActorOverlayBackgroundChange,
               (ActorOverlayBackgroundChangeCallback callback),
               (override));
+#endif  // !BUILDFLAG(IS_ANDROID)
 
  private:
   base::WeakPtrFactory<MockActorUiTabController> weak_factory_{this};
 };
-
 }  // namespace actor::ui
 
 #endif  // CHROME_BROWSER_ACTOR_UI_TEST_SUPPORT_MOCK_ACTOR_UI_TAB_CONTROLLER_H_

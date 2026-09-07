@@ -10,14 +10,14 @@
 #include "base/memory/raw_ptr.h"
 #include "base/power_monitor/power_observer.h"
 #include "base/time/time.h"
-#include "chrome/browser/permissions/one_time_permissions_tracker_observer.h"
 #include "components/content_settings/core/browser/content_settings_origin_value_map.h"
 #include "components/content_settings/core/browser/content_settings_rule.h"
 #include "components/content_settings/core/browser/user_modifiable_provider.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
 #include "components/content_settings/core/common/content_settings_types.h"
-#include "components/permissions/permission_uma_util.h"
+#include "components/permissions/permission_uma_constants.h"
+#include "url/origin.h"
 
 class OneTimePermissionsTracker;
 
@@ -31,7 +31,6 @@ class OneTimePermissionsTracker;
 // - The grant is manually revoked (via page info, settings, or a policy)
 class OneTimePermissionProvider
     : public content_settings::UserModifiableProvider,
-      public OneTimePermissionsTrackerObserver,
       public base::PowerSuspendObserver {
  public:
   explicit OneTimePermissionProvider(
@@ -56,7 +55,7 @@ class OneTimePermissionProvider
       const ContentSettingsPattern& primary_pattern,
       const ContentSettingsPattern& secondary_pattern,
       ContentSettingsType content_type,
-      base::Value&& value,
+      const base::Value& value,
       const content_settings::ContentSettingConstraints& constraints) override;
   void ClearAllContentSettingsRules(ContentSettingsType content_type) override;
   void ShutdownOnUIThread() override;
@@ -64,12 +63,13 @@ class OneTimePermissionProvider
                           const GURL& secondary_url,
                           ContentSettingsType content_type,
                           const base::Time time) override;
-  bool ResetLastVisitTime(const ContentSettingsPattern& primary_pattern,
-                          const ContentSettingsPattern& secondary_pattern,
-                          ContentSettingsType content_type) override;
   bool UpdateLastVisitTime(const ContentSettingsPattern& primary_pattern,
                            const ContentSettingsPattern& secondary_pattern,
                            ContentSettingsType content_type) override;
+  bool SetAutorevocationBypassedByUser(
+      const ContentSettingsPattern& primary_pattern,
+      const ContentSettingsPattern& secondary_pattern,
+      ContentSettingsType content_type) override;
   std::optional<base::TimeDelta> RenewContentSetting(
       const GURL& primary_url,
       const GURL& secondary_url,
@@ -84,15 +84,13 @@ class OneTimePermissionProvider
   // PowerSuspendObserver:
   void OnSuspend() override;
 
-  // OneTimePermissionsTrackerObserver:
-  void OnLastPageFromOriginClosed(const url::Origin&) override;
-  void OnAllTabsInBackgroundTimerExpired(
-      const url::Origin& origin,
-      const BackgroundExpiryType& expiry_type) override;
-  void OnCapturingVideoExpired(const url::Origin&) override;
-  void OnCapturingAudioExpired(const url::Origin&) override;
-
-  void OnShutdown() override;
+  // Called by TrackerObserver:
+  void OnLastPageFromOriginClosed(const url::Origin& origin);
+  void OnAllTabsInBackgroundTimerExpired(const url::Origin& origin,
+                                         bool is_long_timeout);
+  void OnCapturingVideoExpired(const url::Origin& origin);
+  void OnCapturingAudioExpired(const url::Origin& origin);
+  void OnShutdown();
 
  private:
   struct ContentSettingEntry {
@@ -112,6 +110,9 @@ class OneTimePermissionProvider
 
   content_settings::OriginValueMap value_map_;
   raw_ptr<OneTimePermissionsTracker> one_time_permissions_tracker_ = nullptr;
+
+  class TrackerObserver;
+  std::unique_ptr<TrackerObserver> tracker_observer_;
 
   // Unowned
   raw_ptr<const base::Clock> clock_;

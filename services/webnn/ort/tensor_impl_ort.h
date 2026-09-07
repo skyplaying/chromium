@@ -19,24 +19,28 @@ namespace webnn::ort {
 class TensorImplOrt final : public WebNNTensorImpl {
  public:
   TensorImplOrt(mojo::PendingAssociatedReceiver<mojom::WebNNTensor> receiver,
-                base::WeakPtr<WebNNContextImpl> context,
+                WebNNContextImpl& context,
                 mojom::TensorInfoPtr tensor_info,
                 size_t size,
                 ScopedOrtValue tensor,
-                bool can_access_on_cpu,
                 scoped_refptr<DeviceAllocator> device_allocator);
 
   TensorImplOrt(mojo::PendingAssociatedReceiver<mojom::WebNNTensor> receiver,
-                base::WeakPtr<WebNNContextImpl> context,
+                WebNNContextImpl& context,
                 mojom::TensorInfoPtr tensor_info,
                 RepresentationPtr representation,
                 size_t size,
+                ScopedOrtExternalMemoryHandle d3d_heap_external_memory_handle,
+                Microsoft::WRL::ComPtr<ID3D12Resource> mapped_d3d12_buffer,
                 ScopedOrtValue tensor);
 
   TensorImplOrt(const TensorImplOrt&) = delete;
   TensorImplOrt& operator=(const TensorImplOrt&) = delete;
 
-  OrtValue* tensor() const { return tensor_.get(); }
+  OrtValue* tensor() const {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    return tensor_.get();
+  }
 
  private:
   ~TensorImplOrt() override;
@@ -44,8 +48,7 @@ class TensorImplOrt final : public WebNNTensorImpl {
   void ReadTensorImpl(ReadTensorCallback callback) override;
   void WriteTensorImpl(mojo_base::BigBuffer src_buffer) override;
   bool ImportTensorImpl(ScopedAccessPtr access) override;
-  void ExportTensorImpl(ScopedAccessPtr access,
-                        ExportTensorCallback callback) override;
+  void ExportTensorImpl(ScopedAccessPtr access) override;
 
   base::span<uint8_t> AsSpan() const;
 
@@ -57,7 +60,16 @@ class TensorImplOrt final : public WebNNTensorImpl {
   // and declared before `tensor_` to ensure correct destruction order to avoid
   // use-after-free errors.
   scoped_refptr<DeviceAllocator> device_allocator_;
-  const ScopedOrtValue tensor_ GUARDED_BY_CONTEXT(gpu_sequence_checker_);
+  // ORT wrapper around the D3D12 heap handle used for external memory import.
+  // Valid if the tensor was created with the ORT interop API. Must be kept
+  // alive for the lifetime of the OrtValue.
+  const ScopedOrtExternalMemoryHandle d3d_heap_external_memory_handle_;
+  // Exists only on the mapped-fallback interop path; keeps the buffer backing
+  // `tensor_`'s raw pointer alive independent of `representation_`. Must be
+  // declared before `tensor_` so it is destroyed after, since `tensor_` holds
+  // a raw pointer into this buffer's mapping.
+  const Microsoft::WRL::ComPtr<ID3D12Resource> mapped_d3d12_buffer_;
+  const ScopedOrtValue tensor_ GUARDED_BY_CONTEXT(sequence_checker_);
   const size_t size_;
 };
 

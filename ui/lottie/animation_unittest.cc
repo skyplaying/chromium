@@ -212,16 +212,21 @@ class TestSkottieFrameDataProvider : public cc::SkottieFrameDataProvider {
 
 class ScopedPrefersReducedMotion {
  public:
-  ScopedPrefersReducedMotion() {
-    gfx::Animation::SetPrefersReducedMotionForTesting(true);
+  explicit ScopedPrefersReducedMotion(bool prefers_reduced_motion = true)
+      : previous_(gfx::Animation::PrefersReducedMotion()) {
+    gfx::Animation::SetPrefersReducedMotionForTesting(prefers_reduced_motion);
   }
+
+  ScopedPrefersReducedMotion(const ScopedPrefersReducedMotion&) = delete;
+  ScopedPrefersReducedMotion& operator=(const ScopedPrefersReducedMotion&) =
+      delete;
 
   ~ScopedPrefersReducedMotion() {
     gfx::Animation::SetPrefersReducedMotionForTesting(previous_);
   }
 
  private:
-  bool previous_ = gfx::Animation::PrefersReducedMotion();
+  const bool previous_;
 };
 
 }  // namespace
@@ -308,15 +313,10 @@ class AnimationTest : public testing::Test {
   }
 
   void IsAllSameColor(SkColor color, const SkBitmap& bitmap) const {
-    if (bitmap.colorType() == kBGRA_8888_SkColorType) {
-      const SkColor* pixels = reinterpret_cast<SkColor*>(bitmap.getPixels());
-      const int num_pixels = bitmap.width() * bitmap.height();
-      for (int i = 0; i < num_pixels; i++)
-        UNSAFE_TODO(EXPECT_EQ(pixels[i], color));
-    } else {
-      for (int x = 0; x < bitmap.width(); x++)
-        for (int y = 0; y < bitmap.height(); y++)
-          EXPECT_EQ(bitmap.getColor(x, y), color);
+    for (int x = 0; x < bitmap.width(); x++) {
+      for (int y = 0; y < bitmap.height(); y++) {
+        EXPECT_EQ(bitmap.getColor(x, y), color);
+      }
     }
   }
 
@@ -326,6 +326,8 @@ class AnimationTest : public testing::Test {
   scoped_refptr<cc::SkottieWrapper> skottie_;
 
  private:
+  // This will allow the tests to pass on Remote Desktops.
+  ScopedPrefersReducedMotion prefers_reduced_motion_{false};
   base::SimpleTestTickClock test_clock_;
 };
 

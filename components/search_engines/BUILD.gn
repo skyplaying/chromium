@@ -9,8 +9,16 @@ if (is_android) {
   import("//build/config/android/rules.gni")
 }
 
+json_to_struct("ai_mode_button_config") {
+  source = "ai_mode_button_config.json"
+  schema_file = "ai_mode_button_config_schema.json"
+  namespace = "ai_mode_button_config"
+}
+
 static_library("search_engines") {
   sources = [
+    "ai_mode_button_service.cc",
+    "ai_mode_button_service.h",
     "choice_made_location.h",
     "default_search_manager.cc",
     "default_search_manager.h",
@@ -29,6 +37,8 @@ static_library("search_engines") {
     "search_engine_choice/search_engine_choice_service.h",
     "search_engine_choice/search_engine_choice_utils.cc",
     "search_engine_choice/search_engine_choice_utils.h",
+    "search_engine_split_metrics.cc",
+    "search_engine_split_metrics.h",
     "search_host_to_urls_map.cc",
     "search_host_to_urls_map.h",
     "search_terms_data.cc",
@@ -54,11 +64,14 @@ static_library("search_engines") {
     "template_url_service_observer.h",
     "template_url_starter_pack_data.cc",
     "template_url_starter_pack_data.h",
+    "ui_utils.cc",
+    "ui_utils.h",
     "util.cc",
     "util.h",
   ]
 
   public_deps = [
+    ":ai_mode_button_config",
     ":search_engine_pref_names",
     ":search_engine_type",
     ":search_engine_utils",
@@ -85,6 +98,7 @@ static_library("search_engines") {
     "//components/lens:mime_type",
     "//components/lens/proto/server:proto",
     "//components/metrics",
+    "//components/metrics/private_metrics",
     "//components/omnibox/common",
     "//components/policy:generated",
     "//components/policy/core/browser",
@@ -160,6 +174,8 @@ source_set("search_engine_utils") {
   public_deps = [
     ":search_engine_type",
     "//components/google/core/common",
+    "//components/regional_capabilities",
+    "//components/regional_capabilities:switches",
     "//third_party/search_engines_data:prepopulated_engines",
   ]
 
@@ -183,6 +199,7 @@ static_library("test_support") {
     "search_engines_test_util.h",
     "template_url_service_test_util.cc",
     "template_url_service_test_util.h",
+    "test_ai_mode_button_service.h",
     "testing_search_terms_data.cc",
     "testing_search_terms_data.h",
   ]
@@ -192,8 +209,9 @@ static_library("test_support") {
     "//base",
     "//base/test:test_support",
     "//components/country_codes",
+    "//components/metrics",
     "//components/metrics:metrics_pref_names",
-    "//components/os_crypt/async/browser:test_support",
+    "//components/os_crypt/browser:test_support",
     "//components/policy/core/common",
     "//components/prefs:test_support",
     "//components/regional_capabilities",
@@ -208,6 +226,7 @@ static_library("test_support") {
 source_set("unit_tests") {
   testonly = true
   sources = [
+    "ai_mode_button_service_unittest.cc",
     "default_search_manager_unittest.cc",
     "enterprise/enterprise_search_manager_unittest.cc",
     "keyword_table_unittest.cc",
@@ -217,12 +236,15 @@ source_set("unit_tests") {
     "search_engine_choice/search_engine_choice_service_test_base.h",
     "search_engine_choice/search_engine_choice_service_unittest.cc",
     "search_engine_choice/search_engine_choice_utils_unittest.cc",
+    "search_engine_split_metrics_unittest.cc",
     "search_host_to_urls_map_unittest.cc",
     "template_url_data_unittest.cc",
     "template_url_prepopulate_data_unittest.cc",
     "template_url_service_unittest.cc",
     "template_url_service_util_unittest.cc",
     "template_url_unittest.cc",
+    "ui_utils_unittest.cc",
+    "util_unittest.cc",
   ]
 
   deps = [
@@ -232,6 +254,7 @@ source_set("unit_tests") {
     "//build:branding_buildflags",
     "//components/country_codes",
     "//components/google/core/common",
+    "//components/lens:features",
     "//components/metrics",
     "//components/omnibox/common",
     "//components/policy/core/common",
@@ -256,6 +279,7 @@ source_set("unit_tests") {
     "//testing/gmock",
     "//testing/gtest",
     "//third_party/search_engines_data:prepopulated_engines",
+    "//third_party/search_engines_data:regional_settings",
     "//ui/base",
     "//url",
   ]

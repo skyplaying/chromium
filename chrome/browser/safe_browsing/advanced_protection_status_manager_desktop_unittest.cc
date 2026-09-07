@@ -56,12 +56,15 @@ class AdvancedProtectionStatusManagerDesktopTest : public TestWithPrefService {
                        bool is_under_advanced_protection) {
     AccountInfo account_info = identity_test_env_.MakeAccountAvailable(email);
 
-    account_info.is_under_advanced_protection = is_under_advanced_protection;
-    identity_test_env_.SetPrimaryAccount(account_info.email,
+    account_info =
+        AccountInfo::Builder(account_info)
+            .SetIsUnderAdvancedProtection(is_under_advanced_protection)
+            .Build();
+    identity_test_env_.SetPrimaryAccount(account_info.GetEmail(),
                                          signin::ConsentLevel::kSignin);
     identity_test_env_.UpdateAccountInfoForAccount(account_info);
 
-    return account_info.account_id;
+    return account_info.GetAccountId();
   }
 
   void MakeOAuthTokenFetchSucceed(const CoreAccountId& account_id,
@@ -76,10 +79,11 @@ class AdvancedProtectionStatusManagerDesktopTest : public TestWithPrefService {
                                bool is_transient_error) {
     identity_test_env_.WaitForAccessTokenRequestIfNecessaryAndRespondWithError(
         account_id,
-        GoogleServiceAuthError(
-            is_transient_error
-                ? GoogleServiceAuthError::CONNECTION_FAILED
-                : GoogleServiceAuthError::INVALID_GAIA_CREDENTIALS));
+        is_transient_error
+            ? GoogleServiceAuthError::FromConnectionError(net::ERR_FAILED)
+            : GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
+                  GoogleServiceAuthError::InvalidGaiaCredentialsReason::
+                      UNKNOWN));
   }
 
  protected:
@@ -435,7 +439,9 @@ TEST_F(AdvancedProtectionStatusManagerDesktopTest,
   // Sign in, but don't set this as the primary account.
   AccountInfo account_info = identity_test_env_.MakePrimaryAccountAvailable(
       "test@test.com", signin::ConsentLevel::kSignin);
-  account_info.is_under_advanced_protection = true;
+  account_info = AccountInfo::Builder(account_info)
+                     .SetIsUnderAdvancedProtection(true)
+                     .Build();
   identity_test_env_.UpdateAccountInfoForAccount(account_info);
 
   EXPECT_TRUE(aps_manager.IsUnderAdvancedProtection());

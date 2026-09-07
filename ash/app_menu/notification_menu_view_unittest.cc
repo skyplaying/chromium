@@ -7,9 +7,9 @@
 #include "ash/app_menu/notification_item_view.h"
 #include "ash/app_menu/notification_menu_view_test_api.h"
 #include "base/memory/raw_ptr.h"
-#include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/run_until.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/compositor/layer.h"
 #include "ui/events/base_event_utils.h"
@@ -70,8 +70,7 @@ class MockNotificationMenuController : public views::SlideOutControllerDelegate,
   int overflow_added_or_removed_count_ = 0;
 
   // Owned by NotificationMenuViewTest.
-  raw_ptr<NotificationMenuView, DanglingUntriaged> notification_menu_view_ =
-      nullptr;
+  raw_ptr<NotificationMenuView> notification_menu_view_ = nullptr;
 };
 
 }  // namespace
@@ -124,7 +123,13 @@ class NotificationMenuViewTest : public views::ViewsTestBase {
   }
 
   void TearDown() override {
+    mock_notification_menu_controller_->set_notification_menu_view(nullptr);
+    notification_menu_view_ = nullptr;
     widget_->Close();
+    test_api_.reset();
+    widget_.reset();
+    mock_notification_menu_controller_.reset();
+    zero_duration_scope_.reset();
     views::ViewsTestBase::TearDown();
   }
 
@@ -213,7 +218,7 @@ class NotificationMenuViewTest : public views::ViewsTestBase {
  private:
   std::unique_ptr<MockNotificationMenuController>
       mock_notification_menu_controller_;
-  raw_ptr<NotificationMenuView, DanglingUntriaged> notification_menu_view_;
+  raw_ptr<NotificationMenuView> notification_menu_view_;
   std::unique_ptr<NotificationMenuViewTestAPI> test_api_;
   std::unique_ptr<views::Widget> widget_;
   std::unique_ptr<gfx::ScopedAnimationDurationScaleMode> zero_duration_scope_;
@@ -352,8 +357,9 @@ TEST_F(NotificationMenuViewTest, MAYBE_SlideOut) {
   EXPECT_EQ(-200.f, GetSlideAmount());
   // Release the gesture, the notification should slide out.
   EndScroll();
-  base::RunLoop().RunUntilIdle();
-  EXPECT_EQ(1, mock_notification_menu_controller()->slide_out_count_);
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    return mock_notification_menu_controller()->slide_out_count_ == 1;
+  }));
   EXPECT_EQ(0, mock_notification_menu_controller()->activation_count_);
 }
 

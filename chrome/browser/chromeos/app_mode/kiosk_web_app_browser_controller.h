@@ -15,10 +15,7 @@
 #include "content/public/browser/web_contents.h"
 #include "ui/base/models/image_model.h"
 
-class Browser;
-
 namespace web_app {
-class WebAppRegistrar;
 class WebAppProvider;
 }  // namespace web_app
 
@@ -30,7 +27,7 @@ namespace chromeos {
 class KioskWebAppBrowserController : public web_app::AppBrowserController {
  public:
   KioskWebAppBrowserController(web_app::WebAppProvider& provider,
-                               Browser* browser,
+                               BrowserWindowInterface* browser,
                                webapps::AppId app_id);
   KioskWebAppBrowserController(const KioskWebAppBrowserController&) = delete;
   KioskWebAppBrowserController& operator=(const KioskWebAppBrowserController&) =

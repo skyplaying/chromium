@@ -5,6 +5,7 @@
 /**
  * @fileoverview The ChromeVox panel and menus.
  */
+import type {BridgeCallbackId} from '/common/bridge_callback_manager.js';
 import {BridgeHelper} from '/common/bridge_helper.js';
 import {BrowserUtil} from '/common/browser_util.js';
 import {constants} from '/common/constants.js';
@@ -16,7 +17,7 @@ import {Command} from '../common/command.js';
 import {Msgs} from '../common/msgs.js';
 import type {PanelCommand} from '../common/panel_command.js';
 import {PanelCommandType} from '../common/panel_command.js';
-import type {MenuDataForTest, PanelNodeMenuItemData} from '../common/panel_menu_data.js';
+import type {CandidateMenuItemData, MenuDataForTest, PanelNodeMenuItemData} from '../common/panel_menu_data.js';
 import {SettingsManager} from '../common/settings_manager.js';
 
 import {ISearchUI} from './i_search_ui.js';
@@ -106,6 +107,13 @@ export class Panel implements PanelInterface {
         BridgeConstants.Panel.TARGET,
         BridgeConstants.Panel.Action.ON_CURRENT_RANGE_CHANGED,
         () => this.onCurrentRangeChanged_());
+    // Handler for presenting conversion candidates, currently used by
+    // Japanese IME kana-to-kanji conversion, via a single lightweight menu.
+    BridgeHelper.registerHandler(
+        BridgeConstants.Panel.TARGET,
+        BridgeConstants.Panel.Action.SHOW_CANDIDATE_MENU,
+        (items: CandidateMenuItemData[], resultCallbackId: BridgeCallbackId) =>
+            this.menuManager_.onShowCandidateMenu(items, resultCallbackId));
     this.updateFromPrefs_();
 
     // These handlers are all for tests.
@@ -604,7 +612,7 @@ export class Panel implements PanelInterface {
       }
 
       const topCell = row1!.insertCell(-1);
-      topCell.innerHTML = groups[i][0];
+      topCell.textContent = groups[i][0];
       topCell.id = i + '-textCell';
       topCell.setAttribute('data-companionIDs', i + '-brailleCell');
       topCell.className = 'unhighlighted-cell';
@@ -617,7 +625,7 @@ export class Panel implements PanelInterface {
         let brailleText = groups[i][1];
         while (cellCount + brailleText.length > cols) {
           // At this point we already have a bottomCell to fill, so fill it.
-          bottomCell.innerHTML = brailleText.substring(0, cols - cellCount);
+          bottomCell.textContent = brailleText.substring(0, cols - cellCount);
           // Update to see what we still have to fill.
           brailleText = brailleText.substring(cols - cellCount);
           // Make new row.
@@ -651,10 +659,10 @@ export class Panel implements PanelInterface {
           cellCount = 0;
         }
         // Fill the rest.
-        bottomCell.innerHTML = brailleText;
+        bottomCell.textContent = brailleText;
         cellCount = brailleText.length;
       } else {
-        bottomCell.innerHTML = groups[i][1];
+        bottomCell.textContent = groups[i][1];
         cellCount += groups[i][1].length;
       }
     }
@@ -714,6 +722,11 @@ export class Panel implements PanelInterface {
     if (pendingCallback) {
       await pendingCallback();
     }
+    // If a candidate menu was open and closing wasn't due to selecting a
+    // candidate (pendingCallback above already resolved and cleared that
+    // case), let the background know the user dismissed it without
+    // choosing one, so the pending conversion doesn't hang forever.
+    await this.menuManager_.cancelPendingCandidateMenu();
     BackgroundBridge.PanelBackground.clearSavedNode();
   }
 

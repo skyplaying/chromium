@@ -19,19 +19,21 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/actions/chrome_action_id.h"
 #include "chrome/browser/ui/browser_actions.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/layout_constants.h"
+#include "chrome/browser/ui/side_panel/side_panel_enums.h"
 #include "chrome/browser/ui/toolbar/toolbar_pref_names.h"
 #include "chrome/browser/ui/views/extensions/browser_action_drag_data.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_enums.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_util.h"
 #include "chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.h"
 #include "chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container_layout.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_divider.h"
-#include "chrome/common/chrome_features.h"
+#include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+#include "chrome/browser/ui/web_applications/app_browser_controller.h"
+#include "chrome/browser/ui/window_feature_controller/window_feature_controller.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/feature_engagement/public/feature_constants.h"
 #include "ui/actions/action_id.h"
@@ -269,6 +271,12 @@ void PinnedToolbarActionsContainer::UpdatePinnedStateAndAnnounce(
   model_->UpdatePinnedState(id, pin);
 }
 
+void PinnedToolbarActionsContainer::MovePinnedAction(
+    actions::ActionId action_id,
+    int target_index) {
+  model_->MovePinnedAction(action_id, target_index);
+}
+
 void PinnedToolbarActionsContainer::MovePinnedActionBy(actions::ActionId id,
                                                        int delta) {
   DCHECK(IsActionPinned(id));
@@ -311,7 +319,7 @@ bool PinnedToolbarActionsContainer::AreDropTypesRequired() {
 
 bool PinnedToolbarActionsContainer::CanDrop(const OSExchangeData& data) {
   return BrowserActionDragData::CanDrop(data,
-                                        browser_view_->browser()->profile());
+                                        browser_view_->browser()->GetProfile());
 }
 
 void PinnedToolbarActionsContainer::OnDragEntered(
@@ -391,7 +399,7 @@ views::View::DropCallback PinnedToolbarActionsContainer::GetDropCallback(
   base::ScopedClosureRunner cleanup(
       base::BindOnce(&PinnedToolbarActionsContainer::DragDropCleanup,
                      weak_ptr_factory_.GetWeakPtr(), action_id));
-  return base::BindOnce(&PinnedToolbarActionsContainer::MovePinnedAction,
+  return base::BindOnce(&PinnedToolbarActionsContainer::MovePinnedActionOnDrop,
                         drop_weak_ptr_factory_.GetWeakPtr(), action_id, index,
                         std::move(cleanup));
 }
@@ -458,7 +466,7 @@ actions::ActionItem* PinnedToolbarActionsContainer::GetActionItemFor(
     return nullptr;
   }
   return actions::ActionManager::Get().FindAction(
-      id, browser_view_->browser()->browser_actions()->root_action_item());
+      id, BrowserActions::From(browser_view_->browser())->root_action_item());
 }
 
 PinnedActionToolbarButton* PinnedToolbarActionsContainer::AddPoppedOutButtonFor(
@@ -519,9 +527,10 @@ void PinnedToolbarActionsContainer::AddPinnedActionButtonFor(
   // Pinned buttons shouldn't appear in web apps or browsers without a tabstrip
   // (like popups).
   if (auto* browser = browser_view_->browser();
-      browser && (browser->app_controller() ||
-                  !browser->SupportsWindowFeature(
-                      Browser::WindowFeature::kFeatureTabStrip))) {
+      browser &&
+      (web_app::AppBrowserController::From(browser) ||
+       !WindowFeatureController::From(browser)->SupportsWindowFeature(
+           WindowFeatureController::WindowFeature::kFeatureTabStrip))) {
     return;
   }
 
@@ -630,17 +639,16 @@ void PinnedToolbarActionsContainer::RemoveButton(
 }
 
 bool PinnedToolbarActionsContainer::IsOverflowed(actions::ActionId id) {
-  const auto* const pinned_button = GetPinnedButtonFor(id);
-  // TODO(pengchaocai): Support popped out buttons overflow.
+  const auto* const button = GetButtonFor(id);
   // TODO(crbug.com/40949386): If this container is not visible treat the
   // elements inside as overflowed.
 
   // Need to use the target layout in case the animation has not yet shown the
   // button but is in the process of revealing it.
   const auto* const layout =
-      GetAnimatingLayoutManager()->target_layout().GetLayoutFor(pinned_button);
+      GetAnimatingLayoutManager()->target_layout().GetLayoutFor(button);
   return GetAnimatingLayoutManager()->target_layout_manager()->CanBeVisible(
-             pinned_button) &&
+             button) &&
          layout && (!GetVisible() || !layout->visible);
 }
 
@@ -658,17 +666,20 @@ bool PinnedToolbarActionsContainer::ShouldAnyButtonsOverflow(
         GetAnimatingLayoutManager()->target_layout_manager()->GetProposedLayout(
             available_size);
   }
-  for (PinnedActionToolbarButton* pinned_button : pinned_buttons_) {
+
+  auto is_button_overflowing = [&](PinnedActionToolbarButton* button) {
     if (views::ChildLayout* child_layout =
-            proposed_layout.GetLayoutFor(pinned_button)) {
+            proposed_layout.GetLayoutFor(button)) {
       if (GetAnimatingLayoutManager()->target_layout_manager()->CanBeVisible(
-              pinned_button) &&
+              button) &&
           !child_layout->visible) {
         return true;
       }
     }
-  }
-  return false;
+    return false;
+  };
+  return std::ranges::any_of(pinned_buttons_, is_button_overflowing) ||
+         std::ranges::any_of(popped_out_buttons_, is_button_overflowing);
 }
 
 bool PinnedToolbarActionsContainer::IsActionPinned(actions::ActionId id) {
@@ -782,7 +793,7 @@ void PinnedToolbarActionsContainer::SetActionButtonIconVisibility(
   }
 }
 
-void PinnedToolbarActionsContainer::MovePinnedAction(
+void PinnedToolbarActionsContainer::MovePinnedActionOnDrop(
     actions::ActionId action_id,
     size_t index,
     base::ScopedClosureRunner cleanup,
@@ -850,14 +861,62 @@ PinnedToolbarActionsContainer::CreateOrGetButtonForAction(
     return button;
   }
 
-  auto button = std::make_unique<PinnedActionToolbarButton>(
-      browser_view_->browser(), id, weak_ptr_factory_.GetWeakPtr());
+  std::unique_ptr<PinnedActionToolbarButton> button;
+  actions::ActionItem* action_item = GetActionItemFor(id);
+  auto* custom_factory =
+      action_item->GetProperty(kCustomPinnedActionToolbarButtonFactoryKey);
+
+  if (custom_factory && !custom_factory->is_null()) {
+    button = custom_factory->Run(browser_view_->browser(), id,
+                                 weak_ptr_factory_.GetWeakPtr());
+  } else {
+    button = std::make_unique<PinnedActionToolbarButton>(
+        browser_view_->browser(), id, weak_ptr_factory_.GetWeakPtr());
+  }
   action_view_controller_->CreateActionViewRelationship(
-      button.get(), GetActionItemFor(id)->GetAsWeakPtr());
+      button.get(), action_item->GetAsWeakPtr());
 
   button->SetPaintToLayer();
   button->layer()->SetFillsBoundsOpaquely(false);
   return button;
+}
+
+void PinnedToolbarActionsContainer::PostOrQueueActionAfterAnimation(
+    base::OnceClosure action) {
+  GetAnimatingLayoutManager()->PostOrQueueAction(std::move(action));
+}
+
+ToolbarButton* PinnedToolbarActionsContainer::GetDownloadButton() {
+  return GetButtonFor(kActionShowDownloads);
+}
+
+views::BubbleAnchor PinnedToolbarActionsContainer::GetBubbleAnchor(
+    actions::ActionId action_id) {
+  if (IsOverflowed(action_id)) {
+    if (browser_view_ && browser_view_->toolbar() &&
+        browser_view_->toolbar()->overflow_button() &&
+        browser_view_->toolbar()->overflow_button()->GetVisible()) {
+      return views::BubbleAnchor(browser_view_->toolbar()->overflow_button());
+    }
+  }
+  return views::BubbleAnchor(GetButtonFor(action_id));
+}
+
+void PinnedToolbarActionsContainer::GetBubbleAnchorAsync(
+    actions::ActionId action_id,
+    base::OnceCallback<void(BubbleAnchorResult)> callback) {
+  auto anchor = GetBubbleAnchor(action_id);
+  if (anchor.IsNull()) {
+    std::move(callback).Run(
+        base::unexpected(GetAnchorFailureReason::kAnchorNotFound));
+  } else {
+    std::move(callback).Run(anchor);
+  }
+}
+
+PinnedActionToolbarButton*
+PinnedToolbarActionsContainer::GetChromeLabsButton() {
+  return GetButtonFor(kActionShowChromeLabs);
 }
 
 BEGIN_METADATA(PinnedToolbarActionsContainer)

@@ -62,8 +62,6 @@ class QuickDeleteDialogDelegate {
      */
     private @Nullable PropertyModel mModalDialogPropertyModel;
 
-    private TimePeriodSpinnerOption mCurrentTimePeriodOption;
-
     /** The modal dialog controller to detect events on the dialog. */
     private final ModalDialogProperties.Controller mModalDialogController =
             new ModalDialogProperties.Controller() {
@@ -111,11 +109,6 @@ class QuickDeleteDialogDelegate {
         mOnDismissCallback = onDismissCallback;
         mTabModelSelector = tabModelSelector;
         mTimePeriodChangeObserver = timePeriodChangeObserver;
-
-        mCurrentTimePeriodOption =
-                new TimePeriodSpinnerOption(
-                        TimePeriod.LAST_15_MINUTES,
-                        mContext.getString(R.string.clear_browsing_data_tab_period_15_minutes));
     }
 
     /** A method to create the dialog attributes for the quick delete dialog. */
@@ -123,6 +116,10 @@ class QuickDeleteDialogDelegate {
         // Update Spinner
         Spinner quickDeleteSpinner = mQuickDeleteView.findViewById(R.id.quick_delete_spinner);
         updateSpinner(quickDeleteSpinner);
+
+        // Make the spinner row clickable to trigger the spinner
+        View spinnerRow = mQuickDeleteView.findViewById(R.id.quick_delete_spinner_row);
+        spinnerRow.setOnClickListener(view -> quickDeleteSpinner.performClick());
 
         // Update the "More options" button.
         ButtonCompat moreOptionsView =
@@ -157,8 +154,7 @@ class QuickDeleteDialogDelegate {
     private void updateSpinner(Spinner quickDeleteSpinner) {
         TimePeriodSpinnerOption[] options = getTimePeriodSpinnerOptions(mContext);
         ArrayAdapter<TimePeriodSpinnerOption> adapter =
-                new ArrayAdapter<>(
-                        mContext, android.R.layout.simple_spinner_dropdown_item, options) {
+                new ArrayAdapter<>(mContext, android.R.layout.simple_spinner_item, options) {
 
                     @Override
                     public View getView(
@@ -168,8 +164,16 @@ class QuickDeleteDialogDelegate {
                         return view;
                     }
                 };
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
 
         quickDeleteSpinner.setAdapter(adapter);
+        // Disable focus/click on the spinner itself so the parent row handles accessibility.
+        // This must be done programmatically after setAdapter() because setAdapter() resets
+        // the focusability of the AdapterView based on whether it has items.
+        quickDeleteSpinner.setFocusable(false);
+        quickDeleteSpinner.setClickable(false);
+        quickDeleteSpinner.setLongClickable(false);
+
         quickDeleteSpinner.setOnItemSelectedListener(
                 new AdapterView.OnItemSelectedListener() {
                     @Override
@@ -177,21 +181,13 @@ class QuickDeleteDialogDelegate {
                             AdapterView<?> adapterView, View view, int position, long id) {
                         TimePeriodSpinnerOption item =
                                 (TimePeriodSpinnerOption) adapterView.getItemAtPosition(position);
-                        mCurrentTimePeriodOption = item;
-                        @TimePeriod int timePeriod = mCurrentTimePeriodOption.getTimePeriod();
+                        @TimePeriod int timePeriod = item.getTimePeriod();
                         mTimePeriodChangeObserver.onTimePeriodChanged(timePeriod);
                         recordTimePeriodChange(timePeriod);
                     }
 
                     @Override
-                    public void onNothingSelected(AdapterView<?> adapterView) {
-                        // Revert back to default time.
-                        String message =
-                                mContext.getString(
-                                        R.string.clear_browsing_data_tab_period_15_minutes);
-                        mCurrentTimePeriodOption =
-                                new TimePeriodSpinnerOption(TimePeriod.LAST_15_MINUTES, message);
-                    }
+                    public void onNothingSelected(AdapterView<?> adapterView) {}
                 });
     }
 

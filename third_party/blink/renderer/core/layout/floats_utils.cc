@@ -56,6 +56,7 @@ LayoutOpportunity FindLayoutOpportunityForFloat(
 
   return exclusion_space.FindLayoutOpportunity(
       adjusted_origin_point, unpositioned_float.available_size.inline_size,
+      direction,
       inline_size + fragment_margins.InlineSum() /* minimum_inline_size */);
 }
 
@@ -119,19 +120,19 @@ ExclusionShapeData* CreateExclusionShapeData(
 
   const ComputedStyle& style = unpositioned_float.node.Style();
   switch (style.ShapeOutside()->CssBox()) {
-    case CSSBoxType::kMissing:
-    case CSSBoxType::kMargin:
+    case ShapeBox::kMarginBox:
       shape_insets -= new_margins;
       break;
-    case CSSBoxType::kBorder:
+    case ShapeBox::kBorderBox:
       break;
-    case CSSBoxType::kPadding:
-    case CSSBoxType::kContent:
+    case ShapeBox::kPaddingBox:
+    case ShapeBox::kContentBox:
       const ConstraintSpace space =
           CreateConstraintSpaceForFloat(unpositioned_float);
       BoxStrut strut = ComputeBorders(space, unpositioned_float.node);
-      if (style.ShapeOutside()->CssBox() == CSSBoxType::kContent)
+      if (style.ShapeOutside()->CssBox() == ShapeBox::kContentBox) {
         strut += ComputePadding(space, style);
+      }
       // |TextDirection::kLtr| is used as this is line relative.
       shape_insets = strut.ConvertToPhysical(style.GetWritingDirection())
                          .ConvertToLogical({parent_space.GetWritingMode(),
@@ -164,7 +165,6 @@ const ExclusionArea* CreateExclusionArea(
           : nullptr;
 
   return ExclusionArea::Create(BfcRect(start_offset, end_offset), type,
-                               unpositioned_float.is_hidden_for_paint,
                                std::move(shape_data));
 }
 
@@ -401,8 +401,7 @@ PositionedFloat PositionFloat(UnpositionedFloat* unpositioned_float,
                               unpositioned_float->FragmentainerSpaceLeft() +
                                   parent_space.ExpectedBfcBlockOffset());
     const ExclusionArea* exclusion = ExclusionArea::Create(
-        BfcRect(past_everything, past_everything), float_type,
-        unpositioned_float->is_hidden_for_paint);
+        BfcRect(past_everything, past_everything), float_type);
     exclusion_space->Add(std::move(exclusion));
 
     // Also specify that there will be a fragmentainer break before this

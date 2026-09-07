@@ -46,7 +46,7 @@ class CORE_EXPORT HTMLFencedFrameElement : public HTMLFrameOwnerElement {
     explicit FencedFrameDelegate(HTMLFencedFrameElement* outer_element);
     ~FencedFrameDelegate() = default;
 
-    void Navigate(const KURL&, const String&);
+    void Navigate(const KURL&);
     // This method is used to clean up all state in preparation for destruction,
     // even though the destruction may happen arbitrarily later during garbage
     // collection.
@@ -71,6 +71,10 @@ class CORE_EXPORT HTMLFencedFrameElement : public HTMLFrameOwnerElement {
   explicit HTMLFencedFrameElement(Document& document);
   ~HTMLFencedFrameElement() override;
   void Trace(Visitor* visitor) const override;
+
+  ElementType GetElementType() const final {
+    return ElementType::kHTMLFencedFrameElement;
+  }
 
   DOMTokenList* sandbox() const;
 
@@ -115,18 +119,6 @@ class CORE_EXPORT HTMLFencedFrameElement : public HTMLFrameOwnerElement {
   // frame to the config's URL. If `config` is null, navigates to about:blank.
   void setConfig(FencedFrameConfig* config);
 
-  // Web-exposed API that returns whether an opaque-ads fenced frame would be
-  // allowed to be created in the current active document of this node.
-  // Note: This function is deprecated. Please use
-  // `NavigatorAuction::canLoadAdAuctionFencedFrame` instead.
-  static bool canLoadOpaqueURL(ScriptState*);
-
-  // Fires an event named `event_type` at `this`. This path is only invoked for
-  // events that were originally fired *inside* of the fenced frame content, and
-  // that have been intentionally propagated outwards to `this`, the frame
-  // owner, for reception by the embedder script.
-  void DispatchFencedEvent(const String& event_type);
-
  private:
   // This method will only navigate the underlying frame if the element
   // `isConnected()`. It will be deferred if the page is currently prerendering.
@@ -134,8 +126,7 @@ class CORE_EXPORT HTMLFencedFrameElement : public HTMLFrameOwnerElement {
       const KURL& url,
       std::optional<bool> deprecated_should_freeze_initial_size = std::nullopt,
       std::optional<gfx::Size> container_size = std::nullopt,
-      std::optional<gfx::Size> content_size = std::nullopt,
-      String embedder_shared_storage_context = String());
+      std::optional<gfx::Size> content_size = std::nullopt);
 
   // This method delegates to `Navigate()` above only if `this` has a non-null
   // `config_`. If that's the case, this method pulls the appropriate URL off of
@@ -242,6 +233,10 @@ class CORE_EXPORT HTMLFencedFrameElement : public HTMLFrameOwnerElement {
 // enabled, which would result in creation of an HTMLUnknownElement with the
 // "fencedframe" tag name. We can't support casting those elements to
 // HTMLFencedFrameElements because they are not fenced frame elements.
+// See
+// https://chromium.googlesource.com/chromium/src.git/+/main/docs/custom_type_helpers_for_origin_trial_elements.md
+// for more details.
+//
 // TODO(crbug.com/1123606): Remove these custom helpers when the origin trial is
 // over.
 template <>

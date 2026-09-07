@@ -23,7 +23,9 @@ enum class FormInputAccessoryViewSubitemGroup {
   // address button.
   kManualFillButtons,
   // Navigation buttons: the previous button and the next button.
-  kNavigationButtons
+  kNavigationButtons,
+  // AtMemory button with title.
+  kAtMemoryFullButton,
 };
 
 // Informs the receiver of actions in the accessory view.
@@ -61,9 +63,18 @@ enum class FormInputAccessoryViewSubitemGroup {
 - (void)formInputAccessoryViewDidTapAddressManualFillButton:
     (FormInputAccessoryView*)sender;
 
+// This method is called when the AtMemory manual fill button is tapped.
+// TODO(crbug.com/522326512): Verify this interface.
+- (void)formInputAccessoryViewDidTapAtMemoryManualFillButton:
+    (FormInputAccessoryView*)sender;
+
 @end
 
 extern NSString* const kFormInputAccessoryViewAccessibilityID;
+
+extern NSString* const kFormInputAccessoryViewAtMemoryButtonAccessibilityID;
+
+extern NSString* const kFormInputAccessoryViewAtMemoryFullButtonAccessibilityID;
 
 extern NSString* const
     kFormInputAccessoryViewOmniboxTypingShieldAccessibilityID;
@@ -97,12 +108,25 @@ extern NSString* const
 // "addressManualFillSymbol". Nil otherwise.
 @property(nonatomic, readonly, weak) UIButton* addressManualFillButton;
 
+// The AtMemory icon button.
+@property(nonatomic, readonly, weak) UIButton* atMemoryManualFillButton;
+
+// The AtMemory full button (icon + title). This button shows separately
+// when a `contenteditable` element is focused.
+@property(nonatomic, readonly, weak) UIButton* atMemoryFullButton;
+
 // The leading view.
 @property(nonatomic, readonly, weak) UIView* leadingView;
 
 // The trailing view. Can be nil. It is the parent view of all manual fill
 // buttons, and the close button when split view is not enabled.
 @property(nonatomic, readonly, weak) UIView* trailingView;
+
+// Hides or shows the AtMemory button.
+@property(nonatomic, assign) BOOL atMemoryButtonHidden;
+
+// Whether touches in blank areas should pass through to the underlying UI.
+@property(nonatomic, assign) BOOL passThroughTouchesEnabled;
 
 // Sets up the view with the given `leadingView`. Navigation controls are shown
 // on the trailing side and use `delegate` for actions.
@@ -119,7 +143,6 @@ extern NSString* const
 // - The background color is set to grey.
 // If `closeButtonSymbol` is nil, the close button will use the default text.
 // Otherwise, it will use `closeButtonSymbol` as the image instead.
-// `splitViewEnabled` indicates whether two-bubble feature flag is enabled.
 // `isTabletFormFactor` modifies the appearance of the manual fill button.
 - (void)setUpWithLeadingView:(UIView*)leadingView
             navigationDelegate:(id<FormInputAccessoryViewDelegate>)delegate
@@ -127,8 +150,8 @@ extern NSString* const
       passwordManualFillSymbol:(UIImage*)passwordManualFillSymbol
     creditCardManualFillSymbol:(UIImage*)creditCardManualFillSymbol
        addressManualFillSymbol:(UIImage*)addressManualFillSymbol
+      atMemoryManualFillSymbol:(UIImage*)atMemoryManualFillSymbol
              closeButtonSymbol:(UIImage*)closeButtonSymbol
-              splitViewEnabled:(BOOL)splitViewEnabled
             isTabletFormFactor:(BOOL)isTabletFormFactor;
 
 // Sets the height of the omnibox typing shield. Set a height of 0 to hide the
@@ -147,6 +170,10 @@ extern NSString* const
 
 // Returns the group of buttons currently being shown.
 - (FormInputAccessoryViewSubitemGroup)currentGroup;
+
+// Overrides the interface style of subviews, such as the trailing view and
+// close button.
+- (void)setSubviewsOverrideUserInterfaceStyle:(UIUserInterfaceStyle)style;
 
 @end
 

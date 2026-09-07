@@ -61,7 +61,7 @@ class PolicyConverterTest : public testing::Test {
   // to compare with `EXPECT_EQ`.
   std::string ConvertJavaStringArrayToListValue(
       JNIEnv* env,
-      const JavaRef<jobjectArray>& java_array) {
+      const JavaRef<JArray<jstring>>& java_array) {
     base::ListValue list =
         PolicyConverter::ConvertJavaStringArrayToListValue(env, java_array);
 
@@ -72,18 +72,10 @@ class PolicyConverterTest : public testing::Test {
   }
 
   // Converts the passed in values to a java string array
-  ScopedJavaLocalRef<jobjectArray> MakeJavaStringArray(
+  ScopedJavaLocalRef<JArray<jstring>> MakeJavaStringArray(
       JNIEnv* env,
       std::vector<std::string> values) {
-    jobjectArray java_array = (jobjectArray)env->NewObjectArray(
-        values.size(), jni_zero::g_string_class, nullptr);
-    for (size_t i = 0; i < values.size(); i++) {
-      env->SetObjectArrayElement(
-          java_array, i,
-          base::android::ConvertUTF8ToJavaString(env, values[i]).obj());
-    }
-
-    return ScopedJavaLocalRef<jobjectArray>::Adopt(env, java_array);
+    return jni_zero::NewStringArray(env, values);
   }
 
   Schema schema_;
@@ -151,9 +143,13 @@ TEST_F(PolicyConverterTest, ConvertToListValue) {
   EXPECT_EQ("[\"foo\",\"bar\"]", Convert(base::Value("foo,bar"), list_schema));
   EXPECT_EQ("[\"foo\",\"bar\"]", Convert(base::Value("foo, bar"), list_schema));
   EXPECT_EQ("19", Convert(base::Value(19), list_schema));
+  EXPECT_EQ("[\"19\"]", Convert(base::Value("19"), list_schema));
 
   EXPECT_FALSE(
       PolicyConverter::ConvertValueToSchema(base::Value(""), list_schema)
+          .has_value());
+  EXPECT_FALSE(
+      PolicyConverter::ConvertValueToSchema(base::Value("\"\""), list_schema)
           .has_value());
 }
 
@@ -178,9 +174,13 @@ TEST_F(PolicyConverterTest, ConvertToDictValue) {
             Convert(base::Value("{\"moose\": true}"), dict_schema));
   EXPECT_EQ("\"fnord\"", Convert(base::Value("fnord"), dict_schema));
   EXPECT_EQ("1729", Convert(base::Value(1729), dict_schema));
+  EXPECT_EQ("\"1729\"", Convert(base::Value("1729"), dict_schema));
 
   EXPECT_FALSE(
       PolicyConverter::ConvertValueToSchema(base::Value(""), dict_schema)
+          .has_value());
+  EXPECT_FALSE(
+      PolicyConverter::ConvertValueToSchema(base::Value("\"\""), dict_schema)
           .has_value());
 }
 

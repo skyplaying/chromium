@@ -23,6 +23,55 @@ namespace metrics {
 
 namespace {
 
+// Dictates default limits applied to UMA log queues and log sizes.
+// We use raised limits for Android Chrome and Desktop (Windows, Mac, Linux,
+// ChromeOS) per experiment results that show these reduce data loss. Other
+// platforms (such as iOS) have not yet been tested with raised limits and
+// retain the baseline limits.
+//
+// Note: Android WebView does not use these limits, per the implementation in
+// android_webview/browser/metrics/aw_metrics_service_client.cc.
+struct LogTrimmingDefaults {
+  size_t initial_log_count_trim_threshold;
+  size_t ongoing_log_count_trim_threshold;
+  size_t log_bytes_trim_threshold;
+  size_t max_ongoing_log_size_bytes;
+};
+
+constexpr LogTrimmingDefaults GetLogTrimmingDefaults() {
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+  return {
+      .initial_log_count_trim_threshold = 20,
+      .ongoing_log_count_trim_threshold = 8,
+      .log_bytes_trim_threshold = 3 * 1024 * 1024,  // 3 MiB
+      .max_ongoing_log_size_bytes = 1024 * 1024,    // 1 MiB
+  };
+#elif BUILDFLAG(IS_CHROMEOS)
+  // ChromeOS has higher limits to reduce data loss, but the trim threshold is
+  // standard for historical reasons, see crrev.com/c/2904327.
+  return {
+      .initial_log_count_trim_threshold = 20,
+      .ongoing_log_count_trim_threshold = 8,
+      .log_bytes_trim_threshold = 300 * 1024,     // 300 KiB
+      .max_ongoing_log_size_bytes = 1024 * 1024,  // 1 MiB
+  };
+#elif BUILDFLAG(IS_ANDROID)
+  return {
+      .initial_log_count_trim_threshold = 40,
+      .ongoing_log_count_trim_threshold = 16,
+      .log_bytes_trim_threshold = 600 * 1024,    // 600 KiB
+      .max_ongoing_log_size_bytes = 200 * 1024,  // 200 KiB
+  };
+#else
+  return {
+      .initial_log_count_trim_threshold = 20,
+      .ongoing_log_count_trim_threshold = 8,
+      .log_bytes_trim_threshold = 300 * 1024,    // 300 KiB
+      .max_ongoing_log_size_bytes = 100 * 1024,  // 100 KiB
+  };
+#endif
+}
+
 // The number of initial/ongoing logs to persist in the queue before logs are
 // dropped.
 // Note: Both the count threshold and the bytes threshold (see
@@ -42,10 +91,12 @@ namespace {
 //
 // Refer to //components/metrics/unsent_log_store.h for more details on when
 // logs are dropped.
-const base::FeatureParam<int> kInitialLogCountTrimThreshold{
-    &features::kMetricsLogTrimming, "initial_log_count_trim_threshold", 20};
-const base::FeatureParam<int> kOngoingLogCountTrimThreshold{
-    &features::kMetricsLogTrimming, "ongoing_log_count_trim_threshold", 8};
+const base::FeatureParam<size_t> kInitialLogCountTrimThreshold{
+    &features::kMetricsLogTrimming, "initial_log_count_trim_threshold",
+    GetLogTrimmingDefaults().initial_log_count_trim_threshold};
+const base::FeatureParam<size_t> kOngoingLogCountTrimThreshold{
+    &features::kMetricsLogTrimming, "ongoing_log_count_trim_threshold",
+    GetLogTrimmingDefaults().ongoing_log_count_trim_threshold};
 
 // The number bytes of the queue to be persisted before logs are dropped. This
 // will be applied to both log queues (initial/ongoing). This ensures that a
@@ -57,28 +108,21 @@ const base::FeatureParam<int> kOngoingLogCountTrimThreshold{
 //
 // Refer to //components/metrics/unsent_log_store.h for more details on when
 // logs are dropped.
-const base::FeatureParam<int> kLogBytesTrimThreshold{
+const base::FeatureParam<size_t> kLogBytesTrimThreshold{
     &features::kMetricsLogTrimming, "log_bytes_trim_threshold",
-    300 * 1024  // 300 KiB
-};
+    GetLogTrimmingDefaults().log_bytes_trim_threshold};
 
 // If an initial/ongoing metrics log upload fails, and the transmission is over
 // this byte count, then we will discard the log, and not try to retransmit it.
 // We also don't persist the log to the prefs for transmission during the next
 // chrome session if this limit is exceeded.
-const base::FeatureParam<int> kMaxInitialLogSizeBytes{
+const base::FeatureParam<size_t> kMaxInitialLogSizeBytes{
     &features::kMetricsLogTrimming, "max_initial_log_size_bytes",
     0  // Initial logs can be of any size.
 };
-const base::FeatureParam<int> kMaxOngoingLogSizeBytes{
+const base::FeatureParam<size_t> kMaxOngoingLogSizeBytes{
     &features::kMetricsLogTrimming, "max_ongoing_log_size_bytes",
-#if BUILDFLAG(IS_CHROMEOS)
-    // Increase CrOS limit to accommodate SampledProfile data (crbug/1210595).
-    1024 * 1024  // 1 MiB
-#else
-    100 * 1024  // 100 KiB
-#endif  // BUILDFLAG(IS_CHROMEOS)
-};
+    GetLogTrimmingDefaults().max_ongoing_log_size_bytes};
 
 // The minimum time in seconds between consecutive metrics report uploads.
 constexpr int kMetricsUploadIntervalSecMinimum = 20;
@@ -106,9 +150,6 @@ MetricsServiceClient::GetStructuredMetricsService() {
   return nullptr;
 }
 
-bool MetricsServiceClient::ShouldUploadMetricsForUserId(uint64_t user_id) {
-  return true;
-}
 
 GURL MetricsServiceClient::GetMetricsServerUrl() {
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
@@ -216,21 +257,15 @@ MetricsLogStore::StorageLimits MetricsServiceClient::GetStorageLimits() const {
   return {
       .initial_log_queue_limits =
           UnsentLogStore::UnsentLogStoreLimits{
-              .min_log_count =
-                  static_cast<size_t>(kInitialLogCountTrimThreshold.Get()),
-              .min_queue_size_bytes =
-                  static_cast<size_t>(kLogBytesTrimThreshold.Get()),
-              .max_log_size_bytes =
-                  static_cast<size_t>(kMaxInitialLogSizeBytes.Get()),
+              .min_log_count = kInitialLogCountTrimThreshold.Get(),
+              .min_queue_size_bytes = kLogBytesTrimThreshold.Get(),
+              .max_log_size_bytes = kMaxInitialLogSizeBytes.Get(),
           },
       .ongoing_log_queue_limits =
           UnsentLogStore::UnsentLogStoreLimits{
-              .min_log_count =
-                  static_cast<size_t>(kOngoingLogCountTrimThreshold.Get()),
-              .min_queue_size_bytes =
-                  static_cast<size_t>(kLogBytesTrimThreshold.Get()),
-              .max_log_size_bytes =
-                  static_cast<size_t>(kMaxOngoingLogSizeBytes.Get()),
+              .min_log_count = kOngoingLogCountTrimThreshold.Get(),
+              .min_queue_size_bytes = kLogBytesTrimThreshold.Get(),
+              .max_log_size_bytes = kMaxOngoingLogSizeBytes.Get(),
           },
   };
 }
@@ -250,13 +285,19 @@ bool MetricsServiceClient::IsMetricsReportingForceEnabled() const {
   return ::metrics::IsMetricsReportingForceEnabled();
 }
 
-std::optional<bool> MetricsServiceClient::GetCurrentUserMetricsConsent() const {
+#if BUILDFLAG(IS_CHROMEOS)
+bool MetricsServiceClient::ShouldUploadMetricsForUserId(uint64_t user_id) {
+  return true;
+}
+
+std::optional<bool> MetricsServiceClient::GetCurrentUserMetricsChoice() const {
   return std::nullopt;
 }
 
 std::optional<std::string> MetricsServiceClient::GetCurrentUserId() const {
   return std::nullopt;
 }
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 std::optional<regional_capabilities::CountryIdHolder>
 MetricsServiceClient::GetProfileCountryIdForPrivateMetricsReporting() {

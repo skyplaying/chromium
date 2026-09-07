@@ -12,18 +12,12 @@ import("//mojo/public/tools/bindings/mojom.gni")
 import("//pdf/features.gni")
 import("//printing/buildflags/buildflags.gni")
 import("//testing/test.gni")
-import("//third_party/closure_compiler/compile_js.gni")
 import("//third_party/inspector_protocol/inspector_protocol.gni")
 import("//tools/grit/grit_rule.gni")
 import("//tools/grit/repack.gni")
 import("//tools/v8_context_snapshot/v8_context_snapshot.gni")
 
 assert(!is_ios && !is_android)
-
-if (headless_use_policy) {
-  assert(headless_use_prefs,
-         "'headless_use_policy' requires 'headless_use_prefs'.")
-}
 
 if (headless_enable_commands) {
   assert(
@@ -38,7 +32,8 @@ if (should_strip_binary) {
   import("//build/linux/strip_binary.gni")
 }
 
-# If supported, field trials need to be enabled by --enable-field-trial-config switch.
+# If supported, field trials need to be enabled by --enable-field-trial-config
+# switch.
 headless_support_field_trials = headless_use_prefs
 
 # Headless defines config applied to every target below.
@@ -51,10 +46,6 @@ config("headless_defines_config") {
 
   if (headless_use_prefs) {
     defines += [ "HEADLESS_USE_PREFS" ]
-  }
-
-  if (headless_use_policy) {
-    defines += [ "HEADLESS_USE_POLICY" ]
   }
 
   if (headless_support_field_trials) {
@@ -397,8 +388,7 @@ source_set("headless_browser") {
     "//components/optimization_guide/proto:optimization_guide_proto",
     "//components/origin_trials:browser",
     "//components/origin_trials:common",
-    "//components/os_crypt/async/browser",
-    "//components/os_crypt/sync",
+    "//components/os_crypt/browser",
     "//components/profile_metrics",
     "//components/security_state/content",
     "//components/security_state/core",
@@ -446,28 +436,6 @@ source_set("headless_browser") {
     ]
   }
 
-  if (headless_use_policy) {
-    sources += [
-      "lib/browser/policy/headless_browser_policy_connector.cc",
-      "lib/browser/policy/headless_browser_policy_connector.h",
-      "lib/browser/policy/headless_policies.cc",
-      "lib/browser/policy/headless_policies.h",
-      "lib/browser/policy/headless_policy_blocklist_service_factory.cc",
-      "lib/browser/policy/headless_policy_blocklist_service_factory.h",
-      "lib/browser/policy/headless_prefs.cc",
-      "lib/browser/policy/headless_prefs.h",
-    ]
-    deps += [
-      "//components/headless/policy",
-      "//components/policy:generated",
-      "//components/policy/content",
-      "//components/policy/content:safe_sites_navigation_throttle",
-      "//components/policy/core/browser",
-      "//components/policy/core/common:common_constants",
-      "//components/policy/core/common:policy_path_constants",
-    ]
-  }
-
   if (headless_support_field_trials) {
     sources += [
       "lib/browser/headless_field_trials.cc",
@@ -501,7 +469,6 @@ source_set("headless_browser") {
     deps += [
       "//components/origin_trials:browser",
       "//components/origin_trials:common",
-      "//components/os_crypt/sync",
       "//components/pref_registry",
       "//components/prefs",
       "//components/user_prefs",
@@ -529,7 +496,7 @@ source_set("headless_browser") {
   }
 
   if (is_win) {
-    deps += [ "//components/os_crypt/async/browser:dpapi_key_provider" ]
+    deps += [ "//components/os_crypt/browser:dpapi_key_provider" ]
   }
 
   if (is_linux || is_chromeos) {
@@ -545,15 +512,15 @@ source_set("headless_browser") {
   }
   if (is_linux && use_dbus) {
     deps += [
-      "//components/os_crypt/async/browser:freedesktop_secret_key_provider",
+      "//components/os_crypt/browser:freedesktop_secret_key_provider",
       "//components/password_manager/core/browser:password_switches",
     ]
   }
 
   if (is_apple) {
-    deps += [ "//components/os_crypt/async/browser:keychain_key_provider" ]
+    deps += [ "//components/os_crypt/browser:keychain_key_provider" ]
   } else if (is_posix) {
-    deps += [ "//components/os_crypt/async/browser:posix_key_provider" ]
+    deps += [ "//components/os_crypt/browser:posix_key_provider" ]
   }
 
   # Normally set to false (see build/args/headless.gn), but we can optionally
@@ -577,25 +544,6 @@ source_set("headless_browser") {
     ]
   } else {
     deps += [ "//ui/aura" ]
-  }
-
-  if (headless_use_embedded_resources) {
-    defines += [ "HEADLESS_USE_EMBEDDED_RESOURCES" ]
-    deps += [
-      ":embedded_resource_pack_data",
-      ":embedded_resource_pack_strings",
-    ]
-    sources += [
-      "$root_gen_dir/headless/embedded_resource_pack_data.cc",
-      "$root_gen_dir/headless/embedded_resource_pack_data.h",
-      "$root_gen_dir/headless/embedded_resource_pack_strings.cc",
-      "$root_gen_dir/headless/embedded_resource_pack_strings.h",
-    ]
-  } else {
-    deps += [
-      ":resource_pack_data",
-      ":resource_pack_strings",
-    ]
   }
 }
 
@@ -662,10 +610,7 @@ if (is_mac) {
 }
 
 test("headless_browsertests") {
-  configs += [
-    "//net:net_test_config",
-    "//v8:external_startup_data",
-  ]
+  configs += [ "//v8:external_startup_data" ]
   sources = [
     "test/headless_browser_browsertest.cc",
     "test/headless_browser_context_browsertest.cc",
@@ -694,10 +639,6 @@ test("headless_browsertests") {
       "test/headless_printtopdf_browsertest.cc",
       "test/headless_structured_pdf_browsertest.cc",
     ]
-  }
-
-  if (headless_use_policy) {
-    sources += [ "test/headless_policy_browsertest.cc" ]
   }
 
   if (headless_enable_commands) {
@@ -788,6 +729,7 @@ test("headless_browsertests") {
     "//testing/gtest",
     "//tools/v8_context_snapshot:buildflags",
     "//ui/base/clipboard",
+    "//ui/base/clipboard:clipboard_test_support",
     "//ui/shell_dialogs",
   ]
 
@@ -796,7 +738,12 @@ test("headless_browsertests") {
   }
 
   if (!is_fuchsia) {
-    deps += [ "//third_party/crashpad/crashpad/client" ]
+    deps += [
+      "//third_party/crashpad/crashpad/client",
+      "//third_party/crashpad/crashpad/handler:common",
+      "//third_party/crashpad/crashpad/snapshot",
+      "//third_party/crashpad/crashpad/util",
+    ]
   }
 
   if (enable_printing) {
@@ -809,13 +756,6 @@ test("headless_browsertests") {
     if (enable_pdf) {
       deps += [ "//pdf" ]
     }
-  }
-
-  if (headless_use_policy) {
-    deps += [
-      "//components/headless/policy",
-      "//components/policy/core/common:test_support",
-    ]
   }
 
   if (headless_enable_commands) {
@@ -866,6 +806,7 @@ component("headless_shell_lib") {
     "//content/public/common",
     "//content/public/utility",
     "//printing/buildflags",
+    "//v8",
   ]
 
   if (!is_fuchsia) {
@@ -892,6 +833,25 @@ component("headless_shell_lib") {
 
   if (headless_use_prefs) {
     deps += [ "//components/prefs" ]
+  }
+
+  if (headless_use_embedded_resources) {
+    defines += [ "HEADLESS_USE_EMBEDDED_RESOURCES" ]
+    deps += [
+      ":embedded_resource_pack_data",
+      ":embedded_resource_pack_strings",
+    ]
+    sources += [
+      "$root_gen_dir/headless/embedded_resource_pack_data.cc",
+      "$root_gen_dir/headless/embedded_resource_pack_data.h",
+      "$root_gen_dir/headless/embedded_resource_pack_strings.cc",
+      "$root_gen_dir/headless/embedded_resource_pack_strings.h",
+    ]
+  } else {
+    deps += [
+      ":resource_pack_data",
+      ":resource_pack_strings",
+    ]
   }
 }
 
@@ -974,10 +934,6 @@ executable("headless_shell") {
       "//components/headless/command_handler",
       "//components/headless/command_handler:switches",
     ]
-  }
-
-  if (headless_use_policy) {
-    deps += [ "//components/headless/policy" ]
   }
 
   if (!is_fuchsia) {

@@ -4,19 +4,21 @@
 
 #include "components/optimization_guide/core/delivery/prediction_model_download_manager.h"
 
+#include "base/base_switches.h"
 #include "base/command_line.h"
 #include "base/containers/flat_set.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/observer_list.h"
 #include "base/path_service.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
+#include "base/time/time.h"
 #include "base/uuid.h"
 #include "build/build_config.h"
 #include "components/component_updater/pref_names.h"
@@ -27,7 +29,7 @@
 #include "components/optimization_guide/core/delivery/prediction_model_store.h"
 #include "components/optimization_guide/core/optimization_guide_enums.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
-#include "components/optimization_guide/core/optimization_guide_switches.h"
+#include "components/optimization_guide/core/optimization_guide_permissions_util.h"
 #include "components/optimization_guide/core/optimization_guide_util.h"
 #include "components/prefs/pref_service.h"
 #include "components/services/unzip/public/cpp/unzip.h"
@@ -49,6 +51,13 @@ namespace {
 // model downloads that happen on startup with a clean profile.
 const char kDisableModelDownloadsForBenchmarking[] =
     "disable-optimization-guide-model-downloads-for-benchmarking";
+
+// Returns true if the verification of model downloads should be skipped.
+bool ShouldSkipModelDownloadVerificationForTesting() {
+  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+  return command_line->HasSwitch(
+      kDisableModelDownloadVerificationForTestingSwitch);
+}
 
 // The SHA256 hash of the public key for the Optimization Guide Server that
 // we require models to come from.
@@ -96,9 +105,9 @@ void RecordPredictionModelDownloadState(
     proto::OptimizationTarget optimization_target,
     PredictionModelDownloadManager::PredictionModelDownloadState state) {
   base::UmaHistogramEnumeration(
-      "OptimizationGuide.PredictionModelDownloadManager.State." +
-          optimization_guide::GetStringNameForOptimizationTarget(
-              optimization_target),
+      base::StrCat({"OptimizationGuide.PredictionModelDownloadManager.State.",
+                    optimization_guide::GetStringNameForOptimizationTarget(
+                        optimization_target)}),
       state);
 }
 
@@ -200,10 +209,10 @@ bool PredictionModelDownloadManager::ShouldFetchModels() const {
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
           kDisableModelDownloadsForBenchmarking) ||
       base::CommandLine::ForCurrentProcess()->HasSwitch(
-          variations::switches::kEnableBenchmarking)) {
+          ::switches::kEnableBenchmarking)) {
     return false;
   }
-  return (switches::ShouldSkipGoogleApiKeyConfigurationCheck() ||
+  return (ShouldSkipGoogleApiKeyConfigurationCheck() ||
           google_apis::HasAPIKeyConfigured()) &&
          local_state_->GetBoolean(prefs::kComponentUpdatesEnabled);
 }
@@ -246,10 +255,10 @@ void PredictionModelDownloadManager::OnDownloadStarted(
     pending_download_guids_.insert(guid);
     RecordPredictionModelDownloadState(optimization_target, kStarted);
     base::UmaHistogramLongTimes(
-        "OptimizationGuide.PredictionModelDownloadManager."
-        "DownloadStartLatency." +
-            optimization_guide::GetStringNameForOptimizationTarget(
-                optimization_target),
+        base::StrCat({"OptimizationGuide.PredictionModelDownloadManager."
+                      "DownloadStartLatency.",
+                      optimization_guide::GetStringNameForOptimizationTarget(
+                          optimization_target)}),
         base::TimeTicks::Now() - download_requested_time);
     for (PredictionModelDownloadObserver& observer : observers_) {
       observer.OnModelDownloadStarted(optimization_target);
@@ -302,7 +311,7 @@ bool PredictionModelDownloadManager::VerifyDownload(
     const base::FilePath& download_file_path,
     const base::FilePath& base_model_dir,
     bool delete_file_on_error) {
-  if (!switches::ShouldSkipModelDownloadVerificationForTesting()) {
+  if (!ShouldSkipModelDownloadVerificationForTesting()) {
     // Verify that the |download_file_path| contains a valid CRX file.
     std::string public_key;
     crx_file::VerifierResult verifier_result = crx_file::Verify(

@@ -20,7 +20,6 @@
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/bindings/core/v8/native_value_traits_impl.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
-#include "third_party/blink/renderer/bindings/core/v8/v8_string_resource.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_address_errors.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_android_pay_method_data.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_google_play_billing_method_data.h"
@@ -109,7 +108,7 @@ struct TypeConverter<PaymentCurrencyAmountPtr, blink::PaymentCurrencyAmount> {
   static PaymentCurrencyAmountPtr Convert(
       const blink::PaymentCurrencyAmount& input) {
     PaymentCurrencyAmountPtr output = PaymentCurrencyAmount::New();
-    output->currency = input.currency().UpperASCII();
+    output->currency = input.currency().ToAsciiUpper();
     output->value = input.value();
     return output;
   }
@@ -803,14 +802,13 @@ bool AllowedToUsePaymentRequest(ExecutionContext* execution_context) {
 void WarnIgnoringQueryQuotaForCanMakePayment(
     ExecutionContext& execution_context,
     const char* method_name) {
-  const String& error = UNSAFE_TODO(String::Format(
-      "Quota reached for PaymentRequest.%s(). This would normally "
-      "reject the promise, but allowing continued usage on localhost and "
-      "file:// scheme origins.",
-      method_name));
+  const String& error =
+      StrCat({"Quota reached for PaymentRequest.", method_name,
+              "(). This would normally reject the promise, but allowing "
+              "continued usage on localhost and file:// scheme origins."});
   execution_context.AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
-      mojom::ConsoleMessageSource::kJavaScript,
-      mojom::ConsoleMessageLevel::kWarning, error));
+      ConsoleMessage::Source::kJavaScript, ConsoleMessage::Level::kWarning,
+      error));
 }
 
 // Records metrics for an activationless Show() call based on the request
@@ -861,6 +859,29 @@ void OnSecurePaymentConfirmationAvailabilityResponse(
   resolver->Resolve(V8SecurePaymentConfirmationAvailability(
       ToV8SecurePaymentConfirmationAvailabilityEnum(result)));
 }
+
+void OnGetSecurePaymentConfirmationCapabilitiesComplete(
+    std::unique_ptr<ScopedPromiseResolver> scoped_resolver,
+    const Vector<payments::mojom::blink::SecurePaymentConfirmationCapabilityPtr>
+        capabilities) {
+  auto* resolver = scoped_resolver->Release()
+                       ->DowncastTo<IDLRecord<IDLString, IDLBoolean>>();
+
+  Vector<std::pair<String, bool>> results;
+  for (const auto& capability : capabilities) {
+    results.emplace_back(std::move(capability->name), capability->supported);
+  }
+
+  // Results should be sorted lexicographically based on the keys.
+  std::sort(
+      results.begin(), results.end(),
+      [](const std::pair<String, bool>& a, const std::pair<String, bool>& b) {
+        return CodeUnitCompare(a.first, b.first) < 0;
+      });
+
+  resolver->Resolve(std::move(results));
+}
+
 }  // namespace
 
 // static
@@ -891,9 +912,56 @@ PaymentRequest::securePaymentConfirmationAvailability(
 
   CredentialManagerProxy::From(script_state)
       ->SecurePaymentConfirmationService()
-      ->SecurePaymentConfirmationAvailability(
-          BindOnce(&OnSecurePaymentConfirmationAvailabilityResponse,
-                   std::make_unique<ScopedPromiseResolver>(resolver)));
+      ->SecurePaymentConfirmationAvailability(BindOnce(
+          &OnSecurePaymentConfirmationAvailabilityResponse,
+          std::make_unique<ScopedPromiseResolver>(
+              resolver,
+              ScopedPromiseResolver::ConnectionType::kPaymentConfirmation)));
+
+  return promise;
+}
+
+// static
+ScriptPromise<IDLRecord<IDLString, IDLBoolean>>
+PaymentRequest::getSecurePaymentConfirmationCapabilities(
+    ScriptState* script_state) {
+  auto* execution_context = ExecutionContext::From(script_state);
+  auto* resolver = MakeGarbageCollected<
+      ScriptPromiseResolver<IDLRecord<IDLString, IDLBoolean>>>(script_state);
+  ScriptPromise promise = resolver->Promise();
+
+  if (!RuntimeEnabledFeatures::SecurePaymentConfirmationEnabled(
+          execution_context) ||
+      !RuntimeEnabledFeatures::SecurePaymentConfirmationCapabilitiesEnabled(
+          execution_context)) {
+    return ScriptPromise<IDLRecord<IDLString, IDLBoolean>>::
+        RejectWithDOMException(script_state,
+                               MakeGarbageCollected<DOMException>(
+                                   DOMExceptionCode::kNotSupportedError,
+                                   "The feature is not enabled."));
+  }
+
+  if (!execution_context->IsFeatureEnabled(
+          network::mojom::PermissionsPolicyFeature::kPayment)) {
+    return ScriptPromise<IDLRecord<IDLString, IDLBoolean>>::
+        RejectWithDOMException(
+            script_state,
+            MakeGarbageCollected<DOMException>(
+                DOMExceptionCode::kNotAllowedError,
+                "The \"payment\" permission policy is not enabled."));
+  }
+
+  UseCounter::Count(
+      execution_context,
+      WebFeature::kPaymentRequestGetSecurePaymentConfirmationCapabilities);
+
+  CredentialManagerProxy::From(script_state)
+      ->SecurePaymentConfirmationService()
+      ->GetSecurePaymentConfirmationCapabilities(BindOnce(
+          &OnGetSecurePaymentConfirmationCapabilitiesComplete,
+          std::make_unique<ScopedPromiseResolver>(
+              resolver,
+              ScopedPromiseResolver::ConnectionType::kPaymentConfirmation)));
 
   return promise;
 }
@@ -934,8 +1002,14 @@ ScriptPromise<PaymentResponse> PaymentRequest::show(
     ExceptionState& exception_state) {
   if (!script_state->ContextIsValid() || !LocalDOMWindow::From(script_state) ||
       !LocalDOMWindow::From(script_state)->GetFrame()) {
-    exception_state.ThrowDOMException(DOMExceptionCode::kAbortError,
-                                      "Cannot show the payment request");
+    if (RuntimeEnabledFeatures::
+            PaymentRequestNonFullyActiveDocumentCheckInvalidStateErrorEnabled()) {
+      exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                        "Cannot show the payment request");
+    } else {
+      exception_state.ThrowDOMException(DOMExceptionCode::kAbortError,
+                                        "Cannot show the payment request");
+    }
     return EmptyPromise();
   }
 
@@ -1105,8 +1179,14 @@ ScriptPromise<IDLUndefined> PaymentRequest::Retry(
     ExceptionState& exception_state) {
   if (!script_state->ContextIsValid() || !LocalDOMWindow::From(script_state) ||
       !LocalDOMWindow::From(script_state)->GetFrame()) {
-    exception_state.ThrowDOMException(DOMExceptionCode::kAbortError,
-                                      "Cannot retry the payment request");
+    if (RuntimeEnabledFeatures::
+            PaymentRequestNonFullyActiveDocumentCheckInvalidStateErrorEnabled()) {
+      exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                        "Cannot retry the payment request");
+    } else {
+      exception_state.ThrowDOMException(DOMExceptionCode::kAbortError,
+                                        "Cannot retry the payment request");
+    }
     return EmptyPromise();
   }
 
@@ -1384,7 +1464,7 @@ PaymentRequest::PaymentRequest(
   PaymentDetailsPtr validated_details =
       payments::mojom::blink::PaymentDetails::New();
   validated_details->id = id_ =
-      details->hasId() ? details->id() : CreateCanonicalUUIDString();
+      details->hasId() ? details->id() : CreateCanonicalUuidString();
 
   VLOG(2) << "Renderer: New PaymentRequest (" << id_.Utf8() << ")";
 
@@ -1655,6 +1735,10 @@ void PaymentRequest::OnError(PaymentErrorReason error,
       exception_code = DOMExceptionCode::kSecurityError;
       break;
 
+    case PaymentErrorReason::PAYMENT_APP_ERROR:
+      exception_code = DOMExceptionCode::kOperationError;
+      break;
+
     case PaymentErrorReason::UNKNOWN:
       break;
   }
@@ -1852,10 +1936,9 @@ void PaymentRequest::DispatchPaymentRequestUpdateEvent(
     // returns false if the merchant did not call event.updateWith() within
     // the event handler, which is optional, so the renderer sends a message
     // to the browser to re-enable UI interactions.
-    const String& message = String::Format(
-        "No updateWith() call in '%s' event handler. User may see outdated "
-        "line items and total.",
-        event->type().Ascii().c_str());
+    const String& message = StrCat(
+        {"No updateWith() call in '", event->type(),
+         "' event handler. User may see outdated line items and total."});
     GetExecutionContext()->AddConsoleMessage(
         MakeGarbageCollected<ConsoleMessage>(
             mojom::ConsoleMessageSource::kJavaScript,

@@ -14,10 +14,11 @@
 #include "chrome/browser/webauthn/enclave_manager_interface.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/sync/service/sync_service_observer.h"
+#include "components/trusted_vault/trusted_vault_connection.h"
 #include "components/webauthn/core/browser/passkey_model.h"
 #include "components/webauthn/core/browser/passkey_model_change.h"
 
-class Browser;
+class BrowserWindowInterface;
 
 namespace syncer {
 class SyncService;
@@ -75,7 +76,7 @@ class PasskeyUnlockManager : public KeyedService,
 
   // Opens a browser tab with a challenge for unlocking passkeys.
   static void OpenTabWithPasskeyUnlockChallenge(
-      Browser* browser,
+      BrowserWindowInterface* browser,
       trusted_vault::TrustedVaultUserActionTriggerForUMA trigger);
 
   // Methods providing the UI strings. Results depend on the experiment arms
@@ -152,21 +153,30 @@ class PasskeyUnlockManager : public KeyedService,
   void OnStateChanged(syncer::SyncService* sync) override;
   void OnSyncShutdown(syncer::SyncService* sync) override;
 
-  // Schedules recording the `WebAuthentication.PasskeyCount` histogram if it
-  // hasn't been recorded yet.
+  // TODO(crbug.com/540854648): Decouple the metrics publishing logic.
+  // Schedules recording the `WebAuthentication.PasskeyCount` histogram
+  // if it hasn't been recorded yet.
   void MaybeRecordDelayedPasskeyCountHistogram();
   // Records the `WebAuthentication.PasskeyCount` histogram.
   void RecordPasskeyCountHistogram();
+  // TODO(crbug.com/540854648): Decouple the metrics publishing logic.
   // Schedules recording the `WebAuthentication.PasskeyReadiness` histogram.
   void MaybeRecordDelayedPasskeyReadinessHistogram();
   // Records the `WebAuthentication.PasskeyReadiness` histogram.
   void RecordPasskeyReadinessHistogram();
+  // TODO(crbug.com/540854648): Decouple the metrics publishing logic.
   // Schedules recording the `WebAuthentication.GpmPinStatus` histogram.
   void MaybeRecordDelayedGpmPinStatusHistogram(
       EnclaveManager::GpmPinAvailability gpm_pin_availability);
   // Records the `WebAuthentication.GpmPinStatus` histogram.
   void RecordGpmPinStatusHistogram(
       EnclaveManager::GpmPinAvailability gpm_pin_availability);
+  // TODO(crbug.com/540854648): Decouple the metrics publishing logic.
+  // Schedules recording the `PasswordManager.TrustedVaultPasswordReadiness`
+  // histogram.
+  void MaybeRecordDelayedPasswordReadinessHistogram();
+  // Records the `PasswordManager.TrustedVaultPasswordReadiness` histogram.
+  void RecordPasswordReadinessHistogram(bool password_readiness);
 
   std::optional<bool> has_passkeys_;
   std::optional<bool> enclave_ready_;
@@ -189,6 +199,13 @@ class PasskeyUnlockManager : public KeyedService,
   // histogram needs to be recorded. Set to true iff histogram was already
   // recorded.
   bool gpm_pin_status_recorded_on_startup_ = false;
+  // Used for UMA to determine whether
+  // `PasswordManager.TrustedVaultPasswordReadiness` histogram needs to be
+  // recorded. Set to true iff histogram was already recorded.
+  bool password_readiness_recorded_on_startup_ = false;
+
+  std::unique_ptr<trusted_vault::TrustedVaultConnection::Request>
+      download_account_state_request_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 

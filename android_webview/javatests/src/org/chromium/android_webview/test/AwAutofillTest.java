@@ -322,16 +322,6 @@ public class AwAutofillTest extends AwParameterizedTest {
                             });
         }
 
-        public void reload() throws Throwable {
-            mTest.executeJavaScriptAndWaitForResult("location.reload();");
-            mCnt +=
-                    mTest.waitForCallbackAndVerifyTypes(
-                            mCnt,
-                            new Integer[] {
-                                AUTOFILL_VALUE_CHANGED, AUTOFILL_COMMIT, AUTOFILL_CANCEL
-                            });
-        }
-
         public void startNewSession() throws Throwable {
             // Start a new session by moving focus to another form.
             mTest.executeJavaScriptAndWaitForResult("document.getElementById('text2').select();");
@@ -933,8 +923,6 @@ public class AwAutofillTest extends AwParameterizedTest {
     public void testCrossFrameCommit() throws Throwable {
         // The only reason we use a <form> inside the iframe is that this makes it easiest to
         // trigger a form submission in that frame.
-        // TODO(crbug.com/40246930): Need to set the "id" so GetSimilarFieldIndex() doesn't confuse
-        // the fields.
         loadHTML(
                 """
                  <form>
@@ -2130,7 +2118,10 @@ public class AwAutofillTest extends AwParameterizedTest {
                         });
         mUMATestHelper.triggerAutofill();
         invokeOnProvideAutoFillVirtualStructure();
-        mUMATestHelper.reload();
+        int cnt = getCallbackCount();
+        executeJavaScriptAndWaitForResult("window.location = 'about:blank';");
+        waitForCallbackAndVerifyTypes(
+                cnt, new Integer[] {AUTOFILL_VALUE_CHANGED, AUTOFILL_COMMIT, AUTOFILL_CANCEL});
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     histograms.assertExpected();
@@ -2526,7 +2517,6 @@ public class AwAutofillTest extends AwParameterizedTest {
     @SmallTest
     @Feature({"AndroidWebView"})
     @CommandLineFlags.Add({"disable-features=AutofillServerCommunication"})
-    @DisabledTest(message = "crbug.com/424007303")
     public void testDatalistPopup() throws Throwable {
         final String url = getAbsoluteTestPageUrl("form_with_datalist.html");
         loadUrlSync(url);
@@ -2687,6 +2677,12 @@ public class AwAutofillTest extends AwParameterizedTest {
                     <iframe srcdoc='<input id=csc>'></iframe>
                 </form>\
                 """);
+        // `OnPageFinished` does not guarantee that autofill is fully initialized, therefore let's
+        // wait for a short time.
+        // TODO(b/527998144): Find a better way to wait for the autofill to be initialized.
+        // Note: Prior to https://crrev.com/c/7960537, OnPageFinished was triggered with a 500ms
+        // delay for simple pages like the above, which internally did what the following wait does.
+        Thread.sleep(500);
         ThreadUtils.runOnUiThreadBlocking(
                 () ->
                         AutofillProviderTestHelper

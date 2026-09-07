@@ -15,9 +15,9 @@
 #include "base/sequence_checker.h"
 #include "base/synchronization/lock.h"
 #include "base/time/time.h"
-#include "chrome/browser/ash/browser_delegate/browser_controller.h"
 #include "chrome/browser/ash/camera_mic/vm_camera_mic_manager.h"
 #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
+#include "chromeos/ash/components/browser_delegate/browser_controller.h"
 #include "media/capture/video/chromeos/camera_hal_dispatcher_impl.h"
 #include "media/capture/video/chromeos/mojom/cros_camera_service.mojom.h"
 #include "services/video_capture/public/mojom/video_source_provider.mojom.h"
@@ -180,10 +180,6 @@ class MediaClientImpl : public ash::MediaClient,
       device_id_to_camera_privacy_switch_state_;
 
   int active_camera_client_count_ = 0;
-
-  // Most recent time the notification that the camera privacy switch is on was
-  // shown.
-  base::TimeTicks camera_switch_notification_shown_timestamp_;
 
   mojo::Remote<video_capture::mojom::VideoSourceProvider>
       video_source_provider_remote_;

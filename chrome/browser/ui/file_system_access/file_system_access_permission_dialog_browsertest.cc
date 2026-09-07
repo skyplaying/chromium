@@ -8,7 +8,7 @@
 
 #include "base/files/file_path.h"
 #include "base/test/bind.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "components/permissions/permission_util.h"
@@ -92,7 +92,7 @@ class FileSystemAccessPermissionDialogTest : public DialogBrowserTest {
   const url::Origin kTestOrigin =
       url::Origin::Create(GURL("https://example.com"));
 
-  std::optional<permissions::PermissionAction> result_ = std::nullopt;
+  std::optional<permissions::PermissionAction> result_;
 };
 
 IN_PROC_BROWSER_TEST_F(FileSystemAccessPermissionDialogTest, InvokeUi_default) {

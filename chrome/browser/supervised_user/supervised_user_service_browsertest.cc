@@ -16,7 +16,8 @@
 #include "chrome/browser/supervised_user/supervised_user_service_factory.h"
 #include "chrome/browser/supervised_user/supervised_user_test_util.h"
 #include "chrome/browser/supervised_user/supervised_user_url_filtering_service_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -58,7 +59,7 @@ class SupervisedUserServiceBrowserTest
 };
 
 IN_PROC_BROWSER_TEST_P(SupervisedUserServiceBrowserTest, LocalPolicies) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   PrefService* prefs = profile->GetPrefs();
 
   if (GetSignInMode() == SupervisionMixin::SignInMode::kSupervised) {
@@ -84,7 +85,7 @@ IN_PROC_BROWSER_TEST_P(SupervisedUserServiceBrowserTest, LocalPolicies) {
 }
 
 IN_PROC_BROWSER_TEST_P(SupervisedUserServiceBrowserTest, ProfileName) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   PrefService* prefs = profile->GetPrefs();
   EXPECT_TRUE(prefs->IsUserModifiablePreference(prefs::kProfileName));
 
@@ -123,11 +124,11 @@ class SupervisedUserServiceForRegularUsersBrowserTest
 
 IN_PROC_BROWSER_TEST_P(SupervisedUserServiceForRegularUsersBrowserTest,
                        ForceGoogleSafeSearchCanBeOverriden) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   PrefService* prefs = profile->GetPrefs();
 
   content::TestNavigationObserver observer(
-      browser()->tab_strip_model()->GetActiveWebContents());
+      browser()->GetTabStripModel()->GetActiveWebContents());
   GURL search_url("https://google.com/search?q=test");
 
   // 1. Default behavior.
@@ -190,7 +191,7 @@ class SupervisedUserServiceForSupervisedUsersBrowserTest
 // `SupervisedUserUrlFilteringServiceBrowserTest`.
 IN_PROC_BROWSER_TEST_F(SupervisedUserServiceForSupervisedUsersBrowserTest,
                        FilterIsNeutralized) {
-  Profile* profile = browser()->profile();
+  Profile* profile = browser()->GetProfile();
   PrefService* pref_service = profile->GetPrefs();
 
   supervised_user_test_util::SetWebFilterType(
@@ -218,7 +219,7 @@ IN_PROC_BROWSER_TEST_F(SupervisedUserServiceForSupervisedUsersBrowserTest,
   DisableParentalControls(*pref_service);
   EXPECT_EQ(WebFilterType::kDisabled,
             SupervisedUserUrlFilteringServiceFactory::GetForProfile(
-                browser()->profile())
+                browser()->GetProfile())
                 ->GetWebFilterType());
 
   EXPECT_TRUE(pref_service->FindPreference(prefs::kSupervisedUserManualHosts)

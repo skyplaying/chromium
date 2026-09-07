@@ -16,6 +16,8 @@
 #include "ui/aura/env.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_targeter.h"
+#include "ui/base/clipboard/clipboard.h"
+#include "ui/base/data_transfer_policy/data_transfer_endpoint.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
@@ -94,13 +96,13 @@ ui::ImageModel GetHandleVectorIcon(gfx::SelectionBound::Type bound_type) {
   const gfx::VectorIcon* icon = nullptr;
   switch (bound_type) {
     case gfx::SelectionBound::LEFT:
-      icon = &ui::kTextSelectionHandleLeftIcon;
+      icon = &ui::kTextSelectionHandleLeftCustomIcon;
       break;
     case gfx::SelectionBound::CENTER:
-      icon = &ui::kTextSelectionHandleCenterIcon;
+      icon = &ui::kTextSelectionHandleCenterCustomIcon;
       break;
     case gfx::SelectionBound::RIGHT:
-      icon = &ui::kTextSelectionHandleRightIcon;
+      icon = &ui::kTextSelectionHandleRightCustomIcon;
       break;
     default:
       NOTREACHED() << "Invalid touch handle bound type: " << bound_type;
@@ -384,10 +386,10 @@ TouchSelectionControllerImpl::TouchSelectionControllerImpl(
   DCHECK(client_view_);
   CreateHandleWidgets();
   aura::Window* client_window = client_view_->GetNativeView();
-  client_widget_ = Widget::GetTopLevelWidgetForNativeView(client_window);
   // Observe client widget moves and resizes to update the selection handles.
-  if (client_widget_) {
-    client_widget_->AddObserver(this);
+  if (Widget* client_widget =
+          Widget::GetTopLevelWidgetForNativeView(client_window)) {
+    client_widget_observation_.Observe(client_widget);
   }
 
   // Observe certain event types sent to any event target, to hide this ui.
@@ -404,9 +406,7 @@ TouchSelectionControllerImpl::~TouchSelectionControllerImpl() {
   HideQuickMenu();
   HideMagnifier();
   aura::Env::GetInstance()->RemoveEventObserver(this);
-  if (client_widget_) {
-    client_widget_->RemoveObserver(this);
-  }
+  client_widget_observation_.Reset();
   // Close the handle widgets to clean up the EditingHandleViews. We do this
   // here to ensure that the EditingHandleViews aren't left with a pointer to a
   // deleted TouchSelectionControllerImpl.
@@ -597,8 +597,9 @@ bool TouchSelectionControllerImpl::ShouldShowHandleFor(
   return client_bounds.Contains(BoundToRect(bound));
 }
 
-bool TouchSelectionControllerImpl::IsCommandIdEnabled(int command_id) const {
-  return client_view_->IsCommandIdEnabled(command_id);
+bool TouchSelectionControllerImpl::IsCommandIdEnabled(int command_id,
+                                                      bool can_paste) const {
+  return client_view_->IsCommandIdEnabled(command_id, can_paste);
 }
 
 void TouchSelectionControllerImpl::ExecuteCommand(int command_id,
@@ -613,7 +614,7 @@ void TouchSelectionControllerImpl::RunContextMenu() {
   client_view_->OpenContextMenu(anchor);
 }
 
-bool TouchSelectionControllerImpl::ShouldShowQuickMenu() {
+bool TouchSelectionControllerImpl::ShouldShowQuickMenu(bool can_paste) {
   return false;
 }
 
@@ -622,16 +623,15 @@ std::u16string TouchSelectionControllerImpl::GetSelectedText() {
 }
 
 void TouchSelectionControllerImpl::OnWidgetDestroying(Widget* widget) {
-  DCHECK_EQ(client_widget_, widget);
-  client_widget_->RemoveObserver(this);
-  client_widget_ = nullptr;
+  DCHECK(client_widget_observation_.IsObservingSource(widget));
+  client_widget_observation_.Reset();
   client_view_ = nullptr;
 }
 
 void TouchSelectionControllerImpl::OnWidgetBoundsChanged(
     Widget* widget,
     const gfx::Rect& new_bounds) {
-  DCHECK_EQ(client_widget_, widget);
+  DCHECK(client_widget_observation_.IsObservingSource(widget));
   SelectionChanged();
 }
 
@@ -662,23 +662,41 @@ void TouchSelectionControllerImpl::QuickMenuTimerFired() {
     return;
   }
 
-  gfx::Rect menu_anchor = GetQuickMenuAnchorRect();
-  if (menu_anchor == gfx::Rect()) {
-    return;
-  }
+  ui::DataTransferEndpoint data_dst = ui::DataTransferEndpoint(
+      ui::EndpointType::kDefault, {.notify_if_restricted = false});
+  ui::Clipboard::GetForCurrentThread()->GetAllAvailableFormats(
+      ui::ClipboardBuffer::kCopyPaste, data_dst,
+      base::BindOnce(
+          [](base::WeakPtr<TouchSelectionControllerImpl> weak_this,
+             base::flat_set<ui::ClipboardFormatType> formats) {
+            if (!weak_this) {
+              return;
+            }
 
-  gfx::Size handle_image_size;
-  if (selection_handle_1_widget_->IsClosed() ||
-      selection_handle_2_widget_->IsClosed() ||
-      cursor_handle_widget_->IsClosed()) {
-    return;
-  }
-  handle_image_size = cursor_handle_widget_->IsVisible()
-                          ? GetCursorHandle()->GetHandleImageSize()
-                          : GetSelectionHandle1()->GetHandleImageSize();
+            bool can_paste =
+                formats.contains(ui::ClipboardFormatType::PlainTextType());
 
-  menu_runner->OpenMenu(GetWeakPtr(), menu_anchor, handle_image_size,
-                        client_view_->GetNativeView());
+            gfx::Rect menu_anchor = weak_this->GetQuickMenuAnchorRect();
+            if (menu_anchor == gfx::Rect()) {
+              return;
+            }
+
+            gfx::Size handle_image_size;
+            if (weak_this->selection_handle_1_widget_->IsClosed() ||
+                weak_this->selection_handle_2_widget_->IsClosed() ||
+                weak_this->cursor_handle_widget_->IsClosed()) {
+              return;
+            }
+            handle_image_size =
+                weak_this->cursor_handle_widget_->IsVisible()
+                    ? weak_this->GetCursorHandle()->GetHandleImageSize()
+                    : weak_this->GetSelectionHandle1()->GetHandleImageSize();
+
+            ui::TouchSelectionMenuRunner::GetInstance()->OpenMenu(
+                weak_this, menu_anchor, handle_image_size,
+                weak_this->client_view_->GetNativeView(), can_paste);
+          },
+          menu_request_weak_ptr_factory_.GetWeakPtr()));
 }
 
 void TouchSelectionControllerImpl::StartQuickMenuTimer() {
@@ -699,6 +717,7 @@ void TouchSelectionControllerImpl::UpdateQuickMenu() {
 }
 
 void TouchSelectionControllerImpl::HideQuickMenu() {
+  menu_request_weak_ptr_factory_.InvalidateWeakPtrs();
   auto* menu_runner = ui::TouchSelectionMenuRunner::GetInstance();
   if (menu_runner && menu_runner->IsRunning()) {
     menu_runner->CloseMenu();

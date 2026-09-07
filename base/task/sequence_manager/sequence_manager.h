@@ -151,8 +151,6 @@ class BASE_EXPORT SequenceManager {
     // base::SingleThreadTaskRunner::GetMainThreadDefault().
     bool is_main_thread = false;
 
-    bool should_report_lock_metrics = false;
-
     // If true, tasks posted to this sequence manager should be delayed when a
     // Scoped(*)ExecutionFence covering the task type exists. For example
     // best-effort tasks would be delayed by ScopedBestEffortExecutionFence.
@@ -173,10 +171,6 @@ class BASE_EXPORT SequenceManager {
   // only be called once. Note that CreateSequenceManagerOnCurrentThread()
   // performs this initialization automatically.
   virtual void BindToCurrentThread() = 0;
-
-  // Returns the task runner the current task was posted on. Returns null if no
-  // task is currently running. Must be called on the bound thread.
-  virtual scoped_refptr<SequencedTaskRunner> GetTaskRunnerForCurrentTask() = 0;
 
   // Finishes the initialization for a SequenceManager created via
   // CreateUnboundSequenceManager(). Must not be called in any other
@@ -217,10 +211,17 @@ class BASE_EXPORT SequenceManager {
   // returns nullopt.
   virtual std::optional<WakeUp> GetNextDelayedWakeUp() const = 0;
 
-  // Sets the SingleThreadTaskRunner that will be returned by
+  // Sets the TaskQueue whose task runner will be returned by
   // SingleThreadTaskRunner::GetCurrentDefault on the main thread.
+  virtual void SetDefaultTaskQueue(TaskQueue* task_queue) = 0;
+
+  // Directly sets the SingleThreadTaskRunner that will be returned by
+  // SingleThreadTaskRunner::GetCurrentDefault on the main thread. Use this only
+  // when setting a task runner that's not a TaskQueue's default, e.g. one with
+  // a custom task type.
   virtual void SetDefaultTaskRunner(
-      scoped_refptr<SingleThreadTaskRunner> task_runner) = 0;
+      scoped_refptr<SingleThreadTaskRunner> task_runner,
+      TaskQueue::QueuePriority priority) = 0;
 
   // Removes all canceled delayed tasks, and considers resizing to fit all
   // internal queues.
@@ -280,6 +281,7 @@ class BASE_EXPORT SequenceManager::Settings::Builder {
  public:
   Builder();
   ~Builder();
+  Builder(Builder&& move_from) noexcept = default;
 
   // Sets the MessagePumpType which is used to create a MessagePump.
   Builder& SetMessagePumpType(MessagePumpType message_loop_type);
@@ -301,9 +303,6 @@ class BASE_EXPORT SequenceManager::Settings::Builder {
 
   Builder& SetIsMainThread(bool is_main_thread);
 
-  // Whether lock contention metrics should be reported to UMA.
-  Builder& SetShouldReportLockMetrics(bool enable);
-
   // Whether tasks posted to this sequence manager should be delayed when a
   // Scoped(*)ExecutionFence covering the task type exists.
   Builder& SetShouldBlockOnScopedFences(bool enable);
@@ -320,12 +319,6 @@ class BASE_EXPORT SequenceManager::Settings::Builder {
  private:
   Settings settings_;
 };
-
-// Create SequenceManager using MessageLoop on the current thread.
-// Implementation is located in sequence_manager_impl.cc.
-// TODO(scheduler-dev): Remove after every thread has a SequenceManager.
-BASE_EXPORT std::unique_ptr<SequenceManager>
-CreateSequenceManagerOnCurrentThread(SequenceManager::Settings settings);
 
 // Create a SequenceManager using the given MessagePump on the current thread.
 // MessagePump instances can be created with

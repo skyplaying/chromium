@@ -10,7 +10,6 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
-#include "build/build_config.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/bookmarks/managed_bookmark_service_factory.h"
 #include "chrome/browser/extensions/api/bookmarks/bookmarks_api.h"
@@ -57,12 +56,12 @@ using ::testing::StrEq;
 MATCHER_P(IsCreatedEventForNode, node, "") {
   return ExplainMatchResult(Eq(api::bookmarks::OnCreated::kEventName),
                             arg->event_name, result_listener) &&
-         ExplainMatchResult(Eq(2u), arg->event_args.size(), result_listener) &&
+         ExplainMatchResult(Eq(2u), arg->args().size(), result_listener) &&
          ExplainMatchResult(Eq(base::NumberToString(node->id())),
-                            arg->event_args[0].GetString(), result_listener) &&
+                            arg->args()[0].GetString(), result_listener) &&
          ExplainMatchResult(
              MatchesBookmarkNode(node),
-             api::bookmarks::BookmarkTreeNode::FromValue(arg->event_args[1])
+             api::bookmarks::BookmarkTreeNode::FromValue(arg->args()[1])
                  .value(),
              result_listener);
 }
@@ -87,11 +86,11 @@ MATCHER_P5(IsMovedEvent,
                      << arg->event_name;
     return false;
   }
-  if (!ExplainMatchResult(Eq(2u), arg->event_args.size(), result_listener)) {
+  if (!ExplainMatchResult(Eq(2u), arg->args().size(), result_listener)) {
     return false;
   }
   if (!ExplainMatchResult(Eq(base::NumberToString(node_id)),
-                          arg->event_args[0].GetString(), result_listener)) {
+                          arg->args()[0].GetString(), result_listener)) {
     return false;
   }
 
@@ -100,9 +99,9 @@ MATCHER_P5(IsMovedEvent,
   expected_move_info.old_index = old_index;
   expected_move_info.parent_id = base::NumberToString(new_parent_id);
   expected_move_info.index = new_index;
-  if (arg->event_args[1] != expected_move_info.ToValue()) {
+  if (arg->args()[1] != expected_move_info.ToValue()) {
     *result_listener << "Actual MoveInfo:\n"
-                     << PrintToString(arg->event_args[1])
+                     << PrintToString(arg->args()[1])
                      << "\nDoes not match expected value:\n"
                      << PrintToString(expected_move_info.ToValue());
     return false;
@@ -119,16 +118,16 @@ MATCHER_P(IsRemoveEventForNodeWithIndex, remove_info, "") {
                      << arg->event_name;
     return false;
   }
-  if (!ExplainMatchResult(Eq(2u), arg->event_args.size(), result_listener)) {
+  if (!ExplainMatchResult(Eq(2u), arg->args().size(), result_listener)) {
     return false;
   }
-  if (!ExplainMatchResult(Eq(remove_info->node.id),
-                          arg->event_args[0].GetString(), result_listener)) {
+  if (!ExplainMatchResult(Eq(remove_info->node.id), arg->args()[0].GetString(),
+                          result_listener)) {
     return false;
   }
-  if (arg->event_args[1] != remove_info->ToValue()) {
+  if (arg->args()[1] != remove_info->ToValue()) {
     *result_listener << "Actual RemoveInfo:\n"
-                     << PrintToString(arg->event_args[1])
+                     << PrintToString(arg->args()[1])
                      << "\nDoes not match expected value:\n"
                      << PrintToString(remove_info->ToValue());
     return false;
@@ -136,31 +135,18 @@ MATCHER_P(IsRemoveEventForNodeWithIndex, remove_info, "") {
   return true;
 }
 
-// TODO(crbug.com/414844449): The API test extension:
-// - heavily relies on desktop bookmarks behavior (bookmarks bar and other
-//   bookmarks folders are visible when empty)
-// - uses a global state that gets carried over between sub-tests
-// The easiest way to re-enable the test for desktop Android is to modernize and
-// rewrite it.
-#if !BUILDFLAG(IS_ANDROID)
-class BookmarksApiTest : public ExtensionApiTest,
-                         public testing::WithParamInterface<ContextType> {
+// TODO(crbug.com/414844449): The API test extension uses a global state that
+// gets carried over between sub-tests. Consider rewriting the test into
+// independent sub-tests to make it easier to understand.
+class BookmarksApiTest : public ExtensionApiTest {
  public:
-  BookmarksApiTest() : ExtensionApiTest(GetParam()) {}
+  BookmarksApiTest() = default;
   ~BookmarksApiTest() override = default;
   BookmarksApiTest(const BookmarksApiTest&) = delete;
   BookmarksApiTest& operator=(const BookmarksApiTest&) = delete;
 };
 
-INSTANTIATE_TEST_SUITE_P(EventPage,
-                         BookmarksApiTest,
-                         ::testing::Values(ContextType::kEventPage));
-
-INSTANTIATE_TEST_SUITE_P(ServiceWorker,
-                         BookmarksApiTest,
-                         ::testing::Values(ContextType::kServiceWorker));
-
-IN_PROC_BROWSER_TEST_P(BookmarksApiTest, Bookmarks) {
+IN_PROC_BROWSER_TEST_F(BookmarksApiTest, Bookmarks) {
   // Add test managed bookmarks to verify that the bookmarks API can read them
   // and can't modify them.
   BookmarkModel* model = BookmarkModelFactory::GetForBrowserContext(profile());
@@ -190,7 +176,7 @@ IN_PROC_BROWSER_TEST_P(BookmarksApiTest, Bookmarks) {
   ASSERT_TRUE(RunExtensionTest("bookmarks")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_P(BookmarksApiTest, RootNodeId) {
+IN_PROC_BROWSER_TEST_F(BookmarksApiTest, RootNodeId) {
   ExtensionTestMessageListener listener;
 
   ASSERT_TRUE(RunExtensionTest("bookmarks_root_node_id"));
@@ -198,14 +184,12 @@ IN_PROC_BROWSER_TEST_P(BookmarksApiTest, RootNodeId) {
 
   EXPECT_EQ(base::NumberToString(bookmarks::kRootNodeId), listener.message());
 }
-#endif  // !BUILDFLAG(IS_ANDROID)
 
 // TODO(crbug.com/414844449): The tests below depend on which permanent folders
 // are visible when empty. This behaviour is currently different on Android
 // Desktop vs. other Desktop platforms.
 // Once it has been decided what the intended behaviour is for Android Desktop,
 // these tests (or at least a subset) should be re-enabled.
-#if !BUILDFLAG(IS_ANDROID)
 class BookmarksApiEventsTest : public ExtensionApiTest {
  public:
   BookmarksApiEventsTest() = default;
@@ -499,6 +483,5 @@ IN_PROC_BROWSER_TEST_F(BookmarksApiEventsTest,
   EXPECT_THAT(event_observer()->all_events()[3].get(),
               IsRemoveEventForNodeWithIndex(&account_bookmark_bar_info));
 }
-#endif  // !BUILDFLAG(IS_ANDROID)
 
 }  // namespace extensions

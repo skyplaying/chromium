@@ -27,6 +27,7 @@
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_builder.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "ui/base/page_transition_types.h"
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
@@ -38,8 +39,9 @@ scoped_refptr<const Extension> CreateExtensionWithBookmarksPermission(
     bool include_bookmarks) {
   base::ListValue permissions;
   permissions.Append("declarativeContent");
-  if (include_bookmarks)
+  if (include_bookmarks) {
     permissions.Append("bookmarks");
+  }
   return ExtensionBuilder()
       .SetManifest(base::DictValue()
                        .Set("name", "Test extension")
@@ -136,8 +138,10 @@ class DeclarativeContentIsBookmarkedConditionTrackerTest
         page_is_bookmarked !=
         tracker_->EvaluatePredicate(is_not_bookmarked_predicate_.get(), tab);
 
-    if (is_bookmarked_predicate_success && is_not_bookmarked_predicate_success)
+    if (is_bookmarked_predicate_success &&
+        is_not_bookmarked_predicate_success) {
       return testing::AssertionSuccess();
+    }
 
     testing::AssertionResult result = testing::AssertionFailure();
     if (!is_bookmarked_predicate_success) {
@@ -147,8 +151,9 @@ class DeclarativeContentIsBookmarkedConditionTrackerTest
     }
 
     if (!is_not_bookmarked_predicate_success) {
-      if (!is_bookmarked_predicate_success)
+      if (!is_bookmarked_predicate_success) {
         result << "; ";
+      }
       result << "IsBookmarkedPredicate(false): expected "
              << base::ToString(!page_is_bookmarked) << " got "
              << base::ToString(page_is_bookmarked);

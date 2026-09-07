@@ -158,7 +158,8 @@ content::RenderProcessHost* WebrtcLoggingPrivateFunction::RphFromRequest(
 
   int tab_id = *request.tab_id;
   content::WebContents* contents = nullptr;
-  if (!ExtensionTabUtil::GetTabById(tab_id, browser_context(), true,
+  if (!ExtensionTabUtil::GetTabById(tab_id, browser_context(),
+                                    include_incognito_information(),
                                     &contents)) {
     *error = extensions::ErrorUtils::FormatErrorMessage(
         extensions::ExtensionTabUtil::kTabNotFoundError,
@@ -172,9 +173,7 @@ content::RenderProcessHost* WebrtcLoggingPrivateFunction::RphFromRequest(
   GURL expected_origin =
       contents->GetLastCommittedURL().DeprecatedGetOriginAsURL();
   if (expected_origin.spec() != security_origin) {
-    *error = base::StringPrintf(
-        "Invalid security origin. Expected=%s, actual=%s",
-        expected_origin.spec().c_str(), security_origin.c_str());
+    *error = "Invalid security origin.";
     return nullptr;
   }
 
@@ -262,12 +261,14 @@ WebrtcLoggingPrivateSetMetaDataFunction::Run() {
   std::string error;
   WebRtcLoggingController* webrtc_logging_controller =
       PrepareTask(params->request, params->security_origin, &callback, &error);
-  if (!webrtc_logging_controller)
+  if (!webrtc_logging_controller) {
     return RespondNow(Error(std::move(error)));
+  }
 
   std::unique_ptr<WebRtcLogMetaDataMap> meta_data(new WebRtcLogMetaDataMap());
-  for (const MetaDataEntry& entry : params->meta_data)
+  for (const MetaDataEntry& entry : params->meta_data) {
     (*meta_data)[entry.key] = entry.value;
+  }
 
   webrtc_logging_controller->SetMetaData(std::move(meta_data),
                                          std::move(callback));
@@ -282,8 +283,9 @@ ExtensionFunction::ResponseAction WebrtcLoggingPrivateStartFunction::Run() {
   std::string error;
   WebRtcLoggingController* webrtc_logging_controller =
       PrepareTask(params->request, params->security_origin, &callback, &error);
-  if (!webrtc_logging_controller)
+  if (!webrtc_logging_controller) {
     return RespondNow(Error(std::move(error)));
+  }
 
   webrtc_logging_controller->StartLogging(std::move(callback));
   return RespondLater();
@@ -299,8 +301,9 @@ WebrtcLoggingPrivateSetUploadOnRenderCloseFunction::Run() {
   WebRtcLoggingController* webrtc_logging_controller(
       LoggingControllerFromRequest(params->request, params->security_origin,
                                    &error));
-  if (!webrtc_logging_controller)
+  if (!webrtc_logging_controller) {
     return RespondNow(Error(std::move(error)));
+  }
 
   webrtc_logging_controller->set_upload_log_on_render_close(
       params->should_upload);
@@ -316,8 +319,9 @@ ExtensionFunction::ResponseAction WebrtcLoggingPrivateStopFunction::Run() {
   std::string error;
   WebRtcLoggingController* webrtc_logging_controller =
       PrepareTask(params->request, params->security_origin, &callback, &error);
-  if (!webrtc_logging_controller)
+  if (!webrtc_logging_controller) {
     return RespondNow(Error(std::move(error)));
+  }
 
   webrtc_logging_controller->StopLogging(std::move(callback));
   return RespondLater();
@@ -331,8 +335,9 @@ ExtensionFunction::ResponseAction WebrtcLoggingPrivateStoreFunction::Run() {
   std::string error;
   WebRtcLoggingController* webrtc_logging_controller =
       PrepareTask(params->request, params->security_origin, &callback, &error);
-  if (!webrtc_logging_controller)
+  if (!webrtc_logging_controller) {
     return RespondNow(Error(std::move(error)));
+  }
 
   const std::string local_log_id(HashIdWithOrigin(params->security_origin,
                                                   params->log_id));
@@ -348,8 +353,9 @@ ExtensionFunction::ResponseAction WebrtcLoggingPrivateUploadFunction::Run() {
   std::string error;
   WebRtcLoggingController* logging_controller = LoggingControllerFromRequest(
       params->request, params->security_origin, &error);
-  if (!logging_controller)
+  if (!logging_controller) {
     return RespondNow(Error(std::move(error)));
+  }
 
   WebRtcLoggingController::UploadDoneCallback callback =
       base::BindOnce(&WebrtcLoggingPrivateUploadFunction::FireCallback, this);
@@ -366,8 +372,9 @@ ExtensionFunction::ResponseAction WebrtcLoggingPrivateDiscardFunction::Run() {
   std::string error;
   WebRtcLoggingController* webrtc_logging_controller =
       PrepareTask(params->request, params->security_origin, &callback, &error);
-  if (!webrtc_logging_controller)
+  if (!webrtc_logging_controller) {
     return RespondNow(Error(std::move(error)));
+  }
 
   webrtc_logging_controller->DiscardLog(std::move(callback));
   return RespondLater();
@@ -527,13 +534,13 @@ WebrtcLoggingPrivateStartEventLoggingFunction::Run() {
     return RespondNow(Error("WebRTC logging controller not found."));
   }
 
-  WebRtcLoggingController::StartEventLoggingCallback callback =
-      base::BindRepeating(
-          &WebrtcLoggingPrivateStartEventLoggingFunction::FireCallback, this);
+  WebRtcLoggingController::StartEventLoggingCallback callback = base::BindOnce(
+      &WebrtcLoggingPrivateStartEventLoggingFunction::FireCallback, this);
 
   webrtc_logging_controller->StartEventLogging(
-      params->session_id, params->max_log_size_bytes, params->output_period_ms,
-      params->web_app_id, callback);
+      webrtc_logging::ApiType::kExtension, params->session_id,
+      params->max_log_size_bytes, params->output_period_ms, params->web_app_id,
+      std::move(callback));
   return RespondLater();
 }
 

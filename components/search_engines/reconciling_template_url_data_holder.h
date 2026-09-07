@@ -39,6 +39,12 @@ class ReconcilingTemplateURLDataHolder {
   // reconcile it with Chrome prepopulated engines.
   const TemplateURLData* Get() const { return search_engine_.get(); }
 
+  // Releases the ownership of the currently set Search Engine definition and
+  // returns it.
+  std::unique_ptr<TemplateURLData> Release() {
+    return std::move(search_engine_);
+  }
+
   // LINT.IfChange(ReconciliationType)
   enum class ReconciliationType {
     kNone = 0,
@@ -50,8 +56,9 @@ class ReconcilingTemplateURLDataHolder {
     kByIdFromAllEngines = 6,
     kByIdFromRegionalEngines = 7,
     kByIdFallthrough = 8,
+    kByMigrateToId = 9,
 
-    kMaxValue = kByIdFallthrough
+    kMaxValue = kByMigrateToId
   };
   // LINT.ThenChange(//tools/metrics/histograms/metadata/omnibox/enums.xml:ReconciliationType)
 

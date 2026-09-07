@@ -22,7 +22,7 @@ PermissionClapperQuietIcon::PermissionClapperQuietIcon(
     : PermissionPromptAndroid(web_contents, delegate),
       delegate_(
           std::make_unique<PermissionClapperQuietIconDelegate>(web_contents)) {
-  // Quiet Clapper should only be enabled for Notification requests.
+  // The silent Omnibox icon should only be enabled for Notification requests.
   CHECK_EQ(delegate->Requests()[0]->GetContentSettingsType(),
            ContentSettingsType::NOTIFICATIONS);
 }
@@ -39,7 +39,7 @@ PermissionClapperQuietIcon::GetTabSwitchingBehavior() {
 
 PermissionPromptDisposition PermissionClapperQuietIcon::GetPromptDisposition()
     const {
-  return PermissionPromptDisposition::LOCATION_BAR_LEFT_CLAPPER_QUIET_ICON;
+  return PermissionPromptDisposition::LOCATION_BAR_LEFT_QUIET_ICON;
 }
 
 }  // namespace permissions

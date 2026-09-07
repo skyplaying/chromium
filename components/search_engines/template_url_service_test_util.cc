@@ -10,6 +10,7 @@
 #include "base/command_line.h"
 #include "components/country_codes/country_codes.h"
 #include "components/metrics/metrics_pref_names.h"
+#include "components/metrics/profile_metrics_service.h"
 #include "components/os_crypt/async/browser/test_utils.h"
 #include "components/policy/core/common/management/management_service.h"
 #include "components/regional_capabilities/regional_capabilities_prefs.h"
@@ -82,10 +83,13 @@ void TemplateURLServiceUnitTestBase::SetUp() {
   RegisterPrefsForTemplateURLService(pref_service_.registry());
   local_state_.registry()->RegisterBooleanPref(
       metrics::prefs::kMetricsReportingEnabled, true);
-  // Bypass the country checks.
-  base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
-      switches::kSearchEngineChoiceCountry,
-      switches::kDefaultListCountryOverride);
+  // Bypass the country checks if not already set.
+  if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kSearchEngineChoiceCountry)) {
+    base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
+        switches::kSearchEngineChoiceCountry,
+        switches::kDefaultListCountryOverride);
+  }
 
   regional_capabilities_service_ =
       regional_capabilities::CreateServiceWithFakeClient(pref_service_);
@@ -97,13 +101,15 @@ void TemplateURLServiceUnitTestBase::SetUp() {
   management_service_ = std::make_unique<policy::ManagementService>(
       std::vector<std::unique_ptr<policy::ManagementStatusProvider>>{});
 
+  profile_metrics_service_ = std::make_unique<metrics::ProfileMetricsService>();
+
   search_engine_choice_service_ =
       std::make_unique<search_engines::SearchEngineChoiceService>(
           std::make_unique<FakeSearchEngineChoiceServiceClient>(),
           pref_service_, &local_state_, *regional_capabilities_service_,
           *prepopulate_data_resolver_,
           CHECK_DEREF(identity_test_env_.identity_manager()),
-          *management_service_);
+          *management_service_, *profile_metrics_service_);
 
   template_url_service_ = CreateService();
 }
@@ -112,7 +118,8 @@ std::unique_ptr<TemplateURLService>
 TemplateURLServiceUnitTestBase::CreateService() {
   return std::make_unique<TemplateURLService>(
       pref_service_, *search_engine_choice_service_,
-      *prepopulate_data_resolver_.get(), std::make_unique<SearchTermsData>(),
+      *prepopulate_data_resolver_.get(), *regional_capabilities_service_,
+      *profile_metrics_service_, std::make_unique<SearchTermsData>(),
       nullptr /* KeywordWebDataService */,
       nullptr /* TemplateURLServiceClient */, base::RepeatingClosure());
 }
@@ -126,25 +133,25 @@ LoadedTemplateURLServiceUnitTestBase::~LoadedTemplateURLServiceUnitTestBase() =
 
 std::unique_ptr<TemplateURLService>
 LoadedTemplateURLServiceUnitTestBase::CreateService() {
-  CHECK(!database_);
-  CHECK(!keyword_data_service_);
+  if (!database_) {
+    auto task_runner = task_environment.GetMainThreadTaskRunner();
 
-  auto task_runner = task_environment.GetMainThreadTaskRunner();
+    database_ = base::MakeRefCounted<WebDatabaseService>(
+        base::FilePath(WebDatabase::kInMemoryPath),
+        /*ui_task_runner=*/task_runner,
+        /*db_task_runner=*/task_runner);
+    database_->AddTable(std::make_unique<KeywordTable>());
+    database_->LoadDatabase(os_crypt_.get());
 
-  database_ = base::MakeRefCounted<WebDatabaseService>(
-      base::FilePath(WebDatabase::kInMemoryPath),
-      /*ui_task_runner=*/task_runner,
-      /*db_task_runner=*/task_runner);
-  database_->AddTable(std::make_unique<KeywordTable>());
-  database_->LoadDatabase(os_crypt_.get());
-
-  keyword_data_service_ =
-      base::MakeRefCounted<KeywordWebDataService>(database_, task_runner);
-  keyword_data_service_->Init(base::DoNothing());
+    keyword_data_service_ =
+        base::MakeRefCounted<KeywordWebDataService>(database_, task_runner);
+    keyword_data_service_->Init(base::DoNothing());
+  }
 
   auto template_url_service = std::make_unique<TemplateURLService>(
       pref_service(), search_engine_choice_service(),
-      prepopulate_data_resolver(), std::make_unique<SearchTermsData>(),
+      prepopulate_data_resolver(), regional_capabilities_service(),
+      profile_metrics_service(), std::make_unique<SearchTermsData>(),
       keyword_data_service_, nullptr /* TemplateURLServiceClient */,
       base::RepeatingClosure());
 
@@ -159,8 +166,9 @@ void LoadedTemplateURLServiceUnitTestBase::SetUp() {
   template_url_service().Load();
   template_url_service_load_waiter_.WaitForLoadComplete(template_url_service());
 
-  ASSERT_EQ(GetKeywordTemplateURLs().size(),
-            regional_capabilities::GetDefaultPrepopulatedEngines().size());
+  ASSERT_EQ(
+      GetKeywordTemplateURLs().size(),
+      regional_capabilities_service().GetRegionalPrepopulatedEngines().size());
 }
 
 void LoadedTemplateURLServiceUnitTestBase::TearDown() {
@@ -190,11 +198,18 @@ LoadedTemplateURLServiceUnitTestBase::GetKeywordTemplateURLs() {
 TemplateURLService::TemplateURLVector
 LoadedTemplateURLServiceUnitTestBase::GetTemplateURLsMatchingKeyword(
     std::u16string keyword) {
-  TemplateURLService::TemplateURLVector matching_turls;
-  for (const auto& turl : template_url_service().GetTemplateURLs()) {
+  TemplateURLService::TemplateURLVector matches;
+  for (TemplateURL* turl : GetKeywordTemplateURLs()) {
     if (turl->keyword() == keyword) {
-      matching_turls.push_back(turl);
+      matches.push_back(turl);
     }
   }
-  return matching_turls;
+  return matches;
+}
+
+void LoadedTemplateURLServiceUnitTestBase::ResetAndLoadTemplateURLService() {
+  template_url_service().Shutdown();
+  ResetTemplateURLService();
+  template_url_service().Load();
+  TemplateURLServiceLoadWaiter().WaitForLoadComplete(template_url_service());
 }

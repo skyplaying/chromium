@@ -26,6 +26,7 @@
 
 #include <optional>
 
+#include "base/compiler_specific.h"
 #include "base/types/optional_util.h"
 #include "third_party/blink/public/common/view_source/rendering_preferences.h"
 #include "third_party/blink/public/mojom/persistent_renderer_prefs.mojom-blink.h"
@@ -55,6 +56,7 @@
 #include "third_party/blink/renderer/core/input_type_names.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/text/platform_locale.h"
 
 namespace blink {
@@ -165,7 +167,15 @@ void HTMLViewSourceDocument::CreateContainingTable() {
   form->setAttribute(html_names::kAutocompleteAttr, AtomicString("off"));
   form->ParserAppendChild(label);
   body->ParserAppendChild(form);
-  body->ParserAppendChild(table);
+
+  // Wrap the table in a `display:contents` container so it is always the first
+  // child of its parent, preventing spurious leading newlines on "select all +
+  // copy".
+  auto* source_container = MakeGarbageCollected<HTMLDivElement>(*this);
+  source_container->setAttribute(html_names::kClassAttr,
+                                 AtomicString("source-container"));
+  source_container->ParserAppendChild(table);
+  body->ParserAppendChild(source_container);
 }
 
 void HTMLViewSourceDocument::AddSource(
@@ -190,14 +200,12 @@ void HTMLViewSourceDocument::AddSource(
       ProcessTagToken(source, token, attributes_ranges, token_start);
       break;
     case HTMLToken::kProcessingInstruction:
-      // TODO(nrosenthal): implement processing instructions in view-source.
+      ProcessProcessingInstructionToken(source, token);
       break;
     case HTMLToken::kComment:
       ProcessCommentToken(source, token);
       break;
     case HTMLToken::kCharacter:
-    case HTMLToken::kDOMPart:
-      // Process DOM Parts as character tokens.
       ProcessCharacterToken(source, token);
       break;
   }
@@ -289,6 +297,14 @@ void HTMLViewSourceDocument::ProcessCharacterToken(const String& source,
   AddText(source, g_empty_atom);
 }
 
+void HTMLViewSourceDocument::ProcessProcessingInstructionToken(
+    const String& source,
+    HTMLToken&) {
+  CHECK(RuntimeEnabledFeatures::HTMLProcessingInstructionEnabled());
+  AddText(source, class_processing_instruction_);
+  current_ = td_;
+}
+
 Element* HTMLViewSourceDocument::AddSpanWithClassName(
     const AtomicString& class_name) {
   if (current_ == tbody_) {
@@ -348,14 +364,17 @@ void HTMLViewSourceDocument::AddText(const StringView& text,
     unsigned start_pos = 0;
     unsigned pos = 0;
     while (pos < text.length()) {
-      if (text[pos] == '\r') {
+      // SAFETY: index checked in loop condition.
+      UChar ch = UNSAFE_BUFFERS(text[pos]);
+      if (ch == '\r') {
         lines.push_back(text.substr(start_pos, pos - start_pos));
         pos++;
-        if (pos < text.length() && text[pos] == '\n') {
+        // SAFETY: index checked prior to use in &&-operation.
+        if (pos < text.length() && UNSAFE_BUFFERS(text[pos]) == '\n') {
           pos++;  // \r\n counts as a single line break.
         }
         start_pos = pos;
-      } else if (text[pos] == '\n') {
+      } else if (ch == '\n') {
         lines.push_back(text.substr(start_pos, pos - start_pos));
         pos++;
         start_pos = pos;
@@ -385,17 +404,16 @@ void HTMLViewSourceDocument::AddText(const StringView& text,
   }
 }
 
-int HTMLViewSourceDocument::AddRange(const String& source,
-                                     int start,
-                                     int end,
-                                     const AtomicString& class_name,
-                                     const Link* link) {
+wtf_size_t HTMLViewSourceDocument::AddRange(const String& source,
+                                            wtf_size_t start,
+                                            wtf_size_t end,
+                                            const AtomicString& class_name,
+                                            const Link* link) {
   DCHECK_LE(start, end);
   if (start == end)
     return start;
 
-  String text = source.Substring(start, end - start);
-  AddText(text, class_name, link);
+  AddText(source.subview(start, end - start), class_name, link);
   if (!class_name.empty() && current_ != tbody_)
     current_ = To<Element>(current_->parentNode());
   return end;

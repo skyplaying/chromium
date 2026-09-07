@@ -8,6 +8,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -16,6 +17,8 @@ import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+
+import android.view.View;
 
 import androidx.test.core.app.ApplicationProvider;
 
@@ -26,20 +29,19 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.supplier.LazyOneshotSupplier;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.OneshotSupplierImpl;
 import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.collaboration.CollaborationServiceFactory;
 import org.chromium.chrome.browser.collaboration.messaging.MessagingBackendServiceFactory;
 import org.chromium.chrome.browser.data_sharing.DataSharingServiceFactory;
 import org.chromium.chrome.browser.data_sharing.DataSharingTabManager;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
-import org.chromium.chrome.browser.hub.FullButtonData;
 import org.chromium.chrome.browser.hub.LoadHint;
 import org.chromium.chrome.browser.hub.PaneManager;
 import org.chromium.chrome.browser.profiles.Profile;
@@ -51,8 +53,8 @@ import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncFeatures;
 import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncFeaturesJni;
 import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncServiceFactory;
 import org.chromium.chrome.browser.tabmodel.TabCreator;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.browser.tabmodel.TabModel;
+import org.chromium.chrome.browser.ui.actions.button.FullButtonData;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
 import org.chromium.chrome.browser.ui.favicon.FaviconHelper;
 import org.chromium.chrome.browser.ui.favicon.FaviconHelperJni;
@@ -73,7 +75,6 @@ import java.util.function.DoubleConsumer;
 public class TabGroupsPaneUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
-    @Mock private TabGroupModelFilter mTabGroupModelFilter;
     @Mock private TabModel mTabModel;
     @Mock private TabCreator mTabCreator;
     @Mock private DoubleConsumer mOnToolbarAlphaChange;
@@ -122,7 +123,6 @@ public class TabGroupsPaneUnitTest {
         when(mTabGroupSyncService.getAllGroupIds()).thenReturn(new String[] {});
         TabGroupSyncFeaturesJni.setInstanceForTesting(mTabGroupSyncFeaturesJniMock);
         doReturn(true).when(mTabGroupSyncFeaturesJniMock).isTabGroupSyncEnabled(mProfile);
-        when(mTabGroupModelFilter.getTabModel()).thenReturn(mTabModel);
         when(mTabModel.getTabCreator()).thenReturn(mTabCreator);
 
         // Unused at this level.
@@ -131,7 +131,7 @@ public class TabGroupsPaneUnitTest {
         mTabGroupsPane =
                 new TabGroupsPane(
                         ApplicationProvider.getApplicationContext(),
-                        LazyOneshotSupplier.fromValue(mTabGroupModelFilter),
+                        LazyOneshotSupplier.fromValue(mTabModel),
                         mOnToolbarAlphaChange,
                         mProfileSupplier,
                         () -> mPaneManager,
@@ -180,7 +180,7 @@ public class TabGroupsPaneUnitTest {
 
         mTabGroupsPane.notifyLoadHint(LoadHint.HOT);
         assertTrue(mEdgeToEdgeSupplier.hasObservers());
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
         verify(mEdgeToEdgeController).registerAdjuster(notNull());
     }
 
@@ -211,16 +211,22 @@ public class TabGroupsPaneUnitTest {
     }
 
     @Test
+    @EnableFeatures(ChromeFeatureList.ANDROID_BOTTOM_BAR + ":show_bottom_bar_on_gts/true")
+    public void testNewTabGroupButton_BottomBarEnabled() {
+        assertNull(mTabGroupsPane.getActionButtonDataSupplier().get());
+    }
+
+    @Test
     public void testNewTabGroupButton() {
         when(mTabCreator.createNewTab(any(), anyInt(), any())).thenReturn(mTab);
         FullButtonData actionButtonData = mTabGroupsPane.getActionButtonDataSupplier().get();
         assertNotNull(actionButtonData);
 
-        Runnable onPressRunnable = actionButtonData.getOnPressRunnable();
-        assertNotNull(onPressRunnable);
-        onPressRunnable.run();
+        assertTrue(actionButtonData.canPress());
+        View mockView = mock(View.class);
+        actionButtonData.onPress(mockView);
 
         verify(mTabCreator).createNewTab(any(), anyInt(), any());
-        verify(mTabGroupModelFilter).createSingleTabGroup(mTab);
+        verify(mTabModel).createSingleTabGroup(mTab);
     }
 }

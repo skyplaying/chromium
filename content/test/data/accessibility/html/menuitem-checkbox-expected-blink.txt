@@ -1,10 +1,10 @@
 rootWebArea
 ++genericContainer ignored
 ++++genericContainer
-++++++button name='Show Menu'
+++++++popUpButton name='Show Menu'
 ++++++++staticText name='Show Menu'
 ++++++++++inlineTextBox name='Show Menu'
-++++++group ispopup=auto
+++++++menu name='Show Menu' ispopup=auto
 ++++++++group
 ++++++++++menuItemCheckBox name='Checkbox 1' checkedState=true
 ++++++++++++staticText name='Checkbox 1'

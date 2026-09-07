@@ -10,7 +10,7 @@
  * #css_wrapper_metadata_end */
 
 :host {
-  --tab-select-color_: rgba(153, 200, 255, 1);
+  --tab-select-color_: rgba(23, 112, 216, 1);
   --input-inline-spacing: 12px;
   outline: none;
   height: var(--cr-composebox-match-height, 44px);
@@ -29,7 +29,7 @@
   display: flex;
   font-size: 16px;
   height: var(--cr-composebox-match-height, 44px);
-  line-height: 24px;
+  line-height: var(--cr-composebox-match-line-height, 24px);
   position: relative;
 }
 
@@ -107,11 +107,14 @@
 #remove {
   --cr-icon-button-fill-color:
       var(--color-searchbox-results-icon-selected);
-  --cr-icon-button-icon-size: 16px;
+  --cr-icon-button-icon-size:
+      var(--cr-composebox-dropdown-match-icon-size, 16px);
   --cr-icon-button-hover-background-color:
       var(--color-searchbox-results-button-hover);
-  --cr-icon-button-margin-end: 4px;
-  --cr-icon-button-margin-start: 0;
+  --cr-icon-button-margin-end:
+      var(--cr-composebox-dropdown-match-margin-end, 4px);
+  --cr-icon-button-margin-start:
+      var(--cr-composebox-dropdown-match-margin-start, 0);
   display: none;
   top: var(--cr-composebox-match-remove-button-top, 6px);
 }
@@ -121,10 +124,14 @@
   display: inline-flex;
 }
 
-:host([tool-mode='1']) #textContainer {
-  overflow: hidden;
+/* Enum 1 is deepSearch. */
+:host([tool-mode='1']) #textContainer,
+:host(:not([override-clamp-line-num='-1'])) #textContainer {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--clamp-line-num);
+  line-height: var(--cr-composebox-match-line-height, 24px);
   white-space: normal;
-  line-height: 24px;
 }
 
 :host([tool-mode='1']) #focusIndicator {
@@ -133,11 +140,14 @@
   height: auto;
 }
 
+/* Enum 1 is deepSearch. */
 :host([tool-mode='1']) {
   height: auto;
   min-height: var(--cr-composebox-match-height, 44px);
+  white-space: nowrap;
 }
 
+/* Enum 1 is deepSearch. */
 :host([tool-mode='1']) .container {
   height: auto;
   min-height: 24px;

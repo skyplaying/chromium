@@ -116,7 +116,7 @@ class BrowserThemePack : public CustomThemeSupplier {
   bool GetColor(int id, SkColor* color) const override;
   bool GetDisplayProperty(int id, int* result) const override;
   gfx::Image GetImageNamed(int id) const override;
-  base::RefCountedMemory* GetRawData(
+  scoped_refptr<base::RefCountedMemory> GetRawData(
       int id,
       ui::ResourceScaleFactor scale_factor) const override;
   bool HasCustomImage(int id) const override;
@@ -218,12 +218,6 @@ class BrowserThemePack : public CustomThemeSupplier {
       const extensions::ThemeInfo::ThemeImages* theme_images,
       const base::FilePath& images_path,
       FilePathMap* file_paths) const;
-
-  // Transforms the JSON |tab_group_color_palette_value| into their final
-  // versions in the |tab_group_color_palette_shades_| array. Does nothing if
-  // |tab_group_color_palette_value| is nullptr.
-  void SetTabGroupColorPaletteShadesFromJSON(
-      const base::DictValue* tab_group_color_palette_value);
 
   // Helper function to populate the FilePathMap.
   void AddFileAtScaleToMap(const std::string& image_name,
@@ -359,22 +353,7 @@ class BrowserThemePack : public CustomThemeSupplier {
   raw_ptr<DisplayPropertyPair, DanglingUntriaged | AllowPtrArithmetic>
       display_properties_ = nullptr;
 
-  struct TabGroupColorPaletteShadesPair {
-    // The `TabGroupColorId` that is to be overridden/customized.
-    int32_t id = -1;
-    // The shades generated based on the specified hue. These shades will be
-    // used to customize this `id`.
-    std::array<SkColor, ui::kGeneratedShadesCount> shades{};
-  };
 
-  // Number of color options in the tab group color palette.
-  static constexpr size_t kTabGroupColorPaletteLength =
-      static_cast<size_t>(tab_groups::TabGroupColorId::kNumEntries);
-
-  // This array stores an instance for each of the tab group colors that are
-  // overridden by the theme.
-  std::array<TabGroupColorPaletteShadesPair, kTabGroupColorPaletteLength>
-      tab_group_color_palette_shades_{};
 
   // A list of included source images. A pointer to a -1 terminated array of
   // our persistent IDs. The IDs are `int`s, but must be wrapped in a struct so

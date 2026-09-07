@@ -182,7 +182,8 @@ export class ExtensionsErrorPageElement extends ExtensionsErrorPageElementBase {
 
   protected computeErrorIcon_(error: ManifestError|RuntimeError): string {
     // Do not i18n these strings, they're icon names.
-    return getErrorSeverityText(error, 'cr:info', 'cr:warning', 'cr:error');
+    return getErrorSeverityText(
+        error, 'cr:info-filled', 'cr:warning-filled', 'cr:error-filled');
   }
 
   protected computeErrorTypeLabel_(error: ManifestError|RuntimeError): string {
@@ -192,7 +193,7 @@ export class ExtensionsErrorPageElement extends ExtensionsErrorPageElementBase {
         loadTimeData.getString('errorLevel'));
   }
 
-  protected onDeleteErrorAction_(e: Event) {
+  protected onDeleteErrorClick_(e: Event) {
     const id = Number((e.currentTarget as HTMLElement).dataset['errorId']);
     assert(this.data);
     assert(this.delegate);
@@ -232,7 +233,7 @@ export class ExtensionsErrorPageElement extends ExtensionsErrorPageElementBase {
         } catch (e) {
           // Swallow the invalid URL error and return early. This prevents the
           // uncaught error from causing a runtime error as seen in
-          // crbug.com/1257170.
+          // crbug.com/40200545.
           return;
         }
         args.lineNumber =
@@ -377,8 +378,18 @@ export class ExtensionsErrorPageElement extends ExtensionsErrorPageElementBase {
     return this.isOpened_(index).toString();
   }
 
-  protected onErrorItemAction_(e: KeyboardEvent) {
-    if (e.type === 'keydown' && !((e.code === 'Space' || e.code === 'Enter'))) {
+  protected onErrorItemClick_(e: MouseEvent) {
+    this.onErrorItemAction_(e);
+  }
+
+  protected onErrorItemKeydown_(e: KeyboardEvent) {
+    this.onErrorItemAction_(e);
+  }
+
+  protected onErrorItemAction_(e: Event) {
+    if (e.type === 'keydown' &&
+        !((e as KeyboardEvent).code === 'Space' ||
+          (e as KeyboardEvent).code === 'Enter')) {
       return;
     }
 

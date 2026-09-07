@@ -4,11 +4,13 @@
 
 #include "third_party/blink/renderer/modules/image_downloader/image_downloader_impl.h"
 
+#include <algorithm>
+#include <ranges>
 #include <utility>
 #include <vector>
 
 #include "base/check.h"
-#include "base/compiler_specific.h"
+#include "base/containers/adapters.h"
 #include "base/functional/bind.h"
 #include "skia/ext/image_operations.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
@@ -47,9 +49,8 @@ Vector<SkBitmap> DecodeImageData(const std::string& data,
   } else {
     std::vector<SkBitmap> original_bitmaps =
         blink::WebImage::FramesFromData(buffer);
-    bitmaps.AppendRange(std::make_move_iterator(original_bitmaps.begin()),
-                        std::make_move_iterator(original_bitmaps.end()));
-    bitmaps.Reverse();
+    bitmaps.append_range(
+        base::Reversed(std::views::as_rvalue(original_bitmaps)));
   }
   return bitmaps;
 }
@@ -304,14 +305,11 @@ void ImageDownloaderImpl::DidFetchImage(
 
   // Remove the image fetcher from our pending list. We're in the callback from
   // MultiResolutionImageResourceFetcher, best to delay deletion.
-  for (auto it = image_fetchers_.begin(); it != image_fetchers_.end();
-       UNSAFE_TODO(++it)) {
-    MultiResolutionImageResourceFetcher* image_fetcher = it->get();
-    DCHECK(image_fetcher);
-    if (image_fetcher == fetcher) {
-      it = image_fetchers_.erase(it);
-      break;
-    }
+  auto it = std::find_if(
+      image_fetchers_.begin(), image_fetchers_.end(),
+      [fetcher](const auto& item) { return item.get() == fetcher; });
+  if (it != image_fetchers_.end()) {
+    image_fetchers_.erase(it);
   }
 
   // |this| may be destructed after callback is run.
@@ -325,11 +323,16 @@ void ImageDownloaderImpl::Trace(Visitor* visitor) const {
 }
 
 void ImageDownloaderImpl::ContextDestroyed() {
-  for (const auto& fetcher : image_fetchers_) {
+  // Calling `Dispose()` will end up calling back synchronously into
+  // DidFetchImage(). To avoid `image_fetchers_` being mutated while it's being
+  // iterated over, move its contents to a temporary var before doing the
+  // iteration.
+  auto fetchers = std::exchange(image_fetchers_, {});
+
+  for (const auto& fetcher : fetchers) {
     // Will run callbacks with an empty image vector.
     fetcher->Dispose();
   }
-  image_fetchers_.clear();
 }
 
 }  // namespace blink

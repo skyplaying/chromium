@@ -8,7 +8,7 @@ import {EventTracker} from 'chrome://resources/js/event_tracker.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
-import {BrowserServiceImpl} from './browser_service.js';
+import {BrowserProxyImpl} from './browser_proxy.js';
 import {RESULTS_PER_PAGE} from './constants.js';
 
 // Converts a JS Date object to a human readable string in the format of
@@ -23,6 +23,19 @@ export function convertDateToQueryValue(date: Date) {
   }
 
   return `${fullYear}-${twoDigits(month)}-${twoDigits(day)}`;
+}
+
+export type ChangeQueryEvent = CustomEvent<{
+  search: string | null,
+  after: string | null,
+  includeUserVisits?: boolean,
+  includeActorVisits?: boolean,
+}>;
+
+declare global {
+  interface HTMLElementEventMap {
+    'change-query': ChangeQueryEvent;
+  }
 }
 
 export class HistoryQueryManagerElement extends CrLitElement {
@@ -106,10 +119,10 @@ export class HistoryQueryManagerElement extends CrLitElement {
       afterTimestamp = afterDate.getTime();
     }
 
-    const browserService = BrowserServiceImpl.getInstance();
+    const browserProxy = BrowserProxyImpl.getInstance();
     const promise = incremental ?
-        browserService.handler.queryHistoryContinuation() :
-        browserService.handler.queryHistory(
+        browserProxy.handler.queryHistoryContinuation() :
+        browserProxy.handler.queryHistory(
             this.queryState.searchTerm, RESULTS_PER_PAGE,
             afterTimestamp ? afterTimestamp : null,
             this.queryState.includeUserVisits,
@@ -118,12 +131,7 @@ export class HistoryQueryManagerElement extends CrLitElement {
     promise.then((result) => this.onQueryResult_(result.results), () => {});
   }
 
-  private onChangeQuery_(e: CustomEvent<{
-    search: string,
-    after: string,
-    includeUserVisits?: boolean,
-    includeActorVisits?: boolean,
-  }>) {
+  private onChangeQuery_(e: ChangeQueryEvent) {
     const changes = e.detail;
     let needsUpdate = false;
 
@@ -187,7 +195,7 @@ export class HistoryQueryManagerElement extends CrLitElement {
 
     // TODO(tsergeant): Ignore incremental searches in this metric.
     if (this.queryState.searchTerm) {
-      BrowserServiceImpl.getInstance().recordAction('Search');
+      BrowserProxyImpl.getInstance().recordAction('Search');
       this.resultPendingMetricsTimestamp_ = performance.now();
     }
   }
@@ -199,7 +207,7 @@ export class HistoryQueryManagerElement extends CrLitElement {
     if (this.resultPendingMetricsTimestamp_ &&
         (performance.now() - this.resultPendingMetricsTimestamp_) >=
             QUERY_RESULT_MINIMUM_AGE) {
-      BrowserServiceImpl.getInstance().recordHistogram(
+      BrowserProxyImpl.getInstance().recordHistogram(
           'History.Embeddings.UserActions',
           HistoryEmbeddingsUserActions.NON_EMPTY_QUERY_HISTORY_SEARCH,
           HistoryEmbeddingsUserActions.END);

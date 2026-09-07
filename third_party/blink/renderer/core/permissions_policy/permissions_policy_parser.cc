@@ -10,6 +10,7 @@
 #include "base/compiler_specific.h"
 #include "base/feature_list.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/notreached.h"
 #include "net/http/structured_headers.h"
 #include "services/network/public/cpp/permissions_policy/origin_with_possible_wildcards.h"
 #include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
@@ -90,8 +91,8 @@ class ParsingContext {
 
  public:
   ParsingContext(PolicyParserMessageBuffer& logger,
-                 const SecurityOrigin& self_origin LIFETIME_CAPTURE_BY(this),
-                 const SecurityOrigin* src_origin LIFETIME_CAPTURE_BY(this),
+                 const SecurityOrigin& self_origin LIFETIME_CAPTURE_BY_THIS,
+                 const SecurityOrigin* src_origin LIFETIME_CAPTURE_BY_THIS,
                  const FeatureNameMap& feature_names,
                  ExecutionContext* execution_context)
       : logger_(logger),
@@ -246,7 +247,7 @@ ParsingContext::ParsedAllowlist ParsingContext::ParseAllowlist(
     for (const String& origin_string : origin_strings) {
       DCHECK(!origin_string.empty());
 
-      if (!origin_string.ContainsOnlyASCIIOrEmpty()) {
+      if (!origin_string.ContainsOnlyAsciiOrEmpty()) {
         logger_.Warn("Non-ASCII characters in origin.");
         continue;
       }
@@ -269,14 +270,14 @@ ParsingContext::ParsedAllowlist ParsingContext::ParseAllowlist(
       url::Origin self;
 
       // 'self' origin is used if the origin is exactly 'self'.
-      if (EqualIgnoringASCIICase(origin_string, "'self'")) {
+      if (EqualIgnoringAsciiCase(origin_string, "'self'")) {
         target_is_self = true;
         self = self_origin_.ToUrlOrigin();
       }
       // 'src' origin is used if |src_origin| is available and the
       // origin is a match for 'src'. |src_origin| is only set
       // when parsing an iframe allow attribute.
-      else if (src_origin_ && EqualIgnoringASCIICase(origin_string, "'src'")) {
+      else if (src_origin_ && EqualIgnoringAsciiCase(origin_string, "'src'")) {
         if (!src_origin_->IsOpaque()) {
           std::optional<network::OriginWithPossibleWildcards>
               maybe_origin_with_possible_wildcards =
@@ -291,7 +292,7 @@ ParsingContext::ParsedAllowlist ParsingContext::ParseAllowlist(
         } else {
           target_is_opaque = true;
         }
-      } else if (EqualIgnoringASCIICase(origin_string, "'none'")) {
+      } else if (EqualIgnoringAsciiCase(origin_string, "'none'")) {
         continue;
       } else if (origin_string == "*") {
         target_is_all = true;
@@ -460,6 +461,20 @@ PermissionsPolicyParser::Node ParsingContext::ParseFeaturePolicyToIR(
   return root;
 }
 
+namespace {
+
+String GetEndpoint(const net::structured_headers::Parameters& params) {
+  for (const auto& [key, value] : params) {
+    if (const std::string* token = value.GetIfToken();
+        key == "report-to" && token) {
+      return String(*token);
+    }
+  }
+  return String();
+}
+
+}  // namespace
+
 PermissionsPolicyParser::Node ParsingContext::ParsePermissionsPolicyToIR(
     const String& policy) {
   if (policy.length() > MAX_LENGTH_PARSE) {
@@ -483,52 +498,57 @@ PermissionsPolicyParser::Node ParsingContext::ParsePermissionsPolicyToIR(
     const auto& key = feature_entry.first;
     const char* feature_name = key.c_str();
     const auto& value = feature_entry.second;
-    String endpoint;
-
-    if (!value.params.empty()) {
-      for (const auto& param : value.params) {
-        if (param.first == "report-to" && param.second.is_token()) {
-          endpoint = String(param.second.GetString());
-        }
-      }
-    }
 
     Vector<String> allowlist;
-    for (const auto& parameterized_item : value.member) {
-      if (!parameterized_item.params.empty()) {
-        logger_.Warn(UNSAFE_TODO(String::Format(
-            "Feature %s's parameters are ignored.", feature_name)));
-      }
 
+    const auto process_item = [&](const net::structured_headers::Item& item) {
       String allowlist_item;
-      if (parameterized_item.item.is_token()) {
+      if (const std::string* token_value = item.GetIfToken()) {
         // All special keyword appears as token, i.e. self, src and *.
-        const std::string& token_value = parameterized_item.item.GetString();
-        if (token_value != "*" && token_value != "self") {
-          logger_.Warn(UNSAFE_TODO(String::Format(
-              "Invalid allowlist item(%s) for feature %s. Allowlist item "
-              "must be *, self or quoted url.",
-              token_value.c_str(), feature_name)));
-          continue;
+        if (*token_value != "*" && *token_value != "self") {
+          logger_.Warn(
+              StrCat({"Invalid allowlist item(", token_value->c_str(),
+                      ") for feature ", feature_name,
+                      ". Allowlist item must be *, self or quoted url."}));
+          return;
         }
 
-        if (token_value == "*") {
+        if (*token_value == "*") {
           allowlist_item = "*";
         } else {
-          allowlist_item = String::Format("'%s'", token_value.c_str());
+          allowlist_item = StrCat({"'", token_value->c_str(), "'"});
         }
-      } else if (parameterized_item.item.is_string()) {
-        allowlist_item = parameterized_item.item.GetString().c_str();
+      } else if (const std::string* str = item.GetIfString()) {
+        allowlist_item = String(*str);
       } else {
-        logger_.Warn(UNSAFE_TODO(
-            String::Format("Invalid allowlist item for feature %s. Allowlist "
-                           "item must be *, self, or quoted url.",
-                           feature_name)));
-        continue;
+        logger_.Warn(
+            StrCat({"Invalid allowlist item for feature ", feature_name,
+                    ". Allowlist item must be *, self, or quoted url."}));
+        return;
       }
       if (!allowlist_item.empty()) {
         allowlist.push_back(allowlist_item);
       }
+    };
+
+    String endpoint;
+    if (auto item_and_params = value.GetWithParamsIfItem()) {
+      endpoint = GetEndpoint(item_and_params->second);
+      process_item(item_and_params->first);
+    } else if (auto inner_list_and_params = value.GetWithParamsIfInnerList()) {
+      endpoint = GetEndpoint(inner_list_and_params->second);
+      for (const auto& parameterized_item : inner_list_and_params->first) {
+        if (!parameterized_item.params.empty()) {
+          logger_.Warn(
+              StrCat({"Feature ", feature_name, "'s parameters are ignored."}));
+        }
+
+        process_item(parameterized_item.item);
+      }
+    } else {
+      // Parsed dictionaries always return a value from either
+      // `GetWithParamsIfItem()` or `GetWithParamsIfInnerList()`.
+      NOTREACHED();
     }
 
     if (allowlist.empty()) {
@@ -699,8 +719,7 @@ network::ParsedPermissionsPolicy PermissionsPolicyParser::ParseHeader(
     } else {
       overlap_features.push_back(
           GetNameForFeature(policy_declaration.feature, is_isolated_context)
-              .Ascii()
-              .c_str());
+              .Ascii());
     }
   }
 
@@ -710,11 +729,11 @@ network::ParsedPermissionsPolicy PermissionsPolicyParser::ParseHeader(
               std::ostream_iterator<std::string>(features_stream, ", "));
     features_stream << overlap_features.back();
 
-    feature_policy_logger.Warn(String::Format(
-        "Some features are specified in both Feature-Policy and "
-        "Permissions-Policy header: %s. Values defined in Permissions-Policy "
-        "header will be used.",
-        features_stream.str().c_str()));
+    feature_policy_logger.Warn(StrCat(
+        {"Some features are specified in both Feature-Policy and "
+         "Permissions-Policy header: ",
+         features_stream.str().c_str(),
+         ". Values defined in Permissions-Policy header will be used."}));
   }
   return permissions_policy;
 }

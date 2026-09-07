@@ -4,15 +4,17 @@
 
 #include "services/tracing/public/cpp/trace_startup.h"
 
+#include <optional>
+
 #include "base/check.h"
 #include "base/command_line.h"
+#include "base/containers/span.h"
 #include "base/memory/shared_memory_switch.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/synchronization/lock.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/trace_event/trace_event.h"
-#include "base/trace_event/trace_log.h"
 #include "base/trace_event/trace_session_observer.h"
 #include "build/build_config.h"
 #include "components/tracing/common/tracing_switches.h"
@@ -20,7 +22,6 @@
 #include "services/tracing/public/cpp/perfetto/perfetto_traced_process.h"
 #include "services/tracing/public/cpp/perfetto/shared_memory.h"
 #include "services/tracing/public/cpp/perfetto/traced_value_proto_writer.h"
-#include "services/tracing/public/cpp/trace_event_args_allowlist.h"
 #include "services/tracing/public/cpp/trace_startup_config.h"
 #include "services/tracing/public/cpp/tracing_features.h"
 #include "third_party/perfetto/include/perfetto/tracing/track.h"
@@ -29,21 +30,10 @@
 #include "components/tracing/common/etw_export_win.h"
 #endif
 
-#if BUILDFLAG(IS_APPLE) && !BUILDFLAG(IS_IOS_TVOS)
-#include "base/apple/mach_port_rendezvous.h"
-#endif
-
 namespace tracing {
 namespace {
 
-#if BUILDFLAG(IS_APPLE)
-using base::shared_memory::SharedMemoryMachPortRendezvousKey;
-constexpr SharedMemoryMachPortRendezvousKey kTraceConfigRendezvousKey = 'trcc';
-constexpr SharedMemoryMachPortRendezvousKey kTraceBufferRendezvousKey = 'trbc';
-#endif
-
 using base::trace_event::TraceConfig;
-using base::trace_event::TraceLog;
 
 class StartupTrackEventConfigObserver
     : public perfetto::TrackEventSessionObserver {
@@ -122,17 +112,6 @@ void InitTracing(
   g_tracing_initialized = true;
   base::TimeTicks init_start = base::TimeTicks::Now();
 
-  std::optional<uint64_t> maybe_process_track_uuid;
-  auto* command_line = base::CommandLine::ForCurrentProcess();
-  if (command_line->HasSwitch(switches::kTraceProcessTrackUuid)) {
-    uint64_t process_track_uuid;
-    if (base::StringToUint64(
-            command_line->GetSwitchValueASCII(switches::kTraceProcessTrackUuid),
-            &process_track_uuid)) {
-      maybe_process_track_uuid = process_track_uuid;
-    }
-  }
-
   // Create the PerfettoTracedProcess.
   auto& traced_process =
       PerfettoTracedProcess::MaybeCreateInstance(will_trace_thread_restart);
@@ -140,14 +119,10 @@ void InitTracing(
     traced_process.SetAllowSystemTracingConsumerCallback(
         std::move(allow_system_tracing_consumer));
   }
-  traced_process.SetupClientLibrary(enable_consumer, enable_system_backend,
-                                    maybe_process_track_uuid);
+  traced_process.SetupClientLibrary(enable_consumer, enable_system_backend);
 
   RegisterTracedValueProtoWriter();
 
-  // Ensure TraceLog is initialized first.
-  // https://crbug.com/764357
-  TraceLog::GetInstance();
   StartupTrackEventConfigObserver::GetInstance();
   base::trace_event::TraceSessionObserverList::Initialize();
 
@@ -177,6 +152,8 @@ void InitTracingPostFeatureList(
     bool will_trace_thread_restart,
     base::RepeatingCallback<bool()> allow_system_tracing_consumer) {
   DCHECK(base::FeatureList::GetInstance());
+  TraceStartupConfig::InitializeFromCommandLine(
+      *base::CommandLine::ForCurrentProcess());
   InitTracing(enable_consumer, will_trace_thread_restart,
               ShouldSetupSystemTracing(),
               std::move(allow_system_tracing_consumer));
@@ -215,42 +192,10 @@ base::UnsafeSharedMemoryRegion CreateTracingOutputSharedMemory() {
   return shm;
 }
 
-void COMPONENT_EXPORT(TRACING_CPP) AddTraceConfigToLaunchParameters(
-    const base::ReadOnlySharedMemoryRegion& read_only_memory_region,
-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
-    base::GlobalDescriptors::Key descriptor_key,
-    base::ScopedFD& out_descriptor_to_share,
-#endif
-    base::CommandLine* command_line,
-    base::LaunchOptions* launch_options) {
-  base::shared_memory::AddToLaunchParameters(switches::kTraceConfigHandle,
-                                             read_only_memory_region,
-#if BUILDFLAG(IS_APPLE)
-                                             kTraceConfigRendezvousKey,
-#elif BUILDFLAG(IS_POSIX)
-                                             descriptor_key,
-                                             out_descriptor_to_share,
-#endif
-                                             command_line, launch_options);
-}
-
-void COMPONENT_EXPORT(TRACING_CPP) AddTraceOutputToLaunchParameters(
-    const base::UnsafeSharedMemoryRegion& unsafe_memory_region,
-#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_APPLE)
-    base::GlobalDescriptors::Key descriptor_key,
-    base::ScopedFD& out_descriptor_to_share,
-#endif
-    base::CommandLine* command_line,
-    base::LaunchOptions* launch_options) {
-  base::shared_memory::AddToLaunchParameters(switches::kTraceBufferHandle,
-                                             unsafe_memory_region,
-#if BUILDFLAG(IS_APPLE)
-                                             kTraceBufferRendezvousKey,
-#elif BUILDFLAG(IS_POSIX)
-                                             descriptor_key,
-                                             out_descriptor_to_share,
-#endif
-                                             command_line, launch_options);
+void EnableEarlyTrackRegistration() {
+  perfetto::internal::TrackRegistry::InitializeInstance(
+      TraceStartupConfig::GetProcessTrackUuid(
+          *base::CommandLine::ForCurrentProcess()));
 }
 
 }  // namespace tracing

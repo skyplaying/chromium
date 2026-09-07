@@ -81,7 +81,7 @@ class PrintingMetricsApiTest : public ExtensionApiTest {
     base::RunLoop run_loop;
     ash::TestPrintJobHistoryServiceObserver observer(
         ash::PrintJobHistoryServiceFactory::GetForBrowserContext(
-            browser()->profile()),
+            browser()->GetProfile()),
         run_loop.QuitClosure());
 
     std::unique_ptr<ash::CupsPrintJob> print_job =
@@ -93,7 +93,7 @@ class PrintingMetricsApiTest : public ExtensionApiTest {
     ash::TestCupsPrintJobManager* print_job_manager =
         static_cast<ash::TestCupsPrintJobManager*>(
             ash::CupsPrintJobManagerFactory::GetForBrowserContext(
-                browser()->profile()));
+                browser()->GetProfile()));
     print_job_manager->CreatePrintJob(print_job.get());
     print_job_manager->CancelPrintJob(print_job.get());
     run_loop.Run();
@@ -107,7 +107,7 @@ IN_PROC_BROWSER_TEST_F(PrintingMetricsApiTest, GetPrintJobs) {
 
   CreateAndCancelPrintJob(kTitle);
 
-  Browser* const new_browser = CreateBrowser(profile());
+  BrowserWindowInterface* const new_browser = CreateBrowser(profile());
   SetCustomArg(kTitle);
   extensions::ResultCatcher catcher;
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
@@ -119,7 +119,7 @@ IN_PROC_BROWSER_TEST_F(PrintingMetricsApiTest, OnPrintJobFinished) {
   ForceInstallExtensionByPolicy();
 
   ResultCatcher catcher;
-  Browser* const new_browser = CreateBrowser(profile());
+  BrowserWindowInterface* const new_browser = CreateBrowser(profile());
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       new_browser, extension()->GetResourceURL("on_print_job_finished.html")));
 

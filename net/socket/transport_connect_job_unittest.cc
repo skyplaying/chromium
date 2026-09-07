@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-
 #include "net/socket/transport_connect_job.h"
 
 #include <memory>
@@ -22,6 +21,7 @@
 #include "net/cert/mock_cert_verifier.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/dns/public/secure_dns_policy.h"
+#include "net/http/http_server_properties.h"
 #include "net/http/transport_security_state.h"
 #include "net/log/net_log.h"
 #include "net/socket/connect_job_test_util.h"
@@ -31,6 +31,7 @@
 #include "net/socket/transport_client_socket_pool_test_util.h"
 #include "net/ssl/ssl_config_service.h"
 #include "net/ssl/test_ssl_config_service.h"
+#include "net/ssl/test_static_ech_mode_getter.h"
 #include "net/test/gtest_util.h"
 #include "net/test/test_with_task_environment.h"
 #include "net/url_request/static_http_user_agent_settings.h"
@@ -70,11 +71,13 @@ class TransportConnectJobTest : public WithTaskEnvironment,
             /*network_quality_estimator=*/nullptr,
             NetLog::Get(),
             /*websocket_endpoint_lock_manager=*/nullptr,
-            /*http_server_properties=*/nullptr,
+            &http_server_properties_,
             /*alpn_protos=*/nullptr,
             /*application_settings=*/nullptr,
             /*ignore_certificate_errors=*/nullptr,
-            /*early_data_enabled=*/nullptr) {}
+            /*enable_early_data=*/nullptr) {
+    AddScopedFeatureList().InitAndDisableFeature(features::kHappyEyeballsV2);
+  }
 
   ~TransportConnectJobTest() override = default;
 
@@ -82,7 +85,7 @@ class TransportConnectJobTest : public WithTaskEnvironment,
     return base::MakeRefCounted<TransportSocketParams>(
         url::SchemeHostPort(url::kHttpScheme, kHostName, 80),
         NetworkAnonymizationKey(), SecureDnsPolicy::kAllow,
-        OnHostResolutionCallback(),
+        handles::kInvalidNetworkHandle, OnHostResolutionCallback(),
         /*supported_alpns=*/base::flat_set<std::string>());
   }
 
@@ -90,7 +93,7 @@ class TransportConnectJobTest : public WithTaskEnvironment,
     return base::MakeRefCounted<TransportSocketParams>(
         url::SchemeHostPort(url::kHttpsScheme, kHostName, 443),
         NetworkAnonymizationKey(), SecureDnsPolicy::kAllow,
-        OnHostResolutionCallback(),
+        handles::kInvalidNetworkHandle, OnHostResolutionCallback(),
         /*supported_alpns=*/base::flat_set<std::string>{"h2", "http/1.1"});
   }
 
@@ -107,6 +110,7 @@ class TransportConnectJobTest : public WithTaskEnvironment,
                                        &transport_security_state_,
                                        /*ssl_client_session_cache=*/nullptr,
                                        /*sct_auditing_delegate=*/nullptr};
+  HttpServerProperties http_server_properties_;
   const CommonConnectJobParams common_connect_job_params_;
 };
 
@@ -270,7 +274,7 @@ TEST_F(TransportConnectJobTest, HandlesHttpsEndpoint) {
       base::MakeRefCounted<TransportSocketParams>(
           url::SchemeHostPort(url::kHttpsScheme, kHostName, 80),
           NetworkAnonymizationKey(), SecureDnsPolicy::kAllow,
-          OnHostResolutionCallback(),
+          handles::kInvalidNetworkHandle, OnHostResolutionCallback(),
           /*supported_alpns=*/base::flat_set<std::string>{"h2", "http/1.1"}),
       &test_delegate, nullptr /* net_log */);
   test_delegate.StartJobExpectingResult(&transport_connect_job, OK,
@@ -285,7 +289,8 @@ TEST_F(TransportConnectJobTest, HandlesNonStandardEndpoint) {
       DEFAULT_PRIORITY, SocketTag(), &common_connect_job_params_,
       base::MakeRefCounted<TransportSocketParams>(
           HostPortPair(kHostName, 80), NetworkAnonymizationKey(),
-          SecureDnsPolicy::kAllow, OnHostResolutionCallback(),
+          SecureDnsPolicy::kAllow, handles::kInvalidNetworkHandle,
+          OnHostResolutionCallback(),
           /*supported_alpns=*/base::flat_set<std::string>()),
       &test_delegate, nullptr /* net_log */);
   test_delegate.StartJobExpectingResult(&transport_connect_job, OK,
@@ -301,7 +306,7 @@ TEST_F(TransportConnectJobTest, SecureDnsPolicy) {
         base::MakeRefCounted<TransportSocketParams>(
             url::SchemeHostPort(url::kHttpScheme, kHostName, 80),
             NetworkAnonymizationKey(), secure_dns_policy,
-            OnHostResolutionCallback(),
+            handles::kInvalidNetworkHandle, OnHostResolutionCallback(),
             /*supported_alpns=*/base::flat_set<std::string>{}),
         &test_delegate, nullptr /* net_log */);
     test_delegate.StartJobExpectingResult(&transport_connect_job, OK,
@@ -933,12 +938,12 @@ TEST_F(TransportConnectJobTest, SvcbReliantIfEch) {
   EXPECT_EQ(attempts[1].endpoint, IPEndPoint(ParseIP("2::"), 8442));
 }
 
-// SVCB-reliant mode should be disabled for ECH servers when ECH is disabled via
-// config.
-TEST_F(TransportConnectJobTest, SvcbOptionalIfEchDisabledConfig) {
-  SSLContextConfig config;
-  config.ech_enabled = false;
-  ssl_config_service_.UpdateSSLConfigAndNotify(config);
+
+// SVCB-reliant mode should be disabled for ECH servers when EchMode is
+// kDisabled for the specific host.
+TEST_F(TransportConnectJobTest, SvcbOptionalIfEchModeDisabledForHost) {
+  ssl_config_service_.SetEchModeGetter(
+      std::make_unique<TestStaticEchModeGetter>(EchMode::kDisabled, kHostName));
 
   HostResolverEndpointResult endpoint1, endpoint2, endpoint3;
   endpoint1.ip_endpoints = {IPEndPoint(ParseIP("1::"), 8441)};
@@ -1130,6 +1135,59 @@ TEST_F(TransportConnectJobTest, DedupIPEndPoints) {
   EXPECT_EQ(attempts[3].endpoint, IPEndPoint(ParseIP("2::"), 443));
   EXPECT_THAT(attempts[4].result, test::IsError(ERR_CONNECTION_FAILED));
   EXPECT_EQ(attempts[4].endpoint, IPEndPoint(ParseIP("2.2.2.2"), 443));
+}
+
+class TransportConnectJobRTTFallbackTest : public TransportConnectJobTest {
+ public:
+  TransportConnectJobRTTFallbackTest() {
+    AddScopedFeatureList().InitWithFeaturesAndParameters(
+        /*enabled_features=*/
+        {{features::kIPv6FallbackBasedOnRTT,
+          {{"IPv6FallbackRTTMultiplier", "2.0"},
+           {"IPv6FallbackMin", "10ms"},
+           {"IPv6FallbackMax", "1s"}}}},
+        /*disabled_features=*/{features::kHappyEyeballsV2});
+  }
+};
+
+TEST_F(TransportConnectJobRTTFallbackTest, UsesRTTForFallback) {
+  // Set up HttpServerProperties with a specific RTT.
+  url::SchemeHostPort server(url::kHttpScheme, kHostName, 80);
+  ServerNetworkStats stats;
+  stats.srtt = base::Milliseconds(50);
+  http_server_properties_.SetServerNetworkStats(
+      server, NetworkAnonymizationKey(), stats);
+
+  MockTransportClientSocketFactory::Rule rules[] = {
+      // The IPv6 attempt stalls.
+      MockTransportClientSocketFactory::Rule(
+          MockTransportClientSocketFactory::Type::kStalled,
+          std::vector{IPEndPoint(ParseIP("2:abcd::3:4:ff"), 80)}),
+      // The IPv4 attempt also stalls.
+      MockTransportClientSocketFactory::Rule(
+          MockTransportClientSocketFactory::Type::kStalled,
+          std::vector{IPEndPoint(ParseIP("2.2.2.2"), 80)})};
+  client_socket_factory_.SetRules(rules);
+
+  host_resolver_.set_synchronous_mode(true);
+  host_resolver_.rules()->AddIPLiteralRule(kHostName, "2:abcd::3:4:ff,2.2.2.2",
+                                           std::string());
+
+  TestConnectJobDelegate test_delegate;
+  TransportConnectJob transport_connect_job(
+      DEFAULT_PRIORITY, SocketTag(), &common_connect_job_params_,
+      DefaultParams(), &test_delegate, /*net_log=*/nullptr);
+
+  EXPECT_THAT(transport_connect_job.Connect(), test::IsError(ERR_IO_PENDING));
+
+  // IPv6 job starts, but not IPv4 job.
+  EXPECT_EQ(1, client_socket_factory_.allocation_count());
+
+  // RTT is 50ms, multiplier is 2.0, so fallback should be 100ms.
+  FastForwardBy(base::Milliseconds(100));
+
+  // IPv4 job starts.
+  EXPECT_EQ(2, client_socket_factory_.allocation_count());
 }
 
 }  // namespace

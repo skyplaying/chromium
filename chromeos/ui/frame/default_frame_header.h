@@ -5,6 +5,8 @@
 #ifndef CHROMEOS_UI_FRAME_DEFAULT_FRAME_HEADER_H_
 #define CHROMEOS_UI_FRAME_DEFAULT_FRAME_HEADER_H_
 
+#include <optional>
+
 #include "base/compiler_specific.h"  // override
 #include "base/component_export.h"
 #include "base/gtest_prod_util.h"
@@ -34,15 +36,16 @@ class COMPONENT_EXPORT(CHROMEOS_UI_FRAME) DefaultFrameHeader
 
   ~DefaultFrameHeader() override;
 
-  void SetWidthInPixels(int width_in_pixels);
+  void SetWidthInPixels(std::optional<int> width_in_pixels);
+  std::optional<int> width_in_pixels() const { return width_in_pixels_; }
 
   // FrameHeader:
   void UpdateFrameColors() override;
+  views::CaptionButtonLayoutSize GetButtonLayoutSize() const override;
 
  protected:
   // FrameHeader:
   void DoPaintHeader(gfx::Canvas* canvas) override;
-  views::CaptionButtonLayoutSize GetButtonLayoutSize() const override;
   SkColor GetTitleColor() const override;
   SkColor GetCurrentFrameColor() const override;
 
@@ -57,7 +60,7 @@ class COMPONENT_EXPORT(CHROMEOS_UI_FRAME) DefaultFrameHeader
   SkColor active_frame_color_ = chromeos::kDefaultFrameColor;
   SkColor inactive_frame_color_ = chromeos::kDefaultFrameColor;
 
-  int width_in_pixels_ = -1;
+  std::optional<int> width_in_pixels_;
 };
 
 }  // namespace chromeos

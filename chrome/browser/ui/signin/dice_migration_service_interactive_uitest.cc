@@ -29,8 +29,13 @@ constexpr char kTestEmail[] = "test@gmail.com";
 
 constexpr char kToastTriggerToShowHistogram[] = "Toast.TriggeredToShow";
 constexpr char kToastDismissedHistogram[] = "Toast.DiceUserMigrated.Dismissed";
+// TODO(crbug.com/506054344, crbug.com/538010159): Since the only usage of this
+// variable is in a disabled test, guard it so it would compile.
+#if !(BUILDFLAG(IS_MAC) || (BUILDFLAG(IS_WIN) && defined(ADDRESS_SANITIZER)))
 constexpr char kToastActionButtonUserAction[] =
     "Toast.ActionButtonClicked.DiceUserMigrated";
+#endif  // !(BUILDFLAG(IS_MAC) || (BUILDFLAG(IS_WIN) &&
+        // defined(ADDRESS_SANITIZER)))
 constexpr char kToastCloseButtonUserAction[] =
     "Toast.CloseButtonClicked.DiceUserMigrated";
 constexpr char kForceMigratedHistogram[] = "Signin.DiceMigration.ForceMigrated";
@@ -48,7 +53,7 @@ constexpr char kForceMigratedHistogram[] = "Signin.DiceMigration.ForceMigrated";
 class DiceMigrationServiceForcedMigrationInteractiveUiTest
     : public InteractiveBrowserTest {
  public:
-  Profile* GetProfile() { return browser()->profile(); }
+  Profile* GetProfile() { return browser()->GetProfile(); }
 
   DiceMigrationService* GetDiceMigrationService() {
     DiceMigrationService* service =
@@ -84,9 +89,7 @@ class DiceMigrationServiceForcedMigrationInteractiveUiTest
 
   auto FireToastCloseTimer() {
     return Do([=, this]() {
-      browser()
-          ->browser_window_features()
-          ->toast_controller()
+      ToastController::From(browser())
           ->GetToastCloseTimerForTesting()
           ->FireNow();
     });
@@ -102,6 +105,10 @@ class DiceMigrationServiceForcedMigrationInteractiveUiTest
           gfx::ScopedAnimationDurationScaleMode::ZERO_DURATION);
 };
 
+// TODO(https://crbug.com/506054344): Disabled on Mac due to excessive
+// flakiness.
+// TODO(https://crbug.com/538010159): Disabled on Windows ASAN.
+#if !(BUILDFLAG(IS_MAC) || (BUILDFLAG(IS_WIN) && defined(ADDRESS_SANITIZER)))
 DICE_MIGRATION_TEST_F(DiceMigrationServiceForcedMigrationInteractiveUiTest,
                       ToastActionButton) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kActiveTab);
@@ -131,6 +138,8 @@ DICE_MIGRATION_TEST_F(DiceMigrationServiceForcedMigrationInteractiveUiTest,
   EXPECT_EQ(user_action_tester_.GetActionCount(kToastActionButtonUserAction),
             1);
 }
+#endif  // !(BUILDFLAG(IS_MAC) || (BUILDFLAG(IS_WIN) &&
+        // defined(ADDRESS_SANITIZER)))
 
 DICE_MIGRATION_TEST_F(DiceMigrationServiceForcedMigrationInteractiveUiTest,
                       ToastCloseButton) {
@@ -156,7 +165,6 @@ DICE_MIGRATION_TEST_F(DiceMigrationServiceForcedMigrationInteractiveUiTest,
 DICE_MIGRATION_TEST_F(DiceMigrationServiceForcedMigrationInteractiveUiTest,
                       ToastDoesNotCloseOnNavigation) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kActiveTab);
-  constexpr char16_t kNewUrl[] = u"chrome://version";
 
   // The user is explicitly signed in.
   ASSERT_TRUE(
@@ -164,25 +172,22 @@ DICE_MIGRATION_TEST_F(DiceMigrationServiceForcedMigrationInteractiveUiTest,
   ASSERT_TRUE(
       GetProfile()->GetPrefs()->GetBoolean(prefs::kExplicitBrowserSignin));
 
-  RunTestSequence(TriggerToastTimer(),
+  RunTestSequence(
+      InstrumentTab(kActiveTab), TriggerToastTimer(),
+      WaitForShow(toasts::ToastView::kToastViewId),
 
-                  WaitForShow(toasts::ToastView::kToastViewId),
+      // Navigate to another page.
+      NavigateWebContents(kActiveTab, GURL(chrome::kChromeUIVersionURL)),
+      FocusWebContents(kActiveTab),
 
-                  // Navigate to another page using the omnibox.
-                  InstrumentTab(kActiveTab),
-                  EnterText(kOmniboxElementId, kNewUrl),
-                  Confirm(kOmniboxElementId),
-                  WaitForWebContentsNavigation(kActiveTab, GURL(kNewUrl)),
-
-                  // The toast should still be visible.
-                  EnsurePresent(toasts::ToastView::kToastViewId));
+      // The toast should still be visible.
+      EnsurePresent(toasts::ToastView::kToastViewId));
 }
 
 DICE_MIGRATION_TEST_F(DiceMigrationServiceForcedMigrationInteractiveUiTest,
                       ToastDoesNotCloseOnTabSwitch) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kActiveTab);
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewTab);
-  constexpr char16_t kNewUrl[] = u"chrome://version";
 
   // The user is explicitly signed in.
   ASSERT_TRUE(
@@ -190,25 +195,26 @@ DICE_MIGRATION_TEST_F(DiceMigrationServiceForcedMigrationInteractiveUiTest,
   ASSERT_TRUE(
       GetProfile()->GetPrefs()->GetBoolean(prefs::kExplicitBrowserSignin));
 
-  RunTestSequence(InstrumentTab(kActiveTab),
+  RunTestSequence(
+      InstrumentTab(kActiveTab),
 
-                  TriggerToastTimer(),
+      TriggerToastTimer(),
 
-                  WaitForShow(toasts::ToastView::kToastViewId),
+      WaitForShow(toasts::ToastView::kToastViewId),
 
-                  // Switch to another tab.
-                  AddInstrumentedTab(kNewTab, GURL(kNewUrl)),
+      // Switch to another tab.
+      AddInstrumentedTab(kNewTab, GURL(chrome::kChromeUIVersionURL)),
 
-                  // The toast should still be visible because the timeout
-                  // hasn't passed yet.
-                  EnsurePresent(toasts::ToastView::kToastViewId),
+      // The toast should still be visible because the timeout
+      // hasn't passed yet.
+      EnsurePresent(toasts::ToastView::kToastViewId),
 
-                  // Switch back to the original tab.
-                  SelectTab(kTabStripElementId, 0),
+      // Switch back to the original tab.
+      SelectTab(kTabStripElementId, 0),
 
-                  // The toast should still be visible because the timeout
-                  // hasn't passed yet.
-                  EnsurePresent(toasts::ToastView::kToastViewId));
+      // The toast should still be visible because the timeout
+      // hasn't passed yet.
+      EnsurePresent(toasts::ToastView::kToastViewId));
 }
 
 DICE_MIGRATION_TEST_F(DiceMigrationServiceForcedMigrationInteractiveUiTest,

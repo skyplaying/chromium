@@ -85,12 +85,28 @@ const char kEnableRGBA4444Textures[] = "enable-rgba-4444-textures";
 const char kEnableRasterSideDarkModeForImages[] =
     "enable-raster-side-dark-mode-for-images";
 
+#if BUILDFLAG(IS_CHROMEOS)
+// Enables placing WebGL textures into overlays and giving them low-latency
+// usages. Restricted to ChromeOS, where this functionality is enabled on a
+// per-board basis. NOTE: The value for the switch name should not be renamed
+// for historical reasons (i.e., doing so would require updating this as well
+// and coordinating rollout:
+// https://source.chromium.org/chromiumos/chromiumos/codesearch/+/main:src/platform2/login_manager/chromium_command_builder.cc;drc=ed9561e7ab8a71fe4a9d9946cea99df8ebfc9449;l=558).
+const char kEnableOverlaysAndLowLatencyUsageForWebGL[] =
+    "enable-webgl-image-chromium";
+#endif
+
 // Enable rasterizer that writes directly to GPU memory associated with tiles.
 const char kEnableZeroCopy[] = "enable-zero-copy";
 
 // Sets the total amount of memory that may be allocated for GPU resources in
 // cc.
 const char kForceGpuMemAvailableMb[] = "force-gpu-mem-available-mb";
+
+// Disables the GpuMemoryBufferReadbackFromTexture codepath for debugging
+// purposes.
+const char kGpuMemoryBufferReadbackFromTextureForceDisabledForDebugging[] =
+    "gmb-readback-from-texture-disabled-for-debugging";
 
 // The number of multisample antialiasing samples for GPU rasterization.
 // Requires MSAA support on GPU to have an effect. 0 disables MSAA.
@@ -165,12 +181,23 @@ const char kJavaScriptFlags[] = "js-flags";
 const char kWebAudioBypassOutputBufferingOptOut[] =
     "web-audio-bypass-output-buffering-opt-out";
 
+const char kDisableBackForwardCacheForWebSockets[] =
+    "disable-back-forward-cache-for-web-sockets";
+
 // Override mechanism for ReduceAcceptLanguage. This feature is typically
 // controlled by base features, but requires an enterprise policy override.
 const char kDisableReduceAcceptLanguage[] = "disable-reduce-accept-language";
 
 // A switch that controls XSLT availability via enterprise policy.
 const char kXSLTEnabledPolicy[] = "xslt-enabled-policy";
+
+// A switch that controls RestrictBackgroundFetchFromServiceWorker availability
+// via enterprise policy.
+const char kRestrictBackgroundFetchFromServiceWorker[] =
+    "restrict-background-fetch-from-service-worker";
+
+// A switch passed to renderer processes hosting Top Chrome WebUI.
+const char kTopChromeWebUI[] = "top-chrome-webui";
 
 }  // namespace switches
 }  // namespace blink

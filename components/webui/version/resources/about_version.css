@@ -90,8 +90,7 @@ body {
   vertical-align: bottom;
 }
 
-#copy-to-clipboard,
-#copy-variations-to-clipboard {
+.copy-button {
   background-color: var(--background-color);
   border: none;
   border-radius: 2px;
@@ -99,7 +98,7 @@ body {
 }
 
 #copy-to-clipboard-icon {
-  -webkit-mask-image: url(chrome://resources/images/icon_copy_content.svg);
+  -webkit-mask-image: url(chrome://resources/images/icon_copy_content_old.svg);
   -webkit-mask-size: cover;
   background: none;
   background-color: var(--primary-color);
@@ -111,19 +110,21 @@ body {
   width: 1em;
 }
 
+html[webui-rounded-icons] #copy-to-clipboard-icon {
+  -webkit-mask-image: url(chrome://resources/images/icon_copy_content.svg);
+}
+
 @media (forced-colors: active) {
   #copy-to-clipboard-icon {
     background-color: ButtonText;
   }
 }
 
-#copy-to-clipboard:hover,
-#copy-variations-to-clipboard:hover {
+.copy-button:hover {
   background-color: var(--hover-background-color);
 }
 
-#copy-to-clipboard:active,
-#copy-variations-to-clipboard:active {
+.copy-button:active {
   background-color: var(--active-background-color);
 }
 

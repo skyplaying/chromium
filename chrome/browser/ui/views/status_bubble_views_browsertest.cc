@@ -13,7 +13,6 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/test_simple_task_runner.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/views/status_bubble_views_browsertest_mac.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -25,7 +24,7 @@ class StatusBubbleViewsTest : public InProcessBrowserTest {
  public:
   StatusBubbleViews* GetBubble() {
     std::vector<StatusBubble*> status_bubbles =
-        browser()->window()->GetStatusBubbles();
+        BrowserWindow::FromBrowser(browser())->GetStatusBubbles();
     if (status_bubbles.size() > 0) {
       return static_cast<StatusBubbleViews*>(status_bubbles.front());
     }

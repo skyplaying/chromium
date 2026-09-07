@@ -13,6 +13,7 @@ import android.text.TextUtils;
 
 import org.jni_zero.CalledByNative;
 import org.jni_zero.JNINamespace;
+import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
 
 import org.chromium.base.Callback;
@@ -109,7 +110,7 @@ public class CollaborationControllerDelegateImpl implements CollaborationControl
             @FlowType int type,
             DataSharingTabManager tabManager,
             SigninAndHistorySyncActivityLauncher signinAndHistorySyncActivityLauncher,
-            LoadingFullscreenCoordinator loadingFullscreenCoordinator,
+            @Nullable LoadingFullscreenCoordinator loadingFullscreenCoordinator,
             @Nullable Callback<Runnable> switchToTabSwitcherCallback,
             Callback<Callback<Boolean>> startAccountRefreshCallback) {
         mNativePtr = CollaborationControllerDelegateImplJni.get().createNativeObject(this);
@@ -124,6 +125,7 @@ public class CollaborationControllerDelegateImpl implements CollaborationControl
         mStartAccountRefreshCallback = startAccountRefreshCallback;
 
         if (mFlowType == FlowType.JOIN) {
+            assert loadingFullscreenCoordinator != null;
             // The screen should not animate in order to hide all ongoing transitions immediately
             // after this call.
             loadingFullscreenCoordinator.startLoading(this::destroy, /* animate= */ false);
@@ -180,8 +182,8 @@ public class CollaborationControllerDelegateImpl implements CollaborationControl
     @CalledByNative
     void showError(
             @Type int errorType,
-            String titleText,
-            String messageParagraphText,
+            @JniType("std::string") String titleText,
+            @JniType("std::string") String messageParagraphText,
             long resultCallback) {
         mThreadChecker.assertOnValidThread();
         closeLoadingIfNeeded();
@@ -192,10 +194,9 @@ public class CollaborationControllerDelegateImpl implements CollaborationControl
 
         PropertyModel model;
         Runnable exitRunnable =
-                () -> {
-                    CollaborationControllerDelegateImplJni.get()
-                            .runResultCallback(Outcome.SUCCESS, resultCallback);
-                };
+                () ->
+                        CollaborationControllerDelegateImplJni.get()
+                                .runResultCallback(Outcome.SUCCESS, resultCallback);
         if (errorType == Type.UPDATE_CHROME_UI_FOR_VERSION_OUT_OF_DATE) {
             model =
                     VersioningModalDialog.showWithCustomMessage(
@@ -432,7 +433,7 @@ public class CollaborationControllerDelegateImpl implements CollaborationControl
     private @Nullable Intent createFullscreenSigninIntent() {
         mThreadChecker.assertOnValidThread();
         FullscreenSigninAndHistorySyncConfig fullscreenConfig =
-                new FullscreenSigninAndHistorySyncConfig.Builder(
+                FullscreenSigninAndHistorySyncConfig.builder(
                                 mActivity.getString(R.string.collaboration_signin_title),
                                 mActivity.getString(R.string.collaboration_signin_description),
                                 mActivity.getString(R.string.collaboration_signin_sync_dismiss),
@@ -542,7 +543,9 @@ public class CollaborationControllerDelegateImpl implements CollaborationControl
      */
     @CalledByNative
     void showShareDialog(
-            String syncId, LocalTabGroupId localId, long resultWithGroupTokenCallback) {
+            @Nullable String syncId,
+            @Nullable LocalTabGroupId localId,
+            long resultWithGroupTokenCallback) {
         mThreadChecker.assertOnValidThread();
         DataSharingCreateUiConfig.CreateCallback createCallback =
                 new DataSharingCreateUiConfig.CreateCallback() {
@@ -615,7 +618,10 @@ public class CollaborationControllerDelegateImpl implements CollaborationControl
      * @param groupToken The associated group token.
      */
     @CalledByNative
-    void onUrlReadyToShare(String groupId, GURL url, long resultCallback) {
+    void onUrlReadyToShare(
+            @JniType("std::string") String groupId,
+            @JniType("GURL") GURL url,
+            long resultCallback) {
         mThreadChecker.assertOnValidThread();
         if (mCloseScreenRunnable == null) return;
         Callback<Boolean> onFinishCallback =
@@ -642,7 +648,8 @@ public class CollaborationControllerDelegateImpl implements CollaborationControl
      * @param resultCallback The callback to notify the outcome of the UI screen.
      */
     @CalledByNative
-    void showManageDialog(String syncId, LocalTabGroupId localId, long resultCallback) {
+    void showManageDialog(
+            @Nullable String syncId, @Nullable LocalTabGroupId localId, long resultCallback) {
         mThreadChecker.assertOnValidThread();
         SavedTabGroup existingGroup =
                 mDataSharingTabManager.getSavedTabGroupForEitherId(syncId, localId);
@@ -782,7 +789,8 @@ public class CollaborationControllerDelegateImpl implements CollaborationControl
      * @param resultCallback The callback to notify the outcome of the UI screen.
      */
     @CalledByNative
-    void showLeaveDialog(String syncId, LocalTabGroupId localId, long resultCallback) {
+    void showLeaveDialog(
+            @Nullable String syncId, @Nullable LocalTabGroupId localId, long resultCallback) {
         mThreadChecker.assertOnValidThread();
         SavedTabGroup existingGroup =
                 mDataSharingTabManager.getSavedTabGroupForEitherId(syncId, localId);
@@ -801,7 +809,8 @@ public class CollaborationControllerDelegateImpl implements CollaborationControl
      * @param resultCallback The callback to notify the outcome of the UI screen.
      */
     @CalledByNative
-    void showDeleteDialog(String syncId, LocalTabGroupId localId, long resultCallback) {
+    void showDeleteDialog(
+            @Nullable String syncId, @Nullable LocalTabGroupId localId, long resultCallback) {
         mThreadChecker.assertOnValidThread();
         SavedTabGroup existingGroup =
                 mDataSharingTabManager.getSavedTabGroupForEitherId(syncId, localId);
@@ -826,7 +835,7 @@ public class CollaborationControllerDelegateImpl implements CollaborationControl
      * @param resultCallback The callback to notify the outcome of the UI screen.
      */
     @CalledByNative
-    void promoteTabGroup(String collaborationId, long resultCallback) {
+    void promoteTabGroup(@JniType("std::string") String collaborationId, long resultCallback) {
         mThreadChecker.assertOnValidThread();
         closeScreenIfNeeded();
         boolean success =
@@ -854,8 +863,10 @@ public class CollaborationControllerDelegateImpl implements CollaborationControl
         if (mFeatureEngagementLock != null) {
             mFeatureEngagementLock.release();
         }
-        if (mExitCallback != 0) {
-            CollaborationControllerDelegateImplJni.get().deleteExitCallback(mExitCallback);
+        long tempCallback = mExitCallback;
+        mExitCallback = 0;
+        if (tempCallback != 0) {
+            CollaborationControllerDelegateImplJni.get().deleteExitCallback(tempCallback);
         }
     }
 
@@ -873,7 +884,9 @@ public class CollaborationControllerDelegateImpl implements CollaborationControl
         mThreadChecker.assertOnValidThread();
         long tempCallback = mExitCallback;
         mExitCallback = 0;
-        CollaborationControllerDelegateImplJni.get().runExitCallback(tempCallback);
+        if (tempCallback != 0) {
+            CollaborationControllerDelegateImplJni.get().runExitCallback(tempCallback);
+        }
     }
 
     @SuppressWarnings("NullAway")
@@ -910,8 +923,8 @@ public class CollaborationControllerDelegateImpl implements CollaborationControl
 
         void runResultWithGroupTokenCallback(
                 int joutcome,
-                @Nullable String groupId,
-                @Nullable String accessToken,
+                @JniType("std::string") @Nullable String groupId,
+                @JniType("std::string") @Nullable String accessToken,
                 long resultWithGroupTokenCallback);
 
         long createNativeObject(CollaborationControllerDelegateImpl jdelegate);

@@ -7,7 +7,7 @@
 #include "chrome/browser/content_settings/cookie_settings_factory.h"
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -128,7 +128,7 @@ IN_PROC_BROWSER_TEST_P(PartitionedBlobUrlUsagePolicyBrowserTestP,
   // fetch would succeed even if the blob URL is cross-origin and
   // kBlockCrossPartitionBlobUrlFetching is enabled.
   content_settings::CookieSettings* settings =
-      CookieSettingsFactory::GetForProfile(browser()->profile()).get();
+      CookieSettingsFactory::GetForProfile(browser()->GetProfile()).get();
   settings->SetDefaultCookieSetting(CONTENT_SETTING_BLOCK);
 
   bool fetch_results = FetchAndReadBlobUrl(rfh_c_2, blob_url);

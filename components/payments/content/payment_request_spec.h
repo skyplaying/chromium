@@ -195,6 +195,8 @@ class PaymentRequestSpec : public PaymentOptionsProvider,
   // billing method, such as "https://play.google.com/billing".
   bool IsAppStoreBillingAlsoRequested() const;
 
+  const std::string& app_locale() const { return app_locale_; }
+
   base::WeakPtr<PaymentRequestSpec> AsWeakPtr();
 
  private:
@@ -228,8 +230,7 @@ class PaymentRequestSpec : public PaymentOptionsProvider,
   std::vector<mojom::PaymentMethodDataPtr> method_data_;
   const std::string app_locale_;
   // The currently shipping option as specified by the merchant.
-  raw_ptr<mojom::PaymentShippingOption, DanglingUntriaged>
-      selected_shipping_option_;
+  raw_ptr<mojom::PaymentShippingOption> selected_shipping_option_;
   std::u16string selected_shipping_option_error_;
 
   // One currency formatter is instantiated and cached per currency code.

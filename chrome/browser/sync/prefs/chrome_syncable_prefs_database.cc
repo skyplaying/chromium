@@ -9,8 +9,8 @@
 #include "base/containers/fixed_flat_map.h"
 #include "build/build_config.h"
 #include "chrome/browser/accessibility/tree_fixing/pref_names.h"
-#include "chrome/browser/promos/promos_pref_names.h"
-#include "chrome/browser/subscription_eligibility/subscription_eligibility_prefs.h"
+#include "chrome/browser/desktop_to_mobile_promos/promos_pref_names.h"
+#include "chrome/browser/glic/glic_pref_names.h"
 #include "chrome/browser/ui/read_anything/read_anything_prefs.h"
 #include "chrome/browser/ui/toolbar/toolbar_pref_names.h"
 #include "chrome/common/pref_names.h"
@@ -25,12 +25,12 @@
 #include "components/translate/core/browser/translate_prefs.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_login_pref_names.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/public/cpp/shelf_prefs.h"
 #include "chrome/browser/ash/guest_os/guest_os_pref_names.h"
-#include "chrome/browser/ash/login/login_pref_names.h"
 #include "chromeos/ash/components/tether/pref_names.h"
-#include "components/drive/drive_pref_names.h"  // nogncheck crbug.com/1125897
+#include "components/drive/drive_pref_names.h"  // nogncheck crbug.com/40147906
 #include "components/metrics/demographics/user_demographics.h"
 #include "components/user_manager/user_manager_pref_names.h"
 #include "components/variations/service/google_groups_manager_prefs.h"
@@ -40,10 +40,6 @@
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "components/supervised_user/core/common/pref_names.h"
 #include "extensions/browser/pref_names.h"  // nogncheck
-#endif
-
-#if BUILDFLAG(ENABLE_GLIC)
-#include "chrome/browser/glic/glic_pref_names.h"
 #endif
 
 namespace browser_sync {
@@ -286,7 +282,7 @@ enum {
   kBrowserColorVariant = 100220,
   kGrayscaleThemeEnabled = 100221,
   kUserColor = 100222,
-  kBlockAll3pcToggleEnabled = 100223,
+  // kBlockAll3pcToggleEnabled = 100223, (deprecated)
   // kTrackingProtectionLevel = 100224, (deprecated)
   kUserSpeakOnMuteDetectionEnabled = 100225,
   kShouldShowSpeakOnMuteOptInNudge = 100226,
@@ -337,9 +333,11 @@ enum {
   kAccessibilityFaceGazeGesturesToMacros = 100270,
   kAccessibilityFaceGazeGesturesToConfidence = 100271,
   kShelfGeminiAppPinRolls = 100272,
-  kProfileContentSettingsExceptionsTrackingProtection = 100273,
-  kProfileContentSettingsPartitionedExceptionsTrackingProtection = 100274,
-  kProfileDefaultContentSettingValuesTrackingProtection = 100275,
+  // kProfileContentSettingsExceptionsTrackingProtection = 100273, (deprecated)
+  // kProfileContentSettingsPartitionedExceptionsTrackingProtection = 100274,
+  // (deprecated)
+  // kProfileDefaultContentSettingValuesTrackingProtection = 100275,
+  // (deprecated)
   kShowForwardButton = 100276,
   kAccessibilityMagnifierFollowsSts = 100277,
   kAccessibilityReadAnythingLanguagesEnabled = 100278,
@@ -389,12 +387,12 @@ enum {
   kOfficeMoveConfirmationShownForCloudToOneDriveSyncable = 100322,
   kPinnedCastMigrationComplete = 100323,
   kAccessibilityAXTreeFixingEnabled = 100324,
-  kTabSearchMigrationComplete = 100325,
+  // kTabSearchMigrationComplete = 100325, (deprecated)
   kReadAloudPlaybackMode = 100326,
   kPinSplitTabButton = 100327,
   kGlicRolloutEligibility = 100328,
   kShelfNotebookLmAppPinRolls = 100329,
-  kVerticalTabsEnabled = 100330,
+  // kVerticalTabsEnabled = 100330, (no longer synced)
   kSplitViewDragAndDropEnabled = 100331,
   kDesktopToiOSEnhancedBrowsingPromoLastImpressionTimestamp = 100332,
   kDesktopToiOSEnhancedBrowsingPromoImpressionsCounter = 100333,
@@ -402,7 +400,7 @@ enum {
   kDesktopToiOSLensPromoLastImpressionTimestamp = 100335,
   kDesktopToiOSLensPromoImpressionsCounter = 100336,
   kDesktopToiOSLensPromoOptOut = 100337,
-  kSubscriptionEligibilityAiSubscriptionTier = 100338,
+  // kSubscriptionEligibilityAiSubscriptionTier = 100338, (moved to common)
   kAccessibilityCursorHighlightEnabled = 100339,
   kAccessibilityCursorColorEnabled = 100340,
   kAccessibilityCursorColor = 100341,
@@ -436,7 +434,7 @@ enum {
   kPinContextualTaskButton = 100369,
   kAccessibilityReadAnythingOmniboxChipIgnoredCount = 100370,
   kAccessibilityReadAnythingLineFocus = 100371,
-  kProjectsPanelEntrypointEnabled = 100372,
+  kOrganizerPanelEntrypointEnabled = 100372,
   kDesktopToiOSTabGroupsPromoLastImpressionTimestamp = 100373,
   kDesktopToiOSTabGroupsPromoImpressionsCounter = 100374,
   kDesktopToiOSTabGroupsPromoOptOut = 100375,
@@ -444,6 +442,13 @@ enum {
   kDesktopToiOSPriceTrackingPromoImpressionsCounter = 100377,
   kDesktopToiOSPriceTrackingPromoOptOut = 100378,
   kAccessibilityReadAnythingLastNonDisabledLineFocus = 100379,
+  kAppRatingPromptShown = 100380,
+  kAccessibilityReadAnythingLastOpenedPresentationState = 100381,
+  kProfileContentSettingsExceptionsInlineCueMenu = 100382,
+  kProfileContentSettingsPartitionedExceptionsInlineCueMenu = 100383,
+  kProfileDefaultContentSettingValuesInlineCueMenu = 100384,
+  kExtensionsPinnedByDefault = 100385,
+  kAudioFocusEnforcementEnabled = 100386,
   // See components/sync_preferences/README.md about adding new entries here.
   // vvvvv IMPORTANT! vvvvv
   // Note to the reviewer: IT IS YOUR RESPONSIBILITY to ensure that new syncable
@@ -461,6 +466,10 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
 #if BUILDFLAG(IS_ANDROID)
     {language::prefs::kAppLanguagePromptShown,
      {syncable_prefs_ids::kAppLanguagePromptShown, syncer::PREFERENCES,
+      sync_preferences::PrefSensitivity::kNone,
+      sync_preferences::MergeBehavior::kNone}},
+    {prefs::kAppRatingPromptShown,
+     {syncable_prefs_ids::kAppRatingPromptShown, syncer::PREFERENCES,
       sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
     {prefs::kContextualSearchEnabled,
@@ -560,6 +569,10 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
      {syncable_prefs_ids::kAccessibilityReadAnythingLastNonDisabledLineFocus,
       syncer::PREFERENCES, sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
+    {prefs::kAccessibilityReadAnythingLastOpenedPresentationState,
+     {syncable_prefs_ids::kAccessibilityReadAnythingLastOpenedPresentationState,
+      syncer::PREFERENCES, sync_preferences::PrefSensitivity::kNone,
+      sync_preferences::MergeBehavior::kNone}},
     {prefs::kLensRegionSearchEnabled,
      {syncable_prefs_ids::kLensRegionSearchEnabled, syncer::PREFERENCES,
       sync_preferences::PrefSensitivity::kNone,
@@ -636,16 +649,8 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
      {syncable_prefs_ids::kPinnedCastMigrationComplete, syncer::PREFERENCES,
       sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
-    {prefs::kTabSearchMigrationComplete,
-     {syncable_prefs_ids::kTabSearchMigrationComplete, syncer::PREFERENCES,
-      sync_preferences::PrefSensitivity::kNone,
-      sync_preferences::MergeBehavior::kNone}},
-    {prefs::kVerticalTabsEnabled,
-     {syncable_prefs_ids::kVerticalTabsEnabled, syncer::PREFERENCES,
-      sync_preferences::PrefSensitivity::kNone,
-      sync_preferences::MergeBehavior::kNone}},
-    {prefs::kProjectsPanelEntrypointEnabled,
-     {syncable_prefs_ids::kProjectsPanelEntrypointEnabled, syncer::PREFERENCES,
+    {prefs::kOrganizerPanelEntrypointEnabled,
+     {syncable_prefs_ids::kOrganizerPanelEntrypointEnabled, syncer::PREFERENCES,
       sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
 #endif  // BUILDFLAG(IS_ANDROID)
@@ -709,7 +714,7 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
     {ash::prefs::kAccessibilityCaretHighlightEnabled,
      {syncable_prefs_ids::kAccessibilityCaretHighlightEnabled,
       syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
-      sync_preferences::MergeBehavior::kNone}},
+      sync_preferences::MergeBehavior::kCustom}},
     {ash::prefs::kAccessibilityColorCorrectionEnabled,
      {syncable_prefs_ids::kAccessibilityColorCorrectionEnabled,
       syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
@@ -737,7 +742,7 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
     {ash::prefs::kAccessibilityCursorHighlightEnabled,
      {syncable_prefs_ids::kAccessibilityCursorHighlightEnabled,
       syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
-      sync_preferences::MergeBehavior::kNone}},
+      sync_preferences::MergeBehavior::kCustom}},
     {ash::prefs::kAccessibilityEnhancedNetworkVoicesInSelectToSpeakAllowed,
      {syncable_prefs_ids::
           kAccessibilityEnhancedNetworkVoicesInSelectToSpeakAllowed,
@@ -758,7 +763,7 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
     {ash::prefs::kAccessibilityLargeCursorEnabled,
      {syncable_prefs_ids::kAccessibilityLargeCursorEnabled,
       syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
-      sync_preferences::MergeBehavior::kNone}},
+      sync_preferences::MergeBehavior::kCustom}},
     {ash::prefs::kAccessibilityMagnifierFollowsChromeVox,
      {syncable_prefs_ids::kAccessibilityMagnifierFollowsChromeVox,
       syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
@@ -843,6 +848,10 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
      {syncable_prefs_ids::kAppNotificationBadgingEnabled,
       syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
+    {ash::prefs::kAudioFocusEnforcementEnabled,
+     {syncable_prefs_ids::kAudioFocusEnforcementEnabled, syncer::OS_PREFERENCES,
+      sync_preferences::PrefSensitivity::kNone,
+      sync_preferences::MergeBehavior::kNone}},
     {ash::prefs::kClassManagementToolsOOBEAccessCountSetting,
      {syncable_prefs_ids::kClassManagementToolsOOBEAccessCountSetting,
       syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
@@ -851,11 +860,11 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
      {syncable_prefs_ids::kClassManagementToolsKioskReceiverCodes,
       syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kMergeableDict}},
-    {prefs::kDefaultTasksByMimeType,
+    {ash::prefs::kDefaultTasksByMimeType,
      {syncable_prefs_ids::kDefaultTasksByMimeType, syncer::OS_PREFERENCES,
       sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
-    {prefs::kDefaultTasksBySuffix,
+    {ash::prefs::kDefaultTasksBySuffix,
      {syncable_prefs_ids::kDefaultTasksBySuffix, syncer::OS_PREFERENCES,
       sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
@@ -866,11 +875,11 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
     {ash::prefs::kDockedMagnifierEnabled,
      {syncable_prefs_ids::kDockedMagnifierEnabled, syncer::OS_PREFERENCES,
       sync_preferences::PrefSensitivity::kNone,
-      sync_preferences::MergeBehavior::kNone}},
+      sync_preferences::MergeBehavior::kCustom}},
     {ash::prefs::kDockedMagnifierScale,
      {syncable_prefs_ids::kDockedMagnifierScale, syncer::OS_PREFERENCES,
       sync_preferences::PrefSensitivity::kNone,
-      sync_preferences::MergeBehavior::kNone}},
+      sync_preferences::MergeBehavior::kCustom}},
     {ash::prefs::kDynamicColorColorScheme,
      {syncable_prefs_ids::kDynamicColorColorScheme, syncer::OS_PREFERENCES,
       sync_preferences::PrefSensitivity::kNone,
@@ -983,36 +992,36 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
      {syncable_prefs_ids::kNaturalScroll, syncer::OS_PRIORITY_PREFERENCES,
       sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
-    {prefs::kOfficeFilesAlwaysMoveToDriveSyncable,
+    {ash::prefs::kOfficeFilesAlwaysMoveToDriveSyncable,
      {syncable_prefs_ids::kOfficeFilesAlwaysMoveToDriveSyncable,
       syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
-    {prefs::kOfficeFilesAlwaysMoveToOneDriveSyncable,
+    {ash::prefs::kOfficeFilesAlwaysMoveToOneDriveSyncable,
      {syncable_prefs_ids::kOfficeFilesAlwaysMoveToOneDriveSyncable,
       syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
-    {prefs::kOfficeMoveConfirmationShownForDriveSyncable,
+    {ash::prefs::kOfficeMoveConfirmationShownForDriveSyncable,
      {syncable_prefs_ids::kOfficeMoveConfirmationShownForDriveSyncable,
       syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
-    {prefs::kOfficeMoveConfirmationShownForOneDriveSyncable,
+    {ash::prefs::kOfficeMoveConfirmationShownForOneDriveSyncable,
      {syncable_prefs_ids::kOfficeMoveConfirmationShownForOneDriveSyncable,
       syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
-    {prefs::kOfficeMoveConfirmationShownForLocalToDriveSyncable,
+    {ash::prefs::kOfficeMoveConfirmationShownForLocalToDriveSyncable,
      {syncable_prefs_ids::kOfficeMoveConfirmationShownForLocalToDriveSyncable,
       syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
-    {prefs::kOfficeMoveConfirmationShownForLocalToOneDriveSyncable,
+    {ash::prefs::kOfficeMoveConfirmationShownForLocalToOneDriveSyncable,
      {syncable_prefs_ids::
           kOfficeMoveConfirmationShownForLocalToOneDriveSyncable,
       syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
-    {prefs::kOfficeMoveConfirmationShownForCloudToDriveSyncable,
+    {ash::prefs::kOfficeMoveConfirmationShownForCloudToDriveSyncable,
      {syncable_prefs_ids::kOfficeMoveConfirmationShownForCloudToDriveSyncable,
       syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
-    {prefs::kOfficeMoveConfirmationShownForCloudToOneDriveSyncable,
+    {ash::prefs::kOfficeMoveConfirmationShownForCloudToOneDriveSyncable,
      {syncable_prefs_ids::
           kOfficeMoveConfirmationShownForCloudToOneDriveSyncable,
       syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
@@ -1229,7 +1238,7 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
      {syncable_prefs_ids::kSyncOsDemographicsPrefName,
       syncer::OS_PRIORITY_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
-    {prefs::kAppListPreferredOrder,
+    {ash::prefs::kAppListPreferredOrder,
      {syncable_prefs_ids::kAppListPreferredOrder, syncer::OS_PREFERENCES,
       sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
@@ -1237,11 +1246,11 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
      {syncable_prefs_ids::kChromeOSReleaseNotesVersion, syncer::OS_PREFERENCES,
       sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
-    {prefs::kLanguageEnabledImesSyncable,
+    {ash::prefs::kLanguageEnabledImesSyncable,
      {syncable_prefs_ids::kLanguageEnabledImesSyncable, syncer::OS_PREFERENCES,
       sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
-    {prefs::kLanguagePreloadEnginesSyncable,
+    {ash::prefs::kLanguagePreloadEnginesSyncable,
      {syncable_prefs_ids::kLanguagePreloadEnginesSyncable,
       syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
@@ -1289,15 +1298,15 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
      {syncable_prefs_ids::kMultiProfileWarningShowDismissed,
       syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
-    {prefs::kResolveTimezoneByGeolocationMethod,
+    {ash::prefs::kResolveTimezoneByGeolocationMethod,
      {syncable_prefs_ids::kResolveTimezoneByGeolocationMethod,
       syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
-    {prefs::kResolveTimezoneByGeolocationMigratedToMethod,
+    {ash::prefs::kResolveTimezoneByGeolocationMigratedToMethod,
      {syncable_prefs_ids::kResolveTimezoneByGeolocationMigratedToMethod,
       syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
-    {prefs::kShelfDefaultPinLayoutRolls,
+    {ash::prefs::kShelfDefaultPinLayoutRolls,
      {syncable_prefs_ids::kShelfDefaultPinLayoutRolls,
       syncer::OS_PRIORITY_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
@@ -1317,11 +1326,11 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
      {syncable_prefs_ids::kTextToSpeechVolume, syncer::OS_PREFERENCES,
       sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
-    {prefs::kUse24HourClock,
+    {ash::prefs::kUse24HourClock,
      {syncable_prefs_ids::kUse24HourClock, syncer::OS_PREFERENCES,
       sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
-    {prefs::kUserPrintersAllowed,
+    {ash::prefs::kUserPrintersAllowed,
      {syncable_prefs_ids::kUserPrintersAllowed, syncer::OS_PREFERENCES,
       sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
@@ -1410,11 +1419,11 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
     {ash::prefs::kAccessibilityFocusHighlightEnabled,
      {syncable_prefs_ids::kAccessibilityFocusHighlightEnabled,
       syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
-      sync_preferences::MergeBehavior::kNone}},
+      sync_preferences::MergeBehavior::kCustom}},
     {ash::prefs::kAccessibilityHighContrastEnabled,
      {syncable_prefs_ids::kAccessibilityHighContrastEnabled,
       syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
-      sync_preferences::MergeBehavior::kNone}},
+      sync_preferences::MergeBehavior::kCustom}},
     {ash::prefs::kHighContrastAcceleratorDialogHasBeenAccepted,
      {syncable_prefs_ids::kHighContrastAcceleratorDialogHasBeenAccepted,
       syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
@@ -1454,16 +1463,16 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
     {ash::prefs::kAccessibilityScreenMagnifierEnabled,
      {syncable_prefs_ids::kAccessibilityScreenMagnifierEnabled,
       syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
-      sync_preferences::MergeBehavior::kNone}},
+      sync_preferences::MergeBehavior::kCustom}},
     {ash::prefs::kAccessibilityScreenMagnifierScale,
      {syncable_prefs_ids::kAccessibilityScreenMagnifierScale,
       syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
-      sync_preferences::MergeBehavior::kNone}},
+      sync_preferences::MergeBehavior::kCustom}},
     {ash::prefs::kAccessibilitySelectToSpeakEnabled,
      {syncable_prefs_ids::kAccessibilitySelectToSpeakEnabled,
       syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
-      sync_preferences::MergeBehavior::kNone}},
-    {prefs::kShelfGeminiAppPinRolls,
+      sync_preferences::MergeBehavior::kCustom}},
+    {ash::prefs::kShelfGeminiAppPinRolls,
      {syncable_prefs_ids::kShelfGeminiAppPinRolls, syncer::OS_PREFERENCES,
       sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kMergeableListWithRewriteOnUpdate}},
@@ -1479,7 +1488,7 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
      {syncable_prefs_ids::kKeyboardAmbientLightSensorLastEnabled,
       syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
-    {prefs::kShelfMallAppPinRolls,
+    {ash::prefs::kShelfMallAppPinRolls,
      {syncable_prefs_ids::kShelfMallAppPinRolls, syncer::OS_PREFERENCES,
       sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kMergeableListWithRewriteOnUpdate}},
@@ -1491,7 +1500,7 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
      {syncable_prefs_ids::kKeyboardHasSplitModifierKeyboard,
       syncer::OS_PREFERENCES, sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
-    {prefs::kShelfNotebookLmAppPinRolls,
+    {ash::prefs::kShelfNotebookLmAppPinRolls,
      {syncable_prefs_ids::kShelfNotebookLmAppPinRolls, syncer::OS_PREFERENCES,
       sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kMergeableListWithRewriteOnUpdate}},
@@ -1548,6 +1557,10 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
      {syncable_prefs_ids::kExtensionCommands, syncer::PREFERENCES,
       sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
+    {prefs::kExtensionsPinnedByDefault,
+     {syncable_prefs_ids::kExtensionsPinnedByDefault, syncer::PREFERENCES,
+      sync_preferences::PrefSensitivity::kNone,
+      sync_preferences::MergeBehavior::kNone}},
     {prefs::kExtensionsUIDeveloperMode,
      {syncable_prefs_ids::kExtensionsUIDeveloperMode, syncer::PREFERENCES,
       sync_preferences::PrefSensitivity::kNone,
@@ -1580,10 +1593,12 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
      {syncable_prefs_ids::kNetworkQualities, syncer::PREFERENCES,
       sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
-    {prefs::kPerformanceTracingEnabled,
+#if BUILDFLAG(IS_CHROMEOS)
+    {ash::prefs::kPerformanceTracingEnabled,
      {syncable_prefs_ids::kPerformanceTracingEnabled, syncer::PREFERENCES,
       sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
+#endif
     {prefs::kPluginsAlwaysOpenPdfExternally,
      {syncable_prefs_ids::kPluginsAlwaysOpenPdfExternally, syncer::PREFERENCES,
       sync_preferences::PrefSensitivity::kNone,
@@ -1653,6 +1668,11 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
       syncer::PREFERENCES,
       sync_preferences::PrefSensitivity::kSensitiveRequiresHistory,
       sync_preferences::MergeBehavior::kMergeableDict}},
+    {"profile.content_settings.exceptions.inline_cue_menu",
+     {syncable_prefs_ids::kProfileContentSettingsExceptionsInlineCueMenu,
+      syncer::PREFERENCES,
+      sync_preferences::PrefSensitivity::kSensitiveRequiresHistory,
+      sync_preferences::MergeBehavior::kMergeableDict}},
     {"profile.content_settings.exceptions.javascript",
      {syncable_prefs_ids::kProfileContentSettingsExceptionsJavascript,
       syncer::PREFERENCES,
@@ -1670,11 +1690,6 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
       sync_preferences::MergeBehavior::kMergeableDict}},
     {"profile.content_settings.exceptions.popups",
      {syncable_prefs_ids::kProfileContentSettingsExceptionsPopups,
-      syncer::PREFERENCES,
-      sync_preferences::PrefSensitivity::kSensitiveRequiresHistory,
-      sync_preferences::MergeBehavior::kMergeableDict}},
-    {"profile.content_settings.exceptions.tracking_protection",
-     {syncable_prefs_ids::kProfileContentSettingsExceptionsTrackingProtection,
       syncer::PREFERENCES,
       sync_preferences::PrefSensitivity::kSensitiveRequiresHistory,
       sync_preferences::MergeBehavior::kMergeableDict}},
@@ -1711,6 +1726,12 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
       syncer::PREFERENCES,
       sync_preferences::PrefSensitivity::kSensitiveRequiresHistory,
       sync_preferences::MergeBehavior::kMergeableDict}},
+    {"profile.content_settings.partitioned_exceptions.inline_cue_menu",
+     {syncable_prefs_ids::
+          kProfileContentSettingsPartitionedExceptionsInlineCueMenu,
+      syncer::PREFERENCES,
+      sync_preferences::PrefSensitivity::kSensitiveRequiresHistory,
+      sync_preferences::MergeBehavior::kMergeableDict}},
     {"profile.content_settings.partitioned_exceptions.javascript",
      {syncable_prefs_ids::
           kProfileContentSettingsPartitionedExceptionsJavascript,
@@ -1730,12 +1751,6 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
       sync_preferences::MergeBehavior::kMergeableDict}},
     {"profile.content_settings.partitioned_exceptions.popups",
      {syncable_prefs_ids::kProfileContentSettingsPartitionedExceptionsPopups,
-      syncer::PREFERENCES,
-      sync_preferences::PrefSensitivity::kSensitiveRequiresHistory,
-      sync_preferences::MergeBehavior::kMergeableDict}},
-    {"profile.content_settings.partitioned_exceptions.tracking_protection",
-     {syncable_prefs_ids::
-          kProfileContentSettingsPartitionedExceptionsTrackingProtection,
       syncer::PREFERENCES,
       sync_preferences::PrefSensitivity::kSensitiveRequiresHistory,
       sync_preferences::MergeBehavior::kMergeableDict}},
@@ -1767,6 +1782,10 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
      {syncable_prefs_ids::kProfileDefaultContentSettingValuesImages,
       syncer::PREFERENCES, sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
+    {"profile.default_content_setting_values.inline_cue_menu",
+     {syncable_prefs_ids::kProfileDefaultContentSettingValuesInlineCueMenu,
+      syncer::PREFERENCES, sync_preferences::PrefSensitivity::kNone,
+      sync_preferences::MergeBehavior::kNone}},
     {"profile.default_content_setting_values.javascript",
      {syncable_prefs_ids::kProfileDefaultContentSettingValuesJavascript,
       syncer::PREFERENCES, sync_preferences::PrefSensitivity::kNone,
@@ -1783,10 +1802,6 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
      {syncable_prefs_ids::kProfileDefaultContentSettingValuesPopups,
       syncer::PREFERENCES, sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
-    {"profile.default_content_setting_values.tracking_protection",
-     {syncable_prefs_ids::kProfileDefaultContentSettingValuesTrackingProtection,
-      syncer::PREFERENCES, sync_preferences::PrefSensitivity::kNone,
-      sync_preferences::MergeBehavior::kMergeableDict}},
     {"profile.default_content_setting_values.window_placement",
      {syncable_prefs_ids::kProfileDefaultContentSettingValuesWindowPlacement,
       syncer::PREFERENCES, sync_preferences::PrefSensitivity::kNone,
@@ -1808,10 +1823,6 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
       sync_preferences::MergeBehavior::kNone}},
     {promos_prefs::kDesktopToiOSPasswordPromoOptOut,
      {syncable_prefs_ids::kDesktopToiOSPasswordPromoOptOut, syncer::PREFERENCES,
-      sync_preferences::PrefSensitivity::kNone,
-      sync_preferences::MergeBehavior::kNone}},
-    {prefs::kBlockAll3pcToggleEnabled,
-     {syncable_prefs_ids::kBlockAll3pcToggleEnabled, syncer::PREFERENCES,
       sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
     {prefs::kHttpsFirstModeIncognito,
@@ -1904,29 +1915,21 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
      {syncable_prefs_ids::kDesktopToiOSPriceTrackingPromoOptOut,
       syncer::PREFERENCES, sync_preferences::PrefSensitivity::kNone,
       sync_preferences::MergeBehavior::kNone}},
-#if BUILDFLAG(ENABLE_GLIC)
     {glic::prefs::kGlicRolloutEligibility,
      {syncable_prefs_ids::kGlicRolloutEligibility, syncer::PRIORITY_PREFERENCES,
-      sync_preferences::PrefSensitivity::kExemptFromUserControlWhileSignedIn,
-      sync_preferences::MergeBehavior::kNone}},
-#endif  // BUILDFLAG(ENABLE_GLIC)
-    {subscription_eligibility::prefs::kAiSubscriptionTier,
-     {syncable_prefs_ids::kSubscriptionEligibilityAiSubscriptionTier,
-      syncer::PRIORITY_PREFERENCES,
       sync_preferences::PrefSensitivity::kExemptFromUserControlWhileSignedIn,
       sync_preferences::MergeBehavior::kNone}},
 });
 
 }  // namespace
 
-std::optional<sync_preferences::SyncablePrefMetadata>
+const sync_preferences::SyncablePrefMetadata*
 ChromeSyncablePrefsDatabase::GetSyncablePrefMetadata(
     std::string_view pref_name) const {
   const auto it = kChromeSyncablePrefsAllowlist.find(pref_name);
   if (it != kChromeSyncablePrefsAllowlist.end()) {
-    DCHECK(!common_syncable_prefs_database_.GetSyncablePrefMetadata(pref_name)
-                .has_value());
-    return it->second;
+    DCHECK(!common_syncable_prefs_database_.GetSyncablePrefMetadata(pref_name));
+    return &it->second;
   }
   // Check in `common_syncable_prefs_database_`.
   return common_syncable_prefs_database_.GetSyncablePrefMetadata(pref_name);

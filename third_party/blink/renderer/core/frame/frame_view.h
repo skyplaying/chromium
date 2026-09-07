@@ -12,6 +12,7 @@
 #include "third_party/blink/public/mojom/frame/viewport_intersection_state.mojom-blink-forward.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/frame/embedded_content_view.h"
+#include "third_party/blink/renderer/core/intersection_observer/intersection_observation.h"
 #include "third_party/blink/renderer/core/layout/geometry/physical_rect.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
 
@@ -34,10 +35,11 @@ class CORE_EXPORT FrameView : public EmbeddedContentView {
   // the LocalFrameView parent of this FrameView (if any). It contains dirty
   // bits based on whether geometry may have changed in the parent frame.
   virtual void UpdateViewportIntersectionsForSubtree(
-      unsigned parent_flags,
+      IntersectionObservation::ComputeFlags parent_flags,
       ComputeIntersectionsContext&) = 0;
 
   virtual std::optional<NaturalSizingInfo> GetNaturalDimensions() const = 0;
+  virtual void ClearNaturalDimensions() = 0;
 
   // Returns true if this frame could potentially skip rendering and avoid
   // scheduling visual updates.
@@ -49,7 +51,6 @@ class CORE_EXPORT FrameView : public EmbeddedContentView {
   bool CanThrottleRenderingForPropagation() const;
 
   bool IsFrameView() const override { return true; }
-  virtual bool ShouldReportMainFrameIntersection() const { return false; }
 
   Frame& GetFrame() const;
   std::optional<mojom::blink::FrameVisibility> GetFrameVisibility() const {
@@ -82,7 +83,7 @@ class CORE_EXPORT FrameView : public EmbeddedContentView {
       const mojom::blink::ViewportIntersectionState& intersection_state) = 0;
   virtual void VisibilityForThrottlingChanged() = 0;
   virtual bool LifecycleUpdatesThrottled() const { return false; }
-  void UpdateViewportIntersection(unsigned flags,
+  void UpdateViewportIntersection(IntersectionObservation::ComputeFlags flags,
                                   bool needs_occlusion_tracking);
 
   // FrameVisibility is tracked by the browser process, which may suppress

@@ -5,10 +5,14 @@
 #ifndef CHROME_BROWSER_EXTENSIONS_SERVICE_WORKER_APITEST_H_
 #define CHROME_BROWSER_EXTENSIONS_SERVICE_WORKER_APITEST_H_
 
+#include "base/types/pass_key.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/common/page_type.h"
 #include "extensions/browser/process_manager.h"
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 class GURL;
 
@@ -27,6 +31,10 @@ class ServiceWorkerTest : public ExtensionApiTest {
   ServiceWorkerTest(const ServiceWorkerTest&) = delete;
   ServiceWorkerTest& operator=(const ServiceWorkerTest&) = delete;
 
+  base::PassKey<ServiceWorkerTest> GetPassKey() {
+    return base::PassKey<ServiceWorkerTest>();
+  }
+
  protected:
   ServiceWorkerTest() = default;
   ~ServiceWorkerTest() override = default;
@@ -44,7 +52,7 @@ class ServiceWorkerTest : public ExtensionApiTest {
 
   // Navigates the browser to a new tab at `url`, waits for it to load, then
   // returns it.
-  content::WebContents* Navigate(const GURL& url);
+  content::WebContents* NavigateInNewTab(const GURL& url);
 
   // Navigates the browser to `url` and returns the new tab's page type.
   content::PageType NavigateAndGetPageType(const GURL& url);

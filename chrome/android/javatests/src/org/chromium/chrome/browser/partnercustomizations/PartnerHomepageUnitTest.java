@@ -22,6 +22,9 @@ import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.homepage.HomepageManager;
 import org.chromium.chrome.browser.homepage.HomepageTestRule;
 import org.chromium.chrome.browser.url_constants.UrlConstantResolverFactory;
@@ -33,6 +36,10 @@ import org.chromium.url.GURL;
 /** Unit test suite for partner homepage. */
 @DoNotBatch(reason = "Testing tests start up and homepage loading.")
 @RunWith(ChromeJUnit4ClassRunner.class)
+@DisableFeatures(ChromeFeatureList.DISABLE_PARTNER_HOMEPAGE_ANDROID)
+@EnableFeatures(
+        ChromeFeatureList.HOME_BUTTON_REMOVAL
+                + ":set_default_to_false_on_homepage_on_desktop/false")
 public class PartnerHomepageUnitTest {
 
     @Rule
@@ -40,8 +47,6 @@ public class PartnerHomepageUnitTest {
             new BasePartnerBrowserCustomizationUnitTestRule();
 
     @Rule public HomepageTestRule mHomepageTestRule = new HomepageTestRule();
-
-    public static final String TAG = "PartnerHomepageUnitTest";
 
     private static final GURL TEST_CUSTOM_HOMEPAGE_GURL = new GURL("http://chrome.com");
 
@@ -223,7 +228,7 @@ public class PartnerHomepageUnitTest {
      */
     @Test
     @SmallTest
-    @DisabledTest(message = "crbug.com/837311")
+    @DisabledTest(message = "crbug.com/40573802")
     @Feature({"Homepage"})
     public void testHomepageProviderTimeout() throws InterruptedException {
         ThreadUtils.runOnUiThreadBlocking(
@@ -269,7 +274,7 @@ public class PartnerHomepageUnitTest {
     @Test
     @SmallTest
     @Feature({"Homepage"})
-    @DisabledTest(message = "crbug.com/837130")
+    @DisabledTest(message = "crbug.com/41385622")
     public void testHomepageProviderDelayed() throws InterruptedException {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {

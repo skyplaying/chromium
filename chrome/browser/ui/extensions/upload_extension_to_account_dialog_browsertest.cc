@@ -2,12 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/extensions/upload_extension_to_account_dialog.h"
+
 #include "base/functional/callback_helpers.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/extensions/extensions_dialogs.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/views/extensions/extensions_dialogs_browsertest.h"
 #include "components/signin/public/base/gaia_id_hash.h"
 #include "components/signin/public/base/signin_pref_names.h"
@@ -35,12 +36,13 @@ void SignIn(Profile* profile) {
           .AsPrimary(signin::ConsentLevel::kSignin)
           .WithAccessPoint(signin_metrics::AccessPoint::kExtensionInstallBubble)
           .Build("testy@mctestface.com"));
-  ASSERT_TRUE(SigninPrefs(*profile->GetPrefs())
-                  .GetExtensionsExplicitBrowserSignin(account_info.gaia));
+  ASSERT_TRUE(
+      SigninPrefs(*profile->GetPrefs())
+          .GetExtensionsExplicitBrowserSignin(account_info.GetGaiaId()));
 
-  signin::SimulateAccountImageFetch(identity_manager, account_info.account_id,
-                                    "https://avatar.com/avatar.png",
-                                    gfx::test::CreateImage(/*size=*/32));
+  signin::SimulateAccountImageFetch(
+      identity_manager, account_info.GetAccountId(),
+      "https://avatar.com/avatar.png", gfx::test::CreateImage(/*size=*/32));
 }
 
 }  // namespace
@@ -76,17 +78,17 @@ class UploadExtensionToAccountDialogBrowserTest
                     .Build();
 
     ASSERT_TRUE(extension);
-    ExtensionRegistrar::Get(browser()->profile())->AddExtension(extension);
+    ExtensionRegistrar::Get(browser()->GetProfile())->AddExtension(extension);
 
     // Sign in AFTER the extension has been added so there is an active account
     // for extensions to be uploaded to.
-    SignIn(browser()->profile());
+    SignIn(browser()->GetProfile());
 
-    ShowUploadExtensionToAccountDialog(browser()->profile(),
-                                       browser()->window()->GetNativeWindow(),
-                                       *extension,
-                                       /*accept_callback=*/base::DoNothing(),
-                                       /*cancel_callback=*/base::DoNothing());
+    ShowUploadExtensionToAccountDialog(
+        browser()->GetProfile(), browser()->GetWindow()->GetNativeWindow(),
+        *extension,
+        /*accept_callback=*/base::DoNothing(),
+        /*cancel_callback=*/base::DoNothing());
   }
 };
 

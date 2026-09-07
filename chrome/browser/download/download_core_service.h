@@ -14,10 +14,6 @@
 class ChromeDownloadManagerDelegate;
 class DownloadUIController;
 
-namespace content {
-class DownloadManager;
-}
-
 namespace extensions {
 class ExtensionDownloadsEventRouter;
 }
@@ -49,6 +45,9 @@ class DownloadCoreService : public KeyedService {
   // incognito or if the DownloadManager hasn't been created yet or if there is
   // no HistoryService for profile. Virtual for testing.
   virtual DownloadHistory* GetDownloadHistory() = 0;
+
+  // Initialize the history system.
+  virtual void InitializeHistory() {}
 
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   virtual extensions::ExtensionDownloadsEventRouter*

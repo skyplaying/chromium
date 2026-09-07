@@ -11,6 +11,7 @@
 #include "base/check.h"
 #include "base/containers/flat_set.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/task/common/task_annotator.h"
 #include "base/threading/platform_thread.h"
 #include "base/trace_event/trace_event.h"
@@ -112,10 +113,7 @@ bool FrameSinkImpl::BindToClient(FrameSinkImplClient* client) {
   frame_sink_remote_.set_disconnect_handler(
       base::BindOnce(&FrameSinkImpl::OnContextLost, base::Unretained(this)));
 
-  if (mojo::IsDirectReceiverSupported() &&
-      base::FeatureList::IsEnabled(features::kSlimDirectReceiverIpc)) {
-    client_receiver_.emplace<DirectReceiver>(mojo::DirectReceiverKey{}, this);
-  }
+  client_receiver_.emplace<DirectReceiver>(mojo::DirectReceiverKey{}, this);
 
   std::visit(
       absl::Overload{[&](Receiver& receiver) {
@@ -173,9 +171,6 @@ void FrameSinkImpl::UploadUIResource(cc::UIResourceId resource_id,
   switch (resource_bitmap.GetFormat()) {
     case cc::UIResourceBitmap::RGBA8:
       format = viz::PlatformColor::BestSupportedTextureFormat(caps);
-      break;
-    case cc::UIResourceBitmap::ALPHA_8:
-      format = viz::SinglePlaneFormat::kALPHA_8;
       break;
     case cc::UIResourceBitmap::ETC1:
       format = viz::SinglePlaneFormat::kETC1;

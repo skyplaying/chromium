@@ -13,14 +13,13 @@
 #include <utility>
 
 #include "base/metrics/field_trial.h"
-#include "base/metrics/histogram_macros.h"
 #include "components/guest_view/buildflags/buildflags.h"
 #include "components/no_state_prefetch/browser/no_state_prefetch_contents.h"
 #include "components/no_state_prefetch/browser/no_state_prefetch_handle.h"
 #include "components/no_state_prefetch/browser/no_state_prefetch_manager.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
-#include "content/public/browser/session_storage_namespace.h"
+#include "content/public/browser/session_storage_namespace_handle.h"
 #include "content/public/common/referrer.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
@@ -29,12 +28,13 @@
 #include "url/origin.h"
 
 #if BUILDFLAG(ENABLE_GUEST_VIEW)
+#include "base/time/time.h"
 #include "components/guest_view/browser/guest_view_base.h"  // nogncheck
 #endif
 
 using base::TimeTicks;
 using content::RenderViewHost;
-using content::SessionStorageNamespace;
+using content::SessionStorageNamespaceHandle;
 
 namespace prerender {
 

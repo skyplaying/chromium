@@ -87,7 +87,6 @@ extern const char kForceMediaResolutionHeight[];
 extern const char kForceMediaResolutionWidth[];
 
 // UI switches
-extern const char kEnableInput[];
 extern const char kSystemGestureStartWidth[];
 extern const char kSystemGestureStartHeight[];
 extern const char kBottomSystemGestureStartHeight[];
@@ -118,6 +117,9 @@ extern const char kUseCastBrowserPrefConfig[];
 extern const char kInProcessBroker[];
 
 extern const char kCastMojoBrokerPath[];
+
+// Allows specifying the base::ASSETS dir for Cast via commandline.
+extern const char kCastAssetsDir[];
 
 }  // namespace switches
 

@@ -17,9 +17,10 @@
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "components/password_manager/core/browser/features/password_manager_features_util.h"
 #include "components/password_manager/core/browser/password_form.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/password_manager/core/browser/sharing/password_sender_service.h"
 #include "components/password_manager/core/browser/sharing/recipient_info.h"
-#include "components/sync/engine/nigori/cross_user_sharing_public_private_key_pair.h"
+#include "components/sync/nigori/cross_user_sharing_public_private_key_pair.h"
 #include "components/sync/protocol/nigori_specifics.pb.h"
 #include "components/sync/protocol/password_sharing_invitation_specifics.pb.h"
 #include "components/sync/test/fake_server_nigori_helper.h"
@@ -33,12 +34,13 @@ namespace {
 using password_manager::PasswordForm;
 using password_manager::PasswordRecipient;
 using password_manager::PasswordSenderService;
+using password_manager::PasswordString;
 using password_manager::PublicKey;
 using testing::UnorderedElementsAre;
 
 constexpr char kRecipientUserId[] = "recipient_user_id";
 constexpr char kPasswordValue[] = "password";
-constexpr char kSignonRealm[] = "signon_realm";
+constexpr char kSignonRealm[] = "http://abc.com/";
 constexpr char kOrigin[] = "http://abc.com/";
 constexpr char kUsernameElement[] = "username_element";
 constexpr char kUsernameValue[] = "username";
@@ -50,7 +52,8 @@ constexpr uint32_t kRecipientPublicKeyVersion = 1;
 
 PasswordForm MakePasswordForm() {
   PasswordForm password_form;
-  password_form.password_value = base::UTF8ToUTF16(std::string(kPasswordValue));
+  password_form.password_value =
+      PasswordString(base::UTF8ToUTF16(std::string(kPasswordValue)));
   password_form.signon_realm = kSignonRealm;
   password_form.url = GURL(kOrigin);
   password_form.username_element =

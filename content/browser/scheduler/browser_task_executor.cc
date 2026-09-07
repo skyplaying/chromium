@@ -284,15 +284,17 @@ std::unique_ptr<BrowserProcessIOThread> BrowserTaskExecutor::CreateIOThread() {
 
   TRACE_EVENT0("startup", "BrowserTaskExecutor::CreateIOThread");
 
-  auto io_thread = std::make_unique<BrowserProcessIOThread>();
+  bool allow_blocking_for_testing =
+      Get()->browser_io_thread_delegate_->allow_blocking_for_testing();
+  auto io_thread = std::make_unique<BrowserProcessIOThread>(
+      std::move(Get()->browser_io_thread_delegate_));
 
-  if (Get()->browser_io_thread_delegate_->allow_blocking_for_testing()) {
+  if (allow_blocking_for_testing) {
     io_thread->AllowBlockingForTesting();
   }
 
   base::Thread::Options options;
   options.message_pump_type = base::MessagePumpType::IO;
-  options.delegate = std::move(Get()->browser_io_thread_delegate_);
   // Up the priority of the |io_thread_| as some of its IPCs relate to
   // display tasks, or use |kInteractive| for experiments.
   options.thread_type =
@@ -309,6 +311,14 @@ void BrowserTaskExecutor::
     InstallPartitionAllocSchedulerLoopQuarantineTaskObserver() {
   CHECK_DEREF(Get()->browser_ui_thread_scheduler_.get())
       .InstallPartitionAllocSchedulerLoopQuarantineTaskObserver();
+}
+
+// static
+void BrowserTaskExecutor::PostFeatureListInit() {
+  if (!g_browser_task_executor) {
+    return;
+  }
+  g_browser_task_executor->browser_ui_thread_scheduler_->PostFeatureListInit();
 }
 
 }  // namespace content

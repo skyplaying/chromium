@@ -6,7 +6,6 @@
 
 #include "ash/constants/web_app_id_constants.h"
 #include "base/strings/to_string.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/test/web_app_test_utils.h"
 #include "chrome/browser/web_applications/web_app_management_type.h"
@@ -24,7 +23,7 @@ namespace {
 
 class AdobeExpressOemToDefaultMigrationTest : public InProcessBrowserTest {
  public:
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 };
 
 // Installs Adobe Express as an OEM installed app.

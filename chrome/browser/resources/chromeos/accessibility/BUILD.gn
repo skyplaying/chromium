@@ -2,7 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
 import("//chrome/browser/resources/accessibility/tools/manifest.gni")
 import("//chrome/common/features.gni")
 import("//chrome/test/base/ash/js2gtest.gni")
@@ -29,7 +28,7 @@ group("build") {
     "common:build",
     "enhanced_network_tts:build",
     "select_to_speak:build",
-    "switch_access/mv3:build",
+    "switch_access:build",
   ]
 }
 
@@ -98,6 +97,6 @@ group("browser_tests") {
     "common:browser_tests",
     "enhanced_network_tts:browser_tests",
     "select_to_speak:browser_tests",
-    "switch_access/mv3:browser_tests",
+    "switch_access:browser_tests",
   ]
 }

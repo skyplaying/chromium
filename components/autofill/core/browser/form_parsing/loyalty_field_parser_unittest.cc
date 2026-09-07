@@ -4,9 +4,8 @@
 
 #include "components/autofill/core/browser/form_parsing/loyalty_field_parser.h"
 
-#include "base/test/scoped_feature_list.h"
 #include "components/autofill/core/browser/field_types.h"
-#include "components/autofill/core/browser/form_parsing/parsing_test_utils.h"
+#include "components/autofill/core/browser/form_parsing/parsing_test_util.h"
 
 namespace autofill {
 
@@ -22,9 +21,6 @@ class LoyaltyFieldParserTest : public FormFieldParserTestBase,
                                          AutofillScanner& scanner) override {
     return LoyaltyFieldParser::Parse(context, scanner);
   }
-
-  base::test::ScopedFeatureList feature_list{
-      features::kAutofillEnableLoyaltyCardsFilling};
 };
 
 TEST_F(LoyaltyFieldParserTest, ParseFrequentFlyerField) {

@@ -35,8 +35,7 @@
 #include "chrome/browser/ash/wallpaper_handlers/test_wallpaper_fetcher_delegate.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/wallpaper/wallpaper_controller_client_impl.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "content/public/common/isolated_world_ids.h"
 #include "content/public/test/browser_test.h"
@@ -98,7 +97,7 @@ class PersonalizationAppWallpaperDailyRefreshBrowserTest
   void SetUpOnMainThread() override {
     SystemWebAppBrowserTestBase::SetUpOnMainThread();
 
-    browser()->window()->Minimize();
+    browser()->GetWindow()->Minimize();
 
     WallpaperControllerClientImpl::Get()->SetWallpaperFetcherDelegateForTesting(
         std::make_unique<wallpaper_handlers::TestWallpaperFetcherDelegate>());
@@ -106,7 +105,7 @@ class PersonalizationAppWallpaperDailyRefreshBrowserTest
     auto wallpaper_controller_test_api =
         std::make_unique<WallpaperControllerTestApi>(wallpaper_controller());
     wallpaper_controller_test_api->SetDefaultWallpaper(
-        GetAccountId(browser()->profile()));
+        GetAccountId(browser()->GetProfile()));
 
     test_chrome_webui_controller_factory_.AddFactoryOverride(
         kChromeUIPersonalizationAppHost, &test_webui_provider_);
@@ -124,7 +123,8 @@ class PersonalizationAppWallpaperDailyRefreshBrowserTest
     SystemWebAppBrowserTestBase::TearDownOnMainThread();
   }
 
-  content::WebContents* LaunchAppAtWallpaperSubpage(Browser** browser) {
+  content::WebContents* LaunchAppAtWallpaperSubpage(
+      BrowserWindowInterface** browser) {
     apps::AppLaunchParams launch_params =
         LaunchParamsForApp(ash::SystemWebAppType::PERSONALIZATION);
     launch_params.override_url =
@@ -192,7 +192,7 @@ class PersonalizationAppWallpaperDailyRefreshBrowserTest
 
 IN_PROC_BROWSER_TEST_F(PersonalizationAppWallpaperDailyRefreshBrowserTest,
                        DailyWallpaperIsRefreshed) {
-  Browser* browser;
+  BrowserWindowInterface* browser = nullptr;
   auto* web_contents = LaunchAppAtWallpaperSubpage(&browser);
   ASSERT_EQ(ScheduleType::kCustom, scheduler()->GetScheduleType());
   const char kCollectionId[] = "test_collection";
@@ -225,7 +225,7 @@ IN_PROC_BROWSER_TEST_F(PersonalizationAppWallpaperDailyRefreshBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(PersonalizationAppWallpaperDailyRefreshBrowserTest,
                        DailyDarkLightWallpaperIsRefreshed) {
-  Browser* browser;
+  BrowserWindowInterface* browser = nullptr;
   auto* web_contents = LaunchAppAtWallpaperSubpage(&browser);
   ASSERT_EQ(ScheduleType::kCustom, scheduler()->GetScheduleType());
   const char kCollectionId[] = "dark_light_collection";
@@ -294,7 +294,7 @@ IN_PROC_BROWSER_TEST_F(PersonalizationAppWallpaperDailyRefreshBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(PersonalizationAppWallpaperDailyRefreshBrowserTest,
                        DailyGooglePhotosWallpaperIsRefreshed) {
-  Browser* browser;
+  BrowserWindowInterface* browser = nullptr;
   auto* web_contents = LaunchAppAtWallpaperSubpage(&browser);
   ASSERT_EQ(ScheduleType::kCustom, scheduler()->GetScheduleType());
   const char kAlbumId[] = "test_album";

@@ -4,6 +4,8 @@
 
 #import "ios/chrome/browser/signin/model/system_account_updater.h"
 
+#import "base/apple/backup_util.h"
+#import "base/apple/foundation_util.h"
 #import "base/barrier_callback.h"
 #import "base/check_deref.h"
 #import "base/check_is_test.h"
@@ -18,7 +20,6 @@
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/profile/features.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
-#import "ios/chrome/browser/signin/model/avatar/resized_avatar_cache.h"
 #import "ios/chrome/browser/signin/model/constants.h"
 #import "ios/chrome/browser/signin/model/system_identity.h"
 #import "ios/chrome/browser/widget_kit/model/features.h"
@@ -50,6 +51,7 @@ class SystemIdentityInfo {
   ~SystemIdentityInfo() = default;
 
   const GaiaId& gaia_id() const { return gaia_id_; }
+  // Returns the full name or an empty string.
   NSString* full_name() const { return full_name_; }
   NSString* user_email() const { return user_email_; }
   UIImage* cached_avatar() const { return cached_avatar_; }
@@ -63,6 +65,7 @@ class SystemIdentityInfo {
 
  private:
   GaiaId gaia_id_;
+  // The name may be empty.
   NSString* full_name_;
   NSString* user_email_;
   UIImage* cached_avatar_;
@@ -158,6 +161,7 @@ void WriteAvatars(const SystemIdentityInfoDataList& list) {
     if (data) {
       NSURL* path = info.avatar_path(avatar_folder);
       if ([data writeToURL:path atomically:YES]) {
+        base::apple::SetBackupExclusion(base::apple::NSURLToFilePath(path));
         [avatars addObject:path];
       }
     }
@@ -186,7 +190,9 @@ void WriteAvatar(const SystemIdentityInfoData& info) {
 
   NSURL* path = info.avatar_path(avatar_folder);
   if (NSData* data = info.avatar_data()) {
-    [data writeToURL:path atomically:YES];
+    if ([data writeToURL:path atomically:YES]) {
+      base::apple::SetBackupExclusion(base::apple::NSURLToFilePath(path));
+    }
   } else {
     NSFileManager* manager = [NSFileManager defaultManager];
     [manager removeItemAtURL:path error:nil];
@@ -290,15 +296,9 @@ void SystemAccountUpdater::HandleMigrationIfNeeded() {
     // Only migrate prefs if a migration was never performed.
     local_state->SetBoolean(prefs::kMigrateWidgetsPrefs, true);
     UpdateLoadedAccounts();
-  } else if (!local_state->GetBoolean(prefs::kWidgetsForMultiProfile) &&
-             AreSeparateProfilesForManagedAccountsEnabled()) {
+  } else if (!local_state->GetBoolean(prefs::kWidgetsForMultiProfile)) {
     // Reload timelines if multi-profile was enabled since last build.
     local_state->SetBoolean(prefs::kWidgetsForMultiProfile, true);
-    ReloadAllTimelines();
-  } else if (local_state->GetBoolean(prefs::kWidgetsForMultiProfile) &&
-             !AreSeparateProfilesForManagedAccountsEnabled()) {
-    // Reload timelines if multi-profile was disabled since last build.
-    local_state->SetBoolean(prefs::kWidgetsForMultiProfile, false);
     ReloadAllTimelines();
   }
 }

@@ -9,8 +9,8 @@ import com.google.common.collect.ImmutableList;
 import org.jni_zero.JNINamespace;
 import org.jni_zero.NativeMethods;
 
+import org.chromium.base.MutableFlagWithSafeDefault;
 import org.chromium.build.annotations.NullMarked;
-import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.profiles.Profile;
@@ -21,6 +21,7 @@ import org.chromium.chrome.browser.signin.services.UnifiedConsentServiceBridge;
 import org.chromium.components.search_engines.TemplateUrl;
 import org.chromium.components.search_engines.TemplateUrlService;
 import org.chromium.components.user_prefs.UserPrefs;
+import org.chromium.ui.accessibility.AccessibilityFeaturesMap;
 
 import java.util.List;
 
@@ -28,8 +29,7 @@ import java.util.List;
 @JNINamespace("readaloud")
 @NullMarked
 public final class ReadAloudFeatures {
-    private static final String API_KEY_OVERRIDE_PARAM_NAME = "api_key_override";
-    private static final String VOICES_OVERRIDE_PARAM_NAME = "voices_override";
+    private static final int READABILITY_DELAY_MS_AFTER_PAGE_LOAD = 500;
 
     private static @IneligibilityReason int sIneligibilityReason = IneligibilityReason.UNKNOWN;
 
@@ -37,7 +37,6 @@ public final class ReadAloudFeatures {
      * Returns true if Read Aloud is allowed. All must be true:
      *
      * <ul>
-     *   <li>Feature flag enabled
      *   <li>Not incognito mode
      *   <li>User opted into "Make search and browsing better"
      *   <li>Google is the default search engine
@@ -53,6 +52,17 @@ public final class ReadAloudFeatures {
         if (profile.isOffTheRecord()) {
             sIneligibilityReason = IneligibilityReason.INCOGNITO_MODE;
             return false;
+        }
+
+        // When native C++ Read Aloud is enabled, bypass MSBB and Google default search engine
+        // checks.
+        // Incognito mode and enterprise policy checks remain strictly enforced.
+        if (isNativeEnabled()) {
+            if (!UserPrefs.get(profile).getBoolean(Pref.LISTEN_TO_THIS_PAGE_ENABLED)) {
+                sIneligibilityReason = IneligibilityReason.POLICY_DISABLED;
+                return false;
+            }
+            return true;
         }
 
         // Check whether the user has enabled anonymous URL-keyed data collection.
@@ -82,20 +92,11 @@ public final class ReadAloudFeatures {
             return false;
         }
 
-        if (!ChromeFeatureList.isEnabled(ChromeFeatureList.READALOUD)) {
-            sIneligibilityReason = IneligibilityReason.FEATURE_FLAG_DISABLED;
-            return false;
-        }
-
         return true;
     }
 
     public static boolean isAudioOverviewsAllowed() {
         return ChromeFeatureList.isEnabled(ChromeFeatureList.READALOUD_AUDIO_OVERVIEWS);
-    }
-
-    public static boolean isAudioOverviewsFeedbackAllowed() {
-        return ChromeFeatureList.isEnabled(ChromeFeatureList.READALOUD_AUDIO_OVERVIEWS_FEEDBACK);
     }
 
     public static int getAudioOverviewsSpeedAdditionPercentage() {
@@ -107,45 +108,30 @@ public final class ReadAloudFeatures {
     }
 
     public static int getReadabilityDelayMsAfterPageLoad() {
-      return ChromeFeatureList.sReadAloudReadabilityDelayMsAfterPageLoad.getValue();
+        return READABILITY_DELAY_MS_AFTER_PAGE_LOAD;
     }
 
     public static @IneligibilityReason int getIneligibilityReason() {
         return sIneligibilityReason;
     }
 
-    /** Returns true if playback is enabled. */
-    public static boolean isPlaybackEnabled() {
-        return ChromeFeatureList.isEnabled(ChromeFeatureList.READALOUD_PLAYBACK);
-    }
+    public static final String READ_ALOUD_NATIVE = "ReadAloudNative";
 
-    public static boolean shouldSkipAudioOverviewsDisclaimerWhenPossible() {
-        return ChromeFeatureList.isEnabled(
-                ChromeFeatureList.READALOUD_AUDIO_OVERVIEWS_SKIP_DISCLAIMER_WHEN_POSSIBLE);
+    public static final MutableFlagWithSafeDefault sReadAloudNative =
+            new MutableFlagWithSafeDefault(
+                    AccessibilityFeaturesMap.getInstance(),
+                    READ_ALOUD_NATIVE,
+                    /* defaultValue= */ false);
+
+    /** Returns true if the native C++ Read Aloud implementation is enabled. */
+    public static boolean isNativeEnabled() {
+        return sReadAloudNative.isEnabled();
     }
 
     /** Returns true if the ReadAloud CCT IPH should highlight the menu button. */
     public static boolean isIPHMenuButtonHighlightCctEnabled() {
         return ChromeFeatureList.isEnabled(
                 ChromeFeatureList.READALOUD_IPH_MENU_BUTTON_HIGHLIGHT_CCT);
-    }
-
-    /** Returns the API key override feature param if present, or null otherwise. */
-    public static @Nullable String getApiKeyOverride() {
-        String apiKeyOverride =
-                ChromeFeatureList.getFieldTrialParamByFeature(
-                        ChromeFeatureList.READALOUD, API_KEY_OVERRIDE_PARAM_NAME);
-        return apiKeyOverride.isEmpty() ? null : apiKeyOverride;
-    }
-
-    /**
-     * Returns the voice list override param value in serialized form, or empty
-     * string if the param is absent. Value is a base64-encoded ListVoicesResponse
-     * binarypb.
-     */
-    public static String getVoicesParam() {
-        return ChromeFeatureList.getFieldTrialParamByFeature(
-                ChromeFeatureList.READALOUD, VOICES_OVERRIDE_PARAM_NAME);
     }
 
     /** Return the metrics client ID or empty string if it isn't available. */
@@ -164,12 +150,15 @@ public final class ReadAloudFeatures {
     }
 
     public static List<String> getSupportedLanguagesForOverview() {
-      ImmutableList.Builder<String> result = ImmutableList.builder();
-      for (String language : ChromeFeatureList.sReadAloudAudioOverviewsSupportedLanguages.getValue().split(",")) {
-        String trimmed = language.trim();
-        if (!trimmed.isEmpty()) {
-          result.add(trimmed);
-        }
+        ImmutableList.Builder<String> result = ImmutableList.builder();
+        for (String language :
+                ChromeFeatureList.sReadAloudAudioOverviewsSupportedLanguages
+                        .getValue()
+                        .split(",")) {
+            String trimmed = language.trim();
+            if (!trimmed.isEmpty()) {
+                result.add(trimmed);
+            }
       }
       return result.build();
     }

@@ -7,7 +7,7 @@
 #import "base/metrics/histogram_functions.h"
 #import "base/notreached.h"
 #import "components/prefs/pref_service.h"
-#import "ios/chrome/browser/lens_overlay/coordinator/lens_overlay_availability.h"
+#import "ios/chrome/browser/lens_overlay/public/lens_overlay_availability.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
@@ -42,7 +42,8 @@ LensSupportStatus LensSupportStatusForLensEntryPoint(
     return LensSupportStatus::DisabledByEnterprisePolicy;
   } else if (!is_google_default_search_engine) {
     return LensSupportStatus::NonGoogleSearchEngine;
-  } else if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET) {
+  } else if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET &&
+             !base::FeatureList::IsEnabled(kEnableLensOnIPad)) {
     return LensSupportStatus::DeviceFormFactorTablet;
   } else if (base::FeatureList::IsEnabled(kDisableLensCamera)) {
     return LensSupportStatus::DisabledByFlag;
@@ -78,7 +79,8 @@ void LogLensSupportStatusForLensEntryPoint(
       break;
     case LensEntrypoint::HomeScreenWidget:
     case LensEntrypoint::AppIconLongPress:
-      // App icon long press cannot log availailability.
+    case LensEntrypoint::AppBar:
+      // App icon long press and AppBar cannot log availability.
       return;
     default:
       NOTREACHED() << "Unsupported Lens Entry Point.";

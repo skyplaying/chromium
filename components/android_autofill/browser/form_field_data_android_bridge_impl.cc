@@ -79,9 +79,7 @@ FormFieldDataAndroidBridgeImpl::GetOrCreateJavaPeer(
       ConvertUTF16ToJavaString(env, field.id_attribute()),
       /*optionValues=*/ProjectOptions(field.options(), &SelectOption::value),
       /*optionContents=*/
-      ProjectOptions(field.options(), &SelectOption::text),
-      IsCheckable(field.check_status()), IsChecked(field.check_status()),
-      field.max_length(),
+      ProjectOptions(field.options(), &SelectOption::text), field.max_length(),
       /*heuristicType=*/field_types.heuristic_type == UNKNOWN_TYPE
           ? nullptr
           : ConvertUTF8ToJavaString(
@@ -96,7 +94,8 @@ FormFieldDataAndroidBridgeImpl::GetOrCreateJavaPeer(
       ProjectOptions(field.datalist_options(), &SelectOption::value),
       /*datalistLabels=*/
       ProjectOptions(field.datalist_options(), &SelectOption::text),
-      field.is_focusable(), field.is_visible(), field.is_autofilled(),
+      field.is_focusable(), field.is_visible(),
+      field.is_autofilled_according_to_renderer(),
       ConvertUTF8ToJavaString(env, field.origin().Serialize()));
   java_ref_ = JavaObjectWeakGlobalRef(env, obj);
   return obj;
@@ -110,11 +109,11 @@ void FormFieldDataAndroidBridgeImpl::UpdateFieldFromJava(FormFieldData& field) {
     return;
   }
 
-  field.set_is_autofilled(Java_FormFieldData_isAutofilled(env, obj));
-  if (IsCheckable(field.check_status())) {
-    SetCheckStatus(&field, true, Java_FormFieldData_isChecked(env, obj));
-    return;
-  }
+  // This is an abuse of naming. `is_autofilled_according_to_renderer` is being
+  // set here so that the form is sent to the renderer and the renderer is able
+  // to fill them and update the background accordingly.
+  field.set_is_autofilled_according_to_renderer(
+      Java_FormFieldData_isAutofilled(env, obj));
   if (ScopedJavaLocalRef<jstring> jvalue =
           Java_FormFieldData_getValue(env, obj);
       !jvalue.is_null()) {

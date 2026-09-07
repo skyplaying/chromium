@@ -143,12 +143,12 @@ class EditingList::AddContainerButton : public views::Button {
     add_button_->SetBorder(views::CreateEmptyBorder(gfx::Insets::VH(6, 6)));
     add_button_->SetImageModel(
         views::Button::STATE_NORMAL,
-        ui::ImageModel::FromVectorIcon(kGameControlsAddIcon,
+        ui::ImageModel::FromVectorIcon(ash::kGameControlsAddIcon,
                                        cros_tokens::kCrosSysOnPrimary,
                                        /*icon_size=*/20));
     add_button_->SetImageModel(
         views::Button::STATE_DISABLED,
-        ui::ImageModel::FromVectorIcon(kGameControlsAddIcon,
+        ui::ImageModel::FromVectorIcon(ash::kGameControlsAddIcon,
                                        cros_tokens::kCrosSysInverseOnSurface,
                                        /*icon_size=*/20));
     add_button_->SetImageCentered(true);
@@ -295,7 +295,7 @@ void EditingList::Init() {
 
   shadow_ = ash::SystemShadow::CreateShadowOnNinePatchLayerForView(
       this, ash::SystemShadow::Type::kElevation12);
-  shadow_->SetRoundedCornerRadius(kMainContainerCornerRadius);
+  shadow_->SetRoundedCorners(gfx::RoundedCornersF(kMainContainerCornerRadius));
 }
 
 bool EditingList::HasControls() const {

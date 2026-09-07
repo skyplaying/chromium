@@ -2,43 +2,50 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/actor/ui/handoff_button_controller.h"
+
 #include "base/test/run_until.h"
 #include "base/test/test_future.h"
+#include "build/build_config.h"
 #include "chrome/browser/actor/actor_keyed_service.h"
 #include "chrome/browser/actor/actor_task.h"
 #include "chrome/browser/actor/actor_task_metadata.h"
 #include "chrome/browser/actor/resources/grit/actor_browser_resources.h"
 #include "chrome/browser/actor/ui/actor_ui_interactive_browser_test.h"
 #include "chrome/browser/actor/ui/actor_ui_tab_controller.h"
-#include "chrome/browser/actor/ui/handoff_button_controller.h"
+#include "chrome/browser/glic/test_support/glic_test_environment.h"
+#include "chrome/browser/glic/widget/glic_view.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
+#include "chrome/browser/ui/location_bar/location_bar.h"
+#include "chrome/browser/ui/side_panel/side_panel_ui.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/multi_contents_view.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_view_views.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/views/test/split_view_browser_test_mixin.h"
 #include "chrome/common/actor.mojom-forward.h"
 #include "chrome/common/chrome_features.h"
-#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/interaction/interaction_test_util_browser.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/test/browser_test.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/events/event_utils.h"
 #include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/webview/webview.h"
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/interaction/element_tracker_views.h"
 #include "ui/views/view_utils.h"
-#if BUILDFLAG(ENABLE_GLIC)
-#include "chrome/browser/glic/test_support/glic_test_environment.h"
-#include "chrome/browser/glic/widget/glic_view.h"
+
+#if BUILDFLAG(IS_OZONE)
+#include "ui/ozone/public/ozone_platform.h"
 #endif
 
 namespace actor::ui {
@@ -56,29 +63,20 @@ class ActorUiHandoffButtonControllerInteractiveUiTest
     feature_list_.InitWithFeaturesAndParameters(
         // Use a dummy URL so we don't make a network request.
         {
-#if BUILDFLAG(ENABLE_GLIC)
             {features::kGlicURLConfig,
-             { {features::kGlicGuestURL.name, "about:blank"} }},
-#endif
+             {{features::kGlicGuestURL.name, "about:blank"}}},
             {features::kGlicHandoffButtonShowInImmersiveMode, {}},
             {features::kGlicHandoffButtonHideWhenOmniboxPopupOpened, {}},
             {features::kGlicActorUi,
              {{features::kGlicActorUiHandoffButtonName, "true"}}},
-#if BUILDFLAG(IS_MAC)
-            {features::kImmersiveFullscreen, {}},
-#endif  // BUILDFLAG(IS_MAC)
         },
-        /*disabled_features=*/{
-#if BUILDFLAG(ENABLE_GLIC)
-            features::kGlicDetached
-#endif
-        });
+        /*disabled_features=*/{});
     InteractiveBrowserTest::SetUp();
   }
 
   auto ClearOmniboxFocus() {
-    return WithView(kOmniboxElementId, [](OmniboxViewViews* omnibox_view) {
-      omnibox_view->GetFocusManager()->ClearFocus();
+    return WithView(kBrowserViewElementId, [](BrowserView* browser_view) {
+      browser_view->GetFocusManager()->ClearFocus();
     });
   }
 
@@ -97,9 +95,7 @@ class ActorUiHandoffButtonControllerInteractiveUiTest
 #endif  // BUILDFLAG(IS_MAC)
 
  protected:
-#if BUILDFLAG(ENABLE_GLIC)
   glic::GlicTestEnvironment glic_test_env_;
-#endif
   base::test::ScopedFeatureList feature_list_;
 };
 
@@ -169,27 +165,16 @@ IN_PROC_BROWSER_TEST_F(ActorUiHandoffButtonControllerInteractiveUiTest,
             return tabs::TabInterface::GetFromContents(web_contents) != nullptr;
           })),
       InAnyContext(ActivateSurface(kMovedTabId)),
-      InAnyContext(WithElement(
-          kOmniboxElementId,
-          [](::ui::TrackedElement* el) {
-            // 1. Cast to the framework-specific element type
-            auto* tracked_element_views = el->AsA<views::TrackedElementViews>();
-            if (tracked_element_views) {
-              // 2. Get the raw view pointer from it
-              auto* omnibox_view = tracked_element_views->view();
-              if (omnibox_view) {
-                omnibox_view->GetFocusManager()->ClearFocus();
-              }
-            }
-          })),
+      InAnyContext(ClearOmniboxFocus()),
       InAnyContext(
           WaitForShow(HandoffButtonController::kHandoffButtonElementId)));
 }
 
 // This test is only for Mac where we have immersive fullscreen.
 #if BUILDFLAG(IS_MAC)
+// TODO(crbug.com/534409730): Flaky on Mac.
 IN_PROC_BROWSER_TEST_F(ActorUiHandoffButtonControllerInteractiveUiTest,
-                       ButtonReappearsAfterFullscreenToggle) {
+                       DISABLED_ButtonReappearsAfterFullscreenToggle) {
   StartActingOnTab();
   RunTestSequence(
       ClearOmniboxFocus(),
@@ -205,15 +190,15 @@ IN_PROC_BROWSER_TEST_F(ActorUiHandoffButtonControllerInteractiveUiTest,
 }
 #endif  // BUILDFLAG(IS_MAC)
 
-// TODO(crbug.com/465113623) Test flaky on Wayland.
-#if BUILDFLAG(SUPPORTS_OZONE_WAYLAND)
-#define MAYBE_ButtonHidesWhenOmniboxIsFocused \
-  DISABLED_ButtonHidesWhenOmniboxIsFocused
-#else
-#define MAYBE_ButtonHidesWhenOmniboxIsFocused ButtonHidesWhenOmniboxIsFocused
-#endif
+// Ensure button hides when omnibox is focused.
 IN_PROC_BROWSER_TEST_F(ActorUiHandoffButtonControllerInteractiveUiTest,
-                       MAYBE_ButtonHidesWhenOmniboxIsFocused) {
+                       ButtonHidesWhenOmniboxIsFocused) {
+#if BUILDFLAG(IS_OZONE)
+  // TODO(crbug.com/465113623) Test flaky on Wayland.
+  if (::ui::OzonePlatform::RunningOnWaylandForTest()) {
+    GTEST_SKIP() << "Wayland has focus limitations";
+  }
+#endif
   StartActingOnTab();
   RunTestSequence(
       ClearOmniboxFocus(),
@@ -227,7 +212,6 @@ IN_PROC_BROWSER_TEST_F(ActorUiHandoffButtonControllerInteractiveUiTest,
           WaitForShow(HandoffButtonController::kHandoffButtonElementId)));
 }
 
-#if BUILDFLAG(ENABLE_GLIC)
 IN_PROC_BROWSER_TEST_F(ActorUiHandoffButtonControllerInteractiveUiTest,
                        GlicSidePanelTogglesOnWhenButtonClicked) {
   StartActingOnTab();
@@ -243,7 +227,6 @@ IN_PROC_BROWSER_TEST_F(ActorUiHandoffButtonControllerInteractiveUiTest,
                   InAnyContext(WaitForShow(kSidePanelElementId)),
                   InAnyContext(WaitForShow(kGlicViewElementId)));
 }
-#endif
 
 // State identifier for polling the visible handoff button count
 using VisibleCountObserver = ::ui::test::PollingStateObserver<int>;
@@ -258,14 +241,11 @@ class ActorUiHandoffButtonSplitViewTest
 
   const std::vector<base::test::FeatureRefAndParams> GetEnabledFeatures()
       override {
-    return {
-#if BUILDFLAG(ENABLE_GLIC)
-        {features::kGlicURLConfig,
-         { {features::kGlicGuestURL.name, "about:blank"} }},
-        {features::kGlic, {}},
-#endif
-        {features::kGlicActorUi,
-         {{features::kGlicActorUiHandoffButtonName, "true"}}}};
+    return {{features::kGlicURLConfig,
+             {{features::kGlicGuestURL.name, "about:blank"}}},
+            {features::kGlic, {}},
+            {features::kGlicActorUi,
+             {{features::kGlicActorUiHandoffButtonName, "true"}}}};
   }
 
   void SetUpOnMainThread() override {
@@ -372,10 +352,11 @@ class ActorUiHandoffButtonSplitViewTest
     tabs::TabInterface* tab = tabs::TabInterface::GetFromContents(wc);
     ASSERT_NE(tab, nullptr);
 
-    task_id = actor_keyed_service()->CreateTask(NoEnterprisePolicyChecker());
+    task_id = actor_keyed_service()->CreateTask(actor::TestTaskSourceInfo(),
+                                                NoEnterprisePolicyChecker());
     TestFuture<actor::mojom::ActionResultPtr> future;
-    actor_keyed_service()->GetTask(task_id)->AddTab(tab->GetHandle(),
-                                                    future.GetCallback());
+    actor_keyed_service()->GetTask(task_id)->AddTab(
+        tab->GetHandle(), /*stop_task_on_detach=*/true, future.GetCallback());
     ExpectOkResult(future);
 
     actor::PerformActionsFuture result_future;
@@ -435,12 +416,13 @@ IN_PROC_BROWSER_TEST_F(ActorUiHandoffButtonSplitViewTest,
       // Check that both Handoff Buttons hide.
       WaitForState(kVisibleHandoffButtonCountState, 0),
       // Clear focus in Left Pane
-      InContext(left_pane_context_,
-                WithView(kOmniboxElementId,
-                         [](OmniboxViewViews* view) {
-                           view->RevertAll();
-                           view->GetFocusManager()->ClearFocus();
-                         })),
+      InContext(
+          left_pane_context_,
+          WithView(kBrowserViewElementId,
+                   [](BrowserView* view) {
+                     view->GetLocationBar()->GetOmniboxView()->RevertAll();
+                     view->GetFocusManager()->ClearFocus();
+                   })),
       InContext(left_pane_context_,
                 FocusElement(ContentsWebView::kContentsWebViewElementId)),
       // Check that both Handoff Buttons re-show.
@@ -451,12 +433,13 @@ IN_PROC_BROWSER_TEST_F(ActorUiHandoffButtonSplitViewTest,
       // Check that both Handoff Buttons hide.
       WaitForState(kVisibleHandoffButtonCountState, 0),
       // Clear focus in Right Pane
-      InContext(right_pane_context_,
-                WithView(kOmniboxElementId,
-                         [](OmniboxViewViews* view) {
-                           view->RevertAll();
-                           view->GetFocusManager()->ClearFocus();
-                         })),
+      InContext(
+          right_pane_context_,
+          WithView(kBrowserViewElementId,
+                   [](BrowserView* view) {
+                     view->GetLocationBar()->GetOmniboxView()->RevertAll();
+                     view->GetFocusManager()->ClearFocus();
+                   })),
       InContext(right_pane_context_,
                 FocusElement(ContentsWebView::kContentsWebViewElementId)),
       // Check that both Handoff Buttons re-show.

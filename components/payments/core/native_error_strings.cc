@@ -146,6 +146,9 @@ const char kPaymentHandlerInsecureNavigation[] =
 const char kPaymentHandlerInstallFailed[] =
     "Failed to install the payment handler.";
 
+const char kPaymentHandlerInstallFailedForMethod[] =
+    "Failed to install the payment handler for \"$1\".";
+
 const char kPaymentHandlerActivityDied[] =
     "The payment handler is closed because the Android activity is destroyed.";
 
@@ -274,6 +277,30 @@ extern const char kValidLogoUrlSchemeRequired[] =
 extern const char kLogoLabelRequired[] =
     "The \"secure-payment-confirmation\" method requires that each entry in "
     "\"paymentEntitiesLogos\" has a non-empty \"label\" field.";
+
+const char kSpcDisabledMustBeNull[] =
+    "If the SPC feature is disabled, secure_payment_confirmation must be null";
+
+const char kSpcMustBeOnlyPaymentMethod[] =
+    "If present, \"secure-payment-confirmation\" must be the only payment "
+    "method";
+
+const char kSpcUnsupportedOptions[] =
+    "The \"secure-payment-confirmation\" payment method does not support "
+    "requestPayerName, requestPayerEmail, requestPayerPhone, or "
+    "requestShipping";
+
+const char kSpcEnabledMustNotBeNull[] =
+    "If the SPC feature is enabled, secure_payment_confirmation must not be "
+    "null";
+
+const char kInternalError[] =
+    "An internal error occurred during validation of "
+    "SecurePaymentConfirmationRequest.";
+
+const char kWebAuthnExtensionsNotSupported[] =
+    "The \"secure-payment-confirmation\" method does not support the "
+    "provided WebAuthn extension(s).";
 
 }  // namespace errors
 }  // namespace payments

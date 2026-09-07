@@ -20,7 +20,6 @@
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/grit/ios_branded_strings.h"
 #import "ui/base/device_form_factor.h"
-#import "ui/gfx/ios/NSString+CrStringDrawing.h"
 
 namespace {
 const CGFloat kButtonCornerRadius = 15;
@@ -99,7 +98,8 @@ constexpr std::string_view kThirdPartyModsDirectory =
           "23a5287g",  // iOS 26 beta3
       });
 
-  std::string build = base::ToLowerASCII(base::SysInfo::GetIOSBuildNumber());
+  std::string build =
+      base::ToLowerASCII(base::SysInfo::OperatingSystemBuildVersion());
   return kBadOSVersions.contains(std::string_view(build));
 }
 
@@ -178,7 +178,8 @@ constexpr std::string_view kThirdPartyModsDirectory =
   const CGFloat kHorizontalSpacing = 20;
 
   self.view.autoresizesSubviews = YES;
-  CGRect mainBounds = [[UIScreen mainScreen] bounds];
+  CGRect mainBounds =
+      self.view.window ? self.view.window.bounds : self.view.bounds;
   // SafeModeViewController only supports portrait orientation (see
   // implementation of supportedInterfaceOrientations: below) but if the app is
   // launched from landscape mode (e.g. iPad or iPhone 6+) then the mainScreen's
@@ -226,16 +227,13 @@ constexpr std::string_view kThirdPartyModsDirectory =
   [description setTextAlignment:NSTextAlignmentCenter];
   [description setNumberOfLines:0];
   [description setLineBreakMode:NSLineBreakByWordWrapping];
-  CGRect frame = [description frame];
-  frame.size.width =
+  const CGFloat width =
       (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET)
           ? kIPadWidth
           : kIPhoneWidth;
-  CGSize maxSize = CGSizeMake(frame.size.width, 999999.0f);
-  frame.size.height =
-      [[description text] cr_boundingSizeWithSize:maxSize
-                                             font:[description font]]
-          .height;
+  const CGSize size = [description sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
+  CGRect frame = [description frame];
+  frame.size = size;
   [description setFrame:frame];
   [self centerView:description afterView:awSnap];
   [_innerView addSubview:description];

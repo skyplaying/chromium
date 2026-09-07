@@ -4,8 +4,8 @@
 #include "chrome/browser/ui/browser_tab_strip_model_delegate.h"
 
 #include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/split_tab_metrics.h"
 #include "chrome/browser/ui/tabs/tab_group_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -34,16 +34,16 @@ class BrowserTabStripModelDelegateWithEmbeddedServerTest
     host_resolver()->AddRule("example.com", "127.0.0.1");
   }
 
-  void ToggleMute(Browser* browser) {
-    int active_index = browser->tab_strip_model()->active_index();
-    browser->tab_strip_model()->ExecuteContextMenuCommand(
+  void ToggleMute(BrowserWindowInterface* browser) {
+    int active_index = browser->GetTabStripModel()->active_index();
+    browser->GetTabStripModel()->ExecuteContextMenuCommand(
         active_index,
         TabStripModel::ContextMenuCommand::CommandToggleSiteMuted);
   }
 
-  void VerifyMute(Browser* browser, bool isMuted) {
-    int active_index = browser->tab_strip_model()->active_index();
-    EXPECT_EQ(isMuted, IsSiteMuted(*browser->tab_strip_model(), active_index));
+  void VerifyMute(BrowserWindowInterface* browser, bool isMuted) {
+    int active_index = browser->GetTabStripModel()->active_index();
+    EXPECT_EQ(isMuted, IsSiteMuted(*browser->GetTabStripModel(), active_index));
   }
 };
 
@@ -70,28 +70,30 @@ IN_PROC_BROWSER_TEST_F(BrowserTabStripModelDelegateTest, MoveTabsToNewWindow) {
   EXPECT_FALSE(delegate->CanMoveTabsToWindow({0, 1}));
 
   // Precondition: there's currently one browser with two tabs.
-  EXPECT_EQ(chrome::GetTotalBrowserCount(), 1u);
-  EXPECT_EQ(browser()->tab_strip_model()->count(), 2);
-  EXPECT_EQ(browser()->tab_strip_model()->GetActiveWebContents()->GetURL(),
+  EXPECT_EQ(GlobalBrowserCollection::GetInstance()->GetSize(), 1u);
+  EXPECT_EQ(browser()->GetTabStripModel()->count(), 2);
+  EXPECT_EQ(browser()->GetTabStripModel()->GetActiveWebContents()->GetURL(),
             url2);
 
   // Execute this on a background tab to ensure that the code path can handle
   // other tabs besides the active one.
   ui_test_utils::BrowserCreatedObserver browser_created_observer;
   delegate->MoveTabsToNewWindow({0});
-  Browser* active_browser = browser_created_observer.Wait();
+  BrowserWindowInterface* const active_browser =
+      browser_created_observer.Wait();
   ui_test_utils::WaitUntilBrowserBecomeActive(active_browser);
 
   // Now there are two browsers, each with one tab and the new browser is
   // active.
-  EXPECT_EQ(chrome::GetTotalBrowserCount(), 2u);
+  EXPECT_EQ(GlobalBrowserCollection::GetInstance()->GetSize(), 2u);
   EXPECT_NE(active_browser, browser());
-  EXPECT_EQ(browser()->tab_strip_model()->count(), 1);
-  EXPECT_EQ(active_browser->tab_strip_model()->count(), 1);
-  EXPECT_EQ(browser()->tab_strip_model()->GetActiveWebContents()->GetURL(),
+  EXPECT_EQ(browser()->GetTabStripModel()->count(), 1);
+  EXPECT_EQ(active_browser->GetTabStripModel()->count(), 1);
+  EXPECT_EQ(browser()->GetTabStripModel()->GetActiveWebContents()->GetURL(),
             url2);
-  EXPECT_EQ(active_browser->tab_strip_model()->GetActiveWebContents()->GetURL(),
-            url1);
+  EXPECT_EQ(
+      active_browser->GetTabStripModel()->GetActiveWebContents()->GetURL(),
+      url1);
 }
 
 // Tests the "Move Tab to New Window" tab context menu command with multiple
@@ -125,9 +127,9 @@ IN_PROC_BROWSER_TEST_F(BrowserTabStripModelDelegateTest,
   EXPECT_FALSE(delegate->CanMoveTabsToWindow({0, 1, 2}));
 
   // Precondition: there's currently one browser with three tabs.
-  EXPECT_EQ(chrome::GetTotalBrowserCount(), 1u);
-  EXPECT_EQ(browser()->tab_strip_model()->count(), 3);
-  EXPECT_EQ(browser()->tab_strip_model()->GetActiveWebContents()->GetURL(),
+  EXPECT_EQ(GlobalBrowserCollection::GetInstance()->GetSize(), 1u);
+  EXPECT_EQ(browser()->GetTabStripModel()->count(), 3);
+  EXPECT_EQ(browser()->GetTabStripModel()->GetActiveWebContents()->GetURL(),
             url3);
 
   // Execute this on a background tab to ensure that the code path can handle
@@ -140,7 +142,7 @@ IN_PROC_BROWSER_TEST_F(BrowserTabStripModelDelegateTest,
 
   // Now there are two browsers, with one or two tabs and the new browser is
   // active.
-  EXPECT_EQ(chrome::GetTotalBrowserCount(), 2u);
+  EXPECT_EQ(GlobalBrowserCollection::GetInstance()->GetSize(), 2u);
   EXPECT_NE(active_browser, browser());
   EXPECT_EQ(browser()->GetTabStripModel()->count(), 1);
   EXPECT_EQ(active_browser->GetTabStripModel()->count(), 2);
@@ -162,7 +164,8 @@ IN_PROC_BROWSER_TEST_F(BrowserTabStripModelDelegateWithEmbeddedServerTest,
   VerifyMute(browser(), /*isMuted=*/true);
 
   // Open Incognito tab and check the site is muted there.
-  Browser* incognito_browser = CreateIncognitoBrowser(browser()->profile());
+  BrowserWindowInterface* incognito_browser =
+      CreateIncognitoBrowser(browser()->GetProfile());
   ASSERT_TRUE(ui_test_utils::NavigateToURL(incognito_browser, url));
   VerifyMute(incognito_browser, /*isMuted=*/true);
 
@@ -186,7 +189,8 @@ IN_PROC_BROWSER_TEST_F(BrowserTabStripModelDelegateWithEmbeddedServerTest,
   VerifyMute(browser(), /*isMuted=*/true);
 
   // Open Incognito tab and check the site is muted there.
-  Browser* incognito_browser = CreateIncognitoBrowser(browser()->profile());
+  BrowserWindowInterface* incognito_browser =
+      CreateIncognitoBrowser(browser()->GetProfile());
   ASSERT_TRUE(ui_test_utils::NavigateToURL(incognito_browser, url));
   VerifyMute(incognito_browser, /*isMuted=*/true);
 
@@ -203,7 +207,8 @@ IN_PROC_BROWSER_TEST_F(BrowserTabStripModelDelegateWithEmbeddedServerTest,
   GURL url = embedded_test_server()->GetURL("/title1.html");
 
   // Open tab in Incognito
-  Browser* incognito_browser = CreateIncognitoBrowser(browser()->profile());
+  BrowserWindowInterface* incognito_browser =
+      CreateIncognitoBrowser(browser()->GetProfile());
   ASSERT_TRUE(ui_test_utils::NavigateToURL(incognito_browser, url));
 
   // Mute the site in Incognito.
@@ -232,21 +237,21 @@ IN_PROC_BROWSER_TEST_F(BrowserTabStripModelDelegateTest,
   ASSERT_TRUE(AddTabAtIndex(1, url2, ui::PAGE_TRANSITION_LINK));
   ASSERT_TRUE(AddTabAtIndex(2, url3, ui::PAGE_TRANSITION_LINK));
 
-  auto* tab_strip_model = browser()->tab_strip_model();
+  auto* tab_strip_model = browser()->GetTabStripModel();
   tab_strip_model->AddToNewGroup({1});
   tab_strip_model->AddToNewGroup({2});
 
   // Precondition: there's currently one browser with three tabs in two
   // groups.
-  EXPECT_EQ(chrome::GetTotalBrowserCount(), 1u);
-  EXPECT_EQ(browser()->tab_strip_model()->count(), 3);
-  EXPECT_EQ(browser()->tab_strip_model()->GetActiveWebContents()->GetURL(),
+  EXPECT_EQ(GlobalBrowserCollection::GetInstance()->GetSize(), 1u);
+  EXPECT_EQ(browser()->GetTabStripModel()->count(), 3);
+  EXPECT_EQ(browser()->GetTabStripModel()->GetActiveWebContents()->GetURL(),
             url3);
-  EXPECT_EQ(browser()->tab_strip_model()->group_model()->ListTabGroups().size(),
-            2u);
+  EXPECT_EQ(
+      browser()->GetTabStripModel()->group_model()->ListTabGroups().size(), 2u);
 
   auto* sync_service = tab_groups::TabGroupSyncServiceFactory::GetForProfile(
-      browser()->profile());
+      browser()->GetProfile());
   EXPECT_NE(sync_service, nullptr);
 
   auto groups = sync_service->GetAllGroups();
@@ -261,11 +266,11 @@ IN_PROC_BROWSER_TEST_F(BrowserTabStripModelDelegateTest,
       0, TabStripModel::ContextMenuCommand::CommandCloseTabsToRight);
 
   // Now there are is only one tab and groups are minimized.
-  EXPECT_EQ(browser()->tab_strip_model()->count(), 1);
-  EXPECT_EQ(browser()->tab_strip_model()->GetActiveWebContents()->GetURL(),
+  EXPECT_EQ(browser()->GetTabStripModel()->count(), 1);
+  EXPECT_EQ(browser()->GetTabStripModel()->GetActiveWebContents()->GetURL(),
             url1);
-  EXPECT_EQ(browser()->tab_strip_model()->group_model()->ListTabGroups().size(),
-            0u);
+  EXPECT_EQ(
+      browser()->GetTabStripModel()->group_model()->ListTabGroups().size(), 0u);
 
   groups = sync_service->GetAllGroups();
   EXPECT_EQ(groups.size(), 2u);
@@ -287,21 +292,21 @@ IN_PROC_BROWSER_TEST_F(BrowserTabStripModelDelegateTest,
   ASSERT_TRUE(AddTabAtIndex(1, url2, ui::PAGE_TRANSITION_LINK));
   ASSERT_TRUE(AddTabAtIndex(2, url3, ui::PAGE_TRANSITION_LINK));
 
-  auto* tab_strip_model = browser()->tab_strip_model();
+  auto* tab_strip_model = browser()->GetTabStripModel();
   tab_strip_model->AddToNewGroup({1});
   tab_strip_model->AddToNewGroup({2});
 
   // Precondition: there's currently one browser with three tabs in two
   // groups.
-  EXPECT_EQ(chrome::GetTotalBrowserCount(), 1u);
-  EXPECT_EQ(browser()->tab_strip_model()->count(), 3);
-  EXPECT_EQ(browser()->tab_strip_model()->GetActiveWebContents()->GetURL(),
+  EXPECT_EQ(GlobalBrowserCollection::GetInstance()->GetSize(), 1u);
+  EXPECT_EQ(browser()->GetTabStripModel()->count(), 3);
+  EXPECT_EQ(browser()->GetTabStripModel()->GetActiveWebContents()->GetURL(),
             url3);
-  EXPECT_EQ(browser()->tab_strip_model()->group_model()->ListTabGroups().size(),
-            2u);
+  EXPECT_EQ(
+      browser()->GetTabStripModel()->group_model()->ListTabGroups().size(), 2u);
 
   auto* sync_service = tab_groups::TabGroupSyncServiceFactory::GetForProfile(
-      browser()->profile());
+      browser()->GetProfile());
   EXPECT_NE(sync_service, nullptr);
 
   auto groups = sync_service->GetAllGroups();
@@ -316,11 +321,11 @@ IN_PROC_BROWSER_TEST_F(BrowserTabStripModelDelegateTest,
       1, TabStripModel::ContextMenuCommand::CommandCloseOtherTabs);
 
   // Now there are is only one tab and groups are minimized.
-  EXPECT_EQ(browser()->tab_strip_model()->count(), 1);
-  EXPECT_EQ(browser()->tab_strip_model()->GetActiveWebContents()->GetURL(),
+  EXPECT_EQ(browser()->GetTabStripModel()->count(), 1);
+  EXPECT_EQ(browser()->GetTabStripModel()->GetActiveWebContents()->GetURL(),
             url2);
-  EXPECT_EQ(browser()->tab_strip_model()->group_model()->ListTabGroups().size(),
-            1u);
+  EXPECT_EQ(
+      browser()->GetTabStripModel()->group_model()->ListTabGroups().size(), 1u);
 
   groups = sync_service->GetAllGroups();
   EXPECT_EQ(groups.size(), 2u);
@@ -338,12 +343,13 @@ IN_PROC_BROWSER_TEST_F(BrowserTabStripModelDelegateTest,
   GURL url1("chrome://about");
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url1));
 
-  browser()->tab_strip_model()->SetTabPinned(0, true);
-  delegate->NewSplitTab({}, split_tabs::SplitTabCreatedSource::kToolbarButton);
+  browser()->GetTabStripModel()->SetTabPinned(0, true);
+  delegate->NewSplitTab({}, split_tabs::SplitTabLayout::kSideBySide,
+                        split_tabs::SplitTabCreatedSource::kToolbarButton);
 
-  ASSERT_EQ(browser()->tab_strip_model()->count(), 2);
-  ASSERT_TRUE(browser()->tab_strip_model()->IsTabPinned(0));
-  ASSERT_TRUE(browser()->tab_strip_model()->IsTabPinned(1));
+  ASSERT_EQ(browser()->GetTabStripModel()->count(), 2);
+  ASSERT_TRUE(browser()->GetTabStripModel()->IsTabPinned(0));
+  ASSERT_TRUE(browser()->GetTabStripModel()->IsTabPinned(1));
 }
 
 IN_PROC_BROWSER_TEST_F(BrowserTabStripModelDelegateTest,
@@ -355,19 +361,21 @@ IN_PROC_BROWSER_TEST_F(BrowserTabStripModelDelegateTest,
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url1));
 
   tab_groups::TabGroupId group_id =
-      browser()->tab_strip_model()->AddToNewGroup({0});
-  delegate->NewSplitTab({}, split_tabs::SplitTabCreatedSource::kToolbarButton);
+      browser()->GetTabStripModel()->AddToNewGroup({0});
+  delegate->NewSplitTab({}, split_tabs::SplitTabLayout::kSideBySide,
+                        split_tabs::SplitTabCreatedSource::kToolbarButton);
 
-  ASSERT_EQ(browser()->tab_strip_model()->count(), 2);
-  ASSERT_EQ(browser()->tab_strip_model()->GetTabGroupForTab(0).value(),
+  ASSERT_EQ(browser()->GetTabStripModel()->count(), 2);
+  ASSERT_EQ(browser()->GetTabStripModel()->GetTabGroupForTab(0).value(),
             group_id);
-  ASSERT_EQ(browser()->tab_strip_model()->GetTabGroupForTab(1).value(),
+  ASSERT_EQ(browser()->GetTabStripModel()->GetTabGroupForTab(1).value(),
             group_id);
 }
 
 IN_PROC_BROWSER_TEST_F(BrowserTabStripModelDelegateTest,
                        NewSplitTabFromIncognito) {
-  Browser* incognito_browser = CreateIncognitoBrowser(browser()->profile());
+  BrowserWindowInterface* incognito_browser =
+      CreateIncognitoBrowser(browser()->GetProfile());
 
   std::unique_ptr<TabStripModelDelegate> delegate =
       std::make_unique<BrowserTabStripModelDelegate>(incognito_browser);
@@ -375,11 +383,13 @@ IN_PROC_BROWSER_TEST_F(BrowserTabStripModelDelegateTest,
   GURL url1("chrome://about");
   ASSERT_TRUE(ui_test_utils::NavigateToURL(incognito_browser, url1));
 
-  delegate->NewSplitTab({}, split_tabs::SplitTabCreatedSource::kToolbarButton);
+  delegate->NewSplitTab({}, split_tabs::SplitTabLayout::kSideBySide,
+                        split_tabs::SplitTabCreatedSource::kToolbarButton);
 
-  ASSERT_EQ(incognito_browser->tab_strip_model()->count(), 2);
-  ASSERT_EQ(incognito_browser->tab_strip_model()->GetWebContentsAt(1)->GetURL(),
-            chrome::kChromeUINewTabURL);
+  ASSERT_EQ(incognito_browser->GetTabStripModel()->count(), 2);
+  ASSERT_EQ(
+      incognito_browser->GetTabStripModel()->GetWebContentsAt(1)->GetURL(),
+      chrome::ChromeUINewTabURLAsGURL());
 }
 
 IN_PROC_BROWSER_TEST_F(BrowserTabStripModelDelegateTest, DuplicateSplitTab) {
@@ -391,22 +401,23 @@ IN_PROC_BROWSER_TEST_F(BrowserTabStripModelDelegateTest, DuplicateSplitTab) {
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url1));
   ASSERT_TRUE(AddTabAtIndex(1, url2, ui::PAGE_TRANSITION_LINK));
 
-  delegate->NewSplitTab({0}, split_tabs::SplitTabCreatedSource::kToolbarButton);
+  delegate->NewSplitTab({0}, split_tabs::SplitTabLayout::kSideBySide,
+                        split_tabs::SplitTabCreatedSource::kToolbarButton);
 
-  ASSERT_EQ(browser()->tab_strip_model()->count(), 2);
+  ASSERT_EQ(browser()->GetTabStripModel()->count(), 2);
   std::optional<split_tabs::SplitTabId> split_id1 =
-      browser()->tab_strip_model()->GetSplitForTab(0);
+      browser()->GetTabStripModel()->GetSplitForTab(0);
   ASSERT_TRUE(split_id1.has_value());
-  ASSERT_EQ(browser()->tab_strip_model()->GetSplitForTab(1).value(),
+  ASSERT_EQ(browser()->GetTabStripModel()->GetSplitForTab(1).value(),
             split_id1.value());
 
   delegate->DuplicateSplit(split_id1.value());
 
-  ASSERT_EQ(browser()->tab_strip_model()->count(), 4);
+  ASSERT_EQ(browser()->GetTabStripModel()->count(), 4);
   std::optional<split_tabs::SplitTabId> split_id2 =
-      browser()->tab_strip_model()->GetSplitForTab(2);
+      browser()->GetTabStripModel()->GetSplitForTab(2);
   ASSERT_TRUE(split_id2.has_value());
-  ASSERT_EQ(browser()->tab_strip_model()->GetSplitForTab(3).value(),
+  ASSERT_EQ(browser()->GetTabStripModel()->GetSplitForTab(3).value(),
             split_id2.value());
 }
 

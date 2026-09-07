@@ -8,10 +8,13 @@ import static org.chromium.build.NullUtil.assertNonNull;
 
 import android.app.Activity;
 import android.content.Context;
+import android.view.View;
 
 import androidx.appcompat.content.res.AppCompatResources;
 
+import org.chromium.base.CallbackUtils;
 import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.NonNullObservableSupplier;
 import org.chromium.base.supplier.NullableObservableSupplier;
 import org.chromium.build.annotations.Initializer;
 import org.chromium.build.annotations.NullMarked;
@@ -31,7 +34,7 @@ import org.chromium.chrome.browser.dom_distiller.ReaderModeToolbarButtonControll
 import org.chromium.chrome.browser.identity_disc.IdentityDiscController;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.omnibox.voice.VoiceRecognitionHandler;
-import org.chromium.chrome.browser.omnibox.voice.VoiceRecognitionHandler.VoiceInteractionSource;
+import org.chromium.chrome.browser.omnibox.voice.VoiceRecognitionIntentHandler.VoiceInteractionSource;
 import org.chromium.chrome.browser.price_history.PriceHistoryBottomSheetContentCoordinator;
 import org.chromium.chrome.browser.price_insights.PriceInsightsButtonController;
 import org.chromium.chrome.browser.price_tracking.CurrentTabPriceTrackingStateSupplier;
@@ -76,7 +79,7 @@ public class AdaptiveToolbarUiCoordinator {
     // refactored.
     private final Activity mActivity;
     private final ActivityTabProvider mActivityTabProvider;
-    private final Supplier<ModalDialogManager> mModalDialogManagerSupplier;
+    private final NonNullObservableSupplier<ModalDialogManager> mModalDialogManagerSupplier;
 
     private List<ButtonDataProvider> mButtonDataProviders;
     private CurrentTabPriceTrackingStateSupplier mCurrentTabPriceTrackingStateSupplier;
@@ -86,7 +89,7 @@ public class AdaptiveToolbarUiCoordinator {
     private BottomSheetController mBottomSheetController;
     private MonotonicObservableSupplier<Profile> mProfileSupplier;
     private Supplier<ScrimManager> mScrimSupplier;
-    private Supplier<TabModelSelector> mTabModelSelectorSupplier;
+    private Supplier<@Nullable TabModelSelector> mTabModelSelectorSupplier;
     private @Nullable CommerceBottomSheetContentCoordinator mCommerceBottomSheetContentCoordinator;
 
     /**
@@ -99,7 +102,7 @@ public class AdaptiveToolbarUiCoordinator {
     public AdaptiveToolbarUiCoordinator(
             Activity activity,
             ActivityTabProvider activityTabProvider,
-            Supplier<ModalDialogManager> modalDialogManagerSupplier) {
+            NonNullObservableSupplier<ModalDialogManager> modalDialogManagerSupplier) {
         mContext = activity;
         mActivity = activity;
         mActivityTabProvider = activityTabProvider;
@@ -117,7 +120,7 @@ public class AdaptiveToolbarUiCoordinator {
     void initialize(
             AdaptiveToolbarBehavior toolbarBehavior,
             ActivityLifecycleDispatcher activityLifecycleDispatcher,
-            Supplier<TabModelSelector> tabModelSelectorSupplier,
+            MonotonicObservableSupplier<TabModelSelector> tabModelSelectorSupplier,
             BottomSheetController bottomSheetController,
             Supplier<SnackbarManager> snackbarManagerSupplier,
             Supplier<TabBookmarker> tabBookmarkerSupplier,
@@ -126,12 +129,14 @@ public class AdaptiveToolbarUiCoordinator {
             Supplier<@Nullable ReadAloudController> readAloudControllerSupplier,
             MonotonicObservableSupplier<ShareDelegate> shareDelegateSupplier,
             Runnable onShareRunnable,
+            Runnable onSigninTapped,
             WindowAndroid windowAndroid,
             ActivityResultTracker activityResultTracker,
             DeviceLockActivityLauncher deviceLockActivityLauncher,
             Supplier<@Nullable Tracker> trackerSupplier,
             Supplier<ScrimManager> scrimSupplier,
-            Supplier<@Nullable ReaderModeIphController> readerModeIphControllerSupplier) {
+            Supplier<@Nullable ReaderModeIphController> readerModeIphControllerSupplier,
+            View toolbarContainer) {
         if (!toolbarBehavior.shouldInitialize()) return;
 
         mBottomSheetController = bottomSheetController;
@@ -204,7 +209,8 @@ public class AdaptiveToolbarUiCoordinator {
                         profileSupplier,
                         new AdaptiveButtonActionMenuCoordinator(toolbarBehavior.canShowSettings()),
                         toolbarBehavior,
-                        windowAndroid);
+                        windowAndroid,
+                        toolbarContainer);
 
         DiscountsButtonController discountsButtonController =
                 new DiscountsButtonController(
@@ -251,8 +257,9 @@ public class AdaptiveToolbarUiCoordinator {
                             deviceLockActivityLauncher,
                             profileSupplier,
                             bottomSheetController,
-                            (Supplier<@Nullable ModalDialogManager>) mModalDialogManagerSupplier,
-                            snackbarManagerSupplier.get());
+                            mModalDialogManagerSupplier.get(),
+                            snackbarManagerSupplier.get(),
+                            onSigninTapped);
             mButtonDataProviders = List.of(identityDiscController, adaptiveToolbarButtonController);
         }
     }
@@ -273,7 +280,7 @@ public class AdaptiveToolbarUiCoordinator {
      * @param trackerSupplier Supplies {@link Tracker} object.
      */
     public void addVoiceSearchAdaptiveButton(
-            Supplier<VoiceRecognitionHandler> voiceRecognitionHandler,
+            Supplier<@Nullable VoiceRecognitionHandler> voiceRecognitionHandler,
             Supplier<@Nullable Tracker> trackerSupplier) {
         var voiceSearchDelegate =
                 new VoiceToolbarButtonController.VoiceSearchDelegate() {
@@ -288,7 +295,9 @@ public class AdaptiveToolbarUiCoordinator {
                         if (voiceRecognitionHandler.get() == null) return;
                         voiceRecognitionHandler
                                 .get()
-                                .startVoiceRecognition(VoiceInteractionSource.TOOLBAR);
+                                .startVoiceRecognition(
+                                        VoiceInteractionSource.TOOLBAR,
+                                        CallbackUtils.emptyRunnable());
                     }
                 };
         mVoiceToolbarButtonController =

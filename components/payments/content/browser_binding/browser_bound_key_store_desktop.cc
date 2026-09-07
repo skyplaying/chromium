@@ -10,7 +10,7 @@
 #include "base/timer/elapsed_timer.h"
 #include "components/payments/content/browser_binding/browser_bound_key.h"
 #include "components/payments/content/browser_binding/browser_bound_key_desktop.h"
-#include "crypto/signature_verifier.h"
+#include "crypto/sign.h"
 #include "crypto/unexportable_key.h"
 #include "device/fido/public/public_key_credential_params.h"
 
@@ -22,6 +22,9 @@ constexpr char kGetKeyLatencyHistogramName[] =
 constexpr char kCreateKeyLatencyHistogramName[] =
     "PaymentRequest.SecurePaymentConfirmation."
     "BrowserBoundKeyStore.CreateKeyLatency";
+constexpr char kDeviceSupportsHardwareKeysLatencyHistogramName[] =
+    "PaymentRequest.SecurePaymentConfirmation."
+    "BrowserBoundKeyStore.DeviceSupportsHardwareKeysLatency";
 
 #if BUILDFLAG(IS_MAC)
 constexpr char kApplicationTag[] = "secure-payment-confirmation";
@@ -78,18 +81,16 @@ BrowserBoundKeyStoreDesktop::GetOrCreateBrowserBoundKeyForCredentialId(
 
   // No existing key, create a new one.
   base::ElapsedTimer create_key_timer;
-  std::vector<crypto::SignatureVerifier::SignatureAlgorithm> algorithms;
+  std::vector<crypto::sign::SignatureKind> algorithms;
   algorithms.reserve(allowed_credentials.size());
   for (const auto& credential : allowed_credentials) {
     switch (
         static_cast<device::CoseAlgorithmIdentifier>(credential.algorithm)) {
       case device::CoseAlgorithmIdentifier::kRs256:
-        algorithms.push_back(
-            crypto::SignatureVerifier::SignatureAlgorithm::RSA_PKCS1_SHA256);
+        algorithms.push_back(crypto::sign::RSA_PKCS1_SHA256);
         break;
       case device::CoseAlgorithmIdentifier::kEs256:
-        algorithms.push_back(
-            crypto::SignatureVerifier::SignatureAlgorithm::ECDSA_SHA256);
+        algorithms.push_back(crypto::sign::ECDSA_SHA256);
         break;
       default:  // Unsupported algorithms.
         break;
@@ -111,23 +112,34 @@ void BrowserBoundKeyStoreDesktop::DeleteBrowserBoundKey(
 }
 
 bool BrowserBoundKeyStoreDesktop::GetDeviceSupportsHardwareKeys() {
+  if (!device_supports_hardware_keys_.has_value()) {
+    // We only care about the latency when the value is not cached.
+    base::ElapsedTimer timer;
+
 #if BUILDFLAG(IS_MAC)
-  return key_provider_ != nullptr;
+    device_supports_hardware_keys_ = key_provider_ != nullptr;
 #elif BUILDFLAG(IS_WIN)
-  if (!key_provider_) {
-    return false;
-  }
-  // On Windows, the existence of a key provider does not guarantee that
-  // hardware-backed keys are supported. Check if we can create a key with
-  // either of the two algorithms we support.
-  return key_provider_->SelectAlgorithm(
-             {crypto::SignatureVerifier::SignatureAlgorithm::ECDSA_SHA256,
-              crypto::SignatureVerifier::SignatureAlgorithm::
-                  RSA_PKCS1_SHA256}) != std::nullopt;
+    // On Windows, the existence of a key provider does not guarantee that
+    // hardware-backed keys are supported. Check if we can create a key with
+    // either of the two algorithms we support.
+    device_supports_hardware_keys_ =
+        key_provider_ && key_provider_->SelectAlgorithm(
+                             {crypto::sign::ECDSA_SHA256,
+                              crypto::sign::RSA_PKCS1_SHA256}) != std::nullopt;
 #else  // !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_WIN)
   // Hardware based browser bound keys are not supported on Linux or ChromeOS.
-  return false;
+  device_supports_hardware_keys_ = false;
 #endif
+
+    base::UmaHistogramTimes(
+        base::StrCat({kDeviceSupportsHardwareKeysLatencyHistogramName,
+                      device_supports_hardware_keys_.value()
+                          ? ".Supported"
+                          : ".NotSupported"}),
+        timer.Elapsed());
+  }
+
+  return device_supports_hardware_keys_.value();
 }
 
 BrowserBoundKeyStoreDesktop::~BrowserBoundKeyStoreDesktop() = default;

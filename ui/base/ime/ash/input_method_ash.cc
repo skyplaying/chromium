@@ -19,9 +19,9 @@
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/i18n/char_iterator.h"
+#include "base/memory/weak_ptr.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/third_party/icu/icu_utf.h"
 #include "base/time/default_clock.h"
 #include "ui/base/ime/ash/ime_bridge.h"
 #include "ui/base/ime/ash/ime_keyboard.h"
@@ -550,7 +550,8 @@ bool InputMethodAsh::AddGrammarFragments(
 }
 
 void InputMethodAsh::ConfirmComposition(bool reset_engine) {
-  TextInputClient* client = GetTextInputClient();
+  base::WeakPtr<TextInputClient> client =
+      GetTextInputClient() ? GetTextInputClient()->AsWeakPtr() : nullptr;
   // TODO(b/223075193): Quick fix for the case where we have a pending commit.
   // Without this, then we would lose the pending commit after confirming the
   // composition text.
@@ -563,10 +564,12 @@ void InputMethodAsh::ConfirmComposition(bool reset_engine) {
   // solve the autocorrect issue outlined in the linked bug. This is due to the
   // pending composition being reset before it could be applied to the current
   // text. Again we need to fix this properly by removing the pending mechanism.
-  if (pending_composition_ && !pending_commit_ && !pending_composition_range_) {
-    GetTextInputClient()->SetCompositionText(*pending_composition_);
+  if (client && pending_composition_ && !pending_commit_ &&
+      !pending_composition_range_) {
+    ui::CompositionText composition = std::move(*pending_composition_);
     pending_composition_ = std::nullopt;
     composition_changed_ = false;
+    client->SetCompositionText(composition);
   }
   if (client && (client->HasCompositionText() ||
                  client->SupportsAlwaysConfirmComposition())) {
@@ -952,11 +955,14 @@ TextInputMethod::InputContext InputMethodAsh::GetInputContext() const {
     return TextInputMethod::InputContext(ui::TEXT_INPUT_TYPE_NONE);
   }
 
+  ui::TextInputType input_type = client->GetTextInputType();
   const int flags = client->GetTextInputFlags();
-  TextInputMethod::InputContext input_context(
-      flags & ui::TEXT_INPUT_FLAG_HAS_BEEN_PASSWORD
-          ? ui::TEXT_INPUT_TYPE_PASSWORD
-          : client->GetTextInputType());
+  if (flags & ui::TEXT_INPUT_FLAG_HAS_BEEN_PASSWORD ||
+      flags & ui::TEXT_INPUT_FLAG_HAS_BEEN_CUSTOM_PASSWORD) {
+    input_type = ui::TEXT_INPUT_TYPE_PASSWORD;
+  }
+
+  TextInputMethod::InputContext input_context(input_type);
   input_context.mode = client->GetTextInputMode();
   input_context.autocompletion_mode =
       ConvertTextInputFlagToEnum<AutocompletionMode>(

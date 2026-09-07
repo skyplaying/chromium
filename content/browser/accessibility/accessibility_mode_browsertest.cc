@@ -5,6 +5,7 @@
 #include "base/test/run_until.h"
 #include "base/test/scoped_run_loop_timeout.h"
 #include "build/build_config.h"
+#include "content/browser/accessibility/accessibility_test_helpers.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_view_base.h"
@@ -40,35 +41,16 @@ class AccessibilityModeTest : public ContentBrowserTest {
 
   const ui::BrowserAccessibility* FindNode(ax::mojom::Role role,
                                            const std::string& name) {
-    const ui::BrowserAccessibility* root =
+    ui::BrowserAccessibility* root =
         GetManager()->GetBrowserAccessibilityRoot();
     CHECK(root);
-    return FindNodeInSubtree(*root, role, name);
+    return FindFirstAccessibilityNodeWithRoleAndNameOrValue(*root, role, name);
   }
 
   ui::BrowserAccessibilityManager* GetManager() {
     WebContentsImpl* web_contents =
         static_cast<WebContentsImpl*>(shell()->web_contents());
     return web_contents->GetRootBrowserAccessibilityManager();
-  }
-
- private:
-  const ui::BrowserAccessibility* FindNodeInSubtree(
-      const ui::BrowserAccessibility& node,
-      ax::mojom::Role role,
-      const std::string& name) {
-    if (node.GetRole() == role &&
-        node.GetStringAttribute(ax::mojom::StringAttribute::kName) == name) {
-      return &node;
-    }
-    for (unsigned int i = 0; i < node.PlatformChildCount(); ++i) {
-      const ui::BrowserAccessibility* result =
-          FindNodeInSubtree(*node.PlatformGetChild(i), role, name);
-      if (result) {
-        return result;
-      }
-    }
-    return nullptr;
   }
 };
 
@@ -334,15 +316,9 @@ IN_PROC_BROWSER_TEST_F(AccessibilityModeTest, ReEnablingDoesNotAlterUniqueIds) {
   const ui::BrowserAccessibility* button_1_refresh =
       FindNode(ax::mojom::Role::kButton, "Button 1");
   ASSERT_NE(nullptr, button_1_refresh);
-  // button_1 is now a dangling pointer for the old button.
-  // The pointers are not the same, proving that button_1_refresh is new.
-  ASSERT_NE(button_1, button_1_refresh);
   const ui::BrowserAccessibility* button_2_refresh =
       FindNode(ax::mojom::Role::kButton, "Button 2");
   ASSERT_NE(nullptr, button_2_refresh);
-  // button_2 is now a dangling pointer for the old button.
-  // The pointers are not the same, proving that button_2_refresh is new.
-  ASSERT_NE(button_2, button_2_refresh);
 
   EXPECT_EQ(unique_id_1, button_1_refresh->GetAXPlatformNode()->GetUniqueId());
   EXPECT_EQ(unique_id_2, button_2_refresh->GetAXPlatformNode()->GetUniqueId());

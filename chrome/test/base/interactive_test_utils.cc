@@ -4,21 +4,26 @@
 
 #include "chrome/test/base/interactive_test_utils.h"
 
+#include "base/check.h"
 #include "base/logging.h"
+#include "base/run_loop.h"
+#include "build/build_config.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/base_window.h"
+#include "ui/base/test/ui_controls.h"
+#include "ui/events/keycodes/keyboard_codes.h"
+#include "ui/gfx/native_ui_types.h"
+
+#if !BUILDFLAG(IS_ANDROID)
 #include "base/memory/scoped_refptr.h"
 #include "base/task/current_thread.h"
-#include "build/build_config.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "content/public/test/test_utils.h"
-#include "testing/gtest/include/gtest/gtest.h"
-#include "ui/base/test/ui_controls.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
-#include "ui/events/keycodes/keyboard_codes.h"
+#include "ui/views/widget/widget.h"
+#endif
 
 namespace ui_test_utils {
 
@@ -37,18 +42,26 @@ bool GetNativeWindow(const BrowserWindowInterface* browser,
 
 }  // namespace
 
+#if !BUILDFLAG(IS_ANDROID)
+
 BrowserActivationWaiter::BrowserActivationWaiter(
     const BrowserWindowInterface* browser) {
   // When the active browser closes, the next "last active browser" in the
   // BrowserList might not be immediately activated. So we need to wait for the
   // "last active browser" to actually be active.
-  if (chrome::FindLastActive() == browser && browser->GetWindow()->IsActive()) {
+  if (GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser() ==
+          browser &&
+      browser->GetWindow()->IsActive()) {
     observed_ = true;
     return;
   }
 
-  BrowserView::GetBrowserViewForBrowser(browser)->GetWidget()->AddObserver(
-      this);
+  gfx::NativeWindow native_window = gfx::NativeWindow();
+  CHECK(GetNativeWindow(browser, &native_window));
+  views::Widget* widget =
+      views::Widget::GetWidgetForNativeWindow(native_window);
+  CHECK(widget);
+  observation_.Observe(widget);
 }
 
 BrowserActivationWaiter::~BrowserActivationWaiter() = default;
@@ -70,7 +83,7 @@ void BrowserActivationWaiter::OnWidgetActivationChanged(views::Widget* widget,
   }
 
   observed_ = true;
-  widget->RemoveObserver(this);
+  observation_.Reset();
   if (run_loop_.running()) {
     run_loop_.Quit();
   }
@@ -91,6 +104,8 @@ bool BringBrowserWindowToFront(const BrowserWindowInterface* browser) {
   waiter.WaitForActivation();
   return true;
 }
+
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 bool SendKeyPressSync(const BrowserWindowInterface* browser,
                       ui::KeyboardCode key,
@@ -146,6 +161,8 @@ bool SendKeyPressToWindowSync(const gfx::NativeWindow window,
 
   return !testing::Test::HasFatalFailure();
 }
+
+#if !BUILDFLAG(IS_ANDROID)
 
 bool SendMouseMoveSync(const gfx::Point& location,
                        gfx::NativeWindow window_hint) {
@@ -203,5 +220,7 @@ std::pair<display::Display, display::Display> GetDisplays(
   return std::make_pair(screen->GetPrimaryDisplay(),
                         GetSecondaryDisplay(screen));
 }
+
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 }  // namespace ui_test_utils

@@ -6,6 +6,7 @@
 
 #include "base/metrics/histogram_functions.h"
 #include "chrome/browser/browser_features.h"
+#include "chrome/browser/page_load_metrics/chrome_initiator_location.h"
 #include "chrome/browser/preloading/chrome_preloading.h"
 #include "chrome/browser/preloading/preloading_features.h"
 #include "chrome/browser/preloading/preloading_utils.h"
@@ -20,18 +21,12 @@
 #include "content/public/browser/preloading_trigger_type.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/mojom/loader/referrer.mojom.h"
+#include "ui/base/page_transition_types.h"
 
 namespace {
 
 constexpr char kHistogramPrerenderBookmarkBarIsPrerenderingSrpUrl[] =
     "Prerender.IsPrerenderingSRPUrl.Embedder_BookmarkBar";
-
-void AttachBookmarkBarNavigationHandleUserData(
-    content::NavigationHandle& navigation_handle) {
-  page_load_metrics::NavigationHandleUserData::CreateForNavigationHandle(
-      navigation_handle, page_load_metrics::NavigationHandleUserData::
-                             InitiatorLocation::kBookmarkBar);
-}
 
 bool IsSearchUrl(content::WebContents& web_contents, const GURL& url) {
   auto* profile = Profile::FromBrowserContext(web_contents.GetBrowserContext());
@@ -88,7 +83,8 @@ void BookmarkBarPreloadPipeline::StartPrefetch(
       /*no_vary_search_hint=*/std::nullopt, /*priority=*/std::nullopt,
       pipeline_info_, attempt->GetWeakPtr(),
       /*holdback_status_override=*/
-      content::PreloadingHoldbackStatus::kUnspecified, /*ttl=*/std::nullopt);
+      content::PreloadingHoldbackStatus::kUnspecified, /*ttl=*/std::nullopt,
+      /*should_ignore_saver_modes=*/false);
 }
 
 void BookmarkBarPreloadPipeline::StartPrerender(

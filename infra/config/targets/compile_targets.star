@@ -34,6 +34,11 @@ targets.compile_target(
 )
 
 targets.compile_target(
+    name = "blackbox_fuzzing_targets",
+    label = "//:blackbox_fuzzing_targets",
+)
+
+targets.compile_target(
     name = "blink_platform_nocompile_tests",
     label = "//third_party/blink/renderer/platform:blink_platform_nocompile_tests",
     # All references have been moved to starlark
@@ -157,11 +162,6 @@ targets.compile_target(
 targets.compile_target(
     name = "chrome/installer/mac",
     label = "//chrome/installer/mac:mac",
-)
-
-targets.compile_target(
-    name = "chromium_builder_asan",
-    label = "//:chromium_builder_asan",
 )
 
 targets.compile_target(
@@ -353,7 +353,7 @@ targets.compile_target(
 
 targets.compile_target(
     name = "pdfium_test",
-    label = "//third_party/pdfium/testing:pdfium_test",
+    label = "//third_party/pdfium/testing/pdfium_test",
 )
 
 targets.compile_target(
@@ -374,13 +374,6 @@ targets.compile_target(
 targets.compile_target(
     name = "remoting/host:host",
     label = "//remoting/host:host",
-)
-
-targets.compile_target(
-    name = "rust_build_tests",
-    label = "//build/rust/tests",
-    # All references have been moved to starlark
-    skip_usage_check = True,
 )
 
 targets.compile_target(

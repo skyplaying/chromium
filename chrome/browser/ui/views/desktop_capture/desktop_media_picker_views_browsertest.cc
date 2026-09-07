@@ -8,24 +8,20 @@
 #include <string>
 
 #include "base/functional/callback.h"
-#include "base/strings/utf_string_conversions.h"
-#include "base/test/bind.h"
-#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
+#include "build/buildflag.h"
 #include "chrome/browser/media/webrtc/desktop_media_list.h"
 #include "chrome/browser/media/webrtc/fake_desktop_media_list.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/view_ids.h"
 #include "chrome/grit/branded_strings.h"
-#include "chrome/grit/generated_resources.h"
-#include "content/public/browser/desktop_media_id.h"
 #include "content/public/test/browser_test.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
-#include "ui/views/controls/button/label_button.h"
+#include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/window/dialog_delegate.h"
 
 namespace {
@@ -61,8 +57,8 @@ class DesktopMediaPickerViewsBrowserTest : public DialogBrowserTest {
   // DialogBrowserTest:
   void ShowUi(const std::string& name) override {
     picker_ = std::make_unique<DesktopMediaPickerImpl>();
-    auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
-    gfx::NativeWindow native_window = browser()->window()->GetNativeWindow();
+    auto* web_contents = browser()->GetTabStripModel()->GetActiveWebContents();
+    gfx::NativeWindow native_window = browser()->GetWindow()->GetNativeWindow();
 
     std::vector<std::unique_ptr<DesktopMediaList>> sources;
     if (override_source_lists_.empty()) {
@@ -132,6 +128,7 @@ IN_PROC_BROWSER_TEST_F(DesktopMediaPickerViewsBrowserTest, InvokeUi_default) {
 // Show the picker UI with only one source type: TYPE_WEB_CONTENTS, aka the
 // tab picker.
 IN_PROC_BROWSER_TEST_F(DesktopMediaPickerViewsBrowserTest, InvokeUi_tabs) {
+  set_baseline("7638461");
   after_show_callback_ =
       base::BindOnce([](const std::vector<FakeDesktopMediaList*>& sources) {
         AddSources(sources[0], {u"Dapper Drake", u"Edgy Eft", u"Feisty Fawn"});
@@ -142,7 +139,15 @@ IN_PROC_BROWSER_TEST_F(DesktopMediaPickerViewsBrowserTest, InvokeUi_tabs) {
 }
 
 // Show the getDisplayMedia picker UI with a very long title that should wrap.
-IN_PROC_BROWSER_TEST_F(DesktopMediaPickerViewsBrowserTest, InvokeUi_LongTitle) {
+// TODO(crbug.com/491087314): Fix flaky test.
+#if BUILDFLAG(IS_WIN)
+#define MAYBE_InvokeUi_LongTitle DISABLED_InvokeUi_LongTitle
+#else
+#define MAYBE_InvokeUi_LongTitle InvokeUi_LongTitle
+#endif
+IN_PROC_BROWSER_TEST_F(DesktopMediaPickerViewsBrowserTest,
+                       MAYBE_InvokeUi_LongTitle) {
+  set_baseline("7638461");
   request_source_ = DesktopMediaPicker::Params::RequestSource::kGetDisplayMedia;
   app_name_ =
       u"a.site.with.a.super.long.name.that.needs.to.be.displayed.over.multiple."

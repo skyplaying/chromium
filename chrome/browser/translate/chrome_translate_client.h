@@ -8,7 +8,10 @@
 #include <memory>
 #include <string>
 
+#include "base/functional/callback_forward.h"
 #include "base/gtest_prod_util.h"
+#include "base/i18n/language_tag.h"
+#include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
 #include "components/language/core/browser/accept_languages_service.h"
 #include "components/language/core/browser/url_language_histogram.h"
@@ -28,6 +31,11 @@ class WebContents;
 }  // namespace content
 
 class PrefService;
+class SidePanelUI;
+
+namespace tabs {
+class TabInterface;
+}  // namespace tabs
 
 namespace language {
 class AcceptLanguagesService;
@@ -108,7 +116,7 @@ class ChromeTranslateClient
   // language) is ready.
   void ManualTranslateWhenReady();
 #endif
-  void SetPredefinedTargetLanguage(const std::string& translate_language_code,
+  void SetPredefinedTargetLanguage(const base::i18n::LanguageTag& language,
                                    bool should_auto_translate);
 
   bool ShowTranslateUI(translate::TranslateStep step,
@@ -117,6 +125,12 @@ class ChromeTranslateClient
                        translate::TranslateErrors error_type,
                        bool triggered_from_menu) override;
   bool IsTranslatableURL(const GURL& url) override;
+  void TriggerPdfTranslation() override;
+  bool IsReadingModeOpen() const override;
+
+  // Performs a one-time undo of the translation and shows the translation
+  // bubble.
+  void UndoTranslate();
 
   // TranslateDriver::LanguageDetectionObserver implementation.
   void OnLanguageDetermined(
@@ -136,6 +150,10 @@ class ChromeTranslateClient
 
   // content::WebContentsObserver implementation.
   void WebContentsDestroyed() override;
+
+  // Returns the SidePanelUI instance associated with the tab, or nullptr if
+  // there is no such instance.
+  SidePanelUI* GetSidePanelUIFromTab(tabs::TabInterface* tab) const;
 
 #if !BUILDFLAG(IS_ANDROID)
   // Shows the Full Page Translate bubble.
@@ -165,6 +183,8 @@ class ChromeTranslateClient
   void PrimaryPageChanged(content::Page& page) override;
   void OnVisibilityChanged(content::Visibility visibility) override;
 #endif
+
+  base::WeakPtrFactory<ChromeTranslateClient> weak_factory_{this};
 
   WEB_CONTENTS_USER_DATA_KEY_DECL();
 };

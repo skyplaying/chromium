@@ -15,6 +15,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_notifier_impl.h"
@@ -23,7 +24,6 @@
 #include "components/signin/public/base/signin_switches.h"
 #include "components/sync/base/client_tag_hash.h"
 #include "components/sync/base/data_type.h"
-#include "components/sync/base/features.h"
 #include "components/sync/model/sync_change.h"
 #include "components/sync/model/sync_change_processor.h"
 #include "components/sync/model/sync_data.h"
@@ -183,7 +183,8 @@ class TestSyncedPrefObserver : public SyncedPrefObserver {
     changed_count_++;
   }
 
-  void OnStartedSyncing(std::string_view path) override {
+  void OnStartedSyncing(std::string_view path,
+                        const base::Value& value) override {
     synced_pref_ = std::string(path);
     sync_started_count_++;
   }
@@ -316,6 +317,23 @@ class PrefServiceSyncableTest : public testing::Test {
   raw_ptr<PrefModelAssociator> pref_sync_service_ = nullptr;
 };
 
+TEST_F(PrefServiceSyncableTest, ForkForIncognitoSharesRegisteredPrefTypes) {
+  constexpr char kInt64PrefName[] = "int64_pref_name";
+  constexpr char kTimePrefName[] = "time_pref_name";
+  prefs_.registry()->RegisterInt64Pref(kInt64PrefName, 0);
+
+  scoped_refptr<PrefRegistrySyncable> forked_registry =
+      prefs_.registry()->ForkForIncognito();
+  prefs_.registry()->RegisterTimePref(kTimePrefName, base::Time());
+
+  EXPECT_EQ(PrefRegistry::RegisteredPrefType::kOther,
+            forked_registry->GetRegisteredPrefType(kStringPrefName));
+  EXPECT_EQ(PrefRegistry::RegisteredPrefType::kInt64,
+            forked_registry->GetRegisteredPrefType(kInt64PrefName));
+  EXPECT_EQ(PrefRegistry::RegisteredPrefType::kTime,
+            forked_registry->GetRegisteredPrefType(kTimePrefName));
+}
+
 TEST_F(PrefServiceSyncableTest, CreatePrefSyncData) {
   prefs_.SetString(kStringPrefName, kExampleUrl0);
 
@@ -437,21 +455,21 @@ class TestPrefModelAssociatorClient : public PrefModelAssociatorClient {
 class PrefServiceSyncableMergeTest : public testing::Test {
  public:
   PrefServiceSyncableMergeTest()
-      : prefs_(
-            std::unique_ptr<PrefNotifierImpl>(pref_notifier_),
-            std::make_unique<PrefValueStore>(managed_prefs_.get(),
-                                             new TestingPrefStore,
-                                             new TestingPrefStore,
-                                             new TestingPrefStore,
-                                             new TestingPrefStore,
-                                             user_prefs_.get(),
-                                             pref_registry_->defaults().get(),
-                                             pref_notifier_),
-            user_prefs_,
-            pref_registry_,
-            client_,
-            /*read_error_callback=*/base::DoNothing(),
-            /*async=*/false) {}
+      : prefs_(std::unique_ptr<PrefNotifierImpl>(pref_notifier_),
+               std::make_unique<PrefValueStore>(
+                   managed_prefs_,
+                   base::MakeRefCounted<TestingPrefStore>(),
+                   base::MakeRefCounted<TestingPrefStore>(),
+                   base::MakeRefCounted<TestingPrefStore>(),
+                   base::MakeRefCounted<TestingPrefStore>(),
+                   user_prefs_,
+                   pref_registry_->defaults(),
+                   pref_notifier_),
+               user_prefs_,
+               pref_registry_,
+               client_,
+               /*read_error_callback=*/base::DoNothing(),
+               /*async=*/false) {}
 
   void SetUp() override {
     pref_registry_->RegisterStringPref(kUnsyncedPreferenceName,
@@ -1033,10 +1051,9 @@ class PrefServiceSyncableChromeOsTest : public testing::Test {
     prefs_ = std::make_unique<PrefServiceSyncable>(
         std::unique_ptr<PrefNotifierImpl>(pref_notifier_),
         std::make_unique<PrefValueStore>(
-            managed_prefs_.get(), supervised_user_prefs_.get(),
-            extension_prefs_.get(), command_line_prefs_.get(),
-            user_prefs_.get(), recommended_prefs_.get(),
-            pref_registry_->defaults().get(), pref_notifier_),
+            managed_prefs_, supervised_user_prefs_, extension_prefs_,
+            command_line_prefs_, user_prefs_, recommended_prefs_,
+            pref_registry_->defaults(), pref_notifier_),
         user_prefs_, pref_registry_, client_,
         /*read_error_callback=*/base::DoNothing(),
         /*async=*/false);
@@ -1417,10 +1434,8 @@ class PrefServiceSyncableFactoryTestWithAlwaysSyncingPrefs
     : public PrefServiceSyncableFactoryTest {
  public:
   PrefServiceSyncableFactoryTestWithAlwaysSyncingPrefs() {
-    feature_list_.InitWithFeatures(
-        {switches::kEnablePreferencesAccountStorage,
-         syncer::kSyncSupportAlwaysSyncingPriorityPreferences},
-        /*disabled_features=*/{});
+    feature_list_.InitWithFeatures({switches::kEnablePreferencesAccountStorage},
+                                   /*disabled_features=*/{});
     pref_service_syncable_factory_.SetPrefModelAssociatorClient(client_);
 
     // Register test prefs.

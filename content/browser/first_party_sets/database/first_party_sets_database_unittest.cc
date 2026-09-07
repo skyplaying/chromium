@@ -63,6 +63,22 @@ int CompatibleVersionFromMetaTable(sql::Database& db) {
   return s.ColumnInt(0);
 }
 
+base::flat_map<net::SchemefulSite, net::FirstPartySetEntry> FindEntries(
+    const net::GlobalFirstPartySets& sets,
+    const base::flat_set<net::SchemefulSite>& sites,
+    const net::FirstPartySetsContextConfig& config) {
+  std::vector<std::pair<net::SchemefulSite, net::FirstPartySetEntry>> got;
+  got.reserve(sites.size());
+  for (const auto& site : sites) {
+    std::optional<net::FirstPartySetEntry> maybe_entry =
+        sets.FindEntry(site, config);
+    if (maybe_entry) {
+      got.emplace_back(site, std::move(maybe_entry).value());
+    }
+  }
+  return got;
+}
+
 }  // namespace
 
 class FirstPartySetsDatabaseTest : public testing::Test {
@@ -152,17 +168,11 @@ TEST_F(FirstPartySetsDatabaseTest, CreateDB_TablesAndIndexesLazilyInitialized) {
   // An unused FirstPartySetsDatabase instance should not create the database.
   EXPECT_FALSE(base::PathExists(db_path()));
 
-  // DB init UMA should not be recorded.
-  histograms.ExpectTotalCount("FirstPartySets.Database.InitStatus", 0);
-
   OpenDatabase();
   // Trigger the lazy-initialization.
   EXPECT_TRUE(db()->InsertSitesToClear("b", {}));
   EXPECT_TRUE(base::PathExists(db_path()));
 
-  histograms.ExpectUniqueSample("FirstPartySets.Database.InitStatus",
-                                FirstPartySetsDatabase::InitStatus::kSuccess,
-                                1);
   CloseDatabase();
 
   // Create a db handle to the existing db file to verify schemas.
@@ -216,10 +226,6 @@ TEST_F(FirstPartySetsDatabaseTest, LoadDBFile_CurrentVersion_Success) {
   EXPECT_EQ(1u, CountBrowserContextsClearedEntries(&db));
   EXPECT_EQ(2u, CountPolicyConfigurationsEntries(&db));
   EXPECT_EQ(2u, CountManualConfigurationsEntries(&db));
-
-  histograms.ExpectUniqueSample("FirstPartySets.Database.InitStatus",
-                                FirstPartySetsDatabase::InitStatus::kSuccess,
-                                1);
 }
 
 TEST_F(FirstPartySetsDatabaseTest, LoadDBFile_RecreateOnTooOld) {
@@ -245,10 +251,6 @@ TEST_F(FirstPartySetsDatabaseTest, LoadDBFile_RecreateOnTooOld) {
   EXPECT_EQ(0u, CountBrowserContextsClearedEntries(&db));
   EXPECT_EQ(0u, CountPolicyConfigurationsEntries(&db));
   EXPECT_EQ(0u, CountManualConfigurationsEntries(&db));
-
-  histograms.ExpectUniqueSample("FirstPartySets.Database.InitStatus",
-                                FirstPartySetsDatabase::InitStatus::kSuccess,
-                                1);
 }
 
 TEST_F(FirstPartySetsDatabaseTest, LoadDBFile_RecreateOnTooNew) {
@@ -274,10 +276,6 @@ TEST_F(FirstPartySetsDatabaseTest, LoadDBFile_RecreateOnTooNew) {
   EXPECT_EQ(0u, CountBrowserContextsClearedEntries(&db));
   EXPECT_EQ(0u, CountPolicyConfigurationsEntries(&db));
   EXPECT_EQ(0u, CountManualConfigurationsEntries(&db));
-
-  histograms.ExpectUniqueSample("FirstPartySets.Database.InitStatus",
-                                FirstPartySetsDatabase::InitStatus::kSuccess,
-                                1);
 }
 
 TEST_F(FirstPartySetsDatabaseTest, LoadDBFile_InvalidRunCount_Fail) {
@@ -295,9 +293,6 @@ TEST_F(FirstPartySetsDatabaseTest, LoadDBFile_InvalidRunCount_Fail) {
   sql::Database db(sql::test::kTestTag);
   EXPECT_TRUE(db.Open(db_path()));
   EXPECT_EQ(0u, sql::test::CountSQLTables(&db));
-  histograms.ExpectUniqueSample("FirstPartySets.Database.InitStatus",
-                                FirstPartySetsDatabase::InitStatus::kCorrupted,
-                                1);
 }
 
 TEST_F(FirstPartySetsDatabaseTest, PersistSets_NoPreExistingDB) {
@@ -312,16 +307,17 @@ TEST_F(FirstPartySetsDatabaseTest, PersistSets_NoPreExistingDB) {
   const std::string site_member1 = "https://member1.test";
   const std::string site_member2 = "https://member2.test";
 
-  net::GlobalFirstPartySets global_sets(
-      version,
-      /*entries=*/
-      {{net::SchemefulSite(GURL(site)),
-        net::FirstPartySetEntry(net::SchemefulSite(GURL(primary)),
-                                net::SiteType::kAssociated)},
-       {net::SchemefulSite(GURL(primary)),
-        net::FirstPartySetEntry(net::SchemefulSite(GURL(primary)),
-                                net::SiteType::kPrimary)}},
-      /*aliases=*/{});
+  net::GlobalFirstPartySets global_sets =
+      net::GlobalFirstPartySets::CreateForTesting(
+          version,
+          /*entries=*/
+          {{net::SchemefulSite(GURL(site)),
+            net::FirstPartySetEntry(net::SchemefulSite(GURL(primary)),
+                                    net::SiteType::kAssociated)},
+           {net::SchemefulSite(GURL(primary)),
+            net::FirstPartySetEntry(net::SchemefulSite(GURL(primary)),
+                                    net::SiteType::kPrimary)}},
+          /*aliases=*/{});
   base::flat_map<net::SchemefulSite, net::FirstPartySetEntry> manual_sets = {
       {net::SchemefulSite(GURL(manual_site)),
        net::FirstPartySetEntry(net::SchemefulSite(GURL(manual_primary)),
@@ -334,26 +330,16 @@ TEST_F(FirstPartySetsDatabaseTest, PersistSets_NoPreExistingDB) {
                                        /*aliases=*/{})
           .value());
 
-  net::FirstPartySetsContextConfig config =
-      net::FirstPartySetsContextConfig::Create(
-          {{net::SchemefulSite(GURL(site_member1)),
-            net::FirstPartySetEntryOverride(
-                net::FirstPartySetEntry(net::SchemefulSite(GURL(primary_site)),
-                                        net::SiteType::kAssociated))},
-           {net::SchemefulSite(GURL(site_member2)),
-            net::FirstPartySetEntryOverride()}})
-          .value();
-
   OpenDatabase();
   // Trigger the lazy-initialization.
-  EXPECT_TRUE(db()->PersistSets(browser_context_id, global_sets, config));
+  EXPECT_TRUE(db()->PersistSets(browser_context_id, global_sets));
   CloseDatabase();
 
   sql::Database db(sql::test::kTestTag);
   EXPECT_TRUE(db.Open(db_path()));
   EXPECT_EQ(2u, CountPublicSetsEntries(&db));
   EXPECT_EQ(2u, CountManualConfigurationsEntries(&db));
-  EXPECT_EQ(2u, CountPolicyConfigurationsEntries(&db));
+  EXPECT_EQ(0u, CountPolicyConfigurationsEntries(&db));
 
   // ============ Verify persisting public sets
   static constexpr char kSelectPublicSetsSql[] =
@@ -382,22 +368,6 @@ TEST_F(FirstPartySetsDatabaseTest, PersistSets_NoPreExistingDB) {
   EXPECT_EQ(version.GetString(), s_version.ColumnString(1));
 
   EXPECT_FALSE(s_version.Step());
-
-  // ============ Verify persisting context config
-  const char kSelectConfigSql[] =
-      "SELECT browser_context_id,site,primary_site FROM policy_configurations";
-  sql::Statement s_config(db.GetUniqueStatement(kSelectConfigSql));
-  EXPECT_TRUE(s_config.Step());
-  EXPECT_EQ(browser_context_id, s_config.ColumnString(0));
-  EXPECT_EQ(site_member1, s_config.ColumnString(1));
-  EXPECT_EQ(primary_site, s_config.ColumnString(2));
-
-  EXPECT_TRUE(s_config.Step());
-  EXPECT_EQ(browser_context_id, s_config.ColumnString(0));
-  EXPECT_EQ(site_member2, s_config.ColumnString(1));
-  EXPECT_EQ("", s_config.ColumnString(2));
-
-  EXPECT_FALSE(s_config.Step());
 
   // ============ Verify persisting manual config
   const char kSelectManualSql[] =
@@ -430,16 +400,17 @@ TEST_F(FirstPartySetsDatabaseTest, PersistSets_NoPreExistingDB_NoPublicSets) {
   const std::string site_member1 = "https://member1.test";
   const std::string site_member2 = "https://member2.test";
 
-  net::GlobalFirstPartySets global_sets(
-      base::Version(),
-      /*entries=*/
-      {{net::SchemefulSite(GURL(site)),
-        net::FirstPartySetEntry(net::SchemefulSite(GURL(primary)),
-                                net::SiteType::kAssociated)},
-       {net::SchemefulSite(GURL(primary)),
-        net::FirstPartySetEntry(net::SchemefulSite(GURL(primary)),
-                                net::SiteType::kPrimary)}},
-      /*aliases=*/{});
+  net::GlobalFirstPartySets global_sets =
+      net::GlobalFirstPartySets::CreateForTesting(
+          base::Version(),
+          /*entries=*/
+          {{net::SchemefulSite(GURL(site)),
+            net::FirstPartySetEntry(net::SchemefulSite(GURL(primary)),
+                                    net::SiteType::kAssociated)},
+           {net::SchemefulSite(GURL(primary)),
+            net::FirstPartySetEntry(net::SchemefulSite(GURL(primary)),
+                                    net::SiteType::kPrimary)}},
+          /*aliases=*/{});
 
   base::flat_map<net::SchemefulSite, net::FirstPartySetEntry> manual_sets = {
       {net::SchemefulSite(GURL(manual_site)),
@@ -453,42 +424,16 @@ TEST_F(FirstPartySetsDatabaseTest, PersistSets_NoPreExistingDB_NoPublicSets) {
                                        /*aliases=*/{})
           .value());
 
-  net::FirstPartySetsContextConfig config =
-      net::FirstPartySetsContextConfig::Create(
-          {{net::SchemefulSite(GURL(site_member1)),
-            net::FirstPartySetEntryOverride(
-                net::FirstPartySetEntry(net::SchemefulSite(GURL(primary_site)),
-                                        net::SiteType::kAssociated))},
-           {net::SchemefulSite(GURL(site_member2)),
-            net::FirstPartySetEntryOverride()}})
-          .value();
-
   OpenDatabase();
   // Trigger the lazy-initialization.
-  EXPECT_TRUE(db()->PersistSets(browser_context_id, global_sets, config));
+  EXPECT_TRUE(db()->PersistSets(browser_context_id, global_sets));
   CloseDatabase();
 
   sql::Database db(sql::test::kTestTag);
   EXPECT_TRUE(db.Open(db_path()));
   EXPECT_EQ(0u, CountPublicSetsEntries(&db));
   EXPECT_EQ(2u, CountManualConfigurationsEntries(&db));
-  EXPECT_EQ(2u, CountPolicyConfigurationsEntries(&db));
-
-  // ============ Verify persisting context config
-  const char kSelectConfigSql[] =
-      "SELECT browser_context_id,site,primary_site FROM policy_configurations";
-  sql::Statement s_config(db.GetUniqueStatement(kSelectConfigSql));
-  EXPECT_TRUE(s_config.Step());
-  EXPECT_EQ(browser_context_id, s_config.ColumnString(0));
-  EXPECT_EQ(site_member1, s_config.ColumnString(1));
-  EXPECT_EQ(primary_site, s_config.ColumnString(2));
-
-  EXPECT_TRUE(s_config.Step());
-  EXPECT_EQ(browser_context_id, s_config.ColumnString(0));
-  EXPECT_EQ(site_member2, s_config.ColumnString(1));
-  EXPECT_EQ("", s_config.ColumnString(2));
-
-  EXPECT_FALSE(s_config.Step());
+  EXPECT_EQ(0u, CountPolicyConfigurationsEntries(&db));
 
   // ============ Verify persisting manual configurations
   const char kSelectManualSql[] =
@@ -581,16 +526,17 @@ TEST_F(FirstPartySetsDatabaseTest, PersistSets_PreExistingDB) {
   const std::string site_member1 = "https://member3.test";
   const std::string site_member2 = "https://member4.test";
 
-  net::GlobalFirstPartySets global_sets(
-      version,
-      /*entries=*/
-      {{net::SchemefulSite(GURL(site)),
-        net::FirstPartySetEntry(net::SchemefulSite(GURL(primary)),
-                                net::SiteType::kAssociated)},
-       {net::SchemefulSite(GURL(primary)),
-        net::FirstPartySetEntry(net::SchemefulSite(GURL(primary)),
-                                net::SiteType::kPrimary)}},
-      /*aliases=*/{});
+  net::GlobalFirstPartySets global_sets =
+      net::GlobalFirstPartySets::CreateForTesting(
+          version,
+          /*entries=*/
+          {{net::SchemefulSite(GURL(site)),
+            net::FirstPartySetEntry(net::SchemefulSite(GURL(primary)),
+                                    net::SiteType::kAssociated)},
+           {net::SchemefulSite(GURL(primary)),
+            net::FirstPartySetEntry(net::SchemefulSite(GURL(primary)),
+                                    net::SiteType::kPrimary)}},
+          /*aliases=*/{});
 
   base::flat_map<net::SchemefulSite, net::FirstPartySetEntry> manual_sets = {
       {net::SchemefulSite(GURL(manual_site)),
@@ -604,19 +550,9 @@ TEST_F(FirstPartySetsDatabaseTest, PersistSets_PreExistingDB) {
                                        /*aliases=*/{})
           .value());
 
-  net::FirstPartySetsContextConfig config =
-      net::FirstPartySetsContextConfig::Create(
-          {{net::SchemefulSite(GURL(site_member1)),
-            net::FirstPartySetEntryOverride(
-                net::FirstPartySetEntry(net::SchemefulSite(GURL(primary_site)),
-                                        net::SiteType::kAssociated))},
-           {net::SchemefulSite(GURL(site_member2)),
-            net::FirstPartySetEntryOverride()}})
-          .value();
-
   OpenDatabase();
   // Trigger the lazy-initialization.
-  EXPECT_TRUE(db()->PersistSets(browser_context_id, global_sets, config));
+  EXPECT_TRUE(db()->PersistSets(browser_context_id, global_sets));
   CloseDatabase();
 
   // Verify data is inserted.
@@ -652,24 +588,6 @@ TEST_F(FirstPartySetsDatabaseTest, PersistSets_PreExistingDB) {
   EXPECT_EQ(version.GetString(), s_version.ColumnString(0));
 
   EXPECT_FALSE(s_version.Step());
-
-  // ============ Verify the new context config overwrote the pre-existing
-  // data.
-  const char kSelectConfigSql[] =
-      "SELECT browser_context_id,site,primary_site FROM policy_configurations "
-      "WHERE browser_context_id=?";
-  sql::Statement s_config(db.GetUniqueStatement(kSelectConfigSql));
-  s_config.BindString(0, browser_context_id);
-  EXPECT_TRUE(s_config.Step());
-  EXPECT_EQ(browser_context_id, s_config.ColumnString(0));
-  EXPECT_EQ(site_member1, s_config.ColumnString(1));
-  EXPECT_EQ(primary_site, s_config.ColumnString(2));
-
-  EXPECT_TRUE(s_config.Step());
-  EXPECT_EQ(browser_context_id, s_config.ColumnString(0));
-  EXPECT_EQ(site_member2, s_config.ColumnString(1));
-  EXPECT_EQ("", s_config.ColumnString(2));
-  EXPECT_FALSE(s_config.Step());
 
   // ============ Verify new manual config overwrote pre-existing data
   static constexpr char kSelectManualSetsSql[] =
@@ -715,7 +633,7 @@ TEST_F(FirstPartySetsDatabaseTest, PersistSets_PreExistingVersion) {
   const std::string site = "https://site1.test";
   const std::string primary = "https://site2.test";
 
-  net::GlobalFirstPartySets input(
+  net::GlobalFirstPartySets input = net::GlobalFirstPartySets::CreateForTesting(
       version,
       /*entries=*/
       {{net::SchemefulSite(GURL(site)),
@@ -728,8 +646,7 @@ TEST_F(FirstPartySetsDatabaseTest, PersistSets_PreExistingVersion) {
 
   OpenDatabase();
   // Trigger the lazy-initialization.
-  EXPECT_TRUE(db()->PersistSets(browser_context_id, input,
-                                net::FirstPartySetsContextConfig()));
+  EXPECT_TRUE(db()->PersistSets(browser_context_id, input));
   CloseDatabase();
 
   // Verify data is not overwritten with the same version.
@@ -971,12 +888,9 @@ TEST_F(FirstPartySetsDatabaseTest, GetSitesToClearFilters) {
 
 TEST_F(FirstPartySetsDatabaseTest, GetSets_NoPreExistingDB) {
   OpenDatabase();
-  std::optional<
-      std::pair<net::GlobalFirstPartySets, net::FirstPartySetsContextConfig>>
-      res = db()->GetGlobalSetsAndConfig("b");
+  std::optional<net::GlobalFirstPartySets> res = db()->GetGlobalSets("b");
   EXPECT_TRUE(res.has_value());
-  EXPECT_TRUE(res->first.empty());
-  EXPECT_TRUE(res->second.empty());
+  EXPECT_TRUE(res->empty());
 }
 
 TEST_F(FirstPartySetsDatabaseTest, GetSets_NoPublicSets) {
@@ -986,12 +900,14 @@ TEST_F(FirstPartySetsDatabaseTest, GetSets_NoPublicSets) {
   const net::SchemefulSite manual_site(GURL("https://aaa.test"));
   const net::SchemefulSite manual_primary(GURL("https://bbb.test"));
 
-  net::GlobalFirstPartySets global_sets(
-      base::Version(),
-      /*entries=*/
-      {{site, net::FirstPartySetEntry(primary, net::SiteType::kAssociated)},
-       {primary, net::FirstPartySetEntry(primary, net::SiteType::kPrimary)}},
-      /*aliases=*/{});
+  net::GlobalFirstPartySets global_sets =
+      net::GlobalFirstPartySets::CreateForTesting(
+          base::Version(),
+          /*entries=*/
+          {{site, net::FirstPartySetEntry(primary, net::SiteType::kAssociated)},
+           {primary,
+            net::FirstPartySetEntry(primary, net::SiteType::kPrimary)}},
+          /*aliases=*/{});
 
   base::flat_map<net::SchemefulSite, net::FirstPartySetEntry> manual_sets = {
       {manual_site,
@@ -1006,23 +922,20 @@ TEST_F(FirstPartySetsDatabaseTest, GetSets_NoPublicSets) {
   OpenDatabase();
   // Trigger the lazy-initialization and insert data with a invalid version, so
   // that public sets will not be persisted.
-  ASSERT_TRUE(db()->PersistSets(browser_context_id, global_sets,
-                                net::FirstPartySetsContextConfig()));
+  ASSERT_TRUE(db()->PersistSets(browser_context_id, global_sets));
 
-  std::optional<
-      std::pair<net::GlobalFirstPartySets, net::FirstPartySetsContextConfig>>
-      res = db()->GetGlobalSetsAndConfig(browser_context_id);
+  std::optional<net::GlobalFirstPartySets> res =
+      db()->GetGlobalSets(browser_context_id);
 
   EXPECT_TRUE(res.has_value());
   EXPECT_THAT(
-      res->first.FindEntries({manual_site, manual_primary},
-                             net::FirstPartySetsContextConfig()),
+      FindEntries(*res, {manual_site, manual_primary},
+                  net::FirstPartySetsContextConfig()),
       UnorderedElementsAre(
           Pair(manual_site, net::FirstPartySetEntry(
                                 manual_primary, net::SiteType::kAssociated)),
           Pair(manual_primary, net::FirstPartySetEntry(
                                    manual_primary, net::SiteType::kPrimary))));
-  EXPECT_TRUE(res->second.empty());
 }
 
 TEST_F(FirstPartySetsDatabaseTest, GetSets_PublicSetsHaveSingleton) {
@@ -1043,18 +956,15 @@ TEST_F(FirstPartySetsDatabaseTest, GetSets_PublicSetsHaveSingleton) {
   const net::SchemefulSite ddd(GURL("https://ddd.test"));
   OpenDatabase();
 
-  std::optional<
-      std::pair<net::GlobalFirstPartySets, net::FirstPartySetsContextConfig>>
-      res = db()->GetGlobalSetsAndConfig("b0");
+  std::optional<net::GlobalFirstPartySets> res = db()->GetGlobalSets("b0");
   EXPECT_TRUE(res.has_value());
   // The singleton set should be deleted.
   EXPECT_THAT(
-      res->first.FindEntries({aaa, bbb, ccc, ddd},
-                             net::FirstPartySetsContextConfig()),
+      FindEntries(*res, {aaa, bbb, ccc, ddd},
+                  net::FirstPartySetsContextConfig()),
       UnorderedElementsAre(
           Pair(ccc, net::FirstPartySetEntry(ddd, net::SiteType::kAssociated)),
           Pair(ddd, net::FirstPartySetEntry(ddd, net::SiteType::kPrimary))));
-  EXPECT_EQ(res->second, net::FirstPartySetsContextConfig());
 }
 
 TEST_F(FirstPartySetsDatabaseTest, GetSets_PublicSetsHaveOrphan) {
@@ -1075,18 +985,15 @@ TEST_F(FirstPartySetsDatabaseTest, GetSets_PublicSetsHaveOrphan) {
   const net::SchemefulSite ddd(GURL("https://ddd.test"));
   OpenDatabase();
 
-  std::optional<
-      std::pair<net::GlobalFirstPartySets, net::FirstPartySetsContextConfig>>
-      res = db()->GetGlobalSetsAndConfig("b0");
+  std::optional<net::GlobalFirstPartySets> res = db()->GetGlobalSets("b0");
   EXPECT_TRUE(res.has_value());
   // The singleton set should be deleted.
   EXPECT_THAT(
-      res->first.FindEntries({aaa, bbb, ccc, ddd},
-                             net::FirstPartySetsContextConfig()),
+      FindEntries(*res, {aaa, bbb, ccc, ddd},
+                  net::FirstPartySetsContextConfig()),
       UnorderedElementsAre(
           Pair(ccc, net::FirstPartySetEntry(ddd, net::SiteType::kAssociated)),
           Pair(ddd, net::FirstPartySetEntry(ddd, net::SiteType::kPrimary))));
-  EXPECT_EQ(res->second, net::FirstPartySetsContextConfig());
 }
 
 TEST_F(FirstPartySetsDatabaseTest, GetSets) {
@@ -1107,19 +1014,16 @@ TEST_F(FirstPartySetsDatabaseTest, GetSets) {
   const net::SchemefulSite ddd(GURL("https://ddd.test"));
   OpenDatabase();
 
-  std::optional<
-      std::pair<net::GlobalFirstPartySets, net::FirstPartySetsContextConfig>>
-      res = db()->GetGlobalSetsAndConfig("b0");
+  std::optional<net::GlobalFirstPartySets> res = db()->GetGlobalSets("b0");
   EXPECT_TRUE(res.has_value());
   EXPECT_THAT(
-      res->first.FindEntries({aaa, bbb, ccc, ddd},
-                             net::FirstPartySetsContextConfig()),
+      FindEntries(*res, {aaa, bbb, ccc, ddd},
+                  net::FirstPartySetsContextConfig()),
       UnorderedElementsAre(
           Pair(aaa, net::FirstPartySetEntry(bbb, net::SiteType::kAssociated)),
           Pair(bbb, net::FirstPartySetEntry(bbb, net::SiteType::kPrimary)),
           Pair(ccc, net::FirstPartySetEntry(ddd, net::SiteType::kAssociated)),
           Pair(ddd, net::FirstPartySetEntry(ddd, net::SiteType::kPrimary))));
-  EXPECT_EQ(res->second, net::FirstPartySetsContextConfig());
 }
 
 TEST_F(FirstPartySetsDatabaseTest,
@@ -1158,15 +1062,17 @@ TEST_F(FirstPartySetsDatabaseTest, PersistSets_FormatCheck) {
   const net::SchemefulSite config_site_member1(GURL("https://member1.test"));
   const net::SchemefulSite config_site_member2(GURL("https://member2.test"));
 
-  net::GlobalFirstPartySets global_sets(
-      version,
-      /*entries=*/
-      {{associated_site,
-        net::FirstPartySetEntry(primary, net::SiteType::kAssociated)},
-       {service_site,
-        net::FirstPartySetEntry(primary, net::SiteType::kService)},
-       {primary, net::FirstPartySetEntry(primary, net::SiteType::kPrimary)}},
-      /*aliases=*/{});
+  net::GlobalFirstPartySets global_sets =
+      net::GlobalFirstPartySets::CreateForTesting(
+          version,
+          /*entries=*/
+          {{associated_site,
+            net::FirstPartySetEntry(primary, net::SiteType::kAssociated)},
+           {service_site,
+            net::FirstPartySetEntry(primary, net::SiteType::kService)},
+           {primary,
+            net::FirstPartySetEntry(primary, net::SiteType::kPrimary)}},
+          /*aliases=*/{});
   base::flat_map<net::SchemefulSite, net::FirstPartySetEntry> manual_sets = {
       {manual_associated_site,
        net::FirstPartySetEntry(manual_primary, net::SiteType::kAssociated)},
@@ -1179,24 +1085,14 @@ TEST_F(FirstPartySetsDatabaseTest, PersistSets_FormatCheck) {
                                        /*aliases=*/{})
           .value());
 
-  net::FirstPartySetsContextConfig config =
-      net::FirstPartySetsContextConfig::Create(
-          {{config_site_member1,
-            net::FirstPartySetEntryOverride(net::FirstPartySetEntry(
-                config_primary_site, net::SiteType::kAssociated))},
-           {config_site_member2, net::FirstPartySetEntryOverride()}})
-          .value();
-
   OpenDatabase();
   // Trigger the lazy-initialization.
-  EXPECT_TRUE(db()->PersistSets(browser_context_id, global_sets, config));
+  EXPECT_TRUE(db()->PersistSets(browser_context_id, global_sets));
 
-  std::optional<
-      std::pair<net::GlobalFirstPartySets, net::FirstPartySetsContextConfig>>
-      res = db()->GetGlobalSetsAndConfig(browser_context_id);
+  std::optional<net::GlobalFirstPartySets> res =
+      db()->GetGlobalSets(browser_context_id);
   EXPECT_TRUE(res.has_value());
-  EXPECT_EQ(res->first, global_sets);
-  EXPECT_EQ(res->second, config);
+  EXPECT_EQ(*res, global_sets);
 }
 
 class FirstPartySetsDatabaseMigrationsTest : public FirstPartySetsDatabaseTest {
@@ -1206,7 +1102,7 @@ class FirstPartySetsDatabaseMigrationsTest : public FirstPartySetsDatabaseTest {
   void MigrateDatabase() {
     FirstPartySetsDatabase db(db_path());
     // Trigger the lazy-initialization.
-    std::ignore = db.GetGlobalSetsAndConfig("b");
+    std::ignore = db.GetGlobalSets("b");
   }
 };
 
@@ -1214,7 +1110,7 @@ TEST_F(FirstPartySetsDatabaseMigrationsTest, MigrateEmptyToCurrent) {
   {
     FirstPartySetsDatabase db(db_path());
     // Trigger the lazy-initialization.
-    std::ignore = db.GetGlobalSetsAndConfig("b");
+    std::ignore = db.GetGlobalSets("b");
   }
 
   // Verify schema is current.

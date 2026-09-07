@@ -48,6 +48,8 @@ StorageId GetOrCreateStorageId(
 
 }  // namespace
 
+using ScopedBatch = TabStateStorageService::ScopedBatch;
+
 TabStateStorageService::OpenBatches::OpenBatches(
     TabStateStorageService& service,
     TabStoragePackager* packager)
@@ -59,11 +61,9 @@ TabStateStorageService::TabStateStorageService(
     const base::FilePath& profile_path,
     bool support_off_the_record_data,
     std::unique_ptr<TabStoragePackager> packager,
-    TabCanonicalizer tab_canonicalizer,
     RestoreEntityTrackerFactory tracker_factory)
     : tab_backend_(profile_path, support_off_the_record_data),
       packager_(std::move(packager)),
-      tab_canonicalizer_(tab_canonicalizer),
       tracker_factory_(tracker_factory) {
   tab_backend_.Initialize();
 }
@@ -81,8 +81,7 @@ StorageId TabStateStorageService::GetStorageId(
 }
 
 StorageId TabStateStorageService::GetStorageId(const TabInterface* tab) {
-  return ::tabs::GetOrCreateStorageId(tab_canonicalizer_.Run(tab),
-                                      tab_handle_to_storage_id_);
+  return ::tabs::GetOrCreateStorageId(tab, tab_handle_to_storage_id_);
 }
 
 void TabStateStorageService::WaitForAllPendingOperations(
@@ -90,16 +89,32 @@ void TabStateStorageService::WaitForAllPendingOperations(
   tab_backend_.WaitForAllPendingOperations(std::move(on_idle));
 }
 
-TabStateStorageService::ScopedBatch
-TabStateStorageService::CreateScopedBatch() {
+ScopedBatch::ScopedBatch(base::ScopedClosureRunner runner,
+                         TabStateStorageUpdaterBuilder* builder)
+    : runner_(std::move(runner)), builder_(builder) {}
+
+ScopedBatch::ScopedBatch() = default;
+ScopedBatch::~ScopedBatch() = default;
+
+ScopedBatch::ScopedBatch(ScopedBatch&&) = default;
+ScopedBatch& ScopedBatch::operator=(ScopedBatch&&) = default;
+
+void ScopedBatch::AddCallback(base::OnceClosure callback) {
+  if (builder_) {
+    builder_->AddCallback(std::move(callback));
+  }
+}
+
+ScopedBatch TabStateStorageService::CreateScopedBatch() {
   if (!open_batches_) {
     open_batches_.emplace(*this, packager_.get());
   }
   open_batches_->batch_cnt++;
 
-  return base::ScopedClosureRunner(
-      base::BindOnce(&TabStateStorageService::OnScopedBatchDestroyed,
-                     weak_ptr_factory_.GetWeakPtr()));
+  return ScopedBatch(base::ScopedClosureRunner(base::BindOnce(
+                         &TabStateStorageService::OnScopedBatchDestroyed,
+                         weak_ptr_factory_.GetWeakPtr())),
+                     &open_batches_->builder);
 }
 
 void TabStateStorageService::OnScopedBatchDestroyed() {
@@ -120,8 +135,13 @@ void TabStateStorageService::Save(const TabInterface* tab) {
   std::string window_tag = packager_->GetWindowTag(parent);
   bool is_off_the_record = packager_->IsOffTheRecord(parent);
 
-  StorageId storage_id = GetStorageId(tab);
+  Save(std::move(window_tag), is_off_the_record, tab);
+}
 
+void TabStateStorageService::Save(std::string window_tag,
+                                  bool is_off_the_record,
+                                  const TabInterface* tab) {
+  StorageId storage_id = GetStorageId(tab);
   ApplyUpdate([&](TabStateStorageUpdaterBuilder& builder) {
     builder.SaveNode(storage_id, std::move(window_tag), is_off_the_record,
                      TabStorageType::kTab, tab->GetHandle());
@@ -161,6 +181,17 @@ void TabStateStorageService::SaveChildren(const TabCollection* collection) {
   });
 }
 
+void TabStateStorageService::SaveDivergentChildren(
+    const TabCollection* collection,
+    base::PassKey<StorageRestoreOrchestrator>) {
+  DCHECK(packager_);
+
+  StorageId storage_id = GetStorageId(collection);
+  ApplyUpdate([&](TabStateStorageUpdaterBuilder& builder) {
+    builder.SaveDivergentChildren(storage_id, collection);
+  });
+}
+
 void TabStateStorageService::Remove(const TabInterface* tab) {
   DCHECK(packager_);
 
@@ -175,6 +206,13 @@ void TabStateStorageService::Remove(const TabCollection* collection) {
   ApplyUpdate([&](TabStateStorageUpdaterBuilder& builder) {
     builder.RemoveNode(GetStorageId(collection));
   });
+}
+
+void TabStateStorageService::Remove(StorageId id) {
+  DCHECK(packager_);
+
+  ApplyUpdate(
+      [&](TabStateStorageUpdaterBuilder& builder) { builder.RemoveNode(id); });
 }
 
 void TabStateStorageService::CommitCurrentBatch() {
@@ -219,18 +257,38 @@ void TabStateStorageService::LoadAllNodes(std::string_view window_tag,
   std::unique_ptr<RestoreEntityTracker> tracker =
       tracker_factory_.Run(on_tab_association, on_collection_association);
   DCHECK(tracker);
-  auto builder =
-      std::make_unique<StorageLoadedData::Builder>(std::move(tracker));
+  auto builder = std::make_unique<StorageLoadedData::Builder>(
+      window_tag, is_off_the_record, std::move(tracker));
   tab_backend_.LoadAllNodes(window_tag, is_off_the_record, std::move(builder),
                             std::move(callback));
 }
 
-void TabStateStorageService::ClearState() {
+void TabStateStorageService::ClearAllWindows() {
   tab_backend_.ClearAllNodes();
+}
+
+void TabStateStorageService::ClearAllDivergenceWindows() {
+  tab_backend_.ClearAllDivergentNodes();
 }
 
 void TabStateStorageService::ClearWindow(std::string_view window_tag) {
   tab_backend_.ClearWindow(window_tag);
+}
+
+void TabStateStorageService::ClearDivergenceWindow(
+    std::string_view window_tag) {
+  tab_backend_.ClearDivergenceWindow(window_tag);
+}
+
+void TabStateStorageService::ClearAllWindowsExcept(
+    std::vector<std::string> window_tags) {
+  tab_backend_.ClearAllWindowsExcept(std::move(window_tags));
+}
+
+void TabStateStorageService::ClearDivergentNodesForWindow(
+    std::string_view window_tag,
+    bool is_off_the_record) {
+  tab_backend_.ClearDivergentNodesForWindow(window_tag, is_off_the_record);
 }
 
 void TabStateStorageService::ClearNodesForWindowExcept(
@@ -257,10 +315,6 @@ std::vector<uint8_t> TabStateStorageService::GenerateKey(
   return key;
 }
 
-TabCanonicalizer TabStateStorageService::GetCanonicalizer() const {
-  return tab_canonicalizer_;
-}
-
 #if defined(NDEBUG)
 void TabStateStorageService::PrintAll() {
   tab_backend_.PrintAll();
@@ -269,16 +323,14 @@ void TabStateStorageService::PrintAll() {
 
 void TabStateStorageService::OnTabCreated(StorageId storage_id,
                                           const TabInterface* tab) {
-  const TabInterface* canonicalized_tab = tab_canonicalizer_.Run(tab);
-  if (canonicalized_tab == nullptr) {
+  if (tab == nullptr) {
     // TODO(https://crbug.com/448151790): Consider removing from the database.
     // Though if a complete post-initialization raze is coming, maybe it
     // doesn't matter.
     return;
   }
 
-  tab_handle_to_storage_id_[canonicalized_tab->GetHandle().raw_value()] =
-      storage_id;
+  tab_handle_to_storage_id_[tab->GetHandle().raw_value()] = storage_id;
 }
 
 void TabStateStorageService::OnCollectionCreated(

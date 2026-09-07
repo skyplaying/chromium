@@ -15,12 +15,12 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_context.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "components/privacy_sandbox/privacy_sandbox_attestations/privacy_sandbox_attestations.h"
+#include "components/sessions/core/session_id.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/devtools_agent_host.h"
@@ -39,8 +39,7 @@ BrowserWindow* GetBrowserWindow(int window_id) {
   ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
       [window_id, &result](BrowserWindowInterface* browser_window_interface) {
         if (browser_window_interface->GetSessionID().id() == window_id) {
-          result =
-              browser_window_interface->GetBrowserForMigrationOnly()->window();
+          result = BrowserWindow::FromBrowser(browser_window_interface);
           return false;
         }
         return true;

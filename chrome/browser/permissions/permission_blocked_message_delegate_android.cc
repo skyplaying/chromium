@@ -7,6 +7,7 @@
 #include <variant>
 
 #include "base/metrics/histogram_functions.h"
+#include "base/time/time.h"
 #include "chrome/browser/android/android_theme_resources.h"
 #include "chrome/browser/android/resource_mapper.h"
 #include "chrome/browser/permissions/quiet_notification_permission_ui_config.h"
@@ -21,6 +22,7 @@
 #include "components/permissions/android/permission_prompt/permission_dialog.h"
 #include "components/permissions/android/permission_prompt/permission_dialog_controller.h"
 #include "components/permissions/android/permission_prompt/permission_prompt_android.h"
+#include "components/permissions/android/permissions_android_feature_map.h"
 #include "components/permissions/permission_request.h"
 #include "components/permissions/permission_request_manager.h"
 #include "components/permissions/permission_util.h"
@@ -31,7 +33,10 @@
 #include "content/public/browser/web_contents.h"
 #include "ui/android/window_android.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/strings/grit/ui_strings.h"
+#include "url/gurl.h"
 
 namespace {
 
@@ -154,12 +159,12 @@ void PermissionBlockedMessageDelegate::InitializeLoudUI() {
   message_->SetTitle(
       l10n_util::GetStringUTF16(IDS_NOTIFICATION_TITLE_MESSAGE_UI));
 
-  const std::vector<base::WeakPtr<permissions::PermissionRequest>>& requests =
+  const std::vector<std::unique_ptr<permissions::PermissionRequest>>& requests =
       delegate_->permission_prompt()->Requests();
 
   std::u16string requesting_origin_string_formatted =
       url_formatter::FormatUrlForSecurityDisplay(
-          requests[0].get()->requesting_origin(),
+          requests[0]->requesting_origin(),
           url_formatter::SchemeDisplay::OMIT_CRYPTOGRAPHIC);
 
   message_->SetDescription(
@@ -182,6 +187,9 @@ void PermissionBlockedMessageDelegate::InitializeLoudUI() {
       /*resource_id=*/0,
       l10n_util::GetStringUTF16(IDS_NOTIFICATION_CTA_MESSAGE_UI));
 
+  message_->SetDuration(
+      permissions::kClapperLoudTimeout.Get().InMilliseconds());
+
   messages::MessageDispatcherBridge::Get()->EnqueueMessage(
       message_.get(), web_contents_, messages::MessageScopeType::NAVIGATION,
       messages::MessagePriority::kNormal);
@@ -203,7 +211,7 @@ void PermissionBlockedMessageDelegate::InitializeQuietUI() {
   switch (content_setting_type) {
     case ContentSettingsType::NOTIFICATIONS:
       title = IDS_NOTIFICATION_QUIET_PERMISSION_INFOBAR_TITLE;
-      icon = IDR_ANDROID_INFOBAR_NOTIFICATIONS_OFF;
+      icon = IDR_ANDROID_MESSAGE_NOTIFICATIONS_OFF;
       break;
     case ContentSettingsType::GEOLOCATION:
     case ContentSettingsType::GEOLOCATION_WITH_OPTIONS:
@@ -309,13 +317,23 @@ void PermissionBlockedMessageDelegate::HandleLoudPrimaryActionClick() {
   messages::MessageDispatcherBridge::Get()->DismissMessage(
       message_.get(), messages::DismissReason::PRIMARY_ACTION);
 
-  ResolveWithOSPrompt(GetContentSettingsType());
+  if (!delegate_->permission_prompt()) {
+    return;
+  }
+  const std::vector<std::unique_ptr<permissions::PermissionRequest>>& requests =
+      delegate_->permission_prompt()->Requests();
+  if (requests.empty()) {
+    return;
+  }
+  ResolveWithOSPrompt(GetContentSettingsType(),
+                      requests[0]->requesting_origin());
 }
 
 void PermissionBlockedMessageDelegate::ResolveWithOSPrompt(
-    ContentSettingsType content_settings_type) {
-  permissions::ResolvePermissionWithOSPrompt(web_contents_,
-                                             content_settings_type);
+    ContentSettingsType content_settings_type,
+    const GURL& requesting_origin) {
+  permissions::ResolvePermissionWithOSPrompt(
+      web_contents_, content_settings_type, requesting_origin);
 }
 
 void PermissionBlockedMessageDelegate::HandleLoudDismissCallback(

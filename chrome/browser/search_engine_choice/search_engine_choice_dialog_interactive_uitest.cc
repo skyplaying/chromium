@@ -8,12 +8,13 @@
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
+#include "chrome/browser/preloading/preloading_features.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engine_choice/search_engine_choice_dialog_service.h"
 #include "chrome/browser/search_engine_choice/search_engine_choice_dialog_service_factory.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/omnibox/omnibox_next_features.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
@@ -22,23 +23,79 @@
 #include "components/search_engines/search_engine_choice/search_engine_choice_utils.h"
 #include "components/search_engines/search_engines_switches.h"
 #include "components/search_engines/template_url_service.h"
+#include "components/signin/public/base/signin_switches.h"
 #include "components/variations/variations_switches.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/element_tracker.h"
+#include "ui/base/window_open_disposition.h"
 
 namespace {
 
 DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kWebContentsId);
 
 using DeepQuery = WebContentsInteractionTestUtil::DeepQuery;
-const DeepQuery kActionButton{"search-engine-choice-app", "#actionButton"};
-const DeepQuery kLearnMoreLink{"search-engine-choice-app", "#infoLink"};
-const DeepQuery kLearnMoreDialog{"search-engine-choice-app", "#infoDialog"};
-const DeepQuery kLearnMoreDialogCloseButton{"search-engine-choice-app",
-                                            "#infoDialogButton"};
-const DeepQuery kRadioButton = {"search-engine-choice-app", "cr-radio-button"};
+
+const DeepQuery& GetSearchEngineChoiceActionButton() {
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+  if (base::FeatureList::IsEnabled(switches::kFirstRunDesktopRefresh) &&
+      base::FeatureList::IsEnabled(
+          switches::kFirstRunDesktopChoiceScreenRefresh)) {
+    static const base::NoDestructor<DeepQuery> kQuery(
+        {"search-engine-choice-app-refresh", "#actionButton"});
+    return *kQuery;
+  }
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+  static const base::NoDestructor<DeepQuery> kQuery(
+      {"search-engine-choice-app", "#actionButton"});
+  return *kQuery;
+}
+
+const DeepQuery& GetSearchEngineChoiceLearnMoreLink() {
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+  if (base::FeatureList::IsEnabled(switches::kFirstRunDesktopRefresh) &&
+      base::FeatureList::IsEnabled(
+          switches::kFirstRunDesktopChoiceScreenRefresh)) {
+    static const base::NoDestructor<DeepQuery> kQuery(
+        {"search-engine-choice-app-refresh", "#infoLink"});
+    return *kQuery;
+  }
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+  static const base::NoDestructor<DeepQuery> kQuery(
+      {"search-engine-choice-app", "#infoLink"});
+  return *kQuery;
+}
+
+const DeepQuery& GetSearchEngineChoiceLearnMoreDialogCloseButton() {
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+  if (base::FeatureList::IsEnabled(switches::kFirstRunDesktopRefresh) &&
+      base::FeatureList::IsEnabled(
+          switches::kFirstRunDesktopChoiceScreenRefresh)) {
+    static const base::NoDestructor<DeepQuery> kQuery(
+        {"search-engine-choice-app-refresh", "#infoDialogButton"});
+    return *kQuery;
+  }
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+  static const base::NoDestructor<DeepQuery> kQuery(
+      {"search-engine-choice-app", "#infoDialogButton"});
+  return *kQuery;
+}
+
+const DeepQuery& GetSearchEngineChoiceRadioButton() {
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+  if (base::FeatureList::IsEnabled(switches::kFirstRunDesktopRefresh) &&
+      base::FeatureList::IsEnabled(
+          switches::kFirstRunDesktopChoiceScreenRefresh)) {
+    static const base::NoDestructor<DeepQuery> kQuery(
+        {"search-engine-choice-app-refresh", "cr-radio-button"});
+    return *kQuery;
+  }
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+  static const base::NoDestructor<DeepQuery> kQuery(
+      {"search-engine-choice-app", "cr-radio-button"});
+  return *kQuery;
+}
 
 DEFINE_LOCAL_CUSTOM_ELEMENT_EVENT_TYPE(kButtonEnabled);
 DEFINE_LOCAL_CUSTOM_ELEMENT_EVENT_TYPE(kButtonDisabled);
@@ -48,6 +105,18 @@ DEFINE_LOCAL_CUSTOM_ELEMENT_EVENT_TYPE(kButtonDisabled);
 class SearchEngineChoiceDialogInteractiveUiTest
     : public InteractiveBrowserTest {
  public:
+  SearchEngineChoiceDialogInteractiveUiTest() {
+    // TODO(crbug.com/539786691): Re-enable kPrewarm once the feature is
+    // compatible with the test.
+    webui_omnibox_feature_list_.InitWithFeatures(
+        /*enabled_features=*/{},
+        /*disabled_features=*/
+        // TODO(crbug.com/452061489): Fix tests that fail when the WebUI Omnibox
+        // is enabled and then remove these two Features.
+        {omnibox::internal::kWebUIOmniboxPopup,
+         omnibox::internal::kWebUIOmniboxAimPopup, features::kPrewarm});
+  }
+
   auto PressJsButton(const ui::ElementIdentifier web_contents_id,
                      const DeepQuery& button_query) {
     // This can close/navigate the current page, so don't wait for success.
@@ -113,6 +182,7 @@ class SearchEngineChoiceDialogInteractiveUiTest
               /*force_chrome_build=*/true);
   base::HistogramTester histogram_tester_;
   base::UserActionTester user_action_tester_;
+  base::test::ScopedFeatureList webui_omnibox_feature_list_;
 };
 
 // TODO(crbug.com/431780231): Flaky on mac bots and chromeOS bots.
@@ -127,7 +197,7 @@ IN_PROC_BROWSER_TEST_F(SearchEngineChoiceDialogInteractiveUiTest,
                        MAYBE_ChooseSearchEngine) {
   SearchEngineChoiceDialogService* search_engine_choice_service =
       SearchEngineChoiceDialogServiceFactory::GetForProfile(
-          browser()->profile());
+          browser()->GetProfile());
   int first_search_engine_id =
       search_engine_choice_service->GetSearchEngines().at(0)->prepopulate_id();
 
@@ -145,14 +215,16 @@ IN_PROC_BROWSER_TEST_F(SearchEngineChoiceDialogInteractiveUiTest,
             UserActionTester().GetActionCount("SearchEngineChoiceScreenShown"),
             1);
       }),
-      PressJsButton(kWebContentsId, kLearnMoreLink),
-      PressJsButton(kWebContentsId, kLearnMoreDialogCloseButton),
-      PressJsButton(kWebContentsId, kActionButton),
+      PressJsButton(kWebContentsId, GetSearchEngineChoiceLearnMoreLink()),
+      PressJsButton(kWebContentsId,
+                    GetSearchEngineChoiceLearnMoreDialogCloseButton()),
+      PressJsButton(kWebContentsId, GetSearchEngineChoiceActionButton()),
       // The button should become disabled because we didn't make a choice.
-      WaitForButtonDisabled(kWebContentsId, kActionButton),
-      PressJsButton(kWebContentsId, kRadioButton),
-      WaitForButtonEnabled(kWebContentsId, kActionButton),
-      PressJsButton(kWebContentsId, kActionButton),
+      WaitForButtonDisabled(kWebContentsId,
+                            GetSearchEngineChoiceActionButton()),
+      PressJsButton(kWebContentsId, GetSearchEngineChoiceRadioButton()),
+      WaitForButtonEnabled(kWebContentsId, GetSearchEngineChoiceActionButton()),
+      PressJsButton(kWebContentsId, GetSearchEngineChoiceActionButton()),
       WaitForHide(kSearchEngineChoiceDialogId)));
 
   HistogramTester().ExpectBucketCount(
@@ -162,7 +234,7 @@ IN_PROC_BROWSER_TEST_F(SearchEngineChoiceDialogInteractiveUiTest,
 
   EXPECT_FALSE(search_engine_choice_service->IsShowingDialog(*browser()));
   TemplateURLService* template_url_service =
-      TemplateURLServiceFactory::GetForProfile(browser()->profile());
+      TemplateURLServiceFactory::GetForProfile(browser()->GetProfile());
   const TemplateURL* default_search_engine =
       template_url_service->GetDefaultSearchProvider();
   EXPECT_EQ(default_search_engine->prepopulate_id(), first_search_engine_id);
@@ -184,7 +256,7 @@ IN_PROC_BROWSER_TEST_F(SearchEngineChoiceDialogInteractiveUiTest,
       search_engine_type, 1);
 
   ASSERT_TRUE(ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GURL(chrome::kChromeUINewTabPageURL),
+      browser(), chrome::ChromeUINewTabPageURLAsGURL(),
       WindowOpenDisposition::CURRENT_TAB,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP));
 

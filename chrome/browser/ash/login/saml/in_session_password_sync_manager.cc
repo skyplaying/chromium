@@ -13,24 +13,27 @@
 #include "chrome/browser/ash/login/lock/online_reauth/lock_screen_reauth_manager_factory.h"
 #include "chrome/browser/ash/login/saml/password_sync_token_fetcher.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/browser_process.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
 #include "components/user_manager/known_user.h"
 #include "components/user_manager/user.h"
 
 namespace ash {
 
 InSessionPasswordSyncManager::InSessionPasswordSyncManager(
+    PrefService* local_state,
     Profile* primary_profile)
-    : primary_profile_(primary_profile),
-      primary_user_(ProfileHelper::Get()->GetUserByProfile(primary_profile)) {
-  DCHECK(primary_user_);
-}
+    : local_state_(CHECK_DEREF(local_state)),
+      primary_profile_(primary_profile),
+      primary_account_id_(
+          CHECK_DEREF(ProfileHelper::Get()->GetUserByProfile(primary_profile))
+              .GetAccountId()) {}
 
 InSessionPasswordSyncManager::~InSessionPasswordSyncManager() = default;
 
 void InSessionPasswordSyncManager::CreateTokenAsync() {
   password_sync_token_fetcher_ = std::make_unique<PasswordSyncTokenFetcher>(
-      primary_profile_->GetURLLoaderFactory(), primary_profile_, this);
+      primary_profile_->GetURLLoaderFactory(),
+      IdentityManagerFactory::GetForProfile(primary_profile_), this);
   password_sync_token_fetcher_->StartTokenCreate();
 }
 
@@ -38,14 +41,15 @@ void InSessionPasswordSyncManager::OnTokenCreated(const std::string& token) {
   password_sync_token_fetcher_.reset();
 
   // Set token value in local state.
-  user_manager::KnownUser known_user(g_browser_process->local_state());
-  known_user.SetPasswordSyncToken(primary_user_->GetAccountId(), token);
+  user_manager::KnownUser known_user(&local_state_.get());
+  known_user.SetPasswordSyncToken(primary_account_id_, token);
   ResetReauthRequiredBySamlTokenDismatch();
 }
 
 void InSessionPasswordSyncManager::FetchTokenAsync() {
   password_sync_token_fetcher_ = std::make_unique<PasswordSyncTokenFetcher>(
-      primary_profile_->GetURLLoaderFactory(), primary_profile_, this);
+      primary_profile_->GetURLLoaderFactory(),
+      IdentityManagerFactory::GetForProfile(primary_profile_), this);
   password_sync_token_fetcher_->StartTokenGet();
 }
 
@@ -53,8 +57,8 @@ void InSessionPasswordSyncManager::OnTokenFetched(const std::string& token) {
   password_sync_token_fetcher_.reset();
   if (!token.empty()) {
     // Set token fetched from the endpoint in local state.
-    user_manager::KnownUser known_user(g_browser_process->local_state());
-    known_user.SetPasswordSyncToken(primary_user_->GetAccountId(), token);
+    user_manager::KnownUser known_user(&local_state_.get());
+    known_user.SetPasswordSyncToken(primary_account_id_, token);
     ResetReauthRequiredBySamlTokenDismatch();
   } else {
     // This is the first time a sync token is created for the user: we need to

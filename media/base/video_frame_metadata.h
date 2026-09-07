@@ -16,6 +16,10 @@
 #include "media/gpu/buildflags.h"
 #include "ui/gfx/geometry/rect.h"
 
+#if BUILDFLAG(IS_ANDROID)
+#include "gpu/vulkan/vulkan_ycbcr_info.h"
+#endif
+
 namespace media {
 
 // A container for information about effects that might be applied to a frame.
@@ -39,11 +43,6 @@ struct MEDIA_EXPORT VideoFrameMetadata {
 
   // Clear metadata fields that only make sense for texture backed frames.
   void ClearTextureFrameMetadata();
-
-  // Sources of VideoFrames use this marker to indicate that the associated
-  // VideoFrame can be overlaid, case in which its contents do not need to be
-  // further composited but displayed directly.
-  bool allow_overlay = false;
 
   // Video capture begin/end timestamps.  Consumers can use these values for
   // dynamic optimizations, logging stats, etc.
@@ -134,10 +133,9 @@ struct MEDIA_EXPORT VideoFrameMetadata {
   std::optional<VideoTransformation> transformation;
 
   // Android only: For legacy overlays (SurfaceView/Dialog based) this is
-  // required for the frame to be suitable for overlays, even if `allow_overlay`
-  // is set. if `allow_overlay` is set, but `in_surface_view` is not Display
-  // Compositor will process frame and generate appropriate overlay promotion
-  // hints, but will still composite video.
+  // required for the frame to be suitable for overlays. If `in_surface_view`
+  // is not set, Display Compositor will process frame and generate appropriate
+  // overlay promotion hints, but will still composite video.
   bool in_surface_view = false;
 
   // Android & Windows only: if set, then this frame's resource would like to
@@ -237,6 +235,13 @@ struct MEDIA_EXPORT VideoFrameMetadata {
 
   // Information about any background blur effect applied to the frame.
   std::optional<EffectInfo> background_blur;
+
+#if BUILDFLAG(IS_ANDROID)
+  // Vulkan sampler conversion information for shared images backed by
+  // multiplanar hardware buffers, such as those obtained from MediaCodec
+  // or Camera2 via ImageReader.
+  std::optional<gpu::VulkanYCbCrInfo> ycbcr_info;
+#endif
 };
 
 }  // namespace media

@@ -15,6 +15,10 @@
 
 class TabStripModel;
 
+namespace content {
+class WebContents;
+}  // namespace content
+
 namespace ui {
 class ImageModel;
 }  // namespace ui
@@ -33,6 +37,7 @@ class SplitTabMenuModel : public ui::SimpleMenuModel,
                           public ui::SimpleMenuModel::Delegate {
  public:
   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kReversePositionMenuItem);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kToggleOrientationMenuItem);
   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kCloseMenuItem);
   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kCloseStartTabMenuItem);
   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kCloseEndTabMenuItem);
@@ -48,7 +53,8 @@ class SplitTabMenuModel : public ui::SimpleMenuModel,
     kCloseEndTab,
     kExitSplit,
     kSendFeedback,
-    kMaxValue = kSendFeedback,
+    kToggleOrientation,
+    kMaxValue = kToggleOrientation,
   };
   // LINT.ThenChange(//tools/metrics/histograms/metadata/tab/enums.xml:SplitViewMenuEntry)
 
@@ -77,7 +83,7 @@ class SplitTabMenuModel : public ui::SimpleMenuModel,
   const gfx::VectorIcon& GetReversePositionIcon(
       split_tabs::SplitTabActiveLocation active_split_tab_location) const;
   split_tabs::SplitTabLayout GetSplitLayout() const;
-  void CloseTabAtIndex(int index);
+  void CloseWebContents(content::WebContents* contents);
   void SendFeedback();
 
   raw_ptr<TabStripModel> tab_strip_model_ = nullptr;

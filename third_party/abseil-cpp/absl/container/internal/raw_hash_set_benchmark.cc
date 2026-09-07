@@ -17,20 +17,27 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
+#include <functional>
 #include <limits>
+#include <memory>
 #include <numeric>
 #include <random>
 #include <string>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "absl/base/internal/raw_logging.h"
 #include "absl/container/internal/container_memory.h"
 #include "absl/container/internal/hash_function_defaults.h"
+#include "absl/container/internal/hashtable_control_bytes.h"
 #include "absl/container/internal/raw_hash_set.h"
+#include "absl/hash/hash.h"
 #include "absl/random/random.h"
 #include "absl/strings/str_format.h"
+#include "absl/strings/string_view.h"
 #include "benchmark/benchmark.h"
 
 namespace absl {
@@ -68,7 +75,7 @@ struct IntPolicy {
     return std::forward<F>(f)(x, x);
   }
 
-  template <class Hash, bool kIsDefault>
+  template <class Hash, bool kIsDefault, size_t kSeedShift>
   static constexpr HashSlotFn get_hash_slot_fn() {
     return nullptr;
   }
@@ -76,8 +83,8 @@ struct IntPolicy {
 
 class StringPolicy {
   template <class F, class K, class V,
-            class = typename std::enable_if<
-                std::is_convertible<const K&, absl::string_view>::value>::type>
+            class = std::enable_if_t<
+                std::is_convertible_v<const K&, absl::string_view>>>
   decltype(std::declval<F>()(
       std::declval<const absl::string_view&>(), std::piecewise_construct,
       std::declval<std::tuple<K>>(),
@@ -135,7 +142,7 @@ class StringPolicy {
                       PairArgs(std::forward<Args>(args)...));
   }
 
-  template <class Hash, bool kIsDefault>
+  template <class Hash, bool kIsDefault, size_t kSeedShift>
   static constexpr HashSlotFn get_hash_slot_fn() {
     return nullptr;
   }
@@ -160,6 +167,32 @@ struct IntTable
                    std::equal_to<int64_t>, std::allocator<int64_t>> {
   using Base = typename IntTable::raw_hash_set;
   IntTable() {}
+  using Base::Base;
+};
+
+struct MyInt {
+  int64_t value;
+};
+
+struct TransparentIntHash {
+  using is_transparent = void;
+  size_t operator()(int64_t x) const { return absl::Hash<int64_t>{}(x); }
+  size_t operator()(MyInt x) const { return absl::Hash<int64_t>{}(x.value); }
+};
+
+struct TransparentIntEq {
+  using is_transparent = void;
+  bool operator()(int64_t x, MyInt y) const { return x == y.value; }
+  bool operator()(MyInt x, MyInt y) const { return x.value == y.value; }
+  bool operator()(MyInt x, int64_t y) const { return x.value == y; }
+  bool operator()(int64_t x, int64_t y) const { return x == y; }
+};
+
+struct TransparentIntTable
+    : raw_hash_set<IntPolicy, TransparentIntHash, TransparentIntEq,
+                   std::allocator<int64_t>> {
+  using Base = typename TransparentIntTable::raw_hash_set;
+  TransparentIntTable() = default;
   using Base::Base;
 };
 
@@ -243,6 +276,30 @@ void BM_EraseEmplace(benchmark::State& state) {
   }
 }
 BENCHMARK(BM_EraseEmplace)->Arg(1)->Arg(2)->Arg(4)->Arg(8)->Arg(16)->Arg(100);
+
+void BM_EraseEmplaceString(benchmark::State& state) {
+  StringTable t;
+  int64_t size = state.range(0);
+  for (int64_t i = 0; i < size; ++i) {
+    std::string s = std::to_string(i);
+    t.emplace(s, s);
+  }
+  while (state.KeepRunningBatch(size)) {
+    for (int64_t i = 0; i < size; ++i) {
+      benchmark::DoNotOptimize(t);
+      std::string s = std::to_string(i);
+      t.erase(s);
+      t.emplace(s, s);
+    }
+  }
+}
+BENCHMARK(BM_EraseEmplaceString)
+    ->Arg(1)
+    ->Arg(2)
+    ->Arg(4)
+    ->Arg(8)
+    ->Arg(16)
+    ->Arg(100);
 
 void BM_EndComparison(benchmark::State& state) {
   StringTable t = {{"a", "a"}, {"b", "b"}};
@@ -568,6 +625,20 @@ void BM_DropDeletes(benchmark::State& state) {
   }
 }
 BENCHMARK(BM_DropDeletes);
+
+void BM_TransparentFind(benchmark::State& state) {
+  TransparentIntTable table;
+  for (int i = 0; i < 10000; ++i) {
+    table.insert(i);
+  }
+  while (state.KeepRunningBatch(10000)) {
+    for (int i = 0; i < 10000; ++i) {
+      auto it = table.find(MyInt{i});
+      benchmark::DoNotOptimize(it);
+    }
+  }
+}
+BENCHMARK(BM_TransparentFind);
 
 void BM_Resize(benchmark::State& state) {
   // For now just measure a small cheap hash table since we

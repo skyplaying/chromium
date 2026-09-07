@@ -302,6 +302,22 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
   // https://crbug.com/830962).
   if (hitTestResult ==
       remote_cocoa::mojom::HitTestResult::kDraggableBackground) {
+    NSEvent* currentEvent = [NSApp currentEvent];
+    if (currentEvent) {
+      NSEventType type = [currentEvent type];
+      // In AppKit, 2-finger trackpad swipes and scrolling gestures are
+      // dispatched as continuous NSEventTypeScrollWheel events.
+      // NSEventTypeSwipe is a discrete, high-level event that is not emitted
+      // for standard 2-finger trackpad swipes, but is instead specific to
+      // particular macOS settings (e.g. 3-finger page swipes). Allow
+      // scroll wheel events over draggable background areas (such as the
+      // VerticalTabStrip) to pass through to Views rather than being
+      // swallowed by the window manager to support swiping to switch the
+      // window's focused group.
+      if (type == NSEventTypeScrollWheel) {
+        return self;
+      }
+    }
     return nil;
   }
 
@@ -837,6 +853,36 @@ ui::TextEditCommand GetTextEditCommandForMenuAction(SEL action) {
   // equivalent that Cocoa uses for toggling the input language. In this case,
   // that's actually a good thing, though -- see http://crbug.com/26115 .)
   return YES;
+}
+
+- (void)contextMenuKeyDown:(NSEvent*)event {
+  base::apple::OwnedNSEvent owned_event(event);
+  ui::KeyEvent original_event(owned_event);
+
+  // Dispatch the original key event first so that existing handlers (if any)
+  // take priority over the context menu.
+  [self handleKeyEvent:&original_event];
+  if (original_event.handled()) {
+    return;
+  }
+
+  int event_flags = [event isARepeat] ? ui::EF_IS_REPEAT : ui::EF_NONE;
+  ui::KeyEvent context_menu_event(ui::EventType::kKeyPressed, ui::VKEY_APPS,
+                                  ui::DomCode::CONTEXT_MENU, event_flags);
+
+  context_menu_event.SetNativeEvent(owned_event);
+  if ([self dispatchKeyEventToMenuController:&context_menu_event]) {
+    return;
+  }
+
+  [self dispatchKeyEvent:&context_menu_event];
+  if (context_menu_event.handled()) {
+    return;
+  }
+
+  if (@available(macOS 15.0, *)) {
+    [super contextMenuKeyDown:event];
+  }
 }
 
 - (void)keyDown:(NSEvent*)theEvent {

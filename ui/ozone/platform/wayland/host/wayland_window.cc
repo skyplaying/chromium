@@ -13,8 +13,8 @@
 #include <utility>
 
 #include "base/auto_reset.h"
-#include "base/feature_list.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/notimplemented.h"
 #include "base/notreached.h"
@@ -27,7 +27,6 @@
 #include "ui/base/cursor/platform_cursor.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/display/screen.h"
 #include "ui/events/event.h"
 #include "ui/events/event_target_iterator.h"
@@ -162,7 +161,11 @@ void WaylandWindow::UpdateWindowScale(bool update_bounds) {
   const auto window_scale = connection_->UsePerSurfaceScaling()
                                 ? GetPreferredScaleFactor()
                                 : GetScaleFactorFromEnteredOutputs();
+  auto weak_this = AsWeakPtr();
   SetWindowScale(window_scale.value_or(1.0f));
+  if (!weak_this) {
+    return;
+  }
 
   // Propagate update to the popups.
   if (child_popup_) {
@@ -197,11 +200,17 @@ void WaylandWindow::RemoveBubble(WaylandBubble* window) {
   if (active_bubble_ == window) {
     active_bubble_ = nullptr;
     if (IsActive()) {
+      auto weak_this = AsWeakPtr();
       delegate()->OnActivationChanged(true);
+      if (!weak_this) {
+        return;
+      }
     }
   }
-  child_bubbles_.erase(
-      std::find(child_bubbles_.begin(), child_bubbles_.end(), window));
+  auto it = std::find(child_bubbles_.begin(), child_bubbles_.end(), window);
+  if (it != child_bubbles_.end()) {
+    child_bubbles_.erase(it);
+  }
 }
 
 void WaylandWindow::ActivateBubble(WaylandBubble* window) {
@@ -211,15 +220,35 @@ void WaylandWindow::ActivateBubble(WaylandBubble* window) {
   if (active_bubble_ == window) {
     return;
   }
+
+  base::WeakPtr<WaylandWindow> weak_window =
+      window ? window->AsWeakPtr() : nullptr;
+
   if (active_bubble_) {
+    auto weak_this = AsWeakPtr();
     active_bubble_->delegate()->OnActivationChanged(false);
+    if (!weak_this) {
+      return;
+    }
   }
+
+  if (window && !weak_window) {
+    return;
+  }
+
   active_bubble_ = window;
 
   if (active_bubble_) {
+    auto weak_this = AsWeakPtr();
     delegate()->OnActivationChanged(false);
-    active_bubble_->delegate()->OnActivationChanged(true);
+    if (!weak_this) {
+      return;
+    }
+    if (active_bubble_) {
+      active_bubble_->delegate()->OnActivationChanged(true);
+    }
   } else {
+    auto weak_this = AsWeakPtr();
     delegate()->OnActivationChanged(IsActive());
   }
 }
@@ -910,16 +939,23 @@ void WaylandWindow::OnDragSessionClose(DragOperation operation) {
     // is about to shut down. Do nothing and return.
     return;
   }
+  // Running `drag_finished_callback_` and dispatching the synthetic pointer
+  // release below may spin a nested run loop in which `this` gets destroyed,
+  // so move the quit closure onto the stack to ensure the drag loop is still
+  // quit in that case.
+  base::OnceClosure quit_closure = std::move(drag_loop_quit_closure_);
+  auto alive = AsWeakPtr();
   std::move(drag_finished_callback_).Run(operation);
   // Skip releasing any pointer buttons for the case of a window drag driven by
   // the data drag controller.
   // TODO: crbug.com/40238145 - Refactor this per discussion at
   // crrev.com/c/5570335/comment/0b8811fc_818028c9/.
-  if (!connection()->data_drag_controller()->IsWindowDragSessionRunning()) {
+  if (alive &&
+      !connection()->data_drag_controller()->IsWindowDragSessionRunning()) {
     connection()->event_source()->ReleasePressedPointerButtons(
         this, EventTimeForNow());
   }
-  std::move(drag_loop_quit_closure_).Run();
+  std::move(quit_closure).Run();
 }
 
 bool WaylandWindow::Initialize(PlatformWindowInitProperties properties) {
@@ -1315,7 +1351,13 @@ void WaylandWindow::ProcessPendingConfigureState(uint32_t serial) {
     }
   }
 
+  // RequestStateFromServer transitively calls delegate()->OnStateUpdate(),
+  // which may synchronously delete |this|.
+  auto weak_this = AsWeakPtr();
   RequestStateFromServer(state, serial);
+  if (!weak_this) {
+    return;
+  }
 
   // Reset values.
   pending_configure_state_ = PendingConfigureState();
@@ -1551,10 +1593,10 @@ void WaylandWindow::MaybeApplyLatestStateRequest(bool force) {
   // `in_flight_requests_`.
   CHECK(!applying_state_)
       << "MaybeApplyLatestStateRequest called re-entrantly.";
-  auto setter =
-      std::make_optional<base::AutoReset<bool>>(&applying_state_, true);
+  applying_state_ = true;
 
   if (in_flight_requests_.empty()) {
+    applying_state_ = false;
     return;
   }
 
@@ -1566,12 +1608,14 @@ void WaylandWindow::MaybeApplyLatestStateRequest(bool force) {
     // Allow at most 3 configure requests to be waited on at a time.
     constexpr int MAX_IN_FLIGHT_REQUESTS = 3;
     if (in_flight_applied >= MAX_IN_FLIGHT_REQUESTS) {
+      applying_state_ = false;
       return;
     }
   }
 
   auto& latest = in_flight_requests_.back();
   if (latest.applied) {
+    applying_state_ = false;
     return;
   }
   latest.applied = true;
@@ -1585,7 +1629,12 @@ void WaylandWindow::MaybeApplyLatestStateRequest(bool force) {
   // frame to be considered synchronized. For example, this can happen if the
   // old and new states are the same, or it only changes the origin of the
   // bounds.
-  latest.viz_seq = delegate()->OnStateUpdate(old, latest.state);
+  auto weak_this = AsWeakPtr();
+  int64_t viz_seq = delegate()->OnStateUpdate(old, latest.state);
+  if (!weak_this) {
+    return;
+  }
+  latest.viz_seq = viz_seq;
 
   if (UseTestConfigForPlatformWindows()) {
     latest_applied_viz_seq_for_testing_ = std::max(
@@ -1598,7 +1647,7 @@ void WaylandWindow::MaybeApplyLatestStateRequest(bool force) {
   // `ProcessSequencePoint` may re-entrantly call
   // `MaybeApplyLatestStateRequest`. This is safe as long as we do not hold
   // references to `in_flight_requests_` after here.
-  setter.reset();
+  applying_state_ = false;
 
   // Process any requests added re-entrantly. We need to move the requests out
   // of `reentrant_requests_` here because each re-entrant request may also add

@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/views/site_data/page_specific_site_data_dialog.h"
+
 #include <string>
 
 #include "base/functional/callback_helpers.h"
@@ -14,17 +16,17 @@
 #include "chrome/browser/preloading/scoped_prewarm_feature_list.h"
 #include "chrome/browser/privacy_sandbox/privacy_sandbox_settings_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/app_menu_button.h"
 #include "chrome/browser/ui/views/page_info/page_info_cookies_content_view.h"
 #include "chrome/browser/ui/views/page_info/page_info_main_view.h"
 #include "chrome/browser/ui/views/page_info/page_info_view_factory.h"
-#include "chrome/browser/ui/views/site_data/page_specific_site_data_dialog.h"
 #include "chrome/browser/ui/views/site_data/page_specific_site_data_dialog_controller.h"
 #include "chrome/browser/ui/views/site_data/related_app_row_view.h"
 #include "chrome/browser/ui/views/site_data/site_data_row_view.h"
@@ -62,6 +64,7 @@
 #include "ui/base/interaction/interaction_sequence.h"
 #include "ui/base/interaction/interaction_test_util.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/label.h"
@@ -232,7 +235,7 @@ class PageSpecificSiteDataDialogInteractiveUiTest
   virtual void SetUpFeatureList() { feature_list_.InitWithFeatures({}, {}); }
 
   virtual void SetUpCookieControlMode() {
-    browser()->profile()->GetPrefs()->SetInteger(
+    browser()->GetProfile()->GetPrefs()->SetInteger(
         prefs::kCookieControlsMode,
         static_cast<int>(
             content_settings::CookieControlsMode::kBlockThirdParty));
@@ -252,7 +255,7 @@ class PageSpecificSiteDataDialogInteractiveUiTest
 IN_PROC_BROWSER_TEST_F(PageSpecificSiteDataDialogInteractiveUiTest,
                        FirstPartyAllowed) {
   CookieChangeObserver observer(
-      browser()->tab_strip_model()->GetActiveWebContents(), 6);
+      browser()->GetTabStripModel()->GetActiveWebContents(), 6);
   RunTestSequence(
       NavigateAndOpenDialog(kPageSpecificSiteDataDialogFirstPartySection,
                             &observer),
@@ -289,7 +292,7 @@ IN_PROC_BROWSER_TEST_F(PageSpecificSiteDataDialogInteractiveUiTest,
 IN_PROC_BROWSER_TEST_F(PageSpecificSiteDataDialogInteractiveUiTest,
                        ThirdPartyBlocked) {
   CookieChangeObserver observer(
-      browser()->tab_strip_model()->GetActiveWebContents(), 6);
+      browser()->GetTabStripModel()->GetActiveWebContents(), 6);
   RunTestSequence(
       NavigateAndOpenDialog(kPageSpecificSiteDataDialogThirdPartySection,
                             &observer),
@@ -324,7 +327,7 @@ IN_PROC_BROWSER_TEST_F(PageSpecificSiteDataDialogInteractiveUiTest,
 IN_PROC_BROWSER_TEST_F(PageSpecificSiteDataDialogInteractiveUiTest,
                        OnlyPartitionedBlockedThirdPartyCookies) {
   CookieChangeObserver observer(
-      browser()->tab_strip_model()->GetActiveWebContents(), 6);
+      browser()->GetTabStripModel()->GetActiveWebContents(), 6);
   RunTestSequence(
       NavigateAndOpenDialog(kPageSpecificSiteDataDialogThirdPartySection,
                             &observer),
@@ -355,7 +358,7 @@ IN_PROC_BROWSER_TEST_F(PageSpecificSiteDataDialogInteractiveUiTest,
 IN_PROC_BROWSER_TEST_F(PageSpecificSiteDataDialogInteractiveUiTest,
                        MixedPartitionedBlockedThirdPartyCookies) {
   CookieChangeObserver observer(
-      browser()->tab_strip_model()->GetActiveWebContents(), 6);
+      browser()->GetTabStripModel()->GetActiveWebContents(), 6);
   RunTestSequence(
       NavigateAndOpenDialog(kPageSpecificSiteDataDialogThirdPartySection,
                             &observer),
@@ -398,7 +401,8 @@ class PageSpecificSiteDataDialogWithRelatedWebAppsInteractiveUiTest
 
   MultiStep LaunchBrowserForWebAppInTab(const webapps::AppId& app_id,
                                         ui::ElementIdentifier section_id) {
-    auto* provider = web_app::WebAppProvider::GetForTest(browser()->profile());
+    auto* provider =
+        web_app::WebAppProvider::GetForTest(browser()->GetProfile());
     const GURL target_app_url(
         provider->registrar_unsafe().GetAppLaunchUrl(app_id));
 
@@ -422,7 +426,7 @@ class PageSpecificSiteDataDialogWithRelatedWebAppsInteractiveUiTest
                               apps::LaunchSource::kFromTest),
                           base::DoNothing());
                     },
-                    browser()->profile(), app_id))),
+                    browser()->GetProfile(), app_id))),
         WaitForWebContentsNavigation(section_id, target_app_url));
     AddDescriptionPrefix(
         steps, base::StrCat({"LaunchBrowserForWebAppInTab( ", app_id, " )"}));
@@ -474,19 +478,19 @@ IN_PROC_BROWSER_TEST_F(
     RelatedApplicationsSectionInBrowserTab) {
   // Unrelated to the RelatedApplications tests, but needed to avoid crashing.
   CookieChangeObserver observer(
-      browser()->tab_strip_model()->GetActiveWebContents(), 6);
+      browser()->GetTabStripModel()->GetActiveWebContents(), 6);
 
 #if BUILDFLAG(IS_CHROMEOS)
   // Make sure the system web apps are installed since the app management page
   // opens in the OS Settings app, and not a normal browser tab.
-  ash::SystemWebAppManager::GetForTest(browser()->profile())
+  ash::SystemWebAppManager::GetForTest(browser()->GetProfile())
       ->InstallSystemAppsForTesting();
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
   // Install an app so that the related application section will have something
   // to show. We don't actually care about the app in this test though.
   auto app_id = web_app::test::InstallDummyWebApp(
-      browser()->profile(), GetDummyAppName(), GetDummyAppUrl());
+      browser()->GetProfile(), GetDummyAppName(), GetDummyAppUrl());
 
   RunTestSequence(
       LaunchBrowserForWebAppInTabAndOpenDialog(app_id, kWebContentsElementId),
@@ -515,21 +519,21 @@ IN_PROC_BROWSER_TEST_F(
     RelatedApplicationsSectionInAppWindow) {
   // Unrelated to the RelatedApplications tests, but needed to avoid crashing.
   CookieChangeObserver observer(
-      browser()->tab_strip_model()->GetActiveWebContents(), 6);
+      browser()->GetTabStripModel()->GetActiveWebContents(), 6);
 
 #if BUILDFLAG(IS_CHROMEOS)
   // Make sure the system web apps are installed since the app management page
   // opens in the OS Settings app, and not a normal browser tab.
-  ash::SystemWebAppManager::GetForTest(browser()->profile())
+  ash::SystemWebAppManager::GetForTest(browser()->GetProfile())
       ->InstallSystemAppsForTesting();
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
   // Install and launch the web app.
   auto app_id = web_app::test::InstallDummyWebApp(
-      browser()->profile(), GetDummyAppName(), GetDummyAppUrl());
+      browser()->GetProfile(), GetDummyAppName(), GetDummyAppUrl());
 
-  Browser* app_browser =
-      web_app::LaunchWebAppBrowserAndWait(browser()->profile(), app_id);
+  BrowserWindowInterface* app_browser =
+      web_app::LaunchWebAppBrowserAndWait(browser()->GetProfile(), app_id);
 
   // Helper for the test sequence.
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kAppWindowId);
@@ -590,8 +594,8 @@ class PageSpecificSiteDataDialogIsolatedWebAppInteractiveUiTest
         test::ScopedPrewarmFeatureList::PrewarmState::kDisabled);
   }
 
-  Browser* InstallAndLaunchIsolatedWebApp() {
-    Profile* profile = browser()->profile();
+  BrowserWindowInterface* InstallAndLaunchIsolatedWebApp() {
+    Profile* profile = browser()->GetProfile();
 
     std::unique_ptr<web_app::ScopedBundledIsolatedWebApp> app =
         web_app::IsolatedWebAppBuilder(
@@ -605,12 +609,14 @@ class PageSpecificSiteDataDialogIsolatedWebAppInteractiveUiTest
 
     CHECK(content::ExecJs(iwa_frame, "localStorage.setItem('key', 'value')"));
 
-    return chrome::FindBrowserWithTab(
-        content::WebContents::FromRenderFrameHost(iwa_frame));
+    BrowserWindowInterface* iwa_browser =
+        GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+            content::WebContents::FromRenderFrameHost(iwa_frame));
+    return iwa_browser;
   }
 
   // Installs and launches an IWA, then opens the PageSpecificSiteData dialog.
-  MultiStep NavigateAndOpenDialog(Browser* iwa_browser,
+  MultiStep NavigateAndOpenDialog(BrowserWindowInterface* iwa_browser,
                                   ui::ElementIdentifier section_id) {
     return Steps(
         InstrumentTab(kWebContentsElementId,
@@ -658,7 +664,7 @@ class PageSpecificSiteDataDialogIsolatedWebAppInteractiveUiTest
 IN_PROC_BROWSER_TEST_F(
     PageSpecificSiteDataDialogIsolatedWebAppInteractiveUiTest,
     MAYBE_AppNameIsDisplayedInsteadOfHostname) {
-  Browser* iwa_browser = InstallAndLaunchIsolatedWebApp();
+  BrowserWindowInterface* iwa_browser = InstallAndLaunchIsolatedWebApp();
   RunTestSequenceInContext(
       BrowserElements::From(iwa_browser)->GetContext(),
       NavigateAndOpenDialog(iwa_browser,
@@ -673,71 +679,3 @@ IN_PROC_BROWSER_TEST_F(
       CheckHostnameLabel(kFirstPartyAllowedRow, u"Test App"));
 }
 
-class PageSpecificSiteDataDialogPrivacySandboxInteractiveUiTest
-    : public PageSpecificSiteDataDialogInteractiveUiTest {
- public:
-  PageSpecificSiteDataDialogPrivacySandboxInteractiveUiTest() = default;
-  ~PageSpecificSiteDataDialogPrivacySandboxInteractiveUiTest() override =
-      default;
-
- protected:
-  void SetUpFeatureList() override {
-    feature_list_.InitWithFeatures(
-        {network::features::kSharedStorageAPI, blink::features::kFencedFrames,
-         features::kPrivacySandboxAdsAPIsOverride},
-        {});
-  }
-
-  void SetUpCookieControlMode() override {}
-
-  void SetUpPrivacySandboxState() override {
-    PrivacySandboxSettingsFactory::GetForProfile(browser()->profile())
-        ->SetAllPrivacySandboxAllowedForTesting();
-  }
-
-  std::string GetTestPageRelativeURL() override {
-    return "/shared_storage_first_party_data.html";
-  }
-};
-
-IN_PROC_BROWSER_TEST_F(
-    PageSpecificSiteDataDialogPrivacySandboxInteractiveUiTest,
-    FirstPartyAllowed) {
-  privacy_sandbox::ScopedPrivacySandboxAttestations scoped_attestations(
-      privacy_sandbox::PrivacySandboxAttestations::CreateForTesting());
-  // Mark all Privacy Sandbox APIs as attested since the test case is testing
-  // behaviors not related to attestations.
-  privacy_sandbox::PrivacySandboxAttestations::GetInstance()
-      ->SetAllPrivacySandboxAttestedForTesting(true);
-
-  RunTestSequence(
-      NavigateAndOpenDialog(kPageSpecificSiteDataDialogFirstPartySection),
-      // Name the first row in the first-party section.
-      InAnyContext(NameChildView(kPageSpecificSiteDataDialogFirstPartySection,
-                                 kFirstPartyAllowedRow, 0u)),
-      // Verify no empty state label is present.
-      InAnyContext(
-          EnsureNotPresent(kPageSpecificSiteDataDialogEmptyStateLabel)),
-      // Verify the row label and open the row menu.
-      CheckRowLabel(kFirstPartyAllowedRow,
-                    IDS_PAGE_SPECIFIC_SITE_DATA_DIALOG_ALLOWED_STATE_SUBTITLE),
-      OpenRowMenu(kFirstPartyAllowedRow),
-      // Verify that the menu has "Block" and "Clear on exit" menu items.
-      InAnyContext(WaitForShow(SiteDataRowView::kBlockMenuItem)),
-      InAnyContext(WaitForShow(SiteDataRowView::kClearOnExitMenuItem)),
-      // Verify that "Allow" is not present as it is already allowed.
-      InAnyContext(EnsureNotPresent(SiteDataRowView::kAllowMenuItem)),
-      // Verify that the site can be deleted.
-      DeleteRow(kFirstPartyAllowedRow),
-      // Verify that UI has updated as a result of clicking on a menu item and
-      // the correct histogram was logged.
-      AfterHide(
-          kFirstPartyAllowedRow,
-          ExpectActionCount(kCookiesDialogRemoveButtonClickedActionName, 1)),
-      // Verify that after deleting the last (and only) row in a section, a
-      // label explaining the empty state is shown.
-      InAnyContext(CheckViewProperty(
-          kPageSpecificSiteDataDialogEmptyStateLabel, &views::Label::GetText,
-          l10n_util::GetStringUTF16(
-              IDS_PAGE_SPECIFIC_SITE_DATA_DIALOG_EMPTY_STATE_LABEL))));
-}

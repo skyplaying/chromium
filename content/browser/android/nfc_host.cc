@@ -29,7 +29,7 @@ base::AtomicSequenceNumber g_unique_id;
 
 NFCHost::NFCHost(WebContents* web_contents)
     : WebContentsObserver(web_contents) {
-  DCHECK(web_contents);
+  CHECK(web_contents, base::NotFatalUntil::M159);
 
   permission_controller_ =
       web_contents->GetBrowserContext()->GetPermissionController();
@@ -57,6 +57,15 @@ void NFCHost::GetNFC(RenderFrameHost* render_frame_host,
   }
   if (render_frame_host->IsNestedWithinFencedFrame()) {
     mojo::ReportBadMessage("WebNFC is not allowed within in a fenced frame.");
+    return;
+  }
+
+  if (web_contents()->GetPrimaryMainFrame() != render_frame_host) {
+    mojo::ReportBadMessage("WebNFC not on primary main frame.");
+    return;
+  }
+
+  if (render_frame_host->GetLastCommittedOrigin().opaque()) {
     return;
   }
 

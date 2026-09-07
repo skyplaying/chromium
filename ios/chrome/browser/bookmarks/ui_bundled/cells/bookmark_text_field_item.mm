@@ -30,9 +30,8 @@
 
 #pragma mark TableViewItem
 
-- (void)configureCell:(LegacyTableViewCell*)tableCell
-           withStyler:(ChromeTableViewStyler*)styler {
-  [super configureCell:tableCell withStyler:styler];
+- (void)configureCell:(LegacyTableViewCell*)tableCell {
+  [super configureCell:tableCell];
 
   BookmarkTextFieldCell* cell =
       base::apple::ObjCCastStrict<BookmarkTextFieldCell>(tableCell);
@@ -120,19 +119,15 @@
   [self.contentView addSubview:self.stackView];
 
   // Set up constraints.
-  AddSameConstraintsToSidesWithInsets(
+  AddSameConstraintsWithInsets(
       self.stackView, self.contentView,
-      LayoutSides::kLeading | LayoutSides::kTrailing | LayoutSides::kBottom |
-          LayoutSides::kTop,
       NSDirectionalEdgeInsetsMake(
           kBookmarkCellVerticalInset, kBookmarkCellHorizontalLeadingInset,
           kBookmarkCellVerticalInset, kBookmarkCellHorizontalTrailingInset));
 
   [self applyContentSizeCategoryStyles];
 
-  NSArray<UITrait>* traits = TraitCollectionSetForTraits(
-      @[ UITraitPreferredContentSizeCategory.class ]);
-  [self registerForTraitChanges:traits
+  [self registerForTraitChanges:@[ UITraitPreferredContentSizeCategory.class ]
                      withAction:@selector(applyContentSizeCategoryStyles)];
 
   return self;
@@ -140,7 +135,7 @@
 
 - (void)applyContentSizeCategoryStyles {
   if (UIContentSizeCategoryIsAccessibilityCategory(
-          UIScreen.mainScreen.traitCollection.preferredContentSizeCategory)) {
+          self.traitCollection.preferredContentSizeCategory)) {
     self.stackView.axis = UILayoutConstraintAxisVertical;
     self.stackView.alignment = UIStackViewAlignmentLeading;
     self.textField.textAlignment = NSTextAlignmentLeft;

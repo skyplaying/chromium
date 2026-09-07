@@ -24,6 +24,7 @@
 #include "components/supervised_user/core/browser/supervised_user_utils.h"
 #include "components/supervised_user/core/common/pref_names.h"
 #include "components/supervised_user/core/common/supervised_user_constants.h"
+#include "extensions/buildflags/buildflags.h"
 
 namespace supervised_user_test_util {
 
@@ -93,14 +94,14 @@ void SetSupervisedUserGeolocationEnabledContentSetting(Profile* profile,
               ->delegate()
               .ToPermissionSetting(enabled ? CONTENT_SETTING_ALLOW
                                            : CONTENT_SETTING_BLOCK));
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   if (profile->GetPrefs()->GetBoolean(
           prefs::kSupervisedUserExtensionsMayRequestPermissions) != enabled) {
     // Permissions preference is also set to the same value. See
     // SupervisedUsePrefStore.
     SetSupervisedUserExtensionsMayRequestPermissionsPref(profile, enabled);
   }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 }
 
 AccountInfo PopulateAccountInfoWithName(const AccountInfo& info,
@@ -112,7 +113,7 @@ AccountInfo PopulateAccountInfoWithName(const AccountInfo& info,
                                    .SetAvatarUrl("https://example.com")
                                    .SetLocale("en")
                                    .Build();
-  AccountCapabilitiesTestMutator(&populated_info.capabilities)
+  AccountCapabilitiesTestMutator(&populated_info)
       .set_is_subject_to_enterprise_features(true);
 
   CHECK(populated_info.IsValid());

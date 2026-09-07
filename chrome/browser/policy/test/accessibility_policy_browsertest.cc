@@ -7,6 +7,7 @@
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/policy_constants.h"
+#include "content/public/browser/browser_accessibility_state.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -17,15 +18,7 @@
 #include "chrome/browser/ash/accessibility/magnification_manager.h"
 #include "chrome/browser/ash/accessibility/magnifier_type.h"
 #include "chrome/browser/ui/ash/keyboard/chrome_keyboard_controller_client.h"
-#include "chrome/browser/ui/browser.h"
 #include "components/prefs/pref_service.h"
-#endif
-
-#if BUILDFLAG(IS_WIN)
-#include <tuple>
-
-#include "ui/accessibility/accessibility_features.h"
-#include "ui/accessibility/platform/ax_platform.h"
 #endif
 
 namespace policy {
@@ -312,7 +305,7 @@ IN_PROC_BROWSER_TEST_F(AccessibilityPolicyTest, DictationEnabled) {
   // Verifies that the dictation accessibility feature can be
   // controlled through policy.
   AccessibilityManager* accessibility_manager = AccessibilityManager::Get();
-  PrefService* prefs = browser()->profile()->GetPrefs();
+  PrefService* prefs = browser()->GetProfile()->GetPrefs();
 
   // Verify that the dictation is initially disabled
   EXPECT_FALSE(accessibility_manager->IsDictationEnabled());
@@ -536,7 +529,7 @@ IN_PROC_BROWSER_TEST_F(AccessibilityPolicyTest, ColorCorrectionEnabled) {
 // policy.
 IN_PROC_BROWSER_TEST_F(AccessibilityPolicyTest, FaceGazeForcedOff) {
   AccessibilityManager* accessibility_manager = AccessibilityManager::Get();
-  PrefService* prefs = browser()->profile()->GetPrefs();
+  PrefService* prefs = browser()->GetProfile()->GetPrefs();
 
   // Verify that FaceGaze is initially disabled.
   EXPECT_FALSE(accessibility_manager->IsFaceGazeEnabled());
@@ -569,62 +562,30 @@ IN_PROC_BROWSER_TEST_F(AccessibilityPolicyTest, FaceGazeForcedOn) {
 }
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
-#if BUILDFLAG(IS_WIN)
-// Tests that the UiAutomationProviderEnabled policy is respected when set, and
-// that the UiaProvider feature takes effect only when the policy is not set.
-class UiAutomationProviderPolicyTest
-    : public PolicyTest,
-      public ::testing::WithParamInterface<
-          std::tuple<PolicyTest::BooleanPolicy, bool>> {
- protected:
-  static PolicyTest::BooleanPolicy GetBooleanPolicyParam() {
-    return std::get<0>(GetParam());
-  }
+IN_PROC_BROWSER_TEST_F(PolicyTest, RendererAccessibilityEnabled) {
+  content::BrowserAccessibilityState* accessibility_state =
+      content::BrowserAccessibilityState::GetInstance();
 
-  static bool GetFeatureEnabledParam() { return std::get<1>(GetParam()); }
+  // Verify default state is enabled (AX mode changes allowed).
+  EXPECT_TRUE(accessibility_state->IsAXModeChangeAllowed());
 
-  UiAutomationProviderPolicyTest() {
-    feature_list_.InitWithFeatureState(::features::kUiaProvider,
-                                       GetFeatureEnabledParam());
-  }
+  // Disable renderer accessibility via policy.
+  PolicyMap policies;
+  policies.Set(key::kRendererAccessibilityEnabled, POLICY_LEVEL_MANDATORY,
+               POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD, base::Value(false),
+               nullptr);
+  UpdateProviderPolicy(policies);
 
-  void SetUpInProcessBrowserTestFixture() override {
-    PolicyTest::SetUpInProcessBrowserTestFixture();
-    if (const auto boolean_policy = GetBooleanPolicyParam();
-        boolean_policy != BooleanPolicy::kNotConfigured) {
-      PolicyMap policy_map;
-      SetPolicy(&policy_map, key::kUiAutomationProviderEnabled,
-                base::Value(boolean_policy == BooleanPolicy::kTrue));
-      UpdateProviderPolicy(policy_map);
-    }
-  }
+  // Verify that policy disabled AX mode changes.
+  EXPECT_FALSE(accessibility_state->IsAXModeChangeAllowed());
 
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
+  // Re-enable policy dynamically (dynamic_refresh test).
+  policies.Set(key::kRendererAccessibilityEnabled, POLICY_LEVEL_MANDATORY,
+               POLICY_SCOPE_USER, POLICY_SOURCE_CLOUD, base::Value(true),
+               nullptr);
+  UpdateProviderPolicy(policies);
 
-IN_PROC_BROWSER_TEST_P(UiAutomationProviderPolicyTest, IsUiaProviderEnabled) {
-  if (const auto boolean_policy = GetBooleanPolicyParam();
-      boolean_policy == BooleanPolicy::kNotConfigured) {
-    // Enabled or disabled according to the variations framework.
-    ASSERT_EQ(::ui::AXPlatform::GetInstance().IsUiaProviderEnabled(),
-              GetFeatureEnabledParam());
-  } else {
-    // Enabled or disabled according to the value of the policy.
-    ASSERT_EQ(::ui::AXPlatform::GetInstance().IsUiaProviderEnabled(),
-              boolean_policy == BooleanPolicy::kTrue);
-  }
+  EXPECT_TRUE(accessibility_state->IsAXModeChangeAllowed());
 }
-
-INSTANTIATE_TEST_SUITE_P(
-    All,
-    UiAutomationProviderPolicyTest,
-    ::testing::Combine(
-        ::testing::Values(PolicyTest::BooleanPolicy::kNotConfigured,
-                          PolicyTest::BooleanPolicy::kFalse,
-                          PolicyTest::BooleanPolicy::kTrue),
-        ::testing::Bool()));
-
-#endif  // BUILDFLAG(IS_WIN)
 
 }  // namespace policy

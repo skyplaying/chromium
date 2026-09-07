@@ -6,11 +6,15 @@ import {gCrWeb} from '//ios/web/public/js_messaging/resources/gcrweb.js';
 import {isTextField} from '//ios/web/public/js_messaging/resources/utils.js';
 
 /**
- * Retrieves the registered 'autofill_form_features' CrWebApi
- * instance for use in this file.
+ * Helper to check if an autofill form feature is enabled.
  */
-const autofillFormFeaturesApi =
-  gCrWeb.getRegisteredApi('autofill_form_features');
+function isFeatureEnabled(featureName: string): boolean {
+  if (!gCrWeb.hasRegisteredApi('autofill_form_features')) {
+    return false;
+  }
+  return gCrWeb.getRegisteredApi('autofill_form_features')
+      .getFunction(featureName)();
+}
 
 /**
  * Returns is the tag of an `element` is tag.
@@ -38,6 +42,11 @@ export function hasTagName(node: Element, tag: string): boolean {
  *     autofilled.
  */
 export function isAutofillableElement(element: Element): boolean {
+  if (element instanceof HTMLInputElement && element.type === 'hidden' &&
+      element.getAttribute('autocomplete') === 'email-verification-token' &&
+      isFeatureEnabled('isAutofillEmailVerificationEnabled')) {
+    return true;
+  }
   return isAutofillableInputElement(element) || isSelectElement(element) ||
       isTextAreaElement(element);
 }
@@ -302,20 +311,13 @@ export function isTextAreaElement(element: any): boolean {
 }
 
 /**
- * Returns true if `element` is a checkbox or a radio button element.
+ * Returns true if `element` is a date input element.
  *
- * It is based on the logic in IsCheckableElement() in
- * chromium/src/components/autofill/content/renderer/form_autofill_util.h.
- *
- * @param {FormControlElement} element An element to examine.
- * @return Whether element is a checkbox or a radio button.
+ * @param {Element} element An element to examine.
+ * @return Whether element is a date input element.
  */
-// TODO(crbug.com/40285548): Replace all `any` types with a specific type.
-export function isCheckableElement(element: any): boolean {
-  if (!element) {
-    return false;
-  }
-  return element.type === 'checkbox' || element.type === 'radio';
+export function isDateField(element: Element): boolean {
+  return element instanceof HTMLInputElement && element.type === 'date';
 }
 
 /**
@@ -331,9 +333,8 @@ export function isCheckableElement(element: any): boolean {
  */
 export function isAutofillableInputElement(element: Element): boolean {
   return isTextField(element) ||
-      (isCheckableElement(element) &&
-       !autofillFormFeaturesApi.getFunction(
-           'isAutofillIgnoreCheckableElementsEnabled')());
+      (isDateField(element) &&
+       isFeatureEnabled('isAutofillSupportDateInputEnabled'));
 }
 
 /**
@@ -358,9 +359,8 @@ export interface InferredLabel {
  */
 export function buildInferredLabelIfValid(label: string): InferredLabel|null {
   // LINT.IfChange(InvalidLabelCriteria)
-  const isValid = autofillFormFeaturesApi
-                      .getFunction(
-                          'isAutofillDisallowMoreHyphenLikeLabelsEnabled')() ?
+  const isValid =
+      isFeatureEnabled('isAutofillDisallowMoreHyphenLikeLabelsEnabled') ?
       label.search(/[^\s*:()\/\.\u2013\u2014\u2212\uFF0D-]/) >= 0 :
       label.search(/[^\s*:()\/\.\u2013-]/) >= 0;
   // LINT.ThenChange(/components/autofill/content/renderer/form_autofill_util.cc:InvalidLabelCriteria)

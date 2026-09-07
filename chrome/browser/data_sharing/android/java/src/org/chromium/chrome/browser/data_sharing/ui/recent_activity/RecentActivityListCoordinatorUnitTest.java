@@ -33,13 +33,14 @@ import org.chromium.chrome.browser.data_sharing.ui.recent_activity.RecentActivit
 import org.chromium.chrome.browser.data_sharing.ui.recent_activity.RecentActivityListCoordinator.FaviconProvider;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
-import org.chromium.components.browser_ui.bottomsheet.EmptyBottomSheetObserver;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetObserver;
 import org.chromium.components.collaboration.messaging.ActivityLogItem;
 import org.chromium.components.collaboration.messaging.CollaborationEvent;
 import org.chromium.components.collaboration.messaging.MessageAttribution;
 import org.chromium.components.collaboration.messaging.MessagingBackendService;
 import org.chromium.components.collaboration.messaging.TabMessageMetadata;
 import org.chromium.components.data_sharing.GroupMember;
+import org.chromium.components.data_sharing.member_role.MemberRole;
 import org.chromium.components.tab_group_sync.TabGroupSyncService;
 import org.chromium.ui.base.TestActivity;
 
@@ -61,7 +62,7 @@ public class RecentActivityListCoordinatorUnitTest {
     public ActivityScenarioRule<TestActivity> mActivityScenarioRule =
             new ActivityScenarioRule<>(TestActivity.class);
 
-    @Captor private ArgumentCaptor<EmptyBottomSheetObserver> mBottomSheetObserverCaptor;
+    @Captor private ArgumentCaptor<BottomSheetObserver> mBottomSheetObserverCaptor;
     @Captor private ArgumentCaptor<BottomSheetContent> mBottomSheetContentCaptor;
 
     @Mock private MessagingBackendService mMessagingBackendService;
@@ -104,14 +105,7 @@ public class RecentActivityListCoordinatorUnitTest {
         logItem.titleText = USER_DISPLAY_NAME1 + " changed a tab";
         logItem.descriptionText = TEST_DESCRIPTION_1;
         logItem.timeDeltaText = TEST_TIMESTAMP_1;
-        GroupMember triggeringUser =
-                new GroupMember(
-                        null,
-                        null,
-                        null,
-                        org.chromium.components.data_sharing.member_role.MemberRole.OWNER,
-                        null,
-                        "");
+        GroupMember triggeringUser = new GroupMember(null, null, null, MemberRole.OWNER, null, "");
         logItem.activityMetadata = new MessageAttribution();
         logItem.activityMetadata.triggeringUser = triggeringUser;
         logItem.activityMetadata.tabMetadata = new TabMessageMetadata();
@@ -171,5 +165,15 @@ public class RecentActivityListCoordinatorUnitTest {
                         .findViewById(R.id.recent_activity_recycler_view);
         Assert.assertEquals(View.GONE, emptyView.getVisibility());
         Assert.assertEquals(View.VISIBLE, recyclerView.getVisibility());
+    }
+
+    @Test
+    public void testMenuButtonClick_DoesNotCrash() {
+        mCoordinator.requestShowUI();
+        View contentView = mBottomSheetContentCaptor.getValue().getContentView();
+        mActivity.setContentView(contentView);
+        View menuButton = contentView.findViewById(R.id.recent_activity_menu_button);
+        Assert.assertNotNull(menuButton);
+        menuButton.performClick();
     }
 }

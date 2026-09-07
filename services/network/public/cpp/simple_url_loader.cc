@@ -23,6 +23,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
+#include "base/no_destructor.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/sequence_checker.h"
 #include "base/strings/string_view_util.h"
@@ -46,6 +47,7 @@
 #include "net/http/http_response_headers.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/data_element.h"
+#include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/record_ontransfersizeupdate_utils.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/simple_url_loader_stream_consumer.h"
@@ -64,6 +66,14 @@ BASE_FEATURE(kSimpleURLLoaderUseReadAndDiscardBodyOption,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 namespace {
+
+// Returns the thread-safe global callbacks used by the embedder
+// to register and revoke access to uploaded files.
+SimpleURLLoader::FileUploadEventCallbacks& GetFileUploadEventCallbacks() {
+  static base::NoDestructor<SimpleURLLoader::FileUploadEventCallbacks>
+      callbacks;
+  return *callbacks;
+}
 
 constexpr int64_t kReceivedBodySizeUnknown = -1;
 
@@ -249,6 +259,8 @@ class SimpleURLLoaderImpl : public SimpleURLLoader,
   void DownloadAsStream(
       mojom::URLLoaderFactory* url_loader_factory,
       SimpleURLLoaderStreamConsumer* stream_consumer) override;
+  void PauseReadingBody() override;
+  void ResumeReadingBody() override;
   void SetOnRedirectCallback(
       const OnRedirectCallback& on_redirect_callback) override;
   void SetOnResponseStartedCallback(
@@ -438,6 +450,11 @@ class SimpleURLLoaderImpl : public SimpleURLLoader,
   mojo::Remote<mojom::URLLoaderFactory> url_loader_factory_remote_;
   std::unique_ptr<BodyHandler> body_handler_;
 
+  // Whether the consumer wants the body reading paused. Recorded here so a
+  // pause requested before the request is started, or before any response or
+  // body pipe exists, is applied once the request starts.
+  bool pause_reading_body_ = false;
+
   mojo::Receiver<mojom::URLLoaderClient> client_receiver_{this};
   mojo::Remote<mojom::URLLoader> url_loader_;
 
@@ -453,6 +470,12 @@ class SimpleURLLoaderImpl : public SimpleURLLoader,
   // How long |timeout_timer_| should wait before timing out a request. A value
   // of zero means do not set a timeout.
   base::TimeDelta timeout_duration_ = base::TimeDelta();
+
+  // A unique token generated for this loader to register file uploads in the
+  // browser process. If this loader uploads a file from the browser process,
+  // this token is mapped to the file path using the registered callback and
+  // passed to the Network Service to grant read access.
+  base::UnguessableToken owner_token_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 
@@ -693,6 +716,12 @@ class BodyHandler {
   // invoked synchronously.
   virtual void PrepareToRetry(base::OnceClosure retry_callback) = 0;
 
+  // Called by SimpleURLLoader to stop and restart reading the body. Only
+  // handlers that can hold back the body pipe implement these; the default
+  // implementations do nothing.
+  virtual void PauseReadingBody() {}
+  virtual void ResumeReadingBody() {}
+
  protected:
   SimpleURLLoaderImpl* simple_url_loader() { return simple_url_loader_; }
 
@@ -924,6 +953,20 @@ class SaveToFileBodyHandler : public BodyHandler {
     file_writer_->DeleteFile(std::move(retry_callback));
   }
 
+  void PauseReadingBody() override {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    if (file_writer_) {
+      file_writer_->PauseReadingBody();
+    }
+  }
+
+  void ResumeReadingBody() override {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    if (file_writer_) {
+      file_writer_->ResumeReadingBody();
+    }
+  }
+
  private:
   // Class to read from a mojo::ScopedDataPipeConsumerHandle and write the
   // contents to a file. Does all reading and writing on a separate file
@@ -994,6 +1037,24 @@ class SaveToFileBodyHandler : public BodyHandler {
                                     std::move(on_file_deleted_closure)));
     }
 
+    // Stops reading from the body pipe until ResumeReadingBody() is called.
+    // Data that has already been read is still written to the file. Safe to
+    // call before StartWriting().
+    void PauseReadingBody() {
+      DCHECK(body_handler_task_runner_->RunsTasksInCurrentSequence());
+      file_writer_task_runner_->PostTask(
+          FROM_HERE, base::BindOnce(&FileWriter::PauseOnFileSequence,
+                                    base::Unretained(this)));
+    }
+
+    // Resumes reading from the body pipe after PauseReadingBody().
+    void ResumeReadingBody() {
+      DCHECK(body_handler_task_runner_->RunsTasksInCurrentSequence());
+      file_writer_task_runner_->PostTask(
+          FROM_HERE, base::BindOnce(&FileWriter::ResumeOnFileSequence,
+                                    base::Unretained(this)));
+    }
+
     // Destroys the FileWriter on the file TaskRunner.
     static void Destroy(std::unique_ptr<FileWriter> file_writer) {
       DCHECK(
@@ -1013,6 +1074,34 @@ class SaveToFileBodyHandler : public BodyHandler {
     }
 
    private:
+    void PauseOnFileSequence() {
+      DCHECK(file_writer_task_runner_->RunsTasksInCurrentSequence());
+      // The paused state belongs to the consumer's request, not to a single
+      // attempt: it is kept when the request is retried and the writer is
+      // reused, so a retried download stays paused until resumed.
+      //
+      // Only |paused_| is set here. |waiting_for_resume_| is set by
+      // OnDataRead() once the reader actually stops, so a resume that arrives
+      // before any data was read does not touch a reader that does not exist.
+      paused_ = true;
+    }
+
+    void ResumeOnFileSequence() {
+      DCHECK(file_writer_task_runner_->RunsTasksInCurrentSequence());
+      if (!paused_) {
+        return;
+      }
+      paused_ = false;
+      if (!waiting_for_resume_) {
+        return;
+      }
+      waiting_for_resume_ = false;
+      if (body_reader_) {
+        // May delete |body_reader_| if the pipe has been closed.
+        body_reader_->Resume();
+      }
+    }
+
     void StartWritingOnFileSequence(
         mojo::ScopedDataPipeConsumerHandle body_data_pipe,
         OnDoneCallback on_done_callback) {
@@ -1020,28 +1109,29 @@ class SaveToFileBodyHandler : public BodyHandler {
       DCHECK(!file_.IsValid());
       DCHECK(!body_reader_);
 
-      bool have_path = !create_temp_file_;
-      if (!have_path) {
-        DCHECK(create_temp_file_);
-        have_path = base::CreateTemporaryFile(&path_);
-        // CreateTemporaryFile() creates an empty file.
-        if (have_path)
-          owns_file_ = true;
-      }
-
-      if (have_path) {
-        // Try to initialize |file_|, creating the file if needed.
-        file_.Initialize(
-            path_, base::File::FLAG_WRITE | base::File::FLAG_CREATE_ALWAYS);
+      if (create_temp_file_) {
+        base::FilePath temp_dir;
+        if (base::GetTempDir(&temp_dir)) {
+          file_ = base::CreateAndOpenTemporaryFileInDir(temp_dir, &path_);
+        }
+      } else {
+        file_.Initialize(path_, base::File::FLAG_WRITE |
+                                    base::File::FLAG_CREATE_ALWAYS |
+                                    base::File::FLAG_NO_FOLLOW);
       }
 
       // If CreateTemporaryFile() or File::Initialize() failed, report failure.
       if (!file_.IsValid()) {
+        net::Error net_error = net::FileErrorToNetError(file_.error_details());
+        if (net_error == net::OK) {
+          net_error = net::MapSystemError(logging::GetLastSystemErrorCode());
+          if (net_error == net::OK) {
+            net_error = net::ERR_FILE_NOT_FOUND;
+          }
+        }
         body_handler_task_runner_->PostTask(
-            FROM_HERE, base::BindOnce(std::move(on_done_callback),
-                                      net::MapSystemError(
-                                          logging::GetLastSystemErrorCode()),
-                                      0, base::FilePath()));
+            FROM_HERE, base::BindOnce(std::move(on_done_callback), net_error, 0,
+                                      base::FilePath()));
         return;
       }
 
@@ -1073,6 +1163,13 @@ class SaveToFileBodyHandler : public BodyHandler {
                                       body_reader_->total_bytes_read()));
       }
 
+      if (paused_) {
+        // Stop driving the pipe until ResumeOnFileSequence() calls
+        // BodyReader::Resume().
+        waiting_for_resume_ = true;
+        return net::ERR_IO_PENDING;
+      }
+
       return net::OK;
     }
 
@@ -1085,6 +1182,7 @@ class SaveToFileBodyHandler : public BodyHandler {
       // consumer uses it.
       file_.Close();
       body_reader_.reset();
+      waiting_for_resume_ = false;
 
       body_handler_task_runner_->PostTask(
           FROM_HERE, base::BindOnce(std::move(on_done_callback_), error,
@@ -1100,6 +1198,7 @@ class SaveToFileBodyHandler : public BodyHandler {
 
         // Close the body pipe.
         body_reader_.reset();
+        waiting_for_resume_ = false;
 
         // May as well clean this up, too.
         on_done_callback_.Reset();
@@ -1143,6 +1242,12 @@ class SaveToFileBodyHandler : public BodyHandler {
     // True if a file was successfully created. Set to false when the file is
     // destroyed.
     bool owns_file_ = false;
+
+    // True while the consumer has paused reading the body.
+    bool paused_ = false;
+    // True if OnDataRead() returned ERR_IO_PENDING because of |paused_|, so
+    // the BodyReader needs Resume() to continue.
+    bool waiting_for_resume_ = false;
   };
 
   // Called by FileWriter::Destroy after deleting a partially downloaded file.
@@ -1302,7 +1407,12 @@ SimpleURLLoaderImpl::SimpleURLLoaderImpl(
   CHECK(url_loader_client_endpoints_->url_loader.is_valid());
 }
 
-SimpleURLLoaderImpl::~SimpleURLLoaderImpl() {}
+SimpleURLLoaderImpl::~SimpleURLLoaderImpl() {
+  if (!owner_token_.is_empty() &&
+      GetFileUploadEventCallbacks().revoke_callback) {
+    GetFileUploadEventCallbacks().revoke_callback.Run(owner_token_);
+  }
+}
 
 void SimpleURLLoaderImpl::DownloadToString(
     mojom::URLLoaderFactory* url_loader_factory,
@@ -1321,9 +1431,9 @@ void SimpleURLLoaderImpl::DownloadToStringOfUnboundedSizeUntilCrashAndDie(
   body_handler_ = std::make_unique<SaveToStringBodyHandler>(
       this, !on_download_progress_callback_.is_null(),
       std::move(body_as_string_callback),
-      // int64_t because URLLoaderCompletionStatus::decoded_body_length
-      // is an int64_t, not a size_t.
-      std::numeric_limits<int64_t>::max());
+      // URLLoaderCompletionStatus::decoded_body_length is a ByteSize, not a
+      // size_t.
+      base::ByteSize::Max().InBytes());
   Start(url_loader_factory);
 }
 
@@ -1370,6 +1480,28 @@ void SimpleURLLoaderImpl::DownloadAsStream(
   body_handler_ = std::make_unique<DownloadAsStreamBodyHandler>(
       this, !on_download_progress_callback_.is_null(), stream_consumer);
   Start(url_loader_factory);
+}
+
+void SimpleURLLoaderImpl::PauseReadingBody() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (pause_reading_body_) {
+    return;
+  }
+  pause_reading_body_ = true;
+  if (body_handler_) {
+    body_handler_->PauseReadingBody();
+  }
+}
+
+void SimpleURLLoaderImpl::ResumeReadingBody() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!pause_reading_body_) {
+    return;
+  }
+  pause_reading_body_ = false;
+  if (body_handler_) {
+    body_handler_->ResumeReadingBody();
+  }
 }
 
 void SimpleURLLoaderImpl::SetOnRedirectCallback(
@@ -1533,6 +1665,14 @@ void SimpleURLLoaderImpl::AttachFileForUploadInternal(
   // handle instead of the file path.
   resource_request_->request_body->AppendFileRange(upload_file_path, offset,
                                                    length, base::Time());
+
+  if (GetFileUploadEventCallbacks().register_callback) {
+    if (owner_token_.is_empty()) {
+      owner_token_ = base::UnguessableToken::Create();
+    }
+    GetFileUploadEventCallbacks().register_callback.Run(owner_token_,
+                                                        upload_file_path);
+  }
 
   if (upload_content_type) {
     resource_request_->headers.SetHeader(net::HttpRequestHeaders::kContentType,
@@ -1724,6 +1864,12 @@ void SimpleURLLoaderImpl::Start(mojom::URLLoaderFactory* url_loader_factory) {
   DCHECK(!url_loader_);
   DCHECK(!request_state_->body_started);
 
+  // Apply a pause requested before the request was started. A no-op for body
+  // handlers that cannot pause.
+  if (pause_reading_body_) {
+    body_handler_->PauseReadingBody();
+  }
+
   if (url_loader_client_endpoints_) {
     DCHECK(!url_loader_factory);
     AdoptRequest();
@@ -1914,22 +2060,22 @@ void SimpleURLLoaderImpl::OnReceiveRedirect(
     return;
   }
 
+  network::HttpRequestHeadersUpdateParams headers_update_params;
   std::vector<std::string> removed_headers;
   if (on_redirect_callback_) {
     base::WeakPtr<SimpleURLLoaderImpl> weak_this =
         weak_ptr_factory_.GetWeakPtr();
     GURL url_before_redirect = final_url_;
     on_redirect_callback_.Run(url_before_redirect, redirect_info,
-                              *response_head, &removed_headers);
+                              *response_head,
+                              &headers_update_params.removed_headers);
     // If deleted by the callback, bail now.
     if (!weak_this)
       return;
   }
 
   final_url_ = redirect_info.new_url;
-  url_loader_->FollowRedirect(removed_headers, {} /* modified_headers */,
-                              {} /* modified_cors_exempt_headers */,
-                              {} /* new_url */);
+  url_loader_->FollowRedirect(std::move(headers_update_params), std::nullopt);
 }
 
 void SimpleURLLoaderImpl::OnTransferSizeUpdated(int32_t transfer_size_diff) {
@@ -2022,24 +2168,25 @@ void SimpleURLLoaderImpl::MaybeComplete() {
     return;
   }
 
+  // Convert to signed int for comparisons with `received_body_size`.
+  const std::optional<int64_t> decoded_body_length =
+      request_state_->completion_status
+          ? std::make_optional<int64_t>(request_state_->completion_status
+                                            ->decoded_body_length.InBytes())
+          : std::nullopt;
+
   // If the URLLoader didn't supply a data pipe because we set the
   // ReadAndDiscardBody option, then we don't yet have a value for
   // `received_body_size`, so just set it to the size reported by URLLoader.
   if (request_state_->received_body_size == kReceivedBodySizeUnknown) {
-    request_state_->received_body_size =
-        request_state_->completion_status
-            ? request_state_->completion_status->decoded_body_length
-            : 0;
+    request_state_->received_body_size = decoded_body_length.value_or(0);
   }
 
   // When OnCompleted sees a success result, still need to report an error if
   // the size isn't what was expected.
-  if (request_state_->net_error == net::OK &&
-      request_state_->completion_status &&
-      request_state_->completion_status->decoded_body_length !=
-          request_state_->received_body_size) {
-    if (request_state_->completion_status->decoded_body_length >
-        request_state_->received_body_size) {
+  if (request_state_->net_error == net::OK && decoded_body_length.has_value() &&
+      decoded_body_length.value() != request_state_->received_body_size) {
+    if (decoded_body_length.value() > request_state_->received_body_size) {
       // The body pipe was closed before it received the entire body.
       request_state_->net_error = net::ERR_FAILED;
       request_state_->completion_status = std::nullopt;
@@ -2081,8 +2228,14 @@ void SimpleURLLoader::SetTimeoutTickClockForTest(
   timeout_tick_clock_ = timeout_tick_clock;
 }
 
-SimpleURLLoader::~SimpleURLLoader() {}
+// static
+void SimpleURLLoader::SetFileUploadEventCallbacks(
+    const FileUploadEventCallbacks& callbacks) {
+  GetFileUploadEventCallbacks() = callbacks;
+}
 
-SimpleURLLoader::SimpleURLLoader() {}
+SimpleURLLoader::~SimpleURLLoader() = default;
+
+SimpleURLLoader::SimpleURLLoader() = default;
 
 }  // namespace network

@@ -26,6 +26,10 @@
 
 #include "third_party/blink/renderer/core/html/forms/html_text_area_element.h"
 
+#include <utility>
+
+#include "base/feature_list.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/strings/grit/blink_strings.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_focus_options.h"
 #include "third_party/blink/renderer/core/css/style_change_reason.h"
@@ -41,6 +45,7 @@
 #include "third_party/blink/renderer/core/event_interface_names.h"
 #include "third_party/blink/renderer/core/events/before_text_inserted_event.h"
 #include "third_party/blink/renderer/core/events/drag_event.h"
+#include "third_party/blink/renderer/core/events/keyboard_event.h"
 #include "third_party/blink/renderer/core/events/mouse_event.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
@@ -54,12 +59,17 @@
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/layout/adjust_for_absolute_zoom.h"
 #include "third_party/blink/renderer/core/layout/forms/layout_text_control_multi_line.h"
+#include "third_party/blink/renderer/core/layout/inline/fragment_item.h"
+#include "third_party/blink/renderer/core/layout/inline/inline_cursor.h"
+#include "third_party/blink/renderer/core/layout/layout_block_flow.h"
 #include "third_party/blink/renderer/core/layout/layout_box.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
 #include "third_party/blink/renderer/core/layout/layout_object_inlines.h"
 #include "third_party/blink/renderer/core/page/chrome_client.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/fonts/shaping/shape_result_view.h"
+#include "third_party/blink/renderer/platform/fonts/simple_font_data.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
@@ -74,12 +84,14 @@ namespace blink {
 
 using mojom::blink::FormControlType;
 
-static const unsigned kDefaultRows = 2;
-static const unsigned kDefaultCols = 20;
+namespace {
 
-static bool is_default_font_prewarmed_ = false;
+constexpr unsigned kDefaultRows = 2;
+constexpr unsigned kDefaultCols = 20;
 
-static inline unsigned ComputeLengthForAPIValue(const String& text) {
+bool g_is_default_font_prewarmed = false;
+
+inline unsigned ComputeLengthForAPIValue(const String& text) {
   unsigned length = text.length();
   unsigned crlf_count = 0;
   for (unsigned i = 0; i < length; ++i) {
@@ -88,6 +100,44 @@ static inline unsigned ComputeLengthForAPIValue(const String& text) {
   }
   return text.length() - crlf_count;
 }
+
+struct TextInfoContext {
+  std::vector<WebFormControlElement::TypefaceRunInfo> typeface_runs
+      ALLOW_DISCOURAGED_TYPE("blink/public type");
+  size_t start_index;
+};
+
+// Callback passed into ShapeResultView::ForEachGlyph().
+void GetTextInfoForGlyphCallback(void* context,
+                                 unsigned character_index,
+                                 Glyph glyph,
+                                 gfx::Vector2dF glyph_offset,
+                                 float total_advance,
+                                 bool is_horizontal,
+                                 CanvasRotationInVertical canvas_rotation,
+                                 const SimpleFontData* font_data) {
+  std::vector<WebFormControlElement::TypefaceRunInfo>& results =
+      static_cast<TextInfoContext*>(context)->typeface_runs;
+  size_t start_index = static_cast<TextInfoContext*>(context)->start_index;
+
+  sk_sp<SkTypeface> typeface = font_data->PlatformData().TypefaceSp();
+  bool synthetic_bold = font_data->PlatformData().SyntheticBold();
+  bool synthetic_italic = font_data->PlatformData().SyntheticItalic();
+  if (results.empty() || results.back().typeface != typeface ||
+      results.back().is_synthetic_bold != synthetic_bold ||
+      results.back().is_synthetic_italic != synthetic_italic) {
+    results.emplace_back(
+        std::move(typeface), std::vector<WebFormControlElement::GlyphInfo>{},
+        /*is_horizontal=*/is_horizontal, /*is_synthetic_bold=*/synthetic_bold,
+        /*is_synthetic_italic=*/synthetic_italic);
+  }
+
+  CHECK_EQ(results.back().is_horizontal, is_horizontal);
+  results.back().glyphs.emplace_back(glyph, glyph_offset, total_advance,
+                                     character_index - start_index);
+}
+
+}  // namespace
 
 HTMLTextAreaElement::HTMLTextAreaElement(Document& document)
     : TextControlElement(html_names::kTextareaTag, document),
@@ -98,20 +148,24 @@ HTMLTextAreaElement::HTMLTextAreaElement(Document& document)
       is_placeholder_visible_(false) {
   EnsureUserAgentShadowRoot();
 
-  if (!is_default_font_prewarmed_) {
+  if (!g_is_default_font_prewarmed) {
     if (Settings* settings = document.GetSettings()) {
       // Prewarm 'monospace', the default font family for `<textarea>`. The
       // default language should be fine for this purpose because most users set
       // the same family for all languages.
       FontCache::PrewarmFamily(settings->GetGenericFontFamilySettings().Fixed(
           LayoutLocale::GetDefault().GetScript()));
-      is_default_font_prewarmed_ = true;
+      g_is_default_font_prewarmed = true;
     }
   }
 }
 
 void HTMLTextAreaElement::DidAddUserAgentShadowRoot(ShadowRoot& root) {
-  root.AppendChild(CreateInnerEditorElement());
+  auto* inner_editor = CreateInnerEditorElement();
+  // We need a placeholder break for an empty value in order to provide one
+  // line-height and a baseline even if this element is not editable.
+  inner_editor->AppendChild(CreatePlaceholderBreakElement());
+  root.AppendChild(inner_editor);
 }
 
 FormControlType HTMLTextAreaElement::FormControlType() const {
@@ -144,8 +198,8 @@ int HTMLTextAreaElement::scrollWidth() {
   auto* box = GetLayoutBox();
   if (!box || !editor_box)
     return TextControlElement::scrollWidth();
-  LayoutUnit width =
-      editor_box->ClientWidth() + box->PaddingLeft() + box->PaddingRight();
+  const LayoutUnit width = editor_box->PhysicalPaddingBoxRect().Width() +
+                           box->PaddingOutsets().HorizontalSum();
   return AdjustForAbsoluteZoom::AdjustLayoutUnit(width, box->StyleRef())
       .Round();
 }
@@ -162,10 +216,24 @@ int HTMLTextAreaElement::scrollHeight() {
   auto* box = GetLayoutBox();
   if (!box || !editor_box)
     return TextControlElement::scrollHeight();
-  LayoutUnit height =
-      editor_box->ClientHeight() + box->PaddingTop() + box->PaddingBottom();
+  const LayoutUnit height = editor_box->PhysicalPaddingBoxRect().Height() +
+                            box->PaddingOutsets().VerticalSum();
   return AdjustForAbsoluteZoom::AdjustLayoutUnit(height, box->StyleRef())
       .Round();
+}
+
+double HTMLTextAreaElement::scrollLeft() {
+  if (!SuggestedValue().empty()) {
+    return 0;
+  }
+  return TextControlElement::scrollLeft();
+}
+
+double HTMLTextAreaElement::scrollTop() {
+  if (!SuggestedValue().empty()) {
+    return 0;
+  }
+  return TextControlElement::scrollTop();
 }
 
 void HTMLTextAreaElement::ChildrenChanged(const ChildrenChange& change) {
@@ -252,14 +320,15 @@ void HTMLTextAreaElement::ParseAttribute(
     // deprecated.  The soft/hard /off values are a recommendation for HTML 4
     // extension by IE and NS 4.
     WrapMethod wrap;
-    if (EqualIgnoringASCIICase(value, "physical") ||
-        EqualIgnoringASCIICase(value, "hard") ||
-        EqualIgnoringASCIICase(value, "on"))
+    if (EqualIgnoringAsciiCase(value, "physical") ||
+        EqualIgnoringAsciiCase(value, "hard") ||
+        EqualIgnoringAsciiCase(value, "on")) {
       wrap = kHardWrap;
-    else if (EqualIgnoringASCIICase(value, "off"))
+    } else if (EqualIgnoringAsciiCase(value, "off")) {
       wrap = kNoWrap;
-    else
+    } else {
       wrap = kSoftWrap;
+    }
     if (wrap != wrap_) {
       wrap_ = wrap;
       if (LayoutObject* layout_object = GetLayoutObject()) {
@@ -344,12 +413,26 @@ void HTMLTextAreaElement::UpdateSelectionOnFocus(
 }
 
 void HTMLTextAreaElement::DefaultEventHandler(Event& event) {
+  if (auto* keyboard_event = DynamicTo<KeyboardEvent>(event);
+      base::FeatureList::IsEnabled(
+          blink::features::kAutofillKeydownEditableElement) &&
+      keyboard_event && event.type() == event_type_names::kKeydown &&
+      IsFocused() && !IsDisabledOrReadOnly() && GetDocument().GetPage() &&
+      GetDocument()
+          .GetPage()
+          ->GetChromeClient()
+          .HandleKeyboardEventOnEditableElement(*this, *keyboard_event)) {
+    event.SetDefaultHandled();
+    return;
+  }
+
   if (GetLayoutObject() &&
       (IsA<MouseEvent>(event) || IsA<DragEvent>(event) ||
        event.HasInterface(event_interface_names::kWheelEvent) ||
        event.type() == event_type_names::kBlur)) {
     ForwardEvent(event);
-  } else if (GetLayoutObject() && event.IsBeforeTextInsertedEvent()) {
+  } else if (!RuntimeEnabledFeatures::CleanUpActivationBehaviorEnabled() &&
+             GetLayoutObject() && event.IsBeforeTextInsertedEvent()) {
     HandleBeforeTextInsertedEvent(
         static_cast<BeforeTextInsertedEvent*>(&event));
   }
@@ -387,8 +470,8 @@ void HTMLTextAreaElement::SubtreeHasChanged() {
     CalculateAndAdjustAutoDirectionality();
   }
 
-  if (RuntimeEnabledFeatures::FormControlRangeEnabled()) {
-    CommitFormControlRangeEdit();
+  if (RuntimeEnabledFeatures::OpaqueRangeEnabled(GetExecutionContext())) {
+    CommitOpaqueRangeEdit();
   }
 
   if (!IsFocused())
@@ -403,18 +486,27 @@ void HTMLTextAreaElement::SubtreeHasChanged() {
 
 void HTMLTextAreaElement::HandleBeforeTextInsertedEvent(
     BeforeTextInsertedEvent* event) {
+  DCHECK(!RuntimeEnabledFeatures::CleanUpActivationBehaviorEnabled());
   DCHECK(event);
   DCHECK(GetLayoutObject());
+  event->SetText(FilterBeforeTextInserted(event->GetText()));
+}
+
+String HTMLTextAreaElement::FilterBeforeTextInserted(const String& text) {
+  if (!GetLayoutObject()) {
+    return text;
+  }
   int signed_max_length = maxLength();
-  if (signed_max_length < 0)
-    return;
+  if (signed_max_length < 0) {
+    return text;
+  }
   unsigned unsigned_max_length = static_cast<unsigned>(signed_max_length);
 
   const String& current_value = InnerEditorValue();
   unsigned current_length = ComputeLengthForAPIValue(current_value);
-  if (current_length + ComputeLengthForAPIValue(event->GetText()) <
-      unsigned_max_length)
-    return;
+  if (current_length + ComputeLengthForAPIValue(text) < unsigned_max_length) {
+    return text;
+  }
 
   // selectionLength represents the selection length of this text field to be
   // removed by this insertion.
@@ -434,12 +526,13 @@ void HTMLTextAreaElement::HandleBeforeTextInsertedEvent(
   unsigned base_length = current_length - selection_length;
   unsigned appendable_length =
       unsigned_max_length > base_length ? unsigned_max_length - base_length : 0;
-  event->SetText(SanitizeUserInputValue(event->GetText(), appendable_length));
+  String result = SanitizeUserInputValue(text, appendable_length);
 
   if (selection_length == current_length && selection_length != 0 &&
-      !event->GetText().empty()) {
+      !result.empty()) {
     GetDocument().GetPage()->GetChromeClient().DidClearValueInTextField(*this);
   }
+  return result;
 }
 
 String HTMLTextAreaElement::SanitizeUserInputValue(const String& proposed_value,
@@ -460,7 +553,7 @@ String HTMLTextAreaElement::SanitizeUserInputValue(const String& proposed_value,
   }
   if (i > 0 && U16_IS_LEAD(proposed_value[i - 1]))
     --i;
-  return proposed_value.Left(i);
+  return proposed_value.substr(0, i);
 }
 
 void HTMLTextAreaElement::UpdateValue() {
@@ -482,9 +575,9 @@ void HTMLTextAreaElement::setValueForBinding(const String& value) {
            TextControlSetValueSelection::kSetSelectionToEnd,
            was_autofilled && !value_changed ? WebAutofillState::kAutofilled
                                             : WebAutofillState::kNotFilled);
-  if (Page* page = GetDocument().GetPage(); page && value_changed) {
-    page->GetChromeClient().JavaScriptChangedValue(*this, old_value,
-                                                   was_autofilled);
+  if (Page* page = GetDocument().GetPage(); page) {
+    page->GetChromeClient().JavaScriptSetValue(*this, old_value, was_autofilled,
+                                               value_changed);
   }
 }
 
@@ -510,7 +603,7 @@ void HTMLTextAreaElement::SetValueCommon(const String& new_value,
                                          WebAutofillState autofill_state) {
   // Code elsewhere normalizes line endings added by the user via the keyboard
   // or pasting.  We normalize line endings coming from JavaScript here.
-  String normalized_value = NormalizeLineEndingsToLF(new_value);
+  String normalized_value = NormalizeLineEndingsToLf(new_value);
 
   // Clear the suggested value. Use the base class version to not trigger a view
   // update.
@@ -536,14 +629,14 @@ void HTMLTextAreaElement::SetValueCommon(const String& new_value,
   SetInnerEditorValue(value_);
 
   // Programmatic value changes trigger a full-replace update so
-  // FormControlRange offsets are recomputed against the new text. Callers that
+  // OpaqueRange offsets are recomputed against the new text. Callers that
   // perform a targeted update (e.g., setRangeText) set the skip flag to
   // suppress this pass and prevent redundant notifications or offset
   // adjustments.
-  if (RuntimeEnabledFeatures::FormControlRangeEnabled() &&
+  if (RuntimeEnabledFeatures::OpaqueRangeEnabled(GetExecutionContext()) &&
       !ShouldSkipNextSetValueAutoDiff()) {
-    CommitProgrammaticFormControlRangeEdit(old_value, /*old_sel_start=*/0u,
-                                           /*old_sel_end=*/old_value.length());
+    CommitProgrammaticOpaqueRangeEdit(old_value, /*old_sel_start=*/0u,
+                                      /*old_sel_end=*/old_value.length());
   }
   if (event_behavior == TextFieldEventBehavior::kDispatchNoEvent)
     SetLastChangeWasNotUserEdit();
@@ -618,8 +711,8 @@ void HTMLTextAreaElement::setDefaultValue(const String& default_value) {
 
 void HTMLTextAreaElement::SetSuggestedValue(const String& value) {
   String sanitized_value = value;
-  if (RuntimeEnabledFeatures::CanvasDrawElementEnabled() &&
-      IsInCanvasSubtree()) {
+  if (IsInCanvasSubtree() &&
+      RuntimeEnabledFeatures::CanvasDrawElementEnabled(GetExecutionContext())) {
     // Hide suggested values when under canvas, to prevent leaking this
     // information to javascript.
     sanitized_value = String();
@@ -632,9 +725,10 @@ void HTMLTextAreaElement::SetSuggestedValue(const String& value) {
       StyleChangeReasonForTracing::Create(style_change_reason::kControlValue));
 }
 
-void HTMLTextAreaElement::DidChangeIsCanvasOrInCanvasSubtree() {
-  if (RuntimeEnabledFeatures::CanvasDrawElementEnabled() &&
-      IsInCanvasSubtree()) {
+void HTMLTextAreaElement::DidChangeIsInCanvasSubtree() {
+  TextControlElement::DidChangeIsInCanvasSubtree();
+  if (IsInCanvasSubtree() &&
+      RuntimeEnabledFeatures::CanvasDrawElementEnabled(GetExecutionContext())) {
     // Hide suggested values when under canvas, to prevent leaking this
     // information to javascript.
     SetSuggestedValue(String());
@@ -790,7 +884,7 @@ HTMLElement* HTMLTextAreaElement::UpdatePlaceholderText() {
     placeholder->RemoveInlineStyleProperty(CSSPropertyID::kUserSelect);
   }
   // https://html.spec.whatwg.org/multipage/form-elements.html#attr-textarea-placeholder
-  String normalized_value = NormalizeLineEndingsToLF(placeholder_text);
+  String normalized_value = NormalizeLineEndingsToLf(placeholder_text);
   placeholder->setTextContent(normalized_value);
   return placeholder;
 }
@@ -832,12 +926,82 @@ String HTMLTextAreaElement::DefaultToolTip() const {
 }
 
 void HTMLTextAreaElement::SetFocused(bool is_focused,
-                                     mojom::blink::FocusType focus_type) {
+                                     mojom::blink::FocusType focus_type,
+                                     BlurEventBehavior blur_event_behavior) {
   // See comment in HTMLInputElement::SetFocused.
   if (UserHasEditedTheField()) {
     SetUserHasEditedTheFieldAndBlurred();
   }
-  TextControlElement::SetFocused(is_focused, focus_type);
+  TextControlElement::SetFocused(is_focused, focus_type, blur_event_behavior);
+}
+
+WebFormControlElement::TextInfo HTMLTextAreaElement::GetTextInfo() const {
+  GetDocument().UpdateStyleAndLayoutForNode(this,
+                                            DocumentUpdateReason::kJavaScript);
+  const TextControlInnerEditorElement* inner_element = InnerEditorElement();
+  if (!inner_element) {
+    return {};
+  }
+  const auto* inner_layout =
+      To<LayoutBlockFlow>(inner_element->GetLayoutObject());
+  if (!inner_layout) {
+    return {};
+  }
+
+  WebFormControlElement::TextInfo results;
+  results.effective_zoom = inner_layout->StyleRef().EffectiveZoom();
+  results.primary_ascent =
+      inner_layout->StyleRef().GetFontHeight().ascent.ToFloat();
+  for (LayoutObject* child = inner_layout->FirstChild(); child;
+       child = child->NextSibling()) {
+    const auto* paragraph_block = DynamicTo<LayoutBlockFlow>(child);
+    if (!paragraph_block) {
+      continue;
+    }
+    const PhysicalOffset paragraph_offset = paragraph_block->PhysicalLocation();
+    InlineCursor line_cursor;
+    for (InlineCursor cursor(*paragraph_block); cursor; cursor.MoveToNext()) {
+      const FragmentItem* text_item = cursor.CurrentItem();
+      if (!text_item) {
+        continue;
+      }
+      if (text_item->Type() == blink::FragmentItem::kLine) {
+        line_cursor = cursor.CursorForDescendants();
+        continue;
+      }
+      if (!text_item->IsText()) {
+        continue;
+      }
+      const ShapeResultView* shape = text_item->TextShapeResult();
+      if (!shape) {
+        continue;  // Skip \n characters
+      }
+
+      // Split `text_item` into multiple TypefaceRunInfo objects if it has
+      // more than one font.
+      TextInfoContext context;
+      // Adjust the `character_index` values for the substring this TextRunInfo
+      // represents so that they are indexes into TextRunInfo::text.
+      context.start_index = shape->StartIndex();
+      shape->ForEachGlyph(
+          /*initial_advance*/ 0.0f, GetTextInfoForGlyphCallback, &context);
+      CHECK(line_cursor.HasRoot());
+      results.text_runs.emplace_back(
+          std::move(context.typeface_runs),
+          gfx::RectF(text_item->RectInContainerFragment() + paragraph_offset),
+          WebString(text_item->Text(line_cursor.Items()).ToString()));
+    }
+  }
+
+  return results;
+}
+
+bool HTMLTextAreaElement::SupportsBaseAppearanceInternal(
+    Element::BaseAppearanceValue value) const {
+  if (!RuntimeEnabledFeatures::AppearanceBaseEnabled()) {
+    return false;
+  }
+  return value == Element::BaseAppearanceValue::kBase;
 }
 
 }  // namespace blink

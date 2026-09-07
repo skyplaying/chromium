@@ -60,95 +60,28 @@ namespace {
 using ParseErrorType = FirstPartySetsHandler::ParseErrorType;
 using ParseWarningType = FirstPartySetsHandler::ParseWarningType;
 
-constexpr char kAdditionsField[] = "additions";
-constexpr char kPrimaryField[] = "primary";
-constexpr char kCctldsField[] = "ccTLDs";
-
-constexpr char kFirstPartySetsClearSiteDataOutcomeHistogram[] =
-    "FirstPartySets.Initialization.ClearSiteDataOutcome";
-
 constexpr char kDelayedQueriesCountHistogram[] =
     "Cookie.FirstPartySets.Browser.DelayedQueriesCount";
 constexpr char kMostDelayedQueryDeltaHistogram[] =
     "Cookie.FirstPartySets.Browser.MostDelayedQueryDelta";
 
+base::flat_map<net::SchemefulSite, net::FirstPartySetEntry> FindEntries(
+    const net::GlobalFirstPartySets& sets,
+    const base::flat_set<net::SchemefulSite>& sites,
+    const net::FirstPartySetsContextConfig& config) {
+  std::vector<std::pair<net::SchemefulSite, net::FirstPartySetEntry>> got;
+  got.reserve(sites.size());
+  for (const auto& site : sites) {
+    std::optional<net::FirstPartySetEntry> maybe_entry =
+        sets.FindEntry(site, config);
+    if (maybe_entry) {
+      got.emplace_back(site, std::move(maybe_entry).value());
+    }
+  }
+  return got;
+}
+
 }  // namespace
-
-TEST(FirstPartySetsHandlerImplInstance, ValidateEnterprisePolicy_ValidPolicy) {
-  base::DictValue input = base::test::ParseJsonDict(R"(
-             {
-                "replacements": [
-                  {
-                    "primary": "https://primary1.test",
-                    "associatedSites": ["https://associatedsite1.test"]
-                  }
-                ],
-                "additions": [
-                  {
-                    "primary": "https://primary2.test",
-                    "associatedSites": ["https://associatedsite2.test"]
-                  }
-                ]
-              }
-            )");
-  // Validation doesn't fail with an error and there are no warnings to output.
-  EXPECT_THAT(FirstPartySetsHandler::ValidateEnterprisePolicy(input),
-              Pair(HasValue(), IsEmpty()));
-}
-
-TEST(FirstPartySetsHandlerImplInstance,
-     ValidateEnterprisePolicy_ValidPolicyWithWarnings) {
-  // Some input that matches our policies schema but returns non-fatal warnings.
-  base::DictValue input = base::test::ParseJsonDict(R"(
-              {
-                "replacements": [],
-                "additions": [
-                  {
-                    "primary": "https://primary1.test",
-                    "associatedSites": ["https://associatedsite1.test"],
-                    "ccTLDs": {
-                      "https://non-canonical.test": ["https://primary1.test"]
-                    }
-                  }
-                ]
-              }
-            )");
-  // Validation succeeds without errors. Outputs metadata that can be used to
-  // surface a descriptive warning.
-  EXPECT_THAT(
-      FirstPartySetsHandler::ValidateEnterprisePolicy(input),
-      Pair(HasValue(), UnorderedElementsAre(FirstPartySetsHandler::ParseWarning(
-                           ParseWarningType::kCctldKeyNotCanonical,
-                           {kAdditionsField, 0, kCctldsField,
-                            "https://non-canonical.test"}))));
-}
-
-TEST(FirstPartySetsHandlerImplInstance,
-     ValidateEnterprisePolicy_InvalidPolicy) {
-  // Some input that matches our policies schema but breaks FPS invariants.
-  // For more test coverage, see the ParseSetsFromEnterprisePolicy unit tests.
-  base::DictValue input = base::test::ParseJsonDict(R"(
-              {
-                "replacements": [
-                  {
-                    "primary": "https://primary1.test",
-                    "associatedSites": ["https://associatedsite1.test"]
-                  }
-                ],
-                "additions": [
-                  {
-                    "primary": "https://primary1.test",
-                    "associatedSites": ["https://associatedsite2.test"]
-                  }
-                ]
-              }
-            )");
-  // Validation fails with an error and an appropriate ParseError is returned.
-  EXPECT_THAT(FirstPartySetsHandler::ValidateEnterprisePolicy(input).first,
-              base::test::ErrorIs(FirstPartySetsHandler::ParseError(
-                  ParseErrorType::kNonDisjointSets,
-                  {kAdditionsField, 0, kPrimaryField})));
-}
 
 class FirstPartySetsHandlerImplTest : public ::testing::Test {
  public:
@@ -176,35 +109,23 @@ class FirstPartySetsHandlerImplTest : public ::testing::Test {
     return result.has_value() ? std::move(result).value() : future.Take();
   }
 
-  net::FirstPartySetsContextConfig GetContextConfigForPolicy(
-      base::optional_ref<const base::DictValue> policy) {
-    base::test::TestFuture<net::FirstPartySetsContextConfig> future;
-    handler().GetContextConfigForPolicy(policy, future.GetCallback());
-    return future.Take();
-  }
-
   void ClearSiteDataOnChangedSetsForContextAndWait(
       FirstPartySetsHandlerImplInstance& handler,
       BrowserContext* context,
-      const std::string& browser_context_id,
-      net::FirstPartySetsContextConfig context_config) {
+      const std::string& browser_context_id) {
     base::RunLoop run_loop;
     handler.ClearSiteDataOnChangedSetsForContext(
         base::BindLambdaForTesting([&]() { return context; }),
-        browser_context_id, std::move(context_config),
+        browser_context_id,
         base::BindLambdaForTesting(
-            [&](net::FirstPartySetsContextConfig,
-                net::FirstPartySetsCacheFilter) { run_loop.Quit(); }));
+            [&](net::FirstPartySetsCacheFilter) { run_loop.Quit(); }));
     run_loop.Run();
   }
 
-  std::optional<
-      std::pair<net::GlobalFirstPartySets, net::FirstPartySetsContextConfig>>
-  GetPersistedSetsAndWait(FirstPartySetsHandlerImplInstance& handler,
-                          const std::string& browser_context_id) {
-    base::test::TestFuture<std::optional<
-        std::pair<net::GlobalFirstPartySets, net::FirstPartySetsContextConfig>>>
-        future;
+  std::optional<net::GlobalFirstPartySets> GetPersistedSetsAndWait(
+      FirstPartySetsHandlerImplInstance& handler,
+      const std::string& browser_context_id) {
+    base::test::TestFuture<std::optional<net::GlobalFirstPartySets>> future;
     handler.GetPersistedSetsForTesting(browser_context_id,
                                        future.GetCallback());
     return future.Take();
@@ -225,15 +146,13 @@ class FirstPartySetsHandlerImplTest : public ::testing::Test {
 
   void ClearSiteDataOnChangedSetsForContextAndWait(
       BrowserContext* context,
-      const std::string& browser_context_id,
-      net::FirstPartySetsContextConfig context_config) {
-    ClearSiteDataOnChangedSetsForContextAndWait(
-        handler(), context, browser_context_id, std::move(context_config));
+      const std::string& browser_context_id) {
+    ClearSiteDataOnChangedSetsForContextAndWait(handler(), context,
+                                                browser_context_id);
   }
 
-  std::optional<
-      std::pair<net::GlobalFirstPartySets, net::FirstPartySetsContextConfig>>
-  GetPersistedSetsAndWait(const std::string& browser_context_id) {
+  std::optional<net::GlobalFirstPartySets> GetPersistedSetsAndWait(
+      const std::string& browser_context_id) {
     return GetPersistedSetsAndWait(handler(), browser_context_id);
   }
 
@@ -269,20 +188,7 @@ TEST_F(FirstPartySetsHandlerImplDisabledTest, InitImmediately) {
   // Should already be able to answer queries, even before Init is called.
   EXPECT_THAT(handler().GetSets(base::NullCallback()), Optional(_));
 
-  EXPECT_EQ(GetContextConfigForPolicy(std::nullopt),
-            net::FirstPartySetsContextConfig());
 
-  EXPECT_EQ(GetContextConfigForPolicy(base::test::ParseJsonDict(R"(
-                {
-                "replacements": [
-                  {
-                    "primary": "https://primary.test",
-                    "associatedSites": ["https://associated.test"]
-                  }
-                ]
-              }
-            )")),
-            net::FirstPartySetsContextConfig());
 
   // The local set declaration should be ignored, since the handler is disabled.
   handler().Init(
@@ -298,14 +204,15 @@ TEST_F(FirstPartySetsHandlerImplDisabledTest, InitImmediately) {
           R"({"primary": "https://example.test", )"
           R"("associatedSites": ["https://associatedsite2.test"]})"));
 
-  EXPECT_THAT(GetSetsAndWait().FindEntries(
+  EXPECT_THAT(
+      FindEntries(GetSetsAndWait(),
                   {
                       net::SchemefulSite(GURL("https://example.test")),
                       net::SchemefulSite(GURL("https://associatedsite1.test")),
                       net::SchemefulSite(GURL("https://associatedsite2.test")),
                   },
                   net::FirstPartySetsContextConfig()),
-              IsEmpty());
+      IsEmpty());
 }
 
 class FirstPartySetsHandlerImplEnabledTest
@@ -330,8 +237,8 @@ TEST_F(FirstPartySetsHandlerImplEnabledTest, EmptyDBPath) {
           R"({"primary": "https://example.test",)"
           R"("associatedSites": ["https://associatedsite1.test"]})"));
 
-  EXPECT_THAT(GetSetsAndWait().FindEntries({example, associated},
-                                           net::FirstPartySetsContextConfig()),
+  EXPECT_THAT(FindEntries(GetSetsAndWait(), {example, associated},
+                          net::FirstPartySetsContextConfig()),
               UnorderedElementsAre(
                   Pair(example, net::FirstPartySetEntry(
                                     example, net::SiteType::kPrimary)),
@@ -359,24 +266,19 @@ TEST_F(FirstPartySetsHandlerImplEnabledTest,
   handler.Init(scoped_dir_.GetPath(),
                FirstPartySetParser::ParseFromCommandLine(input));
 
-  // Should not yet be recorded.
-  histogram.ExpectTotalCount(kFirstPartySetsClearSiteDataOutcomeHistogram, 0);
-  ClearSiteDataOnChangedSetsForContextAndWait(
-      handler, context(), browser_context_id,
-      net::FirstPartySetsContextConfig());
+  ClearSiteDataOnChangedSetsForContextAndWait(handler, context(),
+                                              browser_context_id);
 
-  std::optional<
-      std::pair<net::GlobalFirstPartySets, net::FirstPartySetsContextConfig>>
-      persisted = GetPersistedSetsAndWait(handler, browser_context_id);
+  std::optional<net::GlobalFirstPartySets> persisted =
+      GetPersistedSetsAndWait(handler, browser_context_id);
   ASSERT_TRUE(persisted.has_value());
   EXPECT_THAT(
-      persisted->first.FindEntries({foo, associated}, persisted->second),
+      FindEntries(*persisted, {foo, associated},
+                  net::FirstPartySetsContextConfig()),
       UnorderedElementsAre(
           Pair(foo, net::FirstPartySetEntry(foo, net::SiteType::kPrimary)),
           Pair(associated,
                net::FirstPartySetEntry(foo, net::SiteType::kAssociated))));
-  histogram.ExpectUniqueSample(kFirstPartySetsClearSiteDataOutcomeHistogram,
-                               /*sample=*/true, 1);
   histogram.ExpectTotalCount(kDelayedQueriesCountHistogram, 1);
   histogram.ExpectTotalCount(kMostDelayedQueryDeltaHistogram, 1);
 }
@@ -407,17 +309,14 @@ TEST_F(FirstPartySetsHandlerImplEnabledTest,
         HasEntryInBrowserContextsClearedAndWait(handler, browser_context_id),
         Optional(false));
 
-    // Should not yet be recorded.
-    histogram.ExpectTotalCount(kFirstPartySetsClearSiteDataOutcomeHistogram, 0);
-    ClearSiteDataOnChangedSetsForContextAndWait(
-        handler, context(), browser_context_id,
-        net::FirstPartySetsContextConfig());
-    std::optional<
-        std::pair<net::GlobalFirstPartySets, net::FirstPartySetsContextConfig>>
-        persisted = GetPersistedSetsAndWait(handler, browser_context_id);
+    ClearSiteDataOnChangedSetsForContextAndWait(handler, context(),
+                                                browser_context_id);
+    std::optional<net::GlobalFirstPartySets> persisted =
+        GetPersistedSetsAndWait(handler, browser_context_id);
     ASSERT_TRUE(persisted.has_value());
     EXPECT_THAT(
-        persisted->first.FindEntries({foo, associated}, persisted->second),
+        FindEntries(*persisted, {foo, associated},
+                    net::FirstPartySetsContextConfig()),
         UnorderedElementsAre(
             Pair(foo, net::FirstPartySetEntry(foo, net::SiteType::kPrimary)),
             Pair(associated,
@@ -425,9 +324,6 @@ TEST_F(FirstPartySetsHandlerImplEnabledTest,
     EXPECT_THAT(
         HasEntryInBrowserContextsClearedAndWait(handler, browser_context_id),
         Optional(true));
-
-    histogram.ExpectUniqueSample(kFirstPartySetsClearSiteDataOutcomeHistogram,
-                                 /*sample=*/true, 1);
 
     // Make sure the database is closed properly before being opened again.
     handler.SynchronouslyResetDBHelperForTesting();
@@ -450,17 +346,14 @@ TEST_F(FirstPartySetsHandlerImplEnabledTest,
 
     handler.Init(scoped_dir_.GetPath(), net::LocalSetDeclaration());
 
-    // Should not yet be recorded.
-    histogram.ExpectTotalCount(kFirstPartySetsClearSiteDataOutcomeHistogram, 0);
-    ClearSiteDataOnChangedSetsForContextAndWait(
-        handler, context(), browser_context_id,
-        net::FirstPartySetsContextConfig());
-    std::optional<
-        std::pair<net::GlobalFirstPartySets, net::FirstPartySetsContextConfig>>
-        persisted = GetPersistedSetsAndWait(handler, browser_context_id);
+    ClearSiteDataOnChangedSetsForContextAndWait(handler, context(),
+                                                browser_context_id);
+    std::optional<net::GlobalFirstPartySets> persisted =
+        GetPersistedSetsAndWait(handler, browser_context_id);
     ASSERT_TRUE(persisted.has_value());
     EXPECT_THAT(
-        persisted->first.FindEntries({foo, associated2}, persisted->second),
+        FindEntries(*persisted, {foo, associated2},
+                    net::FirstPartySetsContextConfig()),
         UnorderedElementsAre(
             Pair(foo, net::FirstPartySetEntry(foo, net::SiteType::kPrimary)),
             Pair(associated2,
@@ -468,9 +361,6 @@ TEST_F(FirstPartySetsHandlerImplEnabledTest,
     EXPECT_THAT(
         HasEntryInBrowserContextsClearedAndWait(handler, browser_context_id),
         Optional(true));
-
-    histogram.ExpectUniqueSample(kFirstPartySetsClearSiteDataOutcomeHistogram,
-                                 /*sample=*/true, 1);
   }
 }
 
@@ -492,19 +382,16 @@ TEST_F(FirstPartySetsHandlerImplEnabledTest,
   handler().Init(
       /*user_data_dir=*/{}, net::LocalSetDeclaration());
   ASSERT_THAT(
-      GetSetsAndWait().FindEntries({foo, associated},
-                                   net::FirstPartySetsContextConfig()),
+      FindEntries(GetSetsAndWait(), {foo, associated},
+                  net::FirstPartySetsContextConfig()),
       UnorderedElementsAre(
           Pair(foo, net::FirstPartySetEntry(foo, net::SiteType::kPrimary)),
           Pair(associated,
                net::FirstPartySetEntry(foo, net::SiteType::kAssociated))));
 
-  ClearSiteDataOnChangedSetsForContextAndWait(
-      context(), browser_context_id, net::FirstPartySetsContextConfig());
+  ClearSiteDataOnChangedSetsForContextAndWait(context(), browser_context_id);
 
   EXPECT_EQ(GetPersistedSetsAndWait(browser_context_id), std::nullopt);
-  // Should not be recorded.
-  histogram.ExpectTotalCount(kFirstPartySetsClearSiteDataOutcomeHistogram, 0);
   histogram.ExpectTotalCount(kDelayedQueriesCountHistogram, 1);
   histogram.ExpectTotalCount(kMostDelayedQueryDeltaHistogram, 1);
 }
@@ -516,13 +403,10 @@ TEST_F(FirstPartySetsHandlerImplEnabledTest,
   handler().Init(scoped_dir_.GetPath(), net::LocalSetDeclaration());
 
   const std::string browser_context_id = "profile";
-  base::test::TestFuture<net::FirstPartySetsContextConfig,
-                         net::FirstPartySetsCacheFilter>
-      future;
+  base::test::TestFuture<net::FirstPartySetsCacheFilter> future;
   handler().ClearSiteDataOnChangedSetsForContext(
       base::BindLambdaForTesting([&]() { return context(); }),
-      browser_context_id, net::FirstPartySetsContextConfig(),
-      future.GetCallback());
+      browser_context_id, future.GetCallback());
 
   handler().SetPublicFirstPartySets(
       base::Version("0.0.1"),
@@ -535,18 +419,16 @@ TEST_F(FirstPartySetsHandlerImplEnabledTest,
   net::SchemefulSite foo(GURL("https://foo.test"));
   net::SchemefulSite associated(GURL("https://associatedsite.test"));
 
-  std::optional<
-      std::pair<net::GlobalFirstPartySets, net::FirstPartySetsContextConfig>>
-      persisted = GetPersistedSetsAndWait(browser_context_id);
+  std::optional<net::GlobalFirstPartySets> persisted =
+      GetPersistedSetsAndWait(browser_context_id);
   ASSERT_TRUE(persisted.has_value());
   EXPECT_THAT(
-      persisted->first.FindEntries({foo, associated}, persisted->second),
+      FindEntries(*persisted, {foo, associated},
+                  net::FirstPartySetsContextConfig()),
       UnorderedElementsAre(
           Pair(foo, net::FirstPartySetEntry(foo, net::SiteType::kPrimary)),
           Pair(associated,
                net::FirstPartySetEntry(foo, net::SiteType::kAssociated))));
-  histogram.ExpectUniqueSample(kFirstPartySetsClearSiteDataOutcomeHistogram,
-                               /*sample=*/true, 1);
   histogram.ExpectTotalCount(kDelayedQueriesCountHistogram, 1);
   histogram.ExpectTotalCount(kMostDelayedQueryDeltaHistogram, 1);
 }
@@ -569,16 +451,14 @@ TEST_F(FirstPartySetsHandlerImplEnabledTest,
   // Wait until initialization is complete.
   GetSetsAndWait();
 
-  EXPECT_THAT(handler()
-                  .GetSets(base::NullCallback())
-                  .value()
-                  .FindEntries({example, associated},
-                               net::FirstPartySetsContextConfig()),
-              UnorderedElementsAre(
-                  Pair(example, net::FirstPartySetEntry(
-                                    example, net::SiteType::kPrimary)),
-                  Pair(associated, net::FirstPartySetEntry(
-                                       example, net::SiteType::kAssociated))));
+  EXPECT_THAT(
+      FindEntries(handler().GetSets(base::NullCallback()).value(),
+                  {example, associated}, net::FirstPartySetsContextConfig()),
+      UnorderedElementsAre(
+          Pair(example,
+               net::FirstPartySetEntry(example, net::SiteType::kPrimary)),
+          Pair(associated,
+               net::FirstPartySetEntry(example, net::SiteType::kAssociated))));
 }
 
 TEST_F(FirstPartySetsHandlerImplEnabledTest,
@@ -600,24 +480,22 @@ TEST_F(FirstPartySetsHandlerImplEnabledTest,
   handler().SetPublicFirstPartySets(base::Version("1.2.3"),
                                     WritePublicSetsFile(input));
 
-  EXPECT_THAT(future.Get().FindEntries({example, associated},
-                                       net::FirstPartySetsContextConfig()),
+  EXPECT_THAT(FindEntries(future.Get(), {example, associated},
+                          net::FirstPartySetsContextConfig()),
               UnorderedElementsAre(
                   Pair(example, net::FirstPartySetEntry(
                                     example, net::SiteType::kPrimary)),
                   Pair(associated, net::FirstPartySetEntry(
                                        example, net::SiteType::kAssociated))));
 
-  EXPECT_THAT(handler()
-                  .GetSets(base::NullCallback())
-                  .value()
-                  .FindEntries({example, associated},
-                               net::FirstPartySetsContextConfig()),
-              UnorderedElementsAre(
-                  Pair(example, net::FirstPartySetEntry(
-                                    example, net::SiteType::kPrimary)),
-                  Pair(associated, net::FirstPartySetEntry(
-                                       example, net::SiteType::kAssociated))));
+  EXPECT_THAT(
+      FindEntries(handler().GetSets(base::NullCallback()).value(),
+                  {example, associated}, net::FirstPartySetsContextConfig()),
+      UnorderedElementsAre(
+          Pair(example,
+               net::FirstPartySetEntry(example, net::SiteType::kPrimary)),
+          Pair(associated,
+               net::FirstPartySetEntry(example, net::SiteType::kAssociated))));
 }
 
 TEST_F(FirstPartySetsHandlerImplEnabledTest,
@@ -751,94 +629,6 @@ TEST_F(FirstPartySetsHandlerImplEnabledTest,
                net::FirstPartySetEntry(example, net::SiteType::kAssociated))));
 }
 
-class FirstPartySetsHandlerGetContextConfigForPolicyTest
-    : public FirstPartySetsHandlerImplEnabledTest {
- public:
-  FirstPartySetsHandlerGetContextConfigForPolicyTest() {
-    handler().Init(scoped_dir_.GetPath(), net::LocalSetDeclaration());
-  }
 
-  // Writes the public list of First-Party Sets which GetContextConfigForPolicy
-  // awaits.
-  //
-  // Initializes the First-Party Sets with the following relationship:
-  //
-  // [
-  //   {
-  //     "primary": "https://primary1.test",
-  //     "associatedSites": ["https://associatedsite1.test",
-  //     "https://associatedsite2.test"]
-  //   }
-  // ]
-  void InitPublicFirstPartySets() {
-    net::SchemefulSite primary1(GURL("https://primary1.test"));
-    net::SchemefulSite associated1(GURL("https://associatedsite1.test"));
-    net::SchemefulSite associated2(GURL("https://associatedsite2.test"));
-
-    const std::string input =
-        R"({"primary": "https://primary1.test", )"
-        R"("associatedSites": ["https://associatedsite1.test", "https://associatedsite2.test"]})";
-    ASSERT_TRUE(
-        base::JSONReader::Read(input, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
-    handler().SetPublicFirstPartySets(base::Version("1.2.3"),
-                                      WritePublicSetsFile(input));
-
-    ASSERT_THAT(
-        GetSetsAndWait().FindEntries({primary1, associated1, associated2},
-                                     net::FirstPartySetsContextConfig()),
-        SizeIs(3));
-  }
-};
-
-TEST_F(FirstPartySetsHandlerGetContextConfigForPolicyTest,
-       DefaultOverridesPolicy_DefaultContextConfigs) {
-  base::test::TestFuture<net::FirstPartySetsContextConfig> future;
-  handler().GetContextConfigForPolicy(base::DictValue(), future.GetCallback());
-
-  InitPublicFirstPartySets();
-  EXPECT_EQ(future.Take(), net::FirstPartySetsContextConfig());
-}
-
-TEST_F(FirstPartySetsHandlerGetContextConfigForPolicyTest,
-       MalformedOverridesPolicy_DefaultContextConfigs) {
-  base::test::TestFuture<net::FirstPartySetsContextConfig> future;
-  handler().GetContextConfigForPolicy(base::test::ParseJsonDict(R"({
-    "replacements": 123,
-    "additions": true
-  })"),
-                                      future.GetCallback());
-
-  InitPublicFirstPartySets();
-  EXPECT_EQ(future.Take(), net::FirstPartySetsContextConfig());
-}
-
-TEST_F(FirstPartySetsHandlerGetContextConfigForPolicyTest,
-       NonDefaultOverridesPolicy_NonDefaultContextConfigs) {
-  base::test::TestFuture<net::FirstPartySetsContextConfig> future;
-  handler().GetContextConfigForPolicy(base::test::ParseJsonDict(R"(
-                {
-                "replacements": [
-                  {
-                    "primary": "https://associatedsite1.test",
-                    "associatedSites": ["https://primary3.test"]
-                  }
-                ],
-                "additions": [
-                  {
-                    "primary": "https://primary2.test",
-                    "associatedSites": ["https://associatedsite2.test"]
-                  }
-                ]
-              }
-            )"),
-                                      future.GetCallback());
-
-  InitPublicFirstPartySets();
-  // We don't care what the customizations are, here; we only care that they're
-  // not a no-op.
-  EXPECT_FALSE(future.Take().empty());
-  EXPECT_EQ(GetContextConfigForPolicy(std::nullopt),
-            net::FirstPartySetsContextConfig());
-}
 
 }  // namespace content

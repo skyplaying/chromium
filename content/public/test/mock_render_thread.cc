@@ -41,7 +41,7 @@ MockRenderThread::MockRenderThread()
 
 MockRenderThread::~MockRenderThread() = default;
 
-IPC::SyncChannel* MockRenderThread::GetChannel() {
+IPC::ChannelProxy* MockRenderThread::GetChannel() {
   return nullptr;
 }
 
@@ -61,11 +61,14 @@ bool MockRenderThread::GenerateFrameRoutingID(
     int32_t& routing_id,
     blink::LocalFrameToken& frame_token,
     base::UnguessableToken& devtools_frame_token,
-    blink::DocumentToken& document_token) {
+    blink::DocumentToken& document_token,
+    std::unique_ptr<base::UnguessableToken>& sandbox_origin_token) {
   routing_id = GetNextRoutingID();
   frame_token = blink::LocalFrameToken();
   devtools_frame_token = base::UnguessableToken::Create();
   document_token = blink::DocumentToken();
+  sandbox_origin_token = std::make_unique<base::UnguessableToken>(
+      base::UnguessableToken::Create());
   return true;
 }
 
@@ -161,6 +164,7 @@ void MockRenderThread::OnCreateWindow(mojom::CreateNewWindowParams& params,
   reply->widget_routing_id = GetNextRoutingID();
   reply->visual_properties.screen_infos =
       display::ScreenInfos(display::ScreenInfo());
+  reply->initiator_state_token = blink::InitiatorStateToken();
 
   mojo::AssociatedRemote<blink::mojom::PageBroadcast> page_broadcast;
   page_broadcast.Bind(std::move(params.page_broadcast_remote));

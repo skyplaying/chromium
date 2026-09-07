@@ -29,19 +29,28 @@ namespace {
 
 using allocator_shim::AllocatorDispatch;
 
-void* RealMalloc(size_t size, AllocToken, void* context) {
+void* RealMalloc(size_t size, allocator_shim::AllocToken, void* context) {
   return __real_malloc(size);
 }
 
-void* RealCalloc(size_t n, size_t size, AllocToken, void* context) {
+void* RealCalloc(size_t n,
+                 size_t size,
+                 allocator_shim::AllocToken,
+                 void* context) {
   return __real_calloc(n, size);
 }
 
-void* RealRealloc(void* address, size_t size, AllocToken, void* context) {
+void* RealRealloc(void* address,
+                  size_t size,
+                  allocator_shim::AllocToken,
+                  void* context) {
   return __real_realloc(address, size);
 }
 
-void* RealMemalign(size_t alignment, size_t size, AllocToken, void* context) {
+void* RealMemalign(size_t alignment,
+                   size_t size,
+                   allocator_shim::AllocToken,
+                   void* context) {
   return __real_memalign(alignment, size);
 }
 
@@ -76,6 +85,7 @@ const AllocatorDispatch AllocatorDispatch::default_dispatch = {
     &RealCalloc,            /* alloc_zero_initialized_function */
     &RealCalloc,            /* alloc_zero_initialized_unchecked_function */
     &RealMemalign,          /* alloc_aligned_function */
+    &RealMemalign,          /* alloc_aligned_unchecked_function */
     &RealRealloc,           /* realloc_function */
     &RealRealloc,           /* realloc_unchecked_function */
     &RealFree,              /* free_function */

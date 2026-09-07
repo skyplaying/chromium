@@ -6,6 +6,7 @@ package org.chromium.chrome.browser.ui.signin.signin_promo;
 
 import android.app.Activity;
 import android.view.View;
+import android.view.ViewGroup.MarginLayoutParams;
 import android.view.ViewStub;
 
 import org.chromium.base.supplier.SupplierUtils;
@@ -22,7 +23,7 @@ import org.chromium.ui.base.ActivityResultTracker;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 
-import java.util.function.Supplier;
+import java.util.function.BooleanSupplier;
 
 /** Coordinator for the seamless sign-in promo card in NTP. */
 @NullMarked
@@ -30,6 +31,7 @@ public class NtpSigninPromoCoordinator {
     private final SigninPromoCoordinator mSigninPromoCoordinator;
     private final ViewStub mSigninPromoViewContainerStub;
     private @Nullable PersonalizedSigninPromoView mSigninPromoView;
+    private @Nullable Integer mLateralMargin;
 
     /**
      * Creates an instance of the {@link NtpSigninPromoCoordinator}.
@@ -39,8 +41,8 @@ public class NtpSigninPromoCoordinator {
      * @param profile A {@link Profile} object to access identity services. This must be the
      *     original profile, not the incognito one.
      * @param activityResultTracker Tracker of activity results.
-     * @param launcher A {@SigninAndHistorySyncActivityLauncher} for the initialization of {@link
-     *     SigninPromoDelegate}.
+     * @param launcher A {@link SigninAndHistorySyncActivityLauncher} for the initialization of
+     *     {@link SigninPromoDelegate}.
      * @param bottomSheetController Used to interact with the bottom sheet.
      * @param modalDialogManagerSupplier Supplies the {@link ModalDialogManager}.
      * @param snackbarManager Manages snackbars shown in the app.
@@ -55,10 +57,11 @@ public class NtpSigninPromoCoordinator {
             ActivityResultTracker activityResultTracker,
             SigninAndHistorySyncActivityLauncher launcher,
             BottomSheetController bottomSheetController,
-            Supplier<@Nullable ModalDialogManager> modalDialogManagerSupplier,
+            ModalDialogManager modalDialogManager,
             SnackbarManager snackbarManager,
             DeviceLockActivityLauncher deviceLockActivityLauncher,
-            ViewStub signinPromoViewContainerStub) {
+            ViewStub signinPromoViewContainerStub,
+            BooleanSupplier isSetupListActiveSupplier) {
         mSigninPromoCoordinator =
                 new SigninPromoCoordinator(
                         windowAndroid,
@@ -67,11 +70,15 @@ public class NtpSigninPromoCoordinator {
                         activityResultTracker,
                         launcher,
                         SupplierUtils.of(bottomSheetController),
-                        modalDialogManagerSupplier,
+                        modalDialogManager,
                         snackbarManager,
                         deviceLockActivityLauncher,
                         new NtpSigninPromoDelegate(
-                                activity, profile, launcher, this::onPromoStateChange));
+                                activity,
+                                profile,
+                                launcher,
+                                this::onPromoStateChange,
+                                isSetupListActiveSupplier));
 
         mSigninPromoViewContainerStub = signinPromoViewContainerStub;
         onPromoStateChange();
@@ -79,6 +86,20 @@ public class NtpSigninPromoCoordinator {
 
     public void destroy() {
         mSigninPromoCoordinator.destroy();
+    }
+
+    /** Updates the lateral margins of the promo. */
+    public void setLateralMargins(int margin) {
+        if (mSigninPromoView != null) {
+            MarginLayoutParams layoutParams =
+                    (MarginLayoutParams) mSigninPromoView.getLayoutParams();
+            if (layoutParams == null) return;
+            layoutParams.setMarginStart(margin);
+            layoutParams.setMarginEnd(margin);
+            mSigninPromoView.setLayoutParams(layoutParams);
+        } else {
+            mLateralMargin = margin;
+        }
     }
 
     private void onPromoStateChange() {
@@ -95,6 +116,9 @@ public class NtpSigninPromoCoordinator {
         assert mSigninPromoView == null;
         mSigninPromoView = (PersonalizedSigninPromoView) mSigninPromoViewContainerStub.inflate();
         mSigninPromoView.setCardBackgroundResource(R.drawable.home_surface_ui_background);
+        if (mLateralMargin != null) {
+            setLateralMargins(mLateralMargin);
+        }
         mSigninPromoCoordinator.setView(mSigninPromoView);
     }
 }

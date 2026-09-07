@@ -21,6 +21,7 @@
 #include "components/sync/service/sync_service_observer.h"
 #include "components/user_manager/user.h"
 
+class AccountCapabilities;
 class Profile;
 
 namespace ash {
@@ -51,7 +52,7 @@ class SyncConsentScreen : public BaseScreen,
 
   enum ConsentGiven { CONSENT_NOT_GIVEN, CONSENT_GIVEN };
 
-  enum class Result { NEXT, DECLINE, NOT_APPLICABLE };
+  enum class Result { NEXT, NOT_APPLICABLE };
 
   static std::string GetResultString(Result result);
 
@@ -83,6 +84,10 @@ class SyncConsentScreen : public BaseScreen,
   // Launches the sync consent settings dialog if the user requested to review
   // them after completing OOBE.
   static void MaybeLaunchSyncConsentSettings(Profile* profile);
+
+  // Returns whether the account capabilities required by SyncConsentScreen are
+  // loaded (i.e. known).
+  static bool AreCapabilitiesLoaded(const AccountCapabilities& capabilities);
 
   SyncConsentScreen(base::WeakPtr<SyncConsentScreenView> view,
                     const ScreenExitCallback& exit_callback);
@@ -123,9 +128,6 @@ class SyncConsentScreen : public BaseScreen,
                      const bool review_sync,
                      const base::ListValue& consent_description_list,
                      const std::string& consent_confirmation);
-
-  void OnLacrosContinue(const base::ListValue& consent_description_list,
-                        const std::string& consent_confirmation);
 
   void RecordAllConsents(const bool opted_in,
                          const base::ListValue& consent_description_list,

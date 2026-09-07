@@ -18,6 +18,7 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/functional/function_ref.h"
 #include "base/i18n/time_formatting.h"
@@ -32,8 +33,7 @@
 #include "base/run_loop.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_util.h"
-#include "base/strings/utf_string_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/task_runner.h"
 #include "base/task/task_traits.h"
@@ -43,6 +43,7 @@
 #include "base/test/test_timeouts.h"
 #include "base/threading/platform_thread.h"
 #include "base/time/time.h"
+#include "base/values.h"
 #include "base/version.h"
 #include "chrome/updater/constants.h"
 #include "chrome/updater/policy/manager.h"
@@ -285,7 +286,7 @@ void InitLoggingForUnitTest(const base::FilePath& log_base_path) {
 
 #if BUILDFLAG(IS_WIN)
 namespace {
-const wchar_t kProcmonPath[] = L"C:\\tools\\Procmon.exe";
+constexpr wchar_t kProcmonPath[] = L"C:\\tools\\Procmon.exe";
 }  // namespace
 
 base::FilePath StartProcmonLogging() {
@@ -317,9 +318,11 @@ base::FilePath StartProcmonLogging() {
   const base::FilePath pmc_path(GetTestFilePath("ProcmonConfiguration.pmc"));
   CHECK(base::PathExists(pmc_path));
 
-  const base::FilePath pml_file(
-      dest_dir.Append(base::UTF8ToWide(base::UnlocalizedTimeFormatWithPattern(
-          base::Time::Now(), "yyMMdd-HHmmss.'PML'"))));
+  base::Time::Exploded exploded;
+  base::Time::Now().LocalExplode(&exploded);
+  const base::FilePath pml_file(dest_dir.AppendASCII(base::StringPrintf(
+      "%02d%02d%02d-%02d%02d%02d.PML", exploded.year % 100, exploded.month,
+      exploded.day_of_month, exploded.hour, exploded.minute, exploded.second)));
 
   const std::wstring& cmdline = base::StrCat(
       {kProcmonPath, L" /AcceptEula /LoadConfig ",
@@ -448,7 +451,7 @@ void SetupFakeUpdaterVersion(UpdaterScope scope,
   std::vector<uint32_t> components = base_version.components();
   base::CheckedNumeric<uint32_t> new_version = components[0];
   new_version += major_version_offset;
-  ASSERT_TRUE(new_version.AssignIfValid(&components[0]));
+  ASSERT_TRUE(new_version.AssignIfValid(components.data()));
   SetupFakeUpdater(scope, base::Version(std::move(components)),
                    should_create_updater_executable);
 }
@@ -535,6 +538,92 @@ void ExpectTagArgsEqual(const updater::tagging::TagArgs& actual,
   }
 
   EXPECT_EQ(actual.runtime_mode, expected.runtime_mode);
+}
+
+bool IsJSONSubset(
+    const base::Value& needle,
+    const base::Value& haystack,
+    base::FunctionRef<bool(const std::string&, const std::string&)>
+        string_comparator) {
+  if (needle.is_none()) {
+    return haystack.is_none();
+  }
+
+  // Compare dicts recursively. "Extra" keys are fine. Absent values match
+  // NONE type, so "null" can be used in 'needle' to explicitly forbid the
+  // presence of a key.
+  if (needle.is_dict()) {
+    if (!haystack.is_dict()) {
+      return false;
+    }
+    for (auto pair : needle.GetDict()) {
+      const base::Value* haystack_val = haystack.GetDict().Find(pair.first);
+      const base::Value& needle_val = pair.second;
+      if (needle_val.is_none()) {
+        if (haystack_val && !haystack_val->is_none()) {
+          return false;
+        }
+      } else {
+        if (!haystack_val) {
+          return false;
+        }
+        if (!IsJSONSubset(needle_val, *haystack_val, string_comparator)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  // Compare lists recursively. Look for the right elements in the right
+  // order, but nonmatching elements are skipped.
+  if (needle.is_list()) {
+    if (!haystack.is_list()) {
+      return false;
+    }
+    const base::ListValue& needle_list = needle.GetList();
+    const base::ListValue& haystack_list = haystack.GetList();
+    auto needle_it = needle_list.begin();
+    auto haystack_it = haystack_list.begin();
+    while (needle_it != needle_list.end() &&
+           haystack_it != haystack_list.end()) {
+      if (IsJSONSubset(*needle_it, *haystack_it, string_comparator)) {
+        ++needle_it;
+      }
+      ++haystack_it;
+    }
+    return needle_it == needle_list.end();
+  }
+
+  // Allow int/double conversions in both directions, comparing as double.
+  if (needle.is_int()) {
+    if (haystack.is_int()) {
+      return needle.GetInt() == haystack.GetInt();
+    }
+    if (haystack.is_double()) {
+      return static_cast<double>(needle.GetInt()) == haystack.GetDouble();
+    }
+    return false;
+  }
+  if (needle.is_double()) {
+    if (haystack.is_int()) {
+      return needle.GetDouble() == static_cast<double>(haystack.GetInt());
+    }
+    if (haystack.is_double()) {
+      return needle.GetDouble() == haystack.GetDouble();
+    }
+    return false;
+  }
+
+  if (needle.is_string()) {
+    if (!haystack.is_string()) {
+      return false;
+    }
+    return string_comparator(needle.GetString(), haystack.GetString());
+  }
+
+  // Remaining types use direct equality comparison.
+  return needle == haystack;
 }
 
 int WaitForProcess(base::Process& process) {

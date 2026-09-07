@@ -86,6 +86,7 @@ constexpr auto kKnownSettings = base::MakeFixedFlatSet<std::string_view>({
     kDeviceCrostiniArcAdbSideloadingAllowed,
     kDeviceDisabled,
     kDeviceDisabledMessage,
+    kDeviceDisabledLocationTrackingEnabled,
     kDeviceDisplayResolution,
     kDeviceDlcPredownloadList,
     kDeviceDockMacAddressSource,
@@ -129,7 +130,6 @@ constexpr auto kKnownSettings = base::MakeFixedFlatSet<std::string_view>({
     kKioskCRXManifestUpdateURLIgnored,
     kLoginAuthenticationBehavior,
     kLoginVideoCaptureAllowedUrls,
-    kPluginVmAllowed,
     kPolicyMissingMitigationMode,
     kRebootOnShutdown,
     kReleaseChannel,
@@ -929,7 +929,7 @@ void DecodeGenericPolicies(const em::ChromeDeviceSettingsProto& policy,
                                  policy.metrics_enabled().metrics_enabled());
   } else {
     // If the policy is missing, default to reporting enabled on enterprise-
-    // enrolled devices, c.f. crbug/456186.
+    // enrolled devices, c.f. crbug.com/41156165.
     new_values_cache->SetBoolean(
         kStatsReportingPref, InstallAttributes::Get()->IsEnterpriseManaged());
   }
@@ -1153,14 +1153,6 @@ void DecodeGenericPolicies(const em::ChromeDeviceSettingsProto& policy,
       new_values_cache->SetValue(
           kDeviceUnaffiliatedCrostiniAllowed,
           base::Value(container.device_unaffiliated_crostini_allowed()));
-    }
-  }
-
-  if (policy.has_plugin_vm_allowed()) {
-    const em::PluginVmAllowedProto& container(policy.plugin_vm_allowed());
-    if (container.has_plugin_vm_allowed()) {
-      new_values_cache->SetValue(kPluginVmAllowed,
-                                 base::Value(container.plugin_vm_allowed()));
     }
   }
 
@@ -1424,8 +1416,15 @@ void DecodeDeviceState(const em::PolicyData& policy_data,
 
   const em::DeviceState& device_state = policy_data.device_state();
 
-  if (device_state.device_mode() == em::DeviceState::DEVICE_MODE_DISABLED)
+  if (device_state.device_mode() == em::DeviceState::DEVICE_MODE_DISABLED) {
     new_values_cache->SetBoolean(kDeviceDisabled, true);
+    if (device_state.has_disabled_state() &&
+        device_state.disabled_state().has_location_tracking_enabled()) {
+      new_values_cache->SetBoolean(
+          kDeviceDisabledLocationTrackingEnabled,
+          device_state.disabled_state().location_tracking_enabled());
+    }
+  }
   if (device_state.has_disabled_state() &&
       device_state.disabled_state().has_message()) {
     new_values_cache->SetString(kDeviceDisabledMessage,

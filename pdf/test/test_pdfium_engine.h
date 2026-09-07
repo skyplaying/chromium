@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 
+#include <optional>
 #include <vector>
 
 #include "base/containers/span.h"
@@ -72,6 +73,15 @@ class TestPDFiumEngine : public PDFiumEngine {
 
   MOCK_METHOD(bool, CanEditText, (), (const override));
 
+  MOCK_METHOD(bool,
+              SetFocusedFormTextDirection,
+              (base::i18n::TextDirection),
+              (override));
+  MOCK_METHOD(std::optional<base::i18n::TextDirection>,
+              GetFocusedFormTextDirection,
+              (),
+              (const, override));
+
   MOCK_METHOD(bool, HasPermission, (DocumentPermission), (const override));
 
   MOCK_METHOD(void, SelectAll, (), (override));
@@ -80,6 +90,11 @@ class TestPDFiumEngine : public PDFiumEngine {
       const override;
 
   const DocumentMetadata& GetDocumentMetadata() const override;
+
+  MOCK_METHOD(std::string,
+              GetFileNameFromContentDisposition,
+              (),
+              (const override));
 
   int GetNumberOfPages() const override;
 
@@ -101,6 +116,12 @@ class TestPDFiumEngine : public PDFiumEngine {
 
   MOCK_METHOD(bool, IsPDFDocTagged, (), (const override));
 
+  MOCK_METHOD(bool, HasMeaningfulText, (), (override));
+
+  MOCK_METHOD(bool, HasJavaScript, (), (const override));
+
+  MOCK_METHOD(bool, IsPasswordProtected, (), (const override));
+
   MOCK_METHOD(uint32_t, GetLoadedByteSize, (), (override));
 
   MOCK_METHOD(bool,
@@ -114,6 +135,23 @@ class TestPDFiumEngine : public PDFiumEngine {
               (override));
 
 #if BUILDFLAG(ENABLE_PDF_INK2)
+  MOCK_METHOD(void,
+              AddFont,
+              (FontId, const std::string&, base::span<const uint8_t>),
+              (override));
+
+  MOCK_METHOD(void,
+              DrawText,
+              (int,
+               InkTextId,
+               base::span<const InkTextLine>,
+               float,
+               double,
+               const InkTextBoxAttributes&),
+              (override));
+
+  MOCK_METHOD(void, UpdateTextActiveAndInvalidate, (TextId, bool), (override));
+
   MOCK_METHOD(gfx::Size, GetThumbnailSize, (int, float), (override));
 
   MOCK_METHOD(void,
@@ -125,10 +163,17 @@ class TestPDFiumEngine : public PDFiumEngine {
 
   MOCK_METHOD(void, DiscardStroke, (int, InkStrokeId), (override));
 
-  MOCK_METHOD(PDFLoadedWithV2InkAnnotations,
-              ContainsV2InkPath,
+  MOCK_METHOD(void, DiscardText, (InkTextId), (override));
+
+  MOCK_METHOD(DocumentInkTextBoxesMap,
+              LoadTextAnnotationsFromPdf,
+              (),
+              (override));
+
+  MOCK_METHOD(InkIdentifiers,
+              ScanForInkAnnotations,
               (base::TimeDelta),
-              (const override));
+              (override));
 
   MOCK_METHOD((std::map<InkModeledShapeId, ink::PartitionedMesh>),
               LoadV2InkPathsForPage,

@@ -283,18 +283,6 @@ void SkiaOutputDeviceBufferQueue::ScheduleOverlays(
   DCHECK(pending_overlay_mailboxes_.empty());
   has_overlays_scheduled_but_swap_not_finished_ = true;
 
-  // The fence that will be created for current ScheduleOverlays. This fence is
-  // required and passed with overlay data iff DelegatedCompositing is enabled
-  // and the overlay's shared image backing is created for raster op. Given
-  // rasterization tasks create fences when gpu operations are issued, we end up
-  // having multiple number of fences, which creation is costly. Instead, a
-  // single fence is created during overlays' scheduling, which is dupped and
-  // inserted into each OverlayPlaneData if the underlying shared image was
-  // created for rasterization.
-  //
-  // TODO(msisov): find a better place for this fence.
-  std::unique_ptr<gfx::GpuFence> current_frame_fence;
-
   for (const auto& overlay : overlays) {
     auto mailbox = overlay.mailbox;
 #if BUILDFLAG(IS_OZONE)
@@ -325,11 +313,12 @@ void SkiaOutputDeviceBufferQueue::Present(
     OutputSurfaceFrame frame) {
   StartSwapBuffers({});
 
+  const gfx::FrameData frame_data = frame.data;
   presenter_->Present(
       base::BindOnce(&SkiaOutputDeviceBufferQueue::DoFinishSwapBuffers,
                      weak_ptr_.GetWeakPtr(), GetSwapBuffersSize(),
                      std::move(frame), std::move(committed_overlay_mailboxes_)),
-      std::move(feedback), frame.data);
+      std::move(feedback), frame_data);
   committed_overlay_mailboxes_.clear();
   std::swap(committed_overlay_mailboxes_, pending_overlay_mailboxes_);
 }
@@ -538,8 +527,9 @@ bool SkiaOutputDeviceBufferQueue::OverlayDataKeyEqual::operator()(
   return lhs == rhs.mailbox();
 }
 
-void SkiaOutputDeviceBufferQueue::SetVSyncDisplayID(int64_t display_id) {
-  presenter_->SetVSyncDisplayID(display_id);
+void SkiaOutputDeviceBufferQueue::SetVSyncDisplayID(int64_t display_id,
+                                                    bool force_update) {
+  presenter_->SetVSyncDisplayID(display_id, force_update);
 }
 
 }  // namespace viz

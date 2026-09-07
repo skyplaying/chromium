@@ -19,11 +19,11 @@
 #include "base/types/strong_alias.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/prefs/pref_service.h"
+#include "components/supervised_user/core/browser/family_link_settings_service.h"
 #include "components/supervised_user/core/browser/fetcher_config.h"
 #include "components/supervised_user/core/browser/proto/kidsmanagement_messages.pb.h"
 #include "components/supervised_user/core/browser/proto_fetcher.h"
 #include "components/supervised_user/core/browser/supervised_user_service.h"
-#include "components/supervised_user/core/browser/supervised_user_service_observer.h"
 #include "components/supervised_user/core/browser/supervised_user_url_filtering_service.h"
 
 namespace supervised_user {
@@ -59,12 +59,14 @@ class FamilyLinkSettingsState {
              const SupervisedUserUrlFilteringService&
                  supervised_user_url_filtering_service,
              const PrefService& pref_service,
-             const HostContentSettingsMap& host_content_settings_map);
+             const HostContentSettingsMap& host_content_settings_map,
+             const FamilyLinkSettingsService& family_link_settings_service);
     raw_ref<const SupervisedUserService> supervised_user_service;
     raw_ref<const SupervisedUserUrlFilteringService>
         supervised_user_url_filtering_service;
     raw_ref<const PrefService> pref_service;
     raw_ref<const HostContentSettingsMap> host_content_settings_map;
+    raw_ref<const FamilyLinkSettingsService> family_link_settings_service;
   };
 
   // Represents intended state of the supervised user service to achieve.

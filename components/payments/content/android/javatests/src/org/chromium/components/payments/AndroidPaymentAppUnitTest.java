@@ -24,8 +24,12 @@ import org.mockito.junit.MockitoRule;
 import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.components.payments.intent.WebPaymentIntentHelper;
 import org.chromium.content_public.browser.test.NativeLibraryTestUtils;
 import org.chromium.payments.mojom.PaymentCurrencyAmount;
+import org.chromium.payments.mojom.PaymentEventResponseType;
 import org.chromium.payments.mojom.PaymentItem;
 import org.chromium.payments.mojom.PaymentMethodData;
 import org.chromium.payments.mojom.PaymentOptions;
@@ -97,23 +101,9 @@ public class AndroidPaymentAppUnitTest {
     public void testSetHasEnrolledInstrument() throws Exception {
         AndroidPaymentApp app =
                 createApp(
-                        /* allowShowWithoutReadyToPay= */ true,
                         /* showReadyToPayDebugInfo= */ false);
         Assert.assertFalse(app.hasEnrolledInstrument());
         app.setHasEnrolledInstrument(true);
-        Assert.assertTrue(app.hasEnrolledInstrument());
-    }
-
-    @SmallTest
-    @Test
-    @UiThreadTest
-    public void testCannotSetHasEnrolledInstrument() throws Exception {
-        AndroidPaymentApp app =
-                createApp(
-                        /* allowShowWithoutReadyToPay= */ false,
-                        /* showReadyToPayDebugInfo= */ false);
-        Assert.assertTrue(app.hasEnrolledInstrument());
-        app.setHasEnrolledInstrument(false);
         Assert.assertTrue(app.hasEnrolledInstrument());
     }
 
@@ -144,12 +134,55 @@ public class AndroidPaymentAppUnitTest {
         Assert.assertNull(mPaymentDetails);
     }
 
-    private AndroidPaymentApp createApp(boolean showReadyToPayDebugInfo) {
-        return createApp(/* allowShowWithoutReadyToPay= */ false, showReadyToPayDebugInfo);
+    @SmallTest
+    @Test
+    @UiThreadTest
+    public void testInternalAppErrorPayment() throws Exception {
+        AndroidPaymentApp app = createApp(/* showReadyToPayDebugInfo= */ false);
+        queryReadyToPay(app);
+        invokePaymentApp(app, WebPaymentIntentHelper.RESULT_INTERNAL_APP_ERROR);
+        Assert.assertEquals(
+                "Payment app returned RESULT_INTERNAL_APP_ERROR code. Native payment app"
+                        + " encountered an internal app error.",
+                mErrorMessage);
+        Assert.assertNull(mPaymentMethodName);
+        Assert.assertNull(mPaymentDetails);
     }
 
-    private AndroidPaymentApp createApp(
-            boolean allowShowWithoutReadyToPay, boolean showReadyToPayDebugInfo) {
+    @SmallTest
+    @Test
+    @UiThreadTest
+    @EnableFeatures({PaymentFeatureList.SURFACE_WALLET_ERROR_CODE_FROM_INTENT})
+    public void testInternalAppErrorPaymentWithWalletErrorCode() throws Exception {
+        AndroidPaymentApp app = createApp(/* showReadyToPayDebugInfo= */ false);
+        queryReadyToPay(app);
+        Bundle extras = new Bundle();
+        extras.putInt(WebPaymentIntentHelper.EXTRA_WALLET_ERROR_CODE, 409);
+        invokePaymentApp(app, WebPaymentIntentHelper.RESULT_INTERNAL_APP_ERROR, extras);
+        Assert.assertEquals(
+                "Internal payment app returned error with status code: 409", mErrorMessage);
+        Assert.assertNull(mPaymentMethodName);
+        Assert.assertNull(mPaymentDetails);
+    }
+
+    @SmallTest
+    @Test
+    @UiThreadTest
+    @DisableFeatures({PaymentFeatureList.SURFACE_WALLET_ERROR_CODE_FROM_INTENT})
+    public void
+            surfaceWalletErrorCodeFromIntentDisabled_testInternalAppErrorPaymentWithWalletErrorCode()
+                    throws Exception {
+        AndroidPaymentApp app = createApp(/* showReadyToPayDebugInfo= */ false);
+        queryReadyToPay(app);
+        Bundle extras = new Bundle();
+        extras.putInt(WebPaymentIntentHelper.EXTRA_WALLET_ERROR_CODE, 409);
+        invokePaymentApp(app, WebPaymentIntentHelper.RESULT_INTERNAL_APP_ERROR, extras);
+        Assert.assertEquals(ErrorStrings.RESULT_INTERNAL_APP_ERROR, mErrorMessage);
+        Assert.assertNull(mPaymentMethodName);
+        Assert.assertNull(mPaymentDetails);
+    }
+
+    private AndroidPaymentApp createApp(boolean showReadyToPayDebugInfo) {
         AndroidPaymentApp app =
                 new AndroidPaymentApp(
                         mLauncherMock,
@@ -163,7 +196,6 @@ public class AndroidPaymentAppUnitTest {
                         /* isIncognito= */ false,
                         /* appToHide= */ null,
                         new SupportedDelegations(),
-                        allowShowWithoutReadyToPay,
                         showReadyToPayDebugInfo,
                         /* removeDeprecatedFields= */ false,
                         /* paymentDetailsUpdateServiceMaxRetryNumber= */ 0);
@@ -192,6 +224,11 @@ public class AndroidPaymentAppUnitTest {
     }
 
     private void invokePaymentApp(AndroidPaymentApp app, int resultCode) throws Exception {
+        invokePaymentApp(app, resultCode, new Bundle());
+    }
+
+    private void invokePaymentApp(AndroidPaymentApp app, int resultCode, Bundle additionalExtras)
+            throws Exception {
         PaymentItem total = new PaymentItem();
         total.amount = new PaymentCurrencyAmount();
         total.amount.currency = "USD";
@@ -219,7 +256,8 @@ public class AndroidPaymentAppUnitTest {
                     }
 
                     @Override
-                    public void onInstrumentDetailsError(String errorMessage) {
+                    public void onInstrumentDetailsError(
+                            @PaymentEventResponseType.EnumType int error, String errorMessage) {
                         mErrorMessage = errorMessage;
                         mInvokePaymentAppFinished = true;
                     }
@@ -228,6 +266,7 @@ public class AndroidPaymentAppUnitTest {
         Bundle extras = new Bundle();
         extras.putString("methodName", "https://company.com/pay");
         extras.putString("details", "{}");
+        extras.putAll(additionalExtras);
         data.putExtras(extras);
         app.onIntentCompleted(resultCode, data);
 

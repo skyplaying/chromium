@@ -6,8 +6,11 @@
 
 #include "base/files/file_path.h"
 #include "base/json/json_writer.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/values.h"
+#include "build/build_config.h"
+#include "components/device_signals/core/common/signals_features.h"
 #include "components/enterprise/connectors/core/reporting_constants.h"
 #include "crypto/sha2.h"
 
@@ -62,6 +65,18 @@ base::DictValue AvProductToDict(
 }  // namespace
 
 namespace enterprise_reporting {
+
+// Retry starts with 2 minute delay and is doubled with every failure.
+const net::BackoffEntry::Policy kDefaultReportUploadBackoffPolicy = {
+    0,  // Number of initial errors to ignore before applying
+        // exponential back-off rules.
+    base::Minutes(2).InMilliseconds(),  // Initial delay
+    2,     // Factor by which the waiting time will be multiplied.
+    0.1,   // Fuzzing percentage.
+    -1,    // No maximum delay.
+    -1,    // It's up to the caller to reset the backoff time.
+    false  // Do not always use initial delay.
+};
 
 namespace em = enterprise_management;
 
@@ -211,12 +226,18 @@ std::string GetSecuritySignalsInReport(
                      os_report.verified_apps_enabled());
     signals_dict.Set("security_patch_ms",
                      base::NumberToString(os_report.security_patch_ms()));
+#elif BUILDFLAG(IS_IOS)
+    if (os_report.has_ios_specific_attributes() &&
+        os_report.ios_specific_attributes().has_vendor_id()) {
+      signals_dict.Set("vendor_id",
+                       os_report.ios_specific_attributes().vendor_id());
+    }
 #endif
   }
 
   if (!chrome_profile_report_request.has_browser_report()) {
-    base::JSONWriter::WriteWithOptions(
-        signals_dict, base::JSONWriter::OPTIONS_PRETTY_PRINT, &signals_json);
+    base::JSONWriter::WriteWithOptions(signals_dict, /*options=*/0,
+                                       &signals_json);
     return signals_json;
   }
 
@@ -224,8 +245,8 @@ std::string GetSecuritySignalsInReport(
   signals_dict.Set("browser_version", browser_report.browser_version());
 
   if (browser_report.chrome_user_profile_infos_size() != 1) {
-    base::JSONWriter::WriteWithOptions(
-        signals_dict, base::JSONWriter::OPTIONS_PRETTY_PRINT, &signals_json);
+    base::JSONWriter::WriteWithOptions(signals_dict, /*options=*/0,
+                                       &signals_json);
     return signals_json;
   }
 
@@ -273,6 +294,11 @@ std::string GetSecuritySignalsInReport(
                      RepeatedFieldptrToList(
                          profile_signals_report.security_event_providers()));
 
+    signals_dict.Set("certificates_count",
+                     chrome_user_profile_info.certificates_size());
+    signals_dict.Set("certificates_were_truncated",
+                     chrome_user_profile_info.certificates_were_truncated());
+
     if (chrome_profile_report_request.has_attestation_payload()) {
       auto attestation_payload =
           chrome_profile_report_request.attestation_payload();
@@ -290,6 +316,17 @@ std::string GetSecuritySignalsInReport(
       signals_dict, base::JSONWriter::OPTIONS_PRETTY_PRINT, &signals_json);
 
   return signals_json;
+}
+
+
+int GetCurrentContentBindingsVersion() {
+  return 1;
+}
+
+void RecordReportGenerationErrorMetric(ReportGenerationError error) {
+  static constexpr char kReportGenerationErrorMetricsName[] =
+      "Enterprise.CloudReportingReportGenerationError";
+  base::UmaHistogramEnumeration(kReportGenerationErrorMetricsName, error);
 }
 
 }  // namespace enterprise_reporting

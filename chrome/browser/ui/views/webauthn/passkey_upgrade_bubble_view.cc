@@ -28,12 +28,16 @@
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/vector_icons/vector_icons.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/base/ui_base_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/geometry/insets_outsets_base.h"
 #include "ui/views/controls/separator.h"
@@ -187,14 +191,19 @@ PasskeyUpgradeBubbleView::PasskeyUpgradeBubbleView(
               },
               base::Unretained(this)),
           /*main_image_icon=*/
-          ui::ImageModel::FromVectorIcon(vector_icons::kSettingsIcon,
+          ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                             ? vector_icons::kSettingsFilledIcon
+                                             : vector_icons::kSettingsOldIcon,
                                          ui::kColorIcon),
           /*title_text=*/
           l10n_util::GetStringUTF16(IDS_PASSKEY_UPGRADE_BUBBLE_MANAGE_BUTTON),
           /*subtitle_text=*/std::u16string(),
           /*action_image_icon=*/
           ui::ImageModel::FromVectorIcon(
-              vector_icons::kLaunchIcon, ui::kColorIconSecondary,
+              features::IsRoundedIconsEnabled()
+                  ? vector_icons::kOpenInNewFlippableIcon
+                  : vector_icons::kLaunchOldIcon,
+              ui::kColorIconSecondary,
               GetLayoutConstant(LayoutConstant::kPageInfoIconSize))));
 
   // The base class sets a fixed dialog width, but that might not fit the

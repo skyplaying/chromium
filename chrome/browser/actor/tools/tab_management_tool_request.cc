@@ -9,6 +9,8 @@
 #include "chrome/browser/actor/tools/tab_management_tool.h"
 #include "chrome/browser/actor/tools/tool_request_visitor_functor.h"
 #include "chrome/common/actor/action_result.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
+#include "ui/base/window_open_disposition.h"
 
 namespace actor {
 

@@ -35,15 +35,18 @@
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/bluetooth/bluetooth_chooser_context_factory.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/browsing_data/chrome_browsing_data_model_delegate.h"
-#include "chrome/browser/browsing_topics/browsing_topics_service_factory.h"
 #include "chrome/browser/content_settings/chrome_content_settings_utils.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/file_system_access/chrome_file_system_access_permission_context.h"
 #include "chrome/browser/file_system_access/file_system_access_features.h"
 #include "chrome/browser/file_system_access/file_system_access_permission_context_factory.h"
+#include "chrome/browser/glic/selection/inline_cue_blocklist_utils.h"
 #include "chrome/browser/hid/hid_chooser_context.h"
 #include "chrome/browser/hid/hid_chooser_context_factory.h"
+#include "chrome/browser/infobars/browser_infobar_manager.h"
+#include "chrome/browser/infobars/infobar_features.h"
 #include "chrome/browser/media/unified_autoplay_config.h"
 #include "chrome/browser/permissions/permission_actions_history_factory.h"
 #include "chrome/browser/permissions/permission_decision_auto_blocker_factory.h"
@@ -52,8 +55,6 @@
 #include "chrome/browser/privacy_sandbox/privacy_sandbox_service_factory.h"
 #include "chrome/browser/serial/serial_chooser_context.h"
 #include "chrome/browser/serial/serial_chooser_context_factory.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/page_info/page_info_infobar_delegate.h"
 #include "chrome/browser/ui/safety_hub/notification_permission_review_service_factory.h"
@@ -65,13 +66,15 @@
 #include "chrome/browser/usb/usb_chooser_context.h"
 #include "chrome/browser/usb/usb_chooser_context_factory.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
+#include "chrome/browser/web_applications/web_app.h"
+#include "chrome/browser/web_applications/web_app_filter.h"
+#include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/common/extensions/manifest_handlers/app_launch_info.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/browsing_data/content/browsing_data_model.h"
-#include "components/browsing_topics/browsing_topics_service.h"
 #include "components/content_settings/core/browser/content_settings_registry.h"
 #include "components/content_settings/core/browser/content_settings_uma_util.h"
 #include "components/content_settings/core/browser/cookie_settings.h"
@@ -110,6 +113,7 @@
 #include "content/public/common/content_features.h"
 #include "content/public/common/url_constants.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/permissions/api_permission.h"
 #include "extensions/common/permissions/permissions_data.h"
 #include "services/network/public/cpp/is_potentially_trustworthy.h"
@@ -349,12 +353,15 @@ void InsertOriginIntoGroup(
   }
 }
 
-// Update the storage data in |origin_size_map|.
-void UpdateDataForOrigin(const url::Origin& origin,
-                         const int64_t size,
-                         std::map<url::Origin, int64_t>* origin_size_map) {
+// Update the storage data in |per_partition_origin_size_map|.
+void UpdateDataForOriginAndPartition(
+    const url::Origin& origin,
+    const int64_t size,
+    const std::optional<GroupingKey>& partition_grouping_key,
+    SiteSettingsHandler::PerPartitionOriginSizeMap*
+        per_partition_origin_size_map) {
   if (size > 0) {
-    (*origin_size_map)[origin] += size;
+    (*per_partition_origin_size_map)[{origin, partition_grouping_key}] += size;
   }
 }
 
@@ -414,11 +421,13 @@ bool IsPatternValidForType(const std::string& pattern_string,
 
 void UpdateDataFromModel(
     SiteSettingsHandler::AllSitesMap* all_sites_map,
-    std::map<url::Origin, int64_t>* origin_size_map,
+    SiteSettingsHandler::PerPartitionOriginSizeMap*
+        per_partition_origin_size_map,
     const url::Origin& origin,
     int64_t size,
     std::optional<GroupingKey> partition_grouping_key = std::nullopt) {
-  UpdateDataForOrigin(origin, size, origin_size_map);
+  UpdateDataForOriginAndPartition(origin, size, partition_grouping_key,
+                                  per_partition_origin_size_map);
   InsertOriginIntoGroup(all_sites_map, origin,
                         /*is_origin_with_cookies=*/false,
                         partition_grouping_key);
@@ -562,13 +571,17 @@ void ConvertSiteGroupMapToList(
     site_group.Set(kHasInstalledPWA, has_installed_pwa);
     site_group.Set(kNumCookies, 0);
     site_group.Set(kOriginList, std::move(origin_list));
-    if (etld_plus1.has_value() && rws_map.count(*etld_plus1)) {
-      site_group.Set(kRwsOwner, rws_map[*etld_plus1].first);
-      site_group.Set(kRwsNumMembers, rws_map[*etld_plus1].second);
-      auto schemeful_site = ConvertEtldToSchemefulSite(*etld_plus1);
-      site_group.Set(kRwsEnterpriseManaged,
-                     privacy_sandbox_service->IsPartOfManagedRelatedWebsiteSet(
-                         schemeful_site));
+    if (etld_plus1.has_value()) {
+      if (auto it = rws_map.find(*etld_plus1); it != rws_map.end()) {
+        auto& [rws_owner, rws_num_members] = it->second;
+        site_group.Set(kRwsOwner, rws_owner);
+        site_group.Set(kRwsNumMembers, rws_num_members);
+        auto schemeful_site = ConvertEtldToSchemefulSite(*etld_plus1);
+        site_group.Set(
+            kRwsEnterpriseManaged,
+            privacy_sandbox_service->IsPartOfManagedRelatedWebsiteSet(
+                schemeful_site));
+      }
     }
     list_value->Append(std::move(site_group));
   }
@@ -840,6 +853,11 @@ void SiteSettingsHandler::RegisterMessages() {
       "openSystemPermissionSettings",
       base::BindRepeating(
           &SiteSettingsHandler::HandleOpenSystemPermissionSettings,
+          base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
+      "getSubAppsPermissionExplanation",
+      base::BindRepeating(
+          &SiteSettingsHandler::HandleGetSubAppsPermissionExplanation,
           base::Unretained(this)));
 }
 
@@ -1357,12 +1375,12 @@ void SiteSettingsHandler::HandleGetRecentSitePermissions(
 
 base::ListValue SiteSettingsHandler::PopulateCookiesAndUsageData(
     Profile* profile) {
-  std::map<url::Origin, int64_t> origin_size_map;
+  PerPartitionOriginSizeMap per_partition_origin_size_map;
   std::map<std::pair<std::string, std::optional<std::string>>, int>
       host_cookie_map;
   base::ListValue list_value;
 
-  GetOriginStorage(&all_sites_map_, &origin_size_map);
+  GetOriginStorage(&all_sites_map_, &per_partition_origin_size_map);
   GetHostCookies(&all_sites_map_, &host_cookie_map);
   ConvertSiteGroupMapToList(all_sites_map_, origin_permission_set_, &list_value,
                             profile, browsing_data_model_.get());
@@ -1383,8 +1401,8 @@ base::ListValue SiteSettingsHandler::PopulateCookiesAndUsageData(
         cookie_num += etld_plus1_cookie_num_it->second;
       }
     }
-    // Iterate over the origins for the group, and set their usage and cookie
-    // numbers.
+    // Iterate over the origins and partitions for the group, and set their
+    // usage and cookie numbers.
     for (base::Value& value : origin_list) {
       base::DictValue& origin_info = value.GetDict();
       auto origin =
@@ -1392,8 +1410,10 @@ base::ListValue SiteSettingsHandler::PopulateCookiesAndUsageData(
       bool is_partitioned =
           origin_info.FindBool("isPartitioned").value_or(false);
 
-      const auto& size_info_it = origin_size_map.find(origin);
-      if (size_info_it != origin_size_map.end()) {
+      const auto& size_info_it = per_partition_origin_size_map.find(
+          {origin,
+           is_partitioned ? std::make_optional(grouping_key) : std::nullopt});
+      if (size_info_it != per_partition_origin_size_map.end()) {
         origin_info.Set("usage", static_cast<double>(size_info_it->second));
       }
 
@@ -1698,8 +1718,8 @@ void SiteSettingsHandler::HandleSetOriginPermissions(
     if (base::FeatureList::IsEnabled(
             permissions::features::
                 kSafetyHubUnusedPermissionRevocationForAllSurfaces) &&
-        content_settings::CanBeAutoRevokedAsUnusedPermission(
-            content_type, content_settings::ContentSettingToValue(setting))) {
+        content_settings::CanBeAutoRevokedAsUnusedPermission(content_type,
+                                                             setting)) {
       constraints.set_track_last_visit_for_autoexpiration(true);
     }
 
@@ -1789,9 +1809,19 @@ void SiteSettingsHandler::HandleSetOriginPermissions(
     if ((tab_is_same_origin || tab_might_embed_origin) &&
         tab->GetBrowserWindowInterface()->GetProfile()->GetOriginalProfile() ==
             profile_->GetOriginalProfile()) {
-      infobars::ContentInfoBarManager* const infobar_manager =
-          infobars::ContentInfoBarManager::FromWebContents(web_contents);
-      PageInfoInfoBarDelegate::Create(infobar_manager);
+      if (infobars::IsInfoBarMigrated(
+              infobars::InfoBarDelegate::PAGE_INFO_INFOBAR_DELEGATE)) {
+        auto* browser_infobar_manager =
+            infobars::BrowserInfoBarManager::From(g_browser_process);
+        if (browser_infobar_manager) {
+          browser_infobar_manager->Show(
+              tab, infobars::InfoBarDelegate::PAGE_INFO_INFOBAR_DELEGATE);
+        }
+      } else {
+        infobars::ContentInfoBarManager* const infobar_manager =
+            infobars::ContentInfoBarManager::FromWebContents(web_contents);
+        PageInfoInfoBarDelegate::Create(infobar_manager);
+      }
     }
     return true;
   });
@@ -1842,6 +1872,15 @@ void SiteSettingsHandler::HandleResetCategoryPermissionForPattern(
       scoped_revocation_reporter(
           profile, primary_pattern, secondary_pattern, content_type,
           permissions::PermissionSourceUI::SITE_SETTINGS);
+
+  // For INLINE_CUE_MENU, if the site is in the default blocklist, resetting it
+  // explicitly sets CONTENT_SETTING_ALLOW in HostContentSettingsMap so that
+  // the user's intent to unblock the site takes precedence over the default
+  // blocklist fallback.
+  if (content_type == ContentSettingsType::INLINE_CUE_MENU &&
+      glic::UnblockDefaultSiteForInlineCue(profile, primary_pattern_string)) {
+    return;
+  }
 
   map->SetContentSettingCustomScope(primary_pattern, secondary_pattern,
                                     content_type, CONTENT_SETTING_DEFAULT);
@@ -1954,8 +1993,8 @@ void SiteSettingsHandler::HandleSetCategoryPermissionForPattern(
   if (base::FeatureList::IsEnabled(
           permissions::features::
               kSafetyHubUnusedPermissionRevocationForAllSurfaces) &&
-      content_settings::CanBeAutoRevokedAsUnusedPermission(
-          content_type, content_settings::ContentSettingToValue(setting))) {
+      content_settings::CanBeAutoRevokedAsUnusedPermission(content_type,
+                                                           setting)) {
     constraints.set_track_last_visit_for_autoexpiration(true);
   }
 
@@ -2393,7 +2432,7 @@ void SiteSettingsHandler::StopObservingSourcesForProfile(Profile* profile) {
 
 void SiteSettingsHandler::GetOriginStorage(
     AllSitesMap* all_sites_map,
-    std::map<url::Origin, int64_t>* origin_size_map) {
+    PerPartitionOriginSizeMap* per_partition_origin_size_map) {
   for (const auto& entry : *browsing_data_model_) {
     if (entry.data_details->storage_size == 0) {
       continue;
@@ -2405,13 +2444,13 @@ void SiteSettingsHandler::GetOriginStorage(
     // If the storage is partitioned on a third party we need to ensure the
     // grouping key matches the top-site and doesn't default to the origin
     // in the UI.
-    std::optional<GroupingKey> partition_grouping_key = std::nullopt;
+    std::optional<GroupingKey> partition_grouping_key;
     auto third_party_partitioning_site = entry.GetThirdPartyPartitioningSite();
     if (third_party_partitioning_site) {
       partition_grouping_key = GroupingKey::Create(url::Origin::Create(
           GURL(third_party_partitioning_site->Serialize())));
     }
-    UpdateDataFromModel(all_sites_map, origin_size_map, origin,
+    UpdateDataFromModel(all_sites_map, per_partition_origin_size_map, origin,
                         entry.data_details->storage_size,
                         partition_grouping_key);
   }
@@ -2428,8 +2467,8 @@ void SiteSettingsHandler::GetHostCookies(
     if (!cookie) {
       continue;
     }
-    std::optional<std::string> partition_etld_plus1 = std::nullopt;
-    std::optional<GroupingKey> partition_grouping_key = std::nullopt;
+    std::optional<std::string> partition_etld_plus1;
+    std::optional<GroupingKey> partition_grouping_key;
     if (cookie->IsPartitioned()) {
       partition_etld_plus1 = cookie->PartitionKey()->site().GetURL().GetHost();
       partition_grouping_key =
@@ -2560,6 +2599,60 @@ void SiteSettingsHandler::HandleOpenSystemPermissionSettings(
   system_permission_settings::OpenSystemSettings(web_contents, permission_type);
 }
 
+void SiteSettingsHandler::HandleGetSubAppsPermissionExplanation(
+    const base::ListValue& args) {
+  AllowJavascript();
+
+  CHECK_EQ(2U, args.size());
+  const base::Value& callback_id = args[0];
+  const std::string& url_string = args[1].GetString();
+
+  const GURL url(url_string);
+  base::DictValue result;
+  result.Set("isSubApp", false);
+  result.Set("hasSubApps", false);
+
+  auto* web_app_provider = web_app::WebAppProvider::GetForWebApps(profile_);
+  if (!web_app_provider) {
+    ResolveJavascriptCallback(callback_id, result);
+    return;
+  }
+
+  const web_app::WebAppRegistrar& registrar =
+      web_app_provider->registrar_unsafe();
+  std::optional<webapps::AppId> app_id =
+      web_app::FindInstalledAppWithUrlInScope(profile_, url);
+
+  if (app_id.has_value()) {
+    if (registrar.AppMatches(*app_id,
+                             web_app::WebAppFilter::IsIsolatedSubApp())) {
+      const web_app::WebApp* app = registrar.GetAppById(*app_id);
+      if (app && app->parent_app_id().has_value()) {
+        std::string parent_app_id = app->parent_app_id().value();
+        result.Set("isSubApp", true);
+        result.Set("appName", registrar.GetAppShortName(*app_id));
+        result.Set("parentAppName", registrar.GetAppShortName(parent_app_id));
+        GURL parent_app_url = registrar.GetAppStartUrl(parent_app_id);
+        std::string parent_url_string =
+            parent_app_url.SchemeIs(webapps::kIsolatedAppScheme)
+                ? parent_app_url.spec()
+                : url::Origin::Create(parent_app_url).Serialize();
+        result.Set("parentAppOrigin", parent_url_string);
+      }
+    }
+
+    if (!result.FindBool("isSubApp").value_or(false) &&
+        registrar.AppMatches(*app_id, web_app::WebAppFilter::IsIsolatedApp())) {
+      if (!registrar.GetAllSubAppIds(*app_id).empty()) {
+        result.Set("hasSubApps", true);
+        result.Set("appName", registrar.GetAppShortName(*app_id));
+      }
+    }
+  }
+
+  ResolveJavascriptCallback(callback_id, result);
+}
+
 void SiteSettingsHandler::RemoveNonModelData(
     const std::vector<url::Origin>& origins) {
   if (origins.empty()) {
@@ -2677,8 +2770,8 @@ base::ListValue SiteSettingsHandler::PopulateFileSystemGrantData() {
     base::DictValue origin_file_system_permission_grants;
     base::ListValue view_grants;
     base::ListValue edit_grants;
-    std::vector<std::string> directory_edit_grants_file_paths;
-    std::vector<std::string> file_edit_grants_file_paths;
+    std::set<std::string> directory_edit_grants_file_paths;
+    std::set<std::string> file_edit_grants_file_paths;
 
     std::string origin_string = origin.GetURL().spec();
     origin_file_system_permission_grants.Set(site_settings::kOrigin,
@@ -2695,15 +2788,14 @@ base::ListValue SiteSettingsHandler::PopulateFileSystemGrantData() {
                                 file_path_string);
       directory_write_grant.Set(site_settings::kDisplayName, file_path_string);
       directory_write_grant.Set(site_settings::kFileSystemIsDirectory, true);
-      directory_edit_grants_file_paths.push_back(file_path_string);
+      directory_edit_grants_file_paths.insert(file_path_string);
       edit_grants.Append(std::move(directory_write_grant));
     }
 
     for (auto& path_info : grantObj.directory_read_grants) {
       const std::string file_path_string =
           FilePathToValue(path_info.path).GetString();
-      if (std::ranges::contains(directory_edit_grants_file_paths,
-                                file_path_string)) {
+      if (directory_edit_grants_file_paths.contains(file_path_string)) {
         continue;
       }
       base::DictValue directory_read_grant;
@@ -2724,15 +2816,14 @@ base::ListValue SiteSettingsHandler::PopulateFileSystemGrantData() {
                            file_path_string);
       file_write_grant.Set(site_settings::kDisplayName, file_path_string);
       file_write_grant.Set(site_settings::kFileSystemIsDirectory, false);
-      file_edit_grants_file_paths.push_back(file_path_string);
+      file_edit_grants_file_paths.insert(file_path_string);
       edit_grants.Append(std::move(file_write_grant));
     }
 
     for (auto& path_info : grantObj.file_read_grants) {
       const std::string file_path_string =
           FilePathToValue(path_info.path).GetString();
-      if (std::ranges::contains(file_edit_grants_file_paths,
-                                file_path_string)) {
+      if (file_edit_grants_file_paths.contains(file_path_string)) {
         continue;
       }
       base::DictValue file_read_grant;

@@ -21,6 +21,8 @@ import org.chromium.base.IntentUtils;
 import org.chromium.base.Log;
 import org.chromium.base.ResettersForTesting;
 import org.chromium.base.TimeUtils;
+import org.chromium.base.TriState;
+import org.chromium.base.TriStateUtils;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.supplier.OneshotSupplier;
 import org.chromium.build.annotations.NullMarked;
@@ -42,7 +44,6 @@ import org.chromium.components.crash.CrashKeyIndex;
 import org.chromium.components.crash.CrashKeys;
 import org.chromium.components.embedder_support.util.UrlConstants;
 import org.chromium.components.signin.AccountManagerFacadeProvider;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 
 /**
@@ -75,15 +76,22 @@ public abstract class FirstRunFlowSequencer {
             if (isChild) {
                 return !historySyncHelper.isHistorySyncDisabledByCustodian();
             }
-            if (historySyncHelper.isHistorySyncDisabledByPolicy()
-                    || historySyncHelper.didAlreadyOptIn()) {
+
+            boolean alreadyOptedIn = historySyncHelper.didAlreadyOptIn();
+            if (ChromeFeatureList.isEnabled(ChromeFeatureList.DEFAULT_BROWSER_PROMO_FRE)) {
+                // HistorySync is no longer the last page in the FRE flow, so users should be able
+                // to navigate back to the history sync page.
+                alreadyOptedIn = false;
+            }
+
+            if (historySyncHelper.isHistorySyncDisabledByPolicy() || alreadyOptedIn) {
                 return false;
             }
             // Show the page only to signed-in users.
             IdentityManager identityManager =
                     IdentityServicesProvider.get().getIdentityManager(profile);
             assumeNonNull(identityManager);
-            return identityManager.hasPrimaryAccount(ConsentLevel.SIGNIN);
+            return identityManager.hasPrimaryAccount();
         }
 
         /** @return true if the Search Engine promo page should be shown. */
@@ -114,7 +122,7 @@ public abstract class FirstRunFlowSequencer {
 
     private boolean mIsFlowKnown;
     private boolean mAccountsAvailable;
-    private @Nullable Boolean mIsChild;
+    private @TriState int mIsChild;
 
     /**
      * Callback that is called once the flow is determined. If the properties is null, the First Run
@@ -163,22 +171,23 @@ public abstract class FirstRunFlowSequencer {
     }
 
     private boolean shouldShowHistorySyncOptIn() {
-        return mDelegate.shouldShowHistorySyncOptIn(assumeNonNull(mIsChild));
+        assert mIsChild != TriState.NOT_SET;
+        return mDelegate.shouldShowHistorySyncOptIn(mIsChild == TriState.TRUE);
     }
 
     private void setChildAccountStatus(boolean isChild) {
-        assert mIsChild == null;
-        mIsChild = isChild;
+        assert mIsChild == TriState.NOT_SET;
+        mIsChild = TriStateUtils.from(isChild);
         maybeProcessFreEnvironmentPreNative();
     }
 
     private void maybeProcessFreEnvironmentPreNative() {
         // Wait till both child account status and the list of accounts are available.
-        if (mIsChild == null || !mAccountsAvailable) return;
+        if (mIsChild == TriState.NOT_SET || !mAccountsAvailable) return;
 
         if (mIsFlowKnown) return;
         mIsFlowKnown = true;
-        onFlowIsKnown(mIsChild);
+        onFlowIsKnown(mIsChild == TriState.TRUE);
     }
 
     /**
@@ -306,9 +315,8 @@ public abstract class FirstRunFlowSequencer {
         CrashKeys.getInstance().set(CrashKeyIndex.FIRST_RUN, "yes");
 
         if (inSameTask) {
-            FreIntentCreator intentCreator = new FreIntentCreator();
             Intent freIntent =
-                    intentCreator.create(
+                    FreIntentCreator.create(
                             caller,
                             fromIntent,
                             preferLightweightFre,
@@ -319,9 +327,8 @@ public abstract class FirstRunFlowSequencer {
         }
 
         if ((fromIntent.getFlags() & Intent.FLAG_ACTIVITY_NEW_TASK) != 0) {
-            FreIntentCreator intentCreator = new FreIntentCreator();
             Intent freIntent =
-                    intentCreator.create(
+                    FreIntentCreator.create(
                             caller, fromIntent, preferLightweightFre, /* usePendingIntent= */ true);
 
             // Although the FRE tries to run in the same task now, this is still needed for

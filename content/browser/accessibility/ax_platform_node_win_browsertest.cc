@@ -172,9 +172,6 @@ class AXPlatformNodeWinBrowserTest : public AccessibilityContentBrowserTest {
     }
   }
 
- private:
-  base::test::ScopedFeatureList scoped_feature_list_{
-      features::kEnableAccessibilityAriaVirtualContent};
 };
 
 IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinBrowserTest,
@@ -215,10 +212,7 @@ IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinBrowserTest,
   ASSERT_EQ(iframe_screen_bounds.y(), bounds.y());
 }
 
-class AXPlatformNodeWinUIABrowserTest : public AXPlatformNodeWinBrowserTest {
- private:
-  base::test::ScopedFeatureList scoped_feature_list_{::features::kUiaProvider};
-};
+class AXPlatformNodeWinUIABrowserTest : public AXPlatformNodeWinBrowserTest {};
 
 IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinUIABrowserTest,
                        UIAGetPropertyValueFlowsFromNone) {
@@ -700,34 +694,6 @@ IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinUIABrowserTest,
   EXPECT_UIA_INT_EQ(empty_lang_node_com_win, UIA_CulturePropertyId, en_us_lcid);
 }
 
-IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinUIABrowserTest,
-                       UIAGetPropertyValueVirtualContent) {
-  LoadInitialAccessibilityTreeFromHtml(std::string(R"HTML(
-      <!DOCTYPE html>
-      <html>
-        <body>
-          <div role="group" aria-virtualcontent="block-end"
-               aria-label="vc">Hello World</div>
-        </body>
-      </html>
-  )HTML"));
-
-  ui::BrowserAccessibility* root_node = GetRootAndAssertNonNull();
-  ui::BrowserAccessibility* body_node = root_node->PlatformGetFirstChild();
-  ASSERT_NE(nullptr, body_node);
-
-  ui::BrowserAccessibility* node = FindNode(ax::mojom::Role::kGroup, "vc");
-  ASSERT_NE(nullptr, node);
-  ui::BrowserAccessibilityComWin* node_com_win =
-      ToBrowserAccessibilityWin(node)->GetCOM();
-  ASSERT_NE(nullptr, node_com_win);
-
-  EXPECT_UIA_BSTR_EQ(
-      node_com_win,
-      ui::UiaRegistrarWin::GetInstance().GetVirtualContentPropertyId(),
-      L"block-end");
-}
-
 IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinBrowserTest,
                        HitTestOnAncestorOfWebRoot) {
   EXPECT_TRUE(NavigateToURL(shell(), GURL(url::kAboutBlankURL)));
@@ -895,12 +861,46 @@ IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinBrowserTest, IFrameTraversal) {
   EXPECT_TRUE(tree_position->IsNullPosition());
 }
 
+IN_PROC_BROWSER_TEST_F(AXPlatformNodeWinBrowserTest,
+                       UIAIsWebContentRootProperty) {
+  LoadInitialAccessibilityTreeFromHtmlFilePath(
+      "/accessibility/html/iframe-traversal.html");
+  WaitForAccessibilityTreeToContainNodeWithName(shell()->web_contents(),
+                                                "Text in iframe");
+
+  ui::BrowserAccessibility* root_node = GetRootAndAssertNonNull();
+  ui::BrowserAccessibility* iframe_text_node =
+      FindNodeAfter(root_node, "Text in iframe");
+  ASSERT_NE(nullptr, iframe_text_node);
+  ui::BrowserAccessibility* iframe_root =
+      iframe_text_node->manager()->GetBrowserAccessibilityRoot();
+  ASSERT_NE(nullptr, iframe_root);
+
+  PROPERTYID property_id =
+      ui::UiaRegistrarWin::GetInstance().GetIsWebContentRootPropertyId();
+  ASSERT_NE(0, property_id);
+
+  ScopedVariant root_value;
+  ASSERT_HRESULT_SUCCEEDED(
+      ToBrowserAccessibilityWin(root_node)->GetCOM()->GetPropertyValue(
+          property_id, root_value.Receive()));
+  ASSERT_EQ(VT_BOOL, root_value.type());
+  EXPECT_EQ(VARIANT_TRUE, V_BOOL(root_value.ptr()));
+
+  ScopedVariant iframe_value;
+  ASSERT_HRESULT_SUCCEEDED(
+      ToBrowserAccessibilityWin(iframe_root)
+          ->GetCOM()
+          ->GetPropertyValue(property_id, iframe_value.Receive()));
+  ASSERT_EQ(VT_BOOL, iframe_value.type());
+  EXPECT_EQ(VARIANT_FALSE, V_BOOL(iframe_value.ptr()));
+}
+
 // Test fixture for MathML UIA property tests.
 class AXPlatformNodeWinMathMLBrowserTest : public AXPlatformNodeWinBrowserTest {
  public:
   AXPlatformNodeWinMathMLBrowserTest() {
-    scoped_feature_list_.InitWithFeatures(
-        {::features::kUiaProvider, ::features::kUiaMathMlSupport}, {});
+    scoped_feature_list_.InitAndEnableFeature(::features::kUiaMathMlSupport);
   }
 
  private:

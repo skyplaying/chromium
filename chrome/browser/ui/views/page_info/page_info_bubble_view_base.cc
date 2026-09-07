@@ -4,10 +4,7 @@
 
 #include "chrome/browser/ui/views/page_info/page_info_bubble_view_base.h"
 
-#include <string>
-
 #include "chrome/browser/ui/page_info/page_info_dialog.h"
-#include "components/page_info/page_info_ui.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/buildflags.h"
@@ -62,8 +59,12 @@ PageInfoBubbleViewBase::PageInfoBubbleViewBase(
   SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
   SetShowCloseButton(true);
 
-  set_parent_window(parent_window);
-  if (std::holds_alternative<std::nullptr_t>(anchor)) {
+  // If anchored to a specific view, skip set_parent_window() so that
+  // BubbleDialogDelegateView automatically parents to the anchor view's widget.
+  // In Mac immersive fullscreen, this ensures the bubble is parented to the
+  // top container overlay_widget rather than the main browser window.
+  if (anchor.IsNull()) {
+    set_parent_window(parent_window);
     SetAnchorRect(anchor_rect);
   }
   SetProperty(views::kElementIdentifierKey, kPageInfoBubbleElementIdentifier);

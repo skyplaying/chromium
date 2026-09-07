@@ -105,11 +105,6 @@ const NSUInteger kMaxSuggestTileTypePosition = 15;
             (OmniboxAutocompleteController*)autocompleteController
                                            hasSuggestions:(BOOL)hasSuggestions
                                                isFocusing:(BOOL)isFocusing {
-  if (!base::FeatureList::IsEnabled(kComposeboxIOS)) {
-    [self.consumer setKeyboardAttachedBottomOmniboxHeight:
-                       self.presenter.keyboardAttachedBottomOmniboxHeight];
-  }
-
   [self.consumer newResultsAvailable];
   [_consumer setUseBottomOmniboxInPopup:self.presenter.useBottomOmniboxInPopup];
 
@@ -259,14 +254,6 @@ const NSUInteger kMaxSuggestTileTypePosition = 15;
         (AutocompleteMatchFormatter*)suggestion;
     const AutocompleteMatch& match =
         autocompleteMatchFormatter.autocompleteMatch;
-    if (suggestion.isShareable) {
-      base::UmaHistogramEnumeration(
-          "Mobile.ShareThisPage.Used",
-          ShareThisPageLocation::kOmniboxVerbatimMatch);
-      [self.browserCoordinatorCommandsHandler hideComposeboxAndShowShareSheet];
-      [self.omniboxAutocompleteController closeOmniboxPopup];
-      return;
-    }
 
     if (match.has_tab_match.value_or(false)) {
       [self.omniboxAutocompleteController

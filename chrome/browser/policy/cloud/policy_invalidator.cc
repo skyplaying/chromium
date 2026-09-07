@@ -4,6 +4,7 @@
 
 #include "chrome/browser/policy/cloud/policy_invalidator.h"
 
+#include <algorithm>
 #include <memory>
 
 #include "base/functional/bind.h"
@@ -89,13 +90,15 @@ size_t CalculatePolicyHash(const enterprise_management::PolicyData* policy) {
 }  // namespace
 
 PolicyInvalidator::PolicyInvalidator(
+    std::string type,
     PolicyInvalidationScope scope,
     invalidation::InvalidationListener* invalidation_listener,
     CloudPolicyCore* core,
     const base::Clock* clock,
     const std::string& device_local_account_id,
     std::unique_ptr<PolicyInvalidationHandler> policy_invalidation_handler)
-    : policy_invalidation_handler_(std::move(policy_invalidation_handler)),
+    : type_(std::move(type)),
+      policy_invalidation_handler_(std::move(policy_invalidation_handler)),
       scope_(scope),
       core_(core),
       invalidation_listener_(invalidation_listener),
@@ -105,15 +108,10 @@ PolicyInvalidator::PolicyInvalidator(
   CHECK(policy_invalidation_handler_);
 }
 
-void PolicyInvalidator::Shutdown() {
-  // Explicitly reset observation of `InvalidationListener` as it needs
-  // `GetType()` to remove observer and `GetType()` requires access to our
-  // state.
-  invalidation_listener_observation_.Reset();
-}
+PolicyInvalidator::~PolicyInvalidator() = default;
 
-PolicyInvalidator::~PolicyInvalidator() {
-  CHECK(!invalidation_listener_observation_.IsObserving());
+std::string PolicyInvalidator::GetType() const {
+  return type_;
 }
 
 void PolicyInvalidator::OnCoreConnected(CloudPolicyCore* core) {}
@@ -123,8 +121,7 @@ void PolicyInvalidator::OnRefreshSchedulerStarted(CloudPolicyCore* core) {
   CHECK(!store_observation_.IsObserving());
   CHECK(!invalidation_listener_observation_.IsObserving());
 
-  auto* cloud_policy_store =
-      policy_invalidation_handler_->GetCloudPolicyStore();
+  auto* cloud_policy_store = core->store();
   CHECK(cloud_policy_store);
   // Policy stack is connected and is ready for invalidations.
   store_observation_.Observe(cloud_policy_store);
@@ -149,7 +146,7 @@ void PolicyInvalidator::OnCoreDisconnecting(CloudPolicyCore* core) {
 }
 
 void PolicyInvalidator::OnStoreLoaded(CloudPolicyStore* store) {
-  CHECK_EQ(store, policy_invalidation_handler_->GetCloudPolicyStore());
+  CHECK_EQ(store, policy_invalidation_handler_->core()->store());
 
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
@@ -164,9 +161,15 @@ PolicyInvalidator::PolicyInvalidationHandler::PolicyInvalidationHandler(
     PolicyInvalidationScope scope,
     CloudPolicyCore* core,
     const base::Clock* clock,
-    scoped_refptr<base::SequencedTaskRunner> task_runner)
-    : scope_(scope), core_(core), clock_(clock), task_runner_(task_runner) {
-  CHECK(task_runner.get());
+    scoped_refptr<base::SequencedTaskRunner> task_runner,
+    const char* policy_refresh_metric_name,
+    const char* policy_invalidation_metric_name)
+    : core_(core),
+      clock_(clock),
+      task_runner_(std::move(task_runner)),
+      policy_refresh_metric_name_(policy_refresh_metric_name),
+      policy_invalidation_metric_name_(policy_invalidation_metric_name) {
+  CHECK(task_runner_.get());
   // |highest_handled_invalidation_version_| indicates the highest actual
   // invalidation version handled. Since actual invalidations can have only
   // positive versions, this member may be zero (no versioned invalidation
@@ -184,12 +187,7 @@ PolicyInvalidator::PolicyInvalidationHandler::~PolicyInvalidationHandler() =
 
 void PolicyInvalidator::PolicyInvalidationHandler::HandlePolicyRefresh(
     CloudPolicyStore* store) {
-  // There are exactly two stores that `HandlePolicyRefresh` can be called on.
-  CHECK(store == core_->store() || store == core_->extension_install_store());
-  // If the store is not handled by this invalidator, do nothing.
-  if (store != GetCloudPolicyStore()) {
-    return;
-  }
+  CHECK(store == core_->store());
   const auto new_policy_hash = CalculatePolicyHash(store->policy());
 
   if (!policy_hash_value_.has_value()) {
@@ -208,7 +206,7 @@ void PolicyInvalidator::PolicyInvalidationHandler::HandlePolicyRefresh(
       store_invalidation_version == in_progress_invalidation_.value().version();
 
   RecordPolicyRefreshMetric(
-      GetPolicyRefreshMetricName(scope_),
+      policy_refresh_metric_name_,
       /*invalidations_enabled=*/AreInvalidationsEnabledForAWhile(),
       /*policy_changed=*/policy_changed,
       /*invalidated=*/invalidated);
@@ -285,7 +283,7 @@ void PolicyInvalidator::PolicyInvalidationHandler::HandleInvalidation(
   }
 
   // Ignore the invalidation if it is expired.
-  const auto* policy = GetCloudPolicyStore()->policy();
+  const auto* policy = core_->store()->policy();
   const auto last_fetch_time =
       policy ? base::Time::FromMillisecondsSinceUnixEpoch(policy->timestamp())
              : base::Time();
@@ -294,8 +292,8 @@ void PolicyInvalidator::PolicyInvalidationHandler::HandleInvalidation(
       IsInvalidationExpired(invalidation, last_fetch_time, current_time);
   const bool is_missing_payload = invalidation.payload().empty();
 
-  RecordPolicyInvalidationMetric(GetPolicyInvalidationMetricName(scope_),
-                                 is_expired, is_missing_payload);
+  RecordPolicyInvalidationMetric(policy_invalidation_metric_name_, is_expired,
+                                 is_missing_payload);
 
   if (is_expired) {
     return;
@@ -337,13 +335,7 @@ void PolicyInvalidator::PolicyInvalidationHandler::UpdateMaxFetchDelay(
 
 void PolicyInvalidator::PolicyInvalidationHandler::set_max_fetch_delay(
     base::TimeDelta delay) {
-  if (delay < kMaxFetchDelayMin) {
-    max_fetch_delay_ = kMaxFetchDelayMin;
-  } else if (delay > kMaxFetchDelayMax) {
-    max_fetch_delay_ = kMaxFetchDelayMax;
-  } else {
-    max_fetch_delay_ = delay;
-  }
+  max_fetch_delay_ = std::clamp(delay, kMaxFetchDelayMin, kMaxFetchDelayMax);
 }
 
 void PolicyInvalidator::PolicyInvalidationHandler::UpdateInvalidationsEnabled(

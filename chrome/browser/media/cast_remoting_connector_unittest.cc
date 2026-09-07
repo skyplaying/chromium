@@ -13,13 +13,16 @@
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
 #include "build/build_config.h"
+#include "chrome/browser/media/remoting_bridge.h"
 #include "components/media_router/common/media_route.h"
 #include "components/media_router/common/media_source.h"
 #include "components/media_router/common/pref_names.h"
+#include "components/sessions/core/session_id.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/test/browser_task_environment.h"
 #include "media/mojo/mojom/remoting.mojom.h"
+#include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -148,8 +151,10 @@ class CastRemotingConnectorTest : public ::testing::Test {
     mojo::PendingRemote<media::mojom::RemotingSource> source_pending_remote;
     source->Bind(source_pending_remote.InitWithNewPipeAndPassReceiver());
     mojo::PendingRemote<media::mojom::Remoter> remoter_pending_remote;
-    connector_->CreateBridge(
-        std::move(source_pending_remote),
+    RemotingBridge::Client* clients[] = {connector_.get()};
+    mojo::MakeSelfOwnedReceiver(
+        std::make_unique<RemotingBridge>(clients,
+                                         std::move(source_pending_remote)),
         remoter_pending_remote.InitWithNewPipeAndPassReceiver());
     return remoter_pending_remote;
   }

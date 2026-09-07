@@ -7,7 +7,6 @@ package org.chromium.chrome.browser.autofill;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.times;
@@ -25,17 +24,15 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.ArgumentCaptor;
-import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
-import org.robolectric.annotation.Config;
 
-import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.autofill.editors.address.AddressEditorCoordinator;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
 import org.chromium.chrome.browser.sync.SyncServiceFactory;
@@ -51,10 +48,9 @@ import org.chromium.ui.test.util.modaldialog.FakeModalDialogManager;
 
 /** Unit tests for {@link SaveUpdateAddressProfilePrompt}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
+@EnableFeatures(ChromeFeatureList.AUTOFILL_AI_WITH_DATA_SCHEMA)
 public class SaveUpdateAddressProfilePromptTest {
     private static final long NATIVE_SAVE_UPDATE_ADDRESS_PROFILE_PROMPT_CONTROLLER = 100L;
-    private static final boolean NO_MIGRATION = false;
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Mock private SaveUpdateAddressProfilePromptController.Natives mPromptControllerJni;
@@ -62,11 +58,8 @@ public class SaveUpdateAddressProfilePromptTest {
     @Mock private PersonalDataManager mPersonalDataManager;
     @Mock private Profile mProfile;
     @Mock private AddressEditorCoordinator mAddressEditor;
-    @Mock private IdentityServicesProvider mIdentityServicesProvider;
     @Mock private IdentityManager mIdentityManager;
     @Mock private SyncService mSyncService;
-
-    @Captor private ArgumentCaptor<Callback<AutofillAddress>> mCallbackCaptor;
 
     private Activity mActivity;
     private SaveUpdateAddressProfilePromptController mPromptController;
@@ -78,8 +71,7 @@ public class SaveUpdateAddressProfilePromptTest {
         PersonalDataManagerFactory.setInstanceForTesting(mPersonalDataManager);
         when(mPersonalDataManager.getDefaultCountryCodeForNewAddress()).thenReturn("US");
         SyncServiceFactory.setInstanceForTesting(mSyncService);
-        IdentityServicesProvider.setInstanceForTests(mIdentityServicesProvider);
-        when(mIdentityServicesProvider.getIdentityManager(any())).thenReturn(mIdentityManager);
+        IdentityServicesProvider.setIdentityManagerForTesting(mIdentityManager);
 
         mActivity = Robolectric.setupActivity(BlankUiTestActivity.class);
 
@@ -99,7 +91,7 @@ public class SaveUpdateAddressProfilePromptTest {
     }
 
     private void createAndShowPrompt(@SaveUpdateAddressProfilePromptMode int promptMode) {
-        AutofillProfile dummyProfile = AutofillProfile.builder().build();
+        AutofillProfile autofillProfile = AutofillProfile.builder().build();
         mModalDialogManager = new FakeModalDialogManager(ModalDialogType.APP);
         mPrompt =
                 new SaveUpdateAddressProfilePrompt(
@@ -107,7 +99,7 @@ public class SaveUpdateAddressProfilePromptTest {
                         mModalDialogManager,
                         mActivity,
                         mProfile,
-                        dummyProfile,
+                        autofillProfile,
                         promptMode);
         mPrompt.setAddressEditorForTesting(mAddressEditor);
         mPrompt.show();

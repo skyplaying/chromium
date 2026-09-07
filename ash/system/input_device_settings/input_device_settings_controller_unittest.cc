@@ -56,7 +56,6 @@
 #include "mojo/public/cpp/bindings/clone_traits.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/events/ash/keyboard_capability.h"
 #include "ui/events/ash/mojom/extended_fkeys_modifier.mojom-shared.h"
 #include "ui/events/ash/mojom/simulate_right_click_modifier.mojom-shared.h"
@@ -662,10 +661,8 @@ class InputDeviceSettingsControllerTest : public NoSessionAshTestBase {
     task_runner_ = base::MakeRefCounted<base::TestSimpleTaskRunner>();
     image_downloader_ = std::make_unique<TestImageDownloader>();
     scoped_feature_list_.InitWithFeatures(
-        {features::kPeripheralCustomization,
-         features::kAltClickAndSixPackCustomization,
-         features::kPeripheralNotification, features::kWelcomeExperience,
-         ::features::kSupportF11AndF12KeyShortcuts, features::kModifierSplit},
+        {features::kAltClickAndSixPackCustomization,
+         features::kPeripheralNotification},
         {});
     NoSessionAshTestBase::SetUp();
     Shell::Get()->event_rewriter_controller()->Initialize(nullptr, nullptr);
@@ -705,15 +702,20 @@ class InputDeviceSettingsControllerTest : public NoSessionAshTestBase {
   }
 
   void TearDown() override {
-    observer_.reset();
-    controller_.reset();
+    // owned by InputDeviceSettingsControllerImpl, requires pointer release
+    // before controller_
     keyboard_pref_handler_ = nullptr;
+    controller_.reset();
+    delegate_.reset();
+    observer_.reset();
 
     // Scoped Resetter must be deleted before the test base is teared down.
     scoped_resetter_.reset();
+    fake_device_manager_.reset();
     NoSessionAshTestBase::TearDown();
     image_downloader_.reset();
     task_runner_.reset();
+    mock_adapter_.reset();
   }
 
   std::unique_ptr<device::MockBluetoothDevice> SetupMockBluetoothDevice(
@@ -760,8 +762,7 @@ class InputDeviceSettingsControllerTest : public NoSessionAshTestBase {
   scoped_refptr<base::TestSimpleTaskRunner> task_runner_;
   std::unique_ptr<InputDeviceSettingsController::ScopedResetterForTest>
       scoped_resetter_;
-  raw_ptr<FakeKeyboardPrefHandler, DanglingUntriaged> keyboard_pref_handler_ =
-      nullptr;
+  raw_ptr<FakeKeyboardPrefHandler> keyboard_pref_handler_ = nullptr;
 
   // Used by other instances of the InputDeviceSettingsControllerTest to control
   // whether or not to sign in within the SetUp() function. Configured to sign
@@ -815,35 +816,6 @@ TEST_F(InputDeviceSettingsControllerTest, KeyboardAddingAndRemoving) {
   EXPECT_EQ(keyboard_pref_handler_->num_keyboard_settings_initialized(), 2u);
 }
 
-TEST_F(InputDeviceSettingsControllerTest,
-       DeletesPrefsWhenPeripheralCustomizationFlagDisabled) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndDisableFeature(features::kPeripheralCustomization);
-
-  auto pref_service = TestPrefServiceProvider::CreateUserPrefServiceSimple();
-
-  base::DictValue test_pref_value;
-  test_pref_value.Set("Fake Key", base::DictValue());
-  pref_service->SetDict(prefs::kGraphicsTabletPenButtonRemappingsDictPref,
-                        test_pref_value.Clone());
-  pref_service->SetDict(prefs::kGraphicsTabletTabletButtonRemappingsDictPref,
-                        test_pref_value.Clone());
-  pref_service->SetDict(prefs::kMouseButtonRemappingsDictPref,
-                        test_pref_value.Clone());
-
-  SimulateUserLogin({}, kAccountId3, std::move(pref_service));
-
-  PrefService* active_pref_service =
-      Shell::Get()->session_controller()->GetActivePrefService();
-  EXPECT_EQ(base::DictValue(),
-            active_pref_service->GetDict(
-                prefs::kGraphicsTabletPenButtonRemappingsDictPref));
-  EXPECT_EQ(base::DictValue(),
-            active_pref_service->GetDict(
-                prefs::kGraphicsTabletTabletButtonRemappingsDictPref));
-  EXPECT_EQ(base::DictValue(), active_pref_service->GetDict(
-                                   prefs::kMouseButtonRemappingsDictPref));
-}
 
 TEST_F(InputDeviceSettingsControllerTest,
        DeletesSimulateRightClickPrefsWhenAltFlagDisabled) {

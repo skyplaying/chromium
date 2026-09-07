@@ -28,7 +28,7 @@ class BrowserContext;
 class WebContents;
 }  // namespace content
 
-class Browser;
+class BrowserWindowInterface;
 class ExtensionTestMessageListener;
 
 namespace extensions {
@@ -46,7 +46,8 @@ class PlatformAppBrowserTest : public MixinBasedExtensionApiTest {
   void TearDownOnMainThread() override;
 
   // Gets the first app window that is found for a given browser.
-  static AppWindow* GetFirstAppWindowForBrowser(Browser* browser);
+  static AppWindow* GetFirstAppWindowForBrowser(
+      BrowserWindowInterface* browser);
 
  protected:
   // Runs the app named |name| out of the platform_apps subdirectory. Waits
@@ -122,6 +123,9 @@ class PlatformAppBrowserTest : public MixinBasedExtensionApiTest {
       const gfx::Rect& current_screen_bounds,
       const gfx::Size& minimum_size,
       gfx::Rect* bounds);
+
+  // Call SetNativeWindowFullscreen of |window|.
+  void SetNativeWindowFullscreenForTesting(AppWindow* window);
 
   // Load a simple test app and create a window. The window must be closed by
   // the caller in order to terminate the test - use CloseAppWindow().

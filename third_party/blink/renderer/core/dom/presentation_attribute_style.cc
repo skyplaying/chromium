@@ -32,6 +32,7 @@
 
 #include <algorithm>
 
+#include "base/memory/raw_ptr.h"
 #include "third_party/blink/renderer/core/css/css_property_value_set.h"
 #include "third_party/blink/renderer/core/dom/attribute.h"
 #include "third_party/blink/renderer/core/dom/element.h"
@@ -40,12 +41,13 @@
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/hash_functions.h"
 #include "third_party/blink/renderer/platform/wtf/hash_map.h"
+#include "third_party/blink/renderer/platform/wtf/hash_traits.h"
 
 namespace blink {
 
 struct PresentationAttributeCacheKey {
   PresentationAttributeCacheKey() : tag_name(nullptr) {}
-  StringImpl* tag_name;
+  raw_ptr<StringImpl, UnprotectedInRelease | DanglingUntriaged> tag_name;
   Vector<std::pair<StringImpl*, AtomicString>, 3> attributes_and_values;
 };
 
@@ -90,8 +92,9 @@ static unsigned ComputePresentationAttributeCacheHash(
   DCHECK(key.tag_name);
   DCHECK(key.attributes_and_values.size());
   unsigned attribute_hash =
-      StringHasher::HashMemory(base::as_byte_span(key.attributes_and_values));
-  return HashInts(key.tag_name->ExistingHash(), attribute_hash);
+      StringHasher::HashMemory32(base::as_byte_span(key.attributes_and_values));
+  return EnsureValidHash(
+      HashInts(key.tag_name->ExistingHash(), attribute_hash));
 }
 
 static unsigned MakePresentationAttributeCacheKey(

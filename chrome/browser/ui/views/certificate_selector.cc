@@ -16,6 +16,14 @@
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/certificate_viewer.h"
+#include "chrome/browser/glic/host/guest_util.h"
+#include "chrome/browser/glic/public/glic_enabling.h"
+#include "chrome/browser/glic/public/glic_keyed_service.h"
+#include "chrome/browser/glic/public/glic_keyed_service_factory.h"
+#include "chrome/browser/glic/public/service/glic_instance_coordinator.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/common/buildflags.h"
 #include "chrome/common/chrome_switches.h"
@@ -24,17 +32,21 @@
 #include "components/strings/grit/components_strings.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/web_contents.h"
+#include "ui/base/base_window.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/table_model.h"
 #include "ui/base/models/table_model_observer.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
+#include "ui/events/base_event_utils.h"
+#include "ui/events/event.h"
 #include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/controls/table/table_view.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/widget/widget.h"
+#include "ui/views/window/dialog_client_view.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/certificate_provider/certificate_provider_service.h"
@@ -43,28 +55,12 @@
 #include "extensions/browser/extension_registry_factory.h"
 #endif
 
-#if BUILDFLAG(ENABLE_GLIC)
-#include "chrome/browser/glic/public/glic_enabling.h"
-#include "chrome/browser/glic/public/glic_keyed_service.h"
-#include "chrome/browser/glic/public/glic_keyed_service_factory.h"
-#include "chrome/browser/glic/widget/glic_window_controller.h"
-#include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
-#endif
-
-#if BUILDFLAG(ENABLE_GLIC)
 namespace {
 
 // Checks that `contents` is for glic.
 bool IsForGlic(content::WebContents* contents) {
-  content::WebContents* outer = contents->GetOutermostWebContents();
-  glic::GlicKeyedService* glic_service =
-      glic::GlicKeyedServiceFactory::GetGlicKeyedService(
-          outer->GetBrowserContext());
-  return glic_service && (glic_service->IsGlicWebUi(contents) ||
-                          glic_service->IsGlicWebUi(outer));
+  return glic::IsGlicWebUI(contents) ||
+         glic::IsGlicWebUI(contents->GetOutermostWebContents());
 }
 
 // Combines IsForGlic with glic dev switch.
@@ -75,7 +71,6 @@ bool UseGlicDevFlow(content::WebContents* contents) {
 }
 
 }  // namespace
-#endif
 
 const int CertificateSelector::kTableViewWidth = 500;
 const int CertificateSelector::kTableViewHeight = 150;
@@ -90,8 +85,8 @@ class CertificateSelector::CertificateTableModel : public ui::TableModel {
   CertificateTableModel& operator=(const CertificateTableModel&) = delete;
 
   // ui::TableModel:
-  size_t RowCount() override;
-  std::u16string GetText(size_t index, int column_id) override;
+  size_t RowCount() const override;
+  std::u16string GetText(size_t index, int column_id) const override;
   void SetObserver(ui::TableModelObserver* observer) override;
 
  private:
@@ -121,13 +116,13 @@ CertificateSelector::CertificateTableModel::CertificateTableModel(
   }
 }
 
-size_t CertificateSelector::CertificateTableModel::RowCount() {
+size_t CertificateSelector::CertificateTableModel::RowCount() const {
   return rows_.size();
 }
 
 std::u16string CertificateSelector::CertificateTableModel::GetText(
     size_t index,
-    int column_id) {
+    int column_id) const {
   DCHECK_LT(index, rows_.size());
 
   const Row& row = rows_[index];
@@ -213,11 +208,9 @@ CertificateSelector::~CertificateSelector() {
 
 // static
 bool CertificateSelector::CanShow(content::WebContents* web_contents) {
-#if BUILDFLAG(ENABLE_GLIC)
   if (UseGlicDevFlow(web_contents)) {
     return true;
   }
-#endif
 
   content::WebContents* top_level_web_contents =
       constrained_window::GetTopLevelWebContents(web_contents);
@@ -226,18 +219,19 @@ bool CertificateSelector::CanShow(content::WebContents* web_contents) {
 }
 
 void CertificateSelector::Show() {
-#if BUILDFLAG(ENABLE_GLIC)
   // In the event that glic is showing and glic-dev is enabled, always show the
   // certificate picker on the glic window. This is not fully correct, but
   // satisfies the main dev use case with minimal overhead.
   if (UseGlicDevFlow(web_contents_)) {
     Profile* profile =
         Profile::FromBrowserContext(web_contents_->GetBrowserContext());
-    Browser* browser = chrome::FindLastActiveWithProfile(profile);
+    BrowserWindowInterface* const browser =
+        ProfileBrowserCollection::GetForProfile(profile)
+            ->GetLastActiveBrowser();
     if (browser) {
       SetModalType(ui::mojom::ModalType::kWindow);
       constrained_window::CreateBrowserModalDialogViews(
-          this, browser->GetBrowserView().GetNativeWindow())
+          this, browser->GetWindow()->GetNativeWindow())
           ->Show();
     } else {
       LOG(ERROR) << "Dev error. Make sure there's a browser window of the "
@@ -245,7 +239,6 @@ void CertificateSelector::Show() {
     }
     return;
   }
-#endif
 
   constrained_window::ShowWebModalDialogViews(this, web_contents_);
 
@@ -354,9 +347,23 @@ void CertificateSelector::OnSelectionChanged() {
 }
 
 void CertificateSelector::OnDoubleClick() {
-  if (GetSelectedCert()) {
-    AcceptDialog();
+  if (!GetSelectedCert()) {
+    return;
   }
+
+  views::DialogClientView* const client_view = GetDialogClientView();
+  if (client_view) {
+    const ui::MouseEvent event(ui::EventType::kMousePressed, gfx::Point(),
+                               gfx::Point(), ui::EventTimeForNow(),
+                               ui::EF_LEFT_MOUSE_BUTTON,
+                               ui::EF_LEFT_MOUSE_BUTTON);
+    if (client_view->IsPossiblyUnintendedInteraction(
+            event, ShouldAllowKeyEventsDuringInputProtection())) {
+      return;
+    }
+  }
+
+  AcceptDialog();
 }
 
 BEGIN_METADATA(CertificateSelector)

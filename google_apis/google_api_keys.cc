@@ -92,6 +92,10 @@ const std::string& GetSodaAPIKey() {
   return GetApiKeyCacheInstance().api_key_soda();
 }
 
+const std::string& GetPartialTranslateAPIKey() {
+  return GetApiKeyCacheInstance().api_key_partial_translate();
+}
+
 #if !BUILDFLAG(IS_ANDROID)
 const std::string& GetHatsAPIKey() {
   return GetApiKeyCacheInstance().api_key_hats();
@@ -120,6 +124,12 @@ const std::string& GetCrosSystemGeoAPIKey() {
 }
 const std::string& GetCrosChromeGeoAPIKey() {
   return GetApiKeyCacheInstance().api_key_cros_chrome_geo();
+}
+#endif
+
+#if BUILDFLAG(SUPPORT_CDM_SERVER_CERTIFICATE)
+const std::string& GetCdmServerCertificate() {
+  return GetApiKeyCacheInstance().cdm_server_certificate();
 }
 #endif
 

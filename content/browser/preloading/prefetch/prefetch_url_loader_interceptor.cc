@@ -71,16 +71,12 @@ PrefetchURLLoaderInterceptor::PrefetchURLLoaderInterceptor(
     base::WeakPtr<ServiceWorkerMainResourceHandle>
         service_worker_handle_for_navigation,
     FrameTreeNodeId frame_tree_node_id,
-    std::optional<blink::DocumentToken> initiator_document_token,
-    base::WeakPtr<PrefetchServingPageMetricsContainer>
-        serving_page_metrics_container)
+    std::optional<blink::DocumentToken> initiator_document_token)
     : expected_service_worker_state_(expected_service_worker_state),
       service_worker_handle_for_navigation_(
           std::move(service_worker_handle_for_navigation)),
       frame_tree_node_id_(frame_tree_node_id),
-      initiator_document_token_(std::move(initiator_document_token)),
-      serving_page_metrics_container_(
-          std::move(serving_page_metrics_container)) {
+      initiator_document_token_(std::move(initiator_document_token)) {
   if (!features::IsPrefetchServiceWorkerEnabled(
           BrowserContextFromFrameTreeNodeId(frame_tree_node_id_))) {
     CHECK_EQ(expected_service_worker_state_,
@@ -121,13 +117,22 @@ void PrefetchURLLoaderInterceptor::MaybeCreateLoader(
   // `skip_service_worker` check here assumes prefetching-time
   // `skip_service_worker` is always false (see the
   // `CHECK(!skip_service_worker)` in
-  // `PrefetchContainer::MakeResourceRequest()`). We should revisit the check
-  // when we support prefetch-time `skip_service_worker`. Probably a prefetch
-  // whose request's `skip_service_worker` == `true` shouldn't serve navigation
-  // whose request's `skip_service_worker` == `false`.
+  // `PrefetchContainer::MakeInitialResourceRequest()`). We should revisit the
+  // check when we support prefetch-time `skip_service_worker`. Probably a
+  // prefetch whose request's `skip_service_worker` == `true` shouldn't serve
+  // navigation whose request's `skip_service_worker` == `false`.
   if (tentative_resource_request.skip_service_worker &&
       expected_service_worker_state_ ==
           PrefetchServiceWorkerState::kControlled) {
+    redirect_serving_handle_ = PrefetchServingHandle();
+    TRACE_EVENT_END("loading");
+    std::move(loader_callback_).Run(std::nullopt);
+    return;
+  }
+
+  PrefetchService* prefetch_service =
+      PrefetchService::GetFromFrameTreeNodeId(frame_tree_node_id_);
+  if (!prefetch_service) {
     redirect_serving_handle_ = PrefetchServingHandle();
     TRACE_EVENT_END("loading");
     std::move(loader_callback_).Run(std::nullopt);
@@ -188,7 +193,7 @@ void PrefetchURLLoaderInterceptor::MaybeCreateLoader(
 
   TRACE_EVENT_END("loading");
   GetPrefetch(
-      tentative_resource_request.url,
+      *prefetch_service, tentative_resource_request.url,
       base::BindOnce(&PrefetchURLLoaderInterceptor::OnGetPrefetchComplete,
                      weak_factory_.GetWeakPtr(), tentative_resource_request.url,
 
@@ -198,6 +203,7 @@ void PrefetchURLLoaderInterceptor::MaybeCreateLoader(
 }
 
 void PrefetchURLLoaderInterceptor::GetPrefetch(
+    PrefetchService& prefetch_service,
     const GURL& url,
     base::OnceCallback<void(PrefetchServingHandle)> get_prefetch_callback)
     const {
@@ -205,29 +211,13 @@ void PrefetchURLLoaderInterceptor::GetPrefetch(
                     perfetto::Flow::FromPointer(
                         const_cast<PrefetchURLLoaderInterceptor*>(this)));
 
-  PrefetchService* prefetch_service =
-      PrefetchService::GetFromFrameTreeNodeId(frame_tree_node_id_);
-  if (!prefetch_service) {
-    TRACE_EVENT_END("loading");
-    std::move(get_prefetch_callback).Run({});
-    return;
-  }
-
-  if (!initiator_document_token_.has_value()) {
-    // TODO(crbug.com/40288091): Currently PrefetchServingPageMetricsContainer
-    // is created only when the navigation is renderer-initiated and its
-    // initiator document has PrefetchDocumentManager.
-    CHECK(!serving_page_metrics_container_);
-  }
-
   auto callback = base::BindOnce(&OnGotPrefetchToServe, frame_tree_node_id_,
                                  url, std::move(get_prefetch_callback));
   auto key = PrefetchKey(initiator_document_token_, url);
   TRACE_EVENT_END("loading");
   PrefetchMatchResolver::FindPrefetch(
-      frame_tree_node_id_, *prefetch_service, std::move(key),
-      expected_service_worker_state_, serving_page_metrics_container_,
-      std::move(callback),
+      frame_tree_node_id_, prefetch_service, std::move(key),
+      expected_service_worker_state_, std::move(callback),
       perfetto::Flow::FromPointer(
           const_cast<PrefetchURLLoaderInterceptor*>(this)));
 }
@@ -264,7 +254,7 @@ void PrefetchURLLoaderInterceptor::OnGetPrefetchComplete(
       // TODO(https://crbug.com/413207408): Monitor the reports and fix
       // `ServiceWorkerClient::CalculateStorageKeyForUpdateUrls()` if there
       // are actual mismatches.
-      DCHECK(false);
+      CHECK(false, base::NotFatalUntil::M159);
       base::debug::DumpWithoutCrashing();
 
       // We anyway gracefully fallback to non-prefetch path.

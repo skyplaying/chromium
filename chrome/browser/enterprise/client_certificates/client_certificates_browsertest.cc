@@ -61,11 +61,6 @@ class ClientCertificateBrowserTest : public MixinBasedPlatformBrowserTest,
             .affiliated = false,
         });
 
-#if BUILDFLAG(IS_ANDROID)
-    scoped_feature_list_.InitAndEnableFeature(
-        client_certificates::features::
-            kEnableClientCertificateProvisioningOnAndroid);
-#endif  // BUILDFLAG(IS_ANDROID)
   }
 
   void SetUp() override {
@@ -235,9 +230,6 @@ IN_PROC_BROWSER_TEST_P(ClientCertificateBrowserTest, CreateNewIdentity) {
       true, 1);
 }
 
-// Temporarily disabled on Android due to PRE_ tests not being fully supported.
-// See crbug.com/40200835
-#if !BUILDFLAG(IS_ANDROID)
 IN_PROC_BROWSER_TEST_P(ClientCertificateBrowserTest, PRE_LoadExistingIdentity) {
   EnablePolicyAndWaitForIdentity();
 }
@@ -251,7 +243,6 @@ IN_PROC_BROWSER_TEST_P(ClientCertificateBrowserTest, LoadExistingIdentity) {
           is_profile_scenario() ? "Profile" : "Browser"),
       true, 1);
 }
-#endif  // !BUILDFLAG(IS_ANDROID)
 
 IN_PROC_BROWSER_TEST_P(ClientCertificateBrowserTest, UseIdentityInMtls) {
   // Enable the necessary policies and trigger a navigation.

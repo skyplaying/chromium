@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "mojo/core/ipcz_driver/transport.h"
 
 #include <optional>
@@ -14,6 +9,7 @@
 #include <vector>
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
@@ -485,14 +481,15 @@ IpczResult Transport::SerializeObject(ObjectBase& object,
           : HandleOwner::kSender;
   header.handle_owner = handle_owner;
 
-  auto handle_data = base::span(reinterpret_cast<HandleData*>(&header + 1),
-                                object_num_handles);
-  auto object_data = base::span(reinterpret_cast<uint8_t*>(&header + 1) +
-                                    object_num_handles * sizeof(HandleData),
-                                object_num_bytes);
-#else
+  auto handle_data = UNSAFE_TODO(base::span(
+      reinterpret_cast<HandleData*>(&header + 1), object_num_handles));
   auto object_data =
-      base::span(reinterpret_cast<uint8_t*>(&header + 1), object_num_bytes);
+      UNSAFE_TODO(base::span(reinterpret_cast<uint8_t*>(&header + 1) +
+                                 object_num_handles * sizeof(HandleData),
+                             object_num_bytes));
+#else
+  auto object_data = UNSAFE_TODO(
+      base::span(reinterpret_cast<uint8_t*>(&header + 1), object_num_bytes));
 #endif
 
   // A small amount of stack storage is reserved to avoid heap allocation in the
@@ -509,7 +506,7 @@ IpczResult Transport::SerializeObject(ObjectBase& object,
     ok &= EncodeHandle(platform_handles[i], remote_process_, handle_owner,
                        handle_data[i], remote_process_trust());
 #else
-    handles[i] = TransmissiblePlatformHandle::ReleaseAsHandle(
+    UNSAFE_TODO(handles[i]) = TransmissiblePlatformHandle::ReleaseAsHandle(
         base::MakeRefCounted<TransmissiblePlatformHandle>(
             std::move(platform_handles[i])));
 #endif
@@ -559,9 +556,9 @@ IpczResult Transport::DeserializeObject(
   }
 
   const size_t handle_data_size = num_handles * sizeof(HandleData);
-  auto handle_data = base::span(
+  auto handle_data = UNSAFE_TODO(base::span(
       reinterpret_cast<const HandleData*>(bytes.data() + header_size),
-      num_handles);
+      num_handles));
   auto object_data = bytes.subspan(header_size + handle_data_size);
 #else
   auto object_data = bytes.subspan(header_size);
@@ -685,8 +682,10 @@ scoped_refptr<Transport> Transport::Deserialize(
     return nullptr;
   }
 
-  const bool is_source_trusted = from_transport.is_peer_trusted() ||
-                                 from_transport.destination_type() == kBroker;
+  // A non-broker implicitly trusts its broker; otherwise the peer must be
+  // explicitly trusted. When both endpoints are brokers, the peer being a
+  // broker does not by itself confer any trust on this end.
+  const bool is_source_trusted = from_transport.is_source_trusted();
 
   const bool is_new_peer_trusted = header.is_peer_trusted;
   const bool is_trusted_by_peer = header.is_trusted_by_peer;

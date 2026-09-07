@@ -14,6 +14,7 @@ import static androidx.core.view.WindowInsetsCompat.Type.systemGestures;
 import static androidx.core.view.WindowInsetsCompat.Type.systemOverlays;
 import static androidx.core.view.WindowInsetsCompat.Type.tappableElement;
 
+import android.content.Context;
 import android.graphics.Rect;
 import android.view.View;
 
@@ -66,6 +67,7 @@ public class InsetObserver implements OnApplyWindowInsetsListener {
             new WindowInsetsConsumer[InsetConsumerSource.COUNT];
 
     private final ImmutableWeakReference<View> mRootViewReference;
+    private final ImmutableWeakReference<Context> mContextReference;
     // Insets to be added to the current safe area.
     private int mBottomInsetsForEdgeToEdge;
     private final Rect mDisplayCutoutRect;
@@ -127,7 +129,7 @@ public class InsetObserver implements OnApplyWindowInsetsListener {
      * enable custom behavior, e.g. you want to shield a specific view from inset changes by
      * consuming them elsewhere.
      */
-    public interface WindowInsetsConsumer extends androidx.core.view.OnApplyWindowInsetsListener {
+    public interface WindowInsetsConsumer extends OnApplyWindowInsetsListener {
 
         // Consumers will be given the opportunity to process applied insets based on the priority
         // defined here. A lower value of the consumer source means that insets will be forwarded to
@@ -141,6 +143,8 @@ public class InsetObserver implements OnApplyWindowInsetsListener {
             InsetConsumerSource.EDGE_TO_EDGE_CONTROLLER_CREATOR,
             InsetConsumerSource.EDGE_TO_EDGE_CONTROLLER_IMPL,
             InsetConsumerSource.UPLOAD_IMAGE_PREVIEW_DIALOG,
+            InsetConsumerSource.WEBXR_OVERLAY,
+            InsetConsumerSource.WEB_APP_EDGE_TO_EDGE,
             InsetConsumerSource.EDGE_TO_EDGE_LAYOUT_COORDINATOR,
             InsetConsumerSource.APP_HEADER_COORDINATOR_BOTTOM,
             InsetConsumerSource.COUNT
@@ -168,11 +172,18 @@ public class InsetObserver implements OnApplyWindowInsetsListener {
             int EDGE_TO_EDGE_CONTROLLER_CREATOR = 4;
             int EDGE_TO_EDGE_CONTROLLER_IMPL = 5;
             int UPLOAD_IMAGE_PREVIEW_DIALOG = 6;
-            int EDGE_TO_EDGE_LAYOUT_COORDINATOR = 7;
-            int APP_HEADER_COORDINATOR_BOTTOM = 8;
+            int WEBXR_OVERLAY = 7;
+
+            // Consumes system bar and display cutout insets while an installed web app draws
+            // edge-to-edge, so the EdgeToEdgeLayoutCoordinator below draws zero-height system
+            // bars instead of padding the content. Must stay directly before
+            // EDGE_TO_EDGE_LAYOUT_COORDINATOR.
+            int WEB_APP_EDGE_TO_EDGE = 8;
+            int EDGE_TO_EDGE_LAYOUT_COORDINATOR = 9;
+            int APP_HEADER_COORDINATOR_BOTTOM = 10;
 
             // Update this whenever a consumer source is added or removed.
-            int COUNT = 9;
+            int COUNT = 11;
         }
     }
 
@@ -232,14 +243,19 @@ public class InsetObserver implements OnApplyWindowInsetsListener {
      * Creates an instance of {@link InsetObserver}.
      *
      * @param rootViewWeakRef A weak reference to the root view of the app.
+     * @param contextWeakRef A weak reference to the context.
      * @param enableKeyboardOverlayMode Whether the keyboard can be considered to be in "overlay"
      *     mode, where its inset shouldn't affect the size of the viewport.
+     * @param enableExtraEdgeToEdgeLogging Whether extra logs should be emitted related to
+           insets and edge-to-edge state.
      */
     public InsetObserver(
             ImmutableWeakReference<View> rootViewWeakRef,
+            ImmutableWeakReference<Context> contextWeakRef,
             boolean enableKeyboardOverlayMode,
             boolean enableExtraEdgeToEdgeLogging) {
         mRootViewReference = rootViewWeakRef;
+        mContextReference = contextWeakRef;
         mEnableKeyboardOverlayMode = enableKeyboardOverlayMode;
         mEnableExtraEdgeToEdgeLogging = enableExtraEdgeToEdgeLogging;
         mWindowInsets = new Rect();
@@ -601,8 +617,8 @@ public class InsetObserver implements OnApplyWindowInsetsListener {
 
         mKeyboardInset = keyboardInset;
         mKeyboardInsetSupplier.set(keyboardInset);
-        for (WindowInsetObserver mObserver : mObservers) {
-            mObserver.onKeyboardInsetChanged(keyboardInset);
+        for (WindowInsetObserver observer : mObservers) {
+            observer.onKeyboardInsetChanged(keyboardInset);
         }
     }
 
@@ -621,16 +637,24 @@ public class InsetObserver implements OnApplyWindowInsetsListener {
     private void updateCurrentSafeArea() {
         // When display cutout already included in the system bar insets, do not consider it as safe
         // area.
-        Insets systemBarInsets =
-                getLastRawWindowInsets() == null
-                        ? Insets.NONE
-                        : getLastRawWindowInsets().getInsets(WindowInsetsCompat.Type.systemBars());
+        Insets extraInsets = Insets.NONE;
+        Context context = mContextReference.get();
+        if (getLastRawWindowInsets() != null && context != null) {
+            boolean shouldPadDisplayCutout =
+                    WindowInsetsUtils.shouldPadDisplayCutout(getLastRawWindowInsets(), context);
+            extraInsets =
+                    getLastRawWindowInsets()
+                            .getInsets(
+                                    shouldPadDisplayCutout
+                                            ? systemBars() + displayCutout()
+                                            : systemBars());
+        }
         Rect newSafeArea =
                 new Rect(
-                        Math.max(0, mDisplayCutoutRect.left - systemBarInsets.left),
-                        Math.max(0, mDisplayCutoutRect.top - systemBarInsets.top),
-                        Math.max(0, mDisplayCutoutRect.right - systemBarInsets.right),
-                        Math.max(0, mDisplayCutoutRect.bottom - systemBarInsets.bottom));
+                        Math.max(0, mDisplayCutoutRect.left - extraInsets.left),
+                        Math.max(0, mDisplayCutoutRect.top - extraInsets.top),
+                        Math.max(0, mDisplayCutoutRect.right - extraInsets.right),
+                        Math.max(0, mDisplayCutoutRect.bottom - extraInsets.bottom));
         newSafeArea.bottom += mBottomInsetsForEdgeToEdge;
         // If the safe area has not changed then we should stop now.
         if (newSafeArea.equals(mCurrentSafeArea)) {
@@ -639,8 +663,8 @@ public class InsetObserver implements OnApplyWindowInsetsListener {
 
         mCurrentSafeArea.set(newSafeArea);
         // Create a new rect to avoid rect being changed by observers.
-        for (WindowInsetObserver mObserver : mObservers) {
-            mObserver.onSafeAreaChanged(new Rect(mCurrentSafeArea));
+        for (WindowInsetObserver observer : mObservers) {
+            observer.onSafeAreaChanged(new Rect(mCurrentSafeArea));
         }
     }
 

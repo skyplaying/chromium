@@ -42,10 +42,14 @@ class AutoPictureInPictureTabModelObserverHelper final
   void StartObserving() override;
   void StopObserving() override;
   content::WebContents* GetActiveWebContents() const override;
+  bool IsTabActivated() override;
 
   // TabModelObserver:
   void DidSelectTab(TabAndroid* tab, TabModel::TabSelectionType type) override;
   void TabRemoved(TabAndroid* tab) override;
+  void WillCloseTabs(const std::vector<TabAndroid*>& tabs,
+                     bool is_all_tabs,
+                     bool allow_undo) override;
   void WillCloseTab(TabAndroid* tab) override;
 
   // TabModelListObserver:

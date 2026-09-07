@@ -64,7 +64,6 @@ class TestGLES2Interface : public gpu::gles2::GLES2InterfaceStub {
   void UseProgram(GLuint program) override;
   void Flush() override;
   void Finish() override;
-  void ShallowFinishCHROMIUM() override;
 
   void BindBuffer(GLenum target, GLuint buffer) override;
   void BindRenderbuffer(GLenum target, GLuint buffer) override;
@@ -191,6 +190,7 @@ class TestGLES2Interface : public gpu::gles2::GLES2InterfaceStub {
   unsigned current_framebuffer_ = 0;
   std::vector<raw_ptr<TestGLES2Interface, VectorExperimental>> shared_contexts_;
   raw_ptr<TestContextSupport> test_support_ = nullptr;
+  const uint64_t test_command_buffer_id_ = 1u;
   gfx::Rect update_rect_;
   UpdateType last_update_type_ = NO_UPDATE;
   GLuint64 next_insert_fence_sync_ = 1;

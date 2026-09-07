@@ -225,47 +225,6 @@ const char* LoggingEventToShortcutUserActionName(NTPLoggingEventType event) {
   }
 }
 
-// This enum must match the numbering for NewTabPageLogoShown in enums.xml.
-// Do not reorder or remove items, and only add new items before
-// LOGO_IMPRESSION_TYPE_MAX.
-enum LogoImpressionType {
-  // Static Doodle image.
-  LOGO_IMPRESSION_TYPE_STATIC = 0,
-  // Call-to-action Doodle image.
-  LOGO_IMPRESSION_TYPE_CTA = 1,
-
-  LOGO_IMPRESSION_TYPE_MAX
-};
-
-// This enum must match the numbering for NewTabPageLogoClick in enums.xml.
-// Do not reorder or remove items, and only add new items before
-// LOGO_CLICK_TYPE_MAX.
-enum LogoClickType {
-  // Static Doodle image.
-  LOGO_CLICK_TYPE_STATIC = 0,
-  // Call-to-action Doodle image.
-  LOGO_CLICK_TYPE_CTA = 1,
-  // Animated Doodle image.
-  LOGO_CLICK_TYPE_ANIMATED = 2,
-
-  LOGO_CLICK_TYPE_MAX
-};
-
-// Converts |NTPLoggingEventType| to a |LogoClickType|, if the value
-// is an error value. Otherwise, |LOGO_CLICK_TYPE_MAX| is returned.
-LogoClickType LoggingEventToLogoClick(NTPLoggingEventType event) {
-  switch (event) {
-    case NTP_STATIC_LOGO_CLICKED:
-      return LOGO_CLICK_TYPE_STATIC;
-    case NTP_CTA_LOGO_CLICKED:
-      return LOGO_CLICK_TYPE_CTA;
-    case NTP_ANIMATED_LOGO_CLICKED:
-      return LOGO_CLICK_TYPE_ANIMATED;
-    default:
-      NOTREACHED();
-  }
-}
-
 }  // namespace
 
 // Helper macro to log a load time to UMA. There's no good reason why we don't
@@ -275,17 +234,15 @@ LogoClickType LoggingEventToLogoClick(NTPLoggingEventType event) {
   UMA_HISTOGRAM_CUSTOM_TIMES(name, sample, base::Milliseconds(1), \
                              base::Seconds(60), 100)
 
-NTPUserDataLogger::NTPUserDataLogger(Profile* profile,
-                                     const GURL& ntp_url,
-                                     base::Time ntp_navigation_start_time)
-    : during_startup_(!AfterStartupTaskUtils::IsBrowserStartupComplete()),
+NTPUserDataLogger::NTPUserDataLogger(
+    Profile* profile,
+    const GURL& ntp_url,
+    base::TimeTicks ntp_navigation_start_time_ticks)
+    : MostVisitedMetricsLogger("NewTabPage"),
+      during_startup_(!AfterStartupTaskUtils::IsBrowserStartupComplete()),
       ntp_url_(ntp_url),
       profile_(profile),
-      // TODO(crbug.com/40811386): Migrate NTP navigation startup time
-      // from base::Time to base::TimeTicks to avoid time glitches.
-      ntp_navigation_start_time_(
-          base::TimeTicks::UnixEpoch() +
-          (ntp_navigation_start_time - base::Time::UnixEpoch())) {}
+      ntp_navigation_start_time_(ntp_navigation_start_time_ticks) {}
 
 NTPUserDataLogger::~NTPUserDataLogger() = default;
 
@@ -312,23 +269,18 @@ void NTPUserDataLogger::LogEvent(NTPLoggingEventType event,
 
   switch (event) {
     case NTP_STATIC_LOGO_SHOWN_FROM_CACHE:
-      RecordDoodleImpression(time, /*is_cta=*/false, /*from_cache=*/true);
+      RecordDoodleImpression(time, LOGO_IMPRESSION_TYPE_STATIC);
       break;
-    case NTP_STATIC_LOGO_SHOWN_FRESH:
-      RecordDoodleImpression(time, /*is_cta=*/false, /*from_cache=*/false);
-      break;
-    case NTP_CTA_LOGO_SHOWN_FROM_CACHE:
-      RecordDoodleImpression(time, /*is_cta=*/true, /*from_cache=*/true);
-      break;
-    case NTP_CTA_LOGO_SHOWN_FRESH:
-      RecordDoodleImpression(time, /*is_cta=*/true, /*from_cache=*/false);
+    case NTP_ANIMATED_LOGO_SHOWN_FROM_CACHE:
+      RecordDoodleImpression(time, LOGO_IMPRESSION_TYPE_ANIMATED);
       break;
     case NTP_STATIC_LOGO_CLICKED:
-    case NTP_CTA_LOGO_CLICKED:
+      UMA_HISTOGRAM_ENUMERATION("NewTabPage.LogoClick", LOGO_CLICK_TYPE_STATIC,
+                                LOGO_CLICK_TYPE_MAX);
+      break;
     case NTP_ANIMATED_LOGO_CLICKED:
       UMA_HISTOGRAM_ENUMERATION("NewTabPage.LogoClick",
-                                LoggingEventToLogoClick(event),
-                                LOGO_CLICK_TYPE_MAX);
+                                LOGO_CLICK_TYPE_ANIMATED, LOGO_CLICK_TYPE_MAX);
       break;
     case NTP_ONE_GOOGLE_BAR_SHOWN:
       UMA_HISTOGRAM_LOAD_TIME("NewTabPage.OneGoogleBar.ShownTime", time);
@@ -416,27 +368,13 @@ void NTPUserDataLogger::LogMostVisitedLoaded(base::TimeDelta time,
                                              bool using_most_visited,
                                              bool using_custom_links,
                                              bool using_enterprise_shortcuts,
-                                             bool is_visible) {
+                                             bool is_visible,
+                                             std::optional<bool> is_expanded) {
+  MostVisitedMetricsLogger::LogMostVisitedLoaded(
+      time, using_most_visited, using_custom_links, using_enterprise_shortcuts,
+      is_visible, is_expanded);
   EmitNtpStatistics(time, using_most_visited, using_custom_links,
-                    using_enterprise_shortcuts, is_visible);
-}
-
-void NTPUserDataLogger::LogMostVisitedImpression(
-    const ntp_tiles::NTPTileImpression& impression) {
-  if ((impression.index >= ntp_tiles::kMaxNumTiles) ||
-      logged_impressions_[impression.index].has_value()) {
-    return;
-  }
-  logged_impressions_[impression.index] = impression;
-}
-
-void NTPUserDataLogger::LogMostVisitedNavigation(
-    const ntp_tiles::NTPTileImpression& impression) {
-  ntp_tiles::metrics::RecordTileClick(impression);
-
-  // Records the action. This will be available as a time-stamped stream
-  // server-side and can be used to compute time-to-long-dwell.
-  base::RecordAction(base::UserMetricsAction("MostVisited_Clicked"));
+                    using_enterprise_shortcuts, is_visible, is_expanded);
 }
 
 bool NTPUserDataLogger::DefaultSearchProviderIsGoogle() const {
@@ -452,25 +390,14 @@ void NTPUserDataLogger::EmitNtpStatistics(base::TimeDelta load_time,
                                           bool using_most_visited,
                                           bool using_custom_links,
                                           bool using_enterprise_shortcuts,
-                                          bool is_visible) {
+                                          bool is_visible,
+                                          std::optional<bool> is_expanded) {
   // We only send statistics once per page.
   if (has_emitted_) {
     return;
   }
 
-  int tiles_count = 0;
-  for (const std::optional<ntp_tiles::NTPTileImpression>& impression :
-       logged_impressions_) {
-    if (!impression.has_value()) {
-      break;
-    }
-    ntp_tiles::metrics::RecordTileImpression(*impression);
-    ++tiles_count;
-  }
-  ntp_tiles::metrics::RecordPageImpression(tiles_count);
-
-  DVLOG(1) << "Emitting NTP load time: " << load_time << ", "
-           << "number of tiles: " << tiles_count;
+  DVLOG(1) << "Emitting NTP load time: " << load_time;
 
   UMA_HISTOGRAM_LOAD_TIME("NewTabPage.LoadTime", load_time);
   UMA_HISTOGRAM_LOAD_TIME("NewTabPage.LoadTime.MostVisited", load_time);
@@ -481,7 +408,7 @@ void NTPUserDataLogger::EmitNtpStatistics(base::TimeDelta load_time,
   bool is_google = DefaultSearchProviderIsGoogle();
 
   // Split between NTP variants.
-  if (ntp_url_ == GURL(chrome::kChromeUINewTabPageURL)) {
+  if (ntp_url_ == chrome::ChromeUINewTabPageURLAsGURL()) {
     UMA_HISTOGRAM_LOAD_TIME("NewTabPage.LoadTime.WebUINTP", load_time);
   } else if (ntp_url_ == GURL(chrome::kChromeUINewTabPageThirdPartyURL)) {
     UMA_HISTOGRAM_LOAD_TIME("NewTabPage.LoadTime.WebUI3PNTP", load_time);
@@ -525,22 +452,12 @@ void NTPUserDataLogger::EmitNtpTraceEvent(const char* event_name,
 }
 
 void NTPUserDataLogger::RecordDoodleImpression(base::TimeDelta time,
-                                               bool is_cta,
-                                               bool from_cache) {
-  LogoImpressionType logo_type =
-      is_cta ? LOGO_IMPRESSION_TYPE_CTA : LOGO_IMPRESSION_TYPE_STATIC;
+                                               LogoImpressionType logo_type) {
   UMA_HISTOGRAM_ENUMERATION("NewTabPage.LogoShown", logo_type,
                             LOGO_IMPRESSION_TYPE_MAX);
   EmitNtpTraceEvent("NewTabPage.LogoShown", time);
-
-  if (from_cache) {
-    UMA_HISTOGRAM_ENUMERATION("NewTabPage.LogoShown.FromCache", logo_type,
-                              LOGO_IMPRESSION_TYPE_MAX);
-  } else {
-    UMA_HISTOGRAM_ENUMERATION("NewTabPage.LogoShown.Fresh", logo_type,
-                              LOGO_IMPRESSION_TYPE_MAX);
-  }
-
+  UMA_HISTOGRAM_ENUMERATION("NewTabPage.LogoShown.FromCache", logo_type,
+                            LOGO_IMPRESSION_TYPE_MAX);
   if (should_record_doodle_load_time_) {
     DEPRECATED_UMA_HISTOGRAM_MEDIUM_TIMES("NewTabPage.LogoShownTime2", time);
     should_record_doodle_load_time_ = false;

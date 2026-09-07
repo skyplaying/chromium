@@ -15,6 +15,7 @@
 #include "base/time/time.h"
 #include "base/types/strong_alias.h"
 #include "base/unguessable_token.h"
+#include "components/page_load_metrics/browser/navigation_scenario.h"
 #include "components/page_load_metrics/browser/observers/core/largest_contentful_paint_handler.h"
 #include "components/page_load_metrics/browser/page_load_metrics_observer.h"
 #include "components/page_load_metrics/browser/page_load_metrics_observer_delegate.h"
@@ -61,8 +62,7 @@ enum class PageLoadTrackerPageType {
   kPrimaryPage = 0,
   kPrerenderPage = 1,
   kFencedFramesPage = 2,
-  kPreviewPrimaryPage = 3,  // Primary page in the preview mode
-  kMaxValue = kPreviewPrimaryPage,
+  kMaxValue = kFencedFramesPage,
 };
 
 extern const char kErrorEvents[];
@@ -230,8 +230,11 @@ class PageLoadTracker : public PageLoadMetricsUpdateDispatcher::Client,
   void OnMainFrameMetadataChanged() override;
   void OnSubframeMetadataChanged(content::RenderFrameHost* rfh,
                                  const mojom::FrameMetadata& metadata) override;
-  void OnSoftNavigationChanged(
+  void OnSoftNavigationFirstContentfulPaint(
       const mojom::SoftNavigationMetrics& soft_navigation_metrics) override;
+  void OnSoftNavigationCompleted(
+      const SoftNavigationData& soft_navigation_data) override;
+  void OnSoftNavigationLargestContentfulPaint(uint64_t num_soft_lcps) override;
   void UpdateFeaturesUsage(
       content::RenderFrameHost* rfh,
       const std::vector<blink::UseCounterFeature>& new_features) override;
@@ -240,15 +243,11 @@ class PageLoadTracker : public PageLoadMetricsUpdateDispatcher::Client,
       const std::vector<mojom::ResourceDataUpdatePtr>& resources) override;
   void UpdateFrameCpuTiming(content::RenderFrameHost* rfh,
                             const mojom::CpuTiming& timing) override;
-  void OnMainFrameIntersectionRectChanged(
-      content::RenderFrameHost* rfh,
-      const gfx::Rect& main_frame_intersection_rect) override;
+  void OnMainFrameRectChanged(const gfx::Rect& main_frame_rect) override;
   void OnMainFrameViewportRectChanged(
       const gfx::Rect& main_frame_viewport_rect) override;
   void OnMainFrameAdRectsChanged(
       const base::flat_map<int, gfx::Rect>& main_frame_ad_rects) override;
-  void SetUpSharedMemoryForDroppedFrames(
-      base::ReadOnlySharedMemoryRegion dropped_frames_memory) override;
 
   // PageLoadMetricsObserverDelegate implementation:
   content::WebContents* GetWebContents() const override;
@@ -259,6 +258,7 @@ class PageLoadTracker : public PageLoadMetricsUpdateDispatcher::Client,
   std::optional<base::TimeDelta> GetActivationStart() const override;
   const BackForwardCacheRestore& GetBackForwardCacheRestore(
       size_t index) const override;
+  size_t GetNumBackForwardCacheRestores() const override;
   bool StartedInForeground() const override;
   PageVisibility GetVisibilityAtActivation() const override;
   bool IsReloadAfterDiscard() const override;
@@ -276,14 +276,11 @@ class PageLoadTracker : public PageLoadMetricsUpdateDispatcher::Client,
   const PageRenderData& GetPageRenderData() const override;
   const NormalizedCLSData& GetNormalizedCLSData(
       BfcacheStrategy bfcache_strategy) const override;
-  const NormalizedCLSData& GetSoftNavigationIntervalNormalizedCLSData()
-      const override;
   const InteractionToNextPaintCalculator& GetInteractionToNextPaintCalculator()
       const override;
-  const InteractionToNextPaintCalculator&
-  GetSoftNavigationIntervalInteractionToNextPaintCalculator() const override;
   const std::optional<blink::SubresourceLoadMetrics>&
   GetSubresourceLoadMetrics() const override;
+  const mojom::FontLoadingMetricsPtr& GetFontLoadingMetrics() const override;
   const PageRenderData& GetMainFrameRenderData() const override;
   const ui::ScopedVisibilityTracker& GetVisibilityTracker() const override;
   const ResourceTracker& GetResourceTracker() const override;
@@ -292,12 +289,12 @@ class PageLoadTracker : public PageLoadMetricsUpdateDispatcher::Client,
   const LargestContentfulPaintHandler&
   GetExperimentalLargestContentfulPaintHandler() const override;
   ukm::SourceId GetPageUkmSourceId() const override;
-  mojom::SoftNavigationMetrics& GetSoftNavigationMetrics() const override;
   // Maps main-frame same-document navigation identified
   // by |same_document_metrics_token| to its UKM source id.
   ukm::SourceId GetUkmSourceIdForSameDocumentNavigation(
       base::UnguessableToken same_document_metrics_token) const override;
   bool IsFirstNavigationInWebContents() const override;
+  NavigationScenario GetNavigationScenario() const override;
   bool IsOriginVisit() const override;
   bool IsTerminalVisit() const override;
   bool ShouldObserveScheme(std::string_view scheme) const override;
@@ -343,6 +340,8 @@ class PageLoadTracker : public PageLoadMetricsUpdateDispatcher::Client,
 
   void OnLoadedResource(
       const ExtraRequestCompleteInfo& extra_request_complete_info);
+  void DidLoadResourceFromMemoryCache(
+      const MemoryResourceLoadInfo& memory_resource_load_info);
 
   void FrameReceivedUserActivation(content::RenderFrameHost* rfh);
   void FrameDisplayStateChanged(content::RenderFrameHost* render_frame_host,
@@ -428,17 +427,12 @@ class PageLoadTracker : public PageLoadMetricsUpdateDispatcher::Client,
       const content::WebContentsObserver::MediaPlayerInfo& video_type,
       content::RenderFrameHost* render_frame_host);
 
-  void OnPrefetchLikely();
-
   void OnEnterBackForwardCache();
   void OnRestoreFromBackForwardCache(
       content::NavigationHandle* navigation_handle);
 
   // Called when the page tracked was just activated after being prerendered.
   void DidActivatePrerenderedPage(content::NavigationHandle* navigation_handle);
-
-  // Called when the previewed page was activated for the tab promotion.
-  void DidActivatePreviewedPage(base::TimeTicks activation_time);
 
   // Called when a `SharedStorageWorkletHost` is created.
   void OnSharedStorageWorkletHostCreated();
@@ -447,25 +441,24 @@ class PageLoadTracker : public PageLoadMetricsUpdateDispatcher::Client,
   // page tracked.
   void OnSharedStorageSelectURLCalled();
 
-  // Called when a Fledge auction completes.
-  void OnAdAuctionComplete(bool is_server_auction,
-                           bool is_on_device_auction,
-                           content::AuctionResult result);
-
   // Checks if this tracker is for outermost pages.
   bool IsOutermostTracker() const { return !parent_tracker_; }
 
-  void UpdateMetrics(content::RenderFrameHost* render_frame_host,
-                     mojom::PageLoadTimingPtr new_timing,
-                     mojom::FrameMetadataPtr new_metadata,
-                     const std::vector<blink::UseCounterFeature>& new_features,
-                     const std::vector<mojom::ResourceDataUpdatePtr>& resources,
-                     mojom::FrameRenderDataUpdatePtr render_data,
-                     mojom::CpuTimingPtr new_cpu_timing,
-                     std::vector<mojom::EventTimingPtr> event_timings,
-                     const std::optional<blink::SubresourceLoadMetrics>&
-                         subresource_load_metrics,
-                     mojom::SoftNavigationMetricsPtr soft_navigation_metrics);
+  void UpdateMetrics(
+      content::RenderFrameHost* render_frame_host,
+      mojom::PageLoadTimingPtr new_timing,
+      mojom::FrameMetadataPtr new_metadata,
+      const std::vector<blink::UseCounterFeature>& new_features,
+      const std::vector<mojom::ResourceDataUpdatePtr>& resources,
+      mojom::FrameRenderDataUpdatePtr render_data,
+      mojom::CpuTimingPtr new_cpu_timing,
+      std::vector<mojom::EventTimingPtr> event_timings,
+      const std::optional<blink::SubresourceLoadMetrics>&
+          subresource_load_metrics,
+      std::vector<mojom::SoftNavigationMetricsPtr> soft_navigation_metrics,
+      std::vector<mojom::LargestContentfulPaintTimingPtr>
+          soft_largest_contentful_paint,
+      mojom::FontLoadingMetricsPtr font_loading_metrics);
 
   void AddCustomUserTimings(
       std::vector<mojom::CustomUserTimingMarkPtr> custom_timings);
@@ -598,14 +591,13 @@ class PageLoadTracker : public PageLoadMetricsUpdateDispatcher::Client,
   const IsFirstNavigationInWebContentsBool is_first_navigation_in_web_contents_;
   const IsReloadAfterDiscardBool is_reload_after_discard_;
   const bool is_origin_visit_;
+  const NavigationScenario navigation_scenario_;
   bool is_terminal_visit_ = true;
 
   page_load_metrics::LargestContentfulPaintHandler
       largest_contentful_paint_handler_;
   page_load_metrics::LargestContentfulPaintHandler
       experimental_largest_contentful_paint_handler_;
-
-  mojom::SoftNavigationMetricsPtr soft_navigation_metrics_;
 
   // Maps main-frame same-document navigations identified
   // by their token to their UKM source ids.

@@ -5,10 +5,12 @@
 #ifndef CHROME_BROWSER_AUTOFILL_ANDROID_ENTITY_INSTANCE_WITH_LABELS_H_
 #define CHROME_BROWSER_AUTOFILL_ANDROID_ENTITY_INSTANCE_WITH_LABELS_H_
 
+#include <optional>
 #include <string>
 
 #include "base/android/jni_android.h"
 #include "base/android/scoped_java_ref.h"
+#include "chrome/browser/autofill/android/entity_type_android.h"
 #include "third_party/jni_zero/jni_zero.h"
 
 namespace autofill {
@@ -16,9 +18,11 @@ namespace autofill {
 // The C++ counterpart to the Java class of the same name.
 struct EntityInstanceWithLabels {
   EntityInstanceWithLabels(std::string guid,
+                           EntityTypeAndroid entity_type,
                            std::u16string entity_instance_label,
                            std::u16string entity_instance_sublabel,
-                           bool stored_in_wallet);
+                           bool stored_in_wallet,
+                           std::optional<std::string> wallet_entity_url);
   ~EntityInstanceWithLabels();
   EntityInstanceWithLabels(const EntityInstanceWithLabels&);
   EntityInstanceWithLabels& operator=(const EntityInstanceWithLabels&);
@@ -26,9 +30,11 @@ struct EntityInstanceWithLabels {
   EntityInstanceWithLabels& operator=(EntityInstanceWithLabels&&);
 
   std::string guid;
+  EntityTypeAndroid entity_type;
   std::u16string entity_instance_label;
   std::u16string entity_instance_sublabel;
   bool stored_in_wallet;
+  std::optional<std::string> wallet_entity_url;
 };
 
 }  // namespace autofill

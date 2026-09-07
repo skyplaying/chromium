@@ -69,7 +69,7 @@ void FormFieldDataAndroid::UpdateFromJava() {
 
 void FormFieldDataAndroid::OnFormFieldDidChange(std::u16string_view value) {
   field_->set_value(std::u16string(value));
-  field_->set_is_autofilled(false);
+  field_->set_is_autofilled_according_to_renderer(false);
   bridge_->UpdateValue(value);
 }
 
@@ -86,8 +86,7 @@ bool FormFieldDataAndroid::SimilarFieldAs(const FormFieldData& field) const {
     return std::tuple_cat(
         std::tie(f.host_frame(), f.name(), f.name_attribute(),
                  f.id_attribute()),
-        std::make_tuple(f.renderer_id(), f.form_control_type(),
-                        IsCheckable(f.check_status())));
+        std::make_tuple(f.renderer_id(), f.form_control_type()));
   };
 
   // For Android Autofill, labels are considered similar if they meet one of the

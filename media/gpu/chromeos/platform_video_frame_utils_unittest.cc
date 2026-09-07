@@ -4,8 +4,11 @@
 
 #include "media/gpu/chromeos/platform_video_frame_utils.h"
 
+#include <linux/memfd.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 #include <optional>
 #include <utility>
@@ -40,26 +43,32 @@ scoped_refptr<VideoFrame> CreateMockDmaBufVideoFrame(
     const gfx::Size& coded_size,
     const gfx::Rect& visible_rect,
     const gfx::Size& natural_size) {
-  const std::optional<VideoFrameLayout> layout =
-      VideoFrameLayout::Create(pixel_format, coded_size);
-  if (!layout) {
-    LOG(ERROR) << "Failed to create video frame layout";
-    return nullptr;
-  }
+  size_t num_planes = VideoFrame::NumPlanes(pixel_format);
+  std::vector<ColorPlaneLayout> planes;
   std::vector<base::ScopedFD> dmabuf_fds;
-  for (size_t i = 0; i < layout->num_planes(); i++) {
-    base::File file(base::FilePath("/dev/null"),
-                    base::File::FLAG_OPEN | base::File::FLAG_READ);
-    if (!file.IsValid()) {
-      LOG(ERROR) << "Failed to open a file";
-      return nullptr;
-    }
-    dmabuf_fds.emplace_back(file.TakePlatformFile());
+  for (size_t i = 0; i < num_planes; i++) {
+    const gfx::Size plane_size_in_bytes =
+        VideoFrame::PlaneSize(pixel_format, i, coded_size);
+    // Placeholder plane fd.
+    base::ScopedFD fd(memfd_create("test_shared_image", MFD_CLOEXEC));
+    CHECK(fd.is_valid());
+    CHECK_EQ(ftruncate(fd.get(), plane_size_in_bytes.GetArea()), 0);
+    dmabuf_fds.emplace_back(std::move(fd));
     if (!dmabuf_fds.back().is_valid()) {
       LOG(ERROR) << "The FD taken from file is not valid";
       return nullptr;
     }
+
+    planes.emplace_back(plane_size_in_bytes.width(), /*offset=*/0,
+                        plane_size_in_bytes.GetArea());
   }
+  const std::optional<VideoFrameLayout> layout =
+      VideoFrameLayout::CreateWithPlanes(pixel_format, coded_size, planes);
+  if (!layout) {
+    LOG(ERROR) << "Failed to create video frame layout";
+    return nullptr;
+  }
+
   return VideoFrame::WrapExternalDmabufs(*layout, visible_rect, natural_size,
                                          std::move(dmabuf_fds),
                                          base::TimeDelta());
@@ -141,6 +150,7 @@ TEST(PlatformVideoFrameUtilsTest, CreateVideoFrame) {
   constexpr gfx::Size kCodedSize(320, 240);
   constexpr gfx::Rect kVisibleRect(kCodedSize);
   constexpr gfx::Size kNaturalSize(kCodedSize);
+  constexpr gfx::ColorSpace kColorSpace(gfx::ColorSpace::CreateREC709());
   constexpr auto kTimeStamp = base::Milliseconds(1234);
   constexpr gfx::BufferUsage kBufferUsage =
       gfx::BufferUsage::VEA_READ_CAMERA_AND_CPU_READ_WRITE;
@@ -159,8 +169,8 @@ TEST(PlatformVideoFrameUtilsTest, CreateVideoFrame) {
         break;
       case VideoFrame::STORAGE_MAPPABLE_SHARED_IMAGE:
         frame = CreateMappableSharedImageVideoFrame(
-            kPixelFormat, kCodedSize, kVisibleRect, kNaturalSize, kTimeStamp,
-            kBufferUsage, test_sii.get());
+            kPixelFormat, kColorSpace, kCodedSize, kVisibleRect, kNaturalSize,
+            kTimeStamp, kBufferUsage, test_sii.get());
         break;
       default:
         NOTREACHED();

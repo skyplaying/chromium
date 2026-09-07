@@ -58,8 +58,11 @@ class MessageBoxCore : public views::DialogDelegateView {
   views::View* GetContentsView() override;
   views::Widget* GetWidget() override;
   const views::Widget* GetWidget() const override;
+  bool ShouldAllowKeyEventsDuringInputProtection() const override;
 
   void SetMessageLabel(const std::u16string& message_label);
+
+  void SetDisableInputs(bool disable);
 
   // Called by MessageBox when it is destroyed.
   void OnMessageBoxDestroyed();
@@ -87,6 +90,7 @@ MessageBoxCore::MessageBoxCore(const std::u16string& title_label,
       message_box_(message_box),
       message_box_view_(new views::MessageBoxView(message_label)) {
   DCHECK(message_box_);
+  SetDefaultButton(static_cast<int>(ui::mojom::DialogButton::kCancel));
   SetButtonLabel(ui::mojom::DialogButton::kOk, ok_label);
   SetButtonLabel(ui::mojom::DialogButton::kCancel, cancel_label);
 
@@ -170,8 +174,17 @@ const views::Widget* MessageBoxCore::GetWidget() const {
   return message_box_view_->GetWidget();
 }
 
+bool MessageBoxCore::ShouldAllowKeyEventsDuringInputProtection() const {
+  return false;
+}
+
 void MessageBoxCore::SetMessageLabel(const std::u16string& message_label) {
   message_box_view_->SetMessageLabel(message_label);
+}
+
+void MessageBoxCore::SetDisableInputs(bool disable) {
+  SetButtonEnabled(ui::mojom::DialogButton::kOk, !disable);
+  SetButtonEnabled(ui::mojom::DialogButton::kCancel, !disable);
 }
 
 void MessageBoxCore::OnMessageBoxDestroyed() {
@@ -212,6 +225,10 @@ void MessageBox::ChangeParentContainer(gfx::NativeView parent) {
 
 void MessageBox::SetMessageLabel(const std::u16string& message_label) {
   core_->SetMessageLabel(message_label);
+}
+
+void MessageBox::SetDisableInputs(bool disable) {
+  core_->SetDisableInputs(disable);
 }
 
 views::DialogDelegate& MessageBox::GetDialogDelegate() {

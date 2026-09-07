@@ -10,6 +10,7 @@ import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
@@ -24,25 +25,25 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.LooperMode;
 
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.OneshotSupplierImpl;
+import org.chromium.base.supplier.SupplierUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.cc.input.BrowserControlsState;
 import org.chromium.chrome.browser.browser_controls.BrowserStateBrowserControlsVisibilityDelegate;
 import org.chromium.chrome.browser.theme.ThemeColorProvider;
 import org.chromium.chrome.browser.toolbar.menu_button.MenuButtonProperties.ShowBadgeProperty;
 import org.chromium.chrome.browser.toolbar.menu_button.MenuButtonProperties.ThemeProperty;
+import org.chromium.chrome.browser.ui.actions.appmenu.MenuButtonState;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuButtonHelper;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuCoordinator;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuHandler;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuPropertiesDelegate;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
-import org.chromium.components.omnibox.OmniboxFocusReason;
 import org.chromium.ui.KeyboardVisibilityDelegate;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -52,12 +53,11 @@ import java.lang.ref.WeakReference;
 
 /** Unit tests for ToolbarAppMenuManager. */
 @RunWith(BaseRobolectricTestRunner.class)
-@LooperMode(LooperMode.Mode.LEGACY)
 public class MenuButtonMediatorTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Mock private Activity mActivity;
-    @Mock private MenuButtonCoordinator.SetFocusFunction mFocusFunction;
+    @Mock private Runnable mClearOmniboxFocus;
     @Mock private AppMenuCoordinator mAppMenuCoordinator;
     @Mock private AppMenuHandler mAppMenuHandler;
     @Mock private AppMenuButtonHelper mAppMenuButtonHelper;
@@ -110,6 +110,7 @@ public class MenuButtonMediatorTest {
     @Test
     public void testInitialization() {
         mAppMenuSupplier.set(mAppMenuCoordinator);
+        RobolectricUtil.runAllBackgroundAndUi();
         verify(mAppMenuHandler).addObserver(mMenuButtonMediator);
         verify(mAppMenuHandler).createAppMenuButtonHelper();
     }
@@ -117,11 +118,12 @@ public class MenuButtonMediatorTest {
     @Test
     public void testAppMenuVisiblityChange_badgeShowing() {
         mAppMenuSupplier.set(mAppMenuCoordinator);
+        RobolectricUtil.runAllBackgroundAndUi();
         mPropertyModel.set(
                 MenuButtonProperties.SHOW_UPDATE_BADGE, new ShowBadgeProperty(true, false));
         mMenuButtonMediator.onMenuVisibilityChanged(true);
 
-        verify(mFocusFunction).setFocus(false, OmniboxFocusReason.UNFOCUS);
+        verify(mClearOmniboxFocus).run();
         assertFalse(mPropertyModel.get(MenuButtonProperties.SHOW_UPDATE_BADGE).mShowUpdateBadge);
         verify(mOnMenuButtonClicked).run();
 
@@ -132,6 +134,7 @@ public class MenuButtonMediatorTest {
     @Test
     public void testAppMenuHighlightChange() {
         mAppMenuSupplier.set(mAppMenuCoordinator);
+        RobolectricUtil.runAllBackgroundAndUi();
 
         mMenuButtonMediator.onMenuHighlightChanged(true);
         assertTrue(mPropertyModel.get(MenuButtonProperties.IS_HIGHLIGHTING));
@@ -144,6 +147,7 @@ public class MenuButtonMediatorTest {
     @Test
     public void testAppMenuUpdateBadge() {
         mAppMenuSupplier.set(mAppMenuCoordinator);
+        RobolectricUtil.runAllBackgroundAndUi();
 
         doReturn(true).when(mActivity).isDestroyed();
         mMenuButtonMediator.updateStateChanged();
@@ -170,11 +174,11 @@ public class MenuButtonMediatorTest {
                 new MenuButtonMediator(
                         mPropertyModel,
                         false,
-                        () -> false,
+                        SupplierUtils.alwaysFalse(),
                         mRequestRenderRunnable,
-                        () -> false,
+                        SupplierUtils.alwaysFalse(),
                         mControlsVisibilityDelegate,
-                        mFocusFunction,
+                        mClearOmniboxFocus,
                         mAppMenuSupplier,
                         mWindowAndroid,
                         () -> mMenuUiState.buttonState,
@@ -292,7 +296,7 @@ public class MenuButtonMediatorTest {
 
     @Test
     public void testVisibilityDelegate() {
-        mVisibilityDelegate = Mockito.mock(MenuButtonCoordinator.VisibilityDelegate.class);
+        mVisibilityDelegate = mock(MenuButtonCoordinator.VisibilityDelegate.class);
         initMenuButtonMediator(mVisibilityDelegate);
 
         mMenuButtonMediator.setVisibility(false);
@@ -321,11 +325,11 @@ public class MenuButtonMediatorTest {
                 new MenuButtonMediator(
                         mPropertyModel,
                         true,
-                        () -> false,
+                        SupplierUtils.alwaysFalse(),
                         mRequestRenderRunnable,
-                        () -> false,
+                        SupplierUtils.alwaysFalse(),
                         mControlsVisibilityDelegate,
-                        mFocusFunction,
+                        mClearOmniboxFocus,
                         mAppMenuSupplier,
                         mWindowAndroid,
                         () -> mMenuUiState.buttonState,

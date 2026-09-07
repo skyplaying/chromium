@@ -78,11 +78,20 @@ class COMPONENT_EXPORT(AX_BASE_ANDROID) AccessibilityState {
   // Returns a vector containing the IDs of all running accessibility services.
   static std::vector<std::string> GetAccessibilityServiceIds();
 
+  // Returns a vector containing the `isAccessibilityTool` manifest flag for
+  // all running accessibility services, in the same order as
+  // `GetAccessibilityServiceIds()`. Note that this defaults to `false` on pre-S
+  // versions of Android, unlike the SDK version which defaults to `true`.
+  static std::vector<bool> GetAccessibilityToolFlags();
+
   // Returns the OS-level setting for the text cursor blink interval.
   static base::TimeDelta GetTextCursorBlinkInterval();
 
   // Returns true when the user has set the OS-level setting to reduce motion.
   static bool PrefersReducedMotion();
+
+  // Returns true when Samsung TalkBack is running.
+  static bool IsSamsungTalkBackEnabled();
 
   // --------------------------------------------------------------------------
   // Methods that call into AccessibilityAutofillHelper.java via JNI
@@ -106,6 +115,21 @@ class COMPONENT_EXPORT(AX_BASE_ANDROID) AccessibilityState {
   ~AccessibilityState();
 
   base::ObserverList<AccessibilityStateObserver> observers_;
+};
+
+// RAII helper to override Samsung TalkBack enabled state in tests.
+class COMPONENT_EXPORT(AX_BASE_ANDROID) ScopedSamsungTalkBackForTesting {
+ public:
+  explicit ScopedSamsungTalkBackForTesting(bool enabled);
+  ~ScopedSamsungTalkBackForTesting();
+
+  ScopedSamsungTalkBackForTesting(const ScopedSamsungTalkBackForTesting&) =
+      delete;
+  ScopedSamsungTalkBackForTesting& operator=(
+      const ScopedSamsungTalkBackForTesting&) = delete;
+
+ private:
+  const bool previous_value_;
 };
 
 }  // namespace ui

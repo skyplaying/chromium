@@ -9,6 +9,7 @@
  * style an icon inside of the button with the [has-icon] attribute.
  */
 import {FocusOutlineManager} from '//resources/js/focus_outline_manager.js';
+import {isMac} from '//resources/js/platform.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
 
@@ -146,16 +147,16 @@ export class CrButtonElement extends CrButtonElementBase {
     }
   }
 
-  protected onPrefixIconSlotChanged_() {
+  protected onPrefixIconSlotchange_() {
     this.hasPrefixIcon_ = this.$.prefixIcon.assignedElements().length > 0;
   }
 
-  protected onSuffixIconSlotChanged_() {
+  protected onSuffixIconSlotchange_() {
     this.hasSuffixIcon_ = this.$.suffixIcon.assignedElements().length > 0;
   }
 
   private onKeyDown_(e: KeyboardEvent) {
-    if (e.key !== ' ' && e.key !== 'Enter') {
+    if (e.key !== ' ' && (e.key !== 'Enter' || (isMac && e.ctrlKey))) {
       return;
     }
 
@@ -178,7 +179,7 @@ export class CrButtonElement extends CrButtonElementBase {
   }
 
   private onKeyUp_(e: KeyboardEvent) {
-    if (e.key !== ' ' && e.key !== 'Enter') {
+    if (e.key !== ' ' && (e.key !== 'Enter' || (isMac && e.ctrlKey))) {
       return;
     }
 

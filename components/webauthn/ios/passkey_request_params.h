@@ -8,6 +8,7 @@
 #import <set>
 #import <vector>
 
+#import "components/autofill/core/common/unique_ids.h"
 #import "components/webauthn/core/browser/passkey_model_utils.h"
 #import "components/webauthn/ios/ios_passkey_client.h"
 #import "device/fido/public/public_key_credential_descriptor.h"
@@ -64,6 +65,9 @@ class PasskeyRequestParams {
 
   // Returns the web::WebFrame's identifier.
   const std::string& FrameId() const;
+
+  // Returns the remote frame token used by ChildFrameRegistrar.
+  const std::optional<autofill::RemoteFrameToken>& RemoteFrameToken() const;
 
   // Returns the request id associated with a PublicKeyCredential promise.
   const std::string& RequestId() const;
@@ -146,6 +150,27 @@ class RegistrationRequestParams : public PasskeyRequestParams {
   // then another passkey for the same RP ID can not be added to the same
   // credential provider.
   const std::vector<device::PublicKeyCredentialDescriptor> exclude_credentials_;
+};
+
+// Parameters for PublicKeyCredential.signalUnknownCredential.
+struct SignalUnknownCredentialParams {
+  std::string rp_id;
+  std::vector<uint8_t> credential_id;
+};
+
+// Parameters for PublicKeyCredential.signalCurrentUserDetails.
+struct SignalCurrentUserDetailsParams {
+  std::string rp_id;
+  std::vector<uint8_t> user_id;
+  std::string name;
+  std::string display_name;
+};
+
+// Parameters for PublicKeyCredential.signalAllAcceptedCredentials.
+struct SignalAllAcceptedCredentialsParams {
+  std::string rp_id;
+  std::vector<uint8_t> user_id;
+  std::vector<std::vector<uint8_t>> all_accepted_credential_ids;
 };
 
 }  // namespace webauthn

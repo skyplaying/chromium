@@ -634,12 +634,6 @@ CORE_EXPORT LayoutUnit LineOffsetForTextAlign(ETextAlign,
                                               TextDirection,
                                               LayoutUnit space_left);
 
-inline LayoutUnit ConstrainByMinMax(LayoutUnit length,
-                                    LayoutUnit min,
-                                    LayoutUnit max) {
-  return std::max(min, std::min(length, max));
-}
-
 CORE_EXPORT FragmentGeometry
 CalculateInitialFragmentGeometry(const ConstraintSpace& space,
                                  const BlockNode& node,
@@ -769,6 +763,15 @@ void AddScrollbarFreeze(const BoxStrut& scrollbars_before,
                         WritingDirectionMode,
                         bool* freeze_horizontal,
                         bool* freeze_vertical);
+
+// Returns the offset that reflects a fragment across its container in one axis.
+LayoutUnit CalculateReverseChildOffset(
+    LayoutUnit offset,
+    LayoutUnit fragment_size,
+    LayoutUnit container_size,
+    LayoutUnit border_scrollbar_padding_start,
+    LayoutUnit margin_start,
+    LayoutUnit margin_end);
 
 }  // namespace blink
 

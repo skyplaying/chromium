@@ -5,18 +5,18 @@
 #include "chrome/browser/ui/ash/network/mobile_data_notifications.h"
 
 #include <string>
+#include <utility>
 
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/notifier_catalogs.h"
 #include "ash/public/cpp/notification_utils.h"
+#include "ash/resources/vector_icons/vector_icons.h"
 #include "base/functional/bind.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
-#include "chrome/app/vector_icons/vector_icons.h"
-#include "chrome/browser/notifications/system_notification_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/ash/system/system_tray_client_impl.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/login/login_state/login_state.h"
 #include "chromeos/ash/components/network/network_connection_handler.h"
@@ -26,6 +26,7 @@
 #include "components/session_manager/core/session_manager.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/message_center/message_center.h"
 
 using ::ash::NetworkHandler;
 using ::ash::NetworkState;
@@ -103,7 +104,7 @@ void MobileDataNotifications::OnSessionStateChanged() {
 }
 
 void MobileDataNotifications::ShowOptionalMobileDataNotification() {
-  if (SessionManager::Get()->IsUserSessionBlocked()) {
+  if (SessionManager::Get()->IsUserSessionBlocked() || !NetworkHandler::IsInitialized()) {
     return;
   }
 
@@ -131,17 +132,17 @@ void MobileDataNotifications::ShowOptionalMobileDataNotificationImpl(
 
   // Check if we've shown this notification before.
   PrefService* prefs = ProfileManager::GetActiveUserProfile()->GetPrefs();
-  if (!prefs->GetBoolean(prefs::kShowMobileDataNotification)) {
+  if (!prefs->GetBoolean(ash::prefs::kShowMobileDataNotification)) {
     return;
   }
 
   // Prevent the notification from showing up in the future and stop any running
   // timers.
-  prefs->SetBoolean(prefs::kShowMobileDataNotification, false);
+  prefs->SetBoolean(ash::prefs::kShowMobileDataNotification, false);
   one_shot_notification_check_delay_.Stop();
 
   // Display a one-time notification on first use of Mobile Data connection.
-  message_center::Notification notification = ash::CreateSystemNotification(
+  auto notification = ash::CreateSystemNotificationPtr(
       message_center::NOTIFICATION_TYPE_SIMPLE, kMobileDataNotificationId,
       l10n_util::GetStringUTF16(IDS_MOBILE_DATA_NOTIFICATION_TITLE),
       l10n_util::GetStringUTF16(IDS_3G_NOTIFICATION_MESSAGE),
@@ -153,10 +154,11 @@ void MobileDataNotifications::ShowOptionalMobileDataNotificationImpl(
       base::MakeRefCounted<message_center::HandleNotificationClickDelegate>(
           base::BindRepeating(&MobileDataNotificationClicked,
                               first_active_network->guid())),
-      kNotificationMobileDataIcon,
+      ash::kNotificationMobileDataIcon,
       message_center::SystemNotificationWarningLevel::NORMAL);
 
-  SystemNotificationHelper::GetInstance()->Display(notification);
+  message_center::MessageCenter::Get()->AddNotification(
+      std::move(notification));
 }
 
 void MobileDataNotifications::DelayedShowOptionalMobileDataNotification() {

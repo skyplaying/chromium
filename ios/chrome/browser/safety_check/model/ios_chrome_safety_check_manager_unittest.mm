@@ -10,18 +10,18 @@
 #import "base/memory/scoped_refptr.h"
 #import "base/task/sequenced_task_runner.h"
 #import "base/test/bind.h"
-#import "base/test/scoped_feature_list.h"
 #import "base/time/time.h"
 #import "components/password_manager/core/browser/password_manager_test_utils.h"
 #import "components/password_manager/core/browser/password_store/test_password_store.h"
+#import "components/password_manager/core/browser/password_string.h"
 #import "components/password_manager/core/browser/ui/credential_ui_entry.h"
 #import "components/prefs/pref_registry_simple.h"
 #import "components/prefs/pref_service.h"
 #import "components/prefs/testing_pref_service.h"
 #import "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #import "components/safety_check/features.h"
-#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
+#import "components/sync/test/test_sync_service.h"
 #import "ios/chrome/browser/passwords/model/ios_chrome_profile_password_store_factory.h"
 #import "ios/chrome/browser/passwords/model/password_checkup_utils.h"
 #import "ios/chrome/browser/safety_check/model/ios_chrome_safety_check_manager_constants.h"
@@ -38,6 +38,8 @@
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity_manager.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
+#import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/browser/upgrade/model/upgrade_recommended_details.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/chrome/test/testing_application_context.h"
@@ -50,8 +52,6 @@ namespace {
 class IOSChromeSafetyCheckManagerTest : public PlatformTest {
  public:
   void SetUp() override {
-    feature_list_.InitAndEnableFeature(kOmahaServiceRefactor);
-
     TestProfileIOS::Builder builder;
 
     builder.AddTestingFactory(
@@ -60,8 +60,10 @@ class IOSChromeSafetyCheckManagerTest : public PlatformTest {
                        ProfileIOS, password_manager::TestPasswordStore>));
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
+        AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
             std::make_unique<FakeAuthenticationServiceDelegate>()));
+    builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
+                              base::BindRepeating(&CreateTestSyncService));
 
     ProfileIOS* profile =
         profile_manager_.AddProfileWithBuilder(std::move(builder));
@@ -101,7 +103,6 @@ class IOSChromeSafetyCheckManagerTest : public PlatformTest {
 
   web::WebTaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
-  base::test::ScopedFeatureList feature_list_;
   IOSChromeScopedTestingLocalState scoped_testing_local_state_;
   TestProfileManagerIOS profile_manager_;
   raw_ptr<IOSChromeSafetyCheckManager> safety_check_manager_;
@@ -115,7 +116,7 @@ CreateCredentialsListWithNoInsecurePasswords() {
   password_manager::PasswordForm password_form;
   password_form.url = GURL("http://accounts.google.com/a/LoginAuth");
   password_form.username_value = u"test@testmail.com";
-  password_form.password_value = u"test1";
+  password_form.password_value = password_manager::PasswordString(u"test1");
 
   return {password_manager::CredentialUIEntry(password_form)};
 }
@@ -363,20 +364,6 @@ TEST_F(IOSChromeSafetyCheckManagerTest, HandlesExpiredOmahaResponse) {
 
   EXPECT_EQ(safety_check_manager_->GetUpdateChromeCheckState(),
             UpdateChromeSafetyCheckState::kOmahaError);
-}
-
-// Tests that the Omaha check is queued if the Omaha service has not yet
-// started.
-TEST_F(IOSChromeSafetyCheckManagerTest, OmahaCheckQueuedIfServiceNotStarted) {
-  // Start the Safety Check, which includes the Omaha check.
-  safety_check_manager_->StartSafetyCheck();
-
-  // Verify that the Update Chrome check is not marked as running, and the Omaha
-  // check is queued.
-  EXPECT_EQ(safety_check_manager_->GetUpdateChromeCheckState(),
-            UpdateChromeSafetyCheckState::kDefault);
-
-  EXPECT_TRUE(safety_check_manager_->IsOmahaCheckQueuedForTesting());
 }
 
 // Tests a valid, app-up-to-date Omaha response is properly handled.
@@ -733,14 +720,13 @@ TEST_F(IOSChromeSafetyCheckManagerTest, ClearsPasswordStateOnSignOut) {
 
   // Simulate sign-in first.
   SignIn();
-  ASSERT_TRUE(auth_service_->HasPrimaryIdentity(signin::ConsentLevel::kSignin));
+  ASSERT_TRUE(auth_service_->HasPrimaryIdentity());
 
   // Simulate sign-out (clearing the primary account at the `kSignin` level).
   // This will trigger `OnPrimaryAccountChanged()` in the `SafetyCheckManager`
   // via the `AuthenticationService` updating the `IdentityManager`.
   SignOut();
-  ASSERT_FALSE(
-      auth_service_->HasPrimaryIdentity(signin::ConsentLevel::kSignin));
+  ASSERT_FALSE(auth_service_->HasPrimaryIdentity());
 
   // Verify that the password state has been reset.
   password_manager::InsecurePasswordCounts reset_counts = {

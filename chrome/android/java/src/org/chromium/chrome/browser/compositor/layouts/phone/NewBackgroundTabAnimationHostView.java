@@ -23,13 +23,13 @@ import androidx.core.content.ContextCompat;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.R;
-import org.chromium.chrome.browser.toolbar.top.ToggleTabStackButton;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 import org.chromium.components.browser_ui.styles.ChromeColors;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+import org.chromium.ui.animation.CommonAnimationsFactory;
+import org.chromium.ui.animation.PathAnimationUtils.ArcDirection;
 import org.chromium.ui.animation.RunOnNextLayout;
 import org.chromium.ui.animation.RunOnNextLayoutDelegate;
-import org.chromium.ui.animation.ViewCurvedMotionAnimatorFactory;
 import org.chromium.ui.interpolators.Interpolators;
 import org.chromium.ui.util.ColorUtils;
 
@@ -67,7 +67,7 @@ public class NewBackgroundTabAnimationHostView extends FrameLayout implements Ru
     private NewBackgroundTabFakeTabSwitcherButton mFakeTabSwitcherButton;
     private ImageView mLinkIcon;
     private @AnimationType int mAnimationType;
-    private boolean mIsTopToolbar;
+    private boolean mIsTargetOnTop;
     private int mStatusBarHeight;
     private int mXOffset;
 
@@ -85,12 +85,14 @@ public class NewBackgroundTabAnimationHostView extends FrameLayout implements Ru
      * @param isNtp True if the current tab is the regular Ntp.
      * @param ntpToolbarTransitionPercentage To know the current transition percentage of the ntp
      *     search box.
+     * @param bottomBarVisible True if the bottom bar is visible.
      */
     public static @AnimationType int calculateAnimationType(
             boolean tabSwitcherButtonIsVisible,
             boolean isNtp,
-            float ntpToolbarTransitionPercentage) {
-        if (tabSwitcherButtonIsVisible || !isNtp) {
+            float ntpToolbarTransitionPercentage,
+            boolean bottomBarVisible) {
+        if (tabSwitcherButtonIsVisible || !isNtp || bottomBarVisible) {
             return AnimationType.DEFAULT;
         } else {
             return ntpToolbarTransitionPercentage == 1f
@@ -122,7 +124,7 @@ public class NewBackgroundTabAnimationHostView extends FrameLayout implements Ru
         target[1] -= Math.round(mLinkIcon.getHeight() / 2f);
 
         AnimatorSet transitionAnimator = getTransitionAnimator();
-        ObjectAnimator pathAnimator = getPathArcAnimator(originX, originY, target[0], target[1]);
+        Animator pathAnimator = getPathArcAnimator(originX, originY, target[0], target[1]);
         AnimatorSet backgroundAnimation = new AnimatorSet();
         AnimatorSet fakeTabSwitcherAnimator;
 
@@ -156,7 +158,8 @@ public class NewBackgroundTabAnimationHostView extends FrameLayout implements Ru
     /**
      * Prepares the animation.
      *
-     * @param tabSwitcherButton The real Tab Switcher Button.
+     * @param shouldShowNotificationIcon Whether to show the notification icon on the tab switcher
+     *     button.
      * @param tabSwitcherRect The {@link Rect} of the tab switcher button.
      * @param isIncognito True if the current tab is an incognito tab.
      * @param isTopToolbar True if current tab has a top toolbar.
@@ -164,30 +167,29 @@ public class NewBackgroundTabAnimationHostView extends FrameLayout implements Ru
      * @param animationType The {@link AnimationType}.
      * @param brandedColorScheme The {@link BrandedColorScheme} for the toolbar.
      * @param tabCount The tab count to display.
-     * @param toolbarHeight Current height of the toolbar in the screen (absolute y-coordinate in
-     *     the screen).
      * @param statusBarHeight The status bar height to calculate the y-offset within the screen.
      * @param xOffset Offset for cases where the screen can't draw from x = 0.
      */
     /* package */ void setUpAnimation(
-            ToggleTabStackButton tabSwitcherButton,
+            boolean shouldShowNotificationIcon,
             Rect tabSwitcherRect,
             boolean isIncognito,
-            boolean isTopToolbar,
+            boolean isTargetOnTop,
             @ColorInt int backgroundColor,
             @AnimationType int animationType,
             @BrandedColorScheme int brandedColorScheme,
             int tabCount,
-            int toolbarHeight,
             int statusBarHeight,
-            int xOffset) {
+            int xOffset,
+            ColorStateList iconTint) {
 
         mAnimationType = animationType;
         mStatusBarHeight = statusBarHeight;
         mXOffset = xOffset;
-        mIsTopToolbar = isTopToolbar;
+        mIsTargetOnTop = isTargetOnTop;
         mFakeTabSwitcherButton.setTabCount(tabCount, isIncognito);
-        mFakeTabSwitcherButton.setBrandedColorScheme(brandedColorScheme);
+        mFakeTabSwitcherButton.setBrandedColorScheme(brandedColorScheme, iconTint);
+        mFakeTabSwitcherButton.setSize(tabSwitcherRect.width(), tabSwitcherRect.height());
 
         Context context = getContext();
         if (ColorUtils.inNightMode(context)) {
@@ -203,12 +205,11 @@ public class NewBackgroundTabAnimationHostView extends FrameLayout implements Ru
         }
 
         int horizontalMargin = tabSwitcherRect.left - xOffset;
-        int verticalMargin = toolbarHeight - statusBarHeight;
+        int verticalMargin = tabSwitcherRect.top - statusBarHeight;
 
         if (mAnimationType == AnimationType.DEFAULT) {
             mFakeTabSwitcherButton.setButtonColor(backgroundColor);
-            mFakeTabSwitcherButton.setNotificationIconStatus(
-                    tabSwitcherButton.shouldShowNotificationIcon());
+            mFakeTabSwitcherButton.setNotificationIconStatus(shouldShowNotificationIcon);
         } else {
             mFakeTabSwitcherButton.setUpNtpAnimation(/* incrementCount= */ true);
             if (mAnimationType == AnimationType.NTP_FULL_SCROLL) {
@@ -222,20 +223,23 @@ public class NewBackgroundTabAnimationHostView extends FrameLayout implements Ru
     }
 
     /**
-     * Returns the {@link ObjectAnimator} for the path arc animation.
+     * Returns the {@link Animator} for the path arc animation.
      *
      * @param originX x-coordinate for the start point.
      * @param originY y-coordinate for the start point.
      * @param finalX x-coordinate for the end point.
      * @param finalY y-coordinate for the end point.
      */
-    private ObjectAnimator getPathArcAnimator(
-            float originX, float originY, float finalX, float finalY) {
-        boolean isClockwise = mIsTopToolbar ? (originX >= finalX) : (originX <= finalX);
+    private Animator getPathArcAnimator(float originX, float originY, float finalX, float finalY) {
+        @ArcDirection
+        int direction =
+                (mIsTargetOnTop ? (originX >= finalX) : (originX <= finalX))
+                        ? ArcDirection.CLOCKWISE
+                        : ArcDirection.COUNTER_CLOCKWISE;
 
-        ObjectAnimator animator =
-                ViewCurvedMotionAnimatorFactory.build(
-                        mLinkIcon, originX, originY, finalX, finalY, isClockwise);
+        Animator animator =
+                CommonAnimationsFactory.createViewArcAnimation(
+                        mLinkIcon, originX, originY, finalX, finalY, direction);
         animator.setDuration(PATH_ARC_DURATION_MS);
         animator.setInterpolator(Interpolators.EMPHASIZED_DECELERATE);
 

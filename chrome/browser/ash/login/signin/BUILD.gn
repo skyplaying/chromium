@@ -70,6 +70,7 @@ static_library("signin") {
 
   deps = [
     "//ash/constants",
+    "//ash/login/resources:login_strings",
     "//ash/public/cpp",
     "//ash/webui/settings/public/constants:mojom",
     "//chrome/app:branded_strings",
@@ -81,17 +82,20 @@ static_library("signin") {
     "//chrome/browser/ash/login/lock/online_reauth",
     "//chrome/browser/ash/login/session",
     "//chrome/browser/ash/profiles",
-    "//chrome/browser/notifications",
     "//chrome/browser/signin",
+    "//chrome/browser/supervised_user",
     "//chrome/browser/sync",
     "//chrome/browser/sync:factories",
+    "//chrome/browser/ui:chrome_pages",
     "//chrome/browser/ui/ash/multi_user",
     "//chrome/common",
     "//chrome/common:constants",
     "//chromeos/ash/components/account_manager",
+    "//chromeos/ash/components/browser_context_helper",
     "//chromeos/ash/components/cryptohome",
     "//chromeos/ash/components/network",
     "//chromeos/ash/components/proximity_auth",
+    "//chromeos/ash/experiences/settings_ui",
     "//components/google/core/common",
     "//components/keyed_service/content",
     "//components/signin/public/base",
@@ -101,6 +105,7 @@ static_library("signin") {
     "//services/network/public/cpp",
     "//ui/base",
     "//ui/base/idle",
+    "//ui/message_center",
     "//ui/message_center/public/cpp",
     "//url",
   ]
@@ -169,11 +174,13 @@ source_set("unit_tests") {
     "signin_error_notifier_unittest.cc",
     "token_handle_checker_unittest.cc",
     "token_handle_fetcher_unittest.cc",
+    "token_handle_store_factory_unittest.cc",
     "token_handle_store_unittest.cc",
   ]
 
   deps = [
     ":signin",
+    "//ash/public/cpp",
     "//base",
     "//base/test:test_support",
     "//chrome/app:generated_resources",
@@ -186,6 +193,7 @@ source_set("unit_tests") {
     "//chrome/browser/ui/webui/signin/ash",
     "//chrome/common:constants",
     "//chrome/test:test_support",
+    "//chromeos/ash/components/browser_context_helper",
     "//components/pref_registry",
     "//components/prefs",
     "//components/prefs:test_support",
@@ -197,8 +205,10 @@ source_set("unit_tests") {
     "//content/test:test_support",
     "//extensions/browser",
     "//google_apis",
+    "//google_apis:test_support",
     "//testing/gtest",
     "//ui/base",
+    "//ui/message_center",
     "//ui/message_center/public/cpp",
   ]
 }

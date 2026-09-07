@@ -27,9 +27,9 @@
 #include "chrome/browser/resource_coordinator/tab_lifecycle_unit_external.h"
 #include "chrome/browser/resource_coordinator/tab_lifecycle_unit_source.h"
 #include "chrome/browser/resource_coordinator/utils.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -49,6 +49,7 @@
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/test_utils.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
@@ -74,7 +75,8 @@ class FaviconWatcher final : public content::WebContentsObserver {
   // WebContentsObserver
   void DidUpdateFaviconURL(
       content::RenderFrameHost* render_frame_host,
-      const std::vector<blink::mojom::FaviconURLPtr>& candidates) final {
+      const std::vector<blink::mojom::FaviconURLPtr>& candidates,
+      blink::mojom::FaviconUpdateReason reason) final {
     run_loop_.Quit();
   }
 
@@ -154,12 +156,16 @@ void EnsureTabsInBrowser(BrowserWindowInterface* browser, int num_tabs) {
   EXPECT_EQ(num_tabs, tab_strip_model->count());
 }
 
-// Creates a browser with `num_tabs` tabs.
-BrowserWindowInterface* CreateBrowserWithTabs(int num_tabs) {
+BrowserWindowInterface* CreateBrowserWithTabsImpl(int num_tabs,
+                                                  bool incognito) {
   BrowserWindowInterface* const current_browser =
       GetLastActiveBrowserWindowInterfaceWithAnyProfile();
   ui_test_utils::BrowserCreatedObserver browser_created_observer;
-  chrome::NewWindow(current_browser);
+  if (incognito) {
+    chrome::NewIncognitoWindow(current_browser->GetProfile());
+  } else {
+    chrome::NewWindow(current_browser);
+  }
   ui_test_utils::WaitForBrowserSetLastActive(browser_created_observer.Wait());
   BrowserWindowInterface* const new_browser =
       GetLastActiveBrowserWindowInterfaceWithAnyProfile();
@@ -167,6 +173,16 @@ BrowserWindowInterface* CreateBrowserWithTabs(int num_tabs) {
 
   EnsureTabsInBrowser(new_browser, num_tabs);
   return new_browser;
+}
+
+// Creates a browser with `num_tabs` tabs.
+BrowserWindowInterface* CreateBrowserWithTabs(int num_tabs) {
+  return CreateBrowserWithTabsImpl(num_tabs, /*incognito=*/false);
+}
+
+// Creates an incognito browser with `num_tabs` tabs.
+BrowserWindowInterface* CreateIncognitoBrowserWithTabs(int num_tabs) {
+  return CreateBrowserWithTabsImpl(num_tabs, /*incognito=*/true);
 }
 
 bool IsTabDiscarded(content::WebContents* web_contents) {
@@ -208,13 +224,13 @@ class PageDiscardingHelperBrowserTest
     observer.Wait();
     favicon_watcher.Wait();
 
-    return browser()->tab_strip_model()->GetIndexOfWebContents(contents);
+    return browser()->GetTabStripModel()->GetIndexOfWebContents(contents);
   }
 
   void UpdatePageTitle(int index) {
     constexpr char16_t kNewTitle[] = u"New title";
     content::WebContents* contents =
-        browser()->tab_strip_model()->GetWebContentsAt(index);
+        browser()->GetTabStripModel()->GetWebContentsAt(index);
     content::TitleWatcher title_watcher(contents, kNewTitle);
     ASSERT_TRUE(content::ExecJs(
         contents, base::StrCat({"document.title = '",
@@ -224,7 +240,7 @@ class PageDiscardingHelperBrowserTest
 
   void UpdateFavicon(int index) {
     content::WebContents* contents =
-        browser()->tab_strip_model()->GetWebContentsAt(index);
+        browser()->GetTabStripModel()->GetWebContentsAt(index);
     // Change the favicon link from "icon.png" to "icon.svg".
     FaviconWatcher favicon_watcher(contents);
     ASSERT_TRUE(content::ExecJs(
@@ -235,7 +251,7 @@ class PageDiscardingHelperBrowserTest
 
   base::WeakPtr<PageNode> GetPageNodeAtIndex(int index) {
     return PerformanceManager::GetPrimaryPageNodeForWebContents(
-        browser()->tab_strip_model()->GetWebContentsAt(index));
+        browser()->GetTabStripModel()->GetWebContentsAt(index));
   }
 
   void ExpectImmediateDiscard(
@@ -275,7 +291,7 @@ class PageDiscardingHelperBrowserTest
         {page_node.get()}, discard_reason);
     EXPECT_EQ(discard_success, expected_result);
     EXPECT_EQ(
-        browser()->tab_strip_model()->GetWebContentsAt(index)->WasDiscarded(),
+        browser()->GetTabStripModel()->GetWebContentsAt(index)->WasDiscarded(),
         expected_result);
   }
 
@@ -300,7 +316,7 @@ class PageDiscardingHelperBrowserTest
   }
 
   content::WebContents* GetWebContentsAt(int index) {
-    return browser()->tab_strip_model()->GetWebContentsAt(index);
+    return browser()->GetTabStripModel()->GetWebContentsAt(index);
   }
 
  private:
@@ -325,7 +341,7 @@ IN_PROC_BROWSER_TEST_P(PageDiscardingHelperBrowserTest,
 
       // A foreground page blocks URGENT, PROACTIVE and SUGGESTED discards.
       const int index2 = OpenNewBackgroundPage();
-      browser()->tab_strip_model()->ActivateTabAt(index2);
+      browser()->GetTabStripModel()->ActivateTabAt(index2);
       switch (discard_reason) {
         case DiscardReason::EXTERNAL:
         case DiscardReason::FROZEN_WITH_GROWING_MEMORY:
@@ -357,9 +373,9 @@ IN_PROC_BROWSER_TEST_P(PageDiscardingHelperBrowserTest,
 
       // Updating favicon in the foreground does not block discards.
       const int index2 = OpenNewBackgroundPage();
-      browser()->tab_strip_model()->ActivateTabAt(index2);
+      browser()->GetTabStripModel()->ActivateTabAt(index2);
       UpdatePageTitle(index2);
-      browser()->tab_strip_model()->ActivateTabAt(index1);
+      browser()->GetTabStripModel()->ActivateTabAt(index1);
       ExpectImmediateDiscard(index2, discard_reason, true);
     }
 
@@ -381,17 +397,17 @@ IN_PROC_BROWSER_TEST_P(PageDiscardingHelperBrowserTest,
 
       // Updating favicon in the foreground does not block discards.
       const int index2 = OpenNewBackgroundPage();
-      browser()->tab_strip_model()->ActivateTabAt(index2);
+      browser()->GetTabStripModel()->ActivateTabAt(index2);
       UpdateFavicon(index2);
-      browser()->tab_strip_model()->ActivateTabAt(index1);
+      browser()->GetTabStripModel()->ActivateTabAt(index1);
       ExpectImmediateDiscard(index2, discard_reason, true);
     }
   }
 }
 
 IN_PROC_BROWSER_TEST_P(PageDiscardingHelperBrowserTest, NoDiscardPatterns) {
-  const std::string default_browser_context_id =
-      browser()->profile()->UniqueId();
+  const auto& default_browser_context_id =
+      browser()->GetProfile()->UniqueToken();
   const std::string base_url_pattern =
       embedded_test_server()->base_url().spec();
 
@@ -403,7 +419,7 @@ IN_PROC_BROWSER_TEST_P(PageDiscardingHelperBrowserTest, NoDiscardPatterns) {
         DiscardReason::FROZEN_WITH_GROWING_MEMORY}) {
     // Also test that FreezingOptOutChecker is hooked up to
     // PageDiscardingHelper correctly.
-    base::test::TestFuture<std::string_view> policy_changed_future;
+    base::test::TestFuture<const base::UnguessableToken&> policy_changed_future;
     auto policy_changed_callback = policy_changed_future.GetRepeatingCallback();
 
     auto* eligibility_policy =
@@ -488,7 +504,7 @@ IN_PROC_BROWSER_TEST_P(PageDiscardingHelperBrowserTest,
   ASSERT_TRUE(helper);
 
   OpenNewBackgroundPage();
-  EXPECT_EQ(browser()->tab_strip_model()->count(), 2);
+  EXPECT_EQ(browser()->GetTabStripModel()->count(), 2);
   base::WeakPtr<PageNode> page_to_discard = GetPageNodeAtIndex(1);
 
   // Keep-alive the process hosting the background page's main frame, to prevent
@@ -503,9 +519,9 @@ IN_PROC_BROWSER_TEST_P(PageDiscardingHelperBrowserTest,
   // Discard a background page.
   ASSERT_TRUE(page_to_discard);
   EXPECT_EQ(CanDiscardResult::kEligible,
-            eligibility_policy->CanDiscard(
-                page_to_discard.get(), DiscardReason::URGENT,
-                /*minimum_time_in_background=*/base::TimeDelta()));
+            eligibility_policy->CanDiscard(page_to_discard.get(),
+                                           DiscardReason::URGENT,
+                                           /*ignore_recent_visibility=*/true));
   ASSERT_TRUE(helper->ImmediatelyDiscardMultiplePages({page_to_discard.get()},
                                                       DiscardReason::URGENT));
   ASSERT_EQ(GetParam(),
@@ -518,9 +534,9 @@ IN_PROC_BROWSER_TEST_P(PageDiscardingHelperBrowserTest,
   base::WeakPtr<PageNode> discarded_page = GetPageNodeAtIndex(1);
   ASSERT_TRUE(discarded_page);
   EXPECT_EQ(CanDiscardResult::kDisallowed,
-            eligibility_policy->CanDiscard(
-                discarded_page.get(), DiscardReason::URGENT,
-                /*minimum_time_in_background=*/base::TimeDelta()));
+            eligibility_policy->CanDiscard(discarded_page.get(),
+                                           DiscardReason::URGENT,
+                                           /*ignore_recent_visibility=*/true));
 }
 
 // Regression test for crbug.com/386801193. Ensure discarded tabs remain
@@ -537,11 +553,11 @@ IN_PROC_BROWSER_TEST_P(PageDiscardingHelperBrowserTest,
                        MAYBE_DiscardedTabEligibleForSuccessiveDiscards) {
   // Add a new background tab.
   OpenNewBackgroundPage();
-  EXPECT_EQ(browser()->tab_strip_model()->count(), 2);
+  EXPECT_EQ(browser()->GetTabStripModel()->count(), 2);
 
-  tabs::TabInterface* tab1 = browser()->tab_strip_model()->GetTabAtIndex(0);
-  tabs::TabInterface* tab2 = browser()->tab_strip_model()->GetTabAtIndex(1);
-  EXPECT_EQ(browser()->tab_strip_model()->GetActiveTab(), tab1);
+  tabs::TabInterface* tab1 = browser()->GetTabStripModel()->GetTabAtIndex(0);
+  tabs::TabInterface* tab2 = browser()->GetTabStripModel()->GetTabAtIndex(1);
+  EXPECT_EQ(browser()->GetTabStripModel()->GetActiveTab(), tab1);
 
   // Attempt to discard the background tab.
   const auto attempt_discard = [this]() {
@@ -551,13 +567,14 @@ IN_PROC_BROWSER_TEST_P(PageDiscardingHelperBrowserTest,
     auto* eligibility_policy = DiscardEligibilityPolicy::GetFromGraph(graph);
     ASSERT_TRUE(eligibility_policy);
     EXPECT_EQ(CanDiscardResult::kEligible,
-              eligibility_policy->CanDiscard(discard_target_page_node.get(),
-                                             DiscardReason::URGENT,
-                                             base::TimeDelta()));
+              eligibility_policy->CanDiscard(
+                  discard_target_page_node.get(), DiscardReason::URGENT,
+                  /*ignore_recent_visibility=*/true));
     auto* helper = PageDiscardingHelper::GetFromGraph(graph);
     ASSERT_TRUE(helper);
     PageDiscardingHelper::DiscardResult result =
-        helper->DiscardAPage(DiscardReason::URGENT, base::TimeDelta());
+        helper->DiscardAPage(DiscardReason::URGENT,
+                             /*ignore_recent_visibility=*/true);
 
     EXPECT_TRUE(result.first_discard_time.has_value());
   };
@@ -569,16 +586,16 @@ IN_PROC_BROWSER_TEST_P(PageDiscardingHelperBrowserTest,
 
   // Activate and reload the discarded background page.
   content::TestNavigationObserver reload_waiter(tab2->GetContents(), 1);
-  browser()->tab_strip_model()->ActivateTabAt(1);
-  EXPECT_EQ(browser()->tab_strip_model()->GetActiveTab(), tab2);
+  browser()->GetTabStripModel()->ActivateTabAt(1);
+  EXPECT_EQ(browser()->GetTabStripModel()->GetActiveTab(), tab2);
   reload_waiter.Wait();
 
   EXPECT_FALSE(tab1->GetContents()->WasDiscarded());
   EXPECT_FALSE(tab2->GetContents()->WasDiscarded());
 
   // Background the discarded tab again and attempt another discard.
-  browser()->tab_strip_model()->ActivateTabAt(0);
-  EXPECT_EQ(browser()->tab_strip_model()->GetActiveTab(), tab1);
+  browser()->GetTabStripModel()->ActivateTabAt(0);
+  EXPECT_EQ(browser()->GetTabStripModel()->GetActiveTab(), tab1);
   attempt_discard();
 
   // Ensure the background tab has been discarded again.
@@ -592,12 +609,12 @@ IN_PROC_BROWSER_TEST_P(PageDiscardingHelperBrowserTest,
                        DiscardingFrozenTabCorrectlyTransitionsLifecycleState) {
   // Add a new background tab.
   OpenNewBackgroundPage();
-  EXPECT_EQ(browser()->tab_strip_model()->count(), 2);
+  EXPECT_EQ(browser()->GetTabStripModel()->count(), 2);
 
-  tabs::TabInterface* tab1 = browser()->tab_strip_model()->GetTabAtIndex(0);
-  tabs::TabInterface* tab2 = browser()->tab_strip_model()->GetTabAtIndex(1);
+  tabs::TabInterface* tab1 = browser()->GetTabStripModel()->GetTabAtIndex(0);
+  tabs::TabInterface* tab2 = browser()->GetTabStripModel()->GetTabAtIndex(1);
 
-  EXPECT_EQ(browser()->tab_strip_model()->GetActiveTab(), tab1);
+  EXPECT_EQ(browser()->GetTabStripModel()->GetActiveTab(), tab1);
 
   // Ensure the off-thread page node has registered the background tab as idle.
   PageNodeIdleWaiter page_node_idle_waiter(GetPageNodeAtIndex(1));
@@ -620,13 +637,14 @@ IN_PROC_BROWSER_TEST_P(PageDiscardingHelperBrowserTest,
     auto* eligibility_policy = DiscardEligibilityPolicy::GetFromGraph(graph);
     ASSERT_TRUE(eligibility_policy);
     EXPECT_EQ(CanDiscardResult::kEligible,
-              eligibility_policy->CanDiscard(discard_target_page_node.get(),
-                                             DiscardReason::URGENT,
-                                             base::TimeDelta()));
+              eligibility_policy->CanDiscard(
+                  discard_target_page_node.get(), DiscardReason::URGENT,
+                  /*ignore_recent_visibility=*/true));
     auto* helper = PageDiscardingHelper::GetFromGraph(graph);
     ASSERT_TRUE(helper);
     PageDiscardingHelper::DiscardResult result =
-        helper->DiscardAPage(DiscardReason::URGENT, base::TimeDelta());
+        helper->DiscardAPage(DiscardReason::URGENT,
+                             /*ignore_recent_visibility=*/true);
 
     EXPECT_TRUE(result.first_discard_time.has_value());
   };
@@ -649,7 +667,7 @@ IN_PROC_BROWSER_TEST_P(PageDiscardingHelperBrowserTest,
                        DiscardTabsWithMinimizedWindow) {
   // Minimize browser.
   EnsureTabsInBrowser(browser(), 2);
-  browser()->window()->Minimize();
+  browser()->GetWindow()->Minimize();
 
   // Request to discard pages a few times.
   auto* helper =
@@ -657,7 +675,7 @@ IN_PROC_BROWSER_TEST_P(PageDiscardingHelperBrowserTest,
   ASSERT_TRUE(helper);
   for (int i = 0; i < 3; ++i) {
     helper->DiscardAPage(DiscardReason::URGENT,
-                         /*minimum_time_in_background=*/base::TimeDelta());
+                         /*ignore_recent_visibility=*/true);
   }
 
   // The active tab is the minimized window isn't discarded.
@@ -671,7 +689,7 @@ IN_PROC_BROWSER_TEST_P(PageDiscardingHelperBrowserTest,
                        DiscardTabsWithOccludedWindow) {
   // This browser will be occluded.
   EnsureTabsInBrowser(browser(), 2);
-  browser()->window()->SetBounds(gfx::Rect(10, 10, 10, 10));
+  browser()->GetWindow()->SetBounds(gfx::Rect(10, 10, 10, 10));
   // Create another browser which occludes the previous browser.
   BrowserWindowInterface* const other_browser = CreateBrowserWithTabs(1);
   EXPECT_NE(other_browser, browser());
@@ -683,7 +701,7 @@ IN_PROC_BROWSER_TEST_P(PageDiscardingHelperBrowserTest,
   ASSERT_TRUE(helper);
   for (int i = 0; i < 3; ++i) {
     helper->DiscardAPage(DiscardReason::URGENT,
-                         /*minimum_time_in_background=*/base::TimeDelta());
+                         /*ignore_recent_visibility=*/true);
   }
 
   // The active tab is the occluded window isn't discarded.
@@ -691,6 +709,57 @@ IN_PROC_BROWSER_TEST_P(PageDiscardingHelperBrowserTest,
 
   // This non-active tab is discarded.
   EXPECT_TRUE(IsTabDiscarded(GetWebContentsAt(1)));
+}
+
+IN_PROC_BROWSER_TEST_P(PageDiscardingHelperBrowserTest,
+                       DiscardTabsWithAllowedBrowserContextIds) {
+  EnsureTabsInBrowser(browser(), 2);
+
+  BrowserWindowInterface* incognito_browser = CreateIncognitoBrowserWithTabs(2);
+
+  auto* helper =
+      PageDiscardingHelper::GetFromGraph(PerformanceManager::GetGraph());
+  ASSERT_TRUE(helper);
+
+  // Call DiscardAPage three times, even though we only expect the first to
+  // actually find a valid tab to discard.
+  for (int i = 0; i < 3; i++) {
+    absl::flat_hash_set<base::UnguessableToken> allowed_tokens;
+    allowed_tokens.insert(incognito_browser->GetProfile()->UniqueToken());
+    helper->DiscardAPage(DiscardReason::URGENT,
+                         /*ignore_recent_visibility=*/true,
+                         std::move(allowed_tokens));
+  }
+
+  // The active tabs should not be discarded, as DiscardReason::URGENT doesn't
+  // discard these.
+  EXPECT_FALSE(IsTabDiscarded(GetWebContentsAt(0)));
+  EXPECT_FALSE(IsTabDiscarded(
+      incognito_browser->GetTabStripModel()->GetWebContentsAt(0)));
+
+  // The non-active regular tab should not be discarded because its context
+  // wasn't in the allowed token set.
+  EXPECT_FALSE(IsTabDiscarded(GetWebContentsAt(1)));
+
+  // The non-active incognito tab should be discarded.
+  EXPECT_TRUE(IsTabDiscarded(
+      incognito_browser->GetTabStripModel()->GetWebContentsAt(1)));
+
+  // If we call DiscardAPage again but do not limit the browser contexts, then
+  // the non-active regular tab should get discarded now (but not the
+  // active-tabs still).
+  for (int i = 0; i < 3; i++) {
+    helper->DiscardAPage(DiscardReason::URGENT,
+                         /*ignore_recent_visibility=*/true,
+                         /*allowed_browser_context_ids=*/std::nullopt);
+  }
+  EXPECT_FALSE(IsTabDiscarded(GetWebContentsAt(0)));
+  EXPECT_FALSE(IsTabDiscarded(
+      incognito_browser->GetTabStripModel()->GetWebContentsAt(0)));
+
+  EXPECT_TRUE(IsTabDiscarded(GetWebContentsAt(1)));
+  EXPECT_TRUE(IsTabDiscarded(
+      incognito_browser->GetTabStripModel()->GetWebContentsAt(1)));
 }
 
 INSTANTIATE_TEST_SUITE_P(

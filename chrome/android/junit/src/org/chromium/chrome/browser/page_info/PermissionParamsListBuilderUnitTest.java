@@ -15,7 +15,6 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.RuntimeEnvironment;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.R;
@@ -32,7 +31,6 @@ import java.util.List;
 
 /** Unit tests for PermissionParamsListBuilder. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class PermissionParamsListBuilderUnitTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
     private PermissionParamsListBuilder mPermissionParamsListBuilder;
@@ -69,7 +67,7 @@ public class PermissionParamsListBuilderUnitTest {
     public void addLocationEntryAndBuildWhenSystemLocationDisabled() {
         LocationSettingsTestUtil.setSystemLocationSettingEnabled(false);
         mPermissionParamsListBuilder.addPermissionEntry(
-                "Test", "test", ContentSettingsType.GEOLOCATION, true, false);
+                "Test", "test", ContentSettingsType.GEOLOCATION_WITH_OPTIONS, true, false);
 
         List<PermissionObject> permissions = mPermissionParamsListBuilder.build();
         assertEquals(1, permissions.size());

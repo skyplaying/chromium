@@ -23,6 +23,12 @@ const char kEnableBackgroundTracing[] = "enable-background-tracing";
 // is provided.
 const char kTraceConfigFile[]               = "trace-config-file";
 
+// Enables startup tracing by passing the perfetto config as an argument. The
+// config is a base64 encoded proto `perfetto.protos.TraceConfig` defined in
+// third_party/perfetto/protos/perfetto/config/trace_config.proto. This flag
+// will be ignored if --trace-startup is provided.
+const char kTracePerfettoConfig[] = "trace-perfetto-config";
+
 // Enables startup tracing by passing a file path containing the perfetto config
 // as an argument. The config is a serialized or base64 encoded proto
 // `perfetto.protos.TraceConfig` defined in
@@ -70,7 +76,7 @@ const char kTraceProcessTrackUuid[] = "trace-process-track-uuid";
 const char kTraceStartupDuration[]          = "trace-startup-duration";
 
 // If supplied, sets the file which startup tracing will be stored into, if
-// omitted the default will be used "chrometrace.log" in the current directory.
+// omitted the default will be used "chrome.pftrace" in the current directory.
 // Has no effect unless --trace-startup is also supplied.
 // Example: --trace-startup --trace-startup-file=/tmp/trace_event.log
 // As a special case, can be set to 'none' - this disables automatically saving

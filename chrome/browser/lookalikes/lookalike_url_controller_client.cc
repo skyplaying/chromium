@@ -17,6 +17,8 @@
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/referrer.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 
 // static
 std::unique_ptr<security_interstitials::MetricsHelper>
@@ -38,7 +40,7 @@ LookalikeUrlControllerClient::LookalikeUrlControllerClient(
           Profile::FromBrowserContext(web_contents->GetBrowserContext())
               ->GetPrefs(),
           g_browser_process->GetApplicationLocale(),
-          GURL(chrome::kChromeUINewTabURL),
+          chrome::ChromeUINewTabURLAsGURL(),
           /*settings_page_helper=*/nullptr),
       request_url_(request_url),
       safe_url_(safe_url) {}

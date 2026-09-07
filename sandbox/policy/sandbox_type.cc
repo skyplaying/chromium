@@ -7,6 +7,7 @@
 #include <string>
 
 #include "base/check.h"
+#include "base/logging.h"
 #include "base/notreached.h"
 #include "build/build_config.h"
 #include "sandbox/policy/mojom/sandbox.mojom.h"
@@ -53,6 +54,7 @@ constexpr char kMirroringSandbox[] = "mirroring";
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 constexpr char kProxyResolverSandbox[] = "proxy_resolver";
+constexpr char kWebNNModelCompilationSandbox[] = "webnn_model_compilation";
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 
 #if BUILDFLAG(IS_FUCHSIA)
@@ -154,6 +156,7 @@ void SetCommandLineFlagsForSandboxType(base::CommandLine* command_line,
 #endif  // BUILDFLAG(IS_MAC)
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
     case Sandbox::kProxyResolver:
+    case Sandbox::kWebNNModelCompilation:
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 #if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
     BUILDFLAG(IS_WIN)
@@ -213,6 +216,9 @@ sandbox::mojom::Sandbox SandboxTypeFromCommandLine(
       process_type == switches::kCodeSignCloneCleanupProcessType ||
       process_type == switches::kAppShimProcessType) {
     return Sandbox::kNoSandbox;
+  }
+  if (process_type == switches::kNoOpForTestingProcessType) {
+    return Sandbox::kUtility;
   }
 #endif
 
@@ -279,6 +285,8 @@ std::string StringFromUtilitySandboxType(Sandbox sandbox_type) {
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
     case Sandbox::kProxyResolver:
       return kProxyResolverSandbox;
+    case Sandbox::kWebNNModelCompilation:
+      return kWebNNModelCompilationSandbox;
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
     case Sandbox::kShapeDetection:
@@ -370,6 +378,9 @@ sandbox::mojom::Sandbox UtilitySandboxTypeFromString(
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
   if (sandbox_string == kProxyResolverSandbox) {
     return Sandbox::kProxyResolver;
+  }
+  if (sandbox_string == kWebNNModelCompilationSandbox) {
+    return Sandbox::kWebNNModelCompilation;
   }
 #endif
   if (sandbox_string == kAudioSandbox) {

@@ -7,26 +7,29 @@
 #include <algorithm>
 
 #include "base/check_is_test.h"
-#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engine_choice/search_engine_choice_dialog_service.h"
 #include "chrome/browser/search_engine_choice/search_engine_choice_dialog_service_factory.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/search_engine_choice/search_engine_choice_tab_helper.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
 #include "chrome/browser/ui/webui/search_engine_choice/search_engine_choice_ui.h"
 #include "chrome/common/webui_url_constants.h"
 #include "components/constrained_window/constrained_window_views.h"
 #include "components/web_modal/web_contents_modal_dialog_host.h"
+#include "content/public/browser/host_zoom_map.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
+#include "ui/base/base_window.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/views/controls/webview/webview.h"
+#include "ui/views/layout/layout_provider.h"
 #include "ui/views/view_class_properties.h"
+#include "ui/views/window/dialog_delegate.h"
 
 namespace {
 
@@ -51,7 +54,7 @@ int GetWebViewCornerRadius() {
 
 // static
 void SearchEngineChoiceDialog::Show(
-    Browser& browser,
+    BrowserWindowInterface& browser,
     std::optional<gfx::Size> boundary_dimensions_for_test,
     std::optional<double> zoom_factor_for_test) {
   if (boundary_dimensions_for_test.has_value() ||
@@ -69,7 +72,8 @@ void SearchEngineChoiceDialog::Show(
       &browser, boundary_dimensions_for_test, zoom_factor_for_test);
 
   SearchEngineChoiceDialogService* dialog_service =
-      SearchEngineChoiceDialogServiceFactory::GetForProfile(browser.profile());
+      SearchEngineChoiceDialogServiceFactory::GetForProfile(
+          browser.GetProfile());
   if (!dialog_service->RegisterDialog(browser,
                                       dialogView->GetCloseViewClosure())) {
     // The dialog was rejected. Abort, don't show anything.
@@ -80,12 +84,12 @@ void SearchEngineChoiceDialog::Show(
   delegate->SetContentsView(std::move(dialogView));
 
   constrained_window::CreateBrowserModalDialogViews(
-      std::move(delegate), browser.window()->GetNativeWindow());
+      std::move(delegate), browser.GetWindow()->GetNativeWindow());
 }
 
-bool CanWindowHeightFitSearchEngineChoiceDialog(Browser& browser) {
-  int max_dialog_height = browser.window()
-                              ->GetWebContentsModalDialogHost()
+bool CanWindowHeightFitSearchEngineChoiceDialog(
+    BrowserWindowInterface& browser) {
+  int max_dialog_height = browser.GetWebContentsModalDialogHostForWindow()
                               ->GetMaximumDialogSize()
                               .height();
 
@@ -93,7 +97,7 @@ bool CanWindowHeightFitSearchEngineChoiceDialog(Browser& browser) {
 }
 
 SearchEngineChoiceDialogView::SearchEngineChoiceDialogView(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     std::optional<gfx::Size> boundary_dimensions_for_test,
     std::optional<double> zoom_factor_for_test)
     : browser_(browser),
@@ -107,7 +111,7 @@ SearchEngineChoiceDialogView::SearchEngineChoiceDialogView(
 
   // Create the web view in the native dialog.
   web_view_ =
-      AddChildView(std::make_unique<views::WebView>(browser->profile()));
+      AddChildView(std::make_unique<views::WebView>(browser->GetProfile()));
 }
 
 SearchEngineChoiceDialogView::~SearchEngineChoiceDialogView() = default;
@@ -134,12 +138,10 @@ void SearchEngineChoiceDialogView::Initialize() {
     preferred_dialog_height = boundary_dimensions_for_test_->height();
   }
 
-  int max_width = browser_->window()
-                      ->GetWebContentsModalDialogHost()
+  int max_width = browser_->GetWebContentsModalDialogHostForWindow()
                       ->GetMaximumDialogSize()
                       .width();
-  int max_height = browser_->window()
-                       ->GetWebContentsModalDialogHost()
+  int max_height = browser_->GetWebContentsModalDialogHostForWindow()
                        ->GetMaximumDialogSize()
                        .height();
 
@@ -178,7 +180,7 @@ void SearchEngineChoiceDialogView::ShowNativeView() {
   // This solution is inspired by the code in `WebUIBubbleDialogView`, it
   // applies the round corners to the inner web_view to match the view rounded
   // corners.
-  web_view_->holder()->SetCornerRadii(
+  web_view_->holder()->SetNativeViewCornerRadii(
       gfx::RoundedCornersF(GetWebViewCornerRadius()));
 
   widget->Show();

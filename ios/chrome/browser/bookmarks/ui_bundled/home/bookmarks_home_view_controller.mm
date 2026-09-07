@@ -67,6 +67,7 @@
 #import "ios/chrome/browser/shared/coordinator/alert/action_sheet_coordinator.h"
 #import "ios/chrome/browser/shared/coordinator/alert/alert_coordinator.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
+#import "ios/chrome/browser/shared/coordinator/scene/state/incognito_state.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/browser/browser_provider.h"
 #import "ios/chrome/browser/shared/model/browser/browser_provider_interface.h"
@@ -78,10 +79,10 @@
 #import "ios/chrome/browser/shared/public/commands/settings_commands.h"
 #import "ios/chrome/browser/shared/public/commands/show_signin_command.h"
 #import "ios/chrome/browser/shared/public/commands/snackbar_commands.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/elements/home_waiting_view.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_url_item.h"
-#import "ios/chrome/browser/shared/ui/table_view/legacy_chrome_table_view_styler.h"
 #import "ios/chrome/browser/shared/ui/table_view/table_view_illustrated_empty_view.h"
 #import "ios/chrome/browser/shared/ui/table_view/table_view_model.h"
 #import "ios/chrome/browser/shared/ui/table_view/table_view_navigation_controller_constants.h"
@@ -161,11 +162,11 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
 }  // namespace
 
 @interface BookmarksHomeViewController () <
-    BookmarksEditorCoordinatorDelegate,
-    BookmarksFolderEditorCoordinatorDelegate,
-    BookmarksFolderChooserCoordinatorDelegate,
-    BookmarksHomeConsumer,
     BookmarkModelBridgeObserver,
+    BookmarksEditorCoordinatorDelegate,
+    BookmarksFolderChooserCoordinatorDelegate,
+    BookmarksFolderEditorCoordinatorDelegate,
+    BookmarksHomeConsumer,
     BookmarkTableCellTitleEditDelegate,
     TableViewURLDragDataSource,
     TableViewURLDropDelegate,
@@ -262,13 +263,14 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
   SigninCoordinator* _signinCoordinator;
   // Whether the UI is disabled.
   BOOL _UIDisabled;
+  // The bookmark folder currently being displayed.
+  raw_ptr<const bookmarks::BookmarkNode> _displayedFolderNode;
 }
 
 @synthesize editingFolderCell = _editingFolderCell;
 
 - (instancetype)initWithBrowser:(Browser*)browser {
   CHECK(browser, base::NotFatalUntil::M152);
-
   UITableViewStyle style = ChromeTableViewStyle();
   self = [super initWithStyle:style];
   if (self) {
@@ -287,10 +289,13 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
 }
 
 - (void)dealloc {
-  CHECK(_isShutDown, base::NotFatalUntil::M152);
+  [self shutdown];
 }
 
 - (void)shutdown {
+  if (_isShutDown) {
+    return;
+  }
   _isShutDown = YES;
   [self stopSigninCoordinator];
   [self.editingFolderCell stopEdit];
@@ -298,6 +303,7 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
   [self stopBookmarksEditorCoordinator];
   [self stopBookmarksFolderEditorCoordinator];
   [self.mediator disconnect];
+  _displayedFolderNode = nullptr;
   self.mediator.consumer = nil;
   self.mediator = nil;
   _browser = nullptr;
@@ -333,6 +339,8 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
   // associated with the root node.
   CHECK(_bookmarkModel->loaded());
   CHECK([self isDisplayingBookmarkRoot], base::NotFatalUntil::M152);
+  // The displayed node is the root node, so it must still exists.
+  CHECK(self.displayedFolderNode, base::NotFatalUntil::M152);
 
   NSMutableArray<BookmarksHomeViewController*>* stack = [NSMutableArray array];
   // Configure the root controller Navigationbar at this time when
@@ -399,10 +407,23 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
   [self willDismiss];
 }
 
+- (const bookmarks::BookmarkNode*)displayedFolderNode {
+  return _displayedFolderNode;
+}
+
+- (void)setDisplayedFolderNode:
+    (const bookmarks::BookmarkNode*)displayedFolderNode {
+  _displayedFolderNode = displayedFolderNode;
+}
+
 #pragma mark - UIViewController
 
 - (void)viewDidLoad {
   [super viewDidLoad];
+
+  if (!_bookmarkModel) {
+    return;
+  }
 
   // Set Navigation Bar, Toolbar and TableView appearance.
   self.navigationController.navigationBarHidden = NO;
@@ -458,7 +479,7 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
 - (void)viewWillAppear:(BOOL)animated {
   [super viewWillAppear:animated];
 
-  if (_isShutDown) {
+  if (_isShutDown || !_bookmarkModel) {
     // After `shutdown` is called, `_profile` is null.
     return;
   }
@@ -485,6 +506,12 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
   [IntentDonationHelper donateIntent:IntentType::kOpenBookmarks];
 }
 
+// Note: Unlike a standard trio of mediator-coordinator-viewcontroller,
+// multiple `BookmarksHomeViewController` instances are pushed for subfolder
+// navigation under a single coordinator and a single mediator.
+// `viewDidDisappear:` cannot be used for shutdown as subfolder navigation
+// would prematurely destroy the coordinator's shared mediator. Teardown is
+// instead tied to root container removal (`parent == nil`).
 - (void)didMoveToParentViewController:(UIViewController*)parent {
   [super didMoveToParentViewController:parent];
   if (_isShutDown) {
@@ -543,7 +570,10 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
 #pragma mark - Protected
 
 - (void)loadBookmarkViews {
-  CHECK(self.displayedFolderNode, base::NotFatalUntil::M152);
+  if (!self.displayedFolderNode) {
+    // The view is being dismissed before being loaded, so let’s not load it.
+    return;
+  }
   [self loadModel];
 
   self.dragDropHandler = [[TableViewURLDragDropHandler alloc] init];
@@ -602,6 +632,11 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
 #pragma mark - BookmarksHomeConsumer
 
 - (void)closeThisFolder {
+  if (!self.displayedFolderNode) {
+    // The view is being dismissed before being loaded, so no need to close it
+    // again.
+    return;
+  }
   [self jumpToFolder:self.displayedFolderNode->parent()];
 }
 
@@ -643,7 +678,7 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
 - (void)loadFaviconAtIndexPath:(NSIndexPath*)indexPath
         fallbackToGoogleServer:(BOOL)fallbackToGoogleServer {
   const BookmarkNode* node = [self nodeAtIndexPath:indexPath];
-  if (node->is_folder()) {
+  if (!node || node->is_folder()) {
     return;
   }
 
@@ -652,13 +687,14 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
       base::apple::ObjCCastStrict<BookmarksHomeNodeItem>(item);
 
   // Start loading a favicon.
+  int64_t nodeId = node->id();
   __weak BookmarksHomeViewController* weakSelf = self;
   auto faviconLoadedBlock = ^(FaviconAttributes* attributes, bool cached) {
     [weakSelf didFetchFaviconAttributes:attributes
                                  cached:cached
                                    item:URLItem
                               indexPath:indexPath
-                                   node:node];
+                                 nodeId:nodeId];
   };
 
   GURL blockURL(node->url());
@@ -751,9 +787,6 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
   __weak __typeof(self) weakSelf = self;
   // Add open URL menu item.
   UIAction* openAction = [actionFactory actionToOpenInNewTabWithBlock:^{
-    if ([weakSelf isIncognitoForced]) {
-      return;
-    }
     [weakSelf openAllURLs:{nodeURL} inIncognito:NO newTab:YES];
   }];
   if ([self isIncognitoForced]) {
@@ -763,9 +796,6 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
   // Add open URL in incognito menu item.
   UIAction* openInIncognito =
       [actionFactory actionToOpenInNewIncognitoTabWithBlock:^{
-        if (![weakSelf isIncognitoAvailable]) {
-          return;
-        }
         [weakSelf openAllURLs:{nodeURL} inIncognito:YES newTab:YES];
       }];
   if (![self isIncognitoAvailable]) {
@@ -785,21 +815,18 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
                     actionToCopyURL:[[CrURL alloc] initWithGURL:nodeURL]]];
   // Add edit menu item.
   UIAction* editAction = [actionFactory actionToEditWithBlock:^{
-    __strong __typeof(weakSelf) strongSelf = weakSelf;
-    [strongSelf editBookmarkNodeWithID:nodeID];
+    [weakSelf editBookmarkNodeWithID:nodeID];
   }];
   [menuElements addObject:editAction];
   // Add share menu item.
   [menuElements addObject:[actionFactory actionToShareWithBlock:^{
-                  __strong __typeof(weakSelf) strongSelf = weakSelf;
-                  [strongSelf shareURLBookmarkNodeWithID:nodeID
-                                               indexPath:indexPath];
+                  [weakSelf shareURLBookmarkNodeWithID:nodeID
+                                             indexPath:indexPath];
                 }]];
   // Add delete menu item.
   UIAction* deleteAction = [actionFactory actionToDeleteWithBlock:^{
-    __strong __typeof(weakSelf) strongSelf = weakSelf;
-    [strongSelf deleteBookmarkNodeWithID:nodeID
-                              userAction:"MobileBookmarkManagerEntryDeleted"];
+    [weakSelf deleteBookmarkNodeWithID:nodeID
+                            userAction:"MobileBookmarkManagerEntryDeleted"];
   }];
   [menuElements addObject:deleteAction];
   // Disable Edit and Delete if the node cannot be edited.
@@ -824,15 +851,13 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
   // Add edit menu item.
   __weak __typeof(self) weakSelf = self;
   UIAction* editAction = [actionFactory actionToEditWithBlock:^{
-    __strong __typeof(weakSelf) strongSelf = weakSelf;
-    [strongSelf editFolderNodeWithID:nodeID];
+    [weakSelf editFolderNodeWithID:nodeID];
   }];
   [menuElements addObject:editAction];
   // Add move menu item.
   UIAction* moveAction = [actionFactory actionToMoveFolderWithBlock:^{
-    __strong __typeof(weakSelf) strongSelf = weakSelf;
-    [strongSelf moveBookmarkNodeWithIDs:{nodeID}
-                             userAction:"MobileBookmarkManagerMoveToFolder"];
+    [weakSelf moveBookmarkNodeWithIDs:{nodeID}
+                           userAction:"MobileBookmarkManagerMoveToFolder"];
   }];
   [menuElements addObject:moveAction];
   // Disable Edit and Move if the node cannot be edited.
@@ -849,7 +874,7 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
   DCHECK(!_folderChooserCoordinator);
   DCHECK(nodeIDs.size() > 0);
 
-  bookmark_utils_ios::NodeSet nodes;
+  std::set<raw_ptr<const bookmarks::BookmarkNode>> nodes;
   for (int64_t nodeID : nodeIDs) {
     const BookmarkNode* node = [self findNodeByID:nodeID];
     if (node) {
@@ -864,13 +889,13 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
   }
 
   base::RecordAction(base::UserMetricsAction(userAction));
-  const BookmarkNode* editedNode = *(nodes.begin());
-  const BookmarkNode* selectedFolder = editedNode->parent();
+  const BookmarkNode* movedNode = *(nodes.begin());
+  const BookmarkNode* selectedFolder = movedNode->parent();
   _UIDisabled = YES;
   _folderChooserCoordinator = [[BookmarksFolderChooserCoordinator alloc]
       initWithBaseViewController:self.navigationController
                          browser:_browser.get()
-                     hiddenNodes:nodes];
+                      movedNodes:nodes];
   [_folderChooserCoordinator setSelectedFolder:selectedFolder];
   _folderChooserCoordinator.delegate = self;
   [_folderChooserCoordinator start];
@@ -946,14 +971,20 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
   _UIDisabled = YES;
 }
 
+// Opens the urls. If `inIncognito` is YES but incognito is unavailable, or if
+// `inIncognito` is NO but incognito is forced, do nothing.
 - (void)openAllURLs:(std::vector<GURL>)urls
         inIncognito:(BOOL)inIncognito
              newTab:(BOOL)newTab {
   if (inIncognito) {
-    IncognitoReauthSceneAgent* reauthAgent = [IncognitoReauthSceneAgent
-        agentFromScene:_browser.get()->GetSceneState()];
-    if (reauthAgent.authenticationRequired) {
+    if (![self isIncognitoAvailable]) {
+      return;
+    }
+    SceneState* scene = _browser.get()->GetSceneState();
+    if (scene.incognitoState.authenticationRequired) {
       __weak BookmarksHomeViewController* weakSelf = self;
+      IncognitoReauthSceneAgent* reauthAgent =
+          [IncognitoReauthSceneAgent agentFromScene:scene];
       [reauthAgent
           authenticateIncognitoContentWithCompletionBlock:^(BOOL success) {
             if (success) {
@@ -962,6 +993,8 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
           }];
       return;
     }
+  } else if ([self isIncognitoForced]) {
+    return;
   }
 
   [self cacheIndexPathRow];
@@ -977,58 +1010,12 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
   }
   _UIDisabled = YES;
   __weak BookmarksHomeViewController* weakSelf = self;
-  [self.mediator queryLocalBookmarks:^(int local_bookmarks_count,
-                                       std::string user_email) {
-    BookmarksHomeViewController* strongSelf = weakSelf;
-    if (!strongSelf) {
-      return;
-    }
-    NSString* alertTitle = l10n_util::GetPluralNSStringF(
-        IDS_IOS_BOOKMARKS_HOME_BULK_UPLOAD_ALERT_TITLE, local_bookmarks_count);
-    NSString* alertDescription = base::SysUTF16ToNSString(
-        base::i18n::MessageFormatter::FormatWithNamedArgs(
-            l10n_util::GetStringUTF16(
-                IDS_IOS_BOOKMARKS_HOME_BULK_UPLOAD_ALERT_DESCRIPTION),
-            "count", local_bookmarks_count, "email", user_email));
-    // queryLocalBookmarks() should execute the callback almost immediately.
-    // This CHECK ensures that the action sheet coordinator is never opened
-    // twice.
-    CHECK(!self.actionSheetCoordinator);
-    strongSelf.actionSheetCoordinator = [[ActionSheetCoordinator alloc]
-        initWithBaseViewController:strongSelf
-                           browser:strongSelf->_browser.get()
-                             title:alertTitle
-                           message:alertDescription
-                              rect:targetRect
-                              view:strongSelf.tableView];
-    // Create the confirm button.
-    [strongSelf.actionSheetCoordinator
-        addItemWithTitle:GetNSString(
-                             IDS_IOS_BOOKMARKS_HOME_BULK_UPLOAD_ALERT_BUTTON)
-                  action:^{
-                    base::RecordAction(base::UserMetricsAction(
-                        "MobileBookmarksManagerBulkSaveBookmarksToAccountDialog"
-                        "Accepted"));
-                    [weakSelf triggerBatchUploadFor:local_bookmarks_count
-                                          userEmail:std::move(user_email)];
-                  }
-                   style:UIAlertActionStyleDefault];
-
-    // Create the cancel button.
-    [strongSelf.actionSheetCoordinator
-        addItemWithTitle:GetNSString(
-                             IDS_IOS_BOOKMARKS_HOME_BULK_UPLOAD_ALERT_CANCEL)
-                  action:^{
-                    base::RecordAction(base::UserMetricsAction(
-                        "MobileBookmarksManagerBulkSaveBookmarksToAccountDialog"
-                        "Cancelled"));
-                    [weakSelf dismissActionSheetCoordinator];
-                  }
-                   style:UIAlertActionStyleCancel];
-
-    // Show the alert.
-    [strongSelf.actionSheetCoordinator start];
-  }];
+  [self.mediator
+      queryLocalBookmarks:^(int localBookmarksCount, std::string userEmail) {
+        [weakSelf queryCallbackWithTargetRect:targetRect
+                                        count:localBookmarksCount
+                                        email:userEmail];
+      }];
 }
 
 - (void)triggerBatchUploadFor:(int)localBookmarksCount
@@ -1053,6 +1040,69 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
                                        completionAction:nil];
 }
 
+#pragma mark - Action Sheet Callback Helper
+
+- (void)queryCallbackWithTargetRect:(CGRect)targetRect
+                              count:(int)localBookmarksCount
+                              email:(std::string)userEmail {
+  NSString* alertTitle = l10n_util::GetPluralNSStringF(
+      IDS_IOS_BOOKMARKS_HOME_BULK_UPLOAD_ALERT_TITLE, localBookmarksCount);
+  NSString* alertDescription = base::SysUTF16ToNSString(
+      base::i18n::MessageFormatter::FormatWithNamedArgs(
+          l10n_util::GetStringUTF16(
+              IDS_IOS_BOOKMARKS_HOME_BULK_UPLOAD_ALERT_DESCRIPTION),
+          "count", localBookmarksCount, "email", userEmail));
+  // queryLocalBookmarks() should execute the callback almost immediately.
+  // This CHECK ensures that the action sheet coordinator is never opened
+  // twice.
+  CHECK(!self.actionSheetCoordinator);
+  self.actionSheetCoordinator = [[ActionSheetCoordinator alloc]
+      initWithBaseViewController:self
+                         browser:self->_browser.get()
+                           title:alertTitle
+                         message:alertDescription
+                            rect:targetRect
+                            view:self.tableView];
+  __weak __typeof(self) weakSelf = self;
+  // Create the confirm button.
+  [self.actionSheetCoordinator
+      addItemWithTitle:GetNSString(
+                           IDS_IOS_BOOKMARKS_HOME_BULK_UPLOAD_ALERT_BUTTON)
+                action:^{
+                  [weakSelf bulkUploadActionWithCount:localBookmarksCount
+                                            userEmail:userEmail];
+                }
+                 style:UIAlertActionStyleDefault];
+
+  // Create the cancel button.
+  [self.actionSheetCoordinator
+      addItemWithTitle:GetNSString(
+                           IDS_IOS_BOOKMARKS_HOME_BULK_UPLOAD_ALERT_CANCEL)
+                action:^{
+                  [weakSelf bulkUploadCancel];
+                }
+                 style:UIAlertActionStyleCancel];
+
+  // Show the alert.
+  [self.actionSheetCoordinator start];
+}
+
+- (void)bulkUploadActionWithCount:(int)localBookmarksCount
+                        userEmail:(std::string)userEmail {
+  base::RecordAction(base::UserMetricsAction(
+      "MobileBookmarksManagerBulkSaveBookmarksToAccountDialog"
+      "Accepted"));
+  [self triggerBatchUploadFor:localBookmarksCount
+                    userEmail:std::move(userEmail)];
+}
+
+- (void)bulkUploadCancel {
+  base::RecordAction(base::UserMetricsAction(
+      "MobileBookmarksManagerBulkSaveBookmarksToAccountDialog"
+      "Cancelled"));
+  [self dismissActionSheetCoordinator];
+}
+
 #pragma mark - Navigation Bar Callbacks
 
 - (void)navigationBarCancel:(id)sender {
@@ -1068,10 +1118,18 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
 }
 
 - (void)handleSelectFolderForNavigation:(const BookmarkNode*)folder {
-  if (!self.mediator.currentlyShowingSearchResults) {
+  // The navigation controller can be nil if `self`’s view is being dismissed.
+  if (self.navigationController &&
+      !self.mediator.currentlyShowingSearchResults) {
     BookmarksHomeViewController* controller =
         [self createControllerWithDisplayedFolderNode:folder];
     [self.navigationController pushViewController:controller animated:YES];
+    if (![self.navigationController.viewControllers
+            containsObject:controller]) {
+      // This push can fail if the navigation controller’s list of VC is
+      // currently changing. See crbug.com/515121885.
+      [controller shutdown];
+    }
     return;
   }
   [self jumpToFolder:folder];
@@ -1143,18 +1201,30 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
 
   __weak BookmarksHomeViewController* weakSelf = self;
   auto completion = ^{
-    NSArray<__kindof UIViewController*>* previousStack =
-        weakSelf.navigationController.viewControllers;
-    [weakSelf.navigationController setViewControllers:stack animated:YES];
-    for (UIViewController* controller in previousStack) {
-      BookmarksHomeViewController* bookmarksHomeViewController =
-          base::apple::ObjCCastStrict<BookmarksHomeViewController>(controller);
-      [bookmarksHomeViewController shutdown];
-    }
+    [weakSelf searchControllerDismissCallbackWithStack:stack];
   };
+  NSArray<__kindof UIViewController*>* previousStack =
+      self.navigationController.viewControllers;
+  for (UIViewController* controller in previousStack) {
+    BookmarksHomeViewController* bookmarksHomeViewController =
+        base::apple::ObjCCastStrict<BookmarksHomeViewController>(controller);
+    bookmarksHomeViewController.displayedFolderNode = nullptr;
+  }
 
   [self.searchController dismissViewControllerAnimated:YES
                                             completion:completion];
+}
+
+- (void)searchControllerDismissCallbackWithStack:
+    (NSMutableArray<BookmarksHomeViewController*>*)stack {
+  NSArray<__kindof UIViewController*>* previousStack =
+      self.navigationController.viewControllers;
+  [self.navigationController setViewControllers:stack animated:YES];
+  for (UIViewController* controller in previousStack) {
+    BookmarksHomeViewController* bookmarksHomeViewController =
+        base::apple::ObjCCastStrict<BookmarksHomeViewController>(controller);
+    [bookmarksHomeViewController shutdown];
+  }
 }
 
 - (void)handleSelectEditNodes:(const std::set<const BookmarkNode*>&)nodes {
@@ -1217,16 +1287,6 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
   NOTREACHED(base::NotFatalUntil::M152);
 }
 
-- (void)handleMoveNode:(const BookmarkNode*)node toPosition:(size_t)position {
-  SnackbarMessage* snackbarMessage =
-      bookmark_utils_ios::UpdateBookmarkPositionWithUndoSnackbar(
-          node, self.displayedFolderNode, position, _bookmarkModel.get(),
-          self.profile);
-  if (snackbarMessage) {
-    [self.snackbarCommandsHandler showSnackbarMessage:snackbarMessage];
-  }
-}
-
 - (void)handleRefreshContextBar {
   // At default state, the enable state of context bar buttons could change
   // during refresh.
@@ -1272,15 +1332,17 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
   CHECK(folder, base::NotFatalUntil::M152);
   CHECK(!folder->is_url(), base::NotFatalUntil::M152);
 
-  // Copy the list of edited nodes from BookmarksFolderChooserCoordinator before
+  // Copy the list of moved nodes from BookmarksFolderChooserCoordinator before
   // `stopFolderChooserCoordinator` sets `_folderChooserCoordinator` to nil.
-  std::set<const BookmarkNode*> editedNodesSet =
-      _folderChooserCoordinator.editedNodes;
-  CHECK_GE(editedNodesSet.size(), 1u, base::NotFatalUntil::M152);
-
+  std::set<raw_ptr<const bookmarks::BookmarkNode>> editedNodesSet =
+      _folderChooserCoordinator.movedNodes;
   [self stopFolderChooserCoordinator];
 
   [self setTableViewEditing:NO];
+  if (editedNodesSet.empty()) {
+    // All nodes of the sets have been deleted in the meantime. Nothing to do.
+    return;
+  }
   ProfileIOS* profile = self.profile;
   std::vector<const BookmarkNode*> editedNodesVector(editedNodesSet.begin(),
                                                      editedNodesSet.end());
@@ -1367,32 +1429,7 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
   CHECK(self.spinnerView, base::NotFatalUntil::M152);
   __weak BookmarksHomeViewController* weakSelf = self;
   [self.spinnerView stopWaitingWithCompletion:^{
-    // Early return if the controller has been deallocated.
-    BookmarksHomeViewController* strongSelf = weakSelf;
-    if (!strongSelf) {
-      return;
-    }
-    [UIView animateWithDuration:0.2f
-        animations:^{
-          weakSelf.spinnerView.alpha = 0.0;
-        }
-        completion:^(BOOL finished) {
-          BookmarksHomeViewController* innerStrongSelf = weakSelf;
-          if (!innerStrongSelf) {
-            return;
-          }
-
-          // By the time completion block is called, the backgroundView could be
-          // another view, like the empty view background. Only clear the
-          // background if it is still the spinner.
-          if (innerStrongSelf.tableView.backgroundView ==
-              innerStrongSelf.spinnerView) {
-            innerStrongSelf.tableView.backgroundView = nil;
-          }
-          innerStrongSelf.spinnerView = nil;
-        }];
-    [strongSelf loadBookmarkViews];
-    [strongSelf.tableView reloadData];
+    [weakSelf spinnerCompletion];
   }];
 }
 
@@ -1419,6 +1456,31 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
 
 - (void)bookmarkModelRemovedAllNodes {
   // No-op
+}
+
+#pragma mark - BookmarkModelBridgeObserver helper
+
+- (void)spinnerCompletion {
+  __weak __typeof(self) weakSelf = self;
+  [UIView animateWithDuration:0.2f
+      animations:^{
+        weakSelf.spinnerView.alpha = 0.0;
+      }
+      completion:^(BOOL finished) {
+        [weakSelf spinnerCompletionCompletion];
+      }];
+  [self loadBookmarkViews];
+  [self.tableView reloadData];
+}
+
+- (void)spinnerCompletionCompletion {
+  // By the time completion block is called, the backgroundView could be
+  // another view, like the empty view background. Only clear the
+  // background if it is still the spinner.
+  if (self.tableView.backgroundView == self.spinnerView) {
+    self.tableView.backgroundView = nil;
+  }
+  self.spinnerView = nil;
 }
 
 #pragma mark - UIAccessibilityAction
@@ -1503,11 +1565,13 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
                            cached:(bool)cached
                              item:(BookmarksHomeNodeItem*)item
                         indexPath:(NSIndexPath*)indexPath
-                             node:(const BookmarkNode*)node {
+                           nodeId:(int64_t)nodeId {
+  const BookmarkNode* node = [self hasItemAtIndexPath:indexPath]
+                                 ? [self nodeAtIndexPath:indexPath]
+                                 : nil;
   // Due to search filtering, we also need to validate the indexPath
   // requested versus what is in the table now.
-  if (![self hasItemAtIndexPath:indexPath] ||
-      [self nodeAtIndexPath:indexPath] != node) {
+  if (!node || node->id() != nodeId) {
     return;
   }
   item.faviconAttributes = attributes;
@@ -1524,7 +1588,7 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
     // Even if Apple documentation hints toward reconfiguring the row instead
     // of just updating the cell, it creates a visible jank. Use the item
     // configuration method instead. See crbug.com/479692041 for more info.
-    [item configureCell:cell withStyler:self.styler];
+    [item configureCell:cell];
   }
 }
 
@@ -1742,8 +1806,7 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
 
 // Returns a button to add a new folder to the bookmarks.
 - (UIBarButtonItem*)createNewFolderButton {
-  UIImage* newFolderIcon =
-      DefaultSymbolWithConfiguration(kFolderBadgePlusSymbol, nil);
+  UIImage* newFolderIcon = SymbolWithConfiguration(SymbolFolderBadgePlus, nil);
 
   UIBarButtonItem* newFolderButton =
       [[UIBarButtonItem alloc] initWithImage:newFolderIcon
@@ -1783,6 +1846,9 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
 
 // Selects all editable bookmark nodes currently displayed.
 - (void)didTapSelectAll {
+  if (!_bookmarkModel) {
+    return;
+  }
   std::set<const bookmarks::BookmarkNode*> allEditableNodes;
   NSArray<TableViewItem*>* items = [self.tableViewModel
       itemsInSectionWithIdentifier:BookmarksHomeSectionIdentifierBookmarks];
@@ -1791,8 +1857,9 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
     if (item.type == BookmarksHomeItemTypeBookmark) {
       BookmarksHomeNodeItem* nodeItem =
           base::apple::ObjCCastStrict<BookmarksHomeNodeItem>(item);
-      const bookmarks::BookmarkNode* node = nodeItem.bookmarkNode;
-      if ([self isNodeEditableByUser:node]) {
+      const bookmarks::BookmarkNode* node =
+          [nodeItem bookmarkNode:_bookmarkModel.get()];
+      if (node && [self isNodeEditableByUser:node]) {
         allEditableNodes.insert(node);
       }
     }
@@ -1923,11 +1990,12 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
       self.mediator.displayedNode,
       self.mediator.displayedNode->children().size(), folderTitle);
 
-  BookmarksHomeNodeItem* nodeItem = [[BookmarksHomeNodeItem alloc]
-      initWithType:BookmarksHomeItemTypeBookmark
-      bookmarkNode:self.mediator.editingFolderNode];
-  nodeItem.shouldDisplayCloudSlashIcon = [self.mediator
+  BOOL shouldDisplayCloudSlashIcon = [self.mediator
       shouldDisplayCloudSlashIconWithBookmarkNode:self.mediator.displayedNode];
+  BookmarksHomeNodeItem* nodeItem =
+      [BookmarksHomeNodeItem makeItemWithType:BookmarksHomeItemTypeBookmark
+                                 bookmarkNode:self.mediator.editingFolderNode
+                  shouldDisplayCloudSlashIcon:shouldDisplayCloudSlashIcon];
   [self.tableViewModel addItem:nodeItem
        toSectionWithIdentifier:BookmarksHomeSectionIdentifierBookmarks];
 
@@ -1963,6 +2031,9 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
 // function is used to restore the row selection.  It also updates
 // selectedNodesForEditMode in case some selected nodes are removed.
 - (void)restoreRowSelection {
+  if (!_bookmarkModel) {
+    return;
+  }
   // Create a new selectedNodesForEditMode set to check if some selected nodes
   // are removed.
   std::set<const BookmarkNode*> newEditNodes;
@@ -1974,8 +2045,8 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
   for (TableViewItem* item in items) {
     BookmarksHomeNodeItem* nodeItem =
         base::apple::ObjCCastStrict<BookmarksHomeNodeItem>(item);
-    const BookmarkNode* node = nodeItem.bookmarkNode;
-    if (self.mediator.selectedNodesForEditMode.contains(node)) {
+    const BookmarkNode* node = [nodeItem bookmarkNode:_bookmarkModel.get()];
+    if (node && self.mediator.selectedNodesForEditMode.contains(node)) {
       newEditNodes.insert(node);
       // Reselect the row of this node.
       NSIndexPath* itemPath = [self.tableViewModel indexPathForItem:nodeItem];
@@ -2050,6 +2121,7 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
 
 // Returns YES if the given node can be edited by user.
 - (BOOL)isNodeEditableByUser:(const BookmarkNode*)node {
+  CHECK(node, base::NotFatalUntil::M155);
   // Note that IsNodeManaged() below returns false for Bookmarks Bar, Mobile
   // Bookmarks, and Other Bookmarks since the user can add, delete, and edit
   // items within those folders. IsNodeManaged() returns true for the
@@ -2071,14 +2143,18 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
       bookmarks::prefs::kEditBookmarksEnabled);
 }
 
-// Returns the bookmark node associated with `indexPath`.
+// Returns the bookmark node associated with `indexPath`. Returns nil if the
+// node has been deleted.
 - (const BookmarkNode*)nodeAtIndexPath:(NSIndexPath*)indexPath {
+  if (!_bookmarkModel) {
+    return nullptr;
+  }
   TableViewItem* item = [self.tableViewModel itemAtIndexPath:indexPath];
 
   if (item.type == BookmarksHomeItemTypeBookmark) {
     BookmarksHomeNodeItem* nodeItem =
         base::apple::ObjCCastStrict<BookmarksHomeNodeItem>(item);
-    return nodeItem.bookmarkNode;
+    return [nodeItem bookmarkNode:_bookmarkModel.get()];
   }
 
   NOTREACHED(base::NotFatalUntil::M152) << "Unexpected item type " << item.type;
@@ -2181,15 +2257,15 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
         weakSelf.scrimView.alpha = 0.0f;
       }
       completion:^(BOOL finished) {
-        BookmarksHomeViewController* strongSelf = weakSelf;
-        if (!strongSelf) {
-          return;
-        }
-        [strongSelf.scrimView removeFromSuperview];
-        strongSelf.tableView.accessibilityElementsHidden = NO;
-        strongSelf.tableView.scrollEnabled = YES;
+        [weakSelf hideScrimCompletion];
       }];
   [self setupContextBar];
+}
+
+- (void)hideScrimCompletion {
+  [self.scrimView removeFromSuperview];
+  self.tableView.accessibilityElementsHidden = NO;
+  self.tableView.scrollEnabled = YES;
 }
 
 - (BOOL)scrimIsVisible {
@@ -2219,6 +2295,7 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
                                    title:title
                                 scenario:SharingScenario::BookmarkEntry];
   UIView* cellView = [self.tableView cellForRowAtIndexPath:indexPath];
+  [self.sharingCoordinator stop];
   self.sharingCoordinator =
       [[SharingCoordinator alloc] initWithBaseViewController:self
                                                      browser:_browser.get()
@@ -2260,20 +2337,21 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
             weakSelf.spinnerView.alpha = 0.0;
           }
           completion:^(BOOL finished) {
-            BookmarksHomeViewController* strongSelf = weakSelf;
-            if (!strongSelf) {
-              return;
-            }
-            // By the time completion block is called, the backgroundView could
-            // be another view, like the empty view background. Only clear the
-            // background if it is still the spinner.
-            if (strongSelf.tableView.backgroundView == strongSelf.spinnerView) {
-              strongSelf.tableView.backgroundView = nil;
-            }
-            strongSelf.spinnerView = nil;
+            [weakSelf
+                hideLoadingSpinnerBackgroundCompletionWithFinished:finished];
           }];
     }];
   }
+}
+
+- (void)hideLoadingSpinnerBackgroundCompletionWithFinished:(BOOL)finished {
+  // By the time completion block is called, the backgroundView could
+  // be another view, like the empty view background. Only clear the
+  // background if it is still the spinner.
+  if (self.tableView.backgroundView == self.spinnerView) {
+    self.tableView.backgroundView = nil;
+  }
+  self.spinnerView = nil;
 }
 
 // Shows empty bookmarks background view.
@@ -2281,7 +2359,9 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
   if (!self.emptyViewBackground) {
     self.emptyViewBackground = [[TableViewIllustratedEmptyView alloc]
         initWithFrame:self.tableView.bounds
-                image:[UIImage imageNamed:@"bookmark_empty"]
+                image:[UIImage imageNamed:IsChromeNextIaEnabled()
+                                              ? @"bookmark_empty"
+                                              : @"bookmark_empty_legacy"]
                 title:GetNSString(IDS_IOS_BOOKMARK_EMPTY_TITLE)
              subtitle:GetNSString(IDS_IOS_BOOKMARK_EMPTY_MESSAGE)];
   }
@@ -2417,9 +2497,10 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
 // Displays the UITableView edit mode and selects the row containing the
 // `_externalBookmark`.
 - (void)editExternalBookmarkIfSet {
-  if (!_externalBookmark) {
+  if (!_bookmarkModel || !_externalBookmark) {
     return;
   }
+  bookmarks::BookmarkModel* bookmarkModel = _bookmarkModel.get();
 
   [self setTableViewEditing:YES];
   NSArray<NSIndexPath*>* paths = [self.tableViewModel
@@ -2429,7 +2510,7 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
     BookmarksHomeNodeItem* node =
         base::apple::ObjCCastStrict<BookmarksHomeNodeItem>(
             [self.tableViewModel itemAtIndexPath:path]);
-    if (node.bookmarkNode == _externalBookmark) {
+    if ([node bookmarkNode:bookmarkModel] == _externalBookmark) {
       [self.tableView selectRowAtIndexPath:path
                                   animated:NO
                             scrollPosition:UITableViewScrollPositionMiddle];
@@ -2487,63 +2568,29 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
       kBookmarksHomeContextMenuIdentifier;
 
   NSString* titleString = GetNSString(IDS_IOS_BOOKMARK_CONTEXT_MENU_OPEN);
-  [coordinator
-      addItemWithTitle:titleString
-                action:^{
-                  [weakSelf dismissActionSheetCoordinator];
-                  BookmarksHomeViewController* strongSelf = weakSelf;
-                  if (!strongSelf) {
-                    return;
-                  }
-                  if ([strongSelf isIncognitoForced]) {
-                    return;
-                  }
-                  std::vector<const BookmarkNode*> selectedNodesForEditMode =
-                      [strongSelf selectedNodesForEditMode];
-                  [strongSelf
-                      openAllURLs:GetUrlsToOpen(selectedNodesForEditMode)
-                      inIncognito:NO
-                           newTab:NO];
-                }
-                 style:UIAlertActionStyleDefault
-               enabled:![self isIncognitoForced]];
+  [coordinator addItemWithTitle:titleString
+                         action:^{
+                           [weakSelf actionSheetOpenAction];
+                         }
+                          style:UIAlertActionStyleDefault
+                        enabled:![self isIncognitoForced]];
 
   titleString = GetNSString(IDS_IOS_BOOKMARK_CONTEXT_MENU_OPEN_INCOGNITO);
-  [coordinator
-      addItemWithTitle:titleString
-                action:^{
-                  [weakSelf dismissActionSheetCoordinator];
-                  BookmarksHomeViewController* strongSelf = weakSelf;
-                  if (!strongSelf) {
-                    return;
-                  }
-                  if (![strongSelf isIncognitoAvailable]) {
-                    return;
-                  }
-                  std::vector<const BookmarkNode*> selectedNodesForEditMode =
-                      [strongSelf selectedNodesForEditMode];
-                  [strongSelf
-                      openAllURLs:GetUrlsToOpen(selectedNodesForEditMode)
-                      inIncognito:YES
-                           newTab:NO];
-                }
-                 style:UIAlertActionStyleDefault
-               enabled:[self isIncognitoAvailable]];
+  [coordinator addItemWithTitle:titleString
+                         action:^{
+                           [weakSelf actionSheetOpenIncognitoAction];
+                         }
+                          style:UIAlertActionStyleDefault
+                        enabled:[self isIncognitoAvailable]];
 
   const BookmarkNodeIDSet nodeIDs = GetBookmarkNodeIDSet(nodes);
 
   titleString = GetNSString(IDS_IOS_BOOKMARK_CONTEXT_MENU_MOVE);
-  [coordinator
-      addItemWithTitle:titleString
-                action:^{
-                  [weakSelf dismissActionSheetCoordinator];
-                  BookmarksHomeViewController* strongSelf = weakSelf;
-                  [strongSelf
-                      moveBookmarkNodeWithIDs:nodeIDs
-                                   userAction:"MobileBookmarkManagerMove"
-                                              "ToFolderBulk"];
-                }
-                 style:UIAlertActionStyleDefault];
+  [coordinator addItemWithTitle:titleString
+                         action:^{
+                           [weakSelf actionSheetMoveActionWithNodeIDs:nodeIDs];
+                         }
+                          style:UIAlertActionStyleDefault];
 }
 
 - (void)configureCoordinator:(AlertCoordinator*)coordinator
@@ -2562,35 +2609,24 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
 
   [coordinator addItemWithTitle:titleString
                          action:^{
-                           [weakSelf dismissActionSheetCoordinator];
-                           BookmarksHomeViewController* strongSelf = weakSelf;
-                           [strongSelf editBookmarkNodeWithID:nodeID];
+                           [weakSelf actionSheetEditActionWithNodeID:nodeID];
                          }
                           style:UIAlertActionStyleDefault
                         enabled:editEnabled];
 
   titleString = GetNSString(IDS_IOS_CONTENT_CONTEXT_OPENLINKNEWTAB);
-  [coordinator addItemWithTitle:titleString
-                         action:^{
-                           [weakSelf dismissActionSheetCoordinator];
-                           if ([weakSelf isIncognitoForced]) {
-                             return;
-                           }
-                           [weakSelf openAllURLs:{nodeURL}
-                                     inIncognito:NO
-                                          newTab:YES];
-                         }
-                          style:UIAlertActionStyleDefault
-                        enabled:![self isIncognitoForced]];
+  [coordinator
+      addItemWithTitle:titleString
+                action:^{
+                  [weakSelf actionSheetOpenLinkNewTabActionWithNodeURL:nodeURL];
+                }
+                 style:UIAlertActionStyleDefault
+               enabled:![self isIncognitoForced]];
 
   if (base::ios::IsMultipleScenesSupported()) {
     titleString = GetNSString(IDS_IOS_CONTENT_CONTEXT_OPENINNEWWINDOW);
     auto action = ^{
-      [weakSelf dismissActionSheetCoordinator];
-      [weakSelf.sceneHandler
-          openNewWindowWithActivity:ActivityToLoadURL(
-                                        WindowActivityBookmarksOrigin,
-                                        nodeURL)];
+      [weakSelf actionSheetOpenNewWindowActionWithURL:nodeURL];
     };
     [coordinator addItemWithTitle:titleString
                            action:action
@@ -2598,33 +2634,19 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
   }
 
   titleString = GetNSString(IDS_IOS_CONTENT_CONTEXT_OPENLINKNEWINCOGNITOTAB);
-  [coordinator addItemWithTitle:titleString
-                         action:^{
-                           [weakSelf dismissActionSheetCoordinator];
-                           if (![weakSelf isIncognitoAvailable]) {
-                             return;
-                           }
-                           [weakSelf openAllURLs:{nodeURL}
-                                     inIncognito:YES
-                                          newTab:YES];
-                         }
-                          style:UIAlertActionStyleDefault
-                        enabled:[self isIncognitoAvailable]];
+  [coordinator
+      addItemWithTitle:titleString
+                action:^{
+                  [weakSelf actionSheetOpenLinkNewIncognitoTabWithURL:nodeURL];
+                }
+                 style:UIAlertActionStyleDefault
+               enabled:[self isIncognitoAvailable]];
 
   titleString = GetNSString(IDS_IOS_CONTENT_CONTEXT_COPY);
   [coordinator
       addItemWithTitle:titleString
                 action:^{
-                  [weakSelf dismissActionSheetCoordinator];
-                  // Use strongSelf even though the object is only used once
-                  // because we do not want to change the global pasteboard
-                  // if the view has been deallocated.
-                  BookmarksHomeViewController* strongSelf = weakSelf;
-                  if (!strongSelf) {
-                    return;
-                  }
-                  [strongSelf setTableViewEditing:NO];
-                  StoreTextInPasteboard(base::SysUTF8ToNSString(urlString));
+                  [weakSelf actionSheetCopyActionWithURLString:urlString];
                 }
                  style:UIAlertActionStyleDefault];
 }
@@ -2643,28 +2665,21 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
   BOOL editEnabled =
       [self isEditBookmarksEnabled] && [self isNodeEditableByUser:node];
 
-  [coordinator addItemWithTitle:titleString
-                         action:^{
-                           [weakSelf dismissActionSheetCoordinator];
-                           BookmarksHomeViewController* strongSelf = weakSelf;
-                           [strongSelf editFolderNodeWithID:nodeID];
-                         }
-                          style:UIAlertActionStyleDefault
-                        enabled:editEnabled];
-
-  titleString = GetNSString(IDS_IOS_BOOKMARK_CONTEXT_MENU_MOVE);
   [coordinator
       addItemWithTitle:titleString
                 action:^{
-                  [weakSelf dismissActionSheetCoordinator];
-                  BookmarksHomeViewController* strongSelf = weakSelf;
-                  [strongSelf
-                      moveBookmarkNodeWithIDs:{nodeID}
-                                   userAction:"MobileBookmarkManagerMove"
-                                              "ToFolder"];
+                  [weakSelf actionSheetEditFolderActionWithNodeID:nodeID];
                 }
                  style:UIAlertActionStyleDefault
                enabled:editEnabled];
+
+  titleString = GetNSString(IDS_IOS_BOOKMARK_CONTEXT_MENU_MOVE);
+  [coordinator addItemWithTitle:titleString
+                         action:^{
+                           [weakSelf actionSheetMoveActionWithNodeID:nodeID];
+                         }
+                          style:UIAlertActionStyleDefault
+                        enabled:editEnabled];
 }
 
 - (void)configureCoordinator:(AlertCoordinator*)coordinator
@@ -2675,17 +2690,11 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
 
   const BookmarkNodeIDSet nodeIDs = GetBookmarkNodeIDSet(nodes);
   NSString* titleString = GetNSString(IDS_IOS_BOOKMARK_CONTEXT_MENU_MOVE);
-  [coordinator
-      addItemWithTitle:titleString
-                action:^{
-                  [weakSelf dismissActionSheetCoordinator];
-                  BookmarksHomeViewController* strongSelf = weakSelf;
-                  [strongSelf
-                      moveBookmarkNodeWithIDs:nodeIDs
-                                   userAction:"MobileBookmarkManagerMove"
-                                              "ToFolderBulk"];
-                }
-                 style:UIAlertActionStyleDefault];
+  [coordinator addItemWithTitle:titleString
+                         action:^{
+                           [weakSelf actionSheetMoveActionWithNodeIDs:nodeIDs];
+                         }
+                          style:UIAlertActionStyleDefault];
 }
 
 - (void)addCancelActionToCoordinator:(AlertCoordinator*)coordinator {
@@ -2696,6 +2705,73 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
                   [weakSelf dismissActionSheetCoordinator];
                 }
                  style:UIAlertActionStyleCancel];
+}
+
+#pragma mark - Context Menu helpers
+
+- (void)actionSheetOpenAction {
+  [self dismissActionSheetCoordinator];
+  std::vector<const BookmarkNode*> selectedNodesForEditMode =
+      [self selectedNodesForEditMode];
+  [self openAllURLs:GetUrlsToOpen(selectedNodesForEditMode)
+        inIncognito:NO
+             newTab:NO];
+}
+
+- (void)actionSheetOpenIncognitoAction {
+  [self dismissActionSheetCoordinator];
+  std::vector<const BookmarkNode*> selectedNodesForEditMode =
+      [self selectedNodesForEditMode];
+  [self openAllURLs:GetUrlsToOpen(selectedNodesForEditMode)
+        inIncognito:YES
+             newTab:NO];
+}
+
+- (void)actionSheetMoveActionWithNodeIDs:(BookmarkNodeIDSet)nodeIDs {
+  [self dismissActionSheetCoordinator];
+  [self moveBookmarkNodeWithIDs:nodeIDs
+                     userAction:"MobileBookmarkManagerMove"
+                                "ToFolderBulk"];
+}
+
+- (void)actionSheetEditActionWithNodeID:(const int64_t)nodeID {
+  [self dismissActionSheetCoordinator];
+  [self editBookmarkNodeWithID:nodeID];
+}
+
+- (void)actionSheetOpenLinkNewTabActionWithNodeURL:(const GURL)nodeURL {
+  [self dismissActionSheetCoordinator];
+  [self openAllURLs:{nodeURL} inIncognito:NO newTab:YES];
+}
+
+- (void)actionSheetOpenNewWindowActionWithURL:(const GURL)nodeURL {
+  [self dismissActionSheetCoordinator];
+  [self.sceneHandler
+      openNewWindowWithActivity:ActivityToLoadURL(WindowActivityBookmarksOrigin,
+                                                  nodeURL)];
+}
+
+- (void)actionSheetOpenLinkNewIncognitoTabWithURL:(const GURL)nodeURL {
+  [self dismissActionSheetCoordinator];
+  [self openAllURLs:{nodeURL} inIncognito:YES newTab:YES];
+}
+
+- (void)actionSheetCopyActionWithURLString:(const std::string)urlString {
+  [self dismissActionSheetCoordinator];
+  [self setTableViewEditing:NO];
+  StoreTextInPasteboard(base::SysUTF8ToNSString(urlString));
+}
+
+- (void)actionSheetEditFolderActionWithNodeID:(const int64_t)nodeID {
+  [self dismissActionSheetCoordinator];
+  [self editFolderNodeWithID:nodeID];
+}
+
+- (void)actionSheetMoveActionWithNodeID:(const int64_t)nodeID {
+  [self dismissActionSheetCoordinator];
+  [self moveBookmarkNodeWithIDs:{nodeID}
+                     userAction:"MobileBookmarkManagerMove"
+                                "ToFolder"];
 }
 
 #pragma mark - UIGestureRecognizerDelegate and gesture handling
@@ -2848,8 +2924,9 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
   if (item.type == BookmarksHomeItemTypeBookmark) {
     BookmarksHomeNodeItem* nodeItem =
         base::apple::ObjCCastStrict<BookmarksHomeNodeItem>(item);
-    if (nodeItem.bookmarkNode->is_folder() &&
-        nodeItem.bookmarkNode == self.mediator.editingFolderNode) {
+    const bookmarks::BookmarkNode* node =
+        _bookmarkModel ? [nodeItem bookmarkNode:_bookmarkModel.get()] : nullptr;
+    if (node && node->is_folder() && node == self.mediator.editingFolderNode) {
       TableViewBookmarksFolderCell* tableCell =
           base::apple::ObjCCastStrict<TableViewBookmarksFolderCell>(cell);
       // Delay starting edit, so that the cell is fully created. This is
@@ -2858,13 +2935,7 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
       // created.
       __weak BookmarksHomeViewController* weakSelf = self;
       dispatch_async(dispatch_get_main_queue(), ^{
-        BookmarksHomeViewController* strongSelf = weakSelf;
-        if (!strongSelf) {
-          return;
-        }
-        strongSelf.editingFolderCell = tableCell;
-        [tableCell startEdit];
-        tableCell.textDelegate = strongSelf;
+        [weakSelf editCellWithTableCell:tableCell];
       });
     }
   }
@@ -2874,6 +2945,10 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
 
 - (BOOL)tableView:(UITableView*)tableView
     canEditRowAtIndexPath:(NSIndexPath*)indexPath {
+  if (!_bookmarkModel) {
+    return NO;
+  }
+
   TableViewItem* item = [self.tableViewModel itemAtIndexPath:indexPath];
   if (item.type != BookmarksHomeItemTypeBookmark) {
     // Can only edit bookmarks.
@@ -2891,14 +2966,17 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
   // swipe-to-delete if editing bookmarks is allowed.
   BookmarksHomeNodeItem* nodeItem =
       base::apple::ObjCCastStrict<BookmarksHomeNodeItem>(item);
-  const BookmarkNode* node = nodeItem.bookmarkNode;
-  return [self isEditBookmarksEnabled] && [self isUrlOrFolder:node] &&
+  const BookmarkNode* node = [nodeItem bookmarkNode:_bookmarkModel.get()];
+  return node && [self isEditBookmarksEnabled] && [self isUrlOrFolder:node] &&
          [self isNodeEditableByUser:node];
 }
 
 - (void)tableView:(UITableView*)tableView
     commitEditingStyle:(UITableViewCellEditingStyle)editingStyle
      forRowAtIndexPath:(NSIndexPath*)indexPath {
+  if (!_bookmarkModel) {
+    return;
+  }
   TableViewItem* item = [self.tableViewModel itemAtIndexPath:indexPath];
   if (item.type != BookmarksHomeItemTypeBookmark) {
     // Can only commit edits for bookmarks.
@@ -2908,7 +2986,10 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
   if (editingStyle == UITableViewCellEditingStyleDelete) {
     BookmarksHomeNodeItem* nodeItem =
         base::apple::ObjCCastStrict<BookmarksHomeNodeItem>(item);
-    const BookmarkNode* node = nodeItem.bookmarkNode;
+    const BookmarkNode* node = [nodeItem bookmarkNode:_bookmarkModel.get()];
+    if (!node) {
+      return;
+    }
     std::set<const BookmarkNode*> nodes;
     nodes.insert(node);
     [self deleteBookmarkNodes:nodes
@@ -2937,7 +3018,8 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
     moveRowAtIndexPath:(NSIndexPath*)sourceIndexPath
            toIndexPath:(NSIndexPath*)destinationIndexPath {
   if (sourceIndexPath.row == destinationIndexPath.row ||
-      self.mediator.currentlyShowingSearchResults) {
+      self.mediator.currentlyShowingSearchResults ||
+      !self.displayedFolderNode) {
     return;
   }
   const BookmarkNode* node = [self nodeAtIndexPath:sourceIndexPath];
@@ -2952,7 +3034,22 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
   size_t newPosition = sourceIndexPath.row < destinationIndexPath.row
                            ? destinationIndexPath.row + 1
                            : destinationIndexPath.row;
-  [self handleMoveNode:node toPosition:newPosition];
+
+  SnackbarMessage* snackbarMessage =
+      bookmark_utils_ios::UpdateBookmarkPositionWithUndoSnackbar(
+          node, self.displayedFolderNode, newPosition, _bookmarkModel.get(),
+          self.profile);
+  if (snackbarMessage) {
+    [self.snackbarCommandsHandler showSnackbarMessage:snackbarMessage];
+  }
+}
+
+#pragma mark - UITableViewDataSource Helper
+
+- (void)editCellWithTableCell:(TableViewBookmarksFolderCell*)tableCell {
+  self.editingFolderCell = tableCell;
+  [tableCell startEdit];
+  tableCell.textDelegate = self;
 }
 
 #pragma mark - UITableViewDelegate
@@ -2976,9 +3073,7 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
     [actions addObject:deleteAction];
   }
 
-  if (send_tab_to_self::
-          IsSendTabIOSPushNotificationsEnabledWithTabReminders() &&
-      bookmarkNode->is_url()) {
+  if (send_tab_to_self::AreIOSTabRemindersEnabled() && bookmarkNode->is_url()) {
     UIContextualAction* remindAction =
         [self createRemindActionForIndexPath:indexPath];
     [actions addObject:remindAction];
@@ -3009,7 +3104,14 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
           sectionIdentifierForSectionIndex:indexPath.section]);
   if (IsABookmarkNodeSectionForIdentifier(sectionIdentifier)) {
     const BookmarkNode* node = [self nodeAtIndexPath:indexPath];
-    CHECK(node, base::NotFatalUntil::M152);
+    if (!node) {
+      // If the user tapped on an entry and the list changed before the current
+      // method is called, that cause a wrong entry to be opened. In particular
+      // if the last entry was tapped and an entry is removed, the node don’t
+      // exists. Let’s just do nothing in this last case.
+      [tableView deselectRowAtIndexPath:indexPath animated:YES];
+      return;
+    }
     // If table is in edit mode, record all the nodes added to edit set.
     if (self.mediator.currentlyInEditMode) {
       if ([self isNodeEditableByUser:node]) {
@@ -3062,6 +3164,9 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
       self.mediator.currentlyInEditMode) {
     const BookmarkNode* node = [self nodeAtIndexPath:indexPath];
     CHECK(node, base::NotFatalUntil::M152);
+    if (!node) {
+      return;
+    }
     self.mediator.selectedNodesForEditMode.erase(node);
     [self handleSelectEditNodes:self.mediator.selectedNodesForEditMode];
   }
@@ -3162,6 +3267,10 @@ BookmarkNodeIDSet GetBookmarkNodeIDSet(
 - (void)tableView:(UITableView*)tableView
        didDropURL:(const GURL&)URL
       atIndexPath:(NSIndexPath*)indexPath {
+  if (!self.displayedFolderNode) {
+    // If the view is being closed, let’s not add the URL.
+    return;
+  }
   NSUInteger index = base::checked_cast<NSUInteger>(indexPath.item);
 
   [self.snackbarCommandsHandler

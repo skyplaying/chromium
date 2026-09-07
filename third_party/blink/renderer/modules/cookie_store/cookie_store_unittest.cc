@@ -53,16 +53,6 @@ using testing::Property;
 constexpr char kDefaultUrl[] = "https://example.com/";
 constexpr char kDataUrl[] = "data:text/html,";
 
-net::FirstPartySetMetadata ComputeFirstPartySetMetadataSync(
-    const url::Origin& origin,
-    const net::CookieMonster* cookie_store,
-    const net::IsolationInfo& isolation_info) {
-  base::test::TestFuture<net::FirstPartySetMetadata> future;
-  network::RestrictedCookieManager::ComputeFirstPartySetMetadata(
-      origin, cookie_store, isolation_info, future.GetCallback());
-  return future.Take();
-}
-
 class CookieStoreTest : public testing::Test {
  protected:
   CookieStoreTest() : CookieStoreTest(url::Origin::Create(GURL(kDefaultUrl))) {}
@@ -81,11 +71,11 @@ class CookieStoreTest : public testing::Test {
     GURL url(kDefaultUrl);
     base::test::TestFuture<net::CookieAccessResult> future;
     std::unique_ptr<net::CanonicalCookie> cookie =
-        net::CanonicalCookie::CreateForTesting(url, cookie_line,
-                                               base::Time::Now());
+        net::CanonicalCookie::CreateForTesting(
+            url, cookie_line, base::Time::Now(), net::CookieSourceType::kOther);
     cookie_monster_.SetCanonicalCookieAsync(
         std::move(cookie), url, net::CookieOptions::MakeAllInclusive(),
-        future.GetCallback());
+        future.GetCallback(), /*cookie_access_result=*/std::nullopt);
     net::CookieAccessResult result = future.Take();
     EXPECT_TRUE(result.status.IsInclude());
   }
@@ -110,10 +100,12 @@ class CookieStoreTest : public testing::Test {
             /*cookies_setting_overrides=*/net::CookieSettingOverrides(),
             /*devtools_cookies_setting_overrides=*/
             net::CookieSettingOverrides(),
+            /*prefer_bound_cookie_context=*/false,
             /*cookie_observer=*/mojo::NullRemote(),
-            ComputeFirstPartySetMetadataSync(origin_,
-                                             &cookie_monster_,
-                                             isolation_info_))) {
+            network::RestrictedCookieManager::ComputeFirstPartySetMetadata(
+                origin_,
+                &cookie_monster_,
+                isolation_info_))) {
     mojo::SetDefaultProcessErrorHandler(base::BindRepeating(
         &CookieStoreTest::OnBadMessage, base::Unretained(this)));
   }
@@ -205,6 +197,117 @@ TEST_F(CookieStoreTest, SetByName) {
                                    "cookie-name", "cookie-value")));
 }
 
+TEST_F(CookieStoreTest, GetByNameWithWhitespace) {
+  V8TestingScope v8_testing_scope((KURL(kDefaultUrl)));
+  CookieStore* cookie_store = CreateCookieStore(v8_testing_scope);
+
+  ScriptState* script_state = v8_testing_scope.GetScriptState();
+  ASSERT_TRUE(script_state);
+  ExceptionState exception_state(v8_testing_scope.GetIsolate());
+
+  SetCookie("cookie-name=cookie-value");
+  ScriptPromise<IDLNullable<CookieListItem>> promise =
+      cookie_store->get(script_state, " \tcookie-name\t ", exception_state);
+  ScriptPromiseTester tester_expecting_cookie(script_state, promise);
+  tester_expecting_cookie.WaitUntilSettled();  // Runs a nested event loop.
+  EXPECT_FALSE(exception_state.HadException());
+  EXPECT_TRUE(tester_expecting_cookie.IsFulfilled());
+  EXPECT_TRUE(tester_expecting_cookie.Value().IsObject());
+  CookieListItem* got = CookieListItem::Create(
+      v8_testing_scope.GetIsolate(), tester_expecting_cookie.Value().V8Value(),
+      exception_state);
+  ASSERT_TRUE(got);  // CookieListItem::Create is auto-generated.
+  EXPECT_EQ("cookie-name", got->name());
+  EXPECT_EQ("cookie-value", got->value());
+}
+
+TEST_F(CookieStoreTest, SetByNameWithWhitespace) {
+  V8TestingScope v8_testing_scope((KURL(kDefaultUrl)));
+  CookieStore* cookie_store = CreateCookieStore(v8_testing_scope);
+
+  ScriptState* script_state = v8_testing_scope.GetScriptState();
+  ASSERT_TRUE(script_state);
+  ExceptionState exception_state(v8_testing_scope.GetIsolate());
+
+  EXPECT_THAT(GetAllCookies(), IsEmpty());
+
+  ScriptPromise<IDLUndefined> promise = cookie_store->set(
+      script_state, " \tcookie-name\t ", " \tcookie-value\t ", exception_state);
+  ScriptPromiseTester promise_tester(script_state, promise);
+  promise_tester.WaitUntilSettled();
+  EXPECT_FALSE(exception_state.HadException());
+  EXPECT_TRUE(promise_tester.IsFulfilled());
+  EXPECT_THAT(GetAllCookies(), ElementsAre(net::MatchesCookieNameValue(
+                                   "cookie-name", "cookie-value")));
+}
+
+TEST_F(CookieStoreTest, SetWithComprehensiveWhitespace) {
+  V8TestingScope v8_testing_scope((KURL(kDefaultUrl)));
+  CookieStore* cookie_store = CreateCookieStore(v8_testing_scope);
+
+  ScriptState* script_state = v8_testing_scope.GetScriptState();
+  ASSERT_TRUE(script_state);
+  ExceptionState exception_state(v8_testing_scope.GetIsolate());
+
+  struct TestCase {
+    const char* input_name;
+    const char* input_value;
+    const char* expected_name;
+    const char* expected_value;
+  } tests[] = {
+      {"a b", "x y", "a b", "x y"},   {"a ", "x", "a", "x"},
+      {"a\t", "x", "a", "x"},         {"  a", "x", "a", "x"},
+      {" \t a", "x", "a", "x"},       {" \t a  \t\t", "x", "a", "x"},
+      {"a", "x ", "a", "x"},          {"a", "x\t", "a", "x"},
+      {"a", " x", "a", "x"},          {"a", " \t x", "a", "x"},
+      {"a", " \t x  \t\t", "a", "x"},
+  };
+
+  for (const auto& t : tests) {
+    EXPECT_THAT(GetAllCookies(), IsEmpty());
+
+    ScriptPromise<IDLUndefined> promise = cookie_store->set(
+        script_state, t.input_name, t.input_value, exception_state);
+    ScriptPromiseTester promise_tester(script_state, promise);
+    promise_tester.WaitUntilSettled();
+    EXPECT_FALSE(exception_state.HadException());
+    EXPECT_TRUE(promise_tester.IsFulfilled());
+
+    EXPECT_THAT(GetAllCookies(), ElementsAre(net::MatchesCookieNameValue(
+                                     t.expected_name, t.expected_value)));
+
+    // Clean up for next test case.
+    ScriptPromise<IDLUndefined> delete_promise =
+        cookie_store->Delete(script_state, t.expected_name, exception_state);
+    ScriptPromiseTester delete_tester(script_state, delete_promise);
+    delete_tester.WaitUntilSettled();
+    EXPECT_FALSE(exception_state.HadException());
+    EXPECT_THAT(GetAllCookies(), IsEmpty());
+  }
+}
+
+TEST_F(CookieStoreTest, DeleteByNameWithWhitespace) {
+  V8TestingScope v8_testing_scope((KURL(kDefaultUrl)));
+  CookieStore* cookie_store = CreateCookieStore(v8_testing_scope);
+
+  ScriptState* script_state = v8_testing_scope.GetScriptState();
+  ASSERT_TRUE(script_state);
+  ExceptionState exception_state(v8_testing_scope.GetIsolate());
+
+  SetCookie("cookie-name=cookie-value");
+  EXPECT_THAT(GetAllCookies(), ElementsAre(net::MatchesCookieNameValue(
+                                   "cookie-name", "cookie-value")));
+
+  ScriptPromise<IDLUndefined> promise =
+      cookie_store->Delete(script_state, " \tcookie-name\t ", exception_state);
+  ScriptPromiseTester promise_tester(script_state, promise);
+  promise_tester.WaitUntilSettled();
+  EXPECT_FALSE(exception_state.HadException());
+  EXPECT_TRUE(promise_tester.IsFulfilled());
+
+  EXPECT_THAT(GetAllCookies(), IsEmpty());
+}
+
 TEST_F(CookieStoreTest, SetByName_DisallowEqualsInName) {
   V8TestingScope v8_testing_scope((KURL(kDefaultUrl)));
   CookieStore* cookie_store = CreateCookieStore(v8_testing_scope);
@@ -252,6 +355,32 @@ TEST_F(CookieStoreTest, SetWithMixedCaseDomain) {
       ElementsAre(AllOf(
           net::MatchesCookieNameValue("cookie-name", "cookie-value"),
           Property("Domain", &net::CanonicalCookie::Domain, ".example.com"))));
+}
+
+TEST_F(CookieStoreTest, SetWithPublicSuffixDomain) {
+  V8TestingScope v8_testing_scope((KURL("https://foo.example.test/page.html")));
+  CookieStore* cookie_store = CreateCookieStore(v8_testing_scope);
+
+  ScriptState* script_state = v8_testing_scope.GetScriptState();
+  ASSERT_TRUE(script_state);
+  DummyExceptionStateForTesting exception_state;
+
+  EXPECT_THAT(GetAllCookies(), IsEmpty());
+
+  CookieInit* set_options = CookieInit::Create();
+  set_options->setName("cookie-name");
+  set_options->setValue("cookie-value");
+  set_options->setDomain("test");
+
+  ScriptPromise<IDLUndefined> promise =
+      cookie_store->set(script_state, set_options, exception_state);
+  ScriptPromiseTester promise_tester(script_state, promise, &exception_state);
+  promise_tester.WaitUntilSettled();
+  EXPECT_TRUE(exception_state.HadException());
+  EXPECT_EQ("Cookie domain must domain-match current host",
+            exception_state.Message());
+  EXPECT_TRUE(promise_tester.IsRejected());
+  EXPECT_THAT(GetAllCookies(), IsEmpty());
 }
 
 TEST_F(CookieStoreTest, SetWithHttpPrefix) {

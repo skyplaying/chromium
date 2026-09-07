@@ -15,7 +15,7 @@
 #include <vector>
 
 #include "base/barrier_closure.h"
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/check_deref.h"
 #include "base/command_line.h"
 #include "base/files/scoped_temp_dir.h"
@@ -41,8 +41,8 @@
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/bluetooth/bluetooth_chooser_context_factory.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/browsing_data/chrome_browsing_data_model_delegate.h"
-#include "chrome/browser/browsing_topics/browsing_topics_service_factory.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/engagement/site_engagement_service_factory.h"
 #include "chrome/browser/extensions/test_extension_system.h"
@@ -52,6 +52,9 @@
 #include "chrome/browser/hid/hid_chooser_context.h"
 #include "chrome/browser/hid/hid_chooser_context_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
+#include "chrome/browser/infobars/browser_infobar_manager.h"
+#include "chrome/browser/infobars/infobar_features.h"
+#include "chrome/browser/infobars/infobar_spec.h"
 #include "chrome/browser/permissions/permission_actions_history_factory.h"
 #include "chrome/browser/permissions/permission_decision_auto_blocker_factory.h"
 #include "chrome/browser/permissions/system/mock_platform_handle.h"
@@ -61,9 +64,14 @@
 #include "chrome/browser/privacy_sandbox/privacy_sandbox_service_factory.h"
 #include "chrome/browser/serial/serial_chooser_context.h"
 #include "chrome/browser/serial/serial_chooser_context_factory.h"
-#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/tab_list/mock_tab_list_interface.h"
+#include "chrome/browser/tab_list/tab_list_interface.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/browser_window/test/mock_browser_window_interface.h"
 #include "chrome/browser/ui/safety_hub/safety_hub_test_util.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
 #include "chrome/browser/ui/webui/settings/site_settings_helper.h"
 #include "chrome/browser/usb/usb_chooser_context.h"
@@ -71,10 +79,12 @@
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
 #include "chrome/browser/web_applications/isolated_web_apps/test/isolated_web_app_builder.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
+#include "chrome/browser/web_applications/test/web_app_test_utils.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
+#include "chrome/browser/web_applications/web_app_registry_update.h"
+#include "chrome/browser/web_applications/web_app_sync_bridge.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
-#include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
@@ -83,8 +93,6 @@
 #include "components/browsing_data/content/fake_browsing_data_model.h"
 #include "components/browsing_data/content/mock_cookie_helper.h"
 #include "components/browsing_data/content/mock_local_storage_helper.h"
-#include "components/browsing_topics/browsing_topics_service.h"
-#include "components/browsing_topics/test_util.h"
 #include "components/client_hints/common/client_hints.h"
 #include "components/content_settings/core/browser/content_settings_uma_util.h"
 #include "components/content_settings/core/browser/cookie_settings.h"
@@ -96,6 +104,7 @@
 #include "components/history/core/browser/history_service.h"
 #include "components/infobars/content/content_infobar_manager.h"
 #include "components/infobars/core/infobar.h"
+#include "components/infobars/core/infobar_delegate.h"
 #include "components/permissions/contexts/bluetooth_chooser_context.h"
 #include "components/permissions/features.h"
 #include "components/permissions/object_permission_context_base.h"
@@ -114,7 +123,10 @@
 #include "components/site_engagement/content/site_engagement_score.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
+#include "components/tabs/public/mock_tab_interface.h"
+#include "components/tabs/public/tab_interface.h"
 #include "components/ukm/test_ukm_recorder.h"
+#include "components/vector_icons/vector_icons.h"
 #include "components/webapps/common/web_app_id.h"
 #include "content/public/browser/host_zoom_map.h"
 #include "content/public/browser/navigation_controller.h"
@@ -123,7 +135,10 @@
 #include "content/public/common/buildflags.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/browser_task_environment.h"
+#include "content/public/test/navigation_simulator.h"
+#include "content/public/test/test_renderer_host.h"
 #include "content/public/test/test_web_ui.h"
+#include "content/public/test/web_contents_tester.h"
 #include "device/bluetooth/bluetooth_adapter_factory.h"
 #include "device/bluetooth/test/mock_bluetooth_adapter.h"
 #include "device/bluetooth/test/mock_bluetooth_device.h"
@@ -144,6 +159,7 @@
 #include "third_party/blink/public/mojom/bluetooth/web_bluetooth.mojom.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/text/bytes_formatting.h"
+#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 #include "ui/webui/webui_allowlist.h"
 #include "url/gurl.h"
 
@@ -289,8 +305,8 @@ std::unique_ptr<net::CanonicalCookie> CreateCookieKey(
     std::optional<net::CookiePartitionKey> cookie_partition_key =
         std::nullopt) {
   return net::CanonicalCookie::CreateForTesting(
-      url, cookie_line, base::Time::Now(), std::nullopt /* server_time */,
-      cookie_partition_key);
+      url, cookie_line, base::Time::Now(), net::CookieSourceType::kOther,
+      std::nullopt /* server_time */, cookie_partition_key);
 }
 
 void RemoveModelEntries(
@@ -349,10 +365,10 @@ class SiteSettingsHandlerBaseTest : public testing::Test {
   SiteSettingsHandlerBaseTest() = default;
 
   void SetUp() override {
-    raw_ptr<TestingProfileManager> testing_profile_manager =
+    profile_manager_ =
         TestingBrowserProcess::GetGlobal()->SetUpGlobalFeaturesForTesting(
             /*profile_manager=*/true);
-    profile_ = testing_profile_manager->CreateTestingProfile(
+    profile_ = profile_manager_->CreateTestingProfile(
         kTestUserEmail, {TestingProfile::TestingFactory{
                             HistoryServiceFactory::GetInstance(),
                             HistoryServiceFactory::GetDefaultFactory()}});
@@ -362,17 +378,6 @@ class SiteSettingsHandlerBaseTest : public testing::Test {
     SetUpUserManager(profile_.get());
 #endif
 
-    browsing_topics::BrowsingTopicsServiceFactory::GetInstance()
-        ->SetTestingFactoryAndUse(
-            profile(),
-            base::BindLambdaForTesting([this](content::BrowserContext* context)
-                                           -> std::unique_ptr<KeyedService> {
-              auto mock_browsing_topics_service = std::make_unique<
-                  browsing_topics::MockBrowsingTopicsService>();
-              mock_browsing_topics_service_ =
-                  mock_browsing_topics_service.get();
-              return mock_browsing_topics_service;
-            }));
 
     mock_privacy_sandbox_service_ = static_cast<MockPrivacySandboxService*>(
         PrivacySandboxServiceFactory::GetInstance()->SetTestingFactoryAndUse(
@@ -396,6 +401,7 @@ class SiteSettingsHandlerBaseTest : public testing::Test {
   }
 
   void TearDown() override {
+    handler_.reset();
     if (profile_) {
       auto* partition = profile_->GetDefaultStoragePartition();
       if (partition) {
@@ -403,13 +409,18 @@ class SiteSettingsHandlerBaseTest : public testing::Test {
       }
     }
 
+    // `handler_` must be reset before the profile is destroyed (via
+    // `TearDownGlobalFeaturesForTesting()`) because it holds a pointer to the
+    // profile and may access profile-owned services during destruction.
+    handler_.reset();
+
 #if BUILDFLAG(IS_CHROMEOS)
     scoped_user_manager_.reset();
 #endif  // BUILDFLAG(IS_CHROMEOS)
     mock_privacy_sandbox_service_ = nullptr;
-    mock_browsing_topics_service_ = nullptr;
     incognito_profile_ = nullptr;
     profile_ = nullptr;
+    profile_manager_ = nullptr;
     TestingBrowserProcess::GetGlobal()->TearDownGlobalFeaturesForTesting();
   }
 
@@ -432,13 +443,11 @@ class SiteSettingsHandlerBaseTest : public testing::Test {
   }
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
+  TestingProfileManager* profile_manager() { return profile_manager_; }
   TestingProfile* profile() { return profile_.get(); }
   Profile* incognito_profile() { return incognito_profile_; }
   content::TestWebUI* web_ui() { return &web_ui_; }
   SiteSettingsHandler* handler() { return handler_.get(); }
-  browsing_topics::MockBrowsingTopicsService* mock_browsing_topics_service() {
-    return mock_browsing_topics_service_;
-  }
   MockPrivacySandboxService* mock_privacy_sandbox_service() {
     return mock_privacy_sandbox_service_.get();
   }
@@ -908,6 +917,7 @@ class SiteSettingsHandlerBaseTest : public testing::Test {
               kGoogleOnExampleEntry,
               kExampleOnGoogleSecureEntry,
               kExampleOnGoogleInsecureEntry,
+              kExampleOnGoogleAuEntry,
               kExampleLocalStorage,
               kHttpExampleCookie,
               kHttpsWwwExampleCookie,
@@ -1086,6 +1096,17 @@ class SiteSettingsHandlerBaseTest : public testing::Test {
               /*third_party_partitioning_allowed=*/true),
           {{BrowsingDataModel::StorageType::kQuotaStorage}, 100, 0}};
 
+  const browsing_data_model_test_util::BrowsingDataEntry
+      kExampleOnGoogleAuEntry{
+          "www.example.com",
+          blink::StorageKey::Create(
+              url::Origin::Create(GURL("https://www.example.com/")),
+              net::SchemefulSite(
+                  url::Origin::Create(GURL("https://www.google.com.au/"))),
+              blink::mojom::AncestorChainBit::kCrossSite,
+              /*third_party_partitioning_allowed=*/true),
+          {{BrowsingDataModel::StorageType::kQuotaStorage}, 400, 0}};
+
   const browsing_data_model_test_util::BrowsingDataEntry kHttpExampleCookie{
       "example.com",
       *(CreateCookieKey(GURL("http://example.com"), "A=1")),
@@ -1192,6 +1213,7 @@ class SiteSettingsHandlerBaseTest : public testing::Test {
  private:
   content::BrowserTaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
+  raw_ptr<TestingProfileManager> profile_manager_ = nullptr;
   raw_ptr<TestingProfile> profile_ = nullptr;
   raw_ptr<Profile, DanglingUntriaged> incognito_profile_ = nullptr;
   content::TestWebUI web_ui_;
@@ -1199,8 +1221,6 @@ class SiteSettingsHandlerBaseTest : public testing::Test {
 #if BUILDFLAG(IS_CHROMEOS)
   std::unique_ptr<user_manager::ScopedUserManager> scoped_user_manager_;
 #endif
-  raw_ptr<browsing_topics::MockBrowsingTopicsService>
-      mock_browsing_topics_service_;
   raw_ptr<MockPrivacySandboxService> mock_privacy_sandbox_service_;
 };
 
@@ -1249,6 +1269,7 @@ TEST_P(SiteSettingsHandlerSchemeTest, HandleClearUnpartitionedUsage) {
           kGoogleOnExampleEntry,
           kExampleOnGoogleSecureEntry,
           kExampleOnGoogleInsecureEntry,
+          kExampleOnGoogleAuEntry,
           kExampleLocalStorage,
           kHttpExampleCookie,
           kHttpsWwwExampleCookie,
@@ -1344,6 +1365,11 @@ TEST_F(SiteSettingsHandlerTest, GetEnforcedDefault) {
   ContentSettingSourceSetter source_setter(profile(),
                                            ContentSettingsType::NOTIFICATIONS);
   source_setter.SetPolicyDefault(CONTENT_SETTING_ALLOW);
+  // SetPolicyDefault triggers a global policy change notification (DEFAULT),
+  // which causes all chooser contexts to reload and notify SiteSettingsHandler,
+  // resulting in extra chooserPermissionChanged WebUI calls. Clear them so
+  // they don't interfere with the call count verification below.
+  web_ui()->ClearTrackedCalls();
 
   base::ListValue get_args;
   get_args.Append(kCallbackId);
@@ -1352,7 +1378,7 @@ TEST_F(SiteSettingsHandlerTest, GetEnforcedDefault) {
   ValidateDefault(CONTENT_SETTING_ALLOW, "policy", 1U);
 }
 
-// Flaky on CrOS and Linux. https://crbug.com/930481
+// Flaky on CrOS and Linux. https://crbug.com/41440409
 TEST_F(SiteSettingsHandlerTest, GetAllSites) {
   SetupModel();
 
@@ -1950,7 +1976,11 @@ TEST_F(SiteSettingsHandlerTest, OnStorageFetched) {
     EXPECT_EQ("https://www.example.com/",
               CHECK_DEREF(origin_info_2.FindString("origin")));
     EXPECT_EQ(0, origin_info_2.FindDouble("engagement"));
-    EXPECT_EQ(302, origin_info_2.FindDouble("usage"));
+    // Usage is reported per displayed row. This unpartitioned row only includes
+    // www.example.com's unpartitioned storage:
+    // kExampleUnpartitionedEntry (100 B) + kExampleLocalStorage (2 B) = 102 B.
+    // Partitioned storage for the same origin is reported separately below.
+    EXPECT_EQ(102, origin_info_2.FindDouble("usage"));
     EXPECT_EQ(1, origin_info_2.FindDouble("numCookies"));
     EXPECT_FALSE(origin_info_2.FindBool("isPartitioned").value_or(false));
   }
@@ -1974,7 +2004,10 @@ TEST_F(SiteSettingsHandlerTest, OnStorageFetched) {
     EXPECT_EQ("https://www.example.com/",
               CHECK_DEREF(partitioned_origin_info.FindString("origin")));
     EXPECT_EQ(0, partitioned_origin_info.FindDouble("engagement"));
-    EXPECT_EQ(302, partitioned_origin_info.FindDouble("usage"));
+    // This partitioned row only includes www.example.com's storage under
+    // google.com: kExampleOnGoogleSecureEntry (100 B) +
+    // kExampleOnGoogleInsecureEntry (100 B) = 200 B.
+    EXPECT_EQ(200, partitioned_origin_info.FindDouble("usage"));
     EXPECT_EQ(1, partitioned_origin_info.FindDouble("numCookies"));
     EXPECT_TRUE(
         partitioned_origin_info.FindBool("isPartitioned").value_or(false));
@@ -2038,7 +2071,9 @@ TEST_F(SiteSettingsHandlerTest, OnStorageFetched) {
     EXPECT_EQ("https://www.example.com/",
               CHECK_DEREF(partitioned_origin_three_info.FindString("origin")));
     EXPECT_EQ(0, partitioned_origin_three_info.FindDouble("engagement"));
-    EXPECT_EQ(302, partitioned_origin_three_info.FindDouble("usage"));
+    // This partitioned row only includes www.example.com's storage under
+    // google.com.au: kExampleOnGoogleAuEntry (400 B).
+    EXPECT_EQ(400, partitioned_origin_three_info.FindDouble("usage"));
     EXPECT_EQ(1, partitioned_origin_three_info.FindDouble("numCookies"));
     EXPECT_TRUE(partitioned_origin_three_info.FindBool("isPartitioned")
                     .value_or(false));
@@ -2519,9 +2554,14 @@ TEST_F(SiteSettingsHandlerTest, MAYBE_DefaultSettingSource) {
 
   // Enterprise-policy set defaults should not show up as default.
   source_setter.SetPolicyDefault(CONTENT_SETTING_ALLOW);
+  // SetPolicyDefault triggers a global policy change notification (DEFAULT),
+  // which causes all chooser contexts to reload and notify SiteSettingsHandler,
+  // resulting in extra chooserPermissionChanged WebUI calls. Clear them so
+  // they don't interfere with the call count verification below.
+  web_ui()->ClearTrackedCalls();
   handler()->HandleGetOriginPermissions(get_origin_permissions_args);
   ValidateOrigin(google, google, expected_display_name, CONTENT_SETTING_ALLOW,
-                 site_settings::SiteSettingSource::kPolicy, 10U);
+                 site_settings::SiteSettingSource::kPolicy, 1U);
 }
 
 TEST_F(SiteSettingsHandlerTest, GetAndSetOriginPermissions) {
@@ -3000,9 +3040,52 @@ TEST_F(SiteSettingsHandlerTest, TemporaryCookieExceptions) {
 class SiteSettingsHandlerIsolatedWebAppTest
     : public SiteSettingsHandlerBaseTest {
  protected:
+  static constexpr char kAppName[] = "IWA Name";
+  static constexpr char kSubAppName[] = "Sub App";
+
   void SetUpIsolatedWebApp() override {
     web_app::test::AwaitStartWebAppProviderAndSubsystems(profile());
-    iwa_url_info_ = InstallIsolatedWebApp("IWA Name");
+    iwa_url_info_ = InstallIsolatedWebApp(kAppName);
+  }
+
+  const base::ListValue& CallHandleGetOriginPermissions(
+      const std::string& url,
+      base::ListValue category_list) {
+    base::ListValue args;
+    args.Append(kCallbackId);
+    args.Append(url);
+    args.Append(std::move(category_list));
+    handler()->HandleGetOriginPermissions(args);
+
+    const content::TestWebUI::CallData& data = *web_ui()->call_data().back();
+    EXPECT_EQ("cr.webUIResponse", data.function_name());
+    return data.arg3()->GetList();
+  }
+
+  const base::DictValue& CallHandleGetSubAppsPermissionExplanation(
+      const std::string& url) {
+    base::ListValue args;
+    args.Append(kCallbackId);
+    args.Append(url);
+    handler()->HandleGetSubAppsPermissionExplanation(args);
+
+    const content::TestWebUI::CallData& data = *web_ui()->call_data().back();
+    EXPECT_EQ("cr.webUIResponse", data.function_name());
+    return data.arg3()->GetDict();
+  }
+
+  void InstallSubApp(const GURL& url, const std::string& name) {
+    auto sub_app =
+        web_app::test::CreateWebApp(url, web_app::WebAppManagement::kSubApp);
+    sub_app->SetName(name);
+    sub_app->SetParentAppId(iwa_url_info_->app_id());
+
+    auto* provider = web_app::WebAppProvider::GetForTest(profile());
+    {
+      web_app::ScopedRegistryUpdate update =
+          provider->sync_bridge_unsafe().BeginUpdate();
+      update->CreateApp(std::move(sub_app));
+    }
   }
 
  protected:
@@ -3029,6 +3112,62 @@ class SiteSettingsHandlerIsolatedWebAppTest
   data_decoder::test::InProcessDataDecoder in_process_data_decoder_;
 };
 
+TEST_F(SiteSettingsHandlerIsolatedWebAppTest, GetOriginPermissionsSubApp) {
+  GURL sub_app_url = iwa_url_info_->origin().GetURL().Resolve("/sub-app/");
+  InstallSubApp(sub_app_url, std::string(kSubAppName));
+
+  base::ListValue category_list;
+  category_list.Append(site_settings::ContentSettingsTypeToGroupName(
+      ContentSettingsType::NOTIFICATIONS));
+
+  const base::ListValue& permissions = CallHandleGetOriginPermissions(
+      sub_app_url.spec(), std::move(category_list));
+  ASSERT_EQ(1U, permissions.size());
+
+  const base::DictValue& permission = permissions[0].GetDict();
+  // Append " (ID: <id>)" to the name as per HandleGetOriginPermissions
+  std::string expected_name = l10n_util::GetStringFUTF8(
+      IDS_SETTINGS_EXTENSION_OR_APP_DISPLAY_NAME,
+      base::UTF8ToUTF16(std::string_view(kSubAppName)),
+      base::UTF8ToUTF16(sub_app_url.host()));
+  EXPECT_EQ(expected_name, *permission.FindString("displayName"));
+}
+
+TEST_F(SiteSettingsHandlerIsolatedWebAppTest,
+       GetSubAppsPermissionExplanation_NeitherParentNorSubApp) {
+  const base::DictValue& result = CallHandleGetSubAppsPermissionExplanation(
+      iwa_url_info_->origin().GetURL().spec());
+  EXPECT_FALSE(*result.FindBool("isSubApp"));
+  EXPECT_FALSE(*result.FindBool("hasSubApps"));
+}
+
+TEST_F(SiteSettingsHandlerIsolatedWebAppTest,
+       GetSubAppsPermissionExplanation_SubApp) {
+  GURL sub_app_url = iwa_url_info_->origin().GetURL().Resolve("/sub-app/");
+  InstallSubApp(sub_app_url, std::string(kSubAppName));
+
+  const base::DictValue& result =
+      CallHandleGetSubAppsPermissionExplanation(sub_app_url.spec());
+  EXPECT_TRUE(*result.FindBool("isSubApp"));
+  EXPECT_FALSE(*result.FindBool("hasSubApps"));
+  EXPECT_EQ(kSubAppName, *result.FindString("appName"));
+  EXPECT_EQ(kAppName, *result.FindString("parentAppName"));
+  EXPECT_EQ(iwa_url_info_->origin().GetURL().spec(),
+            *result.FindString("parentAppOrigin"));
+}
+
+TEST_F(SiteSettingsHandlerIsolatedWebAppTest,
+       GetSubAppsPermissionExplanation_ParentApp) {
+  GURL sub_app_url = iwa_url_info_->origin().GetURL().Resolve("/sub-app/");
+  InstallSubApp(sub_app_url, std::string(kSubAppName));
+
+  const base::DictValue& result = CallHandleGetSubAppsPermissionExplanation(
+      iwa_url_info_->origin().GetURL().spec());
+  EXPECT_FALSE(*result.FindBool("isSubApp"));
+  EXPECT_TRUE(*result.FindBool("hasSubApps"));
+  EXPECT_EQ(kAppName, *result.FindString("appName"));
+}
+
 TEST_F(SiteSettingsHandlerIsolatedWebAppTest, AllSitesDisplaysAppName) {
   GURL https_url("https://" + iwa_url_info_->origin().host());
   GURL iwa_origin_url = iwa_url_info_->origin().GetURL();
@@ -3052,7 +3191,7 @@ TEST_F(SiteSettingsHandlerIsolatedWebAppTest, AllSitesDisplaysAppName) {
   EXPECT_THAT(CHECK_DEREF(group1.FindString("groupingKey")),
               IsOrigin(iwa_origin_url));
   EXPECT_EQ(group1.FindString("etldPlus1"), nullptr);
-  EXPECT_EQ(CHECK_DEREF(group1.FindString("displayName")), "IWA Name");
+  EXPECT_EQ(CHECK_DEREF(group1.FindString("displayName")), kAppName);
   EXPECT_EQ(CHECK_DEREF(origin1.FindString("origin")), iwa_origin_url);
   EXPECT_EQ(origin1.FindDouble("usage").value(), 50.0);
 
@@ -3074,11 +3213,11 @@ TEST_F(SiteSettingsHandlerIsolatedWebAppTest, ZoomLevel) {
 
   std::string host_or_spec = iwa_url_info_->origin().Serialize();
   iwa_host_zoom_map->SetZoomLevelForHost(iwa_url_info_->origin().host(), 1.1);
-  ValidateZoom({{host_or_spec, "IWA Name", "122%"}}, 1U);
+  ValidateZoom({{host_or_spec, kAppName, "122%"}}, 1U);
 
   base::ListValue args;
   handler()->HandleFetchZoomLevels(args);
-  ValidateZoom({{host_or_spec, "IWA Name", "122%"}}, 2U);
+  ValidateZoom({{host_or_spec, kAppName, "122%"}}, 2U);
 
   args.Append(host_or_spec);
   handler()->HandleRemoveZoomLevel(args);
@@ -3111,13 +3250,127 @@ TEST_F(SiteSettingsHandlerIsolatedWebAppTest, ZoomLevelsSortedByAppName) {
   base::ListValue args;
   handler()->HandleFetchZoomLevels(args);
 
-  ValidateZoom({{iwa_url_info_->origin().Serialize(), "IWA Name", "122%"},
+  ValidateZoom({{iwa_url_info_->origin().Serialize(), kAppName, "122%"},
                 {iwa2_url_info.origin().Serialize(), "IWA Name 2", "122%"},
                 {iwa3_url_info.origin().Serialize(), "IWA Name 3", "122%"}},
                2U);
 }
 
-class SiteSettingsHandlerInfobarTest : public BrowserWithTestWindowTest {
+namespace {
+
+class FakeTab : public tabs::MockTabInterface {
+ public:
+  FakeTab(BrowserWindowInterface* window,
+          std::unique_ptr<content::WebContents> web_contents)
+      : window_(window), web_contents_(std::move(web_contents)) {
+    infobars::ContentInfoBarManager::CreateForWebContents(web_contents_.get());
+    ON_CALL(*this, GetBrowserWindowInterface())
+        .WillByDefault(testing::Return(window_));
+    ON_CALL(*this, GetContents())
+        .WillByDefault(testing::Return(web_contents_.get()));
+    ON_CALL(*this, GetWeakPtr())
+        .WillByDefault(testing::Invoke(this, &FakeTab::GetWeakPtrImpl));
+  }
+  ~FakeTab() override = default;
+
+  base::WeakPtr<tabs::TabInterface> GetWeakPtrImpl() {
+    return weak_factory_.GetWeakPtr();
+  }
+
+  content::WebContents* web_contents() { return web_contents_.get(); }
+  ui::UnownedUserDataHost& GetUnownedUserDataHost() override {
+    return user_data_host_;
+  }
+  const ui::UnownedUserDataHost& GetUnownedUserDataHost() const override {
+    return user_data_host_;
+  }
+
+ private:
+  raw_ptr<BrowserWindowInterface> window_;
+  std::unique_ptr<content::WebContents> web_contents_;
+  ui::UnownedUserDataHost user_data_host_;
+  base::WeakPtrFactory<FakeTab> weak_factory_{this};
+};
+
+class FakeBrowserWindow {
+ public:
+  explicit FakeBrowserWindow(Profile* profile) : profile_(profile) {
+    ON_CALL(window_, GetProfile()).WillByDefault(testing::Return(profile_));
+    ON_CALL(tab_list_, GetAllTabs()).WillByDefault([this]() {
+      std::vector<tabs::TabInterface*> result;
+      result.reserve(tabs_.size());
+      for (const auto& tab : tabs_) {
+        result.push_back(tab.get());
+      }
+      return result;
+    });
+#if !BUILDFLAG(IS_ANDROID)
+    static_cast<BrowserCollectionObserver*>(
+        GlobalBrowserCollection::GetInstance()->GetPlatformDelegate())
+        ->OnBrowserCreated(&window_);
+#endif
+  }
+
+  ~FakeBrowserWindow() {
+#if !BUILDFLAG(IS_ANDROID)
+    static_cast<BrowserCollectionObserver*>(
+        GlobalBrowserCollection::GetInstance()->GetPlatformDelegate())
+        ->OnBrowserClosed(&window_);
+#endif
+    CloseAllTabs();
+  }
+
+  MockBrowserWindowInterface* window() { return &window_; }
+
+  FakeTab* AddTab(const GURL& url) {
+    std::unique_ptr<content::WebContents> web_contents =
+        content::WebContentsTester::CreateTestWebContents(profile_, nullptr);
+    content::NavigationSimulator::NavigateAndCommitFromBrowser(
+        web_contents.get(), url);
+    auto tab = std::make_unique<FakeTab>(&window_, std::move(web_contents));
+    FakeTab* tab_ptr = tab.get();
+    tabs_.push_back(std::move(tab));
+    return tab_ptr;
+  }
+
+  FakeTab* InsertTabAt(size_t index, const GURL& url) {
+    std::unique_ptr<content::WebContents> web_contents =
+        content::WebContentsTester::CreateTestWebContents(profile_, nullptr);
+    content::NavigationSimulator::NavigateAndCommitFromBrowser(
+        web_contents.get(), url);
+    auto tab = std::make_unique<FakeTab>(&window_, std::move(web_contents));
+    FakeTab* tab_ptr = tab.get();
+    if (index >= tabs_.size()) {
+      tabs_.push_back(std::move(tab));
+    } else {
+      tabs_.insert(tabs_.begin() + index, std::move(tab));
+    }
+    return tab_ptr;
+  }
+
+  FakeTab* GetTab(size_t index) {
+    CHECK_LT(index, tabs_.size());
+    return tabs_[index].get();
+  }
+
+  size_t tab_count() const { return tabs_.size(); }
+
+  void CloseAllTabs() { tabs_.clear(); }
+
+ private:
+  raw_ptr<Profile> profile_;
+  NiceMock<MockBrowserWindowInterface> window_;
+  NiceMock<MockTabListInterface> tab_list_;
+  ui::ScopedUnownedUserData<TabListInterface> tab_list_registration_{
+      window_.GetUnownedUserDataHost(), tab_list_};
+  std::vector<std::unique_ptr<FakeTab>> tabs_;
+};
+
+}  // namespace
+
+class SiteSettingsHandlerInfobarTest
+    : public SiteSettingsHandlerBaseTest,
+      public testing::WithParamInterface<bool> {
  public:
   SiteSettingsHandlerInfobarTest() = default;
   SiteSettingsHandlerInfobarTest(const SiteSettingsHandlerInfobarTest&) =
@@ -3125,23 +3378,43 @@ class SiteSettingsHandlerInfobarTest : public BrowserWithTestWindowTest {
   SiteSettingsHandlerInfobarTest& operator=(
       const SiteSettingsHandlerInfobarTest&) = delete;
   void SetUp() override {
-    TestingBrowserProcess::GetGlobal()->SetUpGlobalFeaturesForTesting(
-        /*profile_manager=*/false);
-    BrowserWithTestWindowTest::SetUp();
+    layout_provider_ = ChromeLayoutProvider::CreateLayoutProvider();
 
-    handler_ = std::make_unique<SiteSettingsHandler>(profile());
-    handler()->set_web_ui(web_ui());
-    handler()->AllowJavascript();
-    web_ui()->ClearTrackedCalls();
+    if (GetParam()) {
+      feature_list_.InitAndEnableFeatureWithParameters(
+          infobars::kCentralizedInfoBarFramework,
+          {{infobars::kMigratedPageInfo.name, "true"}});
+    } else {
+      feature_list_.InitAndDisableFeature(
+          infobars::kCentralizedInfoBarFramework);
+    }
 
-    browser2_ = CreateBrowser(profile(), browser()->type(), false);
+    SiteSettingsHandlerBaseTest::SetUp();
+
+    if (infobars::IsInfoBarMigrated(
+            infobars::InfoBarDelegate::PAGE_INFO_INFOBAR_DELEGATE)) {
+      auto* browser_infobar_manager =
+          infobars::BrowserInfoBarManager::From(g_browser_process);
+      if (browser_infobar_manager) {
+        auto spec = infobars::InfoBarSpec::Builder(
+                        infobars::InfoBarDelegate::PAGE_INFO_INFOBAR_DELEGATE)
+                        .SetMessageText(u"Test")
+                        .SetIcon(vector_icons::kSettingsIcon)
+                        .SetScope(infobars::InfoBarScope::kTab)
+                        .Build();
+        browser_infobar_manager->Register(std::move(spec));
+      }
+    }
+
+    browser1_ = std::make_unique<FakeBrowserWindow>(profile());
+    browser2_ = std::make_unique<FakeBrowserWindow>(profile());
 
     // Creates the second profile used by this test.
-    TestingProfile* profile2_ = profile_manager()->CreateTestingProfile(
+    profile2_ = profile_manager()->CreateTestingProfile(
         "testing_profile2@test", nullptr, std::u16string(), 0,
-        GetTestingFactories());
+        TestingProfile::TestingFactories());
 
-    browser3_ = CreateBrowser(profile2_, browser()->type(), false);
+    browser3_ = std::make_unique<FakeBrowserWindow>(profile2_);
 
     extensions::TestExtensionSystem* extension_system =
         static_cast<extensions::TestExtensionSystem*>(
@@ -3151,72 +3424,46 @@ class SiteSettingsHandlerInfobarTest : public BrowserWithTestWindowTest {
   }
 
   void TearDown() override {
-    // SiteSettingsHandler maintains a HostZoomMap::Subscription internally and
-    // has a PrefChangeRegistrar that observes the profile's preference, so make
-    // sure that it's cleared before profile destruction.
-    handler_.reset();
-
-    // Also destroy `browser2_` before the profile.
-    browser2()->tab_strip_model()->CloseAllTabs();
+    browser1_.reset();
     browser2_.reset();
-
-    // Destroy `browser3_`.
-    browser3()->tab_strip_model()->CloseAllTabs();
     browser3_.reset();
+    profile2_ = nullptr;
+    layout_provider_.reset();
 
-    // Browser()'s destruction is handled in
-    // BrowserWithTestWindowTest::TearDown()
-    BrowserWithTestWindowTest::TearDown();
-
-    TestingBrowserProcess::GetGlobal()->TearDownGlobalFeaturesForTesting();
+    SiteSettingsHandlerBaseTest::TearDown();
   }
 
-#if BUILDFLAG(IS_CHROMEOS)
-  // On ChromeOS a user account is needed in order to check whether the user
-  // account is affiliated with the device owner for the purposes of applying
-  // enterprise policy.
-  void LogIn(std::string_view email, const GaiaId& gaia_id) override {
-    BrowserWithTestWindowTest::LogIn(email, gaia_id);
-    user_manager()->SetUserPolicyStatus(
-        AccountId::FromUserEmailGaiaId(email, gaia_id),
-        /*is_managed=*/true,
-        /*is_affiliated=*/true);
-  }
-#endif  // BUILDFLAG(IS_CHROMEOS)
-
-  infobars::ContentInfoBarManager* GetInfoBarManagerForTab(Browser* browser,
-                                                           int tab_index,
-                                                           GURL* tab_url) {
+  infobars::ContentInfoBarManager* GetInfoBarManagerForTab(
+      FakeBrowserWindow* browser,
+      size_t tab_index,
+      GURL* tab_url) {
     content::WebContents* web_contents =
-        browser->tab_strip_model()->GetWebContentsAt(tab_index);
+        browser->GetTab(tab_index)->web_contents();
     if (tab_url) {
       *tab_url = web_contents->GetLastCommittedURL();
     }
     return infobars::ContentInfoBarManager::FromWebContents(web_contents);
   }
 
-  content::TestWebUI* web_ui() { return &web_ui_; }
-
-  SiteSettingsHandler* handler() { return handler_.get(); }
-
-  Browser* browser2() { return browser2_.get(); }
-
-  // browser3 is from a different profile `profile2_` than
-  // browser2 and browser() which are from profile()
-  Browser* browser3() { return browser3_.get(); }
+  FakeBrowserWindow* browser1() { return browser1_.get(); }
+  FakeBrowserWindow* browser2() { return browser2_.get(); }
+  FakeBrowserWindow* browser3() { return browser3_.get(); }
 
   const std::string_view kNotifications =
       site_settings::ContentSettingsTypeToGroupName(
           ContentSettingsType::NOTIFICATIONS);
 
  private:
-  content::TestWebUI web_ui_;
-  std::unique_ptr<SiteSettingsHandler> handler_;
-  std::unique_ptr<Browser> browser2_;
-  std::unique_ptr<Browser> browser3_;
+  std::unique_ptr<views::LayoutProvider> layout_provider_;
+  content::RenderViewHostTestEnabler rvh_test_enabler_;
+  base::test::ScopedFeatureList feature_list_;
+  std::unique_ptr<FakeBrowserWindow> browser1_;
+  std::unique_ptr<FakeBrowserWindow> browser2_;
+  raw_ptr<TestingProfile> profile2_ = nullptr;
+  std::unique_ptr<FakeBrowserWindow> browser3_;
 };
 
-TEST_F(SiteSettingsHandlerInfobarTest, SettingPermissionsTriggersInfobar) {
+TEST_P(SiteSettingsHandlerInfobarTest, SettingPermissionsTriggersInfobar) {
   // Note all GURLs starting with 'origin' below belong to the same origin.
   //               _____  _______________  ________  ________  ___________
   //   Window 1:  / foo \' origin_anchor \' chrome \' origin \' extension \
@@ -3247,22 +3494,23 @@ TEST_F(SiteSettingsHandlerInfobarTest, SettingPermissionsTriggersInfobar) {
   const GURL example_subdomain("https://subdomain.example.com/");
   const GURL about(url::kAboutBlankURL);
 
-  // Set up. Note AddTab() adds tab at index 0, so add them in reverse order.
-  AddTab(browser(), extension);
-  AddTab(browser(), origin);
-  AddTab(browser(), chrome);
-  AddTab(browser(), origin_anchor);
-  AddTab(browser(), foo);
-  for (int i = 0; i < browser()->tab_strip_model()->count(); ++i) {
+  // Set up. Note InsertTabAt(0, ...) adds tab at index 0, so add them in
+  // reverse order.
+  browser1()->InsertTabAt(0, extension);
+  browser1()->InsertTabAt(0, origin);
+  browser1()->InsertTabAt(0, chrome);
+  browser1()->InsertTabAt(0, origin_anchor);
+  browser1()->InsertTabAt(0, foo);
+  for (size_t i = 0; i < browser1()->tab_count(); ++i) {
     EXPECT_EQ(
-        0u, GetInfoBarManagerForTab(browser(), i, nullptr)->infobars().size());
+        0u, GetInfoBarManagerForTab(browser1(), i, nullptr)->infobars().size());
   }
 
-  AddTab(browser2(), about);
-  AddTab(browser2(), example_subdomain);
-  AddTab(browser2(), origin_query);
-  AddTab(browser2(), insecure);
-  for (int i = 0; i < browser2()->tab_strip_model()->count(); ++i) {
+  browser2()->InsertTabAt(0, about);
+  browser2()->InsertTabAt(0, example_subdomain);
+  browser2()->InsertTabAt(0, origin_query);
+  browser2()->InsertTabAt(0, insecure);
+  for (size_t i = 0; i < browser2()->tab_count(); ++i) {
     EXPECT_EQ(
         0u, GetInfoBarManagerForTab(browser2(), i, nullptr)->infobars().size());
   }
@@ -3278,20 +3526,20 @@ TEST_F(SiteSettingsHandlerInfobarTest, SettingPermissionsTriggersInfobar) {
   // Make sure all tabs belonging to the same origin as |origin_anchor| have an
   // infobar shown.
   GURL tab_url;
-  for (int i = 0; i < browser()->tab_strip_model()->count(); ++i) {
+  for (size_t i = 0; i < browser1()->tab_count(); ++i) {
     if (i == /*origin_anchor=*/1 || i == /*origin=*/3) {
       EXPECT_EQ(
           1u,
-          GetInfoBarManagerForTab(browser(), i, &tab_url)->infobars().size());
+          GetInfoBarManagerForTab(browser1(), i, &tab_url)->infobars().size());
       EXPECT_TRUE(url::IsSameOriginWith(origin, tab_url));
     } else {
       EXPECT_EQ(
           0u,
-          GetInfoBarManagerForTab(browser(), i, &tab_url)->infobars().size());
+          GetInfoBarManagerForTab(browser1(), i, &tab_url)->infobars().size());
       EXPECT_FALSE(url::IsSameOriginWith(origin, tab_url));
     }
   }
-  for (int i = 0; i < browser2()->tab_strip_model()->count(); ++i) {
+  for (size_t i = 0; i < browser2()->tab_count(); ++i) {
     if (i == /*origin_query=*/1) {
       EXPECT_EQ(
           1u,
@@ -3309,13 +3557,15 @@ TEST_F(SiteSettingsHandlerInfobarTest, SettingPermissionsTriggersInfobar) {
   // |origin_query| tab to a different origin.
   const GURL origin_path("https://www.example.com/path/to/page.html");
   content::WebContents* foo_contents =
-      browser()->tab_strip_model()->GetWebContentsAt(/*index=*/0);
-  NavigateAndCommit(foo_contents, origin_path);
+      browser1()->GetTab(/*index=*/0)->web_contents();
+  content::NavigationSimulator::NavigateAndCommitFromBrowser(foo_contents,
+                                                             origin_path);
 
   const GURL example_without_www("https://example.com/");
   content::WebContents* origin_query_contents =
-      browser2()->tab_strip_model()->GetWebContentsAt(/*index=*/1);
-  NavigateAndCommit(origin_query_contents, example_without_www);
+      browser2()->GetTab(/*index=*/1)->web_contents();
+  content::NavigationSimulator::NavigateAndCommitFromBrowser(
+      origin_query_contents, example_without_www);
 
   // Reset all permissions.
   base::ListValue reset_args;
@@ -3329,23 +3579,23 @@ TEST_F(SiteSettingsHandlerInfobarTest, SettingPermissionsTriggersInfobar) {
 
   // Check the same tabs (plus the tab navigated to |origin_path|) still have
   // infobars showing.
-  for (int i = 0; i < browser()->tab_strip_model()->count(); ++i) {
+  for (size_t i = 0; i < browser1()->tab_count(); ++i) {
     if (i == /*origin_path=*/0 || i == /*origin_anchor=*/1 ||
         i == /*origin=*/3) {
       EXPECT_EQ(
           1u,
-          GetInfoBarManagerForTab(browser(), i, &tab_url)->infobars().size());
+          GetInfoBarManagerForTab(browser1(), i, &tab_url)->infobars().size());
       EXPECT_TRUE(url::IsSameOriginWith(origin, tab_url));
     } else {
       EXPECT_EQ(
           0u,
-          GetInfoBarManagerForTab(browser(), i, &tab_url)->infobars().size());
+          GetInfoBarManagerForTab(browser1(), i, &tab_url)->infobars().size());
       EXPECT_FALSE(url::IsSameOriginWith(origin, tab_url));
     }
   }
   // The infobar on the original |origin_query| tab (which has now been
   // navigated to |example_without_www|) should disappear.
-  for (int i = 0; i < browser2()->tab_strip_model()->count(); ++i) {
+  for (size_t i = 0; i < browser2()->tab_count(); ++i) {
     EXPECT_EQ(
         0u,
         GetInfoBarManagerForTab(browser2(), i, &tab_url)->infobars().size());
@@ -3354,14 +3604,14 @@ TEST_F(SiteSettingsHandlerInfobarTest, SettingPermissionsTriggersInfobar) {
 
   // Make sure it's the correct infobar that's being shown.
   EXPECT_EQ(infobars::InfoBarDelegate::PAGE_INFO_INFOBAR_DELEGATE,
-            GetInfoBarManagerForTab(browser(), /*tab_index=*/0, &tab_url)
+            GetInfoBarManagerForTab(browser1(), /*tab_index=*/0, &tab_url)
                 ->infobars()[0]
                 ->delegate()
                 ->GetIdentifier());
   EXPECT_TRUE(url::IsSameOriginWith(origin, tab_url));
 }
 
-TEST_F(SiteSettingsHandlerInfobarTest,
+TEST_P(SiteSettingsHandlerInfobarTest,
        SettingPermissionsDoesNotTriggerInfobarOnDifferentProfile) {
   // Note all GURLs starting with 'origin' below belong to the same origin.
   //               _______________
@@ -3379,11 +3629,11 @@ TEST_F(SiteSettingsHandlerInfobarTest,
   const GURL origin_query("https://www.example.com/?param=value");
 
   // Set up. No info bars.
-  AddTab(browser(), origin_anchor);
+  browser1()->AddTab(origin_anchor);
   EXPECT_EQ(0u,
-            GetInfoBarManagerForTab(browser(), 0, nullptr)->infobars().size());
+            GetInfoBarManagerForTab(browser1(), 0, nullptr)->infobars().size());
 
-  AddTab(browser3(), origin_query);
+  browser3()->AddTab(origin_query);
   EXPECT_EQ(0u,
             GetInfoBarManagerForTab(browser3(), 0, nullptr)->infobars().size());
 
@@ -3398,8 +3648,8 @@ TEST_F(SiteSettingsHandlerInfobarTest,
   // Make sure all tabs within the same profile belonging to the same origin
   // as `origin_anchor` have an infobar shown.
   GURL tab_url;
-  EXPECT_EQ(1u,
-            GetInfoBarManagerForTab(browser(), 0, &tab_url)->infobars().size());
+  EXPECT_EQ(
+      1u, GetInfoBarManagerForTab(browser1(), 0, &tab_url)->infobars().size());
   EXPECT_TRUE(url::IsSameOriginWith(origin, tab_url));
 
   // Make sure all tabs with the same origin as `origin_anchor` that don't
@@ -3408,6 +3658,13 @@ TEST_F(SiteSettingsHandlerInfobarTest,
       0u, GetInfoBarManagerForTab(browser3(), 0, &tab_url)->infobars().size());
   EXPECT_TRUE(url::IsSameOriginWith(origin, tab_url));
 }
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         SiteSettingsHandlerInfobarTest,
+                         testing::Bool(),
+                         [](const testing::TestParamInfo<bool>& info) {
+                           return info.param ? "Migrated" : "Legacy";
+                         });
 
 TEST_F(SiteSettingsHandlerTest, BlockAutoplay_SendOnRequest) {
   base::ListValue args;
@@ -5142,39 +5399,40 @@ class SiteSettingsHandlerBluetoothTest
 
     auto options = blink::mojom::WebBluetoothRequestDeviceOptions::New();
     options->accept_all_devices = true;
-    {
-      base::RunLoop loop;
-      auto barrier_closure = base::BarrierClosure(5, loop.QuitClosure());
-      auto* bluetooth_chooser_context =
-          BluetoothChooserContextFactory::GetForProfile(profile());
-      EXPECT_CALL(observer_, OnObjectPermissionChanged(
-                                 {ContentSettingsType::BLUETOOTH_GUARD},
-                                 ContentSettingsType::BLUETOOTH_CHOOSER_DATA))
-          .Times(5)
-          .WillRepeatedly(RunClosure(barrier_closure));
-      bluetooth_chooser_context->GrantServiceAccessPermission(
-          kChromiumOrigin, persistent_device_.get(), options.get());
-      bluetooth_chooser_context->GrantServiceAccessPermission(
-          kGoogleOrigin, persistent_device_.get(), options.get());
-      bluetooth_chooser_context->GrantServiceAccessPermission(
-          kWebUIOrigin, persistent_device_.get(), options.get());
-      bluetooth_chooser_context->GrantServiceAccessPermission(
-          kAndroidOrigin, ephemeral_device_.get(), options.get());
-      bluetooth_chooser_context->GrantServiceAccessPermission(
-          kAndroidOrigin, user_granted_device_.get(), options.get());
-      loop.Run();
-    }
+
+    // Expect to receive 5 notifications for 5 permission grants. If there is an
+    // incognito profile, persistent permission grants are propagated to the
+    // incognito profile and trigger additional notifications. The ephemeral
+    // grant is not propagated.
+    EXPECT_CALL(observer_, OnObjectPermissionChanged(
+                               {ContentSettingsType::BLUETOOTH_GUARD},
+                               ContentSettingsType::BLUETOOTH_CHOOSER_DATA))
+        .Times(incognito_profile() ? 9 : 5);
+
+    auto* bluetooth_chooser_context =
+        BluetoothChooserContextFactory::GetForProfile(profile());
+    bluetooth_chooser_context->GrantServiceAccessPermission(
+        kChromiumOrigin, persistent_device_.get(), options.get());
+    bluetooth_chooser_context->GrantServiceAccessPermission(
+        kGoogleOrigin, persistent_device_.get(), options.get());
+    bluetooth_chooser_context->GrantServiceAccessPermission(
+        kWebUIOrigin, persistent_device_.get(), options.get());
+    bluetooth_chooser_context->GrantServiceAccessPermission(
+        kAndroidOrigin, ephemeral_device_.get(), options.get());
+    bluetooth_chooser_context->GrantServiceAccessPermission(
+        kAndroidOrigin, user_granted_device_.get(), options.get());
+
+    bluetooth_chooser_context->FlushScheduledSaveSettingsCalls();
 
     if (off_the_record_device_) {
-      base::RunLoop loop;
       EXPECT_CALL(observer_, OnObjectPermissionChanged(
                                  {ContentSettingsType::BLUETOOTH_GUARD},
-                                 ContentSettingsType::BLUETOOTH_CHOOSER_DATA))
-          .WillOnce(RunClosure(loop.QuitClosure()));
-      BluetoothChooserContextFactory::GetForProfile(incognito_profile())
-          ->GrantServiceAccessPermission(
-              kChromiumOrigin, off_the_record_device_.get(), options.get());
-      loop.Run();
+                                 ContentSettingsType::BLUETOOTH_CHOOSER_DATA));
+      auto* incognito_context =
+          BluetoothChooserContextFactory::GetForProfile(incognito_profile());
+      incognito_context->GrantServiceAccessPermission(
+          kChromiumOrigin, off_the_record_device_.get(), options.get());
+      incognito_context->FlushScheduledSaveSettingsCalls();
     }
   }
 
@@ -5333,42 +5591,39 @@ class SiteSettingsHandlerHidTest
     const auto kGoogleOrigin = url::Origin::Create(kGoogleUrl);
     const auto kWebUIOrigin = url::Origin::Create(kWebUIUrl);
 
-    // Add the user granted permissions for testing.
-    // These two persistent device permissions should be lumped together
-    // with the policy permissions, since they apply to the same device and
-    // URL.
-    {
-      base::RunLoop loop;
-      auto barrier_closure = base::BarrierClosure(5, loop.QuitClosure());
-      EXPECT_CALL(observer_, OnObjectPermissionChanged(
-                                 {ContentSettingsType::HID_GUARD},
-                                 ContentSettingsType::HID_CHOOSER_DATA))
-          .Times(5)
-          .WillRepeatedly(RunClosure(barrier_closure));
-      auto* hid_chooser_context =
-          HidChooserContextFactory::GetForProfile(profile());
-      hid_chooser_context->GrantDevicePermission(kChromiumOrigin,
-                                                 *persistent_device_);
-      hid_chooser_context->GrantDevicePermission(kGoogleOrigin,
-                                                 *persistent_device_);
-      hid_chooser_context->GrantDevicePermission(kWebUIOrigin,
-                                                 *persistent_device_);
-      hid_chooser_context->GrantDevicePermission(kAndroidOrigin,
-                                                 *ephemeral_device_);
-      hid_chooser_context->GrantDevicePermission(kAndroidOrigin,
-                                                 *user_granted_device_);
-      loop.Run();
-    }
+    // Expect to receive 5 notifications for 5 permission grants. If there is an
+    // incognito profile, persistent permission grants are propagated to the
+    // incognito profile and trigger additional notifications. The ephemeral
+    // grant is not propagated.
+    EXPECT_CALL(observer_, OnObjectPermissionChanged(
+                               {ContentSettingsType::HID_GUARD},
+                               ContentSettingsType::HID_CHOOSER_DATA))
+        .Times(incognito_profile() ? 9 : 5);
+
+    auto* hid_chooser_context =
+        HidChooserContextFactory::GetForProfile(profile());
+    hid_chooser_context->GrantDevicePermission(kChromiumOrigin,
+                                               *persistent_device_);
+    hid_chooser_context->GrantDevicePermission(kGoogleOrigin,
+                                               *persistent_device_);
+    hid_chooser_context->GrantDevicePermission(kWebUIOrigin,
+                                               *persistent_device_);
+    hid_chooser_context->GrantDevicePermission(kAndroidOrigin,
+                                               *ephemeral_device_);
+    hid_chooser_context->GrantDevicePermission(kAndroidOrigin,
+                                               *user_granted_device_);
+
+    hid_chooser_context->FlushScheduledSaveSettingsCalls();
 
     if (off_the_record_device_) {
-      base::RunLoop loop;
       EXPECT_CALL(observer_, OnObjectPermissionChanged(
                                  {ContentSettingsType::HID_GUARD},
-                                 ContentSettingsType::HID_CHOOSER_DATA))
-          .WillOnce(RunClosure(loop.QuitClosure()));
-      HidChooserContextFactory::GetForProfile(incognito_profile())
-          ->GrantDevicePermission(kChromiumOrigin, *off_the_record_device_);
-      loop.Run();
+                                 ContentSettingsType::HID_CHOOSER_DATA));
+      auto* incognito_context =
+          HidChooserContextFactory::GetForProfile(incognito_profile());
+      incognito_context->GrantDevicePermission(kChromiumOrigin,
+                                               *off_the_record_device_);
+      incognito_context->FlushScheduledSaveSettingsCalls();
     }
   }
 
@@ -5579,42 +5834,39 @@ class SiteSettingsHandlerSerialTest
     const auto kGoogleOrigin = url::Origin::Create(kGoogleUrl);
     const auto kWebUIOrigin = url::Origin::Create(kWebUIUrl);
 
-    // Add the user granted permissions for testing.
-    // These two persistent device permissions should be lumped together
-    // with the policy permissions, since they apply to the same device and
-    // URL.
-    {
-      base::RunLoop loop;
-      auto barrier_closure = base::BarrierClosure(5, loop.QuitClosure());
-      EXPECT_CALL(observer_, OnObjectPermissionChanged(
-                                 {ContentSettingsType::SERIAL_GUARD},
-                                 ContentSettingsType::SERIAL_CHOOSER_DATA))
-          .Times(5)
-          .WillRepeatedly(RunClosure(barrier_closure));
-      auto* serial_chooser_context =
-          SerialChooserContextFactory::GetForProfile(profile());
-      serial_chooser_context->GrantPortPermission(kChromiumOrigin,
-                                                  *persistent_port_);
-      serial_chooser_context->GrantPortPermission(kGoogleOrigin,
-                                                  *persistent_port_);
-      serial_chooser_context->GrantPortPermission(kWebUIOrigin,
-                                                  *persistent_port_);
-      serial_chooser_context->GrantPortPermission(kAndroidOrigin,
-                                                  *ephemeral_port_);
-      serial_chooser_context->GrantPortPermission(kAndroidOrigin,
-                                                  *user_granted_port_);
-      loop.Run();
-    }
+    // Expect to receive 5 notifications for 5 permission grants. If there is an
+    // incognito profile, persistent permission grants are propagated to the
+    // incognito profile and trigger additional notifications. The ephemeral
+    // grant is not propagated.
+    EXPECT_CALL(observer_, OnObjectPermissionChanged(
+                               {ContentSettingsType::SERIAL_GUARD},
+                               ContentSettingsType::SERIAL_CHOOSER_DATA))
+        .Times(incognito_profile() ? 9 : 5);
+
+    auto* serial_chooser_context =
+        SerialChooserContextFactory::GetForProfile(profile());
+    serial_chooser_context->GrantPortPermission(kChromiumOrigin,
+                                                *persistent_port_);
+    serial_chooser_context->GrantPortPermission(kGoogleOrigin,
+                                                *persistent_port_);
+    serial_chooser_context->GrantPortPermission(kWebUIOrigin,
+                                                *persistent_port_);
+    serial_chooser_context->GrantPortPermission(kAndroidOrigin,
+                                                *ephemeral_port_);
+    serial_chooser_context->GrantPortPermission(kAndroidOrigin,
+                                                *user_granted_port_);
+
+    serial_chooser_context->FlushScheduledSaveSettingsCalls();
 
     if (off_the_record_port_) {
-      base::RunLoop loop;
       EXPECT_CALL(observer_, OnObjectPermissionChanged(
                                  {ContentSettingsType::SERIAL_GUARD},
-                                 ContentSettingsType::SERIAL_CHOOSER_DATA))
-          .WillOnce(RunClosure(loop.QuitClosure()));
-      SerialChooserContextFactory::GetForProfile(incognito_profile())
-          ->GrantPortPermission(kChromiumOrigin, *off_the_record_port_);
-      loop.Run();
+                                 ContentSettingsType::SERIAL_CHOOSER_DATA));
+      auto* incognito_context =
+          SerialChooserContextFactory::GetForProfile(incognito_profile());
+      incognito_context->GrantPortPermission(kChromiumOrigin,
+                                             *off_the_record_port_);
+      incognito_context->FlushScheduledSaveSettingsCalls();
     }
   }
 
@@ -5782,42 +6034,39 @@ class SiteSettingsHandlerUsbTest
     const auto kGoogleOrigin = url::Origin::Create(kGoogleUrl);
     const auto kWebUIOrigin = url::Origin::Create(kWebUIUrl);
 
-    // Add the user granted permissions for testing.
-    // These two persistent device permissions should be lumped together
-    // with the policy permissions, since they apply to the same device and
-    // URL.
-    {
-      base::RunLoop loop;
-      auto barrier_closure = base::BarrierClosure(5, loop.QuitClosure());
-      EXPECT_CALL(observer_, OnObjectPermissionChanged(
-                                 {ContentSettingsType::USB_GUARD},
-                                 ContentSettingsType::USB_CHOOSER_DATA))
-          .Times(5)
-          .WillRepeatedly(RunClosure(barrier_closure));
-      auto* usb_chooser_context =
-          UsbChooserContextFactory::GetForProfile(profile());
-      usb_chooser_context->GrantDevicePermission(kChromiumOrigin,
-                                                 *persistent_device_);
-      usb_chooser_context->GrantDevicePermission(kGoogleOrigin,
-                                                 *persistent_device_);
-      usb_chooser_context->GrantDevicePermission(kWebUIOrigin,
-                                                 *persistent_device_);
-      usb_chooser_context->GrantDevicePermission(kAndroidOrigin,
-                                                 *ephemeral_device_);
-      usb_chooser_context->GrantDevicePermission(kAndroidOrigin,
-                                                 *user_granted_device_);
-      loop.Run();
-    }
+    // Expect to receive 5 notifications for 5 permission grants. If there is an
+    // incognito profile, persistent permission grants are propagated to the
+    // incognito profile and trigger additional notifications. The ephemeral
+    // grant is not propagated.
+    EXPECT_CALL(observer_, OnObjectPermissionChanged(
+                               {ContentSettingsType::USB_GUARD},
+                               ContentSettingsType::USB_CHOOSER_DATA))
+        .Times(incognito_profile() ? 9 : 5);
+
+    auto* usb_chooser_context =
+        UsbChooserContextFactory::GetForProfile(profile());
+    usb_chooser_context->GrantDevicePermission(kChromiumOrigin,
+                                               *persistent_device_);
+    usb_chooser_context->GrantDevicePermission(kGoogleOrigin,
+                                               *persistent_device_);
+    usb_chooser_context->GrantDevicePermission(kWebUIOrigin,
+                                               *persistent_device_);
+    usb_chooser_context->GrantDevicePermission(kAndroidOrigin,
+                                               *ephemeral_device_);
+    usb_chooser_context->GrantDevicePermission(kAndroidOrigin,
+                                               *user_granted_device_);
+
+    usb_chooser_context->FlushScheduledSaveSettingsCalls();
 
     if (off_the_record_device_) {
-      base::RunLoop loop;
       EXPECT_CALL(observer_, OnObjectPermissionChanged(
                                  {ContentSettingsType::USB_GUARD},
-                                 ContentSettingsType::USB_CHOOSER_DATA))
-          .WillOnce(RunClosure(loop.QuitClosure()));
-      UsbChooserContextFactory::GetForProfile(incognito_profile())
-          ->GrantDevicePermission(kChromiumOrigin, *off_the_record_device_);
-      loop.Run();
+                                 ContentSettingsType::USB_CHOOSER_DATA));
+      auto* incognito_context =
+          UsbChooserContextFactory::GetForProfile(incognito_profile());
+      incognito_context->GrantDevicePermission(kChromiumOrigin,
+                                               *off_the_record_device_);
+      incognito_context->FlushScheduledSaveSettingsCalls();
     }
   }
 
@@ -5911,6 +6160,7 @@ TEST_F(SiteSettingsHandlerTest, HandleClearSiteGroupDataAndCookies) {
           kGoogleOnExampleEntry,
           kExampleOnGoogleSecureEntry,
           kExampleOnGoogleInsecureEntry,
+          kExampleOnGoogleAuEntry,
           kExampleLocalStorage,
           kHttpExampleCookie,
           kHttpsWwwExampleCookie,
@@ -5997,6 +6247,7 @@ TEST_F(SiteSettingsHandlerTest, HandleClearSiteGroupDataAndCookies) {
   // present.
   RemoveModelEntries(expected_browsing_data_model_entries,
                      {
+                         kExampleOnGoogleAuEntry,
                          kPartitionedHttpsWwwExampleOnGoogleAuCookie,
                          kHttpGoogleAuCookie,
                          kPartitionedHttpsGoogleAu1PCookie,
@@ -6327,6 +6578,7 @@ TEST_F(SiteSettingsHandlerTest, HandleClearPartitionedUsage) {
           kGoogleOnExampleEntry,
           kExampleOnGoogleSecureEntry,
           kExampleOnGoogleInsecureEntry,
+          kExampleOnGoogleAuEntry,
           kExampleLocalStorage,
           kHttpExampleCookie,
           kHttpsWwwExampleCookie,
@@ -6358,6 +6610,149 @@ TEST_F(SiteSettingsHandlerTest, HandleClearPartitionedUsage) {
   browsing_data_model_test_util::ValidateBrowsingDataEntries(
       handler()->GetBrowsingDataModelForTesting(),
       expected_browsing_data_model_entries);
+}
+
+TEST_F(SiteSettingsHandlerTest,
+       HandleClearPartitionedUsageDoesNotAffectOtherPartitions) {
+  // www.example.com has unpartitioned storage (102 B) and partitioned storage
+  // under two top-level sites: google.com (200 B) and google.com.au (400 B).
+  // Clearing its google.com.au partition must leave the unpartitioned storage,
+  // the google.com partition, and other origins' google.com.au-partitioned
+  // storage intact.
+  SetupModel();
+  std::vector<browsing_data_model_test_util::BrowsingDataEntry>
+      expected_browsing_data_model_entries = {
+          kGoogleUnpartitionedEntry,
+          kExampleUnpartitionedEntry,
+          kGoogleOnExampleEntry,
+          kExampleOnGoogleSecureEntry,
+          kExampleOnGoogleInsecureEntry,
+          kExampleOnGoogleAuEntry,
+          kExampleLocalStorage,
+          kHttpExampleCookie,
+          kHttpsWwwExampleCookie,
+          kPartitionedHttpsWwwExampleOnGoogleAuCookie,
+          kPartitionedHttpsWwwExampleOnGoogleCookie,
+          kHttpAbcExampleCookie,
+          kHttpGoogleCookieA,
+          kHttpGoogleCookieB,
+          kHttpGoogleAuCookie,
+          kPartitionedHttpsGoogleAu1PCookie,
+          kPartitionedHttpsWwwAnotherExampleOnGoogleAuCookie,
+          kUngroupedHttpCookie,
+      };
+  browsing_data_model_test_util::ValidateBrowsingDataEntries(
+      handler()->GetBrowsingDataModelForTesting(),
+      expected_browsing_data_model_entries);
+
+  auto find_origin_info = [](const base::ListValue& site_groups,
+                             const std::string& etld_plus1,
+                             const std::string& origin,
+                             bool is_partitioned) -> const base::DictValue* {
+    const std::string grouping_key =
+        GroupingKey::CreateFromEtldPlus1(etld_plus1).Serialize();
+    for (const base::Value& site_group_value : site_groups) {
+      const base::DictValue& site_group = site_group_value.GetDict();
+      if (CHECK_DEREF(site_group.FindString("groupingKey")) != grouping_key) {
+        continue;
+      }
+      for (const base::Value& origin_value :
+           CHECK_DEREF(site_group.FindList("origins"))) {
+        const base::DictValue& origin_info = origin_value.GetDict();
+        if (CHECK_DEREF(origin_info.FindString("origin")) == origin &&
+            origin_info.FindBool("isPartitioned").value_or(false) ==
+                is_partitioned) {
+          return &origin_info;
+        }
+      }
+    }
+    return nullptr;
+  };
+
+  constexpr int kUnpartitionedExampleUsage = 102;
+  constexpr int kExampleOnGoogleUsage = 200;
+  constexpr int kExampleOnGoogleAuUsage = 400;
+  constexpr int kOtherOriginOnGoogleAuUsage = 0;
+
+  base::ListValue storage_and_cookie_list = GetOnStorageFetchedSentList();
+  ASSERT_EQ(4U, storage_and_cookie_list.size());
+
+  const base::DictValue* unpartitioned_example_before = find_origin_info(
+      storage_and_cookie_list, "example.com", "https://www.example.com/",
+      /*is_partitioned=*/false);
+  ASSERT_TRUE(unpartitioned_example_before);
+  EXPECT_EQ(kUnpartitionedExampleUsage,
+            unpartitioned_example_before->FindDouble("usage"));
+
+  const base::DictValue* example_on_google_before = find_origin_info(
+      storage_and_cookie_list, "google.com", "https://www.example.com/",
+      /*is_partitioned=*/true);
+  ASSERT_TRUE(example_on_google_before);
+  EXPECT_EQ(kExampleOnGoogleUsage,
+            example_on_google_before->FindDouble("usage"));
+
+  const base::DictValue* example_on_google_au_before = find_origin_info(
+      storage_and_cookie_list, "google.com.au", "https://www.example.com/",
+      /*is_partitioned=*/true);
+  ASSERT_TRUE(example_on_google_au_before);
+  EXPECT_EQ(kExampleOnGoogleAuUsage,
+            example_on_google_au_before->FindDouble("usage"));
+
+  const base::DictValue* other_origin_on_google_au_before = find_origin_info(
+      storage_and_cookie_list, "google.com.au",
+      "https://www.another-example.com/", /*is_partitioned=*/true);
+  ASSERT_TRUE(other_origin_on_google_au_before);
+  EXPECT_EQ(kOtherOriginOnGoogleAuUsage,
+            other_origin_on_google_au_before->FindDouble("usage"));
+  EXPECT_EQ(1, other_origin_on_google_au_before->FindDouble("numCookies"));
+
+  // Clear www.example.com's storage partitioned under google.com.au only.
+  base::ListValue args;
+  args.Append("https://www.example.com/");
+  args.Append(GroupingKey::CreateFromEtldPlus1("google.com.au").Serialize());
+  handler()->HandleClearPartitionedUsage(args);
+
+  // Only www.example.com's google.com.au partition is removed. Its google.com
+  // partition, google.com.au's first-party storage, and
+  // www.another-example.com's google.com.au partition all remain untouched.
+  RemoveModelEntries(expected_browsing_data_model_entries,
+                     {
+                         kExampleOnGoogleAuEntry,
+                         kPartitionedHttpsWwwExampleOnGoogleAuCookie,
+                     });
+
+  browsing_data_model_test_util::ValidateBrowsingDataEntries(
+      handler()->GetBrowsingDataModelForTesting(),
+      expected_browsing_data_model_entries);
+
+  storage_and_cookie_list = GetOnStorageFetchedSentList();
+  ASSERT_EQ(4U, storage_and_cookie_list.size());
+
+  const base::DictValue* unpartitioned_example_after = find_origin_info(
+      storage_and_cookie_list, "example.com", "https://www.example.com/",
+      /*is_partitioned=*/false);
+  ASSERT_TRUE(unpartitioned_example_after);
+  EXPECT_EQ(kUnpartitionedExampleUsage,
+            unpartitioned_example_after->FindDouble("usage"));
+
+  const base::DictValue* example_on_google_after = find_origin_info(
+      storage_and_cookie_list, "google.com", "https://www.example.com/",
+      /*is_partitioned=*/true);
+  ASSERT_TRUE(example_on_google_after);
+  EXPECT_EQ(kExampleOnGoogleUsage,
+            example_on_google_after->FindDouble("usage"));
+
+  EXPECT_FALSE(find_origin_info(storage_and_cookie_list, "google.com.au",
+                                "https://www.example.com/",
+                                /*is_partitioned=*/true));
+
+  const base::DictValue* other_origin_on_google_au_after = find_origin_info(
+      storage_and_cookie_list, "google.com.au",
+      "https://www.another-example.com/", /*is_partitioned=*/true);
+  ASSERT_TRUE(other_origin_on_google_au_after);
+  EXPECT_EQ(kOtherOriginOnGoogleAuUsage,
+            other_origin_on_google_au_after->FindDouble("usage"));
+  EXPECT_EQ(1, other_origin_on_google_au_after->FindDouble("numCookies"));
 }
 
 TEST_F(SiteSettingsHandlerTest, HandleGetRwsMembershipLabel) {
@@ -6404,10 +6799,13 @@ TEST_F(SiteSettingsHandlerTest, HandleGetUsageInfo) {
       .Times(2)
       .WillRepeatedly(Return(true));
 
-  // Confirm that usage info only returns unpartitioned storage.
+  // Confirm that usage info for an origin returns its total storage summed
+  // across all partitions (both unpartitioned and partitioned). This is
+  // intentionally different from OnStorageFetched, which reports each partition
+  // separately; HandleFetchUsageTotal shows a single combined total per origin.
   SetupModel();
 
-  EXPECT_EQ(17,
+  EXPECT_EQ(18,
             std::distance(handler()->GetBrowsingDataModelForTesting()->begin(),
                           handler()->GetBrowsingDataModelForTesting()->end()));
 
@@ -6415,7 +6813,11 @@ TEST_F(SiteSettingsHandlerTest, HandleGetUsageInfo) {
   args.Append("http://www.example.com");
   handler()->HandleFetchUsageTotal(args);
   handler()->ServicePendingRequests();
-  ValidateUsageInfo("http://www.example.com", "302 B", "1 cookie",
+  // www.example.com usage is summed across all partitions: 100 (unpartitioned
+  // quota) + 2 (local storage) + 100 (partitioned on google.com, secure) + 100
+  // (partitioned on google.com, insecure) + 400 (partitioned on google.com.au)
+  // = 702 B.
+  ValidateUsageInfo("http://www.example.com", "702 B", "1 cookie",
                     "1 site in example.com's group", true);
 
   args.clear();

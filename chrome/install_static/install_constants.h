@@ -9,10 +9,10 @@
 #ifndef CHROME_INSTALL_STATIC_INSTALL_CONSTANTS_H_
 #define CHROME_INSTALL_STATIC_INSTALL_CONSTANTS_H_
 
-#include <windows.h>
-
+#include <guiddef.h>
 #include <stdint.h>
 
+#include "base/containers/span.h"
 #include "chrome/install_static/buildflags.h"
 
 namespace install_static {
@@ -116,10 +116,6 @@ struct InstallConstants {
   // system-level installs.
   const wchar_t* active_setup_guid;
 
-  // The legacy CommandExecuteImpl CLSID, or an empty string if this install
-  // mode never included a DelegateExecute verb handler.
-  const wchar_t* legacy_command_execute_clsid;
-
   // The CLSID of the COM object registered with the Widnows OS. This is for app
   // activation via user interaction with a toast notification in the Action
   // Center.
@@ -129,15 +125,27 @@ struct InstallConstants {
   CLSID elevator_clsid;
 
   // The IID and the TypeLib of the IElevator interface that provides silent
-  // elevation functionality.
+  // elevation functionality. When changing this value for a mode, one must add
+  // the old value to the end of the mode's `old_elevator_iids` list; see below.
   IID elevator_iid;
+
+  // Previous IIDs of the IElevator interface. Items added to this list
+  // following a change to `elevator_iid` may be removed after two years.
+  base::span<const IID> old_elevator_iids;
 
   // The CLSID of the COM server that provides ETW tracing functionality.
   CLSID tracing_service_clsid;
 
   // The IID and the TypeLib of the ISystemTraceSession interface that provides
-  // ETW tracing functionality.
+  // ETW tracing functionality. When changing this value for a mode, one must
+  // add the old value to the end of the mode's `old_tracing_service_iids` list;
+  // see below.
   IID tracing_service_iid;
+
+  // Previous IIDs of the ISystemTraceSession interface. Items added to this
+  // list following a change to `tracing_service_iid` may be removed after two
+  // years.
+  base::span<const IID> old_tracing_service_iids;
 
   // The default name for this mode's update channel.
   const wchar_t* default_channel_name;

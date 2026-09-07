@@ -8,6 +8,7 @@
 
 #include <array>
 
+#include "audio_parameters.h"
 #include "base/strings/string_number_conversions.h"
 #include "media/base/channel_layout.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -150,7 +151,7 @@ TEST(AudioParameters, Compare) {
 }
 
 TEST(AudioParameters, Constructor_ValidChannelCounts) {
-  int expected_channels = 8;
+  constexpr int expected_channels = 8;
   ChannelLayout expected_layout = CHANNEL_LAYOUT_DISCRETE;
   ChannelLayoutConfig channel_layout_config(CHANNEL_LAYOUT_DISCRETE,
                                             expected_channels);
@@ -163,7 +164,7 @@ TEST(AudioParameters, Constructor_ValidChannelCounts) {
 }
 
 TEST(AudioParameters, Constructor_ValidChannelCountsFor514Downmix) {
-  int expected_channels = 7;
+  constexpr int expected_channels = 6;
   constexpr ChannelLayout expected_layout = CHANNEL_LAYOUT_5_1_4_DOWNMIX;
   ChannelLayoutConfig channel_layout_config(expected_layout, expected_channels);
 
@@ -173,7 +174,6 @@ TEST(AudioParameters, Constructor_ValidChannelCountsFor514Downmix) {
   EXPECT_EQ(expected_layout, params.channel_layout());
   EXPECT_TRUE(params.IsValid());
 
-  // We do not have to explicitly set the channels for this layout.
   params.Reset(AudioParameters::AUDIO_PCM_LOW_LATENCY,
                ChannelLayoutConfig::FromLayout<expected_layout>(), 44100, 880);
   EXPECT_EQ(6, params.channels());
@@ -195,6 +195,36 @@ TEST(AudioParameters, Constructor_CopyChannelLayoutConfig) {
   EXPECT_EQ(expected_channels, params2.channels());
   EXPECT_EQ(expected_layout, params2.channel_layout());
   EXPECT_TRUE(params2.IsValid());
+}
+
+TEST(AudioParameters, EffectsMaskToStringFuchsiaUsage) {
+  // Fuchsia effects values are represented by an integer encoded in a small
+  // range of bits, so verify that the to-string helper correctly decodes the
+  // integer to a single item, given that bit values overlap.
+  EXPECT_EQ(AudioParameters::EffectsMaskToString(
+                AudioParameters::FUCHSIA_RENDER_USAGE_UNKNOWN),
+            "NONE");
+  EXPECT_EQ(AudioParameters::EffectsMaskToString(
+                AudioParameters::FUCHSIA_RENDER_USAGE_BACKGROUND),
+            "FUCHSIA_RENDER_USAGE_BACKGROUND");
+  EXPECT_EQ(AudioParameters::EffectsMaskToString(
+                AudioParameters::FUCHSIA_RENDER_USAGE_MEDIA),
+            "FUCHSIA_RENDER_USAGE_MEDIA");
+  EXPECT_EQ(AudioParameters::EffectsMaskToString(
+                AudioParameters::FUCHSIA_RENDER_USAGE_INTERRUPTION),
+            "FUCHSIA_RENDER_USAGE_INTERRUPTION");
+  EXPECT_EQ(AudioParameters::EffectsMaskToString(
+                AudioParameters::FUCHSIA_RENDER_USAGE_SYSTEM_AGENT),
+            "FUCHSIA_RENDER_USAGE_SYSTEM_AGENT");
+  EXPECT_EQ(AudioParameters::EffectsMaskToString(
+                AudioParameters::FUCHSIA_RENDER_USAGE_COMMUNICATION),
+            "FUCHSIA_RENDER_USAGE_COMMUNICATION");
+  EXPECT_EQ(AudioParameters::EffectsMaskToString(
+                AudioParameters::FUCHSIA_RENDER_USAGE_ACCESSIBILITY),
+            "FUCHSIA_RENDER_USAGE_ACCESSIBILITY");
+  EXPECT_EQ(AudioParameters::EffectsMaskToString(
+                7 << AudioParameters::FUCHSIA_RENDER_USAGE_SHIFT),
+            "FUCHSIA_RENDER_USAGE_INVALID");
 }
 
 TEST(AudioOutputBufferParametersHelperTest, LoadAndWriteGlitchInfo) {

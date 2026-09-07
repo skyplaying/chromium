@@ -45,7 +45,7 @@
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/extensions/extension_action_test_helper.h"
 #include "chrome/test/base/ui_test_utils.h"
 #endif
@@ -239,7 +239,7 @@ IN_PROC_BROWSER_TEST_F(OffscreenApiTest, MAYBE_BasicDocumentManagement) {
 
 // Tests opening and immediately closing an offscreen document (so that the
 // close happens before it's fully loaded). Regression test for
-// https://crbug.com/1450784.
+// https://crbug.com/40065191.
 IN_PROC_BROWSER_TEST_F(OffscreenApiTest, OpenAndImmediatelyCloseDocument) {
   static constexpr char kManifest[] =
       R"({
@@ -493,12 +493,14 @@ IN_PROC_BROWSER_TEST_F(OffscreenApiTest, LifetimeEnforcement) {
          }
 
          chrome.runtime.onMessage.addListener((msg) => {
-           if (msg == 'play')
+           if (msg == 'play') {
              playAudio();
+           }
            else if (msg == 'stop')
              stopAudio();
-           else
+           else {
              console.error('Unexpected message: ' + msg);
+           }
          }))";
   TestExtensionDir test_dir;
   test_dir.WriteManifest(kManifest);

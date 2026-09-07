@@ -57,6 +57,7 @@ bool SupportsInvalidation(CSSSelector::PseudoType type) {
     case CSSSelector::kPseudoState:
     case CSSSelector::kPseudoLink:
     case CSSSelector::kPseudoVisited:
+    case CSSSelector::kPseudoNavigationSource:
     case CSSSelector::kPseudoAny:
     case CSSSelector::kPseudoWebkitAnyLink:
     case CSSSelector::kPseudoAnyLink:
@@ -73,6 +74,7 @@ bool SupportsInvalidation(CSSSelector::PseudoType type) {
     case CSSSelector::kPseudoActiveOption:
     case CSSSelector::kPseudoChecked:
     case CSSSelector::kPseudoEnabled:
+    case CSSSelector::kPseudoFiltered:
     case CSSSelector::kPseudoFullPageMedia:
     case CSSSelector::kPseudoDefault:
     case CSSSelector::kPseudoDisabled:
@@ -94,16 +96,17 @@ bool SupportsInvalidation(CSSSelector::PseudoType type) {
     case CSSSelector::kPseudoCheckMark:
     case CSSSelector::kPseudoBefore:
     case CSSSelector::kPseudoAfter:
-    case CSSSelector::kPseudoInterestHint:
+    case CSSSelector::kPseudoInterestButton:
+    case CSSSelector::kPseudoExpandIcon:
     case CSSSelector::kPseudoPickerIcon:
     case CSSSelector::kPseudoMarker:
     case CSSSelector::kPseudoModal:
-    case CSSSelector::kPseudoSelectorFragmentAnchor:
     case CSSSelector::kPseudoBackdrop:
     case CSSSelector::kPseudoLang:
     case CSSSelector::kPseudoDir:
     case CSSSelector::kPseudoNot:
     case CSSSelector::kPseudoOverscrollAreaParent:
+    case CSSSelector::kPseudoOverscrollBackdrop:
     case CSSSelector::kPseudoPlaceholder:
     case CSSSelector::kPseudoDetailsContent:
     case CSSSelector::kPseudoPermissionIcon:
@@ -136,10 +139,8 @@ bool SupportsInvalidation(CSSSelector::PseudoType type) {
     case CSSSelector::kPseudoFullScreen:
     case CSSSelector::kPseudoFullScreenAncestor:
     case CSSSelector::kPseudoFullscreen:
-    case CSSSelector::kPseudoPaused:
     case CSSSelector::kPseudoPermissionGranted:
     case CSSSelector::kPseudoPictureInPicture:
-    case CSSSelector::kPseudoPlaying:
     case CSSSelector::kPseudoInRange:
     case CSSSelector::kPseudoOutOfRange:
     case CSSSelector::kPseudoWebKitCustomElement:
@@ -156,15 +157,18 @@ bool SupportsInvalidation(CSSSelector::PseudoType type) {
     case CSSSelector::kPseudoMultiSelectFocus:
     case CSSSelector::kPseudoHostHasNonAutoAppearance:
     case CSSSelector::kPseudoOpen:
-    case CSSSelector::kPseudoOverscrollTarget:
+    case CSSSelector::kPseudoOverscrollOpen:
     case CSSSelector::kPseudoDialogInTopLayer:
     case CSSSelector::kPseudoPicker:
+    case CSSSelector::kPseudoSelectListbox:
     case CSSSelector::kPseudoPopoverInTopLayer:
     case CSSSelector::kPseudoPopoverOpen:
     case CSSSelector::kPseudoMenulistPopoverWithMenubarAnchor:
     case CSSSelector::kPseudoMenulistPopoverWithMenulistAnchor:
+    case CSSSelector::kPseudoSelectContainsInput:
     case CSSSelector::kPseudoSelectHasSlottedButton:
     case CSSSelector::kPseudoSlotted:
+    case CSSSelector::kPseudoUnbounded:
     case CSSSelector::kPseudoVideoPersistent:
     case CSSSelector::kPseudoVideoPersistentAncestor:
     case CSSSelector::kPseudoXrOverlay:
@@ -190,8 +194,16 @@ bool SupportsInvalidation(CSSSelector::PseudoType type) {
     case CSSSelector::kPseudoInterestTarget:
     case CSSSelector::kPseudoHasSlotted:
     case CSSSelector::kPseudoLinkTo:
+    case CSSSelector::kPseudoPlaying:
+    case CSSSelector::kPseudoPaused:
+    case CSSSelector::kPseudoSeeking:
+    case CSSSelector::kPseudoBuffering:
+    case CSSSelector::kPseudoStalled:
+    case CSSSelector::kPseudoMuted:
+    case CSSSelector::kPseudoVolumeLocked:
     case CSSSelector::kPseudoToolFormActive:
     case CSSSelector::kPseudoToolSubmitActive:
+    case CSSSelector::kPseudoSkeleton:
       return true;
     case CSSSelector::kPseudoUnknown:
     case CSSSelector::kPseudoLeftPage:
@@ -275,10 +287,10 @@ RuleInvalidationDataVisitor<VisitorType>::RuleInvalidationDataVisitor(
 template <RuleInvalidationDataVisitorType VisitorType>
 void RuleInvalidationDataVisitor<VisitorType>::InvalidationSetFeatures::Merge(
     const InvalidationSetFeatures& other) {
-  classes.AppendVector(other.classes);
-  attributes.AppendVector(other.attributes);
-  custom_pseudo_names.AppendVector(other.custom_pseudo_names);
-  ids.AppendVector(other.ids);
+  classes.append_range(other.classes);
+  attributes.append_range(other.attributes);
+  custom_pseudo_names.append_range(other.custom_pseudo_names);
+  ids.append_range(other.ids);
   // Tag names that have been added to an invalidation set for an ID, a class,
   // or an attribute are called "emitted" tag names. Emitted tag names need to
   // go in a separate vector in order to correctly track which tag names to
@@ -291,11 +303,11 @@ void RuleInvalidationDataVisitor<VisitorType>::InvalidationSetFeatures::Merge(
   // Hence, when processing the rightmost :is(), we end up with li in the
   // emitted_tag_names vector, and span and ol in the regular tag_names vector.
   if (other.has_features_for_rule_set_invalidation) {
-    emitted_tag_names.AppendVector(other.tag_names);
+    emitted_tag_names.append_range(other.tag_names);
   } else {
-    tag_names.AppendVector(other.tag_names);
+    tag_names.append_range(other.tag_names);
   }
-  emitted_tag_names.AppendVector(other.emitted_tag_names);
+  emitted_tag_names.append_range(other.emitted_tag_names);
   max_direct_adjacent_selectors = std::max(max_direct_adjacent_selectors,
                                            other.max_direct_adjacent_selectors);
   invalidation_flags.Merge(other.invalidation_flags);

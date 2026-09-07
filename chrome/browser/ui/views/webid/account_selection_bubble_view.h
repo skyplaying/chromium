@@ -12,7 +12,7 @@
 #include "content/public/browser/webid/identity_request_account.h"
 #include "content/public/browser/webid/identity_request_dialog_controller.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
-#include "third_party/blink/public/mojom/webid/federated_auth_request.mojom.h"
+#include "third_party/blink/public/mojom/webid/federated_request.mojom.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
@@ -123,8 +123,7 @@ class AccountSelectionBubbleView : public views::BoxLayoutView,
   // Adds the accounts provided to the given view. This method does not reorder
   // the accounts, and assumes they are provided in the correct order.
   void AddAccounts(const std::vector<IdentityRequestAccountPtr>& accounts,
-                   views::View* accounts_content,
-                   bool is_multi_idp);
+                   views::View* accounts_content);
 
   // Invoked whenever the expandable account chooser is scrolled.
   void OnExpandableAccountsScrolled();

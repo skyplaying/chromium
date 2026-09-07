@@ -4,9 +4,9 @@
 
 #import "base/ios/ios_util.h"
 #import "base/test/metrics/user_action_tester.h"
-#import "components/autofill/core/common/autofill_payments_features.h"
 #import "components/strings/grit/components_strings.h"
 #import "ios/chrome/browser/autofill/ui_bundled/autofill_app_interface.h"
+#import "ios/chrome/browser/device_reauth/test/reauthentication_app_interface.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/chrome/test/earl_grey/chrome_earl_grey.h"
 #import "ios/chrome/test/earl_grey/chrome_earl_grey_ui.h"
@@ -23,6 +23,7 @@
 using chrome_test_util::ButtonWithAccessibilityLabel;
 using chrome_test_util::ButtonWithAccessibilityLabelId;
 using chrome_test_util::NavigationBarDoneButton;
+using chrome_test_util::NavigationBarEditButton;
 using chrome_test_util::PaymentMethodsButton;
 using chrome_test_util::TextFieldForCellWithLabelId;
 
@@ -35,15 +36,6 @@ namespace {
 // Matcher for the 'Nickname' text field in the edit credit card view.
 id<GREYMatcher> NicknameTextField() {
   return TextFieldForCellWithLabelId(IDS_IOS_AUTOFILL_NICKNAME);
-}
-
-// Matcher for the edit button in the navigation bar.
-id<GREYMatcher> NavigationBarEditButton() {
-  return grey_allOf(
-      ButtonWithAccessibilityLabelId(IDS_IOS_NAVIGATION_BAR_EDIT_BUTTON),
-      grey_not(chrome_test_util::TabGridEditButton()),
-      grey_kindOfClass([UIButton class]),
-      grey_ancestor(grey_kindOfClass([UINavigationBar class])), nil);
 }
 
 // Returns an action to scroll down (swipe up).
@@ -65,26 +57,26 @@ id<GREYMatcher> CvcTextField() {
 
 @implementation AutofillEditCreditCardTestCase
 
-- (AppLaunchConfiguration)appConfigurationForTestCase {
-  AppLaunchConfiguration config;
-  config.features_enabled.push_back(
-      autofill::features::kAutofillEnableCvcStorageAndFilling);
-  // Add feature configs here.
-  return config;
-}
-
 - (void)setUp {
   [super setUp];
 
-  [AutofillAppInterface setUpMockReauthenticationModule];
-  [AutofillAppInterface mockReauthenticationModuleCanAttempt:YES];
+  [ReauthenticationAppInterface mockReauthenticationModuleCanAttempt:YES];
   [AutofillAppInterface setMandatoryReauthEnabled:YES];
 
   [AutofillAppInterface clearCreditCardStore];
   NSString* lastDigits = [AutofillAppInterface saveLocalCreditCard];
 
   [ChromeEarlGreyUI openSettingsMenu];
-  [ChromeEarlGreyUI tapSettingsMenuButton:PaymentMethodsButton()];
+  if ([ChromeEarlGrey isYourSavedInfoSettingsPageIosEnabled]) {
+    [ChromeEarlGreyUI
+        tapSettingsMenuButton:grey_accessibilityID(
+                                  @"kSettingsAutofillAndPasswordsCellId")];
+    [[EarlGrey
+        selectElementWithMatcher:PaymentMethodsButton()]
+        performAction:grey_tap()];
+  } else {
+    [ChromeEarlGreyUI tapSettingsMenuButton:PaymentMethodsButton()];
+  }
 
   [[EarlGrey selectElementWithMatcher:grey_accessibilityLabel(lastDigits)]
       performAction:grey_tap()];
@@ -94,7 +86,6 @@ id<GREYMatcher> CvcTextField() {
 
 - (void)tearDownHelper {
   [AutofillAppInterface clearCreditCardStore];
-  [AutofillAppInterface clearMockReauthenticationModule];
   [super tearDownHelper];
 }
 
@@ -204,31 +195,31 @@ id<GREYMatcher> CvcTextField() {
 
 @implementation AutofillEditCreditCardCvcMetricTestCase
 
-- (AppLaunchConfiguration)appConfigurationForTestCase {
-  AppLaunchConfiguration config;
-  config.features_enabled.push_back(
-      autofill::features::kAutofillEnableCvcStorageAndFilling);
-  return config;
-}
-
 - (void)setUp {
   [super setUp];
-  [AutofillAppInterface setUpMockReauthenticationModule];
-  [AutofillAppInterface mockReauthenticationModuleCanAttempt:YES];
+  [ReauthenticationAppInterface mockReauthenticationModuleCanAttempt:YES];
   [AutofillAppInterface setMandatoryReauthEnabled:YES];
   [AutofillAppInterface clearCreditCardStore];
 }
 
 - (void)tearDownHelper {
   [AutofillAppInterface clearCreditCardStore];
-  [AutofillAppInterface clearMockReauthenticationModule];
   [super tearDownHelper];
 }
 
 // Helper to navigate to the edit screen for a given card
 - (void)navigateToEditCard:(NSString*)lastDigits cvcIsSaved:(BOOL)cvcIsSaved {
   [ChromeEarlGreyUI openSettingsMenu];
-  [ChromeEarlGreyUI tapSettingsMenuButton:PaymentMethodsButton()];
+  if ([ChromeEarlGrey isYourSavedInfoSettingsPageIosEnabled]) {
+    [ChromeEarlGreyUI
+        tapSettingsMenuButton:grey_accessibilityID(
+                                  @"kSettingsAutofillAndPasswordsCellId")];
+    [[EarlGrey
+        selectElementWithMatcher:PaymentMethodsButton()]
+        performAction:grey_tap()];
+  } else {
+    [ChromeEarlGreyUI tapSettingsMenuButton:PaymentMethodsButton()];
+  }
 
   // Construct the expected accessibility label
   NSString* expectedLabel = lastDigits;

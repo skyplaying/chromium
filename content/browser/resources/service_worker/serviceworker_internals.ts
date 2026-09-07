@@ -39,6 +39,7 @@ interface Client {
 
 interface Version {
   clients: Client[];
+  devtools_allowed?: boolean;
   devtools_agent_route_id: number;
   fetch_handler_existence: string;
   fetch_handler_type: string;
@@ -141,6 +142,8 @@ function getVersionHtml(version: Version, partitionId: number) {
             Stop
           </cr-button>
           <cr-button data-command="inspect"
+              ?disabled="${!version.devtools_allowed}"
+              title="${!version.devtools_allowed ? 'Disabled by enterprise policy' : ''}"
               @click="${onButtonClick.bind(null, {
                 process_host_id: version.process_host_id,
                 devtools_agent_route_id: version.devtools_agent_route_id,
@@ -310,11 +313,11 @@ function onOptions(options: Options) {
 }
 
 
-async function onButtonClick(cmdArgs: Record<string, any>, e: Event) {
+async function onButtonClick(cmdArgs: Record<string, unknown>, e: Event) {
   const command = (e.target as HTMLElement).dataset['command'];
   assert(command);
   assert(COMMANDS.includes(command));
-  await sendWithPromise(command, cmdArgs);
+  await sendWithPromise<void>(command, cmdArgs);
   update();
 }
 
@@ -431,7 +434,7 @@ function renderPartitionData(partitionId: number) {
 
 
 function onErrorReported(
-    partitionId: number, versionId: string, errorInfo: any) {
+    partitionId: number, versionId: string, errorInfo: unknown) {
   // Update data model.
   addLogForversion(
       partitionId, versionId, 'Error: ' + JSON.stringify(errorInfo) + '\n');
@@ -442,7 +445,7 @@ function onErrorReported(
 
 
 function onConsoleMessageReported(
-    partitionId: number, versionId: string, message: any) {
+    partitionId: number, versionId: string, message: unknown) {
   // Update data model.
   addLogForversion(
       partitionId, versionId, 'Console: ' + JSON.stringify(message) + '\n');
@@ -471,7 +474,7 @@ function initialize() {
 
 
 function update() {
-  sendWithPromise('GetOptions').then(onOptions);
+  sendWithPromise<Options>('GetOptions').then(onOptions);
   chrome.send('getAllRegistrations');
 }
 

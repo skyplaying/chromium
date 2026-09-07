@@ -9,7 +9,6 @@ import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
-import android.os.Build;
 
 import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
@@ -33,16 +32,20 @@ import java.io.IOException;
  * enables A/B experiments, progressive configuration rollouts, etc.
  *
  * <p>Currently, the interface with the host system is defined as follows:
+ *
  * <ol>
- * <li>The Android system image must provide an Android app that exposes a service matching the
- *     {@link #FLAGS_FILE_PROVIDER_INTENT_ACTION} action.
- * <li>That Android app must expose a directory named after {@link #FLAGS_FILE_DIR_NAME} under the
- *     app's {@link ApplicationInfo#deviceProtectedDataDir}.
- * <li>That directory must contain a file named after {@link #FLAGS_FILE_NAME} that must be readable
- *     by the process running {@link #load}.
- * <li>The flag values are obtained from the contents of that file. The format is a binary proto
- *     that can be read through {@link Flags#parseDelimitedFrom} - see `flags.proto` for details.
+ *   <li>The Android system image must provide an Android app that exposes a service matching the
+ *       {@link #FLAGS_FILE_PROVIDER_INTENT_ACTION} action.
+ *   <li>That Android app must expose a directory named after {@link #FLAGS_FILE_DIR_NAME} under the
+ *       app's {@link ApplicationInfo#deviceProtectedDataDir}.
+ *   <li>That directory must contain a file named after {@link #FLAGS_FILE_NAME} that must be
+ *       readable by the process running {@link #load}.
+ *   <li>The flag values are obtained from the contents of that file. The format is a binary proto
+ *       that can be read through {@link Flags#parseDelimitedFrom} - see `flags.proto` for details.
  * </ol>
+ *
+ * <p>Note: Android versions prior to N (API 24) do not support the necessary APIs for the host
+ * system to expose a flags file provider. This class will return empty flags on those versions.
  *
  * @see HttpFlagsInterceptor
  */
@@ -78,19 +81,18 @@ public final class HttpFlagsLoader {
             if (providerApplicationInfo == null) return null;
             Log.d(
                     TAG,
-                    String.format(
-                            "Found application exporting HTTP flags: %s",
-                            providerApplicationInfo.packageName));
+                    "Found application exporting HTTP flags: %s",
+                    providerApplicationInfo.packageName);
 
             File flagsFile = getFlagsFileFromProvider(providerApplicationInfo);
-            Log.d(TAG, String.format("HTTP flags file path: %s", flagsFile.getAbsolutePath()));
+            Log.d(TAG, "HTTP flags file path: %s", flagsFile.getAbsolutePath());
 
             Flags flags = loadFlagsFile(flagsFile);
             if (flags == null) return null;
             if (Log.isLoggable(TAG, Log.DEBUG)) {
                 // Gated behind isLoggable() because this can be surprisingly expensive to log,
                 // especially if we have many flags.
-                Log.d(TAG, String.format("Successfully loaded HTTP flags: %s", flags));
+                Log.d(TAG, "Successfully loaded HTTP flags: %s", flags);
             }
 
             return flags;
@@ -180,10 +182,7 @@ public final class HttpFlagsLoader {
     private static File getFlagsFileFromProvider(ApplicationInfo providerApplicationInfo) {
         return new File(
                 new File(
-                        new File(
-                                Build.VERSION.SDK_INT >= 24
-                                        ? providerApplicationInfo.deviceProtectedDataDir
-                                        : providerApplicationInfo.dataDir),
+                        new File(providerApplicationInfo.deviceProtectedDataDir),
                         FLAGS_FILE_DIR_NAME),
                 FLAGS_FILE_NAME);
     }

@@ -8,7 +8,6 @@
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/browser/shared/ui/table_view/content_configuration/colorful_symbol_content_configuration.h"
 #import "ios/chrome/browser/shared/ui/table_view/content_configuration/table_view_cell_content_configuration.h"
-#import "ios/chrome/browser/shared/ui/table_view/legacy_chrome_table_view_styler.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/common/ui/table_view/table_view_cells_constants.h"
 #import "testing/gtest/include/gtest/gtest.h"
@@ -31,16 +30,14 @@ TEST_F(TableViewDetailIconItemTest, ItemProperties) {
   item.text = text;
   item.detailText = detail_text;
   item.iconImage =
-      DefaultSymbolWithPointSize(kMagnifyingglassSymbol, kTestIconPointSize);
+      SymbolWithPointSize(SymbolMagnifyingglass, kTestIconPointSize);
   item.iconTintColor = UIColor.whiteColor;
   item.iconBackgroundColor = UIColor.blackColor;
   item.textLayoutConstraintAxis = UILayoutConstraintAxisVertical;
 
   LegacyTableViewCell* cell = [[[item cellClass] alloc] init];
   ASSERT_TRUE([cell isMemberOfClass:[LegacyTableViewCell class]]);
-
-  ChromeTableViewStyler* styler = [[ChromeTableViewStyler alloc] init];
-  [item configureCell:cell withStyler:styler];
+  [item configureCell:cell];
 
   ASSERT_TRUE([cell.contentConfiguration
       isMemberOfClass:TableViewCellContentConfiguration.class]);
@@ -61,9 +58,8 @@ TEST_F(TableViewDetailIconItemTest, ItemProperties) {
           leading_config);
 
   // Check image-based property.
-  EXPECT_NSEQ(
-      DefaultSymbolWithPointSize(kMagnifyingglassSymbol, kTestIconPointSize),
-      symbol_config.symbolImage);
+  EXPECT_NSEQ(SymbolWithPointSize(SymbolMagnifyingglass, kTestIconPointSize),
+              symbol_config.symbolImage);
   EXPECT_EQ(UIColor.whiteColor, symbol_config.symbolTintColor);
   EXPECT_EQ(UIColor.blackColor, symbol_config.symbolBackgroundColor);
 }
@@ -79,9 +75,7 @@ TEST_F(TableViewDetailIconItemTest, ItemDefaultDetailTextNumberOfLines) {
 
   LegacyTableViewCell* cell = [[[item cellClass] alloc] init];
   ASSERT_TRUE([cell isMemberOfClass:[LegacyTableViewCell class]]);
-
-  ChromeTableViewStyler* styler = [[ChromeTableViewStyler alloc] init];
-  [item configureCell:cell withStyler:styler];
+  [item configureCell:cell];
 
   ASSERT_TRUE([cell.contentConfiguration
       isMemberOfClass:TableViewCellContentConfiguration.class]);
@@ -89,9 +83,9 @@ TEST_F(TableViewDetailIconItemTest, ItemDefaultDetailTextNumberOfLines) {
       base::apple::ObjCCastStrict<TableViewCellContentConfiguration>(
           cell.contentConfiguration);
 
-  // Check that the default detailText's UILabel has one as the default number
-  // of lines.
-  EXPECT_EQ(1, configuration.titleNumberOfLines);
+  // Check that the default number of lines for title is two and subtitle is
+  // one.
+  EXPECT_EQ(2, configuration.titleNumberOfLines);
   EXPECT_EQ(1, configuration.subtitleNumberOfLines);
 }
 
@@ -110,9 +104,7 @@ TEST_F(TableViewDetailIconItemTest, ItemWithDetailTextNumberOfLines) {
 
   LegacyTableViewCell* cell = [[[item cellClass] alloc] init];
   ASSERT_TRUE([cell isMemberOfClass:[LegacyTableViewCell class]]);
-
-  ChromeTableViewStyler* styler = [[ChromeTableViewStyler alloc] init];
-  [item configureCell:cell withStyler:styler];
+  [item configureCell:cell];
 
   ASSERT_TRUE([cell.contentConfiguration
       isMemberOfClass:TableViewCellContentConfiguration.class]);
@@ -121,13 +113,13 @@ TEST_F(TableViewDetailIconItemTest, ItemWithDetailTextNumberOfLines) {
           cell.contentConfiguration);
 
   EXPECT_NSEQ(text, configuration.title);
-  EXPECT_EQ(1, configuration.titleNumberOfLines);
+  EXPECT_EQ(2, configuration.titleNumberOfLines);
   EXPECT_NSEQ(detail_text, configuration.subtitle);
   EXPECT_EQ(0, configuration.subtitleNumberOfLines);
   EXPECT_NSEQ(nil, configuration.trailingText);
 
   item.textLayoutConstraintAxis = UILayoutConstraintAxisHorizontal;
-  [item configureCell:cell withStyler:styler];
+  [item configureCell:cell];
 
   configuration =
       base::apple::ObjCCastStrict<TableViewCellContentConfiguration>(
@@ -136,7 +128,7 @@ TEST_F(TableViewDetailIconItemTest, ItemWithDetailTextNumberOfLines) {
   // Check that the if layout is set to the horizontal axis, then we ignore the
   // `detailTextNumberOfLines` property.
   EXPECT_NSEQ(text, configuration.title);
-  EXPECT_EQ(1, configuration.titleNumberOfLines);
+  EXPECT_EQ(2, configuration.titleNumberOfLines);
   EXPECT_NSEQ(nil, configuration.subtitle);
   EXPECT_EQ(0, configuration.subtitleNumberOfLines);
   EXPECT_NSEQ(detail_text, configuration.trailingText);

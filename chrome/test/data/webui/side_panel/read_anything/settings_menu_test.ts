@@ -4,26 +4,39 @@
 
 import 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
 
-import {KEYBOARD_NAV_CLASS, MENU_SHOW_DELAY_MS, SUBMENU_SHOW_DELAY_MS} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
+import {KEYBOARD_NAV_CLASS, LINE_FOCUS_FEATURE_NAME, MENU_SHOW_DELAY_MS, ReadAnythingSettingsChange, SUBMENU_SHOW_DELAY_MS, userEducationProxyFactory} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
 import type {SettingsMenuElement} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
 import {SettingsOption, ToolbarEvent} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
-import {assertEquals, assertFalse, assertTrue} from 'chrome-untrusted://webui-test/chai_assert.js';
+import {loadTimeData} from 'chrome-untrusted://resources/js/load_time_data.js';
+import {assertDeepEquals, assertEquals, assertFalse, assertNotEquals, assertTrue} from 'chrome-untrusted://webui-test/chai_assert.js';
 import {keyDownOn} from 'chrome-untrusted://webui-test/keyboard_mock_interactions.js';
 import {MockTimer} from 'chrome-untrusted://webui-test/mock_timer.js';
-import {eventToPromise, microtasksFinished} from 'chrome-untrusted://webui-test/test_util.js';
+import {TestUserEducationMixedTrustHandler} from 'chrome-untrusted://webui-test/test_user_education_mixed_trust_handler.js';
+import {eventToPromise, microtasksFinished, whenAttributeIs} from 'chrome-untrusted://webui-test/test_util.js';
 
-import {FakeReadingMode} from './fake_reading_mode.js';
-
+import {setupTestEnvironment} from './common.js';
+import type {TestMetricsBrowserProxy} from './test_metrics_browser_proxy.js';
+import type {TestVisualBrowserProxy} from './test_visual_browser_proxy.js';
 
 suite('SettingsMenuElement', () => {
   let settingsMenu: SettingsMenuElement;
+  let metrics: TestMetricsBrowserProxy;
+  let userEducationHandler: TestUserEducationMixedTrustHandler;
+  let visualBrowserProxy: TestVisualBrowserProxy;
+
+  function queryLinksToggle(): HTMLButtonElement|null {
+    const actionMenu = settingsMenu.$.lazyMenu.get();
+    const menuItems =
+        Array.from(actionMenu.querySelectorAll<HTMLButtonElement>('.menu-row'));
+    return menuItems.find(item => item.id === SettingsOption.LINKS) || null;
+  }
 
   setup(async () => {
-    document.body.innerHTML = window.trustedTypes!.emptyHTML;
-    const readingMode = new FakeReadingMode();
-    chrome.readingMode = readingMode as unknown as typeof chrome.readingMode;
-    chrome.readingMode.imagesFeatureEnabled = true;
-    chrome.readingMode.isLineFocusEnabled = true;
+    const result = setupTestEnvironment({lineFocusEnabled: true});
+    visualBrowserProxy = result.visualBrowserProxy;
+    metrics = result.metrics;
+    userEducationHandler = new TestUserEducationMixedTrustHandler();
+    userEducationProxyFactory.setInstance({handler: userEducationHandler});
 
     settingsMenu = document.createElement('settings-menu');
     settingsMenu.id = 'settingsMenu';
@@ -37,10 +50,12 @@ suite('SettingsMenuElement', () => {
     await microtasksFinished();
   });
 
-  test('click outside fires close-all-menus event', () => {
-    let closeWasCalled = false;
-    document.addEventListener(
-        ToolbarEvent.CLOSE_ALL_MENUS, () => closeWasCalled = true);
+  teardown(() => {
+    settingsMenu.close();
+  });
+
+  test('click outside fires close-all-menus event', async () => {
+    const whenFired = eventToPromise(ToolbarEvent.CLOSE_ALL_MENUS, document);
 
     document.dispatchEvent(new PointerEvent('click', {
       bubbles: true,
@@ -48,9 +63,7 @@ suite('SettingsMenuElement', () => {
       cancelable: true,
       view: window,
     }));
-    assertTrue(
-        closeWasCalled,
-        'Clicking outside should fire the close-all-menus event');
+    await whenFired;
   });
 
   test('click inside does NOT fires close-all-menus event', () => {
@@ -109,25 +122,38 @@ suite('SettingsMenuElement', () => {
         assertEquals(8, submenuEvents);
       });
 
-  test('links event is fired when links item is clicked', () => {
+  test('with improved ui flag enabled', async () => {
+    visualBrowserProxy.readAnythingImprovedUiEnabled = true;
+    settingsMenu.isImmersiveMode = true;
+    await microtasksFinished();
+
+    const actionMenu = settingsMenu.$.lazyMenu.get();
+    const menuItems =
+        Array.from(actionMenu.querySelectorAll<HTMLButtonElement>('.menu-row'));
+    const ids = menuItems.map(item => item.id);
+    assertTrue(ids.includes(SettingsOption.APPEARANCE));
+    assertFalse(ids.includes(SettingsOption.COLOR));
+    assertFalse(ids.includes(SettingsOption.PRESENTATION));
+  });
+
+  test('links event is fired when links item is clicked', async () => {
     const actionMenu = settingsMenu.$.lazyMenu.get();
     const menuItems =
         Array.from(actionMenu.querySelectorAll<HTMLButtonElement>('.menu-row'));
     const targetItem = menuItems.find(item => item.id === SettingsOption.LINKS);
     assertTrue(!!targetItem);
 
-    let linksEventWasFired = false;
-    settingsMenu.addEventListener(
-        ToolbarEvent.LINKS, () => linksEventWasFired = true);
-    let linkEnabledTogled = false;
-    chrome.readingMode.onLinksEnabledToggled = () => linkEnabledTogled = true;
-
+    const whenFired = eventToPromise(ToolbarEvent.LINKS, settingsMenu);
     targetItem.click();
-    assertTrue(linksEventWasFired);
-    assertTrue(linkEnabledTogled);
+    await whenFired;
+    assertEquals(1, visualBrowserProxy.getCallCount('onLinksEnabledToggled'));
+    assertEquals(
+        ReadAnythingSettingsChange.LINKS_ENABLED_CHANGE,
+        await metrics.whenCalled('recordTextSettingsChange'));
+    assertEquals(1, metrics.getCallCount('recordTextSettingsChange'));
   });
 
-  test('images event is fired when images item is clicked', () => {
+  test('images event is fired when images item is clicked', async () => {
     const actionMenu = settingsMenu.$.lazyMenu.get();
     const menuItems =
         Array.from(actionMenu.querySelectorAll<HTMLButtonElement>('.menu-row'));
@@ -135,16 +161,53 @@ suite('SettingsMenuElement', () => {
         menuItems.find(item => item.id === SettingsOption.IMAGES);
     assertTrue(!!targetItem);
 
-    let imagesEventWasFired = false;
-    settingsMenu.addEventListener(
-        ToolbarEvent.IMAGES, () => imagesEventWasFired = true);
-    let imagesEnabledTogled = false;
-    chrome.readingMode.onImagesEnabledToggled = () => imagesEnabledTogled =
-        true;
+    const whenFired = eventToPromise(ToolbarEvent.IMAGES, settingsMenu);
+    targetItem.click();
+    await whenFired;
+    assertEquals(1, visualBrowserProxy.getCallCount('onImagesEnabledToggled'));
+    assertEquals(
+        ReadAnythingSettingsChange.IMAGES_ENABLED_CHANGE,
+        await metrics.whenCalled('recordTextSettingsChange'));
+    assertEquals(1, metrics.getCallCount('recordTextSettingsChange'));
+  });
+
+  test('images toggle is disabled when speech is active', async () => {
+    const actionMenu = settingsMenu.$.lazyMenu.get();
+    const menuItems =
+        Array.from(actionMenu.querySelectorAll<HTMLButtonElement>('.menu-row'));
+    const targetItem =
+        menuItems.find(item => item.id === SettingsOption.IMAGES);
+    assertTrue(!!targetItem);
+
+    settingsMenu.isSpeechActive = true;
+    await microtasksFinished();
+
+    assertTrue(targetItem.disabled);
+    const toggle = targetItem.querySelector('cr-toggle');
+    assertTrue(!!toggle);
+    assertTrue(toggle.disabled);
 
     targetItem.click();
-    assertTrue(imagesEventWasFired);
-    assertTrue(imagesEnabledTogled);
+    assertEquals(0, visualBrowserProxy.getCallCount('onImagesEnabledToggled'));
+  });
+
+  test('links toggle is disabled when speech is active', async () => {
+    const actionMenu = settingsMenu.$.lazyMenu.get();
+    const menuItems =
+        Array.from(actionMenu.querySelectorAll<HTMLButtonElement>('.menu-row'));
+    const targetItem = menuItems.find(item => item.id === SettingsOption.LINKS);
+    assertTrue(!!targetItem);
+
+    settingsMenu.isSpeechActive = true;
+    await microtasksFinished();
+
+    assertTrue(targetItem.disabled);
+    const toggle = targetItem.querySelector('cr-toggle');
+    assertTrue(!!toggle);
+    assertTrue(toggle.disabled);
+
+    targetItem.click();
+    assertEquals(0, visualBrowserProxy.getCallCount('onLinksEnabledToggled'));
   });
 
   test('moving the mouse removes keyboard-nav class', () => {
@@ -201,12 +264,14 @@ suite('SettingsMenuElement', () => {
         assertTrue(!!targetItem);
         targetItem.click();
 
-        const whenFired =
+        let whenFired =
             eventToPromise(ToolbarEvent.CLOSE_SUBMENU_REQUESTED, settingsMenu);
         keyDownOn(settingsMenu, 0, undefined, 'Escape');
         await whenFired;
 
         targetItem.click();
+        whenFired =
+            eventToPromise(ToolbarEvent.CLOSE_SUBMENU_REQUESTED, settingsMenu);
         keyDownOn(settingsMenu, 0, undefined, 'ArrowLeft');
         await whenFired;
       });
@@ -220,16 +285,17 @@ suite('SettingsMenuElement', () => {
     assertTrue(!!targetItem);
 
     let openSubmenuWasFiredAfterClose = false;
-    actionMenu.addEventListener(ToolbarEvent.OPEN_SETTINGS_SUBMENU, () => {
+    settingsMenu.addEventListener(ToolbarEvent.OPEN_SETTINGS_SUBMENU, () => {
       openSubmenuWasFiredAfterClose = true;
     });
 
     const timer = new MockTimer();
+    timer.install();
     targetItem.dispatchEvent(new PointerEvent(
         'pointerenter', {bubbles: true, cancelable: true, view: window}));
-    timer.tick(SUBMENU_SHOW_DELAY_MS - 1);
-    actionMenu.close();
-    timer.tick(1);
+    timer.tick(MENU_SHOW_DELAY_MS - 1);
+    settingsMenu.close();
+    timer.tick(MENU_SHOW_DELAY_MS + 1);
 
     assertFalse(openSubmenuWasFiredAfterClose);
     timer.uninstall();
@@ -276,8 +342,10 @@ suite('SettingsMenuElement', () => {
   });
 
   test('forward arrow is ignored when focus is on previewplaybutton', () => {
-    // Pretend we are in Voice Selection submenu.
-    settingsMenu['currentOpenId_'] = SettingsOption.VOICE_SELECTION;
+    // Open Voice Selection submenu.
+    const voiceItem = settingsMenu.$.lazyMenu.get().querySelector<HTMLButtonElement>(
+        `#${SettingsOption.VOICE_SELECTION}`)!;
+    voiceItem.click();
 
     // Move focus away from settings menu row.
     const dummySubmenuElement = document.createElement('button');
@@ -295,5 +363,266 @@ suite('SettingsMenuElement', () => {
 
     // Verify that the settings menu did NOT try to close the submenu.
     assertFalse(event.defaultPrevented, 'Should not have canceled the event');
+  });
+
+  test('links toggle has separator when visible', async () => {
+    settingsMenu.settingsPrefs = {...settingsMenu.settingsPrefs};
+    await microtasksFinished();
+
+    const linksToggle = queryLinksToggle();
+    assertTrue(!!linksToggle);
+    const previous = linksToggle.previousElementSibling;
+    assertTrue(!!previous);
+    assertEquals('HR', previous.tagName);
+    assertTrue(previous.classList.contains('separator'));
+  });
+
+
+  test('menu items have correct aria-haspopup attribute', () => {
+    const actionMenu = settingsMenu.$.lazyMenu.get();
+    const menuItems =
+        Array.from(actionMenu.querySelectorAll<HTMLButtonElement>('.menu-row'));
+
+    // The font menu item should have aria-haspopup="menu"
+    const fontItem = menuItems.find(item => item.id === SettingsOption.FONT);
+    assertTrue(!!fontItem);
+    assertEquals('menu', fontItem.getAttribute('aria-haspopup'));
+
+    // Links toggle should have aria-haspopup="false"
+    const linksItem = menuItems.find(item => item.id === SettingsOption.LINKS);
+    assertTrue(!!linksItem);
+    assertEquals('false', linksItem.getAttribute('aria-haspopup'));
+  });
+
+  test('menu items have correct aria-expanded attribute', async () => {
+    const actionMenu = settingsMenu.$.lazyMenu.get();
+    let menuItems =
+        Array.from(actionMenu.querySelectorAll<HTMLButtonElement>('.menu-row'));
+
+    // Submenu toggles should have aria-expanded false by default.
+    let fontItem = menuItems.find(item => item.id === SettingsOption.FONT);
+    assertTrue(!!fontItem);
+    assertEquals('false', fontItem.getAttribute('aria-expanded'));
+
+    // Toggles that are not submenus shouldn't have aria-expanded attribute.
+    const linksItem = menuItems.find(item => item.id === SettingsOption.LINKS);
+    assertTrue(!!linksItem);
+    assertFalse(linksItem.hasAttribute('aria-expanded'));
+
+    // Open the font submenu.
+    const whenFired =
+        eventToPromise(ToolbarEvent.OPEN_SETTINGS_SUBMENU, settingsMenu);
+    fontItem.click();
+    await whenFired;
+    await whenAttributeIs(fontItem, 'aria-expanded', 'true');
+    await microtasksFinished();
+
+    menuItems =
+        Array.from(actionMenu.querySelectorAll<HTMLButtonElement>('.menu-row'));
+    fontItem = menuItems.find(item => item.id === SettingsOption.FONT)!;
+    // The font item should now be expanded.
+    assertEquals('true', fontItem.getAttribute('aria-expanded'));
+    // Another submenu should still not be expanded.
+    const letterSpacingItem =
+        menuItems.find(item => item.id === SettingsOption.LETTER_SPACING);
+    assertTrue(!!letterSpacingItem);
+    assertEquals('false', letterSpacingItem.getAttribute('aria-expanded'));
+  });
+
+  test('only first toggle has separator', async () => {
+    settingsMenu.isImmersiveMode = true;
+    settingsMenu.settingsPrefs = {...settingsMenu.settingsPrefs};
+    await microtasksFinished();
+
+    const linksToggle = queryLinksToggle();
+    assertTrue(!!linksToggle);
+    const linksPrevious = linksToggle.previousElementSibling;
+    assertTrue(!!linksPrevious);
+    assertEquals('HR', linksPrevious.tagName);
+
+    const actionMenu = settingsMenu.$.lazyMenu.get();
+    const menuItems =
+        Array.from(actionMenu.querySelectorAll<HTMLButtonElement>('.menu-row'));
+    const imagesToggle =
+        menuItems.find(item => item.id === SettingsOption.IMAGES);
+    assertTrue(!!imagesToggle);
+    const imagesPrevious = imagesToggle.previousElementSibling;
+    // The previous element for the images toggle should NOT be an HR, because
+    // it's not the first toggle.
+    assertTrue(!!imagesPrevious);
+    assertNotEquals('HR', imagesPrevious.tagName);
+
+    const pinnedToggle =
+        menuItems.find(item => item.id === SettingsOption.PINNED_TO_TOOLBAR);
+    assertTrue(!!pinnedToggle);
+    const pinnedPrevious = pinnedToggle.previousElementSibling;
+    assertTrue(!!pinnedPrevious);
+    assertNotEquals('HR', pinnedPrevious.tagName);
+  });
+
+  test(
+      'improved ui menu requires isReadAnythingImprovedUiEnabled', async () => {
+        visualBrowserProxy.readAnythingImprovedUiEnabled = true;
+        settingsMenu.settingsPrefs = {...settingsMenu.settingsPrefs};
+        await microtasksFinished();
+
+        const actionMenu = settingsMenu.$.lazyMenu.get();
+        let menuItems = Array.from(
+            actionMenu.querySelectorAll<HTMLButtonElement>('.menu-row'));
+
+        assertTrue(
+            !!menuItems.find(item => item.id === SettingsOption.APPEARANCE));
+        assertTrue(!menuItems.find(item => item.id === SettingsOption.COLOR));
+
+        visualBrowserProxy.readAnythingImprovedUiEnabled = false;
+        settingsMenu.settingsPrefs = {...settingsMenu.settingsPrefs};
+        await microtasksFinished();
+
+        menuItems = Array.from(
+            actionMenu.querySelectorAll<HTMLButtonElement>('.menu-row'));
+        assertTrue(
+            !menuItems.find(item => item.id === SettingsOption.APPEARANCE));
+        assertTrue(!!menuItems.find(item => item.id === SettingsOption.COLOR));
+      });
+
+  test('LINE_FOCUS uses tools label and icon with improved ui', async () => {
+    visualBrowserProxy.readAnythingImprovedUiEnabled = true;
+    settingsMenu.settingsPrefs = {...settingsMenu.settingsPrefs};
+    await microtasksFinished();
+
+    const actionMenu = settingsMenu.$.lazyMenu.get();
+    let menuItems = Array.from(
+        actionMenu.querySelectorAll<HTMLButtonElement>('.menu-row'));
+    let lineFocusItem =
+        menuItems.find(item => item.id === SettingsOption.LINE_FOCUS);
+    assertTrue(!!lineFocusItem);
+
+    let icon = lineFocusItem.querySelector('cr-icon');
+    assertTrue(!!icon);
+    assertEquals(icon.icon, 'read-anything:service_toolbox');
+
+    let title = lineFocusItem.querySelector('.label');
+    assertTrue(!!title);
+    assertEquals(
+        title.textContent.trim(), loadTimeData.getString('toolsLabel'));
+
+    visualBrowserProxy.readAnythingImprovedUiEnabled = false;
+    settingsMenu.settingsPrefs = {...settingsMenu.settingsPrefs};
+    await microtasksFinished();
+
+    menuItems = Array.from(
+        actionMenu.querySelectorAll<HTMLButtonElement>('.menu-row'));
+    lineFocusItem =
+        menuItems.find(item => item.id === SettingsOption.LINE_FOCUS);
+    assertTrue(!!lineFocusItem);
+
+    icon = lineFocusItem.querySelector('cr-icon');
+    assertTrue(!!icon);
+    const expectedIcon = loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'read-anything:wb-incandescent' :
+        'read-anything:line-focus-old';
+    assertEquals(icon.icon, expectedIcon);
+
+    title = lineFocusItem.querySelector('.label');
+    assertTrue(!!title);
+    assertEquals(
+        title.textContent.trim(), loadTimeData.getString('lineFocusLabel'));
+  });
+
+  test('translate action fires event when clicked', async () => {
+    visualBrowserProxy.translateEntryPointEnabled = true;
+    settingsMenu.settingsPrefs = {...settingsMenu.settingsPrefs};
+    await microtasksFinished();
+
+    const actionMenu = settingsMenu.$.lazyMenu.get();
+    const menuItems =
+        Array.from(actionMenu.querySelectorAll<HTMLButtonElement>('.menu-row'));
+    const translateItem = menuItems.find(
+        item => item.id === SettingsOption.TRANSLATION_REQUESTED);
+    assertTrue(!!translateItem);
+
+    const whenFired =
+        eventToPromise(ToolbarEvent.TRANSLATION_REQUESTED, settingsMenu);
+    translateItem.click();
+    await whenFired;
+    assertFalse(actionMenu.open);
+  });
+
+  test('clicking translate closes open submenu', async () => {
+    visualBrowserProxy.translateEntryPointEnabled = true;
+    settingsMenu.settingsPrefs = {...settingsMenu.settingsPrefs};
+    await microtasksFinished();
+
+    const actionMenu = settingsMenu.$.lazyMenu.get();
+    const menuItems =
+        Array.from(actionMenu.querySelectorAll<HTMLButtonElement>('.menu-row'));
+    const fontItem = menuItems.find(item => item.id === SettingsOption.FONT);
+    const translateItem = menuItems.find(
+        item => item.id === SettingsOption.TRANSLATION_REQUESTED);
+    assertTrue(!!fontItem);
+    assertTrue(!!translateItem);
+
+    // Click fontItem to open its submenu.
+    const whenSubmenuOpened =
+        eventToPromise(ToolbarEvent.OPEN_SETTINGS_SUBMENU, settingsMenu);
+    fontItem.click();
+    await whenSubmenuOpened;
+    await microtasksFinished();
+
+    const whenFired = eventToPromise<CustomEvent<{previousId: SettingsOption}>>(
+        ToolbarEvent.CLOSE_SUBMENU_REQUESTED, settingsMenu);
+
+    // Now click the Translate action item.
+    translateItem.click();
+    const event = await whenFired;
+    assertEquals(SettingsOption.FONT, event.detail.previousId);
+  });
+
+  test(
+      'line focus item shows new badge when showLineFocusNewBadge is true',
+      async () => {
+        settingsMenu.showLineFocusNewBadge = true;
+        await microtasksFinished();
+
+        const actionMenu = settingsMenu.$.lazyMenu.get();
+        const lineFocusItem = actionMenu.querySelector<HTMLButtonElement>(
+            `#${SettingsOption.LINE_FOCUS}`);
+        assertTrue(!!lineFocusItem);
+
+        const badge = lineFocusItem.querySelector('new-badge');
+        assertTrue(!!badge);
+      });
+
+  test(
+      'line focus item hides new badge when showLineFocusNewBadge is false',
+      async () => {
+        settingsMenu.showLineFocusNewBadge = false;
+        await microtasksFinished();
+
+        const actionMenu = settingsMenu.$.lazyMenu.get();
+        const lineFocusItem = actionMenu.querySelector<HTMLButtonElement>(
+            `#${SettingsOption.LINE_FOCUS}`);
+        assertTrue(!!lineFocusItem);
+
+        const badge = lineFocusItem.querySelector('new-badge');
+        assertFalse(!!badge);
+      });
+
+  test('requests line focus new badge on open', async () => {
+    settingsMenu.close();
+    await microtasksFinished();
+    userEducationHandler.setNewBadgeResponse(LINE_FOCUS_FEATURE_NAME, true);
+    // Since setup creates a menu, clear out the number of requests.
+    userEducationHandler.reset();
+    const anchor = document.createElement('div');
+    document.body.appendChild(anchor);
+    assertEquals(0, userEducationHandler.getCallCount('maybeShowNewBadgeFor'));
+    settingsMenu.open(anchor);
+    await microtasksFinished();
+    assertEquals(1, userEducationHandler.getCallCount('maybeShowNewBadgeFor'));
+    assertDeepEquals(
+        [LINE_FOCUS_FEATURE_NAME],
+        userEducationHandler.getArgs('maybeShowNewBadgeFor'));
+    assertTrue(settingsMenu.showLineFocusNewBadge);
   });
 });

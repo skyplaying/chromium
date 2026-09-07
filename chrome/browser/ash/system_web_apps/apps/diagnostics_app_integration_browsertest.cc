@@ -3,17 +3,19 @@
 // found in the LICENSE file.
 
 #include "ash/webui/diagnostics_ui/url_constants.h"
-#include "ash/webui/system_apps/public/system_web_app_type.h"
 #include "ash/wm/window_pin_util.h"
+#include "base/check_deref.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/run_until.h"
-#include "chrome/browser/ash/browser_delegate/browser_controller.h"
 #include "chrome/browser/ash/system_web_apps/test_support/system_web_app_integration_test.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/webui/ash/diagnostics_dialog/diagnostics_dialog.h"
 #include "chrome/browser/ui/webui/ash/system_web_dialog/system_web_dialog_delegate.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "chromeos/ash/components/browser_delegate/browser_controller.h"
+#include "chromeos/ash/components/browser_delegate/browser_delegate.h"
+#include "chromeos/ash/components/system_web_apps/system_web_app_type.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -95,12 +97,15 @@ IN_PROC_BROWSER_TEST_P(DiagnosticsAppIntegrationTest, LaunchMetricsTest) {
 IN_PROC_BROWSER_TEST_P(DiagnosticsAppIntegrationTest, UsageMetricsTest) {
   WaitForTestSystemAppInstall();
 
-  Browser* system_app_browser;
+  BrowserWindowInterface* system_app_browser = nullptr;
   // Launch app and allow UI to load.
   LaunchApp(ash::SystemWebAppType::DIAGNOSTICS, &system_app_browser);
 
   // Find system browser for diagnostics and close it to trigger usage metrics.
-  EXPECT_TRUE(ash::IsSystemWebApp(system_app_browser));
+  EXPECT_TRUE(ash::IsBrowserForSystemWebApp(
+      CHECK_DEREF(ash::BrowserController::GetInstance()->GetDelegate(
+          system_app_browser)),
+      ash::SystemWebAppType::DIAGNOSTICS));
   ui_test_utils::BrowserDestroyedObserver observer(system_app_browser);
   chrome::CloseWindow(system_app_browser);
   observer.Wait();
@@ -199,8 +204,10 @@ IN_PROC_BROWSER_TEST_P(DiagnosticsAppIntegrationTest,
                        DiagnosticsAppCapturesNavigation) {
   auto* app_web_contents = LaunchDiagnosticsApp();
 
-  const auto* app_browser = ash::FindSystemWebAppBrowser(
-      profile(), ash::SystemWebAppType::DIAGNOSTICS);
+  ash::BrowserDelegate* app_browser_delegate = ash::FindSystemWebAppBrowser(
+      profile(), ash::SystemWebAppType::DIAGNOSTICS, ash::BrowserType::kApp);
+  BrowserWindowInterface* app_browser =
+      app_browser_delegate ? &app_browser_delegate->GetBrowser() : nullptr;
   EXPECT_TRUE(app_browser);
   // DiagnosticsApp launched in its own browser.
   EXPECT_NE(browser(), app_browser);
@@ -213,7 +220,7 @@ IN_PROC_BROWSER_TEST_P(DiagnosticsAppIntegrationTest,
       WindowOpenDisposition::CURRENT_TAB, /*browser_test_flags=*/0);
 
   auto* browser_web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   EXPECT_FALSE(content::EvalJs(browser_web_contents, kFindDiagnosticsAppScript)
                    .ExtractBool());
   EXPECT_TRUE(content::EvalJs(app_web_contents, kFindDiagnosticsAppScript)
@@ -226,7 +233,7 @@ IN_PROC_BROWSER_TEST_P(DiagnosticsAppIntegrationTest,
   EXPECT_TRUE(IsDiagnosticsDialogVisible());
 
   // Enter locked fullscreen.
-  ash::PinWindow(browser()->window()->GetNativeWindow(), /*trusted=*/true);
+  ash::PinWindow(browser()->GetWindow()->GetNativeWindow(), /*trusted=*/true);
   EXPECT_TRUE(
       base::test::RunUntil([&]() { return !IsDiagnosticsDialogVisible(); }));
 }

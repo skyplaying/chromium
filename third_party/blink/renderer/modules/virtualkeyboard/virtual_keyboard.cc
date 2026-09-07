@@ -6,8 +6,6 @@
 
 #include "base/trace_event/trace_event.h"
 #include "third_party/blink/public/mojom/frame/frame.mojom-blink.h"
-#include "third_party/blink/renderer/core/css/document_style_environment_variables.h"
-#include "third_party/blink/renderer/core/css/style_engine.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/editing/ime/input_method_controller.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
@@ -50,6 +48,12 @@ VirtualKeyboard::VirtualKeyboard(Navigator& navigator)
       VirtualKeyboardOverlayChangedObserver(
           navigator.DomWindow() ? navigator.DomWindow()->GetFrame() : nullptr) {
   bounding_rect_ = DOMRect::Create();
+  if (LocalDOMWindow* window = navigator.DomWindow()) {
+    if (LocalFrame* frame = window->GetFrame()) {
+      bounding_rect_ =
+          DOMRect::FromRect(frame->VirtualKeyboardOverlayRect());
+    }
+  }
 }
 
 ExecutionContext* VirtualKeyboard::GetExecutionContext() const {
@@ -115,21 +119,7 @@ void VirtualKeyboard::VirtualKeyboardOverlayChanged(
   if (!window)
     return;
 
-  bounding_rect_ = DOMRect::FromRectF(gfx::RectF(keyboard_rect));
-  DocumentStyleEnvironmentVariables& vars =
-      window->document()->GetStyleEngine().EnsureEnvironmentVariables();
-  vars.SetVariable(UADefinedVariable::kKeyboardInsetTop,
-                   StyleEnvironmentVariables::FormatPx(keyboard_rect.y()));
-  vars.SetVariable(UADefinedVariable::kKeyboardInsetLeft,
-                   StyleEnvironmentVariables::FormatPx(keyboard_rect.x()));
-  vars.SetVariable(UADefinedVariable::kKeyboardInsetBottom,
-                   StyleEnvironmentVariables::FormatPx(keyboard_rect.bottom()));
-  vars.SetVariable(UADefinedVariable::kKeyboardInsetRight,
-                   StyleEnvironmentVariables::FormatPx(keyboard_rect.right()));
-  vars.SetVariable(UADefinedVariable::kKeyboardInsetWidth,
-                   StyleEnvironmentVariables::FormatPx(keyboard_rect.width()));
-  vars.SetVariable(UADefinedVariable::kKeyboardInsetHeight,
-                   StyleEnvironmentVariables::FormatPx(keyboard_rect.height()));
+  bounding_rect_ = DOMRect::FromRect(keyboard_rect);
   DispatchEvent(*(MakeGarbageCollected<VirtualKeyboardGeometryChangeEvent>(
       event_type_names::kGeometrychange)));
 }

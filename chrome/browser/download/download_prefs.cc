@@ -31,9 +31,9 @@
 #include "chrome/browser/download/download_target_determiner.h"
 #include "chrome/browser/download/trusted_sources_manager.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/download/public/common/download_features.h"
 #include "components/download/public/common/download_item.h"
 #include "components/policy/core/browser/url_list/url_blocklist_manager.h"
@@ -43,14 +43,19 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/download_manager.h"
 #include "content/public/browser/save_page_type.h"
+#include "ui/base/l10n/l10n_util.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_features.h"
+#include "base/check_deref.h"
 #include "base/json/values_util.h"
+#include "base/scoped_observation.h"
 #include "chrome/browser/ash/drive/drive_integration_service.h"
 #include "chrome/browser/ash/drive/drive_integration_service_factory.h"
 #include "chrome/browser/ash/drive/file_system_util.h"
 #include "chrome/browser/ash/file_manager/path_util.h"
 #include "chrome/browser/ui/webui/ash/cloud_upload/cloud_upload_util.h"
+#include "chromeos/ash/components/browser_context_helper/annotated_account_id.h"
 #include "chromeos/ash/components/dbus/cros_disks/cros_disks_client.h"
 #endif
 
@@ -135,6 +140,65 @@ DefaultDownloadDirectory& GetDefaultDownloadDirectorySingleton() {
 
 }  // namespace
 
+#if BUILDFLAG(IS_CHROMEOS)
+
+// Handles DriveFS disabling event.
+class DownloadPrefs::DriveHandler
+    : public drive::DriveIntegrationService::Observer {
+ public:
+  DriveHandler(Profile* profile, drive::DriveIntegrationService* service)
+      : profile_(CHECK_DEREF(profile)), service_(service) {
+    CHECK(service);
+    // Initialize to the first state.
+    if (!drive::util::IsDriveEnabledForProfile(profile)) {
+      OnDriveWillBeDisabled();
+    }
+
+    observation_.Observe(service);
+  }
+
+  DriveHandler(const DriveHandler&) = delete;
+  const DriveHandler& operator=(const DriveHandler&) = delete;
+
+  ~DriveHandler() override = default;
+
+  void OnDriveIntegrationServiceDestroyed() override {
+    observation_.Reset();
+    service_ = nullptr;
+  }
+
+  void OnDriveWillBeDisabled() override {
+    auto* account_id = ash::AnnotatedAccountId::Get(&profile_.get());
+    if (!account_id || !account_id->HasAccountIdKey()) {
+      return;
+    }
+
+    auto* prefs = profile_->GetPrefs();
+    const auto download_path =
+        prefs->GetFilePath(prefs::kDownloadDefaultDirectory);
+    if (!service_->GetMountPointPath().IsParent(download_path)) {
+      // The download path is not under Drive.
+      return;
+    }
+
+    // Here, the download default path was somewhere in drivefs. As
+    // it is disabled, update it to avoid writing to disabled drivefs.
+    prefs->SetFilePath(
+        prefs::kDownloadDefaultDirectory,
+        file_manager::util::GetDownloadsFolderForProfile(&profile_.get()));
+  }
+
+ private:
+  const raw_ref<Profile> profile_;
+  raw_ptr<drive::DriveIntegrationService> service_;
+
+  base::ScopedObservation<drive::DriveIntegrationService,
+                          drive::DriveIntegrationService::Observer>
+      observation_{this};
+};
+
+#endif
+
 DownloadPrefs::DownloadPrefs(Profile* profile) : profile_(profile) {
   PrefService* prefs = profile->GetPrefs();
   pref_change_registrar_.Init(prefs);
@@ -172,6 +236,11 @@ DownloadPrefs::DownloadPrefs(Profile* profile) : profile_(profile) {
           path_pref,
           base::FilePathToValue(GetDefaultDownloadDirectoryForProfile()));
     }
+  }
+
+  if (auto* drive_service =
+          drive::DriveIntegrationServiceFactory::FindForProfile(profile_)) {
+    drive_handler_ = std::make_unique<DriveHandler>(profile_, drive_service);
   }
 
   // Ensure that the default download directory exists.
@@ -338,6 +407,11 @@ base::FilePath DownloadPrefs::GetDefaultDownloadDirectoryForProfile() const {
 // static
 const base::FilePath& DownloadPrefs::GetDefaultDownloadDirectory() {
   return GetDefaultDownloadDirectorySingleton().path();
+}
+
+// static
+std::string DownloadPrefs::GetDefaultDownloadName() {
+  return l10n_util::GetStringUTF8(IDS_DEFAULT_DOWNLOAD_FILENAME);
 }
 
 // static
@@ -601,7 +675,7 @@ base::FilePath DownloadPrefs::SanitizeDownloadTargetPath(
 
   // Allow paths under /tmp if the feature flag is enabled.
   base::FilePath temp_path;
-  if (base::FeatureList::IsEnabled(features::kSkyVault) &&
+  if (base::FeatureList::IsEnabled(ash::features::kSkyVault) &&
       base::GetTempDir(&temp_path) &&
       ((temp_path == path) || temp_path.IsParent(path))) {
     return path;

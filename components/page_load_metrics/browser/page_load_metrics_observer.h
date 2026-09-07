@@ -126,8 +126,6 @@ class PageLoadMetricsObserver : public PageLoadMetricsObserverInterface {
   ObservePolicy OnStart(content::NavigationHandle* navigation_handle,
                         const GURL& currently_committed_url,
                         bool started_in_foreground) override;
-  ObservePolicy OnPreviewStart(content::NavigationHandle* navigation_handle,
-                               const GURL& currently_committed_url) override;
   ObservePolicy OnNavigationHandleTimingUpdated(
       content::NavigationHandle* navigation_handle) override;
   ObservePolicy OnRedirect(
@@ -153,7 +151,12 @@ class PageLoadMetricsObserver : public PageLoadMetricsObserverInterface {
   ObservePolicy ShouldObserveScheme(const GURL& url) const override;
   void OnTimingUpdate(content::RenderFrameHost* subframe_rfh,
                       const mojom::PageLoadTiming& timing) override {}
-  void OnSoftNavigationUpdated(const mojom::SoftNavigationMetrics&) override {}
+  void OnSoftNavigationFirstContentfulPaint(
+      const mojom::SoftNavigationMetrics& soft_navigation_metrics) override {}
+  void OnSoftNavigationCompleted(
+      const SoftNavigationData& soft_navigation_data) override {}
+  void OnSoftNavigationLargestContentfulPaint(uint64_t num_soft_lcps) override {
+  }
   void OnEventTimingUpdate(
       content::RenderFrameHost* subframe_rfh,
       const std::vector<mojom::EventTimingPtr>& event_timings) override {}
@@ -210,17 +213,13 @@ class PageLoadMetricsObserver : public PageLoadMetricsObserverInterface {
   void OnFeaturesUsageObserved(
       content::RenderFrameHost* rfh,
       const std::vector<blink::UseCounterFeature>& features) override {}
-  void SetUpSharedMemoryForDroppedFrames(
-      const base::ReadOnlySharedMemoryRegion& dropped_frames_memory) override {}
   void OnResourceDataUseObserved(
       content::RenderFrameHost* rfh,
       const std::vector<mojom::ResourceDataUpdatePtr>& resources) override {}
   void MediaStartedPlaying(
       const content::WebContentsObserver::MediaPlayerInfo& video_type,
       content::RenderFrameHost* render_frame_host) override {}
-  void OnMainFrameIntersectionRectChanged(
-      content::RenderFrameHost* rfh,
-      const gfx::Rect& main_frame_intersection_rect) override {}
+  void OnMainFrameRectChanged(const gfx::Rect& main_frame_rect) override {}
   void OnMainFrameViewportRectChanged(
       const gfx::Rect& main_frame_viewport_rect) override {}
   void OnMainFrameAdRectsChanged(
@@ -232,6 +231,8 @@ class PageLoadMetricsObserver : public PageLoadMetricsObserverInterface {
       const FailedProvisionalLoadInfo& failed_provisional_load_info) override {}
   void OnLoadedResource(
       const ExtraRequestCompleteInfo& extra_request_complete_info) override {}
+  void DidLoadResourceFromMemoryCache(
+      const MemoryResourceLoadInfo& memory_resource_load_info) override {}
   void FrameReceivedUserActivation(
       content::RenderFrameHost* render_frame_host) override {}
   void FrameDisplayStateChanged(content::RenderFrameHost* render_frame_host,
@@ -261,17 +262,12 @@ class PageLoadMetricsObserver : public PageLoadMetricsObserverInterface {
                          const GURL& first_party_url,
                          bool blocked_by_policy,
                          StorageType access_type) override {}
-  void OnPrefetchLikely() override {}
   void DidActivatePrerenderedPage(
       content::NavigationHandle* navigation_handle) override {}
-  void DidActivatePreviewedPage(base::TimeTicks activation_time) override {}
   void OnSharedStorageWorkletHostCreated() override {}
   void OnSharedStorageSelectURLCalled() override {}
   void OnCustomUserTimingMarkObserved(
       const std::vector<mojom::CustomUserTimingMarkPtr>& timings) override {}
-  void OnAdAuctionComplete(bool is_server_auction,
-                           bool is_on_device_auction,
-                           content::AuctionResult result) override {}
   void OnPrimaryPageRenderProcessGone() override {}
 
  private:

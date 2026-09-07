@@ -10,6 +10,7 @@ load("@chromium-luci//builder_health_indicators.star", "health_spec")
 load("@chromium-luci//ci.star", "ci")
 load("@chromium-luci//consoles.star", "consoles")
 load("@chromium-luci//gn_args.star", "gn_args")
+load("@chromium-luci//gpu.star", shared_gpu = "gpu")
 load("@chromium-luci//targets.star", "targets")
 load("//lib/ci_constants.star", "ci_constants")
 load("//lib/gardener_rotations.star", "gardener_rotations")
@@ -19,7 +20,7 @@ load("//lib/siso.star", "siso")
 ci.defaults.set(
     executable = ci_constants.DEFAULT_EXECUTABLE,
     builder_group = "chromium.gpu",
-    pool = gpu.ci.POOL,
+    pool = shared_gpu.ci.POOL,
     gardener_rotations = gardener_rotations.CHROMIUM_GPU,
     tree_closing = True,
     tree_closing_notifiers = gpu.ci.TREE_CLOSING_NOTIFIERS,
@@ -63,7 +64,7 @@ consoles.console_view(
     },
 )
 
-gpu.ci.linux_builder(
+shared_gpu.ci.linux_builder(
     name = "Android Release (Pixel 2)",
     branch_selector = branches.selector.ANDROID_BRANCHES,
     description_html = "Runs a subset of release GPU tests on stable Pixel 2 configs",
@@ -98,12 +99,13 @@ gpu.ci.linux_builder(
             "remoteexec",
             "arm64",
             "static_angle",
-            "android_fastbuild",
+            "android_with_static_analysis",
         ],
     ),
     targets = targets.bundle(
         targets = [
-            "gpu_common_android_telemetry_tests",
+            "gpu_android_arm_release_gtests",
+            "gpu_android_arm_release_telemetry_tests",
         ],
         mixins = [
             "chromium_pixel_2_q",
@@ -121,7 +123,7 @@ gpu.ci.linux_builder(
     cq_mirrors_console_view = "mirrors",
 )
 
-gpu.ci.linux_builder(
+shared_gpu.ci.linux_builder(
     name = "GPU Linux Builder",
     branch_selector = branches.selector.LINUX_BRANCHES,
     description_html = "Builds release Linux x64 binaries for GPU testing",
@@ -158,12 +160,13 @@ gpu.ci.linux_builder(
     ),
     targets = targets.bundle(),
     console_view_entry = consoles.console_view_entry(
-        category = "Linux",
+        category = "Linux|Builder",
+        short_name = "rel",
     ),
     cq_mirrors_console_view = "mirrors",
 )
 
-gpu.ci.linux_builder(
+shared_gpu.ci.linux_builder(
     name = "GPU Linux Builder (dbg)",
     description_html = "Builds debug Linux x64 binaries for GPU testing",
     builder_spec = builder_config.builder_spec(
@@ -193,11 +196,12 @@ gpu.ci.linux_builder(
     gardener_rotations = args.ignore_default(None),
     tree_closing = False,
     console_view_entry = consoles.console_view_entry(
-        category = "Linux",
+        category = "Linux|Builder",
+        short_name = "dbg",
     ),
 )
 
-gpu.ci.mac_builder(
+shared_gpu.ci.mac_builder(
     name = "GPU Mac Builder",
     branch_selector = branches.selector.MAC_BRANCHES,
     description_html = "Builds release Mac x64 binaries for GPU testing",
@@ -235,12 +239,13 @@ gpu.ci.mac_builder(
     ),
     targets = targets.bundle(),
     console_view_entry = consoles.console_view_entry(
-        category = "Mac",
+        category = "Mac|Builder",
+        short_name = "rel",
     ),
     cq_mirrors_console_view = "mirrors",
 )
 
-gpu.ci.mac_builder(
+shared_gpu.ci.mac_builder(
     name = "GPU Mac Builder (dbg)",
     description_html = "Builds debug Mac x64 binaries for GPU testing",
     builder_spec = builder_config.builder_spec(
@@ -269,11 +274,55 @@ gpu.ci.mac_builder(
     targets = targets.bundle(),
     tree_closing = False,
     console_view_entry = consoles.console_view_entry(
-        category = "Mac",
+        category = "Mac|Builder",
+        short_name = "dbg",
     ),
 )
 
-gpu.ci.windows_builder(
+shared_gpu.ci.mac_builder(
+    name = "GPU Mac arm64 Builder",
+    branch_selector = branches.selector.MAC_BRANCHES,
+    description_html = "Builds release Mac arm64 binaries for GPU testing",
+    builder_spec = builder_config.builder_spec(
+        # Keep in sync with `mac-arm64-rel`.
+        gclient_config = builder_config.gclient_config(
+            config = "chromium",
+            apply_configs = [
+                # This is necessary due to child builders running the
+                # telemetry_perf_unittests suite.
+                "chromium_with_telemetry_dependencies",
+                "use_clang_coverage",
+            ],
+        ),
+        chromium_config = builder_config.chromium_config(
+            config = "chromium",
+            apply_configs = [
+                "mb",
+            ],
+            build_config = builder_config.build_config.RELEASE,
+            target_arch = builder_config.target_arch.ARM,
+            target_bits = 64,
+            target_platform = builder_config.target_platform.MAC,
+        ),
+    ),
+    gn_args = gn_args.config(
+        configs = [
+            "gpu_tests",
+            "release_builder",
+            "try_builder",
+            "remoteexec",
+            "arm64",
+            "mac",
+        ],
+    ),
+    targets = targets.bundle(),
+    console_view_entry = consoles.console_view_entry(
+        category = "Mac arm64|Builder",
+        short_name = "rel",
+    ),
+)
+
+shared_gpu.ci.windows_builder(
     name = "GPU Win x64 Builder",
     branch_selector = branches.selector.WINDOWS_BRANCHES,
     description_html = "Builds release x64 Windows binaries for GPU testing",
@@ -310,12 +359,13 @@ gpu.ci.windows_builder(
         ],
     ),
     console_view_entry = consoles.console_view_entry(
-        category = "Windows",
+        category = "Windows|Builder",
+        short_name = "rel",
     ),
     cq_mirrors_console_view = "mirrors",
 )
 
-gpu.ci.windows_builder(
+shared_gpu.ci.windows_builder(
     name = "GPU Win x64 Builder (dbg)",
     description_html = "Builds debug Windows x64 binaries for GPU testing",
     builder_spec = builder_config.builder_spec(
@@ -343,7 +393,8 @@ gpu.ci.windows_builder(
     ),
     tree_closing = False,
     console_view_entry = consoles.console_view_entry(
-        category = "Windows",
+        category = "Windows|Builder",
+        short_name = "dbg",
     ),
     # TODO(crbug.com/413285147): Restore this to the default once sync/compile
     # times are reduced.
@@ -371,19 +422,14 @@ ci.thin_tester(
     ),
     targets = targets.bundle(
         targets = [
-            "gpu_desktop_passthrough_gtests",
-            "gpu_common_linux_telemetry_tests",
+            "gpu_linux_debug_gtests",
+            "gpu_linux_debug_telemetry_tests",
         ],
         mixins = [
             "linux_nvidia_gtx_1660_stable",
             # TODO(crbug.com/331756538): Specify the puppet_production mixin
             # once testing is moved to Ubuntu 22.
         ],
-        per_test_modifications = {
-            "tab_capture_end2end_tests": targets.remove(
-                reason = "Run these only on Release bots.",
-            ),
-        },
     ),
     targets_settings = targets.settings(
         browser_config = targets.browser_config.DEBUG,
@@ -392,7 +438,8 @@ ci.thin_tester(
     gardener_rotations = args.ignore_default(None),
     tree_closing = False,
     console_view_entry = consoles.console_view_entry(
-        category = "Linux",
+        category = "Linux|Nvidia",
+        short_name = "dbg",
     ),
 )
 
@@ -421,26 +468,22 @@ ci.thin_tester(
     ),
     targets = targets.bundle(
         targets = [
-            "gpu_desktop_passthrough_gtests",
-            "gpu_common_linux_telemetry_tests",
+            "gpu_linux_release_gtests",
+            "gpu_linux_release_telemetry_tests",
         ],
         mixins = [
             "linux_nvidia_gtx_1660_stable",
             # TODO(crbug.com/331756538): Specify the puppet_production mixin
             # once testing is moved to Ubuntu 22.
         ],
-        per_test_modifications = {
-            "tab_capture_end2end_tests": targets.remove(
-                reason = "Disabled due to dbus crashes crbug.com/927465",
-            ),
-        },
     ),
     targets_settings = targets.settings(
         browser_config = targets.browser_config.RELEASE,
         os_type = targets.os_type.LINUX,
     ),
     console_view_entry = consoles.console_view_entry(
-        category = "Linux",
+        category = "Linux|Nvidia",
+        short_name = "rel",
     ),
     cq_mirrors_console_view = "mirrors",
 )
@@ -466,8 +509,8 @@ ci.thin_tester(
     ),
     targets = targets.bundle(
         targets = [
-            "gpu_desktop_passthrough_gtests",
-            "gpu_common_metal_passthrough_graphite_telemetry_tests",
+            "gpu_mac_debug_gtests",
+            "gpu_mac_debug_telemetry_tests",
         ],
         mixins = [
             "mac_mini_intel_gpu_stable",
@@ -479,8 +522,11 @@ ci.thin_tester(
                     shards = 2,
                 ),
             ),
-            "tab_capture_end2end_tests": targets.remove(
-                reason = "Run these only on Release bots.",
+            "trace_test": targets.mixin(
+                # Debug builds are slow enough to warrant an extra shard.
+                swarming = targets.swarming(
+                    shards = 2,
+                ),
             ),
         },
     ),
@@ -491,7 +537,8 @@ ci.thin_tester(
     gardener_rotations = args.ignore_default(None),
     tree_closing = False,
     console_view_entry = consoles.console_view_entry(
-        category = "Mac",
+        category = "Mac|Intel",
+        short_name = "dbg",
     ),
 )
 
@@ -517,8 +564,8 @@ ci.thin_tester(
     ),
     targets = targets.bundle(
         targets = [
-            "gpu_desktop_passthrough_gtests",
-            "gpu_common_metal_passthrough_graphite_telemetry_tests",
+            "gpu_mac_release_gtests",
+            "gpu_mac_release_telemetry_tests",
         ],
         mixins = [
             "mac_mini_intel_gpu_stable",
@@ -530,7 +577,8 @@ ci.thin_tester(
         os_type = targets.os_type.MAC,
     ),
     console_view_entry = consoles.console_view_entry(
-        category = "Mac",
+        category = "Mac|Intel",
+        short_name = "rel",
     ),
     cq_mirrors_console_view = "mirrors",
 )
@@ -556,8 +604,8 @@ ci.thin_tester(
     ),
     targets = targets.bundle(
         targets = [
-            "gpu_desktop_passthrough_gtests",
-            "gpu_common_metal_passthrough_graphite_telemetry_tests",
+            "gpu_mac_debug_gtests",
+            "gpu_mac_debug_telemetry_tests",
         ],
         mixins = [
             "mac_retina_amd_gpu_stable",
@@ -571,9 +619,6 @@ ci.thin_tester(
                     ),
                 ),
             ),
-            "tab_capture_end2end_tests": targets.remove(
-                reason = "Run these only on Release bots.",
-            ),
         },
     ),
     targets_settings = targets.settings(
@@ -582,7 +627,8 @@ ci.thin_tester(
     ),
     tree_closing = False,
     console_view_entry = consoles.console_view_entry(
-        category = "Mac",
+        category = "Mac|AMD",
+        short_name = "dbg",
     ),
 )
 
@@ -608,8 +654,8 @@ ci.thin_tester(
     ),
     targets = targets.bundle(
         targets = [
-            "gpu_desktop_passthrough_gtests",
-            "gpu_common_metal_passthrough_graphite_telemetry_tests",
+            "gpu_mac_release_gtests",
+            "gpu_mac_release_telemetry_tests",
         ],
         mixins = [
             "mac_retina_amd_gpu_stable",
@@ -621,9 +667,52 @@ ci.thin_tester(
         os_type = targets.os_type.MAC,
     ),
     console_view_entry = consoles.console_view_entry(
-        category = "Mac",
+        category = "Mac|AMD",
+        short_name = "rel",
     ),
     cq_mirrors_console_view = "mirrors",
+)
+
+ci.thin_tester(
+    name = "Mac Retina Release (Apple M2)",
+    branch_selector = branches.selector.MAC_BRANCHES,
+    description_html = "Runs release GPU tests on stable Mac/M2 Macbook Pro configs",
+    parent = "GPU Mac arm64 Builder",
+    builder_spec = builder_config.builder_spec(
+        execution_mode = builder_config.execution_mode.TEST,
+        gclient_config = builder_config.gclient_config(
+            config = "chromium",
+        ),
+        chromium_config = builder_config.chromium_config(
+            config = "chromium",
+            apply_configs = [
+                "mb",
+            ],
+            build_config = builder_config.build_config.RELEASE,
+            target_arch = builder_config.target_arch.ARM,
+            target_bits = 64,
+            target_platform = builder_config.target_platform.MAC,
+        ),
+    ),
+    targets = targets.bundle(
+        targets = [
+            "gpu_mac_release_gtests",
+            "gpu_mac_release_telemetry_tests",
+        ],
+        mixins = [
+            "mac_arm64_apple_m2_retina_gpu_stable",
+            "puppet_production",
+            "isolate_profile_data",
+        ],
+    ),
+    targets_settings = targets.settings(
+        browser_config = targets.browser_config.RELEASE,
+        os_type = targets.os_type.MAC,
+    ),
+    console_view_entry = consoles.console_view_entry(
+        category = "Mac arm64|Apple|m2",
+        short_name = "rel",
+    ),
 )
 
 ci.thin_tester(
@@ -647,8 +736,8 @@ ci.thin_tester(
     ),
     targets = targets.bundle(
         targets = [
-            "gpu_win_gtests",
-            "gpu_common_win_telemetry_tests",
+            "gpu_win_debug_gtests",
+            "gpu_win_debug_telemetry_tests",
         ],
         mixins = [
             "win10_nvidia_gtx_1660_stable",
@@ -684,7 +773,8 @@ ci.thin_tester(
     ),
     tree_closing = False,
     console_view_entry = consoles.console_view_entry(
-        category = "Windows",
+        category = "Windows|Nvidia",
+        short_name = "dbg",
     ),
 )
 
@@ -713,13 +803,13 @@ ci.thin_tester(
     ),
     targets = targets.bundle(
         targets = [
-            "gpu_win_gtests",
-            "gpu_common_win_telemetry_tests",
+            "gpu_win_release_gtests",
+            "gpu_win_release_telemetry_tests",
         ],
         mixins = [
             "win10_nvidia_gtx_1660_stable",
             "puppet_production",
-            "retry_only_failed_tests",
+            "isolate_profile_data",
         ],
         per_test_modifications = {
             "pixel_skia_gold_passthrough_test": targets.per_test_modification(
@@ -744,7 +834,8 @@ ci.thin_tester(
         os_type = targets.os_type.WINDOWS,
     ),
     console_view_entry = consoles.console_view_entry(
-        category = "Windows",
+        category = "Windows|Nvidia",
+        short_name = "rel",
     ),
     cq_mirrors_console_view = "mirrors",
 )

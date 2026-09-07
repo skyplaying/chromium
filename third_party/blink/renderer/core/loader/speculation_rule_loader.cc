@@ -44,7 +44,8 @@ void SpeculationRuleLoader::NotifyFinished() {
     message.Append("Load failed or canceled (");
     message.Append(resource_->GetResourceError().LocalizedDescription());
     if (int response_code = response.HttpStatusCode()) {
-      message.AppendFormat("; HTTP status %d", response_code);
+      message.Append("; HTTP status ");
+      message.AppendNumber(response_code);
     }
     message.Append(") for rule set requested from \"");
     message.Append(resource_->GetResourceRequest().Url().ElidedString());
@@ -57,7 +58,7 @@ void SpeculationRuleLoader::NotifyFinished() {
     return;
   }
 
-  if (!EqualIgnoringASCIICase(resource_->HttpContentType(),
+  if (!EqualIgnoringAsciiCase(resource_->HttpContentType(),
                               "application/speculationrules+json")) {
     CountSpeculationRulesLoadOutcome(
         SpeculationRulesLoadOutcome::kInvalidMimeType);

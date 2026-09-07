@@ -12,7 +12,11 @@ import androidx.annotation.CallSuper;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.glic.GlicHelper;
+import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
+import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager.ParentOverrideSlot;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager.SnackbarManageable;
 
 /**
@@ -38,21 +42,53 @@ public abstract class SnackbarActivity extends SynchronousInitializationActivity
     }
 
     @Override
+    protected void onStart() {
+        super.onStart();
+        if (ChromeFeatureList.sGlicShowTaskInProgressSnackbar.getValue()) {
+            getProfileSupplier()
+                    .runSyncOrOnAvailable(
+                            (Profile profile) ->
+                                    GlicHelper.maybeShowGlicTaskInProgressSnackbar(
+                                            this,
+                                            profile,
+                                            this,
+                                            GlicHelper.Caller.SNACKBAR_ACTIVITY));
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (mSnackbarManager != null) {
+            mSnackbarManager.destroy();
+        }
+    }
+
+    @Override
     public void setContentView(int layoutResId) {
         super.setContentView(layoutResId);
-        mSnackbarManager.pushParentViewToOverrideStack(getContentView());
+        mSnackbarManager.pushParentViewOverride(
+                ParentOverrideSlot.ONE_OFF,
+                getContentView(),
+                /* additionalBottomMarginPxSupplier= */ null);
     }
 
     @Override
     public void setContentView(View view) {
         super.setContentView(view);
-        mSnackbarManager.pushParentViewToOverrideStack(getContentView());
+        mSnackbarManager.pushParentViewOverride(
+                ParentOverrideSlot.ONE_OFF,
+                getContentView(),
+                /* additionalBottomMarginPxSupplier= */ null);
     }
 
     @Override
     public void setContentView(View view, ViewGroup.LayoutParams params) {
         super.setContentView(view, params);
-        mSnackbarManager.pushParentViewToOverrideStack(getContentView());
+        mSnackbarManager.pushParentViewOverride(
+                ParentOverrideSlot.ONE_OFF,
+                getContentView(),
+                /* additionalBottomMarginPxSupplier= */ null);
     }
 
     @Override

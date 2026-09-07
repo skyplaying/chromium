@@ -10,10 +10,13 @@
 
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/uuid.h"
 #include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
+#include "chrome/browser/ui/toolbar/app_menu_model.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
+#include "components/saved_tab_groups/public/features.h"
 #include "components/saved_tab_groups/public/saved_tab_group.h"
 #include "components/saved_tab_groups/public/tab_group_sync_service.h"
 #include "components/saved_tab_groups/test_support/fake_tab_group_sync_service.h"
@@ -26,6 +29,7 @@
 
 class TabGroupMenuBridgeTest : public BrowserWithTestWindowTest {
  public:
+
   void SetUp() override {
     BrowserWithTestWindowTest::SetUp();
     service_ = std::make_unique<tab_groups::FakeTabGroupSyncService>();
@@ -40,7 +44,7 @@ class TabGroupMenuBridgeTest : public BrowserWithTestWindowTest {
     tab_groups_menu_root_ = [[NSMenuItem alloc] initWithTitle:@"Tab Groups"
                                                        action:nil
                                                 keyEquivalent:@""];
-    tab_groups_menu_root_.tag = IDC_SAVED_TAB_GROUPS_MENU;
+    tab_groups_menu_root_.tag = AppMenuModel::kSavedTabGroupsMenuPlaceholder;
     tab_groups_menu_ = [[NSMenu alloc] initWithTitle:@"Tab Groups"];
     tab_groups_menu_root_.submenu = tab_groups_menu_;
     [main_menu_ addItem:tab_groups_menu_root_];

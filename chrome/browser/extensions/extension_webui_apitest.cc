@@ -12,7 +12,8 @@
 #include "build/build_config.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -62,7 +63,6 @@ class ExtensionWebUITest : public ExtensionApiTest {
       if (!base::PathExists(path))
         return testing::AssertionFailure() << "Couldn't find " << path.value();
       base::ReadFileToString(path, &script);
-      script = "(function(){'use strict';" + script + "}());";
     }
 
     // Run the test.
@@ -330,7 +330,7 @@ IN_PROC_BROWSER_TEST_P(ExtensionWebUIEmbeddedOptionsTest,
                               "document.getElementById('link').click();"));
   content::WebContents* new_contents = new_contents_observer.GetWebContents();
   EXPECT_NE(TabStripModel::kNoTab,
-            browser()->tab_strip_model()->GetIndexOfWebContents(new_contents));
+            browser()->GetTabStripModel()->GetIndexOfWebContents(new_contents));
 }
 
 IN_PROC_BROWSER_TEST_P(ExtensionWebUIEmbeddedOptionsTest,
@@ -426,7 +426,7 @@ class ExtensionWebUIListenersTest : public ExtensionWebUITest {
   }
 };
 
-// Tests crbug.com/1253745 where adding and removing listeners in a WebUI frame
+// Tests crbug.com/40199285 where adding and removing listeners in a WebUI frame
 // causes all listeners to be removed.
 IN_PROC_BROWSER_TEST_F(ExtensionWebUIListenersTest, MultipleURLListeners) {
   // Use the same URL both for the parent and child frames for convenience.

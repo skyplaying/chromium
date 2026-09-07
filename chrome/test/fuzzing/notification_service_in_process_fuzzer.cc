@@ -5,11 +5,11 @@
 #include <string_view>
 
 #include "base/path_service.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/fuzzing/in_process_proto_fuzzer.h"
 #include "chrome/test/fuzzing/notification_service_fuzzer_grammar.h"
 #include "chrome/test/fuzzing/notification_service_fuzzer_grammar.pb.h"
+#include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/permissions/permissions_client.h"

@@ -10,12 +10,14 @@ import static androidx.test.espresso.contrib.RecyclerViewActions.actionOnItemAtP
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
 
 import static org.chromium.base.test.transit.Triggers.noopTo;
+import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.app.Activity;
 import android.app.Instrumentation;
 import android.content.Context;
 import android.os.SystemClock;
 import android.text.Editable;
+import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.inputmethod.BaseInputConnection;
@@ -23,7 +25,6 @@ import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
 
 import androidx.activity.ComponentActivity;
-import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.test.espresso.UiController;
 import androidx.test.espresso.ViewAction;
@@ -31,6 +32,7 @@ import androidx.test.platform.app.InstrumentationRegistry;
 
 import org.hamcrest.Matcher;
 import org.hamcrest.Matchers;
+import org.junit.Assert;
 
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.transit.ConditionStatus;
@@ -38,6 +40,8 @@ import org.chromium.base.test.transit.UiThreadCondition;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.KeyUtils;
+import org.chromium.base.ui.KeyboardUtils;
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.omnibox.LocationBarLayout;
 import org.chromium.chrome.browser.omnibox.UrlBar;
@@ -51,6 +55,7 @@ import org.chromium.chrome.browser.searchwidget.SearchActivity;
 import org.chromium.chrome.browser.toolbar.top.ToolbarLayout;
 import org.chromium.components.omnibox.AutocompleteMatch;
 import org.chromium.components.omnibox.AutocompleteResult;
+import org.chromium.components.omnibox.AutocompleteStopReason;
 import org.chromium.components.omnibox.suggestions.OmniboxSuggestionUiType;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -60,15 +65,16 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 /** Utility methods and classes for testing the Omnibox. */
+@NullMarked
 public class OmniboxTestUtils {
     /** Value indicating that the index is not valid. */
     public static final int SUGGESTION_INDEX_INVALID = -1;
 
-    private final @NonNull Activity mActivity;
-    private final @NonNull LocationBarLayout mLocationBar;
-    private final @NonNull AutocompleteCoordinator mAutocomplete;
-    private final @NonNull UrlBar mUrlBar;
-    private final @NonNull Instrumentation mInstrumentation;
+    private final Activity mActivity;
+    private final LocationBarLayout mLocationBar;
+    private final AutocompleteCoordinator mAutocomplete;
+    private final UrlBar mUrlBar;
+    private final Instrumentation mInstrumentation;
     private final @Nullable ToolbarLayout mToolbar;
 
     /**
@@ -105,7 +111,7 @@ public class OmniboxTestUtils {
      * Create a ViewAction that can be executed on a Suggestion with Action Chips.
      *
      * @param position the index of an {@link
-     *         org.chromium.chrome.browser.omnibox.suggestions.action.OmniboxAction},
+     *     org.chromium.chrome.browser.omnibox.suggestions.action.OmniboxAction},
      * @param action the action to perform.
      */
     public static ViewAction actionOnOmniboxActionAtPosition(int position, ViewAction action) {
@@ -120,16 +126,16 @@ public class OmniboxTestUtils {
     public static class SuggestionInfo<T extends View> {
         public final int index;
         public final @OmniboxSuggestionUiType int type;
-        public final @NonNull AutocompleteMatch suggestion;
-        public final @NonNull PropertyModel model;
-        public final @NonNull T view;
+        public final AutocompleteMatch suggestion;
+        public final PropertyModel model;
+        public final T view;
 
         protected SuggestionInfo(
                 int index,
                 @OmniboxSuggestionUiType int type,
-                @NonNull AutocompleteMatch suggestion,
-                @NonNull PropertyModel model,
-                @NonNull T view) {
+                AutocompleteMatch suggestion,
+                PropertyModel model,
+                T view) {
             this.index = index;
             this.type = type;
             this.suggestion = suggestion;
@@ -141,11 +147,10 @@ public class OmniboxTestUtils {
     /**
      * Create a new OmniboxTestUtils instance from supplied activity.
      *
-     * This method should be called if the caller intends to retain the instance
-     * for a longer period of time.
-     * For short or single-time uses, consider calling static method below.
+     * <p>This method should be called if the caller intends to retain the instance for a longer
+     * period of time. For short or single-time uses, consider calling static method below.
      */
-    public OmniboxTestUtils(@NonNull Activity activity) {
+    public OmniboxTestUtils(Activity activity) {
         mActivity = activity;
         if (activity instanceof SearchActivity) {
             mLocationBar = mActivity.findViewById(R.id.search_location_bar);
@@ -154,7 +159,7 @@ public class OmniboxTestUtils {
             mLocationBar = mActivity.findViewById(R.id.location_bar);
             mToolbar = mActivity.findViewById(R.id.toolbar);
         }
-        mAutocomplete = mLocationBar.getAutocompleteCoordinator();
+        mAutocomplete = assumeNonNull(mLocationBar.getAutocompleteCoordinator());
         mUrlBar = mActivity.findViewById(R.id.url_bar);
         mInstrumentation = InstrumentationRegistry.getInstrumentation();
     }
@@ -186,7 +191,11 @@ public class OmniboxTestUtils {
     public void checkFocus(boolean active) {
         noopTo().waitFor(
                         new UrlBarHasFocusCondition(mUrlBar, active),
-                        new InputMethodManagerIsActiveCondition(mUrlBar, active));
+                        active
+                                ? new InputMethodManagerIsActiveCondition(
+                                        mUrlBar, active) // Programmatic (Stable)
+                                : new SoftKeyboardShowingCondition(
+                                        mUrlBar, active)); // Physical (Bypasses Stickiness)
     }
 
     /**
@@ -253,8 +262,8 @@ public class OmniboxTestUtils {
     }
 
     /**
-     * Stops any subsequent AutocompleteResults from being generated.
-     * Ensures that no subsequent asynchronous AutocompleteResults could tamper with test execution.
+     * Stops any subsequent AutocompleteResults from being generated. Ensures that no subsequent
+     * asynchronous AutocompleteResults could tamper with test execution.
      */
     public void waitForAutocomplete() {
         AtomicLong previousId = new AtomicLong(-1);
@@ -275,7 +284,7 @@ public class OmniboxTestUtils {
                     // arrives late. This guarantees that the suggestions will not change and the
                     // list can be used for testing purposes.
                     if (count.incrementAndGet() < 3) return false;
-                    mAutocomplete.stopAutocompleteForTest(false);
+                    mAutocomplete.stopAutocompleteForTest(AutocompleteStopReason.INTERACTION);
                     return true;
                 });
     }
@@ -285,7 +294,7 @@ public class OmniboxTestUtils {
      *
      * @param type The type of suggestion to check.
      */
-    public <T extends View> SuggestionInfo<T> findSuggestionWithType(
+    public @Nullable <T extends View> SuggestionInfo<T> findSuggestionWithType(
             @OmniboxSuggestionUiType int type) {
         return findSuggestion(info -> info.type == type);
     }
@@ -309,7 +318,7 @@ public class OmniboxTestUtils {
      * @param filter The filter to use to identify appropriate suggestion type.
      */
     public @Nullable <T extends View> SuggestionInfo<T> findSuggestion(
-            @NonNull Function<DropdownItemViewInfo, Boolean> filter) {
+            Function<DropdownItemViewInfo, Boolean> filter) {
         checkSuggestionsShown();
         AtomicReference<SuggestionInfo<T>> result = new AtomicReference<>();
 
@@ -317,21 +326,22 @@ public class OmniboxTestUtils {
                 () -> {
                     OmniboxSuggestionsContainer container =
                             mAutocomplete.getSuggestionsContainerForTest();
+                    assert container != null;
                     OmniboxSuggestionsDropdown dropdown =
                             container.findViewById(R.id.omnibox_suggestions_dropdown);
+                    assert dropdown != null;
 
                     ModelList currentModels = mAutocomplete.getSuggestionModelListForTest();
                     for (int i = 0; i < currentModels.size(); i++) {
                         DropdownItemViewInfo info = (DropdownItemViewInfo) currentModels.get(i);
+                        // Callers are responsible for ensuring the view type matches T.
+                        @SuppressWarnings("unchecked")
                         T view = (T) dropdown.getDropdownItemViewForTest(i);
-                        if (filter.apply(info) && view != null) {
+                        AutocompleteMatch suggestion = mAutocomplete.getSuggestionAt(i);
+                        if (filter.apply(info) && view != null && suggestion != null) {
                             result.set(
                                     new SuggestionInfo<>(
-                                            i,
-                                            info.type,
-                                            mAutocomplete.getSuggestionAt(i),
-                                            info.model,
-                                            view));
+                                            i, info.type, suggestion, info.model, view));
                             return true;
                         }
                     }
@@ -400,6 +410,42 @@ public class OmniboxTestUtils {
     }
 
     /**
+     * Type text in the Omnibox with a latency delay between keystrokes.
+     *
+     * @param text Text to type into the Omnibox.
+     * @param latencyMs Latency delay in milliseconds between key events.
+     */
+    public void typeTextWithLatency(String text, long latencyMs) {
+        KeyCharacterMap characterMap = KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD);
+        KeyEvent[] events = characterMap.getEvents(text.toCharArray());
+        Assert.assertNotNull("Failed to map characters to key events", events);
+        for (KeyEvent event : events) {
+            ThreadUtils.runOnUiThreadBlocking(
+                    () -> mUrlBar.dispatchKeyEventPreIme(event) || mUrlBar.dispatchKeyEvent(event));
+            if (latencyMs > 0) {
+                SystemClock.sleep(latencyMs);
+            }
+        }
+    }
+
+    /**
+     * Dispatches a key event pair (down/up) directly to the attached Activity.
+     *
+     * @param keyCode The key code to send.
+     * @param metaState The flags indicating which meta keys are pressed.
+     */
+    public void sendShortcut(int keyCode, int metaState) {
+        long now = SystemClock.uptimeMillis();
+        KeyEvent down = new KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0, metaState);
+        KeyEvent up = new KeyEvent(now, now, KeyEvent.ACTION_UP, keyCode, 0, metaState);
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mActivity.dispatchKeyEvent(down);
+                    mActivity.dispatchKeyEvent(up);
+                });
+    }
+
+    /**
      * Specify the text to be shown in the Omnibox. Cancels all autocompletion. Use this to
      * initialize the state of the Omnibox, but avoid using this to validate any behavior.
      *
@@ -425,11 +471,12 @@ public class OmniboxTestUtils {
      *     autocorrection (false). Note that autocorrection works only if the Omnibox is currently
      *     composing text.
      */
-    public void commitText(@NonNull String textToCommit, boolean commitAsAutocomplete) {
+    public void commitText(String textToCommit, boolean commitAsAutocomplete) {
         checkFocus(true);
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     InputConnection conn = mUrlBar.getInputConnection();
+                    assert conn != null;
                     if (commitAsAutocomplete) conn.finishComposingText();
                     // Value of 1 always advance the cursor to the position after the full text
                     // being inserted.
@@ -459,14 +506,22 @@ public class OmniboxTestUtils {
     }
 
     /**
+     * Verify the text content of the Omnibox matches the expected string.
+     *
+     * @param expectedText Expected text in the Omnibox.
+     */
+    public void checkText(String expectedText) {
+        checkText(Matchers.equalTo(expectedText), null);
+    }
+
+    /**
      * Verify the text content of the Omnibox.
      *
      * @param textMatcher Matcher checking the content of the Omnibox.
      * @param autocompleteTextMatcher Optional Matcher for autocompletion.
      */
     public void checkText(
-            @NonNull Matcher<String> textMatcher,
-            @Nullable Matcher<String> autocompleteTextMatcher) {
+            Matcher<String> textMatcher, @Nullable Matcher<String> autocompleteTextMatcher) {
         checkText(textMatcher, autocompleteTextMatcher, null);
     }
 
@@ -478,7 +533,7 @@ public class OmniboxTestUtils {
      * @param additionalTextMatcher Optional Matcher for additional text.
      */
     public void checkText(
-            @NonNull Matcher<String> textMatcher,
+            Matcher<String> textMatcher,
             @Nullable Matcher<String> autocompleteTextMatcher,
             @Nullable Matcher<String> additionalTextMatcher) {
         checkText(textMatcher, autocompleteTextMatcher, additionalTextMatcher, null, null);
@@ -494,7 +549,7 @@ public class OmniboxTestUtils {
      * @param autocompleteSelectionEnd Matcher for Autocomplete's end position.
      */
     public void checkText(
-            @NonNull Matcher<String> textMatcher,
+            Matcher<String> textMatcher,
             @Nullable Matcher<String> autocompleteTextMatcher,
             @Nullable Matcher<String> additionalTextMatcher,
             int autocompleteSelectionStart,
@@ -517,7 +572,7 @@ public class OmniboxTestUtils {
      * @param autocompleteSelectionEnd Optional Matcher for Autocomplete's end position.
      */
     public void checkText(
-            @NonNull Matcher<String> textMatcher,
+            Matcher<String> textMatcher,
             @Nullable Matcher<String> autocompleteTextMatcher,
             @Nullable Matcher<String> additionalTextMatcher,
             @Nullable Matcher<Integer> autocompleteSelectionStart,
@@ -583,7 +638,7 @@ public class OmniboxTestUtils {
     /**
      * Verify the Composing text in the Omnibox.
      *
-     * Unlike Autocomplete, Composing text enables more finegrained control of the edited text.
+     * <p>Unlike Autocomplete, Composing text enables more finegrained control of the edited text.
      * This is particularly relevant to certain family of languages and input connections, where
      * individual characters or sequences are modified with subsequent keystrokes (eg. T9).
      *
@@ -592,7 +647,7 @@ public class OmniboxTestUtils {
      * @param composingRangeEnd Character index where the compose ends.
      */
     public void checkComposingText(
-            @NonNull Matcher<String> textMatcher, int composingRangeStart, int composingRangeEnd) {
+            Matcher<String> textMatcher, int composingRangeStart, int composingRangeEnd) {
         checkFocus(true);
         CriteriaHelper.pollUiThread(
                 () -> {
@@ -630,11 +685,12 @@ public class OmniboxTestUtils {
      * @param composingRegionEnd The placement inside the existing text where composing ends.
      */
     public void setComposingText(
-            @NonNull String composingText, int composingRegionStart, int composingRegionEnd) {
+            String composingText, int composingRegionStart, int composingRegionEnd) {
         checkFocus(true);
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     InputConnection conn = mUrlBar.getInputConnection();
+                    assert conn != null;
                     conn.setComposingRegion(composingRegionStart, composingRegionEnd);
                     conn.setComposingText(
                             composingText, /* newCursorPosition= */ composingText.length());
@@ -666,10 +722,13 @@ public class OmniboxTestUtils {
 
         @Override
         protected ConditionStatus checkWithSuppliers() {
-            OmniboxSuggestionsContainer container =
-                    mLocationBar.getAutocompleteCoordinator().getSuggestionsContainerForTest();
+            AutocompleteCoordinator autocomplete = mLocationBar.getAutocompleteCoordinator();
+            if (autocomplete == null) {
+                return notFulfilled("autocomplete is null");
+            }
+            OmniboxSuggestionsContainer container = autocomplete.getSuggestionsContainerForTest();
             OmniboxSuggestionsDropdown dropdown =
-                    mLocationBar.getAutocompleteCoordinator().getSuggestionsDropdownForTest();
+                    (OmniboxSuggestionsDropdown) autocomplete.getSuggestionsDropdown();
             if (container == null || dropdown == null) {
                 return notFulfilled("suggestion list is null");
             }
@@ -696,10 +755,13 @@ public class OmniboxTestUtils {
 
         @Override
         protected ConditionStatus checkWithSuppliers() {
-            OmniboxSuggestionsContainer container =
-                    mLocationBar.getAutocompleteCoordinator().getSuggestionsContainerForTest();
+            AutocompleteCoordinator autocomplete = mLocationBar.getAutocompleteCoordinator();
+            if (autocomplete == null) {
+                return fulfilled();
+            }
+            OmniboxSuggestionsContainer container = autocomplete.getSuggestionsContainerForTest();
             OmniboxSuggestionsDropdown dropdown =
-                    mLocationBar.getAutocompleteCoordinator().getSuggestionsDropdownForTest();
+                    (OmniboxSuggestionsDropdown) autocomplete.getSuggestionsDropdown();
             // Suggestions list can't be showing if it's not constructed.
             if (container == null || dropdown == null) {
                 return fulfilled();
@@ -770,6 +832,27 @@ public class OmniboxTestUtils {
             return mExpectActive
                     ? "InputMethodManager is active"
                     : "InputMethodManager is not active";
+        }
+    }
+
+    public static class SoftKeyboardShowingCondition extends UiThreadCondition {
+        private final View mView;
+        private final boolean mExpectShowing;
+
+        public SoftKeyboardShowingCondition(View view, boolean expectShowing) {
+            mView = view;
+            mExpectShowing = expectShowing;
+        }
+
+        @Override
+        protected ConditionStatus checkWithSuppliers() {
+            boolean isShowing = KeyboardUtils.isAndroidSoftKeyboardShowing(mView);
+            return whether(isShowing == mExpectShowing, "Keyboard showing is %b", isShowing);
+        }
+
+        @Override
+        public String buildDescription() {
+            return mExpectShowing ? "Soft keyboard is showing" : "Soft keyboard is not showing";
         }
     }
 }

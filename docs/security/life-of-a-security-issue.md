@@ -44,8 +44,8 @@ sequenceDiagram
 
 A security bug begins when a reporter [
 discloses](https://www.chromium.org/Home/chromium-security/reporting-security-bugs/)
-a bug in the [Chromium issue
-tracker](https://issues.chromium.org/issues/new?noWizard=true&component=1363614&template=1922342).
+a bug in the Chrome VRP intake on
+[Google Bughunters](https://bughunters.google.com/report/vrp).
 The new bug is placed in a queue of other incoming security bugs, and it is
 view-restricted to the reporter and select individuals on a need-to-know
 basis.
@@ -59,23 +59,31 @@ about issues that are frequently reported.
 
 ## 2. Triage bug
 
-After the bug is filed, a [security shepherd](shepherd.md) will evaluate the
-report. The shepherd does several tasks:
+After the bug is filed, a [security shepherd](shepherd.md) (with help from some
+robots) will evaluate the report. The sheepdog robot, and the shepherd do
+several tasks:
 
-- Validate that the bug reproduces
-- Searching for any duplicate reports
-- Tag the bug with components
+- Ensure the bug has the necessary information for reproduction
 - Assess the bug's [severity](severity-guidelines.md)
+- Search for any duplicate reports
+- Validate that the bug reproduces
+- Tag the bug with components
 - Determine the versions affected
 - Assign the bug to a developer
 
 ## 3. Assign bug
 
-The primary job of the shepherd is to route valid and actionable reports of
-security bugs to the Chromium developer who is best poised to fix the issue.
+The primary job of the triage rotation is to route valid and actionable reports
+of security bugs to the Chromium developer who is best poised to fix the issue.
 
 After the issue is assigned, there may be discussion between the developer(s)
 involved, members of the security team, and the original reporter.
+
+Low Severity (S3) issues may not be assigned but instead enter the default
+triage mechanisms for Chrome. To enable this, they are made visible internally
+soon after being marked Low, and made public after approximately four weeks.
+This allows anyone with the right knowledge and skills to find and fix the
+issue.
 
 ## 4. Author and land a CL on `main`
 
@@ -152,6 +160,11 @@ security team member will assign the issue a [CVE](https://www.cve.org/) number.
 CVE numbers need to point to a publicly accessible artifact, and Chrome uses the
 releases blog (see below) for this purpose.
 
+Chrome sometimes issues CVEs and later reclassifies an issue reported as a
+security vulnerability as a non-security functional issue. Chrome does not
+routinely revoke CVEs in these cases. The status of the issue will reflect
+our most recent security assessment.
+
 ## 11. Publish release & security notes
 
 The Chrome Release team releases an update of Chrome containing the security
@@ -163,7 +176,10 @@ acknowledging the reporter as requested (if they have consented to such).
 
 ## 12. Publicly disclose
 
-Except in rare circumstances where the bug report has been embargoed, 14 weeks
+Except in rare circumstances where the bug report has been embargoed, 30 days
 after the issue is marked *Fixed*, security automation opens the bug for public
 disclosure. At that time, the reporter can consider their obligations under
 coordinated disclosure to be fulfilled.
+
+Low Severity (S3) issues may be made public after approximately four weeks if
+a developer is not actively investigating the issue.

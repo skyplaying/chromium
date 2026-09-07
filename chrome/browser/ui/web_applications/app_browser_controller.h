@@ -9,10 +9,12 @@
 #include <optional>
 #include <string>
 
+#include "base/containers/flat_set.h"
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/themes/browser_theme_provider_delegate.h"
 #include "chrome/browser/ui/page_action/page_action_icon_type.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
+#include "components/tabs/public/tab_context_menu_command.h"
 #include "components/url_formatter/url_formatter.h"
 #include "components/webapps/browser/installable/installable_metrics.h"
 #include "components/webapps/common/web_app_id.h"
@@ -25,11 +27,13 @@
 #include "ui/color/color_provider_key.h"
 #include "url/gurl.h"
 
-class Browser;
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chromeos/ash/components/system_web_apps/system_web_app_type.h"
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
 class BrowserWindowInterface;
 class BrowserThemePack;
 class CustomThemeSupplier;
-class TabMenuModelFactory;
 
 #if BUILDFLAG(IS_CHROMEOS)
 namespace ash {
@@ -225,6 +229,10 @@ class AppBrowserController : public ui::ColorProviderKey::InitializerSupplier,
 
   virtual bool CanUserUninstall() const;
 
+  // Returns whether the app was preinstalled only, and not installed
+  // by any other sources.
+  virtual bool IsPreinstalledOnly() const;
+
   virtual void Uninstall(
       webapps::WebappUninstallSource webapp_uninstall_source);
 
@@ -232,19 +240,25 @@ class AppBrowserController : public ui::ColorProviderKey::InitializerSupplier,
   // the lifetime of HostedAppBrowserController).
   virtual bool IsInstalled() const;
 
-  // Returns an optional custom tab menu model factory.
-  virtual std::unique_ptr<TabMenuModelFactory> GetTabMenuModelFactory() const;
+  // Returns whether this is the first launch of the app after it was installed.
+  virtual bool IsFirstLaunchAfterInstall() const;
+
+  // If std::nullopt (the default), the standard web app tab menu is built.
+  // If a set is returned, exactly those contained will be used (modulo pinned
+  // home tab restrictions).
+  virtual std::optional<base::flat_set<tabs::TabContextMenuCommand>>
+  GetAllowedTabMenuCommands() const;
 
   // Returns true when an app's effective display mode is
   // window-controls-overlay.
   virtual bool AppUsesWindowControlsOverlay() const;
 
-  // Returns true when an app's effective display mode is borderless.
-  virtual bool AppUsesBorderlessMode() const;
+  // Returns true when an app's effective display mode is unframed.
+  virtual bool AppUsesUnframedMode() const;
 
   // Returns true when `url` matches the display mode override patterns for
-  // borderless mode, or when there are no patterns to match.
-  virtual bool UrlMatchesBorderlessPattern(const GURL& url) const;
+  // unframed mode, or when there are no patterns to match.
+  virtual bool UrlMatchesUnframedPattern(const GURL& url) const;
 
   // Returns true when an app's effective display mode is tabbed.
   virtual bool AppUsesTabbed() const;
@@ -278,13 +292,17 @@ class AppBrowserController : public ui::ColorProviderKey::InitializerSupplier,
   // Returns true if there is a pending migration available for this app.
   virtual bool HasPendingMigration() const;
 
-  // Constructs the metadata required for app identity updating and triggers the
-  // corresponding dialog.
-  virtual void CreateMetadataAndTriggerAppUpdateDialog(
+  // Constructs the metadata required for app identity updating or migration,
+  // and triggers the corresponding dialog.
+  virtual void TriggerAppUpdateOrMigrationDialog(
       base::TimeTicks start_time) const;
 
   // Returns whether prevent close is enabled.
   bool IsPreventCloseEnabled() const;
+
+  // Returns true if the Capture Handle should be exposed for this
+  // app window when captured via window capture.
+  virtual bool IsWindowCaptureHandleAllowed() const;
 
 #if !BUILDFLAG(IS_CHROMEOS)
   // Whether the browser should show the profile menu button in the toolbar.
@@ -306,7 +324,12 @@ class AppBrowserController : public ui::ColorProviderKey::InitializerSupplier,
 
   const webapps::AppId& app_id() const { return app_id_; }
 
-  Browser* browser() const { return browser_; }
+  // Returns whether this app browser was created from a trusted source.
+  bool IsTrustedSource() const;
+
+#if !BUILDFLAG(IS_ANDROID)
+  BrowserWindowInterface* browser() const { return browser_; }
+#endif
 
   // Gets the url that the app browser controller was created with. Note: This
   // may be empty until the web contents begins navigating.
@@ -350,10 +373,10 @@ class AppBrowserController : public ui::ColorProviderKey::InitializerSupplier,
   void MaybeSetInitialUrlOnReparentTab();
 
  protected:
-  AppBrowserController(Browser* browser,
+  AppBrowserController(BrowserWindowInterface* browser,
                        webapps::AppId app_id,
                        bool has_tab_strip);
-  AppBrowserController(Browser* browser, webapps::AppId app_id);
+  AppBrowserController(BrowserWindowInterface* browser, webapps::AppId app_id);
 
   // Called once the app browser controller has determined its initial url.
   virtual void OnReceivedInitialURL();
@@ -371,7 +394,7 @@ class AppBrowserController : public ui::ColorProviderKey::InitializerSupplier,
   // Sets the url that the app browser controller was created with.
   void SetInitialURL(const GURL& initial_url);
 
-  const raw_ptr<Browser> browser_;
+  const raw_ptr<BrowserWindowInterface> browser_;
   const webapps::AppId app_id_;
   const bool has_tab_strip_;
   GURL initial_url_;
@@ -381,12 +404,24 @@ class AppBrowserController : public ui::ColorProviderKey::InitializerSupplier,
   std::optional<SkColor> last_theme_color_;
   std::optional<SkColor> last_background_color_;
 
-  std::optional<SkRegion> draggable_region_ = std::nullopt;
+  std::optional<SkRegion> draggable_region_;
 
   base::OnceClosure on_draggable_region_set_for_testing_;
 
   ui::ScopedUnownedUserData<AppBrowserController> scoped_unowned_user_data_;
 };
+
+#if BUILDFLAG(IS_CHROMEOS)
+// Returns the SystemWebAppDelegate if `browser` is hosting a System Web App, or
+// nullptr otherwise.
+const ash::SystemWebAppDelegate* GetSystemWebAppDelegate(
+    const BrowserWindowInterface* browser);
+
+// Returns the SystemWebAppType if `browser` is hosting a System Web App, or
+// std::nullopt otherwise.
+std::optional<ash::SystemWebAppType> GetSystemWebAppType(
+    const BrowserWindowInterface* browser);
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 }  // namespace web_app
 

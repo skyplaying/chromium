@@ -14,6 +14,7 @@
 #include <string_view>
 #include <vector>
 
+#include "base/byte_size.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "net/base/completion_once_callback.h"
@@ -48,7 +49,7 @@ struct WebSocketExtensionParams;
 class NET_EXPORT_PRIVATE WebSocketBasicHandshakeStream final
     : public WebSocketHandshakeStreamBase {
  public:
-  // |connect_delegate| and |failure_message| must out-live this object.
+  // `connect_delegate` and `request` must outlive this object.
   WebSocketBasicHandshakeStream(
       std::unique_ptr<StreamSocketHandle> connection,
       WebSocketStream::ConnectDelegate* connect_delegate,
@@ -82,8 +83,8 @@ class NET_EXPORT_PRIVATE WebSocketBasicHandshakeStream final
   bool IsConnectionReused() const override;
   void SetConnectionReused() override;
   bool CanReuseConnection() const override;
-  int64_t GetTotalReceivedBytes() const override;
-  int64_t GetTotalSentBytes() const override;
+  base::ByteSize GetTotalReceivedBytes() const override;
+  base::ByteSize GetTotalSentBytes() const override;
   bool GetAlternativeService(
       AlternativeService* alternative_service) const override;
   bool GetLoadTimingInfo(LoadTimingInfo* load_timing_info) const override;
@@ -91,6 +92,8 @@ class NET_EXPORT_PRIVATE WebSocketBasicHandshakeStream final
   int GetRemoteEndpoint(IPEndPoint* endpoint) override;
   void Drain(HttpNetworkSession* session) override;
   void SetPriority(RequestPriority priority) override;
+  void PopulateLoadTimingInternalInfo(
+      LoadTimingInternalInfo* load_timing_internal_info) const override;
   void PopulateNetErrorDetails(NetErrorDetails* details) override;
   std::unique_ptr<HttpStream> RenewStreamForAuth() override;
   const std::set<std::string>& GetDnsAliases() const override;
@@ -165,8 +168,7 @@ class NET_EXPORT_PRIVATE WebSocketBasicHandshakeStream final
   // The extension(s) selected by the server.
   std::string extensions_;
 
-  // The extension parameters. The class is defined in the implementation file
-  // to avoid including extension-related header files here.
+  // The extension parameters negotiated during the handshake.
   std::unique_ptr<WebSocketExtensionParams> extension_params_;
 
   const raw_ptr<WebSocketStreamRequestAPI> stream_request_;

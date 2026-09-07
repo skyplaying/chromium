@@ -15,15 +15,13 @@
 #include "components/tabs/public/tab_collection.h"
 #include "components/tabs/public/tab_interface.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "ui/base/unowned_user_data/unowned_user_data_host.h"
 
 class BrowserWindowInterface;
+class Profile;
 
 namespace content {
 class WebContents;
-}
-
-namespace ui {
-class UnownedUserDataHost;
 }
 
 namespace tabs {
@@ -36,6 +34,11 @@ class MockTabInterface : public testing::NiceMock<TabInterface> {
 
   MOCK_METHOD(base::WeakPtr<TabInterface>, GetWeakPtr, (), (override));
   MOCK_METHOD(content::WebContents*, GetContents, (), (const, override));
+  MOCK_METHOD(void, LoadIfNeeded, (), (override));
+  MOCK_METHOD(std::u16string, GetTitle, (), (const, override));
+  MOCK_METHOD(GURL, GetURL, (), (const, override));
+  MOCK_METHOD(base::Time, GetLastActiveTime, (), (const, override));
+  MOCK_METHOD(Profile*, GetProfile, (), (const, override));
   MOCK_METHOD(void, Close, (), (override));
   MOCK_METHOD(base::CallbackListSubscription,
               RegisterWillDiscardContents,
@@ -75,6 +78,10 @@ class MockTabInterface : public testing::NiceMock<TabInterface> {
   MOCK_METHOD(base::CallbackListSubscription,
               RegisterGroupChanged,
               (GroupChangedCallback),
+              (override));
+  MOCK_METHOD(base::CallbackListSubscription,
+              RegisterBlockedStateChanged,
+              (BlockedStateChangedCallback),
               (override));
   MOCK_METHOD(bool, CanShowModalUI, (), (const, override));
   MOCK_METHOD(std::unique_ptr<ScopedTabModalUI>, ShowModalUI, (), (override));
@@ -123,6 +130,11 @@ class MockTabInterface : public testing::NiceMock<TabInterface> {
               GetUnownedUserDataHost,
               (),
               (const, override));
+
+ private:
+  // Returned by GetUnownedUserDataHost() by default so that tests exercising
+  // UnownedUserData-based lookups do not need to stub the method themselves.
+  ui::UnownedUserDataHost default_unowned_user_data_host_;
 };
 
 }  // namespace tabs

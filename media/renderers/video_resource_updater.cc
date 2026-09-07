@@ -209,6 +209,7 @@ SupportedMultiPlaneChannelFormat(
             viz::SharedImageFormat::ChannelFormat::k8)) {
       return viz::SharedImageFormat::ChannelFormat::k8;
     }
+    return std::nullopt;
   }
   // TODO(https:/crbug.com/481590672): Checking `supports_r16_shared_images`
   // may be too pessimistic. Consider removing it.
@@ -270,6 +271,12 @@ viz::SharedImageFormat VideoPixelFormatToMultiPlanarSharedImageFormat(
       return viz::MultiPlaneFormat::kNV12A;
     case PIXEL_FORMAT_I420A:
       return viz::MultiPlaneFormat::kI420A;
+    case PIXEL_FORMAT_I422A:
+      return viz::SharedImageFormat::MultiPlane(
+          PlaneConfig::kY_U_V_A, Subsampling::k422, ChannelFormat::k8);
+    case PIXEL_FORMAT_I444A:
+      return viz::SharedImageFormat::MultiPlane(
+          PlaneConfig::kY_U_V_A, Subsampling::k444, ChannelFormat::k8);
     case PIXEL_FORMAT_NV16:
     case PIXEL_FORMAT_NV24:
     case PIXEL_FORMAT_P010LE:
@@ -289,8 +296,6 @@ viz::SharedImageFormat VideoPixelFormatToMultiPlanarSharedImageFormat(
     case PIXEL_FORMAT_XB30:
     case PIXEL_FORMAT_BGRA:
     case PIXEL_FORMAT_RGBAF16:
-    case PIXEL_FORMAT_I422A:
-    case PIXEL_FORMAT_I444A:
     case PIXEL_FORMAT_YUV420AP10:
     case PIXEL_FORMAT_YUV422AP10:
     case PIXEL_FORMAT_YUV444AP10:
@@ -341,6 +346,28 @@ class CopyingSyncTokenClient : public VideoFrame::SyncTokenClient {
   gpu::SyncToken sync_token_;
 };
 
+void ReturnTexture(
+    scoped_refptr<VideoFrame> video_frame,
+    scoped_refptr<viz::RasterContextProvider> raster_context_provider,
+    const gpu::SyncToken& original_release_token,
+    const gpu::SyncToken& new_release_token,
+    bool lost_resource) {
+  // Note: This method is called for each plane texture in the frame! Which
+  // means it may end up receiving the same `new_release_token` multiple times.
+  if (lost_resource) {
+    video_frame->SetLostSharedImageResource();
+    return;
+  }
+
+  if (!new_release_token.HasData()) {
+    return;
+  }
+
+  ResourceSyncTokenClient client(raster_context_provider->RasterInterface(),
+                                 original_release_token, new_release_token);
+  video_frame->UpdateReleaseSyncToken(&client);
+}
+
 }  // namespace
 
 VideoFrameExternalResource::VideoFrameExternalResource() = default;
@@ -367,7 +394,8 @@ class VideoResourceUpdater::FrameResource {
             {viz::SinglePlaneFormat::kBGRA_8888, size, color_space,
              gpu::SHARED_IMAGE_USAGE_CPU_WRITE_ONLY, "VideoResourceUpdater"});
     mapping_ = shared_image_->Map();
-    sync_token_ = shared_image_interface->GenVerifiedSyncToken();
+    sync_token_ = shared_image_->creation_sync_token();
+    shared_image_interface->VerifySyncToken(sync_token_);
   }
 
   // For hardware frame resource.
@@ -376,25 +404,17 @@ class VideoResourceUpdater::FrameResource {
                 viz::SharedImageFormat format,
                 const gfx::ColorSpace& color_space,
                 SkAlphaType alpha_type,
-                bool use_gpu_memory_buffer_resources,
+                bool is_overlay_candidate,
                 gpu::SharedImageInterface* shared_image_interface)
       : id_(frame_resource_id), is_software_(false) {
     DCHECK(shared_image_interface);
-    // TODO(crbug.com/40239769): Set `overlay_candidate` for multiplanar
-    // formats.
-    const bool overlay_candidate = format.is_single_plane() &&
-                                   use_gpu_memory_buffer_resources &&
-                                   shared_image_interface->GetCapabilities()
-                                       .supports_scanout_shared_images &&
-                                   CanCreateNativeBufferForFormat(format);
-
     // These SharedImages will be sent over to the display compositor as
     // TransferableResources. RasterInterface which in turn uses RasterDecoder
     // writes the contents of video frames into SharedImages.
     gpu::SharedImageUsageSet shared_image_usage =
         gpu::SHARED_IMAGE_USAGE_DISPLAY_READ |
         gpu::SHARED_IMAGE_USAGE_RASTER_WRITE;
-    if (overlay_candidate) {
+    if (is_overlay_candidate) {
       shared_image_usage |= gpu::SHARED_IMAGE_USAGE_SCANOUT;
     }
     shared_image_ = shared_image_interface->CreateSharedImage(
@@ -533,9 +553,8 @@ void VideoResourceUpdater::ObtainFrameResource(
   frame_resource_id_ = resource_provider_->ImportResource(
       external_resource.resource,
       std::move(external_resource.release_callback));
-  TRACE_EVENT_INSTANT1("media", "VideoResourceUpdater::ObtainFrameResource",
-                       TRACE_EVENT_SCOPE_THREAD, "Timestamp",
-                       video_frame->timestamp().InMicroseconds());
+  TRACE_EVENT_INSTANT("media", "VideoResourceUpdater::ObtainFrameResource",
+                      "Timestamp", video_frame->timestamp().InMicroseconds());
 }
 
 void VideoResourceUpdater::ReleaseFrameResource() {
@@ -665,6 +684,7 @@ VideoResourceUpdater::RecycleOrAllocateResource(
     viz::SharedImageFormat si_format,
     const gfx::ColorSpace& color_space,
     SkAlphaType alpha_type,
+    bool is_overlay_candidate,
     VideoFrame::ID unique_id) {
   FrameResource* recyclable_resource = nullptr;
   for (auto& resource : all_resources_) {
@@ -694,14 +714,16 @@ VideoResourceUpdater::RecycleOrAllocateResource(
   }
 
   // There was nothing available to reuse or recycle. Allocate a new resource.
-  return AllocateResource(resource_size, si_format, color_space, alpha_type);
+  return AllocateResource(resource_size, si_format, color_space, alpha_type,
+                          is_overlay_candidate);
 }
 
 VideoResourceUpdater::FrameResource* VideoResourceUpdater::AllocateResource(
     const gfx::Size& size,
     viz::SharedImageFormat format,
     const gfx::ColorSpace& color_space,
-    SkAlphaType alpha_type) {
+    SkAlphaType alpha_type,
+    bool is_overlay_candidate) {
   const uint32_t resource_id = next_plane_resource_id_++;
 
   if (software_compositor()) {
@@ -712,8 +734,7 @@ VideoResourceUpdater::FrameResource* VideoResourceUpdater::AllocateResource(
   } else {
     all_resources_.push_back(std::make_unique<FrameResource>(
         resource_id, size, format, color_space, alpha_type,
-        use_gpu_memory_buffer_resources_,
-        context_provider_->SharedImageInterface()));
+        is_overlay_candidate, context_provider_->SharedImageInterface()));
   }
   return all_resources_.back().get();
 }
@@ -737,7 +758,7 @@ VideoFrameExternalResource VideoResourceUpdater::CopyHardwareResource(
   const VideoFrame::ID no_unique_id;  // Do not recycle referenced textures.
   FrameResource* hardware_resource = RecycleOrAllocateResource(
       output_resource_size, copy_si_format, copy_color_space, copy_alpha_type,
-      no_unique_id);
+      /*is_overlay_candidate=*/false, no_unique_id);
   CHECK(!hardware_resource->is_software());
   hardware_resource->add_ref();
 
@@ -763,13 +784,10 @@ VideoFrameExternalResource VideoResourceUpdater::CopyHardwareResource(
   hardware_resource->UpdateSyncToken(sync_token);
   gpu::RasterScopedAccess::EndAccess(std::move(dst_ri_access));
 
-  viz::TransferableResource::MetadataOverride overrides = {
-      .is_overlay_candidate = false,
-  };
   auto transferable_resource = viz::TransferableResource::Make(
       hardware_resource->shared_image(),
       viz::TransferableResource::ResourceSource::kVideo,
-      hardware_resource->sync_token(), overrides);
+      hardware_resource->sync_token());
 
   transferable_resource.hdr_metadata = video_frame->hdr_metadata();
   transferable_resource.needs_detiling = video_frame->metadata().needs_detiling;
@@ -789,7 +807,12 @@ VideoFrameExternalResource VideoResourceUpdater::CreateForHardwareFrame(
     return VideoFrameExternalResource();
   }
 
-  if (video_frame->metadata().copy_required) {
+  const bool copy_required =
+      base::FeatureList::IsEnabled(media::kUseSharedImageUsageForVideoFrameCopy)
+          ? !video_frame->shared_image()->usage().Has(
+                gpu::SHARED_IMAGE_USAGE_DISPLAY_READ)
+          : video_frame->metadata().copy_required;
+  if (copy_required) {
     return CopyHardwareResource(video_frame.get());
   }
 
@@ -813,7 +836,6 @@ VideoFrameExternalResource VideoResourceUpdater::CreateForHardwareFrame(
           : kUnpremul_SkAlphaType;
 
   viz::TransferableResource::MetadataOverride overrides = {
-      .is_overlay_candidate = video_frame->metadata().allow_overlay,
       .color_space = video_frame->ColorSpace(),
       .alpha_type = alpha_type,
   };
@@ -828,7 +850,7 @@ VideoFrameExternalResource VideoResourceUpdater::CreateForHardwareFrame(
   }
 
 #if BUILDFLAG(IS_ANDROID)
-  transfer_resource.ycbcr_info = video_frame->ycbcr_info();
+  transfer_resource.ycbcr_info = video_frame->metadata().ycbcr_info;
   transfer_resource.is_backed_by_surface_view =
       video_frame->metadata().in_surface_view;
 #endif
@@ -840,8 +862,8 @@ VideoFrameExternalResource VideoResourceUpdater::CreateForHardwareFrame(
 
   external_resource.resource = std::move(transfer_resource);
   external_resource.release_callback = base::BindOnce(
-      &VideoResourceUpdater::ReturnTexture, weak_ptr_factory_.GetWeakPtr(),
-      video_frame, original_release_token);
+      &ReturnTexture, video_frame, base::WrapRefCounted(context_provider_),
+      original_release_token);
   return external_resource;
 }
 
@@ -1063,6 +1085,7 @@ bool VideoResourceUpdater::WriteYUVPixelsForAllPlanesToTexture(
       }
 
       if (is_16bit_float) {
+        CHECK_GT(bits_per_channel, 8u);
         int max_value = 1 << bits_per_channel;
         // Use 1.0/max_value to be consistent with multiplanar shared images
         // which create TextureDrawQuads and don't take in a multiplier, offset.
@@ -1161,10 +1184,16 @@ VideoFrameExternalResource VideoResourceUpdater::CreateForSoftwareFrame(
   gfx::ColorSpace output_color_space = video_frame->ColorSpace();
   SkAlphaType output_alpha_type =
       software_compositor() ? kPremul_SkAlphaType : kUnpremul_SkAlphaType;
-  if (!software_compositor() && use_gpu_memory_buffer_resources_ &&
+  // Only set overlay candidate for single planar frames, since multiplanar
+  // frames that are triplanar are not supported.
+  const bool is_overlay_candidate =
+      !software_compositor() && output_si_format.is_single_plane() &&
+      CanCreateNativeBufferForFormat(output_si_format) &&
+      use_gpu_memory_buffer_resources_ &&
       context_provider_->SharedImageInterface()
           ->GetCapabilities()
-          .supports_scanout_shared_images) {
+          .supports_scanout_shared_images;
+  if (is_overlay_candidate) {
     // Overlays can only work with Premul alpha types.
     output_alpha_type = kPremul_SkAlphaType;
   }
@@ -1215,7 +1244,7 @@ VideoFrameExternalResource VideoResourceUpdater::CreateForSoftwareFrame(
   // to create a single multiplanar resource.
   FrameResource* frame_resource = RecycleOrAllocateResource(
       output_resource_size, output_si_format, output_color_space,
-      output_alpha_type, video_frame->unique_id());
+      output_alpha_type, is_overlay_candidate, video_frame->unique_id());
   frame_resource->add_ref();
 
   // The formats must match.
@@ -1284,27 +1313,6 @@ gpu::raster::RasterInterface* VideoResourceUpdater::RasterInterface() {
   auto* ri = context_provider_->RasterInterface();
   CHECK(ri);
   return ri;
-}
-
-void VideoResourceUpdater::ReturnTexture(
-    scoped_refptr<VideoFrame> video_frame,
-    const gpu::SyncToken& original_release_token,
-    const gpu::SyncToken& new_release_token,
-    bool lost_resource) {
-  // Note: This method is called for each plane texture in the frame! Which
-  // means it may end up receiving the same `new_release_token` multiple times.
-
-  if (lost_resource) {
-    return;
-  }
-
-  if (!new_release_token.HasData()) {
-    return;
-  }
-
-  ResourceSyncTokenClient client(RasterInterface(), original_release_token,
-                                 new_release_token);
-  video_frame->UpdateReleaseSyncToken(&client);
 }
 
 void VideoResourceUpdater::RecycleResource(uint32_t resource_id,

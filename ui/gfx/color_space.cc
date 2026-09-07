@@ -10,7 +10,11 @@
 #include <sstream>
 
 #include "base/atomic_sequence_num.h"
+#include "base/bit_cast.h"
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/containers/span_reader.h"
+#include "base/containers/span_writer.h"
 #include "base/debug/crash_logging.h"
 #include "base/lazy_instance.h"
 #include "base/logging.h"
@@ -25,23 +29,65 @@
 #include "third_party/skia/include/core/SkM44.h"
 #include "third_party/skia/modules/skcms/skcms.h"
 #include "ui/gfx/display_color_spaces.h"
-#include "ui/gfx/icc_profile.h"
 #include "ui/gfx/skia_color_space_util.h"
 
 namespace gfx {
 
 namespace {
 
-static bool FloatsEqualWithinTolerance(const float* a,
-                                       const float* b,
-                                       int n,
-                                       float tol) {
-  for (int i = 0; i < n; ++i) {
-    if (std::abs(UNSAFE_TODO(a[i]) - UNSAFE_TODO(b[i])) > tol) {
-      return false;
+constexpr size_t kPrimaryMatrixElementCount =
+    sizeof(skcms_Matrix3x3) / sizeof(float);
+
+// These span conversions assume skcms_TransferFunction and skcms_Matrix3x3 are
+// stored as tightly packed floats.
+static_assert(sizeof(skcms_Matrix3x3) ==
+              kPrimaryMatrixElementCount * sizeof(float));
+
+bool MatricesEqualWithinTolerance(const skcms_Matrix3x3& lhs,
+                                  const skcms_Matrix3x3& rhs,
+                                  float tol) {
+  constexpr size_t kRowCount = std::size(skcms_Matrix3x3{}.vals);
+  constexpr size_t kColumnCount = std::size(skcms_Matrix3x3{}.vals[0]);
+
+  base::span<const float[kColumnCount], kRowCount> lhs_rows(lhs.vals);
+  base::span<const float[kColumnCount], kRowCount> rhs_rows(rhs.vals);
+
+  for (size_t row = 0; row < kRowCount; ++row) {
+    base::span<const float, kColumnCount> lhs_row_span(lhs_rows[row]);
+    base::span<const float, kColumnCount> rhs_row_span(rhs_rows[row]);
+    for (size_t column = 0; column < kColumnCount; ++column) {
+      if (std::abs(lhs_row_span[column] - rhs_row_span[column]) > tol) {
+        return false;
+      }
     }
   }
   return true;
+}
+
+void CopyMatrixToArray(const skcms_Matrix3x3& matrix,
+                       base::span<float, kPrimaryMatrixElementCount> out) {
+  base::SpanWriter writer(out);
+  for (const base::span<const float, 3> row : matrix.vals) {
+    CHECK(writer.Write(row));
+  }
+}
+
+void CopyArrayToMatrix(
+    base::span<const float, kPrimaryMatrixElementCount> values,
+    skcms_Matrix3x3& matrix) {
+  base::SpanReader reader(values);
+  for (base::span<float, 3> row : matrix.vals) {
+    CHECK(reader.ReadCopy(row));
+  }
+}
+
+bool TransferFunctionsEqualWithinTolerance(const skcms_TransferFunction& lhs,
+                                           const skcms_TransferFunction& rhs,
+                                           float tol) {
+  return std::abs(lhs.a - rhs.a) <= tol && std::abs(lhs.b - rhs.b) <= tol &&
+         std::abs(lhs.c - rhs.c) <= tol && std::abs(lhs.d - rhs.d) <= tol &&
+         std::abs(lhs.e - rhs.e) <= tol && std::abs(lhs.f - rhs.f) <= tol &&
+         std::abs(lhs.g - rhs.g) <= tol;
 }
 
 bool PrimaryIdContainsSRGB(ColorSpace::PrimaryID id) {
@@ -100,6 +146,23 @@ ColorSpace::ColorSpace(PrimaryID primaries,
                               transfer_ == TransferID::CUSTOM_HDR);
   }
 }
+
+ColorSpace::ColorSpace(const SkColorSpacePrimaries& primaries,
+                       const skcms_TransferFunction& fn)
+    : ColorSpace(PrimaryID::INVALID,
+                 TransferID::INVALID,
+                 MatrixID::RGB,
+                 RangeID::FULL) {
+  skcms_Matrix3x3 to_XYZD50;
+  if (!primaries.toXYZD50(&to_XYZD50)) {
+    return;
+  }
+  SetCustomPrimaries(to_XYZD50);
+  SetCustomTransferFunction(fn, /*is_hdr=*/false);
+}
+
+ColorSpace::ColorSpace(const SkColorSpace* sk_color_space, bool is_hdr)
+    : ColorSpace(sk_color_space ? ColorSpace(*sk_color_space, is_hdr) : ColorSpace()) {}
 
 ColorSpace::ColorSpace(const SkColorSpace& sk_color_space, bool is_hdr)
     : ColorSpace(PrimaryID::INVALID,
@@ -192,14 +255,13 @@ void ColorSpace::SetCustomPrimaries(const skcms_Matrix3x3& to_XYZD50) {
   for (PrimaryID id : kIDsToCheck) {
     skcms_Matrix3x3 matrix;
     GetPrimaryMatrix(id, &matrix);
-    if (FloatsEqualWithinTolerance(&to_XYZD50.vals[0][0], &matrix.vals[0][0], 9,
-                                   0.001f)) {
+    if (MatricesEqualWithinTolerance(to_XYZD50, matrix, 0.001f)) {
       primaries_ = id;
       return;
     }
   }
 
-  UNSAFE_TODO(memcpy(custom_primary_matrix_, &to_XYZD50, 9 * sizeof(float)));
+  CopyMatrixToArray(to_XYZD50, custom_primary_matrix_);
   primaries_ = PrimaryID::CUSTOM;
 }
 
@@ -208,7 +270,7 @@ void ColorSpace::SetCustomTransferFunction(const skcms_TransferFunction& fn,
   auto check_transfer_fn = [this, &fn](TransferID id) {
     skcms_TransferFunction id_fn;
     GetTransferFunction(id, &id_fn);
-    if (!FloatsEqualWithinTolerance(&fn.g, &id_fn.g, 7, 0.001f)) {
+    if (!TransferFunctionsEqualWithinTolerance(fn, id_fn, 0.001f)) {
       return false;
     }
     transfer_ = id;
@@ -278,14 +340,28 @@ bool ColorSpace::operator==(const ColorSpace& other) const {
     return false;
   }
   if (primaries_ == PrimaryID::CUSTOM) {
-    if (UNSAFE_TODO(memcmp(custom_primary_matrix_, other.custom_primary_matrix_,
-                           sizeof(custom_primary_matrix_)))) {
+    // Preserve the memcmp()-style bitwise comparison semantics for
+    // floats, including NaNs and signed zero.
+    // base::allow_nonunique_obj is safe here since floats are trivially
+    // copyable and we want a memcmp()-style bitwise comparison between floats,
+    // including NaNs and signed zero.
+    // See
+    // https://chromium.googlesource.com/chromium/src/+/HEAD/base/containers/span.h#164
+    auto lhs =
+        base::as_byte_span(base::allow_nonunique_obj, custom_primary_matrix_);
+    auto rhs = base::as_byte_span(base::allow_nonunique_obj,
+                                  other.custom_primary_matrix_);
+    if (lhs != rhs) {
       return false;
     }
   }
   if (size_t param_count = TransferParamCount(transfer_)) {
-    if (UNSAFE_TODO(memcmp(transfer_params_, other.transfer_params_,
-                           param_count * sizeof(float)))) {
+    auto lhs = base::as_byte_span(base::allow_nonunique_obj, transfer_params_)
+                   .first(param_count * sizeof(float));
+    auto rhs =
+        base::as_byte_span(base::allow_nonunique_obj, other.transfer_params_)
+            .first(param_count * sizeof(float));
+    if (lhs != rhs) {
       return false;
     }
   }
@@ -367,21 +443,24 @@ bool ColorSpace::operator<(const ColorSpace& other) const {
   if (range_ > other.range_)
     return false;
   if (primaries_ == PrimaryID::CUSTOM) {
-    int primary_result =
-        UNSAFE_TODO(memcmp(custom_primary_matrix_, other.custom_primary_matrix_,
-                           sizeof(custom_primary_matrix_)));
-    if (primary_result < 0)
+    auto lhs =
+        base::as_byte_span(base::allow_nonunique_obj, custom_primary_matrix_);
+    auto rhs = base::as_byte_span(base::allow_nonunique_obj,
+                                  other.custom_primary_matrix_);
+    if (lhs < rhs) {
       return true;
-    if (primary_result > 0)
+    }
+    if (lhs > rhs) {
       return false;
+    }
   }
   if (size_t param_count = TransferParamCount(transfer_)) {
-    int transfer_result = UNSAFE_TODO(memcmp(
-        transfer_params_, other.transfer_params_, param_count * sizeof(float)));
-    if (transfer_result < 0)
-      return true;
-    if (transfer_result > 0)
-      return false;
+    auto lhs = base::as_byte_span(base::allow_nonunique_obj, transfer_params_)
+                   .first(param_count * sizeof(float));
+    auto rhs =
+        base::as_byte_span(base::allow_nonunique_obj, other.transfer_params_)
+            .first(param_count * sizeof(float));
+    return lhs < rhs;
   }
   return false;
 }
@@ -392,18 +471,14 @@ size_t ColorSpace::GetHash() const {
                   (static_cast<size_t>(matrix_) << 16) |
                   (static_cast<size_t>(range_) << 24);
   if (primaries_ == PrimaryID::CUSTOM) {
-    const uint32_t* params =
-        reinterpret_cast<const uint32_t*>(custom_primary_matrix_);
-    result ^= params[0];
-    result ^= UNSAFE_TODO(params[4]);
-    result ^= UNSAFE_TODO(params[8]);
+    result ^= base::bit_cast<uint32_t>(custom_primary_matrix_[0]);
+    result ^= base::bit_cast<uint32_t>(custom_primary_matrix_[4]);
+    result ^= base::bit_cast<uint32_t>(custom_primary_matrix_[8]);
   }
   {
     // Note that |transfer_params_| must be zero when they are unused.
-    const uint32_t* params =
-        reinterpret_cast<const uint32_t*>(transfer_params_);
-    result ^= UNSAFE_TODO(params[3]);
-    result ^= UNSAFE_TODO(params[6]);
+    result ^= base::bit_cast<uint32_t>(transfer_params_[3]);
+    result ^= base::bit_cast<uint32_t>(transfer_params_[6]);
   }
   return result;
 }
@@ -555,9 +630,9 @@ ColorSpace ColorSpace::GetScaledColorSpace(float factor) const {
   ColorSpace result(*this);
   skcms_Matrix3x3 to_XYZD50;
   GetPrimaryMatrix(&to_XYZD50);
-  for (int row = 0; row < 3; ++row) {
-    for (int col = 0; col < 3; ++col) {
-      UNSAFE_TODO(to_XYZD50.vals[row][col]) *= factor;
+  for (base::span<float, 3> row : to_XYZD50.vals) {
+    for (float& val : row) {
+      val *= factor;
     }
   }
   result.SetCustomPrimaries(to_XYZD50);
@@ -778,10 +853,9 @@ bool ColorSpace::Contains(const ColorSpace& other) const {
   // |matrix|. So the multiplication can be skipped, and we can just check if
   // each value in the matrix is in the range [0, 1].
   constexpr float epsilon = 0.001f;
-  for (int r = 0; r < 3; r++) {
-    for (int c = 0; c < 3; c++) {
-      if (UNSAFE_TODO(matrix.vals[r][c]) < -epsilon ||
-          UNSAFE_TODO(matrix.vals[r][c]) > 1 + epsilon) {
+  for (base::span<float, 3> row : matrix.vals) {
+    for (float& value : row) {
+      if (value < -epsilon || value > 1 + epsilon) {
         return false;
       }
     }
@@ -857,7 +931,7 @@ SkColorSpacePrimaries ColorSpace::GetColorSpacePrimaries(
 
 SkColorSpacePrimaries ColorSpace::GetPrimaries() const {
   skcms_Matrix3x3 matrix;
-  UNSAFE_TODO(memcpy(&matrix, custom_primary_matrix_, 9 * sizeof(float)));
+  CopyArrayToMatrix(custom_primary_matrix_, matrix);
   return GetColorSpacePrimaries(primaries_, &matrix);
 }
 
@@ -874,8 +948,9 @@ void ColorSpace::GetPrimaryMatrix(PrimaryID primary_id,
 }
 
 void ColorSpace::GetPrimaryMatrix(skcms_Matrix3x3* to_XYZD50) const {
+  CHECK(to_XYZD50);
   if (primaries_ == PrimaryID::CUSTOM) {
-    UNSAFE_TODO(memcpy(to_XYZD50, custom_primary_matrix_, 9 * sizeof(float)));
+    CopyArrayToMatrix(custom_primary_matrix_, *to_XYZD50);
   } else {
     GetPrimaryMatrix(primaries_, to_XYZD50);
   }
@@ -1011,9 +1086,6 @@ SkM44 ColorSpace::GetTransferMatrix(int bit_depth) const {
   // represented as an unsigned |bit_depth|-bit integer, this 0.5 offset is
   // approximated by 1 << (bit_depth - 1). chroma_0_5 is this approximate value
   // converted to a real number in the range of 0 to 1.
-  //
-  // TODO(wtc): For now chroma_0_5 is only used for YCgCo. It should also be
-  // used for YUV.
   const float chroma_0_5 =
       static_cast<float>(1 << (bit_depth - 1)) / ((1 << bit_depth) - 1);
   float Kr = 0;
@@ -1060,9 +1132,9 @@ SkM44 ColorSpace::GetTransferMatrix(int bit_depth) const {
     case ColorSpace::MatrixID::YDZDX: {
       // clang-format off
       float data[16] = {
-          0.0f,              1.0f,             0.0f, 0.0f,  // Y
-          0.0f,             -0.5f, 0.986566f / 2.0f, 0.5f,  // DX or DZ
-          0.5f, -0.991902f / 2.0f,             0.0f, 0.5f,  // DZ or DX
+          0.0f,              1.0f,             0.0f, 0.0f,        // Y
+          0.0f,             -0.5f, 0.986566f / 2.0f, chroma_0_5,  // DX or DZ
+          0.5f, -0.991902f / 2.0f,             0.0f, chroma_0_5,  // DZ or DX
           0.0f,              0.0f,             0.0f, 1.0f,
       };
       // clang-format on
@@ -1081,9 +1153,9 @@ SkM44 ColorSpace::GetTransferMatrix(int bit_depth) const {
   float v_m = 0.5f / (1.0f - Kr);
   // clang-format off
   float data[16] = {
-                     Kr,        Kg,                Kb, 0.0f,  // Y
-              u_m * -Kr, u_m * -Kg, u_m * (1.0f - Kb), 0.5f,  // U
-      v_m * (1.0f - Kr), v_m * -Kg,         v_m * -Kb, 0.5f,  // V
+                     Kr,        Kg,                Kb, 0.0f,        // Y
+              u_m * -Kr, u_m * -Kg, u_m * (1.0f - Kb), chroma_0_5,  // U
+      v_m * (1.0f - Kr), v_m * -Kg,         v_m * -Kb, chroma_0_5,  // V
                    0.0f,      0.0f,              0.0f, 1.0f,
   };
   // clang-format on
@@ -1125,7 +1197,8 @@ SkM44 ColorSpace::GetRangeAdjustMatrix(int bit_depth) const {
     case MatrixID::YDZDX: {
       const float a_uv = 224 << shift;
       const float scale_uv = c / a_uv;
-      const float translate_uv = (a_uv - c) / (2.0f * a_uv);
+      const float chroma_midpoint = static_cast<float>(1 << (bit_depth - 1));
+      const float translate_uv = chroma_midpoint / c - chroma_midpoint / a_uv;
       return SkM44::Scale(scale_y, scale_uv, scale_uv)
           .postTranslate(-16.0f / 219.0f, translate_uv, translate_uv);
     }

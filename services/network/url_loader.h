@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include "base/byte_size.h"
 #include "base/component_export.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
@@ -37,7 +38,6 @@
 #include "net/socket/socket_tag.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "net/url_request/url_request.h"
-#include "services/network/ad_auction/event_record_request_helper.h"
 #include "services/network/devtools_durable_msg.h"
 #include "services/network/keepalive_statistics_recorder.h"
 #include "services/network/local_network_access_url_loader_interceptor.h"
@@ -65,7 +65,6 @@
 #include "services/network/resource_scheduler/resource_scheduler.h"
 #include "services/network/resource_scheduler/resource_scheduler_client.h"
 #include "services/network/shared_dictionary/shared_dictionary_access_checker.h"
-#include "services/network/shared_storage/shared_storage_request_helper.h"
 #include "services/network/trust_tokens/trust_token_request_helper_factory.h"
 #include "services/network/upload_progress_tracker.h"
 #include "services/network/url_loader_context.h"
@@ -183,7 +182,6 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) URLLoader
           device_bound_session_observer,
       mojo::PendingRemote<mojom::AcceptCHFrameObserver>
           accept_ch_frame_observer,
-      bool shared_storage_writable_eligible,
       SharedResourceChecker& shared_resource_checker,
       std::unique_ptr<DevtoolsDurableMessageWriter>
           maybe_durable_message_writer,
@@ -196,9 +194,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) URLLoader
 
   // mojom::URLLoader implementation:
   void FollowRedirect(
-      const std::vector<std::string>& removed_headers,
-      const net::HttpRequestHeaders& modified_headers,
-      const net::HttpRequestHeaders& modified_cors_exempt_headers,
+      network::HttpRequestHeadersUpdateParams headers_update_params,
       const std::optional<GURL>& new_url) override;
   void SetPriority(net::RequestPriority priority,
                    int32_t intra_priority_value) override;
@@ -214,6 +210,8 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) URLLoader
                       const net::AuthChallengeInfo& info) override;
   void OnCertificateRequested(net::URLRequest* request,
                               net::SSLCertRequestInfo* info) override;
+  void OnPlatformLocalNetworkAccessPermissionRequired(
+      net::URLRequest* request) override;
   void OnSSLCertificateError(net::URLRequest* request,
                              int net_error,
                              const net::SSLInfo& info,
@@ -252,10 +250,10 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) URLLoader
   void ContinueWithoutCertificate() override;
   void CancelRequest() override;
 
-  // Cancel the request because network revocation was triggered.
-  void CancelRequestIfNonceMatchesAndUrlNotExempted(
-      const base::UnguessableToken& nonce,
-      const std::set<GURL>& exemptions);
+  // Called when the browser process responds to a request for platform-specific
+  // local network permission. If the user granted the permission, this will
+  // restart the transaction. Otherwise, it will cancel the request.
+  void OnPlatformLocalNetworkPermissionRequiredResponse(bool granted);
 
   net::LoadState GetLoadState() const;
   net::UploadProgress GetUploadProgress() const;
@@ -289,10 +287,6 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) URLLoader
 
   const std::optional<std::string>& devtools_request_id() const {
     return devtools_request_id_;
-  }
-
-  SharedStorageRequestHelper* shared_storage_request_helper() const {
-    return shared_storage_request_helper_.get();
   }
 
   void set_partial_decoder_decoding_buffer_size_for_testing(
@@ -361,70 +355,6 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) URLLoader
   int ProcessAcceptCHFrameOnConnected(const net::TransportInfo& info,
                                       net::CompletionOnceCallback callback);
 
-  // A `ResourceRequest` where `shared_storage_writable_eligible` is true, is
-  // eligible for shared storage operations via response headers.
-  //
-  // Outbound control flow:
-  //
-  // Start in `ProcessOutboundSharedStorageInterceptor()`
-  // - Execute `SharedStorageRequestHelper::ProcessOutgoingRequest`, which will
-  // add the `kSecSharedStorageWritableHeader` request header to the
-  // `URLRequest` if `ResourceRequest::shared_storage_writable_eligible` is true
-  // and there is a `mojom::URLLoaderNetworkServiceObserver*` available to
-  // forward processed headers to.
-  // - `ScheduleStart` immediately afterwards regardless of eligibility for
-  // shared storage
-  //
-  // Outbound redirection control flow:
-  //
-  // Start in `FollowRedirect`
-  // - Execute
-  // `SharedStorageRequestHelper::UpdateSharedStorageWritableEligible`
-  // to remove or restore the `kSecSharedStorageWritableHeader` request header
-  // if eligibility has been lost or regained
-  //
-  // Inbound redirection control flow:
-  //
-  // Start in `ProcessInboundSharedStorageInterceptorOnReceivedRedirect`
-  // - Execute `SharedStorageRequestHelper::ProcessIncomingResponse`
-  // - If the request has received the `kSharedStorageWriteHeader` response
-  // header and if it is currently eligible for shared storage (i.e., in
-  // particular, the `kSecSharedStorageWritableHeader` has not been removed on a
-  // redirect), the helper will parse the header value into a vector of Shared
-  // Storage operations to call
-  // - If the request has not received the `kSharedStorageWriteHeader` response
-  // header, or if parsing fails to produce any valid operations, then
-  // immediately call `ContinueOnReceiveRedirect`
-  // - Otherwise, `ContinueOnReceiveRedirect` will be run asynchronously after
-  // forwarding the operations to `URLLoaderNetworkServiceObserver` to queue via
-  // Mojo
-  //
-  // Inbound control flow:
-  //
-  // Start in `ProcessInboundSharedStorageInterceptorOnResponseStarted`
-  // - Execute `SharedStorageRequestHelper::ProcessIncomingResponse`
-  // - If the request has received the `kSharedStorageWriteHeader` response
-  // header and if it is currently eligible for shared storage (i.e., in
-  // particular, the `kSecSharedStorageWritableHeader` has not been removed on a
-  // redirect), the helper will parse the header value into a vector of Shared
-  // Storage operations to call
-  // - If the request has not received the `kSharedStorageWriteHeader` response
-  // header, or if parsing fails to produce any valid operations, then
-  // immediately call `ContinueOnResponseStarted`
-  // - Otherwise, `ContinueOnResponseStarted` will be run asynchronously after
-  // forwarding the operations to `URLLoaderNetworkServiceObserver` to queue via
-  // Mojo
-  void ProcessOutboundSharedStorageInterceptor();
-  void ProcessInboundSharedStorageInterceptorOnReceivedRedirect(
-      const net::RedirectInfo& redirect_info,
-      mojom::URLResponseHeadPtr response);
-  void ProcessInboundSharedStorageInterceptorOnResponseStarted();
-
-  // Continuation of `OnReceivedRedirect` after possibly asynchronously
-  // concluding the request's Shared Storage operations.
-  void ContinueOnReceiveRedirect(const net::RedirectInfo& redirect_info,
-                                 mojom::URLResponseHeadPtr response);
-
   // If Trust Tokens parameters are present, delegates Trust Token handling
   // to `trust_token_interceptor_`.
   // The interceptor manages the asynchronous Begin (outbound, adding headers)
@@ -441,8 +371,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) URLLoader
   void OnDoneFinalizingTrustTokenOperation(net::Error error);
 
   // Continuation of `OnResponseStarted` after possibly asynchronously
-  // concluding the request's Trust Tokens, Attribution, and/or Shared Storage
-  // operations.
+  // concluding the request's Trust Tokens operations.
   void ContinueOnResponseStarted();
 
   void ScheduleStart();
@@ -479,7 +408,8 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) URLLoader
   void OnBeforeSendHeadersComplete(
       net::NetworkDelegate::OnBeforeStartTransactionCallback callback,
       int result,
-      const std::optional<net::HttpRequestHeaders>& headers);
+      const std::optional<net::HttpRequestHeaders>& headers,
+      std::optional<base::DictValue> extended_net_log_events);
   void OnHeadersReceivedComplete(
       net::CompletionOnceCallback callback,
       scoped_refptr<net::HttpResponseHeaders>* out_headers,
@@ -510,9 +440,6 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) URLLoader
 
   void ReportFlaggedResponseCookies(bool call_cookie_observer);
   void StartReading();
-
-  // Whether `force_ignore_site_for_cookies` should be set on net::URLRequest.
-  bool ShouldForceIgnoreSiteForCookies(const ResourceRequest& request);
 
   mojom::DevToolsObserver* GetDevToolsObserver() const;
   mojom::CookieAccessObserver* GetCookieAccessObserver() const;
@@ -585,7 +512,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) URLLoader
   mojo::Receiver<mojom::ClientCertificateResponder>
       client_cert_responder_receiver_{this};
   MaybeSyncURLLoaderClient url_loader_client_;
-  int64_t total_written_bytes_ = 0;
+  base::ByteSize total_written_bytes_;
 
   mojo::ScopedDataPipeProducerHandle response_body_stream_;
   scoped_refptr<NetToMojoPendingBuffer> pending_write_;
@@ -678,6 +605,8 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) URLLoader
   LocalNetworkAccessUrlLoaderInterceptor local_network_access_interceptor_;
 
   mojo::Remote<mojom::TrustedHeaderClient> header_client_;
+  // The time when OnBeforeSendHeaders was called to `header_client_`.
+  base::TimeTicks on_before_send_headers_start_time_;
 
   // Handles asynchronously opening files for upload. Holds a reference to the
   // request's URL (from `url_request_`), so `url_request_` must outlive this.
@@ -710,15 +639,6 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) URLLoader
   const scoped_refptr<RefCountedDeviceBoundSessionAccessObserverRemote>
       device_bound_session_observer_shared_remote_;
 
-  // Request helper responsible for processing Shared Storage headers
-  // (https://github.com/WICG/shared-storage#from-response-headers).
-  std::unique_ptr<SharedStorageRequestHelper> shared_storage_request_helper_;
-
-  // Request helper responsible for processing Ad Auction record event
-  // headers.
-  // (https://github.com/WICG/turtledove/pull/1279)
-  AdAuctionEventRecordRequestHelper ad_auction_event_record_request_helper_;
-
   // Indicates |url_request_| is fetch upload request and that has streaming
   // body.
   const bool has_fetch_streaming_upload_body_;
@@ -741,6 +661,8 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) URLLoader
   // Handles processing of the ACCEPT_CH frame during connection, if enabled
   // and an observer exists. May be nullptr.
   std::unique_ptr<AcceptCHFrameInterceptor> accept_ch_frame_interceptor_;
+
+  bool accept_ch_frame_received_ = false;
 
   // Stores cookies passed from the browser process to later add them to the
   // request. This prevents the network stack from overriding them.
@@ -782,6 +704,9 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) URLLoader
   // Keeps the result of IsSharedDictionaryReadAllowed(). Used only for metrics.
   bool shared_dictionary_allowed_check_passed_ = false;
 
+  // True if we are waiting for the platform local network permission response.
+  bool is_waiting_for_platform_local_network_permission_ = false;
+
   // Permissions policy of the request.
   const std::optional<network::PermissionsPolicy> permissions_policy_;
 
@@ -791,8 +716,9 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) URLLoader
   // DevTools Durable Message instances, if enabled.
   std::unique_ptr<DevtoolsDurableMessageWriter> durable_message_writer_;
 
-  // Keeps track of raw body sizes transmitted to DevTools.
-  int64_t devtools_durable_message_raw_size_ = 0;
+  // Whether Sec-Private-Verification-Token was removed from this request
+  // because cookies were included.
+  bool pvt_token_removed_due_to_cookies_ = false;
 
   base::WeakPtrFactory<URLLoader> weak_ptr_factory_{this};
 };

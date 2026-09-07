@@ -11,16 +11,18 @@ import static androidx.test.espresso.action.ViewActions.longClick;
 import static androidx.test.espresso.action.ViewActions.replaceText;
 import static androidx.test.espresso.assertion.ViewAssertions.doesNotExist;
 import static androidx.test.espresso.assertion.ViewAssertions.matches;
+import static androidx.test.espresso.matcher.ViewMatchers.isDescendantOfA;
 import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
 import static androidx.test.espresso.matcher.ViewMatchers.withText;
 
+import static org.hamcrest.Matchers.allOf;
+import static org.hamcrest.Matchers.startsWith;
 import static org.mockito.Mockito.doReturn;
 
 import static org.chromium.base.ThreadUtils.runOnUiThreadBlocking;
-import static org.chromium.base.test.util.Restriction.RESTRICTION_TYPE_NON_LOW_END_DEVICE;
 import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNativeBookmarksUrl;
-import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNonNativeNtpUrl;
+import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNtpUrl;
 
 import android.view.MenuItem;
 import android.view.View;
@@ -41,20 +43,20 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.Mock;
 import org.mockito.Mockito;
-import org.mockito.junit.MockitoJUnit;
-import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.ApplicationTestUtils;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.DoNotBatch;
+import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.ImportantFormFactors;
 import org.chromium.base.test.util.Restriction;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.bookmarks.BookmarkDelegate;
 import org.chromium.chrome.browser.bookmarks.BookmarkManagerCoordinator;
@@ -66,12 +68,13 @@ import org.chromium.chrome.browser.bookmarks.BookmarkPage;
 import org.chromium.chrome.browser.bookmarks.BookmarkToolbar;
 import org.chromium.chrome.browser.bookmarks.BookmarkUiPrefs.BookmarkRowDisplayPref;
 import org.chromium.chrome.browser.bookmarks.BookmarkUiState.BookmarkUiMode;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.ui.signin.signin_promo.SigninPromoCoordinator;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.util.ActivityTestUtils;
@@ -82,7 +85,7 @@ import org.chromium.components.bookmarks.BookmarkType;
 import org.chromium.components.browser_ui.widget.RecyclerViewTestUtils;
 import org.chromium.components.browser_ui.widget.selectable_list.SelectableListToolbar;
 import org.chromium.content_public.browser.test.util.TouchCommon;
-import org.chromium.ui.accessibility.AccessibilityState;
+import org.chromium.ui.accessibility.AccessibilityStateTestHelper;
 import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.test.util.DeviceRestriction;
 import org.chromium.url.GURL;
@@ -94,12 +97,14 @@ import java.util.concurrent.ExecutionException;
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 @ImportantFormFactors(DeviceFormFactor.ONLY_TABLET)
 @DoNotBatch(reason = "BookmarkTest has behaviours and thus can't be batched.")
+@DisableFeatures({
+    ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_LAYOUT,
+    ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_DIALOG
+})
 public class ReadingListTest {
     @Rule
     public FreshCtaTransitTestRule mActivityTestRule =
             ChromeTransitTestRules.freshChromeTabbedActivityRule();
-
-    @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     private static final String TEST_PAGE_TITLE_GOOGLE = "The Google";
     private static final int TEST_PORT = 12345;
@@ -112,7 +117,7 @@ public class ReadingListTest {
     // trigger native load / CommandLineFlag setup.
     private GURL mTestUrlA;
     private @Nullable BookmarkActivity mBookmarkActivity;
-    private @Mock Profile mProfile;
+    private Profile mProfile;
 
     @Before
     public void setUp() {
@@ -127,6 +132,7 @@ public class ReadingListTest {
                 .getEmbeddedTestServerRule()
                 .setServerPort(TEST_PORT);
         mTestUrlA = new GURL("http://a.com");
+        mProfile = ThreadUtils.runOnUiThreadBlocking(ProfileManager::getLastUsedRegularProfile);
     }
 
     @After
@@ -139,15 +145,20 @@ public class ReadingListTest {
         BookmarkTestUtil.waitForBookmarkModelLoaded();
 
         if (mActivityTestRule.getActivity().isTablet()) {
-            mActivityTestRule.loadUrl(getOriginalNativeBookmarksUrl());
-            mItemsContainer =
-                    mActivityTestRule
-                            .getActivity()
-                            .findViewById(R.id.selectable_list_recycler_view);
-            mItemsContainer.setItemAnimator(null); // Disable animation to reduce flakiness.
-            mBookmarkManagerCoordinator =
-                    ((BookmarkPage) mActivityTestRule.getActivityTab().getNativePage())
-                            .getManagerForTesting();
+            String rootFolderId = "folder/0";
+            mActivityTestRule.loadUrl(getOriginalNativeBookmarksUrl() + rootFolderId);
+            ThreadUtils.runOnUiThreadBlocking(
+                    () -> {
+                        mItemsContainer =
+                                mActivityTestRule
+                                        .getActivity()
+                                        .findViewById(R.id.selectable_list_recycler_view);
+                        mItemsContainer.setItemAnimator(
+                                null); // Disable animation to reduce flakiness.
+                        mBookmarkManagerCoordinator =
+                                ((BookmarkPage) mActivityTestRule.getActivityTab().getNativePage())
+                                        .getManagerForTesting();
+                    });
         } else {
             // phone
             mBookmarkActivity =
@@ -158,13 +169,20 @@ public class ReadingListTest {
                                     InstrumentationRegistry.getInstrumentation(),
                                     mActivityTestRule.getActivity(),
                                     R.id.all_bookmarks_menu_id));
-            mItemsContainer = mBookmarkActivity.findViewById(R.id.selectable_list_recycler_view);
-            mItemsContainer.setItemAnimator(null); // Disable animation to reduce flakiness.
-            mBookmarkManagerCoordinator = mBookmarkActivity.getManagerForTesting();
+            ThreadUtils.runOnUiThreadBlocking(
+                    () -> {
+                        mItemsContainer =
+                                mBookmarkActivity.findViewById(R.id.selectable_list_recycler_view);
+                        mItemsContainer.setItemAnimator(
+                                null); // Disable animation to reduce flakiness.
+                        mBookmarkManagerCoordinator = mBookmarkActivity.getManagerForTesting();
+                    });
         }
 
         ThreadUtils.runOnUiThreadBlocking(
-                () -> AccessibilityState.setIsAnyAccessibilityServiceEnabledForTesting(false));
+                () ->
+                        AccessibilityStateTestHelper.setIsAnyAccessibilityServiceEnabledForTesting(
+                                false));
         RecyclerViewTestUtils.waitForStableRecyclerView(mItemsContainer);
     }
 
@@ -175,7 +193,11 @@ public class ReadingListTest {
     }
 
     void openReadingList() {
-        onView(withText("Reading list")).perform(click());
+        onView(
+                        allOf(
+                                withText(startsWith("Reading list")),
+                                isDescendantOfA(withId(R.id.selectable_list_recycler_view))))
+                .perform(click());
         InstrumentationRegistry.getInstrumentation().waitForIdleSync();
     }
 
@@ -267,6 +289,7 @@ public class ReadingListTest {
 
     @Test
     @SmallTest
+    @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511287565
     public void testReadingListItemMenuItems_ReadItem() throws Exception {
         SigninPromoCoordinator.disablePromoForTesting();
         BookmarkId id = addReadingListBookmark(TEST_PAGE_TITLE_GOOGLE, mTestUrlA);
@@ -340,7 +363,7 @@ public class ReadingListTest {
 
     @Test
     @SmallTest
-    @Restriction(RESTRICTION_TYPE_NON_LOW_END_DEVICE)
+    @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511287565
     public void testReadingListEmptyStateView() throws Exception {
         SigninPromoCoordinator.disablePromoForTesting();
         openBookmarkManager();
@@ -393,7 +416,8 @@ public class ReadingListTest {
         pressBack();
         BookmarkTestUtil.waitForBookmarkActivity();
 
-        onView(withText("Reading list")).check(matches(isDisplayed()));
+        onView(allOf(withText("Reading list"), isDescendantOfA(withId(R.id.action_bar))))
+                .check(matches(isDisplayed()));
     }
 
     @Test
@@ -404,7 +428,7 @@ public class ReadingListTest {
         SigninPromoCoordinator.disablePromoForTesting();
         addReadingListBookmark(TEST_PAGE_TITLE_GOOGLE, mTestUrlA);
 
-        mActivityTestRule.loadUrlInNewTab(getOriginalNonNativeNtpUrl(), /* incognito= */ true);
+        mActivityTestRule.loadUrlInNewTab(getOriginalNtpUrl(), /* incognito= */ true);
 
         openBookmarkManager();
         openRootFolder();
@@ -429,7 +453,8 @@ public class ReadingListTest {
         pressBack();
         BookmarkTestUtil.waitForBookmarkActivity();
 
-        onView(withText("Reading list")).check(matches(isDisplayed()));
+        onView(allOf(withText("Reading list"), isDescendantOfA(withId(R.id.action_bar))))
+                .check(matches(isDisplayed()));
     }
 
     @Test
@@ -441,8 +466,15 @@ public class ReadingListTest {
         openRootFolder();
 
         // Reading list should show in the root folder.
-        onView(withText("Reading list")).check(matches(isDisplayed()));
-        onView(withText("Reading list"))
+        onView(
+                        allOf(
+                                withText(startsWith("Reading list")),
+                                isDescendantOfA(withId(R.id.selectable_list_recycler_view))))
+                .check(matches(isDisplayed()));
+        onView(
+                        allOf(
+                                withText(startsWith("Reading list")),
+                                isDescendantOfA(withId(R.id.selectable_list_recycler_view))))
                 .check(
                         matches(
                                 new TypeSafeMatcher<>() {

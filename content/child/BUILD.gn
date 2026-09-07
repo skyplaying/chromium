@@ -22,7 +22,6 @@ target(link_target_type, "child") {
   visibility = [
     ":*",
     "//content/gpu/*",
-    "//content/public/child:child_sources",
     "//content/renderer/*",
     "//content/utility/*",
   ]
@@ -47,6 +46,8 @@ target(link_target_type, "child") {
     "child_thread_impl.h",
     "field_trial.cc",
     "field_trial.h",
+    "host_receiver_batcher.cc",
+    "host_receiver_batcher.h",
     "image_decoder_utils.cc",
     "memory_coordinator/browser_memory_coordinator_bridge.cc",
     "memory_coordinator/browser_memory_coordinator_bridge.h",
@@ -71,6 +72,7 @@ target(link_target_type, "child") {
     "//base",
     "//build/config/compiler:compiler_buildflags",
     "//cc/paint",
+    "//components/attribution_reporting:features",
     "//components/discardable_memory/client",
     "//components/discardable_memory/public/mojom",
     "//components/metrics",
@@ -83,6 +85,7 @@ target(link_target_type, "child") {
     "//content/common",
     "//content/common:mojo_bindings",
     "//content/common/memory_coordinator/mojom",
+    "//content/public/child:child_sources",
     "//content/public/common:common_sources",
     "//device/base",
     "//device/gamepad/public/cpp:switches",
@@ -154,7 +157,7 @@ target(link_target_type, "child") {
     libs = [ "dwrite.lib" ]
   }
 
-  if (is_win || is_linux) {
+  if (is_win || is_linux || is_chromeos) {
     sources += [
       "font_data/font_data_manager.cc",
       "font_data/font_data_manager.h",
@@ -162,6 +165,7 @@ target(link_target_type, "child") {
     ]
     deps += [
       # For font_data_manager
+      "//base:i18n",
       "//components/services/font_data/public/mojom",
       "//third_party:freetype_buildflags",
     ]

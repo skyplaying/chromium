@@ -20,14 +20,9 @@ import static org.chromium.base.test.util.CriteriaHelper.pollUiThread;
 import static org.chromium.base.test.util.CriteriaHelper.pollUiThreadNested;
 
 import android.app.Activity;
-import android.content.Context;
 import android.os.Build;
-import android.view.ContextThemeWrapper;
 import android.view.View;
-import android.view.ViewGroup;
-import android.widget.FrameLayout;
 
-import androidx.test.core.app.ApplicationProvider;
 import androidx.test.filters.LargeTest;
 import androidx.test.filters.MediumTest;
 
@@ -35,51 +30,30 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.ThreadUtils;
-import org.chromium.base.supplier.ObservableSuppliers;
-import org.chromium.base.supplier.OneshotSupplierImpl;
-import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
+import org.chromium.base.TriState;
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
-import org.chromium.base.test.util.DoNotBatch;
-import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.base.test.util.MinAndroidSdkLevel;
 import org.chromium.base.test.util.Restriction;
-import org.chromium.chrome.browser.compositor.layouts.LayoutManagerChrome;
-import org.chromium.chrome.browser.compositor.layouts.LayoutManagerChromePhone;
-import org.chromium.chrome.browser.compositor.layouts.LayoutManagerHost;
-import org.chromium.chrome.browser.compositor.layouts.MockLayoutHost;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
-import org.chromium.chrome.browser.hub.HubLayoutDependencyHolder;
-import org.chromium.chrome.browser.layouts.LayoutType;
-import org.chromium.chrome.browser.layouts.animation.CompositorAnimationHandler;
-import org.chromium.chrome.browser.profiles.ProfileManager;
-import org.chromium.chrome.browser.tab.MockTab;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.browser.tab.TabCreationState;
-import org.chromium.chrome.browser.tab.TabLaunchType;
+import org.chromium.chrome.browser.tab.TabSelectionType;
 import org.chromium.chrome.browser.tab.TabState;
 import org.chromium.chrome.browser.tab.TabStateExtractor;
-import org.chromium.chrome.browser.tab_ui.TabContentManager;
 import org.chromium.chrome.browser.tabmodel.TabClosureParams;
 import org.chromium.chrome.browser.tabmodel.TabModel;
-import org.chromium.chrome.browser.tabmodel.TabModelSelector;
-import org.chromium.chrome.browser.tabmodel.TabModelUtils;
-import org.chromium.chrome.browser.tabwindow.TabWindowManager;
 import org.chromium.chrome.browser.tasks.tab_management.TabUiTestHelper;
-import org.chromium.chrome.browser.theme.TopUiThemeColorProvider;
-import org.chromium.chrome.browser.toolbar.ToolbarManager;
-import org.chromium.chrome.browser.ui.edge_to_edge.NoOpTopInsetProvider;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
+import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
-import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.transit.hub.IncognitoTabSwitcherStation;
 import org.chromium.chrome.test.transit.hub.RegularTabSwitcherStation;
 import org.chromium.chrome.test.transit.ntp.IncognitoNewTabPageStation;
@@ -87,7 +61,6 @@ import org.chromium.chrome.test.transit.ntp.RegularNewTabPageStation;
 import org.chromium.chrome.test.transit.page.CtaPageStation;
 import org.chromium.chrome.test.transit.page.SwipingToTabFacility;
 import org.chromium.chrome.test.transit.page.WebPageStation;
-import org.chromium.chrome.test.util.browser.tabmodel.MockTabModelSelector;
 import org.chromium.components.embedder_support.view.ContentView;
 import org.chromium.components.sensitive_content.SensitiveContentClient;
 import org.chromium.components.sensitive_content.SensitiveContentFeatures;
@@ -97,15 +70,10 @@ import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.base.ViewAndroidDelegate;
 
 import java.util.List;
-import java.util.concurrent.TimeoutException;
 
 /** Tests that the content sensitivity of is set properly. The test fixture uses a tab. */
 @RunWith(ChromeJUnit4ClassRunner.class)
-// TODO(crbug.com/377495440): Try to batch the tests.
-@DoNotBatch(
-        reason =
-                "Test have complex logic, and individual set-ups of some tests get in the way of"
-                        + " other tests")
+@Batch(Batch.PER_CLASS)
 @EnableFeatures(SensitiveContentFeatures.SENSITIVE_CONTENT)
 @MinAndroidSdkLevel(Build.VERSION_CODES.VANILLA_ICE_CREAM)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
@@ -132,19 +100,11 @@ public class SensitiveContentTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Rule
-    public final FreshCtaTransitTestRule mCtaTestRule =
-            ChromeTransitTestRules.freshChromeTabbedActivityRule();
-
-    @Mock private HubLayoutDependencyHolder mHubLayoutDependencyHolder;
-    @Mock private TopUiThemeColorProvider mTopUiThemeColorProvider;
-    @Mock private TabWindowManager mTabWindowManager;
-    @Mock private ToolbarManager mToolbarManager;
-    @Mock private ViewGroup mContentView;
+    public final AutoResetCtaTransitTestRule mCtaTestRule =
+            ChromeTransitTestRules.autoResetCtaActivityRule();
 
     private WebPageStation mPage;
     private EmbeddedTestServer mTestServer;
-    private TabModelSelector mTabModelSelector;
-    private LayoutManagerChromePhone mLayoutManagerChromePhone;
 
     @Before
     public void setUp() throws Exception {
@@ -154,6 +114,7 @@ public class SensitiveContentTest {
 
     @Test
     @MediumTest
+    @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511287319
     public void testTabHasSensitiveContentWhileSensitiveFieldsArePresent() {
         assertNotSensitive(mPage);
 
@@ -166,6 +127,7 @@ public class SensitiveContentTest {
 
     @Test
     @MediumTest
+    @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511287319
     public void testSensitiveContentClientObserver() {
         assertNotSensitive(mPage);
 
@@ -227,6 +189,7 @@ public class SensitiveContentTest {
     @Test
     @MediumTest
     @EnableFeatures(SensitiveContentFeatures.SENSITIVE_CONTENT_WHILE_SWITCHING_TABS)
+    @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511287319
     public void testTabHasSensitiveContentAttributeIsUpdated() {
         final Tab tab = mCtaTestRule.getActivityTab();
         assertFalse(tab.getTabHasSensitiveContent());
@@ -283,6 +246,7 @@ public class SensitiveContentTest {
     @Test
     @LargeTest
     @EnableFeatures(SensitiveContentFeatures.SENSITIVE_CONTENT_WHILE_SWITCHING_TABS)
+    @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511287319
     public void testIncognitoTabSwitcherBecomesSensitive() {
         final String histogram =
                 "SensitiveContent.TabSwitching.IncognitoTabSwitcherPane.Sensitivity";
@@ -349,6 +313,7 @@ public class SensitiveContentTest {
     @Test
     @LargeTest
     @EnableFeatures(SensitiveContentFeatures.SENSITIVE_CONTENT_WHILE_SWITCHING_TABS)
+    @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511287319
     public void testIncognitoTabSwitcherBecomesSensitiveWithTabGroups() {
         // Open the first incognito tab.
         CtaPageStation page = mPage.openNewIncognitoTabOrWindowFast();
@@ -378,6 +343,7 @@ public class SensitiveContentTest {
     @LargeTest
     @EnableFeatures(SensitiveContentFeatures.SENSITIVE_CONTENT_WHILE_SWITCHING_TABS)
     @Restriction(DeviceFormFactor.PHONE)
+    @SuppressWarnings("unchecked") // hamcrest allOf varargs
     public void testTabGroupUiOpenedFromBottomToolbarBecomesSensitive() {
         final String histogram = "SensitiveContent.TabSwitching.BottomTabStripGroupUI.Sensitivity";
         HistogramWatcher histogramWatcher =
@@ -490,101 +456,7 @@ public class SensitiveContentTest {
         return page.loadedTabElement.value().getContentView().getContentSensitivity();
     }
 
-    // The tested animation occurs for example when a link is opened in a new tab or in a new tab in
-    // group. This test also tests if metrics are recorded properly.
-    @Test
-    @MediumTest
-    @EnableFeatures(SensitiveContentFeatures.SENSITIVE_CONTENT_WHILE_SWITCHING_TABS)
-    @DisableFeatures({ChromeFeatureList.SHOW_NEW_TAB_ANIMATIONS})
-    @Restriction(DeviceFormFactor.PHONE)
-    public void testSimpleAnimationLayoutHasSensitiveContent() throws TimeoutException {
-        final String histogram = "SensitiveContent.SensitiveTabSwitchingAnimations";
-        HistogramWatcher histogramWatcher =
-                HistogramWatcher.newSingleRecordWatcher(
-                        histogram,
-                        SensitiveContentClient.TabSwitchingAnimation.NEW_TAB_IN_BACKGROUND);
 
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    initializeLayoutManagerPhone(
-                            /* standardTabCount= */ 1,
-                            /* incognitoTabCount= */ 0,
-                            TabModel.INVALID_TAB_INDEX,
-                            TabModel.INVALID_TAB_INDEX,
-                            /* incognitoSelected= */ false);
-
-                    Tab sourceTab =
-                            MockTab.createAndInitialize(
-                                    /* id= */ 100, ProfileManager.getLastUsedRegularProfile());
-                    mTabModelSelector
-                            .getModel(/* incognito= */ false)
-                            .addTab(
-                                    sourceTab,
-                                    /* index= */ -1,
-                                    TabLaunchType.FROM_CHROME_UI,
-                                    TabCreationState.LIVE_IN_FOREGROUND);
-                    sourceTab.setTabHasSensitiveContent(true);
-                    // Chances are the sensitivity is set to auto initially. That's not a
-                    // problem, it just needs not to be sensitive.
-                    assertNotEquals(
-                            mLayoutManagerChromePhone.getContentContainer().getContentSensitivity(),
-                            View.CONTENT_SENSITIVITY_SENSITIVE);
-
-                    Tab newTab =
-                            MockTab.createAndInitialize(
-                                    /* id= */ 200, ProfileManager.getLastUsedRegularProfile());
-                    mTabModelSelector
-                            .getModel(/* incognito= */ false)
-                            .addTab(
-                                    newTab,
-                                    /* index= */ -1,
-                                    TabLaunchType.FROM_LONGPRESS_BACKGROUND,
-                                    TabCreationState.LIVE_IN_BACKGROUND);
-                    // The content container should become sensitive before the animation starts.
-                    assertEquals(
-                            View.CONTENT_SENSITIVITY_SENSITIVE,
-                            mLayoutManagerChromePhone
-                                    .getContentContainer()
-                                    .getContentSensitivity());
-
-                    assertTrue(
-                            "LayoutManager took too long to finish the animations",
-                            simulateTime(mLayoutManagerChromePhone, 1000));
-                    assertEquals(
-                            "Incorrect active LayoutType",
-                            LayoutType.SIMPLE_ANIMATION,
-                            mLayoutManagerChromePhone.getActiveLayout().getLayoutType());
-                    assertTrue(
-                            "Incorrect active Layout",
-                            mLayoutManagerChromePhone.isLayoutVisible(LayoutType.SIMPLE_ANIMATION));
-                });
-
-        pollUiThread(
-                () -> {
-                    return mLayoutManagerChromePhone.getActiveLayout().getLayoutType()
-                                    == LayoutType.SIMPLE_ANIMATION
-                            && mLayoutManagerChromePhone.getActiveLayout().isStartingToHide();
-                });
-
-        // Check that the content container is still sensitive before the animation finishes.
-        assertEquals(
-                View.CONTENT_SENSITIVITY_SENSITIVE,
-                mLayoutManagerChromePhone.getContentContainer().getContentSensitivity());
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    // Simulate hiding animation.
-                    assertTrue(
-                            "LayoutManager took too long to finish the animations",
-                            simulateTime(mLayoutManagerChromePhone, 1000));
-                });
-        // Check that the content container is not sensitive anymore after the animation
-        // finishes.
-        assertEquals(
-                View.CONTENT_SENSITIVITY_NOT_SENSITIVE,
-                mLayoutManagerChromePhone.getContentContainer().getContentSensitivity());
-
-        histogramWatcher.assertExpected();
-    }
 
     @Test
     @LargeTest
@@ -620,11 +492,8 @@ public class SensitiveContentTest {
                     assertEquals(2, tabModel.getCount());
                     secondTabAfterFreeze[0] = tabModel.getTabAt(1);
                     assertNotNull(secondTabAfterFreeze[0]);
+                    tabModel.setIndex(1, TabSelectionType.FROM_USER);
                 });
-
-        // Select the second tab.
-        final RegularTabSwitcherStation regularTabSwitcher = page.openRegularTabSwitcher();
-        regularTabSwitcher.selectTabAtIndex(1, WebPageStation.newBuilder());
 
         // The second tab should have sensitive content. The content sensitivity should have been
         // restored from tab state.
@@ -633,7 +502,7 @@ public class SensitiveContentTest {
                         () ->
                                 SensitiveContentClient.fromWebContents(
                                         secondTabAfterFreeze[0].getWebContents()));
-        assertTrue(Boolean.TRUE.equals(client.getContentRestoredFromTabStateIsSensitive()));
+        assertEquals(TriState.TRUE, client.getContentRestoredFromTabStateIsSensitive());
         assertEquals(
                 View.CONTENT_SENSITIVITY_SENSITIVE,
                 secondTabAfterFreeze[0].getContentView().getContentSensitivity());
@@ -654,91 +523,5 @@ public class SensitiveContentTest {
 
     private View getContentViewOfCurrentTab() {
         return mCtaTestRule.getActivityTab().getContentView();
-    }
-
-    private void initializeLayoutManagerPhone(
-            int standardTabCount,
-            int incognitoTabCount,
-            int standardIndexSelected,
-            int incognitoIndexSelected,
-            boolean incognitoSelected) {
-        Context context =
-                new ContextThemeWrapper(
-                        ApplicationProvider.getApplicationContext(),
-                        R.style.Theme_BrowserUI_DayNight);
-
-        mTabModelSelector =
-                new MockTabModelSelector(
-                        ProfileManager.getLastUsedRegularProfile(),
-                        ProfileManager.getLastUsedRegularProfile().getPrimaryOtrProfile(true),
-                        standardTabCount,
-                        incognitoTabCount,
-                        null);
-        if (standardIndexSelected != TabModel.INVALID_TAB_INDEX) {
-            TabModelUtils.setIndex(mTabModelSelector.getModel(false), standardIndexSelected);
-        }
-        if (incognitoIndexSelected != TabModel.INVALID_TAB_INDEX) {
-            TabModelUtils.setIndex(mTabModelSelector.getModel(true), incognitoIndexSelected);
-        }
-        mTabModelSelector.selectModel(incognitoSelected);
-        assertNotNull(mTabModelSelector.getCurrentTabGroupModelFilter());
-
-        LayoutManagerHost layoutManagerHost = new MockLayoutHost(context);
-        TabContentManager tabContentManager =
-                new TabContentManager(context, null, false, null, mTabWindowManager);
-        tabContentManager.initWithNative();
-        SettableMonotonicObservableSupplier<TabContentManager> tabContentManagerSupplier =
-                ObservableSuppliers.createMonotonic();
-        OneshotSupplierImpl tabSwitcherSupplier = new OneshotSupplierImpl();
-
-        // Build a fake content container
-        FrameLayout parentContainer = new FrameLayout(context);
-        FrameLayout container = new FrameLayout(context);
-        parentContainer.addView(container);
-
-        mLayoutManagerChromePhone =
-                new LayoutManagerChromePhone(
-                        layoutManagerHost,
-                        container,
-                        tabSwitcherSupplier,
-                        () -> mTabModelSelector,
-                        tabContentManagerSupplier,
-                        () -> mTopUiThemeColorProvider,
-                        mHubLayoutDependencyHolder,
-                        ObservableSuppliers.alwaysNull(),
-                        mContentView,
-                        mToolbarManager,
-                        ObservableSuppliers.alwaysFalse(),
-                        new NoOpTopInsetProvider());
-
-        tabContentManagerSupplier.set(tabContentManager);
-        CompositorAnimationHandler.setTestingMode(true);
-        mLayoutManagerChromePhone.init(
-                mTabModelSelector,
-                null,
-                null,
-                null,
-                mTopUiThemeColorProvider,
-                ObservableSuppliers.alwaysZero());
-    }
-
-    /**
-     * Simulates time so the animation updates.
-     *
-     * @param layoutManager The {@link LayoutManagerChrome} to update.
-     * @param maxFrameCount The maximum number of frames to simulate before the motion ends.
-     * @return Whether the maximum number of frames was enough for the {@link LayoutManagerChrome}
-     *     to reach the end of the animations.
-     */
-    private boolean simulateTime(LayoutManagerChrome layoutManager, int maxFrameCount) {
-        // Simulating time
-        int frame = 0;
-        long time = 0;
-        final long dt = 16;
-        while (layoutManager.onUpdate(time, dt) && frame < maxFrameCount) {
-            time += dt;
-            frame++;
-        }
-        return frame < maxFrameCount;
     }
 }

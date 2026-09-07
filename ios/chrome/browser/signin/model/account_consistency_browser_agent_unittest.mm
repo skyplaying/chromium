@@ -8,8 +8,13 @@
 #import "base/strings/sys_string_conversions.h"
 #import "base/test/scoped_feature_list.h"
 #import "components/signin/ios/browser/fake_signin_enabled_datasource.h"
+#import "components/sync/test/test_sync_service.h"
 #import "components/test/ios/test_utils.h"
+#import "ios/chrome/browser/shared/coordinator/scene/scene_activation_level.h"
+#import "ios/chrome/browser/shared/coordinator/scene/test/fake_scene_state.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
+#import "ios/chrome/browser/shared/model/browser/browser_provider.h"
+#import "ios/chrome/browser/shared/model/browser/browser_provider_interface.h"
 #import "ios/chrome/browser/shared/model/browser/test/test_browser.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_manager_ios.h"
@@ -27,8 +32,11 @@
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity_manager.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
+#import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/browser/web/model/web_navigation_browser_agent.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
+#import "ios/web/public/test/fakes/fake_navigation_manager.h"
 #import "ios/web/public/test/fakes/fake_web_state.h"
 #import "ios/web/public/test/web_task_environment.h"
 #import "testing/platform_test.h"
@@ -43,10 +51,15 @@ class AccountConsistencyBrowserAgentTest : public PlatformTest {
     TestProfileIOS::Builder builder;
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
+        AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
             std::make_unique<FakeAuthenticationServiceDelegate>()));
+    builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
+                              base::BindRepeating(&CreateTestSyncService));
     profile_ = profile_manager_.AddProfileWithBuilder(std::move(builder));
-    browser_ = std::make_unique<TestBrowser>(profile_.get());
+    scene_state_ = [[FakeSceneState alloc] initWithProfile:profile_.get()];
+    scene_state_.activationLevel = SceneActivationLevelForegroundActive;
+    browser_ =
+        scene_state_.browserProviderInterface.mainBrowserProvider.browser;
 
     mock_scene_handler_ = OCMStrictProtocolMock(@protocol(SceneCommands));
     [browser_->GetCommandDispatcher()
@@ -64,16 +77,18 @@ class AccountConsistencyBrowserAgentTest : public PlatformTest {
                      forProtocol:@protocol(BrowserCoordinatorCommands)];
 
     base_view_controller_mock_ = OCMStrictClassMock([UIViewController class]);
-    WebNavigationBrowserAgent::CreateForBrowser(browser_.get());
+    WebNavigationBrowserAgent::CreateForBrowser(browser_);
     AccountConsistencyBrowserAgent::CreateForBrowser(
-        browser_.get(), base_view_controller_mock_,
-        &signin_enabled_data_source_);
-    agent_ = AccountConsistencyBrowserAgent::FromBrowser(browser_.get());
+        browser_, base_view_controller_mock_, &signin_enabled_data_source_);
+    agent_ = AccountConsistencyBrowserAgent::FromBrowser(browser_);
 
-    WebStateList* web_state_list = browser_.get()->GetWebStateList();
+    WebStateList* web_state_list = browser_->GetWebStateList();
     auto test_web_state = std::make_unique<web::FakeWebState>();
+    test_web_state->SetNavigationManager(
+        std::make_unique<web::FakeNavigationManager>());
     web_state_list->InsertWebState(std::move(test_web_state),
                                    WebStateList::InsertionParams::AtIndex(0));
+    web_state_list->ActivateWebStateAt(0);
   }
 
   void TearDown() override {
@@ -81,6 +96,10 @@ class AccountConsistencyBrowserAgentTest : public PlatformTest {
     EXPECT_OCMOCK_VERIFY((id)settings_commands_mock_);
     EXPECT_OCMOCK_VERIFY((id)browser_coordinator_commands_mock_);
     EXPECT_OCMOCK_VERIFY((id)base_view_controller_mock_);
+    agent_ = nullptr;
+    browser_ = nullptr;
+    [scene_state_ shutdown];
+    scene_state_ = nil;
   }
 
  protected:
@@ -101,9 +120,10 @@ class AccountConsistencyBrowserAgentTest : public PlatformTest {
   web::WebTaskEnvironment task_environment_;
   IOSChromeScopedTestingLocalState scoped_testing_local_state_;
   TestProfileManagerIOS profile_manager_;
-  raw_ptr<TestProfileIOS> profile_;
-  std::unique_ptr<Browser> browser_;
-  raw_ptr<AccountConsistencyBrowserAgent> agent_;
+  raw_ptr<TestProfileIOS> profile_ = nullptr;
+  FakeSceneState* scene_state_ = nil;
+  raw_ptr<Browser> browser_ = nullptr;
+  raw_ptr<AccountConsistencyBrowserAgent> agent_ = nullptr;
   id<SceneCommands> mock_scene_handler_;
   signin::FakeSigninEnabledDataSource signin_enabled_data_source_;
   id<SettingsCommands> settings_commands_mock_;
@@ -116,7 +136,8 @@ TEST_F(AccountConsistencyBrowserAgentTest, OnGoIncognitoWithNoURL) {
   __block OpenNewTabCommand* received_command = nil;
   OCMExpect([mock_scene_handler_
       openURLInNewTab:AssignValueToVariable(received_command)]);
-  agent_->OnGoIncognito(GURL());
+  agent_->OnGoIncognito(GURL(),
+                        browser_->GetWebStateList()->GetActiveWebState());
   EXPECT_NE(received_command, nil);
   EXPECT_TRUE(received_command.inIncognito);
   EXPECT_FALSE(received_command.inBackground);
@@ -129,7 +150,7 @@ TEST_F(AccountConsistencyBrowserAgentTest, OnGoIncognitoWithURL) {
   __block OpenNewTabCommand* received_command = nil;
   OCMExpect([mock_scene_handler_
       openURLInNewTab:AssignValueToVariable(received_command)]);
-  agent_->OnGoIncognito(url_);
+  agent_->OnGoIncognito(url_, browser_->GetWebStateList()->GetActiveWebState());
   EXPECT_NE(received_command, nil);
   EXPECT_TRUE(received_command.inIncognito);
   EXPECT_FALSE(received_command.inBackground);
@@ -142,7 +163,8 @@ TEST_F(AccountConsistencyBrowserAgentTest, OnGoIncognitoWithURL) {
 TEST_F(AccountConsistencyBrowserAgentTest, OnAddAccountWithPresentedView) {
   OCMStub([base_view_controller_mock_ presentedViewController])
       .andReturn([[UIViewController alloc] init]);
-  agent_->OnAddAccount(GURL(), "");
+  agent_->OnAddAccount(GURL(), "",
+                       browser_->GetWebStateList()->GetActiveWebState());
   // Expect [mock_scene_handler_ showSignin:baseViewController:] to not
   // be called. This is ensured by TearDown because mock_scene_handler_
   // is a strict mock.
@@ -158,7 +180,8 @@ TEST_F(AccountConsistencyBrowserAgentTest, OnAddAccountWithoutPresentedView) {
   OCMExpect([browser_coordinator_commands_mock_
       showAddAccountWithAccessPoint:access_point
                      prefilledEmail:@"test"]);
-  agent_->OnAddAccount(GURL(), "test");
+  agent_->OnAddAccount(GURL(), "test",
+                       browser_->GetWebStateList()->GetActiveWebState());
 }
 
 TEST_F(AccountConsistencyBrowserAgentTest, OnAddAccountShowsAccountMenu) {
@@ -181,7 +204,8 @@ TEST_F(AccountConsistencyBrowserAgentTest, OnAddAccountShowsAccountMenu) {
   OCMExpect([mock_scene_handler_ showAccountMenuFromWebWithURL:url_]);
   // The expected email is foo2@gmail.com. Using foo.2 instead allows to check
   // adding account with a non-canonical email.
-  agent_->OnAddAccount(url_, "foo.2@gmail.com");
+  agent_->OnAddAccount(url_, "foo.2@gmail.com",
+                       browser_->GetWebStateList()->GetActiveWebState());
 }
 
 // Tests that calling the `OnRestoreGaiaCookies()` callback invokes the account
@@ -216,7 +240,8 @@ TEST_F(AccountConsistencyBrowserAgentTest, OnAddAccountShowsAddAccount) {
   OCMExpect([browser_coordinator_commands_mock_
       showAddAccountWithAccessPoint:access_point
                      prefilledEmail:email]);
-  agent_->OnAddAccount(url_, base::SysNSStringToUTF8(email));
+  agent_->OnAddAccount(url_, base::SysNSStringToUTF8(email),
+                       browser_->GetWebStateList()->GetActiveWebState());
 }
 
 // Tests that calling the `OnManageAccounts()` callback invokes the account
@@ -225,7 +250,8 @@ TEST_F(AccountConsistencyBrowserAgentTest, OnManageAccountsCallsCommand) {
   OCMExpect([settings_commands_mock_
       showAccountsSettingsFromViewController:base_view_controller_mock_
                         skipIfUINotAvailable:YES]);
-  agent_->OnManageAccounts(GURL());
+  agent_->OnManageAccounts(GURL(),
+                           browser_->GetWebStateList()->GetActiveWebState());
   // Expect -showAccountsSettingsFromViewController:skipIfUINotAvailable: to
   // have been called. This is ensured by TearDown because
   // settings_commands_mock_ is a strict mock.
@@ -243,7 +269,8 @@ TEST_F(AccountConsistencyBrowserAgentTest, OnManageAccountsShowsAccountMenu) {
   // Since there is another profile, the agent should trigger the account menu
   // instead of the manage accounts screen.
   OCMExpect([mock_scene_handler_ showAccountMenuFromWebWithURL:url_]);
-  agent_->OnManageAccounts(url_);
+  agent_->OnManageAccounts(url_,
+                           browser_->GetWebStateList()->GetActiveWebState());
   // Expect showAccountsSettingsFromViewController:skipIfUINotAvailable: to not
   // be called. This is ensured by TearDown because mock_scene_handler_
   // is a strict mock.
@@ -286,4 +313,89 @@ TEST_F(AccountConsistencyBrowserAgentTest,
   // Expect -showWebSigninPromoFromViewController:URL: to have not been called.
   // This is ensured by TearDown because mock_scene_handler_ is a strict
   // mock.
+}
+
+// Tests that calling the `OnManageAccounts()` callback with a non-active
+// web state does not invoke any command.
+TEST_F(AccountConsistencyBrowserAgentTest, OnManageAccountsWithOtherWebState) {
+  WebStateList* web_state_list = browser_.get()->GetWebStateList();
+  web_state_list->ActivateWebStateAt(0);
+  auto test_web_state = std::make_unique<web::FakeWebState>();
+  WebStateOpener opener;
+  web_state_list->InsertWebState(
+      std::move(test_web_state),
+      WebStateList::InsertionParams::AtIndex(1).WithOpener(opener));
+  web::WebState* web_state = web_state_list->GetWebStateAt(1);
+  agent_->OnManageAccounts(url_, web_state);
+}
+
+// Tests that calling the `OnAddAccount()` callback with a non-active
+// web state does not invoke any command.
+TEST_F(AccountConsistencyBrowserAgentTest, OnAddAccountWithOtherWebState) {
+  WebStateList* web_state_list = browser_.get()->GetWebStateList();
+  web_state_list->ActivateWebStateAt(0);
+  auto test_web_state = std::make_unique<web::FakeWebState>();
+  WebStateOpener opener;
+  web_state_list->InsertWebState(
+      std::move(test_web_state),
+      WebStateList::InsertionParams::AtIndex(1).WithOpener(opener));
+  web::WebState* web_state = web_state_list->GetWebStateAt(1);
+  agent_->OnAddAccount(url_, "test", web_state);
+}
+
+// Tests that calling the `OnGoIncognito()` callback with a non-active
+// web state does not invoke any command.
+TEST_F(AccountConsistencyBrowserAgentTest, OnGoIncognitoWithOtherWebState) {
+  WebStateList* web_state_list = browser_->GetWebStateList();
+  web_state_list->ActivateWebStateAt(0);
+  auto test_web_state = std::make_unique<web::FakeWebState>();
+  WebStateOpener opener;
+  web_state_list->InsertWebState(
+      std::move(test_web_state),
+      WebStateList::InsertionParams::AtIndex(1).WithOpener(opener));
+  web::WebState* web_state = web_state_list->GetWebStateAt(1);
+  agent_->OnGoIncognito(url_, web_state);
+}
+
+// Tests that calling `OnShowConsistencyPromo()` on a regular browser when
+// incognito is the current active browser does not invoke any command.
+TEST_F(AccountConsistencyBrowserAgentTest,
+       OnShowConsistencyPromoWhenIncognitoIsActive) {
+  [scene_state_ setCurrentBrowserProvider:scene_state_.browserProviderInterface
+                                              .incognitoBrowserProvider];
+  agent_->OnShowConsistencyPromo(
+      url_, browser_->GetWebStateList()->GetActiveWebState());
+}
+
+// Tests that calling `OnManageAccounts()` on a regular browser when incognito
+// is the current active browser does not invoke any command.
+TEST_F(AccountConsistencyBrowserAgentTest,
+       OnManageAccountsWhenIncognitoIsActive) {
+  [scene_state_ setCurrentBrowserProvider:scene_state_.browserProviderInterface
+                                              .incognitoBrowserProvider];
+  agent_->OnManageAccounts(url_,
+                           browser_->GetWebStateList()->GetActiveWebState());
+  // As the scene is changed, this OnAddAccount is dropped, and the mocks are
+  // not asked to present anything, as opposed to OnManageAccountsCallsCommand.
+}
+
+// Tests that calling `OnAddAccount()` on a regular browser when incognito
+// is the current active browser does not invoke any command.
+TEST_F(AccountConsistencyBrowserAgentTest, OnAddAccountWhenIncognitoIsActive) {
+  [scene_state_ setCurrentBrowserProvider:scene_state_.browserProviderInterface
+                                              .incognitoBrowserProvider];
+  agent_->OnAddAccount(url_, "test",
+                       browser_->GetWebStateList()->GetActiveWebState());
+  // As the scene is changed, this OnAddAccount is dropped, and the mocks are
+  // not asked to present anything, as opposed to OnAddAccountWithPresentedView.
+}
+
+// Tests that calling `OnGoIncognito()` on a regular browser when incognito
+// is the current active browser does not invoke any command.
+TEST_F(AccountConsistencyBrowserAgentTest, OnGoIncognitoWhenIncognitoIsActive) {
+  [scene_state_ setCurrentBrowserProvider:scene_state_.browserProviderInterface
+                                              .incognitoBrowserProvider];
+  agent_->OnGoIncognito(url_, browser_->GetWebStateList()->GetActiveWebState());
+  // As the scene is changed, this OnAddAccount is dropped, and the mocks are
+  // not asked to present anything, as opposed to OnGoIncognitoWithURL.
 }

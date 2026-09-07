@@ -5,6 +5,8 @@
 assert(is_mac)
 
 component("enterprise_platform_auth") {
+  configs += [ "//components/enterprise:extra_warnings" ]
+
   sources = [
     "platform_auth_features.cc",
     "platform_auth_features.h",
@@ -14,6 +16,8 @@ component("enterprise_platform_auth") {
     "url_session_test_util.mm",
     "url_session_url_loader.h",
     "url_session_url_loader.mm",
+    "url_session_url_loader_bridge.h",
+    "url_session_url_loader_bridge.mm",
   ]
 
   frameworks = [ "Foundation.framework" ]
@@ -29,6 +33,7 @@ component("enterprise_platform_auth") {
 
 source_set("unit_tests") {
   testonly = true
+  configs += [ "//components/enterprise:extra_warnings" ]
 
   sources = [
     "url_session_helper_unittest.mm",

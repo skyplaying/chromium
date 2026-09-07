@@ -17,25 +17,24 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.autofill.AndroidAutofillAvailabilityStatus;
 import org.chromium.chrome.browser.autofill.AutofillClientProviderUtils;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabHidingType;
+import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.components.browser_ui.http_auth.LoginPrompt;
 import org.chromium.components.user_prefs.UserPrefs;
 import org.chromium.ui.base.WindowAndroid;
+import org.chromium.url.GURL;
 
 /**
- * Represents an HTTP authentication request to be handled by the UI.
- * The request can be fulfilled or canceled using setAuth() or cancelAuth().
- * This class also provides strings for building a login form.
+ * Represents an HTTP authentication request to be handled by the UI. The request can be fulfilled
+ * or canceled using setAuth() or cancelAuth(). This class also provides strings for building a
+ * login form.
  *
- * Note: this class supercedes android.webkit.HttpAuthHandler, but does not
- * extend HttpAuthHandler due to the private access of HttpAuthHandler's
- * constructor.
+ * <p>Note: this class supercedes android.webkit.HttpAuthHandler, but does not extend
+ * HttpAuthHandler due to the private access of HttpAuthHandler's constructor.
  */
 @NullMarked
-public class ChromeHttpAuthHandler extends EmptyTabObserver implements LoginPrompt.Observer {
+public class ChromeHttpAuthHandler implements TabObserver, LoginPrompt.Observer {
     private static @Nullable Callback<ChromeHttpAuthHandler> sTestCreationCallback;
 
     private long mNativeChromeHttpAuthHandler;
@@ -93,7 +92,8 @@ public class ChromeHttpAuthHandler extends EmptyTabObserver implements LoginProm
     }
 
     @CalledByNative
-    private void showDialog(Tab tab, WindowAndroid windowAndroid) {
+    private void showDialog(
+            Tab tab, WindowAndroid windowAndroid, @JniType("GURL") GURL challengerUrl) {
         if (tab == null || tab.isHidden() || windowAndroid == null) {
             cancel();
             return;
@@ -111,12 +111,13 @@ public class ChromeHttpAuthHandler extends EmptyTabObserver implements LoginProm
         mTab.addObserver(this);
         String messageBody =
                 ChromeHttpAuthHandlerJni.get().getMessageBody(mNativeChromeHttpAuthHandler);
-        mLoginPrompt =
-                new LoginPrompt(
-                        activity,
-                        messageBody,
-                        shouldProvideAutofillUrl() ? mTab.getUrl() : null,
-                        this);
+
+        GURL autofillUrl = null;
+        if (shouldProvideAutofillUrl()) {
+            autofillUrl = challengerUrl;
+        }
+
+        mLoginPrompt = new LoginPrompt(activity, messageBody, autofillUrl, this);
         // In case the autofill data arrives before the prompt is created.
 
         if (mAutofillUsername != null && mAutofillPassword != null) {
@@ -126,7 +127,6 @@ public class ChromeHttpAuthHandler extends EmptyTabObserver implements LoginProm
             mLoginPrompt.show();
         } catch (WindowManager.BadTokenException ex) {
             cancel();
-            return;
         }
     }
 
@@ -164,10 +164,9 @@ public class ChromeHttpAuthHandler extends EmptyTabObserver implements LoginProm
 
     private boolean shouldProvideAutofillUrl() {
         if (mTab == null) return false;
-        return ChromeFeatureList.isEnabled(ChromeFeatureList.ANDROID_AUTOFILL_SUPPORT_FOR_HTTP_AUTH)
-                && (AutofillClientProviderUtils.getAndroidAutofillFrameworkAvailability(
-                                UserPrefs.get(mTab.getProfile()))
-                        == AndroidAutofillAvailabilityStatus.AVAILABLE);
+        return AutofillClientProviderUtils.getAndroidAutofillFrameworkAvailability(
+                        UserPrefs.get(mTab.getProfile()))
+                == AndroidAutofillAvailabilityStatus.AVAILABLE;
     }
 
     @NativeMethods

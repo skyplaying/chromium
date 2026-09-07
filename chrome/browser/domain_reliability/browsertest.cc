@@ -15,7 +15,6 @@
 #include "chrome/browser/net/profile_network_context_service.h"
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -38,6 +37,22 @@
 #include "url/gurl.h"
 
 namespace domain_reliability {
+
+class TestDomainReliabilityServiceDelegate
+    : public domain_reliability::DomainReliabilityServiceDelegate {
+ public:
+  TestDomainReliabilityServiceDelegate() = default;
+  ~TestDomainReliabilityServiceDelegate() override = default;
+
+  bool IsDomainReliabilityAllowed() const override {
+    return g_browser_process->local_state()->GetBoolean(
+        domain_reliability::prefs::kDomainReliabilityAllowedByPolicy);
+  }
+
+  bool IsMetricsAndCrashReportingEnabled() const override {
+    return ChromeMetricsServiceAccessor::IsMetricsAndCrashReportingEnabled();
+  }
+};
 
 class DomainReliabilityBrowserTest : public InProcessBrowserTest {
  public:
@@ -74,7 +89,7 @@ class DomainReliabilityBrowserTest : public InProcessBrowserTest {
 
   network::mojom::NetworkContext* GetNetworkContext() {
     return browser()
-        ->profile()
+        ->GetProfile()
         ->GetDefaultStoragePartition()
         ->GetNetworkContext();
   }
@@ -143,7 +158,8 @@ IN_PROC_BROWSER_TEST_F(DomainReliabilityPolicyTest,
   // Confirm behavior with policy true and metrics enabled
   SetAndUpdateDomainReliabilityAllowedPolicy(true);
   SetAndUpdateIsMetricsReporting(true);
-  EXPECT_TRUE(domain_reliability::ShouldCreateService());
+  TestDomainReliabilityServiceDelegate delegate;
+  EXPECT_TRUE(domain_reliability::ShouldCreateService(&delegate));
   ChromeMetricsServiceAccessor::SetMetricsAndCrashReportingForTesting(nullptr);
 }
 
@@ -152,7 +168,8 @@ IN_PROC_BROWSER_TEST_F(DomainReliabilityPolicyTest,
   // Confirm behavior with policy true and metrics disabled
   SetAndUpdateDomainReliabilityAllowedPolicy(true);
   SetAndUpdateIsMetricsReporting(false);
-  EXPECT_FALSE(domain_reliability::ShouldCreateService());
+  TestDomainReliabilityServiceDelegate delegate;
+  EXPECT_FALSE(domain_reliability::ShouldCreateService(&delegate));
   ChromeMetricsServiceAccessor::SetMetricsAndCrashReportingForTesting(nullptr);
 }
 
@@ -161,7 +178,8 @@ IN_PROC_BROWSER_TEST_F(DomainReliabilityPolicyTest,
   // Confirm behavior with policy false and metrics enabled
   SetAndUpdateDomainReliabilityAllowedPolicy(false);
   SetAndUpdateIsMetricsReporting(true);
-  EXPECT_FALSE(domain_reliability::ShouldCreateService());
+  TestDomainReliabilityServiceDelegate delegate;
+  EXPECT_FALSE(domain_reliability::ShouldCreateService(&delegate));
   ChromeMetricsServiceAccessor::SetMetricsAndCrashReportingForTesting(nullptr);
 }
 
@@ -170,17 +188,20 @@ IN_PROC_BROWSER_TEST_F(DomainReliabilityPolicyTest,
   // Confirm behavior with policy false and metrics disabled
   SetAndUpdateDomainReliabilityAllowedPolicy(false);
   SetAndUpdateIsMetricsReporting(false);
-  EXPECT_FALSE(domain_reliability::ShouldCreateService());
+  TestDomainReliabilityServiceDelegate delegate;
+  EXPECT_FALSE(domain_reliability::ShouldCreateService(&delegate));
   ChromeMetricsServiceAccessor::SetMetricsAndCrashReportingForTesting(nullptr);
 }
 
 IN_PROC_BROWSER_TEST_F(DomainReliabilityDisabledBrowserTest,
                        ServiceNotCreated) {
-  EXPECT_FALSE(domain_reliability::ShouldCreateService());
+  TestDomainReliabilityServiceDelegate delegate;
+  EXPECT_FALSE(domain_reliability::ShouldCreateService(&delegate));
 }
 
 IN_PROC_BROWSER_TEST_F(DomainReliabilityBrowserTest, ServiceCreated) {
-  EXPECT_TRUE(domain_reliability::ShouldCreateService());
+  TestDomainReliabilityServiceDelegate delegate;
+  EXPECT_TRUE(domain_reliability::ShouldCreateService(&delegate));
 }
 
 static const char kUploadPath[] = "/domainreliability/upload";
@@ -310,7 +331,8 @@ IN_PROC_BROWSER_TEST_F(DomainReliabilityBrowserTest, RequestAtShutdown) {
   resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
   auto simple_loader = network::SimpleURLLoader::Create(
       std::move(resource_request), TRAFFIC_ANNOTATION_FOR_TESTS);
-  auto* storage_partition = browser()->profile()->GetDefaultStoragePartition();
+  auto* storage_partition =
+      browser()->GetProfile()->GetDefaultStoragePartition();
   simple_loader->DownloadHeadersOnly(
       storage_partition->GetURLLoaderFactoryForBrowserProcess().get(),
       base::DoNothing());

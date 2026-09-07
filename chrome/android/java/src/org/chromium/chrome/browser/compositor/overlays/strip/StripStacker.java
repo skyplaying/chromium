@@ -13,6 +13,7 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.compositor.layouts.Layout;
 import org.chromium.chrome.browser.compositor.layouts.components.CompositorButton;
 import org.chromium.ui.base.LocalizationUtils;
+import org.chromium.ui.util.StyleUtils;
 
 /**
  * An interface that defines how to stack views and how they should look visually. This lets certain
@@ -26,7 +27,7 @@ public abstract class StripStacker {
     // the CC layer instead. On desktop (32dp touch target), we have more room to apply a real
     // offset(10dp) directly. No more visual offset needed for desktop.
     private static final float NEW_TAB_BUTTON_X_OFFSET_TOWARDS_TABS =
-            StripLayoutUtils.shouldApplyMoreDensity() ? 10.f : 4.f;
+            StyleUtils.shouldApplyDesktopDensity() ? 10.f : 4.f;
 
     /**
      * Sets the draw properties for the new tab button.
@@ -145,9 +146,9 @@ public abstract class StripStacker {
      * interface because the implementing class knows the proper visual order to optimize this pass.
      *
      * @param indexOrderedViews A list of views ordered by index.
-     * @param xOffset The xOffset for the start of the strip.
-     * @param visibleWidth The width of the visible space on the tab strip.
+     * @param visibleLeftBound The visible left bound of the tab strip.
+     * @param visibleRightBound The visible right bound of the tab strip.
      */
     public abstract void pushDrawPropertiesToViews(
-            StripLayoutView[] indexOrderedViews, float xOffset, float visibleWidth);
+            StripLayoutView[] indexOrderedViews, float visibleLeftBound, float visibleRightBound);
 }

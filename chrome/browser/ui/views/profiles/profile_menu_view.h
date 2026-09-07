@@ -14,33 +14,23 @@
 #include "base/functional/callback_forward.h"
 #include "build/build_config.h"
 #include "chrome/browser/password_manager/web_app_profile_switcher.h"
-#include "chrome/browser/profiles/avatar_menu.h"
-#include "chrome/browser/profiles/avatar_menu_observer.h"
 #include "chrome/browser/signin/signin_promo_util.h"
-#include "chrome/browser/sync/sync_ui_util.h"
-#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/views/profiles/profile_menu_view_base.h"
 #include "components/signin/core/browser/signin_header_helper.h"
 #include "components/signin/public/base/signin_buildflags.h"
 #include "components/signin/public/base/signin_metrics.h"
 #include "components/sync/service/local_data_description.h"
 #include "components/sync/service/sync_service.h"
+#include "ui/views/bubble/bubble_anchor.h"
 #include "ui/views/controls/styled_label.h"
 
 namespace signin_metrics {
 enum class AccessPoint;
 }
 
-namespace ui {
-class TrackedElement;
-}  // namespace ui
-
-namespace views {
-class Button;
-}
-
 struct CoreAccountInfo;
-class Browser;
+class BrowserWindowInterface;
 
 // This bubble view is displayed when the user clicks on the avatar button.
 // It displays a list of profiles and allows users to switch between profiles.
@@ -54,8 +44,8 @@ class Browser;
 class ProfileMenuView : public ProfileMenuViewBase {
  public:
   // `browser` must not be nullptr.
-  ProfileMenuView(ui::TrackedElement* anchor_element,
-                  Browser* browser,
+  ProfileMenuView(views::BubbleAnchor anchor_element,
+                  BrowserWindowInterface* browser,
                   signin::ProfileMenuAvatarButtonPromoInfo promo_info,
                   bool from_avatar_promo);
   ~ProfileMenuView() override;
@@ -77,7 +67,7 @@ class ProfileMenuView : public ProfileMenuViewBase {
   friend class ProfileMenuViewSyncErrorButtonTest;
   friend class ProfileMenuInteractiveUiTest;
 
-  Browser& browser() const { return *browser_; }
+  BrowserWindowInterface& browser() const { return *browser_; }
 
   // views::BubbleDialogDelegateView:
   std::u16string GetAccessibleWindowTitle() const override;
@@ -103,9 +93,11 @@ class ProfileMenuView : public ProfileMenuViewBase {
   void OnAddNewProfileButtonClicked();
   void OnManageProfilesButtonClicked();
   void OnEditProfileButtonClicked();
-  void OnAutofillSettingsButtonClicked();
   void OnYourSavedInfoSettingsButtonClicked();
   void OnBatchUploadButtonClicked(ActionableItem button_type);
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+  void OnCrossDeviceSigninButtonClicked();
+#endif
 
   // We normally close the bubble any time it becomes inactive but this can lead
   // to flaky tests where unexpected UI events are triggering this behavior.
@@ -128,6 +120,9 @@ class ProfileMenuView : public ProfileMenuViewBase {
   void MaybeBuildGoogleServicesSettingsButton();
   void MaybeBuildManageGoogleAccountButton();
   void MaybeBuildCloseBrowsersButton();
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+  void MaybeBuildCrossDeviceSigninButton();
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
   void MaybeBuildSignoutButton();
   void BuildFeatureButtons();
   IdentitySectionParams GetIdentitySectionParams(
@@ -143,7 +138,7 @@ class ProfileMenuView : public ProfileMenuViewBase {
 
   void BuildProfileManagementFeatureButtons();
 
-  const raw_ref<Browser> browser_;
+  const raw_ref<BrowserWindowInterface> browser_;
   signin::ProfileMenuAvatarButtonPromoInfo promo_info_;
   // If the profile menu opening originated from a Promo on the AvatarButton.
   bool from_avatar_promo_;

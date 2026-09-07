@@ -12,7 +12,7 @@ import static org.mockito.Mockito.anyString;
 import static org.mockito.Mockito.argThat;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.eq;
-import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
@@ -20,6 +20,7 @@ import static org.mockito.Mockito.when;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.view.ContextThemeWrapper;
 
 import org.junit.After;
 import org.junit.Before;
@@ -27,17 +28,16 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
-import org.robolectric.annotation.Implementation;
-import org.robolectric.annotation.Implements;
+import org.mockito.quality.Strictness;
 
 import org.chromium.base.ContextUtils;
+import org.chromium.base.UserDataHost;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.UserActionTester;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider.ControlsPosition;
 import org.chromium.chrome.browser.omnibox.R;
@@ -56,9 +56,9 @@ import org.chromium.components.dom_distiller.core.DomDistillerUrlUtilsJni;
 import org.chromium.components.omnibox.AutocompleteInput;
 import org.chromium.components.omnibox.AutocompleteMatch;
 import org.chromium.components.omnibox.AutocompleteMatchBuilder;
-import org.chromium.components.omnibox.OmniboxFeatureList;
-import org.chromium.components.omnibox.OmniboxFeatures;
+import org.chromium.components.omnibox.OmniboxCapabilities;
 import org.chromium.components.omnibox.OmniboxSuggestionType;
+import org.chromium.components.omnibox.action.OmniboxActionDelegate;
 import org.chromium.components.omnibox.suggestions.OmniboxSuggestionUiType;
 import org.chromium.components.ukm.UkmRecorder;
 import org.chromium.components.ukm.UkmRecorderJni;
@@ -73,13 +73,11 @@ import java.util.function.Supplier;
 
 /** Unit tests for the "edit url" omnibox suggestion. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(shadows = {EditUrlSuggestionProcessorUnitTest.ShadowSadTab.class})
 public final class EditUrlSuggestionProcessorUnitTest {
     private static final String TAB_TITLE = "Tab Title";
     private static final String MATCH_TITLE = "Match Title";
     private static final int ACTION_SHARE = 0;
     private static final int ACTION_COPY = 1;
-    private static final int ACTION_EDIT = 2;
     private static final GURL SEARCH_URL_1 = JUnitTestGURLs.SEARCH_URL;
     private static final GURL SEARCH_URL_2 = JUnitTestGURLs.SEARCH_2_URL;
     private static final GURL INVALID_ESCAPED_PATH_URL =
@@ -89,38 +87,30 @@ public final class EditUrlSuggestionProcessorUnitTest {
     private static final GURL CHROME_DISTILLER_ORIGINAL_URL =
             new GURL("https://www.originalurl.com/test/path");
 
-    public static final String ESCAPED_PATH_URL_STRING = "https://pl.wikipedia.org/wiki/Gżegżółka";
     public static final GURL ESCAPED_PATH_URL =
             new GURL("https://pl.wikipedia.org/wiki/G%C5%BCeg%C5%BC%C3%B3%C5%82ka");
 
-    /** Used to simulate sad tabs. */
-    @Implements(SadTab.class)
-    static class ShadowSadTab {
-        public static boolean reportSadTab;
+    @Rule
+    public final MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
 
-        @Implementation
-        public static boolean isShowing(Tab t) {
-            return reportSadTab;
-        }
-    }
+    @Mock private ShareDelegate mShareDelegate;
+    @Mock private Tab mTab;
+    @Mock private OmniboxImageSupplier mImageSupplier;
+    @Mock private SuggestionHost mSuggestionHost;
+    @Mock private ClipboardManager mClipboardManager;
+    @Mock private WebContents mWebContents;
+    @Mock private UrlBarEditingTextStateProvider mTextProvider;
+    @Mock private BookmarkState mBookmarkState;
+    @Mock private OmniboxActionDelegate mActionDelegate;
+    @Mock private UkmRecorder.Natives mUkmRecorderJniMock;
+    @Mock private DomDistillerUrlUtilsJni mDomDistillerUrlUtilsJni;
+    @Mock private SadTab mSadTab;
+    @Captor private ArgumentCaptor<ClipData> mClipDataCaptor;
 
-    public @Rule MockitoRule mMockitoRule = MockitoJUnit.rule();
-
-    private @Mock ShareDelegate mShareDelegate;
-    private @Mock Tab mTab;
-    private @Mock OmniboxImageSupplier mImageSupplier;
-    private @Mock SuggestionHost mSuggestionHost;
-    private @Mock ClipboardManager mClipboardManager;
-    private @Mock WebContents mWebContents;
-    private @Mock Supplier<Tab> mTabSupplier;
-    private @Mock Supplier<ShareDelegate> mShareDelegateSupplier;
-    private @Mock UrlBarEditingTextStateProvider mTextProvider;
-    private @Mock BookmarkState mBookmarkState;
-    private @Mock UkmRecorder.Natives mUkmRecorderJniMock;
-    private @Mock AutocompleteInput mInput;
-    private @Mock DomDistillerUrlUtilsJni mDomDistillerUrlUtilsJni;
-
-    // The original (real) ClipboardManager to be restored after a test run.
+    private final AutocompleteInput mInput = new AutocompleteInput();
+    private final UserDataHost mTabUserData = new UserDataHost();
+    private final Supplier<Tab> mTabSupplier = () -> mTab;
+    private final Supplier<ShareDelegate> mShareDelegateSupplier = () -> mShareDelegate;
     private Context mContext;
     private AutocompleteMatch mMatch;
     private AutocompleteMatch mChromeDistillerMatch;
@@ -136,7 +126,9 @@ public final class EditUrlSuggestionProcessorUnitTest {
                 ((ClipboardImpl) Clipboard.getInstance())
                         .overrideClipboardManagerForTesting(mClipboardManager);
 
-        mContext = ContextUtils.getApplicationContext();
+        mContext =
+                new ContextThemeWrapper(
+                        ContextUtils.getApplicationContext(), R.style.Theme_BrowserUI_DayNight);
         mMatch =
                 new AutocompleteMatchBuilder(OmniboxSuggestionType.URL_WHAT_YOU_TYPED)
                         .setIsSearch(false)
@@ -162,17 +154,18 @@ public final class EditUrlSuggestionProcessorUnitTest {
                         mBookmarkState,
                         mTabSupplier,
                         mShareDelegateSupplier,
-                        ObservableSuppliers.createNonNull(ControlsPosition.TOP));
+                        ObservableSuppliers.createNonNull(ControlsPosition.TOP),
+                        mActionDelegate);
         mProcessor = new EditUrlSuggestionProcessor(uiContext);
         mModel = mProcessor.createModel();
 
-        doReturn(mTab).when(mTabSupplier).get();
-        doReturn(mShareDelegate).when(mShareDelegateSupplier).get();
-        doReturn(SEARCH_URL_1).when(mTab).getUrl();
-        doReturn(TAB_TITLE).when(mTab).getTitle();
-        doReturn(true).when(mTab).isInitialized();
+        lenient().doReturn(SEARCH_URL_1).when(mTab).getUrl();
+        lenient().doReturn(TAB_TITLE).when(mTab).getTitle();
+        lenient().doReturn(mTabUserData).when(mTab).getUserDataHost();
+        lenient().doReturn(true).when(mTab).isInitialized();
         DomDistillerUrlUtilsJni.setInstanceForTesting(mDomDistillerUrlUtilsJni);
-        when(mDomDistillerUrlUtilsJni.getOriginalUrlFromDistillerUrl(anyString()))
+        lenient()
+                .when(mDomDistillerUrlUtilsJni.getOriginalUrlFromDistillerUrl(anyString()))
                 .thenReturn(SEARCH_URL_1);
 
         mProcessor.onOmniboxSessionStateChange(true);
@@ -199,7 +192,6 @@ public final class EditUrlSuggestionProcessorUnitTest {
     }
 
     @Test
-    @DisableFeatures(OmniboxFeatureList.REMOVE_SEARCH_READY_OMNIBOX)
     public void doesProcessSuggestion_acceptMatchingUrlWhatYouTyped() {
         // URL_WHAT_YOU_TYPED
         assertTrue(mProcessor.doesProcessSuggestion(mMatch, 0));
@@ -215,10 +207,9 @@ public final class EditUrlSuggestionProcessorUnitTest {
     }
 
     @Test
-    @DisableFeatures(OmniboxFeatureList.REMOVE_SEARCH_READY_OMNIBOX)
-    public void doesProcessSuggestion_acceptMatchingWhatYouTypedWhenRetainOmniboxOnFocusDisabled() {
+    public void doesProcessSuggestion_acceptMatchingWhatYouTypedWhenDesktopModeDisabled() {
         // URL_WHAT_YOU_TYPED
-        OmniboxFeatures.setShouldRetainOmniboxOnFocusForTesting(false);
+        OmniboxCapabilities.setHasDesktopExperienceForTesting(false);
         assertTrue(mProcessor.doesProcessSuggestion(mMatch, 0));
 
         // SEARCH_WHAT_YOU_TYPED
@@ -233,21 +224,25 @@ public final class EditUrlSuggestionProcessorUnitTest {
 
     @Test
     public void doesProcessSuggestion_rejectMatchWhenTabIsMissing() {
-        doReturn(null).when(mTabSupplier).get();
+        mTab = null;
         assertFalse(mProcessor.doesProcessSuggestion(mMatch, 0));
         verifyNoMoreInteractions(mSuggestionHost, mShareDelegate, mClipboardManager);
     }
 
     @Test
-    public void doesProcessSuggestion_rejectMatchForNativeTab() {
-        doReturn(true).when(mTab).isNativePage();
+    public void doesProcessSuggestion_rejectMatchForUnacceptableUrl() {
+        mMatch =
+                new AutocompleteMatchBuilder(OmniboxSuggestionType.URL_WHAT_YOU_TYPED)
+                        .setUrl(new GURL("content://12345"))
+                        .build();
         assertFalse(mProcessor.doesProcessSuggestion(mMatch, 0));
         verifyNoMoreInteractions(mSuggestionHost, mShareDelegate, mClipboardManager);
     }
 
     @Test
     public void doesProcessSuggestion_rejectMatchForSadTab() {
-        ShadowSadTab.reportSadTab = true;
+        doReturn(true).when(mSadTab).isShowing();
+        mTabUserData.setUserData(SadTab.class, mSadTab);
         assertFalse(mProcessor.doesProcessSuggestion(mMatch, 0));
         verifyNoMoreInteractions(mSuggestionHost, mShareDelegate, mClipboardManager);
     }
@@ -278,8 +273,8 @@ public final class EditUrlSuggestionProcessorUnitTest {
     }
 
     @Test
-    public void doesProcessSuggestion_rejectMatchWhenRetainOmniboxOnFocusEnabled() {
-        OmniboxFeatures.setShouldRetainOmniboxOnFocusForTesting(true);
+    public void doesProcessSuggestion_rejectMatchWhenDesktopModeEnabled() {
+        OmniboxCapabilities.setHasDesktopExperienceForTesting(true);
         assertFalse(mProcessor.doesProcessSuggestion(mMatch, 0));
         verifyNoMoreInteractions(mSuggestionHost, mShareDelegate, mClipboardManager);
     }
@@ -324,8 +319,7 @@ public final class EditUrlSuggestionProcessorUnitTest {
         var monitor = new UserActionTester();
         mModel.get(BaseSuggestionViewProperties.ACTION_BUTTONS).get(ACTION_SHARE).callback.run();
         verify(mSuggestionHost).finishInteraction();
-        verify(mShareDelegate, times(1))
-                .share(mTab, /* shareDirectly= */ false, ShareOrigin.EDIT_URL);
+        verify(mShareDelegate).share(mTab, /* shareDirectly= */ false, ShareOrigin.EDIT_URL);
         // Note: UkmRecorder requires WebContents to report metrics.
         // In the even WebContents is not available, we should not interact with UkmRecorder.
         verifyNoMoreInteractions(mUkmRecorderJniMock);
@@ -360,8 +354,8 @@ public final class EditUrlSuggestionProcessorUnitTest {
         mProcessor.populateModel(mInput, mMatch, mModel, 0);
 
         var monitor = new UserActionTester();
-        mModel.get(BaseSuggestionViewProperties.ON_CLICK).run();
-        verify(mSuggestionHost).onSuggestionClicked(mMatch, 0, mMatch.getUrl());
+        mModel.get(BaseSuggestionViewProperties.ON_ACTIVATE).onResult(/* result= */ 0);
+        verify(mSuggestionHost).onSuggestionClicked(mMatch, 0, mMatch.getUrl(), /* modifiers= */ 0);
         verifyNoMoreInteractions(mSuggestionHost);
 
         assertEquals(1, monitor.getActionCount("Omnibox.EditUrlSuggestion.Tap"));
@@ -375,8 +369,7 @@ public final class EditUrlSuggestionProcessorUnitTest {
         var monitor = new UserActionTester();
         mModel.get(BaseSuggestionViewProperties.ACTION_BUTTONS).get(ACTION_COPY).callback.run();
 
-        ArgumentCaptor<ClipData> argument = ArgumentCaptor.forClass(ClipData.class);
-        verify(mClipboardManager, times(1)).setPrimaryClip(argument.capture());
+        verify(mClipboardManager).setPrimaryClip(mClipDataCaptor.capture());
 
         // ClipData doesn't implement equals, but their string representations matching should be
         // good enough.
@@ -385,7 +378,7 @@ public final class EditUrlSuggestionProcessorUnitTest {
                         "url",
                         new String[] {"text/x-moz-url", "text/plain"},
                         new ClipData.Item(SEARCH_URL_1.getSpec()));
-        assertEquals(clip.toString(), argument.getValue().toString());
+        assertEquals(clip.toString(), mClipDataCaptor.getValue().toString());
         verifyNoMoreInteractions(mSuggestionHost, mShareDelegate, mClipboardManager);
 
         assertEquals(1, monitor.getActionCount("Omnibox.EditUrlSuggestion.Copy"));
@@ -402,8 +395,7 @@ public final class EditUrlSuggestionProcessorUnitTest {
         var monitor = new UserActionTester();
         mModel.get(BaseSuggestionViewProperties.ACTION_BUTTONS).get(ACTION_COPY).callback.run();
 
-        ArgumentCaptor<ClipData> argument = ArgumentCaptor.forClass(ClipData.class);
-        verify(mClipboardManager, times(1)).setPrimaryClip(argument.capture());
+        verify(mClipboardManager).setPrimaryClip(mClipDataCaptor.capture());
 
         // ClipData doesn't implement equals, but their string representations matching should be
         // good enough.
@@ -412,7 +404,7 @@ public final class EditUrlSuggestionProcessorUnitTest {
                         "url",
                         new String[] {"text/x-moz-url", "text/plain"},
                         new ClipData.Item(CHROME_DISTILLER_ORIGINAL_URL.getSpec()));
-        assertEquals(clip.toString(), argument.getValue().toString());
+        assertEquals(clip.toString(), mClipDataCaptor.getValue().toString());
         verifyNoMoreInteractions(mSuggestionHost, mShareDelegate, mClipboardManager);
 
         assertEquals(1, monitor.getActionCount("Omnibox.EditUrlSuggestion.Copy"));

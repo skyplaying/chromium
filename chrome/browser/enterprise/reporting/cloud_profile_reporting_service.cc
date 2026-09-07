@@ -13,18 +13,16 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/enterprise/browser_management/management_service_factory.h"
 #include "chrome/browser/enterprise/identifiers/profile_id_service_factory.h"
+#include "chrome/browser/enterprise/reporting/saas_usage/saas_usage_reporting_delegate_factory_impl.h"
 #include "chrome/browser/enterprise/signals/signals_aggregator_factory.h"
 #include "chrome/browser/enterprise/util/affiliation.h"
-#include "chrome/browser/enterprise/util/managed_browser_utils.h"
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_attributes_entry.h"
-#include "chrome/browser/profiles/profile_attributes_storage.h"
-#include "chrome/browser/profiles/profile_manager.h"
-#include "components/device_signals/core/browser/signals_aggregator.h"
 #include "components/enterprise/browser/identifiers/profile_id_service.h"
 #include "components/enterprise/browser/reporting/chrome_profile_request_generator.h"
 #include "components/enterprise/browser/reporting/report_scheduler.h"
+#include "components/enterprise/browser/reporting/reporting_features.h"
+#include "components/enterprise/browser/reporting/saas_usage/saas_usage_report_scheduler.h"
 #include "components/policy/core/common/cloud/cloud_policy_client.h"
 #include "components/policy/core/common/cloud/cloud_policy_core.h"
 #include "components/policy/core/common/cloud/cloud_policy_manager.h"
@@ -41,16 +39,21 @@
 #include "chrome/browser/enterprise/reporting/reporting_delegate_factory_desktop.h"
 #endif
 
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+#include "chrome/browser/enterprise/reporting/browser_launch/browser_launch_event_controller_factory_desktop.h"
+#endif  // BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+
 namespace enterprise_reporting {
 
 namespace {
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-BASE_FEATURE(kAlwaysUploadExtensionInfo, base::FEATURE_DISABLED_BY_DEFAULT);
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+// TODO(b/516458264): Clean up feature and deprecate condition which used it.
+BASE_FEATURE(kAlwaysUploadExtensionInfo, base::FEATURE_ENABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 bool CanUploadExtensionInfo(Profile* profile) {
   if (base::FeatureList::IsEnabled(kAlwaysUploadExtensionInfo)) {
     return true;
@@ -71,7 +74,7 @@ bool CanUploadExtensionInfo(Profile* profile) {
                             base::Value::Type::LIST);
 }
 
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 }  // namespace
 
@@ -110,11 +113,28 @@ void CloudProfileReportingService::CreateReportScheduler() {
           enterprise_signals::SignalsAggregatorFactory::GetForProfile(
               profile_));
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   params.profile_request_generator->ToggleExtensionReport(
       base::BindRepeating(&CanUploadExtensionInfo, profile_));
 #endif
   report_scheduler_ = std::make_unique<ReportScheduler>(std::move(params));
+
+  if (base::FeatureList::IsEnabled(kSaasUsageReporting)) {
+    auto saas_usage_reporting_delegate_factory =
+        SaasUsageReportingDelegateFactoryImpl::CreateForProfile(profile_);
+    saas_usage_report_scheduler_ = SaasUsageReportScheduler::Create(
+        "profile", saas_usage_reporting_delegate_factory.get());
+  }
+
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+  if (base::FeatureList::IsEnabled(kBrowserLaunchMetadataReporting)) {
+    browser_launch_controller_ =
+        BrowserLaunchEventControllerFactoryDesktop::CreateForProfile(profile_);
+    if (browser_launch_controller_) {
+      browser_launch_controller_->CollectAndUpload();
+    }
+  }
+#endif  // BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
 }
 
 void CloudProfileReportingService::OnCoreConnected(

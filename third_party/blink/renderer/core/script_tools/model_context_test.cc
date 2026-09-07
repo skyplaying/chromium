@@ -6,23 +6,36 @@
 
 #include <optional>
 
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/run_until.h"
 #include "mojo/public/cpp/bindings/receiver.h"
+#include "mojo/public/cpp/bindings/remote.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/common/origin_trials/scoped_test_origin_trial_policy.h"
 #include "third_party/blink/public/mojom/content_extraction/script_tools.mojom-blink.h"
 #include "third_party/blink/public/platform/web_string.h"
 #include "third_party/blink/public/web/web_script_source.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
+#include "third_party/blink/renderer/core/css/css_default_style_sheets.h"
 #include "third_party/blink/renderer/core/dom/abort_controller.h"
 #include "third_party/blink/renderer/core/dom/events/native_event_listener.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
+#include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
+#include "third_party/blink/renderer/core/page/validation_message_client.h"
 #include "third_party/blink/renderer/core/script_tools/model_context_supplement.h"
+#include "third_party/blink/renderer/core/script_tools/script_tool_types.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_request.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_test.h"
+#include "third_party/blink/renderer/platform/bindings/source_location.h"
+#include "third_party/blink/renderer/platform/heap/persistent.h"
+#include "third_party/blink/renderer/platform/heap/thread_state.h"
 #include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
+#include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
@@ -48,32 +61,132 @@ class MockScriptToolHost : public mojom::blink::ScriptToolHost {
  private:
   mojo::Receiver<mojom::blink::ScriptToolHost> receiver_{this};
   bool pause_called_ = false;
-  base::RunLoop* run_loop_ = nullptr;
+  raw_ptr<base::RunLoop, UnprotectedInRelease | DanglingUntriaged> run_loop_ =
+      nullptr;
 };
 
-class ModelContextTest : public SimTest {
+class MockModelContextHost : public mojom::blink::ModelContextHost {
  public:
-  ModelContextTest() = default;
+  explicit MockModelContextHost() = default;
 
+  void Bind(mojo::ScopedMessagePipeHandle pipe) {
+    receiver_.Bind(
+        mojo::PendingReceiver<mojom::blink::ModelContextHost>(std::move(pipe)));
+  }
+
+  void BindModelContext(
+      mojo::PendingRemote<mojom::blink::ModelContext> model_context) override {
+    model_context_.Bind(std::move(model_context));
+  }
+
+  void RegisterScriptTool(mojom::blink::ScriptToolPtr tool,
+                          RegisterScriptToolCallback callback) override {
+    registered_tools_.push_back(tool->name);
+    if (model_context_.is_bound()) {
+      model_context_->NotifyToolChange();
+    }
+    std::move(callback).Run();
+  }
+
+  void UnregisterScriptTool(const String& name) override {
+    registered_tools_.erase(
+        std::remove(registered_tools_.begin(), registered_tools_.end(), name),
+        registered_tools_.end());
+    if (model_context_.is_bound()) {
+      model_context_->NotifyToolChange();
+    }
+  }
+
+  void GetScriptTools(
+      const Vector<scoped_refptr<const SecurityOrigin>>& from_origins,
+      GetScriptToolsCallback callback) override {
+    std::move(callback).Run({});
+  }
+
+  void ExecuteRemoteScriptTool(
+      const base::UnguessableToken& invocation_id,
+      const ::blink::FrameToken& tool_owner_frame_token,
+      const ::scoped_refptr<const ::blink::SecurityOrigin>&
+          expected_target_origin,
+      const ::blink::String& name,
+      const ::blink::String& input_arguments,
+      ExecuteRemoteScriptToolCallback callback) override {
+    std::move(callback).Run(String(), false);
+  }
+  void CancelRemoteScriptTool(
+      const base::UnguessableToken& invocation_id) override {}
+
+  const Vector<String>& registered_tools() const { return registered_tools_; }
+
+ private:
+  mojo::Receiver<mojom::blink::ModelContextHost> receiver_{this};
+  mojo::Remote<mojom::blink::ModelContext> model_context_;
+  Vector<String> registered_tools_;
+};
+
+class ModelContextTestBase : public SimTest {
+ public:
   bool EvalJsBoolean(const char* script) {
     return MainFrame()
         .ExecuteScriptAndReturnValue(
-            WebScriptSource(WebString::FromUTF8(script)))
+            WebScriptSource(WebString::FromUtf8(script)))
         .As<v8::Boolean>()
         ->Value();
   }
 
   String EvalJsString(const char* script) {
-    return ToCoreString(Window().GetIsolate(),
-                        MainFrame()
-                            .ExecuteScriptAndReturnValue(
-                                WebScriptSource(WebString::FromUTF8(script)))
-                            .As<v8::String>());
+    return ToCoreStringWithUndefinedOrNullCheck(
+        Window().GetIsolate(),
+        MainFrame().ExecuteScriptAndReturnValue(
+            WebScriptSource(WebString::FromUtf8(script))));
   }
+
+  int EvalJsInteger(const char* script) {
+    return static_cast<int>(MainFrame()
+                                .ExecuteScriptAndReturnValue(WebScriptSource(
+                                    WebString::FromUtf8(script)))
+                                .As<v8::Integer>()
+                                ->Value());
+  }
+
+ protected:
+  void SetUp() override {
+    SimTest::SetUp();
+    // In SimTest, web security is disabled and universal/file access from file
+    // URLs is enabled by default. This forces documents to always use a
+    // universal non-origin-keyed agent, bypassing the mock navigation agent
+    // cluster key. We adjust these settings here to ensure the mock browser
+    // navigation's agent cluster key is respected.
+    GetDocument().GetSettings()->SetWebSecurityEnabled(true);
+    GetDocument().GetSettings()->SetAllowUniversalAccessFromFileURLs(false);
+    GetDocument().GetSettings()->SetAllowFileAccessFromFileURLs(false);
+    GetDocument()
+        .GetExecutionContext()
+        ->GetBrowserInterfaceBroker()
+        .SetBinderForTesting(
+            mojom::blink::ModelContextHost::Name_,
+            base::BindRepeating(&MockModelContextHost::Bind,
+                                base::Unretained(&mock_model_context_host_)));
+  }
+
+  void TearDown() override {
+    GetDocument()
+        .GetExecutionContext()
+        ->GetBrowserInterfaceBroker()
+        .SetBinderForTesting(mojom::blink::ModelContextHost::Name_,
+                             base::NullCallback());
+    SimTest::TearDown();
+  }
+
+  MockModelContextHost mock_model_context_host_;
+};
+
+class ModelContextTest : public ModelContextTestBase {
+ public:
+  ModelContextTest() = default;
 
  private:
   ScopedWebMCPForTest scoped_webmcp_{true};
-  ScopedWebMCPTestingForTest scoped_webmcp_testing_{true};
 };
 
 TEST_F(ModelContextTest, ExecuteTool) {
@@ -87,7 +200,7 @@ TEST_F(ModelContextTest, ExecuteTool) {
       return obj.text;
     }
 
-    navigator.modelContext.registerTool({
+    document.modelContext.registerTool({
       execute: echo,
       name: "echo",
       description: "echo input",
@@ -105,17 +218,15 @@ TEST_F(ModelContextTest, ExecuteTool) {
     </script>
   )");
 
-  auto* model_context =
-      ModelContextSupplement::modelContext(*Window().navigator());
-  ASSERT_TRUE(model_context);
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
 
   base::RunLoop run_loop;
   String result;
 
   model_context->ExecuteTool(
-      "echo", "{\"text\": \"hello\"}", /* signal= */ nullptr,
+      base::UnguessableToken::Create(), "echo", "{\"text\": \"hello\"}",
       base::BindLambdaForTesting(
-          [&](base::expected<WebString, WebDocument::ScriptToolError> res) {
+          [&](base::expected<String, ScriptToolError> res) {
             ASSERT_TRUE(res.has_value());
             result = *res;
             run_loop.Quit();
@@ -124,6 +235,27 @@ TEST_F(ModelContextTest, ExecuteTool) {
   run_loop.Run();
 
   EXPECT_EQ(result, "hello");
+}
+
+TEST_F(ModelContextTest, GetTools_InsecureOrigin) {
+  SimRequest main_resource("https://example.com/", "text/html");
+  LoadURL("https://example.com/");
+  v8::HandleScope handle_scope(Window().GetIsolate());
+  ScriptState::Scope script_scope(
+      ToScriptStateForMainWorld(Window().GetFrame()));
+
+  main_resource.Complete(R"(
+    <body>
+    <script>
+      window.test_error = "";
+      document.modelContext.getTools({ fromOrigins: ["http://insecure.com"] })
+        .then(() => { window.test_error = "Success"; })
+        .catch(err => { window.test_error = err.name; });
+    </script>
+  )");
+  test::RunPendingTasks();
+
+  EXPECT_EQ(EvalJsString("window.test_error"), "SecurityError");
 }
 
 TEST_F(ModelContextTest, ExecuteToolReturnsObject) {
@@ -136,7 +268,7 @@ TEST_F(ModelContextTest, ExecuteToolReturnsObject) {
     async function echo(obj) {
       return obj;
     }
-    navigator.modelContext.registerTool({
+    document.modelContext.registerTool({
       execute: echo,
       name: "echo",
       description: "echo input",
@@ -151,23 +283,23 @@ TEST_F(ModelContextTest, ExecuteToolReturnsObject) {
           required: ["text"]
       },
       annotations: {
-        readOnlyHint: "true"
+        readOnlyHint: true,
+        untrustedContentHint: true,
+        consequentialHint: false,
       },
     });
     </script>
   )");
 
-  auto* model_context =
-      ModelContextSupplement::modelContext(*Window().navigator());
-  ASSERT_TRUE(model_context);
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
 
   base::RunLoop run_loop;
   String result;
 
   model_context->ExecuteTool(
-      "echo", "{\"text\": \"hello\"}", /* signal= */ nullptr,
+      base::UnguessableToken::Create(), "echo", "{\"text\": \"hello\"}",
       base::BindLambdaForTesting(
-          [&](base::expected<WebString, WebDocument::ScriptToolError> res) {
+          [&](base::expected<String, ScriptToolError> res) {
             ASSERT_TRUE(res.has_value());
             result = *res;
             run_loop.Quit();
@@ -188,16 +320,16 @@ TEST_F(ModelContextTest, ExecuteDeclarativeFormTool_Navigation) {
       <input type="text" name="query">
     </form>
   )");
+  test::RunPendingTasks();
 
-  auto* model_context =
-      ModelContextSupplement::modelContext(*Window().navigator());
-  ASSERT_TRUE(model_context);
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
 
   base::RunLoop run_loop;
   model_context->ExecuteTool(
-      "search_tool", "{\"query\": \"testing\"}", /* signal= */ nullptr,
+      base::UnguessableToken::Create(), "search_tool",
+      "{\"query\": \"testing\"}",
       base::BindLambdaForTesting(
-          [&](base::expected<WebString, WebDocument::ScriptToolError> res) {
+          [&](base::expected<String, ScriptToolError> res) {
             EXPECT_TRUE(res.has_value());
             EXPECT_TRUE(res->IsNull());
             run_loop.Quit();
@@ -214,20 +346,19 @@ TEST_F(ModelContextTest, ExecuteDeclarativeFormTool_InvalidInput) {
       <input type="text" name="query">
     </form>
   )");
+  test::RunPendingTasks();
 
-  auto* model_context =
-      ModelContextSupplement::modelContext(*Window().navigator());
-  ASSERT_TRUE(model_context);
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
 
   base::RunLoop run_loop;
   // Test with a field that doesn't exist in the form
   model_context->ExecuteTool(
-      "search_tool", "{\"nonexistent\": \"value\"}", /* signal= */ nullptr,
+      base::UnguessableToken::Create(), "search_tool",
+      "{\"nonexistent\": \"value\"}",
       base::BindLambdaForTesting(
-          [&](base::expected<WebString, WebDocument::ScriptToolError> res) {
+          [&](base::expected<String, ScriptToolError> res) {
             EXPECT_FALSE(res.has_value());
-            EXPECT_EQ(res.error(),
-                      WebDocument::ScriptToolError::kInvalidInputArguments);
+            EXPECT_EQ(res.error(), ScriptToolErrorCode::kInvalidInputArguments);
             EXPECT_EQ(res.error().message,
                       "Input contains a parameter \"nonexistent\" but there is "
                       "no such parameter for the tool");
@@ -247,19 +378,17 @@ TEST_F(ModelContextTest, ExecuteDeclarativeFormTool_InvalidSelectValue) {
       </select>
     </form>
   )");
+  test::RunPendingTasks();
 
-  auto* model_context =
-      ModelContextSupplement::modelContext(*Window().navigator());
-  ASSERT_TRUE(model_context);
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
 
   base::RunLoop run_loop;
   model_context->ExecuteTool(
-      "select_tool", "{\"choice\": \"c\"}", /* signal= */ nullptr,
+      base::UnguessableToken::Create(), "select_tool", "{\"choice\": \"c\"}",
       base::BindLambdaForTesting(
-          [&](base::expected<WebString, WebDocument::ScriptToolError> res) {
+          [&](base::expected<String, ScriptToolError> res) {
             EXPECT_FALSE(res.has_value());
-            EXPECT_EQ(res.error(),
-                      WebDocument::ScriptToolError::kInvalidInputArguments);
+            EXPECT_EQ(res.error(), ScriptToolErrorCode::kInvalidInputArguments);
             EXPECT_EQ(res.error().message,
                       "Invalid value \"c\" for parameter choice");
             run_loop.Quit();
@@ -287,17 +416,17 @@ TEST_F(ModelContextTest, ExecuteDeclarativeFormTool_SPA) {
       });
     </script>
   )");
+  test::RunPendingTasks();
 
-  auto* model_context =
-      ModelContextSupplement::modelContext(*Window().navigator());
-  ASSERT_TRUE(model_context);
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
 
   base::RunLoop run_loop;
   bool got_result = false;
   model_context->ExecuteTool(
-      "search_tool", "{\"query\": \"testing\"}", /* signal= */ nullptr,
+      base::UnguessableToken::Create(), "search_tool",
+      "{\"query\": \"testing\"}",
       base::BindLambdaForTesting(
-          [&](base::expected<WebString, WebDocument::ScriptToolError> res) {
+          [&](base::expected<String, ScriptToolError> res) {
             got_result = true;
             ASSERT_TRUE(res.has_value());
             EXPECT_EQ(*res, "result value");
@@ -329,21 +458,20 @@ TEST_F(ModelContextTest, ExecuteDeclarativeFormTool_SPA_Reject) {
       });
     </script>
   )");
+  test::RunPendingTasks();
 
-  auto* model_context =
-      ModelContextSupplement::modelContext(*Window().navigator());
-  ASSERT_TRUE(model_context);
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
 
   base::RunLoop run_loop;
   bool got_result = false;
   model_context->ExecuteTool(
-      "search_tool", "{\"query\": \"testing\"}", /* signal= */ nullptr,
+      base::UnguessableToken::Create(), "search_tool",
+      "{\"query\": \"testing\"}",
       base::BindLambdaForTesting(
-          [&](base::expected<WebString, WebDocument::ScriptToolError> res) {
+          [&](base::expected<String, ScriptToolError> res) {
             got_result = true;
             ASSERT_FALSE(res.has_value());
-            EXPECT_EQ(res.error(),
-                      WebDocument::ScriptToolError::kToolInvocationFailed);
+            EXPECT_EQ(res.error(), ScriptToolErrorCode::kToolInvocationFailed);
             EXPECT_EQ(res.error().message, "respondWith promise was rejected");
             run_loop.Quit();
           }));
@@ -351,6 +479,174 @@ TEST_F(ModelContextTest, ExecuteDeclarativeFormTool_SPA_Reject) {
 
   EXPECT_TRUE(got_result);
   EXPECT_TRUE(EvalJsBoolean("window.submit_event_fired"));
+}
+
+TEST_F(ModelContextTest, ExecuteDeclarativeFormTool_SPA_NoRespondWith) {
+  SimRequest main_resource("https://example.com/", "text/html");
+  LoadURL("https://example.com/");
+  v8::HandleScope handle_scope(Window().GetIsolate());
+  ScriptState::Scope script_scope(
+      ToScriptStateForMainWorld(Window().GetFrame()));
+  main_resource.Complete(R"(
+    <form toolautosubmit toolname="search_tool" tooldescription="Search the web" action="/search">
+      <input type=text name=query>
+      <button type=submit>Submit</button>
+    </form>
+    <script>
+      document.querySelector("form").addEventListener("submit", e => {
+        window.submit_event_fired = true;
+        e.preventDefault();
+      });
+    </script>
+  )");
+  test::RunPendingTasks();
+
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
+
+  base::RunLoop run_loop;
+  bool got_result = false;
+  model_context->ExecuteTool(
+      base::UnguessableToken::Create(), "search_tool",
+      "{\"query\": \"testing\"}",
+      base::BindLambdaForTesting(
+          [&](base::expected<String, ScriptToolError> res) {
+            got_result = true;
+            ASSERT_FALSE(res.has_value());
+            EXPECT_EQ(res.error(), ScriptToolErrorCode::kToolInvocationFailed);
+            EXPECT_EQ(res.error().message,
+                      "The site has a programming error: it called "
+                      "preventDefault() on the 'submit' event, without also "
+                      "calling respondWith() with the tool result");
+            run_loop.Quit();
+          }));
+  run_loop.Run();
+
+  EXPECT_TRUE(got_result);
+  EXPECT_TRUE(EvalJsBoolean("window.submit_event_fired"));
+}
+
+TEST_F(ModelContextTest, ExecuteDeclarativeFormTool_ValidationFailure) {
+  SimRequest main_resource("https://example.com/", "text/html");
+  LoadURL("https://example.com/");
+  v8::HandleScope handle_scope(Window().GetIsolate());
+  ScriptState::Scope script_scope(
+      ToScriptStateForMainWorld(Window().GetFrame()));
+  main_resource.Complete(R"(
+    <form toolautosubmit toolname="search_tool" tooldescription="Search the web" action="/search">
+      <input type=text name=query pattern="[a-z]+">
+      <button type=submit>Submit</button>
+    </form>
+  )");
+  test::RunPendingTasks();
+
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
+
+  base::RunLoop run_loop;
+  bool got_result = false;
+  model_context->ExecuteTool(
+      base::UnguessableToken::Create(), "search_tool", "{\"query\": \"123\"}",
+      base::BindLambdaForTesting(
+          [&](base::expected<String, ScriptToolError> res) {
+            got_result = true;
+            EXPECT_FALSE(res.has_value());
+            run_loop.Quit();
+          }));
+  run_loop.Run();
+  EXPECT_TRUE(got_result);
+}
+
+class MockFormValidationMessageClient
+    : public GarbageCollected<MockFormValidationMessageClient>,
+      public ValidationMessageClient {
+ public:
+  void ShowValidationMessage(Element& anchor,
+                             const String&,
+                             TextDirection,
+                             const String&,
+                             TextDirection) override {
+    anchor_ = anchor;
+  }
+
+  void HideValidationMessage(const Element& anchor) override {
+    if (anchor_ == &anchor) {
+      anchor_ = nullptr;
+    }
+  }
+
+  bool IsValidationMessageVisible(const Element& anchor) override {
+    return anchor_ == &anchor;
+  }
+
+  void DocumentDetached(const Document&) override {}
+  void DidChangeFocusTo(const Element*) override {}
+  void WillBeDestroyed() override {}
+  void Trace(Visitor* visitor) const override {
+    visitor->Trace(anchor_);
+    ValidationMessageClient::Trace(visitor);
+  }
+
+ private:
+  Member<const Element> anchor_;
+};
+
+class ModelContextValidationTest : public ModelContextTest {
+ public:
+  void SetUp() override {
+    ModelContextTest::SetUp();
+    mock_client_ = MakeGarbageCollected<MockFormValidationMessageClient>();
+    original_client_ =
+        &Window().GetFrame()->GetPage()->GetValidationMessageClient();
+    Window().GetFrame()->GetPage()->SetValidationMessageClientForTesting(
+        mock_client_);
+  }
+
+  void TearDown() override {
+    Window().GetFrame()->GetPage()->SetValidationMessageClientForTesting(
+        original_client_);
+    ModelContextTest::TearDown();
+  }
+
+ private:
+  Persistent<MockFormValidationMessageClient> mock_client_;
+  Persistent<ValidationMessageClient> original_client_;
+};
+
+TEST_F(ModelContextValidationTest,
+       ExecuteDeclarativeFormTool_ValidationFailureDetails) {
+  SimRequest main_resource("https://example.com/", "text/html");
+  LoadURL("https://example.com/");
+  v8::HandleScope handle_scope(Window().GetIsolate());
+  ScriptState::Scope script_scope(
+      ToScriptStateForMainWorld(Window().GetFrame()));
+  main_resource.Complete(R"(
+    <form toolautosubmit toolname="validation_tool" tooldescription="Validation">
+      <input id=mytext type=text name=text_required required>
+      <input id=mynumber type=number name=number_min min=10>
+      <button type=submit>Submit</button>
+    </form>
+  )");
+  test::RunPendingTasks();
+
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
+
+  base::RunLoop run_loop;
+  bool got_result = false;
+  model_context->ExecuteTool(
+      base::UnguessableToken::Create(), "validation_tool",
+      "{\"text_required\": \"\", \"number_min\": 5}",
+      base::BindLambdaForTesting(
+          [&](base::expected<String, ScriptToolError> res) {
+            got_result = true;
+            EXPECT_FALSE(res.has_value());
+            EXPECT_EQ(res.error(), ScriptToolErrorCode::kToolInvocationFailed);
+            EXPECT_EQ(
+                res.error().message,
+                "Form validation failed: text_required: "
+                "<<ValidationValueMissing>>. number_min: range underflow. ");
+            run_loop.Quit();
+          }));
+  run_loop.Run();
+  EXPECT_TRUE(got_result);
 }
 
 TEST_F(ModelContextTest, ExecuteDeclarativeFormTool_SPA_NoPreventDefault) {
@@ -377,17 +673,17 @@ TEST_F(ModelContextTest, ExecuteDeclarativeFormTool_SPA_NoPreventDefault) {
       });
     </script>
   )");
+  test::RunPendingTasks();
 
-  auto* model_context =
-      ModelContextSupplement::modelContext(*Window().navigator());
-  ASSERT_TRUE(model_context);
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
 
   base::RunLoop run_loop;
   bool got_result = false;
   model_context->ExecuteTool(
-      "search_tool", "{\"query\": \"testing\"}", /* signal= */ nullptr,
+      base::UnguessableToken::Create(), "search_tool",
+      "{\"query\": \"testing\"}",
       base::BindLambdaForTesting(
-          [&](base::expected<WebString, WebDocument::ScriptToolError> res) {
+          [&](base::expected<String, ScriptToolError> res) {
             got_result = true;
             ASSERT_TRUE(res.has_value());
             EXPECT_TRUE(res->IsNull());
@@ -451,16 +747,16 @@ TEST_F(ModelContextTest, ExecuteDeclarativeFormTool_LateRespondWithThrows) {
       });
     </script>
   )");
+  test::RunPendingTasks();
 
-  auto* model_context =
-      ModelContextSupplement::modelContext(*Window().navigator());
-  ASSERT_TRUE(model_context);
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
 
   base::RunLoop run_loop;
   model_context->ExecuteTool(
-      "search_tool", "{\"query\": \"testing\"}", /* signal= */ nullptr,
+      base::UnguessableToken::Create(), "search_tool",
+      "{\"query\": \"testing\"}",
       base::BindLambdaForTesting(
-          [&](base::expected<WebString, WebDocument::ScriptToolError> res) {
+          [&](base::expected<String, ScriptToolError> res) {
             ASSERT_TRUE(res.has_value());
             EXPECT_EQ(*res, "result");
             run_loop.Quit();
@@ -510,16 +806,16 @@ TEST_F(ModelContextTest, ExecuteDeclarativeFormTool_PseudoClasses) {
       });
     </script>
   )");
+  test::RunPendingTasks();
 
-  auto* model_context =
-      ModelContextSupplement::modelContext(*Window().navigator());
-  ASSERT_TRUE(model_context);
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
 
   base::RunLoop run_loop;
   model_context->ExecuteTool(
-      "search_tool", "{\"query\": \"testing\"}", /* signal= */ nullptr,
+      base::UnguessableToken::Create(), "search_tool",
+      "{\"query\": \"testing\"}",
       base::BindLambdaForTesting(
-          [&](base::expected<WebString, WebDocument::ScriptToolError> res) {
+          [&](base::expected<String, ScriptToolError> res) {
             run_loop.Quit();
           }));
   run_loop.Run();
@@ -536,6 +832,17 @@ TEST_F(ModelContextTest, ExecuteDeclarativeFormTool_PseudoClasses) {
   EXPECT_FALSE(EvalJsBoolean(
       "document.querySelector('button').matches(':tool-submit-active')"));
 }
+
+class ModelContextOriginTrialTest : public ModelContextTestBase {
+ public:
+  ModelContextOriginTrialTest() = default;
+
+ private:
+  ScopedWebMCPForTest scoped_webmcp_{false};
+  ScopedWebMCPDeclarativeFileInputForTest scoped_webmcp_file_feature_{false};
+  ScopedWebMCPFormAssociatedCustomElementsForTest scoped_webmcp_face_feature_{
+      false};
+};
 
 TEST_F(ModelContextTest, ExecuteDeclarativeFormTool_SPA_NoAutoSubmit) {
   SimRequest main_resource("https://example.com/", "text/html");
@@ -557,17 +864,17 @@ TEST_F(ModelContextTest, ExecuteDeclarativeFormTool_SPA_NoAutoSubmit) {
       });
     </script>
   )");
+  test::RunPendingTasks();
 
-  auto* model_context =
-      ModelContextSupplement::modelContext(*Window().navigator());
-  ASSERT_TRUE(model_context);
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
 
   base::RunLoop run_loop;
   bool got_result = false;
   model_context->ExecuteTool(
-      "search_tool", "{\"query\": \"testing\"}", /* signal= */ nullptr,
+      base::UnguessableToken::Create(), "search_tool",
+      "{\"query\": \"testing\"}",
       base::BindLambdaForTesting(
-          [&](base::expected<WebString, WebDocument::ScriptToolError> res) {
+          [&](base::expected<String, ScriptToolError> res) {
             got_result = true;
             ASSERT_TRUE(res.has_value());
             EXPECT_EQ(*res, "result value");
@@ -624,16 +931,16 @@ TEST_F(ModelContextTest, ExecuteDeclarativeFormTool_FormPopulatedAtEvent) {
       });
     </script>
   )");
+  test::RunPendingTasks();
 
-  auto* model_context =
-      ModelContextSupplement::modelContext(*Window().navigator());
-  ASSERT_TRUE(model_context);
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
 
   base::RunLoop run_loop;
   model_context->ExecuteTool(
-      "search_tool", "{\"query\": \"testing\"}", /* signal= */ nullptr,
+      base::UnguessableToken::Create(), "search_tool",
+      "{\"query\": \"testing\"}",
       base::BindLambdaForTesting(
-          [&](base::expected<WebString, WebDocument::ScriptToolError> res) {
+          [&](base::expected<String, ScriptToolError> res) {
             EXPECT_TRUE(res.has_value());
             run_loop.Quit();
           }));
@@ -653,6 +960,7 @@ TEST_F(ModelContextTest, ExecuteDeclarativeFormTool_PauseExecution) {
       <button type="submit">Submit</button>
     </form>
   )");
+  test::RunPendingTasks();
 
   MockScriptToolHost mock_host;
   GetDocument()
@@ -662,17 +970,16 @@ TEST_F(ModelContextTest, ExecuteDeclarativeFormTool_PauseExecution) {
                            base::BindRepeating(&MockScriptToolHost::Bind,
                                                base::Unretained(&mock_host)));
 
-  auto* model_context =
-      ModelContextSupplement::modelContext(*Window().navigator());
-  ASSERT_TRUE(model_context);
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
 
   base::RunLoop run_loop;
   mock_host.set_run_loop(&run_loop);
 
   model_context->ExecuteTool(
-      "search_tool", "{\"query\": \"testing\"}", /* signal= */ nullptr,
+      base::UnguessableToken::Create(), "search_tool",
+      "{\"query\": \"testing\"}",
       base::BindLambdaForTesting(
-          [&](base::expected<WebString, WebDocument::ScriptToolError> res) {
+          [&](base::expected<String, ScriptToolError> res) {
             ADD_FAILURE() << "Callback should not be called";
           }));
 
@@ -700,7 +1007,7 @@ TEST_F(ModelContextTest, CancelTool) {
       return obj.text;
     }
 
-    navigator.modelContext.registerTool({
+    document.modelContext.registerTool({
       execute: echo,
       name: "echo",
       description: "echo input",
@@ -718,22 +1025,21 @@ TEST_F(ModelContextTest, CancelTool) {
   </script>
 )");
 
-  auto* model_context =
-      ModelContextSupplement::modelContext(*Window().navigator());
-  ASSERT_TRUE(model_context);
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
 
   base::RunLoop run_loop;
 
-  std::optional<uint32_t> execution_id = model_context->ExecuteTool(
-      "echo", "{\"text\": \"hello\"}", /* signal= */ nullptr,
+  base::UnguessableToken invocation_id = base::UnguessableToken::Create();
+  bool success = model_context->ExecuteTool(
+      invocation_id, "echo", "{\"text\": \"hello\"}",
       base::BindLambdaForTesting(
-          [&](base::expected<WebString, WebDocument::ScriptToolError> res) {
+          [&](base::expected<String, ScriptToolError> res) {
             ASSERT_FALSE(res.has_value());
             run_loop.Quit();
           }));
 
-  ASSERT_TRUE(execution_id.has_value());
-  model_context->CancelTool(execution_id.value());
+  ASSERT_TRUE(success);
+  model_context->CancelTool(invocation_id);
   run_loop.Run();
 }
 
@@ -752,7 +1058,7 @@ TEST_F(ModelContextTest, ToolEventsDispatched) {
       return "done";
     }
 
-    navigator.modelContext.registerTool({
+    document.modelContext.registerTool({
       execute: longRunning,
       name: "slow",
       description: "slow tool",
@@ -764,24 +1070,23 @@ TEST_F(ModelContextTest, ToolEventsDispatched) {
   </script>
 )");
 
-  auto* model_context =
-      ModelContextSupplement::modelContext(*Window().navigator());
-  ASSERT_TRUE(model_context);
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
 
   base::RunLoop run_loop;
 
   // Execute and Cancel
-  std::optional<uint32_t> execution_id = model_context->ExecuteTool(
-      "slow", "{}", /* signal= */ nullptr,
+  base::UnguessableToken invocation_id = base::UnguessableToken::Create();
+  bool success = model_context->ExecuteTool(
+      invocation_id, "slow", "{}",
       base::BindLambdaForTesting(
-          [&](base::expected<WebString, WebDocument::ScriptToolError> res) {
+          [&](base::expected<String, ScriptToolError> res) {
             run_loop.Quit();
           }));
 
   EXPECT_EQ(EvalJsString("window.events.join(',')"), "activated:slow");
 
-  ASSERT_TRUE(execution_id.has_value());
-  model_context->CancelTool(*execution_id);
+  ASSERT_TRUE(success);
+  model_context->CancelTool(invocation_id);
   run_loop.Run();
 
   EXPECT_EQ(EvalJsString("window.events.join(',')"),
@@ -802,21 +1107,20 @@ TEST_F(ModelContextTest, ExecuteDeclarativeFormTool_Reset_Cancels) {
       </form>
     </body>
   )");
+  test::RunPendingTasks();
 
-  auto* model_context =
-      ModelContextSupplement::modelContext(*Window().navigator());
-  ASSERT_TRUE(model_context);
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
 
   base::RunLoop run_loop;
   bool got_error = false;
   model_context->ExecuteTool(
-      "search_tool", "{\"query\": \"testing\"}", /* signal= */ nullptr,
+      base::UnguessableToken::Create(), "search_tool",
+      "{\"query\": \"testing\"}",
       base::BindLambdaForTesting(
-          [&](base::expected<WebString, WebDocument::ScriptToolError> res) {
+          [&](base::expected<String, ScriptToolError> res) {
             got_error = true;
             ASSERT_FALSE(res.has_value());
-            EXPECT_EQ(res.error(),
-                      WebDocument::ScriptToolError::kToolCancelled);
+            EXPECT_EQ(res.error(), ScriptToolErrorCode::kToolCancelled);
             EXPECT_EQ(res.error().message,
                       "Tool execution cancelled by a form reset");
             run_loop.Quit();
@@ -841,51 +1145,6 @@ TEST_F(ModelContextTest, ExecuteDeclarativeFormTool_Reset_Cancels) {
   EXPECT_TRUE(got_error);
   EXPECT_FALSE(EvalJsBoolean(
       "document.querySelector('form').matches(':tool-form-active')"));
-}
-
-TEST_F(ModelContextTest, ToolSignalAborted) {
-  SimRequest main_resource("https://example.com/", "text/html");
-  LoadURL("https://example.com/");
-  v8::HandleScope handle_scope(Window().GetIsolate());
-  ScriptState* script_state = ToScriptStateForMainWorld(Window().GetFrame());
-  ScriptState::Scope script_scope(script_state);
-  main_resource.Complete(R"(
-<body>
-    <script>
-    async function longRunning(obj) {
-      await new Promise(r => setTimeout(r, 10000));
-      return "done";
-    }
-
-    navigator.modelContext.registerTool({
-      execute: longRunning,
-      name: "slow",
-      description: "slow tool",
-    });
-  </script>
-  </body>
-)");
-
-  auto* model_context =
-      ModelContextSupplement::modelContext(*Window().navigator());
-  ASSERT_TRUE(model_context);
-
-  base::RunLoop run_loop;
-
-  auto* controller = AbortController::Create(script_state);
-  controller->abort(script_state);
-
-  // Execute with an aborted signal.
-  model_context->ExecuteTool(
-      "slow", "{}", controller->signal(),
-      base::BindLambdaForTesting(
-          [&](base::expected<WebString, WebDocument::ScriptToolError> res) {
-            ASSERT_FALSE(res.has_value());
-            EXPECT_EQ(res.error(),
-                      WebDocument::ScriptToolError::kToolInvocationFailed);
-            run_loop.Quit();
-          }));
-  run_loop.Run();
 }
 
 TEST_F(ModelContextTest, ExecuteDeclarativeFormTool_FlexibleTypes) {
@@ -916,10 +1175,9 @@ TEST_F(ModelContextTest, ExecuteDeclarativeFormTool_FlexibleTypes) {
       });
     </script>
   )HTML");
+  test::RunPendingTasks();
 
-  auto* model_context =
-      ModelContextSupplement::modelContext(*Window().navigator());
-  ASSERT_TRUE(model_context);
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
 
   base::RunLoop run_loop;
   String json_string = R"JSON(
@@ -932,9 +1190,9 @@ TEST_F(ModelContextTest, ExecuteDeclarativeFormTool_FlexibleTypes) {
   )JSON";
 
   model_context->ExecuteTool(
-      "flexible_tool", json_string, /* signal= */ nullptr,
+      base::UnguessableToken::Create(), "flexible_tool", json_string,
       base::BindLambdaForTesting(
-          [&](base::expected<WebString, WebDocument::ScriptToolError> res) {
+          [&](base::expected<String, ScriptToolError> res) {
             ASSERT_TRUE(res.has_value());
             run_loop.Quit();
           }));
@@ -955,9 +1213,9 @@ TEST_F(ModelContextTest, ExecuteDeclarativeFormTool_FlexibleTypes) {
   )JSON";
 
   model_context->ExecuteTool(
-      "flexible_tool", json_string, /* signal= */ nullptr,
+      base::UnguessableToken::Create(), "flexible_tool", json_string,
       base::BindLambdaForTesting(
-          [&](base::expected<WebString, WebDocument::ScriptToolError> res) {
+          [&](base::expected<String, ScriptToolError> res) {
             ASSERT_TRUE(res.has_value());
             run_loop2.Quit();
           }));
@@ -973,7 +1231,8 @@ class ReentrantListener : public NativeEventListener {
       : model_context_(model_context) {}
   void Invoke(ExecutionContext*, Event*) override {
     // Trigger HashMap modification by adding a new execution.
-    model_context_->ExecuteTool("echo", "{}", nullptr, base::DoNothing());
+    model_context_->ExecuteTool(base::UnguessableToken::Create(), "echo", "{}",
+                                base::DoNothing());
   }
   void Trace(Visitor* visitor) const override {
     visitor->Trace(model_context_);
@@ -998,14 +1257,14 @@ TEST_F(ModelContextTest, CancelToolReentrancy) {
       return new Promise(() => {});
     }
 
-    navigator.modelContext.registerTool({
+    document.modelContext.registerTool({
       execute: hang,
       name: "hang",
       description: "never resolves",
     });
 
     // We also need another tool that can be executed.
-    navigator.modelContext.registerTool({
+    document.modelContext.registerTool({
       execute: async () => "done",
       name: "echo",
       description: "echo",
@@ -1013,9 +1272,7 @@ TEST_F(ModelContextTest, CancelToolReentrancy) {
   </script>
 )");
 
-  auto* model_context =
-      ModelContextSupplement::modelContext(*Window().navigator());
-  ASSERT_TRUE(model_context);
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
 
   Window().addEventListener(
       event_type_names::kToolcancel,
@@ -1023,23 +1280,758 @@ TEST_F(ModelContextTest, CancelToolReentrancy) {
 
   base::RunLoop run_loop;
 
-  std::optional<uint32_t> execution_id = model_context->ExecuteTool(
-      "hang", "{}", /* signal= */ nullptr,
+  base::UnguessableToken invocation_id = base::UnguessableToken::Create();
+  bool success = model_context->ExecuteTool(
+      invocation_id, "hang", "{}",
       base::BindLambdaForTesting(
-          [&](base::expected<WebString, WebDocument::ScriptToolError> res) {
+          [&](base::expected<String, ScriptToolError> res) {
             EXPECT_FALSE(res.has_value());
-            EXPECT_EQ(res.error(),
-                      WebDocument::ScriptToolError::kToolCancelled);
+            EXPECT_EQ(res.error(), ScriptToolErrorCode::kToolCancelled);
             run_loop.Quit();
           }));
 
-  ASSERT_TRUE(execution_id.has_value());
+  ASSERT_TRUE(success);
 
   // This should trigger the toolcancel event, which re-enters and modifies
   // pending_executions_.
-  model_context->CancelTool(*execution_id);
+  model_context->CancelTool(invocation_id);
 
   run_loop.Run();
+}
+
+TEST_F(ModelContextTest, CancelToolNonExistent) {
+  SimRequest main_resource("https://example.com/", "text/html");
+  LoadURL("https://example.com/");
+  main_resource.Complete(R"(<body></body>)");
+
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
+  base::UnguessableToken invocation_id = base::UnguessableToken::Create();
+  // Cancel invocation that has not been executed.
+  EXPECT_FALSE(model_context->CancelTool(invocation_id));
+}
+
+TEST_F(ModelContextTest, CancelToolAfterFinished) {
+  SimRequest main_resource("https://example.com/", "text/html");
+  LoadURL("https://example.com/");
+
+  main_resource.Complete(R"(
+    <body>
+    <script>
+    document.modelContext.registerTool({
+      execute: async (obj) => "done",
+      name: "echo",
+      description: "echo",
+    });
+  </script>
+)");
+
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
+  base::RunLoop run_loop;
+
+  base::UnguessableToken invocation_id = base::UnguessableToken::Create();
+  bool success = model_context->ExecuteTool(
+      invocation_id, "echo", "{}",
+      base::BindLambdaForTesting(
+          [&](base::expected<String, ScriptToolError> res) {
+            EXPECT_TRUE(res.has_value());
+            EXPECT_EQ(res.value(), "done");
+            run_loop.Quit();
+          }));
+
+  ASSERT_TRUE(success);
+  run_loop.Run();  // Wait for tool to finish successfully.
+
+  // Now that the tool has completed, it is no longer in pending_executions_.
+  // CancelTool should return false.
+  EXPECT_FALSE(model_context->CancelTool(invocation_id));
+}
+
+TEST_F(ModelContextTest, CancelToolUnregistered) {
+  SimRequest main_resource("https://example.com/", "text/html");
+  LoadURL("https://example.com/");
+
+  main_resource.Complete(R"(
+    <body>
+    <script>
+    async function hang(obj) {
+      return new Promise(() => {});
+    }
+
+    document.modelContext.registerTool({
+      execute: hang,
+      name: "hang",
+      description: "never resolves",
+    });
+  </script>
+)");
+
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
+  base::RunLoop run_loop;
+
+  base::UnguessableToken invocation_id = base::UnguessableToken::Create();
+  bool success = model_context->ExecuteTool(
+      invocation_id, "hang", "{}",
+      base::BindLambdaForTesting(
+          [&](base::expected<String, ScriptToolError> res) {
+            EXPECT_FALSE(res.has_value());
+            EXPECT_EQ(res.error(), ScriptToolErrorCode::kToolCancelled);
+            run_loop.Quit();
+          }));
+
+  ASSERT_TRUE(success);
+
+  // Unregister the tool while execution is pending.
+  model_context->UnregisterTool("hang");
+
+  // Attempting to cancel should still succeed and clean up the pending
+  // execution.
+  EXPECT_TRUE(model_context->CancelTool(invocation_id));
+  run_loop.Run();
+}
+
+TEST_F(ModelContextTest, CancelToolDetachesDocument) {
+  SimRequest main_resource("https://example.com/", "text/html");
+  SimRequest iframe_resource("https://example.com/iframe.html", "text/html");
+  LoadURL("https://example.com/");
+
+  main_resource.Complete(R"(
+    <body>
+    <iframe id="test_iframe" src="iframe.html"></iframe>
+    </body>
+  )");
+
+  iframe_resource.Complete(R"(
+    <body>
+    <script>
+    async function hang(obj) {
+      return new Promise(() => {});
+    }
+
+    document.modelContext.registerTool({
+      execute: hang,
+      name: "hang",
+      description: "never resolves",
+    });
+
+    window.addEventListener('toolcancel', () => {
+      // Detach this document by removing the iframe from the parent document.
+      parent.document.querySelector('#test_iframe').remove();
+    });
+    </script>
+    </body>
+  )");
+
+  // Get the subframe's Document.
+  auto* child_frame =
+      To<LocalFrame>(GetDocument().GetFrame()->Tree().FirstChild());
+  ASSERT_TRUE(child_frame);
+  Document* child_doc = child_frame->GetDocument();
+  ASSERT_TRUE(child_doc);
+
+  auto* child_model_context = ModelContextSupplement::modelContext(*child_doc);
+  ASSERT_TRUE(child_model_context);
+
+  base::UnguessableToken invocation_id = base::UnguessableToken::Create();
+
+  bool success = child_model_context->ExecuteTool(invocation_id, "hang", "{}",
+                                                  base::DoNothing());
+
+  ASSERT_TRUE(success);
+
+  // Trigger cancellation, which will synchronously detach the frame during
+  // toolcancel event. This must not crash.
+  child_model_context->CancelTool(invocation_id);
+
+  // Verify the child frame is now detached.
+  EXPECT_FALSE(GetDocument().GetFrame()->Tree().FirstChild());
+}
+
+class MockDeclarativeTool : public GarbageCollected<MockDeclarativeTool>,
+                            public DeclarativeWebMCPTool {
+ public:
+  void ExecuteTool(
+      const base::UnguessableToken& invocation_id,
+      String input_arguments,
+      base::OnceCallback<void(base::expected<String, ScriptToolError>)>
+          done_callback) override {}
+
+  void CancelTool() override {}
+
+  String ToolName() const override { return "test_tool"; }
+  String ToolDescription() const override { return "description"; }
+  String ToolTitle() const override { return "title"; }
+  String ComputeInputSchema() override { return "{}"; }
+  Element* FormElement() const override { return nullptr; }
+  void Trace(Visitor* visitor) const override {}
+};
+
+TEST_F(ModelContextTest, ForEachScriptToolGC) {
+  SimRequest main_resource("https://example.com/", "text/html");
+  LoadURL("https://example.com/");
+  main_resource.Complete("<body></body>");
+
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
+
+  {
+    auto* mock_tool = MakeGarbageCollected<MockDeclarativeTool>();
+    model_context->RegisterDeclarativeTool(mock_tool);
+  }
+
+  // Trigger GC, which should not reclaim mock_tool.
+  ThreadState::Current()->CollectAllGarbageForTesting();
+
+  // This should not crash and should find the tool.
+  bool found = false;
+  model_context->ForEachScriptTool([&](const mojom::blink::ScriptTool& tool) {
+    if (tool.name == "test_tool") {
+      found = true;
+    }
+  });
+  EXPECT_TRUE(found);
+
+  // Now unregister it.
+  model_context->UnregisterTool("test_tool");
+
+  // Trigger GC again. Now it should be reclaimed.
+  ThreadState::Current()->CollectAllGarbageForTesting();
+
+  found = false;
+  model_context->ForEachScriptTool([&](const mojom::blink::ScriptTool& tool) {
+    if (tool.name == "test_tool") {
+      found = true;
+    }
+  });
+  EXPECT_FALSE(found);
+}
+
+TEST_F(ModelContextTest, ListTools) {
+  SimRequest main_resource("https://example.com/", "text/html");
+  LoadURL("https://example.com/");
+
+  main_resource.Complete(R"(<!DOCTYPE html>
+    <script>
+    document.modelContext.registerTool({
+      execute: () => "true",
+      name: "delete",
+      description: "Delete everything",
+    });
+    document.modelContext.registerTool({
+      execute: () => "true",
+      name: "squash",
+      description: "Squash history",
+    });
+    document.modelContext.registerTool({
+      execute: () => "true",
+      name: "append",
+      description: "Append something",
+    });
+    </script>
+  )");
+
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
+
+  HeapVector<Member<const ToolData>> tools = model_context->ListTools();
+  ASSERT_EQ(3u, tools.size());
+
+  EXPECT_EQ("append", tools[0]->Name());
+  EXPECT_EQ("delete", tools[1]->Name());
+  EXPECT_EQ("squash", tools[2]->Name());
+}
+
+TEST_F(ModelContextTest, SourceLocation) {
+  SimRequest main_resource("https://example.com/", "text/html");
+  LoadURL("https://example.com/");
+
+  main_resource.Complete(R"(<!DOCTYPE html>
+    <script>
+    document.modelContext.registerTool({
+      execute: () => "true",
+      name: "append",
+      description: "Append something",
+    });
+    document.modelContext.registerTool({
+      execute: () => "true",
+      name: "delete",
+      description: "Delete everything",
+    });
+    </script>
+  )");
+
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
+
+  HeapVector<Member<const ToolData>> tools = model_context->ListTools();
+  ASSERT_EQ(2u, tools.size());
+
+  EXPECT_EQ("append", tools[0]->Name());
+  ASSERT_TRUE(tools[0]->GetSourceLocation());
+  EXPECT_EQ(3u, tools[0]->GetSourceLocation()->LineNumber());
+
+  EXPECT_EQ("delete", tools[1]->Name());
+  ASSERT_TRUE(tools[1]->GetSourceLocation());
+  EXPECT_EQ(8u, tools[1]->GetSourceLocation()->LineNumber());
+}
+
+TEST_F(ModelContextTest, BackingFormElement) {
+  SimRequest main_resource("https://example.com/", "text/html");
+  LoadURL("https://example.com/");
+
+  main_resource.Complete(R"(<!DOCTYPE html>
+    <form
+      id=book-table
+      toolname=book-table
+      tooldescription="Book a table">
+    </form>
+    <form
+      id=leave-feedback
+      toolname=leave-feedback
+      tooldescription="leave-feedback">
+    </form>
+  )");
+  test::RunPendingTasks();
+
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
+
+  HeapVector<Member<const ToolData>> tools = model_context->ListTools();
+  ASSERT_EQ(2u, tools.size());
+
+  EXPECT_EQ("book-table", tools[0]->Name());
+  ASSERT_TRUE(tools[0]->BackingFormElement());
+  EXPECT_EQ("book-table", tools[0]->BackingFormElement()->GetIdAttribute());
+
+  EXPECT_EQ("leave-feedback", tools[1]->Name());
+  ASSERT_TRUE(tools[1]->BackingFormElement());
+  EXPECT_EQ("leave-feedback", tools[1]->BackingFormElement()->GetIdAttribute());
+}
+
+class ModelContextMetricsTest : public SimTest {
+ public:
+  ModelContextMetricsTest()
+      : SimTest(base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
+
+ protected:
+  void SetUp() override {
+    SimTest::SetUp();
+    GetDocument().GetSettings()->SetWebSecurityEnabled(true);
+    GetDocument().GetSettings()->SetAllowUniversalAccessFromFileURLs(false);
+    GetDocument().GetSettings()->SetAllowFileAccessFromFileURLs(false);
+  }
+
+  void EvalJsString(std::string_view script) {
+    MainFrame().ExecuteScript(WebScriptSource(WebString::FromUtf8(script)));
+  }
+
+ private:
+  ScopedWebMCPForTest scoped_webmcp_{true};
+};
+
+TEST_F(ModelContextMetricsTest, RecordToolCountHistogram) {
+  base::HistogramTester histogram_tester;
+
+  SimRequest main_resource("https://example.com/", "text/html");
+  LoadURL("https://example.com/");
+
+  main_resource.Complete(R"(<!DOCTYPE html>
+    <form
+      id=book-table
+      toolname=book-table
+      tooldescription="Book a table">
+    </form>
+    <form
+      id=leave-feedback
+      toolname=leave-feedback
+      tooldescription="leave-feedback">
+    </form>
+  )");
+  test::RunPendingTasks();
+
+  v8::HandleScope handle_scope(Window().GetIsolate());
+  ScriptState::Scope script_scope(
+      ToScriptStateForMainWorld(Window().GetFrame()));
+
+  task_environment().FastForwardBy(base::Seconds(2));
+  EvalJsString(R"JS(document.modelContext.registerTool({
+      execute: () => "true",
+      name: "tool1",
+      description: "Tool1",
+    }))JS");
+
+  task_environment().FastForwardBy(base::Seconds(2));
+  for (int i = 2; i <= 4; i++) {
+    // clang-format off
+    EvalJsString(Format(R"JS(document.modelContext.registerTool({{
+      execute: () => "true",
+      name: "tool{}",
+      description: "Tool{}",
+    }}))JS", i, i).Utf8());
+    // clang-format on
+  }
+
+  task_environment().FastForwardBy(base::Seconds(8));
+  histogram_tester.ExpectUniqueSample("Blink.ModelContext.DelayedToolCount", 6,
+                                      1);
+}
+
+TEST_F(ModelContextTest, ExecuteDeclarativeFormTool_ToolChangeOnNameChange) {
+  SimRequest main_resource("https://example.com/", "text/html");
+  LoadURL("https://example.com/");
+  v8::HandleScope handle_scope(Window().GetIsolate());
+  ScriptState::Scope script_scope(
+      ToScriptStateForMainWorld(Window().GetFrame()));
+  main_resource.Complete(R"(
+    <body>
+      <form toolname="my_tool" tooldescription="desc">
+        <input id="input1" type="text" name="input_name">
+        <input id="input2" type="checkbox" name="checkbox_name">
+        <select id="select1" name="select_name">
+          <option value="a">A</option>
+          <option value="b">B</option>
+        </select>
+        <textarea id="textarea1" name="textarea_name"></textarea>
+      </form>
+      <script>
+        window.toolchangeCount = 0;
+        document.modelContext.addEventListener('toolchange', () => {
+          window.toolchangeCount++;
+        });
+
+        window.testMutations = [
+          // input1 (text)
+          { id: 'input1', script: "el.setAttribute('name', 'new_input_name');" },
+          { id: 'input1', script: "el.type = 'number';" },
+          { id: 'input1', script: "el.required = true;" },
+          { id: 'input1', script: "el.setAttribute('toolparamdescription', 'new desc');" },
+
+          // input2 (checkbox)
+          { id: 'input2', script: "el.setAttribute('name', 'new_checkbox_name');" },
+          { id: 'input2', script: "el.type = 'radio';" },
+          { id: 'input2', script: "el.required = true;" },
+          { id: 'input2', script: "el.setAttribute('toolparamdescription', 'new desc');" },
+
+          // select1
+          { id: 'select1', script: "el.setAttribute('name', 'new_select_name');" },
+          { id: 'select1', script: "el.multiple = true;" },
+          { id: 'select1', script: "el.required = true;" },
+          { id: 'select1', script: "el.setAttribute('toolparamdescription', 'new desc');" },
+
+          // textarea1
+          { id: 'textarea1', script: "el.setAttribute('name', 'new_textarea_name');" },
+          { id: 'textarea1', script: "el.required = true;" },
+          { id: 'textarea1', script: "el.setAttribute('toolparamdescription', 'new desc');" }
+        ];
+      </script>
+    </body>
+  )");
+  test::RunPendingTasks();
+
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return EvalJsInteger("window.toolchangeCount") == 1;
+  })) << "Failed on initial tool registration";
+
+  int mutation_count = EvalJsInteger("window.testMutations.length");
+  for (int i = 0; i < mutation_count; ++i) {
+    String script = Format(
+        "window.toolchangeCount = 0;"
+        "var m = window.testMutations[{}];"
+        "var el = document.getElementById(m.id);"
+        "eval(m.script);",
+        i);
+    MainFrame().ExecuteScript(WebScriptSource(WebString(script)));
+
+    EXPECT_TRUE(base::test::RunUntil([&]() {
+      return EvalJsInteger("window.toolchangeCount") == 2;
+    })) << "Failed on mutation "
+        << i << ": "
+        << EvalJsString(
+               Format("window.testMutations[{}].script", i).Utf8().c_str());
+  }
+}
+
+TEST_F(ModelContextTest,
+       ExecuteDeclarativeFormTool_ToolChangeOnControlAddRemove) {
+  SimRequest main_resource("https://example.com/", "text/html");
+  LoadURL("https://example.com/");
+  v8::HandleScope handle_scope(Window().GetIsolate());
+  ScriptState::Scope script_scope(
+      ToScriptStateForMainWorld(Window().GetFrame()));
+  main_resource.Complete(R"(
+    <form id="f1" toolname="my_tool" tooldescription="desc">
+      <input id="input1" type="text" name="input_name">
+    </form>
+    <script>
+      window.toolchangeCount = 0;
+      document.modelContext.addEventListener('toolchange', () => {
+        window.toolchangeCount++;
+      });
+    </script>
+  )");
+  blink::test::RunPendingTasks();
+
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return EvalJsInteger("window.toolchangeCount") == 1;
+  })) << "Failed on initial tool registration";
+
+  // Test adding an input
+  MainFrame().ExecuteScript(
+      WebScriptSource("window.toolchangeCount = 0;"
+                      "var i = document.createElement('input');"
+                      "i.type = 'text';"
+                      "i.name = 'new_input';"
+                      "i.id = 'new_input';"
+                      "document.getElementById('f1').appendChild(i);"));
+
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return EvalJsInteger("window.toolchangeCount") == 2;
+  })) << "Failed on adding input";
+
+  // Test removing an input
+  MainFrame().ExecuteScript(
+      WebScriptSource("window.toolchangeCount = 0;"
+                      "document.getElementById('f1').removeChild(document."
+                      "getElementById('new_input'));"));
+
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return EvalJsInteger("window.toolchangeCount") == 2;
+  })) << "Failed on removing input";
+}
+
+TEST_F(ModelContextTest,
+       ExecuteDeclarativeFormTool_NoToolChangeOnUnrelatedAttribute) {
+  SimRequest main_resource("https://example.com/", "text/html");
+  LoadURL("https://example.com/");
+  v8::HandleScope handle_scope(Window().GetIsolate());
+  ScriptState::Scope script_scope(
+      ToScriptStateForMainWorld(Window().GetFrame()));
+  main_resource.Complete(R"(
+    <form toolname="my_tool" tooldescription="desc">
+      <input id="input1" type="text" name="input_name">
+    </form>
+  )");
+  blink::test::RunPendingTasks();
+
+  MainFrame().ExecuteScript(WebScriptSource(
+      "window.toolchangeCount = 0;"
+      "document.modelContext.addEventListener('toolchange', () => {"
+      "  window.toolchangeCount++;"
+      "});"
+      "document.getElementById('input1').setAttribute('data-unrelated', "
+      "'value');"));
+
+  blink::test::RunPendingTasks();
+  EXPECT_EQ(0, EvalJsInteger("window.toolchangeCount"));
+}
+
+TEST_F(ModelContextTest,
+       ExecuteDeclarativeFormTool_NoToolChangeOnRedundantSchemaAttribute) {
+  SimRequest main_resource("https://example.com/", "text/html");
+  LoadURL("https://example.com/");
+  v8::HandleScope handle_scope(Window().GetIsolate());
+  ScriptState::Scope script_scope(
+      ToScriptStateForMainWorld(Window().GetFrame()));
+  main_resource.Complete(R"(
+    <body>
+      <form id="f1" toolname="my_tool" tooldescription="desc">
+        <input id="input1" type="text" name="input_name">
+      </form>
+    </body>
+  )");
+  blink::test::RunPendingTasks();
+
+  MainFrame().ExecuteScript(WebScriptSource(
+      "window.toolchangeCount = 0;"
+      "document.modelContext.addEventListener('toolchange', () => {"
+      "  window.toolchangeCount++;"
+      "});"
+      "const input = document.getElementById('input1');"
+      "// Remove and immediately re-add input, which shouldn't change the tool:"
+      "input.remove();"
+      "document.getElementById('f1').appendChild(input);"));
+  blink::test::RunPendingTasks();
+  EXPECT_EQ(0, EvalJsInteger("window.toolchangeCount"));
+}
+
+TEST_F(ModelContextTest, ExecuteTool_RespondWith_And_RemoveForm) {
+  SimRequest main_resource("https://example.com/", "text/html");
+  LoadURL("https://example.com/");
+  v8::HandleScope handle_scope(Window().GetIsolate());
+  ScriptState::Scope script_scope(
+      ToScriptStateForMainWorld(Window().GetFrame()));
+  main_resource.Complete(R"(
+    <form toolautosubmit toolname="search_tool" tooldescription="Search the web" action="/search">
+      <input type=text name=query>
+      <button type=submit>Submit</button>
+    </form>
+    <script>
+      document.querySelector("form").addEventListener("submit", e => {
+        e.preventDefault();
+        e.respondWith(Promise.resolve("result value"));
+        document.querySelector("form").remove();
+      });
+    </script>
+  )");
+  test::RunPendingTasks();
+
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
+
+  base::RunLoop run_loop;
+  bool got_result = false;
+  model_context->ExecuteTool(
+      base::UnguessableToken::Create(), "search_tool",
+      "{\"query\": \"testing\"}",
+      base::BindLambdaForTesting(
+          [&](base::expected<String, ScriptToolError> res) {
+            got_result = true;
+            EXPECT_TRUE(res.has_value());
+            if (res.has_value()) {
+              EXPECT_EQ(*res, "result value");
+            }
+            run_loop.Quit();
+          }));
+  run_loop.Run();
+
+  EXPECT_TRUE(got_result);
+}
+
+TEST_F(ModelContextTest, ExecuteTool_RespondWith_And_Navigate) {
+  SimRequest main_resource("https://example.com/", "text/html");
+  SimRequest search_resource("https://example.com/search", "text/html");
+  LoadURL("https://example.com/");
+  v8::HandleScope handle_scope(Window().GetIsolate());
+  ScriptState::Scope script_scope(
+      ToScriptStateForMainWorld(Window().GetFrame()));
+  main_resource.Complete(R"HTML(
+    <form toolautosubmit toolname="search_tool" tooldescription="Search the web" action="/search">
+      <input type=text name=query>
+      <button type=submit>Submit</button>
+    </form>
+    <script>
+      document.querySelector("form").addEventListener("submit", e => {
+        e.preventDefault();
+        e.respondWith(Promise.resolve("result value"));
+        window.location.href = "/search";
+      });
+    </script>
+  )HTML");
+  test::RunPendingTasks();
+
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
+
+  base::RunLoop run_loop;
+  bool got_result = false;
+  model_context->ExecuteTool(
+      base::UnguessableToken::Create(), "search_tool",
+      "{\"query\": \"testing\"}",
+      base::BindLambdaForTesting(
+          [&](base::expected<String, ScriptToolError> res) {
+            got_result = true;
+            EXPECT_TRUE(res.has_value());
+            if (res.has_value()) {
+              EXPECT_EQ(*res, "result value");
+            }
+            run_loop.Quit();
+          }));
+  run_loop.Run();
+
+  search_resource.Complete("search page");
+
+  EXPECT_TRUE(got_result);
+}
+
+TEST_F(ModelContextTest, ExecuteDeclarativeFormTool_UnrelatedSubmitAndRemove) {
+  SimRequest main_resource("https://example.com/", "text/html");
+  SimRequest search_resource("https://example.com/search", "text/html");
+  LoadURL("https://example.com/");
+  v8::HandleScope handle_scope(Window().GetIsolate());
+  ScriptState::Scope script_scope(
+      ToScriptStateForMainWorld(Window().GetFrame()));
+  main_resource.Complete(R"HTML(
+    <form toolname="search_tool" tooldescription="Search the web" action="/search">
+      <input type=text name=query>
+      <button type=submit>Submit</button>
+    </form>
+    <script>
+      function doUnrelatedSubmit() {
+        const form = document.querySelector('form');
+        form.addEventListener('submit', e => {
+          e.preventDefault();
+          e.respondWith(Promise.resolve("dummy"));
+        });
+        form.requestSubmit();
+        form.remove();
+      }
+    </script>
+  )HTML");
+  test::RunPendingTasks();
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
+  base::RunLoop run_loop;
+  bool got_callback = false;
+  model_context->ExecuteTool(
+      base::UnguessableToken::Create(), "search_tool",
+      "{\"query\": \"testing\"}",
+      base::BindLambdaForTesting(
+          [&](base::expected<String, ScriptToolError> res) {
+            got_callback = true;
+            EXPECT_FALSE(res.has_value());
+            EXPECT_EQ(res.error(), ScriptToolErrorCode::kToolCancelled);
+            run_loop.Quit();
+          }));
+
+  // Run until the tool populates the form and is waiting for the user.
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return EvalJsBoolean(
+        "document.querySelector('form').matches(':tool-form-active')");
+  }));
+
+  // Trigger the unrelated submit and remove.
+  MainFrame().ExecuteScript(WebScriptSource(WebString("doUnrelatedSubmit()")));
+
+  run_loop.Run();
+  EXPECT_TRUE(got_callback);
+}
+
+TEST_F(ModelContextTest, fileURLAllowedWithoutOriginKeying) {
+  SimRequest main_resource("file:///tmp/test.html", "text/html");
+  LoadURL("file:///tmp/test.html");
+  v8::HandleScope handle_scope(Window().GetIsolate());
+  ScriptState::Scope script_scope(
+      ToScriptStateForMainWorld(Window().GetFrame()));
+
+  main_resource.Complete(R"HTML(
+    <body>
+    <script>
+    window.registerToolError = null;
+    window.registerToolMessage = null;
+    try {
+      document.modelContext.registerTool({
+        name: "test_tool",
+        description: "a test tool",
+        execute: () => "success",
+      });
+    } catch (e) {
+      window.registerToolError = e.name;
+      window.registerToolMessage = e.message;
+    }
+    </script>
+    </body>
+  )HTML");
+  test::RunPendingTasks();
+
+  EXPECT_TRUE(EvalJsBoolean("window.registerToolError === null"));
+  EXPECT_TRUE(EvalJsBoolean("window.registerToolMessage === null"));
+}
+
+TEST_F(ModelContextTest, fileURLAllowedForDeclarativeTool) {
+  SimRequest main_resource("file:///tmp/test.html", "text/html");
+  LoadURL("file:///tmp/test.html");
+  main_resource.Complete("<body></body>");
+
+  auto* model_context = ModelContextSupplement::modelContext(GetDocument());
+
+  auto* mock_tool = MakeGarbageCollected<MockDeclarativeTool>();
+  model_context->RegisterDeclarativeTool(mock_tool);
+
+  HeapVector<Member<const ToolData>> tools = model_context->ListTools();
+  ASSERT_EQ(1u, tools.size());
+  EXPECT_EQ("test_tool", tools[0]->Name());
 }
 
 }  // namespace blink

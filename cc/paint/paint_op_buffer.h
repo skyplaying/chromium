@@ -14,6 +14,8 @@
 #include "base/bits.h"
 #include "base/check_op.h"
 #include "base/compiler_specific.h"
+#include "base/containers/flat_map.h"
+#include "base/containers/span.h"
 #include "base/functional/callback.h"
 #include "base/memory/aligned_memory.h"
 #include "base/memory/stack_allocated.h"
@@ -143,6 +145,7 @@ class CC_PAINT_EXPORT PaintOpBuffer : public SkRefCnt {
     bool context_supports_distance_field_text = true;
     int max_texture_size = 0;
     const ScrollOffsetMap* raster_inducing_scroll_offsets = nullptr;
+    PlaybackCallbacks::CustomDataRasterCallback custom_callback;
   };
 
   struct CC_PAINT_EXPORT DeserializeOptions {
@@ -154,8 +157,6 @@ class CC_PAINT_EXPORT PaintOpBuffer : public SkRefCnt {
     SkStrikeClient* strike_client = nullptr;
     // Used to memcpy Skia flattenables into to avoid TOCTOU issues.
     std::vector<uint8_t>& scratch_buffer;
-    // Do a DumpWithoutCrashing when serialization fails.
-    bool crash_dump_on_failure = false;
     // True if the deserialization is happening on a privileged gpu channel.
     // e.g. in the case of UI.
     bool is_privileged = false;
@@ -191,15 +192,14 @@ class CC_PAINT_EXPORT PaintOpBuffer : public SkRefCnt {
                 const PlaybackParams& params,
                 bool local_ctm = true) const;
 
-  // Deserialize PaintOps from |input|. The original content will be
+  // Deserialize PaintOps from `input`. The original content will be
   // overwritten.
-  bool Deserialize(const volatile void* input,
-                   size_t input_size,
+  bool Deserialize(base::span<const volatile uint8_t> input,
                    const DeserializeOptions& options);
 
-  static sk_sp<PaintOpBuffer> MakeFromMemory(const volatile void* input,
-                                             size_t input_size,
-                                             const DeserializeOptions& options);
+  static sk_sp<PaintOpBuffer> MakeFromMemory(
+      base::span<const volatile uint8_t> input,
+      const DeserializeOptions& options);
 
   // Given the |bounds| of a PaintOpBuffer that would be transformed by |ctm|
   // when rendered, compute the bounds needed to raster the buffer at a fixed
@@ -250,7 +250,13 @@ class CC_PAINT_EXPORT PaintOpBuffer : public SkRefCnt {
   // If the shrinking-to-fit allocates a new data buffer, this PaintOpBuffer
   // retains the original data buffer for future use.
   PaintRecord ReleaseAsRecord();
-  PaintRecord DeepCopyAsRecord();
+  PaintRecord DeepCopyAsRecord() const;
+  PaintRecord ReplaceCustomData(
+      const base::flat_map<uint32_t, PaintRecord>& replacements) const;
+
+  PaintOpBuffer& operator+=(const PaintOpBuffer& other);
+  void Append(const PaintOpBuffer& other,
+              const base::flat_map<uint32_t, PaintRecord>* replacements);
 
   bool EqualsForTesting(const PaintOpBuffer& other) const;
 
@@ -265,9 +271,8 @@ class CC_PAINT_EXPORT PaintOpBuffer : public SkRefCnt {
     static_assert(std::is_base_of<PaintOp, T>::value, "T not a PaintOp.");
     static_assert(alignof(T) <= kPaintOpAlign, "");
     uint16_t aligned_size = ComputeOpAlignedSize<T>();
-    T* op = reinterpret_cast<T*>(AllocatePaintOp(aligned_size));
-
-    new (op) T{std::forward<Args>(args)...};
+    base::span<uint8_t> storage = AllocatePaintOp(aligned_size);
+    T* op = new (storage.data()) T{std::forward<Args>(args)...};
     DCHECK_EQ(op->type, static_cast<uint8_t>(T::kType));
     DCHECK_EQ(aligned_size, op->AlignedSize());
     AnalyzeAddedOp(op);
@@ -275,7 +280,6 @@ class CC_PAINT_EXPORT PaintOpBuffer : public SkRefCnt {
   }
 
   void UpdateSaveLayerBounds(size_t offset, const SkRect& bounds);
-  void UpdateDrawRecordOp(size_t offset, PaintRecord paint_record);
 
   template <typename T>
   void AnalyzeAddedOp(const T* op) {
@@ -356,19 +360,19 @@ class CC_PAINT_EXPORT PaintOpBuffer : public SkRefCnt {
   // allocated a new buffer, or nullptr.
   BufferData ReallocIfNeededToFit();
 
-  // Returns the allocated op.
-  void* AllocatePaintOp(uint16_t aligned_size) {
+  // Returns a span of `aligned_size` bytes for the allocated op.
+  base::span<uint8_t> AllocatePaintOp(uint16_t aligned_size) {
     DCHECK(is_mutable());
     if (used_ + aligned_size > data_.size()) {
       return AllocatePaintOpSlowPath(aligned_size);
     } else {
-      void* op = &data_[used_];
+      base::span<uint8_t> result = data_.subspan(used_, aligned_size);
       used_ += aligned_size;
       op_count_++;
-      return op;
+      return result;
     }
   }
-  void* AllocatePaintOpSlowPath(uint16_t aligned_size);
+  base::span<uint8_t> AllocatePaintOpSlowPath(uint16_t aligned_size);
 
   void ResetRetainingBuffer();
 

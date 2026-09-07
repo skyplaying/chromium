@@ -7,6 +7,7 @@
 #include <optional>
 
 #include "base/containers/flat_map.h"
+#include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/native_theme/native_theme.h"
@@ -115,6 +116,10 @@ TEST_F(OsSettingsProviderTest, PreferredContrast) {
 
   os_settings_provider().SetForcedColorsActive(false);
   EXPECT_EQ(os_settings_provider().PreferredContrast(), kNoPreference);
+}
+
+TEST_F(OsSettingsProviderTest, PrefersOverlayScrollbars) {
+  EXPECT_FALSE(os_settings_provider().PrefersOverlayScrollbars());
 }
 
 }  // namespace

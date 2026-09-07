@@ -17,7 +17,6 @@
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -26,7 +25,6 @@
 #include "components/optimization_guide/core/delivery/prediction_model_override.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/core/optimization_guide_logger.h"
-#include "components/optimization_guide/core/optimization_guide_switches.h"
 #include "components/optimization_guide/optimization_guide_internals/webui/url_constants.h"
 #include "components/prefs/pref_service.h"
 #include "components/webui/chrome_urls/pref_names.h"
@@ -61,7 +59,7 @@ class OptimizationGuideInternalsLoggerBrowserTest
  protected:
   void SetUpOnMainThread() override {
     auto* logger = OptimizationGuideKeyedServiceFactory::GetForProfile(
-                       browser()->profile())
+                       browser()->GetProfile())
                        ->GetOptimizationGuideLogger();
     EXPECT_FALSE(logger->ShouldEnableDebugLogs());
     WebUIMochaBrowserTest::SetUpOnMainThread();
@@ -70,7 +68,7 @@ class OptimizationGuideInternalsLoggerBrowserTest
   void OnWebContentsAvailable(content::WebContents* web_contents) override {
     // Once the internals page is open, debug logs should get enabled.
     auto* logger = OptimizationGuideKeyedServiceFactory::GetForProfile(
-                       browser()->profile())
+                       browser()->GetProfile())
                        ->GetOptimizationGuideLogger();
     EXPECT_TRUE(logger->ShouldEnableDebugLogs());
   }
@@ -86,7 +84,7 @@ class OptimizationGuideInternalsLogMessageBrowserTest
  protected:
   void OnWebContentsAvailable(content::WebContents* web_contents) override {
     auto* service = OptimizationGuideKeyedServiceFactory::GetForProfile(
-        browser()->profile());
+        browser()->GetProfile());
     service->RegisterOptimizationTypes({optimization_guide::proto::NOSCRIPT});
     chrome::AddTabAt(browser(), GURL(url::kAboutBlankURL), -1, true);
 
@@ -112,7 +110,7 @@ class OptimizationGuideInternalsModelsPageBrowserTest
     base::PathService::Get(chrome::DIR_TEST_DATA, &src_dir);
 
     base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
-        optimization_guide::switches::kModelOverride,
+        optimization_guide::kModelOverrideSwitch,
         base::StrCat({
             "OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD",
             optimization_guide::ModelOverrideSeparator(),
@@ -144,13 +142,13 @@ class OptimizationGuideInternalsModelsPageBrowserTest
               base::ScopedAllowBlockingForTesting scoped_allow_blocking;
 
               EXPECT_TRUE(model_info.has_value());
-              EXPECT_EQ(123, model_info->GetVersion());
-              EXPECT_TRUE(model_info->GetModelFilePath().IsAbsolute());
-              EXPECT_TRUE(base::PathExists(model_info->GetModelFilePath()));
+              EXPECT_EQ(123, model_info->version);
+              EXPECT_TRUE(model_info->model_file_path.IsAbsolute());
+              EXPECT_TRUE(base::PathExists(model_info->model_file_path));
 
-              EXPECT_EQ(1U, model_info->GetAdditionalFiles().size());
+              EXPECT_EQ(1U, model_info->additional_files.size());
               for (const base::FilePath& add_file :
-                   model_info->GetAdditionalFiles()) {
+                   model_info->additional_files) {
                 EXPECT_TRUE(add_file.IsAbsolute());
                 EXPECT_TRUE(base::PathExists(add_file));
               }
@@ -158,7 +156,7 @@ class OptimizationGuideInternalsModelsPageBrowserTest
               run_loop.Quit();
             }));
 
-    OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->profile())
+    OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->GetProfile())
         ->AddObserverForOptimizationTargetModel(
             optimization_target,
             /*model_metadata=*/std::nullopt,
@@ -182,7 +180,7 @@ class OptimizationGuideInternalsMqlsLogsBrowserTest
   void SetUpOnMainThread() override {
     auto* model_quality_logs_uploader_service =
         OptimizationGuideKeyedServiceFactory::GetForProfile(
-            browser()->profile())
+            browser()->GetProfile())
             ->GetModelQualityLogsUploaderService();
     std::unique_ptr<optimization_guide::ModelQualityLogEntry> log_entry =
         std::make_unique<optimization_guide::ModelQualityLogEntry>(

@@ -8,7 +8,8 @@
 #import <UIKit/UIKit.h>
 
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_consumer.h"
-#import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_header_view_controller_delegate.h"
+#import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_header_view_delegate.h"
+#import "ios/chrome/browser/shared/ui/util/ui_view_controller_with_display_tracing.h"
 
 @class ContentSuggestionsViewController;
 @class FeedHeaderViewController;
@@ -16,25 +17,22 @@
 @class FeedWrapperViewController;
 typedef NS_ENUM(NSInteger, FeedLayoutUpdateType);
 @protocol HelpCommands;
+@class LayoutGuideCenter;
 @class MagicStackCollectionViewController;
 @protocol NewTabPageCommands;
 @protocol NewTabPageContentDelegate;
 @protocol NewTabPageShortcutsHandler;
-@class NewTabPageHeaderViewController;
+@class NewTabPageHeaderView;
 @protocol NewTabPageMutator;
 @class NewTabPageViewController;
 @protocol OverscrollActionsControllerDelegate;
 
-namespace feature_engagement {
-class Tracker;
-}
-
 // View controller containing all the content presented on a standard,
 // non-incognito new tab page.
 @interface NewTabPageViewController
-    : UIViewController <NewTabPageConsumer,
-                        NewTabPageHeaderViewControllerDelegate,
-                        UIScrollViewDelegate>
+    : UIViewControllerWithDisplayTracing <NewTabPageConsumer,
+                                          NewTabPageHeaderViewDelegate,
+                                          UIScrollViewDelegate>
 
 // View controller wrapping the feed.
 @property(nonatomic, strong)
@@ -45,7 +43,7 @@ class Tracker;
     overscrollDelegate;
 
 // The NTP header, containing the fake omnibox and the doodle.
-@property(nonatomic, weak) NewTabPageHeaderViewController* headerViewController;
+@property(nonatomic, strong) NewTabPageHeaderView* headerView;
 
 // Delegate for actions relating to the NTP content.
 @property(nonatomic, weak) id<NewTabPageContentDelegate> NTPContentDelegate;
@@ -79,9 +77,6 @@ class Tracker;
 // remains YES if viewDidAppear has been called.
 @property(nonatomic, assign) BOOL viewDidAppear;
 
-// Whether the NTP should initially be scrolled into the feed.
-@property(nonatomic, assign) BOOL shouldScrollIntoFeed;
-
 // `YES` if the omnibox should be focused on when the view appears for voice
 // over.
 @property(nonatomic, assign) BOOL focusAccessibilityOmniboxWhenViewAppears;
@@ -92,9 +87,6 @@ class Tracker;
 // Whether or not the fake omnibox is pinned to the top of the NTP.
 @property(nonatomic, readonly) BOOL isFakeboxPinned;
 
-// Layout guide for NTP modules.
-@property(nonatomic, readonly) UILayoutGuide* moduleLayoutGuide;
-
 // Handles the actions for the NTP shortcuts, like Lens or voice search.
 @property(nonatomic, weak) id<NewTabPageShortcutsHandler> NTPShortcutsHandler;
 
@@ -104,8 +96,8 @@ class Tracker;
 // Whether incognito is disabled (e.g. by privacy policy).
 @property(nonatomic, assign) BOOL incognitoDisabled;
 
-// Engagement tracker to use for checking whether IPH should show.
-@property(nonatomic, assign) feature_engagement::Tracker* engagementTracker;
+// The layout guide center for referencing views.
+@property(nonatomic, weak) LayoutGuideCenter* layoutGuideCenter;
 
 // Initializes the new tab page view controller.
 - (instancetype)init NS_DESIGNATED_INITIALIZER;
@@ -129,9 +121,6 @@ class Tracker;
 // the scroll position from the top the same.
 - (void)updateHeightAboveFeed;
 
-// Returns whether the NTP is scrolled to the top or not.
-- (BOOL)isNTPScrolledToTop;
-
 // Lays out and re-configures the NTP content after changing the containing
 // collection view, such as when changing feeds.
 - (void)layoutContentInParentCollectionView;
@@ -150,10 +139,6 @@ class Tracker;
 // is beyond the top of the feed. In that case, sets the scroll position to the
 // top of the feed.
 - (void)setContentOffsetToTopOfFeedOrLess:(CGFloat)contentOffset;
-
-// Checks the content size of the feed and updates the bottom content inset to
-// ensure the feed is still scrollable to the minimum height.
-- (void)updateFeedInsetsForMinimumHeight;
 
 // Updates the scroll position to account for the feed promo being removed.
 - (void)updateScrollPositionForFeedTopSectionClosed;

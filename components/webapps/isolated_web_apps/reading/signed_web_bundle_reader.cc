@@ -436,7 +436,6 @@ class SignedWebBundleReaderImpl : public SignedWebBundleReader {
                         web_package::mojom::BundleResponsePtr response,
                         web_package::mojom::BundleResponseParseErrorPtr error) {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    CHECK_EQ(state_, State::kInitialized);
 
     if (error) {
       std::move(callback).Run(base::unexpected(
@@ -491,12 +490,6 @@ class SignedWebBundleReaderImpl : public SignedWebBundleReader {
   // Metadata
   std::optional<GURL> primary_url_;
   base::flat_map<GURL, web_package::mojom::BundleResponseLocationPtr> entries_;
-
-  // Accumulates `ReadResponse` requests while the parser is disconnected, and
-  // runs them after reconnection of the parser succeeds or fails.
-  std::vector<std::pair<web_package::mojom::BundleResponseLocationPtr,
-                        ResponseCallback>>
-      pending_read_responses_;
 
   base::FilePath web_bundle_path_;
   std::optional<GURL> base_url_;

@@ -8,29 +8,29 @@
 #include <string>
 #include <vector>
 
+#include "ash/login/resources/grit/ash_login_strings.h"
 #include "ash/public/cpp/message_center/oobe_notification_constants.h"
 #include "ash/public/cpp/notification_utils.h"
+#include "base/check_deref.h"
 #include "base/memory/raw_ptr.h"
 #include "base/no_destructor.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/global_features.h"
-#include "chrome/browser/notifications/notification_common.h"
-#include "chrome/browser/notifications/notification_display_service.h"
-#include "chrome/browser/notifications/notification_display_service_factory.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/webui/ash/login/oobe_ui.h"
-#include "chrome/grit/generated_resources.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/strings/grit/chromeos_strings.h"
+#include "components/application_locale_storage/application_locale_storage.h"
+#include "components/user_manager/user.h"
 #include "components/vector_icons/vector_icons.h"
 #include "content/public/browser/browser_thread.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/message_center/message_center.h"
 #include "ui/message_center/public/cpp/notification.h"
 #include "ui/message_center/public/cpp/notification_delegate.h"
 
 namespace ash {
 namespace {
 
-using ::message_center::Notification;
 using ::message_center::NotificationDelegate;
 using ::message_center::NotificationType;
 using ::message_center::NotifierId;
@@ -42,10 +42,6 @@ using ::message_center::SystemNotificationWarningLevel;
 constexpr NotificationType kNotificationType =
     message_center::NOTIFICATION_TYPE_SIMPLE;
 
-// Generic type for notifications that are not from web pages etc.
-constexpr NotificationHandler::Type kNotificationHandlerType =
-    NotificationHandler::Type::TRANSIENT;
-
 // Chromium logo icon that will displayed on the notification.
 const gfx::VectorIcon& kIcon = vector_icons::kProductIcon;
 
@@ -56,9 +52,12 @@ class LocaleSwitchNotificationDelegate
     : public message_center::NotificationDelegate,
       public OobeUI::Observer {
  public:
+  // `application_locale_storage` must be non-null and must outlive `this`.
   LocaleSwitchNotificationDelegate(
+      ApplicationLocaleStorage* application_locale_storage,
       std::string new_locale,
       Profile* profile,
+      std::string notification_id,
       locale_util::SwitchLanguageCallback callback);
 
   LocaleSwitchNotificationDelegate(const LocaleSwitchNotificationDelegate&) =
@@ -85,19 +84,26 @@ class LocaleSwitchNotificationDelegate
     kSwitchLocale = 0,
   };
 
+  const raw_ref<ApplicationLocaleStorage> application_locale_storage_;
+
   std::string new_locale_;
   raw_ptr<Profile> profile_;
+  const std::string notification_id_;
   locale_util::SwitchLanguageCallback callback_;
 
   bool is_screen_changed_ = false;
 };
 
 LocaleSwitchNotificationDelegate::LocaleSwitchNotificationDelegate(
+    ApplicationLocaleStorage* application_locale_storage,
     std::string new_locale,
     Profile* profile,
+    std::string notification_id,
     locale_util::SwitchLanguageCallback callback)
-    : new_locale_(std::move(new_locale)),
+    : application_locale_storage_(CHECK_DEREF(application_locale_storage)),
+      new_locale_(std::move(new_locale)),
       profile_(profile),
+      notification_id_(std::move(notification_id)),
       callback_(std::move(callback)) {
   LoginDisplayHost* host = LoginDisplayHost::default_host();
   if (!host) {
@@ -144,12 +150,8 @@ void LocaleSwitchNotificationDelegate::Click(
     VLOG(1) << "Switching locale to " << new_locale_
             << " from the notification.";
 
-    // TODO(crbug.com/404133029): Avoid g_browser_process usage.
-    ApplicationLocaleStorage* application_locale_storage =
-        g_browser_process->GetFeatures()->application_locale_storage();
-
     locale_util::SwitchLanguage(
-        application_locale_storage, new_locale_,
+        &application_locale_storage_.get(), new_locale_,
         /*enable_locale_keyboard_layouts=*/false,  // The layouts will be synced
                                                    // instead. Also new user
                                                    // could enable required
@@ -190,24 +192,33 @@ void LocaleSwitchNotificationDelegate::CloseNotification() {
     }
   }
 
-  NotificationDisplayService* nds =
-      NotificationDisplayServiceFactory::GetForProfile(profile_);
-  if (nds) {
-    nds->Close(kNotificationHandlerType, kOOBELocaleSwitchNotificationId);
-  }
+  message_center::MessageCenter::Get()->RemoveNotification(notification_id_,
+                                                           /*by_user=*/false);
 }
 
 }  // namespace
 
 // static
 void LocaleSwitchNotification::Show(
+    ApplicationLocaleStorage* application_locale_storage,
     Profile* profile,
     std::string new_locale,
     locale_util::SwitchLanguageCallback locale_switch_callback) {
+  CHECK(application_locale_storage);
+  CHECK(profile);
+
+  const user_manager::User* user =
+      BrowserContextHelper::Get()->GetUserByBrowserContext(profile);
+  CHECK(user);
+
+  const std::string notification_id = CreateUserScopedNotificationId(
+      kOOBELocaleSwitchNotificationId, user->username_hash());
+
   // NotifierId for histogram reporting.
-  static const base::NoDestructor<NotifierId> kNotifierId(
-      NotifierType::SYSTEM_COMPONENT, kOOBELocaleSwitchNotificationId,
-      NotificationCatalogName::kLocaleUpdate);
+  NotifierId notifier_id(NotifierType::SYSTEM_COMPONENT,
+                         kOOBELocaleSwitchNotificationId,
+                         NotificationCatalogName::kLocaleUpdate);
+  notifier_id.profile_id = user->GetAccountId().GetUserEmail();
 
   // Leaving this empty means the notification is attributed to the system -
   // ie "Chromium OS" or similar.
@@ -222,7 +233,7 @@ void LocaleSwitchNotification::Show(
   const std::u16string body = l10n_util::GetStringFUTF16(
       IDS_LOCALE_SWITCH_NOTIFICATION_TEXT,
       l10n_util::GetDisplayNameForLocale(
-          new_locale, g_browser_process->GetApplicationLocale(),
+          new_locale, /*display_locale=*/application_locale_storage->Get(),
           /*is_for_ui=*/true));
 
   const std::u16string accept_label = l10n_util::GetStringUTF16(
@@ -237,18 +248,16 @@ void LocaleSwitchNotification::Show(
 
   const scoped_refptr<LocaleSwitchNotificationDelegate> delegate =
       base::MakeRefCounted<LocaleSwitchNotificationDelegate>(
-          std::move(new_locale), profile, std::move(locale_switch_callback));
+          application_locale_storage, std::move(new_locale), profile,
+          notification_id, std::move(locale_switch_callback));
 
-  Notification notification = CreateSystemNotification(
-      kNotificationType, kOOBELocaleSwitchNotificationId, title, body,
-      *kEmptyDisplaySource, *kEmptyOriginUrl, *kNotifierId,
-      rich_notification_data, delegate, kIcon, kWarningLevel);
+  auto notification = CreateSystemNotificationPtr(
+      kNotificationType, notification_id, title, body, *kEmptyDisplaySource,
+      *kEmptyOriginUrl, notifier_id, rich_notification_data, delegate, kIcon,
+      kWarningLevel);
 
-  NotificationDisplayService* nds =
-      NotificationDisplayServiceFactory::GetForProfile(profile);
-  if (nds) {
-    nds->Display(kNotificationHandlerType, notification, /*metadata=*/nullptr);
-  }
+  message_center::MessageCenter::Get()->AddNotification(
+      std::move(notification));
 }
 
 }  // namespace ash

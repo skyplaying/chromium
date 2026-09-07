@@ -7,12 +7,13 @@
 
 #include <optional>
 
+#include "base/types/expected.h"
 #include "build/build_config.h"
 #include "components/viz/common/resources/resource_id.h"
 #include "components/viz/common/resources/transferable_resource.h"
+#include "mojo/public/cpp/bindings/deserialization_error.h"
 #include "services/viz/public/mojom/compositing/transferable_resource.mojom-shared.h"
 #include "skia/public/mojom/image_info_mojom_traits.h"
-#include "skia/public/mojom/surface_origin_mojom_traits.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "gpu/ipc/common/vulkan_ycbcr_info_mojom_traits.h"
@@ -34,18 +35,14 @@ struct StructTraits<viz::mojom::MetadataOverrideDataView,
     return input.color_space;
   }
 
-  static const std::optional<GrSurfaceOrigin>& origin(
-      const viz::TransferableResource::MetadataOverride& input) {
-    return input.origin;
-  }
-
   static const std::optional<SkAlphaType>& alpha_type(
       const viz::TransferableResource::MetadataOverride& input) {
     return input.alpha_type;
   }
 
-  static bool Read(viz::mojom::MetadataOverrideDataView data,
-                   viz::TransferableResource::MetadataOverride* out);
+  static base::expected<void, DeserializationError> Read(
+      viz::mojom::MetadataOverrideDataView data,
+      viz::TransferableResource::MetadataOverride* out);
 };
 
 template <>
@@ -54,8 +51,8 @@ struct EnumTraits<viz::mojom::SynchronizationType,
   static viz::mojom::SynchronizationType ToMojom(
       viz::TransferableResource::SynchronizationType type);
 
-  static bool FromMojom(viz::mojom::SynchronizationType input,
-                        viz::TransferableResource::SynchronizationType* out);
+  static viz::TransferableResource::SynchronizationType FromMojom(
+      viz::mojom::SynchronizationType input);
 };
 
 template <>
@@ -64,8 +61,8 @@ struct EnumTraits<viz::mojom::ResourceSource,
   static viz::mojom::ResourceSource ToMojom(
       viz::TransferableResource::ResourceSource source);
 
-  static bool FromMojom(viz::mojom::ResourceSource input,
-                        viz::TransferableResource::ResourceSource* out);
+  static viz::TransferableResource::ResourceSource FromMojom(
+      viz::mojom::ResourceSource input);
 };
 
 template <>
@@ -88,11 +85,6 @@ struct StructTraits<viz::mojom::TransferableResourceDataView,
   static viz::TransferableResource::SynchronizationType synchronization_type(
       const viz::TransferableResource& resource) {
     return resource.synchronization_type;
-  }
-
-  static bool is_low_latency_rendering(
-      const viz::TransferableResource& resource) {
-    return resource.is_low_latency_rendering;
   }
 
 #if BUILDFLAG(IS_ANDROID)
@@ -134,8 +126,9 @@ struct StructTraits<viz::mojom::TransferableResourceDataView,
     return resource.metadata_override();
   }
 
-  static bool Read(viz::mojom::TransferableResourceDataView data,
-                   viz::TransferableResource* out);
+  static base::expected<void, DeserializationError> Read(
+      viz::mojom::TransferableResourceDataView data,
+      viz::TransferableResource* out);
 };
 
 }  // namespace mojo

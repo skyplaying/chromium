@@ -9,40 +9,43 @@
 #include <concepts>
 
 #include "third_party/blink/renderer/core/dom/container_node.h"
-#include "third_party/blink/renderer/core/dom/element_rare_data_vector.h"
 #include "third_party/blink/renderer/core/dom/node.h"
+#include "third_party/blink/renderer/core/dom/node_rare_data.h"
+#include "third_party/blink/renderer/core/dom/rare_data_update.h"
 
 namespace blink {
 
-void Node::AddDOMPart(Part& part) {
-  DCHECK(!RuntimeEnabledFeatures::DOMPartsAPIMinimalEnabled());
-  data_ = EnsureRareData().AddDOMPart(part);
+template <typename T>
+ALWAYS_INLINE T& RareDataUpdate<T>::RefreshNodeAndUnwrap(Node& node) && {
+  node.SetRareData(base::PassKey<RareDataUpdate<T>>(), rare_data_);
+  return *field_;
 }
-void Node::RemoveDOMPart(Part& part) {
-  DCHECK(!RuntimeEnabledFeatures::DOMPartsAPIMinimalEnabled());
-  EnsureRareData().RemoveDOMPart(part);
-}
-PartsList* Node::GetDOMParts() const {
-  return data_ ? data_->GetDOMParts() : nullptr;
+
+ALWAYS_INLINE void RareDataUpdate<void>::RefreshNode(Node& node) && {
+  node.SetRareData(base::PassKey<RareDataUpdate<void>>(), rare_data_);
 }
 
 DOMNodeId Node::NodeID(base::PassKey<DOMNodeIds>) const {
-  return data_ ? const_cast<const ElementRareDataVector*>(data_.Get())->NodeId()
+  return data_ ? const_cast<const NodeRareData*>(data_.Get())->NodeId()
                : kInvalidDOMNodeId;
 }
 DOMNodeId& Node::EnsureNodeID(base::PassKey<DOMNodeIds>) {
-  return UnpackAndRefresh(EnsureRareData().NodeId());
+  return EnsureRareData().NodeId().RefreshNodeAndUnwrap(*this);
+}
+
+bool Node::HasPseudoElements() const {
+  return data_ && data_->HasPseudoElements();
 }
 
 bool ContainerNode::HasRestyleFlag(DynamicRestyleFlags mask) const {
-  if (const ElementRareDataVector* data = RareData()) {
+  if (const NodeRareData* data = RareData()) {
     return data->HasRestyleFlag(mask);
   }
   return false;
 }
 
 bool ContainerNode::HasRestyleFlags() const {
-  if (const ElementRareDataVector* data = RareData()) {
+  if (const NodeRareData* data = RareData()) {
     return data->HasRestyleFlags();
   }
   return false;

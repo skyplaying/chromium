@@ -15,17 +15,20 @@ class StatusTray;
 
 namespace glic {
 
-class GlicController;
+class GlicBackgroundDelegate;
 
 class GlicStatusIconWin : public GlicStatusIcon,
                           public ui::NativeThemeObserver {
  public:
-  GlicStatusIconWin(GlicController* controller, StatusTray* status_tray);
+  GlicStatusIconWin(GlicBackgroundDelegate* delegate, StatusTray* status_tray);
 
   GlicStatusIconWin(const GlicStatusIconWin&) = delete;
   GlicStatusIconWin& operator=(const GlicStatusIconWin&) = delete;
 
   ~GlicStatusIconWin() override;
+
+  // GlicStatusIcon:
+  void Init() override;
 
   // ui::NativeThemeObserver
   void OnNativeThemeUpdated(ui::NativeTheme* observed_theme) override;

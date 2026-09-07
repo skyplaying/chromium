@@ -6,18 +6,22 @@
 
 #import <Cocoa/Cocoa.h>
 
+#include <vector>
+
 #import "base/apple/foundation_util.h"
 #import "base/apple/scoped_objc_class_swizzler.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/mac/mac_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
 #include "base/scoped_observation.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/run_until.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/test_timeouts.h"
 #include "build/build_config.h"
 #import "components/remote_cocoa/app_shim/bridged_content_view.h"
@@ -37,23 +41,29 @@
 #include "ui/base/mojom/window_show_state.mojom.h"
 #import "ui/base/test/scoped_fake_full_keyboard_access.h"
 #import "ui/base/test/windowed_nsnotification_observer.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/recyclable_compositor_mac.h"
 #import "ui/events/test/cocoa_test_event_utils.h"
 #include "ui/events/test/event_generator.h"
 #import "ui/gfx/mac/coordinate_conversion.h"
 #include "ui/gfx/native_ui_types.h"
+#include "ui/native_theme/native_theme.h"
+#include "ui/native_theme/native_theme_observer.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
+#include "ui/views/cocoa/native_widget_mac_event_monitor.h"
 #include "ui/views/cocoa/native_widget_mac_ns_window_host.h"
 #include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/native/native_view_host.h"
+#include "ui/views/focus/native_view_focus_manager.h"
+#include "ui/views/test/focus_manager_test.h"
 #include "ui/views/test/native_widget_factory.h"
 #include "ui/views/test/test_widget_observer.h"
+#include "ui/views/test/views_test_utils.h"
 #include "ui/views/test/widget_test.h"
 #include "ui/views/widget/native_widget_mac.h"
 #include "ui/views/widget/native_widget_private.h"
-#include "ui/views/widget/widget_interactive_uitest_utils.h"
 #include "ui/views/widget/widget_observer.h"
 #include "ui/views/window/dialog_delegate.h"
 
@@ -126,10 +136,10 @@ class BridgedNativeWidgetTestApi {
   void SimulateFrameSwap(const gfx::Size& size) {
     const float kScaleFactor = 1.0f;
     gfx::CALayerParams ca_layer_params;
-    ca_layer_params.is_empty = false;
+    ca_layer_params.ca_context_id = 123u;
     ca_layer_params.pixel_size = size;
     ca_layer_params.scale_factor = kScaleFactor;
-    bridge_->SetCALayerParams(ca_layer_params);
+    bridge_->SetCALayerParams(std::move(ca_layer_params));
   }
 
   NSAnimation* show_animation() {
@@ -142,6 +152,29 @@ class BridgedNativeWidgetTestApi {
 
   void CheckAndNotifyAllWorkspacesStateChanged() {
     bridge_->CheckAndNotifyAllWorkspacesStateChanged();
+  }
+
+  void OnSystemColorsChanged() { bridge_->OnSystemColorsChanged(); }
+
+  remote_cocoa::NativeWidgetNSWindowBridge* bridge() { return &*bridge_; }
+  void set_wants_to_be_visible(bool visible) {
+    bridge_->wants_to_be_visible_ = visible;
+  }
+
+  void SetCaptureExclusionApplier(
+      base::RepeatingCallback<void(NSWindow*, bool)> applier) {
+    bridge_->capture_exclusion_applier_for_testing_ = std::move(applier);
+  }
+
+  static std::unique_ptr<remote_cocoa::NativeWidgetNSWindowBridge>
+  TakeInProcessBridge(NativeWidgetMacNSWindowHost* host) {
+    return std::move(host->in_process_ns_window_bridge_);
+  }
+
+  static void RestoreInProcessBridge(
+      NativeWidgetMacNSWindowHost* host,
+      std::unique_ptr<remote_cocoa::NativeWidgetNSWindowBridge> bridge) {
+    host->in_process_ns_window_bridge_ = std::move(bridge);
   }
 
  private:
@@ -238,6 +271,52 @@ class NativeWidgetMacTest : public WidgetTest {
     return native_widget->focus_manager_;
   }
 };
+
+TEST_F(NativeWidgetMacTest, ScreenshotProtectionTracksWindowSize) {
+  struct CaptureExclusionCall {
+    NSRect frame;
+    bool allow;
+  };
+
+  NativeWidgetMacTestWindow* window;
+  Widget::InitParams params =
+      CreateParams(Widget::InitParams::TYPE_WINDOW_FRAMELESS);
+  params.bounds = gfx::Rect(100, 100, 200, 150);
+  Widget* widget = CreateWidgetWithTestWindow(std::move(params), &window);
+
+  std::vector<CaptureExclusionCall> calls;
+  BridgedNativeWidgetTestApi(widget).SetCaptureExclusionApplier(
+      base::BindRepeating(
+          [](std::vector<CaptureExclusionCall>* calls, NSWindow* window,
+             bool allow) { calls->push_back({window.frame, allow}); },
+          &calls));
+
+  const NSRect initial_frame = window.frame;
+  widget->SetAllowScreenshots(false);
+  ASSERT_EQ(1u, calls.size());
+  EXPECT_FALSE(calls.back().allow);
+  EXPECT_TRUE(NSEqualRects(initial_frame, calls.back().frame));
+
+  const NSRect expanded_frame = NSMakeRect(
+      initial_frame.origin.x, initial_frame.origin.y,
+      initial_frame.size.width + 100, initial_frame.size.height + 100);
+  [window setFrame:expanded_frame display:NO];
+  const NSRect resized_frame = window.frame;
+  EXPECT_GT(resized_frame.size.width, initial_frame.size.width);
+  EXPECT_GT(resized_frame.size.height, initial_frame.size.height);
+  ASSERT_EQ(2u, calls.size());
+  EXPECT_FALSE(calls.back().allow);
+  EXPECT_TRUE(NSEqualRects(resized_frame, calls.back().frame));
+
+  widget->SetAllowScreenshots(true);
+  ASSERT_EQ(3u, calls.size());
+  EXPECT_TRUE(calls.back().allow);
+
+  [window setFrame:initial_frame display:NO];
+  EXPECT_EQ(3u, calls.size());
+
+  widget->CloseNow();
+}
 
 class WidgetChangeObserver : public TestWidgetObserver {
  public:
@@ -995,6 +1074,46 @@ TEST_F(NativeWidgetMacTest, NonWidgetParent) {
   [native_parent close];
 }
 
+// Tests that a key-status change does not crash when the child widget has no
+// top-level widget, so Widget::GetFocusManager() returns null.
+TEST_F(NativeWidgetMacTest, KeyStatusChangeWithNoTopLevelDoesNotCrash) {
+  NSWindow* native_parent = MakeBorderlessNativeParent();
+  Widget* child = AttachPopupToNativeParent(native_parent);
+  child->Show();
+  ASSERT_FALSE(child->is_top_level());
+
+  NativeWidgetMacNSWindowHost* host =
+      NativeWidgetMacNSWindowHost::GetFromNativeWindow(
+          child->GetNativeWindow());
+  ASSERT_TRUE(host);
+
+  // Without a parent host, GetTopLevelNativeWidget() resolves to the child,
+  // which is not top-level and owns no FocusManager.
+  host->SetParent(nullptr);
+  ASSERT_EQ(nullptr, child->GetFocusManager());
+
+  TestNativeViewFocusChangeListener focus_listener;
+  base::ScopedObservation<NativeViewFocusManager, NativeViewFocusChangeListener>
+      observation(&focus_listener);
+  observation.Observe(NativeViewFocusManager::GetInstance());
+
+  NativeWidgetMac* native_widget = host->native_widget_mac();
+
+  // Pre-fix both branches dereference the null FocusManager and crash.
+  native_widget->OnWindowKeyStatusChanged(
+      /*is_key=*/true, /*is_content_first_responder=*/true);
+  native_widget->OnWindowKeyStatusChanged(
+      /*is_key=*/false, /*is_content_first_responder=*/true);
+
+  // OnNativeFocus()/OnNativeBlur() still run; only the null deref is skipped.
+  EXPECT_THAT(focus_listener.focus_changes(),
+              testing::Contains(child->GetNativeView()));
+
+  // The child is detached from `native_parent`, so close it directly.
+  [child->GetNativeWindow().GetNativeNSWindow() close];
+  [native_parent close];
+}
+
 // Tests that CloseAllWidgets behaves in various configurations.
 TEST_F(NativeWidgetMacTest, CloseAllWidgetsValidState) {
   NativeWidgetMacTestWindow* __weak last_window_weak = nil;
@@ -1090,9 +1209,9 @@ TEST_F(NativeWidgetMacTest, NonWidgetParentLastReference) {
     native_parent = nil;
   }
 
-  // As of macOS 13 (Ventura), it seems that exiting the autoreleasepool
-  // block does not immediately trigger a release of its contents. Wait
-  // here for the deallocations to occur before proceeding.
+  // It seems that exiting the autoreleasepool block does not immediately
+  // trigger a release of its contents. Wait here for the deallocations to occur
+  // before proceeding.
   EXPECT_TRUE(base::test::RunUntil([&]() { return child_dealloced; }));
   EXPECT_TRUE(base::test::RunUntil([&]() { return native_parent_dealloced; }));
 }
@@ -1394,13 +1513,14 @@ Widget* ShowChildModalWidgetAndWait(NSWindow* native_parent) {
   return modal_dialog_widget;
 }
 
-// Shows a window-modal Widget (as a sheet). No need to wait since the native
-// sheet animation is blocking.
+// Shows a window-modal Widget (as a sheet).
 Widget* ShowWindowModalWidget(NSWindow* native_parent) {
   Widget* sheet_widget = views::DialogDelegate::CreateDialogWidget(
       NativeWidgetMacTest::MakeModalDialog(ui::mojom::ModalType::kWindow),
       gfx::NativeWindow(), gfx::NativeView(native_parent.contentView));
   sheet_widget->Show();
+  NSWindow* sheet_window = sheet_widget->GetNativeWindow().GetNativeNSWindow();
+  EXPECT_TRUE(base::test::RunUntil([&]() { return [sheet_window isVisible]; }));
   return sheet_widget;
 }
 
@@ -1744,6 +1864,52 @@ TEST_F(NativeWidgetMacTest, CloseWithWindowModalSheet) {
     [native_parent close];
     EXPECT_TRUE(widget_observer.widget_closed());
   }
+}
+
+// Test that SetVisibilityState() handles the bridge being destroyed during a
+// modal sheet animation entered via parent_->OrderChildren(). A non-sheet
+// child showing itself orders its parent's children, which can synchronously
+// present a deferred sibling sheet and spin a nested run-loop.
+TEST_F(NativeWidgetMacTest, SetVisibilityStateBridgeDestruction) {
+  NSWindow* native_parent = MakeClosableTitledNativeParent();
+  Widget* parent_widget =
+      Widget::GetWidgetForNativeWindow(gfx::NativeWindow(native_parent));
+  ASSERT_TRUE(parent_widget);
+
+  // A deferred window-modal sheet on the parent. OrderChildren() will present
+  // it via -[NSWindow beginSheet:], spinning a nested run-loop.
+  Widget* sheet_widget = views::DialogDelegate::CreateDialogWidget(
+      NativeWidgetMacTest::MakeModalDialog(ui::mojom::ModalType::kWindow),
+      gfx::NativeWindow(), parent_widget->GetNativeView());
+  BridgedNativeWidgetTestApi(sheet_widget).set_wants_to_be_visible(true);
+
+  // A non-sheet sibling whose SetVisibilityState() will call
+  // parent_->OrderChildren() and find the deferred sheet above.
+  Widget* child_widget = views::DialogDelegate::CreateDialogWidget(
+      NativeWidgetMacTest::MakeModalDialog(ui::mojom::ModalType::kChild),
+      gfx::NativeWindow(), parent_widget->GetNativeView());
+  remote_cocoa::NativeWidgetNSWindowBridge* child_bridge =
+      BridgedNativeWidgetTestApi(child_widget).bridge();
+
+  auto notification_received =
+      base::MakeRefCounted<base::RefCountedData<bool>>(false);
+  id observer = [[NSNotificationCenter defaultCenter]
+      addObserverForName:NSWindowWillBeginSheetNotification
+                  object:native_parent
+                   queue:nil
+              usingBlock:^(NSNotification* note) {
+                notification_received->data = true;
+                child_widget->CloseNow();
+              }];
+
+  child_bridge->SetVisibilityState(
+      remote_cocoa::mojom::WindowVisibilityState::kShowAndActivateWindow);
+
+  EXPECT_TRUE(
+      base::test::RunUntil([&]() { return notification_received->data; }));
+
+  [[NSNotificationCenter defaultCenter] removeObserver:observer];
+  [native_parent close];
 }
 
 // Exercise a scenario where the task posted in the asynchronous Close() could
@@ -2727,6 +2893,156 @@ TEST_F(NativeWidgetMacTest, CenterWindowClampsToScreen) {
       << " should be within screen bounds " << screen_bounds.ToString();
 
   parent->CloseNow();
+}
+
+namespace {
+
+class NoopEventMonitorClient : public NativeWidgetMacEventMonitor::Client {
+ public:
+  void NativeWidgetMacEventMonitorOnEvent(ui::Event*, bool, bool*) override {}
+};
+
+}  // namespace
+
+// Destroying an event monitor while the host's bridge is gone but the host is
+// still alive must not dereference the null mojo interface. This reproduces the
+// teardown window in ~NativeWidgetMacNSWindowHost where the bridge has been
+// cleared but weak_factory_ is still valid.
+TEST_F(NativeWidgetMacTest, RemoveEventMonitorAfterBridgeGone) {
+  Widget* widget = CreateTopLevelPlatformWidget();
+  widget->Show();
+  NativeWidgetMacNSWindowHost* host =
+      NativeWidgetMacNSWindowHost::GetFromNativeWindow(
+          widget->GetNativeWindow());
+  ASSERT_TRUE(host);
+  ASSERT_TRUE(host->GetNSWindowMojo());
+
+  NoopEventMonitorClient client;
+  std::unique_ptr<NativeWidgetMacEventMonitor> monitor =
+      host->AddEventMonitor(&client);
+  ASSERT_TRUE(monitor);
+
+  auto bridge = BridgedNativeWidgetTestApi::TakeInProcessBridge(host);
+  ASSERT_FALSE(host->GetNSWindowMojo());
+
+  // Without the fix, this dereferences the null mojo interface in the monitor's
+  // remove closure.
+  monitor.reset();
+
+  // Restore the bridge so the host tears down normally.
+  BridgedNativeWidgetTestApi::RestoreInProcessBridge(host, std::move(bridge));
+  ASSERT_TRUE(host->GetNSWindowMojo());
+  widget->CloseNow();
+}
+
+namespace {
+
+class ThemeChangeCountingWidgetObserver : public WidgetObserver {
+ public:
+  explicit ThemeChangeCountingWidgetObserver(Widget* widget) {
+    observation_.Observe(widget);
+  }
+
+  void OnWidgetThemeChanged(Widget* widget) override { ++theme_changed_count_; }
+  void OnWidgetDestroying(Widget* widget) override { observation_.Reset(); }
+
+  int theme_changed_count() const { return theme_changed_count_; }
+
+ private:
+  int theme_changed_count_ = 0;
+  base::ScopedObservation<Widget, WidgetObserver> observation_{this};
+};
+
+class TestNativeThemeObserver : public ui::NativeThemeObserver {
+ public:
+  explicit TestNativeThemeObserver(ui::NativeTheme* theme) {
+    observation_.Observe(theme);
+  }
+
+  void OnNativeThemeUpdated(ui::NativeTheme* theme) override {
+    ++theme_updated_count_;
+  }
+
+  int theme_updated_count() const { return theme_updated_count_; }
+
+ private:
+  int theme_updated_count_ = 0;
+  base::ScopedObservation<ui::NativeTheme, ui::NativeThemeObserver>
+      observation_{this};
+};
+
+}  // namespace
+
+// Tests that OnWindowNativeThemeChanged() on a window host only triggers
+// theme change on the target widget and does not notify the global NativeTheme.
+TEST_F(NativeWidgetMacTest, OnWindowNativeThemeChangedScopesToTargetWidget) {
+  base::test::ScopedFeatureList feature_list(
+      ::features::kThemeChangeOptimization);
+
+  Widget* widget1 = CreateTopLevelPlatformWidget();
+  widget1->Show();
+  Widget* widget2 = CreateTopLevelPlatformWidget();
+  widget2->Show();
+
+  ThemeChangeCountingWidgetObserver observer1(widget1);
+  ThemeChangeCountingWidgetObserver observer2(widget2);
+  TestNativeThemeObserver global_theme_observer(
+      ui::NativeTheme::GetInstanceForNativeUi());
+
+  BridgedNativeWidgetTestApi(widget1).OnSystemColorsChanged();
+
+  // Widget2 and process-wide NativeTheme should NOT have received
+  // notifications.
+  EXPECT_EQ(0, observer2.theme_changed_count());
+  EXPECT_EQ(0, global_theme_observer.theme_updated_count());
+
+  widget1->CloseNow();
+  widget2->CloseNow();
+}
+
+TEST_F(NativeWidgetMacTest,
+       OnWindowNativeThemeChangedNotifiesGlobalWhenDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(::features::kThemeChangeOptimization);
+
+  Widget* widget = CreateTopLevelPlatformWidget();
+  widget->Show();
+
+  TestNativeThemeObserver global_theme_observer(
+      ui::NativeTheme::GetInstanceForNativeUi());
+
+  BridgedNativeWidgetTestApi(widget).OnSystemColorsChanged();
+
+  EXPECT_GT(global_theme_observer.theme_updated_count(), 0);
+
+  widget->CloseNow();
+}
+
+// Verifies that when a window moves and resizes simultaneously, the size change
+// is notified before the move change so that observers do not observe the new
+// window bounds with an outdated root view size.
+TEST_F(NativeWidgetMacTest, SizeChangeNotifiedBeforeMoveChange) {
+  Widget* widget = CreateTopLevelPlatformWidget();
+  widget->SetBounds(gfx::Rect(100, 100, 300, 300));
+  widget->Show();
+
+  class TestBoundsObserver : public WidgetObserver {
+   public:
+    void OnWidgetBoundsChanged(Widget* widget,
+                               const gfx::Rect& new_bounds) override {
+      EXPECT_EQ(widget->GetRootView()->size(),
+                widget->GetClientAreaBoundsInScreen().size());
+    }
+  };
+
+  TestBoundsObserver observer;
+  widget->AddObserver(&observer);
+
+  // Move and resize simultaneously.
+  widget->SetBounds(gfx::Rect(200, 200, 400, 400));
+
+  widget->RemoveObserver(&observer);
+  widget->CloseNow();
 }
 
 }  // namespace views::test

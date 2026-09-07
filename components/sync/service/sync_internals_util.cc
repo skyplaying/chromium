@@ -202,12 +202,12 @@ std::string GetUserActionableErrorString(
     case SyncService::UserActionableError::
         kTrustedVaultRecoverabilityDegradedForEverything:
       return "Trusted vault recoverability degraded for everything";
-#if !BUILDFLAG(IS_IOS)
+#if !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_ANDROID)
     case SyncService::UserActionableError::kNeedsSettingsConfirmation:
       return "Needs settings confirmation";
     case SyncService::UserActionableError::kUnrecoverableError:
       return "Unrecoverable error";
-#endif  // !BUILDFLAG(IS_IOS)
+#endif  // !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_ANDROID)
 #if BUILDFLAG(IS_ANDROID)
     case SyncService::UserActionableError::kNeedsUPMBackendUpgrade:
       return "Needs UPM backend upgrade";
@@ -216,6 +216,10 @@ std::string GetUserActionableErrorString(
       return "Client version is too old and needs upgrade";
     case SyncService::UserActionableError::kBookmarksLimitExceeded:
       return "Bookmarks limit exceeded";
+#if BUILDFLAG(IS_IOS)
+    case SyncService::UserActionableError::kDeviceManagementError:
+      return "Device Management error";
+#endif  // BUILDFLAG(IS_IOS)
   }
 
   NOTREACHED();
@@ -292,16 +296,15 @@ std::string GetConnectionStatus(const SyncTokenStatus& status) {
       return "not attempted";
     case CONNECTION_OK:
       return base::StringPrintf(
-          "OK since %s",
-          GetTimeStr(status.connection_status_update_time).c_str());
+          "OK since %s", GetTimeStr(status.connection_status_update_time));
     case CONNECTION_AUTH_ERROR:
       return base::StringPrintf(
           "auth error since %s",
-          GetTimeStr(status.connection_status_update_time).c_str());
+          GetTimeStr(status.connection_status_update_time));
     case CONNECTION_SERVER_ERROR:
       return base::StringPrintf(
           "server error since %s",
-          GetTimeStr(status.connection_status_update_time).c_str());
+          GetTimeStr(status.connection_status_update_time));
   }
   NOTREACHED();
 }
@@ -510,9 +513,8 @@ base::DictValue ConstructAboutInformation(
   std::string auth_error_str = service->GetAuthError().ToString();
   auth_error->Set(
       base::StringPrintf(
-          "%s since %s",
-          (auth_error_str.empty() ? "OK" : auth_error_str).c_str(),
-          GetTimeStr(service->GetAuthErrorTime(), "browser startup").c_str()),
+          "%s since %s", (auth_error_str.empty() ? "OK" : auth_error_str),
+          GetTimeStr(service->GetAuthErrorTime(), "browser startup")),
       /*is_good=*/auth_error_str.empty());
 
   SyncStatus full_status;

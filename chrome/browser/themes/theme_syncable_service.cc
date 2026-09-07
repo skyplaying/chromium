@@ -11,9 +11,11 @@
 
 #include "base/auto_reset.h"
 #include "base/base64.h"
+#include "base/check.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/feature_list.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/observer_list.h"
 #include "base/one_shot_event.h"
@@ -21,7 +23,6 @@
 #include "base/version.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/search/background/ntp_custom_background_service_constants.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_utils.h"
 #include "chrome/common/extensions/sync_helper.h"
@@ -37,6 +38,9 @@
 #include "components/sync/protocol/theme_types.pb.h"
 #include "components/sync_preferences/pref_service_syncable.h"
 #include "components/sync_preferences/pref_service_syncable_observer.h"
+#include "components/themes/ntp_custom_background_service_base.h"
+#include "components/themes/ntp_custom_background_service_constants.h"
+#include "components/themes/theme_utils.h"
 #include "extensions/browser/disable_reason.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registrar.h"
@@ -44,7 +48,7 @@
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/pending_extension_info.h"
 #include "extensions/browser/pending_extension_manager.h"
-#include "extensions/common/manifest_url_handlers.h"
+#include "extensions/common/manifest_handlers/manifest_url_handlers.h"
 
 using std::string;
 
@@ -91,83 +95,6 @@ bool HasNonDefaultBrowserColorScheme(
              ThemeService::BrowserColorScheme::kSystem;
 }
 
-std::optional<base::DictValue> NtpBackgroundDictFromSpecifics(
-    const sync_pb::ThemeSpecifics& theme_specifics) {
-  if (!theme_specifics.has_ntp_background()) {
-    return std::nullopt;
-  }
-  const sync_pb::NtpCustomBackground& ntp_background =
-      theme_specifics.ntp_background();
-  base::DictValue dict;
-  if (ntp_background.has_url()) {
-    dict.Set(kNtpCustomBackgroundURL, ntp_background.url());
-  }
-  if (ntp_background.has_attribution_line_1()) {
-    dict.Set(kNtpCustomBackgroundAttributionLine1,
-             ntp_background.attribution_line_1());
-  }
-  if (ntp_background.has_attribution_line_2()) {
-    dict.Set(kNtpCustomBackgroundAttributionLine2,
-             ntp_background.attribution_line_2());
-  }
-  if (ntp_background.has_attribution_action_url()) {
-    dict.Set(kNtpCustomBackgroundAttributionActionURL,
-             ntp_background.attribution_action_url());
-  }
-  if (ntp_background.has_collection_id()) {
-    dict.Set(kNtpCustomBackgroundCollectionId, ntp_background.collection_id());
-  }
-  if (ntp_background.has_resume_token()) {
-    dict.Set(kNtpCustomBackgroundResumeToken, ntp_background.resume_token());
-  }
-  if (ntp_background.has_refresh_timestamp_unix_epoch_seconds()) {
-    dict.Set(kNtpCustomBackgroundRefreshTimestamp,
-             static_cast<int>(
-                 ntp_background.refresh_timestamp_unix_epoch_seconds()));
-  }
-  if (ntp_background.has_main_color()) {
-    dict.Set(kNtpCustomBackgroundMainColor,
-             static_cast<int>(ntp_background.main_color()));
-  }
-  return dict;
-}
-
-sync_pb::NtpCustomBackground SpecificsNtpBackgroundFromDict(
-    const base::DictValue& dict) {
-  sync_pb::NtpCustomBackground ntp_background;
-  if (const std::string* value = dict.FindString(kNtpCustomBackgroundURL)) {
-    ntp_background.set_url(*value);
-  }
-  if (const std::string* value =
-          dict.FindString(kNtpCustomBackgroundAttributionLine1)) {
-    ntp_background.set_attribution_line_1(*value);
-  }
-  if (const std::string* value =
-          dict.FindString(kNtpCustomBackgroundAttributionLine2)) {
-    ntp_background.set_attribution_line_2(*value);
-  }
-  if (const std::string* value =
-          dict.FindString(kNtpCustomBackgroundAttributionActionURL)) {
-    ntp_background.set_attribution_action_url(*value);
-  }
-  if (const std::string* value =
-          dict.FindString(kNtpCustomBackgroundCollectionId)) {
-    ntp_background.set_collection_id(*value);
-  }
-  if (const std::string* value =
-          dict.FindString(kNtpCustomBackgroundResumeToken)) {
-    ntp_background.set_resume_token(*value);
-  }
-  if (std::optional<int> value =
-          dict.FindInt(kNtpCustomBackgroundRefreshTimestamp)) {
-    ntp_background.set_refresh_timestamp_unix_epoch_seconds(*value);
-  }
-  if (std::optional<int> value = dict.FindInt(kNtpCustomBackgroundMainColor)) {
-    ntp_background.set_main_color(*value);
-  }
-  return ntp_background;
-}
-
 bool AreSpecificsNtpBackgroundEquivalent(
     const sync_pb::NtpCustomBackground& a,
     const sync_pb::NtpCustomBackground& b) {
@@ -185,8 +112,7 @@ const char ThemeSyncableService::kSyncEntityTitle[] = "Current Theme";
 void MigrateSyncingThemePrefsToNonSyncingIfNeeded(PrefService* prefs) {
   const bool pref_registered =
       prefs->FindPreference(prefs::kSyncingThemePrefsMigratedToNonSyncing);
-  base::UmaHistogramBoolean("Theme.ThemePrefMigration.PrefRegistered",
-                            pref_registered);
+
   // TODO(crbug.com/476288050): Investigate why the pref can not be registered
   // at this point.
   if (!pref_registered) {
@@ -653,13 +579,17 @@ ThemeSyncableService::ThemeSyncState ThemeSyncableService::MaybeSetTheme(
 
   PrefService* prefs = profile_->GetPrefs();
   // NTP background can exist along with the other (non-extension) themes.
-  if (std::optional<base::DictValue> dict =
-          NtpBackgroundDictFromSpecifics(new_specs);
-      dict && !dict->empty()) {
+  const bool has_ntp_background = new_specs.has_ntp_background();
+  base::DictValue dict;
+  if (has_ntp_background) {
+    dict = themes::GetBackgroundDictFromProto(new_specs.ntp_background());
+  }
+
+  if (has_ntp_background && !dict.empty()) {
     DVLOG(1) << "Applying custom NTP background";
     // TODO(crbug.com/356148174): Set via NtpCustomBackgroundService instead
     // of setting the pref directly.
-    prefs->SetDict(prefs::kNtpCustomBackgroundDict, std::move(*dict));
+    prefs->SetDict(prefs::kNtpCustomBackgroundDict, std::move(dict));
   } else if (has_all_theme_attributes) {
     // Clear the current ntp background if none received from remote.
     // NOTE: Ntp background is only cleared if the incoming ThemeSpecifics
@@ -736,7 +666,7 @@ ThemeSyncableService::GetThemeSpecificsFromCurrentTheme() const {
     if (const base::Value* pref =
             prefs->GetUserPrefValue(prefs::kNtpCustomBackgroundDict)) {
       *theme_specifics.mutable_ntp_background() =
-          SpecificsNtpBackgroundFromDict(pref->GetDict());
+          themes::GetProtoFromBackgroundDict(pref->GetDict());
     }
   }
 
@@ -781,6 +711,18 @@ ThemeSyncableService::GetThemeSpecificsFromCurrentTheme() const {
 sync_pb::ThemeSpecifics
 ThemeSyncableService::GetThemeSpecificsFromCurrentThemeForTesting() const {
   return GetThemeSpecificsFromCurrentTheme();
+}
+
+std::string ThemeSyncableService::GetSavedLocalThemeExtensionID() const {
+  if (!base::FeatureList::IsEnabled(syncer::kSeparateLocalAndAccountThemes)) {
+    return std::string();
+  }
+
+  std::optional<sync_pb::ThemeSpecifics> specifics = GetSavedLocalTheme();
+  if (specifics && specifics->use_custom_theme()) {
+    return specifics->custom_theme_id();
+  }
+  return std::string();
 }
 
 /* static */
@@ -930,9 +872,9 @@ bool ThemeSyncableService::ApplySavedLocalThemeIfExistsAndClear() {
   std::optional<sync_pb::ThemeSpecifics> local_theme_specifics =
       GetSavedLocalTheme();
   if (local_theme_specifics) {
-    // This does not trigger a notification to OnThemeChanged() and thus does
-    // not commit the theme change to sync. That is done below.
-    MaybeSetTheme(GetThemeSpecificsFromCurrentTheme(), *local_theme_specifics);
+    // Remove any pending theme extension being installed. This is done before
+    // applying the local theme to avoid removing the local theme extension if
+    // it's being installed.
     if (remote_extension_theme_pending_install_) {
       extensions::PendingExtensionManager* pending_extension_manager =
           extensions::PendingExtensionManager::Get(profile_);
@@ -945,10 +887,18 @@ bool ThemeSyncableService::ApplySavedLocalThemeIfExistsAndClear() {
         pending_extension_manager->Remove(
             *remote_extension_theme_pending_install_);
       }
-      // Remove any unused theme extension. This should remove
-      // `remote_extension_theme_pending_install_` if it was installed.
-      theme_service_->RemoveUnusedThemes();
+      remote_extension_theme_pending_install_.reset();
     }
+    // Apply the local theme. This does not trigger a notification to
+    // OnThemeChanged() and thus does not commit the theme change to sync (which
+    // is desired in case of batch upload), but will be done so when
+    // `OnThemeChanged()` is called below.
+    MaybeSetTheme(GetThemeSpecificsFromCurrentTheme(), *local_theme_specifics);
+
+    // Remove any unused theme extension. This will specifically remove the
+    // account theme extension (if any) if it's no longer used.
+    theme_service_->RemoveUnusedThemes();
+
     // Commit the theme change to sync. Note that this does not trigger a commit
     // when called while StopSyncing().
     OnThemeChanged();

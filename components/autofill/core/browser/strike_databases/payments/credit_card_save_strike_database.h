@@ -12,7 +12,6 @@
 
 #include "base/time/time.h"
 #include "components/strike_database/simple_strike_database.h"
-#include "components/strike_database/strike_database.h"
 
 namespace autofill {
 
@@ -26,8 +25,16 @@ struct CreditCardSaveStrikeDatabaseTraits {
 };
 
 // Strike database for credit card saves (both local and upload).
-using CreditCardSaveStrikeDatabase =
-    strike_database::SimpleStrikeDatabase<CreditCardSaveStrikeDatabaseTraits>;
+class CreditCardSaveStrikeDatabase
+    : public strike_database::SimpleStrikeDatabase<
+          CreditCardSaveStrikeDatabaseTraits> {
+ public:
+  using SimpleStrikeDatabase<
+      CreditCardSaveStrikeDatabaseTraits>::SimpleStrikeDatabase;
+
+  std::optional<base::TimeDelta> GetRequiredDelaySinceLastStrike()
+      const override;
+};
 
 }  // namespace autofill
 

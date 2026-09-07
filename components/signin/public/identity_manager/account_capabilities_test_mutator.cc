@@ -10,10 +10,16 @@
 #include "base/check.h"
 #include "build/build_config.h"
 #include "components/signin/internal/identity_manager/account_capabilities_constants.h"
+#include "components/signin/public/base/signin_switches.h"
+#include "components/signin/public/identity_manager/account_info.h"
 
 AccountCapabilitiesTestMutator::AccountCapabilitiesTestMutator(
     AccountCapabilities* capabilities)
     : capabilities_(capabilities) {}
+
+AccountCapabilitiesTestMutator::AccountCapabilitiesTestMutator(
+    AccountInfo* account_info)
+    : capabilities_(&account_info->capabilities_) {}
 
 // static
 base::span<const std::string_view>
@@ -22,7 +28,7 @@ AccountCapabilitiesTestMutator::GetSupportedAccountCapabilityNames() {
 }
 
 // clang-format off
-// keep-sorted start newline_separated=yes sticky_prefixes=#if group_prefixes=#endif block=yes
+// keep-sorted start newline_separated=yes sticky_prefixes=#if,BUILDFLAG group_prefixes=#endif block=yes
 // clang-format on
 void AccountCapabilitiesTestMutator::set_can_fetch_family_member_info(
     bool value) {
@@ -46,6 +52,12 @@ void AccountCapabilitiesTestMutator::
 }
 #endif
 
+void AccountCapabilitiesTestMutator::set_can_override_account_info(
+    bool value) {
+  capabilities_->capabilities_map_[kCanOverrideAccountInfoCapabilityName] =
+      value;
+}
+
 #if !BUILDFLAG(IS_IOS)
 void AccountCapabilitiesTestMutator::set_can_run_chrome_privacy_sandbox_trials(
     bool value) {
@@ -58,10 +70,37 @@ void AccountCapabilitiesTestMutator::set_can_run_chrome_privacy_sandbox_trials(
 void AccountCapabilitiesTestMutator::
     set_can_show_history_sync_opt_ins_without_minor_mode_restrictions(
         bool value) {
+#if BUILDFLAG(IS_IOS)
+  if (base::FeatureList::IsEnabled(
+          switches::kReadContextualAccountCapabilities)) {
+    capabilities_->capabilities_map_
+        [kCanContextuallyShowHistorySyncOptInsWithoutMinorModeRestrictionsCapabilityName] =
+        value;
+  } else {
+    capabilities_->capabilities_map_
+        [kCanShowHistorySyncOptInsWithoutMinorModeRestrictionsCapabilityName] =
+        value;
+  }
+#else
   capabilities_->capabilities_map_
       [kCanShowHistorySyncOptInsWithoutMinorModeRestrictionsCapabilityName] =
       value;
+#endif
 }
+
+#if BUILDFLAG(IS_IOS)
+void AccountCapabilitiesTestMutator::set_can_sign_in_to_chrome(bool value) {
+  capabilities_->capabilities_map_[kCanSignInToChromeCapabilityName] = value;
+}
+#endif
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+    BUILDFLAG(IS_IOS)
+void AccountCapabilitiesTestMutator::set_can_submit_feedback(bool value) {
+  capabilities_->capabilities_map_[kCanSubmitFeedbackInChromeCapabilityName] =
+      value;
+}
+#endif
 
 #if BUILDFLAG(IS_CHROMEOS)
 void AccountCapabilitiesTestMutator::set_can_toggle_auto_updates(bool value) {
@@ -92,7 +131,19 @@ void AccountCapabilitiesTestMutator::set_can_use_edu_features(bool value) {
 #endif
 
 void AccountCapabilitiesTestMutator::set_can_use_gemini_in_chrome(bool value) {
+#if BUILDFLAG(IS_IOS)
+  if (base::FeatureList::IsEnabled(
+          switches::kReadContextualAccountCapabilities)) {
+    capabilities_
+        ->capabilities_map_[kCanContextuallyUseGeminiInChromeCapabilityName] =
+        value;
+  } else {
+    capabilities_->capabilities_map_[kCanUseGeminiInChromeCapabilityName] =
+        value;
+  }
+#else
   capabilities_->capabilities_map_[kCanUseGeminiInChromeCapabilityName] = value;
+#endif
 }
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -115,7 +166,18 @@ void AccountCapabilitiesTestMutator::set_can_use_manta_service(bool value) {
 
 void AccountCapabilitiesTestMutator::set_can_use_model_execution_features(
     bool value) {
+#if BUILDFLAG(IS_IOS)
+  if (base::FeatureList::IsEnabled(
+          switches::kReadContextualAccountCapabilities)) {
+    capabilities_
+        ->capabilities_map_[kCanContextuallyUseModelExecutionFeaturesName] =
+        value;
+  } else {
+    capabilities_->capabilities_map_[kCanUseModelExecutionFeaturesName] = value;
+  }
+#else
   capabilities_->capabilities_map_[kCanUseModelExecutionFeaturesName] = value;
+#endif
 }
 
 void AccountCapabilitiesTestMutator::set_can_use_speaker_label_in_recorder_app(
@@ -161,6 +223,35 @@ void AccountCapabilitiesTestMutator::set_is_subject_to_parental_controls(
       value;
 }
 
+void AccountCapabilitiesTestMutator::set_is_subject_to_universal_opt_out(
+    bool value) {
+  capabilities_->capabilities_map_[kIsSubjectToUniversalOptOutCapabilityName] =
+      value;
+}
+
+#if BUILDFLAG(IS_IOS)
+void AccountCapabilitiesTestMutator::set_must_fetch_apple_age_range_in_chrome(
+    bool value) {
+  capabilities_
+      ->capabilities_map_[kMustFetchAppleAgeRangeInChromeCapabilityName] =
+      value;
+}
+#endif
+
+#if BUILDFLAG(IS_IOS)
+void AccountCapabilitiesTestMutator::set_must_skip_apple_age_range_in_chrome(
+    bool value) {
+  capabilities_
+      ->capabilities_map_[kMustSkipAppleAgeRangeInChromeCapabilityName] = value;
+}
+#endif
+
+void AccountCapabilitiesTestMutator::
+    set_supports_wallet_private_passes_in_autofill(bool value) {
+  capabilities_->capabilities_map_
+      [kSupportsWalletPrivatePassesInAutofillCapabilityName] = value;
+}
+
 // keep-sorted end
 
 void AccountCapabilitiesTestMutator::SetAllSupportedCapabilities(bool value) {
@@ -177,4 +268,10 @@ void AccountCapabilitiesTestMutator::SetCapability(const std::string& name,
   CHECK(std::ranges::contains(capability_names, name))
       << "Invalid capability name: " << name;
   capabilities_->capabilities_map_[name] = value;
+}
+
+void AccountCapabilitiesTestMutator::SetCapabilityOverride(
+    std::string_view name,
+    std::optional<signin::Tribool> value) {
+  capabilities_->SetCapabilityOverride(name, value);
 }

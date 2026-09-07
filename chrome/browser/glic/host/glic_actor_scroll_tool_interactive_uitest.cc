@@ -2,12 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+// TODO(crbug.com/537847546): Migrate this test suite to GlicBrowserTest.
+
 #include "base/feature_list.h"
 #include "chrome/browser/actor/actor_test_util.h"
 #include "chrome/browser/glic/host/glic_actor_interactive_uitest_common.h"
 #include "chrome/browser/ui/zoom/chrome_zoom_level_prefs.h"
 #include "chrome/common/actor/actor_constants.h"
-#include "chrome/common/chrome_features.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
 #include "components/optimization_guide/proto/features/actions_data.pb.h"
 #include "content/public/test/browser_test.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
@@ -40,8 +42,7 @@ class GlicActorScrollToolUiTest : public GlicActorUiTest {
           content::RenderFrameHost* frame =
               tab_handle.Get()->GetContents()->GetPrimaryMainFrame();
           Actions action =
-              actor::MakeScroll(*frame, node_id, offset_x, offset_y);
-          action.set_task_id(task_id.value());
+              actor::MakeScroll(*frame, node_id, offset_x, offset_y, task_id);
           return EncodeActionProto(action);
         });
     return ExecuteAction(std::move(scroll_provider),
@@ -67,9 +68,8 @@ class GlicActorScrollToolUiTest : public GlicActorUiTest {
         [&task_id, &tab_handle, click_point, offset_x, offset_y]() {
           content::RenderFrameHost* frame =
               tab_handle.Get()->GetContents()->GetPrimaryMainFrame();
-          Actions action =
-              actor::MakeScroll(*frame, click_point, offset_x, offset_y);
-          action.set_task_id(task_id.value());
+          Actions action = actor::MakeScroll(*frame, click_point, offset_x,
+                                             offset_y, task_id);
           return EncodeActionProto(action);
         });
     return ExecuteAction(std::move(scroll_provider),
@@ -88,8 +88,8 @@ class GlicActorScrollToolUiTest : public GlicActorUiTest {
 // Test scrolling the viewport vertically.
 IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest, ScrollPageVertical) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   const int kScrollOffsetY = 50;
 
   RunTestSequence(
@@ -103,8 +103,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest, ScrollPageVertical) {
 // Test scrolling the viewport horizontally.
 IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest, ScrollPageHorizontal) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   const int kScrollOffsetX = 50;
 
   RunTestSequence(
@@ -117,22 +117,22 @@ IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest, ScrollPageHorizontal) {
 
 IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest, FailOnInvalidNodeId) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   const int kScrollOffsetY = 50;
 
   RunTestSequence(
       InitializeWithOpenGlicWindow(),
       StartActorTaskInNewTab(task_url, kNewActorTabId),
       GetPageContextForActorTab(),
+      // The fake id is missing from the saved APC, so the browser rejects it.
       ExecuteAction(
           base::BindLambdaForTesting([this]() {
             content::RenderFrameHost* frame =
                 tab_handle_.Get()->GetContents()->GetPrimaryMainFrame();
-            Actions action =
-                actor::MakeScroll(*frame, kNonExistentContentNodeId,
-                                  /*scroll_offset_x=*/0, kScrollOffsetY);
-            action.set_task_id(task_id_.value());
+            Actions action = actor::MakeScroll(
+                *frame, kNonExistentContentNodeId,
+                /*scroll_offset_x=*/0, kScrollOffsetY, task_id_);
             return EncodeActionProto(action);
           }),
           actor::mojom::ActionResultCode::kInvalidDomNodeId),
@@ -142,8 +142,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest, FailOnInvalidNodeId) {
 // Test scrolling in a sub-scroller on the page.
 IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest, ScrollElementWithNodeId) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   const std::string kElementLabel = "scroller";
   const int kScrollOffsetY = 50;
   const int kScrollOffsetX = 20;
@@ -165,8 +165,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest, ScrollElementWithNodeId) {
 // Test scrolling over a non-scrollable element returns failure.
 IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest, ScrollNonScrollable) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   const std::string kElementLabel = "nonscroll";
   const int kScrollOffsetY = 50;
 
@@ -187,8 +187,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest, ScrollNonScrollable) {
 // scrolled into view then scroll applied.
 IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest, OffscreenScrollable) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   const std::string kElementLabel = "offscreenscroller";
   const int kScrollOffsetY = 50;
 
@@ -209,8 +209,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest, OffscreenScrollable) {
 // correctly.
 IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest, OneAxisScroller) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   const std::string kElementLabel = "horizontalscroller";
   const int kScrollOffset = 50;
 
@@ -236,12 +236,12 @@ IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest, OneAxisScroller) {
 // Ensure scroll distances are correctly scaled when browser zoom is applied.
 IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest, BrowserZoomWithNodeId) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   const std::string kElementLabel = "scroller";
 
   double level = blink::ZoomFactorToZoomLevel(1.5);
-  browser()->profile()->GetZoomLevelPrefs()->SetDefaultZoomLevelPref(level);
+  browser()->GetProfile()->GetZoomLevelPrefs()->SetDefaultZoomLevelPref(level);
 
   // 60 physical pixels translates to 40 CSS pixels when the zoom factor is 1.5
   // (3 physical pixels : 2 CSS Pixels)
@@ -262,8 +262,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest, BrowserZoomWithNodeId) {
 // scroller.
 IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest, CssZoomWithNodeId) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   const std::string kElementLabel = "zoomedscroller";
 
   // 60 physical pixels translates to 120 CSS pixels since the scroller is
@@ -285,8 +285,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest, CssZoomWithNodeId) {
 // an animation was started, even though it may not have instantly scrolled.
 IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest, SmoothScrollSucceeds) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   const std::string kElementLabel = "smoothscroller";
   const int kScrollOffsetY = 100;
 
@@ -304,8 +304,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest, SmoothScrollSucceeds) {
 // trying to scroll in a direction with no scrollable extent.
 IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest, SmoothScrollAtExtent) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   const std::string kElementLabel = "smoothscroller";
   const int kScrollOffsetY = 100;
 
@@ -324,8 +324,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest, SmoothScrollAtExtent) {
 
 IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest, ZeroIdTargetsViewport) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   // DOMNodeIDs start at 1 so 0 should be interpreted as viewport.
   const int kTargetViewport = actor::kRootElementDomNodeId;
   const int kScrollOffsetY = 50;
@@ -339,8 +339,7 @@ IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest, ZeroIdTargetsViewport) {
             tab_handle_.Get()->GetContents()->GetPrimaryMainFrame();
         Actions action =
             actor::MakeScroll(*frame, kTargetViewport,
-                              /*scroll_offset_x=*/0, kScrollOffsetY);
-        action.set_task_id(task_id_.value());
+                              /*scroll_offset_x=*/0, kScrollOffsetY, task_id_);
         return EncodeActionProto(action);
       })),
       CheckJsResult(kNewActorTabId, "() => window.scrollY", kScrollOffsetY));
@@ -350,8 +349,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest, ZeroIdTargetsViewport) {
 IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest, ScrollElementWithCoordinate) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
   constexpr std::string_view kScrollerId = "scroller";
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   gfx::Rect scroller_bound;
   const int kScrollOffsetY = 50;
   const int kScrollOffsetX = 20;
@@ -361,10 +360,10 @@ IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest, ScrollElementWithCoordinate) {
         gfx::Point coordinate = scroller_bound.CenterPoint();
         content::RenderFrameHost* frame =
             tab_handle_.Get()->GetContents()->GetPrimaryMainFrame();
-        apc::Actions action = actor::MakeScroll(
-            *frame, coordinate, kScrollOffsetX, /*scroll_offset_y=*/0);
+        apc::Actions action =
+            actor::MakeScroll(*frame, coordinate, kScrollOffsetX,
+                              /*scroll_offset_y=*/0, task_id_);
 
-        action.set_task_id(task_id_.value());
         return EncodeActionProto(action);
       });
 
@@ -373,10 +372,10 @@ IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest, ScrollElementWithCoordinate) {
         gfx::Point coordinate = scroller_bound.CenterPoint();
         content::RenderFrameHost* frame =
             tab_handle_.Get()->GetContents()->GetPrimaryMainFrame();
-        apc::Actions action = actor::MakeScroll(
-            *frame, coordinate, /*scroll_offset_x=*/0, kScrollOffsetY);
+        apc::Actions action =
+            actor::MakeScroll(*frame, coordinate, /*scroll_offset_x=*/0,
+                              kScrollOffsetY, task_id_);
 
-        action.set_task_id(task_id_.value());
         return EncodeActionProto(action);
       });
 
@@ -401,8 +400,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest,
                        ScrollNonScrollableElementWithCoordinate) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
   constexpr std::string_view kNonScrollerId = "nonscroll";
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   gfx::Rect non_scroller_bound;
   const int kScrollOffsetY = 50;
 
@@ -411,10 +410,10 @@ IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest,
         gfx::Point coordinate = non_scroller_bound.CenterPoint();
         content::RenderFrameHost* frame =
             tab_handle_.Get()->GetContents()->GetPrimaryMainFrame();
-        apc::Actions action = actor::MakeScroll(
-            *frame, coordinate, /*scroll_offset_x=*/0, kScrollOffsetY);
+        apc::Actions action =
+            actor::MakeScroll(*frame, coordinate, /*scroll_offset_x=*/0,
+                              kScrollOffsetY, task_id_);
 
-        action.set_task_id(task_id_.value());
         return EncodeActionProto(action);
       });
 
@@ -431,8 +430,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest,
 IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest,
                        ScrollInvalidCoordinateFails) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   const gfx::Point kPoint(-1, -1);
   const int kScrollOffsetY = 50;
 
@@ -451,8 +450,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest,
                        OffscreenScrollableWithCoordinate) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
   constexpr std::string_view kOffScreenScrollerId = "offscreenscroller";
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   gfx::Rect off_screen_scrolle_bound;
   const int kScrollOffsetY = 50;
 
@@ -461,10 +460,10 @@ IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest,
         gfx::Point coordinate = off_screen_scrolle_bound.CenterPoint();
         content::RenderFrameHost* frame =
             tab_handle_.Get()->GetContents()->GetPrimaryMainFrame();
-        apc::Actions action = actor::MakeScroll(
-            *frame, coordinate, /*scroll_offset_x=*/0, kScrollOffsetY);
+        apc::Actions action =
+            actor::MakeScroll(*frame, coordinate, /*scroll_offset_x=*/0,
+                              kScrollOffsetY, task_id_);
 
-        action.set_task_id(task_id_.value());
         return EncodeActionProto(action);
       });
 
@@ -483,8 +482,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest,
                        ScrollNonScrollableElementAndPageWithCoordinate) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
   constexpr std::string_view kNonScrollerId = "nonscroll";
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/non_scrollable_page.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/non_scrollable_page.html");
   gfx::Rect non_scroller_bound;
   const int kScrollOffsetY = 50;
 
@@ -493,10 +492,10 @@ IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest,
         gfx::Point coordinate = non_scroller_bound.CenterPoint();
         content::RenderFrameHost* frame =
             tab_handle_.Get()->GetContents()->GetPrimaryMainFrame();
-        apc::Actions action = actor::MakeScroll(
-            *frame, coordinate, /*scroll_offset_x=*/0, kScrollOffsetY);
+        apc::Actions action =
+            actor::MakeScroll(*frame, coordinate, /*scroll_offset_x=*/0,
+                              kScrollOffsetY, task_id_);
 
-        action.set_task_id(task_id_.value());
         return EncodeActionProto(action);
       });
 
@@ -522,8 +521,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest,
                        ScrollBubblesFromNonScrollingElement) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
   constexpr std::string_view kButtonId = "button";
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/scrollable_page.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/scrollable_page.html");
   gfx::Rect button_bound;
   const int kScrollOffsetY = 50;
   const int kScrollOffsetX = 20;
@@ -533,10 +532,10 @@ IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest,
         gfx::Point coordinate = button_bound.CenterPoint();
         content::RenderFrameHost* frame =
             tab_handle_.Get()->GetContents()->GetPrimaryMainFrame();
-        apc::Actions action = actor::MakeScroll(
-            *frame, coordinate, kScrollOffsetX, /*scroll_offset_y=*/0);
+        apc::Actions action =
+            actor::MakeScroll(*frame, coordinate, kScrollOffsetX,
+                              /*scroll_offset_y=*/0, task_id_);
 
-        action.set_task_id(task_id_.value());
         return EncodeActionProto(action);
       });
 
@@ -545,10 +544,10 @@ IN_PROC_BROWSER_TEST_F(GlicActorScrollToolUiTest,
         gfx::Point coordinate = button_bound.CenterPoint();
         content::RenderFrameHost* frame =
             tab_handle_.Get()->GetContents()->GetPrimaryMainFrame();
-        apc::Actions action = actor::MakeScroll(
-            *frame, coordinate, /*scroll_offset_x=*/0, kScrollOffsetY);
+        apc::Actions action =
+            actor::MakeScroll(*frame, coordinate, /*scroll_offset_x=*/0,
+                              kScrollOffsetY, task_id_);
 
-        action.set_task_id(task_id_.value());
         return EncodeActionProto(action);
       });
 

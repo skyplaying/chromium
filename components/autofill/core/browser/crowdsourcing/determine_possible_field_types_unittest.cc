@@ -4,14 +4,17 @@
 
 #include "components/autofill/core/browser/crowdsourcing/determine_possible_field_types.h"
 
+#include <ranges>
+
 #include "base/containers/to_vector.h"
 #include "base/feature_list.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/task_environment.h"
-#include "base/types/zip.h"
+#include "components/autofill/core/browser/autofill_field.h"
 #include "components/autofill/core/browser/autofill_field_test_api.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_i18n_api.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
@@ -19,14 +22,14 @@
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/form_parsing/determine_regex_types.h"
 #include "components/autofill/core/browser/foundations/test_autofill_client.h"
-#include "components/autofill/core/browser/geo/alternative_state_name_map_test_utils.h"
+#include "components/autofill/core/browser/geo/alternative_state_name_map_test_util.h"
 #include "components/autofill/core/browser/proto/server.pb.h"
-#include "components/autofill/core/browser/test_utils/autofill_form_test_utils.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
-#include "components/autofill/core/browser/test_utils/entity_data_test_utils.h"
-#include "components/autofill/core/browser/test_utils/valuables_data_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_form_test_util.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
+#include "components/autofill/core/browser/test_utils/entity_data_test_util.h"
+#include "components/autofill/core/browser/test_utils/valuables_data_test_util.h"
 #include "components/autofill/core/common/autofill_features.h"
-#include "components/autofill/core/common/autofill_test_utils.h"
+#include "components/autofill/core/common/autofill_test_util.h"
 #include "components/autofill/core/common/form_data_test_api.h"
 #include "components/autofill/core/common/form_field_data.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -186,9 +189,7 @@ class ProfileMatchingTypesTest
  public:
   ProfileMatchingTypesTest() {
     features_.InitWithFeatures(
-        {features::kAutofillUseNegativePatternForAllAttributes,
-         features::kAutofillSupportLastNamePrefix},
-        {});
+        {features::kAutofillUseNegativePatternForAllAttributes}, {});
   }
 
  protected:
@@ -201,7 +202,7 @@ const ProfileMatchingTypesTestCase kProfileMatchingTypesTestCases[] = {
     {"Elvis", {NAME_FIRST}},
     {"Aaron", {NAME_MIDDLE}},
     {"A", {NAME_MIDDLE_INITIAL}},
-    {"Presley", {NAME_LAST, NAME_LAST_SECOND, NAME_LAST_CORE}},
+    {"Presley", {NAME_LAST, NAME_LAST_SECOND}},
     {"Elvis Aaron Presley", {NAME_FULL}},
     {"theking@gmail.com", {EMAIL_ADDRESS}},
     {"RCA", {COMPANY_NAME}},
@@ -291,14 +292,6 @@ const ProfileMatchingTypesTestCase kProfileMatchingTypesTestCases[] = {
     {"5", {UNKNOWN_TYPE}},
     {"56", {UNKNOWN_TYPE}},
     {"901", {UNKNOWN_TYPE}},
-
-    // Make sure that last name prefix and last name core is handled correctly.
-    {"Vincent Wilhelm van Gogh", {NAME_FULL}},
-    {"Vincent", {NAME_FIRST}},
-    {"Wilhelm", {NAME_MIDDLE}},
-    {"van Gogh", {NAME_LAST}},
-    {"van", {NAME_LAST_PREFIX}},
-    {"Gogh", {NAME_LAST_CORE, NAME_LAST_SECOND}},
 };
 
 // Tests that DeterminePossibleFieldTypesForUpload finds accurate possible
@@ -318,7 +311,7 @@ TEST_P(ProfileMatchingTypesTest, DeterminePossibleFieldTypesForUpload) {
 
   // Set up the test profiles.
   std::vector<AutofillProfile> profiles(
-      4, AutofillProfile(i18n_model_definition::kLegacyHierarchyCountryCode));
+      3, AutofillProfile(i18n_model_definition::kLegacyHierarchyCountryCode));
 
   test::SetProfileInfo(
       &profiles[0],
@@ -354,14 +347,6 @@ TEST_P(ProfileMatchingTypesTest, DeterminePossibleFieldTypesForUpload) {
                                          .with_phone("+33 2 49 19 70 70")
                                          .Build());
   profiles[2].set_guid(MakeGuid(1));
-
-  test::SetProfileInfo(&profiles[3], test::SetProfileInfoOptionsBuilder()
-                                         .with_first_name("Vincent")
-                                         .with_middle_name("Wilhelm")
-                                         .with_last_name("van Gogh")
-                                         .with_country("NL")
-                                         .Build());
-  profiles[3].set_guid(MakeGuid(4));
 
   CreditCard credit_card;
   test::SetCreditCardInfo(&credit_card, "John Doe", "4234-5678-9012-3456", "04",
@@ -400,8 +385,7 @@ class DeterminePossibleFieldTypesForUploadTest : public ::testing::Test {
   DeterminePossibleFieldTypesForUploadTest() {
     scoped_feature_list_.InitWithFeatures(
         {features::kAutofillAiWithDataSchema,
-         features::kAutofillAiVoteForFormatStringsForFlightNumbers,
-         features::kAutofillEnableLoyaltyCardsFilling},
+         features::kAutofillAiVoteForFormatStringsForFlightNumbers},
         {});
   }
 
@@ -714,6 +698,39 @@ TEST_F(DeterminePossibleFieldTypesForUploadTest,
   EXPECT_THAT(possible_types[0].types, UnorderedElementsAre(EMAIL_ADDRESS));
 }
 
+// Tests that a phone number whose suffix matches a masked credit card's last
+// four digits does not vote for CREDIT_CARD_NUMBER.
+TEST_F(DeterminePossibleFieldTypesForUploadTest,
+       CrowdsourceMaskedCreditCard_PhoneNumberDoesNotVoteCreditCard) {
+  constexpr std::string_view kPhoneNumber = "+1 (555) 555-1881";
+
+  std::unique_ptr<FormStructure> form_structure =
+      ConstructFormStructureFromFormData(test::GetFormData(
+          {.fields = {{.role = PHONE_HOME_WHOLE_NUMBER,
+                       .value = base::UTF8ToUTF16(kPhoneNumber)}}}));
+
+  CreditCard masked_card(CreditCard::RecordType::kMaskedServerCard,
+                         "server_id");
+  test::SetCreditCardInfo(&masked_card, "John Doe", "1881", "04", "2099", "1");
+
+  AutofillProfile profile(i18n_model_definition::kLegacyHierarchyCountryCode);
+  test::SetProfileInfo(
+      &profile,
+      test::SetProfileInfoOptionsBuilder().with_phone(kPhoneNumber).Build());
+
+  std::vector<PossibleTypes> possible_types =
+      DeterminePossibleFieldTypesForUpload(
+          {profile}, {masked_card}, std::vector<EntityInstance>(),
+          std::vector<LoyaltyCard>(),
+          /*fields_that_match_state=*/{},
+          /*last_unlocked_credit_card_cvc=*/u"", std::vector<OneTimeToken>(),
+          "en-US", form_structure->fields());
+
+  ASSERT_EQ(form_structure->field_count(), possible_types.size());
+  EXPECT_THAT(possible_types[0].types,
+              UnorderedElementsAre(PHONE_HOME_WHOLE_NUMBER));
+}
+
 // Tests if the OTP field is detected.
 TEST_F(DeterminePossibleFieldTypesForUploadTest, CrowdsourceOtpField) {
   constexpr char kOtp[] = "123456";
@@ -730,7 +747,7 @@ TEST_F(DeterminePossibleFieldTypesForUploadTest, CrowdsourceOtpField) {
       ConstructFormStructureFromFormData(form);
 
   std::vector<OneTimeToken> recent_otps = {
-      OneTimeToken(OneTimeTokenType::kSmsOtp, kOtp, base::Time::Now())};
+      OneTimeToken(OneTimeTokenType::kSmsOtp, kOtp, base::TimeTicks::Now())};
   std::vector<PossibleTypes> possible_types_otp =
       DeterminePossibleFieldTypesForUpload(
           std::vector<AutofillProfile>(), std::vector<CreditCard>(),
@@ -800,8 +817,10 @@ TEST_F(DeterminePossibleFieldTypesForUploadTest,
               Each(Field(&PossibleTypes::types, Not(Contains(ONE_TIME_CODE)))));
 }
 
-// Tests if the Autofill AI field types are crowdsourced.
-TEST_F(DeterminePossibleFieldTypesForUploadTest, CrowdsourceAutofillAiTypes) {
+// Tests if the Autofill AI field types for unmasked attributes are
+// crowdsourced.
+TEST_F(DeterminePossibleFieldTypesForUploadTest,
+       CrowdsourceUnmaskedAutofillAiTypes) {
   FormData form;
   form.set_fields({
       CreateTestFormField("first-name", "first-name", "Pippi",
@@ -849,9 +868,45 @@ TEST_F(DeterminePossibleFieldTypesForUploadTest, CrowdsourceAutofillAiTypes) {
                   HasTypes(UNKNOWN_TYPE)));
 }
 
-// Tests if format strings are crowdsourced for certain Autofill AI FieldTypes.
+// Tests if the Autofill AI field types for masked attributes are crowdsourced.
 TEST_F(DeterminePossibleFieldTypesForUploadTest,
-       CrowdsourceAutofillAiFormatStrings) {
+       CrowdsourceMaskedAutofillAiTypes) {
+  FormData form;
+  form.set_fields({
+      // Expected to receive a PASSPORT_NUMBER vote.
+      CreateTestFormField("number", "number", "1234567",
+                          FormControlType::kInputText),
+      // Expected not to receive a PASSPORT_NUMBER vote.
+      CreateTestFormField("number", "number", "7654321",
+                          FormControlType::kInputText),
+  });
+  std::unique_ptr<FormStructure> form_structure =
+      ConstructFormStructureFromFormData(form);
+
+  // Create a masked passport. The entity's number will only be a suffix of the
+  // unmasked number "1234567".
+  EntityInstance entity =
+      test::MaskEntityInstance(test::GetPassportEntityInstance(
+          {.number = u"1234567",
+           .record_type = EntityInstance::RecordType::kServerWallet}));
+  ASSERT_NE(entity.attribute(AttributeType(AttributeTypeName::kPassportNumber))
+                ->GetCompleteRawInfo(),
+            u"1234567");
+
+  EXPECT_THAT(
+      DeterminePossibleFieldTypesForUpload(
+          std::vector<AutofillProfile>(), std::vector<CreditCard>(),
+          base::span_from_ref(entity), std::vector<LoyaltyCard>(),
+          /*fields_that_match_state=*/{},
+          /*last_unlocked_credit_card_cvc=*/u"", std::vector<OneTimeToken>(),
+          "en-US", form_structure->fields()),
+      ElementsAre(HasTypes(PASSPORT_NUMBER), HasTypes(UNKNOWN_TYPE)));
+}
+
+// Tests if format strings are crowdsourced for certain unmasked Autofill AI
+// FieldTypes.
+TEST_F(DeterminePossibleFieldTypesForUploadTest,
+       CrowdsourceUnmaskedAutofillAiFormatStrings) {
   FormData form;
   form.set_fields({
       // Complete first/last name.
@@ -936,6 +991,58 @@ TEST_F(DeterminePossibleFieldTypesForUploadTest,
           AllOf(HasTypes(FLIGHT_RESERVATION_FLIGHT_NUMBER),
                 HasFlightNumberFormats("F")),
           AllOf(HasTypes(UNKNOWN_TYPE), HasNoFormats())));
+}
+
+// Tests if format strings are crowdsourced for certain masked Autofill AI
+// FieldTypes.
+TEST_F(DeterminePossibleFieldTypesForUploadTest,
+       CrowdsourceMaskedAutofillAiFormatStrings) {
+  FormData form;
+  form.set_fields({
+      // Complete passport number. Expect that a vote for PASSPORT_NUMBER
+      // without a format string. Without the unmasked value, we cannot
+      // confidently classify it as a full match.
+      CreateTestFormField("number", "number", "0123456789",
+                          FormControlType::kInputText),
+      // Affixes of the passport number.
+      // Prefix: Expect no match, since only the suffix is available on file.
+      CreateTestFormField("number", "number", "0123",
+                          FormControlType::kInputText),
+      // Short Suffix: Expect a PASSPORT_NUMBER vote and a suffix format string,
+      // because the value on file ends with the field's value.
+      CreateTestFormField("number", "number", "789",
+                          FormControlType::kInputText),
+      // Long Suffix: Expect a vote for PASSPORT_NUMBER, since the value on
+      // file is a suffix of the field's value. Like in the complete passport
+      // number case, don't expect a format string, since we cannot distinguish
+      // between a full match and a suffix match.
+      CreateTestFormField("number", "number", "23456789",
+                          FormControlType::kInputText),
+  });
+  std::unique_ptr<FormStructure> form_structure =
+      ConstructFormStructureFromFormData(form);
+
+  // Create a masked passport. The entity's number will only be a suffix of the
+  // unmasked number "0123456789".
+  EntityInstance entity =
+      test::MaskEntityInstance(test::GetPassportEntityInstance(
+          {.number = u"0123456789",
+           .record_type = EntityInstance::RecordType::kServerWallet}));
+  ASSERT_NE(entity.attribute(AttributeType(AttributeTypeName::kPassportNumber))
+                ->GetCompleteRawInfo(),
+            u"0123456789");
+
+  EXPECT_THAT(
+      DeterminePossibleFieldTypesForUpload(
+          std::vector<AutofillProfile>(), std::vector<CreditCard>(),
+          base::span_from_ref(entity), std::vector<LoyaltyCard>(),
+          /*fields_that_match_state=*/{},
+          /*last_unlocked_credit_card_cvc=*/u"", std::vector<OneTimeToken>(),
+          "en-US", form_structure->fields()),
+      ElementsAre(AllOf(HasTypes(PASSPORT_NUMBER), HasNoFormats()),
+                  AllOf(HasTypes(UNKNOWN_TYPE), HasNoFormats()),
+                  AllOf(HasTypes(PASSPORT_NUMBER), HasAffixFormats("-3")),
+                  AllOf(HasTypes(PASSPORT_NUMBER), HasNoFormats())));
 }
 
 // Test fixture for PreProcessStateMatchingTypes().
@@ -1066,7 +1173,7 @@ class FindDatesAndSetFormatStringsTest : public testing::Test {
 
     std::vector<DatesAndFormats> dafs;
     dafs.resize(fields.size());
-    for (auto [pt, daf] : base::zip(possible_types, dafs)) {
+    for (auto [pt, daf] : std::views::zip(possible_types, dafs)) {
       daf.formats = pt.formats;
       for (const auto& p : dates) {
         if (&pt == p.second) {
@@ -1082,7 +1189,7 @@ class FindDatesAndSetFormatStringsTest : public testing::Test {
       FormControlType form_control_type = FormControlType::kInputText) {
     auto field = std::make_unique<AutofillField>(CreateTestFormField(
         /*label=*/"", /*name=*/"", /*value=*/value, form_control_type));
-    field->set_is_user_edited(true);
+    field->AddFieldModifier(FieldModifier::kUser);
     return field;
   }
 
@@ -1092,7 +1199,7 @@ class FindDatesAndSetFormatStringsTest : public testing::Test {
     auto field = std::make_unique<AutofillField>(CreateTestSelectField(
         /*label=*/"", /*name=*/"", /*value=*/value, /*values=*/values,
         /*contents=*/values));
-    field->set_is_user_edited(true);
+    field->AddFieldModifier(FieldModifier::kUser);
     return field;
   }
 
@@ -1313,18 +1420,11 @@ TEST_P(FindDatesAndSetFormatStringsTest_MultipleTextInput, MultipleTextInput) {
 // Test fixture for DetermineAvailableFieldTypes().
 class DetermineAvailableFieldTypesTest : public ::testing::Test {
  public:
-  DetermineAvailableFieldTypesTest() {
-    features_.InitWithFeatures(
-        /*enabled_features=*/{features::kAutofillAiWithDataSchema,
-                              features::kAutofillEnableLoyaltyCardsFilling,
-                              features::
-                                  kAutofillEnableEmailOrLoyaltyCardsFilling},
-        /*disabled_features=*/{});
-  }
+  DetermineAvailableFieldTypesTest() = default;
 
  protected:
   test::AutofillUnitTestEnvironment autofill_test_environment_;
-  base::test::ScopedFeatureList features_;
+  base::test::ScopedFeatureList features_{features::kAutofillAiWithDataSchema};
 };
 
 // Tests that entities are included in the set of available field types.
@@ -1435,7 +1535,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         {
             .description = "Two zip fields (prefix and suffix)",
-            .fields = {{"zip1", "79401", {ADDRESS_HOME_ZIP}},
+            .fields = {{"zip1", "79401", {ADDRESS_HOME_ZIP_PREFIX}},
                        {"zip2", "4321", {ADDRESS_HOME_ZIP_SUFFIX}}},
         }}));
 
@@ -1450,17 +1550,17 @@ TEST_F(DeterminePossibleFieldTypesForUploadTest,
                  {.role = PHONE_HOME_COUNTRY_CODE,
                   .autocomplete_attribute = "tel-country-code",
                   .form_control_type = FormControlType::kSelectOne,
-                  .select_options =
-                      {
-                          {.value = u"US", .text = u"United States (+1)"},
-                          {.value = u"CA", .text = u"Canada (+1)"},
-                          {.value = u"FR", .text = u"France (+33)"},
-                          {.value = u"DE", .text = u"Germany (+49)"},
-                          {.value = u"LB", .text = u"Lebanon (+961)"},
-                      }},
+                  .select_options = {{
+                      {.value = u"US", .text = u"United States (+1)"},
+                      {.value = u"CA", .text = u"Canada (+1)"},
+                      {.value = u"FR", .text = u"France (+33)"},
+                      {.value = u"DE", .text = u"Germany (+49)"},
+                      {.value = u"LB", .text = u"Lebanon (+961)"},
+                  }}},
                  {.role = PHONE_HOME_CITY_AND_NUMBER_WITHOUT_TRUNK_PREFIX}},
   });
   test_api(form).field(1).set_value(u"US");
+  test_api(form).field(1).set_selected_option_text(u"United States (+1)");
   std::unique_ptr<FormStructure> form_structure =
       ConstructFormStructureFromFormData(form);
 
@@ -1476,6 +1576,28 @@ TEST_F(DeterminePossibleFieldTypesForUploadTest,
   EXPECT_TRUE(possible_types[1].types.contains(PHONE_HOME_COUNTRY_CODE));
   EXPECT_FALSE(possible_types[1].types.contains(ADDRESS_HOME_COUNTRY));
   EXPECT_EQ(possible_types[1].types.size(), 1u);
+}
+
+// Test that Autofill.Timing.DeterminePossibleFieldTypesForUpload is logged.
+TEST_F(DeterminePossibleFieldTypesForUploadTest,
+       DeterminePossibleFieldTypesForUpload_TimingHistogramEmitted) {
+  base::HistogramTester histogram_tester;
+  FormData form = test::GetFormData({
+      .fields = {{.role = NAME_FULL, .autocomplete_attribute = "name"}},
+  });
+  std::unique_ptr<FormStructure> form_structure =
+      ConstructFormStructureFromFormData(form);
+
+  std::vector<PossibleTypes> possible_types =
+      DeterminePossibleFieldTypesForUpload(
+          /*profiles=*/{}, /*credit_cards=*/{}, /*entities=*/{},
+          /*loyalty_cards=*/{}, /*fields_that_match_state=*/{},
+          /*last_unlocked_credit_card_cvc=*/u"", /*recent_otps=*/{}, "en-US",
+          form_structure->fields());
+  EXPECT_EQ(possible_types.size(), 1u);
+
+  histogram_tester.ExpectTotalCount(
+      "Autofill.Timing.DeterminePossibleFieldTypesForUpload", 1);
 }
 
 }  // namespace

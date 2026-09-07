@@ -12,6 +12,7 @@ import androidx.coordinatorlayout.widget.CoordinatorLayout;
 
 import org.chromium.base.MathUtils;
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.browser_controls.BottomControlsStacker;
 import org.chromium.chrome.browser.browser_controls.BottomControlsStacker.LayerType;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider.ControlsPosition;
@@ -21,7 +22,9 @@ import org.chromium.chrome.browser.browser_controls.TopControlsStacker.TopContro
 import org.chromium.chrome.browser.browser_controls.TopControlsStacker.TopControlVisibility;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.toolbar.top.ToolbarControlContainer;
+import org.chromium.chrome.browser.toolbar.top.ToolbarLayout;
 import org.chromium.components.browser_ui.widget.ClipDrawableProgressBar.DrawingInfo;
+import org.chromium.ui.base.DeviceFormFactor;
 
 import java.util.function.Supplier;
 
@@ -37,11 +40,16 @@ public class ToolbarProgressBarLayer implements TopControlLayer {
     private final ToolbarProgressBar mProgressBarView;
     private final View mToolbarHairline;
     private final Supplier<@ControlsPosition Integer> mControlsPositionSupplier;
-    private final Supplier<Integer> mBookmarkBarIdSupplier;
+    private final Supplier<Integer> mTopAnchorViewIdSupplier;
     private final TopControlsStacker mTopControlsStacker;
     private final BottomControlsStacker mBottomControlsStacker;
     private final boolean mIsToolbarPositionCustomizationEnabled;
+    private final ToolbarLayout mToolbarLayout;
     private final Handler mHandler = new Handler();
+    // Supplies the customization-path anchor update. When non-null, it is invoked reactively (via
+    // TopControlsStacker -> onTopControlLayerHeightChanged) to apply the customization-path anchor
+    // update; only used when toolbar-position customization is enabled.
+    private @Nullable Runnable mCustomizationAnchorUpdater;
 
     /**
      * Construct the browser control layer that represents the toolbar progress bar.
@@ -51,10 +59,12 @@ public class ToolbarProgressBarLayer implements TopControlLayer {
      * @param toolbarProgressBar The ToolbarProgressBar view instance.
      * @param hairlineView The view for toolbar hairline.
      * @param controlsPositionSupplier The supplier for the current ControlsPosition.
-     * @param bookmarkBarIdSupplier The supplier for the bookmark bar Id.
+     * @param topAnchorViewIdSupplier Supplier for the view Id the progress bar should be anchored
+     *     to (the bottom of the top controls).
      * @param topControlStacker The TopControlStacker instance.
      * @param bottomControlsStacker The BottomControlsStacker instance.
      * @param isToolbarPositionCustomizationEnabled Whether the toolbar position is customizable.
+     * @param toolbarLayout The toolbar layout instance.
      */
     public ToolbarProgressBarLayer(
             ToolbarControlContainer controlContainer,
@@ -62,19 +72,21 @@ public class ToolbarProgressBarLayer implements TopControlLayer {
             ToolbarProgressBar toolbarProgressBar,
             View hairlineView,
             Supplier<@ControlsPosition Integer> controlsPositionSupplier,
-            Supplier<Integer> bookmarkBarIdSupplier,
+            Supplier<Integer> topAnchorViewIdSupplier,
             TopControlsStacker topControlStacker,
             BottomControlsStacker bottomControlsStacker,
-            boolean isToolbarPositionCustomizationEnabled) {
+            boolean isToolbarPositionCustomizationEnabled,
+            ToolbarLayout toolbarLayout) {
         mControlContainer = controlContainer;
         mProgressBarContainer = progressBarContainer;
         mProgressBarView = toolbarProgressBar;
         mToolbarHairline = hairlineView;
         mControlsPositionSupplier = controlsPositionSupplier;
-        mBookmarkBarIdSupplier = bookmarkBarIdSupplier;
+        mTopAnchorViewIdSupplier = topAnchorViewIdSupplier;
         mTopControlsStacker = topControlStacker;
         mBottomControlsStacker = bottomControlsStacker;
         mIsToolbarPositionCustomizationEnabled = isToolbarPositionCustomizationEnabled;
+        mToolbarLayout = toolbarLayout;
 
         mTopControlsStacker.addControl(this);
         updateTopAnchorView();
@@ -147,11 +159,11 @@ public class ToolbarProgressBarLayer implements TopControlLayer {
             // integrated with the TopControlsStacker yet, which is why we have to
             // explicitly account for its height after calling getHeightFromLayerToX.
             int toolbarPosition = mControlsPositionSupplier.get();
-            int hairlineHeight = mToolbarHairline.getHeight();
-            // TODO(https://crbug.com/471284846): Default position should be TOP instead of NONE on
-            // large form factors.
-            if (toolbarPosition == ControlsPosition.TOP
-                    || toolbarPosition == ControlsPosition.NONE) {
+            int hairlineHeight =
+                    ChromeFeatureList.sAndroidApb144Patch4.isEnabled()
+                            ? mToolbarHairline.getHeight()
+                            : 0;
+            if (toolbarPosition == ControlsPosition.TOP) {
                 yOffset =
                         mTopControlsStacker.getHeightFromLayerToTop(TopControlType.PROGRESS_BAR)
                                 - mTopControlsStacker.getHeightFromLayerToTop(
@@ -165,6 +177,19 @@ public class ToolbarProgressBarLayer implements TopControlLayer {
                                     - mControlContainer.getToolbarHeight()
                                     - mControlContainer.getToolbarHairlineHeight();
                     yOffset += captureHeightDiff;
+                } else if (ChromeFeatureList.sAndroidTabstripStartupCaptureBugFix.isEnabled()
+                        && !ChromeFeatureList.sToolbarSnapshotRefactor.isEnabled()
+                        && DeviceFormFactor.isNonMultiDisplayContextOnTablet(
+                                mToolbarLayout.getContext())) {
+                    // TODO(peilinwang): This is a temporary fix for https://crbug.com/504438014.
+                    // See TopToolbarCoordinator.updateSceneLayerYOffset for more details. Remove
+                    // when ToolbarSnapshotRefactor launches.
+                    // Since we're shifting the tabstrip up, we need to shift the progress bar down
+                    // by the same amount so that it's still in the correct place. The position of
+                    // the progress bar is relative to the toolbar, and isn't effected by the
+                    // capture, so when the bug happens, the progress bar should still be in the
+                    // correct place.
+                    yOffset += mTopControlsStacker.getHeightFromLayerToTop(TopControlType.TOOLBAR);
                 }
             } else if (toolbarPosition == ControlsPosition.BOTTOM) {
                 yOffset =
@@ -177,13 +202,29 @@ public class ToolbarProgressBarLayer implements TopControlLayer {
         }
         drawingInfo.progressBarRect.offset(0, yOffset);
         drawingInfo.progressBarBackgroundRect.offset(0, yOffset);
+        drawingInfo.progressBarStaticBackgroundRect.offset(0, yOffset);
+    }
+
+    /**
+     * Supplies the customization-path anchor update. When set, it is invoked whenever the stacker
+     * notifies this layer of a height change, so the update is driven by TopControlsStacker instead
+     * of manual calls.
+     */
+    void setCustomizationAnchorUpdater(Runnable updater) {
+        mCustomizationAnchorUpdater = updater;
     }
 
     // Progress bar should anchor at the bottom of the top controls.
-    private void updateTopAnchorView() {
-        // When mIsToolbarPositionCustomizationEnabled, this is handled in
-        // ToolbarPositionController. Avoid doing duplicate work.
-        if (mIsToolbarPositionCustomizationEnabled) return;
+    // TODO(crbug.com/417238089): The progress bar should become its own offset-positioned
+    // TopControlLayer, removing CoordinatorLayout anchoring (setAnchorId) entirely.
+    void updateTopAnchorView() {
+        // In the customization path, delegate to the controller-supplied updater. This keeps the
+        // gravity/anchorGravity ownership in ToolbarPositionController while making the update
+        // reactive (driven by TopControlsStacker) instead of via manual calls.
+        if (mIsToolbarPositionCustomizationEnabled) {
+            if (mCustomizationAnchorUpdater != null) mCustomizationAnchorUpdater.run();
+            return;
+        }
 
         if (mProgressBarContainer.getParent() == null) return;
 
@@ -193,13 +234,7 @@ public class ToolbarProgressBarLayer implements TopControlLayer {
                     CoordinatorLayout.LayoutParams lp =
                             (CoordinatorLayout.LayoutParams)
                                     mProgressBarContainer.getLayoutParams();
-                    if (mTopControlsStacker.isLayerAtBottom(TopControlType.BOOKMARK_BAR)
-                            && mBookmarkBarIdSupplier.get() != 0) {
-                        int bookmarkBarId = mBookmarkBarIdSupplier.get();
-                        lp.setAnchorId(bookmarkBarId);
-                    } else {
-                        lp.setAnchorId(mControlContainer.getView().getId());
-                    }
+                    lp.setAnchorId(mTopAnchorViewIdSupplier.get());
                     mProgressBarContainer.setLayoutParams(lp);
                 };
 

@@ -16,7 +16,6 @@
 #include "chrome/browser/vr/model/capturing_state_model.h"
 #include "chrome/browser/vr/model/web_vr_model.h"
 #include "chrome/browser/vr/vr_export.h"
-#include "content/public/browser/web_contents.h"
 #include "device/vr/public/mojom/isolated_xr_service.mojom.h"
 #include "device/vr/public/mojom/vr_service.mojom.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -27,6 +26,15 @@ class BrowserUiInterface;
 class SchedulerUiInterface;
 class GraphicsDelegate;
 
+// VRBrowserRendererThread manages the thread that performs browser-side VR
+// rendering. It coordinates the BrowserRenderer, handles frame timing, and
+// manages the ImmersiveOverlay lifecycle.
+//
+// Threading Model:
+// - It runs on a dedicated, browser-owned thread (separate from the main UI
+//   thread) to ensure rendering is not blocked by UI tasks.
+// - It receives input poses and submits frames to the device runtime,
+//   brokered by the browser process.
 class VR_EXPORT VRBrowserRendererThread {
  public:
   VRBrowserRendererThread(

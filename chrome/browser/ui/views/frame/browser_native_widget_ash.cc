@@ -17,7 +17,8 @@
 #include "build/build_config.h"
 #include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_init_state.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/browser_widget.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
@@ -41,7 +42,8 @@ namespace {
 // request (Shift+F4/F4).
 class BrowserWindowStateDelegate : public ash::WindowStateDelegate {
  public:
-  explicit BrowserWindowStateDelegate(Browser* browser) : browser_(browser) {
+  explicit BrowserWindowStateDelegate(BrowserWindowInterface* browser)
+      : browser_(browser) {
     DCHECK(browser_);
   }
 
@@ -68,7 +70,7 @@ class BrowserWindowStateDelegate : public ash::WindowStateDelegate {
   }
 
  private:
-  raw_ptr<Browser> browser_;  // not owned.
+  raw_ptr<BrowserWindowInterface> browser_;  // not owned.
 };
 
 }  // namespace
@@ -81,13 +83,14 @@ BrowserNativeWidgetAsh::BrowserNativeWidgetAsh(BrowserWidget* browser_widget,
     : views::NativeWidgetAura(browser_widget), browser_view_(browser_view) {
   widget_observation_.Observe(browser_widget);
   GetNativeWindow()->SetName("BrowserNativeWidgetAsh");
-  Browser* browser = browser_view->browser();
+  BrowserWindowInterface* browser = browser_view->browser();
 
   created_from_drag_ = browser_widget->tab_drag_kind() != TabDragKind::kNone;
 
   // Turn on auto window management if we don't need an explicit bounds.
   // This way the requested bounds are honored.
-  if (!browser->bounds_overridden() && !browser->is_session_restore()) {
+  if (!BrowserInitState::From(browser)->bounds_overridden() &&
+      !BrowserInitState::From(browser)->is_session_restore()) {
     SetWindowAutoManaged();
   }
 }
@@ -98,15 +101,16 @@ BrowserNativeWidgetAsh::~BrowserNativeWidgetAsh() = default;
 // BrowserNativeWidgetAsh, views::NativeWidgetAura overrides:
 
 void BrowserNativeWidgetAsh::OnWidgetInitDone() {
-  Browser* browser = browser_view_->browser();
+  BrowserWindowInterface* browser = browser_view_->browser();
   ash::WindowState* window_state = ash::WindowState::Get(GetNativeWindow());
   window_state->SetDelegate(
       std::make_unique<BrowserWindowStateDelegate>(browser));
   // For legacy reasons v1 apps (like Secure Shell) are allowed to consume keys
   // like brightness, volume, etc. Otherwise these keys are handled by the
   // Ash window manager.
-  window_state->SetCanConsumeSystemKeys(browser->is_type_app() ||
-                                        browser->is_type_app_popup());
+  window_state->SetCanConsumeSystemKeys(
+      browser->GetType() == BrowserWindowInterface::Type::TYPE_APP ||
+      browser->GetType() == BrowserWindowInterface::Type::TYPE_APP_POPUP);
 
   app_restore::AppRestoreInfo::GetInstance()->OnWidgetInitialized(GetWidget());
 }
@@ -164,7 +168,7 @@ void BrowserNativeWidgetAsh::GetWindowPlacement(
   }
 
   // Session restore might be unable to correctly restore other states.
-  // For the record, https://crbug.com/396272
+  // For the record, https://crbug.com/40375827
   if (*show_state != ui::mojom::WindowShowState::kMaximized &&
       *show_state != ui::mojom::WindowShowState::kMinimized) {
     *show_state = ui::mojom::WindowShowState::kNormal;
@@ -188,24 +192,30 @@ views::Widget::InitParams BrowserNativeWidgetAsh::GetWidgetParams(
   params.native_widget = this;
   params.context = ash::Shell::GetPrimaryRootWindow();
 
-  Browser* browser = browser_view_->browser();
-  const int32_t restore_id = browser->create_params().restore_id;
+  BrowserWindowInterface* browser = browser_view_->browser();
+  const int32_t restore_id =
+      BrowserInitState::From(browser)->create_params().restore_id;
   params.init_properties_container.SetProperty(app_restore::kWindowIdKey,
-                                               browser->session_id().id());
+                                               browser->GetSessionID().id());
   params.init_properties_container.SetProperty(app_restore::kRestoreWindowIdKey,
                                                restore_id);
 
   params.init_properties_container.SetProperty(
       app_restore::kAppTypeBrowser,
-      (browser->is_type_app() || browser->is_type_app_popup()));
+      (browser->GetType() == BrowserWindowInterface::Type::TYPE_APP ||
+       browser->GetType() == BrowserWindowInterface::Type::TYPE_APP_POPUP));
 
-  params.init_properties_container.SetProperty(app_restore::kBrowserAppNameKey,
-                                               browser->app_name());
+  params.init_properties_container.SetProperty(
+      app_restore::kBrowserAppNameKey,
+      BrowserInitState::From(browser)->create_params().app_name);
   params.init_properties_container.SetProperty(
       chromeos::kShouldHaveHighlightBorderOverlay, true);
 
-  bool is_app = browser->is_type_app() || browser->is_type_app_popup();
-  web_app::AppBrowserController* controller = browser->app_controller();
+  bool is_app =
+      browser->GetType() == BrowserWindowInterface::Type::TYPE_APP ||
+      browser->GetType() == BrowserWindowInterface::Type::TYPE_APP_POPUP;
+  web_app::AppBrowserController* controller =
+      web_app::AppBrowserController::From(browser);
   if (controller && controller->system_app()) {
     params.init_properties_container.SetProperty(chromeos::kAppTypeKey,
                                                  chromeos::AppType::SYSTEM_APP);
@@ -218,11 +228,13 @@ views::Widget::InitParams BrowserNativeWidgetAsh::GetWidgetParams(
   app_restore::ModifyWidgetParams(restore_id, &params);
   // Override session restore bounds with Full Restore bounds if they exist.
   if (!params.bounds.IsEmpty()) {
-    browser->set_override_bounds(params.bounds);
+    BrowserInitState::From(browser)->set_override_bounds(params.bounds);
   } else {
-    params.bounds = browser->create_params().initial_bounds;
+    params.bounds =
+        BrowserInitState::From(browser)->create_params().initial_bounds;
   }
-  params.display_id = browser->create_params().display_id;
+  params.display_id =
+      BrowserInitState::From(browser)->create_params().display_id;
   params.rounded_corners = chromeos::GetWindowRoundedCorners();
 
   return params;
@@ -240,14 +252,19 @@ bool BrowserNativeWidgetAsh::ShouldRestorePreviousBrowserWidgetState() const {
   CHECK(browser_view_);
   // If there is no window info from full restore, maybe use the session
   // restore.
-  const int32_t restore_id =
-      browser_view_->browser()->create_params().restore_id;
+  const int32_t restore_id = BrowserInitState::From(browser_view_->browser())
+                                 ->create_params()
+                                 .restore_id;
   // Don't restore unresizable browser apps, because they can get stuck at a
   // broken size, or the browser being dragged because it should use the
   // specified bounds.
   return !app_restore::HasWindowInfo(restore_id) &&
-         browser_view_->browser()->create_params().can_resize &&
-         !browser_view_->browser()->create_params().in_tab_dragging;
+         BrowserInitState::From(browser_view_->browser())
+             ->create_params()
+             .can_resize &&
+         !BrowserInitState::From(browser_view_->browser())
+              ->create_params()
+              .in_tab_dragging;
 }
 
 bool BrowserNativeWidgetAsh::ShouldUseInitialVisibleOnAllWorkspaces() const {
@@ -275,7 +292,8 @@ void BrowserNativeWidgetAsh::SetWindowAutoManaged() {
   }
   // For browser window in Chrome OS, we should only enable the auto window
   // management logic for tabbed browser.
-  if (browser_view_->browser()->is_type_normal()) {
+  if (browser_view_->browser()->GetType() ==
+      BrowserWindowInterface::Type::TYPE_NORMAL) {
     GetNativeWindow()->SetProperty(ash::kWindowPositionManagedTypeKey, true);
   }
 }

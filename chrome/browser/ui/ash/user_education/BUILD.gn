@@ -23,33 +23,10 @@ static_library("user_education") {
     "//chrome/browser/ui/ash/system_web_apps",
     "//chrome/browser/ui/views/user_education",
     "//chrome/browser/user_education",
-    "//chrome/browser/web_applications",
     "//chromeos/ash/components/browser_context_helper",
     "//chromeos/ash/components/file_manager:constants",
     "//components/account_id",
     "//components/user_manager",
-  ]
-}
-
-source_set("unit_tests") {
-  testonly = true
-
-  sources = [ "chrome_user_education_delegate_unittest.cc" ]
-
-  deps = [
-    ":user_education",
-    "//ash",
-    "//ash:test_support",
-    "//base/test:test_support",
-    "//chrome/browser/ash/app_list",
-    "//chrome/browser/ash/login/users:test_support",
-    "//chrome/browser/feature_engagement",
-    "//chrome/browser/user_education",
-    "//chrome/browser/web_applications",
-    "//chrome/test:test_support",
-    "//chromeos/ash/components/browser_context_helper",
-    "//components/user_manager",
-    "//testing/gtest",
   ]
 }
 
@@ -62,16 +39,17 @@ source_set("browser_tests") {
 
   deps = [
     ":user_education",
-    "//ash/webui/system_apps/public:system_web_app_type",
     "//base/test:test_support",
     "//chrome/browser/apps/app_service",
+    "//chrome/browser/ash/app_list",
     "//chrome/browser/ash/system_web_apps/test_support:test_support_ui",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/ui",
     "//chrome/browser/ui/web_applications",
     "//chrome/browser/user_education",
-    "//chrome/browser/web_applications",
+    "//chrome/test/base:testing_profile",
     "//chromeos/ash/components/browser_context_helper",
+    "//chromeos/ash/components/system_web_apps:system_web_app_type",
     "//components/user_manager",
     "//content/test:test_support",
     "//testing/gtest",

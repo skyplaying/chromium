@@ -4,12 +4,11 @@
 
 #include "chrome/browser/ash/printing/enterprise/print_servers_policy_provider.h"
 
+#include "ash/constants/ash_pref_names.h"
 #include "base/functional/bind.h"
 #include "chrome/browser/ash/printing/enterprise/print_servers_provider.h"
 #include "chrome/browser/ash/printing/enterprise/print_servers_provider_factory.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/pref_names.h"
 
 namespace ash {
 
@@ -37,16 +36,16 @@ PrintServersPolicyProvider::~PrintServersPolicyProvider() {
 
 // static
 std::unique_ptr<PrintServersPolicyProvider> PrintServersPolicyProvider::Create(
+    PrefService& local_state,
     Profile* profile) {
   base::WeakPtr<PrintServersProvider> user_policy_provider =
       PrintServersProviderFactory::Get()->GetForProfile(profile);
-  user_policy_provider->SetAllowlistPref(profile->GetPrefs(),
-                                         prefs::kExternalPrintServersAllowlist);
+  user_policy_provider->SetAllowlistPref(
+      profile->GetPrefs(), ash::prefs::kExternalPrintServersAllowlist);
   base::WeakPtr<PrintServersProvider> device_policy_provider =
       PrintServersProviderFactory::Get()->GetForDevice();
   device_policy_provider->SetAllowlistPref(
-      g_browser_process->local_state(),
-      prefs::kDeviceExternalPrintServersAllowlist);
+      &local_state, ash::prefs::kDeviceExternalPrintServersAllowlist);
   return std::make_unique<PrintServersPolicyProvider>(user_policy_provider,
                                                       device_policy_provider);
 }

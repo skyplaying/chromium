@@ -20,7 +20,6 @@
 #include "chrome/common/chrome_features.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/testing_browser_process.h"
-#include "components/content_settings/core/common/features.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/history/core/browser/history_types.h"
 #include "components/prefs/pref_registry_simple.h"
@@ -41,6 +40,7 @@
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/page_transition_types.h"
 
 namespace site_protection {
 namespace {
@@ -663,8 +663,6 @@ class SiteProtectionMetricsObserverV8OptTest
   SiteProtectionMetricsObserverV8OptTest() {
     feature_list_.InitWithFeatures(
         /*enabled_features=*/{features::kProcessSelectionDeferringConditions,
-                              content_settings::features::
-                                  kBlockV8OptimizerOnUnfamiliarSitesSetting,
                               features::kOriginKeyedProcessesByDefault},
         /*disabled_features=*/{});
   }

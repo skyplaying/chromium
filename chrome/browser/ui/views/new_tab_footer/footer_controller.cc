@@ -8,6 +8,7 @@
 #include "base/time/time.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/enterprise/util/managed_browser_utils.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/views/frame/contents_container_view.h"
 #include "chrome/browser/ui/views/frame/contents_web_view.h"
 #include "chrome/browser/ui/views/new_tab_footer/footer_controller_observer.h"
@@ -16,17 +17,29 @@
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/tabs/public/tab_interface.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/url_constants.h"
 
 namespace new_tab_footer {
 
+DEFINE_USER_DATA(NewTabFooterController);
+
+// static
+NewTabFooterController* NewTabFooterController::From(
+    BrowserWindowInterface* browser) {
+  return Get(browser->GetUnownedUserDataHost());
+}
+
 NewTabFooterController::NewTabFooterController(
     Profile* profile,
-    std::vector<ContentsContainerView*> contents_container_views)
-    : profile_(profile) {
+    const std::vector<raw_ptr<ContentsContainerView, DanglingUntriaged>>&
+        contents_container_views,
+    ui::UnownedUserDataHost& host)
+    : scoped_unowned_user_data_(host, *this), profile_(profile) {
   for (ContentsContainerView* contents_container_view :
        contents_container_views) {
     footer_controllers_.push_back(std::make_unique<ContentsViewFooterCotroller>(
@@ -144,7 +157,7 @@ void NewTabFooterController::ContentsViewFooterCotroller::
   const bool show_extension = ShouldShowExtensionFooter(url);
   const bool show = show_managed || show_extension;
   if (show) {
-    footer_->ShowUI(load_start_timestamp, url);
+    footer_->ShowUI(load_start_timestamp, url, web_contents()->GetWeakPtr());
   } else {
     footer_->CloseUI();
   }
@@ -177,7 +190,7 @@ bool NewTabFooterController::ContentsViewFooterCotroller::
   if (owner_->skip_error_page_check_for_testing_) {
     return false;
   }
-  return web_contents()->GetSiteInstance()->GetSiteURL().SchemeIs(
+  return web_contents()->GetSiteInstance()->GetSecurityPrincipal().SchemeIs(
       content::kChromeErrorScheme);
 }
 

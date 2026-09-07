@@ -10,8 +10,12 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 import android.content.Intent;
+import android.content.res.Configuration;
 import android.graphics.Canvas;
 import android.graphics.Rect;
 import android.os.Bundle;
@@ -32,23 +36,22 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
-import org.robolectric.annotation.Implementation;
-import org.robolectric.annotation.Implements;
-import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.DeviceInfo;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.actor.ActorKeyedService;
+import org.chromium.chrome.browser.actor.ActorKeyedServiceFactory;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.init.ChromeBrowserInitializer;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.profiles.ProfileManagerUtils;
-import org.chromium.chrome.browser.settings.SettingsActivityUnitTest.ShadowProfileManagerUtils;
 import org.chromium.components.browser_ui.settings.CustomDividerFragment;
 import org.chromium.components.browser_ui.settings.PaddedItemDecorationWithDivider;
 import org.chromium.ui.display.DisplayUtil;
@@ -57,17 +60,13 @@ import java.util.concurrent.TimeoutException;
 
 /** Unit tests for {@link SettingsActivity}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(shadows = ShadowProfileManagerUtils.class)
-@DisableFeatures(ChromeFeatureList.SETTINGS_MULTI_COLUMN)
+@DisableFeatures({
+    ChromeFeatureList.SETTINGS_MULTI_COLUMN,
+    ChromeFeatureList.SETTINGS_IN_TAB, // crbug.com/521895796
+    ChromeFeatureList.SETTINGS_IN_TAB_DESKTOP // crbug.com/556881398
+})
 @EnableFeatures({ChromeFeatureList.ENABLE_ESCAPE_HANDLING_FOR_SECONDARY_ACTIVITIES})
 public class SettingsActivityUnitTest {
-    /** Shadow class to bypass the real call to ProfileManagerUtils. */
-    @Implements(ProfileManagerUtils.class)
-    public static class ShadowProfileManagerUtils {
-        @Implementation
-        protected static void flushPersistentDataForAllProfiles() {}
-    }
-
     @Rule public MockitoRule mockitoRule = MockitoJUnit.rule();
 
     private ActivityScenario<SettingsActivity> mActivityScenario;
@@ -75,11 +74,14 @@ public class SettingsActivityUnitTest {
 
     @Mock public ChromeBrowserInitializer mInitializer;
     @Mock public Profile mProfile;
+    @Mock public ActorKeyedService mActorKeyedService;
 
     @Before
     public void setup() {
+        ProfileManagerUtils.setFlushPersistentDataCallbackForTesting(() -> {});
         ChromeBrowserInitializer.setForTesting(mInitializer);
         ProfileManager.setLastUsedProfileForTesting(mProfile);
+        ActorKeyedServiceFactory.setForTesting(mActorKeyedService);
     }
 
     @After
@@ -171,7 +173,7 @@ public class SettingsActivityUnitTest {
         mActivityScenario.moveToState(State.RESUMED);
 
         // Wait for the UI update.
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         assertEquals("Activity title is not updated.", "new title", mSettingsActivity.getTitle());
     }
@@ -360,6 +362,33 @@ public class SettingsActivityUnitTest {
                 "Finishing the activity should not have been triggered with a handler ready to act"
                     + " on the event.",
                 mSettingsActivity.isFinishing());
+    }
+
+    @Test
+    public void testOnConfigurationChanged_updatesContainment() {
+        startSettings(TestEmbeddableFragment.class.getName());
+        mActivityScenario.moveToState(State.CREATED);
+
+        SettingsContainmentHelper mockHelper = mock(SettingsContainmentHelper.class);
+        mSettingsActivity.setContainmentHelperForTesting(mockHelper);
+        mSettingsActivity.setMultiColumnSettingsForTesting(mock(MultiColumnSettings.class));
+
+        mSettingsActivity.onConfigurationChanged(new Configuration());
+
+        verify(mockHelper).updateContainmentForAttachedFragments(any());
+    }
+
+    @Test
+    public void testOnHeaderLayoutUpdated_updatesContainment() {
+        startSettings(TestEmbeddableFragment.class.getName());
+        mActivityScenario.moveToState(State.CREATED);
+
+        SettingsContainmentHelper mockHelper = mock(SettingsContainmentHelper.class);
+        mSettingsActivity.setContainmentHelperForTesting(mockHelper);
+
+        mSettingsActivity.onHeaderLayoutUpdated();
+
+        verify(mockHelper).updateContainmentForAttachedFragments(any());
     }
 
     private void startSettings(String fragmentName) {

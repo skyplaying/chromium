@@ -49,7 +49,7 @@ double ParseDoubleFromLongString(base::span<const UChar> string,
   size_t conversion_length = string.size();
   auto conversion_buffer = base::HeapArray<LChar>::Uninit(conversion_length);
   for (size_t i = 0; i < conversion_length; ++i) {
-    conversion_buffer[i] = IsASCII(string[i]) ? string[i] : 0;
+    conversion_buffer[i] = IsAscii(string[i]) ? string[i] : 0;
   }
   return ParseDouble(base::span(conversion_buffer), parsed_length);
 }
@@ -125,8 +125,7 @@ FormatStringTruncatingTrailingZerosIfNeeded(
 base::span<const LChar> DoubleToStringConverter::ToStringWithFixedPrecision(
     double d,
     unsigned significant_figures) {
-  // Mimic String::format("%.[precision]g", ...), but use dtoas rounding
-  // facilities.
+  // Mimic printf("%.[precision]g", ...), but use dtoas rounding facilities.
   // "g": Signed value printed in f or e format, whichever is more compact for
   // the given value and precision.
   // The e format is used only when the exponent of the value is less than -4 or
@@ -149,8 +148,7 @@ base::span<const LChar> DoubleToStringConverter::ToStringWithFixedPrecision(
 base::span<const LChar> DoubleToStringConverter::ToStringWithFixedWidth(
     double d,
     unsigned decimal_places) {
-  // Mimic String::format("%.[precision]f", ...), but use dtoas rounding
-  // facilities.
+  // Mimic printf("%.[precision]f", ...), but use dtoas rounding facilities.
   // "f": Signed value having the form [ - ]dddd.dddd, where dddd is one or more
   // decimal digits.  The number of digits before the decimal point depends on
   // the magnitude of the number, and the number of digits after the decimal
@@ -186,7 +184,7 @@ double ParseDouble(base::span<const UChar> string, size_t& parsed_length) {
   std::array<LChar, kConversionBufferSize> conversion_buffer;
   for (size_t i = 0; i < length; ++i) {
     conversion_buffer[i] =
-        IsASCII(string[i]) ? static_cast<LChar>(string[i]) : 0;
+        IsAscii(string[i]) ? static_cast<LChar>(string[i]) : 0;
   }
   return ParseDouble(base::span(conversion_buffer).first(length),
                      parsed_length);

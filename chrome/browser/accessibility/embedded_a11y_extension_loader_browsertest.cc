@@ -10,7 +10,7 @@
 #include "chrome/browser/extensions/component_loader.h"
 #include "chrome/browser/profiles/profile_test_util.h"
 #include "chrome/browser/profiles/profile_window.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/test/browser_test.h"
@@ -181,34 +181,36 @@ IN_PROC_BROWSER_TEST_F(EmbeddedA11yExtensionLoaderTest,
 IN_PROC_BROWSER_TEST_F(EmbeddedA11yExtensionLoaderTest,
                        InstallsOnIncognitoProfile) {
   ProfileManager* profile_manager = g_browser_process->profile_manager();
-  Browser* incognito =
+  BrowserWindowInterface* incognito =
       CreateIncognitoBrowser(profile_manager->GetLastUsedProfile());
   content::RunAllTasksUntilIdle();
 
   InstallAndWaitForExtensionLoaded(
-      incognito->profile(), extension_misc::kReadingModeGDocsHelperExtensionId,
+      incognito->GetProfile(),
+      extension_misc::kReadingModeGDocsHelperExtensionId,
       extension_misc::kReadingModeGDocsHelperExtensionPath,
       extension_misc::kReadingModeGDocsHelperManifestFilename,
       /*should_localize=*/false);
   RemoveAndWaitForExtensionUnloaded(
-      incognito->profile(), extension_misc::kReadingModeGDocsHelperExtensionId);
+      incognito->GetProfile(),
+      extension_misc::kReadingModeGDocsHelperExtensionId);
 }
 
 #if !BUILDFLAG(IS_CHROMEOS)
 // CreateGuestBrowser() is not supported for ChromeOS out of the box.
 IN_PROC_BROWSER_TEST_F(EmbeddedA11yExtensionLoaderTest,
                        InstallsOnGuestProfile) {
-  Browser* guest_browser = CreateGuestBrowser();
+  BrowserWindowInterface* guest_browser = CreateGuestBrowser();
   content::RunAllTasksUntilIdle();
 
   InstallAndWaitForExtensionLoaded(
-      guest_browser->profile(),
+      guest_browser->GetProfile(),
       extension_misc::kReadingModeGDocsHelperExtensionId,
       extension_misc::kReadingModeGDocsHelperExtensionPath,
       extension_misc::kReadingModeGDocsHelperManifestFilename,
       /*should_localize=*/false);
   RemoveAndWaitForExtensionUnloaded(
-      guest_browser->profile(),
+      guest_browser->GetProfile(),
       extension_misc::kReadingModeGDocsHelperExtensionId);
 }
 #endif  // !BUILDFLAG(IS_CHROMEOS)

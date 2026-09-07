@@ -14,7 +14,6 @@
 #include "base/test/gmock_callback_support.h"
 #include "base/test/mock_callback.h"
 #include "base/values.h"
-#include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/extensions/api/safe_browsing_private/safe_browsing_private_event_router_factory.h"
@@ -72,7 +71,7 @@ class SafeBrowsingEventObserver : public TestEventRouter::EventObserver {
   // extensions::TestEventRouter::EventObserver:
   void OnBroadcastEvent(const extensions::Event& event) override {
     if (event.event_name == event_name_) {
-      event_args_ = base::Value(event.event_args.Clone());
+      event_args_ = base::Value(event.args().Clone());
     }
   }
 

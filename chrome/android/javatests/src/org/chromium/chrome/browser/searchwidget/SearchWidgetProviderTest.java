@@ -29,15 +29,15 @@ import org.chromium.base.test.util.AdvancedMockContext;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DisableIf;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.firstrun.FirstRunActivity;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.locale.LocaleManager;
 import org.chromium.chrome.browser.locale.LocaleManagerDelegate;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityExtras.SearchType;
-import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityPreferencesManager.SearchActivityPreferences;
+import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityPreferences;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -106,16 +106,14 @@ public class SearchWidgetProviderTest {
      * @param voiceSearchAvailable Whether voice search is available.
      */
     private void performUpdate(String searchEngineName, boolean voiceSearchAvailable) {
+        SearchActivityPreferences preferences =
+                new SearchActivityPreferences.Builder()
+                        .setSearchEngineName(searchEngineName)
+                        .setVoiceSearchAvailable(voiceSearchAvailable)
+                        .build();
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    SearchWidgetProvider.performUpdate(
-                            null,
-                            new SearchActivityPreferences(
-                                    searchEngineName,
-                                    null,
-                                    voiceSearchAvailable,
-                                    /* googleLensAvailable= */ false,
-                                    /* incognitoAvailable= */ true));
+                    SearchWidgetProvider.performUpdate(null, preferences);
                 });
     }
 

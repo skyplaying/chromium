@@ -11,9 +11,7 @@
 import '../settings_shared.css.js';
 import 'chrome://resources/ash/common/bluetooth/bluetooth_battery_icon_percentage.js';
 import 'chrome://resources/ash/common/cr_elements/localized_link/localized_link.js';
-import 'chrome://resources/ash/common/cr_elements/cr_radio_button/cr_radio_button.js';
 import 'chrome://resources/ash/common/cr_elements/cr_shared_vars.css.js';
-import '../controls/settings_radio_group.js';
 import '../controls/settings_slider.js';
 import '../controls/settings_toggle_button.js';
 import './input_device_settings_shared.css.js';
@@ -25,7 +23,6 @@ import 'chrome://resources/ash/common/cr_elements/cr_slider/cr_slider.js';
 import type {CrLinkRowElement} from 'chrome://resources/ash/common/cr_elements/cr_link_row/cr_link_row.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {assert} from 'chrome://resources/js/assert.js';
-import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import type {PolymerElementProperties} from 'chrome://resources/polymer/v3_0/polymer/interfaces.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
@@ -55,14 +52,6 @@ export class SettingsPerDeviceMouseSubsectionElement extends
 
   static get properties(): PolymerElementProperties {
     return {
-      isPeripheralCustomizationEnabled_: {
-        type: Boolean,
-        value() {
-          return loadTimeData.getBoolean('enablePeripheralCustomization');
-        },
-        readOnly: true,
-      },
-
       primaryRightPref: {
         type: Object,
         value() {
@@ -117,23 +106,6 @@ export class SettingsPerDeviceMouseSubsectionElement extends
         value: true,
       },
 
-      swapPrimaryOptions_: {
-        readOnly: true,
-        type: Array,
-        value() {
-          return [
-            {
-              value: false,
-              name: loadTimeData.getString('primaryMouseButtonLeft'),
-            },
-            {
-              value: true,
-              name: loadTimeData.getString('primaryMouseButtonRight'),
-            },
-          ];
-        },
-      },
-
       /**
        * TODO(michaelpg): settings-slider should optionally take a min and max
        * so we don't have to generate a simple range of natural numbers
@@ -172,14 +144,6 @@ export class SettingsPerDeviceMouseSubsectionElement extends
        */
       currentMouseChanged: {
         type: Boolean,
-      },
-
-      isWelcomeExperienceEnabled: {
-        type: Boolean,
-        value() {
-          return loadTimeData.getBoolean('enableWelcomeExperience');
-        },
-        readOnly: true,
       },
     };
   }
@@ -227,8 +191,6 @@ export class SettingsPerDeviceMouseSubsectionElement extends
     this.currentMouseChanged = false;
   }
 
-  isWelcomeExperienceEnabled: boolean;
-
   // DeepLinkingMixin override
   override supportedSettingIds = new Set<Setting>([
     Setting.kMouseSwapPrimaryButtons,
@@ -238,35 +200,31 @@ export class SettingsPerDeviceMouseSubsectionElement extends
     Setting.kMouseSpeed,
   ]);
 
-  private mouse: Mouse;
-  protected mousePolicies: MousePolicies;
-  private primaryRightPref: chrome.settingsPrivate.PrefObject;
-  private accelerationPref: chrome.settingsPrivate.PrefObject;
-  private sensitivityPref: chrome.settingsPrivate.PrefObject;
-  private scrollSensitivityPref: chrome.settingsPrivate.PrefObject;
-  private reverseScrollValue: boolean;
-  private scrollAccelerationValue: boolean;
+  declare private mouse: Mouse;
+  declare protected mousePolicies: MousePolicies;
+  declare private primaryRightPref: chrome.settingsPrivate.PrefObject;
+  declare private accelerationPref: chrome.settingsPrivate.PrefObject;
+  declare private sensitivityPref: chrome.settingsPrivate.PrefObject;
+  declare private scrollSensitivityPref: chrome.settingsPrivate.PrefObject;
+  declare private reverseScrollValue: boolean;
+  declare private scrollAccelerationValue: boolean;
   private isInitialized: boolean = false;
-  private isPeripheralCustomizationEnabled_: boolean;
   private inputDeviceSettingsProvider: InputDeviceSettingsProviderInterface =
       getInputDeviceSettingsProvider();
-  private mouseIndex: number;
-  private isLastDevice: boolean;
-  private customizationRestriction: CustomizationRestriction;
-  private currentMouseChanged: boolean;
-  private readonly sensitivityValues_: number[];
-  private readonly swapPrimaryOptions_: Array<{value: boolean, name: string}>;
+  declare private mouseIndex: number;
+  declare private isLastDevice: boolean;
+  declare private customizationRestriction: CustomizationRestriction;
+  declare private currentMouseChanged: boolean;
+  declare private readonly sensitivityValues_: number[];
 
   private showCustomizeButtonRow(): boolean {
-    return (this.customizationRestriction !==
-            CustomizationRestriction.kDisallowCustomizations) &&
-        this.isPeripheralCustomizationEnabled_;
+    return this.customizationRestriction !==
+        CustomizationRestriction.kDisallowCustomizations;
   }
 
   private showSwapToggleButton(): boolean {
     return this.customizationRestriction ===
-        CustomizationRestriction.kDisallowCustomizations &&
-        this.isPeripheralCustomizationEnabled_;
+        CustomizationRestriction.kDisallowCustomizations;
   }
 
   private showInstallAppRow(): boolean {

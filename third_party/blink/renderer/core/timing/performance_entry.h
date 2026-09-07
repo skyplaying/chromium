@@ -84,6 +84,9 @@ class CORE_EXPORT PerformanceEntry : public ScriptWrappable {
     kScript = 1 << 16,
     kContainer = 1 << 17,
     kInteractionContentfulPaint = 1 << 18,
+    kScroll = 1 << 19,
+    kMarkConditional = 1 << 20,
+    kMeasureConditional = 1 << 21,
   };
 
   const AtomicString& name() const { return name_; }
@@ -161,6 +164,11 @@ class CORE_EXPORT PerformanceEntry : public ScriptWrappable {
   // would not be exposed by WebIDL.
   DOMHighResTimeStamp paintTime() const;
   std::optional<DOMHighResTimeStamp> presentationTime() const;
+
+  const DOMPaintTimingInfo& GetPaintTimingInfo() const {
+    CHECK(paint_timing_info_.has_value());
+    return paint_timing_info_.value();
+  }
 
   void Trace(Visitor*) const override;
 

@@ -17,7 +17,7 @@
 #include "ui/aura/client/screen_position_client.h"
 #include "ui/aura/window.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/display/screen.h"
 #include "ui/display/tablet_state.h"
 #include "ui/gfx/geometry/transform_util.h"
@@ -383,9 +383,10 @@ void MultitaskMenuNudgeController::OnGetPreferences(
 
   if (!tablet_mode) {
     // Create the layer which pulses on the maximize/restore button.
-    pulse_layer_ = std::make_unique<ui::Layer>(ui::LAYER_SOLID_COLOR);
-    pulse_layer_->SetColor(nudge_widget_->GetColorProvider()->GetColor(
-        ui::kColorMultitaskMenuNudgePulse));
+    pulse_layer_ = std::make_unique<ui::LayerSolidColor>();
+    pulse_layer_->SetColor(
+        SkColor4f::FromColor(nudge_widget_->GetColorProvider()->GetColor(
+            ui::kColorMultitaskMenuNudgePulse)));
     window_->parent()->layer()->Add(pulse_layer_.get());
   }
 

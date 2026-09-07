@@ -5,7 +5,7 @@
 import("//chrome/common/features.gni")
 import("//extensions/buildflags/buildflags.gni")
 
-assert(enable_extensions)
+assert(enable_extensions_core)
 assert(is_chromeos)
 
 source_set("enterprise_platform_keys_private") {
@@ -34,5 +34,27 @@ source_set("enterprise_platform_keys_private") {
     "//components/pref_registry",
     "//components/prefs",
     "//content/public/browser",
+  ]
+}
+
+source_set("browser_tests") {
+  testonly = true
+
+  defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+
+  sources = [ "enterprise_platform_keys_private_api_browsertest.cc" ]
+
+  deps = [
+    ":enterprise_platform_keys_private",
+    "//base",
+    "//chrome/browser/ash/attestation:test_support",
+    "//chrome/browser/extensions",
+    "//chrome/common/extensions/api",
+    "//chrome/test:test_support",
+    "//content/test:test_support",
+    "//extensions/browser",
+    "//extensions/common",
+    "//testing/gmock",
+    "//testing/gtest",
   ]
 }

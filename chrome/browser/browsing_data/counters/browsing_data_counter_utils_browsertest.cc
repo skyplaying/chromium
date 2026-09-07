@@ -8,7 +8,6 @@
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/sync/test/integration/sync_service_impl_harness.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/unified_consent/unified_consent_service_factory.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/signin/public/base/signin_buildflags.h"
@@ -50,7 +49,7 @@ IN_PROC_BROWSER_TEST_F(BrowsingDataCounterUtilsBrowserTest,
   EXPECT_FALSE(ShouldShowCookieException(GetProfile(0)));
 
   // Sign the profile in.
-  EXPECT_TRUE(GetClient(0)->SignInPrimaryAccount());
+  EXPECT_TRUE(SignIn());
 
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
   // Users on Dice platforms are explicitly signed in.

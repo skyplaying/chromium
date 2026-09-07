@@ -27,6 +27,8 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_index_context.h"
 #include "content/public/browser/storage_partition.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/image/image_skia.h"
 #include "url/origin.h"
 
@@ -35,8 +37,8 @@
 #include "content/public/browser/page_navigator.h"
 #include "content/public/common/referrer.h"
 #else
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #endif
 
 using offline_items_collection::ContentId;

@@ -8,10 +8,10 @@
 #include <limits>
 #include <utility>
 
+#include "base/containers/to_array.h"
 #include "base/feature_list.h"
 #include "crypto/hash.h"
 #include "device/fido/device_response_converter.h"
-#include "device/fido/fido_parsing_utils.h"
 #include "device/fido/pin.h"
 #include "device/fido/public/features.h"
 #include "device/fido/public/fido_constants.h"
@@ -80,7 +80,7 @@ std::optional<CtapGetAssertionRequest> CtapGetAssertionRequest::Parse(
 
   CtapGetAssertionRequest request(rp_id_it->second.GetString(),
                                   /*client_data_json=*/std::string());
-  request.client_data_hash = fido_parsing_utils::Materialize(client_data_hash);
+  request.client_data_hash = base::ToArray(client_data_hash);
 
   const auto allow_list_it = request_map.find(cbor::Value(3));
   if (allow_list_it != request_map.end()) {
@@ -139,6 +139,11 @@ std::optional<CtapGetAssertionRequest> CtapGetAssertionRequest::Parse(
           return std::nullopt;
         }
         request.get_cred_blob = true;
+      } else if (extension_id == kExtensionCmtgKey) {
+        if (!extension.second.is_bool() || !extension.second.GetBool()) {
+          return std::nullopt;
+        }
+        request.cmtg_key = true;
       } else if (extension_id == kExtensionPRF) {
         if (!extension.second.is_map()) {
           return std::nullopt;
@@ -206,6 +211,11 @@ std::optional<CtapGetAssertionRequest> CtapGetAssertionRequest::Parse(
           // No other combinations of keys are acceptable.
           return std::nullopt;
         }
+      } else if (extension_id == kExtensionCrossDeviceFallbackUrl) {
+        if (!extension.second.is_string()) {
+          return std::nullopt;
+        }
+        request.cross_device_fallback_url = extension.second.GetString();
       }
     }
   }
@@ -284,12 +294,6 @@ CtapGetAssertionRequest& CtapGetAssertionRequest::operator=(
 
 CtapGetAssertionRequest::~CtapGetAssertionRequest() = default;
 
-void CtapGetAssertionRequest::SetClientDataJson(
-    std::string in_client_data_json) {
-  client_data_hash = crypto::hash::Sha256(in_client_data_json);
-  client_data_json = std::move(in_client_data_json);
-}
-
 std::pair<CtapRequestCommand, std::optional<cbor::Value>>
 AsCTAPRequestValuePair(const CtapGetAssertionRequest& request) {
   cbor::Value::MapValue cbor_map;
@@ -339,6 +343,11 @@ AsCTAPRequestValuePair(const CtapGetAssertionRequest& request) {
     extensions.emplace(kExtensionCredBlob, true);
   }
 
+  if (request.cross_device_fallback_url) {
+    extensions.emplace(kExtensionCrossDeviceFallbackUrl,
+                       cbor::Value(*request.cross_device_fallback_url));
+  }
+
   if (!request.prf_inputs.empty()) {
     cbor::Value::MapValue prf;
     cbor::Value::MapValue by_cred;
@@ -353,6 +362,10 @@ AsCTAPRequestValuePair(const CtapGetAssertionRequest& request) {
       prf.emplace(kExtensionPRFEvalByCredential, std::move(by_cred));
     }
     extensions.emplace(kExtensionPRF, std::move(prf));
+  }
+
+  if (request.cmtg_key) {
+    extensions.emplace(kExtensionCmtgKey, true);
   }
 
   if (!extensions.empty()) {

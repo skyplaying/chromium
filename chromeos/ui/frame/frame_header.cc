@@ -112,7 +112,7 @@ void FrameHeader::FrameAnimatorView::StartAnimation(base::TimeDelta duration) {
   old_layer->SetTransform(gfx::Transform());
   // Layer in maximized / fullscreen / snapped state is set to
   // opaque, which can prevent resterizing the new layer immediately.
-  if (old_layer->type() != ui::LAYER_SOLID_COLOR) {
+  if (!old_layer->AsSolidColor()) {
     old_layer->SetFillsBoundsOpaquely(false);
   }
 
@@ -352,6 +352,15 @@ void FrameHeader::SetFrameTextOverride(
   SchedulePaintForTitle();
 }
 
+void FrameHeader::SetPaintTitleBar(bool paint_title_bar) {
+  if (paint_title_bar_ == paint_title_bar) {
+    return;
+  }
+
+  paint_title_bar_ = paint_title_bar;
+  SchedulePaintForTitle();
+}
+
 ui::ColorId FrameHeader::GetColorIdForCurrentMode() const {
   return mode_ == MODE_ACTIVE ? ui::kColorFrameActive : ui::kColorFrameInactive;
 }
@@ -432,6 +441,9 @@ void FrameHeader::UpdateCaptionButtonColors(
 }
 
 void FrameHeader::PaintTitleBar(gfx::Canvas* canvas) {
+  if (!paint_title_bar_) {
+    return;
+  }
   std::u16string text = frame_text_override_;
   views::WidgetDelegate* target_widget_delegate =
       target_widget_->widget_delegate();
@@ -474,8 +486,13 @@ void FrameHeader::LayoutHeaderInternal() {
 
   caption_button_container()->UpdateButtonsImageAndTooltip();
 
-  caption_button_container()->SetButtonSize(
-      views::GetCaptionButtonLayoutSize(GetButtonLayoutSize()));
+  gfx::Size button_size =
+      views::GetCaptionButtonLayoutSize(GetButtonLayoutSize());
+  // Ensure buttons fill custom header height if larger than standard size.
+  if (painted_height_ > button_size.height()) {
+    button_size.set_height(painted_height_);
+  }
+  caption_button_container()->SetButtonSize(button_size);
 
   const gfx::Size caption_button_container_size =
       caption_button_container()->GetPreferredSize({});

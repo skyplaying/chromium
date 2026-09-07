@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/notreached.h"
@@ -417,6 +418,13 @@ bool SecurityDescriptor::SetDaclEntry(const Sid& sid,
     dacl_ = AccessControlList{};
   }
   return dacl_->SetEntry(sid, mode, access_mask, inheritance);
+}
+
+bool SecurityDescriptor::SetDaclEntry(const AccessToken& token,
+                                      SecurityAccessMode mode,
+                                      DWORD access_mask,
+                                      DWORD inheritance) {
+  return SetDaclEntry(token.User(), mode, access_mask, inheritance);
 }
 
 bool SecurityDescriptor::SetDaclEntry(WellKnownSid known_sid,

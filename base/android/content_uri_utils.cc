@@ -45,13 +45,22 @@ std::optional<std::string> TranslateOpenFlagsToJavaMode(uint32_t open_flags) {
     case File::FLAG_OPEN_ALWAYS | File::FLAG_READ:
     case File::FLAG_CREATE | File::FLAG_READ:
       return "r";
+    case File::FLAG_OPEN | File::FLAG_READ | File::FLAG_WRITE:
     case File::FLAG_OPEN_ALWAYS | File::FLAG_READ | File::FLAG_WRITE:
+    case File::FLAG_CREATE | File::FLAG_READ | File::FLAG_WRITE:
       return "rw";
+    case File::FLAG_OPEN | File::FLAG_APPEND:
+    case File::FLAG_OPEN | File::FLAG_APPEND | File::FLAG_WRITE:
     case File::FLAG_OPEN_ALWAYS | File::FLAG_APPEND:
+    case File::FLAG_OPEN_ALWAYS | File::FLAG_APPEND | File::FLAG_WRITE:
       return "wa";
     case File::FLAG_CREATE_ALWAYS | File::FLAG_READ | File::FLAG_WRITE:
+    case File::FLAG_OPEN_TRUNCATED | File::FLAG_READ | File::FLAG_WRITE:
       return "rwt";
     case File::FLAG_CREATE_ALWAYS | File::FLAG_WRITE:
+    case File::FLAG_CREATE_ALWAYS | File::FLAG_APPEND:
+    case File::FLAG_CREATE_ALWAYS | File::FLAG_APPEND | File::FLAG_WRITE:
+    case File::FLAG_OPEN_TRUNCATED | File::FLAG_WRITE:
       return "wt";
     default:
       return std::nullopt;
@@ -62,7 +71,10 @@ ScopedJavaLocalRef<jobject> OpenContentUri(const FilePath& content_uri,
                                            uint32_t open_flags) {
   JNIEnv* env = android::AttachCurrentThread();
   auto mode = TranslateOpenFlagsToJavaMode(open_flags);
-  CHECK(mode.has_value()) << "Unsupported flags=0x" << std::hex << open_flags;
+  if (!mode.has_value()) {
+    DLOG(ERROR) << "Unsupported flags=0x" << std::hex << open_flags;
+    return nullptr;
+  }
   return Java_ContentUriUtils_openContentUri(env, content_uri.value(), *mode);
 }
 
@@ -125,18 +137,24 @@ bool IsDocumentUri(const FilePath& content_uri) {
 
 }  // namespace internal
 
-static void JNI_ContentUriUtils_AddFileInfoToVector(JNIEnv* env,
-                                                    int64_t vector_pointer,
-                                                    std::string& uri,
-                                                    std::string& display_name,
-                                                    bool is_directory,
-                                                    int64_t size,
-                                                    int64_t last_modified) {
+static void JNI_ContentUriUtils_AddFileInfoToVector(
+    JNIEnv* env,
+    int64_t vector_pointer,
+    const std::string& uri,
+    const std::string& display_name,
+    bool is_directory,
+    int64_t size,
+    int64_t last_modified) {
   auto* result =
       reinterpret_cast<std::vector<FileEnumerator::FileInfo>*>(vector_pointer);
   result->emplace_back(FilePath(uri), FilePath(display_name), is_directory,
                        size,
                        Time::FromMillisecondsSinceUnixEpoch(last_modified));
+}
+
+bool IsContentUriFromThisApp(const FilePath& content_uri) {
+  JNIEnv* env = android::AttachCurrentThread();
+  return Java_ContentUriUtils_isUriFromThisApp(env, content_uri.value());
 }
 
 std::string GetContentUriMimeType(const FilePath& content_uri) {

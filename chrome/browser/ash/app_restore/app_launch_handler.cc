@@ -23,6 +23,7 @@
 #include "components/services/app_service/public/cpp/types_util.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/common/extension.h"
+#include "ui/base/window_open_disposition.h"
 
 namespace ash {
 
@@ -214,7 +215,7 @@ void AppLaunchHandler::LaunchSystemWebAppOrChromeApp(
       continue;
     }
 
-    // Desk templates may have partial data. See http://crbug/1232520
+    // Desk templates may have partial data. See http://crbug.com/40191158
     if (!it.second->container.has_value() ||
         !it.second->disposition.has_value() ||
         !it.second->display_id.has_value()) {

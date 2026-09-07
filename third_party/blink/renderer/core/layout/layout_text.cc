@@ -26,6 +26,7 @@
 
 #include <algorithm>
 
+#include "base/compiler_specific.h"
 #include "base/numerics/safe_conversions.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/task_type.h"
@@ -60,7 +61,6 @@
 #include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/layout/physical_box_fragment.h"
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_inline_text.h"
-#include "third_party/blink/renderer/core/layout/text_autosizer.h"
 #include "third_party/blink/renderer/core/paint/object_paint_invalidator.h"
 #include "third_party/blink/renderer/platform/fonts/character_range.h"
 #include "third_party/blink/renderer/platform/heap/disallow_new_wrapper.h"
@@ -156,15 +156,12 @@ class SelectionDisplayItemClient
 };
 
 using SelectionDisplayItemClientMap =
-    HeapHashMap<WeakMember<const LayoutText>,
-                Member<SelectionDisplayItemClient>>;
+    GCedHeapHashMap<WeakMember<const LayoutText>,
+                    Member<SelectionDisplayItemClient>>;
 SelectionDisplayItemClientMap& GetSelectionDisplayItemClientMap() {
-  using SelectionDisplayItemClientMapHolder =
-      DisallowNewWrapper<SelectionDisplayItemClientMap>;
-  DEFINE_STATIC_LOCAL(
-      Persistent<SelectionDisplayItemClientMapHolder>, holder,
-      (MakeGarbageCollected<SelectionDisplayItemClientMapHolder>()));
-  return holder->Value();
+  DEFINE_STATIC_LOCAL(Persistent<SelectionDisplayItemClientMap>, holder,
+                      (MakeGarbageCollected<SelectionDisplayItemClientMap>()));
+  return *holder;
 }
 
 }  // anonymous namespace
@@ -188,10 +185,10 @@ void LayoutText::Trace(Visitor* visitor) const {
   LayoutObject::Trace(visitor);
 }
 
-LayoutText* LayoutText::CreateEmptyAnonymous(Document& doc,
+LayoutText* LayoutText::CreateEmptyAnonymous(Document& document,
                                              const ComputedStyle* style) {
   auto* text = MakeGarbageCollected<LayoutText>(nullptr, StringImpl::empty_);
-  text->SetDocumentForAnonymous(&doc);
+  text->SetDocumentForAnonymous(document);
   text->SetStyle(style);
   return text;
 }
@@ -201,25 +198,10 @@ bool LayoutText::IsWordBreak() const {
   return false;
 }
 
-void LayoutText::StyleWillChange(StyleDifference diff,
-                                 const ComputedStyle& new_style,
-                                 StyleChangeContext& style_change_context) {
-  NOT_DESTROYED();
-
-  if (const ComputedStyle* current_style = Style()) {
-    // Process accessibility for style changes that affect text.
-    if (current_style->Visibility() != new_style.Visibility() ||
-        current_style->IsInert() != new_style.IsInert()) {
-      if (AXObjectCache* cache = GetDocument().ExistingAXObjectCache()) {
-        cache->StyleChanged(this, /*visibility_or_inertness_changed*/ true);
-      }
-    }
-  }
-}
-
 void LayoutText::StyleDidChange(
     StyleDifference diff,
     const ComputedStyle* old_style,
+    const ComputedStyle& new_style,
     const StyleChangeContext& style_change_context) {
   NOT_DESTROYED();
   // There is no need to ever schedule paint invalidations from a style change
@@ -230,8 +212,6 @@ void LayoutText::StyleDidChange(
     SetNeedsLayoutAndIntrinsicWidthsRecalc(
         layout_invalidation_reason::kStyleChange);
   }
-
-  const ComputedStyle& new_style = StyleRef();
   ETextTransform old_transform =
       old_style ? old_style->TextTransform() : ETextTransform::kNone;
   ETextSecurity old_security =
@@ -250,40 +230,36 @@ void LayoutText::StyleDidChange(
     new_style.GetFont()->WillUseFontData(TransformedText());
   }
 
-  TextAutosizer* text_autosizer = GetDocument().GetTextAutosizer();
-  if (!old_style && text_autosizer)
-    text_autosizer->Record(this);
-
   if (diff.needs_reshape) {
     valid_ng_items_ = false;
     SetNeedsCollectInlines();
   }
 
-  SetHorizontalWritingMode(new_style.IsHorizontalWritingMode());
+  if (diff.ax_visibility_or_inert_changed) {
+    if (AXObjectCache* cache = GetDocument().ExistingAXObjectCache()) {
+      cache->StyleChanged(this, /*visibility_or_inertness_changed*/ true);
+    }
+  }
+
+  SetIsHorizontalWritingMode(new_style.IsHorizontalWritingMode());
 }
 
 void LayoutText::RemoveAndDestroyTextBoxes() {
   NOT_DESTROYED();
-  if (!DocumentBeingDestroyed()) {
-    if (FirstInlineFragmentItemIndex()) {
-      DetachAxHooksIfNeeded();
-      FragmentItems::LayoutObjectWillBeDestroyed(*this);
-      ClearFirstInlineFragmentItemIndex();
-    }
-  } else if (FirstInlineFragmentItemIndex()) {
+
+  if (FirstInlineFragmentItemIndex()) {
     DetachAxHooksIfNeeded();
+    FragmentItems::LayoutObjectWillBeDestroyed(*this);
     ClearFirstInlineFragmentItemIndex();
   }
   DeleteTextBoxes();
 }
 
-void LayoutText::WillBeDestroyed() {
+void LayoutText::WillBeDestroyed(const ComputedStyle* style) {
   NOT_DESTROYED();
 
   if (SecureTextTimer* timer = GetSecureTextTimers().Take(this))
     timer->Stop();
-
-  GetSelectionDisplayItemClientMap().erase(this);
 
   if (node_id_ != kInvalidDOMNodeId) {
     if (auto* manager = GetOrResetContentCaptureManager())
@@ -292,8 +268,12 @@ void LayoutText::WillBeDestroyed() {
   }
 
   RemoveAndDestroyTextBoxes();
-  LayoutObject::WillBeDestroyed();
+
   valid_ng_items_ = false;
+
+  // We skip invoking LayoutObject::WillBeDestroyed as all of the logic (except
+  // for removing from the tree) doesn't apply to LayoutText.
+  Remove();
 
 #if DCHECK_IS_ON()
   if (IsInLayoutNGInlineFormattingContext())
@@ -487,14 +467,13 @@ String LayoutText::PlainText() const {
     // Append a trailing space of the last |text_box| if it was collapsed.
     const unsigned end_offset = text_box.dom_start_offset + text_box.dom_length;
     if (last_end_offset && text_box.dom_start_offset > last_end_offset &&
-        !IsASCIISpace(text_[end_offset - 1])) {
+        !IsAsciiSpace(text_[end_offset - 1])) {
       plain_text_builder.Append(uchar::kSpace);
     }
     last_end_offset = end_offset;
 
-    String text =
-        text_.Substring(text_box.dom_start_offset, text_box.dom_length)
-            .SimplifyWhiteSpace(kDoNotStripWhiteSpace);
+    String text = text_.substr(text_box.dom_start_offset, text_box.dom_length)
+                      .SimplifyWhiteSpace(kDoNotStripWhiteSpace);
     plain_text_builder.Append(text);
   }
   return plain_text_builder.ToString();
@@ -521,7 +500,8 @@ void LayoutText::CollectLineBoxRects(const PhysicalRectCollector& yield,
 
 void LayoutText::QuadsInAncestorInternal(Vector<gfx::QuadF>& quads,
                                          const LayoutBoxModelObject* ancestor,
-                                         MapCoordinatesFlags mode) const {
+                                         MapCoordinatesFlags mode,
+                                         BoxQuadType) const {
   NOT_DESTROYED();
   CollectLineBoxRects([this, &quads, ancestor, mode](const PhysicalRect& r) {
     quads.push_back(LocalRectToAncestorQuad(r, ancestor, mode));
@@ -663,7 +643,7 @@ void LayoutText::AbsoluteQuadsForRange(Vector<gfx::QuadF>& quads,
       }
     }
     if (!found_non_collapsed_quad)
-      quads.AppendVector(collapsed_quads_candidates);
+      quads.append_range(collapsed_quads_candidates);
     return;
   }
 }
@@ -697,8 +677,9 @@ PositionWithAffinity LayoutText::PositionForPoint(
     DCHECK(containing_block_flow);
     PhysicalOffset point_in_contents = point;
     if (containing_block_flow->IsScrollContainer()) {
-      point_in_contents += PhysicalOffset(
-          containing_block_flow->PixelSnappedScrolledContentOffset());
+      point_in_contents +=
+          PhysicalOffset(containing_block_flow->GetScrollableArea()
+                             ->PixelSnappedScrollOffset());
     }
     const auto* const text_combine = DynamicTo<LayoutTextCombine>(Parent());
     const PhysicalBoxFragment* container_fragment = nullptr;
@@ -757,7 +738,8 @@ UChar32 LayoutText::FirstCharacterAfterWhitespaceCollapsing() const {
     cursor.MoveTo(*this);
     if (cursor) {
       const StringView text = cursor.Current().Text(cursor);
-      return text.length() ? text.CodepointAt(0) : 0;
+      // SAFETY: Non-zero text length test.
+      return text.length() ? UNSAFE_BUFFERS(text.CodePointAt(0)) : 0;
     }
   }
   return 0;
@@ -770,7 +752,9 @@ UChar32 LayoutText::LastCharacterAfterWhitespaceCollapsing() const {
     cursor.MoveTo(*this);
     if (cursor) {
       const StringView text = cursor.Current().Text(cursor);
-      return text.length() ? text.CodepointAt(text.length() - 1) : 0;
+      // SAFETY: Non-zero text length test.
+      return text.length() ? UNSAFE_BUFFERS(text.CodePointAt(text.length() - 1))
+                           : 0;
     }
   }
   return 0;
@@ -905,35 +889,34 @@ void LayoutText::SetTextInternal(String text) {
 String LayoutText::TransformAndSecureText(const String& original,
                                           TextOffsetMap& offset_map) const {
   NOT_DESTROYED();
-  if (const ComputedStyle* style = Style()) {
-    String transformed =
-        style->ApplyTextTransform(original, PreviousCharacter(), &offset_map);
 
-    UChar mask = 0;
-    // We use the same characters here as for list markers.
-    // See CollectUACounterStyleRules() in ua_counter_style_map.cc.
-    switch (style->TextSecurity()) {
-      case ETextSecurity::kNone:
-        return transformed;
-      case ETextSecurity::kCircle:
-        mask = uchar::kWhiteBullet;
-        break;
-      case ETextSecurity::kDisc:
-        mask = uchar::kBullet;
-        break;
-      case ETextSecurity::kSquare:
-        mask = uchar::kBlackSquare;
-        break;
-    }
-    auto [masked, secure_map] = SecureText(transformed, mask);
-    if (!secure_map.IsEmpty()) {
-      offset_map =
-          TextOffsetMap(original.length(), offset_map, transformed.length(),
-                        secure_map, masked.length());
-    }
-    return masked;
+  const ComputedStyle& style = StyleRef();
+  String transformed =
+      style.ApplyTextTransform(original, PreviousCharacter(), &offset_map);
+
+  UChar mask = 0;
+  // We use the same characters here as for list markers.
+  // See CollectUACounterStyleRules() in ua_counter_style_map.cc.
+  switch (style.TextSecurity()) {
+    case ETextSecurity::kNone:
+      return transformed;
+    case ETextSecurity::kCircle:
+      mask = uchar::kWhiteBullet;
+      break;
+    case ETextSecurity::kDisc:
+      mask = uchar::kBullet;
+      break;
+    case ETextSecurity::kSquare:
+      mask = uchar::kBlackSquare;
+      break;
   }
-  return original;
+  auto [masked, secure_map] = SecureText(transformed, mask);
+  if (!secure_map.IsEmpty()) {
+    offset_map =
+        TextOffsetMap(original.length(), offset_map, transformed.length(),
+                      secure_map, masked.length());
+  }
+  return masked;
 }
 
 std::pair<String, TextOffsetMap> LayoutText::SecureText(const String& plain,
@@ -941,6 +924,17 @@ std::pair<String, TextOffsetMap> LayoutText::SecureText(const String& plain,
   NOT_DESTROYED();
   if (!plain.length()) {
     return std::make_pair(plain, TextOffsetMap());
+  }
+
+  if (Node* node = GetNode()) {
+    auto ancestors = FlatTreeTraversal::InclusiveAncestorsOf(*node);
+    auto it = std::ranges::find_if(ancestors, [](Node& n) {
+      return n.IsElementNode() && !n.IsInUserAgentShadowRoot();
+    });
+
+    if (it != ancestors.end()) {
+      To<Element>(*it).SetHasBeenHeuristicCustomPasswordCSS();
+    }
   }
 
   int last_typed_character_offset_to_reveal = -1;
@@ -1070,10 +1064,6 @@ void LayoutText::TextDidChangeWithoutInvalidation() {
 
   if (AXObjectCache* cache = GetDocument().ExistingAXObjectCache())
     cache->TextChanged(this);
-
-  TextAutosizer* text_autosizer = GetDocument().GetTextAutosizer();
-  if (text_autosizer)
-    text_autosizer->Record(this);
 
   if (HasNodeId()) {
     if (auto* content_capture_manager = GetOrResetContentCaptureManager())
@@ -1214,13 +1204,11 @@ std::optional<unsigned> LayoutText::CaretOffsetForPosition(
   if (position.IsAfterAnchor())
     return OriginalTextLength();
   DCHECK(position.IsOffsetInAnchor()) << position;
-  DCHECK_LE(position.OffsetInContainerNode(),
-            static_cast<int>(OriginalTextLength()))
-      << position;
+  DCHECK_LE(position.OffsetInContainerNode(), OriginalTextLength()) << position;
   return position.OffsetInContainerNode();
 }
 
-int LayoutText::CaretMinOffset() const {
+wtf_size_t LayoutText::CaretMinOffset() const {
   NOT_DESTROYED();
   DCHECK(!GetDocument().NeedsLayoutTreeUpdate());
 
@@ -1240,7 +1228,7 @@ int LayoutText::CaretMinOffset() const {
   return 0;
 }
 
-int LayoutText::CaretMaxOffset() const {
+wtf_size_t LayoutText::CaretMaxOffset() const {
   NOT_DESTROYED();
   DCHECK(!GetDocument().NeedsLayoutTreeUpdate());
 
@@ -1422,14 +1410,16 @@ const DisplayItemClient* LayoutText::GetSelectionDisplayItemClient() const {
       [[unlikely]] {
     return text_combine;
   }
-  if (!IsSelected())
+  if (!IsSelected()) {
     return nullptr;
-  auto it = GetSelectionDisplayItemClientMap().find(this);
-  if (it != GetSelectionDisplayItemClientMap().end())
-    return &*it->value;
-  return GetSelectionDisplayItemClientMap()
-      .insert(this, MakeGarbageCollected<SelectionDisplayItemClient>())
-      .stored_value->value.Get();
+  }
+
+  auto result = GetSelectionDisplayItemClientMap().insert(this, nullptr);
+  if (result.is_new_entry) {
+    result.stored_value->value =
+        MakeGarbageCollected<SelectionDisplayItemClient>();
+  }
+  return result.stored_value->value.Get();
 }
 
 PhysicalRect LayoutText::DebugRect() const {

@@ -19,7 +19,7 @@
 #include "chrome/browser/preloading/prefetch/no_state_prefetch/chrome_no_state_prefetch_contents_delegate.h"
 #include "chrome/browser/preloading/prefetch/no_state_prefetch/no_state_prefetch_manager_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
@@ -29,6 +29,7 @@
 #include "components/safe_browsing/core/browser/db/v4_protocol_manager_util.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/common/content_switches.h"
@@ -40,6 +41,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/chrome_debug_urls.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/page_transition_types.h"
 
 using content::BrowserThread;
 using content::RenderViewHost;
@@ -409,7 +411,7 @@ void PrerenderInProcessBrowserTest::TearDownInProcessBrowserTestFixture() {
   safe_browsing::SafeBrowsingService::RegisterFactory(nullptr);
 }
 
-content::SessionStorageNamespace*
+content::SessionStorageNamespaceHandle*
 PrerenderInProcessBrowserTest::GetSessionStorageNamespace() const {
   content::WebContents* web_contents = GetActiveWebContents();
   if (!web_contents) {
@@ -447,7 +449,7 @@ content::WebContents* PrerenderInProcessBrowserTest::GetActiveWebContents()
 NoStatePrefetchManager*
 PrerenderInProcessBrowserTest::GetNoStatePrefetchManager() const {
   return NoStatePrefetchManagerFactory::GetForBrowserContext(
-      current_browser()->profile());
+      current_browser()->GetProfile());
 }
 
 TestNoStatePrefetchContents*
@@ -486,7 +488,7 @@ void PrerenderInProcessBrowserTest::CreatedBrowserMainParts(
 }
 
 void PrerenderInProcessBrowserTest::SetUpOnMainThread() {
-  current_browser()->profile()->GetPrefs()->SetBoolean(
+  current_browser()->GetProfile()->GetPrefs()->SetBoolean(
       prefs::kPromptForDownload, false);
   embedded_test_server()->RegisterRequestMonitor(base::BindRepeating(
       &PrerenderInProcessBrowserTest::MonitorResourceRequest,
@@ -509,7 +511,7 @@ void PrerenderInProcessBrowserTest::SetUpOnMainThread() {
   // Increase the memory allowed in a prerendered page above normal settings.
   // Debug build bots occasionally run against the default limit, and tests
   // were failing because the prerender was canceled due to memory exhaustion.
-  // http://crbug.com/93076
+  // http://crbug.com/40613397
   no_state_prefetch_manager->mutable_config().max_bytes = 2000 * 1024 * 1024;
 
   no_state_prefetch_manager->mutable_config().rate_limit_enabled = false;

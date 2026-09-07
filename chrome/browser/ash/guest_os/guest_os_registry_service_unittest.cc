@@ -13,11 +13,11 @@
 #include "chrome/browser/ash/crostini/crostini_util.h"
 #include "chrome/browser/ash/crostini/fake_crostini_features.h"
 #include "chrome/browser/ash/guest_os/guest_os_pref_names.h"
-#include "chrome/browser/ash/plugin_vm/fake_plugin_vm_features.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_test_helper.h"
-#include "chrome/browser/browser_process.h"
+#include "chrome/browser/global_features.h"
+#include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/dbus/vm_applications/apps.pb.h"
+#include "components/application_locale_storage/application_locale_storage.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -40,9 +40,16 @@ class GuestOsRegistryServiceTest : public testing::Test {
       delete;
 
  protected:
+  ApplicationLocaleStorage* application_locale_storage() {
+    return TestingBrowserProcess::GetGlobal()
+        ->GetFeatures()
+        ->application_locale_storage();
+  }
+
   void RecreateService() {
     service_.reset(nullptr);
-    service_ = std::make_unique<GuestOsRegistryService>(&profile_);
+    service_ = std::make_unique<GuestOsRegistryService>(
+        application_locale_storage(), &profile_);
     service_->SetClockForTesting(&test_clock_);
   }
 
@@ -253,26 +260,6 @@ TEST_F(GuestOsRegistryServiceTest, NAppsInstalledHistogram) {
   RecreateService();
 }
 
-TEST_F(GuestOsRegistryServiceTest, PluginVmAppsInstalledHistogram) {
-  base::HistogramTester histogram_tester;
-
-  plugin_vm::PluginVmTestHelper test_helper(profile());
-  test_helper.AllowPluginVm();
-
-  // Plugin VM needs to be enabled before we start counting.
-  RecreateService();
-
-  test_helper.EnablePluginVm();
-  // Set up an app list with the expected number of apps.
-  ApplicationList app_list = crostini::CrostiniTestHelper::BasicAppList(
-      "app 1", "PvmDefault", "container");
-  *app_list.add_apps() = crostini::CrostiniTestHelper::BasicApp("app 2");
-  app_list.set_vm_type(vm_tools::apps::PLUGIN_VM);
-  service()->UpdateApplicationList(app_list);
-
-  RecreateService();
-}
-
 TEST_F(GuestOsRegistryServiceTest, InstallAndLaunchTime) {
   ApplicationList app_list =
       crostini::CrostiniTestHelper::BasicAppList("app", "vm", "container");
@@ -434,16 +421,14 @@ TEST_F(GuestOsRegistryServiceTest, SetAndGetRegistrationKeywords) {
   }
   service()->UpdateApplicationList(app_list);
 
-  std::optional<GuestOsRegistryService::Registration> result =
-      service()->GetRegistration(app_id);
-  g_browser_process->SetApplicationLocale("");
-  EXPECT_EQ(result->Keywords(), keywords[""]);
-  g_browser_process->SetApplicationLocale("fr");
-  EXPECT_EQ(result->Keywords(), keywords["fr"]);
-  g_browser_process->SetApplicationLocale("ge");
-  EXPECT_EQ(result->Keywords(), keywords["ge"]);
-  g_browser_process->SetApplicationLocale("te");
-  EXPECT_EQ(result->Keywords(), keywords["te"]);
+  application_locale_storage()->Set("");
+  EXPECT_EQ(service()->GetRegistration(app_id)->Keywords(), keywords[""]);
+  application_locale_storage()->Set("fr");
+  EXPECT_EQ(service()->GetRegistration(app_id)->Keywords(), keywords["fr"]);
+  application_locale_storage()->Set("ge");
+  EXPECT_EQ(service()->GetRegistration(app_id)->Keywords(), keywords["ge"]);
+  application_locale_storage()->Set("te");
+  EXPECT_EQ(service()->GetRegistration(app_id)->Keywords(), keywords["te"]);
 }
 
 TEST_F(GuestOsRegistryServiceTest, SetAndGetRegistrationExec) {
@@ -513,7 +498,6 @@ TEST_F(GuestOsRegistryServiceTest, SetAndGetPackageId) {
 
 TEST_F(GuestOsRegistryServiceTest, GetEnabledApps) {
   crostini::FakeCrostiniFeatures fake_crostini_features;
-  plugin_vm::FakePluginVmFeatures fake_plugin_vm_features;
 
   ApplicationList crostini_list;
   crostini_list.set_vm_type(VmType::TERMINA);
@@ -524,62 +508,15 @@ TEST_F(GuestOsRegistryServiceTest, GetEnabledApps) {
       crostini::CrostiniTestHelper::GenerateAppId("c", "termina", "penguin");
   service()->UpdateApplicationList(crostini_list);
 
-  ApplicationList plugin_vm_list;
-  plugin_vm_list.set_vm_type(VmType::PLUGIN_VM);
-  plugin_vm_list.set_vm_name("PvmDefault");
-  plugin_vm_list.set_container_name("penguin");
-  *plugin_vm_list.add_apps() = crostini::CrostiniTestHelper::BasicApp("p");
-  std::string p =
-      crostini::CrostiniTestHelper::GenerateAppId("p", "PvmDefault", "penguin");
-  service()->UpdateApplicationList(plugin_vm_list);
-
-  // All enabled.
+  // Enabled.
   fake_crostini_features.set_enabled(true);
-  fake_plugin_vm_features.set_enabled(true);
-  EXPECT_THAT(GetRegisteredAppIds(), testing::UnorderedElementsAre(p, c));
-  EXPECT_THAT(GetEnabledAppIds(), testing::UnorderedElementsAre(p, c));
-
-  // Crostini disabled.
-  fake_crostini_features.set_enabled(false);
-  fake_plugin_vm_features.set_enabled(true);
-  EXPECT_THAT(GetRegisteredAppIds(), testing::UnorderedElementsAre(p, c));
-  EXPECT_THAT(GetEnabledAppIds(), testing::UnorderedElementsAre(p));
-
-  // Plugin VM disabled.
-  fake_crostini_features.set_enabled(true);
-  fake_plugin_vm_features.set_enabled(false);
-  EXPECT_THAT(GetRegisteredAppIds(), testing::UnorderedElementsAre(p, c));
+  EXPECT_THAT(GetRegisteredAppIds(), testing::UnorderedElementsAre(c));
   EXPECT_THAT(GetEnabledAppIds(), testing::UnorderedElementsAre(c));
 
-  // All disabled.
+  // Disabled.
   fake_crostini_features.set_enabled(false);
-  fake_plugin_vm_features.set_enabled(false);
-  EXPECT_THAT(GetRegisteredAppIds(), testing::UnorderedElementsAre(p, c));
+  EXPECT_THAT(GetRegisteredAppIds(), testing::UnorderedElementsAre(c));
   EXPECT_THAT(GetEnabledAppIds(), testing::IsEmpty());
-}
-
-TEST_F(GuestOsRegistryServiceTest, PluginVmNameSuffix) {
-  ApplicationList crostini_list;
-  crostini_list.set_vm_type(VmType::TERMINA);
-  crostini_list.set_vm_name("termina");
-  crostini_list.set_container_name("penguin");
-  *crostini_list.add_apps() = crostini::CrostiniTestHelper::BasicApp("c");
-  std::string c =
-      crostini::CrostiniTestHelper::GenerateAppId("c", "termina", "penguin");
-  service()->UpdateApplicationList(crostini_list);
-
-  ApplicationList plugin_vm_list;
-  plugin_vm_list.set_vm_type(VmType::PLUGIN_VM);
-  plugin_vm_list.set_vm_name("PvmDefault");
-  plugin_vm_list.set_container_name("penguin");
-  *plugin_vm_list.add_apps() = crostini::CrostiniTestHelper::BasicApp("p");
-  std::string p =
-      crostini::CrostiniTestHelper::GenerateAppId("p", "PvmDefault", "penguin");
-  service()->UpdateApplicationList(plugin_vm_list);
-
-  // Crostini apps have name unchanged, PluginVM has ' (Windows)' suffix.
-  EXPECT_EQ("c", service()->GetRegistration(c)->Name());
-  EXPECT_EQ("p (Windows)", service()->GetRegistration(p)->Name());
 }
 
 }  // namespace guest_os

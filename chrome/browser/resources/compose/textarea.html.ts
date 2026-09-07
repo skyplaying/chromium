@@ -21,7 +21,7 @@ export function getHtml(this: ComposeTextareaElement) {
       autofocus
       aria-invalid="${this.invalidInput_}"
       aria-errormessage="error"
-      @change="${this.onChangeTextArea_}">
+      @change="${this.onTextAreaChange_}">
   </textarea>
   <div id="error" class="error" role="region" aria-live="assertive"
       ?hidden="${!this.invalidInput_}">
@@ -36,7 +36,10 @@ export function getHtml(this: ComposeTextareaElement) {
   <div id="readonlyText">${this.value}</div>
   <div id="editButtonContainer"
       ?hidden="${!this.shouldShowEditIcon_()}">
-    <cr-icon-button id="editButton" iron-icon="compose:edit"
+    <cr-icon-button id="editButton"
+        iron-icon="${this.webuiRoundedIconsEnabled_
+            ? 'compose:edit'
+            : 'compose:edit-old'}"
         title="$i18n{editButton}" @click="${this.onEditClick_}">
     </cr-icon-button>
   </div>

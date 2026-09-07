@@ -25,6 +25,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_FORMS_HTML_TEXT_AREA_ELEMENT_H_
 
 #include "base/gtest_prod_util.h"
+#include "third_party/blink/public/web/web_form_control_element.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/events/simulated_click_options.h"
 #include "third_party/blink/renderer/core/html/forms/text_control_element.h"
@@ -38,6 +39,10 @@ class CORE_EXPORT HTMLTextAreaElement final : public TextControlElement {
 
  public:
   explicit HTMLTextAreaElement(Document&);
+
+  ElementType GetElementType() const final {
+    return ElementType::kHTMLTextAreaElement;
+  }
 
   unsigned cols() const { return cols_; }
   unsigned rows() const { return rows_; }
@@ -76,7 +81,17 @@ class CORE_EXPORT HTMLTextAreaElement final : public TextControlElement {
 
   String DefaultToolTip() const override;
 
-  void SetFocused(bool is_focused, mojom::blink::FocusType) override;
+  using TextControlElement::SetFocused;
+  void SetFocused(bool is_focused,
+                  mojom::blink::FocusType,
+                  BlurEventBehavior) override;
+
+  // Returns a list of with information (such as typeface and glyphs) for the
+  // text inside.
+  WebFormControlElement::TextInfo GetTextInfo() const;
+
+ protected:
+  bool SupportsBaseAppearanceInternal(BaseAppearanceValue) const override;
 
  private:
   FRIEND_TEST_ALL_PREFIXES(HTMLTextAreaElementTest, SanitizeUserInputValue);
@@ -86,6 +101,7 @@ class CORE_EXPORT HTMLTextAreaElement final : public TextControlElement {
   void DidAddUserAgentShadowRoot(ShadowRoot&) override;
 
   void HandleBeforeTextInsertedEvent(BeforeTextInsertedEvent*);
+  String FilterBeforeTextInserted(const String& text) override;
   static String SanitizeUserInputValue(const String&, unsigned max_length);
   void UpdateValue();
   void SetNonDirtyValue(const String&, TextControlSetValueSelection);
@@ -117,6 +133,7 @@ class CORE_EXPORT HTMLTextAreaElement final : public TextControlElement {
   FocusgroupFlags NativeArrowKeyAxes() const final;
 
   mojom::blink::FormControlType FormControlType() const override;
+  bool SupportsReadOnly() const override { return true; }
   const AtomicString& FormControlTypeAsString() const override;
 
   FormControlState SaveFormControlState() const override;
@@ -126,6 +143,8 @@ class CORE_EXPORT HTMLTextAreaElement final : public TextControlElement {
   bool IsAutoDirectionalityFormAssociated() const final { return true; }
   int scrollWidth() override;
   int scrollHeight() override;
+  double scrollLeft() override;
+  double scrollTop() override;
   void ChildrenChanged(const ChildrenChange&) override;
   void ParseAttribute(const AttributeModificationParams&) override;
   bool IsPresentationAttribute(const QualifiedName&) const override;
@@ -155,7 +174,7 @@ class CORE_EXPORT HTMLTextAreaElement final : public TextControlElement {
   bool TooLong(const String*, NeedsToCheckDirtyFlag) const;
   bool TooShort(const String*, NeedsToCheckDirtyFlag) const;
 
-  void DidChangeIsCanvasOrInCanvasSubtree() final;
+  void DidChangeIsInCanvasSubtree() final;
 
   unsigned rows_;
   unsigned cols_;

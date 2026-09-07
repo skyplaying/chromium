@@ -8,7 +8,6 @@
 #include <utility>
 
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/tab_modal_confirm_dialog.h"
@@ -64,18 +63,21 @@ void JavaScriptTabModalDialogManagerDelegateDesktop::DidCloseDialog() {
 
 void JavaScriptTabModalDialogManagerDelegateDesktop::SetTabNeedsAttention(
     bool attention) {
-  tabs::TabInterface* tab = tabs::TabInterface::GetFromContents(web_contents_);
+  tabs::TabInterface* tab =
+      tabs::TabInterface::MaybeGetFromContents(web_contents_);
+  if (!tab) {
+    // WebContents may be detached during tab close. See crbug.com/40727952.
+    return;
+  }
   BrowserWindowInterface* browser = tab->GetBrowserWindowInterface();
   if (!browser) {
     // It's possible that the WebContents is no longer in the tab strip. If so,
-    // just give up. https://crbug.com/786178
+    // just give up. https://crbug.com/40550429
     return;
   }
 
   TabStripModel* tab_strip_model = browser->GetTabStripModel();
-  SetTabNeedsAttentionImpl(
-      attention, tab_strip_model,
-      tab_strip_model->GetIndexOfWebContents(web_contents_));
+  SetTabNeedsAttentionImpl(attention, tab_strip_model, web_contents_);
 }
 
 bool JavaScriptTabModalDialogManagerDelegateDesktop::IsWebContentsForemost() {
@@ -84,7 +86,7 @@ bool JavaScriptTabModalDialogManagerDelegateDesktop::IsWebContentsForemost() {
   if (!browser) {
     // It's rare, but there are crashes from where sites are trying to show
     // dialogs in the split second of time between when their Browser is gone
-    // and they're gone. In that case, bail. https://crbug.com/1142806
+    // and they're gone. In that case, bail. https://crbug.com/40727952
     return false;
   }
 
@@ -99,7 +101,12 @@ bool JavaScriptTabModalDialogManagerDelegateDesktop::IsWebContentsForemost() {
 }
 
 bool JavaScriptTabModalDialogManagerDelegateDesktop::IsApp() {
-  tabs::TabInterface* tab = tabs::TabInterface::GetFromContents(web_contents_);
+  tabs::TabInterface* tab =
+      tabs::TabInterface::MaybeGetFromContents(web_contents_);
+  if (!tab) {
+    // WebContents may be detached during tab close. See crbug.com/40727952.
+    return false;
+  }
   BrowserWindowInterface* browser = tab->GetBrowserWindowInterface();
   return browser &&
          (browser->GetType() == BrowserWindowInterface::Type::TYPE_APP ||
@@ -107,7 +114,8 @@ bool JavaScriptTabModalDialogManagerDelegateDesktop::IsApp() {
 }
 
 bool JavaScriptTabModalDialogManagerDelegateDesktop::CanShowModalUI() {
-  tabs::TabInterface* tab = tabs::TabInterface::GetFromContents(web_contents_);
+  tabs::TabInterface* tab =
+      tabs::TabInterface::MaybeGetFromContents(web_contents_);
   return tab && tab->CanShowModalUI();
 }
 
@@ -133,7 +141,7 @@ void JavaScriptTabModalDialogManagerDelegateDesktop::OnTabStripModelChanged(
       // At this point, this WebContents is no longer in the tabstrip. The usual
       // teardown will not be able to turn off the attention indicator, so that
       // must be done here.
-      SetTabNeedsAttentionImpl(false, tab_strip_model, replace->index);
+      SetTabNeedsAttentionImpl(false, tab_strip_model, replace->new_contents);
 
       javascript_dialogs::TabModalDialogManager::FromWebContents(web_contents_)
           ->CloseDialogWithReason(javascript_dialogs::TabModalDialogManager::
@@ -148,7 +156,7 @@ void JavaScriptTabModalDialogManagerDelegateDesktop::OnTabStripModelChanged(
         // short term because the tab in question is being removed.
         // TODO(erikchen): Clean up TabStripModel observer API so that this
         // doesn't require re-entrancy and/or works correctly
-        // https://crbug.com/842194.
+        // https://crbug.com/40575977.
         DCHECK(tab_strip_model_being_observed_);
         tab_strip_model_being_observed_->RemoveObserver(this);
         tab_strip_model_being_observed_ = nullptr;
@@ -165,8 +173,8 @@ void JavaScriptTabModalDialogManagerDelegateDesktop::OnTabStripModelChanged(
 void JavaScriptTabModalDialogManagerDelegateDesktop::SetTabNeedsAttentionImpl(
     bool attention,
     TabStripModel* tab_strip_model,
-    int index) {
-  tab_strip_model->SetTabNeedsAttentionAt(index, attention);
+    content::WebContents* web_contents) {
+  tab_strip_model->SetTabNeedsAttention(web_contents, attention);
   if (attention) {
     tab_strip_model->AddObserver(this);
     tab_strip_model_being_observed_ = tab_strip_model;

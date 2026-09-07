@@ -5,6 +5,8 @@
 #ifndef CONTENT_PUBLIC_TEST_PRELOADING_TEST_UTIL_H_
 #define CONTENT_PUBLIC_TEST_PRELOADING_TEST_UTIL_H_
 
+#include <optional>
+#include <string>
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
@@ -13,10 +15,12 @@
 #include "content/public/browser/preloading_data.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "third_party/blink/public/mojom/speculation_rules/speculation_rules.mojom-shared.h"
+#include "url/gurl.h"
 
 namespace content {
 
 class PreloadingConfig;
+class WebContents;
 
 namespace test {
 
@@ -26,7 +30,7 @@ extern const std::vector<std::string> kPreloadingAttemptUkmMetrics;
 extern const std::vector<std::string> kPreloadingPredictionUkmMetrics;
 
 // Used for generating histogram names recorded per trigger.
-inline constexpr char kPreloadingEmbedderHistgramSuffixForTesting[] =
+inline constexpr char kPreloadingEmbedderHistogramSuffixForTesting[] =
     "EmbedderHistogramSuffixForTesting";
 
 // Utility class to make building expected
@@ -143,6 +147,23 @@ class PreloadingConfigOverride {
 };
 
 void SetHasSpeculationRulesPrerender(PreloadingData* preloading_data);
+
+std::string ConvertEagernessToString(
+    blink::mojom::SpeculationEagerness eagerness);
+
+// Builds <script type="speculationrules"> element for prefetching,
+// prerendering, or prerendering until script.
+std::string BuildScriptElementSpeculationRules(
+    const std::string& action,
+    const std::vector<GURL>& urls,
+    std::optional<blink::mojom::SpeculationEagerness> eagerness = std::nullopt,
+    std::optional<std::string> no_vary_search_hint = std::nullopt,
+    const std::string& target_hint = "",
+    std::optional<std::string> ruleset_tag = std::nullopt,
+    std::optional<bool> form_submission = std::nullopt);
+
+// Returns the number of preloading attempts registered for the WebContents.
+size_t GetPreloadingAttemptsCount(WebContents* web_contents);
 
 }  // namespace test
 }  // namespace content

@@ -105,7 +105,7 @@ HRESULT LoadLegacyProcessLauncherFormat(const std::wstring& app_id,
     if (app_version.IsValid() &&
         app_version.CompareTo(
             base::Version(kAllowedLegacyProcessLauncherMaxAppVersion)) <= 0 &&
-        base::StartsWith(name, kAllowedLegacyProcessLauncherAppNamePrefix)) {
+        name.starts_with(kAllowedLegacyProcessLauncherAppNamePrefix)) {
       return HRESULT_FROM_WIN32(
           app_key.ReadValue(command_id.c_str(), &command_format));
     }
@@ -380,7 +380,7 @@ HRESULT AppCommandRunner::GetAppCommandFormatComponents(
 
   int num_args = 0;
   base::win::ScopedLocalAllocTyped<wchar_t*> argv(
-      ::CommandLineToArgvW(&command_format[0], &num_args));
+      ::CommandLineToArgvW(command_format.c_str(), &num_args));
   if (!argv || num_args < 1) {
     LOG(ERROR) << __func__ << "!argv || num_args < 1: " << num_args;
     return E_INVALIDARG;

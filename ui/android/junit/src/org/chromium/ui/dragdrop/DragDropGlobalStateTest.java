@@ -25,22 +25,23 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.shadows.ShadowSystemClock;
 
-import org.chromium.ui.dragdrop.DragDropGlobalState.TrackerToken;
+import org.chromium.base.Token;
+import org.chromium.base.test.BaseRobolectricTestRunner;
 
 import java.util.concurrent.TimeUnit;
 
-@RunWith(org.chromium.base.test.BaseRobolectricTestRunner.class)
+@RunWith(BaseRobolectricTestRunner.class)
 public final class DragDropGlobalStateTest {
     private static final int INSTANCE_ID = 1;
     private static final int INVALID_INSTANCE_ID = -1;
     private static final String M_TEXT = "text";
     @Rule public MockitoRule mMockitoProcessorRule = MockitoJUnit.rule();
     private DropDataAndroid mDropData;
-    private TrackerToken mToken;
+    private Token mToken;
 
     @Before
     public void setup() {
-        mDropData = DropDataAndroid.create(M_TEXT, null, null, null, null);
+        mDropData = DropDataAndroid.create(M_TEXT, null, null, null, null, null, null);
     }
 
     @Test
@@ -84,14 +85,14 @@ public final class DragDropGlobalStateTest {
         mToken = DragDropGlobalState.store(INVALID_INSTANCE_ID, null, null);
 
         ShadowSystemClock.advanceBy(100, TimeUnit.SECONDS);
-        TrackerToken newToken = DragDropGlobalState.store(INSTANCE_ID, mDropData, null);
+        Token newToken = DragDropGlobalState.store(INSTANCE_ID, mDropData, null);
         try {
             DragDropGlobalState.clear(mToken);
         } catch (AssertionError error) {
             DragDropGlobalState.clear(newToken);
             return;
         }
-        Assert.fail("Clear with invalid token should throughs assertion error.");
+        Assert.fail("Clear with invalid token should through assertion error.");
     }
 
     @Test

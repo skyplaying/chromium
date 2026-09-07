@@ -170,6 +170,12 @@ void SSLClientSocket::RecordSSLConnectResult(
       base::UmaHistogramSparse("Net.SSL_KeyExchange.ECDHE",
                                ssl_info.key_exchange_group);
     }
+
+    if (ssl_info.server_padding_received) {
+      base::UmaHistogramCustomTimes("Net.SSL_Connection_Latency_ServerPadding",
+                                    connect_duration, base::Milliseconds(1),
+                                    base::Minutes(1), 100);
+    }
   }
 
   base::UmaHistogramSparse("Net.SSL_Connection_Error", std::abs(result));
@@ -237,6 +243,17 @@ SSLClientContext::~SSLClientContext() {
   }
   cert_verifier_->RemoveObserver(this);
   CertDatabase::GetInstance()->RemoveObserver(this);
+}
+
+EchMode SSLClientContext::GetEchMode(std::string_view hostname) const {
+  if (ssl_config_service_) {
+    return ssl_config_service_->GetEchMode(hostname);
+  }
+  return EchMode::kOpportunistic;
+}
+
+bool SSLClientContext::IsEchEnabled(std::string_view hostname) const {
+  return GetEchMode(hostname) != EchMode::kDisabled;
 }
 
 std::unique_ptr<SSLClientSocket> SSLClientContext::CreateSSLClientSocket(

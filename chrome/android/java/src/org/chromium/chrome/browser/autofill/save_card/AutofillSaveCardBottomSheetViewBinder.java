@@ -13,6 +13,7 @@ import androidx.annotation.DrawableRes;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.autofill.AutofillUiUtils;
+import org.chromium.components.autofill.payments.LegalMessage;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel;
 
@@ -58,7 +59,7 @@ import org.chromium.ui.modelutil.PropertyModel;
                     view.mCardSubLabel,
                     model.get(AutofillSaveCardBottomSheetProperties.CARD_SUB_LABEL));
         } else if (AutofillSaveCardBottomSheetProperties.LEGAL_MESSAGE == propertyKey) {
-            AutofillSaveCardBottomSheetProperties.LegalMessage legalMessage =
+            LegalMessage legalMessage =
                     model.get(AutofillSaveCardBottomSheetProperties.LEGAL_MESSAGE);
             if (legalMessage.mLines.isEmpty()) {
                 view.mLegalMessage.setVisibility(View.GONE);
@@ -98,6 +99,15 @@ import org.chromium.ui.modelutil.PropertyModel;
         } else if (AutofillSaveCardBottomSheetProperties.LOADING_DESCRIPTION == propertyKey) {
             view.mLoadingViewContainer.setContentDescription(
                     model.get(AutofillSaveCardBottomSheetProperties.LOADING_DESCRIPTION));
+        } else if (AutofillSaveCardBottomSheetProperties.GOOGLE_PAY_PILL_LOGO == propertyKey) {
+            @DrawableRes
+            int iconID = model.get(AutofillSaveCardBottomSheetProperties.GOOGLE_PAY_PILL_LOGO);
+            if (iconID == 0) {
+                view.mGooglePayPillLogo.setVisibility(View.GONE);
+                return;
+            }
+            view.mGooglePayPillLogo.setImageResource(iconID);
+            view.mGooglePayPillLogo.setVisibility(View.VISIBLE);
         }
     }
 

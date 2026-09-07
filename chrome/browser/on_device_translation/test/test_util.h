@@ -18,7 +18,7 @@
 #include "content/public/browser/render_process_host.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
-class Browser;
+class BrowserWindowInterface;
 
 namespace on_device_translation {
 
@@ -30,6 +30,10 @@ class MockComponentManager : public ComponentManager {
   // Disallow copy and assign.
   MockComponentManager(const MockComponentManager&) = delete;
   MockComponentManager& operator=(const MockComponentManager&) = delete;
+
+  void SetOnInstallationChangedCallback(base::RepeatingClosure callback) {
+    on_installation_changed_callback_ = std::move(callback);
+  }
 
   // ComponentManager implements:
   MOCK_METHOD(void, RegisterTranslateKitComponentImpl, (), (override));
@@ -99,7 +103,26 @@ class MockComponentManager : public ComponentManager {
 
   const base::FilePath package_dir_;
   base::AutoReset<ComponentManager*> mock_component_manager_;
+  base::RepeatingClosure on_installation_changed_callback_;
   base::WeakPtrFactory<MockComponentManager> weak_ptr_factory_{this};
+};
+
+class TestInstallerAdapter : public OnDeviceTranslationInstaller {
+ public:
+  TestInstallerAdapter();
+  ~TestInstallerAdapter() override;
+
+  bool IsInit() const override;
+  std::set<LanguagePackKey> RegisteredLanguagePacks() const override;
+  std::set<LanguagePackKey> InstalledLanguagePacks() const override;
+  base::FilePath GetLibraryPath() const override;
+  base::FilePath GetLanguagePackPath(
+      LanguagePackKey language_pack) const override;
+  void Init(base::RepeatingClosure on_ready_callback) override;
+  void InstallLanguagePack(LanguagePackKey language_pack) override;
+  void UnInstallLanguagePack(LanguagePackKey language_pack) override;
+  void AddObserver(Observer* observer) override;
+  void RemoveObserver(Observer* observer) override;
 };
 
 class MockTranslationManagerImpl : public TranslationManagerImpl {
@@ -133,23 +156,23 @@ std::string CreateFakeDictionaryData(const std::string_view sourceLang,
 
 // Tests that the simple translation works. The dictionary data generated using
 // CreateFakeDictionaryData() must be installed to pass the test.
-void TestSimpleTranslationWorks(Browser* browser,
+void TestSimpleTranslationWorks(BrowserWindowInterface* browser,
                                 LanguagePackKey language_pack_key);
-void TestSimpleTranslationWorks(Browser* browser,
+void TestSimpleTranslationWorks(BrowserWindowInterface* browser,
                                 const std::string_view sourceLang,
                                 const std::string_view targetLang);
 
 // Tests that the createTranslator() returns the expected result.
-void TestCreateTranslator(Browser* browser,
+void TestCreateTranslator(BrowserWindowInterface* browser,
                           LanguagePackKey language_pack_key,
                           const std::string_view result);
-void TestCreateTranslator(Browser* browser,
+void TestCreateTranslator(BrowserWindowInterface* browser,
                           const std::string_view sourceLang,
                           const std::string_view targetLang,
                           const std::string_view result);
 
 // Tests that`availability()` returns the expected result.
-void TestTranslationAvailable(Browser* browser,
+void TestTranslationAvailable(BrowserWindowInterface* browser,
                               const std::string_view sourceLang,
                               const std::string_view targetLang,
                               const std::string_view result);

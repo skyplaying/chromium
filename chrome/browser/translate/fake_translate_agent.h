@@ -29,14 +29,9 @@
 #include "components/translate/core/browser/translate_manager.h"
 #include "components/translate/core/browser/translate_ui_delegate.h"
 #include "components/translate/core/common/language_detection_details.h"
-#include "content/public/browser/navigation_details.h"
-#include "content/public/browser/navigation_entry.h"
-#include "content/public/browser/web_contents.h"
-#include "content/public/common/url_constants.h"
-#include "content/public/test/navigation_simulator.h"
-#include "content/public/test/test_renderer_host.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
+#include "pdf/buildflags.h"
 
 class FakeTranslateAgent : public translate::mojom::TranslateAgent {
  public:
@@ -56,6 +51,12 @@ class FakeTranslateAgent : public translate::mojom::TranslateAgent {
                       TranslateFrameCallback callback) override;
 
   void RevertTranslation() override;
+
+#if BUILDFLAG(ENABLE_PDF)
+  void PdfPageCaptured(const std::u16string& contents,
+                       const std::string& pdf_lang,
+                       const GURL& page_url) override;
+#endif
 
   void PageTranslated(bool cancelled,
                       const std::string& source_lang,

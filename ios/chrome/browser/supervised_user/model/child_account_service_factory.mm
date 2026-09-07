@@ -7,10 +7,11 @@
 #import "base/check_deref.h"
 #import "base/functional/callback_helpers.h"
 #import "base/no_destructor.h"
+#import "components/supervised_user/core/browser/child_account_service.h"
+#import "components/supervised_user/core/browser/family_link_settings_service.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
-#import "ios/chrome/browser/supervised_user/model/list_family_members_service_factory.h"
-#import "ios/chrome/browser/supervised_user/model/supervised_user_service_factory.h"
+#import "ios/chrome/browser/supervised_user/model/family_link_settings_service_factory.h"
 
 // static
 supervised_user::ChildAccountService* ChildAccountServiceFactory::GetForProfile(
@@ -28,20 +29,22 @@ ChildAccountServiceFactory* ChildAccountServiceFactory::GetInstance() {
 
 ChildAccountServiceFactory::ChildAccountServiceFactory()
     : ProfileKeyedServiceFactoryIOS("ChildAccountService") {
+  // Source of truth for the supervision status.
   DependsOn(IdentityManagerFactory::GetInstance());
-  // Required to consume changes indicated by this service.
-  DependsOn(SupervisedUserServiceFactory::GetInstance());
-  DependsOn(ListFamilyMembersServiceFactory::GetInstance());
+  // Consumer that shall be activated according to supervision status.
+  DependsOn(supervised_user::FamilyLinkSettingsServiceFactory::GetInstance());
 }
 
 std::unique_ptr<KeyedService>
 ChildAccountServiceFactory::BuildServiceInstanceFor(ProfileIOS* profile) const {
-  CHECK(SupervisedUserServiceFactory::GetForProfile(profile));
+  supervised_user::FamilyLinkSettingsService& family_link_settings_service =
+      CHECK_DEREF(
+          supervised_user::FamilyLinkSettingsServiceFactory::GetForProfile(
+              profile));
   return std::make_unique<supervised_user::ChildAccountService>(
       CHECK_DEREF(profile->GetPrefs()),
       IdentityManagerFactory::GetForProfile(profile),
-      profile->GetSharedURLLoaderFactory(),
+      family_link_settings_service,
       // Callback relevant only for Chrome OS.
-      /*check_user_child_status_callback=*/base::DoNothing(),
-      CHECK_DEREF(ListFamilyMembersServiceFactory::GetForProfile(profile)));
+      /*check_user_child_status_callback=*/base::DoNothing());
 }

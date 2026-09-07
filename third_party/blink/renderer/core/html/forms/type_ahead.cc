@@ -30,7 +30,6 @@
 #include "third_party/blink/renderer/core/html/forms/type_ahead.h"
 
 #include "third_party/blink/renderer/core/events/keyboard_event.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/text/character_names.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
 #include "third_party/blink/renderer/platform/wtf/text/unicode.h"
@@ -53,7 +52,15 @@ static String StripLeadingWhiteSpace(const String& string) {
     }
   }
 
-  return string.Substring(i, length - i);
+  return string.substr(i, length - i);
+}
+
+// static
+bool TypeAhead::ShouldHandleKeyboardEvent(const KeyboardEvent& keyboard_event) {
+  return keyboard_event.type() == event_type_names::kKeypress &&
+         !keyboard_event.ctrlKey() && !keyboard_event.altKey() &&
+         !keyboard_event.metaKey() &&
+         unicode::IsPrintableChar(keyboard_event.charCode());
 }
 
 int TypeAhead::HandleEvent(const KeyboardEvent& event,
@@ -110,7 +117,7 @@ int TypeAhead::HandleEvent(const KeyboardEvent& event,
   }
 
   if (match_mode & kMatchIndex) {
-    int index = StringToInt(buffer_.ToString()).value_or(0);
+    int index = StringToIntLoose(buffer_.ToString()).value_or(0);
     if (index > 0 && index <= option_count) {
       return index - 1;
     }

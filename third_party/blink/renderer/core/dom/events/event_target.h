@@ -171,7 +171,12 @@ class CORE_EXPORT EventTarget : public ScriptWrappable {
                         bool use_capture = false);
   bool addEventListener(const AtomicString& event_type,
                         EventListener*,
-                        AddEventListenerOptionsResolved*);
+                        AddEventListenerOptionsResolved&);
+  // Deleted so that passing a pointer is a compile error rather than silently
+  // converting to `true` for the `use_capture` overload above.
+  bool addEventListener(const AtomicString&,
+                        EventListener*,
+                        AddEventListenerOptionsResolved*) = delete;
 
   bool removeEventListener(const AtomicString& event_type, V8EventListener*);
   bool removeEventListener(
@@ -203,13 +208,15 @@ class CORE_EXPORT EventTarget : public ScriptWrappable {
   bool HasEventListeners() const;
   bool HasEventListeners(const AtomicString& event_type) const;
   bool HasAnyEventListeners(const Vector<AtomicString>& event_types) const;
-  bool HasCapturingEventListeners(const AtomicString& event_type);
+  bool HasCapturingEventListeners(const AtomicString& event_type) const;
   bool HasJSBasedEventListeners(const AtomicString& event_type) const;
   EventListenerVector* GetEventListeners(const AtomicString& event_type);
+  const EventListenerVector* GetEventListeners(
+      const AtomicString& event_type) const;
   // Number of event listeners for |event_type| registered at this event target.
   int NumberOfEventListeners(const AtomicString& event_type) const;
 
-  Vector<AtomicString> EventTypes();
+  Vector<AtomicString> EventTypes() const;
 
   DispatchEventResult FireEventListeners(Event&);
 
@@ -223,7 +230,8 @@ class CORE_EXPORT EventTarget : public ScriptWrappable {
   // window.document.body.
   bool IsTopLevelNode();
 
-  EventTargetData* GetEventTargetData();
+  EventTargetData* GetEventTargetData() { return data_.Get(); }
+  const EventTargetData* GetEventTargetData() const { return data_.Get(); }
 
   // GlobalEventHandlers:
   // These event listener helpers are defined internally for all EventTargets,
@@ -235,6 +243,7 @@ class CORE_EXPORT EventTarget : public ScriptWrappable {
   DEFINE_ATTRIBUTE_EVENT_LISTENER(animationiteration, kAnimationiteration)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(animationstart, kAnimationstart)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(auxclick, kAuxclick)
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(beforefilter, kBeforefilter)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(beforeinput, kBeforeinput)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(beforematch, kBeforematch)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(beforetoggle, kBeforetoggle)
@@ -246,6 +255,7 @@ class CORE_EXPORT EventTarget : public ScriptWrappable {
   DEFINE_ATTRIBUTE_EVENT_LISTENER(click, kClick)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(close, kClose)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(command, kCommand)
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(complete, kComplete)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(contentvisibilityautostatechange,
                                   kContentvisibilityautostatechange)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(contextmenu, kContextmenu)
@@ -264,7 +274,6 @@ class CORE_EXPORT EventTarget : public ScriptWrappable {
   DEFINE_ATTRIBUTE_EVENT_LISTENER(emptied, kEmptied)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(ended, kEnded)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(error, kError)
-  DEFINE_ATTRIBUTE_EVENT_LISTENER(fencedtreeclick, kFencedtreeclick)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(focus, kFocus)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(formdata, kFormdata)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(gotpointercapture, kGotpointercapture)
@@ -286,7 +295,10 @@ class CORE_EXPORT EventTarget : public ScriptWrappable {
   DEFINE_ATTRIBUTE_EVENT_LISTENER(mouseover, kMouseover)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(mouseup, kMouseup)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(mousewheel, kMousewheel)
-  DEFINE_ATTRIBUTE_EVENT_LISTENER(overscroll, kOverscroll)
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(overscrollcancel, kOverscrollcancel)
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(overscrollchanging, kOverscrollchanging)
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(overscrollend, kOverscrollend)
+  DEFINE_ATTRIBUTE_EVENT_LISTENER(overscrollstart, kOverscrollstart)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(pause, kPause)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(play, kPlay)
   DEFINE_ATTRIBUTE_EVENT_LISTENER(playing, kPlaying)
@@ -346,7 +358,7 @@ class CORE_EXPORT EventTarget : public ScriptWrappable {
 
   virtual bool AddEventListenerInternal(const AtomicString& event_type,
                                         EventListener*,
-                                        const AddEventListenerOptionsResolved*);
+                                        const AddEventListenerOptionsResolved&);
   bool RemoveEventListenerInternal(
       const AtomicString& event_type,
       const EventListener*,
@@ -369,7 +381,7 @@ class CORE_EXPORT EventTarget : public ScriptWrappable {
   LocalDOMWindow* ExecutingWindow();
   void SetDefaultAddEventListenerOptions(const AtomicString& event_type,
                                          EventListener*,
-                                         AddEventListenerOptionsResolved*);
+                                         AddEventListenerOptionsResolved&);
 
   RegisteredEventListener* GetAttributeRegisteredEventListener(
       const AtomicString& event_type);
@@ -399,9 +411,7 @@ class CORE_EXPORT EventTarget : public ScriptWrappable {
 
 DISABLE_CFI_PERF
 inline bool EventTarget::HasEventListeners() const {
-  // FIXME: We should have a const version of eventTargetData.
-  if (const EventTargetData* d =
-          const_cast<EventTarget*>(this)->GetEventTargetData())
+  if (const EventTargetData* d = GetEventTargetData())
     return !d->event_listener_map.IsEmpty();
   return false;
 }
@@ -409,9 +419,7 @@ inline bool EventTarget::HasEventListeners() const {
 DISABLE_CFI_PERF
 inline bool EventTarget::HasEventListeners(
     const AtomicString& event_type) const {
-  // FIXME: We should have const version of eventTargetData.
-  if (const EventTargetData* d =
-          const_cast<EventTarget*>(this)->GetEventTargetData())
+  if (const EventTargetData* d = GetEventTargetData())
     return d->event_listener_map.Contains(event_type);
   return false;
 }
@@ -427,8 +435,8 @@ inline bool EventTarget::HasAnyEventListeners(
 }
 
 inline bool EventTarget::HasCapturingEventListeners(
-    const AtomicString& event_type) {
-  EventTargetData* d = GetEventTargetData();
+    const AtomicString& event_type) const {
+  const EventTargetData* d = GetEventTargetData();
   if (!d)
     return false;
   return d->event_listener_map.ContainsCapturing(event_type);
@@ -436,9 +444,7 @@ inline bool EventTarget::HasCapturingEventListeners(
 
 inline bool EventTarget::HasJSBasedEventListeners(
     const AtomicString& event_type) const {
-  // TODO(rogerj): We should have const version of eventTargetData.
-  if (const EventTargetData* d =
-          const_cast<EventTarget*>(this)->GetEventTargetData())
+  if (const EventTargetData* d = GetEventTargetData())
     return d->event_listener_map.ContainsJSBasedEventListeners(event_type);
   return false;
 }

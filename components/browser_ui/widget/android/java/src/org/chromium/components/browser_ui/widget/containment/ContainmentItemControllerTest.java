@@ -28,8 +28,8 @@ import org.chromium.base.test.util.Batch;
 import org.chromium.components.browser_ui.settings.BlankUiTestActivitySettingsTestRule;
 import org.chromium.components.browser_ui.settings.PlaceholderSettingsForTest;
 import org.chromium.components.browser_ui.settings.SettingsUtils;
+import org.chromium.components.browser_ui.widget.R;
 import org.chromium.components.browser_ui.widget.containment.ContainmentItem.BackgroundStyle;
-import org.chromium.components.browser_ui.widget.test.R;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -48,10 +48,6 @@ public class ContainmentItemControllerTest {
     private int mDefaultContainerVerticalMargin;
     private int mDefaultMargin;
     private int mBackgroundColor;
-
-    private static final int CUSTOM_TOP_MARGIN = 100;
-    private static final int CUSTOM_BOTTOM_MARGIN = 200;
-    private static final int CUSTOM_HORIZONTAL_MARGIN = 50;
 
     private Context mContext;
     private ContainmentItemController mController;

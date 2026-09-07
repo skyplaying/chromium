@@ -110,21 +110,17 @@ TEST(VTTScannerTest, BasicOperations2) {
   TEST_WITH(ScanSequenceHelper2, "foe");
 }
 
-bool LowerCaseAlpha(UChar c) {
-  return c >= 'a' && c <= 'z';
-}
-
 void ScanWithPredicate(const String& input) {
   VTTScanner scanner(input);
   EXPECT_FALSE(scanner.IsAtEnd());
   // Collect "bad".
-  size_t lc_run_length = scanner.CountWhile<LowerCaseAlpha>();
+  size_t lc_run_length = scanner.CountWhile<IsAsciiLower>();
   // CountWhile doesn't move the scan position.
   EXPECT_TRUE(scanner.Match('b'));
 
   size_t length_before = scanner.Remaining();
   // Consume "bad".
-  scanner.SkipWhile<LowerCaseAlpha>();
+  scanner.SkipWhile<IsAsciiLower>();
   EXPECT_TRUE(scanner.Match('A'));
   EXPECT_EQ(scanner.Remaining(), length_before - lc_run_length);
 
@@ -132,13 +128,13 @@ void ScanWithPredicate(const String& input) {
   EXPECT_TRUE(scanner.Scan('A'));
 
   // Collect "bing".
-  lc_run_length = scanner.CountWhile<LowerCaseAlpha>();
+  lc_run_length = scanner.CountWhile<IsAsciiLower>();
   // CountWhile doesn't move the scan position.
   EXPECT_FALSE(scanner.IsAtEnd());
 
   length_before = scanner.Remaining();
   // Consume "bing".
-  scanner.SkipWhile<LowerCaseAlpha>();
+  scanner.SkipWhile<IsAsciiLower>();
   EXPECT_EQ(scanner.Remaining(), length_before - lc_run_length);
   EXPECT_TRUE(scanner.IsAtEnd());
 }
@@ -153,13 +149,13 @@ void ScanWithInvPredicate(const String& input) {
   VTTScanner scanner(input);
   EXPECT_FALSE(scanner.IsAtEnd());
   // Collect "BAD".
-  size_t uc_run_length = scanner.CountUntil<LowerCaseAlpha>();
+  size_t uc_run_length = scanner.CountUntil<IsAsciiLower>();
   // CountUntil doesn't move the scan position.
   EXPECT_TRUE(scanner.Match('B'));
 
   size_t length_before = scanner.Remaining();
   // Consume "BAD".
-  scanner.SkipUntil<LowerCaseAlpha>();
+  scanner.SkipUntil<IsAsciiLower>();
   EXPECT_TRUE(scanner.Match('a'));
   EXPECT_EQ(scanner.Remaining(), length_before - uc_run_length);
 
@@ -167,13 +163,13 @@ void ScanWithInvPredicate(const String& input) {
   EXPECT_TRUE(scanner.Scan('a'));
 
   // Collect "BING".
-  uc_run_length = scanner.CountUntil<LowerCaseAlpha>();
+  uc_run_length = scanner.CountUntil<IsAsciiLower>();
   // CountUntil doesn't move the scan position.
   EXPECT_FALSE(scanner.IsAtEnd());
 
   length_before = scanner.Remaining();
   // Consume "BING".
-  scanner.SkipUntil<LowerCaseAlpha>();
+  scanner.SkipUntil<IsAsciiLower>();
   EXPECT_EQ(scanner.Remaining(), length_before - uc_run_length);
   EXPECT_TRUE(scanner.IsAtEnd());
 }
@@ -189,7 +185,7 @@ void ScanRuns(const String& input) {
   String bar_string("bar");
   VTTScanner scanner(input);
   EXPECT_FALSE(scanner.IsAtEnd());
-  VTTScanner foo_scanner = scanner.SubrangeWhile<LowerCaseAlpha>();
+  VTTScanner foo_scanner = scanner.SubrangeWhile<IsAsciiLower>();
   EXPECT_FALSE(foo_scanner.Scan(bar_string));
   EXPECT_TRUE(foo_scanner.Scan(foo_string));
   EXPECT_TRUE(foo_scanner.IsAtEnd());
@@ -198,12 +194,12 @@ void ScanRuns(const String& input) {
   EXPECT_TRUE(scanner.Scan(':'));
 
   // Skip 'baz'.
-  scanner.SubrangeWhile<LowerCaseAlpha>();
+  scanner.SubrangeWhile<IsAsciiLower>();
 
   EXPECT_TRUE(scanner.Match(':'));
   EXPECT_TRUE(scanner.Scan(':'));
 
-  VTTScanner bar_scanner = scanner.SubrangeWhile<LowerCaseAlpha>();
+  VTTScanner bar_scanner = scanner.SubrangeWhile<IsAsciiLower>();
   EXPECT_FALSE(bar_scanner.Scan(foo_string));
   EXPECT_TRUE(bar_scanner.Scan(bar_string));
   EXPECT_TRUE(bar_scanner.IsAtEnd());
@@ -220,7 +216,7 @@ void ScanRunsToStrings(const String& input) {
   VTTScanner scanner(input);
   EXPECT_FALSE(scanner.IsAtEnd());
 
-  size_t word_length = scanner.CountWhile<LowerCaseAlpha>();
+  size_t word_length = scanner.CountWhile<IsAsciiLower>();
   size_t length_before = scanner.Remaining();
   String foo_string = scanner.ExtractString(word_length);
   EXPECT_EQ(foo_string, "foo");
@@ -229,7 +225,7 @@ void ScanRunsToStrings(const String& input) {
   EXPECT_TRUE(scanner.Match(':'));
   EXPECT_TRUE(scanner.Scan(':'));
 
-  word_length = scanner.CountWhile<LowerCaseAlpha>();
+  word_length = scanner.CountWhile<IsAsciiLower>();
   length_before = scanner.Remaining();
   String bar_string = scanner.ExtractString(word_length);
   EXPECT_EQ(bar_string, "bar");
@@ -309,22 +305,17 @@ TEST(VTTScannerTest, ScanDigits) {
 void ScanDoubleValue(const String& input) {
   VTTScanner scanner(input);
   double value;
-  // "1."
-  EXPECT_TRUE(scanner.ScanDouble(value));
-  EXPECT_EQ(value, 1.0);
-  EXPECT_TRUE(scanner.Scan(' '));
-
   // "1.0"
   EXPECT_TRUE(scanner.ScanDouble(value));
   EXPECT_EQ(value, 1.0);
   EXPECT_TRUE(scanner.Scan(' '));
 
-  // ".0"
+  // "5.5"
   EXPECT_TRUE(scanner.ScanDouble(value));
-  EXPECT_EQ(value, 0.0);
+  EXPECT_EQ(value, 5.5);
   EXPECT_TRUE(scanner.Scan(' '));
 
-  // "." (invalid)
+  // "." (invalid - no digits on either side)
   EXPECT_FALSE(scanner.ScanDouble(value));
   EXPECT_TRUE(scanner.Match('.'));
   EXPECT_TRUE(scanner.Scan('.'));
@@ -345,7 +336,37 @@ void ScanDoubleValue(const String& input) {
 // Tests ScanDouble().
 TEST(VTTScannerTest, ScanDouble) {
   test::TaskEnvironment task_environment;
-  TEST_WITH(ScanDoubleValue, "1. 1.0 .0 . 1.0000 01.000");
+  TEST_WITH(ScanDoubleValue, "1.0 5.5 . 1.0000 01.000");
+}
+
+// Verifies that ".5" and "5." are rejected per the WebVTT number grammar
+// ([0-9]+ ("." [0-9]+)?), which requires digits on both sides of any dot.
+TEST(VTTScannerTest, ScanDoubleRejectsBareDotForms) {
+  test::TaskEnvironment task_environment;
+  double x;
+  // ".5" - no integer digits before the dot: must be rejected and scanner
+  // must not consume any input.
+  {
+    String str(".5");
+    VTTScanner s(str);
+    EXPECT_FALSE(s.ScanDouble(x));
+    EXPECT_TRUE(s.Match('.'));
+  }
+  // "5." - no decimal digits after the dot: must be rejected and scanner
+  // must not consume any input.
+  {
+    String str("5.");
+    VTTScanner s(str);
+    EXPECT_FALSE(s.ScanDouble(x));
+    EXPECT_TRUE(s.Match('5'));
+  }
+  // "5.5" - digits on both sides: must still be accepted.
+  {
+    String str("5.5");
+    VTTScanner s(str);
+    EXPECT_TRUE(s.ScanDouble(x));
+    EXPECT_EQ(5.5, x);
+  }
 }
 
 #undef TEST_WITH

@@ -96,6 +96,8 @@ class ContentWebState : public WebState,
                             NSString* mime_type) override
       API_AVAILABLE(ios(15.0));
   void Stop() override;
+  std::optional<std::string> GetUserAgentOverride() const override;
+  void SetUserAgentOverride(std::optional<std::string> ua_override) override;
   const NavigationManager* GetNavigationManager() const override;
   NavigationManager* GetNavigationManager() override;
   WebFramesManager* GetPageWorldWebFramesManager() override;
@@ -145,6 +147,8 @@ class ContentWebState : public WebState,
   void SetFindInteractionEnabled(bool enabled) final;
   id<CRWFindInteraction> GetFindInteraction() final API_AVAILABLE(ios(16));
   id GetActivityItem() API_AVAILABLE(ios(16.4)) final;
+  bool IsCustomOpenPanelSupported() const final;
+  void SetCustomOpenPanelSupported(bool supports) final;
   UIColor* GetThemeColor() final;
   UIColor* GetUnderPageBackgroundColor() final;
   void AddPolicyDecider(WebStatePolicyDecider* decider) override;
@@ -179,7 +183,8 @@ class ContentWebState : public WebState,
 
   void DidUpdateFaviconURL(
       content::RenderFrameHost* render_frame_host,
-      const std::vector<blink::mojom::FaviconURLPtr>& candidates) override;
+      const std::vector<blink::mojom::FaviconURLPtr>& candidates,
+      blink::mojom::FaviconUpdateReason reason) override;
 
   void RenderFrameCreated(content::RenderFrameHost* render_frame_host) override;
   void RenderFrameDeleted(content::RenderFrameHost* render_frame_host) override;
@@ -247,7 +252,7 @@ class ContentWebState : public WebState,
   // The unique identifier. Stable across application restarts.
   const WebStateID unique_identifier_;
   base::ObserverList<WebStatePolicyDecider, true> policy_deciders_;
-  base::ObserverList<WebStateObserver, true> observers_;
+  WebStateObserverList observers_;
   std::unique_ptr<ContentNavigationManager> navigation_manager_;
   std::map<ContentWorld, std::unique_ptr<ContentWebFramesManager>> managers_;
   FaviconStatus favicon_status_;

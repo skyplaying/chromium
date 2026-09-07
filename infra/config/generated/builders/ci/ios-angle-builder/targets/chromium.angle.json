@@ -5,14 +5,17 @@
       {
         "args": [
           "--release",
+          "--readline-timeout",
+          "600",
+          "--use-simulator-cache",
           "--platform",
           "iPhone 14",
           "--version",
-          "18.2",
+          "18.5",
           "--out-dir",
           "${ISOLATED_OUTDIR}",
           "--xcode-build-version",
-          "16c5032a",
+          "27a5252f",
           "--xctest"
         ],
         "isolate_profile_data": true,
@@ -21,7 +24,7 @@
         },
         "module_name": "//third_party/angle/src/tests:angle_end2end_tests",
         "module_scheme": "gtest",
-        "name": "angle_end2end_tests iPhone 14 18.2",
+        "name": "angle_end2end_tests iPhone 14 18.5",
         "resultdb": {
           "enable": true,
           "has_native_resultdb_integration": true
@@ -31,7 +34,7 @@
             {
               "cipd_package": "infra/tools/mac_toolchain/${platform}",
               "location": ".",
-              "revision": "git_revision:4c7290150d1c360cecc6a93c0214dc531585c3ab"
+              "revision": "git_revision:07e67ff89ff11ed0e3071867ed6bb49319a91b05"
             }
           ],
           "containment_type": "AUTO",
@@ -39,15 +42,15 @@
             "cpu": "x86-64",
             "display_attached": "1",
             "gpu": "8086:3e9b",
-            "os": "Mac-14.5"
+            "os": "Mac-15.5"
           },
           "named_caches": [
             {
-              "name": "runtime_ios_18_2",
-              "path": "Runtime-ios-18.2"
+              "name": "runtime_ios_18_5",
+              "path": "Runtime-ios-18.5"
             },
             {
-              "name": "xcode_ios_16c5032a",
+              "name": "xcode_ios_27a5252f",
               "path": "Xcode.app"
             }
           ],
@@ -56,28 +59,31 @@
         "test": "angle_end2end_tests",
         "test_id_prefix": "ninja://third_party/angle/src/tests:angle_end2end_tests/",
         "use_isolated_scripts_api": true,
-        "variant_id": "iPhone 14 18.2"
+        "variant_id": "iPhone 14 18.5"
       },
       {
         "args": [
           "--release",
+          "--readline-timeout",
+          "600",
+          "--use-simulator-cache",
           "--platform",
-          "iPhone 14",
+          "iPhone 16",
           "--version",
-          "18.2",
+          "26.5",
           "--out-dir",
           "${ISOLATED_OUTDIR}",
           "--xcode-build-version",
-          "16c5032a",
+          "27a5252f",
           "--xctest"
         ],
         "isolate_profile_data": true,
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
         },
-        "module_name": "//third_party/angle/src/tests:angle_white_box_tests",
+        "module_name": "//third_party/angle/src/tests:angle_end2end_tests",
         "module_scheme": "gtest",
-        "name": "angle_white_box_tests iPhone 14 18.2",
+        "name": "angle_end2end_tests iPhone 16 26.5",
         "resultdb": {
           "enable": true,
           "has_native_resultdb_integration": true
@@ -87,7 +93,7 @@
             {
               "cipd_package": "infra/tools/mac_toolchain/${platform}",
               "location": ".",
-              "revision": "git_revision:4c7290150d1c360cecc6a93c0214dc531585c3ab"
+              "revision": "git_revision:07e67ff89ff11ed0e3071867ed6bb49319a91b05"
             }
           ],
           "containment_type": "AUTO",
@@ -95,15 +101,133 @@
             "cpu": "x86-64",
             "display_attached": "1",
             "gpu": "8086:3e9b",
-            "os": "Mac-14.5"
+            "os": "Mac-15.5"
           },
           "named_caches": [
             {
-              "name": "runtime_ios_18_2",
-              "path": "Runtime-ios-18.2"
+              "name": "runtime_ios_26_5",
+              "path": "Runtime-ios-26.5"
             },
             {
-              "name": "xcode_ios_16c5032a",
+              "name": "xcode_ios_27a5252f",
+              "path": "Xcode.app"
+            }
+          ],
+          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
+        },
+        "test": "angle_end2end_tests",
+        "test_id_prefix": "ninja://third_party/angle/src/tests:angle_end2end_tests/",
+        "use_isolated_scripts_api": true,
+        "variant_id": "iPhone 16 26.5"
+      },
+      {
+        "args": [
+          "--release",
+          "--readline-timeout",
+          "600",
+          "--use-simulator-cache",
+          "--platform",
+          "iPhone 16",
+          "--version",
+          "27.0",
+          "--out-dir",
+          "${ISOLATED_OUTDIR}",
+          "--xcode-build-version",
+          "27a5252f",
+          "--xctest"
+        ],
+        "isolate_profile_data": true,
+        "merge": {
+          "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
+        },
+        "module_name": "//third_party/angle/src/tests:angle_end2end_tests",
+        "module_scheme": "gtest",
+        "name": "angle_end2end_tests iPhone 16 27.0",
+        "resultdb": {
+          "enable": true,
+          "has_native_resultdb_integration": true
+        },
+        "swarming": {
+          "cipd_packages": [
+            {
+              "cipd_package": "infra/tools/mac_toolchain/${platform}",
+              "location": ".",
+              "revision": "git_revision:07e67ff89ff11ed0e3071867ed6bb49319a91b05"
+            }
+          ],
+          "containment_type": "AUTO",
+          "dimensions": {
+            "cpu": "x86-64",
+            "display_attached": "1",
+            "gpu": "8086:3e9b",
+            "os": "Mac-15.5"
+          },
+          "named_caches": [
+            {
+              "name": "runtime_ios_27_0",
+              "path": "Runtime-ios-27.0"
+            },
+            {
+              "name": "xcode_ios_27a5252f",
+              "path": "Xcode.app"
+            }
+          ],
+          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
+        },
+        "test": "angle_end2end_tests",
+        "test_id_prefix": "ninja://third_party/angle/src/tests:angle_end2end_tests/",
+        "use_isolated_scripts_api": true,
+        "variant_id": "iPhone 16 27.0"
+      },
+      {
+        "args": [
+          "--release",
+          "--readline-timeout",
+          "600",
+          "--use-simulator-cache",
+          "--platform",
+          "iPhone 14",
+          "--version",
+          "18.5",
+          "--out-dir",
+          "${ISOLATED_OUTDIR}",
+          "--xcode-build-version",
+          "27a5252f",
+          "--xctest"
+        ],
+        "isolate_profile_data": true,
+        "merge": {
+          "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
+        },
+        "module_name": "//third_party/angle/src/tests:angle_white_box_tests",
+        "module_scheme": "gtest",
+        "name": "angle_white_box_tests iPhone 14 18.5",
+        "resultdb": {
+          "enable": true,
+          "has_native_resultdb_integration": true
+        },
+        "swarming": {
+          "cipd_packages": [
+            {
+              "cipd_package": "infra/tools/mac_toolchain/${platform}",
+              "location": ".",
+              "revision": "git_revision:07e67ff89ff11ed0e3071867ed6bb49319a91b05"
+            }
+          ],
+          "containment_type": "AUTO",
+          "dimensions": {
+            "cpu": "x86-64",
+            "display_attached": "1",
+            "gpu": "8086:3e9b",
+            "os": "Mac-15.5"
+          },
+          "named_caches": [
+            {
+              "name": "runtime_ios_18_5",
+              "path": "Runtime-ios-18.5"
+            },
+            {
+              "name": "xcode_ios_27a5252f",
               "path": "Xcode.app"
             }
           ],
@@ -112,7 +236,125 @@
         "test": "angle_white_box_tests",
         "test_id_prefix": "ninja://third_party/angle/src/tests:angle_white_box_tests/",
         "use_isolated_scripts_api": true,
-        "variant_id": "iPhone 14 18.2"
+        "variant_id": "iPhone 14 18.5"
+      },
+      {
+        "args": [
+          "--release",
+          "--readline-timeout",
+          "600",
+          "--use-simulator-cache",
+          "--platform",
+          "iPhone 16",
+          "--version",
+          "26.5",
+          "--out-dir",
+          "${ISOLATED_OUTDIR}",
+          "--xcode-build-version",
+          "27a5252f",
+          "--xctest"
+        ],
+        "isolate_profile_data": true,
+        "merge": {
+          "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
+        },
+        "module_name": "//third_party/angle/src/tests:angle_white_box_tests",
+        "module_scheme": "gtest",
+        "name": "angle_white_box_tests iPhone 16 26.5",
+        "resultdb": {
+          "enable": true,
+          "has_native_resultdb_integration": true
+        },
+        "swarming": {
+          "cipd_packages": [
+            {
+              "cipd_package": "infra/tools/mac_toolchain/${platform}",
+              "location": ".",
+              "revision": "git_revision:07e67ff89ff11ed0e3071867ed6bb49319a91b05"
+            }
+          ],
+          "containment_type": "AUTO",
+          "dimensions": {
+            "cpu": "x86-64",
+            "display_attached": "1",
+            "gpu": "8086:3e9b",
+            "os": "Mac-15.5"
+          },
+          "named_caches": [
+            {
+              "name": "runtime_ios_26_5",
+              "path": "Runtime-ios-26.5"
+            },
+            {
+              "name": "xcode_ios_27a5252f",
+              "path": "Xcode.app"
+            }
+          ],
+          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
+        },
+        "test": "angle_white_box_tests",
+        "test_id_prefix": "ninja://third_party/angle/src/tests:angle_white_box_tests/",
+        "use_isolated_scripts_api": true,
+        "variant_id": "iPhone 16 26.5"
+      },
+      {
+        "args": [
+          "--release",
+          "--readline-timeout",
+          "600",
+          "--use-simulator-cache",
+          "--platform",
+          "iPhone 16",
+          "--version",
+          "27.0",
+          "--out-dir",
+          "${ISOLATED_OUTDIR}",
+          "--xcode-build-version",
+          "27a5252f",
+          "--xctest"
+        ],
+        "isolate_profile_data": true,
+        "merge": {
+          "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
+        },
+        "module_name": "//third_party/angle/src/tests:angle_white_box_tests",
+        "module_scheme": "gtest",
+        "name": "angle_white_box_tests iPhone 16 27.0",
+        "resultdb": {
+          "enable": true,
+          "has_native_resultdb_integration": true
+        },
+        "swarming": {
+          "cipd_packages": [
+            {
+              "cipd_package": "infra/tools/mac_toolchain/${platform}",
+              "location": ".",
+              "revision": "git_revision:07e67ff89ff11ed0e3071867ed6bb49319a91b05"
+            }
+          ],
+          "containment_type": "AUTO",
+          "dimensions": {
+            "cpu": "x86-64",
+            "display_attached": "1",
+            "gpu": "8086:3e9b",
+            "os": "Mac-15.5"
+          },
+          "named_caches": [
+            {
+              "name": "runtime_ios_27_0",
+              "path": "Runtime-ios-27.0"
+            },
+            {
+              "name": "xcode_ios_27a5252f",
+              "path": "Xcode.app"
+            }
+          ],
+          "service_account": "chromium-tester@chops-service-accounts.iam.gserviceaccount.com"
+        },
+        "test": "angle_white_box_tests",
+        "test_id_prefix": "ninja://third_party/angle/src/tests:angle_white_box_tests/",
+        "use_isolated_scripts_api": true,
+        "variant_id": "iPhone 16 27.0"
       }
     ]
   }

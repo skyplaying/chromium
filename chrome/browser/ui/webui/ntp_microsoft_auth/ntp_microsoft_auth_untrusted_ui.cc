@@ -13,6 +13,7 @@
 #include "chrome/grit/new_tab_page_untrusted_resources.h"
 #include "chrome/grit/new_tab_page_untrusted_resources_map.h"
 #include "components/search/ntp_features.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
@@ -34,7 +35,7 @@ NtpMicrosoftAuthUntrustedUI::NtpMicrosoftAuthUntrustedUI(content::WebUI* web_ui)
   content::WebUIDataSource* untrusted_source =
       content::WebUIDataSource::CreateAndAdd(
           browser_context, chrome::kChromeUIUntrustedNtpMicrosoftAuthURL);
-  untrusted_source->AddFrameAncestor(GURL(chrome::kChromeUINewTabPageURL));
+  untrusted_source->AddFrameAncestor(chrome::ChromeUINewTabPageURLAsGURL());
   untrusted_source->AddResourcePath(
       "", IDR_NEW_TAB_PAGE_UNTRUSTED_MICROSOFT_AUTH_HTML);
   untrusted_source->AddResourcePath("msal_browser.js",

@@ -18,8 +18,9 @@
 #include "chrome/browser/signin/dice_web_signin_interceptor_factory.h"
 #include "chrome/browser/signin/signin_util.h"
 #include "chrome/browser/signin/web_signin_interceptor.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/managed_ui.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/security_interstitials/content/security_interstitial_tab_helper.h"
@@ -59,7 +60,7 @@ class ManagedProfileRequiredNavigationThrottleFeatureDisabledTest
 IN_PROC_BROWSER_TEST_F(
     ManagedProfileRequiredNavigationThrottleFeatureDisabledTest,
     NoThrottle) {
-  auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+  auto* web_contents = browser()->GetTabStripModel()->GetActiveWebContents();
   content::MockNavigationHandle mock_nav_handle(web_contents);
   content::MockNavigationThrottleRegistry registry(
       &mock_nav_handle,
@@ -77,7 +78,7 @@ class ManagedProfileRequiredNavigationThrottleTest
 
 IN_PROC_BROWSER_TEST_F(ManagedProfileRequiredNavigationThrottleTest,
                        CancelsWithInterstitialWhenForcedInterception) {
-  auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+  auto* web_contents = browser()->GetTabStripModel()->GetActiveWebContents();
   content::MockNavigationHandle mock_nav_handle(web_contents);
 
   auto managed_profile_required = std::make_unique<ManagedProfileRequiredPage>(
@@ -96,7 +97,7 @@ IN_PROC_BROWSER_TEST_F(ManagedProfileRequiredNavigationThrottleTest,
   ASSERT_EQ(0u, registry.throttles().size());
 
   auto enable_navigations = ManagedProfileRequiredNavigationThrottle::
-      BlockNavigationUntilEnterpriseActionTaken(browser()->profile(),
+      BlockNavigationUntilEnterpriseActionTaken(browser()->GetProfile(),
                                                 web_contents, nullptr, kEmail);
   ManagedProfileRequiredNavigationThrottle::MaybeCreateAndAdd(registry);
   ASSERT_EQ(1u, registry.throttles().size());
@@ -121,7 +122,7 @@ IN_PROC_BROWSER_TEST_F(ManagedProfileRequiredNavigationThrottleTest,
 IN_PROC_BROWSER_TEST_F(
     ManagedProfileRequiredNavigationThrottleTest,
     CancelsWithInterstitialWhenForcedInterceptionAndRefreshesWebContent) {
-  auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+  auto* web_contents = browser()->GetTabStripModel()->GetActiveWebContents();
   content::MockNavigationHandle mock_nav_handle(web_contents);
 
   auto managed_profile_required = std::make_unique<ManagedProfileRequiredPage>(
@@ -140,7 +141,7 @@ IN_PROC_BROWSER_TEST_F(
   ASSERT_EQ(0u, registry.throttles().size());
 
   auto enable_navigations = ManagedProfileRequiredNavigationThrottle::
-      BlockNavigationUntilEnterpriseActionTaken(browser()->profile(),
+      BlockNavigationUntilEnterpriseActionTaken(browser()->GetProfile(),
                                                 web_contents, nullptr, kEmail);
   ManagedProfileRequiredNavigationThrottle::MaybeCreateAndAdd(registry);
   ASSERT_EQ(1u, registry.throttles().size());
@@ -155,7 +156,7 @@ IN_PROC_BROWSER_TEST_F(
   bool page_reloded = false;
   // Ensures `web_contents` is reloaded
   ManagedProfileRequiredNavigationThrottle::SetReloadRequired(
-      browser()->profile(), true,
+      browser()->GetProfile(), true,
       base::BindLambdaForTesting([&](content::NavigationHandle&) {
         page_reloded = true;
         loop.Quit();

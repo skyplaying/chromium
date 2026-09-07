@@ -8,7 +8,6 @@
 #include <string_view>
 
 #include "ash/shell.h"
-#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
@@ -22,7 +21,7 @@
 #include "chrome/browser/ui/ash/input_method/input_method_menu_manager.h"
 #include "chrome/browser/ui/ash/keyboard/chrome_keyboard_controller_client.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/test/base/chrome_test_utils.h"
+#include "chrome/test/base/chrome_test_path_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -281,7 +280,7 @@ IN_PROC_BROWSER_TEST_P(InputMethodEngineBrowserTest, BasicScenarioTest) {
   IMEBridge::Get()->SetCandidateWindowHandler(nullptr);
 }
 
-// Test is flaky. https://crbug.com/1462135.
+// Test is flaky. https://crbug.com/40921761.
 IN_PROC_BROWSER_TEST_P(InputMethodEngineBrowserTest, DISABLED_APIArgumentTest) {
   // Makes real end to end test without mocking the input context handler.
   // Ideally the test should mock the TextInputClient instance hooked up with
@@ -471,21 +470,17 @@ IN_PROC_BROWSER_TEST_P(InputMethodEngineBrowserTest, DISABLED_APIArgumentTest) {
       {ui::VKEY_F10, "F10", "AudioVolumeUp"},
   };
 
-  for (size_t i = 0; i < std::size(kMediaKeyCases); ++i) {
-    UNSAFE_TODO(
-        SCOPED_TRACE(std::string("KeyDown, ") + kMediaKeyCases[i].code));
+  for (const auto& media_key : kMediaKeyCases) {
+    SCOPED_TRACE(std::string("KeyDown, ") + media_key.code);
     KeyEventDoneCallback callback(ui::ime::KeyEventHandledState::kNotHandled);
     const std::string expected_value = base::StringPrintf(
         "onKeyEvent::true:keydown:%s:%s:false:false:false:false:false",
-        UNSAFE_TODO(kMediaKeyCases[i]).key,
-        UNSAFE_TODO(kMediaKeyCases[i]).code);
+        media_key.key, media_key.code);
     ExtensionTestMessageListener keyevent_listener(expected_value);
 
-    ui::KeyEvent key_event(ui::EventType::kKeyPressed,
-                           UNSAFE_TODO(kMediaKeyCases[i]).keycode,
-                           ui::KeycodeConverter::CodeStringToDomCode(
-                               UNSAFE_TODO(kMediaKeyCases[i]).code),
-                           ui::EF_NONE);
+    ui::KeyEvent key_event(
+        ui::EventType::kKeyPressed, media_key.keycode,
+        ui::KeycodeConverter::CodeStringToDomCode(media_key.code), ui::EF_NONE);
     TextInputMethod::KeyEventDoneCallback keyevent_callback =
         base::BindOnce(&KeyEventDoneCallback::Run, base::Unretained(&callback));
     engine_handler->ProcessKeyEvent(key_event, std::move(keyevent_callback));
@@ -736,7 +731,7 @@ IN_PROC_BROWSER_TEST_P(InputMethodEngineBrowserTest, DISABLED_APIArgumentTest) {
     ExtensionTestMessageListener button_listener(
         "undo button in undo window clicked");
 
-    aura::Window* window = browser()->window()->GetNativeWindow();
+    aura::Window* window = browser()->GetWindow()->GetNativeWindow();
     ui::test::EventGenerator event_generator(window->GetRootWindow());
     views::Button* undo_button = undo_window->GetUndoButtonForTesting();
     event_generator.MoveMouseTo(undo_button->GetBoundsInScreen().CenterPoint());
@@ -1465,7 +1460,7 @@ IN_PROC_BROWSER_TEST_P(InputMethodEngineBrowserTest, MojoInteractionTest) {
       kAPIArgumentIMEID, false /* show_message */);
 
   ui::InputMethod* im =
-      browser()->window()->GetNativeWindow()->GetHost()->GetInputMethod();
+      browser()->GetWindow()->GetNativeWindow()->GetHost()->GetInputMethod();
   TestTextInputClient tic(ui::TEXT_INPUT_TYPE_TEXT);
 
   {

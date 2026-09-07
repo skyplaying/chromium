@@ -16,7 +16,6 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/i18n/time_formatting.h"
-#include "base/memory/raw_ref.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringize_macros.h"
@@ -46,6 +45,7 @@
 #include "gpu/config/gpu_lists_version.h"
 #include "gpu/config/gpu_preferences.h"
 #include "gpu/config/gpu_util.h"
+#include "media/base/video_types.h"
 #include "services/network/public/mojom/content_security_policy.mojom.h"
 #include "skia/ext/skia_commit_hash.h"
 #include "third_party/angle/src/common/angle_version_info.h"
@@ -88,12 +88,11 @@ void CreateAndAddGpuHTMLSource(BrowserContext* browser_context) {
 std::string GPUDeviceToString(const gpu::GPUInfo::GPUDevice& gpu) {
   std::string vendor = base::StringPrintf("0x%04x", gpu.vendor_id);
   if (!gpu.vendor_string.empty())
-    vendor += " [" + gpu.vendor_string + "]";
+    base::StrAppend(&vendor, {" [", gpu.vendor_string, "]"});
   std::string device = base::StringPrintf("0x%04x", gpu.device_id);
   if (!gpu.device_string.empty())
-    device += " [" + gpu.device_string + "]";
-  std::string rt = base::StringPrintf("VENDOR= %s, DEVICE=%s", vendor.c_str(),
-                                      device.c_str());
+    base::StrAppend(&device, {" [", gpu.device_string, "]"});
+  std::string rt = base::StringPrintf("VENDOR= %s, DEVICE=%s", vendor, device);
 #if BUILDFLAG(IS_WIN)
   if (gpu.sub_sys_id)
     rt += base::StringPrintf(", SUBSYS=0x%08x", gpu.sub_sys_id);
@@ -107,9 +106,9 @@ std::string GPUDeviceToString(const gpu::GPUInfo::GPUDevice& gpu) {
                            gpu.luid.LowPart);
 #endif
   if (!gpu.driver_vendor.empty())
-    rt += ", DRIVER_VENDOR=" + gpu.driver_vendor;
+    base::StrAppend(&rt, {", DRIVER_VENDOR=", gpu.driver_vendor});
   if (!gpu.driver_version.empty())
-    rt += ", DRIVER_VERSION=" + gpu.driver_version;
+    base::StrAppend(&rt, {", DRIVER_VERSION=", gpu.driver_version});
   if (gpu.active)
     rt += " *ACTIVE*";
   return rt;
@@ -186,7 +185,7 @@ base::ListValue GetBasicGpuInfo(const gpu::GPUInfo& gpu_info,
     const double rounded_size_inches = floor(10.0 * size_inches) / 10.0;
     std::string size_string = base::StringPrintf("%.1f\"", rounded_size_inches);
     std::string description_string = base::StringPrintf(
-        "Diagonal Monitor Size of %s", display_size.display_name.c_str());
+        "Diagonal Monitor Size of %s", display_size.display_name);
     basic_info.Append(
         display::BuildGpuInfoEntry(description_string, size_string));
   }
@@ -327,13 +326,13 @@ base::ListValue GetDisplayInfo() {
       display_color_spaces.ToStrings(&names, &color_spaces, &formats);
       for (size_t i = 0; i < names.size(); ++i) {
         display_info.Append(display::BuildGpuInfoEntry(
-            base::StringPrintf("Color space (%s)", names[i].c_str()),
+            base::StringPrintf("Color space (%s)", names[i]),
             color_spaces[i]
                 .GetWithSdrWhiteLevel(
                     display_color_spaces.GetSDRMaxLuminanceNits())
                 .ToString()));
         display_info.Append(display::BuildGpuInfoEntry(
-            base::StringPrintf("Buffer format (%s)", names[i].c_str()),
+            base::StringPrintf("Buffer format (%s)", names[i]),
             formats[i].ToString()));
       }
     }
@@ -536,18 +535,36 @@ const char* GetProfileName(gpu::VideoCodecProfile profile) {
   NOTREACHED();
 }
 
+std::string GetEncodeProfileLabel(
+    const gpu::VideoEncodeAcceleratorSupportedProfile& profile) {
+  std::string name = GetProfileName(profile.profile);
+  if (!profile.bit_depth.has_value() && !profile.chroma_sampling.has_value()) {
+    return name;
+  }
+
+  std::string details;
+  if (profile.bit_depth.has_value()) {
+    details = base::StringPrintf("%u-bit", profile.bit_depth.value());
+  }
+  if (profile.chroma_sampling.has_value()) {
+    const auto sampling = static_cast<media::VideoChromaSampling>(
+        profile.chroma_sampling.value());
+    if (sampling != media::VideoChromaSampling::kUnknown) {
+      if (!details.empty()) {
+        details += ", ";
+      }
+      details += media::VideoChromaSamplingToString(sampling);
+    }
+  }
+  if (details.empty()) {
+    return name;
+  }
+  return base::StringPrintf("%s (%s)", name.c_str(), details.c_str());
+}
+
 base::ListValue GetVideoAcceleratorsInfo() {
   gpu::GPUInfo gpu_info = GpuDataManagerImpl::GetInstance()->GetGPUInfo();
   base::ListValue info;
-
-  struct {
-    const raw_ref<const gpu::VideoDecodeAcceleratorSupportedProfiles>
-        capabilities;
-    std::string name;
-  } kVideoDecoderImplementations[] = {
-      {raw_ref(gpu_info.video_decode_accelerator_supported_profiles),
-       "Decoding"},
-  };
 
   info.Append(display::BuildGpuInfoEntry("Decoding", ""));
   for (const auto& profile :
@@ -555,8 +572,8 @@ base::ListValue GetVideoAcceleratorsInfo() {
     std::string codec_string =
         base::StringPrintf("Decode %s", GetProfileName(profile.profile));
     std::string resolution_string = base::StringPrintf(
-        "%s to %s pixels%s", profile.min_resolution.ToString().c_str(),
-        profile.max_resolution.ToString().c_str(),
+        "%s to %s pixels%s", profile.min_resolution.ToString(),
+        profile.max_resolution.ToString(),
         profile.encrypted_only ? " (encrypted)" : "");
     info.Append(display::BuildGpuInfoEntry(codec_string, resolution_string));
   }
@@ -565,11 +582,10 @@ base::ListValue GetVideoAcceleratorsInfo() {
   for (const auto& profile :
        gpu_info.video_encode_accelerator_supported_profiles) {
     std::string codec_string =
-        base::StringPrintf("Encode %s", GetProfileName(profile.profile));
+        base::StringPrintf("Encode %s", GetEncodeProfileLabel(profile).c_str());
     std::string resolution_string = base::StringPrintf(
         "%s to %s pixels, and/or %.3f fps%s.",
-        profile.min_resolution.ToString().c_str(),
-        profile.max_resolution.ToString().c_str(),
+        profile.min_resolution.ToString(), profile.max_resolution.ToString(),
         static_cast<double>(profile.max_framerate_numerator) /
             profile.max_framerate_denominator,
         profile.is_software_codec ? " (software codec)" : "");
@@ -652,7 +668,7 @@ GpuMessageHandler::~GpuMessageHandler() {
 
 /* BrowserBridge.callAsync prepends a requestID to these messages. */
 void GpuMessageHandler::RegisterMessages() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 
   web_ui()->RegisterMessageCallback(
       "getGpuInfo", base::BindRepeating(&GpuMessageHandler::HandleGetGpuInfo,
@@ -691,12 +707,12 @@ void GpuMessageHandler::HandleGetLogMessages(const base::ListValue& args) {
 
 void GpuMessageHandler::HandleGetGpuInfo(const base::ListValue& args) {
   CHECK_EQ(1U, args.size());
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   AllowJavascript();
 
   // Tell GpuDataManager it should have full GpuInfo. If the
   // Gpu process has not run yet, this will trigger its launch.
-  GpuDataManagerImpl::GetInstance()->RequestDx12VulkanVideoGpuInfoIfNeeded(
+  GpuDataManagerImpl::GetInstance()->RequestGpuInfoIfNeeded(
       GpuDataManagerImpl::kGpuInfoRequestAll,
       /*delayed=*/false);
 
@@ -707,7 +723,7 @@ void GpuMessageHandler::HandleGetGpuInfo(const base::ListValue& args) {
 }
 
 base::DictValue GpuMessageHandler::GetClientInfo() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 
   base::DictValue dict;
 
@@ -750,7 +766,7 @@ base::DictValue GpuMessageHandler::GetClientInfo() {
 }
 
 base::ListValue GpuMessageHandler::GetLogMessages() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 
   return GpuDataManagerImpl::GetInstance()->GetLogMessages();
 }

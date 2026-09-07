@@ -4,12 +4,15 @@
 
 #include "services/network/public/cpp/features.h"
 
+#include "base/byte_size.h"
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/no_destructor.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/system/sys_info.h"
+#include "base/task/current_thread.h"
 #include "build/build_config.h"
+#include "mojo/public/cpp/bindings/direct_receiver.h"
 #include "net/base/mime_sniffer.h"
 #include "url/gurl.h"
 #include "url/origin.h"
@@ -190,9 +193,19 @@ BASE_FEATURE_PARAM(bool,
 BASE_FEATURE(kCorsNonWildcardRequestHeadersSupport,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
+// When enabled, CORS preflight cache keys take the tainted origin flag into
+// account (using an opaque / null origin), preventing tainted preflight
+// results from satisfying untainted requests.
+BASE_FEATURE(kCorsPreflightCacheKeyTaintedOrigin,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
 // Do not send TLS client certificates in CORS preflight. Omit all client certs
 // and continue the handshake without sending one if requested.
 BASE_FEATURE(kOmitCorsClientCert, base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Enforces that frame-type destinations require kNavigate mode.
+BASE_FEATURE(kRestrictFrameDestinationsToNavigate,
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Enables support for the `Variants` response header and reduce
 // accept-language. https://github.com/Tanych/accept-language
@@ -224,9 +237,6 @@ BASE_FEATURE_PARAM(int,
 // Enables Local Network Access checks.
 // Blocks local network requests without user permission to prevent exploitation
 // of vulnerable local devices.
-//
-// This feature is being built as a replacement for Private Network Access
-// (PNA), and if this is on PNA features may stop working.
 //
 // Spec: https://wicg.github.io/local-network-access/
 BASE_FEATURE(kLocalNetworkAccessChecks, base::FEATURE_ENABLED_BY_DEFAULT);
@@ -266,7 +276,7 @@ BASE_FEATURE_PARAM(bool,
 //
 // Spec: https://wicg.github.io/local-network-access/
 BASE_FEATURE(kLocalNetworkAccessChecksWebSockets,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Enables Local Network Access checks for WebTransport.
 // Blocks local network requests without user permission to prevent exploitation
@@ -274,11 +284,6 @@ BASE_FEATURE(kLocalNetworkAccessChecksWebSockets,
 //
 // Spec: https://wicg.github.io/local-network-access/
 BASE_FEATURE(kLocalNetworkAccessChecksWebTransport,
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-// Splits the Local Network Access permission into 2 permissions. See
-// crbug.com/465491626.
-BASE_FEATURE(kLocalNetworkAccessChecksSplitPermissions,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 // If enabled, then the network service will parse the Cookie-Indices header.
@@ -316,11 +321,6 @@ BASE_FEATURE(kCompressionDictionaryTTL, base::FEATURE_DISABLED_BY_DEFAULT);
 // integrity enforced.
 BASE_FEATURE(kIntegrityPolicyScript, base::FEATURE_ENABLED_BY_DEFAULT);
 
-// This feature will reduce TransferSizeUpdated IPC from the network service.
-// When enabled, the network service will send the IPC only when DevTools is
-// attached or the request is for an ad request.
-BASE_FEATURE(kReduceTransferSizeUpdatedIPC, base::FEATURE_ENABLED_BY_DEFAULT);
-
 // Enables content decoding in the renderer process.
 // See https://crbug.com/391950057 and this doc for more details.
 // https://docs.google.com/document/d/1LwgPlrtQtUhGz_ilTsRun-7o4TuHo9jbXll6FRq-dKk/edit?usp=sharing
@@ -350,41 +350,11 @@ BASE_FEATURE_PARAM(
     /*name=*/"RendererSideContentDecodingForceMojoFailureForTesting",
     /*default_value=*/false);
 
-// This feature allows skipping TPCD mitigation checks when the cookie access
-// is tagged as being used for advertising purposes. This means that cookies
-// will continue to be blocked for cookie accesses on ad requests even if the
-// 3PC mitigations would otherwise allow the access.
-BASE_FEATURE(kSkipTpcdMitigationsForAds, base::FEATURE_DISABLED_BY_DEFAULT);
-// Controls whether we ignore opener heuristic grants for 3PC accesses.
-BASE_FEATURE_PARAM(bool,
-                   kSkipTpcdMitigationsForAdsHeuristics,
-                   &kSkipTpcdMitigationsForAds,
-                   /*name=*/"SkipTpcdMitigationsForAdsHeuristics",
-                   /*default_value=*/false);
-// Controls whether we ignore checks on the metadata allowlist for 3PC cookies.
-BASE_FEATURE_PARAM(bool,
-                   kSkipTpcdMitigationsForAdsMetadata,
-                   &kSkipTpcdMitigationsForAds,
-                   /*name=*/"SkipTpcdMitigationsForAdsMetadata",
-                   /*default_value=*/false);
-// Controls whether we ignore checks on the deprecation trial for 3PC.
-BASE_FEATURE_PARAM(bool,
-                   kSkipTpcdMitigationsForAdsTrial,
-                   &kSkipTpcdMitigationsForAds,
-                   /*name=*/"SkipTpcdMitigationsForAdsSupport",
-                   /*default_value=*/false);
-// Controls whether we ignore checks on the top-level deprecation trial for 3PC.
-BASE_FEATURE_PARAM(bool,
-                   kSkipTpcdMitigationsForAdsTopLevelTrial,
-                   &kSkipTpcdMitigationsForAds,
-                   /*name=*/"SkipTpcdMitigationsForAdsTopLevelTrial",
-                   /*default_value=*/false);
-
 // Enables Document-Isolation-Policy (DIP).
 // https://github.com/WICG/document-isolation-policy
 BASE_FEATURE(kDocumentIsolationPolicy, base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kConnectionAllowlists, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kConnectionAllowlists, base::FEATURE_ENABLED_BY_DEFAULT);
 
 // This feature enables the Prefetch() method on the NetworkContext, and makes
 // the PrefetchMatchingURLLoaderFactory check the match quality.
@@ -402,13 +372,6 @@ BASE_FEATURE(kNetworkContextPrefetchUseMatches,
 BASE_FEATURE(kCloneDevToolsConnectionOnlyIfRequested,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kAdAuctionEventRegistration, base::FEATURE_DISABLED_BY_DEFAULT);
-
-// See https://github.com/WICG/turtledove/blob/main/FLEDGE.md
-// Changes default Permissions Policy for features join-ad-interest-group and
-// run-ad-auction to a more restricted EnableForSelf.
-BASE_FEATURE(kAdInterestGroupAPIRestrictedPolicyByDefault,
-             base::FEATURE_DISABLED_BY_DEFAULT);
 
 // Enables unload handler deprecation via Permissions-Policy.
 // https://crbug.com/1324111
@@ -465,112 +428,6 @@ BASE_FEATURE(kUpdateRequestForCorsRedirect, base::FEATURE_ENABLED_BY_DEFAULT);
 // Kill switch for the Topics API.
 BASE_FEATURE(kBrowsingTopics, base::FEATURE_ENABLED_BY_DEFAULT);
 
-// Enable the shared storage API. Note that enabling this feature does not
-// automatically expose this API to the web, it only allows the element to be
-// enabled by the runtime enabled feature, for origin trials.
-// https://github.com/pythagoraskitty/shared-storage/blob/main/README.md
-BASE_FEATURE(kSharedStorageAPI, base::FEATURE_ENABLED_BY_DEFAULT);
-BASE_FEATURE_PARAM(size_t,
-                   kSharedStorageURLSelectionOperationInputURLSizeLimit,
-                   &kSharedStorageAPI,
-                   "url_selection_operation_input_url_size_limit",
-                   8);
-BASE_FEATURE_PARAM(int,
-                   kMaxSharedStoragePageSize,
-                   &kSharedStorageAPI,
-                   "MaxSharedStoragePageSize",
-                   4096);
-BASE_FEATURE_PARAM(int,
-                   kMaxSharedStorageCacheSize,
-                   &kSharedStorageAPI,
-                   "MaxSharedStorageCacheSize",
-                   1024);
-BASE_FEATURE_PARAM(int,
-                   kMaxSharedStorageInitTries,
-                   &kSharedStorageAPI,
-                   "MaxSharedStorageInitTries",
-                   2);
-BASE_FEATURE_PARAM(int,
-                   kMaxSharedStorageIteratorBatchSize,
-                   &kSharedStorageAPI,
-                   "MaxSharedStorageIteratorBatchSize",
-                   100);
-BASE_FEATURE_PARAM(int,
-                   kSharedStorageBitBudget,
-                   &kSharedStorageAPI,
-                   "SharedStorageBitBudget",
-                   12);
-BASE_FEATURE_PARAM(base::TimeDelta,
-                   kSharedStorageBudgetInterval,
-                   &kSharedStorageAPI,
-                   "SharedStorageBudgetInterval",
-                   base::Hours(24));
-BASE_FEATURE_PARAM(base::TimeDelta,
-                   kSharedStorageStalePurgeInitialInterval,
-                   &kSharedStorageAPI,
-                   "SharedStorageStalePurgeInitialInterval",
-                   base::Minutes(2));
-BASE_FEATURE_PARAM(base::TimeDelta,
-                   kSharedStorageStalePurgeRecurringInterval,
-                   &kSharedStorageAPI,
-                   "SharedStorageStalePurgeRecurringInterval",
-                   base::Hours(2));
-BASE_FEATURE_PARAM(base::TimeDelta,
-                   kSharedStorageStalenessThreshold,
-                   &kSharedStorageAPI,
-                   "SharedStorageStalenessThreshold",
-                   base::Days(30));
-BASE_FEATURE_PARAM(size_t,
-                   kSharedStorageMaxAllowedFencedFrameDepthForSelectURL,
-                   &kSharedStorageAPI,
-                   "SharedStorageMaxAllowedFencedFrameDepthForSelectURL",
-                   1);
-// NOTE: To preserve user privacy, the
-// `kSharedStorageExposeDebugMessageForSettingsStatus` feature param MUST remain
-// false by default.
-BASE_FEATURE_PARAM(bool,
-                   kSharedStorageExposeDebugMessageForSettingsStatus,
-                   &kSharedStorageAPI,
-                   "ExposeDebugMessageForSettingsStatus",
-                   false);
-
-// Enables transactional behavior for sharedStorage.batchUpdate(). This also
-// disallows the 'withLock' option for methods within batchUpdate().
-// https://wicg.github.io/shared-storage/#batch-update
-BASE_FEATURE(kSharedStorageTransactionalBatchUpdate,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-// Kill switch for the Interest Group API, i.e. if disabled, the
-// API exposure will be disabled regardless of the OT config.
-BASE_FEATURE(kInterestGroupStorage, base::FEATURE_ENABLED_BY_DEFAULT);
-// TODO(crbug.com/40176812): Adjust these limits in response to usage.
-BASE_FEATURE_PARAM(int,
-                   kInterestGroupStorageMaxOwners,
-                   &kInterestGroupStorage,
-                   "max_owners",
-                   1000);
-BASE_FEATURE_PARAM(int,
-                   kInterestGroupStorageMaxStoragePerOwner,
-                   &kInterestGroupStorage,
-                   "max_storage_per_owner",
-                   10 * 1024 * 1024);
-BASE_FEATURE_PARAM(int,
-                   kInterestGroupStorageMaxGroupsPerOwner,
-                   &kInterestGroupStorage,
-                   "max_groups_per_owner",
-                   2000);
-BASE_FEATURE_PARAM(int,
-                   kInterestGroupStorageMaxNegativeGroupsPerOwner,
-                   &kInterestGroupStorage,
-                   "max_negative_groups_per_owner",
-                   20000);
-BASE_FEATURE_PARAM(int,
-                   kInterestGroupStorageMaxOpsBeforeMaintenance,
-                   &kInterestGroupStorage,
-                   "max_ops_before_maintenance",
-                   1000);
-
-BASE_FEATURE(kGetCookiesOnSet, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kIncreaseCookieAccessCacheSize, base::FEATURE_ENABLED_BY_DEFAULT);
 
@@ -583,9 +440,6 @@ BASE_FEATURE_PARAM(int,
 BASE_FEATURE(kPopulatePermissionsPolicyOnRequest,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kProtectedAudienceCorsSafelistKVv2Signals,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
 BASE_FEATURE(kStorageAccessHeadersRespectPermissionsPolicy,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
@@ -596,7 +450,9 @@ BASE_FEATURE(kCSPScriptSrcHashesInV1,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kCacheSharingForPervasiveResources,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kPervasiveSharedDictionaries, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kSendSameSiteLaxForFedCM, base::FEATURE_DISABLED_BY_DEFAULT);
 
@@ -612,6 +468,9 @@ BASE_FEATURE_PARAM(size_t,
                    /*name=*/"max_size",
                    1'000'000);
 
+BASE_FEATURE(kCompressionDictionaryLimitEarlyMatching,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
 BASE_FEATURE(kNetworkServiceTaskScheduler, base::FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE_PARAM(bool,
                    kNetworkServiceTaskSchedulerResourceScheduler,
@@ -624,11 +483,27 @@ BASE_FEATURE_PARAM(bool,
                    "url_loader",
                    true);
 
-BASE_FEATURE(kNetworkServicePerPriorityTaskQueues,
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
+// TODO(crbug.com/549684526): Enable this universally across all platforms as
+// there is no reason to keep the disabled behavior.
 BASE_FEATURE(kUseUnexportableKeyServiceInBrowserProcess,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+             base::FEATURE_ENABLED_BY_DEFAULT
+#else
+             base::FEATURE_DISABLED_BY_DEFAULT
+#endif
+);
+
+BASE_FEATURE(kBypassRequestForbiddenHeadersCheck,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+// When enabled, the network service will prohibit invalid modifications to the
+// Origin header in CorsURLLoader::FollowRedirect.
+BASE_FEATURE(kBlockInvalidOriginHeaderModificationOnRedirect,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+// When enabled, the network service will prohibit invalid Origin headers in
+// CorsURLLoader::StartRequest.
+BASE_FEATURE(kBlockInvalidOriginHeader, base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kServiceWorkerSyntheticResponseHeaderCheck,
              base::FEATURE_DISABLED_BY_DEFAULT);
@@ -645,5 +520,47 @@ BASE_FEATURE_PARAM(bool,
                    &kServiceWorkerSyntheticResponseHeaderCheck,
                    /*name=*/"report_inconsistent_header",
                    /*default_value=*/false);
+
+BASE_FEATURE(kAllowUnsafeRedirectSchemesForManualMode,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kDurableMessages, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE_PARAM(int,
+                   kDurableMessagesGlobalBufferSize,
+                   &kDurableMessages,
+                   /*name=*/"max_global_buffer_size",
+                   /*default_value=*/base::MiB(350).InBytes());
+
+BASE_FEATURE(kReportingApiEnableVariationsHeaders,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kNetworkContextDirectReceiver, base::FEATURE_DISABLED_BY_DEFAULT);
+
+bool ShouldBindNetworkContextDirectReceiver() {
+  return base::CurrentIOThread::IsSet() &&
+         base::FeatureList::IsEnabled(features::kNetworkContextDirectReceiver);
+}
+
+BASE_FEATURE(kCreateNetworkContextNonBlocking,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kDelayInitialDohProbeTimeout, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE_PARAM(base::TimeDelta,
+                   kDelayInitialDohProbeTimeoutParam,
+                   &kDelayInitialDohProbeTimeout,
+                   "initial_doh_probe_timeout",
+                   base::Seconds(5));
+
+BASE_FEATURE(kDirectSocketsUdpSendRequireMulticastPermissionPolicy,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kBrowserInitiatedFileUploadValidation,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kSafeRevalidation, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kBindURLLoaderFactoryToHighPriorityTaskRunner,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 }  // namespace network::features

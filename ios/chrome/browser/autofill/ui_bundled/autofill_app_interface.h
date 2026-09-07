@@ -8,7 +8,6 @@
 #import <Foundation/Foundation.h>
 
 #import "base/time/time.h"
-#import "ios/chrome/common/ui/reauthentication/reauthentication_protocol.h"
 
 // CreditCardSaveManager events that can be waited on by the IOSTestEventWaiter.
 // Name reflects the observer method that is triggering this event.
@@ -65,6 +64,18 @@ enum CreditCardSaveManagerObserverEvent : int {
 // Returns the name of the sample profile.
 + (NSString*)exampleProfileName;
 
+// Returns the street address of the sample profile.
++ (NSString*)exampleProfileAddress;
+
+// Returns the city of the sample profile.
++ (NSString*)exampleProfileCity;
+
+// Returns the state of the sample profile.
++ (NSString*)exampleProfileState;
+
+// Returns the zip code of the sample profile.
++ (NSString*)exampleProfileZip;
+
 // Removes the locally stored credit cards.
 + (void)clearCreditCardStore;
 
@@ -84,6 +95,12 @@ enum CreditCardSaveManagerObserverEvent : int {
 
 // Returns the CVC of the first saved local credit card.
 + (NSString*)firstLocalCreditCardCvc;
+
+// Returns the cardholder name of the sample local credit card.
++ (NSString*)exampleCreditCardName;
+
+// Returns the credit card number of the sample local credit card.
++ (NSString*)exampleCreditCardNumber;
 
 // Saves a masked credit card that requires CVC to be used.
 // Returns the `card.NetworkAndLastFourDigits` of the card used in the UIs.
@@ -146,19 +163,46 @@ enum CreditCardSaveManagerObserverEvent : int {
 // want to use this for tests.
 + (void)considerCreditCardFormSecureForTesting;
 
-// Sets a re-authentication mock (i.e. what asks user for fingerprint to
-// view password) and its options for next test.
-+ (void)setUpMockReauthenticationModule;
-+ (void)clearMockReauthenticationModule;
-+ (void)mockReauthenticationModuleCanAttempt:(BOOL)canAttempt;
-+ (void)mockReauthenticationModuleExpectedResult:
-    (ReauthenticationResult)expectedResult;
-
 // Configs the mandatory reauth preference.
 + (void)setMandatoryReauthEnabled:(BOOL)enabled;
 
 // Sets the CVC storage preference.
 + (void)setPaymentCvcStorageEnabled:(BOOL)enabled;
+
+// Triggers the Autofill AI save entity bubble.
++ (void)showAutofillAiSaveEntityBubble;
+
+// TODO(crbug.com/538242036): Remove showAtMemoryUI once the
+// SuggestionType::kAutocompleteAtMemoryButton can be received.
+// Triggers the AtMemory UI.
++ (void)showAtMemoryUI;
+
+// Saves a Redress Number entity with the given name and number. Returns the
+// UUID of the created entity. Because entities are saved asynchronously, it is
+// not immediately available to be retrieved from the EntityDataManager.
++ (NSString*)saveRedressNumberEntityWithName:(NSString*)name
+                                      number:(NSString*)number;
+
+// Removes the entity with the given UUID.
++ (void)removeEntityWithUUID:(NSString*)uuid;
+
+// Deletes all entities modified since the given time.
++ (void)removeEntityModifiedSince:(NSDate*)time;
+
+// Saves a Passport entity with test data.
++ (BOOL)savePassportEntity;
+
+// Saves a Passport entity with type kServerWallet.
++ (NSString*)saveServerWalletPassportEntity;
+
+// Saves a Vehicle entity with test data.
++ (BOOL)saveVehicleEntity;
+
+// Returns YES if there is at least one form cached in the AutofillManager.
++ (BOOL)isFormCachedInMainFrame;
+
+// Wait until a form is cached in the AutofillManager.
++ (BOOL)waitForFormToBeCachedInMainFrame;
 
 @end
 

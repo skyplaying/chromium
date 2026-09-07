@@ -4,6 +4,7 @@
 
 package org.chromium.chrome.browser.autofill.settings;
 
+import android.content.DialogInterface;
 import android.view.KeyEvent;
 import android.widget.EditText;
 
@@ -17,18 +18,18 @@ import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.chrome.browser.autofill.editors.address.EditorDialogView;
 import org.chromium.chrome.browser.autofill.editors.common.EditorObserverForTest;
-import org.chromium.chrome.browser.autofill.options.AutofillOptionsFragment;
-import org.chromium.chrome.test.ChromeBrowserTestRule;
+import org.chromium.chrome.browser.autofill.settings.options.AutofillOptionsFragment;
+import org.chromium.chrome.test.util.browser.signin.SigninTestRule;
 import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
+import org.chromium.content_public.browser.test.NativeLibraryTestUtils;
 import org.chromium.ui.modaldialog.ModalDialogProperties;
 import org.chromium.ui.modelutil.PropertyModel;
 
 import java.util.List;
 import java.util.concurrent.TimeoutException;
 
-/** Custom ChromeBrowserTestRule to test Autofill. */
-class AutofillTestRule extends ChromeBrowserTestRule
-        implements EditorObserverForTest, Callback<Fragment> {
+/** Custom SigninTestRule to test Autofill. */
+class AutofillTestRule extends SigninTestRule implements EditorObserverForTest, Callback<Fragment> {
     final CallbackHelper mClickUpdate;
     final CallbackHelper mEditorTextUpdate;
     final CallbackHelper mPreferenceUpdate;
@@ -37,7 +38,7 @@ class AutofillTestRule extends ChromeBrowserTestRule
     final CallbackHelper mFragmentShown;
 
     private EditorDialogView mEditorDialog;
-    private Fragment mLastestShownFragment;
+    private Fragment mLastShownFragment;
 
     AutofillTestRule() {
         mClickUpdate = new CallbackHelper();
@@ -54,6 +55,8 @@ class AutofillTestRule extends ChromeBrowserTestRule
         return new Statement() {
             @Override
             public void evaluate() throws Throwable {
+                NativeLibraryTestUtils.loadNativeLibraryAndInitBrowserProcess();
+                mLastShownFragment = null;
                 // If the test suit is batched, the observers are reset after every test method by
                 // the {@link ResettersForTesting}. Thus the observers must be set in the
                 // {@link TestRule#apply()} method.
@@ -82,6 +85,10 @@ class AutofillTestRule extends ChromeBrowserTestRule
     }
 
     protected void waitForFragmentToBeShown() throws TimeoutException {
+        // Return immediately if a fragment has already been shown.
+        if (mLastShownFragment != null) {
+            return;
+        }
         int callCount = mFragmentShown.getCallCount();
         mFragmentShown.waitForCallback(callCount);
     }
@@ -113,7 +120,7 @@ class AutofillTestRule extends ChromeBrowserTestRule
                         () -> {
                             int updateCallCountBeforeButtonClick = mPreferenceUpdate.getCallCount();
                             int buttonType =
-                                    button == android.content.DialogInterface.BUTTON_POSITIVE
+                                    button == DialogInterface.BUTTON_POSITIVE
                                             ? ModalDialogProperties.ButtonType.POSITIVE
                                             : ModalDialogProperties.ButtonType.NEGATIVE;
 
@@ -180,7 +187,7 @@ class AutofillTestRule extends ChromeBrowserTestRule
     }
 
     protected Fragment getLastestShownFragment() {
-        return mLastestShownFragment;
+        return mLastShownFragment;
     }
 
     @Override
@@ -217,7 +224,7 @@ class AutofillTestRule extends ChromeBrowserTestRule
     @Override
     public void onResult(Fragment fragment) {
         ThreadUtils.assertOnUiThread();
-        mLastestShownFragment = fragment;
+        mLastShownFragment = fragment;
         mFragmentShown.notifyCalled();
     }
 }

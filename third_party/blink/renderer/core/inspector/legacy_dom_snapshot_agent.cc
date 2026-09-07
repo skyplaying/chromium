@@ -283,9 +283,9 @@ int LegacyDOMSnapshotAgent::VisitNode(Node* node,
     value->setDocumentURL(InspectorDOMAgent::DocumentURLString(document));
     value->setBaseURL(InspectorDOMAgent::DocumentBaseURLString(document));
     if (document->ContentLanguage())
-      value->setContentLanguage(document->ContentLanguage().Utf8().c_str());
+      value->setContentLanguage(document->ContentLanguage());
     if (document->EncodingName())
-      value->setDocumentEncoding(document->EncodingName().Utf8().c_str());
+      value->setDocumentEncoding(document->EncodingName());
     value->setFrameId(IdentifiersFactory::FrameId(document->GetFrame()));
     if (document->View() && document->View()->LayoutViewport()) {
       auto offset = document->View()->LayoutViewport()->GetScrollOffset();
@@ -341,15 +341,17 @@ LegacyDOMSnapshotAgent::VisitPseudoElements(
       !parent->GetPseudoElement(kPseudoIdCheckMark) &&
       !parent->GetPseudoElement(kPseudoIdBefore) &&
       !parent->GetPseudoElement(kPseudoIdAfter) &&
+      !parent->GetPseudoElement(kPseudoIdExpandIcon) &&
       !parent->GetPseudoElement(kPseudoIdPickerIcon) &&
-      !parent->GetPseudoElement(kPseudoIdInterestHint)) {
+      !parent->GetPseudoElement(kPseudoIdInterestButton)) {
     return nullptr;
   }
 
   auto pseudo_elements = std::make_unique<protocol::Array<int>>();
   for (PseudoId pseudo_id :
        {kPseudoIdFirstLetter, kPseudoIdCheckMark, kPseudoIdBefore,
-        kPseudoIdAfter, kPseudoIdPickerIcon, kPseudoIdInterestHint}) {
+        kPseudoIdAfter, kPseudoIdExpandIcon, kPseudoIdPickerIcon,
+        kPseudoIdInterestButton}) {
     if (Node* pseudo_node = parent->GetPseudoElement(pseudo_id)) {
       pseudo_elements->emplace_back(VisitNode(pseudo_node,
                                               include_event_listeners,
@@ -401,8 +403,9 @@ int LegacyDOMSnapshotAgent::VisitLayoutTreeNode(LayoutObject* layout_object,
   if (style_index != -1)
     layout_tree_node->setStyleIndex(style_index);
 
-  if (layout_object->Style() && layout_object->IsStackingContext())
+  if (layout_object->IsStackingContext()) {
     layout_tree_node->setIsStackingContext(true);
+  }
 
   if (paint_order_map_) {
     PaintLayer* paint_layer = layout_object->EnclosingLayer();
@@ -447,7 +450,7 @@ const ComputedStyle* ComputedStyleForNode(Node& node) {
     return nullptr;
   }
   if (LayoutObject* layout_object = node.GetLayoutObject()) {
-    return layout_object->Style();
+    return &layout_object->StyleRef();
   }
   if (Element* parent_element = FlatTreeTraversal::ParentElement(node)) {
     return parent_element->EnsureComputedStyle();

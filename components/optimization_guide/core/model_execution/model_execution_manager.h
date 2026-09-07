@@ -24,11 +24,22 @@ namespace network {
 class SharedURLLoaderFactory;
 }  // namespace network
 
+namespace network::mojom {
+class NetworkContext;
+}  // namespace network::mojom
+
 namespace signin {
 class IdentityManager;
 }  // namespace signin
 
 namespace optimization_guide {
+
+// Overrides the Optimization Guide model execution URL.
+inline constexpr char kOptimizationGuideServiceModelExecutionURLSwitch[] =
+    "optimization-guide-service-model-execution-url";
+
+// Return the URL endpoint used for the model execution service.
+GURL GetModelExecutionServiceURL();
 
 class ModelExecutionFetcher;
 
@@ -39,7 +50,10 @@ class ModelExecutionManager final {
     virtual ~Delegate() = default;
 
     // Used to provide alternative fetcher implementations.
-    virtual std::unique_ptr<ModelExecutionFetcher> CreateLegionFetcher() = 0;
+    virtual std::unique_ptr<ModelExecutionFetcher> CreatePrivateAiFetcher() = 0;
+
+    // Returns the network context to be used for streaming connections.
+    virtual network::mojom::NetworkContext* GetNetworkContext() = 0;
   };
 
   ModelExecutionManager(
@@ -66,6 +80,12 @@ class ModelExecutionManager final {
       std::unique_ptr<proto::LogAiDataRequest> log_ai_data_request,
       ModelExecutionServiceType service_type,
       OptimizationGuideModelExecutionResultCallback callback);
+
+  // Establishes a persistent streaming session for execution.
+  std::unique_ptr<RemoteModelExecutionSession> StartStreamingSession(
+      ModelBasedCapabilityKey feature,
+      const StreamingModelExecutionOptions& options,
+      OptimizationGuideModelExecutionStreamingCallback callback);
 
   // Records a fake model execution response to be returned when ExecuteModel is
   // called for the given feature.

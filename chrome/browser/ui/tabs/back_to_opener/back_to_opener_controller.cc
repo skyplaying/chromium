@@ -86,6 +86,7 @@ TabCloseObserver* TabCloseObserver::CreateForWebContents(
   if (auto* existing = FromWebContents(web_contents)) {
     existing->close_start_time_ = close_start_time;
     existing->opener_web_contents_ = opener_web_contents;
+    existing->close_was_cancelled_ = false;
     return existing;
   }
 
@@ -107,7 +108,21 @@ TabCloseObserver::TabCloseObserver(
 
 TabCloseObserver::~TabCloseObserver() = default;
 
+void TabCloseObserver::BeforeUnloadFired(bool proceed) {
+  if (!proceed) {
+    MarkCloseCancelled();
+  }
+}
+
+void TabCloseObserver::BeforeUnloadDialogCancelled() {
+  MarkCloseCancelled();
+}
+
 void TabCloseObserver::WebContentsDestroyed() {
+  if (close_was_cancelled_) {
+    return;
+  }
+
   // Record the tab close duration.
   base::TimeDelta close_duration = base::TimeTicks::Now() - close_start_time_;
   base::UmaHistogramLongTimes(
@@ -152,6 +167,10 @@ void TabCloseObserver::WebContentsDestroyed() {
       window->Activate();
     }
   }
+}
+
+void TabCloseObserver::MarkCloseCancelled() {
+  close_was_cancelled_ = true;
 }
 
 BackToOpenerController::BackToOpenerController(tabs::TabInterface& tab)
@@ -245,7 +264,7 @@ void BackToOpenerController::GoBackToOpener() {
 
   content::WebContents* dst_contents = tab().GetContents();
   if (dst_contents && opener_web_contents_) {
-    // Record the time when ClosePage() is called to measure tab close duration.
+    // Record the time when closing starts to measure tab close duration.
     // Create TabCloseObserver to handle duration measurement and opener
     // activation after the tab is actually destroyed (after any unload
     // prompts).
@@ -253,7 +272,7 @@ void BackToOpenerController::GoBackToOpener() {
     TabCloseObserver::CreateForWebContents(dst_contents, opener_web_contents_,
                                            close_start_time);
 
-    dst_contents->ClosePage();
+    tab().Close();
   }
 }
 
@@ -274,6 +293,19 @@ void BackToOpenerController::OnPinnedStateChanged(tabs::TabInterface* tab,
 void BackToOpenerController::NotifyUIStateChanged() {
   content::WebContents* web_contents = tab().GetContents();
   if (!web_contents) {
+    return;
+  }
+  // Skip notifying when the tab strip selection is invalid. This controller
+  // is notified on pinned state changes, which can fire during tab strip
+  // reorg (e.g. unsplit or close). The selection model may be invalidated
+  // (active_index() == kNoTab) at that moment.
+  // TODO(crbug.com/448173940): Consider dropping the opener/destination
+  // relationship when either the opener or destination tab enters split view,
+  // so back-to-opener does not apply across split layout and we can avoid
+  // edge cases during unsplit/close.
+  BrowserWindowInterface* window = tab().GetBrowserWindowInterface();
+  TabStripModel* model = window ? window->GetTabStripModel() : nullptr;
+  if (!model || model->active_index() == TabStripModel::kNoTab) {
     return;
   }
   web_contents->NotifyNavigationStateChanged(content::INVALIDATE_TYPE_TAB);
@@ -310,7 +342,8 @@ void BackToOpenerController::ReadyToCommitNavigation(
     return;
   }
 
-  int initiator_process_id = navigation_handle->GetInitiatorProcessId();
+  content::ChildProcessId initiator_process_id =
+      navigation_handle->GetInitiatorProcessId();
   content::RenderFrameHost* initiator_frame =
       content::RenderFrameHost::FromFrameToken(
           content::GlobalRenderFrameHostToken(initiator_process_id,
@@ -337,6 +370,10 @@ void BackToOpenerController::SetOpenerWebContents(
   opener_web_contents_ = opener->GetWeakPtr();
   opener_title_ = opener->GetTitle();
   has_valid_opener_ = true;
+
+  // Record that a back-to-opener relationship was established.
+  base::UmaHistogramBoolean("Navigation.BackToOpener.Eligible", true);
+
   NotifyUIStateChanged();
 }
 
@@ -368,7 +405,7 @@ std::u16string BackToOpenerController::GetFormattedOpenerTitle(
   }
   opener_title = ui::EscapeMenuLabelAmpersands(opener_title);
 
-  // Format as "Close and return to \"[opener title]\""
+  // Format as "Close and go back to \"[tab title]\""
   const int kMaxBackForwardMenuWidth = 700;
   std::u16string formatted_text = l10n_util::GetStringFUTF16(
       IDS_HISTORY_CLOSE_AND_RETURN_TO_PREFIX, opener_title);

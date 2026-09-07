@@ -66,7 +66,7 @@ import java.util.concurrent.ExecutionException;
 @Batch(Batch.PER_CLASS)
 public class StatusViewTest {
     @ClassRule
-    public static BaseActivityTestRule<BlankUiTestActivity> sActivityTestRule =
+    public static final BaseActivityTestRule<BlankUiTestActivity> sActivityTestRule =
             new BaseActivityTestRule<>(BlankUiTestActivity.class);
 
     private static Activity sActivity;
@@ -97,7 +97,10 @@ public class StatusViewTest {
                     mStatusView =
                             sActivity
                                     .getLayoutInflater()
-                                    .inflate(R.layout.location_status, view, true)
+                                    .inflate(
+                                            R.layout.location_status,
+                                            view,
+                                            /* attachToRoot= */ true)
                                     .findViewById(R.id.location_bar_status);
                     mStatusView.setCompositeTouchDelegate(new CompositeTouchDelegate(view));
                     mStatusModel = new PropertyModel.Builder(StatusProperties.ALL_KEYS).build();
@@ -177,7 +180,7 @@ public class StatusViewTest {
                 () -> {
                     mStatusModel.set(
                             StatusProperties.STATUS_ICON_RESOURCE,
-                            new StatusIconResource(R.drawable.ic_search_24dp, 0));
+                            new StatusIconResource(R.drawable.ic_search_24dp, /* tint= */ 0));
                 });
         onView(withId(R.id.location_bar_status_icon))
                 .check((view, e) -> assertNotNull(mStatusView.getTouchDelegateForTesting()));
@@ -193,7 +196,7 @@ public class StatusViewTest {
                 () -> {
                     mStatusModel.set(
                             StatusProperties.STATUS_ICON_RESOURCE,
-                            new StatusIconResource(R.drawable.ic_search_24dp, 0));
+                            new StatusIconResource(R.drawable.ic_search_24dp, /* tint= */ 0));
                 });
         onView(withId(R.id.location_bar_status_icon))
                 .check(
@@ -239,7 +242,7 @@ public class StatusViewTest {
                 () -> {
                     mStatusModel.set(
                             StatusProperties.STATUS_ICON_RESOURCE,
-                            new StatusIconResource(R.drawable.ic_logo_googleg_24dp, 0));
+                            new StatusIconResource(R.drawable.ic_logo_googleg_24dp, /* tint= */ 0));
                 });
         onView(withId(R.id.location_bar_incognito_badge))
                 .check(
@@ -253,28 +256,11 @@ public class StatusViewTest {
     @Test
     @MediumTest
     @Feature({"Omnibox"})
-    public void testStatusViewAnimationStatusResetOnHide() {
-        runOnUiThreadBlocking(
-                () -> {
-                    mStatusModel.set(StatusProperties.SHOW_STATUS_ICON, true);
-                    mStatusModel.set(
-                            StatusProperties.STATUS_ICON_RESOURCE,
-                            new StatusIconResource(R.drawable.ic_logo_googleg_24dp, 0));
-                    assertTrue(mStatusView.isStatusIconAnimating());
-                    mStatusModel.set(StatusProperties.SHOW_STATUS_ICON, false);
-                    assertFalse(mStatusView.isStatusIconAnimating());
-                });
-    }
-
-    @Test
-    @MediumTest
-    @Feature({"Omnibox"})
     public void testStatusView_iconTransparencyShouldBeReset() {
         StatusIconResource statusIconResource =
-                new StatusIconResource(R.drawable.ic_logo_googleg_24dp, 0);
+                new StatusIconResource(R.drawable.ic_logo_googleg_24dp, /* tint= */ 0);
         runOnUiThreadBlocking(
                 () -> {
-                    mStatusModel.set(StatusProperties.SHOW_STATUS_ICON, true);
                     mStatusModel.set(StatusProperties.STATUS_ICON_RESOURCE, statusIconResource);
                 });
 
@@ -301,11 +287,10 @@ public class StatusViewTest {
         runOnUiThreadBlocking(
                 () -> {
                     mStatusView.setIconAnimationDurationForTesting(50);
-                    mStatusModel.set(StatusProperties.SHOW_STATUS_ICON, true);
                     mStatusModel.set(StatusProperties.ANIMATIONS_ENABLED, true);
                     mStatusModel.set(
                             StatusProperties.STATUS_ICON_RESOURCE,
-                            new StatusIconResource(R.drawable.ic_logo_googleg_24dp, 0));
+                            new StatusIconResource(R.drawable.ic_logo_googleg_24dp, /* tint= */ 0));
                     assertTrue(mStatusView.isStatusIconAnimating());
                 });
 
@@ -324,11 +309,10 @@ public class StatusViewTest {
         runOnUiThreadBlocking(
                 () -> {
                     mStatusView.setIconAnimationDurationForTesting(100);
-                    mStatusModel.set(StatusProperties.SHOW_STATUS_ICON, true);
                     mStatusModel.set(StatusProperties.ANIMATIONS_ENABLED, true);
                     mStatusModel.set(
                             StatusProperties.STATUS_ICON_RESOURCE,
-                            new StatusIconResource(R.drawable.ic_logo_googleg_24dp, 0));
+                            new StatusIconResource(R.drawable.ic_logo_googleg_24dp, /* tint= */ 0));
                     assertTrue(mStatusView.isStatusIconAnimating());
                     ChromeTransitionDrawable initialTransitionDrawable =
                             (ChromeTransitionDrawable)
@@ -345,7 +329,7 @@ public class StatusViewTest {
                     mStatusView.setIconAnimationDurationForTesting(0);
                     mStatusModel.set(
                             StatusProperties.STATUS_ICON_RESOURCE,
-                            new StatusIconResource(R.drawable.ic_search_24dp, 0));
+                            new StatusIconResource(R.drawable.ic_search_24dp, /* tint= */ 0));
 
                     assertFalse(
                             "Initial transition drawable should have stopped animating",
@@ -385,7 +369,6 @@ public class StatusViewTest {
                 () -> {
                     mStatusModel.set(StatusProperties.SHOW_STATUS_VIEW, false);
                     assertEquals(View.GONE, mStatusView.getVisibility());
-                    mStatusModel.set(StatusProperties.SHOW_STATUS_ICON, true);
                     assertEquals(View.GONE, mStatusView.getVisibility());
                 });
     }

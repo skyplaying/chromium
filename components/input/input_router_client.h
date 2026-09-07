@@ -6,6 +6,7 @@
 #define COMPONENTS_INPUT_INPUT_ROUTER_CLIENT_H_
 
 #include "cc/input/touch_action.h"
+#include "components/input/dispatch_to_renderer_callback.h"
 #include "components/input/event_with_latency_info.h"
 #include "components/input/native_web_keyboard_event.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
@@ -57,6 +58,9 @@ class COMPONENT_EXPORT(INPUT) InputRouterClient {
 
   // Called when a GSB has started scrolling a viewport.
   virtual void DidStartScrollingViewport() = 0;
+
+  // Called when the input router becomes active.
+  virtual void OnInputRouterActive() = 0;
 
   // Called when the input router generates an event. It is intended that the
   // client will do some processing on |gesture_event| and then send it back

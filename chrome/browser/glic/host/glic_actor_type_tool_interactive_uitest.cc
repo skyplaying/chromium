@@ -4,6 +4,7 @@
 
 #include "chrome/browser/actor/actor_test_util.h"
 #include "chrome/browser/glic/host/glic_actor_interactive_uitest_common.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
 #include "components/optimization_guide/proto/features/actions_data.pb.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -17,6 +18,7 @@ namespace apc = ::optimization_guide::proto;
 using apc::Actions;
 using apc::TypeAction;
 
+// TODO(crbug.com/537846361): Migrate this test suite to GlicBrowserTest.
 class GlicActorTypeToolUiTest : public GlicActorUiTest {
  public:
   GlicActorUiTest::MultiStep TypeAction(
@@ -54,9 +56,8 @@ GlicActorUiTest::MultiStep GlicActorTypeToolUiTest::TypeAction(
         int32_t node_id = SearchAnnotatedPageContent(label);
         content::RenderFrameHost* frame =
             tab_handle.Get()->GetContents()->GetPrimaryMainFrame();
-        Actions action =
-            actor::MakeType(*frame, node_id, text, follow_by_enter, mode);
-        action.set_task_id(task_id.value());
+        Actions action = actor::MakeType(*frame, node_id, text, follow_by_enter,
+                                         mode, task_id);
         return EncodeActionProto(action);
       });
   return ExecuteAction(std::move(type_provider), std::move(expected_result));
@@ -78,9 +79,9 @@ GlicActorUiTest::MultiStep GlicActorTypeToolUiTest::TypeAction(
     ExpectedErrorResult expected_result) {
   auto type_provider =
       base::BindLambdaForTesting([this, &coordinate, text, mode]() {
-        Actions action = actor::MakeType(tab_handle_, coordinate, text,
-                                         /*follow_by_enter=*/false, mode);
-        action.set_task_id(task_id_.value());
+        Actions action =
+            actor::MakeType(tab_handle_, coordinate, text,
+                            /*follow_by_enter=*/false, mode, task_id_);
         return EncodeActionProto(action);
       });
   return ExecuteAction(std::move(type_provider), std::move(expected_result));
@@ -90,7 +91,8 @@ GlicActorUiTest::MultiStep GlicActorTypeToolUiTest::TypeAction(
 // implemented. Currently uses DELETE_EXISTING behavior in all cases.
 IN_PROC_BROWSER_TEST_F(GlicActorTypeToolUiTest, BasicTypeActionSucceeds) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTypingTestTabId);
-  const GURL task_url = embedded_test_server()->GetURL("/actor/input.html");
+  const GURL task_url =
+      embedded_https_test_server().GetURL("example.com", "/actor/input.html");
   const std::string kExpectedText = "Hello Standard Input";
   const std::string kElementLabel = "test-input";
 
@@ -111,7 +113,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorTypeToolUiTest, BasicTypeActionSucceeds) {
 IN_PROC_BROWSER_TEST_F(GlicActorTypeToolUiTest,
                        TypeActionDeleteExistingSucceeds) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTypingTestTabId);
-  const GURL task_url = embedded_test_server()->GetURL("/actor/input.html");
+  const GURL task_url =
+      embedded_https_test_server().GetURL("example.com", "/actor/input.html");
   const std::string kExpectedText = "This Should Be The Only Text";
   const std::string kElementLabel = "test-input";
   const std::string kInitialText = "This Should Not Appear";
@@ -135,10 +138,18 @@ IN_PROC_BROWSER_TEST_F(GlicActorTypeToolUiTest,
                       kExpectedText));
 }
 
+// TODO(crbug.com/469210106): Re-enable this test on ChromeOS.
+#if BUILDFLAG(IS_CHROMEOS)
+#define MAYBE_TypeActionOnDisabledInputFails \
+  DISABLED_TypeActionOnDisabledInputFails
+#else
+#define MAYBE_TypeActionOnDisabledInputFails TypeActionOnDisabledInputFails
+#endif
 IN_PROC_BROWSER_TEST_F(GlicActorTypeToolUiTest,
-                       TypeActionOnDisabledInputFails) {
+                       MAYBE_TypeActionOnDisabledInputFails) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTypingTestTabId);
-  const GURL task_url = embedded_test_server()->GetURL("/actor/input.html");
+  const GURL task_url =
+      embedded_https_test_server().GetURL("example.com", "/actor/input.html");
   const std::string kElementLabel = "disabled-input";
 
   RunTestSequence(InitializeWithOpenGlicWindow(),
@@ -155,7 +166,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorTypeToolUiTest,
 IN_PROC_BROWSER_TEST_F(GlicActorTypeToolUiTest,
                        TypeActionOnNonExistentNodeFails) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTypingTestTabId);
-  const GURL task_url = embedded_test_server()->GetURL("/actor/input.html");
+  const GURL task_url =
+      embedded_https_test_server().GetURL("example.com", "/actor/input.html");
 
   auto type_provider = base::BindLambdaForTesting([this]() {
     content::RenderFrameHost* frame =
@@ -165,36 +177,28 @@ IN_PROC_BROWSER_TEST_F(GlicActorTypeToolUiTest,
     Actions action = actor::MakeType(
         *frame, kNonExistentContentNodeId, kText, /*follow_by_enter=*/false,
         optimization_guide::proto::TypeAction::TypeMode::
-            TypeAction_TypeMode_DELETE_EXISTING);
+            TypeAction_TypeMode_DELETE_EXISTING,
+        task_id_);
 
-    action.set_task_id(task_id_.value());
     return EncodeActionProto(action);
   });
 
   RunTestSequence(
       InitializeWithOpenGlicWindow(),
       StartActorTaskInNewTab(task_url, kTypingTestTabId),
+      // Save APC before sending the fake target id.
+      GetPageContextForActorTab(),
       ExecuteAction(std::move(type_provider),
                     actor::mojom::ActionResultCode::kInvalidDomNodeId));
 }
 
-class GlicActorTypeToolUiTestWithoutMultiInstance
-    : public GlicActorTypeToolUiTest {
- public:
-  GlicActorTypeToolUiTestWithoutMultiInstance() {
-    feature_list_.InitAndDisableFeature(features::kGlicMultiInstance);
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
 // Tests that if focusing the target element causes focus to move to a
 // different element, the type action correctly types into that new element.
-IN_PROC_BROWSER_TEST_F(GlicActorTypeToolUiTestWithoutMultiInstance,
+IN_PROC_BROWSER_TEST_F(GlicActorTypeToolUiTest,
                        TypeActionOnFocusRedirectSucceeds) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTypingTestTabId);
-  const GURL task_url = embedded_test_server()->GetURL("/actor/input.html");
+  const GURL task_url =
+      embedded_https_test_server().GetURL("example.com", "/actor/input.html");
   const std::string kExpectedText = "Should be typed in input2";
   const std::string kElementLabel = "test-input";
 
@@ -228,8 +232,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorTypeToolUiTestWithoutMultiInstance,
 // Tests that typing at coordinates succeed
 IN_PROC_BROWSER_TEST_F(GlicActorTypeToolUiTest, TypeActionCoordinatesSucceeds) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTypingTestTabId);
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/type_input_coordinate.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/type_input_coordinate.html");
 
   const std::string_view kTypedString = "test";
 
@@ -242,9 +246,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorTypeToolUiTest, TypeActionCoordinatesSucceeds) {
             actor::MakeType(tab_handle_, coordinate, kTypedString,
                             /*follow_by_enter=*/false,
                             optimization_guide::proto::TypeAction::TypeMode::
-                                TypeAction_TypeMode_DELETE_EXISTING);
-
-        action.set_task_id(task_id_.value());
+                                TypeAction_TypeMode_DELETE_EXISTING,
+                            task_id_);
         return EncodeActionProto(action);
       });
 
@@ -278,7 +281,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorTypeToolUiTest, TypeActionCoordinatesSucceeds) {
 IN_PROC_BROWSER_TEST_F(GlicActorTypeToolUiTest,
                        TypeActionOffScreenCoordinateFails) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTypingTestTabId);
-  const GURL task_url = embedded_test_server()->GetURL("/actor/input.html");
+  const GURL task_url =
+      embedded_https_test_server().GetURL("example.com", "/actor/input.html");
 
   RunTestSequence(
       InitializeWithOpenGlicWindow(),
@@ -297,8 +301,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorTypeToolUiTest,
 IN_PROC_BROWSER_TEST_F(GlicActorTypeToolUiTest,
                        TypeActionOnDynamicNodeSucceeds) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTypingTestTabId);
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/type_dynamic_input.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/type_dynamic_input.html");
   const std::string kExpectedText = "abc";
   const std::string kElementLabel = "dynamic-input";
 
@@ -326,7 +330,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorTypeToolUiTest,
 IN_PROC_BROWSER_TEST_F(GlicActorTypeToolUiTest,
                        TypeActionWithPageKeyHandlerSucceeds) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTypingTestTabId);
-  const GURL task_url = embedded_test_server()->GetURL("/actor/input.html");
+  const GURL task_url =
+      embedded_https_test_server().GetURL("example.com", "/actor/input.html");
   const std::string kExpectedText = "Hello Key Handler";
   const std::string kElementLabel = "key-handling-input";
 
@@ -352,7 +357,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorTypeToolUiTest,
 IN_PROC_BROWSER_TEST_F(GlicActorTypeToolUiTest,
                        TypeActionByCoordinateWithPageKeyHandlerSucceeds) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTypingTestTabId);
-  const GURL task_url = embedded_test_server()->GetURL("/actor/input.html");
+  const GURL task_url =
+      embedded_https_test_server().GetURL("example.com", "/actor/input.html");
   const std::string kExpectedText = "Hello Coordinate";
 
   // Declare a variable to hold the element's coordinates.
@@ -367,9 +373,9 @@ IN_PROC_BROWSER_TEST_F(GlicActorTypeToolUiTest,
             actor::MakeType(tab_handle_, coordinate, kExpectedText,
                             /*follow_by_enter=*/false,
                             optimization_guide::proto::TypeAction::TypeMode::
-                                TypeAction_TypeMode_DELETE_EXISTING);
+                                TypeAction_TypeMode_DELETE_EXISTING,
+                            task_id_);
 
-        action.set_task_id(task_id_.value());
         return EncodeActionProto(action);
       });
 

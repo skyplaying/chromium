@@ -8,11 +8,11 @@
 #include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/sad_tab.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
@@ -20,10 +20,16 @@
 #include "content/public/test/no_renderer_crashes_assertion.h"
 #include "content/public/test/test_utils.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+#include "ui/base/window_open_disposition.h"
 
 #if BUILDFLAG(IS_WIN)
 #include "base/process/process.h"
+#include "chrome/browser/preloading/prefetch/no_state_prefetch/no_state_prefetch_manager_factory.h"
+#include "chrome/browser/preloading/prefetch/no_state_prefetch/no_state_prefetch_test_utils.h"
 #include "chrome/common/chrome_result_codes.h"
+#include "components/no_state_prefetch/browser/no_state_prefetch_handle.h"
+#include "components/no_state_prefetch/browser/no_state_prefetch_manager.h"
+#include "third_party/blink/public/mojom/prerender/prerender.mojom.h"
 #endif
 
 class SadTabHelperBrowserTest : public InProcessBrowserTest {
@@ -63,7 +69,7 @@ IN_PROC_BROWSER_TEST_F(
   // Terminate the first tab (at index 0).
   const int target_tab_index = 0;
   content::WebContents* web_contents_to_kill =
-      browser()->tab_strip_model()->GetWebContentsAt(target_tab_index);
+      browser()->GetTabStripModel()->GetWebContentsAt(target_tab_index);
   ASSERT_TRUE(web_contents_to_kill);
 
   // Open a new tab to make the first one hidden.
@@ -85,9 +91,85 @@ IN_PROC_BROWSER_TEST_F(
   // index and check its state.
   EXPECT_TRUE(base::test::RunUntil([&]() {
     content::WebContents* current_web_contents =
-        browser()->tab_strip_model()->GetWebContentsAt(target_tab_index);
+        browser()->GetTabStripModel()->GetWebContentsAt(target_tab_index);
     // It's possible for the WebContents to be briefly null during the swap.
     return current_web_contents && current_web_contents->WasDiscarded();
   }));
+}
+
+// Windows only test, because of the way process termination is used.
+// Verifies that a no-state prefetch WebContents (which is not in a
+// TabStripModel) does not crash in SadTabHelper when its renderer is
+// terminated with TERMINATION_STATUS_EVICTED_FOR_MEMORY. Previously, a CHECK
+// in SadTabHelper::PrimaryMainFrameRenderProcessGone assumed that
+// TabLifecycleUnitExternal::FromWebContents always returned non-null, but
+// no-state prefetch WebContents are never added to a TabStripModel.
+// TODO(crbug.com/541361270): Re-enable this test
+IN_PROC_BROWSER_TEST_F(SadTabHelperBrowserTest,
+                       DISABLED_NoStatePrefetchEvictedForMemory_DoesNotCrash) {
+  content::ScopedAllowRendererCrashes scoped_allow_renderer_crashes;
+
+  // Navigate the main tab to a real page so we have an active browser context.
+  const GURL url(embedded_test_server()->GetURL("/title1.html"));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
+
+  // Start a no-state prefetch. This creates a hidden WebContents that is NOT
+  // in any TabStripModel but has SadTabHelper attached via
+  // TabHelpers::AttachTabHelpers.
+  prerender::NoStatePrefetchManager* prefetch_manager =
+      prerender::NoStatePrefetchManagerFactory::GetForBrowserContext(
+          browser()->GetProfile());
+
+  // Set-up no-state prefetch test.
+  prerender::test_utils::TestNoStatePrefetchContentsFactory*
+      no_state_prefetch_contents_factory =
+          new prerender::test_utils::TestNoStatePrefetchContentsFactory();
+
+  std::unique_ptr<prerender::test_utils::TestPrerender> test_no_state_prefetch =
+      no_state_prefetch_contents_factory->ExpectNoStatePrefetchContents(
+          prerender::FINAL_STATUS_RENDERER_CRASHED);
+
+  prefetch_manager->SetNoStatePrefetchContentsFactoryForTest(
+      no_state_prefetch_contents_factory);
+
+  // Navigate no-state prefetch to hung url to keep it alive before memory
+  // eviction, because if all subresources will be loaded NoStatePrefetchHelper
+  // in renderer will finish prefetching with calling
+  // CancelNoStatePrefetchAfterSubresourcesDiscovered.
+  const GURL prefetch_url(embedded_test_server()->GetURL("/hung"));
+  std::unique_ptr<prerender::NoStatePrefetchHandle> prefetch_handle =
+      prefetch_manager->StartPrefetchingFromLinkRelPrerender(
+          /*process_id=*/-1, /*route_id=*/-1, prefetch_url,
+          blink::mojom::PrerenderTriggerType::kLinkRelPrerender,
+          content::Referrer(), url::Origin::Create(prefetch_url),
+          gfx::Size(640, 480));
+
+  content::WebContents* prefetch_web_contents =
+      prefetch_handle->contents()->no_state_prefetch_contents();
+
+  // Verify this WebContents is not a tab (so it has no SadTabHelper, which
+  // is owned by TabFeatures) and is hidden.
+  ASSERT_FALSE(tabs::TabInterface::MaybeGetFromContents(prefetch_web_contents));
+  ASSERT_EQ(prefetch_web_contents->GetVisibility(),
+            content::Visibility::HIDDEN);
+
+  // Wait for the render process with prefetch web contents to be ready before
+  // terminating it.
+  test_no_state_prefetch->WaitForStart();
+  content::RenderProcessHost* render_process_host =
+      prefetch_web_contents->GetPrimaryMainFrame()->GetProcess();
+  ASSERT_TRUE(render_process_host->IsReady());
+
+  // Terminate the prefetch renderer with the exit code that maps to
+  // TERMINATION_STATUS_EVICTED_FOR_MEMORY.
+  content::RenderProcessHostWatcher crash_observer(
+      render_process_host,
+      content::RenderProcessHostWatcher::WATCH_FOR_PROCESS_EXIT);
+  render_process_host->GetProcess().Terminate(
+      CHROME_RESULT_CODE_TERMINATED_BY_OTHER_PROCESS_ON_COMMIT_FAILURE, false);
+  crash_observer.Wait();
+
+  // Should get there with crashed renderer with prefetch web contents, but
+  // without crashing browser process.
 }
 #endif  // BUILDFLAG(IS_WIN)

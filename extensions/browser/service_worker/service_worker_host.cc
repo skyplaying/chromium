@@ -25,6 +25,7 @@
 #include "extensions/browser/service_worker/service_worker_task_queue.h"
 #include "extensions/browser/service_worker/worker_id.h"
 #include "extensions/common/api/messaging/port_context.h"
+#include "extensions/common/api/messaging/signing_certificate.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/mojom/frame.mojom.h"
 #include "extensions/common/permissions/permissions_data.h"
@@ -91,7 +92,7 @@ ServiceWorkerHost::SetFactoryForTesting(FactoryCallback* factory) {
 
 // static
 void ServiceWorkerHost::BindReceiver(
-    int render_process_id,
+    content::ChildProcessId render_process_id,
     mojo::PendingAssociatedReceiver<mojom::ServiceWorkerHost> receiver) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   auto* render_process_host =
@@ -156,6 +157,7 @@ void ServiceWorkerHost::RemoteDisconnected() {
 
 void ServiceWorkerHost::DidInitializeServiceWorkerContext(
     const ExtensionId& extension_id,
+    const base::UnguessableToken& activation_token,
     int64_t service_worker_version_id,
     int worker_thread_id,
     const blink::ServiceWorkerToken& service_worker_token,
@@ -185,8 +187,7 @@ void ServiceWorkerHost::DidInitializeServiceWorkerContext(
 
   content::ChildProcessId render_process_id = render_process_host_->GetID();
   auto* process_map = ProcessMap::Get(browser_context);
-  if (!process_map || !process_map->Contains(
-                          extension_id, render_process_id.GetUnsafeValue())) {
+  if (!process_map || !process_map->Contains(extension_id, render_process_id)) {
     // We check the process in addition to the registry to guard against
     // situations in which an extension may still be enabled, but no longer
     // running in a given process.
@@ -199,8 +200,8 @@ void ServiceWorkerHost::DidInitializeServiceWorkerContext(
 
   ServiceWorkerTaskQueue::Get(browser_context)
       ->RendererDidInitializeServiceWorkerContext(
-          render_process_id, extension_id, service_worker_version_id,
-          worker_thread_id, service_worker_token);
+          render_process_id, extension_id, activation_token,
+          service_worker_version_id, worker_thread_id, service_worker_token);
   EventRouter::Get(browser_context)
       ->BindServiceWorkerEventDispatcher(render_process_id.GetUnsafeValue(),
                                          worker_thread_id,
@@ -212,7 +213,8 @@ void ServiceWorkerHost::DidStartServiceWorkerContext(
     const base::UnguessableToken& activation_token,
     const GURL& service_worker_scope,
     int64_t service_worker_version_id,
-    int worker_thread_id) {
+    int worker_thread_id,
+    const blink::ServiceWorkerToken& service_worker_token) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   content::BrowserContext* browser_context = GetBrowserContext();
   if (!browser_context) {
@@ -222,18 +224,22 @@ void ServiceWorkerHost::DidStartServiceWorkerContext(
   DCHECK_NE(kMainThreadId, worker_thread_id);
   content::ChildProcessId render_process_id = render_process_host_->GetID();
   auto* process_map = ProcessMap::Get(browser_context);
-  if (!process_map || !process_map->Contains(
-                          extension_id, render_process_id.GetUnsafeValue())) {
+  if (!process_map || !process_map->Contains(extension_id, render_process_id)) {
     // We can legitimately get here if the extension was already unloaded.
     return;
   }
-  CHECK(service_worker_scope.SchemeIs(kExtensionScheme) &&
-        extension_id == service_worker_scope.host());
+  if (!service_worker_scope.SchemeIs(kExtensionScheme) ||
+      extension_id != service_worker_scope.host()) {
+    bad_message::ReceivedBadMessage(
+        render_process_host_, bad_message::SWH_INVALID_SERVICE_WORKER_SCOPE);
+    return;
+  }
 
   ServiceWorkerTaskQueue::Get(browser_context)
       ->RendererDidStartServiceWorkerContext(
           render_process_id, extension_id, activation_token,
-          service_worker_scope, service_worker_version_id, worker_thread_id);
+          service_worker_scope, service_worker_version_id, worker_thread_id,
+          service_worker_token);
 }
 
 void ServiceWorkerHost::DidStopServiceWorkerContext(
@@ -241,7 +247,8 @@ void ServiceWorkerHost::DidStopServiceWorkerContext(
     const base::UnguessableToken& activation_token,
     const GURL& service_worker_scope,
     int64_t service_worker_version_id,
-    int worker_thread_id) {
+    int worker_thread_id,
+    const blink::ServiceWorkerToken& service_worker_token) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   content::BrowserContext* browser_context = GetBrowserContext();
   if (!browser_context) {
@@ -251,19 +258,23 @@ void ServiceWorkerHost::DidStopServiceWorkerContext(
   DCHECK_NE(kMainThreadId, worker_thread_id);
   content::ChildProcessId render_process_id = render_process_host_->GetID();
   auto* process_map = ProcessMap::Get(browser_context);
-  if (!process_map || !process_map->Contains(
-                          extension_id, render_process_id.GetUnsafeValue())) {
+  if (!process_map || !process_map->Contains(extension_id, render_process_id)) {
     // We can legitimately get here if the extension was already unloaded.
     return;
   }
-  CHECK(service_worker_scope.SchemeIs(kExtensionScheme) &&
-        extension_id == service_worker_scope.host());
+  if (!service_worker_scope.SchemeIs(kExtensionScheme) ||
+      extension_id != service_worker_scope.host()) {
+    bad_message::ReceivedBadMessage(
+        render_process_host_, bad_message::SWH_INVALID_SERVICE_WORKER_SCOPE);
+    return;
+  }
   CHECK_NE(blink::mojom::kInvalidServiceWorkerVersionId,
            service_worker_version_id);
   ServiceWorkerTaskQueue::Get(browser_context)
       ->RendererDidStopServiceWorkerContext(
           render_process_id, extension_id, activation_token,
-          service_worker_scope, service_worker_version_id, worker_thread_id);
+          service_worker_scope, service_worker_version_id, worker_thread_id,
+          service_worker_token);
 }
 
 void ServiceWorkerHost::RequestWorker(mojom::RequestParamsPtr params,
@@ -356,6 +367,9 @@ void ServiceWorkerHost::OpenChannelToExtension(
 
 void ServiceWorkerHost::OpenChannelToNativeApp(
     const std::string& native_app_name,
+#if BUILDFLAG(IS_ANDROID)
+    const MojomSigningCertificates& android_certificates,
+#endif
     const PortId& port_id,
     mojo::PendingAssociatedRemote<extensions::mojom::MessagePort> port,
     mojo::PendingAssociatedReceiver<extensions::mojom::MessagePortHost>
@@ -367,9 +381,16 @@ void ServiceWorkerHost::OpenChannelToNativeApp(
     return;
   }
 
+#if BUILDFLAG(IS_ANDROID)
+  SigningCertificates parsed_certificates =
+      ParseCertificatesFromMojom(android_certificates);
+#else
+  SigningCertificates parsed_certificates = {};
+#endif
+
   MessageServiceApi::GetMessageService()->OpenChannelToNativeApp(
-      browser_context, worker_id_, port_id, native_app_name, std::move(port),
-      std::move(port_host));
+      browser_context, worker_id_, port_id, native_app_name,
+      std::move(parsed_certificates), std::move(port), std::move(port_host));
 }
 
 void ServiceWorkerHost::OpenChannelToTab(

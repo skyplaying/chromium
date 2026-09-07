@@ -4,17 +4,19 @@
 
 package org.chromium.chrome.browser.toolbar.optional_button;
 
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import android.app.Activity;
-import android.content.res.Resources;
 import android.graphics.drawable.Drawable;
 import android.view.View;
 
 import androidx.annotation.Nullable;
 
-import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -23,18 +25,16 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.FeatureOverrides;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Features.EnableFeatures;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.toolbar.R;
 import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarButtonVariant;
 import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarFeatures;
+import org.chromium.chrome.browser.toolbar.optional_button.ButtonData.ButtonSpec;
 import org.chromium.chrome.browser.user_education.IphCommandBuilder;
 import org.chromium.components.feature_engagement.FeatureConstants;
 import org.chromium.ui.modaldialog.ModalDialogManager;
@@ -43,8 +43,6 @@ import java.util.function.Supplier;
 
 /** Unit test for {@link BaseButtonDataProvider}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
-@EnableFeatures({ChromeFeatureList.ADAPTIVE_BUTTON_IN_TOP_TOOLBAR_CUSTOMIZATION_V2})
 public class BaseButtonDataProviderTest {
     private static class TestButtonDataProvider extends BaseButtonDataProvider {
         public TestButtonDataProvider(
@@ -58,13 +56,10 @@ public class BaseButtonDataProviderTest {
             super(
                     activeTabSupplier,
                     modalDialogManager,
-                    buttonDrawable,
-                    contentDescription,
-                    actionChipLabelResId,
-                    supportsTinting,
-                    /* iphCommandBuilder= */ null,
-                    adaptiveButtonVariant,
-                    /* tooltipTextResId= */ Resources.ID_NULL);
+                    new ButtonSpec.Builder(buttonDrawable, contentDescription, supportsTinting)
+                            .setActionChipLabelResId(actionChipLabelResId)
+                            .setButtonVariant(adaptiveButtonVariant)
+                            .build());
         }
 
         @Override
@@ -90,6 +85,7 @@ public class BaseButtonDataProviderTest {
 
     @Before
     public void setUp() {
+        FeatureOverrides.newBuilder().apply();
         mMockTabSupplier = ObservableSuppliers.createMonotonic(mMockTab);
         mActivity = Robolectric.setupActivity(Activity.class);
         mActivity.setTheme(R.style.Theme_BrowserUI_DayNight);
@@ -99,7 +95,6 @@ public class BaseButtonDataProviderTest {
 
     @Test
     public void testButtonData_QuietVariation() {
-        FeatureOverrides.enable(ChromeFeatureList.ADAPTIVE_BUTTON_IN_TOP_TOOLBAR_CUSTOMIZATION_V2);
         AdaptiveToolbarFeatures.setActionChipOverrideForTesting(
                 AdaptiveToolbarButtonVariant.READER_MODE, false);
 
@@ -115,12 +110,11 @@ public class BaseButtonDataProviderTest {
         ButtonData buttonData = testButtonDataProvider.get(mMockTab);
 
         // Quiet variation uses an IphCommandBuilder to highlight the action.
-        Assert.assertNotNull(buttonData.getButtonSpec().getIphCommandBuilder());
+        assertNotNull(buttonData.getButtonSpec().getIphCommandBuilder());
     }
 
     @Test
     public void testButtonData_ActionChipVariation() {
-        FeatureOverrides.enable(ChromeFeatureList.ADAPTIVE_BUTTON_IN_TOP_TOOLBAR_CUSTOMIZATION_V2);
         AdaptiveToolbarFeatures.setActionChipOverrideForTesting(
                 AdaptiveToolbarButtonVariant.READER_MODE, true);
 
@@ -136,7 +130,7 @@ public class BaseButtonDataProviderTest {
         ButtonData buttonData = testButtonDataProvider.get(mMockTab);
 
         // Action chip variation should not set an IPH command builder.
-        Assert.assertNull(buttonData.getButtonSpec().getIphCommandBuilder());
+        assertNull(buttonData.getButtonSpec().getIphCommandBuilder());
     }
 
     @Test
@@ -155,7 +149,7 @@ public class BaseButtonDataProviderTest {
 
         ButtonData buttonDataIncognitoTab = testButtonDataProvider.get(mMockTab);
 
-        Assert.assertFalse(buttonDataIncognitoTab.canShow());
+        assertFalse(buttonDataIncognitoTab.canShow());
     }
 
     @Test
@@ -175,6 +169,6 @@ public class BaseButtonDataProviderTest {
 
         ButtonData buttonDataIncognitoTab = testButtonDataProvider.get(mMockTab);
 
-        Assert.assertTrue(buttonDataIncognitoTab.canShow());
+        assertTrue(buttonDataIncognitoTab.canShow());
     }
 }

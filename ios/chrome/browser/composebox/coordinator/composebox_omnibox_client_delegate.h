@@ -12,11 +12,18 @@
 struct UrlLoadParams;
 enum class WindowOpenDisposition;
 
+namespace web {
+class WebState;
+}  // namespace web
+
 /// Delegate for ComposeboxOmniboxClient.
 @protocol ComposeboxOmniboxClientDelegate
 
+/// Returns the current web state.
+- (web::WebState*)webState;
+
 /// Returns the current input state of the composebox.
-- (contextual_search::InputState)inputState;
+- (std::optional<contextual_search::InputState>)inputState;
 
 /// Returns the current attached suggest input in the composebox.
 - (std::optional<lens::proto::LensOverlaySuggestInputs>)suggestInputs;
@@ -35,6 +42,9 @@ enum class WindowOpenDisposition;
 - (void)omniboxDidChangeText:(const std::u16string&)text
                isSearchQuery:(BOOL)isSearchQuery
          userInputInProgress:(BOOL)userInputInProgress;
+
+/// Returns whether the composebox is awaiting attachment signals to fully load.
+- (BOOL)awaitingAttachmentSignals;
 
 @end
 

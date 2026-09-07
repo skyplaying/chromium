@@ -102,7 +102,6 @@ BrowserRootViewBrowserTest.*
 -SessionRestoreTest.RestoredTabsHaveCorrectInitialSize
 -TabSharingUIViewsPreferCurrentTabBrowserTest.VerifyUiWhenCapturingAnotherTab
 -TabSharingUIViewsPreferCurrentTabBrowserTest.VerifyUiWhenSelfCapturing
--WebAppFrameToolbarBrowserTest_Borderless.*
 -WebAppFrameToolbarBrowserTest_WindowControlsOverlay.*
 -WebAppGlassBrowserFrameViewWindowControlsOverlayTest.*
 -WebAppBrowserFrameViewWinWindowControlsOverlayTest.*
@@ -146,9 +145,6 @@ BrowserRootViewBrowserTest.*
 -SingleClientPasswordsSyncTest.*
 -SingleClientPasswordsSyncTestWithVerifier.*
 -SingleClientPasswordsWithAccountStorageSyncTest.*
--SingleClientPlusAddressManagedAccountTest.*
--SingleClientPlusAddressSettingSyncTest.*
--SingleClientPlusAddressSyncTest.*
 -SingleClientPollingSyncTest.*
 -SingleClientPollingSyncTestNoIpProt.*
 -SingleClientPreferencesWithAccountStorageMergeSyncTest.*

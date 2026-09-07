@@ -42,13 +42,15 @@ void SimplifiedOofLayoutAlgorithm::ResumeColumnLayout(
   // points at the content that we're supposed to resume at after the spanner.
   for (const auto& child_break_token :
        old_fragment_break_token->ChildBreakTokens()) {
-    if (!child_break_token->InputNode().IsOutOfFlowPositioned()) {
+    if (!To<BlockBreakToken>(child_break_token.Get())
+             ->InputNode()
+             .IsOutOfFlowPositioned()) {
       container_builder_.AddBreakToken(child_break_token);
     }
   }
 
   // Carry over the IsCausedByColumnSpanner flag (stored in the break token).
-  container_builder_.SetHasColumnSpanner(true);
+  container_builder_.SetHasColumnSpanner();
 }
 
 const LayoutResult* SimplifiedOofLayoutAlgorithm::Layout() {

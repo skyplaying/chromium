@@ -6,12 +6,12 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/autofill/payments/payments_view_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/autofill/payments/card_unmask_otp_input_dialog_views.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "components/autofill/core/browser/metrics/payments/card_unmask_authentication_metrics.h"
 #include "components/autofill/core/browser/ui/payments/card_unmask_otp_input_dialog_controller_impl.h"
 #include "content/public/test/browser_test.h"
 
@@ -42,7 +42,7 @@ class CardUnmaskOtpInputDialogBrowserTest
     controller_->ShowDialog(base::BindOnce(
         &CreateAndShowOtpInputDialog, controller_->GetWeakPtr(),
         base::Unretained(
-            browser()->tab_strip_model()->GetActiveWebContents())));
+            browser()->GetTabStripModel()->GetActiveWebContents())));
   }
 
   CardUnmaskOtpInputDialogViews* GetDialog() {
@@ -109,7 +109,7 @@ IN_PROC_BROWSER_TEST_P(CardUnmaskOtpInputDialogBrowserTest,
                        CanCloseTabWhileDialogShowing) {
   ShowUi("");
   VerifyUi();
-  browser()->tab_strip_model()->GetActiveWebContents()->Close();
+  browser()->GetTabStripModel()->GetActiveWebContents()->Close();
   base::RunLoop().RunUntilIdle();
 }
 
@@ -118,14 +118,14 @@ IN_PROC_BROWSER_TEST_P(CardUnmaskOtpInputDialogBrowserTest,
                        CanCloseBrowserWhileDialogShowing) {
   ShowUi("");
   VerifyUi();
-  browser()->window()->Close();
+  browser()->GetWindow()->Close();
   base::RunLoop().RunUntilIdle();
 }
 
 // Ensures activating the new code link sets it to invalid for a set period of
 // time.
 #if BUILDFLAG(IS_WIN)
-// Triggering logic required for Windows OS runs: https://crbug.com/1254686
+// Triggering logic required for Windows OS runs: https://crbug.com/40794489
 #define MAYBE_LinkInvalidatesOnActivation DISABLED_LinkInvalidatesOnActivation
 #else
 #define MAYBE_LinkInvalidatesOnActivation LinkInvalidatesOnActivation

@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "base/containers/fixed_flat_set.h"
+#include "base/feature_list.h"
 #include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
@@ -21,13 +22,13 @@
 #include "chrome/browser/keyboard_accessory/android/accessory_sheet_data.h"
 #include "chrome/browser/keyboard_accessory/android/accessory_sheet_enums.h"
 #include "chrome/browser/keyboard_accessory/android/address_accessory_controller.h"
-#include "chrome/browser/keyboard_accessory/android/affiliated_plus_profiles_cache.h"
+#include "chrome/browser/keyboard_accessory/android/at_memory_accessory_controller.h"
 #include "chrome/browser/keyboard_accessory/android/password_accessory_controller.h"
 #include "chrome/browser/keyboard_accessory/android/payment_method_accessory_controller.h"
 #include "chrome/browser/password_manager/chrome_password_manager_client.h"
-#include "chrome/browser/plus_addresses/plus_address_service_factory.h"
 #include "components/autofill/content/browser/content_autofill_client.h"
-#include "components/plus_addresses/core/common/features.h"
+#include "components/autofill/content/browser/content_autofill_driver.h"
+#include "components/autofill/core/common/autofill_features.h"
 #include "content/public/browser/web_contents.h"
 
 using autofill::AccessoryAction;
@@ -43,7 +44,7 @@ namespace {
 
 constexpr auto kAllowedFillingSources = base::MakeFixedFlatSet<FillingSource>(
     {FillingSource::PASSWORD_FALLBACKS, FillingSource::CREDIT_CARD_FALLBACKS,
-     FillingSource::ADDRESS_FALLBACKS});
+     FillingSource::ADDRESS_FALLBACKS, FillingSource::AT_MEMORY});
 
 constexpr char
     kUmaAccessoryActionSelectedForNonCredentialFieldWithoutSuggestions[] =
@@ -79,12 +80,14 @@ void ManualFillingControllerImpl::CreateForWebContentsForTesting(
     base::WeakPtr<PasswordAccessoryController> pwd_controller,
     base::WeakPtr<AddressAccessoryController> address_controller,
     base::WeakPtr<PaymentMethodAccessoryController> payment_method_controller,
+    base::WeakPtr<AtMemoryAccessoryController> at_memory_controller,
     std::unique_ptr<ManualFillingViewInterface> view) {
   DCHECK(web_contents) << "Need valid WebContents to attach controller to!";
   DCHECK(!FromWebContents(web_contents)) << "Controller already attached!";
   DCHECK(pwd_controller);
   DCHECK(address_controller);
   DCHECK(payment_method_controller);
+  DCHECK(at_memory_controller);
   DCHECK(view);
 
   web_contents->SetUserData(
@@ -93,7 +96,7 @@ void ManualFillingControllerImpl::CreateForWebContentsForTesting(
       base::WrapUnique(new ManualFillingControllerImpl(
           web_contents, std::move(pwd_controller),
           std::move(address_controller), std::move(payment_method_controller),
-          std::move(view))));
+          std::move(at_memory_controller), std::move(view))));
 
   FromWebContents(web_contents)->Initialize();
 }
@@ -284,7 +287,9 @@ ManualFillingControllerImpl::ManualFillingControllerImpl(
       PaymentMethodAccessoryController::GetOrCreate(web_contents)->AsWeakPtr();
   DCHECK(payment_method_controller_);
 
-  InitializePlusProfilesCache();
+  at_memory_controller_ =
+      AtMemoryAccessoryController::GetOrCreate(web_contents)->AsWeakPtr();
+  DCHECK(at_memory_controller_);
 }
 
 ManualFillingControllerImpl::ManualFillingControllerImpl(
@@ -292,31 +297,16 @@ ManualFillingControllerImpl::ManualFillingControllerImpl(
     base::WeakPtr<PasswordAccessoryController> pwd_controller,
     base::WeakPtr<AddressAccessoryController> address_controller,
     base::WeakPtr<PaymentMethodAccessoryController> payment_method_controller,
+    base::WeakPtr<AtMemoryAccessoryController> at_memory_controller,
     std::unique_ptr<ManualFillingViewInterface> view)
     : content::WebContentsUserData<ManualFillingControllerImpl>(*web_contents),
       pwd_controller_(std::move(pwd_controller)),
       address_controller_(std::move(address_controller)),
       payment_method_controller_(std::move(payment_method_controller)),
-      view_(std::move(view)) {
-  InitializePlusProfilesCache();
-}
+      at_memory_controller_(std::move(at_memory_controller)),
+      view_(std::move(view)) {}
 
 ManualFillingControllerImpl::~ManualFillingControllerImpl() = default;
-
-void ManualFillingControllerImpl::InitializePlusProfilesCache() {
-  auto* client =
-      autofill::ContentAutofillClient::FromWebContents(&GetWebContents());
-  auto* service = PlusAddressServiceFactory::GetForBrowserContext(
-      GetWebContents().GetBrowserContext());
-  if (client && service) {
-    plus_profiles_cache_ =
-        std::make_unique<AffiliatedPlusProfilesCache>(client, service);
-    pwd_controller_->RegisterPlusProfilesProvider(
-        plus_profiles_cache_->GetWeakPtr());
-    address_controller_->RegisterPlusProfilesProvider(
-        plus_profiles_cache_->GetWeakPtr());
-  }
-}
 
 bool ManualFillingControllerImpl::ShouldShowAccessoryForLastFocusedFieldType()
     const {
@@ -328,9 +318,12 @@ bool ManualFillingControllerImpl::ShouldShowAccessoryForLastFocusedFieldType()
     case FocusedFieldType::kFillableNonSearchField:
       return !available_sources_.empty();
 
-    // Fallbacks aren't really useful on search fields but autocomplete entries
-    // justify showing the accessory.
     case FocusedFieldType::kFillableSearchField:
+      if (base::FeatureList::IsEnabled(
+              autofill::features::
+                  kAutofillEnableKeyboardAccessoryOnSearchFields)) {
+        return !available_sources_.empty();
+      }
       return available_sources_.contains(FillingSource::AUTOFILL);
 
     // Even if there are suggestions, don't show on textareas.
@@ -342,6 +335,16 @@ bool ManualFillingControllerImpl::ShouldShowAccessoryForLastFocusedFieldType()
     case FocusedFieldType::kUnfillableElement:
     case FocusedFieldType::kUnknown:
       return available_sources_.contains(FillingSource::AUTOFILL);
+
+    // AtMemory suggestions are supported for contenteditable fields on Android.
+    // Unlike database-backed fallback sheets (passwords, addresses, payments)
+    // which signal availability asynchronously via `available_sources_`,
+    // AtMemory availability on contenteditables is purely focus-driven and
+    // only requires that the `AtMemoryAccessoryController` is available.
+    // Note: `PasswordAutofillAgent` verifies the feature enablement.
+    case FocusedFieldType::kContenteditableField:
+      return at_memory_controller_ &&
+             at_memory_controller_->IsAtMemoryAvailable();
   }
 }
 
@@ -352,6 +355,12 @@ void ManualFillingControllerImpl::UpdateVisibility() {
       if (source == FillingSource::AUTOFILL) {
         continue;  // Autofill suggestions have no sheet.
       }
+      // On contenteditable elements, only AtMemory is supported. Suppress
+      // pushing fallback sheet data (passwords, addresses, payments).
+      if (last_focused_field_type_ == FocusedFieldType::kContenteditableField &&
+          source != FillingSource::AT_MEMORY) {
+        continue;
+      }
       AccessoryController* controller = GetControllerForFillingSource(source);
       if (!controller) {
         continue;  // Most-likely, the controller was cleaned up already.
@@ -361,23 +370,17 @@ void ManualFillingControllerImpl::UpdateVisibility() {
         view_->OnItemsAvailable(std::move(sheet.value()));
       }
     }
-    if (plus_profiles_cache_) {
-      plus_profiles_cache_->FetchAffiliatedPlusProfiles();
-    }
+
     view_->Show(
         ManualFillingViewInterface::WaitForKeyboard(
             last_focused_field_type_ != FocusedFieldType::kUnfillableElement &&
             last_focused_field_type_ != FocusedFieldType::kUnknown),
-        ManualFillingViewInterface::IsCredentialFieldOrHasAutofillSuggestions(
+        ManualFillingViewInterface::ShouldShowOnLargeFormFactor(
+            available_sources_.contains(FillingSource::AUTOFILL)),
+        ManualFillingViewInterface::IsContentEditable(
             last_focused_field_type_ ==
-                FocusedFieldType::kFillableUsernameField ||
-            last_focused_field_type_ ==
-                FocusedFieldType::kFillablePasswordField ||
-            available_sources_.contains(FillingSource::AUTOFILL)));
+                FocusedFieldType::kContenteditableField));
   } else {
-    if (plus_profiles_cache_) {
-      plus_profiles_cache_->ClearCachedPlusProfiles();
-    }
     view_->Hide();
   }
 }
@@ -406,7 +409,12 @@ void ManualFillingControllerImpl::OnSourceAvailabilityChanged(
   // TODO(crbug.com/40165275): Remove once all sheets pull this information
   // instead of waiting to get it pushed.
   if (sheet.has_value()) {
-    view_->OnItemsAvailable(std::move(sheet.value()));
+    // Suppress forwarding fallback sheet data for contenteditable elements
+    // so only the AtMemory sheet is made available to the view.
+    if (last_focused_field_type_ != FocusedFieldType::kContenteditableField ||
+        source == FillingSource::AT_MEMORY) {
+      view_->OnItemsAvailable(std::move(sheet.value()));
+    }
   }
   UpdateSourceAvailability(source, show_filling_source);
 }
@@ -438,17 +446,15 @@ AccessoryController* ManualFillingControllerImpl::GetControllerForAction(
     case AccessoryAction::TOGGLE_SAVE_PASSWORDS:
     case AccessoryAction::CREDMAN_CONDITIONAL_UI_REENTRY:
     case AccessoryAction::CROSS_DEVICE_PASSKEY:
-    case AccessoryAction::SELECT_PLUS_ADDRESS_FROM_PASSWORD_SHEET:
-    case AccessoryAction::MANAGE_PLUS_ADDRESS_FROM_PASSWORD_SHEET:
     case AccessoryAction::RETRIEVE_TRUSTED_VAULT_KEY:
       return pwd_controller_.get();
     case AccessoryAction::MANAGE_ADDRESSES:
-    case AccessoryAction::SELECT_PLUS_ADDRESS_FROM_ADDRESS_SHEET:
-    case AccessoryAction::MANAGE_PLUS_ADDRESS_FROM_ADDRESS_SHEET:
       return address_controller_.get();
     case AccessoryAction::MANAGE_CREDIT_CARDS:
     case AccessoryAction::MANAGE_LOYALTY_CARDS:
       return payment_method_controller_.get();
+    case AccessoryAction::SHOW_AT_MEMORY_BOTTOMSHEET:
+      return at_memory_controller_.get();
     case AccessoryAction::AUTOFILL_SUGGESTION:
     case AccessoryAction::DISMISS:
     case AccessoryAction::AUTOFILL_SUGGESTION_FROM_ACCESSORY_SHEET:
@@ -467,6 +473,8 @@ AccessoryController* ManualFillingControllerImpl::GetControllerForFillingSource(
       return payment_method_controller_.get();
     case FillingSource::ADDRESS_FALLBACKS:
       return address_controller_.get();
+    case FillingSource::AT_MEMORY:
+      return at_memory_controller_.get();
     case FillingSource::AUTOFILL:
       NOTREACHED() << "Controller not defined for filling source: "
                    << static_cast<int>(filling_source);

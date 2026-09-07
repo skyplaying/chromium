@@ -55,6 +55,7 @@
 #include "components/supervised_user/core/browser/supervised_user_service.h"
 #include "components/supervised_user/core/browser/supervised_user_utils.h"
 #include "content/public/browser/global_routing_id.h"
+#include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/url_data_source.h"
@@ -75,9 +76,13 @@
 #include "components/security_interstitials/content/captive_portal_blocking_page.h"
 #endif
 
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || \
+    BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/supervised_user/supervised_user_verification_controller_client.h"
 #include "chrome/browser/supervised_user/supervised_user_verification_page_blocked_sites.h"
+#endif
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 #include "chrome/browser/supervised_user/supervised_user_verification_page_youtube.h"
 #endif
 
@@ -133,7 +138,7 @@ class InterstitialHTMLSource : public content::URLDataSource {
 std::unique_ptr<SSLBlockingPage> CreateSslBlockingPage(
     content::WebContents* web_contents) {
   // Random parameters for SSL blocking page.
-  int cert_error = net::ERR_CERT_CONTAINS_ERRORS;
+  net::Error cert_error = net::ERR_CERT_CONTAINS_ERRORS;
   GURL request_url("https://example.com");
   bool overridable = false;
   bool strict_enforcement = false;
@@ -185,7 +190,7 @@ std::unique_ptr<SSLBlockingPage> CreateSslBlockingPage(
 
 std::unique_ptr<MITMSoftwareBlockingPage> CreateMITMSoftwareBlockingPage(
     content::WebContents* web_contents) {
-  const int cert_error = net::ERR_CERT_AUTHORITY_INVALID;
+  const net::Error cert_error = net::ERR_CERT_AUTHORITY_INVALID;
   const GURL request_url("https://example.com");
   const std::string mitm_software_name = "Misconfigured Antivirus";
   bool is_enterprise_managed = false;
@@ -207,7 +212,7 @@ std::unique_ptr<MITMSoftwareBlockingPage> CreateMITMSoftwareBlockingPage(
 
 std::unique_ptr<BlockedInterceptionBlockingPage>
 CreateBlockedInterceptionBlockingPage(content::WebContents* web_contents) {
-  const int cert_error = net::ERR_CERT_AUTHORITY_INVALID;
+  const net::Error cert_error = net::ERR_CERT_AUTHORITY_INVALID;
   const GURL request_url("https://example.com");
 
   net::SSLInfo ssl_info;
@@ -220,7 +225,7 @@ CreateBlockedInterceptionBlockingPage(content::WebContents* web_contents) {
 std::unique_ptr<BadClockBlockingPage> CreateBadClockBlockingPage(
     content::WebContents* web_contents) {
   // Set up a fake clock error.
-  int cert_error = net::ERR_CERT_DATE_INVALID;
+  net::Error cert_error = net::ERR_CERT_DATE_INVALID;
   GURL request_url("https://example.com");
   std::string url_param;
   if (net::GetValueForKeyInQuery(web_contents->GetVisibleURL(), "url",
@@ -418,10 +423,13 @@ CreateSupervisedUserVerificationPageForYouTube(
           Profile::FromBrowserContext(web_contents->GetBrowserContext())
               ->GetPrefs(),
           g_browser_process->GetApplicationLocale(),
-          GURL(chrome::kChromeUINewTabURL), kRequestUrl),
+          chrome::ChromeUINewTabURLAsGURL(), kRequestUrl),
       is_main_frame);
 }
+#endif
 
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || \
+    BUILDFLAG(IS_ANDROID)
 std::unique_ptr<SupervisedUserVerificationPageForBlockedSites>
 CreateSupervisedUserVerificationPageForBlockedSites(
     content::WebContents* web_contents,
@@ -435,8 +443,8 @@ CreateSupervisedUserVerificationPageForBlockedSites(
           Profile::FromBrowserContext(web_contents->GetBrowserContext())
               ->GetPrefs(),
           g_browser_process->GetApplicationLocale(),
-          GURL(chrome::kChromeUINewTabURL), kRequestUrl),
-      supervised_user::FilteringBehaviorReason::DEFAULT, is_main_frame);
+          chrome::ChromeUINewTabURLAsGURL(), kRequestUrl),
+      is_main_frame);
 }
 #endif
 
@@ -635,12 +643,15 @@ void InterstitialHTMLSource::StartDataRequest(
   } else if (path_without_query == "/supervised-user-verify") {
     interstitial_delegate = CreateSupervisedUserVerificationPageForYouTube(
         web_contents, /*is_main_frame=*/true);
-  } else if (path_without_query == "/supervised-user-verify-blocked-site") {
-    interstitial_delegate = CreateSupervisedUserVerificationPageForBlockedSites(
-        web_contents, /*is_main_frame=*/true);
   } else if (path_without_query == "/supervised-user-verify-subframe") {
     interstitial_delegate = CreateSupervisedUserVerificationPageForYouTube(
         web_contents, /*is_main_frame=*/false);
+#endif
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || \
+    BUILDFLAG(IS_ANDROID)
+  } else if (path_without_query == "/supervised-user-verify-blocked-site") {
+    interstitial_delegate = CreateSupervisedUserVerificationPageForBlockedSites(
+        web_contents, /*is_main_frame=*/true);
   } else if (path_without_query ==
              "/supervised-user-verify-blocked-site-subframe") {
     interstitial_delegate = CreateSupervisedUserVerificationPageForBlockedSites(
@@ -669,9 +680,8 @@ void InterstitialHTMLSource::StartDataRequest(
     html = ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
         IDR_SECURITY_INTERSTITIAL_UI_HTML);
   }
-  scoped_refptr<base::RefCountedString> html_bytes = new base::RefCountedString;
-  html_bytes->as_string() = html;
-  std::move(callback).Run(html_bytes.get());
+  std::move(callback).Run(
+      base::MakeRefCounted<base::RefCountedString>(std::move(html)));
 }
 
 std::string InterstitialHTMLSource::GetSupervisedUserAskParentInterstitialHTML(

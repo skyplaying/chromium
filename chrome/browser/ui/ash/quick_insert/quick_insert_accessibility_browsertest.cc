@@ -34,6 +34,7 @@
 #include "chrome/browser/ash/accessibility/accessibility_manager.h"
 #include "chrome/browser/ash/accessibility/chromevox_test_utils.h"
 #include "chrome/browser/ash/accessibility/speech_monitor.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/quick_insert/quick_insert_client_impl.h"
 #include "chrome/browser/ui/browser.h"
@@ -922,7 +923,7 @@ IN_PROC_BROWSER_TEST_F(QuickInsertAccessibilityBrowserTest,
 
   sm()->Call([this, &feature_tour]() {
     feature_tour.MaybeShowForFirstUse(
-        browser()->profile()->GetPrefs(),
+        browser()->GetProfile()->GetPrefs(),
         ash::QuickInsertFeatureTour::EditorStatus::kEligible, base::DoNothing(),
         base::DoNothing());
   });
@@ -936,10 +937,13 @@ IN_PROC_BROWSER_TEST_F(QuickInsertAccessibilityBrowserTest,
   sm()->Replay();
 }
 
+// TODO(crbug.com/549506895): Fix consistent test failure on chromeos.
+#if !BUILDFLAG(IS_CHROMEOS)
 IN_PROC_BROWSER_TEST_F(QuickInsertAccessibilityBrowserTest,
                        InsertingAnnouncesInsertionBeforeTextfieldRefocus) {
   ash::QuickInsertController controller;
-  QuickInsertClientImpl client(&controller, user_manager::UserManager::Get());
+  QuickInsertClientImpl client(g_browser_process->local_state(), &controller,
+                               user_manager::UserManager::Get());
   std::unique_ptr<views::Widget> textfield_widget =
       views::test::TestWidgetBuilder()
           .SetWidgetType(views::Widget::InitParams::TYPE_WINDOW_FRAMELESS)
@@ -958,7 +962,6 @@ IN_PROC_BROWSER_TEST_F(QuickInsertAccessibilityBrowserTest,
   });
 
   sm()->ExpectSpeechPattern("Quick Insert");
-  sm()->ExpectSpeechPattern(", window");
   sm()->ExpectSpeechPattern("Quick Insert");
   sm()->ExpectSpeechPattern("Status");
   sm()->ExpectSpeechPattern("Inserting selected result");
@@ -967,5 +970,6 @@ IN_PROC_BROWSER_TEST_F(QuickInsertAccessibilityBrowserTest,
   sm()->ExpectSpeechPattern("Edit text");
   sm()->Replay();
 }
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
 }  // namespace

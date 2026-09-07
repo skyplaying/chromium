@@ -46,6 +46,10 @@ namespace ui {
 class RecyclableCompositorMac;
 }  // namespace ui
 
+namespace views::test {
+class BridgedNativeWidgetTestApi;
+}  // namespace views::test
+
 namespace views {
 
 class ImmersiveModeRevealClient;
@@ -77,6 +81,10 @@ class VIEWS_EXPORT NativeWidgetMacNSWindowHost
   // a child widget. NOTE: This is unowned because it is owned by another
   // widget; use a __bridge cast to convert to and from NSView*.
   static const char kMovedContentNSView[];
+
+  // Sets state as to whether windows, upon being restored, should be moved to
+  // the space that originally contained them.
+  static void SetMoveWindowsToOriginalSpacesUponRestoration(bool move);
 
   // Unique integer id handles are used to bridge between the
   // NativeWidgetMacNSWindowHost in one process and the NativeWidgetNSWindowHost
@@ -242,7 +250,7 @@ class VIEWS_EXPORT NativeWidgetMacNSWindowHost
 
   bool IsVisible() const { return is_visible_; }
   bool IsMiniaturized() const { return is_miniaturized_; }
-  bool IsWindowKey() const { return is_window_key_; }
+  bool IsWindowKey() const;
   bool IsMouseCaptureActive() const { return is_mouse_capture_active_; }
   bool IsZoomed() const { return is_zoomed_; }
   bool IsVisibleOnAllWorkspaces() const {
@@ -286,8 +294,12 @@ class VIEWS_EXPORT NativeWidgetMacNSWindowHost
   // Set the color mode of the window.
   void SetColorMode(ui::ColorProviderKey::ColorMode color_mode);
 
+  // Synchronize layer opaqueness and compositor background color.
+  void SetLayerAndCompositorOpaque(bool opaque);
+
  private:
   friend class TextInputHost;
+  friend class views::test::BridgedNativeWidgetTestApi;
 
   void UpdateCompositorProperties();
   void DestroyCompositor();
@@ -321,7 +333,6 @@ class VIEWS_EXPORT NativeWidgetMacNSWindowHost
                  gfx::Point* baseline_point) override;
   remote_cocoa::DragDropClient* GetDragDropClient() override;
   ui::TextInputClient* GetTextInputClient() override;
-  bool MustPostTaskToRunModalSheetAnimation() const override;
 
   // remote_cocoa::ApplicationHost::Observer:
   void OnApplicationHostDestroying(
@@ -356,6 +367,8 @@ class VIEWS_EXPORT NativeWidgetMacNSWindowHost
   void OnWindowGeometryChanged(
       const gfx::Rect& window_bounds_in_screen_dips,
       const gfx::Rect& content_bounds_in_screen_dips) override;
+  void OnWindowWillMove() override;
+  void OnWindowDidEndMove() override;
   void OnWindowWillStartLiveResize() override;
   void OnWindowDidEndLiveResize() override;
   void OnWindowFullscreenTransitionStart(bool target_fullscreen_state) override;
@@ -472,7 +485,8 @@ class VIEWS_EXPORT NativeWidgetMacNSWindowHost
   void UpdateVisualState() override;
 
   // ui::AcceleratedWidgetMacNSView:
-  void AcceleratedWidgetCALayerParamsUpdated() override;
+  void AcceleratedWidgetCALayerParamsUpdated(
+      gfx::CALayerParams ca_layer_params) override;
 
   // ViewObserver:
   void OnViewIsDeleting(View* observed_view) override;
@@ -576,6 +590,8 @@ class VIEWS_EXPORT NativeWidgetMacNSWindowHost
   // Indicates whether the window is allowed to be included in screenshots,
   // based on enterprise policies.
   bool allow_screenshots_ = true;
+
+  bool window_will_close_called_ = false;
 
   mojo::AssociatedReceiver<remote_cocoa::mojom::NativeWidgetNSWindowHost>
       remote_ns_window_host_receiver_{this};

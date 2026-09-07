@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/task/thread_pool.h"
@@ -536,14 +537,10 @@ void KcerTokenImpl::GenerateEcKeyImpl(GenerateEcKeyTask task) {
   }
 
   bssl::ScopedCBB cbb;
-  uint8_t* ec_params_der = nullptr;
-  size_t ec_params_der_len = 0;
   if (!CBB_init(cbb.get(), 0) ||
-      !EC_KEY_marshal_curve_name(cbb.get(), EC_group_p256()) ||
-      !CBB_finish(cbb.get(), &ec_params_der, &ec_params_der_len)) {
+      !EC_KEY_marshal_curve_name(cbb.get(), EC_group_p256())) {
     return std::move(task.callback).Run(base::unexpected(Error::kBadKeyParams));
   }
-  bssl::UniquePtr<uint8_t> der_deleter(ec_params_der);
 
   chromeos::PKCS11_CK_BBOOL kTrue = chromeos::PKCS11_CK_TRUE;
 
@@ -553,7 +550,7 @@ void KcerTokenImpl::GenerateEcKeyImpl(GenerateEcKeyTask task) {
   AddAttribute(public_key_attrs, chromeos::PKCS11_CKA_VERIFY, MakeSpan(&kTrue));
   AddAttribute(public_key_attrs, chromeos::PKCS11_CKA_WRAP, MakeSpan(&kTrue));
   AddAttribute(public_key_attrs, chromeos::PKCS11_CKA_EC_PARAMS,
-               UNSAFE_TODO(base::span(ec_params_der, ec_params_der_len)));
+               crypto::CbbAsSpan(cbb.get()));
 
   chaps::AttributeList private_key_attrs;
   AddAttribute(private_key_attrs, chromeos::PKCS11_CKA_TOKEN, MakeSpan(&kTrue));
@@ -2123,6 +2120,95 @@ void KcerTokenImpl::GetCertProvisioningIdWithAttributes(
 
 //==============================================================================
 
+KcerTokenImpl::GetBrowserEnterpriseClientCertTagTask::
+    GetBrowserEnterpriseClientCertTagTask(
+        PrivateKeyHandle in_key,
+        Kcer::GetBrowserEnterpriseClientCertTagCallback in_callback)
+    : key(std::move(in_key)), callback(std::move(in_callback)) {}
+KcerTokenImpl::GetBrowserEnterpriseClientCertTagTask::
+    GetBrowserEnterpriseClientCertTagTask(
+        GetBrowserEnterpriseClientCertTagTask&& other) = default;
+KcerTokenImpl::GetBrowserEnterpriseClientCertTagTask::
+    ~GetBrowserEnterpriseClientCertTagTask() = default;
+
+void KcerTokenImpl::GetBrowserEnterpriseClientCertTag(
+    PrivateKeyHandle key,
+    Kcer::GetBrowserEnterpriseClientCertTagCallback callback) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+
+  if (is_blocked_) {
+    return task_queue_.push_back(base::BindOnce(
+        &KcerTokenImpl::GetBrowserEnterpriseClientCertTag,
+        weak_factory_.GetWeakPtr(), std::move(key), std::move(callback)));
+  }
+  // Block task queue, attach unblocking task to the callback.
+  auto unblocking_callback = BlockQueueGetUnblocker(std::move(callback));
+
+  if (!EnsurePkcs11IdIsSet(key)) {
+    return std::move(unblocking_callback)
+        .Run(base::unexpected(Error::kFailedToGetPkcs11Id));
+  }
+
+  GetBrowserEnterpriseClientCertTagImpl(GetBrowserEnterpriseClientCertTagTask(
+      std::move(key), std::move(unblocking_callback)));
+}
+
+void KcerTokenImpl::GetBrowserEnterpriseClientCertTagImpl(
+    GetBrowserEnterpriseClientCertTagTask task) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+
+  task.attempts_left--;
+  if (task.attempts_left < 0) {
+    return std::move(task.callback)
+        .Run(base::unexpected(Error::kPkcs11SessionFailure));
+  }
+
+  PrivateKeyHandle key = task.key;
+  GetKeyAttributes(
+      std::move(key), {AttributeId::kBrowserEnterpriseClientCertKey},
+      base::BindOnce(
+          &KcerTokenImpl::GetBrowserEnterpriseClientCertTagWithAttributes,
+          weak_factory_.GetWeakPtr(), std::move(task)));
+}
+
+void KcerTokenImpl::GetBrowserEnterpriseClientCertTagWithAttributes(
+    GetBrowserEnterpriseClientCertTagTask task,
+    std::optional<Error> kcer_error,
+    chaps::AttributeList attributes,
+    uint32_t result_code) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+
+  if (kcer_error.has_value()) {
+    return std::move(task.callback).Run(base::unexpected(kcer_error.value()));
+  }
+  if (SessionChapsClient::IsSessionError(result_code)) {
+    return GetBrowserEnterpriseClientCertTagImpl(std::move(task));
+  }
+  if (result_code == chromeos::PKCS11_CKR_ATTRIBUTE_TYPE_INVALID) {
+    // Tag was never set on this key.
+    return std::move(task.callback).Run(false);
+  }
+  if (result_code != chromeos::PKCS11_CKR_OK) {
+    return std::move(task.callback)
+        .Run(base::unexpected(Error::kFailedToReadAttribute));
+  }
+  if (attributes.attributes_size() != 1) {
+    return std::move(task.callback)
+        .Run(base::unexpected(Error::kFailedToDecodeKeyAttributes));
+  }
+  const chaps::Attribute& attr = attributes.attributes(0);
+  if ((attr.type() !=
+       static_cast<uint32_t>(AttributeId::kBrowserEnterpriseClientCertKey)) ||
+      !attr.has_value() || attr.value().empty()) {
+    return std::move(task.callback)
+        .Run(base::unexpected(Error::kFailedToDecodeKeyAttributes));
+  }
+  // The tag is a single CK_BYTE; non-zero means CK_TRUE.
+  return std::move(task.callback).Run(attr.value()[0] != 0);
+}
+
+//==============================================================================
+
 KcerTokenImpl::SetKeyAttributeTask::SetKeyAttributeTask(
     PrivateKeyHandle in_key,
     HighLevelChapsClient::AttributeId in_attribute_id,
@@ -2285,6 +2371,28 @@ void KcerTokenImpl::SetCertProvisioningProfileId(
       std::move(key), HighLevelChapsClient::AttributeId::kCertProvisioningId,
       std::vector<uint8_t>(profile_id.begin(), profile_id.end()),
       std::move(unblocking_callback));
+}
+
+//==============================================================================
+
+void KcerTokenImpl::SetBrowserEnterpriseClientCertTag(
+    PrivateKeyHandle key,
+    Kcer::StatusCallback callback) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+
+  if (is_blocked_) {
+    return task_queue_.push_back(base::BindOnce(
+        &KcerTokenImpl::SetBrowserEnterpriseClientCertTag,
+        weak_factory_.GetWeakPtr(), std::move(key), std::move(callback)));
+  }
+  // Block task queue, attach unblocking task to the callback.
+  auto unblocking_callback = BlockQueueGetUnblocker(std::move(callback));
+
+  // The attribute value is a single CK_BYTE = CK_TRUE.
+  return SetKeyAttribute(
+      std::move(key),
+      HighLevelChapsClient::AttributeId::kBrowserEnterpriseClientCertKey,
+      std::vector<uint8_t>{1u}, std::move(unblocking_callback));
 }
 
 //==============================================================================

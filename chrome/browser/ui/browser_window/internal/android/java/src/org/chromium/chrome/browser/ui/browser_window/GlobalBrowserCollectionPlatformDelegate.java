@@ -66,8 +66,11 @@ final class GlobalBrowserCollectionPlatformDelegate
         // If there are any existing windows in the task, count them now as the implementation of
         // AndroidBrowserWindowObserver only receives signals on future events.
         assert !task.hasAndroidBrowserWindowObserver(this);
-        for (long androidBrowserWindowPtr : task.getAllNativeBrowserWindowPtrs()) {
-            onBrowserWindowAdded(androidBrowserWindowPtr);
+        if (mNativePointer != 0) {
+            for (long androidBrowserWindowPtr : task.getAllNativeBrowserWindowPtrs()) {
+                GlobalBrowserCollectionPlatformDelegateJni.get()
+                        .onBrowserCreated(mNativePointer, androidBrowserWindowPtr);
+            }
         }
         task.addAndroidBrowserWindowObserver(this);
     }
@@ -77,24 +80,43 @@ final class GlobalBrowserCollectionPlatformDelegate
         task.removeAndroidBrowserWindowObserver(this);
         // In the event there were still windows in the task, remove them as the observer has been
         // removed and will no longer receive signals.
-        for (long androidBrowserWindowPtr : task.getAllNativeBrowserWindowPtrs()) {
-            onBrowserWindowRemoved(androidBrowserWindowPtr);
+        if (mNativePointer != 0) {
+            for (long androidBrowserWindowPtr : task.getAllNativeBrowserWindowPtrs()) {
+                GlobalBrowserCollectionPlatformDelegateJni.get()
+                        .onBrowserClosed(mNativePointer, androidBrowserWindowPtr);
+            }
         }
     }
 
     @Override
-    public void onBrowserWindowAdded(long androidBrowserWindowPtr) {
+    public void onBrowserWindowAdded(AndroidBrowserWindowInfo windowInfo) {
         if (mNativePointer != 0) {
             GlobalBrowserCollectionPlatformDelegateJni.get()
-                    .onBrowserCreated(mNativePointer, androidBrowserWindowPtr);
+                    .onBrowserCreated(mNativePointer, windowInfo.mBrowserWindowPtr);
         }
     }
 
     @Override
-    public void onBrowserWindowRemoved(long androidBrowserWindowPtr) {
+    public void onBrowserWindowRemoved(AndroidBrowserWindowInfo windowInfo) {
         if (mNativePointer != 0) {
             GlobalBrowserCollectionPlatformDelegateJni.get()
-                    .onBrowserClosed(mNativePointer, androidBrowserWindowPtr);
+                    .onBrowserClosed(mNativePointer, windowInfo.mBrowserWindowPtr);
+        }
+    }
+
+    @Override
+    public void onBrowserWindowActivated(AndroidBrowserWindowInfo windowInfo) {
+        if (mNativePointer != 0) {
+            GlobalBrowserCollectionPlatformDelegateJni.get()
+                    .onBrowserActivated(mNativePointer, windowInfo.mBrowserWindowPtr);
+        }
+    }
+
+    @Override
+    public void onBrowserWindowDeactivated(AndroidBrowserWindowInfo windowInfo) {
+        if (mNativePointer != 0) {
+            GlobalBrowserCollectionPlatformDelegateJni.get()
+                    .onBrowserDeactivated(mNativePointer, windowInfo.mBrowserWindowPtr);
         }
     }
 
@@ -105,6 +127,14 @@ final class GlobalBrowserCollectionPlatformDelegate
                 long nativeAndroidBrowserWindow);
 
         void onBrowserClosed(
+                long nativeGlobalBrowserCollectionPlatformDelegate,
+                long nativeAndroidBrowserWindow);
+
+        void onBrowserActivated(
+                long nativeGlobalBrowserCollectionPlatformDelegate,
+                long nativeAndroidBrowserWindow);
+
+        void onBrowserDeactivated(
                 long nativeGlobalBrowserCollectionPlatformDelegate,
                 long nativeAndroidBrowserWindow);
     }

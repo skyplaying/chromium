@@ -17,21 +17,25 @@
 #include "base/test/test_future.h"
 #include "base/time/time.h"
 #include "base/types/expected.h"
+#include "chrome/browser/actor/actor_proto_conversion.h"
 #include "chrome/browser/actor/actor_tab_data.h"
 #include "chrome/browser/actor/actor_task.h"
-#include "chrome/browser/actor/enterprise_policy_url_checker.h"
+#include "chrome/browser/actor/actor_task_delegate.h"
+#include "chrome/browser/actor/enterprise_policy_checker.h"
 #include "chrome/browser/actor/execution_engine.h"
-#include "chrome/browser/actor/shared_types.h"
 #include "chrome/browser/actor/tools/media_control_tool_request.h"
 #include "chrome/browser/actor/tools/tool_request.h"
 #include "chrome/browser/actor/ui/event_dispatcher.h"
 #include "chrome/common/actor.mojom-forward.h"
 #include "chrome/common/actor/action_result.h"
-#include "chrome/common/actor/task_id.h"
+#include "components/actor/core/shared_types.h"
+#include "components/actor/core/task_id.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
 #include "components/optimization_guide/proto/features/actions_data.pb.h"
 #include "components/sessions/core/session_id.h"
 #include "components/tabs/public/mock_tab_interface.h"
 #include "components/tabs/public/tab_interface.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/protobuf/src/google/protobuf/descriptor.h"
 #include "ui/gfx/geometry/point.h"
 
@@ -48,6 +52,10 @@ class TabInterface;
 }  // namespace tabs
 
 namespace actor {
+
+class TabObservationStrategy;
+struct TaskSourceInfo;
+
 template <typename T>
 auto UiEventDispatcherCallback(
     base::RepeatingCallback<mojom::ActionResultPtr()> result_fn) {
@@ -58,14 +66,27 @@ auto UiEventDispatcherCallback(
   };
 }
 
-using ActResultFuture =
-    base::test::TestFuture<mojom::ActionResultPtr,
-                           std::optional<size_t>,
-                           std::vector<ActionResultWithLatencyInfo>>;
-using PerformActionsFuture =
-    base::test::TestFuture<mojom::ActionResultCode,
-                           std::optional<size_t>,
-                           std::vector<ActionResultWithLatencyInfo>>;
+class ActResultFuture
+    : public base::test::TestFuture<std::vector<ActionResultWithLatencyInfo>,
+                                    TabObservationStrategy> {
+ public:
+  const std::vector<ActionResultWithLatencyInfo>& Get() {
+    return std::get<0>(
+        base::test::TestFuture<std::vector<ActionResultWithLatencyInfo>,
+                               TabObservationStrategy>::Get());
+  }
+  std::vector<ActionResultWithLatencyInfo> Take() {
+    return std::get<0>(
+        base::test::TestFuture<std::vector<ActionResultWithLatencyInfo>,
+                               TabObservationStrategy>::Take());
+  }
+  const TabObservationStrategy& GetStrategy() {
+    return std::get<1>(
+        base::test::TestFuture<std::vector<ActionResultWithLatencyInfo>,
+                               TabObservationStrategy>::Get());
+  }
+};
+using PerformActionsFuture = ActResultFuture;
 
 /////////////////////////
 // Proto action makers
@@ -74,26 +95,44 @@ optimization_guide::proto::Actions MakeClick(
     content::RenderFrameHost& rfh,
     int content_node_id,
     optimization_guide::proto::ClickAction::ClickType click_type,
-    optimization_guide::proto::ClickAction::ClickCount click_count);
+    optimization_guide::proto::ClickAction::ClickCount click_count,
+    std::optional<actor::TaskId> task_id = std::nullopt);
 optimization_guide::proto::Actions MakeClick(
     tabs::TabHandle tab_handle,
     const gfx::Point& click_point,
     optimization_guide::proto::ClickAction::ClickType click_type,
-    optimization_guide::proto::ClickAction::ClickCount click_count);
-optimization_guide::proto::Actions MakeHistoryBack(tabs::TabHandle tab_handle);
+    optimization_guide::proto::ClickAction::ClickCount click_count,
+    std::optional<actor::TaskId> task_id = std::nullopt);
+optimization_guide::proto::Actions MakeHistoryBack(
+    tabs::TabHandle tab_handle,
+    std::optional<actor::TaskId> task_id = std::nullopt);
 optimization_guide::proto::Actions MakeHistoryForward(
-    tabs::TabHandle tab_handle);
-optimization_guide::proto::Actions MakeMouseMove(content::RenderFrameHost& rfh,
-                                                 int content_node_id);
-optimization_guide::proto::Actions MakeMouseMove(tabs::TabHandle tab_handle,
-                                                 const gfx::Point& move_point);
-optimization_guide::proto::Actions MakeNavigate(tabs::TabHandle tab_handle,
-                                                std::string_view target_url);
-optimization_guide::proto::Actions MakeCreateTab(SessionID window_id,
-                                                 bool foreground);
-optimization_guide::proto::Actions MakeActivateWindow(SessionID window_id);
-optimization_guide::proto::Actions MakeCreateWindow();
-optimization_guide::proto::Actions MakeCloseWindow(SessionID window_id);
+    tabs::TabHandle tab_handle,
+    std::optional<actor::TaskId> task_id = std::nullopt);
+optimization_guide::proto::Actions MakeMouseMove(
+    content::RenderFrameHost& rfh,
+    int content_node_id,
+    std::optional<actor::TaskId> task_id = std::nullopt);
+optimization_guide::proto::Actions MakeMouseMove(
+    tabs::TabHandle tab_handle,
+    const gfx::Point& move_point,
+    std::optional<actor::TaskId> task_id = std::nullopt);
+optimization_guide::proto::Actions MakeNavigate(
+    tabs::TabHandle tab_handle,
+    std::string_view target_url,
+    std::optional<actor::TaskId> task_id = std::nullopt);
+optimization_guide::proto::Actions MakeCreateTab(
+    SessionID window_id,
+    bool foreground,
+    std::optional<actor::TaskId> task_id = std::nullopt);
+optimization_guide::proto::Actions MakeActivateWindow(
+    SessionID window_id,
+    std::optional<actor::TaskId> task_id = std::nullopt);
+optimization_guide::proto::Actions MakeCreateWindow(
+    std::optional<actor::TaskId> task_id = std::nullopt);
+optimization_guide::proto::Actions MakeCloseWindow(
+    SessionID window_id,
+    std::optional<actor::TaskId> task_id = std::nullopt);
 
 optimization_guide::proto::Actions MakeType(
     content::RenderFrameHost& rfh,
@@ -101,61 +140,94 @@ optimization_guide::proto::Actions MakeType(
     std::string_view text,
     bool follow_by_enter,
     optimization_guide::proto::TypeAction::TypeMode mode =
-        optimization_guide::proto::TypeAction_TypeMode_DELETE_EXISTING);
+        optimization_guide::proto::TypeAction_TypeMode_DELETE_EXISTING,
+    std::optional<actor::TaskId> task_id = std::nullopt);
 optimization_guide::proto::Actions MakeType(
     tabs::TabHandle tab_handle,
     const gfx::Point& type_point,
     std::string_view text,
     bool follow_by_enter,
     optimization_guide::proto::TypeAction::TypeMode mode =
-        optimization_guide::proto::TypeAction_TypeMode_DELETE_EXISTING);
-optimization_guide::proto::Actions MakeSelect(content::RenderFrameHost& rfh,
-                                              int content_node_id,
-                                              std::string_view value);
+        optimization_guide::proto::TypeAction_TypeMode_DELETE_EXISTING,
+    std::optional<actor::TaskId> task_id = std::nullopt);
+optimization_guide::proto::Actions MakeSelect(
+    content::RenderFrameHost& rfh,
+    int content_node_id,
+    std::string_view value,
+    std::optional<actor::TaskId> task_id = std::nullopt);
 optimization_guide::proto::Actions MakeScroll(
     content::RenderFrameHost& rfh,
     std::optional<int> content_node_id,
     float scroll_offset_x,
-    float scroll_offset_y);
-optimization_guide::proto::Actions MakeScroll(content::RenderFrameHost& rfh,
-                                              const gfx::Point& scroll_point,
-                                              float scroll_offset_x,
-                                              float scroll_offset_y);
-optimization_guide::proto::Actions MakeScrollTo(content::RenderFrameHost& rfh,
-                                                int content_node_id);
+    float scroll_offset_y,
+    std::optional<actor::TaskId> task_id = std::nullopt);
+optimization_guide::proto::Actions MakeScroll(
+    content::RenderFrameHost& rfh,
+    const gfx::Point& scroll_point,
+    float scroll_offset_x,
+    float scroll_offset_y,
+    std::optional<actor::TaskId> task_id = std::nullopt);
+optimization_guide::proto::Actions MakeScrollTo(
+    content::RenderFrameHost& rfh,
+    int content_node_id,
+    std::optional<actor::TaskId> task_id = std::nullopt);
 optimization_guide::proto::Actions MakeDragAndRelease(
     tabs::TabHandle tab_handle,
     const gfx::Point& from_point,
-    const gfx::Point& to_point);
+    const gfx::Point& to_point,
+    std::optional<actor::TaskId> task_id = std::nullopt);
 optimization_guide::proto::Actions MakeDragAndRelease(
     content::RenderFrameHost& rfh,
     int from_node_id,
-    int to_node_id);
+    int to_node_id,
+    std::optional<actor::TaskId> task_id = std::nullopt);
 optimization_guide::proto::Actions MakeWait(
     std::optional<base::TimeDelta> duration = std::nullopt,
-    std::optional<tabs::TabHandle> observe_tab_handle = std::nullopt);
+    std::optional<tabs::TabHandle> observe_tab_handle = std::nullopt,
+    std::optional<actor::TaskId> task_id = std::nullopt);
 optimization_guide::proto::Actions MakeScriptTool(
     content::RenderFrameHost& rfh,
     const std::string& name,
-    const std::string& input_arguments);
-optimization_guide::proto::Actions MakeMediaControl(tabs::TabHandle tab_handle,
-                                                    MediaControl media_control);
+    const std::string& input_arguments,
+    std::optional<actor::TaskId> task_id = std::nullopt);
+optimization_guide::proto::Actions MakeMediaControl(
+    tabs::TabHandle tab_handle,
+    MediaControl media_control,
+    std::optional<actor::TaskId> task_id = std::nullopt);
+optimization_guide::proto::Actions MakeTranslatePage(
+    tabs::TabHandle tab_handle,
+    std::string target_language = "",
+    std::optional<actor::TaskId> task_id = std::nullopt);
 
 /////////////////////////
 // ToolRequest action makers
 
-std::unique_ptr<ToolRequest> MakeClickRequest(content::RenderFrameHost& rfh,
-                                              int content_node_id);
-std::unique_ptr<ToolRequest> MakeClickRequest(tabs::TabInterface& tab,
-                                              const gfx::Point& click_point);
+std::unique_ptr<ToolRequest> MakeClickRequest(
+    content::RenderFrameHost& rfh,
+    int content_node_id,
+    mojom::ClickType type = mojom::ClickType::kLeft,
+    mojom::ClickCount count = mojom::ClickCount::kSingle);
+std::unique_ptr<ToolRequest> MakeDirectElementActivationClickRequest(
+    content::RenderFrameHost& rfh,
+    int content_node_id);
+std::unique_ptr<ToolRequest> MakeClickRequest(
+    tabs::TabInterface& tab,
+    const gfx::Point& click_point,
+    mojom::ClickType type = mojom::ClickType::kLeft,
+    mojom::ClickCount count = mojom::ClickCount::kSingle);
 std::unique_ptr<ToolRequest> MakeHistoryBackRequest(tabs::TabInterface& tab);
 std::unique_ptr<ToolRequest> MakeHistoryForwardRequest(tabs::TabInterface& tab);
+std::unique_ptr<ToolRequest> MakeHistoryReloadRequest(
+    tabs::TabInterface& tab,
+    bool bypass_cache = false);
 std::unique_ptr<ToolRequest> MakeMouseMoveRequest(content::RenderFrameHost& rfh,
                                                   int content_node_id);
 std::unique_ptr<ToolRequest> MakeMouseMoveRequest(tabs::TabInterface& tab,
                                                   const gfx::Point& move_point);
 std::unique_ptr<ToolRequest> MakeNavigateRequest(tabs::TabInterface& tab,
                                                  std::string_view target_url);
+std::unique_ptr<ToolRequest> MakePerformSearchRequest(tabs::TabInterface& tab,
+                                                      std::string_view query);
 std::unique_ptr<ToolRequest> MakeTypeRequest(content::RenderFrameHost& rfh,
                                              int content_node_id,
                                              std::string_view text,
@@ -188,6 +260,10 @@ std::unique_ptr<ToolRequest> MakeAttemptLoginRequest(
     tabs::TabInterface& tab,
     std::optional<PageTarget> password_button = std::nullopt,
     std::optional<PageTarget> sign_in_with_google_button = std::nullopt);
+std::unique_ptr<ToolRequest> MakeAttemptLoginRequestByNodeIds(
+    tabs::TabInterface& tab,
+    std::optional<int> password_button_id,
+    std::optional<int> sign_in_with_google_button_id);
 std::unique_ptr<ToolRequest> MakeScriptToolRequest(
     content::RenderFrameHost& rfh,
     const std::string& name,
@@ -195,6 +271,13 @@ std::unique_ptr<ToolRequest> MakeScriptToolRequest(
 std::unique_ptr<ToolRequest> MakeMediaControlRequest(
     tabs::TabInterface& tab,
     MediaControl media_control);
+std::unique_ptr<ToolRequest> MakeTranslatePageRequest(tabs::TabInterface& tab);
+std::unique_ptr<ToolRequest> MakeTranslatePageRequest(
+    tabs::TabInterface& tab,
+    std::string_view target_language);
+std::unique_ptr<ToolRequest> MakeFindAndHighlightRequest(
+    tabs::TabInterface& tab,
+    const std::string& query);
 
 // A helper to create a vector of ToolRequests suitable for passing to
 // ExecutionEngine::Act. Note that this will necessarily move the ToolRequest
@@ -222,9 +305,9 @@ void ExpectOkResult(base::test::TestFuture<mojom::ActionResultPtr>& future);
 void ExpectOkResult(ActResultFuture& future);
 void ExpectErrorResult(ActResultFuture& future,
                        mojom::ActionResultCode expected_code);
-void ExpectOkResult(PerformActionsFuture& future);
-void ExpectErrorResult(PerformActionsFuture& future,
-                       mojom::ActionResultCode expected_code);
+// Checks the standard disabled-target error and its reason-specific message.
+void ExpectElementDisabledResultWithReason(ActResultFuture& future,
+                                           std::string_view reason);
 
 // Sets up GLIC_ACTION_PAGE_BLOCK to block the given host via component updater.
 bool SetUpOptimizationGuideComponentBlocklist(const base::FilePath& path,
@@ -233,9 +316,6 @@ bool SetUpOptimizationGuideComponentBlocklist(const base::FilePath& path,
 // Sets up GLIC_ACTION_PAGE_BLOCK to block the given host via the command line.
 void SetUpBlocklist(base::CommandLine* command_line,
                     const std::string& blocked_host);
-
-// For tests with link pages whose destination is encoded in URL parameters.
-std::string EncodeURI(const std::string& component);
 
 // Waits until a posted task is invoked. Used to ensures any prior posted tasks
 // are run (assuming a sequenced task runner).
@@ -285,7 +365,7 @@ class ActorTaskStateWaiter {
   ~ActorTaskStateWaiter();
 
  private:
-  void StateChanged(TaskId task_id, ActorTask::State state);
+  void StateChanged(ActorTask& task);
 
   base::OnceClosure callback_;
   TaskId task_id_;
@@ -303,19 +383,111 @@ class ScopedExecutionEngineFactory {
   ~ScopedExecutionEngineFactory();
 };
 
-class MockPolicyChecker : public EnterprisePolicyUrlChecker {
+class MockActorTaskDelegate : public ActorTaskDelegate {
  public:
-  explicit MockPolicyChecker(EnterprisePolicyBlockReason reason);
-  ~MockPolicyChecker();
+  MockActorTaskDelegate();
+  ~MockActorTaskDelegate() override;
 
-  EnterprisePolicyBlockReason Evaluate(const GURL& url) const override;
+  MOCK_METHOD(void,
+              OnTabAddedToTask,
+              (TaskId task_id, const tabs::TabInterface::Handle& tab_handle),
+              (override));
+
+  MOCK_METHOD(void,
+              OnTaskTabsVisibilityChanged,
+              (TaskId task_id, bool has_visible_tab),
+              (override));
+
+  MOCK_METHOD(void,
+              RequestToShowCredentialSelectionDialog,
+              (TaskId task_id,
+               (const base::flat_map<std::string, gfx::Image>&)icons,
+               const std::vector<actor_login::Credential>& credentials,
+               CredentialSelectedCallback callback),
+              (override));
+
+  MOCK_METHOD(void,
+              RequestToShowUserConfirmationDialog,
+              (TaskId task_id,
+               const url::Origin& destination,
+               bool for_blocklisted_origin,
+               UserConfirmationDialogCallback callback),
+              (override));
+
+  MOCK_METHOD(void,
+              RequestToConfirmNavigation,
+              (TaskId task_id,
+               const url::Origin& destination,
+               NavigationConfirmationCallback callback),
+              (override));
+
+  MOCK_METHOD(void,
+              RequestToShowAutofillSuggestionsDialog,
+              (actor::TaskId task_id,
+               std::vector<autofill::ActorFormFillingRequest> requests,
+               base::WeakPtr<AutofillSelectionDialogEventHandler> handler,
+               AutofillSuggestionSelectedCallback callback),
+              (override));
+
+  MOCK_METHOD(void,
+              RequestToShowGmailOtpOptInDialog,
+              (TaskId task_id, GmailOtpOptInCallback callback),
+              (override));
+
+  MOCK_METHOD(void,
+              RequestToShowGmailOtpConfirmationDialog,
+              (TaskId task_id,
+               const std::string& verification_code,
+               GmailOtpConfirmationCallback callback),
+              (override));
+
+  base::WeakPtr<MockActorTaskDelegate> GetWeakPtr() {
+    return weak_factory_.GetWeakPtr();
+  }
+
  private:
-  EnterprisePolicyBlockReason reason_;
+  base::WeakPtrFactory<MockActorTaskDelegate> weak_factory_{this};
 };
 
-// Returns a passthrough EnterprisePolicyUrlChecker tests can use to avoid
+class MockPolicyChecker : public EnterprisePolicyChecker {
+ public:
+  explicit MockPolicyChecker(
+      UrlBlockReason reason,
+      std::optional<ContentValidationReason> content_reason =
+          ContentValidationReason::kAllowed);
+  ~MockPolicyChecker() override;
+
+  UrlBlockReason Evaluate(const GURL& url) const override;
+  void set_reason(UrlBlockReason reason) { reason_ = reason; }
+  void ValidateContentSentToRenderer(
+      content::RenderFrameHost* frame,
+      const std::string& content,
+      ContentValidationCallback callback) const override;
+
+ private:
+  UrlBlockReason reason_;
+  std::optional<ContentValidationReason> content_reason_;
+};
+
+// Returns a passthrough EnterprisePolicyChecker tests can use to avoid
 // policy checks.
-const EnterprisePolicyUrlChecker* NoEnterprisePolicyChecker();
+const EnterprisePolicyChecker* NoEnterprisePolicyChecker();
+
+// Returns a common mock TaskSourceInfo used by actor tests.
+const TaskSourceInfo& TestTaskSourceInfo();
+
+// Adds a tab to a task and waits for the operation to complete.
+void AddTabToTask(tabs::TabInterface& tab, ActorTask& actor_task);
+
+// Helper to mock the result returned on a TabObservation built using
+// actor::BuildActionsResultWithObservations. While live, use the provided
+// function to set TabObservationResults. Unset on destruction.
+class ScopedMockTabObservationResult {
+ public:
+  explicit ScopedMockTabObservationResult(
+      TabObservationResultOverrideCallback callback);
+  ~ScopedMockTabObservationResult();
+};
 
 // Helper struct for unit tests that require a mock TabInterface and its
 // associated ActorTabData.

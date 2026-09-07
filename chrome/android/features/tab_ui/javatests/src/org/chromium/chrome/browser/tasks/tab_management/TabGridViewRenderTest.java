@@ -4,7 +4,6 @@
 
 package org.chromium.chrome.browser.tasks.tab_management;
 
-import static org.chromium.base.test.util.Restriction.RESTRICTION_TYPE_NON_LOW_END_DEVICE;
 import static org.chromium.ui.test.util.RenderTestRule.Component.UI_BROWSER_MOBILE_TAB_SWITCHER_GRID;
 
 import android.app.Activity;
@@ -32,7 +31,8 @@ import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
-import org.chromium.base.test.util.Restriction;
+import org.chromium.chrome.browser.actor.ui.ActorUiTabController.UiTabState;
+import org.chromium.chrome.browser.actor.ui.TabIndicatorStatus;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab_ui.ThumbnailProvider.MultiThumbnailMetadata;
@@ -53,7 +53,6 @@ import java.util.List;
 @RunWith(ParameterizedRunner.class)
 @UseRunnerDelegate(ChromeJUnit4RunnerDelegate.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
-@Restriction({RESTRICTION_TYPE_NON_LOW_END_DEVICE})
 @Batch(Batch.PER_CLASS)
 @DisabledTest(message = "https://crbug.com/424204696")
 public class TabGridViewRenderTest {
@@ -79,7 +78,7 @@ public class TabGridViewRenderTest {
     public ChromeRenderTestRule mRenderTestRule =
             ChromeRenderTestRule.Builder.withPublicCorpus()
                     .setBugComponent(UI_BROWSER_MOBILE_TAB_SWITCHER_GRID)
-                    .setRevision(1)
+                    .setRevision(2)
                     .build();
 
     public TabGridViewRenderTest(boolean isNightModeEnabled) {
@@ -91,7 +90,7 @@ public class TabGridViewRenderTest {
     public void setUp() throws Exception {
         mActivityTestRule.launchActivity(null);
         mActivity = mActivityTestRule.getActivity();
-        mActivity.setTheme(org.chromium.chrome.test.R.style.Theme_BrowserUI_DayNight);
+        mActivity.setTheme(R.style.Theme_BrowserUI_DayNight);
 
         FrameLayout.LayoutParams params =
                 new FrameLayout.LayoutParams(
@@ -170,6 +169,27 @@ public class TabGridViewRenderTest {
                     mTabGridView.requestFocus();
                 });
         mRenderTestRule.render(mTabGridView, "tab_grid_view_focused_incognito");
+    }
+
+    @Test
+    @MediumTest
+    @Feature({"RenderTest"})
+    public void testCardView_ActorActiveIndicator() throws IOException {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mModel = createModel(false);
+                    UiTabState state =
+                            new UiTabState(
+                                    Tab.INVALID_TAB_ID,
+                                    /* actorOverlay= */ null,
+                                    /* handoffButton= */ null,
+                                    TabIndicatorStatus.STATIC,
+                                    /* borderGlowVisible= */ false);
+                    mModel.set(TabProperties.ACTOR_UI_STATE, state);
+                    PropertyModelChangeProcessor.create(
+                            mModel, mTabGridView, TabGridViewBinder::bindTab);
+                });
+        mRenderTestRule.render(mTabGridView, "tab_grid_view_actor_active_indicator");
     }
 
     public void pollForHighlight(boolean isHighlighted) {

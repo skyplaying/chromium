@@ -23,14 +23,14 @@ template <>
 struct GPU_IPC_COMMON_EXPORT StructTraits<
     gpu::mojom::SharedImageExportResultDataView,
     gpu::SharedImageExportResult> {
-  static const gpu::SyncToken& sync_token(
+  static const std::vector<gpu::SyncToken>& sync_tokens(
       const gpu::SharedImageExportResult& shared_image_exported_result) {
-    return shared_image_exported_result.sync_token_;
+    return shared_image_exported_result.sync_tokens_;
   }
 
   static bool Read(gpu::mojom::SharedImageExportResultDataView data,
                    gpu::SharedImageExportResult* out) {
-    if (!data.ReadSyncToken(&out->sync_token_)) {
+    if (!data.ReadSyncTokens(&out->sync_tokens_)) {
       return false;
     }
     return true;
@@ -55,7 +55,13 @@ struct GPU_IPC_COMMON_EXPORT StructTraits<
     return shared_image.creation_sync_token_;
   }
 
-  static std::string debug_label(const gpu::ExportedSharedImage& shared_image) {
+  static const std::vector<gpu::SyncToken>& managed_sync_tokens(
+      const gpu::ExportedSharedImage& shared_image) {
+    return shared_image.managed_sync_tokens_;
+  }
+
+  static const std::string& debug_label(
+      const gpu::ExportedSharedImage& shared_image) {
     return shared_image.debug_label_;
   }
 
@@ -79,19 +85,43 @@ struct GPU_IPC_COMMON_EXPORT StructTraits<
 
   static bool Read(gpu::mojom::ExportedSharedImageDataView data,
                    gpu::ExportedSharedImage* out) {
-    if (!data.ReadMailbox(&out->mailbox_) ||
+    if (!data.ReadMailbox(&out->mailbox_) || out->mailbox_.IsZero() ||
         !data.ReadMetadata(&out->metadata_) ||
         !data.ReadDebugLabel(&out->debug_label_) ||
         !data.ReadCreationSyncToken(&out->creation_sync_token_) ||
+        !data.ReadManagedSyncTokens(&out->managed_sync_tokens_) ||
         !data.ReadBufferHandle(&out->buffer_handle_) ||
         !data.ReadBufferUsage(&out->buffer_usage_)) {
       return false;
+    }
+    // There must be at most one SyncToken per client sequence. Reject any
+    // deserialized payload with duplicate client IDs to prevent receiving
+    // processes from crashing or entering an inconsistent state.
+    const auto& managed_tokens = out->managed_sync_tokens_;
+    for (size_t i = 0; i < managed_tokens.size(); ++i) {
+      for (size_t j = i + 1; j < managed_tokens.size(); ++j) {
+        if (managed_tokens[i].GetClientId() ==
+            managed_tokens[j].GetClientId()) {
+          return false;
+        }
+      }
     }
     // If GpuMemoryBufferHandle is passed in, BufferUsage should also be passed.
     if (out->buffer_handle_ && !out->buffer_usage_) {
       return false;
     }
+    if (out->buffer_handle_ && out->buffer_handle_->type == gfx::EMPTY_BUFFER) {
+      return false;
+    }
     out->texture_target_ = data.texture_target();
+#if !BUILDFLAG(IS_FUCHSIA)
+    // On Fuchsia, it is possible for texture_target_ to be 0 because Fuchsia
+    // does not support import of external images to GL for usage with external
+    // sampling. For other platforms, texture_target_ should always be non-zero.
+    if (out->texture_target_ == 0) {
+      return false;
+    }
+#endif
     out->is_software_ = data.is_software();
     return true;
   }

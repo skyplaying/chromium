@@ -24,7 +24,7 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.SheetState;
-import org.chromium.components.browser_ui.bottomsheet.EmptyBottomSheetObserver;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetObserver;
 import org.chromium.components.browser_ui.widget.scrim.ScrimManager;
 import org.chromium.ui.modelutil.LayoutViewBuilder;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
@@ -70,7 +70,7 @@ public class CommerceBottomSheetContentCoordinator implements CommerceBottomShee
                 };
         adapter.registerType(
                 0,
-                new LayoutViewBuilder(R.layout.commerce_bottom_sheet_content_item_container),
+                new LayoutViewBuilder<>(R.layout.commerce_bottom_sheet_content_item_container),
                 CommerceBottomSheetContentBinder::bind);
 
         mCommerceBottomSheetContentContainer =
@@ -96,7 +96,7 @@ public class CommerceBottomSheetContentCoordinator implements CommerceBottomShee
                 });
 
         bottomSheetController.addObserver(
-                new EmptyBottomSheetObserver() {
+                new BottomSheetObserver() {
                     @Nullable PropertyModel mScrimModel;
 
                     @Override

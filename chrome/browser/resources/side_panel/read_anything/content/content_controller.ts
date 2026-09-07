@@ -5,22 +5,29 @@
 import {assert} from '//resources/js/assert.js';
 import {loadTimeData} from '//resources/js/load_time_data.js';
 
+import type {VisualBrowserProxy} from '../app/visual_browser_proxy.js';
+import {VisualBrowserProxyImpl} from '../app/visual_browser_proxy.js';
+import type {AudioBrowserProxy} from '../read_aloud/audio_browser_proxy.js';
+import {AudioBrowserProxyImpl} from '../read_aloud/audio_browser_proxy.js';
 import {previousReadHighlightClass} from '../read_aloud/movement.js';
 import {getReadAloudModel} from '../read_aloud/read_aloud_model_browser_proxy.js';
 import {ReadAloudNode} from '../read_aloud/read_aloud_types.js';
 import {SpeechController} from '../read_aloud/speech_controller.js';
 import {isDistilledByReadability, LOG_EMPTY_DELAY_MS} from '../shared/common.js';
-import {ReadAnythingLogger} from '../shared/read_anything_logger.js';
+import {LinkStatus, ReadAnythingLogger} from '../shared/read_anything_logger.js';
+import {getReadingModeTextNodes} from '../shared/tree_traversal.js';
 
+import type {ContentBrowserProxy} from './content_browser_proxy.js';
+import {ContentBrowserProxyImpl} from './content_browser_proxy.js';
 import {NodeStore} from './node_store.js';
+import {removeExtraneousElementsFrom} from './readability_content_processing.js';
 import {ReadabilityImageClassifier} from './readability_image_classifier.js';
 
 const DATA_PREFIX = 'data-';
 const LINK_DATA_ATTR = 'link';
 const LINKS_OFF_TAG = 'span';
 const LINKS_ON_TAG = 'a';
-const LINKS_OFF_SELECTOR =
-    LINKS_OFF_TAG + '[' + DATA_PREFIX + LINK_DATA_ATTR + ']';
+const LINKS_OFF_SELECTOR = `${LINKS_OFF_TAG}[${DATA_PREFIX}${LINK_DATA_ATTR}]`;
 export const HIGHLIGHTED_LINK_CLASS = 'highlighted-link';
 
 // Reading mode sometimes needs to use a different html tag to display a
@@ -46,6 +53,10 @@ const SCREEN2X_TAG_TO_RM_TAG: Map<string, string> = new Map([
   // Buttons are sometimes distilled but button click logic isn't handled
   // by reading mode, so these shouldn't be distilled as clickable elements.
   ['button', 'div'],
+  // Reading mode shouldn't be distilling input elements, but if this ever
+  // happens, ensure they're converted to divs so that an interactable
+  // element isn't shown on the reading mode panel.
+  ['input', 'div'],
 ]);
 
 // Readability doesn't need to replace as many tags as Screen2x. If there's
@@ -54,6 +65,7 @@ const SCREEN2X_TAG_TO_RM_TAG: Map<string, string> = new Map([
 const READABILITY_TAG_TO_RM_TAG: Map<string, string> = new Map([
   ['button', 'div'],
   ['details', 'div'],
+  ['mark', 'div'],
 ]);
 
 export interface ContentListener {
@@ -131,6 +143,12 @@ export class ContentController {
   private nodeStore_: NodeStore = NodeStore.getInstance();
   private speechController_: SpeechController = SpeechController.getInstance();
   private logger_: ReadAnythingLogger = ReadAnythingLogger.getInstance();
+  private visualBrowserProxy_: VisualBrowserProxy =
+      VisualBrowserProxyImpl.getInstance();
+  private contentBrowserProxy_: ContentBrowserProxy =
+      ContentBrowserProxyImpl.getInstance();
+  private audioBrowserProxy_: AudioBrowserProxy =
+      AudioBrowserProxyImpl.getInstance();
 
   private readonly listeners_: ContentListener[] = [];
   private currentState_: ContentState = CONTENT_STATES[ContentType.NO_CONTENT];
@@ -142,6 +160,19 @@ export class ContentController {
   // (which occur frequently during WebUI test runs) share the same policy
   // reference and do not trigger a "Policy already exists" TypeError.
   private static trustedUpdatePolicy: TrustedTypePolicy|undefined;
+
+  // Holds the text nodes extracted from the current rendered distillation.
+  // This array ensures that we can link a DOM node back to its AXTree
+  // mapping for text selection via its index in this array.
+  private renderedTextNodes_: Node[] = [];
+
+  constructor() {
+    this.contentBrowserProxy_.onImageDownloaded.addListener(
+        this.onImageDownloaded.bind(this));
+    this.contentBrowserProxy_.onNodeWillBeDeleted.addListener(
+        this.onNodeWillBeDeleted.bind(this));
+    this.contentBrowserProxy_.showEmpty.addListener(this.setEmpty.bind(this));
+  }
 
   getState(): ContentState {
     return this.currentState_;
@@ -181,8 +212,9 @@ export class ContentController {
   }
 
   private getNoContentType_() {
-    return chrome.readingMode.isGoogleDocs ? ContentType.NO_SELECTABLE_CONTENT :
-                                             ContentType.NO_CONTENT;
+    return this.contentBrowserProxy_.isGoogleDocs() ?
+        ContentType.NO_SELECTABLE_CONTENT :
+        ContentType.NO_CONTENT;
   }
 
   addListener(listener: ContentListener) {
@@ -194,7 +226,7 @@ export class ContentController {
 
     // When a node is deleted, the read aloud model can get out of sync with the
     // DOM. To be safe, delete the node from the model.
-    if (deletedNode && chrome.readingMode.isTsTextSegmentationEnabled) {
+    if (deletedNode && !this.audioBrowserProxy_.isPhraseHighlightingEnabled()) {
       getReadAloudModel().onNodeWillBeDeleted?.(deletedNode);
     }
 
@@ -203,10 +235,11 @@ export class ContentController {
       deletedNode.remove();
       this.listeners_.forEach(l => l.onContentChange());
     }
-    const root = this.nodeStore_.getDomNode(chrome.readingMode.rootId);
-    if (this.hasContent() && !root?.textContent) {
+    const root =
+        this.nodeStore_.getDomNode(this.contentBrowserProxy_.getRootId());
+    if (this.hasContent() && !root?.textContent?.trim()) {
       this.setState(this.getNoContentType_());
-      chrome.readingMode.onNoTextContent();
+      this.contentBrowserProxy_.onNoTextContent();
     }
   }
 
@@ -218,12 +251,12 @@ export class ContentController {
           'updateContent called while speech is active. ',
           'There may be a bug.');
       this.logger_.logSpeechStopSource(
-          chrome.readingMode.unexpectedUpdateContentStopSource);
+          this.contentBrowserProxy_.getUnexpectedUpdateContentStopSource());
     }
 
     this.speechController_.saveReadAloudState();
     this.speechController_.resetForNewContent();
-    this.nodeStore_.clearDomNodes();
+    this.nodeStore_.clear();
 
     if (isDistilledByReadability()) {
       return this.updateContentForReadability();
@@ -234,10 +267,10 @@ export class ContentController {
   updateContentForReadability(): Node|null {
     if (isDistilledByReadability()) {
       // Readability Path: Build DOM from the HTML string.
-      const title = chrome.readingMode.htmlTitle;
-      const contentHtml = chrome.readingMode.htmlContent;
+      const title = this.contentBrowserProxy_.getHtmlTitle();
+      const contentHtml = this.contentBrowserProxy_.getHtmlContent();
 
-      if (!contentHtml) {
+      if (!contentHtml || !contentHtml.trim()) {
         this.setEmpty();
         return null;
       }
@@ -252,6 +285,20 @@ export class ContentController {
 
       const contentContainer = document.createElement('div');
       contentContainer.innerHTML = this.getTrustedHtml(contentHtml);
+
+
+      // Strip single newlines from text nodes to prevent unexpected sentence
+      // breaks, as Readability preserves raw HTML newlines which are visually
+      // rendered as spaces. Consecutive newlines are preserved as they may
+      // denote intentional line breaks.
+      const walker =
+          document.createTreeWalker(contentContainer, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        if (node.nodeValue && !node.parentElement?.closest('pre')) {
+          node.nodeValue = node.nodeValue.replace(/(?<!\n)\n(?!\n)/g, ' ');
+        }
+      }
 
       // Replace tags that shouldn't be interactive or have special behavior
       // in reading mode. This is similar to what happens in `buildSubtree_`
@@ -270,21 +317,48 @@ export class ContentController {
         }
       }
 
-      // Set before updateImages to avoid early return.
+      // Process images from distillation. If images are disabled or there is
+      // no text content, images shouldn't be considered "content" and the
+      // empty state page should be shown. If there is a valid selection, then
+      // the images may be shown.
+      // TODO: crbug.com/483140075- Right now, selection with Readability does
+      // not work, so selected images will not be distilled.
+      const hasImages = this.updateImagesForReadability_(contentContainer);
+      const hasImagesAsContent = this.visualBrowserProxy_.isImagesEnabled() &&
+          this.contentBrowserProxy_.hasValidSelection() && hasImages;
+
+      if (!contentContainer.textContent?.trim() && !hasImagesAsContent) {
+        this.setEmpty();
+        return null;
+      }
+
+      this.logger_.logNewPage(/*speechPlayed=*/ false);
+
       this.setState(ContentType.HAS_CONTENT);
 
-      // Process images from distillation.
-      this.updateImages(contentContainer);
       contentFragment.appendChild(contentContainer);
 
-      // TODO(crbug.com/40910704): Remove ReadabilityImageClassifier once we
-      // share code with mobile's Reading Mode.
-      ReadabilityImageClassifier.processImagesIn(contentContainer);
+      // Ensure link visibility is updated with user preferences.
+      this.updateLinksForReadability(contentContainer);
+
+      this.applyReadabilityContentPostProcessing_(contentContainer);
       this.updateReadAloudState(contentFragment);
       this.listeners_.forEach(l => l.onContentChange());
       return contentFragment;
     }
     return null;
+  }
+
+  private applyReadabilityContentPostProcessing_(
+      contentContainer: HTMLElement) {
+    if (!isDistilledByReadability()) {
+      return;
+    }
+
+    // TODO(crbug.com/478229109): Remove duplicated code once we share code with
+    // mobile's Reading Mode.
+    removeExtraneousElementsFrom(contentContainer);
+    ReadabilityImageClassifier.processImagesIn(contentContainer);
   }
 
   updateContentForScreen2x(shadowRoot?: ShadowRoot): Node|null {
@@ -294,7 +368,7 @@ export class ContentController {
     // shadow node element representing each AXNode, because experimentation
     // (with Polymer) found the shadow node creation to be ~8-10x slower than
     // constructing and appending nodes directly to the container element.
-    const rootId = chrome.readingMode.rootId;
+    const rootId = this.contentBrowserProxy_.getRootId();
     if (!rootId) {
       return null;
     }
@@ -302,14 +376,20 @@ export class ContentController {
     const node = this.buildSubtree_(rootId);
     // If there is no text or images in the tree, do not proceed. The empty
     // state container will show instead.
-    if (!node.textContent && !this.nodeStore_.hasImagesToFetch()) {
+    // We should only consider images as content when determining whether or
+    // not to show the empty state page if they are enabled and if
+    // the user specifically selected the content.
+    const hasImagesAsContent = this.visualBrowserProxy_.isImagesEnabled() &&
+        this.contentBrowserProxy_.hasValidSelection() &&
+        this.nodeStore_.hasImagesToFetch();
+    if (!node.textContent?.trim() && !hasImagesAsContent) {
       // Sometimes the controller thinks there will be content and redraws
       // without showing the empty page, but we end up not actually having any
       // content and also not showing the empty page sometimes. In this case,
       // send that info back to the controller.
       if (this.hasContent()) {
         this.setEmpty();
-        chrome.readingMode.onNoTextContent();
+        this.contentBrowserProxy_.onNoTextContent();
       } else if (!this.isEmpty()) {
         // This is possible when the AXTree returns bad selection data and
         // reading mode believes it has selected content to distll but
@@ -336,6 +416,65 @@ export class ContentController {
     return node;
   }
 
+  onRenderedTextMappingReady() {
+    if (!isDistilledByReadability() ||
+        !this.contentBrowserProxy_.isReadabilitySelectTextEnabled()) {
+      return;
+    }
+
+    // Iterate through the rendered text nodes by their index.
+    for (let i = 0; i < this.renderedTextNodes_.length; i++) {
+      const node = this.renderedTextNodes_[i];
+      if (!(node instanceof Text) || !node.parentNode) {
+        continue;
+      }
+
+      // Retrieve the mapping segments for this specific block index.
+      const segments = this.contentBrowserProxy_.getAxMapping(i);
+      if (segments && segments.length > 0) {
+        this.mapBlockToAxNodes_(node, segments);
+      }
+    }
+  }
+
+  private mapBlockToAxNodes_(node: Text, segments: Array<{
+                               axNodeId: number,
+                               start: number,
+                               end: number,
+                               axNodeOffset: number,
+                             }>) {
+    // Link the block (rendered text node) to it's equivalent segment in the
+    // AXnode. For multiple segments, mapping to a single block, we split the
+    // block to create a 1:1 mapping between rendered text and an AXNode.
+    let currentNode: Text = node;
+    let lastOffset = 0;
+
+    for (const segment of segments) {
+      if (segment.start > lastOffset) {
+        const gapLength = segment.start - lastOffset;
+        currentNode = currentNode.splitText(gapLength);
+        lastOffset = segment.start;
+      }
+
+      const nodeLength = currentNode.textContent?.length || 0;
+      const segmentLength = Math.min(segment.end - lastOffset, nodeLength);
+
+      // Only split if there is text remaining in the node to avoid creating
+      // empty trailing nodes.
+      if (segmentLength < nodeLength) {
+        const remainingNode = currentNode.splitText(segmentLength);
+        this.nodeStore_.setDomNode(currentNode, segment.axNodeId);
+        this.nodeStore_.setAxNodeOffset(currentNode, segment.axNodeOffset);
+        currentNode = remainingNode;
+      } else {
+        this.nodeStore_.setDomNode(currentNode, segment.axNodeId);
+        this.nodeStore_.setAxNodeOffset(currentNode, segment.axNodeOffset);
+      }
+
+      lastOffset = segment.end;
+    }
+  }
+
   updateReadAloudState(rootNode: Node): void {
     // If the previous reading position still exists and we haven't reached the
     // end of speech, keep that spot.
@@ -349,7 +488,7 @@ export class ContentController {
       }
       this.nodeStore_.estimateWordsSeenWithDelay();
       // Initialize the speech tree with the new content.
-      if (chrome.readingMode.isTsTextSegmentationEnabled) {
+      if (!this.audioBrowserProxy_.isPhraseHighlightingEnabled()) {
         const contextNode = ReadAloudNode.create(rootNode);
         if (contextNode) {
           // Don't initialize until after drawing otherwise, the DOM nodes might
@@ -361,7 +500,7 @@ export class ContentController {
   }
 
   private buildSubtree_(nodeId: number): Node {
-    let htmlTag = chrome.readingMode.getHtmlTag(nodeId);
+    let htmlTag = this.contentBrowserProxy_.getHtmlTag(nodeId);
     const dataAttributes = new Map<string, string>();
 
     // Text nodes do not have an html tag.
@@ -371,8 +510,8 @@ export class ContentController {
 
     // For Google Docs, we extract text from Annotated Canvas. The Annotated
     // Canvas elements with text are leaf nodes with <rect> html tag.
-    if (chrome.readingMode.isGoogleDocs &&
-        chrome.readingMode.isLeafNode(nodeId)) {
+    if (this.contentBrowserProxy_.isGoogleDocs() &&
+        this.contentBrowserProxy_.isLeafNode(nodeId)) {
       return this.createTextNode_(nodeId);
     }
 
@@ -380,39 +519,44 @@ export class ContentController {
       htmlTag = SCREEN2X_TAG_TO_RM_TAG.get(htmlTag)!;
     }
 
-    const url = chrome.readingMode.getUrl(nodeId);
+    const url = this.contentBrowserProxy_.getUrl(nodeId);
     if (!this.shouldShowLinks_() && htmlTag === LINKS_ON_TAG) {
       htmlTag = LINKS_OFF_TAG;
       dataAttributes.set(LINK_DATA_ATTR, url ?? '');
     }
 
     const element = document.createElement(htmlTag);
+    const htmlId = this.contentBrowserProxy_.getHtmlId(nodeId);
+    if (htmlId) {
+      element.id = htmlId;
+    }
     // Add required data attributes.
     for (const [attr, val] of dataAttributes) {
       element.dataset[attr] = val;
     }
     this.nodeStore_.setDomNode(element, nodeId);
-    const direction = chrome.readingMode.getTextDirection(nodeId);
+    const direction = this.contentBrowserProxy_.getTextDirection(nodeId);
     if (direction) {
       element.setAttribute('dir', direction);
     }
 
+    const display = this.visualBrowserProxy_.isImagesEnabled() ? '' : 'none';
     if (element.nodeName === 'CANVAS') {
       this.nodeStore_.addImageToFetch(nodeId);
-      const altText = chrome.readingMode.getAltText(nodeId);
+      const altText = this.contentBrowserProxy_.getAltText(nodeId);
       element.setAttribute('alt', altText);
-      element.style.display = chrome.readingMode.imagesEnabled ? '' : 'none';
+      element.style.display = display;
       element.classList.add('downloaded-image');
     }
 
     if (element.nodeName === 'FIGURE') {
-      element.style.display = chrome.readingMode.imagesEnabled ? '' : 'none';
+      element.style.display = display;
     }
 
     if (url && element.nodeName === 'A') {
       this.setLinkAttributes_(element, url, nodeId);
     }
-    const language = chrome.readingMode.getLanguage(nodeId);
+    const language = this.contentBrowserProxy_.getLanguage(nodeId);
     if (language) {
       element.setAttribute('lang', language);
     }
@@ -422,10 +566,78 @@ export class ContentController {
   }
 
   private appendChildSubtrees_(node: Node, nodeId: number) {
-    for (const childNodeId of chrome.readingMode.getChildren(nodeId)) {
+    for (const childNodeId of this.contentBrowserProxy_.getChildren(nodeId)) {
       const childNode = this.buildSubtree_(childNodeId);
       node.appendChild(childNode);
     }
+  }
+
+  private safeParseUrl_(url: string, base?: string): URL|null {
+    try {
+      return base ? new URL(url, base) : new URL(url);
+    } catch (e) {
+      console.warn('Failed to parse URL:', url, base, e);
+      return null;
+    }
+  }
+
+  scrollToAnchor(url: string, root: ShadowRoot|Document): boolean {
+    if (!url) {
+      return false;
+    }
+
+    const pageUrlString = this.contentBrowserProxy_.getDocumentUrl();
+    if (!pageUrlString) {
+      return false;
+    }
+
+    const pageUrl = this.safeParseUrl_(pageUrlString);
+    const linkUrl = pageUrl ? this.safeParseUrl_(url, pageUrl.href) : null;
+
+    if (!pageUrl || !linkUrl) {
+      return false;
+    }
+
+    // The browser is only sending same document links, but this is an
+    // additional safety check.
+    const isSameDocument = linkUrl.origin === pageUrl.origin &&
+        linkUrl.pathname === pageUrl.pathname &&
+        linkUrl.search === pageUrl.search;
+
+    if (!isSameDocument) {
+      return false;
+    }
+
+    let targetId: string|null = null;
+    if (linkUrl.hash) {
+      try {
+        targetId = decodeURIComponent(linkUrl.hash.substring(1));
+      } catch (e) {
+        targetId = linkUrl.hash.substring(1);
+      }
+    }
+
+    // Case 1: We have a specific target ID. Try to scroll to it.
+    if (targetId) {
+      const target = root.getElementById(targetId);
+      if (target) {
+        target.scrollIntoView({behavior: 'smooth'});
+        return true;
+      }
+      if (targetId.toLowerCase() !== 'top') {
+        return false;  // Target ID was specified but element not found.
+      }
+      // Fall through to Case 2 for 'top'
+    }
+
+    // Case 2: Same-document navigation with no hash (navigated back to top).
+    const scroller = root.getElementById('containerScroller');
+    if (scroller) {
+      scroller.scrollTo({top: 0, behavior: 'smooth'});
+      return true;
+    }
+
+    return false;
   }
 
   private setLinkAttributes_(
@@ -434,17 +646,17 @@ export class ContentController {
     element.onclick = (event: MouseEvent) => {
       event.preventDefault();
       if (nodeId) {
-        chrome.readingMode.onLinkClicked(nodeId);
+        this.contentBrowserProxy_.onLinkClicked(nodeId);
       }
     };
   }
 
   private createTextNode_(nodeId: number): Node {
-    const textContent = chrome.readingMode.getTextContent(nodeId);
+    const textContent = this.contentBrowserProxy_.getTextContent(nodeId);
     const textNode = document.createTextNode(textContent);
     this.nodeStore_.setDomNode(textNode, nodeId);
-    const isOverline = chrome.readingMode.isOverline(nodeId);
-    const shouldBold = chrome.readingMode.shouldBold(nodeId);
+    const isOverline = this.contentBrowserProxy_.isOverline(nodeId);
+    const shouldBold = this.contentBrowserProxy_.shouldBold(nodeId);
 
     // When creating text nodes, save the first text node id. We need this
     // node id to call InitAXPosition in playSpeech. If it's not saved here,
@@ -452,7 +664,7 @@ export class ContentController {
     // which can be computationally expensive.
     // This needs to be done after the text node is created and added to the
     // node store.
-    if (!chrome.readingMode.isTsTextSegmentationEnabled) {
+    if (this.audioBrowserProxy_.isPhraseHighlightingEnabled()) {
       this.speechController_.initializeSpeechTree(textNode);
     }
 
@@ -482,6 +694,34 @@ export class ContentController {
     }
   }
 
+  // TODO: crbug.com/458961470- This should be merged with updateLinks. This
+  // is being kept as a separate method temporarily in order to make things
+  // slightly safer for cherrypicking.
+  updateLinksForReadability(root?: ParentNode) {
+    if (!root || !this.hasContent()) {
+      return;
+    }
+
+    const showLinks = this.shouldShowLinks_();
+    const selector = showLinks ? LINKS_OFF_SELECTOR : LINKS_ON_TAG;
+    const elements = root.querySelectorAll<HTMLElement>(selector);
+    for (const elem of elements) {
+      this.transformLinkContainer_(elem, showLinks);
+    }
+
+    // Ensure the link attributes are set initially when reading mode is
+    // first opened.
+    if (isDistilledByReadability()) {
+      const links = root.querySelectorAll('a');
+      for (const link of links) {
+        const nodeId = this.nodeStore_.getAxId(link);
+        // Use raw href attribute instead of resolved link.href
+        const rawHref = link.getAttribute('href') || '';
+        this.setLinkAttributes_(link, rawHref, nodeId);
+      }
+    }
+  }
+
   private transformLinkContainer_(
       elemToReplace: HTMLElement, showLinks: boolean) {
     const nodeId = this.nodeStore_.getAxId(elemToReplace);
@@ -502,7 +742,8 @@ export class ContentController {
     // Copy all attributes from the old element to the new one.
     for (const attrName of elemToReplace.getAttributeNames()) {
       // Skip the attributes we are manually changing.
-      if (attrName === 'href' || attrName === DATA_PREFIX + LINK_DATA_ATTR) {
+      if (attrName === 'href' ||
+          attrName === `${DATA_PREFIX}${LINK_DATA_ATTR}`) {
         continue;
       }
       const attrValue = elemToReplace.getAttribute(attrName)!;
@@ -525,7 +766,7 @@ export class ContentController {
     const newClass =
         showLinks ? HIGHLIGHTED_LINK_CLASS : previousReadHighlightClass;
     const highlightedNodes =
-        Array.from(newElem.querySelectorAll<HTMLElement>('.' + originalClass));
+        Array.from(newElem.querySelectorAll<HTMLElement>(`.${originalClass}`));
     if (newElem.classList.contains(originalClass)) {
       highlightedNodes.push(newElem);
     }
@@ -539,7 +780,7 @@ export class ContentController {
   // TODO(crbug.com/40910704): Potentially hide links during distillation.
   private shouldShowLinks_(): boolean {
     // Links should only show when Read Aloud is paused.
-    return chrome.readingMode.linksEnabled &&
+    return this.visualBrowserProxy_.isLinksEnabled() &&
         !this.speechController_.isSpeechActive();
   }
 
@@ -548,21 +789,17 @@ export class ContentController {
       return;
     }
     const highlightedNodes =
-        shadowRoot.querySelectorAll<HTMLElement>('.' + HIGHLIGHTED_LINK_CLASS);
+        shadowRoot.querySelectorAll<HTMLElement>(`.${HIGHLIGHTED_LINK_CLASS}`);
     highlightedNodes.forEach(
         node => node.classList.remove(HIGHLIGHTED_LINK_CLASS));
   }
 
   loadImages() {
-    if (!chrome.readingMode.imagesFeatureEnabled) {
-      return;
-    }
-
     this.nodeStore_.fetchImages();
   }
 
   async onImageDownloaded(nodeId: number) {
-    const data = chrome.readingMode.getImageBitmap(nodeId);
+    const data = this.contentBrowserProxy_.getImageBitmap(nodeId);
     const element = this.nodeStore_.getDomNode(nodeId);
     if (data && element && element instanceof HTMLCanvasElement) {
       element.width = data.width;
@@ -582,25 +819,232 @@ export class ContentController {
     }
   }
 
-  updateImages(root?: ParentNode) {
-    if (!root || !this.hasContent()) {
+  onRenderedTextBlocksAvailable(container: HTMLElement) {
+    if (!isDistilledByReadability() ||
+        !this.contentBrowserProxy_.isReadabilitySelectTextEnabled()) {
+      return;
+    }
+
+    // Capture the specific node instances currently rendered in the UI.
+    // We store them in an array so that the index becomes the identifier that
+    // links this node to its AXTree mapping in the renderer.
+    this.renderedTextNodes_ = getReadingModeTextNodes(container);
+
+    // Extract the raw text content from each node to send to the mapping
+    // algorithm in the renderer.
+    const blocks = this.renderedTextNodes_.map(n => n.textContent || '');
+
+    this.contentBrowserProxy_.onRenderedTextBlocksAvailable(blocks);
+  }
+
+  updateImages(shadowRoot?: ShadowRoot) {
+    if (!shadowRoot || !this.hasContent()) {
       return;
     }
 
     const imagesUpdated = isDistilledByReadability() ?
-        this.updateImagesForReadability_(root) :
-        this.updateImagesForAxTree_(root);
-    if (imagesUpdated) {
-      this.listeners_.forEach(l => l.onContentChange());
+        this.updateImagesForReadability_(shadowRoot) :
+        this.updateImagesForAxTree_(shadowRoot);
+    if (!imagesUpdated) {
+      return;
+    }
+    this.listeners_.forEach(l => l.onContentChange());
+
+    // Update read aloud state to ensure it's updated for text related to
+    // image captions.
+    if (this.speechController_.hasSpeechBeenTriggered()) {
+      this.speechController_.saveReadAloudState();
+      this.speechController_.resetForNewContent();
+      const container = shadowRoot.getElementById('container') || shadowRoot;
+      this.updateReadAloudState(container as Node);
+    } else if (!this.audioBrowserProxy_.isPhraseHighlightingEnabled()) {
+      getReadAloudModel().resetModel?.();
     }
   }
 
-  private updateImagesForAxTree_(shadowRoot: ParentNode): boolean {
-    if (!chrome.readingMode.imagesFeatureEnabled) {
-      return false;
+  updateAnchorsForReadability(root: ParentNode) {
+    if (!this.contentBrowserProxy_.isReadabilityEnabled() ||
+        !isDistilledByReadability()) {
+      return;
     }
 
-    const imagesEnabled = chrome.readingMode.imagesEnabled;
+    if (!root || !this.hasContent()) {
+      return;
+    }
+
+    const anchors = Array.from(root.querySelectorAll<HTMLAnchorElement>('a'));
+    const originalAnchors: Record<string, AxTreeAnchorMetadata[]> =
+        this.contentBrowserProxy_.getAxTreeAnchors();
+    let successCount = 0;
+    let noHrefCount = 0;
+    let noMatchCount = 0;
+    let tooManyMatchesCount = 0;
+    for (const anchor of anchors) {
+      // Use raw href attribute to match axTreeAnchors keys correctly
+      const url = anchor.getAttribute('href') || '';
+      if (!url) {
+        noHrefCount++;
+        this.transformLinkContainer_(anchor, false);
+        continue;
+      }
+
+      const options = originalAnchors[url];
+      if (!options) {
+        noMatchCount++;
+        this.transformLinkContainer_(anchor, false);
+        continue;
+      }
+
+      let matchIndex = null;
+      if (options.length === 1) {
+        // Use the first item in the list if there is a single anchor for this
+        // URL.
+        matchIndex = 0;
+      } else {
+        // Otherwise, try to find an anchor that matches.
+        matchIndex = this.findStrictMatch_(anchor, options);
+      }
+
+      if (matchIndex === null || matchIndex >= options.length) {
+        tooManyMatchesCount++;
+        // Convert the anchor to text if no match is found.
+        this.transformLinkContainer_(anchor, false);
+        continue;
+      }
+
+      const match = options[matchIndex];
+      if (!match) {
+        continue;
+      }
+
+      const lastIndex = options.length - 1;
+      const lastElement = options[lastIndex];
+      if (lastElement !== undefined) {
+        // If there is a match, remove it from the list of options so it
+        // cannot be reused by another anchor.
+        options[matchIndex] = lastElement;
+        options.pop();
+      }
+
+      const nodeID = match.axId;
+      this.nodeStore_.setDomNode(anchor, nodeID);
+      this.setLinkAttributes_(anchor, url, nodeID);
+      successCount++;
+    }
+
+    // Only log if there were anchors on the page.
+    if (anchors.length > 0) {
+      this.logger_.logLinkStatusCount(LinkStatus.SUCCESS, successCount);
+      this.logger_.logLinkStatusCount(LinkStatus.NO_HREF, noHrefCount);
+      this.logger_.logLinkStatusCount(LinkStatus.NO_MATCH, noMatchCount);
+      this.logger_.logLinkStatusCount(
+          LinkStatus.TOO_MANY_MATCHES, tooManyMatchesCount);
+    }
+  }
+
+  private findStrictMatch_(
+      domNode: HTMLAnchorElement, candidates: AxTreeAnchorMetadata[]): number
+      |null {
+    let bestCandidateIndex: number|null = null;
+    let highestScore = -1;
+    let tieDetected = false;
+
+    for (let i = 0; i < candidates.length; i++) {
+      const metaCandidate = candidates[i];
+      if (!metaCandidate) {
+        continue;
+      }
+
+      const score = this.calculateMatchScore_(domNode, metaCandidate);
+      if (score > highestScore) {
+        highestScore = score;
+        bestCandidateIndex = i;
+        tieDetected = false;
+      } else if (score === highestScore && score > 0) {
+        tieDetected = true;
+      }
+    }
+
+    if (tieDetected) {
+      return null;
+    }
+
+    return bestCandidateIndex;
+  }
+
+
+  // Calculates a heuristic match score to bind a distilled DOM node to the
+  // correct AXNodeID.
+  // Note: The score values below are heuristics based on the relative
+  // importance of different signals. They can be tuned or changed in the future
+  // if needed.
+  //
+  // High-level scoring hierarchy:
+  // 1. HTML ID: Highest confidence (guaranteed match).
+  // 2. Visible Text: Strongest indicator of user intent.
+  // 3. Surrounding Context: Heavy tie-breaker to disambiguate identical generic
+  //    links (e.g., "Read More").
+  // 4. Attributes (Title/Target): Micro tie-breakers for edge cases.
+  private calculateMatchScore_(
+      domNode: HTMLAnchorElement, axLink: AxTreeAnchorMetadata): number {
+    if (!domNode || !axLink) {
+      return 0;
+    }
+
+    if (axLink.htmlId && domNode.id && axLink.htmlId === domNode.id) {
+      // 10,000: Treated as an exact match.
+      return 10000;
+    }
+
+    let score = 0;
+    const domText = (domNode.textContent || '').trim();
+    const metaText = (axLink.name || '').trim();
+    if (domText && metaText) {
+      if (domText === metaText) {
+        // +60: Exact text match. Weighted high enough so a perfect text match
+        // without context beats a partial match with perfect context
+        // (15 + 50 = 65).
+        score += 60;
+      } else if (domText.includes(metaText) || metaText.includes(domText)) {
+        // +15: Partial text match. Needs strong context to win.
+        score += 15;
+      }
+    }
+
+    // Context readability: Check adjacent text nodes to disambiguate identical
+    // links.
+    const domPrev = (domNode.previousSibling?.textContent || '').trim();
+    const metaPrev = (axLink.textBefore || '').trim();
+    if (metaPrev && domPrev) {
+      if (domPrev.endsWith(metaPrev) || metaPrev.endsWith(domPrev)) {
+        // +25: Previous sibling match. Heavy tie-breaker.
+        score += 25;
+      }
+    }
+    const domNext = (domNode.nextSibling?.textContent || '').trim();
+    const metaNext = (axLink.textAfter || '').trim();
+    if (metaNext && domNext) {
+      if (domNext.startsWith(metaNext) || metaNext.startsWith(domNext)) {
+        // +25: Next sibling match. Heavy tie-breaker.
+        score += 25;
+      }
+    }
+
+    // Micro tie-breakers: Low weight to never override primary text/context
+    // signals.
+    if (axLink.title && domNode.title && axLink.title === domNode.title) {
+      score += 7;
+    }
+    if (axLink.target && domNode.target &&
+        axLink.target.toLowerCase() === domNode.target.toLowerCase()) {
+      score += 3;
+    }
+
+    return score;
+  }
+
+  private updateImagesForAxTree_(shadowRoot: ParentNode): boolean {
+    const imagesEnabled = this.visualBrowserProxy_.isImagesEnabled();
     if (imagesEnabled) {
       this.nodeStore_.clearHiddenImageNodes();
     }
@@ -619,9 +1063,7 @@ export class ContentController {
       return false;
     }
 
-    // If chrome.readingMode.imagesFeatureEnabled is disabled, hide images also.
-    const imagesEnabled = chrome.readingMode.imagesEnabled &&
-        chrome.readingMode.imagesFeatureEnabled;
+    const imagesEnabled = this.visualBrowserProxy_.isImagesEnabled();
     // We look for 'img' tags (standard HTML) and 'figure' tags like screen2x.
     const images = container.querySelectorAll<HTMLElement>('img, figure');
 
@@ -633,7 +1075,7 @@ export class ContentController {
   }
 
   private async markTextNodesHiddenIfImagesHidden_(node: Node) {
-    if (chrome.readingMode.imagesEnabled) {
+    if (this.visualBrowserProxy_.isImagesEnabled()) {
       return;
     }
 

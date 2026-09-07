@@ -2,8 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/threading/platform_thread.h"
 #include "base/time/time.h"
@@ -19,11 +21,13 @@
 #include "chrome/common/pref_names.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/bookmark_node.h"
+#include "components/browser_sync/browser_sync_switches.h"
 #include "components/prefs/pref_service.h"
 #include "components/reading_list/core/reading_list_model.h"
 #include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
+#include "components/sync/base/features.h"
 #include "components/sync/service/sync_service_impl.h"
 #include "components/sync/service/sync_token_status.h"
 #include "content/public/test/browser_test.h"
@@ -72,12 +76,26 @@ class TestForAuthError : public UpdatedProgressMarkerChecker {
 
 class SyncAuthTestBase : public SyncTest {
  public:
-  explicit SyncAuthTestBase(SetupSyncMode setup_sync_mode)
+  explicit SyncAuthTestBase(SetupSyncMode setup_sync_mode,
+                            bool use_propagated_access_token = false)
       : SyncTest(SINGLE_CLIENT) {
-    if (setup_sync_mode == SetupSyncMode::kSyncTransportOnly) {
-      scoped_feature_list_.InitAndEnableFeature(
-          syncer::kReplaceSyncPromosWithSignInPromos);
+    std::vector<base::test::FeatureRef> enabled_features;
+    std::vector<base::test::FeatureRef> disabled_features;
+    if (use_propagated_access_token) {
+      enabled_features.push_back(syncer::kSyncUsePropagatedAccessToken);
+    } else {
+      disabled_features.push_back(syncer::kSyncUsePropagatedAccessToken);
     }
+    if (setup_sync_mode == SetupSyncMode::kSyncTransportOnly) {
+      enabled_features.insert(
+          enabled_features.end(),
+          {syncer::kReplaceSyncPromosWithSignInPromos,
+           switches::kSyncEnableBookmarksInTransportMode,
+           switches::kEnablePreferencesAccountStorage,
+           syncer::kSeparateLocalAndAccountSearchEngines,
+           syncer::kReadingListEnableSyncTransportModeUponSignIn});
+    }
+    scoped_feature_list_.InitWithFeatures(enabled_features, disabled_features);
   }
 
   SyncAuthTestBase(const SyncAuthTestBase&) = delete;
@@ -85,10 +103,7 @@ class SyncAuthTestBase : public SyncTest {
 
   ~SyncAuthTestBase() override = default;
 
-  // Helper function that adds a reading list entry and waits for either an auth
-  // error, or for the entry to be committed. Returns true if it detects an
-  // auth error, false if the entry is committed successfully.
-  bool AttemptToTriggerAuthError() {
+  void AddReadingListEntry() {
     int index = GetNextEntryIndex();
     std::string title = base::StringPrintf("Entry %d", index);
     GURL url = GURL(base::StringPrintf("http://www.foo%d.com", index));
@@ -98,9 +113,16 @@ class SyncAuthTestBase : public SyncTest {
     model->AddOrReplaceEntry(url, title, reading_list::ADDED_VIA_CURRENT_APP,
                              /*estimated_read_time=*/std::nullopt,
                              /*creation_time=*/std::nullopt);
+  }
+
+  // Helper function that adds a reading list entry and waits for either an auth
+  // error, or for the entry to be committed. Returns true if it detects an
+  // auth error, false if the entry is committed successfully.
+  bool AttemptToTriggerAuthError() {
+    AddReadingListEntry();
 
     // Run until the entry is committed or an auth error is encountered.
-    TestForAuthError(GetSyncService(0)).Wait();
+    EXPECT_TRUE(TestForAuthError(GetSyncService(0)).Wait());
     return TestForAuthError::HasAuthError(GetSyncService(0));
   }
 
@@ -130,21 +152,37 @@ class SyncAuthTestBase : public SyncTest {
   int entry_index_ = 0;
 };
 
-class SyncAuthTest
-    : public SyncAuthTestBase,
-      public testing::WithParamInterface<SyncTest::SetupSyncMode> {
+class SyncAuthTest : public SyncAuthTestBase,
+                     public testing::WithParamInterface<
+                         std::tuple<SyncTest::SetupSyncMode, bool>> {
  public:
-  SyncAuthTest() : SyncAuthTestBase(GetSetupSyncMode()) {}
+  SyncAuthTest()
+      : SyncAuthTestBase(GetSetupSyncMode(), UsePropagatedAccessToken()) {}
 
   SyncTest::SetupSyncMode GetSetupSyncMode() const override {
-    return GetParam();
+    return std::get<0>(GetParam());
   }
+
+  bool UsePropagatedAccessToken() const { return std::get<1>(GetParam()); }
 };
+
+namespace {
+
+std::string SyncAuthTestParamNameGenerator(
+    const testing::TestParamInfo<std::tuple<SyncTest::SetupSyncMode, bool>>&
+        info) {
+  const auto& [setup_sync_mode, use_propagated_access_token] = info.param;
+  return base::StrCat({SetupSyncModeAsString(setup_sync_mode), "_",
+                       use_propagated_access_token ? "PropagatedAccessToken"
+                                                   : "CachedAccessToken"});
+}
+
+}  // namespace
 
 INSTANTIATE_TEST_SUITE_P(,
                          SyncAuthTest,
-                         GetSyncTestModes(),
-                         testing::PrintToStringParamName());
+                         testing::Combine(GetSyncTestModes(), testing::Bool()),
+                         SyncAuthTestParamNameGenerator);
 
 // Verify that sync works with a valid OAuth2 token.
 IN_PROC_BROWSER_TEST_P(SyncAuthTest, Sanity) {
@@ -174,28 +212,21 @@ IN_PROC_BROWSER_TEST_P(SyncAuthTest, RetryOnInternalServerError500) {
 
 class SyncAuthTokenFetcherDependentTest
     : public SyncAuthTestBase,
-      public testing::WithParamInterface<
-          std::tuple<bool, SyncTest::SetupSyncMode>> {
+      public testing::WithParamInterface<SyncTest::SetupSyncMode> {
  public:
-  SyncAuthTokenFetcherDependentTest() : SyncAuthTestBase(GetSetupSyncMode()) {
-#if BUILDFLAG(ENABLE_DICE_SUPPORT)
-    scoped_feature_list_.InitWithFeatureState(
-        switches::kUseIssueTokenToFetchAccessTokens, IsIssueTokenEnabled());
-#else
-    CHECK(!IsIssueTokenEnabled());
-#endif
-  }
+  SyncAuthTokenFetcherDependentTest() : SyncAuthTestBase(GetParam()) {}
 
   SyncTest::SetupSyncMode GetSetupSyncMode() const override {
-    return std::get<1>(GetParam());
+    return GetParam();
   }
 
-  bool IsIssueTokenEnabled() const { return std::get<0>(GetParam()); }
-
- private:
+  bool IsIssueTokenEnabled() const {
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
-  base::test::ScopedFeatureList scoped_feature_list_;
+    return true;
+#else
+    return false;
 #endif
+  }
 };
 
 // Verifies the behavior when the access token fetcher encounters an
@@ -248,17 +279,9 @@ IN_PROC_BROWSER_TEST_P(SyncAuthTokenFetcherDependentTest, MalformedToken) {
 INSTANTIATE_TEST_SUITE_P(
     ,
     SyncAuthTokenFetcherDependentTest,
-    testing::Combine(testing::Values(false
-#if BUILDFLAG(ENABLE_DICE_SUPPORT)
-                                     ,
-                                     true
-#endif
-                                     ),
-                     GetSyncTestModes()),
-    [](const testing::TestParamInfo<std::tuple<bool, SyncTest::SetupSyncMode>>&
-           info) {
-      return (std::get<0>(info.param) ? "WithIssueToken_" : "WithGetToken_") +
-             (SetupSyncModeAsString(std::get<1>(info.param)));
+    GetSyncTestModes(),
+    [](const testing::TestParamInfo<SyncTest::SetupSyncMode>& info) {
+      return SetupSyncModeAsString(info.param);
     });
 
 // Verify that SyncServiceImpl continues trying to fetch access tokens
@@ -381,33 +404,35 @@ IN_PROC_BROWSER_TEST_P(SyncAuthTest, RetryInitialSetupWithTransientError) {
 IN_PROC_BROWSER_TEST_P(SyncAuthTest, TokenExpiry) {
   // Initial sync succeeds with a short lived OAuth2 Token.
   ASSERT_TRUE(SetupClients());
-  GetFakeServer()->ClearHttpError();
-  DisableTokenFetchRetries();
   SetOAuth2TokenResponse(gaia::FakeOAuth2TokenResponse::Success(
       "short_lived_access_token", base::Seconds(5)));
   ASSERT_TRUE(GetClient(0)->SetupSync());
-  std::string old_token = GetSyncService(0)->GetAccessTokenForTest();
+  ASSERT_EQ(GetSyncService(0)->GetAccessTokenForTest(),
+            "short_lived_access_token");
+
+  SetOAuth2TokenResponse(
+      gaia::FakeOAuth2TokenResponse::Success("new_access_token"));
 
   // Wait until the token has expired.
   base::PlatformThread::Sleep(base::Seconds(5));
 
-  // Trigger an auth error on the server so PSS requests OA2TS for a new token
-  // during the next sync cycle.
+  // Trigger an auth error and wait until a new token is fetched. Note that the
+  // server error is not necessary when token expiry is checked on the client,
+  // but still set it here in case there is a request made to the server for
+  // consistency.
   GetFakeServer()->SetHttpError(net::HTTP_UNAUTHORIZED);
-  SetOAuth2TokenResponse(gaia::FakeOAuth2TokenResponse::OAuth2Error(
-      OAuth2Response::kInternalFailure));
-  ASSERT_TRUE(AttemptToTriggerAuthError());
-  ASSERT_TRUE(GetSyncService(0)->IsRetryingAccessTokenFetchForTest());
 
-  // Trigger an auth success state and set up a new valid OAuth2 token.
+  // Trigger a sync cycle to trigger an auth error.
+  AddReadingListEntry();
+
+  // Wait until a new token is fetched.
+  ASSERT_TRUE(base::test::RunUntil([this]() {
+    return GetSyncService(0)->GetAccessTokenForTest() == "new_access_token";
+  }));
+
+  // Verify that the next sync cycle is successful.
   GetFakeServer()->ClearHttpError();
-  SetOAuth2TokenResponse(
-      gaia::FakeOAuth2TokenResponse::Success("new_access_token"));
-
-  // Verify that the next sync cycle is successful, and uses the new auth token.
   ASSERT_TRUE(UpdatedProgressMarkerChecker(GetSyncService(0)).Wait());
-  std::string new_token = GetSyncService(0)->GetAccessTokenForTest();
-  EXPECT_NE(old_token, new_token);
 }
 
 class NoAuthErrorChecker : public SingleClientStatusChangeChecker {
@@ -455,7 +480,7 @@ IN_PROC_BROWSER_TEST_P(SyncAuthTest, SyncPausedState) {
   }
   // SyncService will clear its auth error state only once it gets a valid
   // access token again, so wait for that to happen.
-  NoAuthErrorChecker(GetSyncService(0)).Wait();
+  ASSERT_TRUE(NoAuthErrorChecker(GetSyncService(0)).Wait());
   ASSERT_FALSE(GetSyncService(0)->GetAuthError().IsPersistentError());
 
   // Once the auth error is gone, wait for Sync to start up again.
@@ -532,7 +557,7 @@ IN_PROC_BROWSER_TEST_P(SyncAuthTest, ShouldTrackDeletionsInSyncPausedState) {
   }
   // SyncService will clear its auth error state only once it gets a valid
   // access token again, so wait for that to happen.
-  NoAuthErrorChecker(GetSyncService(0)).Wait();
+  ASSERT_TRUE(NoAuthErrorChecker(GetSyncService(0)).Wait());
   ASSERT_FALSE(GetSyncService(0)->GetAuthError().IsPersistentError());
   // Once the auth error is gone, wait for Sync to start up again.
   ASSERT_TRUE(GetClient(0)->AwaitSyncTransportActive());

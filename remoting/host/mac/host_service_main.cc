@@ -26,9 +26,9 @@
 #include "base/threading/platform_thread.h"
 #include "base/time/time.h"
 #include "remoting/base/logging.h"
+#include "remoting/base/username.h"
 #include "remoting/host/base/host_exit_codes.h"
 #include "remoting/host/base/switches.h"
-#include "remoting/host/base/username.h"
 #include "remoting/host/mac/constants_mac.h"
 #include "remoting/host/version.h"
 
@@ -70,16 +70,10 @@ static base::ProcessId g_host_pid = 0;
 
 void HandleSignal(int signum) {
   if (g_host_pid) {
-    // All other signals are forwarded to host then ignored except SIGTERM.
-    // launchd sends SIGTERM when service is being stopped so both the host and
-    // the host service need to terminate.
+    // If the host is running, all signals are forwarded to it and ignored.
     HOST_LOG << "Forwarding signal " << signum << " to host process "
              << g_host_pid;
     kill(g_host_pid, signum);
-    if (signum == SIGTERM) {
-      HOST_LOG << "Host service is terminating upon reception of SIGTERM";
-      exit(kSigtermExitCode);
-    }
   } else {
     HOST_LOG << "Signal " << signum
              << " will not be forwarded since host is not running.";

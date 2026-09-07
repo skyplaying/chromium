@@ -79,9 +79,9 @@ void SiteInstanceGroup::IncrementActiveFrameCount() {
 void SiteInstanceGroup::DecrementActiveFrameCount() {
   if (--active_frame_count_ == 0) {
     base::AutoReset<bool> scope(&is_notifying_observers_, true);
-    for (auto& observer : observers_) {
-      observer.ActiveFrameCountIsZero(this);
-    }
+    // Allow reentrancy because this can be called within RenderProcessExited.
+    observers_.NotifyAllowReentrancy(
+        &SiteInstanceGroup::Observer::ActiveFrameCountIsZero, this);
   }
 }
 
@@ -111,7 +111,8 @@ bool SiteInstanceGroup::IsRelatedSiteInstanceGroup(SiteInstanceGroup* group) {
 }
 
 void SiteInstanceGroup::RenderProcessHostDestroyed(RenderProcessHost* host) {
-  DCHECK_EQ(process_->GetDeprecatedID(), host->GetDeprecatedID());
+  CHECK_EQ(process_->GetDeprecatedID(), host->GetDeprecatedID(),
+           base::NotFatalUntil::M159);
   process_->RemoveObserver(this);
 
   // Remove references to `this` from all SiteInstances in this group. That will
@@ -130,8 +131,9 @@ void SiteInstanceGroup::RenderProcessExited(
   // iteration.
   scoped_refptr<SiteInstanceGroup> self_refcount = base::WrapRefCounted(this);
   base::AutoReset<bool> scope(&is_notifying_observers_, true);
-  for (auto& observer : observers_)
-    observer.RenderProcessGone(this, info);
+  // Allow reentrancy because this can be called within RenderProcessExited.
+  observers_.NotifyAllowReentrancy(
+      &SiteInstanceGroup::Observer::RenderProcessGone, this, info);
 }
 
 const StoragePartitionConfig& SiteInstanceGroup::GetStoragePartitionConfig()

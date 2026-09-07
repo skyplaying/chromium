@@ -15,7 +15,7 @@
 #include "chrome/browser/prefs/session_startup_pref.h"
 #include "chrome/browser/ui/startup/startup_types.h"
 
-class Browser;
+class BrowserWindowInterface;
 class GURL;
 class PrefRegistrySimple;
 class Profile;
@@ -107,7 +107,7 @@ class StartupBrowserCreator {
 
   // Opens the set of startup pages from the current session startup prefs.
   static void OpenStartupPages(
-      Browser* browser,
+      BrowserWindowInterface* browser,
       chrome::startup::IsProcessStartup process_startup);
 
   // Returns true if we're launching a profile synchronously. In that case, the
@@ -121,7 +121,7 @@ class StartupBrowserCreator {
   // `is_first_run` indicates that this is a new profile.
   // `restore_tabbed_browser` should only be flipped false by Ash full restore
   // code path, suppressing restoring a normal browser when there were only PWAs
-  // open in previous session. See crbug.com/1463906.
+  // open in previous session. See crbug.com/40275406.
   void LaunchBrowser(const base::CommandLine& command_line,
                      Profile* profile,
                      const base::FilePath& cur_dir,
@@ -133,7 +133,7 @@ class StartupBrowserCreator {
   // launches browser for `profile_info`. `restore_tabbed_browser` should
   // only be flipped false by Ash full restore code path, suppressing restoring
   // a normal browser when there were only PWAs open in previous session. See
-  // crbug.com/1463906.
+  // crbug.com/40275406.
   void LaunchBrowserForLastProfiles(
       const base::CommandLine& command_line,
       const base::FilePath& cur_dir,
@@ -150,6 +150,14 @@ class StartupBrowserCreator {
   // dtor is called. After the dtor is called, this function returns the value
   // of the preference which is expected to be false as per above.
   static bool WasRestarted();
+
+  // Returns true during browser process startup if the last session should be
+  // restored from switches::kRestoreLastSession. Similar to WasRestarted(),
+  // this only returns true before the first StartupBrowserCreator destructs.
+  // After the first StartupBrowserCreator is destroyed, this function returns
+  // false to ensure subsequent profile launches in the same process honor
+  // their configured On Startup settings.
+  static bool ShouldRestoreLastSession(const base::CommandLine& command_line);
 
   static SessionStartupPref GetSessionStartupPref(
       const base::CommandLine& command_line,
@@ -178,6 +186,10 @@ class StartupBrowserCreator {
                            ReadingWasRestartedAfterNormalStart);
   FRIEND_TEST_ALL_PREFIXES(StartupBrowserCreatorTest,
                            ReadingWasRestartedAfterRestart);
+  FRIEND_TEST_ALL_PREFIXES(StartupBrowserCreatorTest,
+                           ReadingShouldRestoreLastSessionAfterNormalStart);
+  FRIEND_TEST_ALL_PREFIXES(StartupBrowserCreatorTest,
+                           ReadingShouldRestoreLastSessionAfterRestart);
   FRIEND_TEST_ALL_PREFIXES(StartupBrowserCreatorTest, UpdateWithTwoProfiles);
   FRIEND_TEST_ALL_PREFIXES(StartupBrowserCreatorTest, LastUsedProfileActivated);
   FRIEND_TEST_ALL_PREFIXES(StartupBrowserCreatorTest,
@@ -265,6 +277,15 @@ class StartupBrowserCreator {
   // member variable instead of a static variable inside WasRestarted because
   // of testing.)
   static bool was_restarted_read_;
+
+  // True if we have already read the kRestoreLastSession switch during process
+  // startup. (A member variable instead of a static variable inside
+  // ShouldRestoreLastSession because of testing.)
+  static bool was_restore_last_session_read_;
+
+  // Caches whether kRestoreLastSession was active during initial process
+  // startup before the initial StartupBrowserCreator is destroyed.
+  static bool restore_last_session_active_;
 
   static bool in_synchronous_profile_launch_;
 

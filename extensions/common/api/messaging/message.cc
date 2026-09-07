@@ -6,8 +6,6 @@
 
 #include "base/check.h"
 #include "base/containers/span.h"
-#include "base/feature_list.h"
-#include "extensions/common/extension_features.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "third_party/blink/public/mojom/blob/blob.mojom.h"
@@ -38,21 +36,11 @@ blink::CloneableMessage CloneCloneableMessage(
 Message::Message() = default;
 
 Message::Message(MessageData data,
-                 mojom::SerializationFormat format,
                  bool user_gesture,
                  bool from_privileged_context)
     : data_(std::move(data)),
-      format_(format),
       user_gesture_(user_gesture),
-      from_privileged_context_(from_privileged_context) {
-  if (format_ == mojom::SerializationFormat::kJson) {
-    CHECK(std::holds_alternative<std::string>(data_));
-  } else if (format_ == mojom::SerializationFormat::kStructuredClone) {
-    CHECK(std::holds_alternative<StructuredCloneMessageData>(data_));
-    CHECK(base::FeatureList::IsEnabled(
-        extensions_features::kStructuredCloningForMessaging));
-  }
-}
+      from_privileged_context_(from_privileged_context) {}
 
 Message::Message(Message&& other) = default;
 
@@ -61,16 +49,14 @@ Message::~Message() = default;
 Message& Message::operator=(Message&& other) = default;
 
 bool Message::EqualsForTesting(const Message& other) const {
-  if (format_ != other.format() || user_gesture_ != other.user_gesture_) {
+  if (format() != other.format() || user_gesture_ != other.user_gesture_) {
     return false;
   }
 
-  switch (format_) {
+  switch (format()) {
     case mojom::SerializationFormat::kJson:
       return std::get<std::string>(data_) == other.data();
     case mojom::SerializationFormat::kStructuredClone: {
-      CHECK(base::FeatureList::IsEnabled(
-          extensions_features::kStructuredCloningForMessaging));
       const auto& this_msg = std::get<StructuredCloneMessageData>(data_);
       const auto& other_msg = other.structured_message();
       // For JS `Blobs`: this `encoded_message` comparison checks that the JS
@@ -110,8 +96,7 @@ Message Message::Clone() const {
     data = CloneCloneableMessage(std::get<StructuredCloneMessageData>(data_));
   }
 
-  return Message(std::move(data), format_, user_gesture_,
-                 from_privileged_context_);
+  return Message(std::move(data), user_gesture_, from_privileged_context_);
 }
 
 StructuredCloneMessageData Message::TakeStructuredMessage() {

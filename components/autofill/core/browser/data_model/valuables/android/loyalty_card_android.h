@@ -5,7 +5,7 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_DATA_MODEL_VALUABLES_ANDROID_LOYALTY_CARD_ANDROID_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_DATA_MODEL_VALUABLES_ANDROID_LOYALTY_CARD_ANDROID_H_
 
-#include <cstdint>
+#include <stdint.h>
 
 #include "base/component_export.h"
 #include "components/autofill/core/browser/data_model/valuables/loyalty_card.h"
@@ -59,5 +59,3 @@ inline jni_zero::ScopedJavaLocalRef<jobject> ToJniType<autofill::LoyaltyCard>(
 }  // namespace jni_zero
 
 #endif  // COMPONENTS_AUTOFILL_CORE_BROWSER_DATA_MODEL_VALUABLES_ANDROID_LOYALTY_CARD_ANDROID_H_
-
-DEFINE_JNI(LoyaltyCard)

@@ -35,7 +35,6 @@
 #include "ui/gl/gl_context.h"
 #include "ui/gl/gl_fence.h"
 #include "ui/gl/gl_surface.h"
-#include "ui/gl/gpu_switching_observer.h"
 
 namespace gl {
 class GLFence;
@@ -66,6 +65,7 @@ struct PassthroughResources {
   PassthroughResources();
   ~PassthroughResources();
 
+  void MarkContextLost();
   // api is null if we don't have a context (e.g. lost).
   void Destroy(gl::GLApi* api, gl::ProgressReporter* progress_reporter);
 
@@ -130,19 +130,13 @@ struct PassthroughResources {
   // TODO(ericrk): Remove this once TexturePassthrough holds a reference to
   // the GLTexturePassthroughImageRepresentation itself.
   base::flat_map<GLuint, SharedImageData> texture_shared_image_map;
-
-  // Mapping of client buffer IDs that are mapped to the shared memory used to
-  // back the mapping so that it can be flushed when the buffer is unmapped
-  base::flat_map<GLuint, MappedBuffer> mapped_buffer_map;
 };
 
 // Impose an upper bound on the number ANGLE_shader_pixel_local_storage planes
 // so we can stack-allocate load/store ops.
 static constexpr GLsizei kPassthroughMaxPLSPlanes = 8;
 
-class GPU_GLES2_EXPORT GLES2DecoderPassthroughImpl
-    : public GLES2Decoder,
-      public ui::GpuSwitchingObserver {
+class GPU_GLES2_EXPORT GLES2DecoderPassthroughImpl : public GLES2Decoder {
  public:
   GLES2DecoderPassthroughImpl(DecoderClient* client,
                               CommandBufferServiceBase* command_buffer_service,
@@ -333,9 +327,6 @@ class GPU_GLES2_EXPORT GLES2DecoderPassthroughImpl
   // directly, and needing to know if they failed due to loss.
   bool CheckResetStatus() override;
 
-  // Implement GpuSwitchingObserver.
-  void OnGpuSwitched() override;
-
   Logger* GetLogger() override;
 
   void BeginDecoding() override;
@@ -413,18 +404,17 @@ class GPU_GLES2_EXPORT GLES2DecoderPassthroughImpl
                                                       GLsizei length,
                                                       GLint* params);
 
-  template <typename T>
-  error::Error PatchGetBufferResults(GLenum target,
-                                     GLenum pname,
-                                     GLsizei bufsize,
-                                     GLsizei* length,
-                                     T* params);
-
   error::Error PatchGetFramebufferPixelLocalStorageParameterivANGLE(
       GLint plane,
       GLenum pname,
       GLsizei length,
       GLint* params);
+
+  error::Error PatchGetFramebufferPixelLocalStorageParameteruivANGLE(
+      GLint plane,
+      GLenum pname,
+      GLsizei length,
+      GLuint* params);
 
   void InsertError(GLenum error, const std::string& message);
   GLenum PopError();
@@ -442,6 +432,19 @@ class GPU_GLES2_EXPORT GLES2DecoderPassthroughImpl
   void ReadBackBuffersIntoShadowCopies(const BufferShadowUpdateMap& updates);
 
   error::Error ProcessReadPixels(bool did_finish);
+
+  // Validates the use of shm_offset as either an offset in a shmem, or in the
+  // unpack buffer. When using unpack buffers, data will be a zero-length span
+  // with the address corresponding to the offset in the unpack buffer. (so its
+  // .data() and .size() are the arguments to pass to the TexImage family of
+  // functions, without additional changes needed).
+  // image_size is the corresponding argument passed to CompressedTex[Sub]Image
+  // functions so it can be validated against the shmem size when there is no
+  // unpack buffer.
+  error::Error ValidateAndGetTexImageData(base::span<const uint8_t>* data,
+                                          uint32_t shm_id,
+                                          uint32_t shm_offset,
+                                          uint32_t image_size = 0);
 
   // Checks to see if the inserted fence has completed.
   void ProcessDescheduleUntilFinished();
@@ -470,6 +473,8 @@ class GPU_GLES2_EXPORT GLES2DecoderPassthroughImpl
   void ExitCommandProcessingEarly() override;
 
   bool OnlyHasPendingProgramCompletionQueries();
+
+  void BuildRequestableExtensionString();
 
   PassthroughProgramCache* get_passthrough_program_cache() const;
 
@@ -514,6 +519,11 @@ class GPU_GLES2_EXPORT GLES2DecoderPassthroughImpl
   // By default, all requestable extensions should be loaded at initialization
   // time. Can be disabled for testing with only specific extensions enabled.
   bool request_optional_extensions_ = true;
+
+  // Set of extension strings that are valid to request by a client. Other
+  // extension requests are ignored.
+  gfx::ExtensionSet requestable_extensions_;
+  std::string requestable_extension_string_;
 
   // Mappings from client side IDs to service side IDs for shared objects
   raw_ptr<PassthroughResources> resources_ = nullptr;
@@ -744,7 +754,6 @@ class GPU_GLES2_EXPORT GLES2DecoderPassthroughImpl
   std::unique_ptr<LazySharedContextState> lazy_context_;
   // Tracing
   std::unique_ptr<GPUTracer> gpu_tracer_;
-  raw_ptr<const unsigned char> gpu_decoder_category_ = nullptr;
   int gpu_trace_level_;
   bool gpu_trace_commands_;
   bool gpu_debug_commands_;

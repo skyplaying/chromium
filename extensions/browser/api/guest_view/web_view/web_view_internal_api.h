@@ -69,7 +69,7 @@ class WebViewInternalCaptureVisibleRegionFunction
 
  private:
   // extensions::WebContentsCaptureClient:
-  ScreenshotAccess GetScreenshotAccess(
+  base::expected<void, ScreenshotAccessError> GetScreenshotAccess(
       content::WebContents* web_contents) const override;
   bool ClientAllowsTransparency() override;
   void OnCaptureSuccess(const SkBitmap& bitmap) override;
@@ -169,6 +169,9 @@ class WebViewInternalExecuteScriptFunction
  protected:
   ~WebViewInternalExecuteScriptFunction() override {}
 
+  // ExtensionFunction:
+  ResponseAction Run() override;
+
   DECLARE_EXTENSION_FUNCTION("webViewInternal.executeScript",
                              WEBVIEWINTERNAL_EXECUTESCRIPT)
 };
@@ -185,6 +188,9 @@ class WebViewInternalInsertCSSFunction
 
  protected:
   ~WebViewInternalInsertCSSFunction() override {}
+
+  // ExtensionFunction:
+  ResponseAction Run() override;
 
   bool ShouldInsertCSS() const override;
 

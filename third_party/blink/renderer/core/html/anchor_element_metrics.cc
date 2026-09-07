@@ -101,18 +101,18 @@ bool IsStringIncrementedByOne(const String& source, const String& target) {
 
   // There is no difference, or the difference is not a digit.
   if (left == source.length() || left == target.length() ||
-      !IsASCIIDigit(source[left]) || !IsASCIIDigit(target[left])) {
+      !IsAsciiDigit(source[left]) || !IsAsciiDigit(target[left])) {
     return false;
   }
 
   // Expand towards right to extract the numbers.
   unsigned int source_right = left + 1;
-  while (source_right < source.length() && IsASCIIDigit(source[source_right])) {
+  while (source_right < source.length() && IsAsciiDigit(source[source_right])) {
     source_right++;
   }
 
   unsigned int target_right = left + 1;
-  while (target_right < target.length() && IsASCIIDigit(target[target_right])) {
+  while (target_right < target.length() && IsAsciiDigit(target[target_right])) {
     target_right++;
   }
 
@@ -193,7 +193,7 @@ uint32_t AnchorElementId(const HTMLAnchorElementBase& element) {
 mojom::blink::AnchorElementMetricsPtr CreateAnchorElementMetrics(
     const HTMLAnchorElementBase& anchor_element) {
   const KURL anchor_href = anchor_element.Href();
-  if (!anchor_href.ProtocolIsInHTTPFamily()) {
+  if (!anchor_href.ProtocolIsInHttpFamily()) {
     return nullptr;
   }
 
@@ -251,7 +251,8 @@ mojom::blink::AnchorElementMetricsPtr CreateAnchorElementMetrics(
   }
   DCHECK(!root_frame_view->ParentFrameView());
 
-  gfx::Rect viewport = root_frame_view->LayoutViewport()->VisibleContentRect();
+  gfx::Rect viewport =
+      root_frame_view->LayoutViewport()->VisibleContentRect(kExcludeScrollbars);
   if (viewport.IsEmpty()) {
     return metrics;
   }
@@ -274,7 +275,8 @@ mojom::blink::AnchorElementMetricsPtr CreateAnchorElementMetrics(
       ratio_distance_top_to_visible_top;
 
   float ratio_distance_root_top =
-      (target.y() + root_frame_view->LayoutViewport()->ScrollOffsetInt().y()) /
+      (target.y() +
+       root_frame_view->LayoutViewport()->PixelSnappedScrollOffset().y()) /
       base_height;
   metrics->ratio_distance_root_top = ratio_distance_root_top;
 

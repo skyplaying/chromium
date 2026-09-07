@@ -8,21 +8,25 @@
 #include <memory>
 
 #include "base/memory/raw_ptr.h"
+#include "chrome/browser/ui/views/frame/custom_floating_corner.h"
+#include "ui/base/interaction/element_identifier.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/native_ui_types.h"
 #include "ui/views/layout/layout_manager.h"
 
 class BookmarkBarView;
-class Browser;
+class BrowserWindowInterface;
 class BrowserViewLayoutDelegate;
 class InfoBarContainerView;
 class MultiContentsView;
-class ProjectsPanelView;
+class OrganizerPanelView;
 class SidePanel;
+class SidePanelAnimationContentView;
 class TabStrip;
-class HorizontalTabStripRegionView;
+class TabStripRegionView;
 class VerticalTabStripRegionView;
+class VerticalTabStripBackgroundBlurBackdrop;
 class WebAppFrameToolbarView;
 
 namespace views {
@@ -41,6 +45,13 @@ struct BrowserViewLayoutViews {
   BrowserViewLayoutViews& operator=(BrowserViewLayoutViews&&) noexcept;
   ~BrowserViewLayoutViews();
 
+  // Elements only used for visual layout.
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kVerticalTabStripTopCornerElementId);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(
+      kVerticalTabStripBottomCornerElementId);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kShadowOverlayElementId);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kMainBackgroundRegionElementId);
+
   // LINT.IfChange(BrowserViewLayoutViews)
 
   // The Browser View, but only as a view.
@@ -50,24 +61,24 @@ struct BrowserViewLayoutViews {
   // NOTE: If you add a view, try to add it as a views::View, which makes
   // testing much easier.
   raw_ptr<views::View> window_scrim = nullptr;
+  raw_ptr<views::View> side_panel_content_transition_scrim = nullptr;
   raw_ptr<views::View> main_background_region = nullptr;
   raw_ptr<views::View> main_shadow_overlay = nullptr;
   raw_ptr<views::View> top_container = nullptr;
   raw_ptr<WebAppFrameToolbarView> web_app_frame_toolbar = nullptr;
   raw_ptr<views::Label> web_app_window_title = nullptr;
-  raw_ptr<HorizontalTabStripRegionView> horizontal_tab_strip_region_view =
-      nullptr;
+  raw_ptr<TabStripRegionView> horizontal_tab_strip_region_view = nullptr;
   raw_ptr<VerticalTabStripRegionView> vertical_tab_strip_region_view = nullptr;
-  raw_ptr<views::View> vertical_tab_strip_bottom_corner = nullptr;
-  raw_ptr<views::View> vertical_tab_strip_top_corner = nullptr;
-  raw_ptr<ProjectsPanelView> projects_panel_container = nullptr;
+  raw_ptr<VerticalTabStripBackgroundBlurBackdrop>
+      vertical_tab_strip_background_blur_backdrop = nullptr;
+  raw_ptr<CustomFloatingCorner> vertical_tab_strip_bottom_corner = nullptr;
+  raw_ptr<CustomFloatingCorner> vertical_tab_strip_top_corner = nullptr;
+  raw_ptr<OrganizerPanelView> organizer_panel_container = nullptr;
   raw_ptr<views::View> toolbar = nullptr;
   raw_ptr<InfoBarContainerView> infobar_container = nullptr;
-  raw_ptr<views::View> contents_container = nullptr;
   raw_ptr<MultiContentsView> multi_contents_view = nullptr;
-  raw_ptr<SidePanel> toolbar_height_side_panel = nullptr;
-  raw_ptr<SidePanel> contents_height_side_panel = nullptr;
-  raw_ptr<views::View> side_panel_animation_content = nullptr;
+  raw_ptr<SidePanel> side_panel = nullptr;
+  raw_ptr<SidePanelAnimationContentView> side_panel_animation_content = nullptr;
 
   // The contents separator used for when the top container is overlaid.
   // Note: when `SideBySide` feature is disabled, this separator is also
@@ -79,8 +90,6 @@ struct BrowserViewLayoutViews {
   // LINT.ThenChange(//chrome/browser/ui/views/frame/browser_view.cc:BrowserViewLayoutViews)
 
   // These views are dynamically set.
-  raw_ptr<views::View> webui_tab_strip = nullptr;
-  raw_ptr<views::View> loading_bar = nullptr;
   raw_ptr<BookmarkBarView> bookmark_bar = nullptr;
 };
 
@@ -112,23 +121,18 @@ class BrowserViewLayout : public views::LayoutManager {
   // etc.
   static std::unique_ptr<BrowserViewLayout> CreateLayout(
       std::unique_ptr<BrowserViewLayoutDelegate> delegate,
-      Browser* browser,
+      BrowserWindowInterface* browser,
       BrowserViewLayoutViews views);
 
   // Sets or updates views that are not available when |this| is initialized.
-  void set_webui_tab_strip(views::View* webui_tab_strip) {
-    views_.webui_tab_strip = webui_tab_strip;
-  }
-  void set_loading_bar(views::View* loading_bar) {
-    views_.loading_bar = loading_bar;
-  }
   void set_bookmark_bar(BookmarkBarView* bookmark_bar) {
     views_.bookmark_bar = bookmark_bar;
   }
-  void set_side_panel_animation_content(views::View* contents_to_animate) {
+  void set_side_panel_animation_content(
+      SidePanelAnimationContentView* contents_to_animate) {
     views_.side_panel_animation_content = contents_to_animate;
   }
-  views::View* side_panel_animation_content() {
+  SidePanelAnimationContentView* side_panel_animation_content() {
     return views_.side_panel_animation_content;
   }
 
@@ -141,31 +145,18 @@ class BrowserViewLayout : public views::LayoutManager {
   // Used by BrowserView.
   web_modal::WebContentsModalDialogHost* GetWebContentsModalDialogHost();
 
-  // Test-only methods.
-
-  // Returns the minimum acceptable width for the browser web contents.
-  void SetDelegateForTesting(
-      std::unique_ptr<BrowserViewLayoutDelegate> delegate);
-
  protected:
   // |browser| may be null in tests.
   BrowserViewLayout(std::unique_ptr<BrowserViewLayoutDelegate> delegate,
-                    Browser* browser,
                     BrowserViewLayoutViews views);
 
   const BrowserViewLayoutViews& views() const { return views_; }
 
-  Browser* browser() { return browser_; }
-  const Browser* browser() const { return browser_; }
   BrowserViewLayoutDelegate& delegate() { return *delegate_; }
   const BrowserViewLayoutDelegate& delegate() const { return *delegate_; }
 
   virtual gfx::Point GetDialogPosition(const gfx::Size& dialog_size) const = 0;
   virtual gfx::Size GetMaximumDialogSize() const = 0;
-
-  // Returns the current pref for vertical tabs by accessing the vertical
-  // tab strip state controller
-  bool ShouldDisplayVerticalTabs() const;
 
   // Updates bubbles, dialogs, and infobars.
   // Must be called *after* contents pane is laid out.
@@ -176,9 +167,6 @@ class BrowserViewLayout : public views::LayoutManager {
 
   // The delegate interface. May be a mock or replaced in tests.
   std::unique_ptr<BrowserViewLayoutDelegate> delegate_;
-
-  // The owning browser view.
-  const raw_ptr<Browser> browser_;
 
   // The collection of Views associated with the browser.
   BrowserViewLayoutViews views_;

@@ -18,6 +18,7 @@
 #include "gpu/command_buffer/client/client_shared_image.h"
 #include "gpu/command_buffer/client/gpu_command_buffer_client_export.h"
 #include "gpu/command_buffer/common/mailbox.h"
+#include "gpu/command_buffer/common/shared_image_info.h"
 #include "gpu/command_buffer/common/shared_image_pool_id.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
 #include "gpu/command_buffer/common/sync_token.h"
@@ -59,35 +60,6 @@ struct SharedImageCapabilities;
 class SharedImageInterfaceHolder;
 class SharedImageInterfaceInProcessBase;
 class TestSharedImageInterface;
-
-struct SharedImageInfo {
-  SharedImageInfo(const viz::SharedImageFormat& format,
-                  gfx::Size size,
-                  const gfx::ColorSpace& color_space,
-                  GrSurfaceOrigin surface_origin,
-                  SkAlphaType alpha_type,
-                  SharedImageUsageSet usage,
-                  std::string_view debug_label)
-      : meta(format, size, color_space, surface_origin, alpha_type, usage),
-        debug_label(debug_label) {}
-  SharedImageInfo(const viz::SharedImageFormat& format,
-                  gfx::Size size,
-                  const gfx::ColorSpace& color_space,
-                  SharedImageUsageSet usage,
-                  std::string_view debug_label)
-      : meta(format,
-             size,
-             color_space,
-             kTopLeft_GrSurfaceOrigin,
-             kPremul_SkAlphaType,
-             usage),
-        debug_label(debug_label) {}
-  SharedImageInfo(const SharedImageMetadata& meta, std::string_view debug_label)
-      : meta(meta), debug_label(debug_label) {}
-
-  SharedImageMetadata meta;
-  std::string debug_label;
-};
 
 // An interface to create shared images and swap chains that can be imported
 // into other APIs. This interface is thread-safe and (essentially) stateless.
@@ -326,7 +298,7 @@ class GPU_COMMAND_BUFFER_CLIENT_EXPORT SharedImageInterface
         gpu::SyncToken&>
   void VerifySyncTokens(Range&& sync_token_range, Proj proj = {}) {
     bool flush_required = false;
-    for (auto const& element : sync_token_range) {
+    for (auto& element : sync_token_range) {
       gpu::SyncToken& sync_token = proj(element);
       if (sync_token.verified_flush()) {
         continue;
@@ -353,6 +325,11 @@ class GPU_COMMAND_BUFFER_CLIENT_EXPORT SharedImageInterface
   // this interface on the service side. This is an async wait for all the
   // previous commands which will be sent to server on the next flush().
   virtual void WaitSyncToken(const gpu::SyncToken& sync_token) = 0;
+
+  // Asynchronously waits until all `sync_tokens` are signaled, then runs
+  // `callback` on the calling thread.
+  virtual void SignalSyncToken(std::vector<SyncToken> sync_tokens,
+                               base::OnceClosure callback);
 
   // Informs that existing |mailbox| with the specified metadata can be passed
   // to DestroySharedImage().

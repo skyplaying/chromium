@@ -83,25 +83,35 @@ void ContentFacilitatedPaymentsDriverFactory::DidFinishNavigation(
 void ContentFacilitatedPaymentsDriverFactory::OnTextCopiedToClipboard(
     content::RenderFrameHost* render_frame_host,
     const std::u16string& copied_text) {
+  content::RenderFrameHost* main_frame =
+      render_frame_host->GetOutermostMainFrame();
+
   // If the copy event occurred in iframe, only proceed if the iframe flag is
   // enabled.
-  if (render_frame_host != render_frame_host->GetOutermostMainFrame() &&
+  if (render_frame_host != main_frame &&
       !base::FeatureList::IsEnabled(kEnableIframeForPix)) {
     LogPixFlowExitedReason(PixFlowExitedReason::kPixCodeInIFrame);
     return;
   }
+
   if (!render_frame_host->IsActive()) {
     LogPixFlowExitedReason(PixFlowExitedReason::kFrameNotActive);
     return;
   }
 
-  content::RenderFrameHost* main_frame =
-      render_frame_host->GetOutermostMainFrame();
   std::optional<GURL> iframe_url;
 
-  // If the copy event occurred in an iframe, capture the iframe URL.
+  bool is_same_origin = false;
   if (render_frame_host != main_frame) {
+    if (render_frame_host->IsErrorDocument()) {
+      LogPixFlowExitedReason(PixFlowExitedReason::kFrameIsErrorDocument);
+      return;
+    }
+    // If the copy event occurred in an iframe, capture the iframe URL.
     iframe_url = render_frame_host->GetLastCommittedURL();
+    is_same_origin =
+        render_frame_host->GetLastCommittedOrigin().IsSameOriginWith(
+            main_frame->GetLastCommittedOrigin());
   }
 
   auto& driver = GetOrCreateForFrame(render_frame_host);
@@ -114,7 +124,8 @@ void ContentFacilitatedPaymentsDriverFactory::OnTextCopiedToClipboard(
       /*main_frame_url=*/main_frame->GetLastCommittedURL(),
       /*iframe_url=*/iframe_url,
       /*main_frame_origin=*/main_frame->GetLastCommittedOrigin(), copied_text,
-      render_frame_host->GetPageUkmSourceId());
+      render_frame_host->GetPageUkmSourceId(),
+      /*is_same_origin=*/is_same_origin);
 }
 
 }  // namespace payments::facilitated

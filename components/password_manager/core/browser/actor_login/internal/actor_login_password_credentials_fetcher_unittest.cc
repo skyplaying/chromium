@@ -18,7 +18,8 @@
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "base/time/time.h"
-#include "components/autofill/core/common/autofill_test_utils.h"
+#include "build/build_config.h"
+#include "components/autofill/core/common/autofill_test_util.h"
 #include "components/autofill/core/common/form_data.h"
 #include "components/optimization_guide/proto/features/actor_login.pb.h"
 #include "components/password_manager/core/browser/actor_login/actor_login_types.h"
@@ -33,6 +34,7 @@
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_form_manager.h"
 #include "components/password_manager/core/browser/password_save_manager_impl.h"
+#include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/test_password_store.h"
 #include "components/password_manager/core/browser/stub_password_manager_client.h"
 #include "components/password_manager/core/browser/stub_password_manager_driver.h"
@@ -40,17 +42,23 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
+#if BUILDFLAG(IS_ANDROID)
+#include "components/webauthn/android/cred_man_support.h"
+#include "components/webauthn/android/webauthn_cred_man_delegate.h"
+#endif  // BUILDFLAG(IS_ANDROID)
+
 namespace actor_login {
 
-using base::test::RunUntil;
-using password_manager::PasswordForm;
-using password_manager::PasswordFormManager;
-using testing::Eq;
-using testing::NiceMock;
-using testing::Return;
-using testing::ReturnRef;
-using testing::UnorderedElementsAre;
-using testing::WithArg;
+using ::base::test::RunUntil;
+using ::password_manager::PasswordForm;
+using ::password_manager::PasswordFormManager;
+using ::testing::_;
+using ::testing::Eq;
+using ::testing::NiceMock;
+using ::testing::Return;
+using ::testing::ReturnRef;
+using ::testing::UnorderedElementsAre;
+using ::testing::WithArg;
 
 using GetCredentialsDetails =
     optimization_guide::proto::ActorLoginQuality_GetCredentialsDetails;
@@ -80,8 +88,10 @@ class FakePasswordManagerClient
               GetPasswordManager,
               (),
               (override, const));
-
-  MOCK_METHOD(bool, IsFillingEnabled, (const GURL& url), (override, const));
+  MOCK_METHOD(bool,
+              IsFillingEnabled,
+              (const url::Origin& origin, base::optional_ref<const GURL>),
+              (override, const));
   FakePasswordManagerClient() {
     profile_store_ = base::MakeRefCounted<password_manager::TestPasswordStore>(
         password_manager::IsAccountStore(false));
@@ -121,6 +131,7 @@ class MockPasswordManagerDriver
   MOCK_METHOD(bool, IsInPrimaryMainFrame, (), (const, override));
   MOCK_METHOD(bool, IsDirectChildOfPrimaryMainFrame, (), (const, override));
   MOCK_METHOD(bool, IsNestedWithinFencedFrame, (), (const, override));
+  MOCK_METHOD(bool, HasCrossOriginAncestor, (), (const, override));
   MOCK_METHOD(password_manager::PasswordManagerInterface*,
               GetPasswordManager,
               (),
@@ -138,8 +149,8 @@ class ActorLoginPasswordCredentialsFetcherTest : public ::testing::Test {
   ActorLoginPasswordCredentialsFetcherTest() = default;
 
   void SetUp() override {
-    client_.profile_store()->Init(/*affiliated_match_helper=*/nullptr);
-    client_.account_store()->Init(/*affiliated_match_helper=*/nullptr);
+    client_.profile_store()->Init();
+    client_.account_store()->Init();
     ON_CALL(password_manager_, GetPasswordFormCache())
         .WillByDefault(Return(&form_cache_));
     ON_CALL(password_manager_, GetClient()).WillByDefault(Return(&client_));
@@ -148,6 +159,10 @@ class ActorLoginPasswordCredentialsFetcherTest : public ::testing::Test {
     ON_CALL(client_, IsFillingEnabled).WillByDefault(Return(true));
     ON_CALL(driver_, CheckViewAreaVisible)
         .WillByDefault(WithArg<1>(&PostResponse<true>));
+#if BUILDFLAG(IS_ANDROID)
+    webauthn::WebAuthnCredManDelegate::override_cred_man_support_for_testing(
+        webauthn::CredManSupport::DISABLED);
+#endif  // BUILDFLAG(IS_ANDROID)
   }
 
   void TearDown() override {
@@ -198,18 +213,19 @@ class ActorLoginPasswordCredentialsFetcherTest : public ::testing::Test {
     return form_manager;
   }
 
-  PasswordForm CreatePasswordForm(
+  password_manager::StoredCredential CreatePasswordForm(
       const std::string& url,
       const std::u16string& username,
       const std::u16string& password,
       PasswordForm::MatchType match_type = PasswordForm::MatchType::kExact) {
-    PasswordForm form;
-    form.url = GURL(url);
-    form.signon_realm = form.url.spec();
-    form.username_value = username;
-    form.password_value = password;
-    form.match_type = match_type;
-    return form;
+    password_manager::StoredCredential cred;
+    cred.url = GURL(url);
+    cred.signon_realm = cred.url.spec();
+    cred.username_value = username;
+    cred.password_value =
+        password_manager::PasswordString(std::u16string(password));
+    cred.match_type = match_type;
+    return cred;
   }
 
   void AddFormManager(std::unique_ptr<PasswordFormManager> manager) {
@@ -242,7 +258,7 @@ class ActorLoginPasswordCredentialsFetcherTest : public ::testing::Test {
 
 TEST_F(ActorLoginPasswordCredentialsFetcherTest, Success) {
   base::test::TestFuture<std::vector<Credential>,
-                         std::unique_ptr<ActorLoginCredentialsFetcher::Status>>
+                         ActorLoginCredentialsFetcher::Status>
       future;
   auto fetcher = std::make_unique<ActorLoginPasswordCredentialsFetcher>(
       url::Origin::Create(GURL("https://example.com")), client(),
@@ -252,11 +268,7 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest, Success) {
   ASSERT_TRUE(future.Wait());
   const auto& [credentials, status] = future.Get();
   EXPECT_TRUE(credentials.empty());
-  EXPECT_FALSE(status->GetGlobalError().has_value());
-  EXPECT_EQ(
-      static_cast<ActorLoginPasswordCredentialsFetcher::Status*>(status.get())
-          ->outcome(),
-      ActorLoginPasswordCredentialsFetcher::Status::Outcome::kSuccess);
+  EXPECT_EQ(status, ActorLoginCredentialsFetcher::Status::kSuccess);
 
   // Check the reported logs.
   GetCredentialsDetails expected_details;
@@ -277,7 +289,7 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest, FiltersByDomain) {
       CreatePasswordForm("https://bar.com", u"bar_username", u"bar_password"));
 
   base::test::TestFuture<std::vector<Credential>,
-                         std::unique_ptr<ActorLoginCredentialsFetcher::Status>>
+                         ActorLoginCredentialsFetcher::Status>
       future;
   auto fetcher = std::make_unique<ActorLoginPasswordCredentialsFetcher>(
       url::Origin::Create(GURL("https://foo.com")), client(),
@@ -289,7 +301,6 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest, FiltersByDomain) {
 
   ASSERT_TRUE(future.Wait());
   const auto& [credentials, status] = future.Get();
-  EXPECT_FALSE(status->GetGlobalError().has_value());
   ASSERT_EQ(credentials.size(), 1u);
   EXPECT_EQ(credentials[0].username, u"foo_username");
   EXPECT_EQ(credentials[0].type, kPassword);
@@ -322,7 +333,7 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest, FromAllStores) {
       CreatePasswordForm("https://foo.com", u"bar_username", u"bar_password"));
 
   base::test::TestFuture<std::vector<Credential>,
-                         std::unique_ptr<ActorLoginCredentialsFetcher::Status>>
+                         ActorLoginCredentialsFetcher::Status>
       future;
   auto fetcher = std::make_unique<ActorLoginPasswordCredentialsFetcher>(
       url::Origin::Create(GURL("https://foo.com")), client(),
@@ -331,7 +342,6 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest, FromAllStores) {
 
   ASSERT_TRUE(future.Wait());
   const auto& [credentials, status] = future.Get();
-  EXPECT_FALSE(status->GetGlobalError().has_value());
   ASSERT_EQ(credentials.size(), 2u);
 
   std::vector<std::u16string> usernames;
@@ -344,11 +354,8 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest, FromAllStores) {
 
 TEST_F(ActorLoginPasswordCredentialsFetcherTest,
        UsernameAndPasswordFieldsVisible) {
-  base::test::ScopedFeatureList features;
-  features.InitAndEnableFeature(
-      password_manager::features::kActorLoginFieldVisibilityCheck);
-  PasswordForm saved_form =
-      CreatePasswordForm(kUrl.spec(), u"foo_username", u"foo_password");
+  PasswordForm saved_form = password_manager::ToPasswordForm(
+      CreatePasswordForm(kUrl.spec(), u"foo_username", u"foo_password"));
 
   // Populate form_data and renderer IDs to be able to compare it with the
   // mqls logger.
@@ -371,7 +378,7 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest,
       .WillRepeatedly(WithArg<1>(&PostResponse<true>));
 
   base::test::TestFuture<std::vector<Credential>,
-                         std::unique_ptr<ActorLoginCredentialsFetcher::Status>>
+                         ActorLoginCredentialsFetcher::Status>
       future;
   auto fetcher = std::make_unique<ActorLoginPasswordCredentialsFetcher>(
       kOrigin, client(), password_manager(), mqls_logger());
@@ -390,7 +397,6 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest,
 
   ASSERT_TRUE(future.Wait());
   const auto& [credentials, status] = future.Get();
-  EXPECT_FALSE(status->GetGlobalError().has_value());
   ASSERT_EQ(credentials.size(), 1u);
   EXPECT_EQ(credentials[0].username, u"foo_username");
   EXPECT_TRUE(credentials[0].immediatelyAvailableToLogin);
@@ -406,7 +412,8 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest,
           ActorLoginQuality_GetCredentialsDetails_PermissionDetails_NO_PERMANENT_PERMISSION);
   expected_details.set_getting_credentials_time_ms(0);
   *expected_details.add_parsed_form_details() = CreateExpectedLoginFormDetails(
-      saved_form, /*is_username_visible=*/true, /*is_password_visible=*/true);
+      saved_form,
+      /*is_username_visible=*/true, /*is_password_visible=*/true);
 
   EXPECT_CALL(*mqls_logger(),
               SetGetCredentialsDetails(ProtoEquals(expected_details)));
@@ -415,11 +422,8 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest,
 }
 
 TEST_F(ActorLoginPasswordCredentialsFetcherTest, FieldsAreNotVisible) {
-  base::test::ScopedFeatureList features;
-  features.InitAndEnableFeature(
-      password_manager::features::kActorLoginFieldVisibilityCheck);
-  PasswordForm saved_form =
-      CreatePasswordForm(kUrl.spec(), u"foo_username", u"foo_password");
+  PasswordForm saved_form = password_manager::ToPasswordForm(
+      CreatePasswordForm(kUrl.spec(), u"foo_username", u"foo_password"));
   saved_form.actor_login_approved = true;
 
   saved_form.form_data = actor_login::CreateSigninFormData(kUrl);
@@ -432,7 +436,8 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest, FieldsAreNotVisible) {
 
   // There won't be a signin form, so the credential will be fetched from
   // the store rather than the fake form fetcher.
-  client()->profile_store()->AddLogin(saved_form);
+  client()->profile_store()->AddLogin(
+      password_manager::FromPasswordForm(saved_form));
 
   // To make GetSigninFormManager return a non-nullptr value, we need to
   // populate the PasswordFormCache with a PasswordFormManager that
@@ -446,7 +451,7 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest, FieldsAreNotVisible) {
       .WillRepeatedly(base::test::RunOnceCallbackRepeatedly<1>(false));
 
   base::test::TestFuture<std::vector<Credential>,
-                         std::unique_ptr<ActorLoginCredentialsFetcher::Status>>
+                         ActorLoginCredentialsFetcher::Status>
       future;
   auto fetcher = std::make_unique<ActorLoginPasswordCredentialsFetcher>(
       kOrigin, client(), password_manager(), mqls_logger());
@@ -465,7 +470,6 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest, FieldsAreNotVisible) {
 
   ASSERT_TRUE(future.Wait());
   const auto& [credentials, status] = future.Get();
-  EXPECT_FALSE(status->GetGlobalError().has_value());
   ASSERT_EQ(credentials.size(), 1u);
   EXPECT_EQ(credentials[0].username, u"foo_username");
   EXPECT_FALSE(credentials[0].immediatelyAvailableToLogin);
@@ -490,9 +494,10 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest, FieldsAreNotVisible) {
 }
 
 TEST_F(ActorLoginPasswordCredentialsFetcherTest, IgnoresFormInFencedFrame) {
-  PasswordForm saved_form =
-      CreatePasswordForm(kUrl.spec(), u"foo_username", u"foo_password");
-  client()->profile_store()->AddLogin(saved_form);
+  PasswordForm saved_form = password_manager::ToPasswordForm(
+      CreatePasswordForm(kUrl.spec(), u"foo_username", u"foo_password"));
+  client()->profile_store()->AddLogin(
+      password_manager::FromPasswordForm(saved_form));
   // To make GetSigninFormManager return a non-nullptr value, we need to
   // populate the PasswordFormCache with a PasswordFormManager that
   // represents a sign-in form.
@@ -502,7 +507,7 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest, IgnoresFormInFencedFrame) {
   EXPECT_CALL(driver(), IsNestedWithinFencedFrame).WillOnce(Return(true));
 
   base::test::TestFuture<std::vector<Credential>,
-                         std::unique_ptr<ActorLoginCredentialsFetcher::Status>>
+                         ActorLoginCredentialsFetcher::Status>
       future;
   auto fetcher = std::make_unique<ActorLoginPasswordCredentialsFetcher>(
       kOrigin, client(), password_manager(), mqls_logger());
@@ -516,7 +521,6 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest, IgnoresFormInFencedFrame) {
 
   ASSERT_TRUE(future.Wait());
   const auto& [credentials, status] = future.Get();
-  EXPECT_FALSE(status->GetGlobalError().has_value());
   ASSERT_EQ(credentials.size(), 1u);
   EXPECT_EQ(credentials[0].username, u"foo_username");
   EXPECT_FALSE(credentials[0].immediatelyAvailableToLogin);
@@ -525,14 +529,12 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest, IgnoresFormInFencedFrame) {
 
 TEST_F(ActorLoginPasswordCredentialsFetcherTest,
        SameSiteDirectChildOfFrameFormAvailable) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(
-      password_manager::features::kActorLoginSameSiteIframeSupport);
   const GURL same_site_url = GURL("https://login.foo.com");
   const url::Origin same_site_origin = url::Origin::Create(same_site_url);
-  PasswordForm saved_form =
-      CreatePasswordForm(same_site_url.spec(), u"user", u"pass");
-  client()->profile_store()->AddLogin(saved_form);
+  PasswordForm saved_form = password_manager::ToPasswordForm(
+      CreatePasswordForm(same_site_url.spec(), u"user", u"pass"));
+  client()->profile_store()->AddLogin(
+      password_manager::FromPasswordForm(saved_form));
   AddFormManager(
       CreateFormManager(same_site_origin,
                         /*is_in_main_frame=*/false,
@@ -546,7 +548,7 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest,
       .WillRepeatedly(base::test::RunOnceCallbackRepeatedly<1>(true));
 
   base::test::TestFuture<std::vector<Credential>,
-                         std::unique_ptr<ActorLoginCredentialsFetcher::Status>>
+                         ActorLoginCredentialsFetcher::Status>
       future;
   auto fetcher = std::make_unique<ActorLoginPasswordCredentialsFetcher>(
       kOrigin, client(), password_manager(), mqls_logger());
@@ -560,57 +562,16 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest,
 
   ASSERT_TRUE(future.Wait());
   const auto& [credentials, status] = future.Get();
-  EXPECT_FALSE(status->GetGlobalError().has_value());
   ASSERT_EQ(credentials.size(), 1u);
   EXPECT_TRUE(credentials[0].immediatelyAvailableToLogin);
-}
-
-TEST_F(ActorLoginPasswordCredentialsFetcherTest,
-       SameSiteDirectChildOfPrimaryMainFrame_FeatureOff) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures(
-      {}, {password_manager::features::kActorLoginSameSiteIframeSupport});
-  const GURL same_site_url = GURL("https://login.foo.com");
-  const url::Origin same_site_origin = url::Origin::Create(same_site_url);
-  PasswordForm saved_form =
-      CreatePasswordForm(same_site_url.spec(), u"user", u"pass");
-  // The same site form is ignored, so it'll end up fetching credentials
-  // from the store instead of the form manager's fake form fetcher.
-  client()->profile_store()->AddLogin(saved_form);
-  AddFormManager(
-      CreateFormManager(same_site_origin,
-                        /*is_in_main_frame=*/false,
-                        actor_login::CreateSigninFormData(same_site_url),
-                        client(), driver(), form_fetcher()));
-  form_fetcher()->SetBestMatches({saved_form});
-
-  ON_CALL(driver(), IsDirectChildOfPrimaryMainFrame)
-      .WillByDefault(Return(true));
-
-  base::test::TestFuture<std::vector<Credential>,
-                         std::unique_ptr<ActorLoginCredentialsFetcher::Status>>
-      future;
-  auto fetcher = std::make_unique<ActorLoginPasswordCredentialsFetcher>(
-      kOrigin, client(), password_manager(), mqls_logger());
-  fetcher->Fetch(future.GetCallback());
-  // The fetcher only attaches itself as a consumer after all the
-  // async checks for signin forms are done.
-  ASSERT_TRUE(RunUntil([&]() { return form_fetcher()->HasConsumers(); }));
-  form_fetcher()->NotifyFetchCompleted();
-
-  ASSERT_TRUE(future.Wait());
-  const auto& [credentials, status] = future.Get();
-  EXPECT_FALSE(status->GetGlobalError().has_value());
-  ASSERT_EQ(credentials.size(), 1u);
-  EXPECT_FALSE(credentials[0].immediatelyAvailableToLogin);
 }
 
 TEST_F(ActorLoginPasswordCredentialsFetcherTest, NestedFrameWithSameOrigin) {
   base::test::ScopedFeatureList feature_list;
   const GURL same_origin_url = GURL("https://foo.com/login");
   const url::Origin same_origin = url::Origin::Create(same_origin_url);
-  PasswordForm saved_form =
-      CreatePasswordForm(same_origin_url.spec(), u"user", u"pass");
+  PasswordForm saved_form = password_manager::ToPasswordForm(
+      CreatePasswordForm(same_origin_url.spec(), u"user", u"pass"));
   AddFormManager(
       CreateFormManager(same_origin,
                         /*is_in_main_frame=*/false,
@@ -623,7 +584,7 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest, NestedFrameWithSameOrigin) {
       .WillByDefault(Return(false));
 
   base::test::TestFuture<std::vector<Credential>,
-                         std::unique_ptr<ActorLoginCredentialsFetcher::Status>>
+                         ActorLoginCredentialsFetcher::Status>
       future;
 
   auto fetcher = std::make_unique<ActorLoginPasswordCredentialsFetcher>(
@@ -636,17 +597,48 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest, NestedFrameWithSameOrigin) {
 
   ASSERT_TRUE(future.Wait());
   const auto& [credentials, status] = future.Get();
-  EXPECT_FALSE(status->GetGlobalError().has_value());
   ASSERT_EQ(credentials.size(), 1u);
   EXPECT_TRUE(credentials[0].immediatelyAvailableToLogin);
+}
+
+// TODO(crbug.com/539923959): Re-enable on iOS.
+#if !BUILDFLAG(IS_IOS)
+TEST_F(ActorLoginPasswordCredentialsFetcherTest,
+       NestedFrameWithCrossOriginAncestor) {
+  const GURL same_origin_url = GURL("https://foo.com/login");
+  const url::Origin same_origin = url::Origin::Create(same_origin_url);
+  client()->profile_store()->AddLogin(
+      CreatePasswordForm(same_origin_url.spec(), u"user", u"pass"));
+  AddFormManager(
+      CreateFormManager(same_origin,
+                        /*is_in_main_frame=*/false,
+                        actor_login::CreateSigninFormData(same_origin_url),
+                        client(), driver(), form_fetcher()));
+
+  ON_CALL(driver(), IsDirectChildOfPrimaryMainFrame)
+      .WillByDefault(Return(false));
+  ON_CALL(driver(), HasCrossOriginAncestor).WillByDefault(Return(true));
+
+  base::test::TestFuture<std::vector<Credential>,
+                         ActorLoginCredentialsFetcher::Status>
+      future;
+
+  auto fetcher = std::make_unique<ActorLoginPasswordCredentialsFetcher>(
+      kOrigin, client(), password_manager(), mqls_logger());
+  fetcher->Fetch(future.GetCallback());
+
+  ASSERT_TRUE(future.Wait());
+  const auto& [credentials, status] = future.Get();
+  ASSERT_EQ(credentials.size(), 1u);
+  EXPECT_FALSE(credentials[0].immediatelyAvailableToLogin);
 }
 
 TEST_F(ActorLoginPasswordCredentialsFetcherTest, IgnoresSameSiteNestedFrame) {
   const GURL same_site_url = GURL("https://login.foo.com");
   const url::Origin same_site_origin = url::Origin::Create(same_site_url);
 
-  PasswordForm saved_form =
-      CreatePasswordForm(same_site_url.spec(), u"user", u"pass");
+  PasswordForm saved_form = password_manager::ToPasswordForm(
+      CreatePasswordForm(same_site_url.spec(), u"user", u"pass"));
 
   // Populate form_data and renderer IDs so the expected proto matches the
   // actual proto (which derives data from the PasswordFormManager).
@@ -656,7 +648,8 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest, IgnoresSameSiteNestedFrame) {
   saved_form.password_element_renderer_id =
       saved_form.form_data.fields()[1].renderer_id();
 
-  client()->profile_store()->AddLogin(saved_form);
+  client()->profile_store()->AddLogin(
+      password_manager::FromPasswordForm(saved_form));
   AddFormManager(CreateFormManager(same_site_origin,
                                    /*is_in_main_frame=*/false,
                                    saved_form.form_data, client(), driver(),
@@ -665,9 +658,10 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest, IgnoresSameSiteNestedFrame) {
 
   ON_CALL(driver(), IsDirectChildOfPrimaryMainFrame)
       .WillByDefault(Return(false));
+  ON_CALL(driver(), HasCrossOriginAncestor).WillByDefault(Return(true));
 
   base::test::TestFuture<std::vector<Credential>,
-                         std::unique_ptr<ActorLoginCredentialsFetcher::Status>>
+                         ActorLoginCredentialsFetcher::Status>
       future;
   auto fetcher = std::make_unique<ActorLoginPasswordCredentialsFetcher>(
       kOrigin, client(), password_manager(), mqls_logger());
@@ -680,7 +674,6 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest, IgnoresSameSiteNestedFrame) {
 
   ASSERT_TRUE(future.Wait());
   const auto& [credentials, status] = future.Get();
-  EXPECT_FALSE(status->GetGlobalError().has_value());
   ASSERT_EQ(credentials.size(), 1u);
   EXPECT_FALSE(credentials[0].immediatelyAvailableToLogin);
 
@@ -704,62 +697,26 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest, IgnoresSameSiteNestedFrame) {
   // Destroy the fetcher, because it sends logs in the destructor.
   fetcher.reset();
 }
+#endif  // !BUILDFLAG(IS_IOS)
 
 TEST_F(ActorLoginPasswordCredentialsFetcherTest,
-       IgnoresSameSiteNestedFrame_FeatureOff) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures(
-      {}, {password_manager::features::kActorLoginSameSiteIframeSupport});
-  const GURL same_site_url = GURL("https://login.foo.com");
-  const url::Origin same_site_origin = url::Origin::Create(same_site_url);
-  PasswordForm saved_form =
-      CreatePasswordForm(same_site_url.spec(), u"user", u"pass");
-  client()->profile_store()->AddLogin(saved_form);
-  AddFormManager(
-      CreateFormManager(same_site_origin,
-                        /*is_in_main_frame=*/false,
-                        actor_login::CreateSigninFormData(same_site_url),
-                        client(), driver(), form_fetcher()));
-  form_fetcher()->SetBestMatches({saved_form});
-
-  ON_CALL(driver(), IsDirectChildOfPrimaryMainFrame)
-      .WillByDefault(Return(false));
-
-  base::test::TestFuture<std::vector<Credential>,
-                         std::unique_ptr<ActorLoginCredentialsFetcher::Status>>
-      future;
-
-  auto fetcher = std::make_unique<ActorLoginPasswordCredentialsFetcher>(
-      kOrigin, client(), password_manager(), mqls_logger());
-  fetcher->Fetch(future.GetCallback());
-  // The fetcher only attaches itself as a consumer after all the
-  // async checks for signin forms are done.
-  ASSERT_TRUE(RunUntil([&]() { return form_fetcher()->HasConsumers(); }));
-  form_fetcher()->NotifyFetchCompleted();
-
-  ASSERT_TRUE(future.Wait());
-  const auto& [credentials, status] = future.Get();
-  EXPECT_FALSE(status->GetGlobalError().has_value());
-  ASSERT_EQ(credentials.size(), 1u);
-  EXPECT_FALSE(credentials[0].immediatelyAvailableToLogin);
-}
-
-TEST_F(ActorLoginPasswordCredentialsFetcherTest, PrefersExactMatch) {
-  PasswordForm psl_match =
+       ReturnsAllMatchesWithPermission) {
+  PasswordForm psl_match = password_manager::ToPasswordForm(
       CreatePasswordForm("https://sub.foo.com", u"psl_username",
-                         u"psl_password", PasswordForm::MatchType::kPSL);
+                         u"psl_password", PasswordForm::MatchType::kPSL));
   psl_match.actor_login_approved = true;
-  PasswordForm affiliated_match = CreatePasswordForm(
-      "https://m.foo.com", u"affiliated_username", u"affiliated_password",
-      PasswordForm::MatchType::kAffiliated);
+  PasswordForm affiliated_match =
+      password_manager::ToPasswordForm(CreatePasswordForm(
+          "https://m.foo.com", u"affiliated_username", u"affiliated_password",
+          PasswordForm::MatchType::kAffiliated));
   affiliated_match.actor_login_approved = true;
-  PasswordForm exact_match =
-      CreatePasswordForm(kUrl.spec(), u"exact_username", u"exact_password");
+  PasswordForm exact_match = password_manager::ToPasswordForm(
+      CreatePasswordForm(kUrl.spec(), u"exact_username", u"exact_password"));
   exact_match.actor_login_approved = true;
   AddFormManager(CreateFormManager());
   form_fetcher()->SetBestMatches({exact_match, affiliated_match, psl_match});
   base::test::TestFuture<std::vector<Credential>,
-                         std::unique_ptr<ActorLoginCredentialsFetcher::Status>>
+                         ActorLoginCredentialsFetcher::Status>
       future;
 
   auto fetcher = std::make_unique<ActorLoginPasswordCredentialsFetcher>(
@@ -773,53 +730,22 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest, PrefersExactMatch) {
 
   ASSERT_TRUE(future.Wait());
   const auto& [credentials, status] = future.Get();
-  EXPECT_FALSE(status->GetGlobalError().has_value());
-  ASSERT_EQ(credentials.size(), 1u);
-  EXPECT_EQ(credentials[0].username, u"exact_username");
-}
-
-TEST_F(ActorLoginPasswordCredentialsFetcherTest, PrefersAffiliatedMatch) {
-  PasswordForm psl_match =
-      CreatePasswordForm("https://sub.foo.com", u"psl_username",
-                         u"psl_password", PasswordForm::MatchType::kPSL);
-  psl_match.actor_login_approved = true;
-  PasswordForm affiliated_match = CreatePasswordForm(
-      "https://m.foo.com", u"affiliated_username", u"affiliated_password",
-      PasswordForm::MatchType::kAffiliated);
-  affiliated_match.actor_login_approved = true;
-  AddFormManager(CreateFormManager());
-  form_fetcher()->SetBestMatches({affiliated_match, psl_match});
-
-  base::test::TestFuture<std::vector<Credential>,
-                         std::unique_ptr<ActorLoginCredentialsFetcher::Status>>
-      future;
-  auto fetcher = std::make_unique<ActorLoginPasswordCredentialsFetcher>(
-      kOrigin, client(), password_manager(), mqls_logger());
-  fetcher->Fetch(future.GetCallback());
-  // The fetcher only attaches itself as a consumer after all the
-  // async checks for signin forms are done.
-  ASSERT_TRUE(RunUntil([&]() { return form_fetcher()->HasConsumers(); }));
-
-  form_fetcher()->NotifyFetchCompleted();
-  ASSERT_TRUE(future.Wait());
-  const auto& [credentials, status] = future.Get();
-  EXPECT_FALSE(status->GetGlobalError().has_value());
-  ASSERT_EQ(credentials.size(), 1u);
-  EXPECT_EQ(credentials[0].username, u"affiliated_username");
+  ASSERT_EQ(credentials.size(), 3u);
 }
 
 TEST_F(ActorLoginPasswordCredentialsFetcherTest, NoApprovedCredentials) {
-  PasswordForm psl_match =
+  PasswordForm psl_match = password_manager::ToPasswordForm(
       CreatePasswordForm("https://sub.foo.com", u"psl_username",
-                         u"psl_password", PasswordForm::MatchType::kPSL);
-  PasswordForm affiliated_match = CreatePasswordForm(
-      "https://m.foo.com", u"affiliated_username", u"affiliated_password",
-      PasswordForm::MatchType::kAffiliated);
+                         u"psl_password", PasswordForm::MatchType::kPSL));
+  PasswordForm affiliated_match =
+      password_manager::ToPasswordForm(CreatePasswordForm(
+          "https://m.foo.com", u"affiliated_username", u"affiliated_password",
+          PasswordForm::MatchType::kAffiliated));
   AddFormManager(CreateFormManager());
   form_fetcher()->SetBestMatches({affiliated_match, psl_match});
 
   base::test::TestFuture<std::vector<Credential>,
-                         std::unique_ptr<ActorLoginCredentialsFetcher::Status>>
+                         ActorLoginCredentialsFetcher::Status>
       future;
   auto fetcher = std::make_unique<ActorLoginPasswordCredentialsFetcher>(
       kOrigin, client(), password_manager(), mqls_logger());
@@ -833,24 +759,24 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest, NoApprovedCredentials) {
 
   ASSERT_TRUE(future.Wait());
   const auto& [credentials, status] = future.Get();
-  EXPECT_FALSE(status->GetGlobalError().has_value());
   ASSERT_EQ(credentials.size(), 2u);
 }
 
 TEST_F(ActorLoginPasswordCredentialsFetcherTest,
        IgnoresWeakApprovedCredentials) {
-  PasswordForm psl_match =
+  PasswordForm psl_match = password_manager::ToPasswordForm(
       CreatePasswordForm("https://sub.foo.com", u"psl_username",
-                         u"psl_password", PasswordForm::MatchType::kPSL);
+                         u"psl_password", PasswordForm::MatchType::kPSL));
   psl_match.actor_login_approved = true;
-  PasswordForm affiliated_match = CreatePasswordForm(
-      "https://m.foo.com", u"affiliated_username", u"affiliated_password",
-      PasswordForm::MatchType::kAffiliated);
+  PasswordForm affiliated_match =
+      password_manager::ToPasswordForm(CreatePasswordForm(
+          "https://m.foo.com", u"affiliated_username", u"affiliated_password",
+          PasswordForm::MatchType::kAffiliated));
   AddFormManager(CreateFormManager());
   form_fetcher()->SetBestMatches({affiliated_match, psl_match});
 
   base::test::TestFuture<std::vector<Credential>,
-                         std::unique_ptr<ActorLoginCredentialsFetcher::Status>>
+                         ActorLoginCredentialsFetcher::Status>
       future;
   auto fetcher = std::make_unique<ActorLoginPasswordCredentialsFetcher>(
       kOrigin, client(), password_manager(), mqls_logger());
@@ -864,21 +790,48 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest,
 
   ASSERT_TRUE(future.Wait());
   const auto& [credentials, status] = future.Get();
-  EXPECT_FALSE(status->GetGlobalError().has_value());
   ASSERT_EQ(credentials.size(), 2u);
 }
 
+TEST_F(ActorLoginPasswordCredentialsFetcherTest, IgnoresGroupedMatches) {
+  PasswordForm grouped_match =
+      password_manager::ToPasswordForm(CreatePasswordForm(
+          "https://sub.foo.com", u"grouped_username", u"grouped_password",
+          PasswordForm::MatchType::kGrouped));
+  grouped_match.actor_login_approved = true;
+  AddFormManager(CreateFormManager());
+  form_fetcher()->SetBestMatches({grouped_match});
+
+  base::test::TestFuture<std::vector<Credential>,
+                         ActorLoginCredentialsFetcher::Status>
+      future;
+  auto fetcher = std::make_unique<ActorLoginPasswordCredentialsFetcher>(
+      kOrigin, client(), password_manager(), mqls_logger());
+  fetcher->Fetch(future.GetCallback());
+
+  // The fetcher only attaches itself as a consumer after all the
+  // async checks for signin forms are done.
+  ASSERT_TRUE(RunUntil([&]() { return form_fetcher()->HasConsumers(); }));
+
+  form_fetcher()->NotifyFetchCompleted();
+
+  ASSERT_TRUE(future.Wait());
+  const auto& [credentials, status] = future.Get();
+  ASSERT_TRUE(credentials.empty());
+}
+
 TEST_F(ActorLoginPasswordCredentialsFetcherTest,
-       ReturnsSingleApprovedCredential) {
-  PasswordForm psl_match =
+       ReturnsCredentialsWithCorrectPermissionStatus) {
+  PasswordForm psl_match = password_manager::ToPasswordForm(
       CreatePasswordForm("https://sub.foo.com", u"psl_username",
-                         u"psl_password", PasswordForm::MatchType::kPSL);
-  PasswordForm affiliated_match = CreatePasswordForm(
-      "https://m.foo.com", u"affiliated_username", u"affiliated_password",
-      PasswordForm::MatchType::kAffiliated);
+                         u"psl_password", PasswordForm::MatchType::kPSL));
+  PasswordForm affiliated_match =
+      password_manager::ToPasswordForm(CreatePasswordForm(
+          "https://m.foo.com", u"affiliated_username", u"affiliated_password",
+          PasswordForm::MatchType::kAffiliated));
   affiliated_match.actor_login_approved = true;
-  PasswordForm exact_match =
-      CreatePasswordForm(kUrl.spec(), u"exact_username", u"exact_password");
+  PasswordForm exact_match = password_manager::ToPasswordForm(
+      CreatePasswordForm(kUrl.spec(), u"exact_username", u"exact_password"));
 
   // Populate form_data and renderer IDs to be able to compare it with the
   // mqls logger.
@@ -896,7 +849,7 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest,
   form_fetcher()->SetBestMatches({exact_match, affiliated_match, psl_match});
 
   base::test::TestFuture<std::vector<Credential>,
-                         std::unique_ptr<ActorLoginCredentialsFetcher::Status>>
+                         ActorLoginCredentialsFetcher::Status>
       future;
   auto fetcher = std::make_unique<ActorLoginPasswordCredentialsFetcher>(
       kOrigin, client(), password_manager(), mqls_logger());
@@ -910,10 +863,13 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest,
 
   ASSERT_TRUE(future.Wait());
   const auto& [credentials, status] = future.Get();
-  EXPECT_FALSE(status->GetGlobalError().has_value());
-  ASSERT_EQ(credentials.size(), 1u);
-  EXPECT_EQ(credentials[0].username, u"affiliated_username");
-  EXPECT_TRUE(credentials[0].has_persistent_permission);
+  ASSERT_EQ(credentials.size(), 3u);
+  EXPECT_EQ(credentials[0].username, u"exact_username");
+  EXPECT_FALSE(credentials[0].has_persistent_permission);
+  EXPECT_EQ(credentials[1].username, u"affiliated_username");
+  EXPECT_TRUE(credentials[1].has_persistent_permission);
+  EXPECT_EQ(credentials[2].username, u"psl_username");
+  EXPECT_FALSE(credentials[2].has_persistent_permission);
 
   // Check the reported logs.
   GetCredentialsDetails expected_details;
@@ -934,10 +890,9 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest,
 }
 
 TEST_F(ActorLoginPasswordCredentialsFetcherTest, FillingNotAllowed) {
-  EXPECT_CALL(*client(), IsFillingEnabled(kOrigin.GetURL()))
-      .WillOnce(Return(false));
+  EXPECT_CALL(*client(), IsFillingEnabled(kOrigin, _)).WillOnce(Return(false));
   base::test::TestFuture<std::vector<Credential>,
-                         std::unique_ptr<ActorLoginCredentialsFetcher::Status>>
+                         ActorLoginCredentialsFetcher::Status>
       future;
   GetCredentialsDetails expected_details;
   expected_details.set_outcome(
@@ -954,14 +909,7 @@ TEST_F(ActorLoginPasswordCredentialsFetcherTest, FillingNotAllowed) {
   ASSERT_TRUE(future.Wait());
   const auto& [credentials, status] = future.Get();
   EXPECT_TRUE(credentials.empty());
-  ASSERT_TRUE(status->GetGlobalError().has_value());
-  EXPECT_EQ(status->GetGlobalError().value(),
-            ActorLoginError::kFillingNotAllowed);
-  EXPECT_EQ(
-      static_cast<ActorLoginPasswordCredentialsFetcher::Status*>(status.get())
-          ->outcome(),
-      ActorLoginPasswordCredentialsFetcher::Status::Outcome::
-          kFillingNotAllowed);
+  EXPECT_EQ(status, ActorLoginCredentialsFetcher::Status::kFillingNotAllowed);
 }
 
 }  // namespace actor_login

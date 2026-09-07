@@ -4,27 +4,24 @@
 
 #include "chrome/updater/crash_reporter.h"
 
-#include <algorithm>
-#include <iterator>
+#include <cstdint>
 #include <map>
-#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include "base/check.h"
 #include "base/command_line.h"
-#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/containers/to_vector.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/path_service.h"
 #include "base/strings/strcat.h"
-#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/updater/constants.h"
-#include "chrome/updater/event_history.h"
 #include "chrome/updater/external_constants.h"
 #include "chrome/updater/updater_branding.h"
 #include "chrome/updater/updater_scope.h"
@@ -61,14 +58,10 @@ std::vector<std::string> MakeCrashHandlerArgs(UpdaterScope updater_scope) {
   // The first element in the command line arguments is the program name,
   // which must be skipped.
 #if BUILDFLAG(IS_WIN)
-  std::vector<std::string> args;
-  std::ranges::transform(++command_line.argv().begin(),
-                         command_line.argv().end(), std::back_inserter(args),
-                         [](const auto& arg) { return base::WideToUTF8(arg); });
-
-  return args;
+  return base::ToVector(base::span(command_line.argv()).subspan(1u),
+                        [](const auto& arg) { return base::WideToUTF8(arg); });
 #else
-  return {++command_line.argv().begin(), command_line.argv().end()};
+  return base::ToVector(base::span(command_line.argv()).subspan(1u));
 #endif
 }
 
@@ -104,14 +97,14 @@ void StartCrashReporter(UpdaterScope updater_scope,
   crashpad::CrashpadClient& client = GetCrashpadClient();
   std::vector<base::FilePath> attachments;
 #if !BUILDFLAG(IS_MAC)  // Crashpad does not support attachments on macOS.
-  std::optional<base::FilePath> log_file = GetLogFilePath(updater_scope);
-  if (log_file) {
-    attachments.push_back(*log_file);
+  if (std::optional<base::FilePath> log_file = GetLogFilePath(updater_scope);
+      log_file) {
+    attachments.push_back(*std::move(log_file));
   }
-  std::optional<base::FilePath> history_log_path =
-      GetHistoryLogFilePath(updater_scope);
-  if (history_log_path) {
-    attachments.push_back(*history_log_path);
+  if (std::optional<base::FilePath> history_log_path =
+          GetHistoryLogFilePath(updater_scope);
+      history_log_path) {
+    attachments.push_back(*std::move(history_log_path));
   }
 
 #endif
@@ -145,15 +138,16 @@ int CrashReporterMain() {
   // |storage| must be declared before |argv_as_utf8|, to ensure it outlives
   // |argv_as_utf8|, which will hold pointers into |storage|.
   std::vector<std::string> storage;
-  auto argv_as_utf8 = std::make_unique<char*[]>(argv.size() + 1);
+  std::vector<char*> argv_as_utf8;
   storage.reserve(argv.size());
-  for (size_t i = 0; i < argv.size(); ++i) {
-    storage.push_back(update_client::StringTypeToUTF8(argv[i]));
-    UNSAFE_TODO(argv_as_utf8[i]) = &storage[i][0];
+  argv_as_utf8.reserve(argv.size() + 1);
+  for (const auto& arg : argv) {
+    storage.push_back(update_client::StringTypeToUTF8(arg));
+    argv_as_utf8.push_back(storage.back().data());
   }
-  UNSAFE_TODO(argv_as_utf8[argv.size()]) = nullptr;
+  argv_as_utf8.push_back(nullptr);
 
-  return crashpad::HandlerMain(argv.size(), argv_as_utf8.get(),
+  return crashpad::HandlerMain(argv.size(), argv_as_utf8.data(),
                                /*user_stream_sources=*/nullptr);
 }
 

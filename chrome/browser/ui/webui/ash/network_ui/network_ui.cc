@@ -10,9 +10,11 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
+#include "ash/constants/webui_url_constants.h"
 #include "ash/public/cpp/connectivity_services.h"
 #include "ash/public/cpp/esim_manager.h"
 #include "ash/public/cpp/network_config_service.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "ash/webui/common/trusted_types_util.h"
 #include "ash/webui/network_ui/network_diagnostics_resource_provider.h"
 #include "ash/webui/network_ui/network_health_resource_provider.h"
@@ -32,8 +34,6 @@
 #include "chrome/browser/ui/webui/ash/internet/internet_detail_dialog.h"
 #include "chrome/browser/ui/webui/ash/network_ui/network_logs_message_handler.h"
 #include "chrome/browser/ui/webui/ash/network_ui/onc_import_message_handler.h"
-#include "chrome/common/url_constants.h"
-#include "chrome/grit/browser_resources.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/network_ui_resources.h"
 #include "chrome/grit/network_ui_resources_map.h"
@@ -420,6 +420,11 @@ class NetworkConfigMessageHandler : public content::WebUIMessageHandler {
   }
 
   void ResetESimCache(const base::ListValue& arg_list) {
+    if (IsGuestModeActive()) {
+      NET_LOG(ERROR) << "Couldn't reset eSIM cache in guest mode.";
+      return;
+    }
+
     CellularESimProfileHandler* handler =
         NetworkHandler::Get()->cellular_esim_profile_handler();
     if (!handler) {
@@ -432,10 +437,45 @@ class NetworkConfigMessageHandler : public content::WebUIMessageHandler {
   }
 
   void DisableActiveESimProfile(const base::ListValue& arg_list) {
+    if (IsGuestModeActive()) {
+      NET_LOG(ERROR) << "Couldn't disable eSIM profile in guest mode.";
+      return;
+    }
+
     CellularESimProfileHandler* handler =
         NetworkHandler::Get()->cellular_esim_profile_handler();
     if (!handler) {
       return;
+    }
+
+    NetworkStateHandler* state_handler =
+        NetworkHandler::Get()->network_state_handler();
+    if (!state_handler) {
+      return;
+    }
+
+    NetworkStateHandler::NetworkStateList state_list;
+    state_handler->GetNetworkListByType(NetworkTypePattern::Cellular(),
+                                        /*configured_only=*/true,
+                                        /*visible_only=*/false,
+                                        /*limit=*/0, &state_list);
+
+    // Use CellularESimProfileHandler (which wraps Hermes) as the source of
+    // truth for active profiles, as Shill's connection state drops when the
+    // network is not visible.
+    for (const auto& profile : handler->GetESimProfiles()) {
+      if (profile.state() != CellularESimProfile::State::kActive ||
+          profile.iccid().empty()) {
+        continue;
+      }
+      for (const NetworkState* network : state_list) {
+        if (network->iccid() == profile.iccid() &&
+            network->IsManagedByPolicy()) {
+          NET_LOG(ERROR)
+              << "Couldn't disable active eSIM profile; managed by policy.";
+          return;
+        }
+      }
     }
 
     CellularESimProfileHandlerImpl* handler_impl =
@@ -461,6 +501,20 @@ class NetworkConfigMessageHandler : public content::WebUIMessageHandler {
   }
 
   void ResetApnMigrator(const base::ListValue& arg_list) {
+    if (IsGuestModeActive()) {
+      NET_LOG(ERROR) << "Couldn't reset APN migrator in guest mode.";
+      return;
+    }
+    const ManagedNetworkConfigurationHandler*
+        managed_network_configuration_handler =
+            NetworkHandler::Get()->managed_network_configuration_handler();
+    if (managed_network_configuration_handler &&
+        !managed_network_configuration_handler->AllowApnModification()) {
+      NET_LOG(ERROR) << "Couldn't reset APN migrator: APN modification "
+                        "disallowed by policy.";
+      return;
+    }
+
     NET_LOG(EVENT) << "Executing reset ApnMigrator";
     PrefService* local_state = g_browser_process->local_state();
 
@@ -1013,6 +1067,12 @@ base::DictValue NetworkUI::GetLocalizedStrings() {
                IDS_NETWORK_UI_REFRESH_WIFI_DIRECT_CLIENT_INFO_BUTTON_TEXT));
 }
 
+// static
+std::unique_ptr<content::WebUIMessageHandler>
+NetworkUI::CreateNetworkConfigMessageHandlerForTesting() {
+  return std::make_unique<network_ui::NetworkConfigMessageHandler>();
+}
+
 NetworkUI::NetworkUI(content::WebUI* web_ui)
     : ui::MojoWebUIController(web_ui, /*enable_chrome_send=*/true) {
   web_ui->AddMessageHandler(
@@ -1032,8 +1092,7 @@ NetworkUI::NetworkUI(content::WebUI* web_ui)
   base::DictValue localized_strings = GetLocalizedStrings();
 
   content::WebUIDataSource* html = content::WebUIDataSource::CreateAndAdd(
-      web_ui->GetWebContents()->GetBrowserContext(),
-      chrome::kChromeUINetworkHost);
+      web_ui->GetWebContents()->GetBrowserContext(), ash::kChromeUINetworkHost);
 
   html->AddLocalizedStrings(localized_strings);
   html->AddBoolean("isGuestModeActive", IsGuestModeActive());

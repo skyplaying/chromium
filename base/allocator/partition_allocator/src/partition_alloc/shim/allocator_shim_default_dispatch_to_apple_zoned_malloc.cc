@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
-#pragma allow_unsafe_buffers
-#endif
-
 #include <utility>
 
 #include "partition_alloc/shim/allocator_interception_apple.h"
@@ -126,6 +121,7 @@ const AllocatorDispatch AllocatorDispatch::default_dispatch = {
     &CallocImpl,            /* alloc_zero_initialized_function */
     &CallocImpl,            /* alloc_zero_initialized_unchecked_function */
     &MemalignImpl,          /* alloc_aligned_function */
+    &MemalignImpl,          /* alloc_aligned_unchecked_function */
     &ReallocImpl,           /* realloc_function */
     &ReallocImpl,           /* realloc_unchecked_function */
     &FreeImpl,              /* free_function */

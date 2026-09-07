@@ -2524,46 +2524,6 @@ void GetMaxValueInBufferCHROMIUM(GLuint buffer_id,
   }
 }
 
-void EnableFeatureCHROMIUM(GLuint bucket_id,
-                           uint32_t result_shm_id,
-                           uint32_t result_shm_offset) {
-  gles2::cmds::EnableFeatureCHROMIUM* c =
-      GetCmdSpace<gles2::cmds::EnableFeatureCHROMIUM>();
-  if (c) {
-    c->Init(bucket_id, result_shm_id, result_shm_offset);
-  }
-}
-
-void MapBufferRange(GLenum target,
-                    GLintptr offset,
-                    GLsizeiptr size,
-                    GLbitfield access,
-                    uint32_t data_shm_id,
-                    uint32_t data_shm_offset,
-                    uint32_t result_shm_id,
-                    uint32_t result_shm_offset) {
-  gles2::cmds::MapBufferRange* c = GetCmdSpace<gles2::cmds::MapBufferRange>();
-  if (c) {
-    c->Init(target, offset, size, access, data_shm_id, data_shm_offset,
-            result_shm_id, result_shm_offset);
-  }
-}
-
-void UnmapBuffer(GLenum target) {
-  gles2::cmds::UnmapBuffer* c = GetCmdSpace<gles2::cmds::UnmapBuffer>();
-  if (c) {
-    c->Init(target);
-  }
-}
-
-void FlushMappedBufferRange(GLenum target, GLintptr offset, GLsizeiptr size) {
-  gles2::cmds::FlushMappedBufferRange* c =
-      GetCmdSpace<gles2::cmds::FlushMappedBufferRange>();
-  if (c) {
-    c->Init(target, offset, size);
-  }
-}
-
 void GetRequestableExtensionsCHROMIUM(uint32_t bucket_id) {
   gles2::cmds::GetRequestableExtensionsCHROMIUM* c =
       GetCmdSpace<gles2::cmds::GetRequestableExtensionsCHROMIUM>();
@@ -2799,6 +2759,18 @@ void SetActiveURLCHROMIUM(GLuint url_bucket_id) {
       GetCmdSpace<gles2::cmds::SetActiveURLCHROMIUM>();
   if (c) {
     c->Init(url_bucket_id);
+  }
+}
+
+void GetBufferSubDataCHROMIUM(GLenum target,
+                              GLintptr offset,
+                              GLsizeiptr size,
+                              uint32_t data_shm_id,
+                              uint32_t data_shm_offset) {
+  gles2::cmds::GetBufferSubDataCHROMIUM* c =
+      GetCmdSpace<gles2::cmds::GetBufferSubDataCHROMIUM>();
+  if (c) {
+    c->Init(target, offset, size, data_shm_id, data_shm_offset);
   }
 }
 
@@ -3111,22 +3083,24 @@ void ProvokingVertexANGLE(GLenum provokeMode) {
 }
 
 void FramebufferMemorylessPixelLocalStorageANGLE(GLint plane,
-                                                 GLenum internalformat) {
+                                                 GLenum internalformat,
+                                                 GLbitfield usage) {
   gles2::cmds::FramebufferMemorylessPixelLocalStorageANGLE* c =
       GetCmdSpace<gles2::cmds::FramebufferMemorylessPixelLocalStorageANGLE>();
   if (c) {
-    c->Init(plane, internalformat);
+    c->Init(plane, internalformat, usage);
   }
 }
 
 void FramebufferTexturePixelLocalStorageANGLE(GLint plane,
                                               GLuint backingtexture,
                                               GLint level,
-                                              GLint layer) {
+                                              GLint layer,
+                                              GLbitfield usage) {
   gles2::cmds::FramebufferTexturePixelLocalStorageANGLE* c =
       GetCmdSpace<gles2::cmds::FramebufferTexturePixelLocalStorageANGLE>();
   if (c) {
-    c->Init(plane, backingtexture, level, layer);
+    c->Init(plane, backingtexture, level, layer, usage);
   }
 }
 
@@ -3189,6 +3163,14 @@ void EndPixelLocalStorageANGLEImmediate(GLsizei count, const GLenum* storeops) {
   }
 }
 
+void EndPixelLocalStorageImplicitANGLE() {
+  gles2::cmds::EndPixelLocalStorageImplicitANGLE* c =
+      GetCmdSpace<gles2::cmds::EndPixelLocalStorageImplicitANGLE>();
+  if (c) {
+    c->Init();
+  }
+}
+
 void PixelLocalStorageBarrierANGLE() {
   gles2::cmds::PixelLocalStorageBarrierANGLE* c =
       GetCmdSpace<gles2::cmds::PixelLocalStorageBarrierANGLE>();
@@ -3232,6 +3214,19 @@ void GetFramebufferPixelLocalStorageParameterivANGLE(
     uint32_t params_shm_offset) {
   gles2::cmds::GetFramebufferPixelLocalStorageParameterivANGLE* c = GetCmdSpace<
       gles2::cmds::GetFramebufferPixelLocalStorageParameterivANGLE>();
+  if (c) {
+    c->Init(plane, pname, params_shm_id, params_shm_offset);
+  }
+}
+
+void GetFramebufferPixelLocalStorageParameteruivANGLE(
+    GLint plane,
+    GLenum pname,
+    uint32_t params_shm_id,
+    uint32_t params_shm_offset) {
+  gles2::cmds::GetFramebufferPixelLocalStorageParameteruivANGLE* c =
+      GetCmdSpace<
+          gles2::cmds::GetFramebufferPixelLocalStorageParameteruivANGLE>();
   if (c) {
     c->Init(plane, pname, params_shm_id, params_shm_offset);
   }

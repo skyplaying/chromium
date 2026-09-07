@@ -33,7 +33,6 @@
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/web/blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/binding_security.h"
-#include "third_party/blink/renderer/bindings/core/v8/script_state_impl.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_throw_dom_exception.h"
 #include "third_party/blink/renderer/core/css/css_default_style_sheets.h"
 #include "third_party/blink/renderer/core/css/media_feature_names.h"
@@ -60,6 +59,7 @@
 #include "third_party/blink/renderer/core/script_type_names.h"
 #include "third_party/blink/renderer/core/svg_names.h"
 #include "third_party/blink/renderer/core/timezone/timezone_controller.h"
+#include "third_party/blink/renderer/core/trustedtypes/trusted_type_policy_factory.h"
 #include "third_party/blink/renderer/core/trustedtypes/trusted_types_names.h"
 #include "third_party/blink/renderer/core/workers/worker_thread.h"
 #include "third_party/blink/renderer/core/xlink_names.h"
@@ -154,6 +154,10 @@ void CoreInitializer::Initialize() {
   script_type_names::Init();
   trusted_types_names::Init();
 
+  // Ensure that the qualified names are constructed on the main thread
+  // (crbug.com/503618702).
+  TrustedTypePolicyFactory::EagerlyInitializeOnMainThread();
+
   MediaQueryEvaluator::Init();
 
   style_change_extra_data::Init();
@@ -165,7 +169,6 @@ void CoreInitializer::Initialize() {
   V8ThrowDOMException::Init();
 
   BindingSecurity::Init();
-  ScriptStateImpl::Init();
 
   TimeZoneController::Init();
 

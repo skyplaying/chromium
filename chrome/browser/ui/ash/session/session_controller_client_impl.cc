@@ -12,6 +12,7 @@
 #include "ash/constants/ash_pref_names.h"
 #include "ash/public/cpp/session/session_controller.h"
 #include "ash/public/cpp/session/session_types.h"
+#include "base/check_deref.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/strings/utf_string_conversions.h"
@@ -22,7 +23,6 @@
 #include "chrome/browser/ash/floating_workspace/floating_workspace_service_factory.h"
 #include "chrome/browser/ash/floating_workspace/floating_workspace_util.h"
 #include "chrome/browser/ash/login/demo_mode/demo_session.h"
-#include "chrome/browser/ash/login/lock/screen_locker.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/settings/device_settings_service.h"
 #include "chrome/browser/ash/system_web_apps/apps/personalization_app/personalization_app_utils.h"
@@ -32,12 +32,10 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profiles_state.h"
-#include "chrome/browser/supervised_user/supervised_user_service_factory.h"
 #include "chrome/browser/ui/ash/login/user_adding_screen.h"
 #include "chrome/browser/ui/ash/multi_user/multi_user_util.h"
 #include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/browser/ui/managed_ui.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
 #include "chromeos/ash/components/demo_mode/utils/demo_session_utils.h"
 #include "chromeos/ash/components/login/session/session_termination_manager.h"
@@ -45,7 +43,6 @@
 #include "components/prefs/pref_service.h"
 #include "components/session_manager/core/session.h"
 #include "components/session_manager/core/session_manager.h"
-#include "components/supervised_user/core/browser/supervised_user_service.h"
 #include "components/user_manager/multi_user/multi_user_sign_in_policy.h"
 #include "components/user_manager/user_manager.h"
 #include "components/user_manager/user_manager_pref_names.h"
@@ -158,11 +155,11 @@ SessionControllerClientImpl::SessionControllerClientImpl(
   local_state_registrar_ = std::make_unique<PrefChangeRegistrar>();
   local_state_registrar_->Init(&local_state);
   local_state_registrar_->Add(
-      prefs::kSessionStartTime,
+      ash::prefs::kSessionStartTime,
       base::BindRepeating(&SessionControllerClientImpl::SendSessionLengthLimit,
                           base::Unretained(this)));
   local_state_registrar_->Add(
-      prefs::kSessionLengthLimit,
+      ash::prefs::kSessionLengthLimit,
       base::BindRepeating(&SessionControllerClientImpl::SendSessionLengthLimit,
                           base::Unretained(this)));
   DCHECK(!g_session_controller_client_instance);
@@ -232,10 +229,6 @@ void SessionControllerClientImpl::RequestLockScreen() {
   DoLockScreen();
 }
 
-void SessionControllerClientImpl::RequestHideLockScreen() {
-  ash::ScreenLocker::Hide();
-}
-
 void SessionControllerClientImpl::RequestSignOut() {
   chrome::AttemptUserExit();
 }
@@ -295,16 +288,6 @@ void SessionControllerClientImpl::ShowMultiProfileLogin() {
   } else {
     ash::UserAddingScreen::Get()->Start();
   }
-}
-
-void SessionControllerClientImpl::EmitAshInitialized() {
-  // Emit the ash-initialized upstart signal to start Chrome OS tasks that
-  // expect that Ash is listening to D-Bus signals they emit. For example,
-  // hammerd, which handles detachable base state, communicates the base state
-  // purely by emitting D-Bus signals, and thus has to be run whenever Ash is
-  // started so Ash (DetachableBaseHandler in particular) gets the proper view
-  // of the current detachable base state.
-  ash::SessionManagerClient::Get()->EmitAshInitialized();
 }
 
 PrefService* SessionControllerClientImpl::GetSigninScreenPrefService() {
@@ -387,11 +370,6 @@ void SessionControllerClientImpl::ActiveUserChanged(User* active_user) {
   }
 
   SendUserSessionOrder();
-}
-
-void SessionControllerClientImpl::UserAddedToSession(const User* added_user) {
-  SendSessionInfoIfChanged();
-  SendUserSession(*added_user);
 }
 
 void SessionControllerClientImpl::LocalStateChanged(
@@ -535,6 +513,13 @@ void SessionControllerClientImpl::DoCycleActiveUser(
   DoSwitchActiveUser(account_id);
 }
 
+void SessionControllerClientImpl::OnSessionCreated(
+    const AccountId& account_id) {
+  UserManager* const user_manager = UserManager::Get();
+  SendSessionInfoIfChanged();
+  SendUserSession(CHECK_DEREF(user_manager->FindUser(account_id)));
+}
+
 void SessionControllerClientImpl::OnSessionStateChanged() {
   TRACE_EVENT0("ui", "SessionControllerClientImpl::OnSessionStateChanged");
   if (SessionManager::Get()->session_state() == SessionState::ACTIVE) {
@@ -557,15 +542,6 @@ void SessionControllerClientImpl::OnUserSessionStartUpTaskCompleted() {
   session_controller_->NotifyFirstSessionReady();
 }
 
-void SessionControllerClientImpl::OnCustodianInfoChanged() {
-  DCHECK(supervised_user_profile_);
-  User* user =
-      ash::ProfileHelper::Get()->GetUserByProfile(supervised_user_profile_);
-  if (user) {
-    SendUserSession(*user);
-  }
-}
-
 void SessionControllerClientImpl::OnAppTerminating() {
   session_controller_->NotifyChromeTerminating();
 }
@@ -573,16 +549,6 @@ void SessionControllerClientImpl::OnAppTerminating() {
 void SessionControllerClientImpl::OnLoginUserProfilePrepared(Profile* profile) {
   const User* user = ash::ProfileHelper::Get()->GetUserByProfile(profile);
   DCHECK(user);
-
-  if (profile->IsChild()) {
-    // There can be only one supervised user per session.
-    DCHECK(!supervised_user_profile_);
-    supervised_user_profile_ = profile;
-
-    // Watch for changes to supervised user manager/custodians.
-    supervised_user_service_observation_.Observe(
-        SupervisedUserServiceFactory::GetForProfile(supervised_user_profile_));
-  }
 
   base::RepeatingClosure session_info_changed_closure = base::BindRepeating(
       &SessionControllerClientImpl::SendSessionInfoIfChanged,
@@ -668,15 +634,15 @@ void SessionControllerClientImpl::SendUserSessionOrder() {
 void SessionControllerClientImpl::SendSessionLengthLimit() {
   const PrefService* local_state = local_state_registrar_->prefs();
   base::TimeDelta session_length_limit;
-  if (local_state->HasPrefPath(prefs::kSessionLengthLimit)) {
+  if (local_state->HasPrefPath(ash::prefs::kSessionLengthLimit)) {
     session_length_limit = base::Milliseconds(
-        std::clamp(local_state->GetInteger(prefs::kSessionLengthLimit),
+        std::clamp(local_state->GetInteger(ash::prefs::kSessionLengthLimit),
                    kSessionLengthLimitMinMs, kSessionLengthLimitMaxMs));
   }
   base::Time session_start_time;
-  if (local_state->HasPrefPath(prefs::kSessionStartTime)) {
+  if (local_state->HasPrefPath(ash::prefs::kSessionStartTime)) {
     session_start_time = base::Time::FromInternalValue(
-        local_state->GetInt64(prefs::kSessionStartTime));
+        local_state->GetInt64(ash::prefs::kSessionStartTime));
   }
 
   policy::off_hours::DeviceOffHoursController* off_hours_controller =

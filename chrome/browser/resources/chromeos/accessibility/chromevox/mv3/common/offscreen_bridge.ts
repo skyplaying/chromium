@@ -102,6 +102,28 @@ export class OffscreenBridge {
         OffscreenTarget, OffscreenAction.SRE_WALK, mathml);
   }
 
+  static tenjiBackTranslate(tenjiString: string): Promise<string|null> {
+    return BridgeHelper.sendMessage(
+        OffscreenTarget, OffscreenAction.TENJI_BACK_TRANSLATE, tenjiString);
+  }
+
+  static tenjiConvert(reading: string, maxCandidates: number):
+      Promise<string[]> {
+    return BridgeHelper.sendMessage(
+        OffscreenTarget, OffscreenAction.TENJI_CONVERT, reading, maxCandidates);
+  }
+
+  static tenjiStartWorker(tenjiData: object): Promise<void> {
+    return BridgeHelper.sendMessage(
+        OffscreenTarget, OffscreenAction.TENJI_START_WORKER, tenjiData);
+  }
+
+  static tenjiTranslate(text: string): Promise<
+      {value: string, textToBraille: number[], brailleToText: number[]}> {
+    return BridgeHelper.sendMessage(
+        OffscreenTarget, OffscreenAction.TENJI_TRANSLATE, text);
+  }
+
   // For testing purposes only.
 
   static recordEarconsForTest(): Promise<void> {

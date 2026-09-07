@@ -18,15 +18,17 @@
 #include "base/strings/stringprintf.h"
 #include "base/strings/to_string.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "build/config/chromebox_for_meetings/buildflags.h"  // PLATFORM_CFM
 #include "chrome/browser/apps/platform_apps/app_browsertest_util.h"
 #include "chrome/browser/media/webrtc/webrtc_browsertest_base.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tab_sharing/tab_sharing_infobar_delegate.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
@@ -44,6 +46,8 @@
 #include "components/url_formatter/elide_url.h"
 #include "content/public/browser/audio_service.h"
 #include "content/public/browser/host_zoom_map.h"
+#include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
@@ -674,7 +678,7 @@ INSTANTIATE_TEST_SUITE_P(
           "_");
     });
 
-// Flaky on Win bots http://crbug.com/1264805
+// Flaky on Win bots http://crbug.com/40800993
 #if BUILDFLAG(IS_WIN)
 #define MAYBE_ScreenShareFromEmbedded DISABLED_ScreenShareFromEmbedded
 #else
@@ -729,13 +733,13 @@ class WebRtcAppWindowCaptureBrowserTestWithPicker
     // Windows to show up in the tabs list, and thus make it selectable.
     base::ListValue matchlist;
     matchlist.Append("*");
-    browser()->profile()->GetPrefs()->SetList(
+    browser()->GetProfile()->GetPrefs()->SetList(
         prefs::kTabCaptureAllowedByOrigins, std::move(matchlist));
   }
 
   void TearDownOnMainThread() override {
     extensions::PlatformAppBrowserTest::TearDownOnMainThread();
-    browser()->profile()->GetPrefs()->SetList(
+    browser()->GetProfile()->GetPrefs()->SetList(
         prefs::kTabCaptureAllowedByOrigins, base::ListValue());
   }
 
@@ -754,7 +758,7 @@ class WebRtcAppWindowCaptureBrowserTestWithPicker
     chrome::AddTabAt(browser(), GURL(url::kAboutBlankURL), -1, true);
     GURL url = embedded_test_server()->GetURL(test_url);
     EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 };
 
@@ -795,13 +799,13 @@ class WebRtcSameOriginPolicyBrowserTest
     // Restrict all origins to SameOrigin tab capture only.
     base::ListValue matchlist;
     matchlist.Append("*");
-    browser()->profile()->GetPrefs()->SetList(
+    browser()->GetProfile()->GetPrefs()->SetList(
         prefs::kSameOriginTabCaptureAllowedByOrigins, std::move(matchlist));
   }
 
   void TearDownOnMainThread() override {
     WebRtcScreenCaptureBrowserTest::TearDownOnMainThread();
-    browser()->profile()->GetPrefs()->SetList(
+    browser()->GetProfile()->GetPrefs()->SetList(
         prefs::kSameOriginTabCaptureAllowedByOrigins, base::ListValue());
   }
 };
@@ -829,11 +833,11 @@ IN_PROC_BROWSER_TEST_F(WebRtcSameOriginPolicyBrowserTest,
   // the target tab is focused, so that we can navigate it easily. If it is
   // already focused, this will just no-op.
   int target_index =
-      browser()->tab_strip_model()->GetIndexOfWebContents(target_tab);
-  browser()->tab_strip_model()->ActivateTabAt(
+      browser()->GetTabStripModel()->GetIndexOfWebContents(target_tab);
+  browser()->GetTabStripModel()->ActivateTabAt(
       target_index, TabStripUserGestureDetails(
                         TabStripUserGestureDetails::GestureType::kOther));
-  ASSERT_EQ(target_tab, browser()->tab_strip_model()->GetActiveWebContents());
+  ASSERT_EQ(target_tab, browser()->GetTabStripModel()->GetActiveWebContents());
 
   // We navigate to a FileURL so that the origin will change, which should
   // trigger the capture to end.
@@ -869,11 +873,11 @@ IN_PROC_BROWSER_TEST_F(WebRtcSameOriginPolicyBrowserTest,
   // the target tab is focused, so that we can navigate it easily. If it is
   // already focused, this will just no-op.
   int target_index =
-      browser()->tab_strip_model()->GetIndexOfWebContents(target_tab);
-  browser()->tab_strip_model()->ActivateTabAt(
+      browser()->GetTabStripModel()->GetIndexOfWebContents(target_tab);
+  browser()->GetTabStripModel()->ActivateTabAt(
       target_index, TabStripUserGestureDetails(
                         TabStripUserGestureDetails::GestureType::kOther));
-  ASSERT_EQ(target_tab, browser()->tab_strip_model()->GetActiveWebContents());
+  ASSERT_EQ(target_tab, browser()->GetTabStripModel()->GetActiveWebContents());
 
   // We navigate using the test server so that the origin doesn't change.
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
@@ -1034,7 +1038,7 @@ IN_PROC_BROWSER_TEST_P(GetDisplayMediaVideoTrackBrowserTest, RunCombinedTest) {
   }
 }
 
-// Flaky on Mac, Windows, and ChromeOS bots, https://crbug.com/1371309
+// Flaky on Mac, Windows, and ChromeOS bots, https://crbug.com/40241323
 // Also some flakes on Linux ASAN/MSAN builds.
 #if BUILDFLAG(IS_LINUX) && \
     !(defined(MEMORY_SANITIZER) || defined(ADDRESS_SANITIZER))
@@ -1181,20 +1185,18 @@ INSTANTIATE_TEST_SUITE_P(
 
 class GetDisplayMediaChangeSourceBrowserTest
     : public WebRtcTestBase,
-      public testing::WithParamInterface<std::tuple<bool, bool, bool>> {
+      public testing::WithParamInterface<std::tuple<bool, bool>> {
  public:
   GetDisplayMediaChangeSourceBrowserTest()
       : dynamic_surface_switching_requested_(std::get<0>(GetParam())),
-        feature_enabled_(std::get<1>(GetParam())),
-        user_shared_audio_(std::get<2>(GetParam())) {}
+        user_shared_audio_(std::get<1>(GetParam())) {}
   ~GetDisplayMediaChangeSourceBrowserTest() override = default;
 
   void SetUp() override {
     // TODO(crbug.com/40245399): Fix GetDisplayMediaChangeSourceBrowserTest with
     // audio requested on ChromeOS
 #if BUILDFLAG(IS_CHROMEOS)
-    if (dynamic_surface_switching_requested_ && feature_enabled_ &&
-        user_shared_audio_) {
+    if (dynamic_surface_switching_requested_ && user_shared_audio_) {
       GTEST_SKIP();
     }
 #endif
@@ -1202,9 +1204,6 @@ class GetDisplayMediaChangeSourceBrowserTest
   }
 
   void SetUpInProcessBrowserTestFixture() override {
-    feature_list_.InitWithFeatureState(
-        media::kShareThisTabInsteadButtonGetDisplayMedia, feature_enabled_);
-
     WebRtcTestBase::SetUpInProcessBrowserTestFixture();
 
     DetectErrorsInJavaScript();
@@ -1233,28 +1232,24 @@ class GetDisplayMediaChangeSourceBrowserTest
   }
 
   bool ShouldShowShareThisTabInsteadButton() const {
-    return dynamic_surface_switching_requested_ && feature_enabled_;
+    return dynamic_surface_switching_requested_;
   }
 
  private:
-  base::test::ScopedFeatureList feature_list_;
   const bool dynamic_surface_switching_requested_;
-  const bool feature_enabled_;
   const bool user_shared_audio_;
 };
 
 INSTANTIATE_TEST_SUITE_P(
     All,
     GetDisplayMediaChangeSourceBrowserTest,
-    Combine(Bool(), Bool(), Bool()),
+    Combine(Bool(), Bool()),
     [](const testing::TestParamInfo<
         GetDisplayMediaChangeSourceBrowserTest::ParamType>& info) {
       return base::JoinString(
           {
               std::get<0>(info.param) ? "Dynamic" : "Static",
-              std::get<1>(info.param) ? "ShareThisTabInsteadButtonEnabled"
-                                      : "ShareThisTabInsteadButtonDisabled",
-              std::get<2>(info.param) ? "UserSharedAudio"
+              std::get<1>(info.param) ? "UserSharedAudio"
                                       : "UserDidNotShareAudio",
           },
           "_");
@@ -1391,14 +1386,14 @@ IN_PROC_BROWSER_TEST_P(GetDisplayMediaChangeSourceBrowserTest,
   EXPECT_EQ(GetShareThisTabInsteadButtonLabel(other_tab),
             kShareThisTabInsteadMessage);
 
-  browser()->tab_strip_model()->ActivateTabAt(
-      browser()->tab_strip_model()->GetIndexOfWebContents(other_tab));
-  while (browser()->tab_strip_model()->GetActiveWebContents() != other_tab) {
+  browser()->GetTabStripModel()->ActivateTabAt(
+      browser()->GetTabStripModel()->GetIndexOfWebContents(other_tab));
+  while (browser()->GetTabStripModel()->GetActiveWebContents() != other_tab) {
     base::RunLoop().RunUntilIdle();
   }
 
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kScreenCaptureAllowed,
-                                               false);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kScreenCaptureAllowed,
+                                                  false);
 
   // Click the share-this-tab-instead secondary button. This is rejected since
   // screen capture is not allowed by the above policy.
@@ -1406,7 +1401,8 @@ IN_PROC_BROWSER_TEST_P(GetDisplayMediaChangeSourceBrowserTest,
 
   // When "Share this tab instead" fails for other_tab, the focus goes back to
   // the captured tab. Wait until that happens:
-  while (browser()->tab_strip_model()->GetActiveWebContents() != captured_tab) {
+  while (browser()->GetTabStripModel()->GetActiveWebContents() !=
+         captured_tab) {
     base::RunLoop().RunUntilIdle();
   }
 
@@ -2156,11 +2152,6 @@ class CapturedSurfaceControlTest : public WebRtcTestBase {
   ~CapturedSurfaceControlTest() override = default;
 
   void SetUpInProcessBrowserTestFixture() override {
-    feature_list_.InitWithFeatures(
-        /*enabled_features=*/{media::kShareThisTabInsteadButtonGetDisplayMedia,
-                              blink::features::kCapturedSurfaceControl},
-        /*disabled_features=*/{});
-
     WebRtcTestBase::SetUpInProcessBrowserTestFixture();
 
     DetectErrorsInJavaScript();
@@ -2205,9 +2196,6 @@ class CapturedSurfaceControlTest : public WebRtcTestBase {
         /*other_tab=*/(OpenTestPageInNewTab(kMainHtmlPage)),
         /*capturing_tab=*/(OpenTestPageInNewTab(kMainHtmlPage)));
   }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
 };
 
 using CscAction = CapturedSurfaceControlTest::Action;
@@ -2903,7 +2891,6 @@ class GetDisplayMediaRestrictOwnAudioTest
   void SetUpInProcessBrowserTestFixture() override {
 #if BUILDFLAG(IS_MAC)
     feature_list_.InitWithFeatures({media::kMacCatapLoopbackAudioForCast,
-                                    media::kMacCatapLoopbackAudioForScreenShare,
                                     blink::features::kRestrictOwnAudio},
                                    {media::kUseSCContentSharingPicker});
 #elif BUILDFLAG(IS_WIN)

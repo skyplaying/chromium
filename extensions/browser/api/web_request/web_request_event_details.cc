@@ -25,8 +25,8 @@
 #include "extensions/browser/api/web_request/web_request_api_helpers.h"
 #include "extensions/browser/api/web_request/web_request_info.h"
 #include "extensions/browser/api/web_request/web_request_permissions.h"
-#include "extensions/browser/api/web_request/web_request_resource_type.h"
 #include "extensions/buildflags/buildflags.h"
+#include "extensions/common/api/web_request/web_request_resource_type.h"
 #include "extensions/common/permissions/permissions_data.h"
 #include "net/base/auth.h"
 #include "net/base/upload_data_stream.h"
@@ -53,6 +53,8 @@ void EraseHeadersIf(
   });
 }
 
+// NOTE: Keep in sync with `filterSecurityInfo()` in
+// //extensions/renderer/resources/web_request_event.js.
 void FilterSecurityInfo(base::DictValue& result, int extra_info_spec) {
   if (!(extra_info_spec & ExtraInfoSpec::SECURITY_INFO)) {
     result.Remove(keys::kSecurityInfoKey);
@@ -119,7 +121,8 @@ WebRequestEventDetails::WebRequestEventDetails(const WebRequestInfo& request,
               ToString(request.frame_data.document_lifecycle));
   }
   initiator_ = request.initiator;
-  render_process_id_ = request.render_process_id;
+  // TODO(crbug.com/379869738): Remove GetUnsafeValue.
+  render_process_id_ = request.global_id.child_id.GetUnsafeValue();
 }
 
 WebRequestEventDetails::~WebRequestEventDetails() = default;
@@ -241,6 +244,8 @@ void WebRequestEventDetails::SetResponseSource(const WebRequestInfo& request) {
   }
 }
 
+// NOTE: Keep in sync with `getFilteredDetails()` in
+// //extensions/renderer/resources/web_request_event.js.
 base::DictValue WebRequestEventDetails::GetFilteredDict(
     int extra_info_spec,
     PermissionHelper* permission_helper,

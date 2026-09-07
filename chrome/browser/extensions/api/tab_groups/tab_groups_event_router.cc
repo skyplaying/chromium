@@ -11,12 +11,12 @@
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/tabs/tab_group_model.h"
 #include "components/tab_groups/tab_group_color.h"
 #include "components/tab_groups/tab_group_id.h"
 #include "components/tab_groups/tab_group_visual_data.h"
 #include "components/tabs/public/tab_group.h"
 #include "extensions/browser/event_router.h"
+#include "extensions/buildflags/buildflags.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "base/scoped_multi_source_observation.h"
@@ -27,6 +27,8 @@
 #else
 #include "chrome/browser/ui/browser_tab_strip_tracker.h"
 #include "chrome/browser/ui/browser_tab_strip_tracker_delegate.h"
+#include "chrome/browser/ui/tabs/tab_group_model.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #endif  // BUILDFLAG(IS_ANDROID)
 
@@ -70,9 +72,11 @@ class TabGroupsEventRouter::PlatformDelegate : public TabModelListObserver,
     // TabModelEventRouter and PlatformDelegate. But we only want to observe the
     // TabModel associated with the incognito profile, not the regular profile,
     // otherwise we'll see event notifications twice (once per observer). See
-    // TestTabGroupEventsAcrossProfiles.
+    // TestTabGroupEventsAcrossProfiles. Also ignore empty regular tab models
+    // for ephemeral or incognito CCTs as they are never mutated.
     if (profile_ != model->GetProfile() ||
-        model->GetTabModelType() != TabModel::TabModelType::kStandard) {
+        model->GetTabModelType() != TabModel::TabModelType::kStandard ||
+        model->IsEmptyRegularModelForEphemeralOrIncognitoCct()) {
       return;
     }
     tab_model_observations_.AddObservation(model);
@@ -251,8 +255,9 @@ void TabGroupsEventRouter::DispatchEvent(events::HistogramValue histogram_value,
                                          const std::string& event_name,
                                          base::ListValue args) {
   // |event_router_| can be null in tests.
-  if (!event_router_)
+  if (!event_router_) {
     return;
+  }
 
   auto event = std::make_unique<Event>(histogram_value, event_name,
                                        std::move(args), profile_);

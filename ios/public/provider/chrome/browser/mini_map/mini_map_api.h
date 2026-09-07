@@ -27,6 +27,11 @@ using MiniMapControllerCompletionWithString = void (^)(NSString*);
 - (void)presentDirectionsWithPresentingViewController:
     (UIViewController*)viewController;
 
+// Presents the MiniMapController in native preview mode on top of
+// viewController.
+- (void)presentMapsNativePreviewWithPresentingViewController:
+    (UIViewController*)viewController;
+
 // Configure the footer view of the minimap controller.
 // All the fields are required.
 // If this is not called before the presentation, no footer view is presented.
@@ -65,7 +70,15 @@ using MiniMapControllerCompletionWithString = void (^)(NSString*);
 - (void)configureCompletionWithSearchQuery:
     (MiniMapControllerCompletionWithString)completionWithQuery;
 
+// `failureCompletion` is called when Mini Map fails to load.
+- (void)configureFailureCompletion:(void (^)(void))failureCompletion;
+
+// Configure the incognito state of the minimap controller.
+- (void)configureIncognito:(BOOL)isIncognito;
+
 @end
+
+class GURL;
 
 namespace ios {
 namespace provider {
@@ -79,6 +92,12 @@ id<MiniMapController> CreateMiniMapController();
 
 // Checks whether MiniMap can handle `url`.
 BOOL MiniMapCanHandleURL(NSURL* url);
+
+// Returns the maps URL with the campaign token appended if needed.
+GURL URLByAppendingCampaignTokenIfNeeded(const GURL& url);
+
+// Returns whether `url` has a campaign token matching the configured one.
+BOOL URLHasCampaignToken(const GURL& url);
 
 }  // namespace provider
 }  // namespace ios

@@ -90,7 +90,8 @@ export class PasscodeInputElement extends CrLitElement {
     return this.shadowRoot.querySelector<HTMLElement>('#char-' + charIndex)!;
   }
 
-  focusInput() {
+  async focusInput() {
+    await this.updateComplete;
     this.$.inputElement.focus();
     this.focused = true;
     this.renderSelection();
@@ -119,7 +120,7 @@ export class PasscodeInputElement extends CrLitElement {
     this.endIndex = endIndex === undefined ? -1 : endIndex;
   }
 
-  protected renderSelection() {
+  private renderSelection() {
     if (!this.focused) {
       return;
     }
@@ -167,17 +168,29 @@ export class PasscodeInputElement extends CrLitElement {
     });
   }
 
-  protected handleOnFocus() {
+  protected onSelectionClick() {
+    this.renderSelection();
+  }
+
+  protected onSelectionKeyup() {
+    this.renderSelection();
+  }
+
+  protected onSelectionSelect() {
+    this.renderSelection();
+  }
+
+  protected onFocus() {
     this.focused = true;
   }
 
-  protected handleOnBlur() {
+  protected onBlur() {
     this.focused = false;
     this.removeCursor();
     this.makeActive(-1);
   }
 
-  protected async handleOnInput() {
+  protected async onInput() {
     this.value = this.$.inputElement.value.toUpperCase();
     await this.updateComplete;
     this.renderSelection();

@@ -18,6 +18,8 @@ import static com.google.common.truth.Truth.assertThat;
 import android.app.Activity;
 import android.content.res.Resources;
 import android.os.SystemClock;
+import android.view.InputDevice;
+import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
@@ -43,6 +45,7 @@ import org.chromium.base.test.BaseActivityTestRule;
 import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.DisabledTest;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.components.browser_ui.widget.BrowserUiListMenuUtils;
 import org.chromium.components.browser_ui.widget.ListItemBuilder;
 import org.chromium.ui.listmenu.BasicListMenu;
@@ -57,6 +60,7 @@ import org.chromium.ui.test.util.BlankUiTestActivity;
 
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /** Instrumentation tests for MessageBannerView. */
 @RunWith(BaseJUnit4ClassRunner.class)
@@ -192,6 +196,54 @@ public class MessageBannerViewTest {
                 "Close button should be visible when hovered",
                 View.VISIBLE,
                 mMessageBannerView.findViewById(R.id.message_close_button).getVisibility());
+    }
+
+    @Test
+    @MediumTest
+    @EnableFeatures({"BlockMouseEventsOnView"})
+    public void testOnGenericMotionEvent_BlocksPointerEvents() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    PropertyModel propertyModel =
+                            new PropertyModel.Builder(MessageBannerProperties.ALL_KEYS)
+                                    .with(
+                                            MessageBannerProperties.MESSAGE_IDENTIFIER,
+                                            MessageIdentifier.TEST_MESSAGE)
+                                    .with(MessageBannerProperties.TITLE, "test")
+                                    .build();
+                    PropertyModelChangeProcessor.create(
+                            propertyModel, mMessageBannerView, MessageBannerViewBinder::bind);
+                });
+
+        MotionEvent.PointerProperties properties = new MotionEvent.PointerProperties();
+        properties.toolType = MotionEvent.TOOL_TYPE_MOUSE;
+        properties.id = 0;
+
+        MotionEvent.PointerCoords pointerCoords = new MotionEvent.PointerCoords();
+        pointerCoords.x = 0;
+        pointerCoords.y = 0;
+
+        MotionEvent mouseEvent =
+                MotionEvent.obtain(
+                        SystemClock.uptimeMillis(),
+                        SystemClock.uptimeMillis(),
+                        MotionEvent.ACTION_SCROLL,
+                        1,
+                        new MotionEvent.PointerProperties[] {properties},
+                        new MotionEvent.PointerCoords[] {pointerCoords},
+                        0,
+                        0,
+                        0f,
+                        0f,
+                        0,
+                        0,
+                        InputDevice.SOURCE_CLASS_POINTER,
+                        0);
+
+        final boolean handled =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () -> mMessageBannerView.onGenericMotionEvent(mouseEvent));
+        Assert.assertTrue("Pointer events should be consumed to block pass-through", handled);
     }
 
     /**
@@ -813,6 +865,334 @@ public class MessageBannerViewTest {
                         + " set.",
                 "secondary icon content description",
                 btn.getContentDescription());
+    }
+
+    /** Tests that requestFocus prioritizes primary button when it is visible. */
+    @Test
+    @MediumTest
+    public void testRequestFocus_primaryButton() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    PropertyModel propertyModel =
+                            new PropertyModel.Builder(MessageBannerProperties.ALL_KEYS)
+                                    .with(
+                                            MessageBannerProperties.MESSAGE_IDENTIFIER,
+                                            MessageIdentifier.TEST_MESSAGE)
+                                    .with(
+                                            MessageBannerProperties.PRIMARY_WIDGET_APPEARANCE,
+                                            PrimaryWidgetAppearance.BUTTON_IF_TEXT_IS_SET)
+                                    .with(
+                                            MessageBannerProperties.PRIMARY_BUTTON_TEXT,
+                                            PRIMARY_BUTTON_TEXT)
+                                    .build();
+                    PropertyModelChangeProcessor.create(
+                            propertyModel, mMessageBannerView, MessageBannerViewBinder::bind);
+
+                    boolean focused = mMessageBannerView.requestFocus();
+                    Assert.assertTrue("Focus should be handled.", focused);
+                    Assert.assertTrue(
+                            "Primary button should have focus.", mPrimaryButton.hasFocus());
+                });
+    }
+
+    /** Tests that requestFocus prioritizes secondary button when primary button is not visible. */
+    @Test
+    @MediumTest
+    public void testRequestFocus_secondaryButton() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    PropertyModel propertyModel =
+                            new PropertyModel.Builder(MessageBannerProperties.ALL_KEYS)
+                                    .with(
+                                            MessageBannerProperties.MESSAGE_IDENTIFIER,
+                                            MessageIdentifier.TEST_MESSAGE)
+                                    .with(
+                                            MessageBannerProperties.SECONDARY_ICON_RESOURCE_ID,
+                                            android.R.drawable.ic_menu_add)
+                                    .build();
+                    PropertyModelChangeProcessor.create(
+                            propertyModel, mMessageBannerView, MessageBannerViewBinder::bind);
+
+                    View secondaryButton =
+                            mMessageBannerView.findViewById(R.id.message_secondary_button);
+                    boolean focused = mMessageBannerView.requestFocus();
+                    Assert.assertTrue("Focus should be handled.", focused);
+                    Assert.assertTrue(
+                            "Secondary button should have focus.", secondaryButton.hasFocus());
+                });
+    }
+
+    /** Tests that requestFocus focuses close button when action buttons are not visible. */
+    @Test
+    @MediumTest
+    public void testRequestFocus_closeButton() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    PropertyModel propertyModel =
+                            new PropertyModel.Builder(MessageBannerProperties.ALL_KEYS)
+                                    .with(
+                                            MessageBannerProperties.MESSAGE_IDENTIFIER,
+                                            MessageIdentifier.TEST_MESSAGE)
+                                    .build();
+                    PropertyModelChangeProcessor.create(
+                            propertyModel, mMessageBannerView, MessageBannerViewBinder::bind);
+
+                    mMessageBannerView.enableCloseButton(true);
+                    View closeButton = mMessageBannerView.findViewById(R.id.message_close_button);
+                    closeButton.setVisibility(View.VISIBLE);
+
+                    boolean focused = mMessageBannerView.requestFocus();
+                    Assert.assertTrue("Focus should be handled.", focused);
+                    Assert.assertTrue("Close button should have focus.", closeButton.hasFocus());
+                });
+    }
+
+    /**
+     * Tests that dispatchKeyEvent consumes and blocks non-system key events during the tap
+     * protection period while allowing system key events to pass through.
+     */
+    @Test
+    @MediumTest
+    public void testDispatchKeyEvent_BlocksNonSystemKeysDuringTapProtection() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    PropertyModel propertyModel =
+                            new PropertyModel.Builder(MessageBannerProperties.ALL_KEYS)
+                                    .with(
+                                            MessageBannerProperties.MESSAGE_IDENTIFIER,
+                                            MessageIdentifier.TEST_MESSAGE)
+                                    .with(MessageBannerProperties.TITLE, "test")
+                                    .with(
+                                            MessageBannerProperties
+                                                    .IS_WITHIN_TAP_PROTECTION_PERIOD_SUPPLIER,
+                                            () -> true)
+                                    .build();
+                    PropertyModelChangeProcessor.create(
+                            propertyModel, mMessageBannerView, MessageBannerViewBinder::bind);
+                });
+
+        KeyEvent enterEvent = new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER);
+        KeyEvent dpadCenterEvent = new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER);
+        KeyEvent backEvent = new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK);
+
+        boolean enterHandled =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () -> mMessageBannerView.dispatchKeyEvent(enterEvent));
+        boolean dpadCenterHandled =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () -> mMessageBannerView.dispatchKeyEvent(dpadCenterEvent));
+        boolean backHandled =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () -> mMessageBannerView.dispatchKeyEvent(backEvent));
+
+        Assert.assertTrue(
+                "Enter key event should be consumed and blocked during tap protection.",
+                enterHandled);
+        Assert.assertTrue(
+                "D-pad center key event should be consumed and blocked during tap protection.",
+                dpadCenterHandled);
+        Assert.assertFalse(
+                "System key (Back) should not be consumed by tap protection.", backHandled);
+    }
+
+    /**
+     * Tests that dispatchKeyEvent allows key events to be dispatched normally after the tap
+     * protection period expires.
+     */
+    @Test
+    @MediumTest
+    public void testDispatchKeyEvent_AllowsKeysAfterTapProtectionExpires() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    PropertyModel propertyModel =
+                            new PropertyModel.Builder(MessageBannerProperties.ALL_KEYS)
+                                    .with(
+                                            MessageBannerProperties.MESSAGE_IDENTIFIER,
+                                            MessageIdentifier.TEST_MESSAGE)
+                                    .with(MessageBannerProperties.TITLE, "test")
+                                    .with(
+                                            MessageBannerProperties
+                                                    .IS_WITHIN_TAP_PROTECTION_PERIOD_SUPPLIER,
+                                            () -> false)
+                                    .build();
+                    PropertyModelChangeProcessor.create(
+                            propertyModel, mMessageBannerView, MessageBannerViewBinder::bind);
+                });
+
+        KeyEvent enterEvent = new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER);
+        boolean enterHandled =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () -> mMessageBannerView.dispatchKeyEvent(enterEvent));
+        Assert.assertFalse(
+                "Key event should not be unconditionally blocked after tap protection expires.",
+                enterHandled);
+    }
+
+    /** Tests that primary button clicks are ignored during the tap protection period. */
+    @Test
+    @MediumTest
+    public void testPrimaryButtonClick_BlockedDuringTapProtection() {
+        final AtomicBoolean called = new AtomicBoolean();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    PropertyModel propertyModel =
+                            new PropertyModel.Builder(MessageBannerProperties.ALL_KEYS)
+                                    .with(
+                                            MessageBannerProperties.MESSAGE_IDENTIFIER,
+                                            MessageIdentifier.TEST_MESSAGE)
+                                    .with(
+                                            MessageBannerProperties.PRIMARY_WIDGET_APPEARANCE,
+                                            PrimaryWidgetAppearance.BUTTON_IF_TEXT_IS_SET)
+                                    .with(
+                                            MessageBannerProperties.PRIMARY_BUTTON_TEXT,
+                                            PRIMARY_BUTTON_TEXT)
+                                    .with(
+                                            MessageBannerProperties.PRIMARY_BUTTON_CLICK_LISTENER,
+                                            (v) -> called.set(true))
+                                    .with(
+                                            MessageBannerProperties
+                                                    .IS_WITHIN_TAP_PROTECTION_PERIOD_SUPPLIER,
+                                            () -> true)
+                                    .build();
+                    PropertyModelChangeProcessor.create(
+                            propertyModel, mMessageBannerView, MessageBannerViewBinder::bind);
+                });
+
+        ThreadUtils.runOnUiThreadBlocking(() -> mPrimaryButton.performClick());
+        Assert.assertFalse(
+                "Primary button click should be ignored during tap protection.", called.get());
+    }
+
+    /** Tests that secondary button clicks are ignored during the tap protection period. */
+    @Test
+    @MediumTest
+    public void testSecondaryButtonClick_BlockedDuringTapProtection() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    PropertyModel propertyModel =
+                            new PropertyModel.Builder(MessageBannerProperties.ALL_KEYS)
+                                    .with(
+                                            MessageBannerProperties.MESSAGE_IDENTIFIER,
+                                            MessageIdentifier.TEST_MESSAGE)
+                                    .with(
+                                            MessageBannerProperties.SECONDARY_ICON_RESOURCE_ID,
+                                            android.R.drawable.ic_menu_add)
+                                    .with(
+                                            MessageBannerProperties.ON_SECONDARY_BUTTON_CLICK,
+                                            mSecondaryActionCallback)
+                                    .with(
+                                            MessageBannerProperties
+                                                    .IS_WITHIN_TAP_PROTECTION_PERIOD_SUPPLIER,
+                                            () -> true)
+                                    .build();
+                    PropertyModelChangeProcessor.create(
+                            propertyModel, mMessageBannerView, MessageBannerViewBinder::bind);
+                });
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () ->
+                        mMessageBannerView
+                                .findViewById(R.id.message_secondary_button)
+                                .performClick());
+        Mockito.verify(mSecondaryActionCallback, Mockito.never()).run();
+    }
+
+    /** Tests that close button clicks are ignored during the tap protection period. */
+    @Test
+    @MediumTest
+    public void testCloseButtonClick_BlockedDuringTapProtection() {
+        final AtomicBoolean called = new AtomicBoolean();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    PropertyModel propertyModel =
+                            new PropertyModel.Builder(MessageBannerProperties.ALL_KEYS)
+                                    .with(
+                                            MessageBannerProperties.MESSAGE_IDENTIFIER,
+                                            MessageIdentifier.TEST_MESSAGE)
+                                    .with(
+                                            MessageBannerProperties.CLOSE_BUTTON_CLICK_LISTENER,
+                                            (v) -> called.set(true))
+                                    .with(
+                                            MessageBannerProperties
+                                                    .IS_WITHIN_TAP_PROTECTION_PERIOD_SUPPLIER,
+                                            () -> true)
+                                    .build();
+                    PropertyModelChangeProcessor.create(
+                            propertyModel, mMessageBannerView, MessageBannerViewBinder::bind);
+                });
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> mMessageBannerView.findViewById(R.id.message_close_button).performClick());
+        Assert.assertFalse(
+                "Close button click should be ignored during tap protection.", called.get());
+    }
+
+    /**
+     * Tests that all clickable elements across the entire MessageBannerView hierarchy are blocked
+     * from executing click actions during the tap protection period.
+     */
+    @Test
+    @MediumTest
+    public void testAllClickableElements_BlockedDuringTapProtection() {
+        final AtomicInteger clickCount = new AtomicInteger();
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    PropertyModel propertyModel =
+                            new PropertyModel.Builder(MessageBannerProperties.ALL_KEYS)
+                                    .with(
+                                            MessageBannerProperties.MESSAGE_IDENTIFIER,
+                                            MessageIdentifier.TEST_MESSAGE)
+                                    .with(MessageBannerProperties.TITLE, "test")
+                                    .with(
+                                            MessageBannerProperties.PRIMARY_WIDGET_APPEARANCE,
+                                            PrimaryWidgetAppearance.BUTTON_IF_TEXT_IS_SET)
+                                    .with(
+                                            MessageBannerProperties.PRIMARY_BUTTON_TEXT,
+                                            PRIMARY_BUTTON_TEXT)
+                                    .with(
+                                            MessageBannerProperties.PRIMARY_BUTTON_CLICK_LISTENER,
+                                            (v) -> clickCount.incrementAndGet())
+                                    .with(
+                                            MessageBannerProperties.SECONDARY_ICON_RESOURCE_ID,
+                                            android.R.drawable.ic_menu_add)
+                                    .with(
+                                            MessageBannerProperties.ON_SECONDARY_BUTTON_CLICK,
+                                            clickCount::incrementAndGet)
+                                    .with(MessageBannerProperties.ENABLE_CLOSE_BUTTON, true)
+                                    .with(
+                                            MessageBannerProperties.CLOSE_BUTTON_CLICK_LISTENER,
+                                            (v) -> clickCount.incrementAndGet())
+                                    .with(
+                                            MessageBannerProperties
+                                                    .IS_WITHIN_TAP_PROTECTION_PERIOD_SUPPLIER,
+                                            () -> true)
+                                    .build();
+                    PropertyModelChangeProcessor.create(
+                            propertyModel, mMessageBannerView, MessageBannerViewBinder::bind);
+                });
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () ->
+                        assertNoClickListenersFiredDuringTapProtection(
+                                mMessageBannerView, clickCount));
+    }
+
+    private void assertNoClickListenersFiredDuringTapProtection(
+            View root, AtomicInteger clickCount) {
+        if (root.hasOnClickListeners()) {
+            root.performClick();
+            Assert.assertEquals(
+                    "Click on view with id "
+                            + root.getId()
+                            + " should be blocked during tap protection.",
+                    0,
+                    clickCount.get());
+        }
+        if (root instanceof ViewGroup group) {
+            for (int i = 0; i < group.getChildCount(); i++) {
+                assertNoClickListenersFiredDuringTapProtection(group.getChildAt(i), clickCount);
+            }
+        }
     }
 
     private void assertIsLoading(boolean isLoading) {

@@ -21,7 +21,7 @@ namespace content {
 class WebUI;
 }  // namespace content
 
-class Browser;
+class BrowserWindowInterface;
 class SignoutConfirmationHandler;
 class SignoutConfirmationUI;
 
@@ -41,9 +41,13 @@ class SignoutConfirmationUI
    public:
     // Called when the `handler_` is set and ready to be used.
     // TODO(crbug.com/469344442): This method is only used in tests.
-    // Once an alterinative observer is used for the tests that need this,
+    // Once an alternative observer is used for the tests that need this,
     // remove this method (and observer).
     virtual void OnSignoutConfirmationUIHandlerReady() = 0;
+
+    // Called when the SignoutConfirmationUI is being destroyed.
+    virtual void OnSignoutConfirmationUIDestroying(
+        SignoutConfirmationUI* ui) = 0;
   };
 
   explicit SignoutConfirmationUI(content::WebUI* web_ui);
@@ -56,7 +60,7 @@ class SignoutConfirmationUI
   void RemoveObserver(Observer* observer);
 
   // Prepares the information to be given to the handler once ready.
-  void Initialize(Browser* browser,
+  void Initialize(BrowserWindowInterface* browser,
                   ChromeSignoutConfirmationPromptVariant variant,
                   size_t unsynced_data_count,
                   SignoutConfirmationCallback callback);
@@ -96,7 +100,7 @@ class SignoutConfirmationUI
   // Callback awaiting `CreateSignoutConfirmationHandler` to create the handlers
   // with all the needed information to display.
   void OnMojoHandlersReady(
-      Browser* browser,
+      BrowserWindowInterface* browser,
       ChromeSignoutConfirmationPromptVariant variant,
       size_t unsynced_data_count,
       SignoutConfirmationCallback callback,

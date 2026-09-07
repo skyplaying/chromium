@@ -39,7 +39,7 @@ import './tether_connection_dialog.js';
 import type {PrefsMixinInterface} from '/shared/settings/prefs/prefs_mixin.js';
 import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {MojoConnectivityProvider} from 'chrome://resources/ash/common/connectivity/mojo_connectivity_provider.js';
-import type {PasspointServiceInterface, PasspointSubscription} from 'chrome://resources/ash/common/connectivity/passpoint.mojom-webui.js';
+import type {PasspointSubscription} from 'chrome://resources/ash/common/connectivity/passpoint.mojom-webui.js';
 import type {CrToggleElement} from 'chrome://resources/ash/common/cr_elements/cr_toggle/cr_toggle.js';
 import type {I18nMixinInterface} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
@@ -54,7 +54,7 @@ import {NetworkListenerBehavior} from 'chrome://resources/ash/common/network/net
 import {OncMojo} from 'chrome://resources/ash/common/network/onc_mojo.js';
 import {TrafficCountersAdapter} from 'chrome://resources/ash/common/traffic_counters/traffic_counters_adapter.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
-import type {ApnProperties, ConfigProperties, CrosNetworkConfigInterface, GlobalPolicy, IPConfigProperties, ManagedProperties, NetworkStateProperties, ProxySettings} from 'chrome://resources/mojo/chromeos/services/network_config/public/mojom/cros_network_config.mojom-webui.js';
+import type {ApnProperties, ConfigProperties, GlobalPolicy, IPConfigProperties, ManagedProperties, NetworkStateProperties, ProxySettings} from 'chrome://resources/mojo/chromeos/services/network_config/public/mojom/cros_network_config.mojom-webui.js';
 import {ActivationStateType, HiddenSsidMode, MatchType, SecurityType, VpnType} from 'chrome://resources/mojo/chromeos/services/network_config/public/mojom/cros_network_config.mojom-webui.js';
 import {ConnectionStateType, DeviceStateType, IPConfigType, NetworkType, OncSource, PolicySource, PortalState} from 'chrome://resources/mojo/chromeos/services/network_config/public/mojom/network_types.mojom-webui.js';
 import {afterNextRender, flush, mixinBehaviors, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
@@ -233,6 +233,17 @@ export class SettingsInternetDetailPageElement extends
       },
 
       /**
+       * This gets initialized to
+       * managedProperties_.typeProperties.cellular.allowTextMessages.
+       * When this is changed from the UI, a change event will update the
+       * property and setMojoNetworkProperties will be called.
+       */
+      suppressTextMessagesOverride_: {
+        type: Boolean,
+        value: false,
+      },
+
+      /**
        * The network preferred state.
        */
       preferNetwork_: {
@@ -257,7 +268,6 @@ export class SettingsInternetDetailPageElement extends
         value() {
           return loadTimeData.valueExists('showTechnologyBadge') &&
               loadTimeData.getBoolean('showTechnologyBadge');
-
         },
       },
 
@@ -340,12 +350,10 @@ export class SettingsInternetDetailPageElement extends
     ];
   }
 
-  /* eslint-disable-next-line @typescript-eslint/naming-convention */
-  CR_EXPAND_BUTTON_TAG: string;
-  defaultNetwork: OncMojo.NetworkStateProperties|null;
-  globalPolicy?: GlobalPolicy;
-  guid: string;
-  managedNetworkAvailable: boolean;
+  declare defaultNetwork: OncMojo.NetworkStateProperties|null;
+  declare globalPolicy?: GlobalPolicy;
+  declare guid: string;
+  declare managedNetworkAvailable: boolean;
 
   // DeepLinkingMixin override
   override supportedSettingIds = new Set<Setting>([
@@ -374,87 +382,62 @@ export class SettingsInternetDetailPageElement extends
     Setting.kCellularMetered,
   ]);
 
-  private advancedExpanded_: boolean;
-  private alwaysOnVpn_: chrome.settingsPrivate.PrefObject<boolean>;
-  private applyingChanges_: boolean;
-  private autoConnectPref_: chrome.settingsPrivate.PrefObject<boolean>;
-  private browserProxy_: InternetPageBrowserProxy;
-  private dataUsageExpanded_: boolean;
-  private deviceState_: OncMojo.DeviceStateProperties|null;
-  private didSetFocus_: boolean;
-  private disabled_: boolean;
-  private hiddenPref_: chrome.settingsPrivate.PrefObject<boolean>;
-  private ipAddress_: string;
-  private isApnRevampEnabled_: boolean;
-  private suppressTextMessagesOverride_: boolean;
-  private isApnRevampAndAllowApnModificationPolicyEnabled_: boolean;
-  private isSecondaryUser_: boolean;
-  private isTrafficCountersEnabled_: boolean;
-  private isTrafficCountersForWifiTestingEnabled_: boolean;
-  private isWifiSyncEnabled_: boolean;
-  private managedProperties_: ManagedProperties|undefined;
-  private meteredOverride_: boolean;
-  private networkConfig_: CrosNetworkConfigInterface;
-  private networkExpanded_: boolean;
-  private osSyncBrowserProxy_: OsSyncBrowserProxy;
-  private outOfRange_: boolean;
-  private passpointService_: PasspointServiceInterface;
-  private passpointSubscription_: PasspointSubscription|null;
-  private pendingSimLockDeepLink_: boolean;
-  private preferNetwork_: boolean;
-  private primaryUserEmail_: string;
-  private propertiesReceived_: boolean;
-  private proxyExpanded_: boolean;
-  private shouldShowConfigureWhenNetworkLoaded_: boolean;
-  private showConfigurableSections_: boolean;
-  private showMeteredToggle_: boolean;
-  private showTechnologyBadge_: string;
-  private trafficCountersAdapter_: TrafficCountersAdapter;
-  private trafficCountersAvailable_: boolean;
-
-  constructor() {
-    super();
-
-    this.CR_EXPAND_BUTTON_TAG = 'CR-EXPAND-BUTTON';
-
-    this.didSetFocus_ = false;
-
-    /**
-     * Set to true to once the initial properties have been received. This
-     * prevents setProperties from being called when setting default properties.
-     */
-    this.propertiesReceived_ = false;
-
-    /**
-     * Set in currentRouteChanged() if the showConfigure URL query
-     * parameter is set to true. The dialog cannot be shown until the
-     * network properties have been fetched in managedPropertiesChanged_().
-     */
-    this.shouldShowConfigureWhenNetworkLoaded_ = false;
-
-    /**
-     * Prevents re-saving incoming changes.
-     */
-    this.applyingChanges_ = false;
-
-    /**
-     * Flag, if true, indicating that the next deviceState_ update
-     * should call deepLinkToSimLockElement_().
-     */
-    this.pendingSimLockDeepLink_ = false;
-
-    this.browserProxy_ = InternetPageBrowserProxyImpl.getInstance();
-
-    this.networkConfig_ =
-        MojoInterfaceProviderImpl.getInstance().getMojoServiceRemote();
-
-    this.passpointService_ =
-        MojoConnectivityProvider.getInstance().getPasspointService();
-
-    this.osSyncBrowserProxy_ = OsSyncBrowserProxyImpl.getInstance();
-
-    this.trafficCountersAdapter_ = new TrafficCountersAdapter();
-  }
+  declare private advancedExpanded_: boolean;
+  declare private alwaysOnVpn_: chrome.settingsPrivate.PrefObject<boolean>;
+  /**
+   * Prevents re-saving incoming changes.
+   */
+  private applyingChanges_: boolean = false;
+  declare private autoConnectPref_: chrome.settingsPrivate.PrefObject<boolean>;
+  private browserProxy_: InternetPageBrowserProxy =
+      InternetPageBrowserProxyImpl.getInstance();
+  declare private dataUsageExpanded_: boolean;
+  declare private deviceState_: OncMojo.DeviceStateProperties|null;
+  private didSetFocus_: boolean = false;
+  declare private disabled_: boolean;
+  declare private hiddenPref_: chrome.settingsPrivate.PrefObject<boolean>;
+  declare private ipAddress_: string;
+  declare private isApnRevampEnabled_: boolean;
+  declare private isApnRevampAndAllowApnModificationPolicyEnabled_: boolean;
+  declare private isSecondaryUser_: boolean;
+  declare private isTrafficCountersEnabled_: boolean;
+  declare private isTrafficCountersForWifiTestingEnabled_: boolean;
+  declare private isWifiSyncEnabled_: boolean;
+  declare private managedProperties_: ManagedProperties|undefined;
+  declare private meteredOverride_: boolean;
+  declare private suppressTextMessagesOverride_: boolean;
+  private networkConfig_ =
+      MojoInterfaceProviderImpl.getInstance().getMojoServiceRemote();
+  declare private networkExpanded_: boolean;
+  private osSyncBrowserProxy_: OsSyncBrowserProxy =
+      OsSyncBrowserProxyImpl.getInstance();
+  declare private outOfRange_: boolean;
+  private passpointService_ =
+      MojoConnectivityProvider.getInstance().getPasspointService();
+  declare private passpointSubscription_: PasspointSubscription|null;
+  /**
+   * Flag, if true, indicating that the next deviceState_ update
+   * should call deepLinkToSimLockElement_().
+   */
+  private pendingSimLockDeepLink_: boolean = false;
+  declare private preferNetwork_: boolean;
+  declare private primaryUserEmail_: string;
+  /**
+   * Set to true to once the initial properties have been received. This
+   * prevents setProperties from being called when setting default properties.
+   */
+  private propertiesReceived_: boolean = false;
+  declare private proxyExpanded_: boolean;
+  /**
+   * Set in currentRouteChanged() if the showConfigure URL query
+   * parameter is set to true. The dialog cannot be shown until the
+   * network properties have been fetched in managedPropertiesChanged_().
+   */
+  private shouldShowConfigureWhenNetworkLoaded_: boolean = false;
+  declare private showConfigurableSections_: boolean;
+  declare private showTechnologyBadge_: boolean;
+  private trafficCountersAdapter_ = new TrafficCountersAdapter();
+  declare private trafficCountersAvailable_: boolean;
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -641,7 +624,7 @@ export class SettingsInternetDetailPageElement extends
     requestAnimationFrame(() => {
       // Clear network properties before navigating away to ensure that a future
       // navigation back to the details page does not show a flicker of
-      // incorrect text. See https://crbug.com/905986.
+      // incorrect text. See https://crbug.com/41426690.
       this.managedProperties_ = undefined;
       this.propertiesReceived_ = false;
 
@@ -805,7 +788,7 @@ export class SettingsInternetDetailPageElement extends
       return;
     }
     const config = this.getDefaultConfigProperties_();
-    config.autoConnect = {value: !!this.autoConnectPref_.value};
+    config.autoConnect = {value: this.autoConnectPref_.value};
     this.setMojoNetworkProperties_(config);
   }
 
@@ -814,7 +797,7 @@ export class SettingsInternetDetailPageElement extends
       return;
     }
     recordSettingChange(
-        Setting.kWifiHidden, {boolValue: !!this.hiddenPref_.value});
+        Setting.kWifiHidden, {boolValue: this.hiddenPref_.value});
     const config = this.getDefaultConfigProperties_();
     config.typeConfig.wifi!.hiddenSsid = this.hiddenPref_.value ?
         HiddenSsidMode.kEnabled :
@@ -1252,7 +1235,7 @@ export class SettingsInternetDetailPageElement extends
     }
 
     if (managedProperties.type === NetworkType.kCellular &&
-        !!globalPolicy.allowOnlyPolicyCellularNetworks) {
+        globalPolicy.allowOnlyPolicyCellularNetworks) {
       return true;
     }
 
@@ -1261,9 +1244,9 @@ export class SettingsInternetDetailPageElement extends
     }
     const hexSsid =
         OncMojo.getActiveString(managedProperties.typeProperties.wifi!.hexSsid);
-    return !!globalPolicy.allowOnlyPolicyWifiNetworksToConnect ||
-        (!!globalPolicy.allowOnlyPolicyWifiNetworksToConnectIfAvailable &&
-         !!managedNetworkAvailable) ||
+    return globalPolicy.allowOnlyPolicyWifiNetworksToConnect ||
+        (globalPolicy.allowOnlyPolicyWifiNetworksToConnectIfAvailable &&
+         managedNetworkAvailable) ||
         (!!hexSsid && !!globalPolicy.blockedHexSsids &&
          globalPolicy.blockedHexSsids.includes(hexSsid));
   }
@@ -1554,9 +1537,8 @@ export class SettingsInternetDetailPageElement extends
   }
 
   private updateAlwaysOnVpnPrefValue_(): void {
-    this.alwaysOnVpn_.value = this.prefs.arc && this.prefs.arc.vpn &&
-        this.prefs.arc.vpn.always_on && this.prefs.arc.vpn.always_on.lockdown &&
-        this.prefs.arc.vpn.always_on.lockdown.value;
+    this.alwaysOnVpn_.value =
+        this.getPref<boolean>('arc.vpn.always_on.lockdown').value;
   }
 
   private getFakeVpnConfigPrefForEnforcement_():
@@ -1572,11 +1554,11 @@ export class SettingsInternetDetailPageElement extends
     // shown on non-VPN networks.
     if (this.managedProperties_ &&
         this.managedProperties_.type === NetworkType.kVPN && this.prefs &&
-        this.prefs.vpn_config_allowed && !this.prefs.vpn_config_allowed.value) {
+        !this.getPref<boolean>('vpn_config_allowed').value) {
       fakeAlwaysOnVpnEnforcementPref.enforcement =
           chrome.settingsPrivate.Enforcement.ENFORCED;
       fakeAlwaysOnVpnEnforcementPref.controlledBy =
-          this.prefs.vpn_config_allowed.controlledBy;
+          this.getPref('vpn_config_allowed').controlledBy;
     }
     return fakeAlwaysOnVpnEnforcementPref;
   }
@@ -1754,7 +1736,7 @@ export class SettingsInternetDetailPageElement extends
 
   private showHiddenNetworkWarning_(): boolean {
     return loadTimeData.getBoolean('showHiddenNetworkWarning') &&
-        !!this.autoConnectPref_.value && !!this.managedProperties_ &&
+        this.autoConnectPref_.value && !!this.managedProperties_ &&
         this.managedProperties_.type === NetworkType.kWiFi &&
         !!OncMojo.getActiveValue(
             this.managedProperties_.typeProperties.wifi!.hiddenSsid);
@@ -1987,16 +1969,13 @@ export class SettingsInternetDetailPageElement extends
   }
 
   private showAlwaysOnVpn_(managedProperties: ManagedProperties): boolean {
-    return this.isArcVpn_(managedProperties) && this.prefs.arc &&
-        this.prefs.arc.vpn && this.prefs.arc.vpn.always_on &&
-        this.prefs.arc.vpn.always_on.vpn_package &&
+    return this.isArcVpn_(managedProperties) &&
         OncMojo.getActiveValue(managedProperties.typeProperties.vpn!.host) ===
-        this.prefs.arc.vpn.always_on.vpn_package.value;
+        this.getPref('arc.vpn.always_on.vpn_package').value;
   }
 
   private alwaysOnVpnChanged_(): void {
-    if (this.prefs && this.prefs.arc && this.prefs.arc.vpn &&
-        this.prefs.arc.vpn.always_on && this.prefs.arc.vpn.always_on.lockdown) {
+    if (this.prefs) {
       this.set(
           'prefs.arc.vpn.always_on.lockdown.value', this.alwaysOnVpn_.value);
     }

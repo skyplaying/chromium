@@ -11,7 +11,6 @@
 #include <windows.security.cryptography.core.h>
 #include <windows.storage.streams.h>
 
-#include <atomic>
 #include <functional>
 #include <utility>
 
@@ -34,6 +33,7 @@
 #include "base/win/scoped_hstring.h"
 #include "base/win/winrt_storage_util.h"
 #include "crypto/random.h"
+#include "crypto/sign.h"
 
 using ABI::Windows::Foundation::IAsyncAction;
 using ABI::Windows::Foundation::IAsyncOperation;
@@ -199,12 +199,6 @@ class HelloDialogForegrounder
 
   State state_ = State::kNotStarted;
   base::AtomicFlag stopping_;
-};
-
-enum KeyCredentialManagerAvailability {
-  kUnknown = 0,
-  kAvailable = 1,
-  kUnavailable = 2,
 };
 
 std::string FormatError(std::string message, HRESULT hr) {
@@ -597,12 +591,11 @@ void DeleteUserVerifyingKeyInternal(UserVerifyingKeyLabel key_label,
   std::move(callback).Run(true);
 }
 
-std::optional<SignatureVerifier::SignatureAlgorithm> SelectAlgorithm(
-    base::span<const SignatureVerifier::SignatureAlgorithm>
-        acceptable_algorithms) {
+std::optional<sign::SignatureKind> SelectAlgorithm(
+    base::span<const sign::SignatureKind> acceptable_algorithms) {
   // Windows keys come in any algorithm you want, as long as it's RSA 2048.
   for (auto algorithm : acceptable_algorithms) {
-    if (algorithm == SignatureVerifier::SignatureAlgorithm::RSA_PKCS1_SHA256) {
+    if (algorithm == sign::RSA_PKCS1_SHA256) {
       return algorithm;
     }
   }
@@ -615,8 +608,7 @@ class UserVerifyingKeyProviderWin : public UserVerifyingKeyProvider {
   ~UserVerifyingKeyProviderWin() override = default;
 
   void GenerateUserVerifyingSigningKey(
-      base::span<const SignatureVerifier::SignatureAlgorithm>
-          acceptable_algorithms,
+      base::span<const sign::SignatureKind> acceptable_algorithms,
       UserVerifyingKeyCreationCallback callback) override {
     // Ignore the non-empty return value of `SelectAlgorithm` unless in the
     // future Windows supports more algorithms.
@@ -671,18 +663,6 @@ class UserVerifyingKeyProviderWin : public UserVerifyingKeyProvider {
 void IsKeyCredentialManagerAvailableInternal(
     base::OnceCallback<void(bool)> callback) {
   SCOPED_MAY_LOAD_LIBRARY_AT_BACKGROUND_PRIORITY();
-  // Lookup requires an asynchronous system API call, so cache the value.
-  static std::atomic<KeyCredentialManagerAvailability> availability =
-      KeyCredentialManagerAvailability::kUnknown;
-
-  // Read once to ensure consistency.
-  const KeyCredentialManagerAvailability current_availability = availability;
-  if (current_availability != KeyCredentialManagerAvailability::kUnknown) {
-    std::move(callback).Run(current_availability ==
-                            KeyCredentialManagerAvailability::kAvailable);
-    return;
-  }
-
   ComPtr<IKeyCredentialManagerStatics> factory;
   HRESULT hr = base::win::GetActivationFactory<
       IKeyCredentialManagerStatics,
@@ -704,16 +684,9 @@ void IsKeyCredentialManagerAvailableInternal(
   auto callback_splits = SplitOnceCallbackIntoThree(std::move(callback));
   hr = base::win::PostAsyncHandlers(
       is_supported_operation.Get(),
-      base::BindOnce(
-          [](base::OnceCallback<void(bool)> callback,
-             std::atomic<KeyCredentialManagerAvailability>& availability,
-             boolean result) {
-            availability = result
-                               ? KeyCredentialManagerAvailability::kAvailable
-                               : KeyCredentialManagerAvailability::kUnavailable;
-            std::move(callback).Run(result);
-          },
-          std::move(std::get<0>(callback_splits)), std::ref(availability)),
+      base::BindOnce([](base::OnceCallback<void(bool)> callback,
+                        boolean result) { std::move(callback).Run(result); },
+                     std::move(std::get<0>(callback_splits))),
       base::BindOnce([](base::OnceCallback<void(bool)> callback,
                         HRESULT) { std::move(callback).Run(false); },
                      std::move(std::get<1>(callback_splits))));

@@ -7,6 +7,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -14,11 +15,11 @@
 #include "android_webview/browser/aw_contents_io_thread_client.h"
 #include "android_webview/browser/aw_contents_origin_matcher.h"
 #include "android_webview/browser/aw_context_permissions_delegate.h"
-#include "android_webview/browser/aw_origin_matched_header.h"
 #include "android_webview/browser/aw_permission_manager.h"
 #include "android_webview/browser/aw_preconnector.h"
 #include "android_webview/browser/aw_ssl_host_state_delegate.h"
 #include "android_webview/browser/file_system_access/aw_file_system_access_permission_context.h"
+#include "android_webview/browser/http_headers/aw_origin_matched_header.h"
 #include "android_webview/browser/network_service/aw_proxy_config_monitor.h"
 #include "android_webview/browser/prefetch/aw_prefetch_manager.h"
 #include "base/android/jni_weak_ref.h"
@@ -29,6 +30,7 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/keyed_service/core/simple_factory_key.h"
+#include "components/origin_matcher/origin_matcher.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/visitedlink/browser/visitedlink_delegate.h"
 #include "content/public/browser/browser_context.h"
@@ -52,12 +54,18 @@ class InProgressDownloadManager;
 }
 
 namespace visitedlink {
+// TODO(crbug.com/517136103): Remove VisitedLinkWriter and only use
+// PartitionedVisitedLinkWriter
 class VisitedLinkWriter;
+class PartitionedVisitedLinkWriter;
 }
 
 namespace android_webview {
 
 class AwBrowserContextIoThreadHandle;
+class AwContentRestrictionManagerClient;
+class AwContentRestrictionBlockedNavigationTracker;
+class AwHttpCacheManager;
 class AwQuotaManagerBridge;
 class CookieManager;
 
@@ -107,6 +115,10 @@ class AwBrowserContext : public content::BrowserContext,
   AwQuotaManagerBridge* GetQuotaManagerBridge();
   int64_t GetQuotaManagerBridge(JNIEnv* env);
 
+  AwContentRestrictionManagerClient* GetContentRestrictionManagerClient();
+  AwContentRestrictionBlockedNavigationTracker*
+  GetContentRestrictionBlockedNavigationTracker();
+
   CookieManager* GetCookieManager();
 
   bool IsDefaultBrowserContext() const;
@@ -120,9 +132,10 @@ class AwBrowserContext : public content::BrowserContext,
       const base::android::JavaRef<jobject>& io_thread_client);
 
   int AllowedPrerenderingCount() const;
-  void SetAllowedPrerenderingCount(JNIEnv* const env,
-                                   std::optional<int> allowed_count);
-  void WarmUpSpareRenderer(JNIEnv* const env);
+  void SetAllowedPrerenderingCount(JNIEnv* env, int allowed_count);
+  void ClearAllowedPrerenderingCount(JNIEnv* env);
+
+  void WarmUpSpareRenderer(JNIEnv* env);
 
   // content::BrowserContext implementation.
   base::FilePath GetPath() const override;
@@ -199,8 +212,8 @@ class AwBrowserContext : public content::BrowserContext,
   // in Java by the WebView code.
   std::vector<std::string> SetOriginMatchedHeader(
       JNIEnv* env,
-      std::string& header_name,
-      std::string& header_value,
+      const std::string& header_name,
+      const std::string& header_value,
       const std::vector<std::string>& origin_rules);
 
   // Set a static header name-value pair to be sent to origins that match the
@@ -215,8 +228,8 @@ class AwBrowserContext : public content::BrowserContext,
   // in Java by the WebView code.
   std::vector<std::string> AddOriginMatchedHeader(
       JNIEnv* env,
-      std::string& header_name,
-      std::string& header_value,
+      const std::string& header_name,
+      const std::string& header_value,
       const std::vector<std::string>& origin_rules);
 
   bool HasOriginMatchedHeader(JNIEnv* env, const std::string& header_name);
@@ -248,8 +261,31 @@ class AwBrowserContext : public content::BrowserContext,
   // Adds a QUIC hints for the given origins.
   void AddQuicHints(JNIEnv* env, const std::vector<GURL>& origins);
 
+  AwHttpCacheManager* GetHttpCacheManager() {
+    return http_cache_manager_.get();
+  }
+  AwPrefetchManager& GetPrefetchManager() { return *prefetch_manager_.get(); }
+
+  // Records UMA metrics for cases where an operation was blocked waiting for
+  // NetworkContext initialization.
+  static void RecordNetworkContextInitializationBlocking(
+      std::string_view operation_detail,
+      base::TimeDelta duration,
+      bool was_blocked);
+
+  std::vector<std::string> SetCrossOriginIsolatedAllowList(
+      JNIEnv* env,
+      const std::vector<std::string>& origin_patterns);
+  std::vector<std::string> GetCrossOriginIsolatedAllowList(JNIEnv* env);
+
+  // Returns if an origin is allowed to use APIs that require
+  // CrossOriginIsolated. Checks if the origin matches any rule set by
+  // AwBrowserContext#SetCrossOriginIsolatedAllowList()
+  bool AllowCrossOriginIsolatedApis(const url::Origin& origin) const;
+
  private:
   friend class AwBrowserContextIoThreadHandle;
+  friend class AwBrowserContextTest;
   void CreateUserPrefService();
   void MigrateLocalStatePrefs();
 
@@ -269,7 +305,11 @@ class AwBrowserContext : public content::BrowserContext,
 
   scoped_refptr<AwQuotaManagerBridge> quota_manager_bridge_;
 
+  // TODO(crbug.com/517136103): Remove VisitedLinkWriter and only use
+  // PartitionedVisitedLinkWriter
   std::unique_ptr<visitedlink::VisitedLinkWriter> visitedlink_writer_;
+  std::unique_ptr<visitedlink::PartitionedVisitedLinkWriter>
+      partitioned_visitedlink_writer_;
 
   std::unique_ptr<PrefService> user_pref_service_;
   std::unique_ptr<AwSSLHostStateDelegate> ssl_host_state_delegate_;
@@ -297,8 +337,14 @@ class AwBrowserContext : public content::BrowserContext,
   // In generally, use GetCookieManager() rather than using this directly.
   std::unique_ptr<CookieManager> cookie_manager_;
 
+  std::unique_ptr<AwHttpCacheManager> http_cache_manager_;
+
   std::unique_ptr<AwPrefetchManager> prefetch_manager_;
   std::unique_ptr<AwPreconnector> preconnector_;
+  std::unique_ptr<AwContentRestrictionManagerClient>
+      content_restriction_manager_client_;
+  std::unique_ptr<AwContentRestrictionBlockedNavigationTracker>
+      content_restriction_blocked_navigation_tracker_;
 
   // The IO thread client that should be used by service workers.
   base::android::ScopedJavaGlobalRef<jobject> sw_io_thread_client_;
@@ -313,6 +359,9 @@ class AwBrowserContext : public content::BrowserContext,
   bool enable_stale_dns_ = false;
 
   std::vector<scoped_refptr<AwOriginMatchedHeader>> origin_matched_headers_;
+
+  std::unique_ptr<origin_matcher::OriginMatcher>
+      cross_origin_allow_list_matcher_;
 
   base::WeakPtrFactory<AwBrowserContext> weak_method_factory_{this};
 };

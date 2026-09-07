@@ -27,13 +27,14 @@ import android.os.SystemClock;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
-import org.robolectric.annotation.Config;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.FeatureOverrides;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -53,8 +54,8 @@ import java.util.function.Supplier;
 
 /** Unit tests for {@link PartnerCustomizationsUma}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class PartnerCustomizationsUmaUnitTest {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Mock private ActivityLifecycleDispatcher mActivityLifecycleDispatcherMock;
 
     @Captor private ArgumentCaptor<LifecycleObserver> mLifeCycleObserverCaptor;
@@ -67,9 +68,7 @@ public class PartnerCustomizationsUmaUnitTest {
 
     private static final int START_TIME = 700;
     private static final int CREATE_DURING_CUSTOMIZATION_TIME = 1500;
-    private static final int CREATE_DURING_CUSTOMIZATION_A_BIT_LATER_TIME = 1550;
     private static final int END_TIME = 2700;
-    private static final int CREATE_AFTER_CUSTOMIZATION_TIME = 4500;
     private static final int UNUSED_TIME = 0;
 
     private static final boolean NOT_CACHED = false;
@@ -90,7 +89,6 @@ public class PartnerCustomizationsUmaUnitTest {
 
     @Before
     public void setUp() {
-        MockitoAnnotations.openMocks(this);
         PartnerCustomizationsUma.resetStaticsForTesting();
         mPartnerCustomizationsUma = new PartnerCustomizationsUma();
     }

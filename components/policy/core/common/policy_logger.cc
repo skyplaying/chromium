@@ -9,17 +9,21 @@
 #include <utility>
 
 #include "base/check_is_test.h"
-#include "base/functional/bind.h"
 #include "base/i18n/time_formatting.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/strings/escape.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
-#include "base/task/sequenced_task_runner.h"
 #include "components/policy/core/common/features.h"
+#include "components/policy/resources/webui/mojom/policy.mojom.h"
 #include "components/version_info/version_info.h"
+
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chromeos/ash/components/channel/channel_info.h"
+#endif
 
 namespace policy {
 
@@ -135,10 +139,6 @@ std::string GetFileAndLine(std::string_view file, int line) {
   return base::StrCat({GetFileBasename(file), ":", base::NumberToString(line)});
 }
 
-// Checks if the log has been if the list for at least `kTimeToLive` minutes.
-bool IsLogExpired(PolicyLogger::Log& log) {
-  return base::Time::Now() - log.timestamp() >= PolicyLogger::kTimeToLive;
-}
 
 }  // namespace
 
@@ -153,9 +153,30 @@ PolicyLogger::Log::Log(const Severity log_severity,
       file_(file),
       line_(line),
       timestamp_(base::Time::Now()) {}
+
+// static
 PolicyLogger* PolicyLogger::GetInstance() {
   static base::NoDestructor<PolicyLogger> instance;
   return instance.get();
+}
+
+// static
+bool PolicyLogger::IsPolicyLoggingEnabled() {
+#if BUILDFLAG(IS_CHROMEOS)
+  // All choices are explicit to ensure that new channels added in the future
+  // will need to be explicitly handled here and follow the right logic.
+  switch (ash::GetChannel()) {
+    case version_info::Channel::STABLE:
+      return false;
+    case version_info::Channel::BETA:
+    case version_info::Channel::DEV:
+    case version_info::Channel::CANARY:
+    case version_info::Channel::UNKNOWN:
+      return true;
+  }
+#else
+  return true;
+#endif
 }
 
 PolicyLogger::LogHelper::LogHelper(
@@ -173,8 +194,10 @@ PolicyLogger::LogHelper::LogHelper(
       line_(line) {}
 
 PolicyLogger::LogHelper::~LogHelper() {
-  policy::PolicyLogger::GetInstance()->AddLog(PolicyLogger::Log(
-      log_severity_, log_source_, message_buffer_.str(), file_, line_));
+  if (PolicyLogger::IsPolicyLoggingEnabled()) {
+    PolicyLogger::GetInstance()->AddLog(PolicyLogger::Log(
+        log_severity_, log_source_, message_buffer_.str(), file_, line_));
+  }
   StreamLog();
 }
 
@@ -216,76 +239,66 @@ base::DictValue PolicyLogger::Log::GetAsDict() const {
       .Set("timestamp", base::TimeFormatHTTP(timestamp_));
 }
 
+policy::mojom::LogPtr PolicyLogger::Log::GetAsMojoLog() const {
+  return policy::mojom::Log::New(
+      message_, GetLogSeverity(log_severity_), GetLogSourceValue(log_source_),
+      GetFileAndLine(file_, line_), GetLineURL(file_, line_),
+      base::TimeFormatHTTP(timestamp_));
+}
+
 PolicyLogger::PolicyLogger() = default;
 PolicyLogger::~PolicyLogger() = default;
 
 void PolicyLogger::AddLog(PolicyLogger::Log&& new_log) {
-    {
-      base::AutoLock lock(lock_);
-
-      // The logs deque size should not exceed `kMaxLogsSize`. Remove the first
-      // log if the size is reached before adding the new log.
-      if (logs_.size() == kMaxLogsSize) {
-        logs_.pop_front();
-      }
-
-      logs_.emplace_back(std::move(new_log));
-    }
-
-    if (!is_log_deletion_scheduled_ && is_log_deletion_enabled_) {
-      ScheduleOldLogsDeletion();
-    }
-}
-
-void PolicyLogger::DeleteOldLogs() {
-  // Delete older logs with lifetime `kTimeToLive` mins, set the flag and
-  // reschedule the task.
   base::AutoLock lock(lock_);
-  std::erase_if(logs_, IsLogExpired);
 
-  if (logs_.size() > 0) {
-    ScheduleOldLogsDeletion();
-    return;
+  // The logs deque size should not exceed `kMaxLogCount`. Remove the first
+  // log if the size is reached before adding the new log.
+  if (logs_.size() == kMaxLogCount) {
+    logs_.pop_front();
   }
-  is_log_deletion_scheduled_ = false;
+
+  logs_.emplace_back(std::move(new_log));
 }
 
-void PolicyLogger::ScheduleOldLogsDeletion() {
-  if (!base::SequencedTaskRunner::HasCurrentDefault()) {
-    return;
-  }
-  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
-      FROM_HERE,
-      base::BindOnce(&PolicyLogger::DeleteOldLogs, weak_factory_.GetWeakPtr()),
-      kTimeToLive);
-  is_log_deletion_scheduled_ = true;
-}
-
-base::ListValue PolicyLogger::GetAsList() {
+void PolicyLogger::GetAsList(GetAsListCallback callback) {
   base::ListValue all_logs_list;
   base::AutoLock lock(lock_);
   for (const Log& log : logs_) {
     all_logs_list.Append(log.GetAsDict());
   }
-  return all_logs_list;
+  std::move(callback).Run(std::move(all_logs_list));
 }
 
-void PolicyLogger::EnableLogDeletion() {
-  is_log_deletion_enabled_ = true;
-}
-
-size_t PolicyLogger::GetPolicyLogsSizeForTesting() {
-  CHECK_IS_TEST();
+void PolicyLogger::GetAsMojoList(GetAsMojoListCallback callback) {
+  std::vector<policy::mojom::LogPtr> all_logs_list;
   base::AutoLock lock(lock_);
-  return logs_.size();
+  all_logs_list.reserve(logs_.size());
+  std::ranges::transform(logs_, std::back_inserter(all_logs_list),
+                         &PolicyLogger::Log::GetAsMojoLog);
+  std::move(callback).Run(std::move(all_logs_list));
+}
+
+void PolicyLogger::RecordPerformanceMetrics() {
+  size_t memory_usage = 0;
+  size_t log_count = 0;
+  {
+    base::AutoLock lock(lock_);
+    for (const auto& log : logs_) {
+      memory_usage += sizeof(Log) + log.message().size();
+    }
+    log_count = logs_.size();
+  }
+  base::UmaHistogramCounts1M("Enterprise.PolicyLogger.MemoryUsage.Uncompressed",
+                             memory_usage);
+  base::UmaHistogramCounts10000("Enterprise.PolicyLogger.LogCount.Uncompressed",
+                                log_count);
 }
 
 void PolicyLogger::ResetLoggerForTesting() {
   CHECK_IS_TEST();
   base::AutoLock lock(lock_);
   logs_.erase(logs_.begin(), logs_.end());
-  is_log_deletion_scheduled_ = false;
-  is_log_deletion_enabled_ = false;
 }
 
 }  // namespace policy

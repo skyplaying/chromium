@@ -10,6 +10,7 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
+#include "base/check_deref.h"
 #include "base/metrics/histogram_macros.h"
 #include "chrome/browser/ash/app_list/app_list_controller_delegate.h"
 #include "chrome/browser/ash/app_list/search/omnibox/omnibox_answer_result.h"
@@ -32,7 +33,6 @@
 #include "components/prefs/pref_service.h"
 #include "third_party/metrics_proto/omnibox_event.pb.h"
 #include "third_party/metrics_proto/omnibox_focus_type.pb.h"
-#include "third_party/omnibox_proto/answer_type.pb.h"
 #include "url/gurl.h"
 
 namespace app_list {
@@ -41,10 +41,9 @@ namespace {
 
 using ::ash::string_matching::TokenizedString;
 
-// Returns true if the match is an answer, including calculator answers.
-bool IsAnswer(const AutocompleteMatch& match) {
-  return match.answer_type != omnibox::ANSWER_TYPE_UNSPECIFIED ||
-         match.type == AutocompleteMatchType::CALCULATOR;
+// Returns true if the match is a calculator answer.
+bool IsCalculator(const AutocompleteMatch& match) {
+  return match.type == AutocompleteMatchType::CALCULATOR;
 }
 
 }  //  namespace
@@ -53,10 +52,12 @@ bool IsAnswer(const AutocompleteMatch& match) {
 // answer cards results from Omnibox.
 OmniboxProvider::OmniboxProvider(Profile* profile,
                                  AppListControllerDelegate* list_controller,
+                                 TemplateURLService* template_url_service,
                                  int provider_types)
     : SearchProvider(SearchCategory::kOmnibox),
       profile_(profile),
       list_controller_(list_controller),
+      template_url_service_(CHECK_DEREF(template_url_service)),
       favicon_cache_(FaviconServiceFactory::GetForProfile(
                          profile,
                          ServiceAccessType::EXPLICIT_ACCESS),
@@ -131,22 +132,22 @@ void OmniboxProvider::PopulateFromACResult(const AutocompleteResult& result) {
       DCHECK(last_tokenized_query_.has_value());
       new_results.emplace_back(std::make_unique<OpenTabResult>(
           profile_, list_controller_,
-          CreateResult(match, controller_.get(), &favicon_cache_,
+          CreateResult(match, controller_.get(),
                        BookmarkModelFactory::GetForBrowserContext(profile_),
                        input_),
-          last_tokenized_query_.value()));
-    } else if (!IsAnswer(match)) {
+          last_tokenized_query_.value(), &favicon_cache_));
+    } else if (!IsCalculator(match)) {
       // Filters out omnibox results if web is disabled in launcher search
       // controls.
       if (!IsControlCategoryEnabled(profile_, ControlCategory::kWeb)) {
         continue;
       }
       list_results.emplace_back(std::make_unique<OmniboxResult>(
-          profile_, list_controller_,
-          CreateResult(match, controller_.get(), &favicon_cache_,
+          profile_, list_controller_, &template_url_service_.get(),
+          CreateResult(match, controller_.get(),
                        BookmarkModelFactory::GetForBrowserContext(profile_),
                        input_),
-          last_query_));
+          last_query_, &favicon_cache_));
     } else {
       new_results.emplace_back(std::make_unique<OmniboxAnswerResult>(
           profile_, list_controller_,

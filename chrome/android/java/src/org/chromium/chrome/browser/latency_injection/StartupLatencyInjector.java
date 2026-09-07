@@ -19,7 +19,7 @@ public final class StartupLatencyInjector {
 
     public StartupLatencyInjector() {
         mBusyWaitDurationMillis =
-                Long.valueOf(ChromeFeatureList.sClankStartupLatencyInjectionAmountMs.getValue());
+                (long) ChromeFeatureList.sClankStartupLatencyInjectionAmountMs.getValue();
     }
 
     private boolean isEnabled() {
@@ -40,7 +40,6 @@ public final class StartupLatencyInjector {
 
     private void busyWait() {
         UptimeMillisTimer timer = new UptimeMillisTimer();
-        while (mBusyWaitDurationMillis.compareTo(timer.getElapsedMillis()) >= 0)
-            ;
+        while (mBusyWaitDurationMillis.compareTo(timer.getElapsedMillis()) >= 0) {}
     }
 }

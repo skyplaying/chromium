@@ -6,8 +6,11 @@
 
 #include "base/callback_list.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "chrome/browser/autocomplete/aim_eligibility_service_factory.h"
+#include "chrome/browser/contextual_tasks/contextual_tasks_eligibility_manager.h"
 #include "chrome/browser/contextual_tasks/contextual_tasks_service_factory.h"
+#include "chrome/browser/contextual_tasks/contextual_tasks_ui.h"
 #include "chrome/browser/contextual_tasks/contextual_tasks_ui_service.h"
 #include "chrome/browser/contextual_tasks/contextual_tasks_ui_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
@@ -32,30 +35,30 @@ EntryPointEligibilityManager::EntryPointEligibilityManager(
       scoped_unowned_user_data_(
           browser_window_interface->GetUnownedUserDataHost(),
           *this) {
-  signin::IdentityManager* const identity_manager =
-      IdentityManagerFactory::GetForProfile(profile_);
-
-  if (identity_manager) {
-    identity_manager_observation_.Observe(identity_manager);
+  ContextualTasksUiService* const contextual_tasks_ui_service =
+      ContextualTasksUiServiceFactory::GetForBrowserContext(profile_);
+  if (contextual_tasks_ui_service) {
+    ContextualTasksEligibilityManager* eligibility_manager =
+        contextual_tasks_ui_service->GetEligibilityManager();
+    if (eligibility_manager) {
+      eligibility_subscription_ =
+          eligibility_manager->RegisterEligibilityChangedCallback(
+              base::IgnoreArgs<bool>(
+                  base::BindRepeating(&EntryPointEligibilityManager::
+                                          MaybeNotifyEntryPointEligibilityChanged,
+                                      base::Unretained(this))));
+    }
   }
-
-  aim_policy_.Init(
-      omnibox::kAIModeSettings, profile_->GetPrefs(),
-      base::BindRepeating(&EntryPointEligibilityManager::
-                              MaybeNotifyEntryPointEligibilityChanged,
-                          base::Unretained(this)));
-
+  auto* aim_service = AimEligibilityServiceFactory::GetForProfile(profile_);
+  if (aim_service) {
+    aim_eligibility_subscription_ =
+        aim_service->RegisterEligibilityChangedCallback(
+            base::BindRepeating(&EntryPointEligibilityManager::
+                                    MaybeNotifyEntryPointEligibilityChanged,
+                                base::Unretained(this)));
+  }
   entry_points_are_eligible_ = AreEntryPointsEligible();
-  AimEligibilityService* const aim_eligibility_service =
-      AimEligibilityServiceFactory::GetForProfile(profile_);
-
-  CHECK(aim_eligibility_service);
-  aim_eligibility_callback_subscription_ =
-      aim_eligibility_service->RegisterEligibilityChangedCallback(
-          base::BindRepeating(&EntryPointEligibilityManager::
-                                  MaybeNotifyEntryPointEligibilityChanged,
-                              base::Unretained(this)));
-  entry_points_are_eligible_ = AreEntryPointsEligible();
+  is_pinning_eligible_ = IsPinningEligible(profile_);
 }
 
 EntryPointEligibilityManager::~EntryPointEligibilityManager() = default;
@@ -63,38 +66,6 @@ EntryPointEligibilityManager::~EntryPointEligibilityManager() = default;
 EntryPointEligibilityManager* EntryPointEligibilityManager::From(
     BrowserWindowInterface* browser_window_interface) {
   return Get(browser_window_interface->GetUnownedUserDataHost());
-}
-
-void EntryPointEligibilityManager::OnPrimaryAccountChanged(
-    const signin::PrimaryAccountChangeEvent& event_details) {
-  MaybeNotifyEntryPointEligibilityChanged();
-}
-
-void EntryPointEligibilityManager::OnRefreshTokenUpdatedForAccount(
-    const CoreAccountInfo& account_info) {
-  MaybeNotifyEntryPointEligibilityChanged();
-}
-
-void EntryPointEligibilityManager::OnRefreshTokenRemovedForAccount(
-    const CoreAccountId& account_id) {
-  MaybeNotifyEntryPointEligibilityChanged();
-}
-
-void EntryPointEligibilityManager::OnErrorStateOfRefreshTokenUpdatedForAccount(
-    const CoreAccountInfo& account_info,
-    const GoogleServiceAuthError& error,
-    signin_metrics::SourceForRefreshTokenOperation token_operation_source) {
-  MaybeNotifyEntryPointEligibilityChanged();
-}
-
-void EntryPointEligibilityManager::OnAccountsInCookieUpdated(
-    const signin::AccountsInCookieJarInfo& accounts_in_cookie_jar_info,
-    const GoogleServiceAuthError& error) {
-  MaybeNotifyEntryPointEligibilityChanged();
-}
-
-void EntryPointEligibilityManager::OnAccountsCookieDeletedByUserAction() {
-  MaybeNotifyEntryPointEligibilityChanged();
 }
 
 base::CallbackListSubscription
@@ -121,27 +92,42 @@ bool EntryPointEligibilityManager::IsEligible(Profile* profile) {
   if (!contextual_tasks_ui_service) {
     return false;
   }
-  const bool is_signed_in_to_browser =
-      contextual_tasks_ui_service->IsSignedInToBrowserWithValidCredentials();
-  const bool cookie_jar_contains_primary_account =
-      contextual_tasks_ui_service->CookieJarContainsPrimaryAccount();
 
-  ContextualTasksService* const contextual_task_service =
-      ContextualTasksServiceFactory::GetForProfile(profile);
-  CHECK(contextual_task_service);
-  const bool is_feature_eligible =
-      contextual_task_service->GetFeatureEligibility().IsEligible();
-  const bool is_aim_allowed_by_policy =
-      AimEligibilityService::IsAimAllowedByPolicy(profile->GetPrefs());
+  ContextualTasksEligibilityManager* eligibility_manager =
+      contextual_tasks_ui_service->GetEligibilityManager();
+  if (!eligibility_manager) {
+    return false;
+  }
 
-  return is_signed_in_to_browser && cookie_jar_contains_primary_account &&
-         is_feature_eligible && is_aim_allowed_by_policy;
+  return eligibility_manager->IsEligible();
+}
+
+// static
+bool EntryPointEligibilityManager::IsPinningEligible(Profile* profile) {
+  if (!contextual_tasks::IsContextualTasksPinButtonInToolbarEnabled()) {
+    return false;
+  }
+  if (!profile) {
+    return false;
+  }
+  if (base::FeatureList::IsEnabled(
+          kContextualTasksForceEntryPointEligibility)) {
+    return true;
+  }
+  if (!IsEligible(profile)) {
+    return false;
+  }
+  auto* aim_service = AimEligibilityServiceFactory::GetForProfile(profile);
+  return aim_service && aim_service->IsFuseboxEligible();
 }
 
 void EntryPointEligibilityManager::MaybeNotifyEntryPointEligibilityChanged() {
   const bool updated_eligibility = AreEntryPointsEligible();
-  if (entry_points_are_eligible_ != updated_eligibility) {
+  const bool updated_pinning_eligible = IsPinningEligible(profile_);
+  if (entry_points_are_eligible_ != updated_eligibility ||
+      is_pinning_eligible_ != updated_pinning_eligible) {
     entry_points_are_eligible_ = updated_eligibility;
+    is_pinning_eligible_ = updated_pinning_eligible;
     entry_point_eligibility_change_callback_list_.Notify(
         entry_points_are_eligible_);
   }

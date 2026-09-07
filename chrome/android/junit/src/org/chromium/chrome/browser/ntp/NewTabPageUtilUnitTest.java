@@ -24,21 +24,26 @@ import org.junit.runner.RunWith;
 import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
+import org.chromium.base.FeatureOverrides;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.ntp.NewTabPageUtils.PaddingStyle;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils;
 import org.chromium.components.browser_ui.widget.displaystyle.HorizontalDisplayStyle;
 import org.chromium.components.browser_ui.widget.displaystyle.UiConfig;
 import org.chromium.components.browser_ui.widget.displaystyle.UiConfig.DisplayStyle;
 import org.chromium.components.browser_ui.widget.displaystyle.VerticalDisplayStyle;
 
-/** Unit tests for helper functions in {@link NewTabPage} and {@link NewTabPageLayout} classes. */
+/**
+ * Unit tests for helper functions in {@link NewTabPage} and {@link NewTabPageCoordinator} classes.
+ */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class NewTabPageUtilUnitTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
+
+    private static final String PADDING_STYLE_PARAM = "padding_style";
 
     private Context mContext;
     private View mView;
@@ -54,7 +59,7 @@ public class NewTabPageUtilUnitTest {
     }
 
     @Test
-    public void testIsInNarrowWindowOnTablet() {
+    public void testIsInNarrowWindowOnLff() {
         UiConfig uiConfig = Mockito.mock(UiConfig.class);
 
         UiConfig.DisplayStyle displayStyleWide =
@@ -62,95 +67,51 @@ public class NewTabPageUtilUnitTest {
         when(uiConfig.getCurrentDisplayStyle()).thenReturn(displayStyleWide);
 
         assertFalse(
-                "It isn't a narrow window on tablet when displayStyleWide =="
+                "It isn't a narrow window on LFF when displayStyleWide =="
                         + " HorizontalDisplayStyle.WIDE.",
-                NtpCustomizationUtils.isInNarrowWindowOnTablet(true, uiConfig));
+                NtpCustomizationUtils.isInNarrowWindowOnLff(true, uiConfig));
 
         UiConfig.DisplayStyle displayStyleRegular =
                 new DisplayStyle(HorizontalDisplayStyle.REGULAR, VerticalDisplayStyle.REGULAR);
         when(uiConfig.getCurrentDisplayStyle()).thenReturn(displayStyleRegular);
         assertFalse(
-                "It isn't a narrow window on tablet when |isTablet| is false.",
-                NtpCustomizationUtils.isInNarrowWindowOnTablet(false, uiConfig));
+                "It isn't a narrow window on LFF when |isLff| is false.",
+                NtpCustomizationUtils.isInNarrowWindowOnLff(false, uiConfig));
 
-        assertTrue(NtpCustomizationUtils.isInNarrowWindowOnTablet(true, uiConfig));
+        assertTrue(NtpCustomizationUtils.isInNarrowWindowOnLff(true, uiConfig));
     }
 
     @Test
     public void testIsInSingleUrlBarMode_OmniboxMobileParityUpdateV2Enabled() {
-        // Verifies isInSingleUrlBarMode() returns false on tablets.
-        assertFalse(NewTabPage.isInSingleUrlBarMode(/* isTablet= */ true));
-
-        // Verifies that isInSingleUrlBarMode() return true on phones.
-        assertTrue(NewTabPage.isInSingleUrlBarMode(/* isTablet= */ false));
-    }
-
-    @Test
-    public void testApplyUpdatedLayoutParamsForComposeplateView() {
-        Resources resources = mContext.getResources();
-        int originalPaddingStart = mView.getPaddingStart();
-        int originalPaddingEnd = mView.getPaddingEnd();
-
-        int paddingBottomPx =
-                resources.getDimensionPixelSize(
-                        R.dimen.composeplate_view_button_padding_for_shadow_bottom);
-        int composeplateViewHeight =
-                resources.getDimensionPixelSize(
-                        R.dimen.composeplate_view_height_with_padding_for_shadow);
-
-        NewTabPageUtils.applyUpdatedLayoutParamsForComposeplateView(mView);
-
-        // Verify padding
-        assertEquals(
-                originalPaddingStart, mView.getPaddingStart()); // Padding start should not change
-        assertEquals(paddingBottomPx, mView.getPaddingTop());
-        assertEquals(originalPaddingEnd, mView.getPaddingEnd()); // Padding end should not change
-        assertEquals(paddingBottomPx, mView.getPaddingBottom());
-
-        // Verify layout parameters
-        MarginLayoutParams layoutParams = (MarginLayoutParams) mView.getLayoutParams();
-        assertEquals(composeplateViewHeight, layoutParams.height);
-        assertEquals(paddingBottomPx, layoutParams.topMargin);
+        // Verifies isInSingleUrlBarMode() returns false on LFF devices.
+        assertFalse(NewTabPage.isInSingleUrlBarMode(/* isLff= */ true));
+        // Verifies isInSingleUrlBarMode() returns true on phones.
+        assertTrue(NewTabPage.isInSingleUrlBarMode(/* isLff= */ false));
     }
 
     @Test
     public void testUpdateTilesLayoutTopMargin_shouldShowLogo_phones() {
         Resources resources = mContext.getResources();
-        int mvtContainerTopMargin =
-                resources.getDimensionPixelSize(R.dimen.mvt_container_top_margin);
+        int mvtContainerTopMargin = resources.getDimensionPixelSize(R.dimen.ntp_section_top_margin);
 
         testUpdateTilesLayoutTopMargin_shouldShowLogoImpl(
-                /* isTablet*/ false, mvtContainerTopMargin);
+                /* isLff= */ false, mvtContainerTopMargin);
     }
 
     @Test
-    public void testUpdateTilesLayoutTopMargin_shouldShowLogo_tablets() {
+    public void testUpdateTilesLayoutTopMargin_shouldShowLogo_LFFs() {
         Resources resources = mContext.getResources();
-        int mvtContainerTopMargin =
-                resources.getDimensionPixelSize(R.dimen.mvt_container_top_margin);
+        int mvtContainerTopMargin = resources.getDimensionPixelSize(R.dimen.ntp_section_top_margin);
 
-        testUpdateTilesLayoutTopMargin_shouldShowLogoImpl(
-                /* isTablet*/ true, mvtContainerTopMargin);
+        testUpdateTilesLayoutTopMargin_shouldShowLogoImpl(/* isLff= */ true, mvtContainerTopMargin);
     }
 
     private void testUpdateTilesLayoutTopMargin_shouldShowLogoImpl(
-            boolean isTablet, int expectedMvtContainerTopMargin) {
-        Resources resources = mContext.getResources();
-        int paddingBottomPx =
-                resources.getDimensionPixelSize(
-                        R.dimen.composeplate_view_button_padding_for_shadow_bottom);
-
+            boolean isLff, int expectedMvtContainerTopMargin) {
         verifyTilesLayoutTopMargin(
-                /* shouldShowLogo= */ true,
-                /* isWhiteBackgroundOnSearchBoxApplied= */ false,
-                isTablet,
-                expectedMvtContainerTopMargin);
-
+                /* shouldShowLogo= */ true, isLff, expectedMvtContainerTopMargin);
         verifyTilesLayoutTopMargin(
-                /* shouldShowLogo= */ true,
-                /* isWhiteBackgroundOnSearchBoxApplied= */ true,
-                isTablet,
-                expectedMvtContainerTopMargin - paddingBottomPx);
+                /* shouldShowLogo= */ true, isLff, expectedMvtContainerTopMargin);
     }
 
     @Test
@@ -160,46 +121,69 @@ public class NewTabPageUtilUnitTest {
                 resources.getDimensionPixelSize(R.dimen.tile_layout_no_logo_top_margin);
 
         testUpdateTilesLayoutTopMargin_shouldNotShowLogoImpl(
-                /* isTablet*/ false, tileLayoutNoLogoTopMargin);
+                /* isLff= */ false, tileLayoutNoLogoTopMargin);
     }
 
     @Test
-    public void testUpdateTilesLayoutTopMargin_shouldNotShowLogo_tablets() {
+    public void testUpdateTilesLayoutTopMargin_shouldNotShowLogo_LFFs() {
         Resources resources = mContext.getResources();
         int expectedTileLayoutTopMargin =
-                resources.getDimensionPixelSize(R.dimen.mvt_container_top_margin);
+                resources.getDimensionPixelSize(R.dimen.ntp_section_top_margin);
 
         testUpdateTilesLayoutTopMargin_shouldNotShowLogoImpl(
-                /* isTablet*/ true, expectedTileLayoutTopMargin);
+                /* isLff= */ true, expectedTileLayoutTopMargin);
+    }
+
+    @Test
+    public void testGetPaddingStyleForAurora() {
+        // Default should be DEFAULT.
+        assertEquals(PaddingStyle.DEFAULT, NewTabPageUtils.getPaddingStyleForAurora());
+
+        FeatureOverrides.overrideParam(
+                ChromeFeatureList.NTP_AURORA, PADDING_STYLE_PARAM, PaddingStyle.SMALL);
+        assertEquals(PaddingStyle.SMALL, NewTabPageUtils.getPaddingStyleForAurora());
+
+        FeatureOverrides.overrideParam(
+                ChromeFeatureList.NTP_AURORA, PADDING_STYLE_PARAM, PaddingStyle.MEDIUM);
+        assertEquals(PaddingStyle.MEDIUM, NewTabPageUtils.getPaddingStyleForAurora());
+
+        FeatureOverrides.overrideParam(
+                ChromeFeatureList.NTP_AURORA, PADDING_STYLE_PARAM, PaddingStyle.LARGE);
+        assertEquals(PaddingStyle.LARGE, NewTabPageUtils.getPaddingStyleForAurora());
+    }
+
+    @Test
+    public void testGetNtpSectionPaddingPx() {
+        Resources resources = mContext.getResources();
+        int expectedDefaultMargin = resources.getDimensionPixelSize(R.dimen.ntp_section_top_margin);
+        int expectedSmallMargin =
+                resources.getDimensionPixelSize(R.dimen.ntp_section_top_margin_small);
+
+        // Default should be ntp_section_top_margin.
+        assertEquals(expectedDefaultMargin, NewTabPageUtils.getNtpSectionPaddingPx(resources));
+
+        FeatureOverrides.overrideParam(
+                ChromeFeatureList.NTP_AURORA, PADDING_STYLE_PARAM, PaddingStyle.SMALL);
+        assertEquals(expectedSmallMargin, NewTabPageUtils.getNtpSectionPaddingPx(resources));
+
+        FeatureOverrides.overrideParam(
+                ChromeFeatureList.NTP_AURORA, PADDING_STYLE_PARAM, PaddingStyle.MEDIUM);
+        assertEquals(expectedSmallMargin, NewTabPageUtils.getNtpSectionPaddingPx(resources));
+
+        FeatureOverrides.overrideParam(
+                ChromeFeatureList.NTP_AURORA, PADDING_STYLE_PARAM, PaddingStyle.LARGE);
+        assertEquals(expectedSmallMargin, NewTabPageUtils.getNtpSectionPaddingPx(resources));
     }
 
     private void testUpdateTilesLayoutTopMargin_shouldNotShowLogoImpl(
-            boolean isTablet, int expectedTopMargin) {
-        Resources resources = mContext.getResources();
-        int paddingBottomPx =
-                resources.getDimensionPixelSize(
-                        R.dimen.composeplate_view_button_padding_for_shadow_bottom);
-
-        verifyTilesLayoutTopMargin(
-                /* shouldShowLogo= */ false,
-                /* isWhiteBackgroundOnSearchBoxApplied= */ false,
-                isTablet,
-                expectedTopMargin);
-
-        verifyTilesLayoutTopMargin(
-                /* shouldShowLogo= */ false,
-                /* isWhiteBackgroundOnSearchBoxApplied= */ true,
-                isTablet,
-                expectedTopMargin - paddingBottomPx);
+            boolean isLff, int expectedTopMargin) {
+        verifyTilesLayoutTopMargin(/* shouldShowLogo= */ false, isLff, expectedTopMargin);
+        verifyTilesLayoutTopMargin(/* shouldShowLogo= */ false, isLff, expectedTopMargin);
     }
 
     private void verifyTilesLayoutTopMargin(
-            boolean shouldShowLogo,
-            boolean isWhiteBackgroundOnSearchBoxApplied,
-            boolean isTablet,
-            int expectedTopMargin) {
-        NewTabPageUtils.updateTilesLayoutTopMargin(
-                mView, shouldShowLogo, isWhiteBackgroundOnSearchBoxApplied, isTablet);
+            boolean shouldShowLogo, boolean isLff, int expectedTopMargin) {
+        NewTabPageUtils.updateTilesLayoutTopMargin(mView, shouldShowLogo, isLff);
         MarginLayoutParams layoutParams = (MarginLayoutParams) mView.getLayoutParams();
         assertEquals(expectedTopMargin, layoutParams.topMargin);
     }

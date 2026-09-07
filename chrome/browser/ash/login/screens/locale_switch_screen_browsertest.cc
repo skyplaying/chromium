@@ -6,12 +6,14 @@
 
 #include <string>
 
+#include "ash/constants/ash_login_pref_names.h"
 #include "base/functional/callback.h"
 #include "base/json/json_writer.h"
 #include "base/test/bind.h"
+#include "base/test/run_until.h"
 #include "base/test/test_future.h"
+#include "base/time/time.h"
 #include "base/values.h"
-#include "chrome/browser/ash/login/login_pref_names.h"
 #include "chrome/browser/ash/login/test/login_manager_mixin.h"
 #include "chrome/browser/ash/login/test/oobe_base_test.h"
 #include "chrome/browser/ash/login/test/oobe_screen_exit_waiter.h"
@@ -26,6 +28,7 @@
 #include "components/signin/public/identity_manager/identity_test_utils.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/test_utils.h"
 #include "content/public/test/url_loader_interceptor.h"
 #include "google_apis/gaia/gaia_id.h"
 
@@ -63,6 +66,8 @@ class LocaleSwitchScreenBrowserTest : public OobeBaseTest {
   void SetPeopleAPIResponseLocale(const std::string& account_locale);
   LocaleSwitchScreen::Result WaitForScreenExitResult();
 
+  LocaleSwitchScreen* GetScreen();
+
  private:
   // Helper to substitute calls to PeopleAPI to fetch preferred user locale.
   std::unique_ptr<content::URLLoaderInterceptor> people_api_interceptor_;
@@ -74,14 +79,19 @@ class LocaleSwitchScreenBrowserTest : public OobeBaseTest {
 
 LocaleSwitchScreenBrowserTest::LocaleSwitchScreenBrowserTest() = default;
 
-void LocaleSwitchScreenBrowserTest::SetUpOnMainThread() {
-  SetPeopleAPIResponseLocale("en");
-  LocaleSwitchScreen* screen = static_cast<LocaleSwitchScreen*>(
+LocaleSwitchScreen* LocaleSwitchScreenBrowserTest::GetScreen() {
+  return static_cast<LocaleSwitchScreen*>(
       WizardController::default_controller()->screen_manager()->GetScreen(
           LocaleSwitchView::kScreenId));
+}
+
+void LocaleSwitchScreenBrowserTest::SetUpOnMainThread() {
+  SetPeopleAPIResponseLocale("en");
+  LocaleSwitchScreen* screen = GetScreen();
   original_callback_ = screen->get_exit_callback_for_testing();
   screen->set_exit_callback_for_testing(
       screen_result_waiter_.GetRepeatingCallback());
+  screen->set_timeout_for_testing(base::Seconds(30));
   fake_gaia_.SetupFakeGaiaForLoginWithDefaults();
   OobeBaseTest::SetUpOnMainThread();
 }
@@ -96,7 +106,7 @@ void LocaleSwitchScreenBrowserTest::SetPeopleAPIResponseLocale(
   people_api_interceptor_.reset();
   people_api_interceptor_ = std::make_unique<content::URLLoaderInterceptor>(
       base::BindLambdaForTesting(
-          [&account_locale](
+          [account_locale](
               content::URLLoaderInterceptor::RequestParams* params) {
             bool is_people_api_request =
                 params->url_request.url.spec().find(kPeopleApiBaseURL) !=
@@ -121,9 +131,10 @@ void LocaleSwitchScreenBrowserTest::ProceedToLocaleSwitchScreen() {
   // Make sure that all of the capabilities are already loaded after login.
   Profile* profile = ProfileManager::GetPrimaryUserProfile();
   auto* identity_manager = IdentityManagerFactory::GetForProfile(profile);
+  signin::WaitForRefreshTokensLoaded(identity_manager);
   AccountInfo account_info = identity_manager->FindExtendedAccountInfoByGaiaId(
       FakeGaiaMixin::kFakeUserGaiaId);
-  AccountCapabilitiesTestMutator mutator(&account_info.capabilities);
+  AccountCapabilitiesTestMutator mutator(&account_info);
   mutator.SetAllSupportedCapabilities(false);
   signin::UpdateAccountInfoForAccount(identity_manager, account_info);
 
@@ -177,9 +188,12 @@ IN_PROC_BROWSER_TEST_F(LocaleSwitchScreenBrowserTest,
 
   EXPECT_EQ(g_browser_process->GetApplicationLocale(), new_locale);
 
-  const user_manager::User* user =
-      user_manager::UserManager::Get()->GetActiveUser();
-  EXPECT_EQ(*user->GetAccountLocale(), new_locale);
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    const user_manager::User* user =
+        user_manager::UserManager::Get()->GetActiveUser();
+    return user && user->GetAccountLocale() &&
+           *user->GetAccountLocale() == new_locale;
+  })) << "Timeout waiting for user account locale to be updated";
 }
 
 }  // namespace ash

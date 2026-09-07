@@ -4,8 +4,10 @@
 
 #import "ios/chrome/browser/first_run/coordinator/first_run_post_action_provider.h"
 
+#import "components/prefs/pref_service.h"
 #import "ios/chrome/browser/safari_data_import/model/features.h"
 #import "ios/chrome/browser/screen/ui_bundled/screen_provider+protected.h"
+#import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 
 @implementation FirstRunPostActionProvider {
@@ -14,9 +16,24 @@
 
 - (instancetype)initWithPrefService:(PrefService*)prefService {
   NSMutableArray<NSNumber*>* screens = [NSMutableArray array];
-  if (IsSyncedSetUpEnabled()) {
-    [screens addObject:@(kSyncedSetUp)];
+  // For now, skip all post-FRE screens if the interactive promo is enabled, as
+  // the interactive promo makes the FRE longer.
+  if (IsBestOfAppLensInteractivePromoEnabled()) {
+    [screens addObject:@(kStepsCompleted)];
+    return [super initWithScreens:screens];
   }
+
+  BOOL promoTriggered =
+      prefService &&
+      prefService->GetBoolean(prefs::kAppStoreGeminiPromoTriggered);
+  if (promoTriggered) {
+    prefService->SetBoolean(prefs::kAppStoreGeminiPromoTriggered, false);
+    [screens addObject:@(kStepsCompleted)];
+    return [super initWithScreens:screens];
+  }
+
+  [screens addObject:@(kSyncedSetUp)];
+
   if (IsBestOfAppGuidedTourEnabled()) {
     [screens addObject:@(kGuidedTour)];
   }

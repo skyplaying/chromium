@@ -102,11 +102,13 @@ if (is_chromeos) {
     deps = [
       ":smart_card",
       "//chrome/browser",
+      "//chrome/browser:chrome_content_browser_client",
       "//chrome/browser/content_settings:content_settings_factory",
       "//chrome/browser/permissions",
       "//chrome/browser/policy:test_support",
       "//chrome/browser/profiles:profile",
       "//chrome/browser/ui",
+      "//chrome/browser/ui/views/permissions",
       "//chrome/test:test_support_ui",
       "//components/permissions:permissions_common",
       "//content/test:test_support",

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
 #include "components/payments/content/developer_console_logger.h"
 #include "components/payments/content/initialization_task.h"
 #include "components/payments/content/payment_handler_host.h"
@@ -69,6 +70,7 @@ class PaymentRequest : public content::DocumentService<mojom::PaymentRequest>,
     virtual void OnPayCalled() = 0;
     virtual void OnAbortCalled() = 0;
     virtual void OnInternalError() = 0;
+    virtual void OnPaymentRequestStateInitDone(PaymentRequestState* state) {}
     virtual void OnCompleteCalled() {}
 
    protected:
@@ -113,7 +115,8 @@ class PaymentRequest : public content::DocumentService<mojom::PaymentRequest>,
 
   // PaymentRequestState::Delegate:
   void OnPaymentResponseAvailable(mojom::PaymentResponsePtr response) override;
-  void OnPaymentResponseError(const std::string& error_message) override;
+  void OnPaymentResponseError(mojom::PaymentEventResponseType error,
+                              const std::string& error_message) override;
   void OnShippingOptionIdSelected(std::string shipping_option_id) override;
   void OnShippingAddressSelected(mojom::PaymentAddressPtr address) override;
   void OnPayerInfoSelected(mojom::PayerDetailPtr payer_info) override;
@@ -148,6 +151,10 @@ class PaymentRequest : public content::DocumentService<mojom::PaymentRequest>,
   // Called when the payment handler requests to open a payment handler
   // window.
   void OnPaymentHandlerOpenWindowCalled();
+
+  // Sets the reason why the browser window size check failed.
+  void SetWindowSizeCheckRejectionReason(
+      JourneyLogger::WindowSizeCheckRejectionReason reason);
 
   bool skipped_payment_request_ui() { return skipped_payment_request_ui_; }
   SPCTransactionMode spc_transaction_mode() const {
@@ -286,6 +293,10 @@ class PaymentRequest : public content::DocumentService<mojom::PaymentRequest>,
   // renderer.
   bool is_initialized_ = false;
 
+  // Timestamps for checkout duration tracking.
+  base::TimeTicks init_time_;
+  base::TimeTicks show_time_;
+
   // Whether PaymentRequest.show() has been called.
   bool is_show_called_ = false;
 
@@ -293,6 +304,10 @@ class PaymentRequest : public content::DocumentService<mojom::PaymentRequest>,
   // invoked. This is distinct from state_->IsInitialized(), because the
   // callback is asynchronous.
   bool is_requested_methods_supported_invoked_ = false;
+
+  // If not empty, use this error reason when rejecting PaymentRequest.show().
+  // Will be mapped to a DOMException on the renderer side.
+  std::optional<mojom::PaymentErrorReason> reject_show_error_reason_;
 
   // If not empty, use this error message for rejecting
   // PaymentRequest.show().

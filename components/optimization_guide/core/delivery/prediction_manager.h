@@ -6,6 +6,7 @@
 #define COMPONENTS_OPTIMIZATION_GUIDE_CORE_DELIVERY_PREDICTION_MANAGER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -22,6 +23,7 @@
 #include "base/types/optional_ref.h"
 #include "components/download/public/background_service/download_params.h"
 #include "components/optimization_guide/core/delivery/model_enums.h"
+#include "components/optimization_guide/core/delivery/model_info.h"
 #include "components/optimization_guide/core/delivery/model_provider_registry.h"
 #include "components/optimization_guide/core/delivery/prediction_model_download_observer.h"
 #include "components/optimization_guide/core/delivery/prediction_model_fetch_timer.h"
@@ -54,7 +56,6 @@ class OptimizationTargetModelObserver;
 class PredictionModelDownloadManager;
 class PredictionModelFetcher;
 class PredictionModelStore;
-class ModelInfo;
 class ProfileDownloadServiceTracker;
 
 // A PredictionManager supported by the optimization guide that makes an
@@ -98,11 +99,11 @@ class PredictionManager : public PredictionModelDownloadObserver,
       const;
 
   // Override the model file returned to observers for |optimization_target|.
-  // Use |TestModelInfoBuilder| to construct the model files. For
+  // Use ModelInfo aggregate initialization to construct the model files. For
   // testing purposes only.
   void OverrideTargetModelForTesting(
       proto::OptimizationTarget optimization_target,
-      std::unique_ptr<ModelInfo> model_info);
+      std::optional<ModelInfo> model_info);
 
   // PredictionModelDownloadObserver:
   void OnModelReady(const base::FilePath& base_model_dir,
@@ -189,20 +190,15 @@ class PredictionManager : public PredictionModelDownloadObserver,
   // Callback run after a prediction model is loaded from the store.
   // |prediction_model| is used to construct a PredictionModel capable of making
   // prediction for the appropriate |optimization_target|.
-  void OnLoadPredictionModel(
-      proto::OptimizationTarget optimization_target,
-      bool record_availability_metrics,
-      std::unique_ptr<proto::PredictionModel> prediction_model);
+  void OnLoadPredictionModel(proto::OptimizationTarget optimization_target,
+                             bool record_availability_metrics,
+                             std::optional<ModelInfo> model_info);
 
   // Callback run after a prediction model is loaded from a command-line
   // override.
   void OnPredictionModelOverrideLoaded(
       proto::OptimizationTarget optimization_target,
       std::unique_ptr<proto::PredictionModel> prediction_model);
-
-  // Process loaded |model| into memory. Return true if a prediction
-  // model object was created and successfully stored, otherwise false.
-  bool ProcessAndStoreLoadedModel(const proto::PredictionModel& model);
 
   // Removes the model for `optimization_target` from store, for the
   // `model_removal_reason`.
@@ -216,13 +212,10 @@ class PredictionManager : public PredictionModelDownloadObserver,
       proto::OptimizationTarget optimization_target,
       int64_t new_version) const;
 
-  // Updates the in-memory model file for |optimization_target| to
-  // |prediction_model_file|.
+  // Updates the in-memory model file for `optimization_target` to
+  // `model_info`.
   void StoreLoadedModelInfo(proto::OptimizationTarget optimization_target,
-                            std::unique_ptr<ModelInfo> prediction_model_file);
-
-  // Post-processing callback invoked after processing |model|.
-  void OnProcessLoadedModel(const proto::PredictionModel& model, bool success);
+                            ModelInfo model_info);
 
   // Return the time when a prediction model fetch was last attempted.
   base::Time GetLastFetchAttemptTime() const;
@@ -263,7 +256,7 @@ class PredictionManager : public PredictionModelDownloadObserver,
   void MaybeDownloadOrUpdatePredictionModel(
       proto::OptimizationTarget optimization_target,
       const proto::PredictionModel& get_models_response_model,
-      std::unique_ptr<proto::PredictionModel> loaded_model);
+      std::optional<ModelInfo> loaded_model);
 
   // Returns a new file path for the directory to download the model files for
   // |optimization_target|. The directory will not be created.

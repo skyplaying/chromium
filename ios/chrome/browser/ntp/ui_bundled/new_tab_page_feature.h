@@ -17,32 +17,38 @@ enum class FeedSwipeIPHVariation {
   kAnimated,
 };
 
-// Represents the possible onboarding treatments of Lens Overlay.
-enum class NTPMIAEntrypointVariation {
-  // The default experience.
+// Enum to represent arms of feature kNewTabPageUICleanup.
+enum class NTPUICleanupVariation {
+  kDisabled,
+  kTightPadding,
+  kMediumPadding,
+  kPreferredPadding,
+  kFakeboxBackgroundAndShadow,
+};
+
+// Defines the arms for the AIM Refactor Experiment.
+enum class AimButtonRefactorArm {
   kDisabled = 0,
-  // The entrypoint is shown in the omnibox as a single button.
-  kOmniboxContainedSingleButton = 1,
-  // The entrypoint is shown in the omnibox as a button inline with Lens and
-  // Voice.
-  kOmniboxContainedInline = 2,
-  // The entrypoint is shown inside the enlarged fake omnibox.
-  kOmniboxContainedEnlargedFakebox = 3,
-  // The entrypoint is shown inside the enlarged fake omnibox without incognito
-  // shortcut.
-  kEnlargedFakeboxNoIncognito = 4,
-  // The entrypoint is shown as a quick actions button, with enlarged fake
-  // omnibox
-  kAIMInQuickAction = 5,
-  kMaxValue = kAIMInQuickAction,
+  // Present AIM button in the Quick Actions row alongside one merchandising
+  // chips.
+  kOneMerchandisingChip = 1,
+  // Present AIM button in the Quick Actions row alongside two merchandising
+  // chips.
+  kTwoMerchandisingChips = 2,
+  // Present the AIM button as a standalone module beside the Most Visited
+  // Tiles. Remove the Quick Actions row from the NTP.
+  kAimAsModule = 3,
+  // Present the AIM button as a Most Visited Tile. Remove the Quick Actions row
+  // from the NTP.
+  kAimAsMvt = 4,
+  // Remove the AIM button and the Quick Actions row from the NTP.
+  kNoChips = 5,
 };
 
 #pragma mark - Feature declarations
 
-// Feature flag to fix the NTP view hierarchy if it is broken before applying
-// constraints.
-// TODO(crbug.com/40799579): Remove this when it is fixed.
-BASE_DECLARE_FEATURE(kEnableNTPViewHierarchyRepair);
+// Feature flag to change the location of the AIM button on the NTP.
+BASE_DECLARE_FEATURE(kAimButtonRefactor);
 
 // Flag to modify the feed header through the server. Enabling this feature on
 // its own does nothing; relies on feature parameters.
@@ -52,6 +58,12 @@ BASE_DECLARE_FEATURE(kFeedHeaderSettings);
 // its own does nothing; relies on feature parameters.
 BASE_DECLARE_FEATURE(kOverrideFeedSettings);
 
+// Feature flag to enable transform-based animations for the NTP header.
+BASE_DECLARE_FEATURE(kNTPHeaderUseTransformsForAnimations);
+
+// Checks if transform-based animations are enabled for the NTP header.
+bool IsNTPHeaderTransformsForAnimationsEnabled();
+
 // Feature flag to enable in-product help for swipe action on the Feed.
 BASE_DECLARE_FEATURE(kFeedSwipeInProductHelp);
 
@@ -59,15 +71,18 @@ BASE_DECLARE_FEATURE(kFeedSwipeInProductHelp);
 // eligibility service instead of the new tab page mediator.
 BASE_DECLARE_FEATURE(kUseFeedEligibilityService);
 
-// iOS counterpart for `chrome::android::kMostVisitedTilesCustomization`;
-// enables customizable most visited tiles when enabled.
-BASE_DECLARE_FEATURE(kMostVisitedTilesCustomizationIOS);
-
-// Feature flag to enable the NTP background image cache.
-BASE_DECLARE_FEATURE(kEnableNTPBackgroundImageCache);
-
 // Feature flag to make the height of the NTP Logo and Doodle consistent.
 BASE_DECLARE_FEATURE(kConsistentLogoDoodleHeight);
+
+// Feature flag to enable the New Tab Page UI cleanup. The refresh includes
+// padding and styling updates.
+BASE_DECLARE_FEATURE(kNewTabPageUICleanup);
+
+// Feature flag to place the Most Visited Tiles in the bottom sheet.
+BASE_DECLARE_FEATURE(kMVTInBottomSheet);
+
+// Checks if the Most Visited Tiles should be placed in the bottom sheet.
+bool IsMVTInBottomSheetEnabled();
 
 #pragma mark - Feature parameters
 
@@ -92,10 +107,14 @@ extern const char kFeedSettingDiscoverReferrerParameter[];
 // enabled.
 extern const char kFeedSwipeInProductHelpArmParam[];
 
-#pragma mark - Helpers
+// Parameter to indicate which arm of the feature kNewTabPageUICleanup is
+// enabled.
+extern const char kNewTabPageUICleanupArmParam[];
 
-// Whether the NTP view hierarchy repair is enabled.
-bool IsNTPViewHierarchyRepairEnabled();
+// Parameter to indicate which arm of the feature kAimButtonRefactor is enabled.
+extern const char kAimButtonRefactorArmParam[];
+
+#pragma mark - Helpers
 
 // Whether the sync promo should be shown on top of the feed.
 bool IsDiscoverFeedTopSyncPromoEnabled();
@@ -110,25 +129,33 @@ FeedSwipeIPHVariation GetFeedSwipeIPHVariation();
 // the new tab page mediator.
 bool UseFeedEligibilityService();
 
-// Returns the enabled variation of feature kNTPMIAEntrypoint;
-NTPMIAEntrypointVariation GetNTPMIAEntrypointVariation();
-
-// Whether to show only the MIA button in the fakebox.
-bool ShowOnlyMIAEntrypointInNTPFakebox();
-
-// Whether the quick actions row should be displayed.
-bool ShouldShowQuickActionsRow();
-
-// Whether a MIA variation should increase the size of the fakebox.
-bool ShouldEnlargeNTPFakeboxForMIA();
-
-// Whether customized most visited tiles is enabled on Chrome on iOS.
-bool IsContentSuggestionsCustomizable();
-
-// Whether the NTP background image cache is enabled.
-bool IsNTPBackgroundImageCacheEnabled();
+// Whether the AIM button is allowed in NTP.
+bool IsAimEnabledInNtp();
 
 // Whether the NTP Logo and Doodle should have a consistent height.
 bool IsConsistentLogoDoodleHeightEnabled();
+
+// Feature flag to enable the New Tab Page Redesign.
+BASE_DECLARE_FEATURE(kNewTabPageRedesign);
+
+// Whether the New Tab Page Redesign is enabled.
+bool IsNTPRedesignEnabled();
+
+// Whether the full New Tab Page UI cleanup is enabled. This cleanup includes
+// all color, sizing, and padding updates.
+bool IsNewTabPageUICleanupEnabled();
+
+// Returns whether the updated fakebox background color and shadow should be
+// applied.
+bool ShouldApplyFakeboxBackgroundAndShadow();
+
+// Returns the enabled variation of feature kNewTabPageUICleanup.
+NTPUICleanupVariation GetNewTabPageUICleanupVariation();
+
+// Returns the active arm for the AimButtonRefactor feature.
+AimButtonRefactorArm GetAimButtonRefactorArm();
+
+// Returns whether the AimButtonRefactor feature is enabled.
+bool IsAimButtonRefactorEnabled();
 
 #endif  // IOS_CHROME_BROWSER_NTP_UI_BUNDLED_NEW_TAB_PAGE_FEATURE_H_

@@ -4,6 +4,8 @@
 
 #include "components/autofill/core/browser/form_processing/optimization_guide_proto_util.h"
 
+#include <stddef.h>
+
 #include <concepts>
 
 #include "base/check_op.h"
@@ -17,42 +19,6 @@
 namespace autofill {
 
 namespace {
-
-// Converts `form_control_type` to its corresponding proto enum.
-optimization_guide::proto::FormControlType ToFormControlTypeProto(
-    FormControlType form_control_type) {
-  switch (form_control_type) {
-    case FormControlType::kContentEditable:
-      return optimization_guide::proto::FORM_CONTROL_TYPE_CONTENT_EDITABLE;
-    case FormControlType::kInputCheckbox:
-      return optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_CHECKBOX;
-    case FormControlType::kInputEmail:
-      return optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_EMAIL;
-    case FormControlType::kInputDate:
-      return optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_DATE;
-    case FormControlType::kInputMonth:
-      return optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_MONTH;
-    case FormControlType::kInputNumber:
-      return optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_NUMBER;
-    case FormControlType::kInputPassword:
-      return optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_PASSWORD;
-    case FormControlType::kInputRadio:
-      return optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_RADIO;
-    case FormControlType::kInputSearch:
-      return optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_SEARCH;
-    case FormControlType::kInputTelephone:
-      return optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_TELEPHONE;
-    case FormControlType::kInputText:
-      return optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_TEXT;
-    case FormControlType::kInputUrl:
-      return optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_URL;
-    case FormControlType::kSelectOne:
-      return optimization_guide::proto::FORM_CONTROL_TYPE_SELECT_ONE;
-    case FormControlType::kTextArea:
-      return optimization_guide::proto::FORM_CONTROL_TYPE_TEXT_AREA;
-  }
-  return optimization_guide::proto::FORM_CONTROL_TYPE_UNSPECIFIED;
-}
 
 template <typename T>
   requires(std::same_as<T, FormGlobalId> || std::same_as<T, FieldGlobalId>)
@@ -79,6 +45,38 @@ void PopulateExtensionAPISpecificFields(
 }
 
 }  // namespace
+
+// Converts `form_control_type` to its corresponding proto enum.
+optimization_guide::proto::FormControlType ToFormControlTypeProto(
+    FormControlType form_control_type) {
+  switch (form_control_type) {
+    case FormControlType::kContentEditable:
+      return optimization_guide::proto::FORM_CONTROL_TYPE_CONTENT_EDITABLE;
+    case FormControlType::kInputEmail:
+      return optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_EMAIL;
+    case FormControlType::kInputDate:
+      return optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_DATE;
+    case FormControlType::kInputMonth:
+      return optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_MONTH;
+    case FormControlType::kInputNumber:
+      return optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_NUMBER;
+    case FormControlType::kInputPassword:
+      return optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_PASSWORD;
+    case FormControlType::kInputSearch:
+      return optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_SEARCH;
+    case FormControlType::kInputTelephone:
+      return optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_TELEPHONE;
+    case FormControlType::kInputText:
+      return optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_TEXT;
+    case FormControlType::kInputUrl:
+      return optimization_guide::proto::FORM_CONTROL_TYPE_INPUT_URL;
+    case FormControlType::kSelectOne:
+      return optimization_guide::proto::FORM_CONTROL_TYPE_SELECT_ONE;
+    case FormControlType::kTextArea:
+      return optimization_guide::proto::FORM_CONTROL_TYPE_TEXT_AREA;
+  }
+  NOTREACHED();
+}
 
 optimization_guide::proto::FormData ToFormDataProto(
     const FormData& form_data,

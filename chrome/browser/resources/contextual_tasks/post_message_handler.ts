@@ -7,15 +7,31 @@ import {EventTracker} from '//resources/js/event_tracker.js';
 import {loadTimeData} from '//resources/js/load_time_data.js';
 
 import type {BrowserProxy} from './contextual_tasks_browser_proxy.js';
+import {HANDSHAKE_INTERVAL_MS, MAX_HANDSHAKE_ATTEMPTS} from './utils.js';
+import type {WebViewType} from './web_view_type.js';
 
-const HANDSHAKE_INTERVAL_MS = 500;
-const MAX_HANDSHAKE_ATTEMPTS = 1000;
+export interface Rect {
+  top: number;
+  left: number;
+  width: number;
+  right: number;
+  bottom: number;
+  height: number;
+}
+
+export interface InputPlateBoundsUpdateMessage {
+  type: 'input-plate-bounds-update';
+  'bounds-rect': Rect;
+  occluders: Rect[];
+  viewportWidth?: number;
+  viewportHeight?: number;
+}
 
 /**
  * A proxy class to control post messages sent to the webview.
  */
 export class PostMessageHandler {
-  private webview_: chrome.webviewTag.WebView;
+  private webview_: WebViewType;
   private targetOrigin_: string = '';
   private eventTracker_: EventTracker = new EventTracker();
   private browserProxy_: BrowserProxy;
@@ -25,9 +41,17 @@ export class PostMessageHandler {
   private handshakeIntervalId_: number|null = null;
   private pendingMessages_: Array<Uint8Array|object> = [];
   private handshakeMessage_: Uint8Array|null = null;
+  private onInputPlateBoundsUpdate_:
+      ((rect?: Rect, occluders?: Rect[], viewportWidth?: number,
+        viewportHeight?: number) => void)|null = null;
+  private onInputStateUpdate_:
+      ((toolMode?: number, modelMode?: number,
+        data?: Record<string, unknown>) => void)|null = null;
+  // The URL of the active navigation. Null if there is no active navigation.
+  private activeNavigationUrl_: string|null = null;
 
   constructor(
-      webview: chrome.webviewTag.WebView, browserProxy: BrowserProxy,
+      webview: WebViewType, browserProxy: BrowserProxy,
       // Allow overriding max attempts for testing.
       private readonly maxHandshakeAttempts_: number = MAX_HANDSHAKE_ATTEMPTS) {
     this.webview_ = webview;
@@ -36,7 +60,12 @@ export class PostMessageHandler {
     this.eventTracker_.add(
         this.webview_, 'loadstart', this.onLoadStart_.bind(this));
     this.eventTracker_.add(
+        this.webview_, 'loadredirect', this.onLoadRedirect_.bind(this));
+    this.eventTracker_.add(
         this.webview_, 'loadcommit', this.onLoadCommit_.bind(this));
+    this.eventTracker_.add(
+        this.webview_, 'loadabort', this.onLoadAbort_.bind(this));
+
     this.eventTracker_.add(
         window, 'message', this.onMessageReceived_.bind(this));
 
@@ -56,6 +85,9 @@ export class PostMessageHandler {
   sendMessage(message: Uint8Array) {
     if (!this.handshakeComplete_) {
       this.pendingMessages_.push(message);
+      if (this.handshakeIntervalId_ === null) {
+        this.restartHandshake_();
+      }
       return;
     }
 
@@ -77,6 +109,9 @@ export class PostMessageHandler {
   sendObjectMessage(message: object) {
     if (!this.handshakeComplete_) {
       this.pendingMessages_.push(message);
+      if (this.handshakeIntervalId_ === null) {
+        this.restartHandshake_();
+      }
       return;
     }
 
@@ -89,33 +124,67 @@ export class PostMessageHandler {
     this.resetHandshake_();
   }
 
-  private onLoadStart_(event: any) {
-    // This event is fired anytime a load starts in the webview, including
-    // subframes and navigations within the same page. Only reset the handshake
-    // if its the top level frame to avoid unnecessary resets.
+  private onLoadStart_(event: chrome.webviewTag.LoadStartEvent) {
+    if (!event.isTopLevel) {
+      return;
+    }
+    // Store the start event to be used once its clear if this navigation is
+    // committed or aborted
+    this.activeNavigationUrl_ = event.url;
+  }
+
+  private onLoadRedirect_(event: chrome.webviewTag.LoadRedirectEvent) {
     if (!event.isTopLevel) {
       return;
     }
 
-    // Reset the handshake since the src has changed.
-    this.resetHandshake_();
+    const urlObj = URL.parse(event.newUrl);
+    if (urlObj) {
+      // Update target origin immediately on redirect to ensure handshake
+      // messages go to the correct origin for the intermediate hop or final
+      // destination.
+      this.targetOrigin_ = urlObj.origin;
+    } else {
+      console.error('Invalid URL in loadredirect:', event.newUrl);
+    }
+
+    if (this.activeNavigationUrl_ === event.oldUrl) {
+      this.activeNavigationUrl_ = event.newUrl;
+    }
   }
 
   // This event is fired when the load has committed in the webview. This is
   // used to determine if the webview is ready to receive messages. Doing this
   // in onLoadStart_ can cause a race condition where the handshake completes
   // with the page that is about to navigate away from.
-  private onLoadCommit_(event: any) {
+  private onLoadCommit_(event: chrome.webviewTag.LoadCommitEvent) {
     if (!event.isTopLevel) {
       return;
     }
 
-    this.targetOrigin_ = new URL(event.url).origin;
+    const urlObj = URL.parse(event.url);
+    if (urlObj) {
+      // Update target origin to the final committed URL.
+      this.targetOrigin_ = urlObj.origin;
+    } else {
+      console.error('Invalid URL in loadcommit:', event.url);
+    }
 
-    // Must reset the handshake before starting a new one. onLoadCommit_ can be
-    // called multiple times in a row for the same page load, so reattempt the
-    // handshake with each page load, since there is no way to distinguish
-    // which load has the receiving Javascript.
+    if (this.activeNavigationUrl_ === event.url) {
+      this.restartHandshake_();
+      this.activeNavigationUrl_ = null;
+    }
+  }
+
+  private onLoadAbort_(event: chrome.webviewTag.LoadAbortEvent) {
+    if (!event.isTopLevel) {
+      return;
+    }
+    // The navigation aborted, so reset the last thread frame load start event.
+    this.activeNavigationUrl_ = null;
+  }
+
+  private restartHandshake_() {
     this.resetHandshake_();
     this.startHandshake_();
   }
@@ -160,6 +229,40 @@ export class PostMessageHandler {
       return;
     }
 
+    // TODO(crbug.com/483737358): Sending an object instead of a proto is
+    // a temporary solution to unblock the prototype. Remove this method
+    // once the proto is implemented on the webview side.
+    if (event.data && event.data.type === 'input-plate-bounds-update') {
+      if (this.onInputPlateBoundsUpdate_) {
+        this.onInputPlateBoundsUpdate_(
+            event.data['bounds-rect'], event.data['occluders'],
+            event.data.viewportWidth, event.data.viewportHeight);
+      }
+      return;
+    }
+
+    // Input state update event (with correct capability for security):
+    if (event.data &&
+        (event.data.type === 'input-state-update' &&
+         event.data.requiresCapability === 'input state update')) {
+      if (this.onInputStateUpdate_) {
+        // Several fallbacks (kebab, snake case) for extraction.
+        // Use undefined check (if attribute does not exist) to
+        // preserve explicitly set null values.
+        const toolMode = event.data.toolMode !== undefined ?
+            event.data.toolMode :
+            (event.data['tool-mode'] !== undefined ? event.data['tool-mode'] :
+                                                     event.data.tool_mode);
+        const modelMode = event.data.modelMode !== undefined ?
+            event.data.modelMode :
+            (event.data['model-mode'] !== undefined ? event.data['model-mode'] :
+                                                      event.data.model_mode);
+
+        this.onInputStateUpdate_(toolMode, modelMode, event.data);
+      }
+      return;
+    }
+
     try {
       // No json messages are expected from the webview.
       JSON.parse(event.data);
@@ -173,6 +276,20 @@ export class PostMessageHandler {
         this.browserProxy_.handler.onWebviewMessage(messageBytes);
       }
     }
+  }
+
+  setInputPlateBoundsUpdateCallback(
+      callback:
+          (rect?: Rect, occluders?: Rect[], viewportWidth?: number,
+           viewportHeight?: number) => void) {
+    this.onInputPlateBoundsUpdate_ = callback;
+  }
+
+  setInputStateUpdateCallback(
+      callback:
+          (toolMode?: number, modelMode?: number,
+           data?: Record<string, unknown>) => void) {
+    this.onInputStateUpdate_ = callback;
   }
 
   completeHandshake() {

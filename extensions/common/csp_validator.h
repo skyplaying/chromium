@@ -17,8 +17,9 @@ namespace extensions {
 namespace csp_validator {
 
 // Checks whether the given `policy` is legal for use in the extension system.
-// This check just ensures that the policy doesn't contain any characters that
-// will cause problems when we transmit the policy in an HTTP header.
+// This ensures that the policy doesn't contain any characters that will cause
+// HTTP header injection or parser differentials with the runtime CSP parser
+// (e.g. control characters, commas, and non-printable ASCII).
 bool ContentSecurityPolicyIsLegal(const std::string& policy);
 
 // This specifies options for configuring which CSP directives are permitted in
@@ -139,6 +140,10 @@ bool DoesCSPDisallowRemoteCode(const std::string& extension_id,
                                const std::string& content_security_policy,
                                std::string_view manifest_key,
                                std::u16string* error);
+
+// Returns true if the extension with the given `extension_id` is allowed to use
+// chrome://resources in its Content Security Policy.
+bool IsExtensionAllowedToUseChromeResources(const std::string& extension_id);
 
 }  // namespace csp_validator
 

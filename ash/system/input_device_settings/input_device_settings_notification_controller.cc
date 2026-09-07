@@ -40,6 +40,7 @@
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/resource/resource_bundle.h"
 #include "ui/events/ash/keyboard_capability.h"
 #include "ui/events/ash/mojom/simulate_right_click_modifier.mojom-shared.h"
 #include "ui/events/ash/mojom/six_pack_shortcut_modifier.mojom-shared.h"
@@ -192,10 +193,6 @@ const char kSixPackKeyPageUpRewriteNotificationId[] =
     "page_up_six_pack_rewrite_blocked_by_setting";
 const char kSixPackKeyPageDownRewriteNotificationId[] =
     "page_down_six_pack_rewrite_blocked_by_setting";
-const char kInputDeviceSettingsMousePrefix[] =
-    "peripheral_customization_mouse_";
-const char kInputDeviceSettingsGraphicsTabletPrefix[] =
-    "peripheral_customization_graphics_tablet_";
 const char kWelcomeExperienceNotificationPrefix[] = "welcome_experience";
 const char kDelimiter[] = "_";
 
@@ -268,17 +265,11 @@ std::string GetWelcomeExperienceNotificationId(uint32_t id) {
 }
 
 std::string GetMouseNotificationID(uint32_t id) {
-  if (features::IsWelcomeExperienceEnabled()) {
-    return GetWelcomeExperienceNotificationId(id);
-  }
-  return kInputDeviceSettingsMousePrefix + base::NumberToString(id);
+  return GetWelcomeExperienceNotificationId(id);
 }
 
 std::string GetGraphicsTabletNotificationID(uint32_t id) {
-  if (features::IsWelcomeExperienceEnabled()) {
-    return GetWelcomeExperienceNotificationId(id);
-  }
-  return kInputDeviceSettingsGraphicsTabletPrefix + base::NumberToString(id);
+  return GetWelcomeExperienceNotificationId(id);
 }
 
 // We only display notifications for active user sessions (signed-in/guest with
@@ -655,9 +646,7 @@ void InputDeviceSettingsNotificationController::NotifyMouseFirstTimeConnected(
       Shell::Get()->session_controller()->GetActivePrefService();
   CHECK(prefs);
 
-  const char* pref_name = features::IsWelcomeExperienceEnabled()
-                              ? prefs::kWelcomeExperienceNotificationSeen
-                              : prefs::kPeripheralNotificationMiceSeen;
+  const char* pref_name = prefs::kWelcomeExperienceNotificationSeen;
   if (prefs->GetList(pref_name).contains(mouse.device_key)) {
     return;
   }
@@ -690,10 +679,7 @@ void InputDeviceSettingsNotificationController::
       Shell::Get()->session_controller()->GetActivePrefService();
   CHECK(prefs);
 
-  const char* pref_name =
-      features::IsWelcomeExperienceEnabled()
-          ? prefs::kWelcomeExperienceNotificationSeen
-          : prefs::kPeripheralNotificationGraphicsTabletsSeen;
+  const char* pref_name = prefs::kWelcomeExperienceNotificationSeen;
 
   auto seen_device_list = prefs->GetList(pref_name).Clone();
 

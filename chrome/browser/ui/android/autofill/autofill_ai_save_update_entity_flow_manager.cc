@@ -8,6 +8,8 @@
 #include <string>
 
 #include "base/check_deref.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/android/resource_mapper.h"
 #include "chrome/browser/autofill/android/autofill_ai_save_update_entity_prompt_controller.h"
@@ -15,11 +17,12 @@
 #include "chrome/browser/ui/android/autofill/autofill_ai_save_update_entity_prompt_view_android.h"
 #include "chrome/browser/ui/android/autofill/save_update_address_profile_prompt_view_android.h"
 #include "chrome/browser/ui/autofill/autofill_ai/autofill_ai_import_string_utils.h"
+#include "chrome/browser/ui/autofill/autofill_dialog_controller_impl.h"
 #include "chrome/browser/ui/autofill/autofill_message_controller.h"
 #include "chrome/browser/ui/autofill/autofill_message_model.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
-#include "components/autofill/core/browser/ui/autofill_resource_utils.h"
+#include "components/autofill/core/browser/ui/autofill_resource_util.h"
 #include "components/messages/android/message_enums.h"
 #include "components/resources/android/theme_resources.h"
 #include "components/signin/public/identity_manager/account_info.h"
@@ -47,7 +50,7 @@ std::u16string GetMessageDescription(content::WebContents* web_contents,
       l10n_util::GetStringUTF16(IDS_AUTOFILL_GOOGLE_WALLET_TITLE);
   return l10n_util::GetStringFUTF16(
       IDS_AUTOFILL_AI_SAVE_ENTITY_TO_WALLET_MESSAGE_SUBTITLE,
-      google_wallet_text, base::UTF8ToUTF16(account->email));
+      google_wallet_text, base::UTF8ToUTF16(account->GetEmail()));
 }
 
 int GetMessageIconResourceId(const EntityInstance& entity) {
@@ -69,6 +72,10 @@ int GetMessageIconResourceId(const EntityInstance& entity) {
       return IDR_ANDROID_AUTOFILL_VEHICLE;
     case EntityTypeName::kFlightReservation:
       NOTREACHED() << "Entity is read only and doesn't support save prompts.";
+    case EntityTypeName::kOrder:
+      NOTREACHED() << "Entity is read only and doesn't support save prompts.";
+    case EntityTypeName::kShipment:
+      NOTREACHED() << "Entity is read only and doesn't support save prompts.";
   }
   NOTREACHED();
 }
@@ -78,9 +85,11 @@ int GetMessageIconResourceId(const EntityInstance& entity) {
 AutofillAiSaveUpdateEntityFlowManager::AutofillAiSaveUpdateEntityFlowManager(
     content::WebContents* web_contents,
     AutofillMessageController* autofill_message_controller,
+    AutofillDialogController* autofill_dialog_controller,
     std::string app_locale)
     : web_contents_(web_contents),
       autofill_message_controller_(CHECK_DEREF(autofill_message_controller)),
+      autofill_dialog_controller_(CHECK_DEREF(autofill_dialog_controller)),
       app_locale_(std::move(app_locale)) {}
 
 AutofillAiSaveUpdateEntityFlowManager::
@@ -98,6 +107,20 @@ void AutofillAiSaveUpdateEntityFlowManager::OfferSave(
       CreateMessageModel(std::move(entity), std::move(old_entity)));
 }
 
+void AutofillAiSaveUpdateEntityFlowManager::ShowLocalSaveNotification() {
+  std::u16string google_wallet_text =
+      l10n_util::GetStringUTF16(IDS_AUTOFILL_GOOGLE_WALLET_TITLE);
+  autofill_dialog_controller_->Show(
+      l10n_util::GetStringUTF16(
+          IDS_AUTOFILL_AI_SAVE_OR_UPDATE_ENTITY_FAILED_WALLET_SAVE_DIALOG_TITLE),
+      l10n_util::GetStringFUTF16(
+          IDS_AUTOFILL_AI_SAVE_OR_UPDATE_ENTITY_FAILED_WALLET_SAVE_DIALOG_DESCRIPTION,
+          std::move(google_wallet_text)),
+      l10n_util::GetStringUTF16(
+          IDS_AUTOFILL_AI_SNACK_BAR_CONFIRMATION_BUTTON_LABEL),
+      base::DoNothing());
+}
+
 std::unique_ptr<AutofillMessageModel>
 AutofillAiSaveUpdateEntityFlowManager::CreateMessageModel(
     EntityInstance entity,
@@ -108,12 +131,16 @@ AutofillAiSaveUpdateEntityFlowManager::CreateMessageModel(
   auto message = std::make_unique<messages::MessageWrapper>(
       messages::MessageIdentifier::SAVE_UPDATE_ENTITY);
 
-  message->SetTitle(GetPromptTitle(entity.type().name(), !old_entity));
-  message->SetDescription(GetMessageDescription(
-      web_contents_,
-      entity.record_type() == EntityInstance::RecordType::kServerWallet));
+  const bool is_server_wallet =
+      entity.record_type() == EntityInstance::RecordType::kServerWallet;
+  message->SetTitle(GetPromptTitle(entity.type().name(), !old_entity,
+                                   /*is_banner_prompt=*/true,
+                                   is_server_wallet));
+  message->SetDescription(
+      GetMessageDescription(web_contents_, is_server_wallet));
   message->SetDescriptionMaxLines(kDescriptionMaxLines);
-  message->SetPrimaryButtonText(GetPrimaryButtonText(!old_entity));
+  message->SetPrimaryButtonText(
+      l10n_util::GetStringUTF16(GetPrimaryButtonTextId(!old_entity)));
   message->SetPrimaryButtonTextMaxLines(1);
   message->SetIconResourceId(
       ResourceMapper::MapToJavaDrawableId(GetMessageIconResourceId(entity)));
@@ -166,7 +193,7 @@ void AutofillAiSaveUpdateEntityFlowManager::OnMessageDismissed(
 void AutofillAiSaveUpdateEntityFlowManager::RunPromptClosedCallback(
     AutofillClient::AutofillAiBubbleResult result) {
   if (prompt_result_callback_) {
-    std::move(prompt_result_callback_).Run(result);
+    std::move(prompt_result_callback_).Run(result, std::nullopt, {});
   }
 }
 

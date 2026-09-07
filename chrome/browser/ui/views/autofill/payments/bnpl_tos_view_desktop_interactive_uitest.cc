@@ -2,27 +2,24 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/views/autofill/payments/bnpl_tos_view_desktop.h"
+
 #include "base/json/json_reader.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #include "chrome/browser/ui/autofill/payments/payments_view_factory.h"
+#include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/autofill/payments/bnpl_tos_dialog.h"
-#include "chrome/browser/ui/views/autofill/payments/bnpl_tos_view_desktop.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
 #include "components/autofill/content/browser/content_autofill_client.h"
 #include "components/autofill/core/browser/data_model/payments/bnpl_issuer.h"
-#include "components/autofill/core/browser/foundations/test_autofill_client.h"
 #include "components/autofill/core/browser/metrics/payments/bnpl_metrics.h"
 #include "components/autofill/core/browser/payments/bnpl_util.h"
-#include "components/autofill/core/browser/payments/constants.h"
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
-#include "components/autofill/core/browser/ui/payments/bnpl_tos_controller_impl.h"
 #include "components/autofill/core/browser/ui/payments/bnpl_ui_delegate.h"
-#include "components/signin/public/identity_manager/account_info.h"
 #include "content/public/test/browser_test.h"
-#include "ui/base/l10n/l10n_util.h"
 #include "ui/events/event_modifiers.h"
 #include "ui/views/interaction/view_focus_observer.h"
 #include "ui/views/window/dialog_client_view.h"
@@ -76,7 +73,7 @@ class BnplTosViewDesktopInteractiveUiTest : public InteractiveBrowserTest {
   }
 
   content::WebContents* web_contents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
   base::MockOnceClosure accept_callback_;
@@ -266,8 +263,8 @@ IN_PROC_BROWSER_TEST_F(BnplTosViewDesktopInteractiveUiTest,
 
                   // Close the active tab.
                   Do([this]() {
-                    browser()->tab_strip_model()->CloseWebContentsAt(
-                        browser()->tab_strip_model()->active_index(),
+                    browser()->GetTabStripModel()->CloseWebContentsAt(
+                        browser()->GetTabStripModel()->active_index(),
                         TabCloseTypes::CLOSE_USER_GESTURE);
                   }),
 

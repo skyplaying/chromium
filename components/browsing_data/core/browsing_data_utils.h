@@ -10,7 +10,6 @@
 
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "components/browsing_data/core/clear_browsing_data_tab.h"
 #include "components/browsing_data/core/counters/browsing_data_counter.h"
 #include "net/cookies/cookie_constants.h"
 
@@ -72,8 +71,7 @@ enum class TimePeriod {
 // A Java counterpart will be generated for this enum.
 // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.browsing_data
 //
-// Note: Make sure to keep in sync with DeleteBrowsingDataAction defined in
-//   chrome/browser/resources/settings/site_settings/metrics_browser_proxy.ts
+// LINT.IfChange(DeleteBrowsingDataAction)
 enum class DeleteBrowsingDataAction {
   kClearBrowsingDataDialog = 0,
   kClearBrowsingDataOnExit = 1,
@@ -86,6 +84,10 @@ enum class DeleteBrowsingDataAction {
   kRwsDeleteAllData = 8,
   kMaxValue = kRwsDeleteAllData,
 };
+// LINT.ThenChange(
+//   //chrome/browser/resources/settings/metrics_browser_proxy.ts:DeleteBrowsingDataAction,
+//   //tools/metrics/histograms/metadata/privacy/enums.xml:DeleteBrowsingDataAction
+// )
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
@@ -150,14 +152,12 @@ std::u16string GetCounterTextFromResult(
     const BrowsingDataCounter::Result* result);
 
 // Returns the preference that stores the time period.
-const char* GetTimePeriodPreferenceName(
-    ClearBrowsingDataTab clear_browsing_data_tab);
+const char* GetTimePeriodPreferenceName();
 
 // Copies the name of the deletion preference corresponding to the given
 // |data_type| to |out_pref|. Returns false if no such preference exists.
 bool GetDeletionPreferenceFromDataType(
     BrowsingDataType data_type,
-    ClearBrowsingDataTab clear_browsing_data_tab,
     std::string* out_pref);
 
 // Returns a BrowsingDataType if a type matching |pref_name| is found.

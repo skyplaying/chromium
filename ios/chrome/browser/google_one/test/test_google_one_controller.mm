@@ -21,6 +21,12 @@
                                  completion:nil];
 }
 
+- (void)launchWithViewController:(UIViewController*)baseViewController
+                             URL:(NSURL*)URL
+                      completion:(void (^)(NSError*))completion {
+  [self launchWithViewController:baseViewController completion:completion];
+}
+
 - (void)stop {
   [_viewController.presentingViewController dismissViewControllerAnimated:NO
                                                                completion:nil];
@@ -39,5 +45,13 @@
 - (id<GoogleOneController>)createControllerWithConfiguration:
     (GoogleOneConfiguration*)configuration {
   return [[TestGoogleOneController alloc] init];
+}
+
+- (BOOL)canHandleURL:(NSURL*)url {
+  return [[url host] isEqualToString:@"one.google.com"];
+}
+
+- (NSString*)emailFromURL:(NSURL*)url {
+  return nil;
 }
 @end

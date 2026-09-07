@@ -20,6 +20,7 @@ namespace android_webview {
 class AwMetricsServiceAccessor : public metrics::MetricsServiceAccessor {
  private:
   friend class AwBrowserMainParts;
+  friend class AwMetricsServiceClient;
   friend class AwSettings;
   friend class AwPrefetchManager;
   friend class AwMetricsTestBase;
@@ -29,6 +30,8 @@ class AwMetricsServiceAccessor : public metrics::MetricsServiceAccessor {
   FRIEND_TEST_ALL_PREFIXES(AwMetricsServiceAccessorTest,
                            RegisterExternalExperimentOrderingAgnostic);
 
+  // Must be called from the UI thread because
+  // `AwMetricsServiceClient::GetInstance()` is bound to the UI thread.
   static void RegisterExternalExperiment(
       const std::vector<int>& experiment_ids);
 

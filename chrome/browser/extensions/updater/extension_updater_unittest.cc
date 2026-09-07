@@ -40,7 +40,6 @@
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
-#include "chrome/browser/extensions/crx_installer.h"
 #include "chrome/browser/extensions/fake_crx_installer.h"
 #include "chrome/browser/extensions/mock_crx_installer.h"
 #include "chrome/browser/extensions/sync/extension_sync_data.h"
@@ -60,6 +59,7 @@
 #include "content/public/test/test_utils.h"
 #include "extensions/browser/blocklist_extension_prefs.h"
 #include "extensions/browser/blocklist_state.h"
+#include "extensions/browser/crx_installer.h"
 #include "extensions/browser/delayed_install_manager.h"
 #include "extensions/browser/disable_reason.h"
 #include "extensions/browser/extension_prefs.h"
@@ -82,12 +82,13 @@
 #include "extensions/common/extension_urls.h"
 #include "extensions/common/extensions_client.h"
 #include "extensions/common/manifest_constants.h"
-#include "extensions/common/manifest_url_handlers.h"
+#include "extensions/common/manifest_handlers/manifest_url_handlers.h"
 #include "extensions/common/mojom/manifest.mojom-shared.h"
 #include "extensions/common/verifier_formats.h"
 #include "net/base/backoff_entry.h"
 #include "net/base/load_flags.h"
 #include "net/http/http_request_headers.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
@@ -314,7 +315,7 @@ class TestDownloaderFactory {
     return identity_test_env_.get();
   }
 
-  const CoreAccountId& account_id() { return account_info_.account_id; }
+  const CoreAccountId& account_id() { return account_info_.GetAccountId(); }
 
   ExtensionDownloader::Factory GetDownloaderFactory() {
     return base::BindRepeating(
@@ -367,7 +368,7 @@ class TestDownloaderFactory {
 
 bool ShouldInstallExtensionsOnly(const Extension* extension,
                                  content::BrowserContext* context) {
-  return extension->GetType() == Manifest::TYPE_EXTENSION;
+  return extension->GetType() == Manifest::Type::kExtension;
 }
 
 bool ShouldInstallThemesOnly(const Extension* extension,
@@ -589,8 +590,8 @@ class ExtensionUpdaterTest : public testing::Test {
   }
 
   bool CanUseUpdateService(ExtensionUpdater* updater,
-                           const std::string& extension_id) {
-    return updater->CanUseUpdateService(extension_id);
+                           const Extension* extension) {
+    return updater->CanUseUpdateService(extension, nullptr);
   }
 
   // Adds a Result with the given data to results.
@@ -1680,12 +1681,14 @@ class ExtensionUpdaterTest : public testing::Test {
 
     // Add crx file entry in the cache.
     base::RunLoop put_extension_run_loop;
+    base::FilePath cached_crx_path;
     test_extension_cache.AllowCaching("test_app");
     test_extension_cache.PutExtension(
         kTestExtensionId, "" /* expected hash*/, filename, version,
         base::BindLambdaForTesting(
-            [&put_extension_run_loop](const base::FilePath& file_path,
-                                      bool file_ownership_passed) {
+            [&put_extension_run_loop, &cached_crx_path](
+                const base::FilePath& file_path, bool file_ownership_passed) {
+              cached_crx_path = file_path;
               put_extension_run_loop.Quit();
             }));
     put_extension_run_loop.Run();
@@ -1743,7 +1746,7 @@ class ExtensionUpdaterTest : public testing::Test {
     LoadErrorReporter::Init(false);
 
     updater.SetExtensionCacheForTesting(&test_extension_cache);
-    CRXFileInfo crx_info(filename, GetTestVerifierFormat());
+    CRXFileInfo crx_info(cached_crx_path, GetTestVerifierFormat());
     crx_info.extension_id = kTestExtensionId;
     crx_info.expected_hash = hash;
 
@@ -2598,7 +2601,7 @@ TEST_F(ExtensionUpdaterTest, TestUpdatingDisabledExtensions) {
   updater.CheckNow(ExtensionUpdater::CheckParams());
 }
 
-// crbug.com/1098540: Tests that removely disabled extensions that are part of
+// crbug.com/40137079: Tests that removely disabled extensions that are part of
 // the blocklisted extensions are still receive updates.
 TEST_F(ExtensionUpdaterTest, TestUpdatingRemotelyDisabledExtensions) {
   ExtensionDownloaderTestHelper helper;
@@ -2634,7 +2637,7 @@ TEST_F(ExtensionUpdaterTest, TestUpdatingRemotelyDisabledExtensions) {
   EXPECT_CALL(update_service,
               StartUpdateCheck(
                   ::testing::Field(&ExtensionUpdateCheckParams::update_info,
-                                   ::testing::SizeIs(2)),
+                                   ::testing::SizeIs(3)),
                   _, _));
 
   SetExtensions(enabled_extensions, ExtensionList(), blocklisted_extensions);
@@ -2842,6 +2845,47 @@ TEST_F(ExtensionUpdaterTest, TestCheckSoon) {
   EXPECT_FALSE(updater.WillCheckSoon());
 }
 
+// Verifies that HasFullCheckInProgress() distinguishes full update checks from
+// targeted single-extension update checks, remaining false during targeted
+// checks and transitioning to true during full checks.
+TEST_F(ExtensionUpdaterTest, TestHasFullCheckInProgress) {
+  ExtensionDownloaderTestHelper helper;
+  TestDownloaderFactory factory(helper.url_loader_factory());
+  TestCrxInstallerFactory crx_installer_factory;
+  ExtensionList tmp;
+  CreateTestExtensions(2, 2, &tmp, nullptr, ManifestLocation::kInternal);
+  SetExtensions(tmp, ExtensionList());
+
+  ASSERT_EQ(2u, tmp.size());
+  ExtensionId id1 = tmp[0]->id();
+  ExtensionId id2 = tmp[1]->id();
+  ExtensionRegistry* registry = ExtensionRegistry::Get(profile());
+  ASSERT_TRUE(registry->enabled_extensions().GetByID(id1));
+  ASSERT_TRUE(registry->enabled_extensions().GetByID(id2));
+
+  ExtensionUpdater updater(profile());
+  updater.InitAndEnable(extension_prefs(), pref_service(), kUpdateFrequency,
+                        nullptr, factory.GetDownloaderFactory());
+  updater.set_crx_installer_factory_for_test(&crx_installer_factory);
+
+  updater.Start();
+  EXPECT_FALSE(updater.HasFullCheckInProgress());
+
+  // A targeted check must not report as a full check.
+  ExtensionUpdater::CheckParams params;
+  params.ids = {id1};
+  updater.CheckNow(std::move(params));
+  EXPECT_FALSE(updater.HasFullCheckInProgress());
+
+  // A parameterless check covers all extensions and must report as a full
+  // check.
+  updater.CheckNow(ExtensionUpdater::CheckParams());
+  EXPECT_TRUE(updater.HasFullCheckInProgress());
+
+  updater.Stop();
+  EXPECT_FALSE(updater.HasFullCheckInProgress());
+}
+
 TEST_F(ExtensionUpdaterTest, TestUninstallWhileUpdateCheck) {
   ExtensionDownloaderTestHelper helper;
   TestDownloaderFactory factory(helper.url_loader_factory());
@@ -3031,32 +3075,26 @@ class UpdateServiceCanUpdateFeatureEnabledNonDefaultUpdateUrl
 
 TEST_F(CanUseUpdateServiceTest, TestDefaults) {
   // Update service can only update webstore extensions when enabled.
-  EXPECT_TRUE(CanUseUpdateService(updater(), store_extension_->id()));
+  EXPECT_TRUE(CanUseUpdateService(updater(), store_extension_.get()));
   // ... and extensions with empty update URL.
-  EXPECT_TRUE(CanUseUpdateService(updater(), emptyurl_extension_->id()));
+  EXPECT_TRUE(CanUseUpdateService(updater(), emptyurl_extension_.get()));
   // It can't update off-store extensions.
-  EXPECT_FALSE(CanUseUpdateService(updater(), offstore_extension_->id()));
-  // ... or extensions with empty update URL converted from user script.
-  EXPECT_FALSE(CanUseUpdateService(updater(), userscript_extension_->id()));
+  EXPECT_FALSE(CanUseUpdateService(updater(), offstore_extension_.get()));
   // ... or extensions that don't exist.
-  EXPECT_FALSE(CanUseUpdateService(updater(), std::string(32, 'a')));
-  // ... or extensions with empty ID (is it possible?).
-  EXPECT_FALSE(CanUseUpdateService(updater(), ""));
+  EXPECT_FALSE(CanUseUpdateService(updater(), nullptr));
 }
 
 TEST_F(UpdateServiceCanUpdateFeatureEnabledNonDefaultUpdateUrl,
        CanUseUpdateServiceFeatureEnabledNonDefaultUpdateUrl) {
   // Update service can update extensions when the default webstore update url
   // is changed.
-  EXPECT_FALSE(CanUseUpdateService(updater(), store_extension_->id()));
-  EXPECT_TRUE(CanUseUpdateService(updater(), emptyurl_extension_->id()));
-  EXPECT_FALSE(CanUseUpdateService(updater(), offstore_extension_->id()));
-  EXPECT_FALSE(CanUseUpdateService(updater(), userscript_extension_->id()));
-  EXPECT_FALSE(CanUseUpdateService(updater(), std::string(32, 'a')));
-  EXPECT_FALSE(CanUseUpdateService(updater(), ""));
+  EXPECT_FALSE(CanUseUpdateService(updater(), store_extension_.get()));
+  EXPECT_TRUE(CanUseUpdateService(updater(), emptyurl_extension_.get()));
+  EXPECT_FALSE(CanUseUpdateService(updater(), offstore_extension_.get()));
+  EXPECT_FALSE(CanUseUpdateService(updater(), nullptr));
 }
 
-// TODO(asargent) - (http://crbug.com/12780) add tests for:
+// TODO(asargent) - (http://crbug.com/40809955) add tests for:
 // -prodversionmin (shouldn't update if browser version too old)
 // -manifests & updates arriving out of order / interleaved
 // -malformed update url (empty, file://, has query, has a # fragment, etc.)

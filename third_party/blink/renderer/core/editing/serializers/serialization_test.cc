@@ -6,11 +6,15 @@
 
 #include "testing/gmock/include/gmock/gmock-matchers.h"
 #include "third_party/blink/renderer/core/css/properties/longhands.h"
+#include "third_party/blink/renderer/core/dom/document_fragment.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/editing/position.h"
 #include "third_party/blink/renderer/core/editing/testing/editing_test_base.h"
+#include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/mathml_names.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 #include "third_party/blink/renderer/platform/wtf/text/math_transform.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
@@ -23,13 +27,13 @@ using ::testing::MatchesRegex;
 
 class SerializationTest : public EditingTestBase {
  protected:
-  std::string SerailizeToHTMLText(const Node& node) {
+  std::string SerializeToHtmlText(const Node& node) {
     // We use same |CreateMarkupOptions| used in
     // |FrameSelection::SelectedHTMLForClipboard()|
     return CreateMarkup(Position::BeforeNode(node), Position::AfterNode(node),
                         CreateMarkupOptions::Builder()
                             .SetShouldAnnotateForInterchange(true)
-                            .SetShouldResolveURLs(kResolveNonLocalURLs)
+                            .SetShouldResolveUrls(ResolveUrls::kNonLocal)
                             .Build())
         .Utf8();
   }
@@ -39,6 +43,11 @@ class SerializationTest : public EditingTestBase {
     StringBuilder builder;
     builder.Append(math_char);
     return builder.ToString();
+  }
+
+  String StrictlyProcessedMarkup(const String& html) {
+    return CreateStrictlyProcessedMarkupWithContext(GetDocument(), html, 0,
+                                                    html.length(), KURL());
   }
 
   Element* GetFirstChildElementNamed(const Node& parent,
@@ -145,7 +154,7 @@ TEST_F(SerializationTest, Link) {
               Color::FromRGB(1, 1, 1))
       << "should not be :visited/:link color";
   EXPECT_THAT(
-      SerailizeToHTMLText(a1),
+      SerializeToHtmlText(a1),
       MatchesRegex(
           R"re(<a id="a1" style=".*;? ?color: rgb\(1, 1, 1\);.*">text</a>)re"));
 
@@ -158,7 +167,7 @@ TEST_F(SerializationTest, Link) {
               Color::FromRGB(3, 3, 3))
       << "should be :visited color";
   EXPECT_THAT(
-      SerailizeToHTMLText(a2),
+      SerializeToHtmlText(a2),
       MatchesRegex(
           R"re(<a id="a2" href="" style=".*;? ?color: rgb\(2, 2, 2\);.*">visited</a>)re"));
 
@@ -168,7 +177,7 @@ TEST_F(SerializationTest, Link) {
               Color::FromRGB(2, 2, 2))
       << "should be :link color";
   EXPECT_THAT(
-      SerailizeToHTMLText(a3),
+      SerializeToHtmlText(a3),
       MatchesRegex(
           R"re(<a id="a3" href="https://1.1.1.1/" style=".*;? ?color: rgb\(2, 2, 2\);.*">unvisited</a>)re"));
 }
@@ -189,6 +198,59 @@ TEST_F(SerializationTest, SVGForeignObjectCrash) {
   // This is a crash test. We don't verify the content of the strictly processed
   // markup as it's too verbose and not interesting.
   EXPECT_TRUE(strictly_processed_fragment);
+}
+
+TEST_F(SerializationTest, StrictlyProcessedMarkupDropsScriptsAndPlugins) {
+  const String markup =
+      "<div>safe"
+      "<script>alert(1)</script>"
+      "<svg><script>alert(2)</script><circle></circle></svg>"
+      "<object data='plugin'></object>"
+      "<embed src='plugin'>"
+      "<applet code='plugin'></applet>"
+      "</div>";
+
+  EXPECT_EQ("<div>safe<svg><circle></circle></svg></div>",
+            StrictlyProcessedMarkup(markup));
+}
+
+TEST_F(SerializationTest, StrictlyProcessedMarkupStripsScriptingAttributes) {
+  const String markup =
+      "<a href='javascript:alert(1)' onclick='alert(2)' title='safe'>link</a>"
+      "<img src='x' onerror='alert(3)'>"
+      "<iframe srcdoc='<script>alert(4)</script>'></iframe>"
+      "<svg><a href='javascript:alert(5)'><text onclick='alert(6)'>x</text>"
+      "</a></svg>";
+
+  EXPECT_EQ(
+      "<a title=\"safe\">link</a><img src=\"x\"><iframe></iframe>"
+      "<svg><a><text>x</text></a></svg>",
+      StrictlyProcessedMarkup(markup));
+}
+
+TEST_F(SerializationTest,
+       StrictlyProcessedFragmentDoesNotResolveToJavaScriptURL) {
+  const String base_url = "javascript:alert(1)//";
+  const String markup =
+      "<a href='#x'>link</a>"
+      "<img src='image.png'>";
+
+  DocumentFragment* fragment =
+      CreateStrictlyProcessedFragmentFromMarkupWithContext(
+          GetDocument(), markup, 0, markup.length(), base_url);
+  ASSERT_TRUE(fragment);
+  const auto* anchor = To<Element>(fragment->firstChild());
+  ASSERT_TRUE(anchor);
+  EXPECT_FALSE(
+      ProtocolIsJavaScript(anchor->getAttribute(html_names::kHrefAttr)));
+  const auto* image = To<Element>(anchor->nextSibling());
+  ASSERT_TRUE(image);
+  EXPECT_FALSE(ProtocolIsJavaScript(image->getAttribute(html_names::kSrcAttr)));
+
+  const String final_markup = CreateStrictlyProcessedMarkupWithContext(
+      GetDocument(), markup, 0, markup.length(), base_url, kIncludeNode,
+      ResolveUrls::kAll);
+  EXPECT_EQ(kNotFound, final_markup.find("javascript:")) << final_markup;
 }
 
 // Regression test for https://crbug.com/40840595
@@ -217,7 +279,7 @@ TEST_F(SerializationTest, MathML_EntireMathElement) {
       "<mrow><mi>x</mi><mo>+</mo><mi>y</mi></mrow>"
       "</math>");
   const auto& original_math_element = *GetDocument().body()->firstChild();
-  std::string serialized_markup = SerailizeToHTMLText(original_math_element);
+  std::string serialized_markup = SerializeToHtmlText(original_math_element);
 
   SetBodyContent(serialized_markup);
 
@@ -328,7 +390,7 @@ TEST_F(SerializationTest, MathML_FractionWithSuperscript) {
       "</mfrac>"
       "</math>");
   const auto& math_root = *GetDocument().body()->firstChild();
-  std::string serialized_markup = SerailizeToHTMLText(math_root);
+  std::string serialized_markup = SerializeToHtmlText(math_root);
   SetBodyContent(serialized_markup);
 
   const auto& parsed_math = *GetDocument().body()->firstChild();
@@ -420,6 +482,120 @@ TEST_F(SerializationTest, MathML_TableWithTextElements) {
   ASSERT_TRUE(ms_element);
   EXPECT_EQ(ms_element->nodeName(), "ms");
   EXPECT_EQ(ms_element->textContent().SimplifyWhiteSpace(), "result");
+}
+
+TEST_F(SerializationTest, ReplaceChildrenWithFragment) {
+  for (bool feature_enabled : {true, false}) {
+    ScopedReplaceChildrenWithFragmentFastPathForTest scoped_feature(
+        feature_enabled);
+
+    // Replace children of an empty container with a non-empty fragment.
+    {
+      Element* container = GetDocument().CreateRawElement(html_names::kDivTag);
+      ASSERT_FALSE(container->hasChildren());
+
+      auto* fragment = DocumentFragment::Create(GetDocument());
+      Element* child1 = GetDocument().CreateRawElement(html_names::kSpanTag);
+      Element* child2 = GetDocument().CreateRawElement(html_names::kPTag);
+      fragment->AppendChild(child1);
+      fragment->AppendChild(child2);
+
+      DummyExceptionStateForTesting exception_state;
+      ReplaceChildrenWithFragment(container, fragment, exception_state);
+      EXPECT_FALSE(exception_state.HadException());
+      EXPECT_TRUE(container->hasChildren());
+      EXPECT_EQ(container->firstChild(), child1);
+      EXPECT_EQ(container->lastChild(), child2);
+      EXPECT_EQ(container->firstChild()->nextSibling(), child2);
+    }
+
+    // Replace children of an empty container with an empty fragment.
+    {
+      Element* container = GetDocument().CreateRawElement(html_names::kDivTag);
+      ASSERT_FALSE(container->hasChildren());
+      auto* empty_fragment = DocumentFragment::Create(GetDocument());
+
+      DummyExceptionStateForTesting exception_state;
+      ReplaceChildrenWithFragment(container, empty_fragment, exception_state);
+      EXPECT_FALSE(exception_state.HadException());
+      EXPECT_FALSE(container->hasChildren());
+    }
+
+    // Replace children of a container with a single child (HasOneChild)
+    // with a non-empty fragment.
+    {
+      Element* container = GetDocument().CreateRawElement(html_names::kDivTag);
+      container->AppendChild(
+          GetDocument().CreateRawElement(html_names::kSpanTag));
+      ASSERT_TRUE(container->HasOneChild());
+
+      auto* fragment = DocumentFragment::Create(GetDocument());
+      Element* child = GetDocument().CreateRawElement(html_names::kPTag);
+      fragment->AppendChild(child);
+
+      DummyExceptionStateForTesting exception_state;
+      ReplaceChildrenWithFragment(container, fragment, exception_state);
+      EXPECT_FALSE(exception_state.HadException());
+      EXPECT_TRUE(container->hasChildren());
+      EXPECT_EQ(container->firstChild(), child);
+    }
+
+    // Replace children of a container with a single child with an empty
+    // fragment.
+    {
+      Element* container = GetDocument().CreateRawElement(html_names::kDivTag);
+      container->AppendChild(
+          GetDocument().CreateRawElement(html_names::kSpanTag));
+      ASSERT_TRUE(container->HasOneChild());
+
+      auto* empty_fragment = DocumentFragment::Create(GetDocument());
+
+      DummyExceptionStateForTesting exception_state;
+      ReplaceChildrenWithFragment(container, empty_fragment, exception_state);
+      EXPECT_FALSE(exception_state.HadException());
+      EXPECT_FALSE(container->hasChildren());
+    }
+
+    // Replace children of a container with multiple children using a
+    // non-empty fragment.
+    {
+      Element* container = GetDocument().CreateRawElement(html_names::kDivTag);
+      container->AppendChild(
+          GetDocument().CreateRawElement(html_names::kSpanTag));
+      container->AppendChild(
+          GetDocument().CreateRawElement(html_names::kSpanTag));
+      ASSERT_TRUE(container->hasChildren());
+
+      auto* fragment = DocumentFragment::Create(GetDocument());
+      Element* child = GetDocument().CreateRawElement(html_names::kPTag);
+      fragment->AppendChild(child);
+
+      DummyExceptionStateForTesting exception_state;
+      ReplaceChildrenWithFragment(container, fragment, exception_state);
+      EXPECT_FALSE(exception_state.HadException());
+      EXPECT_TRUE(container->hasChildren());
+      EXPECT_EQ(container->firstChild(), child);
+      EXPECT_EQ(container->lastChild(), child);
+    }
+
+    // Replace children of a container with multiple children using an empty
+    // fragment.
+    {
+      Element* container = GetDocument().CreateRawElement(html_names::kDivTag);
+      container->AppendChild(
+          GetDocument().CreateRawElement(html_names::kSpanTag));
+      container->AppendChild(
+          GetDocument().CreateRawElement(html_names::kSpanTag));
+      ASSERT_TRUE(container->hasChildren());
+
+      auto* empty_fragment = DocumentFragment::Create(GetDocument());
+
+      DummyExceptionStateForTesting exception_state;
+      ReplaceChildrenWithFragment(container, empty_fragment, exception_state);
+      EXPECT_FALSE(exception_state.HadException());
+      EXPECT_FALSE(container->hasChildren());
+    }
+  }
 }
 
 }  // namespace blink

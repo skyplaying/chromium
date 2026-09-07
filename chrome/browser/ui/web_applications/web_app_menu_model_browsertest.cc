@@ -8,9 +8,11 @@
 #include <vector>
 
 #include "ash/constants/web_app_id_constants.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
+#include "chrome/browser/web_applications/model/pending_migration_info.h"
 #include "chrome/browser/web_applications/test/prevent_close_test_base.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/web_app_icon_manager.h"
@@ -35,7 +37,7 @@ namespace web_app {
 
 class TestWebAppMenuModelCR2023 : public WebAppBrowserTestBase {
  public:
-  TestWebAppMenuModelCR2023() : WebAppBrowserTestBase({}, {}) {}
+  TestWebAppMenuModelCR2023() = default;
 
   TestWebAppMenuModelCR2023(const TestWebAppMenuModelCR2023&) = delete;
   TestWebAppMenuModelCR2023& operator=(const TestWebAppMenuModelCR2023&) =
@@ -47,7 +49,7 @@ class TestWebAppMenuModelCR2023 : public WebAppBrowserTestBase {
 IN_PROC_BROWSER_TEST_F(TestWebAppMenuModelCR2023, ModelHasIcons) {
   const GURL app_url = GetInstallableAppURL();
   const webapps::AppId app_id = InstallPWA(app_url);
-  Browser* const browser = LaunchWebAppBrowser(app_id);
+  BrowserWindowInterface* const browser = LaunchWebAppBrowser(app_id);
 
   const auto check_for_icons = [](std::u16string menu_name,
                                   ui::MenuModel* model) -> void {
@@ -90,7 +92,7 @@ IN_PROC_BROWSER_TEST_F(TestWebAppMenuModelCR2023, ModelHasIcons) {
 IN_PROC_BROWSER_TEST_F(TestWebAppMenuModelCR2023, CommandStatusTest) {
   const GURL app_url = GetInstallableAppURL();
   const webapps::AppId app_id = InstallPWA(app_url);
-  Browser* const browser = LaunchWebAppBrowser(app_id);
+  BrowserWindowInterface* const browser = LaunchWebAppBrowser(app_id);
 
   {
     WebAppMenuModel model(nullptr, browser);
@@ -106,15 +108,14 @@ IN_PROC_BROWSER_TEST_F(TestWebAppMenuModelCR2023, CommandStatusTest) {
 
 class WebAppMenuModelBrowserTest : public WebAppBrowserTestBase {
  public:
-  WebAppMenuModelBrowserTest()
-      : WebAppBrowserTestBase({features::kWebAppPredictableAppUpdating}, {}) {}
+  WebAppMenuModelBrowserTest() = default;
   ~WebAppMenuModelBrowserTest() override = default;
 };
 
 IN_PROC_BROWSER_TEST_F(WebAppMenuModelBrowserTest, HasPendingUpdate) {
   const GURL app_url = GetInstallableAppURL();
-  const webapps::AppId app_id = InstallPWA(app_url);
-  Browser* const browser = LaunchWebAppBrowser(app_id);
+  const webapps::AppId app_id = InstallWebAppFromPage(browser(), app_url);
+  BrowserWindowInterface* const browser = LaunchWebAppBrowser(app_id);
 
   {
     WebAppMenuModel app_menu_model(nullptr, browser);
@@ -177,8 +178,8 @@ class WebAppMenuModelMigrationBrowserTest : public WebAppBrowserTestBase {
 IN_PROC_BROWSER_TEST_F(WebAppMenuModelMigrationBrowserTest,
                        HasPendingMigration) {
   const GURL app_url = GetInstallableAppURL();
-  const webapps::AppId app_id = InstallPWA(app_url);
-  Browser* const browser = LaunchWebAppBrowser(app_id);
+  const webapps::AppId app_id = InstallWebAppFromPage(browser(), app_url);
+  BrowserWindowInterface* const browser = LaunchWebAppBrowser(app_id);
 
   {
     WebAppMenuModel app_menu_model(nullptr, browser);
@@ -195,10 +196,9 @@ IN_PROC_BROWSER_TEST_F(WebAppMenuModelMigrationBrowserTest,
   {
     web_app::ScopedRegistryUpdate update =
         provider().sync_bridge_unsafe().BeginUpdate();
-    web_app::proto::PendingMigrationInfo migration_info;
-    migration_info.set_manifest_id("https://migrated-app.com/");
-    migration_info.set_behavior(
-        web_app::proto::WEB_APP_MIGRATION_BEHAVIOR_SUGGEST);
+    web_app::PendingMigrationInfo migration_info(
+        webapps::ManifestId(GURL("https://migrated-app.com/")),
+        web_app::MigrationBehavior::kSuggest);
     update->UpdateApp(app_id)->SetPendingMigrationInfo(std::move(migration_info));
   }
 
@@ -265,7 +265,7 @@ IN_PROC_BROWSER_TEST_F(WebAppModelMenuPreventCloseTest,
                                    kPreventCloseEnabledForCalculator,
                                    kCalculatorForceInstalled);
 
-  Browser* const browser =
+  BrowserWindowInterface* const browser =
       LaunchPWA(ash::kCalculatorAppId, /*launch_in_window=*/true);
   ASSERT_TRUE(browser);
 
@@ -282,7 +282,7 @@ IN_PROC_BROWSER_TEST_F(WebAppModelMenuPreventCloseTest,
     EXPECT_EQ(!kShouldPreventClose, found);
   }
 
-  test::UninstallAllWebApps(browser->profile());
+  test::UninstallAllWebApps(browser->GetProfile());
 }
 
 }  // namespace web_app

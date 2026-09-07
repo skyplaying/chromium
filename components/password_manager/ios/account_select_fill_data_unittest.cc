@@ -2,13 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO: crbug.com/352295124 - Remove this and spanify to fix the errors.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "components/password_manager/ios/account_select_fill_data.h"
 
+#include "base/compiler_specific.h"
 #include "base/feature_list.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
@@ -99,11 +95,11 @@ class AccountSelectFillDataTest : public PlatformTest {
  public:
   AccountSelectFillDataTest() {
     for (size_t i = 0; i < std::size(form_data_); ++i) {
-      SetPasswordFormFillData(
+      UNSAFE_TODO(SetPasswordFormFillData(
           kUrl, kFormNames[i], kFormUniqueIDs[i], kUsernameElements[i],
           kUsernameUniqueIDs[i], kUsernames[i], kPasswordElements[i],
           kPasswordUniqueIDs[i], kPasswords[i], kAdditionalUsernames[i],
-          kAdditionalPasswords[i], &form_data_[i]);
+          kAdditionalPasswords[i], &form_data_[i]));
     }
   }
 
@@ -542,7 +538,7 @@ TEST_P(AccountSelectFillDataFieldTypeTest, GetFillData_WhenNotStateless) {
 
   const bool is_password_field = IsPasswordField();
   for (size_t form_i = 0; form_i < std::size(form_data_); ++form_i) {
-    const auto& form_data = form_data_[form_i];
+    const auto& form_data = UNSAFE_TODO(form_data_[form_i]);
     // Suggestions should be shown on any password field on the form. So in
     // case of clicking on a password field it is taken an id different from
     // existing field ids.
@@ -565,10 +561,11 @@ TEST_P(AccountSelectFillDataFieldTypeTest, GetFillData_WhenNotStateless) {
         FieldsAre(/*origin=*/form_data.url,
                   /*form_id=*/form_data.form_renderer_id,
                   /*username_element_id=*/
-                  FieldRendererId(kUsernameUniqueIDs[form_i]),
+                  FieldRendererId(UNSAFE_TODO(kUsernameUniqueIDs[form_i])),
                   /*username_value=*/base::ASCIIToUTF16(kUsernames[1]),
                   /*password_element_id=*/password_field_id,
-                  /*password_value=*/base::ASCIIToUTF16(kPasswords[1])));
+                  /*password_value=*/base::ASCIIToUTF16(kPasswords[1]),
+                  /*realm=*/std::string()));
   }
 }
 
@@ -583,7 +580,7 @@ TEST_P(AccountSelectFillDataFieldTypeTest, GetFillData) {
 
   const bool is_password_field = IsPasswordField();
   for (size_t form_i = 0; form_i < std::size(form_data_); ++form_i) {
-    const auto& form_data = form_data_[form_i];
+    const auto& form_data = UNSAFE_TODO(form_data_[form_i]);
     // Suggestions should be shown on any password field on the form. So in
     // case of clicking on a password field it is taken an id different from
     // existing field ids.
@@ -605,10 +602,11 @@ TEST_P(AccountSelectFillDataFieldTypeTest, GetFillData) {
         FieldsAre(/*origin=*/form_data.url,
                   /*form_id=*/form_data.form_renderer_id,
                   /*username_element_id=*/
-                  FieldRendererId(kUsernameUniqueIDs[form_i]),
+                  FieldRendererId(UNSAFE_TODO(kUsernameUniqueIDs[form_i])),
                   /*username_value=*/base::ASCIIToUTF16(kUsernames[1]),
                   /*password_element_id=*/password_field_id,
-                  /*password_value=*/base::ASCIIToUTF16(kPasswords[1])));
+                  /*password_value=*/base::ASCIIToUTF16(kPasswords[1]),
+                  /*realm=*/std::string()));
   }
 }
 
@@ -683,7 +681,8 @@ TEST_P(AccountSelectFillDataFieldAndCredentialTypeTest,
                   /*password_element_id=*/password_field_id,
                   /*password_value=*/
                   is_backup_credential ? kBackupPassword
-                                       : base::ASCIIToUTF16(kPasswords[0])));
+                                       : base::ASCIIToUTF16(kPasswords[0]),
+                  /*realm=*/std::string()));
 }
 
 INSTANTIATE_TEST_SUITE_P(All,

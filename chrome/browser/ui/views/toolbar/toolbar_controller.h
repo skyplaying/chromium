@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_TOOLBAR_TOOLBAR_CONTROLLER_H_
 #define CHROME_BROWSER_UI_VIEWS_TOOLBAR_TOOLBAR_CONTROLLER_H_
 
+#include <memory>
 #include <variant>
 #include <vector>
 
@@ -13,6 +14,7 @@
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.h"
 #include "chrome/browser/ui/views/toolbar/overflow_button.h"
+#include "chrome/browser/ui/views/toolbar/overflow_menu.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_button.h"
 #include "ui/actions/action_id.h"
 #include "ui/views/controls/menu/menu_item_view.h"
@@ -20,20 +22,17 @@
 #include "ui/views/layout/proposed_layout.h"
 #include "ui/views/view.h"
 
-class Browser;
-
 // Manages toolbar elements' visibility using flex rules. This also owns the
-// overflow menu and the logic to generate the menu model. It also listens to
-// action item changes and updates the menu as required.
-class ToolbarController : public views::MenuDelegate,
-                          public ui::SimpleMenuModel::Delegate,
-                          public PinnedToolbarActionsModel::Observer {
+// overflow menu and the logic to generate the menu model.
+class ToolbarController : public OverflowMenu::Delegate {
  public:
-  // Manages action-based pinned toolbar elements.
-  class PinnedActionsDelegate {
-   public:
-    virtual actions::ActionItem* GetActionItemFor(actions::ActionId id) = 0;
+  using ElementIdInfo = OverflowMenu::ElementIdInfo;
+  using ResponsiveElementInfo = OverflowMenu::ResponsiveElementInfo;
+  using OverflowableElement = OverflowMenu::OverflowableElement;
 
+  // Manages action-based pinned toolbar elements.
+  class PinnedActionsDelegate : public OverflowMenu::PinnedActionsInfo {
+   public:
     // Returns true if the corresponding element is hidden.
     virtual bool IsOverflowed(actions::ActionId id) = 0;
 
@@ -42,86 +41,46 @@ class ToolbarController : public views::MenuDelegate,
     // Return true if any buttons should overflow given available size.
     virtual bool ShouldAnyButtonsOverflow(gfx::Size available_size) const = 0;
 
-    // Returns the ordered list of pinned ActionIds.
-    virtual const std::vector<actions::ActionId>& PinnedActionIds() const = 0;
+   protected:
+    ~PinnedActionsDelegate() override = default;
+  };
+
+  // A delegate to handle overflow detection when using the WebUI toolbar, which
+  // uses a single view to show multiple buttons, so needs its own logic.
+  class WebUIToolbarControllerDelegate {
+   public:
+    WebUIToolbarControllerDelegate(WebUIToolbarControllerDelegate&&) = delete;
+
+    // Returns true if the specified button would be hidden due to overflow,
+    // given a ProposedLayout. If `proposed_layout` is null, considers the
+    // current layout instead. May be called even if `identifier` is not being
+    // handled by the WebUIToolbarControllerDelegate.
+    virtual bool IsOverflowed(
+        ui::ElementIdentifier identifier,
+        const views::ProposedLayout* proposed_layout) const = 0;
+
+    // Returns true if the specified button is enabled. Will not be called if
+    // `identifier` is not being handled by the WebUIToolbarControllerDelegate.
+    virtual bool IsEnabled(ui::ElementIdentifier identifier) const = 0;
+
+    // Simulates a click on the specified element. Always simulates a left
+    // click, without modifiers. Will not be called if `identifier` is
+    // not being handled by the WebUIToolbarControllerDelegate.
+    virtual void OverflowButtonClicked(ui::ElementIdentifier identifier) = 0;
 
    protected:
-    virtual ~PinnedActionsDelegate() = default;
+    WebUIToolbarControllerDelegate() = default;
+    ~WebUIToolbarControllerDelegate() = default;
   };
 
-  // Data structure to store information specifically used to support
-  // ui::ElementIdentifier as element reference.
-  struct ElementIdInfo {
-    explicit ElementIdInfo(ui::ElementIdentifier overflow_identifier,
-                           int menu_text_id,
-                           raw_ptr<const gfx::VectorIcon> menu_icon,
-                           ui::ElementIdentifier activate_identifier,
-                           std::optional<ui::ElementIdentifier>
-                               observed_identifier = std::nullopt);
-
-    // The identifier of toolbar element that potentially overflows.
-    ui::ElementIdentifier overflow_identifier;
-
-    // Menu text when the element is overflow to the overflow menu. For
-    // ActionId-based elements this value is supplied when constructing action
-    // items.
-    int menu_text_id;
-
-    // Menu item icon. nullptr if this menu item has no icon.
-    raw_ptr<const gfx::VectorIcon> menu_icon = nullptr;
-
-    // The toolbar button to be activated with menu text pressed. This is not
-    // necessarily the same as the element that overflows. E.g. when the
-    // overflowed element is kToolbarExtensionsContainerElementId the
-    // `activate_identifier` should be kExtensionsMenuButtonElementId.
-    ui::ElementIdentifier activate_identifier;
-
-    // Pop out button when `observed_identifier` is shown. End pop out when it's
-    // hidden.
-    std::optional<ui::ElementIdentifier> observed_identifier;
-  };
-
-  // Data structure to store information of responsive elements. Supports both
-  // ui::ElementIdentifier and ActionId as element reference.
-  struct ResponsiveElementInfo {
-    // Overflow menu structure:
-    // -------------------
-    // | Forward         |
-    // |-----------------|
-    // | Home            | -> section end
-    // |=================| -> potential separator
-    // | Reading list    |
-    // |-----------------|
-    // | Bookmarks       | -> section end
-    // |=================| -> potential separator
-    // | Labs            |
-    // |-----------------|
-    // | Cast            |
-    // |-----------------|
-    // | Media controls  |
-    // |-----------------|
-    // | Downloads       | -> section end
-    // |=================| -> potential separator
-    // | Profile         |
-    // |-----------------|
-    explicit ResponsiveElementInfo(
-        std::variant<ElementIdInfo, actions::ActionId> overflow_id,
-        bool is_section_end = false);
-    ResponsiveElementInfo(const ResponsiveElementInfo&);
-    ~ResponsiveElementInfo();
-
-    // The toolbar element that potentially overflows.
-    std::variant<ElementIdInfo, actions::ActionId> overflow_id;
-
-    // True if current element is a section end in overflow menu structure.
-    bool is_section_end = false;
-  };
-
+  // `webui_toolbar_controller_delegate` may be nullptr if the WebUI toolbar is
+  // not in use.
   ToolbarController(
       const std::vector<ResponsiveElementInfo>& responsive_elements,
       const std::vector<ui::ElementIdentifier>& elements_in_overflow_order,
       int element_flex_order_start,
       views::View* toolbar_container_view,
+      WebUIToolbarControllerDelegate* webui_toolbar_controller_delegate,
       OverflowButton* overflow_button,
       PinnedActionsDelegate* pinned_actions_delegate,
       PinnedToolbarActionsModel* pinned_toolbar_actions_model);
@@ -176,13 +135,6 @@ class ToolbarController : public views::MenuDelegate,
     std::unique_ptr<PopOutHandler> handler;
   };
 
-  // PinnedToolbarActionsModel::Observer
-  void OnActionsChanged() override;
-
-  // Return the default responsive elements list in the toolbar.
-  static std::vector<ResponsiveElementInfo> GetDefaultResponsiveElements(
-      Browser* browser);
-
   // Return the element list in desired overflow order. The list should contain
   // only the immediate children of toolbar i.e. those managed by
   // `toolbar_container_view_` layout manager. For those inside a child
@@ -196,7 +148,8 @@ class ToolbarController : public views::MenuDelegate,
 
   // Force the UI element with the identifier to show. Return whether the action
   // is successful.
-  virtual bool PopOut(ui::ElementIdentifier identifier);
+  virtual bool PopOut(ui::ElementIdentifier identifier,
+                      bool show_synchronously);
 
   // End forcing the UI element with the identifier to show. Return whether the
   // action is successful.
@@ -213,23 +166,24 @@ class ToolbarController : public views::MenuDelegate,
   // Return true if any buttons overflow.
   bool InOverflowMode() const;
 
+  // OverflowMenu::Delegate:
+  void ExecuteCommand(const OverflowableElement& element) override;
+  bool IsCurrentlyOverflowed(const OverflowableElement& element) const override;
+  bool IsEnabled(const OverflowableElement& element) const override;
+  void OnMenuClosed() override;
+
   OverflowButton* overflow_button() { return overflow_button_; }
+
+  // Returns the FlexLayout order that should be used by the WebUI toolbar (if
+  // enabled) for the forward and home buttons.
+  int webui_toolbar_button_flex_order() const {
+    return webui_toolbar_button_flex_order_;
+  }
 
   const base::flat_map<ui::ElementIdentifier, std::unique_ptr<PopOutState>>&
   pop_out_state_for_testing() const {
     return pop_out_state_;
   }
-
-  // Create the overflow menu model for hidden buttons.
-  std::unique_ptr<ui::SimpleMenuModel> CreateOverflowMenuModel();
-
-  // Generate menu text from the responsive element.
-  virtual std::u16string GetMenuText(
-      const ResponsiveElementInfo& element_info) const;
-
-  // Get menu icon from the responsive element.
-  std::optional<ui::ImageModel> GetMenuIcon(
-      const ResponsiveElementInfo& element_info) const;
 
   // Utility that recursively searches for a view with `id` from `view`.
   static views::View* FindToolbarElementWithId(views::View* view,
@@ -238,72 +192,56 @@ class ToolbarController : public views::MenuDelegate,
   // Shows the overflow menu that is anchored to the `overflow_button_`.
   void ShowMenu();
 
-  bool IsMenuRunning() const;
+  bool IsMenuRunning() const { return overflow_menu_.IsMenuRunning(); }
 
-  views::MenuItemView* root_menu_item() { return root_menu_item_.get(); }
+  views::MenuItemView* root_menu_item() {
+    return overflow_menu_.root_menu_item();
+  }
 
   const views::MenuItemView* root_menu_item() const {
-    return root_menu_item_.get();
+    return overflow_menu_.root_menu_item();
   }
 
   const ui::SimpleMenuModel* menu_model_for_testing() const {
-    return menu_model_.get();
+    return overflow_menu_.menu_model_for_testing();
   }
+
+  OverflowMenu& overflow_menu_for_testing() { return overflow_menu_; }
+  const OverflowMenu& overflow_menu_for_testing() const {
+    return overflow_menu_;
+  }
+
+  // Check if element is currently overflowed.
+  bool IsElementOverflowedForTesting(ui::ElementIdentifier id) const;
 
  private:
   friend class ToolbarControllerUiTest;
+  friend class ToolbarControllerOverflowOrderingUiTest;
+  friend class ToolbarControllerHighPriorityLocationBarOverflowOrderingUiTest;
   friend class ToolbarControllerUnitTest;
 
   // Returns currently hidden elements.
-  std::vector<const ResponsiveElementInfo*> GetOverflowedElements();
+  std::vector<const ResponsiveElementInfo*> GetOverflowedElements() const;
 
-  // Check if element has overflowed. Check the visibility in proposed_layout if
-  // provided.
+  // Check if element has overflowed.
   bool IsOverflowed(
-      const ResponsiveElementInfo& element,
+      const OverflowableElement& element,
       const views::ProposedLayout* proposed_layout = nullptr) const;
 
-  void PopulateMenu(views::MenuItemView* parent);
-  void CloseMenu();
-
-  // Adds the status indicator to all the menu items and makes it visible if
-  // needed.
-  void ShowStatusIndicator();
-
-  // Listens to changes in `action_item` and updates the visibility of the
-  // status indicator.
-  void ActionItemChanged(actions::ActionItem* action_item);
-
-  // ui::SimpleMenuModel::Delegate:
-  void ExecuteCommand(int command_id, int event_flags) override;
-  bool IsCommandIdEnabled(int command_id) const override;
-
-  // The toolbar elements managed by this controller.
-  // Actions are kept in order by observing the PinnedToolbarActionsModel.
-  // To facilitate menu creation elements order should match overflow
-  // menu top to bottom.
-  std::vector<ResponsiveElementInfo> responsive_elements_;
-  // Returns responsive_elements_ but with the Actions in the correct order,
-  // as defined by the pinned_actions_delegate_
-  std::vector<ResponsiveElementInfo> GetResponsiveElementsWithOrderedActions()
-      const;
-
-  std::vector<base::CallbackListSubscription> action_changed_subscription_;
-
   // The starting flex order assigned to the last overflowed element in
-  // `responsive_elements_`.
+  // `overflow_menu_.responsive_elements()`.
   const int element_flex_order_start_;
 
   // Reference to ToolbarView::container_view_. Must outlive `this`.
   const raw_ptr<views::View> toolbar_container_view_;
 
-  // The button with a chevron icon that indicates at least one element in
-  // `responsive_elements_` overflows. Owned by `toolbar_container_view_`.
-  raw_ptr<OverflowButton> overflow_button_;
+  const raw_ptr<WebUIToolbarControllerDelegate>
+      webui_toolbar_controller_delegate_;
 
-  std::unique_ptr<views::MenuRunner> menu_runner_;
-  std::unique_ptr<ui::SimpleMenuModel> menu_model_;
-  raw_ptr<views::MenuItemView> root_menu_item_ = nullptr;
+  // The button with a chevron icon that indicates at least one element in
+  // `overflow_menu_.responsive_elements()` overflows. Owned by
+  // `toolbar_container_view_`.
+  raw_ptr<OverflowButton> overflow_button_;
 
   const raw_ptr<PinnedActionsDelegate> pinned_actions_delegate_;
   const raw_ptr<PinnedToolbarActionsModel> pinned_actions_model_;
@@ -312,6 +250,18 @@ class ToolbarController : public views::MenuDelegate,
   // elements that need to pop out. Set when ToolbarController is initialized.
   base::flat_map<ui::ElementIdentifier, std::unique_ptr<PopOutState>>
       pop_out_state_;
+
+  // Flex order specifically for the buttons that may appear on
+  // kWebUIToolbarElementIdentifier. Default is used when
+  // ToolbarControllerUtil::PreventOverflow() returns true, which makes order
+  // for the buttons irrelevant, since they'll always be displayed at their full
+  // size.
+  int webui_toolbar_button_flex_order_ = 1;
+
+  // Handles display and layout of the overflow menu, as well as keeping track
+  // of and automatically sorting the ResponsiveElementInfo of all overflowable
+  // elements.
+  OverflowMenu overflow_menu_;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_TOOLBAR_TOOLBAR_CONTROLLER_H_

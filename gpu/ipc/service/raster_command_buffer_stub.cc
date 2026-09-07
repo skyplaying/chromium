@@ -59,8 +59,6 @@ gpu::ContextResult RasterCommandBufferStub::Initialize(
   TRACE_EVENT0("gpu", "RasterBufferStub::Initialize");
   UpdateActiveUrl();
 
-  const auto& attribs = *init_params.attribs->get_raster();
-
   GpuChannelManager* manager = channel_->gpu_channel_manager();
   DCHECK(manager);
 
@@ -77,8 +75,6 @@ gpu::ContextResult RasterCommandBufferStub::Initialize(
 
   surface_ = shared_context_state->surface();
   share_group_ = shared_context_state->share_group();
-  use_virtualized_gl_context_ =
-      shared_context_state->use_virtualized_gl_contexts();
 
   memory_tracker_ = CreateMemoryTracker();
 
@@ -95,10 +91,6 @@ gpu::ContextResult RasterCommandBufferStub::Initialize(
       channel_->scheduler()->CreateSyncPointClientState(
           sequence_id_, CommandBufferNamespace::GPU_IO, command_buffer_id_);
 
-  // TODO(sunnyps): Should this use ScopedCrashKey instead?
-  crash_keys::gpu_gl_context_is_virtual.Set(use_virtualized_gl_context_ ? "1"
-                                                                        : "0");
-
   scoped_refptr<gl::GLContext> context = shared_context_state->context();
   if (!shared_context_state->MakeCurrent(nullptr, false /* needs_gl */)) {
     LOG(ERROR) << "ContextResult::kTransientFailure: "
@@ -107,7 +99,7 @@ gpu::ContextResult RasterCommandBufferStub::Initialize(
   }
 
   // Initialize the decoder with either the view or pbuffer GLContext.
-  result = decoder->Initialize(attribs.lose_context_when_out_of_memory);
+  result = decoder->Initialize(/*lose_context_when_out_of_memory=*/true);
   if (result != gpu::ContextResult::kSuccess) {
     DLOG(ERROR) << "Failed to initialize decoder.";
     return result;
@@ -135,10 +127,6 @@ gpu::ContextResult RasterCommandBufferStub::Initialize(
   manager->delegate()->DidCreateContextSuccessfully();
   initialized_ = true;
   return gpu::ContextResult::kSuccess;
-}
-
-MemoryTracker* RasterCommandBufferStub::GetContextGroupMemoryTracker() const {
-  return nullptr;
 }
 
 base::WeakPtr<CommandBufferStub> RasterCommandBufferStub::AsWeakPtr() {

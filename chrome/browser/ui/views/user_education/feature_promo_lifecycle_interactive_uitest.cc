@@ -19,6 +19,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/user_education/browser_help_bubble.h"
@@ -26,7 +27,6 @@
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
 #include "chrome/browser/user_education/user_education_service.h"
 #include "chrome/browser/user_education/user_education_service_factory.h"
-#include "chrome/grit/generated_resources.h"
 #include "chrome/test/user_education/interactive_feature_promo_test.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "components/keyed_service/content/browser_context_keyed_service_factory.h"
@@ -34,6 +34,7 @@
 #include "components/user_education/common/feature_promo/feature_promo_controller.h"
 #include "components/user_education/common/feature_promo/feature_promo_result.h"
 #include "components/user_education/common/feature_promo/feature_promo_specification.h"
+#include "components/user_education/common/feature_promo/impl/feature_promo_controller_impl.h"
 #include "components/user_education/common/user_education_data.h"
 #include "components/user_education/common/user_education_features.h"
 #include "components/user_education/common/user_education_storage_service.h"
@@ -87,7 +88,6 @@ class FeaturePromoLifecycleUiTest : public TestBase {
       : TestBase(UseMockTracker(), ClockMode::kUseDefaultClock) {}
 
   void SetUp() override {
-    SetControllerMode(ControllerMode::kUserEd25);
     feature_promo_test_impl().set_use_shortened_timeouts_for_internal_testing(
         true);
     TestBase::SetUp();
@@ -111,10 +111,11 @@ class FeaturePromoLifecycleUiTest : public TestBase {
             IDS_OK));
   }
 
-  auto InBrowser(base::OnceCallback<void(Browser*)> callback) {
+  auto InBrowser(base::OnceCallback<void(BrowserWindowInterface*)> callback) {
     return WithView(kBrowserViewElementId,
                     base::BindOnce(
-                        [](base::OnceCallback<void(Browser*)> callback,
+                        [](base::OnceCallback<void(BrowserWindowInterface*)>
+                               callback,
                            BrowserView* browser_view) {
                           std::move(callback).Run(browser_view->browser());
                         },
@@ -122,11 +123,13 @@ class FeaturePromoLifecycleUiTest : public TestBase {
         .SetDescription("InBrowser()");
   }
 
-  auto CheckBrowser(base::OnceCallback<bool(Browser*)> callback) {
+  auto CheckBrowser(
+      base::OnceCallback<bool(BrowserWindowInterface*)> callback) {
     return CheckView(
                kBrowserViewElementId,
                base::BindOnce(
-                   [](base::OnceCallback<bool(Browser*)> callback,
+                   [](base::OnceCallback<bool(BrowserWindowInterface*)>
+                          callback,
                       BrowserView* browser_view) {
                      return std::move(callback).Run(browser_view->browser());
                    },
@@ -146,7 +149,8 @@ class FeaturePromoLifecycleUiTest : public TestBase {
   auto CheckSnoozePrefs(bool is_dismissed, int show_count, int snooze_count) {
     return CheckBrowser(
                base::BindLambdaForTesting([this, is_dismissed, show_count,
-                                           snooze_count](Browser* browser) {
+                                           snooze_count](
+                                              BrowserWindowInterface* browser) {
                  auto data = GetStorageService(browser)->ReadPromoData(
                      kFeaturePromoLifecycleTestPromo);
 
@@ -179,10 +183,11 @@ class FeaturePromoLifecycleUiTest : public TestBase {
   }
 
   auto SetSnoozePrefs(const PromoData& data) {
-    return InBrowser(base::BindLambdaForTesting([data](Browser* browser) {
-      GetStorageService(browser)->SavePromoData(kFeaturePromoLifecycleTestPromo,
-                                                data);
-    }));
+    return InBrowser(
+        base::BindLambdaForTesting([data](BrowserWindowInterface* browser) {
+          GetStorageService(browser)->SavePromoData(
+              kFeaturePromoLifecycleTestPromo, data);
+        }));
   }
 
   auto SnoozeIPH() {
@@ -202,7 +207,7 @@ class FeaturePromoLifecycleUiTest : public TestBase {
         PressButton(user_education::HelpBubbleView::kCloseButtonIdForTesting),
         WaitForHide(
             user_education::HelpBubbleView::kHelpBubbleElementIdForTesting),
-        CheckBrowser(base::BindOnce([](Browser* browser) {
+        CheckBrowser(base::BindOnce([](BrowserWindowInterface* browser) {
           auto* const promo = GetPromoController(browser)->current_promo_.get();
           return !promo || (!promo->is_promo_active() && !promo->help_bubble());
         })));
@@ -214,11 +219,12 @@ class FeaturePromoLifecycleUiTest : public TestBase {
       bool dismissed,
       const base::Feature* feature = &kFeaturePromoLifecycleTestPromo,
       const std::string& key = std::string()) {
-    return CheckBrowser(base::BindLambdaForTesting([dismissed, feature,
-                                                    key](Browser* browser) {
-             return GetPromoController(browser)->HasPromoBeenDismissed(
-                        {*feature, key}) == dismissed;
-           }))
+    return CheckBrowser(
+               base::BindLambdaForTesting(
+                   [dismissed, feature, key](BrowserWindowInterface* browser) {
+                     return GetPromoController(browser)->HasPromoBeenDismissed(
+                                {*feature, key}) == dismissed;
+                   }))
         .SetDescription(
             base::StrCat({"CheckDismissed( ", base::ToString(dismissed), ", ",
                           feature->name, " )"}));
@@ -227,13 +233,14 @@ class FeaturePromoLifecycleUiTest : public TestBase {
   auto CheckDismissedWithReason(
       user_education::FeaturePromoClosedReason close_reason,
       const base::Feature* feature = &kFeaturePromoLifecycleTestPromo) {
-    return CheckBrowser(base::BindLambdaForTesting([close_reason,
-                                                    feature](Browser* browser) {
-             user_education::FeaturePromoClosedReason actual_reason;
-             return GetPromoController(browser)->HasPromoBeenDismissed(
-                        *feature, &actual_reason) &&
-                    actual_reason == close_reason;
-           }))
+    return CheckBrowser(
+               base::BindLambdaForTesting(
+                   [close_reason, feature](BrowserWindowInterface* browser) {
+                     user_education::FeaturePromoClosedReason actual_reason;
+                     return GetPromoController(browser)->HasPromoBeenDismissed(
+                                *feature, &actual_reason) &&
+                            actual_reason == close_reason;
+                   }))
         .SetDescription(base::StrCat({"CheckDismissedWithReason( ",
                                       base::ToString(close_reason), ", ",
                                       feature->name, " )"}));
@@ -251,15 +258,15 @@ class FeaturePromoLifecycleUiTest : public TestBase {
             base::StringPrintf("CheckHistogram( %s )", name.c_str()));
   }
 
-  static user_education::FeaturePromoControllerCommon* GetPromoController(
-      Browser* browser) {
-    return static_cast<user_education::FeaturePromoControllerCommon*>(
-        UserEducationServiceFactory::GetForBrowserContext(browser->profile())
+  static user_education::FeaturePromoControllerImpl* GetPromoController(
+      BrowserWindowInterface* browser) {
+    return static_cast<user_education::FeaturePromoControllerImpl*>(
+        UserEducationServiceFactory::GetForBrowserContext(browser->GetProfile())
             ->GetFeaturePromoControllerForTesting());
   }
 
   static user_education::UserEducationStorageService* GetStorageService(
-      Browser* browser) {
+      BrowserWindowInterface* browser) {
     return GetPromoController(browser)->storage_service();
   }
 
@@ -355,7 +362,7 @@ IN_PROC_BROWSER_TEST_F(FeaturePromoLifecycleUiTest, AbortPromoSetsPrefs) {
 IN_PROC_BROWSER_TEST_F(FeaturePromoLifecycleUiTest, EndPromoSetsPrefs) {
   RunTestSequence(
       ShowPromoRecordingTime(kFeaturePromoLifecycleTestPromo),
-      InBrowser(base::BindOnce([](Browser* browser) {
+      InBrowser(base::BindOnce([](BrowserWindowInterface* browser) {
         GetPromoController(browser)->EndPromo(
             kFeaturePromoLifecycleTestPromo,
             user_education::EndFeaturePromoReason::kFeatureEngaged);
@@ -487,7 +494,7 @@ IN_PROC_BROWSER_TEST_F(FeaturePromoLifecycleUiTest,
 IN_PROC_BROWSER_TEST_F(FeaturePromoLifecycleUiTest, EndPromoRecordsHistogram) {
   RunTestSequence(
       ShowPromoRecordingTime(kFeaturePromoLifecycleTestPromo),
-      InBrowser(base::BindOnce([](Browser* browser) {
+      InBrowser(base::BindOnce([](BrowserWindowInterface* browser) {
         GetPromoController(browser)->EndPromo(
             kFeaturePromoLifecycleTestPromo,
             user_education::EndFeaturePromoReason::kFeatureEngaged);
@@ -556,9 +563,9 @@ class FeaturePromoLifecycleAppUiTest : public FeaturePromoLifecycleUiTest {
   static constexpr char kAppPath[] = "/web_apps/no_manifest.html";
 
   void SetUpOnMainThread() override {
-    FeaturePromoLifecycleUiTest::SetUpOnMainThread();
     embedded_https_test_server().SetCertHostnames({kApp1Host, kApp2Host});
-    CHECK(embedded_https_test_server().Start());
+
+    FeaturePromoLifecycleUiTest::SetUpOnMainThread();
     host_resolver()->AddRule("*", "127.0.0.1");
     app1_id_ =
         InstallPWA(embedded_https_test_server().GetURL(kApp1Host, kAppPath));
@@ -568,11 +575,11 @@ class FeaturePromoLifecycleAppUiTest : public FeaturePromoLifecycleUiTest {
   }
 
   auto CheckShownForApp() {
-    return CheckBrowser(base::BindOnce([](Browser* browser) {
+    return CheckBrowser(base::BindOnce([](BrowserWindowInterface* browser) {
              const auto data = GetStorageService(browser)->ReadPromoData(
                  kFeaturePromoLifecycleTestPromo);
              return data->shown_for_keys.contains(
-                 browser->app_controller()->app_id());
+                 web_app::AppBrowserController::From(browser)->app_id());
            }))
         .SetDescription("CheckShownForApp()");
   }
@@ -592,7 +599,7 @@ class FeaturePromoLifecycleAppUiTest : public FeaturePromoLifecycleUiTest {
 };
 
 IN_PROC_BROWSER_TEST_F(FeaturePromoLifecycleAppUiTest, ShowForApp) {
-  Browser* const app_browser = LaunchWebAppBrowser(app1_id_);
+  BrowserWindowInterface* const app_browser = LaunchWebAppBrowser(app1_id_);
   RunTestSequenceInContext(
       BrowserElements::From(app_browser)->GetContext(),
       WaitForShow(kToolbarAppMenuButtonElementId),
@@ -601,7 +608,7 @@ IN_PROC_BROWSER_TEST_F(FeaturePromoLifecycleAppUiTest, ShowForApp) {
 }
 
 IN_PROC_BROWSER_TEST_F(FeaturePromoLifecycleAppUiTest, ShowForAppThenBlocked) {
-  Browser* const app_browser = LaunchWebAppBrowser(app1_id_);
+  BrowserWindowInterface* const app_browser = LaunchWebAppBrowser(app1_id_);
   RunTestSequenceInContext(
       BrowserElements::From(app_browser)->GetContext(),
       WaitForShow(kToolbarAppMenuButtonElementId),
@@ -612,7 +619,7 @@ IN_PROC_BROWSER_TEST_F(FeaturePromoLifecycleAppUiTest, ShowForAppThenBlocked) {
 }
 
 IN_PROC_BROWSER_TEST_F(FeaturePromoLifecycleAppUiTest, HasPromoBeenDismissed) {
-  Browser* const app_browser = LaunchWebAppBrowser(app1_id_);
+  BrowserWindowInterface* const app_browser = LaunchWebAppBrowser(app1_id_);
   RunTestSequenceInContext(
       BrowserElements::From(app_browser)->GetContext(),
       WaitForShow(kToolbarAppMenuButtonElementId), CheckDismissed(false),
@@ -621,8 +628,8 @@ IN_PROC_BROWSER_TEST_F(FeaturePromoLifecycleAppUiTest, HasPromoBeenDismissed) {
 }
 
 IN_PROC_BROWSER_TEST_F(FeaturePromoLifecycleAppUiTest, ShowForTwoApps) {
-  Browser* const app_browser = LaunchWebAppBrowser(app1_id_);
-  Browser* const app_browser2 = LaunchWebAppBrowser(app2_id_);
+  BrowserWindowInterface* const app_browser = LaunchWebAppBrowser(app1_id_);
+  BrowserWindowInterface* const app_browser2 = LaunchWebAppBrowser(app2_id_);
   RunTestSequenceInContext(
       BrowserElements::From(app_browser)->GetContext(),
       WaitForShow(kToolbarAppMenuButtonElementId),
@@ -643,8 +650,8 @@ class FeaturePromoLifecycleCriticalUiTest : public FeaturePromoLifecycleUiTest {
   auto CheckDismissed(
       bool dismissed,
       const base::Feature* feature = &kFeaturePromoLifecycleTestPromo) {
-    return CheckBrowser(
-        base::BindLambdaForTesting([dismissed, feature](Browser* browser) {
+    return CheckBrowser(base::BindLambdaForTesting(
+        [dismissed, feature](BrowserWindowInterface* browser) {
           const auto data = GetStorageService(browser)->ReadPromoData(*feature);
           return (data && data->is_dismissed) == dismissed;
         }));

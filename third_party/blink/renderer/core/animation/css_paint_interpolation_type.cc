@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ref.h"
 #include "third_party/blink/renderer/core/animation/css_color_interpolation_type.h"
 #include "third_party/blink/renderer/core/css/css_property_names.h"
 #include "third_party/blink/renderer/core/css/resolver/style_resolver.h"
@@ -71,11 +72,7 @@ PairwiseInterpolationValue CSSPaintInterpolationType::MaybeMergeSingles(
   DCHECK(!start.non_interpolable_value);
   DCHECK(!end.non_interpolable_value);
 
-  // Confirm that both colors are in the same colorspace and adjust if
-  // necessary.
-  auto& start_color = To<InterpolableColor>(*start.interpolable_value);
-  auto& end_color = To<InterpolableColor>(*end.interpolable_value);
-  InterpolableColor::SetupColorInterpolationSpaces(start_color, end_color);
+  BaseInterpolableColor::EnsureCompatible(start, end);
 
   return PairwiseInterpolationValue(std::move(start.interpolable_value),
                                     std::move(end.interpolable_value), nullptr);
@@ -98,12 +95,14 @@ class InheritedPaintChecker
   bool IsValid(const StyleResolverState& state,
                const InterpolationValue& underlying) const final {
     StyleColor parent_color;
-    if (!GetColor(property_, *state.ParentStyle(), parent_color))
+    if (!GetColor(*property_, *state.ParentStyle(), parent_color)) {
       return !valid_color_;
+    }
     return valid_color_ && parent_color == color_;
   }
 
-  const CSSProperty& property_;
+  const raw_ref<const CSSProperty, UnprotectedInRelease | DanglingUntriaged>
+      property_;
   const bool valid_color_;
   const StyleColor color_;
 };

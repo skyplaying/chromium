@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+// IWYU pragma: private, include "third_party/jni_zero/jni_zero.h"
+
 #ifndef JNI_ZERO_COMMON_APIS_H_
 #define JNI_ZERO_COMMON_APIS_H_
 
@@ -13,6 +15,11 @@
 #include "third_party/jni_zero/type_conversions.h"
 
 namespace jni_zero {
+
+// A wrapper around NewStringUTF(), so technically accepts MUTF-8.
+JNI_ZERO_COMPONENT_BUILD_EXPORT ScopedJavaLocalRef<jstring>
+NewAsciiString(JNIEnv* env, const char* str);
+
 // Wraps Collection.toArray().
 JNI_ZERO_COMPONENT_BUILD_EXPORT ScopedJavaLocalRef<jobjectArray>
 CollectionToArray(JNIEnv* env, const JavaRef<jobject>& collection);
@@ -48,9 +55,9 @@ JNI_ZERO_COMPONENT_BUILD_EXPORT ScopedJavaLocalRef<jobject> ListSet(
     const JavaRef<jobject>& list,
     int32_t idx,
     const JavaRef<jobject>& value);
-// Use ToJniType on the value.
+// Helper that calls ToJniType on the value before calling ListSet.
 template <typename V>
-  requires(!internal::IsJavaRef<V>)
+  requires(!IsJavaRef<V>)
 inline ScopedJavaLocalRef<jobject> ListSet(JNIEnv* env,
                                            const JavaRef<jobject>& list,
                                            int32_t idx,
@@ -65,9 +72,9 @@ JNI_ZERO_COMPONENT_BUILD_EXPORT bool CollectionAdd(
     JNIEnv* env,
     const JavaRef<jobject>& collection,
     const JavaRef<jobject>& value);
-// Use ToJniType on the value.
+// Helper that calls ToJniType on the value before calling CollectionAdd.
 template <typename V>
-  requires(!internal::IsJavaRef<V>)
+  requires(!IsJavaRef<V>)
 inline ScopedJavaLocalRef<jobject>
 CollectionAdd(JNIEnv* env, const JavaRef<jobject>& collection, const V& value) {
   return CollectionAdd(env, collection, ToJniType(env, value));
@@ -103,9 +110,9 @@ JNI_ZERO_COMPONENT_BUILD_EXPORT ScopedJavaLocalRef<jobject> MapPut(
     const JavaRef<jobject>& key,
     const JavaRef<jobject>& value);
 
-// Use ToJniType on the key/value.
+// Helper that calls ToJniType on the key and value before calling MapPut.
 template <typename K, typename V>
-  requires(!internal::IsJavaRef<K> && !internal::IsJavaRef<V>)
+  requires(!IsJavaRef<K> || !IsJavaRef<V>)
 inline ScopedJavaLocalRef<jobject> MapPut(JNIEnv* env,
                                           const JavaRef<jobject>& map,
                                           const K& key,

@@ -70,6 +70,7 @@ namespace gpu {
 class DisplayCompositorMemoryAndTaskControllerOnGpu;
 class SharedImageRepresentationFactory;
 class SharedImageFactory;
+class VulkanContextProvider;
 }  // namespace gpu
 
 namespace skgpu::graphite {
@@ -88,7 +89,6 @@ class AsyncReadResultHelper;
 class AsyncReadResultLock;
 class ImageContextImpl;
 class SkiaOutputSurfaceDependency;
-class VulkanContextProvider;
 
 namespace copy_output {
 struct RenderPassGeometry;
@@ -214,7 +214,7 @@ class SkiaOutputSurfaceImplOnGpu
           image_contexts);
   void ScheduleOverlays(SkiaOutputSurface::OverlayList overlays);
 
-  void SetVSyncDisplayID(int64_t display_id);
+  void SetVSyncDisplayID(int64_t display_id, bool force_update);
 
 #if BUILDFLAG(IS_ANDROID)
   void SetFrameRate(gfx::SurfaceControlFrameRate frame_rate);
@@ -325,7 +325,6 @@ class SkiaOutputSurfaceImplOnGpu
   bool InitializeForGL();
   bool InitializeForVulkan();
   bool InitializeForDawn();
-  bool InitializeForMetal();
 
   // Provided as a callback to |device_|.
   void DidSwapBuffersCompleteInternal(gpu::SwapBuffersCompleteParams params,
@@ -463,8 +462,7 @@ class SkiaOutputSurfaceImplOnGpu
   // by CreateAndStoreExternalSemaphoreVulkan(). May destroy VkSemaphore that
   // the |semaphore| stores if creation of a release fence fails. In this case,
   // invalid fence handle is returned.
-  gfx::GpuFenceHandle CreateReleaseFenceForVulkan(
-      const GrBackendSemaphore& semaphore);
+  gfx::GpuFenceHandle CreateReleaseFenceForVulkan(VkSemaphore semaphore);
   // Returns true if succeess.
   bool CreateAndStoreExternalSemaphoreVulkan(
       std::vector<GrBackendSemaphore>& end_semaphores);
@@ -500,7 +498,7 @@ class SkiaOutputSurfaceImplOnGpu
   std::unique_ptr<gpu::SharedImageFactory> shared_image_factory_;
   std::unique_ptr<gpu::SharedImageRepresentationFactory>
       shared_image_representation_factory_;
-  const raw_ptr<VulkanContextProvider> vulkan_context_provider_;
+  const raw_ptr<gpu::VulkanContextProvider> vulkan_context_provider_;
   const RendererSettings renderer_settings_;
 
   // Should only be run on the client thread with PostTaskToClientThread().
@@ -613,11 +611,6 @@ class SkiaOutputSurfaceImplOnGpu
   // A cache of solid color image mailboxes so we can destroy them in the
   // destructor.
   base::flat_set<gpu::Mailbox> solid_color_images_;
-
-  // The format that will be used to CreateSolidColorSharedImage(). This should
-  // be either RGBA_8888 by default, or BGRA_8888 if the default is not
-  // supported on Linux.
-  SharedImageFormat solid_color_image_format_ = SinglePlaneFormat::kRGBA_8888;
 
   THREAD_CHECKER(thread_checker_);
 

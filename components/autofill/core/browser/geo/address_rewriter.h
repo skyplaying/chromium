@@ -7,6 +7,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -21,15 +22,28 @@ namespace autofill {
 // copyable, movable, and passable by value.
 class AddressRewriter {
  public:
-  // Rewrites |text| using the rules for |country_code|.
+  enum class Type {
+    kCountrySpecific,
+    kGlobal,
+    kCustom,
+  };
+
+  // Rewrites `normalized_text` using the rules for `country_code`.
   static std::u16string RewriteForCountryCode(
       const AddressCountryCode& country_code,
       const std::u16string& normalized_text);
 
-  // Get an AddressRewrite instance which applies the rules for `country_code`.
+  // Rewrites `normalized_text` using the global rules.
+  static std::u16string RewriteUsingGlobalRules(
+      const std::u16string& normalized_text);
+
+  // Get an AddressRewriter instance which applies the rules for `country_code`.
   static AddressRewriter ForCountryCode(const AddressCountryCode& country_code);
 
-  // Gets an AddressRewrite instance for tests with custom rules.
+  // Get an AddressRewriter instance which applies the global rules.
+  static AddressRewriter ForGlobalRules();
+
+  // Gets an AddressRewriter instance for tests with custom rules.
   static AddressRewriter ForCustomRules(const std::string& custom_rules);
 
   // Apply the rewrite rules to |text| and return the result.
@@ -43,13 +57,15 @@ class AddressRewriter {
 
   class Cache;
 
-  explicit AddressRewriter(const CompiledRuleVector* compiled_rules);
+  explicit AddressRewriter(const CompiledRuleVector* compiled_rules, Type type);
 
   static void CompileRulesFromData(std::string_view data_string,
                                    CompiledRuleVector& compiled_rules);
 
   // A handle to the internal rewrite rules this instance is using.
   const raw_ptr<const CompiledRuleVector> compiled_rules_ = nullptr;
+
+  Type type_ = Type::kCustom;
 };
 
 }  // namespace autofill

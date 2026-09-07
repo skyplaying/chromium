@@ -12,6 +12,7 @@
 #include "base/strings/string_util.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
+#include "content/browser/client_hints/critical_client_hints_throttle.h"
 #include "content/public/test/mock_client_hints_controller_delegate.h"
 #include "content/public/test/test_browser_context.h"
 #include "content/test/test_render_frame_host.h"
@@ -32,6 +33,14 @@ namespace {
 
 using ClientHintsVector = std::vector<network::mojom::WebClientHintsType>;
 using network::mojom::WebClientHintsType;
+
+class MockThrottleDelegate : public blink::URLLoaderThrottle::Delegate {
+ public:
+  void CancelWithError(int error_code,
+                       std::string_view custom_reason) override {}
+  void Resume() override {}
+  void DidRestartForCriticalClientHint() override {}
+};
 
 }  // namespace
 
@@ -57,9 +66,28 @@ class ClientHintsTest : public RenderViewHostImplTestHarness {
         /*frame_token=*/blink::LocalFrameToken(),
         /*devtools_frame_token=*/base::UnguessableToken::Create(),
         /*document_token=*/blink::DocumentToken(),
+        /*initiator_state_token=*/blink::InitiatorStateToken(),
         /*frame_policy=*/blink::FramePolicy(),
         /*frame_owner_properties=*/blink::mojom::FrameOwnerProperties(),
         /*owner_type=*/blink::FrameOwnerElementType::kIframe,
+        /*document_ukm_source_id=*/ukm::kInvalidSourceId);
+  }
+
+  void AddOneFencedFrameNode() {
+    main_test_rfh()->OnCreateChildFrame(
+        /*new_routing_id=*/15, TestRenderFrameHost::CreateStubFrameRemote(),
+        TestRenderFrameHost::CreateStubBrowserInterfaceBrokerReceiver(),
+        TestRenderFrameHost::CreateStubPolicyContainerBindParams(),
+        TestRenderFrameHost::CreateStubAssociatedInterfaceProviderReceiver(),
+        /*scope=*/blink::mojom::TreeScopeType::kDocument, /*frame_name=*/"",
+        /*frame_unique_name=*/"uniqueName1", /*is_created_by_script=*/false,
+        /*frame_token=*/blink::LocalFrameToken(),
+        /*devtools_frame_token=*/base::UnguessableToken::Create(),
+        /*document_token=*/blink::DocumentToken(),
+        /*initiator_state_token=*/blink::InitiatorStateToken(),
+        /*frame_policy=*/blink::FramePolicy(),
+        /*frame_owner_properties=*/blink::mojom::FrameOwnerProperties(),
+        /*owner_type=*/blink::FrameOwnerElementType::kFencedframe,
         /*document_ukm_source_id=*/ukm::kInvalidSourceId);
   }
 
@@ -308,6 +336,39 @@ TEST_F(ClientHintsTest, SubFrame) {
   // hints.
   auto actual_updated_hints = ParseAndPersist(
       url, response_headers.get(), accept_ch_str, sub_frame_node, &delegate);
+
+  EXPECT_EQ(std::nullopt, actual_updated_hints);
+  blink::EnabledClientHints current_hints;
+  delegate.GetAllowedClientHintsFromSource(url::Origin::Create(url),
+                                           &current_hints);
+  EXPECT_EQ(existing_hints, current_hints.GetEnabledHints());
+}
+
+TEST_F(ClientHintsTest, FencedFrame) {
+  GURL url = GURL(ClientHintsTest::kOriginUrl);
+  contents()->NavigateAndCommit(url);
+  FrameTree& frame_tree = contents()->GetPrimaryFrameTree();
+  FrameTreeNode* main_frame_node = frame_tree.root();
+  AddOneFencedFrameNode();
+  FrameTreeNode* fenced_frame_node = main_frame_node->child_at(0);
+
+  blink::UserAgentMetadata ua_metadata;
+  MockClientHintsControllerDelegate delegate(ua_metadata);
+
+  // Persist existing hint to accept-ch cache.
+  ClientHintsVector existing_hints = ClientHintsVector{
+      WebClientHintsType::kUAPlatform, WebClientHintsType::kUABitness};
+  delegate.PersistClientHints(url::Origin::Create(url),
+                              main_frame_node->GetParentOrOuterDocument(),
+                              existing_hints);
+  auto response_headers =
+      base::MakeRefCounted<net::HttpResponseHeaders>("HTTP/1.1 200 OK\n");
+  std::string accept_ch_str = "sec-ch-ua-platform-version";
+
+  // We shouldn't parse accept-ch in fenced frame, it should not overwrite
+  // existing hints.
+  auto actual_updated_hints = ParseAndPersist(
+      url, response_headers.get(), accept_ch_str, fenced_frame_node, &delegate);
 
   EXPECT_EQ(std::nullopt, actual_updated_hints);
   blink::EnabledClientHints current_hints;
@@ -644,6 +705,44 @@ TEST_F(ClientHintsTest, GetEnabledClientHintsNotAllowedHintsLogic) {
         GetEnabledClientHints(sub_origin, sub_frame_node, &delegate);
     EXPECT_FALSE(actual_hints.not_allowed_hints.empty());
   }
+}
+
+TEST_F(ClientHintsTest, NullNavigationRequest) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(features::kCriticalClientHint);
+
+  GURL url("https://example.com");
+  contents()->NavigateAndCommit(url);
+
+  FrameTree& frame_tree = contents()->GetPrimaryFrameTree();
+  FrameTreeNode* main_frame_node = frame_tree.root();
+  ASSERT_FALSE(main_frame_node->navigation_request());
+
+  blink::UserAgentMetadata ua_metadata;
+  MockClientHintsControllerDelegate delegate(ua_metadata);
+
+  CriticalClientHintsThrottle throttle(browser_context(), &delegate,
+                                       main_frame_node->frame_tree_node_id());
+  MockThrottleDelegate throttle_delegate;
+  throttle.set_delegate(&throttle_delegate);
+
+  network::ResourceRequest request;
+  request.url = GURL("https://example.com");
+  bool defer = false;
+  throttle.WillStartRequest(&request, &defer);
+
+  auto response_head = network::mojom::URLResponseHead::New();
+  response_head->parsed_headers = network::mojom::ParsedHeaders::New();
+  response_head->parsed_headers->accept_ch = {
+      network::mojom::WebClientHintsType::kDeviceMemory};
+  response_head->parsed_headers->critical_ch = {
+      network::mojom::WebClientHintsType::kDeviceMemory};
+
+  blink::URLLoaderThrottle::RestartWithURLReset restart_with_url_reset(false);
+  throttle.BeforeWillProcessResponse(request.url, *response_head,
+                                     &restart_with_url_reset);
+
+  EXPECT_TRUE(restart_with_url_reset.value());
 }
 
 }  // namespace content

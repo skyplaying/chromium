@@ -13,7 +13,6 @@
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/trace_event/trace_event.h"
 #include "components/offline_pages/core/archive_manager.h"
@@ -239,7 +238,8 @@ StartupMaintenanceTask::~StartupMaintenanceTask() = default;
 
 void StartupMaintenanceTask::Run() {
   TRACE_EVENT_BEGIN("offline_pages", "StartupMaintenanceTask running",
-                    perfetto::Track::FromPointer(this));
+                    perfetto::NamedTrack::FromPointer(
+                        "offline_pages::StartupMaintenanceTask", this));
   store_->Execute(
       base::BindOnce(&StartupMaintenanceSync,
                      archive_manager_->GetTemporaryArchivesDir(),
@@ -250,10 +250,10 @@ void StartupMaintenanceTask::Run() {
 }
 
 void StartupMaintenanceTask::OnStartupMaintenanceDone(bool result) {
-  TRACE_EVENT_END(
-      "offline_pages",
-      /* StartupMaintenanceTask running */ perfetto::Track::FromPointer(this),
-      "result", result);
+  TRACE_EVENT_END("offline_pages", /* StartupMaintenanceTask running */
+                  perfetto::NamedTrack::FromPointer(
+                      "offline_pages::StartupMaintenanceTask", this),
+                  "result", result);
   TaskComplete();
 }
 

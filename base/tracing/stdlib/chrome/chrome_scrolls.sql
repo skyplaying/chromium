@@ -460,8 +460,15 @@ CREATE PERFETTO TABLE chrome_scroll_update_frame_pipeline (
   viz_swap_buffers_dur DURATION,
   -- End timestamp for the `STEP_BUFFER_SWAP_POST_SUBMIT` slice.
   viz_swap_buffers_end_ts TIMESTAMP,
-  -- Duration of `EventLatency`'s `BufferReadyToLatch` step.
+  -- Duration from the end of the `STEP_BUFFER_SWAP_POST_SUBMIT` slice to
+  -- `EventLatency`'s `LatchToSwapEnd` step.
   viz_swap_buffers_to_latch_dur DURATION,
+  -- Timestamp for `EventLatency`'s `BufferAvailableToBufferReady` step.
+  buffer_available_timestamp TIMESTAMP,
+  -- Duration of `EventLatency`'s `BufferAvailableToBufferReady` step.
+  buffer_available_to_ready_dur DURATION,
+  -- Timestamp for `EventLatency`'s `BufferAvailableToBufferReady` step.
+  buffer_ready_timestamp TIMESTAMP,
   -- Timestamp for `EventLatency`'s `LatchToSwapEnd` step.
   latch_timestamp TIMESTAMP,
   -- Duration of either `EventLatency`'s `LatchToSwapEnd` +
@@ -527,6 +534,8 @@ WITH
       viz_swap_buffers_end_ts,
       -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
       -- Timestamps
+      buffer_available_timestamp,
+      buffer_ready_timestamp,
       latch_timestamp,
       presentation_timestamp
     FROM _scroll_update_frame_timestamps_and_metadata
@@ -589,6 +598,9 @@ SELECT
   viz_swap_buffers_end_ts,
   latch_timestamp - viz_swap_buffers_end_ts AS viz_swap_buffers_to_latch_dur,
   -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+  buffer_available_timestamp,
+  buffer_ready_timestamp - buffer_available_timestamp AS buffer_available_to_ready_dur,
+  buffer_ready_timestamp,
   latch_timestamp,
   presentation_timestamp - latch_timestamp AS viz_latch_to_presentation_dur,
   -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
@@ -618,18 +630,60 @@ CREATE PERFETTO TABLE chrome_scrolls (
   -- The earliest timestamp of the EventLatency slice of the GESTURE_SCROLL_END type /
   -- the latest timestamp of the EventLatency slice of the GESTURE_SCROLL_UPDATE type for the
   -- corresponding scroll id.
-  gesture_scroll_end_ts TIMESTAMP
+  gesture_scroll_end_ts TIMESTAMP,
+  -- Whether the scroll is fully captured in the trace (i.e. did not start or end
+  -- mid-scroll). For the first scroll in the trace, this requires
+  -- FIRST_GESTURE_SCROLL_UPDATE to be present; for the last scroll, this requires
+  -- a corresponding gesture scroll end event to be present.
+  is_fully_captured BOOL
 ) AS
+WITH
+  scroll_updates_summary AS (
+    SELECT
+      scroll_id AS id,
+      min(ts) AS ts,
+      cast_int!(MAX(ts + dur) - MIN(ts)) AS dur,
+      MAX(event_type = 'FIRST_GESTURE_SCROLL_UPDATE') = 1 AS has_first_scroll_update,
+      LAG(scroll_id) OVER (ORDER BY scroll_id) AS prev_scroll_id,
+      LEAD(scroll_id) OVER (ORDER BY scroll_id) AS next_scroll_id
+    FROM chrome_gesture_scroll_updates
+    GROUP BY
+      scroll_id
+  ),
+  scroll_ends AS (
+    SELECT
+      ts
+    FROM chrome_event_latencies
+    WHERE
+      event_type IN ('GESTURE_SCROLL_END', 'INERTIAL_GESTURE_SCROLL_END')
+    UNION ALL
+    -- Gesture scroll end is not emitted in EventLatency slices.
+    SELECT
+      ts
+    FROM slice
+    WHERE
+      name = 'InputLatency::GestureScrollEnd'
+  )
 SELECT
-  scroll_id AS id,
-  min(ts) AS ts,
-  cast_int!(MAX(ts + dur) - MIN(ts)) AS dur,
+  s.id,
+  s.ts,
+  s.dur,
   -- TODO(b:389055670): Remove this once the UI doesn't rely on it.
   NULL AS gesture_scroll_begin_ts,
-  NULL AS gesture_scroll_end_ts
-FROM chrome_gesture_scroll_updates
-GROUP BY
-  scroll_id;
+  NULL AS gesture_scroll_end_ts,
+  (
+    (s.prev_scroll_id IS NOT NULL OR s.has_first_scroll_update)
+    AND (
+      s.next_scroll_id IS NOT NULL
+      OR EXISTS(
+        SELECT 1
+        FROM scroll_ends e
+        WHERE
+          e.ts >= s.ts
+      )
+    )
+  ) AS is_fully_captured
+FROM scroll_updates_summary s;
 
 -- Timestamps and durations for the critical path stages during scrolling.
 -- This table covers both the input-associated (before coalescing inputs into a
@@ -798,8 +852,15 @@ CREATE PERFETTO TABLE chrome_scroll_update_info (
   viz_swap_buffers_dur DURATION,
   -- End timestamp for the `STEP_BUFFER_SWAP_POST_SUBMIT` slice.
   viz_swap_buffers_end_ts TIMESTAMP,
-  -- Duration of `EventLatency`'s `BufferReadyToLatch` step.
+  -- Duration from the end of the `STEP_BUFFER_SWAP_POST_SUBMIT` slice to
+  -- `EventLatency`'s `LatchToSwapEnd` step.
   viz_swap_buffers_to_latch_dur DURATION,
+  -- Timestamp of `EventLatency`'s `BufferAvailableToBufferReady` step.
+  buffer_available_timestamp TIMESTAMP,
+  -- Duration of `EventLatency`'s `BufferAvailableToBufferReady` step.
+  buffer_available_to_ready_dur DURATION,
+  -- Timestamp for `EventLatency`'s `BufferReadyToLatch` step.
+  buffer_ready_timestamp TIMESTAMP,
   -- Timestamp for `EventLatency`'s `LatchToSwapEnd` step.
   latch_timestamp TIMESTAMP,
   -- Duration of either `EventLatency`'s `LatchToSwapEnd` +
@@ -916,6 +977,10 @@ SELECT
   -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
   frame.viz_swap_buffers_end_ts,
   frame.viz_swap_buffers_to_latch_dur,
+  -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+  frame.buffer_available_timestamp,
+  frame.buffer_available_to_ready_dur,
+  frame.buffer_ready_timestamp,
   -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
   frame.latch_timestamp,
   frame.viz_latch_to_presentation_dur,
@@ -1075,6 +1140,11 @@ CREATE PERFETTO TABLE chrome_scroll_frame_info (
   -- Difference between `viz_swap_buffers_to_latch_dur` for this frame and the
   -- previous frame in the same scroll.
   viz_swap_buffers_to_latch_delta_dur DURATION,
+  -- Duration of `EventLatency`'s `BufferAvailableToBufferReady` step.
+  buffer_available_to_ready_dur DURATION,
+  -- Difference between `buffer_available_to_ready_dur` for this frame and the
+  -- previous frame in the same scroll.
+  buffer_available_to_ready_delta_dur DURATION,
   -- Duration between Choreographer's latch and presentation.
   viz_latch_to_presentation_dur DURATION,
   -- Difference between `viz_latch_to_presentation_dur` for this frame and the
@@ -1141,6 +1211,8 @@ SELECT
   _chrome_scroll_frame_stage_delta!(viz_swap_buffers_dur) AS viz_swap_buffers_delta_dur,
   info.viz_swap_buffers_to_latch_dur,
   _chrome_scroll_frame_stage_delta!(viz_swap_buffers_to_latch_dur) AS viz_swap_buffers_to_latch_delta_dur,
+  info.buffer_available_to_ready_dur,
+  _chrome_scroll_frame_stage_delta!(buffer_available_to_ready_dur) AS buffer_available_to_ready_delta_dur,
   info.viz_latch_to_presentation_dur,
   _chrome_scroll_frame_stage_delta!(viz_latch_to_presentation_dur) AS viz_latch_to_presentation_delta_dur
 FROM chrome_scroll_update_info AS info

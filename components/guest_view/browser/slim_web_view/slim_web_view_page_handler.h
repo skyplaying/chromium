@@ -9,6 +9,7 @@
 #include "components/guest_view/browser/slim_web_view/slim_web_view.mojom.h"
 #include "content/public/browser/document_user_data.h"
 #include "mojo/public/cpp/bindings/receiver.h"
+#include "mojo/public/cpp/bindings/remote.h"
 
 namespace guest_view {
 
@@ -25,20 +26,37 @@ class SlimWebViewPageHandler
 
   ~SlimWebViewPageHandler() override;
 
+  void DispatchEvent(const std::string& event_name,
+                     base::DictValue args,
+                     int instance_id);
+
   // mojom::PageHandler implementation.
   void CreateGuest(base::DictValue create_params,
                    CreateGuestCallback callback) override;
+  void SetSize(int32_t guest_instance_id,
+               mojom::SetSizeParamsPtr size_params) override;
   void Navigate(int32_t guest_instance_id, const GURL& url) override;
+  void SetPermission(int32_t guest_instance_id,
+                     int32_t request_id,
+                     mojom::PageHandler_PermissionResponseAction action,
+                     SetPermissionCallback callback) override;
+  void SetUserAgentOverride(int32_t guest_instance_id,
+                            const std::string& user_agent_override) override;
+  void SetZoom(int32_t guest_instance_id,
+               double zoom_factor,
+               SetZoomCallback callback) override;
+  void GetZoom(int32_t guest_instance_id, GetZoomCallback callback) override;
 
  private:
   friend class content::DocumentUserData<SlimWebViewPageHandler>;
-  SlimWebViewPageHandler(
-      content::RenderFrameHost* render_frame_host,
-      mojo::PendingReceiver<mojom::PageHandler> page_handler);
+  SlimWebViewPageHandler(content::RenderFrameHost* render_frame_host,
+                         mojo::PendingReceiver<PageHandler> page_handler,
+                         mojo::PendingRemote<mojom::Page> page);
 
   GuestViewManager* GetGuestViewManager();
 
-  mojo::Receiver<mojom::PageHandler> receiver_;
+  mojo::Receiver<PageHandler> receiver_;
+  mojo::Remote<mojom::Page> page_;
 };
 
 }  // namespace guest_view

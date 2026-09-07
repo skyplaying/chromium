@@ -7,11 +7,11 @@
 
 #include "base/containers/fixed_flat_map.h"
 #include "base/containers/flat_map.h"
+#include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/glic/glic_pref_names.h"
-#include "chrome/browser/glic/widget/glic_window_controller.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_service.h"
@@ -22,22 +22,41 @@ namespace glic {
 
 namespace {
 
-#if BUILDFLAG(IS_MAC)
 constexpr int kFocusToggleAcceleratorModifiers =
+#if BUILDFLAG(IS_MAC)
     ui::EF_CONTROL_DOWN | ui::EF_COMMAND_DOWN;
 #elif BUILDFLAG(IS_CHROMEOS)
-// ui::EF_COMMAND_DOWN is the search key for ChromeOS.
-constexpr int kFocusToggleAcceleratorModifiers =
+    // ui::EF_COMMAND_DOWN is the search key for ChromeOS.
     ui::EF_COMMAND_DOWN | ui::EF_ALT_DOWN;
 #else
-constexpr int kFocusToggleAcceleratorModifiers =
     ui::EF_ALT_DOWN | ui::EF_SHIFT_DOWN;
 #endif
 
-constexpr auto kHotkeyToPrefMap =
-    base::MakeFixedFlatMap<LocalHotkeyManager::Hotkey, const char*>(
-        {{LocalHotkeyManager::Hotkey::kFocusToggle,
-          prefs::kGlicFocusToggleHotkey}});
+constexpr int kCaptureRegionAcceleratorModifiers =
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_CHROMEOS)
+    ui::EF_CONTROL_DOWN | ui::EF_SHIFT_DOWN;
+#else
+    ui::EF_ALT_DOWN | ui::EF_CONTROL_DOWN;
+#endif
+
+constexpr int kPanelToggleAcceleratorModifiers =
+#if BUILDFLAG(IS_MAC)
+    ui::EF_CONTROL_DOWN;
+#elif BUILDFLAG(IS_CHROMEOS)
+    // ui::EF_COMMAND_DOWN is the search key for ChromeOS.
+    ui::EF_COMMAND_DOWN;
+#else
+        ui::EF_ALT_DOWN;
+#endif
+
+constexpr auto kCommandToPrefMap =
+    base::MakeFixedFlatMap<LocalHotkeyManager::Command, const char*>({
+        {LocalHotkeyManager::Command::kFocusToggle,
+         prefs::kGlicFocusToggleHotkey},
+        {LocalHotkeyManager::Command::kCaptureRegion,
+         prefs::kGlicSelectionHotkey},
+        {LocalHotkeyManager::Command::kPanelToggle, prefs::kGlicLauncherHotkey},
+    });
 
 constexpr std::array kCloseAccelerators = {
     ui::Accelerator{ui::VKEY_ESCAPE, ui::EF_NONE},
@@ -53,15 +72,42 @@ constexpr std::array kTitleBarContextMenuAccelerators = {
     ui::Accelerator{ui::VKEY_SPACE, ui::EF_ALT_DOWN}};
 #endif
 
-constexpr auto kHotkeyToStaticAcceleratorsMap =
-    base::MakeFixedFlatMap<LocalHotkeyManager::Hotkey,
-                           base::span<const ui::Accelerator>>(
-        {{LocalHotkeyManager::Hotkey::kClose, kCloseAccelerators},
-#if BUILDFLAG(IS_WIN)
-         {LocalHotkeyManager::Hotkey::kTitleBarContextMenu,
-          kTitleBarContextMenuAccelerators}
+#if BUILDFLAG(IS_MAC)
+constexpr int kZoomModifier = ui::EF_COMMAND_DOWN;
+#else
+constexpr int kZoomModifier = ui::EF_CONTROL_DOWN;
 #endif
-        });
+
+constexpr std::array kZoomInAccelerators = {
+    ui::Accelerator{ui::VKEY_OEM_PLUS, kZoomModifier},
+    ui::Accelerator{ui::VKEY_OEM_PLUS, kZoomModifier | ui::EF_SHIFT_DOWN},
+    ui::Accelerator{ui::VKEY_ADD, kZoomModifier},
+    ui::Accelerator{ui::VKEY_ADD, kZoomModifier | ui::EF_SHIFT_DOWN}};
+
+constexpr std::array kZoomOutAccelerators = {
+    ui::Accelerator{ui::VKEY_OEM_MINUS, kZoomModifier},
+    ui::Accelerator{ui::VKEY_OEM_MINUS, kZoomModifier | ui::EF_SHIFT_DOWN},
+    ui::Accelerator{ui::VKEY_SUBTRACT, kZoomModifier},
+    ui::Accelerator{ui::VKEY_SUBTRACT, kZoomModifier | ui::EF_SHIFT_DOWN}};
+
+constexpr std::array kZoomResetAccelerators = {
+    ui::Accelerator{ui::VKEY_0, kZoomModifier},
+    ui::Accelerator{ui::VKEY_0, kZoomModifier | ui::EF_SHIFT_DOWN},
+    ui::Accelerator{ui::VKEY_NUMPAD0, kZoomModifier},
+    ui::Accelerator{ui::VKEY_NUMPAD0, kZoomModifier | ui::EF_SHIFT_DOWN}};
+
+constexpr auto kCommandToStaticAcceleratorsMap =
+    base::MakeFixedFlatMap<LocalHotkeyManager::Command,
+                           base::span<const ui::Accelerator>>({
+        {LocalHotkeyManager::Command::kClose, kCloseAccelerators},
+        {LocalHotkeyManager::Command::kZoomIn, kZoomInAccelerators},
+        {LocalHotkeyManager::Command::kZoomOut, kZoomOutAccelerators},
+        {LocalHotkeyManager::Command::kZoomReset, kZoomResetAccelerators},
+#if BUILDFLAG(IS_WIN)
+        {LocalHotkeyManager::Command::kTitleBarContextMenu,
+         kTitleBarContextMenuAccelerators},
+#endif
+    });
 
 // Compile-time helper to check if the keys in two maps are disjoint.
 // It checks if any key from map1 exists in map2.
@@ -79,44 +125,55 @@ constexpr bool AreKeysDisjoint(const Map1& map1, const Map2& map2) {
   }
   return true;
 }
-// Compile-time check to ensure that hotkeys defined as static (in
-// kHotkeyToStaticAcceleratorsMap) are not also defined as configurable (in
-// kHotkeyToPrefMap).
+// Compile-time check to ensure that commands defined as static (in
+// kCommandToStaticAcceleratorsMap) are not also defined as configurable (in
+// kCommandToPrefMap).
 static_assert(
-    AreKeysDisjoint(kHotkeyToStaticAcceleratorsMap, kHotkeyToPrefMap),
-    "A hotkey cannot be defined in both kHotkeyToStaticAcceleratorsMap and "
-    "kHotkeyToPrefMap. Check definitions.");
+    AreKeysDisjoint(kCommandToStaticAcceleratorsMap, kCommandToPrefMap),
+    "A command cannot be defined in both kCommandToStaticAcceleratorsMap and "
+    "kCommandToPrefMap. Check definitions.");
 }  // namespace
 
-LocalHotkeyManager::LocalHotkeyManager(base::WeakPtr<Panel> panel,
-                                       std::unique_ptr<Delegate> delegate)
-    : panel_(panel), delegate_(std::move(delegate)) {
-  CHECK(delegate_);
+LocalHotkeyManager::LocalHotkeyManager(
+    std::unique_ptr<RegistrationDelegate> registration_delegate,
+    EventHandler* event_handler,
+    base::span<const Command> supported_commands)
+    : registration_delegate_(std::move(registration_delegate)),
+      event_handler_(event_handler),
+      supported_commands_(supported_commands.begin(),
+                          supported_commands.end()) {
+  CHECK(registration_delegate_);
+  CHECK(event_handler_);
   CHECK(g_browser_process);
   pref_registrar_.Init(g_browser_process->local_state());
-  for (Hotkey hotkey : delegate_->GetSupportedHotkeys()) {
-    auto pref_name_iter = kHotkeyToPrefMap.find(hotkey);
-    if (pref_name_iter == kHotkeyToPrefMap.end()) {
+  for (Command command : supported_commands_) {
+    auto pref_name_iter = kCommandToPrefMap.find(command);
+    if (pref_name_iter == kCommandToPrefMap.end()) {
       continue;
     }
-    pref_registrar_.Add(pref_name_iter->second,
-                        base::BindRepeating(&LocalHotkeyManager::RegisterHotkey,
-                                            base::Unretained(this), hotkey));
+    pref_registrar_.Add(
+        pref_name_iter->second,
+        base::BindRepeating(&LocalHotkeyManager::RegisterCommand,
+                            base::Unretained(this), command));
   }
 }
 
 LocalHotkeyManager::~LocalHotkeyManager() {
   // Ensure that registrations are deleted before the WeakPtrs are invalidated
   // as they might be depending on it.
-  hotkey_registrations_.clear();
+  command_registrations_.clear();
 }
 
 // static
-ui::Accelerator LocalHotkeyManager::GetDefaultAccelerator(Hotkey hotkey) {
-  CHECK(kHotkeyToPrefMap.contains(hotkey));
-  switch (hotkey) {
-    case Hotkey::kFocusToggle:
+ui::Accelerator LocalHotkeyManager::GetDefaultAccelerator(Command command) {
+  CHECK(kCommandToPrefMap.contains(command));
+  switch (command) {
+    case Command::kFocusToggle:
       return ui::Accelerator{ui::VKEY_G, kFocusToggleAcceleratorModifiers};
+    case Command::kCaptureRegion:
+      return ui::Accelerator{ui::VKEY_G, kCaptureRegionAcceleratorModifiers};
+    case Command::kPanelToggle:
+      return ui::Accelerator{ui::VKEY_G, kPanelToggleAcceleratorModifiers};
     default:
       NOTREACHED();
   }
@@ -124,16 +181,17 @@ ui::Accelerator LocalHotkeyManager::GetDefaultAccelerator(Hotkey hotkey) {
 
 // static
 base::span<const ui::Accelerator> LocalHotkeyManager::GetStaticAccelerators(
-    Hotkey hotkey) {
-  auto iter = kHotkeyToStaticAcceleratorsMap.find(hotkey);
-  CHECK(iter != kHotkeyToStaticAcceleratorsMap.end());
+    Command command) {
+  auto iter = kCommandToStaticAcceleratorsMap.find(command);
+  CHECK(iter != kCommandToStaticAcceleratorsMap.end());
   return iter->second;
 }
 
 // static
-ui::Accelerator LocalHotkeyManager::GetConfigurableAccelerator(Hotkey hotkey) {
-  auto pref_name_iter = kHotkeyToPrefMap.find(hotkey);
-  CHECK(pref_name_iter != kHotkeyToPrefMap.end());
+ui::Accelerator LocalHotkeyManager::GetConfigurableAccelerator(
+    Command command) {
+  auto pref_name_iter = kCommandToPrefMap.find(command);
+  CHECK(pref_name_iter != kCommandToPrefMap.end());
 
   const ui::Accelerator accelerator = ui::Command::StringToAccelerator(
       g_browser_process->local_state()->GetString(pref_name_iter->second));
@@ -147,91 +205,113 @@ ui::Accelerator LocalHotkeyManager::GetConfigurableAccelerator(Hotkey hotkey) {
   return accelerator;
 }
 
-LocalHotkeyManager::Hotkey LocalHotkeyManager::GetHotkeyEnum(
+LocalHotkeyManager::Command LocalHotkeyManager::GetCommand(
     ui::Accelerator accelerator) {
-  CHECK(delegate_);
+  CHECK(event_handler_);
 
-  for (Hotkey hotkey : delegate_->GetSupportedHotkeys()) {
-    if (auto iter = kHotkeyToStaticAcceleratorsMap.find(hotkey);
-        iter != kHotkeyToStaticAcceleratorsMap.end()) {
+  for (Command command : supported_commands_) {
+    if (auto iter = kCommandToStaticAcceleratorsMap.find(command);
+        iter != kCommandToStaticAcceleratorsMap.end()) {
       for (const ui::Accelerator& static_accelerator : iter->second) {
         if (static_accelerator == accelerator) {
-          return hotkey;
+          return command;
         }
       }
-    } else if (GetConfigurableAccelerator(hotkey) == accelerator) {
-      return hotkey;
+    } else if (GetConfigurableAccelerator(command) == accelerator) {
+      return command;
     }
   }
 
-  NOTREACHED() << accelerator.GetShortcutText() << " isn't a supported hotkey";
+  NOTREACHED() << accelerator.GetShortcutText() << " isn't a supported command";
 }
 
 void LocalHotkeyManager::InitializeAccelerators() {
-  CHECK(delegate_);
-  for (Hotkey hotkey : delegate_->GetSupportedHotkeys()) {
-    RegisterHotkey(hotkey);
+  CHECK(event_handler_);
+  for (Command command : supported_commands_) {
+    RegisterCommand(command);
   }
 }
 
 bool LocalHotkeyManager::AcceleratorPressed(
     const ui::Accelerator& accelerator) {
-  if (!panel_ || !delegate_) {
+  if (!event_handler_) {
     return false;
   }
-  auto hotkey = GetHotkeyEnum(accelerator);
-  return delegate_->AcceleratorPressed(hotkey);
+  auto command = GetCommand(accelerator);
+  return event_handler_->AcceleratorPressed(command, accelerator);
+}
+
+bool LocalHotkeyManager::EventHandler::AcceleratorPressed(
+    Command command,
+    const ui::Accelerator& accelerator) {
+  return AcceleratorPressed(command);
 }
 
 bool LocalHotkeyManager::CanHandleAccelerators() const {
-  if (!panel_) {
+  if (!event_handler_) {
     return false;
   }
+  return event_handler_->CanHandleAccelerators();
+}
 
-  return panel_->IsShowing();
+bool LocalHotkeyManager::IsRegisteredAccelerator(
+    const ui::Accelerator& accelerator) const {
+  for (Command command : supported_commands_) {
+    for (const ui::Accelerator& registered_accel : GetAccelerators(command)) {
+      if (registered_accel == accelerator) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 std::vector<ui::Accelerator> LocalHotkeyManager::GetAccelerators(
-    Hotkey hotkey) {
+    Command command) const {
   std::vector<ui::Accelerator> accelerators_to_register;
-  if (kHotkeyToPrefMap.contains(hotkey)) {
+  if (kCommandToPrefMap.contains(command)) {
     // Configurable hotkey
-    ui::Accelerator accelerator = GetConfigurableAccelerator(hotkey);
+    ui::Accelerator accelerator = GetConfigurableAccelerator(command);
     if (!accelerator.IsEmpty()) {
       accelerators_to_register.push_back(accelerator);
     }
   } else {
     // Static hotkey. GetStaticAccelerators will CHECK that it's in
-    // kHotkeyToStaticAcceleratorsMap and not in kHotkeyToPrefMap.
+    // kCommandToStaticAcceleratorsMap and not in kCommandToPrefMap.
     base::span<const ui::Accelerator> static_accelerators =
-        GetStaticAccelerators(hotkey);
+        GetStaticAccelerators(command);
     accelerators_to_register.assign(static_accelerators.begin(),
                                     static_accelerators.end());
   }
   return accelerators_to_register;
 }
 
-void LocalHotkeyManager::RegisterHotkey(Hotkey hotkey) {
-  // Clear previous registrations for this hotkey.
+void LocalHotkeyManager::RegisterCommand(Command command) {
+  // Clear previous registrations for this command.
   // The unique_ptrs in the vector will be destroyed, unregistering them.
-  hotkey_registrations_.erase(hotkey);
+  command_registrations_.erase(command);
 
-  if (!delegate_) {
+  if (!registration_delegate_) {
     return;
   }
 
   std::vector<std::unique_ptr<ScopedHotkeyRegistration>> new_registrations;
 
-  for (const ui::Accelerator& accelerator : GetAccelerators(hotkey)) {
-    if (auto registration = delegate_->CreateScopedHotkeyRegistration(
-            accelerator, GetWeakPtr())) {
+  for (const ui::Accelerator& accelerator : GetAccelerators(command)) {
+    if (auto registration =
+            registration_delegate_->CreateScopedHotkeyRegistration(
+                accelerator, GetWeakPtr())) {
       new_registrations.push_back(std::move(registration));
     }
   }
 
   if (!new_registrations.empty()) {
-    hotkey_registrations_.emplace(hotkey, std::move(new_registrations));
+    command_registrations_.emplace(command, std::move(new_registrations));
   }
+}
+
+BrowserWindowInterface* LocalHotkeyManager::Panel::GetBrowserWindowInterface() {
+  return nullptr;
 }
 
 }  // namespace glic

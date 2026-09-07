@@ -54,8 +54,7 @@ import org.chromium.components.autofill.EditableOption;
 import org.chromium.components.browser_ui.widget.FadingEdgeScrollView;
 import org.chromium.components.browser_ui.widget.animation.FocusAnimator;
 import org.chromium.components.payments.ui.InputProtector;
-import org.chromium.components.signin.base.CoreAccountInfo;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
+import org.chromium.components.signin.base.AccountInfo;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.ui.base.ViewUtils;
 import org.chromium.ui.interpolators.Interpolators;
@@ -72,7 +71,7 @@ import java.util.List;
 /** The PaymentRequest UI. */
 @NullMarked
 public class PaymentRequestUi
-        implements DimmingDialog.OnDismissListener,
+        implements DimmingDialog.DimmingDialogObserver,
                 View.OnClickListener,
                 PaymentRequestSection.SectionDelegate,
                 PauseResumeWithNativeObserver {
@@ -242,6 +241,9 @@ public class PaymentRequestUi
 
         /** Called when the result UI is showing. */
         void onPaymentRequestResultReady(PaymentRequestUi ui);
+
+        /** Called when the scrim is shown in the skip UI case. */
+        void onPaymentRequestScrimShown(PaymentRequestUi ui);
     }
 
     /** Helper to notify tests of an event only once. */
@@ -258,12 +260,9 @@ public class PaymentRequestUi
         public NotifierForTest(final Runnable notification) {
             mHandler = new Handler();
             mNotification =
-                    new Runnable() {
-                        @Override
-                        public void run() {
-                            notification.run();
-                            mNotificationPending = false;
-                        }
+                    () -> {
+                        notification.run();
+                        mNotificationPending = false;
                     };
         }
 
@@ -379,43 +378,36 @@ public class PaymentRequestUi
 
         mReadyToPayNotifierForTest =
                 new NotifierForTest(
-                        new Runnable() {
-                            @Override
-                            public void run() {
-                                if (sPaymentRequestObserverForTest != null
-                                        && isAcceptingUserInput()
-                                        && mPayButton.isEnabled()) {
-                                    sPaymentRequestObserverForTest.onPaymentRequestReadyToPay(
-                                            PaymentRequestUi.this);
-                                }
+                        () -> {
+                            if (sPaymentRequestObserverForTest != null
+                                    && isAcceptingUserInput()
+                                    && mPayButton.isEnabled()) {
+                                sPaymentRequestObserverForTest.onPaymentRequestReadyToPay(
+                                        PaymentRequestUi.this);
                             }
                         });
 
         // This callback will be fired if mIsClientCheckingSelection is true.
         mUpdateSectionsCallback =
-                new Callback<>() {
-                    @Override
-                    public void onResult(PaymentInformation result) {
-                        mIsClientCheckingSelection = false;
-                        updateOrderSummarySection(result.getShoppingCart());
-                        if (mClient.shouldShowShippingSection()) {
-                            updateSection(
-                                    DataType.SHIPPING_ADDRESSES, result.getShippingAddresses());
-                            updateSection(DataType.SHIPPING_OPTIONS, result.getShippingOptions());
-                        }
-                        if (mClient.shouldShowContactSection()) {
-                            updateSection(DataType.CONTACT_DETAILS, result.getContactDetails());
-                        }
-                        updateSection(DataType.PAYMENT_METHODS, result.getPaymentMethods());
-                        if (mShippingAddressSectionInformation != null
-                                && mShippingAddressSectionInformation.getSelectedItem() == null) {
-                            expand(mShippingAddressSection);
-                        } else {
-                            expand(null);
-                        }
-                        updatePayButtonEnabled();
-                        notifySelectionChecked();
+                (PaymentInformation result) -> {
+                    mIsClientCheckingSelection = false;
+                    updateOrderSummarySection(result.getShoppingCart());
+                    if (mClient.shouldShowShippingSection()) {
+                        updateSection(DataType.SHIPPING_ADDRESSES, result.getShippingAddresses());
+                        updateSection(DataType.SHIPPING_OPTIONS, result.getShippingOptions());
                     }
+                    if (mClient.shouldShowContactSection()) {
+                        updateSection(DataType.CONTACT_DETAILS, result.getContactDetails());
+                    }
+                    updateSection(DataType.PAYMENT_METHODS, result.getPaymentMethods());
+                    if (mShippingAddressSectionInformation != null
+                            && mShippingAddressSectionInformation.getSelectedItem() == null) {
+                        expand(mShippingAddressSection);
+                    } else {
+                        expand(null);
+                    }
+                    updatePayButtonEnabled();
+                    notifySelectionChecked();
                 };
 
         mShippingStrings = shippingStrings;
@@ -451,31 +443,27 @@ public class PaymentRequestUi
         mPaymentUisShowStateReconciler.showPaymentRequestDialogWhenNoBottomSheet();
         mClient.getDefaultPaymentInformation(
                 waitForUpdatedDetails,
-                new Callback<>() {
-                    @Override
-                    public void onResult(PaymentInformation result) {
-                        updateOrderSummarySection(result.getShoppingCart());
+                (PaymentInformation result) -> {
+                    updateOrderSummarySection(result.getShoppingCart());
 
-                        if (mClient.shouldShowShippingSection()) {
-                            updateSection(
-                                    DataType.SHIPPING_ADDRESSES, result.getShippingAddresses());
-                            updateSection(DataType.SHIPPING_OPTIONS, result.getShippingOptions());
-                        }
-
-                        if (mClient.shouldShowContactSection()) {
-                            updateSection(DataType.CONTACT_DETAILS, result.getContactDetails());
-                        }
-
-                        mPaymentMethodSection.setDisplaySummaryInSingleLineInNormalMode(
-                                result.getPaymentMethods()
-                                        .getDisplaySelectedItemSummaryInSingleLineInNormalMode());
-                        updateSection(DataType.PAYMENT_METHODS, result.getPaymentMethods());
-                        updatePayButtonEnabled();
-
-                        // Hide the loading indicators and show the real sections.
-                        changeSpinnerVisibility(false);
-                        mRequestView.addOnLayoutChangeListener(new SheetEnlargingAnimator(false));
+                    if (mClient.shouldShowShippingSection()) {
+                        updateSection(DataType.SHIPPING_ADDRESSES, result.getShippingAddresses());
+                        updateSection(DataType.SHIPPING_OPTIONS, result.getShippingOptions());
                     }
+
+                    if (mClient.shouldShowContactSection()) {
+                        updateSection(DataType.CONTACT_DETAILS, result.getContactDetails());
+                    }
+
+                    mPaymentMethodSection.setDisplaySummaryInSingleLineInNormalMode(
+                            result.getPaymentMethods()
+                                    .getDisplaySelectedItemSummaryInSingleLineInNormalMode());
+                    updateSection(DataType.PAYMENT_METHODS, result.getPaymentMethods());
+                    updatePayButtonEnabled();
+
+                    // Hide the loading indicators and show the real sections.
+                    changeSpinnerVisibility(false);
+                    mRequestView.addOnLayoutChangeListener(new SheetEnlargingAnimator(false));
                 });
         if (sPaymentRequestObserverForTest != null) {
             sPaymentRequestObserverForTest.onPaymentRequestUiShow(PaymentRequestUi.this);
@@ -491,7 +479,8 @@ public class PaymentRequestUi
     public void dimBackground() {
         // Intentionally do not add the bottom sheet view to mDialog so that only the scrim part of
         // the dialog will be shown.
-        mPaymentUisShowStateReconciler.showPaymentRequestDialogWhenNoBottomSheet();
+        mPaymentUisShowStateReconciler.showPaymentRequestDialogWhenNoBottomSheet(
+                /* delayBackground= */ true);
     }
 
     /**
@@ -532,6 +521,7 @@ public class PaymentRequestUi
         // Create all the possible sections.
         mSectionSeparators = new ArrayList<>();
         mPaymentContainer = mRequestView.findViewById(R.id.option_container);
+        mPaymentContainer.disableScrollbarOnTablet();
         mPaymentContainerLayout = mRequestView.findViewById(R.id.payment_container_layout);
         mRetryErrorView = mRequestView.findViewById(R.id.retry_error);
         mOrderSummarySection =
@@ -919,8 +909,7 @@ public class PaymentRequestUi
         if (!isAcceptingUserInput()) return;
 
         // Users can only expand incomplete sections by clicking on their edit buttons.
-        if (v instanceof PaymentRequestSection) {
-            PaymentRequestSection section = (PaymentRequestSection) v;
+        if (v instanceof PaymentRequestSection section) {
             if (section.getEditButtonState() != EDIT_BUTTON_GONE) return;
         }
 
@@ -1021,7 +1010,7 @@ public class PaymentRequestUi
             mSpinnyLayout.setVisibility(View.VISIBLE);
 
             // Turn the bottom sheet back into a collapsed bottom sheet showing only the spinner.
-            // TODO(dfalcantara): Animate this: https://crbug.com/621955
+            // TODO(dfalcantara): Animate this: https://crbug.com/41260058
             ((FrameLayout.LayoutParams) mRequestView.getLayoutParams()).height =
                     LayoutParams.WRAP_CONTENT;
             ViewUtils.requestLayout(mRequestView, "PaymentRequestUi.changeSpinnerVisibility show");
@@ -1132,12 +1121,9 @@ public class PaymentRequestUi
         mSelectedSection = section;
         if (mSelectedSection == mOrderSummarySection) {
             mClient.getShoppingCart(
-                    new Callback<>() {
-                        @Override
-                        public void onResult(ShoppingCart result) {
-                            updateOrderSummarySection(result);
-                            updateSectionVisibility();
-                        }
+                    (ShoppingCart result) -> {
+                        updateOrderSummarySection(result);
+                        updateSectionVisibility();
                     });
         } else if (mSelectedSection == mShippingAddressSection) {
             mClient.getSectionInformation(
@@ -1212,17 +1198,13 @@ public class PaymentRequestUi
         IdentityManager identityManager =
                 IdentityServicesProvider.get().getIdentityManager(mProfile);
         if (identityManager == null) return null;
-        CoreAccountInfo info = identityManager.getPrimaryAccountInfo(ConsentLevel.SIGNIN);
-        return CoreAccountInfo.getEmailFrom(info);
+        return AccountInfo.getEmailFrom(identityManager.getPrimaryAccountInfo());
     }
 
     private Callback<SectionInformation> createUpdateSectionCallback(@DataType final int type) {
-        return new Callback<>() {
-            @Override
-            public void onResult(SectionInformation result) {
-                updateSection(type, result);
-                updateSectionVisibility();
-            }
+        return (SectionInformation result) -> {
+            updateSection(type, result);
+            updateSectionVisibility();
         };
     }
 
@@ -1252,9 +1234,8 @@ public class PaymentRequestUi
         boolean mayEnableButton = !mIsClientCheckingSelection;
         for (int i = 0; i < mPaymentContainerLayout.getChildCount(); i++) {
             View child = mPaymentContainerLayout.getChildAt(i);
-            if (!(child instanceof PaymentRequestSection)) continue;
+            if (!(child instanceof PaymentRequestSection section)) continue;
 
-            PaymentRequestSection section = (PaymentRequestSection) child;
             section.setIsEditButtonEnabled(mayEnableButton);
             if (section.getEditButtonState() != EDIT_BUTTON_GONE) mayEnableButton = false;
         }
@@ -1274,13 +1255,20 @@ public class PaymentRequestUi
      *   <li>User closing all incognito windows with PaymentRequest UI open in an incognito window.
      * </ul>
      */
-    // DimmingDialog.OnDismissListener implementation.
+    // DimmingDialog.DimmingDialogObserver implementation.
     @Override
     public void onDismiss() {
         mIsClosing = true;
         if (mEditorDialog.isShowing()) mEditorDialog.dismiss();
         if (sEditorObserverForTest != null) sEditorObserverForTest.onEditorDismiss();
         if (!mIsClientClosing) mClient.onDismiss();
+    }
+
+    @Override
+    public void onScrimShown() {
+        if (sPaymentRequestObserverForTest != null) {
+            sPaymentRequestObserverForTest.onPaymentRequestScrimShown(this);
+        }
     }
 
     @Override
@@ -1329,13 +1317,10 @@ public class PaymentRequestUi
      */
     private void startSectionResizeAnimation() {
         Runnable animationEndRunnable =
-                new Runnable() {
-                    @Override
-                    public void run() {
-                        mSectionAnimator = null;
-                        notifyReadyForInput();
-                        mReadyToPayNotifierForTest.run();
-                    }
+                () -> {
+                    mSectionAnimator = null;
+                    notifyReadyForInput();
+                    mReadyToPayNotifierForTest.run();
                 };
 
         mSectionAnimator =
@@ -1464,6 +1449,7 @@ public class PaymentRequestUi
     public static void setEditorObserverForTest(EditorObserverForTest editorObserverForTest) {
         sEditorObserverForTest = editorObserverForTest;
         EditorDialogView.setEditorObserverForTest(sEditorObserverForTest);
+        ResettersForTesting.register(() -> sEditorObserverForTest = null);
     }
 
     public static void setPaymentRequestObserverForTest(
@@ -1517,28 +1503,30 @@ public class PaymentRequestUi
     }
 
     /**
-     * Set the visibility state of the dialog. Use {@link PaymentUisShowStateReconciler}'s
-     * showPaymentRequestDialogWhenNoBottomSheet() and hidePaymentRequestDialog() instead of calling
-     * this method directly.
+     * Show the dialog. Use {@link PaymentUisShowStateReconciler}'s
+     * showPaymentRequestDialogWhenNoBottomSheet() instead of calling this method directly.
      *
-     * @param visible True to show the dialog, false to hide the dialog.
-     * @return Whether setting visibility is successful.
+     * @param delayBackground True if showing the background should be delayed.
+     * @return Whether the dialog was made visible successfully.
      */
-    public boolean setVisible(boolean visible) {
-        if (visible) {
-            return mDialog.show();
-        } else {
-            mDialog.hide();
-            return true;
-        }
+    public boolean showDialog(boolean delayBackground) {
+        return mDialog.show(delayBackground);
+    }
+
+    /**
+     * Hide the dialog. Use {@link PaymentUisShowStateReconciler}'s hidePaymentRequestDialog()
+     * instead of calling this method directly.
+     */
+    public void hideDialog() {
+        mDialog.hide();
     }
 
     // Implement PauseResumeWithNativeObserver:
     @Override
     public void onResumeWithNative() {
         // When users come back from an external activity (e.g., app-picker/webauthn), the PR UI
-        // somehow shows up even though it's set to GONE (crbug.com/1030416 and
-        // crbug.com/1051786). Here we use a workaround to fix it - refresh the dialog window
+        // somehow shows up even though it's set to GONE (crbug.com/40109981 and
+        // crbug.com/40118601). Here we use a workaround to fix it - refresh the dialog window
         // from time to time to force the visual state to respect its visibility attribute.
         mDialog.refresh();
     }

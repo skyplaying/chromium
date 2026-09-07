@@ -35,14 +35,11 @@
 #include "chrome/browser/media/router/media_router_feature.h"
 #include "chrome/browser/prefs/browser_prefs.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/web_applications/test/fake_web_app_provider.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
@@ -272,7 +269,15 @@ class NoteTakingHelperTest : public BrowserWithTestWindowTest {
     // TODO(derat): Sigh, something in ArcAppTest appears to be re-enabling ARC.
     profile()->GetPrefs()->SetBoolean(arc::prefs::kArcEnabled,
                                       flags & ENABLE_PLAY_STORE);
+
     NoteTakingHelper::Initialize();
+
+    // NOTE: In production, NoteTakingHelper is created before a profile.
+    // These simulate observer calls of ProfileManagerObserver and
+    // ArcIntentHelperObserver.
+    NoteTakingHelper::Get()->OnProfileAdded(profile());
+    NoteTakingHelper::Get()->OnIntentFiltersUpdated(std::nullopt);
+
     NoteTakingHelper::Get()->set_launch_chrome_app_callback_for_test(
         base::BindRepeating(&NoteTakingHelperTest::LaunchChromeApp,
                             base::Unretained(this)));
@@ -344,14 +349,6 @@ class NoteTakingHelperTest : public BrowserWithTestWindowTest {
   // BrowserWithTestWindowTest:
   std::optional<std::string> GetDefaultProfileName() override {
     return kTestProfileName;
-  }
-
-  // TODO(crbug.com/40286020): merge into BrowserWithTestWindowTest.
-  void LogIn(std::string_view email, const GaiaId& gaia_id) override {
-    AccountId account_id = AccountId::FromUserEmailGaiaId(email, gaia_id);
-    user_manager()->AddGaiaUser(account_id, user_manager::UserType::kRegular);
-    user_manager()->UserLoggedIn(
-        account_id, user_manager::TestHelper::GetFakeUsernameHash(account_id));
   }
 
   TestingProfile* CreateProfile(const std::string& profile_name) override {

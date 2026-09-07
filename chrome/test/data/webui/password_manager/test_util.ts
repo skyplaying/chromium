@@ -57,6 +57,7 @@ export interface PasswordEntryParams {
   changePasswordUrl?: string;
   affiliatedDomains?: chrome.passwordsPrivate.DomainInfo[];
   hidden?: boolean;
+  compromisedInfo?: chrome.passwordsPrivate.CompromisedInfo;
 }
 
 /**
@@ -105,6 +106,7 @@ export function createPasswordEntry(params?: PasswordEntryParams):
     affiliatedDomains: params.affiliatedDomains || [domain],
     creationTime: params.isPasskey ? 1000000000 : undefined,
     hidden: params.hidden || false,
+    compromisedInfo: params.compromisedInfo,
   };
 }
 
@@ -160,6 +162,11 @@ export function makePasswordManagerPrefs() {
       type: chrome.settingsPrivate.PrefType.BOOLEAN,
       value: true,
     },
+    automated_password_change_enabled: {
+      key: 'automated_password_change_enabled',
+      type: chrome.settingsPrivate.PrefType.BOOLEAN,
+      value: true,
+    },
     profile: {
       password_dismiss_compromised_alert: {
         key: 'profile.password_dismiss_compromised_alert',
@@ -192,6 +199,7 @@ export interface InsecureCredentialsParams {
   id?: number;
   elapsedMinSinceCompromise?: number;
   isMuted?: boolean;
+  isAutomaticPasswordChangeSupported?: boolean;
 }
 
 /**
@@ -222,6 +230,8 @@ export function makeInsecureCredential(params: InsecureCredentialsParams):
     id: id || 0,
     storedIn: chrome.passwordsPrivate.PasswordStoreSet.DEVICE,
     changePasswordUrl: `https://${url}/`,
+    isAutomaticPasswordChangeSupported:
+        params.isAutomaticPasswordChangeSupported ?? false,
     username: username,
     password: params.password,
     note: '',

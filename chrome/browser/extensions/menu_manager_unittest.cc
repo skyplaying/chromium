@@ -382,7 +382,7 @@ TEST_F(MenuManagerTest, PopulateFromValue) {
   EXPECT_EQ(incognito, item->incognito());
   EXPECT_EQ(title, item->title());
   EXPECT_EQ(checked, item->checked());
-  EXPECT_EQ(item->checked(), item->checked());
+  EXPECT_EQ(type, item->type());
   EXPECT_EQ(visible, item->visible());
   EXPECT_EQ(enabled, item->enabled());
   EXPECT_EQ(contexts, item->contexts());
@@ -602,11 +602,10 @@ class MockEventRouter : public EventRouter {
 
   void DispatchEventToExtension(const std::string& extension_id,
                                 std::unique_ptr<Event> event) override {
-    DispatchEventToExtensionMock(
-        extension_id, event->event_name,
-        new base::ListValue(std::move(event->event_args)),
-        event->restrict_to_browser_context, event->event_url,
-        event->user_gesture);
+    DispatchEventToExtensionMock(extension_id, event->event_name,
+                                 new base::ListValue(event->args().Clone()),
+                                 event->restrict_to_browser_context,
+                                 event->event_url, event->user_gesture);
   }
 };
 

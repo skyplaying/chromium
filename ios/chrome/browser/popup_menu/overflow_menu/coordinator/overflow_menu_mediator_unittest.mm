@@ -5,18 +5,23 @@
 #import "ios/chrome/browser/popup_menu/overflow_menu/coordinator/overflow_menu_mediator.h"
 
 #import "base/files/scoped_temp_dir.h"
+#import "base/ios/block_types.h"
 #import "base/ios/ios_util.h"
 #import "base/memory/raw_ptr.h"
 #import "base/strings/string_number_conversions.h"
 #import "base/strings/sys_string_conversions.h"
 #import "base/test/ios/wait_util.h"
 #import "base/test/metrics/histogram_tester.h"
+#import "base/test/scoped_feature_list.h"
 #import "base/time/default_clock.h"
 #import "components/bookmarks/browser/bookmark_model.h"
 #import "components/bookmarks/browser/bookmark_utils.h"
 #import "components/bookmarks/common/bookmark_pref_names.h"
 #import "components/bookmarks/test/bookmark_test_helpers.h"
 #import "components/feature_engagement/test/mock_tracker.h"
+#import "components/image_fetcher/core/image_fetcher_service.h"
+#import "components/image_fetcher/core/mock_image_fetcher.h"
+#import "components/image_fetcher/core/request_metadata.h"
 #import "components/language/ios/browser/ios_language_detection_tab_helper.h"
 #import "components/language/ios/browser/language_detection_java_script_feature.h"
 #import "components/language_detection/core/language_detection_model.h"
@@ -30,14 +35,17 @@
 #import "components/reading_list/core/fake_reading_list_model_storage.h"
 #import "components/reading_list/core/reading_list_model.h"
 #import "components/reading_list/core/reading_list_model_impl.h"
+#import "components/send_tab_to_self/features.h"
 #import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/base/signin_metrics.h"
+#import "components/signin/public/identity_manager/account_capabilities_test_mutator.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "components/signin/public/identity_manager/identity_test_utils.h"
 #import "components/supervised_user/test_support/supervised_user_signin_test_utils.h"
 #import "components/sync/service/sync_service.h"
 #import "components/sync/service/sync_user_settings.h"
 #import "components/sync/test/mock_sync_service.h"
+#import "components/sync/test/test_sync_service.h"
 #import "components/sync_preferences/pref_service_mock_factory.h"
 #import "components/sync_preferences/pref_service_syncable.h"
 #import "components/translate/core/browser/translate_pref_names.h"
@@ -45,7 +53,12 @@
 #import "components/translate/core/language_detection/language_detection_model.h"
 #import "ios/chrome/browser/bookmarks/model/bookmark_model_factory.h"
 #import "ios/chrome/browser/dom_distiller/model/distiller_service_factory.h"
-#import "ios/chrome/browser/lens_overlay/coordinator/lens_overlay_availability.h"
+#import "ios/chrome/browser/home_customization/model/home_background_customization_service.h"
+#import "ios/chrome/browser/home_customization/model/home_background_customization_service_factory.h"
+#import "ios/chrome/browser/home_customization/model/user_uploaded_image_manager_factory.h"
+#import "ios/chrome/browser/intelligence/bwg/utils/gemini_constants.h"
+#import "ios/chrome/browser/intelligence/features/features.h"
+#import "ios/chrome/browser/lens_overlay/public/lens_overlay_availability.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_presenter.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_request.h"
 #import "ios/chrome/browser/overlays/model/public/overlay_request_queue.h"
@@ -55,6 +68,7 @@
 #import "ios/chrome/browser/policy/model/cloud/user_policy_constants.h"
 #import "ios/chrome/browser/policy/model/enterprise_policy_test_helper.h"
 #import "ios/chrome/browser/popup_menu/overflow_menu/coordinator/overflow_menu_orderer.h"
+#import "ios/chrome/browser/popup_menu/overflow_menu/public/features.h"
 #import "ios/chrome/browser/popup_menu/overflow_menu/public/overflow_menu_constants.h"
 #import "ios/chrome/browser/popup_menu/overflow_menu/ui/ui_swift.h"
 #import "ios/chrome/browser/popup_menu/public/popup_menu_constants.h"
@@ -69,11 +83,15 @@
 #import "ios/chrome/browser/shared/model/prefs/browser_prefs.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
+#import "ios/chrome/browser/shared/model/profile/test/test_profile_manager_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list_observer_bridge.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_opener.h"
+#import "ios/chrome/browser/shared/public/commands/gemini_commands.h"
+#import "ios/chrome/browser/shared/public/commands/popup_menu_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
+#import "ios/chrome/browser/signin/model/account_profile_mapper.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service.h"
@@ -86,11 +104,15 @@
 #import "ios/chrome/browser/signin/model/system_identity_manager.h"
 #import "ios/chrome/browser/snapshots/model/snapshot_source_tab_helper.h"
 #import "ios/chrome/browser/supervised_user/model/supervised_user_service_factory.h"
+#import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/test/toolbar_test_navigation_manager.h"
 #import "ios/chrome/browser/web/model/font_size/font_size_java_script_feature.h"
 #import "ios/chrome/browser/web/model/font_size/font_size_tab_helper.h"
 #import "ios/chrome/browser/whats_new/coordinator/whats_new_util.h"
 #import "ios/chrome/browser/whats_new/public/constants.h"
+#import "ios/chrome/grit/ios_branded_strings.h"
+#import "ios/chrome/grit/ios_strings.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/public/provider/chrome/browser/text_zoom/text_zoom_api.h"
 #import "ios/public/provider/chrome/browser/user_feedback/user_feedback_api.h"
@@ -103,14 +125,22 @@
 #import "ios/web/public/test/js_test_util.h"
 #import "ios/web/public/test/web_task_environment.h"
 #import "ios/web/public/web_state_observer_bridge.h"
+#import "testing/gmock/include/gmock/gmock.h"
 #import "testing/gtest_mac.h"
 #import "testing/platform_test.h"
+#import "third_party/ocmock/OCMock/OCMock.h"
 #import "ui/base/device_form_factor.h"
+#import "ui/base/l10n/l10n_util.h"
 
 using sync_preferences::PrefServiceMockFactory;
 using sync_preferences::PrefServiceSyncable;
+using testing::_;
 using testing::Return;
 using user_prefs::PrefRegistrySyncable;
+
+@interface OverflowMenuMediator (Testing)
+- (void)startAskGemini;
+@end
 
 namespace {
 
@@ -178,17 +208,19 @@ class OverflowMenuMediatorTest : public PlatformTest {
                 ProfileIOS, password_manager::MockPasswordStoreInterface>));
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
+        AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
             std::make_unique<FakeAuthenticationServiceDelegate>()));
+    builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
+                              base::BindRepeating(&CreateTestSyncService));
 
-    profile_ = std::move(builder).Build();
+    profile_ = profile_manager_.AddProfileWithBuilder(std::move(builder));
 
     web::test::OverrideJavaScriptFeatures(
-        profile_.get(),
+        profile_,
         {language::LanguageDetectionJavaScriptFeature::GetInstance()});
 
     // Set up the TestBrowser.
-    browser_ = std::make_unique<TestBrowser>(profile_.get());
+    browser_ = std::make_unique<TestBrowser>(profile_);
 
     // Set up the WebStateList.
     auto navigation_manager = std::make_unique<ToolbarTestNavigationManager>();
@@ -203,13 +235,13 @@ class OverflowMenuMediatorTest : public PlatformTest {
         std::make_unique<web::FakeWebState>();
     test_web_state->SetNavigationManager(std::move(navigation_manager));
     test_web_state->SetLoading(true);
-    test_web_state->SetBrowserState(profile_.get());
+    test_web_state->SetBrowserState(profile_);
     web_state_ = test_web_state.get();
 
     auto frames_manager = std::make_unique<web::FakeWebFramesManager>();
     auto main_frame = web::FakeWebFrame::CreateMainWebFrame(
         /*security_origin=*/url);
-    main_frame->set_browser_state(profile_.get());
+    main_frame->set_browser_state(profile_);
     frames_manager->AddWebFrame(std::move(main_frame));
     web::ContentWorld content_world =
         language::LanguageDetectionJavaScriptFeature::GetInstance()
@@ -241,9 +273,18 @@ class OverflowMenuMediatorTest : public PlatformTest {
     // observers when browser_ gets destroyed.
     [mediator_ disconnect];
     [orderer_ disconnect];
+    mediator_ = nil;
+    orderer_ = nil;
+    model_ = nil;
+    baseViewController_ = nil;
     overlay_presenter_->SetPresentationContext(nullptr);
     overlay_presenter_ = nullptr;
+    web_state_ = nullptr;
+    navigation_item_.reset();
+    reading_list_model_.reset();
+    bookmark_model_ = nullptr;
     browser_.reset();
+    profile_ = nullptr;
 
     CleanupNSUserDefaults();
 
@@ -262,6 +303,8 @@ class OverflowMenuMediatorTest : public PlatformTest {
     mediator_.baseViewController = baseViewController_;
     mediator_.localStatePrefs = localStatePrefs_.get();
     mediator_.profilePrefs = profilePrefs_.get();
+    mediator_.identityAvatarProvider =
+        GetApplicationContext()->GetIdentityAvatarProvider();
     SetUpReadingList();
     return mediator_;
   }
@@ -304,7 +347,7 @@ class OverflowMenuMediatorTest : public PlatformTest {
   }
 
   void SetUpBookmarks() {
-    bookmark_model_ = ios::BookmarkModelFactory::GetForProfile(profile_.get());
+    bookmark_model_ = ios::BookmarkModelFactory::GetForProfile(profile_);
     DCHECK(bookmark_model_);
     bookmarks::test::WaitForBookmarkModelToLoad(bookmark_model_);
     mediator_.bookmarkModel = bookmark_model_;
@@ -331,7 +374,7 @@ class OverflowMenuMediatorTest : public PlatformTest {
         ReaderModeTabHelper::FromWebState(web_state_);
     if (!tab_helper) {
       ReaderModeTabHelper::CreateForWebState(
-          web_state_, DistillerServiceFactory::GetForProfile(profile_.get()));
+          web_state_, DistillerServiceFactory::GetForProfile(profile_));
       SnapshotSourceTabHelper::CreateForWebState(web_state_);
       tab_helper = ReaderModeTabHelper::FromWebState(web_state_);
     }
@@ -350,7 +393,7 @@ class OverflowMenuMediatorTest : public PlatformTest {
     auto frames_manager = std::make_unique<web::FakeWebFramesManager>();
     auto main_frame = web::FakeWebFrame::CreateMainWebFrame(
         /*security_origin=*/url);
-    main_frame->set_browser_state(profile_.get());
+    main_frame->set_browser_state(profile_);
     frames_manager->AddWebFrame(std::move(main_frame));
     web::ContentWorld content_world =
         language::LanguageDetectionJavaScriptFeature::GetInstance()
@@ -440,7 +483,7 @@ class OverflowMenuMediatorTest : public PlatformTest {
   }
 
   signin::IdentityManager* identity_manager() {
-    return IdentityManagerFactory::GetForProfile(profile_.get());
+    return IdentityManagerFactory::GetForProfile(profile_);
   }
 
   FakeSystemIdentityManager* fake_system_identity_manager() {
@@ -452,8 +495,8 @@ class OverflowMenuMediatorTest : public PlatformTest {
     const FakeSystemIdentity* identity = [FakeSystemIdentity fakeIdentity1];
     fake_system_identity_manager()->AddIdentityWithUnknownCapabilities(
         identity);
-    AuthenticationServiceFactory::GetForProfile(profile_.get())
-        ->SignIn(identity, signin_metrics::AccessPoint::kStartPage);
+    AuthenticationServiceFactory::GetForProfile(profile_)->SignIn(
+        identity, signin_metrics::AccessPoint::kStartPage);
     CoreAccountInfo core_account_info =
         identity_manager()->GetPrimaryAccountInfo(
             signin::ConsentLevel::kSignin);
@@ -470,21 +513,22 @@ class OverflowMenuMediatorTest : public PlatformTest {
   // AuthenticationServiceFactory. Valid local state prefs for testing the
   // mediator are usually hosted in `localStatePrefs_`.
   IOSChromeScopedTestingLocalState scoped_testing_local_state_;
-  std::unique_ptr<TestProfileIOS> profile_;
+  TestProfileManagerIOS profile_manager_;
+  raw_ptr<TestProfileIOS> profile_ = nullptr;
   std::unique_ptr<Browser> browser_;
   raw_ptr<OverlayPresenter> overlay_presenter_ = nullptr;
 
   FakeOverlayPresentationContext presentation_context_;
-  OverflowMenuModel* model_;
-  OverflowMenuMediator* mediator_;
-  OverflowMenuOrderer* orderer_;
-  raw_ptr<bookmarks::BookmarkModel> bookmark_model_;
+  OverflowMenuModel* model_ = nil;
+  OverflowMenuMediator* mediator_ = nil;
+  OverflowMenuOrderer* orderer_ = nil;
+  raw_ptr<bookmarks::BookmarkModel> bookmark_model_ = nullptr;
   std::unique_ptr<ReadingListModel> reading_list_model_;
   std::unique_ptr<TestingPrefServiceSimple> profilePrefs_;
   std::unique_ptr<TestingPrefServiceSimple> localStatePrefs_;
-  raw_ptr<web::FakeWebState, DanglingUntriaged> web_state_;
+  raw_ptr<web::FakeWebState> web_state_ = nullptr;
   std::unique_ptr<web::NavigationItem> navigation_item_;
-  UIViewController* baseViewController_;
+  UIViewController* baseViewController_ = nil;
   translate::LanguageDetectionModel language_detection_model_;
   TestingPrefServiceSimple pref_service_;
   feature_engagement::test::MockTracker tracker_;
@@ -508,19 +552,31 @@ TEST_F(OverflowMenuMediatorTest, TestFeatureEngagementDisconnect) {
 // Tests that the mediator is returning the right number of items and sections
 // for the Tools Menu type.
 TEST_F(OverflowMenuMediatorTest, TestMenuItemsCount) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(send_tab_to_self::kIOSTabReminders);
+
   CreateMediator(/*incognito=*/NO);
   mediator_.model = model_;
 
-  NSUInteger number_of_action_items = 6;
+  NSUInteger number_of_action_items = 7;
 
   if (ios::provider::IsTextZoomEnabled()) {
     number_of_action_items++;
   }
 
+  if (send_tab_to_self::AreIOSTabRemindersEnabled() && !mediator_.incognito) {
+    number_of_action_items++;
+  }
   // New Tab, New Incognito Tab.
   NSUInteger number_of_tab_actions = 2;
-  if (IsSplitToolbarMode(mediator_.baseViewController)) {
+  BOOL showReloadStopAction;
+  if (IsChromeNextIaEnabled()) {
+    showReloadStopAction = !CanShowTabStrip(mediator_.baseViewController);
+  } else {
     // Stop/Reload only shows in split toolbar mode.
+    showReloadStopAction = IsSplitToolbarMode(mediator_.baseViewController);
+  }
+  if (showReloadStopAction) {
     number_of_tab_actions++;
   }
   if (base::ios::IsMultipleScenesSupported()) {
@@ -546,6 +602,119 @@ TEST_F(OverflowMenuMediatorTest, TestMenuItemsCount) {
   ]);
 }
 
+// Tests that the Report an Issue item is hidden when the capability is false.
+TEST_F(OverflowMenuMediatorTest, FeedbackItemHiddenWhenCapabilityFalse) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      kFeedbackEntryPointsRequireCanSubmitFeedbackCapability);
+
+  FakeSystemIdentity* identity = [FakeSystemIdentity fakeIdentity1];
+  fake_system_identity_manager()->AddIdentityWithUnknownCapabilities(identity);
+  AuthenticationServiceFactory::GetForProfile(profile_)->SignIn(
+      identity, signin_metrics::AccessPoint::kStartPage);
+
+  CoreAccountInfo core_account_info =
+      identity_manager()->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin);
+  AccountInfo account_info =
+      identity_manager()->FindExtendedAccountInfo(core_account_info);
+
+  AccountCapabilitiesTestMutator mutator(&account_info);
+  mutator.set_can_submit_feedback(false);
+
+  signin::UpdateAccountInfoForAccount(identity_manager(), account_info);
+
+  CreateMediator(/*incognito=*/NO);
+  mediator_.identityManager = identity_manager();
+  SetUpActiveWebState();
+  mediator_.webStateList = browser_->GetWebStateList();
+
+  // Force model update.
+  mediator_.model = model_;
+
+  bool found = false;
+  for (OverflowMenuActionGroup* group in model_.actionGroups) {
+    for (OverflowMenuAction* action in group.actions) {
+      if (action.accessibilityIdentifier == kToolsMenuReportAnIssueId) {
+        found = true;
+      }
+    }
+  }
+  EXPECT_FALSE(found);
+}
+
+// Tests that the Report an Issue item is shown when the capability is true.
+TEST_F(OverflowMenuMediatorTest, TestFeedbackItemShownWhenCapabilityTrue) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      kFeedbackEntryPointsRequireCanSubmitFeedbackCapability);
+
+  const FakeSystemIdentity* identity = [FakeSystemIdentity fakeIdentity1];
+  fake_system_identity_manager()->AddIdentityWithUnknownCapabilities(identity);
+  AuthenticationServiceFactory::GetForProfile(profile_)->SignIn(
+      identity, signin_metrics::AccessPoint::kStartPage);
+
+  CoreAccountInfo core_account_info =
+      identity_manager()->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin);
+  AccountInfo account_info =
+      identity_manager()->FindExtendedAccountInfo(core_account_info);
+
+  AccountCapabilitiesTestMutator mutator(&account_info);
+  mutator.set_can_submit_feedback(true);
+
+  signin::UpdateAccountInfoForAccount(identity_manager(), account_info);
+
+  CreateMediator(/*incognito=*/NO);
+  mediator_.identityManager = identity_manager();
+  SetUpActiveWebState();
+  mediator_.webStateList = browser_->GetWebStateList();
+
+  // Force model update.
+  mediator_.model = model_;
+
+  bool found = false;
+  for (OverflowMenuActionGroup* group in model_.actionGroups) {
+    for (OverflowMenuAction* action in group.actions) {
+      if (action.accessibilityIdentifier == kToolsMenuReportAnIssueId) {
+        found = true;
+      }
+    }
+  }
+  EXPECT_TRUE(found);
+}
+
+// Tests that the Report an Issue item is shown when the user is signed out
+// but has an identity with the capability set to true.
+TEST_F(OverflowMenuMediatorTest,
+       TestFeedbackItemShownWhenSignedOutAndCapabilityTrue) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      kFeedbackEntryPointsRequireCanSubmitFeedbackCapability);
+
+  const FakeSystemIdentity* identity = [FakeSystemIdentity fakeIdentity1];
+  fake_system_identity_manager()->AddIdentityWithUnknownCapabilities(identity);
+  fake_system_identity_manager()
+      ->GetPendingCapabilitiesMutator(identity)
+      ->set_can_submit_feedback(true);
+
+  CreateMediator(/*incognito=*/NO);
+  mediator_.identityManager = identity_manager();
+  SetUpActiveWebState();
+  mediator_.webStateList = browser_->GetWebStateList();
+
+  // Force model update.
+  mediator_.model = model_;
+
+  bool found = false;
+  for (OverflowMenuActionGroup* group in model_.actionGroups) {
+    for (OverflowMenuAction* action in group.actions) {
+      if (action.accessibilityIdentifier == kToolsMenuReportAnIssueId) {
+        found = true;
+      }
+    }
+  }
+  EXPECT_TRUE(found);
+}
+
 // Tests that the items returned by the mediator are correctly enabled on a
 // WebPage.
 TEST_F(OverflowMenuMediatorTest, TestItemsStatusOnWebPage) {
@@ -561,6 +730,40 @@ TEST_F(OverflowMenuMediatorTest, TestItemsStatusOnWebPage) {
 
   EXPECT_TRUE(HasItem(kToolsMenuNewTabId, /*enabled=*/YES));
   EXPECT_TRUE(HasItem(kToolsMenuSiteInformation, /*enabled=*/YES));
+}
+
+// Tests that the "Set Reminder" action is visible in regular mode.
+TEST_F(OverflowMenuMediatorTest, SetReminderIsVisibleInRegularMode) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(send_tab_to_self::kIOSTabReminders);
+
+  const GURL kUrl("https://chromium.test");
+  web_state_->SetCurrentURL(kUrl);
+  CreateMediator(/*incognito=*/NO);
+  SetUpActiveWebState();
+  mediator_.webStateList = browser_->GetWebStateList();
+
+  // Force model update.
+  mediator_.model = model_;
+
+  EXPECT_TRUE(HasItem(kToolsMenuSetTabReminder, /*enabled=*/YES));
+}
+
+// Tests that the "Set Reminder" action is hidden in incognito mode.
+TEST_F(OverflowMenuMediatorTest, SetReminderIsHiddenInIncognitoMode) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(send_tab_to_self::kIOSTabReminders);
+
+  const GURL kUrl("https://chromium.test");
+  web_state_->SetCurrentURL(kUrl);
+  CreateMediator(/*incognito=*/YES);
+  SetUpActiveWebState();
+  mediator_.webStateList = browser_->GetWebStateList();
+
+  // Force model update.
+  mediator_.model = model_;
+
+  EXPECT_FALSE(HasItem(kToolsMenuSetTabReminder, /*enabled=*/YES));
 }
 
 // Tests that the items returned by the mediator are correctly enabled on the
@@ -579,6 +782,36 @@ TEST_F(OverflowMenuMediatorTest, TestItemsStatusOnNTP) {
 
   EXPECT_TRUE(HasItem(kToolsMenuNewTabId, /*enabled=*/YES));
   EXPECT_FALSE(HasItem(kToolsMenuSiteInformation, /*enabled=*/YES));
+}
+
+// Tests that the share action is not added to the overflow menu when the share
+// icon is visible in the omnibox.
+TEST_F(OverflowMenuMediatorTest, TestShareActionNotVisibleByDefault) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeaturesAndParameters(
+      {{kChromeNextIa, {{"chrome_next_ia_share_icon_visible", "true"}}}}, {});
+
+  CreateMediator(/*incognito=*/NO);
+  SetUpActiveWebState();
+  web_state_->SetCurrentURL(GURL("http://chromium.org"));
+  mediator_.webStateList = browser_->GetWebStateList();
+  mediator_.model = model_;
+  EXPECT_FALSE(HasItem(kToolsMenuShareId, /*enabled=*/YES));
+}
+
+// Tests that the share action is added to the overflow menu when ChromeNextIa
+// is enabled without the share icon being visible.
+TEST_F(OverflowMenuMediatorTest, TestShareActionVisibleWithChromeNextIa) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeaturesAndParameters(
+      {{kChromeNextIa, {{"chrome_next_ia_share_icon_visible", "false"}}}}, {});
+
+  CreateMediator(/*incognito=*/NO);
+  SetUpActiveWebState();
+  web_state_->SetCurrentURL(GURL("http://chromium.org"));
+  mediator_.webStateList = browser_->GetWebStateList();
+  mediator_.model = model_;
+  EXPECT_TRUE(HasItem(kToolsMenuShareId, /*enabled=*/YES));
 }
 
 // Tests that the "Add to Reading List" button is disabled while overlay UI is
@@ -657,21 +890,21 @@ TEST_F(OverflowMenuMediatorTest, TestEnterpriseInfoShownForUserLevelPolicies) {
   FakeSystemIdentity* fake_system_identity =
       [FakeSystemIdentity fakeManagedIdentity];
   fake_system_identity_manager()->AddIdentity(fake_system_identity);
+  GetApplicationContext()
+      ->GetAccountProfileMapper()
+      ->MakePersonalProfileManagedWithGaiaID(fake_system_identity.gaiaId);
 
   // Emulate signing in with managed account.
   AuthenticationService* authentication_service =
-      AuthenticationServiceFactory::GetForProfile(profile_.get());
-  ChromeAccountManagerService* account_manager =
-      ChromeAccountManagerServiceFactory::GetForProfile(profile_.get());
-  authentication_service->SignIn(account_manager->GetDefaultIdentity(),
+      AuthenticationServiceFactory::GetForProfile(profile_);
+  authentication_service->SignIn(fake_system_identity,
                                  signin_metrics::AccessPoint::kStartPage);
-  EXPECT_TRUE(authentication_service->HasPrimaryIdentityManaged(
-      signin::ConsentLevel::kSignin));
+  EXPECT_TRUE(authentication_service->HasPrimaryIdentityManaged());
 
   CreateMediator(/*incognito=*/NO);
   // Set the objects needed to detect the signed in managed account.
   mediator_.authenticationService =
-      AuthenticationServiceFactory::GetForProfile(profile_.get());
+      AuthenticationServiceFactory::GetForProfile(profile_);
 
   // Force model update.
   mediator_.model = model_;
@@ -743,6 +976,78 @@ TEST_F(OverflowMenuMediatorTest, TestFamilyLinkInfoShown) {
   ASSERT_TRUE(HasFamilyLinkInfoItem());
 }
 
+// Tests that the identity button is not shown when user is signed out even
+// if the IdentityAwareness feature is enabled.
+TEST_F(OverflowMenuMediatorTest, TestIdentityButtonHiddenWhenSignedOut) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(kIdentityAwareness);
+
+  // Setup the mediator.
+  CreateMediator(/*incognito=*/NO);
+  mediator_.authenticationService =
+      AuthenticationServiceFactory::GetForProfile(profile_);
+  mediator_.model = model_;
+
+  // Check the identity item is not there.
+  EXPECT_FALSE(HasItem(kToolsMenuIdentityId, /*enabled=*/YES));
+}
+
+// Tests that the identity button is shown in its own group when user is signed
+// out and the IdentityAwareness feature is enabled.
+TEST_F(OverflowMenuMediatorTest, TestIdentityButtonVisibleWhenSignedIn) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(kIdentityAwareness);
+
+  // Sign in user.
+  const FakeSystemIdentity* identity = [FakeSystemIdentity fakeIdentity1];
+  fake_system_identity_manager()->AddIdentity(identity);
+  AuthenticationServiceFactory::GetForProfile(profile_)->SignIn(
+      identity, signin_metrics::AccessPoint::kStartPage);
+
+  // Check the identity group.
+  CreateMediator(/*incognito=*/NO);
+  mediator_.authenticationService =
+      AuthenticationServiceFactory::GetForProfile(profile_);
+  mediator_.model = model_;
+
+  // Check the identity group.
+  EXPECT_TRUE(HasItem(kToolsMenuIdentityId, /*enabled=*/YES));
+  EXPECT_EQ(5u, mediator_.model.actionGroups.count);
+  OverflowMenuActionGroup* identity_group = mediator_.model.actionGroups[0];
+  EXPECT_NSEQ(kIdentityGroupName, identity_group.groupName);
+  EXPECT_EQ(1u, identity_group.actions.count);
+
+  // Check the identity action button.
+  OverflowMenuAction* identity_action = identity_group.actions[0];
+  EXPECT_NSEQ(kToolsMenuIdentityId, identity_action.accessibilityIdentifier);
+  NSString* expectedName = identity.userFullName;
+  EXPECT_NSEQ(expectedName, identity_action.name);
+  NSString* expectedSubtitle = identity.userEmail;
+  EXPECT_NSEQ(expectedSubtitle, identity_action.subtitle);
+}
+
+// Tests that the identity button is hidden in incognito mode even when signed
+// in.
+TEST_F(OverflowMenuMediatorTest, TestIdentityButtonHiddenInIncognitoMode) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(kIdentityAwareness);
+
+  // Sign in user.
+  const FakeSystemIdentity* identity = [FakeSystemIdentity fakeIdentity1];
+  fake_system_identity_manager()->AddIdentity(identity);
+  AuthenticationServiceFactory::GetForProfile(profile_)->SignIn(
+      identity, signin_metrics::AccessPoint::kStartPage);
+
+  // Create mediator in incognito mode.
+  CreateMediator(/*incognito=*/YES);
+  mediator_.authenticationService =
+      AuthenticationServiceFactory::GetForProfile(profile_);
+  mediator_.model = model_;
+
+  // Check the identity item is not present.
+  EXPECT_FALSE(HasItem(kToolsMenuIdentityId, /*enabled=*/YES));
+}
+
 // Tests that 1) the tools menu has an enabled 'Add to Bookmarks' button when
 // the current URL is not in bookmarks 2) the bookmark button changes to an
 // enabled 'Edit bookmark' button when navigating to a bookmarked URL, 3) the
@@ -774,8 +1079,8 @@ TEST_F(OverflowMenuMediatorTest, TestBookmarksToolsMenuButtons) {
   EXPECT_FALSE(HasItem(kToolsMenuAddToBookmarks, /*enabled=*/YES));
   EXPECT_TRUE(HasItem(kToolsMenuEditBookmark, /*enabled=*/YES));
 
-  ios::BookmarkModelFactory::GetForProfile(profile_.get())
-      ->RemoveAllUserBookmarks(FROM_HERE);
+  ios::BookmarkModelFactory::GetForProfile(profile_)->RemoveAllUserBookmarks(
+      FROM_HERE);
   EXPECT_TRUE(HasItem(kToolsMenuAddToBookmarks, /*enabled=*/YES));
   EXPECT_FALSE(HasItem(kToolsMenuEditBookmark, /*enabled=*/YES));
 }
@@ -882,6 +1187,14 @@ TEST_F(OverflowMenuMediatorTest, TestNoEligibleIdentityErrorWhenSyncOff) {
       GetDestination(kToolsMenuSettingsId);
   ASSERT_NE(nil, settingsDestination);
   EXPECT_EQ(BadgeTypeNone, settingsDestination.badge);
+}
+
+// Verifies that the Level Up walkthrough target item (Settings destination)
+// exists in OverflowMenuMediator.
+TEST_F(OverflowMenuMediatorTest, HasSettingsLevelUpDestination) {
+  CreateMediator(/*incognito=*/NO);
+  mediator_.model = model_;
+  EXPECT_NE(GetDestination(kToolsMenuSettingsId), nil);
 }
 
 // Tests that there is an error badge on the Settings destination when there is
@@ -1218,4 +1531,197 @@ TEST_F(OverflowMenuMediatorTest, TestReadingModeMenu) {
   ASSERT_TRUE(HasItem(kToolsMenuRequestDesktopId, /*enabled=*/YES));
   ASSERT_TRUE(HasItem(kToolsMenuAddToBookmarks, /*enabled=*/YES));
   ASSERT_TRUE(HasItem(kToolsMenuReadingListId, /*enabled=*/YES));
+}
+
+// Tests that the Customize Home Page item is shown on the NTP when the
+// kOverflowMenuHomeCustomizationEntrypoint feature is enabled.
+TEST_F(OverflowMenuMediatorTest, TestCustomizeHomePageShownOnNTP) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      /*enabled_features=*/{kChromeNextIa, kOverflowMenuNTPRefactor,
+                            kOverflowMenuHomeCustomizationEntrypoint},
+      /*disabled_features=*/{});
+
+  navigation_item_->SetURL(GURL("chrome://newtab"));
+
+  CreateMediator(/*incognito=*/NO);
+  SetUpActiveWebState();
+  mediator_.webStateList = browser_->GetWebStateList();
+
+  // Force model update.
+  mediator_.model = model_;
+
+  EXPECT_TRUE(HasItem(kToolsMenuCustomizeHomePageId, /*enabled=*/YES));
+}
+
+// Tests that the Customize Home Page item has a preview image.
+TEST_F(OverflowMenuMediatorTest, TestCustomizeHomePageHasPreviewImage) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      /*enabled_features=*/{kChromeNextIa, kOverflowMenuNTPRefactor,
+                            kOverflowMenuHomeCustomizationEntrypoint},
+      /*disabled_features=*/{});
+
+  navigation_item_->SetURL(GURL("chrome://newtab"));
+
+  CreateMediator(/*incognito=*/NO);
+  SetUpActiveWebState();
+  mediator_.webStateList = browser_->GetWebStateList();
+  mediator_.backgroundCustomizationService =
+      HomeBackgroundCustomizationServiceFactory::GetForProfile(profile_);
+
+  // Force model update.
+  mediator_.model = model_;
+
+  OverflowMenuAction* customizeAction = nil;
+  for (OverflowMenuActionGroup* group in mediator_.model.actionGroups) {
+    for (OverflowMenuAction* action in group.actions) {
+      if ([action.accessibilityIdentifier
+              isEqualToString:kToolsMenuCustomizeHomePageId]) {
+        customizeAction = action;
+        break;
+      }
+    }
+  }
+
+  ASSERT_NE(nil, customizeAction);
+  EXPECT_NE(nil, customizeAction.previewImage);
+  EXPECT_NE(nil, customizeAction.fallbackPreviewImage);
+}
+
+// Tests that the Customize Home Page item has a fallback preview image when the
+// custom background has a value but cache is empty.
+TEST_F(OverflowMenuMediatorTest,
+       TestCustomizeHomePageHasPreviewImageWithCustomBackgroundFallback) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      /*enabled_features=*/{kChromeNextIa, kOverflowMenuNTPRefactor,
+                            kOverflowMenuHomeCustomizationEntrypoint},
+      /*disabled_features=*/{});
+
+  navigation_item_->SetURL(GURL("chrome://newtab"));
+
+  CreateMediator(/*incognito=*/NO);
+  SetUpActiveWebState();
+  mediator_.webStateList = browser_->GetWebStateList();
+
+  HomeBackgroundCustomizationService* backgroundCustomizationService =
+      HomeBackgroundCustomizationServiceFactory::GetForProfile(profile_);
+  backgroundCustomizationService->SetCurrentBackground(
+      GURL("https://example.com/bg.jpg"), GURL("https://example.com/thumb.jpg"),
+      "attribution1", "attribution2", GURL("https://example.com/action"),
+      "collection");
+
+  mediator_.backgroundCustomizationService = backgroundCustomizationService;
+  mediator_.userUploadedImageManager =
+      UserUploadedImageManagerFactory::GetForProfile(profile_);
+  image_fetcher::MockImageFetcher mockImageFetcher;
+  EXPECT_CALL(mockImageFetcher, FetchImageAndData_(_, _, _, _))
+      .Times(testing::AtLeast(1))
+      .WillRepeatedly(
+          [](const GURL& image_url,
+             image_fetcher::ImageDataFetcherCallback* image_data_callback,
+             image_fetcher::ImageFetcherCallback* image_callback,
+             image_fetcher::ImageFetcherParams params) {
+            std::move(*image_data_callback)
+                .Run(std::string(), image_fetcher::RequestMetadata());
+          });
+  mediator_.imageFetcher = &mockImageFetcher;
+
+  // Force model update.
+  mediator_.model = model_;
+
+  OverflowMenuAction* customizeAction = nil;
+  for (OverflowMenuActionGroup* group in mediator_.model.actionGroups) {
+    for (OverflowMenuAction* action in group.actions) {
+      if ([action.accessibilityIdentifier
+              isEqualToString:kToolsMenuCustomizeHomePageId]) {
+        customizeAction = action;
+        break;
+      }
+    }
+  }
+
+  ASSERT_NE(nil, customizeAction);
+  EXPECT_EQ(nil, customizeAction.previewImage);
+}
+
+// Tests that the Customize Home Page item is NOT shown on a regular web page
+// even when the kOverflowMenuHomeCustomizationEntrypoint feature is enabled.
+TEST_F(OverflowMenuMediatorTest, TestCustomizeHomePageNotShownOnWebPage) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      /*enabled_features=*/{kChromeNextIa, kOverflowMenuNTPRefactor,
+                            kOverflowMenuHomeCustomizationEntrypoint},
+      /*disabled_features=*/{});
+
+  navigation_item_->SetURL(GURL("https://chromium.org"));
+
+  CreateMediator(/*incognito=*/NO);
+  SetUpActiveWebState();
+  mediator_.webStateList = browser_->GetWebStateList();
+
+  // Force model update.
+  mediator_.model = model_;
+
+  EXPECT_FALSE(HasItem(kToolsMenuCustomizeHomePageId, /*enabled=*/YES));
+}
+
+// Tests that the Customize Home Page item is NOT shown on an incognito NTP.
+TEST_F(OverflowMenuMediatorTest, TestCustomizeHomePageNotShownInIncognito) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      /*enabled_features=*/{kChromeNextIa, kOverflowMenuNTPRefactor,
+                            kOverflowMenuHomeCustomizationEntrypoint},
+      /*disabled_features=*/{});
+
+  navigation_item_->SetURL(GURL("chrome://newtab"));
+
+  CreateMediator(/*incognito=*/YES);
+  SetUpActiveWebState();
+  mediator_.webStateList = browser_->GetWebStateList();
+
+  // Force model update.
+  mediator_.model = model_;
+
+  EXPECT_FALSE(HasItem(kToolsMenuCustomizeHomePageId, /*enabled=*/YES));
+}
+
+// Tests that startAskGemini triggers the generalized Gemini entry flow command.
+TEST_F(OverflowMenuMediatorTest,
+       TestStartAskGeminiTriggersGeneralizedEntryFlow) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      /*enabled_features=*/{kPageActionMenu, kGeneralizedGeminiEntryFlow},
+      /*disabled_features=*/{});
+
+  CreateMediator(/*incognito=*/NO);
+  id mockGeminiHandler = OCMProtocolMock(@protocol(GeminiCommands));
+  id mockPopupMenuHandler = OCMProtocolMock(@protocol(PopupMenuCommands));
+  mediator_.geminiHandler = mockGeminiHandler;
+  mediator_.popupMenuHandler = mockPopupMenuHandler;
+
+  OCMExpect([mockPopupMenuHandler
+      dismissPopupMenuAnimated:YES
+                    completion:[OCMArg checkWithBlock:^BOOL(
+                                           ProceduralBlock completion) {
+                      if (completion) {
+                        completion();
+                      }
+                      return YES;
+                    }]]);
+  OCMExpect([mockGeminiHandler
+      startGeminiEntryFlowWithStartupState:[OCMArg checkWithBlock:^BOOL(
+                                                       GeminiStartupState*
+                                                           state) {
+        return state.entryPoint == gemini::EntryPoint::OverflowMenu;
+      }]
+                        baseViewController:baseViewController_
+                  showSnackbarOnCompletion:YES
+                                completion:nil]);
+
+  [mediator_ startAskGemini];
+
+  [mockPopupMenuHandler verify];
+  [mockGeminiHandler verify];
 }

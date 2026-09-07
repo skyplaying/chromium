@@ -9,6 +9,7 @@
 #import "base/test/scoped_feature_list.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "components/signin/public/identity_manager/identity_test_utils.h"
+#import "components/sync/test/test_sync_service.h"
 #import "components/variations/scoped_variations_ids_provider.h"
 #import "ios/chrome/browser/download/model/download_manager_tab_helper.h"
 #import "ios/chrome/browser/drive/model/drive_metrics.h"
@@ -19,7 +20,7 @@
 #import "ios/chrome/browser/drive/model/upload_task.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
-#import "ios/chrome/browser/shared/public/commands/account_picker_commands.h"
+#import "ios/chrome/browser/shared/model/profile/test/test_profile_manager_ios.h"
 #import "ios/chrome/browser/shared/public/commands/manage_storage_alert_commands.h"
 #import "ios/chrome/browser/shared/public/commands/save_to_drive_commands.h"
 #import "ios/chrome/browser/shared/public/commands/scene_commands.h"
@@ -32,6 +33,8 @@
 #import "ios/chrome/browser/signin/model/fake_system_identity_manager.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
 #import "ios/chrome/browser/signin/model/identity_test_environment_browser_state_adaptor.h"
+#import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/web/public/test/fakes/fake_download_task.h"
 #import "ios/web/public/test/fakes/fake_web_state.h"
@@ -82,19 +85,21 @@ class SaveToDriveMediatorTest : public PlatformTest {
     TestProfileIOS::Builder builder;
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
+        AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
             std::make_unique<FakeAuthenticationServiceDelegate>()));
     builder.AddTestingFactory(
         IdentityManagerFactory::GetInstance(),
         base::BindRepeating(IdentityTestEnvironmentBrowserStateAdaptor::
                                 BuildIdentityManagerForTests));
-    profile_ = std::move(builder).Build();
+    builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
+                              base::BindRepeating(&CreateTestSyncService));
+    profile_ = profile_manager_.AddProfileWithBuilder(std::move(builder));
     fake_system_identity_manager_ =
         FakeSystemIdentityManager::FromSystemIdentityManager(
             GetApplicationContext()->GetSystemIdentityManager());
     AuthenticationService* authentication_service =
-        AuthenticationServiceFactory::GetForProfile(profile_.get());
-    identity_manager_ = IdentityManagerFactory::GetForProfile(profile_.get());
+        AuthenticationServiceFactory::GetForProfile(profile_);
+    identity_manager_ = IdentityManagerFactory::GetForProfile(profile_);
 
     fake_system_identity_manager_->AddIdentity(kPrimaryIdentity);
     signin::MakeAccountAvailable(
@@ -106,8 +111,8 @@ class SaveToDriveMediatorTest : public PlatformTest {
                                    signin_metrics::AccessPoint::kStartPage);
 
     web_state_ = std::make_unique<web::FakeWebState>();
-    web_state_->SetBrowserState(profile_.get());
-    DriveTabHelper::GetOrCreateForWebState(web_state_.get());
+    web_state_->SetBrowserState(profile_);
+    DriveTabHelper::CreateForWebState(web_state_.get());
     FakeDownloadManagerTabHelper::CreateForWebState(web_state_.get());
     download_task_ =
         std::make_unique<web::FakeDownloadTask>(GURL(kTestUrl), kTestMimeType);
@@ -117,38 +122,41 @@ class SaveToDriveMediatorTest : public PlatformTest {
     manage_storage_alert_commands_handler_ =
         OCMStrictProtocolMock(@protocol(ManageStorageAlertCommands));
     scene_handler_ = OCMStrictProtocolMock(@protocol(SceneCommands));
-    account_picker_commands_handler_ =
-        OCMStrictProtocolMock(@protocol(AccountPickerCommands));
     mediator_ = [[SaveToDriveMediator alloc]
              initWithDownloadTask:download_task_.get()
                saveToDriveHandler:save_to_drive_commands_handler_
         manageStorageAlertHandler:manage_storage_alert_commands_handler_
-             accountPickerHandler:account_picker_commands_handler_
                       prefService:profile_->GetPrefs()
             authenticationService:authentication_service
             accountManagerService:ChromeAccountManagerServiceFactory::
-                                      GetForProfile(profile_.get())
+                                      GetForProfile(profile_)
                   identityManager:IdentityManagerFactory::GetForProfile(
-                                      profile_.get())
+                                      profile_)
                      driveService:drive::DriveServiceFactory::GetForProfile(
-                                      profile_.get())];
+                                      profile_)];
   }
 
   void TearDown() final {
     [mediator_ disconnect];
     mediator_ = nil;
-    identity_manager_ = nil;
-    fake_system_identity_manager_ = nil;
+    identity_manager_ = nullptr;
+    fake_system_identity_manager_ = nullptr;
+    download_task_.reset();
+    web_state_.reset();
+    save_to_drive_commands_handler_ = nil;
+    manage_storage_alert_commands_handler_ = nil;
+    scene_handler_ = nil;
+    profile_ = nullptr;
     PlatformTest::TearDown();
   }
 
   DriveTabHelper* GetDriveTabHelper() const {
-    return DriveTabHelper::GetOrCreateForWebState(web_state_.get());
+    return DriveTabHelper::FromWebState(web_state_.get());
   }
 
   drive::TestDriveService* GetTestDriveService() {
     return static_cast<drive::TestDriveService*>(
-        drive::DriveServiceFactory::GetForProfile(profile_.get()));
+        drive::DriveServiceFactory::GetForProfile(profile_));
   }
 
   FakeDownloadManagerTabHelper* GetDownloadManagerTabHelper() const {
@@ -159,9 +167,10 @@ class SaveToDriveMediatorTest : public PlatformTest {
   web::WebTaskEnvironment task_environment_{
       web::WebTaskEnvironment::MainThreadType::IO};
   base::test::ScopedFeatureList scoped_feature_list_;
-  std::unique_ptr<TestProfileIOS> profile_;
   // ScopedTestingLocalState needed for the authentication service.
   IOSChromeScopedTestingLocalState scoped_testing_local_state_;
+  TestProfileManagerIOS profile_manager_;
+  raw_ptr<TestProfileIOS> profile_ = nullptr;
   std::unique_ptr<web::FakeWebState> web_state_;
   std::unique_ptr<web::FakeDownloadTask> download_task_;
   id save_to_drive_commands_handler_;
@@ -169,7 +178,6 @@ class SaveToDriveMediatorTest : public PlatformTest {
   raw_ptr<FakeSystemIdentityManager> fake_system_identity_manager_;
   raw_ptr<signin::IdentityManager> identity_manager_;
   id scene_handler_;
-  id account_picker_commands_handler_;
   SaveToDriveMediator* mediator_;
   variations::test::ScopedVariationsIdsProvider scoped_variations_ids_provider_{
       variations::VariationsIdsProvider::Mode::kUseSignedInState};
@@ -178,14 +186,14 @@ class SaveToDriveMediatorTest : public PlatformTest {
 // Tests that the Save to Drive UI is hidden when the `DownloadTask` is
 // destroyed.
 TEST_F(SaveToDriveMediatorTest, HidesSaveToDriveOnDownloadTaskDestroyed) {
-  OCMExpect([save_to_drive_commands_handler_ hideSaveToDrive]);
+  OCMExpect([save_to_drive_commands_handler_ hideSaveToDriveAnimated:NO]);
   download_task_.reset();
   EXPECT_OCMOCK_VERIFY(save_to_drive_commands_handler_);
 }
 
 // Tests that the Save to Drive UI is hidden when the `WebState` is destroyed.
 TEST_F(SaveToDriveMediatorTest, HidesSaveToDriveOnWebStateDestroyed) {
-  OCMExpect([save_to_drive_commands_handler_ hideSaveToDrive]);
+  OCMExpect([save_to_drive_commands_handler_ hideSaveToDriveAnimated:NO]);
   download_task_->SetWebState(/*web_state=*/nullptr);
   web_state_.reset();
   EXPECT_OCMOCK_VERIFY(save_to_drive_commands_handler_);
@@ -193,7 +201,7 @@ TEST_F(SaveToDriveMediatorTest, HidesSaveToDriveOnWebStateDestroyed) {
 
 // Tests that the Save to Drive UI is hidden when the `WebState` is hidden.
 TEST_F(SaveToDriveMediatorTest, HidesSaveToDriveOnWebStateHidden) {
-  OCMExpect([save_to_drive_commands_handler_ hideSaveToDrive]);
+  OCMExpect([save_to_drive_commands_handler_ hideSaveToDriveAnimated:NO]);
   web_state_->WasHidden();
   EXPECT_OCMOCK_VERIFY(save_to_drive_commands_handler_);
 }
@@ -211,9 +219,9 @@ TEST_F(SaveToDriveMediatorTest, DoesNotSaveToDriveIfDestinationIsFiles) {
             drive_helper->GetUploadTaskForDownload(download_task_.get()));
   [mediator_ fileDestinationPicker:nil
               didSelectDestination:FileDestination::kFiles];
-  OCMExpect([account_picker_commands_handler_ hideAccountPickerAnimated:YES]);
+  OCMExpect([save_to_drive_commands_handler_ hideSaveToDriveAnimated:YES]);
   [mediator_ saveWithSelectedIdentity:identity];
-  EXPECT_OCMOCK_VERIFY(account_picker_commands_handler_);
+  EXPECT_OCMOCK_VERIFY(save_to_drive_commands_handler_);
   EXPECT_EQ(download_task_.get(), download_helper->download_task_started_);
   UploadTask* upload_task =
       drive_helper->GetUploadTaskForDownload(download_task_.get());
@@ -244,10 +252,10 @@ TEST_F(SaveToDriveMediatorTest, SavesToDriveIfDestinationIsDrive) {
   [mediator_ saveWithSelectedIdentity:identity];
   // Expect that the account picker will be hidden when sufficient storage is
   // confirmed by the file uploader.
-  OCMExpect([account_picker_commands_handler_ hideAccountPickerAnimated:YES]);
+  OCMExpect([save_to_drive_commands_handler_ hideSaveToDriveAnimated:YES]);
   // Run until storage quota result is reported.
   task_environment_.RunUntilQuit();
-  EXPECT_OCMOCK_VERIFY(account_picker_commands_handler_);
+  EXPECT_OCMOCK_VERIFY(save_to_drive_commands_handler_);
   // Download task should have been started, an upload task should be created.
   EXPECT_EQ(download_task_.get(), download_helper->download_task_started_);
   UploadTask* upload_task =
@@ -261,8 +269,42 @@ TEST_F(SaveToDriveMediatorTest, SavesToDriveIfDestinationIsDrive) {
 
 // Tests that the Save to Drive UI is hidden when the user signs out.
 TEST_F(SaveToDriveMediatorTest, HidesSaveToDriveOnSignOut) {
-  OCMExpect([save_to_drive_commands_handler_ hideSaveToDrive]);
+  OCMExpect([save_to_drive_commands_handler_ hideSaveToDriveAnimated:NO]);
   signin::ClearPrimaryAccount(
       IdentityManagerFactory::GetForProfile(profile_.get()));
+  EXPECT_OCMOCK_VERIFY(save_to_drive_commands_handler_);
+}
+
+// Tests that `selectedFileDestinationRequiresSignin` returns YES when the
+// destination is Drive and the user is signed out.
+TEST_F(SaveToDriveMediatorTest, RequiresSigninForDriveWhenSignedOut) {
+  OCMExpect([save_to_drive_commands_handler_ hideSaveToDriveAnimated:NO]);
+  signin::ClearPrimaryAccount(
+      IdentityManagerFactory::GetForProfile(profile_.get()));
+  [mediator_ fileDestinationPicker:nil
+              didSelectDestination:FileDestination::kDrive];
+  EXPECT_TRUE([mediator_ selectedFileDestinationRequiresSignin]);
+  EXPECT_OCMOCK_VERIFY(save_to_drive_commands_handler_);
+}
+
+// Tests that `selectedFileDestinationRequiresSignin` returns NO when the
+// destination is Drive and the user is signed in.
+TEST_F(SaveToDriveMediatorTest, DoesNotRequireSigninForDriveWhenSignedIn) {
+  [mediator_ fileDestinationPicker:nil
+              didSelectDestination:FileDestination::kDrive];
+  EXPECT_FALSE([mediator_ selectedFileDestinationRequiresSignin]);
+}
+
+// Tests that `selectedFileDestinationRequiresSignin` returns NO when the
+// destination is Files.
+TEST_F(SaveToDriveMediatorTest, DoesNotRequireSigninForFiles) {
+  [mediator_ fileDestinationPicker:nil
+              didSelectDestination:FileDestination::kFiles];
+  EXPECT_FALSE([mediator_ selectedFileDestinationRequiresSignin]);
+
+  OCMExpect([save_to_drive_commands_handler_ hideSaveToDriveAnimated:NO]);
+  signin::ClearPrimaryAccount(
+      IdentityManagerFactory::GetForProfile(profile_.get()));
+  EXPECT_FALSE([mediator_ selectedFileDestinationRequiresSignin]);
   EXPECT_OCMOCK_VERIFY(save_to_drive_commands_handler_);
 }

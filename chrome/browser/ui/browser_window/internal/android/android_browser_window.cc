@@ -15,10 +15,10 @@
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/blocked_content/chrome_popup_navigation_delegate.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_window/internal/jni/AndroidBrowserWindow_jni.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "components/blocked_content/popup_blocker.h"
 #include "components/sessions/core/session_id.h"
 #include "content/public/browser/navigation_handle.h"
@@ -65,6 +65,7 @@ AndroidBrowserWindow::AndroidBrowserWindow(
 }
 
 AndroidBrowserWindow::~AndroidBrowserWindow() {
+  browser_did_close_callback_list_.Notify(this);
   Java_AndroidBrowserWindow_clearNativePtr(AttachCurrentThread(),
                                            java_android_browser_window_);
 }
@@ -114,6 +115,11 @@ const SessionID& AndroidBrowserWindow::GetSessionID() const {
 bool AndroidBrowserWindow::IsDeleteScheduled() const {
   return Java_AndroidBrowserWindow_isDeleteScheduled(
       AttachCurrentThread(), java_android_browser_window_);
+}
+
+base::CallbackListSubscription AndroidBrowserWindow::RegisterBrowserDidClose(
+    BrowserDidCloseCallback callback) {
+  return browser_did_close_callback_list_.Add(std::move(callback));
 }
 
 BrowserWindowInterface::Type AndroidBrowserWindow::GetType() const {

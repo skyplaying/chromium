@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ssl/ask_before_http_dialog_controller.h"
+
 #include <algorithm>
 #include <memory>
 #include <vector>
@@ -11,12 +13,13 @@
 #include "chrome/browser/interstitials/security_interstitial_page_test_utils.h"
 #include "chrome/browser/preloading/scoped_prewarm_feature_list.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ssl/ask_before_http_dialog_controller.h"
 #include "chrome/browser/ssl/https_upgrades_interceptor.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
+#include "chrome/browser/ui/tabs/tab_model.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -25,6 +28,8 @@
 #include "components/security_interstitials/core/features.h"
 #include "components/tabs/public/tab_interface.h"
 #include "components/ukm/test_ukm_recorder.h"
+#include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test_utils.h"
@@ -38,6 +43,8 @@
 #include "net/test/test_data_directory.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_source.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/views/controls/styled_label.h"
 
 using security_interstitials::MetricsHelper;
@@ -184,13 +191,16 @@ class AskBeforeHttpDialogControllerUiTest
   }
 
   void TearDownOnMainThread() override {
-    browser()->profile()->GetPrefs()->ClearPref(prefs::kHttpsOnlyModeEnabled);
-    browser()->profile()->GetPrefs()->ClearPref(
+    browser()->GetProfile()->GetPrefs()->ClearPref(
+        prefs::kHttpsOnlyModeEnabled);
+    browser()->GetProfile()->GetPrefs()->ClearPref(
         prefs::kHttpsOnlyModeAutoEnabled);
-    browser()->profile()->GetPrefs()->ClearPref(prefs::kHttpsUpgradeFallbacks);
-    browser()->profile()->GetPrefs()->ClearPref(
+    browser()->GetProfile()->GetPrefs()->ClearPref(
+        prefs::kHttpsUpgradeFallbacks);
+    browser()->GetProfile()->GetPrefs()->ClearPref(
         prefs::kHttpsUpgradeNavigations);
-    browser()->profile()->GetPrefs()->ClearPref(prefs::kHttpsFirstBalancedMode);
+    browser()->GetProfile()->GetPrefs()->ClearPref(
+        prefs::kHttpsFirstBalancedMode);
   }
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
@@ -208,7 +218,7 @@ class AskBeforeHttpDialogControllerUiTest
   // Incognito testing support
   //
   // Returns the active Browser for the test type being run.
-  Browser* GetBrowser() const {
+  BrowserWindowInterface* GetBrowser() const {
     return incognito_browser_ ? incognito_browser_.get() : browser();
   }
   // Call to use an Incognito browser rather than the default.
@@ -222,12 +232,12 @@ class AskBeforeHttpDialogControllerUiTest
   AskBeforeHttpDialogControllerTestType test_type() const { return GetParam(); }
 
   void SetPref(bool enabled) {
-    auto* prefs = browser()->profile()->GetPrefs();
+    auto* prefs = browser()->GetProfile()->GetPrefs();
     prefs->SetBoolean(prefs::kHttpsOnlyModeEnabled, enabled);
   }
 
   void SetBalancedPref(bool enabled) {
-    auto* prefs = browser()->profile()->GetPrefs();
+    auto* prefs = browser()->GetProfile()->GetPrefs();
     prefs->SetBoolean(prefs::kHttpsFirstBalancedMode, enabled);
   }
 
@@ -252,6 +262,15 @@ class AskBeforeHttpDialogControllerUiTest
     EXPECT_EQ(0u, entries.size());
   }
 
+  std::unique_ptr<content::WebContents> DiscardTabAt(int index) {
+    auto* tab_strip = GetBrowser()->tab_strip_model();
+    std::unique_ptr<content::WebContents> new_contents =
+        content::WebContents::Create(
+            content::WebContents::CreateParams(GetBrowser()->GetProfile()));
+    return tab_strip->DiscardWebContents(tab_strip->GetWebContentsAt(index),
+                                         std::move(new_contents));
+  }
+
  private:
   // TODO(https://crbug.com/423465927): Explore a better approach to make the
   // existing tests run with the prewarm feature enabled.
@@ -263,7 +282,8 @@ class AskBeforeHttpDialogControllerUiTest
   content::ContentMockCertVerifier mock_cert_verifier_;
   base::HistogramTester histograms_;
   std::unique_ptr<ukm::TestAutoSetUkmRecorder> test_ukm_recorder_;
-  raw_ptr<Browser, AcrossTasksDanglingUntriaged> incognito_browser_ = nullptr;
+  raw_ptr<BrowserWindowInterface, AcrossTasksDanglingUntriaged>
+      incognito_browser_ = nullptr;
 };
 
 INSTANTIATE_TEST_SUITE_P(
@@ -319,7 +339,9 @@ IN_PROC_BROWSER_TEST_P(AskBeforeHttpDialogControllerUiTest,
   GURL https_url = https_server()->GetURL("bad-https.com", "/simple.html");
 
   auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
-  content::NavigateToURLBlockUntilNavigationsComplete(contents, http_url, 1);
+  content::NavigationController::LoadURLParams params(http_url);
+  params.transition_type = ui::PAGE_TRANSITION_LINK;
+  content::NavigateToURLBlockUntilNavigationsComplete(contents, params, 1);
   EXPECT_EQ(http_url, contents->GetLastCommittedURL());
 
   RunTestSequence(
@@ -370,7 +392,9 @@ IN_PROC_BROWSER_TEST_P(AskBeforeHttpDialogControllerUiTest,
   GURL https_url = https_server()->GetURL("bad-https.com", "/simple.html");
 
   auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
-  content::NavigateToURLBlockUntilNavigationsComplete(contents, http_url, 1);
+  content::NavigationController::LoadURLParams params(http_url);
+  params.transition_type = ui::PAGE_TRANSITION_LINK;
+  content::NavigateToURLBlockUntilNavigationsComplete(contents, params, 1);
   EXPECT_EQ(http_url, contents->GetLastCommittedURL());
 
   RunTestSequence(
@@ -380,6 +404,43 @@ IN_PROC_BROWSER_TEST_P(AskBeforeHttpDialogControllerUiTest,
           CheckViewProperty(AskBeforeHttpDialogController::kGoBackButtonId,
                             &views::View::HasFocus, true),
           PressButton(AskBeforeHttpDialogController::kGoBackButtonId),
+          WaitForWebContentsNavigation(kTestTab, GURL("about:blank"))));
+
+  EXPECT_EQ(GURL("about:blank"), contents->GetLastCommittedURL());
+
+  // Verify that the interstitial metrics were correctly recorded.
+  histograms()->ExpectBucketCount("interstitial.https_first_mode.decision",
+                                  MetricsHelper::Decision::SHOW, 1);
+  histograms()->ExpectBucketCount("interstitial.https_first_mode.decision",
+                                  MetricsHelper::Decision::DONT_PROCEED, 1);
+
+  ExpectUKMEntry(http_url, BlockingResult::kInterstitialDontProceed);
+}
+
+// If the user triggers an Ask-before-HTTP warning for a host and then
+// presses ESC, the dialog should be dismissed and the tab should navigate back
+// to the previous page (about:blank in this case).
+IN_PROC_BROWSER_TEST_P(AskBeforeHttpDialogControllerUiTest,
+                       FailedUpgrade_WarningShown_PressEsc_GoBack) {
+  DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTestTab);
+
+  GURL http_url = http_server()->GetURL("bad-https.com", "/simple.html");
+  GURL https_url = https_server()->GetURL("bad-https.com", "/simple.html");
+
+  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  content::NavigationController::LoadURLParams params(http_url);
+  params.transition_type = ui::PAGE_TRANSITION_LINK;
+  content::NavigateToURLBlockUntilNavigationsComplete(contents, params, 1);
+  EXPECT_EQ(http_url, contents->GetLastCommittedURL());
+
+  const ui::Accelerator kEscapeKey(ui::VKEY_ESCAPE, ui::EF_NONE);
+  RunTestSequence(
+      InAnyContext(WaitForShow(AskBeforeHttpDialogController::kGoBackButtonId)),
+      InSameContext(
+          InstrumentTab(kTestTab),
+          SendAccelerator(AskBeforeHttpDialogController::kGoBackButtonId,
+                          kEscapeKey)
+              .SetMustRemainVisible(false),
           WaitForWebContentsNavigation(kTestTab, GURL("about:blank"))));
 
   EXPECT_EQ(GURL("about:blank"), contents->GetLastCommittedURL());
@@ -404,7 +465,9 @@ IN_PROC_BROWSER_TEST_P(AskBeforeHttpDialogControllerUiTest,
   GURL https_url = https_server()->GetURL("bad-https.com", "/simple.html");
 
   auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
-  content::NavigateToURLBlockUntilNavigationsComplete(contents, http_url, 1);
+  content::NavigationController::LoadURLParams params(http_url);
+  params.transition_type = ui::PAGE_TRANSITION_LINK;
+  content::NavigateToURLBlockUntilNavigationsComplete(contents, params, 1);
   EXPECT_EQ(http_url, contents->GetLastCommittedURL());
 
   RunTestSequence(
@@ -443,7 +506,9 @@ IN_PROC_BROWSER_TEST_P(AskBeforeHttpDialogControllerUiTest,
   GURL https_url = https_server()->GetURL("bad-https.com", "/simple.html");
 
   auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
-  content::NavigateToURLBlockUntilNavigationsComplete(contents, http_url, 1);
+  content::NavigationController::LoadURLParams params(http_url);
+  params.transition_type = ui::PAGE_TRANSITION_LINK;
+  content::NavigateToURLBlockUntilNavigationsComplete(contents, params, 1);
   EXPECT_EQ(http_url, contents->GetLastCommittedURL());
 
   RunTestSequence(
@@ -479,7 +544,9 @@ IN_PROC_BROWSER_TEST_P(AskBeforeHttpDialogControllerUiTest,
   GURL https_url = https_server()->GetURL("bad-https.com", "/simple.html");
 
   auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
-  content::NavigateToURLBlockUntilNavigationsComplete(contents, http_url, 1);
+  content::NavigationController::LoadURLParams params(http_url);
+  params.transition_type = ui::PAGE_TRANSITION_LINK;
+  content::NavigateToURLBlockUntilNavigationsComplete(contents, params, 1);
   EXPECT_EQ(http_url, contents->GetLastCommittedURL());
 
   RunTestSequence(InAnyContext(
@@ -495,4 +562,152 @@ IN_PROC_BROWSER_TEST_P(AskBeforeHttpDialogControllerUiTest,
                                   MetricsHelper::Decision::DONT_PROCEED, 1);
 
   ExpectUKMEntry(http_url, BlockingResult::kInterstitialDontProceed);
+}
+
+// Test-only View used to artificially trigger the sequence of actions
+// required to trigger the crash in crbug.com/505796019.
+class CrashTriggerView : public views::View {
+  METADATA_HEADER(CrashTriggerView, views::View)
+ public:
+  explicit CrashTriggerView(BrowserWindowInterface* browser)
+      : browser_(browser) {
+    SetFocusBehavior(FocusBehavior::ALWAYS);
+    GetViewAccessibility().SetRole(ax::mojom::Role::kButton);
+    GetViewAccessibility().SetName(u"Crash Trigger");
+  }
+
+  void OnFocus() override {
+    if (auto* tab = tabs::TabInterface::MaybeGetFromContents(
+            browser_->GetTabStripModel()->GetActiveWebContents())) {
+      if (auto* controller = AskBeforeHttpDialogController::From(tab)) {
+        controller->CloseDialog();
+      }
+    }
+    views::View::OnFocus();
+  }
+
+ private:
+  raw_ptr<BrowserWindowInterface> browser_;
+};
+
+BEGIN_METADATA(CrashTriggerView)
+END_METADATA
+
+// Regression test for crbug.com/505796019.
+// This test ensures that navigating away while the ABH dialog is open and a
+// view inside it has focus does not cause a Use-After-Free when focus is later
+// changed.
+IN_PROC_BROWSER_TEST_P(AskBeforeHttpDialogControllerUiTest,
+                       FocusUAFOnNavigation) {
+  GURL http_url = http_server()->GetURL("bad-https.com", "/simple.html");
+
+  DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTestTab);
+
+  RunTestSequence(
+      InstrumentTab(kTestTab, std::nullopt, GetBrowser()),
+      NavigateWebContents(kTestTab, http_url),
+      InAnyContext(WaitForShow(AskBeforeHttpDialogController::kGoBackButtonId)),
+      InSameContext(
+          // 1. Focus the "Go back" button in the dialog.
+          WithView(AskBeforeHttpDialogController::kGoBackButtonId,
+                   [](views::View* view) { view->RequestFocus(); }),
+          CheckViewProperty(AskBeforeHttpDialogController::kGoBackButtonId,
+                            &views::View::HasFocus, true),
+
+          Do([&]() {
+            auto* browser_view =
+                BrowserView::GetBrowserViewForBrowser(GetBrowser());
+            auto* crash_trigger = browser_view->AddChildView(
+                std::make_unique<CrashTriggerView>(GetBrowser()));
+            crash_trigger->RequestFocus();
+          })));
+}
+
+// Regression test for crbug.com/512768300.
+// This test ensures that discarding a background tab (which destroys its
+// WebContents and replaces it with a placeholder) does not cause a crash
+// when starting a subsequent HTTP fallback navigation that attempts to
+// display the Ask-before-HTTP dialog on the new WebContents.
+IN_PROC_BROWSER_TEST_P(AskBeforeHttpDialogControllerUiTest,
+                       NoCrashIfTabDiscardedDuringFallback) {
+  // A successful HTTPS URL to initialize the background tab cleanly.
+  GURL safe_https_url = https_server()->GetURL("example.com", "/simple.html");
+  // The HTTP URL that will trigger the upgrade fallback -> ABH dialog.
+  GURL http_url = http_server()->GetURL("bad-https.com", "/simple.html");
+  DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kBackgroundTab);
+  content::WebContents* old_contents = nullptr;
+  RunTestSequence(
+      // 1. Open a background tab (index 1) and navigate it to a clean,
+      // successful HTTPS page.
+      Do([&]() {
+        chrome::AddTabAt(GetBrowser(), GURL("about:blank"), 1,
+                         /*foreground=*/false);
+      }),
+      InstrumentTab(kBackgroundTab, 1, GetBrowser()),
+      NavigateWebContents(kBackgroundTab, safe_https_url),
+      // 2. Discard the background tab using our synchronous helper.
+      Do([&]() {
+        std::unique_ptr<content::WebContents> discarded_contents =
+            DiscardTabAt(1);
+        old_contents = discarded_contents.get();
+      }),
+      // 3. Verify the WebContents was swapped.
+      Check(
+          [&]() {
+            auto* tab_strip = GetBrowser()->tab_strip_model();
+            return tab_strip->GetWebContentsAt(1) != old_contents;
+          },
+          "Verify WebContents is swapped"),
+      // 3b. Re-instrument the tab at index 1 because the old WebContents was
+      // discarded.
+      UninstrumentWebContents(kBackgroundTab,
+                              /*fail_if_not_instrumented=*/false),
+      InstrumentTab(kBackgroundTab, 1, GetBrowser(), /*wait_for_ready=*/false),
+      // 4. Start fallback navigation in the newly swapped WebContents.
+      // This will trigger the upgrade to bad-https.com, fail, and try to show
+      // the ABH dialog.
+      Do([&]() {
+        content::NavigationController::LoadURLParams params(http_url);
+        GetBrowser()
+            ->tab_strip_model()
+            ->GetWebContentsAt(1)
+            ->GetController()
+            .LoadURLWithParams(params);
+      }),
+      WaitForWebContentsNavigation(kBackgroundTab, http_url));
+}
+
+// Tests that reparenting a tab with an open Ask-before-HTTP dialog into another
+// browser window preserves the dialog. Regression test for crbug.com/513637237.
+IN_PROC_BROWSER_TEST_P(AskBeforeHttpDialogControllerUiTest,
+                       ReparentTabPreservesDialog) {
+  GURL http_url = http_server()->GetURL("bad-https.com", "/simple.html");
+
+  auto* contents = GetBrowser()->tab_strip_model()->GetActiveWebContents();
+  content::NavigationController::LoadURLParams params(http_url);
+  params.transition_type = ui::PAGE_TRANSITION_LINK;
+  content::NavigateToURLBlockUntilNavigationsComplete(contents, params, 1);
+  EXPECT_EQ(http_url, contents->GetLastCommittedURL());
+
+  RunTestSequence(
+      InAnyContext(
+          WaitForShow(AskBeforeHttpDialogController::kContinueButtonId)),
+      Do([&]() {
+        // Add a placeholder tab to prevent the original browser from closing
+        // when its active tab is detached.
+        chrome::AddTabAt(GetBrowser(), GURL("about:blank"), 1,
+                         /*foreground=*/false);
+
+        // Create a second browser window and move the tab to it.
+        BrowserWindowInterface* second_browser =
+            CreateBrowser(GetBrowser()->GetProfile());
+        std::unique_ptr<tabs::TabModel> detached_tab =
+            GetBrowser()->tab_strip_model()->DetachTabAtForInsertion(0);
+        second_browser->GetTabStripModel()->AppendTab(std::move(detached_tab),
+                                                      /*foreground=*/true);
+      }),
+      // Verify that after reparenting, the dialog's continue button is still
+      // present and visible in the second browser window.
+      InAnyContext(
+          WaitForShow(AskBeforeHttpDialogController::kContinueButtonId)));
 }

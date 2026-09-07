@@ -291,7 +291,7 @@ TEST_F(DisplayLockUtilitiesTest, InteractionWithIntersectionObserver) {
       MakeGarbageCollected<TestIntersectionObserverDelegate>(ChildDocument());
   IntersectionObserver* observer = IntersectionObserver::Create(
       observer_init, *observer_delegate,
-      LocalFrameUkmAggregator::kDisplayLockIntersectionObserver);
+      LocalFrameMetricsAggregator::kDisplayLockIntersectionObserver);
   observer->observe(target);
   UpdateAllLifecyclePhasesForTest();
   test::RunPendingTasks();
@@ -347,6 +347,30 @@ TEST_F(DisplayLockUtilitiesTest, ContainerQueryCrash) {
 
   // Should not fail DCHECKs or crash.
   child->offsetTopForBinding();
+}
+
+TEST_F(DisplayLockUtilitiesTest, ScrollMarkerGroupContentVisibilityCrash) {
+  SetHtmlInnerHTML(R"HTML(
+    <style>
+      #scroller {
+        overflow: auto;
+        scroll-marker-group: after;
+        display: flex;
+      }
+      #scroller::scroll-marker-group { display: flex; }
+      #scroller > *::scroll-marker { content: counter(item); }
+      #scroller::scroll-button(inline-start) { content: '<'; }
+      #scroller::scroll-button(inline-end) { content: '>'; }
+    </style>
+    <div id="scroller"><div></div><div></div></div>
+  )HTML");
+  UpdateAllLifecyclePhasesForTest();
+
+  Element* scroller = GetDocument().getElementById(AtomicString("scroller"));
+  ASSERT_TRUE(scroller);
+  scroller->setAttribute(html_names::kStyleAttr,
+                         AtomicString("content-visibility: hidden"));
+  UpdateAllLifecyclePhasesForTest();
 }
 
 }  // namespace blink

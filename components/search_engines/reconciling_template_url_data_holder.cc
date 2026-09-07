@@ -9,10 +9,13 @@
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
+#include "components/regional_capabilities/regional_capabilities_utils.h"
 #include "components/search_engines/search_engines_switches.h"
+#include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_data_util.h"
 #include "components/search_engines/template_url_prepopulate_data.h"
 #include "components/search_engines/template_url_prepopulate_data_resolver.h"
+#include "components/search_engines/util.h"
 #include "third_party/search_engines_data/resources/definitions/prepopulated_engines.h"
 
 namespace {
@@ -35,6 +38,7 @@ GetReconciliationVariant(
     case ReconciliationType::kByIdFromAllEngines:
     case ReconciliationType::kByIdFromRegionalEngines:
     case ReconciliationType::kByIdFallthrough:
+    case ReconciliationType::kByMigrateToId:
       return ReconciliationVariant::kByID;
 
     case ReconciliationType::kNone:
@@ -115,33 +119,23 @@ ReconcilingTemplateURLDataHolder::GetOrComputeKeyword() const {
 std::unique_ptr<TemplateURLData>
 ReconcilingTemplateURLDataHolder::FindMatchingBuiltInDefinitionsByKeyword(
     const std::u16string& keyword) const {
-  std::vector<std::unique_ptr<TemplateURLData>> prepopulated_urls =
-      prepopulate_data_resolver_->GetPrepopulatedEngines();
-
-  auto engine_iter =
-      std::ranges::find(prepopulated_urls, keyword, &TemplateURLData::keyword);
-
-  std::unique_ptr<TemplateURLData> result;
-  if (engine_iter != prepopulated_urls.end()) {
-    result = std::move(*engine_iter);
-  } else {
-    // Search the entire search engine database to find matching entry.
-    auto all_engines = TemplateURLPrepopulateData::GetAllPrepopulatedEngines();
-    for (const auto* engine : all_engines) {
-      if (engine->keyword == keyword) {
-        result = TemplateURLDataFromPrepopulatedEngine(*engine);
-        break;
-      }
-    }
-  }
-
-  return result;
+  return prepopulate_data_resolver_->GetEngineFromFullList(keyword);
 }
 
 std::pair<std::unique_ptr<TemplateURLData>,
           ReconcilingTemplateURLDataHolder::ReconciliationType>
 ReconcilingTemplateURLDataHolder::FindMatchingBuiltInDefinitionsById(
     const TemplateURLData& data_to_match) const {
+  // Search for potential migrations. It is prioritised over the regional
+  // engines, which can change across runs. That's a very strict check (see
+  // `Resolver::CompareEngineUnderMigration`), so there is no risk to  match the
+  // wrong engine.
+  if (std::unique_ptr<TemplateURLData> engine =
+          prepopulate_data_resolver_->TryGetMigratedEngine(data_to_match);
+      engine != nullptr) {
+    return {std::move(engine), ReconciliationType::kByMigrateToId};
+  }
+
   std::vector<std::unique_ptr<TemplateURLData>> prepopulated_urls =
       prepopulate_data_resolver_->GetPrepopulatedEngines();
 
@@ -154,12 +148,11 @@ ReconcilingTemplateURLDataHolder::FindMatchingBuiltInDefinitionsById(
   }
 
   // Search the entire search engine database to find matching entry.
-  auto all_engines = TemplateURLPrepopulateData::GetAllPrepopulatedEngines();
-  for (const auto* engine : all_engines) {
-    if (engine->id == data_to_match.prepopulate_id) {
-      return {TemplateURLDataFromPrepopulatedEngine(*engine),
-              ReconciliationType::kByIdFromAllEngines};
-    }
+  if (std::unique_ptr<TemplateURLData> engine =
+          prepopulate_data_resolver_->GetEngineFromFullList(
+              data_to_match.prepopulate_id);
+      engine != nullptr) {
+    return {std::move(engine), ReconciliationType::kByIdFromAllEngines};
   }
 
   return {nullptr, ReconciliationType::kByIdFallthrough};
@@ -208,19 +201,8 @@ void ReconcilingTemplateURLDataHolder::SetAndReconcile(
     return;
   }
 
-  if (!search_engine_->safe_for_autoreplace) {
-    engine->safe_for_autoreplace = false;
-    engine->SetKeyword(search_engine_->keyword());
-    engine->SetShortName(search_engine_->short_name());
-  }
-
-  engine->id = search_engine_->id;
-  engine->sync_guid = search_engine_->sync_guid;
-  engine->date_created = search_engine_->date_created;
-  engine->last_modified = search_engine_->last_modified;
-  engine->last_visited = search_engine_->last_visited;
-  engine->favicon_url = search_engine_->favicon_url;
-  engine->regulatory_origin = search_engine_->regulatory_origin;
+  MergeIntoEngineData(*search_engine_.get(), *engine.get(),
+                      TemplateURLMergeOption::kSettingAsDefaultProvider);
 
   search_engine_ = std::move(engine);
 }

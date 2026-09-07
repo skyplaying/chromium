@@ -60,7 +60,7 @@ void GetAliasedFeature(v8::Local<v8::Name> property_name,
   v8::Isolate* isolate = info.GetIsolate();
   v8::HandleScope handle_scope(isolate);
   v8::Local<v8::Context> context =
-      info.HolderV2()->GetCreationContextChecked(isolate);
+      info.Holder()->GetCreationContextChecked(isolate);
 
   v8::TryCatch try_catch(isolate);
   v8::Local<v8::Value> chrome;
@@ -110,7 +110,7 @@ void ThrowDeprecatedAccessError(
 
 void EmptySetterCallback(v8::Local<v8::Name> name,
                          v8::Local<v8::Value> value,
-                         const v8::PropertyCallbackInfo<void>& info) {
+                         const v8::PropertyCallbackInfo<v8::Boolean>& info) {
   // Empty setter is required to keep the native data property in "accessor"
   // state even in case the value is updated by user code.
   // TODO(337075390): consider not using empty setter and let the property

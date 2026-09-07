@@ -11,14 +11,25 @@
  * #include=cr-shared-style-lit shared-style
  * #css_wrapper_metadata_end */
 
+:host {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  padding: 0 var(--page-padding) 0 var(--page-padding);
+}
+
 #discoverCategories {
   display: flex;
   flex-direction: row;
+  flex-wrap: wrap;
   gap: 8px;
   margin: 16px 0 0 0;
 }
 
-#discoverTopPicks {
-  margin: 16px 0 16px 0;
+skills-carousel {
+  margin-bottom: 14px;
 }
 
+skill-card.skill-with-image {
+  --skills-card-height: 308px;
+}

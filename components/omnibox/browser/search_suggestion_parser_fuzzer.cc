@@ -13,9 +13,11 @@
 
 #include "base/at_exit.h"
 #include "base/i18n/icu_util.h"
+#include "base/no_destructor.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "components/omnibox/browser/test_scheme_classifier.h"
+#include "components/search_engines/search_engine_type.h"
 #include "third_party/metrics_proto/omnibox_event.pb.h"
 
 // From crbug.com/774858
@@ -25,9 +27,8 @@ struct IcuEnvironment {
   base::AtExitManager at_exit_manager;
 };
 
-IcuEnvironment icu_env;
-
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
+  static const base::NoDestructor<IcuEnvironment> icu_env;
   // This is an arbitrary size, and arguably even small for a JSON input,
   // but we have to cut it off somewhere.
   if (size > 4096)
@@ -58,6 +59,16 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
         *root_list, input, TestSchemeClassifier(),
         /*default_result_relevance=*/-1,
         /*is_keyword_result=*/is_keyword, &results);
+    // Engines that answer with a response format of their own take a different
+    // path through the parser, so exercise those too.
+    for (SearchEngineType search_engine_type : {SEARCH_ENGINE_BRAVE}) {
+      SearchSuggestionParser::Results engine_results;
+      SearchSuggestionParser::ParseSuggestResults(
+          *root_list, input, TestSchemeClassifier(),
+          /*default_result_relevance=*/-1,
+          /*is_keyword_result=*/is_keyword,
+          {.search_engine_type = search_engine_type}, &engine_results);
+    }
   }
   return 0;
 }

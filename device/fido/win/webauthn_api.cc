@@ -96,6 +96,8 @@ WEBAUTHN_HMAC_SECRET_SALT_VALUES* FillHMACSaltValues(
     values_storage->cCredWithHmacSecretSaltList =
         base::checked_cast<DWORD>(cred_salts_storage->size());
     values_storage->pCredWithHmacSecretSaltList = cred_salts_storage->data();
+  } else {
+    values_storage->cCredWithHmacSecretSaltList = 0;
   }
 
   return values_storage;
@@ -505,6 +507,18 @@ AuthenticatorMakeCredentialBlocking(WinWebAuthnApi* webauthn_api,
     credential_hints = ToWinCredentialHints(request_options.hints);
   }
 
+  DWORD flags = 0;
+  std::vector<WEBAUTHN_HMAC_SECRET_SALT> prf_input_storage;
+  WEBAUTHN_HMAC_SECRET_SALT* win_prf_input = nullptr;
+  if (base::FeatureList::IsEnabled(device::kWebAuthnWinPrfOnCreate) &&
+      api_version >= 8 && request.prf_input) {
+    win_prf_input = FillHMACSalts(&prf_input_storage, *request.prf_input);
+
+    // The HMAC salts are hashed in the renderer. This flag indicates that they
+    // should not be hashed again.
+    flags |= WEBAUTHN_AUTHENTICATOR_HMAC_SECRET_VALUES_FLAG;
+  }
+
   WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS options{
       WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS_VERSION_8,
       kWinWebAuthnTimeoutMilliseconds,
@@ -517,7 +531,7 @@ AuthenticatorMakeCredentialBlocking(WinWebAuthnApi* webauthn_api,
       ToWinUserVerificationRequirement(request.user_verification),
       ToWinAttestationConveyancePreference(request.attestation_preference,
                                            api_version),
-      /*dwFlags=*/0,
+      flags,
       &cancellation_id,
       &exclude_credential_list,
       enterprise_attestation,
@@ -529,7 +543,7 @@ AuthenticatorMakeCredentialBlocking(WinWebAuthnApi* webauthn_api,
       /*pLinkedDevice=*/nullptr,
       /*cbJsonExt=*/0,
       /*pbJsonExt=*/nullptr,
-      /*pPRFGlobalEval=*/nullptr,
+      win_prf_input,
       base::checked_cast<DWORD>(credential_hints.size()),
       credential_hints.data(),
       /*bThirdPartyPayment=*/false,
@@ -723,7 +737,7 @@ AuthenticatorGetAssertionBlocking(WinWebAuthnApi* webauthn_api,
 
 std::pair<bool, std::vector<DiscoverableCredentialMetadata>>
 AuthenticatorEnumerateCredentialsBlocking(WinWebAuthnApi* webauthn_api,
-                                          std::u16string_view rp_id,
+                                          std::optional<std::u16string> rp_id,
                                           bool is_incognito) {
   if (!webauthn_api || !webauthn_api->IsAvailable() ||
       !webauthn_api->SupportsSilentDiscovery()) {
@@ -733,9 +747,7 @@ AuthenticatorEnumerateCredentialsBlocking(WinWebAuthnApi* webauthn_api,
 
   WEBAUTHN_GET_CREDENTIALS_OPTIONS options{
       .dwVersion = WEBAUTHN_GET_CREDENTIALS_OPTIONS_VERSION_1,
-      // For a default-initialized string_view `pwszRpId` will be nullptr,
-      // which makes the API not filter on RP ID.
-      .pwszRpId = base::as_wcstr(rp_id),
+      .pwszRpId = rp_id.has_value() ? base::as_wcstr(rp_id->c_str()) : nullptr,
       .bBrowserInPrivateMode = is_incognito};
 
   FIDO_LOG(DEBUG) << "WebAuthNGetCredentialList("
@@ -763,7 +775,27 @@ AuthenticatorEnumerateCredentialsBlocking(WinWebAuthnApi* webauthn_api,
   }
   FIDO_LOG(DEBUG) << "WebAuthNGetCredentialList returned "
                   << credentials->cCredentialDetails << " credential(s)";
-  return {true, WinCredentialDetailsListToCredentialMetadata(*credentials)};
+
+  std::vector<DiscoverableCredentialMetadata> results =
+      WinCredentialDetailsListToCredentialMetadata(*credentials);
+
+  // Other RP IDs should have been filtered out, but since we are relying on an
+  // OS API outside of our control we should not CHECK here. Instead, just skip
+  // any incorrect RP IDs.
+  if (rp_id.has_value()) {
+    std::string expected_rp_id = base::UTF16ToUTF8(*rp_id);
+    size_t erased_count =
+        std::erase_if(results, [&](const DiscoverableCredentialMetadata& cred) {
+          return cred.rp_id != expected_rp_id;
+        });
+
+    if (erased_count > 0) {
+      FIDO_LOG(ERROR) << "WebAuthNGetCredentialList returned " << erased_count
+                      << " credential(s) with a wrong RP ID";
+    }
+  }
+
+  return {true, std::move(results)};
 }
 
 }  // namespace device

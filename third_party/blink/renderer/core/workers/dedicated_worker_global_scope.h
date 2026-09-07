@@ -35,6 +35,7 @@
 
 #include "base/types/pass_key.h"
 #include "net/storage_access_api/status.h"
+#include "third_party/blink/public/common/permissions_policy/document_policy.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/mojom/frame/back_forward_cache_controller.mojom-blink.h"
 #include "third_party/blink/public/mojom/worker/dedicated_worker_host.mojom-blink.h"
@@ -82,7 +83,6 @@ class CORE_EXPORT DedicatedWorkerGlobalScope final : public WorkerGlobalScope {
       std::unique_ptr<Vector<mojom::blink::OriginTrialFeature>>
           inherited_trial_features,
       const BeginFrameProviderParams& begin_frame_provider_params,
-      bool direct_socket_isolated_capability,
       mojo::PendingRemote<mojom::blink::DedicatedWorkerHost>
           dedicated_worker_host,
       mojo::PendingRemote<mojom::blink::BackForwardCacheControllerHost>
@@ -113,6 +113,7 @@ class CORE_EXPORT DedicatedWorkerGlobalScope final : public WorkerGlobalScope {
       const KURL& response_url,
       network::mojom::ReferrerPolicy response_referrer_policy,
       Vector<network::mojom::blink::ContentSecurityPolicyPtr> response_csp,
+      DocumentPolicy::DocumentPolicyBundle response_document_policy,
       const Vector<String>* response_origin_trial_tokens) override;
   void FetchAndRunClassicScript(
       const KURL& script_url,
@@ -185,6 +186,9 @@ class CORE_EXPORT DedicatedWorkerGlobalScope final : public WorkerGlobalScope {
     std::unique_ptr<GlobalScopeCreationParams> creation_params;
     ExecutionContextToken parent_context_token;
     net::StorageAccessApiStatus parent_storage_access_api_status;
+    DocumentPolicy::DocumentPolicyBundle creator_document_policy;
+    bool parent_is_isolated_context = false;
+    bool direct_sockets_force_enabled_in_parent = false;
   };
 
   static ParsedCreationParams ParseCreationParams(
@@ -202,7 +206,6 @@ class CORE_EXPORT DedicatedWorkerGlobalScope final : public WorkerGlobalScope {
       std::unique_ptr<Vector<mojom::blink::OriginTrialFeature>>
           inherited_trial_features,
       const BeginFrameProviderParams& begin_frame_provider_params,
-      bool is_isolated_context,
       mojo::PendingRemote<mojom::blink::DedicatedWorkerHost>
           dedicated_worker_host,
       mojo::PendingRemote<mojom::blink::BackForwardCacheControllerHost>
@@ -237,6 +240,10 @@ class CORE_EXPORT DedicatedWorkerGlobalScope final : public WorkerGlobalScope {
   // The worker's Storage Access API status (inherited from the parent
   // ExecutionContext).
   net::StorageAccessApiStatus storage_access_api_status_;
+
+  // The creator's document policy, used for local-scheme workers (about:,
+  // blob:, data:, filesystem:) to inherit the document policy from the creator.
+  DocumentPolicy::DocumentPolicyBundle creator_document_policy_;
 
   // The timestamp taken when FetchAndRunClassicScript() is called.
   base::TimeTicks fetch_classic_script_start_time_;

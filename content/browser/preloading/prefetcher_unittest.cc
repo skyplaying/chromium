@@ -12,8 +12,8 @@
 #include "content/browser/preloading/prefetch/prefetch_test_util_internal.h"
 #include "content/public/common/content_client.h"
 #include "content/public/test/test_browser_context.h"
+#include "content/public/test/test_content_browser_client.h"
 #include "content/public/test/test_renderer_host.h"
-#include "content/test/test_content_browser_client.h"
 #include "content/test/test_web_contents.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -70,6 +70,7 @@ TEST_F(PrefetcherTest, ProcessCandidatesForPrefetch) {
   std::vector<blink::mojom::SpeculationCandidatePtr> candidates;
 
   auto candidate1 = blink::mojom::SpeculationCandidate::New();
+  candidate1->tags = {std::nullopt};
   candidate1->action = blink::mojom::SpeculationAction::kPrefetch;
   candidate1->requires_anonymous_client_ip_when_cross_origin = true;
   candidate1->url = GetCrossOriginUrl("/candidate1.html");

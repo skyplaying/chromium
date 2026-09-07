@@ -39,23 +39,17 @@ class FormDataAndroid {
   // Updates `form_` with state from Java side.
   void UpdateFromJava();
 
-  // Gets the index of a given field. It returns `true` and sets the `index` if
-  // `field` is found.
-  bool GetFieldIndex(const FormFieldData& field, size_t* index);
-
-  // Gets the index of a given field. It returns `true` and sets the `index` if
-  // a similar field is found. This method compares fewer attributes than
-  // `GetFieldIndex()` does, and should be used when the field could be changed
-  // dynamically, but the change has no impact on autofill purpose. Examples are
-  // CSS style changes - see `FormFieldDataAndroid::SimilarFieldAs()` for
-  // details.
-  bool GetSimilarFieldIndex(const FormFieldData& field, size_t* index);
+  // Gets the index of a given field based on `FieldGlobalId`-check. It returns
+  // `true` and sets the `index` if a similar field is found.
+  bool GetFieldByGlobalId(const FormFieldData& field, size_t* index);
 
   // Returns true if this form is similar to the given form.
   // `SimilarFormAs` checks `FormData` members that are unlikely to have been
   // changed by direct user input. If they differ, the form has changed enough
   // (e.g. by adding or removing fields) to warrant starting a new Autofill
   // session.
+  // TODO(crbug.com/542493825): Remove when
+  // `AutofillAndroidUseGlobalIdForFormComparison` launches.
   bool SimilarFormAs(const FormData& form) const;
 
   // Is invoked when the form field specified by `index` is changed to a new
@@ -86,6 +80,14 @@ class FormDataAndroid {
   // Returns whether the fields of `this` are similar to the fields of `form`.
   // Returns `false` if the number of fields differs.
   bool SimilarFieldsAs(const FormData& form) const;
+
+  // Updates the field visibilities by matching fields by `FieldGlobalId`.
+  std::vector<int> UpdateFieldVisibilitiesByGlobalId(const FormData& form);
+
+  // Updates the field visibilities by matching fields by index.
+  // TODO(crbug.com/542493825): Remove when
+  // `AutofillAndroidUseGlobalIdForFormComparison` launches.
+  std::vector<int> UpdateFieldVisibilitiesByIndex(const FormData& form);
 
   // The session id of this form. It is used to generate virtual view ids for
   // the `ViewStructure` shared with the Android AutofillManager framework.

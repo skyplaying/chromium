@@ -11,7 +11,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
-#include "components/autofill/core/browser/data_model/addresses/contact_info.h"
+#include "components/autofill/core/browser/data_model/addresses/name_info.h"
 #include "components/autofill/core/browser/data_quality/autofill_data_util.h"
 #include "components/autofill/core/browser/data_quality/validation.h"
 #include "components/autofill/core/browser/field_types.h"
@@ -39,16 +39,17 @@ PaymentsProfileComparator::GetMissingProfileFields(
   if (!profile)
     return kName | kPhone | kEmail | kAddress;
 
-  if (!cache_.count(profile->guid())) {
-    cache_[profile->guid()] = ComputeMissingFields(*profile);
+  auto it = cache_.find(profile->guid());
+  if (it == cache_.end()) {
+    it = cache_.emplace(profile->guid(), ComputeMissingFields(*profile)).first;
   } else {
     // Cache hit. In debug mode, recompute and check that invalidation has
     // occurred where necessary.
-    DCHECK_EQ(cache_[profile->guid()], ComputeMissingFields(*profile))
+    DCHECK_EQ(it->second, ComputeMissingFields(*profile))
         << "Profiles must be invalidated when their contents change.";
   }
 
-  return cache_[profile->guid()];
+  return it->second;
 }
 
 std::vector<raw_ptr<autofill::AutofillProfile, VectorExperimental>>
@@ -113,16 +114,19 @@ bool PaymentsProfileComparator::IsContactEqualOrSuperset(
         !super.HasInfo(autofill::PHONE_HOME_WHOLE_NUMBER)) {
       return false;
     }
-    if (!HaveMergeablePhoneNumbers(super, sub))
+    if (!MergePhoneNumbers(super, sub).has_value()) {
       return false;
+    }
   }
   if (options_->request_payer_email()) {
     if (sub.HasInfo(autofill::EMAIL_ADDRESS) &&
         !super.HasInfo(autofill::EMAIL_ADDRESS)) {
       return false;
     }
-    if (!HaveMergeableEmailAddresses(super, sub))
+
+    if (!MergeEmailAddresses(super, sub).has_value()) {
       return false;
+    }
   }
   return true;
 }

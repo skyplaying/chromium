@@ -4,7 +4,7 @@
 
 #include "components/page_load_metrics/common/page_load_timing.h"
 
-#include "components/page_load_metrics/common/page_load_metrics.mojom-forward.h"
+#include "components/page_load_metrics/common/page_load_metrics.mojom.h"
 #include "third_party/blink/public/web/web_performance_metrics_for_reporting.h"
 
 namespace page_load_metrics {
@@ -28,14 +28,6 @@ mojom::PageLoadTimingPtr CreatePageLoadTiming() {
 mojom::LargestContentfulPaintTimingPtr CreateLargestContentfulPaintTiming() {
   auto timing = mojom::LargestContentfulPaintTiming::New();
   timing->resource_load_timings = mojom::LcpResourceLoadTimings::New();
-  return timing;
-}
-
-mojom::SoftNavigationMetricsPtr CreateSoftNavigationMetrics() {
-  auto timing = mojom::SoftNavigationMetrics::New();
-  timing->navigation_id = 0;
-  timing->start_time = base::Milliseconds(0);
-  timing->largest_contentful_paint = CreateLargestContentfulPaintTiming();
   return timing;
 }
 
@@ -81,14 +73,12 @@ bool IsEmpty(const mojom::LargestContentfulPaintTiming& timing) {
 }
 
 bool IsEmpty(const mojom::MonotonicPaintTiming& timing) {
-  return !timing.first_paint && !timing.first_contentful_paint;
+  return !timing.first_paint && !timing.first_contentful_paint &&
+         !timing.first_contentful_paint_submitted;
 }
 
 bool IsEmpty(const mojom::SoftNavigationMetrics& timing) {
-  return !timing.count && timing.start_time.is_zero() &&
-         !timing.navigation_id && !timing.same_document_metrics_token &&
-         (!timing.largest_contentful_paint ||
-          IsEmpty(*timing.largest_contentful_paint));
+  return !timing.performance_timeline_navigation_id;
 }
 
 bool IsEmpty(const page_load_metrics::mojom::PageLoadTiming& timing) {

@@ -19,6 +19,7 @@ import static org.mockito.Mockito.when;
 import static org.chromium.chrome.browser.multiwindow.MultiInstanceManager.INVALID_WINDOW_ID;
 
 import android.content.Intent;
+import android.os.Bundle;
 
 import org.junit.After;
 import org.junit.Before;
@@ -34,28 +35,27 @@ import org.robolectric.annotation.Config;
 
 import org.chromium.base.ApplicationStatus;
 import org.chromium.base.ContextUtils;
-import org.chromium.base.supplier.ObservableSuppliers;
-import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.IntentHandler;
 import org.chromium.chrome.browser.app.tab_activity_glue.ReparentingTabGroupTask;
 import org.chromium.chrome.browser.app.tab_activity_glue.ReparentingTabsTask;
-import org.chromium.chrome.browser.app.tabmodel.TabModelOrchestrator;
 import org.chromium.chrome.browser.app.tabwindow.TabWindowManagerSingleton;
 import org.chromium.chrome.browser.multiwindow.MultiInstanceManager.NewWindowAppSource;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab.TabBuilder;
 import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncFeatures;
 import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncFeaturesJni;
 import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncServiceFactory;
 import org.chromium.chrome.browser.tabmodel.MismatchedIndicesHandler;
+import org.chromium.chrome.browser.tabmodel.SupportedProfileType;
 import org.chromium.chrome.browser.tabmodel.TabGroupMetadata;
 import org.chromium.chrome.browser.tabmodel.TabList;
 import org.chromium.chrome.browser.tabmodel.TabPersistentStore;
 import org.chromium.chrome.browser.tabwindow.TabWindowManager;
 import org.chromium.components.tab_group_sync.TabGroupSyncService;
+import org.chromium.content_public.browser.WebContents;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -74,7 +74,6 @@ public class TabReparentingDelegateUnitTest {
     @Mock private ChromeTabbedActivity mCurrentActivity;
     @Mock private ChromeTabbedActivity mDestActivity;
     @Mock private MismatchedIndicesHandler mMismatchedIndicesHandler;
-    @Mock private TabModelOrchestrator mTabModelOrchestrator;
     @Mock private TabGroupSyncFeatures.Natives mTabGroupSyncFeaturesJniMock;
     @Mock private TabGroupSyncService mTabGroupSyncService;
     @Mock private TabPersistentStore mTabPersistentStore;
@@ -82,21 +81,22 @@ public class TabReparentingDelegateUnitTest {
     @Mock private ReparentingTabGroupTask mReparentingTabGroupTask;
     @Mock private Tab mTab1;
     @Mock private Tab mTab2;
+    @Mock private Profile mProfile;
+    @Mock private WebContents mWebContents;
 
     @Captor private ArgumentCaptor<Runnable> mOnSaveTabListRunnableCaptor;
 
     private TabReparentingDelegate mDelegate;
-    private final SettableMonotonicObservableSupplier<TabModelOrchestrator>
-            mTabModelOrchestratorSupplier = ObservableSuppliers.createMonotonic();
 
     @Before
     public void setup() {
         MultiWindowTestUtils.enableMultiInstance();
         TabGroupSyncFeaturesJni.setInstanceForTesting(mTabGroupSyncFeaturesJniMock);
         when(mTabGroupSyncFeaturesJniMock.isTabGroupSyncEnabled(any())).thenReturn(true);
-        mTabModelOrchestratorSupplier.set(mTabModelOrchestrator);
+        TabBuilder.setTabForTesting(mTab1);
 
-        mDelegate = new TabReparentingDelegate(mCurrentActivity, mTabModelOrchestratorSupplier);
+        mDelegate = new TabReparentingDelegate();
+        TabReparentingDelegate.setPersistentStoreForTesting(mTabPersistentStore);
 
         when(mCurrentActivity.getPackageName())
                 .thenReturn(ContextUtils.getApplicationContext().getPackageName());
@@ -109,16 +109,19 @@ public class TabReparentingDelegateUnitTest {
                         /* profileProviderSupplier= */ null,
                         /* tabCreatorManager= */ null,
                         /* nextTabPolicySupplier= */ null,
-                        /* multiInstanceManager= */ null,
                         mMismatchedIndicesHandler,
-                        SOURCE_WINDOW_ID);
+                        SOURCE_WINDOW_ID,
+                        SupportedProfileType.MIXED);
         TabGroupSyncServiceFactory.setForTesting(mTabGroupSyncService);
-        when(mTabModelOrchestrator.getTabPersistentStore()).thenReturn(mTabPersistentStore);
 
         ReparentingTabsTask.setReparentingTabsTaskForTesting(mReparentingTabsTask);
-        doNothing().when(mReparentingTabsTask).begin(any(), any(), any(), any());
+        when(mReparentingTabsTask.begin(any(), any(), any(), any())).thenReturn(true);
         ReparentingTabGroupTask.setReparentingTabGroupTaskForTesting(mReparentingTabGroupTask);
         doNothing().when(mReparentingTabGroupTask).begin(any(), any());
+
+        MultiWindowUtils.setActivityByWindowIdForTesting(SOURCE_WINDOW_ID, mCurrentActivity);
+        when(mTab1.getContext()).thenReturn(mCurrentActivity);
+        when(mTab2.getContext()).thenReturn(mCurrentActivity);
     }
 
     @After
@@ -130,18 +133,17 @@ public class TabReparentingDelegateUnitTest {
     @Test
     public void testReparentTabsToNewWindow() {
         // Setup.
-        var histogramWatcher =
-                HistogramWatcher.newBuilder()
-                        .expectIntRecord(
-                                MultiInstanceManager.NEW_WINDOW_APP_SOURCE_HISTOGRAM,
-                                NewWindowAppSource.MENU)
-                        .build();
         List<Tab> tabs = List.of(mTab1, mTab2);
         boolean openAdjacently = true;
 
         // Act.
         mDelegate.reparentTabsToNewWindow(
-                tabs, INVALID_WINDOW_ID, openAdjacently, NewWindowAppSource.MENU);
+                mCurrentActivity,
+                tabs,
+                INVALID_WINDOW_ID,
+                openAdjacently,
+                /* finalizeCallback= */ null,
+                NewWindowAppSource.MENU);
 
         // Verify that the reparenting task is initiated.
         var intentCaptor = ArgumentCaptor.forClass(Intent.class);
@@ -162,7 +164,103 @@ public class TabReparentingDelegateUnitTest {
                 intentCaptor
                         .getValue()
                         .getIntExtra(IntentHandler.EXTRA_WINDOW_ID, INVALID_WINDOW_ID));
-        histogramWatcher.assertExpected();
+        assertEquals(
+                "New window source extra is incorrect.",
+                NewWindowAppSource.MENU,
+                intentCaptor
+                        .getValue()
+                        .getIntExtra(
+                                IntentHandler.EXTRA_NEW_WINDOW_APP_SOURCE,
+                                NewWindowAppSource.UNKNOWN));
+    }
+
+    @Test
+    public void testCreateNewWindowFromWebContents_success() {
+        // Act.
+        boolean result =
+                mDelegate.createNewWindowFromWebContents(
+                        mCurrentActivity,
+                        mProfile,
+                        mWebContents,
+                        /* additionalIntentExtras= */ null,
+                        /* startActivityOptions= */ null,
+                        NewWindowAppSource.BROWSER_WINDOW_CREATOR);
+
+        // Verify.
+        assertTrue(result);
+        ArgumentCaptor<Intent> intentCaptor = ArgumentCaptor.forClass(Intent.class);
+        verify(mReparentingTabsTask)
+                .begin(eq(mCurrentActivity), intentCaptor.capture(), eq(null), eq(null));
+        Intent intent = intentCaptor.getValue();
+        org.junit.Assert.assertNotNull(intent);
+        org.junit.Assert.assertFalse(
+                intent.getBooleanExtra(
+                        IntentHandler.EXTRA_OPEN_NEW_INCOGNITO_WINDOW, /* defaultValue= */ true));
+    }
+
+    @Test
+    public void testCreateNewWindowFromWebContents_success_withExtrasAndOptions() {
+        // Setup.
+        when(mProfile.isIncognitoBranded()).thenReturn(true);
+
+        Bundle extras = new Bundle();
+        extras.putInt("extra", 1);
+        Bundle options = mock(Bundle.class);
+
+        // Act.
+        boolean result =
+                mDelegate.createNewWindowFromWebContents(
+                        mCurrentActivity,
+                        mProfile,
+                        mWebContents,
+                        extras,
+                        options,
+                        NewWindowAppSource.BROWSER_WINDOW_CREATOR);
+
+        // Verify.
+        assertTrue(result);
+        ArgumentCaptor<Intent> intentCaptor = ArgumentCaptor.forClass(Intent.class);
+        verify(mReparentingTabsTask)
+                .begin(eq(mCurrentActivity), intentCaptor.capture(), eq(options), eq(null));
+        Intent intent = intentCaptor.getValue();
+        org.junit.Assert.assertNotNull(intent);
+        org.junit.Assert.assertTrue(
+                intent.getBooleanExtra(
+                        IntentHandler.EXTRA_OPEN_NEW_INCOGNITO_WINDOW, /* defaultValue= */ false));
+        org.junit.Assert.assertEquals(1, intent.getIntExtra("extra", 0));
+    }
+
+    @Test
+    public void testCreateNewWindowFromWebContents_reparentingTaskFailed() {
+        // Setup.
+        when(mReparentingTabsTask.begin(any(), any(), any(), any())).thenReturn(false);
+
+        // Act.
+        boolean result =
+                mDelegate.createNewWindowFromWebContents(
+                        mCurrentActivity,
+                        mProfile,
+                        mWebContents,
+                        /* additionalIntentExtras= */ null,
+                        /* startActivityOptions= */ null,
+                        NewWindowAppSource.BROWSER_WINDOW_CREATOR);
+
+        // Verify.
+        assertFalse(result);
+        verify(mReparentingTabsTask).begin(eq(mCurrentActivity), any(), eq(null), eq(null));
+    }
+
+    @Test
+    public void testReparentTabsToExistingWindow_emptyTabs() {
+        mDelegate.reparentTabsToExistingWindow(
+                mDestActivity,
+                new ArrayList<>(),
+                /* destTabIndex= */ 0,
+                /* destGroupTabId= */ Tab.INVALID_TAB_ID,
+                /* bringToFront= */ true);
+
+        verify(mDestActivity, never()).onNewIntent(any());
+        verify(mReparentingTabsTask, never()).setupIntent(any(), any());
     }
 
     @Test
@@ -175,7 +273,8 @@ public class TabReparentingDelegateUnitTest {
                 mDestActivity,
                 tabs,
                 /* destTabIndex= */ 2,
-                /* destGroupTabId= */ TabList.INVALID_TAB_INDEX);
+                /* destGroupTabId= */ TabList.INVALID_TAB_INDEX,
+                /* bringToFront= */ true);
 
         // Verify that the reparenting task is initiated.
         var setupIntentCaptor = ArgumentCaptor.forClass(Intent.class);
@@ -204,7 +303,8 @@ public class TabReparentingDelegateUnitTest {
                 mDestActivity,
                 tabs,
                 /* destTabIndex= */ TabList.INVALID_TAB_INDEX,
-                /* destGroupTabId= */ 3);
+                /* destGroupTabId= */ 3,
+                /* bringToFront= */ true);
 
         // Verify that the reparenting task is initiated.
         var setupIntentCaptor = ArgumentCaptor.forClass(Intent.class);
@@ -225,46 +325,128 @@ public class TabReparentingDelegateUnitTest {
 
     @Test
     public void testReparentTabsToExistingWindow_invalidDestTabIds() {
+        List<Tab> tabs = List.of(mTab1, mTab2);
         assertThrows(
                 AssertionError.class,
                 () ->
                         mDelegate.reparentTabsToExistingWindow(
                                 mDestActivity,
-                                List.of(mTab1, mTab2),
+                                tabs,
                                 /* destTabIndex= */ 2,
-                                /* destGroupTabId= */ 3));
+                                /* destGroupTabId= */ 3,
+                                /* bringToFront= */ true));
+    }
+
+    @Test
+    public void testReparentTabsToExistingWindow_targetActivityFinishingOrDestroyed() {
+        when(mDestActivity.isActivityFinishingOrDestroyed()).thenReturn(true);
+        List<Tab> tabs = List.of(mTab1, mTab2);
+
+        mDelegate.reparentTabsToExistingWindow(
+                mDestActivity,
+                tabs,
+                /* destTabIndex= */ 0,
+                /* destGroupTabId= */ Tab.INVALID_TAB_ID,
+                /* bringToFront= */ true);
+
+        verify(mDestActivity, never()).onNewIntent(any());
+        verify(mReparentingTabsTask, never()).setupIntent(any(), any());
+    }
+
+    @Test
+    public void testReparentTabGroupToExistingWindow_targetActivityFinishingOrDestroyed() {
+        when(mDestActivity.isActivityFinishingOrDestroyed()).thenReturn(true);
+        TabGroupMetadata tabGroupMetadata = getTestTabGroupMetadata(/* isGroupShared= */ false);
+
+        mDelegate.reparentTabGroupToExistingWindow(
+                mDestActivity, tabGroupMetadata, /* destTabIndex= */ 3, /* bringToFront= */ true);
+
+        verify(mDestActivity, never()).onNewIntent(any());
+        verify(mReparentingTabGroupTask, never()).setupIntent(any(), any());
+        verify(mTabPersistentStore, never()).pauseSaveTabList();
+    }
+
+    @Test
+    public void testReparentTabGroupToExistingWindow_targetActivityDestroyedDuringAsyncSave() {
+        TabGroupMetadata tabGroupMetadata = getTestTabGroupMetadata(/* isGroupShared= */ true);
+
+        mDelegate.reparentTabGroupToExistingWindow(
+                mDestActivity, tabGroupMetadata, /* destTabIndex= */ 3, /* bringToFront= */ true);
+
+        verify(mTabGroupSyncService).setLocalObservationMode(/* observeLocalChanges= */ false);
+        verify(mTabPersistentStore).resumeSaveTabList(mOnSaveTabListRunnableCaptor.capture());
+
+        // Target activity is destroyed before resumeSaveTabList callback executes.
+        when(mDestActivity.isActivityFinishingOrDestroyed()).thenReturn(true);
+        mOnSaveTabListRunnableCaptor.getValue().run();
+
+        // onNewIntent is NOT called, but sync service observation is resumed.
+        verify(mDestActivity, never()).onNewIntent(any());
+        verify(mTabGroupSyncService).setLocalObservationMode(/* observeLocalChanges= */ true);
     }
 
     @Test
     public void testReparentTabGroupToNewWindow() {
+        doTestReparentTabGroupToNewWindow(/* pauseResumeTabGroupSyncService= */ true);
+    }
+
+    @Test
+    public void testReparentTabGroupToNewWindow_noSourceTabPersistentStore() {
+        doTestReparentTabGroupToNewWindow(/* pauseResumeTabGroupSyncService= */ false);
+    }
+
+    @Test
+    public void testReparentTabGroupToExistingWindow() {
+        doTestReparentTabGroupToExistingWindow(
+                /* isGroupShared= */ false, /* pauseResumeTabGroupSyncService= */ true);
+    }
+
+    @Test
+    public void testReparentTabGroupToExistingWindow_sharedTabGroup() {
+        doTestReparentTabGroupToExistingWindow(
+                /* isGroupShared= */ true, /* pauseResumeTabGroupSyncService= */ true);
+    }
+
+    @Test
+    public void testReparentTabGroupToExistingWindow_noSourceTabPersistentStore() {
+        doTestReparentTabGroupToExistingWindow(
+                /* isGroupShared= */ false, /* pauseResumeTabGroupSyncService= */ false);
+    }
+
+    private void doTestReparentTabGroupToNewWindow(boolean pauseResumeTabGroupSyncService) {
         // Setup.
         TabGroupMetadata tabGroupMetadata = getTestTabGroupMetadata(/* isGroupShared= */ false);
         boolean openAdjacently = true;
-        var histogramWatcher =
-                HistogramWatcher.newBuilder()
-                        .expectIntRecord(
-                                MultiInstanceManager.NEW_WINDOW_APP_SOURCE_HISTOGRAM,
-                                NewWindowAppSource.MENU)
-                        .build();
+        if (!pauseResumeTabGroupSyncService) {
+            MultiWindowUtils.setActivityByWindowIdForTesting(
+                    SOURCE_WINDOW_ID, /* activity= */ null);
+        }
 
         // Act.
         mDelegate.reparentTabGroupToNewWindow(
                 tabGroupMetadata, DEST_WINDOW_ID, openAdjacently, NewWindowAppSource.MENU);
 
-        // Verify that we pause the TabGroupSyncService to stop observing local changes.
-        verify(mTabGroupSyncService).setLocalObservationMode(/* observeLocalChanges= */ false);
+        if (pauseResumeTabGroupSyncService) {
+            // Verify that we pause the TabGroupSyncService to stop observing local changes.
+            verify(mTabGroupSyncService).setLocalObservationMode(/* observeLocalChanges= */ false);
 
-        // Verify that we pause the TabPersistentStore.
-        verify(mTabPersistentStore).pauseSaveTabList();
-        verify(mTabPersistentStore).resumeSaveTabList(mOnSaveTabListRunnableCaptor.capture());
+            // Verify that we pause the TabPersistentStore.
+            verify(mTabPersistentStore).pauseSaveTabList();
+            verify(mTabPersistentStore).resumeSaveTabList(mOnSaveTabListRunnableCaptor.capture());
+        }
 
-        // Verify that we only send the reparent intent after the Runnable runs.
         var setupIntentCaptor = ArgumentCaptor.forClass(Intent.class);
         var beginIntentCaptor = ArgumentCaptor.forClass(Intent.class);
         verify(mReparentingTabGroupTask).setupIntent(setupIntentCaptor.capture(), eq(null));
-        verify(mReparentingTabGroupTask, never()).begin(any(), any());
-        mOnSaveTabListRunnableCaptor.getValue().run();
-        verify(mReparentingTabGroupTask).begin(eq(mCurrentActivity), beginIntentCaptor.capture());
+        if (pauseResumeTabGroupSyncService) {
+            // Verify that we only send the reparent intent after the Runnable runs.
+            verify(mReparentingTabGroupTask, never()).begin(any(), any());
+            mOnSaveTabListRunnableCaptor.getValue().run();
+            verify(mReparentingTabGroupTask)
+                    .begin(eq(mCurrentActivity), beginIntentCaptor.capture());
+        } else {
+            verify(mReparentingTabGroupTask).begin(any(), beginIntentCaptor.capture());
+        }
 
         // Verify the intent used in the reparenting task.
         assertEquals(
@@ -291,44 +473,51 @@ public class TabReparentingDelegateUnitTest {
         assertTrue(
                 "EXTRA_REPARENT_START_TIME is not set.",
                 setupIntentCaptor.getValue().hasExtra(IntentHandler.EXTRA_REPARENT_START_TIME));
+        assertEquals(
+                "New window source extra is incorrect.",
+                NewWindowAppSource.MENU,
+                setupIntentCaptor
+                        .getValue()
+                        .getIntExtra(
+                                IntentHandler.EXTRA_NEW_WINDOW_APP_SOURCE,
+                                NewWindowAppSource.UNKNOWN));
 
-        // Verify that we resume the TabGroupSyncService to begin observing local changes.
-        verify(mTabGroupSyncService).setLocalObservationMode(/* observeLocalChanges= */ true);
-
-        histogramWatcher.assertExpected();
+        if (pauseResumeTabGroupSyncService) {
+            // Verify that we resume the TabGroupSyncService to begin observing local changes.
+            verify(mTabGroupSyncService).setLocalObservationMode(/* observeLocalChanges= */ true);
+        }
     }
 
-    @Test
-    public void testReparentTabGroupToExistingWindow() {
-        doTestReparentTabGroupToExistingWindow(/* isGroupShared= */ false);
-    }
-
-    @Test
-    public void testReparentTabGroupToExistingWindow_sharedTabGroup() {
-        doTestReparentTabGroupToExistingWindow(/* isGroupShared= */ true);
-    }
-
-    private void doTestReparentTabGroupToExistingWindow(boolean isGroupShared) {
+    private void doTestReparentTabGroupToExistingWindow(
+            boolean isGroupShared, boolean pauseResumeTabGroupSyncService) {
         // Setup.
         TabGroupMetadata tabGroupMetadata = getTestTabGroupMetadata(isGroupShared);
+        if (!pauseResumeTabGroupSyncService) {
+            MultiWindowUtils.setActivityByWindowIdForTesting(
+                    SOURCE_WINDOW_ID, /* activity= */ null);
+        }
 
         // Act.
         mDelegate.reparentTabGroupToExistingWindow(
-                mDestActivity, tabGroupMetadata, /* destTabIndex= */ 3);
+                mDestActivity, tabGroupMetadata, /* destTabIndex= */ 3, /* bringToFront= */ true);
 
-        // Verify that we pause the TabGroupSyncService to stop observing local changes.
-        verify(mTabGroupSyncService).setLocalObservationMode(/* observeLocalChanges= */ false);
+        if (pauseResumeTabGroupSyncService) {
+            // Verify that we pause the TabGroupSyncService to stop observing local changes.
+            verify(mTabGroupSyncService).setLocalObservationMode(/* observeLocalChanges= */ false);
 
-        // Verify that we pause the TabPersistentStore.
-        verify(mTabPersistentStore).pauseSaveTabList();
-        verify(mTabPersistentStore).resumeSaveTabList(mOnSaveTabListRunnableCaptor.capture());
+            // Verify that we pause the TabPersistentStore.
+            verify(mTabPersistentStore).pauseSaveTabList();
+            verify(mTabPersistentStore).resumeSaveTabList(mOnSaveTabListRunnableCaptor.capture());
+        }
 
-        // Verify that we only send the reparent intent after the Runnable runs.
         var setupIntentCaptor = ArgumentCaptor.forClass(Intent.class);
         var onNewIntentCaptor = ArgumentCaptor.forClass(Intent.class);
         verify(mReparentingTabGroupTask).setupIntent(setupIntentCaptor.capture(), eq(null));
-        verify(mDestActivity, never()).onNewIntent(any());
-        mOnSaveTabListRunnableCaptor.getValue().run();
+        if (pauseResumeTabGroupSyncService) {
+            // Verify that we only send the reparent intent after the Runnable runs.
+            verify(mDestActivity, never()).onNewIntent(any());
+            mOnSaveTabListRunnableCaptor.getValue().run();
+        }
         verify(mDestActivity).onNewIntent(onNewIntentCaptor.capture());
 
         assertEquals(
@@ -347,8 +536,10 @@ public class TabReparentingDelegateUnitTest {
                 "EXTRA_REPARENT_START_TIME is not set.",
                 setupIntentCaptor.getValue().hasExtra(IntentHandler.EXTRA_REPARENT_START_TIME));
 
-        // Verify that we resume the TabGroupSyncService to begin observing local changes.
-        verify(mTabGroupSyncService).setLocalObservationMode(/* observeLocalChanges= */ true);
+        if (pauseResumeTabGroupSyncService) {
+            // Verify that we resume the TabGroupSyncService to begin observing local changes.
+            verify(mTabGroupSyncService).setLocalObservationMode(/* observeLocalChanges= */ true);
+        }
     }
 
     private static TabGroupMetadata getTestTabGroupMetadata(boolean isGroupShared) {

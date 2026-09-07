@@ -37,6 +37,11 @@ class TabStateStorageServiceAndroid : public base::SupportsUserData::Data {
 
   void Save(JNIEnv* env, TabAndroid* tab);
 
+  void SaveWithMetadata(JNIEnv* env,
+                        const std::string& window_tag,
+                        bool is_off_the_record,
+                        TabAndroid* tab);
+
   void LoadAllData(JNIEnv* env,
                    const std::string& window_tag,
                    bool is_off_the_record,
@@ -50,6 +55,9 @@ class TabStateStorageServiceAndroid : public base::SupportsUserData::Data {
   void ClearState(JNIEnv* env);
 
   void ClearWindow(JNIEnv* env, const std::string& window_tag);
+
+  void ClearAllWindowsExcept(JNIEnv* env,
+                             const std::vector<std::string>& window_tags);
 
   void ClearWindowWithOtrStatus(JNIEnv* env,
                                 const std::string& window_tag,

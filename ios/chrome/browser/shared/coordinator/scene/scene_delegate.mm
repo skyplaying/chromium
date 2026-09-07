@@ -83,29 +83,57 @@ void SyncBreadcrumbsLog() {
 - (void)scene:(UIScene*)scene
     willConnectToSession:(UISceneSession*)session
                  options:(UISceneConnectionOptions*)connectionOptions {
+  CHECK(_window);
   CHECK(!_sceneState);
   MainApplicationDelegate* appDelegate =
       base::apple::ObjCCastStrict<MainApplicationDelegate>(
           UIApplication.sharedApplication.delegate);
-  _sceneState = [[SceneState alloc] initWithAppState:appDelegate.appState];
+  _sceneState = [[SceneState alloc] init];
   _sceneController = [[SceneController alloc] initWithSceneState:_sceneState];
   _sceneState.controller = _sceneController;
 
+  _sceneState.window = _window;
   _sceneState.scene = base::apple::ObjCCastStrict<UIWindowScene>(scene);
   _sceneState.currentOrigin = [self originFromSession:session
                                               options:connectionOptions];
   _sceneState.activationLevel = SceneActivationLevelBackground;
-  _sceneState.connectionOptions = connectionOptions;
+  if (IsEnableNewStartupFlowEnabled()) {
+    if (connectionOptions.shortcutItem) {
+      [self addTaskRequestForShortcutItem:connectionOptions.shortcutItem
+                              isColdStart:YES
+                                  handler:nil];
+    }
+    if (connectionOptions.URLContexts.count != 0) {
+      for (UIOpenURLContext* URLContext in connectionOptions.URLContexts) {
+        [self addTaskRequestForURLContext:URLContext isColdStart:YES];
+      }
+    }
+    if (connectionOptions.userActivities.count != 0) {
+      for (NSUserActivity* userActivity in connectionOptions.userActivities) {
+        [self addTaskRequestForUserActivity:userActivity isColdStart:YES];
+      }
+    }
+  } else {
+    _sceneState.connectionOptions = connectionOptions;
+  }
+
   if (connectionOptions.shortcutItem != nil ||
       connectionOptions.URLContexts.count != 0 ||
       connectionOptions.userActivities.count != 0) {
     _sceneState.startupHadExternalIntent = YES;
   }
+
+  [appDelegate.appState sceneStateConnected:_sceneState];
 }
 
 - (void)sceneDidDisconnect:(UIScene*)scene {
   CHECK(_sceneState);
-  _sceneState.window.rootViewController = nil;
+  MainApplicationDelegate* appDelegate =
+      base::apple::ObjCCastStrict<MainApplicationDelegate>(
+          UIApplication.sharedApplication.delegate);
+  [appDelegate.appState sceneStateDisconnected:_sceneState];
+
+  _window.rootViewController = nil;
   _sceneState.activationLevel = SceneActivationLevelDisconnected;
   _sceneState = nil;
   // Setting the level to Disconnected had the side effect of tearing down the
@@ -170,7 +198,13 @@ void SyncBreadcrumbsLog() {
     openURLContexts:(NSSet<UIOpenURLContext*>*)URLContexts {
   DCHECK(!_sceneState.URLContextsToOpen);
   _sceneState.startupHadExternalIntent = YES;
-  _sceneState.URLContextsToOpen = URLContexts;
+  if (IsEnableNewStartupFlowEnabled()) {
+    for (UIOpenURLContext* URLContext in URLContexts) {
+      [self addTaskRequestForURLContext:URLContext isColdStart:NO];
+    }
+  } else {
+    _sceneState.URLContextsToOpen = URLContexts;
+  }
 }
 
 - (void)windowScene:(UIWindowScene*)windowScene
@@ -178,13 +212,9 @@ void SyncBreadcrumbsLog() {
                completionHandler:(void (^)(BOOL succeeded))completionHandler {
   _sceneState.startupHadExternalIntent = YES;
   if (IsEnableNewStartupFlowEnabled()) {
-    TaskRequest* request = [[TaskRequest alloc]
-        initWithShortcutItem:shortcutItem
-                  sceneState:_sceneState
-                  taskSource:TaskSource::TaskSourceQuickAction
-                     handler:completionHandler];
-
-    [_sceneState.profileState.appState.taskOrchestrator addTaskRequest:request];
+    [self addTaskRequestForShortcutItem:shortcutItem
+                            isColdStart:NO
+                                handler:completionHandler];
   } else {
     [_sceneController performActionForShortcutItem:shortcutItem
                                  completionHandler:completionHandler];
@@ -194,7 +224,50 @@ void SyncBreadcrumbsLog() {
 - (void)scene:(UIScene*)scene
     continueUserActivity:(NSUserActivity*)userActivity {
   _sceneState.startupHadExternalIntent = YES;
-  _sceneState.pendingUserActivity = userActivity;
+  if (IsEnableNewStartupFlowEnabled()) {
+    [self addTaskRequestForUserActivity:userActivity isColdStart:NO];
+  } else {
+    _sceneState.pendingUserActivity = userActivity;
+  }
+}
+
+#pragma mark - Task Helpers
+
+- (void)addTaskRequestForShortcutItem:(UIApplicationShortcutItem*)shortcutItem
+                          isColdStart:(BOOL)isColdStart
+                              handler:(void (^)(BOOL))completionHandler {
+  TaskRequest* request = [TaskRequest taskForShortcutItem:shortcutItem
+                                               sceneState:_sceneState
+                                                  handler:completionHandler
+                                              isColdStart:isColdStart];
+  [self addTaskRequest:request];
+}
+
+- (void)addTaskRequestForURLContext:(UIOpenURLContext*)URLContext
+                        isColdStart:(BOOL)isColdStart {
+  TaskRequest* request = [TaskRequest taskForURLContext:URLContext
+                                             sceneState:_sceneState
+                                            isColdStart:isColdStart];
+  [self addTaskRequest:request];
+}
+
+- (void)addTaskRequestForUserActivity:(NSUserActivity*)userActivity
+                          isColdStart:(BOOL)isColdStart {
+  TaskRequest* request = [TaskRequest taskForUserActivity:userActivity
+                                               sceneState:_sceneState
+                                              isColdStart:isColdStart];
+  [self addTaskRequest:request];
+}
+
+// Adds `request` to the task orchestrator.
+- (void)addTaskRequest:(TaskRequest*)request {
+  // Access `AppState` through the application delegate because during cold
+  // start the scene's `ProfileState` has not yet been connected.
+  MainApplicationDelegate* appDelegate =
+      base::apple::ObjCCastStrict<MainApplicationDelegate>(
+          UIApplication.sharedApplication.delegate);
+
+  [appDelegate.appState.taskOrchestrator addTaskRequest:request];
 }
 
 @end

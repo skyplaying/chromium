@@ -17,6 +17,7 @@
 #include "third_party/blink/renderer/core/layout/inline/inline_node.h"
 #include "third_party/blink/renderer/core/layout/inline/physical_line_box_fragment.h"
 #include "third_party/blink/renderer/core/layout/layout_block_flow.h"
+#include "third_party/blink/renderer/core/layout/layout_object_inlines.h"
 #include "third_party/blink/renderer/core/layout/layout_result.h"
 #include "third_party/blink/renderer/core/layout/physical_box_fragment.h"
 #include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
@@ -52,6 +53,17 @@ const PhysicalLineBoxFragment* FindBlockInInlineLineBoxFragment(
   return nullptr;
 }
 
+const FragmentItem* FindFragmentItemByText(const LayoutBlockFlow& block,
+                                           StringView text) {
+  InlineCursor cursor(block);
+  for (; cursor; cursor.MoveToNext()) {
+    if (cursor.Current()->IsText() && cursor.Current().Text(cursor) == text) {
+      return cursor.CurrentItem();
+    }
+  }
+  return nullptr;
+}
+
 class InlineLayoutAlgorithmTest : public BaseLayoutAlgorithmTest {
  protected:
   static std::string AsFragmentItemsString(const LayoutBlockFlow& root) {
@@ -78,6 +90,8 @@ class InlineLayoutAlgorithmTest : public BaseLayoutAlgorithmTest {
     return PhysicalRect(cursor.Current().OffsetInContainerFragment(),
                         cursor.Current().Size());
   }
+
+  void TestRubyTextEmphasisAnnotationMetricsVertical(WritingMode writing_mode);
 };
 
 TEST_F(InlineLayoutAlgorithmTest, Types) {
@@ -204,8 +218,8 @@ TEST_F(InlineLayoutAlgorithmTest, BreakToken) {
   ConstraintSpace constraint_space = builder.ToConstraintSpace();
 
   BoxFragmentBuilder container_builder(
-      block_flow, block_flow->Style(), constraint_space,
-      block_flow->Style()->GetWritingDirection());
+      block_flow, &block_flow->StyleRef(), constraint_space,
+      block_flow->StyleRef().GetWritingDirection());
   SimpleInlineChildLayoutContext context(inline_node, &container_builder);
   const LayoutResult* layout_result =
       inline_node.Layout(constraint_space, nullptr, nullptr, &context);
@@ -982,9 +996,9 @@ TEST_F(InlineLayoutAlgorithmTest, TextBoxTrimConstraintSpaceNone) {
 #undef MAYBE_VerticalAlignBottomReplaced
 
 // crbug.com/430665516
-TEST_F(InlineLayoutAlgorithmTest, FitTextDivisionByZero) {
+TEST_F(InlineLayoutAlgorithmTest, TextFitDivisionByZero) {
   SetBodyInnerHTML(R"HTML(
-<div style="text-grow: per-line scale;"><span style="display:inline-block;">
+<div style="text-fit: grow per-line;"><span style="display:inline-block;">
 A</span></div>)HTML");
 
   // This test passes if no crashes.
@@ -1064,6 +1078,376 @@ TEST_F(InlineLayoutAlgorithmTest, LineClampAndMaxContent) {
   InlineCursor cursor(*test);
   cursor.MoveToLastLogicalLeaf();
   EXPECT_FALSE(cursor.Current().IsEllipsis());
+}
+
+// crbug.com/40385624: If the font lacks horizontal ellipsis (U+2026), Blink
+// should fall back to three dots ("...") instead of falling back to a platform
+// font.
+TEST_F(InlineLayoutAlgorithmTest, EllipsisFallbackToDots) {
+  LoadFontFromFile(
+      GetFrame(),
+      blink::test::BlinkWebTestsDir() +
+          "/third_party/DroidSans/DroidSans.ttf.subset-U002E-U0041-42.ttf",
+      AtomicString("DroidSansSubset"));
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      #root {
+        font-family: DroidSansSubset;
+        font-size: 24px;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        overflow: hidden;
+        width: 2em;
+      }
+    </style>
+    <div id="root">ABAB</div>
+  )HTML");
+
+  LayoutBlockFlow* root =
+      To<LayoutBlockFlow>(GetLayoutObjectByElementId("root"));
+  InlineCursor cursor(*root);
+  while (cursor && !cursor.Current().IsEllipsis()) {
+    cursor.MoveToNext();
+  }
+  ASSERT_TRUE(cursor);
+  EXPECT_EQ(cursor.CurrentText(), "...");
+  EXPECT_EQ(cursor.Current().GetStyleVariant(),
+            StyleVariant::kStandardEllipsis);
+  EXPECT_EQ(cursor.CurrentItem()
+                ->Style()
+                .GetFont()
+                ->GetFontDescription()
+                .Family()
+                .FamilyName(),
+            "DroidSansSubset");
+}
+
+// crbug.com/40385624: `::first-line` styling applies to the ellipsis.
+// The container has the default font (which has U+2026), but `::first-line`
+// has DroidSansSubset (which lacks U+2026). The ellipsis must use the
+// `::first-line` font, falling back to "...", and `::first-line` font size.
+TEST_F(InlineLayoutAlgorithmTest, EllipsisFallbackToDotsFirstLine) {
+  LoadFontFromFile(
+      GetFrame(),
+      blink::test::BlinkWebTestsDir() +
+          "/third_party/DroidSans/DroidSans.ttf.subset-U002E-U0041-42.ttf",
+      AtomicString("DroidSansSubset"));
+
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      #root {
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        overflow: hidden;
+        width: 10em;
+        font-size: 24px;
+      }
+      #root::first-line {
+        font-family: DroidSansSubset;
+        font-size: 16px;
+      }
+    </style>
+    <div id="root">
+      ABABABABABABABABABABAB ABABABABABABAB
+    </div>
+  )HTML");
+
+  LayoutBlockFlow* root =
+      To<LayoutBlockFlow>(GetLayoutObjectByElementId("root"));
+  InlineCursor cursor(*root);
+  while (cursor && !cursor.Current().IsEllipsis()) {
+    cursor.MoveToNext();
+  }
+  ASSERT_TRUE(cursor);
+  EXPECT_EQ(cursor.CurrentText(), "...");
+  EXPECT_EQ(cursor.Current().GetStyleVariant(),
+            StyleVariant::kFirstLineEllipsis);
+  EXPECT_EQ(cursor.CurrentItem()
+                ->Style()
+                .GetFont()
+                ->GetFontDescription()
+                .Family()
+                .FamilyName(),
+            "DroidSansSubset");
+  EXPECT_EQ(cursor.CurrentItem()->Style().FontSize(), 16);
+}
+
+TEST_F(InlineLayoutAlgorithmTest, TextEmphasisAsRuby) {
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      #container {
+        font: 20px Ahem;
+        line-height: 1;
+        text-emphasis-style: dot;
+        text-emphasis-position: under;
+      }
+    </style>
+    <div id="container">Hello</div>
+  )HTML");
+
+  LayoutBlockFlow* container =
+      To<LayoutBlockFlow>(GetLayoutObjectByElementId("container"));
+
+  container->SetNeedsLayout("test");
+  UpdateAllLifecyclePhasesForTest();
+
+  InlineCursor cursor(*container);
+  cursor.MoveToFirstLine();
+  ASSERT_TRUE(cursor);
+
+  // With TextEmphasisAsRuby: line box height remains same as line-height.
+  EXPECT_EQ(cursor.Current().Size().height, LayoutUnit(20));
+
+  // The container height should be greater than the line box height (20px)
+  // because the annotation overflow (emphasis marks) should be accommodated
+  // by the block layout.
+  EXPECT_GT(container->LogicalHeight(), LayoutUnit(20));
+}
+
+void InlineLayoutAlgorithmTest::TestRubyTextEmphasisAnnotationMetricsVertical(
+    WritingMode writing_mode) {
+  ScopedTextEmphasisWithRubyForTest enable_text_emphasis_with_ruby(true);
+
+  LoadAhem();
+
+  String writing_mode_str = (writing_mode == WritingMode::kVerticalRl)
+                                ? "vertical-rl"
+                                : "vertical-lr";
+
+  SetBodyInnerHTML(
+      "<style>"
+      "  #test1, #test2, #test3 {"
+      "    font: 20px Ahem;"
+      "    writing-mode: " +
+      writing_mode_str +
+      ";"
+      "  }"
+      "  ruby.under {"
+      "    ruby-position: under;"
+      "  }"
+      "  em.under {"
+      "    text-emphasis: filled circle;"
+      "    text-emphasis-position: under left;"
+      "  }"
+      "  ruby.over {"
+      "    ruby-position: over;"
+      "  }"
+      "  em.over {"
+      "    text-emphasis: filled circle;"
+      "    text-emphasis-position: over right;"
+      "  }"
+      "</style>"
+      "<div id='test1'><em class='under'><ruby "
+      "class='under'>A<rt>a</rt></ruby></em></div>"
+      "<div id='test2'><em class='over'><ruby "
+      "class='over'>B<rt>b</rt></ruby></em></div>"
+      "<div id='test3'><em class='under'>C</em></div>");
+
+  // 1. Ruby and Emphasis both Under (Left)
+  {
+    LayoutBlockFlow* test1 = GetLayoutBlockFlowByElementId("test1");
+    FontHeight metrics =
+        FindFragmentItemByText(*test1, "A")->AnnotationMetrics();
+    EXPECT_EQ(metrics.ascent, LayoutUnit(0));
+    EXPECT_EQ(metrics.descent, LayoutUnit(10));
+  }
+
+  // 2. Ruby and Emphasis both Over (Right)
+  {
+    LayoutBlockFlow* test2 = GetLayoutBlockFlowByElementId("test2");
+    FontHeight metrics =
+        FindFragmentItemByText(*test2, "B")->AnnotationMetrics();
+    EXPECT_EQ(metrics.ascent, LayoutUnit(10));
+    EXPECT_EQ(metrics.descent, LayoutUnit(0));
+  }
+
+  // 3. Base only with Emphasis Under (Left)
+  {
+    LayoutBlockFlow* test3 = GetLayoutBlockFlowByElementId("test3");
+    FontHeight metrics =
+        FindFragmentItemByText(*test3, "C")->AnnotationMetrics();
+    EXPECT_EQ(metrics.ascent, LayoutUnit(0));
+    EXPECT_EQ(metrics.descent, LayoutUnit(0));
+  }
+}
+
+TEST_F(InlineLayoutAlgorithmTest, RubyTextEmphasisAnnotationMetricsVerticalLr) {
+  TestRubyTextEmphasisAnnotationMetricsVertical(WritingMode::kVerticalLr);
+}
+
+TEST_F(InlineLayoutAlgorithmTest, RubyTextEmphasisAnnotationMetricsVerticalRl) {
+  TestRubyTextEmphasisAnnotationMetricsVertical(WritingMode::kVerticalRl);
+}
+
+TEST_F(InlineLayoutAlgorithmTest, RubyTextEmphasisAnnotationMetricsHorizontal) {
+  ScopedTextEmphasisWithRubyForTest enable_text_emphasis_with_ruby(true);
+
+  LoadAhem();
+
+  constexpr LayoutUnit kBaseSize = LayoutUnit(20);
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      #test1, #test2, #test3, #test4 {
+        font: 20px/1 Ahem;
+        writing-mode: horizontal-tb;
+      }
+      rt {
+        x-line-height: 1;
+      }
+      ruby.under {
+        ruby-position: under;
+      }
+      em.under {
+        text-emphasis: 'x';
+        text-emphasis-position: under;
+      }
+      ruby.over {
+        ruby-position: over;
+      }
+      em.over {
+        text-emphasis: 'x';
+        text-emphasis-position: over;
+      }
+    </style>
+    <div id='test1'><em class='under'>before<ruby class='under'>A<rt>a</rt></ruby>after</em></div>
+    <div id='test2'><em class='over'><ruby class='over'>B<rt>b</rt></ruby></em></div>
+    <div id='test3'><em class='under'>C</em></div>
+    <div id='test4'>
+      <em class='over'><ruby><ruby style="ruby-position:under">A<rt>a</rt></ruby><rt style="font-size:20px">AA</rt></ruby></em>
+      &nbsp;
+      <em class='over'><ruby><ruby style="ruby-position:under">B<rt style="font-size:20px">b</rt></ruby><rt>BB</rt></ruby></em>
+    </div>
+  )HTML");
+
+  // 1. Ruby and Emphasis both Under
+  {
+    LayoutBlockFlow* test1 = GetLayoutBlockFlowByElementId("test1");
+    FontHeight metrics =
+        FindFragmentItemByText(*test1, "A")->AnnotationMetrics();
+    EXPECT_EQ(metrics.ascent, LayoutUnit());
+    EXPECT_EQ(metrics.descent, kBaseSize / 2);
+
+    FontHeight metrics_after =
+        FindFragmentItemByText(*test1, "after")->AnnotationMetrics();
+    EXPECT_EQ(metrics_after.ascent, LayoutUnit());
+    EXPECT_EQ(metrics_after.descent, LayoutUnit());
+  }
+
+  // 2. Ruby and Emphasis both Over
+  {
+    LayoutBlockFlow* test2 = GetLayoutBlockFlowByElementId("test2");
+    FontHeight metrics =
+        FindFragmentItemByText(*test2, "B")->AnnotationMetrics();
+    EXPECT_EQ(metrics.ascent, kBaseSize / 2);
+    EXPECT_EQ(metrics.descent, LayoutUnit(0));
+  }
+
+  // 3. Base only with Emphasis Under
+  {
+    LayoutBlockFlow* test3 = GetLayoutBlockFlowByElementId("test3");
+    FontHeight metrics =
+        FindFragmentItemByText(*test3, "C")->AnnotationMetrics();
+    EXPECT_EQ(metrics.ascent, LayoutUnit(0));
+    EXPECT_EQ(metrics.descent, LayoutUnit(0));
+  }
+
+  // 4. Multiple columns in the same line with different heights
+  //
+  //  "AA" 20px    "BB" 10px
+  //  "A"          "B"
+  //  "a"  10px    "b" 20px
+  {
+    LayoutBlockFlow* test4 = GetLayoutBlockFlowByElementId("test4");
+    {
+      FontHeight metrics =
+          FindFragmentItemByText(*test4, "A")->AnnotationMetrics();
+      EXPECT_EQ(metrics.ascent, LayoutUnit(20));
+      EXPECT_EQ(metrics.descent, LayoutUnit(0));
+    }
+    {
+      FontHeight metrics =
+          FindFragmentItemByText(*test4, "B")->AnnotationMetrics();
+      // "BB"'s ascent (8px) + "AA"'s descent (4px)
+      EXPECT_EQ(metrics.ascent, LayoutUnit(12));
+      EXPECT_EQ(metrics.descent, LayoutUnit(0));
+    }
+  }
+}
+
+TEST_F(InlineLayoutAlgorithmTest, RubyTextEmphasisHeight) {
+  LoadAhem();
+
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      p, rt {
+        font-family: Ahem;
+      }
+      p {
+        font-size: 80px;
+        line-height: 1;
+        display: inline-block;
+        border: 1px solid gray;
+      }
+    </style>
+    <p id="p1"><span style="text-emphasis:'x'">emp</span></p>
+    <p id="p2"><ruby>ruby<rt>x</ruby><span style="text-emphasis:'x'">emp</span></span></p>
+    <p id="p3"><ruby>ruby<rt>x</ruby></span></p>
+  )HTML");
+
+  LayoutBlockFlow* emp = GetLayoutBlockFlowByElementId("p1");
+  LayoutBlockFlow* both = GetLayoutBlockFlowByElementId("p2");
+  LayoutBlockFlow* ruby = GetLayoutBlockFlowByElementId("p3");
+  ASSERT_NE(emp, nullptr);
+  ASSERT_NE(both, nullptr);
+  ASSERT_NE(ruby, nullptr);
+
+  EXPECT_EQ(emp->GetPhysicalFragment(0)->Size().height,
+            both->GetPhysicalFragment(0)->Size().height);
+  EXPECT_EQ(emp->GetPhysicalFragment(0)->Size().height,
+            ruby->GetPhysicalFragment(0)->Size().height);
+}
+
+TEST_F(InlineLayoutAlgorithmTest, TextBoxTrimOnInlineBox) {
+  LoadAhem();
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      #container {
+        font: 100px/1 Ahem;
+      }
+      .target {
+        text-box: trim-both cap alphabetic;
+      }
+    </style>
+    <div id="container"><span id="target" class="target">X</span></div>
+  )HTML");
+
+  LayoutBlockFlow* container = GetLayoutBlockFlowByElementId("container");
+  ASSERT_NE(container, nullptr);
+  LayoutObject* target = GetLayoutObjectByElementId("target");
+  ASSERT_NE(target, nullptr);
+
+  {
+    ScopedTextBoxTrimOnInlineBoxForTest enable_text_box_trim_on_inline_box(
+        false);
+    container->SetNeedsLayout("test");
+    UpdateAllLifecyclePhasesForTest();
+
+    InlineCursor cursor(*container);
+    cursor.MoveTo(*target);
+    ASSERT_TRUE(cursor);
+    EXPECT_EQ(cursor.Current().Size().height, LayoutUnit(100));
+  }
+
+  ScopedTextBoxTrimOnInlineBoxForTest enable_text_box_trim_on_inline_box(true);
+  container->SetNeedsLayout("test");
+  UpdateAllLifecyclePhasesForTest();
+
+  InlineCursor cursor(*container);
+  cursor.MoveTo(*target);
+  ASSERT_TRUE(cursor);
+  // In Ahem at 100px, cap-height is 80px and alphabetic baseline is 0px.
+  // Trimming to cap-to-alphabetic results in height of 80px.
+  EXPECT_EQ(cursor.Current().Size().height, LayoutUnit(80));
 }
 
 }  // namespace

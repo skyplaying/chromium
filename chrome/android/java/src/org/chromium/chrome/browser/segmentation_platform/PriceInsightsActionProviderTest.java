@@ -17,7 +17,6 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.build.annotations.Nullable;
@@ -36,7 +35,6 @@ import java.util.HashMap;
 
 /** Unit tests for {@link PriceInsightsActionProvider} */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class PriceInsightsActionProviderTest {
 
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
@@ -65,7 +63,7 @@ public class PriceInsightsActionProviderTest {
         PriceInsightsActionProvider provider =
                 new PriceInsightsActionProvider(() -> mShoppingService);
         providers.put(AdaptiveToolbarButtonVariant.PRICE_INSIGHTS, provider);
-        SignalAccumulator accumulator = new SignalAccumulator(new Handler(), mMockTab, providers);
+        SignalAccumulator accumulator = new SignalAccumulator(new Handler(), providers);
         provider.getAction(mMockTab, accumulator);
         Assert.assertFalse(accumulator.getSignal(AdaptiveToolbarButtonVariant.PRICE_INSIGHTS));
     }
@@ -77,7 +75,7 @@ public class PriceInsightsActionProviderTest {
         PriceInsightsActionProvider provider =
                 new PriceInsightsActionProvider(() -> mShoppingService);
         providers.put(AdaptiveToolbarButtonVariant.PRICE_INSIGHTS, provider);
-        SignalAccumulator accumulator = new SignalAccumulator(new Handler(), mMockTab, providers);
+        SignalAccumulator accumulator = new SignalAccumulator(new Handler(), providers);
         mockShoppingServiceIsPriceInsightsEligibleResult(false);
         provider.getAction(mMockTab, accumulator);
         Assert.assertFalse(accumulator.getSignal(AdaptiveToolbarButtonVariant.PRICE_INSIGHTS));
@@ -90,7 +88,7 @@ public class PriceInsightsActionProviderTest {
         PriceInsightsActionProvider provider =
                 new PriceInsightsActionProvider(() -> mShoppingService);
         providers.put(AdaptiveToolbarButtonVariant.PRICE_INSIGHTS, provider);
-        SignalAccumulator accumulator = new SignalAccumulator(new Handler(), mMockTab, providers);
+        SignalAccumulator accumulator = new SignalAccumulator(new Handler(), providers);
         mockShoppingServiceIsPriceInsightsEligibleResult(true);
         mockShoppingServiceGetPriceInsightsInfoForUrlResult(null);
         provider.getAction(mMockTab, accumulator);
@@ -104,7 +102,7 @@ public class PriceInsightsActionProviderTest {
         PriceInsightsActionProvider provider =
                 new PriceInsightsActionProvider(() -> mShoppingService);
         providers.put(AdaptiveToolbarButtonVariant.PRICE_INSIGHTS, provider);
-        SignalAccumulator accumulator = new SignalAccumulator(new Handler(), mMockTab, providers);
+        SignalAccumulator accumulator = new SignalAccumulator(new Handler(), providers);
         mockShoppingServiceIsPriceInsightsEligibleResult(true);
         mockShoppingServiceGetPriceInsightsInfoForUrlResult(EMPTY_PRICE_INSIGHTS_INFO);
         provider.getAction(mMockTab, accumulator);
@@ -118,7 +116,7 @@ public class PriceInsightsActionProviderTest {
         PriceInsightsActionProvider provider =
                 new PriceInsightsActionProvider(() -> mShoppingService);
         providers.put(AdaptiveToolbarButtonVariant.PRICE_INSIGHTS, provider);
-        SignalAccumulator accumulator = new SignalAccumulator(new Handler(), mMockTab, providers);
+        SignalAccumulator accumulator = new SignalAccumulator(new Handler(), providers);
         mockShoppingServiceIsPriceInsightsEligibleResult(true);
         mockShoppingServiceGetPriceInsightsInfoForUrlResult(PRICE_INSIGHTS_INFO);
         provider.getAction(mMockTab, accumulator);

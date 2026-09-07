@@ -8,6 +8,7 @@ import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.content.Context;
 import android.graphics.Rect;
+import android.graphics.drawable.Drawable;
 import android.provider.Settings;
 import android.text.Editable;
 import android.text.TextUtils;
@@ -26,6 +27,7 @@ import org.chromium.build.annotations.EnsuresNonNull;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.components.omnibox.OmniboxFeatures;
+import org.chromium.components.omnibox.OmniboxUrlEmphasizer.UrlEmphasisSpan;
 import org.chromium.ui.accessibility.AccessibilityState;
 import org.chromium.ui.text.EmptyTextWatcher;
 import org.chromium.ui.widget.EditTextWithLeading;
@@ -49,8 +51,8 @@ public class AutocompleteEditText extends EditTextWithLeading
      */
     private boolean mDisableTextScrollingFromAutocomplete;
 
-    /** Local copy of the OnKeyListener. */
     private @Nullable OnKeyListener mOnKeyListener;
+    private boolean mModelShouldIgnoreFocusChanges;
 
     public AutocompleteEditText(Context context, AttributeSet attrs) {
         super(context, attrs);
@@ -169,7 +171,6 @@ public class AutocompleteEditText extends EditTextWithLeading
     /**
      * @return Whether any autocomplete information is specified on the current text.
      */
-    @VisibleForTesting
     public boolean hasAutocomplete() {
         if (mModel == null) return false;
         return mModel.hasAutocomplete();
@@ -195,9 +196,13 @@ public class AutocompleteEditText extends EditTextWithLeading
 
     @Override
     protected void onFocusChanged(boolean focused, int direction, Rect previouslyFocusedRect) {
-        if (mModel != null) mModel.onFocusChanged(focused);
+        if (mModel != null && !mModelShouldIgnoreFocusChanges) mModel.onFocusChanged(focused);
         super.onFocusChanged(focused, direction, previouslyFocusedRect);
         if (!focused) setCursorVisible(false);
+    }
+
+    void setModelShouldIgnoreFocusChanges(boolean ignoreFocusChanges) {
+        mModelShouldIgnoreFocusChanges = ignoreFocusChanges;
     }
 
     @Override
@@ -277,9 +282,26 @@ public class AutocompleteEditText extends EditTextWithLeading
     public void setText(CharSequence text, BufferType type) {
         if (DEBUG) Log.i(TAG, "setText -- text: %s", text);
         mDisableTextScrollingFromAutocomplete = false;
+        if (isTextEquivalentToExistingText(text)) {
+            if (mModel != null) mModel.onSetText(text);
+            return;
+        }
 
         super.setText(text, type);
         if (mModel != null) mModel.onSetText(text);
+    }
+
+    /**
+     * Returns whether setting {@code text} would leave the URL-emphasis state unchanged. Subclasses
+     * may extend this policy for other persistent spans. Framework, selection, composing, watcher,
+     * and IME spans are intentionally ignored so they do not defeat the no-reset path.
+     */
+    protected boolean isTextEquivalentToExistingText(CharSequence text) {
+        Editable currentText = getText();
+        return currentText != null
+                && TextUtils.equals(currentText, text)
+                && OmniboxViewUtil.haveEquivalentSpans(
+                        currentText, text, UrlEmphasisSpan.class);
     }
 
     @Override
@@ -348,6 +370,17 @@ public class AutocompleteEditText extends EditTextWithLeading
     }
 
     @Override
+    public boolean onKeyPreIme(int keyCode, KeyEvent event) {
+        if (mModel != null && mModel.isDeleteByWord(event)) {
+            // Route directly to dispatchKeyEvent to override the native word deletion.
+            if (dispatchKeyEvent(event)) {
+                return true;
+            }
+        }
+        return super.onKeyPreIme(keyCode, event);
+    }
+
+    @Override
     public void setOnKeyListener(@Nullable OnKeyListener listener) {
         super.setOnKeyListener(listener);
         mOnKeyListener = listener;
@@ -355,6 +388,11 @@ public class AutocompleteEditText extends EditTextWithLeading
 
     private @Nullable OnKeyListener getOnKeyListener() {
         return mOnKeyListener;
+    }
+
+    private void dispatchKeyEventToModel(KeyEvent event) {
+        if (mModel == null) return;
+        mModel.dispatchKeyEvent(event);
     }
 
     @Override
@@ -399,5 +437,26 @@ public class AutocompleteEditText extends EditTextWithLeading
 
     /* package */ @Nullable AutocompleteEditTextModelBase getModelForTesting() {
         return mModel;
+    }
+
+    @Override
+    public void setSiteSearchChip(@Nullable String keyword) {
+        SiteSearchChipDrawable drawable = null;
+        if (keyword != null) {
+            // TODO(crbug.com/459590224): convert keyword to templateUrl.FullName() or equivalent.
+            drawable = new SiteSearchChipDrawable(getContext(), keyword);
+            drawable.setBounds(0, 0, drawable.getIntrinsicWidth(), drawable.getIntrinsicHeight());
+        }
+        Drawable[] drawables = getCompoundDrawablesRelative();
+        setCompoundDrawablesRelative(drawable, drawables[1], drawables[2], drawables[3]);
+    }
+
+    public void maybeAcceptInlineSuggestion(KeyEvent event) {
+        OnKeyListener onKeyListener = getOnKeyListener();
+        // Set our key listener to null because this method can be called in the process of handling
+        // a key event; if we don't set it to null we may recurse infinitely.
+        setOnKeyListener(null);
+        dispatchKeyEventToModel(event);
+        setOnKeyListener(onKeyListener);
     }
 }

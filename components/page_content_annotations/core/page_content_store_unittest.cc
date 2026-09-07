@@ -5,6 +5,7 @@
 #include "components/page_content_annotations/core/page_content_store.h"
 
 #include "base/files/scoped_temp_dir.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
@@ -40,7 +41,7 @@ class PageContentStoreTest : public testing::Test {
     base::RunLoop run_loop;
     os_crypt_async->GetInstance(base::BindOnce(
         [](PageContentStore* store, base::RunLoop* run_loop,
-           os_crypt_async::Encryptor encryptor) {
+           scoped_refptr<os_crypt_async::Encryptor> encryptor) {
           store->InitWithEncryptor(std::move(encryptor));
           run_loop->Quit();
         },
@@ -111,7 +112,6 @@ TEST_F(PageContentStoreTest, AddPageContent_SucceedsOnDuplicate) {
 
 TEST_F(PageContentStoreTest, AddPageContent_SucceedsAfterDelete) {
   const GURL url(kUrl);
-  const auto apc1 = TestContent("test title 1");
   const base::Time visit_timestamp = base::Time::Now();
   const base::Time extraction_timestamp = base::Time::Now();
 
@@ -184,7 +184,6 @@ TEST_F(PageContentStoreTest, AddPageContent_NullTabId) {
 
 TEST_F(PageContentStoreTest, DeletePageContentOlderThan) {
   const GURL url(kUrl);
-  const auto apc = TestContent("test title");
   const base::Time visit_timestamp = base::Time::Now() - base::Days(8);
   const base::Time extraction_timestamp = base::Time::Now();
 
@@ -236,7 +235,6 @@ TEST_F(PageContentStoreTest, DeletePageContentOlderThan_RespectsMaxLimit) {
 
 TEST_F(PageContentStoreTest, DeletePageContentForTab) {
   const GURL url(kUrl);
-  const auto apc = TestContent("test title");
   const base::Time visit_timestamp = base::Time::Now();
   const base::Time extraction_timestamp = base::Time::Now();
 
@@ -285,7 +283,7 @@ TEST_F(PageContentStoreTest, GetPageContentForTab) {
   const base::Time visit_timestamp = base::Time::Now();
   const base::Time extraction_timestamp = base::Time::Now();
 
-  EXPECT_TRUE(store_->AddPageContent(url, TestContent("test title"),
+  EXPECT_TRUE(store_->AddPageContent(url, apc,
                                      visit_timestamp, extraction_timestamp,
                                      kTabId));
 
@@ -298,7 +296,6 @@ TEST_F(PageContentStoreTest, GetPageContentForTab) {
 
 TEST_F(PageContentStoreTest, DeleteAllEntries) {
   const GURL url(kUrl);
-  const auto apc = TestContent("test title");
   const base::Time visit_timestamp = base::Time::Now();
   const base::Time extraction_timestamp = base::Time::Now();
 

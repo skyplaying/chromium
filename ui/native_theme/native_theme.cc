@@ -15,7 +15,6 @@
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
-#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
@@ -28,6 +27,9 @@
 #include "cc/paint/paint_canvas.h"
 #include "cc/paint/paint_flags.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "third_party/skia/include/core/SkRect.h"
+#include "third_party/skia/include/core/SkScalar.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/base/ui_base_switches.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_metrics.h"
@@ -36,9 +38,12 @@
 #include "ui/color/color_provider_manager.h"
 #include "ui/color/system_theme.h"
 #include "ui/gfx/canvas.h"
+#include "ui/gfx/geometry/insets.h"
+#include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/gfx/scoped_canvas.h"
+#include "ui/native_theme/features/native_theme_features.h"
 #include "ui/native_theme/native_theme_observer.h"
 #include "ui/native_theme/os_settings_provider.h"
 
@@ -46,7 +51,6 @@
 #include "ui/native_theme/native_theme_aura.h"
 #include "ui/native_theme/native_theme_mac.h"
 #elif defined(USE_AURA)
-#include "ui/native_theme/features/native_theme_features.h"
 #include "ui/native_theme/native_theme_aura.h"
 #include "ui/native_theme/native_theme_fluent.h"
 #if BUILDFLAG(IS_WIN)
@@ -76,18 +80,26 @@ NativeTheme* GetInstanceForWebImpl() {
     return s_web_theme.get();
   }
   static base::NoDestructor<NativeThemeAura> s_web_theme(
-#if BUILDFLAG(IS_CHROMEOS)
-      true
-#else
-      IsOverlayScrollbarEnabledByFeatureFlag()
-#endif
-  );
+      IsOverlayScrollbarEnabledByFeatureFlag());
   return s_web_theme.get();
 }
 #else
 using NativeUiTheme = NativeThemeMobile;
 using WebUiTheme = NativeThemeMobile;
 #endif
+
+bool OsSettingsProviderSuppliesOverlayScrollbarPreference() {
+  // Note: when this function returns true, the native-UI NativeTheme instance
+  // auto-updates the web instance. On ChromeOS, ash::AccessibilityController
+  // sets the overlay-scrollbars bit on both instances separately.
+  // TODO(crbug.com/513603825): Handle the NativeTheme overlay-scrollbars bit
+  // more consistently across platforms.
+#if BUILDFLAG(IS_MAC)
+  return true;
+#else
+  return IsFluentOverlayScrollbarEnabled();
+#endif
+}
 
 }  // namespace
 
@@ -275,9 +287,13 @@ void NativeTheme::NotifyOnNativeThemeUpdated() {
   const size_t initial_providers_initialized =
       color_provider_manager.num_providers_initialized();
 
-  // Reset the ColorProviderManager's cache so that ColorProviders requested
-  // from this point onwards incorporate the changes to the system theme.
-  color_provider_manager.ResetColorProviderCache();
+  if (base::FeatureList::IsEnabled(features::kThemeChangeOptimization)) {
+    IncrementSystemColorVersion();
+  } else {
+    // Reset the ColorProviderManager's cache so that ColorProviders requested
+    // from this point onwards incorporate the changes to the system theme.
+    color_provider_manager.ResetColorProviderCache();
+  }
 
   NotifyOnNativeThemeUpdatedImpl();
 
@@ -346,6 +362,7 @@ ColorProviderKey NativeTheme::GetColorProviderKey(
   key.user_color = user_color();
   key.scheme_variant = scheme_variant();
   key.custom_theme = std::move(custom_theme);
+  key.system_theme_version = system_color_version_;
   return key;
 }
 
@@ -409,20 +426,18 @@ bool NativeTheme::UpdateWebInstance() const {
     return false;
   }
 
-  // NOTE: Intentionally does not copy the native "overlay scrollbar" setting to
-  // the web instance, as the web instance often wants to differ there.
-  // TODO(crbug.com/444399080): If we had a notion somewhere about "web wants
-  // overlay scrollbars even when native doesn't", we could probably copy the
-  // setting fearlessly here (and have that override it on the web instance
-  // side), making callers who want to toggle overlay scrollbars on/off globally
-  // simpler and safer.
-
   // TODO(pkasting): The code duplication between this function and
   // `UpdateVariablesForToolkitSettings()` is error-prone; e.g. it's easy to
   // forget to update the web instance properly when adding a new member.
   // Refactor to a settings struct or similar.
 
   bool updated_web_instance = false;
+  if (OsSettingsProviderSuppliesOverlayScrollbarPreference() &&
+      associated_web_instance_->use_overlay_scrollbar() !=
+          use_overlay_scrollbar()) {
+    associated_web_instance_->use_overlay_scrollbar_ = use_overlay_scrollbar();
+    updated_web_instance = true;
+  }
   if (associated_web_instance_->forced_colors() != forced_colors()) {
     associated_web_instance_->forced_colors_ = forced_colors();
     updated_web_instance = true;
@@ -522,6 +537,7 @@ bool NativeTheme::UpdateVariablesForToolkitSettings() {
       os_settings_provider.PreferredColorSource();
   const auto new_caret_blink_interval =
       os_settings_provider.CaretBlinkInterval();
+  const auto new_use_overlay_scrollbar = CalculateUseOverlayScrollbar();
 
   // Set updated values and see if anything changed.
   bool updated = false;
@@ -561,6 +577,10 @@ bool NativeTheme::UpdateVariablesForToolkitSettings() {
     caret_blink_interval_ = new_caret_blink_interval;
     updated = true;
   }
+  if (use_overlay_scrollbar() != new_use_overlay_scrollbar) {
+    use_overlay_scrollbar_ = new_use_overlay_scrollbar;
+    updated = true;
+  }
 
   return updated;
 }
@@ -581,6 +601,14 @@ NativeTheme::PreferredColorScheme NativeTheme::CalculatePreferredColorScheme()
 NativeTheme::PreferredContrast NativeTheme::CalculatePreferredContrast() const {
   return IsForcedHighContrast() ? PreferredContrast::kMore
                                 : OsSettingsProvider::Get().PreferredContrast();
+}
+
+bool NativeTheme::CalculateUseOverlayScrollbar() const {
+  if (OsSettingsProviderSuppliesOverlayScrollbarPreference()) {
+    return ShouldUseOverlayScrollbar(
+        OsSettingsProvider::Get().PrefersOverlayScrollbars());
+  }
+  return use_overlay_scrollbar_;
 }
 
 }  // namespace ui

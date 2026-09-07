@@ -11,6 +11,7 @@
 #include "base/time/time.h"
 #include "third_party/blink/public/mojom/frame/lifecycle.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/frame/viewport_intersection_state.mojom-blink.h"
+#include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-blink-forward.h"
 #include "third_party/blink/renderer/core/frame/embedded_content_view.h"
 #include "third_party/blink/renderer/core/frame/frame_view.h"
 #include "third_party/blink/renderer/core/layout/natural_sizing_info.h"
@@ -29,7 +30,6 @@ class Vector2d;
 
 namespace blink {
 class CullRect;
-class GraphicsContext;
 class LocalFrameView;
 class RemoteFrame;
 
@@ -52,10 +52,8 @@ class CORE_EXPORT RemoteFrameView final
 
   void Dispose() override;
   void SetFrameRect(const gfx::Rect&) override;
-  void PropagateFrameRects() override;
   void ZoomFactorChanged(float zoom_factor) override;
-  void Paint(GraphicsContext&,
-             PaintFlags,
+  void Paint(const PaintInfo&,
              const CullRect&,
              const gfx::Vector2d& paint_offset) const override;
   void UpdateGeometry() override;
@@ -66,7 +64,7 @@ class CORE_EXPORT RemoteFrameView final
 
   void UpdateIntersectionObserverStatus() override;
   void UpdateViewportIntersectionsForSubtree(
-      unsigned parent_flags,
+      IntersectionObservation::ComputeFlags parent_flags,
       ComputeIntersectionsContext&) override;
   bool HasActiveIntersectionObservations() const override;
   bool NeedsOcclusionTracking() const override;
@@ -74,6 +72,7 @@ class CORE_EXPORT RemoteFrameView final
   std::optional<NaturalSizingInfo> GetNaturalDimensions() const override;
 
   void SetNaturalDimensions(const NaturalSizingInfo& size_info);
+  void ClearNaturalDimensions() override;
 
   bool CanThrottleRendering() const override;
   void VisibilityForThrottlingChanged() override;
@@ -96,7 +95,10 @@ class CORE_EXPORT RemoteFrameView final
 
   void ResetFrozenSize() { frozen_size_ = std::nullopt; }
 
+  mojom::blink::WebFeature SvgFilterPaintedCounter() const override;
+
  protected:
+  void PropagateFrameRectsInternal() override;
   bool NeedsViewportOffset() const override { return true; }
   // This is used to service IntersectionObservers in an OOPIF child document.
   void SetViewportIntersection(const mojom::blink::ViewportIntersectionState&
@@ -131,7 +133,6 @@ class CORE_EXPORT RemoteFrameView final
 
   std::optional<NaturalSizingInfo> natural_sizing_info_;
   bool needs_occlusion_tracking_ = false;
-  bool needs_frame_rect_propagation_ = false;
 };
 
 template <>

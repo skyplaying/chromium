@@ -11,6 +11,7 @@
 #include "chrome/browser/tab_list/tab_list_interface.h"
 #include "chrome/browser/tab_list/tab_list_interface_observer.h"
 #include "components/sessions/core/session_id.h"
+#include "components/split_tabs/split_tab_id.h"
 #include "components/tab_groups/tab_group_id.h"
 #include "components/tab_groups/tab_group_visual_data.h"
 #include "components/tabs/public/tab_interface.h"
@@ -46,7 +47,10 @@ class MockTabListInterface : public TabListInterface {
   MOCK_METHOD(int, GetActiveIndex, (), (const, override));
   MOCK_METHOD(tabs::TabInterface*, GetActiveTab, (), (override));
   MOCK_METHOD(void, ActivateTab, (tabs::TabHandle), (override));
-  MOCK_METHOD(tabs::TabInterface*, OpenTab, (const GURL&, int), (override));
+  MOCK_METHOD(tabs::TabInterface*,
+              OpenTab,
+              (const GURL&, int, bool),
+              (override));
   MOCK_METHOD(void,
               SetOpenerForTab,
               (tabs::TabHandle, tabs::TabHandle),
@@ -54,6 +58,13 @@ class MockTabListInterface : public TabListInterface {
   MOCK_METHOD(tabs::TabInterface*,
               GetOpenerForTab,
               (tabs::TabHandle),
+              (override));
+  MOCK_METHOD(tabs::TabInterface*,
+              InsertWebContentsAt,
+              (int,
+               std::unique_ptr<content::WebContents>,
+               bool,
+               std::optional<tab_groups::TabGroupId>),
               (override));
   MOCK_METHOD(content::WebContents*, DiscardTab, (tabs::TabHandle), (override));
   MOCK_METHOD(tabs::TabInterface*, DuplicateTab, (tabs::TabHandle), (override));
@@ -65,6 +76,10 @@ class MockTabListInterface : public TabListInterface {
               (override));
   MOCK_METHOD(void, MoveTab, (tabs::TabHandle, int), (override));
   MOCK_METHOD(void, CloseTab, (tabs::TabHandle), (override));
+  MOCK_METHOD(std::unique_ptr<content::WebContents>,
+              DetachWebContents,
+              (tabs::TabHandle),
+              (override));
   MOCK_METHOD(std::vector<tabs::TabInterface*>, GetAllTabs, (), (override));
   MOCK_METHOD(void, PinTab, (tabs::TabHandle), (override));
   MOCK_METHOD(void, UnpinTab, (tabs::TabHandle), (override));
@@ -73,6 +88,7 @@ class MockTabListInterface : public TabListInterface {
               ListTabGroups,
               (),
               (override));
+  MOCK_METHOD(std::set<split_tabs::SplitTabId>, ListSplits, (), (override));
   MOCK_METHOD(std::optional<tab_groups::TabGroupVisualData>,
               GetTabGroupVisualData,
               (tab_groups::TabGroupId),
@@ -85,6 +101,10 @@ class MockTabListInterface : public TabListInterface {
               CreateTabGroup,
               (const std::vector<tabs::TabHandle>&),
               (override));
+  MOCK_METHOD(std::optional<split_tabs::SplitTabId>,
+              CreateSplit,
+              (const std::vector<tabs::TabHandle>&),
+              (override));
   MOCK_METHOD(void,
               SetTabGroupVisualData,
               (tab_groups::TabGroupId, const tab_groups::TabGroupVisualData&),
@@ -95,12 +115,13 @@ class MockTabListInterface : public TabListInterface {
                const std::set<tabs::TabHandle>&),
               (override));
   MOCK_METHOD(void, Ungroup, (const std::set<tabs::TabHandle>&), (override));
+  MOCK_METHOD(void, Unsplit, (split_tabs::SplitTabId), (override));
   MOCK_METHOD(void, MoveGroupTo, (tab_groups::TabGroupId, int), (override));
   MOCK_METHOD(void,
               MoveTabToWindow,
               (tabs::TabHandle, SessionID, int),
               (override));
-  MOCK_METHOD(void,
+  MOCK_METHOD(bool,
               MoveTabGroupToWindow,
               (tab_groups::TabGroupId, SessionID, int),
               (override));

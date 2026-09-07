@@ -48,7 +48,7 @@
 #include "base/test/test_future.h"
 #include "base/test/test_mock_time_task_runner.h"
 #include "base/test/test_timeouts.h"
-#include "base/test/test_trace_processor.h"
+#include "base/test/tracing/test_trace_processor.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "build/build_config.h"
@@ -61,7 +61,6 @@
 #include "components/input/switches.h"
 #include "components/input/utils.h"
 #include "components/viz/host/host_frame_sink_manager.h"
-#include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/compositor/surface_utils.h"
 #include "content/browser/gpu/compositor_util.h"
 #include "content/browser/gpu/gpu_data_manager_impl.h"
@@ -105,6 +104,7 @@
 #include "content/public/browser/javascript_dialog_manager.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_process_host_priority_client.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/site_isolation_policy.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_features.h"
@@ -1329,8 +1329,8 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
   if (ShouldCreateSiteInstanceForDataUrls()) {
     // Site A and Site C are in the same SiteInstanceGroup, so there are no
     // proxies for each other.
-    // TODO(crbug.com/341741267, yangsharon): Update output to show that A and C
-    // are in the same SiteInstanceGroup.
+    // TODO(crbug.com/341741267): Update output to show that A and C are in the
+    // same SiteInstanceGroup.
     EXPECT_EQ(
         " Site A\n"
         "   |--Site C\n"
@@ -1722,12 +1722,22 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest, ProcessTransferAfterError) {
   EXPECT_EQ(2, shell()->web_contents()->GetController().GetEntryCount());
 
   // Ensure that we have created a new process for the subframe.
-  EXPECT_EQ(
-      " Site A ------------ proxies for B\n"
-      "   +--Site B ------- proxies for A\n"
-      "Where A = http://a.com/\n"
-      "      B = http://b.com/",
-      DepictFrameTree(root));
+  if (SiteIsolationPolicy::IsErrorPageIsolationEnabled(
+          /*in_main_frame=*/false)) {
+    EXPECT_EQ(
+        " Site A ------------ proxies for B\n"
+        "   +--Site B ------- proxies for A\n"
+        "Where A = http://a.com/\n"
+        "      B = chrome-error://chromewebdata/",
+        DepictFrameTree(root));
+  } else {
+    EXPECT_EQ(
+        " Site A ------------ proxies for B\n"
+        "   +--Site B ------- proxies for A\n"
+        "Where A = http://a.com/\n"
+        "      B = http://b.com/",
+        DepictFrameTree(root));
+  }
   EXPECT_NE(shell()->web_contents()->GetSiteInstance(),
             child->current_frame_host()->GetSiteInstance());
 
@@ -1756,18 +1766,34 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest, ProcessTransferAfterError) {
             child->current_origin().Serialize() + '/');
 
   // Ensure that we have created a new process for the subframe.
-  EXPECT_EQ(
-      " Site A ------------ proxies for B\n"
-      "   +--Site B ------- proxies for A\n"
-      "Where A = http://a.com/\n"
-      "      B = http://b.com/",
-      DepictFrameTree(root));
+  if (base::FeatureList::IsEnabled(features::kIsolateSubframeErrorPages)) {
+    EXPECT_EQ(
+        " Site A ------------ proxies for C\n"
+        "   +--Site C ------- proxies for A\n"
+        "Where A = http://a.com/\n"
+        "      C = http://b.com/",
+        DepictFrameTree(root));
+  } else {
+    EXPECT_EQ(
+        " Site A ------------ proxies for B\n"
+        "   +--Site B ------- proxies for A\n"
+        "Where A = http://a.com/\n"
+        "      B = http://b.com/",
+        DepictFrameTree(root));
+  }
   EXPECT_NE(shell()->web_contents()->GetSiteInstance(),
             child->current_frame_host()->GetSiteInstance());
 
-  // Make sure that the navigation replaced the error page and that going back
-  // ends up on the original site.
-  EXPECT_EQ(2, shell()->web_contents()->GetController().GetEntryCount());
+  // Navigating a subframe displaying an error page for b.com from cross-origin
+  // initiator (a.com) does not replace the entry, preventing cross-origin
+  // history length leaks. Thus, entry count is 3.
+  EXPECT_EQ(3, shell()->web_contents()->GetController().GetEntryCount());
+  {
+    TestNavigationObserver back_load_observer(shell()->web_contents());
+    shell()->web_contents()->GetController().GoBack();
+    back_load_observer.Wait();
+  }
+  // Going back a second time ends up on the original site.
   {
     RenderFrameDeletedObserver deleted_observer(child->current_frame_host());
     TestNavigationObserver back_load_observer(shell()->web_contents());
@@ -4769,6 +4795,7 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
     params->frame_token = frame_token;
     params->devtools_frame_token = base::UnguessableToken::Create();
     params->document_token = blink::DocumentToken();
+    params->initiator_state_token = blink::InitiatorStateToken();
     params->policy_container = CreateStubPolicyContainer();
     params->replication_state = blink::mojom::FrameReplicationState::New();
     agent_scheduling_group->CreateFrame(std::move(params));
@@ -4871,6 +4898,7 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest, ParentDetachRemoteChild) {
     params->frame_token = frame_token;
     params->devtools_frame_token = base::UnguessableToken::Create();
     params->document_token = blink::DocumentToken();
+    params->initiator_state_token = blink::InitiatorStateToken();
     params->policy_container = CreateStubPolicyContainer();
     agent_scheduling_group->CreateFrame(std::move(params));
   }
@@ -5870,8 +5898,12 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest, DataUrlsHaveUniqueSiteURLs) {
 
   auto* main_frame = shell()->web_contents()->GetPrimaryMainFrame();
   auto* new_frame = new_shell->web_contents()->GetPrimaryMainFrame();
-  GURL main_url = main_frame->GetSiteInstance()->GetSiteURL();
-  GURL new_url = new_frame->GetSiteInstance()->GetSiteURL();
+  GURL main_url = main_frame->GetSiteInstance()
+                      ->GetSecurityPrincipal()
+                      .GetDeprecatedSiteURL();
+  GURL new_url = new_frame->GetSiteInstance()
+                     ->GetSecurityPrincipal()
+                     .GetDeprecatedSiteURL();
   EXPECT_NE(new_frame->GetSiteInstance(), main_frame->GetSiteInstance());
 
   // The site URL is the data scheme followed by a serialized nonce, which is
@@ -6400,8 +6432,7 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
       event);
   run_loop1.Run();
 
-  auto first_popup_global_id =
-      GlobalRoutingID(process1->GetDeprecatedID(), routing_id1);
+  auto first_popup_global_id = GlobalRoutingID(process1->GetID(), routing_id1);
   // Add an interceptor for first popup widget so it doesn't get closed
   // immediately while the other one is being opened.
   EXPECT_TRUE(web_contents()->pending_widgets_.contains(first_popup_global_id));
@@ -6426,7 +6457,7 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
   // At this point, we should have two pending widgets.
   EXPECT_TRUE(web_contents()->pending_widgets_.contains(first_popup_global_id));
   EXPECT_TRUE(web_contents()->pending_widgets_.contains(
-      GlobalRoutingID(process2->GetDeprecatedID(), routing_id2)));
+      GlobalRoutingID(process2->GetID(), routing_id2)));
 
   // Both subframes were set up in the same way, so the next routing ID for the
   // new popup widgets should match up (this led to the collision in the
@@ -6437,9 +6468,9 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
   interceptor1.ResumeShowPopupWidget();
   interceptor2.ResumeShowPopupWidget();
   EXPECT_FALSE(web_contents()->pending_widgets_.contains(
-      GlobalRoutingID(process1->GetDeprecatedID(), routing_id1)));
+      GlobalRoutingID(process1->GetID(), routing_id1)));
   EXPECT_FALSE(web_contents()->pending_widgets_.contains(
-      GlobalRoutingID(process2->GetDeprecatedID(), routing_id2)));
+      GlobalRoutingID(process2->GetID(), routing_id2)));
 
   // There are posted tasks that must be run before the test shuts down, lest
   // they access deleted state.
@@ -6841,7 +6872,9 @@ class NavigationHandleWatcher : public WebContentsObserver {
       : WebContentsObserver(web_contents) {}
   void DidStartNavigation(NavigationHandle* navigation_handle) override {
     DCHECK_EQ(GURL("http://b.com/"),
-              navigation_handle->GetStartingSiteInstance()->GetSiteURL());
+              navigation_handle->GetStartingSiteInstance()
+                  ->GetSecurityPrincipal()
+                  .GetDeprecatedSiteURL());
   }
 };
 
@@ -9356,21 +9389,7 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
   EXPECT_FALSE(mock_handler_speculative.did_receive_event());
 }
 
-class SitePerProcessBrowserTestWithSubframePriority
-    : public SitePerProcessBrowserTest {
- public:
-  SitePerProcessBrowserTestWithSubframePriority() {
-    scoped_feature_list_.InitWithFeatures(
-        /* enabled_features= */ {features::kSubframeImportance},
-        /* disabled_features= */ {});
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTestWithSubframePriority,
-                       TestChildProcessImportance) {
+IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest, TestChildProcessImportance) {
   web_contents()->SetPrimaryPageImportance(ChildProcessImportance::IMPORTANT,
                                            ChildProcessImportance::MODERATE);
 
@@ -10185,8 +10204,10 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
     // In per-origin IsolatedSandboxedIframes mode, the server port is retained
     // in the site URL.
     GURL main_site(embedded_test_server()->GetURL("a.com", "/"));
-    EXPECT_EQ(main_site,
-              root->current_frame_host()->GetSiteInstance()->GetSiteURL());
+    EXPECT_EQ(main_site, root->current_frame_host()
+                             ->GetSiteInstance()
+                             ->GetSecurityPrincipal()
+                             .GetDeprecatedSiteURL());
   }
 
   FrameTreeNode* child_node = root->child_at(0);
@@ -10725,9 +10746,10 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
       child->current_frame_host()->GetSiteInstance()->process_reuse_policy());
 
   EXPECT_TRUE(child->current_frame_host()->IsCrossProcessSubframe());
-  EXPECT_EQ(
-      bar_url.GetHost(),
-      child->current_frame_host()->GetSiteInstance()->GetSiteURL().GetHost());
+  EXPECT_EQ(bar_url.GetHost(), child->current_frame_host()
+                                   ->GetSiteInstance()
+                                   ->GetSecurityPrincipal()
+                                   .GetHost());
 
   // The subframe's SiteInstance should still be different from second_shell's
   // SiteInstance, and they should be in separate BrowsingInstances.
@@ -11745,54 +11767,56 @@ class GpuInfoUpdateObserver : public GpuDataManagerObserver {
 };
 
 // Checks if RenderInputRouterDelegate mojo connection is reset when GPU process
-// restarts. Disabled due to flake: crbug.com/439855865.
+// restarts.
 IN_PROC_BROWSER_TEST_P(AndroidInputBrowserTest,
-                       DISABLED_RestartingGPUProcessResetsMojoConnection) {
-  base::test::TestTraceProcessor ttp;
-  ttp.StartTrace("viz");
-  RenderFrameSubmissionObserver render_frame_submission_observer(
-      web_contents());
-  EXPECT_TRUE(NavigateToURL(
-      shell(), embedded_test_server()->GetURL("foo.com", "/title1.html")));
-  if (render_frame_submission_observer.render_frame_count() == 0) {
-    render_frame_submission_observer.WaitForAnyFrameSubmission();
+                       RestartingGPUProcessResetsMojoConnection) {
+  // Return early if transferring input to Viz isn't supported.
+  if (!input::InputUtils::IsTransferInputToVizSupported()) {
+    return;
   }
 
+  EXPECT_TRUE(NavigateToURL(
+      shell(), embedded_test_server()->GetURL("foo.com", "/title1.html")));
+
   base::RunLoop run_loop;
-  // This observer is begin used here to signal if the GPU process has
+  // This observer is being used here to signal if the GPU process has
   // restarted.
   GpuInfoUpdateObserver gpu_observer(run_loop.QuitClosure());
-
-  RenderFrameSubmissionObserver render_frame_submission_observer2(
-      web_contents());
 
   // Kill GPU process explicitly, this should trigger a restart.
   KillGpuProcess();
   run_loop.Run();
 
-  if (render_frame_submission_observer2.render_frame_count() == 0) {
-    render_frame_submission_observer2.WaitForAnyFrameSubmission();
-  }
+  base::test::TestTraceProcessor ttp;
+  ttp.StartTrace("viz");
+
+  // Navigate to URL and synchronize with Viz to verify the mojo connection
+  // is established with the new GPU process.
+  EXPECT_TRUE(NavigateToURL(
+      shell(), embedded_test_server()->GetURL("bar.com", "/title2.html")));
+  mojo::ScopedAllowSyncCallForTesting allowed_for_testing;
+  bool enabled = false;
+  content::GetHostFrameSinkManager()
+      ->GetFrameSinkManagerTestApi()
+      .GetForceEnableZoomState(GetRenderWidgetHost()->GetFrameSinkId(),
+                               &enabled);
 
   absl::Status status = ttp.StopAndParseTrace();
   ASSERT_TRUE(status.ok()) << status.message();
 
   std::string query = R"(
-    SELECT COUNT(*) AS cnt
+    SELECT (COUNT(*) > 0) AS has_connection
     FROM slice
     WHERE name = 'InputManager::SetupRenderInputRouterDelegateConnection'
-    ORDER BY ts ASC
   )";
   auto result = ttp.RunQuery(query);
   ASSERT_TRUE(result.has_value());
 
-  // `result.value()` would look something like this: {{"cnt"}, {"<num>"}}.
-  EXPECT_THAT(
-      result.value(),
-      testing::ElementsAre(
-          testing::ElementsAre("cnt"),
-          testing::ElementsAre(
-              input::InputUtils::IsTransferInputToVizSupported() ? "2" : "0")));
+  // `result.value()` would look something like this: {{"has_connection"},
+  // {"<num>"}}.
+  EXPECT_THAT(result.value(),
+              testing::ElementsAre(testing::ElementsAre("has_connection"),
+                                   testing::ElementsAre("1")));
 }
 
 IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTouchActionTest,
@@ -12438,9 +12462,14 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
   EXPECT_NE(
       subframe->current_frame_host()->GetSiteInstance()->GetProcess(),
       popup_subframe->current_frame_host()->GetSiteInstance()->GetProcess());
-  EXPECT_NE(
-      subframe->current_frame_host()->GetSiteInstance()->GetSiteURL(),
-      popup_subframe->current_frame_host()->GetSiteInstance()->GetSiteURL());
+  EXPECT_NE(subframe->current_frame_host()
+                ->GetSiteInstance()
+                ->GetSecurityPrincipal()
+                .GetDeprecatedSiteURL(),
+            popup_subframe->current_frame_host()
+                ->GetSiteInstance()
+                ->GetSecurityPrincipal()
+                .GetDeprecatedSiteURL());
 }
 
 // Ensure that when a process is about to be destroyed after the last active
@@ -14645,12 +14674,12 @@ class CrossProcessSubframeRenderProcessGoneLogger
     crashed_rfhs_.push_back(render_frame_host);
   }
 
-  const std::vector<RenderFrameHost*>& crashed_rfhs() const {
+  const std::vector<raw_ptr<RenderFrameHost>>& crashed_rfhs() const {
     return crashed_rfhs_;
   }
 
  private:
-  std::vector<RenderFrameHost*> crashed_rfhs_;
+  std::vector<raw_ptr<RenderFrameHost>> crashed_rfhs_;
 };
 
 // Test that when a process hosting multiple subframes dies,
@@ -14691,6 +14720,297 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
   EXPECT_FALSE(std::ranges::contains(test_client.crashed_rfhs(), rfh_b3));
 }
 
+namespace {
+
+// Intercepts DidCommitNavigation to capture the renderer-reported committed
+// origin from DidCommitProvisionalLoadParams for a specific URL, for
+// comparison with the browser-computed origin.
+class CommittedOriginInterceptor : public DidCommitNavigationInterceptor {
+ public:
+  CommittedOriginInterceptor(WebContents* web_contents, const GURL& target_url)
+      : DidCommitNavigationInterceptor(web_contents), target_url_(target_url) {}
+
+  const std::optional<url::Origin>& committed_origin() const {
+    return committed_origin_;
+  }
+
+  // Blocks until a DidCommit for |target_url_| is received.
+  void WaitForCommit() {
+    if (committed_origin_.has_value()) {
+      return;
+    }
+    base::RunLoop run_loop;
+    quit_closure_ = run_loop.QuitClosure();
+    run_loop.Run();
+  }
+
+ private:
+  bool WillProcessDidCommitNavigation(
+      RenderFrameHost* render_frame_host,
+      NavigationRequest* navigation_request,
+      mojom::DidCommitProvisionalLoadParamsPtr* params,
+      mojom::DidCommitProvisionalLoadInterfaceParamsPtr* interface_params)
+      override {
+    if ((*params)->url == target_url_) {
+      committed_origin_ = (*params)->origin;
+      if (quit_closure_) {
+        std::move(quit_closure_).Run();
+      }
+    }
+    return true;
+  }
+
+  const GURL target_url_;
+  std::optional<url::Origin> committed_origin_;
+  base::OnceClosure quit_closure_;
+};
+
+// Verifies that |origin|'s nonce equals the sandbox_origin_token recorded by
+// |rfh|, confirming the origin was derived from it.
+void VerifySandboxTokenNonce(RenderFrameHostImpl* rfh,
+                             const url::Origin& origin) {
+  const std::optional<base::UnguessableToken> token =
+      rfh->last_sandbox_origin_token_for_testing();
+  const base::UnguessableToken* nonce = origin.GetNonceForTesting();
+  ASSERT_TRUE(token.has_value());
+  ASSERT_TRUE(nonce);
+  EXPECT_EQ(*token, *nonce);
+}
+
+}  // namespace
+
+// Verify that a sandboxed iframe's initial about:blank document has an opaque
+// origin derived deterministically from the sandbox_origin_token, and that the
+// renderer agrees on this origin.
+IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
+                       SandboxedIframeInitialEmptyDocumentOrigin) {
+  GURL main_url(embedded_test_server()->GetURL("a.com", "/title1.html"));
+  EXPECT_TRUE(NavigateToURL(shell(), main_url));
+
+  FrameTreeNode* root = web_contents()->GetPrimaryFrameTree().root();
+
+  GURL about_blank_url("about:blank");
+
+  // Set up an interceptor to capture the renderer's committed origin for
+  // about:blank from DidCommitParams.
+  CommittedOriginInterceptor interceptor(shell()->web_contents(),
+                                         about_blank_url);
+
+  // Create a sandboxed iframe with src="about:blank". The renderer performs a
+  // synchronous about:blank navigation and sends DidCommit with the origin
+  // derived from the sandbox_origin_token.
+  {
+    std::string script =
+        "var iframe = document.createElement('iframe');\n"
+        "iframe.sandbox = 'allow-scripts';\n"
+        "iframe.src = 'about:blank';\n"
+        "document.body.appendChild(iframe);\n";
+    ExecuteScriptAsync(root, script);
+  }
+
+  // Wait for the synchronous about:blank DidCommit.
+  interceptor.WaitForCommit();
+
+  FrameTreeNode* child = root->child_at(0);
+  RenderFrameHostImpl* child_rfh = child->current_frame_host();
+
+  EXPECT_TRUE(child_rfh->IsSandboxed(network::mojom::WebSandboxFlags::kOrigin));
+
+  // about:blank committed origin: opaque with parent's precursor (a.com),
+  // derived from sandbox_origin_token via SetOriginDependentStateOfNewFrame().
+  url::Origin about_blank_origin = child->current_origin();
+  EXPECT_TRUE(about_blank_origin.opaque());
+  EXPECT_EQ(url::SchemeHostPort(main_url),
+            about_blank_origin.GetTupleOrPrecursorTupleIfOpaque());
+
+  // Verify the origin was derived from the sandbox_origin_token.
+  VerifySandboxTokenNonce(child_rfh, about_blank_origin);
+
+  // Verify the renderer's committed origin for about:blank matches the
+  // browser-side origin (browser-renderer agreement on token-derived origin).
+  auto about_blank_committed = interceptor.committed_origin();
+  ASSERT_TRUE(about_blank_committed.has_value());
+  EXPECT_EQ(about_blank_origin, *about_blank_committed);
+
+  // Renderer-side origin is opaque ("null").
+  EXPECT_EQ("null", GetOriginFromRenderer(child));
+}
+
+// Verify that a popup from a CSP-sandboxed page has an opaque about:blank
+// origin derived deterministically from the sandbox_origin_token, and that the
+// renderer agrees on this origin.
+IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
+                       SandboxedPopupInitialEmptyDocumentOrigin) {
+  GURL main_url(embedded_test_server()->GetURL(
+      "a.com",
+      "/set-header?"
+      "Content-Security-Policy: sandbox allow-scripts allow-popups"));
+  EXPECT_TRUE(NavigateToURL(shell(), main_url));
+
+  FrameTreeNode* root = web_contents()->GetPrimaryFrameTree().root();
+  EXPECT_TRUE(root->current_frame_host()->IsSandboxed(
+      network::mojom::WebSandboxFlags::kOrigin));
+
+  // Open a popup to about:blank from the sandboxed main frame. The renderer
+  // performs a synchronous about:blank navigation and sends DidCommit with the
+  // origin derived from the sandbox_origin_token.
+  GURL about_blank_url("about:blank");
+  Shell* popup_shell = nullptr;
+  std::unique_ptr<CommittedOriginInterceptor> commit_interceptor;
+  Shell::SetShellCreatedCallback(
+      base::BindLambdaForTesting([&](Shell* created_shell) {
+        popup_shell = created_shell;
+        commit_interceptor = std::make_unique<CommittedOriginInterceptor>(
+            created_shell->web_contents(), about_blank_url);
+      }));
+
+  EXPECT_TRUE(
+      ExecJs(root, JsReplace("window.open($1, 'popup')", about_blank_url)));
+  ASSERT_TRUE(popup_shell);
+  ASSERT_TRUE(commit_interceptor);
+
+  // Wait for the synchronous about:blank DidCommit.
+  commit_interceptor->WaitForCommit();
+
+  FrameTreeNode* popup_frame =
+      static_cast<WebContentsImpl*>(popup_shell->web_contents())
+          ->GetPrimaryFrameTree()
+          .root();
+  RenderFrameHostImpl* popup_rfh = popup_frame->current_frame_host();
+
+  EXPECT_TRUE(popup_rfh->IsSandboxed(network::mojom::WebSandboxFlags::kOrigin));
+
+  // about:blank committed origin: opaque with opener's precursor (a.com),
+  // derived from sandbox_origin_token via SetOriginDependentStateOfNewFrame().
+  url::Origin about_blank_origin = popup_frame->current_origin();
+  EXPECT_TRUE(about_blank_origin.opaque());
+  EXPECT_EQ(url::SchemeHostPort(main_url),
+            about_blank_origin.GetTupleOrPrecursorTupleIfOpaque());
+
+  // Verify the origin was derived from the sandbox_origin_token.
+  VerifySandboxTokenNonce(popup_rfh, about_blank_origin);
+
+  // Verify the renderer's committed origin for about:blank matches the
+  // browser-side origin (browser-renderer agreement on token-derived origin).
+  auto about_blank_committed = commit_interceptor->committed_origin();
+  ASSERT_TRUE(about_blank_committed.has_value());
+  EXPECT_EQ(about_blank_origin, *about_blank_committed);
+
+  // Renderer-side origin is opaque ("null").
+  EXPECT_EQ("null", GetOriginFromRenderer(popup_frame));
+}
+
+// Verify that a noopener popup from a CSP-sandboxed page has an opaque origin
+// derived deterministically from the sandbox_origin_token (with no precursor
+// since the creator_frame is null for noopener), and that the origin changes to
+// a new opaque origin with the navigated site's precursor after the navigation
+// commits.
+IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
+                       SandboxedNoopenerPopupInitialEmptyDocumentOrigin) {
+  GURL main_url(embedded_test_server()->GetURL(
+      "a.com",
+      "/set-header?"
+      "Content-Security-Policy: sandbox allow-scripts allow-popups"));
+  EXPECT_TRUE(NavigateToURL(shell(), main_url));
+
+  FrameTreeNode* root = web_contents()->GetPrimaryFrameTree().root();
+  EXPECT_TRUE(root->current_frame_host()->IsSandboxed(
+      network::mojom::WebSandboxFlags::kOrigin));
+
+  // The popup will navigate to a cross-site URL via a noopener link.
+  GURL popup_url(embedded_test_server()->GetURL("b.com", "/title1.html"));
+
+  Shell* popup_shell = nullptr;
+  std::optional<base::UnguessableToken> initial_sandbox_token;
+  url::Origin initial_empty_doc_origin;
+  std::unique_ptr<TestNavigationManager> popup_manager;
+  std::unique_ptr<CommittedOriginInterceptor> commit_interceptor;
+  Shell::SetShellCreatedCallback(
+      base::BindLambdaForTesting([&](Shell* created_shell) {
+        popup_shell = created_shell;
+        // Capture the sandbox_origin_token and initial empty document origin
+        // here, inside the Shell-created callback. For noopener popups the
+        // browser calls AddNewContents (which fires this callback) *before*
+        // LoadURLWithParams starts the navigation to b.com. The initial RFH
+        // may be replaced by a speculative RFH once the navigation starts, so
+        // we save values rather than the RFH pointer.
+        FrameTreeNode* popup_root =
+            static_cast<WebContentsImpl*>(created_shell->web_contents())
+                ->GetPrimaryFrameTree()
+                .root();
+        initial_empty_doc_origin = popup_root->current_origin();
+        initial_sandbox_token = popup_root->current_frame_host()
+                                    ->last_sandbox_origin_token_for_testing();
+        popup_manager = std::make_unique<TestNavigationManager>(
+            created_shell->web_contents(), popup_url);
+        commit_interceptor = std::make_unique<CommittedOriginInterceptor>(
+            created_shell->web_contents(), popup_url);
+      }));
+
+  // Dynamically create and click a noopener link to open a cross-site popup.
+  EXPECT_TRUE(ExecJs(root, JsReplace("var a = document.createElement('a');"
+                                     "a.href = $1;"
+                                     "a.rel = 'noopener';"
+                                     "a.target = '_blank';"
+                                     "document.body.appendChild(a);"
+                                     "a.click();",
+                                     popup_url)));
+  ASSERT_TRUE(popup_shell);
+  ASSERT_TRUE(popup_manager);
+  ASSERT_TRUE(commit_interceptor);
+
+  FrameTreeNode* popup_frame =
+      static_cast<WebContentsImpl*>(popup_shell->web_contents())
+          ->GetPrimaryFrameTree()
+          .root();
+
+  // Verify the initial empty document origin (captured in the Shell callback
+  // before LoadURLWithParams, avoiding any race with the navigation to b.com).
+  // Opaque with no precursor: noopener suppresses the opener (new
+  // BrowsingInstance), so creator_frame is null and the precursor is empty.
+  EXPECT_TRUE(initial_empty_doc_origin.opaque());
+  EXPECT_EQ(url::SchemeHostPort(),
+            initial_empty_doc_origin.GetTupleOrPrecursorTupleIfOpaque());
+
+  // Verify the origin was derived from the sandbox_origin_token.
+  ASSERT_TRUE(initial_sandbox_token.has_value());
+  const base::UnguessableToken* pre_commit_nonce =
+      initial_empty_doc_origin.GetNonceForTesting();
+  ASSERT_TRUE(pre_commit_nonce);
+  EXPECT_EQ(*initial_sandbox_token, *pre_commit_nonce);
+
+  // Let the navigation to b.com commit.
+  ASSERT_TRUE(popup_manager->WaitForNavigationFinished());
+
+  // Post-commit origin: new opaque origin with the navigated site (b.com) as
+  // precursor, assigned by the browser via origin_to_commit.
+  EXPECT_TRUE(popup_frame->current_frame_host()->IsSandboxed(
+      network::mojom::WebSandboxFlags::kOrigin));
+
+  url::Origin post_commit_origin = popup_frame->current_origin();
+  EXPECT_TRUE(post_commit_origin.opaque());
+  EXPECT_EQ(url::SchemeHostPort(popup_url),
+            post_commit_origin.GetTupleOrPrecursorTupleIfOpaque());
+
+  // The initial and post-commit origins must differ.
+  EXPECT_NE(initial_empty_doc_origin, post_commit_origin);
+
+  // Verify the renderer's committed origin matches the browser's post-commit
+  // origin.
+  auto noopener_committed = commit_interceptor->committed_origin();
+  ASSERT_TRUE(noopener_committed.has_value());
+  EXPECT_EQ(post_commit_origin, *noopener_committed);
+
+  // The post-commit nonce must differ from the initial (token-derived) nonce.
+  const base::UnguessableToken* post_commit_nonce =
+      post_commit_origin.GetNonceForTesting();
+  ASSERT_TRUE(post_commit_nonce);
+  EXPECT_NE(*pre_commit_nonce, *post_commit_nonce);
+
+  // Renderer-side origin is opaque ("null").
+  EXPECT_EQ("null", GetOriginFromRenderer(popup_frame));
+}
+
 INSTANTIATE_TEST_SUITE_P(All,
                          RequestDelayingSitePerProcessBrowserTest,
                          testing::ValuesIn(RenderDocumentFeatureLevelValues()));
@@ -14700,9 +15020,6 @@ INSTANTIATE_TEST_SUITE_P(All,
                          testing::ValuesIn(RenderDocumentFeatureLevelValues()));
 INSTANTIATE_TEST_SUITE_P(All,
                          AndroidInputBrowserTest,
-                         testing::ValuesIn(RenderDocumentFeatureLevelValues()));
-INSTANTIATE_TEST_SUITE_P(All,
-                         SitePerProcessBrowserTestWithSubframePriority,
                          testing::ValuesIn(RenderDocumentFeatureLevelValues()));
 #endif  // BUILDFLAG(IS_ANDROID)
 INSTANTIATE_TEST_SUITE_P(All,

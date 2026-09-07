@@ -41,7 +41,8 @@ class ConfirmInfobarBannerInteractionHandlerTest : public PlatformTest {
   }
 
  protected:
-  ConfirmInfobarBannerInteractionHandler handler_;
+  ConfirmInfobarBannerInteractionHandler handler_{
+      InfobarType::kInfobarTypeConfirm};
   web::FakeWebState web_state_;
   raw_ptr<InfoBarIOS> infobar_;
 };
@@ -57,3 +58,5 @@ TEST_F(ConfirmInfobarBannerInteractionHandlerTest, Presentation) {
   EXPECT_CALL(mock_delegate(), InfoBarDismissed());
   handler_.BannerVisibilityChanged(infobar_, false);
 }
+
+

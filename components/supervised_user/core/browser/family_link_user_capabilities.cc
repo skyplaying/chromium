@@ -39,7 +39,8 @@ signin::Tribool IsPrimaryAccountSubjectToParentalControls(
   }
   AccountInfo account_info =
       identity_manager->FindExtendedAccountInfo(core_account_info);
-  return account_info.capabilities.is_subject_to_parental_controls();
+  return account_info.GetAccountCapabilities()
+      .is_subject_to_parental_controls();
 }
 
 FamilyLinkUserCapabilitiesObserver::FamilyLinkUserCapabilitiesObserver(
@@ -56,14 +57,14 @@ void FamilyLinkUserCapabilitiesObserver::OnExtendedAccountInfoUpdated(
     const AccountInfo& info) {
   DCHECK(identity_manager_);
   // Only observe updates to capabilities of the primary account.
-  if (info.account_id !=
+  if (info.GetAccountId() !=
       identity_manager_->GetPrimaryAccountId(signin::ConsentLevel::kSignin)) {
     return;
   }
 
   for (std::string_view name : GetFamilyLinkUserCapabilityNames()) {
     signin::Tribool new_capability_value =
-        info.capabilities.GetCapabilityByName(name);
+        info.GetAccountCapabilities().GetCapabilityByName(name);
     // Do not override known capability values with kUnknown.
     if (new_capability_value == signin::Tribool::kUnknown) {
       continue;

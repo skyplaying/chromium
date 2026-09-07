@@ -9,21 +9,18 @@
 
 #include "base/memory/raw_ptr.h"
 #include "net/base/net_export.h"
-#include "net/quic/quic_chromium_client_stream.h"
-#include "net/third_party/quiche/src/quiche/quic/core/http/quic_spdy_client_session_base.h"
-#include "net/third_party/quiche/src/quiche/quic/core/http/quic_spdy_stream.h"
-#include "net/third_party/quiche/src/quiche/quic/core/quic_types.h"
+#include "net/quic/quic_chromium_client_stream_base.h"
 
 namespace quic {
 class QuicHeaderList;
-class QuicSpdyClientSessionBase;
 }  // namespace quic
 
 namespace net {
 
 class IOBuffer;
 
-class NET_EXPORT_PRIVATE WebSocketQuicSpdyStream : public quic::QuicSpdyStream {
+class NET_EXPORT_PRIVATE WebSocketQuicSpdyStream
+    : public QuicChromiumClientStreamBase {
  public:
   class NET_EXPORT_PRIVATE Delegate {
    public:
@@ -63,10 +60,12 @@ class NET_EXPORT_PRIVATE WebSocketQuicSpdyStream : public quic::QuicSpdyStream {
 
   void OnCanWriteNewData() override;
 
-  // Decouples the delegate from this stream and cancels the underlying QUIC
-  // stream. This allows the delegate to be destroyed independently while
-  // ensuring the stream is properly terminated. The stream is reset with
-  // QUIC_STREAM_CANCELLED to signal intentional closure to the peer.
+  // Decouples the delegate from this stream and closes the stream, if it is
+  // not closed already. Once the peer's FIN has been consumed the closing
+  // handshake is complete, so the stream is closed with a FIN of our own: the
+  // orderly closure of RFC 9220 section 3. A stream abandoned before that is
+  // reset with QUIC_STREAM_CANCELLED, the RST exception of that same section,
+  // to signal intentional closure to the peer.
   void DetachDelegate();
 
  private:

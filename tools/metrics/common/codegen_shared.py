@@ -33,12 +33,13 @@ def HashFieldTrialName(field_trial_name: str) -> int:
   # This must match the hash function in //base/metrics/metrics_hashes.cc.
   # <L: 4 bytes, little endian.
   return struct.unpack(
-      '<L',
-      hashlib.sha1(field_trial_name.encode('utf-8')).digest()[:4])[0]
+    '<L', hashlib.sha1(field_trial_name.encode('utf-8')).digest()[:4]
+  )[0]
 
 
 class FileInfo(object):
   """A class to hold codegen information about a file."""
+
   def __init__(self, relpath: str, basename: str) -> None:
     self.dir_path = relpath
     self.guard_path = _SanitizeName(os.path.join(relpath, basename)).upper()
@@ -46,6 +47,7 @@ class FileInfo(object):
 
 class ModelTypeInfo(object):
   """A class to hold codegen information about a model type such as metric."""
+
   def __init__(self, json_obj: dict) -> None:
     self.raw_name = json_obj['name']
     self.name = _SanitizeName(json_obj['name'])

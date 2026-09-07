@@ -116,7 +116,7 @@ public class DistilledPagePrefsView extends LinearLayout
     private void initFontFamilySpinner() {
         // These must be kept in sync (and in-order) with
         // components/dom_distiller/core/font_family_list.h
-        // TODO(wychen): fix getStringArray issue (https://crbug/803117#c2)
+        // TODO(wychen): fix getStringArray issue (https://crbug.com/40558544#comment3)
         String[] fonts = {
             getResources().getString(R.string.sans_serif),
             getResources().getString(R.string.serif),
@@ -139,8 +139,7 @@ public class DistilledPagePrefsView extends LinearLayout
 
                     private View overrideTypeFace(View view, int family) {
                         FontFamily.validate(family);
-                        if (view instanceof TextView) {
-                            TextView textView = (TextView) view;
+                        if (view instanceof TextView textView) {
                             if (family == FontFamily.MONOSPACE) {
                                 textView.setTypeface(Typeface.MONOSPACE);
                             } else if (family == FontFamily.SANS_SERIF) {
@@ -263,12 +262,9 @@ public class DistilledPagePrefsView extends LinearLayout
         Theme.validate(theme);
         final RadioButton button = findViewById(id);
         button.setOnClickListener(
-                new View.OnClickListener() {
-                    @Override
-                    public void onClick(View v) {
-                        ReaderModeMetrics.reportReaderModePrefsThemeChanged(theme);
-                        mDistilledPagePrefs.setUserPrefTheme(theme);
-                    }
+                (View v) -> {
+                    ReaderModeMetrics.reportReaderModePrefsThemeChanged(theme);
+                    mDistilledPagePrefs.setUserPrefTheme(theme);
                 });
         return button;
     }

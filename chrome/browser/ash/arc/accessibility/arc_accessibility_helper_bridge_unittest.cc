@@ -18,7 +18,6 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/common/extensions/api/accessibility_private.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/views/chrome_views_test_base.h"
 #include "chromeos/ash/experiences/arc/arc_util.h"
@@ -85,7 +84,7 @@ class ArcAccessibilityHelperBridgeTest : public ChromeViewsTestBase {
 
     // TestEventRouter::EventObserver overrides:
     void OnBroadcastEvent(const extensions::Event& event) override {
-      last_event = event.DeepCopy();
+      last_event = event.Clone();
     }
     void OnDispatchEventToExtension(const std::string& extension_id,
                                     const extensions::Event& event) override {}
@@ -145,7 +144,7 @@ class ArcAccessibilityHelperBridgeTest : public ChromeViewsTestBase {
    private:
     std::map<std::string, raw_ptr<ArcNotificationSurface, CtnExperimental>>
         surfaces_;
-    base::ObserverList<Observer>::UncheckedAndDanglingUntriaged observers_;
+    base::ObserverList<Observer> observers_;
   };
 
   ArcAccessibilityHelperBridgeTest() = default;
@@ -231,8 +230,7 @@ TEST_F(ArcAccessibilityHelperBridgeTest, AnnouncementEvent) {
 
   ASSERT_EQ(1, helper_bridge->GetEventCount(event_name));
   ASSERT_EQ(event_name, helper_bridge->last_event->event_name);
-  const base::ListValue& arg =
-      helper_bridge->last_event->event_args[0].GetList();
+  const base::ListValue& arg = helper_bridge->last_event->args()[0].GetList();
   ASSERT_EQ(1U, arg.size());
   ASSERT_EQ(announce_text, arg[0].GetString());
 }
@@ -261,8 +259,7 @@ TEST_F(ArcAccessibilityHelperBridgeTest, NotificationStateChangedEvent) {
 
   ASSERT_EQ(1, helper_bridge->GetEventCount(event_name));
   ASSERT_EQ(event_name, helper_bridge->last_event->event_name);
-  const base::ListValue& arg =
-      helper_bridge->last_event->event_args[0].GetList();
+  const base::ListValue& arg = helper_bridge->last_event->args()[0].GetList();
   ASSERT_EQ(1U, arg.size());
   ASSERT_EQ(toast_text, arg[0].GetString());
 
@@ -454,7 +451,7 @@ TEST_F(ArcAccessibilityHelperBridgeTest,
 
   // Prepare widget to hold it.
   std::unique_ptr<views::Widget> widget =
-      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
+      CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
   widget->widget_delegate()->SetCanActivate(false);
   widget->Deactivate();
   widget->SetContentsView(std::move(notification_view));
@@ -519,7 +516,7 @@ TEST_F(ArcAccessibilityHelperBridgeTest, TextSelectionChangedFocusContentView) {
 
   // Prepare a widget to hold them.
   std::unique_ptr<views::Widget> widget =
-      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
+      CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
   ArcNotificationView* notification_view =
       widget->GetRootView()->AddChildView(std::move(owning_notification_view));
   views::View* focus_stealer =

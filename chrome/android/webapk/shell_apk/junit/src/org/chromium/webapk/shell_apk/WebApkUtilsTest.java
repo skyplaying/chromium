@@ -9,7 +9,6 @@ import static org.junit.Assert.assertNotEquals;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
-import static org.mockito.MockitoAnnotations.openMocks;
 import static org.robolectric.Robolectric.setupActivity;
 
 import android.app.Activity;
@@ -23,21 +22,23 @@ import android.view.View;
 
 import org.junit.Assert;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.Shadows;
-import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowPackageManager;
 
 import org.chromium.components.webapk.lib.common.WebApkMetaDataKeys;
 
 /** Tests for WebApkUtils. */
 @RunWith(RobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class WebApkUtilsTest {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Mock private Context mMockApplicationContext;
     @Mock private PackageManager mMockPackageManager;
 
@@ -122,7 +123,6 @@ public class WebApkUtilsTest {
     @Test
     public void testStatusBarBlackInAutomotive() {
         // Create an "automotive" Activity.
-        openMocks(this);
         Activity testActivity = spy(setupActivity(Activity.class));
         doReturn(mMockApplicationContext).when(testActivity).getApplicationContext();
         when(mMockApplicationContext.getPackageManager()).thenReturn(mMockPackageManager);

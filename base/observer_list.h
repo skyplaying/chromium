@@ -114,11 +114,10 @@ enum class ObserverListReentrancyPolicy {
 // When `check_empty` is true, assert that the list is empty on destruction.
 // When `reentrancy` is kDisallowReentrancy, iterating through the list while
 // already in the iteration loop will result in DCHECK failure.
-// TODO(oshima): Change the default to non reentrant. https://crbug.com/812109
 template <class ObserverType,
           bool check_empty = false,
           ObserverListReentrancyPolicy reentrancy =
-              ObserverListReentrancyPolicy::kAllowReentrancy,
+              ObserverListReentrancyPolicy::kDisallowReentrancy,
           class ObserverStorageType = internal::CheckedObserverAdapter>
 class ObserverList {
  public:
@@ -156,6 +155,7 @@ class ObserverList {
       internal::UncheckedObserverAdapter<RawPtrTraits::kEmpty, true>>;
 
   // An iterator class that can be used to access the list of observers.
+  template <bool check_reentrancy = true>
   class Iter {
    public:
     using iterator_category = std::forward_iterator_tag;
@@ -176,6 +176,7 @@ class ObserverList {
       // TODO(crbug.com/40063488): Turn into CHECK once very prevalent failures
       // are weeded out.
       DUMP_WILL_BE_CHECK(
+          !check_reentrancy ||
           reentrancy != ObserverListReentrancyPolicy::kDisallowReentrancy ||
           list_.IsOnlyRemainingNode());
       // Bind to this sequence when creating the first iterator.
@@ -281,14 +282,14 @@ class ObserverList {
     size_t max_index_;
   };
 
-  using iterator = Iter;
-  using const_iterator = Iter;
+  using iterator = Iter<>;
+  using const_iterator = Iter<>;
   using value_type = ObserverType;
 
   const_iterator begin() const {
     DCHECK_CALLED_ON_VALID_SEQUENCE(iteration_sequence_checker_);
     // An optimization: do not involve weak pointers for empty list.
-    return observers_.empty() ? const_iterator() : const_iterator(this);
+    return empty() ? const_iterator() : const_iterator(this);
   }
 
   const_iterator end() const { return const_iterator(); }
@@ -323,6 +324,29 @@ class ObserverList {
     }
   }
 
+  // A nested struct to act as the range
+  struct ReentrantRange {
+    ObserverList::Iter<false> begin_;
+    ObserverList::Iter<false> end_;
+
+    auto begin() { return begin_; }
+    auto end() { return end_; }
+  };
+
+  // Method to return the reentrant range adapter. Use this if it's safe to
+  // iterate observers even if the observer list itself should be non-reentrant
+  // The observer should be non reentrant.
+  // TODO(40562847): Add static_assert to ensure the reentrancy is
+  // kDisallowReentrancy.
+  ReentrantRange GetReentrantRange() {
+    // An optimization: do not involve weak pointers for empty list.
+    if (empty()) {
+      return {};
+    }
+    return ReentrantRange{Iter</*check_reentrancy=*/false>(this),
+                          Iter</*check_reentrancy=*/false>()};
+  }
+
   // Add an observer to this list. An observer should not be added to the same
   // list more than once.
   //
@@ -335,6 +359,9 @@ class ObserverList {
     if (HasObserver(observer)) {
       DUMP_WILL_BE_NOTREACHED() << "Observers can only be added once!";
       return;
+    }
+    if (!live_iterators_.empty()) {
+      DCHECK_CALLED_ON_VALID_SEQUENCE(iteration_sequence_checker_);
     }
     ++observers_count_;
     observers_.emplace_back(ObserverStorageType(observer));
@@ -415,6 +442,29 @@ class ObserverList {
     for (auto& observer : *this) {
       std::invoke(method, observer, args...);
     }
+  }
+
+  // Same as `Notify` but doesn't check reentrancy. Use this if it's safe to
+  // call the method reentrantly even if the observer list itself should be
+  // non-reentrant. The observer should be non reentrant.
+  // TODO(40562847): Add static_assert to ensure the reentrancy is
+  // kDisallowReentrancy.
+  template <typename Method, typename... Args>
+    requires std::invocable<Method, ObserverType*, const Args&...>
+  void NotifyAllowReentrancy(Method method, const Args&... args) {
+    for (auto& observer : GetReentrantRange()) {
+      std::invoke(method, observer, args...);
+    }
+  }
+
+  // Same as `NotifyReentrantly` but the reentrancy of the observer method is
+  // not trigaged and needs investigation.
+  // TODO(40562847(): Add static_assert to ensure the reentrancy is
+  // kDisallowReentrancy.
+  template <typename Method, typename... Args>
+    requires std::invocable<Method, ObserverType*, const Args&...>
+  void NotifyAllowReentrancyUntriaged(Method method, const Args&... args) {
+    NotifyAllowReentrancy(method, args...);
   }
 
  private:

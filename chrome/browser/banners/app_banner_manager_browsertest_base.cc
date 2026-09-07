@@ -10,7 +10,6 @@
 #include "net/test/embedded_test_server/embedded_test_server.h"
 
 #if !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #endif
@@ -26,7 +25,7 @@ void AppBannerManagerBrowserTestBase::SetUpOnMainThread() {
 
 #if !BUILDFLAG(IS_ANDROID)
   web_app::test::WaitUntilReady(
-      web_app::WebAppProvider::GetForTest(browser()->profile()));
+      web_app::WebAppProvider::GetForTest(browser()->GetProfile()));
 #endif
 }
 

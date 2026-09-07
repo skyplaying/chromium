@@ -1,6 +1,7 @@
 // Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 #include "chrome/browser/ui/views/extensions/chooser_dialog_view.h"
 
 #include <memory>
@@ -14,6 +15,7 @@
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/views/controls/button/label_button.h"
+#include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/table/table_view.h"
 #include "ui/views/widget/widget.h"
 
@@ -41,7 +43,7 @@ class ChooserDialogViewTest : public ChromeViewsTestBase {
     // We need a native view parent for the dialog to avoid a DCHECK
     // on Mac.
     parent_widget_ =
-        CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
+        CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
     parent = parent_widget_->GetNativeView();
 #endif
     widget_ = views::DialogDelegate::CreateDialogWidget(dialog_, GetContext(),

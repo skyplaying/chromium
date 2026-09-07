@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/views/user_education/impl/browser_feature_promo_preconditions.h"
+
 #include <ctime>
 #include <memory>
 
@@ -23,17 +25,17 @@
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
+#include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/omnibox/omnibox_controller.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/toolbar_controller_util.h"
 #include "chrome/browser/ui/views/frame/contents_web_view.h"
-#include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_controller.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
-#include "chrome/browser/ui/views/user_education/impl/browser_feature_promo_preconditions.h"
-#include "chrome/common/actor/task_id.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
+#include "components/actor/core/task_id.h"
 #include "components/omnibox/browser/autocomplete_controller.h"
 #include "components/omnibox/browser/autocomplete_input.h"
 #include "components/prefs/pref_service.h"
@@ -41,6 +43,8 @@
 #include "components/user_education/common/feature_promo/feature_promo_precondition.h"
 #include "components/user_education/common/feature_promo/feature_promo_result.h"
 #include "components/user_education/common/feature_promo/impl/common_preconditions.h"
+#include "components/user_education/common/feature_promo/impl/scoped_typed_data.h"
+#include "components/user_education/common/feature_promo/impl/typed_data.h"
 #include "components/user_education/common/user_education_features.h"
 #include "components/user_education/common/user_education_storage_service.h"
 #include "components/webui/chrome_urls/pref_names.h"
@@ -49,8 +53,6 @@
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/element_tracker.h"
-#include "ui/base/interaction/scoped_typed_data.h"
-#include "ui/base/interaction/typed_data.h"
 #include "ui/base/test/ui_controls.h"
 #include "ui/events/test/event_generator.h"
 #include "ui/gfx/geometry/point.h"
@@ -89,9 +91,10 @@ class BrowserFeaturePromoPreconditionsUiTest : public InteractiveBrowserTest {
         expected);
   }
 
-  ui::UnownedTypedDataCollection data_;
-  ui::test::ScopedTypedData<ui::SafeElementReference> anchor_element_data_{
-      data_, user_education::AnchorElementPrecondition::kAnchorElement};
+  user_education::UnownedTypedDataCollection data_;
+  user_education::test::ScopedTypedData<ui::SafeElementReference>
+      anchor_element_data_{
+          data_, user_education::AnchorElementPrecondition::kAnchorElement};
 };
 
 using WindowActivePreconditionUiTest = BrowserFeaturePromoPreconditionsUiTest;
@@ -196,17 +199,16 @@ IN_PROC_BROWSER_TEST_F(ContentNotFullscreenPreconditionUiTest, NotFullscreen) {
 IN_PROC_BROWSER_TEST_F(ContentNotFullscreenPreconditionUiTest,
                        MaximizedNotFullscreen) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTabId);
-  RunTestSequence(
-      InstrumentTab(kTabId),
-      NavigateWebContents(kTabId,
-                          GURL(chrome::kChromeUIUserEducationInternalsURL)),
-      Do([this]() { browser()->window()->Maximize(); }),
-      CheckResult(
-          [this]() {
-            ContentNotFullscreenPrecondition precond(*browser());
-            return precond.CheckPrecondition(data_);
-          },
-          user_education::FeaturePromoResult::Success()));
+  RunTestSequence(InstrumentTab(kTabId),
+                  NavigateWebContents(
+                      kTabId, GURL(chrome::kChromeUIUserEducationInternalsURL)),
+                  Do([this]() { browser()->GetWindow()->Maximize(); }),
+                  CheckResult(
+                      [this]() {
+                        ContentNotFullscreenPrecondition precond(*browser());
+                        return precond.CheckPrecondition(data_);
+                      },
+                      user_education::FeaturePromoResult::Success()));
 }
 
 IN_PROC_BROWSER_TEST_F(ContentNotFullscreenPreconditionUiTest, Fullscreen) {
@@ -216,9 +218,7 @@ IN_PROC_BROWSER_TEST_F(ContentNotFullscreenPreconditionUiTest, Fullscreen) {
                       kTabId, GURL(chrome::kChromeUIUserEducationInternalsURL)),
                   WithElement(kTabId,
                               [this](ui::TrackedElement* tab) {
-                                browser()
-                                    ->GetFeatures()
-                                    .exclusive_access_manager()
+                                ExclusiveAccessManager::From(browser())
                                     ->fullscreen_controller()
                                     ->EnterFullscreenModeForTab(
                                         AsInstrumentedWebContents(tab)
@@ -227,9 +227,7 @@ IN_PROC_BROWSER_TEST_F(ContentNotFullscreenPreconditionUiTest, Fullscreen) {
                               }),
                   CheckResult(
                       [this]() {
-                        return browser()
-                            ->GetFeatures()
-                            .exclusive_access_manager()
+                        return ExclusiveAccessManager::From(browser())
                             ->fullscreen_controller()
                             ->IsTabFullscreen();
                       },
@@ -250,9 +248,7 @@ IN_PROC_BROWSER_TEST_F(ContentNotFullscreenPreconditionUiTest, ExitFullscreen) {
                           GURL(chrome::kChromeUIUserEducationInternalsURL)),
       WithElement(kTabId,
                   [this](ui::TrackedElement* tab) {
-                    browser()
-                        ->GetFeatures()
-                        .exclusive_access_manager()
+                    ExclusiveAccessManager::From(browser())
                         ->fullscreen_controller()
                         ->EnterFullscreenModeForTab(
                             AsInstrumentedWebContents(tab)
@@ -261,18 +257,14 @@ IN_PROC_BROWSER_TEST_F(ContentNotFullscreenPreconditionUiTest, ExitFullscreen) {
                   }),
       WithElement(kTabId,
                   [this](ui::TrackedElement* tab) {
-                    browser()
-                        ->GetFeatures()
-                        .exclusive_access_manager()
+                    ExclusiveAccessManager::From(browser())
                         ->fullscreen_controller()
                         ->ExitFullscreenModeForTab(
                             AsInstrumentedWebContents(tab)->web_contents());
                   }),
       CheckResult(
           [this]() {
-            return browser()
-                ->GetFeatures()
-                .exclusive_access_manager()
+            return ExclusiveAccessManager::From(browser())
                 ->fullscreen_controller()
                 ->IsTabFullscreen();
           },
@@ -303,7 +295,7 @@ IN_PROC_BROWSER_TEST_F(OmniboxNotOpenPreconditionUiTest,
             AutocompleteInput input(
                 u"chrome", metrics::OmniboxEventProto::NTP,
                 ChromeAutocompleteSchemeClassifier(browser_view->GetProfile()));
-            browser_view->GetLocationBarView()
+            browser_view->GetLocationBar()
                 ->GetOmniboxController()
                 ->autocomplete_controller()
                 ->Start(input);
@@ -347,16 +339,13 @@ IN_PROC_BROWSER_TEST_F(ToolbarNotCollapsedPreconditionUiTest,
             const ToolbarController* const controller =
                 browser_view->toolbar()->toolbar_controller();
             CHECK(controller);
-            auto* const forward_button =
-                views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
-                    kToolbarForwardButtonElementId,
-                    browser_view->GetElementContext());
             auto* const container_view =
                 views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
                     ToolbarView::kToolbarElementId,
                     browser_view->GetElementContext());
             constexpr gfx::Size kButtonSize{16, 16};
-            while (forward_button->GetVisible()) {
+            while (!controller->IsElementOverflowedForTesting(
+                kToolbarForwardButtonElementId)) {
               auto* const button = container_view->AddChildView(
                   std::make_unique<ToolbarButton>());
               button->SetPreferredSize(kButtonSize);
@@ -409,10 +398,14 @@ class UserNotActivePreconditionUiTest
   ~UserNotActivePreconditionUiTest() override = default;
 
   void SetUp() override {
-    feature_list_.InitAndEnableFeatureWithParameters(
-        user_education::features::kUserEducationExperienceVersion2Point5,
-        {{"idle_before_heavyweight",
-          base::StringPrintf("%dms", GetParam().InMilliseconds())}});
+    user_education::features::testing::TimeoutOverrides overrides;
+    overrides.high_priority_timeout = base::Seconds(1);
+    overrides.medium_priority_timeout = base::Seconds(2);
+    overrides.low_priority_timeout = base::Seconds(3);
+    overrides.idle_before_heavyweight = GetParam();
+    timeout_override_handle_ =
+        user_education::features::testing::SetTimeoutOverridesForTest(
+            overrides);
     less_than_activity_time_ = GetParam() / 2;
     more_than_activity_time_ = GetParam() + base::Seconds(1);
 
@@ -455,7 +448,8 @@ class UserNotActivePreconditionUiTest
   base::TimeDelta less_than_activity_time_;
   base::TimeDelta more_than_activity_time_;
 
-  base::test::ScopedFeatureList feature_list_;
+  user_education::features::testing::TimeoutOverrideHandle
+      timeout_override_handle_;
   base::SimpleTestClock test_clock_;
   user_education::UserEducationTimeProvider time_provider_;
   std::unique_ptr<UserNotActivePrecondition> precondition_;
@@ -511,12 +505,12 @@ IN_PROC_BROWSER_TEST_F(ActorNotActuatingActiveTabPreconditionUiTest,
           user_education::FeaturePromoResult::Success()),
       // Start actuating on the active tab.
       Do([this]() {
-        auto* service = actor::ActorKeyedService::Get(browser()->profile());
-        actor::TaskId task_id =
-            service->CreateTask(actor::NoEnterprisePolicyChecker());
+        auto* service = actor::ActorKeyedService::Get(browser()->GetProfile());
+        actor::TaskId task_id = service->CreateTask(
+            actor::TestTaskSourceInfo(), actor::NoEnterprisePolicyChecker());
         auto* task = service->GetTask(task_id);
         task->AddTab(browser()->GetActiveTabInterface()->GetHandle(),
-                     base::DoNothing());
+                     /*stop_task_on_detach=*/true, base::DoNothing());
       }),
       // Precondition should block
       CheckResult(
@@ -539,13 +533,13 @@ IN_PROC_BROWSER_TEST_F(ActorNotActuatingActiveTabPreconditionUiTest,
       WaitForShow(kSecondTab),
       // Second tab is active, start actuating on first tab.
       Do([this]() {
-        auto* service = actor::ActorKeyedService::Get(browser()->profile());
-        actor::TaskId task_id =
-            service->CreateTask(actor::NoEnterprisePolicyChecker());
+        auto* service = actor::ActorKeyedService::Get(browser()->GetProfile());
+        actor::TaskId task_id = service->CreateTask(
+            actor::TestTaskSourceInfo(), actor::NoEnterprisePolicyChecker());
         auto* task = service->GetTask(task_id);
         task->AddTab(
             browser()->GetTabStripModel()->GetTabAtIndex(0)->GetHandle(),
-            base::DoNothing());
+            /*stop_task_on_detach=*/true, base::DoNothing());
       }),
       CheckResult(
           [this]() {

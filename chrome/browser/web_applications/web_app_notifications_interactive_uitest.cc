@@ -7,7 +7,7 @@
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/notifications/notification_display_service_tester.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
 #include "chrome/browser/web_applications/test/os_integration_test_override_impl.h"
@@ -51,12 +51,12 @@ class WebAppNotificationsBrowserTest : public WebAppBrowserTestBase {
   }
 
   void SetAppBrowserForAppId(const webapps::AppId& app_id) {
-    Browser* app_browser = FindWebAppBrowser(profile(), app_id);
+    BrowserWindowInterface* app_browser = FindWebAppBrowser(profile(), app_id);
     ASSERT_TRUE(app_browser);
     app_browser_ = app_browser;
   }
 
-  Browser& app_browser() {
+  BrowserWindowInterface& app_browser() {
     DCHECK(app_browser_);
     return *app_browser_;
   }
@@ -124,7 +124,8 @@ class WebAppNotificationsBrowserTest : public WebAppBrowserTestBase {
   std::unique_ptr<NotificationDisplayServiceTester> display_service_tester_;
 
   // Can be different from browser();
-  raw_ptr<Browser, AcrossTasksDanglingUntriaged> app_browser_ = nullptr;
+  raw_ptr<BrowserWindowInterface, AcrossTasksDanglingUntriaged> app_browser_ =
+      nullptr;
 };
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -134,9 +135,10 @@ using WebAppNotificationsBrowserTest_IconAndTitleEnabled =
 IN_PROC_BROWSER_TEST_F(WebAppNotificationsBrowserTest_IconAndTitleEnabled,
                        PersistentNotificationIconAndTitle) {
   const GURL app_url =
-      https_server()->GetURL("/web_app_notifications/index.html");
+      embedded_https_test_server().GetURL("/web_app_notifications/index.html");
 
-  const webapps::AppId app_id = InstallWebAppFromPage(browser(), app_url);
+  const webapps::AppId app_id = InstallWebAppFromPage(
+      browser(), app_url, {.launch_or_reparent_page_to_app = true});
   // The installation opens a new Browser window: |user_display_mode| is
   // kStandalone.
   SetAppBrowserForAppId(app_id);
@@ -215,9 +217,10 @@ using WebAppNotificationsBrowserTest_IconAndTitleDisabled =
 IN_PROC_BROWSER_TEST_F(WebAppNotificationsBrowserTest_IconAndTitleDisabled,
                        PersistentNotificationIconAndTitle) {
   const GURL app_url =
-      https_server()->GetURL("/web_app_notifications/index.html");
+      embedded_https_test_server().GetURL("/web_app_notifications/index.html");
 
-  const webapps::AppId app_id = InstallWebAppFromPage(browser(), app_url);
+  const webapps::AppId app_id = InstallWebAppFromPage(
+      browser(), app_url, {.launch_or_reparent_page_to_app = true});
   // The installation opens a new Browser window: |user_display_mode| is
   // kStandalone.
   SetAppBrowserForAppId(app_id);
@@ -285,17 +288,18 @@ class WebAppNotificationsBrowserTest_MacPermissions
   void SetUpOnMainThread() override {
     WebAppNotificationsBrowserTest::SetUpOnMainThread();
 
-    const GURL app_url =
-        https_server()->GetURL("/web_app_notifications/index.html");
+    const GURL app_url = embedded_https_test_server().GetURL(
+        "/web_app_notifications/index.html");
 
-    const webapps::AppId app_id = InstallWebAppFromPage(browser(), app_url);
+    const webapps::AppId app_id = InstallWebAppFromPage(
+        browser(), app_url, {.launch_or_reparent_page_to_app = true});
     // The installation opens a new Browser window: |user_display_mode| is
     // kStandalone.
     SetAppBrowserForAppId(app_id);
   }
 
   void TearDownOnMainThread() override {
-    test::UninstallAllWebApps(browser()->profile());
+    test::UninstallAllWebApps(browser()->GetProfile());
     WebAppNotificationsBrowserTest::TearDownOnMainThread();
   }
 };

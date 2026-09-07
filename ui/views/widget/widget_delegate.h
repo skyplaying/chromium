@@ -49,9 +49,11 @@ class ScreenCaptureNotificationUIViews;
 class SearchEngineChoiceDialog;
 class ShareThisTabDialogView;
 class SigninViewControllerDelegateViews;
+class SimpleWebViewDialog;
 class TabModalConfirmDialogViews;
 class TestBaseWidgetDelegate;
 class UpdateRecommendedMessageBox;
+class ViewTracker;
 class WebDialogBrowserTest;
 FORWARD_DECLARE_TEST(AcceleratorCommandsFullscreenBrowserTest,
                      ToggleFullscreen);
@@ -90,7 +92,6 @@ class DropTargetView;
 class ExitWarningWidgetDelegateView;
 class FrameCaptionButtonContainerViewTest;
 class FrameSizeButtonTestWidgetDelegate;
-class GuestSessionConfirmationDialog;
 class HotseatWidgetDelegateView;
 class IdleAppNameNotificationDelegateView;
 class InSessionAuthDialog;
@@ -116,7 +117,6 @@ class RootWindowControllerTest;
 class ShelfNavigationWidgetDelegate;
 class ShelfWidgetDelegateView;
 class ShellTest;
-class SimpleWebViewDialog;
 class StatusAreaWidgetDelegate;
 class StuckWidgetDelegate;
 class SystemDialogDelegateView;
@@ -196,9 +196,6 @@ namespace native_app_window {
 class NativeAppWindowViews;
 }
 
-namespace plus_addresses {
-class PlusAddressCreationDialogDelegate;
-}
 
 namespace remoting {
 class MessageBoxCore;
@@ -228,10 +225,6 @@ FORWARD_DECLARE_TEST(NativeWidgetAuraTest, TransientChildModalWindowVisibility);
 FORWARD_DECLARE_TEST(NativeViewHostAuraTest,
                      FocusManagerUpdatedDuringDestruction);
 
-namespace borealis {
-class BorealisDisallowedDialog;
-class BorealisLaunchErrorDialog;
-}  // namespace borealis
 
 namespace test {
 FORWARD_DECLARE_TEST(DesktopWidgetTest, LockPaintAsActiveAndCloseParent);
@@ -322,7 +315,7 @@ class VIEWS_EXPORT WidgetDelegate {
 
     // The widget's initially focused view, if any. This can only be set before
     // this WidgetDelegate is used to initialize a Widget.
-    std::optional<View*> initially_focused_view;
+    std::unique_ptr<ViewTracker> initially_focused_view;
 
     // This is used by modal dialogs to override and constrain desired bounds
     // calculations.
@@ -406,7 +399,6 @@ class VIEWS_EXPORT WidgetDelegate {
     friend class ::ash::CaptureModeSessionFocusCycler;
     friend class ::ash::DeferredUpdateDialog;
     friend class ::ash::DisclaimerView;
-    friend class ::ash::GuestSessionConfirmationDialog;
     friend class ::ash::InSessionAuthDialog;
     friend class ::ash::InSessionAuthDialogControllerImpl;
     friend class ::ash::LocalAuthenticationWithPinControllerImpl;
@@ -420,7 +412,7 @@ class VIEWS_EXPORT WidgetDelegate {
     friend class ::ash::ShelfNavigationWidgetDelegate;
     friend class ::ash::ShelfWidgetDelegateView;
     friend class ::ash::ShellTest;
-    friend class ::ash::SimpleWebViewDialog;
+    friend class ::SimpleWebViewDialog;
     friend class ::ash::StatusAreaWidgetDelegate;
     friend class ::ash::StuckWidgetDelegate;
     friend class ::ash::SystemUIComponentsStyleViewerView;
@@ -436,8 +428,6 @@ class VIEWS_EXPORT WidgetDelegate {
     friend class BubbleDialogModelHost;
     friend class FocusTraversalTest;
     FRIEND_TEST_ALL_PREFIXES(BubbleUmaLoggerTest, LogMetricFromDelegate);
-    friend class borealis::BorealisDisallowedDialog;
-    friend class borealis::BorealisLaunchErrorDialog;
     friend class ::web_app::IsolatedWebAppInstallerViewController;
     friend class ::web_app::SubAppsInstallDialogController;
 
@@ -469,7 +459,6 @@ class VIEWS_EXPORT WidgetDelegate {
     friend class ::SigninViewControllerDelegateViews;
     friend class ::ash::InformedRestoreController;
     friend class ::native_app_window::NativeAppWindowViews;
-    friend class ::plus_addresses::PlusAddressCreationDialogDelegate;
     friend class ::remoting::MessageBoxCore;
     friend class DefaultWidgetDelegate;
     friend class TableViewFocusTest;

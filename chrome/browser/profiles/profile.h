@@ -56,10 +56,6 @@ class UserCloudPolicyManagerAsh;
 #endif
 }  // namespace policy
 
-namespace network {
-class SharedURLLoaderFactory;
-}
-
 namespace user_prefs {
 class PrefRegistrySyncable;
 }
@@ -76,6 +72,12 @@ class Profile : public content::BrowserContext {
     kAsynchronous,
   };
 
+  enum class LifecycleState {
+    kNotRegistered,
+    kRegistered,
+    kPendingDestruction,
+  };
+
   // Defines an ID to distinguish different off-the-record profiles of a regular
   // profile.
   class OTRProfileID {
@@ -88,7 +90,8 @@ class Profile : public content::BrowserContext {
     // WARNING:
     // The use of this class to create non-primary OTR profiles in Desktop
     // platforms is restricted exclusively for cases where extensions should not
-    // be applicable to run. Please see crbug.com/1098697#c3 for more details.
+    // be applicable to run. Please see crbug.com/40137149#comment4 for more
+    // details.
     static OTRProfileID CreateUnique(const std::string& profile_id_prefix);
 
     // Creates a unique OTR profile id to be used for DevTools browser contexts.
@@ -309,10 +312,6 @@ class Profile : public content::BrowserContext {
   // profile at the moment (i.e. HasOffTheRecordProfile is false).
   virtual PrefService* GetReadOnlyOffTheRecordPrefs();
 
-  // Returns the main URLLoaderFactory.
-  virtual scoped_refptr<network::SharedURLLoaderFactory>
-  GetURLLoaderFactory() = 0;
-
   // Return whether two profiles are the same or one is the OffTheRecord version
   // of the other.
   virtual bool IsSameOrParent(Profile* profile) = 0;
@@ -392,10 +391,10 @@ class Profile : public content::BrowserContext {
   // more recent (or equal to) the one specified.
   virtual bool WasCreatedByVersionOrLater(const std::string& version) = 0;
 
-  // IsRegularProfile(), IsSystemProfile(), IsIncognitoProfile(), and
-  // IsGuestSession() are mutually exclusive.
-  // Note: IsGuestSession() is not mutually exclusive with the rest of the
-  // methods mentioned above on ChromeOS. TODO(crbug.com/40233408).
+  // IsRegularProfile(), IsSystemProfile(), IsIncognitoProfile(),
+  // IsGuestSession() and IsEnterpriseIsolatedModeProfile() are mutually
+  // exclusive. Note: IsGuestSession() is not mutually exclusive with the rest
+  // of the methods mentioned above on ChromeOS. TODO(crbug.com/40233408).
   //
   // IsSystemProfile() returns true for both regular and off-the-record profile
   //   of the system profile.
@@ -409,8 +408,17 @@ class Profile : public content::BrowserContext {
   // off-the-record profile that is used for incognito mode.
   bool IsIncognitoProfile() const;
 
+  // Returns whether this profile is an Enterprise Isolated Mode session.
+  bool IsEnterpriseIsolatedModeProfile() const;
+
+  // Returns true if this is a primary OffTheRecord profile with a regular
+  // parent profile (i.e. an Incognito profile or an Enterprise Isolated Mode
+  // profile).
+  bool IsPrimaryOTRProfileWithRegularParent() const;
+
   // Returns true if this is a primary OffTheRecord profile, which covers the
-  // OffTheRecord profile used for incognito mode and guest sessions.
+  // OffTheRecord profile used for incognito mode, isolated mode and guest
+  // sessions.
   bool IsPrimaryOTRProfile() const;
 
   // Returns whether it is a Guest session. This covers both regular and
@@ -454,6 +462,10 @@ class Profile : public content::BrowserContext {
   bool ShouldSendAccessibilityEvents() {
     return 0 == accessibility_pause_level_;
   }
+
+  // Returns the LOM profile ID for this profile, generating one if it doesn't
+  // exist yet.
+  virtual uint64_t GetLomProfileId();
 
   // Returns whether the profile is new.  A profile is new if the browser has
   // not been shut down since the profile was created.
@@ -499,6 +511,18 @@ class Profile : public content::BrowserContext {
   static Profile* FromJavaObject(const jni_zero::JavaRef<jobject>& obj);
   jni_zero::ScopedJavaLocalRef<jobject> GetJavaObject() const;
 #endif  // BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_WIN)
+  // Track user acknowledgement of the crash bubble. For more information, see
+  // the definition of `ProfileLoadTracker`.
+  virtual void AckCrashForTracking() = 0;
+#endif
+
+  LifecycleState lifecycle_state() const { return lifecycle_state_; }
+  void set_lifecycle_state(LifecycleState lifecycle_state) {
+    lifecycle_state_ = lifecycle_state;
+  }
+
  protected:
   // Creates an OffTheRecordProfile which points to this Profile.
   static std::unique_ptr<Profile> CreateOffTheRecordProfile(
@@ -507,8 +531,9 @@ class Profile : public content::BrowserContext {
 
   // Returns a newly created ExtensionPrefStore suitable for the supplied
   // Profile.
-  static PrefStore* CreateExtensionPrefStore(Profile*,
-                                             bool incognito_pref_store);
+  static scoped_refptr<PrefStore> CreateExtensionPrefStore(
+      Profile*,
+      bool incognito_pref_store);
 
   void NotifyOffTheRecordProfileCreated(Profile* off_the_record);
   void NotifyProfileInitializationComplete();
@@ -529,6 +554,8 @@ class Profile : public content::BrowserContext {
 #endif
 
  private:
+  LifecycleState lifecycle_state_ = LifecycleState::kNotRegistered;
+
   bool restored_last_session_ = false;
 
   // Used to prevent the notification that this Profile is destroyed from

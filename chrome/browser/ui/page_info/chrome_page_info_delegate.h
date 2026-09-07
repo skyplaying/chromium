@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_UI_PAGE_INFO_CHROME_PAGE_INFO_DELEGATE_H_
 #define CHROME_BROWSER_UI_PAGE_INFO_CHROME_PAGE_INFO_DELEGATE_H_
 
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "build/build_config.h"
 #include "components/page_info/page_info_delegate.h"
@@ -12,6 +13,7 @@
 #include "content/public/browser/web_contents_user_data.h"
 #include "url/gurl.h"
 
+class BrowserWindowInterface;
 class Profile;
 class StatefulSSLHostStateDelegate;
 class TrustSafetySentimentService;
@@ -31,10 +33,33 @@ class PasswordProtectionService;
 class ChromePasswordProtectionService;
 }  // namespace safe_browsing
 
+#if !BUILDFLAG(IS_ANDROID)
+namespace infobars {
+class BrowserInfoBarManager;
+}
+#endif
+
 class ChromePageInfoDelegate : public PageInfoDelegate {
  public:
+  // Callback used to look up the BrowserWindowInterface for a WebContents.
+  using GetBrowserCallback =
+      base::RepeatingCallback<BrowserWindowInterface*(content::WebContents*)>;
+
+  // Returns the default callback for resolving BrowserWindowInterface from a
+  // WebContents.
+  static GetBrowserCallback DefaultGetBrowserCallback();
+
+#if !BUILDFLAG(IS_ANDROID)
+  // Registers the Page Info InfoBar specification in the centralized
+  // infobar framework.
+  static void RegisterPageInfoInfoBar(
+      infobars::BrowserInfoBarManager* infobar_manager);
+#endif
+
+  ChromePageInfoDelegate(content::WebContents* web_contents,
+                         GetBrowserCallback get_browser_callback);
   explicit ChromePageInfoDelegate(content::WebContents* web_contents);
-  ~ChromePageInfoDelegate() override = default;
+  ~ChromePageInfoDelegate() override;
 
   void SetSecurityStateForTests(
       security_state::SecurityLevel security_level,
@@ -60,6 +85,8 @@ class ChromePageInfoDelegate : public PageInfoDelegate {
   std::unique_ptr<content_settings::CookieControlsController>
   CreateCookieControlsController() override;
   bool IsIsolatedWebApp() override;
+  bool IsSubApp() override;
+  bool HasSubApps() override;
   // In Chrome's case, this may show the site settings page or an app settings
   // page, depending on context.
   void ShowSiteSettings(const GURL& site_url) override;
@@ -71,12 +98,14 @@ class ChromePageInfoDelegate : public PageInfoDelegate {
   void OpenCertificateDialog(net::X509Certificate* certificate) override;
   void OpenConnectionHelpCenterPage(const ui::Event& event) override;
   void OpenSafetyTipHelpCenterPage() override;
-  void OpenSafeBrowsingHelpCenterPage(const ui::Event& event) override;
   void OpenContentSettingsExceptions(
       ContentSettingsType content_settings_type) override;
   void OnPageInfoActionOccurred(page_info::PageInfoAction action) override;
   void OnUIClosing() override;
 #endif
+
+  void OpenSafeBrowsingHelpCenterPage(const ui::Event* event,
+                                      bool is_suspicious_site) override;
 
   std::u16string GetSubjectName(const GURL& url) override;
   permissions::PermissionDecisionAutoBlocker* GetPermissionDecisionAutoblocker()
@@ -97,12 +126,15 @@ class ChromePageInfoDelegate : public PageInfoDelegate {
   const std::u16string GetClientApplicationName() override;
 #endif
 
-  bool IsHttpsFirstModeEnabled() override;
+  bool IsHttpsFirstModeEnabledForUrl(const GURL& url) override;
   bool IsIncognitoProfile() override;
 
 #if BUILDFLAG(IS_CHROMEOS)
   bool ShouldSyncCookiesForUrl(const GURL& url) override;
 #endif
+
+  void OnSuspiciousSiteBackToSafety() override;
+  void OnSuspiciousSiteMarkAsSafe() override;
 
  private:
   Profile* GetProfile() const;
@@ -122,6 +154,12 @@ class ChromePageInfoDelegate : public PageInfoDelegate {
   raw_ptr<TrustSafetySentimentService> sentiment_service_;
 #endif
 
+  // Callback used to look up the BrowserWindowInterface for a WebContents.
+  //
+  // Defaults to searching via GlobalBrowserCollection::FindBrowserWithTab(),
+  // but can be overridden by callers for WebContents not directly hosted as
+  // browser tabs (e.g. payment handler dialogs or modal web dialogs).
+  GetBrowserCallback get_browser_callback_;
   raw_ptr<content::WebContents, AcrossTasksDanglingUntriaged> web_contents_;
   security_state::SecurityLevel security_level_for_tests_;
   security_state::VisibleSecurityState visible_security_state_for_tests_;

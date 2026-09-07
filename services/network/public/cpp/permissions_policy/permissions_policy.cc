@@ -23,14 +23,11 @@
 
 namespace {
 
-const std::array<network::mojom::PermissionsPolicyFeature, 5>
+const std::array<network::mojom::PermissionsPolicyFeature, 2>
     kDefinedOptInFeatures = {
         network::mojom::PermissionsPolicyFeature::kBrowsingTopics,
         network::mojom::PermissionsPolicyFeature::
-            kBrowsingTopicsBackwardCompatible,
-        network::mojom::PermissionsPolicyFeature::kSharedStorage,
-        network::mojom::PermissionsPolicyFeature::kRunAdAuction,
-        network::mojom::PermissionsPolicyFeature::kJoinAdInterestGroup};
+            kBrowsingTopicsBackwardCompatible};
 
 }  // namespace
 
@@ -377,7 +374,7 @@ const PermissionsPolicy::Allowlist PermissionsPolicy::GetAllowlistForFeature(
 std::optional<const PermissionsPolicy::Allowlist>
 PermissionsPolicy::GetAllowlistForFeatureIfExists(
     network::mojom::PermissionsPolicyFeature feature) const {
-  // Return an empty allowlist when disabled through inheritance.
+  // Return nullopt when disabled through inheritance.
   if (!IsFeatureEnabledByInheritedPolicy(feature)) {
     return std::nullopt;
   }
@@ -459,17 +456,14 @@ PermissionsPolicy::CreateAllowlistsAndReportingEndpoints(
     // "local-network", as "loopback-network" had already been set. This would
     // result in the document having only the "local-network-access" and
     // "local-network" features enabled.
-    if (base::FeatureList::IsEnabled(
-            features::kLocalNetworkAccessChecksSplitPermissions)) {
-      if (feature ==
-          network::mojom::PermissionsPolicyFeature::kLocalNetworkAccess) {
-        allow_lists_and_reporting_endpoints.allowlists_.emplace(
-            network::mojom::PermissionsPolicyFeature::kLocalNetwork,
-            Allowlist::FromDeclaration(parsed_declaration));
-        allow_lists_and_reporting_endpoints.allowlists_.emplace(
-            network::mojom::PermissionsPolicyFeature::kLoopbackNetwork,
-            Allowlist::FromDeclaration(parsed_declaration));
-      }
+    if (feature ==
+        network::mojom::PermissionsPolicyFeature::kLocalNetworkAccess) {
+      allow_lists_and_reporting_endpoints.allowlists_.emplace(
+          network::mojom::PermissionsPolicyFeature::kLocalNetwork,
+          Allowlist::FromDeclaration(parsed_declaration));
+      allow_lists_and_reporting_endpoints.allowlists_.emplace(
+          network::mojom::PermissionsPolicyFeature::kLoopbackNetwork,
+          Allowlist::FromDeclaration(parsed_declaration));
     }
   }
   return allow_lists_and_reporting_endpoints;
@@ -620,15 +614,12 @@ std::unique_ptr<PermissionsPolicy> PermissionsPolicy::CreateFromParentPolicy(
       //
       // then, since inherited policy computation is purely additive here, the
       // subframe will have the "local-network" feature enabled.
-      if (base::FeatureList::IsEnabled(
-              features::kLocalNetworkAccessChecksSplitPermissions)) {
-        if (feature ==
-            network::mojom::PermissionsPolicyFeature::kLocalNetworkAccess) {
-          inherited_policies.Add(
-              network::mojom::PermissionsPolicyFeature::kLocalNetwork);
-          inherited_policies.Add(
-              network::mojom::PermissionsPolicyFeature::kLoopbackNetwork);
-        }
+      if (feature ==
+          network::mojom::PermissionsPolicyFeature::kLocalNetworkAccess) {
+        inherited_policies.Add(
+            network::mojom::PermissionsPolicyFeature::kLocalNetwork);
+        inherited_policies.Add(
+            network::mojom::PermissionsPolicyFeature::kLoopbackNetwork);
       }
     }
   }

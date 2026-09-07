@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_PERFORMANCE_MANAGER_EXECUTION_CONTEXT_PRIORITY_SIDE_PANEL_LOADING_VOTER_H_
 
 #include "base/containers/flat_set.h"
+#include "base/memory/raw_ptr.h"
 #include "components/performance_manager/public/execution_context_priority/priority_voting_system.h"
 #include "components/performance_manager/public/graph/frame_node.h"
 #include "components/performance_manager/public/graph/graph_registered.h"
@@ -49,7 +50,7 @@ class SidePanelLoadingVoter : public GraphRegisteredImpl<SidePanelLoadingVoter>,
   VoterId voter_id() const { return voting_channel_.voter_id(); }
 
  private:
-  void SubmitVoteForPage(const PageNode* page_node);
+  void SetVoteForPage(const PageNode* page_node);
 
   // The voting channel where votes are submitted.
   VotingChannel voting_channel_;
@@ -57,10 +58,7 @@ class SidePanelLoadingVoter : public GraphRegisteredImpl<SidePanelLoadingVoter>,
   // The set of page nodes that represent Side Panel contents that has not yet
   // loaded. Once they start loading, they are removed from this set as the
   // content will only get its priority increased for the initial load.
-  base::flat_set<const PageNode*> side_panel_pages_;
-
-  // The set of frame nodes that have an active vote.
-  base::flat_set<const FrameNode*> frames_with_vote_;
+  base::flat_set<raw_ptr<const PageNode>> side_panel_pages_;
 };
 
 }  // namespace performance_manager::execution_context_priority

@@ -12,14 +12,15 @@
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/types/expected.h"
 #include "components/optimization_guide/core/model_execution/feature_keys.h"
 #include "components/optimization_guide/core/model_execution/model_execution_features.h"
 #include "components/optimization_guide/core/model_execution/model_execution_fetcher_impl.h"
 #include "components/optimization_guide/core/model_execution/optimization_guide_model_execution_error.h"
+#include "components/optimization_guide/core/model_execution/remote_model_execution_session_impl.h"
 #include "components/optimization_guide/core/model_execution/remote_model_executor.h"
 #include "components/optimization_guide/core/model_quality/model_quality_log_entry.h"
-#include "components/optimization_guide/core/optimization_guide_constants.h"
 #include "components/optimization_guide/core/optimization_guide_enums.h"
 #include "components/optimization_guide/core/optimization_guide_logger.h"
 #include "components/optimization_guide/core/optimization_guide_prefs.h"
@@ -28,10 +29,14 @@
 #include "components/optimization_guide/proto/common_types.pb.h"
 #include "net/base/url_util.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
+#include "services/network/public/mojom/network_context.mojom.h"
 
 namespace optimization_guide {
 
 namespace {
+
+constexpr char kOptimizationGuideServiceModelExecutionDefaultURL[] =
+    "https://chromemodelexecution-pa.googleapis.com/v1:Execute";
 
 const std::string& ProtoName(ModelBasedCapabilityKey feature) {
   return proto::ModelExecutionFeature_Name(
@@ -90,7 +95,6 @@ void RecordModelExecutionLatency(ModelBasedCapabilityKey feature,
 size_t GetMaxParallelFeatureExecutions(ModelBasedCapabilityKey feature) {
   switch (feature) {
     case ModelBasedCapabilityKey::kCompose:
-    case ModelBasedCapabilityKey::kTabOrganization:
     case ModelBasedCapabilityKey::kWallpaperSearch:
     case ModelBasedCapabilityKey::kTest:
     case ModelBasedCapabilityKey::kHistorySearch:
@@ -104,11 +108,43 @@ size_t GetMaxParallelFeatureExecutions(ModelBasedCapabilityKey feature) {
     case ModelBasedCapabilityKey::kSkills:
     case ModelBasedCapabilityKey::kScamDetection:
     case ModelBasedCapabilityKey::kGeminiAntiscamProtection:
+    case ModelBasedCapabilityKey::kContentAnnotation:
+    case ModelBasedCapabilityKey::kFinds:
+    case ModelBasedCapabilityKey::kAnnotationReducerOnePResolver:
+    case ModelBasedCapabilityKey::kAnnotationReducerQueryClassifier:
+    case ModelBasedCapabilityKey::kContextualCueing:
+    case ModelBasedCapabilityKey::kCardRecommendations:
+    case ModelBasedCapabilityKey::kReadAloudGenerateText:
       return 1;
+    case ModelBasedCapabilityKey::kReadAloudSynthesize:
+      // Since ReadAloud prefetches speech synthesis chunks concurrently for
+      // low-latency playback, allow multiple parallel executions.
+      return 10;
+    case ModelBasedCapabilityKey::kContextHub:
+      // Allow multiple parallel executions for `kContextHub` due to the large
+      // size of tab APC, which is inputted per tab into the model.
+      return 10;
     case ModelBasedCapabilityKey::kFormsClassifications:
       // Since there can be multiple forms on a single page, multiple parallel
       // executions are allowed for `kFormsClassifications`.
       return 10;
+    case ModelBasedCapabilityKey::kUpdaterChat:
+      // Allow multiple parallel executions for `kUpdaterChat` so the LLM
+      // can generate summaries for multiple log snippets concurrently,
+      // enabling the front-end to display a multi-snippet status view.
+      return 10;
+  }
+}
+
+bool IsEligibleForPrivateAI(ModelBasedCapabilityKey feature) {
+  switch (feature) {
+    case ModelBasedCapabilityKey::kContextualCueing:
+    case ModelBasedCapabilityKey::kFormsClassifications:
+    case ModelBasedCapabilityKey::kZeroStateSuggestions:
+    case ModelBasedCapabilityKey::kPasswordChangeSubmission:
+      return true;
+    default:
+      return false;
   }
 }
 
@@ -126,10 +162,7 @@ ModelExecutionManager::ModelExecutionManager(
         model_quality_uploader_service)
     : model_quality_uploader_service_(model_quality_uploader_service),
       optimization_guide_logger_(optimization_guide_logger),
-      model_execution_service_url_(net::AppendOrReplaceQueryParameter(
-          switches::GetModelExecutionServiceURL(),
-          "key",
-          features::GetOptimizationGuideServiceAPIKey())),
+      model_execution_service_url_(GetModelExecutionServiceURL()),
       delegate_(std::move(delegate)),
       url_loader_factory_(url_loader_factory),
       identity_manager_(identity_manager) {}
@@ -161,8 +194,10 @@ void ModelExecutionManager::ExecuteModel(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (test_execution_results_.find(feature) != test_execution_results_.end()) {
-    std::move(callback).Run(std::move(test_execution_results_[feature]),
-                            nullptr);
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(std::move(callback),
+                       std::move(test_execution_results_[feature]), nullptr));
     test_execution_results_.erase(feature);
     return;
   }
@@ -172,33 +207,6 @@ void ModelExecutionManager::ExecuteModel(
         optimization_guide_common::mojom::LogSource::MODEL_EXECUTION,
         optimization_guide_logger_)
         << "ExecuteModel: " << ProtoName(feature);
-    switch (feature) {
-      case ModelBasedCapabilityKey::kTabOrganization: {
-        proto::Any any = AnyWrapProto(request_metadata);
-        auto tab_request = optimization_guide::ParsedAnyMetadata<
-            optimization_guide::proto::TabOrganizationRequest>(any);
-        std::string tabs = "";
-        for (const auto& tab : tab_request->tabs()) {
-          tabs += base::StringPrintf("%s\"%s\"", tabs.empty() ? "" : ",",
-                                     tab.title().c_str());
-        }
-        OPTIMIZATION_GUIDE_LOGGER(
-            optimization_guide_common::mojom::LogSource::MODEL_EXECUTION,
-            optimization_guide_logger_)
-            << "TabOrganization Request: "
-            << base::StringPrintf(
-                   "{\"model_strategy\": \"%s\", \"tabs\" : [%s]}",
-                   optimization_guide::proto::
-                       TabOrganizationRequest_TabOrganizationModelStrategy_Name(
-                           tab_request->model_strategy()),
-                   tabs.c_str());
-
-        break;
-      }
-      default: {
-        break;
-      }
-    }
   }
 
   // Create log request if not already provided.
@@ -214,20 +222,62 @@ void ModelExecutionManager::ExecuteModel(
     fetchers_for_feature.erase(fetchers_for_feature.begin());
   }
   FetcherId fetcher_id = next_model_execution_fetcher_id++;
-  // Currently only ZSS is supported by legion. Update or remove this CHECK when
-  // other features are supported too.
-  CHECK(service_type != ModelExecutionServiceType::kLegion ||
-        feature == ModelBasedCapabilityKey::kZeroStateSuggestions)
+  CHECK(service_type != ModelExecutionServiceType::kPrivateAi ||
+        IsEligibleForPrivateAI(feature))
       << feature;
   base::TimeTicks start_time = base::TimeTicks::Now();
-  auto fetcher_it = fetchers_for_feature.emplace(
-      fetcher_id, CreateModelExecutionFetcher(service_type));
+  auto fetcher = CreateModelExecutionFetcher(service_type);
+  if (!fetcher) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(
+            std::move(callback),
+            OptimizationGuideModelExecutionResult(
+                base::unexpected(OptimizationGuideModelExecutionError::
+                                     FromModelExecutionError(
+                                         ModelExecutionError::kGenericFailure)),
+                nullptr),
+            nullptr));
+    return;
+  }
+  auto fetcher_it =
+      fetchers_for_feature.emplace(fetcher_id, std::move(fetcher));
   fetcher_it.first->second->ExecuteModel(
       feature, identity_manager_, request_metadata, timeout,
       base::BindOnce(&ModelExecutionManager::OnModelExecuteResponse,
                      weak_ptr_factory_.GetWeakPtr(), feature, fetcher_id,
                      std::move(log_ai_data_request), std::move(callback),
                      start_time));
+}
+
+std::unique_ptr<RemoteModelExecutionSession>
+ModelExecutionManager::StartStreamingSession(
+    ModelBasedCapabilityKey feature,
+    const StreamingModelExecutionOptions& options,
+    OptimizationGuideModelExecutionStreamingCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (!delegate_) {
+    return nullptr;
+  }
+
+  network::mojom::NetworkContext* network_context =
+      delegate_->GetNetworkContext();
+  if (!network_context) {
+    return nullptr;
+  }
+
+  if (optimization_guide_logger_ &&
+      optimization_guide_logger_->ShouldEnableDebugLogs()) {
+    OPTIMIZATION_GUIDE_LOGGER(
+        optimization_guide_common::mojom::LogSource::MODEL_EXECUTION,
+        optimization_guide_logger_)
+        << "StartStreamingSession: " << ProtoName(feature);
+  }
+
+  return std::make_unique<RemoteModelExecutionSessionImpl>(
+      feature, options, std::move(callback), network_context, identity_manager_,
+      optimization_guide_logger_);
 }
 
 std::unique_ptr<ModelExecutionFetcher>
@@ -238,9 +288,11 @@ ModelExecutionManager::CreateModelExecutionFetcher(
       return std::make_unique<ModelExecutionFetcherImpl>(
           url_loader_factory_, model_execution_service_url_,
           optimization_guide_logger_);
-    case ModelExecutionServiceType::kLegion:
-      CHECK(delegate_);
-      return delegate_->CreateLegionFetcher();
+    case ModelExecutionServiceType::kPrivateAi:
+      if (!delegate_) {
+        return nullptr;
+      }
+      return delegate_->CreatePrivateAiFetcher();
   }
 }
 
@@ -338,37 +390,6 @@ void ModelExecutionManager::OnModelExecuteResponse(
         optimization_guide_common::mojom::LogSource::MODEL_EXECUTION,
         optimization_guide_logger_)
         << "ExecuteModel Response: " << ProtoName(feature);
-    switch (feature) {
-      case ModelBasedCapabilityKey::kTabOrganization: {
-        std::string message = "";
-        auto tab_response = optimization_guide::ParsedAnyMetadata<
-            optimization_guide::proto::TabOrganizationResponse>(
-            execute_response->response_metadata());
-        message += "Response: [";
-        int group_cnt = 0;
-        for (const auto& tab_group : tab_response->tab_groups()) {
-          std::string tab_titles = "";
-          for (const auto& tab : tab_group.tabs()) {
-            tab_titles +=
-                base::StringPrintf("%s\" %s \"", tab_titles.empty() ? "" : ",",
-                                   tab.title().c_str());
-          }
-          message += base::StringPrintf(
-              "%s{"
-              "\"label\": \"%s\", "
-              "\"tabs\": [%s] }",
-              group_cnt > 0 ? "," : "", tab_group.label().c_str(),
-              tab_titles.c_str());
-          group_cnt += 1;
-        }
-        message += "]";
-        scoped_logger.set_message(message);
-        break;
-      }
-      default: {
-        break;
-      }
-    }
   }
 
   RecordModelExecutionResultHistogram(feature, true);
@@ -376,6 +397,16 @@ void ModelExecutionManager::OnModelExecuteResponse(
                               base::ok(execute_response->response_metadata()),
                               std::move(execution_info)),
                           std::move(log_entry));
+}
+
+GURL GetModelExecutionServiceURL() {
+  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+  if (command_line->HasSwitch(
+          kOptimizationGuideServiceModelExecutionURLSwitch)) {
+    return GURL(command_line->GetSwitchValueASCII(
+        kOptimizationGuideServiceModelExecutionURLSwitch));
+  }
+  return GURL(kOptimizationGuideServiceModelExecutionDefaultURL);
 }
 
 }  // namespace optimization_guide

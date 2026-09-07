@@ -15,7 +15,7 @@ import org.chromium.blink.mojom.DisplayMode;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider.CustomTabsUiType;
 import org.chromium.chrome.browser.ui.desktop_windowing.AppHeaderUtils;
 import org.chromium.chrome.browser.web_app_header.R;
 import org.chromium.components.browser_ui.desktop_windowing.DesktopWindowStateManager;
@@ -109,8 +109,8 @@ public class WebAppHeaderUtils {
     }
 
     /**
-     * Checks whether standalone display mode is enabled. This includes checking that the the
-     * standalone feature flag is enabled, as well as the type of web app of the intent.
+     * Checks whether standalone display mode is enabled. This includes checking the type of web app
+     * of the intent.
      *
      * @param intentDataProvider contains intent data related to the current browser service.
      * @return true when currently running a trusted web app in standalone mode, else return false.
@@ -122,7 +122,7 @@ public class WebAppHeaderUtils {
 
         return intentDataProvider.isTrustedWebActivity()
                 && displayMode == DisplayMode.STANDALONE
-                && ChromeFeatureList.sAndroidTwaOriginDisplay.isEnabled();
+                && Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM;
     }
 
     /**
@@ -150,20 +150,26 @@ public class WebAppHeaderUtils {
 
         return intentDataProvider.isTrustedWebActivity()
                 && displayMode == DisplayMode.WINDOW_CONTROLS_OVERLAY
-                && isWindowControlsOverlayFlagEnabled();
+                && isWindowControlsOverlayEnabled();
     }
 
-    /** Checks whether the window controls overlay feature flag is enabled. */
+    /**
+     * Checks whether window controls overlay is enabled for Android 15+ SDK.
+     *
+     * @return true if running on SDK >= 35, false otherwise.
+     */
     @ChecksSdkIntAtLeast(api = Build.VERSION_CODES.VANILLA_ICE_CREAM)
-    public static boolean isWindowControlsOverlayFlagEnabled() {
-        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM
-                && ChromeFeatureList.sAndroidWindowControlsOverlay.isEnabled();
+    public static boolean isWindowControlsOverlayEnabled() {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM;
     }
 
     /** Checks whether a display mode that requires the custom web app header is enabled. */
     @ChecksSdkIntAtLeast(api = Build.VERSION_CODES.VANILLA_ICE_CREAM)
     public static boolean isWebAppHeaderEnabled(
             BrowserServicesIntentDataProvider intentDataProvider) {
+        if (intentDataProvider.getUiType() == CustomTabsUiType.POPUP) {
+            return false;
+        }
         return isMinimalUiEnabled(intentDataProvider)
                 || isStandaloneEnabled(intentDataProvider)
                 || isWindowControlsOverlayEnabled(intentDataProvider);
@@ -218,7 +224,7 @@ public class WebAppHeaderUtils {
      */
     static void recordReloadButtonEvent(@ReloadType int type) {
         RecordHistogram.recordEnumeratedHistogram(
-                "CustomTabs.WebAppHeader.ReloadButtonEvent", type, ReloadType.MAX_VALUE);
+                "CustomTabs.WebAppHeader.ReloadButtonEvent", type, ReloadType.MAX_VALUE + 1);
     }
 
     /**
@@ -228,6 +234,6 @@ public class WebAppHeaderUtils {
      */
     static void recordBackButtonEvent(@BackEvent int type) {
         RecordHistogram.recordEnumeratedHistogram(
-                "CustomTabs.WebAppHeader.BackButtonEvent", type, ReloadType.MAX_VALUE);
+                "CustomTabs.WebAppHeader.BackButtonEvent", type, BackEvent.MAX_VALUE + 1);
     }
 }

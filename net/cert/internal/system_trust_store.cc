@@ -163,18 +163,43 @@ class SystemTrustStoreChromeWithUnOwnedSystemStore : public SystemTrustStore {
     return trust_store_chrome_->version();
   }
 
+  std::optional<base::Time> signer_set_timestamp() const override {
+    return trust_store_chrome_->signer_set_timestamp();
+  }
+
   std::optional<base::Time> mtc_metadata_update_time() const override {
     return trust_store_chrome_->mtc_metadata_update_time();
   }
 
   base::span<const ChromeRootCertConstraints> GetChromeRootConstraints(
-      const bssl::ParsedCertificate* cert) const override {
-    return trust_store_chrome_->GetConstraintsForCert(cert);
+      const bssl::CertPathBuilderResultPath* path) const override {
+    return trust_store_chrome_->GetConstraintsForCert(path);
   }
 
   const TrustStoreChrome::MtcAnchorExtraData* GetMTCAnchorData(
-      base::span<const uint8_t> log_id) const override {
-    return trust_store_chrome_->GetMTCAnchorData(log_id);
+      base::span<const uint8_t> ca_id) const override {
+    return trust_store_chrome_->GetMTCAnchorData(ca_id);
+  }
+
+  std::optional<bssl::VerifyCertificateChainDelegate::MTCCosigner>
+  GetMtcMirrorKey(base::span<const uint8_t> cosigner_id) const override {
+    return trust_store_chrome_->GetMtcMirrorKey(cosigner_id);
+  }
+
+  bool IsMtcCosignerPolicySatisfied(
+      const bssl::ParsedCertificate& target_cert,
+      base::Time current_time,
+      const bssl::MTCAnchor* mtc_anchor,
+      base::span<const std::vector<uint8_t>> valid_additional_cosigners,
+      const NetLogWithSource& net_log) const override {
+    return trust_store_chrome_->IsMtcCosignerPolicySatisfied(
+        target_cert, current_time, mtc_anchor, valid_additional_cosigners,
+        net_log);
+  }
+
+  std::optional<int32_t> GetCrsRootIdForCert(
+      const bssl::CertPathBuilderResultPath* path) const override {
+    return trust_store_chrome_->GetCrsRootIdForCert(path);
   }
 
   bssl::TrustStore* eutl_trust_store() override {
@@ -228,8 +253,7 @@ std::unique_ptr<SystemTrustStore> CreateSystemTrustStoreChromeForTesting(
 std::unique_ptr<SystemTrustStore> CreateSslSystemTrustStoreChromeRoot(
     std::unique_ptr<TrustStoreChrome> chrome_root) {
   return std::make_unique<SystemTrustStoreChrome>(
-      std::move(chrome_root), std::make_unique<TrustStoreNSS>(
-                                  TrustStoreNSS::UseTrustFromAllUserSlots()));
+      std::move(chrome_root), std::make_unique<TrustStoreNSS>());
 }
 
 #elif BUILDFLAG(IS_MAC)
@@ -385,6 +409,12 @@ void InitializeTrustStoreAndroid() {
   // ObserveCertDBChanges on the singleton TrustStoreAndroid.
   GetGlobalTrustStoreAndroidForCRS()->ObserveCertDBChanges();
 
+  static bool initialized = false;
+  if (initialized) {
+    return;
+  }
+
+  initialized = true;
   base::ThreadPool::PostTask(
       FROM_HERE,
       {base::MayBlock(), base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN},

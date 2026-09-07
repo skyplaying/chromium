@@ -6,14 +6,13 @@
 
 #include "base/metrics/histogram.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "extensions/buildflags/buildflags.h"
 #include "url/gurl.h"
 #include "url/url_constants.h"
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 // GN doesn't understand conditional includes, so we need nogncheck here.
 #include "extensions/common/constants.h"  // nogncheck
 #endif
@@ -34,7 +33,7 @@ const char kFollowOnlyWhenPrerenderShown[] = "follow-only-when-prerender-shown";
 
 bool DoesURLHaveValidScheme(const GURL& url) {
   return (url.SchemeIsHTTPOrHTTPS() ||
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
           url.SchemeIs(extensions::kExtensionScheme) ||
 #endif
           url.SchemeIs(url::kDataScheme));

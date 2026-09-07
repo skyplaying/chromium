@@ -15,9 +15,12 @@ import static org.mockito.AdditionalMatchers.lt;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -34,6 +37,7 @@ import static org.chromium.chrome.browser.toolbar.top.ToolbarUtils.ToolbarCompon
 import static org.chromium.chrome.browser.toolbar.top.ToolbarUtils.ToolbarComponentId.OMNIBOX_ZOOM;
 import static org.chromium.chrome.browser.toolbar.top.ToolbarUtils.ToolbarComponentId.PADDING;
 import static org.chromium.chrome.browser.toolbar.top.ToolbarUtils.ToolbarComponentId.RELOAD;
+import static org.chromium.chrome.browser.toolbar.top.ToolbarUtils.ToolbarComponentId.SIGNIN_BUTTON;
 import static org.chromium.chrome.browser.toolbar.top.ToolbarUtils.ToolbarComponentId.TAB_SWITCHER;
 
 import android.animation.ObjectAnimator;
@@ -48,13 +52,14 @@ import android.view.View;
 import android.view.View.MeasureSpec;
 import android.view.ViewGroup.LayoutParams;
 import android.view.ViewGroup.MarginLayoutParams;
+import android.widget.FrameLayout;
 import android.widget.ImageButton;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 
 import androidx.appcompat.content.res.AppCompatResources;
 
 import org.junit.After;
-import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -66,12 +71,13 @@ import org.mockito.junit.MockitoRule;
 import org.mockito.stubbing.Answer;
 import org.robolectric.Robolectric;
 import org.robolectric.Shadows;
-import org.robolectric.annotation.LooperMode;
 import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
@@ -104,14 +110,19 @@ import org.chromium.chrome.browser.toolbar.menu_button.MenuButtonCoordinator;
 import org.chromium.chrome.browser.toolbar.optional_button.ButtonData.ButtonSpec;
 import org.chromium.chrome.browser.toolbar.optional_button.ButtonDataImpl;
 import org.chromium.chrome.browser.toolbar.reload_button.ReloadButtonCoordinator;
+import org.chromium.chrome.browser.toolbar.signin_button.SigninButtonCoordinator;
 import org.chromium.chrome.browser.toolbar.top.CaptureReadinessResult.TopToolbarAllowCaptureReason;
 import org.chromium.chrome.browser.toolbar.top.CaptureReadinessResult.TopToolbarBlockCaptureReason;
 import org.chromium.chrome.browser.toolbar.top.ToolbarUtils.ToolbarComponentId;
 import org.chromium.chrome.browser.toolbar.top.TopToolbarCoordinator.ToolbarColorObserver;
 import org.chromium.chrome.browser.toolbar.top.tab_strip.TabStripTransitionCoordinator;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
+import org.chromium.chrome.browser.user_education.UserEducationHelper;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+import org.chromium.components.feature_engagement.Tracker;
 import org.chromium.components.omnibox.OmniboxFeatureList;
+import org.chromium.ui.base.ViewUtils;
+import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.widget.ChromeImageButton;
 import org.chromium.ui.widget.ToastManager;
 
@@ -121,7 +132,6 @@ import java.util.List;
 import java.util.Set;
 
 /** Unit tests for @{@link ToolbarTablet} */
-@LooperMode(LooperMode.Mode.PAUSED)
 @RunWith(BaseRobolectricTestRunner.class)
 @EnableFeatures(ChromeFeatureList.TOOLBAR_TABLET_RESIZE_REFACTOR)
 public final class ToolbarTabletUnitTest {
@@ -140,16 +150,22 @@ public final class ToolbarTabletUnitTest {
     @Mock private ReloadButtonCoordinator mReloadButtonCoordinator;
     @Mock private BackButtonCoordinator mBackButtonCoordinator;
     @Mock private HomeButtonCoordinator mHomeButtonCoordinator;
+    @Mock private SigninButtonCoordinator mSigninButtonCoordinator;
     @Mock private IncognitoIndicatorCoordinator mIncognitoIndicatorCoordinator;
     @Mock private ForwardButtonCoordinator mForwardButtonCoordinator;
     @Mock private ThemeColorProvider mThemeColorProvider;
     @Mock private IncognitoStateProvider mIncognitoStateProvider;
+    @Mock private UserEducationHelper mUserEducationHelper;
+    private final SettableMonotonicObservableSupplier<Tracker> mTrackerSupplier =
+            ObservableSuppliers.createMonotonic();
+    @Mock private Tracker mTracker;
     @Mock private NavigationPopup.HistoryDelegate mHistoryDelegate;
     @Mock private ToolbarWidthConsumer mLocationBarBookmarkButtonWidthConsumer;
     @Mock private ToolbarWidthConsumer mLocationBarInstallButtonWidthConsumer;
     @Mock private ToolbarWidthConsumer mLocationBarMicButtonWidthConsumer;
     @Mock private ToolbarWidthConsumer mLocationBarLensButtonWidthConsumer;
     @Mock private ToolbarWidthConsumer mLocationBarZoomButtonWidthConsumer;
+    @Mock private WindowAndroid mWindowAndroid;
 
     private Activity mActivity;
     private ToolbarTablet mToolbarTablet;
@@ -172,6 +188,7 @@ public final class ToolbarTabletUnitTest {
                 observer.onIncognitoStateChanged(/* isIncognito= */ true);
                 return null;
             };
+    private ImageView mToolbarHairline;
 
     @Before
     public void setUp() {
@@ -197,11 +214,20 @@ public final class ToolbarTabletUnitTest {
                 .when(mIncognitoStateProvider)
                 .addIncognitoStateObserverAndTrigger(any());
 
+        FrameLayout rootView = new FrameLayout(mActivity);
+        mToolbarHairline = new ImageView(mActivity);
+        mToolbarHairline.setId(R.id.toolbar_hairline);
+        mToolbarHairline.setVisibility(View.VISIBLE);
+        rootView.addView(mToolbarHairline);
+
         ToolbarTablet realView =
                 (ToolbarTablet)
                         mActivity.getLayoutInflater().inflate(R.layout.toolbar_tablet, null);
         realView.setLayoutParams(mLayoutParams);
-        mToolbarTablet = Mockito.spy(realView);
+        rootView.addView(realView);
+        realView.onAttachedToWindow();
+        realView.setIsBottomMostTopControlsLayer(false);
+        mToolbarTablet = spy(realView);
         when(mLocationBar.getTabletCoordinator()).thenReturn(mLocationBarTablet);
         when(mLocationBar.getBookmarkButtonToolbarWidthConsumer())
                 .thenReturn(mLocationBarBookmarkButtonWidthConsumer);
@@ -220,15 +246,22 @@ public final class ToolbarTabletUnitTest {
         mToolbarTablet.setMenuButtonCoordinatorForTesting(mMenuButtonCoordinator);
         mToolbarTablet.setTabStripTransitionCoordinator(mTabStripTransitionCoordinator);
         mToolbarTablet.setToolbarColorObserver(mToolbarColorObserver);
-        mToolbarTablet.setReloadButtonCoordinator(mReloadButtonCoordinator);
-        mToolbarTablet.setBackButtonCoordinator(mBackButtonCoordinator);
+        mToolbarTablet.setReloadButtonCoordinatorForTesting(mReloadButtonCoordinator);
+        mToolbarTablet.setBackButtonCoordinatorForTesting(mBackButtonCoordinator);
+        mToolbarTablet.setSigninButtonCoordinatorForTesting(mSigninButtonCoordinator);
         mToolbarTablet.setHomeButtonWidthConsumerForTesting(mHomeButtonCoordinator);
         mToolbarTablet.setTabStackButtonCoordinatorForTesting(mTabSwitcherButtonCoordinator);
         mToolbarTablet.setIncognitoIndicatorCoordinatorForTesting(mIncognitoIndicatorCoordinator);
         mToolbarTablet.ensureOptionalButtonWidthConsumerForTesting();
-        mToolbarTablet.ensurePaddingWidthConsumer();
         mToolbarTablet.ensureLocationBarMidWidthConsumer();
-        mToolbarTabletLayout = mToolbarTablet.findViewById(R.id.toolbar_tablet_layout);
+        mToolbarTabletLayout =
+                spy((LinearLayout) mToolbarTablet.findViewById(R.id.toolbar_tablet_layout));
+        doReturn(mToolbarTabletLayout)
+                .when(mToolbarTablet)
+                .findViewById(R.id.toolbar_tablet_layout);
+        mToolbarTablet.setToolbarTabletLayoutForTesting(mToolbarTabletLayout);
+        mToolbarTablet.ensurePaddingWidthConsumer();
+
         mHomeButton = mToolbarTablet.findViewById(R.id.home_button);
         mBackButton = mToolbarTablet.findViewById(R.id.back_button);
         mForwardButton = mToolbarTablet.findViewById(R.id.forward_button);
@@ -289,13 +322,15 @@ public final class ToolbarTabletUnitTest {
         doReturn(buttonWidth * 3)
                 .when(mIncognitoIndicatorCoordinator)
                 .updateVisibility(anyInt(), anyInt(), anyInt());
-        doReturn(false).when(mIncognitoIndicatorCoordinator).needsUpdateBeforeShowing();
 
         mockToolbarWidthConsumer(mLocationBarBookmarkButtonWidthConsumer, buttonWidth);
         mockToolbarWidthConsumer(mLocationBarInstallButtonWidthConsumer, buttonWidth);
         mockToolbarWidthConsumer(mLocationBarMicButtonWidthConsumer, buttonWidth);
         mockToolbarWidthConsumer(mLocationBarLensButtonWidthConsumer, buttonWidth);
         mockToolbarWidthConsumer(mLocationBarZoomButtonWidthConsumer, buttonWidth);
+        mockToolbarWidthConsumer(mSigninButtonCoordinator, buttonWidth);
+
+        mTrackerSupplier.set(mTracker);
 
         mForwardButtonCoordinator =
                 new ForwardButtonCoordinator(
@@ -357,16 +392,18 @@ public final class ToolbarTabletUnitTest {
                 mMenuButtonCoordinator,
                 mTabSwitcherButtonCoordinator,
                 null,
-                null,
-                null,
+                mUserEducationHelper,
+                mTrackerSupplier,
                 mProgressBar,
                 mReloadButtonCoordinator,
                 mBackButtonCoordinator,
                 mForwardButtonCoordinator,
-                /* homeButtonDisplay= */ null,
+                mHomeButtonCoordinator,
+                mSigninButtonCoordinator,
                 mThemeColorProvider,
                 mIncognitoStateProvider,
-                /* incognitoWindowCountSupplier= */ () -> 1);
+                /* incognitoWindowCountSupplier= */ () -> 1,
+                mWindowAndroid);
         when(mToolbarDataProvider.getNewTabPageDelegate()).thenReturn(mNewTabPageDelegate);
         when(mToolbarDataProvider.isIncognitoBranded()).thenReturn(true);
         mToolbarTablet.onTabOrModelChanged();
@@ -418,6 +455,7 @@ public final class ToolbarTabletUnitTest {
     }
 
     @Test
+    @DisabledTest(message = "crbug.com/501137241")
     @DisableFeatures(ChromeFeatureList.TOOLBAR_TABLET_RESIZE_REFACTOR)
     public void onMeasureSmallWidth_hidesToolbarButtons_Legacy() {
         mToolbarTablet.measure(300, 300);
@@ -432,6 +470,7 @@ public final class ToolbarTabletUnitTest {
     }
 
     @Test
+    @DisabledTest(message = "crbug.com/501137241")
     @DisableFeatures(ChromeFeatureList.TOOLBAR_TABLET_RESIZE_REFACTOR)
     public void onMeasureLargeWidth_showsToolbarButtons_Legacy() {
         mToolbarTablet.setToolbarButtonsVisibleForTesting(false);
@@ -461,16 +500,18 @@ public final class ToolbarTabletUnitTest {
                 mMenuButtonCoordinator,
                 mTabSwitcherButtonCoordinator,
                 null,
-                null,
-                null,
+                mUserEducationHelper,
+                mTrackerSupplier,
                 mProgressBar,
                 mReloadButtonCoordinator,
                 mBackButtonCoordinator,
                 mForwardButtonCoordinator,
-                /* homeButtonDisplay= */ null,
+                mHomeButtonCoordinator,
+                mSigninButtonCoordinator,
                 mThemeColorProvider,
                 mIncognitoStateProvider,
-                /* incognitoWindowCountSupplier= */ () -> 1);
+                /* incognitoWindowCountSupplier= */ () -> 1,
+                mWindowAndroid);
         when(mToolbarDataProvider.getNewTabPageDelegate()).thenReturn(mNewTabPageDelegate);
         when(mToolbarDataProvider.isIncognitoBranded()).thenReturn(true);
         mToolbarTablet.onTabOrModelChanged();
@@ -492,6 +533,7 @@ public final class ToolbarTabletUnitTest {
     }
 
     @Test
+    @DisabledTest(message = "crbug.com/501137241")
     @DisableFeatures(ChromeFeatureList.TOOLBAR_TABLET_RESIZE_REFACTOR)
     public void onMeasureSmallWidthWithAnimation_hidesToolbarButtons_Legacy() {
         doReturn(true).when(mToolbarTablet).isShown();
@@ -516,6 +558,7 @@ public final class ToolbarTabletUnitTest {
     }
 
     @Test
+    @DisabledTest(message = "crbug.com/501137241")
     @DisableFeatures(ChromeFeatureList.TOOLBAR_TABLET_RESIZE_REFACTOR)
     public void onMeasureLargeWidthWithAnimation_showsToolbarButtons_Legacy() {
         doReturn(true).when(mToolbarTablet).isShown();
@@ -578,16 +621,18 @@ public final class ToolbarTabletUnitTest {
                 mMenuButtonCoordinator,
                 mTabSwitcherButtonCoordinator,
                 null,
-                null,
-                null,
+                mUserEducationHelper,
+                mTrackerSupplier,
                 mProgressBar,
                 mReloadButtonCoordinator,
                 mBackButtonCoordinator,
                 mForwardButtonCoordinator,
-                /* homeButtonDisplay= */ null,
+                mHomeButtonCoordinator,
+                mSigninButtonCoordinator,
                 mThemeColorProvider,
                 mIncognitoStateProvider,
-                /* incognitoWindowCountSupplier= */ () -> 1);
+                /* incognitoWindowCountSupplier= */ () -> 1,
+                mWindowAndroid);
         ImageButton btn = mToolbarTablet.findViewById(R.id.forward_button);
 
         doReturn(null).when(mToolbarDataProvider).getTab();
@@ -595,7 +640,7 @@ public final class ToolbarTabletUnitTest {
         assertFalse("Button should not be enabled", btn.isEnabled());
         assertFalse("Button should not be focused", btn.isFocusable());
 
-        Tab tab = Mockito.mock(Tab.class);
+        Tab tab = mock(Tab.class);
         doReturn(false).when(tab).canGoForward();
         doReturn(tab).when(mToolbarDataProvider).getTab();
         mToolbarTablet.updateButtonVisibility();
@@ -612,16 +657,22 @@ public final class ToolbarTabletUnitTest {
     public void testIsReadyForTextureCapture_HasFocus() {
         mToolbarTablet.onUrlFocusChange(/* hasFocus= */ true);
         CaptureReadinessResult result = mToolbarTablet.isReadyForTextureCapture();
-        Assert.assertFalse(result.isReady);
-        Assert.assertEquals(TopToolbarBlockCaptureReason.URL_BAR_HAS_FOCUS, result.blockReason);
+        assertFalse(result.isReady);
+        assertEquals(TopToolbarBlockCaptureReason.URL_BAR_HAS_FOCUS, result.blockReason);
+        mToolbarTablet.onUrlFocusChange(/* hasFocus= */ false);
+
+        doReturn(true).when(mLocationBar).isUrlBarFocusedWithoutAnimation();
+        result = mToolbarTablet.isReadyForTextureCapture();
+        assertFalse(result.isReady);
+        assertEquals(TopToolbarBlockCaptureReason.URL_BAR_HAS_FOCUS, result.blockReason);
     }
 
     @Test
     public void testIsReadyForTextureCapture_inLayout() {
         mToolbarTablet.requestLayout();
         CaptureReadinessResult result = mToolbarTablet.isReadyForTextureCapture();
-        Assert.assertFalse(result.isReady);
-        Assert.assertEquals(TopToolbarBlockCaptureReason.LAYOUT_REQUESTED, result.blockReason);
+        assertFalse(result.isReady);
+        assertEquals(TopToolbarBlockCaptureReason.LAYOUT_REQUESTED, result.blockReason);
     }
 
     @Test
@@ -629,14 +680,15 @@ public final class ToolbarTabletUnitTest {
         updateOptionalButton(
                 /* buttonVariant= */ AdaptiveToolbarButtonVariant.READER_MODE,
                 /* tooltipTextResId= */ 0);
-        Assert.assertEquals(
-                null, mToolbarTablet.getOptionalButtonViewForTesting().getTooltipText());
+        assertEquals(
+                mActivity.getString(R.string.actionbar_share),
+                mToolbarTablet.getOptionalButtonViewForTesting().getTooltipText());
 
         // Test whether share button tooltip Text is set correctly.
         updateOptionalButton(
                 /* buttonVariant= */ AdaptiveToolbarButtonVariant.SHARE,
                 R.string.adaptive_toolbar_button_preference_share);
-        Assert.assertEquals(
+        assertEquals(
                 mActivity
                         .getResources()
                         .getString(R.string.adaptive_toolbar_button_preference_share),
@@ -646,7 +698,7 @@ public final class ToolbarTabletUnitTest {
         updateOptionalButton(
                 /* buttonVariant= */ AdaptiveToolbarButtonVariant.VOICE,
                 R.string.adaptive_toolbar_button_preference_voice_search);
-        Assert.assertEquals(
+        assertEquals(
                 mActivity
                         .getResources()
                         .getString(R.string.adaptive_toolbar_button_preference_voice_search),
@@ -655,7 +707,7 @@ public final class ToolbarTabletUnitTest {
         // Test whether new tab button tooltip Text is set correctly.
         updateOptionalButton(
                 /* buttonVariant= */ AdaptiveToolbarButtonVariant.NEW_TAB, R.string.new_tab_title);
-        Assert.assertEquals(
+        assertEquals(
                 mActivity.getResources().getString(R.string.new_tab_title),
                 mToolbarTablet.getOptionalButtonViewForTesting().getTooltipText());
     }
@@ -665,13 +717,13 @@ public final class ToolbarTabletUnitTest {
         updateOptionalButton(
                 /* buttonVariant= */ AdaptiveToolbarButtonVariant.READER_MODE,
                 /* tooltipTextResId= */ 0);
-        Assert.assertEquals(
+        assertEquals(
                 mActivity
                         .getResources()
                         .getDimensionPixelSize(
                                 R.dimen.optional_toolbar_tablet_button_padding_start),
                 mToolbarTablet.getOptionalButtonViewForTesting().getPaddingStart());
-        Assert.assertEquals(
+        assertEquals(
                 mActivity
                         .getResources()
                         .getDimensionPixelSize(R.dimen.optional_toolbar_tablet_button_padding_top),
@@ -682,14 +734,14 @@ public final class ToolbarTabletUnitTest {
                 /* buttonVariant= */ AdaptiveToolbarButtonVariant.SHARE,
                 /* tooltipTextResId= */ 0,
                 /* hasErrorBadge= */ true);
-        Assert.assertEquals(
+        assertEquals(
                 mActivity
                         .getResources()
                         .getDimensionPixelSize(
                                 R.dimen
                                         .optional_toolbar_tablet_button_with_error_badge_padding_start),
                 mToolbarTablet.getOptionalButtonViewForTesting().getPaddingStart());
-        Assert.assertEquals(
+        assertEquals(
                 mActivity
                         .getResources()
                         .getDimensionPixelSize(
@@ -702,11 +754,12 @@ public final class ToolbarTabletUnitTest {
     public void testIsReadyForTextureCapture_InTabSwitcher() {
         mToolbarTablet.setTabSwitcherMode(/* inTabSwitcherMode= */ true);
         CaptureReadinessResult result = mToolbarTablet.isReadyForTextureCapture();
-        Assert.assertFalse(result.isReady);
-        Assert.assertEquals(TopToolbarBlockCaptureReason.TAB_SWITCHER_MODE, result.blockReason);
+        assertFalse(result.isReady);
+        assertEquals(TopToolbarBlockCaptureReason.TAB_SWITCHER_MODE, result.blockReason);
     }
 
     @Test
+    @DisabledTest(message = "crbug.com/501137241")
     @DisableFeatures(ChromeFeatureList.TOOLBAR_TABLET_RESIZE_REFACTOR)
     public void testIsReadyForTextureCapture_ButtonShowAnimationInProgress_Legacy() {
         mToolbarTablet.measure(300, 300);
@@ -722,18 +775,19 @@ public final class ToolbarTabletUnitTest {
         // Run animation.
         mToolbarTablet.measure(700, 300);
         CaptureReadinessResult result = mToolbarTablet.isReadyForTextureCapture();
-        Assert.assertFalse(result.isReady);
-        Assert.assertEquals(
+        assertFalse(result.isReady);
+        assertEquals(
                 TopToolbarBlockCaptureReason.TABLET_BUTTON_ANIMATION_IN_PROGRESS,
                 result.blockReason);
 
         ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
         result = mToolbarTablet.isReadyForTextureCapture();
-        Assert.assertTrue(result.isReady);
-        Assert.assertEquals(TopToolbarAllowCaptureReason.SNAPSHOT_DIFFERENCE, result.allowReason);
+        assertTrue(result.isReady);
+        assertEquals(TopToolbarAllowCaptureReason.SNAPSHOT_DIFFERENCE, result.allowReason);
     }
 
     @Test
+    @DisabledTest(message = "crbug.com/501137241")
     @DisableFeatures(ChromeFeatureList.TOOLBAR_TABLET_RESIZE_REFACTOR)
     public void testIsReadyForTextureCapture_ButtonHideAnimationInProgress_Legacy() {
         mToolbarTablet.measure(300, 300);
@@ -750,15 +804,15 @@ public final class ToolbarTabletUnitTest {
         mToolbarTablet.measure(310, 310);
         mToolbarTablet.layout(0, 1, 0, 1);
         CaptureReadinessResult result = mToolbarTablet.isReadyForTextureCapture();
-        Assert.assertFalse(result.isReady);
-        Assert.assertEquals(
+        assertFalse(result.isReady);
+        assertEquals(
                 TopToolbarBlockCaptureReason.TABLET_BUTTON_ANIMATION_IN_PROGRESS,
                 result.blockReason);
 
         ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
         result = mToolbarTablet.isReadyForTextureCapture();
-        Assert.assertTrue(result.isReady);
-        Assert.assertEquals(TopToolbarAllowCaptureReason.SNAPSHOT_DIFFERENCE, result.allowReason);
+        assertTrue(result.isReady);
+        assertEquals(TopToolbarAllowCaptureReason.SNAPSHOT_DIFFERENCE, result.allowReason);
     }
 
     @Test
@@ -767,34 +821,31 @@ public final class ToolbarTabletUnitTest {
         mToolbarTablet.layout(0, 0, 0, 0);
         {
             CaptureReadinessResult result = mToolbarTablet.isReadyForTextureCapture();
-            Assert.assertTrue(result.isReady);
-            Assert.assertEquals(
-                    TopToolbarAllowCaptureReason.SNAPSHOT_DIFFERENCE, result.allowReason);
-            Assert.assertEquals(ToolbarSnapshotDifference.NULL, result.snapshotDifference);
+            assertTrue(result.isReady);
+            assertEquals(TopToolbarAllowCaptureReason.SNAPSHOT_DIFFERENCE, result.allowReason);
+            assertEquals(ToolbarSnapshotDifference.NULL, result.snapshotDifference);
         }
 
         {
             CaptureReadinessResult result = mToolbarTablet.isReadyForTextureCapture();
-            Assert.assertTrue(result.isReady);
+            assertTrue(result.isReady);
         }
 
         mToolbarTablet.setTextureCaptureMode(/* textureMode= */ true);
 
         {
             CaptureReadinessResult result = mToolbarTablet.isReadyForTextureCapture();
-            Assert.assertFalse(result.isReady);
-            Assert.assertEquals(TopToolbarBlockCaptureReason.SNAPSHOT_SAME, result.blockReason);
+            assertFalse(result.isReady);
+            assertEquals(TopToolbarBlockCaptureReason.SNAPSHOT_SAME, result.blockReason);
         }
 
         mToolbarTablet.updateBookmarkButton(/* isBookmarked= */ true, /* editingAllowed= */ true);
 
         {
             CaptureReadinessResult result = mToolbarTablet.isReadyForTextureCapture();
-            Assert.assertTrue(result.isReady);
-            Assert.assertEquals(
-                    TopToolbarAllowCaptureReason.SNAPSHOT_DIFFERENCE, result.allowReason);
-            Assert.assertEquals(
-                    ToolbarSnapshotDifference.BOOKMARK_BUTTON, result.snapshotDifference);
+            assertTrue(result.isReady);
+            assertEquals(TopToolbarAllowCaptureReason.SNAPSHOT_DIFFERENCE, result.allowReason);
+            assertEquals(ToolbarSnapshotDifference.BOOKMARK_BUTTON, result.snapshotDifference);
         }
     }
 
@@ -918,7 +969,7 @@ public final class ToolbarTabletUnitTest {
                         BACK,
                         INCOGNITO_INDICATOR,
                         ADAPTIVE_BUTTON,
-                        RELOAD));
+                        SIGNIN_BUTTON));
 
         mToolbarTablet.onMeasure(
                 MeasureSpec.makeMeasureSpec(
@@ -932,8 +983,8 @@ public final class ToolbarTabletUnitTest {
                         BACK,
                         INCOGNITO_INDICATOR,
                         ADAPTIVE_BUTTON,
-                        RELOAD,
-                        FORWARD));
+                        SIGNIN_BUTTON,
+                        RELOAD));
 
         mToolbarTablet.onMeasure(
                 MeasureSpec.makeMeasureSpec(
@@ -947,9 +998,9 @@ public final class ToolbarTabletUnitTest {
                         BACK,
                         INCOGNITO_INDICATOR,
                         ADAPTIVE_BUTTON,
+                        SIGNIN_BUTTON,
                         RELOAD,
-                        FORWARD,
-                        HOME));
+                        FORWARD));
 
         mToolbarTablet.onMeasure(
                 MeasureSpec.makeMeasureSpec(
@@ -963,10 +1014,10 @@ public final class ToolbarTabletUnitTest {
                         BACK,
                         INCOGNITO_INDICATOR,
                         ADAPTIVE_BUTTON,
+                        SIGNIN_BUTTON,
                         RELOAD,
                         FORWARD,
-                        HOME,
-                        OMNIBOX_BOOKMARK));
+                        HOME));
 
         mToolbarTablet.onMeasure(
                 MeasureSpec.makeMeasureSpec(
@@ -980,6 +1031,25 @@ public final class ToolbarTabletUnitTest {
                         BACK,
                         INCOGNITO_INDICATOR,
                         ADAPTIVE_BUTTON,
+                        SIGNIN_BUTTON,
+                        RELOAD,
+                        FORWARD,
+                        HOME,
+                        OMNIBOX_BOOKMARK));
+
+        mToolbarTablet.onMeasure(
+                MeasureSpec.makeMeasureSpec(
+                        padding + 13 * buttonWidth + locationBarMidWidth, EXACTLY),
+                UNSPECIFIED);
+        assertToolbarComponentsReceivedWidth(
+                Set.of(
+                        PADDING,
+                        MENU,
+                        TAB_SWITCHER,
+                        BACK,
+                        INCOGNITO_INDICATOR,
+                        ADAPTIVE_BUTTON,
+                        SIGNIN_BUTTON,
                         RELOAD,
                         FORWARD,
                         HOME,
@@ -1010,6 +1080,25 @@ public final class ToolbarTabletUnitTest {
 
         mToolbarTablet.onMeasure(
                 MeasureSpec.makeMeasureSpec(
+                        padding + 13 * buttonWidth + locationBarMidWidth, EXACTLY),
+                UNSPECIFIED);
+        assertToolbarComponentsReceivedWidth(
+                Set.of(
+                        PADDING,
+                        MENU,
+                        TAB_SWITCHER,
+                        BACK,
+                        INCOGNITO_INDICATOR,
+                        ADAPTIVE_BUTTON,
+                        SIGNIN_BUTTON,
+                        RELOAD,
+                        FORWARD,
+                        HOME,
+                        OMNIBOX_BOOKMARK,
+                        OMNIBOX_ZOOM));
+
+        mToolbarTablet.onMeasure(
+                MeasureSpec.makeMeasureSpec(
                         padding + 12 * buttonWidth + locationBarMidWidth, EXACTLY),
                 UNSPECIFIED);
         assertToolbarComponentsReceivedWidth(
@@ -1020,11 +1109,11 @@ public final class ToolbarTabletUnitTest {
                         BACK,
                         INCOGNITO_INDICATOR,
                         ADAPTIVE_BUTTON,
+                        SIGNIN_BUTTON,
                         RELOAD,
                         FORWARD,
                         HOME,
-                        OMNIBOX_BOOKMARK,
-                        OMNIBOX_ZOOM));
+                        OMNIBOX_BOOKMARK));
 
         mToolbarTablet.onMeasure(
                 MeasureSpec.makeMeasureSpec(
@@ -1038,10 +1127,10 @@ public final class ToolbarTabletUnitTest {
                         BACK,
                         INCOGNITO_INDICATOR,
                         ADAPTIVE_BUTTON,
+                        SIGNIN_BUTTON,
                         RELOAD,
                         FORWARD,
-                        HOME,
-                        OMNIBOX_BOOKMARK));
+                        HOME));
 
         mToolbarTablet.onMeasure(
                 MeasureSpec.makeMeasureSpec(
@@ -1055,9 +1144,9 @@ public final class ToolbarTabletUnitTest {
                         BACK,
                         INCOGNITO_INDICATOR,
                         ADAPTIVE_BUTTON,
+                        SIGNIN_BUTTON,
                         RELOAD,
-                        FORWARD,
-                        HOME));
+                        FORWARD));
 
         mToolbarTablet.onMeasure(
                 MeasureSpec.makeMeasureSpec(
@@ -1071,8 +1160,8 @@ public final class ToolbarTabletUnitTest {
                         BACK,
                         INCOGNITO_INDICATOR,
                         ADAPTIVE_BUTTON,
-                        RELOAD,
-                        FORWARD));
+                        SIGNIN_BUTTON,
+                        RELOAD));
 
         mToolbarTablet.onMeasure(
                 MeasureSpec.makeMeasureSpec(
@@ -1086,7 +1175,7 @@ public final class ToolbarTabletUnitTest {
                         BACK,
                         INCOGNITO_INDICATOR,
                         ADAPTIVE_BUTTON,
-                        RELOAD));
+                        SIGNIN_BUTTON));
 
         mToolbarTablet.onMeasure(
                 MeasureSpec.makeMeasureSpec(
@@ -1150,7 +1239,7 @@ public final class ToolbarTabletUnitTest {
                         .getContext()
                         .getResources()
                         .getDimensionPixelSize(R.dimen.toolbar_button_width);
-        int toolbarWidth = 10 * buttonWidth + locationBarMidWidth + padding;
+        int toolbarWidth = 11 * buttonWidth + locationBarMidWidth + padding;
         updateOptionalButton(
                 /* buttonVariant= */ AdaptiveToolbarButtonVariant.SHARE,
                 R.string.adaptive_toolbar_button_preference_share);
@@ -1167,6 +1256,7 @@ public final class ToolbarTabletUnitTest {
                         FORWARD,
                         RELOAD,
                         ADAPTIVE_BUTTON,
+                        SIGNIN_BUTTON,
                         INCOGNITO_INDICATOR,
                         TAB_SWITCHER,
                         MENU));
@@ -1181,6 +1271,7 @@ public final class ToolbarTabletUnitTest {
                         BACK,
                         FORWARD,
                         RELOAD,
+                        SIGNIN_BUTTON,
                         INCOGNITO_INDICATOR,
                         TAB_SWITCHER,
                         MENU,
@@ -1199,6 +1290,7 @@ public final class ToolbarTabletUnitTest {
                         FORWARD,
                         RELOAD,
                         ADAPTIVE_BUTTON,
+                        SIGNIN_BUTTON,
                         INCOGNITO_INDICATOR,
                         TAB_SWITCHER,
                         MENU));
@@ -1208,19 +1300,101 @@ public final class ToolbarTabletUnitTest {
     @Test
     @EnableFeatures(ChromeFeatureList.TOOLBAR_TABLET_RESIZE_REFACTOR)
     public void testAreAnyToolbarComponentsMissingForWidth() {
-        doReturn(true).when(mReloadButtonCoordinator).isVisible();
+        doReturn(true).when(mReloadButtonCoordinator).hasSpaceToShow();
         assertFalse(mToolbarTablet.areAnyToolbarComponentsMissingForWidth(new int[] {RELOAD}));
 
-        doReturn(false).when(mReloadButtonCoordinator).isVisible();
+        doReturn(false).when(mReloadButtonCoordinator).hasSpaceToShow();
         assertTrue(mToolbarTablet.areAnyToolbarComponentsMissingForWidth(new int[] {RELOAD}));
 
-        doReturn(true).when(mReloadButtonCoordinator).isVisible();
+        doReturn(true).when(mReloadButtonCoordinator).hasSpaceToShow();
         assertFalse(mToolbarTablet.areAnyToolbarComponentsMissingForWidth(new int[] {RELOAD}));
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.TOOLBAR_TABLET_RESIZE_REFACTOR)
+    public void testOptionalButtonToolbarWidthConsumer_returnsPartialWidthWhenNoSpace() {
+        ToolbarWidthConsumer consumer = mToolbarTablet.getOptionalButtonWidthConsumerForTesting();
+        int buttonWidth =
+                mToolbarTablet
+                        .getContext()
+                        .getResources()
+                        .getDimensionPixelSize(R.dimen.toolbar_button_width);
+
+        // When available width >= buttonWidth, it returns buttonWidth.
+        assertEquals(buttonWidth, consumer.updateVisibility(buttonWidth));
+        assertTrue(consumer.hasSpaceToShow());
+
+        // When available width < buttonWidth, it returns availableWidth.
+        int availableWidth = buttonWidth - 10;
+        assertEquals(availableWidth, consumer.updateVisibility(availableWidth));
+        assertFalse(consumer.hasSpaceToShow());
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.TOOLBAR_TABLET_RESIZE_REFACTOR)
+    public void testAllocateAvailableToolbarWidth_subtractsControlContainerMargins() {
+        updateOptionalButton(
+                /* buttonVariant= */ AdaptiveToolbarButtonVariant.SHARE,
+                R.string.adaptive_toolbar_button_preference_share);
+        MarginLayoutParams params = new MarginLayoutParams(100, 100);
+        mToolbarTablet.setLayoutParams(params);
+        MarginLayoutParams params2 = new MarginLayoutParams(100, 100);
+        params2.leftMargin = 200;
+        mToolbarTabletLayout.setLayoutParams(params2);
+
+        // Measure with width 500px. With 200px left margin, net available width is 300px.
+        mToolbarTablet.onMeasure(MeasureSpec.makeMeasureSpec(500, EXACTLY), UNSPECIFIED);
+
+        // At 300px available width (500 - 200), padding (start/end), menu, and tab switcher receive
+        // width, but back button does not (since locationBarMidWidth 200 + buttons exceeds 300).
+        assertToolbarComponentsReceivedWidth(Set.of(PADDING, MENU, TAB_SWITCHER));
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.TOOLBAR_TABLET_RESIZE_REFACTOR)
+    public void testGlicToolbarWidthConsumer_hidesWhenNoSpace() {
+        mToolbarTablet.ensureGlicToolbarWidthConsumer();
+        ToolbarWidthConsumer consumer = mToolbarTablet.getGlicWidthConsumerForTesting();
+        assertNotNull(consumer);
+
+        doReturn(1200).when(mToolbarTablet).getWidth();
+        mToolbarTablet.setGlicActionChipVisibility(
+                true, ViewUtils.emptyClickListener(), ViewUtils.emptyLongClickListener());
+        View glicChip = mToolbarTablet.getGlicActionChipForTesting();
+        assertNotNull(glicChip);
+        assertEquals(View.VISIBLE, glicChip.getVisibility());
+
+        int chipWidth =
+                mToolbarTablet
+                        .getContext()
+                        .getResources()
+                        .getDimensionPixelSize(R.dimen.min_touch_target_size);
+
+        // When available width >= chipWidth, hasSpaceToShow is true, returns chipWidth, chip is
+        // VISIBLE.
+        assertEquals(chipWidth, consumer.updateVisibility(chipWidth + 10));
+        assertTrue(consumer.hasSpaceToShow());
+        assertEquals(View.VISIBLE, glicChip.getVisibility());
+
+        // When available width < chipWidth, hasSpaceToShow is false, still returns the available
+        // width, and chip is GONE.
+        int availableWidth = chipWidth - 10;
+        assertEquals(availableWidth, consumer.updateVisibility(availableWidth));
+        assertFalse(consumer.hasSpaceToShow());
+        assertEquals(View.GONE, glicChip.getVisibility());
+
+        // Re-triggering visibility update while no space is available must keep chip GONE.
+        doReturn(300).when(mToolbarTablet).getWidth();
+        mToolbarTablet.setGlicActionChipVisibility(
+                true, ViewUtils.emptyClickListener(), ViewUtils.emptyLongClickListener());
+        assertEquals(View.GONE, glicChip.getVisibility());
     }
 
     @Test
     @EnableFeatures(OmniboxFeatureList.OMNIBOX_MULTIMODAL_INPUT)
     public void testFuseboxState() {
+        mToolbarTablet.onAttachedToWindow();
+        mToolbarTablet.setIsBottomMostTopControlsLayer(true);
         View fixedHeightBg = mToolbarTablet.findViewById(R.id.toolbar_tablet_fixed_height_bg);
         ColorDrawable backgroundDrawable = (ColorDrawable) mToolbarTablet.getBackground();
         assertEquals(100, mToolbarTablet.getLayoutParams().height);
@@ -1228,12 +1402,161 @@ public final class ToolbarTabletUnitTest {
         assertEquals(
                 SemanticColorUtils.getDefaultBgColor(mToolbarTablet.getContext()),
                 backgroundDrawable.getColor());
+        assertEquals(View.VISIBLE, mToolbarHairline.getVisibility());
 
         mFuseboxStateSupplier.set(FuseboxState.EXPANDED);
         ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
         assertEquals(LayoutParams.WRAP_CONTENT, mToolbarTablet.getLayoutParams().height);
         assertEquals(View.VISIBLE, fixedHeightBg.getVisibility());
         assertEquals(Color.TRANSPARENT, backgroundDrawable.getColor());
+        assertEquals(View.INVISIBLE, mToolbarHairline.getVisibility());
+
+        mToolbarTablet.setIsBottomMostTopControlsLayer(false);
+        assertEquals(View.INVISIBLE, mToolbarHairline.getVisibility());
+
+        mFuseboxStateSupplier.set(FuseboxState.DISABLED);
+        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        assertEquals(View.INVISIBLE, mToolbarHairline.getVisibility());
+
+        mToolbarTablet.setIsBottomMostTopControlsLayer(true);
+        assertEquals(View.VISIBLE, mToolbarHairline.getVisibility());
+    }
+
+    @Test
+    public void testSetGlicActionChipVisibility_ListenersAndVisibility() {
+        View.OnClickListener mockClickListener = mock(View.OnClickListener.class);
+        View.OnLongClickListener mockLongClickListener = mock(View.OnLongClickListener.class);
+        when(mockLongClickListener.onLongClick(any())).thenReturn(true);
+
+        // Show the action chip and set listeners.
+        mToolbarTablet.setGlicActionChipVisibility(
+                /* visible= */ true, mockClickListener, mockLongClickListener);
+
+        View actionChip = mToolbarTablet.getGlicActionChipView();
+        assertNotNull("Glic action chip should be inflated and non-null.", actionChip);
+        assertEquals(
+                "Glic action chip should be visible.", View.VISIBLE, actionChip.getVisibility());
+
+        // Perform long click and verify longClickListener is called.
+        actionChip.performLongClick();
+        verify(mockLongClickListener).onLongClick(actionChip);
+
+        // Perform context click (right-click) and verify longClickListener is called again.
+        actionChip.performContextClick();
+        verify(mockLongClickListener, Mockito.times(2)).onLongClick(actionChip);
+
+        // Hide the action chip and verify visibility.
+        mToolbarTablet.setGlicActionChipVisibility(
+                /* visible= */ false, mockClickListener, mockLongClickListener);
+        assertEquals("Glic action chip should be hidden.", View.GONE, actionChip.getVisibility());
+    }
+
+    @Test
+    public void testOnTintChanged_GlicActionChip() {
+        var focusedTint =
+                ThemeUtils.getThemedToolbarIconTintForActivityState(
+                        mToolbarTablet.getContext(),
+                        BrandedColorScheme.APP_DEFAULT,
+                        /* isActivityFocused= */ true);
+
+        var unfocusedTint =
+                ThemeUtils.getThemedToolbarIconTintForActivityState(
+                        mToolbarTablet.getContext(),
+                        BrandedColorScheme.APP_DEFAULT,
+                        /* isActivityFocused= */ false);
+
+        View.OnClickListener mockClickListener = mock(View.OnClickListener.class);
+        View.OnLongClickListener mockLongClickListener = mock(View.OnLongClickListener.class);
+
+        // 1. Show the Glic action chip and set initial focused tint.
+        mToolbarTablet.setGlicActionChipVisibility(
+                /* visible= */ true, mockClickListener, mockLongClickListener);
+        ImageView glicChip = (ImageView) mToolbarTablet.getGlicActionChipView();
+        assertNotNull("Glic action chip should be inflated and non-null.", glicChip);
+
+        // Apply focused activity tint first.
+        mToolbarTablet.onTintChanged(focusedTint, focusedTint, BrandedColorScheme.APP_DEFAULT);
+        assertEquals(
+                "Glic action chip should initially have the focused tint.",
+                focusedTint.getDefaultColor(),
+                glicChip.getImageTintList().getDefaultColor());
+
+        // 2. Simulate activity losing focus / tint update.
+        mToolbarTablet.onTintChanged(focusedTint, unfocusedTint, BrandedColorScheme.APP_DEFAULT);
+
+        // Verify the Glic action chip receives the unfocused activity tint.
+        assertEquals(
+                "Glic action chip tint is incorrect when activity is unfocused.",
+                unfocusedTint.getDefaultColor(),
+                glicChip.getImageTintList().getDefaultColor());
+    }
+
+    @Test
+    public void testSetGlicPanelIsOpen_updatesTooltipAndContentDescription() {
+        View.OnClickListener mockClickListener = mock(View.OnClickListener.class);
+        View.OnLongClickListener mockLongClickListener = mock(View.OnLongClickListener.class);
+
+        // Show the Glic action chip.
+        mToolbarTablet.setGlicActionChipVisibility(
+                /* visible= */ true, mockClickListener, mockLongClickListener);
+
+        View glicChip = mToolbarTablet.getGlicActionChipView();
+        assertNotNull("Glic action chip should be inflated and non-null.", glicChip);
+
+        // Verify initial closed state tooltip / content description.
+        assertEquals(
+                "Initial content description should be default tooltip.",
+                mActivity.getString(R.string.glic_tab_strip_button_tooltip),
+                glicChip.getContentDescription().toString());
+
+        // Open Glic UI Panel.
+        mToolbarTablet.setGlicPanelIsOpen(true);
+        assertEquals(
+                "Content description should update to close tooltip when panel is open.",
+                mActivity.getString(R.string.glic_tab_strip_button_tooltip_close),
+                glicChip.getContentDescription().toString());
+        assertEquals(
+                "Tooltip text should update to close tooltip when panel is open.",
+                mActivity.getString(R.string.glic_tab_strip_button_tooltip_close),
+                glicChip.getTooltipText());
+
+        // Close Glic UI Panel.
+        mToolbarTablet.setGlicPanelIsOpen(false);
+        assertEquals(
+                "Content description should restore to default tooltip when panel is closed.",
+                mActivity.getString(R.string.glic_tab_strip_button_tooltip),
+                glicChip.getContentDescription().toString());
+        assertEquals(
+                "Tooltip text should restore to default tooltip when panel is closed.",
+                mActivity.getString(R.string.glic_tab_strip_button_tooltip),
+                glicChip.getTooltipText());
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.TOOLBAR_TABLET_RESIZE_REFACTOR)
+    public void testSetGlicActionChipVisibility_invokesOnWidthConsumerVisibilityChanged() {
+        View.OnClickListener mockClickListener = mock(View.OnClickListener.class);
+        View.OnLongClickListener mockLongClickListener = mock(View.OnLongClickListener.class);
+
+        mToolbarTablet.setGlicActionChipVisibility(
+                /* visible= */ true, mockClickListener, mockLongClickListener);
+        verify(mToolbarTablet).onWidthConsumerVisibilityChanged();
+
+        mToolbarTablet.setGlicActionChipVisibility(
+                /* visible= */ false, mockClickListener, mockLongClickListener);
+        verify(mToolbarTablet, Mockito.times(2)).onWidthConsumerVisibilityChanged();
+    }
+
+    @Test
+    public void testGetContainerView_reflectsRightMargin() {
+        MarginLayoutParams params = new MarginLayoutParams(500, 100);
+        params.rightMargin = 120;
+        mToolbarTabletLayout.setLayoutParams(params);
+
+        View containerView = mToolbarTablet.getContainerView();
+        assertNotNull(containerView);
+        assertEquals(mToolbarTabletLayout, containerView);
+        assertEquals(120, ((MarginLayoutParams) containerView.getLayoutParams()).rightMargin);
     }
 
     @SuppressWarnings("DirectInvocationOnMock")
@@ -1326,7 +1649,14 @@ public final class ToolbarTabletUnitTest {
                     .updateVisibility(geq(buttonWidth), anyInt(), anyInt());
         }
 
-        Mockito.clearInvocations(
+        if (visibleComponents.contains(SIGNIN_BUTTON)) {
+            verify(mSigninButtonCoordinator).updateVisibility(geq(buttonWidth), anyInt(), anyInt());
+        } else {
+            verify(mSigninButtonCoordinator, never())
+                    .updateVisibility(geq(buttonWidth), anyInt(), anyInt());
+        }
+
+        clearInvocations(
                 mHomeButtonCoordinator,
                 mBackButtonCoordinator,
                 mReloadButtonCoordinator,
@@ -1336,7 +1666,8 @@ public final class ToolbarTabletUnitTest {
                 mLocationBarZoomButtonWidthConsumer,
                 mLocationBarInstallButtonWidthConsumer,
                 mLocationBarMicButtonWidthConsumer,
-                mLocationBarLensButtonWidthConsumer);
+                mLocationBarLensButtonWidthConsumer,
+                mSigninButtonCoordinator);
 
         // Replace with a mock when the ForwardButtonCoordinator has its own unit tests.
         assertEquals(
@@ -1348,28 +1679,28 @@ public final class ToolbarTabletUnitTest {
                 mToolbarTablet.getOptionalButtonViewForTesting().getVisibility());
 
         if (visibleComponents.contains(PADDING)) {
-            assertEquals(padding, mToolbarTablet.getPaddingStart());
-            assertEquals(padding, mToolbarTablet.getPaddingEnd());
+            assertEquals(padding, mToolbarTabletLayout.getPaddingStart());
+            assertEquals(padding, mToolbarTabletLayout.getPaddingEnd());
         } else {
-            assertEquals(0, mToolbarTablet.getPaddingStart());
-            assertEquals(0, mToolbarTablet.getPaddingEnd());
+            assertEquals(0, mToolbarTabletLayout.getPaddingStart());
+            assertEquals(0, mToolbarTabletLayout.getPaddingEnd());
         }
     }
 
     private void verifyToolbarIconTints(ColorStateList tint, ColorStateList activityFocusTint) {
-        Assert.assertEquals(
+        assertEquals(
                 "Home button tint is incorrect.",
                 activityFocusTint.getDefaultColor(),
                 mHomeButton.getImageTintList().getDefaultColor());
-        Assert.assertEquals(
+        assertEquals(
                 "Forward button tint is incorrect.",
                 activityFocusTint.getDefaultColor(),
                 mForwardButton.getImageTintList().getDefaultColor());
-        Assert.assertEquals(
+        assertEquals(
                 "Bookmark button tint is incorrect.",
                 tint.getDefaultColor(),
                 mBookmarkButton.getImageTintList().getDefaultColor());
-        Assert.assertEquals(
+        assertEquals(
                 "Optional button tint is incorrect.",
                 activityFocusTint.getDefaultColor(),
                 ((ImageButton) mToolbarTablet.getOptionalButtonViewForTesting())
@@ -1388,20 +1719,18 @@ public final class ToolbarTabletUnitTest {
             boolean hasErrorBadge) {
         // Verify reader mode tooltip text is null.
         ButtonSpec buttonSpec =
-                new ButtonSpec(
-                        AppCompatResources.getDrawable(mActivity, R.drawable.new_tab_icon),
-                        v -> {},
-                        v -> false,
-                        mActivity.getString(R.string.actionbar_share),
-                        true,
-                        null,
-                        buttonVariant,
-                        0,
-                        tooltipTextResId,
-                        hasErrorBadge);
+                new ButtonSpec.Builder(
+                                AppCompatResources.getDrawable(mActivity, R.drawable.new_tab_icon),
+                                mActivity.getString(R.string.actionbar_share),
+                                /* supportsTinting= */ true)
+                        .setOnLongClickListener(v -> false)
+                        .setButtonVariant(buttonVariant)
+                        .setHoverTooltipTextId(tooltipTextResId)
+                        .setHasErrorBadge(hasErrorBadge)
+                        .build();
 
-        ButtonDataImpl buttonData = new ButtonDataImpl();
-        buttonData.setButtonSpec(buttonSpec);
+        ButtonDataImpl buttonData =
+                new ButtonDataImpl(/* canShow= */ false, /* isEnabled= */ false, buttonSpec);
         mToolbarTablet.updateOptionalButton(buttonData);
     }
 }

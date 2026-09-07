@@ -6,6 +6,7 @@
 
 #include <optional>
 
+#include "build/build_config.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/resource/resource_bundle.h"
 
@@ -75,12 +76,20 @@ std::u16string MenuModel::GetMinorTextAt(size_t index) const {
   return std::u16string();
 }
 
+bool MenuModel::GetMinorTextIsUrlAt(size_t index) const {
+  return false;
+}
+
 std::u16string MenuModel::GetSecondaryLabelAt(size_t index) const {
   return std::u16string();
 }
 
 ImageModel MenuModel::GetMinorIconAt(size_t index) const {
   return ImageModel();
+}
+
+bool MenuModel::GetMinorIconOnRight(MinorIconOnRightPasskey) const {
+  return false;
 }
 
 bool MenuModel::MayHaveMnemonicsAt(size_t index) const {
@@ -124,5 +133,11 @@ std::optional<ui::ColorId> MenuModel::GetSelectedBackgroundColorId(
     size_t index) {
   return std::nullopt;
 }
+
+#if BUILDFLAG(IS_ANDROID)
+int MenuModel::GetDisplayOrderAt(size_t index) const {
+  return -1;
+}
+#endif
 
 }  // namespace ui

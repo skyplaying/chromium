@@ -21,6 +21,7 @@ MappableSharedImageVideoFramePool::MappableSharedImageVideoFramePool(
       color_space_(color_space),
       context_provider_(context_provider),
       buffer_format_preference_(buffer_format_preference) {
+  CHECK(color_space.IsValid());
   RecreateVideoFramePool();
 }
 
@@ -99,6 +100,11 @@ void MappableSharedImageVideoFramePool::OnVideoFrameDestroyed(
 
     num_reserved_frames_--;
   }
+}
+
+void MappableSharedImageVideoFramePool::InvalidateBuffers() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  RecreateVideoFramePool();
 }
 
 }  // namespace viz

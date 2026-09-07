@@ -26,6 +26,7 @@ buildflag_header("buildflags") {
     "MBI_MODE_PER_RENDER_PROCESS_HOST=$_mbi_mode_per_render_process_host",
     "MBI_MODE_PER_SITE_INSTANCE=$_mbi_mode_per_site_instance",
     "CONTENT_ENABLE_LEGACY_IPC=0",
+    "ENABLE_MEMORY_COORDINATOR_INTERNALS=$enable_memory_coordinator_internals",
   ]
 }
 
@@ -68,8 +69,6 @@ source_set("common") {
     "background_fetch/background_fetch_types.cc",
     "background_fetch/background_fetch_types.h",
     "color_parser.cc",
-    "common_param_traits.cc",
-    "common_param_traits.h",
     "content_constants_internal.h",
     "content_export.h",
     "content_navigation_policy.cc",
@@ -141,7 +140,10 @@ source_set("common") {
     "input/synthetic_touchpad_pinch_gesture.h",
     "input/synthetic_touchscreen_pinch_gesture.cc",
     "input/synthetic_touchscreen_pinch_gesture.h",
+    "lazy_shared_url_loader_factory.cc",
+    "lazy_shared_url_loader_factory.h",
     "media/cdm_info.cc",
+    "memory_coordinator/constants.h",
     "memory_coordinator/memory_consumer_group_controller.h",
     "memory_coordinator/memory_consumer_group_host.h",
     "memory_coordinator/memory_consumer_registry.cc",
@@ -150,6 +152,10 @@ source_set("common") {
     "memory_coordinator/memory_coordinator_policy.h",
     "memory_coordinator/memory_coordinator_policy_manager.cc",
     "memory_coordinator/memory_coordinator_policy_manager.h",
+    "memory_coordinator/memory_pressure_listener_policy.cc",
+    "memory_coordinator/memory_pressure_listener_policy.h",
+    "memory_coordinator/predicate_memory_coordinator_policy.cc",
+    "memory_coordinator/predicate_memory_coordinator_policy.h",
     "navigation_params_utils.h",
     "origin_util.cc",
     "page_state_mojom_traits.h",
@@ -197,7 +203,7 @@ source_set("common") {
   public_deps = [
     ":mojo_bindings",
     "//cc",
-    "//cc/ipc",
+    "//content/public/common:memory_consumer_update",
     "//content/public/common:switches",
     "//gpu/command_buffer/common",
     "//ipc",
@@ -218,6 +224,7 @@ source_set("common") {
     "//build:branding_buildflags",
     "//components/discardable_memory/common",
     "//components/input",
+    "//components/network_session_configurator/common",
     "//components/services/filesystem/public/mojom",
     "//components/tracing:tracing_config",
     "//content:content_resources",
@@ -244,6 +251,7 @@ source_set("common") {
     "//net",
     "//sandbox",
     "//sandbox:sandbox_buildflags",
+    "//services/data_decoder/public/cpp",
     "//services/network/public/cpp",
     "//services/network/public/mojom",
     "//services/resource_coordinator/public/cpp/memory_instrumentation",
@@ -270,7 +278,6 @@ source_set("common") {
     "//ui/gfx/ipc/geometry",
     "//ui/gl",
     "//ui/gl/init",
-    "//ui/latency/ipc",
     "//ui/native_theme",
     "//ui/shell_dialogs",
     "//url",
@@ -296,6 +303,8 @@ source_set("common") {
 
   if (is_android) {
     sources += [
+      "android/child_process_id.cc",
+      "android/child_process_id.h",
       "android/cpu_time_metrics.cc",
       "android/cpu_time_metrics.h",
       "android/cpu_time_metrics_internal.cc",
@@ -346,7 +355,7 @@ source_set("common") {
   if (is_android) {
     deps += [
       "//content/public/android:common_aidl",
-      "//content/public/android:common_jni",
+      "//content/public/android:content_main_dex_jni",
       "//content/public/android:jar_jni",
     ]
 
@@ -420,10 +429,7 @@ component("main_frame_counter") {
 
 # See comment at the top of //content/BUILD.gn for how this works.
 group("for_content_tests") {
-  visibility = [
-    "//content/services/auction_worklet:tests",
-    "//content/test/*",
-  ]
+  visibility = [ "//content/test/*" ]
   if (!is_component_build) {
     public_deps = [ ":common" ]
   }
@@ -512,7 +518,6 @@ mojom("mojo_bindings") {
         "//content/common/input/synthetic_smooth_drag_gesture_params.h",
         "//content/common/input/synthetic_smooth_scroll_gesture_params.h",
         "//content/common/input/synthetic_tap_gesture_params.h",
-        "//third_party/blink/public/common/navigation/impression.h",
         "//third_party/blink/public/common/widget/visual_properties.h",
         "//ui/events/types/scroll_types.h",
         "//ui/native_theme/native_theme.h",
@@ -527,12 +532,10 @@ mojom("mojo_bindings") {
       ]
 
       traits_public_deps = [
-        # NOTE: These dependencies are here to satisfy gn check because
-        # common_param_traits_macros.h include their headers.
-        # Although the mojo bindings target is configured to allow direct circular
-        # includes from //content/common and //content/public/common, this isn't a
-        # transitive allowance, so those targets' own public_deps aren't included in
-        # the set of implied dependencies.
+        # Although the mojo bindings target is configured to allow direct
+        # circular includes from //content/common and //content/public/common,
+        # this isn't a transitive allowance, so those targets' own public_deps
+        # aren't included in the set of implied dependencies.
         "//content/common:buildflags",
         "//ui/events/blink",
       ]
@@ -564,9 +567,24 @@ mojom("mojo_bindings") {
     },
   ]
 
+  if (is_mac) {
+    cpp_typemaps += [
+      {
+        types = [
+          {
+            mojom = "remote_cocoa.mojom.ChildProcessId"
+            cpp = "::content::ChildProcessId"
+            copyable_pass_by_value = true
+          },
+        ]
+        traits_headers = [ "child_process_id_mojom_traits.h" ]
+        traits_public_deps = [ "//base" ]
+      },
+    ]
+  }
+
   public_deps = [
     "//cc/mojom",
-    "//components/attribution_reporting:mojom",
     "//components/metrics/public/mojom:histogram_fetcher_mojo_bindings",
     "//components/variations:variations_mojom",
     "//content/public/common:interfaces",
@@ -616,21 +634,6 @@ mojom("mojo_bindings") {
       "//ui/base/cursor/mojom",
       "//ui/display/mojom",
     ]
-    cpp_typemaps += [
-      {
-        types = [
-          {
-            mojom = "content.mojom.ScrollerStyle"
-            cpp = "::blink::ScrollerStyle"
-          },
-        ]
-        traits_headers = [ "scroller_style_mojom_traits.h" ]
-        traits_public_deps = [
-          "//base",
-          "//third_party/blink/public:blink_headers",
-        ]
-      },
-    ]
   }
 
   overridden_deps = [
@@ -658,4 +661,12 @@ if (is_android) {
     # files, they should be added here as necessary.
     srcjar_deps = [ ":java_features_srcjar" ]
   }
+}
+
+rust_static_library("common_id_types") {
+  crate_name = "content_common_id_types"
+  crate_root = "child_process_id.rs"
+  sources = [ crate_root ]
+  allow_unsafe = true
+  deps = [ "//third_party/rust/cxx/v1:lib" ]
 }

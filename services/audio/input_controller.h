@@ -13,6 +13,7 @@
 #include <string>
 #include <string_view>
 
+#include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/single_thread_task_runner.h"
@@ -40,10 +41,7 @@ class AudioCallback;
 class MlModelManager;
 class OutputTapper;
 class ReferenceSignalProvider;
-
-#if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
-class ProcessingAudioFifo;
-#endif
+class VoiceIsolationHandler;
 
 // Only do power monitoring for non-mobile platforms to save resources.
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
@@ -63,18 +61,20 @@ class ProcessingAudioFifo;
 //     InputController::|audio_callback_|::OnData()
 //     -> InputController::OnData()
 //     --> InputController::|audio_processor_handler_|::ProcessCapturedAudio()
-//     ---> InputController::DeliverProcessedAudio()
-//     ----> InputController::|sync_writer_|::Write()
+//     ---> |audio_processor_handler_|::ProcessCapturedAudioInternal()
+//     ----> InputController::DeliverProcessedAudio()
+//     -----> InputController::|sync_writer_|::Write()
 //
 // * With audio processing and a dedicated processing thread:
 //   Audio capture device thread:
 //     InputController::|audio_callback_|::OnData()
 //     -> InputController::OnData()
-//     --> InputController::|processing_fifo_|::PushData()
+//     --> InputController::|audio_processor_handler_|::ProcessCapturedAudio()
+//     ---> |audio_processor_handler_|::|processing_fifo_|::PushData()
 //   Audio processing thread:
-//     ---> InputController::|audio_processor_handler_|::ProcessCapturedAudio()
-//     ----> InputController::DeliverProcessedAudio()
-//     -----> InputController::|sync_writer_|::Write()
+//     ----> |audio_processor_handler_|::ProcessCapturedAudioInternal()
+//     -----> InputController::DeliverProcessedAudio()
+//     ------> InputController::|sync_writer_|::Write()
 //
 //     - InputController::|audio_processor_handler_| changes format from the
 //     AudioInputStream format to |params| provided to
@@ -121,6 +121,9 @@ class InputController final {
 
     // Failed to open aec reference stream due to device in use by another app.
     REFERENCE_STREAM_OPEN_DEVICE_IN_USE_ERROR,  // = 10
+
+    // Open failed due to the device being removed.
+    STREAM_OPEN_DEVICE_REMOVED_ERROR,  // = 11
   };
 
 #if defined(AUDIO_POWER_MONITORING)
@@ -143,10 +146,6 @@ class InputController final {
   };
 #endif
 
-#if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
-  static constexpr int kProcessingFifoSize = 10;
-#endif
-
   // An event handler that receives events from the InputController. The
   // following methods are all called on the audio thread.
   class EventHandler {
@@ -161,14 +160,14 @@ class InputController final {
     virtual void OnMuted(bool is_muted) = 0;
 
    protected:
-    virtual ~EventHandler() {}
+    virtual ~EventHandler() = default;
   };
 
   // A synchronous writer interface used by InputController for
   // synchronous writing.
   class SyncWriter {
    public:
-    virtual ~SyncWriter() {}
+    virtual ~SyncWriter() = default;
 
     // Write certain amount of data from |data|.
     virtual void Write(const media::AudioBus* data,
@@ -243,26 +242,28 @@ class InputController final {
     CAPTURE_STARTUP_OPEN_STREAM_FAILED = 2,
     CAPTURE_STARTUP_NEVER_GOT_DATA = 3,
     CAPTURE_STARTUP_STOPPED_EARLY = 4,
-    CAPTURE_STARTUP_RESULT_MAX = CAPTURE_STARTUP_STOPPED_EARLY,
+    CAPTURE_STARTUP_VOICE_ISOLATION_ERROR = 5,
+    CAPTURE_STARTUP_RESULT_MAX = CAPTURE_STARTUP_VOICE_ISOLATION_ERROR,
   };
 
-  InputController(
-      EventHandler* event_handler,
-      SyncWriter* sync_writer,
-      std::unique_ptr<ReferenceSignalProvider> reference_signal_provider,
-      media::AecdumpRecordingManager* aecdump_recording_manager,
-      raw_ptr<MlModelManager> ml_model_manager,
-      media::mojom::AudioProcessingConfigPtr processing_config,
-      const media::AudioParameters& output_params,
-      const media::AudioParameters& device_params,
-      StreamType type);
+  static void LogCaptureStartupResult(StreamType type,
+                                      CaptureStartupResult result);
+
+  InputController(EventHandler* event_handler,
+                  SyncWriter* sync_writer,
+                  StreamType type);
 
   void DoCreate(
       media::AudioManager* audio_manager,
       const media::AudioParameters& params,
       const std::string& device_id,
       bool enable_agc,
-      LoopbackMixin::MaybeCreateCallback maybe_create_loopback_mixin_cb);
+      LoopbackMixin::MaybeCreateCallback maybe_create_loopback_mixin_cb,
+      media::mojom::AudioProcessingConfigPtr processing_config,
+      const media::AudioParameters& device_params,
+      std::unique_ptr<ReferenceSignalProvider> reference_signal_provider,
+      media::AecdumpRecordingManager* aecdump_recording_manager,
+      raw_ptr<MlModelManager> ml_model_manager);
   void DoReportError(ErrorCode error_code);
   void DoLogAudioLevels(float level_dbfs, int microphone_volume_percent);
 
@@ -282,7 +283,7 @@ class InputController final {
   void LogMessage(const std::string& message);
 
   // Helper method for creating internal log messages prefixed with "AIC::".
-  PRINTF_FORMAT(2, 3) void SendLogMessage(const char* format, ...);
+  void SendLogMessage(const std::string& message);
 
   // Does power monitoring on supported platforms.
   // Called on the hw callback thread.
@@ -295,7 +296,13 @@ class InputController final {
                        float* average_power_dbfs,
                        int* mic_volume_percent);
 
+  // Polls the input stream's mute state when push notifications are not
+  // supported by the platform.
   void CheckMutedState();
+
+  // Deduplicates and forwards mute state changes received through either push
+  // notifications or polling.
+  void OnMuteStateChanged(bool is_muted);
 
   // Called once at first audio callback.
   void ReportIsAlive();
@@ -307,15 +314,31 @@ class InputController final {
               const media::AudioGlitchInfo& glitch_info);
 
 #if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
-  // Called from the constructor. Helper to isolate logic setting up audio
-  // processing components.
+  using DeliverProcessedAudioCallback = base::RepeatingCallback<void(
+      const media::AudioBus& audio_bus,
+      base::TimeTicks audio_capture_time,
+      std::optional<double> new_volume,
+      const media::AudioGlitchInfo& audio_glitch_info)>;
+
+  // Called from DoCreate. Helper to isolate logic setting up audio processing
+  // components.
   void MaybeSetUpAudioProcessing(
       media::mojom::AudioProcessingConfigPtr processing_config,
       const media::AudioParameters& processing_output_params,
       const media::AudioParameters& device_params,
       std::unique_ptr<ReferenceSignalProvider> reference_signal_provider,
       media::AecdumpRecordingManager* aecdump_recording_manager,
-      raw_ptr<MlModelManager> ml_model_manager);
+      raw_ptr<MlModelManager> ml_model_manager,
+      std::unique_ptr<VoiceIsolationHandler> voice_isolation,
+      DeliverProcessedAudioCallback deliver_processed_audio_callback);
+
+  // Called from DoCreate. Helper to create a VoiceIsolationHandler. If might
+  // return nullptr if the VoiceIsolation component is not created. If created
+  // `deliver_processed_audio_callback` should be consumed.
+  std::unique_ptr<VoiceIsolationHandler> MaybeCreateVoiceIsolationHandler(
+      raw_ptr<MlModelManager> ml_model_manager,
+      const media::AudioParameters& processing_output_params,
+      DeliverProcessedAudioCallback deliver_processed_audio_callback);
 
   // Used as a callback for |audio_processor_handler_|.
   void DeliverProcessedAudio(const media::AudioBus& audio_bus,
@@ -351,12 +374,6 @@ class InputController final {
 #if BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
   // Handles audio processing effects applied to the microphone capture audio.
   std::unique_ptr<AudioProcessorHandler> audio_processor_handler_;
-
-  // Offloads processing captured data to its own real time thread.
-  // Note: Ordering is important, as |processing_fifo_| must be destroyed before
-  // |audio_processing_handler_|.
-  std::unique_ptr<ProcessingAudioFifo> processing_fifo_;
-
   // Manages the |audio_processor_handler_| subscription to output audio.
   std::unique_ptr<OutputTapper> output_tapper_;
 #endif
@@ -379,6 +396,10 @@ class InputController final {
   base::TimeTicks stream_create_time_;
 
   bool is_muted_ = false;
+
+  // Mute state changes are monitored by either a platform subscription or,
+  // when subscriptions are not supported, the polling timer.
+  std::optional<base::CallbackListSubscription> mute_state_subscription_;
   base::RepeatingTimer check_muted_state_timer_;
 
   // If configured, used to add chromium playout to the captured audio signal.

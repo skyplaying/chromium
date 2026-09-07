@@ -44,10 +44,12 @@
 #include "extensions/browser/permissions/site_permissions_helper.h"
 #include "extensions/browser/permissions_manager.h"
 #include "extensions/browser/test_extension_registry_observer.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/api/extension_action/action_info.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/extension_features.h"
 #include "extensions/common/mojom/run_location.mojom-shared.h"
+#include "extensions/test/permissions_manager_waiter.h"
 #include "extensions/test/test_extension_dir.h"
 #include "net/dns/mock_host_resolver.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -268,7 +270,12 @@ IN_PROC_BROWSER_TEST_P(ExtensionActionViewModelFeatureRolloutBrowserTest,
             !is_feature_enabled);
 
   // Verify running the action removes the decoration, if existent.
-  action_runner->RunForTesting(extension.get());
+  {
+    extensions::PermissionsManagerWaiter waiter(
+        extensions::PermissionsManager::Get(profile()));
+    action_runner->RunForTesting(extension.get());
+    waiter.WaitForActiveTabPermissionGranted(extension->id());
+  }
   image_source =
       model->GetIconImageSourceForTesting(web_contents, kTestIconSize);
   EXPECT_FALSE(image_source->grayscale());
@@ -312,7 +319,7 @@ IN_PROC_BROWSER_TEST_P(ExtensionActionViewModelFeatureRolloutBrowserTest,
 
   // Simulate NativeTheme update after `image_source` is created.
   // `image_source` should paint fine without hitting use-after-free in such
-  // case.  See http://crbug.com/1315967
+  // case.  See http://crbug.com/40833823
   ui::NativeTheme::GetInstanceForNativeUi()->NotifyOnNativeThemeUpdated();
   image_source->GetImageForScale(1.0f);
 }
@@ -370,8 +377,13 @@ IN_PROC_BROWSER_TEST_P(ExtensionActionViewModelFeatureRolloutBrowserTest,
 
   // After triggering the action it should have access, which is reflected in
   // the tooltip.
-  model->ExecuteUserAction(
-      ToolbarActionViewModel::InvocationSource::kToolbarButton);
+  {
+    extensions::PermissionsManagerWaiter waiter(
+        extensions::PermissionsManager::Get(profile()));
+    model->ExecuteUserAction(
+        ToolbarActionViewModel::InvocationSource::kToolbarButton);
+    waiter.WaitForActiveTabPermissionGranted(extension->id());
+  }
   image_source =
       model->GetIconImageSourceForTesting(web_contents, kTestIconSize);
   EXPECT_FALSE(image_source->grayscale());
@@ -425,7 +437,9 @@ IN_PROC_BROWSER_TEST_P(ExtensionActionViewModelFeatureRolloutBrowserTest,
   // We skip this test on Android because popping out an extension via the
   // direct container access is not supported.
   ExtensionsToolbarDesktop* toolbar =
-      browser()->GetBrowserView().toolbar()->extensions_container();
+      BrowserView::GetBrowserViewForBrowser(browser())
+          ->toolbar()
+          ->extensions_container();
   toolbar_model()->SetActionVisibility(id, false);
   EXPECT_FALSE(toolbar->IsActionVisibleOnToolbar(id));
   base::RunLoop run_loop;
@@ -826,16 +840,26 @@ IN_PROC_BROWSER_TEST_P(ExtensionActionViewModelFeatureRolloutBrowserTest,
 
   // Click on the action, which grants activeTab and allows the extension to
   // access the page. This changes the page interaction status to "granted".
-  model->ExecuteUserAction(
-      ToolbarActionViewModel::InvocationSource::kToolbarButton);
+  {
+    extensions::PermissionsManagerWaiter waiter(
+        extensions::PermissionsManager::Get(profile()));
+    model->ExecuteUserAction(
+        ToolbarActionViewModel::InvocationSource::kToolbarButton);
+    waiter.WaitForActiveTabPermissionGranted(extension->id());
+  }
   EXPECT_EQ(SiteInteraction::kGranted, model->GetSiteInteraction(web_contents));
 
   // Now navigate to a restricted URL. Clicking the extension won't give access
   // here, so the page interaction status should be "none".
   NavigateAndCommitActiveTab(GURL("chrome://extensions"));
   EXPECT_EQ(SiteInteraction::kNone, model->GetSiteInteraction(web_contents));
-  model->ExecuteUserAction(
-      ToolbarActionViewModel::InvocationSource::kToolbarButton);
+  {
+    extensions::PermissionsManagerWaiter waiter(
+        extensions::PermissionsManager::Get(profile()));
+    model->ExecuteUserAction(
+        ToolbarActionViewModel::InvocationSource::kToolbarButton);
+    waiter.WaitForActiveTabPermissionGranted(extension->id());
+  }
   EXPECT_EQ(SiteInteraction::kNone, model->GetSiteInteraction(web_contents));
 }
 
@@ -873,8 +897,13 @@ IN_PROC_BROWSER_TEST_P(ExtensionActionViewModelFeatureRolloutBrowserTest,
   content::WebContents* web_contents = GetActiveWebContents();
 
   EXPECT_EQ(SiteInteraction::kNone, model->GetSiteInteraction(web_contents));
-  model->ExecuteUserAction(
-      ToolbarActionViewModel::InvocationSource::kToolbarButton);
+  {
+    extensions::PermissionsManagerWaiter waiter(
+        extensions::PermissionsManager::Get(profile()));
+    model->ExecuteUserAction(
+        ToolbarActionViewModel::InvocationSource::kToolbarButton);
+    waiter.WaitForActiveTabPermissionGranted(extension->id());
+  }
   EXPECT_EQ(SiteInteraction::kNone, model->GetSiteInteraction(web_contents));
 
   // After being granted access to file URLs the page interaction status should
@@ -890,8 +919,13 @@ IN_PROC_BROWSER_TEST_P(ExtensionActionViewModelFeatureRolloutBrowserTest,
   model = GetViewModelForId(extension->id());
   EXPECT_EQ(SiteInteraction::kActiveTab,
             model->GetSiteInteraction(web_contents));
-  model->ExecuteUserAction(
-      ToolbarActionViewModel::InvocationSource::kToolbarButton);
+  {
+    extensions::PermissionsManagerWaiter waiter(
+        extensions::PermissionsManager::Get(profile()));
+    model->ExecuteUserAction(
+        ToolbarActionViewModel::InvocationSource::kToolbarButton);
+    waiter.WaitForActiveTabPermissionGranted(extension->id());
+  }
   EXPECT_EQ(SiteInteraction::kGranted, model->GetSiteInteraction(web_contents));
 }
 
@@ -1243,13 +1277,15 @@ class FakeExtensionActionDelegate : public ExtensionActionDelegate {
   void UnregisterCommand() override {}
   bool IsShowingPopup() const override { return false; }
   void HidePopup() override {}
-  gfx::NativeView GetPopupNativeView() override { return gfx::NativeView(); }
+  gfx::NativeView GetPopupNativeViewForTesting() override {
+    return gfx::NativeView();
+  }
   void TriggerPopup(std::unique_ptr<extensions::ExtensionViewHost> host,
                     PopupShowAction show_action,
                     bool by_user,
                     ShowPopupCallback callback) override {}
   void ShowContextMenuAsFallback() override {}
-  bool CloseOverflowMenuIfOpen() override { return false; }
+  void CloseExtensionsMenuIfOpen() override {}
 };
 
 // Ensures that calling methods for stale extensions does not cause crashes.
@@ -1288,7 +1324,7 @@ IN_PROC_BROWSER_TEST_P(ExtensionActionViewModelFeatureRolloutBrowserTest,
   EXPECT_EQ(SiteInteraction::kNone, action->GetSiteInteraction(web_contents));
   EXPECT_EQ(false, action->IsEnabled(web_contents));
   EXPECT_EQ(false, action->IsShowingPopup());
-  EXPECT_EQ(gfx::NativeView(), action->GetPopupNativeView());
+  EXPECT_EQ(gfx::NativeView(), action->GetPopupNativeViewForTesting());
   EXPECT_EQ(nullptr,
             action->GetContextMenu(extensions::ExtensionContextMenuModel::
                                        ContextMenuSource::kToolbarAction));

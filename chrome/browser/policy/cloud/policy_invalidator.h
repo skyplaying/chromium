@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
@@ -55,8 +56,6 @@ class PolicyInvalidator : public invalidation::InvalidationListener::Observer,
   PolicyInvalidator& operator=(const PolicyInvalidator&) = delete;
   ~PolicyInvalidator() override;
 
-  void Shutdown();
-
   // The highest invalidation version that was handled already.
   int64_t highest_handled_invalidation_version() const;
 
@@ -75,25 +74,24 @@ class PolicyInvalidator : public invalidation::InvalidationListener::Observer,
   void OnInvalidationReceived(
       const invalidation::DirectInvalidation& invalidation) override;
 
+  std::string GetType() const override;
+
  protected:
   class PolicyInvalidationHandler;
 
   // |scope| indicates the invalidation scope that this invalidator
   // is responsible for.
   // |invalidation_listener| provides invalidations and is observed during the
-  // whole invaldiator's lifetime. Must remain valid until the invalidator is
+  // whole invalidator's lifetime. Must remain valid until the invalidator is
   // destroyed.
   // |core| is the cloud policy core which connects the various policy objects.
   // It must remain valid until Shutdown is called.
-  // |task_runner| is used for scheduling delayed tasks. It must post tasks to
-  // the main policy thread.
   // |clock| is used to get the current time.
-  // |highest_handled_invalidation_version| is the highest invalidation version
-  // that was handled already before this invalidator was created.
   // |device_local_account_id| is a unique identity for invalidator with
   // DeviceLocalAccount |scope| to have unique owner name. May be let empty
   // if scope is not DeviceLocalAccount.
   PolicyInvalidator(
+      std::string type,
       PolicyInvalidationScope scope,
       invalidation::InvalidationListener* invalidation_listener,
       CloudPolicyCore* core,
@@ -109,7 +107,9 @@ class PolicyInvalidator : public invalidation::InvalidationListener::Observer,
         PolicyInvalidationScope scope,
         CloudPolicyCore* core,
         const base::Clock* clock,
-        scoped_refptr<base::SequencedTaskRunner> task_runner);
+        scoped_refptr<base::SequencedTaskRunner> task_runner,
+        const char* policy_refresh_metric_name,
+        const char* policy_invalidation_metric_name);
 
     virtual ~PolicyInvalidationHandler();
 
@@ -134,16 +134,8 @@ class PolicyInvalidator : public invalidation::InvalidationListener::Observer,
 
     bool IsCoreReady() const {
       return core_->IsConnected() && core_->refresh_scheduler() &&
-             GetCloudPolicyStore();
+             core_->store();
     }
-
-    virtual const char* GetPolicyRefreshMetricName(
-        PolicyInvalidationScope scope) = 0;
-    virtual const char* GetPolicyInvalidationMetricName(
-        PolicyInvalidationScope scope) = 0;
-
-    // Returns the cloud policy store that is handled by this invalidator.
-    virtual CloudPolicyStore* GetCloudPolicyStore() const = 0;
 
     CloudPolicyCore* core() const { return core_; }
 
@@ -158,9 +150,6 @@ class PolicyInvalidator : public invalidation::InvalidationListener::Observer,
     // invalidation-triggered.
     // See https://codereview.chromium.org/213743014 for more details.
     bool AreInvalidationsEnabledForAWhile() const;
-
-    // The invalidation scope this invalidator is responsible for.
-    const PolicyInvalidationScope scope_;
 
     // The cloud policy core.
     const raw_ptr<CloudPolicyCore> core_;
@@ -191,6 +180,10 @@ class PolicyInvalidator : public invalidation::InvalidationListener::Observer,
     // Schedules delayed tasks.
     const scoped_refptr<base::SequencedTaskRunner> task_runner_;
 
+    // Metric names to record.
+    const char* const policy_refresh_metric_name_;
+    const char* const policy_invalidation_metric_name_;
+
     // A thread checker to make sure that callbacks are invoked on the correct
     // thread.
     THREAD_CHECKER(thread_checker_);
@@ -205,6 +198,8 @@ class PolicyInvalidator : public invalidation::InvalidationListener::Observer,
   // Returns true if ready to receive invalidations and invalidations are
   // enabled.
   bool AreInvalidationsEnabled() const;
+
+  const std::string type_;
 
   std::unique_ptr<PolicyInvalidationHandler> policy_invalidation_handler_;
 

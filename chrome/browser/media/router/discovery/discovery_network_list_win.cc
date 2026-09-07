@@ -23,12 +23,14 @@
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/no_destructor.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/threading/scoped_thread_priority.h"
 #include "base/win/hstring_reference.h"
 #include "base/win/scoped_hstring.h"
 #include "base/win/win_util.h"
 #include "base/win/windows_version.h"
+#include "chrome/browser/media/router/discovery/discovery_network_info.h"
 #include "chrome/browser/media/router/discovery/discovery_network_list.h"
 
 namespace WinrtConnectivity = ABI::Windows::Networking::Connectivity;
@@ -530,9 +532,11 @@ std::vector<DiscoveryNetworkInfo> GetDiscoveryNetworkInfoList() {
         continue;
       }
     }
-    network_ids.emplace_back(
-        name, base::HexEncode(current_adapter->PhysicalAddress,
-                              current_adapter->PhysicalAddressLength));
+    const auto mac_bytes =
+        base::as_byte_span(base::span(current_adapter->PhysicalAddress));
+    const size_t mac_len =
+        static_cast<size_t>(current_adapter->PhysicalAddressLength);
+    network_ids.emplace_back(name, base::HexEncode(mac_bytes.first(mac_len)));
   }
 
   StableSortDiscoveryNetworkInfo(network_ids.begin(), network_ids.end());

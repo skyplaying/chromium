@@ -8,10 +8,11 @@
 #include <string>
 #include <vector>
 
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/views/permissions/embedded_permission_prompt_base_view.h"
 
-class Browser;
+namespace content {
+class WebContents;
+}
 
 // A view used to display information to the user that they previously denied
 // permission to a site.
@@ -20,7 +21,7 @@ class EmbeddedPermissionPromptPreviouslyDeniedView
  public:
   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kAllowThisTimeId);
   EmbeddedPermissionPromptPreviouslyDeniedView(
-      Browser* browser,
+      content::WebContents* web_contents,
       base::WeakPtr<EmbeddedPermissionPromptViewDelegate> delegate);
   EmbeddedPermissionPromptPreviouslyDeniedView(
       const EmbeddedPermissionPromptPreviouslyDeniedView&) = delete;

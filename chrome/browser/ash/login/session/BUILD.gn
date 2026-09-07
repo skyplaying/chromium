@@ -46,6 +46,7 @@ static_library("session") {
     "//ash/constants",
     "//ash/webui/shimless_rma",
     "//chrome/browser:browser_process",
+    "//chrome/browser:browser_process_platform_part",
     "//chrome/browser:flags",
     "//chrome/browser:global_features",
     "//chrome/browser/app_mode",
@@ -65,15 +66,26 @@ static_library("session") {
     "//chrome/browser/ash/login/demo_mode",
     "//chrome/browser/ash/login/quick_unlock",
     "//chrome/browser/ash/login/saml",
-    "//chrome/browser/ash/plugin_vm",
     "//chrome/browser/ash/policy/core",
+    "//chrome/browser/ash/policy/remote_commands",
     "//chrome/browser/ash/profiles",
     "//chrome/browser/ash/settings",
     "//chrome/browser/ash/tpm",
+    "//chrome/browser/component_updater",
+    "//chrome/browser/first_run",
     "//chrome/browser/google",
+    "//chrome/browser/lifetime",
+    "//chrome/browser/manta",
+    "//chrome/browser/manta:impl",
+    "//chrome/browser/metrics",
+    "//chrome/browser/net",
+    "//chrome/browser/password_manager/factories",
     "//chrome/browser/prefs:util",
+    "//chrome/browser/profiles:profile_manager",
     "//chrome/browser/screen_ai:screen_ai_dlc_installer",
     "//chrome/browser/signin",
+    "//chrome/browser/supervised_user",
+    "//chrome/browser/trusted_vault",
     "//chrome/browser/ui/startup",
     "//chrome/browser/ui/webui/ash/shimless_rma_dialog",
     "//chrome/common",
@@ -96,11 +108,13 @@ static_library("session") {
     "//chromeos/ash/components/osauth/public",
     "//chromeos/ash/components/peripheral_notification",
     "//chromeos/ash/components/settings",
+    "//chromeos/ash/components/signin:identity_manager_provider",
     "//chromeos/ash/components/tpm",
     "//chromeos/ash/experiences/arc:arc_base_utils",
     "//chromeos/ash/experiences/arc:arc_features",
     "//chromeos/ash/experiences/arc:prefs",
     "//chromeos/ash/experiences/arc/session:arc_base_enums",
+    "//chromeos/ash/experiences/frozen_update",
     "//chromeos/ash/services/cros_safety",
     "//chromeos/constants",
     "//chromeos/dbus/tpm_manager",
@@ -108,6 +122,7 @@ static_library("session") {
     "//chromeos/ui/vector_icons",
     "//components/account_id",
     "//components/account_manager_core",
+    "//components/application_locale_storage",
     "//components/component_updater",
     "//components/language/core/browser",
     "//components/live_caption:utils",
@@ -136,7 +151,8 @@ static_library("session") {
     "//ui/aura",
     "//url",
 
-    # TODO(b/353449319): Use //chrome/browser/ash after fixing cyclic dependency from
+    # TODO(b/353449319): Use //chrome/browser/ash after fixing cyclic dependency
+    # from
     # obj/chrome/browser/ash/login/session/session/user_session_initializer.o.
     "//chrome/browser/policy/messaging_layer/proto:app_install_events_proto",
   ]
@@ -150,7 +166,10 @@ static_library("session") {
   ]
 
   if (enable_rlz) {
-    deps += [ "//components/rlz" ]
+    deps += [
+      "//chrome/browser/rlz",
+      "//components/rlz",
+    ]
   }
 }
 
@@ -187,12 +206,15 @@ source_set("browser_tests") {
     "//chrome/browser/ui/ash/login",
     "//chrome/browser/ui/webui/ash/login",
     "//chrome/test:test_support_ui",
+    "//chromeos/ash/components/browser_context_helper",
     "//chromeos/ash/components/system",
+    "//components/signin/public/identity_manager:test_support",
     "//content/test:test_support",
     "//google_apis:test_support",
     "//rlz/buildflags",
     "//testing/gtest",
     "//ui/base/clipboard",
+    "//ui/base/clipboard:clipboard_test_support",
   ]
 
   if (enable_rlz) {

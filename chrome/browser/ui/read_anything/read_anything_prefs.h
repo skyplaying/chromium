@@ -89,6 +89,18 @@ inline constexpr char kAccessibilityReadAnythingTTSEngineReinstalled[] =
 inline constexpr char kAccessibilityReadAnythingOmniboxChipIgnoredCount[] =
     "settings.a11y.read_anything.omnibox_chip_ignored_count";
 
+// The last opened presentation state of reading mode. This is used to
+// determine whether to reopen reading mode in full-screen or side panel
+// view.
+inline constexpr char kAccessibilityReadAnythingLastOpenedPresentationState[] =
+    "settings.a11y.read_anything.last_opened_presentation_state";
+
+// A list of timestamps of when the user last started a
+// Reading Mode session. This is used to determine when to show the HaTS survey
+// to the user.
+inline constexpr char kAccessibilityReadAnythingRecentUsagesStartTimes[] =
+    "settings.a11y.read_anything.recent_usages_start_times";
+
 }  // namespace prefs
 
 void RegisterReadAnythingProfilePrefs(

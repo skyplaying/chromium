@@ -11,13 +11,13 @@
 #include "base/run_loop.h"
 #include "base/scoped_observation.h"
 #include "base/test/scoped_feature_list.h"
+#include "chrome/browser/ui/immersive/immersive_mode_controller.h"
 #include "chrome/browser/ui/ui_features.h"
-#include "chrome/browser/ui/views/frame/immersive_mode_controller.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/pointer/touch_ui_controller.h"
 
 class BrowserView;
-class Browser;
+class BrowserWindowInterface;
 
 // Template to be used as a base class for touch-optimized UI parameterized test
 // fixtures.
@@ -43,27 +43,10 @@ class TopChromeTouchTest : public BaseTest {
   ui::TouchUiController::TouchUiScoperForTesting touch_ui_scoper_;
 };
 
-// Template to be used when a test does not work with the webUI tabstrip.
-template <bool kEnabled, class BaseTest>
-class WebUiTabStripOverrideTest : public BaseTest {
- public:
-  WebUiTabStripOverrideTest() {
-    if (kEnabled) {
-      feature_override_.InitAndEnableFeature(features::kWebUITabStrip);
-    } else {
-      feature_override_.InitAndDisableFeature(features::kWebUITabStrip);
-    }
-  }
-  ~WebUiTabStripOverrideTest() override = default;
-
- private:
-  base::test::ScopedFeatureList feature_override_;
-};
-
 // A helper class for immersive mode tests.
 class ImmersiveModeTester : public ImmersiveModeController::Observer {
  public:
-  explicit ImmersiveModeTester(Browser* browser);
+  explicit ImmersiveModeTester(BrowserWindowInterface* browser);
   ImmersiveModeTester(const ImmersiveModeTester&) = delete;
   ImmersiveModeTester& operator=(const ImmersiveModeTester&) = delete;
   ~ImmersiveModeTester() override;
@@ -100,7 +83,7 @@ class ImmersiveModeTester : public ImmersiveModeController::Observer {
   void OnImmersiveFullscreenExited() override;
 
  private:
-  const raw_ptr<Browser> browser_;
+  const raw_ptr<BrowserWindowInterface> browser_;
   base::ScopedObservation<ImmersiveModeController,
                           ImmersiveModeController::Observer>
       scoped_observation_{this};

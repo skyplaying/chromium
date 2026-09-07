@@ -6,6 +6,7 @@
 #define UI_TOUCH_SELECTION_TOUCH_SELECTION_CONTROLLER_H_
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "ui/events/types/event_type.h"
 #include "ui/gfx/geometry/point.h"
@@ -138,6 +139,9 @@ class UI_TOUCH_SELECTION_EXPORT TouchSelectionController
   // Hide the handles and suppress bounds updates until the next explicit
   // showing allowance.
   void HideAndDisallowShowingAutomatically();
+
+  // Hide the touch selection and destroy the handles natively.
+  void HideAndDestroy();
 
   // Override the handle visibility according to |hidden|.
   void SetTemporarilyHidden(bool hidden);
@@ -297,6 +301,8 @@ class UI_TOUCH_SELECTION_EXPORT TouchSelectionController
 
   // Whether a swipe-to-move-cursor gesture is activated.
   bool swipe_to_move_cursor_activated_ = false;
+
+  base::WeakPtrFactory<TouchSelectionController> weak_factory_{this};
 };
 
 }  // namespace ui

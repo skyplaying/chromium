@@ -14,7 +14,11 @@
 #include "chrome/browser/extensions/extension_install_prompt.h"
 #include "chrome/browser/extensions/extension_install_prompt_show_params.h"
 #include "chrome/grit/generated_resources.h"
+#include "content/public/browser/page_navigator.h"
 #include "content/public/browser/web_contents.h"
+#include "extensions/browser/install_prompt_data.h"
+#include "extensions/common/extension.h"
+#include "extensions/common/extension_urls.h"
 #include "ui/android/modal_dialog_manager_bridge.h"
 #include "ui/android/view_android.h"
 #include "ui/android/window_android.h"
@@ -26,27 +30,33 @@
 
 using base::android::ConvertUTF16ToJavaString;
 using base::android::ScopedJavaLocalRef;
+using extensions::InstallPromptData;
 
 namespace {
 
 void ShowExtensionInstallDialogAndroid(
     std::unique_ptr<ExtensionInstallPromptShowParams> show_params,
     ExtensionInstallPrompt::DoneCallback done_callback,
-    std::unique_ptr<ExtensionInstallPrompt::Prompt> prompt) {
-  content::WebContents* web_contents = show_params->GetParentWebContents();
-  if (!web_contents) {
-    return;
-  }
-
-  ui::ViewAndroid* view_android = web_contents->GetNativeView();
-  DCHECK(view_android);
-  ui::WindowAndroid* window_android = view_android->GetWindowAndroid();
+    std::unique_ptr<InstallPromptData> prompt) {
+  // A parent window is required to retrieve the ModalDialogManager. If
+  // show_params was configured with a WebContents, GetParentWindow() computes
+  // the window from the WebContents's top-level native window.
+  ui::WindowAndroid* window_android = show_params->GetParentWindow();
   if (!window_android) {
+    LOG(ERROR) << "Parent window not found.";
+    if (done_callback) {
+      std::move(done_callback)
+          .Run(ExtensionInstallPrompt::DoneCallbackPayload(
+              ExtensionInstallPrompt::Result::ABORTED));
+    }
     return;
   }
 
+  // WebContents is optional (e.g. for permission prompts requested from a
+  // background context) and is only used if the user clicks a Web Store link.
+  content::WebContents* web_contents = show_params->GetParentWebContents();
   auto* dialog_view = new extensions::ExtensionInstallDialogViewAndroid(
-      std::move(prompt), std::move(done_callback));
+      web_contents, std::move(prompt), std::move(done_callback));
   dialog_view->ShowDialog(window_android);
   // `dialog_view` will delete itself when dialog is dismissed.
 }
@@ -56,11 +66,17 @@ void ShowExtensionInstallDialogAndroid(
 namespace extensions {
 
 ExtensionInstallDialogViewAndroid::ExtensionInstallDialogViewAndroid(
-    std::unique_ptr<ExtensionInstallPrompt::Prompt> prompt,
+    content::WebContents* web_contents,
+    std::unique_ptr<InstallPromptData> prompt,
     ExtensionInstallPrompt::DoneCallback done_callback)
-    : prompt_(std::move(prompt)), done_callback_(std::move(done_callback)) {}
+    : web_contents_(web_contents),
+      prompt_(std::move(prompt)),
+      done_callback_(std::move(done_callback)) {}
 
 ExtensionInstallDialogViewAndroid::~ExtensionInstallDialogViewAndroid() {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_ExtensionInstallDialogBridge_clearNativePtr(env, java_object_);
+
   if (!done_callback_) {
     return;
   }
@@ -107,6 +123,19 @@ void ExtensionInstallDialogViewAndroid::Destroy(JNIEnv* env) {
   delete this;
 }
 
+void ExtensionInstallDialogViewAndroid::OnStoreLinkClicked(
+    JNIEnv* env,
+    const base::android::JavaRef<jstring>& url) {
+  if (!web_contents_) {
+    return;
+  }
+  GURL gurl(base::android::ConvertJavaStringToUTF8(env, url));
+  content::OpenURLParams params(gurl, content::Referrer(),
+                                WindowOpenDisposition::NEW_FOREGROUND_TAB,
+                                ui::PAGE_TRANSITION_LINK, false);
+  web_contents_->OpenURL(params, /*navigation_handle_callback=*/{});
+}
+
 void ExtensionInstallDialogViewAndroid::BuildPropertyModel() {
   JNIEnv* env = base::android::AttachCurrentThread();
 
@@ -133,8 +162,7 @@ void ExtensionInstallDialogViewAndroid::BuildPropertyModel() {
   }
 
   bool requires_justification =
-      prompt_->type() ==
-      ExtensionInstallPrompt::PromptType::EXTENSION_REQUEST_PROMPT;
+      prompt_->type() == InstallPromptData::EXTENSION_REQUEST_PROMPT;
   if (requires_justification) {
     std::u16string justification_heading = l10n_util::GetStringUTF16(
         IDS_ENTERPRISE_EXTENSION_REQUEST_JUSTIFICATION);
@@ -143,6 +171,20 @@ void ExtensionInstallDialogViewAndroid::BuildPropertyModel() {
 
     Java_ExtensionInstallDialogBridge_withJustification(
         env, java_object_, justification_heading, justification_placeholder);
+  }
+
+  if (prompt_->has_webstore_data()) {
+    std::u16string store_link_text =
+        l10n_util::GetStringUTF16(IDS_EXTENSION_PROMPT_STORE_LINK);
+    std::u16string rating_count_text = prompt_->GetRatingCount();
+    std::u16string user_count_text = prompt_->GetUserCount();
+    double average_rating = prompt_->average_rating();
+    std::string store_url = extension_urls::GetWebstoreItemDetailURLPrefix() +
+                            prompt_->extension()->id();
+
+    Java_ExtensionInstallDialogBridge_withWebstoreData(
+        env, java_object_, store_link_text, rating_count_text, user_count_text,
+        average_rating, store_url);
   }
 
   Java_ExtensionInstallDialogBridge_buildDialog(

@@ -39,6 +39,8 @@ std::unique_ptr<WDTypedResult> GetKeywordsImpl(WebDatabase* db) {
       keyword_table->GetBuiltinKeywordDataVersion();
   metadata.builtin_keyword_country = regional_capabilities::CountryIdHolder(
       keyword_table->GetBuiltinKeywordCountry());
+  metadata.prepopulated_engines_migration_state =
+      keyword_table->GetPrepopulatedEnginesMigrationState();
   metadata.starter_pack_version = keyword_table->GetStarterPackKeywordVersion();
 
   result.metadata = metadata;
@@ -56,6 +58,15 @@ WebDatabase::State SetBuiltinKeywordDataVersionImpl(int version,
 WebDatabase::State SetBuiltinKeywordCountryImpl(CountryId country_id,
                                                 WebDatabase* db) {
   return KeywordTable::FromWebDatabase(db)->SetBuiltinKeywordCountry(country_id)
+             ? WebDatabase::COMMIT_NEEDED
+             : WebDatabase::COMMIT_NOT_NEEDED;
+}
+
+WebDatabase::State SetPrepopulatedEnginesMigrationStateImpl(
+    KeywordTable::PrepopulatedEngineMigrationSet migration_state,
+    WebDatabase* db) {
+  return KeywordTable::FromWebDatabase(db)
+                 ->SetPrepopulatedEnginesMigrationState(migration_state)
              ? WebDatabase::COMMIT_NEEDED
              : WebDatabase::COMMIT_NOT_NEEDED;
 }
@@ -163,6 +174,13 @@ void KeywordWebDataService::SetBuiltinKeywordDataVersion(int version) {
 void KeywordWebDataService::SetBuiltinKeywordCountry(CountryId version) {
   wdbs_->ScheduleDBTask(FROM_HERE,
                         base::BindOnce(&SetBuiltinKeywordCountryImpl, version));
+}
+
+void KeywordWebDataService::SetPrepopulatedEnginesMigrationState(
+    KeywordTable::PrepopulatedEngineMigrationSet migration_state) {
+  wdbs_->ScheduleDBTask(
+      FROM_HERE, base::BindOnce(&SetPrepopulatedEnginesMigrationStateImpl,
+                                migration_state));
 }
 
 void KeywordWebDataService::SetStarterPackKeywordVersion(int version) {

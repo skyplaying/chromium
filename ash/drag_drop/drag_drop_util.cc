@@ -5,7 +5,7 @@
 #include "ash/drag_drop/drag_drop_util.h"
 
 #include "ash/style/ash_color_id.h"
-#include "ui/gfx/shadow_util.h"
+#include "ui/compositor_extra/decoration_util.h"
 
 namespace ash::drag_drop {
 
@@ -17,7 +17,8 @@ const ui::ColorId kDragImageBackgroundColor = kColorAshShieldAndBaseOpaque;
 
 const gfx::ShadowDetails& GetDragImageShadowDetails(
     const std::optional<size_t>& corner_radius) {
-  return gfx::ShadowDetails::Get(kShadowElevation, corner_radius.value_or(0));
+  return gfx::ShadowDetails::Get(
+      kShadowElevation, gfx::RoundedCornersF(corner_radius.value_or(0)));
 }
 
 }  // namespace ash::drag_drop

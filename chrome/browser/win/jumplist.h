@@ -193,6 +193,14 @@ class JumpList : public sessions::TabRestoreServiceObserver,
                 const base::FilePath& cmd_line_profile_dir,
                 size_t max_items);
 
+  // Adds a new ShellLinkItem for each tab in |split| to the JumpList data
+  // provided that doing so will not exceed |max_items|. If
+  // |cmd_line_profile_dir| is not empty, it will be added to the command line
+  // switch --profile-directory.
+  void AddSplit(const sessions::tab_restore::Split& split,
+                const base::FilePath& cmd_line_profile_dir,
+                size_t max_items);
+
   // Starts loading a favicon for each URL in |icon_urls_|.
   // This function sends a query to HistoryService.
   // When finishing loading all favicons, this function posts a task that
@@ -237,6 +245,7 @@ class JumpList : public sessions::TabRestoreServiceObserver,
       bool most_visited_should_update,
       bool recently_closed_should_update,
       policy::IncognitoModeAvailability incognito_availability,
+      bool isolated_mode_enabled,
       UpdateTransaction* update_transaction);
 
   // Creates a new JumpList along with any icons that are not in the cache,
@@ -251,6 +260,7 @@ class JumpList : public sessions::TabRestoreServiceObserver,
       bool most_visited_should_update,
       bool recently_closed_should_update,
       policy::IncognitoModeAvailability incognito_availability,
+      bool isolated_mode_enabled,
       UpdateTransaction* update_transaction);
 
   // Updates icon files for |item_list| in |icon_dir|, which consists of

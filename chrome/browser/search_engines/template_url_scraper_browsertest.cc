@@ -17,7 +17,6 @@
 #include "chrome/browser/search_engine_choice/search_engine_choice_service_factory.h"
 #include "chrome/browser/search_engines/template_url_prepopulate_data_resolver_factory.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -90,10 +89,10 @@ IN_PROC_BROWSER_TEST_F(TemplateURLScraperTest, ScrapeWithOnSubmit) {
 
   TemplateURLPrepopulateData::Resolver* prepopulate_data_resolver =
       TemplateURLPrepopulateData::ResolverFactory::GetForProfile(
-          browser()->profile());
+          browser()->GetProfile());
   TemplateURLService* template_urls =
       TemplateURLServiceFactory::GetInstance()->GetForProfile(
-          browser()->profile());
+          browser()->GetProfile());
   TemplateURLServiceLoader loader(template_urls);
 
   TemplateURLService::TemplateURLVector all_urls =

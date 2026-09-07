@@ -21,6 +21,7 @@
 #include "components/password_manager/core/browser/password_form_cache_impl.h"
 #include "components/password_manager/core/browser/password_form_manager.h"
 #include "components/password_manager/core/browser/password_save_manager_impl.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/password_manager/core/browser/stub_form_saver.h"
 #include "components/password_manager/core/browser/stub_password_manager_client.h"
 #include "components/password_manager/core/browser/stub_password_manager_driver.h"
@@ -344,7 +345,8 @@ TEST_F(UndoPasswordChangeControllerTest,
 
 TEST_F(UndoPasswordChangeControllerTest,
        OnLoginPotentiallyFailed_BackupUsed_Ignored) {
-  failed_login_form_.password_value = kBackupPassword;
+  failed_login_form_.password_value =
+      PasswordString(std::u16string(kBackupPassword));
   best_match_form_.SetPasswordBackupNote(kBackupPassword);
   auto form_manager = CreateFormManager(best_match_form_);
 
@@ -380,6 +382,26 @@ TEST_F(UndoPasswordChangeControllerTest,
   run_loop.Run();
 
   EXPECT_EQ(controller_.FindLoginWithProactiveRecoveryState(&fill_data), match);
+}
+
+TEST_F(UndoPasswordChangeControllerTest,
+       OnLoginPotentiallyFailed_GroupedAffiliation_RecoveryTriggered) {
+  best_match_form_.SetPasswordBackupNote(kBackupPassword);
+  best_match_form_.match_type =
+      password_manager::PasswordForm::MatchType::kGrouped;
+  auto form_manager = CreateFormManager(best_match_form_);
+  base::RunLoop run_loop;
+
+  controller_.OnLoginPotentiallyFailed(&driver_, failed_login_form_);
+  EXPECT_CALL(driver_, TriggerPasswordRecoverySuggestions(
+                           failed_login_form_.password_element_renderer_id))
+      .WillOnce(RunOnceClosure(run_loop.QuitClosure()));
+  static_cast<PasswordFormManagerObserver*>(&controller_)
+      ->OnPasswordFormParsed(form_manager.get());
+  run_loop.Run();
+
+  EXPECT_EQ(controller_.GetState(kUsername),
+            PasswordRecoveryState::kShowProactiveRecovery);
 }
 
 TEST_F(UndoPasswordChangeControllerTest,

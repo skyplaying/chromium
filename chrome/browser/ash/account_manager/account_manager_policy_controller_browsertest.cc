@@ -27,7 +27,6 @@
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "components/account_id/account_id.h"
 #include "components/account_manager_core/account.h"
-#include "components/account_manager_core/account_manager_facade.h"
 #include "components/account_manager_core/chromeos/account_manager.h"
 #include "components/account_manager_core/pref_names.h"
 #include "components/session_manager/core/session_manager.h"
@@ -96,16 +95,17 @@ class AccountManagerPolicyControllerTest : public InProcessBrowserTest {
         identity_test_env->MakePrimaryAccountAvailable(
             kFakePrimaryUsername, signin::ConsentLevel::kSignin);
     ASSERT_EQ(account_id,
-              AccountId::FromUserEmailGaiaId(primary_account_info.email,
-                                             primary_account_info.gaia));
+              AccountId::FromUserEmailGaiaId(primary_account_info.GetEmail(),
+                                             primary_account_info.GetGaiaId()));
 
     // Add accounts in Account Manager.
     auto* account_manager =
         ash::AccountManagerFactory::Get()->GetAccountManager(
             profile_->GetPath().value());
     account_manager->UpsertAccount(
-        ::account_manager::AccountKey::FromGaiaId(primary_account_info.gaia),
-        primary_account_info.email,
+        ::account_manager::AccountKey::FromGaiaId(
+            primary_account_info.GetGaiaId()),
+        primary_account_info.GetEmail(),
         account_manager::AccountManager::kInvalidToken);
     account_manager->UpsertAccount(
         ::account_manager::AccountKey::FromGaiaId(kFakeSecondaryGaiaId),
@@ -121,14 +121,14 @@ class AccountManagerPolicyControllerTest : public InProcessBrowserTest {
   }
 
   std::vector<::account_manager::Account> GetAccountManagerAccounts() {
-    auto* account_manager_facade =
-        ash::AccountManagerFactory::Get()->GetAccountManagerFacade(
+    auto* account_manager =
+        ash::AccountManagerFactory::Get()->GetAccountManager(
             profile_->GetPath().value());
-    CHECK(account_manager_facade);
+    CHECK(account_manager);
 
     base::test::TestFuture<const std::vector<::account_manager::Account>&>
         future;
-    account_manager_facade->GetAccounts(future.GetCallback());
+    account_manager->GetAccounts(future.GetCallback());
     return future.Get();
   }
 

@@ -17,11 +17,10 @@
 #include "chrome/browser/net/server_certificate_database_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/certificate_dialogs.h"
-#include "chrome/browser/ui/chrome_select_file_policy.h"
+#include "chrome/browser/ui/select_file_policy/chrome_select_file_policy.h"
 #include "chrome/browser/ui/webui/certificate_manager/certificate_manager_handler.h"
 #include "chrome/browser/ui/webui/certificate_manager/certificate_manager_utils.h"
 #include "chrome/browser/ui/webui/certificate_viewer/certificate_viewer_webui.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/net/x509_certificate_model.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
@@ -31,7 +30,7 @@
 #include "components/server_certificate_database/server_certificate_database_service.h"
 #include "content/public/browser/network_service_instance.h"
 #include "content/public/browser/web_contents.h"
-#include "crypto/sha2.h"
+#include "crypto/hash.h"
 #include "net/cert/x509_certificate.h"
 #include "net/cert/x509_util.h"
 #include "services/cert_verifier/public/mojom/cert_verifier_service_factory.mojom.h"
@@ -108,7 +107,7 @@ void ViewCertificateAsync(
     return;
   }
 
-  std::array<uint8_t, crypto::kSHA256Length> hash;
+  std::array<uint8_t, crypto::hash::kSha256Size> hash;
   if (!base::HexStringToSpan(sha256_hex_hash, hash)) {
     return;
   }
@@ -117,7 +116,7 @@ void ViewCertificateAsync(
     if (cert_info.cert_metadata.trust().trust_type() != trust) {
       continue;
     }
-    if (hash == crypto::SHA256Hash(cert_info.der_cert)) {
+    if (hash == crypto::hash::Sha256(cert_info.der_cert)) {
       // Found the cert, open cert viewer dialog if able and return.
       if (IsCACertificateManagementAllowed(*profile->GetPrefs())) {
         ShowCertificateDialog(

@@ -33,6 +33,7 @@
 
 #include <stdint.h>
 
+#include <limits>
 #include <memory>
 #include <utility>
 
@@ -46,6 +47,7 @@
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/system/simple_watcher.h"
+#include "services/network/public/mojom/ip_address_space.mojom-blink-forward.h"
 #include "services/network/public/mojom/websocket.mojom-blink.h"
 #include "third_party/blink/public/mojom/websockets/websocket_connector.mojom-blink-forward.h"
 #include "third_party/blink/renderer/core/fileapi/blob.h"
@@ -112,7 +114,10 @@ class MODULES_EXPORT WebSocketChannelImpl final
   ~WebSocketChannelImpl() override;
 
   // WebSocketChannel functions.
-  bool Connect(const KURL&, const String& protocol) override;
+  bool Connect(
+      const KURL&,
+      const String& protocol,
+      network::mojom::blink::IPAddressSpace target_address_space) override;
   void Send(const std::string& message,
             std::unique_ptr<SendCompletionWatcher>) override;
   void Send(const DOMArrayBuffer&,
@@ -130,6 +135,10 @@ class MODULES_EXPORT WebSocketChannelImpl final
   void CancelHandshake() override;
   void ApplyBackpressure() override;
   void RemoveBackpressure() override;
+
+  void SetMaxMessageSizeForTesting(size_t max_message_size) {
+    max_message_size_ = max_message_size;
+  }
 
   // network::mojom::blink::WebSocketHandshakeClient methods:
   void OnOpeningHandshakeStarted(
@@ -393,6 +402,7 @@ class MODULES_EXPORT WebSocketChannelImpl final
   FrameScheduler::SchedulingAffectingFeatureHandle
       feature_handle_for_scheduler_;
   String failure_message_;
+  size_t max_message_size_ = std::numeric_limits<wtf_size_t>::max();
 
   const Member<const SourceLocation> location_at_construction_;
   network::mojom::blink::WebSocketHandshakeRequestPtr handshake_request_;

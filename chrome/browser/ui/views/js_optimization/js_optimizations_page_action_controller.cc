@@ -6,14 +6,15 @@
 
 #include "base/check_deref.h"
 #include "base/functional/bind.h"
-#include "base/functional/callback_helpers.h"
 #include "base/no_destructor.h"
 #include "chrome/browser/site_protection/site_familiarity_utils.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
-#include "chrome/browser/ui/browser_actions.h"
-#include "chrome/browser/ui/views/page_action/page_action_controller.h"
-#include "chrome/browser/ui/views/page_action/page_action_icon_view.h"
+#include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/page_action/page_action_controller.h"
+#include "chrome/browser/ui/views/js_optimization/js_optimizations_infobar_delegate.h"
+#include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/infobars/content/content_infobar_manager.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/actions/actions.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -56,6 +57,11 @@ JsOptimizationsPageActionController::~JsOptimizationsPageActionController() =
 
 void JsOptimizationsPageActionController::PrimaryPageChanged(
     content::Page& page) {
+  // The bubble's contents and action are scoped to the page it was opened for,
+  // so dismiss it when the primary page changes.
+  if (bubble_ && bubble_->GetWidget()) {
+    bubble_->GetWidget()->Close();
+  }
   UpdateIconVisibility();
 }
 
@@ -76,13 +82,10 @@ void JsOptimizationsPageActionController::ShowBubble(
 
 void JsOptimizationsPageActionController::OnBubbleHidden(
     actions::ActionItem* action_item) {
-  action_item->SetIsShowingBubble(false);
-}
-
-void JsOptimizationsPageActionController::OnWidgetClosing(
-    views::Widget* widget) {
-  widget_observation_.Reset();
+  // At this point, `bubble_` pointer is no longer valid. Therefore, it should
+  // be cleared.
   bubble_ = nullptr;
+  action_item->SetIsShowingBubble(false);
 }
 
 views::BubbleDialogModelHost* JsOptimizationsPageActionController::CreateBubble(
@@ -124,14 +127,16 @@ views::BubbleDialogModelHost* JsOptimizationsPageActionController::CreateBubble(
   auto dialog_model = dialog_model_builder.Build();
   auto bubble_unique = std::make_unique<views::BubbleDialogModelHost>(
       std::move(dialog_model), anchor, views::BubbleBorder::TOP_RIGHT);
+  bubble_unique->SetHighlightedElement(kJsOptimizationsIconElementId);
   auto* bubble = bubble_unique.get();
   if (GetTestCallback()) {
     GetTestCallback().Run(bubble);
   }
   // TODO(crbug.com/464011395): Refactor to use CLIENT_OWNS_WIDGET.
   views::Widget* const widget =
-      views::BubbleDialogDelegate::CreateBubble(std::move(bubble_unique));
-  widget_observation_.Observe(widget);
+      views::BubbleDialogDelegate::CreateBubbleDeprecated(
+          std::move(bubble_unique),
+          views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
   widget->Show();
   return bubble;
 }
@@ -142,4 +147,11 @@ void JsOptimizationsPageActionController::EnableV8Optimizations() {
   // TODO(crbug.com/457420369): Something may need to be done here to cause
   // the updated content setting to take effect in the existing tab. Currently
   // it only takes effect in subsequently opened tabs.
+
+  // Display a prompt to the user to reload the page
+  infobars::ContentInfoBarManager* const infobar_manager =
+      infobars::ContentInfoBarManager::FromWebContents(web_contents());
+  if (infobar_manager) {
+    JsOptimizationsInfoBarDelegate::Create(infobar_manager);
+  }
 }

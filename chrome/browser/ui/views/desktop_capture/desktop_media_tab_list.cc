@@ -6,20 +6,15 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/numerics/safe_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/media/webrtc/desktop_media_list_layout_config.h"
-#include "chrome/browser/ui/color/chrome_color_id.h"
-#include "chrome/browser/ui/views/desktop_capture/desktop_media_picker_views.h"
 #include "chrome/grit/generated_resources.h"
-#include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/color/color_provider.h"
 #include "ui/gfx/favicon_size.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/views/accessibility/view_accessibility.h"
@@ -30,7 +25,6 @@
 #include "ui/views/controls/table/table_view_observer.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
-#include "ui/views/layout/layout_provider.h"
 #include "ui/views/view.h"
 
 using content::BrowserThread;
@@ -67,16 +61,16 @@ class TabListModel : public ui::TableModel,
                      public DesktopMediaListController::SourceListListener {
  public:
   explicit TabListModel(
-      DesktopMediaListController* controller,
+      base::WeakPtr<DesktopMediaListController> controller,
       base::RepeatingCallback<void(size_t)> preview_updated_callback);
 
   TabListModel(const TabListModel&) = delete;
   TabListModel operator=(const TabListModel&) = delete;
 
   // ui::TableModel:
-  size_t RowCount() override;
-  std::u16string GetText(size_t row, int column) override;
-  ui::ImageModel GetIcon(size_t row) override;
+  size_t RowCount() const override;
+  std::u16string GetText(size_t row, int column) const override;
+  ui::ImageModel GetIcon(size_t row) const override;
   void SetObserver(ui::TableModelObserver* observer) override;
 
   // DesktopMediaListController::SourceListListener:
@@ -89,32 +83,34 @@ class TabListModel : public ui::TableModel,
   void OnDelegatedSourceListSelection() override;
 
  private:
-  raw_ptr<DesktopMediaListController, DanglingUntriaged> controller_;
+  base::WeakPtr<DesktopMediaListController> controller_;
   raw_ptr<ui::TableModelObserver> observer_ = nullptr;
   base::RepeatingCallback<void(size_t)> preview_updated_callback_;
 };
 
 TabListModel::TabListModel(
-    DesktopMediaListController* controller,
+    base::WeakPtr<DesktopMediaListController> controller,
     base::RepeatingCallback<void(size_t)> preview_updated_callback)
     : controller_(controller),
       preview_updated_callback_(preview_updated_callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 }
 
-size_t TabListModel::RowCount() {
+size_t TabListModel::RowCount() const {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  return controller_->GetSourceCount();
+  return controller_ ? controller_->GetSourceCount() : 0;
 }
 
-std::u16string TabListModel::GetText(size_t row, int column) {
+std::u16string TabListModel::GetText(size_t row, int column) const {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  return controller_->GetSource(row).name;
+  return controller_ ? controller_->GetSource(row).name : std::u16string();
 }
 
-ui::ImageModel TabListModel::GetIcon(size_t row) {
+ui::ImageModel TabListModel::GetIcon(size_t row) const {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  return ui::ImageModel::FromImageSkia(controller_->GetSource(row).thumbnail);
+  return controller_ ? ui::ImageModel::FromImageSkia(
+                           controller_->GetSource(row).thumbnail)
+                     : ui::ImageModel();
 }
 
 void TabListModel::SetObserver(ui::TableModelObserver* observer) {
@@ -164,7 +160,7 @@ void TabListModel::OnDelegatedSourceListSelection() {
 // listing tabs and the DesktopMediaTabList.
 class TabListViewObserver : public views::TableViewObserver {
  public:
-  TabListViewObserver(DesktopMediaListController* controller,
+  TabListViewObserver(base::WeakPtr<DesktopMediaListController> controller,
                       base::RepeatingClosure selection_changed_callback);
 
   TabListViewObserver(const TabListViewObserver&) = delete;
@@ -174,12 +170,12 @@ class TabListViewObserver : public views::TableViewObserver {
   void OnKeyDown(ui::KeyboardCode virtual_keycode) override;
 
  private:
-  const raw_ptr<DesktopMediaListController, DanglingUntriaged> controller_;
+  base::WeakPtr<DesktopMediaListController> controller_;
   base::RepeatingClosure selection_changed_callback_;
 };
 
 TabListViewObserver::TabListViewObserver(
-    DesktopMediaListController* controller,
+    base::WeakPtr<DesktopMediaListController> controller,
     base::RepeatingClosure selection_changed_callback)
     : controller_(controller),
       selection_changed_callback_(std::move(selection_changed_callback)) {
@@ -188,13 +184,15 @@ TabListViewObserver::TabListViewObserver(
 
 void TabListViewObserver::OnSelectionChanged() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  controller_->OnSourceSelectionChanged();
+  if (controller_) {
+    controller_->OnSourceSelectionChanged();
+  }
   selection_changed_callback_.Run();
 }
 
 void TabListViewObserver::OnKeyDown(ui::KeyboardCode virtual_keycode) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  if (virtual_keycode == ui::VKEY_RETURN) {
+  if (virtual_keycode == ui::VKEY_RETURN && controller_) {
     controller_->AcceptSource();
   }
 }
@@ -214,7 +212,7 @@ std::unique_ptr<views::ScrollView> CreateScrollViewWithTable(
 
 DesktopMediaTabList::DesktopMediaTabList(DesktopMediaListController* controller,
                                          const std::u16string& accessible_name)
-    : controller_(controller) {
+    : controller_(controller ? controller->GetWeakPtr() : nullptr) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   // The thumbnail size isn't allowed to be smaller than gfx::kFaviconSize by
   // the underlying media list. TableView requires that the icon size be exactly
@@ -223,8 +221,10 @@ DesktopMediaTabList::DesktopMediaTabList(DesktopMediaListController* controller,
   // list.
   DCHECK_GE(ui::TableModel::kIconSize, gfx::kFaviconSize);
 
-  controller_->SetThumbnailSize(
-      gfx::Size(ui::TableModel::kIconSize, ui::TableModel::kIconSize));
+  if (controller_) {
+    controller_->SetThumbnailSize(
+        gfx::Size(ui::TableModel::kIconSize, ui::TableModel::kIconSize));
+  }
 
   SetLayoutManager(std::make_unique<views::FillLayout>());
 
@@ -251,6 +251,8 @@ std::unique_ptr<views::View> DesktopMediaTabList::BuildUI(
     std::unique_ptr<views::TableView> table) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   auto preview_wrapper = std::make_unique<views::View>();
+  preview_wrapper->SetBackground(
+      views::CreateRoundedRectBackground(ui::kColorSysTonalContainer, 8));
   preview_wrapper->SetPreferredSize(desktopcapture::kPreviewSize);
 
   auto preview = std::make_unique<views::ImageView>();
@@ -266,6 +268,10 @@ std::unique_ptr<views::View> DesktopMediaTabList::BuildUI(
   empty_preview_label->SetMultiLine(true);
   empty_preview_label->SetPreferredSize(desktopcapture::kPreviewSize);
   empty_preview_label->SetSize(desktopcapture::kPreviewSize);
+  empty_preview_label->SetEnabledColor(ui::kColorSysOnTonalContainer);
+  empty_preview_label->SetBackground(
+      views::CreateRoundedRectBackground(ui::kColorSysTonalContainer, 8));
+  empty_preview_label->SetBackgroundColor(ui::kColorSysTonalContainer);
   empty_preview_label_ =
       preview_wrapper->AddChildView(std::move(empty_preview_label));
 
@@ -289,6 +295,8 @@ std::unique_ptr<views::View> DesktopMediaTabList::BuildUI(
 
   scroll_view_ =
       full_panel->AddChildView(CreateScrollViewWithTable(std::move(table)));
+  scroll_view_->SetBackground(
+      views::CreateRoundedRectBackground(ui::kColorSysSurface4, 8));
   scroll_view_->SetPreferredSize(gfx::Size(kListWidth, 0));
   full_panel->AddChildView(std::move(preview_sidebar));
 
@@ -335,23 +343,15 @@ gfx::Size DesktopMediaTabList::CalculatePreferredSize(
 
 void DesktopMediaTabList::OnThemeChanged() {
   DesktopMediaListController::ListView::OnThemeChanged();
-
-  const ui::ColorProvider* const color_provider = GetColorProvider();
-  table_->SetBorder(nullptr);
-
-  scroll_view_->SetBackground(views::CreateRoundedRectBackground(
-      GetColorProvider()->GetColor(ui::kColorSysSurface4), 8));
-  const SkColor background_color =
-      color_provider->GetColor(ui::kColorSysTonalContainer);
-  preview_wrapper_->SetBackground(
-      views::CreateRoundedRectBackground(background_color, 8));
-  empty_preview_label_->SetBackground(
-      views::CreateRoundedRectBackground(background_color, 8));
-  empty_preview_label_->SetBackgroundColor(background_color);
+  scroll_view_->SetBackground(
+      views::CreateRoundedRectBackground(ui::kColorSysSurface4, 8));
 }
 
 std::optional<content::DesktopMediaID> DesktopMediaTabList::GetSelection() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  if (!controller_) {
+    return std::nullopt;
+  }
   std::optional<size_t> row = table_->GetFirstSelectedRow();
   if (!row.has_value()) {
     return std::nullopt;
@@ -385,7 +385,12 @@ void DesktopMediaTabList::OnSelectionChanged() {
   std::optional<size_t> row = table_->GetFirstSelectedRow();
   if (!row.has_value()) {
     ClearPreview();
-    controller_->SetPreviewedSource(std::nullopt);
+    if (controller_) {
+      controller_->SetPreviewedSource(std::nullopt);
+    }
+    return;
+  }
+  if (!controller_) {
     return;
   }
   const DesktopMediaList::Source& source = controller_->GetSource(row.value());
@@ -420,7 +425,7 @@ void DesktopMediaTabList::ClearPreviewImageIfUnchanged(
 
 void DesktopMediaTabList::OnPreviewUpdated(size_t index) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  if (index != table_->GetFirstSelectedRow()) {
+  if (index != table_->GetFirstSelectedRow() || !controller_) {
     return;
   }
 

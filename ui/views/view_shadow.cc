@@ -6,6 +6,7 @@
 
 #include "ui/compositor/layer.h"
 #include "ui/compositor_extra/shadow.h"
+#include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/views/view.h"
 #include "ui/views/view_class_properties.h"
 
@@ -30,7 +31,11 @@ ViewShadow::~ViewShadow() {
 }
 
 void ViewShadow::SetRoundedCornerRadius(int corner_radius) {
-  shadow_->SetRoundedCornerRadius(corner_radius);
+  shadow_->SetRoundedCorners(gfx::RoundedCornersF(corner_radius));
+}
+
+void ViewShadow::SetRoundedCorners(const gfx::RoundedCornersF& radii) {
+  shadow_->SetRoundedCorners(radii);
 }
 
 void ViewShadow::OnLayerRecreated(ui::Layer* old_layer) {

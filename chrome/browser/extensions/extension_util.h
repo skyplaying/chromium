@@ -9,8 +9,10 @@
 #include <string>
 
 #include "base/values.h"
+#include "build/build_config.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/constants.h"
+#include "extensions/common/extension_id.h"
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
@@ -31,6 +33,7 @@ class PrefRegistrySyncable;
 }
 
 class Profile;
+class GURL;
 
 namespace extensions {
 
@@ -46,6 +49,12 @@ bool HasIsolatedStorage(const std::string& extension_id,
                         content::BrowserContext* context);
 bool HasIsolatedStorage(const Extension& extension,
                         content::BrowserContext* context);
+
+// Returns whether the extension with `extension_id` is force installed by
+// policy, and fills `reason` (if non-null) with expository text.
+bool IsExtensionForceInstalled(const std::string& extension_id,
+                               content::BrowserContext* context,
+                               std::u16string* reason = nullptr);
 
 // Sets whether `extension_id` can run in an incognito window. Reloads the
 // extension if it's enabled since this permission is applied at loading time
@@ -88,6 +97,41 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 // or preference).
 bool AreExtensionsDisabled(const base::CommandLine& command_line,
                            content::BrowserContext* context);
+
+// Returns the URL for the chrome://extensions page and highlights the
+// extension with `extension_id`. If `extension_id` is empty, just shows the
+// main extensions page.
+GURL GetExtensionsPageUrl(const ExtensionId& extension_id);
+
+// Represents the type of settings override configured by the extension.
+// DSE = Default Search Engine.
+// NTP = New Tab Page.
+enum class DseNtpOverrideType {
+  kNone = 0,
+  kDse = 1,
+  kNtp = 2,
+  kBoth = 3,
+  kMaxValue = kBoth,
+};
+
+constexpr bool IsValidDseNtpOverrideType(int value) {
+  return value >= static_cast<int>(DseNtpOverrideType::kNone) &&
+         value <= static_cast<int>(DseNtpOverrideType::kMaxValue);
+}
+
+DseNtpOverrideType GetDseNtpOverrideType(const Extension& extension);
+
+// Sources from which the CWS write review dialog can be launched.
+enum class CWSReviewSource {
+  kExtensionsMenu,
+  kExtensionsPage,
+  kContextMenu,
+};
+
+// Returns the URL to the Chrome Web Store's write review dialog for a specific
+// `extension_id` and `source`.
+GURL GetCWSWritingReviewUrl(const ExtensionId& extension_id,
+                            CWSReviewSource source);
 
 }  // namespace util
 }  // namespace extensions

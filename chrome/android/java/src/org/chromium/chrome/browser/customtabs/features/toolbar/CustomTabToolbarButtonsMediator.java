@@ -202,7 +202,7 @@ class CustomTabToolbarButtonsMediator
             RecordHistogram.recordEnumeratedHistogram(
                     "CustomTabs.AdaptiveToolbarButton.Shown",
                     buttonVariant,
-                    AdaptiveToolbarButtonVariant.MAX_VALUE);
+                    AdaptiveToolbarButtonVariant.MAX_VALUE + 1);
         }
     }
 
@@ -289,9 +289,9 @@ class CustomTabToolbarButtonsMediator
     }
 
     @SuppressWarnings("NullAway")
-    private Supplier getProfileSupplier() {
+    private Supplier<@Nullable Profile> getProfileSupplier() {
         Tab tab = mTabProvider.get();
-        if (tab != null) return () -> tab.getProfile();
+        if (tab != null) return tab::getProfile;
 
         // Passing OneshotSupplier effectively delays UserEducationHelper#requestShowIph()
         // till Profile becomes reachable via the current Tab.
@@ -344,7 +344,6 @@ class CustomTabToolbarButtonsMediator
                         colorScheme == BrandedColorScheme.INCOGNITO,
                         /* isCustomTab= */ true);
         mOptionalButtonCoordinator.setBackgroundColorFilter(backgroundColor);
-        mOptionalButtonCoordinator.setIconForegroundColor(
-                ThemeUtils.getThemedToolbarIconTint(mActivity, colorScheme));
+        mOptionalButtonCoordinator.setBrandedColorScheme(colorScheme);
     }
 }

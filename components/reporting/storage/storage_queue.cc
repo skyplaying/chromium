@@ -76,6 +76,10 @@ BASE_FEATURE(kReportingStorageDegradationFeature,
              "ReportingStorageDegradation",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
+BASE_FEATURE(kEraseLegacyQueueOnDataLoss,
+             "EraseLegacyQueueOnDataLoss",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
 namespace {
 
 // Metadata file name prefix.
@@ -282,8 +286,23 @@ Status StorageQueue::Init() {
       // If generation id is also unknown, reset all parameters as they were
       // at the beginning of Init(). Some of them might have been changed
       // earlier.
-      if (generation_id_ <= 0) {
-        LOG(ERROR) << "Unable to retrieve generation id, performing full reset";
+      //
+      // Additionally, perform a full reset if a legacy queue encounters
+      // unrecoverable DATA_LOSS, as it would otherwise be stuck indefinitely
+      // blocking migration (see b/458321208).
+      const bool is_legacy_directory = options_.directory().Extension().empty();
+
+      const bool force_legacy_reset =
+          base::FeatureList::IsEnabled(kEraseLegacyQueueOnDataLoss) &&
+          status.error_code() == error::DATA_LOSS && is_legacy_directory;
+
+      if (generation_id_ <= 0 || force_legacy_reset) {
+        if (generation_id_ <= 0) {
+          LOG(ERROR) << "Unable to retrieve generation id, performing full reset";
+        } else {
+          LOG(ERROR) << "Legacy queue encountered DATA_LOSS, performing full "
+                        "reset to unblock migration";
+        }
         next_sequencing_id_ = 0;
         first_sequencing_id_ = 0;
         first_unconfirmed_sequencing_id_ = std::nullopt;
@@ -342,8 +361,12 @@ Status StorageQueue::SetOrConfirmGenerationId(const base::FilePath& full_name) {
   }
 
   int64_t file_generation_id = 0;
-  const bool success =
-      base::StringToInt64(generation_extension.substr(1), &file_generation_id);
+  // StringViewType for FilePath is platform-dependent, so import the symbol
+  // from there. On Windows it is std::wstring_view, on other platforms it is
+  // std::string_view.
+  const bool success = base::StringToInt64(
+      base::FilePath::StringViewType(generation_extension).substr(1),
+      &file_generation_id);
   if (!success || file_generation_id <= 0) {
     base::UmaHistogramEnumeration(
         reporting::kUmaDataLossErrorReason,

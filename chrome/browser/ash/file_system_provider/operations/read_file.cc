@@ -6,11 +6,13 @@
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <limits>
 #include <string>
 #include <utility>
 
-#include "base/compiler_specific.h"
+#include "base/containers/span.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/trace_event/trace_event.h"
 #include "chrome/common/extensions/api/file_system_provider.h"
 #include "chrome/common/extensions/api/file_system_provider_internal.h"
@@ -28,19 +30,35 @@ int CopyRequestValueToBuffer(const RequestValue& value,
       ReadFileRequestedSuccess::Params;
 
   const Params* params = value.read_file_success_params();
-  if (!params)
+  if (!params) {
     return -1;
+  }
 
-  const size_t chunk_size = params->data.size();
-
-  // Check for overflows.
-  if (chunk_size > static_cast<size_t>(buffer_length) - buffer_offset)
+  if (buffer_offset < 0 || buffer_length < 0) {
     return -1;
+  }
 
-  UNSAFE_TODO(
-      memcpy(buffer->data() + buffer_offset, params->data.data(), chunk_size));
+  const size_t offset_size = base::checked_cast<size_t>(buffer_offset);
+  const size_t buffer_length_size = base::checked_cast<size_t>(buffer_length);
+  const size_t buffer_capacity = buffer->span().size();
 
-  return chunk_size;
+  // Check for overflows. Validate against both the IOBuffer's true capacity,
+  // and the caller-supplied buffer_length, because the latter is untrusted.
+  if (offset_size > buffer_capacity || offset_size > buffer_length_size) {
+    return -1;
+  }
+
+  const size_t available_bytes =
+      std::min(buffer_capacity - offset_size, buffer_length_size - offset_size);
+  if (params->data.size() > available_bytes) {
+    return -1;
+  }
+
+  buffer->span()
+      .subspan(offset_size)
+      .copy_prefix_from(base::as_byte_span(params->data));
+
+  return base::checked_cast<int>(params->data.size());
 }
 
 }  // namespace

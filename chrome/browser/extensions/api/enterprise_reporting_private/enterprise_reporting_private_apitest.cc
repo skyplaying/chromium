@@ -9,7 +9,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/scoped_feature_list.h"
-#include "build/branding_buildflags.h"
+#include "base/uuid.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/enterprise/browser_management/management_service_factory.h"
@@ -23,8 +23,12 @@
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
 #include "chrome/common/extensions/api/enterprise_reporting_private.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "components/download/public/common/download_item.h"
+#include "components/enterprise/common/proto/connectors.pb.h"
 #include "components/enterprise/common/proto/synced/browser_events.pb.h"
-#include "components/policy/core/common/cloud/realtime_reporting_job_configuration.h"
+#include "components/enterprise/connectors/core/common.h"
+#include "content/public/browser/download_manager.h"
+#include "content/public/browser/storage_partition_config.h"
 #include "components/policy/core/common/management/management_service.h"
 #include "components/safe_browsing/core/common/proto/realtimeapi.pb.h"
 #include "components/signin/public/identity_manager/account_capabilities_test_mutator.h"
@@ -165,7 +169,7 @@ class EnterpriseReportingPrivateApiTest : public extensions::ExtensionApiTest {
           ->store()
           ->set_policy_data_for_testing(std::move(profile_policy_data));
     }
-    AccountCapabilitiesTestMutator(&account_info.capabilities)
+    AccountCapabilitiesTestMutator(&account_info)
         .set_is_subject_to_enterprise_features(as_managed);
 
     return account_info;
@@ -514,7 +518,8 @@ IN_PROC_BROWSER_TEST_F(EnterpriseReportingPrivateApiTest, GetAvInfo_Success) {
   )";
 
   AccountInfo account_info = SignIn("some-email@example.com");
-  RunTest(base::StringPrintf(kTest, account_info.gaia.ToString().c_str()));
+  RunTest(
+      base::StringPrintf(kTest, account_info.GetGaiaId().ToString().c_str()));
 }
 
 IN_PROC_BROWSER_TEST_F(EnterpriseReportingPrivateApiTest, GetHotfixes_Success) {
@@ -532,7 +537,8 @@ IN_PROC_BROWSER_TEST_F(EnterpriseReportingPrivateApiTest, GetHotfixes_Success) {
   )";
 
   AccountInfo account_info = SignIn("some-email@example.com");
-  RunTest(base::StringPrintf(kTest, account_info.gaia.ToString().c_str()));
+  RunTest(
+      base::StringPrintf(kTest, account_info.GetGaiaId().ToString().c_str()));
 }
 
 IN_PROC_BROWSER_TEST_F(EnterpriseReportingPrivateApiTest,
@@ -643,7 +649,7 @@ IN_PROC_BROWSER_TEST_F(EnterpriseReportingPrivateApiTest,
   )";
 
   AccountInfo account_info = SignIn("some-email@example.com");
-  RunTest(base::StringPrintf(kTest, account_info.gaia.ToString().c_str(),
+  RunTest(base::StringPrintf(kTest, account_info.GetGaiaId().ToString().c_str(),
                              kOptions.c_str(), kAssertions));
 }
 
@@ -849,7 +855,7 @@ IN_PROC_BROWSER_TEST_F(EnterpriseReportingPrivateApiTest,
   base::ReplaceSubstringsAfterOffset(&escaped_file_path, 0U, "\\", "\\\\");
 
   AccountInfo account_info = SignIn("some-email@example.com");
-  RunTest(base::StringPrintf(kTest, account_info.gaia.ToString().c_str(),
+  RunTest(base::StringPrintf(kTest, account_info.GetGaiaId().ToString().c_str(),
                              escaped_file_path.c_str(), extra_items.c_str(),
                              kAssertions));
 }
@@ -857,7 +863,7 @@ IN_PROC_BROWSER_TEST_F(EnterpriseReportingPrivateApiTest,
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 
 #if BUILDFLAG(IS_MAC)
-// TODO(http://crbug.com/1408618): Failing consistently on Mac.
+// TODO(http://crbug.com/40888560): Failing consistently on Mac.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_GetPlistSettings_Success DISABLED_GetPlistSettings_Success
 #else
@@ -926,159 +932,15 @@ IN_PROC_BROWSER_TEST_F(EnterpriseReportingPrivateApiTest,
   )";
 
   AccountInfo account_info = SignIn("some-email@example.com");
-  RunTest(base::StringPrintf(kTest, account_info.gaia.ToString().c_str(),
+  RunTest(base::StringPrintf(kTest, account_info.GetGaiaId().ToString().c_str(),
                              extra_items.c_str(), kAssertions));
 }
 #endif  // BUILDFLAG(IS_MAC)
 
-#if BUILDFLAG(IS_CHROMEOS)
-static void RunTestUsingProfile(const std::string& background_js,
-                                Profile* profile) {
-  ResultCatcher result_catcher;
-  TestExtensionDir test_dir;
-  test_dir.WriteManifest(
-      base::StringPrintf(kManifestTemplate, kAuthorizedManifestKey));
-
-  // Since the API functions use async callbacks, this wrapper code is
-  // necessary for assertions to work properly.
-  constexpr char kTestWrapper[] = R"(
-        chrome.test.runTests([
-          async function asyncAssertions() {
-            %s
-          }
-        ]);)";
-  test_dir.WriteFile(FILE_PATH_LITERAL("background.js"),
-                     base::StringPrintf(kTestWrapper, background_js.c_str()));
-
-  ChromeTestExtensionLoader loader(profile);
-  loader.set_ignore_manifest_warnings(true);
-
-  const Extension* extension =
-      loader.LoadExtension(test_dir.UnpackedPath()).get();
-  ASSERT_TRUE(extension);
-  ASSERT_TRUE(result_catcher.GetNextResult()) << result_catcher.message();
-}
-
-static std::string CreateValidRecord() {
-  std::vector<uint8_t> serialized_record_data;
-  std::string serialized_data = R"({"TEST_KEY":"TEST_VALUE"})";
-  reporting::Record record;
-  record.set_data(serialized_data);
-  record.set_destination(reporting::Destination::TELEMETRY_METRIC);
-  record.set_timestamp_us(base::Time::Now().InMillisecondsSinceUnixEpoch() *
-                          base::Time::kMicrosecondsPerMillisecond);
-  serialized_record_data.resize(record.SerializeAsString().size());
-  record.SerializeToArray(serialized_record_data.data(),
-                          serialized_record_data.size());
-
-  // Print std::vector<uint8_t> into a form like "[1,2,3,4]"
-  std::string serialized_record_data_str = "[";
-  for (size_t i = 0; i < serialized_record_data.size(); i++) {
-    if (i == serialized_record_data.size() - 1) {
-      base::StrAppend(&serialized_record_data_str,
-                      {base::NumberToString(serialized_record_data[i]), "]"});
-    } else {
-      base::StrAppend(&serialized_record_data_str,
-                      {base::NumberToString(serialized_record_data[i]), ","});
-    }
-  }
-  return serialized_record_data_str;
-}
-
-// Inheriting from DevicePolicyCrosBrowserTest enables use of AffiliationMixin
-// for setting up profile/device affiliation. Only available in ChromeOS.
-struct Params {
-  explicit Params(bool affiliated) : affiliated(affiliated) {}
-  // Whether the user is expected to be affiliated.
-  bool affiliated;
-};
-
-class EnterpriseReportingPrivateEnqueueRecordApiTest
-    : public ::policy::DevicePolicyCrosBrowserTest,
-      public ::testing::WithParamInterface<Params> {
- protected:
-  EnterpriseReportingPrivateEnqueueRecordApiTest() {
-    affiliation_mixin_.set_affiliated(GetParam().affiliated);
-    crypto_home_mixin_.MarkUserAsExisting(affiliation_mixin_.account_id());
-    crypto_home_mixin_.ApplyAuthConfig(
-        affiliation_mixin_.account_id(),
-        ash::test::UserAuthConfig::Create(ash::test::kDefaultAuthSetup));
-  }
-
-  ~EnterpriseReportingPrivateEnqueueRecordApiTest() override = default;
-
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    ::policy::AffiliationTestHelper::AppendCommandLineSwitchesForLoginManager(
-        command_line);
-    ::policy::DevicePolicyCrosBrowserTest::SetUpCommandLine(command_line);
-  }
-
-  ::policy::DevicePolicyCrosTestHelper test_helper_;
-  ::policy::AffiliationMixin affiliation_mixin_{&mixin_host_, &test_helper_};
-  ash::CryptohomeMixin crypto_home_mixin_{&mixin_host_};
-};
-
-IN_PROC_BROWSER_TEST_P(EnterpriseReportingPrivateEnqueueRecordApiTest,
-                       PRE_EnqueueRecord) {
-  policy::AffiliationTestHelper::PreLoginUser(affiliation_mixin_.account_id());
-}
-
-IN_PROC_BROWSER_TEST_P(EnterpriseReportingPrivateEnqueueRecordApiTest,
-                       EnqueueRecord) {
-  policy::AffiliationTestHelper::LoginUser(affiliation_mixin_.account_id());
-
-  constexpr char kTest[] = R"(
-
-        const request = {
-          eventType: "USER",
-          priority: 4,
-          recordData: Uint8Array.from(%s),
-        };
-
-        chrome.enterprise.reportingPrivate.enqueueRecord(request, () =>{
-          %s
-          chrome.test.succeed();
-        });
-
-      )";
-
-  std::string javascript_assertion =
-      GetParam().affiliated
-          ? "chrome.test.assertNoLastError();"
-          : base::StrCat({"chrome.test.assertLastError(\'",
-                          EnterpriseReportingPrivateEnqueueRecordFunction::
-                              kErrorProfileNotAffiliated,
-                          "\');"});
-
-  ASSERT_EQ(GetParam().affiliated,
-            enterprise_util::IsProfileAffiliated(
-                ash::ProfileHelper::Get()->GetProfileByAccountId(
-                    affiliation_mixin_.account_id())));
-
-  RunTestUsingProfile(base::StringPrintf(kTest, CreateValidRecord().c_str(),
-                                         javascript_assertion.c_str()),
-                      ash::ProfileHelper::Get()->GetProfileByAccountId(
-                          affiliation_mixin_.account_id()));
-}
-INSTANTIATE_TEST_SUITE_P(TestAffiliation,
-                         EnterpriseReportingPrivateEnqueueRecordApiTest,
-                         ::testing::Values(Params(/*affiliated=*/true),
-                                           Params(/*affiliated=*/false)));
-#endif  // BUILDFLAG(IS_CHROMEOS)
-
 class EnterpriseReportDataMaskingEventTest
-    : public EnterpriseReportingPrivateApiTest,
-      public testing::WithParamInterface<bool> {
+    : public EnterpriseReportingPrivateApiTest {
  public:
-  EnterpriseReportDataMaskingEventTest() {
-    if (use_proto_format()) {
-      scoped_feature_list_.InitAndEnableFeature(
-          policy::kUploadRealtimeReportingEventsUsingProto);
-    } else {
-      scoped_feature_list_.InitAndDisableFeature(
-          policy::kUploadRealtimeReportingEventsUsingProto);
-    }
-  }
+  EnterpriseReportDataMaskingEventTest() = default;
 
   static constexpr char kTestJS[] = R"(
     chrome.test.assertEq(
@@ -1118,15 +980,12 @@ class EnterpriseReportDataMaskingEventTest
     EnterpriseReportingPrivateApiTest::TearDownOnMainThread();
   }
 
-  bool use_proto_format() { return GetParam(); }
-
  protected:
   std::unique_ptr<enterprise_connectors::test::EventReportValidatorHelper>
       event_report_validator_helper_;
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-IN_PROC_BROWSER_TEST_P(EnterpriseReportDataMaskingEventTest,
+IN_PROC_BROWSER_TEST_F(EnterpriseReportDataMaskingEventTest,
                        ReportingPolicyDisabled) {
   auto event_validator = event_report_validator_helper_->CreateValidator();
   event_validator.ExpectNoReport();
@@ -1136,54 +995,33 @@ IN_PROC_BROWSER_TEST_P(EnterpriseReportDataMaskingEventTest,
   RunTest(kTestJS);
 }
 
-IN_PROC_BROWSER_TEST_P(EnterpriseReportDataMaskingEventTest,
+IN_PROC_BROWSER_TEST_F(EnterpriseReportDataMaskingEventTest,
                        ReportingPolicyEnabled) {
   auto event_validator = event_report_validator_helper_->CreateValidator();
   base::RunLoop run_loop;
   event_validator.SetDoneClosure(run_loop.QuitClosure());
 
-  if (use_proto_format()) {
-    chrome::cros::reporting::proto::MatchedDetector detector;
-    detector.set_detector_id("5678");
-    detector.set_display_name("Credit card matcher");
-    detector.set_detector_type(
-        chrome::cros::reporting::proto::MatchedDetector::PREDEFINED_DLP);
+  chrome::cros::reporting::proto::MatchedDetector detector;
+  detector.set_detector_id("5678");
+  detector.set_display_name("Credit card matcher");
+  detector.set_detector_type(
+      chrome::cros::reporting::proto::MatchedDetector::PREDEFINED_DLP);
 
-    chrome::cros::reporting::proto::TriggeredRuleInfo info;
-    info.set_rule_id(1234);
-    info.set_rule_name("Data Masking rule");
-    *info.mutable_matched_detectors()->Add() = detector;
+  chrome::cros::reporting::proto::TriggeredRuleInfo info;
+  info.set_rule_id(1234);
+  info.set_rule_name("Data Masking rule");
+  *info.mutable_matched_detectors()->Add() = detector;
 
-    chrome::cros::reporting::proto::DlpSensitiveDataEvent expected_event;
-    expected_event.set_event_result(
-        chrome::cros::reporting::proto::EVENT_RESULT_DATA_MASKED);
-    expected_event.set_url("https://foo.com");
-    expected_event.set_tab_url("https://foo.com");
-    expected_event.set_profile_identifier(profile()->GetPath().AsUTF8Unsafe());
-    expected_event.set_profile_user_name("test-user@chromium.org");
-    *expected_event.mutable_triggered_rule_info()->Add() = info;
+  chrome::cros::reporting::proto::DlpSensitiveDataEvent expected_event;
+  expected_event.set_event_result(
+      chrome::cros::reporting::proto::EVENT_RESULT_DATA_MASKED);
+  expected_event.set_url("https://foo.com");
+  expected_event.set_tab_url("https://foo.com");
+  expected_event.set_profile_identifier(profile()->GetPath().AsUTF8Unsafe());
+  expected_event.set_profile_user_name("test-user@chromium.org");
+  *expected_event.mutable_triggered_rule_info()->Add() = info;
 
-    event_validator.ExpectSensitiveDataEvent(std::move(expected_event));
-  } else {
-    api::enterprise_reporting_private::TriggeredRuleInfo rule_info;
-    rule_info.rule_id = "1234";
-    rule_info.rule_name = "Data Masking rule";
-    rule_info.matched_detectors.push_back({});
-    rule_info.matched_detectors[0].detector_id = "5678";
-    rule_info.matched_detectors[0].display_name = "Credit card matcher";
-    rule_info.matched_detectors[0].detector_type =
-        api::enterprise_reporting_private::DetectorType::kPredefinedDlp;
-
-    api::enterprise_reporting_private::DataMaskingEvent event;
-    event.event_result =
-        api::enterprise_reporting_private::EventResult::kEventResultDataMasked;
-    event.url = "https://foo.com";
-    event.triggered_rule_info.push_back(std::move(rule_info));
-
-    event_validator.ExpectDataMaskingEvent("test-user@chromium.org",
-                                           profile()->GetPath().AsUTF8Unsafe(),
-                                           std::move(event));
-  }
+  event_validator.ExpectSensitiveDataEvent(std::move(expected_event));
 
   // Explicitly only enable sensitive data events only to avoid having to handle
   // assertions for extension install events.
@@ -1193,10 +1031,6 @@ IN_PROC_BROWSER_TEST_P(EnterpriseReportDataMaskingEventTest,
   RunTest(kTestJS);
   run_loop.Run();
 }
-
-INSTANTIATE_TEST_SUITE_P(,
-                         EnterpriseReportDataMaskingEventTest,
-                         testing::Bool());
 
 class EnterpriseOnDataMaskingRulesTriggeredTest
     : public EnterpriseReportingPrivateApiTest {
@@ -1380,5 +1214,229 @@ IN_PROC_BROWSER_TEST_F(EnterpriseOnDataMaskingRulesTriggeredTest, WithRules) {
 
   ASSERT_TRUE(result_catcher.GetNextResult()) << result_catcher.message();
 }
+
+IN_PROC_BROWSER_TEST_F(EnterpriseReportingPrivateApiTest,
+                       ReportForceSaveToCloudFeatureDisabled) {
+  static constexpr char kTestJS[] = R"(
+    chrome.test.assertEq(
+        'undefined',
+        typeof chrome.enterprise.reportingPrivate
+            .reportForceSaveToCloudEventHandled);
+    chrome.test.succeed();
+  )";
+
+  RunTest(kTestJS);
+}
+
+class EnterpriseReportForceSaveToCloudEventHandledTest
+    : public EnterpriseReportingPrivateApiTest {
+ public:
+  EnterpriseReportForceSaveToCloudEventHandledTest() = default;
+
+  void SetUpOnMainThread() override {
+    EnterpriseReportingPrivateApiTest::SetUpOnMainThread();
+    event_report_validator_helper_ = std::make_unique<
+        enterprise_connectors::test::EventReportValidatorHelper>(
+        profile(), /*browser_test=*/true);
+  }
+
+  void TearDownOnMainThread() override {
+    event_report_validator_helper_.reset();
+    EnterpriseReportingPrivateApiTest::TearDownOnMainThread();
+  }
+
+  download::DownloadItem* CreateDownloadItem(
+      uint32_t id,
+      download::DownloadDangerType danger_type,
+      std::unique_ptr<enterprise_connectors::ScanResult> scan_result =
+          nullptr) {
+    base::Time current = base::Time::Now();
+    std::vector<GURL> url_chain = {GURL("https://example.com/download.txt")};
+    download::DownloadItem* item =
+        profile()->GetDownloadManager()->CreateDownloadItem(
+            base::Uuid::GenerateRandomV4().AsLowercaseString(), id,
+            base::FilePath(FILE_PATH_LITERAL("/path/to/download.txt")),
+            base::FilePath(FILE_PATH_LITERAL("/path/to/download.txt")),
+            url_chain, GURL("https://example.com"),
+            content::StoragePartitionConfig::CreateDefault(profile()),
+            GURL("https://example.com/tab"), GURL(),
+            url::Origin::Create(GURL("https://example.com")), "text/plain",
+            "text/plain", current, current, std::string(), std::string(), 100,
+            100, "hash", download::DownloadItem::COMPLETE, danger_type,
+            download::DOWNLOAD_INTERRUPT_REASON_NONE, false, current, false,
+            {});
+    if (scan_result) {
+      item->SetUserData(enterprise_connectors::ScanResult::kKey,
+                        std::move(scan_result));
+    }
+    return item;
+  }
+
+ protected:
+  std::unique_ptr<enterprise_connectors::test::EventReportValidatorHelper>
+      event_report_validator_helper_;
+
+ private:
+  base::test::ScopedFeatureList scoped_features_{
+      extensions_features::
+          kApiEnterpriseReportingPrivateReportForceSaveToCloudEventHandled};
+};
+
+IN_PROC_BROWSER_TEST_F(EnterpriseReportForceSaveToCloudEventHandledTest,
+                       EmptyDownloadIdFails) {
+  static constexpr char kTestJS[] = R"(
+    await chrome.test.assertPromiseRejects(
+        chrome.enterprise.reportingPrivate.reportForceSaveToCloudEventHandled(
+            {
+              "downloadId": "",
+              "event": "savedToCloud"
+            }),
+        'Error: Download ID cannot be empty.');
+    chrome.test.succeed();
+  )";
+
+  RunTest(kTestJS);
+}
+
+IN_PROC_BROWSER_TEST_F(EnterpriseReportForceSaveToCloudEventHandledTest,
+                       DownloadNotFoundFails) {
+  static constexpr char kTestJS[] = R"(
+    await chrome.test.assertPromiseRejects(
+        chrome.enterprise.reportingPrivate.reportForceSaveToCloudEventHandled(
+            {
+              "downloadId": "99999",
+              "event": "savedToCloud"
+            }),
+        'Error: Download not found.');
+    chrome.test.succeed();
+  )";
+
+  RunTest(kTestJS);
+}
+
+IN_PROC_BROWSER_TEST_F(EnterpriseReportForceSaveToCloudEventHandledTest,
+                       NoScanResultFails) {
+  CreateDownloadItem(12345,
+                     download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_GDRIVE);
+
+  static constexpr char kTestJS[] = R"(
+    await chrome.test.assertPromiseRejects(
+        chrome.enterprise.reportingPrivate.reportForceSaveToCloudEventHandled(
+            {
+              "downloadId": "12345",
+              "event": "savedToCloud"
+            }),
+        'Error: No scan result found for download.');
+    chrome.test.succeed();
+  )";
+
+  RunTest(kTestJS);
+}
+
+struct ForceSaveToCloudTestParam {
+  std::string test_name;
+  download::DownloadDangerType danger_type;
+  enterprise_connectors::TriggeredRule::ForceSaveToCloudDestination destination;
+  std::string destination_string;
+};
+
+class EnterpriseReportForceSaveToCloudEventHandledSuccessTest
+    : public EnterpriseReportForceSaveToCloudEventHandledTest,
+      public testing::WithParamInterface<ForceSaveToCloudTestParam> {};
+
+IN_PROC_BROWSER_TEST_P(EnterpriseReportForceSaveToCloudEventHandledSuccessTest,
+                       Success) {
+  const auto& param = GetParam();
+
+  enterprise_connectors::ContentAnalysisResponse response;
+  response.set_request_token("request-token-123");
+  auto* result = response.add_results();
+  result->set_tag("dlp");
+  result->set_status(
+      enterprise_connectors::ContentAnalysisResponse::Result::SUCCESS);
+  auto* rule = result->add_triggered_rules();
+  rule->set_action(enterprise_connectors::TriggeredRule::FORCE_SAVE_TO_CLOUD);
+  rule->set_force_save_to_cloud_destination(param.destination);
+  rule->set_rule_name("Force Save rule");
+  rule->set_rule_id("1234");
+
+  enterprise_connectors::FileMetadata file_metadata(
+      "download.txt",
+      "76E00EB33811F5778A5EE557512C30D9341D4FEB07646BCE3E4DB13F9428573C",
+      "text/plain", 100, response);
+  auto scan_result = std::make_unique<enterprise_connectors::ScanResult>(
+      std::move(file_metadata));
+
+  CreateDownloadItem(12345, param.danger_type, std::move(scan_result));
+
+  auto event_validator = event_report_validator_helper_->CreateValidator();
+  base::RunLoop run_loop;
+  event_validator.SetDoneClosure(run_loop.QuitClosure());
+
+  chrome::cros::reporting::proto::TriggeredRuleInfo info;
+  info.set_rule_id(1234);
+  info.set_rule_name("Force Save rule");
+  info.set_action(
+      chrome::cros::reporting::proto::TriggeredRuleInfo::FORCE_SAVE_TO_CLOUD);
+
+  chrome::cros::reporting::proto::DlpSensitiveDataEvent expected_event;
+  expected_event.set_file_name("download.txt");
+  expected_event.set_content_type("text/plain");
+  expected_event.set_content_size(100);
+  expected_event.set_download_digest_sha_256(
+      "76E00EB33811F5778A5EE557512C30D9341D4FEB07646BCE3E4DB13F9428573C");
+  expected_event.set_trigger(
+      chrome::cros::reporting::proto::DataTransferEventTrigger::FILE_DOWNLOAD);
+  expected_event.set_event_result(
+      chrome::cros::reporting::proto::EVENT_RESULT_FORCED_SAVE_TO_CLOUD);
+  expected_event.set_scan_id("request-token-123");
+  expected_event.set_url("https://example.com/download.txt");
+  expected_event.set_tab_url("https://example.com/tab");
+  expected_event.set_destination(param.destination_string);
+  expected_event.set_profile_identifier(profile()->GetPath().AsUTF8Unsafe());
+  expected_event.set_profile_user_name("test-user@chromium.org");
+  auto* referrer = expected_event.add_referrers();
+  referrer->set_url("https://example.com/download.txt");
+  referrer->set_ip("example.com");
+  *expected_event.mutable_triggered_rule_info()->Add() = info;
+
+  event_validator.ExpectSensitiveDataEvent(std::move(expected_event));
+
+  enterprise_connectors::test::SetOnSecurityEventReporting(
+      profile()->GetPrefs(), true, {"sensitiveDataEvent"}, {});
+
+  static constexpr char kTestJS[] = R"(
+    await chrome.enterprise.reportingPrivate.reportForceSaveToCloudEventHandled(
+        {
+          "downloadId": "12345",
+          "event": "savedToCloud"
+        });
+    chrome.test.succeed();
+  )";
+
+  RunTest(kTestJS);
+  run_loop.Run();
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    All,
+    EnterpriseReportForceSaveToCloudEventHandledSuccessTest,
+    testing::Values(
+        ForceSaveToCloudTestParam{
+            .test_name = "GoogleDrive",
+            .danger_type = download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_GDRIVE,
+            .destination = enterprise_connectors::TriggeredRule::CORP_G_DRIVE,
+            .destination_string = "Google Drive",
+        },
+        ForceSaveToCloudTestParam{
+            .test_name = "OneDrive",
+            .danger_type =
+                download::DOWNLOAD_DANGER_TYPE_FORCE_SAVE_TO_ONEDRIVE,
+            .destination = enterprise_connectors::TriggeredRule::CORP_ONEDRIVE,
+            .destination_string = "OneDrive",
+        }),
+    [](const testing::TestParamInfo<ForceSaveToCloudTestParam>& info) {
+      return info.param.test_name;
+    });
 
 }  // namespace extensions

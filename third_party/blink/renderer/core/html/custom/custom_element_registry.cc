@@ -24,9 +24,12 @@
 #include "third_party/blink/renderer/core/html/custom/custom_element_definition_builder.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element_descriptor.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element_reaction_stack.h"
+#include "third_party/blink/renderer/core/html/custom/custom_element_registry_assignment.h"
 #include "third_party/blink/renderer/core/html/custom/custom_element_upgrade_sorter.h"
 #include "third_party/blink/renderer/core/html_element_type_helpers.h"
+#include "third_party/blink/renderer/platform/bindings/dom_wrapper_world.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
@@ -43,8 +46,7 @@ void CollectUpgradeCandidateInNode(CustomElementRegistry* registry,
   if (auto* root_element = DynamicTo<Element>(root)) {
     if (root_element->GetCustomElementState() ==
             CustomElementState::kUndefined &&
-        (!RuntimeEnabledFeatures::ScopedCustomElementRegistryEnabled() ||
-         root_element->customElementRegistry() == registry)) {
+        root_element->customElementRegistry() == registry) {
       candidates.push_back(root_element);
     }
     if (auto* shadow_root = root_element->GetShadowRoot()) {
@@ -85,10 +87,10 @@ bool ThrowIfValidName(const AtomicString& name,
 // static
 CustomElementRegistry* CustomElementRegistry::Create(
     ScriptState* script_state) {
-  DCHECK(RuntimeEnabledFeatures::ScopedCustomElementRegistryEnabled());
   auto* window = LocalDOMWindow::From(script_state);
   window->document()->SetScopedCustomElementRegistryUsed();
-  return MakeGarbageCollected<CustomElementRegistry>(window);
+  return MakeGarbageCollected<CustomElementRegistry>(
+      window, script_state->World().GetWorldId());
 }
 
 CustomElementRegistry* CustomElementRegistry::DefaultRegistry(
@@ -96,8 +98,10 @@ CustomElementRegistry* CustomElementRegistry::DefaultRegistry(
   return document.customElementRegistry();
 }
 
-CustomElementRegistry::CustomElementRegistry(const LocalDOMWindow* owner)
+CustomElementRegistry::CustomElementRegistry(const LocalDOMWindow* owner,
+                                             int32_t world_id)
     : element_definition_is_running_(false),
+      world_id_(world_id),
       owner_(owner),
       upgrade_candidates_(MakeGarbageCollected<UpgradeCandidateMap>()),
       associated_documents_(MakeGarbageCollected<AssociatedDocumentSet>()) {}
@@ -118,7 +122,7 @@ void CustomElementRegistry::Trace(Visitor* visitor) const {
   visitor->Trace(when_defined_promise_map_);
   visitor->Trace(associated_documents_);
   ScriptWrappable::Trace(visitor);
-  ElementRareDataField::Trace(visitor);
+  NodeRareDataField::Trace(visitor);
 }
 
 CustomElementDefinition* CustomElementRegistry::define(
@@ -176,7 +180,7 @@ CustomElementDefinition* CustomElementRegistry::DefineInternal(
       return nullptr;
     // 7.2. If element interface is undefined element, throw exception
     if (HtmlElementTypeForTag(extends, owner_->document()) ==
-        HTMLElementType::kHTMLUnknownElement) {
+        ElementType::kHTMLUnknownElement) {
       exception_state.ThrowDOMException(
           DOMExceptionCode::kNotSupportedError,
           StrCat({"\"", extends, "\" is an HTMLUnknownElement"}));
@@ -383,12 +387,10 @@ void CustomElementRegistry::CollectCandidates(
   for (Element* element : *it.Get()->value) {
     if (!element || !desc.Matches(*element))
       continue;
-    if (RuntimeEnabledFeatures::ScopedCustomElementRegistryEnabled()) {
-      if ((*element).customElementRegistry() != this) {
-        // The element has been moved away from the original tree scope and no
-        // longer uses this registry.
-        continue;
-      }
+    if ((*element).customElementRegistry() != this) {
+      // The element has been moved away from the original tree scope and no
+      // longer uses this registry.
+      continue;
     }
     sorter.Add(element);
   }
@@ -416,10 +418,6 @@ void CustomElementRegistry::upgrade(Node* root) {
     CustomElement::TryToUpgrade(*candidate);
 }
 
-bool CustomElementRegistry::IsGlobalRegistry() const {
-  return this == owner_->customElements();
-}
-
 void CustomElementRegistry::AssociatedWith(Document& document) {
   associated_documents_->insert(&document);
 }
@@ -428,7 +426,6 @@ void CustomElementRegistry::AssociatedWith(Document& document) {
 // https://html.spec.whatwg.org/multipage/custom-elements.html#dom-customelementregistry-initialize
 void CustomElementRegistry::initialize(Node* root,
                                        ExceptionState& exception_state) {
-  CHECK(RuntimeEnabledFeatures::ScopedCustomElementRegistryEnabled());
   // 1. If this's "is scoped" is false and either root is a Document node or
   // root's node document's custom element registry is not this, then throw a
   // "NotSupportedError" DOMException.
@@ -455,10 +452,12 @@ void CustomElementRegistry::initialize(Node* root,
   // null, then set root's custom element registry to this.
   if (auto* document = DynamicTo<Document>(root);
       document && !document->customElementRegistry()) {
-    document->SetCustomElementRegistry(this);
+    document->SetCustomElementRegistry(
+        CustomElementRegistryAssignment::Explicit(this));
   } else if (auto* shadow_root = DynamicTo<ShadowRoot>(root);
              shadow_root && !shadow_root->customElementRegistry()) {
-    shadow_root->SetCustomElementRegistry(this);
+    shadow_root->SetCustomElementRegistry(
+        CustomElementRegistryAssignment::Explicit(this));
   }
 
   // 4. For each inclusive descendant inclusiveDescendant of root, in tree
@@ -474,7 +473,8 @@ void CustomElementRegistry::initialize(Node* root,
     // 4-2. If inclusiveDescendant's custom element registry is null, then:
     if (!descendant_element->customElementRegistry()) {
       // 4-2-1. Set inclusiveDescendant's custom element registry to this.
-      descendant_element->SetCustomElementRegistry(this);
+      descendant_element->SetCustomElementRegistry(
+          CustomElementRegistryAssignment::Explicit(this));
       // 4-2-2. If this's "is scoped" is true, then append inclusiveDescendant's
       // node document to this's scoped document set.
       if (!this->IsGlobalRegistry()) {

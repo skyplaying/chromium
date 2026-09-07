@@ -39,8 +39,8 @@
 #include "ui/gl/gl_version_info.h"
 
 #if BUILDFLAG(ENABLE_VULKAN)
-#include "components/viz/common/gpu/vulkan_context_provider.h"
 #include "components/viz/common/resources/shared_image_format.h"
+#include "gpu/command_buffer/service/vulkan_context_provider.h"
 #include "gpu/vulkan/vulkan_device_queue.h"
 #include "gpu/vulkan/vulkan_fence_helper.h"
 #include "gpu/vulkan/vulkan_function_pointers.h"
@@ -148,7 +148,7 @@ skgpu::graphite::ContextOptions GetDefaultGraphiteContextOptions(
   // kSkiaGraphiteEnableMSAAOnNewerIntel feature is disabled.
   if (workarounds.msaa_is_slow_2 ||
       (workarounds.msaa_is_slow &&
-       !features::kSkiaGraphiteEnableMSAAOnNewerIntel.Get())) {
+       !features::SkiaGraphiteEnableMSAAOnNewerIntel())) {
     // For single-sampling, currently Graphite falls back to the CPU-based
     // RasterPathAtlas, which is still a little slow and buggy now.
     options.fInternalMultisampleCount = skgpu::graphite::SampleCount::k1;
@@ -167,6 +167,9 @@ skgpu::graphite::ContextOptions GetDefaultGraphiteContextOptions(
     options.fMinimumPathSizeForMSAA =
         features::kSkiaGraphiteMinPathSizeForMsaa.Get();
   }
+
+  options.fUseDrawListLayer =
+      base::FeatureList::IsEnabled(features::kSkiaGraphiteDrawListLayer);
 
   // Always emit labels in Skia. For Dawn, we have a toggle that controls
   // whether labels are emitted to the underlying backend, which is currently
@@ -324,9 +327,8 @@ void AddCleanupTaskForGraphiteRecording(
   context->cleanup_tasks.push_back(std::move(task));
 }
 
-void AddVulkanCleanupTaskForSkiaFlush(
-    viz::VulkanContextProvider* context_provider,
-    GrFlushInfo* flush_info) {
+void AddVulkanCleanupTaskForSkiaFlush(VulkanContextProvider* context_provider,
+                                      GrFlushInfo* flush_info) {
 #if BUILDFLAG(ENABLE_VULKAN)
   if (context_provider) {
     auto task = context_provider->GetDeviceQueue()
@@ -537,8 +539,7 @@ CreateVulkanYcbcrConversionInfo(
 
 #endif  // BUILDFLAG(ENABLE_VULKAN)
 
-bool ShouldVulkanSyncCpuForSkiaSubmit(
-    viz::VulkanContextProvider* context_provider) {
+bool ShouldVulkanSyncCpuForSkiaSubmit(VulkanContextProvider* context_provider) {
 #if BUILDFLAG(ENABLE_VULKAN)
   if (context_provider) {
     const std::optional<uint32_t>& sync_cpu_memory_limit =

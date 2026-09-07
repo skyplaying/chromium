@@ -33,8 +33,7 @@ class OnTaskSystemWebAppManagerImpl : public OnTaskSystemWebAppManager {
 
   // OnTaskSystemWebAppManager:
   void LaunchSystemWebAppAsync(
-      base::OnceCallback<void(bool)> callback,
-      const GURL& url = GURL(kChromeBocaAppUntrustedIndexURL)) override;
+      base::OnceCallback<void(bool)> callback) override;
   void CloseSystemWebAppWindow(SessionID window_id) override;
   SessionID GetActiveSystemWebAppWindowID() override;
   void SetPinStateForSystemWebAppWindow(bool pinned,
@@ -66,10 +65,6 @@ class OnTaskSystemWebAppManagerImpl : public OnTaskSystemWebAppManager {
 
  private:
   LockedSessionWindowTracker* GetWindowTracker();
-
-  void DisableCommandsForDevTools(SessionID window_id);
-
-  void EnableOrDisableCommandsForTabSwitch(SessionID window_id, bool enabled);
 
   void PauseCameraInput(bool paused);
 

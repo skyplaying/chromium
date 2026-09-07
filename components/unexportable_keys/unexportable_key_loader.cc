@@ -16,7 +16,7 @@
 #include "components/unexportable_keys/service_error.h"
 #include "components/unexportable_keys/unexportable_key_id.h"
 #include "components/unexportable_keys/unexportable_key_service.h"
-#include "crypto/signature_verifier.h"
+#include "crypto/sign.h"
 
 namespace unexportable_keys {
 
@@ -35,8 +35,7 @@ UnexportableKeyLoader::CreateFromWrappedKey(
 // static
 std::unique_ptr<UnexportableKeyLoader> UnexportableKeyLoader::CreateWithNewKey(
     UnexportableKeyService& unexportable_key_service,
-    base::span<const crypto::SignatureVerifier::SignatureAlgorithm>
-        acceptable_algorithms,
+    base::span<const crypto::sign::SignatureKind> acceptable_algorithms,
     BackgroundTaskPriority priority) {
   std::unique_ptr<UnexportableKeyLoader> loader =
       base::WrapUnique(new UnexportableKeyLoader());
@@ -45,10 +44,20 @@ std::unique_ptr<UnexportableKeyLoader> UnexportableKeyLoader::CreateWithNewKey(
   return loader;
 }
 
-UnexportableKeyLoader::~UnexportableKeyLoader() = default;
+UnexportableKeyLoader::~UnexportableKeyLoader() {
+  std::vector<
+      base::OnceCallback<void(ServiceErrorOr<UnexportableSigningKeyId>)>>
+      callbacks;
+  callbacks.swap(on_load_callbacks_);
+  for (auto& callback : callbacks) {
+    std::move(callback).Run(
+        base::unexpected(ServiceError::kOperationCancelled));
+  }
+}
 
 void UnexportableKeyLoader::InvokeCallbackAfterKeyLoaded(
-    base::OnceCallback<void(ServiceErrorOr<UnexportableKeyId>)> callback) {
+    base::OnceCallback<void(ServiceErrorOr<UnexportableSigningKeyId>)>
+        callback) {
   if (state_ == State::kReady) {
     // The key is ready, we can invoke the callback immediately.
     std::move(callback).Run(key_id_or_error_);
@@ -58,7 +67,8 @@ void UnexportableKeyLoader::InvokeCallbackAfterKeyLoaded(
   on_load_callbacks_.push_back(std::move(callback));
 }
 
-ServiceErrorOr<UnexportableKeyId> UnexportableKeyLoader::GetKeyIdOrError() {
+ServiceErrorOr<UnexportableSigningKeyId>
+UnexportableKeyLoader::GetKeyIdOrError() {
   return key_id_or_error_;
 }
 
@@ -81,8 +91,7 @@ void UnexportableKeyLoader::LoadFromWrappedKey(
 }
 void UnexportableKeyLoader::GenerateNewKey(
     UnexportableKeyService& unexportable_key_service,
-    base::span<const crypto::SignatureVerifier::SignatureAlgorithm>
-        acceptable_algorithms,
+    base::span<const crypto::sign::SignatureKind> acceptable_algorithms,
     BackgroundTaskPriority priority) {
   CHECK_EQ(state_, State::kNotStarted);
   state_ = State::kLoading;
@@ -93,12 +102,13 @@ void UnexportableKeyLoader::GenerateNewKey(
 }
 
 void UnexportableKeyLoader::OnKeyLoaded(
-    ServiceErrorOr<UnexportableKeyId> key_id_or_error) {
+    ServiceErrorOr<UnexportableSigningKeyId> key_id_or_error) {
   CHECK_EQ(state_, State::kLoading);
   state_ = State::kReady;
   key_id_or_error_ = key_id_or_error;
 
-  std::vector<base::OnceCallback<void(ServiceErrorOr<UnexportableKeyId>)>>
+  std::vector<
+      base::OnceCallback<void(ServiceErrorOr<UnexportableSigningKeyId>)>>
       callbacks;
   callbacks.swap(on_load_callbacks_);
   // `this` may be destroyed after invoking a callback.

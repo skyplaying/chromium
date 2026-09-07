@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/functional/callback_helpers.h"
+#include "chrome/browser/ui/views/bookmarks/bookmark_account_storage_move_dialog.h"
+
 #include "base/location.h"
-#include "base/notreached.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
@@ -14,10 +14,9 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_window.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/views/bookmarks/bookmark_account_storage_move_dialog.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
 #include "components/bookmarks/browser/bookmark_model.h"
@@ -51,19 +50,19 @@ class BookmarkAccountStorageMoveDialogInteractiveTest
 
   BookmarkMergedSurfaceService* service() {
     return BookmarkMergedSurfaceServiceFactory::GetForProfile(
-        browser()->profile());
+        browser()->GetProfile());
   }
 
  protected:
   void SetUpTest() {
     signin::IdentityManager* identity_manager =
-        IdentityManagerFactory::GetForProfile(browser()->profile());
+        IdentityManagerFactory::GetForProfile(browser()->GetProfile());
     AccountInfo account_info = signin::MakePrimaryAccountAvailable(
         identity_manager, "foo@gmail.com", signin::ConsentLevel::kSignin);
-    signin::SimulateAccountImageFetch(identity_manager, account_info.account_id,
-                                      "https://avatar.com/avatar.png",
-                                      gfx::test::CreateImage(/*size=*/32));
-    BookmarkModelFactory::GetForBrowserContext(browser()->profile())
+    signin::SimulateAccountImageFetch(
+        identity_manager, account_info.GetAccountId(),
+        "https://avatar.com/avatar.png", gfx::test::CreateImage(/*size=*/32));
+    BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile())
         ->CreateAccountPermanentFolders();
   }
 
@@ -77,7 +76,7 @@ IN_PROC_BROWSER_TEST_F(BookmarkAccountStorageMoveDialogInteractiveTest,
   base::HistogramTester histogram_tester;
 
   bookmarks::BookmarkModel* bookmark_model =
-      BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+      BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
   const bookmarks::BookmarkNode* source_folder =
       bookmark_model->bookmark_bar_node();
   const bookmarks::BookmarkNode* node =
@@ -130,7 +129,7 @@ IN_PROC_BROWSER_TEST_F(BookmarkAccountStorageMoveDialogInteractiveTest,
   base::HistogramTester histogram_tester;
 
   bookmarks::BookmarkModel* bookmark_model =
-      BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+      BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
   const bookmarks::BookmarkNode* source_folder =
       bookmark_model->bookmark_bar_node();
   const bookmarks::BookmarkNode* node =
@@ -183,7 +182,7 @@ IN_PROC_BROWSER_TEST_F(BookmarkAccountStorageMoveDialogInteractiveTest,
   base::HistogramTester histogram_tester;
 
   bookmarks::BookmarkModel* bookmark_model =
-      BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+      BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
   const bookmarks::BookmarkNode* source_folder =
       bookmark_model->account_bookmark_bar_node();
   const bookmarks::BookmarkNode* node =
@@ -230,7 +229,7 @@ IN_PROC_BROWSER_TEST_F(BookmarkAccountStorageMoveDialogInteractiveTest,
   base::HistogramTester histogram_tester;
 
   bookmarks::BookmarkModel* bookmark_model =
-      BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+      BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
   const bookmarks::BookmarkNode* source_folder =
       bookmark_model->account_bookmark_bar_node();
   const bookmarks::BookmarkNode* node =
@@ -277,7 +276,7 @@ IN_PROC_BROWSER_TEST_F(BookmarkAccountStorageMoveDialogInteractiveTest,
   base::HistogramTester histogram_tester;
 
   bookmarks::BookmarkModel* bookmark_model =
-      BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+      BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
   const bookmarks::BookmarkNode* source_folder =
       bookmark_model->bookmark_bar_node();
   const bookmarks::BookmarkNode* node =
@@ -324,7 +323,7 @@ IN_PROC_BROWSER_TEST_F(BookmarkAccountStorageMoveDialogInteractiveTest,
   base::HistogramTester histogram_tester;
 
   bookmarks::BookmarkModel* bookmark_model =
-      BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+      BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
   const bookmarks::BookmarkNode* source_folder =
       bookmark_model->bookmark_bar_node();
   const bookmarks::BookmarkNode* node =
@@ -376,7 +375,7 @@ IN_PROC_BROWSER_TEST_F(BookmarkAccountStorageMoveDialogInteractiveTest,
   base::HistogramTester histogram_tester;
 
   bookmarks::BookmarkModel* bookmark_model =
-      BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+      BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
   const bookmarks::BookmarkNode* source_folder =
       bookmark_model->bookmark_bar_node();
   const bookmarks::BookmarkNode* node =
@@ -429,7 +428,7 @@ IN_PROC_BROWSER_TEST_F(BookmarkAccountStorageMoveDialogInteractiveTest,
   const ui::Accelerator kEscapeKey(ui::VKEY_ESCAPE, ui::EF_NONE);
 
   bookmarks::BookmarkModel* bookmark_model =
-      BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+      BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
   const bookmarks::BookmarkNode* local_folder = bookmark_model->AddFolder(
       bookmark_model->bookmark_bar_node(), 0, u"Local");
   const bookmarks::BookmarkNode* account_folder = bookmark_model->AddFolder(
@@ -654,7 +653,7 @@ IN_PROC_BROWSER_TEST_F(
     PressOKButtonInIncogntoMode) {
   base::HistogramTester histogram_tester;
 
-  Profile* original_profile = browser()->profile();
+  Profile* original_profile = browser()->GetProfile();
   ASSERT_FALSE(original_profile->IsOffTheRecord());
   bookmarks::BookmarkModel* bookmark_model =
       BookmarkModelFactory::GetForBrowserContext(original_profile);
@@ -672,13 +671,13 @@ IN_PROC_BROWSER_TEST_F(
   // Create Incognito Mode browser.
   Profile* otr_profile =
       original_profile->GetPrimaryOTRProfile(/*create_if_needed*/ true);
-  Browser* otr_browser = CreateBrowser(otr_profile);
+  BrowserWindowInterface* otr_browser = CreateBrowser(otr_profile);
   CloseBrowserSynchronously(browser());
-  ASSERT_EQ(chrome::GetTotalBrowserCount(), 1u);
+  ASSERT_EQ(GlobalBrowserCollection::GetInstance()->GetSize(), 1u);
 
   // A new browser should open on the Original Profile with the bookmarks
   // manager tab opened.
-  base::test::TestFuture<Browser*> browser_waiter;
+  base::test::TestFuture<BrowserWindowInterface*> browser_waiter;
   // Deletes itself.
   new profiles::BrowserAddedForProfileObserver(original_profile,
                                                browser_waiter.GetCallback());
@@ -691,12 +690,12 @@ IN_PROC_BROWSER_TEST_F(
                                        /*index=*/1,
                                        closed_waiter.GetCallback());
 
-  Browser* new_browser = browser_waiter.Get();
+  BrowserWindowInterface* new_browser = browser_waiter.Get();
   ASSERT_TRUE(new_browser);
-  EXPECT_EQ(new_browser->profile(), original_profile);
+  EXPECT_EQ(new_browser->GetProfile(), original_profile);
   bookmarks_manager_observer.WaitForNavigationFinished();
   // No other browser was opened.
-  ASSERT_EQ(chrome::GetTotalBrowserCount(), 2u);
+  ASSERT_EQ(GlobalBrowserCollection::GetInstance()->GetSize(), 2u);
 
   // Makes sure the context is the new browser. Otherwise the button cannot be
   // found. No prior context should be set in this test.

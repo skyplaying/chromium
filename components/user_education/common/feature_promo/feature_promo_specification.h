@@ -28,6 +28,7 @@
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/element_tracker.h"
+#include "ui/base/l10n/l10n_util.h"
 
 namespace gfx {
 struct VectorIcon;
@@ -491,6 +492,12 @@ class FeaturePromoSpecification : public AnchorElementProviderCommon {
   // can be done to fix it.
   FeaturePromoSpecification& OverrideFocusOnShow(bool focus_on_show);
 
+  // Overrides the default behavior for IPH to direct whether the promo should
+  // time out. Only applies to toasts. Setting to false requires being
+  // specifically allowlisted.
+  FeaturePromoSpecification& OverrideBubbleShouldTimeOut(
+      bool bubble_should_time_out);
+
   // Set the promo subtype. Setting the subtype to most values other than
   // `kNormal` requires being on an allowlist.
   FeaturePromoSpecification& SetPromoSubtype(PromoSubtype promo_subtype);
@@ -523,8 +530,10 @@ class FeaturePromoSpecification : public AnchorElementProviderCommon {
   FeaturePromoSpecification& SetInAnyContext(bool in_any_context);
 
   // AnchorElementProvider:
-  ui::TrackedElement* GetAnchorElement(ui::ElementContext context,
-                                       std::optional<int> index) const override;
+  ui::TrackedElement* GetAnchorElement(
+      ui::ElementContext context,
+      user_education::AnchorElementFilter default_filter,
+      std::optional<int> index) const override;
   int GetNextValidIndex(int index) const override;
 
   const base::Feature* feature() const { return feature_; }
@@ -536,13 +545,20 @@ class FeaturePromoSpecification : public AnchorElementProviderCommon {
   const std::optional<bool>& focus_on_show_override() const {
     return focus_on_show_override_;
   }
+  const std::optional<bool>& bubble_should_time_out_override() const {
+    return bubble_should_time_out_override_;
+  }
   int screen_reader_string_id() const { return screen_reader_string_id_; }
   const AcceleratorInfo& screen_reader_accelerator() const {
     return screen_reader_accelerator_;
   }
   const TutorialIdentifier& tutorial_id() const { return tutorial_id_; }
   const std::u16string custom_action_caption() const {
-    return custom_action_caption_;
+    if (std::holds_alternative<int>(custom_action_caption_string_or_id_)) {
+      custom_action_caption_string_or_id_ = l10n_util::GetStringUTF16(
+          std::get<int>(custom_action_caption_string_or_id_));
+    }
+    return std::get<std::u16string>(custom_action_caption_string_or_id_);
   }
   const std::optional<base::TimeDelta>& reshow_delay() const {
     return reshow_delay_;
@@ -585,8 +601,9 @@ class FeaturePromoSpecification : public AnchorElementProviderCommon {
   // allowlisting; use sparingly. Note that only certain preconditions may be
   // exempted; attempting to exempt other preconditions will have no effect.
   FeaturePromoSpecification& AddPreconditionExemption(
-      FeaturePromoPrecondition::Identifier exempt_precondition);
-  bool is_exempt_from(FeaturePromoPrecondition::Identifier precondition) const {
+      FeaturePromoPrecondition::PreconditionIdentifier exempt_precondition);
+  bool is_exempt_from(
+      FeaturePromoPrecondition::PreconditionIdentifier precondition) const {
     return exempt_preconditions_.contains(precondition);
   }
 
@@ -690,6 +707,9 @@ class FeaturePromoSpecification : public AnchorElementProviderCommon {
   // button.
   std::optional<bool> focus_on_show_override_;
 
+  // Overrides the default timeout behavior for a bubble.
+  std::optional<bool> bubble_should_time_out_override_;
+
   // Optional screen reader announcement that replaces bubble text when the
   // bubble is first announced.
   int screen_reader_string_id_ = 0;
@@ -702,7 +722,7 @@ class FeaturePromoSpecification : public AnchorElementProviderCommon {
   TutorialIdentifier tutorial_id_;
 
   // Custom action button text.
-  std::u16string custom_action_caption_;
+  mutable std::variant<std::u16string, int> custom_action_caption_string_or_id_;
 
   // Custom action button action.
   CustomActionCallback custom_action_callback_;
@@ -721,7 +741,8 @@ class FeaturePromoSpecification : public AnchorElementProviderCommon {
   AdditionalConditions additional_conditions_;
 
   // Preconditions this promo is exempt from. Requires explicit allowlisting.
-  std::set<FeaturePromoPrecondition::Identifier> exempt_preconditions_;
+  std::set<FeaturePromoPrecondition::PreconditionIdentifier>
+      exempt_preconditions_;
 
   // For rotating promos, maintain a list of sub-promos.
   RotatingPromos rotating_promos_;

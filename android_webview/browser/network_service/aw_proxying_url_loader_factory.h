@@ -8,7 +8,7 @@
 #include <optional>
 
 #include "android_webview/browser/aw_cookie_access_policy.h"
-#include "android_webview/browser/aw_origin_matched_header.h"
+#include "android_webview/browser/http_headers/aw_origin_matched_header.h"
 #include "android_webview/browser/network_service/aw_browser_context_io_thread_handle.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
@@ -91,6 +91,12 @@ class AwProxyingURLLoaderFactory : public network::mojom::URLLoaderFactory {
       delete;
 
   ~AwProxyingURLLoaderFactory() override;
+
+  // Set the X-Requested-With header if it is not already present in the regular
+  // headers.
+  static void SetRequestedWithHeader(
+      const network::ResourceRequest& request,
+      net::HttpRequestHeaders& cors_exempt_headers);
 
   // static
   static void CreateProxy(

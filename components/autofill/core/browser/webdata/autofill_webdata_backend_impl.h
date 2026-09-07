@@ -5,25 +5,31 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_WEBDATA_AUTOFILL_WEBDATA_BACKEND_IMPL_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_WEBDATA_AUTOFILL_WEBDATA_BACKEND_IMPL_H_
 
+#include <stdint.h>
+
 #include <memory>
-#include <optional>
 #include <string>
-#include <string_view>
 #include <vector>
 
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/ref_counted_delete_on_sequence.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/supports_user_data.h"
-#include "base/uuid.h"
+#include "base/task/sequenced_task_runner_helpers.h"
+#include "base/time/time.h"
+#include "build/buildflag.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
-#include "components/autofill/core/browser/data_model/valuables/loyalty_card.h"
+#include "components/autofill/core/browser/data_model/valuables/valuable_types.h"
+#include "components/autofill/core/browser/webdata/autocomplete/autocomplete_entry.h"
+#include "components/autofill/core/browser/webdata/autofill_change.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_backend.h"
 #include "components/autofill/core/common/form_field_data.h"
+#include "components/sync/base/data_type.h"
 #include "components/webdata/common/web_data_results.h"
 #include "components/webdata/common/web_data_service_base.h"
-#include "components/webdata/common/web_data_service_consumer.h"
 #include "components/webdata/common/web_database.h"
 
 namespace base {
@@ -99,6 +105,8 @@ class AutofillWebDataBackendImpl final
       const EntityInstanceChange& change) override;
   void NotifyOnServerEntityMetadataChanged(
       const EntityInstanceMetadataChange& change) override;
+  void NotifyOnValuableMetadataChanged(
+      const ValuableMetadataChange& change) override;
   void CommitChanges() override;
 
   // Returns a SupportsUserData object that may be used to store data accessible
@@ -116,9 +124,20 @@ class AutofillWebDataBackendImpl final
       const std::u16string& prefix,
       int limit,
       WebDatabase* db);
+  std::unique_ptr<WDTypedResult> GetFormValuesForElementNameAndLabel(
+      std::u16string_view name,
+      std::u16string_view label,
+      std::u16string_view prefix,
+      int limit,
+      WebDatabase* db);
 
-  // Function to remove expired Autocomplete entries, which deletes them from
-  // the Sqlite table, unlinks them from Sync and cleans up the metadata.
+  // Removes expired Autocomplete entries by deleting them from the Sqlite
+  // table, unlinking them from Sync, and cleaning up the metadata.
+  //
+  // Note: Unlinking and event emission occur only for the non-label-sensitive
+  // solution. The new label-sensitive solution is not synced at all, so
+  // event emission is not needed.
+  //
   // Returns the number of entries cleaned-up.
   std::unique_ptr<WDTypedResult> RemoveExpiredAutocompleteEntries(
       WebDatabase* db);
@@ -130,9 +149,11 @@ class AutofillWebDataBackendImpl final
 
   // Removes the Form-value |value| which has been entered in form input fields
   // named |name| from the database.
-  WebDatabase::State RemoveFormValueForElementName(const std::u16string& name,
-                                                   const std::u16string& value,
-                                                   WebDatabase* db);
+  WebDatabase::State RemoveFormValueForElementNameAndLabel(
+      std::u16string_view name,
+      std::u16string_view label,
+      std::u16string_view value,
+      WebDatabase* db);
 
   // Adds an Autofill profile to the web database.
   WebDatabase::State AddAutofillProfile(
@@ -154,8 +175,7 @@ class AutofillWebDataBackendImpl final
       WebDatabase* db);
 
   // Returns the Autofill profiles from the web database.
-  std::unique_ptr<WDTypedResult> GetAutofillProfiles(
-      WebDatabase* db);
+  std::unique_ptr<WDTypedResult> GetAutofillProfiles(WebDatabase* db);
 
   // Adds, updates, removes, or retrieves EntityInstances.
   // See the identically named functions in `EntityTable`, especially on why
@@ -251,10 +271,6 @@ class AutofillWebDataBackendImpl final
   // Method to clear all the local CVCs from the web database.
   WebDatabase::State ClearLocalCvcs(WebDatabase* db);
 
-  // Method to clear all local CVCs created before mid-May 2025. For more
-  // information, see crbug.com/411681430.
-  WebDatabase::State ClearLocalCvcsUpToMay2025(WebDatabase* db);
-
 #if BUILDFLAG(IS_IOS)
   // Method to clean up for crbug.com/445879524.
   WebDatabase::State CleanupForCrbug445879524(WebDatabase* db);
@@ -297,6 +313,11 @@ class AutofillWebDataBackendImpl final
   WebDatabase::State AddServerCreditCardForTesting(
       const CreditCard& credit_card,
       WebDatabase* db);
+
+  // Copies data from the legacy `autofill` table to the `autocomplete` table.
+  // Returns a boolean `WDResult` with true on success or if the legacy table
+  // does not exist, and false on database failure.
+  std::unique_ptr<WDTypedResult> MigrateDataFromLegacyTable(WebDatabase* db);
 
  protected:
   ~AutofillWebDataBackendImpl() override;

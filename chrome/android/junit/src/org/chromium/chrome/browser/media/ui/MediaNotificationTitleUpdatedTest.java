@@ -24,13 +24,12 @@ import org.robolectric.RuntimeEnvironment;
 import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowKeyguardManager;
-import org.robolectric.shadows.ShadowLooper;
 import org.robolectric.shadows.ShadowNotification;
 
 import org.chromium.base.ContextUtils;
-import org.chromium.base.ScreenOffBroadcastReceiver;
-import org.chromium.base.test.BaseRobolectricTestRule;
+import org.chromium.base.ScreenStateReceiver;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.chrome.R;
 import org.chromium.components.browser_ui.media.MediaNotificationController;
 import org.chromium.components.browser_ui.media.MediaSessionHelper;
@@ -43,7 +42,6 @@ import org.chromium.services.media_session.MediaMetadata;
  */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(
-        manifest = Config.NONE,
         shadows = {MediaNotificationTestShadowResources.class})
 public class MediaNotificationTitleUpdatedTest extends MediaNotificationTestBase {
     private static final int TAB_ID_1 = 1;
@@ -74,16 +72,16 @@ public class MediaNotificationTitleUpdatedTest extends MediaNotificationTestBase
                                 .getSystemService(Context.KEYGUARD_SERVICE);
         mShadowKeyguardManager = Shadows.shadowOf(keyguardManager);
 
-        ScreenOffBroadcastReceiver.getInstance();
-        BaseRobolectricTestRule.runAllBackgroundAndUi();
+        ScreenStateReceiver.getInstance();
+        RobolectricUtil.runAllBackgroundAndUi();
     }
 
     @After
     @Override
     public void tearDown() {
         super.tearDown();
-        ScreenOffBroadcastReceiver.resetForTesting();
-        BaseRobolectricTestRule.runAllBackgroundAndUi();
+        ScreenStateReceiver.resetForTesting();
+        RobolectricUtil.runAllBackgroundAndUi();
     }
 
     @Test
@@ -121,7 +119,7 @@ public class MediaNotificationTitleUpdatedTest extends MediaNotificationTestBase
         assertNotNull(getController().mMediaNotificationInfo);
 
         advanceTimeByMillis(HIDE_NOTIFICATION_DELAY_MILLIS);
-        assertNull(getController().mMediaNotificationInfo);
+        assertNull(getController());
     }
 
     @Test
@@ -137,7 +135,7 @@ public class MediaNotificationTitleUpdatedTest extends MediaNotificationTestBase
                 /* isControllable= */ false, /* isSuspended= */ false);
 
         // Should be hidden immediately
-        assertNull(getController().mMediaNotificationInfo);
+        assertNull(getController());
     }
 
     @Test
@@ -158,7 +156,7 @@ public class MediaNotificationTitleUpdatedTest extends MediaNotificationTestBase
         simulateScreenLock();
 
         // Should be hidden immediately
-        assertNull(getController().mMediaNotificationInfo);
+        assertNull(getController());
     }
 
     @Test
@@ -181,7 +179,7 @@ public class MediaNotificationTitleUpdatedTest extends MediaNotificationTestBase
         mShadowKeyguardManager.setKeyguardLocked(true);
         ContextUtils.getApplicationContext().sendBroadcast(new Intent(Intent.ACTION_SCREEN_OFF));
         Shadows.shadowOf(Looper.getMainLooper()).runToEndOfTasks();
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
     }
 
     @Test
@@ -198,7 +196,7 @@ public class MediaNotificationTitleUpdatedTest extends MediaNotificationTestBase
         assertNotNull(getController().mMediaNotificationInfo);
 
         advanceTimeByMillis(HIDE_NOTIFICATION_DELAY_MILLIS);
-        assertNull(getController().mMediaNotificationInfo);
+        assertNull(getController());
     }
 
     @Test
@@ -316,6 +314,66 @@ public class MediaNotificationTitleUpdatedTest extends MediaNotificationTestBase
         mTabHolder.simulateMediaSessionActionsChanged(DEFAULT_ACTIONS);
         advanceTimeByMillis(THROTTLE_MILLIS);
         assertEquals("title2", getDisplayedTitle());
+    }
+
+    @Test
+    public void testOriginUpdatedFromSourceTitle() {
+        mTabHolder.simulateNavigation("about:blank", false);
+        mTabHolder.simulateMediaSessionStateChanged(true, false);
+        mTabHolder.simulateMediaSessionMetadataChanged(
+                new MediaMetadata("title2", "artist", "album", "example.com"));
+        mTabHolder.simulateMediaSessionActionsChanged(DEFAULT_ACTIONS);
+        advanceTimeByMillis(THROTTLE_MILLIS);
+
+        assertEquals("example.com", getController().mMediaNotificationInfo.origin);
+    }
+
+    @Test
+    public void testOriginUpdatedFromSourceTitle_NullMetadata() {
+        mTabHolder.simulateNavigation("about:blank", false);
+        mTabHolder.simulateMediaSessionStateChanged(true, false);
+        mTabHolder.simulateMediaSessionMetadataChanged(null);
+        mTabHolder.simulateMediaSessionActionsChanged(DEFAULT_ACTIONS);
+        advanceTimeByMillis(THROTTLE_MILLIS);
+
+        assertEquals("", getController().mMediaNotificationInfo.origin);
+    }
+
+    @Test
+    public void testFallbackTitleFromSourceTitle_WhenPageTitleEmpty() {
+        mTabHolder.simulateNavigation("about:blank", false);
+        mTabHolder.simulateTitleUpdated("");
+        mTabHolder.simulateMediaSessionStateChanged(true, false);
+        mTabHolder.simulateMediaSessionMetadataChanged(
+                new MediaMetadata("", "artist", "album", "example.com"));
+        mTabHolder.simulateMediaSessionActionsChanged(DEFAULT_ACTIONS);
+        advanceTimeByMillis(THROTTLE_MILLIS);
+
+        assertEquals("example.com", getController().mMediaNotificationInfo.origin);
+        assertEquals("example.com", getDisplayedTitle());
+    }
+
+    @Test
+    public void testFallbackTitleUpdatesWhenSourceTitleChanges_WhenPageTitleEmpty() {
+        mTabHolder.simulateNavigation("about:blank", false);
+        mTabHolder.simulateTitleUpdated("");
+        mTabHolder.simulateMediaSessionStateChanged(true, false);
+        mTabHolder.simulateMediaSessionMetadataChanged(
+                new MediaMetadata("", "artist", "album", "first.example.com"));
+        mTabHolder.simulateMediaSessionActionsChanged(DEFAULT_ACTIONS);
+        advanceTimeByMillis(THROTTLE_MILLIS);
+
+        assertEquals("first.example.com", getController().mMediaNotificationInfo.origin);
+        assertEquals("first.example.com", getDisplayedTitle());
+
+        // Metadata updates with new sourceTitle on untitled session.
+        mTabHolder.simulateMediaSessionMetadataChanged(
+                new MediaMetadata("", "artist", "album", "second.example.com"));
+        mTabHolder.simulateMediaSessionActionsChanged(DEFAULT_ACTIONS);
+        advanceTimeByMillis(THROTTLE_MILLIS);
+
+        assertEquals("second.example.com", getController().mMediaNotificationInfo.origin);
+        assertEquals("second.example.com", getDisplayedTitle());
     }
 
     private CharSequence getDisplayedTitle() {

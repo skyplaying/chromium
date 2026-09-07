@@ -8,10 +8,14 @@
 #include <tuple>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_policy_pref_names.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
+#include "ash/login/resources/grit/ash_login_strings.h"
 #include "ash/public/cpp/login_screen_test_api.h"
 #include "ash/root_window_controller.h"
 #include "ash/shell.h"
+#include "base/check_deref.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/functional/bind.h"
@@ -66,7 +70,6 @@
 #include "chrome/browser/ash/login/test/cryptohome_mixin.h"
 #include "chrome/browser/ash/login/test/device_state_mixin.h"
 #include "chrome/browser/ash/login/test/js_checker.h"
-#include "chrome/browser/ash/login/test/local_state_mixin.h"
 #include "chrome/browser/ash/login/test/login_manager_mixin.h"
 #include "chrome/browser/ash/login/test/oobe_base_test.h"
 #include "chrome/browser/ash/login/test/oobe_configuration_waiter.h"
@@ -95,6 +98,7 @@
 #include "chrome/browser/ui/webui/ash/login/display_size_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/error_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/fjord_fw_update_screen_handler.h"
+#include "chrome/browser/ui/webui/ash/login/fjord_image_selection_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/fjord_station_setup_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/fjord_touch_controller_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/gaia_info_screen_handler.h"
@@ -111,8 +115,6 @@
 #include "chrome/browser/ui/webui/ash/login/update_required_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/user_creation_screen_handler.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/pref_names.h"
-#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/audio/cras_audio_handler.h"
 #include "chromeos/ash/components/dbus/device_management/fake_install_attributes_client.h"
@@ -469,14 +471,14 @@ IN_PROC_BROWSER_TEST_F(WizardControllerTest, SwitchLanguage) {
   EXPECT_STREQ("en", icu::Locale::getDefault().getLanguage());
   EXPECT_FALSE(base::i18n::IsRTL());
   const std::u16string en_str =
-      l10n_util::GetStringUTF16(IDS_UPDATE_STATUS_TITLE);
+      l10n_util::GetStringUTF16(IDS_LOGIN_GET_STARTED);
 
   RunSwitchLanguageTest("fr", "fr", true);
   EXPECT_EQ("fr", g_browser_process->GetApplicationLocale());
   EXPECT_STREQ("fr", icu::Locale::getDefault().getLanguage());
   EXPECT_FALSE(base::i18n::IsRTL());
   const std::u16string fr_str =
-      l10n_util::GetStringUTF16(IDS_UPDATE_STATUS_TITLE);
+      l10n_util::GetStringUTF16(IDS_LOGIN_GET_STARTED);
 
   EXPECT_NE(en_str, fr_str);
 
@@ -485,7 +487,7 @@ IN_PROC_BROWSER_TEST_F(WizardControllerTest, SwitchLanguage) {
   EXPECT_STREQ("ar", icu::Locale::getDefault().getLanguage());
   EXPECT_TRUE(base::i18n::IsRTL());
   const std::u16string ar_str =
-      l10n_util::GetStringUTF16(IDS_UPDATE_STATUS_TITLE);
+      l10n_util::GetStringUTF16(IDS_LOGIN_GET_STARTED);
 
   EXPECT_NE(fr_str, ar_str);
 }
@@ -549,6 +551,8 @@ class WizardControllerFlowTest : public WizardControllerTest {
     // Set up the mocks for all screens.
     mock_welcome_screen_ =
         MockScreenExpectLifecycle(std::make_unique<MockWelcomeScreen>(
+            g_browser_process->local_state(),
+            g_browser_process->GetFeatures()->application_locale_storage(),
             GetOobeUI()->GetView<WelcomeScreenHandler>()->AsWeakPtr(),
             base::BindRepeating(&WizardController::OnWelcomeScreenExit,
                                 base::Unretained(wizard_controller))));
@@ -557,6 +561,7 @@ class WizardControllerFlowTest : public WizardControllerTest {
         std::make_unique<MockDemoPreferencesScreenView>();
     mock_demo_preferences_screen_ =
         MockScreenExpectLifecycle(std::make_unique<MockDemoPreferencesScreen>(
+            g_browser_process->local_state(),
             mock_demo_preferences_screen_view_->AsWeakPtr(),
             base::BindRepeating(&WizardController::OnDemoPreferencesScreenExit,
                                 base::Unretained(wizard_controller))));
@@ -564,6 +569,8 @@ class WizardControllerFlowTest : public WizardControllerTest {
     device_disabled_screen_view_ =
         std::make_unique<MockDeviceDisabledScreenView>();
     MockScreen(std::make_unique<DeviceDisabledScreen>(
+        g_browser_process->platform_part()
+            ->device_restriction_schedule_controller(),
         device_disabled_screen_view_->AsWeakPtr()));
     EXPECT_CALL(*device_disabled_screen_view_, Show(_)).Times(0);
 
@@ -577,6 +584,7 @@ class WizardControllerFlowTest : public WizardControllerTest {
     mock_update_view_ = std::make_unique<MockUpdateView>();
     mock_update_screen_ =
         MockScreenExpectLifecycle(std::make_unique<MockUpdateScreen>(
+            g_browser_process->local_state(),
             mock_update_view_.get()->AsWeakPtr(), GetErrorScreen(),
             base::BindRepeating(&WizardController::OnUpdateScreenExit,
                                 base::Unretained(wizard_controller))));
@@ -584,6 +592,9 @@ class WizardControllerFlowTest : public WizardControllerTest {
     mock_enrollment_screen_view_ = std::make_unique<MockEnrollmentScreenView>();
     mock_enrollment_screen_ =
         MockScreenExpectLifecycle(std::make_unique<MockEnrollmentScreen>(
+            g_browser_process->local_state(),
+            g_browser_process->shared_url_loader_factory(),
+            g_browser_process->platform_part()->browser_policy_connector_ash(),
             mock_enrollment_screen_view_->AsWeakPtr(), GetErrorScreen(),
             base::BindRepeating(&WizardController::OnEnrollmentScreenExit,
                                 base::Unretained(wizard_controller))));
@@ -592,6 +603,7 @@ class WizardControllerFlowTest : public WizardControllerTest {
         std::make_unique<MockAutoEnrollmentCheckScreenView>();
     mock_auto_enrollment_check_screen_ = MockScreen(
         std::make_unique<testing::NiceMock<MockAutoEnrollmentCheckScreen>>(
+            g_browser_process->local_state(),
             mock_auto_enrollment_check_screen_view_.get()->AsWeakPtr(),
             GetErrorScreen(),
             base::BindRepeating(
@@ -610,6 +622,7 @@ class WizardControllerFlowTest : public WizardControllerTest {
         std::make_unique<MockEnableAdbSideloadingScreenView>();
     mock_enable_adb_sideloading_screen_ = MockScreenExpectLifecycle(
         std::make_unique<MockEnableAdbSideloadingScreen>(
+            g_browser_process->local_state(),
             mock_enable_adb_sideloading_screen_view_->AsWeakPtr(),
             base::BindRepeating(
                 &WizardController::OnEnableAdbSideloadingScreenExit,
@@ -619,6 +632,7 @@ class WizardControllerFlowTest : public WizardControllerTest {
         std::make_unique<MockEnableDebuggingScreenView>();
     mock_enable_debugging_screen_ =
         MockScreenExpectLifecycle(std::make_unique<MockEnableDebuggingScreen>(
+            g_browser_process->local_state(),
             mock_enable_debugging_screen_view_.get()->AsWeakPtr(),
             base::BindRepeating(&WizardController::OnEnableDebuggingScreenExit,
                                 base::Unretained(wizard_controller))));
@@ -634,6 +648,7 @@ class WizardControllerFlowTest : public WizardControllerTest {
         std::make_unique<MockDemoPreferencesScreenView>();
     mock_demo_preferences_screen_ =
         MockScreenExpectLifecycle(std::make_unique<MockDemoPreferencesScreen>(
+            g_browser_process->local_state(),
             mock_demo_preferences_screen_view_->AsWeakPtr(),
             base::BindRepeating(&WizardController::OnDemoPreferencesScreenExit,
                                 base::Unretained(wizard_controller))));
@@ -642,6 +657,9 @@ class WizardControllerFlowTest : public WizardControllerTest {
         std::make_unique<MockConsolidatedConsentScreenView>();
     mock_consolidated_consent_screen_ = MockScreenExpectLifecycle(
         std::make_unique<MockConsolidatedConsentScreen>(
+            g_browser_process->local_state(),
+            g_browser_process->GetFeatures()->application_locale_storage(),
+            g_browser_process->metrics_service(),
             mock_consolidated_consent_screen_view_.get()->AsWeakPtr(),
             base::BindRepeating(
                 &WizardController::OnConsolidatedConsentScreenExit,
@@ -944,8 +962,7 @@ IN_PROC_BROWSER_TEST_F(WizardControllerFlowTest,
 // after the OOBE is marked complete.
 class WizardControllerUpdateAfterCompletedOobeTest
     : public WizardControllerFlowTest,
-      public testing::WithParamInterface<UpdateScreen::Result>,
-      public LocalStateMixin::Delegate {
+      public testing::WithParamInterface<UpdateScreen::Result> {
  public:
   WizardControllerUpdateAfterCompletedOobeTest(
       const WizardControllerUpdateAfterCompletedOobeTest&) = delete;
@@ -955,13 +972,11 @@ class WizardControllerUpdateAfterCompletedOobeTest
  protected:
   WizardControllerUpdateAfterCompletedOobeTest() = default;
 
-  // LocalStateMixin::Delegate:
-  void SetUpLocalState() override {
-    StartupUtils::MarkOobeCompleted();  // Pretend OOBE was complete.
+  void SetUpLocalStatePrefService(PrefService* local_state) override {
+    WizardControllerFlowTest::SetUpLocalStatePrefService(local_state);
+    StartupUtils::MarkOobeCompleted(
+        CHECK_DEREF(local_state));  // Pretend OOBE was complete.
   }
-
- private:
-  LocalStateMixin local_state_mixin_{&mixin_host_, this};
 };
 
 // This test verifies that if WizardController reports any result after the
@@ -1257,8 +1272,8 @@ IN_PROC_BROWSER_TEST_F(WizardControllerUnifiedEnrollmentTest, Enrollment) {
   device_state.Set(
       policy::kDeviceStateMode,
       base::Value(policy::kDeviceStateRestoreModeReEnrollmentEnforced));
-  g_browser_process->local_state()->SetDict(prefs::kServerBackedDeviceState,
-                                            std::move(device_state));
+  g_browser_process->local_state()->SetDict(
+      ash::prefs::kServerBackedDeviceState, std::move(device_state));
   fetcher_factory.ReportEnrollmentState(
       policy::AutoEnrollmentResult::kEnrollment);
 
@@ -1282,8 +1297,8 @@ IN_PROC_BROWSER_TEST_F(WizardControllerUnifiedEnrollmentTest, Disabled) {
                    base::Value(policy::kDeviceStateModeDisabled));
   device_state.Set(policy::kDeviceStateDisabledMessage,
                    base::Value(kDisabledMessage));
-  g_browser_process->local_state()->SetDict(prefs::kServerBackedDeviceState,
-                                            std::move(device_state));
+  g_browser_process->local_state()->SetDict(
+      ash::prefs::kServerBackedDeviceState, std::move(device_state));
   fetcher_factory.ReportEnrollmentState(
       policy::AutoEnrollmentResult::kDisabled);
 
@@ -1353,8 +1368,8 @@ IN_PROC_BROWSER_TEST_F(WizardControllerUnifiedEnrollmentTest,
                    base::Value(policy::kDeviceStateModeDisabled));
   device_state.Set(policy::kDeviceStateDisabledMessage,
                    base::Value(kDisabledMessage));
-  g_browser_process->local_state()->SetDict(prefs::kServerBackedDeviceState,
-                                            std::move(device_state));
+  g_browser_process->local_state()->SetDict(
+      ash::prefs::kServerBackedDeviceState, std::move(device_state));
 
   EXPECT_CALL(*mock_auto_enrollment_check_screen_, HideImpl());
   EXPECT_CALL(*device_disabled_screen_view_,
@@ -1418,7 +1433,9 @@ class WizardControllerFjordOOBETest
     : public WizardControllerUnifiedEnrollmentTest {
  public:
   void SetUp() override {
-    scoped_feature_list_.InitAndEnableFeature(features::kFjordOobeForceEnabled);
+    scoped_feature_list_.InitWithFeatures(
+        /*enabled_features=*/{features::kFjordOobeForceEnabled},
+        /*disabled_features=*/{features::kFjordOobeImageSwitch});
     FjordOobeStateManager::Initialize();
     WizardControllerUnifiedEnrollmentTest::SetUp();
   }
@@ -1445,8 +1462,8 @@ IN_PROC_BROWSER_TEST_F(WizardControllerFjordOOBETest, FjordOobeScreenFlow) {
   device_state.Set(
       policy::kDeviceStateMode,
       base::Value(policy::kDeviceStateRestoreModeReEnrollmentEnforced));
-  g_browser_process->local_state()->SetDict(prefs::kServerBackedDeviceState,
-                                            std::move(device_state));
+  g_browser_process->local_state()->SetDict(
+      ash::prefs::kServerBackedDeviceState, std::move(device_state));
   fetcher_factory.ReportEnrollmentState(
       policy::AutoEnrollmentResult::kEnrollment);
 
@@ -1454,12 +1471,14 @@ IN_PROC_BROWSER_TEST_F(WizardControllerFjordOOBETest, FjordOobeScreenFlow) {
       FjordOobeStateManager::Get()->GetFjordOobeStateInfo().oobe_state(),
       fjord_oobe_state::proto::FjordOobeStateInfo::FJORD_OOBE_STATE_START);
   CheckCurrentScreen(EnrollmentScreenView::kScreenId);
-  EXPECT_FALSE(StartupUtils::IsOobeCompleted());
+  EXPECT_FALSE(StartupUtils::IsOobeCompleted(
+      CHECK_DEREF(g_browser_process->local_state())));
 
   // Make sure enterprise enrollment page shows up right after update screen.
   mock_enrollment_screen_->ExitScreen(EnrollmentScreen::Result::COMPLETED);
 
-  EXPECT_TRUE(StartupUtils::IsOobeCompleted());
+  EXPECT_TRUE(StartupUtils::IsOobeCompleted(
+      CHECK_DEREF(g_browser_process->local_state())));
   CheckCurrentScreen(FjordTouchControllerScreenView::kScreenId);
 
   EXPECT_TRUE(wizard_controller->ExitFjordTouchControllerScreen());
@@ -1485,8 +1504,8 @@ IN_PROC_BROWSER_TEST_F(WizardControllerFjordOOBETest,
   device_state.Set(
       policy::kDeviceStateMode,
       base::Value(policy::kDeviceStateRestoreModeReEnrollmentEnforced));
-  g_browser_process->local_state()->SetDict(prefs::kServerBackedDeviceState,
-                                            std::move(device_state));
+  g_browser_process->local_state()->SetDict(
+      ash::prefs::kServerBackedDeviceState, std::move(device_state));
   fetcher_factory.ReportEnrollmentState(
       policy::AutoEnrollmentResult::kEnrollment);
 
@@ -1516,6 +1535,40 @@ IN_PROC_BROWSER_TEST_F(WizardControllerFjordOOBETest,
   EXPECT_EQ(
       FjordOobeStateManager::Get()->GetFjordOobeStateInfo().oobe_state(),
       fjord_oobe_state::proto::FjordOobeStateInfo::FJORD_OOBE_STATE_COMPLETE);
+}
+
+class WizardControllerFjordImageSelectionTest
+    : public WizardControllerFlowTest {
+ public:
+  void SetUp() override {
+    scoped_feature_list_.InitWithFeatures(
+        {features::kFjordOobeForceEnabled, features::kFjordOobeImageSwitch},
+        {});
+    WizardControllerFlowTest::SetUp();
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_F(WizardControllerFjordImageSelectionTest,
+                       ImageSwitchScreenShownAfterUpdate) {
+  CheckCurrentScreen(WelcomeView::kScreenId);
+
+  EXPECT_CALL(*mock_welcome_screen_, HideImpl()).Times(1);
+  EXPECT_CALL(*mock_network_screen_, ShowImpl()).Times(1);
+  mock_welcome_screen_->ExitScreen(WelcomeScreen::Result::kNext);
+
+  CheckCurrentScreen(NetworkScreenView::kScreenId);
+  EXPECT_CALL(*mock_network_screen_, HideImpl()).Times(1);
+  EXPECT_CALL(*mock_update_screen_, ShowImpl()).Times(1);
+  mock_network_screen_->ExitScreen(NetworkScreen::Result::CONNECTED);
+
+  CheckCurrentScreen(UpdateView::kScreenId);
+  EXPECT_CALL(*mock_update_screen_, HideImpl()).Times(1);
+  mock_update_screen_->RunExit(UpdateScreen::Result::UPDATE_NOT_REQUIRED);
+
+  CheckCurrentScreen(FjordImageSelectionScreenView::kScreenId);
 }
 
 class WizardControllerScreenPriorityOOBETest : public OobeBaseTest {
@@ -1548,8 +1601,7 @@ IN_PROC_BROWSER_TEST_F(WizardControllerScreenPriorityOOBETest,
   CheckCurrentScreen(UpdateView::kScreenId);
 }
 
-class WizardControllerScreenPriorityTest : public LoginManagerTest,
-                                           public LocalStateMixin::Delegate {
+class WizardControllerScreenPriorityTest : public LoginManagerTest {
  protected:
   WizardControllerScreenPriorityTest() {
     login_manager_mixin_.AppendRegularUsers(1);
@@ -1561,16 +1613,15 @@ class WizardControllerScreenPriorityTest : public LoginManagerTest,
               WizardController::default_controller()->current_screen());
   }
 
-  // LocalStateMixin::Delegate:
-  void SetUpLocalState() override {
+  void SetUpLocalStatePrefService(PrefService* local_state) override {
+    LoginManagerTest::SetUpLocalStatePrefService(local_state);
+
     // Set pref to show reset screen on startup.
-    g_browser_process->local_state()->SetBoolean(prefs::kFactoryResetRequested,
-                                                 true);
+    local_state->SetBoolean(ash::prefs::kFactoryResetRequested, true);
   }
 
  private:
   LoginManagerMixin login_manager_mixin_{&mixin_host_};
-  LocalStateMixin local_state_mixin_{&mixin_host_, this};
 };
 
 IN_PROC_BROWSER_TEST_F(WizardControllerScreenPriorityTest, CanNavigateToTest) {
@@ -1739,12 +1790,14 @@ IN_PROC_BROWSER_TEST_F(WizardControllerKioskFlowTest,
   CheckCurrentScreen(EnrollmentScreenView::kScreenId);
   EXPECT_CALL(*mock_auto_enrollment_check_screen_, HideImpl()).Times(0);
 
-  EXPECT_FALSE(StartupUtils::IsOobeCompleted());
+  EXPECT_FALSE(StartupUtils::IsOobeCompleted(
+      CHECK_DEREF(g_browser_process->local_state())));
 
   // Make sure enterprise enrollment page shows up right after update screen.
   mock_enrollment_screen_->ExitScreen(EnrollmentScreen::Result::COMPLETED);
 
-  EXPECT_TRUE(StartupUtils::IsOobeCompleted());
+  EXPECT_TRUE(StartupUtils::IsOobeCompleted(
+      CHECK_DEREF(g_browser_process->local_state())));
 }
 
 IN_PROC_BROWSER_TEST_F(WizardControllerKioskFlowTest,
@@ -1777,7 +1830,8 @@ IN_PROC_BROWSER_TEST_F(WizardControllerKioskFlowTest,
   CheckCurrentScreen(EnrollmentScreenView::kScreenId);
   EXPECT_CALL(*mock_auto_enrollment_check_screen_, HideImpl()).Times(0);
 
-  EXPECT_FALSE(StartupUtils::IsOobeCompleted());
+  EXPECT_FALSE(StartupUtils::IsOobeCompleted(
+      CHECK_DEREF(g_browser_process->local_state())));
 
   // Make sure enterprise enrollment page shows up right after update screen.
   EXPECT_CALL(*mock_enrollment_screen_, ShowImpl()).Times(0);
@@ -1787,7 +1841,8 @@ IN_PROC_BROWSER_TEST_F(WizardControllerKioskFlowTest,
       EnrollmentScreen::Result::BACK_TO_AUTO_ENROLLMENT_CHECK);
 
   CheckCurrentScreen(EnrollmentScreenView::kScreenId);
-  EXPECT_FALSE(StartupUtils::IsOobeCompleted());
+  EXPECT_FALSE(StartupUtils::IsOobeCompleted(
+      CHECK_DEREF(g_browser_process->local_state())));
 }
 
 class WizardControllerEnableAdbSideloadingTest
@@ -1982,7 +2037,8 @@ IN_PROC_BROWSER_TEST_F(WizardControllerDemoSetupTest,
   test::LockDemoDeviceInstallAttributes();
   mock_demo_setup_screen_->ExitScreen(DemoSetupScreen::Result::kCompleted);
 
-  EXPECT_TRUE(StartupUtils::IsOobeCompleted());
+  EXPECT_TRUE(StartupUtils::IsOobeCompleted(
+      CHECK_DEREF(g_browser_process->local_state())));
   EXPECT_TRUE(ExistingUserController::current_controller());
   EXPECT_FALSE(DemoSetupController::IsOobeDemoSetupFlowInProgress());
 }
@@ -2043,7 +2099,8 @@ IN_PROC_BROWSER_TEST_F(WizardControllerDemoSetupTest, DemoSetupCanceled) {
 
   CheckCurrentScreen(WelcomeView::kScreenId);
   EXPECT_FALSE(DemoSetupController::IsOobeDemoSetupFlowInProgress());
-  EXPECT_FALSE(StartupUtils::IsOobeCompleted());
+  EXPECT_FALSE(StartupUtils::IsOobeCompleted(
+      CHECK_DEREF(g_browser_process->local_state())));
 }
 
 IN_PROC_BROWSER_TEST_F(WizardControllerDemoSetupTest, DemoPreferencesCanceled) {
@@ -2145,6 +2202,7 @@ class WizardControllerOobeResumeTest : public WizardControllerTest {
         std::make_unique<MockAutoEnrollmentCheckScreenView>();
     mock_auto_enrollment_check_screen_ = MockScreen(
         std::make_unique<testing::NiceMock<MockAutoEnrollmentCheckScreen>>(
+            g_browser_process->local_state(),
             mock_auto_enrollment_check_screen_view_.get()->AsWeakPtr(),
             GetErrorScreen(),
             base::BindRepeating(
@@ -2333,9 +2391,7 @@ IN_PROC_BROWSER_TEST_F(WizardControllerOobeConfigurationTest,
 // Verifies that incomplete token-based enrollment flows (e.g. device is
 // rebooted after enrollment fails) resume enrollment without issue. See
 // b/336337134 for more details.
-class WizardControllerEnrollmentTokenRebootTest
-    : public WizardControllerTest,
-      public LocalStateMixin::Delegate {
+class WizardControllerEnrollmentTokenRebootTest : public WizardControllerTest {
  public:
   WizardControllerEnrollmentTokenRebootTest(
       const WizardControllerEnrollmentTokenRebootTest&) = delete;
@@ -2357,18 +2413,17 @@ class WizardControllerEnrollmentTokenRebootTest
                                    configuration_file);
   }
 
-  void SetUpLocalState() override {
+  void SetUpLocalStatePrefService(PrefService* local_state) override {
+    WizardControllerTest::SetUpLocalStatePrefService(local_state);
+
     // Simulate device having previously gone through state determination.
     base::DictValue device_state;
     device_state.Set(
         policy::kDeviceStateMode,
         base::Value(policy::kDeviceStateInitialModeTokenEnrollment));
-    g_browser_process->local_state()->SetDict(prefs::kServerBackedDeviceState,
-                                              std::move(device_state));
+    local_state->SetDict(ash::prefs::kServerBackedDeviceState,
+                         std::move(device_state));
   }
-
- private:
-  LocalStateMixin local_state_mixin_{&mixin_host_, this};
 };
 
 IN_PROC_BROWSER_TEST_F(WizardControllerEnrollmentTokenRebootTest,
@@ -2381,8 +2436,7 @@ IN_PROC_BROWSER_TEST_F(WizardControllerEnrollmentTokenRebootTest,
 }
 
 class WizardControllerRemoteActivityNotificationTest
-    : public WizardControllerTest,
-      public LocalStateMixin::Delegate {
+    : public WizardControllerTest {
  public:
   WizardControllerRemoteActivityNotificationTest(
       const WizardControllerRemoteActivityNotificationTest&) = delete;
@@ -2399,12 +2453,10 @@ class WizardControllerRemoteActivityNotificationTest
     login_manager_mixin_.AppendRegularUsers(1);
   }
 
-  void SetUpOnMainThread() override {
-    WizardControllerTest::SetUpOnMainThread();
+  void SetUpLocalStatePrefService(PrefService* local_state) override {
+    WizardControllerTest::SetUpLocalStatePrefService(local_state);
+    StartupUtils::MarkOobeCompleted(CHECK_DEREF(local_state));
   }
-
-  // LocalStateMixin::Delegate:
-  void SetUpLocalState() override { StartupUtils::MarkOobeCompleted(); }
 
   void SetPref(const std::string& pref, bool value) {
     local_state()->SetBoolean(pref, value);
@@ -2432,20 +2484,23 @@ class WizardControllerRemoteActivityNotificationTest
 
  private:
   LoginManagerMixin login_manager_mixin_{&mixin_host_};
-  LocalStateMixin local_state_mixin_{&mixin_host_, this};
 };
 
 class RemoteActivityNotificationTestWhenPrefIsSet
     : public WizardControllerRemoteActivityNotificationTest {
-  void SetUpLocalState() override {
-    SetPref(prefs::kRemoteAdminWasPresent, true);
+  void SetUpLocalStatePrefService(PrefService* local_state) override {
+    WizardControllerRemoteActivityNotificationTest::SetUpLocalStatePrefService(
+        local_state);
+    local_state->SetBoolean(ash::prefs::kRemoteAdminWasPresent, true);
   }
 };
 
 class RemoteActivityNotificationTestWhenPrefIsNotSet
     : public WizardControllerRemoteActivityNotificationTest {
-  void SetUpLocalState() override {
-    SetPref(prefs::kRemoteAdminWasPresent, false);
+  void SetUpLocalStatePrefService(PrefService* local_state) override {
+    WizardControllerRemoteActivityNotificationTest::SetUpLocalStatePrefService(
+        local_state);
+    local_state->SetBoolean(ash::prefs::kRemoteAdminWasPresent, false);
   }
 };
 
@@ -2453,7 +2508,7 @@ IN_PROC_BROWSER_TEST_F(RemoteActivityNotificationTestWhenPrefIsSet,
                        ShouldSetPrefOnRemoteActivityScreenExit) {
   OobeScreenWaiter(RemoteActivityNotificationView::kScreenId).Wait();
   CheckCurrentScreen(RemoteActivityNotificationView::kScreenId);
-  ASSERT_TRUE(GetPref(prefs::kRemoteAdminWasPresent));
+  ASSERT_TRUE(GetPref(ash::prefs::kRemoteAdminWasPresent));
   ASSERT_TRUE(LoginScreenTestApi::IsOobeDialogVisible());
 
   test::OobeJS().ClickOnPath({"remote-activity-notification", "cancelButton"});
@@ -2462,12 +2517,12 @@ IN_PROC_BROWSER_TEST_F(RemoteActivityNotificationTestWhenPrefIsSet,
     return !LoginScreenTestApi::IsOobeDialogVisible();
   })).Wait();
   EXPECT_FALSE(IsRemoteActivityScreenVisible());
-  EXPECT_FALSE(GetPref(prefs::kRemoteAdminWasPresent));
+  EXPECT_FALSE(GetPref(ash::prefs::kRemoteAdminWasPresent));
 }
 
 IN_PROC_BROWSER_TEST_F(RemoteActivityNotificationTestWhenPrefIsNotSet,
                        NotificationShouldNotBeVisible) {
-  ASSERT_FALSE(GetPref(prefs::kRemoteAdminWasPresent));
+  ASSERT_FALSE(GetPref(ash::prefs::kRemoteAdminWasPresent));
 
   EXPECT_FALSE(IsRemoteActivityScreenVisible());
 }
@@ -2499,7 +2554,7 @@ IN_PROC_BROWSER_TEST_F(
     PRE_ShouldGoToPreviousScreenWhenNotificationIsDismissed) {
   CheckCurrentScreen(UserCreationView::kScreenId);
 
-  local_state()->SetBoolean(prefs::kRemoteAdminWasPresent, true);
+  local_state()->SetBoolean(ash::prefs::kRemoteAdminWasPresent, true);
 }
 
 IN_PROC_BROWSER_TEST_F(
@@ -2744,7 +2799,8 @@ IN_PROC_BROWSER_TEST_F(WizardControllerFlowWithAutoEnrollmentCheckForcedTest,
   base::RunLoop().RunUntilIdle();
 
   OobeScreenWaiter(UserCreationView::kScreenId).Wait();
-  EXPECT_TRUE(StartupUtils::IsOobeCompleted());
+  EXPECT_TRUE(StartupUtils::IsOobeCompleted(
+      CHECK_DEREF(g_browser_process->local_state())));
 }
 
 IN_PROC_BROWSER_TEST_F(WizardControllerFlowWithAutoEnrollmentCheckForcedTest,
@@ -2773,7 +2829,8 @@ IN_PROC_BROWSER_TEST_F(WizardControllerFlowWithAutoEnrollmentCheckForcedTest,
   base::RunLoop().RunUntilIdle();
 
   OobeScreenWaiter(SignInFatalErrorView::kScreenId).Wait();
-  EXPECT_FALSE(StartupUtils::IsOobeCompleted());
+  EXPECT_FALSE(StartupUtils::IsOobeCompleted(
+      CHECK_DEREF(g_browser_process->local_state())));
 }
 
 IN_PROC_BROWSER_TEST_F(WizardControllerFlowWithAutoEnrollmentCheckForcedTest,
@@ -2787,7 +2844,8 @@ IN_PROC_BROWSER_TEST_F(WizardControllerFlowWithAutoEnrollmentCheckForcedTest,
 
 IN_PROC_BROWSER_TEST_F(WizardControllerFlowWithAutoEnrollmentCheckForcedTest,
                        NoFatalErrorOnGaiaAdvanceWhenOobeComplete) {
-  StartupUtils::MarkOobeCompleted();
+  StartupUtils::MarkOobeCompleted(
+      CHECK_DEREF(g_browser_process->local_state()));
   WaitForOobeUI();
 
   WizardController::default_controller()->AdvanceToScreen(GaiaView::kScreenId);

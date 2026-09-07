@@ -5,6 +5,7 @@
 #ifndef SERVICES_NETWORK_PUBLIC_CPP_SYNTHETIC_RESPONSE_UTIL_H_
 #define SERVICES_NETWORK_PUBLIC_CPP_SYNTHETIC_RESPONSE_UTIL_H_
 
+#include <string_view>
 #include <vector>
 
 #include "base/component_export.h"
@@ -22,7 +23,8 @@ namespace network {
 COMPONENT_EXPORT(NETWORK_CPP)
 bool CheckHeaderConsistencyForSyntheticResponse(
     const net::HttpResponseHeaders& actual_headers,
-    const net::HttpResponseHeaders& expected_headers);
+    const net::HttpResponseHeaders& expected_headers,
+    std::string_view request_url);
 
 COMPONENT_EXPORT(NETWORK_CPP)
 bool CheckHeaderConsistencyForSyntheticResponseForTesting(
@@ -30,11 +32,16 @@ bool CheckHeaderConsistencyForSyntheticResponseForTesting(
     const net::HttpResponseHeaders& expected_headers,
     const std::vector<std::string>& ignored_headers);
 
+struct WriteSyntheticResponseFallbackResult {
+  MojoResult result;
+  size_t bytes_written;
+};
+
 // Writes the hardcoded fallback body to the provided data pipe.
 // TODO(crbug.com/447039330): This is temporary for the SyntheticResponse
 // experiment and will be removed after standardization.
 COMPONENT_EXPORT(NETWORK_CPP)
-size_t WriteSyntheticResponseFallbackBody(
+WriteSyntheticResponseFallbackResult WriteSyntheticResponseFallbackBody(
     mojo::ScopedDataPipeProducerHandle& response_body_stream);
 
 }  // namespace network

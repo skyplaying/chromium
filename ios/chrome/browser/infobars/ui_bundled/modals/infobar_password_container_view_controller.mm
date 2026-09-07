@@ -11,10 +11,11 @@
 #import "ios/chrome/browser/infobars/ui_bundled/modals/infobar_modal_constants.h"
 #import "ios/chrome/browser/infobars/ui_bundled/modals/infobar_password_modal_delegate.h"
 #import "ios/chrome/browser/infobars/ui_bundled/modals/infobar_password_table_view_controller.h"
-#import "ios/chrome/browser/passwords/model/ios_chrome_password_infobar_metrics_recorder.h"
+#import "ios/chrome/browser/passwords/infobars/public/ios_chrome_password_infobar_metrics_recorder.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/common/ui/util/chrome_button.h"
+#import "ios/chrome/common/ui/util/constraints_ui_util.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ui/base/l10n/l10n_util.h"
 
@@ -99,8 +100,8 @@ constexpr CGFloat kButtonStackVerticalMargin = 9;
                            action:@selector(dismissInfobarModal)];
   cancelButton.accessibilityIdentifier = kInfobarModalCancelButton;
 
-  UIImage* gearImage = DefaultSymbolWithPointSize(kSettingsFilledSymbol,
-                                                  kInfobarSymbolPointSize);
+  UIImage* gearImage =
+      SymbolWithPointSize(SymbolSettingsFilled, kInfobarSymbolPointSize);
   UIBarButtonItem* settingsButton = [[UIBarButtonItem alloc]
       initWithImage:gearImage
               style:UIBarButtonItemStylePlain
@@ -146,13 +147,13 @@ constexpr CGFloat kButtonStackVerticalMargin = 9;
 
   [self addChildViewController:_passwordViewController];
   [view addSubview:passwordView];
+  AddSameConstraintsToSides(passwordView, view,
+                            LayoutSides::kTop | LayoutSides::kHorizontal);
   [NSLayoutConstraint activateConstraints:@[
-    [view.leadingAnchor constraintEqualToAnchor:passwordView.leadingAnchor],
-    [view.topAnchor constraintEqualToAnchor:passwordView.topAnchor],
-    [view.trailingAnchor constraintEqualToAnchor:passwordView.trailingAnchor],
     [view.widthAnchor constraintEqualToAnchor:passwordView.widthAnchor],
-
-    [passwordView.bottomAnchor constraintEqualToAnchor:_buttonStack.topAnchor],
+    [passwordView.bottomAnchor
+        constraintEqualToAnchor:_buttonStack.topAnchor
+                       constant:-kButtonStackVerticalMargin],
 
     [view.centerXAnchor constraintEqualToAnchor:_buttonStack.centerXAnchor],
     [view.widthAnchor constraintEqualToAnchor:_buttonStack.widthAnchor

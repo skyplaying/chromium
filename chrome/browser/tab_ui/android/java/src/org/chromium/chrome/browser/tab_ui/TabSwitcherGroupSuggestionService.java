@@ -9,6 +9,7 @@ import static java.util.Comparator.comparingInt;
 import androidx.annotation.IntDef;
 
 import org.chromium.base.Callback;
+import org.chromium.base.CallbackUtils;
 import org.chromium.base.Token;
 import org.chromium.base.ValueChangedCallback;
 import org.chromium.base.metrics.RecordHistogram;
@@ -22,8 +23,7 @@ import org.chromium.chrome.browser.tab.TabId;
 import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tab_group_suggestion.GroupSuggestionsServiceFactory;
 import org.chromium.chrome.browser.tabmodel.TabClosingSource;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilterObserver;
+import org.chromium.chrome.browser.tabmodel.TabGroupObserver;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelObserver;
 import org.chromium.chrome.browser.tabwindow.WindowId;
@@ -174,6 +174,12 @@ public class TabSwitcherGroupSuggestionService {
                 }
 
                 @Override
+                public void willCloseTabs(
+                        List<Tab> tabs, boolean isAllTabs, boolean allowUndo) {
+                    clearSuggestions();
+                }
+
+                @Override
                 public void willAddTab(Tab tab, @TabLaunchType int type) {
                     clearSuggestions();
                 }
@@ -185,8 +191,8 @@ public class TabSwitcherGroupSuggestionService {
                 }
             };
 
-    private final TabGroupModelFilterObserver mTabGroupModelFilterObserver =
-            new TabGroupModelFilterObserver() {
+    private final TabGroupObserver mTabGroupObserver =
+            new TabGroupObserver() {
                 @Override
                 public void willMergeTabToGroup(
                         Tab movedTab, int newRootId, @Nullable Token tabGroupId) {
@@ -205,7 +211,7 @@ public class TabSwitcherGroupSuggestionService {
                 }
 
                 @Override
-                public void didCreateNewGroup(Tab destinationTab, TabGroupModelFilter filter) {
+                public void didCreateNewGroup(Tab destinationTab, TabModel tabModel) {
                     clearSuggestions();
                 }
 
@@ -223,58 +229,54 @@ public class TabSwitcherGroupSuggestionService {
                 }
             };
     private final @WindowId int mWindowId;
-    private final MonotonicObservableSupplier<TabGroupModelFilter>
-            mCurrentTabGroupModelFilterSupplier;
+    private final MonotonicObservableSupplier<TabModel> mCurrentTabModelSupplier;
     private final SuggestionLifecycleObserverHandler mSuggestionLifecycleObserverHandler;
     private final GroupSuggestionsService mGroupSuggestionsService;
-    private final Callback<TabGroupModelFilter> mOnTabGroupModelFilterChanged =
-            new ValueChangedCallback<>(this::onTabGroupModelFilterChanged);
+    private final Callback<TabModel> mOnTabModelChanged =
+            new ValueChangedCallback<>(this::onTabModelChanged);
 
     /**
      * @param windowId The ID of the current window.
-     * @param currentTabGroupModelFilterSupplier The supplier for the current {@link
-     *     TabGroupModelFilter}.
+     * @param currentTabModelSupplier The supplier for the current {@link TabModel}.
      * @param profile The profile used for tab group suggestions.
      * @param suggestionLifecycleObserverHandler Listens for user responses to a group suggestion.
      */
     public TabSwitcherGroupSuggestionService(
             @WindowId int windowId,
-            MonotonicObservableSupplier<TabGroupModelFilter> currentTabGroupModelFilterSupplier,
+            MonotonicObservableSupplier<TabModel> currentTabModelSupplier,
             Profile profile,
             SuggestionLifecycleObserverHandler suggestionLifecycleObserverHandler) {
         mWindowId = windowId;
-        mCurrentTabGroupModelFilterSupplier = currentTabGroupModelFilterSupplier;
+        mCurrentTabModelSupplier = currentTabModelSupplier;
         mSuggestionLifecycleObserverHandler = suggestionLifecycleObserverHandler;
 
         mGroupSuggestionsService = GroupSuggestionsServiceFactory.getForProfile(profile);
 
-        mCurrentTabGroupModelFilterSupplier.addSyncObserverAndCallIfNonNull(
-                mOnTabGroupModelFilterChanged);
+        mCurrentTabModelSupplier.addSyncObserverAndCallIfNonNull(mOnTabModelChanged);
     }
 
     public void destroy() {
-        mCurrentTabGroupModelFilterSupplier.removeObserver(mOnTabGroupModelFilterChanged);
+        mCurrentTabModelSupplier.removeObserver(mOnTabModelChanged);
         mSuggestionLifecycleObserverHandler.onSuggestionIgnored();
     }
 
-    private void onTabGroupModelFilterChanged(
-            TabGroupModelFilter newFilter, @Nullable TabGroupModelFilter oldFilter) {
-        if (oldFilter != null) {
-            oldFilter.removeObserver(mTabModelObserver);
-            oldFilter.removeTabGroupObserver(mTabGroupModelFilterObserver);
+    private void onTabModelChanged(TabModel newTabModel, @Nullable TabModel oldTabModel) {
+        if (oldTabModel != null) {
+            oldTabModel.removeObserver(mTabModelObserver);
+            oldTabModel.removeTabGroupObserver(mTabGroupObserver);
         }
 
-        if (newFilter != null) {
-            newFilter.addObserver(mTabModelObserver);
-            newFilter.addTabGroupObserver(mTabGroupModelFilterObserver);
+        if (newTabModel != null) {
+            newTabModel.addObserver(mTabModelObserver);
+            newTabModel.addTabGroupObserver(mTabGroupObserver);
         }
     }
 
     /** Shows tab group suggestions if needed. */
     public void maybeShowSuggestions() {
-        TabGroupModelFilter filter = mCurrentTabGroupModelFilterSupplier.get();
+        TabModel tabModel = mCurrentTabModelSupplier.get();
         clearSuggestions();
-        if (filter == null || isIncognitoMode(filter)) return;
+        if (tabModel == null || isIncognitoMode(tabModel)) return;
 
         recordGroupSuggestionHistogram(SuggestionUiEvent.REQUEST_STARTED);
         CachedSuggestions cachedSuggestions =
@@ -305,7 +307,6 @@ public class TabSwitcherGroupSuggestionService {
 
         GroupSuggestion suggestion = groupSuggestionsList.get(0);
 
-        TabModel tabModel = filter.getTabModel();
         Map<@TabId Integer, Integer> tabIdsToIndices = getTabIdToIndicesMap(tabModel);
         List<Tab> tabsSortedByIndex = getTabsSortedByIndex(tabModel, tabIdsToIndices, suggestion);
 
@@ -388,8 +389,8 @@ public class TabSwitcherGroupSuggestionService {
         return true;
     }
 
-    private boolean isIncognitoMode(TabGroupModelFilter filter) {
-        return filter.getTabModel().isIncognitoBranded();
+    private boolean isIncognitoMode(TabModel tabModel) {
+        return tabModel.isIncognitoBranded();
     }
 
     /** Clears tab group suggestions if present. */
@@ -400,7 +401,7 @@ public class TabSwitcherGroupSuggestionService {
     /** Records a histogram for a {@link SuggestionUiEvent}. */
     public static void recordGroupSuggestionHistogram(@SuggestionUiEvent int suggestionUiEvent) {
         RecordHistogram.recordEnumeratedHistogram(
-                SUGGESTION_UI_HISTOGRAM_NAME, suggestionUiEvent, SuggestionUiEvent.MAX_VALUE);
+                SUGGESTION_UI_HISTOGRAM_NAME, suggestionUiEvent, SuggestionUiEvent.MAX_VALUE + 1);
     }
 
     /** Forces a tab group suggestion for testing purposes. */
@@ -408,11 +409,10 @@ public class TabSwitcherGroupSuggestionService {
         assert ChromeFeatureList.sTabSwitcherGroupSuggestionsTestModeAndroid.isEnabled()
                 : "Forcing suggestions is only allowed in test mode.";
 
-        TabGroupModelFilter filter = mCurrentTabGroupModelFilterSupplier.get();
+        TabModel tabModel = mCurrentTabModelSupplier.get();
         clearSuggestions();
-        if (filter == null) return;
+        if (tabModel == null) return;
 
-        TabModel tabModel = filter.getTabModel();
         if (tabModel.getCount() == 0) return;
         List<Integer> tabIds = new ArrayList<>();
 
@@ -443,7 +443,7 @@ public class TabSwitcherGroupSuggestionService {
                         /* suggestedName= */ "",
                         /* promoHeader= */ "",
                         /* promoContents= */ "");
-        showSuggestion(groupSuggestion, tabIds, ignored -> {});
+        showSuggestion(groupSuggestion, tabIds, CallbackUtils.emptyCallback());
     }
 
     /**

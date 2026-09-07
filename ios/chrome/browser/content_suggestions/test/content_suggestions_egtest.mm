@@ -21,11 +21,12 @@
 #import "ios/chrome/browser/content_suggestions/public/ntp_home_constants.h"
 #import "ios/chrome/browser/content_suggestions/set_up_list/public/set_up_list_constants.h"
 #import "ios/chrome/browser/content_suggestions/test/new_tab_page_app_interface.h"
+#import "ios/chrome/browser/default_browser/promo/public/features.h"
 #import "ios/chrome/browser/first_run/public/first_run_constants.h"
 #import "ios/chrome/browser/home_customization/utils/home_customization_constants.h"
 #import "ios/chrome/browser/home_customization/utils/home_customization_helper.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_constants.h"
-#import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_feature.h"
+#import "ios/chrome/browser/settings/ui_bundled/settings_table_view_controller_constants.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
@@ -130,6 +131,15 @@ NSString* AccessibilityIdentifierForMostVisitedCellAtIndex(int index) {
           index];
 }
 
+// Returns the matcher for the "Add" button in the navigation bar.
+id<GREYMatcher> NavigationBarAddButton() {
+  return grey_allOf(
+      grey_ancestor(grey_kindOfClass([UINavigationBar class])),
+      ButtonWithAccessibilityLabel(l10n_util::GetNSString(IDS_ADD)),
+      grey_userInteractionEnabled(),
+      grey_not(grey_accessibilityTrait(UIAccessibilityTraitNotEnabled)), nil);
+}
+
 }  // namespace
 
 #pragma mark - TestCase
@@ -146,13 +156,23 @@ NSString* AccessibilityIdentifierForMostVisitedCellAtIndex(int index) {
 - (AppLaunchConfiguration)appConfigurationForTestCase {
   AppLaunchConfiguration config;
   config.features_enabled.push_back(kEnableFeedAblation);
-  config.features_enabled.push_back(kMostVisitedTilesCustomizationIOS);
-  config.features_disabled.push_back(kIOSExpandedSetupList);
   config.additional_args.push_back("--test-ios-module-ranker=mvt");
   if ([self isRunningTest:@selector(testMagicStackEditButton)] ||
       [self isRunningTest:@selector
             (testMagicStackCompactedSetUpListCompleteAllItems)]) {
     config.features_disabled.push_back(kContentPushNotifications);
+  }
+
+  if ([self isRunningTest:@selector
+            (testMagicStackCompactedSetUpListCompleteAllItems)]) {
+    config.features_enabled_and_params.push_back(
+        {kIOSExpandedSetupList,
+         {{kIOSExpandedSetupListVariationParam,
+           kIOSExpandedSetupListVariationParamSafariImport}}});
+    config.features_enabled_and_params.push_back(
+        {kDefaultBrowserPictureInPicture,
+         {{kDefaultBrowserPictureInPictureParam,
+           kDefaultBrowserPictureInPictureParamDisabledDefaultApps}}});
   }
 
   return config;
@@ -220,6 +240,7 @@ NSString* AccessibilityIdentifierForMostVisitedCellAtIndex(int index) {
 
   // Check the page has been correctly opened.
   [ChromeEarlGrey selectTabAtIndex:1];
+  [ChromeEarlGrey waitForPageToFinishLoading];
   [ChromeEarlGrey waitForWebStateVisibleURL:pageURL];
   [ChromeEarlGrey waitForWebStateContainingText:kPageLoadedString];
 }
@@ -239,6 +260,7 @@ NSString* AccessibilityIdentifierForMostVisitedCellAtIndex(int index) {
   [ChromeEarlGrey waitForIncognitoTabCount:1];
 
   // Check that the tab has been opened in foreground.
+  [ChromeEarlGrey waitForPageToFinishLoading];
   [ChromeEarlGrey waitForWebStateVisibleURL:pageURL];
   [ChromeEarlGrey waitForWebStateContainingText:kPageLoadedString];
 
@@ -320,13 +342,30 @@ NSString* AccessibilityIdentifierForMostVisitedCellAtIndex(int index) {
 
   // Tap the default browser item.
   TapView(set_up_list::kDefaultBrowserItemID);
-  // Ensure the Default Browser Promo is displayed.
-  id<GREYMatcher> defaultBrowserView = grey_accessibilityID(
-      first_run::kFirstRunDefaultBrowserScreenAccessibilityIdentifier);
-  [[EarlGrey selectElementWithMatcher:defaultBrowserView]
-      assertWithMatcher:grey_notNil()];
-  // Dismiss Default Browser Promo.
-  TapPromoStyleSecondaryActionButton();
+
+  if (@available(iOS 18.3, *)) {
+    // Ensure the Default Browser Settings is displayed.
+    id<GREYMatcher> defaultBrowserView =
+        grey_accessibilityID(kDefaultBrowserSettingsTableViewId);
+    [[EarlGrey selectElementWithMatcher:defaultBrowserView]
+        assertWithMatcher:grey_notNil()];
+
+    id<GREYMatcher> primaryButton =
+        chrome_test_util::ButtonStackPrimaryButton();
+    [ChromeEarlGrey waitForUIElementToAppearWithMatcher:primaryButton];
+    [[EarlGrey selectElementWithMatcher:primaryButton]
+        performAction:grey_tap()];
+
+    [[AppLaunchManager sharedManager] backgroundAndForegroundApp];
+  } else {
+    // Ensure the Default Browser Promo is displayed.
+    id<GREYMatcher> defaultBrowserView = grey_accessibilityID(
+        first_run::kFirstRunDefaultBrowserScreenAccessibilityIdentifier);
+    [[EarlGrey selectElementWithMatcher:defaultBrowserView]
+        assertWithMatcher:grey_notNil()];
+    // Dismiss Default Browser Promo.
+    TapPromoStyleSecondaryActionButton();
+  }
 
   ConditionBlock condition = ^{
     return [NewTabPageAppInterface
@@ -335,24 +374,6 @@ NSString* AccessibilityIdentifierForMostVisitedCellAtIndex(int index) {
   GREYAssert(
       base::test::ios::WaitUntilConditionOrTimeout(base::Seconds(2), condition),
       @"SetUpList item Default Browser not completed.");
-
-  // TODO:(crbug.com/480153437): Enable `kIOSExpandedSetupList` and update this
-  // test to work with the new setup list.
-  // Tap the autofill item.
-  TapView(set_up_list::kAutofillItemID);
-  id<GREYMatcher> CPEPromoView =
-      grey_accessibilityID(@"kCredentialProviderPromoAccessibilityId");
-  [[EarlGrey selectElementWithMatcher:CPEPromoView]
-      assertWithMatcher:grey_notNil()];
-  // Dismiss the CPE promo.
-  TapSecondaryActionButton();
-
-  condition = ^{
-    return [NewTabPageAppInterface setUpListItemAutofillInMagicStackIsComplete];
-  };
-  GREYAssert(
-      base::test::ios::WaitUntilConditionOrTimeout(base::Seconds(2), condition),
-      @"SetUpList item Autofill not completed.");
 
   // Completed Set Up List items last one impression
   [ChromeEarlGrey closeAllTabs];
@@ -370,6 +391,42 @@ NSString* AccessibilityIdentifierForMostVisitedCellAtIndex(int index) {
   // Dismiss Notification opt-in screen.
   TapPromoStyleSecondaryActionButton();
 
+  // Completed Set Up List items last one impression
+  [ChromeEarlGrey closeAllTabs];
+  [ChromeEarlGrey openNewTab];
+  [ChromeEarlGrey closeAllTabs];
+  [ChromeEarlGrey openNewTab];
+
+  // Tap the Safari Import item.
+  TapView(set_up_list::kSafariImportItemID);
+  id<GREYMatcher> cancelButton = chrome_test_util::NavigationBarCancelButton();
+  [[EarlGrey selectElementWithMatcher:cancelButton]
+      assertWithMatcher:grey_notNil()];
+  [[EarlGrey selectElementWithMatcher:cancelButton] performAction:grey_tap()];
+
+  condition = ^{
+    return [NewTabPageAppInterface
+        setUpListItemSafariImportInMagicStackIsComplete];
+  };
+  GREYAssert(
+      base::test::ios::WaitUntilConditionOrTimeout(base::Seconds(2), condition),
+      @"SetUpList item Safari Import not completed.");
+
+  // Completed Set Up List items last one impression
+  [ChromeEarlGrey closeAllTabs];
+  [ChromeEarlGrey openNewTab];
+  [ChromeEarlGrey closeAllTabs];
+  [ChromeEarlGrey openNewTab];
+
+  // Tap the autofill item.
+  TapView(set_up_list::kAutofillItemID);
+  id<GREYMatcher> CPEPromoView =
+      grey_accessibilityID(@"kCredentialProviderPromoAccessibilityId");
+  [[EarlGrey selectElementWithMatcher:CPEPromoView]
+      assertWithMatcher:grey_notNil()];
+
+  // Dismiss the CPE promo.
+  TapSecondaryActionButton();
   // Verify the All Set item is shown.
   condition = ^{
     NSError* error = nil;
@@ -516,18 +573,15 @@ NSString* AccessibilityIdentifierForMostVisitedCellAtIndex(int index) {
       performAction:grey_tap()];
   // Verify that an error message is displayed for invalid input.
   NSString* secondTitle = @"Second Site";
-  NSString* secondUrl = @"https://second_url.com";
-  id<GREYMatcher> saveButton = grey_allOf(
-      grey_ancestor(grey_kindOfClass([UINavigationBar class])),
-      ButtonWithAccessibilityLabel(l10n_util::GetNSString(IDS_ADD)),
-      grey_not(grey_accessibilityTrait(UIAccessibilityTraitNotEnabled)), nil);
+  NSString* secondUrl = @"chrome://second_url";
+  NSString* invalidUrl = @"in://valid.url";
+  id<GREYMatcher> saveButton = NavigationBarAddButton();
   GREYAssertFalse([self addPinnedSiteWithTitle:secondTitle URL:firstUrl],
                   @"Add pinned site form should not be dismissed when URL is "
                   @"already pinned.");
-  [[EarlGrey
-      selectElementWithMatcher:
-          grey_text(l10n_util::GetNSString(
-              IDS_IOS_CONTENT_SUGGESTIONS_PIN_SITE_FORM_URL_VALIDATION_FAILED))]
+  [[EarlGrey selectElementWithMatcher:
+                 grey_text(l10n_util::GetNSString(
+                     IDS_IOS_CONTENT_SUGGESTIONS_PIN_SITE_FORM_URL_EXISTS))]
       assertWithMatcher:grey_sufficientlyVisible()];
   [[EarlGrey selectElementWithMatcher:saveButton] assertWithMatcher:grey_nil()];
   // Verify that the message disappears and the "Add" button is interactable
@@ -536,21 +590,33 @@ NSString* AccessibilityIdentifierForMostVisitedCellAtIndex(int index) {
       selectElementWithMatcher:grey_allOf(grey_accessibilityValue(firstUrl),
                                           grey_kindOfClassName(@"UITextField"),
                                           nil)]
-      performAction:grey_replaceText(secondUrl)];
+      performAction:grey_replaceText(invalidUrl)];
+  [[EarlGrey selectElementWithMatcher:
+                 grey_text(l10n_util::GetNSString(
+                     IDS_IOS_CONTENT_SUGGESTIONS_PIN_SITE_FORM_URL_EXISTS))]
+      assertWithMatcher:grey_nil()];
+  // Verify that invalid URL could not be saved.
+  [[[EarlGrey selectElementWithMatcher:saveButton]
+      assertWithMatcher:grey_sufficientlyVisible()] performAction:grey_tap()];
   [[EarlGrey
       selectElementWithMatcher:
           grey_text(l10n_util::GetNSString(
               IDS_IOS_CONTENT_SUGGESTIONS_PIN_SITE_FORM_URL_VALIDATION_FAILED))]
-      assertWithMatcher:grey_nil()];
-  [[EarlGrey selectElementWithMatcher:saveButton]
       assertWithMatcher:grey_sufficientlyVisible()];
-  // Verify that the "title" field is optional, and the URL will be used as
-  // title.
+  [[EarlGrey selectElementWithMatcher:saveButton] assertWithMatcher:grey_nil()];
+  // Save a valid URL. Verify that the "title" field is optional, and the URL
+  // will be used as title.
+  [[EarlGrey
+      selectElementWithMatcher:grey_allOf(grey_accessibilityValue(invalidUrl),
+                                          grey_kindOfClassName(@"UITextField"),
+                                          nil)]
+      performAction:grey_replaceText(secondUrl)];
   [[EarlGrey
       selectElementWithMatcher:grey_allOf(grey_accessibilityValue(secondTitle),
                                           grey_kindOfClassName(@"UITextField"),
                                           nil)] performAction:grey_clearText()];
-  [[EarlGrey selectElementWithMatcher:saveButton] performAction:grey_tap()];
+  [[[EarlGrey selectElementWithMatcher:saveButton]
+      assertWithMatcher:grey_sufficientlyVisible()] performAction:grey_tap()];
   pinnedLabel = l10n_util::GetNSStringF(
       IDS_IOS_CONTENT_SUGGESTIONS_PIN_SITE_ACCESSIBILITY_LABEL,
       base::SysNSStringToUTF16(secondUrl));
@@ -581,12 +647,8 @@ NSString* AccessibilityIdentifierForMostVisitedCellAtIndex(int index) {
   // Check the form is displayed with the correct title and footer.
   [[EarlGrey
       selectElementWithMatcher:
-          chrome_test_util::HeaderWithAccessibilityLabelId(
+          chrome_test_util::NavigationBarTitleWithAccessibilityLabelId(
               IDS_IOS_CONTENT_SUGGESTIONS_PIN_SITE_EDIT_PINNED_SITE_TITLE)]
-      assertWithMatcher:grey_sufficientlyVisible()];
-  [[EarlGrey selectElementWithMatcher:
-                 grey_text(l10n_util::GetNSString(
-                     IDS_IOS_CONTENT_SUGGESTIONS_PIN_SITE_FORM_FOOTER))]
       assertWithMatcher:grey_sufficientlyVisible()];
   // Check the "Name" field and type a new value.
   NSString* newTitle = @"New Title";
@@ -630,10 +692,7 @@ NSString* AccessibilityIdentifierForMostVisitedCellAtIndex(int index) {
                                          @"https://example.com"),
                                      grey_kindOfClassName(@"UITextField"), nil)]
         performAction:grey_replaceText(URLs[i])];
-    id<GREYMatcher> saveButton = grey_allOf(
-        grey_ancestor(grey_kindOfClass([UINavigationBar class])),
-        ButtonWithAccessibilityLabel(l10n_util::GetNSString(IDS_ADD)),
-        grey_not(grey_accessibilityTrait(UIAccessibilityTraitNotEnabled)), nil);
+    id<GREYMatcher> saveButton = NavigationBarAddButton();
     [[EarlGrey selectElementWithMatcher:saveButton] performAction:grey_tap()];
     [[EarlGrey selectElementWithMatcher:chrome_test_util::SnackbarViewMatcher()]
         performAction:grey_tap()];
@@ -692,13 +751,7 @@ NSString* AccessibilityIdentifierForMostVisitedCellAtIndex(int index) {
 
 // Tests pinning 8 sites and verifying the "Add site" button disappears after 8
 // sites are added, and reappears after unpinning one.
-// TODO(crbug.com/483977973): Reenable this test on device.
-#if TARGET_OS_SIMULATOR
-#define MAYBE_testMostVisitedPinEightSites testMostVisitedPinEightSites
-#else
-#define MAYBE_testMostVisitedPinEightSites DISABLED_testMostVisitedPinEightSites
-#endif
-- (void)MAYBE_testMostVisitedPinEightSites {
+- (void)testMostVisitedPinEightSites {
   id<GREYMatcher> addSiteButton = grey_accessibilityID(
       AccessibilityIdentifierForMostVisitedCellAtIndex(-1));
   // Add 8 pinned sites. Before pinning each, verify that the "Add site" button
@@ -730,7 +783,7 @@ NSString* AccessibilityIdentifierForMostVisitedCellAtIndex(int index) {
   // Now the "+" button should be back.
   ScrollMostVisitedToRightEdge();
   [[EarlGrey selectElementWithMatcher:addSiteButton]
-      assertWithMatcher:grey_sufficientlyVisible()];
+      assertWithMatcher:grey_interactable()];
 }
 
 #pragma mark - Test utils
@@ -785,13 +838,10 @@ NSString* AccessibilityIdentifierForMostVisitedCellAtIndex(int index) {
   // Verify form title.
   [[EarlGrey
       selectElementWithMatcher:
-          chrome_test_util::HeaderWithAccessibilityLabelId(
+          chrome_test_util::NavigationBarTitleWithAccessibilityLabelId(
               IDS_IOS_CONTENT_SUGGESTIONS_PIN_SITE_ADD_PINNED_SITE_TITLE)]
       assertWithMatcher:grey_sufficientlyVisible()];
-  id<GREYMatcher> saveButton = grey_allOf(
-      grey_ancestor(grey_kindOfClass([UINavigationBar class])),
-      ButtonWithAccessibilityLabel(l10n_util::GetNSString(IDS_ADD)),
-      grey_not(grey_accessibilityTrait(UIAccessibilityTraitNotEnabled)), nil);
+  id<GREYMatcher> saveButton = NavigationBarAddButton();
   // Fill the "Name" field.
   [[EarlGrey
       selectElementWithMatcher:

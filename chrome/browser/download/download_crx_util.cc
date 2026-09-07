@@ -11,22 +11,25 @@
 #include "base/auto_reset.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/browser_window_util.h"
-#include "chrome/browser/extensions/crx_installer.h"
 #include "chrome/browser/extensions/extension_install_prompt.h"
 #include "chrome/browser/extensions/extension_management.h"
-#include "chrome/browser/extensions/webstore_installer.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/tab_list/tab_list_interface.h"
 #include "components/download/public/common/download_item.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/download_item_utils.h"
+#include "extensions/browser/crx_installer.h"
+#include "extensions/browser/extension_util.h"
+#include "extensions/browser/install_prompt_data.h"
+#include "extensions/browser/webstore_installer.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_urls.h"
 #include "extensions/common/user_script.h"
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "chrome/browser/ui/browser.h"
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #endif
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
@@ -73,14 +76,16 @@ std::unique_ptr<ExtensionInstallPrompt> CreateExtensionInstallPrompt(
       // handles having an empty ExtensionInstallPrompt.
       return nullptr;
 #else
-      browser = Browser::Create(
-          Browser::CreateParams(Browser::TYPE_NORMAL, profile, true));
+      browser = CreateBrowserWindow(BrowserWindowCreateParams(
+          BrowserWindowInterface::TYPE_NORMAL, profile, true));
 #endif
     }
     TabListInterface* tab_list = TabListInterface::From(browser);
     web_contents = tab_list->GetActiveTab()->GetContents();
   }
-  return std::make_unique<ExtensionInstallPrompt>(web_contents);
+  return std::make_unique<ExtensionInstallPrompt>(
+      web_contents, std::make_unique<extensions::InstallPromptData>(
+                        extensions::InstallPromptData::UNSET_PROMPT_TYPE));
 }
 }  // namespace
 
@@ -114,22 +119,8 @@ scoped_refptr<extensions::CrxInstaller> CreateCrxInstaller(
   return installer;
 }
 
-bool IsExtensionDownload(const DownloadItem& download_item) {
-  if (download_item.GetTargetDisposition() ==
-      DownloadItem::TARGET_DISPOSITION_PROMPT)
-    return false;
-
-  if (download_item.GetMimeType() == extensions::Extension::kMimeType ||
-      extensions::UserScript::IsURLUserScript(download_item.GetURL(),
-                                              download_item.GetMimeType())) {
-    return true;
-  } else {
-    return false;
-  }
-}
-
 bool IsTrustedExtensionDownload(Profile* profile, const DownloadItem& item) {
-  return IsExtensionDownload(item) &&
+  return extensions::util::IsExtensionDownload(item) &&
          (OffStoreInstallAllowedByPrefs(profile, item) ||
           extension_urls::IsWebstoreUpdateUrl(item.GetOriginalUrl()) ||
           extension_urls::IsWebstoreDomain(item.GetOriginalUrl()));

@@ -21,6 +21,8 @@ import static org.chromium.chrome.test.util.ChromeTabUtils.getIndexOnUiThread;
 
 import android.graphics.Bitmap;
 import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
+import android.os.Build;
 import android.view.View;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -28,6 +30,7 @@ import android.widget.ImageView;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.test.filters.MediumTest;
 
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -37,23 +40,27 @@ import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Features.DisableFeatures;
-import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.base.test.util.RequiresRestart;
-import org.chromium.base.test.util.Restriction;
 import org.chromium.base.test.util.TestAnimations;
 import org.chromium.base.test.util.TestAnimations.EnableAnimations;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
+import org.chromium.chrome.browser.composeplate.ComposeplateUtils;
+import org.chromium.chrome.browser.compositor.layouts.LayoutManagerChrome;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
+import org.chromium.chrome.browser.hub.Pane;
+import org.chromium.chrome.browser.hub.PaneId;
+import org.chromium.chrome.browser.layouts.LayoutType;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.ui.signin.signin_promo.SigninPromoCoordinator;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.Journeys;
@@ -74,8 +81,11 @@ import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.chrome.test.transit.tabmodel.TabThumbnailsCapturedCarryOn;
 import org.chromium.chrome.test.util.ChromeRenderTestRule;
 import org.chromium.components.embedder_support.util.UrlConstants;
+import org.chromium.components.omnibox.OmniboxFeatures;
 import org.chromium.components.tab_groups.TabGroupColorId;
+import org.chromium.components.tab_groups.TabGroupsFeatureMap;
 import org.chromium.mojo.system.Pair;
+import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.base.PageTransition;
 
 import java.io.IOException;
@@ -90,7 +100,6 @@ import java.util.function.Supplier;
 @SuppressWarnings("ConstantConditions")
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
-@Restriction({Restriction.RESTRICTION_TYPE_NON_LOW_END_DEVICE})
 @Batch(Batch.PER_CLASS)
 // TODO(https://crbug.com/392634251): Fix line height when elegant text height is used with Roboto
 // or enable Google Sans (Text) in //chrome/ tests on Android T+.
@@ -99,8 +108,8 @@ import java.util.function.Supplier;
     ANDROID_ELEGANT_TEXT_HEIGHT,
     ChromeFeatureList.ANDROID_SURFACE_COLOR_UPDATE,
     ChromeFeatureList.GRID_TAB_SWITCHER_SURFACE_COLOR_UPDATE,
-    ChromeFeatureList.GRID_TAB_SWITCHER_UPDATE,
-    ChromeFeatureList.ANDROID_THEME_MODULE
+    ChromeFeatureList.ANDROID_THEME_MODULE,
+    TabGroupsFeatureMap.UPDATE_TAB_GROUP_COLORS
 })
 public class TabSwitcherLayoutPTTest {
     private static final String TEST_URL = "/chrome/test/data/android/google.html";
@@ -115,12 +124,12 @@ public class TabSwitcherLayoutPTTest {
 
     @Rule
     public AutoResetCtaTransitTestRule mCtaTestRule =
-            ChromeTransitTestRules.autoResetCtaActivityRule();
+            ChromeTransitTestRules.fastAutoResetCtaActivityRule();
 
     @Rule
     public ChromeRenderTestRule mRenderTestRule =
             ChromeRenderTestRule.Builder.withPublicCorpus()
-                    .setRevision(12) // Update the hub search tab groups fake text.
+                    .setRevision(16) // NTP new colour due to IA changes
                     .setBugComponent(ChromeRenderTestRule.Component.UI_BROWSER_MOBILE_HUB)
                     .build();
 
@@ -129,10 +138,56 @@ public class TabSwitcherLayoutPTTest {
 
     @Before
     public void setUp() throws ExecutionException {
+        ComposeplateUtils.setIsEnabledForTesting(false);
+        OmniboxFeatures.sUseAskHintForNtp.setForTesting(false);
         // After setUp, Chrome is launched and has one NTP.
         mStartPage = mCtaTestRule.startOnBlankPage();
 
         mCtaTestRule.getActivity().getTabContentManager().setCaptureMinRequestTimeForTesting(0);
+    }
+
+    @After
+    public void tearDown() {
+        ChromeTabbedActivity cta = mCtaTestRule.getActivity();
+        if (cta != null) {
+            LayoutManagerChrome layoutManager = cta.getLayoutManager();
+            if (layoutManager != null && layoutManager.isLayoutVisible(LayoutType.HUB)) {
+                ThreadUtils.runOnUiThreadBlocking(
+                        () -> layoutManager.showLayout(LayoutType.BROWSING, /* animate= */ false));
+                CriteriaHelper.pollUiThread(
+                        () -> layoutManager.getActiveLayoutType() == LayoutType.BROWSING,
+                        "Failed to exit Hub to BROWSING layout during tearDown");
+            }
+        }
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    if (cta == null) {
+                        return;
+                    }
+                    var hubManagerSupplier = cta.getHubManagerSupplierForTesting();
+                    if (hubManagerSupplier == null) {
+                        return;
+                    }
+                    var hubManager = hubManagerSupplier.get();
+                    if (hubManager == null) {
+                        return;
+                    }
+                    var paneManager = hubManager.getPaneManager();
+                    if (paneManager == null) {
+                        return;
+                    }
+
+                    Pane tabSwitcherPane = paneManager.getPaneForId(PaneId.TAB_SWITCHER);
+                    if (tabSwitcherPane instanceof TabSwitcherPaneBase paneBase) {
+                        paneBase.finishAllCleanupsForTesting();
+                    }
+                    Pane incognitoTabSwitcherPane =
+                            paneManager.getPaneForId(PaneId.INCOGNITO_TAB_SWITCHER);
+                    if (incognitoTabSwitcherPane instanceof TabSwitcherPaneBase incognitoPaneBase) {
+                        incognitoPaneBase.finishAllCleanupsForTesting();
+                    }
+                });
     }
 
     /** Enters the regular Tab Switcher, making sure all tabs have a thumbnail. */
@@ -234,6 +289,7 @@ public class TabSwitcherLayoutPTTest {
     @Test
     @MediumTest
     @Feature({"RenderTest"})
+    @DisableIf.Device(DeviceFormFactor.DESKTOP) // crbug.com/545205792
     public void testRenderGrid_3NativeTabs() throws IOException {
         ChromeTabbedActivity cta = mCtaTestRule.getActivity();
         RegularNewTabPageStation pageStation =
@@ -250,7 +306,7 @@ public class TabSwitcherLayoutPTTest {
 
         tabSwitcherStation = pageStation.openRegularTabSwitcher();
 
-        mRenderTestRule.render(cta.findViewById(R.id.pane_frame), "3_native_tabs_v4");
+        mRenderTestRule.render(cta.findViewById(R.id.pane_frame), "3_native_tabs_v8");
 
         RegularNewTabPageStation previousPage =
                 tabSwitcherStation.leaveHubToPreviousTabViaBack(
@@ -295,7 +351,7 @@ public class TabSwitcherLayoutPTTest {
     @Test
     @MediumTest
     @Feature({"RenderTest"})
-    @EnableFeatures(ChromeFeatureList.ANDROID_PINNED_TABS)
+    @DisableIf.Device(DeviceFormFactor.DESKTOP) // crbug.com/545205792
     public void testRenderGrid_PinnedTabs() throws IOException {
         WebPageStation firstPage = mCtaTestRule.startOnBlankPage();
 
@@ -313,7 +369,7 @@ public class TabSwitcherLayoutPTTest {
         editor.openAppMenuWithEditor().pinTabs();
 
         mRenderTestRule.render(
-                tabSwitcher.getActivity().findViewById(R.id.pane_frame), "regular_pinned_tabs");
+                tabSwitcher.getActivity().findViewById(R.id.pane_frame), "regular_pinned_tabs_v4");
 
         RegularNewTabPageStation previousPage =
                 tabSwitcher.leaveHubToPreviousTabViaBack(RegularNewTabPageStation.newBuilder());
@@ -323,7 +379,10 @@ public class TabSwitcherLayoutPTTest {
     @Test
     @MediumTest
     @Feature({"RenderTest"})
-    @EnableFeatures(ChromeFeatureList.ANDROID_PINNED_TABS)
+    @DisableIf.Build(
+            sdk_equals = Build.VERSION_CODES.BAKLAVA,
+            message = "Flaky on android-16 bots, crbug.com/546050424")
+    @DisableIf.Device(DeviceFormFactor.DESKTOP) // crbug.com/545205792
     public void testRenderGrid_PinnedTabs_Scrolled() throws IOException {
         ChromeTabbedActivity cta = mCtaTestRule.getActivity();
         RegularNewTabPageStation pageStation =
@@ -375,7 +434,7 @@ public class TabSwitcherLayoutPTTest {
                 });
 
         mRenderTestRule.render(
-                cta.findViewById(R.id.hub_main_container), "regular_pinned_tabs_scrolled");
+                cta.findViewById(R.id.hub_main_container), "regular_pinned_tabs_scrolled_v1");
 
         RegularNewTabPageStation previousPage =
                 tabSwitcher.leaveHubToPreviousTabViaBack(RegularNewTabPageStation.newBuilder());
@@ -386,10 +445,9 @@ public class TabSwitcherLayoutPTTest {
     @MediumTest
     @EnableAnimations
     public void testTabToGridAndBack_NoReset() {
-        WebPageStation firstPage = mCtaTestRule.startOnBlankPage();
         WebPageStation page =
                 roundtripToHTSWithThumbnailChecks(
-                        firstPage,
+                        mStartPage,
                         WebPageStation::newBuilder,
                         () -> {},
                         /* canGarbageCollectBitmaps= */ false);
@@ -399,6 +457,7 @@ public class TabSwitcherLayoutPTTest {
     @Test
     @MediumTest
     @EnableAnimations
+    @DisableIf.Device(DeviceFormFactor.DESKTOP) // Flaky on desktop crbug.com/485611939
     public void testTabToGridAndBack_SoftCleanup() {
         WebPageStation firstPage = mCtaTestRule.startOnBlankPage();
         ChromeTabbedActivity cta = mCtaTestRule.getActivity();
@@ -493,9 +552,7 @@ public class TabSwitcherLayoutPTTest {
                                             .getPaneManager()
                                             .getFocusedPaneSupplier()
                                             .get();
-                    tabSwitcherPane.softCleanupForTesting();
-                    tabSwitcherPane.hardCleanupForTesting();
-                    tabSwitcherPane.destroyCoordinatorForTesting();
+                    tabSwitcherPane.finishAllCleanupsForTesting();
                 };
         WebPageStation page =
                 roundtripToHTSWithThumbnailChecks(
@@ -535,10 +592,6 @@ public class TabSwitcherLayoutPTTest {
         // Verify the color icon exists and that the dialog is dismissed via another action
         card.expectColor(TabGroupColorId.GREY);
         watcher.assertExpected();
-
-        // Open NTP PageStation for InitialStateRule to reset
-        RegularNewTabPageStation ntp = tabSwitcher.openNewTab();
-        assertFinalDestination(ntp);
     }
 
     @Test
@@ -577,10 +630,6 @@ public class TabSwitcherLayoutPTTest {
                 .expectGroupCard(List.of(firstTabId, secondTabId), "Test")
                 .expectColor(TabGroupColorId.BLUE);
         histograms.assertExpected();
-
-        // Open NTP PageStation for InitialStateRule to reset
-        RegularNewTabPageStation ntp = tabSwitcher.openNewTab();
-        assertFinalDestination(ntp);
     }
 
     @Test
@@ -609,10 +658,6 @@ public class TabSwitcherLayoutPTTest {
                         List.of(firstTabId, secondTabId),
                         TabSwitcherGroupCardFacility.DEFAULT_N_TABS_TITLE)
                 .expectColor(TabGroupColorId.GREY);
-
-        // Open NTP PageStation for InitialStateRule to reset
-        RegularNewTabPageStation ntp = tabSwitcher.openNewTab();
-        assertFinalDestination(ntp);
     }
 
     @Test
@@ -643,10 +688,6 @@ public class TabSwitcherLayoutPTTest {
                         List.of(firstTabId, secondTabId),
                         TabSwitcherGroupCardFacility.DEFAULT_N_TABS_TITLE)
                 .expectColor(TabGroupColorId.BLUE);
-
-        // Open NTP PageStation for InitialStateRule to reset
-        RegularNewTabPageStation ntp = tabSwitcher.openNewTab();
-        assertFinalDestination(ntp);
     }
 
     @Test
@@ -680,14 +721,11 @@ public class TabSwitcherLayoutPTTest {
                         List.of(firstTabId, secondTabId),
                         TabSwitcherGroupCardFacility.DEFAULT_N_TABS_TITLE)
                 .expectColor(TabGroupColorId.GREY);
-
-        // Open NTP PageStation for InitialStateRule to reset
-        RegularNewTabPageStation ntp = tabSwitcher.openNewTab();
-        assertFinalDestination(ntp);
     }
 
     @Test
     @MediumTest
+    @DisableIf.Device(DeviceFormFactor.DESKTOP) // Flaky on desktop crbug.com/510238011
     public void testTabGroupCreation_dismissSavesState() {
         WebPageStation firstPage = mCtaTestRule.startOnBlankPage();
 
@@ -712,10 +750,6 @@ public class TabSwitcherLayoutPTTest {
         tabSwitcher
                 .expectGroupCard(List.of(firstTabId, secondTabId), "Test")
                 .expectColor(TabGroupColorId.BLUE);
-
-        // Open NTP PageStation for InitialStateRule to reset
-        RegularNewTabPageStation ntp = tabSwitcher.openNewTab();
-        assertFinalDestination(ntp);
     }
 
     @Test
@@ -743,7 +777,7 @@ public class TabSwitcherLayoutPTTest {
                 tabSwitcher.expectGroupCard(
                         List.of(firstTabId, secondTabId),
                         TabSwitcherGroupCardFacility.DEFAULT_N_TABS_TITLE);
-        UndoSnackbarFacility<RegularTabSwitcherStation> undoSnackbar =
+        UndoSnackbarFacility<TabSwitcherStation> undoSnackbar =
                 tabGroupCard.openAppMenu().closeRegularTabGroup();
         tabSwitcher.verifyTabSwitcherCardCount(0);
 
@@ -753,10 +787,6 @@ public class TabSwitcherLayoutPTTest {
                 List.of(firstTabId, secondTabId),
                 TabSwitcherGroupCardFacility.DEFAULT_N_TABS_TITLE);
         tabSwitcher.verifyTabSwitcherCardCount(1);
-
-        // Open NTP PageStation for InitialStateRule to reset
-        RegularNewTabPageStation ntp = tabSwitcher.openNewTab();
-        assertFinalDestination(ntp);
     }
 
     private <T extends CtaPageStation> T roundtripToHTSWithThumbnailChecks(
@@ -768,14 +798,20 @@ public class TabSwitcherLayoutPTTest {
 
         // TODO(crbug.com/324919909): Migrate this to a HubTabSwitcherCardFacility with a tab
         // thumbnail as a view element.
-        ThreadUtils.runOnUiThreadBlocking(
+        CriteriaHelper.pollUiThread(
                 () -> {
                     ImageView view =
                             (ImageView) mCtaTestRule.getActivity().findViewById(R.id.tab_thumbnail);
-                    mBitmap =
-                            new WeakReference<>(((BitmapDrawable) view.getDrawable()).getBitmap());
-                    assertNotNull(mBitmap.get());
-                });
+                    if (view == null) return false;
+                    Drawable drawable = view.getDrawable();
+                    if (!(drawable instanceof BitmapDrawable bitmapDrawable)) return false;
+                    Bitmap bitmap = bitmapDrawable.getBitmap();
+                    if (bitmap == null) return false;
+                    mBitmap = new WeakReference<>(bitmap);
+                    return true;
+                },
+                "Tab thumbnail failed to load as a BitmapDrawable");
+        assertNotNull(mBitmap.get());
 
         page = tabSwitcher.leaveHubToPreviousTabViaBack(destinationBuiderFactory.get());
 

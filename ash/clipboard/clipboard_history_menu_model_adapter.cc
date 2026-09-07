@@ -33,6 +33,7 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/menu_model.h"
 #include "ui/base/mojom/menu_source_type.mojom-forward.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/menus/simple_menu_model.h"
@@ -192,7 +193,9 @@ void InsertFooterContentV2(
           .AddChildren(
               views::Builder<views::ImageView>().SetImage(
                   ui::ImageModel::FromVectorIcon(
-                      vector_icons::kHelpOutlineIcon,
+                      ::features::IsRoundedIconsEnabled()
+                          ? vector_icons::kHelpIcon
+                          : vector_icons::kHelpOutlineOldIcon,
                       cros_tokens::kCrosSysOnSurfaceVariant,
                       ClipboardHistoryViews::kFooterContentV2IconSize)),
               views::Builder<views::StyledLabel>()
@@ -397,8 +400,7 @@ void ClipboardHistoryMenuModelAdapter::SelectMenuItemWithCommandId(
   views::MenuItemView* selected_menu_item =
       root_view_->GetMenuItemByID(command_id);
   DCHECK(IsRunning());
-  views::MenuController::GetActiveInstance()->SelectItemAndOpenSubmenu(
-      selected_menu_item);
+  root_view_->GetMenuController()->SelectItemAndOpenSubmenu(selected_menu_item);
 }
 
 void ClipboardHistoryMenuModelAdapter::SelectMenuItemHoveredByMouse() {
@@ -410,8 +412,7 @@ void ClipboardHistoryMenuModelAdapter::SelectMenuItemHoveredByMouse() {
   if (iter == item_views_by_command_id_.cend()) {
     // If no item is hovered by mouse, cancel the selection on the child menu
     // item by selecting the root menu item.
-    views::MenuController::GetActiveInstance()->SelectItemAndOpenSubmenu(
-        root_view_);
+    root_view_->GetMenuController()->SelectItemAndOpenSubmenu(root_view_);
   } else {
     SelectMenuItemWithCommandId(iter->first);
   }
@@ -436,8 +437,7 @@ void ClipboardHistoryMenuModelAdapter::RemoveMenuItemWithCommandId(
   if (new_selected_command_id.has_value()) {
     SelectMenuItemWithCommandId(*new_selected_command_id);
   } else {
-    views::MenuController::GetActiveInstance()->SelectItemAndOpenSubmenu(
-        root_view_);
+    root_view_->GetMenuController()->SelectItemAndOpenSubmenu(root_view_);
   }
 
   auto item_view_to_delete_iter = item_views_by_command_id_.find(command_id);

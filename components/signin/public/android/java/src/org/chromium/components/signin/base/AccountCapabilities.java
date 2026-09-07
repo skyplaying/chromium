@@ -85,6 +85,14 @@ public class AccountCapabilities {
     }
 
     /**
+     * @return canOverrideAccountInfo capability value.
+     */
+    public @Tribool int canOverrideAccountInfo() {
+        return getCapabilityByName(
+                AccountCapabilitiesConstants.CAN_OVERRIDE_ACCOUNT_INFO_CAPABILITY_NAME);
+    }
+
+    /**
      * @return canRunChromePrivacySandboxTrials capability value.
      */
     public @Tribool int canRunChromePrivacySandboxTrials() {
@@ -166,6 +174,15 @@ public class AccountCapabilities {
     }
 
     /**
+     * @return isSubjectToAccountLevelEnterprisePolicies capability value.
+     */
+    public @Tribool int isSubjectToAccountLevelEnterprisePolicies() {
+        return getCapabilityByName(
+                AccountCapabilitiesConstants
+                        .IS_SUBJECT_TO_ACCOUNT_LEVEL_ENTERPRISE_POLICIES_CAPABILITY_NAME);
+    }
+
+    /**
      * @return isSubjectToChromePrivacySandboxRestrictedMeasurementNotice capability value.
      */
     public @Tribool int isSubjectToChromePrivacySandboxRestrictedMeasurementNotice() {
@@ -188,6 +205,23 @@ public class AccountCapabilities {
     public @Tribool int isSubjectToParentalControls() {
         return getCapabilityByName(
                 AccountCapabilitiesConstants.IS_SUBJECT_TO_PARENTAL_CONTROLS_CAPABILITY_NAME);
+    }
+
+    /**
+     * @return isSubjectToUniversalOptOut capability value.
+     */
+    public @Tribool int isSubjectToUniversalOptOut() {
+        return getCapabilityByName(
+                AccountCapabilitiesConstants
+                        .IS_SUBJECT_TO_UNIVERSAL_OPT_OUT_CAPABILITY_NAME);
+    }
+
+    /**
+     * @return supportsWalletPrivatePassesInAutofill capability value.
+     */
+    public @Tribool int supportsWalletPrivatePassesInAutofill() {
+        return getCapabilityByName(
+                AccountCapabilitiesConstants.SUPPORTS_WALLET_PRIVATE_PASSES_IN_AUTOFILL_NAME);
     }
 
     /** keep-sorted end */

@@ -15,9 +15,9 @@ import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.metrics.RecordHistogram;
+import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.TabUsageTracker;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
@@ -37,7 +37,6 @@ import java.util.concurrent.TimeoutException;
  * percentage of tabs used.
  */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class TabUsageTrackerTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Mock TabModelSelector mTabModelSelector;
@@ -62,6 +61,8 @@ public class TabUsageTrackerTest {
 
         Mockito.when(mTabModel.getCount()).thenReturn(INITIAL_TAB_COUNT);
         Mockito.when(mTabModelSelector.getCurrentModel()).thenReturn(mTabModel);
+        Mockito.when(mTabModelSelector.getCurrentTabModelSupplier())
+                .thenReturn(ObservableSuppliers.createMonotonic(mTabModel));
         Mockito.when(mTabModelSelector.getModels()).thenReturn(tabModels);
         Mockito.when(mTabModelSelector.isTabStateInitialized()).thenReturn(true);
 

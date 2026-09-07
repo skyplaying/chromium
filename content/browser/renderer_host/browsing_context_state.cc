@@ -13,6 +13,7 @@
 #include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "services/network/public/cpp/web_sandbox_flags.h"
 #include "services/network/public/mojom/web_sandbox_flags.mojom.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 namespace features {
 BASE_FEATURE(kNewBrowsingContextStateOnBrowsingContextGroupSwap,
@@ -41,13 +42,15 @@ BrowsingContextState::BrowsingContextState(
     : replication_state_(std::move(replication_state)),
       parent_(parent),
       browsing_instance_id_(browsing_instance_id) {
-  TRACE_EVENT_BEGIN("navigation.debug", "BrowsingContextState",
-                    perfetto::Track::FromPointer(this),
-                    "browsing_context_state_when_created", this);
+  TRACE_EVENT_BEGIN(
+      "navigation.debug", "BrowsingContextState",
+      perfetto::NamedTrack::FromPointer("BrowsingContextState", this),
+      "browsing_context_state_when_created", this);
 }
 
 BrowsingContextState::~BrowsingContextState() {
-  TRACE_EVENT_END("navigation.debug", perfetto::Track::FromPointer(this));
+  TRACE_EVENT_END("navigation.debug", perfetto::NamedTrack::FromPointer(
+                                          "BrowsingContextState", this));
   CHECK(proxy_hosts_.empty());
 }
 
@@ -130,8 +133,9 @@ RenderFrameProxyHost* BrowsingContextState::CreateRenderFrameProxyHost(
   if (features::GetBrowsingContextMode() ==
       features::BrowsingContextStateImplementationType::
           kLegacyOneToOneWithFrameTreeNode) {
-    DCHECK_EQ(this,
-              frame_tree_node->current_frame_host()->browsing_context_state());
+    CHECK_EQ(this,
+             frame_tree_node->current_frame_host()->browsing_context_state(),
+             base::NotFatalUntil::M152);
   }
 
   if (features::GetBrowsingContextMode() ==
@@ -242,16 +246,18 @@ void BrowsingContextState::SetFrameName(const std::string& name,
                                         const std::string& unique_name) {
   if (name == replication_state_->name) {
     // |unique_name| shouldn't change unless |name| changes.
+    // TODO(crbug.com/545190061): CHECK-exclusion: Convert to a CHECK once we
+    // are confident it won't be triggered.
     DCHECK_EQ(unique_name, replication_state_->unique_name);
     return;
   }
 
   if (parent_) {
     // Non-main frames should have a non-empty unique name.
-    DCHECK(!unique_name.empty());
+    CHECK(!unique_name.empty(), base::NotFatalUntil::M152);
   } else {
     // Unique name of main frames should always stay empty.
-    DCHECK(unique_name.empty());
+    CHECK(unique_name.empty(), base::NotFatalUntil::M152);
   }
 
   // Note the unique name should only be able to change before the first real
@@ -316,8 +322,9 @@ void BrowsingContextState::SetInsecureRequestPolicy(
 
 void BrowsingContextState::SetInsecureNavigationsSet(
     const std::vector<uint32_t>& insecure_navigations_set) {
-  DCHECK(std::is_sorted(insecure_navigations_set.begin(),
-                        insecure_navigations_set.end()));
+  CHECK(std::is_sorted(insecure_navigations_set.begin(),
+                       insecure_navigations_set.end()),
+        base::NotFatalUntil::M152);
   if (insecure_navigations_set == replication_state_->insecure_navigations_set)
     return;
   {
@@ -350,25 +357,52 @@ void BrowsingContextState::OnSetHadStickyUserActivationBeforeNavigation(
   replication_state_->has_received_user_gesture_before_nav = value;
 }
 
-void BrowsingContextState::SetIsAdFrame(bool is_ad_frame) {
-  if (is_ad_frame == replication_state_->is_ad_frame)
+void BrowsingContextState::SetAdFrameStatus(
+    blink::mojom::FrameAdStatus ad_frame_status) {
+  // A frame's ad status can only be upgraded monotonically. Ignore redundant
+  // updates and reject attempted downgrades. This fails safe in production
+  // and DCHECKs in debug builds.
+  if (ad_frame_status <= replication_state_->ad_frame_status) {
+    DCHECK_EQ(ad_frame_status, replication_state_->ad_frame_status)
+        << "A frame's ad status must not be downgraded.";
     return;
+  }
 
-  replication_state_->is_ad_frame = is_ad_frame;
+  replication_state_->ad_frame_status = ad_frame_status;
   {
-    TRACE_EVENT("navigation", "BrowsingContextState::SetIsAdFrame broadcast",
-                "is_ad_frame", is_ad_frame);
+    TRACE_EVENT("navigation",
+                "BrowsingContextState::SetAdFrameStatus broadcast",
+                "ad_frame_status", static_cast<int>(ad_frame_status));
     ExecuteRemoteFramesBroadcastMethod(
-        [is_ad_frame](RenderFrameProxyHost* proxy) {
-          proxy->GetAssociatedRemoteFrame()->SetReplicatedIsAdFrame(
-              is_ad_frame);
+        [ad_frame_status](RenderFrameProxyHost* proxy) {
+          proxy->GetAssociatedRemoteFrame()->SetReplicatedAdFrameStatus(
+              ad_frame_status);
         },
         /*group_to_skip=*/nullptr, /*outer_delegate_proxy=*/nullptr);
   }
 }
 
-bool BrowsingContextState::IsAdFrame() const {
-  return replication_state_->is_ad_frame;
+blink::mojom::FrameAdStatus BrowsingContextState::ad_frame_status() const {
+  return replication_state_->ad_frame_status;
+}
+
+void BrowsingContextState::SetIsSecureContextRoot(bool is_secure_context_root) {
+  if (is_secure_context_root == replication_state_->is_secure_context_root) {
+    return;
+  }
+
+  replication_state_->is_secure_context_root = is_secure_context_root;
+  {
+    TRACE_EVENT("navigation",
+                "BrowsingContextState::SetIsSecureContextRoot broadcast",
+                "is_secure_context_root", is_secure_context_root);
+    ExecuteRemoteFramesBroadcastMethod(
+        [is_secure_context_root](RenderFrameProxyHost* proxy) {
+          proxy->GetAssociatedRemoteFrame()->SetReplicatedIsSecureContextRoot(
+              is_secure_context_root);
+        },
+        /*group_to_skip=*/nullptr, /*outer_delegate_proxy=*/nullptr);
+  }
 }
 
 void BrowsingContextState::ActiveFrameCountIsZero(
@@ -408,6 +442,15 @@ void BrowsingContextState::CheckIfSiteInstanceGroupIsUnused(
                         ChromeTrackEvent::kRenderFrameProxyHost, proxy);
   }
 
+  // Unregister the RVH from the FrameTree map before deleting the proxy.
+  // After proxy deletion, the RVH would have no proxy or main frame
+  // associated with it. Without this, the stale RVH remains discoverable
+  // in the FrameTree map and can be reused in an uninitialized state,
+  // leading to CHECK failures. This is consistent with the DisallowReuse()
+  // call in RenderFrameHostManager::CommitPending().
+  if (RenderViewHostImpl* rvh = proxy->GetRenderViewHost()) {
+    rvh->DisallowReuse();
+  }
   DeleteRenderFrameProxyHost(site_instance_group);
 }
 

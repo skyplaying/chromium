@@ -103,8 +103,7 @@ const CGFloat kProfileImageSize = 60.0;
 
 // Fetches and returns sender's profile image from account manager service.
 - (UIImage*)fetchSenderImage {
-  id<SystemIdentity> identity =
-      _authService->GetPrimaryIdentity(signin::ConsentLevel::kSignin);
+  id<SystemIdentity> identity = _authService->GetPrimaryIdentity();
   if (identity) {
     return CircularImageFromImage(
         GetApplicationContext()->GetIdentityAvatarProvider()->GetIdentityAvatar(
@@ -112,8 +111,7 @@ const CGFloat kProfileImageSize = 60.0;
         kProfileImageSize);
   }
 
-  return DefaultSymbolTemplateWithPointSize(kPersonCropCircleSymbol,
-                                            kProfileImageSize);
+  return SymbolTemplateWithPointSize(SymbolPersonCropCircle, kProfileImageSize);
 }
 
 // Creates a multi-avatar image of recipients from their profile images.

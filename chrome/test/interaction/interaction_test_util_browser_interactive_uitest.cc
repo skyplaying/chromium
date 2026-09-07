@@ -6,7 +6,6 @@
 
 #include "base/test/bind.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/toolbar/app_menu_model.h"
@@ -23,7 +22,7 @@
 using InteractionTestUtilBrowserUiTest = InteractiveBrowserTest;
 
 // This test checks that we can attach to a WebUI that is embedded in a tab.
-// Note: This test used to fail on the Win bot (crbug.com/1376747).
+// Note: This test used to fail on the Win bot (crbug.com/40873874).
 IN_PROC_BROWSER_TEST_F(InteractionTestUtilBrowserUiTest,
                        CompareScreenshot_TabWebUI) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kDownloadsPageElementId);

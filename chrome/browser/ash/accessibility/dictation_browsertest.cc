@@ -42,11 +42,8 @@
 #include "chrome/browser/global_features.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/speech/speech_recognition_constants.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/common/extensions/extension_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
-#include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/application_locale_storage/application_locale_storage.h"
 #include "components/metrics/content/subprocess_metrics_provider.h"
@@ -64,6 +61,7 @@
 #include "ui/aura/window_tree_host.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/clipboard_buffer.h"
+#include "ui/base/clipboard/test/clipboard_test_util.h"
 #include "ui/events/test/event_generator.h"
 
 namespace ash {
@@ -259,10 +257,9 @@ class DictationTestBase : public AccessibilityFeatureBrowserTest,
   }
 
   std::string GetClipboardText() {
-    std::u16string text;
-    ui::Clipboard::GetForCurrentThread()->ReadText(
-        ui::ClipboardBuffer::kCopyPaste, /*data_dst=*/nullptr, &text);
-    return base::UTF16ToUTF8(text);
+    return base::UTF16ToUTF8(ui::clipboard_test_util::ReadText(
+        ui::Clipboard::GetForCurrentThread(), ui::ClipboardBuffer::kCopyPaste,
+        /*data_dst=*/nullptr));
   }
 
   void PressTab() {

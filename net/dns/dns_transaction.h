@@ -15,8 +15,10 @@
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
+#include "net/base/network_handle.h"
 #include "net/base/request_priority.h"
 #include "net/dns/opt_record_rdata.h"
+#include "net/dns/public/resolution_details.h"
 #include "net/dns/public/secure_dns_mode.h"
 
 namespace net {
@@ -56,6 +58,9 @@ class NET_EXPORT_PRIVATE DnsTransaction {
   virtual void Start(ResponseCallback callback) = 0;
 
   virtual void SetRequestPriority(RequestPriority priority) = 0;
+
+  virtual std::optional<DohResolutionDetails> GetDohResolutionDetails()
+      const = 0;
 };
 
 // Startable/Cancellable object to represent a DNS probe sequence.
@@ -92,8 +97,10 @@ class NET_EXPORT_PRIVATE DnsTransactionFactory {
   // Defines the underlying implementation used to implement a single DNS
   // exchange.
   enum class AttemptMode {
-    kClassic,  // Plaintext DNS (either over TCP or UDP)
-    kHttp,  // DNS-over-HTTPS (DoH)
+    kClassic,   // Plaintext DNS (either over TCP or UDP)
+    kHttp,      // DNS-over-HTTPS (DoH)
+    kPlatform,  // Platform DNS API (currently this is only supported on
+                // Android)
   };
 
   DnsTransactionFactory();
@@ -121,6 +128,7 @@ class NET_EXPORT_PRIVATE DnsTransactionFactory {
       const NetLogWithSource& net_log,
       AttemptMode attempt_mode,
       SecureDnsMode secure_dns_mode,
+      handles::NetworkHandle target_network,
       ResolveContext* resolve_context,
       bool fast_timeout) = 0;
 

@@ -21,7 +21,10 @@
 #include "base/barrier_closure.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
+#include "base/i18n/rtl.h"
+#include "base/i18n/test/scoped_rtl_for_testing.h"
 #include "base/strings/stringprintf.h"
+#include "base/test/run_until.h"
 #include "ui/compositor/layer.h"
 #include "ui/views/accessibility/view_accessibility.h"
 
@@ -78,12 +81,10 @@ class FloatingAccessibilityControllerTest : public AshTestBase {
   }
 
   void WaitUntilAccessibilityTrayClosed() {
-    // Waiting until accessibility tray is closed
-    // after being notified from the observer.
-    base::RunLoop run_loop;
-    while (detailed_view_shown()) {
-      run_loop.RunUntilIdle();
-    }
+    // Wait until the accessibility tray is closed after being notified from
+    // the observer.
+    ASSERT_TRUE(
+        base::test::RunUntil([this] { return !detailed_view_shown(); }));
   }
 
   views::View* GetMenuButton(FloatingAccessibilityView::ButtonId button_id) {
@@ -455,7 +456,7 @@ TEST_F(FloatingAccessibilityControllerTest, DetailedViewPosition) {
     SCOPED_TRACE(base::StringPrintf("Testing rtl=#[%d]", test.is_RTL));
     // These positions should be relative to the corners of the screen
     // whether we are in RTL or LTR.
-    base::i18n::SetRTLForTesting(test.is_RTL);
+    base::i18n::ScopedRTLForTesting scoped_rtl(test.is_RTL);
 
     // When the menu is in the top right, the detailed should be directly
     // under it and along the right side of the screen.

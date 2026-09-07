@@ -11,7 +11,8 @@
 #include "chrome/browser/media/webrtc/multi_capture/multi_capture_data_service_factory.h"
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
 #include "components/policy/policy_constants.h"
@@ -99,7 +100,7 @@ class MultiCaptureDataTest : public MultiCaptureDataTestBase,
 IN_PROC_BROWSER_TEST_P(MultiCaptureDataTest, TestExactOrigins) {
   EXPECT_EQ(GetParam().expected_is_get_all_screens_media_allowed,
             multi_capture::MultiCaptureDataServiceFactory::GetForBrowserContext(
-                browser()->profile())
+                browser()->GetProfile())
                 ->IsMultiCaptureAllowed(GURL(GetParam().testing_url)));
 }
 
@@ -196,13 +197,13 @@ class MultiCaptureDataDynamicRefreshTest
 
   void CheckExpectedAllowlistedAndForbiddenOrigins() {
     content::WebContents* current_web_contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
     DCHECK(current_web_contents);
     for (const auto& expected_allowed_origin :
          GetParam().expected_allowed_origins) {
       EXPECT_TRUE(
           multi_capture::MultiCaptureDataServiceFactory::GetForBrowserContext(
-              browser()->profile())
+              browser()->GetProfile())
               ->IsMultiCaptureAllowed(GURL(expected_allowed_origin)));
     }
 
@@ -210,7 +211,7 @@ class MultiCaptureDataDynamicRefreshTest
          GetParam().expected_forbidden_origins) {
       EXPECT_FALSE(
           multi_capture::MultiCaptureDataServiceFactory::GetForBrowserContext(
-              browser()->profile())
+              browser()->GetProfile())
               ->IsMultiCaptureAllowed(GURL(expected_forbidden_origin)));
     }
   }

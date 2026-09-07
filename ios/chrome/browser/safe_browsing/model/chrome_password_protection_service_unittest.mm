@@ -21,6 +21,7 @@
 #import "components/prefs/pref_service.h"
 #import "components/safe_browsing/core/browser/password_protection/metrics_util.h"
 #import "components/safe_browsing/core/common/safe_browsing_prefs.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/identity_manager/account_info.h"
 #import "components/signin/public/identity_manager/identity_test_environment.h"
 #import "components/signin/public/identity_manager/signin_constants.h"
@@ -221,7 +222,7 @@ class ChromePasswordProtectionServiceTest : public PlatformTest {
                     LoginReputationClientResponse::VerdictType verdict,
                     int cache_duration_sec,
                     const std::string& cache_expression,
-                    const base::Time& verdict_received_time) {
+                    base::Time verdict_received_time) {
     ASSERT_FALSE(cache_expression.empty());
     LoginReputationClientResponse response(
         CreateVerdictProto(verdict, cache_duration_sec, cache_expression));

@@ -68,10 +68,8 @@ DeviceInfoSyncServiceFactory::DeviceInfoSyncServiceFactory()
           "DeviceInfoSyncService",
           ProfileSelections::Builder()
               .WithRegular(ProfileSelection::kOriginalOnly)
-              .WithGuest(ProfileSelection::kOriginalOnly)
-              // TODO(crbug.com/41488885): Check if this service is needed for
-              // Ash Internals.
-              .WithAshInternals(ProfileSelection::kOriginalOnly)
+              .WithGuest(ProfileSelection::kNone)
+              .WithAshInternals(ProfileSelection::kNone)
               .Build()) {
   DependsOn(DataTypeStoreServiceFactory::GetInstance());
   DependsOn(SyncInvalidationsServiceFactory::GetInstance());
@@ -101,7 +99,5 @@ DeviceInfoSyncServiceFactory::BuildServiceInstanceForBrowserContext(
       std::move(device_info_sync_client),
       SyncInvalidationsServiceFactory::GetForProfile(profile),
       /*pulse_task_runner=*/
-      base::FeatureList::IsEnabled(base::features::kReducePPMs)
-          ? content::GetUIThreadTaskRunner({base::TaskPriority::BEST_EFFORT})
-          : content::GetUIThreadTaskRunner());
+      content::GetUIThreadTaskRunner({base::TaskPriority::BEST_EFFORT}));
 }

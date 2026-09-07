@@ -155,6 +155,8 @@ class COMPONENT_EXPORT(NATIVE_THEME) NativeTheme {
     // True when Chromium renders the titlebar.  False when the window
     // manager renders the titlebar.
     bool use_custom_frame = false;
+    // True when frame borders should be rendered in the custom frame.
+    bool has_frame_border = false;
     // If the NativeTheme will paint a solid color, it should use
     // |default_background_color|.
     SkColor default_background_color = gfx::kPlaceholderColor;
@@ -534,6 +536,9 @@ class COMPONENT_EXPORT(NATIVE_THEME) NativeTheme {
     caret_blink_interval_ = caret_blink_interval;
   }
 
+  size_t system_color_version() const { return system_color_version_; }
+  void IncrementSystemColorVersion() { ++system_color_version_; }
+
  protected:
   explicit NativeTheme(SystemTheme system_theme = SystemTheme::kDefault);
   virtual ~NativeTheme();
@@ -589,10 +594,16 @@ class COMPONENT_EXPORT(NATIVE_THEME) NativeTheme {
   ColorProviderKey::ForcedColors CalculateForcedColors() const;
   PreferredColorScheme CalculatePreferredColorScheme() const;
   PreferredContrast CalculatePreferredContrast() const;
+  bool CalculateUseOverlayScrollbar() const;
 
   base::CallbackListSubscription os_settings_changed_subscription_;
   base::CallbackListSubscription update_delay_subscription_;
-  base::ObserverList<NativeThemeObserver> native_theme_observers_;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      NativeThemeObserver,
+      /*check_empty=*/false,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>
+      native_theme_observers_;
   SystemTheme system_theme_;
   bool use_overlay_scrollbar_ = false;
   ColorProviderKey::ForcedColors forced_colors_ =
@@ -607,6 +618,7 @@ class COMPONENT_EXPORT(NATIVE_THEME) NativeTheme {
   ColorProviderKey::UserColorSource preferred_color_source_ =
       ColorProviderKey::UserColorSource::kAccent;
   base::TimeDelta caret_blink_interval_;
+  size_t system_color_version_ = 0;
 
   raw_ptr<NativeTheme> associated_web_instance_ = nullptr;
 

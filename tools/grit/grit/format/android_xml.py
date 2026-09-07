@@ -59,13 +59,11 @@ in the output xml file. For example:
   </plurals>
 """
 
-
 import os
 import re
 import xml.sax.saxutils
 
 from grit import constants
-from grit import lazy_re
 from grit.node import message
 
 
@@ -77,7 +75,7 @@ _TAGGED_ONLY_DEFAULT = False
 # In tagged-only mode, only messages with this tag will be ouputted.
 _EMIT_TAG = 'android_java'
 
-_NAME_PATTERN = lazy_re.compile(r'IDS_(?P<name>[A-Z0-9_]+)\Z')
+_NAME_PATTERN = re.compile(r'IDS_(?P<name>[A-Z0-9_]+)\Z')
 
 # Most strings are output as a <string> element. Note the double quotes
 # around the value to preserve whitespace.
@@ -90,13 +88,16 @@ _PLURALS_ITEM_TEMPLATE = '  <item quantity="%s">%s</item>\n'
 # Matches e.g. "{HELLO, plural, HOW ARE YOU DOING}", while capturing
 # "HOW ARE YOU DOING" in <items>. The en-XA pseudolocale adds a set of words
 # beginning with " - one" after the plural block which is also captured.
-_PLURALS_PATTERN = lazy_re.compile(
-    r'\{[A-Z_]+,\s*plural,(?P<items>.*)\}(?P<pseudolong> - one.*)?$', flags=re.S)
+_PLURALS_PATTERN = re.compile(
+  r'\{[A-Z_]+,\s*plural,(?P<items>.*)\}(?P<pseudolong> - one.*)?$', flags=re.S
+)
 
 # Repeatedly matched against the <items> capture in _PLURALS_PATTERN,
 # to match "<quantity>{<value>}".
-_PLURALS_ITEM_PATTERN = lazy_re.compile(r'(?P<quantity>\S+?)\s*'
-                                        r'\{(?P<value>.*?)\}')
+_PLURALS_ITEM_PATTERN = re.compile(
+  r'(?P<quantity>[=\w]+?)\s*'
+  r'\{(?P<value>.*?)\}'
+)
 _PLURALS_QUANTITY_MAP = {
   '=0': 'zero',
   'zero': 'zero',
@@ -113,9 +114,11 @@ _PLURALS_QUANTITY_MAP = {
 def Format(root, lang='en', gender=constants.DEFAULT_GENDER, output_dir='.'):
   assert gender is not None
 
-  yield ('<?xml version="1.0" encoding="utf-8"?>\n'
-          '<resources '
-          'xmlns:android="http://schemas.android.com/apk/res/android">\n')
+  yield (
+    '<?xml version="1.0" encoding="utf-8"?>\n'
+    '<resources '
+    'xmlns:android="http://schemas.android.com/apk/res/android">\n'
+  )
 
   tagged_only = _TAGGED_ONLY_DEFAULT
   if _TAGGED_ONLY_ENV_VAR in os.environ:
@@ -125,8 +128,10 @@ def Format(root, lang='en', gender=constants.DEFAULT_GENDER, output_dir='.'):
     elif tagged_only == 'false':
       tagged_only = False
     else:
-      raise Exception('env variable ANDROID_JAVA_TAGGED_ONLY must have value '
-                      'true or false. Invalid value: %s' % tagged_only)
+      raise Exception(
+        'env variable ANDROID_JAVA_TAGGED_ONLY must have value '
+        'true or false. Invalid value: %s' % tagged_only
+      )
 
   for item in root.ActiveDescendants():
     with item:
@@ -187,8 +192,9 @@ def ShouldOutputNode(node, tagged_only):
       node: a Node from the grd dom
       tagged_only: true, if only tagged messages should be outputted
   """
-  return (isinstance(node, message.MessageNode) and
-          (not tagged_only or _EMIT_TAG in node.formatter_data))
+  return isinstance(node, message.MessageNode) and (
+    not tagged_only or _EMIT_TAG in node.formatter_data
+  )
 
 
 def _FormatPluralMessage(message):
@@ -237,8 +243,9 @@ def _FormatPluralMessage(message):
         quantities_so_far.add(quantity_out)
         lines.append(_PLURALS_ITEM_TEMPLATE % (quantity_out, value_out))
     else:
-      raise Exception('Unsupported plural quantity for android '
-                      'strings.xml: %s' % quantity_in)
+      raise Exception(
+        'Unsupported plural quantity for android strings.xml: %s' % quantity_in
+      )
   return ''.join(lines)
 
 

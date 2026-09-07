@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {YourSavedInfoDataCategory, YourSavedInfoDataChip, YourSavedInfoRelatedService} from 'chrome://settings/settings.js';
-import type {AiPageComposeInteractions, AiPageHistorySearchInteractions, AiPageInteractions, AiPageTabOrganizationInteractions, AutofillSettingsReferrer, DeleteBrowsingDataAction, MetricsBrowserProxy, PrivacyElementInteractions, PrivacyGuideInteractions, PrivacyGuideSettingsStates, PrivacyGuideStepsEligibleAndReached, SafeBrowsingInteractions, SafetyCheckNotificationsModuleInteractions, SafetyCheckUnusedSitePermissionsModuleInteractions, SafetyHubCardState, SafetyHubEntryPoint, SafetyHubModuleType, SafetyHubSurfaces} from 'chrome://settings/settings.js';
+import {SuggestionsFromGeminiAction, SuggestionsFromGeminiEntryPoint, YourSavedInfoDataCategory, YourSavedInfoDataChip, YourSavedInfoRelatedService} from 'chrome://settings/settings.js';
+import type {AiPageComposeInteractions, AiPageHistorySearchInteractions, AiPageInteractions, AiPageSuggestionsInteractions, AutofillSettingsReferrer, DeleteBrowsingDataAction, MetricsBrowserProxy, PrivacyElementInteractions, PrivacyGuideInteractions, PrivacyGuideSettingsStates, PrivacyGuideStepsEligibleAndReached, SafeBrowsingInteractions, SafetyCheckNotificationsModuleInteractions, SafetyCheckUnusedSitePermissionsModuleInteractions, SafetyHubCardState, SafetyHubEntryPoint, SafetyHubModuleType, SafetyHubSurfaces} from 'chrome://settings/settings.js';
 import {TestBrowserProxy} from 'chrome://webui-test/test_browser_proxy.js';
 
 export class TestMetricsBrowserProxy extends TestBrowserProxy implements
@@ -38,11 +38,13 @@ export class TestMetricsBrowserProxy extends TestBrowserProxy implements
       'recordAiPageInteractions',
       'recordAiPageHistorySearchInteractions',
       'recordAiPageComposeInteractions',
-      'recordAiPageTabOrganizationInteractions',
+      'recordAiPageSuggestionsInteractions',
       'recordAutofillSettingsReferrer',
       'recordYourSavedInfoCategoryClick',
       'recordYourSavedInfoDataChipClick',
       'recordYourSavedInfoRelatedServiceClick',
+      'recordSuggestionsFromGeminiEntryPointClick',
+      'recordSuggestionsFromGeminiAction',
     ]);
   }
 
@@ -180,14 +182,14 @@ export class TestMetricsBrowserProxy extends TestBrowserProxy implements
     this.methodCalled('recordAiPageComposeInteractions', interaction);
   }
 
-  recordAiPageTabOrganizationInteractions(
-      interaction: AiPageTabOrganizationInteractions) {
-    this.methodCalled('recordAiPageTabOrganizationInteractions', interaction);
+  recordAiPageSuggestionsInteractions(
+      interaction: AiPageSuggestionsInteractions) {
+    this.methodCalled('recordAiPageSuggestionsInteractions', interaction);
   }
 
   recordYourSavedInfoCategoryClick(category: YourSavedInfoDataCategory) {
     this.methodCalled('recordYourSavedInfoCategoryClick', [category]);
-    if (category !== YourSavedInfoDataCategory.MAX_VALUE) {
+    if (category !== YourSavedInfoDataCategory.COUNT) {
       this.recordAction(`Settings.YourSavedInfo.CategoryClick.${
           YourSavedInfoDataCategory[category]}`);
     }
@@ -195,7 +197,7 @@ export class TestMetricsBrowserProxy extends TestBrowserProxy implements
 
   recordYourSavedInfoDataChipClick(chip: YourSavedInfoDataChip) {
     this.methodCalled('recordYourSavedInfoDataChipClick', [chip]);
-    if (chip !== YourSavedInfoDataChip.MAX_VALUE) {
+    if (chip !== YourSavedInfoDataChip.COUNT) {
       this.recordAction(
           `Settings.YourSavedInfo.ChipClick.${YourSavedInfoDataChip[chip]}`);
     }
@@ -203,9 +205,42 @@ export class TestMetricsBrowserProxy extends TestBrowserProxy implements
 
   recordYourSavedInfoRelatedServiceClick(service: YourSavedInfoRelatedService) {
     this.methodCalled('recordYourSavedInfoRelatedServiceClick', [service]);
-    if (service !== YourSavedInfoRelatedService.MAX_VALUE) {
+    if (service !== YourSavedInfoRelatedService.COUNT) {
       this.recordAction(`Settings.YourSavedInfo.RelatedServiceClick.${
           YourSavedInfoRelatedService[service]}`);
+    }
+  }
+
+  recordSuggestionsFromGeminiEntryPointClick(
+      entryPoint: SuggestionsFromGeminiEntryPoint) {
+    this.methodCalled('recordSuggestionsFromGeminiEntryPointClick', entryPoint);
+    if (entryPoint !== SuggestionsFromGeminiEntryPoint.COUNT) {
+      const actionMap = {
+        [SuggestionsFromGeminiEntryPoint.YOUR_SAVED_INFO]:
+            'PersonalContext.Settings.EntryPoint.AutofillAndPasswordsSettings',
+        [SuggestionsFromGeminiEntryPoint.TRAVEL]:
+            'PersonalContext.Settings.EntryPoint.TravelSettings',
+        [SuggestionsFromGeminiEntryPoint.SHOPPING]:
+            'PersonalContext.Settings.EntryPoint.ShoppingSettings',
+        [SuggestionsFromGeminiEntryPoint.IDENTITY_DOCS]:
+            'PersonalContext.Settings.EntryPoint.IdentityDocsSettings',
+      };
+      this.recordAction(actionMap[entryPoint]);
+    }
+  }
+
+  recordSuggestionsFromGeminiAction(action: SuggestionsFromGeminiAction) {
+    this.methodCalled('recordSuggestionsFromGeminiAction', action);
+    if (action !== SuggestionsFromGeminiAction.COUNT) {
+      const actionMap = {
+        [SuggestionsFromGeminiAction.MANAGE_CONNECTED_APPS_CLICK]:
+            'PersonalContext.Settings.ManageConnectedAppsClick',
+        [SuggestionsFromGeminiAction.TOGGLE_ON]:
+            'PersonalContext.Settings.ToggledOn',
+        [SuggestionsFromGeminiAction.TOGGLE_OFF]:
+            'PersonalContext.Settings.ToggledOff',
+      };
+      this.recordAction(actionMap[action]);
     }
   }
 }

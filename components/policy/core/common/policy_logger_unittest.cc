@@ -3,19 +3,14 @@
 // found in the LICENSE file.
 
 #include "components/policy/core/common/policy_logger.h"
+
 #include "base/strings/string_number_conversions.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
-#include "base/test/test_mock_time_task_runner.h"
-#include "components/policy/core/common/features.h"
-#include "testing/gmock/include/gmock/gmock.h"
+#include "base/test/test_future.h"
+#include "build/build_config.h"
+#include "components/policy/resources/webui/mojom/policy.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/platform_test.h"
-
-using testing::_;
-using testing::ElementsAre;
-using testing::Eq;
-using testing::Property;
 
 namespace policy {
 
@@ -25,6 +20,22 @@ void AddLogs(const std::string& message, PolicyLogger* policy_logger) {
   LOG_POLICY(INFO, POLICY_FETCHING) << "Element added: " << message;
 }
 
+base::ListValue GetLogsAsList(PolicyLogger* policy_logger) {
+  base::test::TestFuture<base::ListValue> future;
+  policy_logger->GetAsList(future.GetCallback());
+  return future.Take();
+}
+
+std::vector<policy::mojom::LogPtr> GetLogsAsMojoList(
+    PolicyLogger* policy_logger) {
+  base::test::TestFuture<std::vector<policy::mojom::LogPtr>> future;
+  policy_logger->GetAsMojoList(future.GetCallback());
+  return future.Take();
+}
+
+size_t GetLogCount(PolicyLogger* logger) {
+  return GetLogsAsList(logger).size();
+}
 }  // namespace
 
 class PolicyLoggerTest : public PlatformTest {
@@ -33,89 +44,69 @@ class PolicyLoggerTest : public PlatformTest {
   ~PolicyLoggerTest() override = default;
 
  protected:
-  // Clears the logs list and resets the deletion flag before the test and its
-  // tasks are deleted. This is important to prevent tests from affecting each
-  // other's results.
+  // Clears the logs list before the test. This is important to prevent tests
+  // from affecting each other's results.
   void SetUp() override {
     policy::PolicyLogger::GetInstance()->ResetLoggerForTesting();
   }
 
-  base::test::ScopedFeatureList scoped_feature_list_;
-  base::test::SingleThreadTaskEnvironment task_environment{
-      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
+  base::test::TaskEnvironment task_environment_;
 };
 
 // Checks that the logger is enabled by feature and that `GetAsList` returns an
 // updated list of logs.
 TEST_F(PolicyLoggerTest, PolicyLoggingEnabled) {
+#if BUILDFLAG(IS_CHROMEOS)
+  if (!PolicyLogger::IsPolicyLoggingEnabled()) {
+    GTEST_SKIP() << "Policy logging is disabled on ChromeOS stable";
+  }
+#endif
   PolicyLogger* policy_logger = policy::PolicyLogger::GetInstance();
 
-  size_t logs_size_before_adding = policy_logger->GetPolicyLogsSizeForTesting();
+  size_t log_count_before_adding = GetLogCount(policy_logger);
   AddLogs("when the feature is enabled.", policy_logger);
 
-  EXPECT_EQ(policy_logger->GetAsList().size(), logs_size_before_adding + 1);
-  EXPECT_EQ(*(policy_logger->GetAsList()[logs_size_before_adding]
-                  .GetDict()
-                  .FindString("message")),
+  base::ListValue logs = GetLogsAsList(policy_logger);
+  EXPECT_EQ(logs.size(), log_count_before_adding + 1);
+  EXPECT_EQ(*(logs[log_count_before_adding].GetDict().FindString("message")),
+            "Element added: when the feature is enabled.");
+
+  std::vector<policy::mojom::LogPtr> mojo_logs =
+      GetLogsAsMojoList(policy_logger);
+  EXPECT_EQ(mojo_logs.size(), log_count_before_adding + 1);
+  EXPECT_EQ(mojo_logs[log_count_before_adding]->message,
             "Element added: when the feature is enabled.");
 }
 
-// Checks that the deletion of expired logs works as expected.
-TEST_F(PolicyLoggerTest, DeleteOldLogs) {
-  PolicyLogger* policy_logger = policy::PolicyLogger::GetInstance();
-  policy_logger->EnableLogDeletion();
-  size_t logs_size_before_adding = policy_logger->GetPolicyLogsSizeForTesting();
-
-  AddLogs("First log at t=0.", policy_logger);
-  AddLogs("Second log at t=0+delta.", policy_logger);
-
-  base::TimeDelta first_time_elapsed = policy::PolicyLogger::kTimeToLive / 2;
-  task_environment.FastForwardBy(first_time_elapsed + base::Minutes(1));
-  AddLogs("Third log at t=TimeToLive/2.", policy_logger);
-
-  // Check that the logs that were in the list for `kTimeToLive` minutes were
-  // deleted and that the one that did not expire is still in the list.
-  task_environment.FastForwardBy(first_time_elapsed);
-  task_environment.RunUntilIdle();
-  EXPECT_EQ(policy_logger->GetAsList().size(), size_t(1));
-  EXPECT_EQ(*(policy_logger->GetAsList()[logs_size_before_adding]
-                  .GetDict()
-                  .FindString("message")),
-            "Element added: Third log at t=TimeToLive/2.");
-
-  // Check that the last log was deleted after `kTimeToLive` minutes to ensure
-  // that a second deleting task was scheduled after deleting the old ones.
-  task_environment.FastForwardBy(policy::PolicyLogger::kTimeToLive);
-  task_environment.RunUntilIdle();
-  EXPECT_EQ(policy_logger->GetAsList().size(), size_t(0));
-}
-
-// Checks that the first log  added is deleted when `PolicyLogger::kMaxLogSize`
+// Checks that the first log added is deleted when `PolicyLogger::kMaxLogCount`
 // is exceeded.
-TEST_F(PolicyLoggerTest, MaxSizeExceededDeletesOldestLog) {
+TEST_F(PolicyLoggerTest, MaxCountExceededDeletesOldestLog) {
+#if BUILDFLAG(IS_CHROMEOS)
+  if (!PolicyLogger::IsPolicyLoggingEnabled()) {
+    GTEST_SKIP() << "Policy logging is disabled on ChromeOS stable";
+  }
+#endif
   PolicyLogger* policy_logger = policy::PolicyLogger::GetInstance();
 
   AddLogs("First log that will be removed.", policy_logger);
 
-  // Adds kMaxLogsSize` - 1 more elements until `kMaxLogsSize` is reached.
-  for (int i = 0; i < static_cast<int>(policy::PolicyLogger::kMaxLogsSize) - 1;
-       i++) {
+  // Adds `kMaxLogCount` - 1 more elements until `kMaxLogCount` is reached.
+  for (size_t i = 0; i < policy::PolicyLogger::kMaxLogCount - 1; i++) {
     AddLogs(base::NumberToString(i + 1), policy_logger);
   }
-  EXPECT_EQ(policy_logger->GetPolicyLogsSizeForTesting(),
-            policy::PolicyLogger::kMaxLogsSize);
+  EXPECT_EQ(GetLogCount(policy_logger), policy::PolicyLogger::kMaxLogCount);
 
   AddLogs("Last log added and size is exceeded.", policy_logger);
 
-  size_t current_size = policy_logger->GetPolicyLogsSizeForTesting();
-  base::ListValue current_logs = policy_logger->GetAsList();
+  size_t current_count = GetLogCount(policy_logger);
+  base::ListValue current_logs = GetLogsAsList(policy_logger);
 
-  EXPECT_EQ(current_size, policy::PolicyLogger::kMaxLogsSize);
+  EXPECT_EQ(current_count, policy::PolicyLogger::kMaxLogCount);
 
   EXPECT_EQ(*(current_logs[0].GetDict().FindString("message")),
             "Element added: 1");
 
-  EXPECT_EQ(*(current_logs[current_size - 1].GetDict().FindString("message")),
+  EXPECT_EQ(*(current_logs[current_count - 1].GetDict().FindString("message")),
             "Element added: Last log added and size is exceeded.");
 }
 

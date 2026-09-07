@@ -4,6 +4,7 @@
 
 #import "ios/chrome/browser/browser_view/ui_bundled/browser_coordinator.h"
 
+#import "base/logging.h"
 #import "base/test/scoped_feature_list.h"
 #import "components/bookmarks/test/bookmark_test_helpers.h"
 #import "components/commerce/core/mock_shopping_service.h"
@@ -36,29 +37,26 @@
 #import "ios/chrome/browser/main/model/browser_web_state_list_delegate.h"
 #import "ios/chrome/browser/ntp/model/new_tab_page_tab_helper.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_coordinator.h"
-#import "ios/chrome/browser/omnibox/model/omnibox_position/omnibox_position_browser_agent.h"
-#import "ios/chrome/browser/save_to_photos/ui_bundled/save_to_photos_coordinator.h"
+#import "ios/chrome/browser/omnibox/model/omnibox_focus/omnibox_focus_browser_agent.h"
 #import "ios/chrome/browser/saved_tab_groups/model/tab_group_sync_service_factory.h"
 #import "ios/chrome/browser/search_engines/model/template_url_service_factory.h"
 #import "ios/chrome/browser/segmentation_platform/model/segmentation_platform_service_factory.h"
+#import "ios/chrome/browser/shared/coordinator/layout_guide/layout_guide_scene_agent.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/model/browser/test/test_browser.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_manager_ios.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list_observer.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_opener.h"
-#import "ios/chrome/browser/shared/public/commands/activity_service_commands.h"
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/find_in_page_commands.h"
+#import "ios/chrome/browser/shared/public/commands/gemini_commands.h"
 #import "ios/chrome/browser/shared/public/commands/help_commands.h"
 #import "ios/chrome/browser/shared/public/commands/promos_manager_commands.h"
-#import "ios/chrome/browser/shared/public/commands/save_image_to_photos_command.h"
-#import "ios/chrome/browser/shared/public/commands/save_to_photos_commands.h"
 #import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/settings_commands.h"
 #import "ios/chrome/browser/shared/public/commands/sync_presenter_commands.h"
-#import "ios/chrome/browser/sharing/ui_bundled/sharing_coordinator.h"
-#import "ios/chrome/browser/sharing/ui_bundled/sharing_params.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
 #import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
@@ -85,13 +83,14 @@
 #import "third_party/ocmock/OCMock/OCMock.h"
 #import "third_party/ocmock/gtest_support.h"
 #import "ui/base/device_form_factor.h"
+#import "url/origin.h"
 
 // Test fixture for BrowserCoordinator testing.
 class BrowserCoordinatorTest : public PlatformTest {
  protected:
   BrowserCoordinatorTest() {
     base_view_controller_ = [[UIViewController alloc] init];
-    scene_state_ = [[SceneState alloc] initWithAppState:nil];
+    scene_state_ = [[SceneState alloc] init];
 
     TestProfileIOS::Builder test_profile_builder;
     test_profile_builder.AddTestingFactory(
@@ -114,7 +113,7 @@ class BrowserCoordinatorTest : public PlatformTest {
         ios::BookmarkModelFactory::GetDefaultFactory());
     test_profile_builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
+        AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
             std::make_unique<FakeAuthenticationServiceDelegate>()));
     test_profile_builder.AddTestingFactory(
         segmentation_platform::SegmentationPlatformServiceFactory::
@@ -159,7 +158,7 @@ class BrowserCoordinatorTest : public PlatformTest {
     StartSurfaceRecentTabBrowserAgent::CreateForBrowser(browser_.get());
     WebStateDelegateBrowserAgent::CreateForBrowser(browser_.get());
     SyncErrorBrowserAgent::CreateForBrowser(browser_.get());
-    OmniboxPositionBrowserAgent::CreateForBrowser(browser_.get());
+    OmniboxFocusBrowserAgent::CreateForBrowser(browser_.get());
     BrowserViewVisibilityNotifierBrowserAgent::CreateForBrowser(browser_.get());
     DiscoverFeedVisibilityBrowserAgent::CreateForBrowser(browser_.get());
     ToolbarsSizeBrowserAgent::CreateForBrowser(browser_.get());
@@ -176,18 +175,24 @@ class BrowserCoordinatorTest : public PlatformTest {
     // to SettingsCommands, that needs to be mocked and dispatched
     // as well.
     mock_scene_handler_ = OCMProtocolMock(@protocol(SceneCommands));
-    id mockSettingsCommandHandler =
-        OCMProtocolMock(@protocol(SettingsCommands));
+    id mock_settings_handler = OCMProtocolMock(@protocol(SettingsCommands));
     [dispatcher startDispatchingToTarget:mock_scene_handler_
                              forProtocol:@protocol(SceneCommands)];
-    [dispatcher startDispatchingToTarget:mockSettingsCommandHandler
+    [dispatcher startDispatchingToTarget:mock_settings_handler
                              forProtocol:@protocol(SettingsCommands)];
 
-    IncognitoReauthSceneAgent* reauthAgent = [[IncognitoReauthSceneAgent alloc]
-        initWithReauthModule:[[ReauthenticationModule alloc] init]
-                sceneHandler:mock_scene_handler_];
-    [scene_state_ addAgent:reauthAgent];
-    [dispatcher startDispatchingToTarget:reauthAgent
+    id mock_gemini_handler = OCMProtocolMock(@protocol(GeminiCommands));
+    [dispatcher startDispatchingToTarget:mock_gemini_handler
+                             forProtocol:@protocol(GeminiCommands)];
+
+    LayoutGuideSceneAgent* layout_guide_scene_agent =
+        [[LayoutGuideSceneAgent alloc] init];
+    [scene_state_ addAgent:layout_guide_scene_agent];
+
+    IncognitoReauthSceneAgent* reauth_agent = [[IncognitoReauthSceneAgent alloc]
+        initWithReauthModule:[[ReauthenticationModule alloc] init]];
+    [scene_state_ addAgent:reauth_agent];
+    [dispatcher startDispatchingToTarget:reauth_agent
                              forProtocol:@protocol(IncognitoReauthCommands)];
   }
 
@@ -281,101 +286,6 @@ TEST_F(BrowserCoordinatorTest, ShowDownloadsFolder) {
   [browser_coordinator stop];
 }
 
-// Tests showDownloadsFolder shows download list UI when feature is enabled.
-TEST_F(BrowserCoordinatorTest, ShowDownloadList) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(kDownloadList);
-
-  BrowserCoordinator* browser_coordinator = GetBrowserCoordinator();
-  [browser_coordinator start];
-
-  CommandDispatcher* dispatcher = browser_->GetCommandDispatcher();
-  id<BrowserCoordinatorCommands> handler =
-      HandlerForProtocol(dispatcher, BrowserCoordinatorCommands);
-
-  // When the download list feature is enabled, showDownloadsFolder should
-  // present the download list UI instead of opening Files.app.
-  [handler showDownloadsFolder];
-
-  // Verify that the download list coordinator was created.
-  EXPECT_NE(browser_coordinator.downloadListCoordinator, nil);
-
-  [browser_coordinator stop];
-}
-
-// Tests that `-showShareSheet` is leaving fullscreen and starting the share
-// coordinator.
-TEST_F(BrowserCoordinatorTest, ShowShareSheet) {
-  TestFullscreenController* controller =
-      TestFullscreenController::FromBrowser(browser_.get());
-
-  controller->EnterFullscreen();
-  ASSERT_EQ(0.0, controller->GetProgress());
-
-  UIView* source = [[UIView alloc] init];
-
-  id classMock = OCMClassMock([SharingCoordinator class]);
-  SharingCoordinator* mockSharingCoordinator = classMock;
-  OCMExpect([classMock alloc]).andReturn(classMock);
-  OCMExpect([[classMock ignoringNonObjectArgs]
-                initWithBaseViewController:[OCMArg any]
-                                   browser:browser_.get()
-                                    params:[OCMArg any]
-                                sourceItem:source])
-      .andReturn(mockSharingCoordinator);
-  OCMExpect([mockSharingCoordinator start]);
-
-  BrowserCoordinator* browser_coordinator = GetBrowserCoordinator();
-  [browser_coordinator start];
-  [browser_coordinator showShareSheetFromShareButton:source];
-
-  // Check that fullscreen is exited.
-  EXPECT_EQ(1.0, controller->GetProgress());
-
-  [browser_coordinator stop];
-
-  // Check that -start has been called.
-  EXPECT_OCMOCK_VERIFY(classMock);
-}
-
-// Tests that `-showShareSheetForChromeApp` is instantiating the
-// SharingCoordinator with SharingParams where scenario is ShareChrome, leaving
-// fullscreen and starting the share coordinator.
-TEST_F(BrowserCoordinatorTest, ShowShareSheetForChromeApp) {
-  TestFullscreenController* controller =
-      TestFullscreenController::FromBrowser(browser_.get());
-
-  controller->EnterFullscreen();
-  ASSERT_EQ(0.0, controller->GetProgress());
-
-  id expectShareChromeScenarioArg =
-      [OCMArg checkWithBlock:^BOOL(SharingParams* params) {
-        return params.scenario == SharingScenario::ShareChrome;
-      }];
-
-  id classMock = OCMClassMock([SharingCoordinator class]);
-  SharingCoordinator* mockSharingCoordinator = classMock;
-  OCMExpect([classMock alloc]).andReturn(classMock);
-  OCMExpect([[classMock ignoringNonObjectArgs]
-                initWithBaseViewController:[OCMArg any]
-                                   browser:browser_.get()
-                                    params:expectShareChromeScenarioArg
-                                sourceItem:[OCMArg any]])
-      .andReturn(mockSharingCoordinator);
-  OCMExpect([mockSharingCoordinator start]);
-
-  BrowserCoordinator* browser_coordinator = GetBrowserCoordinator();
-  [browser_coordinator start];
-  [browser_coordinator showShareSheetForChromeApp];
-
-  // Check that fullscreen is exited.
-  EXPECT_EQ(1.0, controller->GetProgress());
-
-  [browser_coordinator stop];
-
-  // Check that -start has been called.
-  EXPECT_OCMOCK_VERIFY(classMock);
-}
 
 // Tests that BrowserCoordinator properly implements
 // the NewTabPageTabHelperDelegate protocol.
@@ -413,62 +323,6 @@ TEST_F(BrowserCoordinatorTest, NewTabPageTabHelperDelegate) {
   }
 }
 
-// Tests that BrowserCoordinator starts and stops the SaveToPhotosCoordinator
-// properly when SaveToPhotosCommands are issued.
-
-TEST_F(BrowserCoordinatorTest, StartsAndStopsSaveToPhotosCoordinator) {
-  // Mock the SaveToPhotosCoordinator class.
-  id mockSaveToPhotosCoordinator =
-      OCMStrictClassMock([SaveToPhotosCoordinator class]);
-
-  // Start the BrowserCoordinator.
-  BrowserCoordinator* browser_coordinator = GetBrowserCoordinator();
-  [browser_coordinator start];
-
-  // At rest, check the SaveToPhotosCoordinator is nil.
-  EXPECT_EQ(browser_coordinator.saveToPhotosCoordinator, nil);
-
-  CommandDispatcher* dispatcher = browser_->GetCommandDispatcher();
-  id<SaveToPhotosCommands> handler =
-      HandlerForProtocol(dispatcher, SaveToPhotosCommands);
-
-  // Insert a web state into the Browser.
-  InsertWebState();
-
-  GURL fakeImageURL("http://www.example.com/image.jpg");
-  web::Referrer fakeImageReferrer;
-  web::WebState* webState = GetActiveWebState();
-  SaveImageToPhotosCommand* command =
-      [[SaveImageToPhotosCommand alloc] initWithImageURL:fakeImageURL
-                                                referrer:fakeImageReferrer
-                                                webState:webState];
-
-  // Tests that -[BrowserCoordinator saveImageToPhotos:] starts the
-  // SaveToPhotosCoordinator.
-  OCMExpect([mockSaveToPhotosCoordinator alloc])
-      .andReturn(mockSaveToPhotosCoordinator);
-  OCMExpect([[mockSaveToPhotosCoordinator ignoringNonObjectArgs]
-                initWithBaseViewController:browser_coordinator.viewController
-                                   browser:browser_.get()
-                                  imageURL:command.imageURL
-                                  referrer:command.referrer
-                                  webState:command.webState.get()])
-      .andReturn(mockSaveToPhotosCoordinator);
-  OCMExpect([(SaveToPhotosCoordinator*)mockSaveToPhotosCoordinator start]);
-  [handler saveImageToPhotos:command];
-  EXPECT_OCMOCK_VERIFY(mockSaveToPhotosCoordinator);
-  EXPECT_NE(browser_coordinator.saveToPhotosCoordinator, nil);
-
-  // Tests that -[BrowserCoordinator stopSaveToPhotos:] stops the
-  // SaveToPhotosCoordinator.
-  OCMExpect([mockSaveToPhotosCoordinator stop]);
-  [handler stopSaveToPhotos];
-  EXPECT_OCMOCK_VERIFY(mockSaveToPhotosCoordinator);
-  EXPECT_EQ(browser_coordinator.saveToPhotosCoordinator, nil);
-
-  [browser_coordinator stop];
-}
-
 // Tests that the `-showDefaultBrowserPromoAfterRemindMeLater` command does not
 // crash.
 TEST_F(BrowserCoordinatorTest, ShowDefaultBrowserPromoAfterRemindMeLater) {
@@ -494,6 +348,19 @@ TEST_F(BrowserCoordinatorTest,
   [browser_coordinator start];
 
   [browser_coordinator overscrollActionRefresh:overscroll_actions_controller];
+
+  [browser_coordinator stop];
+}
+
+// Tests that the BrowserCoordinator early returns from `hideFindUI` if it
+// doesn't have an active web state.
+TEST_F(BrowserCoordinatorTest, NoCrashOnHideFindUIWithNoActiveWebState) {
+  BrowserCoordinator* browser_coordinator = GetBrowserCoordinator();
+  [browser_coordinator start];
+
+  id<FindInPageCommands> handler =
+      HandlerForProtocol(browser_->GetCommandDispatcher(), FindInPageCommands);
+  [handler hideFindUI];
 
   [browser_coordinator stop];
 }

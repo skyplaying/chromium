@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "ui/base/ime/win/tsf_bridge.h"
 
 #include <msctf.h>
@@ -543,8 +538,7 @@ HRESULT TSFBridgeImpl::InitializeDocumentMapInternal() {
     empty_tsf_support_ = true;
   }
 
-  for (size_t i = 0; i < std::size(kTextInputTypes); ++i) {
-    const TextInputType input_type = kTextInputTypes[i];
+  for (const TextInputType input_type : kTextInputTypes) {
     Microsoft::WRL::ComPtr<ITfContext> context;
     Microsoft::WRL::ComPtr<ITfDocumentMgr> document_manager;
     DWORD source_cookie = TF_INVALID_COOKIE;

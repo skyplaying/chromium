@@ -9,10 +9,12 @@ import androidx.test.filters.SmallTest;
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 
+import org.chromium.android_webview.common.AwFeatures;
+import org.chromium.android_webview.common.WebViewCachedFlags;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.InMemorySharedPreferences;
 import org.chromium.support_lib_boundary.WebMessageBoundaryInterface;
 import org.chromium.support_lib_boundary.util.Features;
 import org.chromium.support_lib_glue.SupportLibWebViewChromiumFactory;
@@ -21,22 +23,55 @@ import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Tests to prevent removing features we should avoid removing from the AndroidX Support library.
  * androidx.webkit 1.0.0 assumes these features are present and calls the methods.
  */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class SupportLibTest {
     @Test
     @SmallTest
     @Feature({"AndroidWebView"})
     public void testFeaturesExist() {
+        WebViewCachedFlags.initForTesting(new InMemorySharedPreferences());
         List<String> supportedFeaturesList =
-                Arrays.asList(SupportLibWebViewChromiumFactory.getSupportedFeaturesForTesting());
+                Arrays.asList(SupportLibWebViewChromiumFactory.assembleSupportedFeatures());
         Assert.assertTrue(
                 supportedFeaturesList.contains(Features.SAFE_BROWSING_RESPONSE_SHOW_INTERSTITIAL));
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"AndroidWebView"})
+    public void testEnqueuePreconnectFeatureSupportedWhenLazyProfileEnabled() {
+        InMemorySharedPreferences prefs = new InMemorySharedPreferences();
+        prefs.edit()
+                .putStringSet(
+                        "CachedFlagsEnabled",
+                        Set.of(AwFeatures.WEBVIEW_PROFILE_STORE_NOT_TRIGGER_STARTUP))
+                .apply();
+        WebViewCachedFlags.initForTesting(prefs);
+        List<String> supportedFeaturesList =
+                Arrays.asList(SupportLibWebViewChromiumFactory.assembleSupportedFeatures());
+        Assert.assertTrue(supportedFeaturesList.contains(Features.ENQUEUE_PRECONNECT));
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"AndroidWebView"})
+    public void testEnqueuePreconnectFeatureNotSupportedWhenLazyProfileDisabled() {
+        InMemorySharedPreferences prefs = new InMemorySharedPreferences();
+        prefs.edit()
+                .putStringSet(
+                        "CachedFlagsDisabled",
+                        Set.of(AwFeatures.WEBVIEW_PROFILE_STORE_NOT_TRIGGER_STARTUP))
+                .apply();
+        WebViewCachedFlags.initForTesting(prefs);
+        List<String> supportedFeaturesList =
+                Arrays.asList(SupportLibWebViewChromiumFactory.assembleSupportedFeatures());
+        Assert.assertFalse(supportedFeaturesList.contains(Features.ENQUEUE_PRECONNECT));
     }
 
     @Test

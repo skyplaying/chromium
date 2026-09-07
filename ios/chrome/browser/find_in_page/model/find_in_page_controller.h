@@ -10,6 +10,7 @@
 @protocol FindInPageResponseDelegate;
 @class FindInPageModel;
 class FullscreenController;
+@protocol FullscreenCommands;
 
 namespace web {
 class WebState;

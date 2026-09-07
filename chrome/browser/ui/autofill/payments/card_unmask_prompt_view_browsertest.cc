@@ -21,7 +21,7 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/autofill/core/browser/payments/card_unmask_delegate.h"
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/browser/ui/payments/card_unmask_prompt_controller_impl.h"
 #include "components/autofill/core/browser/ui/payments/card_unmask_prompt_options.h"
 #include "components/user_prefs/user_prefs.h"
@@ -277,7 +277,7 @@ IN_PROC_BROWSER_TEST_F(CardUnmaskPromptViewBrowserTest,
 }
 
 // Makes sure the tab can be closed while the dialog is showing.
-// https://crbug.com/484376
+// https://crbug.com/41172350
 // TODO(crbug.com/409069597): Re-enable this test on Mac.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_CloseTabWhileDialogShowing DISABLED_CloseTabWhileDialogShowing

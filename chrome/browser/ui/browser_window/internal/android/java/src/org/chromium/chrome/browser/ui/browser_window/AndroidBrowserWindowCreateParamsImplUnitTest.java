@@ -11,21 +11,21 @@ import android.graphics.Rect;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.mojom.WindowShowState;
 
 /** Unit tests for {@link AndroidBrowserWindowCreateParamsImpl}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class AndroidBrowserWindowCreateParamsImplUnitTest {
 
     @Test
     public void testCreate() {
         // Arrange.
         Profile profile = mock(Profile.class);
+        WebContents webContents = mock(WebContents.class);
 
         @BrowserWindowType int windowType = BrowserWindowType.NORMAL;
         int leftBound = 10;
@@ -37,7 +37,14 @@ public class AndroidBrowserWindowCreateParamsImplUnitTest {
         // Act.
         AndroidBrowserWindowCreateParams params =
                 AndroidBrowserWindowCreateParamsImpl.create(
-                        windowType, profile, leftBound, topBound, width, height, initialShowState);
+                        windowType,
+                        profile,
+                        leftBound,
+                        topBound,
+                        width,
+                        height,
+                        initialShowState,
+                        webContents);
 
         // Assert.
         assertEquals("Window type should match.", windowType, params.getWindowType());
@@ -48,5 +55,6 @@ public class AndroidBrowserWindowCreateParamsImplUnitTest {
                 params.getInitialBoundsInDp());
         assertEquals(
                 "Initial show state should match.", initialShowState, params.getInitialShowState());
+        assertEquals("WebContents should match.", webContents, params.getWebContents());
     }
 }

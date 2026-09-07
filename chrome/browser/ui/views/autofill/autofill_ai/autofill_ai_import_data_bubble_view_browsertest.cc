@@ -2,14 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef CHROME_BROWSER_UI_VIEWS_AUTOFILL_AUTOFILL_AI_SAVE_OR_UPDATE_AUTOFILL_AI_DATA_BUBBLE_VIEW_BROWSERTEST_CC_H_
-#define CHROME_BROWSER_UI_VIEWS_AUTOFILL_AUTOFILL_AI_SAVE_OR_UPDATE_AUTOFILL_AI_DATA_BUBBLE_VIEW_BROWSERTEST_CC_H_
-
 #include "chrome/browser/ui/views/autofill/autofill_ai/autofill_ai_import_data_bubble_view.h"
 
 #include <tuple>
 #include <utility>
 
+#include "base/i18n/rtl.h"
+#include "base/i18n/test/scoped_rtl_for_testing.h"
 #include "base/strings/strcat.h"
 #include "chrome/browser/ui/autofill/autofill_ai/mock_autofill_ai_import_data_controller.h"
 #include "chrome/browser/ui/browser_window.h"
@@ -17,13 +16,14 @@
 #include "chrome/browser/ui/test/test_browser_ui.h"
 #include "chrome/grit/browser_resources.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "components/autofill/core/browser/payments/test_legal_message_line.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/test/browser_test.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/ui_base_switches.h"
-#include "ui/views/test/views_test_base.h"
 #include "ui/views/widget/widget.h"
 
 namespace autofill {
@@ -51,10 +51,17 @@ class AutofillAiImportDataBubbleViewBrowsertest
   void SetUpOnMainThread() override {
     UiBrowserTest::SetUpOnMainThread();
 
-    base::i18n::SetRTLForTesting(IsBrowserLanguageRTL(this->GetParam()));
+    scoped_rtl_ = std::make_unique<base::i18n::ScopedRTLForTesting>(
+        IsBrowserLanguageRTL(this->GetParam()));
     ON_CALL(mock_controller(), GetSaveUpdateDialogTitleImagesResourceId())
         .WillByDefault(
             Return(IDR_AUTOFILL_SAVE_PASSPORT_AND_NATIONAL_ID_CARD_LOTTIE));
+    ON_CALL(mock_controller(), GetNoticeStringId())
+        .WillByDefault(Return(IDS_AUTOFILL_AI_SAVE_ENTITY_DIALOG_SUBTITLE));
+  }
+  void TearDownOnMainThread() override {
+    scoped_rtl_.reset();
+    UiBrowserTest::TearDownOnMainThread();
   }
 
   void DismissUi() override { bubble_ = nullptr; }
@@ -85,7 +92,8 @@ class AutofillAiImportDataBubbleViewBrowsertest
 
   void ShowUi(const std::string& name) override {
     auto bubble = std::make_unique<AutofillAiImportDataBubbleView>(
-        nullptr, browser()->tab_strip_model()->GetActiveWebContents(),
+        views::BubbleAnchor(),
+        browser()->GetTabStripModel()->GetActiveWebContents(),
         &mock_controller());
     bubble->set_has_parent(false);
     bubble_ = bubble.get();
@@ -108,10 +116,13 @@ class AutofillAiImportDataBubbleViewBrowsertest
     return mock_controller_;
   }
 
+  AutofillAiImportDataBubbleView* bubble() { return bubble_; }
+
  private:
   base::test::ScopedFeatureList features_;
   raw_ptr<AutofillAiImportDataBubbleView> bubble_ = nullptr;
   testing::NiceMock<MockAutofillAiImportDataController> mock_controller_;
+  std::unique_ptr<base::i18n::ScopedRTLForTesting> scoped_rtl_;
 };
 
 // `TypicalPassportCase` here and in other test(s) means that this test creates
@@ -172,6 +183,8 @@ IN_PROC_BROWSER_TEST_P(AutofillAiImportDataBubbleViewBrowsertest,
           EntityAttributeUpdateType::kNewEntityAttributeUnchanged)};
   ON_CALL(mock_controller(), GetUpdatedAttributesDetails())
       .WillByDefault(Return(details));
+  ON_CALL(mock_controller(), GetNoticeStringId())
+      .WillByDefault(Return(IDS_AUTOFILL_AI_UPDATE_ENTITY_DIALOG_SUBTITLE));
   ShowAndVerifyUi();
 }
 
@@ -182,6 +195,9 @@ IN_PROC_BROWSER_TEST_P(AutofillAiImportDataBubbleViewBrowsertest,
           IDS_AUTOFILL_AI_SAVE_VEHICLE_ENTITY_DIALOG_TITLE)));
   ON_CALL(mock_controller(), IsSavePrompt()).WillByDefault(Return(true));
   ON_CALL(mock_controller(), IsWalletableEntity()).WillByDefault(Return(true));
+  ON_CALL(mock_controller(), GetNoticeStringId())
+      .WillByDefault(
+          Return(IDS_AUTOFILL_AI_SAVE_ENTITY_TO_WALLET_DIALOG_SUBTITLE_NEW));
   ON_CALL(mock_controller(), GetPrimaryAccountEmail())
       .WillByDefault(Return(u"machadodeassis@gmail.com"));
   std::vector<EntityAttributeUpdateDetails> details = {
@@ -205,12 +221,55 @@ IN_PROC_BROWSER_TEST_P(AutofillAiImportDataBubbleViewBrowsertest,
 }
 
 IN_PROC_BROWSER_TEST_P(AutofillAiImportDataBubbleViewBrowsertest,
-                       WalletableEntity_Update) {
+                       WalletableEntity_Save_WithDisclosure) {
+  ON_CALL(mock_controller(), GetSaveUpdateDialogTitle())
+      .WillByDefault(Return(l10n_util::GetStringUTF16(
+          IDS_AUTOFILL_AI_SAVE_VEHICLE_ENTITY_DIALOG_TITLE)));
+  ON_CALL(mock_controller(), IsSavePrompt()).WillByDefault(Return(true));
+  ON_CALL(mock_controller(), IsWalletableEntity()).WillByDefault(Return(true));
+  ON_CALL(mock_controller(), IsEligibleForWalletPassDisclosure())
+      .WillByDefault(Return(true));
+  LegalMessageLines legal_message_lines = {
+      TestLegalMessageLine("Test legal message")};
+  ON_CALL(mock_controller(), GetLegalMessageLines())
+      .WillByDefault(testing::ReturnRef(legal_message_lines));
+  ON_CALL(mock_controller(), GetNoticeStringId())
+      .WillByDefault(
+          Return(IDS_AUTOFILL_AI_SAVE_ENTITY_TO_WALLET_DIALOG_SUBTITLE_NEW));
+  ON_CALL(mock_controller(), GetPrimaryAccountEmail())
+      .WillByDefault(Return(u"machadodeassis@gmail.com"));
+  std::vector<EntityAttributeUpdateDetails> details = {
+      EntityAttributeUpdateDetails(
+          /*attribute_name=*/u"Owner",
+          /*attribute_value=*/u"Machado de Assis",
+          /*old_attribute_value=*/std::nullopt,
+          EntityAttributeUpdateType::kNewEntityAttributeAdded),
+      EntityAttributeUpdateDetails(
+          /*attribute_name=*/u"Model",
+          /*attribute_value=*/u"Käfer", /*old_attribute_value=*/std::nullopt,
+          EntityAttributeUpdateType::kNewEntityAttributeAdded),
+      EntityAttributeUpdateDetails(
+          /*attribute_name=*/u"Maker",
+          /*attribute_value=*/u"Volkswagen",
+          /*old_attribute_value=*/std::nullopt,
+          EntityAttributeUpdateType::kNewEntityAttributeAdded)};
+  ON_CALL(mock_controller(), GetUpdatedAttributesDetails())
+      .WillByDefault(Return(details));
+  ShowAndVerifyUi();
+}
+
+IN_PROC_BROWSER_TEST_P(AutofillAiImportDataBubbleViewBrowsertest,
+                       WalletableEntity_Update_WithoutDisclosure) {
   ON_CALL(mock_controller(), GetSaveUpdateDialogTitle())
       .WillByDefault(Return(l10n_util::GetStringUTF16(
           IDS_AUTOFILL_AI_UPDATE_VEHICLE_ENTITY_DIALOG_TITLE)));
   ON_CALL(mock_controller(), IsSavePrompt()).WillByDefault(Return(false));
   ON_CALL(mock_controller(), IsWalletableEntity()).WillByDefault(Return(true));
+  ON_CALL(mock_controller(), IsEligibleForWalletPassDisclosure())
+      .WillByDefault(Return(false));
+  ON_CALL(mock_controller(), GetNoticeStringId())
+      .WillByDefault(
+          Return(IDS_AUTOFILL_AI_UPDATE_ENTITY_TO_WALLET_DIALOG_SUBTITLE));
   ON_CALL(mock_controller(), GetPrimaryAccountEmail())
       .WillByDefault(Return(u"machadodeassis@gmail.com"));
   std::vector<EntityAttributeUpdateDetails> details = {
@@ -269,6 +328,8 @@ IN_PROC_BROWSER_TEST_P(AutofillAiImportDataBubbleViewBrowsertest,
           EntityAttributeUpdateType::kNewEntityAttributeUnchanged)};
   ON_CALL(mock_controller(), GetUpdatedAttributesDetails())
       .WillByDefault(Return(details));
+  ON_CALL(mock_controller(), GetNoticeStringId())
+      .WillByDefault(Return(IDS_AUTOFILL_AI_UPDATE_ENTITY_DIALOG_SUBTITLE));
   ShowAndVerifyUi();
 }
 
@@ -329,5 +390,3 @@ INSTANTIATE_TEST_SUITE_P(
 
 }  // namespace
 }  // namespace autofill
-
-#endif  // CHROME_BROWSER_UI_VIEWS_AUTOFILL_AUTOFILL_AI_SAVE_OR_UPDATE_AUTOFILL_AI_DATA_BUBBLE_VIEW_BROWSERTEST_CC_H_

@@ -63,9 +63,9 @@ class SelectionForUndoStep;
 enum class DeleteDirection;
 enum class DeleteMode { kSimple, kSmart };
 enum class InsertMode { kSimple, kSmart };
-enum class DragSourceType { kHTMLSource, kPlainTextSource };
+enum class DragSourceType { kHtmlSource, kPlainTextSource };
 enum class EditorParagraphSeparator { kIsDiv, kIsP };
-enum class EditorCommandSource { kMenuOrKeyBinding, kDOM };
+enum class EditorCommandSource { kMenuOrKeyBinding, kDom };
 
 class CORE_EXPORT Editor final : public GarbageCollected<Editor> {
  public:
@@ -111,8 +111,8 @@ class CORE_EXPORT Editor final : public GarbageCollected<Editor> {
   void ApplyParagraphStyleToSelection(CSSPropertyValueSet*,
                                       InputEvent::InputType);
 
-  void SetShouldStyleWithCSS(bool flag) { should_style_with_css_ = flag; }
-  bool ShouldStyleWithCSS() const { return should_style_with_css_; }
+  void SetShouldStyleWithCss(bool flag) { should_style_with_css_ = flag; }
+  bool ShouldStyleWithCss() const { return should_style_with_css_; }
 
   EditorCommand CreateCommand(const String& command_name)
       const;  // Command source is CommandFromMenuOrKeyBinding.
@@ -163,7 +163,7 @@ class CORE_EXPORT Editor final : public GarbageCollected<Editor> {
 
   void Clear();
 
-  SelectionInDOMTree SelectionForCommand(Event*);
+  SelectionInDomTree SelectionForCommand(Event*);
 
   KillRing& GetKillRing() const { return *kill_ring_; }
 
@@ -215,7 +215,7 @@ class CORE_EXPORT Editor final : public GarbageCollected<Editor> {
   void ReplaceSelectionAfterDragging(DocumentFragment*,
                                      InsertMode,
                                      DragSourceType,
-                                     DataTransfer* = nullptr);
+                                     DataTransfer*);
 
   // Return false if frame was destroyed by event handler, should stop executing
   // remaining actions.
@@ -253,12 +253,15 @@ class CORE_EXPORT Editor final : public GarbageCollected<Editor> {
   Member<LocalFrame> frame_;
   Member<CompositeEditCommand> last_edit_command_;
   const Member<UndoStack> undo_stack_;
-  int prevent_reveal_selection_;
-  bool should_start_new_kill_ring_sequence_;
-  bool should_style_with_css_;
+  int prevent_reveal_selection_ = 0;
+  bool should_start_new_kill_ring_sequence_ = false;
+  // This is off by default, since most editors want this behavior (this
+  // matches IE but not FF).
+  bool should_style_with_css_ = false;
   const std::unique_ptr<KillRing> kill_ring_;
   VisibleSelection mark_;
-  EditorParagraphSeparator default_paragraph_separator_;
+  EditorParagraphSeparator default_paragraph_separator_ =
+      EditorParagraphSeparator::kIsDiv;
   Member<EditingStyle> typing_style_;
   bool mark_is_directional_ = false;
   HeapHashSet<Member<ImageResourceObserver>> image_resource_observers_;

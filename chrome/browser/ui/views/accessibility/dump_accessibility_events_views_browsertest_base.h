@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "base/files/file_path.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/browser/scoped_accessibility_mode.h"
@@ -22,6 +23,8 @@
 #include "ui/views/widget/widget.h"
 
 namespace views {
+
+class EventRecordingSession;
 
 // Test parameters combining platform API type and ViewsAX feature state.
 struct ViewsEventTestParams {
@@ -60,12 +63,15 @@ class DumpAccessibilityEventsViewsTestBase
       std::vector<base::test::FeatureRef>* enabled_features,
       std::vector<base::test::FeatureRef>* disabled_features);
 
-  // Stops recording, compares events against the expectation file, and
-  // reports any differences as test failures.
-  void EndTestAndCompareEvents(const std::string& test_name);
-
-  // Runs action, then compares recorded events against expectation file.
-  void RunEventTest(const std::string& test_name, base::OnceClosure action);
+  // Creates an event recording session for the given test. Checks whether an
+  // expectation file exists for the current platform and API type; if not,
+  // returns an invalid session (operator bool() returns false). Filters should
+  // be configured before calling this.
+  //
+  // Prefer using the BEGIN_RECORDING_EVENTS_OR_SKIP() macro instead of calling
+  // this directly.
+  [[nodiscard]] EventRecordingSession BeginRecordingEvents(
+      const std::string& test_name);
 
   virtual std::unique_ptr<ui::AXEventRecorder> CreateEventRecorder();
 
@@ -83,6 +89,8 @@ class DumpAccessibilityEventsViewsTestBase
 
   base::FilePath GetExpectationDirectory() const;
 
+  // Returns event-log filters shared by tests in a fixture. Event logs are
+  // denied by default; tests must allow the platform events they assert.
   virtual std::vector<ui::AXPropertyFilter> DefaultFilters() const;
 
   Widget* widget() { return widget_.get(); }
@@ -95,6 +103,17 @@ class DumpAccessibilityEventsViewsTestBase
   void AddAllowFilter(const std::string& filter_str);
   void AddDenyFilter(const std::string& filter_str);
 
+  // Pumps the message loop until the event recorder captures an event whose
+  // string representation starts with |event_prefix|, or until a timeout.
+  // Returns true if a matching event was captured, false on timeout.
+  //
+  // Use this in UIA tests after the action that fires the event, before the
+  // EventRecordingSession goes out of scope. This prevents a race where the
+  // UIA TestComplete sentinel (fired from a different HWND than the tooltip
+  // widget) is delivered to the handler before the tooltip event, causing
+  // the event to be discarded.
+  [[nodiscard]] bool WaitForCapturedEvent(const std::string& event_prefix);
+
   // Parses a multi-line string of filter directives using the same format
   // as accessibility test expectation files (parsed via AXInspectScenario).
   // Only directives matching the current platform are applied. Example:
@@ -106,11 +125,23 @@ class DumpAccessibilityEventsViewsTestBase
 
   virtual void OnDiffFailed();
 
+  // Collects event logs from the recorder, applies filters, and optionally
+  // sorts them. Subclasses can override to post-process event strings (e.g.,
+  // strip properties that vary between ViewsAX enabled/disabled paths).
+  virtual std::vector<std::string> CollectEventLogs();
+
+  // Waits for any pending WidgetAXManager serialization to complete.
+  // Use this instead of RunUntilIdle(), which is brittle because it
+  // guesses async timing rather than waiting for a specific signal.
+  void WaitForPendingSerialization();
+
  private:
-  void BeginRecordingEvents();
+  friend class EventRecordingSession;
+
   void SetUpTestWidget();
+  void StopRecordingAndCompare(const std::string& test_name);
+
   base::FilePath GetExpectationFilePath(const std::string& test_name) const;
-  std::vector<std::string> CollectEventLogs();
   std::vector<std::string> FilterEventLogs(
       const std::vector<std::string>& event_logs) const;
   bool ValidateAgainstExpectation(const std::string& test_name,
@@ -124,6 +155,40 @@ class DumpAccessibilityEventsViewsTestBase
   std::unique_ptr<content::ScopedAccessibilityMode> scoped_ax_mode_;
   bool recording_events_ = false;
   bool sort_events_ = true;
+};
+
+// RAII class that manages the lifecycle of accessibility event recording.
+// Created by DumpAccessibilityEventsViewsTestBase::BeginRecordingEvents().
+// When destroyed, automatically stops recording and compares events against
+// the expectation file (unless StopAndCompare() was already called).
+class EventRecordingSession {
+ public:
+  // Creates an invalid (empty) session.
+  EventRecordingSession();
+  ~EventRecordingSession();
+
+  EventRecordingSession(EventRecordingSession&& other);
+  EventRecordingSession& operator=(EventRecordingSession&& other);
+
+  EventRecordingSession(const EventRecordingSession&) = delete;
+  EventRecordingSession& operator=(const EventRecordingSession&) = delete;
+
+  // Returns true if the session is valid (expectations exist and recording
+  // is active).
+  explicit operator bool() const { return test_ != nullptr; }
+
+  // Manually stops recording and compares events against the expectation
+  // file. Must only be called once. After this, the destructor is a no-op.
+  void StopAndCompare();
+
+ private:
+  friend class DumpAccessibilityEventsViewsTestBase;
+  EventRecordingSession(DumpAccessibilityEventsViewsTestBase* test,
+                        std::string test_name);
+
+  raw_ptr<DumpAccessibilityEventsViewsTestBase> test_ = nullptr;
+  std::string test_name_;
+  bool compared_ = false;
 };
 
 struct EventTestPassToString {
@@ -143,6 +208,20 @@ struct EventTestPassToString {
     if (IsViewsAXEnabled()) {                          \
       GTEST_SKIP() << "Test skipped: ViewsAX enabled"; \
     }                                                  \
+  } while (0)
+
+// Begins event recording and skips the test if no expectation file exists
+// for the current platform. The recording session variable is named
+// `event_recording_session_` and is accessible in the test body. Events are
+// automatically compared against expectations when the session goes out of
+// scope, or earlier via event_recording_session_.StopAndCompare().
+#define BEGIN_RECORDING_EVENTS_OR_SKIP(test_name)                         \
+  auto event_recording_session_ = BeginRecordingEvents(test_name);        \
+  do {                                                                    \
+    if (!event_recording_session_) {                                      \
+      GTEST_SKIP() << "No expectation file for " << (test_name) << " on " \
+                   << GetTestParams().ToString();                         \
+    }                                                                     \
   } while (0)
 
 // Skip the test when ViewsAX is disabled. Use when a test only applies to

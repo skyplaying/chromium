@@ -120,18 +120,14 @@ gfx::Rect SystemWebAppDelegate::GetDefaultBounds(
   return {};
 }
 
-bool SystemWebAppDelegate::HasCustomTabMenuModel() const {
-  return false;
-}
-
-std::unique_ptr<ui::SimpleMenuModel> SystemWebAppDelegate::GetTabMenuModel(
-    ui::SimpleMenuModel::Delegate* delegate) const {
-  return nullptr;
+std::optional<base::flat_set<tabs::TabContextMenuCommand>>
+SystemWebAppDelegate::GetAllowedTabMenuCommands() const {
+  return std::nullopt;
 }
 
 bool SystemWebAppDelegate::ShouldShowTabContextMenuShortcut(
     Profile* profile,
-    int command_id) const {
+    tabs::TabContextMenuCommand command) const {
   return true;
 }
 
@@ -145,10 +141,6 @@ bool SystemWebAppDelegate::IsUrlInSystemAppScope(const GURL& url) const {
 
 bool SystemWebAppDelegate::UseSystemThemeColor() const {
   return true;
-}
-
-bool SystemWebAppDelegate::ShouldAnimateThemeChanges() const {
-  return false;
 }
 
 bool SystemWebAppDelegate::ShouldPinTab(GURL url) const {

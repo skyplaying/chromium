@@ -56,6 +56,7 @@ class MockVideoCaptureDevice final
           uint32_t,
           base::OnceCallback<void(media::mojom::ApplySubCaptureTargetResult)>));
   MOCK_METHOD0(RequestRefreshFrame, void());
+  MOCK_METHOD0(InvalidateBuffers, void());
   MOCK_METHOD1(OnUtilizationReport, void(media::VideoCaptureFeedback));
 };
 
@@ -205,7 +206,8 @@ class MockVideoCaptureObserver final
 media::mojom::VideoFrameInfoPtr GetVideoFrameInfo() {
   return media::mojom::VideoFrameInfo::New(
       base::TimeDelta(), media::VideoFrameMetadata(), media::PIXEL_FORMAT_I420,
-      gfx::Size(320, 180), gfx::Rect(320, 180), kNotPremapped,
+      gfx::Size(320, 180), gfx::Rect(320, 180),
+      /*natural_size=*/gfx::Size(320, 180), kNotPremapped,
       gfx::ColorSpace::CreateREC709(), nullptr);
 }
 

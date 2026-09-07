@@ -57,6 +57,8 @@ using ::testing::NotNull;
 
 namespace media {
 
+using Error = AudioInputStream::AudioInputCallback::Error;
+
 namespace {
 
 constexpr char kMockApplicationLoopbackDeviceId[] = "applicationLoopback:12345";
@@ -93,7 +95,7 @@ class MockAudioInputCallback : public AudioInputStream::AudioInputCallback {
                double volume,
                const AudioGlitchInfo& glitch_info),
               (override));
-  MOCK_METHOD(void, OnError, (), (override));
+  MOCK_METHOD(void, OnError, (Error), (override));
 };
 
 class FakeAudioInputCallback : public AudioInputStream::AudioInputCallback {
@@ -110,6 +112,7 @@ class FakeAudioInputCallback : public AudioInputStream::AudioInputCallback {
   FakeAudioInputCallback& operator=(const FakeAudioInputCallback&) = delete;
 
   bool error() const { return error_; }
+  std::optional<Error> last_error_code() const { return last_error_code_; }
   int num_callbacks() const { return num_callbacks_; }
   int num_received_audio_frames() const { return num_received_audio_frames_; }
 
@@ -135,8 +138,9 @@ class FakeAudioInputCallback : public AudioInputStream::AudioInputCallback {
     data_event_.Signal();
   }
 
-  void OnError() override {
+  void OnError(Error error_code) override {
     error_ = true;
+    last_error_code_ = error_code;
     if (!error_event_.IsSignaled()) {
       error_event_.Signal();
     }
@@ -148,6 +152,7 @@ class FakeAudioInputCallback : public AudioInputStream::AudioInputCallback {
   base::WaitableEvent data_event_;
   base::WaitableEvent error_event_;
   bool error_;
+  std::optional<Error> last_error_code_;
 };
 
 class FakeAudioOutputCallback : public AudioOutputStream::AudioSourceCallback {
@@ -233,8 +238,7 @@ class WriteToFileAudioSink : public AudioInputStream::AudioInputCallback {
               const AudioGlitchInfo& glitch_info) override {
     const int num_samples = src->frames() * src->channels();
     auto interleaved = base::HeapArray<int16_t>::Uninit(num_samples);
-    src->ToInterleaved<SignedInt16SampleTypeTraits>(src->frames(),
-                                                    interleaved.data());
+    src->ToInterleaved<SignedInt16SampleTypeTraits>(interleaved.as_span());
 
     // Store data data in a temporary buffer to avoid making blocking
     // fwrite() calls in the audio callback. The complete buffer will be
@@ -245,7 +249,7 @@ class WriteToFileAudioSink : public AudioInputStream::AudioInputCallback {
     }
   }
 
-  void OnError() override {}
+  void OnError(Error error_code) override {}
 
  private:
   media::SeekableBuffer buffer_;
@@ -695,6 +699,19 @@ class WinAudioInputStreamErrorTest : public WinAudioInputTest {
   }
 
  protected:
+  WASAPIAudioInputStream* GetUnderlyingWASAPIStream() {
+    CHECK(stream_.get());
+    // The stream is expected to be an AudioInputStreamDataInterceptor
+    // wrapping a WASAPIAudioInputStream.
+    auto* interceptor =
+        static_cast<AudioInputStreamDataInterceptor*>(stream_.get());
+    CHECK(interceptor);
+    auto* wasapi_stream = static_cast<WASAPIAudioInputStream*>(
+        interceptor->GetUnderlyingStreamForTesting());
+    CHECK(wasapi_stream);
+    return wasapi_stream;
+  }
+
   void SetUp() override {
     WinAudioInputTest::SetUp();
     // Abort early if requirements are not met.
@@ -723,17 +740,7 @@ class WinAudioInputStreamErrorTest : public WinAudioInputTest {
 
   // Helper method to call SimulateErrorForTesting on the underlying stream.
   void SimulateErrorOnStream() {
-    ASSERT_TRUE(stream_.get());
-    // The stream is expected to be an AudioInputStreamDataInterceptor
-    // wrapping a WASAPIAudioInputStream.
-    AudioInputStreamDataInterceptor* interceptor =
-        static_cast<AudioInputStreamDataInterceptor*>(stream_.get());
-    ASSERT_TRUE(interceptor);
-    WASAPIAudioInputStream* wasapi_stream =
-        static_cast<WASAPIAudioInputStream*>(
-            interceptor->GetUnderlyingStreamForTesting());
-    ASSERT_TRUE(wasapi_stream);
-    wasapi_stream->SimulateErrorForTesting();
+    GetUnderlyingWASAPIStream()->SimulateErrorForTesting();
   }
 
   AudioDeviceInfoAccessorForTests device_info_accessor_;
@@ -756,11 +763,57 @@ TEST_F(WinAudioInputStreamErrorTest, WASAPIAudioInputStreamOnError) {
   // Wait for the OnError call.
   sink.WaitForError();
   EXPECT_TRUE(sink.error());
+  EXPECT_EQ(sink.last_error_code(), Error::kRuntimeError);
 
   // In this state, the inner audio-thread loop should be cancelled due to the
   // previous error. Verify it by waiting for data callbacks and ensure that
   // we time out.
   EXPECT_FALSE(sink.WaitForDataWithTimeout(base::Milliseconds(100)));
+}
+
+// Covers the case where the capture thread has already been created but
+// starting the underlying audio client fails. In that situation the capture
+// thread is already blocked waiting for either `audio_samples_ready_event_` or
+// `stop_capture_event_`, but a failed IAudioClient::Start() means the audio
+// engine will never signal `audio_samples_ready_event_`. The thread therefore
+// cannot make progress or exit on its own, and Stop() / Close() must still
+// signal shutdown, join the thread, and avoid hitting a DCHECK.
+//
+// This test injects a failure into IAudioClient::Start() after
+// WASAPIAudioInputStream has already created its capture thread. It then calls
+// Start(), verifies that the client reports the failure through OnError(), and
+// confirms that the capture thread was still created even though startup
+// failed. Then it explicitly calls Stop() to trigger the shutdown sequence and
+// verifies that the capture thread was properly joined and cleaned up without
+// hitting a DCHECK.
+//
+// Find more details in https://issues.chromium.org/issues/483430706.
+TEST_F(WinAudioInputStreamErrorTest,
+       WASAPIAudioInputStreamForceStartFailureStopAndClose) {
+  auto* wasapi_stream = GetUnderlyingWASAPIStream();
+  wasapi_stream->OverrideAudioClientStartCallbackForTesting(
+      base::BindRepeating([](IAudioClient* audio_client) {
+        CHECK(audio_client);
+        return AUDCLNT_E_DEVICE_INVALIDATED;
+      }));
+
+  // Start the stream then expect an error.
+  FakeAudioInputCallback sink;
+  stream_->Start(&sink);
+
+  // Wait for the OnError call.
+  sink.WaitForError();
+  EXPECT_TRUE(sink.error());
+  EXPECT_EQ(sink.last_error_code(), Error::kStartupFailed);
+
+  // Ensure the capture thread was created even though Start() failed.
+  EXPECT_TRUE(wasapi_stream->HasCaptureThreadForTesting());
+
+  // Explicitly trigger the cleanup phase that we are testing.
+  stream_->Stop();
+
+  // Cleanly verify that the thread was joined and the resource was freed.
+  EXPECT_FALSE(wasapi_stream->HasCaptureThreadForTesting());
 }
 
 TEST_F(WinAudioInputTest, WASAPIAudioInputStreamTestPacketSizes) {
@@ -1033,6 +1086,7 @@ TEST_P(WinAudioProcessLoopbackTest, OpenStreamAudioClientActivationFailed) {
   histogram_tester_.ExpectBucketCount(
       "Media.Audio.Capture.Win.GetAudioClientTimedOut", false, 1);
 }
+
 
 TEST_P(WinAudioProcessLoopbackTest, SuccessfulCapture) {
   ASSERT_THAT(stream_->Open(), Eq(AudioInputStream::OpenOutcome::kSuccess));

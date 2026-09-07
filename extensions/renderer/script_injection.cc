@@ -34,6 +34,7 @@
 #include "third_party/blink/public/web/web_local_frame.h"
 #include "third_party/blink/public/web/web_script_execution_callback.h"
 #include "third_party/blink/public/web/web_script_source.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 
 using perfetto::protos::pbzero::ChromeTrackEvent;
 
@@ -88,7 +89,8 @@ ScriptInjection::ScriptInjection(
       frame_watcher_(new FrameWatcher(render_frame, this)) {
   CHECK(injection_host_.get());
   TRACE_EVENT_BEGIN(
-      "extensions", "ScriptInjection", perfetto::Track::FromPointer(this),
+      "extensions", "ScriptInjection",
+      perfetto::NamedTrack::FromPointer("extensions::ScriptInjection", this),
       ChromeTrackEvent::kRenderProcessHost, content::RenderThread::Get(),
       ChromeTrackEvent::kChromeExtensionId,
       ExtensionIdForTracing(host_id().id));
@@ -98,11 +100,12 @@ ScriptInjection::~ScriptInjection() {
   if (!complete_)
     NotifyWillNotInject(ScriptInjector::InjectFailureReason::kWontInject);
 
-  TRACE_EVENT_END("extensions", perfetto::Track::FromPointer(this),
-                  ChromeTrackEvent::kRenderProcessHost,
-                  content::RenderThread::Get(),
-                  ChromeTrackEvent::kChromeExtensionId,
-                  ExtensionIdForTracing(injection_host_ ? host_id().id : ""));
+  TRACE_EVENT_END(
+      "extensions",
+      perfetto::NamedTrack::FromPointer("extensions::ScriptInjection", this),
+      ChromeTrackEvent::kRenderProcessHost, content::RenderThread::Get(),
+      ChromeTrackEvent::kChromeExtensionId,
+      ExtensionIdForTracing(injection_host_ ? host_id().id : ""));
 }
 
 ScriptInjection::InjectionResult ScriptInjection::TryToInject(
@@ -303,9 +306,9 @@ void ScriptInjection::InjectJs(std::set<std::string>* executing_scripts,
       blink_world_id =
           IsolatedWorldManager::GetInstance().GetOrCreateIsolatedWorldForHost(
               *injection_host_, execution_world, world_id);
-      if (injection_host_->id().type == mojom::HostID::HostType::kExtensions &&
-          log_activity_) {
-        DOMActivityLogger::AttachToWorld(blink_world_id, host_string_id);
+      if (injection_host_->id().type == mojom::HostID::HostType::kExtensions) {
+        DOMActivityLogger::AttachToWorldIfEnabled(blink_world_id,
+                                                  host_string_id);
       }
 
       break;
@@ -314,13 +317,19 @@ void ScriptInjection::InjectJs(std::set<std::string>* executing_scripts,
       break;
   }
 
+  blink::WebString script_injector_id;
+  if (injection_host_->id().type == mojom::HostID::HostType::kExtensions) {
+    script_injector_id = blink::WebString::FromUtf8(host_string_id);
+  }
+
   render_frame_->GetWebFrame()->RequestExecuteScript(
       blink_world_id, sources, injector_->IsUserGesture(), execution_option,
       blink::mojom::LoadEventBlockingOption::kBlock,
       base::BindOnce(&ScriptInjection::OnJsInjectionCompleted,
                      weak_ptr_factory_.GetWeakPtr()),
       blink::BackForwardCacheAware::kPossiblyDisallow,
-      injector_->ExpectsResults(), injector_->ShouldWaitForPromise());
+      injector_->ExpectsResults(), injector_->ShouldWaitForPromise(),
+      script_injector_id);
 }
 
 void ScriptInjection::OnJsInjectionCompleted(std::optional<base::Value> value,

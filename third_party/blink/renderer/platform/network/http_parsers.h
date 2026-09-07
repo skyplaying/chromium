@@ -42,6 +42,7 @@
 #include "services/network/public/mojom/parsed_headers.mojom-blink-forward.h"
 #include "services/network/public/mojom/sri_message_signature.mojom-blink-forward.h"
 #include "services/network/public/mojom/timing_allow_origin.mojom-blink.h"
+#include "services/network/public/mojom/unencoded_digest.mojom-blink-forward.h"
 #include "third_party/blink/renderer/platform/network/content_security_policy_response_headers.h"
 #include "third_party/blink/renderer/platform/network/parsed_content_type.h"
 #include "third_party/blink/renderer/platform/network/server_timing_header.h"
@@ -65,7 +66,8 @@ enum ContentTypeOptionsDisposition {
   kContentTypeOptionsNosniff
 };
 
-using CommaDelimitedHeaderSet = HashSet<String, CaseFoldingHashTraits<String>>;
+using CommaDelimitedHeaderSet =
+    HashSet<String, DeprecatedCaseFoldingHashTraits<String>>;
 
 struct CacheControlHeader {
   DISALLOW_NEW();
@@ -138,18 +140,6 @@ PLATFORM_EXPORT bool ParseMultipartHeadersFromBody(
     ResourceResponse*,
     wtf_size_t* end);
 
-// Extracts the values in a Content-Range header and returns true if all three
-// values are present and valid for a 206 response; otherwise returns false.
-// The following values will be outputted:
-// |*first_byte_position| = inclusive position of the first byte of the range
-// |*last_byte_position| = inclusive position of the last byte of the range
-// |*instance_length| = size in bytes of the object requested
-// If this method returns false, then all of the outputs will be -1.
-PLATFORM_EXPORT bool ParseContentRangeHeaderFor206(const String& content_range,
-                                                   int64_t* first_byte_position,
-                                                   int64_t* last_byte_position,
-                                                   int64_t* instance_length);
-
 PLATFORM_EXPORT std::unique_ptr<ServerTimingHeaderVector>
 ParseServerTimingHeader(const String&);
 
@@ -186,11 +176,20 @@ Vector<network::mojom::blink::ContentSecurityPolicyPtr>
 ParseContentSecurityPolicyHeaders(
     const ContentSecurityPolicyResponseHeaders& headers);
 
+// Parses an allow-origins expression into a CSPSourceList using blink types.
+PLATFORM_EXPORT
+network::mojom::blink::CSPSourceListPtr ParseAllowOrigins(
+    const StringView& raw_value);
+
 // Parses SRI-relevant HTTP Message Signature headers. This wraps
 // network::ParseSRIMessageSignaturesFromHeaders with blink types.
 PLATFORM_EXPORT
 network::mojom::blink::SRIMessageSignaturesPtr
 ParseSRIMessageSignaturesFromHeaders(const String& raw_headers);
+
+PLATFORM_EXPORT
+network::mojom::blink::UnencodedDigestsPtr ParseUnencodedDigestsFromHeaders(
+    const String& raw_headers);
 
 PLATFORM_EXPORT
 network::mojom::blink::TimingAllowOriginPtr ParseTimingAllowOrigin(
@@ -203,6 +202,15 @@ network::mojom::blink::NoVarySearchWithParseErrorPtr ParseNoVarySearch(
 PLATFORM_EXPORT
 String GetNoVarySearchHintConsoleMessage(
     const network::mojom::NoVarySearchParseError& error);
+
+// Returns true if `url1` and `url2` are equivalent under the given
+// No-Vary-Search hint (i.e. they only differ by query parameters that the
+// hint says should be ignored). `no_vary_search` must be non-null.
+PLATFORM_EXPORT bool AreUrlsEquivalentUnderNoVarySearch(
+    const KURL& url1,
+    const KURL& url2,
+    const network::mojom::blink::NoVarySearchPtr& no_vary_search);
+
 }  // namespace blink
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_NETWORK_HTTP_PARSERS_H_

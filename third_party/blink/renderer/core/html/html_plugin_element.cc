@@ -113,13 +113,13 @@ void PluginParameters::AppendNameWithValue(const String& name,
 
 void PluginParameters::MapDataParamToSrc() {
   if (std::ranges::any_of(names_, [](auto name) {
-        return EqualIgnoringASCIICase(name, "src");
+        return EqualIgnoringAsciiCase(name, "src");
       })) {
     return;
   }
 
   auto data = std::ranges::find_if(
-      names_, [](auto name) { return EqualIgnoringASCIICase(name, "data"); });
+      names_, [](auto name) { return EqualIgnoringAsciiCase(name, "data"); });
 
   if (data != names_.end()) {
     AppendNameWithValue(
@@ -167,11 +167,12 @@ void HTMLPlugInElement::SetPersistedPlugin(WebPluginContainerImpl* plugin) {
 }
 
 void HTMLPlugInElement::SetFocused(bool focused,
-                                   mojom::blink::FocusType focus_type) {
+                                   mojom::blink::FocusType focus_type,
+                                   BlurEventBehavior blur_event_behavior) {
   WebPluginContainerImpl* plugin = OwnedPlugin();
   if (plugin)
     plugin->SetFocused(focused, focus_type);
-  HTMLFrameOwnerElement::SetFocused(focused, focus_type);
+  HTMLFrameOwnerElement::SetFocused(focused, focus_type, blur_event_behavior);
 }
 
 bool HTMLPlugInElement::CanProcessDrag() const {
@@ -263,6 +264,7 @@ void HTMLPlugInElement::AttachLayoutTree(AttachContext& context) {
 }
 
 void HTMLPlugInElement::NaturalSizingInfoChanged() {
+  HTMLFrameOwnerElement::NaturalSizingInfoChanged();
   if (auto* embedded_object = GetLayoutEmbeddedObject())
     embedded_object->NaturalSizeChanged();
 }

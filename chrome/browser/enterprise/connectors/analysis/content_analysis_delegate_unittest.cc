@@ -23,15 +23,19 @@
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
+#include "base/test/gtest_util.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
+#include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/enterprise/connectors/common.h"
 #include "chrome/browser/enterprise/connectors/connectors_service.h"
+#include "chrome/browser/enterprise/connectors/referrer_cache_utils.h"
 #include "chrome/browser/enterprise/connectors/test/deep_scanning_test_utils.h"
 #include "chrome/browser/enterprise/connectors/test/fake_content_analysis_delegate.h"
 #include "chrome/browser/policy/dm_token_utils.h"
 #include "chrome/browser/safe_browsing/cloud_content_scanning/deep_scanning_utils.h"
+#include "chrome/browser/safe_browsing/safe_browsing_navigation_observer_manager_factory.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
@@ -41,11 +45,15 @@
 #include "components/enterprise/connectors/core/analysis_settings.h"
 #include "components/enterprise/connectors/core/cloud_content_scanning/binary_upload_service.h"
 #include "components/enterprise/connectors/core/cloud_content_scanning/common.h"
+#include "components/enterprise/connectors/core/cloud_content_scanning/deep_scanning_utils.h"
 #include "components/enterprise/connectors/core/features.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/prefs/testing_pref_service.h"
+#include "components/safe_browsing/content/browser/safe_browsing_navigation_observer.h"
+#include "components/safe_browsing/content/browser/safe_browsing_navigation_observer_manager.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
+#include "components/sessions/content/session_tab_helper.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/browser_test_utils.h"
@@ -53,16 +61,9 @@
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/test_utils.h"
 #include "content/public/test/web_contents_tester.h"
+#include "services/network/public/mojom/referrer_policy.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
-
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "base/values.h"
-#include "chrome/browser/extensions/extension_service.h"  // nogncheck
-#include "chrome/browser/extensions/test_extension_system.h"
-#include "extensions/browser/extension_registrar.h"
-#include "extensions/common/extension.h"
-#include "extensions/common/extension_builder.h"
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#include "third_party/blink/public/mojom/loader/referrer.mojom.h"
 
 #if BUILDFLAG(ENTERPRISE_LOCAL_CONTENT_ANALYSIS)
 #include "chrome/browser/enterprise/connectors/test/fake_content_analysis_sdk_manager.h"  // nogncheck
@@ -174,15 +175,13 @@ class BaseTest : public testing::Test {
         /*disabled_features=*/{});
   }
 
-  void ScanUpload(content::WebContents* web_contents,
-                  ContentAnalysisDelegate::Data data,
-                  ContentAnalysisDelegate::CompletionCallback callback) {
-    // The access point is only used for metrics and choosing the dialog text if
-    // one is shown, so its value doesn't affect the tests in this file and can
-    // always be the same.
-    ContentAnalysisDelegate::CreateForWebContents(web_contents, std::move(data),
-                                                  std::move(callback),
-                                                  DeepScanAccessPoint::UPLOAD);
+  void ScanUpload(
+      content::WebContents* web_contents,
+      ContentAnalysisDelegate::Data data,
+      ContentAnalysisDelegate::CompletionCallback callback,
+      DeepScanAccessPoint access_point = DeepScanAccessPoint::UPLOAD) {
+    ContentAnalysisDelegate::CreateForWebContents(
+        web_contents, std::move(data), std::move(callback), access_point);
   }
 
   void CreateFilesForTest(
@@ -202,8 +201,8 @@ class BaseTest : public testing::Test {
 
   content::WebContents* contents() {
     if (!web_contents_) {
-      content::WebContents::CreateParams params(profile());
-      web_contents_ = content::WebContents::Create(params);
+      web_contents_ = content::WebContentsTester::CreateTestWebContents(
+          profile(), content::SiteInstance::Create(profile()));
     }
     return web_contents_.get();
   }
@@ -222,8 +221,14 @@ class BaseTest : public testing::Test {
     EXPECT_EQ(expect_malware, tags.find("malware") != tags.end());
   }
 
+  void TearDown() override {
+    web_contents_.reset();
+    testing::Test::TearDown();
+  }
+
  protected:
   content::BrowserTaskEnvironment task_environment_;
+  content::RenderViewHostTestEnabler rvh_test_enabler_;
   base::test::ScopedFeatureList scoped_feature_list_;
   TestingPrefServiceSimple pref_service_;
   TestingProfileManager profile_manager_;
@@ -630,8 +635,8 @@ class ContentAnalysisDelegateAuditOnlyTest : public BaseTest {
   // The actual failure response is given for each path.
   std::map<base::FilePath, ContentAnalysisResponse> failures_;
 
-  // DLP response to ovewrite in the callback if present.
-  std::optional<ContentAnalysisResponse> dlp_response_ = std::nullopt;
+  // DLP response to overwrite in the callback if present.
+  std::optional<ContentAnalysisResponse> dlp_response_;
 
 #if BUILDFLAG(ENTERPRISE_LOCAL_CONTENT_ANALYSIS)
   // This installs a fake SDK manager that creates fake SDK clients when
@@ -694,10 +699,40 @@ TEST_F(ContentAnalysisDelegateAuditOnlyTest, StringDataAndReportSuccess) {
   EXPECT_EQ(1,
             test::FakeContentAnalysisDelegate::GetTotalAnalysisRequestsCount());
 
-  // FakeContentAnalysisDelegate is always constructed with UPLOAD; just
-  // verify a success histogram is recorded.
+  // FakeContentAnalysisDelegate is constructed with UPLOAD by default here;
+  // just verify a success histogram is recorded.
   histogram_tester_.ExpectTotalCount(
       "Enterprise.ContentAnalysis.Upload.Success.Duration", 1);
+  EXPECT_TRUE(called);
+}
+
+TEST_F(ContentAnalysisDelegateAuditOnlyTest, StringDataAndReportSuccess_Actor) {
+  base::HistogramTester histogram_tester_;
+
+  GURL url(kTestUrl);
+  ContentAnalysisDelegate::Data data;
+  ASSERT_TRUE(ContentAnalysisDelegate::IsEnabled(profile(), url, &data,
+                                                 BULK_DATA_ENTRY));
+
+  data.text.emplace_back(large_text());
+
+  bool called = false;
+  ScanUpload(
+      contents(), std::move(data),
+      base::BindOnce(
+          [](bool* called, const ContentAnalysisDelegate::Data& data,
+             ContentAnalysisDelegate::Result& result) { *called = true; },
+          &called),
+      enterprise_connectors::DeepScanAccessPoint::ACTOR);
+  RunUntilDone();
+  EXPECT_EQ(1,
+            test::FakeContentAnalysisDelegate::GetTotalAnalysisRequestsCount());
+
+  histogram_tester_.ExpectTotalCount(
+      "Enterprise.OnBulkDataEntry.Actor.DataSize", 1);
+  histogram_tester_.ExpectTotalCount("Enterprise.OnBulkDataEntry.DataSize", 1);
+  histogram_tester_.ExpectTotalCount(
+      "Enterprise.ContentAnalysis.Actor.Success.Duration", 1);
   EXPECT_TRUE(called);
 }
 
@@ -1810,5 +1845,276 @@ TEST_F(ContentAnalysisDelegateWithLocalClient, FailClosed) {
   EXPECT_TRUE(called);
 }
 #endif
+
+using ContentAnalysisDelegateDeleteTest = BaseTest;
+
+TEST_F(ContentAnalysisDelegateDeleteTest, RunsCallbackAndDeletes) {
+  bool callback_ran = false;
+  ContentAnalysisDelegate::Data data;
+  auto delegate = test::FakeContentAnalysisDelegate::Create(
+      run_loop_.QuitClosure(),
+      base::BindRepeating([](const std::string&, const base::FilePath&) {
+        return test::FakeContentAnalysisDelegate::SuccessfulResponse({"dlp"});
+      }),
+      kDmToken, contents(), std::move(data),
+      base::BindLambdaForTesting([&](const ContentAnalysisDelegate::Data& data,
+                                     ContentAnalysisDelegate::Result& result) {
+        callback_ran = true;
+      }),
+      DeepScanAccessPoint::COPY);
+
+  auto* delegate_ptr = delegate.release();
+  delegate_ptr->Delete();
+  RunUntilDone();
+
+  EXPECT_TRUE(callback_ran);
+}
+
+TEST_F(ContentAnalysisDelegateDeleteTest, DoesNotRunCallbackIfAlreadyRun) {
+  int callback_count = 0;
+  ContentAnalysisDelegate::Data data;
+  auto delegate = test::FakeContentAnalysisDelegate::Create(
+      run_loop_.QuitClosure(),
+      base::BindRepeating([](const std::string&, const base::FilePath&) {
+        return test::FakeContentAnalysisDelegate::SuccessfulResponse({"dlp"});
+      }),
+      kDmToken, contents(), std::move(data),
+      base::BindLambdaForTesting(
+          [&](const ContentAnalysisDelegate::Data& data,
+              ContentAnalysisDelegate::Result& result) { callback_count++; }),
+      DeepScanAccessPoint::COPY);
+
+  auto* delegate_ptr = delegate.release();
+  delegate_ptr->BypassWarnings(std::nullopt);
+
+  EXPECT_EQ(1, callback_count);
+
+  delegate_ptr->Delete();
+  RunUntilDone();
+
+  EXPECT_EQ(1, callback_count);
+}
+
+using ContentAnalysisDelegateUpdateFinalResultTest = BaseTest;
+
+class MinimalTestContentAnalysisDelegate : public ContentAnalysisDelegate {
+ public:
+  MinimalTestContentAnalysisDelegate(content::WebContents* web_contents,
+                                     Data data)
+      : ContentAnalysisDelegate(
+            web_contents,
+            std::move(data),
+            base::BindOnce([](const Data& data, Result& result) {}),
+            DeepScanAccessPoint::PASTE) {}
+};
+
+TEST_F(ContentAnalysisDelegateUpdateFinalResultTest, Precedence) {
+  ContentAnalysisDelegate::Data data;
+  data.url = GURL("https://example.com");
+
+  // Create a minimal delegate just to call UpdateFinalResult on it.
+  auto delegate = std::make_unique<MinimalTestContentAnalysisDelegate>(
+      contents(), std::move(data));
+
+  // Initial state should be SUCCESS.
+  EXPECT_EQ(FinalContentAnalysisResult::SUCCESS, delegate->final_result_);
+
+  // Overriding SUCCESS with KEPT_IN_MANAGED_CHROME should work.
+  delegate->UpdateFinalResult(
+      FinalContentAnalysisResult::KEPT_IN_MANAGED_CHROME, "dlp", {});
+  EXPECT_EQ(FinalContentAnalysisResult::KEPT_IN_MANAGED_CHROME,
+            delegate->final_result_);
+
+  // Overriding KEPT_IN_MANAGED_CHROME with FAILURE should work.
+  delegate->UpdateFinalResult(FinalContentAnalysisResult::FAILURE, "dlp", {});
+  EXPECT_EQ(FinalContentAnalysisResult::FAILURE, delegate->final_result_);
+
+  // Attempting to override FAILURE with WARNING should NOT work.
+  delegate->UpdateFinalResult(FinalContentAnalysisResult::WARNING, "dlp", {});
+  EXPECT_EQ(FinalContentAnalysisResult::FAILURE, delegate->final_result_);
+
+  // Attempting to override FAILURE with KEPT_IN_MANAGED_CHROME should
+  // NOT work.
+  delegate->UpdateFinalResult(
+      FinalContentAnalysisResult::KEPT_IN_MANAGED_CHROME, "dlp", {});
+  EXPECT_EQ(FinalContentAnalysisResult::FAILURE, delegate->final_result_);
+}
+
+using ContentAnalysisDelegateReferrerChainTest = BaseTest;
+
+TEST_F(ContentAnalysisDelegateReferrerChainTest, UnaffectedByNavigations) {
+  sessions::SessionTabHelper::CreateForWebContents(
+      contents(),
+      base::BindRepeating(
+          [](content::WebContents*) -> sessions::SessionTabHelperDelegate* {
+            return nullptr;
+          }));
+  safe_browsing::SafeBrowsingNavigationObserver::MaybeCreateForWebContents(
+      contents(), HostContentSettingsMapFactory::GetForProfile(profile()),
+      safe_browsing::SafeBrowsingNavigationObserverManagerFactory::
+          GetForBrowserContext(profile()),
+      profile()->GetPrefs(), /*has_safe_browsing_service=*/true);
+
+  // Navigate to the referring page.
+  content::WebContentsTester::For(contents())
+      ->NavigateAndCommit(GURL("https://referrer.example.com/"));
+
+  // Navigate to the test URL (simulating a link click).
+  auto simulator = content::NavigationSimulator::CreateRendererInitiated(
+      GURL(kTestUrl), contents()->GetPrimaryMainFrame());
+  simulator->SetHasUserGesture(true);
+  simulator->Commit();
+
+  ContentAnalysisDelegate::Data data;
+  data.url = GURL(kTestUrl);
+
+  auto delegate = std::make_unique<MinimalTestContentAnalysisDelegate>(
+      contents(), std::move(data));
+
+  auto initial_referrer_chain = delegate->referrer_chain();
+  ASSERT_GT(initial_referrer_chain.size(), 0);
+  EXPECT_EQ(initial_referrer_chain[0].url(), kTestUrl);
+  EXPECT_EQ(initial_referrer_chain[0].referrer_url(),
+            "https://referrer.example.com/");
+
+  // Navigate to a new URL, effectively creating a new referrer chain for the
+  // WebContents.
+  const GURL new_url("https://example.com/");
+  auto simulator2 = content::NavigationSimulator::CreateRendererInitiated(
+      new_url, contents()->GetPrimaryMainFrame());
+  simulator2->SetHasUserGesture(true);
+  simulator2->Commit();
+
+  auto after_navigation_referrer_chain = delegate->referrer_chain();
+
+  EXPECT_EQ(initial_referrer_chain.size(),
+            after_navigation_referrer_chain.size());
+  for (int i = 0; i < initial_referrer_chain.size(); ++i) {
+    EXPECT_EQ(initial_referrer_chain[i].url(),
+              after_navigation_referrer_chain[i].url());
+    EXPECT_EQ(initial_referrer_chain[i].referrer_url(),
+              after_navigation_referrer_chain[i].referrer_url());
+  }
+
+  // Verify that the underlying SafeBrowsing observer recorded the new chain
+  // correctly.
+  safe_browsing::ReferrerChain current_referrer_chain;
+  safe_browsing::SafeBrowsingNavigationObserverManagerFactory::
+      GetForBrowserContext(profile())
+          ->IdentifyReferrerChainByEventURL(
+              new_url, sessions::SessionTabHelper::IdForTab(contents()),
+              2 /* user_gesture_limit */, &current_referrer_chain);
+
+  ASSERT_GT(current_referrer_chain.size(), 0);
+  EXPECT_EQ(current_referrer_chain[0].url(), "https://example.com/");
+  EXPECT_EQ(current_referrer_chain[0].referrer_url(), kTestUrl);
+}
+
+using ContentAnalysisDelegateFrameUrlChainTest = BaseTest;
+
+TEST_F(ContentAnalysisDelegateFrameUrlChainTest,
+       DefaultToFocusedFrameWhenInitiatingFrameOmitted) {
+  content::WebContentsTester::For(contents())
+      ->NavigateAndCommit(GURL(kTestUrl));
+
+  const GURL child_frame_url("https://subframe.example.com/");
+  content::RenderFrameHostTester* rfh_tester =
+      content::RenderFrameHostTester::For(contents()->GetPrimaryMainFrame());
+
+  content::RenderFrameHost* child_frame =
+      rfh_tester->AppendChild("child_frame");
+  child_frame = content::NavigationSimulator::NavigateAndCommitFromDocument(
+      child_frame_url, child_frame);
+
+  // Focus the child frame.
+  content::FocusWebContentsOnFrame(contents(), child_frame);
+
+  ContentAnalysisDelegate::Data data;
+  data.url = GURL("https://example.com");
+  // data.initiating_frame_id is omitted (std::nullopt).
+
+  auto delegate = std::make_unique<MinimalTestContentAnalysisDelegate>(
+      contents(), std::move(data));
+
+  google::protobuf::RepeatedPtrField<std::string> frame_urls =
+      delegate->frame_url_chain();
+
+  ASSERT_EQ(1, frame_urls.size());
+  EXPECT_EQ(child_frame_url.spec(), frame_urls[0]);
+}
+
+TEST_F(ContentAnalysisDelegateFrameUrlChainTest,
+       UsesInitiatingFrameWhenMainFrameFocused) {
+  content::WebContentsTester::For(contents())
+      ->NavigateAndCommit(GURL(kTestUrl));
+
+  const GURL child_frame_url("https://subframe.example.com/");
+  content::RenderFrameHostTester* rfh_tester =
+      content::RenderFrameHostTester::For(contents()->GetPrimaryMainFrame());
+
+  content::RenderFrameHost* child_frame =
+      rfh_tester->AppendChild("child_frame");
+  child_frame = content::NavigationSimulator::NavigateAndCommitFromDocument(
+      child_frame_url, child_frame);
+
+  // Focus the main frame, simulating focus change away from the child frame.
+  content::FocusWebContentsOnFrame(contents(),
+                                   contents()->GetPrimaryMainFrame());
+
+  ContentAnalysisDelegate::Data data;
+  data.url = GURL("https://example.com");
+  data.initiating_frame_id = child_frame->GetGlobalId();
+
+  auto delegate = std::make_unique<MinimalTestContentAnalysisDelegate>(
+      contents(), std::move(data));
+
+  google::protobuf::RepeatedPtrField<std::string> frame_urls =
+      delegate->frame_url_chain();
+
+  ASSERT_EQ(1, frame_urls.size());
+  EXPECT_EQ(child_frame_url.spec(), frame_urls[0]);
+}
+
+TEST_F(ContentAnalysisDelegateFrameUrlChainTest,
+       UsesInitiatingFrameWhenSiblingFrameFocused) {
+  content::WebContentsTester::For(contents())
+      ->NavigateAndCommit(GURL(kTestUrl));
+
+  const GURL untrusted_frame_url("https://untrusted.example.com/");
+  const GURL trusted_sibling_frame_url("https://trusted-sibling.example.com/");
+
+  content::RenderFrameHostTester* rfh_tester =
+      content::RenderFrameHostTester::For(contents()->GetPrimaryMainFrame());
+
+  content::RenderFrameHost* untrusted_frame =
+      rfh_tester->AppendChild("untrusted_frame");
+  untrusted_frame = content::NavigationSimulator::NavigateAndCommitFromDocument(
+      untrusted_frame_url, untrusted_frame);
+
+  content::RenderFrameHost* trusted_sibling_frame =
+      rfh_tester->AppendChild("trusted_sibling_frame");
+  trusted_sibling_frame =
+      content::NavigationSimulator::NavigateAndCommitFromDocument(
+          trusted_sibling_frame_url, trusted_sibling_frame);
+
+  // Focus the trusted sibling frame, simulating focus shift to a trusted
+  // sibling.
+  content::FocusWebContentsOnFrame(contents(), trusted_sibling_frame);
+
+  ContentAnalysisDelegate::Data data;
+  data.url = GURL("https://example.com");
+  data.initiating_frame_id = untrusted_frame->GetGlobalId();
+
+  auto delegate = std::make_unique<MinimalTestContentAnalysisDelegate>(
+      contents(), std::move(data));
+
+  google::protobuf::RepeatedPtrField<std::string> frame_urls =
+      delegate->frame_url_chain();
+
+  // The chain must contain the untrusted initiating frame, NOT the focused
+  // sibling.
+  ASSERT_EQ(1, frame_urls.size());
+  EXPECT_EQ(untrusted_frame_url.spec(), frame_urls[0]);
+}
 
 }  // namespace enterprise_connectors

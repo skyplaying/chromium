@@ -9,18 +9,22 @@
 #include <string>
 #include <utility>
 
+#include "base/memory/singleton.h"
 #include "base/observer_list.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "extensions/browser/api/automation_internal/automation_internal_api_delegate.h"
 #include "extensions/browser/api/extensions_api_client.h"
+#include "extensions/browser/bad_message.h"
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/process_manager.h"
+#include "extensions/browser/process_map.h"
 #include "extensions/browser/service_worker/worker_id.h"
 #include "extensions/common/api/automation_internal.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_id.h"
+#include "extensions/common/manifest_handlers/automation.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
 #include "ui/accessibility/ax_action_data.h"
@@ -48,15 +52,6 @@ AutomationEventRouter::AutomationEventRouter() {
 
 AutomationEventRouter::~AutomationEventRouter() {
   CHECK(!remote_router_);
-}
-
-void AutomationEventRouter::RegisterListenerForOneTree(
-    const ExtensionId& extension_id,
-    const RenderProcessHostId& listener_rph_id,
-    content::WebContents* web_contents,
-    ui::AXTreeID source_ax_tree_id) {
-  Register(extension_id, listener_rph_id, web_contents, source_ax_tree_id,
-           /*desktop=*/false);
 }
 
 void AutomationEventRouter::RegisterListenerWithDesktopPermission(
@@ -129,10 +124,8 @@ void AutomationEventRouter::DispatchTreeDestroyedEvent(ui::AXTreeID tree_id) {
   }
 }
 
-void AutomationEventRouter::DispatchActionResult(
-    const ui::AXActionData& data,
-    bool result,
-    content::BrowserContext* browser_context) {
+void AutomationEventRouter::DispatchActionResult(const ui::AXActionData& data,
+                                                 bool result) {
   CHECK(!data.source_extension_id.empty());
 
   for (const auto& remote : automation_remote_set_) {
@@ -248,7 +241,7 @@ void AutomationEventRouter::Register(const ExtensionId& extension_id,
   std::vector<WorkerId> all_worker_ids =
       process_manager->GetServiceWorkersForExtension(extension_id);
   for (const WorkerId& worker_id : all_worker_ids) {
-    if (worker_id.render_process_id.GetUnsafeValue() != listener_rph_id) {
+    if (worker_id.render_process_id != listener_rph_id) {
       continue;
     }
 
@@ -290,7 +283,7 @@ void AutomationEventRouter::RenderProcessHostDestroyed(
 
 void AutomationEventRouter::RemoveAutomationListener(
     content::RenderProcessHost* host) {
-  RenderProcessHostId rph_id = host->GetDeprecatedID();
+  RenderProcessHostId rph_id = host->GetID();
   ExtensionId extension_id;
   for (auto listener = listeners_.begin(); listener != listeners_.end();) {
     if ((*listener)->render_process_host_id == rph_id) {
@@ -317,7 +310,7 @@ void AutomationEventRouter::RemoveAutomationListener(
       process_manager->GetServiceWorkersForExtension(extension_id);
 
   for (const WorkerId& worker_id : all_worker_ids) {
-    if (worker_id.render_process_id.GetUnsafeValue() != rph_id) {
+    if (worker_id.render_process_id != rph_id) {
       continue;
     }
     const auto& request_uuid_iter =
@@ -359,6 +352,27 @@ void AutomationEventRouter::BindForRenderer(
     RenderProcessHostId render_process_id,
     mojo::PendingAssociatedReceiver<
         extensions::mojom::RendererAutomationRegistry> receiver) {
+  content::RenderProcessHost* host =
+      content::RenderProcessHost::FromID(render_process_id);
+  if (!host) {
+    return;
+  }
+
+  ProcessMap* process_map = ProcessMap::Get(host->GetBrowserContext());
+  const Extension* extension =
+      process_map
+          ? process_map->GetEnabledExtensionByProcessID(render_process_id)
+          : nullptr;
+
+  const AutomationInfo* automation_info =
+      extension ? AutomationInfo::Get(extension) : nullptr;
+
+  if (!automation_info) {
+    bad_message::ReceivedBadMessage(
+        host, bad_message::AER_INVALID_PROCESS_FOR_AUTOMATION_BINDING);
+    return;
+  }
+
   AutomationEventRouter* router = AutomationEventRouter::GetInstance();
   CHECK(router);
 

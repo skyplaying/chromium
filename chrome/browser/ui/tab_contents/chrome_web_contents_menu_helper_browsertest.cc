@@ -8,10 +8,8 @@
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/prefs/browser_prefs.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/testing_profile.h"
@@ -25,6 +23,7 @@
 #include "content/public/test/browser_test_utils.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/window_open_disposition.h"
 
 using ::testing::Eq;
 
@@ -34,11 +33,11 @@ using ChromeWebContentsMenuHelperBrowserTest = InProcessBrowserTest;
 
 IN_PROC_BROWSER_TEST_F(ChromeWebContentsMenuHelperBrowserTest,
                        AllowContextMenuAccessThroughPreferences) {
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       prefs::kDefaultSearchProviderContextMenuAccessAllowed, true);
 
   // Make sure we have 1 window to start with.
-  EXPECT_EQ(1U, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1U, GlobalBrowserCollection::GetInstance()->GetSize());
 
   ui_test_utils::NavigateToURLWithDisposition(
       browser(), GURL("http://foo/1"),
@@ -55,11 +54,11 @@ IN_PROC_BROWSER_TEST_F(ChromeWebContentsMenuHelperBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(ChromeWebContentsMenuHelperBrowserTest,
                        DisallowContextMenuAccessThroughPreferences) {
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       prefs::kDefaultSearchProviderContextMenuAccessAllowed, false);
 
   // Make sure we have 1 window to start with.
-  EXPECT_EQ(1U, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1U, GlobalBrowserCollection::GetInstance()->GetSize());
 
   ui_test_utils::NavigateToURLWithDisposition(
       browser(), GURL("http://foo/1"),

@@ -13,6 +13,9 @@ import Foundation
     passkeys: [CredentialExchangePasskey],
     exporterDisplayName: NSString,
     stats: ImportStats)
+
+  /// Called when the import failed with an error.
+  @objc func onImportError()
 }
 
 /// Handles importing user credentials through ASCredentialImportManager.
@@ -52,7 +55,7 @@ import Foundation
           stats: translatedData.stats
         )
       } catch {
-        // TODO(crbug.com/445889307): Handle errors.
+        delegate?.onImportError()
       }
     }
   }
@@ -93,10 +96,37 @@ import Foundation
                 url: optionalUrl,
                 username: basicAuth.userName?.value ?? "",
                 password: basicAuth.password?.value ?? "",
-                note: note
+                note: note,
+                creationDate: item.created
               ))
           case .passkey(let passkey):
             stats.passkeyCount += 1
+            var hmacSecret: Data? = nil
+            var hmacSecretAlgorithm: String? = nil
+            var largeBlob: Data? = nil
+            var largeBlobUncompressedSize: NSNumber? = nil
+            #if compiler(>=6.3)
+              if #available(iOS 26.4, *) {
+                if let hmacCred = passkey.fido2Extensions?.hmacCredentials {
+                  if !hmacCred.credentialWithUV.isEmpty {
+                    hmacSecret = hmacCred.credentialWithUV
+                  } else if !hmacCred.credentialWithoutUV.isEmpty {
+                    hmacSecret = hmacCred.credentialWithoutUV
+                  }
+                  if hmacSecret != nil {
+                    if hmacCred.algorithm == .sha256 {
+                      hmacSecretAlgorithm = "sha256"
+                    } else {
+                      hmacSecretAlgorithm = "unsupported"
+                    }
+                  }
+                }
+                if let lb = passkey.fido2Extensions?.largeBlob {
+                  largeBlob = lb.data
+                  largeBlobUncompressedSize = NSNumber(value: lb.uncompressedSize)
+                }
+              }
+            #endif
             passkeys.append(
               CredentialExchangePasskey(
                 credentialId: passkey.credentialID,
@@ -104,7 +134,12 @@ import Foundation
                 userName: passkey.userName,
                 userDisplayName: passkey.userDisplayName,
                 userId: passkey.userHandle,
-                privateKey: passkey.key))
+                privateKey: passkey.key,
+                creationDate: item.created,
+                hmacSecret: hmacSecret,
+                hmacSecretAlgorithm: hmacSecretAlgorithm,
+                largeBlob: largeBlob,
+                largeBlobUncompressedSize: largeBlobUncompressedSize))
           case .address:
             stats.addressCount += 1
           case .apiKey:

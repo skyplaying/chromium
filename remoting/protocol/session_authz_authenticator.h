@@ -11,6 +11,7 @@
 #include <string_view>
 
 #include "base/functional/callback.h"
+#include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "remoting/base/constants.h"
 #include "remoting/base/http_status.h"
@@ -18,10 +19,8 @@
 #include "remoting/base/session_policies.h"
 #include "remoting/proto/session_authz_service.h"
 #include "remoting/protocol/authenticator.h"
-#include "remoting/protocol/channel_authenticator.h"
 #include "remoting/protocol/credentials_type.h"
 #include "remoting/protocol/session_authz_reauthorizer.h"
-#include "third_party/libjingle_xmpp/xmllite/xmlelement.h"
 
 namespace remoting::protocol {
 
@@ -72,8 +71,6 @@ class SessionAuthzAuthenticator : public Authenticator {
   JingleAuthentication GetNextMessage() override;
   const std::string& GetAuthKey() const override;
   const SessionPolicies* GetSessionPolicies() const override;
-  std::unique_ptr<ChannelAuthenticator> CreateChannelAuthenticator()
-      const override;
 
   void SetReauthorizerForTesting(
       std::unique_ptr<SessionAuthzReauthorizer> reauthorizer);
@@ -149,6 +146,8 @@ class SessionAuthzAuthenticator : public Authenticator {
 
   std::string session_id_;
   std::string host_token_;
+
+  base::WeakPtrFactory<SessionAuthzAuthenticator> weak_factory_{this};
 };
 
 }  // namespace remoting::protocol

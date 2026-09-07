@@ -66,6 +66,7 @@ class FrameNodeImpl
                 FrameNodeImpl* outer_document_for_inner_frame_root,
                 int render_frame_id,
                 const blink::LocalFrameToken& frame_token,
+                const perfetto::Track& tracing_track,
                 content::BrowsingInstanceId browsing_instance_id,
                 content::SiteInstanceGroupId site_instance_group_id,
                 bool is_current,
@@ -101,6 +102,7 @@ class FrameNodeImpl
   content::SiteInstanceGroupId GetSiteInstanceGroupId() const override;
   resource_attribution::FrameContext GetResourceContext() const override;
   bool IsMainFrame() const override;
+
   LifecycleState GetLifecycleState() const override;
   bool HasNonemptyBeforeUnload() const override;
   const GURL& GetURL() const override;
@@ -134,11 +136,11 @@ class FrameNodeImpl
 
   // Getters for const properties.
   FrameNodeImpl* parent_frame_node() const;
+  FrameNodeImpl* parent_or_outer_document() const;
   FrameNodeImpl* parent_or_outer_document_or_embedder() const;
   PageNodeImpl* page_node() const;
   ProcessNodeImpl* process_node() const;
   int render_frame_id() const;
-  perfetto::Track tracing_track() const;
 
   // Getters for non-const properties. These are not thread safe.
   NodeSetView<FrameNodeImpl*> child_frame_nodes() const;
@@ -216,6 +218,7 @@ class FrameNodeImpl
   // Rest of FrameNode implementation. These are private so that users of the
   // impl use the private getters rather than the public interface.
   const FrameNode* GetParentFrameNode() const override;
+  const FrameNode* GetParentOrOuterDocument() const override;
   const FrameNode* GetParentOrOuterDocumentOrEmbedder() const override;
   const PageNode* GetPageNode() const override;
   const ProcessNode* GetProcessNode() const override;
@@ -347,8 +350,7 @@ class FrameNodeImpl
   const RenderFrameHostProxy render_frame_host_proxy_;
 
   // Perfetto track that can record trace events for the page.
-  const base::trace_event::TrackRegistration<perfetto::NamedTrack>
-      tracing_track_;
+  const perfetto::Track tracing_track_;
 
   base::ScopedObservation<TracingObserverList, TracingObserver>
       tracing_observation_{this};

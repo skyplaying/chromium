@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/lens/overlay_base_controller.h"
 
+#include "base/i18n/rtl.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
@@ -11,8 +12,11 @@
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/lens/lens_preselection_bubble.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
+#include "chrome/browser/ui/side_panel/side_panel_ui.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/frame/multi_contents_view.h"
 #include "chrome/browser/ui/views/interaction/browser_elements_views.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/webui/webui_embedding_context.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
@@ -26,6 +30,7 @@
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/controls/webview/web_contents_set_background_color.h"
 #include "ui/views/controls/webview/webview.h"
+#include "ui/views/layout/layout_provider.h"
 #include "ui/views/view_class_properties.h"
 
 namespace {
@@ -73,13 +78,6 @@ OverlayBaseController::OverlayBaseController(tabs::TabInterface* tab,
 
 OverlayBaseController::~OverlayBaseController() {
   state_ = State::kOff;
-  if (overlay_web_view_) {
-    // Remove render frame observer.
-    overlay_web_view_->GetWebContents()
-        ->GetPrimaryMainFrame()
-        ->GetProcess()
-        ->RemoveObserver(this);
-  }
 }
 
 bool OverlayBaseController::IsOverlayShowing() const {
@@ -127,6 +125,10 @@ void OverlayBaseController::OnViewBoundsChanged(views::View* observed_view) {
     // views local coordinate system, the blur should be positioned at (0,0).
     overlay_blur_layer_delegate_->layer()->SetBounds(
         overlay_view_->GetLocalBounds());
+  }
+
+  if (promo_anchor_) {
+    promo_anchor_->SetBounds(0, 0, 1, 1);
   }
 }
 
@@ -210,12 +212,37 @@ void OverlayBaseController::RenderProcessExited(
               : DismissalSource::kOverlayRendererClosedUnexpectedly));
 }
 
+void OverlayBaseController::RenderProcessHostDestroyed(
+    content::RenderProcessHost* host) {
+  if (render_process_host_observation_.IsObservingSource(host)) {
+    render_process_host_observation_.Reset();
+  }
+}
+
 raw_ptr<views::View> OverlayBaseController::CreateViewForOverlay() {
-  // Grab the host view for the overlay which is owned by the browser view.
-  auto* const host_view =
-      BrowserElementsViews::From(tab_->GetBrowserWindowInterface())
-          ->GetView(GetViewContainerId());
+  views::View* host_view = GetHostView();
   CHECK(host_view);
+
+  if (owned_overlay_web_view_) {
+    CHECK(owned_promo_anchor_);
+    CHECK(owned_preselection_widget_anchor_);
+    CHECK_EQ(state_, State::kBackground);
+    CHECK(!IsOverlayViewShared());
+
+    preselection_widget_anchor_ =
+        host_view->AddChildView(std::move(owned_preselection_widget_anchor_));
+    promo_anchor_ = host_view->AddChildView(std::move(owned_promo_anchor_));
+    overlay_web_view_ =
+        host_view->AddChildView(std::move(owned_overlay_web_view_));
+
+    preselection_widget_anchor_->SetVisible(true);
+    promo_anchor_->SetVisible(true);
+    overlay_web_view_->SetVisible(true);
+
+    host_view->InvalidateLayout();
+
+    return host_view;
+  }
 
   // Setup a preselection anchor view. Usually bubbles are anchored to top
   // chrome, but top chrome is not always visible when our overlay is visible.
@@ -226,6 +253,14 @@ raw_ptr<views::View> OverlayBaseController::CreateViewForOverlay() {
   std::unique_ptr<views::View> anchor_view = std::make_unique<views::View>();
   anchor_view->SetFocusBehavior(views::View::FocusBehavior::NEVER);
   preselection_widget_anchor_ = host_view->AddChildView(std::move(anchor_view));
+
+  // Create top left anchor.
+  auto promo_anchor = std::make_unique<views::View>();
+  promo_anchor->SetProperty(views::kElementIdentifierKey,
+                            kIOSLensPromoAnchorElementId);
+  promo_anchor->SetCanProcessEventsWithinSubtree(false);
+  promo_anchor->SetProperty(views::kViewIgnoredByLayoutKey, true);
+  promo_anchor_ = host_view->AddChildView(std::move(promo_anchor));
 
   // Create the web view.
   std::unique_ptr<views::WebView> web_view = std::make_unique<views::WebView>(
@@ -252,6 +287,11 @@ raw_ptr<views::View> OverlayBaseController::CreateViewForOverlay() {
   web_view->LoadInitialURL(GetInitialURL());
 
   overlay_web_view_ = host_view->AddChildView(std::move(web_view));
+
+  // Listen to the render process housing out overlay.
+  render_process_host_observation_.Observe(
+      overlay_web_view_->GetWebContents()->GetPrimaryMainFrame()->GetProcess());
+
   return host_view;
 }
 
@@ -361,6 +401,52 @@ void OverlayBaseController::SetOverlayWebViewOpacity(float opacity) {
   }
 }
 
+void OverlayBaseController::PreserveOverlayViews() {
+  CHECK(overlay_view_);
+  overlay_view_->SetVisible(false);
+  if (preselection_widget_anchor_) {
+    owned_preselection_widget_anchor_ =
+        overlay_view_->RemoveChildViewT(preselection_widget_anchor_);
+    preselection_widget_anchor_ = nullptr;
+  }
+  if (promo_anchor_) {
+    owned_promo_anchor_ = overlay_view_->RemoveChildViewT(promo_anchor_);
+    promo_anchor_ = nullptr;
+  }
+  if (overlay_web_view_) {
+    owned_overlay_web_view_ =
+        overlay_view_->RemoveChildViewT(overlay_web_view_);
+    overlay_web_view_ = nullptr;
+  }
+  tab_contents_view_observer_.Reset();
+  overlay_view_->InvalidateLayout();
+  overlay_view_ = nullptr;
+}
+
+// This is non-virtual because some subclass cannot depend on chrome UI code
+// (circular dependencies).
+views::View* OverlayBaseController::GetHostView() const {
+  views::View* host_view = nullptr;
+  // For tab-scoped overlay, we may use ContentsContainerViews to look up the
+  // ID.
+  if (!IsOverlayViewShared()) {
+    auto* browser_view = BrowserView::GetBrowserViewForBrowser(
+        tab_->GetBrowserWindowInterface());
+    if (browser_view) {
+      if (auto* contents_container =
+              browser_view->GetContentsContainerViewFor(tab_->GetContents())) {
+        host_view =
+            contents_container->GetViewByElementId(GetViewContainerId());
+      }
+    }
+  } else {
+    // Grab the host view for the overlay which is owned by the browser view.
+    host_view = BrowserElementsViews::From(tab_->GetBrowserWindowInterface())
+                    ->GetView(GetViewContainerId());
+  }
+  return host_view;
+}
+
 void OverlayBaseController::TriggerOverlayFadeOutAnimation(
     base::OnceClosure callback) {
   if (state_ == State::kOff || IsOverlayClosing()) {
@@ -444,6 +530,12 @@ void OverlayBaseController::TabWillEnterBackground(tabs::TabInterface* tab) {
     // If the overlay UI is showing, hide it.
     if (overlay_web_view_ && overlay_web_view_->GetVisible()) {
       HideOverlay();
+      if (!IsOverlayViewShared()) {
+        // Preserve the overlay view and other visual elements for the
+        // tab-scoped overlay. These preserve views will be re-attached to a
+        // different ContentsViewContainer when re-shown.
+        PreserveOverlayViews();
+      }
     }
 
     state_ = State::kBackground;
@@ -477,13 +569,11 @@ void OverlayBaseController::ShowModalUI() {
     return;
   }
   auto* const side_panel_ui =
-      tab_->GetBrowserWindowInterface()->GetFeatures().side_panel_ui();
+      SidePanelUI::From(tab_->GetBrowserWindowInterface());
   CHECK(side_panel_ui);
-  auto panel_type = GetSidePanelType();
 
   // Setup observer to be notified of side panel opens and closes.
   side_panel_shown_subscription_ = side_panel_ui->RegisterSidePanelShown(
-      panel_type,
       base::BindRepeating(&OverlayBaseController::OnSidePanelDidOpen,
                           weak_factory_.GetWeakPtr()));
 
@@ -509,16 +599,28 @@ void OverlayBaseController::ShowModalUI() {
       prefs::kSidePanelHorizontalAlignment,
       base::BindRepeating(&OverlayBaseController::OnSidePanelAlignmentChanged,
                           base::Unretained(this)));
+  pref_change_registrar_.Add(
+      prefs::kSidePanelAlignmentOverrides,
+      base::BindRepeating(&OverlayBaseController::OnSidePanelAlignmentChanged,
+                          base::Unretained(this)));
 
   // This should be the last thing called in ShowUI, so if something goes wrong
   // in capturing the screenshot, the state gets cleaned up correctly.
-  if (side_panel_ui->IsSidePanelShowing(panel_type) && ShouldCloseSidePanel() &&
-      !IsResultsSidePanelShowing()) {
+  // 1. Determine the target state based on side panel conditions.
+  if (!side_panel_ui->IsSidePanelShowing()) {
+    state_ = State::kScreenshot;
+  } else if (ShouldCloseSidePanel() && !IsResultsSidePanelShowing()) {
     // Close the currently opened side panel synchronously if it's not the Lens
     // panel. Postpone the screenshot for a fixed time to allow reflow.
     state_ = State::kClosingOpenedSidePanel;
-    side_panel_ui->Close(panel_type, SidePanelEntryHideReason::kSidePanelClosed,
+    side_panel_ui->Close(SidePanelEntryHideReason::kSidePanelClosed,
                          /*suppress_animations=*/true);
+  } else {
+    state_ = State::kScreenshot;
+  }
+
+  // 2. Execute the action corresponding to the state.
+  if (state_ == State::kClosingOpenedSidePanel) {
     base::SingleThreadTaskRunner::GetCurrentDefault()
         ->PostNonNestableDelayedTask(
             FROM_HERE,
@@ -526,7 +628,6 @@ void OverlayBaseController::ShowModalUI() {
                            weak_factory_.GetWeakPtr(), base::TimeTicks::Now()),
             kReflowWaitTimeout);
   } else {
-    state_ = State::kScreenshot;
     content::RenderWidgetHostView* view = tab_->GetContents()
                                               ->GetPrimaryMainFrame()
                                               ->GetRenderViewHost()
@@ -545,9 +646,6 @@ void OverlayBaseController::ShowModalUI() {
 void OverlayBaseController::FinishedWaitingForReflow(
     base::TimeTicks reflow_start_time) {
   if (state_ == State::kClosingOpenedSidePanel) {
-    // This path is invoked after the user invokes the overlay, but we needed
-    // to close the side panel before taking a screenshot. The Side panel is
-    // now closed so we can now take the screenshot of the page.
     state_ = State::kScreenshot;
     StartScreenshotFlow();
   }
@@ -566,6 +664,7 @@ void OverlayBaseController::ShowOverlay() {
     overlay_view_->SetVisible(true);
     preselection_widget_anchor_->SetVisible(true);
     overlay_web_view_->SetVisible(true);
+    promo_anchor_->SetVisible(true);
     SetOverlayRoundedCorner();
 
     // Restart the live blur since the view is visible again.
@@ -615,12 +714,6 @@ void OverlayBaseController::ShowOverlay() {
   // the contents web view to another Chrome UI element before the overlay can
   // take focus.
   contents_web_view->SetEnabled(false);
-
-  // Listen to the render process housing out overlay.
-  overlay_web_view_->GetWebContents()
-      ->GetPrimaryMainFrame()
-      ->GetProcess()
-      ->AddObserver(this);
 }
 
 void OverlayBaseController::HideOverlay() {
@@ -633,7 +726,9 @@ void OverlayBaseController::HideOverlay() {
           ->RetrieveView(kActiveContentsWebViewRetrievalId);
   CHECK(contents_web_view);
   contents_web_view->SetEnabled(true);
-  contents_web_view->RequestFocus();
+  if (tab_->IsActivated()) {
+    contents_web_view->RequestFocus();
+  }
 
   // Hide the overlay view, but keep the web view attached to the overlay view
   // so that the overlay can be re-shown without creating a new web view.
@@ -642,6 +737,9 @@ void OverlayBaseController::HideOverlay() {
   }
   if (overlay_web_view_) {
     overlay_web_view_->SetVisible(false);
+  }
+  if (promo_anchor_) {
+    promo_anchor_->SetVisible(false);
   }
   MaybeHideSharedOverlayView();
 
@@ -698,13 +796,11 @@ void OverlayBaseController::CloseUI() {
   CHECK(contents_web_view);
   contents_web_view->SetEnabled(true);
 
-  if (overlay_web_view_) {
-    // Remove render frame observer.
-    overlay_web_view_->GetWebContents()
-        ->GetPrimaryMainFrame()
-        ->GetProcess()
-        ->RemoveObserver(this);
-  }
+  render_process_host_observation_.Reset();
+
+  owned_preselection_widget_anchor_.reset();
+  owned_promo_anchor_.reset();
+  owned_overlay_web_view_.reset();
 
   tab_contents_view_observer_.Reset();
   scoped_tab_modal_ui_.reset();
@@ -718,6 +814,7 @@ void OverlayBaseController::CloseUI() {
   if (overlay_view_) {
     overlay_view_->RemoveChildViewT(
         std::exchange(preselection_widget_anchor_, nullptr));
+    overlay_view_->RemoveChildViewT(std::exchange(promo_anchor_, nullptr));
     overlay_view_->RemoveChildViewT(std::exchange(overlay_web_view_, nullptr));
     MaybeHideSharedOverlayView();
     overlay_view_ = nullptr;
@@ -737,11 +834,14 @@ void OverlayBaseController::MaybeHideSharedOverlayView() {
   if (!overlay_view_) {
     return;
   }
-  for (views::View* child : overlay_view_->children()) {
-    if (child->GetVisible()) {
-      // If any child is visible, it is being used by another tab so do not hide
-      // the overlay view.
-      return;
+  // Only check the children's visibilities if the overlay is shared.
+  if (IsOverlayViewShared()) {
+    for (views::View* child : overlay_view_->children()) {
+      if (child->GetVisible()) {
+        // If any child is visible, it is being used by another tab so do not
+        // hide the overlay view.
+        return;
+      }
     }
   }
   overlay_view_->SetVisible(false);
@@ -756,42 +856,87 @@ void OverlayBaseController::HideOverlayAndSetHiddenState() {
 }
 
 void OverlayBaseController::SetOverlayRoundedCorner() {
-  CHECK(overlay_view_ && overlay_web_view_);
+  views::WebView* overlay_web_view = nullptr;
+  if (IsOverlayViewShared()) {
+    overlay_web_view = overlay_web_view_.get();
+  } else {
+    overlay_web_view = !!overlay_web_view_ ? overlay_web_view_.get()
+                                           : owned_overlay_web_view_.get();
+  }
+  CHECK(overlay_web_view);
 
-  const bool should_round_corner = IsResultsSidePanelShowing();
-  const float radius =
-      should_round_corner
-          ? overlay_web_view_->GetLayoutProvider()->GetCornerRadiusMetric(
-                views::ShapeContextTokens::kContentSeparatorRadius)
-          : 0;
-  const bool right_aligned =
+  // Only tab-scoped overlays (where `!IsOverlayViewShared()`) live inside a
+  // `ContentsContainerView` and respect split view rounded corners.
+  const bool is_split = !IsOverlayViewShared() && tab_ && tab_->IsSplit();
+  const bool should_round_corner = is_split || IsResultsSidePanelShowing();
+  float radius = 0;
+  if (!is_split && should_round_corner) {
+    const views::LayoutProvider* layout_provider =
+        overlay_web_view->GetLayoutProvider();
+    if (!layout_provider) {
+      // If `overlay_web_view` is `owned_overlay_web_view_`, it is not currently
+      // attached to a Widget hierarchy, so `GetLayoutProvider()` returns
+      // nullptr. In this case, fall back to the global layout provider.
+      CHECK_EQ(overlay_web_view, owned_overlay_web_view_.get());
+      layout_provider = views::LayoutProvider::Get();
+    }
+    CHECK(layout_provider);
+    radius = layout_provider->GetCornerRadiusMetric(
+        views::ShapeContextTokens::kContentSeparatorRadius);
+  }
+  bool is_right_aligned =
       pref_service_->GetBoolean(prefs::kSidePanelHorizontalAlignment);
-  const gfx::RoundedCornersF radii = gfx::RoundedCornersF{
-      right_aligned ? 0 : radius, right_aligned ? radius : 0, 0, 0};
+  const base::DictValue& overrides =
+      pref_service_->GetDict(prefs::kSidePanelAlignmentOverrides);
+  auto* side_panel_ui =
+      tab_ && tab_->GetBrowserWindowInterface()
+          ? SidePanelUI::From(tab_->GetBrowserWindowInterface())
+          : nullptr;
+  if (side_panel_ui) {
+    if (auto current_entry_id = side_panel_ui->GetCurrentEntryId()) {
+      if (auto override_val = overrides.FindBool(
+              SidePanelEntryIdToString(*current_entry_id))) {
+        is_right_aligned = *override_val;
+      }
+    }
+  }
+  const bool right_aligned = is_right_aligned != base::i18n::IsRTL();
+  const gfx::RoundedCornersF radii =
+      is_split ? MultiContentsView::kSplitViewContentRoundedCorners
+               : gfx::RoundedCornersF{right_aligned ? 0 : radius,
+                                      right_aligned ? radius : 0, 0, 0};
 
-  overlay_web_view_->holder()->SetCornerRadii(radii);
+  overlay_web_view->holder()->SetNativeViewCornerRadii(radii);
 
-  // If we show the overlay with overlay_view_ being painted to a layer,
-  // there is a visual bug where the background is momentarily transparent,
-  // causing flickering. When we don't want the corner to be rounded,
-  // instead of setting the corner radii to 0, destroy the layer instead.
-  // See crbug.com/437355402.
-  if (!should_round_corner) {
-    overlay_view_->DestroyLayer();
-    return;
+  views::View* overlay_view = nullptr;
+  if (IsOverlayViewShared()) {
+    overlay_view = overlay_view_.get();
+    CHECK(overlay_view);
+  } else {
+    // GetHostView() can return a nullptr for when the overlay is tab-scoped
+    // and when the overlay is in kBackground. The styling will be reapplied
+    // when the tab is foregrounded.
+    overlay_view = !!overlay_view_ ? overlay_view_.get() : GetHostView();
   }
 
-  overlay_view_->SetPaintToLayer();
-  overlay_view_->layer()->SetIsFastRoundedCorner(true);
-  overlay_view_->layer()->SetRoundedCornerRadius(radii);
+  if (overlay_view) {
+    // If we show the overlay with overlay_view being painted to a layer,
+    // there is a visual bug where the background is momentarily transparent,
+    // causing flickering. When we don't want the corner to be rounded,
+    // instead of setting the corner radii to 0, destroy the layer instead.
+    // See crbug.com/437355402.
+    if (!should_round_corner) {
+      overlay_view->DestroyLayer();
+      return;
+    }
+
+    overlay_view->SetPaintToLayer();
+    overlay_view->layer()->SetIsFastRoundedCorner(true);
+    overlay_view->layer()->SetRoundedCornerRadius(radii);
+  }
 }
 
 void OverlayBaseController::ShowPreselectionBubble() {
-  // Don't show the preselection bubble if the overlay is not being shown.
-  if (IsResultsSidePanelShowing()) {
-    return;
-  }
-
 #if BUILDFLAG(IS_MAC)
   // On Mac, the kShowFullscreenToolbar pref is used to determine whether the
   // toolbar is always shown. This causes the toolbar to never unreveal, meaning
@@ -814,11 +959,14 @@ void OverlayBaseController::ShowPreselectionBubble() {
 
   if (!preselection_widget_) {
     CHECK(preselection_widget_anchor_);
+    PreselectionUIConfig config = GetPreselectionBubbleConfig();
     // Setup the preselection widget.
     preselection_widget_ = views::BubbleDialogDelegateView::CreateBubble(
         std::make_unique<lens::LensPreselectionBubble>(
             tab_->GetHandle(), preselection_widget_anchor_,
             net::NetworkChangeNotifier::IsOffline(),
+            config.bubble_background_color, config.icon,
+            config.cancel_button_config,
             /*exit_clicked_callback=*/
             base::BindRepeating(&OverlayBaseController::RequestSyncClose,
                                 weak_factory_.GetWeakPtr(),
@@ -828,6 +976,11 @@ void OverlayBaseController::ShowPreselectionBubble() {
                            weak_factory_.GetWeakPtr(),
                            DismissalSource::kPreselectionToastEscapeKeyPress)));
     preselection_widget_observer_.Observe(preselection_widget_);
+
+    static_cast<lens::LensPreselectionBubble*>(
+        preselection_widget_->widget_delegate())
+        ->SetLabelText(config.message_string_id);
+
     // Setting the parent allows focus traversal out of the preselection widget.
     preselection_widget_->SetFocusTraversableParent(
         preselection_widget_anchor_->GetWidget()->GetFocusTraversable());
@@ -936,7 +1089,9 @@ void OverlayBaseController::OnSidePanelAlignmentChanged() {
 
 void OverlayBaseController::OnSidePanelDidOpen() {
   if (IsResultsSidePanelShowing()) {
-    SetOverlayRoundedCorner();
+    if (IsOverlayShowing()) {
+      SetOverlayRoundedCorner();
+    }
   } else {
     // If a side panel opens that is not ours, we must close the overlay.
     RequestSyncClose(DismissalSource::kUnexpectedSidePanelOpen);

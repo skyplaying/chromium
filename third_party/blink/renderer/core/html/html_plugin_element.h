@@ -67,7 +67,8 @@ class CORE_EXPORT HTMLPlugInElement
 
   bool HasPendingActivity() const final;
 
-  void SetFocused(bool, mojom::blink::FocusType) override;
+  using HTMLFrameOwnerElement::SetFocused;
+  void SetFocused(bool, mojom::blink::FocusType, BlurEventBehavior) override;
   void ResetInstance();
   WebPluginContainerImpl* OwnedPlugin() const;
   bool CanProcessDrag() const;
@@ -127,8 +128,8 @@ class CORE_EXPORT HTMLPlugInElement
   bool IsErrorplaceholder();
   void ReattachOnPluginChangeIfNeeded(bool require_layout);
 
-  void SetUrl(const String& url) {
-    url_ = url;
+  void SetUrl(const StringView& url) {
+    url_ = url.ToString();
     UpdateServiceTypeIfEmpty();
   }
 

@@ -26,6 +26,9 @@
                 "target_platform": "linux"
               },
               "legacy_gclient_config": {
+                "apply_configs": [
+                  "checkout_mesa"
+                ],
                 "config": "chromium"
               }
             }
@@ -66,6 +69,7 @@
       "v.test_suite"
     ]
   },
+  "archive_path": "linux-debug-asan/libfuzzer-high-end-linux-debug",
   "archive_prefix": "libfuzzer-high-end",
   "builder_group": "chromium.fuzz",
   "recipe": "chromium/fuzz",

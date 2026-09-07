@@ -18,12 +18,6 @@ include_rules = [
   "+ios/chrome/browser/tabs/model",
   "+ios/chrome/browser/translate/model",
   "+ios/chrome/browser/web/model/web_view_proxy/web_view_proxy_tab_helper.h",
-  "+ios/web/navigation/wk_navigation_util.h",
   "+third_party/dom_distiller_js",
   # keep-sorted end
 ]
-specific_include_rules = {
-  "^reader_mode_test.mm" : [
-    "+ios/web/js_messaging/java_script_feature_manager.h",
-  ]
-}

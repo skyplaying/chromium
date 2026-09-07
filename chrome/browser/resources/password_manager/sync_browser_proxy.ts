@@ -59,27 +59,37 @@ export interface SyncBrowserProxy {
    * entry point as input.
    */
   openBatchUpload(entryPoint: BatchUploadPasswordsEntryPoint): void;
+
+  /**
+   * Triggers the passkey unlock flow.
+   */
+  startPasskeyUnlockFlow(): void;
 }
 
 export class SyncBrowserProxyImpl implements SyncBrowserProxy {
   getTrustedVaultBannerState() {
-    return sendWithPromise('GetSyncTrustedVaultBannerState');
+    return sendWithPromise<TrustedVaultBannerState>(
+        'GetSyncTrustedVaultBannerState');
   }
 
   getSyncInfo() {
-    return sendWithPromise('GetSyncInfo');
+    return sendWithPromise<SyncInfo>('GetSyncInfo');
   }
 
   getAccountInfo() {
-    return sendWithPromise('GetAccountInfo');
+    return sendWithPromise<AccountInfo>('GetAccountInfo');
   }
 
   getLocalPasswordCount() {
-    return sendWithPromise('GetLocalPasswordCount');
+    return sendWithPromise<number>('GetLocalPasswordCount');
   }
 
   openBatchUpload(entryPoint: BatchUploadPasswordsEntryPoint): void {
     chrome.send('OpenBatchUpload', [entryPoint]);
+  }
+
+  startPasskeyUnlockFlow(): void {
+    chrome.send('StartPasskeyUnlockFlow');
   }
 
   static getInstance(): SyncBrowserProxy {

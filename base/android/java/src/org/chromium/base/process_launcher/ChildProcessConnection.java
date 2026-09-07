@@ -9,27 +9,26 @@ import static org.chromium.build.NullUtil.assumeNonNull;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
-import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.RemoteException;
+import android.text.TextUtils;
 
 import androidx.annotation.IntDef;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.ApkInfo;
 import org.chromium.base.ChildBindingState;
+import org.chromium.base.JavaExceptionReporter;
 import org.chromium.base.Log;
-import org.chromium.base.MemoryPressureLevel;
 import org.chromium.base.MemoryPressureListener;
 import org.chromium.base.PackageUtils;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.TraceEvent;
 import org.chromium.base.library_loader.IRelroLibInfo;
-import org.chromium.base.memory.MemoryPressureCallback;
 import org.chromium.base.memory.SelfFreezeCallback;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.build.BuildConfig;
@@ -40,7 +39,6 @@ import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
-import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.Executor;
 
@@ -303,7 +301,6 @@ public class ChildProcessConnection {
     @GuardedBy("mProcessStateLock")
     private boolean mKilledByUs;
 
-    private @Nullable MemoryPressureCallback mMemoryPressureCallback;
     private @Nullable SelfFreezeCallback mSelfFreezeCallback;
 
     // If the process threw an exception before entering the main loop, the exception
@@ -655,16 +652,13 @@ public class ChildProcessConnection {
             // Validate that the child process is running the same code as the parent process.
             boolean childMatches = true;
             try {
-                String[] childAppInfoStrings = mService.getAppInfoStrings();
+                String childSourceDir = mService.getSourceDir();
+                String parentSourceDir =
+                        ApkInfo.getInstance().getBrowserApplicationInfo().sourceDir;
 
-                ApplicationInfo parentAppInfo = ApkInfo.getInstance().getBrowserApplicationInfo();
-                String[] parentAppInfoStrings = ChildProcessService.convertToStrings(parentAppInfo);
-
-                // Don't compare splitSourceDirs as isolatedSplits/dynamic feature modules/etc
-                // make this potentially complicated.
-                childMatches = Arrays.equals(parentAppInfoStrings, childAppInfoStrings);
+                childMatches = TextUtils.equals(parentSourceDir, childSourceDir);
             } catch (RemoteException ex) {
-                // If the child can't handle getAppInfo then it is old and doesn't match.
+                // If the child can't handle getSourceDir then it is old and doesn't match.
                 childMatches = false;
             }
             if (!childMatches) {
@@ -696,12 +690,6 @@ public class ChildProcessConnection {
             }
 
             mServiceConnectComplete = true;
-
-            if (mMemoryPressureCallback == null) {
-                final MemoryPressureCallback callback = this::onMemoryPressure;
-                ThreadUtils.postOnUiThread(() -> MemoryPressureListener.addCallback(callback));
-                mMemoryPressureCallback = callback;
-            }
 
             if (mSelfFreezeCallback == null) {
                 final SelfFreezeCallback callback = this::onSelfFreeze;
@@ -960,17 +948,30 @@ public class ChildProcessConnection {
         int NUM_ENTRIES = 4;
     }
 
+    private static final String NATIVE_SANDBOXED_SERVICE =
+            "org.chromium.content.app.NativeOnlySandboxedProcessService";
+    private static final String SANDBOXED_SERVICE =
+            "org.chromium.content.app.SandboxedProcessService";
+    private static final String PRIVILEGED_SERVICE =
+            "org.chromium.content.app.PrivilegedProcessService";
+
     private void fallbackService() {
         assert mFallbackServiceName != null;
         @ServiceNames int serviceName;
         String className = mFallbackServiceName.getClassName();
+        if (mServiceName.getClassName().startsWith(NATIVE_SANDBOXED_SERVICE)) {
+            ThreadUtils.postOnUiThread(
+                    () ->
+                            JavaExceptionReporter.reportException(
+                                    new Throwable(
+                                            "Fallback from NativeOnlySandboxedProcessService")));
+        }
         // Don't use the exact match because service names have a number as a suffix.
-        if (className.startsWith("org.chromium.content.app.SandboxedProcessService")) {
+        if (className.startsWith(SANDBOXED_SERVICE)) {
             serviceName = ServiceNames.JAVA_SANDBOXED;
-        } else if (className.startsWith(
-                "org.chromium.content.app.NativeOnlySandboxedProcessService")) {
+        } else if (className.startsWith(NATIVE_SANDBOXED_SERVICE)) {
             serviceName = ServiceNames.NATIVE_ONLY_SANDBOXED;
-        } else if (className.startsWith("org.chromium.content.app.PrivilegedProcessService")) {
+        } else if (className.startsWith(PRIVILEGED_SERVICE)) {
             serviceName = ServiceNames.PRIVILEGED;
         } else {
             serviceName = ServiceNames.OTHER;
@@ -994,12 +995,6 @@ public class ChildProcessConnection {
         mService = null;
         mConnectionParams = null;
         mConnectionController.unbind();
-
-        if (mMemoryPressureCallback != null) {
-            final MemoryPressureCallback callback = mMemoryPressureCallback;
-            ThreadUtils.postOnUiThread(() -> MemoryPressureListener.removeCallback(callback));
-            mMemoryPressureCallback = null;
-        }
 
         if (mSelfFreezeCallback != null) {
             final SelfFreezeCallback callback = mSelfFreezeCallback;
@@ -1198,19 +1193,6 @@ public class ChildProcessConnection {
 
     private boolean getAlwaysFallback() {
         return sAlwaysFallback && !mIndependentFallback;
-    }
-
-    private void onMemoryPressure(@MemoryPressureLevel int pressure) {
-        mLauncherHandler.post(() -> onMemoryPressureOnLauncherThread(pressure));
-    }
-
-    private void onMemoryPressureOnLauncherThread(@MemoryPressureLevel int pressure) {
-        if (mService == null) return;
-        try {
-            mService.onMemoryPressure(pressure);
-        } catch (RemoteException ex) {
-            // Ignore
-        }
     }
 
     private void onSelfFreeze() {

@@ -13,9 +13,6 @@
 
 #include "base/check_op.h"
 #include "base/files/file_util.h"
-#include "base/functional/bind.h"
-#include "base/functional/callback.h"
-#include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/memory/ptr_util.h"
@@ -26,6 +23,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/timer/elapsed_timer.h"
+#include "base/types/expected.h"
 #include "base/values.h"
 #include "content/public/browser/browser_context.h"
 #include "extensions/browser/api/declarative_net_request/constants.h"
@@ -36,7 +34,6 @@
 #include "extensions/common/error_utils.h"
 #include "extensions/common/file_util.h"
 #include "extensions/common/install_warning.h"
-#include "services/data_decoder/public/cpp/data_decoder.h"
 #include "tools/json_schema_compiler/util.h"
 
 namespace extensions::declarative_net_request {
@@ -48,12 +45,40 @@ using Status = ReadJSONRulesResult::Status;
 
 constexpr const char kFileDoesNotExistError[] = "File does not exist.";
 constexpr const char kFileReadError[] = "File read error.";
+constexpr const char kRulesetFileSizeLimitExceededError[] =
+    "Ruleset file size limit exceeded.";
 
 constexpr const char kDynamicRulesetDirectory[] = "DNR Extension Rules";
 constexpr const char kDynamicRulesJSONFilename[] = "rules.json";
 constexpr const char kDynamicIndexedRulesFilename[] = "rules.fbs";
 
-// Helper to retrieve the filename for the given |file_path|.
+// Describes the results of reading a file.
+enum class FileReadError {
+  // File reading failed because the file size exceeded a specified limit.
+  kSizeLimitExceeded,
+  // Used for all other failures.
+  kOther,
+};
+
+// Helper to read the ruleset file from the given `file_path`. Returns an error
+// if the file is larger than the maximum ruleset file size or if any other file
+// read error occurs.
+base::expected<std::string, FileReadError> ReadRulesetFileToString(
+    const base::FilePath& file_path) {
+  std::string contents;
+  const size_t kMaxSize = GetMaximumRulesetFileSize();
+  if (!base::ReadFileToStringWithMaxSize(file_path, &contents, kMaxSize)) {
+    const FileReadError error = contents.size() == kMaxSize
+                                    ? FileReadError::kSizeLimitExceeded
+                                    : FileReadError::kOther;
+
+    return base::unexpected(error);
+  }
+
+  return contents;
+}
+
+// Helper to retrieve the filename for the given `file_path`.
 std::string GetFilename(const base::FilePath& file_path) {
   return file_path.BaseName().AsUTF8Unsafe();
 }
@@ -145,89 +170,6 @@ ReadJSONRulesResult ParseRulesFromJSON(const RulesetID& ruleset_id,
   DCHECK_LE(result.rules.size(), rule_limit);
 
   return result;
-}
-
-IndexAndPersistJSONRulesetResult IndexAndPersistRuleset(
-    const FileBackedRulesetSource& source,
-    ReadJSONRulesResult read_result,
-    const base::ElapsedTimer& timer,
-    uint8_t parse_flags) {
-  // Rulesets which exceed the rule limit are ignored because they can never be
-  // enabled without breaking the limit.
-  if (read_result.status == Status::kRuleCountLimitExceeded) {
-    std::vector<InstallWarning> warnings;
-    warnings.push_back(
-        CreateInstallWarning(source.json_path(), read_result.error));
-
-    return IndexAndPersistJSONRulesetResult::CreateIgnoreResult(
-        std::move(warnings));
-  } else if (read_result.status != Status::kSuccess) {
-    return IndexAndPersistJSONRulesetResult::CreateErrorResult(
-        GetErrorWithFilename(source.json_path(), read_result.error));
-  }
-
-  DCHECK_EQ(Status::kSuccess, read_result.status);
-
-  const ParseInfo info =
-      source.IndexRules(std::move(read_result.rules), parse_flags);
-
-  if (info.has_error()) {
-    return IndexAndPersistJSONRulesetResult::CreateErrorResult(
-        GetErrorWithFilename(source.json_path(), info.error()));
-  }
-
-  if (!PersistIndexedRuleset(source.indexed_path(), info.GetBuffer())) {
-    return IndexAndPersistJSONRulesetResult::CreateErrorResult(
-        GetErrorWithFilename(source.json_path(), kErrorPersisting));
-  }
-
-  // Parsing errors (e.g. rule ID of "invalid") are always considered to be
-  // install warnings. This helps ensure backwards compatibility as the rule
-  // schema is changed.
-  std::vector<InstallWarning> warnings =
-      std::move(read_result.rule_parse_warnings);
-
-  for (const auto& warning : info.rule_ignored_warnings()) {
-    warnings.push_back(
-        CreateInstallWarning(source.json_path(), warning.message));
-  }
-
-  // Limit the maximum number of rule parsing warnings to 5.
-  const size_t kMaxUnparsedRulesWarnings = 5;
-  if (warnings.size() > kMaxUnparsedRulesWarnings) {
-    warnings.erase(warnings.begin() + kMaxUnparsedRulesWarnings,
-                   warnings.end());
-    warnings.push_back(CreateInstallWarning(
-        source.json_path(),
-        ErrorUtils::FormatErrorMessage(
-            kTooManyParseFailuresWarning,
-            base::NumberToString(kMaxUnparsedRulesWarnings))));
-  }
-
-  return IndexAndPersistJSONRulesetResult::CreateSuccessResult(
-      info.ruleset_checksum(), std::move(warnings), info.rules_count(),
-      info.regex_rules_count(), timer.Elapsed());
-}
-
-void OnSafeJSONParse(
-    const base::FilePath& json_path,
-    const FileBackedRulesetSource& source,
-    uint8_t parse_flags,
-    FileBackedRulesetSource::IndexAndPersistJSONRulesetCallback callback,
-    data_decoder::DataDecoder::ValueOrError result) {
-  if (!result.has_value()) {
-    std::move(callback).Run(IndexAndPersistJSONRulesetResult::CreateErrorResult(
-        GetErrorWithFilename(json_path, result.error())));
-    return;
-  }
-
-  base::ElapsedTimer timer;
-  ReadJSONRulesResult read_result = ParseRulesFromJSON(
-      source.id(), json_path, *result, source.rule_count_limit(),
-      source.is_dynamic_ruleset());
-
-  std::move(callback).Run(IndexAndPersistRuleset(source, std::move(read_result),
-                                                 timer, parse_flags));
 }
 
 }  // namespace
@@ -367,48 +309,82 @@ FileBackedRulesetSource FileBackedRulesetSource::Clone() const {
 }
 
 IndexAndPersistJSONRulesetResult
-FileBackedRulesetSource::IndexAndPersistJSONRulesetUnsafe(
-    uint8_t parse_flags) const {
+FileBackedRulesetSource::IndexAndPersistJSONRuleset(uint8_t parse_flags) const {
   base::ElapsedTimer timer;
-  return IndexAndPersistRuleset(*this, ReadJSONRulesUnsafe(), timer,
-                                parse_flags);
-}
 
-void FileBackedRulesetSource::IndexAndPersistJSONRuleset(
-    data_decoder::DataDecoder* decoder,
-    uint8_t parse_flags,
-    IndexAndPersistJSONRulesetCallback callback) const {
-  if (!base::PathExists(json_path_)) {
-    std::move(callback).Run(IndexAndPersistJSONRulesetResult::CreateErrorResult(
-        GetErrorWithFilename(json_path_, kFileDoesNotExistError)));
-    return;
+  ReadJSONRulesResult read_result = ReadJSONRules();
+
+  // Rulesets which exceed the rule limit are ignored because they can never be
+  // enabled without breaking the limit.
+  if (read_result.status == Status::kRuleCountLimitExceeded) {
+    std::vector<InstallWarning> warnings;
+    warnings.push_back(CreateInstallWarning(json_path(), read_result.error));
+
+    return IndexAndPersistJSONRulesetResult::CreateIgnoreResult(
+        std::move(warnings));
+  } else if (read_result.status != Status::kSuccess) {
+    return IndexAndPersistJSONRulesetResult::CreateErrorResult(
+        GetErrorWithFilename(json_path(), read_result.error));
   }
 
-  std::string json_contents;
-  if (!base::ReadFileToString(json_path_, &json_contents)) {
-    std::move(callback).Run(IndexAndPersistJSONRulesetResult::CreateErrorResult(
-        GetErrorWithFilename(json_path_, kFileReadError)));
-    return;
+  DCHECK_EQ(Status::kSuccess, read_result.status);
+
+  const ParseInfo info = IndexRules(std::move(read_result.rules), parse_flags);
+
+  if (info.has_error()) {
+    return IndexAndPersistJSONRulesetResult::CreateErrorResult(
+        GetErrorWithFilename(json_path(), info.error()));
   }
 
-  decoder->ParseJson(json_contents,
-                     base::BindOnce(&OnSafeJSONParse, json_path_, Clone(),
-                                    parse_flags, std::move(callback)));
+  if (!PersistIndexedRuleset(indexed_path(), info.GetBuffer())) {
+    return IndexAndPersistJSONRulesetResult::CreateErrorResult(
+        GetErrorWithFilename(json_path(), kErrorPersisting));
+  }
+
+  // Parsing errors (e.g. rule ID of "invalid") are always considered to be
+  // install warnings. This helps ensure backwards compatibility as the rule
+  // schema is changed.
+  std::vector<InstallWarning> warnings =
+      std::move(read_result.rule_parse_warnings);
+
+  for (const auto& warning : info.rule_ignored_warnings()) {
+    warnings.push_back(CreateInstallWarning(json_path(), warning.message));
+  }
+
+  // Limit the maximum number of rule parsing warnings to 5.
+  const size_t kMaxUnparsedRulesWarnings = 5;
+  if (warnings.size() > kMaxUnparsedRulesWarnings) {
+    warnings.erase(warnings.begin() + kMaxUnparsedRulesWarnings,
+                   warnings.end());
+    warnings.push_back(CreateInstallWarning(
+        json_path(), ErrorUtils::FormatErrorMessage(
+                         kTooManyParseFailuresWarning,
+                         base::NumberToString(kMaxUnparsedRulesWarnings))));
+  }
+
+  return IndexAndPersistJSONRulesetResult::CreateSuccessResult(
+      info.ruleset_checksum(), std::move(warnings), info.rules_count(),
+      info.regex_rules_count(), timer.Elapsed());
 }
 
-ReadJSONRulesResult FileBackedRulesetSource::ReadJSONRulesUnsafe() const {
+ReadJSONRulesResult FileBackedRulesetSource::ReadJSONRules() const {
   ReadJSONRulesResult result;
 
-  if (!base::PathExists(json_path_)) {
-    return ReadJSONRulesResult::CreateErrorResult(Status::kFileDoesNotExist,
-                                                  kFileDoesNotExistError);
-  }
-
-  std::string json_contents;
-  if (!base::ReadFileToString(json_path_, &json_contents)) {
+  auto contents = ReadRulesetFileToString(json_path_);
+  if (!contents.has_value()) {
+    if (contents.error() == FileReadError::kSizeLimitExceeded) {
+      return ReadJSONRulesResult::CreateErrorResult(
+          Status::kRulesetFileSizeLimitExceeded,
+          kRulesetFileSizeLimitExceededError);
+    }
+    if (!base::PathExists(json_path_)) {
+      return ReadJSONRulesResult::CreateErrorResult(Status::kFileDoesNotExist,
+                                                    kFileDoesNotExistError);
+    }
     return ReadJSONRulesResult::CreateErrorResult(Status::kFileReadError,
                                                   kFileReadError);
   }
+  std::string json_contents = std::move(contents).value();
 
   auto value_with_error = base::JSONReader::ReadAndReturnValueWithError(
       json_contents, base::JSON_PARSE_RFC /* options */);
@@ -448,10 +424,13 @@ LoadRulesetResult FileBackedRulesetSource::CreateVerifiedMatcher(
     return LoadRulesetResult::kErrorInvalidPath;
   }
 
-  std::string ruleset_data;
-  if (!base::ReadFileToString(indexed_path(), &ruleset_data)) {
-    return LoadRulesetResult::kErrorCannotReadFile;
+  auto data = ReadRulesetFileToString(indexed_path());
+  if (!data.has_value()) {
+    return data.error() == FileReadError::kSizeLimitExceeded
+               ? LoadRulesetResult::kErrorRulesetFileSizeLimitExceeded
+               : LoadRulesetResult::kErrorCannotReadFile;
   }
+  std::string ruleset_data = std::move(data).value();
 
   if (!StripVersionHeaderAndParseVersion(&ruleset_data)) {
     return LoadRulesetResult::kErrorVersionMismatch;

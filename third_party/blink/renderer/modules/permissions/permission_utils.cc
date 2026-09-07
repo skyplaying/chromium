@@ -8,6 +8,8 @@
 
 #include "build/build_config.h"
 #include "third_party/blink/public/mojom/permissions/permission.mojom-blink.h"
+#include "third_party/blink/public/mojom/permissions/permission_status.mojom-blink-forward.h"
+#include "third_party/blink/public/mojom/permissions/permission_status.mojom-blink.h"
 #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 #include "third_party/blink/renderer/bindings/core/v8/native_value_traits_impl.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
@@ -26,6 +28,7 @@
 #include "third_party/blink/renderer/core/workers/worker_thread.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
@@ -69,6 +72,17 @@ void ConnectToPermissionService(
 
 V8PermissionState ToV8PermissionState(mojom::blink::PermissionStatus status) {
   return V8PermissionState(ToPermissionStateEnum(status));
+}
+
+V8AccuracyMode ToV8AccuracyMode(
+    mojom::blink::GeolocationAccuracy accuracy_mode) {
+  switch (accuracy_mode) {
+    case mojom::blink::GeolocationAccuracy::kPrecise:
+      return V8AccuracyMode(V8AccuracyMode::Enum::kPrecise);
+    case mojom::blink::GeolocationAccuracy::kApproximate:
+      return V8AccuracyMode(V8AccuracyMode::Enum::kApproximate);
+  }
+  NOTREACHED();
 }
 
 String PermissionNameToString(PermissionName name) {
@@ -236,7 +250,35 @@ PermissionDescriptorPtr ParsePermissionDescriptor(
 
   switch (name.AsEnum()) {
     case V8PermissionName::Enum::kGeolocation:
-      return CreatePermissionDescriptor(PermissionName::GEOLOCATION);
+      if (RuntimeEnabledFeatures::ApproximateGeolocationPermissionEnabled(
+              ExecutionContext::From(script_state)) &&
+          !RuntimeEnabledFeatures::ApproximateGeolocationPermissionAPIEnabled(
+              ExecutionContext::From(script_state))) {
+        // The internal permission model of chromium stores two separate values
+        // for precise and approximate geolocation. However, only one permission
+        // ("geolocation") is exposed through the Permissions API, and the spec
+        // mandates that permissions.query() should return "granted" even if the
+        // internal states are approximate: granted, precise: prompt. So we just
+        // return the approximate permission state here. Note that the state of
+        // approximate location is always laxer than the state of precise
+        // location, and querying approximate location exactly answers the
+        // question "is any location access granted or prompt".
+        return CreatePermissionDescriptor(
+            PermissionName::GEOLOCATION_APPROXIMATE);
+      } else {
+        return CreatePermissionDescriptor(PermissionName::GEOLOCATION);
+      }
+
+    case V8PermissionName::Enum::kGeolocationApproximate:
+      if (!RuntimeEnabledFeatures::ApproximateGeolocationPermissionAPIEnabled(
+              ExecutionContext::From(script_state))) {
+        exception_state.ThrowTypeError(
+            "Permission API support for approximate geolocation is not "
+            "enabled.");
+        return nullptr;
+      }
+      return CreatePermissionDescriptor(
+          PermissionName::GEOLOCATION_APPROXIMATE);
 
     case V8PermissionName::Enum::kNotifications:
       return CreatePermissionDescriptor(PermissionName::NOTIFICATIONS);
@@ -422,23 +464,23 @@ PermissionDescriptorPtr ParsePermissionDescriptor(
     }
 
     case V8PermissionName::Enum::kKeyboardLock: {
-#if !BUILDFLAG(IS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
       return CreatePermissionDescriptor(PermissionName::KEYBOARD_LOCK);
 #else
       exception_state.ThrowTypeError(
-          "The Keyboard Lock permission isn't available on Android.");
+          "The Keyboard Lock permission isn't available on this platform.");
       return nullptr;
-#endif
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
     }
 
     case V8PermissionName::Enum::kPointerLock: {
-#if !BUILDFLAG(IS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
       return CreatePermissionDescriptor(PermissionName::POINTER_LOCK);
 #else
       exception_state.ThrowTypeError(
-          "The Pointer Lock permission isn't available on Android.");
+          "The Pointer Lock permission isn't available on this platform.");
       return nullptr;
-#endif
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
     }
 
     case V8PermissionName::Enum::kFullscreen: {
@@ -472,25 +514,11 @@ PermissionDescriptorPtr ParsePermissionDescriptor(
     case V8PermissionName::Enum::kLocalNetworkAccess:
       return CreatePermissionDescriptor(PermissionName::LOCAL_NETWORK_ACCESS);
 
-    case V8PermissionName::Enum::kLocalNetwork: {
-      if (!RuntimeEnabledFeatures::
-              LocalNetworkAccessSplitPermissionsEnabled()) {
-        exception_state.ThrowTypeError(
-            "Local Network Access Split permissions are not enabled.");
-        return nullptr;
-      }
+    case V8PermissionName::Enum::kLocalNetwork:
       return CreatePermissionDescriptor(PermissionName::LOCAL_NETWORK);
-    }
 
-    case V8PermissionName::Enum::kLoopbackNetwork: {
-      if (!RuntimeEnabledFeatures::
-              LocalNetworkAccessSplitPermissionsEnabled()) {
-        exception_state.ThrowTypeError(
-            "Local Network Access Split permissions are not enabled.");
-        return nullptr;
-      }
+    case V8PermissionName::Enum::kLoopbackNetwork:
       return CreatePermissionDescriptor(PermissionName::LOOPBACK_NETWORK);
-    }
   }
 
   return nullptr;

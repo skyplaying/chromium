@@ -96,8 +96,6 @@ std::string GLImplementationParts::ANGLEString() const {
   switch (angle) {
     case ANGLEImplementation::kNone:
       return "none";
-    case ANGLEImplementation::kD3D9:
-      return "d3d9";
     case ANGLEImplementation::kD3D11:
       return "d3d11";
     case ANGLEImplementation::kOpenGL:
@@ -133,8 +131,6 @@ const struct {
      GLImplementationParts(ANGLEImplementation::kDefault)},
     {kGLImplementationANGLEName, kANGLEImplementationDefaultName,
      GLImplementationParts(ANGLEImplementation::kDefault)},
-    {kGLImplementationANGLEName, kANGLEImplementationD3D9Name,
-     GLImplementationParts(ANGLEImplementation::kD3D9)},
     {kGLImplementationANGLEName, kANGLEImplementationD3D11Name,
      GLImplementationParts(ANGLEImplementation::kD3D11)},
     {kGLImplementationANGLEName, kANGLEImplementationD3D11on12Name,
@@ -439,9 +435,9 @@ STDCALL GLFunctionPointerType GetGLProcAddress(const char* name) {
   DCHECK(g_gl_implementation.gl != kGLImplementationNone);
 
   if (g_libraries) {
-    for (size_t i = 0; i < g_libraries->size(); ++i) {
+    for (auto& library : *g_libraries) {
       GLFunctionPointerType proc = reinterpret_cast<GLFunctionPointerType>(
-          base::GetFunctionPointerFromNativeLibrary((*g_libraries)[i], name));
+          base::GetFunctionPointerFromNativeLibrary(library, name));
       if (proc)
         return proc;
     }

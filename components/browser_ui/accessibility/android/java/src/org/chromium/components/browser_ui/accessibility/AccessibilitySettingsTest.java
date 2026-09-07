@@ -58,11 +58,16 @@ import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
 import org.chromium.components.browser_ui.settings.SettingsNavigation;
 import org.chromium.components.dom_distiller.core.DistilledPagePrefs;
 import org.chromium.components.dom_distiller.core.DomDistillerFeatures;
+import org.chromium.components.prefs.PrefChangeRegistrar;
+import org.chromium.components.prefs.PrefChangeRegistrar.PrefObserver;
+import org.chromium.components.prefs.PrefChangeRegistrarJni;
+import org.chromium.components.prefs.PrefService;
+import org.chromium.components.user_prefs.UserPrefs;
 import org.chromium.content.browser.HostZoomMapImpl;
 import org.chromium.content.browser.HostZoomMapImplJni;
 import org.chromium.content_public.browser.BrowserContextHandle;
 import org.chromium.content_public.browser.ContentFeatureList;
-import org.chromium.ui.accessibility.AccessibilityState;
+import org.chromium.ui.accessibility.AccessibilityStateTestHelper;
 import org.chromium.ui.base.DeviceInput;
 import org.chromium.ui.widget.ChromeImageButton;
 
@@ -94,6 +99,8 @@ public class AccessibilitySettingsTest {
     @Mock private DistilledPagePrefs mDistilledPagePrefsMock;
 
     @Mock private HostZoomMapImpl.Natives mHostZoomMapBridgeMock;
+    @Mock private PrefChangeRegistrar.Natives mPrefChangeRegistrarJniMock;
+    @Mock private PrefService mPrefServiceMock;
 
     @Rule // initialize mocks
     public MockitoRule rule = MockitoJUnit.rule();
@@ -113,14 +120,16 @@ public class AccessibilitySettingsTest {
 
         // Enable screen reader to display all settings options.
         ThreadUtils.runOnUiThreadBlocking(
-                () -> AccessibilityState.setIsKnownScreenReaderEnabledForTesting(true));
+                () -> AccessibilityStateTestHelper.setIsKnownScreenReaderEnabledForTesting(true));
         when(mDelegate.shouldShowImageDescriptionsSetting()).thenReturn(true);
     }
 
     @After
     public void tearDown() {
+        PrefChangeRegistrarJni.setInstanceForTesting(null);
+        UserPrefs.setPrefServiceForTesting(null);
         ThreadUtils.runOnUiThreadBlocking(
-                () -> AccessibilityState.setIsKnownScreenReaderEnabledForTesting(false));
+                () -> AccessibilityStateTestHelper.setIsKnownScreenReaderEnabledForTesting(false));
         when(mDelegate.shouldShowImageDescriptionsSetting()).thenReturn(false);
     }
 
@@ -163,6 +172,7 @@ public class AccessibilitySettingsTest {
         Preference captionsPref =
                 mAccessibilitySettings.findPreference(AccessibilitySettings.PREF_CAPTIONS);
         Assert.assertNotNull(captionsPref);
+        Assert.assertFalse(captionsPref.isIconSpaceReserved());
         Assert.assertNotNull(captionsPref.getOnPreferenceClickListener());
 
         Instrumentation.ActivityMonitor monitor =
@@ -190,6 +200,7 @@ public class AccessibilitySettingsTest {
                 mAccessibilitySettings.findPreference(PREF_IMAGE_DESCRIPTIONS);
 
         Assert.assertNotNull(imageDescriptionsPref);
+        Assert.assertFalse(imageDescriptionsPref.isIconSpaceReserved());
         Assert.assertTrue(
                 "Image Descriptions option should be visible", imageDescriptionsPref.isVisible());
 
@@ -222,6 +233,7 @@ public class AccessibilitySettingsTest {
         Preference zoomInfoPref =
                 mAccessibilitySettings.findPreference(AccessibilitySettings.PREF_ZOOM_INFO);
         Assert.assertNotNull(zoomInfoPref);
+        Assert.assertFalse(zoomInfoPref.isIconSpaceReserved());
         Assert.assertNotNull(zoomInfoPref.getOnPreferenceClickListener());
 
         // First scroll to the "Saved zoom levels" preference, then click.
@@ -385,7 +397,6 @@ public class AccessibilitySettingsTest {
     @Test
     @SmallTest
     @Feature({"Accessibility"})
-    @Features.EnableFeatures({ContentFeatureList.ANDROID_CARET_BROWSING})
     public void testCaretFeatureToggle() {
         DeviceInput.setSupportsKeyboardForTesting(true);
         launchPreferenceUI();
@@ -413,6 +424,56 @@ public class AccessibilitySettingsTest {
 
         // Verify that we did set the feature value on the delegate
         verify(mDelegate).setCaretBrowsingEnabled(any(Boolean.class));
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"Accessibility"})
+    public void testCaretBrowsingSyncOnStart() {
+        when(mDelegate.isCaretBrowsingEnabled()).thenReturn(false);
+        launchPreferenceUI();
+        ChromeSwitchPreference caretBrowsingPref =
+                (ChromeSwitchPreference)
+                        mAccessibilitySettings.findPreference(
+                                AccessibilitySettings.PREF_CARET_BROWSING);
+        Assert.assertFalse("Initial value should be false", caretBrowsingPref.isChecked());
+
+        // Simulate external update (e.g. F7 shortcut in another window) changing value to true.
+        when(mDelegate.isCaretBrowsingEnabled()).thenReturn(true);
+        ThreadUtils.runOnUiThreadBlocking(() -> mAccessibilitySettings.onStart());
+
+        Assert.assertTrue(
+                "Caret browsing toggle should update onStart", caretBrowsingPref.isChecked());
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"Accessibility"})
+    public void testCaretBrowsingSplitScreenSync() {
+        PrefChangeRegistrarJni.setInstanceForTesting(mPrefChangeRegistrarJniMock);
+        UserPrefs.setPrefServiceForTesting(mPrefServiceMock);
+        when(mDelegate.getCaretBrowsingPreferenceKey())
+                .thenReturn(AccessibilitySettings.PREF_CARET_BROWSING);
+        when(mDelegate.isCaretBrowsingEnabled()).thenReturn(false);
+
+        launchPreferenceUI();
+        ChromeSwitchPreference caretBrowsingPref =
+                (ChromeSwitchPreference)
+                        mAccessibilitySettings.findPreference(
+                                AccessibilitySettings.PREF_CARET_BROWSING);
+        Assert.assertFalse("Initial value should be false", caretBrowsingPref.isChecked());
+
+        // Verify observer was registered
+        PrefObserver observer = mAccessibilitySettings.getPrefObserverForTesting();
+        Assert.assertNotNull("PrefObserver should be registered", observer);
+
+        // Simulate active split-screen external preference update
+        when(mDelegate.isCaretBrowsingEnabled()).thenReturn(true);
+        ThreadUtils.runOnUiThreadBlocking(observer::onPreferenceChange);
+
+        Assert.assertTrue(
+                "Caret browsing toggle should update via live observer",
+                caretBrowsingPref.isChecked());
     }
 
     // Helper methods.

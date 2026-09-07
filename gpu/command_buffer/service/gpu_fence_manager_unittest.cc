@@ -39,8 +39,8 @@ class GpuFenceManagerTest : public GpuServiceTest {
  public:
   GpuFenceManagerTest() {
     GpuDriverBugWorkarounds gpu_driver_bug_workaround;
-    feature_info_ =
-        new FeatureInfo(gpu_driver_bug_workaround, GpuFeatureInfo());
+    feature_info_ = base::MakeRefCounted<FeatureInfo>(gpu_driver_bug_workaround,
+                                                      GpuFeatureInfo());
   }
 
   ~GpuFenceManagerTest() override {}
@@ -325,6 +325,25 @@ TEST_F(GpuFenceManagerTest, Duplication) {
 
   // Cleanup.
   EXPECT_TRUE(manager_->RemoveGpuFence(kClient1Id));
+  EXPECT_FALSE(manager_->IsValidGpuFence(kClient1Id));
+}
+
+// Regression test: entries created by CreateGpuFenceFromHandle() carry only a
+// gfx::GpuFenceHandle and leave gl_fence_ null. Destroy(false) is the
+// context-loss path and iterates the map invalidating fences, so it must not
+// dereference gl_fence_ unconditionally. Note there is deliberately no
+// RemoveGpuFence() call here: every other test removes its entry, which is why
+// this path was not covered.
+TEST_F(GpuFenceManagerTest, DestroyWithoutContextAfterCreateFromHandle) {
+  const GLuint kClient1Id = 1;
+
+  gfx::GpuFenceHandle handle;
+  handle.Adopt(base::ScopedFD(dup(1)));
+  EXPECT_TRUE(
+      manager_->CreateGpuFenceFromHandle(kClient1Id, std::move(handle)));
+  EXPECT_TRUE(manager_->IsValidGpuFence(kClient1Id));
+
+  manager_->Destroy(false);
   EXPECT_FALSE(manager_->IsValidGpuFence(kClient1Id));
 }
 

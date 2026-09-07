@@ -10,9 +10,9 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
+#include "components/services/storage/dom_storage/db_status.h"
 #include "components/services/storage/dom_storage/session_storage_metadata.h"
 #include "components/services/storage/dom_storage/storage_area_impl.h"
-#include "storage/common/database/db_status.h"
 
 namespace storage {
 
@@ -93,8 +93,6 @@ class SessionStorageDataMap final
   ~SessionStorageDataMap() override;
 
   void OnMapLoaded() override;
-
-  static StorageAreaImpl::Options GetOptions();
 
   raw_ptr<Listener> listener_;
   int binding_count_ = 0;

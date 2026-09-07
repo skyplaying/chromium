@@ -98,8 +98,7 @@ bool ShouldAddSixPackKeyProperties(const mojom::Keyboard& keyboard) {
 }
 
 bool ShouldAddExtendedFkeyProperties(const mojom::Keyboard& keyboard) {
-  return ::features::AreF11AndF12ShortcutsEnabled() &&
-         IsChromeOSKeyboard(keyboard) &&
+  return IsChromeOSKeyboard(keyboard) &&
          !std::ranges::contains(keyboard.modifier_keys,
                                 ui::mojom::ModifierKey::kFunction);
 }
@@ -456,16 +455,6 @@ mojom::KeyboardSettingsPtr GetDefaultKeyboardSettings(
   }
 
   base::DictValue settings_dict;
-  if (Shell::Get()->keyboard_capability()->HasQuickInsertKeyForOobe(
-          keyboard.id)) {
-    base::DictValue modifier_remappings_dict;
-    modifier_remappings_dict.Set(
-        base::NumberToString(
-            static_cast<int>(ui::mojom::ModifierKey::kAssistant)),
-        static_cast<int>(ui::mojom::ModifierKey::kCapsLock));
-    settings_dict.Set(prefs::kKeyboardSettingModifierRemappings,
-                      std::move(modifier_remappings_dict));
-  }
 
   return RetrieveKeyboardSettings(pref_service, keyboard_policies, keyboard,
                                   std::move(settings_dict));

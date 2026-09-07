@@ -50,6 +50,12 @@ class CONTENT_EXPORT BrowserUIThreadScheduler {
 
   scoped_refptr<Handle> GetHandle() const { return handle_; }
 
+  base::sequence_manager::TaskQueue* GetDefaultTaskQueue() const;
+
+  bool IsPrioritizeResizeEnabled() const;
+
+  void PostFeatureListInit();
+
  private:
   friend class BrowserTaskExecutor;
 

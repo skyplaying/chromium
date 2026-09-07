@@ -57,8 +57,8 @@
 #include "third_party/blink/renderer/core/css/style_rule_font_palette_values.h"
 #include "third_party/blink/renderer/core/css/style_rule_function_declarations.h"
 #include "third_party/blink/renderer/core/css/style_rule_import.h"
+#include "third_party/blink/renderer/core/css/style_rule_location.h"
 #include "third_party/blink/renderer/core/css/style_rule_nested_declarations.h"
-#include "third_party/blink/renderer/core/css/style_rule_route.h"
 #include "third_party/blink/renderer/core/css/style_rule_view_transition.h"
 #include "third_party/blink/renderer/core/css/style_sheet_contents.h"
 #include "third_party/blink/renderer/core/dom/document.h"
@@ -67,8 +67,7 @@
 #include "third_party/blink/renderer/core/html/track/text_track_cue.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/inspector/invalidation_set_to_selector_map.h"
-#include "third_party/blink/renderer/core/route_matching/route_map.h"
-#include "third_party/blink/renderer/core/route_matching/route_match_state.h"
+#include "third_party/blink/renderer/core/route_matching/navigation_state.h"
 #include "third_party/blink/renderer/core/style/computed_style_constants.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
@@ -212,10 +211,12 @@ void RuleData::ComputeBloomFilterHashes(const StyleScope* style_scope,
   // captures most of the benefits. (It is fairly common, especially with
   // nesting, to have the same sets of parents in consecutive rules.)
   if (bloom_hash_size_ > 0 && bloom_hash_pos_ >= bloom_hash_size_ &&
-      UNSAFE_BUFFERS(std::equal(
-          bloom_hash_backing.begin() + bloom_hash_pos_ - bloom_hash_size_,
-          bloom_hash_backing.begin() + bloom_hash_pos_,
-          bloom_hash_backing.begin() + bloom_hash_pos_))) {
+      std::ranges::equal(base::span(bloom_hash_backing)
+                             .subspan(static_cast<wtf_size_t>(bloom_hash_pos_ -
+                                                              bloom_hash_size_),
+                                      bloom_hash_size_),
+                         base::span(bloom_hash_backing)
+                             .subspan(bloom_hash_pos_, bloom_hash_size_))) {
     bloom_hash_backing.resize(bloom_hash_pos_);
     bloom_hash_pos_ -= bloom_hash_size_;
   }
@@ -225,9 +226,8 @@ void RuleData::MovedToDifferentRuleSet(const Vector<uint16_t>& old_backing,
                                        Vector<uint16_t>& new_backing,
                                        unsigned new_position) {
   unsigned new_pos = new_backing.size();
-  new_backing.insert(new_backing.size(),
-                     UNSAFE_BUFFERS(old_backing.data() + bloom_hash_pos_),
-                     bloom_hash_size_);
+  new_backing.append_range(
+      base::span(old_backing).subspan(bloom_hash_pos_, bloom_hash_size_));
   bloom_hash_pos_ = new_pos;
   position_ = new_position;
 }
@@ -276,12 +276,13 @@ bool ShouldStopExtractingAtPseudoElement(
   switch (pseudo_type) {
     case CSSSelector::kPseudoCheckMark:
     case CSSSelector::kPseudoPickerIcon:
+    case CSSSelector::kPseudoExpandIcon:
     case CSSSelector::kPseudoFirstLetter:
     case CSSSelector::kPseudoScrollButton:
     case CSSSelector::kPseudoScrollMarker:
     case CSSSelector::kPseudoAfter:
     case CSSSelector::kPseudoBefore:
-    case CSSSelector::kPseudoInterestHint:
+    case CSSSelector::kPseudoInterestButton:
     case CSSSelector::kPseudoBackdrop:
     case CSSSelector::kPseudoMarker:
     case CSSSelector::kPseudoColumn:
@@ -293,6 +294,8 @@ bool ShouldStopExtractingAtPseudoElement(
     case CSSSelector::kPseudoViewTransitionOld:
     case CSSSelector::kPseudoScrollMarkerGroup:
     case CSSSelector::kPseudoOverscrollAreaParent:
+    case CSSSelector::kPseudoOverscrollBackdrop:
+    case CSSSelector::kPseudoSkeleton:
       return true;
     case CSSSelector::kPseudoCue:
     case CSSSelector::kPseudoFirstLine:
@@ -316,6 +319,7 @@ bool ShouldStopExtractingAtPseudoElement(
     case CSSSelector::kPseudoDetailsContent:
     case CSSSelector::kPseudoPermissionIcon:
     case CSSSelector::kPseudoPicker:
+    case CSSSelector::kPseudoSelectListbox:
     case CSSSelector::kPseudoWebKitCustomElement:
     case CSSSelector::kPseudoBlinkInternalElement:
       return false;
@@ -386,20 +390,25 @@ static bool ExtractBucketingValues(const CSSSelector* selector,
         case CSSSelector::kPseudoHost:
         case CSSSelector::kPseudoHostContext:
         case CSSSelector::kPseudoSlotted:
-        case CSSSelector::kPseudoSelectorFragmentAnchor:
         case CSSSelector::kPseudoRoot:
         case CSSSelector::kPseudoActiveViewTransition:
-        case CSSSelector::kPseudoOverscrollTarget:
+        case CSSSelector::kPseudoUnbounded:
           // Pseudo classes.
           values.pseudo_type = selector->GetPseudoType();
           if (values.pseudo_type == CSSSelector::kPseudoSlotted) {
             values.has_slotted = true;
           }
           break;
+        case CSSSelector::kPseudoPicker:
+          if (selector->Argument() != "select") {
+            break;
+          }
+          [[fallthrough]];
         case CSSSelector::kPseudoPlaceholder:
         case CSSSelector::kPseudoDetailsContent:
         case CSSSelector::kPseudoPermissionIcon:
         case CSSSelector::kPseudoFileSelectorButton:
+        case CSSSelector::kPseudoSelectListbox:
         case CSSSelector::kPseudoScrollbarButton:
         case CSSSelector::kPseudoScrollbarCorner:
         case CSSSelector::kPseudoScrollbarThumb:
@@ -420,11 +429,6 @@ static bool ExtractBucketingValues(const CSSSelector* selector,
           break;
         case CSSSelector::kPseudoPart:
           values.part_name = selector->Value();
-          break;
-        case CSSSelector::kPseudoPicker:
-          if (selector->Argument() == "select") {
-            values.ua_shadow_pseudo = shadow_element_names::kPickerSelect;
-          }
           break;
         case CSSSelector::kPseudoIs:
         case CSSSelector::kPseudoWhere:
@@ -475,6 +479,7 @@ static bool ExtractBucketingValues(const CSSSelector* selector,
       }
       break;
     case CSSSelector::kAttributeSet:
+      values.is_exact_attr = false;
       values.attr_name = selector->Attribute().LocalName();
       values.attr_value = g_empty_atom;
       break;
@@ -664,14 +669,14 @@ void RuleSet::FindBestBucketAndAdd(CSSSelector& component,
     AddToBucket(active_view_transition_rules_, rule_data);
     return;
   }
-  if (values.pseudo_type == CSSSelector::kPseudoOverscrollTarget) {
+  if (values.pseudo_type == CSSSelector::kPseudoUnbounded) {
     if (bucket_coverage == BucketCoverage::kCompute) {
       MarkAsCoveredByBucketing(component, [](const CSSSelector& selector) {
         return selector.Match() == CSSSelector::kPseudoClass &&
-               selector.GetPseudoType() == CSSSelector::kPseudoOverscrollTarget;
+               selector.GetPseudoType() == CSSSelector::kPseudoUnbounded;
       });
     }
-    AddToBucket(overscroll_target_rules_, rule_data);
+    AddToBucket(unbounded_pseudo_class_rules_, rule_data);
     return;
   }
 
@@ -716,7 +721,7 @@ void RuleSet::FindBestBucketAndAdd(CSSSelector& component,
                  selector.TagQName().NamespaceURI() == g_star_atom;
         });
       }
-      AddToBucket(values.attr_value.LowerASCII(), input_rules_, rule_data);
+      AddToBucket(values.attr_value.ToAsciiLower(), input_rules_, rule_data);
       return;
     }
 
@@ -769,9 +774,6 @@ void RuleSet::FindBestBucketAndAdd(CSSSelector& component,
     case CSSSelector::kPseudoFocusVisible:
       // Was handled above.
       NOTREACHED();
-      return;
-    case CSSSelector::kPseudoSelectorFragmentAnchor:
-      AddToBucket(selector_fragment_anchor_rules_, rule_data);
       return;
     case CSSSelector::kPseudoHost:
     case CSSSelector::kPseudoHostContext:
@@ -834,7 +836,7 @@ void RuleSet::FindBestBucketAndAdd(CSSSelector& component,
 void RuleSet::AddRule(StyleRule* rule,
                       unsigned selector_index,
                       AddRuleFlags add_rule_flags,
-                      const ContainerQuery* container_query,
+                      const ContainerQuerySet* container_queries,
                       const CascadeLayer* cascade_layer,
                       const StyleScope* style_scope) {
   // The selector index field in RuleData is only 13 bits so we can't support
@@ -882,7 +884,7 @@ void RuleSet::AddRule(StyleRule* rule,
   }
 
   AddRuleToLayerIntervals(cascade_layer, rule_data.GetPosition());
-  AddRuleToIntervals(container_query, rule_data.GetPosition(),
+  AddRuleToIntervals(container_queries, rule_data.GetPosition(),
                      container_query_intervals_);
   AddRuleToIntervals(style_scope, rule_data.GetPosition(), scope_intervals_);
 }
@@ -984,31 +986,31 @@ void RuleSet::AddChildRules(StyleRule* parent_rule,
                             const MediaQueryEvaluator& medium,
                             const MixinMap& mixins,
                             AddRuleFlags add_rule_flags,
-                            const ContainerQuery* container_query,
+                            const ContainerQuerySet* container_queries,
                             CascadeLayer* cascade_layer,
                             const StyleScope* style_scope,
                             ApplyMixinsStack& apply_mixins_stack) {
   for (StyleRuleBase* rule : rules) {
     if (auto* style_rule = DynamicTo<StyleRule>(rule)) {
       AddStyleRule(style_rule, parent_rule, medium, mixins, add_rule_flags,
-                   apply_mixins_stack, container_query, cascade_layer,
+                   apply_mixins_stack, container_queries, cascade_layer,
                    style_scope);
     } else if (auto* page_rule = DynamicTo<StyleRulePage>(rule)) {
       AddPageRule(page_rule, cascade_layer);
-    } else if (auto* route_rule = DynamicTo<StyleRuleRoute>(rule)) {
-      // TODO(crbug.com/436805487): Support removal of @route rules too.
-      route_rule->CreateRouteIfNeeded(medium.GetMediaValues().GetDocument());
+    } else if (auto* location_rule = DynamicTo<StyleRuleLocation>(rule)) {
+      // TODO(crbug.com/436805487): Support removal of @location rules too.
+      location_rule->CreateRouteIfNeeded(medium.GetMediaValues().GetDocument());
     } else if (auto* navigation_rule = DynamicTo<StyleRuleNavigation>(rule)) {
       const NavigationQuery& query = navigation_rule->GetNavigationQuery();
       if (query.Evaluate(medium.GetMediaValues().GetDocument())) {
         AddChildRules(parent_rule, navigation_rule->ChildRules(), medium,
-                      mixins, add_rule_flags, container_query, cascade_layer,
+                      mixins, add_rule_flags, container_queries, cascade_layer,
                       style_scope, apply_mixins_stack);
       }
     } else if (auto* media_rule = DynamicTo<StyleRuleMedia>(rule)) {
       if (MatchMediaForAddRules(medium, media_rule->MediaQueries())) {
         AddChildRules(parent_rule, media_rule->ChildRules(), medium, mixins,
-                      add_rule_flags, container_query, cascade_layer,
+                      add_rule_flags, container_queries, cascade_layer,
                       style_scope, apply_mixins_stack);
       }
     } else if (auto* font_face_rule = DynamicTo<StyleRuleFontFace>(rule)) {
@@ -1039,24 +1041,24 @@ void RuleSet::AddChildRules(StyleRule* parent_rule,
     } else if (auto* supports_rule = DynamicTo<StyleRuleSupports>(rule)) {
       if (supports_rule->ConditionIsSupported()) {
         AddChildRules(parent_rule, supports_rule->ChildRules(), medium, mixins,
-                      add_rule_flags, container_query, cascade_layer,
+                      add_rule_flags, container_queries, cascade_layer,
                       style_scope, apply_mixins_stack);
       }
     } else if (auto* container_rule = DynamicTo<StyleRuleContainer>(rule)) {
-      const ContainerQuery* inner_container_query =
-          &container_rule->GetContainerQuery();
-      if (container_query) {
-        inner_container_query =
-            inner_container_query->CopyWithParent(container_query);
+      const ContainerQuerySet* inner_container_queries =
+          &container_rule->GetContainerQuerySet();
+      if (container_queries) {
+        inner_container_queries =
+            inner_container_queries->CopyWithParent(container_queries);
       }
       AddChildRules(parent_rule, container_rule->ChildRules(), medium, mixins,
-                    add_rule_flags, inner_container_query, cascade_layer,
+                    add_rule_flags, inner_container_queries, cascade_layer,
                     style_scope, apply_mixins_stack);
     } else if (auto* layer_block_rule = DynamicTo<StyleRuleLayerBlock>(rule)) {
       CascadeLayer* sub_layer =
           GetOrAddSubLayer(cascade_layer, layer_block_rule->GetName());
       AddChildRules(parent_rule, layer_block_rule->ChildRules(), medium, mixins,
-                    add_rule_flags, container_query, sub_layer, style_scope,
+                    add_rule_flags, container_queries, sub_layer, style_scope,
                     apply_mixins_stack);
     } else if (auto* layer_statement_rule =
                    DynamicTo<StyleRuleLayerStatement>(rule)) {
@@ -1069,17 +1071,17 @@ void RuleSet::AddChildRules(StyleRule* parent_rule,
         inner_style_scope = inner_style_scope->CopyWithParent(style_scope);
       }
       AddChildRules(parent_rule, scope_rule->ChildRules(), medium, mixins,
-                    add_rule_flags, container_query, cascade_layer,
+                    add_rule_flags, container_queries, cascade_layer,
                     inner_style_scope, apply_mixins_stack);
     } else if (auto* starting_style_rule =
                    DynamicTo<StyleRuleStartingStyle>(rule)) {
       AddChildRules(parent_rule, starting_style_rule->ChildRules(), medium,
                     mixins, add_rule_flags | kRuleIsStartingStyle,
-                    container_query, cascade_layer, style_scope,
+                    container_queries, cascade_layer, style_scope,
                     apply_mixins_stack);
     } else if (auto* apply_mixin_rule = DynamicTo<StyleRuleApplyMixin>(rule)) {
       ApplyMixin(parent_rule, apply_mixin_rule, medium, mixins, add_rule_flags,
-                 container_query, cascade_layer, style_scope,
+                 container_queries, cascade_layer, style_scope,
                  apply_mixins_stack);
     } else if (auto* contents_rule =
                    DynamicTo<StyleRuleContentsStatement>(rule)) {
@@ -1090,28 +1092,24 @@ void RuleSet::AddChildRules(StyleRule* parent_rule,
 
       // Try first the parameter from @apply, then the fallback block given in
       // @contents, and if neither exists, nothing happens.
-      StyleRule* rules_to_add = nullptr;
-      if (apply->FakeParentRuleForDeclarations()) {
+      const StyleRuleGroup* rules_to_add = nullptr;
+      if (apply->HasContentsBlock()) {
         rules_to_add = To<StyleRuleApplyMixin>(
-                           apply->Clone(parent_rule, mixin_parameter_bindings))
-                           ->FakeParentRuleForDeclarations();
-      } else if (contents_rule->FakeParentRuleForFallback() &&
-                 contents_rule->FakeParentRuleForFallback()->ChildRules()) {
-        rules_to_add =
-            To<StyleRuleContentsStatement>(
-                contents_rule->Clone(parent_rule, mixin_parameter_bindings))
-                ->FakeParentRuleForFallback();
+            apply->Clone(parent_rule, mixin_parameter_bindings));
+      } else if (!contents_rule->ChildRules().empty()) {
+        rules_to_add = To<StyleRuleContentsStatement>(
+            contents_rule->Clone(parent_rule, mixin_parameter_bindings));
       }
-      if (rules_to_add && rules_to_add->ChildRules()) {
-        AddChildRules(parent_rule, *rules_to_add->ChildRules(), medium, mixins,
-                      add_rule_flags, container_query, cascade_layer,
+      if (rules_to_add) {
+        AddChildRules(parent_rule, rules_to_add->ChildRules(), medium, mixins,
+                      add_rule_flags, container_queries, cascade_layer,
                       style_scope, apply_mixins_stack);
       }
     } else if (auto* nested_declarations =
                    DynamicTo<StyleRuleNestedDeclarations>(rule)) {
       AddStyleRule(nested_declarations->InnerStyleRule(), parent_rule, medium,
-                   mixins, add_rule_flags, apply_mixins_stack, container_query,
-                   cascade_layer, style_scope);
+                   mixins, add_rule_flags, apply_mixins_stack,
+                   container_queries, cascade_layer, style_scope);
     } else if (StyleRuleResult* result_rule =
                    DynamicTo<StyleRuleResult>(rule)) {
       // If we see a @result, it means we are within a @mixin.
@@ -1122,8 +1120,72 @@ void RuleSet::AddChildRules(StyleRule* parent_rule,
           To<StyleRuleResult>(
               result_rule->Clone(parent_rule, mixin_parameter_bindings))
               ->ChildRules(),
-          medium, mixins, add_rule_flags, container_query, cascade_layer,
+          medium, mixins, add_rule_flags, container_queries, cascade_layer,
           style_scope, apply_mixins_stack);
+    }
+  }
+}
+
+void RuleSet::FlattenMixinLocals(
+    base::span<const Member<StyleRuleBase>> rules,
+    const MediaQueryEvaluator& medium,
+    const ContainerQuerySet* container_queries,
+    HeapHashMap<String, Member<CSSVariableData>>& locals,
+    HeapHashMap<String, HeapVector<MixinParameterBindings::CQDependentValue>>&
+        cq_dependent_locals) {
+  for (StyleRuleBase* rule : rules) {
+    if (auto* media_rule = DynamicTo<StyleRuleMedia>(rule)) {
+      if (MatchMediaForAddRules(medium, media_rule->MediaQueries())) {
+        FlattenMixinLocals(media_rule->ChildRules(), medium, container_queries,
+                           locals, cq_dependent_locals);
+      }
+    } else if (auto* supports_rule = DynamicTo<StyleRuleSupports>(rule)) {
+      if (supports_rule->ConditionIsSupported()) {
+        FlattenMixinLocals(supports_rule->ChildRules(), medium,
+                           container_queries, locals, cq_dependent_locals);
+      }
+    } else if (auto* container_rule = DynamicTo<StyleRuleContainer>(rule)) {
+      const ContainerQuerySet* inner_container_queries =
+          &container_rule->GetContainerQuerySet();
+      if (container_queries) {
+        inner_container_queries =
+            inner_container_queries->CopyWithParent(container_queries);
+      }
+      FlattenMixinLocals(container_rule->ChildRules(), medium,
+                         inner_container_queries, locals, cq_dependent_locals);
+    } else if (StyleRuleFunctionDeclarations* function_declarations =
+                   DynamicTo<StyleRuleFunctionDeclarations>(rule)) {
+      for (const CSSPropertyValue& value :
+           function_declarations->Properties().Properties()) {
+        const AtomicString& name = value.CustomPropertyName();
+        CSSVariableData* variable_data =
+            To<CSSUnparsedDeclarationValue>(value.Value()).VariableDataValue();
+
+        // Locals outside of container queries override all earlier locals.
+        // Locals inside container queries will only override locals with
+        // the same container query (since we don't attempt to find out if
+        // CQs are supersets of all CQs).
+        if (container_queries) {
+          auto& inserted =
+              cq_dependent_locals
+                  .insert(
+                      name,
+                      HeapVector<MixinParameterBindings::CQDependentValue>{})
+                  .stored_value->value;
+          auto new_end = std::remove_if(
+              inserted.begin(), inserted.end(),
+              [container_queries](
+                  const MixinParameterBindings::CQDependentValue& value) {
+                return value.container_queries == container_queries;
+              });
+          inserted.erase(new_end, inserted.end());
+          inserted.push_back(MixinParameterBindings::CQDependentValue{
+              variable_data, Member{container_queries}});
+        } else {
+          locals.Set(name, variable_data);
+          cq_dependent_locals.erase(name);
+        }
+      }
     }
   }
 }
@@ -1133,10 +1195,22 @@ void RuleSet::ApplyMixin(StyleRule* parent_rule,
                          const MediaQueryEvaluator& medium,
                          const MixinMap& mixins,
                          AddRuleFlags add_rule_flags,
-                         const ContainerQuery* container_query,
+                         const ContainerQuerySet* container_queries,
                          CascadeLayer* cascade_layer,
                          const StyleScope* style_scope,
                          ApplyMixinsStack& apply_mixins_stack) {
+  if (depends_on_mixins_) {
+    // A RuleSet is only ever built against a single mixin map.
+    CHECK(based_on_mixin_map_identifier_ == mixins.map_identifier);
+  } else {
+    // Mark that we saw an @apply rule, and the identifier of the mixin map it
+    // was resolved against, so that we can invalidate if anything should
+    // change. This must happen for every @apply, so we can distinguish RuleSets
+    // built in scopes with a different set of mixins.
+    depends_on_mixins_ = true;
+    based_on_mixin_map_identifier_ = mixins.map_identifier;
+  }
+
   auto it = mixins.mixins.find(apply_mixin_rule->GetName());
   if (it != mixins.mixins.end()) {
     StyleRuleMixin* mixin_rule = it->value;
@@ -1183,26 +1257,17 @@ void RuleSet::ApplyMixin(StyleRule* parent_rule,
     }
 
     // Collect any locals from the mixin.
-    // TODO(sesse): Support locals wrapped in conditional rules.
     HeapHashMap<String, Member<CSSVariableData>> locals;
-    for (StyleRuleBase* child_rule : mixin_rule->ChildRules()) {
-      if (StyleRuleFunctionDeclarations* function_declarations =
-              DynamicTo<StyleRuleFunctionDeclarations>(child_rule)) {
-        for (const CSSPropertyValue& value :
-             function_declarations->Properties().Properties()) {
-          const AtomicString& name = value.CustomPropertyName();
-          CSSVariableData* variable_data =
-              To<CSSUnparsedDeclarationValue>(value.Value())
-                  .VariableDataValue();
-
-          locals.insert(name, variable_data);
-        }
-      }
-    }
+    HeapHashMap<String, HeapVector<MixinParameterBindings::CQDependentValue>>
+        cq_dependent_locals;
+    FlattenMixinLocals(mixin_rule->ChildRules(), medium,
+                       /*container_queries=*/nullptr, locals,
+                       cq_dependent_locals);
 
     MixinParameterBindings* mixin_parameter_bindings =
         MakeGarbageCollected<MixinParameterBindings>(
             std::move(bindings), std::move(locals),
+            std::move(cq_dependent_locals),
             apply_mixins_stack.empty()
                 ? nullptr
                 : apply_mixins_stack.back().mixin_parameter_bindings);
@@ -1212,7 +1277,7 @@ void RuleSet::ApplyMixin(StyleRule* parent_rule,
                       .invoking_apply_rule = apply_mixin_rule,
                       .mixin_parameter_bindings = mixin_parameter_bindings});
     AddChildRules(parent_rule, mixin_rule->ChildRules(), medium, mixins,
-                  add_rule_flags, container_query, cascade_layer, style_scope,
+                  add_rule_flags, container_queries, cascade_layer, style_scope,
                   apply_mixins_stack);
     apply_mixins_stack.pop_back();
 
@@ -1222,14 +1287,7 @@ void RuleSet::ApplyMixin(StyleRule* parent_rule,
     // re-evaluate this RuleSet.
     features_.MutableMediaQueryResultFlags().Add(
         mixins.media_query_result_flags);
-    media_query_set_results_.AppendVector(mixins.media_query_set_results);
-
-    // Mark that we are using some mixin, and which generation of mixin map
-    // it came from, so that we can invalidate if anything should change.
-    if (based_on_mixin_generation_ != std::numeric_limits<uint64_t>::max()) {
-      CHECK_EQ(based_on_mixin_generation_, mixins.generation);
-    }
-    based_on_mixin_generation_ = mixins.generation;
+    media_query_set_results_.append_range(mixins.media_query_set_results);
   }
 }
 
@@ -1259,7 +1317,9 @@ void RuleSet::AddRulesFromSheet(const StyleSheetContents* sheet,
     }
   }
 
-  based_on_mixin_generation_ = std::numeric_limits<uint64_t>::max();
+  // NOTE: based_on_mixin_map_identifier_ is deliberately not reset here; this
+  // function is called recursively for @imported sheets, and resetting would
+  // drop a dependency recorded by an earlier @import.
 
   const HeapVector<Member<StyleRuleImport>>& import_rules =
       sheet->ImportRules();
@@ -1285,17 +1345,19 @@ void RuleSet::AddRulesFromSheet(const StyleSheetContents* sheet,
   InvalidationSetToSelectorMap::StyleSheetContentsScope contents_scope(sheet);
   ApplyMixinsStack apply_mixins_stack;
   AddChildRules(/*parent_rule=*/nullptr, sheet->ChildRules(), medium, mixins,
-                kRuleHasNoSpecialState, nullptr /* container_query */,
+                kRuleHasNoSpecialState, nullptr /* container_queries */,
                 cascade_layer, style_scope, apply_mixins_stack);
 
-  if (const auto* route_map = RouteMap::Get(medium.GetDocument())) {
-    // Need to do this for every style sheet, since each may add their own
-    // anonymous routes.
-    //
-    // TODO(crbug.com/436805487): See if we can find a better place for this.
-    // Maybe RuleSet isn't the right place. DidRoutesChange() was modeled after
-    // DidMediaQueryResultsChange(), but maybe there's a better way.
-    route_match_state_ = RouteMatchState::Create(*route_map);
+  // Need to do this for every style sheet, since each may add their own
+  // anonymous routes.
+  //
+  // TODO(crbug.com/436805487): See if we can find a better place for this.
+  // Maybe RuleSet isn't the right place. DidRoutesChange() was modeled after
+  // DidMediaQueryResultsChange(), but maybe there's a better way.
+  if (const auto* new_state = NavigationState::Get(medium.GetDocument())) {
+    navigation_state_ = MakeGarbageCollected<NavigationState>(*new_state);
+  } else {
+    navigation_state_ = nullptr;
   }
 }
 
@@ -1369,14 +1431,13 @@ void RuleSet::AddFilteredRulesFromOtherSet(
     AddFilteredRulesFromOtherBucket(other, other.slotted_pseudo_element_rules_,
                                     only_include,
                                     &slotted_pseudo_element_rules_);
-    AddFilteredRulesFromOtherBucket(
-        other, other.selector_fragment_anchor_rules_, only_include,
-        &selector_fragment_anchor_rules_);
     AddFilteredRulesFromOtherBucket(other, other.active_view_transition_rules_,
                                     only_include,
                                     &active_view_transition_rules_);
-    AddFilteredRulesFromOtherBucket(other, other.overscroll_target_rules_,
-                                    only_include, &overscroll_target_rules_);
+    AddFilteredRulesFromOtherBucket(other, other.unbounded_pseudo_class_rules_,
+                                    only_include,
+                                    &unbounded_pseudo_class_rules_);
+
     AddFilteredRulesFromOtherBucket(other, other.root_element_rules_,
                                     only_include, &root_element_rules_);
 
@@ -1397,20 +1458,20 @@ void RuleSet::AddStyleRule(StyleRule* style_rule,
                            const MixinMap& mixins,
                            AddRuleFlags add_rule_flags,
                            ApplyMixinsStack& apply_mixins_stack,
-                           const ContainerQuery* container_query,
+                           const ContainerQuerySet* container_queries,
                            CascadeLayer* cascade_layer,
                            const StyleScope* style_scope) {
   for (const CSSSelector* selector = style_rule->FirstSelector(); selector;
        selector = CSSSelectorList::Next(*selector)) {
     wtf_size_t selector_index = style_rule->SelectorIndex(*selector);
-    AddRule(style_rule, selector_index, add_rule_flags, container_query,
+    AddRule(style_rule, selector_index, add_rule_flags, container_queries,
             cascade_layer, style_scope);
   }
 
   // Nested rules are taken to be added immediately after their parent rule.
   if (style_rule->ChildRules() != nullptr) {
     AddChildRules(style_rule, *style_rule->ChildRules(), medium, mixins,
-                  add_rule_flags, container_query, cascade_layer, style_scope,
+                  add_rule_flags, container_queries, cascade_layer, style_scope,
                   apply_mixins_stack);
   }
 }
@@ -1547,10 +1608,19 @@ void RuleMap::AddFilteredRulesFromOtherSet(
       Seeker<StyleScope> scope_seeker(old_rule_set.scope_intervals_);
       for (const RuleData& rule_data : other.GetRulesFromExtent(extent)) {
         if (only_include.Contains(const_cast<StyleRule*>(rule_data.Rule()))) {
-          Add(key, rule_data);
+          RuleData* new_rule_data;
+          if (Add(key, rule_data)) {
+            new_rule_data = &backing.back();
+          } else {
+            // See comment in AddToBucket().
+            new_rule_set.universal_rules_.push_back(rule_data);
+            new_rule_data = &new_rule_set.universal_rules_.back();
+            UnmarkAsCoveredByBucketing(new_rule_data->MutableSelector());
+            new_rule_data->ComputeEntirelyCoveredByBucketing();
+          }
           new_rule_set.NewlyAddedFromDifferentRuleSet(
               rule_data, scope_seeker.Seek(rule_data.GetPosition()),
-              old_rule_set, backing.back());
+              old_rule_set, *new_rule_data);
         }
       }
     }
@@ -1568,10 +1638,19 @@ void RuleMap::AddFilteredRulesFromOtherSet(
       const unsigned bucket_number = other.bucket_number_[i];
       const RuleData& rule_data = other.backing[i];
       if (only_include.Contains(const_cast<StyleRule*>(rule_data.Rule()))) {
-        Add(*keys[bucket_number], rule_data);
+        RuleData* new_rule_data;
+        if (Add(*keys[bucket_number], rule_data)) {
+          new_rule_data = &backing.back();
+        } else {
+          // See comment in AddToBucket().
+          new_rule_set.universal_rules_.push_back(rule_data);
+          new_rule_data = &new_rule_set.universal_rules_.back();
+          UnmarkAsCoveredByBucketing(new_rule_data->MutableSelector());
+          new_rule_data->ComputeEntirelyCoveredByBucketing();
+        }
         new_rule_set.NewlyAddedFromDifferentRuleSet(
             rule_data, scope_seeker.Seek(rule_data.GetPosition()), old_rule_set,
-            backing.back());
+            *new_rule_data);
       }
     }
   }
@@ -1613,7 +1692,7 @@ bool RuleSet::CanIgnoreEntireList(base::span<const RuleData> list,
     // Building the tree failed, so always check.
     return false;
   }
-  return !it->value->AnyMatch(value.LowerASCII().Utf8());
+  return !it->value->AnyMatch(value.ToAsciiLower().Utf8());
 }
 
 void RuleSet::CreateSubstringMatchers(
@@ -1651,7 +1730,7 @@ void RuleSet::CreateSubstringMatchers(
         }
       }
 
-      std::string pattern = values.attr_value.LowerASCII().Utf8();
+      std::string pattern = values.attr_value.ToAsciiLower().Utf8();
 
       // SubstringSetMatcher doesn't like duplicates, and since we only
       // use the tree for true/false information anyway, we can remove them.
@@ -1693,7 +1772,6 @@ void RuleSet::CompactRules() {
   link_pseudo_class_rules_.shrink_to_fit();
   cue_pseudo_rules_.shrink_to_fit();
   focus_pseudo_class_rules_.shrink_to_fit();
-  selector_fragment_anchor_rules_.shrink_to_fit();
   focus_visible_pseudo_class_rules_.shrink_to_fit();
   scrollbar_rules_.shrink_to_fit();
   universal_rules_.shrink_to_fit();
@@ -1701,7 +1779,8 @@ void RuleSet::CompactRules() {
   part_pseudo_rules_.shrink_to_fit();
   slotted_pseudo_element_rules_.shrink_to_fit();
   active_view_transition_rules_.shrink_to_fit();
-  overscroll_target_rules_.shrink_to_fit();
+  unbounded_pseudo_class_rules_.shrink_to_fit();
+
   page_rules_.shrink_to_fit();
   font_face_rules_.shrink_to_fit();
   font_palette_values_rules_.shrink_to_fit();
@@ -1771,14 +1850,13 @@ void RuleSet::AssertRuleListsSorted() const {
   DCHECK(IsRuleListSorted(link_pseudo_class_rules_));
   DCHECK(IsRuleListSorted(cue_pseudo_rules_));
   DCHECK(IsRuleListSorted(focus_pseudo_class_rules_));
-  DCHECK(IsRuleListSorted(selector_fragment_anchor_rules_));
   DCHECK(IsRuleListSorted(focus_visible_pseudo_class_rules_));
   DCHECK(IsRuleListSorted(scrollbar_rules_));
   DCHECK(IsRuleListSorted(universal_rules_));
   DCHECK(IsRuleListSorted(shadow_host_rules_));
   DCHECK(IsRuleListSorted(part_pseudo_rules_));
   DCHECK(IsRuleListSorted(active_view_transition_rules_));
-  DCHECK(IsRuleListSorted(overscroll_target_rules_));
+  DCHECK(IsRuleListSorted(unbounded_pseudo_class_rules_));
 }
 
 #endif  // EXPENSIVE_DCHECKS_ARE_ON()
@@ -1789,12 +1867,11 @@ bool RuleSet::DidMediaQueryResultsChange(
 }
 
 bool RuleSet::DidRoutesChange(const Document* document) const {
-  const RouteMap* map = RouteMap::Get(document);
-  if (!map || !route_match_state_) {
-    return false;
+  const auto* current_state = NavigationState::Get(document);
+  if (!current_state != !navigation_state_) {
+    return true;
   }
-  auto* new_state = RouteMatchState::Create(*map);
-  return !new_state->Equals(*route_match_state_);
+  return current_state && *current_state != *navigation_state_;
 }
 
 const CascadeLayer* RuleSet::GetLayerForTest(const RuleData& rule) const {
@@ -1829,7 +1906,6 @@ void RuleSet::Trace(Visitor* visitor) const {
   visitor->Trace(link_pseudo_class_rules_);
   visitor->Trace(cue_pseudo_rules_);
   visitor->Trace(focus_pseudo_class_rules_);
-  visitor->Trace(selector_fragment_anchor_rules_);
   visitor->Trace(focus_visible_pseudo_class_rules_);
   visitor->Trace(scrollbar_rules_);
   visitor->Trace(universal_rules_);
@@ -1837,7 +1913,8 @@ void RuleSet::Trace(Visitor* visitor) const {
   visitor->Trace(part_pseudo_rules_);
   visitor->Trace(slotted_pseudo_element_rules_);
   visitor->Trace(active_view_transition_rules_);
-  visitor->Trace(overscroll_target_rules_);
+  visitor->Trace(unbounded_pseudo_class_rules_);
+
   visitor->Trace(page_rules_);
   visitor->Trace(font_face_rules_);
   visitor->Trace(font_palette_values_rules_);
@@ -1854,7 +1931,7 @@ void RuleSet::Trace(Visitor* visitor) const {
   visitor->Trace(layer_intervals_);
   visitor->Trace(container_query_intervals_);
   visitor->Trace(scope_intervals_);
-  visitor->Trace(route_match_state_);
+  visitor->Trace(navigation_state_);
 #if DCHECK_IS_ON()
   visitor->Trace(all_rules_);
 #endif  // DCHECK_IS_ON()

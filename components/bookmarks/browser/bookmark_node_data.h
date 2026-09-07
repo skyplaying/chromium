@@ -93,24 +93,18 @@ struct BookmarkNodeData {
 #if !BUILDFLAG(IS_APPLE)
     // For reading/writing this Element.
     void WriteToLegacyPickle(base::Pickle* pickle) const;
-    bool ReadFromLegacyPickle(base::PickleIterator* iterator);
+    bool ReadFromLegacyPickle(base::PickleIterator* iterator, size_t depth = 0);
 
     // Serializes this Element to a pickle.
     base::Pickle ToPickle() const;
     // Deserializes this Element from an iterator. Returns true if the
     // operation succeeds.
-    bool FromPickle(base::PickleIterator iterator);
+    bool FromPickle(base::PickleIterator iterator, size_t depth = 0);
 #endif
 
     // ID of the node.
     int64_t id_;
   };
-
-#if !BUILDFLAG(IS_APPLE)
-  // The MIME type for the clipboard format for BookmarkNodeData. This type is
-  // not used on the Mac.
-  static const char kClipboardFormatString[];
-#endif
 
   BookmarkNodeData();
   BookmarkNodeData(const BookmarkNodeData& other);
@@ -123,11 +117,8 @@ struct BookmarkNodeData {
 
   ~BookmarkNodeData();
 
-#if defined(TOOLKIT_VIEWS)
-  static const ui::ClipboardFormatType& GetBookmarkFormatType();
-#endif
-
-  static bool ClipboardContainsBookmarks();
+  static void ClipboardContainsBookmarks(
+      base::OnceCallback<void(bool)> callback);
 
   // Reads bookmarks from the given vector.
   // Returns true if the operation succeeds, which also implies that this
@@ -146,9 +137,11 @@ struct BookmarkNodeData {
 
   // Reads bookmarks from the specified clipboard. Prefers data written via
   // WriteToClipboard() but will also attempt to read a plain bookmark.
-  // Returns true if the operation succeeds, which also implies that this
-  // contains valid data (is non-empty).
-  bool ReadFromClipboard(ui::ClipboardBuffer buffer);
+  // `callback` will always be called, returning the data on success (is
+  // non-empty), or null on failure.
+  static void ReadFromClipboard(
+      ui::ClipboardBuffer buffer,
+      base::OnceCallback<void(std::unique_ptr<BookmarkNodeData>)> callback);
 
 #if defined(TOOLKIT_VIEWS)
   // Writes elements to data. If there is only one element and it is a URL

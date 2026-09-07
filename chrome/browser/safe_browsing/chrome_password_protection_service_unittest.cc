@@ -16,13 +16,15 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "base/test/gmock_callback_support.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/enterprise/connectors/reporting/realtime_reporting_client.h"
 #include "chrome/browser/enterprise/connectors/reporting/realtime_reporting_client_factory.h"
-#include "chrome/browser/password_manager/account_password_store_factory.h"
-#include "chrome/browser/password_manager/profile_password_store_factory.h"
+#include "chrome/browser/enterprise/connectors/test/deep_scanning_test_utils.h"
+#include "chrome/browser/password_manager/factories/account_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
 #include "chrome/browser/policy/dm_token_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/safe_browsing/chrome_safe_browsing_blocking_page_factory.h"
@@ -47,7 +49,6 @@
 #include "components/password_manager/core/browser/password_reuse_detector.h"
 #include "components/password_manager/core/browser/password_store/mock_password_store_interface.h"
 #include "components/policy/core/common/cloud/mock_cloud_policy_client.h"
-#include "components/policy/core/common/cloud/realtime_reporting_job_configuration.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/safe_browsing/content/browser/password_protection/password_protection_commit_deferring_condition.h"
@@ -59,11 +60,13 @@
 #include "components/safe_browsing/core/common/utils.h"
 #include "components/signin/public/identity_manager/account_capabilities_test_mutator.h"
 #include "components/signin/public/identity_manager/account_info.h"
+#include "components/site_engagement/content/site_engagement_service.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/sync/model/data_type_controller_delegate.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "components/sync_user_events/fake_user_event_service.h"
 #include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/mock_navigation_handle.h"
@@ -238,6 +241,13 @@ class MockChromePasswordProtectionService
     return safe_browsing::LoginReputationClientRequest::UrlDisplayExperiment();
   }
 
+  void ShowModalWarning(PasswordProtectionRequest* request,
+                        LoginReputationClientResponse::VerdictType verdict_type,
+                        const std::string& verdict_token,
+                        ReusedPasswordAccountType password_type) override {
+    request->set_is_modal_warning_showing(true);
+  }
+
   // Configures the results returned by IsExtendedReporting(), IsIncognito(),
   // and IsHistorySyncEnabled().
   void ConfigService(bool is_incognito, bool is_extended_reporting) {
@@ -258,7 +268,7 @@ class MockChromePasswordProtectionService
                         .SetAccountId(CoreAccountId::FromGaiaId(GaiaId("gaia")))
                         .SetHostedDomain(hosted_domain)
                         .Build();
-    AccountCapabilitiesTestMutator(&account_info_.capabilities)
+    AccountCapabilitiesTestMutator(&account_info_)
         .set_is_subject_to_enterprise_features(!hosted_domain.empty());
   }
 
@@ -331,10 +341,8 @@ class ChromePasswordProtectionServiceTest
     enterprise_connectors::RealtimeReportingClientFactory::GetInstance()
         ->SetTestingFactory(
             browser_context(),
-            base::BindRepeating([](content::BrowserContext* context) {
-              return std::unique_ptr<KeyedService>(
-                  new enterprise_connectors::RealtimeReportingClient(context));
-            }));
+            base::BindRepeating(
+                &enterprise_connectors::test::BuildRealtimeReportingClient));
 
     client_ = std::make_unique<policy::MockCloudPolicyClient>();
     client_->SetDMToken("fake-token");
@@ -356,6 +364,11 @@ class ChromePasswordProtectionServiceTest
   }
 
   void TearDown() override {
+    security_event_recorder_ = nullptr;
+    fake_user_event_service_ = nullptr;
+#if !BUILDFLAG(IS_ANDROID)
+    test_event_router_ = nullptr;
+#endif
     base::RunLoop().RunUntilIdle();
     service_.reset();
     request_ = nullptr;
@@ -383,7 +396,7 @@ class ChromePasswordProtectionServiceTest
         new SafeBrowsingUIManager(
             std::make_unique<ChromeSafeBrowsingUIManagerDelegate>(),
             std::make_unique<ChromeSafeBrowsingBlockingPageFactory>(),
-            GURL(chrome::kChromeUINewTabURL)),
+            chrome::ChromeUINewTabURLAsGURL()),
         sync_password_hash_provider, cache_manager_.get(),
         mock_add_callback_.Get(), mock_remove_callback_.Get());
 #else
@@ -395,7 +408,7 @@ class ChromePasswordProtectionServiceTest
         new SafeBrowsingUIManager(
             std::make_unique<ChromeSafeBrowsingUIManagerDelegate>(),
             std::make_unique<ChromeSafeBrowsingBlockingPageFactory>(),
-            GURL(chrome::kChromeUINewTabURL)),
+            chrome::ChromeUINewTabURLAsGURL()),
         sync_password_hash_provider, cache_manager_.get(),
         mock_add_callback_.Get(), mock_remove_callback_.Get(),
         std::move(checkup_launcher));
@@ -432,39 +445,20 @@ class ChromePasswordProtectionServiceTest
     std::vector<MatchingReusedCredential> credentials;
     credentials.emplace_back("somedomain.com", GURL("https://somedomain.com/"),
                              u"user");
-    if (trigger_type == LoginReputationClientRequest::UNFAMILIAR_LOGIN_PAGE) {
-      request_ = new PasswordProtectionRequestContent(
-          /*web_contents=*/web_contents(),
-          /*main_frame_url=*/GURL(kPhishingURL),
-          /*password_form_action=*/GURL(),
-          /*password_form_frame_url=*/GURL(),
-          /*main_frame_mime_type=*/web_contents()->GetContentsMimeType(),
-          /*username=*/kUserName,
-          /*password_type=*/PasswordType::PASSWORD_TYPE_UNKNOWN,
-          /*matching_reused_credentials=*/credentials,
-          /*trigger_type=*/trigger_type,
-          /*password_field_exists=*/true,
-          /*service=*/service_.get(),
-          /*request_timeout_in_ms=*/0,
-          /*otp_phishing_verdict_callback=*/std::nullopt);
-    } else {
-      ASSERT_EQ(LoginReputationClientRequest::PASSWORD_REUSE_EVENT,
-                trigger_type);
-      request_ = new PasswordProtectionRequestContent(
-          /*web_contents=*/web_contents(),
-          /*main_frame_url=*/GURL(kPhishingURL),
-          /*password_form_action=*/GURL(),
-          /*password_form_frame_url=*/GURL(),
-          /*main_frame_mime_type=*/web_contents()->GetContentsMimeType(),
-          /*username=*/kUserName,
-          /*password_type=*/reused_password_type,
-          /*matching_reused_credentials=*/credentials,
-          /*trigger_type=*/trigger_type,
-          /*password_field_exists=*/true,
-          /*service=*/service_.get(),
-          /*request_timeout_in_ms=*/0,
-          /*otp_phishing_verdict_callback=*/std::nullopt);
-    }
+    request_ = new PasswordProtectionRequestContent(
+        /*web_contents=*/web_contents(),
+        /*main_frame_url=*/GURL(kPhishingURL),
+        /*password_form_action=*/GURL(),
+        /*password_form_frame_url=*/GURL(),
+        /*main_frame_mime_type=*/web_contents()->GetContentsMimeType(),
+        /*username=*/kUserName,
+        /*password_type=*/reused_password_type,
+        /*matching_reused_credentials=*/credentials,
+        /*trigger_type=*/trigger_type,
+        /*password_field_exists=*/true,
+        /*service=*/service_.get(),
+        /*request_timeout_in_ms=*/0,
+        /*otp_phishing_verdict_callback=*/std::nullopt);
   }
 
   void InitializeVerdict(LoginReputationClientResponse::VerdictType type) {
@@ -527,16 +521,16 @@ class ChromePasswordProtectionServiceTest
   std::unique_ptr<LoginReputationClientResponse> verdict_;
   std::unique_ptr<IdentityTestEnvironmentProfileAdaptor>
       identity_test_env_profile_adaptor_;
-  raw_ptr<MockSecurityEventRecorder, DanglingUntriaged>
+  raw_ptr<MockSecurityEventRecorder>
       security_event_recorder_;
   scoped_refptr<password_manager::MockPasswordStoreInterface> password_store_;
   scoped_refptr<password_manager::MockPasswordStoreInterface>
       account_password_store_;
   // Owned by KeyedServiceFactory.
-  raw_ptr<syncer::FakeUserEventService, DanglingUntriaged>
+  raw_ptr<syncer::FakeUserEventService>
       fake_user_event_service_;
 #if !BUILDFLAG(IS_ANDROID)
-  raw_ptr<extensions::TestEventRouter, DanglingUntriaged> test_event_router_;
+  raw_ptr<extensions::TestEventRouter> test_event_router_;
 #endif
 #if BUILDFLAG(IS_ANDROID)
   raw_ptr<MockPasswordCheckupLauncherHelper> mock_checkup_launcher_;
@@ -1390,16 +1384,9 @@ TEST_F(ChromePasswordProtectionServiceTest,
 
   // Simulates change password.
   base::RunLoop run_loop;
-  if (base::FeatureList::IsEnabled(
-          policy::kUploadRealtimeReportingEventsUsingProto)) {
-    EXPECT_CALL(*client_, UploadSecurityEvent)
-        .Times(1)
-        .WillOnce(base::test::RunOnceClosure(run_loop.QuitClosure()));
-  } else {
-    EXPECT_CALL(*client_, UploadSecurityEventReport)
-        .Times(1)
-        .WillOnce(base::test::RunOnceClosure(run_loop.QuitClosure()));
-  }
+  EXPECT_CALL(*client_, UploadSecurityEvent)
+      .Times(1)
+      .WillOnce(base::test::RunOnceClosure(run_loop.QuitClosure()));
   service_->OnGaiaPasswordChanged("foo@example.com", false);
   run_loop.Run();
 
@@ -1412,12 +1399,7 @@ TEST_F(ChromePasswordProtectionServiceTest,
 #endif
 
   // If user is in incognito mode, no event should be sent.
-  if (base::FeatureList::IsEnabled(
-          policy::kUploadRealtimeReportingEventsUsingProto)) {
-    EXPECT_CALL(*client_, UploadSecurityEventReport).Times(0);
-  } else {
-    EXPECT_CALL(*client_, UploadSecurityEvent).Times(0);
-  }
+  EXPECT_CALL(*client_, UploadSecurityEvent).Times(0);
   service_->ConfigService(true /*is_incognito=*/,
                           false /*is_extended_reporting=*/);
   service_->OnGaiaPasswordChanged("foo@example.com", false);
@@ -1440,16 +1422,9 @@ TEST_F(
   profile()->GetPrefs()->SetInteger(prefs::kPasswordProtectionWarningTrigger,
                                     PASSWORD_REUSE);
   base::RunLoop run_loop;
-  if (base::FeatureList::IsEnabled(
-          policy::kUploadRealtimeReportingEventsUsingProto)) {
-    EXPECT_CALL(*client_, UploadSecurityEvent)
-        .Times(1)
-        .WillOnce(base::test::RunOnceClosure(run_loop.QuitClosure()));
-  } else {
-    EXPECT_CALL(*client_, UploadSecurityEventReport)
-        .Times(1)
-        .WillOnce(base::test::RunOnceClosure(run_loop.QuitClosure()));
-  }
+  EXPECT_CALL(*client_, UploadSecurityEvent)
+      .Times(1)
+      .WillOnce(base::test::RunOnceClosure(run_loop.QuitClosure()));
 
   NavigateAndCommit(GURL(kPasswordReuseURL));
   PrepareRequest(LoginReputationClientRequest::PASSWORD_REUSE_EVENT,
@@ -1474,16 +1449,9 @@ TEST_F(
   profile()->GetPrefs()->SetInteger(prefs::kPasswordProtectionWarningTrigger,
                                     PASSWORD_REUSE);
   base::RunLoop run_loop;
-  if (base::FeatureList::IsEnabled(
-          policy::kUploadRealtimeReportingEventsUsingProto)) {
-    EXPECT_CALL(*client_, UploadSecurityEvent)
-        .Times(1)
-        .WillOnce(base::test::RunOnceClosure(run_loop.QuitClosure()));
-  } else {
-    EXPECT_CALL(*client_, UploadSecurityEventReport)
-        .Times(1)
-        .WillOnce(base::test::RunOnceClosure(run_loop.QuitClosure()));
-  }
+  EXPECT_CALL(*client_, UploadSecurityEvent)
+      .Times(1)
+      .WillOnce(base::test::RunOnceClosure(run_loop.QuitClosure()));
   service_->MaybeStartProtectedPasswordEntryRequest(
       web_contents(),
       /*main_frame_url=*/GURL("chrome-extension://some-fab-extension"),
@@ -1512,21 +1480,14 @@ TEST_F(ChromePasswordProtectionServiceTest,
                  PasswordType::SAVED_PASSWORD,
                  /*is_warning_showing=*/false);
   base::RunLoop run_loop;
-  if (base::FeatureList::IsEnabled(
-          policy::kUploadRealtimeReportingEventsUsingProto)) {
-    EXPECT_CALL(*client_, UploadSecurityEvent)
-        .Times(1)
-        .WillOnce(base::test::RunOnceClosure(run_loop.QuitClosure()));
-  } else {
-    EXPECT_CALL(*client_, UploadSecurityEventReport)
-        .Times(1)
-        .WillOnce(base::test::RunOnceClosure(run_loop.QuitClosure()));
-  }
+  EXPECT_CALL(*client_, UploadSecurityEvent)
+      .Times(1)
+      .WillOnce(base::test::RunOnceClosure(run_loop.QuitClosure()));
   service_->MaybeReportPasswordReuseDetected(
       web_contents()->GetLastCommittedURL(), kUserName,
       PasswordType::ENTERPRISE_PASSWORD,
       /*is_phishing_url =*/true,
-      /*warning_shown =*/true);
+      /*warning_shown =*/true, safe_browsing::ReferrerChain());
   run_loop.Run();
 
 #if !BUILDFLAG(IS_ANDROID)
@@ -1543,11 +1504,11 @@ TEST_F(ChromePasswordProtectionServiceTest,
   // should be sent.
   service_->SetAccountInfo(kUserName, /*hosted_domain=*/"");
   service_->SetIsAccountSignedIn(true);
-  EXPECT_CALL(*client_, UploadSecurityEventReport).Times(0);
+  EXPECT_CALL(*client_, UploadSecurityEvent).Times(0);
   service_->MaybeReportPasswordReuseDetected(
       request_->main_frame_url(), kUserName, PasswordType::OTHER_GAIA_PASSWORD,
       /*is_phishing_url =*/true,
-      /*warning_shown =*/true);
+      /*warning_shown =*/true, ReferrerChain());
 
 #if !BUILDFLAG(IS_ANDROID)
   ASSERT_EQ(1, test_event_router_->GetEventCount(
@@ -1557,11 +1518,11 @@ TEST_F(ChromePasswordProtectionServiceTest,
   // consumer accounts and reports are not sent even if there is a hosted
   // domain.
   service_->SetAccountInfo(kGmailUserName, /*hosted_domain=*/"example.com");
-  service_->MaybeReportPasswordReuseDetected(request_->main_frame_url(),
-                                             kGmailUserName,
-                                             PasswordType::OTHER_GAIA_PASSWORD,
-                                             /*is_phishing_url =*/true,
-                                             /*warning_shown =*/true);
+  service_->MaybeReportPasswordReuseDetected(
+      request_->main_frame_url(), kGmailUserName,
+      PasswordType::OTHER_GAIA_PASSWORD,
+      /*is_phishing_url =*/true,
+      /*warning_shown =*/true, ReferrerChain());
   base::RunLoop().RunUntilIdle();
 #if !BUILDFLAG(IS_ANDROID)
   ASSERT_EQ(1, test_event_router_->GetEventCount(
@@ -1569,12 +1530,12 @@ TEST_F(ChromePasswordProtectionServiceTest,
 #endif
   service_->SetAccountInfo(kGooglemailUserName,
                            /*hosted_domain=*/"example.com");
-  EXPECT_CALL(*client_, UploadSecurityEventReport).Times(0);
-  service_->MaybeReportPasswordReuseDetected(request_->main_frame_url(),
-                                             kGooglemailUserName,
-                                             PasswordType::OTHER_GAIA_PASSWORD,
-                                             /*is_phishing_url =*/true,
-                                             /*warning_shown =*/true);
+  EXPECT_CALL(*client_, UploadSecurityEvent).Times(0);
+  service_->MaybeReportPasswordReuseDetected(
+      request_->main_frame_url(), kGooglemailUserName,
+      PasswordType::OTHER_GAIA_PASSWORD,
+      /*is_phishing_url =*/true,
+      /*warning_shown =*/true, ReferrerChain());
 #if !BUILDFLAG(IS_ANDROID)
   ASSERT_EQ(1, test_event_router_->GetEventCount(
                    OnPolicySpecifiedPasswordReuseDetected::kEventName));
@@ -1583,20 +1544,13 @@ TEST_F(ChromePasswordProtectionServiceTest,
   // GSuite, event should be sent.
   service_->SetAccountInfo(kUserName, "example.com");
   base::RunLoop run_loop2;
-  if (base::FeatureList::IsEnabled(
-          policy::kUploadRealtimeReportingEventsUsingProto)) {
-    EXPECT_CALL(*client_, UploadSecurityEvent)
-        .Times(1)
-        .WillOnce(base::test::RunOnceClosure(run_loop2.QuitClosure()));
-  } else {
-    EXPECT_CALL(*client_, UploadSecurityEventReport)
-        .Times(1)
-        .WillOnce(base::test::RunOnceClosure(run_loop2.QuitClosure()));
-  }
+  EXPECT_CALL(*client_, UploadSecurityEvent)
+      .Times(1)
+      .WillOnce(base::test::RunOnceClosure(run_loop2.QuitClosure()));
   service_->MaybeReportPasswordReuseDetected(
       request_->main_frame_url(), kUserName, PasswordType::OTHER_GAIA_PASSWORD,
       /*is_phishing_url =*/true,
-      /*warning_shown =*/true);
+      /*warning_shown =*/true, ReferrerChain());
   run_loop2.Run();
 
 #if !BUILDFLAG(IS_ANDROID)
@@ -1605,16 +1559,11 @@ TEST_F(ChromePasswordProtectionServiceTest,
 #endif
 
   // If no password is used , no event should be sent.
-  if (base::FeatureList::IsEnabled(
-          policy::kUploadRealtimeReportingEventsUsingProto)) {
-    EXPECT_CALL(*client_, UploadSecurityEventReport).Times(0);
-  } else {
-    EXPECT_CALL(*client_, UploadSecurityEvent).Times(0);
-  }
+  EXPECT_CALL(*client_, UploadSecurityEvent).Times(0);
   service_->MaybeReportPasswordReuseDetected(
       request_->main_frame_url(), kUserName,
       PasswordType::PASSWORD_TYPE_UNKNOWN,
-      /*is_phishing_url =*/true, /*warning_shown =*/true);
+      /*is_phishing_url =*/true, /*warning_shown =*/true, ReferrerChain());
   base::RunLoop().RunUntilIdle();
 #if !BUILDFLAG(IS_ANDROID)
   EXPECT_EQ(2, test_event_router_->GetEventCount(
@@ -1623,16 +1572,11 @@ TEST_F(ChromePasswordProtectionServiceTest,
   // If user is in incognito mode, no event should be sent.
   service_->ConfigService(true /*is_incognito=*/,
                           false /*is_extended_reporting=*/);
-  if (base::FeatureList::IsEnabled(
-          policy::kUploadRealtimeReportingEventsUsingProto)) {
-    EXPECT_CALL(*client_, UploadSecurityEventReport).Times(0);
-  } else {
-    EXPECT_CALL(*client_, UploadSecurityEvent).Times(0);
-  }
+  EXPECT_CALL(*client_, UploadSecurityEvent).Times(0);
   service_->MaybeReportPasswordReuseDetected(
       request_->main_frame_url(), kUserName, PasswordType::ENTERPRISE_PASSWORD,
       /*is_phishing_url =*/true,
-      /*warning_shown =*/true);
+      /*warning_shown =*/true, ReferrerChain());
   base::RunLoop().RunUntilIdle();
 #if !BUILDFLAG(IS_ANDROID)
   EXPECT_EQ(2, test_event_router_->GetEventCount(
@@ -1657,20 +1601,13 @@ TEST_F(ChromePasswordProtectionServiceTest,
                  PasswordType::SAVED_PASSWORD,
                  /*is_warning_showing=*/false);
   base::RunLoop run_loop;
-  if (base::FeatureList::IsEnabled(
-          policy::kUploadRealtimeReportingEventsUsingProto)) {
-    EXPECT_CALL(*client_, UploadSecurityEvent)
-        .Times(1)
-        .WillOnce(base::test::RunOnceClosure(run_loop.QuitClosure()));
-  } else {
-    EXPECT_CALL(*client_, UploadSecurityEventReport)
-        .Times(1)
-        .WillOnce(base::test::RunOnceClosure(run_loop.QuitClosure()));
-  }
+  EXPECT_CALL(*client_, UploadSecurityEvent)
+      .Times(1)
+      .WillOnce(base::test::RunOnceClosure(run_loop.QuitClosure()));
   service_->MaybeReportPasswordReuseDetected(
       request_->main_frame_url(), kUserName, PasswordType::ENTERPRISE_PASSWORD,
       /*is_phishing_url =*/true,
-      /*warning_shown =*/true);
+      /*warning_shown =*/true, ReferrerChain());
   run_loop.Run();
 #if !BUILDFLAG(IS_ANDROID)
   EXPECT_EQ(1, test_event_router_->GetEventCount(
@@ -1679,16 +1616,11 @@ TEST_F(ChromePasswordProtectionServiceTest,
 
   // If user is a Gmail user and not an enterprise password is used , no event
   // should be sent.
-  if (base::FeatureList::IsEnabled(
-          policy::kUploadRealtimeReportingEventsUsingProto)) {
-    EXPECT_CALL(*client_, UploadSecurityEventReport).Times(0);
-  } else {
-    EXPECT_CALL(*client_, UploadSecurityEvent).Times(0);
-  }
+  EXPECT_CALL(*client_, UploadSecurityEvent).Times(0);
   service_->MaybeReportPasswordReuseDetected(
       request_->main_frame_url(), kUserName, PasswordType::OTHER_GAIA_PASSWORD,
       /*is_phishing_url =*/true,
-      /*warning_shown =*/true);
+      /*warning_shown =*/true, ReferrerChain());
   base::RunLoop().RunUntilIdle();
 #if !BUILDFLAG(IS_ANDROID)
   EXPECT_EQ(1, test_event_router_->GetEventCount(
@@ -1696,16 +1628,11 @@ TEST_F(ChromePasswordProtectionServiceTest,
 #endif
 
   // If user is a Gmail user and no password is used , no event should be sent.
-  if (base::FeatureList::IsEnabled(
-          policy::kUploadRealtimeReportingEventsUsingProto)) {
-    EXPECT_CALL(*client_, UploadSecurityEventReport).Times(0);
-  } else {
-    EXPECT_CALL(*client_, UploadSecurityEvent).Times(0);
-  }
+  EXPECT_CALL(*client_, UploadSecurityEvent).Times(0);
   service_->MaybeReportPasswordReuseDetected(
       request_->main_frame_url(), kUserName,
       PasswordType::PASSWORD_TYPE_UNKNOWN,
-      /*is_phishing_url =*/true, /*warning_shown*/ true);
+      /*is_phishing_url =*/true, /*warning_shown*/ true, ReferrerChain());
   base::RunLoop().RunUntilIdle();
 #if !BUILDFLAG(IS_ANDROID)
   EXPECT_EQ(1, test_event_router_->GetEventCount(
@@ -2012,7 +1939,8 @@ class PasswordCheckupWithPhishGuardTest
     password_account_type.set_is_account_syncing(is_syncing);
 
     service_->OnUserAction(
-        web_contents(), password_account_type, RequestOutcome::UNKNOWN,
+        web_contents()->GetWeakPtr(), password_account_type,
+        RequestOutcome::UNKNOWN,
         LoginReputationClientResponse::VERDICT_TYPE_UNSPECIFIED, "unused_token",
         WarningUIType::MODAL_DIALOG, WarningAction::CHANGE_PASSWORD);
   }
@@ -2139,6 +2067,59 @@ TEST_F(PasswordCheckupWithPhishGuardTest,
 }
 
 #endif
+
+TEST_F(ChromePasswordProtectionServiceTest, RecordSiteEngagementScore) {
+  base::HistogramTester histograms;
+  GURL url(kPhishingURL);
+
+  // Mock site engagement score.
+  site_engagement::SiteEngagementService::Get(profile())->ResetBaseScoreForURL(
+      url, 75.0);
+
+  // Case 1: PASSWORD_REUSE_EVENT + SAFE
+  InitializeRequest(LoginReputationClientRequest::PASSWORD_REUSE_EVENT,
+                    PasswordType::SAVED_PASSWORD);
+  SimulateRequestFinished(LoginReputationClientResponse::SAFE);
+  histograms.ExpectUniqueSample(
+      "PasswordProtection.Verdict.PasswordReuseEvent.SiteEngagementScore.Safe",
+      75, 1);
+
+  // Case 2: UNFAMILIAR_LOGIN_PAGE + PHISHING
+  InitializeRequest(LoginReputationClientRequest::UNFAMILIAR_LOGIN_PAGE,
+                    PasswordType::PASSWORD_TYPE_UNKNOWN);
+  SimulateRequestFinished(LoginReputationClientResponse::PHISHING);
+  histograms.ExpectUniqueSample(
+      "PasswordProtection.Verdict.UnfamiliarLoginPage.SiteEngagementScore."
+      "Phishing",
+      75, 1);
+
+  // Case 3: ONE_TIME_PASSWORD_FIELD_DETECTED + LOW_REPUTATION
+  InitializeRequest(
+      LoginReputationClientRequest::ONE_TIME_PASSWORD_FIELD_DETECTED,
+      PasswordType::PASSWORD_TYPE_UNKNOWN);
+  SimulateRequestFinished(LoginReputationClientResponse::LOW_REPUTATION);
+  histograms.ExpectUniqueSample(
+      "PasswordProtection.Verdict.OtpFieldDetected.SiteEngagementScore."
+      "LowReputation",
+      75, 1);
+}
+
+TEST_F(ChromePasswordProtectionServiceTest,
+       RecordSiteEngagementScore_Incognito) {
+  base::HistogramTester histograms;
+  GURL url(kPhishingURL);
+
+  service_->ConfigService(true /*is_incognito=*/,
+                          true /*is_extended_reporting=*/);
+
+  InitializeRequest(LoginReputationClientRequest::PASSWORD_REUSE_EVENT,
+                    PasswordType::SAVED_PASSWORD);
+
+  SimulateRequestFinished(LoginReputationClientResponse::SAFE);
+  histograms.ExpectTotalCount(
+      "PasswordProtection.Verdict.PasswordReuseEvent.SiteEngagementScore.Safe",
+      0);
+}
 
 }  // namespace
 

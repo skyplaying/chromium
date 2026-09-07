@@ -30,7 +30,7 @@ ExtensionSettingsOverriddenDialog::Params CreateTestDialogParams(
     const extensions::ExtensionId& controlling_id) {
   SettingsOverriddenDialogController::ShowParams show_params(
       u"Test Dialog Title", u"Test Dialog Body", nullptr);
-  return {controlling_id, kTestAcknowledgedPreference,
+  return {controlling_id, "Test Extension", kTestAcknowledgedPreference,
           kTestDialogResultHistogramName, std::move(show_params)};
 }
 
@@ -91,7 +91,7 @@ TEST_F(ExtensionSettingsOverriddenDialogUnitTest,
   const extensions::Extension* extension = AddExtension("fancy extension");
 
   ExtensionSettingsOverriddenDialog controller(
-      CreateTestDialogParams(extension->id()), profile());
+      CreateTestDialogParams(extension->id()), *profile());
   EXPECT_TRUE(controller.ShouldShow());
 
   ExtensionSettingsOverriddenDialog::ShowParams show_params =
@@ -107,7 +107,7 @@ TEST_F(ExtensionSettingsOverriddenDialogUnitTest,
       extension->id(), kTestAcknowledgedPreference, base::Value(true));
 
   ExtensionSettingsOverriddenDialog controller(
-      CreateTestDialogParams(extension->id()), profile());
+      CreateTestDialogParams(extension->id()), *profile());
   EXPECT_FALSE(controller.ShouldShow());
 }
 
@@ -118,7 +118,7 @@ TEST_F(ExtensionSettingsOverriddenDialogUnitTest,
       extensions::mojom::ManifestLocation::kExternalPolicyDownload);
 
   ExtensionSettingsOverriddenDialog controller(
-      CreateTestDialogParams(policy_extension->id()), profile());
+      CreateTestDialogParams(policy_extension->id()), *profile());
   EXPECT_FALSE(controller.ShouldShow());
 }
 
@@ -128,9 +128,9 @@ TEST_F(ExtensionSettingsOverriddenDialogUnitTest,
   const extensions::Extension* extension = AddExtension();
 
   ExtensionSettingsOverriddenDialog controller(
-      CreateTestDialogParams(extension->id()), profile());
+      CreateTestDialogParams(extension->id()), *profile());
   EXPECT_TRUE(controller.ShouldShow());
-  controller.OnDialogShown();
+  controller.OnDialogWillBeShown();
 
   controller.HandleDialogResult(DialogResult::kChangeSettingsBack);
   histogram_tester.ExpectUniqueSample(kTestDialogResultHistogramName,
@@ -149,9 +149,9 @@ TEST_F(ExtensionSettingsOverriddenDialogUnitTest,
   const extensions::Extension* extension = AddExtension();
 
   ExtensionSettingsOverriddenDialog controller(
-      CreateTestDialogParams(extension->id()), profile());
+      CreateTestDialogParams(extension->id()), *profile());
   EXPECT_TRUE(controller.ShouldShow());
-  controller.OnDialogShown();
+  controller.OnDialogWillBeShown();
 
   controller.HandleDialogResult(DialogResult::kKeepNewSettings);
   histogram_tester.ExpectUniqueSample(kTestDialogResultHistogramName,
@@ -167,8 +167,8 @@ TEST_F(ExtensionSettingsOverriddenDialogUnitTest,
   const extensions::Extension* extension = AddExtension();
 
   ExtensionSettingsOverriddenDialog controller(
-      CreateTestDialogParams(extension->id()), profile());
-  controller.OnDialogShown();
+      CreateTestDialogParams(extension->id()), *profile());
+  controller.OnDialogWillBeShown();
 
   controller.HandleDialogResult(DialogResult::kDialogDismissed);
   histogram_tester.ExpectUniqueSample(kTestDialogResultHistogramName,
@@ -185,8 +185,8 @@ TEST_F(
   const extensions::Extension* extension = AddExtension();
 
   ExtensionSettingsOverriddenDialog controller(
-      CreateTestDialogParams(extension->id()), profile());
-  controller.OnDialogShown();
+      CreateTestDialogParams(extension->id()), *profile());
+  controller.OnDialogWillBeShown();
 
   controller.HandleDialogResult(DialogResult::kDialogClosedWithoutUserAction);
   histogram_tester.ExpectUniqueSample(
@@ -203,9 +203,9 @@ TEST_F(ExtensionSettingsOverriddenDialogUnitTest,
 
   {
     ExtensionSettingsOverriddenDialog controller(
-        CreateTestDialogParams(extension->id()), profile());
+        CreateTestDialogParams(extension->id()), *profile());
     EXPECT_TRUE(controller.ShouldShow());
-    controller.OnDialogShown();
+    controller.OnDialogWillBeShown();
     controller.HandleDialogResult(DialogResult::kDialogDismissed);
   }
 
@@ -213,7 +213,7 @@ TEST_F(ExtensionSettingsOverriddenDialogUnitTest,
     // Since the dialog was already shown for this extension, it should not
     // display a second time.
     ExtensionSettingsOverriddenDialog controller(
-        CreateTestDialogParams(extension->id()), profile());
+        CreateTestDialogParams(extension->id()), *profile());
     EXPECT_FALSE(controller.ShouldShow());
   }
 }
@@ -224,16 +224,16 @@ TEST_F(ExtensionSettingsOverriddenDialogUnitTest,
 
   {
     ExtensionSettingsOverriddenDialog controller(
-        CreateTestDialogParams(extension_one->id()), profile());
+        CreateTestDialogParams(extension_one->id()), *profile());
     EXPECT_TRUE(controller.ShouldShow());
-    controller.OnDialogShown();
+    controller.OnDialogWillBeShown();
     controller.HandleDialogResult(DialogResult::kDialogDismissed);
   }
 
   const extensions::Extension* extension_two = AddExtension("two");
   {
     ExtensionSettingsOverriddenDialog controller(
-        CreateTestDialogParams(extension_two->id()), profile());
+        CreateTestDialogParams(extension_two->id()), *profile());
     EXPECT_TRUE(controller.ShouldShow());
   }
 }
@@ -243,9 +243,9 @@ TEST_F(ExtensionSettingsOverriddenDialogUnitTest,
   const extensions::Extension* extension = AddExtension();
 
   ExtensionSettingsOverriddenDialog controller(
-      CreateTestDialogParams(extension->id()), profile());
+      CreateTestDialogParams(extension->id()), *profile());
   EXPECT_TRUE(controller.ShouldShow());
-  controller.OnDialogShown();
+  controller.OnDialogWillBeShown();
 
   registrar()->UninstallExtension(
       extension->id(), extensions::UNINSTALL_REASON_FOR_TESTING, nullptr);
@@ -262,7 +262,7 @@ TEST_F(ExtensionSettingsOverriddenDialogUnitTest,
                    /*include_extra_perms=*/false);
 
   ExtensionSettingsOverriddenDialog controller(
-      CreateTestDialogParams(extension->id()), profile());
+      CreateTestDialogParams(extension->id()), *profile());
   EXPECT_FALSE(controller.ShouldShow());
   // The the extension should not be acknowledged. The latter is important to
   // re-assess the extension in case it updates.
@@ -287,7 +287,7 @@ TEST_F(ExtensionSettingsOverriddenDialogUnitTest,
                    /*include_extra_perms=*/false);
 
   ExtensionSettingsOverriddenDialog controller(
-      CreateTestDialogParams(extension->id()), profile());
+      CreateTestDialogParams(extension->id()), *profile());
 
   // Since InstallTime > EnforcementTime, it should show.
   EXPECT_TRUE(controller.ShouldShow());
@@ -310,7 +310,7 @@ TEST_F(ExtensionSettingsOverriddenDialogUnitTest,
                                  base::Time::Now() + base::Days(1));
 
   ExtensionSettingsOverriddenDialog controller(
-      CreateTestDialogParams(extension->id()), profile());
+      CreateTestDialogParams(extension->id()), *profile());
 
   // Since InstallTime < EnforcementTime, it should NOT show.
   EXPECT_FALSE(controller.ShouldShow());
@@ -341,7 +341,7 @@ TEST_F(ExtensionSettingsOverriddenDialogUnitTest,
                   .is_null());
 
   ExtensionSettingsOverriddenDialog controller(
-      CreateTestDialogParams(extension->id()), profile());
+      CreateTestDialogParams(extension->id()), *profile());
 
   // 3. It should not show (Grandfathered), because InstallTime <
   // EnforcementTime (Now).
@@ -372,7 +372,7 @@ TEST_F(ExtensionSettingsOverriddenDialogUnitTest,
                                  base::Time::Now() + base::Days(1));
 
   ExtensionSettingsOverriddenDialog controller(
-      CreateTestDialogParams(extension->id()), profile());
+      CreateTestDialogParams(extension->id()), *profile());
 
   EXPECT_TRUE(controller.ShouldShow());
 }

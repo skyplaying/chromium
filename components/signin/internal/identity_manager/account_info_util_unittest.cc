@@ -8,9 +8,12 @@
 #include <string>
 #include <vector>
 
+#include "base/feature_list.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/values.h"
 #include "components/signin/internal/identity_manager/account_capabilities_constants.h"
 #include "components/signin/public/base/signin_metrics.h"
+#include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/account_capabilities.h"
 #include "components/signin/public/identity_manager/account_capabilities_test_mutator.h"
 #include "components/signin/public/identity_manager/account_info.h"
@@ -363,7 +366,8 @@ TEST(AccountInfoUtilTest, SerializeAndDeserializeAccountCapabilities) {
 
   base::DictValue dict = SerializeAccountCapabilities(capabilities);
   AccountCapabilities deserialized_capabilities =
-      DeserializeAccountCapabilities(dict);
+      DeserializeAccountCapabilities(dict,
+                                     /*overrides_dict=*/base::DictValue());
 
   EXPECT_EQ(deserialized_capabilities.is_subject_to_parental_controls(),
             Tribool::kTrue);
@@ -377,14 +381,16 @@ TEST(AccountInfoUtilTest, SerializeAndDeserializeAccountCapabilities) {
 
 TEST(AccountInfoUtilTest, DeserializeAccountCapabilities_Empty) {
   base::DictValue dict;
-  AccountCapabilities capabilities = DeserializeAccountCapabilities(dict);
+  AccountCapabilities capabilities = DeserializeAccountCapabilities(
+      dict, /*overrides_dict=*/base::DictValue());
   EXPECT_FALSE(capabilities.AreAnyCapabilitiesKnown());
 }
 
 TEST(AccountInfoUtilTest, DeserializeAccountCapabilities_UnknownCapability) {
   base::DictValue dict;
   dict.Set("unknown_capability", 1);
-  AccountCapabilities capabilities = DeserializeAccountCapabilities(dict);
+  AccountCapabilities capabilities = DeserializeAccountCapabilities(
+      dict, /*overrides_dict=*/base::DictValue());
   EXPECT_FALSE(capabilities.AreAnyCapabilitiesKnown());
 }
 
@@ -398,7 +404,8 @@ TEST(AccountInfoUtilTest, DeserializeAccountCapabilities_FormatStability) {
                   .Set("accountcapabilities/guydolldmfya", 0)
                   .Set("accountcapabilities/gi2tklldmfya", 1);
 
-  AccountCapabilities capabilities = DeserializeAccountCapabilities(dict);
+  AccountCapabilities capabilities = DeserializeAccountCapabilities(
+      dict, /*overrides_dict=*/base::DictValue());
 
   EXPECT_EQ(capabilities.is_subject_to_parental_controls(), Tribool::kFalse);
   EXPECT_EQ(
@@ -426,8 +433,10 @@ TEST(AccountInfoUtilTest, SerializeAndDeserializeAccountInfo) {
           .SetIsChildAccount(signin::Tribool::kTrue)
           .SetLastDownloadedAvatarUrlWithSize(
               "https://example.com/picture_with_size.jpg")
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
           .SetLastAuthenticationAccessPoint(
               signin_metrics::AccessPoint::kAvatarBubbleSignIn)
+#endif
           .UpdateAccountCapabilitiesWith(capabilities)
           .Build();
 
@@ -436,11 +445,12 @@ TEST(AccountInfoUtilTest, SerializeAndDeserializeAccountInfo) {
       DeserializeAccountInfo(dict);
 
   ASSERT_TRUE(deserialized_account_info.has_value());
-  EXPECT_EQ(account_info.account_id, deserialized_account_info->account_id);
-  EXPECT_EQ(account_info.gaia, deserialized_account_info->gaia);
-  EXPECT_EQ(account_info.email, deserialized_account_info->email);
-  EXPECT_EQ(account_info.is_under_advanced_protection,
-            deserialized_account_info->is_under_advanced_protection);
+  EXPECT_EQ(account_info.GetAccountId(),
+            deserialized_account_info->GetAccountId());
+  EXPECT_EQ(account_info.GetGaiaId(), deserialized_account_info->GetGaiaId());
+  EXPECT_EQ(account_info.GetEmail(), deserialized_account_info->GetEmail());
+  EXPECT_EQ(account_info.IsUnderAdvancedProtection(),
+            deserialized_account_info->IsUnderAdvancedProtection());
   EXPECT_EQ(account_info.GetFullName(),
             deserialized_account_info->GetFullName());
   EXPECT_EQ(account_info.GetGivenName(),
@@ -454,7 +464,10 @@ TEST(AccountInfoUtilTest, SerializeAndDeserializeAccountInfo) {
             deserialized_account_info->IsChildAccount());
   EXPECT_EQ(account_info.GetLastDownloadedAvatarUrlWithSize(),
             deserialized_account_info->GetLastDownloadedAvatarUrlWithSize());
-  EXPECT_EQ(account_info.access_point, deserialized_account_info->access_point);
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+  EXPECT_EQ(account_info.GetLastAuthenticationAccessPoint(),
+            deserialized_account_info->GetLastAuthenticationAccessPoint());
+#endif
   EXPECT_EQ(
       account_info.GetAccountCapabilities().can_fetch_family_member_info(),
       Tribool::kUnknown);
@@ -494,11 +507,18 @@ TEST(AccountInfoUtilTest, DeserializeAccountInfo_FormatStability) {
   std::optional<AccountInfo> account_info = DeserializeAccountInfo(dict);
 
   ASSERT_NE(account_info, std::nullopt);
-  EXPECT_EQ(account_info->gaia, GaiaId("test_gaia_id"));
-  EXPECT_EQ(account_info->email, "test@example.com");
-  EXPECT_EQ(account_info->account_id,
-            CoreAccountId::FromString("test_account_id"));
-  EXPECT_EQ(account_info->is_under_advanced_protection, false);
+  GaiaId gaia_id("test_gaia_id");
+  EXPECT_EQ(account_info->GetGaiaId(), gaia_id);
+  EXPECT_EQ(account_info->GetEmail(), "test@example.com");
+  if (base::FeatureList::IsEnabled(switches::kGaiaAccountIdEnforcement)) {
+    // AccountInfo::Builder enforces that AccountInfo::account_id is derived
+    // from GaiaId.
+    EXPECT_EQ(account_info->GetAccountId(), CoreAccountId::FromGaiaId(gaia_id));
+  } else {
+    EXPECT_EQ(account_info->GetAccountId(),
+              CoreAccountId::FromString("test_account_id"));
+  }
+  EXPECT_EQ(account_info->IsUnderAdvancedProtection(), false);
   EXPECT_EQ(account_info->GetFullName(), "Test Name");
   EXPECT_EQ(account_info->GetGivenName(), "Test");
   EXPECT_EQ(account_info->GetHostedDomain(), "example.com");
@@ -531,18 +551,23 @@ TEST(AccountInfoUtilTest, DeserializeAccountInfo_Minimal) {
                   .Set("email", "test@example.org");
   std::optional<AccountInfo> account_info = DeserializeAccountInfo(dict);
   ASSERT_NE(account_info, std::nullopt);
-  EXPECT_EQ(account_info->gaia, GaiaId("gaia_id"));
-  EXPECT_EQ(account_info->email, "test@example.org");
-  EXPECT_EQ(account_info->account_id,
-            CoreAccountId::FromString("test_account_id"));
+  GaiaId gaia_id("gaia_id");
+  EXPECT_EQ(account_info->GetGaiaId(), gaia_id);
+  EXPECT_EQ(account_info->GetEmail(), "test@example.org");
+  if (base::FeatureList::IsEnabled(switches::kGaiaAccountIdEnforcement)) {
+    // AccountInfo::Builder enforces that AccountInfo::account_id is derived
+    // from GaiaId.
+    EXPECT_EQ(account_info->GetAccountId(), CoreAccountId::FromGaiaId(gaia_id));
+  } else {
+    EXPECT_EQ(account_info->GetAccountId(),
+              CoreAccountId::FromString("test_account_id"));
+  }
   // All other fields should be unknown.
   EXPECT_EQ(account_info->GetFullName(), std::nullopt);
   EXPECT_FALSE(
       account_info->GetAccountCapabilities().AreAnyCapabilitiesKnown());
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
-  EXPECT_EQ(account_info->GetLastAuthenticationAccessPoint().value_or(
-                signin_metrics::AccessPoint::kUnknown),
-            signin_metrics::AccessPoint::kUnknown);
+  EXPECT_FALSE(account_info->GetLastAuthenticationAccessPoint().has_value());
 #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 }
 
@@ -551,7 +576,11 @@ TEST(AccountInfoUtilTest, DeserializeAccountInfo_EmptyDict) {
   EXPECT_EQ(DeserializeAccountInfo(dict), std::nullopt);
 }
 
-TEST(AccountInfoUtilTest, DeserializeAccountInfo_NoAccountId) {
+TEST(AccountInfoUtilTest,
+     DeserializeAccountInfo_NoAccountIdWithoutEnforcement) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      switches::kGaiaAccountIdEnforcement);
   auto dict = base::DictValue()
                   .Set("account_id", "")
                   .Set("gaia", "gaia_id")
@@ -559,7 +588,27 @@ TEST(AccountInfoUtilTest, DeserializeAccountInfo_NoAccountId) {
   EXPECT_EQ(DeserializeAccountInfo(dict), std::nullopt);
 }
 
-TEST(AccountInfoUtilTest, DeserializeAccountInfo_NoGaia) {
+// When GaiaAccountIdEnforcement is enabled, CoreAccountId is derived from
+// GaiaId and account_id serialized field is ignored.
+TEST(AccountInfoUtilTest, DeserializeAccountInfo_NoAccountId) {
+  base::test::ScopedFeatureList scoped_feature_list(
+      switches::kGaiaAccountIdEnforcement);
+
+  auto dict = base::DictValue()
+                  .Set("account_id", "")
+                  .Set("gaia", "gaia_id")
+                  .Set("email", "test@example.org");
+  std::optional<AccountInfo> account_info = DeserializeAccountInfo(dict);
+  ASSERT_NE(account_info, std::nullopt);
+  EXPECT_EQ(account_info->GetGaiaId(), GaiaId("gaia_id"));
+  EXPECT_EQ(account_info->GetEmail(), "test@example.org");
+}
+
+TEST(AccountInfoUtilTest, DeserializeAccountInfo_NoGaiaWithoutEnforcement) {
+  // TODO(crbug.com/502237328): Remove this test once the feature is launched.
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      switches::kGaiaAccountIdEnforcement);
   auto dict = base::DictValue()
                   .Set("account_id", "test_account_id")
                   .Set("gaia", "")
@@ -567,13 +616,24 @@ TEST(AccountInfoUtilTest, DeserializeAccountInfo_NoGaia) {
   std::optional<AccountInfo> account_info = DeserializeAccountInfo(dict);
 #if BUILDFLAG(IS_CHROMEOS)
   ASSERT_NE(account_info, std::nullopt);
-  EXPECT_EQ(account_info->gaia, GaiaId());
-  EXPECT_EQ(account_info->email, "test@example.org");
-  EXPECT_EQ(account_info->account_id,
+  EXPECT_EQ(account_info->GetGaiaId(), GaiaId());
+  EXPECT_EQ(account_info->GetEmail(), "test@example.org");
+  EXPECT_EQ(account_info->GetAccountId(),
             CoreAccountId::FromString("test_account_id"));
 #else
   EXPECT_EQ(account_info, std::nullopt);
 #endif
+}
+
+TEST(AccountInfoUtilTest, DeserializeAccountInfo_NoGaia) {
+  base::test::ScopedFeatureList scoped_feature_list(
+      switches::kGaiaAccountIdEnforcement);
+  auto dict = base::DictValue()
+                  .Set("account_id", "test_account_id")
+                  .Set("gaia", "")
+                  .Set("email", "test@example.org");
+  std::optional<AccountInfo> account_info = DeserializeAccountInfo(dict);
+  EXPECT_EQ(account_info, std::nullopt);
 }
 
 TEST(AccountInfoUtilTest, DeserializeAccountInfo_NoEmail) {
@@ -599,8 +659,8 @@ TEST(AccountInfoUtilTest, DeserializeAccountInfo_EmptyStringValues) {
 
   std::optional<AccountInfo> account_info = DeserializeAccountInfo(dict);
   ASSERT_NE(account_info, std::nullopt);
-  EXPECT_EQ(account_info->gaia, GaiaId("gaia_id"));
-  EXPECT_EQ(account_info->email, "test@example.org");
+  EXPECT_EQ(account_info->GetGaiaId(), GaiaId("gaia_id"));
+  EXPECT_EQ(account_info->GetEmail(), "test@example.org");
   EXPECT_EQ(account_info->GetFullName(), std::nullopt);
   EXPECT_EQ(account_info->GetGivenName(), std::nullopt);
   EXPECT_EQ(account_info->GetLocale(), std::nullopt);
@@ -619,8 +679,8 @@ TEST(AccountInfoUtilTest, DeserializeAccountInfo_SentinelValues) {
 
   std::optional<AccountInfo> account_info = DeserializeAccountInfo(dict);
   ASSERT_NE(account_info, std::nullopt);
-  EXPECT_EQ(account_info->gaia, GaiaId("gaia_id"));
-  EXPECT_EQ(account_info->email, "test@example.org");
+  EXPECT_EQ(account_info->GetGaiaId(), GaiaId("gaia_id"));
+  EXPECT_EQ(account_info->GetEmail(), "test@example.org");
   EXPECT_EQ(account_info->GetHostedDomain(), std::string());
   EXPECT_EQ(account_info->GetAvatarUrl(), std::string());
 }
@@ -635,16 +695,153 @@ TEST(AccountInfoUtilTest, DeserializeAccountInfo_InvalidAccessPoint) {
                   .Set("access_point", kDeprecatedAccessPoint);
   std::optional<AccountInfo> account_info = DeserializeAccountInfo(dict);
   ASSERT_NE(account_info, std::nullopt);
-  EXPECT_EQ(account_info->gaia, GaiaId("gaia_id"));
-  EXPECT_EQ(account_info->email, "test@example.org");
-  EXPECT_EQ(account_info->account_id,
-            CoreAccountId::FromString("test_account_id"));
+  GaiaId gaia_id("gaia_id");
+  EXPECT_EQ(account_info->GetGaiaId(), gaia_id);
+  EXPECT_EQ(account_info->GetEmail(), "test@example.org");
+  if (base::FeatureList::IsEnabled(switches::kGaiaAccountIdEnforcement)) {
+    EXPECT_EQ(account_info->GetAccountId(), CoreAccountId::FromGaiaId(gaia_id));
+  } else {
+    EXPECT_EQ(account_info->GetAccountId(),
+              CoreAccountId::FromString("test_account_id"));
+  }
   // Access point should be empty.
-  EXPECT_EQ(account_info->GetLastAuthenticationAccessPoint().value_or(
-                signin_metrics::AccessPoint::kUnknown),
-            signin_metrics::AccessPoint::kUnknown);
+  EXPECT_FALSE(account_info->GetLastAuthenticationAccessPoint().has_value());
 }
 #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
+
+TEST(AccountInfoUtilTest, SerializeAndDeserializeAccountCapabilityOverrides) {
+  AccountCapabilities capabilities;
+  AccountCapabilitiesTestMutator mutator(&capabilities);
+  mutator.SetCapabilityOverride(
+      kCanShowHistorySyncOptInsWithoutMinorModeRestrictionsCapabilityName,
+      Tribool::kTrue);
+  mutator.SetCapabilityOverride(kCanFetchFamilyMemberInfoCapabilityName,
+                                Tribool::kFalse);
+
+  base::DictValue dict = SerializeAccountCapabilityOverrides(capabilities);
+  EXPECT_EQ(
+      dict.FindInt(
+          kCanShowHistorySyncOptInsWithoutMinorModeRestrictionsCapabilityName),
+      static_cast<int>(Tribool::kTrue));
+  EXPECT_EQ(dict.FindInt(kCanFetchFamilyMemberInfoCapabilityName),
+            static_cast<int>(Tribool::kFalse));
+
+  base::DictValue capabilities_dict =
+      SerializeAccountCapabilities(capabilities);
+  AccountCapabilities deserialized_capabilities =
+      DeserializeAccountCapabilities(capabilities_dict, dict);
+
+  // Since GetCapabilityOverrides() is private, check roundtrip serialization.
+  base::DictValue reserialized =
+      SerializeAccountCapabilityOverrides(deserialized_capabilities);
+  EXPECT_EQ(dict, reserialized);
+}
+
+TEST(AccountInfoUtilTest,
+     SerializeAndDeserializeAccountInfo_WithCapabilityOverrides) {
+  AccountCapabilities capabilities;
+  AccountCapabilitiesTestMutator mutator(&capabilities);
+  mutator.SetCapabilityOverride(
+      kCanShowHistorySyncOptInsWithoutMinorModeRestrictionsCapabilityName,
+      Tribool::kTrue);
+  mutator.SetCapabilityOverride(kCanFetchFamilyMemberInfoCapabilityName,
+                                Tribool::kFalse);
+
+  AccountInfo account_info =
+      AccountInfo::Builder(GaiaId("test_gaia_id"), "test_email@example.com")
+          .SetAccountId(CoreAccountId::FromString("test_account_id"))
+          .UpdateAccountCapabilitiesWith(capabilities)
+          .Build();
+
+  base::DictValue dict = SerializeAccountInfo(account_info);
+  const base::DictValue* overrides =
+      dict.FindDict("accountcapability_overrides");
+  ASSERT_NE(overrides, nullptr);
+  EXPECT_EQ(
+      overrides->FindInt(
+          kCanShowHistorySyncOptInsWithoutMinorModeRestrictionsCapabilityName),
+      static_cast<int>(Tribool::kTrue));
+  EXPECT_EQ(overrides->FindInt(kCanFetchFamilyMemberInfoCapabilityName),
+            static_cast<int>(Tribool::kFalse));
+
+  std::optional<AccountInfo> deserialized_account_info =
+      DeserializeAccountInfo(dict);
+
+  ASSERT_TRUE(deserialized_account_info.has_value());
+  EXPECT_EQ(account_info.GetAccountId(),
+            deserialized_account_info->GetAccountId());
+  EXPECT_EQ(account_info.GetGaiaId(), deserialized_account_info->GetGaiaId());
+  EXPECT_EQ(account_info.GetEmail(), deserialized_account_info->GetEmail());
+
+  // Check roundtrip using SerializeAccountInfo.
+  base::DictValue reserialized_dict =
+      SerializeAccountInfo(*deserialized_account_info);
+  const base::DictValue* reserialized_overrides =
+      reserialized_dict.FindDict("accountcapability_overrides");
+  ASSERT_NE(reserialized_overrides, nullptr);
+  EXPECT_EQ(*overrides, *reserialized_overrides);
+}
+
+TEST(AccountInfoUtilTest, DeserializeAccountInfo_FormatStabilityWithOverrides) {
+  auto dict = base::DictValue()
+                  .Set("access_point", 31)
+                  .Set("account_id", "test_account_id")
+                  .Set("accountcapabilities",
+                       base::DictValue()
+                           .Set("accountcapabilities/guydolldmfya", 0)
+                           .Set("accountcapabilities/gi2tklldmfya", 1))
+                  .Set("accountcapability_overrides",
+                       base::DictValue()
+                           .Set("accountcapabilities/guydolldmfya", 1)
+                           .Set("accountcapabilities/gi2tklldmfya", 0))
+                  .Set("email", "test@example.com")
+                  .Set("full_name", "Test Name")
+                  .Set("gaia", "test_gaia_id")
+                  .Set("given_name", "Test")
+                  .Set("hd", "example.com")
+                  .Set("is_supervised_child", 0)
+                  .Set("is_under_advanced_protection", false)
+                  .Set("last_downloaded_image_url_with_size",
+                       "https://example.com/a/my_pic=s256-c-ns")
+                  .Set("locale", "en")
+                  .Set("picture_url", "https://example.com/a/my_pic=s96-c");
+  std::optional<AccountInfo> account_info = DeserializeAccountInfo(dict);
+
+  ASSERT_NE(account_info, std::nullopt);
+  GaiaId gaia_id("test_gaia_id");
+  EXPECT_EQ(account_info->GetGaiaId(), gaia_id);
+  EXPECT_EQ(account_info->GetEmail(), "test@example.com");
+  if (base::FeatureList::IsEnabled(switches::kGaiaAccountIdEnforcement)) {
+    // AccountInfo::Builder enforces that AccountInfo::account_id is derived
+    // from GaiaId.
+    EXPECT_EQ(account_info->GetAccountId(), CoreAccountId::FromGaiaId(gaia_id));
+  } else {
+    EXPECT_EQ(account_info->GetAccountId(),
+              CoreAccountId::FromString("test_account_id"));
+  }
+  EXPECT_EQ(account_info->IsUnderAdvancedProtection(), false);
+  EXPECT_EQ(account_info->GetFullName(), "Test Name");
+  EXPECT_EQ(account_info->GetGivenName(), "Test");
+  EXPECT_EQ(account_info->GetHostedDomain(), "example.com");
+  EXPECT_EQ(account_info->IsChildAccount(), Tribool::kFalse);
+  EXPECT_EQ(account_info->GetLastDownloadedAvatarUrlWithSize(),
+            "https://example.com/a/my_pic=s256-c-ns");
+  EXPECT_EQ(account_info->GetAvatarUrl(), "https://example.com/a/my_pic=s96-c");
+  EXPECT_EQ(account_info->GetLocale(), "en");
+
+  // Re-serialize to verify overrides are deserialized.
+  base::DictValue reserialized_dict = SerializeAccountInfo(*account_info);
+  const base::DictValue* reserialized_overrides =
+      reserialized_dict.FindDict("accountcapability_overrides");
+  ASSERT_NE(reserialized_overrides, nullptr);
+  EXPECT_EQ(reserialized_overrides->FindInt(
+                kIsSubjectToParentalControlsCapabilityName),
+            static_cast<int>(Tribool::kTrue));
+  EXPECT_EQ(
+      reserialized_overrides->FindInt(
+          kCanShowHistorySyncOptInsWithoutMinorModeRestrictionsCapabilityName),
+      static_cast<int>(Tribool::kFalse));
+}
 
 }  // namespace
 

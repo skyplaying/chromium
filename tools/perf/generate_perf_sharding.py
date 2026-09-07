@@ -15,12 +15,11 @@ import shutil
 import sys
 import tempfile
 import textwrap
-import six
-from six.moves import input  # pylint: disable=redefined-builtin
 
 import cross_device_test_config
 
 from core import path_util
+
 path_util.AddTelemetryToPath()
 
 from core import bot_platforms
@@ -44,63 +43,77 @@ files may not match with the true state of world.
 
 """
 
+
 def GetParser():
   parser = argparse.ArgumentParser(
-      description=_SCRIPT_USAGE, formatter_class=argparse.RawTextHelpFormatter)
+    description=_SCRIPT_USAGE, formatter_class=argparse.RawTextHelpFormatter
+  )
 
-  if six.PY2:
-    subparsers = parser.add_subparsers()
-  else:
-    # Python 3 needs required=True in order to issue an error when subcommand is
-    # missing. Without metavar, argparse would crash while issuing error (bug?).
-    subparsers = parser.add_subparsers(
-        required=True, metavar='{update,update-timing,deschedule,validate}')
+  subparsers = parser.add_subparsers(
+    required=True, metavar='{update,update-timing,deschedule,validate}'
+  )
 
-  parser_update = subparsers.add_parser(
-      'update',
-      help='Update the shard maps.')
+  parser_update = subparsers.add_parser('update', help='Update the shard maps.')
   parser_update.add_argument(
-      '--use-existing-timing-data', '-o', action='store_true',
-      help=('Whether to reuse existing builder timing data (stored in '
-            '//tools/perf/core/shard_maps/timing_data/) and skip the step of '
-            'fetching the most recent timing data from test results server. '
-            'This flag is default to False. One typically uses this option '
-            'when they need to fix the timing data to debug sharding '
-            'generation.'),
-      default=False)
+    '--use-existing-timing-data',
+    '-o',
+    action='store_true',
+    help=(
+      'Whether to reuse existing builder timing data (stored in '
+      '//tools/perf/core/shard_maps/timing_data/) and skip the step of '
+      'fetching the most recent timing data from test results server. '
+      'This flag is default to False. One typically uses this option '
+      'when they need to fix the timing data to debug sharding '
+      'generation.'
+    ),
+    default=False,
+  )
   _AddBuilderPlatformSelectionArgs(parser_update)
   parser.add_argument(
-      '--debug', action='store_true',
-      help=('Whether to include detailed debug info of the sharding map in the '
-            'shard maps.'), default=False)
+    '--debug',
+    action='store_true',
+    help=(
+      'Whether to include detailed debug info of the sharding map in the '
+      'shard maps.'
+    ),
+    default=False,
+  )
   parser_update.set_defaults(func=_UpdateShardsForBuilders)
 
   parser_update_timing = subparsers.add_parser(
-      'update-timing',
-      help='Update the timing data that is used to create the shard maps, '
-      'but don\'t update the shard maps themselves.')
+    'update-timing',
+    help='Update the timing data that is used to create the shard maps, '
+    'but don\'t update the shard maps themselves.',
+  )
   _AddBuilderPlatformSelectionArgs(parser_update_timing)
   parser_update_timing.add_argument(
-      '--filter-only', action='store_true',
-      help='Do not grab new data from bigquery but instead simply filter '
-      'the existing data to reflect some change in the benchmark (for example '
-      'if the benchmark was switched to abridged mode on some platform or if '
-      'a story was removed from the benchmark.)')
+    '--filter-only',
+    action='store_true',
+    help='Do not grab new data from bigquery but instead simply filter '
+    'the existing data to reflect some change in the benchmark (for example '
+    'if the benchmark was switched to abridged mode on some platform or if '
+    'a story was removed from the benchmark.)',
+  )
   parser_update_timing.set_defaults(func=_UpdateTimingDataCommand)
 
   parser_deschedule = subparsers.add_parser(
-      'deschedule',
-      help=('After you deschedule one or more '
-            'benchmarks by deleting from tools/perf/benchmarks or by editing '
-            'bot_platforms.py, use this script to deschedule the '
-            'benchmark(s) without impacting the sharding for other benchmarks.'
-            ))
+    'deschedule',
+    help=(
+      'After you deschedule one or more '
+      'benchmarks by deleting from tools/perf/benchmarks or by editing '
+      'bot_platforms.py, use this script to deschedule the '
+      'benchmark(s) without impacting the sharding for other benchmarks.'
+    ),
+  )
   parser_deschedule.set_defaults(func=_DescheduleBenchmark)
 
   parser_validate = subparsers.add_parser(
-      'validate',
-      help=('Validate that the shard maps match up with the benchmarks and '
-            'bot_platforms.py.'))
+    'validate',
+    help=(
+      'Validate that the shard maps match up with the benchmarks and '
+      'bot_platforms.py.'
+    ),
+  )
   parser_validate.set_defaults(func=_ValidateShardMaps)
 
   return parser
@@ -109,19 +122,27 @@ def GetParser():
 def _AddBuilderPlatformSelectionArgs(parser):
   builder_selection = parser.add_mutually_exclusive_group()
   builder_selection.add_argument(
-      '--builders', '-b', action='append',
-      help=('The builder names to use.'), default=[],
-      choices=bot_platforms.ALL_PLATFORM_NAMES)
+    '--builders',
+    '-b',
+    action='append',
+    help=('The builder names to use.'),
+    default=[],
+    choices=bot_platforms.ALL_PLATFORM_NAMES,
+  )
   builder_selection.add_argument(
-      '--waterfall', '-w', choices=['perf', 'perf-fyi', 'all'], default=None,
-      help=('The name of waterfall whose builders should be used. If not '
-            'specified, use all perf builders by default'))
+    '--waterfall',
+    '-w',
+    choices=['perf', 'perf-fyi', 'all'],
+    default=None,
+    help=(
+      'The name of waterfall whose builders should be used. If not '
+      'specified, use all perf builders by default'
+    ),
+  )
 
 
 def _DumpJson(data, output_path):
-  with open(output_path, 'w',
-            newline='') if sys.version_info.major == 3 else open(
-                output_path, 'wb') as output_file:
+  with open(output_path, 'w', newline='') as output_file:
     json.dump(data, output_file, indent=4, separators=(',', ': '))
     output_file.write('\n')
 
@@ -129,12 +150,15 @@ def _DumpJson(data, output_path):
 def _LoadTimingData(args):
   builder, timing_file_path = args
   data = retrieve_story_timing.FetchAverageStoryTimingData(
-      configurations=[builder.name], num_last_days=5)
+    configurations=[builder.name], num_last_days=5
+  )
   for executable in builder.executables:
-    data.append({
+    data.append(
+      {
         'duration': str(float(executable.estimated_runtime)),
-        'name': executable.name + '/' + bot_platforms.GTEST_STORY_NAME
-    })
+        'name': executable.name + '/' + bot_platforms.GTEST_STORY_NAME,
+      }
+    )
   _DumpJson(data, timing_file_path)
   print('Finished retrieving story timing data for %s' % repr(builder.name))
 
@@ -148,15 +172,19 @@ def GenerateShardMap(builder, num_of_shards, debug=False):
   if builder:
     with open(builder.timing_file_path) as f:
       timing_data = json.load(f)
-  benchmarks_to_shard = (list(builder.benchmark_configs) +
-                         list(builder.executables) + list(builder.crossbench))
+  benchmarks_to_shard = (
+    list(builder.benchmark_configs)
+    + list(builder.executables)
+    + list(builder.crossbench)
+  )
   repeat_config = cross_device_test_config.TARGET_DEVICES.get(builder.name, {})
   sharding_map = sharding_map_generator.generate_sharding_map(
-      benchmarks_to_shard,
-      timing_data,
-      num_shards=num_of_shards,
-      debug=debug,
-      repeat_config=repeat_config)
+    benchmarks_to_shard,
+    timing_data,
+    num_shards=num_of_shards,
+    debug=debug,
+    repeat_config=repeat_config,
+  )
   return sharding_map
 
 
@@ -166,18 +194,20 @@ def _GenerateShardMapJson(builder, num_of_shards, output_path, debug):
 
 
 def _PromptWarning():
-  message = ('This will regenerate the sharding maps for perf benchmarks. '
-             'Note that this will shuffle all the benchmarks on the shards, '
-             'which can cause false regressions. In general this operation '
-             'should only be done when the shards are too unbalanced or when '
-             'benchmarks are added/removed. '
-             'In addition, this is a tricky operation and should '
-             'always be reviewed by Benchmarking '
-             'team members. Upon landing the CL to update the shard maps, '
-             'please notify Chromium perf sheriffs in '
-             'perf-sheriffs@chromium.org and put a warning about expected '
-             'false regressions in your CL '
-             'description')
+  message = (
+    'This will regenerate the sharding maps for perf benchmarks. '
+    'Note that this will shuffle all the benchmarks on the shards, '
+    'which can cause false regressions. In general this operation '
+    'should only be done when the shards are too unbalanced or when '
+    'benchmarks are added/removed. '
+    'In addition, this is a tricky operation and should '
+    'always be reviewed by Benchmarking '
+    'team members. Upon landing the CL to update the shard maps, '
+    'please notify Chromium perf sheriffs in '
+    'perf-sheriffs@chromium.org and put a warning about expected '
+    'false regressions in your CL '
+    'description'
+  )
   print(textwrap.fill(message, 70), '\n')
   answer = input("Enter 'y' to continue: ")
   if answer != 'y':
@@ -203,11 +233,17 @@ def _FilterTimingData(builder, output_path=None):
       story_full_names.add('/'.join([benchmark_config.name, story]))
   # When benchmarks are abridged or stories are removed, we want that
   # to be reflected in the timing data right away.
-  executable_story_names = [e.name + '/' + bot_platforms.GTEST_STORY_NAME
-                            for e in builder.executables]
-  timing_dataset = [point for point in timing_dataset
-                    if (str(point['name']) in story_full_names or
-                        str(point['name']) in executable_story_names)]
+  executable_story_names = [
+    e.name + '/' + bot_platforms.GTEST_STORY_NAME for e in builder.executables
+  ]
+  timing_dataset = [
+    point
+    for point in timing_dataset
+    if (
+      str(point['name']) in story_full_names
+      or str(point['name']) in executable_story_names
+    )
+  ]
   _DumpJson(timing_dataset, output_path)
 
 
@@ -218,7 +254,7 @@ def _UpdateTimingData(builders):
     load_timing_args.append((b, b.timing_file_path))
   p = multiprocessing.Pool(len(load_timing_args))
   # Use map_async to work around python bug. See crbug.com/1026004.
-  p.map_async(_LoadTimingData, load_timing_args).get(12*60*60)
+  p.map_async(_LoadTimingData, load_timing_args).get(12 * 60 * 60)
 
 
 def _GetBuilderPlatforms(builders, waterfall):
@@ -227,8 +263,7 @@ def _GetBuilderPlatforms(builders, waterfall):
   Otherwise, just return all platforms.
   """
   if builders:
-    return {b for b in bot_platforms.ALL_PLATFORMS if b.name in
-                builders}
+    return {b for b in bot_platforms.ALL_PLATFORMS if b.name in builders}
   if waterfall == 'perf':
     platforms = bot_platforms.OFFICIAL_PLATFORMS
   elif waterfall == 'perf-fyi':
@@ -254,7 +289,8 @@ def _DescheduleBenchmark(args):
   builders = bot_platforms.ALL_PLATFORMS
   for b in builders:
     benchmarks_to_keep = set(
-        benchmark.Name() for benchmark in b.benchmarks_to_run)
+      benchmark.Name() for benchmark in b.benchmarks_to_run
+    )
     executables_to_keep = set(executable.name for executable in b.executables)
     with open(b.shards_map_file_path, 'r') as f:
       if not os.path.exists(b.shards_map_file_path):
@@ -279,7 +315,8 @@ def _DescheduleBenchmark(args):
 def _ParseBenchmarks(shard_map_path):
   if not os.path.exists(shard_map_path):
     raise RuntimeError(
-        'Platform does not have a shard map at %s.' % shard_map_path)
+      'Platform does not have a shard map at %s.' % shard_map_path
+    )
   all_benchmarks = set()
   with open(shard_map_path) as f:
     shard_map = json.load(f)
@@ -305,13 +342,15 @@ def _ValidateShardMaps(args):
     builders = _GetBuilderPlatforms(builders=None, waterfall='all')
     for builder in builders:
       output_file = os.path.join(
-          tempdir, os.path.basename(builder.timing_file_path))
+        tempdir, os.path.basename(builder.timing_file_path)
+      )
       _FilterTimingData(builder, output_file)
       if not filecmp.cmp(builder.timing_file_path, output_file):
         errors.append(
-            '{timing_data} is not up to date. Please run '
-            '`./generate_perf_sharding.py update-timing --filter-only` '
-            'to regenerate it.'.format(timing_data=builder.timing_file_path))
+          '{timing_data} is not up to date. Please run '
+          '`./generate_perf_sharding.py update-timing --filter-only` '
+          'to regenerate it.'.format(timing_data=builder.timing_file_path)
+        )
   finally:
     shutil.rmtree(tempdir)
 
@@ -320,48 +359,32 @@ def _ValidateShardMaps(args):
     if platform.pinpoint_only:
       continue
     platform_benchmark_names = {
-        b.name
-        for b in (platform.benchmark_configs | platform.executables
-                  | platform.crossbench)
+      b.name
+      for b in (
+        platform.benchmark_configs | platform.executables | platform.crossbench
+      )
     }
     shard_map_benchmark_names = _ParseBenchmarks(platform.shards_map_file_path)
-    for benchmark in platform_benchmark_names - shard_map_benchmark_names:
+    new_benchmarks = platform_benchmark_names - shard_map_benchmark_names
+    for benchmark in new_benchmarks:
       errors.append(
-          'Benchmark {benchmark} is supposed to be scheduled on platform '
-          '{platform} according to '
-          'bot_platforms.py, but it is not yet scheduled. If this is a new '
-          'benchmark, please set {benchmark}.SCHEDULED = False, and then '
-          'contact '
-          'Telemetry and Chrome Client Infra team to schedule the benchmark. '
-          'You can email chrome-benchmarking-request@ to get started.'.format(
-              benchmark=benchmark, platform=platform.name))
-    for benchmark in shard_map_benchmark_names - platform_benchmark_names:
+        f'Benchmark {benchmark} is supposed to be scheduled on platform '
+        f'{platform.name} according to '
+        f'schedule/{benchmark}.csv, but it is not yet scheduled.'
+        f'Please regenerate the shard map {platform.shards_map_file_path}'
+        f'with `{__file__} update`'
+      )
+    stale_benchmarks = shard_map_benchmark_names - platform_benchmark_names
+    for benchmark in stale_benchmarks:
       errors.append(
-          'Benchmark {benchmark} is scheduled on shard map {path}, but '
-          'bot_platforms.py '
-          'says that it should not be on that shard map. This could be because '
-          'the benchmark was deleted or {benchmark}.SCHEDULED is not True. '
-          'If that is the case, you can use '
-          '`generate_perf_sharding deschedule` to deschedule the benchmark '
-          'from the shard map.'.format(benchmark=benchmark,
-                                       path=platform.shards_map_file_path))
-
-  # Check that every official benchmark is scheduled on some shard map.
-  # TODO(crbug.com/40627632): Note that this check can be deleted if we
-  # find some way other than naming the benchmark with prefix "UNSCHEDULED_"
-  # to make it clear that a benchmark is not running.
-  scheduled_benchmarks = set()
-  for platform in bot_platforms.ALL_PLATFORMS:
-    if platform.pinpoint_only:
-      continue
-    scheduled_benchmarks = scheduled_benchmarks | _ParseBenchmarks(
-        platform.shards_map_file_path)
-  for benchmark in (
-      bot_platforms.OFFICIAL_BENCHMARK_NAMES - scheduled_benchmarks):
-    errors.append(
-        'Benchmark {benchmark} is an official benchmark, but it is not '
-        'scheduled to run anywhere. please set '
-        '{benchmark}.SCHEDULED = False'.format(benchmark=benchmark))
+        f'Benchmark {benchmark} is scheduled on shard map '
+        f'{platform.shards_map_file_path}, but '
+        f'schedule/{benchmark}.csv, '
+        'says that it should not be on that shard map. '
+        'If that is the case, you can use '
+        f'`{__file__} deschedule` to deschedule the benchmark '
+        'from the shard map.'
+      )
 
   for error in errors:
     print('*', error, '\n', file=sys.stderr)
@@ -374,6 +397,7 @@ def main():
   parser = GetParser()
   options = parser.parse_args()
   return options.func(options)
+
 
 if __name__ == '__main__':
   sys.exit(main())

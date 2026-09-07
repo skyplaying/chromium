@@ -8,6 +8,7 @@
 
 #import "base/strings/sys_string_conversions.h"
 #import "base/test/ios/wait_util.h"
+#import "base/test/scoped_feature_list.h"
 #import "base/test/test_future.h"
 #import "base/test/test_timeouts.h"
 #import "components/autofill/core/common/autofill_features.h"
@@ -63,10 +64,6 @@ NSString* const kUnownedUntitledFormHtml =
      "<TEXTAREA id='textarea'></TEXTAREA>"
      "<TEXTAREA id='textarea-nonempty'>Go&#10;away!</TEXTAREA>"
      "<INPUT type='submit' name='reply-send' value='Send'/>";
-
-NSNumber* GetDefaultMaxLength() {
-  return @524288;
-}
 
 using base::test::ios::kWaitForJSCompletionTimeout;
 using base::test::ios::WaitUntilConditionOrTimeout;
@@ -176,11 +173,8 @@ TEST_F(AutofillJavaScriptFeatureTest, ExtractForms) {
         @"form_control_type" : @"text",
         @"pattern_attribute" : @"",
         @"placeholder_attribute" : @"",
-        @"max_length" : GetDefaultMaxLength(),
         @"should_autocomplete" : @true,
-        @"is_checkable" : @false,
         @"is_focusable" : @true,
-        @"is_user_edited" : @true,
         @"value" : @"",
         @"label" : @"First Name",
         @"renderer_id" : @"2"
@@ -195,11 +189,8 @@ TEST_F(AutofillJavaScriptFeatureTest, ExtractForms) {
         @"form_control_type" : @"text",
         @"pattern_attribute" : @"",
         @"placeholder_attribute" : @"",
-        @"max_length" : GetDefaultMaxLength(),
         @"should_autocomplete" : @true,
-        @"is_checkable" : @false,
         @"is_focusable" : @true,
-        @"is_user_edited" : @true,
         @"value" : @"",
         @"label" : @"Last Name",
         @"renderer_id" : @"3"
@@ -214,11 +205,8 @@ TEST_F(AutofillJavaScriptFeatureTest, ExtractForms) {
         @"form_control_type" : @"email",
         @"pattern_attribute" : @"",
         @"placeholder_attribute" : @"",
-        @"max_length" : GetDefaultMaxLength(),
         @"should_autocomplete" : @true,
-        @"is_checkable" : @false,
         @"is_focusable" : @true,
-        @"is_user_edited" : @true,
         @"value" : @"",
         @"label" : @"",
         @"renderer_id" : @"4"
@@ -278,11 +266,8 @@ TEST_F(AutofillJavaScriptFeatureTest, ExtractForms2) {
         @"form_control_type" : @"text",
         @"pattern_attribute" : @"",
         @"placeholder_attribute" : @"",
-        @"max_length" : GetDefaultMaxLength(),
         @"should_autocomplete" : @true,
-        @"is_checkable" : @false,
         @"is_focusable" : @true,
-        @"is_user_edited" : @true,
         @"value" : @"",
         @"label" : @"First Name",
         @"renderer_id" : @"2"
@@ -297,11 +282,8 @@ TEST_F(AutofillJavaScriptFeatureTest, ExtractForms2) {
         @"form_control_type" : @"text",
         @"pattern_attribute" : @"",
         @"placeholder_attribute" : @"",
-        @"max_length" : GetDefaultMaxLength(),
         @"should_autocomplete" : @true,
-        @"is_checkable" : @false,
         @"is_focusable" : @true,
-        @"is_user_edited" : @true,
         @"value" : @"",
         @"label" : @"Last Name",
         @"renderer_id" : @"3"
@@ -316,11 +298,8 @@ TEST_F(AutofillJavaScriptFeatureTest, ExtractForms2) {
         @"form_control_type" : @"email",
         @"pattern_attribute" : @"",
         @"placeholder_attribute" : @"",
-        @"max_length" : GetDefaultMaxLength(),
         @"should_autocomplete" : @true,
-        @"is_checkable" : @false,
         @"is_focusable" : @true,
-        @"is_user_edited" : @true,
         @"value" : @"",
         @"label" : @"",
         @"renderer_id" : @"4"
@@ -584,7 +563,7 @@ TEST_F(AutofillJavaScriptFeatureTest, FillFormUsingRendererIDs) {
 
   base::test::TestFuture<NSString*> future;
   feature()->FillForm(main_web_frame(), std::move(autofillData),
-                      FieldRendererId(2), future.GetCallback());
+                      future.GetCallback());
   EXPECT_TRUE(future.Wait());
   NSString* filling_result = future.Get();
   EXPECT_NSEQ(@"{\"2\":\"Cool User\",\"3\":\"coolemail@com\"}", filling_result);
@@ -632,7 +611,7 @@ TEST_F(AutofillJavaScriptFeatureTest, UndoForm) {
 
   base::test::TestFuture<NSString*> future;
   feature()->FillForm(main_web_frame(), std::move(autofillData),
-                      FieldRendererId(2), future.GetCallback());
+                      future.GetCallback());
   EXPECT_TRUE(future.Wait());
 
   // Check that the input has the autofilled attribute so that we can
@@ -665,7 +644,7 @@ TEST_F(AutofillJavaScriptFeatureTest, UndoForm) {
 
   base::test::TestFuture<NSString*> undo_future;
   feature()->FillForm(main_web_frame(), std::move(undoAutofillData),
-                      FieldRendererId(2), undo_future.GetCallback());
+                      undo_future.GetCallback());
   EXPECT_TRUE(undo_future.Wait());
 
   EXPECT_TRUE(base::test::ios::WaitUntilConditionOrTimeout(
@@ -681,55 +660,6 @@ TEST_F(AutofillJavaScriptFeatureTest, UndoForm) {
 
   EXPECT_NSEQ(@"",
               ExecuteJavaScript(@"document.getElementById('firstname').value"));
-}
-
-// Tests form clearing (clearAutofilledFieldsForForm:formUniqueID:
-// fieldUniqueID:inFrame:completionHandler:) method.
-TEST_F(AutofillJavaScriptFeatureTest, ClearForm) {
-  LoadHtml(@"<html><body><form name='testform' method='post'>"
-            "<input type='text' id='firstname' name='firstname'/>"
-            "<input type='email' id='email' name='email'/>"
-            "</form></body></html>");
-  RunFormsSearch();
-
-  std::vector<std::pair<NSString*, int>> field_ids = {{@"firstname", 2},
-                                                      {@"email", 3}};
-  // Fill form fields.
-  for (auto& field_data : field_ids) {
-    NSString* getFieldScript =
-        [NSString stringWithFormat:@"document.getElementsByName('%@')[0]",
-                                   field_data.first];
-    NSString* focusScript =
-        [NSString stringWithFormat:@"%@.focus()", getFieldScript];
-    ExecuteJavaScript(focusScript);
-    base::DictValue data;
-    data.Set("renderer_id", field_data.second);
-    data.Set("value", "testvalue");
-
-    __block BOOL success = NO;
-    feature()->FillActiveFormField(main_web_frame(), std::move(data),
-                                   base::BindOnce(^(BOOL result) {
-                                     success = result;
-                                   }));
-    EXPECT_TRUE(base::test::ios::WaitUntilConditionOrTimeout(
-        base::test::ios::kWaitForActionTimeout, ^bool() {
-          return success;
-        }));
-  }
-
-  __block NSString* clearing_result = nil;
-  __block BOOL block_was_called = NO;
-  feature()->ClearAutofilledFieldsForForm(main_web_frame(), FormRendererId(1),
-                                          FieldRendererId(2),
-                                          base::BindOnce(^(NSString* result) {
-                                            clearing_result = [result copy];
-                                            block_was_called = YES;
-                                          }));
-  EXPECT_TRUE(base::test::ios::WaitUntilConditionOrTimeout(
-      base::test::ios::kWaitForActionTimeout, ^bool() {
-        return block_was_called;
-      }));
-  EXPECT_NSEQ(@"[\"2\",\"3\"]", clearing_result);
 }
 
 }  // namespace

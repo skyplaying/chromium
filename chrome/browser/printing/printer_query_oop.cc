@@ -15,6 +15,7 @@
 #include "chrome/browser/printing/print_backend_service_manager.h"
 #include "chrome/browser/printing/print_job_worker_oop.h"
 #include "components/device_event_log/device_event_log.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/web_contents.h"
 #include "printing/buildflags/buildflags.h"
@@ -72,7 +73,7 @@ void PrinterQueryOop::OnDidUseDefaultSettings(
                        << result;
 
     // TODO(crbug.com/40561724)  Fill in support for handling of access-denied
-    // result code.  Blocked on crbug.com/1243873 for Windows.
+    // result code.  Blocked on crbug.com/40787526 for Windows.
   } else {
     VLOG(1) << "Use default settings from service complete";
     result = mojom::ResultCode::kSuccess;
@@ -115,7 +116,7 @@ void PrinterQueryOop::OnDidAskUserForSettings(
     }
 
     // TODO(crbug.com/40561724)  Fill in support for handling of access-denied
-    // result code.  Blocked on crbug.com/1243873 for Windows.
+    // result code.  Blocked on crbug.com/40787526 for Windows.
   }
 
   InvokeSettingsCallback(std::move(callback), result);

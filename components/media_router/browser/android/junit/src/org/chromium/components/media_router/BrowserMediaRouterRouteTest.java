@@ -10,11 +10,12 @@ import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.verify;
 
 import org.junit.After;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
-import org.robolectric.annotation.Config;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Feature;
@@ -22,8 +23,8 @@ import org.chromium.content_public.browser.WebContents;
 
 /** Route tests for BrowserMediaRouter. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class BrowserMediaRouterRouteTest extends BrowserMediaRouterTestBase {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Mock WebContents mWebContents1;
 
     @Mock WebContents mWebContents2;
@@ -31,7 +32,6 @@ public class BrowserMediaRouterRouteTest extends BrowserMediaRouterTestBase {
     @Override
     public void setUp() {
         super.setUp();
-        MockitoAnnotations.initMocks(this);
         doReturn(false).when(mWebContents1).isIncognito();
         doReturn(false).when(mWebContents2).isIncognito();
 

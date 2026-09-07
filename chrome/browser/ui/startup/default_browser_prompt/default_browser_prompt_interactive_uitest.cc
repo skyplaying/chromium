@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/startup/default_browser_prompt/default_browser_prompt.h"
+
 #include <cstdint>
 
 #include "base/test/bind.h"
@@ -10,15 +12,16 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_browser_main.h"
 #include "chrome/browser/default_browser/default_browser_controller.h"
+#include "chrome/browser/default_browser/default_browser_features.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/shell_integration.h"
 #include "chrome/browser/ui/accelerator_utils.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
-#include "chrome/browser/ui/startup/default_browser_prompt/default_browser_prompt.h"
 #include "chrome/browser/ui/startup/default_browser_prompt/default_browser_prompt_manager.h"
 #include "chrome/browser/ui/startup/infobar_utils.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/toolbar/app_menu_model.h"
 #include "chrome/browser/ui/views/frame/app_menu_button.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -27,7 +30,6 @@
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/webui_url_constants.h"
-#include "chrome/grit/branded_strings.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
 #include "chrome/test/interaction/tracked_element_webcontents.h"
@@ -57,6 +59,11 @@ DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kSecondTabContents);
 class DefaultBrowserPromptInteractiveTest
     : public WebUiInteractiveTestMixin<InteractiveBrowserTest> {
  public:
+  DefaultBrowserPromptInteractiveTest() {
+    scoped_feature_list_.InitAndDisableFeature(
+        default_browser::kDefaultBrowserFramework);
+  }
+
   void SetUp() override {
     shell_integration::DefaultBrowserWorker::DisableSetAsDefaultForTesting();
     InteractiveBrowserTest::SetUp();
@@ -80,13 +87,16 @@ class DefaultBrowserPromptInteractiveTest
         WaitForShow(ConfirmInfoBar::kInfoBarElementId),
         WaitForShow(kToolbarAppMenuButtonElementId), DoesAppMenuItemExist(true),
         AddInstrumentedTab(kSecondTabContents,
-                           GURL(chrome::kChromeUINewTabURL)),
+                           chrome::ChromeUINewTabURLAsGURL()),
         WaitForShow(ConfirmInfoBar::kInfoBarElementId), std::move(steps),
         WaitForHide(ConfirmInfoBar::kInfoBarElementId),
         SelectTab(kTabStripElementId, 0),
         WaitForHide(ConfirmInfoBar::kInfoBarElementId),
         DoesAppMenuItemExist(preserve_app_menu_item));
   }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_F(DefaultBrowserPromptInteractiveTest,
@@ -94,7 +104,7 @@ IN_PROC_BROWSER_TEST_F(DefaultBrowserPromptInteractiveTest,
   DefaultBrowserPromptManager::GetInstance()->MaybeShowPrompt();
   RunTestSequence(
       WaitForShow(ConfirmInfoBar::kInfoBarElementId),
-      AddInstrumentedTab(kSecondTabContents, GURL(chrome::kChromeUINewTabURL)),
+      AddInstrumentedTab(kSecondTabContents, chrome::ChromeUINewTabURLAsGURL()),
       WaitForShow(ConfirmInfoBar::kInfoBarElementId));
 }
 
@@ -108,7 +118,7 @@ IN_PROC_BROWSER_TEST_F(DefaultBrowserPromptInteractiveTest,
                [&height](ConfirmInfoBar* info_bar) {
                  height = info_bar->target_height_for_testing();
                }),
-      AddInstrumentedTab(kSecondTabContents, GURL(chrome::kChromeUINewTabURL)),
+      AddInstrumentedTab(kSecondTabContents, chrome::ChromeUINewTabURLAsGURL()),
       SelectTab(kTabStripElementId, 0),
       WaitForShow(ConfirmInfoBar::kInfoBarElementId),
       CheckView(ConfirmInfoBar::kInfoBarElementId,
@@ -201,7 +211,7 @@ IN_PROC_BROWSER_TEST_F(DefaultBrowserPromptInteractiveTest,
   RunTestSequence(
       // Open two tabs
       WaitForShow(ConfirmInfoBar::kInfoBarElementId),
-      AddInstrumentedTab(kSecondTabContents, GURL(chrome::kChromeUINewTabURL)),
+      AddInstrumentedTab(kSecondTabContents, chrome::ChromeUINewTabURLAsGURL()),
       WaitForShow(ConfirmInfoBar::kInfoBarElementId),
       // Dismiss prompt on one tab
       PressButton(ConfirmInfoBar::kDismissButtonElementId),

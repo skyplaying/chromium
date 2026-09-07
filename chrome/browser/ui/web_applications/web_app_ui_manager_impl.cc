@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/web_applications/web_app_ui_manager_impl.h"
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <string>
@@ -11,6 +12,8 @@
 #include <utility>
 #include <vector>
 
+#include "base/barrier_callback.h"
+#include "base/barrier_closure.h"
 #include "base/check.h"
 #include "base/check_op.h"
 #include "base/files/file_path.h"
@@ -23,15 +26,14 @@
 #include "base/metrics/user_metrics.h"
 #include "base/metrics/user_metrics_action.h"
 #include "base/one_shot_event.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/types/pass_key.h"
 #include "build/build_config.h"
+#include "chrome/browser/apps/app_service/app_service_proxy.h"
+#include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -39,17 +41,28 @@
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/intent_picker_tab_helper.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
+#include "chrome/browser/ui/profiles/profile_error_dialog.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/unload_controller.h"
 #include "chrome/browser/ui/user_education/browser_user_education_interface.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/web_apps/web_app_blocked_migration_infobar_delegate.h"
+#include "chrome/browser/ui/views/web_apps/web_app_update_review_dialog.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
+#include "chrome/browser/ui/web_applications/web_app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/web_app_dialog_utils.h"
 #include "chrome/browser/ui/web_applications/web_app_dialogs.h"
+#include "chrome/browser/ui/web_applications/web_app_launch_navigation_handle_user_data.h"
 #include "chrome/browser/ui/web_applications/web_app_launch_utils.h"
 #include "chrome/browser/ui/web_applications/web_app_metrics.h"
 #include "chrome/browser/ui/web_applications/web_app_run_on_os_login_notification.h"
 #include "chrome/browser/user_education/user_education_service.h"
 #include "chrome/browser/user_education/user_education_service_factory.h"
-#include "chrome/browser/web_applications/web_app_callback_app_identity.h"
+#include "chrome/browser/web_applications/link_capturing_features.h"
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
+#include "chrome/browser/web_applications/web_app_icon_generator.h"
 #include "chrome/browser/web_applications/web_app_icon_manager.h"
 #include "chrome/browser/web_applications/web_app_pref_guardrails.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
@@ -58,8 +71,11 @@
 #include "chrome/browser/web_applications/web_app_ui_manager.h"
 #include "chrome/browser/web_applications/web_app_uninstall_dialog_user_options.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/feature_engagement/public/feature_constants.h"
 #include "components/services/app_service/public/cpp/app_launch_params.h"
+#include "components/services/app_service/public/cpp/app_types.h"
+#include "components/tabs/public/tab_interface.h"
 #include "components/user_education/common/feature_promo/feature_promo_controller.h"
 #include "components/user_education/common/feature_promo/feature_promo_result.h"
 #include "components/user_education/common/user_education_data.h"
@@ -70,9 +86,11 @@
 #include "content/public/browser/clear_site_data_utils.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/content_features.h"
 #include "extensions/browser/app_sorting.h"
 #include "extensions/browser/extension_system.h"
 #include "third_party/blink/public/mojom/manifest/manifest.mojom-shared.h"
+#include "third_party/blink/public/mojom/manifest/manifest.mojom.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/gfx/native_ui_types.h"
@@ -82,10 +100,20 @@
 #include "url/url_constants.h"
 
 #if !BUILDFLAG(IS_CHROMEOS)
+#include "base/numerics/clamped_math.h"
 #include "chrome/browser/apps/link_capturing/enable_link_capturing_infobar_delegate.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/infobars/browser_infobar_manager.h"
 #include "chrome/browser/infobars/confirm_infobar_creator.h"
+#include "chrome/browser/infobars/infobar_features.h"
+#include "chrome/browser/infobars/infobar_spec.h"
+#include "chrome/browser/web_applications/locks/app_lock.h"
+#include "chrome/browser/web_applications/web_app.h"
+#include "chrome/browser/web_applications/web_app_registry_update.h"
+#include "chrome/browser/web_applications/web_app_sync_bridge.h"
 #include "components/infobars/content/content_infobar_manager.h"
 #include "components/infobars/core/infobar.h"
+#include "ui/base/l10n/l10n_util.h"
 #else
 #include "chrome/browser/ui/web_applications/web_app_relaunch_notification.h"
 #endif  // !BUILDFLAG(IS_CHROMEOS)
@@ -96,6 +124,8 @@
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "ash/public/cpp/shelf_model.h"
+#include "chrome/browser/apps/app_service/app_service_proxy.h"
+#include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/ash/app_list/app_list_syncable_service.h"
 #include "chrome/browser/ash/app_list/app_list_syncable_service_factory.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
@@ -109,7 +139,6 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/web_applications/os_integration/os_integration_manager.h"
 #include "chrome/browser/web_applications/os_integration/web_app_shortcut.h"
-#include "chrome/browser/web_applications/web_app_install_finalizer.h"
 #include "components/keep_alive_registry/keep_alive_types.h"
 #include "components/keep_alive_registry/scoped_keep_alive.h"
 #endif  // BUILDFLAG(IS_WIN)
@@ -123,6 +152,113 @@ namespace web_app {
 class AppLock;
 
 namespace {
+
+struct UninstallDialogState {
+  IconMetadataFromDisk main_icon_metadata;
+  std::vector<SubAppUninstallMetadata> sub_apps;
+};
+
+#if !BUILDFLAG(IS_CHROMEOS)
+void IncrementIgnoreCount(webapps::AppId app_id,
+                          web_app::AppLock& app_lock,
+                          base::DictValue& debug_result) {
+  web_app::ScopedRegistryUpdate update = app_lock.sync_bridge().BeginUpdate();
+  web_app::WebApp* app = update->UpdateApp(app_id);
+  debug_result.Set("app_id", app_id);
+  if (app) {
+    int new_count =
+        base::ClampedNumeric(app->supported_links_offer_ignore_count()) + 1;
+    app->SetSupportedLinksOfferIgnoreCount(new_count);
+    debug_result.Set("supported_links_offer_ignore_count", new_count);
+  } else {
+    debug_result.Set("error", "AppId does not exist.");
+  }
+}
+
+void IncrementDismissCount(webapps::AppId app_id,
+                           web_app::AppLock& app_lock,
+                           base::DictValue& debug_result) {
+  web_app::ScopedRegistryUpdate update = app_lock.sync_bridge().BeginUpdate();
+  web_app::WebApp* app = update->UpdateApp(app_id);
+  debug_result.Set("app_id", app_id);
+  if (app) {
+    int new_count =
+        base::ClampedNumeric(app->supported_links_offer_dismiss_count()) + 1;
+    app->SetSupportedLinksOfferDismissCount(new_count);
+    debug_result.Set("supported_links_offer_dismiss_count", new_count);
+  } else {
+    debug_result.Set("error", "AppId does not exist.");
+  }
+}
+
+WebAppProvider* GetProvider(Profile* profile, content::WebContents* contents) {
+  if (!profile && contents) {
+    profile = Profile::FromBrowserContext(contents->GetBrowserContext());
+  }
+  return profile ? WebAppProvider::GetForWebApps(profile) : nullptr;
+}
+
+bool IsEligibleForLinkCapturing(WebAppProvider& provider,
+                                content::WebContents& web_contents,
+                                const webapps::AppId& app_id) {
+  const auto& registrar = provider.registrar_unsafe();
+  const GURL& url = web_contents.GetLastCommittedURL();
+  const web_app::WebApp* app = registrar.GetAppById(app_id);
+
+  if (!app || registrar.CapturesLinksInScope(app_id) ||
+      !IsValidScopeForLinkCapturing(url) ||
+      !registrar.IsLinkCapturableByApp(app_id, url)) {
+    return false;
+  }
+
+  constexpr int kSupportedLinksMaxIgnoreCount = 3;
+  constexpr int kSupportedLinksMaxDismissCount = 2;
+  return app->supported_links_offer_ignore_count() <
+             kSupportedLinksMaxIgnoreCount &&
+         app->supported_links_offer_dismiss_count() <
+             kSupportedLinksMaxDismissCount;
+}
+
+void OnLinkCapturingAccepted(webapps::AppId app_id,
+                             content::WebContents* contents) {
+  base::RecordAction(
+      base::UserMetricsAction("LinkCapturingAcceptedFromInfoBar"));
+  if (auto* provider = GetProvider(nullptr, contents)) {
+    provider->scheduler().SetAppCapturesSupportedLinksDisableOverlapping(
+        app_id, true, base::DoNothing());
+  }
+}
+
+void OnLinkCapturingCancelled(webapps::AppId app_id,
+                              content::WebContents* contents) {
+  base::RecordAction(
+      base::UserMetricsAction("LinkCapturingCancelledFromInfoBar"));
+  if (auto* provider = GetProvider(nullptr, contents)) {
+    provider->scheduler().ScheduleCallback(
+        "IncrementSupportedLinksOfferDismissCount", AppLockDescription(app_id),
+        base::BindOnce(&IncrementDismissCount, app_id),
+        /*on_complete=*/base::DoNothing());
+  }
+}
+
+void OnLinkCapturingResult(Profile* profile,
+                           webapps::AppId app_id,
+                           content::WebContents* contents,
+                           infobars::InfoBarResult result) {
+  if (result != infobars::InfoBarResult::kIgnored &&
+      result != infobars::InfoBarResult::kDismissed) {
+    return;
+  }
+  base::RecordAction(
+      base::UserMetricsAction("LinkCapturingIgnoredFromInfoBar"));
+  if (auto* provider = GetProvider(profile, contents)) {
+    provider->scheduler().ScheduleCallback(
+        "IncrementSupportedLinksOfferIgnoreCount", AppLockDescription(app_id),
+        base::BindOnce(&IncrementIgnoreCount, app_id),
+        /*on_complete=*/base::DoNothing());
+  }
+}
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(IS_WIN)
 void UninstallWebAppWithDialogFromStartupSwitch(
@@ -138,7 +274,7 @@ void UninstallWebAppWithDialogFromStartupSwitch(
                webapps::UninstallResultCode code) {
               // This ensures that the scoped_keep_alive will be deleted in the
               // next message loop, giving objects like DialogDelegate enough
-              // time to shut itself down. See crbug.com/1506302 for more
+              // time to shut itself down. See crbug.com/40946953 for more
               // information.
               base::SequencedTaskRunner::GetCurrentDefault()->DeleteSoon(
                   FROM_HERE, std::move(scoped_keep_alive));
@@ -246,6 +382,11 @@ void WebAppUiManagerImpl::CloseAppWindows(const webapps::AppId& app_id) {
         const auto* const app_controller =
             AppBrowserController::From(browser_window_interface);
         if (app_controller && app_controller->app_id() == app_id) {
+          UnloadController* const unload_controller =
+              UnloadController::From(browser_window_interface);
+          if (unload_controller) {
+            unload_controller->set_force_skip_warning_user_on_close(true);
+          }
           browser_window_interface->GetWindow()->Close();
         }
         return true;
@@ -304,6 +445,32 @@ bool WebAppUiManagerImpl::IsAppInQuickLaunchBar(
   return false;
 }
 
+bool WebAppUiManagerImpl::IsAppMigrationSuggested(
+    BrowserWindowInterface* window) const {
+  WebAppBrowserController* controller = WebAppBrowserController::From(window);
+  if (!controller) {
+    return false;
+  }
+  return controller->HasPendingMigration();
+}
+
+bool WebAppUiManagerImpl::IsAppMigrationDialogShowing(
+    BrowserWindowInterface* window) const {
+  WebAppBrowserController* controller = WebAppBrowserController::From(window);
+  if (!controller) {
+    return false;
+  }
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || \
+    BUILDFLAG(IS_MAC)
+  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(window);
+  return browser_view &&
+         browser_view->GetProperty(kIsPwaUpdateDialogShowingKey) &&
+         controller->HasPendingMigration();
+#else
+  return false;
+#endif
+}
+
 bool WebAppUiManagerImpl::CanReparentAppTabToWindow(
     const webapps::AppId& app_id,
     bool shortcut_created,
@@ -322,31 +489,28 @@ bool WebAppUiManagerImpl::CanReparentAppTabToWindow(
   }
 #if BUILDFLAG(IS_MAC)
   // On macOS it is only possible to reparent the window when the shortcut (app
-  // shim) was created. See https://crbug.com/915571.
+  // shim) was created. See https://crbug.com/40606764.
   return shortcut_created;
 #else
   return true;
 #endif
 }
 
-Browser* WebAppUiManagerImpl::ReparentAppTabToWindow(
+BrowserWindowInterface* WebAppUiManagerImpl::ReparentAppTabToWindow(
     content::WebContents* contents,
     const webapps::AppId& app_id,
     bool shortcut_created) {
   DCHECK(CanReparentAppTabToWindow(app_id, shortcut_created, contents));
   // Reparent the tab into an app window immediately.
-  BrowserWindowInterface* browser =
-      ReparentWebContentsIntoAppBrowser(contents, app_id);
-  return browser ? browser->GetBrowserForMigrationOnly() : nullptr;
+  return ReparentWebContentsIntoAppBrowser(contents, app_id);
 }
 
-Browser* WebAppUiManagerImpl::ReparentAppTabToWindow(
+BrowserWindowInterface* WebAppUiManagerImpl::ReparentAppTabToWindow(
     content::WebContents* contents,
     const webapps::AppId& app_id,
     base::OnceCallback<void(content::WebContents*)> completion_callback) {
-  BrowserWindowInterface* browser = ReparentWebContentsIntoAppBrowser(
-      contents, app_id, std::move(completion_callback));
-  return browser == nullptr ? nullptr : browser->GetBrowserForMigrationOnly();
+  return ReparentWebContentsIntoAppBrowser(contents, app_id,
+                                           std::move(completion_callback));
 }
 
 void WebAppUiManagerImpl::ShowWebAppFileLaunchDialog(
@@ -363,21 +527,6 @@ void WebAppUiManagerImpl::ShowWebAppProtocolLaunchDialog(
     WebAppLaunchAcceptanceCallback launch_callback) {
   ::web_app::ShowWebAppProtocolLaunchDialog(protocol_url, profile_, app_id,
                                             std::move(launch_callback));
-}
-
-void WebAppUiManagerImpl::ShowWebAppIdentityUpdateDialog(
-    const std::string& app_id,
-    bool title_change,
-    bool icon_change,
-    const std::u16string& old_title,
-    const std::u16string& new_title,
-    const SkBitmap& old_icon,
-    const SkBitmap& new_icon,
-    content::WebContents* web_contents,
-    web_app::AppIdentityDialogCallback callback) {
-  ::web_app::ShowWebAppIdentityUpdateDialog(
-      app_id, title_change, icon_change, old_title, new_title, old_icon,
-      new_icon, web_contents, std::move(callback));
 }
 
 void WebAppUiManagerImpl::ShowSubAppsInstallDialog(
@@ -465,9 +614,10 @@ content::WebContents* WebAppUiManagerImpl::CreateNewTab() {
 
 bool WebAppUiManagerImpl::IsWebContentsActiveTabInBrowser(
     content::WebContents* web_contents) {
-  Browser* browser = chrome::FindBrowserWithTab(web_contents);
-  return browser && browser->tab_strip_model() &&
-         browser->tab_strip_model()->GetActiveWebContents() == web_contents;
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents);
+  return browser && browser->GetActiveTabInterface() &&
+         browser->GetActiveTabInterface()->GetContents() == web_contents;
 }
 
 void WebAppUiManagerImpl::TriggerInstallDialog(
@@ -477,16 +627,18 @@ void WebAppUiManagerImpl::TriggerInstallDialog(
   web_app::CreateWebAppFromManifest(web_contents, source, std::move(callback));
 }
 
-void WebAppUiManagerImpl::TriggerInstallDialogForBackgroundInstall(
+void WebAppUiManagerImpl::TriggerInstallDialogForManifestInstall(
     content::WebContents* initiating_web_contents,
+    base::WeakPtr<content::Page> initiating_page,
     std::unique_ptr<webapps::MlInstallOperationTracker> tracker,
-    const GURL& install_url,
-    const std::optional<GURL>& manifest_id,
-    const GURL& last_committed_url,
+    blink::mojom::ManifestPtr manifest,
+    const GURL& manifest_url,
+    const GURL& requesting_page_url,
     InstallCallback callback) {
-  web_app::CreateWebAppForBackgroundInstall(
-      initiating_web_contents, std::move(tracker), install_url, manifest_id,
-      last_committed_url, std::move(callback));
+  web_app::CreateWebAppForManifestInstall(
+      initiating_web_contents, std::move(initiating_page), std::move(tracker),
+      std::move(manifest), manifest_url, requesting_page_url,
+      std::move(callback));
 }
 
 void WebAppUiManagerImpl::TriggerLaunchDialogForBackgroundInstall(
@@ -540,24 +692,93 @@ void WebAppUiManagerImpl::PresentUserUninstallDialog(
   WebAppProvider* provider = WebAppProvider::GetForWebApps(profile_);
   CHECK(provider);
 
+  auto state =
+      base::MakeRefCounted<base::RefCountedData<UninstallDialogState>>();
+
+  std::vector<webapps::AppId> sub_app_ids =
+      provider->registrar_unsafe().GetAllSubAppIds(app_id);
+
+  auto barrier = base::BarrierClosure(
+      1 + sub_app_ids.size(),
+      base::BindOnce(
+          [](base::WeakPtr<WebAppUiManagerImpl> ui_manager,
+             const webapps::AppId& app_id,
+             webapps::WebappUninstallSource uninstall_source,
+             gfx::NativeWindow parent_window,
+             std::unique_ptr<ui::NativeWindowTracker> parent_window_tracker,
+             UninstallCompleteCallback complete_callback,
+             UninstallScheduledCallback uninstall_scheduled_callback,
+             scoped_refptr<base::RefCountedData<UninstallDialogState>> state) {
+            if (ui_manager) {
+              ui_manager->OnAllIconsReadForUninstall(
+                  app_id, uninstall_source, parent_window,
+                  std::move(parent_window_tracker),
+                  std::move(complete_callback),
+                  std::move(uninstall_scheduled_callback),
+                  std::move(state->data.main_icon_metadata),
+                  std::move(state->data.sub_apps));
+            }
+          },
+          weak_ptr_factory_.GetWeakPtr(), app_id, uninstall_source,
+          parent_window, std::move(parent_window_tracker),
+          std::move(uninstall_complete_callback),
+          std::move(uninstall_scheduled_callback), state));
+
   provider->icon_manager().ReadTrustedIconsWithFallbackToManifestIcons(
       app_id,
       provider->registrar_unsafe().GetAppTrustedIconSizesFallbackToUntrusted(
           app_id),
       IconPurpose::ANY,
-      base::BindOnce(&WebAppUiManagerImpl::OnIconsReadForUninstall,
-                     weak_ptr_factory_.GetWeakPtr(), app_id, uninstall_source,
-                     parent_window, std::move(parent_window_tracker),
-                     std::move(uninstall_complete_callback),
-                     std::move(uninstall_scheduled_callback)));
+      base::BindOnce(
+          [](scoped_refptr<base::RefCountedData<UninstallDialogState>> state,
+             base::OnceClosure done, IconMetadataFromDisk icon_metadata) {
+            state->data.main_icon_metadata = std::move(icon_metadata);
+            std::move(done).Run();
+          },
+          state, barrier));
+
+  for (const webapps::AppId& sub_app_id : sub_app_ids) {
+    std::u16string sub_app_name = base::UTF8ToUTF16(
+        provider->registrar_unsafe().GetAppShortName(sub_app_id));
+
+    provider->icon_manager().ReadTrustedIconsWithFallbackToManifestIcons(
+        sub_app_id,
+        provider->registrar_unsafe().GetAppTrustedIconSizesFallbackToUntrusted(
+            sub_app_id),
+        web_app::IconPurpose::ANY,
+        base::BindOnce(
+            [](scoped_refptr<base::RefCountedData<UninstallDialogState>> state,
+               base::OnceClosure done, std::u16string sub_app_name,
+               IconMetadataFromDisk sub_app_icon_metadata) {
+              state->data.sub_apps.emplace_back(
+                  std::move(sub_app_name), std::move(sub_app_icon_metadata));
+              std::move(done).Run();
+            },
+            state, barrier, sub_app_name));
+  }
+}
+
+void WebAppUiManagerImpl::UninstallAppSilentlyForMigration(
+    const webapps::AppId& app_id) {
+  auto* proxy = apps::AppServiceProxyFactory::GetForProfile(profile_);
+  proxy->UninstallSilently(app_id, apps::UninstallSource::kMigration);
+}
+
+void WebAppUiManagerImpl::ShowProfileErrorDialogForCorruptDB() {
+  ::ShowProfileErrorDialog(ProfileErrorType::DB_WEB_APP_DATA,
+                           IDS_COULDNT_OPEN_PROFILE_ERROR,
+                           "Web App database corruption detected.");
 }
 
 void WebAppUiManagerImpl::ShowIntentPicker(
     const GURL& url,
     content::WebContents* web_contents,
-    ShowIntentPickerBubbleCallback callback) {
+    ShowIntentPickerBubbleCallback callback,
+    std::optional<webapps::AppId> scoped_app_id) {
+  tabs::TabInterface* tab =
+      tabs::TabInterface::MaybeGetFromContents(web_contents);
   IntentPickerTabHelper* intent_picker_tab_helper =
-      IntentPickerTabHelper::FromWebContents(web_contents);
+      tab ? IntentPickerTabHelper::From(tab) : nullptr;
 
   if (!intent_picker_tab_helper) {
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
@@ -565,7 +786,8 @@ void WebAppUiManagerImpl::ShowIntentPicker(
     return;
   }
   intent_picker_tab_helper->ShowIntentPickerBubbleOrLaunchApp(
-      url, /*always_show =*/true, std::move(callback));
+      url, /*always_show =*/true, std::move(callback),
+      std::move(scoped_app_id));
 }
 
 void WebAppUiManagerImpl::LaunchOrFocusIsolatedWebAppInstaller(
@@ -599,6 +821,39 @@ void WebAppUiManagerImpl::MaybeCreateEnableSupportedLinksInfobar(
     content::WebContents* web_contents,
     const std::string& launch_name) {
 #if !BUILDFLAG(IS_CHROMEOS)
+  if (infobars::IsInfoBarMigrated(
+          infobars::InfoBarDelegate::ENABLE_LINK_CAPTURING_INFOBAR_DELEGATE)) {
+    CHECK(web_contents);
+    auto* tab = tabs::TabInterface::GetFromContents(web_contents);
+    CHECK(tab);
+    auto* browser_infobar_manager =
+        infobars::BrowserInfoBarManager::From(g_browser_process);
+    CHECK(browser_infobar_manager);
+    auto* provider = WebAppProvider::GetForWebApps(profile_);
+    CHECK(provider);
+
+    if (!IsEligibleForLinkCapturing(*provider, *web_contents, launch_name)) {
+      return;
+    }
+
+    infobars::InfoBarShowParams params;
+    params.message_text = l10n_util::GetStringFUTF16(
+        IDR_INTENT_PICKER_SUPPORTED_LINKS_INFOBAR_MESSAGE,
+        base::UTF8ToUTF16(
+            provider->registrar_unsafe().GetAppShortName(launch_name)));
+    params.ok_button_callback =
+        base::BindRepeating(&OnLinkCapturingAccepted, launch_name);
+    params.cancel_button_callback =
+        base::BindRepeating(&OnLinkCapturingCancelled, launch_name);
+    params.result_callback = base::BindRepeating(&OnLinkCapturingResult,
+                                                 profile_.get(), launch_name);
+
+    browser_infobar_manager->Show(
+        tab, infobars::InfoBarDelegate::ENABLE_LINK_CAPTURING_INFOBAR_DELEGATE,
+        std::move(params));
+    return;
+  }
+
   std::unique_ptr<apps::EnableLinkCapturingInfoBarDelegate> delegate =
       apps::EnableLinkCapturingInfoBarDelegate::MaybeCreate(web_contents,
                                                             launch_name);
@@ -609,17 +864,43 @@ void WebAppUiManagerImpl::MaybeCreateEnableSupportedLinksInfobar(
 #endif  // !BUILDFLAG(IS_CHROMEOS)
 }
 
+void WebAppUiManagerImpl::MaybeCreateWebAppBlockedMigrationInfoBar(
+    content::WebContents* web_contents,
+    base::OnceClosure on_dismiss_callback) {
+  WebAppBlockedMigrationInfoBarDelegate::Create(web_contents,
+                                                std::move(on_dismiss_callback));
+}
+
+void WebAppUiManagerImpl::MaybeRemoveWebAppBlockedMigrationInfoBar(
+    content::WebContents* web_contents) {
+  WebAppBlockedMigrationInfoBarDelegate::Remove(web_contents);
+}
+
 void WebAppUiManagerImpl::MaybeShowIPHPromoForAppsLaunchedViaLinkCapturing(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     Profile* profile,
     const std::string& app_id) {
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+  if (!apps::features::IsNavigationCapturingOnByDefault()) {
+    return;
+  }
+
   WebAppProvider* provider = WebAppProvider::GetForWebApps(profile);
   CHECK(provider);
 
+#if BUILDFLAG(IS_CHROMEOS)
+  if (!apps::AppServiceProxyFactory::IsAppServiceAvailableForProfile(profile)) {
+    return;
+  }
+  apps::AppServiceProxy* proxy =
+      apps::AppServiceProxyFactory::GetForProfile(profile);
+  if (!proxy->PreferredAppsList().IsPreferredAppForSupportedLinks(app_id)) {
+    return;
+  }
+#else
   if (!provider->registrar_unsafe().CapturesLinksInScope(app_id)) {
     return;
   }
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   BrowserWindowInterface* const app_browser =
       browser ? browser : AppBrowserController::FindForWebApp(*profile, app_id);
@@ -634,12 +915,10 @@ void WebAppUiManagerImpl::MaybeShowIPHPromoForAppsLaunchedViaLinkCapturing(
   }
 
   web_app::PostCallbackOnBrowserActivation(
-      app_browser->GetBrowserForMigrationOnly(), kToolbarAppMenuButtonElementId,
+      app_browser, kToolbarAppMenuButtonElementId,
       base::BindOnce(
           &WebAppUiManagerImpl::ShowIPHPromoForAppsLaunchedViaLinkCapturing,
-          weak_ptr_factory_.GetWeakPtr(),
-          app_browser->GetBrowserForMigrationOnly(), app_id));
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+          weak_ptr_factory_.GetWeakPtr(), app_browser, app_id));
 }
 
 void WebAppUiManagerImpl::OnBrowserCreated(BrowserWindowInterface* browser) {
@@ -738,23 +1017,67 @@ webapps::AppId WebAppUiManagerImpl::GetAppIdForBrowser(
   return web_app::AppBrowserController::From(browser)->app_id();
 }
 
-void WebAppUiManagerImpl::OnIconsReadForUninstall(
+void WebAppUiManagerImpl::OnAllIconsReadForUninstall(
     const webapps::AppId& app_id,
     webapps::WebappUninstallSource uninstall_source,
     gfx::NativeWindow parent_window,
     std::unique_ptr<ui::NativeWindowTracker> parent_window_tracker,
     UninstallCompleteCallback complete_callback,
     UninstallScheduledCallback uninstall_scheduled_callback,
-    IconMetadataFromDisk icon_metadata) {
+    IconMetadataFromDisk icon_metadata,
+    std::vector<SubAppUninstallMetadata> sub_apps) {
   if (parent_window && parent_window_tracker->WasNativeWindowDestroyed()) {
     OnUninstallCancelled(std::move(complete_callback),
                          std::move(uninstall_scheduled_callback));
     return;
   }
 
+  // If icon reading returned an empty map because of disk I/O operations
+  // failing from the WebAppIconManager side, fallback to generating monogram
+  // icons.
+  if (icon_metadata.icons_map.empty()) {
+    WebAppProvider* provider = WebAppProvider::GetForWebApps(profile_);
+    CHECK(provider);
+    WebAppRegistrar& registrar = provider->registrar_unsafe();
+
+    // If the app was unregistered asynchronously during icon reading, we cannot
+    // construct fallback icons or display the dialog. Cancel uninstallation.
+    if (!registrar.GetInstallState(app_id)) {
+      OnUninstallCancelled(std::move(complete_callback),
+                           std::move(uninstall_scheduled_callback));
+      return;
+    }
+
+    std::string name_to_use_for_icon = registrar.GetAppShortName(app_id);
+    if (name_to_use_for_icon.empty()) {
+      name_to_use_for_icon = registrar.GetAppStartUrl(app_id).spec();
+    }
+
+    for (const auto& [size, bitmap] :
+         GenerateIcons(base::UTF8ToUTF16(name_to_use_for_icon))) {
+      icon_metadata.icons_map[size] = bitmap;
+    }
+  }
+  // If sub app icon reading returned an empty map ,
+  // fallback to generating monogram icons.
+  for (auto& sub_app : sub_apps) {
+    if (sub_app.icon_metadata.icons_map.empty()) {
+      for (const auto& [size, bitmap] : GenerateIcons(sub_app.app_name)) {
+        sub_app.icon_metadata.icons_map[size] = bitmap;
+      }
+    }
+  }
+
+  // Sort sub apps by app name because
+  // current order is random due to entries being added
+  // to vector after icon reading is done.
+  std::sort(sub_apps.begin(), sub_apps.end(), [](const auto& a, const auto& b) {
+    return a.app_name < b.app_name;
+  });
+
   ShowWebAppUninstallDialog(
       profile_, app_id, uninstall_source, parent_window,
-      std::move(icon_metadata),
+      std::move(icon_metadata), std::move(sub_apps),
       base::BindOnce(&WebAppUiManagerImpl::ScheduleUninstallIfUserRequested,
                      weak_ptr_factory_.GetWeakPtr(), app_id, uninstall_source,
                      std::move(complete_callback),
@@ -831,7 +1154,8 @@ void WebAppUiManagerImpl::ClearWebAppSiteDataIfNeeded(
   }
 }
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+    BUILDFLAG(IS_CHROMEOS)
 
 const base::Feature& GetPromoFeatureEngagementFromBrowser(
     const BrowserWindowInterface* browser) {
@@ -841,10 +1165,10 @@ const base::Feature& GetPromoFeatureEngagementFromBrowser(
 }
 
 void WebAppUiManagerImpl::ShowIPHPromoForAppsLaunchedViaLinkCapturing(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     const webapps::AppId& app_id,
     bool is_activated) {
-  if (!is_activated) {
+  if (!browser || !is_activated) {
     return;
   }
 
@@ -870,8 +1194,12 @@ void WebAppUiManagerImpl::ShowIPHPromoForAppsLaunchedViaLinkCapturing(
   // window.
   if (&feature ==
       &feature_engagement::kIPHDesktopPWAsLinkCapturingLaunchAppInTab) {
-    WebAppTabHelper* const tab_helper = WebAppTabHelper::FromWebContents(
-        browser->tab_strip_model()->GetActiveWebContents());
+    tabs::TabInterface* const active_tab = browser->GetActiveTabInterface();
+    if (!active_tab || !active_tab->GetContents()) {
+      return;
+    }
+    WebAppTabHelper* const tab_helper =
+        WebAppTabHelper::FromWebContents(active_tab->GetContents());
     CHECK(tab_helper);
     tab_helper->SetCallbackToRunOnTabChanges(base::BindOnce(
         &WebAppUiManagerImpl::OnTabChangedDuringIph,
@@ -933,7 +1261,8 @@ void WebAppUiManagerImpl::OnTabChangedDuringIph(
   }
 }
 
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+        // BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(IS_CHROMEOS)
 void WebAppUiManagerImpl::OnBrowserCloseCancelled(
@@ -951,5 +1280,21 @@ void WebAppUiManagerImpl::OnBrowserCloseCancelled(
       GetAppIdForBrowser(browser));
 }
 #endif  // BUILDFLAG(IS_CHROMEOS)
+
+void WebAppUiManagerImpl::NotifyDidFinishNavigation(
+    content::NavigationHandle* navigation_handle) {
+  auto* user_data =
+      WebAppLaunchNavigationHandleUserData::GetForNavigationHandle(
+          *navigation_handle);
+  if (!user_data) {
+    return;
+  }
+
+  // Enqueue launch params once the navigation has committed and the navigation
+  // was successful.
+  if (navigation_handle->HasCommitted()) {
+    user_data->MaybePerformAppHandlingTasksInWebContents();
+  }
+}
 
 }  // namespace web_app

@@ -10,7 +10,6 @@
 #include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "cc/metrics/scroll_jank_v4_frame.h"
-#include "cc/metrics/scroll_jank_v4_frame_stage.h"
 #include "cc/metrics/scroll_jank_v4_result.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -24,8 +23,12 @@ constexpr base::TimeTicks MillisSinceEpoch(int64_t millis) {
   return base::TimeTicks() + base::Milliseconds(millis);
 }
 
+// The decision queue ignores which scroll a frame's updates belong to, so every
+// frame in this file uses the same arbitrary scroll ID.
+constexpr base::TimeTicks kScrollId = MillisSinceEpoch(1);
+
 using DamagingFrame = ScrollJankV4Frame::DamagingFrame;
-using ScrollUpdates = ScrollJankV4FrameStage::ScrollUpdates;
+using ScrollUpdates = ScrollJankV4Frame::Stage::ScrollUpdates;
 using Real = ScrollUpdates::Real;
 using Synthetic = ScrollUpdates::Synthetic;
 using ScrollDamage = ScrollJankV4Frame::ScrollDamage;
@@ -124,9 +127,9 @@ TEST_F(ScrollJankV4DecisionQueueTest, ImmediatelyReportsResultsForRealFrames) {
       ScrollUpdates(Real{.first_input_generation_ts = MillisSinceEpoch(103),
                          .last_input_generation_ts = MillisSinceEpoch(111),
                          .has_inertial_input = false,
-                         .abs_total_raw_delta_pixels = 5.0f,
+                         .total_raw_delta_pixels = 5.0f,
                          .max_abs_inertial_raw_delta_pixels = 0.0f},
-                    /* synthetic= */ std::nullopt);
+                    /* synthetic= */ std::nullopt, kScrollId);
   ScrollDamage damage1 =
       DamagingFrame{.presentation_ts = MillisSinceEpoch(132)};
   BeginFrameArgsForScrollJank args1 =
@@ -145,9 +148,9 @@ TEST_F(ScrollJankV4DecisionQueueTest, ImmediatelyReportsResultsForRealFrames) {
       ScrollUpdates(Real{.first_input_generation_ts = MillisSinceEpoch(119),
                          .last_input_generation_ts = MillisSinceEpoch(127),
                          .has_inertial_input = false,
-                         .abs_total_raw_delta_pixels = 5.0f,
+                         .total_raw_delta_pixels = 5.0f,
                          .max_abs_inertial_raw_delta_pixels = 0.0f},
-                    /* synthetic= */ std::nullopt);
+                    /* synthetic= */ std::nullopt, kScrollId);
   ScrollDamage damage2 =
       DamagingFrame{.presentation_ts = MillisSinceEpoch(148)};
   BeginFrameArgsForScrollJank args2 =
@@ -166,9 +169,9 @@ TEST_F(ScrollJankV4DecisionQueueTest, ImmediatelyReportsResultsForRealFrames) {
       ScrollUpdates(Real{.first_input_generation_ts = MillisSinceEpoch(151),
                          .last_input_generation_ts = MillisSinceEpoch(159),
                          .has_inertial_input = false,
-                         .abs_total_raw_delta_pixels = 5.0f,
+                         .total_raw_delta_pixels = 5.0f,
                          .max_abs_inertial_raw_delta_pixels = 0.0f},
-                    /* synthetic= */ std::nullopt);
+                    /* synthetic= */ std::nullopt, kScrollId);
   ScrollDamage damage3 =
       DamagingFrame{.presentation_ts = MillisSinceEpoch(180)};
   BeginFrameArgsForScrollJank args3 =
@@ -203,7 +206,8 @@ TEST_F(ScrollJankV4DecisionQueueTest,
   // F1: Synthetic frame.
   ScrollUpdates updates1 = ScrollUpdates(
       /* real= */ std::nullopt,
-      Synthetic{.first_input_begin_frame_ts = MillisSinceEpoch(116)});
+      Synthetic{.first_input_begin_frame_ts = MillisSinceEpoch(116)},
+      kScrollId);
   ScrollDamage damage1 =
       DamagingFrame{.presentation_ts = MillisSinceEpoch(132)};
   BeginFrameArgsForScrollJank args1 =
@@ -223,9 +227,9 @@ TEST_F(ScrollJankV4DecisionQueueTest,
       ScrollUpdates(Real{.first_input_generation_ts = MillisSinceEpoch(135),
                          .last_input_generation_ts = MillisSinceEpoch(143),
                          .has_inertial_input = false,
-                         .abs_total_raw_delta_pixels = 5.0f,
+                         .total_raw_delta_pixels = 5.0f,
                          .max_abs_inertial_raw_delta_pixels = 0.0f},
-                    /* synthetic= */ std::nullopt);
+                    /* synthetic= */ std::nullopt, kScrollId);
   ScrollDamage damage2 =
       DamagingFrame{.presentation_ts = MillisSinceEpoch(164)};
   BeginFrameArgsForScrollJank args2 =
@@ -247,7 +251,8 @@ TEST_F(ScrollJankV4DecisionQueueTest,
   // F3: Synthetic frame with no missed VSyncs.
   ScrollUpdates updates3 = ScrollUpdates(
       /* real= */ std::nullopt,
-      Synthetic{.first_input_begin_frame_ts = MillisSinceEpoch(164)});
+      Synthetic{.first_input_begin_frame_ts = MillisSinceEpoch(164)},
+      kScrollId);
   ScrollDamage damage3 =
       DamagingFrame{.presentation_ts = MillisSinceEpoch(180)};
   BeginFrameArgsForScrollJank args3 =
@@ -265,7 +270,8 @@ TEST_F(ScrollJankV4DecisionQueueTest,
   // F4: Synthetic frame with 1 VSync missed due to fast scroll continuity rule.
   ScrollUpdates updates4 = ScrollUpdates(
       /* real= */ std::nullopt,
-      Synthetic{.first_input_begin_frame_ts = MillisSinceEpoch(196)});
+      Synthetic{.first_input_begin_frame_ts = MillisSinceEpoch(196)},
+      kScrollId);
   ScrollDamage damage4 =
       DamagingFrame{.presentation_ts = MillisSinceEpoch(212)};
   BeginFrameArgsForScrollJank args4 =
@@ -285,9 +291,9 @@ TEST_F(ScrollJankV4DecisionQueueTest,
       ScrollUpdates(Real{.first_input_generation_ts = MillisSinceEpoch(236),
                          .last_input_generation_ts = MillisSinceEpoch(236),
                          .has_inertial_input = true,
-                         .abs_total_raw_delta_pixels = 1.0f,
+                         .total_raw_delta_pixels = 1.0f,
                          .max_abs_inertial_raw_delta_pixels = 1.0f},
-                    /* synthetic= */ std::nullopt);
+                    /* synthetic= */ std::nullopt, kScrollId);
   ScrollDamage damage5 =
       DamagingFrame{.presentation_ts = MillisSinceEpoch(260)};
   BeginFrameArgsForScrollJank args5 =
@@ -333,9 +339,9 @@ TEST_F(ScrollJankV4DecisionQueueTest,
       ScrollUpdates(Real{.first_input_generation_ts = MillisSinceEpoch(135),
                          .last_input_generation_ts = MillisSinceEpoch(143),
                          .has_inertial_input = false,
-                         .abs_total_raw_delta_pixels = 5.0f,
+                         .total_raw_delta_pixels = 5.0f,
                          .max_abs_inertial_raw_delta_pixels = 0.0f},
-                    /* synthetic= */ std::nullopt);
+                    /* synthetic= */ std::nullopt, kScrollId);
   ScrollDamage damage1 =
       DamagingFrame{.presentation_ts = MillisSinceEpoch(164)};
   BeginFrameArgsForScrollJank args1 =
@@ -353,7 +359,8 @@ TEST_F(ScrollJankV4DecisionQueueTest,
   // scroll).
   ScrollUpdates updates2 = ScrollUpdates(
       /* real= */ std::nullopt,
-      Synthetic{.first_input_begin_frame_ts = MillisSinceEpoch(196)});
+      Synthetic{.first_input_begin_frame_ts = MillisSinceEpoch(196)},
+      kScrollId);
   ScrollDamage damage2 =
       DamagingFrame{.presentation_ts = MillisSinceEpoch(212)};
   BeginFrameArgsForScrollJank args2 =
@@ -393,9 +400,9 @@ TEST_F(ScrollJankV4DecisionQueueTest,
       ScrollUpdates(Real{.first_input_generation_ts = MillisSinceEpoch(135),
                          .last_input_generation_ts = MillisSinceEpoch(143),
                          .has_inertial_input = false,
-                         .abs_total_raw_delta_pixels = 5.0f,
+                         .total_raw_delta_pixels = 5.0f,
                          .max_abs_inertial_raw_delta_pixels = 0.0f},
-                    /* synthetic= */ std::nullopt);
+                    /* synthetic= */ std::nullopt, kScrollId);
   ScrollDamage damage1 =
       DamagingFrame{.presentation_ts = MillisSinceEpoch(164)};
   BeginFrameArgsForScrollJank args1 =
@@ -413,7 +420,8 @@ TEST_F(ScrollJankV4DecisionQueueTest,
   // scroll).
   ScrollUpdates updates2 = ScrollUpdates(
       /* real= */ std::nullopt,
-      Synthetic{.first_input_begin_frame_ts = MillisSinceEpoch(196)});
+      Synthetic{.first_input_begin_frame_ts = MillisSinceEpoch(196)},
+      kScrollId);
   ScrollDamage damage2 =
       DamagingFrame{.presentation_ts = MillisSinceEpoch(212)};
   BeginFrameArgsForScrollJank args2 =
@@ -453,9 +461,9 @@ TEST_F(ScrollJankV4DecisionQueueTest,
       ScrollUpdates(Real{.first_input_generation_ts = MillisSinceEpoch(135),
                          .last_input_generation_ts = MillisSinceEpoch(143),
                          .has_inertial_input = false,
-                         .abs_total_raw_delta_pixels = 5.0f,
+                         .total_raw_delta_pixels = 5.0f,
                          .max_abs_inertial_raw_delta_pixels = 0.0f},
-                    /* synthetic= */ std::nullopt);
+                    /* synthetic= */ std::nullopt, kScrollId);
   ScrollDamage damage1 =
       DamagingFrame{.presentation_ts = MillisSinceEpoch(164)};
   BeginFrameArgsForScrollJank args1 =
@@ -473,7 +481,8 @@ TEST_F(ScrollJankV4DecisionQueueTest,
   // scroll).
   ScrollUpdates updates2 = ScrollUpdates(
       /* real= */ std::nullopt,
-      Synthetic{.first_input_begin_frame_ts = MillisSinceEpoch(196)});
+      Synthetic{.first_input_begin_frame_ts = MillisSinceEpoch(196)},
+      kScrollId);
   ScrollDamage damage2 =
       DamagingFrame{.presentation_ts = MillisSinceEpoch(212)};
   BeginFrameArgsForScrollJank args2 =
@@ -510,9 +519,9 @@ TEST_F(ScrollJankV4DecisionQueueTest, HandlesInvalidFramesGracefully) {
       ScrollUpdates(Real{.first_input_generation_ts = MillisSinceEpoch(103),
                          .last_input_generation_ts = MillisSinceEpoch(111),
                          .has_inertial_input = false,
-                         .abs_total_raw_delta_pixels = 5.0f,
+                         .total_raw_delta_pixels = 5.0f,
                          .max_abs_inertial_raw_delta_pixels = 0.0f},
-                    /* synthetic= */ std::nullopt);
+                    /* synthetic= */ std::nullopt, kScrollId);
   ScrollDamage damage1 =
       DamagingFrame{.presentation_ts = MillisSinceEpoch(148)};
   BeginFrameArgsForScrollJank args1 =
@@ -532,9 +541,9 @@ TEST_F(ScrollJankV4DecisionQueueTest, HandlesInvalidFramesGracefully) {
       Real{.first_input_generation_ts = MillisSinceEpoch(119),
            .last_input_generation_ts = MillisSinceEpoch(165) /* wrong */,
            .has_inertial_input = false,
-           .abs_total_raw_delta_pixels = 5.0f,
+           .total_raw_delta_pixels = 5.0f,
            .max_abs_inertial_raw_delta_pixels = 0.0f},
-      /* synthetic= */ std::nullopt);
+      /* synthetic= */ std::nullopt, kScrollId);
   ScrollDamage damage2 =
       DamagingFrame{.presentation_ts = MillisSinceEpoch(164)};
   BeginFrameArgsForScrollJank args2 =
@@ -553,9 +562,9 @@ TEST_F(ScrollJankV4DecisionQueueTest, HandlesInvalidFramesGracefully) {
       ScrollUpdates(Real{.first_input_generation_ts = MillisSinceEpoch(119),
                          .last_input_generation_ts = MillisSinceEpoch(127),
                          .has_inertial_input = false,
-                         .abs_total_raw_delta_pixels = 5.0f,
+                         .total_raw_delta_pixels = 5.0f,
                          .max_abs_inertial_raw_delta_pixels = 0.0f},
-                    /* synthetic= */ std::nullopt);
+                    /* synthetic= */ std::nullopt, kScrollId);
   ScrollDamage damage3 =
       DamagingFrame{.presentation_ts = MillisSinceEpoch(164)};
   BeginFrameArgsForScrollJank args3 =
@@ -574,9 +583,9 @@ TEST_F(ScrollJankV4DecisionQueueTest, HandlesInvalidFramesGracefully) {
       ScrollUpdates(Real{.first_input_generation_ts = MillisSinceEpoch(119),
                          .last_input_generation_ts = MillisSinceEpoch(127),
                          .has_inertial_input = false,
-                         .abs_total_raw_delta_pixels = 5.0f,
+                         .total_raw_delta_pixels = 5.0f,
                          .max_abs_inertial_raw_delta_pixels = 0.0f},
-                    /* synthetic= */ std::nullopt);
+                    /* synthetic= */ std::nullopt, kScrollId);
   ScrollDamage damage4 =
       DamagingFrame{.presentation_ts = MillisSinceEpoch(147) /* wrong */};
   BeginFrameArgsForScrollJank args4 =
@@ -594,9 +603,9 @@ TEST_F(ScrollJankV4DecisionQueueTest, HandlesInvalidFramesGracefully) {
       ScrollUpdates(Real{.first_input_generation_ts = MillisSinceEpoch(119),
                          .last_input_generation_ts = MillisSinceEpoch(127),
                          .has_inertial_input = false,
-                         .abs_total_raw_delta_pixels = 5.0f,
+                         .total_raw_delta_pixels = 5.0f,
                          .max_abs_inertial_raw_delta_pixels = 0.0f},
-                    /* synthetic= */ std::nullopt);
+                    /* synthetic= */ std::nullopt, kScrollId);
   ScrollDamage damage5 =
       DamagingFrame{.presentation_ts = MillisSinceEpoch(164)};
   BeginFrameArgsForScrollJank args5 =

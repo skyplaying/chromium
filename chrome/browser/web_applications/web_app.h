@@ -22,9 +22,11 @@
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/web_applications/generated_icon_fix_util.h"
-#include "chrome/browser/web_applications/isolated_web_apps/isolation_data.h"
 #include "chrome/browser/web_applications/model/app_installed_by.h"
 #include "chrome/browser/web_applications/model/display_override.h"
+#include "chrome/browser/web_applications/model/isolation_data.h"
+#include "chrome/browser/web_applications/model/migration_source.h"
+#include "chrome/browser/web_applications/model/pending_migration_info.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom-forward.h"
 #include "chrome/browser/web_applications/proto/web_app.pb.h"
 #include "chrome/browser/web_applications/proto/web_app_install_state.pb.h"
@@ -42,7 +44,6 @@
 #include "components/sync/model/string_ordinal.h"
 #include "components/sync/protocol/web_app_specifics.pb.h"
 #include "components/webapps/common/web_app_id.h"
-#include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "third_party/blink/public/common/manifest/manifest.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "url/gurl.h"
@@ -67,6 +68,13 @@ class InstalledByPassKey {
   InstalledByPassKey() = default;
 };
 
+// Represents an installed web app in RAM. Its member fields largely reflect all
+// the ways a site can configure their web app manifest, plus miscellaneous
+// internal bookkeeping and user settings.
+//
+// Some settings on this class can also be influenced by other sources of truth
+// like policy. Thus it is often safer to access properties via getters on the
+// WebAppRegistrar, which combines these sources of truth.
 class WebApp {
  public:
   // This creates a web app object, and will CHECK-fail if the arguments are
@@ -79,8 +87,7 @@ class WebApp {
   WebApp(const webapps::ManifestId& manifest_id,
          const GURL& start_url,
          const GURL& scope,
-         std::optional<webapps::AppId> parent_app_id = std::nullopt,
-         std::optional<webapps::ManifestId> parent_manifest_id = std::nullopt);
+         std::optional<webapps::AppId> parent_app_id = std::nullopt);
 
   // Create a web app object from just the incoming sync data.
   // Callers are responsible for sanitizing the inputs in the sync_proto,
@@ -190,8 +197,12 @@ class WebApp {
 
   // Represents the last time the Badging API was used.
   const base::Time& last_badging_time() const { return last_badging_time_; }
-  // Represents the last time this app is launched.
-  const base::Time& last_launch_time() const { return last_launch_time_; }
+  // Represents the last time this app is launched. This can be unset if the app
+  // has not been launched at all, like after installation when
+  // `kWebAppInstallDialog` is enabled.
+  const std::optional<base::Time>& last_launch_time() const {
+    return last_launch_time_;
+  }
   // Represents the time when this app is installed.
   const base::Time& first_install_time() const { return first_install_time_; }
   // Represents the time when this app is updated.
@@ -256,6 +267,11 @@ class WebApp {
     return validated_scope_extensions_;
   }
 
+  const std::optional<base::Time>&
+  origin_association_last_validation_check_time() const {
+    return origin_association_last_validation_check_time_;
+  }
+
   WebAppScope GetScope() const;
 
   RunOnOsLoginMode run_on_os_login_mode() const {
@@ -295,10 +311,6 @@ class WebApp {
 
   const std::optional<webapps::AppId>& parent_app_id() const {
     return parent_app_id_;
-  }
-
-  const network::ParsedPermissionsPolicy& permissions_policy() const {
-    return permissions_policy_;
   }
 
   std::optional<webapps::WebappInstallSource> latest_install_source() const {
@@ -457,21 +469,18 @@ class WebApp {
   void SetDescription(const std::string& description);
 
   // Sets the start_url of the web app.  This call will CHECK-fail if the
-  // start_url is empty or not valid. If the manifest_id is not yet set, this
-  // will set the manifest_id using the start_url.
+  // start_url is empty or not valid, or if `SetManifestId()` has not been
+  // called yet.
   // TODO(): Remove this fallback as all web apps should be guaranteed to have
   // the manifest_id set.
   //
-  // Note: When serialized to disk, the code will CHECK-fail if the start_url is
-  // not prefixed by the scope.
-  void SetStartUrl(const GURL& start_url);
-
-  // The scope will have the query and fragment from the scope url, as per spec.
+  // The scope will have the query and fragment removed from the scope url,
+  // as per spec.
   // This call will CHECK-fail if the scope is empty or not valid.
   //
   // Note: When serialized to disk, the code will CHECK-fail if the start_url is
   // not prefixed by the scope.
-  void SetScope(const GURL& scope);
+  void SetStartUrlAndScope(const GURL& start_url, const GURL& scope);
 
   void SetLaunchQueryParams(std::optional<std::string> launch_query_params);
   void SetThemeColor(std::optional<SkColor> theme_color);
@@ -509,20 +518,19 @@ class WebApp {
   void SetScopeExtensions(base::flat_set<ScopeExtensionInfo> scope_extensions);
   void SetValidatedScopeExtensions(
       base::flat_set<ScopeExtensionInfo> validated_scope_extensions);
+  void SetOriginAssociationLastValidationCheckTime(
+      const std::optional<base::Time>& time);
   void SetLockScreenStartUrl(const GURL& lock_screen_start_url);
   void SetNoteTakingNewNoteUrl(const GURL& note_taking_new_note_url);
   void SetLastBadgingTime(const base::Time& time);
-  void SetLastLaunchTime(const base::Time& time);
+  void SetLastLaunchTime(const std::optional<base::Time>& last_launch_time);
   void SetFirstInstallTime(const base::Time& time);
   void SetManifestUpdateTime(const base::Time& time);
   void SetRunOnOsLoginMode(RunOnOsLoginMode mode);
   void SetManifestUrl(const GURL& manifest_url);
-  void SetManifestId(const webapps::ManifestId& manifest_id);
   void SetWindowControlsOverlayEnabled(bool enabled);
   void SetLaunchHandler(std::optional<LaunchHandler> launch_handler);
   void SetParentAppId(const std::optional<webapps::AppId>& parent_app_id);
-  void SetPermissionsPolicy(
-      network::ParsedPermissionsPolicy permissions_policy);
   void SetLatestInstallSource(
       std::optional<webapps::WebappInstallSource> latest_install_source);
   void SetAppSizeInBytes(std::optional<int64_t> app_size_in_bytes);
@@ -580,24 +588,19 @@ class WebApp {
 
   void SetStoredTrustedIconSizes(IconPurpose purpose, SortedSizesPx sizes);
 
-  const std::vector<proto::WebAppMigrationSource>&
-  unvalidated_migration_sources() const {
+  const std::vector<MigrationSource>& unvalidated_migration_sources() const {
     return unvalidated_migration_sources_;
   }
-  const std::vector<proto::WebAppMigrationSource>& validated_migration_sources()
-      const {
+  const std::vector<MigrationSource>& validated_migration_sources() const {
     return validated_migration_sources_;
   }
-  const std::optional<proto::PendingMigrationInfo>& pending_migration_info()
-      const {
+  const std::optional<PendingMigrationInfo>& pending_migration_info() const {
     return pending_migration_info_;
   }
 
-  void SetUnvalidatedMigrationSources(
-      std::vector<proto::WebAppMigrationSource> sources);
-  void SetValidatedMigrationSources(
-      std::vector<proto::WebAppMigrationSource> sources);
-  void SetPendingMigrationInfo(std::optional<proto::PendingMigrationInfo> info);
+  void SetUnvalidatedMigrationSources(std::vector<MigrationSource> sources);
+  void SetValidatedMigrationSources(std::vector<MigrationSource> sources);
+  void SetPendingMigrationInfo(std::optional<PendingMigrationInfo> info);
 
   void SetInstalledBy(InstalledByPassKey,
                       std::deque<AppInstalledBy> installed_by);
@@ -644,13 +647,9 @@ class WebApp {
   friend std::unique_ptr<proto::WebApp> WebAppToProto(const WebApp& web_app);
   friend std::ostream& operator<<(std::ostream&, const WebApp&);
 
-  // TODO(http://crbug.com/384536509): Remove this after migrating parent_app_id
-  // in the database to parent_manifest_id.
-  WebApp(const webapps::AppId& app_id,
-         const webapps::ManifestId& manifest_id,
-         const GURL& start_url,
-         const GURL& scope,
-         std::optional<webapps::AppId> parent_app_id);
+  // This shouldn't be a public API. If the `manifest_id` needs to be set for a
+  // web app, use the constructors to do so.
+  void SetManifestId(const webapps::ManifestId& manifest_id);
 
   // LINT.IfChange(MemberVariables)
   webapps::AppId app_id_;
@@ -695,7 +694,11 @@ class WebApp {
   GURL lock_screen_start_url_;
   GURL note_taking_new_note_url_;
   base::Time last_badging_time_;
-  base::Time last_launch_time_;
+  // Denotes the last time an app was launched. If a `base::Time` instance is
+  // populated, it has to be valid, and cannot satisfy `base::Time::is_null()`,
+  // otherwise this code will crash. Consider setting the last launch time to
+  // `std::nullopt` instead if that is the case.
+  std::optional<base::Time> last_launch_time_;
   base::Time first_install_time_;
   base::Time manifest_update_time_;
   RunOnOsLoginMode run_on_os_login_mode_ = RunOnOsLoginMode::kNotRun;
@@ -710,7 +713,6 @@ class WebApp {
   bool window_controls_overlay_enabled_ = false;
   std::optional<LaunchHandler> launch_handler_;
   std::optional<webapps::AppId> parent_app_id_;
-  network::ParsedPermissionsPolicy permissions_policy_;
   // The source of the latest install. WebAppRegistrar provides range
   // validation. Optional only to support legacy installations, since this used
   // to be tracked as a pref. It might also be null if the value read from the
@@ -764,9 +766,11 @@ class WebApp {
 
   std::deque<AppInstalledBy> installed_by_;
 
-  std::vector<proto::WebAppMigrationSource> unvalidated_migration_sources_;
-  std::vector<proto::WebAppMigrationSource> validated_migration_sources_;
-  std::optional<proto::PendingMigrationInfo> pending_migration_info_;
+  std::vector<MigrationSource> unvalidated_migration_sources_;
+  std::vector<MigrationSource> validated_migration_sources_;
+  std::optional<PendingMigrationInfo> pending_migration_info_;
+
+  std::optional<base::Time> origin_association_last_validation_check_time_;
   // LINT.ThenChange(//chrome/browser/web_applications/proto/web_app.proto)
 
   // New fields must be added to:
@@ -777,9 +781,7 @@ class WebApp {
   //  - CreateRandomWebApp()
   //  - web_app.proto
   // If parsed from manifest, also add to:
-  //  - GetManifestDataChanges() inside manifest_update_utils.h
-  //  - ManifestSilentUpdateCommand::CompareWebApps() inside
-  //    manifest_silent_update_command.cc.
+  //  - WebAppComparison::CompareWebApps() in web_app_comparison.h
   //  - SetWebAppManifestFields()
   // If the field relates to the app icons, add revert logic for it in:
   // - ManifestUpdateCheckCommand::RevertIdentityChangesIfNeeded()
@@ -813,10 +815,6 @@ std::ostream& operator<<(std::ostream& out, const WebApp& app);
 std::ostream& operator<<(
     std::ostream& out,
     const WebApp::ExternalManagementConfig& management_config);
-
-std::vector<std::string> GetSerializedAllowedOrigins(
-    const network::ParsedPermissionsPolicyDeclaration
-        permissions_policy_declaration);
 
 }  // namespace web_app
 

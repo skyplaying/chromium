@@ -4,6 +4,10 @@
 
 #include "components/autofill/core/browser/suggestions/suggestion_type.h"
 
+#include <ostream>
+#include <string>
+#include <string_view>
+
 #include "base/notreached.h"
 #include "suggestion_type.h"
 
@@ -25,14 +29,16 @@ std::string_view SuggestionTypeToStringView(SuggestionType type) {
       return "kManageAutofillAi";
     case SuggestionType::kManageAutofillAiIdentityDocs:
       return "kManageAutofillAiIdentityDocs";
+    case SuggestionType::kManageAutofillAiShopping:
+      return "kManageAutofillAiShopping";
     case SuggestionType::kManageAutofillAiTravel:
       return "kManageAutofillAiTravel";
+    case SuggestionType::kManageEnhancedAutofill:
+      return "kManageEnhancedAutofill";
     case SuggestionType::kManageCreditCard:
       return "kManageCreditCard";
     case SuggestionType::kManageIban:
       return "kManageIban";
-    case SuggestionType::kManagePlusAddress:
-      return "kManagePlusAddress";
     case SuggestionType::kManageLoyaltyCard:
       return "kManageLoyaltyCard";
     case SuggestionType::kComposeResumeNudge:
@@ -83,8 +89,6 @@ std::string_view SuggestionTypeToStringView(SuggestionType type) {
       return "kIbanEntry";
     case SuggestionType::kBnplEntry:
       return "kBnplEntry";
-    case SuggestionType::kFillExistingPlusAddress:
-      return "kFillExistingPlusAddress";
     case SuggestionType::kMerchantPromoCodeEntry:
       return "kMerchantPromoCodeEntry";
     case SuggestionType::kSeePromoCodeDetails:
@@ -93,16 +97,16 @@ std::string_view SuggestionTypeToStringView(SuggestionType type) {
       return "kWebauthnCredential";
     case SuggestionType::kWebauthnSignInWithAnotherDevice:
       return "kWebauthnSignInWithAnotherDevice";
+    case SuggestionType::kWebauthnPasskeyQrCode:
+      return "kWebauthnPasskeyQrCode";
     case SuggestionType::kIdentityCredential:
       return "kIdentityCredential";
     case SuggestionType::kTitle:
       return "kTitle";
     case SuggestionType::kSeparator:
       return "kSeparator";
-    case SuggestionType::kUndoOrClear:
-      return "kUndoOrClear";
-    case SuggestionType::kMixedFormMessage:
-      return "kMixedFormMessage";
+    case SuggestionType::kUndo:
+      return "kUndo";
     case SuggestionType::kDevtoolsTestAddresses:
       return "kDevtoolsTestAddresses";
     case SuggestionType::kDevtoolsTestAddressByCountry:
@@ -113,6 +117,10 @@ std::string_view SuggestionTypeToStringView(SuggestionType type) {
       return "kFillAutofillAi";
     case SuggestionType::kPendingStateSignin:
       return "kPendingStateSignin";
+    case SuggestionType::kAtMemorySearchResult:
+      return "kAtMemorySearchResult";
+    case SuggestionType::kAtMemoryInactivityNudge:
+      return "kAtMemoryInactivityNudge";
     case SuggestionType::kLoyaltyCardEntry:
       return "kLoyaltyCardEntry";
     case SuggestionType::kAllLoyaltyCardsEntry:
@@ -121,6 +129,40 @@ std::string_view SuggestionTypeToStringView(SuggestionType type) {
       return "OneTimePasswordEntry";
     case SuggestionType::kLoadingThrobber:
       return "kLoadingThrobber";
+    case SuggestionType::kBnplFootnote:
+      return "kBnplFootnote";
+    case SuggestionType::kAutocompleteAtMemoryButton:
+      return "kAutocompleteAtMemoryButton";
+    case SuggestionType::kAtMemoryNoConnection:
+      return "kAtMemoryNoConnection";
+    case SuggestionType::kAtMemoryOpenGemini:
+      return "kAtMemoryOpenGemini";
+    case SuggestionType::kAtMemorySearchAffordance:
+      return "kAtMemorySearchAffordance";
+    case SuggestionType::kPersonalContextNotice:
+      return "kPersonalContextNotice";
+    case SuggestionType::kFetchingAmbientData:
+      return "kFetchingAmbientData";
+    case SuggestionType::kAtMemoryGenericError:
+      return "kAtMemoryGenericError";
+    case SuggestionType::kMaximizeCreditCardBenefitsEntry:
+      return "kMaximizeCreditCardBenefitsEntry";
+    case SuggestionType::kAutofillAiOtherOrders:
+      return "kAutofillAiOtherOrders";
+    case SuggestionType::kAutofillAiOtherShipments:
+      return "kAutofillAiOtherShipments";
+    case SuggestionType::kAutofillAiPrivateInferenceNotice:
+      return "kAutofillAiPrivateInferenceNotice";
+    case SuggestionType::kAtMemoryAiDisclosure:
+      return "kAtMemoryAiDisclosure";
+    case SuggestionType::kAtMemorySourceAttribution:
+      return "kAtMemorySourceAttribution";
+    case SuggestionType::kAtMemoryFetching:
+      return "kAtMemoryFetching";
+    case SuggestionType::kRemoveAutofillAi:
+      return "kRemoveAutofillAi";
+    case SuggestionType::kAutofillAiSourceAttribution:
+      return "kAutofillAiSourceAttribution";
   }
   NOTREACHED();
 }

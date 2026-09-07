@@ -10,7 +10,7 @@
 #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-shared.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_usvstring_usvstringsequencesequence_usvstringusvstringrecord.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
-#include "third_party/blink/renderer/core/url/dom_url.h"
+#include "third_party/blink/renderer/core/url/url.h"
 #include "third_party/blink/renderer/platform/bindings/exception_messages.h"
 #include "third_party/blink/renderer/platform/network/form_data_encoder.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
@@ -60,8 +60,9 @@ URLSearchParams* URLSearchParams::Create(const URLSearchParamsInit* init,
   switch (init->GetContentType()) {
     case URLSearchParamsInit::ContentType::kUSVString: {
       const String& query_string = init->GetAsUSVString();
-      if (query_string.StartsWith('?'))
-        return MakeGarbageCollected<URLSearchParams>(query_string.Substring(1));
+      if (query_string.starts_with('?')) {
+        return MakeGarbageCollected<URLSearchParams>(query_string.substr(1));
+      }
       return MakeGarbageCollected<URLSearchParams>(query_string);
     }
     case URLSearchParamsInit::ContentType::kUSVStringSequenceSequence:
@@ -92,7 +93,7 @@ URLSearchParams* URLSearchParams::Create(const Vector<Vector<String>>& init,
   return instance;
 }
 
-URLSearchParams::URLSearchParams(const String& query_string, DOMURL* url_object)
+URLSearchParams::URLSearchParams(const String& query_string, URL* url_object)
     : url_object_(url_object) {
   if (!query_string.empty())
     SetInputWithoutUpdate(query_string);
@@ -117,7 +118,7 @@ void URLSearchParams::Trace(Visitor* visitor) const {
 }
 
 #if DCHECK_IS_ON()
-DOMURL* URLSearchParams::UrlObject() const {
+URL* URLSearchParams::UrlObject() const {
   return url_object_;
 }
 #endif
@@ -135,8 +136,8 @@ void URLSearchParams::RunUpdateSteps() {
 static String DecodeString(String input) {
   // |DecodeURLMode::kUTF8| is used because "UTF-8 decode without BOM" should
   // be performed (see https://url.spec.whatwg.org/#concept-urlencoded-parser).
-  return DecodeURLEscapeSequences(input.Replace('+', ' '),
-                                  DecodeURLMode::kUTF8);
+  return DecodeUrlEscapeSequences(input.Replace('+', ' '),
+                                  DecodeUrlMode::kUtf8);
 }
 
 void URLSearchParams::SetInputWithoutUpdate(const String& query_string) {
@@ -154,10 +155,10 @@ void URLSearchParams::SetInputWithoutUpdate(const String& query_string) {
       if (end_of_name == kNotFound || end_of_name > name_value_end)
         end_of_name = name_value_end;
       String name = DecodeString(
-          query_string.Substring(name_start, end_of_name - name_start));
+          query_string.substr(name_start, end_of_name - name_start));
       String value;
       if (end_of_name != name_value_end)
-        value = DecodeString(query_string.Substring(
+        value = DecodeString(query_string.substr(
             end_of_name + 1, name_value_end - end_of_name - 1));
       if (value.IsNull())
         value = "";
@@ -317,7 +318,7 @@ void URLSearchParams::EncodeAsFormData(Vector<char>& encoded_data) const {
   for (const auto& param : params_) {
     FormDataEncoder::AddKeyValuePairAsFormData(
         encoded_data, param.first.Utf8(), param.second.Utf8(),
-        EncodedFormData::kFormURLEncoded, FormDataEncoder::kDoNotNormalizeCRLF);
+        EncodedFormData::kFormUrlEncoded, FormDataEncoder::kDoNotNormalizeCRLF);
   }
 }
 

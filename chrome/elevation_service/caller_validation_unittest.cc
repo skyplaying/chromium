@@ -4,7 +4,6 @@
 
 #include "chrome/elevation_service/caller_validation.h"
 
-#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
@@ -48,8 +47,8 @@ void VerifyValidationResult(const base::FilePath& path1,
   ASSERT_TRUE(process1.IsRunning());
   auto process2 = StartSuspendedFakeProcess(path2);
   ASSERT_TRUE(process2.IsRunning());
-  const auto data = GenerateValidationData(
-      ProtectionLevel::PROTECTION_PATH_VALIDATION, process1);
+  const auto data =
+      GenerateValidationData(PROTECTION_PATH_VALIDATION, process1);
   ASSERT_TRUE(data.has_value()) << data.error();
   EXPECT_EQ(expected_match, SUCCEEDED(ValidateData(process2, *data)))
       << path1 << " vs. " << path2;
@@ -68,16 +67,25 @@ class CallerValidationTest : public ::testing::Test {
 
 TEST_F(CallerValidationTest, NoneValidationTest) {
   const auto my_process = base::Process::Current();
-  const auto data =
-      GenerateValidationData(ProtectionLevel::PROTECTION_NONE, my_process);
+  const auto data = GenerateValidationData(PROTECTION_NONE, my_process);
   ASSERT_TRUE(data.has_value()) << data.error();
   ASSERT_HRESULT_SUCCEEDED(ValidateData(my_process, *data));
 }
 
 TEST_F(CallerValidationTest, PathValidationTest) {
   const auto my_process = base::Process::Current();
+  const auto data =
+      GenerateValidationData(PROTECTION_PATH_VALIDATION, my_process);
+  ASSERT_TRUE(data.has_value()) << data.error();
+  ASSERT_HRESULT_SUCCEEDED(ValidateData(my_process, *data));
+}
+
+TEST_F(CallerValidationTest, PathValidationWithIsolationTest) {
+  const auto my_process = base::Process::Current();
+  // Isolated validation is tested elsewhere, but this is a very basic check
+  // that the API works.
   const auto data = GenerateValidationData(
-      ProtectionLevel::PROTECTION_PATH_VALIDATION, my_process);
+      PROTECTION_PATH_VALIDATION_WITH_ISOLATION, my_process);
   ASSERT_TRUE(data.has_value()) << data.error();
   ASSERT_HRESULT_SUCCEEDED(ValidateData(my_process, *data));
 }
@@ -91,31 +99,30 @@ TEST_F(CallerValidationTest, PathValidationOldDataTest) {
 }
 
 TEST_F(CallerValidationTest, DeprecatedPathValidationTest) {
-  const auto data =
-      GenerateValidationData(ProtectionLevel::PROTECTION_PATH_VALIDATION_OLD,
-                             base::Process::Current());
+  const auto data = GenerateValidationData(PROTECTION_PATH_VALIDATION_OLD,
+                                           base::Process::Current());
 
   ASSERT_FALSE(data.has_value());
   EXPECT_EQ(data.error(), Elevator::kErrorUnsupportedProtectionLevel);
 }
 
 TEST_F(CallerValidationTest, BackwardsCompatiblePathDataTest) {
-  auto data = GenerateValidationData(
-      ProtectionLevel::PROTECTION_PATH_VALIDATION, base::Process::Current());
+  auto data = GenerateValidationData(PROTECTION_PATH_VALIDATION,
+                                     base::Process::Current());
   ASSERT_TRUE(data.has_value());
-  ASSERT_EQ((*data)[0], ProtectionLevel::PROTECTION_PATH_VALIDATION);
+  ASSERT_EQ((*data)[0], PROTECTION_PATH_VALIDATION);
   // Simulate a client that has previously generated path validation data but
   // with the old validation type (0x01). This is compatible with the new data
   // type (0x02).
-  (*data)[0] = ProtectionLevel::PROTECTION_PATH_VALIDATION_OLD;
+  (*data)[0] = PROTECTION_PATH_VALIDATION_OLD;
   const auto result = ValidateData(base::Process::Current(), *data);
   ASSERT_HRESULT_SUCCEEDED(result);
 }
 
 TEST_F(CallerValidationTest, PathValidationTestFail) {
   const auto my_process = base::Process::Current();
-  const auto data = GenerateValidationData(
-      ProtectionLevel::PROTECTION_PATH_VALIDATION, my_process);
+  const auto data =
+      GenerateValidationData(PROTECTION_PATH_VALIDATION, my_process);
   ASSERT_TRUE(data.has_value()) << data.error();
 
   auto notepad_process =
@@ -138,8 +145,7 @@ TEST_F(CallerValidationTest, PathValidationTestOtherProcess) {
         base::LaunchProcess(L"calc.exe", base::LaunchOptions());
     ASSERT_TRUE(notepad_process.IsRunning());
 
-    data = GenerateValidationData(ProtectionLevel::PROTECTION_PATH_VALIDATION,
-                                  notepad_process);
+    data = GenerateValidationData(PROTECTION_PATH_VALIDATION, notepad_process);
     ASSERT_TRUE(notepad_process.Terminate(0, true));
   }
 
@@ -157,8 +163,7 @@ TEST_F(CallerValidationTest, PathValidationTestOtherProcess) {
 
 TEST_F(CallerValidationTest, NoneValidationTestOtherProcess) {
   const auto my_process = base::Process::Current();
-  const auto data =
-      GenerateValidationData(ProtectionLevel::PROTECTION_NONE, my_process);
+  const auto data = GenerateValidationData(PROTECTION_NONE, my_process);
   ASSERT_TRUE(data.has_value()) << data.error();
 
   auto notepad_process =
@@ -268,8 +273,8 @@ TEST_F(CallerValidationTest, PathValidationFuzzyPathMatch) {
 // --gtest_filter=CallerValidationTest.PathValidationNetwork
 // --gtest_also_run_disabled_tests.
 TEST_F(CallerValidationTest, DISABLED_PathValidationNetwork) {
-  const auto data = GenerateValidationData(
-      ProtectionLevel::PROTECTION_PATH_VALIDATION, base::Process::Current());
+  const auto data = GenerateValidationData(PROTECTION_PATH_VALIDATION,
+                                           base::Process::Current());
   EXPECT_FALSE(data.has_value());
   EXPECT_EQ(data.error(), Elevator::kErrorUnsupportedFilePath);
 }
@@ -308,10 +313,10 @@ TEST_F(CallerValidationTest, TrimProcessPath) {
        L"C:\\Program Files\\Google\\Chrome"},
   };
 
-  for (size_t i = 0; i < std::size(cases); ++i) {
-    base::FilePath input(UNSAFE_TODO(cases[i]).input);
+  for (const TestData& test_case : cases) {
+    base::FilePath input(test_case.input);
     auto output = MaybeTrimProcessPathForTesting(input);
-    EXPECT_EQ(output.value(), UNSAFE_TODO(cases[i]).expected);
+    EXPECT_EQ(output.value(), test_case.expected);
   }
 }
 

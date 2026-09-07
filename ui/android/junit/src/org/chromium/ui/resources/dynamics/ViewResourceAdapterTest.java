@@ -10,7 +10,6 @@ import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.when;
-import static org.mockito.MockitoAnnotations.initMocks;
 
 import static org.chromium.base.GarbageCollectionTestUtils.canBeGarbageCollected;
 
@@ -19,14 +18,19 @@ import android.graphics.Rect;
 import android.view.View;
 
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.robolectric.annotation.Config;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.CallbackHelper;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.ui.base.UiAndroidFeatures;
 import org.chromium.ui.resources.Resource;
 import org.chromium.ui.resources.ResourceFactory;
 import org.chromium.ui.resources.ResourceFactoryJni;
@@ -35,8 +39,8 @@ import java.lang.ref.WeakReference;
 
 /** Tests for {@link ViewResourceAdapter}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class ViewResourceAdapterTest {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     private int mViewWidth;
     private int mViewHeight;
     @Mock private ResourceFactory.Natives mResourceFactoryJni;
@@ -46,7 +50,6 @@ public class ViewResourceAdapterTest {
 
     @Before
     public void setup() {
-        initMocks(this);
         ResourceFactoryJni.setInstanceForTesting(mResourceFactoryJni);
         CaptureUtils.setCaptureCommonHookForTesting(() -> true);
 
@@ -211,6 +214,29 @@ public class ViewResourceAdapterTest {
         mAdapter.invalidate(null);
         assertTrue(mAdapter.isDirty());
         assertEquals(bitmap, getBitmap());
+    }
+
+    @Test
+    @DisableFeatures(UiAndroidFeatures.ANDROID_RESOURCE_MEMORY_OPTIMIZATION)
+    public void testAndroidResourceMemoryOptimization_Disabled() {
+        Bitmap bitmap = getBitmap();
+        assertNotNull(bitmap);
+
+        mAdapter.invalidate(null);
+        assertTrue(mAdapter.isDirty());
+        assertEquals(bitmap, getBitmap());
+    }
+
+    @Test
+    @EnableFeatures(UiAndroidFeatures.ANDROID_RESOURCE_MEMORY_OPTIMIZATION)
+    public void testAndroidResourceMemoryOptimization_Enabled() {
+        WeakReference<Bitmap> bitmapWeakReference = new WeakReference<>(getBitmap());
+        assertNotNull(bitmapWeakReference.get());
+        assertTrue(canBeGarbageCollected(bitmapWeakReference));
+
+        mAdapter.invalidate(null);
+        assertTrue(mAdapter.isDirty());
+        assertNotEquals(bitmapWeakReference.get(), getBitmap());
     }
 
     @Test

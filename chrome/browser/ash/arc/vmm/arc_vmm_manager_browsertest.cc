@@ -14,7 +14,6 @@
 #include "chrome/browser/ash/arc/arc_util.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
 #include "chrome/browser/ash/arc/vmm/arc_system_state_observation.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chromeos/ash/experiences/arc/arc_features.h"
 #include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
@@ -57,9 +56,9 @@ class ArcVmmManagerBrowserTest : public InProcessBrowserTest {
 
   // ArcVmmManagerBrowserTest:
   void EnableArc() {
-    arc::SetArcPlayStoreEnabledForProfile(browser()->profile(), true);
+    arc::SetArcPlayStoreEnabledForProfile(browser()->GetProfile(), true);
 
-    arc_app_list_prefs_ = ArcAppListPrefs::Get(browser()->profile());
+    arc_app_list_prefs_ = ArcAppListPrefs::Get(browser()->GetProfile());
     DCHECK(arc_app_list_prefs_);
 
     base::RunLoop run_loop;
@@ -82,7 +81,7 @@ class ArcVmmManagerBrowserTest : public InProcessBrowserTest {
   }
 
   ArcVmmManager* vmm_manager() {
-    return ArcVmmManager::GetForBrowserContext(browser()->profile());
+    return ArcVmmManager::GetForBrowserContext(browser()->GetProfile());
   }
 
   bool arc_connected() { return vmm_manager()->arc_connected_; }

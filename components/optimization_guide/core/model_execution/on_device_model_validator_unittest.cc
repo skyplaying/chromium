@@ -6,9 +6,9 @@
 
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
+#include "components/optimization_guide/core/model_execution/on_device_model_names.h"
 #include "components/optimization_guide/core/model_execution/test/fake_model_assets.h"
 #include "components/optimization_guide/core/model_execution/test/feature_config_builder.h"
-#include "components/optimization_guide/core/optimization_guide_constants.h"
 #include "services/on_device_model/public/cpp/test_support/fake_service.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -69,6 +69,13 @@ TEST_F(OnDeviceModelValidatorTest, FailsOnServiceCrash) {
       WillPassValidationConfig(), result_future.GetCallback(), StartSession());
   fake_launcher_.CrashService();
   EXPECT_EQ(OnDeviceModelValidationResult::kServiceCrash, result_future.Get());
+}
+
+TEST_F(OnDeviceModelValidatorTest, FailsOnModelDisconnect) {
+  fake_settings_.set_execute_error(
+      on_device_model::mojom::GenerateError::kUnknown);
+  EXPECT_EQ(OnDeviceModelValidationResult::kServiceCrash,
+            WaitForValidation(WillPassValidationConfig()));
 }
 
 TEST_F(OnDeviceModelValidatorTest, Fails) {

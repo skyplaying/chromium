@@ -26,6 +26,9 @@ class TestSecurityDelegate : public SecurityDelegate {
   bool CanSelfActivate(aura::Window* window) const override;
   bool CanLockPointer(aura::Window* toplevel) const override;
   SetBoundsPolicy CanSetBounds(aura::Window* window) const override;
+  bool CanAccessRemoteShell() const override;
+  bool CanSetRestoreInfo() const override;
+  bool CanSetSystemModal() const override;
   std::vector<ui::FileInfo> GetFilenames(
       ui::EndpointType source,
       const std::vector<uint8_t>& data) const override;
@@ -39,11 +42,23 @@ class TestSecurityDelegate : public SecurityDelegate {
   // Choose the return value of |CanSetBounds()|.
   void SetCanSetBounds(SetBoundsPolicy policy);
 
+  // Choose the return value of |CanAccessRemoteShell()|.
+  void SetCanAccessRemoteShell(bool allowed);
+
+  // Choose the return value of |CanSetRestoreInfo()|.
+  void SetCanSetRestoreInfo(bool allowed);
+
+  // Choose the return value of |CanSetSystemModal()|.
+  void SetCanSetSystemModal(bool allowed);
+
   // Run the callback received in SendPickle() with the specified values..
   void RunSendPickleCallback(std::vector<GURL> urls);
 
  protected:
   SetBoundsPolicy policy_ = SetBoundsPolicy::IGNORE;
+  bool remote_shell_allowed_ = true;
+  bool restore_info_allowed_ = true;
+  bool system_modal_allowed_ = true;
   SendDataCallback send_pickle_callback_;
 };
 

@@ -48,15 +48,16 @@ class InteractionToNextPaintCalculator {
   };
 
   InteractionToNextPaintCalculator();
-  InteractionToNextPaintCalculator(const InteractionToNextPaintCalculator&) =
-      delete;
+  InteractionToNextPaintCalculator(const InteractionToNextPaintCalculator&);
+  InteractionToNextPaintCalculator(InteractionToNextPaintCalculator&&);
   InteractionToNextPaintCalculator& operator=(
-      const InteractionToNextPaintCalculator&) = delete;
-
+      const InteractionToNextPaintCalculator&);
+  InteractionToNextPaintCalculator& operator=(
+      InteractionToNextPaintCalculator&&);
   ~InteractionToNextPaintCalculator();
 
   void AddNewEventTimings(
-      const content::RenderFrameHost& source,
+      content::GlobalRenderFrameHostToken source_token,
       base::span<const mojom::EventTimingPtr> event_timings);
 
   void ClearEventTimings();

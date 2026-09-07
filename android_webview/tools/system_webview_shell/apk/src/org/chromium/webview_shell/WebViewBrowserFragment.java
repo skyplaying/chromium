@@ -5,6 +5,7 @@
 package org.chromium.webview_shell;
 
 import android.Manifest;
+import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
@@ -36,8 +37,10 @@ import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
+import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.window.OnBackInvokedCallback;
@@ -47,7 +50,6 @@ import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.ActivityResultRegistry;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import androidx.annotation.OptIn;
 import androidx.annotation.RequiresApi;
 import androidx.fragment.app.Fragment;
 import androidx.webkit.WebSettingsCompat;
@@ -58,7 +60,6 @@ import androidx.webkit.WebViewFeature;
 import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.Log;
 import org.chromium.base.PackageManagerUtils;
-import org.chromium.base.StrictModeContext;
 import org.chromium.base.task.AsyncTask;
 import org.chromium.net.ChromiumNetworkAdapter;
 import org.chromium.net.NetworkTrafficAnnotationTag;
@@ -306,10 +307,63 @@ public class WebViewBrowserFragment extends Fragment {
         return inflater.inflate(R.layout.fragment_webview_browser, container, false);
     }
 
+    private boolean shouldDelayStartup() {
+        Activity activity = getActivity();
+        if (activity instanceof WebViewBrowserActivity) {
+            return ((WebViewBrowserActivity) activity).shouldDelayStartup();
+        }
+        return false;
+    }
+
     @Override
     public void onViewCreated(View view, Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
         WebView.setWebContentsDebuggingEnabled(true);
+
+        if (shouldDelayStartup()) {
+            setupDelayStartup(view, savedInstanceState);
+        } else {
+            initializeWebView(view, savedInstanceState);
+        }
+
+        ActivityResultRegistry registry = mActivityResultRegistry;
+        if (registry == null) {
+            registry = requireActivity().getActivityResultRegistry();
+        }
+        mFileContents =
+                registerForActivityResult(
+                        mMultiFileSelector,
+                        registry,
+                        result -> mFilePathCallback.onReceiveValue(result));
+    }
+
+    private void setupDelayStartup(View view, Bundle savedInstanceState) {
+        final LinearLayout contentContainer = (LinearLayout) view;
+        final int childCount = contentContainer.getChildCount();
+        final View[] children = new View[childCount];
+        for (int i = 0; i < childCount; i++) {
+            children[i] = contentContainer.getChildAt(i);
+            children[i].setVisibility(View.GONE);
+        }
+
+        final Button startupButton = new Button(requireContext());
+        startupButton.setText(getResources().getString(R.string.action_create_webview_instance));
+        contentContainer.addView(startupButton);
+
+        startupButton.setOnClickListener(
+                new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        startupButton.setVisibility(View.GONE);
+                        for (View child : children) {
+                            child.setVisibility(View.VISIBLE);
+                        }
+                        initializeWebView(view, savedInstanceState);
+                    }
+                });
+    }
+
+    private void initializeWebView(View view, Bundle savedInstanceState) {
         mUrlBar = view.findViewById(R.id.url_field);
         mUrlBar.setOnKeyListener(
                 (View view1, int keyCode, KeyEvent event) -> {
@@ -325,11 +379,6 @@ public class WebViewBrowserFragment extends Fragment {
                 .setOnClickListener((view1) -> loadUrlFromUrlBar(view1));
 
         createAndInitializeWebView();
-        mFileContents =
-                registerForActivityResult(
-                        mMultiFileSelector,
-                        mActivityResultRegistry,
-                        result -> mFilePathCallback.onReceiveValue(result));
 
         String url = getUrlFromIntent(requireActivity().getIntent());
         if (url == null) {
@@ -369,9 +418,9 @@ public class WebViewBrowserFragment extends Fragment {
     }
 
     @Override
-    @OptIn(markerClass = WebViewCompat.ExperimentalSaveState.class)
     public void onSaveInstanceState(Bundle savedInstanceState) {
         super.onSaveInstanceState(savedInstanceState);
+        if (mWebView == null) return;
 
         if (WebViewFeature.isFeatureSupported(WebViewFeature.SAVE_STATE)) {
             WebViewCompat.saveState(
@@ -507,6 +556,7 @@ public class WebViewBrowserFragment extends Fragment {
                             ((ViewGroup) mFullscreenView.getParent()).removeView(mFullscreenView);
                         }
                         mFullscreenView = view;
+                        EdgeToEdgeUtil.setupEdgeToEdge(getActivity(), mFullscreenView);
                         requireActivity()
                                 .getWindow()
                                 .addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
@@ -569,6 +619,11 @@ public class WebViewBrowserFragment extends Fragment {
                         webview,
                         new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
         setUrlBarText("");
+
+        Activity activity = getActivity();
+        if (activity instanceof WebViewBrowserActivity) {
+            ((WebViewBrowserActivity) activity).onWebViewCreated(mWebView);
+        }
     }
 
     // WebKit permissions which can be granted because either they have no associated Android
@@ -677,10 +732,7 @@ public class WebViewBrowserFragment extends Fragment {
     @SuppressWarnings("deprecation")
     // This is public and static so it can be reused between activities for consistent settings.
     public static void initializeSettings(WebSettings settings, Context context) {
-        File geolocation = null;
-        try (StrictModeContext ignored = StrictModeContext.allowDiskWrites()) {
-            geolocation = context.getDir("geolocation", 0);
-        }
+        File geolocation = context.getDir("geolocation", 0);
 
         settings.setJavaScriptEnabled(true);
 
@@ -719,6 +771,9 @@ public class WebViewBrowserFragment extends Fragment {
         // If it is file:// and we don't have permission, they'll get the "Webpage not available"
         // "net::ERR_ACCESS_DENIED" page. When we get permission, FilePermissionRequest.grant()
         // will reload.
+        if (mWebView == null) {
+            createAndInitializeWebView();
+        }
         mWebView.loadUrl(url);
         mWebView.requestFocus();
     }
@@ -836,13 +891,17 @@ public class WebViewBrowserFragment extends Fragment {
         return mWebView;
     }
 
-    public void resetWebView() {
+    public void destroyWebView() {
         if (mWebView != null) {
             ViewGroup container = getContainer();
             container.removeView(mWebView);
             mWebView.destroy();
             mWebView = null;
         }
+    }
+
+    public void resetWebView() {
+        destroyWebView();
         createAndInitializeWebView();
     }
 

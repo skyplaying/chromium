@@ -126,12 +126,6 @@
       depends_on: ["AriaNotify"],
     },
     {
-      name: "AttributionReporting",
-      permissions_policy_name: "attribution-reporting",
-      feature_default: "EnableForAll",
-      depends_on: ["AttributionReporting"],
-    },
-    {
       name: "Autofill",
       permissions_policy_name: "autofill",
       depends_on: ["Autofill"],
@@ -226,7 +220,6 @@
       name: "ClientHintUAHighEntropyValues",
       permissions_policy_name: "ch-ua-high-entropy-values",
       feature_default: "EnableForAll",
-      depends_on: ["ClientHintUAHighEntropyValuesPermissionPolicy"],
     },
     {
       name: "ClientHintUAPlatform",
@@ -326,13 +319,6 @@
     {
       name: "DirectSockets",
       permissions_policy_name: "direct-sockets",
-      depends_on: ["DirectSockets"],
-      visibility: "IsolatedContext",
-    },
-    {
-      name: "DirectSocketsPrivate",
-      permissions_policy_name: "direct-sockets-private",
-      depends_on: ["DirectSockets"],
       visibility: "IsolatedContext",
     },
     {
@@ -357,15 +343,9 @@
       depends_on: ["FreezeFramesOnVisibility"],
     },
     {
-      name: "FencedUnpartitionedStorageRead",
-      permissions_policy_name: "fenced-unpartitioned-storage-read",
-      feature_default: "EnableForAll",
-      depends_on: ["FencedFramesLocalUnpartitionedDataAccess"],
-    },
-    {
       name: "FocusWithoutUserActivation",
       permissions_policy_name: "focus-without-user-activation",
-      feature_default: "EnableForSelf",
+      feature_default: "EnableForAll",
       depends_on: ["BlockingFocusWithoutUserActivation"],
     },
     {
@@ -392,6 +372,11 @@
       permissions_policy_name: "gyroscope",
     },
     {
+      name: "Haptics",
+      permissions_policy_name: "haptics",
+      depends_on: ["WebHaptics"],
+    },
+    {
       name: "Hid",
       permissions_policy_name: "hid",
       depends_on: ["WebHID"],
@@ -403,15 +388,6 @@
     {
       name: "IdleDetection",
       permissions_policy_name: "idle-detection",
-    },
-    {
-      name: "JoinAdInterestGroup",
-      permissions_policy_name: "join-ad-interest-group",
-      feature_default: "EnableForAll",
-      depends_on: ["AdInterestGroupAPI"],
-      default_value_behind_flag: [
-        ["AdInterestGroupAPIRestrictedPolicyByDefault", "EnableForSelf"],
-      ],
     },
     {
       name: "KeyboardMap",
@@ -435,7 +411,6 @@
     {
       name: "LocalNetwork",
       permissions_policy_name: "local-network",
-      depends_on: [ "LocalNetworkAccessSplitPermissions" ],
       default_value_behind_switch: [
         ["LocalNetworkAccessPermissionsPolicyDefaultEnabled",
         "EnableForAll"]
@@ -453,7 +428,6 @@
     {
       name: "LoopbackNetwork",
       permissions_policy_name: "loopback-network",
-      depends_on: [ "LocalNetworkAccessSplitPermissions" ],
       default_value_behind_switch: [
         ["LocalNetworkAccessPermissionsPolicyDefaultEnabled",
          "EnableForAll"]
@@ -486,7 +460,6 @@
     {
       name: "MulticastInDirectSockets",
       permissions_policy_name: "direct-sockets-multicast",
-      depends_on: ["MulticastInDirectSockets"],
       visibility: "IsolatedContext",
     },
     {
@@ -509,12 +482,6 @@
       feature_default: "EnableForAll",
     },
     {
-      name: "PrivateAggregation",
-      permissions_policy_name: "private-aggregation",
-      feature_default: "EnableForAll",
-      depends_on: ["SharedStorageAPI", "Fledge"],
-    },
-    {
       name: "PrivateStateTokenIssuance",
       permissions_policy_name: "private-state-token-issuance",
       feature_default: "EnableForAll",
@@ -529,24 +496,9 @@
       permissions_policy_name: "publickey-credentials-get",
     },
     {
-      name: "RecordAdAuctionEvents",
-      permissions_policy_name: "record-ad-auction-events",
-      feature_default: "EnableForAll",
-      depends_on: ["FledgeClickiness"],
-    },
-    {
       name: "Rewriter",
       permissions_policy_name: "rewriter",
       depends_on: ["AIRewriterAPI"],
-    },
-    {
-      name: "RunAdAuction",
-      permissions_policy_name: "run-ad-auction",
-      feature_default: "EnableForAll",
-      depends_on: ["Fledge"],
-      default_value_behind_flag: [
-        ["AdInterestGroupAPIRestrictedPolicyByDefault", "EnableForSelf"],
-      ],
     },
     {
       name: "ScreenWakeLock",
@@ -559,14 +511,16 @@
       depends_on: ["Serial"],
       privacy_sensitive: true,
     },
+    // Deprecated. TODO(crbug.com/462465887): Remove when no longer needed.
     {
-      name: "SharedStorage",
+      name: "Deprecated_SharedStorage",
       permissions_policy_name: "shared-storage",
       feature_default: "EnableForAll",
       depends_on: ["SharedStorageAPI"],
     },
+    // Deprecated. TODO(crbug.com/462465887): Remove when no longer needed.
     {
-      name: "SharedStorageSelectUrl",
+      name: "Deprecated_SharedStorageSelectUrl",
       permissions_policy_name: "shared-storage-select-url",
       feature_default: "EnableForAll",
       depends_on: ["SharedStorageAPI"],
@@ -643,6 +597,17 @@
       name: "WebAppInstallation",
       permissions_policy_name: "web-app-installation",
       depends_on: ["WebAppInstallation"],
+    },
+    {
+      name: "Tools",
+      permissions_policy_name: "tools",
+      depends_on: ["WebMCP"],
+      feature_default: "EnableForSelf",
+    },
+    {
+      name: "WebNN",
+      permissions_policy_name: "webnn",
+      depends_on: ["MachineLearningNeuralNetwork"],
     },
     {
       name: "WebPrinting",

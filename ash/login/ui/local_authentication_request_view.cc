@@ -31,6 +31,7 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/chromeos/resources/grit/ui_chromeos_resources.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/compositor/layer.h"
@@ -175,11 +176,11 @@ LocalAuthenticationRequestView::LocalAuthenticationRequestView(
   // Set Border and shadow.
   SetBorder(std::make_unique<views::HighlightBorder>(
       kLocalAuthenticationRequestViewRoundedCornerRadiusDp,
-      views::HighlightBorder::Type::kHighlightBorder1));
+      views::HighlightBorder::Type::kHighlightBorderOnShadow));
   shadow_ = SystemShadow::CreateShadowOnNinePatchLayerForView(
       this, SystemShadow::Type::kElevation12);
-  shadow_->SetRoundedCornerRadius(
-      kLocalAuthenticationRequestViewRoundedCornerRadiusDp);
+  shadow_->SetRoundedCorners(gfx::RoundedCornersF(
+      kLocalAuthenticationRequestViewRoundedCornerRadiusDp));
 
   // Header view which contains the back button that is aligned top right and
   // the lock icon which is in the bottom center.
@@ -236,8 +237,10 @@ LocalAuthenticationRequestView::LocalAuthenticationRequestView(
   const ui::ColorId icon_color_id = cros_tokens::kCrosSysOnSurface;
   close_button_->SetImageModel(
       views::Button::STATE_NORMAL,
-      ui::ImageModel::FromVectorIcon(views::kIcCloseIcon, icon_color_id,
-                                     kCrossSizeDp));
+      ui::ImageModel::FromVectorIcon(::features::IsRoundedIconsEnabled()
+                                         ? views::kCloseIcon
+                                         : views::kIcCloseOldIcon,
+                                     icon_color_id, kCrossSizeDp));
   close_button_->SetImageHorizontalAlignment(views::ImageButton::ALIGN_CENTER);
   close_button_->SetImageVerticalAlignment(views::ImageButton::ALIGN_MIDDLE);
   close_button_->GetViewAccessibility().SetName(l10n_util::GetStringUTF16(

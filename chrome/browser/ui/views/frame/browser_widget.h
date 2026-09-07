@@ -24,7 +24,6 @@ enum class BrowserThemeChangeType;
 class BrowserView;
 class BrowserNativeWidget;
 class SystemMenuModelBuilder;
-class ThemeService;
 
 namespace input {
 struct NativeWebKeyboardEvent;
@@ -139,7 +138,10 @@ class BrowserWidget : public views::Widget,
   ui::ColorProviderKey GetColorProviderKey() const override;
 
  private:
+  const ui::ThemeProvider* GetBaseThemeProvider() const;
+
   void OnTouchUiChanged();
+  void OnGlassFrameEligibilityChanged(bool is_eligible);
 
   // Callback for MenuRunner.
   void OnMenuClosed();
@@ -156,7 +158,9 @@ class BrowserWidget : public views::Widget,
   // Returns true if the browser instance belongs to an incognito profile.
   bool IsIncognitoBrowser() const;
 
-  ThemeService* GetThemeService() const;
+  // Returns true if the browser instance belongs to an enterprise isolated mode
+  // profile.
+  bool IsEnterpriseIsolatedModeBrowser() const;
 
   raw_ptr<BrowserNativeWidget> browser_native_widget_;
 
@@ -171,9 +175,6 @@ class BrowserWidget : public views::Widget,
   // The BrowserView is our ClientView. This is a pointer to it.
   raw_ptr<BrowserView> browser_view_;
 
-  // Cache theme_service_ if feature BrowserWidgetCacheThemeService is enabled.
-  raw_ptr<ThemeService> theme_service_;
-
   std::unique_ptr<SystemMenuModelBuilder> menu_model_builder_;
 
   // Used to show the system menu. Only used if
@@ -184,6 +185,10 @@ class BrowserWidget : public views::Widget,
       ui::TouchUiController::Get()->RegisterCallback(
           base::BindRepeating(&BrowserWidget::OnTouchUiChanged,
                               base::Unretained(this)));
+
+  // Observes changes in glass frame eligibility from GlassFrameService to
+  // trigger a widget theme update when eligibility transitions.
+  base::CallbackListSubscription glass_frame_subscription_;
 
   // Indicates the drag state for this window. The value can be kWindowDrag
   // if the accociated browser is the dragged browser or kTabDrag

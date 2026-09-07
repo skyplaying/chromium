@@ -17,6 +17,7 @@
 #include "components/contextual_tasks/public/contextual_task_context.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/sessions/core/session_id.h"
+#include "third_party/omnibox_proto/chrome_aim_entry_point.pb.h"
 #include "url/gurl.h"
 
 namespace syncer {
@@ -26,22 +27,6 @@ class DataTypeControllerDelegate;
 namespace contextual_tasks {
 
 struct ContextDecorationParams;
-
-// Represents the eligibility status for contextual tasks features.
-// This is used to determine if any backend is available and if the feature
-// is enabled.
-struct FeatureEligibility {
-  // Whether the contextual tasks feature flag is enabled.
-  bool contextual_tasks_enabled;
-  // Whether the AIM backend is eligible for use.
-  bool aim_eligible;
-  // Whether context sharing is enabled.
-  bool context_sharing_enabled;
-
-  bool IsEligible() const {
-    return contextual_tasks_enabled && aim_eligible && context_sharing_enabled;
-  }
-};
 
 // Service that allows clients to create and manage contextual tasks.
 // See `ContextualTask` for more information on what a task is.
@@ -64,7 +49,7 @@ class ContextualTasksService : public KeyedService {
 
     // The service is initialized and ready to take calls and return stored
     // tasks and threads.
-    virtual void OnInitialized() {}
+    virtual void OnContextualTasksServiceInitialized() {}
 
     // A new task was added at the given |source|.
     virtual void OnTaskAdded(const ContextualTask& task, TriggerSource source) {
@@ -91,9 +76,6 @@ class ContextualTasksService : public KeyedService {
 
   ContextualTasksService();
   ~ContextualTasksService() override;
-
-  // Returns whether there are any available backends that are eligible for use.
-  virtual FeatureEligibility GetFeatureEligibility() = 0;
 
   // Whether service is initialized.
   virtual bool IsInitialized() = 0;
@@ -145,6 +127,14 @@ class ContextualTasksService : public KeyedService {
       base::OnceCallback<void(std::unique_ptr<ContextualTaskContext>)>
           context_callback) = 0;
 
+  // Get a thread URL based on the task ID. If no task is found or the task does
+  // not have a thread ID, the default AI URL is returned.
+  virtual void GetThreadUrlFromTaskId(
+      const base::Uuid& task_id,
+      const std::string& locale,
+      omnibox::ChromeAimEntryPoint entry_point,
+      base::OnceCallback<void(GURL)> callback) = 0;
+
   // Methods related to associating tabs to tasks using their tab ID.
   virtual void AssociateTabWithTask(const base::Uuid& task_id,
                                     SessionID tab_id) = 0;
@@ -155,6 +145,7 @@ class ContextualTasksService : public KeyedService {
       SessionID tab_id) const = 0;
   virtual std::vector<SessionID> GetTabsAssociatedWithTask(
       const base::Uuid& task_id) const = 0;
+  virtual void SetLastActiveTask(const base::Uuid& task_id) = 0;
 
   // Add / remove observers.
   virtual void AddObserver(Observer* observer) = 0;
@@ -164,6 +155,7 @@ class ContextualTasksService : public KeyedService {
   GetAiThreadControllerDelegate() = 0;
   virtual base::WeakPtr<syncer::DataTypeControllerDelegate>
   GetGeminiThreadControllerDelegate() = 0;
+  virtual bool IsGeminiThreadsEligible() = 0;
 };
 
 }  // namespace contextual_tasks

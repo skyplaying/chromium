@@ -35,8 +35,8 @@ export class TestService extends TestBrowserProxy implements ServiceInterface {
       'deleteItems',
       'dismissSafetyHubExtensionsMenuNotification',
       'dismissMv2DeprecationNotice',
-      'dismissMv2DeprecationNoticeForExtension',
       'uninstallItem',
+      'openReviewPage',
       'downloadActivities',
       'getExtensionActivityLog',
       'getExtensionsInfo',
@@ -71,6 +71,7 @@ export class TestService extends TestBrowserProxy implements ServiceInterface {
       'setItemPinnedToToolbar',
       'setItemSafetyCheckWarningAcknowledged',
       'setProfileInDevMode',
+      'setProfileExtensionsPinnedByDefault',
       'setShortcutHandlingSuspended',
       'setShowAccessRequestsInToolbar',
       'shouldIgnoreUpdate',
@@ -122,6 +123,7 @@ export class TestService extends TestBrowserProxy implements ServiceInterface {
       isIncognitoAvailable: false,
       isChildAccount: false,
       isMv2DeprecationNoticeDismissed: false,
+      extensionsPinnedByDefault: false,
     });
   }
 
@@ -268,6 +270,11 @@ export class TestService extends TestBrowserProxy implements ServiceInterface {
     this.methodCalled('setProfileInDevMode', inDevMode);
   }
 
+  setProfileExtensionsPinnedByDefault(extensionsPinnedByDefault: boolean) {
+    this.methodCalled(
+        'setProfileExtensionsPinnedByDefault', extensionsPinnedByDefault);
+  }
+
   showInFolder(id: string) {
     this.methodCalled('showInFolder', id);
   }
@@ -345,6 +352,11 @@ export class TestService extends TestBrowserProxy implements ServiceInterface {
     return Promise.resolve();
   }
 
+  openReviewPage(id: string) {
+    this.methodCalled('openReviewPage', id);
+    return Promise.resolve();
+  }
+
   getOnExtensionActivity() {
     return this.extensionActivityTarget;
   }
@@ -410,10 +422,6 @@ export class TestService extends TestBrowserProxy implements ServiceInterface {
 
   dismissSafetyHubExtensionsMenuNotification() {
     this.methodCalled('dismissSafetyHubExtensionsMenuNotification');
-  }
-
-  dismissMv2DeprecationNoticeForExtension(id: string) {
-    this.methodCalled('dismissMv2DeprecationNoticeForExtension', id);
   }
 
   dismissMv2DeprecationNotice() {

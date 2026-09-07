@@ -54,7 +54,6 @@ import org.chromium.components.bookmarks.BookmarkId;
 import org.chromium.components.bookmarks.BookmarkItem;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
 import org.chromium.components.browser_ui.widget.RoundedIconGenerator;
-import org.chromium.components.favicon.IconType;
 import org.chromium.components.favicon.LargeIconBridge;
 import org.chromium.components.favicon.LargeIconBridge.LargeIconCallback;
 
@@ -158,6 +157,8 @@ public class BookmarkWidgetServiceImpl extends SplitCompatRemoteViewsService.Imp
         private int mDisplayedIconSize;
         private int mRemainingTaskCount;
 
+        private @Nullable BookmarkUiPrefs mBookmarkUiPrefs;
+
         @UiThread
         @Initializer
         public void initialize(
@@ -173,19 +174,14 @@ public class BookmarkWidgetServiceImpl extends SplitCompatRemoteViewsService.Imp
             mRemainingTaskCount = 1;
             mBookmarkModel =
                     BookmarkModel.getForProfile(ProfileManager.getLastUsedRegularProfile());
+            mBookmarkUiPrefs = new BookmarkUiPrefs(ChromeSharedPreferences.getInstance());
             mQueryHandler =
                     new ImprovedBookmarkQueryHandler(
                             mBookmarkModel,
-                            new BookmarkUiPrefs(ChromeSharedPreferences.getInstance()),
+                            mBookmarkUiPrefs,
                             /* shoppingService= */ null,
                             BookmarkNodeMaskBit.NONE);
-            mBookmarkModel.finishLoadingBookmarkModel(
-                    new Runnable() {
-                        @Override
-                        public void run() {
-                            loadBookmarks(folderId);
-                        }
-                    });
+            mBookmarkModel.finishLoadingBookmarkModel(() -> loadBookmarks(folderId));
         }
 
         @UiThread
@@ -221,24 +217,17 @@ public class BookmarkWidgetServiceImpl extends SplitCompatRemoteViewsService.Imp
 
             mRemainingTaskCount++;
             LargeIconCallback callback =
-                    new LargeIconCallback() {
-                        @Override
-                        public void onLargeIconAvailable(
-                                @Nullable Bitmap icon,
-                                int fallbackColor,
-                                boolean isFallbackColorDefault,
-                                @IconType int iconType) {
-                            if (icon == null) {
-                                mIconGenerator.setBackgroundColor(fallbackColor);
-                                icon = mIconGenerator.generateIconForUrl(bookmarkItem.getUrl());
-                            } else {
-                                icon =
-                                        Bitmap.createScaledBitmap(
-                                                icon, mDisplayedIconSize, mDisplayedIconSize, true);
-                            }
-                            mFavicons.put(bookmarkItem.getId(), icon);
-                            taskFinished();
+                    (@Nullable Bitmap icon, int fallbackColor, boolean _, int _) -> {
+                        if (icon == null) {
+                            mIconGenerator.setBackgroundColor(fallbackColor);
+                            icon = mIconGenerator.generateIconForUrl(bookmarkItem.getUrl());
+                        } else {
+                            icon =
+                                    Bitmap.createScaledBitmap(
+                                            icon, mDisplayedIconSize, mDisplayedIconSize, true);
                         }
+                        mFavicons.put(bookmarkItem.getId(), icon);
+                        taskFinished();
                     };
             mLargeIconBridge.getLargeIconForUrl(bookmarkItem.getUrl(), mMinIconSizeDp, callback);
         }
@@ -255,6 +244,11 @@ public class BookmarkWidgetServiceImpl extends SplitCompatRemoteViewsService.Imp
         @UiThread
         private void destroy() {
             mLargeIconBridge.destroy();
+
+            if (mBookmarkUiPrefs != null) {
+                mBookmarkUiPrefs.destroy();
+                mBookmarkUiPrefs = null;
+            }
         }
     }
 
@@ -354,9 +348,7 @@ public class BookmarkWidgetServiceImpl extends SplitCompatRemoteViewsService.Imp
         public void onDestroy() {
             PostTask.runOrPostTask(
                     TaskTraits.UI_DEFAULT,
-                    () -> {
-                        SystemNightModeMonitor.getInstance().removeObserver(this);
-                    });
+                    () -> SystemNightModeMonitor.getInstance().removeObserver(this));
             deleteWidgetState(mWidgetId);
         }
 
@@ -397,13 +389,12 @@ public class BookmarkWidgetServiceImpl extends SplitCompatRemoteViewsService.Imp
                 // Directly update the widget on the UI thread.
                 PostTask.runOrPostTask(
                         TaskTraits.UI_DEFAULT,
-                        () -> {
-                            // Use AppWidgetManager#partiallyUpdateAppWidget to update only the
-                            // empty_message visibility, avoiding full widget redraws and redundant
-                            // intent setup from BookmarkWidgetProvider#performUpdate.
-                            appWidgetManager.partiallyUpdateAppWidget(
-                                    mWidgetId, mBookmarkWidgetRemoteView);
-                        });
+                        () ->
+                                // Use AppWidgetManager#partiallyUpdateAppWidget to update only the
+                                // empty_message visibility, avoiding full widget redraws and
+                                // redundant intent setup from BookmarkWidgetProvider#performUpdate.
+                                appWidgetManager.partiallyUpdateAppWidget(
+                                        mWidgetId, mBookmarkWidgetRemoteView));
             }
         }
 
@@ -415,17 +406,14 @@ public class BookmarkWidgetServiceImpl extends SplitCompatRemoteViewsService.Imp
             final BookmarkLoader bookmarkLoader = new BookmarkLoader();
             PostTask.runOrPostTask(
                     TaskTraits.UI_DEFAULT,
-                    () -> {
-                        bookmarkLoader.initialize(
-                                mContext,
-                                folderId,
-                                new BookmarkLoaderCallback() {
-                                    @Override
-                                    public void onBookmarksLoaded(
-                                            @Nullable BookmarkItem folder,
+                    () ->
+                            bookmarkLoader.initialize(
+                                    mContext,
+                                    folderId,
+                                    (@Nullable BookmarkItem folder,
                                             @Nullable BookmarkItem parent,
                                             @Nullable List<BookmarkListEntry> entries,
-                                            Map<BookmarkId, Bitmap> favicons) {
+                                            Map<BookmarkId, Bitmap> favicons) -> {
                                         mCurrentFolder = folder;
                                         mParentFolder = parent;
                                         mEntries.clear();
@@ -435,9 +423,7 @@ public class BookmarkWidgetServiceImpl extends SplitCompatRemoteViewsService.Imp
                                         mFavicons.clear();
                                         mFavicons.putAll(favicons);
                                         latch.countDown();
-                                    }
-                                });
-                    });
+                                    }));
             try {
                 latch.await();
             } catch (InterruptedException e) {
@@ -473,11 +459,7 @@ public class BookmarkWidgetServiceImpl extends SplitCompatRemoteViewsService.Imp
                     || !mPreferences
                             .getString(PREF_CURRENT_FOLDER, "")
                             .equals(mCurrentFolder.getId().toString())) {
-                PostTask.runOrPostTask(
-                        TaskTraits.UI_DEFAULT,
-                        () -> {
-                            refreshWidget();
-                        });
+                PostTask.runOrPostTask(TaskTraits.UI_DEFAULT, this::refreshWidget);
             }
             if (mCurrentFolder == null) {
                 return 0;

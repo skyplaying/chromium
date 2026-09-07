@@ -36,7 +36,7 @@
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/events/event.h"
 #include "ui/gfx/font_list.h"
 #include "ui/gfx/geometry/insets.h"
@@ -436,8 +436,8 @@ void PowerButton::OnThemeChanged() {
       GetColorProvider()->GetColor(cros_tokens::kCrosSysSystemOnBase);
   SkColor active_color =
       GetColorProvider()->GetColor(cros_tokens::kCrosSysSystemPrimaryContainer);
-  background_view_->layer()->SetColor(IsMenuShowing() ? active_color
-                                                      : inactive_color);
+  background_view_->layer()->AsSolidColor()->SetColor(
+      SkColor4f::FromColor(IsMenuShowing() ? active_color : inactive_color));
 }
 
 void PowerButton::UpdateView() {

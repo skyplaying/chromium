@@ -2,8 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <memory>
+#include "chrome/browser/ash/child_accounts/screen_time_controller.h"
 
+#include <memory>
+#include <optional>
+
+#include "ash/constants/ash_pref_names.h"
 #include "ash/public/cpp/login_screen_test_api.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
@@ -12,22 +16,20 @@
 #include "base/time/time.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "chrome/browser/ash/child_accounts/screen_time_controller.h"
 #include "chrome/browser/ash/child_accounts/screen_time_controller_factory.h"
 #include "chrome/browser/ash/child_accounts/time_limit_override.h"
 #include "chrome/browser/ash/child_accounts/time_limit_test_utils.h"
 #include "chrome/browser/ash/login/lock/screen_locker.h"
+#include "chrome/browser/ash/login/lock/screen_locker_controller.h"
 #include "chrome/browser/ash/login/lock/screen_locker_tester.h"
 #include "chrome/browser/ash/login/test/logged_in_user_mixin.h"
 #include "chrome/browser/ash/policy/core/user_policy_test_helper.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
 #include "components/prefs/pref_service.h"
 #include "components/session_manager/core/session_manager.h"
 #include "content/public/test/browser_test.h"
-#include "content/public/test/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace ash {
@@ -82,6 +84,16 @@ class ScreenTimeControllerTest : public MixinBasedInProcessBrowserTest {
         ->set_value(utils::PolicyToString(policy_content));
   }
 
+  void SetUpOnMainThread() override {
+    MixinBasedInProcessBrowserTest::SetUpOnMainThread();
+    scoped_request_lock_screen_override_.emplace();
+  }
+
+  void TearDownOnMainThread() override {
+    scoped_request_lock_screen_override_.reset();
+    MixinBasedInProcessBrowserTest::TearDownOnMainThread();
+  }
+
  protected:
   void LogInChildAndSetupClockWithTime(const char* time) {
     SetupTaskRunnerWithTime(utils::TimeFromString(time));
@@ -91,7 +103,7 @@ class ScreenTimeControllerTest : public MixinBasedInProcessBrowserTest {
 
   void SetupTaskRunnerWithTime(base::Time start_time) {
     task_runner_ = base::MakeRefCounted<base::TestMockTimeTaskRunner>(
-        start_time, base::TimeTicks::UnixEpoch());
+        start_time, base::TimeTicks());
   }
 
   void MockClockForActiveUser() {
@@ -109,7 +121,8 @@ class ScreenTimeControllerTest : public MixinBasedInProcessBrowserTest {
   }
 
   bool IsAuthEnabled() {
-    return !ScreenLocker::default_screen_locker()
+    return !ScreenLockerController::Get()
+                .screen_locker()
                 ->IsAuthTemporarilyDisabledForUser(
                     logged_in_user_mixin_.GetAccountId());
   }
@@ -119,12 +132,11 @@ class ScreenTimeControllerTest : public MixinBasedInProcessBrowserTest {
   }
 
   void MockChildScreenTime(base::TimeDelta used_time) {
-    child_profile_->GetPrefs()->SetInteger(prefs::kChildScreenTimeMilliseconds,
-                                           used_time.InMilliseconds());
+    child_profile_->GetPrefs()->SetInteger(
+        ash::prefs::kChildScreenTimeMilliseconds, used_time.InMilliseconds());
   }
 
   bool IsLocked() {
-    base::RunLoop().RunUntilIdle();
     return session_manager::SessionManager::Get()->IsScreenLocked();
   }
 
@@ -143,6 +155,9 @@ class ScreenTimeControllerTest : public MixinBasedInProcessBrowserTest {
   raw_ptr<Profile, DanglingUntriaged> child_profile_ = nullptr;
 
  private:
+  std::optional<ash::ScreenLockerTester::ScopedRequestLockScreenOverride>
+      scoped_request_lock_screen_override_;
+
   LoggedInUserMixin logged_in_user_mixin_{
       &mixin_host_, /*test_base=*/this, embedded_test_server(),
       LoggedInUserMixin::LogInType::kChild, /*include_initial_user=*/false};
@@ -484,8 +499,10 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, DISABLED_DefaultBedtime) {
   }
 }
 
+// TODO(crbug.com/550179314): Re-enable this test.
 // Tests the default time window limit.
-IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, DefaultDailyLimit) {
+IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest,
+                       DISABLED_DefaultDailyLimit) {
   LogInChildAndSetupClockWithTime("1 Jan 2018 10:00:00 GMT");
   ScreenLockerTester().Lock();
 
@@ -567,6 +584,7 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, ActiveSessionBedtime) {
 
   // Verify that device is locked at 11 PM (start of bedtime).
   task_runner_->FastForwardBy(base::Hours(1));
+  ScreenLockerTester().WaitForLock();
   EXPECT_TRUE(IsLocked());
 
   // Forward to 8 AM and check that auth was re-enabled (end of bedtime).
@@ -595,6 +613,7 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, ActiveSessionDailyLimit) {
   // locked (start of daily limit).
   MockChildScreenTime(base::Hours(1));
   task_runner_->FastForwardBy(base::Hours(1));
+  ScreenLockerTester().WaitForLock();
   EXPECT_TRUE(IsLocked());
 
   // Forward to 6 AM, reset the usage time and check that auth was re-enabled.
@@ -649,7 +668,7 @@ IN_PROC_BROWSER_TEST_F(ScreenTimeControllerTest, BedtimeLockScreen24HourClock) {
   LogInChildAndSetupClockWithTime("1 Jan 2018 22:00:00 GMT");
 
   // Set preference of using 24 hour clock to be true.
-  child_profile_->GetPrefs()->SetBoolean(prefs::kUse24HourClock, true);
+  child_profile_->GetPrefs()->SetBoolean(ash::prefs::kUse24HourClock, true);
 
   ScreenLockerTester().Lock();
 

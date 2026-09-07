@@ -56,7 +56,7 @@ namespace blink {
 
 namespace {
 
-const std::string Utf8BlobUUID(Blob* blob) {
+const std::string Utf8BlobUuid(Blob* blob) {
   return blob->Uuid().Utf8();
 }
 
@@ -235,7 +235,7 @@ bool FileReader::HasPendingActivity() const {
 void FileReader::readAsArrayBuffer(Blob* blob,
                                    ExceptionState& exception_state) {
   DCHECK(blob);
-  DVLOG(1) << "reading as array buffer: " << Utf8BlobUUID(blob).data() << " "
+  DVLOG(1) << "reading as array buffer: " << Utf8BlobUuid(blob).data() << " "
            << Utf8FilePath(blob).data();
 
   ReadInternal(blob, FileReadType::kReadAsArrayBuffer, exception_state);
@@ -244,7 +244,7 @@ void FileReader::readAsArrayBuffer(Blob* blob,
 void FileReader::readAsBinaryString(Blob* blob,
                                     ExceptionState& exception_state) {
   DCHECK(blob);
-  DVLOG(1) << "reading as binary: " << Utf8BlobUUID(blob).data() << " "
+  DVLOG(1) << "reading as binary: " << Utf8BlobUuid(blob).data() << " "
            << Utf8FilePath(blob).data();
 
   ReadInternal(blob, FileReadType::kReadAsBinaryString, exception_state);
@@ -254,7 +254,7 @@ void FileReader::readAsText(Blob* blob,
                             const String& encoding,
                             ExceptionState& exception_state) {
   DCHECK(blob);
-  DVLOG(1) << "reading as text: " << Utf8BlobUUID(blob).data() << " "
+  DVLOG(1) << "reading as text: " << Utf8BlobUuid(blob).data() << " "
            << Utf8FilePath(blob).data();
 
   encoding_ = encoding;
@@ -267,7 +267,7 @@ void FileReader::readAsText(Blob* blob, ExceptionState& exception_state) {
 
 void FileReader::readAsDataURL(Blob* blob, ExceptionState& exception_state) {
   DCHECK(blob);
-  DVLOG(1) << "reading as data URL: " << Utf8BlobUUID(blob).data() << " "
+  DVLOG(1) << "reading as data URL: " << Utf8BlobUuid(blob).data() << " "
            << Utf8FilePath(blob).data();
 
   ReadInternal(blob, FileReadType::kReadAsDataURL, exception_state);
@@ -355,9 +355,9 @@ void FileReader::abort() {
   scheduler::TaskAttributionInfo* task_state =
       std::exchange(task_state_, nullptr);
   FireEvent(event_type_names::kAbort, task_state);
-  // TODO(https://crbug.com/1204139): Only fire loadend event if no new load was
-  // started from the abort event handler.
-  FireEvent(event_type_names::kLoadend, task_state);
+  if (state_ != kLoading) {
+    FireEvent(event_type_names::kLoadend, task_state);
+  }
 
   // All possible events have fired and we're done, no more pending activity.
   ThrottlingController::FinishReader(GetExecutionContext(), this, final_step);
@@ -444,9 +444,9 @@ void FileReader::DidFinishLoading(FileReaderData contents) {
   scheduler::TaskAttributionInfo* task_state =
       std::exchange(task_state_, nullptr);
   FireEvent(event_type_names::kLoad, task_state);
-  // TODO(https://crbug.com/1204139): Only fire loadend event if no new load was
-  // started from the abort event handler.
-  FireEvent(event_type_names::kLoadend, task_state);
+  if (state_ != kLoading) {
+    FireEvent(event_type_names::kLoadend, task_state);
+  }
 
   // All possible events have fired and we're done, no more pending activity.
   ThrottlingController::FinishReader(GetExecutionContext(), this, final_step);
@@ -474,7 +474,9 @@ void FileReader::DidFail(FileErrorCode error_code) {
   scheduler::TaskAttributionInfo* task_state =
       std::exchange(task_state_, nullptr);
   FireEvent(event_type_names::kError, task_state);
-  FireEvent(event_type_names::kLoadend, task_state);
+  if (state_ != kLoading) {
+    FireEvent(event_type_names::kLoadend, task_state);
+  }
 
   // All possible events have fired and we're done, no more pending activity.
   ThrottlingController::FinishReader(GetExecutionContext(), this, final_step);

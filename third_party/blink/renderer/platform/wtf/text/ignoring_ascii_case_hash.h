@@ -17,21 +17,20 @@ struct IgnoringAsciiCaseHash {
   STATIC_ONLY(IgnoringAsciiCaseHash);
 
   static unsigned GetHash(const String& string) {
-    if (string.ContainsOnlyASCIIOrEmpty() && string.IsLowerASCII()) {
+    if (string.ContainsOnlyAsciiOrEmpty() && string.ContainsNoAsciiUpper()) {
       return HashTraits<String>::GetHash(string);
     }
-    base::span<const char> bytes = base::as_chars(string.RawByteSpan());
+    auto bytes = string.RawByteSpan();
     if (string.Is8Bit()) {
       return StringHasher::ComputeHashAndMaskTop8Bits<
-          AsciiLowerHashReader<LChar>>(bytes.data(), bytes.size());
+          AsciiLowerHashReader<LChar>>(bytes);
     }
     if (string.ContainsOnlyLatin1OrEmpty()) {
-      using Reader = AsciiConvertTo8AndLowerHashReader;
-      return StringHasher::ComputeHashAndMaskTop8Bits<Reader>(
-          bytes.data(), bytes.size() / Reader::kCompressionFactor);
+      return StringHasher::ComputeHashAndMaskTop8Bits<
+          AsciiConvertTo8AndLowerHashReader>(bytes);
     }
     return StringHasher::ComputeHashAndMaskTop8Bits<
-        AsciiLowerHashReader<UChar>>(bytes.data(), bytes.size());
+        AsciiLowerHashReader<UChar>>(bytes);
   }
 
   static unsigned GetHash(const AtomicString& string) {
@@ -39,11 +38,11 @@ struct IgnoringAsciiCaseHash {
   }
 
   static bool Equal(const String& a, const String& b) {
-    return EqualIgnoringASCIICase(a, b);
+    return EqualIgnoringAsciiCase(a, b);
   }
 
   static bool Equal(const AtomicString& a, const AtomicString& b) {
-    return EqualIgnoringASCIICase(a, b);
+    return EqualIgnoringAsciiCase(a, b);
   }
 
   static const bool kSafeToCompareToEmptyOrDeleted = false;
@@ -71,26 +70,25 @@ struct IgnoringAsciiCaseHashTranslator {
     if (string.SharedImpl()) {
       return IgnoringAsciiCaseHash::GetHash(string.ToString());
     }
-    base::span<const char> bytes = base::as_chars(string.RawByteSpan());
+    auto bytes = string.RawByteSpan();
     if (string.Is8Bit()) {
       return StringHasher::ComputeHashAndMaskTop8Bits<
-          AsciiLowerHashReader<LChar>>(bytes.data(), bytes.size());
+          AsciiLowerHashReader<LChar>>(bytes);
     }
     if (string.ContainsOnlyLatin1OrEmpty()) {
-      using Reader = AsciiConvertTo8AndLowerHashReader;
-      return StringHasher::ComputeHashAndMaskTop8Bits<Reader>(
-          bytes.data(), bytes.size() / Reader::kCompressionFactor);
+      return StringHasher::ComputeHashAndMaskTop8Bits<
+          AsciiConvertTo8AndLowerHashReader>(bytes);
     }
     return StringHasher::ComputeHashAndMaskTop8Bits<
-        AsciiLowerHashReader<UChar>>(bytes.data(), bytes.size());
+        AsciiLowerHashReader<UChar>>(bytes);
   }
 
   static bool Equal(const String& a, StringView b) {
-    return EqualIgnoringASCIICase(a, b);
+    return EqualIgnoringAsciiCase(a, b);
   }
 
   static bool Equal(const AtomicString& a, StringView b) {
-    return EqualIgnoringASCIICase(a, b);
+    return EqualIgnoringAsciiCase(a, b);
   }
 };
 

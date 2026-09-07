@@ -14,6 +14,7 @@
 #import "ios/chrome/browser/first_run/best_features/coordinator/best_features_screen_detail_coordinator.h"
 #import "ios/chrome/browser/first_run/public/best_features_item.h"
 #import "ios/chrome/browser/first_run/public/first_run_screen_delegate.h"
+#import "ios/chrome/browser/promos_manager/coordinator/promos_manager_ui_handler.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
@@ -29,10 +30,10 @@
 #import "ios/chrome/common/ui/confirmation_alert/confirmation_alert_action_handler.h"
 
 @interface WelcomeBackCoordinator () <ConfirmationAlertActionHandler,
-                                      WelcomeBackActionHandler,
                                       FirstRunScreenDelegate,
+                                      UIAdaptivePresentationControllerDelegate,
                                       UINavigationControllerDelegate,
-                                      UIAdaptivePresentationControllerDelegate>
+                                      WelcomeBackActionHandler>
 @end
 
 @implementation WelcomeBackCoordinator {
@@ -46,6 +47,19 @@
   BestFeaturesScreenDetailCoordinator* _detailScreenCoordinator;
   // Number of time a feature was clicked in Welcome Back.
   int _featureClickedCount;
+  // The UI handler to alert the promo manager when the promo is dismissed.
+  id<PromosManagerUIHandler> _promosUIHandler;
+}
+
+- (instancetype)initWithBaseViewController:(UIViewController*)viewController
+                                   browser:(Browser*)browser
+                           promosUIHandler:
+                               (id<PromosManagerUIHandler>)promosUIHandler {
+  self = [super initWithBaseViewController:viewController browser:browser];
+  if (self) {
+    _promosUIHandler = promosUIHandler;
+  }
+  return self;
 }
 
 #pragma mark - ChromeCoordinator
@@ -95,6 +109,9 @@
   base::UmaHistogramCounts10000("IOS.WelcomeBack.FeaturesClickedCount",
                                 _featureClickedCount);
 
+  [_detailScreenCoordinator stop];
+  _detailScreenCoordinator = nil;
+
   // Dismiss the presented view controller.
   if (_navigationController.presentingViewController &&
       !_navigationController.isBeingDismissed) {
@@ -108,6 +125,8 @@
   _navigationController = nil;
   [_mediator disconnect];
   _mediator = nil;
+
+  [_promosUIHandler promoWasDismissed];
 }
 
 #pragma mark - ConfirmationAlertActionHandler
@@ -131,7 +150,9 @@
   _detailScreenCoordinator = [[BestFeaturesScreenDetailCoordinator alloc]
       initWithBaseNavigationViewController:_navigationController
                                    browser:self.browser
-                          bestFeaturesItem:item];
+                          bestFeaturesItem:item
+                                    source:DetailScreenPresentationSource::
+                                               kWelcomeBack];
   _detailScreenCoordinator.delegate = self;
   ++_featureClickedCount;
   base::UmaHistogramEnumeration("IOS.WelcomeBack.DetailScreen.Impression",
@@ -141,7 +162,9 @@
 
 #pragma mark - FirstRunScreenDelegate
 
-- (void)screenWillFinishPresenting {
+- (void)firstRunScreenCoordinatorWantsToBeStopped:
+    (ChromeCoordinator*)coordinator {
+  CHECK_EQ(coordinator, _detailScreenCoordinator, base::NotFatalUntil::M155);
   // First dismiss the best feature detail view.
   [_navigationController.presentingViewController
       dismissViewControllerAnimated:YES

@@ -21,8 +21,11 @@
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
+#include "chrome/browser/extensions/browser_window_util.h"
+#include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/extensions/updater/extension_updater.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "components/update_client/update_query_params.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
@@ -32,13 +35,18 @@
 #include "extensions/browser/view_type_utils.h"
 #include "extensions/browser/warning_service.h"
 #include "extensions/browser/warning_set.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/api/runtime.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension_features.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/manifest.h"
+#include "extensions/common/manifest_handlers/incognito_info.h"
+#include "extensions/common/manifest_handlers/options_page_info.h"
 #include "extensions/common/mojom/view_type.mojom.h"
 #include "net/base/backoff_entry.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chromeos/components/kiosk/kiosk_utils.h"
@@ -52,11 +60,10 @@
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "chrome/browser/devtools/devtools_window.h"
-#include "chrome/browser/extensions/extension_tab_util.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #else
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
@@ -209,7 +216,7 @@ void ChromeRuntimeAPIDelegate::ReloadExtension(
     // Unloading an extension clears all warnings, so first terminate the
     // extension, and then add the warning. Since this is called from an
     // extension function unloading the extension has to be done
-    // asynchronously. Fortunately PostTask guarentees FIFO order so just
+    // asynchronously. Fortunately PostTask guarantees FIFO order so just
     // post both tasks.
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
@@ -218,13 +225,21 @@ void ChromeRuntimeAPIDelegate::ReloadExtension(
     extensions::WarningSet warnings;
     warnings.insert(
         extensions::Warning::CreateReloadTooFrequentWarning(extension_id));
+    Profile* profile = Profile::FromBrowserContext(browser_context_);
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
-        base::BindOnce(&extensions::WarningService::NotifyWarningsOnUI,
-                       // TODO(crbug.com/40061562): Remove
-                       // `UnsafeDanglingUntriaged`
-                       base::UnsafeDanglingUntriaged(browser_context_),
-                       warnings));
+        base::BindOnce(
+            [](base::WeakPtr<Profile> profile,
+               extensions::WarningSet warnings) {
+              if (!profile) {
+                return;
+              }
+              if (auto* warning_service =
+                      extensions::WarningService::Get(profile.get())) {
+                warning_service->AddWarnings(warnings);
+              }
+            },
+            profile->GetWeakPtr(), std::move(warnings)));
   } else {
     // We can't call ReloadExtension directly, since when this method finishes
     // it tries to decrease the reference count for the extension, which fails
@@ -273,15 +288,17 @@ bool ChromeRuntimeAPIDelegate::CheckForUpdates(
 void ChromeRuntimeAPIDelegate::OpenURL(const GURL& uninstall_url) {
   Profile* profile = Profile::FromBrowserContext(browser_context_);
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-  Browser* browser = chrome::FindLastActiveWithProfile(profile);
-  if (!browser) {
-    browser = Browser::Create(Browser::CreateParams(profile, false));
+  BrowserWindowInterface* current_browser =
+      ProfileBrowserCollection::GetForProfile(profile)->GetLastActiveBrowser();
+  if (!current_browser) {
+    current_browser =
+        CreateBrowserWindow(BrowserWindowCreateParams(profile, false));
   }
-  if (!browser) {
+  if (!current_browser) {
     return;
   }
 
-  NavigateParams params(browser, uninstall_url,
+  NavigateParams params(current_browser, uninstall_url,
                         ui::PAGE_TRANSITION_CLIENT_REDIRECT);
   params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
   params.user_gesture = false;
@@ -412,18 +429,70 @@ bool ChromeRuntimeAPIDelegate::RestartDevice(std::string* error_message) {
   return false;
 }
 
-bool ChromeRuntimeAPIDelegate::OpenOptionsPage(
+void ChromeRuntimeAPIDelegate::OpenOptionsPage(
     const Extension* extension,
-    content::BrowserContext* browser_context) {
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-  return extensions::ExtensionTabUtil::OpenOptionsPageFromAPI(extension,
-                                                              browser_context);
+    content::BrowserContext* browser_context,
+    base::OnceCallback<void(bool)> callback) {
+  if (!extensions::OptionsPageInfo::HasOptionsPage(extension)) {
+    std::move(callback).Run(false);
+    return;
+  }
+
+  Profile* profile = Profile::FromBrowserContext(browser_context);
+  // This version of OpenOptionsPage() is only called when the extension
+  // initiated the command via chrome.runtime.openOptionsPage. For a spanning
+  // mode extension, this API could only be called from a regular profile, since
+  // that's the only place it's running.
+  DCHECK(!profile->IsOffTheRecord() ||
+         extensions::IncognitoInfo::IsSplitMode(extension));
+
+  BrowserWindowInterface* browser =
+      extensions::browser_window_util::GetLastActiveNormalBrowserWithProfile(
+          *profile, /*include_incognito_or_parent=*/false);
+  const bool create_new_browser = !browser;
+
+  if (create_new_browser) {
+    if (GetBrowserWindowCreationStatusForProfile(*profile) !=
+        BrowserWindowInterface::CreationStatus::kOk) {
+      // No active browser and can't create a new one. Bail.
+      std::move(callback).Run(false);
+      return;
+    }
+
+    // TODO(devlin): This has always used user_gesture=true, though it's not
+    // necessarily tied to a user gesture. We should change that.
+    bool user_gesture = true;
+    BrowserWindowCreateParams params(BrowserWindowInterface::TYPE_NORMAL,
+                                     *profile, user_gesture);
+
+#if BUILDFLAG(IS_ANDROID)
+    // Asynchronously create the window on Android, then open the options page.
+    auto creation_callback = base::BindOnce(
+        [](scoped_refptr<const Extension> extension,
+           base::OnceCallback<void(bool)> complete_callback,
+           BrowserWindowInterface* new_browser) {
+          if (!new_browser) {
+            std::move(complete_callback).Run(false);
+            return;
+          }
+          std::move(complete_callback)
+              .Run(extensions::ExtensionTabUtil::OpenOptionsPage(
+                  extension.get(), new_browser));
+        },
+        base::WrapRefCounted(extension), std::move(callback));
+    CreateBrowserWindow(std::move(params), std::move(creation_callback));
+
+    // Nothing to do here, the callback will open the options page eventually.
+    return;
 #else
-  // TODO(crbug.com/383366125): Implement this when options page for extensions
-  // becomes available for desktop android.
-  NOTIMPLEMENTED_LOG_ONCE();
-  return false;
+    // Other platforms create windows synchronously. Fallthrough and open
+    // the options page afterwards.
+    browser = CreateBrowserWindow(std::move(params));
+    CHECK(browser);
 #endif
+  }
+  std::move(callback).Run(
+      extensions::ExtensionTabUtil::OpenOptionsPage(extension, browser));
 }
 
 int ChromeRuntimeAPIDelegate::GetDeveloperToolsWindowId(

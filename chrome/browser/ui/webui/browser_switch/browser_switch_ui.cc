@@ -20,7 +20,6 @@
 #include "chrome/browser/browser_switcher/browser_switcher_service_factory.h"
 #include "chrome/browser/browser_switcher/browser_switcher_sitelist.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -39,14 +38,15 @@
 #include "content/public/browser/web_ui_data_source.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/webui/webui_util.h"
 #include "url/gurl.h"
 
 namespace {
 
 void GotoNewTabPage(content::WebContents* web_contents) {
-  GURL url(chrome::kChromeUINewTabURL);
-  content::OpenURLParams params(url, content::Referrer(),
+  content::OpenURLParams params(chrome::ChromeUINewTabURLAsGURL(),
+                                content::Referrer(),
                                 WindowOpenDisposition::CURRENT_TAB,
                                 ui::PAGE_TRANSITION_AUTO_TOPLEVEL, false);
   web_contents->OpenURL(params, /*navigation_handle_callback=*/{});

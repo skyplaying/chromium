@@ -26,6 +26,7 @@
 #include "ash/shell.h"
 #include "ash/system/status_area_widget.h"
 #include "ash/webui/settings/public/constants/routes.mojom.h"
+#include "ash/webui/settings/public/constants/routes_util.h"
 #include "base/base64.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
@@ -37,20 +38,16 @@
 #include "chrome/browser/ash/login/test/guest_session_mixin.h"
 #include "chrome/browser/ash/login/test/logged_in_user_mixin.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/browser_list_observer.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
-#include "chrome/browser/ui/chrome_pages.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/web_applications/preinstalled_web_apps/gemini.h"
 #include "chrome/browser/web_applications/preinstalled_web_apps/gmail.h"
 #include "chrome/browser/web_applications/preinstalled_web_apps/preinstalled_web_apps.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
 #include "chromeos/ash/components/file_manager/app_id.h"
@@ -156,8 +153,16 @@ bool IsAppListItemViewForWebApp(std::string_view id, const views::View* view) {
 }
 
 // Returns if `browser` is the `Browser` for the given web app `id`.
-bool IsBrowserForWebApp(const webapps::AppId& id, const Browser* browser) {
+bool IsBrowserForWebApp(const webapps::AppId& id,
+                        const BrowserWindowInterface* browser) {
   return web_app::AppBrowserController::IsForWebApp(browser, id);
+}
+
+// Returns the browser containing `web_contents` as a tab.
+BrowserWindowInterface* FindBrowserWithTab(
+    const content::WebContents* web_contents) {
+  return GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+      web_contents);
 }
 
 // Returns if the menu is currently showing.
@@ -178,14 +183,16 @@ bool IsShelfAppButtonForWebApp(
 
 // Waiters ---------------------------------------------------------------------
 
-// Class which waits for `BrowserListObserver::OnBrowserSetLastActive()` events.
-class OnBrowserSetLastActiveWaiter : public BrowserListObserver {
+// Class which waits for `BrowserCollectionObserver::OnBrowserActivated()`
+// events.
+class OnBrowserSetLastActiveWaiter : public BrowserCollectionObserver {
  public:
   void Wait() {
     CHECK(!run_loop_);
 
-    base::ScopedObservation<BrowserList, BrowserListObserver> observer(this);
-    observer.Observe(BrowserList::GetInstance());
+    base::ScopedObservation<BrowserCollection, BrowserCollectionObserver>
+        observer(this);
+    observer.Observe(GlobalBrowserCollection::GetInstance());
 
     run_loop_ = std::make_unique<base::RunLoop>(
         base::RunLoop::Type::kNestableTasksAllowed);
@@ -195,8 +202,8 @@ class OnBrowserSetLastActiveWaiter : public BrowserListObserver {
   }
 
  private:
-  // BrowserListObserver:
-  void OnBrowserSetLastActive(Browser* browser) override {
+  // BrowserCollectionObserver:
+  void OnBrowserActivated(BrowserWindowInterface* browser) override {
     CHECK(run_loop_);
     run_loop_->Quit();
   }
@@ -263,7 +270,7 @@ class GeminiAppInteractiveUiTestBase
   }
 
   // Returns a builder for a step which waits for a
-  // `BrowserList::OnBrowserSetLastActive()` event.
+  // `BrowserCollectionObserver::OnBrowserActivated()` event.
   [[nodiscard]] auto WaitForOnBrowserSetLastActive() {
     return Do([]() { OnBrowserSetLastActiveWaiter().Wait(); });
   }
@@ -301,7 +308,7 @@ class GeminiAppInteractiveUiTestBase
     // Wait for installation of both system and external web apps. The Gemini
     // app is an external app and this test suite will verify its adjacency to
     // system web apps.
-    Profile* const profile = browser()->profile();
+    Profile* const profile = browser()->GetProfile();
     ash::SystemWebAppManager::GetForTest(profile)
         ->InstallSystemAppsForTesting();
     web_app::test::WaitUntilWebAppProviderAndSubsystemsReady(
@@ -512,7 +519,7 @@ IN_PROC_BROWSER_TEST_P(GeminiAppInteractiveUiTest, LaunchFromAppList) {
           base::BindOnce(&AsInstrumentedWebContents)
               .Then(
                   base::BindOnce(&WebContentsInteractionTestUtil::web_contents))
-              .Then(base::BindOnce(&chrome::FindBrowserWithTab))
+              .Then(base::BindOnce(&FindBrowserWithTab))
               .Then(base::BindOnce(&IsBrowserForWebApp, ash::kGeminiAppId))),
 
       // Check Gemini app launch URL.
@@ -577,7 +584,7 @@ IN_PROC_BROWSER_TEST_P(GeminiAppInteractiveUiTest, LaunchFromShelf) {
           base::BindOnce(&AsInstrumentedWebContents)
               .Then(
                   base::BindOnce(&WebContentsInteractionTestUtil::web_contents))
-              .Then(base::BindOnce(&chrome::FindBrowserWithTab))
+              .Then(base::BindOnce(&FindBrowserWithTab))
               .Then(base::BindOnce(&IsBrowserForWebApp, ash::kGeminiAppId))),
 
       // Check Gemini app launch URL.
@@ -629,7 +636,7 @@ IN_PROC_BROWSER_TEST_P(GeminiAppInteractiveUiTest,
           // Check Gemini app browser.
           CheckElement(kGeminiAppWebContentsElementId,
                        [](ui::TrackedElement* el) {
-                         auto* const browser = chrome::FindBrowserWithTab(
+                         auto* const browser = FindBrowserWithTab(
                              AsInstrumentedWebContents(el)->web_contents());
                          return IsBrowserForWebApp(ash::kGeminiAppId, browser);
                        }),
@@ -735,14 +742,14 @@ IN_PROC_BROWSER_TEST_P(GeminiAppInteractiveUiTest, UninstallFromSettings) {
                    base::BindOnce(&AsInstrumentedWebContents)
                        .Then(base::BindOnce(
                            &WebContentsInteractionTestUtil::web_contents))
-                       .Then(base::BindOnce(&chrome::FindBrowserWithTab))
+                       .Then(base::BindOnce(&FindBrowserWithTab))
                        .Then(base::BindOnce(&IsBrowserForWebApp,
                                             ash::kOsSettingsAppId))),
 
       // Check Settings app launch URL.
       WaitForWebContentsReady(
           kSettingsAppWebContentsElementId,
-          chrome::GetOSSettingsUrl(
+          chromeos::settings::GetOSSettingsUrl(
               base::StrCat({chromeos::settings::mojom::kAppDetailsSubpagePath,
                             "?id=", ash::kGeminiAppId}))),
 

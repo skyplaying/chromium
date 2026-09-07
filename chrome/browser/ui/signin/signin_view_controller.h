@@ -24,6 +24,8 @@
 #include "components/sync/base/data_type.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 #include "ui/base/interaction/element_identifier.h"
+#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
+#include "ui/views/widget/widget.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
@@ -44,9 +46,6 @@ namespace content {
 class WebContents;
 }
 
-namespace login_ui_test_utils {
-class SigninViewControllerTestUtil;
-}
 
 namespace signin_metrics {
 enum class AccessPoint;
@@ -68,6 +67,11 @@ class NewTabWebContentsObserver;
 // Chrome OS has its own sign-in flow and doesn't use DICE.
 class SigninViewController {
  public:
+  DECLARE_USER_DATA(SigninViewController);
+
+  // Returns the controller for `browser`, or null if it does not have one.
+  static SigninViewController* From(BrowserWindowInterface* browser);
+
   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(
       kSignoutConfirmationDialogViewElementId);
   DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kHistorySyncOptinViewId);
@@ -104,7 +108,7 @@ class SigninViewController {
   // page.
   // DEPRECATED: Use ShowDiceEnableSyncTab instead.
   void ShowSignin(signin_metrics::AccessPoint access_point,
-                  const GURL& redirect_url = GURL(chrome::kChromeUINewTabURL));
+                  const GURL& redirect_url = chrome::ChromeUINewTabURLAsGURL());
 
   // Shows a Chrome Sync signin tab. |email_hint| may be empty.
   // Note: If the user has already set a primary account, then this is
@@ -124,7 +128,7 @@ class SigninViewController {
   // function does not clear it, but still invalidates its credentials.
   // This is the only way to properly signout all accounts. In particular,
   // calling Gaia logout programmatically or revoking the tokens does not sign
-  // out SAML accounts completely (see https://crbug.com/1069421).
+  // out SAML accounts completely (see https://crbug.com/40125905).
   void ShowGaiaLogoutTab(signin_metrics::SourceForRefreshTokenOperation source);
 
   // Shows the modal signin intercept first run experience dialog as a
@@ -160,6 +164,11 @@ class SigninViewController {
       const std::string& last_email,
       const std::string& email,
       SigninEmailConfirmationDialog::Callback callback);
+
+  // Shows the cross-device sign-in QR code bubble. The bubble is anchored to
+  // the profile menu button if available, or centered on the browser window
+  // otherwise.
+  void ShowCrossDeviceSigninQrBubble(base::OnceClosure closing_callback);
 #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
   // Shows the modal sync confirmation dialog as a browser-modal dialog on top
@@ -211,36 +220,35 @@ class SigninViewController {
   // SigninViewController, if one exists. Does nothing otherwise.
   void CloseModalSignin();
 
+  // Closes the bubble-based signin flow previously shown using this
+  // SigninViewController, if one exists. Does nothing otherwise.
+  void CloseBubbleSignin();
+
   // Sets the height of the modal signin dialog.
   void SetModalSigninHeight(int height);
 
   // Called by a `dialog_`' when it closes.
   void OnModalDialogClosed();
 
+  // Called when `bubble_widget_` is closed. Defers C++ object destruction
+  // to prevent re-entrancy crashes during the native Views teardown.
+  void OnBubbleClosed(views::Widget::ClosedReason reason);
+
   base::WeakPtr<SigninViewController> AsWeakPtr();
 
   void TearDownPreBrowserWindowDestruction();
 
+  // Returns the web contents of the modal dialog.
+  content::WebContents* GetModalDialogWebContentsForTesting();
+
+  // Returns the currently displayed modal dialog, or nullptr if no modal dialog
+  // is currently displayed.
+  SigninModalDialog* GetModalDialogForTesting();
+
  private:
-  FRIEND_TEST_ALL_PREFIXES(SignInViewControllerBrowserTest,
-                           ErrorDialogDefaultFocus);
-  FRIEND_TEST_ALL_PREFIXES(SigninViewControllerDelegateViewsBrowserTest,
-                           CloseImmediately);
-  FRIEND_TEST_ALL_PREFIXES(ProfilePickerCreationFlowBrowserTest,
-                           CreateLocalProfile);
-  FRIEND_TEST_ALL_PREFIXES(ProfilePickerCreationFlowBrowserTest,
-                           CancelLocalProfileCreation);
-  FRIEND_TEST_ALL_PREFIXES(
-      ProfilePickerWithReducedFrictionRemoveSigninBrowserTest,
-      CreateLocalProfileWithoutSigninStep);
-  FRIEND_TEST_ALL_PREFIXES(SyncSettingsInteractiveTest,
-                           PressingSignOutButtonsSignsOutUser);
+  ui::ScopedUnownedUserData<SigninViewController> scoped_unowned_user_data_;
+
   friend class ChromeSignoutConfirmationPromptPixelTest;
-  friend class login_ui_test_utils::SigninViewControllerTestUtil;
-  friend class SigninInterceptFirstRunExperienceDialogBrowserTestBase;
-  friend class SyncConfirmationUIDialogPixelTest;
-  friend class SigninViewControllerBrowserTestBase;
-  friend class ProfileMenuViewSignoutTest;
 
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
   // Shows the DICE-specific sign-in flow: opens a Gaia sign-in webpage in a new
@@ -277,13 +285,6 @@ class SigninViewController {
       SignoutConfirmationCallback callback);
 #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
-  // Returns the web contents of the modal dialog.
-  content::WebContents* GetModalDialogWebContentsForTesting();
-
-  // Returns the currently displayed modal dialog, or nullptr if no modal dialog
-  // is currently displayed.
-  SigninModalDialog* GetModalDialogForTesting();
-
   // Helper to create an on close callback for `SigninModalDialog`.
   base::OnceClosure GetOnModalDialogClosedCallback();
 
@@ -298,6 +299,12 @@ class SigninViewController {
 
   // Currently displayed modal dialog, or nullptr if none is displayed.
   std::unique_ptr<SigninModalDialog> dialog_;
+
+  // Stores the active bubble widget, if one is currently shown.
+  // New bubble promos/UIs should use this widget, whereas modal dialogs should
+  // use `dialog_`. Note that bubbles managed by this widget are completely
+  // decoupled from the modal dialogs.
+  std::unique_ptr<views::Widget> bubble_widget_;
 
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
   std::unique_ptr<NewTabWebContentsObserver> new_tab_web_contents_observer_;

@@ -26,14 +26,13 @@ import org.mockito.Mock;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.ui.test.util.MockitoHelper;
 
 /** Test for NetworkImageFetcher.java. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class NetworkImageFetcherTest {
     private static final String UMA_CLIENT_NAME = "TestUmaClient";
     private static final String URL = "http://google.com/test.png";
@@ -62,8 +61,7 @@ public class NetworkImageFetcherTest {
                         mGif.getData(),
                         new RequestMetadata("image/gif", 200, "test_content_location_header"));
 
-        ArgumentCaptor<Callback<Bitmap>> bitmapCallbackCaptor =
-                ArgumentCaptor.forClass(Callback.class);
+        ArgumentCaptor<Callback<Bitmap>> bitmapCallbackCaptor = MockitoHelper.callbackCaptor();
         doAnswer(
                         (InvocationOnMock invocation) -> {
                             bitmapCallbackCaptor.getValue().onResult(mBitmap);
@@ -73,7 +71,7 @@ public class NetworkImageFetcherTest {
                 .fetchImage(anyInt(), any(), bitmapCallbackCaptor.capture());
 
         ArgumentCaptor<Callback<ImageDataFetchResult>> gifCallbackCaptor =
-                ArgumentCaptor.forClass(Callback.class);
+                MockitoHelper.callbackCaptor();
         doAnswer(
                         (InvocationOnMock invocation) -> {
                             gifCallbackCaptor.getValue().onResult(mGifFetchResult);

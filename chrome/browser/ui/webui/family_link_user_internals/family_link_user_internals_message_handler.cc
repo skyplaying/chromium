@@ -27,10 +27,12 @@
 #include "components/supervised_user/core/browser/supervised_user_preferences.h"
 #include "components/supervised_user/core/browser/supervised_user_url_filtering_service.h"
 #include "components/supervised_user/core/browser/supervised_user_utils.h"
+#include "components/supervised_user/core/common/pref_names.h"
 #include "components/url_formatter/url_fixer.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
+#include "extensions/buildflags/buildflags.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "url/gurl.h"
 
@@ -283,12 +285,16 @@ void FamilyLinkUserInternalsMessageHandler::SendBasicInfo() {
   base::ListValue section_list;
   Profile* profile = Profile::FromWebUI(web_ui());
 
+  supervised_user::FamilyLinkSettingsService* settings_service =
+      supervised_user::FamilyLinkSettingsServiceFactory::GetForKey(
+          profile->GetProfileKey());
+
   base::ListValue* section_profile = AddSection(&section_list, "Profile");
   AddSectionEntry(section_profile, "Account", profile->GetProfileUserName());
 
   base::ListValue* section_filter = AddSection(&section_list, "Filter");
   AddSectionEntry(section_filter, "SafeSites enabled",
-                  supervised_user::IsSafeSitesEnabled(*profile->GetPrefs()));
+                  settings_service->IsSafeSitesEnabled());
   AddSectionEntry(
       section_filter, "Web filter type",
       WebFilterTypeToString(
@@ -334,14 +340,25 @@ void FamilyLinkUserInternalsMessageHandler::SendBasicInfo() {
     }
   }
 
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  const base::DictValue& approved_extensions =
+      profile->GetPrefs()->GetDict(prefs::kSupervisedUserApprovedExtensions);
+  if (!approved_extensions.empty()) {
+    base::ListValue* section_extensions =
+        AddSection(&section_list, "Approved Extensions");
+    for (const auto&& [extension_id, version] : approved_extensions) {
+      AddSectionEntry(
+          section_extensions, extension_id,
+          version.is_string() ? version.GetString() : "unknown version");
+    }
+  }
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+
   base::DictValue result;
   result.Set("sections", std::move(section_list));
   FireWebUIListener("basic-info-received", result);
 
   // Trigger retrieval of the user settings
-  supervised_user::FamilyLinkSettingsService* settings_service =
-      supervised_user::FamilyLinkSettingsServiceFactory::GetForKey(
-          profile->GetProfileKey());
   user_settings_subscription_ =
       settings_service->SubscribeForSettingsChange(base::BindRepeating(
           &FamilyLinkUserInternalsMessageHandler::SendFamilyLinkUserSettings,

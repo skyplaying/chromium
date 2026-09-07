@@ -27,6 +27,7 @@
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/policy_types.h"
 #include "components/policy/policy_constants.h"
+#include "components/signin/public/base/signin_switches.h"
 #include "components/sync/engine/cycle/sync_cycle_snapshot.h"
 #include "components/sync/engine/loopback_server/persistent_permanent_entity.h"
 #include "components/sync/service/sync_service.h"
@@ -99,8 +100,10 @@ class TwoClientBookmarksSyncTest
  public:
   TwoClientBookmarksSyncTest() : SyncTest(TWO_CLIENT) {
     if (GetSetupSyncMode() == SetupSyncMode::kSyncTransportOnly) {
-      feature_overrides_.InitAndEnableFeature(
-          syncer::kReplaceSyncPromosWithSignInPromos);
+      feature_overrides_.InitWithFeatures(
+          {syncer::kReplaceSyncPromosWithSignInPromos,
+           switches::kSyncEnableBookmarksInTransportMode},
+          {});
     }
   }
   ~TwoClientBookmarksSyncTest() override = default;
@@ -1892,7 +1895,8 @@ IN_PROC_BROWSER_TEST_P(TwoClientBookmarksSyncTest,
   ASSERT_TRUE(BookmarksMatchChecker().Wait());
 
   // Note: When a racy commit is done with identical bookmarks, it is possible
-  // for duplicates to exist after sync completes. See http://crbug.com/19769.
+  // for duplicates to exist after sync completes. See
+  // http://crbug.com/40307144.
   for (size_t i = 0; i < 2; ++i) {
     std::u16string title = IndexedURLTitle(i);
     GURL url = GURL(IndexedURL(i));
@@ -2663,7 +2667,7 @@ IN_PROC_BROWSER_TEST_P(TwoClientBookmarksSyncTest, CreateSyncedBookmarks) {
 
   fake_server_->InjectEntity(syncer::PersistentPermanentEntity::CreateNew(
       syncer::BOOKMARKS, "synced_bookmarks", "Synced Bookmarks",
-      "google_chrome_bookmarks"));
+      "google_chrome_bookmarks", /*migration_version=*/0));
   ASSERT_TRUE(BookmarksMatchChecker().Wait());
 
   // Add a bookmark on Client 0 and ensure it syncs over. This will also trigger

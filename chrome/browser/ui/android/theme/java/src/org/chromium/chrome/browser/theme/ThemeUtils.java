@@ -4,8 +4,6 @@
 
 package org.chromium.chrome.browser.theme;
 
-import static org.chromium.build.NullUtil.assumeNonNull;
-
 import android.content.Context;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
@@ -13,7 +11,6 @@ import android.graphics.Color;
 import androidx.annotation.ColorInt;
 import androidx.annotation.ColorRes;
 import androidx.annotation.VisibleForTesting;
-import androidx.appcompat.content.res.AppCompatResources;
 import androidx.core.content.ContextCompat;
 
 import org.chromium.build.annotations.NullMarked;
@@ -23,8 +20,6 @@ import org.chromium.chrome.browser.ui.native_page.NativePage;
 import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 import org.chromium.components.browser_ui.styles.ChromeColors;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
-import org.chromium.content_public.browser.RenderWidgetHostView;
-import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.util.ColorUtils;
 
 /** Utility methods for theme colors. */
@@ -44,17 +39,16 @@ public class ThemeUtils {
      * The background color to use for a given {@link Tab}. This will either be the color specified
      * by the associated web content or a default color if not specified.
      *
+     * <p>Note: {@link Tab#getBackgroundColor()} returns {@link Color#TRANSPARENT} when the web
+     * document has no explicit background color or is still loading. This method provides the
+     * fallback to the theme's default background color for UI components.
+     *
      * @param tab {@link Tab} object to get the background color for.
      * @return The background color of {@link Tab}.
      */
     public static @ColorInt int getBackgroundColor(Tab tab) {
-        if (tab.isNativePage()) return assumeNonNull(tab.getNativePage()).getBackgroundColor();
-
-        WebContents tabWebContents = tab.getWebContents();
-        RenderWidgetHostView rwhv =
-                tabWebContents == null ? null : tabWebContents.getRenderWidgetHostView();
-        @ColorInt
-        int backgroundColor = rwhv != null ? rwhv.getBackgroundColor() : Color.TRANSPARENT;
+        // tab.getBackgroundColor() returns Color.TRANSPARENT when unset by the webpage.
+        @ColorInt int backgroundColor = tab.getBackgroundColor();
         if (backgroundColor != Color.TRANSPARENT) return backgroundColor;
         return ChromeColors.getDefaultThemeColor(tab.getContext(), /* isIncognito= */ false);
     }
@@ -125,7 +119,7 @@ public class ThemeUtils {
      * @return The {@link ColorStateList} for the icon tint of themed toolbar.
      */
     public static ColorStateList getThemedToolbarIconTint(Context context, boolean useLight) {
-        return AppCompatResources.getColorStateList(context, getThemedToolbarIconTintRes(useLight));
+        return context.getColorStateList(getThemedToolbarIconTintRes(useLight));
     }
 
     /**
@@ -184,8 +178,7 @@ public class ThemeUtils {
             Context context,
             @BrandedColorScheme int brandedColorScheme,
             boolean isActivityFocused) {
-        return AppCompatResources.getColorStateList(
-                context,
+        return context.getColorStateList(
                 getThemedToolbarIconTintResForActivityState(brandedColorScheme, isActivityFocused));
     }
 

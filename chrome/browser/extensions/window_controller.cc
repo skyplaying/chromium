@@ -12,6 +12,7 @@
 #include "base/values.h"
 #include "chrome/browser/extensions/window_controller_list.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/common/extensions/api/windows.h"
 #include "extensions/buildflags/buildflags.h"
 
@@ -26,13 +27,14 @@ namespace extensions {
 WindowController::TypeFilter WindowController::GetAllWindowFilter() {
   // This needs to be updated if there is a change to
   // extensions::api::windows:WindowType.
-  static_assert(std::to_underlying(api::windows::WindowType::kMaxValue) == 5,
+  static_assert(std::to_underlying(api::windows::WindowType::kMaxValue) == 6,
                 "Update extensions WindowController to match WindowType");
   return ((1 << std::to_underlying(api::windows::WindowType::kNormal)) |
           (1 << std::to_underlying(api::windows::WindowType::kPanel)) |
           (1 << std::to_underlying(api::windows::WindowType::kPopup)) |
           (1 << std::to_underlying(api::windows::WindowType::kApp)) |
-          (1 << std::to_underlying(api::windows::WindowType::kDevtools)));
+          (1 << std::to_underlying(api::windows::WindowType::kDevtools)) |
+          (1 << std::to_underlying(api::windows::WindowType::kCustomTab)));
 }
 
 // static
@@ -72,7 +74,7 @@ BrowserWindowInterface* WindowController::GetBrowserWindowInterface() {
 }
 
 #if !BUILDFLAG(IS_ANDROID)
-Browser* WindowController::GetBrowser() const {
+BrowserWindowInterface* WindowController::GetBrowser() const {
   return nullptr;
 }
 #endif

@@ -256,6 +256,7 @@ LayoutBlockFlow* OffsetMapping::GetInlineFormattingContextOf(
 
 OffsetMapping::OffsetMapping(UnitVector&& units, RangeMap&& ranges, String text)
     : units_(std::move(units)), ranges_(std::move(ranges)), text_(text) {
+  DCHECK_EQ(units_.capacity(), units_.size());
 #if ENABLE_SECURITY_ASSERT
   for (const auto& unit : units_) {
     SECURITY_DCHECK(unit.TextContentStart() <= text.length())
@@ -376,7 +377,7 @@ OffsetMapping::GetMappingUnitsForLayoutObject(
                    });
   DCHECK_LT(begin, end);
   // SAFETY: Both of `begin` and `end` are valid iterators for `units_`.
-  return UNSAFE_BUFFERS(base::span(begin, end));
+  return UNSAFE_BUFFERS(base::span(base::unchecked, begin, end));
 }
 
 base::span<const OffsetMappingUnit>
@@ -399,7 +400,7 @@ OffsetMapping::GetMappingUnitsForTextContentOffsetRange(unsigned start,
       units_, end, std::less_equal<>{}, &OffsetMappingUnit::TextContentStart);
   // SAFETY: Both of `result_begin` and `result_end` are valid iterators for
   // `units_`.
-  return UNSAFE_BUFFERS(base::span(result_begin, result_end));
+  return UNSAFE_BUFFERS(base::span(base::unchecked, result_begin, result_end));
 }
 
 std::optional<unsigned> OffsetMapping::GetTextContentOffset(

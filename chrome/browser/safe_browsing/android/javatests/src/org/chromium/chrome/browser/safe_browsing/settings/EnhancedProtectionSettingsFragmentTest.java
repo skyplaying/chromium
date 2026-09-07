@@ -16,19 +16,18 @@ import org.chromium.base.test.util.Feature;
 import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.safe_browsing.SafeBrowsingBridge;
 import org.chromium.chrome.browser.safe_browsing.SafeBrowsingState;
-import org.chromium.chrome.browser.settings.SettingsActivityTestRule;
-import org.chromium.chrome.test.ChromeBrowserTestRule;
+import org.chromium.chrome.browser.settings.SettingsTestRule;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.components.browser_ui.settings.TextMessagePreference;
+import org.chromium.content_public.browser.test.NativeLibraryTestUtils;
 
 /** Tests for {@link EnhancedProtectionSettingsFragment}. */
 @RunWith(ChromeJUnit4ClassRunner.class)
 public class EnhancedProtectionSettingsFragmentTest {
-    @Rule public final ChromeBrowserTestRule mBrowserTestRule = new ChromeBrowserTestRule();
 
     @Rule
-    public SettingsActivityTestRule<EnhancedProtectionSettingsFragment> mTestRule =
-            new SettingsActivityTestRule<>(EnhancedProtectionSettingsFragment.class);
+    public SettingsTestRule<EnhancedProtectionSettingsFragment> mTestRule =
+            new SettingsTestRule<>(EnhancedProtectionSettingsFragment.class);
 
     private TextMessagePreference mEnhancedProtectionSubtitle;
     private TextMessagePreference mEnhancedProtectionWhenOn;
@@ -75,6 +74,7 @@ public class EnhancedProtectionSettingsFragmentTest {
     @SmallTest
     @Feature({"SafeBrowsing"})
     public void testSafeBrowsingSettingsEnhancedProtection() {
+        NativeLibraryTestUtils.loadNativeLibraryAndInitBrowserProcess();
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     new SafeBrowsingBridge(ProfileManager.getLastUsedRegularProfile())

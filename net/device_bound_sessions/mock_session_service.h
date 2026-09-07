@@ -9,9 +9,12 @@
 #include <utility>
 
 #include "base/containers/span.h"
+#include "base/types/expected.h"
 #include "net/device_bound_sessions/registration_fetcher_param.h"
 #include "net/device_bound_sessions/session_challenge_param.h"
+#include "net/device_bound_sessions/session_error.h"
 #include "net/device_bound_sessions/session_service.h"
+#include "net/ssl/ssl_cert_request_info.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "url/gurl.h"
@@ -28,6 +31,7 @@ class SessionServiceMock : public SessionService {
               (OnAccessCallback on_access_callback,
                RegistrationFetcherParam registration_params,
                const IsolationInfo& isolation_info,
+               const net::SiteForCookies& site_for_cookies,
                const NetLogWithSource& net_log,
                const std::optional<url::Origin>& original_request_initiator),
               (override));
@@ -66,6 +70,19 @@ class SessionServiceMock : public SessionService {
                const SessionKey& session_key,
                SessionService::OnAccessCallback per_request_callback),
               (override));
+  MOCK_METHOD(bool,
+              AddPreProvisionedKey,
+              (const url::Origin&,
+               std::string_view,
+               const GURL&,
+               unexportable_keys::UnexportableSigningKeyId),
+              (override));
+  MOCK_METHOD(
+      (SessionErrorOr<unexportable_keys::UnexportableSigningKeyId>),
+      FindPreProvisionedKey,
+      (const ProviderRegistrationParams& provider_params,
+       base::optional_ref<const url::Origin> original_request_initiator),
+      (override));
   MOCK_METHOD(void,
               DeleteAllSessions,
               (DeletionReason reason,
@@ -118,6 +135,16 @@ class SessionServiceMock : public SessionService {
               (DbscRequest & request,
                HttpResponseHeaders* headers,
                const FirstPartySetMetadata& first_party_set_metadata),
+              (override));
+  MOCK_METHOD(void,
+              SelectClientCertificate,
+              (const GURL& url,
+               scoped_refptr<SSLCertRequestInfo> cert_info,
+               SelectClientCertificateCallback callback),
+              (override));
+  MOCK_METHOD(void,
+              PrewarmSessionsForUrl,
+              (const GURL& url, PrewarmCallback callback),
               (override));
 };
 

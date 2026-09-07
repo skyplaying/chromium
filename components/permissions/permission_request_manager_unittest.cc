@@ -13,6 +13,7 @@
 #include <variant>
 
 #include "base/command_line.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
@@ -23,6 +24,7 @@
 #include "build/build_config.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/content_settings/core/common/features.h"
+#include "components/omnibox/common/omnibox_feature_configs.h"
 #include "components/permissions/features.h"
 #include "components/permissions/permission_decision.h"
 #include "components/permissions/permission_request.h"
@@ -143,7 +145,7 @@ class PermissionRequestManagerTest : public content::RenderViewHostTestHarness {
     task_environment()->RunUntilIdle();
   }
 
-  void Closing() {
+  void Dismiss() {
     manager_->Dismiss(/*prompt_options=*/std::monostate());
     task_environment()->RunUntilIdle();
   }
@@ -271,6 +273,13 @@ class PermissionRequestManagerTest : public content::RenderViewHostTestHarness {
 TEST_F(PermissionRequestManagerTest, NoRequests) {
   WaitForBubbleToBeShown();
   EXPECT_FALSE(prompt_factory_->is_visible());
+  EXPECT_FALSE(manager_->ShouldCurrentRequestUseQuietUI());
+  EXPECT_FALSE(
+      PermissionUtil::ShouldCurrentRequestUsePermissionElementSecondaryUI(
+          manager_, web_contents()));
+  EXPECT_FALSE(
+      PermissionUtil::ShouldCurrentRequestUsePermissionElementSecondaryUI(
+          manager_));
 }
 
 TEST_F(PermissionRequestManagerTest, SingleRequest) {
@@ -284,6 +293,33 @@ TEST_F(PermissionRequestManagerTest, SingleRequest) {
 
   Accept();
   EXPECT_TRUE(request1_state.granted);
+}
+
+TEST_F(PermissionRequestManagerTest, EmptyOptionsForGeolocation) {
+  base::test::ScopedFeatureList enable_approximate_location{
+      content_settings::features::kApproximateGeolocationPermission};
+
+  MockPermissionRequest::MockPermissionRequestState request_state;
+  std::unique_ptr<MockPermissionRequest> request =
+      std::make_unique<MockPermissionRequest>(
+          RequestType::kGeolocation, PermissionRequestGestureType::GESTURE,
+          request_state.GetWeakPtr());
+
+  base::RunLoop run_loop;
+  request->RegisterOnPermissionDecidedCallback(run_loop.QuitClosure());
+
+  manager_->AddRequest(web_contents()->GetPrimaryMainFrame(),
+                       std::move(request));
+  WaitForBubbleToBeShown();
+
+  EXPECT_TRUE(prompt_factory_->is_visible());
+  ASSERT_EQ(prompt_factory_->request_count(), 1);
+
+  manager_->Accept(std::monostate());
+  run_loop.Run();
+
+  EXPECT_TRUE(request_state.granted);
+  EXPECT_FALSE(request_state.selected_accuracy.has_value());
 }
 
 TEST_F(PermissionRequestManagerTest, SequentialRequests) {
@@ -727,8 +763,7 @@ class QuicklyDeletedRequest : public PermissionRequest {
                         PermissionRequestGestureType gesture_type)
       : PermissionRequest(
             std::make_unique<PermissionRequestData>(
-                std::make_unique<ContentSettingPermissionResolver>(
-                    request_type),
+                request_type,
                 /*user_gesture=*/gesture_type ==
                     PermissionRequestGestureType::GESTURE,
                 requesting_origin),
@@ -814,7 +849,7 @@ TEST_F(PermissionRequestManagerTest, MainFrameNoRequestIFrameRequest) {
   WaitForFrameLoad();
 
   EXPECT_TRUE(prompt_factory_->is_visible());
-  Closing();
+  Dismiss();
   EXPECT_TRUE(iframe_request_same_domain_state.finished);
 }
 
@@ -834,7 +869,7 @@ TEST_F(PermissionRequestManagerTest, MainFrameAndIFrameRequestSameDomain) {
 
   EXPECT_TRUE(prompt_factory_->is_visible());
   ASSERT_EQ(1, prompt_factory_->request_count());
-  Closing();
+  Dismiss();
   if (PermissionUtil::DoesPlatformSupportChip()) {
     EXPECT_TRUE(iframe_request_same_domain_state.finished);
     EXPECT_FALSE(request1_state.finished);
@@ -847,7 +882,7 @@ TEST_F(PermissionRequestManagerTest, MainFrameAndIFrameRequestSameDomain) {
   EXPECT_TRUE(prompt_factory_->is_visible());
   ASSERT_EQ(1, prompt_factory_->request_count());
 
-  Closing();
+  Dismiss();
   EXPECT_FALSE(prompt_factory_->is_visible());
   if (PermissionUtil::DoesPlatformSupportChip()) {
     EXPECT_TRUE(request1_state.finished);
@@ -871,7 +906,7 @@ TEST_F(PermissionRequestManagerTest, MainFrameAndIFrameRequestOtherDomain) {
   WaitForBubbleToBeShown();
 
   EXPECT_TRUE(prompt_factory_->is_visible());
-  Closing();
+  Dismiss();
   if (PermissionUtil::DoesPlatformSupportChip()) {
     EXPECT_TRUE(iframe_request_other_domain_state.finished);
     EXPECT_FALSE(request1_state.finished);
@@ -881,7 +916,7 @@ TEST_F(PermissionRequestManagerTest, MainFrameAndIFrameRequestOtherDomain) {
   }
 
   EXPECT_TRUE(prompt_factory_->is_visible());
-  Closing();
+  Dismiss();
   EXPECT_TRUE(iframe_request_other_domain_state.finished);
   if (PermissionUtil::DoesPlatformSupportChip()) {
     EXPECT_TRUE(request1_state.finished);
@@ -906,7 +941,7 @@ TEST_F(PermissionRequestManagerTest, IFrameRequestWhenMainRequestVisible) {
                     iframe_request_other_domain_state.GetWeakPtr()));
   WaitForFrameLoad();
   ASSERT_EQ(prompt_factory_->request_count(), 1);
-  Closing();
+  Dismiss();
   if (PermissionUtil::DoesPlatformSupportChip()) {
     EXPECT_TRUE(iframe_request_other_domain_state.finished);
     EXPECT_FALSE(request1_state.finished);
@@ -917,7 +952,7 @@ TEST_F(PermissionRequestManagerTest, IFrameRequestWhenMainRequestVisible) {
 
   EXPECT_TRUE(prompt_factory_->is_visible());
   ASSERT_EQ(prompt_factory_->request_count(), 1);
-  Closing();
+  Dismiss();
   EXPECT_TRUE(iframe_request_other_domain_state.finished);
   if (PermissionUtil::DoesPlatformSupportChip()) {
     EXPECT_TRUE(request1_state.finished);
@@ -942,7 +977,7 @@ TEST_F(PermissionRequestManagerTest,
       CreateRequest(iframe_request_other_domain_,
                     iframe_request_other_domain_state.GetWeakPtr()));
   WaitForFrameLoad();
-  Closing();
+  Dismiss();
   if (PermissionUtil::DoesPlatformSupportChip()) {
     EXPECT_TRUE(iframe_request_other_domain_state.finished);
     EXPECT_FALSE(request1_state.finished);
@@ -952,7 +987,7 @@ TEST_F(PermissionRequestManagerTest,
   }
 
   EXPECT_TRUE(prompt_factory_->is_visible());
-  Closing();
+  Dismiss();
   if (PermissionUtil::DoesPlatformSupportChip()) {
     EXPECT_TRUE(request1_state.finished);
   } else {
@@ -977,29 +1012,37 @@ TEST_F(PermissionRequestManagerTest, UMAForSimpleDeniedBubbleAlternatePath) {
   // UMAForSimpleAcceptedBubble.
 
   Deny();
-  histograms.ExpectUniqueSample(PermissionUmaUtil::kPermissionsPromptDenied,
-                                static_cast<base::HistogramBase::Sample32>(
-                                    RequestTypeForUma::PERMISSION_GEOLOCATION),
-                                1);
+  histograms.ExpectUniqueSample(
+      PermissionUmaUtil::kPermissionsPromptDenied,
+      static_cast<base::HistogramBase::Sample32>(
+          base::FeatureList::IsEnabled(
+              content_settings::features::kApproximateGeolocationPermission)
+              ? RequestTypeForUma::PERMISSION_GEOLOCATION_APPROXIMATE_OR_PRECISE
+              : RequestTypeForUma::PERMISSION_GEOLOCATION),
+      1);
 }
 
 TEST_F(PermissionRequestManagerTest, UMAForTabSwitching) {
   base::HistogramTester histograms;
 
+  RequestTypeForUma geolocation_request_type =
+      base::FeatureList::IsEnabled(
+          content_settings::features::kApproximateGeolocationPermission)
+          ? RequestTypeForUma::PERMISSION_GEOLOCATION_APPROXIMATE_OR_PRECISE
+          : RequestTypeForUma::PERMISSION_GEOLOCATION;
+
   manager_->AddRequest(web_contents()->GetPrimaryMainFrame(),
                        CreateRequest(request1_));
   WaitForBubbleToBeShown();
-  histograms.ExpectUniqueSample(PermissionUmaUtil::kPermissionsPromptShown,
-                                static_cast<base::HistogramBase::Sample32>(
-                                    RequestTypeForUma::PERMISSION_GEOLOCATION),
-                                1);
+  histograms.ExpectUniqueSample(
+      PermissionUmaUtil::kPermissionsPromptShown,
+      static_cast<base::HistogramBase::Sample32>(geolocation_request_type), 1);
 
   MockTabSwitchAway();
   MockTabSwitchBack();
-  histograms.ExpectUniqueSample(PermissionUmaUtil::kPermissionsPromptShown,
-                                static_cast<base::HistogramBase::Sample32>(
-                                    RequestTypeForUma::PERMISSION_GEOLOCATION),
-                                1);
+  histograms.ExpectUniqueSample(
+      PermissionUmaUtil::kPermissionsPromptShown,
+      static_cast<base::HistogramBase::Sample32>(geolocation_request_type), 1);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1244,6 +1287,49 @@ TEST_F(PermissionRequestManagerTest, UiSelectorUsedForGeolocation) {
                   entry, "InitialGeolocationAccuracySelection"),
               static_cast<int64_t>(test.expected_accuracy));
   }
+}
+
+// Regression test for crbug.com/548056474.
+TEST_F(PermissionRequestManagerTest,
+       WebContentsDestroyedWithInFlightGeolocationAccuracySelector) {
+  base::test::ScopedFeatureList enable_approximate_location;
+  enable_approximate_location.InitWithFeatures(
+      /*enabled_features=*/
+      {features::kPermissionPredictionsGeolocationAccuracy,
+       content_settings::features::kApproximateGeolocationPermission},
+      /*disabled_features=*/{});
+
+  ukm::InitializeSourceUrlRecorderForWebContents(web_contents());
+  ukm::TestAutoSetUkmRecorder ukm_recorder;
+
+  manager_->clear_permission_ui_selector_for_testing();
+  MockNotificationGeolocationPermissionUiSelector::CreateForManager(
+      manager_, Decision::UseNormalUiAndShowNoWarning(),
+      /*async_delay=*/base::Days(1));
+
+  MockPermissionRequest::MockPermissionRequestState request_state;
+  auto request = std::make_unique<MockPermissionRequest>(
+      RequestType::kGeolocation, PermissionRequestGestureType::GESTURE,
+      request_state.GetWeakPtr());
+
+  manager_->AddRequest(web_contents()->GetPrimaryMainFrame(),
+                       std::move(request));
+  WaitForBubbleToBeShown();
+
+  EXPECT_FALSE(prompt_factory_->is_visible());
+  EXPECT_TRUE(manager_->IsRequestInProgress());
+
+  prompt_factory_.reset();
+  manager_ = nullptr;
+  DeleteContents();
+
+  EXPECT_TRUE(request_state.cancelled);
+
+  const auto entries = ukm_recorder.GetEntriesByName("Permission");
+  ASSERT_EQ(1u, entries.size());
+  EXPECT_EQ(*ukm_recorder.GetEntryMetric(entries.back().get(),
+                                         "InitialGeolocationAccuracySelection"),
+            static_cast<int64_t>(GeolocationAccuracy::kPrecise));
 }
 
 TEST_F(PermissionRequestManagerTest,
@@ -2215,7 +2301,7 @@ TEST_F(PermissionRequestManagerTest, ReentrantPermissionRequestCancelled) {
 
   EXPECT_TRUE(prompt_factory_->is_visible());
   EXPECT_EQ(prompt_factory_->request_count(), 1);
-  Closing();
+  Dismiss();
   EXPECT_TRUE(request1_state.cancelled);
   EXPECT_FALSE(request_mic_state.cancelled);
   WaitForBubbleToBeShown();
@@ -2569,6 +2655,37 @@ TEST_F(PermissionRequestManagerTest, PEPCRequestNeverQuiet) {
   Accept();
 }
 
+TEST_F(PermissionRequestManagerTest,
+       AllowlistedSurfaceRequestNeverQuietAndInitializesFlowModel) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      omnibox_feature_configs::kEmbeddedPermissionEnabled);
+  client_.SetIsPrivilegedInternalWebUI(true);
+
+  manager_->clear_permission_ui_selector_for_testing();
+  MockNotificationGeolocationPermissionUiSelector::CreateForManager(
+      manager_,
+      Decision::UseQuietUi(PermissionUiSelector::QuietUiReason::kEnabledInPrefs,
+                           Decision::ShowNoWarning()),
+      std::nullopt /* async_delay */);
+
+  // Allowlisted surface request is not quieted by selector and initializes flow
+  // model.
+  MockPermissionRequest::MockPermissionRequestState request_state;
+  auto request = std::make_unique<MockPermissionRequest>(
+      RequestType::kNotifications, PermissionRequestGestureType::GESTURE,
+      request_state.GetWeakPtr());
+  manager_->AddRequest(web_contents()->GetPrimaryMainFrame(),
+                       std::move(request));
+  WaitForBubbleToBeShown();
+
+  ASSERT_TRUE(prompt_factory_->is_visible());
+  ASSERT_TRUE(prompt_factory_->RequestTypeSeen(request_state.request_type));
+  EXPECT_FALSE(manager_->ShouldCurrentRequestUseQuietUI());
+  EXPECT_NE(nullptr, manager_->GetEmbeddedPromptFlowModel());
+  Accept();
+}
+
 #endif  // BUILDFLAG(IS_ANDROID)
 
 class PermissionRequestManagerApproximateGeolocationTest
@@ -2579,9 +2696,10 @@ class PermissionRequestManagerApproximateGeolocationTest
       content_settings::features::kApproximateGeolocationPermission};
 };
 
-// Match UkmPromptOptions in permission_uma_util.cc.
-constexpr int64_t kPromptOptionsApproximate = 1;
-constexpr int64_t kPromptOptionsPrecise = 2;
+constexpr int64_t kPromptOptionsApproximate = static_cast<int64_t>(
+    permissions::UkmPermissionPromptOptions::APPROXIMATE_LOCATION);
+constexpr int64_t kPromptOptionsPrecise = static_cast<int64_t>(
+    permissions::UkmPermissionPromptOptions::PRECISE_LOCATION);
 
 TEST_P(PermissionRequestManagerApproximateGeolocationTest,
        ReportAccuracyInUmaAOnAccept) {
@@ -2749,6 +2867,114 @@ struct GestureGatedTestcase {
   bool mute_geolocation;
   std::optional<std::string> warning_message;
 };
+
+class PermissionRequestManagerSameOriginGestureTest
+    : public PermissionRequestManagerTest {
+ public:
+  void SetUp() override {
+    PermissionRequestManagerTest::SetUp();
+    manager_->clear_permission_ui_selector_for_testing();
+    manager_->add_permission_ui_selector_for_testing(
+        std::make_unique<MockNotificationGeolocationPermissionUiSelector>(
+            Decision::UseNormalUiAndShowNoWarning(),
+            /*prediction_likelihood=*/std::nullopt,
+            /*async_delay=*/std::nullopt));
+  }
+};
+
+TEST_F(PermissionRequestManagerSameOriginGestureTest,
+       ExcludeSameOriginNavigationsEnabled) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeatureWithParameters(
+      features::kPermissionsGestureGatedPrompts,
+      {{"mute_geolocation", "true"},
+       {"exclude_same_origin_navigations", "true"}});
+
+  // 1. Initial navigation (not same-origin): gestureless prompt is muted.
+  {
+    MockPermissionRequest::MockPermissionRequestState request_state;
+    auto request = std::make_unique<MockPermissionRequest>(
+        RequestType::kGeolocation, PermissionRequestGestureType::NO_GESTURE,
+        request_state.GetWeakPtr());
+    manager_->AddRequest(web_contents()->GetPrimaryMainFrame(),
+                         std::move(request));
+    WaitForBubbleToBeShown();
+
+    EXPECT_TRUE(manager_->ShouldCurrentRequestUseQuietUI());
+    EXPECT_EQ(manager_->ReasonForUsingQuietUi(),
+              QuietUiReason::kTriggeredDueToLackOfGesture);
+
+    Accept();
+    EXPECT_TRUE(request_state.granted);
+  }
+
+  // 2. Same-origin navigation: gestureless prompt is NOT muted when exclude
+  // param is true.
+  NavigateAndCommit(GURL("https://www.google.com/foo"));
+  {
+    MockPermissionRequest::MockPermissionRequestState request_state;
+    auto request = std::make_unique<MockPermissionRequest>(
+        RequestType::kGeolocation, PermissionRequestGestureType::NO_GESTURE,
+        request_state.GetWeakPtr());
+    manager_->AddRequest(web_contents()->GetPrimaryMainFrame(),
+                         std::move(request));
+    WaitForBubbleToBeShown();
+
+    EXPECT_FALSE(manager_->ShouldCurrentRequestUseQuietUI());
+    EXPECT_EQ(manager_->ReasonForUsingQuietUi(), std::nullopt);
+
+    Accept();
+    EXPECT_TRUE(request_state.granted);
+  }
+
+  // 3. Cross-origin navigation: gestureless prompt is muted again.
+  NavigateAndCommit(GURL("https://www.youtube.com/foo"));
+  {
+    MockPermissionRequest::MockPermissionRequestState request_state;
+    auto request = std::make_unique<MockPermissionRequest>(
+        RequestType::kGeolocation, PermissionRequestGestureType::NO_GESTURE,
+        request_state.GetWeakPtr());
+    manager_->AddRequest(web_contents()->GetPrimaryMainFrame(),
+                         std::move(request));
+    WaitForBubbleToBeShown();
+
+    EXPECT_TRUE(manager_->ShouldCurrentRequestUseQuietUI());
+    EXPECT_EQ(manager_->ReasonForUsingQuietUi(),
+              QuietUiReason::kTriggeredDueToLackOfGesture);
+
+    Accept();
+    EXPECT_TRUE(request_state.granted);
+  }
+}
+
+TEST_F(PermissionRequestManagerSameOriginGestureTest,
+       ExcludeSameOriginNavigationsDisabledByDefault) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeatureWithParameters(
+      features::kPermissionsGestureGatedPrompts,
+      {{"mute_geolocation", "true"},
+       {"exclude_same_origin_navigations", "false"}});
+
+  // Same-origin navigation still mutes gestureless prompt when exclude param is
+  // false.
+  NavigateAndCommit(GURL("https://www.google.com/foo"));
+  {
+    MockPermissionRequest::MockPermissionRequestState request_state;
+    auto request = std::make_unique<MockPermissionRequest>(
+        RequestType::kGeolocation, PermissionRequestGestureType::NO_GESTURE,
+        request_state.GetWeakPtr());
+    manager_->AddRequest(web_contents()->GetPrimaryMainFrame(),
+                         std::move(request));
+    WaitForBubbleToBeShown();
+
+    EXPECT_TRUE(manager_->ShouldCurrentRequestUseQuietUI());
+    EXPECT_EQ(manager_->ReasonForUsingQuietUi(),
+              QuietUiReason::kTriggeredDueToLackOfGesture);
+
+    Accept();
+    EXPECT_TRUE(request_state.granted);
+  }
+}
 
 class PermissionRequestManagerEnforceGestureTest
     : public PermissionRequestManagerTest,

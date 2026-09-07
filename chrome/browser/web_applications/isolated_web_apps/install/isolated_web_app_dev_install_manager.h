@@ -19,6 +19,7 @@
 #include "base/types/expected.h"
 #include "chrome/browser/web_applications/isolated_web_apps/commands/install_isolated_web_app_command.h"
 #include "chrome/browser/web_applications/isolated_web_apps/install/isolated_web_app_install_source.h"
+#include "chrome/browser/web_applications/model/iwa_update_info.h"
 #include "components/keep_alive_registry/scoped_keep_alive.h"
 #include "components/webapps/isolated_web_apps/download/bundle_downloader.h"
 
@@ -69,7 +70,8 @@ class IsolatedWebAppDevInstallManager {
       base::OnceCallback<void(MaybeInstallIsolatedWebAppCommandSuccess)>
           callback,
       std::optional<web_package::SignedWebBundleId> explicit_bundle_id =
-          std::nullopt);
+          std::nullopt,
+      std::optional<IwaUpdateInfo> optional_update_info = std::nullopt);
 
   // if `expected_bundle_id` is non null, then the installation
   // will fail if the actual bundle id is different.
@@ -79,7 +81,8 @@ class IsolatedWebAppDevInstallManager {
       base::OnceCallback<void(MaybeInstallIsolatedWebAppCommandSuccess)>
           callback,
       std::optional<web_package::SignedWebBundleId> expected_bundle_id =
-          std::nullopt);
+          std::nullopt,
+      std::optional<IwaUpdateInfo> optional_update_info = std::nullopt);
 
   // if `expected_bundle_id` is non null, then the installation
   // will fail if the actual bundle id is different.
@@ -89,12 +92,16 @@ class IsolatedWebAppDevInstallManager {
       base::OnceCallback<void(MaybeInstallIsolatedWebAppCommandSuccess)>
           callback,
       std::optional<web_package::SignedWebBundleId> expected_bundle_id =
-          std::nullopt);
+          std::nullopt,
+      std::optional<IwaUpdateInfo> optional_update_info = std::nullopt);
 
   void OnReportInstallationResultForTesting(
       base::RepeatingCallback<void(MaybeInstallIsolatedWebAppCommandSuccess)>
           on_report_installation_result) {
     on_report_installation_result_ = std::move(on_report_installation_result);
+    if (last_installation_result_.has_value()) {
+      on_report_installation_result_.Run(*last_installation_result_);
+    }
   }
 
   // if `expected_bundle_id` is non null, then the installation
@@ -105,7 +112,8 @@ class IsolatedWebAppDevInstallManager {
       base::OnceCallback<void(MaybeInstallIsolatedWebAppCommandSuccess)>
           callback,
       std::optional<web_package::SignedWebBundleId> expected_bundle_id =
-          std::nullopt);
+          std::nullopt,
+      std::optional<IwaUpdateInfo> optional_update_info = std::nullopt);
 
   static bool HasIwaInstallSwitch(const base::CommandLine& command_line);
 
@@ -121,11 +129,6 @@ class IsolatedWebAppDevInstallManager {
   static void GetIsolatedWebAppInstallSourceFromCommandLine(
       const base::CommandLine& command_line,
       base::OnceCallback<void(MaybeIwaInstallSource)> callback);
-
-  const base::OneShotEvent&
-  on_garbage_collect_storage_partitions_done_for_testing() {
-    return on_garbage_collect_storage_partitions_done_for_testing_;
-  }
 
  private:
   FRIEND_TEST_ALL_PREFIXES(IsolatedWebAppDevInstallManagerTest,
@@ -152,7 +155,8 @@ class IsolatedWebAppDevInstallManager {
       MaybeIwaInstallSource install_source,
       std::optional<web_package::SignedWebBundleId> expected_bundle_id,
       base::OnceCallback<void(MaybeInstallIsolatedWebAppCommandSuccess)>
-          callback);
+          callback,
+      std::optional<IwaUpdateInfo> optional_update_info = std::nullopt);
 
   void InstallIsolatedWebAppFromInstallSource(
       std::unique_ptr<ScopedKeepAlive> keep_alive,
@@ -160,7 +164,8 @@ class IsolatedWebAppDevInstallManager {
       std::optional<web_package::SignedWebBundleId> expected_bundle_id,
       MaybeIwaInstallSource install_source,
       base::OnceCallback<void(MaybeInstallIsolatedWebAppCommandSuccess)>
-          callback);
+          callback,
+      std::optional<IwaUpdateInfo> optional_update_info = std::nullopt);
 
   void OnGetIsolatedWebAppInstallSourceFromCommandLine(
       std::unique_ptr<ScopedKeepAlive> keep_alive,
@@ -174,6 +179,7 @@ class IsolatedWebAppDevInstallManager {
       const IsolatedWebAppInstallSource& install_source,
       base::OnceCallback<void(MaybeInstallIsolatedWebAppCommandSuccess)>
           callback,
+      std::optional<IwaUpdateInfo> optional_update_info,
       base::expected<IsolatedWebAppUrlInfo, std::string> url_info);
 
   void OnInstallIsolatedWebApp(
@@ -185,14 +191,13 @@ class IsolatedWebAppDevInstallManager {
   void ReportInstallationResult(
       MaybeInstallIsolatedWebAppCommandSuccess result);
 
-  void MaybeScheduleGarbageCollection();
-
   void DownloadWebBundleToFile(
       const GURL& web_bundle_url,
       InstallSurface install_surface,
       base::OnceCallback<void(MaybeInstallIsolatedWebAppCommandSuccess)>
           callback,
       std::optional<web_package::SignedWebBundleId> expected_bundle_id,
+      std::optional<IwaUpdateInfo> optional_update_info,
       ScopedTempWebBundleFile bundle);
 
   void OnWebBundleDownloaded(
@@ -201,6 +206,7 @@ class IsolatedWebAppDevInstallManager {
           callback,
       std::optional<web_package::SignedWebBundleId> expected_bundle_id,
       ScopedTempWebBundleFile bundle,
+      std::optional<IwaUpdateInfo> optional_update_info,
       int32_t result);
 
   Profile* profile() { return &profile_.get(); }
@@ -215,8 +221,9 @@ class IsolatedWebAppDevInstallManager {
       base::expected<InstallIsolatedWebAppCommandSuccess, std::string>)>
       on_report_installation_result_ = base::DoNothing();
 
-  // Signals when `GarbageCollectStoragePartitionsCommand` completes.
-  base::OneShotEvent on_garbage_collect_storage_partitions_done_for_testing_;
+  std::optional<
+      base::expected<InstallIsolatedWebAppCommandSuccess, std::string>>
+      last_installation_result_;
 
   base::WeakPtrFactory<IsolatedWebAppDevInstallManager> weak_ptr_factory_{this};
 };

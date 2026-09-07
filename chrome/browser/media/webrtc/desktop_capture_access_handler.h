@@ -90,6 +90,8 @@ class DesktopCaptureAccessHandler : public CaptureAccessHandlerBase,
       std::unique_ptr<PendingAccessRequest> pending_request);
   void ProcessQueuedAccessRequest(const RequestsQueue& queue,
                                   content::WebContents* web_contents);
+  void RejectRequest(content::WebContents* web_contents,
+                     blink::mojom::MediaStreamRequestResult result);
   void OnPickerDialogResults(
       base::WeakPtr<content::WebContents> web_contents,
       const std::u16string& application_title,
@@ -102,6 +104,7 @@ class DesktopCaptureAccessHandler : public CaptureAccessHandlerBase,
   void OnDesktopCaptureDevicesObtained(
       base::WeakPtr<content::WebContents> web_contents,
       std::unique_ptr<PendingAccessRequest> pending_request,
+      const content::DesktopMediaID& media_id,
       blink::mojom::StreamDevices devices,
       std::unique_ptr<content::MediaStreamUI> ui);
 
@@ -129,6 +132,10 @@ class DesktopCaptureAccessHandler : public CaptureAccessHandlerBase,
   raw_ptr<aura::Window, DanglingUntriaged> primary_root_window_for_testing_ =
       nullptr;
 #endif  // BUILDFLAG(IS_CHROMEOS)
+
+  // Returns true if the request is from a built-in feedback UI and
+  // `kUseSCContentSharingPicker` feature is enabled.
+  bool IsFeedbackRequestWithSckPicker(const GURL& origin) const;
 
   // Skips the screen capture request approval dialog in tests.
   bool request_approved_for_test_ = false;

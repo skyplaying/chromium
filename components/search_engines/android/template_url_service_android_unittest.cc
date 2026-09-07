@@ -12,6 +12,9 @@
 #include "base/command_line.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
+#include "components/omnibox/common/omnibox_feature_configs.h"
+#include "components/omnibox/common/omnibox_features.h"
 #include "components/regional_capabilities/regional_capabilities_switches.h"
 #include "components/search_engines/search_engine_choice/search_engine_choice_utils.h"
 #include "components/search_engines/search_engines_pref_names.h"
@@ -156,6 +159,39 @@ TEST_F(TemplateUrlServiceAndroidUnitTest, EditSearchEngine) {
   EXPECT_EQ(t_url->url(), new_url);
 
   EXPECT_FALSE(template_url_service().GetTemplateURLForKeyword(keyword));
+}
+
+TEST_F(TemplateUrlServiceAndroidUnitTest, AddSearchEngine) {
+  const std::u16string keyword = u"chromium";
+  const std::u16string short_name = u"Add Test";
+  const std::string search_url_user = "http://chromium.org/search?q=%s";
+  const std::string search_url_internal =
+      "http://chromium.org/search?q={searchTerms}";
+
+  EXPECT_TRUE(template_url_service_android().AddSearchEngine(
+      env(), short_name, keyword, search_url_user));
+
+  TemplateURL* t_url = template_url_service().GetTemplateURLForKeyword(keyword);
+  ASSERT_TRUE(t_url);
+  EXPECT_EQ(t_url->short_name(), short_name);
+  EXPECT_EQ(t_url->url(), search_url_internal);
+  EXPECT_FALSE(t_url->safe_for_autoreplace());
+  EXPECT_EQ(t_url->is_active(), TemplateURLData::ActiveStatus::kTrue);
+}
+
+TEST_F(TemplateUrlServiceAndroidUnitTest, AddSearchEngineFailed_KeywordExists) {
+  const std::u16string keyword = u"chromium";
+  TemplateURLData data;
+  data.SetShortName(u"Existing");
+  data.SetKeyword(keyword);
+  data.SetURL("http://chromium.org/search/existing");
+  template_url_service().Add(std::make_unique<TemplateURL>(data));
+
+  const std::u16string short_name = u"Existing2";
+  const std::string search_url = "http://chromium.org/search/add";
+
+  EXPECT_FALSE(template_url_service_android().AddSearchEngine(
+      env(), short_name, keyword, search_url));
 }
 
 TEST_F(TemplateUrlServiceAndroidUnitTest,
@@ -346,5 +382,153 @@ TEST_F(TemplateUrlServiceAndroidUnitTest, FilterTemplateUrlsByCategory) {
         input_urls, Category::kExtension);
     EXPECT_EQ(result.size(), 1u);
     EXPECT_EQ(result[0], t_extension);
+  }
+}
+
+TEST_F(TemplateUrlServiceAndroidUnitTest, ActivateAndDeactivateSearchEngine) {
+  const std::u16string keyword = u"chromium";
+  TemplateURLData data;
+  data.SetShortName(u"Activate Test");
+  data.SetKeyword(keyword);
+  data.SetURL("http://chromium.org/search/activate");
+  template_url_service().Add(std::make_unique<TemplateURL>(data));
+  EXPECT_EQ(
+      template_url_service().GetTemplateURLForKeyword(keyword)->is_active(),
+      TemplateURLData::ActiveStatus::kUnspecified);
+
+  template_url_service_android().ActivateSearchEngine(env(), keyword);
+  EXPECT_EQ(
+      template_url_service().GetTemplateURLForKeyword(keyword)->is_active(),
+      TemplateURLData::ActiveStatus::kTrue);
+
+  template_url_service_android().DeactivateSearchEngine(env(), keyword);
+  EXPECT_EQ(
+      template_url_service().GetTemplateURLForKeyword(keyword)->is_active(),
+      TemplateURLData::ActiveStatus::kFalse);
+}
+
+TEST_F(TemplateUrlServiceAndroidUnitTest, GetDisplayUrl) {
+  const std::u16string keyword = u"chromium";
+  TemplateURLData data;
+  data.SetShortName(u"Display Test");
+  data.SetKeyword(keyword);
+  data.SetURL("http://chromium.org/search?q={searchTerms}");
+  TemplateURL* t_url =
+      template_url_service().Add(std::make_unique<TemplateURL>(data));
+
+  ASSERT_TRUE(t_url);
+
+  const std::u16string display_url =
+      template_url_service_android().GetDisplayUrl(
+          env(), reinterpret_cast<intptr_t>(t_url));
+
+  EXPECT_EQ(display_url, u"http://chromium.org/search?q=%s");
+}
+
+TEST_F(TemplateUrlServiceAndroidUnitTest, GetTemplateUrlsByCategory_Sorting) {
+  using Category = TemplateUrlServiceAndroid::TemplateUrlCategory;
+
+  // Create engines in a non-sorted order.
+  // a: Non-managed
+  TemplateURLData data_a;
+  data_a.SetShortName(u"a");
+  data_a.SetKeyword(u"a");
+  data_a.SetURL("http://a.com/q={searchTerms}");
+  data_a.is_active = TemplateURLData::ActiveStatus::kTrue;
+  data_a.safe_for_autoreplace = false;
+  TemplateURL* t_a =
+      template_url_service().Add(std::make_unique<TemplateURL>(data_a));
+
+  // b: Managed
+  TemplateURLData data_b;
+  data_b.SetShortName(u"b");
+  data_b.SetKeyword(u"b");
+  data_b.SetURL("http://b.com/q={searchTerms}");
+  data_b.is_active = TemplateURLData::ActiveStatus::kTrue;
+  data_b.safe_for_autoreplace = false;
+  data_b.policy_origin = TemplateURLData::PolicyOrigin::kSiteSearch;
+  TemplateURL* t_b =
+      template_url_service().Add(std::make_unique<TemplateURL>(data_b));
+
+  // c: Non-managed
+  TemplateURLData data_c;
+  data_c.SetShortName(u"c");
+  data_c.SetKeyword(u"c");
+  data_c.SetURL("http://c.com/q={searchTerms}");
+  data_c.is_active = TemplateURLData::ActiveStatus::kTrue;
+  data_c.safe_for_autoreplace = false;
+  TemplateURL* t_c =
+      template_url_service().Add(std::make_unique<TemplateURL>(data_c));
+
+  // d: Managed
+  TemplateURLData data_d;
+  data_d.SetShortName(u"d");
+  data_d.SetKeyword(u"d");
+  data_d.SetURL("http://d.com/q={searchTerms}");
+  data_d.is_active = TemplateURLData::ActiveStatus::kTrue;
+  data_d.safe_for_autoreplace = false;
+  data_d.policy_origin = TemplateURLData::PolicyOrigin::kSiteSearch;
+  TemplateURL* t_d =
+      template_url_service().Add(std::make_unique<TemplateURL>(data_d));
+
+  auto result = template_url_service_android().GetTemplateUrlsByCategory(
+      env(), Category::kActiveSiteSearch);
+
+  // Result contains other engines from setup so filter them out.
+  std::vector<const TemplateURL*> filtered_result;
+  for (const auto* turl : result) {
+    if (turl == t_a || turl == t_b || turl == t_c || turl == t_d) {
+      filtered_result.push_back(turl);
+    }
+  }
+
+  ASSERT_EQ(filtered_result.size(), 4u);
+  EXPECT_EQ(filtered_result[0], t_b);
+  EXPECT_EQ(filtered_result[1], t_d);
+  EXPECT_EQ(filtered_result[2], t_a);
+  EXPECT_EQ(filtered_result[3], t_c);
+}
+
+TEST_F(TemplateUrlServiceAndroidUnitTest, GetDisabledStarterPackIds) {
+  // Enable features
+  {
+    omnibox_feature_configs::ScopedConfigForTesting<
+        omnibox_feature_configs::ContextualSearch>
+        scoped_config;
+    scoped_config.Get().starter_pack_page = true;
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndEnableFeature(omnibox::kStarterPackExpansion);
+
+    auto disabled_ids =
+        template_url_service_android().GetDisabledStarterPackIds();
+    EXPECT_FALSE(
+        disabled_ids.Has(template_url_starter_pack_data::StarterPackId::kPage));
+    EXPECT_FALSE(disabled_ids.Has(
+        template_url_starter_pack_data::StarterPackId::kGemini));
+
+    // @bookmarks is disabled by default.
+    EXPECT_TRUE(disabled_ids.Has(
+        template_url_starter_pack_data::StarterPackId::kBookmarks));
+  }
+
+  // Disable features
+  {
+    omnibox_feature_configs::ScopedConfigForTesting<
+        omnibox_feature_configs::ContextualSearch>
+        scoped_config;
+    scoped_config.Get().starter_pack_page = false;
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitAndDisableFeature(omnibox::kStarterPackExpansion);
+
+    auto disabled_ids =
+        template_url_service_android().GetDisabledStarterPackIds();
+    EXPECT_TRUE(
+        disabled_ids.Has(template_url_starter_pack_data::StarterPackId::kPage));
+    EXPECT_TRUE(disabled_ids.Has(
+        template_url_starter_pack_data::StarterPackId::kGemini));
+
+    // @bookmarks is disabled by default.
+    EXPECT_TRUE(disabled_ids.Has(
+        template_url_starter_pack_data::StarterPackId::kBookmarks));
   }
 }

@@ -16,15 +16,17 @@
 #include "base/callback_list.h"
 #include "base/check_is_test.h"
 #include "base/gtest_prod_util.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "components/content_settings/core/common/content_settings.h"
+#include "components/permissions/embedded_permission_prompt_flow_model.h"
 #include "components/permissions/features.h"
 #include "components/permissions/permission_prompt.h"
 #include "components/permissions/permission_request_queue.h"
-#include "components/permissions/permission_uma_util.h"
+#include "components/permissions/permission_uma_constants.h"
 #include "components/permissions/prediction_service/permission_ui_selector.h"
 #include "components/permissions/request_type.h"
 #include "components/permissions/resolvers/permission_prompt_options.h"
@@ -47,6 +49,7 @@ class MockPermissionRequestManager;
 }  // namespace test
 
 namespace permissions {
+class EmbeddedPermissionPromptFlowModel;
 class PermissionRequest;
 enum class PermissionAction;
 enum class PermissionPromptDisposition;
@@ -183,7 +186,8 @@ class PermissionRequestManager
   void OnVisibilityChanged(content::Visibility visibility) override;
 
   // PermissionPrompt::Delegate:
-  const std::vector<std::unique_ptr<PermissionRequest>>& Requests() override;
+  const std::vector<std::unique_ptr<PermissionRequest>>& Requests()
+      const override;
   GURL GetRequestingOrigin() const override;
   GURL GetEmbeddingOrigin() const override;
   void Accept(const PromptOptions& prompt_options) override;
@@ -202,6 +206,8 @@ class PermissionRequestManager
   void SetDismissOnTabClose() override;
   void SetPromptShown() override;
   GeolocationAccuracy GetInitialGeolocationAccuracySelection() const override;
+  std::optional<GeolocationPromptType> GetGeolocationPromptType()
+      const override;
   void SetDecisionTime() override;
   void SetManageClicked() override;
   void SetLearnMoreClicked() override;
@@ -209,9 +215,10 @@ class PermissionRequestManager
   content::WebContents* GetAssociatedWebContents() override;
   bool RecreateView() override;
   const PermissionPrompt* GetCurrentPrompt() const override;
-  // Returns true if there is a request in progress that is initiated by an
-  // embedded permission element.
-  bool IsCurrentRequestEmbeddedPermissionElementInitiated() const;
+  EmbeddedPermissionPromptFlowModel* GetEmbeddedPromptFlowModel()
+      const override;
+  void CalculateCurrentVariantForEmbeddedPrompt() override;
+  void AdvanceOrFinalizeEmbeddedPromptFlow() override;
 
   // Returns the bounds of the active permission prompt view if we're
   // displaying one.
@@ -305,7 +312,16 @@ class PermissionRequestManager
     embedding_origin_for_testing_ = embedding_origin;
   }
 
-  base::ObserverList<Observer>* get_observer_list_for_testing() {
+  void set_requesting_origin_for_testing(const GURL& requesting_origin) {
+    requesting_origin_for_testing_ = requesting_origin;
+  }
+
+  base::ObserverList<
+      Observer,
+      /*check_empty=*/false,
+      /*allow_reentrancy=*/
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>*
+  get_observer_list_for_testing() {
     CHECK_IS_TEST();
     return &observer_list_;
   }
@@ -319,6 +335,12 @@ class PermissionRequestManager
   // For permissions that have visible views, we should only record
   // PromptResolved metrics, for ask prompts.
   bool ShouldRecordUmaForCurrentPrompt() const;
+
+#if BUILDFLAG(IS_ANDROID)
+  bool has_requested_notifications() const {
+    return has_requested_notifications_;
+  }
+#endif  // BUILDFLAG(IS_ANDROID)
 
  private:
   friend class test::PermissionRequestManagerTestApi;
@@ -345,14 +367,6 @@ class PermissionRequestManager
     kFinalize
   };
 
-  struct lex_compare {
-    bool operator()(const base::WeakPtr<PermissionRequest>& lhs,
-                    const base::WeakPtr<PermissionRequest>& rhs) const {
-      CHECK(lhs);
-      CHECK(rhs);
-      return lhs.get() < rhs.get();
-    }
-  };
   // Reprioritize the current requests (preempting, finalizing) based on what
   // type of UI has been shown for `requests_` and current pending requests
   // queue.
@@ -375,11 +389,11 @@ class PermissionRequestManager
   //  RenderFrameHost::IsInactiveAndDisallowActivation()
 
   bool HasActiveSourceFrameOrDisallowActivationOtherwise(
-      PermissionRequest* request) const;
+      const PermissionRequest& request) const;
 
   // Cancels a request and removes it from |request_sources_map_| and
   // |validated_requests_|.
-  void FinalizeAndCancelRequest(PermissionRequest* request);
+  void FinalizeAndCancelRequest(PermissionRequest& request);
 
   // Adds `request` into `pending_permission_requests_`, and request's
   // `source_frame` into `request_sources_map_`.
@@ -410,9 +424,8 @@ class PermissionRequestManager
   void ResetViewStateForCurrentRequest();
 
   // Records metrics and informs embargo and autoblocker about the requests
-  // being decided. Based on |view_->ShouldFinalizeRequestAfterDecided()| it
-  // will also call |FinalizeCurrentRequests()|. Otherwise a separate
-  // |FinalizeCurrentRequests()| call must be made to release the |view_|.
+  // being decided and calls |FinalizeCurrentRequests()| or advances embedded
+  // flow.
   void CurrentRequestsDecided(PermissionAction permission_action,
                               const PromptOptions& prompt_options);
 
@@ -487,10 +500,6 @@ class PermissionRequestManager
   // access.
   bool IsCurrentRequestExclusiveAccess() const;
 
-  // Returns true when the current request should be finalized together with the
-  // permission decision.
-  bool ShouldFinalizeRequestAfterDecided(PermissionAction action) const;
-
   // Calculate and record the PermissionEmbargoStatus.
   PermissionEmbargoStatus RecordActionAndGetEmbargoStatus(
       content::BrowserContext* browser_context,
@@ -505,13 +514,19 @@ class PermissionRequestManager
 
   ContentSetting GetRequestInitialStatus(PermissionRequest* request);
 
+  // Adopts a TabInterface if not already adopted (e.g. for discarded or
+  // prerendered tabs where TabInterface lookup is created after helper
+  // attachment).
+  void AdoptTabInterfaceIfNeeded(tabs::TabInterface* tab_interface);
+
   void RegisterTabSubscriptions(tabs::TabInterface* tab_interface);
   void OnTabActiveStatusChanged(bool is_active,
                                 tabs::TabInterface* tab_interface);
-  void OnTabVisibleStatusChanged(bool is_visible,
-                                 tabs::TabInterface* tab_interface);
   void OnTabDetached(tabs::TabInterface* tab_interface,
                      tabs::TabInterface::DetachReason reason);
+  void OnTabWillDiscardContents(tabs::TabInterface* tab_interface,
+                                content::WebContents* old_contents,
+                                content::WebContents* new_contents);
   void OnTabAttached(tabs::TabInterface* tab_interface);
   void OnTabActiveChanged();
 
@@ -525,6 +540,8 @@ class PermissionRequestManager
   // the object alive. The infobar system hides the actual infobar UI and modals
   // prevent tab switching.
   std::unique_ptr<PermissionPrompt> view_;
+  std::unique_ptr<EmbeddedPermissionPromptFlowModel>
+      embedded_prompt_flow_model_;
 
   // The disposition for the currently active permission prompt, if any.
   // Recorded separately because the `view_` might not be available at prompt
@@ -559,21 +576,31 @@ class PermissionRequestManager
   // Maps each PermissionRequest currently in |requests_| or
   // |pending_permission_requests_| to which RenderFrameHost it originated from.
   // Note that no date is stored for |duplicate_requests_|.
-  std::map<PermissionRequest*, PermissionRequestSource> request_sources_map_;
+  std::map<base::raw_ref<PermissionRequest>, PermissionRequestSource>
+      request_sources_map_;
 
   // Sequence of requests from pending queue will be marked as validated, when
   // we are extracting a group of requests from the queue to show to user. This
   // is an immature solution to avoid an infinitive loop of preempting, we would
   // not prempt a request if the incoming request is already validated.
-  std::vector<base::WeakPtr<PermissionRequest>> validated_requests_;
+  std::vector<base::raw_ref<PermissionRequest>> validated_requests_;
 
-  base::ObserverList<Observer> observer_list_;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      Observer,
+      /*check_empty=*/false,
+      /*allow_reentrancy=*/
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>
+      observer_list_;
   AutoResponseType auto_response_for_test_ = NONE;
   PromptOptions auto_response_prompt_options_for_test_ = std::monostate();
 
   // Suppress notification permission prompts in this tab, regardless of the
   // origin requesting the permission.
   bool is_notification_prompt_cooldown_active_ = false;
+
+  // Whether the current page is the result of a same-origin navigation.
+  bool had_same_origin_navigation_ = false;
 
   // A vector of selectors which decide if the quiet prompt UI should be used
   // to display permission requests. Sorted from the highest priority to the
@@ -666,6 +693,8 @@ class PermissionRequestManager
 
   std::optional<GURL> embedding_origin_for_testing_;
 
+  std::optional<GURL> requesting_origin_for_testing_;
+
   // A timer is used to pre-ignore the permission request if it's been displayed
   // as a quiet chip.
   base::OneShotTimer preignore_timer_;
@@ -681,6 +710,11 @@ class PermissionRequestManager
   // |requests_|.
   std::map<PermissionRequest*, ContentSetting>
       current_requests_initial_statuses_;
+
+#if BUILDFLAG(IS_ANDROID)
+  // Whether the current page already requested notification permission.
+  bool has_requested_notifications_ = false;
+#endif  // BUILDFLAG(IS_ANDROID)
 
   base::WeakPtrFactory<PermissionRequestManager> weak_factory_{this};
   WEB_CONTENTS_USER_DATA_KEY_DECL();

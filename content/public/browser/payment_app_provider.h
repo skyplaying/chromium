@@ -8,6 +8,7 @@
 #include "base/functional/callback_forward.h"
 #include "content/common/content_export.h"
 #include "third_party/blink/public/mojom/payments/payment_app.mojom.h"
+#include "third_party/blink/public/mojom/payments/payment_app_events.mojom.h"
 
 class SkBitmap;
 
@@ -18,6 +19,7 @@ class Origin;
 namespace content {
 
 class WebContents;
+struct GlobalRenderFrameHostId;
 struct SupportedDelegations;
 
 // This is providing the service worker based payment app related APIs to
@@ -51,6 +53,7 @@ class CONTENT_EXPORT PaymentAppProvider {
       payments::mojom::PaymentRequestEventDataPtr event_data,
       InvokePaymentAppCallback callback) = 0;
   virtual void InstallAndInvokePaymentApp(
+      GlobalRenderFrameHostId requesting_frame_id,
       payments::mojom::PaymentRequestEventDataPtr event_data,
       const std::string& app_name,
       const SkBitmap& app_icon,
@@ -107,6 +110,7 @@ class CONTENT_EXPORT PaymentAppProvider {
       const GURL& service_worker_javascript_file_url,
       const GURL& service_worker_scope,
       const std::string& payment_method_identifier,
+      GlobalRenderFrameHostId requesting_frame_id,
       base::OnceCallback<void(bool success)> callback) = 0;
 
  protected:

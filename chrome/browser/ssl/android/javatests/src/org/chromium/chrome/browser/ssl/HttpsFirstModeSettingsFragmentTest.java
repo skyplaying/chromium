@@ -22,12 +22,11 @@ import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.init.ChromeBrowserInitializer;
 import org.chromium.chrome.browser.profiles.ProfileManager;
-import org.chromium.chrome.browser.settings.SettingsActivityTestRule;
+import org.chromium.chrome.browser.settings.SettingsTestRule;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.util.AdvancedProtectionTestRule;
 import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
 import org.chromium.components.browser_ui.widget.RadioButtonWithDescription;
-import org.chromium.components.browser_ui.widget.RadioButtonWithDescriptionLayout;
 import org.chromium.components.policy.test.annotations.Policies;
 
 /** Tests for {@link HttpsFirstModeSettingsFragment}. */
@@ -47,8 +46,8 @@ public class HttpsFirstModeSettingsFragmentTest {
             new AdvancedProtectionTestRule();
 
     @Rule
-    public SettingsActivityTestRule<HttpsFirstModeSettingsFragment> mSettingsTestRule =
-            new SettingsActivityTestRule<>(HttpsFirstModeSettingsFragment.class);
+    public SettingsTestRule<HttpsFirstModeSettingsFragment> mSettingsTestRule =
+            new SettingsTestRule<>(HttpsFirstModeSettingsFragment.class);
 
     @Before
     public void setUp() {
@@ -58,9 +57,6 @@ public class HttpsFirstModeSettingsFragmentTest {
     private HttpsFirstModeSettingsFragment mHttpsFirstModeSettingsFragment;
     private ChromeSwitchPreference mHttpsFirstModeTogglePref;
     private HttpsFirstModeVariantPreference mHttpsFirstModeVariantPref;
-    private RadioButtonWithDescriptionLayout mHttpsFirstModeVariantGroup;
-    private RadioButtonWithDescription mHttpsFirstModeVariantStrict;
-    private RadioButtonWithDescription mHttpsFirstModeVariantBalanced;
     private Preference mEnforcedByAdvancedProtectionWarning;
 
     private void startSettings() {
@@ -105,28 +101,27 @@ public class HttpsFirstModeSettingsFragmentTest {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     @HttpsFirstModeSetting int currentState = getHttpsFirstModeState();
-                    boolean strict_mode_checked =
-                            currentState == HttpsFirstModeSetting.ENABLED_FULL;
-                    boolean balanced_mode_checked =
+                    boolean strictModeChecked = currentState == HttpsFirstModeSetting.ENABLED_FULL;
+                    boolean balancedModeChecked =
                             (currentState == HttpsFirstModeSetting.ENABLED_BALANCED
                                     || currentState == HttpsFirstModeSetting.DISABLED);
-                    boolean toggle_on = currentState != HttpsFirstModeSetting.DISABLED;
+                    boolean toggleOn = currentState != HttpsFirstModeSetting.DISABLED;
                     Assert.assertEquals(
                             ASSERT_RADIO_BUTTON_CHECKED,
-                            strict_mode_checked,
+                            strictModeChecked,
                             getStrictModeButton().isChecked());
                     Assert.assertEquals(
                             ASSERT_RADIO_BUTTON_CHECKED,
-                            balanced_mode_checked,
+                            balancedModeChecked,
                             getBalancedModeButton().isChecked());
                     Assert.assertEquals(
                             ASSERT_RADIO_BUTTON_CHECKED,
-                            toggle_on,
+                            toggleOn,
                             mHttpsFirstModeTogglePref.isChecked());
                     // Variant pref is enabled if toggle is on.
                     Assert.assertEquals(
                             "Incorrect variant pref enabled state.",
-                            toggle_on,
+                            toggleOn,
                             mHttpsFirstModeVariantPref.isEnabled());
                 });
     }

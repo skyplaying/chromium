@@ -13,6 +13,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/about_signin_internals_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
+#include "chrome/common/channel_info.h"
 #include "chrome/common/url_constants.h"
 #include "components/grit/signin_internals_resources.h"
 #include "components/grit/signin_internals_resources_map.h"
@@ -20,6 +21,8 @@
 #include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/accounts_in_cookie_jar_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/signin/public/identity_manager/tribool.h"
+#include "components/version_info/channel.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "services/network/public/mojom/content_security_policy.mojom.h"
@@ -37,9 +40,8 @@ namespace {
 void CreateAndAddSignInInternalsHTMLSource(Profile* profile) {
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
       profile, chrome::kChromeUISignInInternalsHost);
-  webui::SetupWebUIDataSource(
-      source, base::span<const webui::ResourcePath>(kSigninInternalsResources),
-      IDR_SIGNIN_INTERNALS_SIGNIN_INDEX_HTML);
+  webui::SetupWebUIDataSource(source, kSigninInternalsResources,
+                              IDR_SIGNIN_INTERNALS_SIGNIN_INDEX_HTML);
 }
 
 #if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
@@ -99,7 +101,7 @@ SignInInternalsHandler::SignInInternalsHandler() = default;
 
 SignInInternalsHandler::~SignInInternalsHandler() {
   // This handler can be destroyed without OnJavascriptDisallowed() ever being
-  // called (https://crbug.com/1199198). Call it to ensure that `this` is
+  // called (https://crbug.com/40055554). Call it to ensure that `this` is
   // removed as an observer.
   OnJavascriptDisallowed();
 }
@@ -124,6 +126,60 @@ void SignInInternalsHandler::RegisterMessages() {
       "getSigninInfo",
       base::BindRepeating(&SignInInternalsHandler::HandleGetSignInInfo,
                           base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
+      "overrideCapability",
+      base::BindRepeating(&SignInInternalsHandler::HandleOverrideCapability,
+                          base::Unretained(this)));
+}
+
+void SignInInternalsHandler::HandleOverrideCapability(
+    const base::ListValue& args) {
+  AllowJavascript();
+
+  CHECK_EQ(args.size(), 3u);
+  std::string account_id_str = args[0].GetString();
+  std::string capability_name = args[1].GetString();
+  std::string value_str = args[2].GetString();
+
+  Profile* profile = Profile::FromWebUI(web_ui());
+  if (!profile) {
+    return;
+  }
+
+  AboutSigninInternals* about_signin_internals =
+      AboutSigninInternalsFactory::GetForProfile(profile);
+  if (!about_signin_internals) {
+    return;
+  }
+
+  CoreAccountId account_id = CoreAccountId::FromString(account_id_str);
+  if (!about_signin_internals->CanOverrideAccountCapability(
+          account_id, capability_name, chrome::GetChannel())) {
+    return;
+  }
+
+  signin::IdentityManager* identity_manager =
+      IdentityManagerFactory::GetForProfile(profile);
+  if (!identity_manager) {
+    return;
+  }
+
+  std::optional<signin::Tribool> override_value;
+
+  if (value_str == "True") {
+    override_value = signin::Tribool::kTrue;
+  } else if (value_str == "False") {
+    override_value = signin::Tribool::kFalse;
+  } else if (value_str == "Unknown") {
+    override_value = signin::Tribool::kUnknown;
+  } else if (value_str.empty()) {
+    override_value = std::nullopt;
+  } else {
+    NOTREACHED() << "Invalid override value: " << value_str;
+  }
+
+  identity_manager->SetCapabilityOverride(account_id, capability_name,
+                                          override_value);
 }
 
 void SignInInternalsHandler::HandleGetSignInInfo(const base::ListValue& args) {
@@ -145,6 +201,7 @@ void SignInInternalsHandler::HandleGetSignInInfo(const base::ListValue& args) {
   base::DictValue signin_status =
       about_signin_internals ? about_signin_internals->GetSigninStatus()
                              : base::DictValue();
+  AddAccountCapabilitiesOverridesInfo(signin_status);
 #if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
   AppendBoundSessionInfo(
       signin_status,
@@ -163,16 +220,16 @@ void SignInInternalsHandler::HandleGetSignInInfo(const base::ListValue& args) {
       identity_manager->GetAccountsInCookieJar();
   if (accounts_in_cookie_jar.AreAccountsFresh()) {
     about_signin_internals->OnAccountsInCookieUpdated(
-        accounts_in_cookie_jar,
-        GoogleServiceAuthError(GoogleServiceAuthError::NONE));
+        accounts_in_cookie_jar, GoogleServiceAuthError::AuthErrorNone());
   }
 }
 
 void SignInInternalsHandler::OnSigninStateChanged(const base::DictValue& info) {
+  base::DictValue signin_status = info.Clone();
+  AddAccountCapabilitiesOverridesInfo(signin_status);
 #if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
   Profile* profile = Profile::FromWebUI(web_ui());
   if (profile) {
-    base::DictValue signin_status = info.Clone();
     AppendBoundSessionInfo(
         signin_status,
         BoundSessionCookieRefreshServiceFactory::GetForProfile(profile),
@@ -182,10 +239,63 @@ void SignInInternalsHandler::OnSigninStateChanged(const base::DictValue& info) {
   }
 #endif  // BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
 
-  FireWebUIListener("signin-info-changed", info);
+  FireWebUIListener("signin-info-changed", signin_status);
 }
 
 void SignInInternalsHandler::OnCookieAccountsFetched(
     const base::DictValue& info) {
   FireWebUIListener("update-cookie-accounts", info);
+}
+
+void SignInInternalsHandler::AddAccountCapabilitiesOverridesInfo(
+    base::DictValue& signin_status) {
+  Profile* profile = Profile::FromWebUI(web_ui());
+  if (!profile) {
+    return;
+  }
+  AboutSigninInternals* about_signin_internals =
+      AboutSigninInternalsFactory::GetForProfile(profile);
+  if (!about_signin_internals) {
+    return;
+  }
+
+  base::ListValue* account_capabilities =
+      signin_status.FindList("accountCapabilities");
+  bool any_capability_can_override = false;
+  if (account_capabilities) {
+    for (base::Value& item : *account_capabilities) {
+      if (!item.is_dict()) {
+        continue;
+      }
+      base::DictValue& account_dict = item.GetDict();
+      const std::string* account_id_str = account_dict.FindString("accountId");
+      if (!account_id_str) {
+        continue;
+      }
+      CoreAccountId account_id = CoreAccountId::FromString(*account_id_str);
+      base::ListValue* capabilities_list =
+          account_dict.FindList("capabilities");
+      if (!capabilities_list) {
+        continue;
+      }
+      for (base::Value& cap_item : *capabilities_list) {
+        if (!cap_item.is_dict()) {
+          continue;
+        }
+        base::DictValue& cap_dict = cap_item.GetDict();
+        const std::string* cap_name = cap_dict.FindString("name");
+        if (!cap_name) {
+          continue;
+        }
+        bool can_override =
+            about_signin_internals->CanOverrideAccountCapability(
+                account_id, *cap_name, chrome::GetChannel());
+        cap_dict.Set("can_override", can_override);
+        if (can_override) {
+          any_capability_can_override = true;
+        }
+      }
+    }
+  }
+  signin_status.Set("canOverrideAccountInfo", any_capability_can_override);
 }

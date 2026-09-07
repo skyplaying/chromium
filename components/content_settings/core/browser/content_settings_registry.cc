@@ -303,16 +303,6 @@ void ContentSettingsRegistry::Init() {
            ContentSettingsInfo::INHERIT_IN_INCOGNITO,
            PermissionSettingsInfo::EXCEPTIONS_ON_SECURE_AND_INSECURE_ORIGINS);
 
-  Register(ContentSettingsType::TPCD_HEURISTICS_GRANTS,
-           "3pcd-heuristics-grants", CONTENT_SETTING_BLOCK,
-           WebsiteSettingsInfo::UNSYNCABLE,
-           /*allowlisted_primary_schemes=*/{},
-           /*valid_settings=*/{CONTENT_SETTING_ALLOW, CONTENT_SETTING_BLOCK},
-           WebsiteSettingsInfo::REQUESTING_AND_TOP_SCHEMEFUL_SITE_SCOPE,
-           WebsiteSettingsRegistry::ALL_PLATFORMS,
-           ContentSettingsInfo::INHERIT_IF_LESS_PERMISSIVE,
-           PermissionSettingsInfo::EXCEPTIONS_ON_SECURE_AND_INSECURE_ORIGINS);
-
   Register(ContentSettingsType::STORAGE_ACCESS_HEADER_ORIGIN_TRIAL,
            "storage-access-header-origin-trial", CONTENT_SETTING_BLOCK,
            WebsiteSettingsInfo::UNSYNCABLE,
@@ -361,7 +351,8 @@ void ContentSettingsRegistry::Init() {
   // contexts.
   Register(ContentSettingsType::SENSORS, "sensors", CONTENT_SETTING_ALLOW,
            WebsiteSettingsInfo::UNSYNCABLE, /*allowlisted_primary_schemes=*/{},
-           /*valid_settings=*/{CONTENT_SETTING_ALLOW, CONTENT_SETTING_BLOCK},
+           /*valid_settings=*/
+           {CONTENT_SETTING_ALLOW, CONTENT_SETTING_BLOCK, CONTENT_SETTING_ASK},
            WebsiteSettingsInfo::TOP_ORIGIN_ONLY_SCOPE,
            WebsiteSettingsRegistry::DESKTOP |
                WebsiteSettingsRegistry::PLATFORM_ANDROID,
@@ -422,7 +413,8 @@ void ContentSettingsRegistry::Init() {
            WebsiteSettingsInfo::UNSYNCABLE, /*allowlisted_primary_schemes=*/{},
            /*valid_settings=*/{CONTENT_SETTING_ASK, CONTENT_SETTING_BLOCK},
            WebsiteSettingsInfo::TOP_ORIGIN_ONLY_SCOPE,
-           WebsiteSettingsRegistry::DESKTOP,
+           WebsiteSettingsRegistry::DESKTOP |
+               WebsiteSettingsRegistry::PLATFORM_ANDROID,
            ContentSettingsInfo::INHERIT_IF_LESS_PERMISSIVE,
            PermissionSettingsInfo::EXCEPTIONS_ON_SECURE_ORIGINS_ONLY);
 
@@ -841,15 +833,35 @@ void ContentSettingsRegistry::Init() {
            WebsiteSettingsRegistry::PLATFORM_CHROMEOS,
            ContentSettingsInfo::INHERIT_IN_INCOGNITO,
            PermissionSettingsInfo::EXCEPTIONS_ON_SECURE_ORIGINS_ONLY);
+
+  Register(ContentSettingsType::SUB_APPS_WITHOUT_PROMPTS,
+           "sub-apps-without-prompts", CONTENT_SETTING_ASK,
+           WebsiteSettingsInfo::UNSYNCABLE,
+           /*allowlisted_primary_schemes=*/{},
+           /*valid_settings=*/
+           {CONTENT_SETTING_ALLOW, CONTENT_SETTING_BLOCK, CONTENT_SETTING_ASK},
+           WebsiteSettingsInfo::TOP_ORIGIN_ONLY_SCOPE,
+           WebsiteSettingsRegistry::DESKTOP,
+           ContentSettingsInfo::DONT_INHERIT_IN_INCOGNITO,
+           PermissionSettingsInfo::EXCEPTIONS_ON_SECURE_ORIGINS_ONLY);
+
+  Register(ContentSettingsType::INLINE_CUE_MENU, "inline-cue-menu",
+           CONTENT_SETTING_ALLOW, WebsiteSettingsInfo::SYNCABLE,
+           /*allowlisted_primary_schemes=*/{},
+           /*valid_settings=*/{CONTENT_SETTING_ALLOW, CONTENT_SETTING_BLOCK},
+           WebsiteSettingsInfo::TOP_ORIGIN_ONLY_SCOPE,
+           WebsiteSettingsRegistry::DESKTOP,
+           ContentSettingsInfo::INHERIT_IN_INCOGNITO,
+           PermissionSettingsInfo::EXCEPTIONS_ON_SECURE_AND_INSECURE_ORIGINS);
 }
 
 void ContentSettingsRegistry::Register(
     ContentSettingsType type,
-    const std::string& name,
+    std::string_view name,
     ContentSetting initial_default_value,
     WebsiteSettingsInfo::SyncStatus sync_status,
-    const std::vector<std::string>& allowlisted_primary_schemes,
-    const std::set<ContentSetting>& valid_settings,
+    base::span<const std::string_view> allowlisted_primary_schemes,
+    base::span<const ContentSetting> valid_settings,
     WebsiteSettingsInfo::ScopingType scoping_type,
     WebsiteSettingsRegistry::Platforms platforms,
     ContentSettingsInfo::IncognitoBehavior incognito_behavior,
@@ -862,9 +874,10 @@ void ContentSettingsRegistry::Register(
   auto delegate = std::make_unique<ContentSettingsInfo::Delegate>();
   auto* delegate_ptr = delegate.get();
   auto* permission_setting_info = permission_settings_registry_->Register(
-      type, name, initial_default_value, sync_status,
-      allowlisted_primary_schemes, scoping_type, platforms, origin_restriction,
-      std::move(delegate));
+      type, std::string(name), initial_default_value, sync_status,
+      std::vector<std::string>(allowlisted_primary_schemes.begin(),
+                               allowlisted_primary_schemes.end()),
+      scoping_type, platforms, origin_restriction, std::move(delegate));
 
   // PermissionSettingsRegistry::Register() will return nullptr if content
   // setting type is not used on the current platform and doesn't need to be
@@ -877,9 +890,11 @@ void ContentSettingsRegistry::Register(
   DCHECK(website_settings_registry_->Get(type)) << type;
 
   auto& info = content_settings_info_[type] =
-      std::make_unique<ContentSettingsInfo>(permission_setting_info,
-                                            delegate_ptr, valid_settings,
-                                            incognito_behavior);
+      std::make_unique<ContentSettingsInfo>(
+          permission_setting_info, delegate_ptr,
+          std::set<ContentSetting>(valid_settings.begin(),
+                                   valid_settings.end()),
+          incognito_behavior);
 
   if (type == ContentSettingsType::COOKIES) {
     info->set_third_party_cookie_allowed_secondary_schemes(

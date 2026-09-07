@@ -8,11 +8,12 @@
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
 #include "components/autofill/core/browser/payments/payments_network_interface_test_base.h"
 #include "components/autofill/core/browser/payments/payments_request_details.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace autofill::payments {
+namespace {
 
 class MultipleRequestPaymentsNetworkInterfaceTest
     : public PaymentsNetworkInterfaceTestBase,
@@ -313,7 +314,7 @@ class MultipleRequestGetVirtualCardEnrollmentDetailsTest
 
   void OnDidGetVirtualCardEnrollmentDetails(
       PaymentsRpcResult result,
-      const payments::GetDetailsForEnrollmentResponseDetails&
+      const GetDetailsForEnrollmentResponseDetails&
           get_details_for_enrollment_response_fields) {
     result_ = result;
     get_details_for_enrollment_response_fields_ =
@@ -413,4 +414,5 @@ TEST_P(MultipleRequestGetVirtualCardEnrollmentDetailsTest,
   EXPECT_EQ(result, result_);
 }
 
+}  // namespace
 }  // namespace autofill::payments

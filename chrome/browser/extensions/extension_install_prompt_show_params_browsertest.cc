@@ -4,8 +4,8 @@
 
 #include "chrome/browser/extensions/extension_install_prompt_show_params.h"
 
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/test/browser_test.h"
 #include "ui/aura/test/test_windows.h"
@@ -14,7 +14,7 @@ using ExtensionInstallPromptShowParamsTest = InProcessBrowserTest;
 
 IN_PROC_BROWSER_TEST_F(ExtensionInstallPromptShowParamsTest,
                        WasParentDestroyedOutsideOfRoot) {
-  aura::Window* context_window = browser()->window()->GetNativeWindow();
+  aura::Window* context_window = browser()->GetWindow()->GetNativeWindow();
 
   ExtensionInstallPromptShowParams params(GetProfile(), context_window);
   ASSERT_TRUE(context_window->GetRootWindow());

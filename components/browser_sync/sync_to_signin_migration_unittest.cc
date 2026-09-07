@@ -15,6 +15,9 @@
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/threading/thread_restrictions.h"
+#include "build/build_config.h"
+#include "components/bookmarks/common/bookmark_constants.h"
+#include "components/bookmarks/common/bookmark_features.h"
 #include "components/browser_sync/browser_sync_switches.h"
 #include "components/prefs/testing_pref_service.h"
 #include "components/signin/public/base/signin_pref_names.h"
@@ -34,6 +37,8 @@
 
 namespace browser_sync {
 namespace {
+
+#if !BUILDFLAG(IS_IOS)
 
 // Parameter controlling whether to use the synchronous or asynchronous
 // version of MaybeMigrateSyncingUserToSignedIn(...) function.
@@ -668,13 +673,21 @@ TEST_P(SyncToSigninMigrationMetricsTest, SyncAndAllDataTypesActive) {
   histograms.ExpectUniqueSample(
       "Sync.SyncToSigninMigration.MigrationType",
       IsMigrationEnabled() ? /*kMigrated*/ 1 : /*kNotMigratedYet*/ 3, 1);
+
   if (IsMigrationEnabled()) {
     histograms.ExpectTotalCount("Sync.SyncToSigninMigrationOutcome", 1);
     histograms.ExpectTotalCount("Sync.SyncToSigninMigrationTime", 1);
+    histograms.ExpectUniqueSample(
+        "Sync.SyncToSigninMigrationExecutionMode",
+        IsBlockingAllowed()
+            ? /*SyncToSigninMigrationExecutionMode::kSynchronous*/ 0
+            : /*SyncToSigninMigrationExecutionMode::kAsynchronous*/ 1,
+        1);
 
   } else {
     histograms.ExpectTotalCount("Sync.SyncToSigninMigrationOutcome", 0);
     histograms.ExpectTotalCount("Sync.SyncToSigninMigrationTime", 0);
+    histograms.ExpectTotalCount("Sync.SyncToSigninMigrationExecutionMode", 0);
   }
   // All the data type migrations should run - in "DryRun" mode if the feature
   // flag is disabled.
@@ -1519,10 +1532,21 @@ class SyncToSigninMigrationDataTypesTest
   }
 
   base::FilePath GetBookmarksLocalStorePath() const {
-    return fake_profile_dir_.GetPath().AppendASCII("Bookmarks");
+    return fake_profile_dir_.GetPath().Append(
+        bookmarks::kLocalOrSyncableBookmarksFileName);
   }
   base::FilePath GetBookmarksAccountStorePath() const {
-    return fake_profile_dir_.GetPath().AppendASCII("AccountBookmarks");
+    return fake_profile_dir_.GetPath().Append(
+        bookmarks::kAccountBookmarksFileName);
+  }
+
+  base::FilePath GetEncryptedBookmarksLocalStorePath() const {
+    return fake_profile_dir_.GetPath().Append(
+        bookmarks::kEncryptedLocalOrSyncableBookmarksFileName);
+  }
+  base::FilePath GetEncryptedBookmarksAccountStorePath() const {
+    return fake_profile_dir_.GetPath().Append(
+        bookmarks::kEncryptedAccountBookmarksFileName);
   }
 
   base::FilePath GetPasswordsLocalStorePath() const {
@@ -1670,6 +1694,129 @@ TEST_P(SyncToSigninMigrationDataTypesTest, MoveBookmarks_FolderNotWritable) {
       -base::File::FILE_ERROR_ACCESS_DENIED, 1);
 }
 #endif  // BUILDFLAG(IS_POSIX)
+
+TEST_P(SyncToSigninMigrationDataTypesTest,
+       MoveBookmarks_EncryptionEnabledAndEncryptionFilesExist) {
+  base::test::ScopedFeatureList encrypted_bookmarks_features(
+      bookmarks::kEncryptBookmarks);
+
+  // Both bookmark stores exist on disk for clear text and encrypted cases. The
+  // account store is empty, since it was unused pre-migration. This is the
+  // typical pre-migration state when the encryption feature is enabled.
+  base::WriteFile(GetBookmarksLocalStorePath(), "local bookmarks");
+  base::WriteFile(GetBookmarksAccountStorePath(), "");
+  base::WriteFile(GetEncryptedBookmarksLocalStorePath(),
+                  "encrypted local bookmarks");
+  base::WriteFile(GetEncryptedBookmarksAccountStorePath(), "");
+
+  base::HistogramTester histograms;
+
+  MaybeMigrateSyncingUserToSignedInWrapper(
+      IsBlockingAllowed(), fake_profile_dir_.GetPath(), &pref_service_);
+
+  // The local file should have been moved over the account one.
+  EXPECT_FALSE(base::PathExists(GetBookmarksLocalStorePath()));
+  EXPECT_TRUE(base::PathExists(GetBookmarksAccountStorePath()));
+  EXPECT_FALSE(base::PathExists(GetEncryptedBookmarksLocalStorePath()));
+  EXPECT_TRUE(base::PathExists(GetEncryptedBookmarksAccountStorePath()));
+
+  std::string account_contents;
+  ASSERT_TRUE(base::ReadFileToString(GetBookmarksAccountStorePath(),
+                                     &account_contents));
+  EXPECT_EQ(account_contents, "local bookmarks");
+  std::string encrypted_account_contents;
+  ASSERT_TRUE(base::ReadFileToString(GetEncryptedBookmarksAccountStorePath(),
+                                     &encrypted_account_contents));
+  EXPECT_EQ(encrypted_account_contents, "encrypted local bookmarks");
+
+  histograms.ExpectUniqueSample(
+      "Sync.SyncToSigninMigrationOutcome.BookmarksFileMove",
+      -base::File::FILE_OK, 1);
+  histograms.ExpectUniqueSample(
+      "Sync.SyncToSigninMigrationOutcome.EncryptedBookmarksFileMove",
+      -base::File::FILE_OK, 1);
+}
+
+TEST_P(SyncToSigninMigrationDataTypesTest,
+       MoveBookmarks_EncryptionFilesExistButEncryptionDisabled) {
+  base::test::ScopedFeatureList encrypted_bookmarks_features;
+  encrypted_bookmarks_features.InitAndDisableFeature(
+      bookmarks::kEncryptBookmarks);
+
+  // Both bookmark stores exist on disk for clear text and encrypted cases. The
+  // account store is empty, since it was unused pre-migration. This could
+  // happen if the encryption feature was enabled and then disabled.
+  base::WriteFile(GetBookmarksLocalStorePath(), "local bookmarks");
+  base::WriteFile(GetBookmarksAccountStorePath(), "");
+  base::WriteFile(GetEncryptedBookmarksLocalStorePath(),
+                  "encrypted local bookmarks");
+  base::WriteFile(GetEncryptedBookmarksAccountStorePath(), "");
+
+  base::HistogramTester histograms;
+
+  MaybeMigrateSyncingUserToSignedInWrapper(
+      IsBlockingAllowed(), fake_profile_dir_.GetPath(), &pref_service_);
+
+  // Clear text bookmark files should have been moved but not the encrypted
+  // ones.
+  EXPECT_FALSE(base::PathExists(GetBookmarksLocalStorePath()));
+  EXPECT_TRUE(base::PathExists(GetBookmarksAccountStorePath()));
+  EXPECT_TRUE(base::PathExists(GetEncryptedBookmarksLocalStorePath()));
+  EXPECT_TRUE(base::PathExists(GetEncryptedBookmarksAccountStorePath()));
+
+  std::string account_contents;
+  ASSERT_TRUE(base::ReadFileToString(GetBookmarksAccountStorePath(),
+                                     &account_contents));
+  EXPECT_EQ(account_contents, "local bookmarks");
+  std::string encrypted_account_contents;
+  ASSERT_TRUE(base::ReadFileToString(GetEncryptedBookmarksAccountStorePath(),
+                                     &encrypted_account_contents));
+  // Encrypted account store shouldn't have changed.
+  EXPECT_EQ(encrypted_account_contents, "");
+
+  histograms.ExpectUniqueSample(
+      "Sync.SyncToSigninMigrationOutcome.BookmarksFileMove",
+      -base::File::FILE_OK, 1);
+  histograms.ExpectTotalCount(
+      "Sync.SyncToSigninMigrationOutcome.EncryptedBookmarksFileMove", 0);
+}
+
+TEST_P(SyncToSigninMigrationDataTypesTest,
+       MoveBookmarks_EncryptionEnabledButEncryptionFilesDoNotExist) {
+  base::test::ScopedFeatureList encrypted_bookmarks_features(
+      bookmarks::kEncryptBookmarks);
+
+  // Both clear text bookmark stores exist on disk only but encrypted stores are
+  // missing. This could happen if this is the first time the profile loads
+  // since encryption was enabled or if an error occurs while creating encrypted
+  // files.
+  base::WriteFile(GetBookmarksLocalStorePath(), "local bookmarks");
+  base::WriteFile(GetBookmarksAccountStorePath(), "");
+
+  base::HistogramTester histograms;
+
+  MaybeMigrateSyncingUserToSignedInWrapper(
+      IsBlockingAllowed(), fake_profile_dir_.GetPath(), &pref_service_);
+
+  // The clear text local file should have been moved over the account one.
+  // Encrypted files should still be missing.
+  EXPECT_FALSE(base::PathExists(GetBookmarksLocalStorePath()));
+  EXPECT_TRUE(base::PathExists(GetBookmarksAccountStorePath()));
+  EXPECT_FALSE(base::PathExists(GetEncryptedBookmarksLocalStorePath()));
+  EXPECT_FALSE(base::PathExists(GetEncryptedBookmarksAccountStorePath()));
+
+  std::string account_contents;
+  ASSERT_TRUE(base::ReadFileToString(GetBookmarksAccountStorePath(),
+                                     &account_contents));
+  EXPECT_EQ(account_contents, "local bookmarks");
+
+  histograms.ExpectUniqueSample(
+      "Sync.SyncToSigninMigrationOutcome.BookmarksFileMove",
+      -base::File::FILE_OK, 1);
+  histograms.ExpectUniqueSample(
+      "Sync.SyncToSigninMigrationOutcome.EncryptedBookmarksFileMove",
+      -base::File::FILE_ERROR_NOT_FOUND, 1);
+}
 
 #if BUILDFLAG(IS_ANDROID)
 TEST_P(SyncToSigninMigrationDataTypesTest, MovePasswords_NoMoveOnAndroid) {
@@ -1828,6 +1975,23 @@ TEST_P(SyncToSigninMigrationDataTypesTest, MovePasswords_FolderNotWritable) {
       -base::File::FILE_ERROR_ACCESS_DENIED, 1);
 }
 #endif  // BUILDFLAG(IS_POSIX)
+
+TEST_P(SyncToSigninMigrationDataTypesTest, MarkStatsTableToBeCleanedUp) {
+  ASSERT_FALSE(pref_service_.GetBoolean(
+      syncer::prefs::kCleanUpStatsTableFromAccountPasswordStore));
+
+  base::HistogramTester histograms;
+  MaybeMigrateSyncingUserToSignedInWrapper(
+      IsBlockingAllowed(), fake_profile_dir_.GetPath(), &pref_service_);
+
+  // The clean-up does not happen right away, but rather a pref is set
+  // to mark that it should be cleaned up.
+  EXPECT_TRUE(pref_service_.GetBoolean(
+      syncer::prefs::kCleanUpStatsTableFromAccountPasswordStore));
+  histograms.ExpectUniqueSample(
+      "Sync.SyncToSigninMigration.StatsTableCleanupStep",
+      syncer::SyncToSigninMigrationStatsTableCleanupStep::kCleanupRequested, 1);
+}
 #endif  // BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
@@ -2332,6 +2496,8 @@ TEST_F(SyncSetupIncompleteMigrationTest, ShouldNotMigrateIfFlagDisabled) {
   }
 }
 #endif  // !BUILDFLAG(IS_CHROMEOS)
+
+#endif  // !BUILDFLAG(IS_IOS)
 
 }  // namespace
 }  // namespace browser_sync

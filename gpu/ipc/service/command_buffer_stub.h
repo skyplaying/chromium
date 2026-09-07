@@ -110,7 +110,6 @@ class GPU_IPC_SERVICE_EXPORT CommandBufferStub
       scoped_refptr<base::SingleThreadTaskRunner> io_task_runner);
 
   MemoryTracker* GetMemoryTracker() const;
-  virtual MemoryTracker* GetContextGroupMemoryTracker() const = 0;
 
   virtual base::WeakPtr<CommandBufferStub> AsWeakPtr() = 0;
 
@@ -151,7 +150,6 @@ class GPU_IPC_SERVICE_EXPORT CommandBufferStub
   void OnRescheduleAfterFinished() override;
   void ScheduleGrContextCleanup() override;
   void HandleReturnData(base::span<const uint8_t> data) override;
-  bool ShouldYield() override;
 
   using MemoryTrackerFactory =
       base::RepeatingCallback<scoped_refptr<MemoryTracker>()>;
@@ -250,7 +248,6 @@ class GPU_IPC_SERVICE_EXPORT CommandBufferStub
   std::string context_label_;
 
   bool initialized_;
-  bool use_virtualized_gl_context_;
 
   std::unique_ptr<CommandBufferService> command_buffer_;
 

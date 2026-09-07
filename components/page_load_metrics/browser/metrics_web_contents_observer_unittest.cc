@@ -7,7 +7,7 @@
 #include <memory>
 #include <utility>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/process/kill.h"
@@ -19,6 +19,7 @@
 #include "components/page_load_metrics/browser/page_load_metrics_test_content_browser_client.h"
 #include "components/page_load_metrics/browser/page_load_tracker.h"
 #include "components/page_load_metrics/browser/test_metrics_web_contents_observer_embedder.h"
+#include "components/page_load_metrics/common/features.h"
 #include "components/page_load_metrics/common/page_load_metrics.mojom.h"
 #include "components/page_load_metrics/common/page_load_timing.h"
 #include "content/public/browser/back_forward_cache.h"
@@ -70,7 +71,7 @@ blink::mojom::ResourceLoadInfoPtr CreateResourceLoadInfo(
   resource_load_info->original_url = url;
   resource_load_info->request_destination = request_destination;
   resource_load_info->was_cached = false;
-  resource_load_info->raw_body_bytes = base::ByteCount(0);
+  resource_load_info->raw_body_bytes = base::ByteSize(0);
   resource_load_info->net_error = net::OK;
   resource_load_info->network_info = blink::mojom::CommonNetworkInfo::New();
   resource_load_info->network_info->remote_endpoint = net::IPEndPoint();
@@ -81,7 +82,8 @@ blink::mojom::ResourceLoadInfoPtr CreateResourceLoadInfo(
 }  //  namespace
 
 class MetricsWebContentsObserverTest
-    : public content::RenderViewHostTestHarness {
+    : public content::RenderViewHostTestHarness,
+      public testing::WithParamInterface<bool> {
  public:
   MetricsWebContentsObserverTest() {
     mojom::PageLoadTiming timing;
@@ -124,14 +126,17 @@ class MetricsWebContentsObserverTest
 
   void SimulateCpuTimingUpdate(const mojom::CpuTiming& timing,
                                content::RenderFrameHost* render_frame_host) {
-    observer()->OnTimingUpdated(render_frame_host, previous_timing_->Clone(),
-                                mojom::FrameMetadataPtr(std::in_place),
-                                std::vector<blink::UseCounterFeature>(),
-                                std::vector<mojom::ResourceDataUpdatePtr>(),
-                                mojom::FrameRenderDataUpdatePtr(std::in_place),
-                                timing.Clone(),
-                                std::vector<mojom::EventTimingPtr>(),
-                                std::nullopt, CreateSoftNavigationMetrics());
+    observer()->OnTimingUpdated(
+        render_frame_host, previous_timing_->Clone(),
+        mojom::FrameMetadataPtr(std::in_place),
+        std::vector<blink::UseCounterFeature>(),
+        std::vector<mojom::ResourceDataUpdatePtr>(),
+        mojom::FrameRenderDataUpdatePtr(std::in_place), timing.Clone(),
+        std::vector<mojom::EventTimingPtr>(), std::nullopt,
+        std::vector<mojom::SoftNavigationMetricsPtr>(),
+        std::vector<mojom::LargestContentfulPaintTimingPtr>(),
+        std::vector<mojom::CustomUserTimingMarkPtr>(),
+        mojom::FontLoadingMetricsPtr());
   }
 
   void SimulateTimingUpdate(const mojom::PageLoadTiming& timing,
@@ -149,14 +154,18 @@ class MetricsWebContentsObserverTest
       const mojom::PageLoadTiming& timing,
       content::RenderFrameHost* render_frame_host) {
     previous_timing_ = timing.Clone();
-    observer()->OnTimingUpdated(render_frame_host, timing.Clone(),
-                                mojom::FrameMetadataPtr(std::in_place),
-                                std::vector<blink::UseCounterFeature>(),
-                                std::vector<mojom::ResourceDataUpdatePtr>(),
-                                mojom::FrameRenderDataUpdatePtr(std::in_place),
-                                mojom::CpuTimingPtr(std::in_place),
-                                std::vector<mojom::EventTimingPtr>(),
-                                std::nullopt, CreateSoftNavigationMetrics());
+    observer()->OnTimingUpdated(
+        render_frame_host, timing.Clone(),
+        mojom::FrameMetadataPtr(std::in_place),
+        std::vector<blink::UseCounterFeature>(),
+        std::vector<mojom::ResourceDataUpdatePtr>(),
+        mojom::FrameRenderDataUpdatePtr(std::in_place),
+        mojom::CpuTimingPtr(std::in_place),
+        std::vector<mojom::EventTimingPtr>(), std::nullopt,
+        std::vector<mojom::SoftNavigationMetricsPtr>(),
+        std::vector<mojom::LargestContentfulPaintTimingPtr>(),
+        std::vector<mojom::CustomUserTimingMarkPtr>(),
+        mojom::FontLoadingMetricsPtr());
   }
 
   void SimulateCustomUserTimingUpdate(
@@ -264,6 +273,10 @@ class MetricsWebContentsObserverTest
     return embedder_interface_->loaded_resources();
   }
 
+  const std::vector<MemoryResourceLoadInfo>& memory_cached_resources() const {
+    return embedder_interface_->memory_cached_resources();
+  }
+
  protected:
   MetricsWebContentsObserver* observer() {
     return MetricsWebContentsObserver::FromWebContents(web_contents());
@@ -284,7 +297,9 @@ class MetricsWebContentsObserverTest
   raw_ptr<content::ContentBrowserClient> original_browser_client_ = nullptr;
 };
 
-TEST_F(MetricsWebContentsObserverTest, SuccessfulMainFrameNavigation) {
+INSTANTIATE_TEST_SUITE_P(All, MetricsWebContentsObserverTest, testing::Bool());
+
+TEST_P(MetricsWebContentsObserverTest, SuccessfulMainFrameNavigation) {
   mojom::PageLoadTiming timing;
   page_load_metrics::InitPageLoadTimingForTest(&timing);
   timing.navigation_start = base::Time::FromSecondsSinceUnixEpoch(1);
@@ -317,7 +332,7 @@ TEST_F(MetricsWebContentsObserverTest, SuccessfulMainFrameNavigation) {
   CheckNoErrorEvents();
 }
 
-TEST_F(MetricsWebContentsObserverTest,
+TEST_P(MetricsWebContentsObserverTest,
        DISABLED_MainFrameNavigationInternalAbort) {
   auto navigation = content::NavigationSimulator::CreateBrowserInitiated(
       GURL(kDefaultTestUrl), web_contents());
@@ -326,7 +341,7 @@ TEST_F(MetricsWebContentsObserverTest,
   ASSERT_EQ(kDefaultTestUrl, observed_aborted_urls().front().spec());
 }
 
-TEST_F(MetricsWebContentsObserverTest, SubFrame) {
+TEST_P(MetricsWebContentsObserverTest, SubFrame) {
   mojom::PageLoadTiming timing;
   page_load_metrics::InitPageLoadTimingForTest(&timing);
   timing.navigation_start = base::Time::FromSecondsSinceUnixEpoch(1);
@@ -378,7 +393,7 @@ TEST_F(MetricsWebContentsObserverTest, SubFrame) {
   CheckNoErrorEvents();
 }
 
-TEST_F(MetricsWebContentsObserverTest, SameDocumentNoTrigger) {
+TEST_P(MetricsWebContentsObserverTest, SameDocumentNoTrigger) {
   mojom::PageLoadTiming timing;
   page_load_metrics::InitPageLoadTimingForTest(&timing);
   timing.navigation_start = base::Time::FromSecondsSinceUnixEpoch(1);
@@ -410,7 +425,7 @@ TEST_F(MetricsWebContentsObserverTest, SameDocumentNoTrigger) {
   CheckNoErrorEvents();
 }
 
-TEST_F(MetricsWebContentsObserverTest, DontLogIrrelevantNavigation) {
+TEST_P(MetricsWebContentsObserverTest, DontLogIrrelevantNavigation) {
   mojom::PageLoadTiming timing;
   page_load_metrics::InitPageLoadTimingForTest(&timing);
   timing.navigation_start = base::Time::FromSecondsSinceUnixEpoch(10);
@@ -435,7 +450,7 @@ TEST_F(MetricsWebContentsObserverTest, DontLogIrrelevantNavigation) {
   CheckTotalErrorEvents();
 }
 
-TEST_F(MetricsWebContentsObserverTest, EmptyTimingError) {
+TEST_P(MetricsWebContentsObserverTest, EmptyTimingError) {
   // Page load timing errors are not being reported when the error occurs for a
   // page that gets preserved in the back/forward cache.
   // TODO(crbug.com/40213776): Fix this.
@@ -463,7 +478,7 @@ TEST_F(MetricsWebContentsObserverTest, EmptyTimingError) {
       page_load_metrics::internal::INVALID_EMPTY_TIMING, 1);
 }
 
-TEST_F(MetricsWebContentsObserverTest, NullNavigationStartError) {
+TEST_P(MetricsWebContentsObserverTest, NullNavigationStartError) {
   // Page load timing errors are not being reported when the error occurs for a
   // page that gets preserved in the back/forward cache.
   // TODO(crbug.com/40213776): Fix this.
@@ -492,7 +507,7 @@ TEST_F(MetricsWebContentsObserverTest, NullNavigationStartError) {
       page_load_metrics::internal::INVALID_NULL_NAVIGATION_START, 1);
 }
 
-TEST_F(MetricsWebContentsObserverTest, TimingOrderError) {
+TEST_P(MetricsWebContentsObserverTest, TimingOrderError) {
   // Page load timing errors are not being reported when the error occurs for a
   // page that gets preserved in the back/forward cache.
   // TODO(crbug.com/40213776): Fix this.
@@ -522,7 +537,7 @@ TEST_F(MetricsWebContentsObserverTest, TimingOrderError) {
       page_load_metrics::internal::INVALID_ORDER_PARSE_START_PARSE_STOP, 1);
 }
 
-TEST_F(MetricsWebContentsObserverTest, BadIPC) {
+TEST_P(MetricsWebContentsObserverTest, BadIPC) {
   mojom::PageLoadTiming timing;
   page_load_metrics::InitPageLoadTimingForTest(&timing);
   timing.navigation_start = base::Time::FromSecondsSinceUnixEpoch(10);
@@ -542,7 +557,7 @@ TEST_F(MetricsWebContentsObserverTest, BadIPC) {
   CheckTotalErrorEvents();
 }
 
-TEST_F(MetricsWebContentsObserverTest, ObservePartialNavigation) {
+TEST_P(MetricsWebContentsObserverTest, ObservePartialNavigation) {
   // Reset the state of the tests, and attach the MetricsWebContentsObserver in
   // the middle of a navigation. This tests that the class is robust to only
   // observing some of a navigation.
@@ -573,7 +588,7 @@ TEST_F(MetricsWebContentsObserverTest, ObservePartialNavigation) {
   CheckTotalErrorEvents();
 }
 
-TEST_F(MetricsWebContentsObserverTest, StopObservingOnCommit) {
+TEST_P(MetricsWebContentsObserverTest, StopObservingOnCommit) {
   ASSERT_TRUE(completed_filtered_urls().empty());
 
   content::NavigationSimulator::NavigateAndCommitFromBrowser(
@@ -598,7 +613,7 @@ TEST_F(MetricsWebContentsObserverTest, StopObservingOnCommit) {
             completed_filtered_urls());
 }
 
-TEST_F(MetricsWebContentsObserverTest, StopObservingOnStart) {
+TEST_P(MetricsWebContentsObserverTest, StopObservingOnStart) {
   ASSERT_TRUE(completed_filtered_urls().empty());
 
   content::NavigationSimulator::NavigateAndCommitFromBrowser(
@@ -625,7 +640,7 @@ TEST_F(MetricsWebContentsObserverTest, StopObservingOnStart) {
 
 // We buffer cross frame timings in order to provide a consistent view of
 // timing data to observers. See crbug.com/722860 for more.
-TEST_F(MetricsWebContentsObserverTest, OutOfOrderCrossFrameTiming) {
+TEST_P(MetricsWebContentsObserverTest, OutOfOrderCrossFrameTiming) {
   mojom::PageLoadTiming timing;
   page_load_metrics::InitPageLoadTimingForTest(&timing);
   timing.navigation_start = base::Time::FromSecondsSinceUnixEpoch(1);
@@ -689,7 +704,7 @@ TEST_F(MetricsWebContentsObserverTest, OutOfOrderCrossFrameTiming) {
 
 // We buffer cross-frame paint updates to account for paint timings from
 // different frames arriving out of order.
-TEST_F(MetricsWebContentsObserverTest, OutOfOrderCrossFrameTiming2) {
+TEST_P(MetricsWebContentsObserverTest, OutOfOrderCrossFrameTiming2) {
   // Dispatch a timing update for the main frame that includes a first
   // paint. This should be buffered, with the dispatch timer running.
   mojom::PageLoadTiming timing;
@@ -768,7 +783,7 @@ TEST_F(MetricsWebContentsObserverTest, OutOfOrderCrossFrameTiming2) {
   CheckNoErrorEvents();
 }
 
-TEST_F(MetricsWebContentsObserverTest, FlushBufferOnAppBackground) {
+TEST_P(MetricsWebContentsObserverTest, FlushBufferOnAppBackground) {
   mojom::PageLoadTiming timing;
   PopulatePageLoadTiming(&timing);
   timing.paint_timing->first_paint = base::Milliseconds(100000);
@@ -781,7 +796,7 @@ TEST_F(MetricsWebContentsObserverTest, FlushBufferOnAppBackground) {
   ASSERT_EQ(1, CountUpdatedTimingReported());
 }
 
-TEST_F(MetricsWebContentsObserverTest,
+TEST_P(MetricsWebContentsObserverTest,
        FirstInputDelayMissingFirstInputTimestamp) {
   mojom::PageLoadTiming timing;
   PopulatePageLoadTiming(&timing);
@@ -810,7 +825,7 @@ TEST_F(MetricsWebContentsObserverTest,
   CheckTotalErrorEvents();
 }
 
-TEST_F(MetricsWebContentsObserverTest,
+TEST_P(MetricsWebContentsObserverTest,
        FirstInputTimestampMissingFirstInputDelay) {
   mojom::PageLoadTiming timing;
   PopulatePageLoadTiming(&timing);
@@ -842,7 +857,7 @@ TEST_F(MetricsWebContentsObserverTest,
 // Main frame delivers an input notification. Subsequently, a subframe delivers
 // an input notification, where the input occurred first. Verify that
 // FirstInputDelay and FirstInputTimestamp come from the subframe.
-TEST_F(MetricsWebContentsObserverTest,
+TEST_P(MetricsWebContentsObserverTest,
        FirstInputDelayAndTimingSubframeFirstDeliveredSecond) {
   mojom::PageLoadTiming timing;
   PopulatePageLoadTiming(&timing);
@@ -891,7 +906,7 @@ TEST_F(MetricsWebContentsObserverTest,
 // A subframe delivers an input notification. Subsequently, the mainframe
 // delivers an input notification, where the input occurred first. Verify that
 // FirstInputDelay and FirstInputTimestamp come from the main frame.
-TEST_F(MetricsWebContentsObserverTest,
+TEST_P(MetricsWebContentsObserverTest,
        FirstInputDelayAndTimingMainframeFirstDeliveredSecond) {
   // We need to navigate before we can navigate the subframe.
   content::NavigationSimulator::NavigateAndCommitFromBrowser(
@@ -942,7 +957,7 @@ TEST_F(MetricsWebContentsObserverTest,
   CheckNoErrorEvents();
 }
 
-TEST_F(MetricsWebContentsObserverTest, DispatchDelayedMetricsOnPageClose) {
+TEST_P(MetricsWebContentsObserverTest, DispatchDelayedMetricsOnPageClose) {
   mojom::PageLoadTiming timing;
   PopulatePageLoadTiming(&timing);
   timing.paint_timing->first_paint = base::Milliseconds(1000);
@@ -974,7 +989,7 @@ TEST_F(MetricsWebContentsObserverTest, DispatchDelayedMetricsOnPageClose) {
 }
 
 // Make sure the dispatch of CPU occurs immediately.
-TEST_F(MetricsWebContentsObserverTest, DispatchCpuMetricsImmediately) {
+TEST_P(MetricsWebContentsObserverTest, DispatchCpuMetricsImmediately) {
   content::NavigationSimulator::NavigateAndCommitFromBrowser(
       web_contents(), GURL(kDefaultTestUrl));
 
@@ -994,7 +1009,7 @@ TEST_F(MetricsWebContentsObserverTest, DispatchCpuMetricsImmediately) {
   CheckNoErrorEvents();
 }
 
-TEST_F(MetricsWebContentsObserverTest, OnLoadedResource_MainFrame) {
+TEST_P(MetricsWebContentsObserverTest, OnLoadedResource_MainFrame) {
   GURL main_resource_url(kDefaultTestUrl);
   content::NavigationSimulator::NavigateAndCommitFromBrowser(web_contents(),
                                                              main_resource_url);
@@ -1008,7 +1023,7 @@ TEST_F(MetricsWebContentsObserverTest, OnLoadedResource_MainFrame) {
   const auto request_id = navigation_simulator->GetGlobalRequestID();
 
   observer()->ResourceLoadComplete(
-      web_contents()->GetPrimaryMainFrame(), request_id,
+      web_contents()->GetPrimaryMainFrame(), request_id, main_resource_url,
       *CreateResourceLoadInfo(main_resource_url,
                               network::mojom::RequestDestination::kFrame));
   EXPECT_EQ(1u, loaded_resources().size());
@@ -1020,7 +1035,7 @@ TEST_F(MetricsWebContentsObserverTest, OnLoadedResource_MainFrame) {
   // Deliver a second main frame resource. This one should be ignored, since the
   // specified |request_id| is no longer associated with any tracked page loads.
   observer()->ResourceLoadComplete(
-      web_contents()->GetPrimaryMainFrame(), request_id,
+      web_contents()->GetPrimaryMainFrame(), request_id, main_resource_url,
       *CreateResourceLoadInfo(main_resource_url,
                               network::mojom::RequestDestination::kFrame));
   EXPECT_EQ(1u, loaded_resources().size());
@@ -1028,12 +1043,13 @@ TEST_F(MetricsWebContentsObserverTest, OnLoadedResource_MainFrame) {
             loaded_resources().back().final_url);
 }
 
-TEST_F(MetricsWebContentsObserverTest, OnLoadedResource_Subresource) {
+TEST_P(MetricsWebContentsObserverTest, OnLoadedResource_Subresource) {
   content::NavigationSimulator::NavigateAndCommitFromBrowser(
       web_contents(), GURL(kDefaultTestUrl));
   GURL loaded_resource_url("http://www.other.com/");
   observer()->ResourceLoadComplete(
       web_contents()->GetPrimaryMainFrame(), content::GlobalRequestID(),
+      loaded_resource_url,
       *CreateResourceLoadInfo(loaded_resource_url,
                               network::mojom::RequestDestination::kScript));
 
@@ -1042,7 +1058,7 @@ TEST_F(MetricsWebContentsObserverTest, OnLoadedResource_Subresource) {
             loaded_resources().back().final_url);
 }
 
-TEST_F(MetricsWebContentsObserverTest,
+TEST_P(MetricsWebContentsObserverTest,
        OnLoadedResource_ResourceFromOtherRFHIgnored) {
   content::NavigationSimulator::NavigateAndCommitFromBrowser(
       web_contents(), GURL(kDefaultTestUrl));
@@ -1054,15 +1070,153 @@ TEST_F(MetricsWebContentsObserverTest,
       web_contents(), GURL(kDefaultTestUrl2));
 
   DCHECK(!old_rfh->IsActive());
+  GURL other_url("http://www.other.com/");
   observer()->ResourceLoadComplete(
-      old_rfh, content::GlobalRequestID(),
-      *CreateResourceLoadInfo(GURL("http://www.other.com/"),
+      old_rfh, content::GlobalRequestID(), other_url,
+      *CreateResourceLoadInfo(other_url,
                               network::mojom::RequestDestination::kScript));
 
   EXPECT_TRUE(loaded_resources().empty());
 }
 
-TEST_F(MetricsWebContentsObserverTest, RecordFeatureUsage) {
+TEST_P(MetricsWebContentsObserverTest, DidLoadResourceFromMemoryCache) {
+  content::NavigationSimulator::NavigateAndCommitFromBrowser(
+      web_contents(), GURL(kDefaultTestUrl));
+  GURL memory_cached_url("https://www.google.com/test.js");
+  observer()->DidLoadResourceFromMemoryCache(
+      web_contents()->GetPrimaryMainFrame(), memory_cached_url,
+      "application/javascript", network::mojom::RequestDestination::kScript);
+
+  ASSERT_EQ(1u, memory_cached_resources().size());
+  EXPECT_EQ(url::SchemeHostPort(memory_cached_url),
+            memory_cached_resources().back().url);
+  EXPECT_EQ(network::mojom::RequestDestination::kScript,
+            memory_cached_resources().back().request_destination);
+  EXPECT_EQ(web_contents()->GetPrimaryMainFrame()->GetFrameTreeNodeId(),
+            memory_cached_resources().back().frame_tree_node_id);
+}
+
+TEST_P(MetricsWebContentsObserverTest,
+       DidLoadResourceFromMemoryCache_ResourceFromOtherRFHIgnored) {
+  content::NavigationSimulator::NavigateAndCommitFromBrowser(
+      web_contents(), GURL(kDefaultTestUrl));
+
+  content::RenderFrameHost* old_rfh = web_contents()->GetPrimaryMainFrame();
+  content::LeaveInPendingDeletionState(old_rfh);
+
+  content::NavigationSimulator::NavigateAndCommitFromBrowser(
+      web_contents(), GURL(kDefaultTestUrl2));
+
+  ASSERT_FALSE(old_rfh->IsActive());
+  GURL other_url("https://www.google.com/test.js");
+  observer()->DidLoadResourceFromMemoryCache(
+      old_rfh, other_url, "application/javascript",
+      network::mojom::RequestDestination::kScript);
+
+  EXPECT_TRUE(memory_cached_resources().empty());
+}
+
+TEST_P(MetricsWebContentsObserverTest,
+       DidLoadResourceFromMemoryCache_Subframe) {
+  content::NavigationSimulator::NavigateAndCommitFromBrowser(
+      web_contents(), GURL(kDefaultTestUrl));
+
+  content::RenderFrameHostTester* rfh_tester =
+      content::RenderFrameHostTester::For(main_rfh());
+  content::RenderFrameHost* subframe = rfh_tester->AppendChild("subframe");
+  subframe = content::NavigationSimulator::NavigateAndCommitFromDocument(
+      GURL(kDefaultTestUrl2), subframe);
+
+  GURL memory_cached_url("https://www.google.com/subframe_script.js");
+  observer()->DidLoadResourceFromMemoryCache(
+      subframe, memory_cached_url, "application/javascript",
+      network::mojom::RequestDestination::kScript);
+
+  ASSERT_EQ(1u, memory_cached_resources().size());
+  EXPECT_EQ(url::SchemeHostPort(memory_cached_url),
+            memory_cached_resources().back().url);
+  EXPECT_EQ(network::mojom::RequestDestination::kScript,
+            memory_cached_resources().back().request_destination);
+  EXPECT_EQ(subframe->GetFrameTreeNodeId(),
+            memory_cached_resources().back().frame_tree_node_id);
+}
+
+TEST_P(MetricsWebContentsObserverTest,
+       DidLoadResourceFromMemoryCache_UntrackedSchemeIgnored) {
+  content::NavigationSimulator::NavigateAndCommitFromBrowser(
+      web_contents(), GURL(kDefaultTestUrl));
+
+  GURL untracked_url("custom://www.example.com/script.js");
+  observer()->DidLoadResourceFromMemoryCache(
+      web_contents()->GetPrimaryMainFrame(), untracked_url,
+      "application/javascript", network::mojom::RequestDestination::kScript);
+
+  EXPECT_TRUE(memory_cached_resources().empty());
+}
+
+TEST_P(MetricsWebContentsObserverTest,
+       DidLoadResourceFromMemoryCache_InvalidUrlIgnored) {
+  content::NavigationSimulator::NavigateAndCommitFromBrowser(
+      web_contents(), GURL(kDefaultTestUrl));
+
+  // Empty GURL.
+  GURL empty_url;
+  ASSERT_FALSE(empty_url.is_valid());
+  observer()->DidLoadResourceFromMemoryCache(
+      web_contents()->GetPrimaryMainFrame(), empty_url,
+      "application/javascript", network::mojom::RequestDestination::kScript);
+
+  // Invalid GURL.
+  GURL invalid_url("http://google.com:12three45");
+  ASSERT_FALSE(invalid_url.is_valid());
+  observer()->DidLoadResourceFromMemoryCache(
+      web_contents()->GetPrimaryMainFrame(), invalid_url,
+      "application/javascript", network::mojom::RequestDestination::kScript);
+
+  EXPECT_TRUE(memory_cached_resources().empty());
+}
+
+TEST_P(MetricsWebContentsObserverTest,
+       DidLoadResourceFromMemoryCache_MultipleSequentialResources) {
+  content::NavigationSimulator::NavigateAndCommitFromBrowser(
+      web_contents(), GURL(kDefaultTestUrl));
+
+  GURL script_url("https://www.google.com/test.js");
+  observer()->DidLoadResourceFromMemoryCache(
+      web_contents()->GetPrimaryMainFrame(), script_url,
+      "application/javascript", network::mojom::RequestDestination::kScript);
+
+  GURL style_url("https://www.google.com/test.css");
+  observer()->DidLoadResourceFromMemoryCache(
+      web_contents()->GetPrimaryMainFrame(), style_url, "text/css",
+      network::mojom::RequestDestination::kStyle);
+
+  GURL image_url("https://www.google.com/test.png");
+  observer()->DidLoadResourceFromMemoryCache(
+      web_contents()->GetPrimaryMainFrame(), image_url, "image/png",
+      network::mojom::RequestDestination::kImage);
+
+  GURL font_url("https://www.google.com/test.woff2");
+  observer()->DidLoadResourceFromMemoryCache(
+      web_contents()->GetPrimaryMainFrame(), font_url, "font/woff2",
+      network::mojom::RequestDestination::kFont);
+
+  ASSERT_EQ(4u, memory_cached_resources().size());
+  EXPECT_EQ(url::SchemeHostPort(script_url), memory_cached_resources()[0].url);
+  EXPECT_EQ(network::mojom::RequestDestination::kScript,
+            memory_cached_resources()[0].request_destination);
+  EXPECT_EQ(url::SchemeHostPort(style_url), memory_cached_resources()[1].url);
+  EXPECT_EQ(network::mojom::RequestDestination::kStyle,
+            memory_cached_resources()[1].request_destination);
+  EXPECT_EQ(url::SchemeHostPort(image_url), memory_cached_resources()[2].url);
+  EXPECT_EQ(network::mojom::RequestDestination::kImage,
+            memory_cached_resources()[2].request_destination);
+  EXPECT_EQ(url::SchemeHostPort(font_url), memory_cached_resources()[3].url);
+  EXPECT_EQ(network::mojom::RequestDestination::kFont,
+            memory_cached_resources()[3].request_destination);
+}
+
+TEST_P(MetricsWebContentsObserverTest, RecordFeatureUsage) {
   content::NavigationSimulator::NavigateAndCommitFromBrowser(
       web_contents(), GURL(kDefaultTestUrl));
   ASSERT_EQ(main_rfh()->GetLastCommittedURL().spec(), GURL(kDefaultTestUrl));
@@ -1086,7 +1240,7 @@ TEST_F(MetricsWebContentsObserverTest, RecordFeatureUsage) {
   EXPECT_EQ(observed_features()[1], feature2);
 }
 
-TEST_F(MetricsWebContentsObserverTest, RecordFeatureUsageNoObserver) {
+TEST_P(MetricsWebContentsObserverTest, RecordFeatureUsageNoObserver) {
   // Reset the state of the tests, and don't add an observer.
   DeleteContents();
   SetContents(CreateTestWebContents());
@@ -1098,11 +1252,10 @@ TEST_F(MetricsWebContentsObserverTest, RecordFeatureUsageNoObserver) {
                    blink::mojom::WebFeature::kFormAttribute});
 }
 
-TEST_F(MetricsWebContentsObserverTest, CustomUserTiming) {
+TEST_P(MetricsWebContentsObserverTest, CustomUserTiming) {
   content::NavigationSimulator::NavigateAndCommitFromBrowser(
       web_contents(), GURL(kDefaultTestUrl));
   content::RenderFrameHost* rfh = web_contents()->GetPrimaryMainFrame();
-
   mojom::CustomUserTimingMark custom_timing;
   custom_timing.mark_name = "fake_custom_mark";
   custom_timing.start_time = base::Milliseconds(1000);
@@ -1111,6 +1264,25 @@ TEST_F(MetricsWebContentsObserverTest, CustomUserTiming) {
   ASSERT_EQ(1, CountUpdatedCustomUserTimingReported());
   EXPECT_TRUE(custom_timing.Equals(*updated_custom_user_timings().back()));
   CheckNoErrorEvents();
+}
+
+TEST_P(MetricsWebContentsObserverTest, CustomUserTimingNoTracker) {
+  NavigateToUntrackedUrl();
+  content::RenderFrameHost* rfh = web_contents()->GetPrimaryMainFrame();
+  mojom::CustomUserTimingMark custom_timing;
+  custom_timing.mark_name = "fake_custom_mark";
+  custom_timing.start_time = base::Milliseconds(1000);
+
+  // When there is no tracker, updates should be dropped immediately rather than
+  // buffered.
+  SimulateCustomUserTimingUpdate(custom_timing, rfh);
+  EXPECT_EQ(0, CountUpdatedCustomUserTimingReported());
+
+  // Navigate to a tracked URL and verify that the dropped timing is NOT
+  // flushed.
+  content::NavigationSimulator::NavigateAndCommitFromBrowser(
+      web_contents(), GURL(kDefaultTestUrl));
+  EXPECT_EQ(0, CountUpdatedCustomUserTimingReported());
 }
 
 class MetricsWebContentsObserverBackForwardCacheTest
@@ -1235,7 +1407,7 @@ class MetricsWebContentsObserverBackForwardCacheDisabledTest
  public:
   MetricsWebContentsObserverBackForwardCacheDisabledTest() {
     feature_list_.InitWithFeaturesAndParameters({},
-                                                {features::kBackForwardCache});
+                                                {::features::kBackForwardCache});
   }
 
   ~MetricsWebContentsObserverBackForwardCacheDisabledTest() override = default;

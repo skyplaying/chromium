@@ -219,7 +219,7 @@ public class AutofillServerCardEditor extends AutofillCreditCardEditor {
                                         ? ButtonType.VIRTUAL_CARD_UNENROLL
                                         : ButtonType.VIRTUAL_CARD_ENROLL);
                         // TODO(@vishwasuppoor): Show a blocking progress dialog
-                        // (crbug.com/1327467).
+                        // (crbug.com/40226208).
                         // Disable the button until we receive a response from the server.
                         mVirtualCardEnrollmentButton.setEnabled(false);
                         if (!mVirtualCardEnrollmentButtonShowsUnenroll) {
@@ -262,7 +262,7 @@ public class AutofillServerCardEditor extends AutofillCreditCardEditor {
                     RecordHistogram.recordEnumeratedHistogram(
                             SETTINGS_PAGE_ENROLLMENT_HISTOGRAM_TEXT + ".LinkClicked",
                             virtualCardEnrollmentLinkType,
-                            VirtualCardEnrollmentLinkType.MAX_VALUE);
+                            VirtualCardEnrollmentLinkType.MAX_VALUE + 1);
                     CustomTabActivity.showInfoPage(getActivity(), url);
                 };
         Callback<Integer> resultHandler =

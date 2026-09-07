@@ -9,9 +9,9 @@
 
 #include "build/build_config.h"
 #include "cc/cc_export.h"
-#include "cc/trees/tracked_element_bounds.h"
 #include "components/viz/common/quads/selection.h"
 #include "components/viz/common/surfaces/local_surface_id.h"
+#include "components/viz/common/surfaces/tracked_element_rects.h"
 #include "components/viz/common/vertical_scroll_direction.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/geometry/size.h"
@@ -44,6 +44,36 @@ struct DelegatedInkBrowserMetadata {
   // has processed the point that didn't match yet or not. It is true when
   // hovering, false otherwise.
   bool delegated_ink_is_hovering;
+};
+
+// Contains browser controls related information.
+struct CC_EXPORT BrowserControlsMetadata {
+  // Used to position the location top bar and page content, whose precise
+  // position is computed by the renderer compositor.
+  float top_controls_height = 0.f;
+  float top_controls_shown_ratio = 0.f;
+
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+  // Used to position Android bottom bar, whose position is computed by the
+  // renderer compositor.
+  float bottom_controls_height = 0.f;
+  float bottom_controls_shown_ratio = 0.f;
+
+  // Used to offset views that need to be positioned according to the current
+  // min-height. These offsets follow the min-height change animations.
+  float top_controls_min_height_offset = 0.f;
+  float bottom_controls_min_height_offset = 0.f;
+
+  // Whether the browser controls have an offset tag. This is only ever set in
+  // the renderer process.
+  bool has_offset_tag = false;
+#endif
+
+  bool operator==(const BrowserControlsMetadata& other) const;
+
+  // Returns whether a new local surface id is required when the browser
+  // controls metadata changes from `previous` to the current state.
+  bool RequiresNewLocalSurfaceId(const BrowserControlsMetadata& previous) const;
 };
 
 class CC_EXPORT RenderFrameMetadata {
@@ -103,10 +133,8 @@ class CC_EXPORT RenderFrameMetadata {
   // Used for testing propagation of page scale factor to sub-frame renderers.
   float external_page_scale_factor = 1.f;
 
-  // Used to position the location top bar and page content, whose precise
-  // position is computed by the renderer compositor.
-  float top_controls_height = 0.f;
-  float top_controls_shown_ratio = 0.f;
+  // Contains browser controls related information.
+  BrowserControlsMetadata browser_controls_metadata;
 
   // Indicates a change in the vertical scroll direction of the root layer since
   // the last drawn render frame. If no change occurred, this value is |kNull|.
@@ -123,20 +151,10 @@ class CC_EXPORT RenderFrameMetadata {
   int64_t primary_main_frame_item_sequence_number = kInvalidItemSequenceNumber;
 
   // Screen-space rectangles of tracked elements (see Element
-  // setTrackedElementRect).
-  TrackedElementBounds tracked_element_bounds;
+  // setTrackedElementSubRect).
+  viz::TrackedElementRects tracked_element_rects;
 
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
-  // Used to position Android bottom bar, whose position is computed by the
-  // renderer compositor.
-  float bottom_controls_height = 0.f;
-  float bottom_controls_shown_ratio = 0.f;
-
-  // Used to offset views that need to be positioned according to the current
-  // min-height. These offsets follow the min-height change animations.
-  float top_controls_min_height_offset = 0.f;
-  float bottom_controls_min_height_offset = 0.f;
-
   // These limits can be used together with the scroll/scale fields above to
   // determine if scrolling/scaling in a particular direction is possible.
   float min_page_scale_factor = 0.f;
@@ -149,8 +167,6 @@ class CC_EXPORT RenderFrameMetadata {
   // Returns whether the root RenderPass of the CompositorFrame has a
   // transparent background color.
   bool has_transparent_background = false;
-
-  bool has_offset_tag = false;
 #endif
 };
 

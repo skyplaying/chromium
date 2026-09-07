@@ -79,8 +79,6 @@
 #include "base/timer/timer.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "chrome/browser/apps/app_service/app_service_proxy.h"
-#include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_list_prefs.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_utils.h"
 #include "chrome/browser/ash/arc/arc_util.h"
@@ -91,7 +89,6 @@
 #include "chrome/browser/ash/borealis/borealis_service.h"
 #include "chrome/browser/ash/borealis/borealis_service_factory.h"
 #include "chrome/browser/ash/borealis/borealis_types.mojom.h"
-#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/ash/bruschetta/bruschetta_installer.h"
 #include "chrome/browser/ash/bruschetta/bruschetta_service.h"
 #include "chrome/browser/ash/bruschetta/bruschetta_service_factory.h"
@@ -112,11 +109,8 @@
 #include "chrome/browser/ash/lobster/lobster_service.h"
 #include "chrome/browser/ash/lobster/lobster_service_provider.h"
 #include "chrome/browser/ash/login/lock/screen_locker.h"
+#include "chrome/browser/ash/login/lock/screen_locker_controller.h"
 #include "chrome/browser/ash/login/wizard_context.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_installer.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_installer_factory.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_pref_names.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_util.h"
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/ash/policy/core/user_cloud_policy_manager_ash.h"
 #include "chrome/browser/ash/power/ml/smart_dim/ml_agent.h"
@@ -131,10 +125,9 @@
 #include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/component_updater/smart_dim_component_installer.h"
 #include "chrome/browser/extensions/component_loader.h"
-#include "chrome/browser/lifetime/application_lifetime.h"
+#include "chrome/browser/global_features.h"
 #include "chrome/browser/policy/chrome_policy_conversions_client.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/ash/holding_space/holding_space_keyed_service.h"
 #include "chrome/browser/ui/ash/holding_space/holding_space_keyed_service_factory.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
@@ -145,7 +138,6 @@
 #include "chrome/browser/ui/toolbar/app_menu_model.h"
 #include "chrome/browser/ui/views/bruschetta/bruschetta_installer_view.h"
 #include "chrome/browser/ui/views/crostini/crostini_uninstaller_view.h"
-#include "chrome/browser/ui/views/plugin_vm/plugin_vm_installer_view.h"
 #include "chrome/browser/ui/web_applications/web_app_dialogs.h"
 #include "chrome/browser/ui/webui/ash/crostini_installer/crostini_installer_dialog.h"
 #include "chrome/browser/ui/webui/ash/crostini_installer/crostini_installer_ui.h"
@@ -153,12 +145,15 @@
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/common/extensions/api/autotest_private.h"
 #include "chrome/common/pref_names.h"
+#include "chromeos/ash/components/browser_context_helper/annotated_account_id.h"
+#include "chromeos/ash/components/browser_delegate/browser_delegate.h"
 #include "chromeos/ash/components/dbus/dbus_thread_manager.h"
 #include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
 #include "chromeos/ash/components/default_pinned_apps/default_pinned_apps.h"
 #include "chromeos/ash/components/metrics/login_event_recorder.h"
 #include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
+#include "chromeos/ash/components/signin/identity_manager_provider.h"
 #include "chromeos/ash/experiences/arc/arc_prefs.h"
 #include "chromeos/ash/experiences/arc/metrics/arc_metrics_constants.h"
 #include "chromeos/ash/experiences/arc/mojom/power.mojom.h"
@@ -186,12 +181,17 @@
 #include "components/policy/core/common/remote_commands/remote_commands_fetch_reason.h"
 #include "components/policy/core/common/remote_commands/remote_commands_service.h"
 #include "components/prefs/pref_service.h"
+#include "components/services/app_service/public/cpp/app_registry_cache.h"
+#include "components/services/app_service/public/cpp/app_service.h"
+#include "components/services/app_service/public/cpp/app_service_registry.h"
 #include "components/services/app_service/public/cpp/app_types.h"
+#include "components/services/app_service/public/cpp/app_update.h"
 #include "components/services/app_service/public/cpp/types_util.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/session_manager/session_manager_types.h"
 #include "components/signin/public/identity_manager/access_token_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/tabs/public/tab_interface.h"
 #include "components/update_client/update_client_errors.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
@@ -212,6 +212,7 @@
 #include "extensions/browser/extension_util.h"
 #include "extensions/common/api/extension_action/action_info.h"
 #include "extensions/common/manifest_handlers/background_info.h"
+#include "extensions/common/manifest_handlers/description_info.h"
 #include "extensions/common/manifest_handlers/options_page_info.h"
 #include "extensions/common/permissions/api_permission_set.h"
 #include "extensions/common/permissions/permission_set.h"
@@ -266,10 +267,8 @@ using chromeos::PrinterClass;
 
 // Features used for testing `isFeatureEnabled`.
 BASE_FEATURE(kEnabledFeatureForTest,
-             "EnabledFeatureForTest",
              base::FEATURE_ENABLED_BY_DEFAULT);
 BASE_FEATURE(kDisabledFeatureForTest,
-             "DisabledFeatureForTest",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 constexpr char kCrostiniNotAvailableForCurrentUserError[] =
@@ -366,8 +365,6 @@ api::autotest_private::ShelfItemType GetShelfItemType(ash::ShelfItemType type) {
       return api::autotest_private::ShelfItemType::kBrowserShortcut;
     case ash::TYPE_APP:
       return api::autotest_private::ShelfItemType::kApp;
-    case ash::TYPE_UNPINNED_BROWSER_SHORTCUT:
-      return api::autotest_private::ShelfItemType::kUnpinnedBrowserShortcut;
     case ash::TYPE_DIALOG:
       return api::autotest_private::ShelfItemType::kDialog;
     case ash::TYPE_UNDEFINED:
@@ -530,7 +527,7 @@ std::string SetAllowedPref(Profile* profile,
                            const base::Value& value) {
   // Special case for the preference that is stored in the "Local State"
   // profile.
-  if (pref_name == prefs::kEnableAdbSideloadingRequested) {
+  if (pref_name == arc::prefs::kEnableAdbSideloadingRequested) {
     DCHECK(value.is_bool());
     g_browser_process->local_state()->Set(pref_name, value);
     return std::string();
@@ -551,18 +548,12 @@ std::string SetAllowedPref(Profile* profile,
     DCHECK(value.is_bool());
   } else if (pref_name == ash::prefs::kAccessibilityVirtualKeyboardEnabled) {
     DCHECK(value.is_bool());
-  } else if (pref_name == prefs::kDocumentScanAPITrustedExtensions) {
+  } else if (pref_name == ash::prefs::kDocumentScanAPITrustedExtensions) {
     DCHECK(value.is_list());
   } else if (pref_name == ash::prefs::kEnableAutoScreenLock) {
     DCHECK(value.is_bool());
-  } else if (pref_name == prefs::kLanguagePreloadEngines) {
+  } else if (pref_name == ash::prefs::kLanguagePreloadEngines) {
     DCHECK(value.is_string());
-  } else if (pref_name == plugin_vm::prefs::kPluginVmCameraAllowed) {
-    DCHECK(value.is_bool());
-  } else if (pref_name == plugin_vm::prefs::kPluginVmMicAllowed) {
-    DCHECK(value.is_bool());
-  } else if (pref_name == plugin_vm::prefs::kPluginVmDataCollectionAllowed) {
-    DCHECK(value.is_bool());
   } else if (pref_name == prefs::kPrintingAPIExtensionsAllowlist) {
     DCHECK(value.is_list());
   } else if (pref_name == quick_answers::prefs::kQuickAnswersEnabled) {
@@ -997,7 +988,7 @@ void ForwardFrameRateDataAndReset(
 
   // Moves the callback out and erases the mapping first to allow new tracking
   // for |display_id| to start before |callback| run returns.
-  // See https://crbug.com/1098886.
+  // See https://crbug.com/40702167.
   auto callback = it->second->TakeCallback();
   DCHECK(callback);
   trackers->erase(it);
@@ -1304,7 +1295,7 @@ AutotestPrivateLogoutFunction::~AutotestPrivateLogoutFunction() = default;
 ExtensionFunction::ResponseAction AutotestPrivateLogoutFunction::Run() {
   DVLOG(1) << "AutotestPrivateLogoutFunction";
   if (!IsTestMode(browser_context())) {
-    chrome::AttemptUserExit();
+    session_manager::SessionManager::Get()->RequestSignOut();
   }
   return RespondNow(NoArguments());
 }
@@ -1318,7 +1309,7 @@ AutotestPrivateRestartFunction::~AutotestPrivateRestartFunction() = default;
 ExtensionFunction::ResponseAction AutotestPrivateRestartFunction::Run() {
   DVLOG(1) << "AutotestPrivateRestartFunction";
   if (!IsTestMode(browser_context())) {
-    chrome::AttemptRestart();
+    session_manager::SessionManager::Get()->RequestRestart();
   }
   return RespondNow(NoArguments());
 }
@@ -1336,7 +1327,7 @@ ExtensionFunction::ResponseAction AutotestPrivateShutdownFunction::Run() {
   DVLOG(1) << "AutotestPrivateShutdownFunction " << params->force;
 
   if (!IsTestMode(browser_context())) {
-    chrome::AttemptExit();
+    session_manager::SessionManager::Get()->RequestSignOut();
   }
   return RespondNow(NoArguments());
 }
@@ -1354,11 +1345,12 @@ ExtensionFunction::ResponseAction AutotestPrivateLoginStatusFunction::Run() {
   const user_manager::UserManager* user_manager =
       user_manager::UserManager::Get();
 
-  // default_screen_locker()->locked() is set when the UI is ready, so this
-  // tells us both views based lockscreen UI and screenlocker are ready.
+  // ScreenLockerController::Get().screen_locker()->locked() is set when the
+  // UI is ready, so this tells us both views based lockscreen UI and
+  // screenlocker are ready.
   const bool is_screen_locked =
-      !!ash::ScreenLocker::default_screen_locker() &&
-      ash::ScreenLocker::default_screen_locker()->locked();
+      !!ash::ScreenLockerController::Get().screen_locker() &&
+      ash::ScreenLockerController::Get().screen_locker()->locked();
 
   if (user_manager) {
     result.Set("isLoggedIn", user_manager->IsUserLoggedIn());
@@ -1574,7 +1566,7 @@ AutotestPrivateGetExtensionsInfoFunction::Run() {
             .Set("version", extension->VersionString())
             .Set("name", extension->name())
             .Set("publicKey", extension->public_key())
-            .Set("description", extension->description())
+            .Set("description", DescriptionInfo::GetDescription(*extension))
             .Set("backgroundUrl",
                  BackgroundInfo::GetBackgroundURL(extension).spec())
             .Set("optionsUrl",
@@ -2392,15 +2384,21 @@ AutotestPrivateGetClipboardTextDataFunction::
 
 ExtensionFunction::ResponseAction
 AutotestPrivateGetClipboardTextDataFunction::Run() {
-  std::u16string data;
   // This clipboard data read is initiated an extension API, then the user
   // shouldn't see a notification if the clipboard is restricted by the rules of
   // data leak prevention policy.
   ui::DataTransferEndpoint data_dst = ui::DataTransferEndpoint(
       ui::EndpointType::kDefault, {.notify_if_restricted = false});
   ui::Clipboard::GetForCurrentThread()->ReadText(
-      ui::ClipboardBuffer::kCopyPaste, &data_dst, &data);
-  return RespondNow(WithArguments(data));
+      ui::ClipboardBuffer::kCopyPaste, std::move(data_dst),
+      base::BindOnce(&AutotestPrivateGetClipboardTextDataFunction::OnTextRead,
+                     this));
+  return RespondLater();
+}
+
+void AutotestPrivateGetClipboardTextDataFunction::OnTextRead(
+    std::u16string data) {
+  Respond(WithArguments(data));
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -2483,7 +2481,7 @@ AutotestPrivateRunCrostiniInstallerFunction::Run() {
   // we call RestartCrostini and we will be put in the pending restarters
   // queue and be notified on success/otherwise of installation.
   ash::CrostiniInstallerDialog::Show(
-      profile,
+      profile, /*ui_surface=*/std::nullopt,
       base::BindOnce([](base::WeakPtr<ash::CrostiniInstallerUI> installer_ui) {
         installer_ui->ClickInstallForTesting();
       }));
@@ -2669,45 +2667,6 @@ void AutotestPrivateImportCrostiniFunction::CrostiniImported(
   } else {
     Respond(Error("Error importing crostini"));
   }
-}
-
-///////////////////////////////////////////////////////////////////////////////
-// AutotestPrivateSetPluginVMPolicyFunction
-///////////////////////////////////////////////////////////////////////////////
-
-AutotestPrivateSetPluginVMPolicyFunction::
-    ~AutotestPrivateSetPluginVMPolicyFunction() = default;
-
-ExtensionFunction::ResponseAction
-AutotestPrivateSetPluginVMPolicyFunction::Run() {
-  std::optional<api::autotest_private::SetPluginVMPolicy::Params> params =
-      api::autotest_private::SetPluginVMPolicy::Params::Create(args());
-  EXTENSION_FUNCTION_VALIDATE(params);
-  DVLOG(1) << "AutotestPrivateSetPluginVMPolicyFunction " << params->image_url
-           << ", " << params->image_hash << ", " << params->license_key;
-
-  Profile* profile = Profile::FromBrowserContext(browser_context());
-  plugin_vm::SetFakePluginVmPolicy(profile, params->image_url,
-                                   params->image_hash, params->license_key);
-
-  return RespondNow(NoArguments());
-}
-
-///////////////////////////////////////////////////////////////////////////////
-// AutotestPrivateShowPluginVMInstallerFunction
-///////////////////////////////////////////////////////////////////////////////
-
-AutotestPrivateShowPluginVMInstallerFunction::
-    ~AutotestPrivateShowPluginVMInstallerFunction() = default;
-
-ExtensionFunction::ResponseAction
-AutotestPrivateShowPluginVMInstallerFunction::Run() {
-  DVLOG(1) << "AutotestPrivateShowPluginVMInstallerFunction";
-
-  Profile* profile = Profile::FromBrowserContext(browser_context());
-  plugin_vm::ShowPluginVmInstallerView(profile);
-
-  return RespondNow(NoArguments());
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -2906,7 +2865,9 @@ ExtensionFunction::ResponseAction AutotestPrivateGetPrinterListFunction::Run() {
   DVLOG(1) << "AutotestPrivateGetPrinterListFunction";
 
   Profile* profile = Profile::FromBrowserContext(browser_context());
-  printers_manager_ = ash::CupsPrintersManager::Create(profile);
+  printers_manager_ = ash::CupsPrintersManager::Create(
+      CHECK_DEREF(g_browser_process->local_state()),
+      g_browser_process->GetFeatures()->application_locale_storage(), profile);
   printers_manager_->AddObserver(this);
 
   // Set up a timer to finish waiting after 10 seconds
@@ -3307,43 +3268,48 @@ AutotestPrivateGetAllInstalledAppsFunction::Run() {
   DVLOG(1) << "AutotestPrivateGetAllInstalledAppsFunction";
 
   Profile* const profile = Profile::FromBrowserContext(browser_context());
-  apps::AppServiceProxy* proxy =
-      apps::AppServiceProxyFactory::GetForProfile(profile);
+  const AccountId* account_id =
+      ash::AnnotatedAccountId::Get(profile->GetOriginalProfile());
+  apps::AppService* app_service =
+      account_id ? apps::AppServiceRegistry::Get()->Find(*account_id) : nullptr;
 
   std::vector<api::autotest_private::App> installed_apps;
-  proxy->AppRegistryCache().ForEachApp(
-      [&installed_apps](const apps::AppUpdate& update) {
-        if (!apps_util::IsInstalled(update.Readiness())) {
-          return;
-        }
+  if (app_service) {
+    app_service->AppRegistryCache().ForEachApp(
+        [&installed_apps](const apps::AppUpdate& update) {
+          if (!apps_util::IsInstalled(update.Readiness())) {
+            return;
+          }
 
-        api::autotest_private::App app;
-        app.app_id = update.AppId();
+          api::autotest_private::App app;
+          app.app_id = update.AppId();
 
-        // Assume that when `switches::kForceDirectionRTL` is enabled, the
-        // system language still follows the left-to-right fashion. Because the
-        // app names carried by `update` are adapted to RTL by inserting extra
-        // characters that indicate the text direction, we should recover the
-        // original app names before returning them as the result.
-        if (base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
-                switches::kForceUIDirection) == switches::kForceDirectionRTL) {
-          std::u16string name = base::UTF8ToUTF16(update.Name());
-          base::i18n::UnadjustStringForLocaleDirection(&name);
-          app.name = base::UTF16ToUTF8(name);
-        } else {
-          app.name = update.Name();
-        }
+          // Assume that when `switches::kForceDirectionRTL` is enabled, the
+          // system language still follows the left-to-right fashion. Because
+          // the app names carried by `update` are adapted to RTL by inserting
+          // extra characters that indicate the text direction, we should
+          // recover the original app names before returning them as the result.
+          if (base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
+                  switches::kForceUIDirection) ==
+              switches::kForceDirectionRTL) {
+            std::u16string name = base::UTF8ToUTF16(update.Name());
+            base::i18n::UnadjustStringForLocaleDirection(&name);
+            app.name = base::UTF16ToUTF8(name);
+          } else {
+            app.name = update.Name();
+          }
 
-        app.short_name = update.ShortName();
-        app.publisher_id = update.PublisherId();
-        app.additional_search_terms = update.AdditionalSearchTerms();
-        app.type = GetAppType(update.AppType());
-        app.install_source = GetAppInstallSource(update.InstallReason());
-        app.readiness = GetAppReadiness(update.Readiness());
-        app.show_in_launcher = update.ShowInLauncher();
-        app.show_in_search = update.ShowInSearch();
-        installed_apps.emplace_back(std::move(app));
-      });
+          app.short_name = update.ShortName();
+          app.publisher_id = update.PublisherId();
+          app.additional_search_terms = update.AdditionalSearchTerms();
+          app.type = GetAppType(update.AppType());
+          app.install_source = GetAppInstallSource(update.InstallReason());
+          app.readiness = GetAppReadiness(update.Readiness());
+          app.show_in_launcher = update.ShowInLauncher();
+          app.show_in_search = update.ShowInSearch();
+          installed_apps.emplace_back(std::move(app));
+        });
+  }
 
   return RespondNow(
       ArgumentList(api::autotest_private::GetAllInstalledApps::Results::Create(
@@ -4230,10 +4196,25 @@ class AutotestPrivateInstallPWAForCurrentURLFunction::PWABannerObserver
     : public webapps::AppBannerManager::Observer {
  public:
   PWABannerObserver(webapps::AppBannerManager* manager,
+                    content::WebContents* web_contents,
                     base::OnceCallback<void()> callback)
       : callback_(std::move(callback)), app_banner_manager_(manager) {
     DCHECK(manager);
     observation_.Observe(manager);
+    // The manager's lifetime is tied to the tab, which can be destroyed (or
+    // its contents discarded) while this observer waits; detach then to
+    // avoid observing a destroyed manager.
+    tabs::TabInterface* tab =
+        tabs::TabInterface::MaybeGetFromContents(web_contents);
+    if (tab) {
+      tab_will_detach_subscription_ =
+          tab->RegisterWillDetach(base::BindRepeating(
+              &PWABannerObserver::OnTabWillDetach, base::Unretained(this)));
+      tab_will_discard_contents_subscription_ =
+          tab->RegisterWillDiscardContents(
+              base::BindRepeating(&PWABannerObserver::OnTabWillDiscardContents,
+                                  base::Unretained(this)));
+    }
 
     // If PWA is already loaded, call callback immediately.
     Installable installable =
@@ -4275,11 +4256,26 @@ class AutotestPrivateInstallPWAForCurrentURLFunction::PWABannerObserver
  private:
   using Installable = webapps::InstallableWebAppCheckResult;
 
+  void OnTabWillDetach(tabs::TabInterface* tab,
+                       tabs::TabInterface::DetachReason reason) {
+    observation_.Reset();
+    app_banner_manager_ = nullptr;
+  }
+
+  void OnTabWillDiscardContents(tabs::TabInterface* tab,
+                                content::WebContents* old_contents,
+                                content::WebContents* new_contents) {
+    observation_.Reset();
+    app_banner_manager_ = nullptr;
+  }
+
   base::ScopedObservation<webapps::AppBannerManager,
                           webapps::AppBannerManager::Observer>
       observation_{this};
   base::OnceCallback<void()> callback_;
   raw_ptr<webapps::AppBannerManager> app_banner_manager_;
+  base::CallbackListSubscription tab_will_detach_subscription_;
+  base::CallbackListSubscription tab_will_discard_contents_subscription_;
 };
 
 // Used to notify when a PWA is installed.
@@ -4332,7 +4328,8 @@ class AutotestPrivateInstallPWAForCurrentURLFunction::PWAInstallManagerObserver
 AutotestPrivateInstallPWAForCurrentURLFunction::
     AutotestPrivateInstallPWAForCurrentURLFunction()
     : auto_accept_pwa_install_confirmation_(
-          web_app::SetAutoAcceptPWAInstallConfirmationForTesting()) {}
+          web_app::SetPwaInstallationAutoRespondForTesting(  // IN-TEST
+              web_app::InstallDialogTestResponse::kAcceptAndLaunch)) {}
 AutotestPrivateInstallPWAForCurrentURLFunction::
     ~AutotestPrivateInstallPWAForCurrentURLFunction() = default;
 
@@ -4351,13 +4348,13 @@ AutotestPrivateInstallPWAForCurrentURLFunction::Run() {
   content::WebContents* web_contents = browser->GetActiveWebContents();
 
   webapps::AppBannerManager* app_banner_manager =
-      webapps::AppBannerManagerDesktop::FromWebContents(web_contents);
+      webapps::AppBannerManager::FromWebContents(web_contents);
   if (!app_banner_manager) {
     return RespondNow(Error("Failed to create AppBannerManager"));
   }
 
   banner_observer_ = std::make_unique<PWABannerObserver>(
-      app_banner_manager,
+      app_banner_manager, web_contents,
       base::BindOnce(&AutotestPrivateInstallPWAForCurrentURLFunction::PWALoaded,
                      this));
 
@@ -5686,11 +5683,19 @@ AutotestPrivateGetLoginEventRecorderLoginEventsFunction::Run() {
       ash::LoginEventRecorder::Get()
           ->GetCollectedLoginEventsForTesting();  // IN-TEST
   std::vector<api::autotest_private::LoginEventRecorderData> result_data;
+  // Sample both clocks once, back-to-back, so every event is mapped through
+  // the same wall-clock/TimeTicks anchor and the (sub-microsecond) skew
+  // between the two Now() reads is shared rather than re-incurred per event.
+  const base::Time wall_now = base::Time::Now();
+  const base::TimeTicks ticks_now = base::TimeTicks::Now();
   for (const auto& data : collected_data) {
     api::autotest_private::LoginEventRecorderData event_data;
     event_data.name = data.name();
+    // Map the TimeTicks event time onto wall-clock time by anchoring both
+    // clocks to the current instant.
     event_data.microsecnods_since_unix_epoch =
-        (data.time() - base::TimeTicks::UnixEpoch()).InMicroseconds();
+        (wall_now - (ticks_now - data.time()) - base::Time::UnixEpoch())
+            .InMicroseconds();
     result_data.emplace_back(std::move(event_data));
   }
 
@@ -5778,9 +5783,9 @@ ExtensionFunction::ResponseAction AutotestPrivateGetAccessTokenFunction::Run() {
           &AutotestPrivateGetAccessTokenFunction::RespondWithTimeoutError,
           this));
 
-  Profile* profile = Profile::FromBrowserContext(browser_context());
   signin::IdentityManager* identity_manager =
-      IdentityManagerFactory::GetForProfile(profile);
+      ash::IdentityManagerProvider::Get().Find(
+          CHECK_DEREF(ash::AnnotatedAccountId::Get(browser_context())));
   OAuth2AccessTokenManager::ScopeSet scopes(
       params->access_token_params.scopes.begin(),
       params->access_token_params.scopes.end());
@@ -5789,7 +5794,7 @@ ExtensionFunction::ResponseAction AutotestPrivateGetAccessTokenFunction::Run() {
           identity_manager
               ->FindExtendedAccountInfoByEmailAddress(
                   params->access_token_params.email)
-              .account_id,
+              .GetAccountId(),
           signin::OAuthConsumerId::kAshAutotestPrivateApi, scopes,
           base::BindOnce(&AutotestPrivateGetAccessTokenFunction::OnAccessToken,
                          this),

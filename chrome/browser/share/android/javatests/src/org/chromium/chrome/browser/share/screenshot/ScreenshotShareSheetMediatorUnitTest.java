@@ -22,10 +22,8 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
-import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.share.share_sheet.ChromeOptionShareCallback;
 import org.chromium.ui.base.WindowAndroid;
@@ -34,15 +32,12 @@ import org.chromium.url.JUnitTestGURLs;
 
 /** Tests for {@link ScreenshotShareSheetMediator}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class ScreenshotShareSheetMediatorUnitTest {
 
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Mock Runnable mDeleteRunnable;
 
     @Mock Runnable mSaveRunnable;
-
-    @Mock Callback<Runnable> mInstallRunnable;
 
     @Mock Activity mContext;
 
@@ -112,11 +107,6 @@ public class ScreenshotShareSheetMediatorUnitTest {
         callback.onResult(ScreenshotShareSheetViewProperties.NoArgOperation.DELETE);
 
         verify(mDeleteRunnable).run();
-        Assert.assertEquals(
-                1,
-                RecordHistogram.getHistogramValueCountForTesting(
-                        "Sharing.ScreenshotFallback.Action",
-                        ScreenshotShareSheetMetrics.ScreenshotShareSheetAction.DELETE));
     }
 
     @Test
@@ -126,11 +116,6 @@ public class ScreenshotShareSheetMediatorUnitTest {
         callback.onResult(ScreenshotShareSheetViewProperties.NoArgOperation.SAVE);
 
         verify(mSaveRunnable).run();
-        Assert.assertEquals(
-                1,
-                RecordHistogram.getHistogramValueCountForTesting(
-                        "Sharing.ScreenshotFallback.Action",
-                        ScreenshotShareSheetMetrics.ScreenshotShareSheetAction.SAVE));
     }
 
     @Test
@@ -141,10 +126,5 @@ public class ScreenshotShareSheetMediatorUnitTest {
 
         Assert.assertTrue(mMediator.generateTemporaryUriFromBitmapCalled());
         verify(mDeleteRunnable).run();
-        Assert.assertEquals(
-                1,
-                RecordHistogram.getHistogramValueCountForTesting(
-                        "Sharing.ScreenshotFallback.Action",
-                        ScreenshotShareSheetMetrics.ScreenshotShareSheetAction.SHARE));
     }
 }

@@ -7,9 +7,11 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/check.h"
+#include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/pickle.h"
 #include "base/strings/strcat.h"
@@ -145,11 +147,8 @@ void AddFiles(PlatformClipboard::Data data, OSExchangeDataProvider* provider) {
       continue;
     }
 
-    url::RawCanonOutputT<char16_t> unescaped;
-    url::DecodeURLEscapeSequences(
-        url.path(), url::DecodeURLMode::kUTF8OrIsomorphic, &unescaped);
-
-    const base::FilePath path(base::UTF16ToUTF8(unescaped.view()));
+    const base::FilePath path(url::DecodeUrlEscapeSequences(
+        url.path(), url::DecodeUrlMode::kUtf8OrIsomorphic));
     filenames.emplace_back(path, path.BaseName());
   }
   if (filenames.empty())
@@ -167,8 +166,7 @@ void AddFileContents(const std::string& filename,
     return;
   }
 
-  provider->SetFileContents(base::FilePath(filename),
-                            BytesTo<std::string>(data));
+  provider->SetFileContents(base::FilePath(filename), data->as_vector());
 }
 
 // Parses |data| as if it had text/x-moz-url format, which is basically
@@ -222,16 +220,6 @@ std::unique_ptr<OSExchangeDataProvider> WaylandExchangeDataProvider::Clone()
 void WaylandExchangeDataProvider::SetFilenames(
     const std::vector<FileInfo>& filenames) {
   OSExchangeDataProviderNonBacked::SetFilenames(filenames);
-
-#if BUILDFLAG(IS_LINUX)
-  // Synchronously register files to get the key. This blocks the UI thread
-  // briefly but ensures the key is ready for the data offer.
-  std::string key = ui::clipboard_util::RegisterFilesWithPortal(filenames);
-  if (!key.empty()) {
-    additional_data_[kMimeTypePortalFileTransfer] = key;
-    additional_data_[kMimeTypePortalFiles] = key;
-  }
-#endif
 }
 
 std::vector<std::string> WaylandExchangeDataProvider::BuildMimeTypesList()
@@ -348,15 +336,17 @@ bool WaylandExchangeDataProvider::ExtractData(const std::string& mime_type,
   }
   if (mime_type.starts_with(ui::kMimeTypeOctetStream) && HasFileContents()) {
     std::optional<FileContentsInfo> file_contents = GetFileContents();
-    out_content->append(file_contents->file_contents);
+    // Transforming from the vector<int8_t> to string is awkward; should
+    // ExtractData() also return vector<int8_t>?
+    out_content->append(std::string_view(
+        base::as_chars(base::span(file_contents->file_contents))));
     return true;
   }
   if (mime_type == ui::kMimeTypeDataTransferCustomData &&
       HasCustomFormat(ui::ClipboardFormatType::DataTransferCustomType())) {
     std::optional<base::Pickle> pickle =
         GetPickledData(ui::ClipboardFormatType::DataTransferCustomType());
-    *out_content = std::string(reinterpret_cast<const char*>(pickle->data()),
-                               pickle->size());
+    *out_content = std::string(pickle->AsStringView());
     return true;
   }
 #if BUILDFLAG(IS_LINUX)

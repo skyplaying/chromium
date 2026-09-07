@@ -9,6 +9,7 @@
 #include "base/linux_util.h"
 #include "base/logging.h"
 #include "base/logging/logging_settings.h"
+#include "base/memory_coordinator/dummy_memory_consumer_registry.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/run_loop.h"
 #include "base/strings/string_split.h"
@@ -26,6 +27,9 @@
 #include "services/network/transitional_url_loader_factory_owner.h"
 
 int main(int argc, char const* argv[]) {
+  base::ScopedMemoryConsumerRegistry<base::DummyMemoryConsumerRegistry>
+      memory_consumer_registry;
+
   base::AtExitManager exitManager;
   base::CommandLine::Init(argc, argv);
 

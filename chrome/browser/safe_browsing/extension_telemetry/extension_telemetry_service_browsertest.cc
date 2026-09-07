@@ -7,6 +7,7 @@
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/path_service.h"
+#include "base/strings/string_util.h"
 #include "base/test/protobuf_matchers.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/enterprise/connectors/test/deep_scanning_test_utils.h"
@@ -16,8 +17,10 @@
 #include "chrome/browser/safe_browsing/extension_telemetry/extension_telemetry_service_factory.h"
 #include "chrome/browser/safe_browsing/extension_telemetry/search_hijacking_detector.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
+#include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/enterprise/connectors/core/reporting_constants.h"
@@ -68,6 +71,9 @@ using RemoteHostContactedInfo =
     ExtensionTelemetryReportRequest_SignalInfo_RemoteHostContactedInfo;
 using RemoteHostInfo =
     ExtensionTelemetryReportRequest_SignalInfo_RemoteHostContactedInfo_RemoteHostInfo;
+using DOMAccessInfo = ExtensionTelemetryReportRequest_SignalInfo_DOMAccessInfo;
+using ScriptInjectionInfo =
+    ExtensionTelemetryReportRequest_SignalInfo_ScriptInjectionInfo;
 using TestRule = extensions::declarative_net_request::TestRule;
 using TestHeaderInfo = extensions::declarative_net_request::TestHeaderInfo;
 
@@ -78,7 +84,8 @@ class ExtensionTelemetryServiceBrowserTest
     scoped_feature_list_.InitWithFeatures(
         /*enabled_features=*/
         {kExtensionTelemetrySearchHijackingSignal,
-         extensions_features::kIncludeJSCallStackInExtensionApiRequest},
+         extensions_features::kIncludeJSCallStackInExtensionApiRequest,
+         extensions_features::kEnterpriseExtensionDOMActivityTelemetry},
         /*disabled_features=*/{});
     CHECK(base::PathService::Get(chrome::DIR_TEST_DATA, &test_extension_dir_));
     test_extension_dir_ =
@@ -92,7 +99,7 @@ class ExtensionTelemetryServiceBrowserTest
     // Helper to set up enterprise reporting and enable by default.
     event_report_validator_helper_ = std::make_unique<
         enterprise_connectors::test::EventReportValidatorHelper>(
-        browser()->profile(), /*browser_test=*/true);
+        browser()->GetProfile(), /*browser_test=*/true);
     // Enable enterprise policy.
     enterprise_connectors::test::SetOnSecurityEventReporting(
         /*prefs=*/prefs(),
@@ -100,6 +107,11 @@ class ExtensionTelemetryServiceBrowserTest
         /*enabled_event_names=*/{},
         /*enabled_opt_in_events=*/
         {{enterprise_connectors::kExtensionTelemetryEvent, {"*"}}});
+
+    // Set the last upload time to Now() so that StartUploadCheck (delayed by
+    // 15s at startup) does not trigger CreateAndUploadReport() and clear the
+    // collected signals in the middle of tests.
+    SetLastUploadTimeForExtensionTelemetry(*prefs(), base::Time::Now());
   }
 
   void TearDownOnMainThread() override {
@@ -108,15 +120,15 @@ class ExtensionTelemetryServiceBrowserTest
   }
 
  protected:
-  content::WebContents* web_contents(Browser* browser) const {
-    return browser->tab_strip_model()->GetActiveWebContents();
+  content::WebContents* web_contents(BrowserWindowInterface* browser) const {
+    return browser->GetTabStripModel()->GetActiveWebContents();
   }
 
-  PrefService* prefs() { return browser()->profile()->GetPrefs(); }
+  PrefService* prefs() { return browser()->GetProfile()->GetPrefs(); }
 
   ExtensionTelemetryService* telemetry_service() {
     return ExtensionTelemetryServiceFactory::GetForProfile(
-        browser()->profile());
+        browser()->GetProfile());
   }
 
   bool IsTelemetryServiceEnabledForESB() {
@@ -166,7 +178,7 @@ class ExtensionTelemetryServiceBrowserTest
 
 IN_PROC_BROWSER_TEST_F(ExtensionTelemetryServiceBrowserTest,
                        DetectsAndReportsCookiesGetAllSignal) {
-  SetSafeBrowsingState(browser()->profile()->GetPrefs(),
+  SetSafeBrowsingState(browser()->GetProfile()->GetPrefs(),
                        SafeBrowsingState::ENHANCED_PROTECTION);
   ASSERT_TRUE(StartEmbeddedTestServer());
 
@@ -273,7 +285,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionTelemetryServiceBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(ExtensionTelemetryServiceBrowserTest,
                        DetectsAndReportsCookiesGetSignal) {
-  SetSafeBrowsingState(browser()->profile()->GetPrefs(),
+  SetSafeBrowsingState(browser()->GetProfile()->GetPrefs(),
                        SafeBrowsingState::ENHANCED_PROTECTION);
   ASSERT_TRUE(StartEmbeddedTestServer());
 
@@ -374,7 +386,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionTelemetryServiceBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(ExtensionTelemetryServiceBrowserTest,
                        DetectsAndReportsDeclarativeNetRequestSignal) {
-  SetSafeBrowsingState(browser()->profile()->GetPrefs(),
+  SetSafeBrowsingState(browser()->GetProfile()->GetPrefs(),
                        SafeBrowsingState::ENHANCED_PROTECTION);
   ASSERT_TRUE(StartEmbeddedTestServer());
 
@@ -486,7 +498,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionTelemetryServiceBrowserTest,
 IN_PROC_BROWSER_TEST_F(ExtensionTelemetryServiceBrowserTest,
                        DetectsAndReportsDeclarativeNetRequestActionSignal) {
   UseHttpsTestServer();
-  SetSafeBrowsingState(browser()->profile()->GetPrefs(),
+  SetSafeBrowsingState(browser()->GetProfile()->GetPrefs(),
                        SafeBrowsingState::ENHANCED_PROTECTION);
   ASSERT_TRUE(StartEmbeddedTestServer());
 
@@ -601,9 +613,15 @@ IN_PROC_BROWSER_TEST_F(ExtensionTelemetryServiceBrowserTest,
 #endif
 IN_PROC_BROWSER_TEST_F(ExtensionTelemetryServiceBrowserTest,
                        MAYBE_DetectsAndReportsTabsApiSignal) {
-  SetSafeBrowsingState(browser()->profile()->GetPrefs(),
+  SetSafeBrowsingState(browser()->GetProfile()->GetPrefs(),
                        SafeBrowsingState::ENHANCED_PROTECTION);
   ASSERT_TRUE(StartEmbeddedTestServer());
+
+  GURL google_url = embedded_test_server()->GetURL("google.com", "/empty.html");
+  GURL example_url =
+      embedded_test_server()->GetURL("example.com", "/empty.html");
+  std::string sanitized_google_url = google_url.GetWithoutFilename().spec();
+  std::string sanitized_example_url = example_url.GetWithoutFilename().spec();
 
   static constexpr char kManifest[] =
       R"({
@@ -614,58 +632,70 @@ IN_PROC_BROWSER_TEST_F(ExtensionTelemetryServiceBrowserTest,
          "host_permissions": ["<all_urls>"],
          "background": { "service_worker" : "background.js" }
        })";
-  static constexpr char kBackground[] =
+  static constexpr char kBackgroundTemplate[] =
       R"(
-        var pass = chrome.test.callbackPass;
-        function waitForAllTabs(callback) {
-          // Wait for all tabs to load.
-          function waitForTabs() {
-            chrome.windows.getAll({"populate": true}, function(windows) {
-              var ready = true;
-              for (var i in windows) {
-                for (var j in windows[i].tabs) {
-                  if (windows[i].tabs[j].status != "complete") {
-                    ready = false;
-                    break;
-                  }
-                }
-                if (!ready)
-                  break;
+        const loadedTabs = new Map();
+        const waitingResolvers = new Map();
+
+        chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+          if (changeInfo.status === 'complete' && tab.url) {
+            loadedTabs.set(tabId, tab.url);
+            if (waitingResolvers.has(tabId)) {
+              const {expectedUrl, resolve} = waitingResolvers.get(tabId);
+              if (!expectedUrl || tab.url.startsWith(expectedUrl)) {
+                waitingResolvers.delete(tabId);
+                resolve(tab);
               }
-              if (ready)
-                callback();
-              else
-                setTimeout(waitForTabs, 30);
-            });
+            }
+          } else if (changeInfo.status === 'loading') {
+            loadedTabs.delete(tabId);
           }
-          waitForTabs();
+        });
+
+        function waitForTabLoad(tabId, expectedUrl) {
+          return new Promise((resolve) => {
+            if (loadedTabs.has(tabId) &&
+                (!expectedUrl || loadedTabs.get(tabId).startsWith(expectedUrl))) {
+              resolve();
+              return;
+            }
+            waitingResolvers.set(tabId, {expectedUrl, resolve});
+          });
         }
+
+        const GOOGLE_URL = '$1';
+        const EXAMPLE_URL = '$2';
 
         chrome.test.runTests([
           async function tabOps() {
-            await chrome.tabs.create({url: 'http://www.google.com'});
-            const second_tab = await chrome.tabs.create(
-                {url: 'http://www.google.com'});
-            await chrome.tabs.update({url:'http://www.example.com'});
+            const first_tab =
+                await chrome.tabs.create({url: GOOGLE_URL});
+            await waitForTabLoad(first_tab.id, GOOGLE_URL);
+
+            const second_tab =
+                await chrome.tabs.create({url: GOOGLE_URL});
+            await waitForTabLoad(second_tab.id, GOOGLE_URL);
+
+            await chrome.tabs.update(second_tab.id, {url: EXAMPLE_URL});
+            await waitForTabLoad(second_tab.id, EXAMPLE_URL);
+
             await chrome.tabs.remove(second_tab.id);
+
+            const newWindow =
+                await chrome.windows.create({url: GOOGLE_URL});
+            await waitForTabLoad(newWindow.tabs[0].id, GOOGLE_URL);
+            await chrome.tabs.captureVisibleTab(newWindow.id);
             chrome.test.succeed();
-          },
-          async function captureVisibleTabOp() {
-            await chrome.windows.create({url: 'http://www.google.com'},
-              pass(function(newWindow) {
-                waitForAllTabs(pass(function() {
-                  chrome.tabs.captureVisibleTab(newWindow.id, function() {
-                    chrome.test.succeed();
-                  });
-                }));
-              }));
           },
         ]);
       )";
 
+  std::string background = base::ReplaceStringPlaceholders(
+      kBackgroundTemplate, {google_url.spec(), example_url.spec()}, nullptr);
+
   extensions::TestExtensionDir test_dir;
   test_dir.WriteManifest(kManifest);
-  test_dir.WriteFile(FILE_PATH_LITERAL("background.js"), kBackground);
+  test_dir.WriteFile(FILE_PATH_LITERAL("background.js"), background);
 
   extensions::ResultCatcher result_catcher;
   const auto* extension = LoadExtension(test_dir.UnpackedPath());
@@ -713,7 +743,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionTelemetryServiceBrowserTest,
     EXPECT_EQ(call_details.count(), 2u);
     EXPECT_EQ(call_details.method(), TabsApiInfo::CREATE);
     EXPECT_EQ(call_details.current_url(), "");
-    EXPECT_EQ(call_details.new_url(), "http://www.google.com/");
+    EXPECT_EQ(call_details.new_url(), sanitized_google_url);
 
     // Check the JS call stack information.
     EXPECT_EQ(call_details.js_callstacks_size(), 2);
@@ -732,9 +762,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionTelemetryServiceBrowserTest,
         tabs_api_info.call_details(1);
     EXPECT_EQ(call_details.count(), 1u);
     EXPECT_EQ(call_details.method(), TabsApiInfo::UPDATE);
-    EXPECT_EQ(call_details.current_url(), "http://www.google.com/");
-    EXPECT_EQ(call_details.new_url(), "http://www.example.com/");
-    EXPECT_EQ(call_details.js_callstacks_size(), 1);
+    EXPECT_EQ(call_details.current_url(), sanitized_google_url);
+    EXPECT_EQ(call_details.new_url(), sanitized_example_url);
 
     // Check the JS call stack information.
     EXPECT_EQ(call_details.js_callstacks_size(), 1);
@@ -748,9 +777,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionTelemetryServiceBrowserTest,
         tabs_api_info.call_details(2);
     EXPECT_EQ(call_details.count(), 1u);
     EXPECT_EQ(call_details.method(), TabsApiInfo::REMOVE);
-    EXPECT_EQ(call_details.current_url(), "http://www.example.com/");
+    EXPECT_EQ(call_details.current_url(), sanitized_example_url);
     EXPECT_EQ(call_details.new_url(), "");
-    EXPECT_EQ(call_details.js_callstacks_size(), 1);
 
     // Check the JS call stack information.
     EXPECT_EQ(call_details.js_callstacks_size(), 1);
@@ -764,7 +792,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionTelemetryServiceBrowserTest,
         tabs_api_info.call_details(3);
     EXPECT_EQ(call_details.count(), 1u);
     EXPECT_EQ(call_details.method(), TabsApiInfo::CAPTURE_VISIBLE_TAB);
-    EXPECT_EQ(call_details.current_url(), "http://www.google.com/");
+    EXPECT_EQ(call_details.current_url(), sanitized_google_url);
     EXPECT_EQ(call_details.new_url(), "");
 
     // Check the JS call stack information.
@@ -772,7 +800,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionTelemetryServiceBrowserTest,
     const JSCallStack& callstack = call_details.js_callstacks(0);
     ASSERT_GE(callstack.frames_size(), 1);
     EXPECT_EQ(callstack.frames(0).script_name(), "/background.js");
-    EXPECT_EQ(callstack.frames(0).function_name(), "<anonymous>");
+    EXPECT_EQ(callstack.frames(0).function_name(), "tabOps");
   }
 
   // Verify enterprise telemetry reporting.
@@ -788,7 +816,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionTelemetryServiceBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(ExtensionTelemetryServiceBrowserTest,
                        InterceptsRemoteHostContactedSignalInRenderer) {
-  SetSafeBrowsingState(browser()->profile()->GetPrefs(),
+  SetSafeBrowsingState(browser()->GetProfile()->GetPrefs(),
                        SafeBrowsingState::ENHANCED_PROTECTION);
   ASSERT_TRUE(StartEmbeddedTestServer());
   extensions::ResultCatcher result_catcher;
@@ -857,7 +885,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionTelemetryServiceBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(ExtensionTelemetryServiceBrowserTest,
                        DetectsWebRequestFromContentScript) {
-  SetSafeBrowsingState(browser()->profile()->GetPrefs(),
+  SetSafeBrowsingState(browser()->GetProfile()->GetPrefs(),
                        SafeBrowsingState::ENHANCED_PROTECTION);
   ASSERT_TRUE(StartEmbeddedTestServer());
 
@@ -969,7 +997,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionTelemetryServiceBrowserTest,
 #endif
 IN_PROC_BROWSER_TEST_F(ExtensionTelemetryServiceBrowserTest,
                        MAYBE_DetectsAndReportsSearchHijackingSignal) {
-  SetSafeBrowsingState(browser()->profile()->GetPrefs(),
+  SetSafeBrowsingState(browser()->GetProfile()->GetPrefs(),
                        SafeBrowsingState::ENHANCED_PROTECTION);
   ASSERT_TRUE(StartEmbeddedTestServer());
 
@@ -990,7 +1018,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionTelemetryServiceBrowserTest,
 
   // Set up DSE.
   TemplateURLService* template_url_service =
-      TemplateURLServiceFactory::GetForProfile(browser()->profile());
+      TemplateURLServiceFactory::GetForProfile(browser()->GetProfile());
   TemplateURLData data;
   data.SetShortName(u"Test");
   data.SetKeyword(u"test");
@@ -1026,6 +1054,156 @@ IN_PROC_BROWSER_TEST_F(ExtensionTelemetryServiceBrowserTest,
   const auto& signal = telemetry_report_pb->search_hijacking_signal();
   EXPECT_EQ(signal.omnibox_search_count(), 10);
   EXPECT_EQ(signal.serp_landing_count(), 3);
+}
+
+IN_PROC_BROWSER_TEST_F(ExtensionTelemetryServiceBrowserTest,
+                       DetectsAndReportsDOMAccessSignal) {
+  // Enable enterprise policy with DOM activity event.
+  enterprise_connectors::test::SetOnSecurityEventReporting(
+      /*prefs=*/prefs(),
+      /*enabled=*/true,
+      /*enabled_event_names=*/{},
+      /*enabled_opt_in_events=*/
+      {{enterprise_connectors::kExtensionTelemetryEvent, {"*"}},
+       {enterprise_connectors::kExtensionDOMActivityEvent, {"*"}}});
+  ASSERT_TRUE(StartEmbeddedTestServer());
+
+  static constexpr char kManifest[] =
+      R"({
+        "name": "DOM Access Extension",
+        "version": "0.1",
+        "manifest_version": 3,
+        "content_scripts": [
+          {
+            "matches": ["<all_urls>"],
+            "js": ["content_script.js"],
+            "run_at": "document_start"
+          }
+        ]
+      })";
+  static constexpr char kContentScript[] =
+      R"(
+        console.log(document.cookie);
+        chrome.test.notifyPass();
+      )";
+
+  extensions::TestExtensionDir test_dir;
+  test_dir.WriteManifest(kManifest);
+  test_dir.WriteFile(FILE_PATH_LITERAL("content_script.js"), kContentScript);
+
+  extensions::ResultCatcher result_catcher;
+  const auto* extension = LoadExtension(test_dir.UnpackedPath());
+  ASSERT_TRUE(extension);
+
+  // Navigate to a page to trigger the content script.
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL("example.com", "/empty.html")));
+  ASSERT_TRUE(result_catcher.GetNextResult());
+
+  ASSERT_TRUE(IsTelemetryServiceEnabledForEnterprise());
+
+  // Generate telemetry report and verify.
+  std::unique_ptr<TelemetryReport> telemetry_report_pb =
+      GetTelemetryReportForEnterprise();
+  ASSERT_NE(telemetry_report_pb, nullptr);
+
+  // Retrieve the report corresponding to the test extension.
+  int report_index = -1;
+  for (int i = 0; i < telemetry_report_pb->reports_size(); i++) {
+    if (telemetry_report_pb->reports(i).extension().id() == extension->id()) {
+      report_index = i;
+    }
+  }
+  ASSERT_NE(report_index, -1);
+
+  const auto& extension_report = telemetry_report_pb->reports(report_index);
+  bool found_dom_access_signal = false;
+  for (const auto& signal : extension_report.signals()) {
+    if (signal.has_dom_access_info()) {
+      const auto& dom_access_info = signal.dom_access_info();
+      for (const auto& dom_access : dom_access_info.dom_accesses()) {
+        if (dom_access.api_name() == "Document.cookie") {
+          found_dom_access_signal = true;
+          break;
+        }
+      }
+    }
+  }
+  EXPECT_TRUE(found_dom_access_signal);
+}
+
+IN_PROC_BROWSER_TEST_F(ExtensionTelemetryServiceBrowserTest,
+                       DetectsAndReportsScriptInjectionSignal) {
+  // Enable enterprise policy with DOM activity event.
+  enterprise_connectors::test::SetOnSecurityEventReporting(
+      /*prefs=*/prefs(),
+      /*enabled=*/true,
+      /*enabled_event_names=*/{},
+      /*enabled_opt_in_events=*/
+      {{enterprise_connectors::kExtensionTelemetryEvent, {"*"}},
+       {enterprise_connectors::kExtensionDOMActivityEvent, {"*"}}});
+  ASSERT_TRUE(StartEmbeddedTestServer());
+
+  static constexpr char kManifest[] =
+      R"({
+        "name": "Script Injection Extension",
+        "version": "0.1",
+        "manifest_version": 3,
+        "permissions": ["scripting"],
+        "host_permissions": ["<all_urls>"],
+        "background": { "service_worker": "background.js" }
+      })";
+  static constexpr char kBackground[] =
+      R"(
+        chrome.test.runTests([
+          async function injectScript() {
+            const tabs = await chrome.tabs.query({active: true, currentWindow: true});
+            await chrome.scripting.executeScript({
+              target: {tabId: tabs[0].id},
+              func: () => { console.log('injected'); }
+            });
+            chrome.test.succeed();
+          }
+        ]);
+      )";
+
+  extensions::TestExtensionDir test_dir;
+  test_dir.WriteManifest(kManifest);
+  test_dir.WriteFile(FILE_PATH_LITERAL("background.js"), kBackground);
+
+  // Navigate to a page first so there's a target for injection.
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL("example.com", "/empty.html")));
+
+  extensions::ResultCatcher result_catcher;
+  const auto* extension = LoadExtension(test_dir.UnpackedPath());
+  ASSERT_TRUE(extension);
+  ASSERT_TRUE(result_catcher.GetNextResult());
+
+  ASSERT_TRUE(IsTelemetryServiceEnabledForEnterprise());
+
+  // Generate telemetry report and verify.
+  std::unique_ptr<TelemetryReport> telemetry_report_pb =
+      GetTelemetryReportForEnterprise();
+  ASSERT_NE(telemetry_report_pb, nullptr);
+
+  int report_index = -1;
+  for (int i = 0; i < telemetry_report_pb->reports_size(); i++) {
+    if (telemetry_report_pb->reports(i).extension().id() == extension->id()) {
+      report_index = i;
+    }
+  }
+  ASSERT_NE(report_index, -1);
+
+  const auto& extension_report = telemetry_report_pb->reports(report_index);
+  bool found_script_injection_signal = false;
+  for (const auto& signal : extension_report.signals()) {
+    if (signal.has_script_injection_info()) {
+      found_script_injection_signal = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(found_script_injection_signal);
 }
 
 }  // namespace safe_browsing

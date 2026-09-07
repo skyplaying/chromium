@@ -14,6 +14,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -21,6 +22,7 @@ import static org.mockito.Mockito.when;
 
 import android.content.Context;
 import android.content.ContextWrapper;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.os.Build;
@@ -40,12 +42,11 @@ import org.mockito.stubbing.Answer;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.ContextUtils;
-import org.chromium.base.task.TaskTraits;
-import org.chromium.base.task.test.ShadowPostTask;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.base.test.util.PackageManagerWrapper;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
+import org.chromium.chrome.browser.app.tabwindow.TabWindowManagerSingleton;
 import org.chromium.chrome.browser.back_press.BackPressManager;
 import org.chromium.chrome.browser.back_press.MinimizeAppAndCloseTabBackPressHandler;
 import org.chromium.chrome.browser.back_press.MinimizeAppAndCloseTabBackPressHandler.MinimizeAppAndCloseTabType;
@@ -53,9 +54,9 @@ import org.chromium.chrome.browser.customtabs.content.CustomTabActivityNavigatio
 import org.chromium.chrome.browser.customtabs.content.CustomTabActivityNavigationController.FinishReason;
 import org.chromium.chrome.browser.externalnav.ExternalNavigationDelegateImpl;
 import org.chromium.chrome.browser.flags.ActivityType;
-import org.chromium.chrome.browser.multiwindow.MultiInstanceManagerImpl;
 import org.chromium.chrome.browser.multiwindow.MultiWindowUtils;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tabwindow.TabWindowManager;
 import org.chromium.url.GURL;
 
 /**
@@ -65,9 +66,6 @@ import org.chromium.url.GURL;
  * classes in {@link CustomTabActivityUrlLoadingTest}.
  */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(
-        manifest = Config.NONE,
-        shadows = {ShadowPostTask.class})
 public class CustomTabActivityNavigationControllerTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -98,7 +96,6 @@ public class CustomTabActivityNavigationControllerTest {
 
     @Before
     public void setUp() {
-        ShadowPostTask.setTestImpl((@TaskTraits int taskTraits, Runnable task, long delay) -> {});
         mTestContext = new TestContext(ContextUtils.getApplicationContext());
         ContextUtils.initApplicationContextForTests(mTestContext);
 
@@ -118,7 +115,7 @@ public class CustomTabActivityNavigationControllerTest {
 
     // Predictive back is enabled by default on SDK 36+. Pin to older SDKs to
     // test the legacy back navigation path.
-    @Config(sdk = {29, 35})
+    @Config(sdk = {BaseRobolectricTestRunner.MIN_SDK, 35})
     @Test
     public void finishes_IfBackNavigationClosesTheOnlyTabWithNoUnloadEvents() {
         HistogramWatcher histogramWatcher =
@@ -144,9 +141,6 @@ public class CustomTabActivityNavigationControllerTest {
                         .expectIntRecord(
                                 CustomTabActivityNavigationController.HISTOGRAM_FINISH_REASON,
                                 FinishReason.USER_NAVIGATION)
-                        .expectNoRecords(
-                                BackPressManager.getCustomTabSeparateTaskHistogramForTesting())
-                        .expectNoRecords(BackPressManager.getCustomTabSameTaskHistogramForTesting())
                         .build();
         when(mTabController.onlyOneTabRemaining()).thenReturn(true);
         when(mTabController.dispatchBeforeUnloadIfNeeded()).thenReturn(false);
@@ -164,7 +158,7 @@ public class CustomTabActivityNavigationControllerTest {
 
     // Predictive back is enabled by default on SDK 36+. Pin to older SDKs to
     // test the legacy back navigation path.
-    @Config(sdk = {29, 35})
+    @Config(sdk = {BaseRobolectricTestRunner.MIN_SDK, 35})
     @Test
     public void finishes_IfBackNavigationClosesTheOnlyTabWithUnloadHandler_CctBeforeUnload() {
         HistogramWatcher histogramWatcher =
@@ -190,9 +184,6 @@ public class CustomTabActivityNavigationControllerTest {
                         .expectIntRecord(
                                 CustomTabActivityNavigationController.HISTOGRAM_FINISH_REASON,
                                 FinishReason.USER_NAVIGATION)
-                        .expectNoRecords(
-                                BackPressManager.getCustomTabSeparateTaskHistogramForTesting())
-                        .expectNoRecords(BackPressManager.getCustomTabSameTaskHistogramForTesting())
                         .build();
         when(mTabController.onlyOneTabRemaining()).thenReturn(true);
         when(mTabController.dispatchBeforeUnloadIfNeeded()).thenReturn(true);
@@ -210,7 +201,7 @@ public class CustomTabActivityNavigationControllerTest {
 
     // Predictive back is enabled by default on SDK 36+. Pin to older SDKs to
     // test the legacy back navigation path.
-    @Config(sdk = {29, 35})
+    @Config(sdk = {BaseRobolectricTestRunner.MIN_SDK, 35})
     @Test
     public void doesntFinish_IfBackNavigationReplacesTabWithPreviousOne() {
         HistogramWatcher histogramWatcher =
@@ -257,7 +248,10 @@ public class CustomTabActivityNavigationControllerTest {
         ExternalNavigationDelegateImpl.setWillChromeHandleIntentHookForTesting(intent -> true);
         mNavigationController.openCurrentUrlInBrowser();
         verify(env.activity, never()).startActivity(any());
-        verify(mTabController).detachAndStartReparenting(any(), any(), any());
+        ArgumentCaptor<Intent> intentCaptor = ArgumentCaptor.forClass(Intent.class);
+        verify(mTabController).detachAndStartReparenting(intentCaptor.capture(), any(), any());
+        Intent intent = intentCaptor.getValue();
+        assertTrue(intent.hasCategory(Intent.CATEGORY_BROWSABLE));
     }
 
     @Test
@@ -276,9 +270,11 @@ public class CustomTabActivityNavigationControllerTest {
     @Test
     public void finishes_whenDoneReparentingToAdjacentActivity() {
         ExternalNavigationDelegateImpl.setWillChromeHandleIntentHookForTesting(intent -> true);
-        MultiInstanceManagerImpl.setAdjacentWindowActivitySupplierForTesting(
-                () -> mAdjacentActivity);
         MultiWindowUtils.setActivitySupplierForTesting(() -> mAdjacentActivity);
+        TabWindowManager tabWindowManager = mock(TabWindowManager.class);
+        TabWindowManagerSingleton.setTabWindowManagerForTesting(tabWindowManager);
+        when(tabWindowManager.getIdForWindow(mAdjacentActivity)).thenReturn(1);
+        MultiWindowUtils.setActivityByWindowIdForTesting(1, mAdjacentActivity);
 
         mNavigationController.openCurrentUrlInBrowser();
 
@@ -291,7 +287,10 @@ public class CustomTabActivityNavigationControllerTest {
         ExternalNavigationDelegateImpl.setWillChromeHandleIntentHookForTesting(intent -> false);
         mNavigationController.openCurrentUrlInBrowser();
         verify(mTabController, never()).detachAndStartReparenting(any(), any(), any());
-        verify(env.activity).startActivity(any(), any());
+        ArgumentCaptor<Intent> intentCaptor = ArgumentCaptor.forClass(Intent.class);
+        verify(env.activity).startActivity(intentCaptor.capture(), any());
+        Intent intent = intentCaptor.getValue();
+        assertTrue(intent.hasCategory(Intent.CATEGORY_BROWSABLE));
         verify(mFinishHandler).onFinish(FinishReason.OPEN_IN_BROWSER, true);
     }
 
@@ -304,6 +303,97 @@ public class CustomTabActivityNavigationControllerTest {
         mNavigationController.openCurrentUrlInBrowser();
         verify(mTabController, never()).detachAndStartReparenting(any(), any(), any());
         verify(env.activity).startActivity(any(), any());
+        // The TWA client app must be kept alive, so the activity must not be finished.
+        verify(mFinishHandler, never()).onFinish(anyInt(), anyBoolean());
+    }
+
+    @Test
+    public void doesNotFinish_WhenOpenInBrowserCalled_AndIsWebapp() {
+        // Regression test for crbug.com/41495930 / crbug.com/510460240: "Open in
+        // browser" from an installed webapp must open the URL in the browser without
+        // finishing (and thus closing) the webapp.
+        ExternalNavigationDelegateImpl.setWillChromeHandleIntentHookForTesting(intent -> true);
+        when(env.intentDataProvider.getActivityType()).thenReturn(ActivityType.WEBAPP);
+
+        mNavigationController.openCurrentUrlInBrowser();
+
+        verify(mTabController, never()).detachAndStartReparenting(any(), any(), any());
+        verify(env.activity).startActivity(any(), any());
+        verify(mFinishHandler, never()).onFinish(anyInt(), anyBoolean());
+    }
+
+    @Test
+    public void doesNotFinish_WhenOpenInBrowserCalled_AndIsWebApk() {
+        // Regression test for crbug.com/41495930: "Open in browser" from a WebAPK must
+        // open the URL in the browser without finishing (and thus crashing) the WebAPK.
+        ExternalNavigationDelegateImpl.setWillChromeHandleIntentHookForTesting(intent -> true);
+        when(env.intentDataProvider.getActivityType()).thenReturn(ActivityType.WEB_APK);
+
+        mNavigationController.openCurrentUrlInBrowser();
+
+        verify(mTabController, never()).detachAndStartReparenting(any(), any(), any());
+        verify(env.activity).startActivity(any(), any());
+        verify(mFinishHandler, never()).onFinish(anyInt(), anyBoolean());
+    }
+
+    @Test
+    public void reparentsWithoutFinishing_WhenOpenInBrowserCalled_AndIsWebappWithChildTab() {
+        // Follow-up for crbug.com/41495930: when the in-app browser of an installed
+        // webapp shows a child tab (target="_blank"), "Open in browser" should move
+        // the actual tab to the browser (preserving its state) and return the webapp
+        // to its own tab, without finishing the activity.
+        ExternalNavigationDelegateImpl.setWillChromeHandleIntentHookForTesting(intent -> true);
+        when(env.intentDataProvider.getActivityType()).thenReturn(ActivityType.WEBAPP);
+        when(mTabController.getTabCount()).thenReturn(2);
+        ArgumentCaptor<Runnable> callbackCaptor = ArgumentCaptor.forClass(Runnable.class);
+        doNothing()
+                .when(mTabController)
+                .detachAndStartReparenting(any(), any(), callbackCaptor.capture());
+
+        mNavigationController.openCurrentUrlInBrowser();
+
+        verify(env.activity, never()).startActivity(any(), any());
+        verify(mTabController).detachAndStartReparenting(any(), any(), any());
+        // The webapp must stay alive, even once reparenting completes.
+        callbackCaptor.getValue().run();
+        verify(mFinishHandler, never()).onFinish(anyInt(), anyBoolean());
+    }
+
+    @Test
+    public void reparentsWithoutFinishing_WhenOpenInBrowserCalled_AndIsWebApkWithChildTab() {
+        ExternalNavigationDelegateImpl.setWillChromeHandleIntentHookForTesting(intent -> true);
+        when(env.intentDataProvider.getActivityType()).thenReturn(ActivityType.WEB_APK);
+        when(mTabController.getTabCount()).thenReturn(2);
+        ArgumentCaptor<Runnable> callbackCaptor = ArgumentCaptor.forClass(Runnable.class);
+        doNothing()
+                .when(mTabController)
+                .detachAndStartReparenting(any(), any(), callbackCaptor.capture());
+
+        mNavigationController.openCurrentUrlInBrowser();
+
+        verify(env.activity, never()).startActivity(any(), any());
+        verify(mTabController).detachAndStartReparenting(any(), any(), any());
+        callbackCaptor.getValue().run();
+        verify(mFinishHandler, never()).onFinish(anyInt(), anyBoolean());
+    }
+
+    @Test
+    public void reparentsWithoutFinishing_WhenOpenInBrowserCalled_AndIsTwaWithChildTab() {
+        ExternalNavigationDelegateImpl.setWillChromeHandleIntentHookForTesting(intent -> true);
+        when(env.intentDataProvider.getActivityType())
+                .thenReturn(ActivityType.TRUSTED_WEB_ACTIVITY);
+        when(mTabController.getTabCount()).thenReturn(2);
+        ArgumentCaptor<Runnable> callbackCaptor = ArgumentCaptor.forClass(Runnable.class);
+        doNothing()
+                .when(mTabController)
+                .detachAndStartReparenting(any(), any(), callbackCaptor.capture());
+
+        mNavigationController.openCurrentUrlInBrowser();
+
+        verify(env.activity, never()).startActivity(any(), any());
+        verify(mTabController).detachAndStartReparenting(any(), any(), any());
+        callbackCaptor.getValue().run();
+        verify(mFinishHandler, never()).onFinish(anyInt(), anyBoolean());
     }
 
     @Test
@@ -387,7 +477,7 @@ public class CustomTabActivityNavigationControllerTest {
 
     // Predictive back is enabled by default on SDK 36+. Pin to older SDKs to
     // test the legacy back navigation path.
-    @Config(sdk = {29, 35})
+    @Config(sdk = {BaseRobolectricTestRunner.MIN_SDK, 35})
     @Test
     public void getVersionForTesting_ReturnsSetVersion() {
         assertFalse(CustomTabActivityNavigationController.supportsPredictiveBackGesture());

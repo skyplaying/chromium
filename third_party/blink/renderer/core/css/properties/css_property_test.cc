@@ -43,15 +43,14 @@ class ModeCheckingAnchorEvaluator : public AnchorEvaluator {
 
   std::optional<LayoutUnit> Evaluate(
       const AnchorQuery&,
-      const StylePositionAnchor& position_anchor,
+      const DefaultAnchorData&,
       const std::optional<PositionAreaOffsets>&) override {
     return (required_mode_ == GetMode()) ? std::optional<LayoutUnit>(1)
                                          : std::optional<LayoutUnit>();
   }
 
   std::optional<PositionAreaOffsets> ComputePositionAreaOffsetsForLayout(
-      const StylePositionAnchor&,
-      PositionArea) override {
+      const DefaultAnchorData&) override {
     return std::nullopt;
   }
   std::optional<PhysicalOffset> ComputeAnchorCenterOffsets(
@@ -87,7 +86,8 @@ class CSSPropertyTest : public PageTestBase {
   String ComputedValue(String property_str,
                        String value_str,
                        StyleRecalcContext style_recalc_context) {
-    CSSPropertyRef ref(property_str, GetDocument());
+    AtomicString atomic_property(property_str);
+    CSSPropertyRef ref(&atomic_property, GetDocument());
     CHECK(ref.IsValid());
     const CSSProperty& property = ref.GetProperty();
 
@@ -150,16 +150,7 @@ TEST_F(CSSPropertyTest, InternalFontSizeDeltaNotWebExposed) {
       CSSProperty::Get(CSSPropertyID::kInternalFontSizeDelta).IsWebExposed());
 }
 
-class VisitedPropertiesCanParseValues
-    : public CSSPropertyTest,
-      public testing::WithParamInterface<bool> {};
-
-INSTANTIATE_TEST_SUITE_P(CSSPropertyTest,
-                         VisitedPropertiesCanParseValues,
-                         ::testing::Bool());
-
-TEST_P(VisitedPropertiesCanParseValues, ParsesAllProperties) {
-  ScopedCSSGapDecorationForTest scoped_gap_decoration(GetParam());
+TEST_F(CSSPropertyTest, VisitedPropertiesCanParseValues) {
   const ComputedStyle& initial_style =
       GetDocument().GetStyleResolver().InitialStyle();
 
@@ -186,17 +177,14 @@ TEST_P(VisitedPropertiesCanParseValues, ParsesAllProperties) {
     const CSSValue* parsed_visited_value = css_test_helpers::ParseLonghand(
         GetDocument(), *visited, initial_value->CssText());
 
-    // Special handling for 'column-rule-color' when gap decorations are
-    // enabled. In this case, the regular property returns a `CSSValueList` with
-    // a single value, while the visited property returns a single `CSSValue`.
-    // This discrepancy arises because visited styles are not applied to
-    // 'column-rule-color' when multiple values are used. To ensure accurate
-    // comparison, we extract the sole value from the regular property's list
-    // and compare it directly with the visited value.
+    // The regular 'column-rule-color' property returns a `CSSValueList` with a
+    // single value, while the visited property returns a single `CSSValue`.
+    // Visited styles are not applied when multiple values are used, so extract
+    // the sole regular value before comparing.
     //
     // TODO(crbug.com/357648037): Remove this check once the visited
     // partitioning work is done.
-    if (GetParam() && property_id == CSSPropertyID::kColumnRuleColor) {
+    if (property_id == CSSPropertyID::kColumnRuleColor) {
       EXPECT_TRUE(parsed_regular_value->IsValueList());
       const CSSValueList* parsed_regular_value_list =
           DynamicTo<CSSValueList>(parsed_regular_value);

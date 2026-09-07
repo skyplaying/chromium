@@ -138,7 +138,7 @@ bool HandleLogMessage(int severity,
           local_time.wMilliseconds,
           level_name,
           message.c_str());
-#elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+#elif BUILDFLAG(IS_POSIX)
       timeval tv;
       gettimeofday(&tv, nullptr);
       time_t t = tv.tv_sec;
@@ -159,11 +159,9 @@ bool HandleLogMessage(int severity,
     } else {
       entry = base::StringPrintf(
           "[%.3lf][%s]: %s",
-          base::TimeDelta(base::TimeTicks::Now() -
-                          base::TimeTicks::UnixEpoch())
+          base::TimeDelta(base::Time::Now() - base::Time::UnixEpoch())
               .InSecondsF(),
-          level_name,
-          message.c_str());
+          level_name, message.c_str());
     }
     fprintf(stderr, "%s", entry.c_str());
     fflush(stderr);

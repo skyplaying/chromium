@@ -34,7 +34,7 @@ chromium-metrics-reviews@google.com.
 </variants>
 
 <histogram name="OSCrypt.AppBoundEncryption.SupportLevel"
-    enum="AppBoundEncryptionSupportLevel" expires_after="2026-07-05">
+    enum="AppBoundEncryptionSupportLevel" expires_after="2027-01-17">
   <owner>wfh@chromium.org</owner>
   <owner>nparker@chromium.org</owner>
   <summary>
@@ -44,7 +44,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="OSCrypt.AppBoundProvider.Decrypt.ResultCode" enum="Hresult"
-    expires_after="2026-07-26">
+    expires_after="2027-01-31">
   <owner>wfh@chromium.org</owner>
   <owner>nparker@chromium.org</owner>
   <summary>
@@ -56,7 +56,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="OSCrypt.AppBoundProvider.Decrypt.ResultLastError"
-    enum="WinGetLastError" expires_after="2026-07-05">
+    enum="WinGetLastError" expires_after="2027-01-17">
   <owner>wfh@chromium.org</owner>
   <owner>nparker@chromium.org</owner>
   <summary>
@@ -69,7 +69,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="OSCrypt.AppBoundProvider.Encrypt.ResultCode" enum="Hresult"
-    expires_after="2026-07-26">
+    expires_after="2027-02-07">
   <owner>wfh@chromium.org</owner>
   <owner>nparker@chromium.org</owner>
   <summary>
@@ -82,7 +82,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="OSCrypt.AppBoundProvider.Encrypt.ResultLastError"
-    enum="WinGetLastError" expires_after="2026-08-09">
+    enum="WinGetLastError" expires_after="2026-12-16">
   <owner>wfh@chromium.org</owner>
   <owner>nparker@chromium.org</owner>
   <summary>
@@ -95,7 +95,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="OSCrypt.AppBoundProvider.KeyRetrieval.Status"
-    enum="OSCryptAppBoundKeyRetrievalStatus" expires_after="2026-07-05">
+    enum="OSCryptAppBoundKeyRetrievalStatus" expires_after="2026-09-06">
   <owner>wfh@chromium.org</owner>
   <owner>nparker@chromium.org</owner>
   <summary>
@@ -105,34 +105,8 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
-<histogram name="OSCrypt.Async.DecryptionFallbackToSync" enum="Boolean"
-    expires_after="2026-06-15">
-  <owner>wfh@chromium.org</owner>
-  <owner>thomasanderson@chromium.org</owner>
-  <summary>
-    Whether or not a fallback to OSCrypt Sync occured in a decryption call to an
-    OSCrypt Async Encryptor. This histogram is recorded every time a data
-    decryption happens and only reports true if the Encryptor was unable to
-    decrypt the data, a fallback to OSCrypt Sync therefore happened, and OSCrypt
-    Sync was able to successfully decrypt the data. It reports false otherwise.
-  </summary>
-</histogram>
-
-<histogram name="OSCrypt.Async.EncryptionFallbackToSync" enum="Boolean"
-    expires_after="2026-06-15">
-  <owner>wfh@chromium.org</owner>
-  <owner>thomasanderson@chromium.org</owner>
-  <summary>
-    Whether or not a fallback to OSCrypt Sync occured in a encryption call to an
-    OSCrypt Async Encryptor. This histogram is recorded every time a data
-    encryption happens and only reports true if the Encryptor contained no valid
-    key for encryption, a fallback to OSCrypt Sync therefore happened, and
-    OSCrypt Sync successfully encrypted the data. It reports false otherwise.
-  </summary>
-</histogram>
-
 <histogram name="OSCrypt.AsyncInitialization.Time" units="ms"
-    expires_after="2026-07-19">
+    expires_after="2027-01-24">
   <owner>wfh@chromium.org</owner>
   <owner>nparker@chromium.org</owner>
   <summary>
@@ -140,16 +114,6 @@ chromium-metrics-reviews@google.com.
     attempt to initialize the keyring during browser process initialization.
     Recorded once per browser start, if the OSCrypt Async completes the
     initialization attempt before the browser shuts down.
-  </summary>
-</histogram>
-
-<histogram name="OSCrypt.BackendUsage" enum="LinuxPasswordStoreUsage"
-    expires_after="2026-08-09">
-  <owner>vasilii@chromium.org</owner>
-  <owner>mamir@chromium.org</owner>
-  <summary>
-    The backend selected for this user and whether it was initialised
-    successfully.
   </summary>
 </histogram>
 
@@ -166,7 +130,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="OSCrypt.EncryptionPrefixVersion"
-    enum="EncryptionPrefixVersion" expires_after="2026-06-28">
+    enum="EncryptionPrefixVersion" expires_after="2027-06-28">
   <owner>wfh@chromium.org</owner>
   <owner>thestig@chromium.org</owner>
   <summary>
@@ -176,7 +140,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="OSCrypt.EncryptorKeyCount{EncryptorKeyType}" units="key count"
-    expires_after="2026-07-05">
+    expires_after="2027-02-07">
   <owner>wfh@chromium.org</owner>
   <owner>chrome-platform-security-core@google.com</owner>
   <summary>
@@ -201,42 +165,8 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
-<histogram name="OSCrypt.FreedesktopSecretKeyProvider.{InitStatus}.ErrorDetail"
-    enum="FreedesktopSecretKeyProviderErrorDetail" expires_after="2026-06-28">
-  <owner>thomasanderson@chromium.org</owner>
-  <owner>thestig@chromium.org</owner>
-  <summary>
-    The detailed error cause for each InitStatus for the org.freedesktop.secrets
-    OSCrypt Async Key Provider initialization, recorded once during browser
-    startup in case of failure (Linux only).
-  </summary>
-  <token key="InitStatus">
-    <variant name="CreateCollectionFailed"/>
-    <variant name="CreateItemFailed"/>
-    <variant name="EmptySecret"/>
-    <variant name="GetSecretFailed"/>
-    <variant name="GnomeKeyringDeadlock"/>
-    <variant name="NoService"/>
-    <variant name="ReadAliasFailed"/>
-    <variant name="SearchItemsFailed"/>
-    <variant name="SessionFailure"/>
-    <variant name="UnlockFailed"/>
-  </token>
-</histogram>
-
-<histogram name="OSCrypt.Linux.DecryptedWithEmptyKey" enum="Boolean"
-    expires_after="2026-06-30">
-  <owner>thestig@chromium.org</owner>
-  <owner>wfh@chromium.org</owner>
-  <summary>
-    True, iff the data was not decryptable with the stored encryption key, but
-    was decryptable with a key generated from an empty string. This is emitted
-    every time OSCrypt attempts to decrypt a value.
-  </summary>
-</histogram>
-
 <histogram name="OSCrypt.Mac.FindGenericPasswordError"
-    enum="MacSecurityFrameworkOSStatus" expires_after="2026-08-09">
+    enum="MacSecurityFrameworkOSStatus" expires_after="2027-02-14">
   <owner>avi@chromium.org</owner>
   <owner>lgrey@chromium.org</owner>
   <owner>markrowe@chromium.org</owner>
@@ -254,7 +184,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="OSCrypt.Mac.FindGenericPasswordResult"
-    enum="FindGenericPasswordResult" expires_after="2026-08-09">
+    enum="FindGenericPasswordResult" expires_after="2027-02-14">
   <owner>avi@chromium.org</owner>
   <owner>lgrey@chromium.org</owner>
   <owner>markrowe@chromium.org</owner>
@@ -269,7 +199,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="OSCrypt.Mac.SuccessAfterPreviousError"
-    enum="MacSecurityFrameworkOSStatus" expires_after="2026-06-07">
+    enum="MacSecurityFrameworkOSStatus" expires_after="2026-10-18">
   <owner>thestig@chromium.org</owner>
   <owner>thomasanderson@chromium.org</owner>
   <owner>wfh@chromium.org</owner>
@@ -316,7 +246,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="OSCrypt.Win.Decrypt.Result" enum="BooleanSuccess"
-    expires_after="2026-07-05">
+    expires_after="2026-09-06">
   <owner>wfh@chromium.org</owner>
   <owner>nparker@chromium.org</owner>
   <summary>
@@ -362,138 +292,21 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="OSCrypt.Win.KeyDecryptionError" enum="WinGetLastError"
-    expires_after="2026-07-26">
+    expires_after="2027-02-07">
   <owner>wfh@chromium.org</owner>
   <owner>forshaw@chromium.org</owner>
   <summary>
     The Windows GetLastError after a failure from calling into DPAPI to decrypt
-    the main key for the os_crypt library on Windows. This is recorded during
-    the OSCrypt::Init each time the decryption fails. Note that this metric was
+    the main key for the os_crypt library on Windows. This is recorded by
+    DPAPIKeyProvider each time the decryption fails. Note that this metric was
     not recorded between 2021-08 (M91) and 2024-07 (M128).
   </summary>
 </histogram>
 
-<histogram name="Security.DataDecoder.Image.DecodingTime" units="ms"
-    expires_after="2026-03-22">
-  <owner>lukasza@chromium.org</owner>
-  <owner>rsesek@chromium.org</owner>
-  <summary>
-    Logged once for every invocation of `data_decoder::DecodeImage` and/or
-    `data_decoder::DecodeImageIsolated`. Logs the time that has elapsed while
-    decoding the image (typically this happens in the Utility process). The time
-    is recorded in all the cases (including empty input which don't require
-    actual image decoding).
-  </summary>
-</histogram>
-
-<histogram name="Security.DataDecoder.Image.Isolated.EndToEndTime" units="ms"
-    expires_after="2025-03-09">
-  <owner>lukasza@chromium.org</owner>
-  <owner>rsesek@chromium.org</owner>
-  <summary>
-    Logged once for every invocation of `data_decoder::DecodeImageIsolated`.
-    Logs the time that has elapsed between 1) invocation of DecodeImageIsolated
-    and 2) calling the completion callback (both of these events happen in the
-    Browser process). The elapsed time covers A) spawning the utility process,
-    B) decoding the image, C) IPC overhead.
-
-    Note that there are 2 sets of similar metrics:
-    Security.DataDecoder.Image.Isolated. and
-    Security.DataDecoder.Image.Reusable. In the Isolated case a Utility process
-    is spawned for each image decoding operation and the ...End2End and
-    ...ProcessOverhead metrics always include process spawning overhead. In the
-    Reusable case a Utility process may get reused when decoding a batch of
-    images, and the ...End2End and ...ProcessOverhead metrics may or may not
-    include process spawning overhead (the process will only need to be spawned
-    for the first image in a batch + after the process has been shut down due to
-    inactivity).
-  </summary>
-</histogram>
-
-<histogram name="Security.DataDecoder.Image.Isolated.ProcessOverhead"
-    units="ms" expires_after="2025-03-09">
-  <owner>lukasza@chromium.org</owner>
-  <owner>rsesek@chromium.org</owner>
-  <summary>
-    Logged once for every invocation of `data_decoder::DecodeImageIsolated`.
-    Logs the overhead of using a separate process for decoding the images by
-    calculating the difference between ...Image.Isolated.EndToEndTime and the
-    ...Image.DecodingTime metrics.
-
-    Note that there are 2 sets of similar metrics:
-    Security.DataDecoder.Image.Isolated. and
-    Security.DataDecoder.Image.Reusable. In the Isolated case a Utility process
-    is spawned for each image decoding operation and the ...End2End and
-    ...ProcessOverhead metrics always include process spawning overhead. In the
-    Reusable case a Utility process may get reused when decoding a batch of
-    images, and the ...End2End and ...ProcessOverhead metrics may or may not
-    include process spawning overhead (the process will only need to be spawned
-    for the first image in a batch + after the process has been shut down due to
-    inactivity).
-  </summary>
-</histogram>
-
-<histogram name="Security.DataDecoder.Image.Reusable.EndToEndTime" units="ms"
-    expires_after="2025-03-09">
-  <owner>lukasza@chromium.org</owner>
-  <owner>rsesek@chromium.org</owner>
-  <summary>
-    Logged once for every invocation of `data_decoder::DecodeImage`. Logs the
-    time that has elapsed between 1) invocation of DecodeImage and 2) calling
-    the completion callback (both of these events happen in the Browser
-    process). The elapsed time covers A) spawning the utility process (if
-    needed), B) decoding the image, C) IPC overhead.
-
-    Note that there are 2 sets of similar metrics:
-    Security.DataDecoder.Image.Isolated. and
-    Security.DataDecoder.Image.Reusable. In the Isolated case a Utility process
-    is spawned for each image decoding operation and the ...End2End and
-    ...ProcessOverhead metrics always include process spawning overhead. In the
-    Reusable case a Utility process may get reused when decoding a batch of
-    images, and the ...End2End and ...ProcessOverhead metrics may or may not
-    include process spawning overhead (the process will only need to be spawned
-    for the first image in a batch + after the process has been shut down due to
-    inactivity).
-  </summary>
-</histogram>
-
-<histogram name="Security.DataDecoder.Image.Reusable.ProcessOverhead"
-    units="ms" expires_after="2025-03-09">
-  <owner>lukasza@chromium.org</owner>
-  <owner>rsesek@chromium.org</owner>
-  <summary>
-    Logged once for every invocation of `data_decoder::DecodeImage`. Logs the
-    overhead of using a separate process for decoding the images by calculating
-    the difference between ...Image.Reusable.EndToEndTime and the
-    ...Image.DecodingTime metrics.
-
-    Note that there are 2 sets of similar metrics:
-    Security.DataDecoder.Image.Isolated. and
-    Security.DataDecoder.Image.Reusable. In the Isolated case a Utility process
-    is spawned for each image decoding operation and the ...End2End and
-    ...ProcessOverhead metrics always include process spawning overhead. In the
-    Reusable case a Utility process may get reused when decoding a batch of
-    images, and the ...End2End and ...ProcessOverhead metrics may or may not
-    include process spawning overhead (the process will only need to be spawned
-    for the first image in a batch + after the process has been shut down due to
-    inactivity).
-  </summary>
-</histogram>
-
-<histogram name="Security.DataDecoder.Json.DecodingTime" units="ms"
-    expires_after="2026-01-11">
-  <owner>djmitche@chromium.org</owner>
-  <owner>dadrian@chromium.org</owner>
-  <summary>
-    Logged once for every invocation of `DataDecoder::ParseJson`. Logs the time
-    that has elapsed while decoding the input.
-  </summary>
-</histogram>
-
 <histogram name="Security.EnhancedBundle.IsEnhancedSelected"
-    enum="BooleanEnabled" expires_after="2026-04-01">
+    enum="BooleanEnabled" expires_after="2026-08-01">
   <owner>awado@google.com</owner>
-  <owner>chrome-safebrowsing-alerts@google.com</owner>
+  <owner>chrome-counter-abuse-alerts@google.com</owner>
   <summary>
     Whether the enhanced-security settings bundle is selected. Recorded for all
     uma log at upload time by the BundleSettingsMetricsProvider for the main
@@ -502,10 +315,22 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram
-    name="Security.EnhancedBundle.SafeBrowsingSetting.WasModifiedFromDefault"
-    enum="Boolean" expires_after="2026-04-01">
+    name="Security.EnhancedBundle.JavascriptOptimizerSetting.WasModifiedFromDefault"
+    enum="Boolean" expires_after="2026-08-01">
   <owner>awado@google.com</owner>
-  <owner>chrome-safebrowsing-alerts@google.com</owner>
+  <owner>chrome-counter-abuse-alerts@google.com</owner>
+  <summary>
+    Records whether the user has changed the javascript optimizer setting from
+    the default for the enhanced-security bundle. Recorded for all uma logs at
+    upload time by the BundleSettingsMetricsProvider for the main profile only.
+  </summary>
+</histogram>
+
+<histogram
+    name="Security.EnhancedBundle.SafeBrowsingSetting.WasModifiedFromDefault"
+    enum="Boolean" expires_after="2026-08-01">
+  <owner>awado@google.com</owner>
+  <owner>chrome-counter-abuse-alerts@google.com</owner>
   <summary>
     Records whether the user has changed the safe browsing setting from the
     default for the enhanced-security bundle. Recorded for all uma logs at
@@ -514,7 +339,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Security.GwpAsan.Activated.{Allocator}.{Process}"
-    enum="Boolean" expires_after="2026-06-21">
+    enum="Boolean" expires_after="2026-08-23">
   <owner>mpdenton@chromium.org</owner>
   <owner>kdlee@chromium.org</owner>
   <owner>memory-safety-dev@chromium.org</owner>
@@ -577,7 +402,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Security.HttpsFirstMode.InterstitialReason"
-    enum="HttpsFirstModeInterstitialReason" expires_after="2026-06-28">
+    enum="HttpsFirstModeInterstitialReason" expires_after="2027-01-03">
   <owner>meacer@chromium.org</owner>
   <owner>trusty-transport@chromium.org</owner>
   <summary>
@@ -587,36 +412,28 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Security.HttpsFirstMode.NavigationEvent"
-    enum="HttpsFirstModeNavigationEvent" expires_after="2025-12-21">
+    enum="HttpsFirstModeNavigationEvent" expires_after="2027-04-01">
   <owner>cthomp@chromium.org</owner>
-  <owner>trusty-transport@chromium.org</owner>
+  <owner>chrome-swan@google.com</owner>
   <summary>
     Events for navigations that are upgraded from HTTP to HTTPS by HTTPS-First
     Mode. Recorded for eligible navigations (HTTP main frame navigations that
     are not allowlisted), if the profile is opted in to HTTPS-First Mode.
-  </summary>
-</histogram>
 
-<histogram name="Security.HttpsFirstMode.SettingChanged" enum="BooleanEnabled"
-    expires_after="2025-04-15">
-  <owner>cthomp@chromium.org</owner>
-  <owner>trusty-transport@chromium.org</owner>
-  <summary>
-    Records the HTTPS-First Mode preference state when it changes for a profile.
-    Recorded for regular profiles only (not for Incognito, Guest, or Sign-in
-    profiles).
+    Note: This histogram was expired from 2025-12-21 through 2026-05-13.
   </summary>
 </histogram>
 
 <histogram name="Security.HttpsFirstMode.SettingChanged2"
-    enum="HttpsFirstModeSetting" expires_after="2026-07-05">
+    enum="HttpsFirstModeSetting" expires_after="2027-01-03">
   <owner>cthomp@chromium.org</owner>
   <owner>trusty-transport@chromium.org</owner>
   <summary>
     Records the HTTPS-First Mode setting state when it changes for a profile.
     Recorded for regular profiles only (not for Incognito, Guest, or Sign-in
-    profiles). Supersedes Security.HttpsFirstMode.SettingChanged after the
-    rollout of HTTPS-First Balanced Mode. Note: Compared to the original
+    profiles). Supersedes the original (superseded)
+    Security.HttpsFirstMode.SettingChanged after the rollout of HTTPS-First
+    Balanced Mode. Note: Compared to the original (superseded)
     Security.HttpsFirstMode.SettingChanged histogram, this is logged at the
     point of the UI setting changing, rather than the underlying prefs updating.
     This change was made to avoid double-counting now that the feature logic is
@@ -636,7 +453,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Security.HttpsFirstMode.SettingEnabledAtStartup2"
-    enum="HttpsFirstModeSetting" expires_after="2026-07-05">
+    enum="HttpsFirstModeSetting" expires_after="2027-01-17">
   <owner>cthomp@chromium.org</owner>
   <owner>trusty-transport@chromium.org</owner>
   <summary>
@@ -646,9 +463,34 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
+<histogram name="Security.HttpsFirstMode.SettingEnabledAtStartupDetailed"
+    enum="HttpsFirstModeStartupState" expires_after="2027-06-01">
+  <owner>zackhan@chromium.org</owner>
+  <owner>chrome-counter-abuse-alerts@google.com</owner>
+  <summary>
+    The detailed status of the HTTPS-First Mode setting at startup. This
+    distinguishes between different reasons why Balanced Mode might be enabled
+    (explicit user choice, typically secure heuristic, ESB pairing, or
+    auto-enable). Recorded once per profile startup.
+  </summary>
+</histogram>
+
+<histogram name="Security.HttpsFirstMode.SettingImplicitlyChanged"
+    enum="HttpsFirstModeImplicitStateChange" expires_after="2027-06-01">
+  <owner>zackhan@chromium.org</owner>
+  <owner>chrome-counter-abuse-alerts@google.com</owner>
+  <summary>
+    Records implicit changes to the HTTPS-First Mode setting. This is logged
+    when HFM Balanced Mode is automatically enabled or disabled as a side-effect
+    of the user changing their Safe Browsing setting (e.g. enabling/disabling
+    Enhanced Safe Browsing), provided the user has not manually customized their
+    HFM settings.
+  </summary>
+</histogram>
+
 <histogram
     name="Security.HttpsFirstModeWithEngagementHeuristic.AccumulatedHostCount"
-    units="hostnames" expires_after="2026-07-05">
+    units="hostnames" expires_after="2026-09-06">
   <owner>meacer@chromium.org</owner>
   <owner>trusty-transport@chromium.org</owner>
   <summary>
@@ -670,7 +512,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Security.HttpsFirstModeWithEngagementHeuristic.HostCount"
-    units="hostnames" expires_after="2026-07-05">
+    units="hostnames" expires_after="2026-09-06">
   <owner>meacer@chromium.org</owner>
   <owner>trusty-transport@chromium.org</owner>
   <summary>
@@ -704,8 +546,33 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
+<histogram name="Security.HttpsFirstModeWithEsbPairing.NavigationEvent"
+    enum="HttpsFirstModeNavigationEvent" expires_after="2027-06-01">
+  <owner>zackhan@chromium.org</owner>
+  <owner>chrome-counter-abuse-alerts@google.com</owner>
+  <summary>
+    Records navigation events (upgrade attempts, successes, failures) for
+    navigations where HTTPS-First Mode was enabled specifically because the user
+    has Enhanced Safe Browsing enabled and has not manually customized their HFM
+    settings.
+  </summary>
+</histogram>
+
+<histogram name="Security.iOS.KeychainMigration.Result"
+    enum="IOSKeychainMigrationResult" expires_after="2027-02-21">
+  <owner>marq@chromium.org</owner>
+  <owner>bling-flags@google.com</owner>
+  <summary>
+    Tracks whether a keychain item required accessibility migration and if the
+    migration attempt succeeded. Migration is needed if the item currently has
+    kSecAttrAccessibleWhenUnlocked but should have
+    kSecAttrAccessibleAfterFirstUnlock. Recorded on iOS only, after a migration
+    attempt has finished.
+  </summary>
+</histogram>
+
 <histogram name="Security.NavigationRequestSecurityLevel"
-    enum="NavigationRequestSecurityLevel" expires_after="2026-07-05">
+    enum="NavigationRequestSecurityLevel" expires_after="2027-01-17">
   <owner>jdeblasio@chromium.org</owner>
   <owner>trusty-transport@chromium.org</owner>
   <summary>
@@ -731,7 +598,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Security.PageInfo.AboutThisSiteInteraction"
-    enum="AboutThisSiteInteraction" expires_after="2026-07-05">
+    enum="AboutThisSiteInteraction" expires_after="2027-01-17">
   <owner>dullweber@chromium.org</owner>
   <owner>olesiamarukhno@chromium.org</owner>
   <summary>
@@ -760,16 +627,6 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
-<histogram name="Security.PageInfo.AdPersonalizationRowShown" enum="Boolean"
-    expires_after="2026-04-26">
-  <owner>dullweber@chromium.org</owner>
-  <owner>sauski@google.com</owner>
-  <summary>
-    Tracks whether the Ads Personalization section was shown. Recorded every
-    time PageInfo is opened.
-  </summary>
-</histogram>
-
 <histogram name="Security.PageInfo.Cookies.HasFPSInfo" enum="Boolean"
     expires_after="2025-09-10">
   <owner>tommasin@chromium.org</owner>
@@ -784,7 +641,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Security.PageInfo.MerchantTrustEngagement.{Event}"
-    units="EngagementScore" expires_after="2026-08-09">
+    units="EngagementScore" expires_after="2027-02-14">
   <owner>tommasin@chromium.org</owner>
   <owner>privacy-on-the-web@google.com</owner>
   <summary>
@@ -799,7 +656,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Security.PageInfo.MerchantTrustInteraction.{SiteFamiliarity}"
-    enum="MerchantTrustInteraction" expires_after="2026-08-09">
+    enum="MerchantTrustInteraction" expires_after="2027-02-14">
   <owner>tommasin@chromium.org</owner>
   <owner>privacy-on-the-web@google.com</owner>
   <summary>
@@ -813,7 +670,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Security.PageInfo.MerchantTrustStatus"
-    enum="MerchantTrustStatus" expires_after="2026-07-19">
+    enum="MerchantTrustStatus" expires_after="2026-09-20">
   <owner>tommasin@chromium.org</owner>
   <owner>privacy-on-the-web@google.com</owner>
   <summary>
@@ -863,8 +720,32 @@ chromium-metrics-reviews@google.com.
   </token>
 </histogram>
 
+<histogram name="Security.PopupBypassAllowedType" enum="PopupBypassType"
+    expires_after="2026-12-31">
+  <owner>evasu@chromium.org</owner>
+  <owner>extensions-core@chromium.org</owner>
+  <summary>
+    Records the type of extension-related context that successfully bypassed the
+    popup blocker when creating a new window without transient user activation.
+    Recorded whenever ChromeContentBrowserClient::IsPopupBypassAllowed returns
+    true.
+  </summary>
+</histogram>
+
+<histogram name="Security.PopupBypassDeniedByContentEmbedder" enum="Boolean"
+    expires_after="2026-12-31">
+  <owner>evasu@chromium.org</owner>
+  <owner>extensions-core@chromium.org</owner>
+  <summary>
+    Records whether a popup without transient user activation was denied (true)
+    or allowed via bypass (false) by the browser process. Recorded when
+    RenderFrameHostImpl::CreateNewWindow is called and the request requires a
+    bypass.
+  </summary>
+</histogram>
+
 <histogram name="Security.PrivateNetworkAccess.CheckResult"
-    enum="LocalNetworkAccessCheckResult" expires_after="2026-07-05">
+    enum="LocalNetworkAccessCheckResult" expires_after="2027-01-17">
   <owner>hchao@chromium.org</owner>
   <owner>clamy@chromium.org</owner>
   <owner>cthomp@chromium.org</owner>
@@ -875,33 +756,6 @@ chromium-metrics-reviews@google.com.
     Result of the Local Network Access Check on a new connection. Recorded once
     per call to network::URLLoader::OnConnected(), which may be more than once
     per URL request.
-  </summary>
-</histogram>
-
-<histogram name="Security.PrivateNetworkAccess.PrivateIpResolveMatch"
-    enum="Boolean" expires_after="2026-07-05">
-  <owner>hchao@chromium.org</owner>
-  <owner>clamy@chromium.org</owner>
-  <owner>cthomp@chromium.org</owner>
-  <owner>estark@chromium.org</owner>
-  <owner>jdeblasio@chromium.org</owner>
-  <owner>src/chrome/browser/local_network_access/OWNERS</owner>
-  <summary>
-    Records whether a request to a literal private IP address resolved to that
-    private IP address. Recorded at most once per call to
-    `network::URLLoader::OnConnected()`, which may be more than once per URL
-    request.
-  </summary>
-</histogram>
-
-<histogram name="Security.SafetyTips.GetReputationStatusWithEngagedSitesTime"
-    units="ms" expires_after="2024-08-11">
-  <owner>jdeblasio@chromium.org</owner>
-  <owner>estark@chromium.org</owner>
-  <owner>blundell@chromium.org</owner>
-  <summary>
-    Records the time duration of a check for the reputation status of a site on
-    the main thread. Recorded on every check.
   </summary>
 </histogram>
 
@@ -920,18 +774,6 @@ chromium-metrics-reviews@google.com.
   </token>
 </histogram>
 
-<histogram name="Security.SafetyTips.SafetyTipIgnoredPageLoad"
-    enum="SafetyTipStatus" expires_after="2024-03-17">
-  <owner>jdeblasio@chromium.org</owner>
-  <owner>src/chrome/browser/lookalikes/OWNERS</owner>
-  <summary>
-    Records the Safety Tip status of a page after navigation commit for a page
-    where the Safety Tip has previously been ignored.
-
-    Note: This histogram was expired from 2021-12-26 until 2023-01-19.
-  </summary>
-</histogram>
-
 <histogram name="Security.SafetyTips.SafetyTipShown" enum="SafetyTipStatus"
     expires_after="2024-05-26">
   <owner>jdeblasio@chromium.org</owner>
@@ -943,7 +785,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Security.Sandbox.LandlockState" enum="LandlockState"
-    expires_after="2026-04-16">
+    expires_after="2027-04-16">
   <owner>akhna@google.com</owner>
   <owner>chromeos-hardening@google.com</owner>
   <summary>
@@ -952,6 +794,18 @@ chromium-metrics-reviews@google.com.
 
     Records the status of the Landlock LSM on the system, whether it is enabled,
     available but disabled, not available, or undetermined.
+  </summary>
+</histogram>
+
+<histogram name="Security.ScreenOrientation.LockRequestIsSandboxed"
+    enum="Boolean" expires_after="2027-01-27">
+  <owner>alexmos@chromium.org</owner>
+  <owner>helmut@januschka.com</owner>
+  <summary>
+    Records whether the requesting frame lacks the allow-orientation-lock
+    sandbox permission for each browser-side screen orientation lock request.
+    This measures how often media controls request orientation locks from
+    sandboxed frames before browser-side enforcement is reconsidered.
   </summary>
 </histogram>
 
@@ -1008,17 +862,6 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
-<histogram name="Security.SCTAuditing.OptIn.ReportSampled" enum="Boolean"
-    expires_after="2024-05-26">
-  <owner>cthomp@chromium.org</owner>
-  <owner>trusty-transport@chromium.org</owner>
-  <summary>
-    Records whether a report was sampled to be sent to Safe Browsing. Recorded
-    for each new report seen by the SCT auditing cache that was not
-    deduplicated.
-  </summary>
-</histogram>
-
 <histogram name="Security.SCTAuditing.OptIn.ReportSize" units="bytes"
     expires_after="2024-05-26">
   <owner>cthomp@chromium.org</owner>
@@ -1041,7 +884,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Security.SCTAuditing.OptOut.DroppedDueToLogNotFound"
-    enum="Boolean" expires_after="2026-04-01">
+    enum="Boolean" expires_after="2027-04-01">
   <owner>cthomp@chromium.org</owner>
   <owner>trusty-transport@chromium.org</owner>
   <summary>
@@ -1054,7 +897,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Security.SCTAuditing.OptOut.LookupQueryResult"
-    enum="SCTLookupQueryResult" expires_after="2026-04-01">
+    enum="SCTLookupQueryResult" expires_after="2027-04-01">
   <owner>cthomp@chromium.org</owner>
   <owner>nsatragno@chromium.org</owner>
   <owner>trusty-transport@chromium.org</owner>
@@ -1067,7 +910,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Security.SCTAuditing.OptOut.PopularSCTSkipped" enum="Boolean"
-    expires_after="2026-04-01">
+    expires_after="2027-04-01">
   <owner>cthomp@chromium.org</owner>
   <owner>nsatragno@chromium.org</owner>
   <owner>trusty-transport@chromium.org</owner>
@@ -1081,7 +924,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Security.SCTAuditing.OptOut.ReportCount" units="reports"
-    expires_after="2026-04-01">
+    expires_after="2027-04-01">
   <owner>cthomp@chromium.org</owner>
   <owner>jdeblasio@chromium.org</owner>
   <summary>
@@ -1112,7 +955,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Security.SecurityLevel.OnCommit" enum="SecurityLevel"
-    expires_after="2026-03-17">
+    expires_after="2027-04-01">
   <owner>cthomp@chromium.org</owner>
   <owner>security-enamel@chromium.org</owner>
   <summary>
@@ -1124,7 +967,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="Security.SecurityLevel.OnComplete" enum="SecurityLevel"
-    expires_after="2026-04-05">
+    expires_after="2027-04-01">
   <owner>cthomp@chromium.org</owner>
   <owner>security-enamel@chromium.org</owner>
   <summary>
@@ -1148,10 +991,22 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram
-    name="Security.StandardBundle.SafeBrowsingSetting.WasModifiedFromDefault"
-    enum="Boolean" expires_after="2026-04-01">
+    name="Security.StandardBundle.JavascriptOptimizerSetting.WasModifiedFromDefault"
+    enum="Boolean" expires_after="2026-08-01">
   <owner>awado@google.com</owner>
-  <owner>chrome-safebrowsing-alerts@google.com</owner>
+  <owner>chrome-counter-abuse-alerts@google.com</owner>
+  <summary>
+    Records whether the user has changed the javascript optimizer setting from
+    the default for the standard bundle. Recorded for all uma logs at upload
+    time by the BundleSettingsMetricsProvider for the main profile only.
+  </summary>
+</histogram>
+
+<histogram
+    name="Security.StandardBundle.SafeBrowsingSetting.WasModifiedFromDefault"
+    enum="Boolean" expires_after="2026-08-01">
+  <owner>awado@google.com</owner>
+  <owner>chrome-counter-abuse-alerts@google.com</owner>
   <summary>
     Records whether the user has changed the safe browsing setting from the
     default for the standard bundle. Recorded for all uma logs at upload time by
@@ -1173,18 +1028,18 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="SiteIsolation.BrowsingInstance.MaxCountPerProcess"
-    units="units" expires_after="2026-05-17">
-  <owner>wjmaclean@chromium.org</owner>
+    units="units" expires_after="2026-11-17">
+  <owner>alexmos@chromium.org</owner>
   <owner>creis@chromium.org</owner>
   <summary>
     The maximum number of BrowsingInstances seen in a RenderProcessHost over its
     lifetime. Recorded once when
-    ChildProcessImpl::SecurityState::~SecurityState() is invoked.
+    ChildProcessSecurityPolicyImpl::ProcessState::~ProcessState() is invoked.
   </summary>
 </histogram>
 
 <histogram name="SiteIsolation.BrowsingInstanceCount" units="units"
-    expires_after="2026-06-21">
+    expires_after="2027-06-21">
   <owner>alexmos@chromium.org</owner>
   <owner>creis@chromium.org</owner>
   <summary>
@@ -1193,7 +1048,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="SiteIsolation.CreateOpenerProxiesTime" units="microseconds"
-    expires_after="2026-07-19">
+    expires_after="2026-09-20">
   <owner>alexmos@chromium.org</owner>
   <owner>creis@chromium.org</owner>
   <owner>nasko@chromium.org</owner>
@@ -1221,8 +1076,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="SiteIsolation.IsolatableSandboxedIframes" units="processes"
-    expires_after="2026-08-09">
-  <owner>wjmaclean@chromium.org</owner>
+    expires_after="2027-07-26">
   <owner>alexmos@chromium.org</owner>
   <owner>creis@chromium.org</owner>
   <summary>
@@ -1240,8 +1094,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="SiteIsolation.IsolatableSandboxedIframes.UniqueOrigins"
-    units="processes" expires_after="2026-08-09">
-  <owner>wjmaclean@chromium.org</owner>
+    units="processes" expires_after="2027-07-26">
   <owner>alexmos@chromium.org</owner>
   <owner>creis@chromium.org</owner>
   <summary>
@@ -1255,8 +1108,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="SiteIsolation.IsolatableSandboxedIframes.UniqueSites"
-    units="processes" expires_after="2026-07-26">
-  <owner>wjmaclean@chromium.org</owner>
+    units="processes" expires_after="2027-07-26">
   <owner>alexmos@chromium.org</owner>
   <owner>creis@chromium.org</owner>
   <summary>
@@ -1268,7 +1120,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="SiteIsolation.IsPasswordFormSubmittedInDedicatedProcess"
-    enum="SiteIsolationIsDedicatedProcess" expires_after="2026-05-24">
+    enum="SiteIsolationIsDedicatedProcess" expires_after="2027-05-24">
   <owner>alexmos@chromium.org</owner>
   <owner>lukasza@chromium.org</owner>
   <summary>
@@ -1279,7 +1131,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="SiteIsolation.IsSitePerProcessOrStricter" enum="Boolean"
-    expires_after="2026-06-23">
+    expires_after="2026-12-27">
   <owner>alexmos@chromium.org</owner>
   <owner>creis@chromium.org</owner>
   <owner>wenz@chromium.org</owner>
@@ -1291,7 +1143,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="SiteIsolation.IsSitePerProcessOrStricter.AndroidDesktop"
-    enum="Boolean" expires_after="2026-08-28">
+    enum="Boolean" expires_after="2027-02-28">
   <owner>alexmos@chromium.org</owner>
   <owner>creis@chromium.org</owner>
   <owner>wenz@chromium.org</owner>
@@ -1302,15 +1154,15 @@ chromium-metrics-reviews@google.com.
   </summary>
 </histogram>
 
-<histogram name="SiteIsolation.MainFrameProcessReuse.BlockReason"
-    enum="MainFrameProcessReuseBlockReason" expires_after="2025-12-31">
+<histogram name="SiteIsolation.MainFrameProcessReuse.BlockReason2"
+    enum="MainFrameProcessReuseBlockReason" expires_after="2026-12-31">
   <owner>bashi@chromium.org</owner>
   <owner>gjc@google.com</owner>
   <owner>blink-network-stack@google.com</owner>
   <owner>chrome-loading@google.com</owner>
   <summary>
-    The reason why process sharing is disallowed for main frame navigation. The
-    UMA is only reported when the feature flag
+    The reason why process sharing is allowed or disallowed for main frame
+    navigation. The UMA is only reported when the feature flag
     ProcessPerSiteWithMainFrameThreshold or
     ReusePrerenderingProcessForMainFrames is enabled. The UMA is recorded when
     initializing a frame tree or getting a site instance for navigation.
@@ -1318,7 +1170,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="SiteIsolation.MissedReuseOpportunity.Found.MainFrame"
-    enum="Boolean" expires_after="2026-07-18">
+    enum="Boolean" expires_after="2027-01-24">
   <owner>aattar@google.com</owner>
   <owner>olivierli@chromium.org</owner>
   <summary>
@@ -1330,7 +1182,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="SiteIsolation.MissedReuseOpportunity.Found.Subframe"
-    enum="Boolean" expires_after="2026-07-18">
+    enum="Boolean" expires_after="2027-01-24">
   <owner>aattar@google.com</owner>
   <owner>olivierli@chromium.org</owner>
   <summary>
@@ -1342,7 +1194,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="SiteIsolation.OutOfProcessIframes" units="oopifs"
-    expires_after="2026-06-21">
+    expires_after="2027-02-07">
   <owner>alexmos@chromium.org</owner>
   <owner>creis@chromium.org</owner>
   <owner>lukasza@chromium.org</owner>
@@ -1353,7 +1205,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="SiteIsolation.OutOfProcessInnerFrameTrees" units="frame trees"
-    expires_after="2026-07-21">
+    expires_after="2027-07-21">
   <owner>alexmos@chromium.org</owner>
   <owner>creis@chromium.org</owner>
   <owner>lukasza@chromium.org</owner>
@@ -1377,7 +1229,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="SiteIsolation.ProxyCount" units="proxies"
-    expires_after="2026-06-14">
+    expires_after="2027-02-21">
   <owner>alexmos@chromium.org</owner>
   <owner>creis@chromium.org</owner>
   <owner>lukasza@chromium.org</owner>
@@ -1387,7 +1239,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="SiteIsolation.ProxyCountPerBrowsingInstance" units="units"
-    expires_after="2026-07-09">
+    expires_after="2027-07-09">
   <owner>alexmos@chromium.org</owner>
   <owner>creis@chromium.org</owner>
   <owner>lukasza@chromium.org</owner>
@@ -1412,7 +1264,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="SiteIsolation.ReusePendingOrCommittedSite.TimeSinceReusableProcessDestroyed.MainFrame2"
-    units="ms" expires_after="2026-07-18">
+    units="ms" expires_after="2027-01-24">
   <owner>aattar@google.com</owner>
   <owner>olivierli@chromium.org</owner>
   <summary>
@@ -1426,7 +1278,7 @@ chromium-metrics-reviews@google.com.
 
 <histogram
     name="SiteIsolation.ReusePendingOrCommittedSite.TimeSinceReusableProcessDestroyed.Subframe2"
-    units="ms" expires_after="2026-07-18">
+    units="ms" expires_after="2026-12-27">
   <owner>aattar@google.com</owner>
   <owner>olivierli@chromium.org</owner>
   <summary>
@@ -1439,7 +1291,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="SiteIsolation.SavedOAuthSites.Size" units="origins"
-    expires_after="2026-06-28">
+    expires_after="2027-07-28">
   <owner>alexmos@chromium.org</owner>
   <owner>creis@chromium.org</owner>
   <owner>lukasza@chromium.org</owner>
@@ -1451,7 +1303,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="SiteIsolation.SavedUserTriggeredIsolatedOrigins.Size"
-    units="origins" expires_after="2026-06-21">
+    units="origins" expires_after="2027-07-28">
   <owner>alexmos@chromium.org</owner>
   <owner>creis@chromium.org</owner>
   <owner>lukasza@chromium.org</owner>
@@ -1464,7 +1316,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="SiteIsolation.SavedWebTriggeredIsolatedOrigins.Size"
-    units="origins" expires_after="2025-12-07">
+    units="origins" expires_after="2027-07-28">
   <owner>alexmos@chromium.org</owner>
   <owner>creis@chromium.org</owner>
   <owner>lukasza@chromium.org</owner>
@@ -1477,7 +1329,7 @@ chromium-metrics-reviews@google.com.
 </histogram>
 
 <histogram name="SiteIsolation.SiteInstancesPerBrowsingInstance" units="units"
-    expires_after="2026-06-21">
+    expires_after="2027-02-28">
   <owner>alexmos@chromium.org</owner>
   <owner>creis@chromium.org</owner>
   <owner>lukasza@chromium.org</owner>

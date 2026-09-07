@@ -10,7 +10,6 @@
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
 #include "base/notreached.h"
 #include "base/time/time.h"
@@ -19,7 +18,6 @@
 #include "chrome/browser/profiles/profile_avatar_icon_util.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/signin/signin_view_controller_delegate.h"
 #include "chrome/browser/ui/webui/signin/login_ui_service_factory.h"
 #include "chrome/browser/ui/webui/signin/signin_utils.h"
@@ -53,7 +51,7 @@ constexpr bool UseMinorModeRestrictions() {
 }
 
 inline bool ScreenModeIsPending(const AccountInfo& primary_account_info) {
-  return GetScreenMode(primary_account_info.capabilities) ==
+  return GetScreenMode(primary_account_info.GetAccountCapabilities()) ==
          SyncConfirmationScreenMode::kPending;
 }
 
@@ -94,7 +92,7 @@ SyncConfirmationScreenMode GetScreenMode(
 SyncConfirmationHandler::SyncConfirmationHandler(
     Profile* profile,
     const std::unordered_map<std::string, int>& string_to_grd_id_map,
-    Browser* browser)
+    BrowserWindowInterface* browser)
     : profile_(profile),
       string_to_grd_id_map_(string_to_grd_id_map),
       browser_(browser),
@@ -284,7 +282,7 @@ void SyncConfirmationHandler::DispatchAccountInfoUpdate(
     return;
   }
 
-  if (info.account_id !=
+  if (info.GetAccountId() !=
       identity_manager_->GetPrimaryAccountId(ConsentLevel::kSignin)) {
     return;
   }
@@ -310,7 +308,7 @@ void SyncConfirmationHandler::DispatchAccountInfoUpdate(
     return;
   }
 
-  OnScreenModeChanged(GetScreenMode(info.capabilities));
+  OnScreenModeChanged(GetScreenMode(info.GetAccountCapabilities()));
 }
 
 void SyncConfirmationHandler::OnExtendedAccountInfoUpdated(

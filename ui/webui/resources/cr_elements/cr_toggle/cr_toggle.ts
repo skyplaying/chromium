@@ -18,6 +18,8 @@ import {CrRippleMixin} from '../cr_ripple/cr_ripple_mixin.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
 import {assert} from '//resources/js/assert.js';
+import {isMac} from '//resources/js/platform.js';
+
 import {getCss} from './cr_toggle.css.js';
 import {getHtml} from './cr_toggle.html.js';
 
@@ -95,12 +97,12 @@ export class CrToggleElement extends CrToggleElementBase {
 
   override firstUpdated() {
     if (!this.hasAttribute('role')) {
-      this.setAttribute('role', 'button');
+      this.setAttribute('role', 'switch');
     }
     if (!this.hasAttribute('tabindex')) {
       this.setAttribute('tabindex', '0');
     }
-    this.setAttribute('aria-pressed', this.checked ? 'true' : 'false');
+    this.setAttribute('aria-checked', this.checked ? 'true' : 'false');
     this.setAttribute('aria-disabled', this.disabled ? 'true' : 'false');
 
     this.addEventListener('click', this.onClick_.bind(this));
@@ -114,7 +116,7 @@ export class CrToggleElement extends CrToggleElementBase {
     super.updated(changedProperties);
 
     if (changedProperties.has('checked')) {
-      this.setAttribute('aria-pressed', this.checked ? 'true' : 'false');
+      this.setAttribute('aria-checked', this.checked ? 'true' : 'false');
     }
 
     if (changedProperties.has('disabled')) {
@@ -187,7 +189,7 @@ export class CrToggleElement extends CrToggleElementBase {
   }
 
   private onKeyDown_(e: KeyboardEvent) {
-    if (e.key !== ' ' && e.key !== 'Enter') {
+    if (e.key !== ' ' && (e.key !== 'Enter' || (isMac && e.ctrlKey))) {
       return;
     }
 
@@ -203,7 +205,7 @@ export class CrToggleElement extends CrToggleElementBase {
   }
 
   private onKeyUp_(e: KeyboardEvent) {
-    if (e.key !== ' ' && e.key !== 'Enter') {
+    if (e.key !== ' ' && (e.key !== 'Enter' || (isMac && e.ctrlKey))) {
       return;
     }
 

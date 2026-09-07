@@ -10,12 +10,15 @@
 
 #import "base/apple/foundation_util.h"
 #import "base/cancelable_callback.h"
+#import "base/files/file_util.h"
 #import "base/memory/raw_ptr.h"
 #import "base/metrics/histogram_functions.h"
 #import "base/metrics/user_metrics.h"
 #import "base/metrics/user_metrics_action.h"
 #import "base/strings/sys_string_conversions.h"
+#import "base/task/thread_pool.h"
 #import "base/time/time.h"
+#import "base/trace_event/trace_event.h"
 #import "components/feature_engagement/public/event_constants.h"
 #import "components/feature_engagement/public/tracker.h"
 #import "components/image_fetcher/core/image_fetcher.h"
@@ -23,6 +26,7 @@
 #import "components/image_fetcher/core/request_metadata.h"
 #import "components/ntp_tiles/pref_names.h"
 #import "components/omnibox/browser/aim_eligibility_service.h"
+#import "components/omnibox/browser/omnibox_pref_names.h"
 #import "components/omnibox/browser/omnibox_prefs.h"
 #import "components/omnibox/common/omnibox_features.h"
 #import "components/prefs/ios/pref_observer_bridge.h"
@@ -32,12 +36,16 @@
 #import "components/signin/public/base/signin_switches.h"
 #import "components/signin/public/identity_manager/objc/identity_manager_observer_bridge.h"
 #import "components/strings/grit/components_strings.h"
+#import "components/subscription_eligibility/objc/subscription_eligibility_observer_bridge.h"
+#import "components/subscription_eligibility/subscription_eligibility_service.h"
 #import "ios/chrome/browser/browser_view/model/browser_view_visibility_notifier_browser_agent.h"
 #import "ios/chrome/browser/content_suggestions/coordinator/content_suggestions_mediator.h"
 #import "ios/chrome/browser/content_suggestions/ui/user_account_image_update_delegate.h"
 #import "ios/chrome/browser/discover_feed/model/discover_feed_service.h"
 #import "ios/chrome/browser/discover_feed/model/discover_feed_service_factory.h"
 #import "ios/chrome/browser/discover_feed/model/discover_feed_visibility_browser_agent.h"
+#import "ios/chrome/browser/fullscreen/model/fullscreen_browser_agent.h"
+#import "ios/chrome/browser/fullscreen/model/fullscreen_browser_agent_observer_bridge.h"
 #import "ios/chrome/browser/home_customization/coordinator/home_customization_data_conversion.h"
 #import "ios/chrome/browser/home_customization/model/home_background_customization_service.h"
 #import "ios/chrome/browser/home_customization/model/home_background_customization_service_observer_bridge.h"
@@ -47,9 +55,9 @@
 #import "ios/chrome/browser/home_customization/utils/home_customization_constants.h"
 #import "ios/chrome/browser/metrics/model/new_tab_page_uma.h"
 #import "ios/chrome/browser/ntp/model/new_tab_page_tab_helper.h"
-#import "ios/chrome/browser/ntp/model/ntp_background_image_cache_service.h"
 #import "ios/chrome/browser/ntp/model/set_up_list_item_type.h"
 #import "ios/chrome/browser/ntp/model/set_up_list_prefs.h"
+#import "ios/chrome/browser/ntp/search_engine_logo/mediator/search_engine_logo_mediator.h"
 #import "ios/chrome/browser/ntp/search_engine_logo/ui/search_engine_logo_state.h"
 #import "ios/chrome/browser/ntp/shared/metrics/feed_metrics_constants.h"
 #import "ios/chrome/browser/ntp/shared/metrics/feed_metrics_recorder.h"
@@ -60,32 +68,35 @@
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_color_palette_util.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_consumer.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_content_delegate.h"
-#import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_feature.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_header_constants.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_header_consumer.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_image_background_trait.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_trait.h"
-#import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_view_controller.h"
 #import "ios/chrome/browser/ntp/ui_bundled/theme_utils.h"
 #import "ios/chrome/browser/omnibox/model/placeholder_service/placeholder_service.h"
 #import "ios/chrome/browser/omnibox/model/placeholder_service/placeholder_service_observer_bridge.h"
 #import "ios/chrome/browser/policy/model/policy_util.h"
 #import "ios/chrome/browser/search_engines/model/search_engine_observer_bridge.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
+#import "ios/chrome/browser/shared/model/prefs/pref_backed_boolean.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/url/chrome_url_constants.h"
 #import "ios/chrome/browser/shared/model/utils/first_run_util.h"
+#import "ios/chrome/browser/shared/model/utils/observable_boolean.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/util/custom_ui_trait_accessor.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/avatar/avatar_provider.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service.h"
+#import "ios/chrome/browser/signin/model/constants.h"
+#import "ios/chrome/browser/signin/model/signin_util.h"
 #import "ios/chrome/browser/sync/model/sync_observer_bridge.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_browser_agent.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_params.h"
 #import "ios/chrome/common/NSString+Chromium.h"
 #import "ios/chrome/common/ui/favicon/favicon_attributes.h"
+#import "ios/chrome/common/ui/util/image_util.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/public/provider/chrome/browser/voice_search/voice_search_api.h"
 #import "ios/web/public/navigation/navigation_item.h"
@@ -96,6 +107,10 @@
 #import "ui/base/device_form_factor.h"
 #import "ui/base/l10n/l10n_util.h"
 #import "url/gurl.h"
+
+@interface NewTabPageMediator (ImageFetcher)
+- (image_fetcher::ImageFetcherService*)imageFetcherService;
+@end
 
 namespace {
 
@@ -160,13 +175,132 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
         }
         )");
 
+// Enum for the IOS.HomeCustomization.Background.Ntp.CacheCleanupEvent
+// histogram.
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// LINT.IfChange(NtpBackgroundCacheCleanupEvent)
+enum class NtpBackgroundCacheCleanupEvent {
+  // The cleanup was skipped because the user is a new background customization
+  // user.
+  kCleanupSkippedNewUser = 0,
+  // The cleanup was triggered (files deletion started).
+  kCleanupTriggered = 1,
+  // The cleanup completed successfully (files deleted).
+  kCleanupCompletedSuccess = 2,
+  // The cleanup failed to delete files.
+  kCleanupCompletedFailure = 3,
+  // The refetch of the current background was triggered.
+  kRefetchTriggered = 4,
+  // The refetch of the current background completed successfully.
+  kRefetchCompletedSuccess = 5,
+  // The refetch of the current background failed.
+  kRefetchCompletedFailure = 6,
+  kMaxValue = kRefetchCompletedFailure,
+};
+// LINT.ThenChange(/tools/metrics/histograms/metadata/ios/enums.xml)
+
+// Before M149, an upscaling and transcoding bug caused the image fetcher to
+// store unnecessarily large background images, making a cache cleanup
+// necessary. However, new background customization users (M149+) bypass this
+// step entirely since their caches are clean.
+void DisableImageFetcherCacheCleanupIfNeeded(PrefService* pref_service) {
+  // The default value for `kIosRecentlyUsedBackgrounds` is a list containing
+  // a single boolean `true`, which is used as a signal for a new user.
+  const auto& recently_used =
+      pref_service->GetList(prefs::kIosRecentlyUsedBackgrounds);
+  if (recently_used.size() == 1 && recently_used[0].is_bool() &&
+      recently_used[0].GetBool()) {
+    pref_service->SetBoolean(prefs::kIosImageFetcherShouldClearCache, false);
+    base::UmaHistogramEnumeration(
+        "IOS.HomeCustomization.Background.Ntp.CacheCleanupEvent",
+        NtpBackgroundCacheCleanupEvent::kCleanupSkippedNewUser);
+  }
+}
+
+// Before M149, there was an upscale & transcoding issue on background images
+// stored in the image fetcher image cache resulting in storing very large files
+// increasing the memory footprint for no reason. This function has been
+// introduced after the fix to clean up the image cache and will be removed in
+// a future version of Chrome.
+void CleanupImageFetcherCacheIfNeeded(PrefService* pref_service,
+                                      web::BrowserState* browser_state,
+                                      NewTabPageMediator* mediator,
+                                      HomeCustomBackground custom_background) {
+  if (!pref_service->GetBoolean(prefs::kIosImageFetcherShouldClearCache)) {
+    return;
+  }
+
+  base::UmaHistogramEnumeration(
+      "IOS.HomeCustomization.Background.Ntp.CacheCleanupEvent",
+      NtpBackgroundCacheCleanupEvent::kCleanupTriggered);
+
+  base::FilePath cache_path = browser_state->GetStatePath();
+  base::FilePath storage_path =
+      cache_path.Append(FILE_PATH_LITERAL("image_data_storage"));
+
+  __weak NewTabPageMediator* weakMediator = mediator;
+  // Refetches the image.
+  void (^refetchCurrentImage)(void) = ^{
+    NewTabPageMediator* strongMediator = weakMediator;
+    if (!strongMediator) {
+      return;
+    }
+    // Refetch the image to populate the cache in the new format.
+    if (const sync_pb::NtpCustomBackground* ntpBackground =
+            std::get_if<sync_pb::NtpCustomBackground>(&custom_background)) {
+      image_fetcher::ImageFetcher* imageFetcher =
+          [strongMediator imageFetcherService]->GetImageFetcher(
+              image_fetcher::ImageFetcherConfig::kReducedMode);
+      GURL imageURL = GURL(ntpBackground->url());
+      imageFetcher->FetchImageData(
+          imageURL,
+          base::BindOnce(^(const std::string& imageData,
+                           const image_fetcher::RequestMetadata& metadata) {
+            bool success = !imageData.empty();
+            base::UmaHistogramEnumeration(
+                "IOS.HomeCustomization.Background.Ntp.CacheCleanupEvent",
+                success
+                    ? NtpBackgroundCacheCleanupEvent::kCleanupCompletedSuccess
+                    : NtpBackgroundCacheCleanupEvent::kCleanupCompletedFailure);
+          }),
+          image_fetcher::ImageFetcherParams(kTrafficAnnotation,
+                                            kImageFetcherUmaClient));
+      base::UmaHistogramEnumeration(
+          "IOS.HomeCustomization.Background.Ntp.CacheCleanupEvent",
+          NtpBackgroundCacheCleanupEvent::kRefetchTriggered);
+    }
+  };
+
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
+      base::BindOnce(
+          ^(const base::FilePath& path) {
+            return base::DeletePathRecursively(path) &&
+                   base::CreateDirectory(path);
+          },
+          storage_path),
+      base::BindOnce(^(bool success) {
+        base::UmaHistogramEnumeration(
+            "IOS.HomeCustomization.Background.Ntp.CacheCleanupEvent",
+            success ? NtpBackgroundCacheCleanupEvent::kCleanupCompletedSuccess
+                    : NtpBackgroundCacheCleanupEvent::kCleanupCompletedFailure);
+        refetchCurrentImage();
+      }));
+
+  pref_service->SetBoolean(prefs::kIosImageFetcherShouldClearCache, false);
+}
+
 }  // namespace
 
-@interface NewTabPageMediator () <HomeBackgroundCustomizationServiceObserving,
-                                  IdentityManagerObserverBridgeDelegate,
+@interface NewTabPageMediator () <BooleanObserver,
+                                  FullscreenBrowserAgentObserving,
+                                  HomeBackgroundCustomizationServiceObserving,
+                                  IdentityManagerObserving,
                                   PlaceholderServiceObserving,
                                   PrefObserverDelegate,
                                   SearchEngineObserving,
+                                  SubscriptionEligibilityServiceObserving,
                                   SyncObserverModelBridge>
 
 @property(nonatomic, assign) ChromeAccountManagerService* accountManagerService;
@@ -174,14 +308,15 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
 @property(nonatomic, assign) TemplateURLService* templateURLService;
 // Authentication Service to get the current user's avatar.
 @property(nonatomic, assign) AuthenticationService* authService;
-// This is the object that knows how to update the Identity Disc UI.
-@property(nonatomic, weak) id<UserAccountImageUpdateDelegate> imageUpdater;
 // DiscoverFeed Service to display the Feed.
 @property(nonatomic, assign) DiscoverFeedService* discoverFeedService;
 
 @end
 
 @implementation NewTabPageMediator {
+  raw_ptr<FullscreenBrowserAgent> _fullscreenBrowserAgent;
+  std::unique_ptr<FullscreenBrowserAgentObserverBridge>
+      _fullscreenBrowserAgentObserverBridge;
   // AIM eligibility service.
   raw_ptr<AimEligibilityService> _aimEligibilityService;
   // AIM eligibility subscription.
@@ -193,6 +328,10 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
   // Observes changes in identity and updates the Identity Disc.
   std::unique_ptr<signin::IdentityManagerObserverBridge>
       _identityObserverBridge;
+  // Observes changes in AI subscription tier.
+  std::unique_ptr<
+      subscription_eligibility::SubscriptionEligibilityObserverBridge>
+      _subscriptionEligibilityObserverBridge;
   // Observes changes of the browser view visibility state.
   raw_ptr<BrowserViewVisibilityNotifierBrowserAgent, DanglingUntriaged>
       _browserViewVisibilityNotifierBrowserAgent;
@@ -220,8 +359,6 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
   // Observer for the customization service.
   std::unique_ptr<HomeBackgroundCustomizationServiceObserverBridge>
       _backgroundCustomizationServiceObserverBridge;
-  // Used to cache the background image.
-  raw_ptr<NTPBackgroundImageCacheService> _backgroundImageCacheService;
   // Used to fetch and cache images for the background.
   raw_ptr<image_fetcher::ImageFetcherService> _imageFetcherService;
   raw_ptr<UserUploadedImageManager, DanglingUntriaged>
@@ -237,6 +374,22 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
   BOOL _wasNTPInLandscape;
   // Whether the mediator has been set up.
   BOOL _mediatorSetUp;
+  // Callback for the thumbnail image fetch.
+  std::unique_ptr<base::CancelableOnceCallback<
+      void(const std::string&, const image_fetcher::RequestMetadata&)>>
+      _thumbnailCallback;
+  // Callback for the high-resolution image fetch.
+  std::unique_ptr<base::CancelableOnceCallback<
+      void(const std::string&, const image_fetcher::RequestMetadata&)>>
+      _imageCallback;
+  // The URL of the background image currently being fetched.
+  GURL _pendingBackgroundURL;
+  // Sequence number for fetch requests to generate unique flow IDs.
+  uint64_t _fetchSequenceNumber;
+  // Holds whether the omnibox should be pinned to the bottom position.
+  PrefBackedBoolean* _bottomOmniboxEnabled;
+  raw_ptr<subscription_eligibility::SubscriptionEligibilityService>
+      _subscriptionEligibilityService;
 }
 
 // Synthesized from NewTabPageMutator.
@@ -253,14 +406,15 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
                   (id<UserAccountImageUpdateDelegate>)imageUpdater
                    discoverFeedService:(DiscoverFeedService*)discoverFeedService
                            prefService:(PrefService*)prefService
+        subscriptionEligibilityService:
+            (subscription_eligibility::SubscriptionEligibilityService*)
+                subscriptionEligibilityService
                            syncService:(syncer::SyncService*)syncService
            regionalCapabilitiesService:
                (regional_capabilities::RegionalCapabilitiesService*)
                    regionalCapabilitiesService
         backgroundCustomizationService:
             (HomeBackgroundCustomizationService*)backgroundCustomizationService
-           backgroundImageCacheService:
-               (NTPBackgroundImageCacheService*)backgroundImageCacheService
                    imageFetcherService:
                        (image_fetcher::ImageFetcherService*)imageFetcherService
               userUploadedImageManager:
@@ -272,7 +426,9 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
         (DiscoverFeedVisibilityBrowserAgent*)discoverFeedVisibilityBrowserAgent
               featureEngagementTracker:(feature_engagement::Tracker*)tracker
                  aimEligibilityService:
-                     (AimEligibilityService*)aimEligibilityService {
+                     (AimEligibilityService*)aimEligibilityService
+                fullscreenBrowserAgent:
+                    (FullscreenBrowserAgent*)fullscreenBrowserAgent {
   self = [super init];
   if (self) {
     CHECK(identityManager);
@@ -287,6 +443,10 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
     _identityObserverBridge =
         std::make_unique<signin::IdentityManagerObserverBridge>(identityManager,
                                                                 self);
+    CHECK(subscriptionEligibilityService);
+    _subscriptionEligibilityObserverBridge = std::make_unique<
+        subscription_eligibility::SubscriptionEligibilityObserverBridge>(
+        subscriptionEligibilityService, self);
     _browserViewVisibilityNotifierBrowserAgent =
         browserViewVisibilityNotifierBrowserAgent;
     // Listen for default search engine changes.
@@ -298,13 +458,12 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
     _discoverFeedService = discoverFeedService;
     _discoverFeedVisibilityBrowserAgent = discoverFeedVisibilityBrowserAgent;
     _prefService = prefService;
+    _subscriptionEligibilityService = subscriptionEligibilityService;
     _regionalCapabilitiesService = regionalCapabilitiesService;
     _backgroundCustomizationService = backgroundCustomizationService;
-    _backgroundImageCacheService = backgroundImageCacheService;
     _imageFetcherService = imageFetcherService;
     _userUploadedImageManager = userUploadedImageManager;
-    _signedInIdentity =
-        _authService->GetPrimaryIdentity(signin::ConsentLevel::kSignin);
+    _signedInIdentity = _authService->GetPrimaryIdentity();
     _tracker = tracker;
     _aimEligibilityService = aimEligibilityService;
     if (_aimEligibilityService) {
@@ -315,8 +474,42 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
                 [weakSelf updateAIMAvailability];
               }));
     }
+    if (IsChromeNextIaEnabled() && IsBottomOmniboxAvailable()) {
+      _bottomOmniboxEnabled = [[PrefBackedBoolean alloc]
+          initWithPrefService:GetApplicationContext()->GetLocalState()
+                     prefName:omnibox::kIsOmniboxInBottomPosition];
+      _bottomOmniboxEnabled.observer = self;
+      [_bottomOmniboxEnabled.observer booleanDidChange:_bottomOmniboxEnabled];
+    }
+    if (IsFullscreenRefactoringEnabled() && fullscreenBrowserAgent) {
+      _fullscreenBrowserAgent = fullscreenBrowserAgent;
+      _fullscreenBrowserAgentObserverBridge =
+          std::make_unique<FullscreenBrowserAgentObserverBridge>(
+              self, _fullscreenBrowserAgent);
+    }
   }
   return self;
+}
+
+- (void)setConsumer:(id<NewTabPageConsumer>)consumer {
+  _consumer = consumer;
+  if (IsChromeNextIaEnabled()) {
+    if (IsBottomOmniboxAvailable()) {
+      [self.consumer setOmniboxInBottomPosition:_bottomOmniboxEnabled.value];
+    }
+    if (IsFullscreenRefactoringEnabled() && _fullscreenBrowserAgent) {
+      [self.consumer
+          setFeedBottomInset:_fullscreenBrowserAgent->max_insets().bottom];
+    }
+  }
+}
+
+- (void)setHeaderConsumer:(id<NewTabPageHeaderConsumer>)headerConsumer {
+  _headerConsumer = headerConsumer;
+  if (IsChromeNextIaEnabled() && IsBottomOmniboxAvailable()) {
+    [self.headerConsumer
+        setOmniboxInBottomPosition:_bottomOmniboxEnabled.value];
+  }
 }
 
 #pragma mark - NewTabPageMutator
@@ -362,6 +555,8 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
 }
 
 - (void)setUp {
+  DisableImageFetcherCacheCleanupIfNeeded(_prefService);
+
   self.templateURLService->Load();
   [self updateModuleVisibilityForConsumer];
   [self.headerConsumer
@@ -401,11 +596,9 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
                                                       fromState:previous_state];
               }));
   _discoverFeedVisibilityBrowserAgent->AddObserver(self.feedVisibilityObserver);
-  if (IsNTPBackgroundCustomizationEnabled()) {
-    _backgroundCustomizationServiceObserverBridge =
-        std::make_unique<HomeBackgroundCustomizationServiceObserverBridge>(
-            _backgroundCustomizationService, self);
-  }
+  _backgroundCustomizationServiceObserverBridge =
+      std::make_unique<HomeBackgroundCustomizationServiceObserverBridge>(
+          _backgroundCustomizationService, self);
   [self updateAIMAvailability];
   _mediatorSetUp = YES;
 }
@@ -418,11 +611,13 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
       self.feedVisibilityObserver);
   _searchEngineObserver.reset();
   _identityObserverBridge.reset();
+  _subscriptionEligibilityObserverBridge.reset();
   self.accountManagerService = nil;
   self.discoverFeedService = nullptr;
   _prefChangeRegistrar.reset();
   _prefObserverBridge.reset();
   _prefService = nullptr;
+  _subscriptionEligibilityService = nullptr;
   _syncObserver.reset();
   _syncService = nullptr;
   _regionalCapabilitiesService = nullptr;
@@ -434,11 +629,9 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
   _backgroundCustomizationServiceObserverBridge = nullptr;
   _backgroundCustomizationService = nullptr;
   _imageFetcherService = nullptr;
-  _backgroundImageCacheService = nullptr;
-  if (base::FeatureList::IsEnabled(omnibox::kOmniboxMobileParityUpdate) ||
-      base::FeatureList::IsEnabled(omnibox::kOmniboxMobileParityUpdateV2)) {
-    self.placeholderService = nullptr;
-  }
+  self.placeholderService = nullptr;
+  _fullscreenBrowserAgentObserverBridge.reset();
+  _fullscreenBrowserAgent = nullptr;
   base::UmaHistogramBoolean("IOS.NTP.LandscapeMode", _wasNTPInLandscape);
 }
 
@@ -454,9 +647,6 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
 }
 
 - (void)setPlaceholderService:(PlaceholderService*)placeholderService {
-  CHECK(base::FeatureList::IsEnabled(omnibox::kOmniboxMobileParityUpdate) ||
-        base::FeatureList::IsEnabled(omnibox::kOmniboxMobileParityUpdateV2));
-
   _placeholderService = placeholderService;
 
   if (!placeholderService) {
@@ -484,6 +674,24 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
   }
 }
 
+#pragma mark - FullscreenBrowserAgentObserving
+
+- (void)fullscreenDidUpdateObscuredInsetRange:(FullscreenBrowserAgent*)agent {
+  [self.consumer setFeedBottomInset:agent->max_insets().bottom];
+}
+
+#pragma mark - BooleanObserver
+
+- (void)booleanDidChange:(id<ObservableBoolean>)observableBoolean {
+  CHECK(IsChromeNextIaEnabled());
+  if (observableBoolean == _bottomOmniboxEnabled) {
+    CHECK(IsBottomOmniboxAvailable());
+    [self.consumer setOmniboxInBottomPosition:_bottomOmniboxEnabled.value];
+    [self.headerConsumer
+        setOmniboxInBottomPosition:_bottomOmniboxEnabled.value];
+  }
+}
+
 #pragma mark - SearchEngineObserving
 
 - (void)searchEngineChanged {
@@ -506,16 +714,15 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
   [self.headerConsumer setDefaultSearchEngineName:dseName];
 }
 
-#pragma mark - IdentityManagerObserverBridgeDelegate
+#pragma mark - IdentityManagerObserving
 
-- (void)onEndBatchOfPrimaryAccountChanges {
-  _signedInIdentity =
-      self.authService->GetPrimaryIdentity(signin::ConsentLevel::kSignin);
+- (void)batchOfPrimaryAccountChangesDidEnd {
+  _signedInIdentity = self.authService->GetPrimaryIdentity();
   [self updateAccountImage];
   [self updateAccountErrorBadge];
 }
 
-- (void)onExtendedAccountInfoUpdated:(const AccountInfo&)info {
+- (void)extendedAccountInfoDidUpdate:(const AccountInfo&)info {
   if (info.gaia != _signedInIdentity.gaiaId) {
     return;
   }
@@ -526,10 +733,6 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
 #pragma mark - PlaceholderServiceObserving
 
 - (void)placeholderImageUpdated {
-  if (!base::FeatureList::IsEnabled(omnibox::kOmniboxMobileParityUpdateV2)) {
-    return;
-  }
-
   // Show Default Search Engine favicon.
   // Remember what is the Default Search Engine provider that the icon is
   // for, in case the user changes Default Search Engine while this is being
@@ -587,38 +790,33 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
 }
 
 // Sets the background image through the consumer and updates the traits.
-// Caches the image when `cache` is YES.
+- (void)setCustomBackground:(HomeCustomBackground)customBackground
+                      image:(UIImage*)image {
+  [self setCustomBackground:customBackground
+                      image:image
+          originalImageSize:CGSizeZero];
+}
+
 - (void)setCustomBackground:(HomeCustomBackground)customBackground
                       image:(UIImage*)image
-                      cache:(BOOL)cache {
-  if (cache && _backgroundImageCacheService &&
-      IsNTPBackgroundImageCacheEnabled()) {
-    _backgroundImageCacheService->SetCachedBackgroundImage(image);
-  }
+          originalImageSize:(CGSize)originalImageSize {
   HomeCustomizationFramingCoordinates* coordinates =
       [self framingCoordinatesForCustomBackground:customBackground];
+  coordinates.originalImageSize = originalImageSize;
   [self.consumer setBackgroundImage:image framingCoordinates:coordinates];
 
   CustomUITraitAccessor* traitAccessor = [[CustomUITraitAccessor alloc]
       initWithMutableTraits:self.consumer.traitOverrides];
   [traitAccessor setBoolForNewTabPageImageBackgroundTrait:(image != nil)];
   [traitAccessor setObjectForNewTabPageTrait:[NewTabPageTrait defaultValue]];
-}
 
-// Attempts to apply the cached background image. Returns YES if a cached image
-// was found and applied, NO otherwise.
-- (BOOL)applyCachedBackground:(const HomeCustomBackground&)customBackground {
-  if (!_backgroundImageCacheService) {
-    return NO;
-  }
-  UIImage* cachedImage =
-      _backgroundImageCacheService->GetCachedBackgroundImage();
-  if (!cachedImage) {
-    return NO;
-  }
+  UIColor* tintColor = image ? UIColor.whiteColor : nil;
+  [self.logoMediator setLogoTintColor:tintColor];
 
-  [self setCustomBackground:customBackground image:cachedImage cache:NO];
-  return YES;
+  if (self.webState) {
+    CleanupImageFetcherCacheIfNeeded(
+        _prefService, self.webState->GetBrowserState(), self, customBackground);
+  }
 }
 
 // Records any necessary logging for after a custom background loaded..
@@ -635,15 +833,18 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
 
 - (void)updateAIMAvailability {
   BOOL aimAllowed = NO;
+  BOOL fuseboxEligible = NO;
   if (_aimEligibilityService) {
     const BOOL allowedOnDevice =
         ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_PHONE ||
         IsAIMNTPEntrypointTabletEnabled();
     aimAllowed = _aimEligibilityService->IsAimEligible() && allowedOnDevice;
+    fuseboxEligible = _aimEligibilityService->IsFuseboxEligible();
   }
 
   [self.consumer setAIMAllowed:aimAllowed];
   [self.headerConsumer setAIMAllowed:aimAllowed];
+  [self.headerConsumer setFuseboxEligible:fuseboxEligible];
 
   if (aimAllowed == _isAIMAllowed) {
     return;
@@ -661,12 +862,17 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
   // Fetches user's identity from Authentication Service.
   if (_signedInIdentity) {
     // Only show an avatar if the user is signed in.
-    UIImage* image =
+    UIImage* avatarImage =
         GetApplicationContext()->GetIdentityAvatarProvider()->GetIdentityAvatar(
             _signedInIdentity, IdentityAvatarSize::SmallSize);
-    [self.imageUpdater updateAccountImage:image
-                                     name:_signedInIdentity.userFullName
-                                    email:_signedInIdentity.userEmail];
+
+    BOOL hasAITier =
+        IsAiSubscriptionAvatarRingIOSEnabled() &&
+        _subscriptionEligibilityService->GetAiSubscriptionTier() > 0;
+    [self.imageUpdater updateAccountWithName:_signedInIdentity.userFullName
+                                       email:_signedInIdentity.userEmail
+                                 avatarImage:avatarImage
+                                   hasAITier:hasAITier];
   } else {
     [self.imageUpdater setSignedOutAccountImage];
     signin_metrics::LogSignInOffered(
@@ -740,6 +946,8 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
 // Updates the background based on the current customization settings.
 // `initialLoad` is YES if this is the first time the background is being set.
 - (void)updateBackgroundForInitialLoad:(BOOL)initialLoad {
+  TRACE_EVENT("startup", "NewTabPageMediator::updateBackgroundForInitialLoad",
+              perfetto::Flow::ProcessScoped(reinterpret_cast<uintptr_t>(self)));
   CustomUITraitAccessor* traitAccessor = [[CustomUITraitAccessor alloc]
       initWithMutableTraits:self.consumer.traitOverrides];
 
@@ -747,10 +955,8 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
       _backgroundCustomizationService->GetCurrentCustomBackground();
 
   if (customBackground) {
-    if (initialLoad && [self applyCachedBackground:customBackground.value()]) {
-      // Cached background image applied. Nothing else to do.
-    } else if (std::holds_alternative<sync_pb::NtpCustomBackground>(
-                   customBackground.value())) {
+    if (std::holds_alternative<sync_pb::NtpCustomBackground>(
+            customBackground.value())) {
       sync_pb::NtpCustomBackground background =
           std::get<sync_pb::NtpCustomBackground>(customBackground.value());
       [self fetchCustomBackground:background];
@@ -760,9 +966,12 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
 
       __weak __typeof(self) weakSelf = self;
       _userUploadedImageManager->LoadUserUploadedImage(
-          base::FilePath(userBackground.image_path),
-          base::BindOnce(^(UIImage* image, UserUploadedImageError error) {
-            [weakSelf setCustomBackground:userBackground image:image cache:YES];
+          base::FilePath(userBackground.image_path), self.screenSize,
+          base::BindOnce(^(UIImage* image, CGSize originalSize,
+                           UserUploadedImageError error) {
+            [weakSelf setCustomBackground:userBackground
+                                    image:image
+                        originalImageSize:originalSize];
             if (!image) {
               base::UmaHistogramEnumeration("IOS.HomeCustomization.Background."
                                             "Ntp.ImageUserUploadedFetchError",
@@ -790,6 +999,8 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
 
     [traitAccessor setObjectForNewTabPageTrait:colorPalette];
     [traitAccessor setBoolForNewTabPageImageBackgroundTrait:NO];
+    UIColor* tintColor = colorPalette.tintColor;
+    [self.logoMediator setLogoTintColor:tintColor];
     if (initialLoad) {
       base::UmaHistogramEnumeration(
           "IOS.HomeCustomization.Background.Ntp.Loaded",
@@ -802,72 +1013,126 @@ const net::NetworkTrafficAnnotationTag kTrafficAnnotation =
   // reverting to the default colors defined by the trait.
   [traitAccessor setObjectForNewTabPageTrait:[NewTabPageTrait defaultValue]];
   [traitAccessor setBoolForNewTabPageImageBackgroundTrait:NO];
-  base::UmaHistogramEnumeration("IOS.HomeCustomization.Background.Ntp.Loaded",
-                                HomeCustomizationBackgroundStyle::kDefault);
+  [self.logoMediator setLogoTintColor:nil];
+  if (initialLoad) {
+    base::UmaHistogramEnumeration("IOS.HomeCustomization.Background.Ntp.Loaded",
+                                  HomeCustomizationBackgroundStyle::kDefault);
+  }
 }
 
 // Fetches and applies a custom background image.
 - (void)fetchCustomBackground:(sync_pb::NtpCustomBackground)background {
   GURL imageURL = GURL(background.url());
+  if (imageURL == _pendingBackgroundURL) {
+    return;
+  }
+
+  // Cancel any existing fetches.
+  if (_imageCallback) {
+    _imageCallback->Cancel();
+    _imageCallback.reset();
+  }
+  if (_thumbnailCallback) {
+    _thumbnailCallback->Cancel();
+    _thumbnailCallback.reset();
+  }
+
+  _pendingBackgroundURL = imageURL;
+
+  uint64_t flow_id =
+      reinterpret_cast<uint64_t>(self) ^ (++_fetchSequenceNumber);
+  TRACE_EVENT("ui", "NewTabPageMediator::fetchCustomBackground",
+              perfetto::Flow::ProcessScoped(flow_id));
+
   GURL thumbnailURL =
       AddOptionsToImageURL(RemoveOptionsFromImageURL(imageURL.spec()).spec(),
                            GetThumbnailImageOptions());
 
   image_fetcher::ImageFetcher* imageFetcher =
       _imageFetcherService->GetImageFetcher(
-          image_fetcher::ImageFetcherConfig::kDiskCacheOnly);
+          image_fetcher::ImageFetcherConfig::kReducedMode);
 
   __weak __typeof(self) weakSelf = self;
 
-  auto cancelable_thumbnail_callback =
-      std::make_shared<base::CancelableOnceCallback<void(
-          const gfx::Image&, const image_fetcher::RequestMetadata&)>>();
-
-  cancelable_thumbnail_callback->Reset(base::BindOnce(^(
-      const gfx::Image& image, const image_fetcher::RequestMetadata& metadata) {
-    if (!image.IsEmpty()) {
-      // Temporarily sets the thumbnail as the background until the
-      // high-resolution image is loaded.
-      [weakSelf setCustomBackground:background
-                              image:image.ToUIImage()
-                              cache:NO];
-      return;
-    }
-  }));
-
-  // Retrieving the thumbnail URL should hit the cache, so it returns almost
-  // instantly.
-  imageFetcher->FetchImage(thumbnailURL,
-                           cancelable_thumbnail_callback->callback(),
-                           image_fetcher::ImageFetcherParams(
-                               kTrafficAnnotation, kImageFetcherUmaClient));
-
-  imageFetcher->FetchImage(
-      imageURL,
-      base::BindOnce(^(const gfx::Image& image,
+  _thumbnailCallback = std::make_unique<base::CancelableOnceCallback<void(
+      const std::string&, const image_fetcher::RequestMetadata&)>>(
+      base::BindOnce(^(const std::string& image_data,
                        const image_fetcher::RequestMetadata& metadata) {
+        if (!image_data.empty()) {
+          NSData* data = [NSData dataWithBytes:image_data.data()
+                                        length:image_data.length()];
+          UIImage* image = [UIImage imageWithData:data];
+          if (image) {
+            // Temporarily sets the thumbnail as the background until the
+            // high-resolution image is loaded.
+            [weakSelf setCustomBackground:background image:image];
+          }
+          return;
+        }
+      }));
+
+  _imageCallback = std::make_unique<base::CancelableOnceCallback<void(
+      const std::string&, const image_fetcher::RequestMetadata&)>>(
+      base::BindOnce(^(const std::string& image_data,
+                       const image_fetcher::RequestMetadata& metadata) {
+        __typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) {
+          return;
+        }
+
+        TRACE_EVENT(
+            "ui",
+            "NewTabPageMediator::fetchCustomBackground completion callback",
+            perfetto::Flow::ProcessScoped(flow_id));
+
         // Cancel the thumbnail URL fetch if the high-resolution fetch
         // finished first.
-        if (cancelable_thumbnail_callback) {
-          cancelable_thumbnail_callback->Cancel();
+        if (strongSelf->_thumbnailCallback) {
+          strongSelf->_thumbnailCallback->Cancel();
+          strongSelf->_thumbnailCallback.reset();
         }
-        if (!image.IsEmpty()) {
-          [weakSelf setCustomBackground:background
-                                  image:image.ToUIImage()
-                                  cache:YES];
+
+        if (!image_data.empty()) {
+          NSData* data = [NSData dataWithBytes:image_data.data()
+                                        length:image_data.length()];
+          UIImage* image = [UIImage imageWithData:data];
+          if (image) {
+            [strongSelf setCustomBackground:background image:image];
+          }
         } else {
           base::UmaHistogramSparse(
               "IOS.HomeCustomization.Background.Ntp.ImageDownloadErrorCode",
               metadata.http_response_code);
         }
-      }),
-      image_fetcher::ImageFetcherParams(kTrafficAnnotation,
-                                        kImageFetcherUmaClient));
+
+        // Clear state.
+        strongSelf->_pendingBackgroundURL = GURL();
+      }));
+
+  // Retrieving the thumbnail URL should hit the cache, so it returns almost
+  // instantly.
+  imageFetcher->FetchImageData(thumbnailURL, _thumbnailCallback->callback(),
+                               image_fetcher::ImageFetcherParams(
+                                   kTrafficAnnotation, kImageFetcherUmaClient));
+
+  imageFetcher->FetchImageData(imageURL, _imageCallback->callback(),
+                               image_fetcher::ImageFetcherParams(
+                                   kTrafficAnnotation, kImageFetcherUmaClient));
 }
 
 - (void)markSafariDataImportSetupListItemAsComplete {
   set_up_list_prefs::MarkItemComplete(GetApplicationContext()->GetLocalState(),
                                       SetUpListItemType::kSafariImport);
+}
+
+- (image_fetcher::ImageFetcherService*)imageFetcherService {
+  return _imageFetcherService;
+}
+
+#pragma mark - SubscriptionEligibilityServiceObserving
+
+- (void)aiSubscriptionTierDidUpdate:(int32_t)newSubscriptionTier {
+  [self updateAccountImage];
 }
 
 @end

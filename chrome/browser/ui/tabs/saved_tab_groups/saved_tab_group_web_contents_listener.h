@@ -46,7 +46,7 @@ class TabGroupSyncService;
 // State that encompasses the information the tab needs in order to fake
 // its visual state. Queries the favicon service for the given URL, and
 // udpates the tabstripmodel observers when it's updated. Used by the
-// TabRendererData to override the favicon and title.
+// tabs::TabData to override the favicon and title.
 class DeferredTabState {
  public:
   DeferredTabState(tabs::TabInterface* local_tab,
@@ -118,13 +118,13 @@ class SavedTabGroupWebContentsListener : public content::WebContentsObserver {
       content::NavigationHandle* navigation_handle) override;
   void DidGetUserInteraction(const blink::WebInputEvent& event) override;
 
-  // Retrieves the SavedTabGroup that contains the tab |local_tab_|.
+  // Retrieves the SavedTabGroup that contains the tab `local_tab_`.
   std::optional<SavedTabGroup> saved_group();
 
  private:
   void NavigateToUrlInternal(const GURL& url);
 
-  // Clear and then update the |tab_redirect_chain_| for the navigation_handle's
+  // Clear and then update the `tab_redirect_chain_` for the navigation_handle's
   // entire redirect chain (from GetRedirectChain()). only performed if the nav
   // is a MainFrame navigation.
   void UpdateTabRedirectChain(content::NavigationHandle* navigation_handle);

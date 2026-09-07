@@ -16,7 +16,7 @@ mojom("mojom") {
       types = [
         {
           mojom = "unexportable_keys.mojom.SignatureAlgorithm"
-          cpp = "::crypto::SignatureVerifier::SignatureAlgorithm"
+          cpp = "::crypto::sign::SignatureKind"
         },
         {
           mojom = "unexportable_keys.mojom.BackgroundTaskPriority"
@@ -26,16 +26,29 @@ mojom("mojom") {
           mojom = "unexportable_keys.mojom.ServiceError"
           cpp = "::unexportable_keys::ServiceError"
         },
+
         {
-          mojom = "unexportable_keys.mojom.UnexportableKeyId"
-          cpp = "::unexportable_keys::UnexportableKeyId"
+          mojom = "unexportable_keys.mojom.UnexportableSigningKeyId"
+          cpp = "::unexportable_keys::UnexportableSigningKeyId"
+        },
+        {
+          mojom = "unexportable_keys.mojom.UnexportableAttestationKeyId"
+          cpp = "::unexportable_keys::UnexportableAttestationKeyId"
+        },
+        {
+          mojom = "unexportable_keys.mojom.AttestationFormat"
+          cpp = "::crypto::AttestationStatement::Format"
+        },
+        {
+          mojom = "unexportable_keys.mojom.AttestationStatement"
+          cpp = "::crypto::AttestationStatement"
         },
       ]
       traits_headers = [
         "//components/unexportable_keys/mojom/unexportable_keys_mojom_traits.h",
         "//components/unexportable_keys/background_task_priority.h",
         "//components/unexportable_keys/unexportable_key_id.h",
-        "//crypto/signature_verifier.h",
+        "//crypto/sign.h",
         "//crypto/unexportable_key.h",
         "//components/unexportable_keys/service_error.h",
       ]
@@ -72,6 +85,7 @@ source_set("unit_tests") {
   sources = [
     "unexportable_key_service_proxied_unittest.cc",
     "unexportable_key_service_proxy_unittest.cc",
+    "unexportable_keys_mojom_traits_unittest.cc",
   ]
 
   deps = [

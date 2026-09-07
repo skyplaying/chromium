@@ -7,7 +7,6 @@
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/bookmarks/bookmark_utils_desktop.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_test_utils.h"
@@ -50,7 +49,7 @@ class BookmarkEditorViewBrowserTestWithAccountBookmarks
 
   void SetUpOnMainThread() override {
     DialogBrowserTest::SetUpOnMainThread();
-    SignInAndEnableAccountBookmarkNodes(browser()->profile());
+    SignInAndEnableAccountBookmarkNodes(browser()->GetProfile());
   }
 
  private:
@@ -66,7 +65,7 @@ IN_PROC_BROWSER_TEST_F(BookmarkEditorViewBrowserTestWithAccountBookmarks,
 IN_PROC_BROWSER_TEST_F(BookmarkEditorViewBrowserTestWithAccountBookmarks,
                        InvokeUi_AccountAndLocalNodes) {
   bookmarks::BookmarkModel* const bookmark_model =
-      BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+      BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
   bookmark_model->AddFolder(bookmark_model->bookmark_bar_node(),
                             /*index=*/0, u"Local Folder");
   bookmark_model->AddFolder(bookmark_model->account_bookmark_bar_node(),
@@ -78,7 +77,7 @@ IN_PROC_BROWSER_TEST_F(BookmarkEditorViewBrowserTestWithAccountBookmarks,
 IN_PROC_BROWSER_TEST_F(BookmarkEditorViewBrowserTestWithAccountBookmarks,
                        InvokeUi_OnlyAccountNodes) {
   bookmarks::BookmarkModel* const bookmark_model =
-      BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+      BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
   bookmark_model->AddFolder(bookmark_model->account_bookmark_bar_node(),
                             /*index=*/0, u"Account Folder");
   ShowAndVerifyUi();
@@ -87,7 +86,7 @@ IN_PROC_BROWSER_TEST_F(BookmarkEditorViewBrowserTestWithAccountBookmarks,
 IN_PROC_BROWSER_TEST_F(BookmarkEditorViewBrowserTestWithAccountBookmarks,
                        InvokeUi_OnlyLocalNodes) {
   bookmarks::BookmarkModel* const bookmark_model =
-      BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+      BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
   bookmark_model->AddFolder(bookmark_model->other_node(),
                             /*index=*/0, u"Local Folder");
 
@@ -97,7 +96,7 @@ IN_PROC_BROWSER_TEST_F(BookmarkEditorViewBrowserTestWithAccountBookmarks,
 IN_PROC_BROWSER_TEST_F(BookmarkEditorViewBrowserTestWithAccountBookmarks,
                        InvokeUi_OnlyLocalChildren) {
   bookmarks::BookmarkModel* const bookmark_model =
-      BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+      BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
   bookmark_model->AddURL(bookmark_model->other_node(), 0, u"bookmark 2",
                          GURL("http://www.google.com"));
   bookmark_model->AddURL(bookmark_model->bookmark_bar_node(), 0, u"bookmark",
@@ -114,7 +113,7 @@ class BookmarkEditorViewBrowserTestMoveDialog
   // BookmarkEditorView dialog with a tree view.
   void ShowUi(const std::string& name) override {
     BookmarkEditor::Show(
-        browser()->window()->GetNativeWindow(), browser()->profile(),
+        browser()->GetWindow()->GetNativeWindow(), browser()->GetProfile(),
         BookmarkEditor::EditDetails::MoveNodes(bookmark_model(), nodes_),
         BookmarkEditor::SHOW_TREE);
   }
@@ -125,7 +124,7 @@ class BookmarkEditorViewBrowserTestMoveDialog
   }
 
   bookmarks::BookmarkModel* bookmark_model() {
-    return BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+    return BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
   }
 
  private:
@@ -158,11 +157,11 @@ IN_PROC_BROWSER_TEST_F(BookmarkEditorViewBrowserTestMoveDialog,
                                 GURL("http://www.google.com"))});
 
   auto editor = std::make_unique<BookmarkEditorView>(
-      browser()->profile(),
+      browser()->GetProfile(),
       BookmarkEditor::EditDetails::MoveNodes(bookmark_model(), nodes),
       BookmarkEditor::SHOW_TREE, base::DoNothing());
   editor_raw = editor.get();
-  editor->Show(browser()->window()->GetNativeWindow());
+  editor->Show(browser()->GetWindow()->GetNativeWindow());
 
   // `BookmarkEditorView` is self-deleting.
   editor.release();

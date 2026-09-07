@@ -13,10 +13,12 @@
 #include <utility>
 #include <vector>
 
+#include "base/check.h"
+#include "base/check_op.h"
 #include "base/command_line.h"
-#include "base/containers/adapters.h"
 #include "base/feature_list.h"
 #include "base/json/values_util.h"
+#include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/strings/utf_string_conversions.h"
@@ -27,6 +29,8 @@
 #include "chrome/browser/file_system_access/chrome_file_system_access_permission_context.h"
 #include "chrome/browser/file_system_access/file_system_access_features.h"
 #include "chrome/browser/file_system_access/file_system_access_permission_context_factory.h"
+#include "chrome/browser/glic/public/features.h"
+#include "chrome/browser/glic/selection/inline_cue_blocklist_utils.h"
 #include "chrome/browser/hid/hid_chooser_context.h"
 #include "chrome/browser/hid/hid_chooser_context_factory.h"
 #include "chrome/browser/profiles/profile.h"
@@ -132,6 +136,7 @@ constexpr auto kContentSettingsTypeGroupNames = std::to_array<
     {ContentSettingsType::BACKGROUND_SYNC, "background-sync"},
     {ContentSettingsType::ADS, "ads"},
     {ContentSettingsType::SOUND, "sound"},
+    {ContentSettingsType::INLINE_CUE_MENU, "inline-cue-menu"},
     {ContentSettingsType::CLIPBOARD_READ_WRITE, "clipboard"},
     {ContentSettingsType::SENSORS, "sensors"},
     {ContentSettingsType::PAYMENT_HANDLER, "payment-handler"},
@@ -168,7 +173,6 @@ constexpr auto kContentSettingsTypeGroupNames = std::to_array<
     {ContentSettingsType::WEB_APP_INSTALLATION, "web-app-installation"},
     {ContentSettingsType::SMART_CARD_GUARD, "smart-card-readers"},
     {ContentSettingsType::SMART_CARD_DATA, kSmartCardChooserDataGroupType},
-    {ContentSettingsType::LOCAL_NETWORK_ACCESS, "local-network-access"},
     {ContentSettingsType::LOCAL_NETWORK, "local-network"},
     {ContentSettingsType::LOOPBACK_NETWORK, "loopback-network"},
 
@@ -229,11 +233,9 @@ constexpr auto kContentSettingsTypeGroupNames = std::to_array<
      nullptr},
     {ContentSettingsType::ALL_SCREEN_CAPTURE, nullptr},
     {ContentSettingsType::COOKIE_CONTROLS_METADATA, nullptr},
-    {ContentSettingsType::TPCD_METADATA_GRANTS, nullptr},
     // TODO(crbug.com/40101962): Update the name once the design is finalized
     // for the integration with Safety Hub.
     {ContentSettingsType::FILE_SYSTEM_ACCESS_EXTENDED_PERMISSION, nullptr},
-    {ContentSettingsType::TPCD_HEURISTICS_GRANTS, nullptr},
     {ContentSettingsType::FILE_SYSTEM_ACCESS_RESTORE_PERMISSION, nullptr},
     {ContentSettingsType::SUB_APP_INSTALLATION_PROMPTS, nullptr},
     {ContentSettingsType::DIRECT_SOCKETS, nullptr},
@@ -258,6 +260,9 @@ constexpr auto kContentSettingsTypeGroupNames = std::to_array<
     {ContentSettingsType::DEVICE_ATTRIBUTES, nullptr},
     {ContentSettingsType::PERMISSION_ACTIONS_HISTORY, nullptr},
     {ContentSettingsType::SUSPICIOUS_NOTIFICATION_SHOW_ORIGINAL, nullptr},
+    {ContentSettingsType::LOCAL_NETWORK_ACCESS, nullptr},
+    {ContentSettingsType::SUB_APPS_WITHOUT_PROMPTS, nullptr},
+    {ContentSettingsType::SUSPICIOUS_SITE_WARNING_DATA, nullptr},
 });
 
 static_assert(
@@ -639,7 +644,7 @@ std::vector<ContentSettingsType> GetVisiblePermissionCategories(
     }
 
     if (base::FeatureList::IsEnabled(
-            features::kCapturedSurfaceControlKillswitch)) {
+            blink::features::kCapturedSurfaceControl)) {
       base_types->push_back(ContentSettingsType::CAPTURED_SURFACE_CONTROL);
     }
 
@@ -660,13 +665,8 @@ std::vector<ContentSettingsType> GetVisiblePermissionCategories(
 
     if (base::FeatureList::IsEnabled(
             network::features::kLocalNetworkAccessChecks)) {
-      if (base::FeatureList::IsEnabled(
-              network::features::kLocalNetworkAccessChecksSplitPermissions)) {
-        base_types->push_back(ContentSettingsType::LOCAL_NETWORK);
-        base_types->push_back(ContentSettingsType::LOOPBACK_NETWORK);
-      } else {
-        base_types->push_back(ContentSettingsType::LOCAL_NETWORK_ACCESS);
-      }
+      base_types->push_back(ContentSettingsType::LOCAL_NETWORK);
+      base_types->push_back(ContentSettingsType::LOOPBACK_NETWORK);
     }
 
     initialized = true;
@@ -727,6 +727,7 @@ SiteSettingSource ProviderTypeToSiteSettingsSource(
     case ProviderType::kSupervisedProvider:
       return SiteSettingSource::kPolicy;
     case ProviderType::kCustomExtensionProvider:
+    case ProviderType::kExtensionInstallTimePermissionProvider:
       return SiteSettingSource::kExtension;
     case ProviderType::kInstalledWebappProvider:
       return SiteSettingSource::kHostedApp;
@@ -753,6 +754,7 @@ std::string_view ProviderToDefaultSettingSourceString(
     case ProviderType::kSupervisedProvider:
       return "supervised_user";
     case ProviderType::kCustomExtensionProvider:
+    case ProviderType::kExtensionInstallTimePermissionProvider:
       return "extension";
     case ProviderType::kOneTimePermissionProvider:
     case ProviderType::kPrefProvider:
@@ -992,8 +994,11 @@ UrlIdentity GetUrlIdentityForGURL(Profile* profile,
             .name = base::UTF8ToUTF16(url.spec())};
   }
 
+  GURL url_to_use =
+      url.SchemeIs(webapps::kIsolatedAppScheme) ? url : origin.GetURL();
+
   return UrlIdentity::CreateFromUrl(
-      profile, origin.GetURL(), kUrlIdentityAllowedTypes,
+      profile, url_to_use, kUrlIdentityAllowedTypes,
       hostname_only ? kUrlIdentityOptionsHostOnly
                     : kUrlIdentityOptionsOmitHttps);
 }
@@ -1148,6 +1153,22 @@ void GetExceptionsForContentType(ContentSettingsType type,
     auto& urls_with_granted_entries =
         all_provider_exceptions[ProviderType::kDefaultProvider];
     GetFileSystemGrantedEntries(&urls_with_granted_entries, profile, incognito);
+  }
+
+  // Display default blocked sites for the inline cue in the
+  // settings so users can see and manage those sites.
+  if (type == ContentSettingsType::INLINE_CUE_MENU) {
+    auto& pref_exceptions =
+        all_provider_exceptions[ProviderType::kPrefProvider];
+    std::vector<std::string> blocked_sites =
+        glic::GetActiveDefaultBlockedSitePatternsForInlineCue(profile);
+    for (const std::string& site : blocked_sites) {
+      ContentSettingsPattern pattern = ContentSettingsPattern::FromString(site);
+      pref_exceptions.push_back(GetExceptionForPage(
+          type, profile, pattern, ContentSettingsPattern::Wildcard(),
+          GetDisplayNameForPattern(profile, pattern), CONTENT_SETTING_BLOCK,
+          SiteSettingSource::kPreference, base::Time(), incognito));
+    }
   }
 
   for (auto& one_provider_exceptions : all_provider_exceptions) {

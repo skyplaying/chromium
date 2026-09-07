@@ -2,11 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/supervised_user/extension_install_blocked_by_parent_dialog.h"
+
 #include <string>
 #include <utility>
 
 #include "chrome/browser/ui/extensions/extension_dialog_utils.h"
-#include "chrome/browser/ui/extensions/extensions_dialogs.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/strings/grit/components_strings.h"
@@ -17,6 +18,7 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/dialog_model.h"
 #include "ui/base/models/image_model.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/native_ui_types.h"
 #include "ui/gfx/paint_vector_icon.h"
 
@@ -55,8 +57,11 @@ void ShowExtensionInstallBlockedByParentDialog(
   auto dialog_model =
       ui::DialogModel::Builder()
           .SetTitle(GetTitle(action, extension_type))
-          .SetIcon(ui::ImageModel::FromVectorIcon(vector_icons::kFamilyLinkIcon,
-                                                  ui::kColorIcon))
+          .SetIcon(ui::ImageModel::FromVectorIcon(
+              features::IsRoundedIconsEnabled()
+                  ? vector_icons::kFamilyLinkIcon
+                  : vector_icons::kFamilyLinkOldIcon,
+              ui::kColorIcon))
           .AddParagraph(
               ui::DialogModelLabel(l10n_util::GetStringUTF16(
                   IDS_EXTENSION_PERMISSIONS_BLOCKED_BY_PARENT_PROMPT_MESSAGE)),

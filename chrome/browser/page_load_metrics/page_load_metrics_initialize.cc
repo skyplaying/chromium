@@ -10,7 +10,20 @@
 
 #include "base/functional/bind.h"
 #include "build/build_config.h"
+#include "build/buildflag.h"
+#include "chrome/browser/after_startup_task_utils.h"
 #include "chrome/browser/browser_process.h"
+#include "components/page_load_metrics/browser/observers/core/uma_page_load_metrics_observer.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "components/tabs/public/tab_interface.h"
+#include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/restore_type.h"
+#endif
 #include "chrome/browser/heavy_ad_intervention/heavy_ad_service_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/page_load_metrics/observers/bookmark_bar_page_load_metrics_observer.h"
@@ -28,13 +41,12 @@
 #include "chrome/browser/page_load_metrics/observers/lcp_critical_path_predictor_page_load_metrics_observer.h"
 #include "chrome/browser/page_load_metrics/observers/loading_predictor_page_load_metrics_observer.h"
 #include "chrome/browser/page_load_metrics/observers/multi_tab_loading_page_load_metrics_observer.h"
+#include "chrome/browser/page_load_metrics/observers/navigation_initiator_page_load_metrics_observer.h"
 #include "chrome/browser/page_load_metrics/observers/new_tab_page_initiated_page_load_metrics_observer.h"
 #include "chrome/browser/page_load_metrics/observers/new_tab_page_page_load_metrics_observer.h"
 #include "chrome/browser/page_load_metrics/observers/omnibox_suggestion_used_page_load_metrics_observer.h"
 #include "chrome/browser/page_load_metrics/observers/optimization_guide_page_load_metrics_observer.h"
 #include "chrome/browser/page_load_metrics/observers/page_anchors_metrics_observer.h"
-#include "chrome/browser/page_load_metrics/observers/prefetch_page_load_metrics_observer.h"
-#include "chrome/browser/page_load_metrics/observers/preload_serving_metrics_page_load_metrics_observer.h"
 #include "chrome/browser/page_load_metrics/observers/protocol_page_load_metrics_observer.h"
 #include "chrome/browser/page_load_metrics/observers/scheme_page_load_metrics_observer.h"
 #include "chrome/browser/page_load_metrics/observers/security_state_page_load_metrics_observer.h"
@@ -45,17 +57,21 @@
 #include "chrome/browser/preloading/prefetch/no_state_prefetch/chrome_no_state_prefetch_contents_delegate.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search/search.h"
+#include "chrome/browser/ui/waap/waap_utils.h"
 #include "components/no_state_prefetch/browser/no_state_prefetch_contents.h"
 #include "components/page_load_metrics/browser/features.h"
 #include "components/page_load_metrics/browser/metrics_web_contents_observer.h"
+#include "components/page_load_metrics/browser/navigation_scenario.h"
 #include "components/page_load_metrics/browser/observers/ad_metrics/ads_page_load_metrics_observer.h"
 #include "components/page_load_metrics/browser/observers/paid_content_page_load_metrics_observer.h"
+#include "components/page_load_metrics/browser/observers/preload_serving_metrics_page_load_metrics_observer.h"
 #include "components/page_load_metrics/browser/observers/third_party_metrics_observer.h"
 #include "components/page_load_metrics/browser/observers/zstd_page_load_metrics_observer.h"
 #include "components/page_load_metrics/browser/page_load_metrics_embedder_base.h"
 #include "components/page_load_metrics/browser/page_load_tracker.h"
 #include "components/page_load_metrics/google/browser/from_gws_abandoned_page_load_metrics_observer.h"
 #include "components/page_load_metrics/google/browser/gws_abandoned_page_load_metrics_observer.h"
+#include "components/page_load_metrics/google/browser/gws_prewarm_page_load_metrics_observer.h"
 #include "content/public/browser/internal_webui_config.h"
 #include "content/public/browser/preload_serving_metrics_capsule.h"
 #include "content/public/browser/web_contents.h"
@@ -63,6 +79,7 @@
 #include "content/public/common/url_utils.h"
 #include "extensions/buildflags/buildflags.h"
 #include "third_party/blink/public/common/loader/lcp_critical_path_predictor_util.h"
+#include "ui/accessibility/accessibility_features.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
@@ -78,15 +95,19 @@
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/page_load_metrics/observers/initial_webui_page_load_metrics_observer.h"
 #include "chrome/browser/page_load_metrics/observers/non_tab_webui_page_load_metrics_observer.h"
+#include "chrome/browser/page_load_metrics/observers/top_chrome_webui_metrics_observer.h"
+#include "chrome/browser/ui/read_anything/read_anything_soft_navigation_observer.h"
 #include "chrome/browser/ui/waap/waap_utils.h"
+#include "chrome/browser/ui/webui/omnibox_popup/omnibox_popup_ui.h"
 #include "chrome/browser/ui/webui/top_chrome/top_chrome_webui_config.h"
+#include "chrome/common/webui_url_constants.h"
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/page_load_metrics/observers/ash_session_restore_page_load_metrics_observer.h"
 #endif
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "chrome/browser/page_load_metrics/observers/serp_page_load_metrics_observer.h"
 #include "extensions/common/constants.h"
 #endif
@@ -130,6 +151,9 @@ class PageLoadMetricsEmbedder
   bool IsNonTabWebUI(const GURL& url) override;
   bool IsInternalWebUI(const GURL& url) override;
   bool ShouldObserveScheme(std::string_view scheme) override;
+  page_load_metrics::NavigationScenario GetNavigationScenario(
+      content::NavigationHandle* navigation_handle) const override;
+
  protected:
   // page_load_metrics::PageLoadMetricsEmbedderBase:
   void RegisterObservers(page_load_metrics::PageLoadTracker* tracker,
@@ -160,8 +184,7 @@ void PageLoadMetricsEmbedder::RegisterObservers(
 
 #if !BUILDFLAG(IS_ANDROID)
   if (HasWebUIConfig(navigation_handle->GetURL()) &&
-      waap::IsForInitialWebUI(navigation_handle->GetURL()) &&
-      waap::IsInitialWebUIMetricsLoggingEnabled()) {
+      waap::IsForInitialWebUI(navigation_handle->GetURL())) {
     tracker->AddObserver(
         std::make_unique<InitialWebUIPageLoadMetricsObserver>());
   }
@@ -173,6 +196,11 @@ void PageLoadMetricsEmbedder::RegisterObservers(
     tracker->AddObserver(std::make_unique<NonTabPageLoadMetricsObserver>(
         std::string(GetNonTabWebUIName(web_contents()->GetBrowserContext(),
                                        navigation_handle->GetURL()))));
+    if (navigation_handle->GetURL().host() ==
+        chrome::kChromeUIOmniboxPopupHost) {
+      tracker->AddObserver(std::make_unique<TopChromeWebUIMetricsObserver>(
+          std::string(OmniboxPopupUI::GetWebUIName())));
+    }
     return;
   }
 #endif
@@ -202,10 +230,10 @@ void PageLoadMetricsEmbedder::RegisterObservers(
     tracker->AddObserver(
         std::make_unique<ChromeGWSAbandonedPageLoadMetricsObserver>());
     tracker->AddObserver(std::make_unique<GWSHpPageLoadMetricsObserver>());
+    tracker->AddObserver(std::make_unique<GWSPrewarmPageLoadMetricsObserver>());
     tracker->AddObserver(std::make_unique<ForegroundDurationUKMObserver>());
     tracker->AddObserver(
         std::make_unique<DocumentWritePageLoadMetricsObserver>());
-    tracker->AddObserver(std::make_unique<PrefetchPageLoadMetricsObserver>());
     tracker->AddObserver(
         std::make_unique<MultiTabLoadingPageLoadMetricsObserver>());
     tracker->AddObserver(
@@ -215,6 +243,8 @@ void PageLoadMetricsEmbedder::RegisterObservers(
     tracker->AddObserver(
         std::make_unique<HttpsEngagementPageLoadMetricsObserver>(
             web_contents()->GetBrowserContext()));
+    tracker->AddObserver(
+        std::make_unique<NavigationInitiatorPageLoadMetricsObserver>());
     tracker->AddObserver(std::make_unique<ProtocolPageLoadMetricsObserver>());
 
     bool is_in_foreground =
@@ -263,17 +293,15 @@ void PageLoadMetricsEmbedder::RegisterObservers(
     tracker->AddObserver(std::make_unique<BookmarkBarMetricsObserver>());
     tracker->AddObserver(
         std::make_unique<NewTabPageInitiatedPageLoadMetricsObserver>());
-    if (content::PreloadServingMetricsCapsule::IsFeatureEnabled()) {
-      tracker->AddObserver(
-          std::make_unique<PreloadServingMetricsPageLoadMetricsObserver>());
-    }
+    tracker->AddObserver(
+        std::make_unique<PreloadServingMetricsPageLoadMetricsObserver>());
   }
   tracker->AddObserver(
       std::make_unique<OmniboxSuggestionUsedMetricsObserver>());
   tracker->AddObserver(
       SecurityStatePageLoadMetricsObserver::MaybeCreateForProfile(
           web_contents()->GetBrowserContext()));
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   tracker->AddObserver(std::make_unique<SerpPageLoadMetricsObserver>());
 #endif
   tracker->AddObserver(
@@ -286,6 +314,10 @@ void PageLoadMetricsEmbedder::RegisterObservers(
   }
   tracker->AddObserver(std::make_unique<ZstdPageLoadMetricsObserver>());
 
+#if !BUILDFLAG(IS_ANDROID)
+  tracker->AddObserver(std::make_unique<ReadAnythingSoftNavigationObserver>());
+#endif
+
 #if BUILDFLAG(IS_CHROMEOS)
   if (AshSessionRestorePageLoadMetricsObserver::ShouldBeInstantiated(
           Profile::FromBrowserContext(web_contents()->GetBrowserContext()))) {
@@ -296,6 +328,70 @@ void PageLoadMetricsEmbedder::RegisterObservers(
 #endif
 
   tracker->AddObserver(std::make_unique<CaptchaMetricsObserver>());
+}
+
+page_load_metrics::NavigationScenario
+PageLoadMetricsEmbedder::GetNavigationScenario(
+    content::NavigationHandle* navigation_handle) const {
+#if BUILDFLAG(IS_ANDROID)
+  return page_load_metrics::NavigationScenario::kUnknown;
+#else
+  // Slicing by navigation scenario is currently only evaluated after startup.
+  if (!AfterStartupTaskUtils::IsBrowserStartupComplete()) {
+    return page_load_metrics::NavigationScenario::kStartup;
+  }
+
+  // Navigations in WebContents detached from or not associated with any browser
+  // window, e.g. background pages or prerender hosts, cannot determine
+  // navigation scenario.
+  content::WebContents* contents = web_contents();
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(contents);
+  if (!browser) {
+    return page_load_metrics::NavigationScenario::kUnknown;
+  }
+
+  // Discarded tab reloads represent existing tab reactivation rather than new
+  // window creation.
+  if (navigation_handle->ExistingDocumentWasDiscarded()) {
+    return page_load_metrics::NavigationScenario::kSameWindow;
+  }
+
+  // If this WebContents previously committed an entry and is not undergoing a
+  // session restore, this is a subsequent navigation in an existing tab.
+  content::NavigationEntry* last_entry =
+      contents->GetController().GetLastCommittedEntry();
+  if (last_entry && !last_entry->GetURL().is_empty() &&
+      navigation_handle->GetRestoreType() ==
+          content::RestoreType::kNotRestored) {
+    return page_load_metrics::NavigationScenario::kSameWindow;
+  }
+
+  // WebContents without a corresponding tab interface, such as non-tab UI
+  // hosts, are treated as same window navigations.
+  tabs::TabInterface* tab = tabs::TabInterface::MaybeGetFromContents(contents);
+  if (!tab) {
+    return page_load_metrics::NavigationScenario::kSameWindow;
+  }
+
+  // Browser windows lacking a tab strip, such as custom popups or app panels,
+  // default to same window classification.
+  TabStripModel* tab_strip = browser->tab_strip_model();
+  if (!tab_strip) {
+    return page_load_metrics::NavigationScenario::kSameWindow;
+  }
+
+  // If the tab strip is empty, in the process of initial window creation, or
+  // contains only this initial tab, this qualifies as a new window navigation.
+  if (tab_strip->empty() ||
+      (tab_strip->count() == 1 &&
+       (tab_strip->GetTabAtIndex(0) == tab ||
+        tab_strip->GetWebContentsAt(0) == tab->GetContents()))) {
+    return page_load_metrics::NavigationScenario::kNewWindow;
+  }
+
+  return page_load_metrics::NavigationScenario::kSameWindow;
+#endif  // BUILDFLAG(IS_ANDROID)
 }
 
 bool PageLoadMetricsEmbedder::IsNewTabPageUrl(const GURL& url) {
@@ -314,7 +410,7 @@ bool PageLoadMetricsEmbedder::IsNoStatePrefetch(
 }
 
 bool PageLoadMetricsEmbedder::IsExtensionUrl(const GURL& url) {
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   return url.SchemeIs(extensions::kExtensionScheme);
 #else
   return false;

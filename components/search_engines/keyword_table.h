@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
+#include "base/containers/enum_set.h"
 #include "components/country_codes/country_codes.h"
 #include "components/search_engines/template_url_id.h"
 #include "components/webdata/common/web_database_table.h"
@@ -88,9 +89,27 @@ class Statement;
 // Starter Pack Keyword Version      The version of starter pack data.
 // Builtin Keyword Country           The country associated with the builtin
 //                                   keywords data, stored as a country ID.
-//
+// Is Prepopulated Engines Migration Enabled
+//                                   Whether the database has been updated
+//                                   while the engine migration logic was
+//                                   active, thus would require future updates
+//                                   to keep this logic active to avoid rolling
+//                                   back to a previous data version.
+//                                   See
+//                                   `switches::kPrepopulatedEnginesMigration`.
 class KeywordTable : public WebDatabaseTable {
  public:
+  enum class PrepopulatedEngineMigration {
+    kMigration = 0,
+    kShadowVariants = 1,
+    kMinValue = kMigration,
+    kMaxValue = kShadowVariants,
+  };
+  using PrepopulatedEngineMigrationSet =
+      base::EnumSet<PrepopulatedEngineMigration,
+                    PrepopulatedEngineMigration::kMinValue,
+                    PrepopulatedEngineMigration::kMaxValue>;
+
   enum OperationType {
     ADD,
     REMOVE,
@@ -141,6 +160,12 @@ class KeywordTable : public WebDatabaseTable {
   bool SetBuiltinKeywordCountry(country_codes::CountryId country_id);
   country_codes::CountryId GetBuiltinKeywordCountry();
 
+  // The migration state of the database, indicating which prepopulated engine
+  // migrations have been applied.
+  bool SetPrepopulatedEnginesMigrationState(
+      PrepopulatedEngineMigrationSet migration_state);
+  PrepopulatedEngineMigrationSet GetPrepopulatedEnginesMigrationState();
+
   // Version of built-in starter pack keywords (@bookmarks, @settings, etc.).
   bool SetStarterPackKeywordVersion(int version);
   int GetStarterPackKeywordVersion();
@@ -162,6 +187,7 @@ class KeywordTable : public WebDatabaseTable {
   bool MigrateToVersion112AddEnforcedByPolicyColumn();
   bool MigrateToVersion122AddSiteSearchPolicyColumns();
   bool MigrateToVersion137AddHashColumn();
+  bool MigrateToVersion152ExpandHashColumn();
 
  private:
   friend class KeywordTableTest;

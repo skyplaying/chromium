@@ -16,6 +16,7 @@
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/views/view.h"
 
+class PrefService;
 class Profile;
 class UserContext;
 
@@ -38,6 +39,10 @@ class SharedURLLoaderFactory;
 namespace policy {
 class DeviceLocalAccountPolicyBroker;
 }  // namespace policy
+
+namespace password_manager {
+class PasswordReuseManager;
+}  // namespace password_manager
 
 namespace ash {
 
@@ -120,8 +125,9 @@ scoped_refptr<network::SharedURLLoaderFactory> GetSigninURLLoaderFactory();
 
 // Saves sync password hash and salt to profile prefs. These will be used to
 // detect Gaia password reuses.
-void SaveSyncPasswordDataToProfile(const UserContext& user_context,
-                                   Profile* profile);
+void SaveSyncPasswordDataToProfile(
+    const UserContext& user_context,
+    password_manager::PasswordReuseManager* reuse_manager);
 
 // Returns time remaining to the next online login. The value can be negative
 // which means that online login should have been already happened in the past.
@@ -133,6 +139,7 @@ base::TimeDelta TimeToOnlineSignIn(base::Time last_online_signin,
 // managed and any risky extensions or network certificates are forced
 // through the policies.
 bool IsFullManagementDisclosureNeeded(
+    const PrefService& local_state,
     policy::DeviceLocalAccountPolicyBroker* broker);
 
 // Sets the available auth factors for the user on the login & lock screen.

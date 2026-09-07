@@ -12,6 +12,7 @@
 #include "base/base64.h"
 #include "base/check_is_test.h"
 #include "base/command_line.h"
+#include "base/containers/span.h"
 #include "base/hash/hash.h"
 #include "base/logging.h"
 #include "base/memory/raw_ref.h"
@@ -102,7 +103,9 @@ enum class Method {
   kSetKeyNickname,
   kSetKeyPermissions,
   kSetCertProvisioningProfileId,
-  kMaxValue = kSetCertProvisioningProfileId,
+  kGetBrowserEnterpriseClientCertTag,
+  kSetBrowserEnterpriseClientCertTag,
+  kMaxValue = kSetBrowserEnterpriseClientCertTag,
 };
 
 // Test-only overloads for better errors from EXPECT_EQ, etc.
@@ -194,6 +197,9 @@ struct FuzzKey {
     // empty values by default.
     key_permissions = chaps::KeyPermissions();
     cert_provisioning_profile_id = "";
+    // Browser enterprise client cert tag defaults to absent (false) until
+    // SetBrowserEnterpriseClientCertTag has been called on this key.
+    browser_enterprise_client_cert_tag = false;
   }
   FuzzKey(FuzzKey&&) = default;
   FuzzKey& operator=(FuzzKey&&) = default;
@@ -224,6 +230,9 @@ struct FuzzKey {
   std::optional<std::string> nickname;
   std::optional<chaps::KeyPermissions> key_permissions;
   std::optional<std::string> cert_provisioning_profile_id;
+  // Mirrors the kCkaBrowserEnterpriseClientCertKey attribute on the underlying
+  // key. False == attribute not set; true == set to CK_TRUE.
+  bool browser_enterprise_client_cert_tag = false;
 };
 
 //==============================================================================
@@ -522,7 +531,8 @@ void CertGenerator::GenerateCert() {
     }
   }
   if (GetBool()) {
-    std::vector<std::string> memory_holder;
+    // Use std::deque so the memory is not moved when the container grows.
+    std::deque<std::string> memory_holder;
     std::vector<bssl::der::Input> purpose_oids;
     while (GetBool()) {
       memory_holder.push_back(GetString());
@@ -615,9 +625,11 @@ class KcerFuzzer {
   void RunGetKeyInfo();
   void RunGetKeyPermissions();
   void RunGetCertProvisioningProfileId();
+  void RunGetBrowserEnterpriseClientCertTag();
   void RunSetKeyNickname();
   void RunSetKeyPermissions();
   void RunSetCertProvisioningProfileId();
+  void RunSetBrowserEnterpriseClientCertTag();
 
   // Returns a randomized set of tokens. Can return tokens that were not
   // initialized for the current instance of Kcer.
@@ -739,12 +751,16 @@ void KcerFuzzer::RunNextMethod() {
       return RunGetKeyPermissions();
     case Method::kGetCertProvisioningProfileId:
       return RunGetCertProvisioningProfileId();
+    case Method::kGetBrowserEnterpriseClientCertTag:
+      return RunGetBrowserEnterpriseClientCertTag();
     case Method::kSetKeyNickname:
       return RunSetKeyNickname();
     case Method::kSetKeyPermissions:
       return RunSetKeyPermissions();
     case Method::kSetCertProvisioningProfileId:
       return RunSetCertProvisioningProfileId();
+    case Method::kSetBrowserEnterpriseClientCertTag:
+      return RunSetBrowserEnterpriseClientCertTag();
   }
 }
 
@@ -1366,8 +1382,9 @@ void KcerFuzzer::RunGetKeyInfo() {
   ASSERT_TRUE(key_info_waiter.Get().has_value());
   const KeyInfo& key_info = key_info_waiter.Get().value();
 
-  // Software-backed keys are never generated in the current implementation.
-  EXPECT_EQ(key_info.is_hardware_backed, true);
+  // The fuzzer runs against an NSS softoken slot, which Chaps does not provide,
+  // so no key in it can be hardware backed.
+  EXPECT_EQ(key_info.is_hardware_backed, false);
   EXPECT_EQ(key_info.key_type, expected_key->key_type);
 
   if (expected_key->nickname_known) {
@@ -1426,6 +1443,31 @@ void KcerFuzzer::RunGetCertProvisioningProfileId() {
   ASSERT_TRUE(cert_prov_waiter.Get().has_value());
   EXPECT_EQ(cert_prov_waiter.Get().value(),
             expected_key->cert_provisioning_profile_id);
+}
+
+void KcerFuzzer::RunGetBrowserEnterpriseClientCertTag() {
+  FuzzKey* expected_key = nullptr;
+  PrivateKeyHandle key_handle = GeneratePrivateKeyHandle(&expected_key);
+
+  base::test::TestFuture<base::expected<bool, Error>> tag_waiter;
+  kcer_->GetBrowserEnterpriseClientCertTag(key_handle,
+                                           tag_waiter.GetCallback());
+
+  if (available_tokens_.empty() ||
+      (key_handle.GetTokenInternal().has_value() &&
+       !available_tokens_.contains(key_handle.GetTokenInternal().value()))) {
+    ASSERT_FALSE(tag_waiter.Get().has_value());
+    EXPECT_EQ(tag_waiter.Get().error(), Error::kTokenIsNotAvailable);
+    return;
+  }
+
+  if (!expected_key) {
+    EXPECT_FALSE(tag_waiter.Get().has_value());
+    return;
+  }
+  ASSERT_TRUE(tag_waiter.Get().has_value());
+  EXPECT_EQ(tag_waiter.Get().value(),
+            expected_key->browser_enterprise_client_cert_tag);
 }
 
 void KcerFuzzer::RunSetKeyNickname() {
@@ -1491,6 +1533,38 @@ void KcerFuzzer::RunSetCertProvisioningProfileId() {
 
   EXPECT_TRUE(set_cert_prov_id_waiter.Get().has_value());
   expected_key->cert_provisioning_profile_id = cert_prov_id;
+  // Tests share the attribute id for `cert_provisioning_profile_id` and
+  // `browser_enterprise_client_cert_tag` custom attributes, so their values are
+  // unfortunately populated together.
+  expected_key->browser_enterprise_client_cert_tag = true;
+}
+
+void KcerFuzzer::RunSetBrowserEnterpriseClientCertTag() {
+  FuzzKey* expected_key = nullptr;
+  PrivateKeyHandle key_handle = GeneratePrivateKeyHandle(&expected_key);
+
+  base::test::TestFuture<base::expected<void, Error>> set_tag_waiter;
+  kcer_->SetBrowserEnterpriseClientCertTag(key_handle,
+                                           set_tag_waiter.GetCallback());
+  if (available_tokens_.empty() ||
+      (key_handle.GetTokenInternal().has_value() &&
+       !available_tokens_.contains(key_handle.GetTokenInternal().value()))) {
+    ASSERT_FALSE(set_tag_waiter.Get().has_value());
+    EXPECT_EQ(set_tag_waiter.Get().error(), Error::kTokenIsNotAvailable);
+    return;
+  }
+
+  if (!expected_key) {
+    EXPECT_FALSE(set_tag_waiter.Get().has_value());
+    return;
+  }
+
+  EXPECT_TRUE(set_tag_waiter.Get().has_value());
+  expected_key->browser_enterprise_client_cert_tag = true;
+  // Tests share the attribute id for `cert_provisioning_profile_id` and
+  // `browser_enterprise_client_cert_tag` custom attributes, so their values are
+  // unfortunately populated together.
+  expected_key->cert_provisioning_profile_id = "\x01";
 }
 
 base::flat_set<Token> KcerFuzzer::SelectTokens() {

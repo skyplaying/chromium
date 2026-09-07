@@ -6,16 +6,22 @@ package org.chromium.ui.hierarchicalmenu;
 
 import android.graphics.Rect;
 import android.os.Handler;
+import android.text.TextUtils;
 import android.view.View;
+import android.widget.ListView;
 
+import org.chromium.base.Callback;
 import org.chromium.base.lifetime.Destroyable;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.ui.R;
 import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
+import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
+import org.chromium.ui.modelutil.PropertyModel.WritableObjectPropertyKey;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Supplier;
 
 /**
  * A controller for managing flyout menus in a list-based menu system. This class handles the logic
@@ -29,7 +35,7 @@ import java.util.List;
 @NullMarked
 public class FlyoutController<T> implements Destroyable {
 
-    private final HierarchicalMenuController mMenuController;
+    private final HierarchicalMenuController<T> mMenuController;
     private final HierarchicalMenuKeyProvider mKeyProvider;
     private final FlyoutHandler<T> mFlyoutHandler;
 
@@ -89,12 +95,17 @@ public class FlyoutController<T> implements Destroyable {
         /**
          * Creates and shows a flyout popup.
          *
-         * @param item The ListItem that got the hover.
+         * @param modelList The {@link ModelList} to show.
          * @param view The View that got the hover.
          * @param dismissRunnable Runnable to run when the window is dismissed.
+         * @param scrollListener The scroll listener to attach to the flyout popup.
          * @return The created popup of type {@link T}.
          */
-        T createAndShowFlyoutPopup(ListItem item, View view, Runnable dismissRunnable);
+        T createAndShowFlyoutPopup(
+                List<ListItem> modelList,
+                View view,
+                Runnable dismissRunnable,
+                View.OnScrollChangeListener scrollListener);
 
         /**
          * Callback triggered after one or more flyout popups are removed.
@@ -104,17 +115,30 @@ public class FlyoutController<T> implements Destroyable {
         default void afterFlyoutPopupsRemoved(int removeFromIndex) {}
     }
 
+    /**
+     * Constructs a {@link FlyoutController} instance.
+     *
+     * @param flyoutHandler The handler responsible for manipulating windows of type T.
+     * @param keyProvider The {@link HierarchicalMenuKeyProvider} to use.
+     * @param mainPopup The main, first level window of type T.
+     * @param menuController The {@link HierarchicalMenuController} coordinating the nesting of
+     *     windows of type T.
+     * @param scrollListenerAttacher Callback to attach the scroll listener to the main popup.
+     */
     public FlyoutController(
             FlyoutHandler<T> flyoutHandler,
             HierarchicalMenuKeyProvider keyProvider,
             T mainPopup,
-            HierarchicalMenuController menuController) {
+            HierarchicalMenuController<T> menuController,
+            Callback<View.OnScrollChangeListener> scrollListenerAttacher) {
         mFlyoutHandler = flyoutHandler;
         mKeyProvider = keyProvider;
         mMenuController = menuController;
 
-        mPopups = new ArrayList();
-        mPopups.add(new FlyoutPopupEntry(null, mainPopup));
+        mPopups = new ArrayList<>();
+        mPopups.add(new FlyoutPopupEntry<>(null, mainPopup));
+
+        scrollListenerAttacher.onResult(new ThresholdScrollListener(0));
     }
 
     /**
@@ -146,12 +170,17 @@ public class FlyoutController<T> implements Destroyable {
      *     items, 1 for sub-menu items).
      * @param highlightPath The complete list of items from the root of the menu to the currently
      *     hovered {@code item}, inclusive.
+     * @param dismissRunnable The runnable to run when the menu closes.
      */
     public void enterFlyoutWithoutDelay(
-            ListItem item, View view, int levelOfHoveredItem, List<ListItem> highlightPath) {
+            ListItem item,
+            View view,
+            int levelOfHoveredItem,
+            List<ListItem> highlightPath,
+            Runnable dismissRunnable) {
         mMenuController.updateHighlights(highlightPath);
-        cancelFlyoutDelay(view);
-        onFlyoutAfterDelay(item, view, levelOfHoveredItem);
+        cancelFlyoutDelay();
+        onFlyoutAfterDelay(item, view, levelOfHoveredItem, highlightPath, dismissRunnable);
     }
 
     /**
@@ -159,21 +188,21 @@ public class FlyoutController<T> implements Destroyable {
      * e.g. when keyboard is used to navigate flyout menus.
      *
      * @param clearFromIndex The minimum level of flyout popup to remove.
-     * @param view The View associated with the hovered ListItem.
      * @param highlightPath The complete list of items from the root of the menu to the currently
      *     hovered {@code item}, inclusive.
      */
-    public void exitFlyoutWithoutDelay(
-            int clearFromIndex, View view, List<ListItem> highlightPath) {
+    public void exitFlyoutWithoutDelay(int clearFromIndex, List<ListItem> highlightPath) {
         // We do not dismiss the main, non-flyout popup here.
         if (clearFromIndex == 0) {
             return;
         }
 
-        cancelFlyoutDelay(view);
+        cancelFlyoutDelay();
 
         // We need to remove hover from the popup currently in focus.
-        mMenuController.updateHighlights(highlightPath.subList(0, clearFromIndex - 1));
+        mMenuController.updateHighlights(
+                highlightPath.subList(
+                        0, Math.max(0, Math.min(highlightPath.size(), clearFromIndex - 1))));
 
         removeFlyoutWindows(clearFromIndex);
     }
@@ -187,6 +216,10 @@ public class FlyoutController<T> implements Destroyable {
         }
 
         for (int i = mPopups.size() - 1; i >= clearFromIndex; i--) {
+            ListItem parentItem = mPopups.get(i).parentItem;
+            if (parentItem != null) {
+                parentItem.model.set(mKeyProvider.getIsExpandedKey(), false);
+            }
             mFlyoutHandler.dismissPopup(mPopups.get(i).popupWindow);
         }
 
@@ -206,17 +239,22 @@ public class FlyoutController<T> implements Destroyable {
      *     items, 1 for sub-menu items).
      * @param highlightPath The complete list of items from the root of the menu to the currently
      *     hovered {@code item}, inclusive.
+     * @param dismissRunnable The runnable to run when the menu closes.
      */
     public void onItemHovered(
-            ListItem item, View view, int levelOfHoveredItem, List<ListItem> highlightPath) {
-        // Since we received a new `HOVER` event, we cancel the previous timer.
-        cancelFlyoutDelay(view);
+            ListItem item,
+            View view,
+            int levelOfHoveredItem,
+            List<ListItem> highlightPath,
+            Runnable dismissRunnable) {
+        cancelFlyoutDelay();
 
         // We wait for a set period of time before we go on with the UI changes to ensure user
         // intent.
         mFlyoutAfterDelayRunnable =
                 () -> {
-                    onFlyoutAfterDelay(item, view, levelOfHoveredItem);
+                    onFlyoutAfterDelay(
+                            item, view, levelOfHoveredItem, highlightPath, dismissRunnable);
                 };
         mPendingFlyoutParentView = view;
         Handler handler = view.getHandler();
@@ -226,7 +264,12 @@ public class FlyoutController<T> implements Destroyable {
                 view.getContext().getResources().getInteger(R.integer.flyout_menu_delay_in_ms));
     }
 
-    private void onFlyoutAfterDelay(ListItem item, View view, int levelOfHoveredItem) {
+    private void onFlyoutAfterDelay(
+            ListItem hoveredItem,
+            View view,
+            int levelOfHoveredItem,
+            List<ListItem> highlightPath,
+            Runnable dismissRunnable) {
         if (levelOfHoveredItem >= mPopups.size()) {
             return;
         }
@@ -237,7 +280,7 @@ public class FlyoutController<T> implements Destroyable {
         if (levelOfHoveredItem < mPopups.size() - 1) {
             // We want to keep the direct child open if the hover is still on the same child.
             FlyoutPopupEntry<T> currentFlyoutPopupEntry = mPopups.get(levelOfHoveredItem + 1);
-            keepChildWindow = item == currentFlyoutPopupEntry.parentItem;
+            keepChildWindow = hoveredItem == currentFlyoutPopupEntry.parentItem;
 
             int clearFromIndex = keepChildWindow ? levelOfHoveredItem + 2 : levelOfHoveredItem + 1;
             if (clearFromIndex < mPopups.size()) {
@@ -245,21 +288,67 @@ public class FlyoutController<T> implements Destroyable {
             }
         }
 
-        // Create a new child popup if the item has submenu and we removed the child window.
-        if (item.model.containsKey(mKeyProvider.getSubmenuItemsKey()) && !keepChildWindow) {
-            T popup =
-                    mFlyoutHandler.createAndShowFlyoutPopup(
-                            item,
-                            view,
-                            () -> {
-                                removeFlyoutWindows(levelOfHoveredItem + 1);
-                            });
-            mPopups.add(new FlyoutPopupEntry<T>(null, popup));
+        if (keepChildWindow) {
+            return;
+        }
 
-            assert mPopups.size() > 1;
+        WritableObjectPropertyKey<Supplier<List<ListItem>>> providerKey =
+                mKeyProvider.getSubmenuProviderKey();
+        if (!hoveredItem.model.containsKey(providerKey)
+                || hoveredItem.model.get(providerKey) == null) {
+            return;
+        }
+
+        List<ListItem> items =
+                mMenuController.getLoadedSubmenuItems(
+                        /* headerModelList= */ null,
+                        new ModelList(),
+                        hoveredItem,
+                        dismissRunnable,
+                        levelOfHoveredItem,
+                        highlightPath);
+
+        T popup =
+                mFlyoutHandler.createAndShowFlyoutPopup(
+                        items,
+                        view,
+                        () -> {
+                            removeFlyoutWindows(levelOfHoveredItem + 1);
+                        },
+                        new ThresholdScrollListener(levelOfHoveredItem + 1));
+        mPopups.add(new FlyoutPopupEntry<>(hoveredItem, popup));
+
+        assert mPopups.size() > 1;
+
+        // We have to give special treatment to cases when all items in the new window are disabled.
+        boolean newWindowFocusable = false;
+        for (ListItem item : items) {
+            if (item.model.get(mKeyProvider.getEnabledKey())) {
+                newWindowFocusable = true;
+                break;
+            }
+        }
+
+        if (newWindowFocusable) {
             mFlyoutHandler.setWindowFocus(mPopups.get(mPopups.size() - 2).popupWindow, false);
             mFlyoutHandler.setWindowFocus(popup, true);
+        } else {
+            // If all items in the new window are disabled, we don't move
+            // keyboard focus to the new window, and instead keep it in the
+            // parent window.
+            mFlyoutHandler.setWindowFocus(popup, false);
+            if (!items.isEmpty()) {
+                CharSequence title =
+                        HierarchicalMenuController.getItemTitle(
+                                items.get(0), mKeyProvider, view.getContext());
+                if (!TextUtils.isEmpty(title)) {
+                    view.announceForAccessibility(title);
+                }
+            }
         }
+
+        hoveredItem.model.set(
+                mKeyProvider.getIsExpandedKey(), levelOfHoveredItem < mPopups.size() - 1);
     }
 
     /**
@@ -309,7 +398,14 @@ public class FlyoutController<T> implements Destroyable {
      */
     public void cancelFlyoutDelay(View view) {
         if (mFlyoutAfterDelayRunnable != null && mPendingFlyoutParentView == view) {
-            Handler handler = view.getHandler();
+            cancelFlyoutDelay();
+        }
+    }
+
+    /** Cancels the timer that was supposed to remove or add flyout popups. */
+    public void cancelFlyoutDelay() {
+        if (mPendingFlyoutParentView != null && mFlyoutAfterDelayRunnable != null) {
+            Handler handler = mPendingFlyoutParentView.getHandler();
             if (handler != null) {
                 handler.removeCallbacks(mFlyoutAfterDelayRunnable);
             }
@@ -320,13 +416,14 @@ public class FlyoutController<T> implements Destroyable {
 
     @Override
     public void destroy() {
+        cancelFlyoutDelay();
         for (int i = mPopups.size() - 1; i >= 0; i--) {
             mFlyoutHandler.dismissPopup(mPopups.get(i).popupWindow);
         }
     }
 
     public void setMainPopupForTest(T popupWindow) {
-        mPopups.set(0, new FlyoutPopupEntry(null, popupWindow));
+        mPopups.set(0, new FlyoutPopupEntry<>(null, popupWindow));
     }
 
     public List<T> getPopupsForTest() {
@@ -335,5 +432,39 @@ public class FlyoutController<T> implements Destroyable {
             popups.add(entry.popupWindow);
         }
         return popups;
+    }
+
+    /**
+     * A scroll listener that triggers an action only when the scroll distance exceeds a threshold.
+     */
+    private class ThresholdScrollListener implements View.OnScrollChangeListener {
+        private final int mLevel;
+        private @Nullable Integer mLatestFirstVisiblePosition;
+
+        public ThresholdScrollListener(int level) {
+            mLevel = level;
+        }
+
+        @Override
+        public void onScrollChange(
+                View v, int scrollX, int scrollY, int oldScrollX, int oldScrollY) {
+            // All menus managed by {@link FlyoutController} currently use {@link ListView}.
+            assert v instanceof ListView;
+            ListView listView = (ListView) v;
+
+            // Android's View.getScrollY() (which populates scrollY) always returns 0 for
+            // ListView. We cannot use the scrollY arguments directly, and must use
+            // getFirstVisiblePosition() to detect scrolling.
+            int firstVisiblePosition = listView.getFirstVisiblePosition();
+            if (mLatestFirstVisiblePosition == null) {
+                mLatestFirstVisiblePosition = firstVisiblePosition;
+                return;
+            }
+
+            if (firstVisiblePosition != mLatestFirstVisiblePosition) {
+                removeFlyoutWindows(mLevel + 1);
+                mLatestFirstVisiblePosition = firstVisiblePosition;
+            }
+        }
     }
 }

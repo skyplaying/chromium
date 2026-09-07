@@ -4,11 +4,9 @@
 
 #include "chrome/browser/ui/views/bookmarks/bookmark_account_storage_move_dialog.h"
 
-#include "base/functional/callback_helpers.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_test_utils.h"
 #include "components/bookmarks/browser/bookmark_model.h"
@@ -33,7 +31,7 @@ class BookmarkAccountStorageMoveDialogPixelTest : public DialogBrowserTest {
 
   void SetUpOnMainThread() override {
     DialogBrowserTest::SetUpOnMainThread();
-    SignInAndEnableAccountBookmarkNodes(browser()->profile());
+    SignInAndEnableAccountBookmarkNodes(browser()->GetProfile());
   }
 
   void TearDownOnMainThread() override {
@@ -67,7 +65,7 @@ class BookmarkAccountStorageMoveDialogPixelTest : public DialogBrowserTest {
 IN_PROC_BROWSER_TEST_F(BookmarkAccountStorageMoveDialogPixelTest,
                        InvokeUi_ShowMoveBookmarkToAccount) {
   bookmarks::BookmarkModel* bookmark_model =
-      BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+      BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
   set_node(bookmark_model->AddURL(bookmark_model->bookmark_bar_node(),
                                   /*index=*/0, u"Local Bookmark",
                                   GURL("https://local.com")));
@@ -81,7 +79,7 @@ IN_PROC_BROWSER_TEST_F(BookmarkAccountStorageMoveDialogPixelTest,
 IN_PROC_BROWSER_TEST_F(BookmarkAccountStorageMoveDialogPixelTest,
                        InvokeUi_ShowMoveFolderToAccount) {
   bookmarks::BookmarkModel* bookmark_model =
-      BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+      BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
   set_node(bookmark_model->AddFolder(bookmark_model->bookmark_bar_node(),
                                      /*index=*/0, u"Local Folder"));
   set_target_folder(
@@ -95,7 +93,7 @@ IN_PROC_BROWSER_TEST_F(BookmarkAccountStorageMoveDialogPixelTest,
                        InvokeUi_ShowMoveBookmarkToDevice) {
   set_baseline("5895535");
   bookmarks::BookmarkModel* bookmark_model =
-      BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+      BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
   set_node(bookmark_model->AddURL(bookmark_model->account_bookmark_bar_node(),
                                   /*index=*/0, u"Account Bookmark",
                                   GURL("https://account.com")));
@@ -110,7 +108,7 @@ IN_PROC_BROWSER_TEST_F(BookmarkAccountStorageMoveDialogPixelTest,
                        InvokeUi_ShowMoveFolderToDevice) {
   set_baseline("5895535");
   bookmarks::BookmarkModel* bookmark_model =
-      BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+      BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
   set_node(
       bookmark_model->AddFolder(bookmark_model->account_bookmark_bar_node(),
                                 /*index=*/0, u"Account Folder"));
@@ -125,7 +123,7 @@ IN_PROC_BROWSER_TEST_F(BookmarkAccountStorageMoveDialogPixelTest,
                        InvokeUi_TruncateLongFolderName) {
   set_baseline("6653664");
   bookmarks::BookmarkModel* bookmark_model =
-      BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+      BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
   set_node(
       bookmark_model->AddFolder(bookmark_model->account_bookmark_bar_node(),
                                 /*index=*/0, u"Account Folder"));
@@ -148,7 +146,7 @@ class SingleBookmarkUploadDialogPixelTest
 IN_PROC_BROWSER_TEST_F(SingleBookmarkUploadDialogPixelTest, InvokeUi) {
   set_baseline("6653664");
   bookmarks::BookmarkModel* bookmark_model =
-      BookmarkModelFactory::GetForBrowserContext(browser()->profile());
+      BookmarkModelFactory::GetForBrowserContext(browser()->GetProfile());
   set_node(bookmark_model->AddURL(bookmark_model->bookmark_bar_node(),
                                   /*index=*/0, u"Local Bookmark",
                                   GURL("https://local.com")));

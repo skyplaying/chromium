@@ -6,6 +6,36 @@
         padding-top: 8px;
       }
 
+      :host-context([settings-refresh-2026]) .cr-nav-menu-item {
+        --cr-nav-menu-item-content-height: 20px;
+        border-radius: 100px;
+        line-height: var(--cr-nav-menu-item-content-height);
+        padding-block: 14px;
+        padding-inline-end: 24px;
+        padding-inline-start: 16px;
+
+        /* Colors */
+        --cr-nav-menu-item-background-color-selected: var(--color-settings-nav-menu-item-background);
+        --cr-nav-menu-item-color: var(--color-settings-nav-menu-item-foreground);
+        --cr-nav-menu-item-color-selected: var(--color-settings-nav-menu-item-foreground-selected);
+        --cr-nav-menu-item-icon-color: var(--color-settings-nav-menu-item-icon);
+        --cr-nav-menu-item-icon-color-selected: var(--color-settings-nav-menu-item-foreground-selected);
+      }
+
+      :host-context([settings-refresh-2026]) .cr-nav-menu-item:focus {
+        border-radius: 100px;
+      }
+
+      :host-context([settings-refresh-2026]) .cr-nav-menu-item:focus:not(:focus-visible) {
+        outline: none;
+      }
+
+      :host-context([settings-refresh-2026]) .cr-nav-menu-item cr-icon {
+        height: var(--cr-nav-menu-item-content-height);
+        width: var(--cr-nav-menu-item-content-height);
+        margin-inline-end: 16px;
+      }
+
       :host * {
         -webkit-tap-highlight-color: transparent;
       }
@@ -60,14 +90,12 @@
         <a role="menuitem" id="autofill" href="/autofill"
             on-click="onAutofillClick_"
             class="cr-nav-menu-item"
-            hidden="[[!showAutofillMenuItem_(
-                enableYourSavedInfoSettingsPage_,
-                pageVisibility_.yourSavedInfo, pageVisibility_.autofill)]]">
-          <cr-icon icon="settings:assignment"></cr-icon>
+            hidden="[[!pageVisibility_.yourSavedInfo]]">
+          <cr-icon icon="settings:password-manager"></cr-icon>
           $i18n{autofillPageTitle}
           <cr-ripple></cr-ripple>
         </a>
-        <a role="menuitem" href="/privacy"
+        <a role="menuitem" id="privacy" href="/privacy"
             hidden="[[!pageVisibility_.privacy]]"
             class="cr-nav-menu-item">
           <cr-icon icon="settings:security"></cr-icon>
@@ -77,16 +105,15 @@
         <a role="menuitem" id="performance" href="/performance"
             class="cr-nav-menu-item"
             hidden="[[!pageVisibility_.performance]]">
-          <cr-icon icon="settings:navigation-performance"></cr-icon>
+          <cr-icon icon="settings:speed"></cr-icon>
           $i18n{performancePageTitle}
           <cr-ripple></cr-ripple>
         </a>
-        <a role="menuitem" href="/ai"
+        <a role="menuitem" id="ai" href="/ai"
             hidden="[[!showAiPageMenuItem_(showAiPage_, pageVisibility_.ai)]]"
-            on-click="onAiPageClick_"
             class="cr-nav-menu-item">
-          <cr-icon icon="settings20:magic"></cr-icon>
-          $i18n{aiInnovationsPageTitle}
+          <cr-icon icon="settings20:button-magic"></cr-icon>
+          $i18n{aiPageTitle}
           <cr-ripple></cr-ripple>
         </a>
         <a role="menuitem" id="appearance" href="/appearance"
@@ -96,7 +123,7 @@
           $i18n{appearancePageTitle}
           <cr-ripple></cr-ripple>
         </a>
-        <a role="menuitem" href="/search" class="cr-nav-menu-item">
+        <a role="menuitem" id="search" href="/search" class="cr-nav-menu-item">
           <cr-icon icon="settings:search"></cr-icon>
           $i18n{searchPageTitle}
           <cr-ripple></cr-ripple>
@@ -105,7 +132,7 @@
         <a role="menuitem" id="defaultBrowser" class="cr-nav-menu-item"
           href="/defaultBrowser"
           hidden="[[!pageVisibility_.defaultBrowser]]">
-          <cr-icon icon="settings:web"></cr-icon>
+          <cr-icon icon="settings:web-asset"></cr-icon>
           $i18n{defaultBrowser}
           <cr-ripple></cr-ripple>
         </a>
@@ -113,7 +140,7 @@
         <a role="menuitem" id="onStartup" href="/onStartup"
             class="cr-nav-menu-item"
             hidden="[[!pageVisibility_.onStartup]]">
-          <cr-icon icon="settings:power-settings"></cr-icon>
+          <cr-icon icon="settings:power-settings-new"></cr-icon>
           $i18n{onStartup}
           <cr-ripple></cr-ripple>
         </a>
@@ -121,7 +148,7 @@
         <a role="menuitem" id="languages" href="/languages"
             class="cr-nav-menu-item"
             hidden="[[!pageVisibility_.languages]]">
-          <cr-icon icon="settings:navigation-language"></cr-icon>
+          <cr-icon icon="settings:translate"></cr-icon>
           $i18n{languagesPageTitle}
           <cr-ripple></cr-ripple>
         </a>
@@ -142,14 +169,14 @@
 <if expr="not is_chromeos">
         <a role="menuitem" id="system" href="/system" class="cr-nav-menu-item"
             hidden="[[!pageVisibility_.system]]">
-          <cr-icon icon="settings:system"></cr-icon>
+          <cr-icon icon="settings:build"></cr-icon>
           $i18n{systemPageTitle}
           <cr-ripple></cr-ripple>
         </a>
 </if>
         <a role="menuitem" id="reset" href="/reset"
             hidden="[[!pageVisibility_.reset]]" class="cr-nav-menu-item">
-          <cr-icon icon="settings:restore"></cr-icon>
+          <cr-icon icon="settings:restart-alt"></cr-icon>
           $i18n{resetPageTitle}
           <cr-ripple></cr-ripple>
         </a>
@@ -160,7 +187,7 @@
             hidden="[[!pageVisibility_.extensions]]"
             on-click="onExtensionsLinkClick_"
             title="$i18n{extensionsLinkTooltip}">
-          <cr-icon icon="settings:extension"></cr-icon>
+          <cr-icon icon="settings:chrome-extension"></cr-icon>
           <span>$i18n{extensionsPageTitle}</span>
           <div class="cr-icon icon-external"></div>
           <cr-ripple></cr-ripple>

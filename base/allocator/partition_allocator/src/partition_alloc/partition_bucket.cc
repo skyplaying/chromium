@@ -4,12 +4,14 @@
 
 #include "partition_alloc/partition_bucket.h"
 
+#include <bit>
 #include <cstdint>
 #include <tuple>
 
 #include "partition_alloc/address_pool_manager.h"
 #include "partition_alloc/build_config.h"
 #include "partition_alloc/buildflags.h"
+#include "partition_alloc/internal/partition_root_internal.h"
 #include "partition_alloc/oom.h"
 #include "partition_alloc/page_allocator.h"
 #include "partition_alloc/page_allocator_constants.h"
@@ -30,7 +32,6 @@
 #include "partition_alloc/partition_freelist_entry.h"
 #include "partition_alloc/partition_oom.h"
 #include "partition_alloc/partition_page.h"
-#include "partition_alloc/partition_root.h"
 #include "partition_alloc/reservation_offset_table.h"
 #include "partition_alloc/slot_start.h"
 #include "partition_alloc/tagging.h"
@@ -179,14 +180,14 @@ SlotSpanMetadata* PartitionDirectMap(PartitionRoot* root,
                                      size_t raw_size,
                                      size_t slot_span_alignment) {
   PA_DCHECK((slot_span_alignment >= PartitionPageSize()) &&
-            base::bits::HasSingleBit(slot_span_alignment));
+            std::has_single_bit(slot_span_alignment));
 
   // No static EXCLUSIVE_LOCKS_REQUIRED(), as the checker doesn't understand
   // scoped unlocking.
   PartitionRootLock(root).AssertAcquired();
 
   const bool return_null = ContainsFlags(flags, AllocFlags::kReturnNull);
-  if (raw_size > MaxDirectMapped()) [[unlikely]] {
+  if (raw_size > MaxAllocationSize()) [[unlikely]] {
     if (return_null) {
       return nullptr;
     }
@@ -394,6 +395,8 @@ SlotSpanMetadata* PartitionDirectMap(PartitionRoot* root,
         PartitionOutOfMemoryCommitFailure(root, slot_size);
       }
 
+      root->GetReservationOffsetTable().SetNotAllocatedTag(reservation_start,
+                                                           reservation_size);
       {
         ScopedSyscallTimer timer{root};
 #if !PA_BUILDFLAG(HAS_64_BIT_POINTERS)
@@ -1268,9 +1271,10 @@ uintptr_t PartitionBucket::SlowPathAlloc(PartitionRoot* root,
                                          size_t raw_size,
                                          size_t slot_span_alignment,
                                          SlotSpanMetadata** slot_span,
-                                         bool* is_already_zeroed) {
+                                         bool* is_already_zeroed,
+                                         bool* stored_raw_size) {
   PA_DCHECK((slot_span_alignment >= PartitionPageSize()) &&
-            base::bits::HasSingleBit(slot_span_alignment));
+            std::has_single_bit(slot_span_alignment));
 
   // The slow path is called when the freelist is empty. The only exception is
   // when a higher-order alignment is requested, in which case the freelist
@@ -1419,6 +1423,7 @@ uintptr_t PartitionBucket::SlowPathAlloc(PartitionRoot* root,
   new_bucket->active_slot_spans_head = new_slot_span;
   if (new_slot_span->CanStoreRawSize()) {
     new_slot_span->SetRawSize(raw_size);
+    *stored_raw_size = true;
   }
 
   // If we found an active slot span with free slots, or an empty slot span, we

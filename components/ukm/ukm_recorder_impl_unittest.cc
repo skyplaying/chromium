@@ -9,6 +9,7 @@
 #include "base/functional/bind.h"
 #include "base/metrics/metrics_hashes.h"
 #include "base/test/task_environment.h"
+#include "components/metrics/metrics_reporting_choice_service.h"
 #include "components/ukm/scheme_constants.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "components/ukm/ukm_recorder_observer.h"
@@ -26,6 +27,17 @@
 namespace ukm {
 namespace {
 
+class TestUkmRecorderImpl : public UkmRecorderImpl {
+ public:
+  TestUkmRecorderImpl() = default;
+  ~TestUkmRecorderImpl() override = default;
+
+  bool ShouldUseMetricsConsentRestructure() const override {
+    return metrics::MetricsReportingChoiceService::
+        ShouldUseMetricsConsentRestructure();
+  }
+};
+
 using TestEvent1 = builders::PageLoad;
 
 const uint64_t kTestEntryHash = 1234;
@@ -40,6 +52,17 @@ const size_t kWebDXFeatureNumberOfFeaturesForTesting = 5;
 mojom::UkmEntryPtr BlankUkmEntry(SourceId source_id) {
   return mojom::UkmEntry::New(source_id, 0ull,
                               base::flat_map<uint64_t, int64_t>());
+}
+
+std::vector<mojom::UkmEntry*> GetDocumentCreatedEntries(
+    const std::vector<mojom::UkmEntryPtr>& entries) {
+  std::vector<mojom::UkmEntry*> document_created_entries;
+  for (const auto& entry : entries) {
+    if (entry->event_hash == builders::DocumentCreated::kEntryNameHash) {
+      document_created_entries.push_back(entry.get());
+    }
+  }
+  return document_created_entries;
 }
 
 MATCHER_P2(MatchesDownsamplingRate,
@@ -94,11 +117,24 @@ class TestUkmObserver : public UkmRecorderObserver {
     if (stop_waiting_)
       std::move(stop_waiting_).Run();
 
-    EXPECT_EQ(expected_state_, consent_state);
+    EXPECT_EQ(expected_consent_state_, consent_state);
+  }
+
+  void OnUkmAllowedStateChanged(bool consent_state) override {
+    if (stop_waiting_) {
+      std::move(stop_waiting_).Run();
+    }
+
+    EXPECT_EQ(expected_bool_state_, consent_state);
   }
 
   void WaitOnUkmAllowedStateChanged(ukm::UkmConsentState expected_state) {
-    expected_state_ = expected_state;
+    expected_consent_state_ = expected_state;
+    WaitCallback();
+  }
+
+  void WaitOnUkmAllowedStateChanged(bool expected_state) {
+    expected_bool_state_ = expected_state;
     WaitCallback();
   }
 
@@ -125,13 +161,14 @@ class TestUkmObserver : public UkmRecorderObserver {
   mojom::UkmEntryPtr ukm_entry_;
   SourceId source_id_;
   std::vector<GURL> urls_;
-  ukm::UkmConsentState expected_state_;
+  ukm::UkmConsentState expected_consent_state_;
+  bool expected_bool_state_ = false;
 };
 
 }  // namespace
 
 TEST(UkmRecorderImplTest, IsSampledIn) {
-  UkmRecorderImpl impl;
+  TestUkmRecorderImpl impl;
 
   for (int i = 0; i < 100; ++i) {
     // These are constant regardless of the seed, source, and event.
@@ -407,11 +444,19 @@ TEST(UkmRecorderImplTest, ObserverNotifiedOnUkmAllowedStateChanged) {
   ukm::TestAutoSetUkmRecorder test_ukm_recorder;
   TestUkmObserver test_observer(&test_ukm_recorder);
 
+  // Test UkmConsentState overload.
   test_ukm_recorder.OnUkmAllowedStateChanged(ukm::UkmConsentState());
   test_observer.WaitOnUkmAllowedStateChanged(ukm::UkmConsentState());
 
   test_ukm_recorder.OnUkmAllowedStateChanged(ukm::UkmConsentState::All());
   test_observer.WaitOnUkmAllowedStateChanged(ukm::UkmConsentState::All());
+
+  // Test bool overload.
+  test_ukm_recorder.OnUkmAllowedStateChanged(false);
+  test_observer.WaitOnUkmAllowedStateChanged(false);
+
+  test_ukm_recorder.OnUkmAllowedStateChanged(true);
+  test_observer.WaitOnUkmAllowedStateChanged(true);
 }
 
 // Tests that adding and removing observers work as expected.
@@ -460,7 +505,7 @@ TEST(UkmRecorderImplTest, AddRemoveObserver) {
 }
 
 TEST(UkmRecorderImplTest, VerifyShouldDropEntry) {
-  UkmRecorderImpl impl;
+  TestUkmRecorderImpl impl;
 
   // Enable Recording, if recording was disabled everything
   // would be dropped.
@@ -498,7 +543,7 @@ TEST(UkmRecorderImplTest, VerifyShouldDropEntry) {
 }
 
 TEST(UkmRecorderImplTest, WebDXFeaturesConsent) {
-  UkmRecorderImpl impl;
+  TestUkmRecorderImpl impl;
 
   // Enable recording and set no sampling (1-in-1).
   impl.EnableRecording();
@@ -559,7 +604,7 @@ TEST(UkmRecorderImplTest, WebDXFeaturesConsent) {
 }
 
 TEST(UkmRecorderImplTest, WebDXFeaturesSampling) {
-  UkmRecorderImpl impl;
+  TestUkmRecorderImpl impl;
 
   // Enable recording, consent to MSBB, and set 1-in-2 sampling.
   impl.EnableRecording();
@@ -612,4 +657,291 @@ TEST(UkmRecorderImplTest, WebDXFeaturesSampling) {
                   downsampling_rate)));
 }
 
+TEST(UkmRecorderImplTest, GetDocumentToNavigationUrlsMap) {
+  base::test::TaskEnvironment task_environment;
+  TestUkmRecorderImpl impl;
+  impl.EnableRecording();
+  impl.UpdateRecording({MSBB});
+  impl.SetSamplingForTesting(1);  // Sample everything in.
+
+  SourceId subframe_id = ConvertToSourceId(1, SourceIdType::NAVIGATION_ID);
+  SourceId main_frame_navigation_id =
+      ConvertToSourceId(2, SourceIdType::NAVIGATION_ID);
+  GURL main_frame_url("https://example.com");
+
+  // Record the URL for the main frame's navigation ID.
+  impl.UpdateSourceURL(main_frame_navigation_id, main_frame_url);
+
+  // Record the URL for the subframe's navigation ID.
+  impl.UpdateSourceURL(subframe_id, GURL("https://subframe.com"));
+
+  // Record a subframe DocumentCreated event.
+  {
+    auto entry = mojom::UkmEntry::New();
+    entry->source_id = subframe_id;
+    entry->event_hash = builders::DocumentCreated::kEntryNameHash;
+    entry->metrics[builders::DocumentCreated::kIsMainFrameNameHash] = 0;
+    entry->metrics[builders::DocumentCreated::kNavigationSourceIdNameHash] =
+        main_frame_navigation_id;
+    impl.AddEntry(std::move(entry));
+  }
+
+  auto url_map = impl.GetDocumentToNavigationUrlsMap(
+      GetDocumentCreatedEntries(impl.entries()));
+  EXPECT_EQ(1u, url_map.size());
+  EXPECT_EQ(1u, url_map[subframe_id].size());
+  EXPECT_EQ(main_frame_url, url_map[subframe_id][0]);
+
+  // Record a dummy entry for the subframe so it's not discarded.
+  {
+    auto entry = mojom::UkmEntry::New();
+    entry->source_id = subframe_id;
+    entry->event_hash = builders::PageLoad::kEntryNameHash;
+    impl.AddEntry(std::move(entry));
+  }
+
+  // Verify that the Source in the report is included and has resolved_urls.
+  Report report;
+  impl.StoreRecordingsInReport(&report);
+
+  bool found_subframe_source = false;
+  for (const auto& source : report.sources()) {
+    if (source.id() == subframe_id) {
+      found_subframe_source = true;
+      EXPECT_EQ(1, source.resolved_urls_size());
+      EXPECT_EQ(main_frame_url.spec(), source.resolved_urls(0).url());
+    }
+  }
+  EXPECT_TRUE(found_subframe_source);
+}
+
+TEST(UkmRecorderImplTest,
+     GetDocumentToNavigationUrlsMap_MissingSubframeSource) {
+  base::test::TaskEnvironment task_environment;
+  TestUkmRecorderImpl impl;
+  impl.EnableRecording();
+  impl.UpdateRecording({MSBB});
+  impl.SetSamplingForTesting(1);  // Sample everything in.
+
+  SourceId subframe_id = ConvertToSourceId(1, SourceIdType::NAVIGATION_ID);
+  SourceId main_frame_navigation_id =
+      ConvertToSourceId(2, SourceIdType::NAVIGATION_ID);
+  GURL main_frame_url("https://example.com");
+
+  // Record the URL for the main frame's navigation ID.
+  impl.UpdateSourceURL(main_frame_navigation_id, main_frame_url);
+
+  // NOT recording the URL for the subframe's navigation ID.
+  // impl.UpdateSourceURL(subframe_id, GURL("https://subframe.com"));
+
+  // Record a subframe DocumentCreated event.
+  {
+    auto entry = mojom::UkmEntry::New();
+    entry->source_id = subframe_id;
+    entry->event_hash = builders::DocumentCreated::kEntryNameHash;
+    entry->metrics[builders::DocumentCreated::kIsMainFrameNameHash] = 0;
+    entry->metrics[builders::DocumentCreated::kNavigationSourceIdNameHash] =
+        main_frame_navigation_id;
+    impl.AddEntry(std::move(entry));
+  }
+
+  auto url_map = impl.GetDocumentToNavigationUrlsMap(
+      GetDocumentCreatedEntries(impl.entries()));
+  EXPECT_EQ(1u, url_map.size());
+  EXPECT_EQ(1u, url_map[subframe_id].size());
+  EXPECT_EQ(main_frame_url, url_map[subframe_id][0]);
+
+  // Record a dummy entry for the subframe so it's not discarded.
+  {
+    auto entry = mojom::UkmEntry::New();
+    entry->source_id = subframe_id;
+    entry->event_hash = builders::PageLoad::kEntryNameHash;
+    impl.AddEntry(std::move(entry));
+  }
+
+  // Verify that the Source in the report is included and has resolved_urls.
+  Report report;
+  impl.StoreRecordingsInReport(&report);
+
+  bool found_subframe_source = false;
+  for (const auto& source : report.sources()) {
+    if (source.id() == subframe_id) {
+      found_subframe_source = true;
+      EXPECT_EQ(0, source.urls_size());
+      EXPECT_EQ(1, source.resolved_urls_size());
+      EXPECT_EQ(main_frame_url.spec(), source.resolved_urls(0).url());
+    }
+  }
+  EXPECT_TRUE(found_subframe_source);
+}
+
+TEST(UkmRecorderImplTest, GetDocumentToNavigationUrlsMap_Redirect) {
+  base::test::TaskEnvironment task_environment;
+  TestUkmRecorderImpl impl;
+  impl.EnableRecording();
+  impl.UpdateRecording({MSBB});
+  impl.SetSamplingForTesting(1);  // Sample everything in.
+
+  SourceId subframe_id = ConvertToSourceId(1, SourceIdType::NAVIGATION_ID);
+  SourceId main_frame_navigation_id =
+      ConvertToSourceId(2, SourceIdType::NAVIGATION_ID);
+  GURL main_frame_url1("https://google.com");
+  GURL main_frame_url2("https://example.com");
+
+  // Record URLs for the main frame's navigation ID (redirect).
+  UkmSource::NavigationData data;
+  data.urls = {main_frame_url1, main_frame_url2};
+  impl.RecordNavigation(main_frame_navigation_id, data);
+
+  EXPECT_EQ(2u, impl.sources().at(main_frame_navigation_id)->urls().size());
+
+  // Record a subframe DocumentCreated event.
+  {
+    auto entry = mojom::UkmEntry::New();
+    entry->source_id = subframe_id;
+    entry->event_hash = builders::DocumentCreated::kEntryNameHash;
+    entry->metrics[builders::DocumentCreated::kNavigationSourceIdNameHash] =
+        main_frame_navigation_id;
+    impl.AddEntry(std::move(entry));
+  }
+
+  EXPECT_EQ(1u, impl.entries().size());
+
+  auto url_map = impl.GetDocumentToNavigationUrlsMap(
+      GetDocumentCreatedEntries(impl.entries()));
+  EXPECT_EQ(1u, url_map.size());
+  EXPECT_EQ(2u, url_map[subframe_id].size());
+  EXPECT_EQ(main_frame_url1, url_map[subframe_id][0]);
+  EXPECT_EQ(main_frame_url2, url_map[subframe_id][1]);
+
+  // Record a dummy entry for the subframe so it's not discarded.
+  {
+    auto entry = mojom::UkmEntry::New();
+    entry->source_id = subframe_id;
+    entry->event_hash = builders::PageLoad::kEntryNameHash;
+    impl.AddEntry(std::move(entry));
+  }
+
+  // Verify that the Source in the report is included and has multiple
+  // resolved_urls.
+  Report report;
+  impl.StoreRecordingsInReport(&report);
+
+  bool found_subframe_source = false;
+  for (const auto& source : report.sources()) {
+    if (source.id() == subframe_id) {
+      found_subframe_source = true;
+      EXPECT_EQ(0, source.urls_size());
+      EXPECT_EQ(2, source.resolved_urls_size());
+      EXPECT_EQ(main_frame_url1.spec(), source.resolved_urls(0).url());
+      EXPECT_EQ(main_frame_url2.spec(), source.resolved_urls(1).url());
+    }
+  }
+  EXPECT_TRUE(found_subframe_source);
+}
+
+TEST(UkmRecorderImplTest, DocumentCreatedNotSerialized) {
+  base::test::TaskEnvironment task_environment;
+  TestUkmRecorderImpl impl;
+  impl.EnableRecording();
+  impl.UpdateRecording({MSBB});
+  impl.SetSamplingForTesting(1);  // Sample everything in.
+
+  SourceId subframe_id = ConvertToSourceId(1, SourceIdType::NAVIGATION_ID);
+  SourceId main_frame_navigation_id =
+      ConvertToSourceId(2, SourceIdType::NAVIGATION_ID);
+  GURL main_frame_url("https://example.com");
+
+  // Record the URL for the main frame's navigation ID.
+  impl.UpdateSourceURL(main_frame_navigation_id, main_frame_url);
+
+  // Record a subframe DocumentCreated event.
+  {
+    auto entry = mojom::UkmEntry::New();
+    entry->source_id = subframe_id;
+    entry->event_hash = builders::DocumentCreated::kEntryNameHash;
+    entry->metrics[builders::DocumentCreated::kNavigationSourceIdNameHash] =
+        main_frame_navigation_id;
+    impl.AddEntry(std::move(entry));
+  }
+
+  // Record a PageLoad entry for the subframe.
+  {
+    auto entry = mojom::UkmEntry::New();
+    entry->source_id = subframe_id;
+    entry->event_hash = builders::PageLoad::kEntryNameHash;
+    impl.AddEntry(std::move(entry));
+  }
+
+  // Verify that only PageLoad is in the report, and DocumentCreated is skipped.
+  Report report;
+  impl.StoreRecordingsInReport(&report);
+
+  EXPECT_EQ(1, report.entries_size());
+  EXPECT_EQ(builders::PageLoad::kEntryNameHash, report.entries(0).event_hash());
+}
+
+TEST(UkmRecorderImplTest, StoreDownsamplingParametersInReport) {
+  struct TestUkmRecorder : public TestUkmRecorderImpl {
+    TestUkmRecorder() {
+      // Stub event names to pass HasUnknownMetrics check.
+      decode_map_ = {
+          {base::HashMetricName("My.Event"), {"My.Event", {}}},
+          {base::HashMetricName("My.OtherEvent"), {"My.OtherEvent", {}}},
+          {base::HashMetricName("My.UnusedEvent"), {"My.UnusedEvent", {}}},
+      };
+    }
+    const builders::DecodeMap& GetDecodeMap() const override {
+      return decode_map_;
+    }
+    builders::DecodeMap decode_map_;
+  };
+
+  TestUkmRecorder impl;
+  impl.EnableRecording();
+  impl.UpdateRecording({MSBB});
+
+  impl.SetSamplingForTesting(1);
+  impl.SetWebDXFeaturesSamplingForTesting(2);
+
+  // Record sample events.
+  SourceId source_id = ConvertToSourceId(1, SourceIdType::NAVIGATION_ID);
+
+  auto entry1 = mojom::UkmEntry::New();
+  entry1->event_hash = base::HashMetricName("My.Event");
+  entry1->source_id = source_id;
+  impl.AddEntry(std::move(entry1));
+
+  auto entry2 = mojom::UkmEntry::New();
+  entry2->event_hash = base::HashMetricName("My.OtherEvent");
+  entry2->source_id = source_id;
+  impl.AddEntry(std::move(entry2));
+
+  // Manually configure some rates to verify the rates in the report will match.
+  impl.event_sampling_rates_[base::HashMetricName("My.Event")] = 30;
+  impl.event_sampling_master_[base::HashMetricName("My.OtherEvent")] =
+      base::HashMetricName("My.Event");
+  impl.event_sampling_rates_[base::HashMetricName("My.UnusedEvent")] = 40;
+
+  Report report;
+  impl.StoreRecordingsInReport(&report);
+
+  // Expects 2 downsampling rates for the default and WebDX, which should always
+  // be present; and 2 more for the two recorded event types.
+  EXPECT_EQ(report.downsampling_rates().size(), 2 + 2);
+  EXPECT_THAT(report.downsampling_rates(),
+              testing::Contains(MatchesDownsamplingRate(
+                  base::HashMetricName("_default_sampling"), 1)));
+  EXPECT_THAT(report.downsampling_rates(),
+              testing::Contains(MatchesDownsamplingRate(
+                  base::HashMetricName(kWebFeatureSamplingKeyword), 2)));
+  // Rate for "My.UnusedEvent" is skipped since the report doesn't have any
+  // such event type.
+  EXPECT_THAT(report.downsampling_rates(),
+              testing::Contains(MatchesDownsamplingRate(
+                  base::HashMetricName("My.Event"), 30)));
+  EXPECT_THAT(report.downsampling_rates(),
+              testing::Contains(MatchesDownsamplingRate(
+                  base::HashMetricName("My.OtherEvent"), 30)));
+}
 }  // namespace ukm

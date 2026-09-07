@@ -16,6 +16,7 @@
 #include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
+#include "base/no_destructor.h"
 #include "base/strings/string_util.h"
 #include "base/task/thread_pool.h"
 #include "base/unguessable_token.h"
@@ -26,6 +27,8 @@
 #include "content/public/browser/render_process_host.h"
 #include "extensions/browser/bad_message.h"
 #include "extensions/browser/extension_function_dispatcher.h"
+#include "extensions/browser/extension_mojo_binder_registry.h"
+#include "extensions/browser/extension_mojo_binder_registry_factory.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
@@ -196,6 +199,13 @@ mojom::ExtensionLoadedParamsPtr CreateExtensionLoadedParams(
       user_script_manager &&
       user_script_manager->AreUserScriptsAllowed(extension);
 
+  bool is_mojo_js_enabled_for_service_worker = false;
+  if (auto* registry = ExtensionMojoBinderRegistryFactory::GetForBrowserContext(
+          browser_context)) {
+    is_mojo_js_enabled_for_service_worker =
+        registry->IsMojoJsEnabledForServiceWorker(extension);
+  }
+
   return mojom::ExtensionLoadedParams::New(
       extension.manifest()->value()->Clone(), extension.location(),
       extension.path(),
@@ -207,23 +217,13 @@ mojom::ExtensionLoadedParamsPtr CreateExtensionLoadedParams(
       permissions_data->UsesDefaultPolicyHostRestrictions(),
       user_scripts_allowed, extension.id(),
       GetWorkerActivationToken(browser_context, extension),
-      extension.creation_flags(), extension.guid());
+      extension.creation_flags(), extension.guid(),
+      is_mojo_js_enabled_for_service_worker);
 }
 
 base::flat_map<std::string, std::string> ToFlatMap(
     const std::map<std::string, std::string>& map) {
   return {map.begin(), map.end()};
-}
-
-bool ShouldDisableExtensionsForInitialWebUI(
-    content::RenderProcessHost* process) {
-#if BUILDFLAG(IS_ANDROID)
-  return false;
-#else
-  return base::FeatureList::IsEnabled(
-             blink::features::kInitialWebUIWithoutExtensions) &&
-         process->IsForInitialWebUI();
-#endif  // BUILDFLAG(IS_ANDROID)
 }
 
 }  // namespace
@@ -240,6 +240,16 @@ RendererStartupHelper::~RendererStartupHelper() {
 
 void RendererStartupHelper::OnRenderProcessHostCreated(
     content::RenderProcessHost* host) {
+#if !BUILDFLAG(IS_ANDROID)
+  if (host->IsForTopChromeWebUI() &&
+      base::FeatureList::IsEnabled(
+          blink::features::kInitialWebUIWithoutExtensions)) {
+    // We initialize extension for topchrome processes on DidStartNavigation or
+    // ReadyToCommitNavigation.
+    return;
+  }
+#endif  // !BUILDFLAG(IS_ANDROID)
+
   if (host->IsForGuestsOnly()) {
     // GuestView initialization is done in OnRenderProcessLaunched()
     // instead, because WebViewRendererState set up is not yet done at this
@@ -251,14 +261,23 @@ void RendererStartupHelper::OnRenderProcessHostCreated(
 
 void RendererStartupHelper::OnRenderProcessLaunched(
     content::RenderProcessHost* host) {
-  if (!host->IsForGuestsOnly() &&
-      !ShouldDisableExtensionsForInitialWebUI(host)) {
+#if !BUILDFLAG(IS_ANDROID)
+  if (host->IsForTopChromeWebUI() &&
+      base::FeatureList::IsEnabled(
+          blink::features::kInitialWebUIWithoutExtensions)) {
+    // We initialize extension for topchrome processes on DidStartNavigation or
+    // ReadyToCommitNavigation.
+    return;
+  }
+#endif  // !BUILDFLAG(IS_ANDROID)
+
+  if (!host->IsForGuestsOnly()) {
     // Any process that *isn't* for guests or an initial WebUI with disabled
     // extensions should have already been initialized in
     // OnRenderProcessHostCreated(), if it corresponds to the same context.
     ExtensionsBrowserClient* client = ExtensionsBrowserClient::Get();
-#if BUILDFLAG(IS_ANDROID)
-    // On Android, handle race condition during process restart:
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS)
+    // On Android and ChromeOS, handle race condition during process restart:
     // 1. OnRenderProcessHostCreated() initializes extensions and populates
     // process_mojo_map_.
     // 2. Process startup fails in some cases.
@@ -274,7 +293,7 @@ void RendererStartupHelper::OnRenderProcessLaunched(
 #else
     CHECK(GetRenderer(host) != nullptr ||
           !client->IsSameContext(browser_context_, host->GetBrowserContext()));
-#endif  // BUILDFLAG(IS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS)
     return;
   }
   // Otherwise, we should *not* have initialized the host yet.
@@ -301,9 +320,8 @@ void RendererStartupHelper::RegisterProcess(
 
 void RendererStartupHelper::InitializeProcess(
     content::RenderProcessHost* process) {
-  // If the process is for an initial WebUI, we don't need to initialize
-  // support for Extensions.
-  if (ShouldDisableExtensionsForInitialWebUI(process)) {
+  // If the process is already initialized, we're done.
+  if (process_mojo_map_.contains(process)) {
     return;
   }
 
@@ -312,6 +330,7 @@ void RendererStartupHelper::InitializeProcess(
     return;
   }
 
+  // Otherwise, initialize the process.
   RegisterProcess(process);
   mojom::Renderer* renderer = GetRenderer(process);
 
@@ -321,6 +340,12 @@ void RendererStartupHelper::InitializeProcess(
   // the default (not enabled) is correct.
   if (activity_logging_enabled) {
     renderer->SetActivityLoggingEnabled(activity_logging_enabled);
+  }
+
+  bool telemetry_logging_enabled =
+      client->IsTelemetryLoggingEnabled(process->GetBrowserContext());
+  if (telemetry_logging_enabled) {
+    renderer->SetPolicyActivityLoggingEnabled(telemetry_logging_enabled);
   }
 
   // extensions need to know the developer mode value for api restrictions.
@@ -601,9 +626,6 @@ mojom::Renderer* RendererStartupHelper::GetRenderer(
     return nullptr;
   }
 
-  // The renderer for the initial WebUI process is not created.
-  CHECK(!ShouldDisableExtensionsForInitialWebUI(process));
-
   return it->second.get();
 }
 
@@ -667,7 +689,7 @@ void RendererStartupHelper::AddDOMActionToActivityLog(
 
 // static
 void RendererStartupHelper::BindForRenderer(
-    int process_id,
+    content::ChildProcessId process_id,
     mojo::PendingAssociatedReceiver<mojom::RendererHost> receiver) {
   auto* host = content::RenderProcessHost::FromID(process_id);
   if (!host) {
@@ -765,7 +787,8 @@ RendererStartupHelper* RendererStartupHelperFactory::GetForBrowserContext(
 
 // static
 RendererStartupHelperFactory* RendererStartupHelperFactory::GetInstance() {
-  return base::Singleton<RendererStartupHelperFactory>::get();
+  static base::NoDestructor<RendererStartupHelperFactory> instance;
+  return instance.get();
 }
 
 RendererStartupHelperFactory::RendererStartupHelperFactory()

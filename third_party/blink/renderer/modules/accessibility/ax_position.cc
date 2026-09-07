@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/modules/accessibility/ax_position.h"
 
+#include "base/containers/span.h"
 #include "third_party/blink/renderer/core/accessibility/ax_object_cache.h"
 #include "third_party/blink/renderer/core/dom/container_node.h"
 #include "third_party/blink/renderer/core/dom/document.h"
@@ -17,6 +18,7 @@
 #include "third_party/blink/renderer/modules/accessibility/ax_node_object.h"
 #include "third_party/blink/renderer/modules/accessibility/ax_object-inl.h"
 #include "third_party/blink/renderer/modules/accessibility/ax_object.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
@@ -526,9 +528,9 @@ bool AXPosition::IsValid(String* failure_reason) const {
   if (IsTextPosition()) {
     if (text_offset_or_child_index_ > MaxTextOffset()) {
       if (failure_reason) {
-        *failure_reason = String::Format(
-            "\nPosition invalid: text offset too large.\n%d vs. %d.",
-            text_offset_or_child_index_, MaxTextOffset());
+        *failure_reason =
+            Format("\nPosition invalid: text offset too large.\n{} vs. {}.",
+                   text_offset_or_child_index_, MaxTextOffset());
       }
       return false;
     }
@@ -536,10 +538,10 @@ bool AXPosition::IsValid(String* failure_reason) const {
     if (text_offset_or_child_index_ >
         container_object_->ChildCountIncludingIgnored()) {
       if (failure_reason) {
-        *failure_reason = String::Format(
-            "\nPosition invalid: child index too large.\n%d vs. %d.",
-            text_offset_or_child_index_,
-            container_object_->ChildCountIncludingIgnored());
+        *failure_reason =
+            Format("\nPosition invalid: child index too large.\n{} vs. {}.",
+                   text_offset_or_child_index_,
+                   container_object_->ChildCountIncludingIgnored());
       }
       return false;
     }
@@ -997,18 +999,13 @@ String AXPosition::ToString() const {
   if (!IsValid())
     return "Invalid AXPosition";
 
-  StringBuilder builder;
   if (IsTextPosition()) {
-    builder.Append("AX text position in ");
-    builder.Append(container_object_->ToString(/*verbose*/false));
-    builder.AppendFormat(", %d", TextOffset());
-    return builder.ToString();
+    return Format("AX text position in {}, {}",
+                  container_object_->ToString(/*verbose*/ false), TextOffset());
   }
 
-  builder.Append("AX object anchored position in ");
-  builder.Append(container_object_->ToString(/*verbose*/false));
-  builder.AppendFormat(", %d", ChildIndex());
-  return builder.ToString();
+  return Format("AX object anchored position in {}, {}",
+                container_object_->ToString(/*verbose*/ false), ChildIndex());
 }
 
 // static
@@ -1041,7 +1038,7 @@ int AXPosition::GetLeadingIgnoredCharacterCount(const OffsetMapping* mapping,
     }
 
     if (unit.TextContentStart() != previous_content_end) {
-      String substring = text.Substring(
+      String substring = text.DeprecatedSubstring(
           previous_content_end, unit.TextContentStart() - previous_content_end);
       String unignored = substring.RemoveCharacters(IsIgnoredCharacter);
       count += substring.length() - unignored.length();

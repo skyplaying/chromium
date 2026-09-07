@@ -259,49 +259,6 @@ IN_PROC_BROWSER_TEST_F(TabDialogManagerBrowserTest,
       InAnyContext(EnsurePresent(kWidgetContentsViewElementId)));
 }
 
-// Tests that the widget becomes active when `should_show_inactive` is false.
-IN_PROC_BROWSER_TEST_F(TabDialogManagerBrowserTest,
-                       Params_should_show_inactive_false) {
-  std::unique_ptr<views::Widget> widget;
-
-  RunTestSequence(
-      ObserveState(views::test::kCurrentWidgetFocus), Do([&, this]() {
-        widget = CreateWidgetWithNoNonClientView();
-        TabDialogManager* manager = GetTabDialogManager();
-        auto params = std::make_unique<tabs::TabDialogManager::Params>();
-        params->should_show_inactive = false;
-        manager->ShowDialog(widget.get(), std::move(params));
-      }),
-      InAnyContext(WaitForShow(kWidgetContentsViewElementId)),
-      WaitForState(views::test::kCurrentWidgetFocus,
-                   [&]() { return widget.get(); }),
-      CheckResult([&]() { return widget && widget->IsVisible(); }, true,
-                  "Verify widget is visible"),
-      CheckResult([&]() { return widget && widget->IsActive(); }, true,
-                  "Verify widget is active"));
-}
-
-// Tests that the widget does not become active when `should_show_inactive` is
-// true.
-IN_PROC_BROWSER_TEST_F(TabDialogManagerBrowserTest,
-                       Params_should_show_inactive_true) {
-  std::unique_ptr<views::Widget> widget;
-
-  RunTestSequence(Do([&, this]() {
-                    widget = CreateWidgetWithNoNonClientView();
-                    TabDialogManager* manager = GetTabDialogManager();
-                    auto params =
-                        std::make_unique<tabs::TabDialogManager::Params>();
-                    params->should_show_inactive = true;
-                    manager->ShowDialog(widget.get(), std::move(params));
-                  }),
-                  InAnyContext(WaitForShow(kWidgetContentsViewElementId)),
-                  CheckResult([&]() { return widget && widget->IsVisible(); },
-                              true, "Verify widget is visible"),
-                  CheckResult([&]() { return widget && widget->IsActive(); },
-                              false, "Verify widget is not active"));
-}
-
 // Tests that the widget is repositioned after its preferred size is changed.
 IN_PROC_BROWSER_TEST_F(TabDialogManagerBrowserTest,
                        ChangePreferredSizeAfterShow) {
@@ -359,8 +316,8 @@ IN_PROC_BROWSER_TEST_F(TabDialogManagerBrowserTest,
           [&]() { return widget->GetClientAreaBoundsInScreen().size(); },
           kInitialSize, "Verify initial size"),
       Do([=, this]() {
-        browser()->profile()->GetPrefs()->SetBoolean(prefs::kPinSplitTabButton,
-                                                     true);
+        browser()->GetProfile()->GetPrefs()->SetBoolean(
+            prefs::kPinSplitTabButton, true);
       }),
       WaitForShow(kToolbarSplitTabsToolbarButtonElementId),
       PressButton(kToolbarSplitTabsToolbarButtonElementId),
@@ -410,6 +367,30 @@ IN_PROC_BROWSER_TEST_F(TabDialogManagerBrowserTest, AnimatedBoundsChange) {
                                   testing::Property(
                                       &gfx::Rect::origin,
                                       testing::Ne(initial_bounds.origin())))));
+}
+
+// Regression test for unmaximizing the window to a small size while dialog is
+// visible (crbug.com/487436402).
+IN_PROC_BROWSER_TEST_F(TabDialogManagerBrowserTest,
+                       WindowBoundsChangeWhileShowingBubble) {
+  std::unique_ptr<views::Widget> widget;
+  views::Widget* browser_widget = views::Widget::GetWidgetForNativeWindow(
+      browser()->GetWindow()->GetNativeWindow());
+  RunTestSequence(
+      // Set the browser window to a wide initial size.
+      Do([&]() { browser_widget->SetBounds(gfx::Rect(0, 0, 1600, 800)); }),
+      // Show a top-level bubble dialog managed by TabDialogManager.
+      Do([&]() {
+        widget = CreateWidgetWithDialogModel();
+        GetTabDialogManager()->ShowDialog(
+            widget.get(), std::make_unique<tabs::TabDialogManager::Params>());
+      }),
+      InAnyContext(WaitForShow(kWidgetContentsViewElementId)),
+      // Move and shrink the browser window simultaneously to simulate
+      // unmaximize.
+      Do([&]() { browser_widget->SetBounds(gfx::Rect(50, 50, 400, 400)); }),
+      // Verify no crash and widget remains valid.
+      CheckResult([&]() { return widget && widget->IsVisible(); }, true));
 }
 
 class TabDialogManagerPixelTest : public DialogBrowserTest {

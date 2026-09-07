@@ -11,11 +11,11 @@ import android.graphics.Bitmap;
 
 import androidx.annotation.VisibleForTesting;
 
+import org.chromium.base.UserData;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.IntentHandler;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.components.browser_ui.media.MediaNotificationInfo;
@@ -31,13 +31,15 @@ import org.chromium.url.GURL;
  * behavior.
  */
 @NullMarked
-public class MediaSessionTabHelper implements MediaSessionHelper.Delegate {
+public class MediaSessionTabHelper implements MediaSessionHelper.Delegate, UserData {
+    private static final Class<MediaSessionTabHelper> USER_DATA_KEY = MediaSessionTabHelper.class;
+
     private @Nullable Tab mTab;
-    @VisibleForTesting MediaSessionHelper mMediaSessionHelper;
+    @VisibleForTesting @Nullable MediaSessionHelper mMediaSessionHelper;
 
     @VisibleForTesting
     final TabObserver mTabObserver =
-            new EmptyTabObserver() {
+            new TabObserver() {
                 @Override
                 public void onContentChanged(Tab tab) {
                     assert tab == mTab;
@@ -77,20 +79,38 @@ public class MediaSessionTabHelper implements MediaSessionHelper.Delegate {
     }
 
     private void maybeCreateOrUpdateMediaSessionHelper() {
-        WebContents webContents = assumeNonNull(assumeNonNull(mTab).getWebContents());
-        if (mMediaSessionHelper != null) {
-            mMediaSessionHelper.setWebContents(webContents);
-        } else if (mTab.getWebContents() != null) {
-            mMediaSessionHelper = new MediaSessionHelper(webContents, this);
+        if (mTab == null) return;
+        WebContents webContents = mTab.getWebContents();
+        if (webContents == null) {
+            if (mMediaSessionHelper != null) {
+                mMediaSessionHelper.destroy();
+                mMediaSessionHelper = null;
+            }
+        } else {
+            if (mMediaSessionHelper != null) {
+                mMediaSessionHelper.setWebContents(webContents);
+            } else {
+                mMediaSessionHelper = new MediaSessionHelper(webContents, this);
+            }
         }
     }
 
     /**
-     * Creates the {@link MediaSessionTabHelper} for the given {@link Tab}.
-     * @param tab the tab to attach the helper to.
+     * Retrieves the {@link MediaSessionTabHelper} for the given {@link Tab}, creating it if it
+     * doesn't already exist.
+     *
+     * @param tab The Tab to get the helper for.
+     * @return The {@link MediaSessionTabHelper}, or null if UserDataHost is null.
      */
-    public static void createForTab(Tab tab) {
-        new MediaSessionTabHelper(tab);
+    public static @Nullable MediaSessionTabHelper from(Tab tab) {
+        if (tab.getUserDataHost() == null || tab.getWebContents() == null) return null;
+        MediaSessionTabHelper helper = tab.getUserDataHost().getUserData(USER_DATA_KEY);
+        if (helper == null) {
+            helper =
+                    tab.getUserDataHost()
+                            .setUserData(USER_DATA_KEY, new MediaSessionTabHelper(tab));
+        }
+        return helper;
     }
 
     @Override
@@ -129,5 +149,10 @@ public class MediaSessionTabHelper implements MediaSessionHelper.Delegate {
 
         MediaNotificationManager.activateAndroidMediaSession(
                 mTab.getId(), R.id.media_playback_notification);
+    }
+
+    @VisibleForTesting
+    public @Nullable MediaSessionHelper getMediaSessionHelperForTesting() {
+        return mMediaSessionHelper;
     }
 }

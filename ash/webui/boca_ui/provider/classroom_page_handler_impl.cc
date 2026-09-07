@@ -7,10 +7,9 @@
 #include "ash/constants/ash_features.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/thread_pool.h"
-#include "chromeos/ash/components/boca/boca_app_client.h"
 #include "chromeos/ash/components/boca/boca_metrics_util.h"
+#include "chromeos/ash/components/boca/session_api/session_client_impl.h"
 #include "components/signin/public/base/consent_level.h"
-#include "components/signin/public/identity_manager/identity_manager.h"
 #include "google_apis/classroom/classroom_api_course_work_materials_response_types.h"
 #include "google_apis/classroom/classroom_api_course_work_response_types.h"
 #include "google_apis/classroom/classroom_api_courses_response_types.h"
@@ -18,6 +17,7 @@
 #include "google_apis/classroom/classroom_api_list_course_work_request.h"
 #include "google_apis/classroom/classroom_api_list_courses_request.h"
 #include "google_apis/classroom/classroom_api_list_students_request.h"
+#include "google_apis/classroom/classroom_api_material_response_types.h"
 #include "google_apis/classroom/classroom_api_students_response_types.h"
 #include "google_apis/common/auth_service.h"
 #include "google_apis/common/request_sender.h"
@@ -82,6 +82,9 @@ std::vector<mojom::MaterialPtr> MaterialsApiToMojom(
       case google_apis::classroom::Material::Type::kForm:
         material->type = mojom::MaterialType::kForm;
         break;
+      case google_apis::classroom::Material::Type::kGuidedLearning:
+        material->type = mojom::MaterialType::kGuidedLearning;
+        break;
       case google_apis::classroom::Material::Type::kUnknown:
       default:
         material->type = mojom::MaterialType::kUnknown;
@@ -95,11 +98,14 @@ std::vector<mojom::MaterialPtr> MaterialsApiToMojom(
 }  // namespace
 
 ClassroomPageHandlerImpl::ClassroomPageHandlerImpl(
+    SessionClientImpl& session_client_impl)
+    : ClassroomPageHandlerImpl(session_client_impl.CreateRequestSender(
+          signin::OAuthConsumerId::kAshBocaClassroomPageHandler,
+          kTrafficAnnotation)) {}
+
+ClassroomPageHandlerImpl::ClassroomPageHandlerImpl(
     std::unique_ptr<google_apis::RequestSender> sender)
     : sender_(std::move(sender)), weak_factory_(this) {}
-
-ClassroomPageHandlerImpl::ClassroomPageHandlerImpl()
-    : ClassroomPageHandlerImpl(CreateRequestSender()) {}
 
 ClassroomPageHandlerImpl::~ClassroomPageHandlerImpl() = default;
 
@@ -122,6 +128,9 @@ void ClassroomPageHandlerImpl::ListStudents(const std::string& course_id,
 void ClassroomPageHandlerImpl::ListAssignments(
     const std::string& course_id,
     ListAssignmentsCallback callback) {
+  if (valid_course_ids_.find(course_id) == valid_course_ids_.end()) {
+    return std::move(callback).Run(AssignmentList());
+  }
   ListAssignmentsHelper(course_id, /*page_token=*/"",
                         std::make_unique<AssignmentList>(),
                         std::move(callback));
@@ -213,6 +222,9 @@ void ClassroomPageHandlerImpl::ListAssignmentsHelper(
     ListAssignmentsCallback callback) {
   sender_->StartRequestWithAuthRetry(std::make_unique<ListCourseWorkRequest>(
       sender_.get(), course_id, page_token,
+      std::vector<ListCourseWorkRequest::AdditionalRequestField>{
+          ListCourseWorkRequest::AdditionalRequestField::kWorkType,
+          ListCourseWorkRequest::AdditionalRequestField::kMaterials},
       base::BindOnce(&ClassroomPageHandlerImpl::OnListAssignmentsFetched,
                      weak_factory_.GetWeakPtr(), course_id,
                      std::move(fetched_assignments), std::move(callback))));
@@ -320,27 +332,6 @@ void ClassroomPageHandlerImpl::OnListCourseWorkMaterialsFetched(
   } else {
     std::move(callback).Run(std::move(*fetched_assignments));
   }
-}
-
-// static
-std::unique_ptr<google_apis::RequestSender>
-ClassroomPageHandlerImpl::CreateRequestSender() {
-  auto url_loader_factory = BocaAppClient::Get()->GetURLLoaderFactory();
-  auto* identity_manager = BocaAppClient::Get()->GetIdentityManager();
-  auto auth_service = std::make_unique<google_apis::AuthService>(
-      identity_manager,
-      identity_manager->GetPrimaryAccountId(signin::ConsentLevel::kSignin),
-      url_loader_factory,
-      signin::OAuthConsumerId::kAshBocaClassroomPageHandler);
-  return std::make_unique<google_apis::RequestSender>(
-      std::move(auth_service), url_loader_factory,
-      base::ThreadPool::CreateSequencedTaskRunner(
-          {base::MayBlock(),
-           /* `USER_VISIBLE` is because the requested/returned data is visible
-               to the user on System UI surfaces. */
-           base::TaskPriority::USER_VISIBLE,
-           base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN}),
-      /*custom_user_agent=*/"", kTrafficAnnotation);
 }
 
 }  // namespace ash::boca

@@ -4,7 +4,7 @@
 
 #include "chrome/browser/webid/federated_identity_auto_reauthn_permission_context.h"
 
-#include "base/metrics/histogram_macros.h"
+#include "base/time/time.h"
 #include "chrome/browser/actor/actor_keyed_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
@@ -64,14 +64,6 @@ bool FederatedIdentityAutoReauthnPermissionContext::
   auto* actor_service = actor::ActorKeyedService::Get(profile);
   return tab_interface && actor_service &&
          actor_service->IsActiveOnTab(*tab_interface);
-}
-
-base::Time
-FederatedIdentityAutoReauthnPermissionContext::GetAutoReauthnEmbargoStartTime(
-    const url::Origin& relying_party_embedder) {
-  return permission_autoblocker_->GetEmbargoStartTime(
-      relying_party_embedder.GetURL(),
-      ContentSettingsType::FEDERATED_IDENTITY_AUTO_REAUTHN_PERMISSION);
 }
 
 void FederatedIdentityAutoReauthnPermissionContext::RecordEmbargoForAutoReauthn(

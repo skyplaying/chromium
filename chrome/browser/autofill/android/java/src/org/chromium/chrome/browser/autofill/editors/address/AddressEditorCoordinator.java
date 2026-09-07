@@ -105,7 +105,6 @@ public class AddressEditorCoordinator {
                         promptMode,
                         saveToDisk);
         mEditorDialog = new EditorDialogView(activity);
-        mEditorDialog.setProfileRecordTypeSuffix(mMediator.getProfileRecordTypeSuffix());
     }
 
     /**
@@ -124,6 +123,10 @@ public class AddressEditorCoordinator {
      */
     public void setAllowDelete(boolean allowDelete) {
         mMediator.setAllowDelete(allowDelete);
+    }
+
+    public @SaveUpdateAddressProfilePromptMode int getPromptMode() {
+        return mMediator.getPromptMode();
     }
 
     /** Notifies underlying view that device configuration has changed. */

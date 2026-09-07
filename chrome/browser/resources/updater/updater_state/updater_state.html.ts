@@ -12,7 +12,7 @@ export function getHtml(this: UpdaterStateElement) {
 <!--_html_template_start_-->
 ${this.error ? html`
   <div class="error-card">
-    <cr-icon icon="cr:warning"></cr-icon>
+    <cr-icon icon="cr:warning-filled"></cr-icon>
     <div id="error-message">$i18n{updaterStateQueryFailed}</div>
   </div>
 ` : ''}
@@ -43,7 +43,7 @@ ${this.shouldShowEnterpriseCompanionState() ? html`
           this.enterpriseCompanionState.installationDirectory)}">
   </enterprise-companion-state-card>
 ` : ''}
-${this.shouldShowNoUpdatersFound ? html`
+${this.shouldShowNoUpdatersFound() ? html`
   <div id="no-updater-message">$i18n{noUpdaterFound}</div>
 ` : ''}
 <!--_html_template_end_-->`;

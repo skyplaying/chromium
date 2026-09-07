@@ -12,15 +12,16 @@ import static org.junit.Assert.assertThrows;
 import static org.chromium.net.truth.UrlResponseInfoSubject.assertThat;
 
 import android.net.Network;
-import io.netty.channel.ChannelInboundHandlerAdapter;
-import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelHandler;
 import android.os.Build;
 import android.os.ConditionVariable;
 import android.os.Process;
 
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.filters.SmallTest;
+
+import io.netty.channel.ChannelHandler;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelInboundHandlerAdapter;
 
 import org.junit.After;
 import org.junit.Before;
@@ -39,7 +40,6 @@ import org.chromium.net.CronetTestRule.Flags;
 import org.chromium.net.CronetTestRule.IgnoreFor;
 import org.chromium.net.CronetTestRule.RequiresMinAndroidApi;
 import org.chromium.net.CronetTestRule.RequiresMinApi;
-import org.chromium.net.NetworkChangeNotifierAutoDetect.ConnectivityManagerDelegate;
 import org.chromium.net.TestBidirectionalStreamCallback.FailureType;
 import org.chromium.net.TestBidirectionalStreamCallback.ResponseStep;
 import org.chromium.net.impl.BidirectionalStreamNetworkException;
@@ -47,6 +47,7 @@ import org.chromium.net.impl.CronetBidirectionalStream;
 import org.chromium.net.impl.CronetExceptionImpl;
 import org.chromium.net.impl.CronetLogger.CronetSource;
 import org.chromium.net.impl.JavaCronetProvider;
+import org.chromium.net.impl.NativeCronetProvider;
 import org.chromium.net.impl.NetworkExceptionImpl;
 import org.chromium.net.impl.TestLogger;
 import org.chromium.net.impl.UrlResponseInfoImpl;
@@ -96,21 +97,12 @@ public class BidirectionalStreamTest {
             }
             ctx.fireChannelRead(msg);
         }
-    };
+    }
 
     @Before
     public void setUp() throws Exception {
         mTestLogger = mLoggerTestRule.mTestLogger;
         mDropConnectionPackets = false;
-        // TODO(crbug.com/40284777): Fallback to MockCertVerifier when custom CAs are not supported.
-        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.M) {
-            mTestRule
-                    .getTestFramework()
-                    .applyEngineBuilderPatch(
-                            (builder) ->
-                                    CronetTestUtil.setMockCertVerifierForTesting(
-                                            builder, QuicTestServer.createMockCertVerifier()));
-        }
         mCronetEngine = mTestRule.getTestFramework().startEngine();
         assertThat(Http2TestServer.startHttp2TestServer(new Http2TestServer.ServerStartOptions(mTestRule.getTestFramework().getContext())
                         .setPreTlsPacketHandler(new DroppingPacketHandler())))
@@ -222,12 +214,11 @@ public class BidirectionalStreamTest {
             throws Exception {
         TestBidirectionalStreamCallback callback = new TestBidirectionalStreamCallback();
 
+        Executor executor = callback.getExecutor();
         NullPointerException e =
                 assertThrows(
                         NullPointerException.class,
-                        () ->
-                                engine.newBidirectionalStreamBuilder(
-                                        null, callback, callback.getExecutor()));
+                        () -> engine.newBidirectionalStreamBuilder(null, callback, executor));
         assertThat(e).hasMessageThat().isEqualTo("URL is required.");
 
         e =
@@ -297,7 +288,7 @@ public class BidirectionalStreamTest {
             reason = "The output differs depending on the type of Cronet Impl.")
     @RequiresMinAndroidApi(Build.VERSION_CODES.O)
     public void testTrafficInfoAtomSourceStaticallyLinked() throws Exception {
-        testSimpleGet();
+        testSimpleGetImpl();
         mTestLogger.waitForLogCronetTrafficInfo();
         assertThat(mTestLogger.getLastCronetTrafficInfo().getCronetSource())
                 .isEqualTo(
@@ -309,6 +300,10 @@ public class BidirectionalStreamTest {
     @Test
     @SmallTest
     public void testSimpleGet() throws Exception {
+        testSimpleGetImpl();
+    }
+
+    private void testSimpleGetImpl() throws Exception {
         // Since this is the first request on the connection, the expected received bytes count
         // must account for an HPACK dynamic table size update.
         int expectedReceivedBytes = 31;
@@ -419,17 +414,15 @@ public class BidirectionalStreamTest {
         String url = Http2TestServer.getEchoMethodUrl();
         TestBidirectionalStreamCallback callback = new TestBidirectionalStreamCallback();
         // Create stream.
+        CronetEngine engine =
+                new JavaCronetProvider(mTestRule.getTestFramework().getContext())
+                        .createBuilder()
+                        .build();
+        Executor executor = callback.getExecutor();
         UnsupportedOperationException e =
                 assertThrows(
                         UnsupportedOperationException.class,
-                        () ->
-                                new JavaCronetProvider(mTestRule.getTestFramework().getContext())
-                                        .createBuilder()
-                                        .build()
-                                        .newBidirectionalStreamBuilder(
-                                                url, callback, callback.getExecutor())
-                                        .setHttpMethod("GET")
-                                        .build());
+                        () -> engine.newBidirectionalStreamBuilder(url, callback, executor));
         assertThat(e)
                 .hasMessageThat()
                 .contains(
@@ -866,9 +859,10 @@ public class BidirectionalStreamTest {
                         @Override
                         public void onStreamReady(BidirectionalStream stream) {
                             // Attempt to write data for GET request.
+                            ByteBuffer buffer = ByteBuffer.wrap("sample".getBytes());
                             assertThrows(
                                     IllegalArgumentException.class,
-                                    () -> stream.write(ByteBuffer.wrap("sample".getBytes()), true));
+                                    () -> stream.write(buffer, true));
 
                             // If there are delayed headers, this flush should try to send them.
                             // If nothing to flush, it should not crash.
@@ -878,7 +872,7 @@ public class BidirectionalStreamTest {
                             // Attempt to write data for GET request.
                             assertThrows(
                                     IllegalArgumentException.class,
-                                    () -> stream.write(ByteBuffer.wrap("sample".getBytes()), true));
+                                    () -> stream.write(buffer, true));
                         }
                     };
             BidirectionalStream stream =
@@ -1102,8 +1096,9 @@ public class BidirectionalStreamTest {
                 mCronetEngine.newBidirectionalStreamBuilder(
                         Http2TestServer.getServerUrl(), callback, callback.getExecutor());
         builder.setHttpMethod("bad:method!");
+        BidirectionalStream bidirectionalStream = builder.build();
         IllegalArgumentException e =
-                assertThrows(IllegalArgumentException.class, () -> builder.build().start());
+                assertThrows(IllegalArgumentException.class, () -> bidirectionalStream.start());
         assertThat(e).hasMessageThat().isEqualTo("Invalid http method bad:method!");
     }
 
@@ -1117,8 +1112,9 @@ public class BidirectionalStreamTest {
         builder.addHeader("goodheader1", "headervalue");
         builder.addHeader("header:name", "headervalue");
         builder.addHeader("goodheader2", "headervalue");
+        BidirectionalStream bidirectionalStream = builder.build();
         IllegalArgumentException e =
-                assertThrows(IllegalArgumentException.class, () -> builder.build().start());
+                assertThrows(IllegalArgumentException.class, () -> bidirectionalStream.start());
         var oldMessage = "Invalid header header:name=headervalue";
         var newMessage = "Invalid header with headername: header:name";
         if (mTestRule.implementationUnderTest() == CronetImplementation.AOSP_PLATFORM
@@ -1139,8 +1135,9 @@ public class BidirectionalStreamTest {
                 mCronetEngine.newBidirectionalStreamBuilder(
                         Http2TestServer.getServerUrl(), callback, callback.getExecutor());
         builder.addHeader("headername", "bad header\r\nvalue");
+        BidirectionalStream bidirectionalStream = builder.build();
         IllegalArgumentException e =
-                assertThrows(IllegalArgumentException.class, () -> builder.build().start());
+                assertThrows(IllegalArgumentException.class, () -> bidirectionalStream.start());
         var oldMessage = "Invalid header headername=bad header\r\nvalue";
         var newMessage = "Invalid header with headername: headername";
         if (mTestRule.implementationUnderTest() == CronetImplementation.AOSP_PLATFORM
@@ -1246,11 +1243,6 @@ public class BidirectionalStreamTest {
         ExperimentalCronetEngine.Builder engineBuilder =
                 new ExperimentalCronetEngine.Builder(mTestRule.getTestFramework().getContext());
         engineBuilder.setUserAgent(userAgentValue);
-        // TODO(crbug.com/40284777): Fallback to MockCertVerifier when custom CAs are not supported.
-        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.M) {
-            CronetTestUtil.setMockCertVerifierForTesting(
-                    engineBuilder, QuicTestServer.createMockCertVerifier());
-        }
         ExperimentalCronetEngine engine = engineBuilder.build();
         TestBidirectionalStreamCallback callback = new TestBidirectionalStreamCallback();
         BidirectionalStream.Builder builder =
@@ -1376,10 +1368,8 @@ public class BidirectionalStreamTest {
                         // Second read from callback invoked on single-threaded executor throws an
                         // exception because previous read is still pending until its completion is
                         // handled on executor.
-                        Exception e =
-                                assertThrows(
-                                        Exception.class,
-                                        () -> stream.read(ByteBuffer.allocateDirect(5)));
+                        ByteBuffer buffer = ByteBuffer.allocateDirect(5);
+                        Exception e = assertThrows(Exception.class, () -> stream.read(buffer));
                         assertThat(e).hasMessageThat().isEqualTo("Unexpected read attempt.");
                     }
                 };
@@ -1659,12 +1649,9 @@ public class BidirectionalStreamTest {
             FailureType failureType, ResponseStep failureStep, boolean expectError) {
         // Use a fresh CronetEngine each time so Http2 session is not reused.
         ExperimentalCronetEngine.Builder builder =
-                new ExperimentalCronetEngine.Builder(mTestRule.getTestFramework().getContext());
-        // TODO(crbug.com/40284777): Fallback to MockCertVerifier when custom CAs are not supported.
-        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.M) {
-            CronetTestUtil.setMockCertVerifierForTesting(
-                    builder, QuicTestServer.createMockCertVerifier());
-        }
+                (ExperimentalCronetEngine.Builder)
+                        new NativeCronetProvider(mTestRule.getTestFramework().getContext())
+                                .createBuilder();
         mCronetEngine = builder.build();
         TestBidirectionalStreamCallback callback = new TestBidirectionalStreamCallback();
         callback.setFailure(failureType, failureStep);
@@ -2060,9 +2047,8 @@ public class BidirectionalStreamTest {
             // itself at bind time, not at request execution time.
             // Note: this will never happen in prod, as translation failure can only happen if we're
             // given a fake networkHandle.
-            assertThrows(
-                    IllegalArgumentException.class,
-                    () -> builder.bindToNetwork(-150 /* invalid network handle */).build());
+            builder.bindToNetwork(-150 /* invalid network handle */);
+            assertThrows(IllegalArgumentException.class, () -> builder.build());
             return;
         }
 
@@ -2082,12 +2068,10 @@ public class BidirectionalStreamTest {
     }
 
     @Test
-    // TODO(crbug.com/41494733): Enable on Android M once fixed.
-    @RequiresMinAndroidApi(Build.VERSION_CODES.N)
     public void testBindToDefaultNetworkSucceeds() {
-        ConnectivityManagerDelegate delegate =
-                new ConnectivityManagerDelegate(mTestRule.getTestFramework().getContext());
-        Network defaultNetwork = delegate.getDefaultNetwork();
+        ConnectivityManagerWrapper wrapper =
+                new ConnectivityManagerWrapper(mTestRule.getTestFramework().getContext());
+        Network defaultNetwork = wrapper.getDefaultNetwork();
         assume().that(defaultNetwork).isNotNull();
 
         String url = Http2TestServer.getEchoMethodUrl();

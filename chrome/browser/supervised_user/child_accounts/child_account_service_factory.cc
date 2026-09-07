@@ -5,16 +5,17 @@
 #include "chrome/browser/supervised_user/child_accounts/child_account_service_factory.h"
 
 #include "base/check.h"
+#include "base/check_deref.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_key.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/supervised_user/child_accounts/list_family_members_service_factory.h"
+#include "chrome/browser/supervised_user/family_link_settings_service_factory.h"
 #include "chrome/browser/supervised_user/supervised_user_browser_utils.h"
-#include "chrome/browser/supervised_user/supervised_user_service_factory.h"
-#include "chrome/browser/sync/sync_service_factory.h"
 #include "components/prefs/pref_service.h"
 #include "components/supervised_user/core/browser/child_account_service.h"
+#include "components/supervised_user/core/browser/family_link_settings_service.h"
 #include "components/supervised_user/core/common/features.h"
 
 // static
@@ -34,11 +35,10 @@ ChildAccountServiceFactory::ChildAccountServiceFactory()
     : ProfileKeyedServiceFactory(
           "ChildAccountService",
           supervised_user::BuildProfileSelectionsForRegularAndGuest()) {
+  // Source of truth for the supervision status.
   DependsOn(IdentityManagerFactory::GetInstance());
-  DependsOn(SyncServiceFactory::GetInstance());
-  // Required to consume changes indicated by this service.
-  DependsOn(SupervisedUserServiceFactory::GetInstance());
-  DependsOn(ListFamilyMembersServiceFactory::GetInstance());
+  // Consumer that shall be activated according to supervision status.
+  DependsOn(supervised_user::FamilyLinkSettingsServiceFactory::GetInstance());
 }
 
 ChildAccountServiceFactory::~ChildAccountServiceFactory() = default;
@@ -49,12 +49,9 @@ ChildAccountServiceFactory::BuildServiceInstanceForBrowserContext(
   Profile* profile = static_cast<Profile*>(context);
 
   CHECK(profile->GetPrefs());
-  CHECK(ListFamilyMembersServiceFactory::GetForProfile(profile));
-  CHECK(SupervisedUserServiceFactory::GetForProfile(profile));
-
   return std::make_unique<supervised_user::ChildAccountService>(
       *profile->GetPrefs(), IdentityManagerFactory::GetForProfile(profile),
-      profile->GetURLLoaderFactory(),
-      base::BindOnce(&supervised_user::AssertChildStatusOfTheUser, profile),
-      *ListFamilyMembersServiceFactory::GetForProfile(profile));
+      CHECK_DEREF(supervised_user::FamilyLinkSettingsServiceFactory::GetForKey(
+          profile->GetProfileKey())),
+      base::BindOnce(&supervised_user::AssertChildStatusOfTheUser, profile));
 }

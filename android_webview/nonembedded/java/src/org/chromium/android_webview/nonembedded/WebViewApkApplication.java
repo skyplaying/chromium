@@ -29,7 +29,6 @@ import org.chromium.base.version_info.VersionConstants;
 import org.chromium.build.BuildConfig;
 import org.chromium.components.crash.CustomAssertionHandler;
 import org.chromium.components.crash.PureJavaExceptionHandler;
-import org.chromium.components.embedder_support.application.FontPreloadingWorkaround;
 import org.chromium.ui.base.ResourceBundle;
 
 /**
@@ -75,7 +74,6 @@ public class WebViewApkApplication extends Application {
     public void onCreate() {
         super.onCreate();
         checkForAppRecovery();
-        FontPreloadingWorkaround.maybeInstallWorkaround(this);
     }
 
     public static void checkForAppRecovery() {
@@ -132,23 +130,17 @@ public class WebViewApkApplication extends Application {
         assert ThreadUtils.runningOnUiThread()
                 : "WebViewApkApplication#ensureNativeInitialized should only be called on the"
                         + " UIThread";
-        try {
-            if (LibraryLoader.getInstance().isInitialized()) {
-                return true;
-            }
-            // Should not call LibraryLoader.initialize() since this will reset UmaRecorder
-            // delegate.
-            LibraryLoader.getInstance()
-                    .setLibraryProcessType(LibraryProcessType.PROCESS_WEBVIEW_NONEMBEDDED);
-            LibraryLoader.getInstance().ensureInitialized();
-            LibraryLoader.getInstance().switchCommandLineForWebView();
-            WebViewApkApplicationJni.get().initializeGlobalsAndResources();
+        if (LibraryLoader.getInstance().isInitialized()) {
             return true;
-        } catch (Throwable unused) {
-            // Happens for WebView Stub. Throws NoClassDefFoundError because of no
-            // NativeLibraries.java being generated.
-            return false;
         }
+        // Should not call LibraryLoader.initialize() since this will reset UmaRecorder
+        // delegate.
+        LibraryLoader.getInstance()
+                .setLibraryProcessType(LibraryProcessType.PROCESS_WEBVIEW_NONEMBEDDED);
+        LibraryLoader.getInstance().ensureInitialized();
+        LibraryLoader.getInstance().switchCommandLineForWebView();
+        WebViewApkApplicationJni.get().initializeGlobalsAndResources();
+        return true;
     }
 
     @NativeMethods

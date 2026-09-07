@@ -1050,11 +1050,6 @@ void GLES2TraceImplementation::ShaderSource(GLuint shader,
   gl_->ShaderSource(shader, count, str, length);
 }
 
-void GLES2TraceImplementation::ShallowFinishCHROMIUM() {
-  TRACE_EVENT_BINARY_EFFICIENT0("gpu", "GLES2Trace::ShallowFinishCHROMIUM");
-  gl_->ShallowFinishCHROMIUM();
-}
-
 void GLES2TraceImplementation::OrderingBarrierCHROMIUM() {
   TRACE_EVENT_BINARY_EFFICIENT0("gpu", "GLES2Trace::OrderingBarrierCHROMIUM");
   gl_->OrderingBarrierCHROMIUM();
@@ -1860,11 +1855,6 @@ GLuint GLES2TraceImplementation::GetMaxValueInBufferCHROMIUM(GLuint buffer_id,
   return gl_->GetMaxValueInBufferCHROMIUM(buffer_id, count, type, offset);
 }
 
-GLboolean GLES2TraceImplementation::EnableFeatureCHROMIUM(const char* feature) {
-  TRACE_EVENT_BINARY_EFFICIENT0("gpu", "GLES2Trace::EnableFeatureCHROMIUM");
-  return gl_->EnableFeatureCHROMIUM(feature);
-}
-
 void* GLES2TraceImplementation::MapBufferCHROMIUM(GLuint target,
                                                   GLenum access) {
   TRACE_EVENT_BINARY_EFFICIENT0("gpu", "GLES2Trace::MapBufferCHROMIUM");
@@ -1888,26 +1878,6 @@ void GLES2TraceImplementation::UnmapBufferSubDataCHROMIUM(const void* mem) {
   TRACE_EVENT_BINARY_EFFICIENT0("gpu",
                                 "GLES2Trace::UnmapBufferSubDataCHROMIUM");
   gl_->UnmapBufferSubDataCHROMIUM(mem);
-}
-
-void* GLES2TraceImplementation::MapBufferRange(GLenum target,
-                                               GLintptr offset,
-                                               GLsizeiptr size,
-                                               GLbitfield access) {
-  TRACE_EVENT_BINARY_EFFICIENT0("gpu", "GLES2Trace::MapBufferRange");
-  return gl_->MapBufferRange(target, offset, size, access);
-}
-
-GLboolean GLES2TraceImplementation::UnmapBuffer(GLenum target) {
-  TRACE_EVENT_BINARY_EFFICIENT0("gpu", "GLES2Trace::UnmapBuffer");
-  return gl_->UnmapBuffer(target);
-}
-
-void GLES2TraceImplementation::FlushMappedBufferRange(GLenum target,
-                                                      GLintptr offset,
-                                                      GLsizeiptr size) {
-  TRACE_EVENT_BINARY_EFFICIENT0("gpu", "GLES2Trace::FlushMappedBufferRange");
-  gl_->FlushMappedBufferRange(target, offset, size);
 }
 
 void* GLES2TraceImplementation::MapTexSubImage2DCHROMIUM(GLenum target,
@@ -2131,6 +2101,14 @@ GLuint GLES2TraceImplementation::GetLastFlushIdCHROMIUM() {
 void GLES2TraceImplementation::SetActiveURLCHROMIUM(const char* url) {
   TRACE_EVENT_BINARY_EFFICIENT0("gpu", "GLES2Trace::SetActiveURLCHROMIUM");
   gl_->SetActiveURLCHROMIUM(url);
+}
+
+void GLES2TraceImplementation::GetBufferSubDataCHROMIUM(GLenum target,
+                                                        GLintptr offset,
+                                                        GLsizeiptr size,
+                                                        void* data) {
+  TRACE_EVENT_BINARY_EFFICIENT0("gpu", "GLES2Trace::GetBufferSubDataCHROMIUM");
+  gl_->GetBufferSubDataCHROMIUM(target, offset, size, data);
 }
 
 void GLES2TraceImplementation::ContextVisibilityHintCHROMIUM(
@@ -2390,21 +2368,24 @@ void GLES2TraceImplementation::ProvokingVertexANGLE(GLenum provokeMode) {
 
 void GLES2TraceImplementation::FramebufferMemorylessPixelLocalStorageANGLE(
     GLint plane,
-    GLenum internalformat) {
+    GLenum internalformat,
+    GLbitfield usage) {
   TRACE_EVENT_BINARY_EFFICIENT0(
       "gpu", "GLES2Trace::FramebufferMemorylessPixelLocalStorageANGLE");
-  gl_->FramebufferMemorylessPixelLocalStorageANGLE(plane, internalformat);
+  gl_->FramebufferMemorylessPixelLocalStorageANGLE(plane, internalformat,
+                                                   usage);
 }
 
 void GLES2TraceImplementation::FramebufferTexturePixelLocalStorageANGLE(
     GLint plane,
     GLuint backingtexture,
     GLint level,
-    GLint layer) {
+    GLint layer,
+    GLbitfield usage) {
   TRACE_EVENT_BINARY_EFFICIENT0(
       "gpu", "GLES2Trace::FramebufferTexturePixelLocalStorageANGLE");
   gl_->FramebufferTexturePixelLocalStorageANGLE(plane, backingtexture, level,
-                                                layer);
+                                                layer, usage);
 }
 
 void GLES2TraceImplementation::FramebufferPixelLocalClearValuefvANGLE(
@@ -2446,6 +2427,12 @@ void GLES2TraceImplementation::EndPixelLocalStorageANGLE(
   gl_->EndPixelLocalStorageANGLE(count, storeops);
 }
 
+void GLES2TraceImplementation::EndPixelLocalStorageImplicitANGLE() {
+  TRACE_EVENT_BINARY_EFFICIENT0(
+      "gpu", "GLES2Trace::EndPixelLocalStorageImplicitANGLE");
+  gl_->EndPixelLocalStorageImplicitANGLE();
+}
+
 void GLES2TraceImplementation::PixelLocalStorageBarrierANGLE() {
   TRACE_EVENT_BINARY_EFFICIENT0("gpu",
                                 "GLES2Trace::PixelLocalStorageBarrierANGLE");
@@ -2480,6 +2467,15 @@ void GLES2TraceImplementation::GetFramebufferPixelLocalStorageParameterivANGLE(
   TRACE_EVENT_BINARY_EFFICIENT0(
       "gpu", "GLES2Trace::GetFramebufferPixelLocalStorageParameterivANGLE");
   gl_->GetFramebufferPixelLocalStorageParameterivANGLE(plane, pname, params);
+}
+
+void GLES2TraceImplementation::GetFramebufferPixelLocalStorageParameteruivANGLE(
+    GLint plane,
+    GLenum pname,
+    GLuint* params) {
+  TRACE_EVENT_BINARY_EFFICIENT0(
+      "gpu", "GLES2Trace::GetFramebufferPixelLocalStorageParameteruivANGLE");
+  gl_->GetFramebufferPixelLocalStorageParameteruivANGLE(plane, pname, params);
 }
 
 void GLES2TraceImplementation::ClipControlEXT(GLenum origin, GLenum depth) {

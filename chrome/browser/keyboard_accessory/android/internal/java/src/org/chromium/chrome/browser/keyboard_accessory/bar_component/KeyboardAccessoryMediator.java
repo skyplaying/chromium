@@ -14,18 +14,26 @@ import static org.chromium.chrome.browser.keyboard_accessory.bar_component.Keybo
 import static org.chromium.chrome.browser.keyboard_accessory.bar_component.KeyboardAccessoryProperties.HAS_SUGGESTIONS;
 import static org.chromium.chrome.browser.keyboard_accessory.bar_component.KeyboardAccessoryProperties.OBFUSCATED_CHILD_AT_CALLBACK;
 import static org.chromium.chrome.browser.keyboard_accessory.bar_component.KeyboardAccessoryProperties.ON_TOUCH_EVENT_CALLBACK;
+import static org.chromium.chrome.browser.keyboard_accessory.bar_component.KeyboardAccessoryProperties.SELECTED_SUGGESTION_INDEX;
 import static org.chromium.chrome.browser.keyboard_accessory.bar_component.KeyboardAccessoryProperties.SHEET_OPENER_ITEM;
 import static org.chromium.chrome.browser.keyboard_accessory.bar_component.KeyboardAccessoryProperties.SHOW_SWIPING_IPH;
 import static org.chromium.chrome.browser.keyboard_accessory.bar_component.KeyboardAccessoryProperties.SKIP_CLOSING_ANIMATION;
 import static org.chromium.chrome.browser.keyboard_accessory.bar_component.KeyboardAccessoryProperties.STYLE;
 import static org.chromium.chrome.browser.keyboard_accessory.bar_component.KeyboardAccessoryProperties.VISIBLE;
 
+import android.content.Context;
+
 import androidx.annotation.StringRes;
 
+import org.chromium.base.DeviceInfo;
 import org.chromium.base.ObserverList;
 import org.chromium.base.TraceEvent;
+import org.chromium.base.TriState;
+import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.autofill.autofill_ai.EntityDataManager;
+import org.chromium.chrome.browser.autofill.autofill_ai.EntityDataManagerFactory;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.keyboard_accessory.AccessoryAction;
 import org.chromium.chrome.browser.keyboard_accessory.KeyboardAccessoryVisualStateProvider;
@@ -45,12 +53,24 @@ import org.chromium.chrome.browser.keyboard_accessory.data.Provider;
 import org.chromium.chrome.browser.keyboard_accessory.sheet_component.AccessorySheetCoordinator;
 import org.chromium.chrome.browser.keyboard_accessory.utils.ManualFillingMetricsRecorder;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.components.autofill.AutofillAiPayload;
 import org.chromium.components.autofill.AutofillDelegate;
 import org.chromium.components.autofill.AutofillSuggestion;
 import org.chromium.components.autofill.FillingProduct;
 import org.chromium.components.autofill.FillingProductBridge;
 import org.chromium.components.autofill.SuggestionType;
+import org.chromium.components.autofill.autofill_ai.EntityInstance;
+import org.chromium.components.autofill.autofill_ai.EntityType;
+import org.chromium.components.autofill.autofill_ai.EntityTypeName;
+import org.chromium.components.autofill.autofill_ai.RecordType;
+import org.chromium.components.browser_ui.widget.ActionConfirmationDialog;
+import org.chromium.components.browser_ui.widget.ActionConfirmationDialog.ConfirmationDialogParams;
+import org.chromium.components.browser_ui.widget.ActionConfirmationDialog.DialogDismissType;
+import org.chromium.components.browser_ui.widget.ActionConfirmationDialog.DismissHandler;
+import org.chromium.components.browser_ui.widget.StrictButtonPressController.ButtonClickResult;
 import org.chromium.components.feature_engagement.FeatureConstants;
+import org.chromium.ui.modaldialog.ModalDialogManager;
+import org.chromium.ui.modelutil.ListModel;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyObservable;
@@ -72,34 +92,44 @@ class KeyboardAccessoryMediator
         implements PropertyObservable.PropertyObserver<PropertyKey>,
                 Provider.Observer<Action[]>,
                 KeyboardAccessoryButtonGroupCoordinator.AccessoryTabObserver {
+    private static final String UMA_AUTOFILL_AI_SETTINGS_LINKOUT_DIALOG =
+            "Autofill.Ai.SettingsLinkoutDialog";
+
+    private final Context mContext;
     private final PropertyModel mModel;
     private final BarVisibilityDelegate mBarVisibilityDelegate;
     private final AccessorySheetCoordinator.SheetVisibilityDelegate mSheetVisibilityDelegate;
     private final TabSwitchingDelegate mTabSwitcher;
     private final Supplier<Integer> mBackgroundColorSupplier;
-    private final Supplier<Boolean> mIsLargeFormFactorSupplier;
     private final Profile mProfile;
-    private @Nullable Boolean mHasFilteredTouchEvent;
+    private final @Nullable ActionConfirmationDialog mDialog;
     private final ObserverList<KeyboardAccessoryVisualStateProvider.Observer> mVisualObservers =
             new ObserverList<>();
 
+    private @TriState int mHasFilteredTouchEvent;
+
     KeyboardAccessoryMediator(
+            Context context,
             PropertyModel model,
             Profile profile,
+            ModalDialogManager modalDialogManager,
             BarVisibilityDelegate barVisibilityDelegate,
             AccessorySheetCoordinator.SheetVisibilityDelegate sheetVisibilityDelegate,
             TabSwitchingDelegate tabSwitcher,
             KeyboardAccessoryButtonGroupCoordinator.SheetOpenerCallbacks sheetOpenerCallbacks,
             Supplier<Integer> backgroundColorSupplier,
-            Supplier<Boolean> isLargeFormFactorSupplier,
             Runnable dismissRunnable) {
+        mContext = context;
         mModel = model;
         mProfile = profile;
         mBarVisibilityDelegate = barVisibilityDelegate;
         mSheetVisibilityDelegate = sheetVisibilityDelegate;
         mTabSwitcher = tabSwitcher;
         mBackgroundColorSupplier = backgroundColorSupplier;
-        mIsLargeFormFactorSupplier = isLargeFormFactorSupplier;
+        mDialog =
+                modalDialogManager != null
+                        ? new ActionConfirmationDialog(context, modalDialogManager)
+                        : null;
 
         // Add mediator as observer so it can use model changes as signal for accessory visibility.
         mModel.set(OBFUSCATED_CHILD_AT_CALLBACK, this::onSuggestionObfuscatedAt);
@@ -123,6 +153,9 @@ class KeyboardAccessoryMediator
      *     views.
      */
     void setSuggestions(List<AutofillSuggestion> suggestions, AutofillDelegate delegate) {
+        // TODO(crbug.com/542535472): Identify and restore the selected element across suggestion
+        // updates to avoid losing selection on async loads.
+        mModel.set(SELECTED_SUGGESTION_INDEX, null);
         List<BarItem> retainedItems = collectItemsToRetain(AccessoryAction.AUTOFILL_SUGGESTION);
         retainedItems.addAll(toBarItems(suggestions, delegate));
         setBarContents(retainedItems);
@@ -135,6 +168,26 @@ class KeyboardAccessoryMediator
             }
         }
         return false;
+    }
+
+    /**
+     * Updates the visual selection/hover state of the suggestion chips in the accessory bar to
+     * match the given {@code suggestionIndex} (which refers to the original index in the backend
+     * suggestions list). If no item matches (or if {@code suggestionIndex} is {@code null}), all
+     * suggestion items are unselected.
+     *
+     * <p>This method is a pure UI synchronizer for absolute selection (e.g., when hover or
+     * selection is driven externally by mouse/touch or when clearing preview). It deliberately does
+     * NOT notify {@link AutofillDelegate#suggestionSelectionStateChanged} to avoid circular or
+     * duplicate callback events.
+     *
+     * @param suggestionIndex The original index of the suggestion in the backend list to select, or
+     *     {@code null} to clear selection.
+     */
+    void setSelectedSuggestion(@Nullable Integer suggestionIndex) {
+        assert suggestionIndex == null || suggestionIndex >= 0
+                : "Suggestion index must be null or non-negative: " + suggestionIndex;
+        mModel.set(SELECTED_SUGGESTION_INDEX, suggestionIndex);
     }
 
     @Override
@@ -223,14 +276,10 @@ class KeyboardAccessoryMediator
         return scrollableItems;
     }
 
-    private List<BarItem> ungroupBarItems(Iterable<BarItem> scrollableItems) {
-        List<BarItem> barItems = new ArrayList<>();
+    private List<ActionBarItem> ungroupBarItems(Iterable<BarItem> scrollableItems) {
+        List<ActionBarItem> barItems = new ArrayList<>();
         for (BarItem barItem : scrollableItems) {
-            if (barItem instanceof GroupBarItem) {
-                barItems.addAll(barItem.getActionBarItems());
-            } else {
-                barItems.add(barItem);
-            }
+            barItems.addAll(barItem.getActionBarItems());
         }
         return barItems;
     }
@@ -249,48 +298,16 @@ class KeyboardAccessoryMediator
         return retainedItems;
     }
 
-    /**
-     * Next to the regular suggestion that we always want to show, there is a number of special
-     * suggestions which we want to suppress (e.g. replaced entry points, old warnings, separators).
-     *
-     * @param suggestion This {@link AutofillSuggestion} will be checked for usefulness.
-     * @return True iff the suggestion should be displayed.
-     */
-    private boolean shouldShowSuggestion(AutofillSuggestion suggestion) {
-        switch (suggestion.getSuggestionType()) {
-            case SuggestionType.INSECURE_CONTEXT_PAYMENT_DISABLED_MESSAGE:
-            // The insecure context warning has a replacement in the fallback sheet.
-            case SuggestionType.TITLE:
-            case SuggestionType.SEPARATOR:
-            case SuggestionType.UNDO_OR_CLEAR:
-            case SuggestionType.ALL_SAVED_PASSWORDS_ENTRY:
-            case SuggestionType.GENERATE_PASSWORD_ENTRY:
-            case SuggestionType.MANAGE_ADDRESS:
-            case SuggestionType.MANAGE_AUTOFILL_AI:
-            case SuggestionType.MANAGE_CREDIT_CARD:
-            case SuggestionType.MANAGE_IBAN:
-            case SuggestionType.MANAGE_PLUS_ADDRESS:
-            case SuggestionType.MANAGE_LOYALTY_CARD:
-                return false;
-            case SuggestionType.AUTOCOMPLETE_ENTRY:
-            case SuggestionType.PASSWORD_ENTRY:
-            case SuggestionType.DATALIST_ENTRY:
-            case SuggestionType.SCAN_CREDIT_CARD:
-            case SuggestionType.ACCOUNT_STORAGE_PASSWORD_ENTRY:
-                return true;
-        }
-        return true; // If it's not a special id, show the regular suggestion!
-    }
-
     private List<AutofillBarItem> toBarItems(
             List<AutofillSuggestion> suggestions, AutofillDelegate delegate) {
         List<AutofillBarItem> barItems = new ArrayList<>(suggestions.size());
-        for (int position = 0; position < suggestions.size(); ++position) {
-            AutofillSuggestion suggestion = suggestions.get(position);
-            if (!shouldShowSuggestion(suggestion)) continue;
+        for (AutofillSuggestion suggestion : suggestions) {
             barItems.add(
                     new AutofillBarItem(
-                            suggestion, createAutofillAction(delegate, position), mProfile));
+                            suggestion,
+                            createAutofillAction(
+                                    delegate, suggestion.getOriginalIndex(), suggestion),
+                            mProfile));
         }
 
         // Annotates the first suggestion in with an in-product help bubble. For password
@@ -324,15 +341,133 @@ class KeyboardAccessoryMediator
         return barItems;
     }
 
-    private Action createAutofillAction(AutofillDelegate delegate, int pos) {
+    private Action createAutofillAction(
+            AutofillDelegate delegate, int pos, AutofillSuggestion suggestion) {
         return new Action(
                 AccessoryAction.AUTOFILL_SUGGESTION,
                 result -> {
                     ManualFillingMetricsRecorder.recordActionSelected(
                             AccessoryAction.AUTOFILL_SUGGESTION);
-                    delegate.suggestionSelected(pos);
+                    if (suggestion.showLoadingOnAcceptance()) {
+                        showLoadingUIOnSuggestion(suggestion);
+                    }
+                    delegate.suggestionAccepted(pos, suggestion.showLoadingOnAcceptance());
                 },
-                result -> delegate.deleteSuggestion(pos));
+                result -> {
+                    if (maybeShowDialogOnLongPress(delegate, suggestion)) {
+                        return;
+                    }
+                    delegate.deleteSuggestion(pos);
+                },
+                ChromeFeatureList.isEnabled(
+                                ChromeFeatureList.AUTOFILL_ANDROID_KEYBOARD_ACCESSORY_HOVER_PREVIEW)
+                        ? selected -> delegate.suggestionSelectionStateChanged(pos, selected)
+                        : null);
+    }
+
+    private boolean maybeShowDialogOnLongPress(
+            AutofillDelegate delegate, AutofillSuggestion suggestion) {
+        AutofillAiPayload payload = suggestion.getAutofillAiPayload();
+        if (payload == null || mDialog == null) {
+            return false;
+        }
+        EntityDataManager entityDataManager = EntityDataManagerFactory.getForProfile(mProfile);
+        if (entityDataManager == null) {
+            return false;
+        }
+        EntityInstance entityInstance = entityDataManager.getEntityInstance(payload.getGuid());
+        if (entityInstance == null
+                || entityInstance.getRecordType() != RecordType.PERSONAL_CONTEXT
+                || !shouldOpenSettingsForEntityType(entityInstance.getEntityType().getTypeName())) {
+            return false;
+        }
+        String sublabel = suggestion.getSublabel();
+        if (sublabel == null) {
+            return false;
+        }
+        mDialog.show(
+                new ConfirmationDialogParams.Builder(mContext)
+                        .withTitle(sublabel)
+                        .withDescription(
+                                mContext.getString(
+                                        R.string
+                                                .autofill_ai_suggestion_long_press_dialog_description))
+                        .withPositiveButton(
+                                mContext.getString(
+                                        R.string
+                                                .autofill_ai_suggestion_long_press_dialog_positive_button))
+                        .withNegativeButton(
+                                mContext.getString(
+                                        R.string
+                                                .autofill_ai_suggestion_long_press_dialog_negative_button))
+                        .build(),
+                (dismissHandler, buttonClickResult, stopShowing) ->
+                        handleDialogAction(
+                                delegate,
+                                entityInstance.getEntityType(),
+                                dismissHandler,
+                                buttonClickResult,
+                                stopShowing));
+        return true;
+    }
+
+    private boolean shouldOpenSettingsForEntityType(@EntityTypeName int entityType) {
+        switch (entityType) {
+            case EntityTypeName.PASSPORT:
+            case EntityTypeName.DRIVERS_LICENSE:
+            case EntityTypeName.NATIONAL_ID_CARD:
+            case EntityTypeName.KNOWN_TRAVELER_NUMBER:
+            case EntityTypeName.REDRESS_NUMBER:
+            case EntityTypeName.VEHICLE:
+            case EntityTypeName.ORDER:
+            case EntityTypeName.FLIGHT_RESERVATION:
+            case EntityTypeName.SHIPMENT:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private @DialogDismissType int handleDialogAction(
+            AutofillDelegate delegate,
+            EntityType entityType,
+            DismissHandler unusedDismissHandler,
+            @ButtonClickResult int buttonClickResult,
+            boolean unusedStopShowing) {
+        boolean isPositive = buttonClickResult == ButtonClickResult.POSITIVE;
+        RecordHistogram.recordBooleanHistogram(
+                UMA_AUTOFILL_AI_SETTINGS_LINKOUT_DIALOG + "."
+                        + entityType.getTypeNameAsMetricsString(),
+                isPositive);
+        if (isPositive) {
+            // Need to go through C++ because `SettingsNavigationHelper` is in `chrome_java`.
+            // Keyboard accessory Java code should not depend on `chrome_java`.
+            delegate.openSettingsForEntityType(entityType.getTypeName());
+        }
+        return DialogDismissType.DISMISS_IMMEDIATELY;
+    }
+
+    private void updateActionBarItemsState(
+            ListModel<BarItem> barItems, AutofillSuggestion acceptedSuggestion) {
+        // Ungroup the elements, make all elements disabled and show loading UI for the accepted
+        // item.
+        List<ActionBarItem> listOfBarItems = ungroupBarItems(barItems);
+        for (ActionBarItem actionBarItem : listOfBarItems) {
+            actionBarItem.setEnabled(false);
+            if (actionBarItem instanceof AutofillBarItem autofillBarItem) {
+                autofillBarItem.setLoading(
+                        autofillBarItem.getSuggestion().equals(acceptedSuggestion));
+            }
+        }
+        // Update the UI once the data model is updated.
+        for (int i = 0; i < barItems.size(); i++) {
+            barItems.update(i, barItems.get(i));
+        }
+    }
+
+    private void showLoadingUIOnSuggestion(AutofillSuggestion acceptedSuggestion) {
+        updateActionBarItemsState(mModel.get(BAR_ITEMS), acceptedSuggestion);
+        updateActionBarItemsState(mModel.get(BAR_ITEMS_FIXED), acceptedSuggestion);
     }
 
     private @BarItem.Type int toBarItemType(@AccessoryAction int accessoryAction) {
@@ -364,12 +499,18 @@ class KeyboardAccessoryMediator
     void dismiss() {
         mTabSwitcher.closeActiveTab();
         mModel.set(VISIBLE, false);
-        if (!(mHasFilteredTouchEvent == null || mHasFilteredTouchEvent)) {
+        if (mModel.get(SHEET_OPENER_ITEM) != null) {
+            mModel.get(SHEET_OPENER_ITEM).setEnabled(true);
+        }
+        if (mModel.get(DISMISS_ITEM) != null) {
+            mModel.get(DISMISS_ITEM).setEnabled(true);
+        }
+        if (mHasFilteredTouchEvent == TriState.FALSE) {
             // Log the metric if the accessory received touch events, but none of them were
             // filtered.
             ManualFillingMetricsRecorder.recordHasFilteredTouchEvents(false);
         }
-        mHasFilteredTouchEvent = null;
+        mHasFilteredTouchEvent = TriState.NOT_SET;
     }
 
     @Override
@@ -399,6 +540,7 @@ class KeyboardAccessoryMediator
                 || propertyKey == SHOW_SWIPING_IPH
                 || propertyKey == HAS_SUGGESTIONS
                 || propertyKey == HAS_STICKY_LAST_ITEM
+                || propertyKey == SELECTED_SUGGESTION_INDEX
                 || propertyKey == ANIMATE_SUGGESTIONS_FROM_TOP
                 || propertyKey == ANIMATION_LISTENER
                 || propertyKey == BAR_ITEMS_FIXED) {
@@ -422,16 +564,16 @@ class KeyboardAccessoryMediator
 
     private void onTouchEvent(boolean eventFiltered) {
         if (!eventFiltered) {
-            if (mHasFilteredTouchEvent == null) {
-                mHasFilteredTouchEvent = false;
+            if (mHasFilteredTouchEvent == TriState.NOT_SET) {
+                mHasFilteredTouchEvent = TriState.FALSE;
             }
             return;
         }
-        if (mHasFilteredTouchEvent == null || !mHasFilteredTouchEvent) {
+        if (mHasFilteredTouchEvent != TriState.TRUE) {
             // Log the metric if none of the previous touch events were filtered.
             ManualFillingMetricsRecorder.recordHasFilteredTouchEvents(true);
         }
-        mHasFilteredTouchEvent = true;
+        mHasFilteredTouchEvent = TriState.TRUE;
     }
 
     /**
@@ -453,7 +595,7 @@ class KeyboardAccessoryMediator
         if (style.isDocked()) {
             mModel.get(BAR_ITEMS).set(createGroupBarItem(mModel.get(BAR_ITEMS)));
         } else {
-            mModel.get(BAR_ITEMS).set(ungroupBarItems(mModel.get(BAR_ITEMS)));
+            mModel.get(BAR_ITEMS).set(new ArrayList<>(ungroupBarItems(mModel.get(BAR_ITEMS))));
         }
     }
 
@@ -514,8 +656,14 @@ class KeyboardAccessoryMediator
      * @return whether the width of the suggestion is allowed to be limited.
      */
     private static boolean canLimitWidth(@SuggestionType int suggestionType) {
-        return FillingProductBridge.getFillingProductFromSuggestionType(suggestionType)
-                == FillingProduct.ADDRESS;
+        @FillingProduct
+        final int fillingProduct =
+                FillingProductBridge.getFillingProductFromSuggestionType(suggestionType);
+        if (fillingProduct == FillingProduct.AUTOFILL_AI) {
+            return ChromeFeatureList.isEnabled(
+                    ChromeFeatureList.AUTOFILL_AI_LIMIT_SUGGESTION_WIDTH);
+        }
+        return fillingProduct == FillingProduct.ADDRESS;
     }
 
     private @StringRes int getCaptionId(@AccessoryAction int actionType) {
@@ -553,17 +701,13 @@ class KeyboardAccessoryMediator
     }
 
     private boolean showFloatingKeyboardAccessory() {
-        return mIsLargeFormFactorSupplier.get()
+        return DeviceInfo.isDesktop()
                 && ChromeFeatureList.isEnabled(
                         ChromeFeatureList.AUTOFILL_ANDROID_DESKTOP_KEYBOARD_ACCESSORY_REVAMP);
     }
 
     private boolean shouldLimitSuggestionWidth() {
-        return !showFloatingKeyboardAccessory()
-                && ChromeFeatureList.isEnabled(
-                        ChromeFeatureList.AUTOFILL_ENABLE_KEYBOARD_ACCESSORY_CHIP_REDESIGN)
-                && ChromeFeatureList.isEnabled(
-                        ChromeFeatureList.AUTOFILL_ENABLE_KEYBOARD_ACCESSORY_CHIP_WIDTH_ADJUSTMENT);
+        return !showFloatingKeyboardAccessory();
     }
 
     void addObserver(KeyboardAccessoryVisualStateProvider.Observer observer) {

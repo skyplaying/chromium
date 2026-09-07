@@ -13,12 +13,13 @@
 #include "base/run_loop.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/win/registry.h"
 #include "base/win/windows_version.h"
 #include "chrome/browser/importer/external_process_importer_host.h"
 #include "chrome/browser/importer/importer_progress_observer.h"
 #include "chrome/browser/importer/importer_unittest_utils.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/importer/edge_importer_utils_win.h"
 #include "chrome/common/importer/importer_bridge.h"
@@ -230,7 +231,7 @@ IN_PROC_BROWSER_TEST_F(EdgeImporterBrowserTest, EdgeImporter) {
   source_profile.importer_type = user_data_importer::TYPE_EDGE;
   source_profile.source_path = temp_path.AppendASCII("edge_profile");
 
-  host->StartImportSettings(source_profile, browser()->profile(),
+  host->StartImportSettings(source_profile, browser()->GetProfile(),
                             user_data_importer::FAVORITES, observer.get());
   loop.Run();
 }
@@ -278,7 +279,7 @@ IN_PROC_BROWSER_TEST_F(EdgeImporterBrowserTest, EdgeImporterLegacyFallback) {
   }
   source_profile.source_path = source_path;
 
-  host->StartImportSettings(source_profile, browser()->profile(),
+  host->StartImportSettings(source_profile, browser()->GetProfile(),
                             user_data_importer::FAVORITES, observer.get());
   loop.Run();
 }
@@ -306,7 +307,7 @@ IN_PROC_BROWSER_TEST_F(EdgeImporterBrowserTest, EdgeImporterNoDatabase) {
   source_profile.importer_type = user_data_importer::TYPE_EDGE;
   source_profile.source_path = temp_dir_.GetPath();
 
-  host->StartImportSettings(source_profile, browser()->profile(),
+  host->StartImportSettings(source_profile, browser()->GetProfile(),
                             user_data_importer::FAVORITES, observer.get());
   loop.Run();
 }

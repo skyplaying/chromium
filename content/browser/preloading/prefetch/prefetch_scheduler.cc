@@ -92,11 +92,6 @@ PrefetchSchedulerPriority CalculatePriorityImpl(
 }
 
 bool IsReadyToStartPrefetch(const PrefetchQueue::Item& item) {
-  // Keep this method as similar as much as possible to a lambda in
-  // `PrefetchService::PopNextPrefetchContainer()`.
-  //
-  // TODO(crbug.com/406754449): Remove this comment.
-
   // `prefetch_container` must be valid. It will be ensured by `PrefetchService`
   // in the future.
   //
@@ -421,21 +416,18 @@ void PrefetchScheduler::ProgressOne(
       return;
     }
 
-    base::WeakPtr<PrefetchContainer> prefetch_to_evict = std::get<1>(
-        prefetch_document_manager->CanPrefetchNow(prefetch_container.get()));
-    if (!prefetch_to_evict) {
-      return;
-    }
-
-    {
+    // Cancel existing prefetches until a slot for a new prefetch is ensured.
+    while (base::WeakPtr<PrefetchContainer> prefetch_to_evict =
+               std::get<1>(prefetch_document_manager->CanPrefetchNow(
+                   prefetch_container.get()))) {
       base::AutoReset<bool> guard{&in_eviction_, true};
       prefetch_service_->EvictPrefetch(base::PassKey<PrefetchScheduler>(),
-                                       prefetch_to_evict);
+                                       *prefetch_to_evict);
     }
   }();
 
   const bool is_started = prefetch_service_->StartSinglePrefetch(
-      base::PassKey<PrefetchScheduler>(), prefetch_container);
+      base::PassKey<PrefetchScheduler>(), *prefetch_container);
   if (is_started) {
     active_set_.push_back(prefetch_container);
   }

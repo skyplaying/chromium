@@ -11,6 +11,7 @@
 #include "ash/constants/ash_features.h"
 #include "ash/public/cpp/login_screen.h"
 #include "ash/public/cpp/login_screen_model.h"
+#include "base/check_deref.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/i18n/time_formatting.h"
@@ -21,6 +22,7 @@
 #include "chrome/browser/ash/login/challenge_response_auth_keys_loader.h"
 #include "chrome/browser/ash/login/helper.h"
 #include "chrome/browser/ash/login/lock/screen_locker.h"
+#include "chrome/browser/ash/login/lock/screen_locker_controller.h"
 #include "chrome/browser/ash/login/lock_screen_utils.h"
 #include "chrome/browser/ash/login/mojo_system_info_dispatcher.h"
 #include "chrome/browser/ash/login/quick_unlock/pin_backend.h"
@@ -28,10 +30,8 @@
 #include "chrome/browser/ash/login/quick_unlock/quick_unlock_utils.h"
 #include "chrome/browser/ash/login/screens/chrome_user_selection_screen.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/ash/system/system_clock.h"
 #include "chrome/browser/ui/ash/session/session_controller_client_impl.h"
 #include "chrome/browser/ui/ash/wallpaper/wallpaper_controller_client_impl.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/install_attributes/install_attributes.h"
 #include "components/user_manager/known_user.h"
 #include "components/user_manager/user.h"
@@ -45,12 +45,27 @@
 
 namespace ash {
 
-ViewsScreenLocker::ViewsScreenLocker()
-    : system_info_updater_(std::make_unique<MojoSystemInfoDispatcher>()),
+ViewsScreenLocker::ViewsScreenLocker(
+    PrefService* local_state,
+    const ApplicationLocaleStorage* application_locale_storage,
+    scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
+    policy::BrowserPolicyConnectorAsh* browser_policy_connector_ash,
+    const user_manager::MultiUserSignInPolicyController*
+        multi_user_sign_in_policy_controller,
+    system::SystemClock* system_clock)
+    : local_state_(CHECK_DEREF(local_state)),
+      user_selection_screen_(std::make_unique<ChromeUserSelectionScreen>(
+          local_state,
+          &CHECK_DEREF(application_locale_storage),
+          std::move(shared_url_loader_factory),
+          &CHECK_DEREF(browser_policy_connector_ash),
+          multi_user_sign_in_policy_controller,
+          system_clock,
+          DisplayedScreen::LOCK_SCREEN)),
+      system_info_updater_(std::make_unique<MojoSystemInfoDispatcher>(
+          &CHECK_DEREF(browser_policy_connector_ash))),
       auth_performer_(UserDataAuthClient::Get()) {
   LoginScreenClientImpl::Get()->SetDelegate(this);
-  user_selection_screen_ =
-      std::make_unique<ChromeUserSelectionScreen>(DisplayedScreen::LOCK_SCREEN);
 }
 
 ViewsScreenLocker::~ViewsScreenLocker() {
@@ -114,7 +129,7 @@ void ViewsScreenLocker::HandleAuthenticateUserWithPasswordOrPin(
   auto on_authenticated = base::BindOnce(&ViewsScreenLocker::OnAuthenticated,
                                          weak_factory_.GetWeakPtr(), account_id,
                                          std::move(callback));
-  ScreenLocker::default_screen_locker()->Authenticate(
+  ScreenLockerController::Get().screen_locker()->Authenticate(
       std::move(user_context), std::move(on_authenticated));
 }
 
@@ -126,8 +141,9 @@ void ViewsScreenLocker::HandleAuthenticateUserWithEasyUnlock(
 void ViewsScreenLocker::HandleAuthenticateUserWithChallengeResponse(
     const AccountId& account_id,
     base::OnceCallback<void(bool)> callback) {
-  ScreenLocker::default_screen_locker()->AuthenticateWithChallengeResponse(
-      account_id, std::move(callback));
+  ScreenLockerController::Get()
+      .screen_locker()
+      ->AuthenticateWithChallengeResponse(account_id, std::move(callback));
 }
 
 void ViewsScreenLocker::HandleOnFocusPod(const AccountId& account_id) {
@@ -189,7 +205,8 @@ void ViewsScreenLocker::UpdatePinKeyboardState(const AccountId& account_id) {
 void ViewsScreenLocker::UpdateChallengeResponseAuthAvailability(
     const AccountId& account_id) {
   const bool enable_challenge_response =
-      ChallengeResponseAuthKeysLoader::CanAuthenticateUser(account_id);
+      ChallengeResponseAuthKeysLoader::CanAuthenticateUser(local_state_.get(),
+                                                           account_id);
   LoginScreen::Get()->GetModel()->SetChallengeResponseAuthEnabledForUser(
       account_id, enable_challenge_response);
 }

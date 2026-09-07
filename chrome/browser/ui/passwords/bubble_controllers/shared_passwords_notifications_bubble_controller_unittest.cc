@@ -10,7 +10,9 @@
 #include "chrome/test/base/testing_profile.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
+#include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/test_password_store.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/web_contents_tester.h"
@@ -19,6 +21,7 @@
 
 using base::Bucket;
 using password_manager::PasswordForm;
+using password_manager::PasswordString;
 using testing::Each;
 using testing::Field;
 using testing::Return;
@@ -34,7 +37,7 @@ std::unique_ptr<PasswordForm> CreateUnnoitifiedSharedPasswordForm(
   shared_credentials->url = GURL(kUrl);
   shared_credentials->signon_realm = shared_credentials->url.spec();
   shared_credentials->username_value = username;
-  shared_credentials->password_value = u"12345";
+  shared_credentials->password_value = PasswordString(u"12345");
   shared_credentials->match_type = PasswordForm::MatchType::kExact;
   shared_credentials->type = PasswordForm::Type::kReceivedViaSharing;
   shared_credentials->sharing_notification_displayed = false;
@@ -76,8 +79,8 @@ class SharedPasswordsNotificationBubbleControllerTest : public ::testing::Test {
     std::unique_ptr<password_manager::PasswordForm> shared_credentials2 =
         CreateUnnoitifiedSharedPasswordForm(u"username2");
 
-    store_->AddLogin(*shared_credentials1);
-    store_->AddLogin(*shared_credentials2);
+    store_->AddLogin(password_manager::FromPasswordForm(*shared_credentials1));
+    store_->AddLogin(password_manager::FromPasswordForm(*shared_credentials2));
 
     RunUntilIdle();
 
@@ -122,7 +125,7 @@ TEST_F(SharedPasswordsNotificationBubbleControllerTest,
 
   RunUntilIdle();
 
-  EXPECT_THAT(store().stored_passwords().at(GURL(kUrl).spec()),
+  EXPECT_THAT(GetAllLoginsSync(&store()).at(GURL(kUrl).spec()),
               Each(Field(&PasswordForm::sharing_notification_displayed, true)));
 }
 
@@ -134,7 +137,7 @@ TEST_F(SharedPasswordsNotificationBubbleControllerTest,
 
   RunUntilIdle();
 
-  EXPECT_THAT(store().stored_passwords().at(GURL(kUrl).spec()),
+  EXPECT_THAT(GetAllLoginsSync(&store()).at(GURL(kUrl).spec()),
               Each(Field(&PasswordForm::sharing_notification_displayed, true)));
 }
 
@@ -146,7 +149,7 @@ TEST_F(SharedPasswordsNotificationBubbleControllerTest,
 
   RunUntilIdle();
 
-  EXPECT_THAT(store().stored_passwords().at(GURL(kUrl).spec()),
+  EXPECT_THAT(GetAllLoginsSync(&store()).at(GURL(kUrl).spec()),
               Each(Field(&PasswordForm::sharing_notification_displayed, true)));
 }
 

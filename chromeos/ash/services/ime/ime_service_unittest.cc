@@ -4,8 +4,9 @@
 
 #include "chromeos/ash/services/ime/ime_service.h"
 
+#include <string_view>
+
 #include "ash/constants/ash_features.h"
-#include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
@@ -31,9 +32,8 @@ namespace ime {
 
 namespace {
 
-const char kInvalidImeSpec[] = "ime_spec_never_support";
+constexpr char kInvalidImeSpec[] = "ime_spec_never_support";
 constexpr char kValidImeSpec[] = "valid_spec";
-const std::vector<uint8_t> extra{0x66, 0x77, 0x88};
 
 void ConnectCallback(bool* success, bool result) {
   *success = result;
@@ -105,7 +105,7 @@ class TestImeSharedLibraryWrapper : public ImeSharedLibraryWrapper {
         .close_proto_mode = []() {},
         .proto_mode_supports =
             [](const char* ime_spec) {
-              return UNSAFE_TODO(strcmp(kInvalidImeSpec, ime_spec)) != 0;
+              return std::string_view(kInvalidImeSpec) != ime_spec;
             },
         .proto_mode_activate_ime =
             [](const char* ime_spec, ImeClientDelegate* delegate) {
@@ -269,6 +269,7 @@ TEST_F(ImeServiceTest, ConnectInvalidImeEngineDoesNotConnectRemote) {
   MockInputChannel test_channel;
   mojo::Remote<mojom::InputChannel> remote_engine;
 
+  const std::vector<uint8_t> extra{0x66, 0x77, 0x88};
   remote_manager_->ConnectToImeEngine(
       kInvalidImeSpec, remote_engine.BindNewPipeAndPassReceiver(),
       test_channel.CreatePendingRemote(), extra,

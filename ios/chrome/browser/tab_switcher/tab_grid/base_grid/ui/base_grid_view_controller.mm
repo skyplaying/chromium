@@ -43,7 +43,6 @@
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid/grid_view_controller_mutator.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/grid/group_grid_cell.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/tab_context_menu/tab_context_menu_provider.h"
-#import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/transitions/legacy_grid_transition_layout.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/transitions/tab_grid_transition_item.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/transitions/tab_grid_transition_layout.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_group_item.h"
@@ -141,9 +140,6 @@ typedef NS_ENUM(NSInteger, DragEntrySide) {
 @property(nonatomic, assign) BOOL dragEndAtNewIndex;
 // Tracks if a drop action initiated in this grid is in progress.
 @property(nonatomic) BOOL localDragActionInProgress;
-// Tracks if the items are in a batch action, which are the "Close All" or
-// "Undo" the close all.
-@property(nonatomic) BOOL isClosingAllOrUndoRunning;
 // Caches the initial entry direction for a cell drag into other cells.
 @property(nonatomic, strong)
     NSMutableDictionary<NSIndexPath*, NSNumber*>* entryDirectionCache;
@@ -285,9 +281,7 @@ typedef NS_ENUM(NSInteger, DragEntrySide) {
 
   [self updateTabsSectionHeaderType];
 
-  if (IsTabGridDragAndDropEnabled()) {
-    self.entryDirectionCache = [NSMutableDictionary dictionary];
-  }
+  self.entryDirectionCache = [NSMutableDictionary dictionary];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -335,12 +329,12 @@ typedef NS_ENUM(NSInteger, DragEntrySide) {
 
 #pragma mark - Public
 
-- (BOOL)isScrolledToTop {
-  return IsScrollViewScrolledToTop(self.collectionView);
+- (CGFloat)remainingScrollDistanceTop {
+  return RemainingScrollDistanceToTop(self.collectionView);
 }
 
-- (BOOL)isScrolledToBottom {
-  return IsScrollViewScrolledToBottom(self.collectionView);
+- (CGFloat)remainingScrollDistanceBottom {
+  return RemainingScrollDistanceToBottom(self.collectionView);
 }
 
 - (BOOL)isGridScrollsToTopEnabled {
@@ -409,7 +403,7 @@ typedef NS_ENUM(NSInteger, DragEntrySide) {
   GridSnapshot* snapshot = self.diffableDataSource.snapshot;
   [self updateSnapshotForModeUpdate:snapshot];
   [snapshot reconfigureItemsWithIdentifiers:snapshot.itemIdentifiers];
-  [self.diffableDataSource applySnapshot:snapshot animatingDifferences:NO];
+  [self.diffableDataSource applySnapshot:snapshot animatingDifferences:YES];
   [self.gridLayout invalidateLayout];
 
   NSUInteger selectedIndex = self.selectedIndex;
@@ -487,56 +481,6 @@ typedef NS_ENUM(NSInteger, DragEntrySide) {
   _contentInsets = contentInsets;
 }
 
-- (LegacyGridTransitionLayout*)legacyTransitionLayout {
-  [self.collectionView layoutIfNeeded];
-  NSMutableArray<LegacyGridTransitionItem*>* items =
-      [[NSMutableArray alloc] init];
-  LegacyGridTransitionActiveItem* activeItem;
-  LegacyGridTransitionItem* selectionItem;
-  NSInteger tabSectionIndex = [self.diffableDataSource
-      indexForSectionIdentifier:kGridOpenTabsSectionIdentifier];
-  for (NSIndexPath* path in self.collectionView.indexPathsForVisibleItems) {
-    if (path.section != tabSectionIndex) {
-      continue;
-    }
-    UICollectionViewCell* collectionViewCell =
-        [self.collectionView cellForItemAtIndexPath:path];
-    if (![collectionViewCell isKindOfClass:[GridCell class]]) {
-      continue;
-    }
-    GridCell* cell = ObjCCastStrict<GridCell>(collectionViewCell);
-    UICollectionViewLayoutAttributes* attributes =
-        [self.collectionView layoutAttributesForItemAtIndexPath:path];
-    // Normalize frame to window coordinates. The attributes class applies this
-    // change to the other properties such as center, bounds, etc.
-    attributes.frame = [self.collectionView convertRect:attributes.frame
-                                                 toView:nil];
-    if ([cell.itemIdentifier isEqual:self.selectedItemIdentifier]) {
-      GridTransitionCell* activeCell =
-          [GridTransitionCell transitionCellFromCell:cell];
-      activeItem =
-          [LegacyGridTransitionActiveItem itemWithCell:activeCell
-                                                center:attributes.center
-                                                  size:attributes.size];
-      // NTP items need to be animated differently.
-      if (IsUrlNtp(cell.itemIdentifier.tabSwitcherItem.URL)) {
-        activeItem.shouldUseBVCSnapshot = YES;
-      }
-      selectionItem = [LegacyGridTransitionItem
-          itemWithCell:[GridCell transitionSelectionCellFromCell:cell]
-                center:attributes.center];
-    } else {
-      UIView* cellSnapshot = [cell snapshotViewAfterScreenUpdates:YES];
-      LegacyGridTransitionItem* item =
-          [LegacyGridTransitionItem itemWithCell:cellSnapshot
-                                          center:attributes.center];
-      [items addObject:item];
-    }
-  }
-  return [LegacyGridTransitionLayout layoutWithInactiveItems:items
-                                                  activeItem:activeItem
-                                               selectionItem:selectionItem];
-}
 
 - (TabGridTransitionLayout*)transitionLayout {
   return [TabGridTransitionLayout
@@ -701,6 +645,19 @@ typedef NS_ENUM(NSInteger, DragEntrySide) {
 }
 
 - (void)collectionView:(UICollectionView*)collectionView
+    willEndContextMenuInteractionWithConfiguration:
+        (UIContextMenuConfiguration*)configuration
+                                          animator:
+                                              (id<UIContextMenuInteractionAnimating>)
+                                                  animator {
+  self.activeContextMenuAnimator = animator;
+  __weak __typeof(self) weakSelf = self;
+  [animator addCompletion:^{
+    weakSelf.activeContextMenuAnimator = nil;
+  }];
+}
+
+- (void)collectionView:(UICollectionView*)collectionView
     didEndDisplayingCell:(UICollectionViewCell*)cell
       forItemAtIndexPath:(NSIndexPath*)indexPath {
   if ([cell isKindOfClass:[GridCell class]]) {
@@ -733,9 +690,7 @@ typedef NS_ENUM(NSInteger, DragEntrySide) {
 
 - (void)collectionView:(UICollectionView*)collectionView
     dragSessionWillBegin:(id<UIDragSession>)session {
-  if (IsTabGridDragAndDropEnabled()) {
-    [self.entryDirectionCache removeAllObjects];
-  }
+  [self.entryDirectionCache removeAllObjects];
   self.dragEndAtNewIndex = NO;
   self.localDragActionInProgress = YES;
 
@@ -770,10 +725,8 @@ typedef NS_ENUM(NSInteger, DragEntrySide) {
 
 - (void)collectionView:(UICollectionView*)collectionView
      dragSessionDidEnd:(id<UIDragSession>)session {
-  if (IsTabGridDragAndDropEnabled()) {
-    [self clearCurrentlyHighlightedCell];
-    [self.entryDirectionCache removeAllObjects];
-  }
+  [self clearCurrentlyHighlightedCell];
+  [self.entryDirectionCache removeAllObjects];
   self.localDragActionInProgress = NO;
 
   DragDropItem dragEvent = self.dragEndAtNewIndex
@@ -936,7 +889,7 @@ typedef NS_ENUM(NSInteger, DragEntrySide) {
   UIDropOperation dropOperation = [self.dragDropHandler
       dropOperationForDropSession:session
                           toIndex:destinationIndexPath.item];
-  if (IsTabGridDragAndDropEnabled() && !isGroup && destinationItemIndexPath &&
+  if (!isGroup && destinationItemIndexPath &&
       draggedItemIndexPath != destinationItemIndexPath &&
       dropOperation != UIDropOperationForbidden) {
     // If the drag goes into a different cell's frame, either highlight or allow
@@ -967,9 +920,7 @@ typedef NS_ENUM(NSInteger, DragEntrySide) {
                              UICollectionViewDropIntentInsertIntoDestinationIndexPath];
     }
   }
-  if (IsTabGridDragAndDropEnabled()) {
-    [self clearCurrentlyHighlightedCell];
-  }
+  [self clearCurrentlyHighlightedCell];
 
   return [[UICollectionViewDropProposal alloc]
       initWithDropOperation:dropOperation
@@ -986,8 +937,7 @@ typedef NS_ENUM(NSInteger, DragEntrySide) {
   // created as a tab isn't dropped into another tab/group.
   // [self.dragDropHandler dropItemFromProvider:toIndex:placeholderContext:]
   // will handle this case further down in the method and load the URL.
-  if (IsTabGridDragAndDropEnabled() &&
-      coordinator.proposal.intent ==
+  if (coordinator.proposal.intent ==
           UICollectionViewDropIntentInsertIntoDestinationIndexPath &&
       coordinator.items.count == 1 && sourceIndexPath) {
     NSIndexPath* destinationIndexPath = coordinator.destinationIndexPath;
@@ -998,6 +948,9 @@ typedef NS_ENUM(NSInteger, DragEntrySide) {
 
     GridItemIdentifier* sourceItem =
         [self.diffableDataSource itemIdentifierForIndexPath:sourceIndexPath];
+    if (!sourceItem) {
+      return;
+    }
     GridItemIdentifier* destinationItem = [self.diffableDataSource
         itemIdentifierForIndexPath:destinationIndexPath];
 
@@ -1111,9 +1064,7 @@ typedef NS_ENUM(NSInteger, DragEntrySide) {
 
 - (void)collectionView:(UICollectionView*)collectionView
     dropSessionDidExit:(id<UIDropSession>)session {
-  if (IsTabGridDragAndDropEnabled()) {
-    [self clearCurrentlyHighlightedCell];
-  }
+  [self clearCurrentlyHighlightedCell];
   if (!_localDragActionInProgress) {
     // Enable back toolbar buttons if no items are dragged in the current
     // collection view.
@@ -1123,9 +1074,7 @@ typedef NS_ENUM(NSInteger, DragEntrySide) {
 
 - (void)collectionView:(UICollectionView*)collectionView
      dropSessionDidEnd:(id<UIDropSession>)session {
-  if (IsTabGridDragAndDropEnabled()) {
-    [self clearCurrentlyHighlightedCell];
-  }
+  [self clearCurrentlyHighlightedCell];
   if (IsPinnedTabsEnabled()) {
     // Notify the delegate that a drag ends from another app.
     [self.delegate gridViewControllerDropAnimationDidEnd:self];
@@ -1211,6 +1160,14 @@ typedef NS_ENUM(NSInteger, DragEntrySide) {
 
 - (void)populateItems:(NSArray<GridItemIdentifier*>*)items
     selectedItemIdentifier:(GridItemIdentifier*)selectedItemIdentifier {
+  [self populateItems:items
+      selectedItemIdentifier:selectedItemIdentifier
+                  completion:nil];
+}
+
+- (void)populateItems:(NSArray<GridItemIdentifier*>*)items
+    selectedItemIdentifier:(GridItemIdentifier*)selectedItemIdentifier
+                completion:(void (^)(void))completion {
   CHECK(!HasDuplicateGroupsAndTabsIdentifiers(items));
   // Call self.view to ensure that the collection view is created.
   [self view];
@@ -1239,7 +1196,7 @@ typedef NS_ENUM(NSInteger, DragEntrySide) {
   [snapshot reconfigureItemsWithIdentifiers:items];
   [self.diffableDataSource applySnapshot:snapshot
                     animatingDifferences:YES
-                              completion:nil];
+                              completion:completion];
 
   [self updateSelectedCollectionViewItemRingAndBringIntoView:NO];
   [self updateVisibleCellIdentifiers];
@@ -1378,8 +1335,32 @@ typedef NS_ENUM(NSInteger, DragEntrySide) {
 }
 
 - (void)bringItemIntoView:(GridItemIdentifier*)item animated:(BOOL)animated {
+  // Scrolling in UICollectionView can be flaky in tests due to layout race
+  // conditions. We attempt to scroll synchronously for immediate visual
+  // feedback. We also scroll asynchronously as a fallback to ensure scrolling
+  // happens after pending layout updates are processed.
+  [self scrollToItem:item animated:animated];
+
+  __weak __typeof(self) weakSelf = self;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (!weakSelf || weakSelf.collectionView.isTracking) {
+      return;
+    }
+    [weakSelf scrollToItem:item animated:animated];
+  });
+}
+
+// Helper to scroll to `item` if it is not already visible.
+- (void)scrollToItem:(GridItemIdentifier*)item animated:(BOOL)animated {
   NSIndexPath* indexPath =
       [self.diffableDataSource indexPathForItemIdentifier:item];
+  if (!indexPath) {
+    return;
+  }
+  if ([self.collectionView.indexPathsForVisibleItems
+          containsObject:indexPath]) {
+    return;
+  }
   [self.collectionView
       scrollToItemAtIndexPath:indexPath
              atScrollPosition:UICollectionViewScrollPositionCenteredVertically
@@ -1392,26 +1373,6 @@ typedef NS_ENUM(NSInteger, DragEntrySide) {
 
 - (void)reload {
   [self.collectionView reloadData];
-}
-
-- (void)willCloseAll {
-  self.isClosingAllOrUndoRunning = YES;
-}
-
-- (void)didCloseAll {
-  self.isClosingAllOrUndoRunning = NO;
-  [self updateTabsSectionHeaderType];
-  [self.collectionView.collectionViewLayout invalidateLayout];
-}
-
-- (void)willUndoCloseAll {
-  self.isClosingAllOrUndoRunning = YES;
-}
-
-- (void)didUndoCloseAll {
-  self.isClosingAllOrUndoRunning = NO;
-  [self updateTabsSectionHeaderType];
-  [self.collectionView.collectionViewLayout invalidateLayout];
 }
 
 #pragma mark - Suggested Actions Section
@@ -1703,6 +1664,10 @@ typedef NS_ENUM(NSInteger, DragEntrySide) {
 
 - (void)updateSelectedCollectionViewItemRingAndBringIntoView:
     (BOOL)shouldBringItemIntoView {
+  if (_mode == TabGridMode::kSelection) {
+    return;
+  }
+
   // Deselects all the collection view items.
   NSArray<NSIndexPath*>* indexPathsForSelectedItems =
       [self.collectionView indexPathsForSelectedItems];
@@ -1802,13 +1767,7 @@ typedef NS_ENUM(NSInteger, DragEntrySide) {
   cell.delegate = self;
   cell.theme = self.theme;
   cell.itemIdentifier = groupItemIdentifier;
-  // TODO(crbug.com/481997646): Cleanup this groupColor flow once feature hits
-  // stable.
-  if (!IsTabGroupColorOnSurfaceEnabled()) {
-    cell.groupColor = item.groupColor;
-  } else {
-    cell.tabGroupColorPalette = item.tabGroupColorPalette;
-  }
+  cell.tabGroupColorPalette = item.tabGroupColorPalette;
   cell.tabsCount = item.numberOfTabsInGroup;
   cell.title = item.title;
   cell.accessibilityIdentifier = GroupGridCellAccessibilityIdentifier(index);
@@ -1831,7 +1790,7 @@ typedef NS_ENUM(NSInteger, DragEntrySide) {
   cell.activityLabelData =
       [self.gridProvider activityLabelDataForItem:groupItemIdentifier];
 
-  if (IsTabGridDragAndDropEnabled() && _highlightedGroupIndexPath) {
+  if (_highlightedGroupIndexPath) {
     NSUInteger newGroupIndexPath = _highlightedGroupIndexPath.item;
     if (_isNewGroupShiftingToDifferentFinalIndexPath &&
         _isGroupBeingCreatedFromDragAndDrop) {
@@ -2136,7 +2095,8 @@ typedef NS_ENUM(NSInteger, DragEntrySide) {
 // instead of EmptyThumbnailLayoutTypeCenteredPortrait.
 - (EmptyThumbnailLayoutType)layoutTypeForContainerSize:(CGSize)containerSize
                                             isGridCell:(BOOL)isGridCell {
-  const CGFloat aspectRatio = TabGridItemAspectRatio(containerSize);
+  const CGFloat aspectRatio =
+      TabGridItemAspectRatio(containerSize, self.view.window.windowScene);
   CGFloat cellHeight =
       aspectRatio * containerSize.width /
       TabGridColumnsCount(containerSize,

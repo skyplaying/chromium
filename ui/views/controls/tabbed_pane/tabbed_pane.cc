@@ -582,9 +582,6 @@ bool TabbedPaneTabStrip::SelectTab(TabbedPaneTab* new_selected_tab,
     old_selected_tab->SetSelected(false);
     MaybeUpdateTabContentVisibility(GetIndexForTab(old_selected_tab), false);
     OnSelectedTabChanged(old_selected_tab, new_selected_tab, animate);
-
-    NotifyNewAccessibilityEvent(ax::mojom::Event::kSelectedChildrenChanged,
-                                true);
   }
 
   UpdateAccessibleName();
@@ -975,6 +972,22 @@ void TabbedPane::SetDrawTabDivider(bool draw) {
   tab_strip_->SetDrawTabDivider(draw);
 }
 
+bool TabbedPane::GetIncludeHiddenViewsInLayout() const {
+  if (!contents_ || !contents_->GetLayoutManager()) {
+    return false;
+  }
+  return static_cast<FillLayout*>(contents_->GetLayoutManager())
+      ->include_hidden_views();
+}
+
+void TabbedPane::SetIncludeHiddenViewsInLayout(bool include) {
+  if (!contents_ || !contents_->GetLayoutManager()) {
+    return;
+  }
+  static_cast<FillLayout*>(contents_->GetLayoutManager())
+      ->SetIncludeHiddenViews(include);
+}
+
 TabbedPaneTab* TabbedPane::GetSelectedTab() {
   return tab_strip_->GetSelectedTab();
 }
@@ -996,6 +1009,7 @@ gfx::Size TabbedPane::CalculatePreferredSize(
 }
 
 BEGIN_METADATA(TabbedPane)
+ADD_PROPERTY_METADATA(bool, IncludeHiddenViewsInLayout)
 END_METADATA
 
 }  // namespace views

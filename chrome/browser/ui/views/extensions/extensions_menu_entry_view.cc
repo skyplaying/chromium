@@ -6,22 +6,27 @@
 
 #include "base/metrics/user_metrics.h"
 #include "base/metrics/user_metrics_action.h"
+#include "base/strings/strcat.h"
 #include "chrome/app/vector_icons/vector_icons.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/controls/hover_button.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
 #include "extensions/common/extension_features.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/menu_source_type.mojom.h"
+#include "ui/base/ui_base_features.h"
+#include "ui/strings/grit/ui_strings.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/menu_button_controller.h"
 #include "ui/views/controls/button/toggle_button.h"
 #include "ui/views/controls/highlight_path_generator.h"
+#include "ui/views/controls/label.h"
 #include "ui/views/vector_icons.h"
 
 namespace {
@@ -54,14 +59,18 @@ views::Builder<HoverButton> GetSitePermissionsButtonBuilder(
     button_builder.SetHorizontalAlignment(gfx::ALIGN_LEFT)
         .SetImageModel(views::Button::ButtonState::STATE_NORMAL,
                        ui::ImageModel::FromVectorIcon(
-                           vector_icons::kBusinessChromeRefreshIcon,
+                           features::IsRoundedIconsEnabled()
+                               ? vector_icons::kDomainIcon
+                               : vector_icons::kBusinessChromeRefreshOldIcon,
                            kColorExtensionMenuIcon, small_icon_size));
   } else {
     // Add right-aligned arrow icon for non-enterprise extensions when the
     // button is not disabled.
     auto arrow_icon = ui::ImageModel::FromVectorIcon(
-        vector_icons::kSubmenuArrowChromeRefreshIcon, kColorExtensionMenuIcon,
-        small_icon_size);
+        features::IsRoundedIconsEnabled()
+            ? vector_icons::kKeyboardArrowRightFlippableIcon
+            : vector_icons::kSubmenuArrowChromeRefreshOldIcon,
+        kColorExtensionMenuIcon, small_icon_size);
 
     button_builder.SetHorizontalAlignment(gfx::ALIGN_RIGHT)
         .SetImageModel(views::Button::ButtonState::STATE_NORMAL, arrow_icon)
@@ -77,7 +86,7 @@ views::Builder<HoverButton> GetSitePermissionsButtonBuilder(
 DEFINE_ELEMENT_IDENTIFIER_VALUE(kExtensionsMenuEntryViewElementId);
 
 ExtensionsMenuEntryView::ExtensionsMenuEntryView(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     bool is_enterprise,
     ToolbarActionViewModel* view_model,
     views::Button::PressedCallback action_button_callback,
@@ -184,7 +193,23 @@ ExtensionsMenuEntryView::ExtensionsMenuEntryView(
                   std::move(site_permissions_button_callback), is_enterprise,
                   small_icon_size, icon_size, icon_label_spacing,
                   button_icon_label_spacing)
-                  .CopyAddressTo(&site_permissions_button_)))
+                  .CopyAddressTo(&site_permissions_button_),
+              views::Builder<views::Label>()
+                  .CopyAddressTo(&site_permissions_label_)
+                  .SetTextContext(views::style::CONTEXT_BUTTON)
+                  .SetTextStyle(views::style::STYLE_BODY_5)
+                  .SetEnabledColor(kColorExtensionsMenuSecondaryText)
+                  .SetHorizontalAlignment(gfx::ALIGN_LEFT)
+                  .SetElideBehavior(gfx::ELIDE_TAIL)
+                  .SetProperty(views::kFlexBehaviorKey,
+                               views::FlexSpecification(
+                                   views::LayoutOrientation::kHorizontal,
+                                   views::MinimumFlexSizeRule::kScaleToZero,
+                                   views::MaximumFlexSizeRule::kPreferred))
+                  .SetProperty(views::kMarginsKey,
+                               gfx::Insets::VH(0, icon_size))
+                  .SetBorder(views::CreateEmptyBorder(
+                      gfx::Insets::VH(0, icon_label_spacing)))))
       .BuildChildren();
 
   SetupContextMenuButton(view_model);
@@ -195,7 +220,12 @@ ExtensionsMenuEntryView::ExtensionsMenuEntryView(
   // accessible name.
   site_access_toggle_->GetViewAccessibility().SetDescription(
       std::u16string(), ax::mojom::DescriptionFrom::kAttributeExplicitlyEmpty);
+  action_button_->GetViewAccessibility().SetIsLeaf(true);
+  context_menu_button_->GetViewAccessibility().SetIsLeaf(true);
   site_permissions_button_->GetViewAccessibility().SetDescription(
+      std::u16string(), ax::mojom::DescriptionFrom::kAttributeExplicitlyEmpty);
+  site_permissions_button_->GetViewAccessibility().SetIsLeaf(true);
+  site_permissions_label_->GetViewAccessibility().SetDescription(
       std::u16string(), ax::mojom::DescriptionFrom::kAttributeExplicitlyEmpty);
 
   // Add rounded corners to the site permissions button.
@@ -215,21 +245,48 @@ void ExtensionsMenuEntryView::Update(
   site_access_toggle_->SetTooltipText(
       entry_state.site_access_toggle.tooltip_text);
 
-  site_permissions_button_->SetVisible(
+  bool is_permissions_visible =
       entry_state.site_permissions_button.status !=
-      ExtensionsMenuViewModel::ControlState::Status::kHidden);
-  site_permissions_button_->SetEnabled(
+      ExtensionsMenuViewModel::ControlState::Status::kHidden;
+  bool is_permissions_enabled =
       entry_state.site_permissions_button.status ==
-      ExtensionsMenuViewModel::ControlState::Status::kEnabled);
-  site_permissions_button_->SetText(entry_state.site_permissions_button.text);
-  site_permissions_button_->SetTooltipText(
-      entry_state.site_permissions_button.tooltip_text);
-  site_permissions_button_->GetViewAccessibility().SetName(
-      entry_state.site_permissions_button.accessible_name);
+      ExtensionsMenuViewModel::ControlState::Status::kEnabled;
 
-  // Update button size after changing its contents so it fits in the menu
-  // entry row.
-  site_permissions_button_->PreferredSizeChanged();
+  if (!is_permissions_visible) {
+    site_permissions_button_->SetVisible(false);
+    site_permissions_label_->SetVisible(false);
+  } else if (is_permissions_enabled) {
+    site_permissions_button_->SetVisible(true);
+    site_permissions_label_->SetVisible(false);
+
+    site_permissions_button_->SetState(views::Button::STATE_NORMAL);
+    site_permissions_button_->SetText(entry_state.site_permissions_button.text);
+    site_permissions_button_->SetTooltipText(
+        entry_state.site_permissions_button.tooltip_text);
+    site_permissions_button_->GetViewAccessibility().SetName(
+        entry_state.site_permissions_button.accessible_name);
+    site_permissions_button_->GetViewAccessibility().SetIsIgnored(false);
+    site_permissions_button_->GetViewAccessibility().SetIsLeaf(true);
+    site_permissions_button_->SetFocusBehavior(
+        views::View::FocusBehavior::ALWAYS);
+    site_permissions_button_->PreferredSizeChanged();
+  } else {
+    site_permissions_button_->SetVisible(false);
+    site_permissions_label_->SetVisible(true);
+
+    // Set the label's text to the full accessible name (which includes the
+    // enterprise/policy suffix if applicable). This ensures the text and the
+    // accessible name are identical, completely preventing any AXPosition
+    // text boundary crashes on Linux while providing full info to both visual
+    // and screen reader users.
+    site_permissions_label_->SetText(
+        entry_state.site_permissions_button.accessible_name);
+    site_permissions_label_->SetCustomTooltipText(
+        entry_state.site_permissions_button.tooltip_text);
+    site_permissions_label_->GetViewAccessibility().SetIsIgnored(false);
+    site_permissions_label_->SetFocusBehavior(
+        views::View::FocusBehavior::NEVER);
+  }
 
   UpdateActionButton(entry_state.action_button);
   UpdateContextMenuButton(entry_state.context_menu_button);
@@ -241,9 +298,24 @@ void ExtensionsMenuEntryView::UpdateActionButton(
   action_button_->SetText(button_state.text);
   action_button_->SetTooltipText(button_state.tooltip_text);
   action_button_->SetAccessibleName(button_state.accessible_name);
-  action_button_->SetEnabled(
+  action_button_->GetViewAccessibility().SetIsLeaf(true);
+  bool is_action_enabled =
       button_state.status ==
-      ExtensionsMenuViewModel::ControlState::Status::kEnabled);
+      ExtensionsMenuViewModel::ControlState::Status::kEnabled;
+  action_button_->SetEnabled(true);
+  action_button_->SetState(is_action_enabled ? views::Button::STATE_NORMAL
+                                             : views::Button::STATE_DISABLED);
+  // Keep the view accessibility enabled so it remains focusable for screen
+  // readers, even when logically disabled.
+  if (!is_action_enabled) {
+    action_button_->GetViewAccessibility().SetDescription(
+        l10n_util::GetStringFUTF16(IDS_EXTENSION_DISABLED_ERROR_TITLE,
+                                   button_state.text));
+  } else {
+    action_button_->GetViewAccessibility().SetDescription(
+        std::u16string(),
+        ax::mojom::DescriptionFrom::kAttributeExplicitlyEmpty);
+  }
 }
 
 void ExtensionsMenuEntryView::UpdateContextMenuButton(
@@ -251,21 +323,26 @@ void ExtensionsMenuEntryView::UpdateContextMenuButton(
   const int icon_size = ChromeLayoutProvider::Get()->GetDistanceMetric(
       DISTANCE_EXTENSIONS_MENU_BUTTON_ICON_SIZE);
   auto three_dot_icon = ui::ImageModel::FromVectorIcon(
-      kBrowserToolsChromeRefreshIcon, kColorExtensionMenuIcon, icon_size);
+      features::IsRoundedIconsEnabled() ? kMoreVertIcon
+                                        : kBrowserToolsChromeRefreshOldIcon,
+      kColorExtensionMenuIcon, icon_size);
 
   // Show a pin button for the context menu normal state icon when the action is
   // pinned in the toolbar. All other states should look, and behave, the same.
   context_menu_button_->SetImageModel(
       views::Button::STATE_NORMAL,
-      button_state.is_on ? ui::ImageModel::FromVectorIcon(
-                               kKeepIcon, kColorExtensionMenuIcon, icon_size)
-                         : three_dot_icon);
+      button_state.is_on
+          ? ui::ImageModel::FromVectorIcon(
+                features::IsRoundedIconsEnabled() ? kKeepIcon : kKeepOldIcon,
+                kColorExtensionMenuIcon, icon_size)
+          : three_dot_icon);
   context_menu_button_->SetImageModel(views::Button::STATE_HOVERED,
                                       three_dot_icon);
   context_menu_button_->SetImageModel(views::Button::STATE_PRESSED,
                                       three_dot_icon);
   context_menu_button_->GetViewAccessibility().SetName(
       button_state.accessible_name);
+  context_menu_button_->GetViewAccessibility().SetIsLeaf(true);
 }
 
 void ExtensionsMenuEntryView::SetupContextMenuButton(

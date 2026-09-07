@@ -17,7 +17,6 @@
 #include "base/test/test_future.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/shell_integration_linux.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/web_applications/external_install_options.h"
 #include "chrome/browser/web_applications/test/os_integration_test_override_impl.h"
@@ -57,10 +56,10 @@ class WebAppFileHandlerRegistrationLinuxBrowserTest
  protected:
   WebAppFileHandlerRegistrationLinuxBrowserTest() = default;
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
   void InstallApp(ExternalInstallOptions install_options) {
-    auto result = ExternallyManagedAppManagerInstall(browser()->profile(),
+    auto result = ExternallyManagedAppManagerInstall(browser()->GetProfile(),
                                                      install_options);
     result_code_ = result.code;
   }

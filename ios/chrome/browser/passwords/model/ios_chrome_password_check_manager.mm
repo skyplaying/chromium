@@ -193,6 +193,7 @@ void IOSChromePasswordCheckManager::ShutdownOnUIThread() {
   observed_bulk_leak_check_service_.Reset();
   observed_insecure_credentials_manager_.Reset();
   observed_saved_passwords_presenter_.Reset();
+  user_prefs_ = nullptr;
 }
 
 void IOSChromePasswordCheckManager::OnSavedPasswordsChanged(
@@ -220,6 +221,11 @@ void IOSChromePasswordCheckManager::OnStateChanged(State state) {
         base::Time::Now().InSecondsFSinceUnixEpoch());
 
     LogInsecureCredentialsCountMetrics();
+
+    size_t count = saved_passwords_presenter_->GetSavedPasswords().size();
+    for (auto& observer : observers_) {
+      observer.PasswordCheckFinished(count);
+    }
   }
   if (state != State::kRunning) {
     // If check was running

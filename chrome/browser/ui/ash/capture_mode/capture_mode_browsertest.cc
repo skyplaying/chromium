@@ -41,10 +41,11 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/common/chrome_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "chromeos/ash/components/browser_delegate/browser_delegate.h"
 #include "components/enterprise/common/proto/synced/dlp_policy_event.pb.h"
 #include "components/policy/policy_constants.h"
 #include "components/prefs/pref_service.h"
@@ -54,6 +55,7 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/aura/window_observer.h"
+#include "ui/base/base_window.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/keycodes/keyboard_codes_posix.h"
 #include "ui/events/test/event_generator.h"
@@ -76,8 +78,8 @@ constexpr char kRuleId[] = "testid1";
 const policy::DlpRulesManager::RuleMetadata kRuleMetadata(kRuleName, kRuleId);
 
 // Returns the native window of the given `browser`.
-aura::Window* GetBrowserWindow(Browser* browser) {
-  return browser->window()->GetNativeWindow();
+aura::Window* GetBrowserWindow(BrowserWindowInterface* browser) {
+  return browser->GetWindow()->GetNativeWindow();
 }
 
 void SetupLoopToWaitForCaptureFileToBeSaved(base::RunLoop* loop) {
@@ -132,12 +134,12 @@ void StartVideoRecording() {
 
 // Marks the active web contents of the given `browser` as DLP restricted with a
 // warning level.
-void MarkActiveTabAsDlpWarnedForScreenCapture(Browser* browser) {
+void MarkActiveTabAsDlpWarnedForScreenCapture(BrowserWindowInterface* browser) {
   auto* dlp_content_observer = policy::DlpContentObserver::Get();
   ASSERT_TRUE(dlp_content_observer);
 
   content::WebContents* web_contents =
-      browser->tab_strip_model()->GetActiveWebContents();
+      browser->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(web_contents);
   dlp_content_observer->OnConfidentialityChanged(web_contents,
                                                  kScreenCaptureWarned);
@@ -152,7 +154,7 @@ void WaitForCountDownToFinish() {
 }
 
 // Stops the video recording and waits for the DLP warning dialog to be added.
-void StopRecordingAndWaitForDlpWarningDialog(Browser* browser) {
+void StopRecordingAndWaitForDlpWarningDialog(BrowserWindowInterface* browser) {
   auto* root = GetBrowserWindow(browser)->GetRootWindow();
   ASSERT_TRUE(root);
   DlpWarningDialogWaiter waiter{root};
@@ -162,7 +164,7 @@ void StopRecordingAndWaitForDlpWarningDialog(Browser* browser) {
   EXPECT_FALSE(test_api.IsVideoRecordingInProgress());
 }
 
-void SendKeyEvent(Browser* browser,
+void SendKeyEvent(BrowserWindowInterface* browser,
                   ui::KeyboardCode key_code,
                   int flags = ui::EF_NONE) {
   auto* browser_window = GetBrowserWindow(browser);
@@ -188,7 +190,7 @@ class CaptureModeBrowserTest : public InProcessBrowserTest {};
 
 IN_PROC_BROWSER_TEST_F(CaptureModeBrowserTest, ContextMenuStaysOpen) {
   // Right click the desktop to open a context menu.
-  aura::Window* browser_window = browser()->window()->GetNativeWindow();
+  aura::Window* browser_window = browser()->GetWindow()->GetNativeWindow();
   const gfx::Point point_on_desktop(1, 1);
   ASSERT_FALSE(browser_window->bounds().Contains(point_on_desktop));
 
@@ -203,8 +205,8 @@ IN_PROC_BROWSER_TEST_F(CaptureModeBrowserTest, ContextMenuStaysOpen) {
   EXPECT_TRUE(shell_test_api.IsContextMenuShown());
 }
 
-// A regression test for https://crbug.com/1350711 in which a session is started
-// quickly after clicking the sign out button.
+// A regression test for https://crbug.com/40060518 in which a session is
+// started quickly after clicking the sign out button.
 IN_PROC_BROWSER_TEST_F(CaptureModeBrowserTest,
                        SimulateStartingSessionAfterSignOut) {
   ash::Shell::Get()->session_controller()->RequestSignOut();
@@ -254,7 +256,7 @@ class CaptureModeDlpBrowserTest : public CaptureModeBrowserTest {
   // Sets up mock rules manager.
   void SetupDlpRulesManager() {
     policy::DlpRulesManagerFactory::GetInstance()->SetTestingFactory(
-        browser()->profile(), base::BindRepeating(&SetDlpRulesManager));
+        browser()->GetProfile(), base::BindRepeating(&SetDlpRulesManager));
     ASSERT_TRUE(policy::DlpRulesManagerFactory::GetForPrimaryProfile());
   }
 
@@ -814,7 +816,7 @@ IN_PROC_BROWSER_TEST_F(CaptureModeSettingsBrowserTest,
   ASSERT_TRUE(transient_root);
   EXPECT_EQ(transient_root->GetId(),
             ash::kShellWindowId_CaptureModeFolderSelectionDialogOwner);
-  EXPECT_NE(transient_root, browser()->window()->GetNativeWindow());
+  EXPECT_NE(transient_root, browser()->GetWindow()->GetNativeWindow());
 }
 
 IN_PROC_BROWSER_TEST_F(CaptureModeSettingsBrowserTest,
@@ -886,7 +888,7 @@ class CaptureModeProjectorBrowserTests : public CaptureModeCameraBrowserTests {
   // InProcessBrowserTest:
   void SetUpOnMainThread() override {
     CaptureModeCameraBrowserTests::SetUpOnMainThread();
-    auto* profile = browser()->profile();
+    auto* profile = browser()->GetProfile();
     ash::SystemWebAppManager::GetForTest(profile)
         ->InstallSystemAppsForTesting();
 
@@ -894,8 +896,8 @@ class CaptureModeProjectorBrowserTests : public CaptureModeCameraBrowserTests {
     ash::ProjectorClient::Get()->OpenProjectorApp();
     browser_created_observer.Wait();
 
-    Browser* app_browser =
-        FindSystemWebAppBrowser(profile, ash::SystemWebAppType::PROJECTOR);
+    ash::BrowserDelegate* app_browser = FindSystemWebAppBrowser(
+        profile, ash::SystemWebAppType::PROJECTOR, ash::BrowserType::kApp);
     ASSERT_TRUE(app_browser);
   }
 
@@ -926,24 +928,14 @@ IN_PROC_BROWSER_TEST_F(CaptureModeProjectorBrowserTests,
 }
 
 class CaptureModeVideoConferenceBrowserTests
-    : public testing::WithParamInterface<bool>,
-      public CaptureModeCameraBrowserTests {
+    : public CaptureModeCameraBrowserTests {
  public:
-  CaptureModeVideoConferenceBrowserTests()
-      : is_share_screen_icon_enabled_(GetParam()) {
-    if (is_share_screen_icon_enabled_) {
-      scoped_feature_list_.InitWithFeatures(
-          /*enabled_features=*/{ash::features::kVcStopAllScreenShare,
-                                ash::features::
-                                    kFeatureManagementVideoConference},
-          /*disabled_features=*/{});
-    } else {
-      scoped_feature_list_.InitWithFeatures(
-          /*enabled_features=*/{ash::features::
-                                    kFeatureManagementVideoConference},
-          /*disabled_features=*/{});
-    }
+  CaptureModeVideoConferenceBrowserTests() {
+    scoped_feature_list_.InitWithFeatures(
+        /*enabled_features=*/{ash::features::kFeatureManagementVideoConference},
+        /*disabled_features=*/{});
   }
+
   CaptureModeVideoConferenceBrowserTests(
       const CaptureModeVideoConferenceBrowserTests&) = delete;
   CaptureModeVideoConferenceBrowserTests& operator=(
@@ -963,26 +955,15 @@ class CaptureModeVideoConferenceBrowserTests
     return video_conference_tray()->audio_icon();
   }
 
-  ash::VideoConferenceTrayButton* vc_tray_screen_share_icon() {
-    return video_conference_tray()->screen_share_icon();
-  }
-
   ash::VideoConferenceMediaState GetMediaStateInVideoConferenceManager() {
     return ash::VideoConferenceManagerAsh::Get()->GetAggregatedState();
   }
-
- protected:
-  const bool is_share_screen_icon_enabled_;
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-INSTANTIATE_TEST_SUITE_P(,  // Empty to simplify gtest output
-                         CaptureModeVideoConferenceBrowserTests,
-                         testing::Bool());
-
-IN_PROC_BROWSER_TEST_P(CaptureModeVideoConferenceBrowserTests,
+IN_PROC_BROWSER_TEST_F(CaptureModeVideoConferenceBrowserTests,
                        ManagerGetsUpdated) {
   // Test the initial state.
   ash::VideoConferenceMediaState state =
@@ -1013,8 +994,6 @@ IN_PROC_BROWSER_TEST_P(CaptureModeVideoConferenceBrowserTests,
   EXPECT_TRUE(video_conference_tray()->GetVisible());
   EXPECT_TRUE(vc_tray_audio_icon()->GetVisible());
   EXPECT_TRUE(vc_tray_camera_icon()->GetVisible());
-  EXPECT_TRUE(!is_share_screen_icon_enabled_ ||
-              !vc_tray_screen_share_icon()->GetVisible());
 
   // Stop recording and expect the state to return back to the initial state,
   // and the VC tray buttons should be hidden.
@@ -1034,8 +1013,6 @@ IN_PROC_BROWSER_TEST_P(CaptureModeVideoConferenceBrowserTests,
   EXPECT_FALSE(video_conference_tray()->GetVisible());
   EXPECT_FALSE(vc_tray_audio_icon()->GetVisible());
   EXPECT_FALSE(vc_tray_camera_icon()->GetVisible());
-  EXPECT_TRUE(!is_share_screen_icon_enabled_ ||
-              !vc_tray_screen_share_icon()->GetVisible());
 }
 
 // Tests that the capture is saved to policy defined location if feature is
@@ -1048,9 +1025,9 @@ class CaptureModePolicyBrowserTest
   CaptureModePolicyBrowserTest()
       : for_video_(GetParam().first), skyvault_enabled_(GetParam().second) {
     if (skyvault_enabled_) {
-      scoped_feature_list_.InitAndEnableFeature(features::kSkyVault);
+      scoped_feature_list_.InitAndEnableFeature(ash::features::kSkyVault);
     } else {
-      scoped_feature_list_.InitAndDisableFeature(features::kSkyVault);
+      scoped_feature_list_.InitAndDisableFeature(ash::features::kSkyVault);
     }
   }
 
@@ -1102,7 +1079,7 @@ IN_PROC_BROWSER_TEST_P(CaptureModePolicyBrowserTest,
     const base::FilePath expected_location =
         skyvault_enabled_
             ? temp_dir.GetPath()
-            : DownloadPrefs::FromBrowserContext(browser()->profile())
+            : DownloadPrefs::FromBrowserContext(browser()->GetProfile())
                   ->GetDefaultDownloadDirectoryForProfile();
     // Wait for the file to be saved.
     EXPECT_TRUE(expected_location.IsParent(path_future.Get()));

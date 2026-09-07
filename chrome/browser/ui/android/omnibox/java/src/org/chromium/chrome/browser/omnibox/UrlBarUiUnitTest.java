@@ -6,8 +6,15 @@ package org.chromium.chrome.browser.omnibox;
 
 import static androidx.test.espresso.matcher.ViewMatchers.assertThat;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
+
 import android.app.Activity;
 import android.text.TextUtils;
+import android.view.InputDevice;
+import android.view.MotionEvent;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
 import android.widget.FrameLayout.LayoutParams;
@@ -15,7 +22,6 @@ import android.widget.FrameLayout.LayoutParams;
 import androidx.test.filters.SmallTest;
 
 import org.hamcrest.Matchers;
-import org.junit.Assert;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.ClassRule;
@@ -79,7 +85,7 @@ public class UrlBarUiUnitTest {
     }
 
     private static void assertTextEquals(CharSequence a, CharSequence b) {
-        Assert.assertTrue(a + " should match: " + b, TextUtils.equals(a, b));
+        assertTrue(a + " should match: " + b, TextUtils.equals(a, b));
     }
 
     private void waitForUrlBarLayout() {
@@ -95,7 +101,7 @@ public class UrlBarUiUnitTest {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     mUrlBar.setText(text);
-                    mUrlBar.setScrollState(scrollType, scrollIndex);
+                    mUrlBar.setScrollState(scrollType, scrollIndex, /* originChanged= */ false);
                 });
         waitForUrlBarLayout();
     }
@@ -124,7 +130,7 @@ public class UrlBarUiUnitTest {
                             Matchers.lessThan((float) mUrlBar.getMeasuredWidth()));
                 });
 
-        Assert.assertNull(getVisibleTextPrefixHint());
+        assertNull(getVisibleTextPrefixHint());
     }
 
     @Test
@@ -145,7 +151,7 @@ public class UrlBarUiUnitTest {
                 });
 
         CharSequence urlText = getUrlText();
-        Assert.assertNull(getVisibleTextPrefixHint());
+        assertNull(getVisibleTextPrefixHint());
 
         // Append a string to the already long initial text and validate the prefix doesn't change.
         updateUrlBarText(
@@ -153,8 +159,8 @@ public class UrlBarUiUnitTest {
                 UrlBar.ScrollType.SCROLL_TO_TLD,
                 domain.length());
         final CharSequence prefixHint = getVisibleTextPrefixHint();
-        Assert.assertNotNull(prefixHint);
-        Assert.assertTrue(
+        assertNotNull(prefixHint);
+        assertTrue(
                 "Expected url text: '" + urlText + "' starts with " + prefixHint,
                 TextUtils.indexOf(urlText, prefixHint) == 0);
         assertThat(prefixHint.length(), Matchers.lessThan(urlText.length()));
@@ -176,7 +182,7 @@ public class UrlBarUiUnitTest {
                 TextUtils.substring(prefixHint, 0, prefixHint.length() - 2),
                 UrlBar.ScrollType.SCROLL_TO_TLD,
                 domain.length());
-        Assert.assertNull(getVisibleTextPrefixHint());
+        assertNull(getVisibleTextPrefixHint());
     }
 
     @Test
@@ -199,14 +205,14 @@ public class UrlBarUiUnitTest {
 
         // Assert null visible hint when there is RTl text anywhere in the visible url
         final CharSequence prefixHint = getVisibleTextPrefixHint();
-        Assert.assertNull(prefixHint);
+        assertNull(prefixHint);
 
         // Append a string to the already long initial text and validate the prefix doesn't change.
         updateUrlBarText(
                 getUrlText() + "bbbbbbbbbbbbbbbbbbbbbbb",
                 UrlBar.ScrollType.SCROLL_TO_TLD,
                 domain.length());
-        Assert.assertNull(prefixHint);
+        assertNull(prefixHint);
     }
 
     @Test
@@ -218,7 +224,7 @@ public class UrlBarUiUnitTest {
 
         final CharSequence urlText = getUrlText();
         CharSequence prefixHint = getVisibleTextPrefixHint();
-        Assert.assertNotNull(prefixHint);
+        assertNotNull(prefixHint);
         assertTextEquals(urlText, prefixHint);
 
         updateUrlBarText(
@@ -231,12 +237,88 @@ public class UrlBarUiUnitTest {
     @Feature("Omnibox")
     public void testVisibleTextPrefixHint_NonUrlText() {
         updateUrlBarText("a", UrlBar.ScrollType.SCROLL_TO_BEGINNING, 0);
-        Assert.assertNull(getVisibleTextPrefixHint());
+        assertNull(getVisibleTextPrefixHint());
 
         updateUrlBarText(
                 TextUtils.join("", Collections.nCopies(500, "a")),
                 UrlBar.ScrollType.SCROLL_TO_BEGINNING,
                 0);
-        Assert.assertNull(getVisibleTextPrefixHint());
+        assertNull(getVisibleTextPrefixHint());
+    }
+
+    private static MotionEvent createMouseEvent(int action, float x, float y, int buttonState) {
+        MotionEvent.PointerProperties pp = new MotionEvent.PointerProperties();
+        pp.id = 0;
+        pp.toolType = MotionEvent.TOOL_TYPE_MOUSE;
+        MotionEvent.PointerCoords pc = new MotionEvent.PointerCoords();
+        pc.x = x;
+        pc.y = y;
+        return MotionEvent.obtain(
+                /* downTime= */ 0,
+                /* eventTime= */ 0,
+                action,
+                /* pointerCount= */ 1,
+                new MotionEvent.PointerProperties[] {pp},
+                new MotionEvent.PointerCoords[] {pc},
+                /* metaState= */ 0,
+                buttonState,
+                /* xPrecision= */ 1f,
+                /* yPrecision= */ 1f,
+                /* deviceId= */ 0,
+                /* edgeFlags= */ 0,
+                InputDevice.SOURCE_MOUSE,
+                /* flags= */ 0);
+    }
+
+    private void rightClickAtOffset(int offset) {
+        float x =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () -> {
+                            float startX = mUrlBar.getLayout().getPrimaryHorizontal(offset);
+                            float endX = mUrlBar.getLayout().getPrimaryHorizontal(offset + 1);
+                            return mUrlBar.getTotalPaddingLeft() + (startX + endX) / 2f;
+                        });
+        float y = ThreadUtils.runOnUiThreadBlocking(() -> mUrlBar.getHeight() / 2f);
+        MotionEvent evt =
+                createMouseEvent(MotionEvent.ACTION_DOWN, x, y, MotionEvent.BUTTON_SECONDARY);
+        ThreadUtils.runOnUiThreadBlocking(() -> mUrlBar.onTouchEvent(evt));
+    }
+
+    @Test
+    @SmallTest
+    @Feature("Omnibox")
+    public void testFocusedRightClick_selectsWord() {
+        updateUrlBarText("search google query", UrlBar.ScrollType.SCROLL_TO_BEGINNING, 0);
+        ThreadUtils.runOnUiThreadBlocking(() -> mUrlBar.requestFocus());
+
+        rightClickAtOffset(9);
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    // Selects "google" [7, 13).
+                    assertEquals(7, mUrlBar.getSelectionStart());
+                    assertEquals(13, mUrlBar.getSelectionEnd());
+                });
+    }
+
+    @Test
+    @SmallTest
+    @Feature("Omnibox")
+    public void testFocusedRightClick_insideSelection_retainsSelection() {
+        updateUrlBarText("search google query", UrlBar.ScrollType.SCROLL_TO_BEGINNING, 0);
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    mUrlBar.requestFocus();
+                    mUrlBar.setSelection(7, 13);
+                });
+
+        rightClickAtOffset(9);
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    // Retains selection of "google" [7, 13).
+                    assertEquals(7, mUrlBar.getSelectionStart());
+                    assertEquals(13, mUrlBar.getSelectionEnd());
+                });
     }
 }

@@ -11,6 +11,7 @@ import androidx.test.filters.MediumTest;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.RuleChain;
 import org.junit.runner.RunWith;
 
 import org.chromium.base.test.util.CommandLineFlags;
@@ -18,13 +19,15 @@ import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.HistogramWatcher;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.app.ChromeActivity;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.incognito.IncognitoUtils;
 import org.chromium.chrome.browser.permissions.RuntimePermissionTestUtils.RuntimePromptResponse;
 import org.chromium.chrome.browser.permissions.RuntimePermissionTestUtils.TestAndroidPermissionDelegate;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
+import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
+import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.components.permissions.DismissalType;
 import org.chromium.content_public.common.ContentSwitches;
 import org.chromium.ui.base.DeviceFormFactor;
@@ -34,15 +37,20 @@ import org.chromium.ui.base.DeviceFormFactor;
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 // TODO(crbug.com/344665249): Failing when batched, batch this again.
 public class RuntimePermissionTest {
-    @Rule public PermissionTestRule mPermissionTestRule = new PermissionTestRule();
+    public AutoResetCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.autoResetCtaActivityRule();
+    public PermissionTestRule mPermissionTestRule =
+            new PermissionTestRule(mActivityTestRule.getActivityTestRule());
 
-    private static final String GEOLOCATION_TEST =
-            "/chrome/test/data/geolocation/geolocation_on_load.html";
+    @Rule
+    public RuleChain mRuleChain =
+            RuleChain.outerRule(mActivityTestRule).around(mPermissionTestRule);
+
+    private static final String GEOLOCATION_TEST = "/chrome/test/data/geolocation/geolocation.html";
     private static final String MEDIA_TEST = "/content/test/data/media/getusermedia.html";
-    private static final String DOWNLOAD_TEST = "/chrome/test/data/android/download/get.html";
 
     private static final String DISMISS_TYPE_HISTOGRAM =
-            "Permissions.Prompt.Geolocation.ModalDialog.Dismissed.Method";
+            "Permissions.Prompt.GeolocationApproximateOrPrecise.ModalDialog.Dismissed.Method";
 
     private TestAndroidPermissionDelegate mTestAndroidPermissionDelegate;
 
@@ -74,7 +82,7 @@ public class RuntimePermissionTest {
                 /* promptDecision= */ PermissionTestRule.PromptDecision.ALLOW,
                 /* waitForMissingPermissionPrompt= */ false,
                 /* waitForUpdater= */ true,
-                /* javascriptToExecute= */ null,
+                "initiate_geolocation()",
                 /* missingPermissionPromptTextId= */ 0);
     }
 
@@ -174,8 +182,8 @@ public class RuntimePermissionTest {
                 /* promptDecision= */ PermissionTestRule.PromptDecision.ALLOW,
                 /* waitForMissingPermissionPrompt= */ true,
                 /* waitForUpdater= */ true,
-                /* javascriptToExecute= */ null,
-                R.string.infobar_missing_location_permission_text);
+                "initiate_geolocation()",
+                R.string.message_missing_location_permission_text);
 
         histogramExpectation.assertExpected(
                 "Should record permission prompt dismissal due to OS deny in UMA");
@@ -200,7 +208,7 @@ public class RuntimePermissionTest {
                 /* waitForMissingPermissionPrompt= */ true,
                 /* waitForUpdater= */ true,
                 "getUserMediaAndStopLegacy({video: true, audio: false});",
-                R.string.infobar_missing_camera_permission_text);
+                R.string.message_missing_camera_permission_text);
     }
 
     @Test
@@ -222,7 +230,7 @@ public class RuntimePermissionTest {
                 /* waitForMissingPermissionPrompt= */ true,
                 /* waitForUpdater= */ true,
                 "getUserMediaAndStopLegacy({video: false, audio: true});",
-                R.string.infobar_missing_microphone_permission_text);
+                R.string.message_missing_microphone_permission_text);
     }
 
     // Disabled on android.emulator_12l_landscape - crbug.com/442769979.
@@ -240,7 +248,9 @@ public class RuntimePermissionTest {
         mTestAndroidPermissionDelegate =
                 new TestAndroidPermissionDelegate(
                         requestablePermission, RuntimePromptResponse.ASSERT_NEVER_ASKED);
-        RuntimePermissionTestUtils.runTest(
+
+        // TODO(crbug.com/531793849): See if we want to keep using ForgivingClickAction.
+        RuntimePermissionTestUtils.runTestForgiving(
                 mPermissionTestRule,
                 mTestAndroidPermissionDelegate,
                 GEOLOCATION_TEST,
@@ -248,8 +258,8 @@ public class RuntimePermissionTest {
                 /* promptDecision= */ PermissionTestRule.PromptDecision.DENY,
                 /* waitForMissingPermissionPrompt= */ false,
                 /* waitForUpdater= */ true,
-                /* javascriptToExecute= */ null,
-                R.string.infobar_missing_location_permission_text);
+                "initiate_geolocation()",
+                R.string.message_missing_location_permission_text);
     }
 
     @Test
@@ -353,7 +363,7 @@ public class RuntimePermissionTest {
                 /* promptDecision= */ PermissionTestRule.PromptDecision.ALLOW,
                 /* waitForMissingPermissionPrompt= */ false,
                 /* waitForUpdater= */ true,
-                /* javascriptToExecute= */ null,
+                "initiate_geolocation()",
                 /* missingPermissionPromptTextId= */ 0);
     }
 
@@ -387,7 +397,7 @@ public class RuntimePermissionTest {
                 /* promptDecision= */ PermissionTestRule.PromptDecision.ALLOW,
                 /* waitForMissingPermissionPrompt= */ false,
                 /* waitForUpdater= */ true,
-                /* javascriptToExecute= */ null,
+                "initiate_geolocation()",
                 /* missingPermissionPromptTextId= */ 0);
     }
 
@@ -495,7 +505,7 @@ public class RuntimePermissionTest {
                 /* promptDecision= */ PermissionTestRule.PromptDecision.ALLOW,
                 /* waitForMissingPermissionPrompt= */ false,
                 /* waitForUpdater= */ true,
-                /* javascriptToExecute= */ null,
+                "initiate_geolocation()",
                 /* missingPermissionPromptTextId= */ 0);
         histogramWatcher.assertExpected();
     }
@@ -524,7 +534,7 @@ public class RuntimePermissionTest {
                 /* waitForMissingPermissionPrompt= */ true,
                 /* waitForUpdater= */ true,
                 "getUserMediaAndStopLegacy({video: true, audio: false});",
-                R.string.infobar_missing_camera_permission_text);
+                R.string.message_missing_camera_permission_text);
         histogramWatcher.assertExpected();
     }
 
@@ -550,7 +560,7 @@ public class RuntimePermissionTest {
                 /* waitForMissingPermissionPrompt= */ false,
                 /* waitForUpdater= */ true,
                 "getUserMediaAndStopLegacy({video: true, audio: false});",
-                R.string.infobar_missing_camera_permission_text);
+                R.string.message_missing_camera_permission_text);
         histogramWatcher.assertExpected();
     }
 }

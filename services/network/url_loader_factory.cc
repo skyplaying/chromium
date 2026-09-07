@@ -12,15 +12,14 @@
 #include "base/check_op.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
+#include "base/time/time.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "mojo/public/cpp/bindings/message.h"
 #include "net/base/isolation_info.h"
 #include "net/cookies/cookie_constants.h"
 #include "net/cookies/cookie_setting_override.h"
 #include "net/url_request/url_request_context.h"
-#include "services/network/attribution/attribution_request_helper.h"
 #include "services/network/cookie_manager.h"
 #include "services/network/cookie_settings.h"
 #include "services/network/cors/cors_url_loader_factory.h"
@@ -404,7 +403,6 @@ void URLLoaderFactory::CreateLoaderAndStartWithSyncClient(
       std::move(trust_token_observer), std::move(url_loader_network_observer),
       std::move(devtools_observer), std::move(device_bound_session_observer),
       std::move(accept_ch_frame_observer),
-      resource_request.shared_storage_writable_eligible,
       *context_->GetSharedResourceChecker(),
       std::move(maybe_durable_message_writer),
       std::move(provided_response_body_stream));
@@ -414,7 +412,9 @@ void URLLoaderFactory::CreateLoaderAndStartWithSyncClient(
 
 net::handles::NetworkHandle URLLoaderFactory::GetBoundNetworkForTesting()
     const {
-  return context_->url_request_context()->bound_network();
+  auto target_network =
+      params_->target_network.value_or(net::handles::kInvalidNetworkHandle);
+  return target_network;
 }
 
 mojom::DevToolsObserver* URLLoaderFactory::GetDevToolsObserver() const {

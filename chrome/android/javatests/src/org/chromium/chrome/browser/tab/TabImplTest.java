@@ -24,18 +24,22 @@ import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.Feature;
-import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.base.test.util.RequiresRestart;
+import org.chromium.chrome.browser.app.tabmodel.HeadlessTabDelegateFactory;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
+import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tabmodel.TabClosureParams;
+import org.chromium.chrome.browser.tabmodel.TabModelType;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.components.autofill.TestViewStructure;
+import org.chromium.components.embedder_support.util.UrlConstants;
 import org.chromium.content_public.browser.LoadUrlParams;
-import org.chromium.content_public.common.ContentFeatures;
+import org.chromium.content_public.browser.Visibility;
+import org.chromium.ui.base.WindowAndroid;
 
 /** Tests for the {@link TabImpl} class. */
 @RunWith(ChromeJUnit4ClassRunner.class)
@@ -85,11 +89,60 @@ public class TabImplTest {
     @Test
     @SmallTest
     @Feature({"Tab"})
+    @EnableFeatures({"LoadAllTabsAtStartup"})
+    @RequiresRestart(
+            "Optimization feature tests require absolute custom flag evaluations and container"
+                    + " resets.")
+    public void testDeferredContentViewInflation() {
+        TabImpl tab = createFrozenTab();
+
+        assertNotNull("WebContents should be initialized early", tab.getWebContents());
+        assertNotNull("ContentView should return lightweight proxy stub", tab.getContentView());
+
+        // Triggering show() unrolls the deferred view layer attachment safely.
+        ThreadUtils.runOnUiThreadBlocking(() -> tab.show(TabSelectionType.FROM_USER));
+
+        assertNotNull("ContentView should be inflated after show()", tab.getContentView());
+        assertFalse(
+                "ContentView should inflate to regular base instance",
+                tab.getContentView()
+                        .getClass()
+                        .getSimpleName()
+                        .contains("DeferredContentViewStub"));
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"Tab"})
+    @EnableFeatures({"LoadAllTabsAtStartup"})
+    @RequiresRestart(
+            "Optimization feature tests require absolute custom flag evaluations and container"
+                    + " resets.")
+    public void testDeferredContentViewInflation_loadIfNeeded() {
+        TabImpl tab = createFrozenTab();
+
+        assertNotNull("WebContents should be initialized early", tab.getWebContents());
+        assertNotNull("ContentView should return lightweight proxy stub", tab.getContentView());
+
+        // Triggering loadIfNeeded() invokes restoration paths that inflate the deferred UI.
+        ThreadUtils.runOnUiThreadBlocking(() -> tab.loadIfNeeded(/* forceBackingSize= */ false));
+
+        assertNotNull("ContentView should be inflated after loadIfNeeded()", tab.getContentView());
+        assertFalse(
+                "ContentView should inflate to regular base instance",
+                tab.getContentView()
+                        .getClass()
+                        .getSimpleName()
+                        .contains("DeferredContentViewStub"));
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"Tab"})
     public void testTabLoadIfNeededEnsuresBackingForMediaCapture() {
         TabImpl tab = createFrozenTab();
 
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> tab.loadIfNeeded(TabLoadIfNeededCaller.MEDIA_CAPTURE_PICKER));
+        ThreadUtils.runOnUiThreadBlocking(() -> tab.loadIfNeeded(/* forceBackingSize= */ true));
 
         ThreadUtils.runOnUiThreadBlocking(() -> assertTrue(tab.hasBacking()));
     }
@@ -148,24 +201,7 @@ public class TabImplTest {
     @Test
     @SmallTest
     @Feature({"Tab"})
-    @DisableFeatures({
-        ChromeFeatureList.ANDROID_PINNED_TABS,
-        ChromeFeatureList.ANDROID_PINNED_TABS_TABLET_TAB_STRIP
-    })
-    public void testSetIsPinned_TrueBecomesFalseWhenFeatureDisabled() {
-        TabImpl tab = (TabImpl) mActivityTestRule.getActivityTab();
-        ThreadUtils.runOnUiThreadBlocking(() -> tab.setIsPinned(true));
-        assertFalse("Tab should not be pinned when the feature is disabled.", tab.getIsPinned());
-    }
-
-    @Test
-    @SmallTest
-    @Feature({"Tab"})
-    @EnableFeatures({
-        ChromeFeatureList.TAB_FREEZING_USES_DISCARD,
-        ContentFeatures.WEB_CONTENTS_DISCARD
-    })
-    public void testFreeze_withDiscard() {
+    public void testDiscard() {
         final TabImpl tab = (TabImpl) mActivityTestRule.getActivityTab();
 
         // Open a new tab to hide the initial tab. The new tab becomes active.
@@ -183,7 +219,7 @@ public class TabImplTest {
 
         CriteriaHelper.pollUiThread(() -> Criteria.checkThat(tab.isHidden(), Matchers.is(true)));
 
-        ThreadUtils.runOnUiThreadBlocking(tab::freeze);
+        ThreadUtils.runOnUiThreadBlocking(tab::discard);
 
         assertFalse("Tab should not be frozen", tab.isFrozen());
         assertNotNull("WebContents should not be null after discard", tab.getWebContents());
@@ -192,42 +228,7 @@ public class TabImplTest {
     @Test
     @SmallTest
     @Feature({"Tab"})
-    @DisableFeatures({
-        ChromeFeatureList.TAB_FREEZING_USES_DISCARD,
-        ContentFeatures.WEB_CONTENTS_DISCARD
-    })
-    public void testFreeze_withoutDiscard() {
-        final TabImpl tab = (TabImpl) mActivityTestRule.getActivityTab();
-
-        // Open a new tab to hide the initial tab. The new tab becomes active.
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    mActivityTestRule
-                            .getActivity()
-                            .getTabModelSelector()
-                            .openNewTab(
-                                    new LoadUrlParams("about:blank"),
-                                    TabLaunchType.FROM_CHROME_UI,
-                                    tab,
-                                    tab.isIncognito());
-                });
-
-        CriteriaHelper.pollUiThread(() -> Criteria.checkThat(tab.isHidden(), Matchers.is(true)));
-
-        ThreadUtils.runOnUiThreadBlocking(tab::freeze);
-
-        assertTrue("Tab should be frozen", tab.isFrozen());
-        assertNull("WebContents should be null after freezeInternal", tab.getWebContents());
-    }
-
-    @Test
-    @SmallTest
-    @Feature({"Tab"})
-    @EnableFeatures({
-        ChromeFeatureList.TAB_FREEZING_USES_DISCARD,
-        ContentFeatures.WEB_CONTENTS_DISCARD
-    })
-    public void testFreezeAndAppendPendingNavigation_withDiscard() {
+    public void testDiscardAndAppendPendingNavigation() {
         final TabImpl tab = (TabImpl) mActivityTestRule.getActivityTab();
 
         // Open a new tab to hide the initial tab. The new tab becomes active.
@@ -247,7 +248,7 @@ public class TabImplTest {
 
         String url = mActivityTestRule.getTestServer().getURL(TEST_PATH);
         ThreadUtils.runOnUiThreadBlocking(
-                () -> tab.freezeAndAppendPendingNavigation(new LoadUrlParams(url), "title"));
+                () -> tab.discardAndAppendPendingNavigation(new LoadUrlParams(url), "title"));
 
         assertFalse("Tab should not be frozen", tab.isFrozen());
         assertNotNull("WebContents should not be null", tab.getWebContents());
@@ -263,52 +264,7 @@ public class TabImplTest {
     @Test
     @SmallTest
     @Feature({"Tab"})
-    @DisableFeatures({
-        ChromeFeatureList.TAB_FREEZING_USES_DISCARD,
-        ContentFeatures.WEB_CONTENTS_DISCARD
-    })
-    public void testFreezeAndAppendPendingNavigation_withoutDiscard() {
-        final TabImpl tab = (TabImpl) mActivityTestRule.getActivityTab();
-
-        // Open a new tab to hide the initial tab. The new tab becomes active.
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    mActivityTestRule
-                            .getActivity()
-                            .getTabModelSelector()
-                            .openNewTab(
-                                    new LoadUrlParams("about:blank"),
-                                    TabLaunchType.FROM_CHROME_UI,
-                                    tab,
-                                    tab.isIncognito());
-                });
-
-        CriteriaHelper.pollUiThread(() -> Criteria.checkThat(tab.isHidden(), Matchers.is(true)));
-
-        String url = mActivityTestRule.getTestServer().getURL(TEST_PATH);
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> tab.freezeAndAppendPendingNavigation(new LoadUrlParams(url), "title"));
-
-        assertTrue("Tab should be frozen", tab.isFrozen());
-        assertNull("WebContents should be null", tab.getWebContents());
-        assertNotNull("WebContentsState should not be null", tab.getWebContentsState());
-        assertNull("Pending load params should be null", tab.getPendingLoadParams());
-        assertEquals(
-                "WebContentsState should have the new URL",
-                url,
-                tab.getWebContentsState().getVirtualUrlFromState());
-        assertEquals("URL should be updated", url, tab.getUrl().getSpec());
-        assertEquals("Title should be updated", "title", tab.getTitle());
-    }
-
-    @Test
-    @SmallTest
-    @Feature({"Tab"})
-    @EnableFeatures({
-        ChromeFeatureList.TAB_FREEZING_USES_DISCARD,
-        ContentFeatures.WEB_CONTENTS_DISCARD
-    })
-    public void testFreezeAndAppendPendingNavigation_withDiscard_loadUrlDiscardsPendingLoad() {
+    public void testDiscardAndAppendPendingNavigation_loadUrlDiscardsPendingLoad() {
         final TabImpl tab = (TabImpl) mActivityTestRule.getActivityTab();
 
         // Open a new tab to hide the initial tab. The new tab becomes active.
@@ -328,7 +284,7 @@ public class TabImplTest {
 
         String url1 = mActivityTestRule.getTestServer().getURL(TEST_PATH);
         ThreadUtils.runOnUiThreadBlocking(
-                () -> tab.freezeAndAppendPendingNavigation(new LoadUrlParams(url1), "title1"));
+                () -> tab.discardAndAppendPendingNavigation(new LoadUrlParams(url1), "title1"));
 
         assertNotNull("Pending load params should not be null", tab.getPendingLoadParams());
         assertEquals(
@@ -350,51 +306,226 @@ public class TabImplTest {
     @Test
     @SmallTest
     @Feature({"Tab"})
-    @DisableFeatures({
-        ChromeFeatureList.TAB_FREEZING_USES_DISCARD,
-        ContentFeatures.WEB_CONTENTS_DISCARD
-    })
-    public void testFreezeAndAppendPendingNavigation_withoutDiscard_loadUrlDiscardsPendingLoad() {
+    public void testOffscreenRendering() {
+        TabImpl tab = (TabImpl) mActivityTestRule.getActivityTab();
+        WindowAndroid originalWindow = tab.getWindowAndroid();
+        assertNotNull(originalWindow);
+        assertFalse(tab.getIsOffscreenRenderingSupplier().get());
+
+        WindowAndroid testWindow =
+                ThreadUtils.runOnUiThreadBlocking(
+                        () ->
+                                new WindowAndroid(
+                                        mActivityTestRule.getActivity(),
+                                        /* occlusionTrackingAllowed= */ false));
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    tab.startOffscreenRendering();
+                    tab.getWebContents().setTopLevelNativeWindow(testWindow);
+                });
+
+        assertTrue(tab.getIsOffscreenRenderingSupplier().get());
+        assertEquals(testWindow, tab.getWebContents().getTopLevelNativeWindow());
+        assertEquals(originalWindow, tab.getWindowAndroid());
+
+        ThreadUtils.runOnUiThreadBlocking(() -> tab.stopOffscreenRendering());
+
+        assertFalse(tab.getIsOffscreenRenderingSupplier().get());
+
+        assertEquals(originalWindow, tab.getWebContents().getTopLevelNativeWindow());
+        assertEquals(originalWindow, tab.getWindowAndroid());
+
+        ThreadUtils.runOnUiThreadBlocking(() -> testWindow.destroy());
+    }
+    @Test
+    @SmallTest
+    @Feature({"Tab"})
+    public void testOffscreenRenderingUpdatesVisibility() {
+        TabImpl tab = (TabImpl) mActivityTestRule.getActivityTab();
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    tab.hide(TabHidingType.ACTIVITY_HIDDEN);
+                });
+        assertEquals(Visibility.HIDDEN, tab.getWebContents().getVisibility());
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    tab.startOffscreenRendering();
+                });
+        assertEquals(Visibility.VISIBLE, tab.getWebContents().getVisibility());
+
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    tab.stopOffscreenRendering();
+                });
+        assertEquals(Visibility.HIDDEN, tab.getWebContents().getVisibility());
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"Tab"})
+    public void testLoadIfNeeded_unattachedWebTabSucceeds() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    Profile profile =
+                            mActivityTestRule
+                                    .getActivity()
+                                    .getProfileProviderSupplier()
+                                    .get()
+                                    .getOriginalProfile();
+                    TabDelegateFactory delegateFactory =
+                            ((TabImpl) mActivityTestRule.getActivityTab()).getDelegateFactory();
+                    TabState state = TabStateExtractor.from(mActivityTestRule.getActivityTab());
+                    TabImpl tab =
+                            (TabImpl)
+                                    new TabBuilder(profile)
+                                            .setTabState(state)
+                                            .setLaunchType(TabLaunchType.FROM_RESTORE)
+                                            .setDelegateFactory(delegateFactory)
+                                            .build();
+                    assertNull(tab.getWindowAndroid());
+                    assertTrue(tab.isFrozen());
+                    assertTrue(tab.loadIfNeeded(/* forceBackingSize= */ false));
+                    assertNotNull(tab.getWebContents());
+                    assertFalse(tab.isFrozen());
+                    tab.destroy();
+                });
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"Tab"})
+    public void testLoadIfNeeded_unattachedNativePageFails() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    Profile profile =
+                            mActivityTestRule
+                                    .getActivity()
+                                    .getProfileProviderSupplier()
+                                    .get()
+                                    .getOriginalProfile();
+                    TabDelegateFactory delegateFactory =
+                            ((TabImpl) mActivityTestRule.getActivityTab()).getDelegateFactory();
+                    TabImpl tab =
+                            (TabImpl)
+                                    new TabBuilder(profile)
+                                            .setLaunchType(TabLaunchType.FROM_CHROME_UI)
+                                            .setDelegateFactory(delegateFactory)
+                                            .build();
+                    tab.discardAndAppendPendingNavigation(
+                            new LoadUrlParams(UrlConstants.RECENT_TABS_URL), "Recent Tabs");
+                    assertNull(tab.getWindowAndroid());
+                    assertFalse(tab.loadIfNeeded(/* forceBackingSize= */ false));
+                    tab.destroy();
+                });
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"Tab"})
+    public void testLoadIfNeeded_archivedOrDestroyedTabFails() {
+        ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    Profile profile =
+                            mActivityTestRule
+                                    .getActivity()
+                                    .getProfileProviderSupplier()
+                                    .get()
+                                    .getOriginalProfile();
+                    WindowAndroid window = mActivityTestRule.getActivity().getWindowAndroid();
+                    TabDelegateFactory delegateFactory =
+                            ((TabImpl) mActivityTestRule.getActivityTab()).getDelegateFactory();
+                    TabImpl standaloneTab =
+                            (TabImpl)
+                                    new TabBuilder(profile)
+                                            .setWindow(window)
+                                            .setLaunchType(TabLaunchType.FROM_RESTORE)
+                                            .setDelegateFactory(delegateFactory)
+                                            .build();
+                    standaloneTab.destroy();
+                    assertTrue(standaloneTab.isDestroyed());
+                    assertFalse(standaloneTab.loadIfNeeded(/* forceBackingSize= */ false));
+
+                    TabImpl archivedTab =
+                            (TabImpl)
+                                    new TabBuilder(profile)
+                                            .setWindow(window)
+                                            .setLaunchType(TabLaunchType.FROM_RESTORE)
+                                            .setDelegateFactory(
+                                                    new HeadlessTabDelegateFactory(
+                                                            TabModelType.ARCHIVED))
+                                            .build();
+                    assertTrue(archivedTab.isArchivedForTesting());
+                    assertFalse(archivedTab.loadIfNeeded(/* forceBackingSize= */ false));
+                    archivedTab.destroy();
+                });
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"Tab"})
+    public void testShow_forcesLoadIfAlreadyShownAndNeedsReload() {
         final TabImpl tab = (TabImpl) mActivityTestRule.getActivityTab();
 
-        // Open a new tab to hide the initial tab. The new tab becomes active.
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    mActivityTestRule
-                            .getActivity()
-                            .getTabModelSelector()
-                            .openNewTab(
-                                    new LoadUrlParams("about:blank"),
-                                    TabLaunchType.FROM_CHROME_UI,
-                                    tab,
-                                    tab.isIncognito());
+                    tab.show(TabSelectionType.FROM_USER);
+                    assertFalse(tab.isHidden());
+                    assertNotNull(tab.getWebContents());
+
+                    // Mark as needing reload.
+                    tab.setNeedsReload();
+                    assertTrue(tab.needsReload());
+
+                    // Calling show() when already not hidden should force loadIfNeeded().
+                    tab.show(TabSelectionType.FROM_USER);
+                    assertFalse(tab.isHidden());
+                    assertNotNull(tab.getWebContents());
                 });
+    }
 
-        CriteriaHelper.pollUiThread(() -> Criteria.checkThat(tab.isHidden(), Matchers.is(true)));
-
-        String url1 = mActivityTestRule.getTestServer().getURL(TEST_PATH);
-        ThreadUtils.runOnUiThreadBlocking(
-                () -> tab.freezeAndAppendPendingNavigation(new LoadUrlParams(url1), "title1"));
-
-        assertNotNull("WebContentsState should not be null", tab.getWebContentsState());
-        assertNull("Pending load params should be null", tab.getPendingLoadParams());
-        assertEquals(
-                "WebContentsState should have the new URL",
-                url1,
-                tab.getWebContentsState().getVirtualUrlFromState());
-        assertEquals("URL should be updated", url1, tab.getUrl().getSpec());
-        assertEquals("Title should be updated", "title1", tab.getTitle());
-
-        String url2 =
-                mActivityTestRule.getTestServer().getURL("/chrome/test/data/android/simple.html");
+    @Test
+    @SmallTest
+    @Feature({"Tab"})
+    public void testShow_forcesLoadIfAlreadyShownAndFrozen() {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    tab.loadIfNeeded(TabLoadIfNeededCaller.OTHER);
-                    tab.loadUrl(new LoadUrlParams(url2));
-                });
+                    Profile profile =
+                            mActivityTestRule
+                                    .getActivity()
+                                    .getProfileProviderSupplier()
+                                    .get()
+                                    .getOriginalProfile();
+                    TabDelegateFactory delegateFactory =
+                            ((TabImpl) mActivityTestRule.getActivityTab()).getDelegateFactory();
+                    TabState state = TabStateExtractor.from(mActivityTestRule.getActivityTab());
+                    TabImpl tab =
+                            (TabImpl)
+                                    new TabBuilder(profile)
+                                            .setTabState(state)
+                                            .setLaunchType(TabLaunchType.FROM_RESTORE)
+                                            .setDelegateFactory(delegateFactory)
+                                            .build();
+                    tab.updateAttachment(
+                            mActivityTestRule.getActivity().getWindowAndroid(),
+                            tab.getDelegateFactory());
+                    assertTrue(tab.isFrozen());
+                    assertNull(tab.getWebContents());
 
-        assertNull("Pending load params should be null", tab.getPendingLoadParams());
-        assertEquals("URL should be updated", url2, tab.getUrl().getSpec());
-        // Title will be updated asynchronously.
+                    // First show() marks it unhidden and restores contents.
+                    tab.show(TabSelectionType.FROM_USER);
+                    assertFalse(tab.isHidden());
+                    assertNotNull(tab.getWebContents());
+                    assertFalse(tab.isFrozen());
+
+                    // Calling show() when already not hidden should remain unhidden and loaded.
+                    tab.show(TabSelectionType.FROM_USER);
+                    assertFalse(tab.isHidden());
+                    assertNotNull(tab.getWebContents());
+                    assertFalse(tab.isFrozen());
+                    tab.destroy();
+                });
     }
 }

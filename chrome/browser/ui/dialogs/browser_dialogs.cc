@@ -5,7 +5,6 @@
 #include "chrome/browser/ui/dialogs/browser_dialogs.h"
 
 #include "base/functional/callback_helpers.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notimplemented.h"
 
 #if defined(TOOLKIT_VIEWS)
@@ -23,11 +22,11 @@
 namespace chrome {
 
 #if !defined(TOOLKIT_VIEWS)
-void ShowWindowNamePrompt(Browser* browser) {
+void ShowWindowNamePrompt(BrowserWindowInterface* browser) {
   NOTIMPLEMENTED();
 }
 
-void ShowWindowNamePromptForTesting(Browser* browser,
+void ShowWindowNamePromptForTesting(BrowserWindowInterface* browser,
                                     gfx::NativeWindow context) {
   NOTIMPLEMENTED();
 }

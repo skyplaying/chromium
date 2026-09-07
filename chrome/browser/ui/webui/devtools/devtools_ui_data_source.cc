@@ -31,6 +31,7 @@
 #include "net/base/load_flags.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "url/url_constants.h"
 
 namespace {
@@ -174,7 +175,8 @@ void DevToolsDataSource::StartDataRequest(
   std::string empty_path_prefix(chrome::kChromeUIDevToolsBlankPath);
   if (base::StartsWith(path, empty_path_prefix,
                        base::CompareCase::INSENSITIVE_ASCII)) {
-    std::move(callback).Run(new base::RefCountedStaticMemory());
+    std::move(callback).Run(
+        base::MakeRefCounted<base::RefCountedStaticMemory>());
     return;
   }
 

@@ -216,7 +216,8 @@ content::DesktopMediaID::Id GetUpdatedWindowId(
     }
   }
 #elif BUILDFLAG(IS_MAC)
-  if (remote_cocoa::ScopedCGWindowID::Get(desktop_media_id.id)) {
+  if (!is_source_list_delegated &&
+      remote_cocoa::ScopedCGWindowID::Get(desktop_media_id.id)) {
     window_id = desktop_media_id.id;
   }
 #endif
@@ -290,10 +291,15 @@ class NativeDesktopMediaList::Worker
   static std::vector<SourceDescription> FormatSources(
       const webrtc::DesktopCapturer::SourceList& sources,
       const DesktopMediaID::Type source_type,
-      DesktopMediaID::Id excluded_window_id);
+      DesktopMediaID::Id excluded_window_id,
+      bool is_source_list_delegated);
 
 #if BUILDFLAG(IS_WIN)
-  static std::vector<SourceDescription> GetCurrentProcessWindows();
+  // On Windows, enumerates all capturable top-level HWNDs owned by the current
+  // Chrome process to augment WebRTC's source list. Skips |excluded_window_id|
+  // so the picker dialog itself is not listed in the window sharing list.
+  static std::vector<SourceDescription> GetCurrentProcessWindows(
+      DesktopMediaID::Id excluded_window_id);
 
   static std::vector<SourceDescription> MergeAndSortWindowSources(
       std::vector<SourceDescription> sources_a,
@@ -410,20 +416,22 @@ void NativeDesktopMediaList::Worker::Refresh(bool update_thumbnails) {
     capturer_->SelectSources(source_ids, thumbnail_size_);
   }
 
-  std::vector<SourceDescription> source_descriptions =
-      FormatSources(sources, source_type_, excluded_window_id_);
+  std::vector<SourceDescription> source_descriptions = FormatSources(
+      sources, source_type_, excluded_window_id_, is_source_list_delegated_);
 
 #if BUILDFLAG(IS_WIN)
   // If |add_current_process_windows_| is set to false, |capturer_| will have
   // found the windows owned by the current process for us. Otherwise, we must
-  // do this.
+  // do this. Pass |excluded_window_id_| so that the picker dialog window is
+  // not added back into the window list on Windows.
   if (add_current_process_windows_) {
     DCHECK_EQ(source_type_, DesktopMediaID::Type::TYPE_WINDOW);
     // WebRTC returns the windows in order of highest z-order to lowest, but
     // these additional windows will be out of order if we just append them. So
     // we sort the list according to the z-order of the windows.
     source_descriptions = MergeAndSortWindowSources(
-        std::move(source_descriptions), GetCurrentProcessWindows());
+        std::move(source_descriptions),
+        GetCurrentProcessWindows(excluded_window_id_));
   }
 #endif  // BUILDFLAG(IS_WIN)
 
@@ -485,7 +493,8 @@ std::vector<DesktopMediaListBase::SourceDescription>
 NativeDesktopMediaList::Worker::FormatSources(
     const webrtc::DesktopCapturer::SourceList& sources,
     const DesktopMediaID::Type source_type,
-    DesktopMediaID::Id excluded_window_id) {
+    DesktopMediaID::Id excluded_window_id,
+    bool is_source_list_delegated) {
   std::vector<SourceDescription> source_descriptions;
   std::u16string title;
   for (size_t i = 0; i < sources.size(); ++i) {
@@ -513,6 +522,9 @@ NativeDesktopMediaList::Worker::FormatSources(
         NOTREACHED();
     }
     DesktopMediaID source_id(source_type, sources[i].id);
+    if (is_source_list_delegated) {
+      source_id.id_type = DesktopMediaID::IdType::kNativePickerSession;
+    }
     source_descriptions.emplace_back(std::move(source_id), title);
   }
 
@@ -522,7 +534,8 @@ NativeDesktopMediaList::Worker::FormatSources(
 #if BUILDFLAG(IS_WIN)
 // static
 std::vector<DesktopMediaListBase::SourceDescription>
-NativeDesktopMediaList::Worker::GetCurrentProcessWindows() {
+NativeDesktopMediaList::Worker::GetCurrentProcessWindows(
+    DesktopMediaID::Id excluded_window_id) {
   std::vector<HWND> current_process_windows;
   if (!::EnumWindows(CapturableCurrentProcessHwndCollector,
                      reinterpret_cast<LPARAM>(&current_process_windows))) {
@@ -531,6 +544,11 @@ NativeDesktopMediaList::Worker::GetCurrentProcessWindows() {
 
   std::vector<SourceDescription> current_process_sources;
   for (HWND hwnd : current_process_windows) {
+    // Skip the excluded window (e.g. the picker dialog itself) so it is not
+    // added to the window list on Windows.
+    if (reinterpret_cast<DesktopMediaID::Id>(hwnd) == excluded_window_id) {
+      continue;
+    }
     // Leave these sources untitled, we must get their title from the UI thread.
     current_process_sources.emplace_back(
         DesktopMediaID(
@@ -654,11 +672,15 @@ void NativeDesktopMediaList::Worker::OnRecurrentCaptureResult(
   gfx::ImageSkia thumbnail =
       ScaleDesktopFrame(std::move(frame), thumbnail_size_);
 
+  DesktopMediaID id(source_type_, source_id);
+  if (is_source_list_delegated_) {
+    id.id_type = content::DesktopMediaID::IdType::kNativePickerSession;
+  }
+
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE,
       base::BindOnce(
-          &AssignWindowIdAndUpdateThumbnail,
-          DesktopMediaID(source_type_, source_id), is_source_list_delegated_,
+          &AssignWindowIdAndUpdateThumbnail, id, is_source_list_delegated_,
           thumbnail,
           base::BindOnce(&NativeDesktopMediaList::UpdateSourceThumbnail,
                          media_list_)));
@@ -896,8 +918,14 @@ void NativeDesktopMediaList::Refresh(bool update_thumbnails) {
   DCHECK(can_refresh());
 
 #if defined(USE_AURA)
-  DCHECK_EQ(pending_aura_capture_requests_, 0);
-  DCHECK(!pending_native_thumbnail_capture_);
+  if (pending_aura_capture_requests_ > 0 || pending_native_thumbnail_capture_) {
+    // If there's still a pending capture, just bail out; we can't refresh until
+    // the capture is actually finished. This can happen if the worker thread is
+    // slow to finish its native captures or the update rate for refreshes is
+    // very fast (or the timing is just unlucky).
+    return;
+  }
+
   new_aura_thumbnail_hashes_.clear();
 #endif
 

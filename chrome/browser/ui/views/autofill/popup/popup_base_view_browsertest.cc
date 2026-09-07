@@ -8,14 +8,15 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/autofill/autofill_popup_view_delegate.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/autofill/core/browser/suggestions/suggestion.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/browser/ui/popup_open_enums.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/strings/grit/components_strings.h"
@@ -29,7 +30,6 @@
 #include "ui/gfx/geometry/point_conversions.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_f.h"
-#include "ui/gfx/geometry/vector2d.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/test/views_test_base.h"
 #include "ui/views/widget/widget.h"
@@ -71,9 +71,7 @@ class MockAutofillPopupViewDelegate : public AutofillPopupViewDelegate {
 
 class PopupBaseViewBrowsertest : public InProcessBrowserTest {
  public:
-  PopupBaseViewBrowsertest() {
-    feature_list_.InitAndDisableFeature(features::kAutofillMoreProminentPopup);
-  }
+  PopupBaseViewBrowsertest() = default;
 
   PopupBaseViewBrowsertest(const PopupBaseViewBrowsertest&) = delete;
   PopupBaseViewBrowsertest& operator=(const PopupBaseViewBrowsertest&) = delete;
@@ -82,30 +80,32 @@ class PopupBaseViewBrowsertest : public InProcessBrowserTest {
 
   void SetUpOnMainThread() override {
     content::WebContents* web_contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
     gfx::NativeView native_view = web_contents->GetNativeView();
     EXPECT_CALL(mock_delegate_, container_view())
         .WillRepeatedly(Return(native_view));
     EXPECT_CALL(mock_delegate_, GetWebContents())
         .WillRepeatedly(Return(web_contents));
-    EXPECT_CALL(mock_delegate_, ViewDestroyed());
+    EXPECT_CALL(mock_delegate_, ViewDestroyed()).Times(testing::AtMost(1));
 
     view_ = new PopupBaseView(mock_delegate_.GetWeakPtr(),
                               views::Widget::GetWidgetForNativeWindow(
-                                  browser()->window()->GetNativeWindow()));
+                                  browser()->GetWindow()->GetNativeWindow()));
   }
 
   void TearDownOnMainThread() override { view_ = nullptr; }
 
-  void ShowView() { view_->DoShow(); }
+  bool ShowView() { return view_->DoShow(); }
+  void HideView() { view_->DoHide(); }
 
  protected:
   testing::NiceMock<MockAutofillPopupViewDelegate> mock_delegate_;
   raw_ptr<PopupBaseView> view_ = nullptr;
 
  private:
+  base::test::ScopedFeatureList feature_list_{
+      features::kAutofillPopupUseDeleteSoon};
   test::AutofillBrowserTestEnvironment autofill_test_environment_;
-  base::test::ScopedFeatureList feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_F(PopupBaseViewBrowsertest, CorrectBoundsTest) {
@@ -141,55 +141,31 @@ IN_PROC_BROWSER_TEST_F(PopupBaseViewBrowsertest, AccessibleProperties) {
             data.GetString16Attribute(ax::mojom::StringAttribute::kName));
 }
 
-struct ProminentPopupTestParams {
-  bool is_feature_enabled;
-  int expected_left_offset;
-};
+IN_PROC_BROWSER_TEST_F(PopupBaseViewBrowsertest,
+                       HideWithoutWidgetSchedulesDeleteSoon) {
+  EXPECT_EQ(nullptr, view_->GetWidget());
 
-class PopupBaseViewProminentStyleFeatureTest
-    : public PopupBaseViewBrowsertest,
-      public testing::WithParamInterface<ProminentPopupTestParams> {
- public:
-  PopupBaseViewProminentStyleFeatureTest() {
-    feature_list_.InitWithFeatureState(features::kAutofillMoreProminentPopup,
-                                       GetParam().is_feature_enabled);
-  }
+  // DoHide() should not synchronously delete `view_`, and calling DoHide()
+  // again should be a safe no-op.
+  HideView();
+  HideView();
 
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
+  // Reset `view_` before running tasks to avoid a dangling raw_ptr when
+  // DeleteSoon destroys the view.
+  view_ = nullptr;
 
-IN_PROC_BROWSER_TEST_P(PopupBaseViewProminentStyleFeatureTest, LeftMaxOffset) {
-  gfx::Rect web_bounds = mock_delegate_.GetWebContents()->GetViewBounds();
-  gfx::RectF bounds(web_bounds.x() + 100, web_bounds.y() + 150, 1000, 20);
-  EXPECT_CALL(mock_delegate_, element_bounds())
-      .WillRepeatedly(ReturnRef(bounds));
-
-  ShowView();
-
-  gfx::Point display_point = static_cast<views::View*>(view_)
-                                 ->GetWidget()
-                                 ->GetClientAreaBoundsInScreen()
-                                 .origin();
-
-  // Shows the popup on a long (1000px) element and returns the offset
-  // of the poopup's top left point to the bottom left point of the target:
-  //     │      element     │
-  //     └──────────────────┘
-  //      |- offset -|┌──^───────────────┐
-  //                  │       popup      │
-  gfx::Vector2d offset =
-      display_point - gfx::ToRoundedPoint(bounds.bottom_left());
-
-  EXPECT_EQ(offset.x(), GetParam().expected_left_offset);
+  // Run pending tasks to execute DeleteSoon.
+  base::RunLoop().RunUntilIdle();
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    All,
-    PopupBaseViewProminentStyleFeatureTest,
-    testing::Values(ProminentPopupTestParams{.is_feature_enabled = false,
-                                             .expected_left_offset = 95},
-                    ProminentPopupTestParams{.is_feature_enabled = true,
-                                             .expected_left_offset = 55}));
+IN_PROC_BROWSER_TEST_F(PopupBaseViewBrowsertest, ShowAfterHideReturnsFalse) {
+  EXPECT_EQ(nullptr, view_->GetWidget());
+
+  HideView();
+  EXPECT_FALSE(ShowView());
+
+  view_ = nullptr;
+  base::RunLoop().RunUntilIdle();
+}
 
 }  // namespace autofill

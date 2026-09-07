@@ -262,7 +262,9 @@ std::optional<syncer::ModelError> PrefModelAssociator::MergeDataAndStartSyncing(
 
     remaining_preferences.erase(it);
     InitPrefAndAssociate(sync_data, sync_pref_name, &new_changes);
-    NotifyStartedSyncing(sync_pref_name);
+    NotifyStartedSyncing(
+        sync_pref_name,
+        ReadPreferenceSpecifics(preference).value_or(base::Value()));
   }
 
   // Go through and build sync data for any remaining preferences.
@@ -471,16 +473,28 @@ void PrefModelAssociator::OnPrefValueChanged(std::string_view name) {
     return;  // These are changes originating from us, ignore.
   }
 
-  // We only process changes if we've already associated models.
-  // This also filters out local changes during the initial merge.
-  if (!models_associated_) {
-    return;
-  }
-
   if (!IsPrefRegistered(name)) {
     // We are not syncing this preference -- this also filters out synced
     // preferences of the wrong type (e.g. priority preference are handled by a
     // separate associator).
+    return;
+  }
+
+  if (client_) {
+    const SyncablePrefMetadata* pref_metadata =
+        client_->GetSyncablePrefsDatabase().GetSyncablePrefMetadata(name);
+    CHECK(pref_metadata);
+    int id = pref_metadata->syncable_pref_id();
+    // TODO(crbug.com/418991364): Determine if this histogram should replace the
+    // one below. If not, remove this histogram.
+    base::UmaHistogramSparse(
+        base::StrCat({"Sync.PrefModelAssociator.OnPrefValueChanged.",
+                      syncer::DataTypeToHistogramSuffix(type_)}), id);
+  }
+
+  // We only process changes if we've already associated models.
+  // This also filters out local changes during the initial merge.
+  if (!models_associated_) {
     return;
   }
 
@@ -519,8 +533,9 @@ void PrefModelAssociator::OnPrefValueChanged(std::string_view name) {
   if (client_ &&
       // Only log if there's actually something to sync.
       !changes.empty()) {
-    std::optional<SyncablePrefMetadata> pref_metadata =
+    const SyncablePrefMetadata* pref_metadata =
         client_->GetSyncablePrefsDatabase().GetSyncablePrefMetadata(name);
+    CHECK(pref_metadata);
     int id = pref_metadata->syncable_pref_id();
     base::UmaHistogramSparse("Sync.SyncablePrefValueChanged", id);
     base::UmaHistogramSparse(
@@ -572,14 +587,15 @@ bool PrefModelAssociator::SetPrefWithTypeCheck(std::string_view pref_name,
   return true;
 }
 
-void PrefModelAssociator::NotifyStartedSyncing(const std::string& path) const {
+void PrefModelAssociator::NotifyStartedSyncing(const std::string& path,
+                                               const base::Value& value) const {
   auto observer_iter = synced_pref_observers_.find(path);
   if (observer_iter == synced_pref_observers_.end()) {
     return;
   }
 
   for (auto& observer : *observer_iter->second) {
-    observer.OnStartedSyncing(path);
+    observer.OnStartedSyncing(path, value);
   }
 }
 

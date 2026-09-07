@@ -5,11 +5,18 @@
 #ifndef COMPONENTS_ENTERPRISE_CONNECTORS_CORE_CLOUD_CONTENT_SCANNING_FILE_ANALYSIS_REQUEST_BASE_H_
 #define COMPONENTS_ENTERPRISE_CONNECTORS_CORE_CLOUD_CONTENT_SCANNING_FILE_ANALYSIS_REQUEST_BASE_H_
 
+#include <atomic>
+
 #include "base/functional/callback_helpers.h"
+#include "base/task/post_job.h"
 #include "base/task/sequenced_task_runner.h"
 #include "components/enterprise/connectors/core/cloud_content_scanning/binary_upload_request.h"
 #include "components/enterprise/connectors/core/service_provider_config.h"
 #include "components/file_access/scoped_file_access.h"
+
+namespace safe_browsing {
+class FileOpeningJob;
+}  // namespace safe_browsing
 
 namespace enterprise_connectors {
 
@@ -35,6 +42,9 @@ class FileAnalysisRequestBase : public BinaryUploadRequest {
   FileAnalysisRequestBase& operator=(const FileAnalysisRequestBase&) = delete;
   ~FileAnalysisRequestBase() override;
 
+  void set_file_opening_job(
+      scoped_refptr<safe_browsing::FileOpeningJob> file_opening_job);
+
   // BinaryUploadRequest implementation. If |delay_opening_file_| is false,
   // OnGotFileData is called by posting after GetFileDataBlocking runs a
   // base::MayBlock() thread, otherwise the callback will be stored and run
@@ -43,7 +53,21 @@ class FileAnalysisRequestBase : public BinaryUploadRequest {
 
   // Opens the file, reads it, and then calls OnGotFileData on the UI thread.
   // This should be called on a thread with base::MayBlock().
-  void OpenFile();
+  // This function is virtual for testing.
+  virtual void OpenFile(const std::atomic<bool>* is_cancelled);
+
+  // Cancels the request if it hasn't been opened yet, triggering callbacks
+  // to avoid memory leaks. Resetting data_callback_ destroys the bound
+  // arguments, which includes the std::unique_ptr holding this
+  // FileAnalysisRequestBase, destroying it and breaking the circular reference
+  // silently.
+  void Cancel();
+
+  // Returns true if `path` is a virtual/FSP file system mount (e.g. ChromeOS
+  // Fusebox).
+  static bool IsVirtualFile(const base::FilePath& path);
+
+  static void SetIsVirtualFileForTesting(bool is_virtual);
 
  protected:
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
@@ -111,6 +135,10 @@ class FileAnalysisRequestBase : public BinaryUploadRequest {
  private:
   SEQUENCE_CHECKER(sequence_checker_);
 
+  // Used to CHECK at most one register_on_got_hash_callback_ is called last.
+  bool register_cb_called_last = false;
+
+  scoped_refptr<safe_browsing::FileOpeningJob> file_opening_job_;
   scoped_refptr<base::SequencedTaskRunner> ui_task_runner_;
 
   base::WeakPtrFactory<FileAnalysisRequestBase> weakptr_factory_{this};

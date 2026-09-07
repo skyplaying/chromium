@@ -4,7 +4,7 @@
 
 #include "ios/chrome/browser/composebox/model/ios_contextual_search_service.h"
 
-#include "components/omnibox/composebox/ios/composebox_query_controller_ios.h"
+#include "components/contextual_search/internal/ios/composebox_query_controller_ios.h"
 
 IOSContextualSearchService::IOSContextualSearchService(
     signin::IdentityManager* identity_manager,
@@ -18,7 +18,11 @@ IOSContextualSearchService::IOSContextualSearchService(
                                                  template_url_service,
                                                  variations_client,
                                                  channel,
-                                                 locale) {}
+                                                 locale,
+                                                 /*tab_validator=*/nullptr,
+                                                 GetAuthHeadersCallback()) {
+  // TODO(crbug.com/514803722): Implement and pass TabValidator for iOS.
+}
 
 IOSContextualSearchService::~IOSContextualSearchService() = default;
 
@@ -30,5 +34,5 @@ IOSContextualSearchService::CreateComposeboxQueryController(
   return std::make_unique<ComposeboxQueryControllerIOS>(
       identity_manager_, url_loader_factory_, channel_, locale_,
       template_url_service_, variations_client_,
-      std::move(query_controller_config_params));
+      std::move(query_controller_config_params), get_auth_headers_callback_);
 }

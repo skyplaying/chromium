@@ -34,27 +34,23 @@
       base::ScopedObservation<WebStateList, WebStateListObserverBridge>>
       _webStateListObservation;
 
-  // ID of the passkey request.
-  std::string _requestID;
+  // Information about the pending passkey request.
+  std::optional<webauthn::IOSPasskeyClient::RequestInfo> _requestInfo;
 
   // Email associated with the account the passkey will get saved in.
   NSString* _accountForSaving;
 
   // Module containing the reauthentication mechanism.
-  __weak id<ReauthenticationProtocol> _reauthModule;
-
-  // URL of the current page the bottom sheet is being displayed on.
-  GURL _URL;
+  id<ReauthenticationProtocol> _reauthModule;
 }
 
-- (instancetype)initWithWebStateList:(WebStateList*)webStateList
-                           requestID:(std::string)requestID
-                    accountForSaving:(NSString*)accountForSaving
-                        reauthModule:(id<ReauthenticationProtocol>)reauthModule
-                            delegate:
-                                (id<PasskeyCreationBottomSheetMediatorDelegate>)
-                                    mediatorDelegate {
-  CHECK(!requestID.empty());
+- (instancetype)
+    initWithWebStateList:(WebStateList*)webStateList
+             requestInfo:(webauthn::IOSPasskeyClient::RequestInfo)requestInfo
+        accountForSaving:(NSString*)accountForSaving
+            reauthModule:(id<ReauthenticationProtocol>)reauthModule
+                delegate:(id<PasskeyCreationBottomSheetMediatorDelegate>)
+                             mediatorDelegate {
   self = [super init];
   if (self) {
     _webStateList = webStateList;
@@ -64,10 +60,9 @@
     _webStateListObservation.emplace(&(*_webStateListObserver));
     _webStateListObservation->Observe(_webStateList);
 
-    _requestID = requestID;
+    _requestInfo = std::move(requestInfo);
     _accountForSaving = accountForSaving;
     _reauthModule = reauthModule;
-    _URL = webStateList->GetActiveWebState()->GetLastCommittedURL();
     _mediatorDelegate = mediatorDelegate;
   }
   return self;
@@ -81,13 +76,12 @@
 
 - (void)createPasskey {
   webauthn::PasskeyTabHelper* passkeyTabHelper = [self passkeyTabHelper];
-  if (!passkeyTabHelper) {
+  if (!passkeyTabHelper || !_requestInfo.has_value()) {
     return;
   }
 
   std::optional<bool> shouldPerformUserVerification =
-      passkeyTabHelper->ShouldPerformUserVerification(
-          _requestID, [_reauthModule canAttemptReauthWithBiometrics]);
+      passkeyTabHelper->ShouldPerformUserVerification(_requestInfo->request_id);
 
   if (!shouldPerformUserVerification.has_value()) {
     // TODO(crbug.com/479249845): This should not happen. The correct behavior
@@ -98,8 +92,9 @@
     return;
   }
 
-  if (!*shouldPerformUserVerification) {
-    [self performPasskeyCreation];
+  bool mustPerformUserVerification = *shouldPerformUserVerification;
+  if (!mustPerformUserVerification) {
+    [self performPasskeyCreationWithUserVerification:NO];
     return;
   }
 
@@ -108,27 +103,23 @@
     [_reauthModule
         attemptReauthWithLocalizedReason:
             l10n_util::GetNSString(IDS_IOS_PASSKEY_CREATION_START_REAUTH_REASON)
-                    canReusePreviousAuth:YES
+                    canReusePreviousAuth:!mustPerformUserVerification
                                  handler:^(ReauthenticationResult result) {
                                    [weakSelf handleReauthResult:result];
                                  }];
     return;
   }
 
-  // TODO(crbug.com/479249845): The code below is the correct behavior.
-  // We need to review it with broader teams to confirm that this is the best
-  // approach. When reauthentication cannot be attempted, we
-  // could fail the request or show an appropriate error to the user. However,
-  // there might be other means for the device to authenticate the user (other
-  // credential providers in the system). So, deferring to the renderer is a
-  // reasonable fallback.
+  // Defer to the OS to allow authentication methods that don't require a
+  // passcode. (e.g., security keys, using a QR code).
   [self deferPasskeyCreationToRenderer];
   [_mediatorDelegate dismissPasskeyCreation];
 }
 
 - (void)handleReauthResult:(ReauthenticationResult)result {
-  if (result == ReauthenticationResult::kSuccess) {
-    [self performPasskeyCreation];
+  if (result != ReauthenticationResult::kFailure) {
+    [self performPasskeyCreationWithUserVerification:
+              result == ReauthenticationResult::kSuccess];
   } else {
     // TODO(crbug.com/479249845): The correct behavior when reauthentication
     // fails (e.g., was canceled) should be to fail the request.
@@ -140,39 +131,52 @@
   }
 }
 
-- (void)performPasskeyCreation {
+- (void)performPasskeyCreationWithUserVerification:(BOOL)didCompleteUV {
   webauthn::PasskeyTabHelper* passkeyTabHelper = [self passkeyTabHelper];
-  if (!passkeyTabHelper) {
+  if (!passkeyTabHelper || !_requestInfo.has_value()) {
     [_mediatorDelegate dismissPasskeyCreation];
     return;
   }
-  passkeyTabHelper->StartPasskeyCreation(_requestID);
+  passkeyTabHelper->StartPasskeyCreation(_requestInfo->request_id,
+                                         didCompleteUV);
   [_mediatorDelegate dismissPasskeyCreation];
 }
 
 - (void)deferPasskeyCreationToRenderer {
   webauthn::PasskeyTabHelper* passkeyTabHelper = [self passkeyTabHelper];
-  if (!passkeyTabHelper) {
+  if (!passkeyTabHelper || !_requestInfo.has_value()) {
     return;
   }
 
-  passkeyTabHelper->DeferPendingRequestToRenderer(_requestID);
+  passkeyTabHelper->DeferPendingRequestToRenderer(_requestInfo->request_id);
 }
 
 - (void)cancelPasskeyCreation {
   webauthn::PasskeyTabHelper* passkeyTabHelper = [self passkeyTabHelper];
-  if (!passkeyTabHelper) {
+  if (!passkeyTabHelper || !_requestInfo.has_value()) {
     return;
   }
 
-  passkeyTabHelper->RejectPendingRequest(_requestID);
+  passkeyTabHelper->RejectPendingRequest(_requestInfo->request_id);
+}
+
+- (BOOL)hasPendingRequest:
+    (const webauthn::IOSPasskeyClient::RequestInfo&)requestInfo {
+  return _requestInfo.has_value() && *_requestInfo == requestInfo;
 }
 
 #pragma mark - Accessors
 
 - (void)setConsumer:(id<PasskeyCreationBottomSheetConsumer>)consumer {
+  NSString* rpId = [self rpId];
+  if (!rpId) {
+    // The RP ID should not be empty, dismiss the flow.
+    [_mediatorDelegate dismissPasskeyCreation];
+    return;
+  }
+
   _consumer = consumer;
-  [_consumer setUsername:[self username] email:[self email] url:_URL];
+  [_consumer setUsername:[self username] email:[self email] rpId:rpId];
 }
 
 #pragma mark - WebStateListObserving
@@ -193,15 +197,31 @@
 
 #pragma mark - Private
 
+// Returns the relying party identifier for the passkey request.
+- (NSString*)rpId {
+  webauthn::PasskeyTabHelper* passkeyTabHelper = [self passkeyTabHelper];
+  if (!passkeyTabHelper || !_requestInfo.has_value()) {
+    return nil;
+  }
+
+  std::string rpId =
+      passkeyTabHelper->RelyingPartyIdForRequest(_requestInfo->request_id);
+  if (rpId.empty()) {
+    return nil;
+  }
+
+  return base::SysUTF8ToNSString(rpId);
+}
+
 // Returns the username for the passkey request.
 - (NSString*)username {
   webauthn::PasskeyTabHelper* passkeyTabHelper = [self passkeyTabHelper];
-  if (!passkeyTabHelper) {
+  if (!passkeyTabHelper || !_requestInfo.has_value()) {
     return nil;
   }
 
   const std::string& username =
-      passkeyTabHelper->UsernameForRequest(_requestID);
+      passkeyTabHelper->UsernameForRequest(_requestInfo->request_id);
   if (username.empty()) {
     return nil;
   }

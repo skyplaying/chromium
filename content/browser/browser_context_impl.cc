@@ -23,6 +23,8 @@
 #include "content/browser/in_memory_federated_permission_context.h"
 #include "content/browser/permissions/permission_controller_impl.h"
 #include "content/browser/preloading/prefetch/prefetch_service.h"
+#include "content/browser/renderer_host/initiator_navigation_state_impl.h"
+#include "content/browser/renderer_host/navigation_state_keep_alive.h"
 #include "content/browser/renderer_host/navigation_transitions/navigation_entry_screenshot_cache.h"
 #include "content/browser/renderer_host/navigation_transitions/navigation_entry_screenshot_manager.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
@@ -101,7 +103,7 @@ void BrowserContextImpl::WaitForBtmCleanupForTesting() {
 }
 
 BrowserContextImpl::BrowserContextImpl(BrowserContext* self) : self_(self) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 
   background_sync_scheduler_ = base::MakeRefCounted<BackgroundSyncScheduler>();
 
@@ -115,7 +117,7 @@ BrowserContextImpl::BrowserContextImpl(BrowserContext* self) : self_(self) {
 }
 
 BrowserContextImpl::~BrowserContextImpl() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   DCHECK(!storage_partition_map_)
       << "StoragePartitionMap is not shut down properly";
 
@@ -127,8 +129,6 @@ BrowserContextImpl::~BrowserContextImpl() {
   // this context. Trigger a crash report if there are still references so
   // we can detect/diagnose potential UAFs.
   std::string rph_crash_key_value;
-  ChildProcessSecurityPolicyImpl* policy =
-      ChildProcessSecurityPolicyImpl::GetInstance();
   for (RenderProcessHost::iterator host_iterator =
            RenderProcessHost::AllHostsIterator();
        !host_iterator.IsAtEnd(); host_iterator.Advance()) {
@@ -145,10 +145,6 @@ BrowserContextImpl::~BrowserContextImpl() {
     DUMP_WILL_BE_NOTREACHED()
         << "rph_with_bc_reference : " << rph_crash_key_value;
   }
-
-  // Clean up any isolated origins and other security state associated with this
-  // BrowserContext.
-  policy->RemoveStateForBrowserContext(*self_);
 
   if (download_manager_) {
     download_manager_->Shutdown();
@@ -200,10 +196,15 @@ void BrowserContextImpl::NotifyWillBeDestroyed() {
       host->DisableRefCounts();
     }
   }
+
+  // Clean up any isolated origins and other security state associated with this
+  // BrowserContext.
+  ChildProcessSecurityPolicyImpl::GetInstance()->RemoveStateForBrowserContext(
+      *self_);
 }
 
 StoragePartitionImplMap* BrowserContextImpl::GetOrCreateStoragePartitionMap() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 
   if (!storage_partition_map_) {
     storage_partition_map_ = std::make_unique<StoragePartitionImplMap>(self_);
@@ -213,7 +214,7 @@ StoragePartitionImplMap* BrowserContextImpl::GetOrCreateStoragePartitionMap() {
 }
 
 BrowsingDataRemoverImpl* BrowserContextImpl::GetBrowsingDataRemover() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 
   if (!browsing_data_remover_) {
     browsing_data_remover_ = std::make_unique<BrowsingDataRemoverImpl>(self_);
@@ -225,7 +226,7 @@ BrowsingDataRemoverImpl* BrowserContextImpl::GetBrowsingDataRemover() {
 }
 
 media::VideoDecodePerfHistory* BrowserContextImpl::GetVideoDecodePerfHistory() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 
   if (!video_decode_perf_history_) {
     video_decode_perf_history_ = self_->CreateVideoDecodePerfHistory();
@@ -239,7 +240,7 @@ BrowserContextImpl::CreateWebrtcVideoPerfHistory() {
   // TODO(crbug.com/40172952): Implement in memory path in
   // off_the_record_profile_impl.cc and web_engine_browser_context.cc
 
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   auto* db_provider =
       self_->GetDefaultStoragePartition()->GetProtoDatabaseProvider();
 
@@ -252,7 +253,7 @@ BrowserContextImpl::CreateWebrtcVideoPerfHistory() {
 }
 
 media::WebrtcVideoPerfHistory* BrowserContextImpl::GetWebrtcVideoPerfHistory() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 
   if (!webrtc_video_perf_history_) {
     webrtc_video_perf_history_ = CreateWebrtcVideoPerfHistory();
@@ -262,11 +263,11 @@ media::WebrtcVideoPerfHistory* BrowserContextImpl::GetWebrtcVideoPerfHistory() {
 }
 
 void BrowserContextImpl::ShutdownStoragePartitions() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 
   // The BackgroundSyncScheduler keeps raw pointers to partitions; clear it
   // first.
-  DCHECK(background_sync_scheduler_->HasOneRef());
+  CHECK(background_sync_scheduler_->HasOneRef(), base::NotFatalUntil::M159);
   background_sync_scheduler_.reset();
 
   storage_partition_map_.reset();
@@ -278,7 +279,7 @@ void BrowserContextImpl::ShutdownStoragePartitions() {
 }
 
 DownloadManager* BrowserContextImpl::GetDownloadManager() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 
   // Lazily populate `download_manager_`.  This is important to
   // 1) Avoid constructing DownloadManagerImpl when a test might have provided
@@ -299,7 +300,7 @@ DownloadManager* BrowserContextImpl::GetDownloadManager() {
 
 void BrowserContextImpl::SetDownloadManagerForTesting(
     std::unique_ptr<DownloadManager> download_manager) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   if (download_manager_) {
     download_manager_->Shutdown();
   }
@@ -307,7 +308,7 @@ void BrowserContextImpl::SetDownloadManagerForTesting(
 }
 
 PermissionController* BrowserContextImpl::GetPermissionController() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 
   if (!permission_controller_) {
     permission_controller_ = std::make_unique<PermissionControllerImpl>(self_);
@@ -318,15 +319,16 @@ PermissionController* BrowserContextImpl::GetPermissionController() {
 
 void BrowserContextImpl::SetPermissionControllerForTesting(
     std::unique_ptr<PermissionController> permission_controller) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   permission_controller_ = std::move(permission_controller);
 }
 
 storage::ExternalMountPoints* BrowserContextImpl::GetMountPoints() {
   // Ensure that these methods are called on the UI thread, except for
   // unittests where a UI thread might not have been created.
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI) ||
-         !BrowserThread::IsThreadInitialized(BrowserThread::UI));
+  CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI) ||
+            !BrowserThread::IsThreadInitialized(BrowserThread::UI),
+        base::NotFatalUntil::M159);
 
 #if BUILDFLAG(IS_CHROMEOS)
   if (!external_mount_points_) {
@@ -408,6 +410,34 @@ BtmServiceImpl* BrowserContextImpl::GetBtmService() {
   }
 
   return btm_service_.get();
+}
+
+void BrowserContextImpl::RegisterKeepAliveHandle(
+    mojo::PendingReceiver<blink::mojom::NavigationStateKeepAliveHandle>
+        receiver,
+    std::unique_ptr<NavigationStateKeepAlive> handle) {
+  auto frame_token = static_cast<InitiatorNavigationStateImpl*>(
+                         handle->initiator_navigation_state().get())
+                         ->frame_token();
+  navigation_state_keep_alive_map_[frame_token] = handle.get();
+  keep_alive_handles_receiver_set_.Add(std::move(handle), std::move(receiver));
+}
+
+NavigationStateKeepAlive* BrowserContextImpl::GetNavigationStateKeepAlive(
+    blink::LocalFrameToken frame_token) {
+  return base::FindPtrOrNull(navigation_state_keep_alive_map_, frame_token);
+}
+
+void BrowserContextImpl::RemoveKeepAliveHandleFromMap(
+    blink::LocalFrameToken frame_token,
+    NavigationStateKeepAlive* keep_alive) {
+  // The NavigationStateKeepAlive associated with `frame_token` may have
+  // changed. Make sure the specified one is removed from the map.
+  auto it = navigation_state_keep_alive_map_.find(frame_token);
+  if (it != navigation_state_keep_alive_map_.end() &&
+      it->second == keep_alive) {
+    navigation_state_keep_alive_map_.erase(it);
+  }
 }
 
 }  // namespace content

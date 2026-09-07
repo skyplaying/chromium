@@ -8,7 +8,6 @@
 #include <utility>
 
 #include "base/command_line.h"
-#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/sequence_checker.h"
 #include "base/sequence_token.h"
@@ -33,16 +32,18 @@
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "net/base/features.h"
 #include "net/base/network_change_notifier.h"
 #include "services/network/public/cpp/network_switches.h"
 #include "services/network/public/mojom/network_change_manager.mojom-forward.h"
 #include "services/network/public/mojom/network_context.mojom.h"
-#include "services/network/public/mojom/shared_storage.mojom.h"
 #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/content_uri_utils.h"
+#endif
+
+#if BUILDFLAG(IS_WIN)
+#include "content/browser/network/network_service_process_tracker_win.h"
 #endif
 
 #if BUILDFLAG(IS_MAC)
@@ -136,16 +137,9 @@ NetworkServiceClient::~NetworkServiceClient() {
   if (IsOutOfProcessNetworkService()) {
     net::CertDatabase::GetInstance()->RemoveObserver(this);
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX)
-    bool remove_ncn_observers = true;
-#if BUILDFLAG(IS_LINUX)
-    remove_ncn_observers = base::FeatureList::IsEnabled(
-        net::features::kAddressTrackerLinuxIsProxied);
-#endif  // BUILDFLAG(IS_LINUX)
-    if (remove_ncn_observers) {
-      net::NetworkChangeNotifier::RemoveConnectionTypeObserver(this);
-      net::NetworkChangeNotifier::RemoveMaxBandwidthObserver(this);
-      net::NetworkChangeNotifier::RemoveIPAddressObserver(this);
-    }
+    net::NetworkChangeNotifier::RemoveConnectionTypeObserver(this);
+    net::NetworkChangeNotifier::RemoveMaxBandwidthObserver(this);
+    net::NetworkChangeNotifier::RemoveIPAddressObserver(this);
 #endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX)
   }
 }
@@ -210,6 +204,7 @@ void NetworkServiceClient::OnIPAddressChanged(
 #if BUILDFLAG(IS_WIN)
 mojo::PendingRemote<network::mojom::SocketBroker>
 NetworkServiceClient::BindSocketBroker() {
+  EnsureNetworkServiceListenerStarted();
   return socket_broker_.BindNewRemote();
 }
 #endif  // BUILDFLAG(IS_WIN)
@@ -225,12 +220,7 @@ NetworkServiceClient::BindURLLoaderNetworkServiceObserver() {
 void NetworkServiceClient::OnNetworkServiceInitialized(
     network::mojom::NetworkService* service) {
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX)
-  bool add_ncn_observers = true;
-#if BUILDFLAG(IS_LINUX)
-  add_ncn_observers = base::FeatureList::IsEnabled(
-      net::features::kAddressTrackerLinuxIsProxied);
-#endif  // BUILDFLAG(IS_LINUX)
-  if (IsOutOfProcessNetworkService() && add_ncn_observers) {
+  if (IsOutOfProcessNetworkService()) {
     DCHECK(!net::NetworkChangeNotifier::CreateIfNeeded());
     service->GetNetworkChangeManager(
         network_change_manager_.BindNewPipeAndPassReceiver());
@@ -301,6 +291,11 @@ void NetworkServiceClient::OnLocalNetworkAccessPermissionRequired(
   std::move(callback).Run(network::mojom::LocalNetworkAccessResult::kDenied);
 }
 
+void NetworkServiceClient::OnPlatformLocalNetworkPermissionRequired(
+    OnPlatformLocalNetworkPermissionRequiredCallback callback) {
+  std::move(callback).Run(/*granted=*/false);
+}
+
 void NetworkServiceClient::OnClearSiteData(
     const GURL& url,
     const std::string& header_value,
@@ -325,19 +320,6 @@ void NetworkServiceClient::OnDataUseUpdate(
       GlobalRenderFrameHostId(), network_traffic_annotation_id_hash, recv_bytes,
       sent_bytes);
 }
-
-void NetworkServiceClient::OnSharedStorageHeaderReceived(
-    const url::Origin& request_origin,
-    std::vector<network::mojom::SharedStorageModifierMethodWithOptionsPtr>
-        methods_with_options,
-    const std::optional<std::string>& with_lock,
-    OnSharedStorageHeaderReceivedCallback callback) {
-  std::move(callback).Run();
-}
-
-void NetworkServiceClient::OnAdAuctionEventRecordHeaderReceived(
-    network::AdAuctionEventRecord event_record,
-    const std::optional<url::Origin>& top_frame_origin) {}
 
 void NetworkServiceClient::Clone(
     mojo::PendingReceiver<network::mojom::URLLoaderNetworkServiceObserver>

@@ -17,6 +17,7 @@
 #include "base/scoped_observation.h"
 #include "base/task/cancelable_task_tracker.h"
 #include "components/favicon/core/favicon_service.h"
+#include "components/prefs/pref_change_registrar.h"
 #include "components/sessions/core/session_id.h"
 #include "components/sessions/core/tab_restore_service.h"
 #include "components/sessions/core/tab_restore_service_observer.h"
@@ -25,7 +26,7 @@
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/menus/simple_menu_model.h"
 
-class Browser;
+class BrowserWindowInterface;
 
 namespace favicon_base {
 struct FaviconImageResult;
@@ -60,7 +61,7 @@ class RecentTabsSubMenuModel : public ui::SimpleMenuModel,
   int GetFirstRecentTabsCommandId();
 
   RecentTabsSubMenuModel(ui::AcceleratorProvider* accelerator_provider,
-                         Browser* browser);
+                         BrowserWindowInterface* browser);
 
   RecentTabsSubMenuModel(const RecentTabsSubMenuModel&) = delete;
   RecentTabsSubMenuModel& operator=(const RecentTabsSubMenuModel&) = delete;
@@ -84,6 +85,7 @@ class RecentTabsSubMenuModel : public ui::SimpleMenuModel,
     RemoteTab,    // Tabs originating from other devices.
     Group,        // Tab groups and their tabs.
     Window,       // Windows including their groups and tabs.
+    Split,        // Split views and their tabs.
     Submenu,      // Items in the submenus such as separators.
     OtherDevice,  // Other devices.
   };
@@ -92,6 +94,7 @@ class RecentTabsSubMenuModel : public ui::SimpleMenuModel,
   using TabItems = std::map<int, TabItem>;
   using WindowItems = std::map<int, SessionID>;
   using GroupItems = std::map<int, SessionID>;
+  using SplitItems = std::map<int, SessionID>;
   struct SubMenuItem;
   using SubMenuItems = std::map<int, SubMenuItem>;
   using DeviceNameItems = base::flat_set<int>;
@@ -110,18 +113,23 @@ class RecentTabsSubMenuModel : public ui::SimpleMenuModel,
   void BuildTabsFromOtherDevices();
 
   // Build a recently closed tab item with parameters needed to restore it, and
-  // add it to the menumodel at |curr_model_index|.
+  // add it to the menumodel at `curr_model_index`.
   void BuildLocalTabItem(const sessions::tab_restore::Tab& tab,
                          size_t curr_model_index);
 
   // Build the recently closed window item with parameters needed to restore it,
-  // and add it to the menumodel at |curr_model_index|.
+  // and add it to the menumodel at `curr_model_index`.
   void BuildLocalWindowItem(const sessions::tab_restore::Window& window,
                             size_t curr_model_index);
 
   // Build the recently closed group item with parameters needed to restore it,
-  // and add it to the menumodel at |curr_model_index|.
+  // and add it to the menumodel at `curr_model_index`.
   void BuildLocalGroupItem(const sessions::tab_restore::Group& group,
+                           size_t curr_model_index);
+
+  // Build the recently closed split view item with parameters needed to restore
+  // it, and add it to the menumodel at `curr_model_index`.
+  void BuildLocalSplitItem(const sessions::tab_restore::Split& split,
                            size_t curr_model_index);
 
   // Build the tab item for other devices with parameters needed to restore it.
@@ -134,6 +142,29 @@ class RecentTabsSubMenuModel : public ui::SimpleMenuModel,
       const sync_sessions::SyncedSession* session,
       const std::vector<const sessions::SessionTab*>& tabs_in_session);
 
+  using TabIterator =
+      std::vector<std::unique_ptr<sessions::tab_restore::Tab>>::const_iterator;
+
+  // Helper to build and add a Split Submenu.
+  void BuildAndAddSplit(
+      ui::SimpleMenuModel* parent,
+      TabIterator& it,
+      TabIterator end,
+      const std::map<split_tabs::SplitTabId,
+                     std::unique_ptr<sessions::tab_restore::Split>>&
+          split_tabs);
+
+  // Helper to build and add a Group Submenu.
+  void BuildAndAddGroup(
+      ui::SimpleMenuModel* parent,
+      TabIterator& it,
+      TabIterator end,
+      const std::map<tab_groups::TabGroupId,
+                     std::unique_ptr<sessions::tab_restore::Group>>& tab_groups,
+      const std::map<split_tabs::SplitTabId,
+                     std::unique_ptr<sessions::tab_restore::Split>>&
+          split_tabs);
+
   // Create a submenu model representing the tabs within a window.
   std::unique_ptr<ui::SimpleMenuModel> CreateWindowSubMenuModel(
       const sessions::tab_restore::Window& window);
@@ -142,12 +173,21 @@ class RecentTabsSubMenuModel : public ui::SimpleMenuModel,
   std::unique_ptr<ui::SimpleMenuModel> CreateGroupSubMenuModel(
       const sessions::tab_restore::Group& group);
 
-  // Adds a submenu item representation of |group_model| to |parent_model|.
+  // Create a submenu model representing the tabs within a split view.
+  std::unique_ptr<ui::SimpleMenuModel> CreateSplitSubMenuModel(
+      const sessions::tab_restore::Split& split);
+
+  // Adds a submenu item representation of `group_model` to `parent_model`.
   void AddGroupItemToModel(SimpleMenuModel* parent_model,
                            std::unique_ptr<SimpleMenuModel> group_model,
                            const sessions::tab_restore::Group& group);
 
-  // Adds a submenu item representation of a |tab| to |model|.
+  // Adds a submenu item representation of a split view to `parent_model`.
+  void AddSplitItemToModel(SimpleMenuModel* parent_model,
+                           std::unique_ptr<SimpleMenuModel> split_model,
+                           const sessions::tab_restore::Split& split);
+
+  // Adds a submenu item representation of a `tab` to `model`.
   void AddTabItemToModel(const sessions::tab_restore::Tab* tab,
                          ui::SimpleMenuModel* model,
                          int command_id);
@@ -183,7 +223,7 @@ class RecentTabsSubMenuModel : public ui::SimpleMenuModel,
   void ClearTabsFromOtherDevices();
 
   // Returns the corresponding local or other devices' TabItems in
-  // |local_tab_items_| or |remote_tab_items_|.
+  // `local_tab_items_` or `remote_tab_items_`.
   TabItems* GetTabVectorForCommandId(int command_id);
 
   // Convenience function to access OpenTabsUIDelegate provided by
@@ -197,7 +237,14 @@ class RecentTabsSubMenuModel : public ui::SimpleMenuModel,
 
   void OnForeignSessionUpdated();
 
-  // Returns |next_menu_id_| and increments it by 2. This allows for 'sharing'
+  // Returns true when the kSavingBrowserHistoryDisabled policy is not active,
+  // meaning the dynamic menu section (local + remote entries) should be shown.
+  bool ShouldShowRecentTabEntries() const;
+
+  // Called when the kSavingBrowserHistoryDisabled pref changes.
+  void OnSavingBrowserHistoryDisabledChanged();
+
+  // Returns `next_menu_id_` and increments it by 2. This allows for 'sharing'
   // command ids with the bookmarks menu, which also uses every other int as
   // an id.
   int GetAndIncrementNextMenuID();
@@ -210,7 +257,7 @@ class RecentTabsSubMenuModel : public ui::SimpleMenuModel,
   // Returns true if `command_id` identifies as `command_type`.
   bool IsCommandType(CommandType command_type, int command_id) const;
 
-  const raw_ptr<Browser> browser_;  // Weak.
+  const raw_ptr<BrowserWindowInterface> browser_;  // Weak.
 
   LogMenuMetricsCallback log_menu_metrics_callback_;
 
@@ -238,6 +285,9 @@ class RecentTabsSubMenuModel : public ui::SimpleMenuModel,
   // Group items for local recently closed groups.
   GroupItems local_group_items_;
 
+  // Split items for local recently closed splits.
+  SplitItems local_split_items_;
+
   // Sub menu items for sub menu entry points representing local recently
   // closed groups and windows. These are not executable.
   SubMenuItems local_sub_menu_items_;
@@ -259,6 +309,12 @@ class RecentTabsSubMenuModel : public ui::SimpleMenuModel,
       tab_restore_service_observation_{this};
 
   base::CallbackListSubscription foreign_session_updated_subscription_;
+
+  PrefChangeRegistrar pref_change_registrar_;
+
+  // Keeps track of whether the dynamic section (separator, local recently
+  // closed entries, and remote synced devices) is currently built in the menu.
+  bool is_dynamic_section_built_ = false;
 
   base::WeakPtrFactory<RecentTabsSubMenuModel> weak_ptr_factory_{this};
   base::WeakPtrFactory<RecentTabsSubMenuModel>

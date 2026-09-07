@@ -7,9 +7,8 @@
 #include <algorithm>
 #include <memory>
 
-#include "ash/constants/ash_features.h"
-#include "ash/constants/ash_switches.h"
 #include "ash/fast_ink/fast_ink_host_frame_utils.h"
+#include "ash/frame_sink/frame_sink_utils.h"
 #include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/numerics/safe_conversions.h"
@@ -32,6 +31,27 @@
 #include "ui/gfx/video_types.h"
 
 namespace ash {
+namespace {
+
+void ClearGpuBuffer(const scoped_refptr<gpu::ClientSharedImage>& shared_image) {
+  std::unique_ptr<gpu::ClientSharedImage::ScopedMapping> mapping =
+      shared_image->Map();
+  if (!mapping) {
+    LOG(ERROR) << "Failed to map MappableSI";
+    return;
+  }
+
+  gfx::Size size = mapping->Size();
+  int stride = mapping->Stride(0);
+  for (int i = 0; i < size.height(); ++i) {
+    auto row_span = mapping->GetMemoryForPlane(0).subspan(
+        base::checked_cast<size_t>(i * stride),
+        base::checked_cast<size_t>(size.width() * 4));
+    std::ranges::fill(row_span, 0);
+  }
+}
+
+}  // namespace
 
 // -----------------------------------------------------------------------------
 // FastInkHost::ScopedPaint
@@ -78,7 +98,8 @@ std::unique_ptr<FastInkHost::ScopedPaint> FastInkHost::CreateScopedPaint(
 
 std::unique_ptr<viz::CompositorFrame> FastInkHost::CreateCompositorFrame(
     const viz::BeginFrameAck& begin_frame_ack,
-    UiResourceManager& resource_manager,
+    viz::ClientResourceProvider& client_resource_provider,
+    cc::ResourcePool& resource_pool,
     bool auto_update,
     const gfx::Size& last_submitted_frame_size,
     float last_submitted_frame_dsf) {
@@ -89,7 +110,8 @@ std::unique_ptr<viz::CompositorFrame> FastInkHost::CreateCompositorFrame(
 
   auto frame = fast_ink_internal::CreateCompositorFrame(
       begin_frame_ack, GetContentRect(), GetTotalDamage(), auto_update,
-      *host_window(), &resource_manager, client_shared_image_, sync_token_);
+      *host_window(), client_resource_provider, client_shared_image_,
+      sync_token_);
 
   ResetDamage();
 
@@ -132,7 +154,7 @@ void FastInkHost::InitializeFastInkBuffer(aura::Window* host_window) {
   // latency but with potential tearing. Note that to avoid flicker, we draw
   // into a temporary surface and copy it into the mappable SI (see the
   // DrawBitmap() method below).
-  context_provider_ = fast_ink_internal::GetContextProvider();
+  context_provider_ = frame_sink_utils::GetContextProvider();
   gpu::SharedImageInterface* sii = context_provider_->SharedImageInterface();
 
   // This SharedImage will be used by the display compositor, will be updated
@@ -149,28 +171,17 @@ void FastInkHost::InitializeFastInkBuffer(aura::Window* host_window) {
   client_shared_image_ = fast_ink_internal::CreateMappableSharedImage(
       buffer_size_, usage, gfx::BufferUsage::SCANOUT_CPU_READ_WRITE);
 
-  LOG_IF(ERROR, !client_shared_image_) << "Failed to create MappableSI";
-  sync_token_ = sii->GenVerifiedSyncToken();
-
-  if (switches::ShouldClearFastInkBuffer()) {
-    std::unique_ptr<gpu::ClientSharedImage::ScopedMapping> mapping;
-    if (client_shared_image_) {
-      mapping = client_shared_image_->Map();
-    }
-    LOG_IF(ERROR, !mapping) << "Failed to map MappableSI";
-    if (mapping) {
-      gfx::Size size = mapping->Size();
-      int stride = mapping->Stride(0);
-      // Clear the buffer before usage, since it may be uninitialized.
-      // (http://b/168735625)
-      for (int i = 0; i < size.height(); ++i) {
-        auto row_span = mapping->GetMemoryForPlane(0).subspan(
-            base::checked_cast<size_t>(i * stride),
-            base::checked_cast<size_t>(size.width() * 4));
-        std::ranges::fill(row_span, 0);
-      }
-    }
+  if (!client_shared_image_) {
+    LOG(ERROR) << "Failed to create MappableSI";
+    return;
   }
+
+  sync_token_ = client_shared_image_->creation_sync_token();
+  sii->VerifySyncToken(sync_token_);
+
+  // Clear the buffer before usage, since it may be uninitialized.
+  // (http://b/168735625)
+  ClearGpuBuffer(client_shared_image_);
 
   // Draw pending bitmaps to the buffer.
   for (auto pending_bitmap : pending_bitmaps_) {

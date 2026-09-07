@@ -8,7 +8,7 @@ import XCTest
 class SysInfoTest: XCTestCase {
 
   func testIOSBuildNumber() {
-    let cxxBuildNumber = base.SysInfo.GetIOSBuildNumber()
+    let cxxBuildNumber = base.swift.OperatingSystemBuildVersion()
     let buildNumber = String(cString: cxxBuildNumber.__c_strUnsafe())
     XCTAssertNotNil(buildNumber)
     XCTAssertNotEqual(buildNumber, "")

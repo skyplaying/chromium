@@ -46,14 +46,11 @@ per-file chrome_origin_trials_browsertest.cc=file://third_party/blink/common/ori
 
 per-file chrome_security_exploit_browsertest.cc=file://content/OWNERS
 
-per-file chrome_service_worker_browsertest.cc=file://content/browser/service_worker/OWNERS
-
 per-file chrome_webusb_browser_client*=file://chrome/browser/usb/OWNERS
 
 per-file chrome_worker_browsertest.cc=file://content/browser/worker_host/OWNERS
 per-file ukm_worker_browsertest.cc=file://content/browser/worker_host/OWNERS
 
-per-file exo_parts.*=dcastagna@chromium.org
 per-file exo_parts.*=oshima@chromium.org
 
 per-file flag-never-expire-list.json=avi@chromium.org
@@ -61,11 +58,16 @@ per-file flag-never-expire-list.json=ellyjones@chromium.org
 
 per-file load_library_perf_test.*=xhwang@chromium.org
 
+per-file multi_network_browser_test.cc=stefanoduo@google.com
+
 per-file *.mm=file://ui/base/cocoa/OWNERS
 per-file *_mac.h=file://ui/base/cocoa/OWNERS
 
 per-file shell_integration_win*=gab@chromium.org
 per-file shell_integration_win*=grt@chromium.org
+
+per-file after_startup_task_utils*=gab@chromium.org
+per-file after_startup_task_utils*=joenotcharles@google.com
 
 per-file *linux*=thomasanderson@chromium.org
 
@@ -81,11 +83,9 @@ per-file chrome_content_browser_client_receiver_bindings.*=file://ipc/SECURITY_O
 per-file chrome_content_browser_client_binder_policies.*=set noparent
 per-file chrome_content_browser_client_binder_policies.*=file://ipc/SECURITY_OWNERS
 
-# BackForwardCache
-per-file chrome_back_forward_cache_browsertest.cc=file://content/browser/BACK_FORWARD_CACHE_OWNERS
-per-file chrome_back_forward_cache_browsertest.cc=file://content/OWNERS
-
 # Web Platform security metrics tests:
 per-file chrome_web_platform_security_metrics_browsertest.cc=file://content/OWNERS
 
 per-file universal_web_contents_helpers.*=file://content/OWNERS
+
+per-file browser_keyevents_interactive_uitest.cc=file://ui/events/OWNERS

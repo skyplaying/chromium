@@ -11,6 +11,7 @@
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
@@ -19,6 +20,7 @@
 #include "crypto/keypair.h"
 #include "net/base/completion_once_callback.h"
 #include "net/base/elements_upload_data_stream.h"
+#include "net/base/features.h"
 #include "net/base/ip_address.h"
 #include "net/base/test_completion_callback.h"
 #include "net/base/upload_bytes_element_reader.h"
@@ -35,10 +37,14 @@
 #include "net/http/http_server_properties.h"
 #include "net/http/http_transaction_test_util.h"
 #include "net/http/transport_security_state.h"
+#include "net/log/net_log.h"
 #include "net/log/net_log_with_source.h"
+#include "net/log/test_net_log.h"
+#include "net/log/test_net_log_util.h"
 #include "net/proxy_resolution/configured_proxy_resolution_service.h"
 #include "net/quic/crypto/proof_source_chromium.h"
 #include "net/quic/crypto_test_utils_chromium.h"
+#include "net/quic/quic_chromium_client_session.h"
 #include "net/quic/quic_context.h"
 #include "net/socket/client_socket_factory.h"
 #include "net/ssl/ssl_config_service.h"
@@ -49,7 +55,9 @@
 #include "net/test/test_data_directory.h"
 #include "net/test/test_with_task_environment.h"
 #include "net/third_party/quiche/src/quiche/quic/test_tools/crypto_test_utils.h"
+#include "net/third_party/quiche/src/quiche/quic/test_tools/quic_crypto_server_config_peer.h"
 #include "net/third_party/quiche/src/quiche/quic/test_tools/quic_test_utils.h"
+#include "net/third_party/quiche/src/quiche/quic/test_tools/test_ticket_crypter.h"
 #include "net/third_party/quiche/src/quiche/quic/tools/quic_memory_cache_backend.h"
 #include "net/tools/quic/quic_simple_server.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
@@ -135,6 +143,7 @@ class QuicEndToEndTest : public ::testing::Test, public WithTaskEnvironment {
     session_context_.http_user_agent_settings = &http_user_agent_settings_;
     session_context_.http_auth_handler_factory = auth_handler_factory_.get();
     session_context_.http_server_properties = &http_server_properties_;
+    session_context_.net_log = NetLog::Get();
   }
 
   // Creates a mock host resolver in which test.example.com
@@ -170,6 +179,10 @@ class QuicEndToEndTest : public ::testing::Test, public WithTaskEnvironment {
   void StartServer() {
     std::unique_ptr<ProofSourceChromium> proof_source =
         std::make_unique<ProofSourceChromium>();
+    proof_source->SetTicketCrypter(
+        std::make_unique<quic::test::TestTicketCrypter>());
+    ticket_crypter_ = reinterpret_cast<quic::test::TestTicketCrypter*>(
+        proof_source->GetTicketCrypter());
     CertificateList cert_list;
     cert_list.push_back(cert_);
     proof_source->InitializeFromCertAndKey(cert_list, *cert_key_);
@@ -184,7 +197,6 @@ class QuicEndToEndTest : public ::testing::Test, public WithTaskEnvironment {
     server_->Listen(server_address_);
     server_address_ = server_->server_address();
     server_->StartReading();
-    server_started_ = true;
 
     CertVerifyResult verify_result;
     verify_result.verified_cert = cert_list[0];
@@ -238,6 +250,7 @@ class QuicEndToEndTest : public ::testing::Test, public WithTaskEnvironment {
     EXPECT_EQ(body, consumer.content());
   }
 
+  quic::test::QuicFlagSaver saver_;
   QuicContext quic_context_;
   MappedHostResolver host_resolver_;
   MockCertVerifier cert_verifier_;
@@ -261,7 +274,8 @@ class QuicEndToEndTest : public ::testing::Test, public WithTaskEnvironment {
   std::string server_hostname_;
   quic::QuicConfig server_config_;
   quic::QuicCryptoServerConfig::ConfigOptions server_config_options_;
-  bool server_started_;
+  // Owned by server_.
+  raw_ptr<quic::test::TestTicketCrypter> ticket_crypter_ = nullptr;
   bool strike_register_no_startup_period_ = false;
 };
 
@@ -334,82 +348,7 @@ TEST_F(QuicEndToEndTest, EnableMLKEM) {
             SSL_GROUP_X25519_MLKEM768);
 }
 
-TEST_F(QuicEndToEndTest, MLKEMDisabled) {
-  // Disable ML-KEM on the client.
-  SSLContextConfig config;
-  std::erase_if(config.supported_named_groups,
-                std::mem_fn(&net::SSLNamedGroupInfo::IsPostQuantum));
-  ssl_config_service_->UpdateSSLConfigAndNotify(config);
-
-  // Configure the server to only support ML-KEM.
-  server_->crypto_config()->set_preferred_groups({SSL_GROUP_X25519_MLKEM768});
-
-  AddToCache(request_.url.PathForRequest(), 200, "OK", kResponseBody);
-
-  TestTransactionConsumer consumer(DEFAULT_PRIORITY,
-                                   transaction_factory_.get());
-  consumer.Start(&request_, NetLogWithSource());
-
-  // Connection should fail because there's no supported group in common between
-  // client and server.
-  EXPECT_EQ(consumer.error(), net::ERR_QUIC_PROTOCOL_ERROR);
-}
-
-#if BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
-class QuicEndToEndMTCTest : public QuicEndToEndTest {
- public:
-  QuicEndToEndMTCTest()
-      : QuicEndToEndTest(base::test::TaskEnvironment::TimeSource::MOCK_TIME) {
-    feature_list_.InitWithFeatures(
-        {{features::kTLSTrustAnchorIDs, features::kVerifyMTCs}}, {});
-  }
-
-  void SetUp() override {
-    auto leaf = std::move(CertBuilder::CreateSimpleChain(1)[0]);
-    leaf->SetSubjectAltName("test.example.com");
-    // ProofSourceChromium assumes the leaf cert uses an RSA key.
-    ASSERT_TRUE(leaf->UseKeyFromFile(
-        GetTestCertsDirectory().AppendASCII("rsa-2048-1.key")));
-    cert_key_ = crypto::keypair::PrivateKey(
-        bssl::UpRef(leaf->GetKey()), crypto::SubtlePassKey::ForTesting());
-
-    // This is the log ID for the MTC experiment (see log_id in
-    // root_store.textproto). It doesn't actually matter for this test.
-    constexpr uint8_t kMtcLogId[] = {0x82, 0xda, 0x4b, 0x30, 0x08};
-    // This is the base ID for the MTC experiment (see kMtcExperimentBaseId in
-    // quic_chromium_client_session.cc).
-    constexpr uint8_t kMtcBaseId[] = {0x82, 0xda, 0x4b, 0x30, 0x07};
-    MtcLogBuilder mtc_log(kMtcLogId, kMtcBaseId);
-    uint64_t leaf_index = mtc_log.AddEntry(*leaf);
-    mtc_log.AdvanceLandmark();
-    auto leaf_der = mtc_log.CreateSignaturelessCertificate(leaf_index);
-    ASSERT_TRUE(leaf_der);
-    cert_ = X509Certificate::CreateFromBytes(*leaf_der);
-    ASSERT_TRUE(cert_);
-
-    // This is a fake trust anchor ID formed from the base ID above. (We could
-    // make one that actually matches the generated landmark number from
-    // mtc_log, but it doesn't matter for this test.)
-    const auto kMtcTrustAnchorId =
-        x509_util::AppendOidComponent(kMtcBaseId, 0x01);
-
-    SSLContextConfig config;
-    config.mtc_trust_anchor_ids = {{kMtcTrustAnchorId}};
-    config.mtc_update_time_seconds =
-        (base::Time::Now() - kMtcUpdateAge).InMillisecondsSinceUnixEpoch() /
-        1000;
-    ssl_config_service_->UpdateSSLConfigAndNotify(config);
-
-    QuicEndToEndTest::SetUp();
-  }
-
-  static constexpr base::TimeDelta kMtcUpdateAge = base::Hours(42);
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
-TEST_F(QuicEndToEndMTCTest, SimpleConnection) {
+TEST_F(QuicEndToEndTest, CryptoHandshakeCompleteMetrics) {
   AddToCache(request_.url.PathForRequest(), 200, "OK", kResponseBody);
 
   base::HistogramTester histograms;
@@ -419,49 +358,131 @@ TEST_F(QuicEndToEndMTCTest, SimpleConnection) {
   ASSERT_NO_FATAL_FAILURE(
       CheckResponse(consumer, "HTTP/1.1 200", kResponseBody));
 
-  EXPECT_EQ(consumer.response_info()->ssl_info.cert->signature_algorithm(),
-            bssl::SignatureAlgorithm::kMtcProofDraftDavidben08);
-
-  // Not logged, since the server is not configured to reply with a TAI.
-  // TODO(crbug.com/482083310): add tests of other cases.
-  histograms.ExpectTotalCount("Net.QuicSession.MTCLandmarkDelta.OldClient", 0);
-  histograms.ExpectTotalCount("Net.QuicSession.MTCLandmarkDelta.CurrentClient",
-                              0);
-
-  histograms.ExpectTimeBucketCount("Net.QuicSession.MTCMetadataAge",
-                                   kMtcUpdateAge, 1);
-
-  histograms.ExpectUniqueSample("Net.QuicSession.HasMTCMetadata", /*sample=*/1,
-                                /*expected_bucket_count=*/1);
-
-  histograms.ExpectUniqueSample("Net.QuicSession.MTCResult",
-                                /*sample=*/MTCResult::kValidMTC,
-                                /*expected_bucket_count=*/1);
-
-  histograms.ExpectUniqueSample(
-      "Net.QuicSession.CertVerificationResult.MTCAdvertised",
-      /*sample=*/-net::OK,
-      /*expected_bucket_count=*/1);
-  histograms.ExpectUniqueSample(
-      "Net.QuicSession.CertVerificationResult.MTCReceived",
-      /*sample=*/-net::OK,
-      /*expected_bucket_count=*/1);
-
-  // A mock time is used, and is not advanced during the test, but there was
-  // still some flaky failures where the histogram had a non-zero number. I'm
-  // not sure it is actually the cause, but apparently the test framework may
-  // automatically advance the mocked time if the threadpool has delayed tasks
-  // (see
-  // https://crsrc.org/c/base/test/task_environment.h;drc=e63596721df61bbc199c38c4a102597ad81ad154;l=106)
-  // Therefore we only check that the metric is present, but don't try to check
-  // the value.
-  histograms.ExpectTotalCount("Net.QuicSession.HandshakeConfirmedTime.MTC", 1);
-
-  // Should be logged, but we don't know what the exact value will be, so just
-  // check that a sample is present.
-  histograms.ExpectTotalCount("Net.QuicSession.TLSHandshakeBytes.MTC", 1);
+  // The Net.QuicSession.HandshakeConfirmedTime metric should be logged.
+  histograms.ExpectTotalCount("Net.QuicSession.HandshakeConfirmedTime", 1);
 }
-#endif  // BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
+
+TEST_F(QuicEndToEndTest, ServerHandshakePaddingMetrics) {
+  NetLogWithSource net_log;
+  SetQuicRestartFlag(tls_server_padding_support, true);
+  AddScopedFeatureList().InitAndEnableFeatureWithParameters(
+      features::kAddTLSServerHandshakePadding,
+      {{"AddTLSServerHandshakePaddingBytes", "128"}});
+
+  AddToCache(request_.url.PathForRequest(), 200, "OK", kResponseBody);
+
+  base::HistogramTester histograms;
+  TestTransactionConsumer consumer(DEFAULT_PRIORITY,
+                                   transaction_factory_.get());
+  RecordingNetLogObserver net_log_observer(NetLogCaptureMode::kDefault);
+  consumer.Start(&request_, net_log);
+  ASSERT_NO_FATAL_FAILURE(
+      CheckResponse(consumer, "HTTP/1.1 200", kResponseBody));
+
+  // The Net.QuicSession.HandshakeConfirmedTime metric should be logged.
+  histograms.ExpectTotalCount("Net.QuicSession.HandshakeConfirmedTime", 1);
+
+  // The server padding metric should also be logged.
+  histograms.ExpectTotalCount(
+      "Net.QuicSession.HandshakeConfirmedTime.ServerPadding", 1);
+
+  auto entries = net_log_observer.GetEntriesWithType(
+      NetLogEventType::QUIC_SESSION_CRYPTO_HANDSHAKE_COMPLETE);
+  ASSERT_EQ(1u, entries.size());
+  EXPECT_TRUE(GetBooleanValueFromParams(entries[0], "received_server_padding"));
+}
+
+TEST_F(QuicEndToEndTest, ServerHandshakePaddingMetricsZeroPadding) {
+  NetLogWithSource net_log;
+  SetQuicRestartFlag(tls_server_padding_support, true);
+  AddScopedFeatureList().InitAndEnableFeatureWithParameters(
+      features::kAddTLSServerHandshakePadding,
+      {{"AddTLSServerHandshakePaddingBytes", "0"}});
+
+  AddToCache(request_.url.PathForRequest(), 200, "OK", kResponseBody);
+
+  base::HistogramTester histograms;
+  TestTransactionConsumer consumer(DEFAULT_PRIORITY,
+                                   transaction_factory_.get());
+  RecordingNetLogObserver net_log_observer(NetLogCaptureMode::kDefault);
+  consumer.Start(&request_, net_log);
+  ASSERT_NO_FATAL_FAILURE(
+      CheckResponse(consumer, "HTTP/1.1 200", kResponseBody));
+
+  // The Net.QuicSession.HandshakeConfirmedTime metric should be logged.
+  histograms.ExpectTotalCount("Net.QuicSession.HandshakeConfirmedTime", 1);
+
+  // The server padding metric should also be logged.
+  histograms.ExpectTotalCount(
+      "Net.QuicSession.HandshakeConfirmedTime.ServerPadding", 1);
+
+  auto entries = net_log_observer.GetEntriesWithType(
+      NetLogEventType::QUIC_SESSION_CRYPTO_HANDSHAKE_COMPLETE);
+  ASSERT_EQ(1u, entries.size());
+  EXPECT_TRUE(GetBooleanValueFromParams(entries[0], "received_server_padding"));
+}
+
+TEST_F(QuicEndToEndTest, ServerHandshakePaddingMetricsNoServerSupport) {
+  NetLogWithSource net_log;
+  SetQuicRestartFlag(tls_server_padding_support, false);
+  AddScopedFeatureList().InitAndEnableFeatureWithParameters(
+      features::kAddTLSServerHandshakePadding,
+      {{"AddTLSServerHandshakePaddingBytes", "0"}});
+
+  AddToCache(request_.url.PathForRequest(), 200, "OK", kResponseBody);
+
+  base::HistogramTester histograms;
+  TestTransactionConsumer consumer(DEFAULT_PRIORITY,
+                                   transaction_factory_.get());
+  RecordingNetLogObserver net_log_observer(NetLogCaptureMode::kDefault);
+  consumer.Start(&request_, net_log);
+  ASSERT_NO_FATAL_FAILURE(
+      CheckResponse(consumer, "HTTP/1.1 200", kResponseBody));
+
+  // The Net.QuicSession.HandshakeConfirmedTime metric should be logged.
+  histograms.ExpectTotalCount("Net.QuicSession.HandshakeConfirmedTime", 1);
+
+  // The server padding metric should not be logged.
+  histograms.ExpectTotalCount(
+      "Net.QuicSession.HandshakeConfirmedTime.ServerPadding", 0);
+
+  auto entries = net_log_observer.GetEntriesWithType(
+      NetLogEventType::QUIC_SESSION_CRYPTO_HANDSHAKE_COMPLETE);
+  ASSERT_EQ(1u, entries.size());
+  EXPECT_FALSE(
+      GetBooleanValueFromParams(entries[0], "received_server_padding"));
+}
+
+TEST_F(QuicEndToEndTest,
+       ServerHandshakePaddingMetricsServerSupportFeatureDisabled) {
+  NetLogWithSource net_log;
+  SetQuicRestartFlag(tls_server_padding_support, false);
+  AddScopedFeatureList().InitAndDisableFeature(
+      features::kAddTLSServerHandshakePadding);
+
+  AddToCache(request_.url.PathForRequest(), 200, "OK", kResponseBody);
+
+  base::HistogramTester histograms;
+  TestTransactionConsumer consumer(DEFAULT_PRIORITY,
+                                   transaction_factory_.get());
+  RecordingNetLogObserver net_log_observer(NetLogCaptureMode::kDefault);
+  consumer.Start(&request_, net_log);
+  ASSERT_NO_FATAL_FAILURE(
+      CheckResponse(consumer, "HTTP/1.1 200", kResponseBody));
+
+  // The Net.QuicSession.HandshakeConfirmedTime metric should be logged.
+  histograms.ExpectTotalCount("Net.QuicSession.HandshakeConfirmedTime", 1);
+
+  // The server padding metric should not be logged.
+  histograms.ExpectTotalCount(
+      "Net.QuicSession.HandshakeConfirmedTime.ServerPadding", 0);
+
+  auto entries = net_log_observer.GetEntriesWithType(
+      NetLogEventType::QUIC_SESSION_CRYPTO_HANDSHAKE_COMPLETE);
+  ASSERT_EQ(1u, entries.size());
+  EXPECT_FALSE(
+      GetBooleanValueFromParams(entries[0], "received_server_padding"));
+}
 
 }  // namespace test
 }  // namespace net

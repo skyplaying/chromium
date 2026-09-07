@@ -8,13 +8,12 @@
 #include <optional>
 #include <string>
 
-#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/wallpaper_handlers/google_photos_wallpaper_handlers.h"
 #include "chrome/browser/ash/wallpaper_handlers/sea_pen_fetcher.h"
 #include "chrome/browser/ash/wallpaper_handlers/wallpaper_handlers.h"
 #include "chrome/browser/manta/manta_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/signin/identity_manager_factory.h"
+#include "chromeos/ash/components/signin/identity_manager_provider.h"
 #include "components/account_id/account_id.h"
 #include "components/manta/manta_service.h"
 #include "components/manta/snapper_provider.h"
@@ -84,11 +83,9 @@ void WallpaperFetcherDelegateImpl::FetchGooglePhotosAccessToken(
     const AccountId& account_id,
     ash::WallpaperControllerClient::FetchGooglePhotosAccessTokenCallback
         callback) const {
-  Profile* profile =
-      ash::ProfileHelper::Get()->GetProfileByAccountId(account_id);
   auto fetcher = std::make_unique<signin::PrimaryAccountAccessTokenFetcher>(
       signin::OAuthConsumerId::kWallpaperFetcherDelegate,
-      IdentityManagerFactory::GetForProfile(profile),
+      ash::IdentityManagerProvider::Get().Find(account_id),
       signin::PrimaryAccountAccessTokenFetcher::Mode::kImmediate,
       signin::ConsentLevel::kSignin);
   auto* fetcher_ptr = fetcher.get();

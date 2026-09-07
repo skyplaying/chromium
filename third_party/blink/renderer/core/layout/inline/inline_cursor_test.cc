@@ -163,6 +163,24 @@ TEST_F(InlineCursorTest, BidiLevelSimpleRTL) {
                         "MNO:3", ":1", "jkl:2", ",:1", "123:2"));
 }
 
+TEST_F(InlineCursorTest, BidiLevelFirstLineTextTransform) {
+  InsertStyleElement(
+      "#root { white-space: pre; }"
+      "#root::first-line { text-transform: uppercase; }");
+  InlineCursor cursor = SetupCursor("<div id=root dir=ltr>&szlig;&#9;</div>");
+  Vector<String> list = ToDebugStringListWithBidiLevel(cursor);
+  EXPECT_THAT(list, ElementsAre("#linebox", "SS:0", ":0"));
+}
+
+TEST_F(InlineCursorTest, BidiLevelFirstLineTextTransformBR) {
+  InsertStyleElement(
+      "#root { white-space: pre; }"
+      "#root::first-line { text-transform: uppercase; }");
+  InlineCursor cursor = SetupCursor("<div id=root dir=ltr>&szlig;<br></div>");
+  Vector<String> list = ToDebugStringListWithBidiLevel(cursor);
+  EXPECT_THAT(list, ElementsAre("#linebox", "SS:0", ":0"));
+}
+
 TEST_F(InlineCursorTest, GetLayoutBlockFlowWithScopedCursor) {
   InlineCursor line = SetupCursor("<div id=root>line1<br>line2</div>");
   ASSERT_TRUE(line.Current().IsLineBox()) << line;
@@ -1430,6 +1448,24 @@ TEST_F(InlineCursorBlockFragmentationTest, MoveToLayoutObject) {
   TestFragment1(InlineCursor(*fragments[0], *fragments[0]->Items()));
   TestFragment2(InlineCursor(*fragments[1], *fragments[1]->Items()));
   TestFragment3(InlineCursor(*fragments[2], *fragments[2]->Items()));
+}
+
+TEST_F(InlineCursorTest, CulledInlineWithNonIFCChild) {
+  SetBodyInnerHTML(R"HTML(
+    <span id="culled">
+      <ruby>
+        <rb>base</rb>
+        <rt>annotation</rt>
+      </ruby>
+    </span>
+  )HTML");
+  const auto* culled = To<LayoutInline>(GetLayoutObjectByElementId("culled"));
+  EXPECT_FALSE(culled->ShouldCreateBoxFragment());
+
+  InlineCursor cursor;
+  cursor.MoveToIncludingCulledInline(*culled);
+  for (; cursor; cursor.MoveToNextForSameLayoutObject()) {
+  }
 }
 
 }  // namespace

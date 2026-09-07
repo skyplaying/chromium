@@ -235,8 +235,7 @@ PositionArea PositionArea::ToPhysical(
 
 std::pair<StyleSelfAlignmentData, StyleSelfAlignmentData>
 PositionArea::AlignJustifySelfFromPhysical(
-    WritingDirectionMode container_writing_direction,
-    bool is_containing_block_scrollable) const {
+    WritingDirectionMode container_writing_direction) const {
   ItemPosition align = ItemPosition::kStart;
   ItemPosition align_reverse = ItemPosition::kEnd;
   ItemPosition justify = ItemPosition::kStart;
@@ -283,30 +282,6 @@ PositionArea::AlignJustifySelfFromPhysical(
                                  OverflowAlignment::kDefault),
           StyleSelfAlignmentData(converter.InlineStart(),
                                  OverflowAlignment::kDefault)};
-}
-
-AnchorQuery PositionArea::AnchorTop() {
-  return AnchorQuery(CSSAnchorQueryType::kAnchor,
-                     AnchorSpecifierValue::Default(), /* percentage */ 0,
-                     CSSAnchorValue::kTop);
-}
-
-AnchorQuery PositionArea::AnchorBottom() {
-  return AnchorQuery(CSSAnchorQueryType::kAnchor,
-                     AnchorSpecifierValue::Default(), /* percentage */ 0,
-                     CSSAnchorValue::kBottom);
-}
-
-AnchorQuery PositionArea::AnchorLeft() {
-  return AnchorQuery(CSSAnchorQueryType::kAnchor,
-                     AnchorSpecifierValue::Default(), /* percentage */ 0,
-                     CSSAnchorValue::kLeft);
-}
-
-AnchorQuery PositionArea::AnchorRight() {
-  return AnchorQuery(CSSAnchorQueryType::kAnchor,
-                     AnchorSpecifierValue::Default(), /* percentage */ 0,
-                     CSSAnchorValue::kRight);
 }
 
 }  // namespace blink

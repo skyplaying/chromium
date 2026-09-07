@@ -18,11 +18,12 @@ import android.graphics.Bitmap;
 import android.graphics.Rect;
 
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
-import org.robolectric.annotation.Config;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.content_public.browser.WebContents;
@@ -34,7 +35,6 @@ import java.util.ArrayList;
 
 /** Robolectric tests for MediaImageManager. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class MediaImageManagerTest {
     private static final int TINY_IMAGE_SIZE_PX = 50;
     private static final int MIN_IMAGE_SIZE_PX = 100;
@@ -43,6 +43,7 @@ public class MediaImageManagerTest {
     private static final int REQUEST_ID_2 = 2;
     private static final GURL IMAGE_URL_1 = JUnitTestGURLs.URL_1;
     private static final GURL IMAGE_URL_2 = JUnitTestGURLs.URL_2;
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Mock private WebContents mWebContents;
     @Mock private MediaImageCallback mCallback;
@@ -56,7 +57,6 @@ public class MediaImageManagerTest {
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
         doReturn(REQUEST_ID_1)
                 .when(mWebContents)
                 .downloadImage(

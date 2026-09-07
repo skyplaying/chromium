@@ -7,6 +7,7 @@
 
 #include "base/check_is_test.h"
 #include "chrome/browser/ui/content_settings/content_setting_bubble_model.h"
+#include "chrome/browser/ui/views/permissions/chip/permission_chip_interface.h"
 #include "chrome/browser/ui/views/permissions/chip/permission_chip_theme.h"
 #include "chrome/browser/ui/views/permissions/permission_prompt_style.h"
 #include "components/permissions/permission_actions_history.h"
@@ -21,32 +22,22 @@ class MultiImageContainer;
 
 // UI component for chip button located in the omnibox. A button with an icon
 // and text, with rounded corners.
-class PermissionChipView : public views::MdTextButton {
+class PermissionChipView : public views::MdTextButton,
+                           public PermissionChipInterface {
   METADATA_HEADER(PermissionChipView, views::MdTextButton)
 
  public:
-  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kElementIdForTesting);
-  explicit PermissionChipView(PressedCallback callback);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kIndicatorChipElementId);
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kPermissionRequestChipElementId);
+  enum class Role { kIndicatorChip, kPermissionRequestChip };
+
+  PermissionChipView(Role role, PressedCallback callback);
   PermissionChipView(const PermissionChipView& button) = delete;
   PermissionChipView& operator=(const PermissionChipView& button) = delete;
   ~PermissionChipView() override;
 
-  class Observer : public base::CheckedObserver {
-   public:
-    virtual void OnChipVisibilityChanged(bool is_visible) {}
-    virtual void OnExpandAnimationEnded() {}
-    virtual void OnCollapseAnimationEnded() {}
-    virtual void OnMousePressed() {}
-  };
-
   void VisibilityChanged(views::View* starting_from, bool is_visible) override;
 
-  void AnimateCollapse(base::TimeDelta duration);
-  void AnimateExpand(base::TimeDelta duration);
-  void AnimateToFit(base::TimeDelta duration);
-  void ResetAnimation(double value = 0);
-  bool is_fully_collapsed() const { return fully_collapsed_; }
-  bool is_animating() const { return animation_->is_animating(); }
   gfx::SlideAnimation* animation_for_testing() { return animation_.get(); }
 
   // views::AnimationDelegateViews:
@@ -57,17 +48,9 @@ class PermissionChipView : public views::MdTextButton {
   gfx::Size CalculatePreferredSize(
       const views::SizeBounds& available_size) const override;
   bool OnMousePressed(const ui::MouseEvent& event) override;
+  void OnGestureEvent(ui::GestureEvent* event) override;
   void OnThemeChanged() override;
   void UpdateBackgroundColor() override;
-
-  // Customize the button.
-  void SetUserDecision(permissions::PermissionAction user_decision);
-  void SetTheme(PermissionChipTheme theme);
-  void SetMessage(std::u16string message);
-  void SetBlockedIconShowing(bool should_show_blocked_icon);
-  void SetPermissionPromptStyle(PermissionPromptStyle prompt_style);
-  void SetChipIcon(const gfx::VectorIcon& icon);
-  void SetChipIcon(const gfx::VectorIcon* icon);
 
   bool ShouldShowBlockedIcon() const { return should_show_blocked_icon_; }
   permissions::PermissionAction GetUserDecision() const {
@@ -78,17 +61,51 @@ class PermissionChipView : public views::MdTextButton {
   }
   PermissionChipTheme theme() const { return theme_; }
 
-  // Returns whether the theme describes a request state (true) or indicator
-  // state (false).
-  bool GetIsRequestForTesting() const;
+  void StopAnimationForTesting();
 
-  // Add/remove observer.
-  void AddObserver(Observer* observer);
-  void RemoveObserver(Observer* observer);
-
-  void UpdateForDividerVisibility(bool is_divider_visible,
-                                  int divider_arc_width = 0);
   int GetIconViewWidth() const;
+
+  // PermissionChipInterface:
+  void SetVisible(bool visible) override;
+  bool GetVisible() const override;
+  PermissionChipTheme GetThemeForTesting() const override;
+  std::u16string GetTooltipText() const override;
+  std::u16string GetTextForTesting() const override;
+  bool GetIsRequestForTesting() const override;
+  void SetChipIcon(const gfx::VectorIcon& icon) override;
+  void SetChipIcon(const gfx::VectorIcon* icon) override;
+  void SetMessage(std::u16string message) override;
+  void SetTooltipText(const std::u16string& tooltip) override;
+  void SetTheme(PermissionChipTheme theme) override;
+  void SetUserDecision(permissions::PermissionAction user_decision) override;
+  void SetBlockedIconShowing(bool should_show_blocked_icon) override;
+  void SetPermissionPromptStyle(PermissionPromptStyle prompt_style) override;
+  void AnimateCollapse(base::TimeDelta duration) override;
+  void AnimateExpand(base::TimeDelta duration) override;
+  void AnimateToFit(base::TimeDelta duration) override;
+  void ResetAnimation(AnimationState state) override;
+  bool IsFullyCollapsed() const override;
+  bool IsAnimating() const override;
+  void AddObserver(PermissionChipInterface::Observer* observer) override;
+  void RemoveObserver(PermissionChipInterface::Observer* observer) override;
+  [[nodiscard]] base::CallbackListSubscription AddVisibilityCallback(
+      base::RepeatingClosure callback) override;
+  void SetAccessibilityIgnored(bool is_ignored) override;
+  void SetAccessibilityName(const std::u16string& name) override;
+  void AnnounceText(const std::u16string& text) override;
+  void AnnounceAlert(const std::u16string& text) override;
+  bool IsMouseHovered() const override;
+  void SetPressedCallback(
+      base::RepeatingCallback<void(bool)> callback) override;
+  views::BubbleAnchor GetAnchor() override;
+  void SetBubbleOwner(
+      PermissionChipInterface::BubbleOwnerDelegate* owner) override;
+  void ExecuteForTesting() override;
+  void EndAnimationForTesting() override;
+
+  // Views-specific formatting.
+  void UpdateForDividerVisibility(bool is_divider_visible,
+                                  int divider_arc_width);
 
  protected:
   MultiImageContainer* multi_image_container();
@@ -152,7 +169,12 @@ class PermissionChipView : public views::MdTextButton {
 
   raw_ptr<const gfx::VectorIcon> icon_ = &gfx::VectorIcon::EmptyIcon();
 
-  base::ObserverList<Observer> observers_;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      PermissionChipInterface::Observer,
+      /*check_empty=*/false,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>
+      observers_;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_PERMISSIONS_CHIP_PERMISSION_CHIP_VIEW_H_

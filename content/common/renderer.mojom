@@ -19,18 +19,11 @@ import "third_party/blink/public/mojom/user_agent/user_agent_metadata.mojom";
 import "url/mojom/url.mojom";
 
 [EnableIf=is_mac]
-enum ScrollerStyle {
-  kScrollerStyleLegacy,
-  kScrollerStyleOverlay,
-};
-
-[EnableIf=is_mac]
 struct UpdateScrollbarThemeParams {
   float? initial_button_delay;
   float? autoscroll_button_delay;
 
   bool jump_on_track_click;
-  ScrollerStyle preferred_scroller_style;
   bool redraw;
 
   bool scroll_view_rubber_banding;
@@ -109,6 +102,10 @@ interface Renderer {
   // Notification that the OS X Aqua color preferences changed.
   [EnableIf=is_mac]
   OnSystemColorsChanged(int32 aqua_color_variant);
+
+  // Tells the renderer process that the system font families have changed.
+  [EnableIf=is_mac]
+  OnRegisteredFontsChanged();
 
   // Tells the renderer process the new system color info.
   UpdateSystemColorInfo(UpdateSystemColorInfoParams params);

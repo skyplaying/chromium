@@ -79,6 +79,15 @@ gpu::ContextResult GLES2CommandBufferStub::Initialize(
 
   const auto& attribs = *init_params.attribs->get_gles();
 
+#if !BUILDFLAG(IS_WIN)
+  if (attribs.context_type == CONTEXT_TYPE_OPENGLES2 &&
+      !channel_->is_gpu_host()) {
+    LOG(ERROR) << "ContextResult::kFatalFailure: CONTEXT_TYPE_OPENGLES2 is not "
+                  "allowed";
+    return gpu::ContextResult::kFatalFailure;
+  }
+#endif
+
   GpuChannelManager* manager = channel_->gpu_channel_manager();
   DCHECK(manager);
   memory_tracker_ = CreateMemoryTracker();
@@ -86,7 +95,7 @@ gpu::ContextResult GLES2CommandBufferStub::Initialize(
   auto feature_info = base::MakeRefCounted<gles2::FeatureInfo>(
       manager->gpu_driver_bug_workarounds(), manager->gpu_feature_info());
   context_group_ = base::MakeRefCounted<gles2::ContextGroup>(
-      manager->gpu_preferences(), CreateMemoryTracker(),
+      manager->gpu_preferences(), memory_tracker_,
       manager->shader_translator_cache(),
       manager->framebuffer_completeness_cache(), feature_info,
       manager->watchdog() /* progress_reporter */, manager->gpu_feature_info(),
@@ -94,27 +103,40 @@ gpu::ContextResult GLES2CommandBufferStub::Initialize(
 
   // If the `fail_if_major_perf_caveat` context creation attribute was true
   // and we are using a software renderer, fail.
-  if (attribs.fail_if_major_perf_caveat &&
-      context_group_->feature_info()->feature_flags().is_software_webgl) {
-    LOG(ERROR) << "ContextResult::kFatalFailure: "
-                  "fail_if_major_perf_caveat + software gl";
-    return gpu::ContextResult::kFatalFailure;
+  if (attribs.fail_if_major_perf_caveat) {
+    auto* command_line = base::CommandLine::ForCurrentProcess();
+    const auto useGL = command_line->GetSwitchValueASCII(switches::kUseGL);
+    const auto useANGLE =
+        command_line->GetSwitchValueASCII(switches::kUseANGLE);
+
+    const bool is_software_webgl =
+        (useGL == gl::kGLImplementationANGLEName) &&
+        (useANGLE == gl::kANGLEImplementationSwiftShaderForWebGLName ||
+         useANGLE == gl::kANGLEImplementationD3D11WarpForWebGLName);
+
+    if (is_software_webgl) {
+      LOG(ERROR) << "ContextResult::kFatalFailure: "
+                    "fail_if_major_perf_caveat + software gl";
+      return gpu::ContextResult::kFatalFailure;
+    }
   }
+
+  bool use_virtualized_gl_context = false;
 
 #if BUILDFLAG(IS_MAC)
   // Virtualize GpuPreference::kLowPower contexts by default on OS X to prevent
   // performance regressions when enabling FCM.
   // http://crbug.com/180463
   if (attribs.gpu_preference == gl::GpuPreference::kLowPower) {
-    use_virtualized_gl_context_ = true;
+    use_virtualized_gl_context = true;
   }
 #endif
 
-  use_virtualized_gl_context_ |=
+  use_virtualized_gl_context |=
       context_group_->feature_info()->workarounds().use_virtualized_gl_contexts;
 
-  command_buffer_ = std::make_unique<CommandBufferService>(
-      this, context_group_->memory_tracker());
+  command_buffer_ =
+      std::make_unique<CommandBufferService>(this, memory_tracker_);
   auto decoder = gles2::GLES2Decoder::Create(
       this, command_buffer_.get(), manager->outputter(), context_group_.get());
   gles2_decoder_ = decoder.get();
@@ -180,7 +202,7 @@ gpu::ContextResult GLES2CommandBufferStub::Initialize(
   if (context_group_->use_passthrough_cmd_decoder()) {
     // Virtualized contexts don't work with passthrough command decoder.
     // See https://crbug.com/914976
-    use_virtualized_gl_context_ = false;
+    use_virtualized_gl_context = false;
     // When using the passthrough command decoder, only share with other
     // contexts in the explicitly requested share group
     share_group_ = base::MakeRefCounted<gl::GLShareGroup>();
@@ -190,12 +212,8 @@ gpu::ContextResult GLES2CommandBufferStub::Initialize(
     share_group_ = channel_->share_group();
   }
 
-  // TODO(sunnyps): Should this use ScopedCrashKey instead?
-  crash_keys::gpu_gl_context_is_virtual.Set(use_virtualized_gl_context_ ? "1"
-                                                                        : "0");
-
   scoped_refptr<gl::GLContext> context;
-  if (use_virtualized_gl_context_ && share_group_) {
+  if (use_virtualized_gl_context && share_group_) {
     context = share_group_->shared_context();
     if (context && (!context->MakeCurrent(surface_.get()) ||
                     context->CheckStickyGraphicsResetStatus() != GL_NO_ERROR)) {
@@ -286,7 +304,7 @@ gpu::ContextResult GLES2CommandBufferStub::Initialize(
   // Initialize the decoder with either the view or pbuffer GLContext.
   auto result = gles2_decoder_->Initialize(
       surface_, context, /*offscreen=*/true, attribs.context_type,
-      attribs.lose_context_when_out_of_memory);
+      /*lose_context_when_out_of_memory=*/true);
   if (result != gpu::ContextResult::kSuccess) {
     DLOG(ERROR) << "Failed to initialize decoder.";
     return result;
@@ -311,7 +329,7 @@ gpu::ContextResult GLES2CommandBufferStub::Initialize(
     manager->delegate()->DidCreateOffscreenContext(active_url_.url());
   }
 
-  if (use_virtualized_gl_context_) {
+  if (use_virtualized_gl_context) {
     // If virtualized GL contexts are in use, then real GL context state
     // is in an indeterminate state, since the GLStateRestorer was not
     // initialized at the time the GLContextVirtual was made current. In
@@ -341,16 +359,8 @@ gpu::ContextResult GLES2CommandBufferStub::Initialize(
   return gpu::ContextResult::kSuccess;
 }
 
-MemoryTracker* GLES2CommandBufferStub::GetContextGroupMemoryTracker() const {
-  return context_group_->memory_tracker();
-}
-
 base::WeakPtr<CommandBufferStub> GLES2CommandBufferStub::AsWeakPtr() {
   return weak_ptr_factory_.GetWeakPtr();
-}
-
-void GLES2CommandBufferStub::OnGpuSwitched() {
-  client().OnGpuSwitched();
 }
 
 void GLES2CommandBufferStub::CreateGpuFenceFromHandle(

@@ -8,43 +8,28 @@
 #include <string>
 #include <string_view>
 
-#include "base/strings/strcat.h"
-#include "base/strings/string_util.h"
-#include "base/strings/utf_string_conversions.h"
+#include "base/feature_list.h"
 #include "chrome/browser/ui/autofill/autofill_ai/autofill_ai_import_data_controller.h"
 #include "chrome/browser/ui/autofill/autofill_ai/entity_attribute_update_details.h"
-#include "chrome/browser/ui/views/accessibility/theme_tracking_non_accessible_image_view.h"
 #include "chrome/browser/ui/views/autofill/autofill_ai/autofill_ai_bubble_utils.h"
+#include "chrome/browser/ui/views/autofill/autofill_bubble_utils.h"
 #include "chrome/browser/ui/views/autofill/payments/dialog_view_ids.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
-#include "chrome/grit/theme_resources.h"
-#include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 #include "components/autofill/core/common/autofill_features.h"
-#include "components/optimization_guide/proto/features/common_quality_data.pb.h"
 #include "components/strings/grit/components_strings.h"
-#include "components/vector_icons/vector_icons.h"
 #include "ui/accessibility/ax_enums.mojom-shared.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/base/models/image_model_utils.h"
 #include "ui/base/resource/resource_bundle.h"
-#include "ui/base/ui_base_types.h"
 #include "ui/color/color_id.h"
-#include "ui/gfx/font.h"
-#include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/range/range.h"
-#include "ui/gfx/text_elider.h"
 #include "ui/views/accessibility/view_accessibility.h"
-#include "ui/views/controls/button/button_controller.h"
-#include "ui/views/controls/button/image_button.h"
-#include "ui/views/controls/button/image_button_factory.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/styled_label.h"
 #include "ui/views/controls/throbber.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/box_layout_view.h"
-#include "ui/views/layout/flex_layout_view.h"
 #include "ui/views/metadata/view_factory.h"
 #include "ui/views/style/typography.h"
 #include "ui/views/view_class_properties.h"
@@ -88,7 +73,10 @@ AutofillAiImportDataBubbleView::AutofillAiImportDataBubbleView(
       views::BoxLayout::Orientation::kVertical));
   set_margins(GetAutofillAiBubbleInnerMargins());
   SetAccessibleTitle(controller_->GetSaveUpdateDialogTitle());
-  if (!controller_->IsWalletableEntity()) {
+  if (!controller_->IsWalletableEntity() ||
+      (controller_->IsSavePrompt() &&
+       base::FeatureList::IsEnabled(
+           features::kAutofillAiWalletPassBranding2026))) {
     SetTitle(controller_->GetSaveUpdateDialogTitle());
   }
   auto* main_content_wrapper =
@@ -119,6 +107,10 @@ AutofillAiImportDataBubbleView::AutofillAiImportDataBubbleView(
       controller_->GetUpdatedAttributesDetails();
   for (const EntityAttributeUpdateDetails& detail : attributes_details) {
     attributes_wrapper->AddChildView(BuildEntityAttributeRow(detail));
+  }
+
+  if (controller_->IsEligibleForWalletPassDisclosure()) {
+    main_content_wrapper->AddChildView(GetWalletableEntityDisclosure());
   }
 
   DialogDelegate::SetButtonLabel(
@@ -157,12 +149,26 @@ AutofillAiImportDataBubbleView::BuildEntityAttributeRow(
 
   std::optional<std::u16string> accessibility_value;
   if (existing_entity_added_or_updated_attribute) {
-    accessibility_value = l10n_util::GetStringFUTF16(
-        detail.update_type() ==
-                EntityAttributeUpdateType::kNewEntityAttributeAdded
-            ? IDS_AUTOFILL_AI_UPDATE_ENTITY_DIALOG_NEW_ATTRIBUTE_ACCESSIBLE_NAME
-            : IDS_AUTOFILL_AI_UPDATE_ENTITY_DIALOG_UPDATED_ATTRIBUTE_ACCESSIBLE_NAME,
-        detail.attribute_value());
+    if (base::FeatureList::IsEnabled(features::kAutofillAiNewUpdatePrompt)) {
+      if (detail.update_type() ==
+          EntityAttributeUpdateType::kNewEntityAttributeAdded) {
+        accessibility_value = l10n_util::GetStringFUTF16(
+            IDS_AUTOFILL_AI_UPDATE_ENTITY_DIALOG_NEW_ATTRIBUTE_ACCESSIBLE_NAME_V2,
+            detail.attribute_value());
+      } else {
+        accessibility_value = l10n_util::GetStringFUTF16(
+            IDS_AUTOFILL_AI_UPDATE_ENTITY_DIALOG_UPDATED_ATTRIBUTE_ACCESSIBLE_NAME_V2,
+            detail.attribute_value(),
+            detail.old_attribute_value().value_or(u""));
+      }
+    } else {
+      accessibility_value = l10n_util::GetStringFUTF16(
+          detail.update_type() ==
+                  EntityAttributeUpdateType::kNewEntityAttributeAdded
+              ? IDS_AUTOFILL_AI_UPDATE_ENTITY_DIALOG_NEW_ATTRIBUTE_ACCESSIBLE_NAME
+              : IDS_AUTOFILL_AI_UPDATE_ENTITY_DIALOG_UPDATED_ATTRIBUTE_ACCESSIBLE_NAME,
+          detail.attribute_value());
+    }
   }
 
   const int new_value_font_style = [&]() {
@@ -193,10 +199,8 @@ AutofillAiImportDataBubbleView::BuildEntityAttributeRow(
 
 std::unique_ptr<views::Label>
 AutofillAiImportDataBubbleView::GetLocalEntitySubtitle() const {
-  std::u16string subtitle_text = l10n_util::GetStringUTF16(
-      controller_->IsSavePrompt()
-          ? IDS_AUTOFILL_AI_SAVE_ENTITY_DIALOG_SUBTITLE
-          : IDS_AUTOFILL_AI_UPDATE_ENTITY_DIALOG_SUBTITLE);
+  std::u16string subtitle_text =
+      l10n_util::GetStringUTF16(controller_->GetNoticeStringId());
   return views::Builder<views::Label>()
       .SetText(std::move(subtitle_text))
       .SetTextStyle(views::style::STYLE_BODY_4)
@@ -210,16 +214,34 @@ AutofillAiImportDataBubbleView::GetLocalEntitySubtitle() const {
 std::unique_ptr<views::StyledLabel>
 AutofillAiImportDataBubbleView::GetWalletableEntitySubtitle() const {
   std::vector<size_t> offsets;
+  std::u16string formatted_text;
+  gfx::Range link_range;
+
   const std::u16string google_wallet_text =
       l10n_util::GetStringUTF16(IDS_AUTOFILL_GOOGLE_WALLET_TITLE);
-  std::u16string formatted_text = l10n_util::GetStringFUTF16(
-      controller_->IsSavePrompt()
-          ? IDS_AUTOFILL_AI_SAVE_ENTITY_TO_WALLET_DIALOG_SUBTITLE
-          : IDS_AUTOFILL_AI_UPDATE_ENTITY_TO_WALLET_DIALOG_SUBTITLE,
-      {google_wallet_text, controller_->GetPrimaryAccountEmail()}, &offsets);
+  const std::u16string account_email = controller_->GetPrimaryAccountEmail();
 
-  gfx::Range go_to_wallet_range(offsets[0],
-                                offsets[0] + google_wallet_text.size());
+  if (controller_->IsSavePrompt() &&
+      base::FeatureList::IsEnabled(features::kAutofillAiWalletPrivatePasses)) {
+    const std::u16string manage_info_text =
+        l10n_util::GetStringUTF16(IDS_AUTOFILL_MANAGE_YOUR_INFO_LINK);
+
+    formatted_text =
+        l10n_util::GetStringFUTF16(controller_->GetNoticeStringId(),
+                                   {google_wallet_text, manage_info_text,
+                                    google_wallet_text, account_email},
+                                   &offsets);
+
+    link_range = gfx::Range(offsets[1], offsets[1] + manage_info_text.size());
+
+  } else {
+    formatted_text = l10n_util::GetStringFUTF16(
+        controller_->GetNoticeStringId(), {google_wallet_text, account_email},
+        &offsets);
+
+    link_range = gfx::Range(offsets[0], offsets[0] + google_wallet_text.size());
+  }
+
   auto go_to_wallet =
       views::StyledLabel::RangeStyleInfo::CreateForLink(base::BindRepeating(
           &AutofillAiImportDataController::OnGoToWalletLinkClicked,
@@ -231,8 +253,23 @@ AutofillAiImportDataBubbleView::GetWalletableEntitySubtitle() const {
       .SetDefaultEnabledColorId(ui::kColorSysOnSurfaceSubtle)
       .SetAccessibleRole(ax::mojom::Role::kDetails)
       .SetHorizontalAlignment(gfx::HorizontalAlignment::ALIGN_LEFT)
-      .AddStyleRange(go_to_wallet_range, go_to_wallet)
+      .AddStyleRange(link_range, go_to_wallet)
       .Build();
+}
+
+std::unique_ptr<views::View>
+AutofillAiImportDataBubbleView::GetWalletableEntityDisclosure() {
+  std::unique_ptr<views::View> legal_message_view = CreateLegalMessageView(
+      controller_->GetLegalMessageLines(),
+      base::BindRepeating(
+          &AutofillAiImportDataController::OnLegalMessageLinkClicked,
+          controller_));
+  legal_message_view->SetProperty(
+      views::kMarginsKey,
+      gfx::Insets().set_top(ChromeLayoutProvider::Get()->GetDistanceMetric(
+          views::DISTANCE_RELATED_CONTROL_VERTICAL)));
+  legal_message_view->SetID(DialogViewId::LEGAL_MESSAGE_VIEW);
+  return legal_message_view;
 }
 
 void AutofillAiImportDataBubbleView::Hide() {
@@ -256,7 +293,10 @@ void AutofillAiImportDataBubbleView::AddedToWidget() {
 
     GetBubbleFrameView()->SetHeaderView(std::move(image_view));
   }
-  if (controller_->IsWalletableEntity()) {
+  if (controller_->IsWalletableEntity() &&
+      (!controller_->IsSavePrompt() ||
+       !base::FeatureList::IsEnabled(
+           features::kAutofillAiWalletPassBranding2026))) {
     GetBubbleFrameView()->SetTitleView(
         CreateWalletBubbleTitleView(controller_->GetSaveUpdateDialogTitle()));
   }

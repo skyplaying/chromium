@@ -24,8 +24,8 @@ void LogBadMessage(BadMessageReason reason) {
   static auto* const bad_message_reason = base::debug::AllocateCrashKeyString(
       "bad_message_reason", base::debug::CrashKeySize::Size64);
 
-  TRACE_EVENT_INSTANT1("ipc,security", "content::ReceivedBadMessage",
-                       TRACE_EVENT_SCOPE_THREAD, "reason", reason);
+  TRACE_EVENT_INSTANT("ipc,security", "content::ReceivedBadMessage", "reason",
+                      reason);
   LOG(ERROR) << "Terminating renderer for bad IPC message, reason " << reason;
   base::UmaHistogramSparse("Stability.BadMessageTerminated.Content", reason);
   base::debug::SetCrashKeyString(bad_message_reason,
@@ -34,7 +34,8 @@ void LogBadMessage(BadMessageReason reason) {
 
 void ReceivedBadMessageOnUIThread(ChildProcessId render_process_id,
                                   BadMessageReason reason) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI),
+        base::NotFatalUntil::M159);
   RenderProcessHost* host = RenderProcessHost::FromID(render_process_id);
   if (!host)
     return;

@@ -17,7 +17,7 @@ import org.chromium.ui.modelutil.PropertyModel;
 /** ViewBinder for the page zoom feature. */
 @NullMarked
 class PageZoomBarViewBinder {
-    public static void bind(PropertyModel model, View view, PropertyKey propertyKey) {
+    static void bind(PropertyModel model, View view, PropertyKey propertyKey) {
         Slider slider = view.findViewById(R.id.page_zoom_slider);
         SeekBar seekBar = view.findViewById(R.id.page_zoom_slider_legacy);
 
@@ -110,6 +110,17 @@ class PageZoomBarViewBinder {
             boolean useSlider = model.get(PageZoomProperties.USE_SLIDER);
             slider.setVisibility(useSlider ? View.VISIBLE : View.GONE);
             seekBar.setVisibility(useSlider ? View.GONE : View.VISIBLE);
+            if (useSlider) {
+                slider.setLabelFormatter(
+                        value -> {
+                            long zoomLevel =
+                                    Math.round(
+                                            100
+                                                    * PageZoomUtils.convertBarValueToZoomLevel(
+                                                            (int) value));
+                            return view.getContext().getString(R.string.page_zoom_level, zoomLevel);
+                        });
+            }
         }
     }
 }

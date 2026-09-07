@@ -4,7 +4,8 @@
 
 package org.chromium.chrome.browser.tab_bottom_sheet;
 
-import static org.chromium.chrome.browser.tab_bottom_sheet.TabBottomSheetProperties.FUSEBOX_OFFSET;
+import static org.chromium.chrome.browser.tab_bottom_sheet.TabBottomSheetProperties.EXPANDED_STATE_ALPHA;
+import static org.chromium.chrome.browser.tab_bottom_sheet.TabBottomSheetProperties.PEEK_STATE_ALPHA;
 
 import android.view.View;
 
@@ -13,7 +14,7 @@ import org.chromium.chrome.browser.context_sharing.R;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel;
 
-/** ViewBinder for the Auto Delete Decision Promo. Connects PropertyModel listeners to the View. */
+/** ViewBinder for the Tab Bottom Sheet. */
 @NullMarked
 public class TabBottomSheetViewBinder {
     /**
@@ -24,10 +25,18 @@ public class TabBottomSheetViewBinder {
      * @param propertyKey The {@link PropertyKey} that changed.
      */
     public static void bind(PropertyModel model, View view, PropertyKey propertyKey) {
-        if (FUSEBOX_OFFSET == propertyKey) {
-            View fuseboxContainer = view.findViewById(R.id.fusebox_container);
-            float offset = -(view.getHeight() - model.get(FUSEBOX_OFFSET));
-            fuseboxContainer.setTranslationY(offset);
+        if (PEEK_STATE_ALPHA == propertyKey) {
+            float alpha = model.get(PEEK_STATE_ALPHA);
+            View peekContainer = view.findViewById(R.id.peek_view_container);
+            peekContainer.setAlpha(alpha);
+            peekContainer.setVisibility(alpha == 0.0f ? View.INVISIBLE : View.VISIBLE);
+        } else if (EXPANDED_STATE_ALPHA == propertyKey) {
+            float alpha = model.get(EXPANDED_STATE_ALPHA);
+            View expandedContent = view.findViewById(R.id.expanded_content_group);
+            expandedContent.setAlpha(alpha);
+            // Using INVISIBLE instead of GONE to keep the view in layout hierarchy,
+            // allowing the BottomSheetController to calculate correct scrollable height.
+            expandedContent.setVisibility(alpha == 0.0f ? View.INVISIBLE : View.VISIBLE);
         }
     }
 }

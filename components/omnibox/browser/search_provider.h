@@ -22,8 +22,8 @@
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
+#include "build/build_config.h"
 #include "components/history/core/browser/history_types.h"
-#include "components/omnibox/browser/answers_cache.h"
 #include "components/omnibox/browser/autocomplete_enums.h"
 #include "components/omnibox/browser/base_search_provider.h"
 #include "components/search_engines/template_url.h"
@@ -33,7 +33,6 @@
 
 class AutocompleteProviderClient;
 class AutocompleteProviderListener;
-class AutocompleteResult;
 class SearchProviderTest;
 
 namespace network {
@@ -60,7 +59,6 @@ class SearchProvider : public BaseSearchProvider,
 
   // Answers prefetch handling - register displayed answers. Takes the top
   // match for Autocomplete and registers the contained answer data, if any.
-  void RegisterDisplayedAnswers(const AutocompleteResult& result);
 
   // Calculates the relevance score for the keyword verbatim result (if the
   // input matches one of the profile's keywords).  If
@@ -69,7 +67,7 @@ class SearchProvider : public BaseSearchProvider,
   static int CalculateRelevanceForKeywordVerbatim(
       metrics::OmniboxInputType type,
       bool allow_exact_keyword_match,
-      bool prefer_keyword);
+      bool in_keyword_mode);
 
   // The verbatim score for an input which is not a URL.
   static const int kNonURLVerbatimRelevance = 1300;
@@ -91,9 +89,6 @@ class SearchProvider : public BaseSearchProvider,
   FRIEND_TEST_ALL_PREFIXES(SearchProviderTest, SuggestRelevanceExperiment);
   FRIEND_TEST_ALL_PREFIXES(SearchProviderTest, TestDeleteMatch);
   FRIEND_TEST_ALL_PREFIXES(SearchProviderTest, SuggestQueryUsesToken);
-  FRIEND_TEST_ALL_PREFIXES(SearchProviderTest, AnswersCache);
-  FRIEND_TEST_ALL_PREFIXES(SearchProviderTest, RemoveExtraAnswers);
-  FRIEND_TEST_ALL_PREFIXES(SearchProviderTest, DuplicateCardAnswer);
   FRIEND_TEST_ALL_PREFIXES(SearchProviderTest, CopyAnswerToVerbatim);
   FRIEND_TEST_ALL_PREFIXES(SearchProviderTest, DoesNotProvideOnFocus);
   FRIEND_TEST_ALL_PREFIXES(SearchProviderTest, SendsWarmUpRequestOnFocus);
@@ -277,12 +272,10 @@ class SearchProvider : public BaseSearchProvider,
 
   // Remove answer contents from each match in |matches| other than the first
   // that appears.
-  static void RemoveExtraAnswers(ACMatches* matches);
 
   // Add a copy of an answer suggestion presented as a rich card, sans answer
   // data. This gives an "escape hatch" if, e.g. the user wants the verbatim
   // query associated with the answer suggestion.
-  static void DuplicateCardAnswer(ACMatches* matches);
 
   // Checks if suggested relevances violate an expected constraint.
   // See UpdateMatches() for the use and explanation of this constraint
@@ -373,11 +366,16 @@ class SearchProvider : public BaseSearchProvider,
   // Answers prefetch handling - finds the previously displayed answer matching
   // the current top-scoring history result. If there is a previous answer,
   // returns the query data associated with it. Otherwise, returns an empty
-  // AnswersQueryData.
-  AnswersQueryData FindAnswersPrefetchData();
 
   // Finds image URLs in most relevant results and uses client to prefetch them.
   void PrefetchImages(SearchSuggestionParser::Results* results);
+
+#if !BUILDFLAG(IS_IOS)
+  // Create a location-sending duplicate of `match` with subtype
+  // `SUBTYPE_LOCATION_SUGGEST_TRIGGER`.
+  std::unique_ptr<AutocompleteMatch> CreateLocationSignalingMatch(
+      const AutocompleteMatch& match);
+#endif
 
   // Maintains the TemplateURLs used.
   Providers providers_;
@@ -420,8 +418,6 @@ class SearchProvider : public BaseSearchProvider,
   GURL top_navigation_suggestion_;
 
   // Answers prefetch management.
-  AnswersCache answers_cache_;      // Cache for last answers seen.
-  AnswersQueryData prefetch_data_;  // Data to use for query prefetching.
 
   base::ScopedObservation<TemplateURLService, TemplateURLServiceObserver>
       observation_{this};

@@ -33,13 +33,14 @@ public class AutofillSaveCardUiInfoTest {
                 .withIsForUpload(false)
                 .withCardDetail(new CardDetail(0, "", ""))
                 .withCardDescription("")
-                .withLegalMessageLines(Collections.EMPTY_LIST)
+                .withLegalMessageLines(Collections.emptyList())
                 .withTitleText("")
                 .withConfirmText("")
                 .withCancelText("")
                 .withDescriptionText("")
                 .withLoadingDescription("")
-                .withIsChromeBrandingEnabled(false);
+                .withIsChromeBrandingEnabled(false)
+                .withGooglePayPillLogo(0);
     }
 
     @Test
@@ -171,5 +172,13 @@ public class AutofillSaveCardUiInfoTest {
         AutofillSaveCardUiInfo uiInfo = defaultBuilder().withIsChromeBrandingEnabled(true).build();
 
         assertThat(uiInfo.isChromeBrandingEnabled(), equalTo(true));
+    }
+
+    @Test
+    public void testBuilder_setsGooglePayPillLogo() {
+        @SuppressLint("ResourceType")
+        AutofillSaveCardUiInfo uiInfo = defaultBuilder().withGooglePayPillLogo(1234).build();
+
+        assertThat(uiInfo.getGooglePayPillLogoId(), equalTo(1234));
     }
 }

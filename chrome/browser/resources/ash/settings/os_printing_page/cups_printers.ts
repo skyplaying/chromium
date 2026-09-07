@@ -71,21 +71,23 @@ import type {SettingsCupsAddPrinterDialogElement} from './cups_settings_add_prin
  * change one without changing the other).
  * These values are persisted to logs. Entries should not be renumbered and
  * numeric values should never be reused.
- * @enum {number}
  */
+// LINT.IfChange(PrinterSettingsUserAction)
 export enum PrinterSettingsUserAction {
   ADD_PRINTER_MANUALLY = 0,
   SAVE_PRINTER = 1,
   EDIT_PRINTER = 2,
   REMOVE_PRINTER = 3,
   CLICK_HELP_LINK = 4,
+  COUNT = CLICK_HELP_LINK + 1,
 }
+// LINT.ThenChange(//tools/metrics/histograms/metadata/printing/enums.xml:PrinterSettingsUserAction)
 
 export function recordPrinterSettingsUserAction(
     userAction: PrinterSettingsUserAction): void {
   chrome.metricsPrivate.recordEnumerationValue(
       'Printing.CUPS.SettingsUserAction', userAction,
-      Object.keys(PrinterSettingsUserAction).length);
+      PrinterSettingsUserAction.COUNT);
 }
 
 const SettingsCupsPrintersElementBase =
@@ -223,10 +225,10 @@ export class SettingsCupsPrintersElement extends
     };
   }
 
-  activePrinter: CupsPrinterInfo;
-  prefs: Object;
-  printers: CupsPrinterInfo[];
-  searchTerm: string;
+  declare activePrinter: CupsPrinterInfo;
+  declare prefs: Object;
+  declare printers: CupsPrinterInfo[];
+  declare searchTerm: string;
 
   // DeepLinkingMixin override
   override supportedSettingIds = new Set<Setting>([
@@ -236,25 +238,25 @@ export class SettingsCupsPrintersElement extends
   ]);
 
   private addPrintServerResultText_: string;
-  private addPrinterResultText_: string;
-  private attemptedLoadingPrinters_: boolean;
+  declare private addPrinterResultText_: string;
+  declare private attemptedLoadingPrinters_: boolean;
   private browserProxy_: CupsPrintersBrowserProxy;
-  private enterprisePrinterCount_: number;
-  private enterprisePrintersAriaLabel_: string;
-  private enterprisePrinters_: PrinterListEntry[];
+  declare private enterprisePrinterCount_: number;
+  declare private enterprisePrintersAriaLabel_: string;
+  declare private enterprisePrinters_: PrinterListEntry[];
   private entryManager_: CupsPrintersEntryManager;
-  private hasActiveNetworkConnection: boolean;
-  private nearbyPrinterCount_: number;
-  private nearbyPrintersAriaLabel_: string;
+  declare private hasActiveNetworkConnection: boolean;
+  declare private nearbyPrinterCount_: number;
+  declare private nearbyPrintersAriaLabel_: string;
   private networkConfig_: CrosNetworkConfigInterface;
-  private onEnterprisePrintersChangedListener_: WebUiListener;
-  private onPrintersChangedListener_: WebUiListener|null;
-  private savedPrinterCount_: number;
-  private savedPrintersAriaLabel_: string;
-  private savedPrinters_: PrinterListEntry[];
-  private showCupsEditPrinterDialog_: boolean;
-  private nearbyPrintersExpanded_: boolean;
-  private nearbyPrintersEmpty_: boolean;
+  declare private onEnterprisePrintersChangedListener_: WebUiListener;
+  declare private onPrintersChangedListener_: WebUiListener|null;
+  declare private savedPrinterCount_: number;
+  declare private savedPrintersAriaLabel_: string;
+  declare private savedPrinters_: PrinterListEntry[];
+  declare private showCupsEditPrinterDialog_: boolean;
+  declare private nearbyPrintersExpanded_: boolean;
+  declare private nearbyPrintersEmpty_: boolean;
 
   constructor() {
     super();

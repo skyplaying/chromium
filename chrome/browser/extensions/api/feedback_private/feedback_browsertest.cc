@@ -15,7 +15,8 @@
 #include "chrome/browser/feedback/feedback_uploader_chrome.h"
 #include "chrome/browser/feedback/feedback_uploader_factory_chrome.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -157,7 +158,7 @@ IN_PROC_BROWSER_TEST_F(FeedbackTest, DISABLED_ExtraDiagnostics) {
 
 // Ensures that when triggered from Assistant with Google account, Assistant
 // checkbox are not hidden.
-// Disabled due to flake: https://crbug.com/1240591
+// Disabled due to flake: https://crbug.com/40194309
 IN_PROC_BROWSER_TEST_F(FeedbackTest, DISABLED_ShowFeedbackFromAssistant) {
   WaitForExtensionViewsToLoad();
 
@@ -316,7 +317,7 @@ IN_PROC_BROWSER_TEST_F(FeedbackTest, DISABLED_AppendQuestionnaireNotGoogler) {
 }
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
-// Disabled due to flake: https://crbug.com/1069870
+// Disabled due to flake: https://crbug.com/40126107
 IN_PROC_BROWSER_TEST_F(FeedbackTest, DISABLED_GetTargetTabUrl) {
   const std::pair<std::string, std::string> test_cases[] = {
       {"https://www.google.com/", "https://www.google.com/"},
@@ -330,10 +331,10 @@ IN_PROC_BROWSER_TEST_F(FeedbackTest, DISABLED_GetTargetTabUrl) {
     ASSERT_TRUE(NavigateToURL(GetActiveWebContents(), GURL(test_case.first)));
 
     // Sanity check that we always have one tab in the browser.
-    ASSERT_EQ(browser()->tab_strip_model()->count(), 1);
+    ASSERT_EQ(browser()->GetTabStripModel()->count(), 1);
 
     ASSERT_EQ(expected_url, browser()
-                                ->tab_strip_model()
+                                ->GetTabStripModel()
                                 ->GetWebContentsAt(0)
                                 ->GetLastCommittedURL());
 
@@ -353,7 +354,7 @@ IN_PROC_BROWSER_TEST_F(FeedbackTest, DISABLED_GetTargetTabUrl) {
   }
 }
 
-// Disabled due to flake: https://crbug.com/1180373
+// Disabled due to flake: https://crbug.com/40750267
 IN_PROC_BROWSER_TEST_F(FeedbackTest, DISABLED_SubmissionTest) {
   WaitForExtensionViewsToLoad();
 

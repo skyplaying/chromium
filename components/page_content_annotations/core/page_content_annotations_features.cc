@@ -5,9 +5,13 @@
 #include "components/page_content_annotations/core/page_content_annotations_features.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 
+#include "base/i18n/legacy_language_tag_helpers.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/field_trial_params.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "build/build_config.h"
@@ -32,15 +36,15 @@ constexpr auto enabled_by_default_non_ios =
     base::FEATURE_ENABLED_BY_DEFAULT;
 #endif
 
-constexpr auto enabled_by_default_non_arm32 =
-#if defined(ARCH_CPU_ARMEL)
-    base::FEATURE_DISABLED_BY_DEFAULT;
-#else
+constexpr auto enabled_by_default_ios_only =
+#if BUILDFLAG(IS_IOS)
     base::FEATURE_ENABLED_BY_DEFAULT;
+#else
+    base::FEATURE_DISABLED_BY_DEFAULT;
 #endif
 
 const base::FeatureParam<base::TimeDelta> kAnnotatedPageContentCaptureDelay{
-    &kAnnotatedPageContentExtraction, "capture_delay", base::Seconds(5)};
+    &kAnnotatedPageContentExtraction, "capture_delay", base::Seconds(3)};
 
 const base::FeatureParam<bool> kAnnotatedPageContentStudyIncludeInnerText{
     &kAnnotatedPageContentExtraction, "include_inner_text", false};
@@ -67,10 +71,9 @@ bool IsSupportedLocale(const std::string& locale,
     return true;
   }
 
-  // Otherwise, the locale or the primary language subtag must match an element
-  // of the allowlist.
   return std::ranges::contains(supported, locale) ||
-         std::ranges::contains(supported, l10n_util::GetLanguage(locale));
+         std::ranges::contains(
+             supported, base::i18n::GetLanguageSubtagUsingLanguageTag(locale));
 }
 
 bool IsSupportedCountry(const std::string& country_code,
@@ -96,19 +99,8 @@ bool IsSupportedCountry(const std::string& country_code,
 
 }  // namespace
 
-// Enables page content to be annotated.
-BASE_FEATURE(kPageContentAnnotations, base::FEATURE_ENABLED_BY_DEFAULT);
-
-// Enables the page visibility model to be annotated on every page load.
-BASE_FEATURE(kPageVisibilityPageContentAnnotations,
-             enabled_by_default_non_arm32);
-
 BASE_FEATURE(kPageContentAnnotationsValidation,
              base::FEATURE_DISABLED_BY_DEFAULT);
-
-// Enables fetching page metadata from the remote Optimization Guide service,
-// left as a killswitch.
-BASE_FEATURE(kRemotePageMetadata, base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kOptimizationGuideUseContinueOnShutdownForPageContentAnnotations,
              enabled_by_default_non_ios);
@@ -119,9 +111,28 @@ BASE_FEATURE(kExtractRelatedSearchesFromPrefetchedZPSResponse,
 BASE_FEATURE(kAnnotatedPageContentExtraction,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kOnDeviceCategoryClassifier, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kAnnotatedPageContentExtractionOnHideFix,
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kPageContentCache, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kPageContentExtractionAllowOnDemandWithoutObservers,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kAnnotatedPageContentNonSalientFiltering,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+const base::FeatureParam<bool> kAnnotatedPageContentExcludeAdRelatedParam{
+    &kAnnotatedPageContentNonSalientFiltering, "exclude_ad_related", true};
+
+BASE_FEATURE(kAnnotatedPageContentPDFTextExtraction,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+const base::FeatureParam<size_t> kMaxPDFTextExtractionByteSizeParam{
+    &kAnnotatedPageContentPDFTextExtraction, "max_text_byte_size",
+    1048576};  // 1MB
+
+BASE_FEATURE(kOnDeviceCategoryClassifier, enabled_by_default_desktop_only);
+
+BASE_FEATURE(kPageContentCache, enabled_by_default_ios_only);
 
 const base::FeatureParam<int> kPageContentCacheMaxCacheAgeInDays{
     &kPageContentCache, "max_cache_age_in_days", 7};
@@ -135,70 +146,98 @@ const base::FeatureParam<bool> kPageContentCacheEnableScreenshot{
 const base::FeatureParam<bool> kPageContentCacheUseUserEngagement{
     &kPageContentCache, "page_content_cache_use_user_engagement", false};
 
+BASE_FEATURE(kPageSettledMonitor, base::FEATURE_ENABLED_BY_DEFAULT);
+
+const base::FeatureParam<base::TimeDelta> kPageStabilityTimeout{
+    &kPageSettledMonitor, "page-stability-timeout", base::Seconds(4)};
+
+const base::FeatureParam<base::TimeDelta> kPageStabilityMinWait{
+    &kPageSettledMonitor, "page-stability-min-wait", base::Seconds(1)};
+
+const base::FeatureParam<base::TimeDelta> kPaintStabilityInitialPaintTimeout{
+    &kPageSettledMonitor, "paint-stability-initial-paint-timeout",
+    base::Seconds(1)};
+
+const base::FeatureParam<base::TimeDelta> kPaintStabilitySubsequentPaintTimeout{
+    &kPageSettledMonitor, "paint-stability-subsequent-paint-timeout",
+    base::Seconds(1)};
+
+const base::FeatureParam<base::TimeDelta> kObservationDelayTimeout{
+    &kPageSettledMonitor, "observation-delay-timeout", base::Seconds(10)};
+
+const base::FeatureParam<base::TimeDelta> kObservationDelayLcp{
+    &kPageSettledMonitor, "observation-delay-lcp", base::Seconds(1)};
+
+BASE_FEATURE(kPageContentExtractionUsingPageSettledMonitor,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+const base::FeatureParam<base::TimeDelta> kPageSettledCaptureDelay{
+    &kPageContentExtractionUsingPageSettledMonitor, "capture_delay",
+    base::TimeDelta()};
+
+BASE_FEATURE(kPageSettledMonitorExcludeAdFrameLoading,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kPageSettledMonitorSkipAwaitVisualStateForHiddenTabs,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
 base::TimeDelta PCAServiceWaitForTitleDelayDuration() {
-  return base::Milliseconds(GetFieldTrialParamByFeatureAsInt(
-      kPageContentAnnotations,
-      "pca_service_wait_for_title_delay_in_milliseconds", 5000));
+  return base::Milliseconds(5000);
 }
 
 bool ShouldEnablePageContentAnnotations() {
-  // Allow for the validation experiment or remote page metadata to enable the
-  // PCAService without need to enable both features.
-  return base::FeatureList::IsEnabled(kPageContentAnnotations) ||
-         base::FeatureList::IsEnabled(page_content_annotations::features::
-                                          kPageContentAnnotationsValidation) ||
-         base::FeatureList::IsEnabled(
-             page_content_annotations::features::kRemotePageMetadata) ||
-         base::FeatureList::IsEnabled(kOnDeviceCategoryClassifier);
-}
-
-bool ShouldWriteContentAnnotationsToHistoryService() {
-  return base::GetFieldTrialParamByFeatureAsBool(
-      kPageContentAnnotations, "write_to_history_service", true);
+  // Remote page metadata is permanently enabled without a feature flag, so
+  // the service should always be enabled.
+  return true;
 }
 
 size_t MaxContentAnnotationRequestsCached() {
-  return GetFieldTrialParamByFeatureAsInt(
-      kPageContentAnnotations, "max_content_annotation_requests_cached", 50);
+  return 50;
 }
 
-const base::FeatureParam<bool> kContentAnnotationsExtractRelatedSearchesParam{
-    &kPageContentAnnotations, "extract_related_searches", true};
-
 bool ShouldExtractRelatedSearches() {
-  return kContentAnnotationsExtractRelatedSearchesParam.Get();
+  return true;
 }
 
 bool ShouldExecutePageVisibilityModelOnPageContent(const std::string& locale) {
-  return base::FeatureList::IsEnabled(kPageVisibilityPageContentAnnotations) &&
-         IsSupportedLocaleForFeature(
-             locale, kPageVisibilityPageContentAnnotations,
-             /*default_value=*/"ar,en,es,fa,fr,hi,id,pl,pt,tr,vi");
+#if defined(ARCH_CPU_ARMEL)
+  return false;
+#else
+  return IsSupportedLocale(locale, "ar,en,es,fa,fr,hi,id,pl,pt,tr,vi");
+#endif
 }
 
-bool RemotePageMetadataEnabled(const std::string& locale,
-                               const std::string& country_code) {
-  return base::FeatureList::IsEnabled(kRemotePageMetadata) &&
-         IsSupportedLocaleForFeature(locale, kRemotePageMetadata, "*") &&
-         IsSupportedCountryForFeature(country_code, kRemotePageMetadata, "*");
-}
-
-int GetMinimumPageCategoryScoreToPersist() {
-  return GetFieldTrialParamByFeatureAsInt(kRemotePageMetadata,
-                                          "min_page_category_score", 85);
+bool ShouldExecuteOnDeviceCategoryClassifierOnPageContent(
+    const std::string& locale,
+    const std::string& country_code) {
+  // If the feature is overridden (e.g. via server-side config or command-line),
+  // use that state.
+  auto* feature_list = base::FeatureList::GetInstance();
+  if (feature_list &&
+      feature_list->IsFeatureOverridden(kOnDeviceCategoryClassifier.name)) {
+    // Important: If a server-side config applies to this client (i.e. after
+    // accounting for its filters), but the client gets assigned to the default
+    // group, they will still take this code path and receive the state
+    // specified via BASE_FEATURE() above.
+    return base::FeatureList::IsEnabled(kOnDeviceCategoryClassifier);
+  }
+  return base::FeatureList::IsEnabled(kOnDeviceCategoryClassifier) &&
+         IsSupportedLocale(locale, "en") &&
+         IsSupportedCountryForFeature(country_code, kOnDeviceCategoryClassifier,
+                                      "US");
 }
 
 int NumBitsForRAPPORMetrics() {
   // The number of bits must be at least 1.
   return std::max(
-      1, GetFieldTrialParamByFeatureAsInt(kPageContentAnnotations,
+      1, GetFieldTrialParamByFeatureAsInt(kPageContentAnnotationsValidation,
                                           "num_bits_for_rappor_metrics", 4));
 }
 
 double NoiseProbabilityForRAPPORMetrics() {
   // The noise probability must be between 0 and 1.
   return std::max(0.0, std::min(1.0, GetFieldTrialParamByFeatureAsDouble(
-                                         kPageContentAnnotations,
+                                         kPageContentAnnotationsValidation,
                                          "noise_prob_for_rappor_metrics", .5)));
 }
 
@@ -208,9 +247,7 @@ size_t AnnotateVisitBatchSize() {
   // `kDefaultBatchSize` entries are annotated when new visits are synced. Set
   // the limit to 5 since up to 5 URLs are shown on tab resume module.
   constexpr int kDefaultBatchSize = 5;
-  return std::max(1, GetFieldTrialParamByFeatureAsInt(
-                         kPageContentAnnotations, "annotate_visit_batch_size",
-                         kDefaultBatchSize));
+  return kDefaultBatchSize;
 }
 
 base::TimeDelta PageContentAnnotationValidationStartupDelay() {
@@ -227,14 +264,11 @@ size_t PageContentAnnotationsValidationBatchSize() {
 }
 
 base::TimeDelta PageContentAnnotationBatchSizeTimeoutDuration() {
-  return base::Seconds(GetFieldTrialParamByFeatureAsInt(
-      kPageContentAnnotations, "batch_annotations_timeout_seconds", 30));
+  return base::Seconds(1);
 }
 
 size_t MaxVisitAnnotationCacheSize() {
-  int batch_size = GetFieldTrialParamByFeatureAsInt(
-      kPageContentAnnotations, "max_visit_annotation_cache_size", 50);
-  return std::max(1, batch_size);
+  return 50;
 }
 
 size_t MaxRelatedSearchesCacheSize() {
@@ -259,6 +293,20 @@ std::string AnnotatedPageContentMode() {
   return kAnnotatedPageContentMode.Get();
 }
 
+uint32_t MaxPDFTextExtractionByteSize() {
+  size_t limit = kMaxPDFTextExtractionByteSizeParam.Get();
+  return base::IsValueInRangeForNumericType<uint32_t>(limit)
+             ? static_cast<uint32_t>(limit)
+             : static_cast<uint32_t>(
+                   kMaxPDFTextExtractionByteSizeParam.default_value);
+}
+
+bool ShouldAnnotatedPageContentExcludeAdRelated() {
+  return base::FeatureList::IsEnabled(
+             kAnnotatedPageContentNonSalientFiltering) &&
+         kAnnotatedPageContentExcludeAdRelatedParam.Get();
+}
+
 PageContentExtractionTriggeringMode GetPageContentExtractionTriggeringMode() {
   std::string mode_str = kPageContentExtractionTriggeringMode.Get();
   if (mode_str == "on_hidden") {
@@ -270,22 +318,8 @@ PageContentExtractionTriggeringMode GetPageContentExtractionTriggeringMode() {
   return PageContentExtractionTriggeringMode::kOnLoad;
 }
 
-bool IsSupportedLocaleForFeature(
-    const std::string& locale,
-    const base::Feature& feature,
-    const std::string& default_value = "de,en,es,fr,it,nl,pt,tr") {
-  if (!base::FeatureList::IsEnabled(feature)) {
-    return false;
-  }
-
-  std::string value =
-      base::GetFieldTrialParamValueByFeature(feature, "supported_locales");
-  if (value.empty()) {
-    // The default list of supported locales for optimization guide features.
-    value = default_value;
-  }
-
-  return IsSupportedLocale(locale, value);
+base::TimeDelta GetPageSettledCaptureDelay() {
+  return kPageSettledCaptureDelay.Get();
 }
 
 bool IsSupportedCountryForFeature(const std::string& country_code,

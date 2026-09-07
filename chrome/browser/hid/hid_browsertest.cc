@@ -23,8 +23,8 @@
 #include "chrome/browser/hid/hid_chooser_context_factory.h"
 #include "chrome/browser/hid/hid_connection_tracker.h"
 #include "chrome/browser/notifications/notification_display_service_tester.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/common/chrome_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -38,6 +38,7 @@
 #include "content/public/common/content_client.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/service_worker_test_helpers.h"
+#include "extensions/buildflags/buildflags.h"
 #include "services/device/public/cpp/test/fake_hid_manager.h"
 #include "services/device/public/mojom/hid.mojom.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -323,7 +324,7 @@ class WebHidExtensionBrowserTest : public InProcessBrowserTestMixinHostSupport<
 
   device::FakeHidManager* hid_manager() { return &hid_manager_; }
 
-  void SimulateClickOnSystemTrayIconButton(Browser* browser,
+  void SimulateClickOnSystemTrayIconButton(BrowserWindowInterface* browser,
                                            const Extension* extension) {
 #if BUILDFLAG(IS_CHROMEOS)
     auto* hid_pinned_notification = static_cast<HidPinnedNotification*>(
@@ -335,7 +336,7 @@ class WebHidExtensionBrowserTest : public InProcessBrowserTestMixinHostSupport<
 
     auto expected_pinned_notification_id =
         device_pinned_notification_renderer->GetNotificationId(
-            browser->profile());
+            browser->GetProfile());
     auto maybe_indicator_notification =
         display_service_for_system_notification_->GetNotification(
             expected_pinned_notification_id);
@@ -344,7 +345,7 @@ class WebHidExtensionBrowserTest : public InProcessBrowserTestMixinHostSupport<
     display_service_for_system_notification_->SimulateClick(
         NotificationHandler::Type::TRANSIENT, expected_pinned_notification_id,
         /*action_index=*/0, /*reply=*/std::nullopt);
-    auto* web_contents = browser->tab_strip_model()->GetActiveWebContents();
+    auto* web_contents = browser->GetTabStripModel()->GetActiveWebContents();
     EXPECT_EQ(web_contents->GetURL(), "chrome://settings/content/hidDevices");
 #else
     // On non-ChromeOS platforms, as they use status icon and there isn't good
@@ -358,21 +359,21 @@ class WebHidExtensionBrowserTest : public InProcessBrowserTestMixinHostSupport<
 
     status_icon_renderer->ExecuteCommandForTesting(
         IDC_DEVICE_SYSTEM_TRAY_ICON_FIRST, 0);
-    EXPECT_EQ(browser->tab_strip_model()->GetActiveWebContents()->GetURL(),
+    EXPECT_EQ(browser->GetTabStripModel()->GetActiveWebContents()->GetURL(),
               "https://support.google.com/chrome?p=webhid");
 
     status_icon_renderer->ExecuteCommandForTesting(
         IDC_DEVICE_SYSTEM_TRAY_ICON_FIRST + 1, 0);
-    EXPECT_EQ(browser->tab_strip_model()->GetActiveWebContents()->GetURL(),
+    EXPECT_EQ(browser->GetTabStripModel()->GetActiveWebContents()->GetURL(),
               "chrome://settings/content/hidDevices");
 
     status_icon_renderer->ExecuteCommandForTesting(
         IDC_DEVICE_SYSTEM_TRAY_ICON_FIRST + 2, 0);
     EXPECT_EQ(
-        browser->tab_strip_model()->GetActiveWebContents()->GetURL(),
+        browser->GetTabStripModel()->GetActiveWebContents()->GetURL(),
         "chrome://settings/content/siteDetails?site=chrome-extension%3A%2F%2F" +
             extension->id());
-#endif
+#endif  // BUILDFLAG(IS_CHROMEOS)
   }
 
  private:
@@ -386,13 +387,7 @@ class WebHidExtensionBrowserTest : public InProcessBrowserTestMixinHostSupport<
   device::FakeHidManager hid_manager_;
 };
 
-// TODO(crbug.com/41494522): Re-enable on ChromeOS.
-#if BUILDFLAG(IS_CHROMEOS)
-#define MAYBE_GetDevices DISABLED_GetDevices
-#else
-#define MAYBE_GetDevices GetDevices
-#endif
-IN_PROC_BROWSER_TEST_F(WebHidExtensionBrowserTest, MAYBE_GetDevices) {
+IN_PROC_BROWSER_TEST_F(WebHidExtensionBrowserTest, GetDevices) {
   extensions::TestExtensionDir test_dir;
 
   auto device = CreateTestDeviceWithInputAndOutputReports();
@@ -413,13 +408,7 @@ IN_PROC_BROWSER_TEST_F(WebHidExtensionBrowserTest, MAYBE_GetDevices) {
   LoadExtensionAndRunTest(kBackgroundJs);
 }
 
-// TODO(crbug.com/41494522): Re-enable on ChromeOS.
-#if BUILDFLAG(IS_CHROMEOS)
-#define MAYBE_RequestDevice DISABLED_RequestDevice
-#else
-#define MAYBE_RequestDevice RequestDevice
-#endif
-IN_PROC_BROWSER_TEST_F(WebHidExtensionBrowserTest, MAYBE_RequestDevice) {
+IN_PROC_BROWSER_TEST_F(WebHidExtensionBrowserTest, RequestDevice) {
   extensions::TestExtensionDir test_dir;
 
   constexpr char kBackgroundJs[] = R"(
@@ -438,20 +427,10 @@ IN_PROC_BROWSER_TEST_F(WebHidExtensionBrowserTest, MAYBE_RequestDevice) {
 
 // Test the scenario of waking up the service worker upon device events and
 // the service worker being kept alive with active device session.
-// TODO(crbug.com/41493373): enable the flaky test.
-#if (BUILDFLAG(IS_LINUX) && defined(LEAK_SANITIZER)) || \
-    (BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_CHROMEOS_DEVICE))
-#define MAYBE_DeviceConnectAndOpenDeviceWhenServiceWorkerStopped \
-  DISABLED_DeviceConnectAndOpenDeviceWhenServiceWorkerStopped
-#else
-#define MAYBE_DeviceConnectAndOpenDeviceWhenServiceWorkerStopped \
-  DeviceConnectAndOpenDeviceWhenServiceWorkerStopped
-#endif
-IN_PROC_BROWSER_TEST_F(
-    WebHidExtensionBrowserTest,
-    MAYBE_DeviceConnectAndOpenDeviceWhenServiceWorkerStopped) {
+IN_PROC_BROWSER_TEST_F(WebHidExtensionBrowserTest,
+                       DeviceConnectAndOpenDeviceWhenServiceWorkerStopped) {
   content::ServiceWorkerContext* context = browser()
-                                               ->profile()
+                                               ->GetProfile()
                                                ->GetDefaultStoragePartition()
                                                ->GetServiceWorkerContext();
   // Set up an observer for service worker events.
@@ -552,16 +531,8 @@ IN_PROC_BROWSER_TEST_F(
   SimulateClickOnSystemTrayIconButton(browser(), extension);
 }
 
-// TODO(crbug.com/41494522): Flaky on non-Mac release builds.
-#if !BUILDFLAG(IS_MAC) && defined(NDEBUG)
-#define MAYBE_EventListenerAddedAfterServiceWorkerIsActivated \
-  DISABLED_EventListenerAddedAfterServiceWorkerIsActivated
-#else
-#define MAYBE_EventListenerAddedAfterServiceWorkerIsActivated \
-  EventListenerAddedAfterServiceWorkerIsActivated
-#endif
 IN_PROC_BROWSER_TEST_F(WebHidExtensionBrowserTest,
-                       MAYBE_EventListenerAddedAfterServiceWorkerIsActivated) {
+                       EventListenerAddedAfterServiceWorkerIsActivated) {
   const char kWarningMessage[] =
       "Event handler of '%s' event must be added on the initial evaluation "
       "of worker script. More info: "
@@ -569,7 +540,7 @@ IN_PROC_BROWSER_TEST_F(WebHidExtensionBrowserTest,
       "events/";
 
   content::ServiceWorkerContext* context = browser()
-                                               ->profile()
+                                               ->GetProfile()
                                                ->GetDefaultStoragePartition()
                                                ->GetServiceWorkerContext();
   // Set up an observer for service worker events.

@@ -15,11 +15,14 @@
 #include "content/public/browser/webid/federated_identity_api_permission_context_delegate.h"
 #include "content/public/browser/webid/federated_identity_permission_context_delegate.h"
 #include "services/network/public/cpp/is_potentially_trustworthy.h"
-#include "third_party/blink/public/mojom/webid/federated_auth_request.mojom.h"
+#include "third_party/blink/public/mojom/webid/federated_request.mojom.h"
 #include "url/origin.h"
 #include "url/url_constants.h"
 
 namespace content::webid {
+
+using UserInfoRequestResult = UserInfoRequest::UserInfoRequestResult;
+
 namespace {
 
 std::string GetConsoleErrorMessage(UserInfoRequestResult error) {
@@ -69,20 +72,6 @@ using FederatedApiPermissionStatus =
     FederatedIdentityApiPermissionContextDelegate::PermissionStatus;
 using LoginState = IdentityRequestAccount::LoginState;
 
-// static
-std::unique_ptr<UserInfoRequest> UserInfoRequest::Create(
-    std::unique_ptr<IdpNetworkRequestManager> network_manager,
-    FederatedIdentityPermissionContextDelegate* permission_delegate,
-    FederatedIdentityApiPermissionContextDelegate* api_permission_delegate,
-    RenderFrameHost* render_frame_host,
-    blink::mojom::IdentityProviderConfigPtr provider) {
-  std::unique_ptr<UserInfoRequest> request =
-      base::WrapUnique<UserInfoRequest>(new UserInfoRequest(
-          std::move(network_manager), permission_delegate,
-          api_permission_delegate, render_frame_host, std::move(provider)));
-  return request;
-}
-
 UserInfoRequest::~UserInfoRequest() {
   CompleteWithError(UserInfoRequestResult::kUnhandledRequest);
 }
@@ -102,7 +91,7 @@ UserInfoRequest::UserInfoRequest(
       origin_(render_frame_host->GetLastCommittedOrigin()),
       perfetto_track_(CreatePerfettoTrackForFedCM(this)) {
   RenderFrameHost* main_frame = render_frame_host->GetMainFrame();
-  DCHECK(main_frame->IsInPrimaryMainFrame());
+  CHECK(main_frame->IsInPrimaryMainFrame(), base::NotFatalUntil::M158);
   embedding_origin_ = main_frame->GetLastCommittedOrigin();
 
   RenderFrameHost* parent_frame = render_frame_host->GetParentOrOuterDocument();
@@ -111,7 +100,7 @@ UserInfoRequest::UserInfoRequest(
 }
 
 void UserInfoRequest::SetCallbackAndStart(
-    blink::mojom::FederatedAuthRequest::RequestUserInfoCallback callback) {
+    blink::mojom::FederatedRequestService::RequestUserInfoCallback callback) {
   TRACE_EVENT_BEGIN("content.fedcm", "FedCM getUserInfo", perfetto_track_);
   callback_ = std::move(callback);
 
@@ -160,7 +149,7 @@ void UserInfoRequest::SetCallbackAndStart(
   }
 
   // ConfigFetcher is stored as a member so that it is destroyed when
-  // RequestService is destroyed.
+  // Request is destroyed.
   config_fetcher_ = std::make_unique<ConfigFetcher>(*render_frame_host_,
                                                     network_manager_.get());
   // TODO(crbug.com/390626180): It seems ok to ignore the well-known checks in
@@ -168,7 +157,7 @@ void UserInfoRequest::SetCallbackAndStart(
   // registration API is not enabled since we only really need this for that
   // case.
   config_fetcher_->Start(
-      {{idp_config_url_, webid::IsIdPRegistrationEnabled()}},
+      {{idp_config_url_, IsIdPRegistrationEnabled()}},
       /*icon_ideal_size=*/0,
       /*icon_minimum_size=*/0,
       base::BindOnce(&UserInfoRequest::OnAllConfigAndWellKnownFetched,
@@ -203,7 +192,6 @@ void UserInfoRequest::OnAllConfigAndWellKnownFetched(
 
   network_manager_->SendAccountsRequest(
       url::Origin::Create(idp_config_url_), fetch_results[0].endpoints.accounts,
-      client_id_,
       base::BindOnce(&UserInfoRequest::OnAccountsResponseReceived,
                      weak_ptr_factory_.GetWeakPtr()));
 }
@@ -211,18 +199,23 @@ void UserInfoRequest::OnAllConfigAndWellKnownFetched(
 void UserInfoRequest::OnAccountsResponseReceived(
     FetchStatus fetch_status,
     IdpNetworkRequestManager::AccountsResponse accounts) {
+  // Speculative guard: UpdateIdpSigninStatus may destroy |this| via observer
+  // callbacks. See crbug.com/548340637.
+  base::WeakPtr<UserInfoRequest> weak_this = weak_ptr_factory_.GetWeakPtr();
   UpdateIdpSigninStatusForAccountsEndpointResponse(
       idp_config_url_, fetch_status, does_idp_have_failing_signin_status_,
       permission_delegate_);
+  if (!weak_this) {
+    return;
+  }
 
   if (fetch_status.parse_status != ParseStatus::kSuccess) {
     CompleteWithError(UserInfoRequestResult::kInvalidAccountsResponse);
     return;
   }
 
-  GetPageData(render_frame_host_->GetPage())
-      ->SetUserInfoAccountsResponseTime(idp_config_url_,
-                                        base::TimeTicks::Now());
+  IdentityRequestAccount::ComputeIdpClaimedLoginStates(client_id_,
+                                                       accounts.accounts);
 
   // Populate the accounts' login state based on browser stored permission
   // grants.
@@ -241,8 +234,8 @@ void UserInfoRequest::OnAccountsResponseReceived(
 }
 
 void UserInfoRequest::MaybeReturnAccounts(
-    const std::vector<IdentityRequestAccountPtr>& accounts) {
-  DCHECK(!accounts.empty());
+    const std::vector<scoped_refptr<IdentityRequestAccount>>& accounts) {
+  CHECK(!accounts.empty(), base::NotFatalUntil::M158);
 
   bool has_returning_accounts = false;
   for (const auto& account : accounts) {
@@ -252,11 +245,10 @@ void UserInfoRequest::MaybeReturnAccounts(
     }
   }
 
-  webid::Metrics::NumAccounts num_accounts = webid::Metrics::NumAccounts::kZero;
+  Metrics::NumAccounts num_accounts = Metrics::NumAccounts::kZero;
   if (has_returning_accounts) {
-    num_accounts = accounts.size() == 1u
-                       ? webid::Metrics::NumAccounts::kOne
-                       : webid::Metrics::NumAccounts::kMultiple;
+    num_accounts = accounts.size() == 1u ? Metrics::NumAccounts::kOne
+                                         : Metrics::NumAccounts::kMultiple;
   }
   base::UmaHistogramEnumeration("Blink.FedCm.UserInfo.NumAccounts",
                                 num_accounts);
@@ -286,8 +278,9 @@ void UserInfoRequest::MaybeReturnAccounts(
   user_info.insert(user_info.end(),
                    std::make_move_iterator(not_returning_accounts.begin()),
                    std::make_move_iterator(not_returning_accounts.end()));
-  Complete(blink::mojom::RequestUserInfoStatus::kSuccess, std::move(user_info),
-           UserInfoRequestResult::kSuccess);
+  Complete(
+      blink::mojom::RequestUserInfoResult::NewUserInfo(std::move(user_info)),
+      UserInfoRequestResult::kSuccess);
 }
 
 bool UserInfoRequest::IsReturningAccount(
@@ -312,10 +305,8 @@ bool UserInfoRequest::IsReturningAccount(
       api_permission_delegate_);
 }
 
-void UserInfoRequest::Complete(
-    blink::mojom::RequestUserInfoStatus status,
-    std::optional<std::vector<blink::mojom::IdentityUserInfoPtr>> user_info,
-    UserInfoRequestResult request_status) {
+void UserInfoRequest::Complete(blink::mojom::RequestUserInfoResultPtr result,
+                               UserInfoRequestResult request_status) {
   if (!callback_) {
     return;
   }
@@ -324,7 +315,7 @@ void UserInfoRequest::Complete(
 
   base::UmaHistogramEnumeration("Blink.FedCm.UserInfo.Status", request_status);
 
-  std::move(callback_).Run(status, std::move(user_info));
+  std::move(callback_).Run(std::move(result));
 }
 
 void UserInfoRequest::CompleteWithError(UserInfoRequestResult error) {
@@ -336,17 +327,19 @@ void UserInfoRequest::CompleteWithError(UserInfoRequestResult error) {
         GetConsoleErrorMessage(error));
     AddDevToolsIssue(error);
   }
-  Complete(blink::mojom::RequestUserInfoStatus::kError, std::nullopt, error);
+  Complete(blink::mojom::RequestUserInfoResult::NewStatus(
+               blink::mojom::RequestUserInfoStatus::kError),
+           error);
 }
 
 void UserInfoRequest::AddDevToolsIssue(UserInfoRequestResult error) {
-  DCHECK_NE(error, UserInfoRequestResult::kSuccess);
+  CHECK_NE(error, UserInfoRequestResult::kSuccess, base::NotFatalUntil::M158);
 
   auto details = blink::mojom::InspectorIssueDetails::New();
-  auto federated_auth_user_info_request_details =
+  auto user_info_request_details =
       blink::mojom::FederatedAuthUserInfoRequestIssueDetails::New(error);
   details->federated_auth_user_info_request_details =
-      std::move(federated_auth_user_info_request_details);
+      std::move(user_info_request_details);
   render_frame_host_->ReportInspectorIssue(
       blink::mojom::InspectorIssueInfo::New(
           blink::mojom::InspectorIssueCode::kFederatedAuthUserInfoRequestIssue,

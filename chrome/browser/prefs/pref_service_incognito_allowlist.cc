@@ -13,6 +13,7 @@
 #include "components/metrics/metrics_pref_names.h"
 #include "components/reading_list/core/reading_list_pref_names.h"
 #include "components/ukm/ukm_pref_names.h"
+#include "extensions/buildflags/buildflags.h"
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/accessibility/animation_policy_prefs.h"
@@ -170,7 +171,6 @@ const char* const kPersistentPrefNames[] = {
     // Default browser bar's status is aggregated between regular and incognito
     // modes.
     prefs::kBrowserSuppressDefaultBrowserPrompt,
-    prefs::kDefaultBrowserLastDeclined,
     prefs::kDefaultBrowserSettingEnabled,
 
     // Devtools preferences are stored cross profiles as they are not storing

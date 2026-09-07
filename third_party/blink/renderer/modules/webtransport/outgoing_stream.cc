@@ -198,7 +198,7 @@ OutgoingStream::~OutgoingStream() = default;
 
 void OutgoingStream::Init(ExceptionState& exception_state) {
   DVLOG(1) << "OutgoingStream::Init() this=" << this;
-  auto* stream = MakeGarbageCollected<WritableStream>();
+  auto* stream = MakeGarbageCollected<WritableStream>(script_state_);
   InitWithExistingWritableStream(stream, exception_state);
 }
 
@@ -462,9 +462,9 @@ ScriptValue OutgoingStream::CreateAbortException(IsLocalAbort is_local_abort) {
 
   DOMExceptionCode code = is_local_abort ? DOMExceptionCode::kAbortError
                                          : DOMExceptionCode::kNetworkError;
-  String message = UNSAFE_TODO(
-      String::Format("The stream was aborted %s",
-                     is_local_abort ? "locally" : "by the remote server"));
+  String message =
+      StrCat({"The stream was aborted ",
+              is_local_abort ? "locally" : "by the remote server"});
 
   return ScriptValue(script_state_->GetIsolate(),
                      V8ThrowDOMException::CreateOrEmpty(

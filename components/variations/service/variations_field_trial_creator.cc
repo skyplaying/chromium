@@ -8,15 +8,20 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 #include "base/base64.h"
 #include "base/base_switches.h"
 #include "base/command_line.h"
+#include "base/containers/flat_set.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/json/json_file_value_serializer.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/process/process.h"
 #include "base/sequence_checker.h"
@@ -30,10 +35,13 @@
 #include "base/version.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
+#include "components/enterprise/browser/groups/groups_prefs.h"
 #include "components/language/core/browser/locale_util.h"
 #include "components/metrics/field_trials_provider.h"
+#include "components/metrics/metrics_features.h"
 #include "components/metrics/metrics_state_manager.h"
 #include "components/prefs/pref_service.h"
+#include "components/prefs/scoped_user_pref_update.h"
 #include "components/variations/active_field_trials.h"
 #include "components/variations/entropy_provider.h"
 #include "components/variations/field_trial_config/field_trial_util.h"
@@ -135,8 +143,7 @@ Study::CpuArchitecture GetCurrentCpuArchitecture() {
 bool ShouldUseFieldTrialTestingConfig(const base::CommandLine* command_line) {
   bool is_enable_switch_set =
       command_line->HasSwitch(switches::kEnableFieldTrialTestingConfig) ||
-      command_line->GetSwitchValueASCII(
-          variations::switches::kEnableBenchmarking) ==
+      command_line->GetSwitchValueASCII(::switches::kEnableBenchmarking) ==
           switches::kEnableFieldTrialTestingConfig;
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
   return is_enable_switch_set;
@@ -187,6 +194,17 @@ Study::Channel ConvertProductChannelToStudyChannel(
   NOTREACHED();
 }
 
+void AddGroupsFromList(const base::ListValue& input_groups,
+                       base::flat_set<std::string>& output_groups) {
+  for (const auto& group_value : input_groups) {
+    const std::string* group = group_value.GetIfString();
+    if (!group || group->empty()) {
+      continue;
+    }
+    output_groups.insert(*group);
+  }
+}
+
 // No-op feature used to test sticky activation functionality.
 BASE_FEATURE(kVariationsStickyNoopTest, base::FEATURE_DISABLED_BY_DEFAULT);
 
@@ -222,9 +240,16 @@ std::string VariationsFieldTrialCreator::GetLatestCountry() const {
              : seed_store_->GetLatestCountry();
 }
 
+std::string VariationsFieldTrialCreator::GetLatestGeoLevel1() const {
+  const std::string override_geo = base::ToLowerASCII(
+      base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
+          switches::kVariationsOverrideGeoLevel1));
+  return !override_geo.empty() ? override_geo
+                               : seed_store_->GetLatestGeoLevel1();
+}
+
 bool VariationsFieldTrialCreator::SetUpFieldTrials(
     const std::vector<std::string>& variation_ids,
-    const std::string& command_line_variation_ids,
     const std::vector<base::FeatureList::FeatureOverrideInfo>& extra_overrides,
     std::unique_ptr<base::FeatureList> feature_list,
     metrics::MetricsStateManager* metrics_state_manager,
@@ -246,11 +271,14 @@ bool VariationsFieldTrialCreator::SetUpFieldTrials(
   VariationsIdsProvider* http_header_provider =
       VariationsIdsProvider::GetInstance();
 
+  const base::CommandLine* command_line =
+      base::CommandLine::ForCurrentProcess();
+
   // Force the variation ids selected in chrome://flags and/or specified using
   // the command-line flag.
   auto result = http_header_provider->ForceVariationIds(
-      base::PassKey<VariationsFieldTrialCreator>(),
-      variation_ids, command_line_variation_ids);
+      base::PassKey<VariationsFieldTrialCreator>(), variation_ids,
+      command_line->GetSwitchValueASCII(switches::kForceVariationIds));
 
   switch (result) {
     case VariationsIdsProvider::ForceIdsResult::INVALID_SWITCH_ENTRY:
@@ -265,8 +293,7 @@ bool VariationsFieldTrialCreator::SetUpFieldTrials(
       break;
   }
 
-  const base::CommandLine* command_line =
-      base::CommandLine::ForCurrentProcess();
+  variations_source_.type = VariationsSourceType::kDefaultSeed;
   bool success = http_header_provider->ForceDisableVariationIds(
       command_line->GetSwitchValueASCII(switches::kForceDisableVariationIds));
   if (!success) {
@@ -285,12 +312,25 @@ bool VariationsFieldTrialCreator::SetUpFieldTrials(
   // instance is set.
   feature_list->RegisterExtraFeatureOverrides(extra_overrides);
 
+  if (!variation_ids.empty() ||
+      command_line->HasSwitch(switches::kForceVariationIds) ||
+      command_line->HasSwitch(switches::kForceDisableVariationIds) ||
+      command_line->HasSwitch(variations::switches::kForceFieldTrialParams) ||
+      command_line->HasSwitch(::switches::kForceFieldTrials) ||
+      command_line->HasSwitch(::switches::kEnableFeatures) ||
+      command_line->HasSwitch(::switches::kDisableFeatures)) {
+    // Set the default source to kCommandLineOrAboutFlags,
+    // might be overridden later.
+    variations_source_.type = VariationsSourceType::kCommandLineOrAboutFlags;
+    variations_source_.forced_via_command_line_or_about_flags = true;
+  }
+
   bool used_testing_config = false;
-  // TODO(crbug.com/40230862): Remove this code path.
 #if BUILDFLAG(FIELDTRIAL_TESTING_ENABLED)
   if (ShouldUseFieldTrialTestingConfig(command_line)) {
     ApplyFieldTrialTestingConfig(feature_list.get());
     used_testing_config = true;
+    variations_source_.type = VariationsSourceType::kFieldTrialConfig;
   }
 #else
   if (command_line->HasSwitch(switches::kEnableFieldTrialTestingConfig)) {
@@ -303,6 +343,7 @@ bool VariationsFieldTrialCreator::SetUpFieldTrials(
   if (command_line->HasSwitch(switches::kVariationsTestSeedJsonPath)) {
     LoadSeedFromJsonFile(command_line->GetSwitchValuePath(
         switches::kVariationsTestSeedJsonPath));
+    variations_source_.type = VariationsSourceType::kManualConfigFile;
   }
 
   // Get client filterable state to be used by CreateTrialsFromSeed()
@@ -323,6 +364,7 @@ bool VariationsFieldTrialCreator::SetUpFieldTrials(
   if (create_trials_result.applied_seed) {
     FieldTrialsProvider::UpdateAppliedSeedHasActiveLimitedLayer(
         create_trials_result.seed_has_active_limited_layer.value_or(false));
+    variations_source_.type = VariationsSourceType::kVariationsServer;
   }
 
   if (add_entropy_source_to_variations_ids &&
@@ -338,6 +380,13 @@ bool VariationsFieldTrialCreator::SetUpFieldTrials(
 
   platform_field_trials->RegisterFeatureOverrides(feature_list.get());
 
+  // Enable the no-op mutable features, for testing.
+  metrics::features::EnableNoopRuntimeMutableFeatures(feature_list.get());
+
+  // Enable the production runtime mutable features.
+  platform_field_trials->EnableRuntimeMutableFeatures(feature_list.get());
+
+  feature_list->SetVariationCountry(GetPermanentConsistencyCountry());
   base::FeatureList::SetInstance(std::move(feature_list));
 
   GetSeedStore()->AllowToPurgeSeedsDataFromMemory();
@@ -370,9 +419,12 @@ VariationsFieldTrialCreator::GetClientFilterableStateForVersion(
   auto GoogleGroupsCallback = base::BindRepeating(
       &VariationsFieldTrialCreator::GetGoogleGroupsFromPrefs,
       base::Unretained(this));
+  auto EnterpriseGroupsCallback = base::BindRepeating(
+      &VariationsFieldTrialCreator::GetEnterpriseGroupsFromPrefs,
+      base::Unretained(this));
   std::unique_ptr<ClientFilterableState> state =
-      std::make_unique<ClientFilterableState>(IsEnterpriseCallback,
-                                              GoogleGroupsCallback);
+      std::make_unique<ClientFilterableState>(
+          IsEnterpriseCallback, GoogleGroupsCallback, EnterpriseGroupsCallback);
   state->locale = application_locale_;
   state->reference_date = GetSeedStore()->GetTimeForStudyDateChecks(
       /*is_safe_seed=*/false);
@@ -384,6 +436,8 @@ VariationsFieldTrialCreator::GetClientFilterableStateForVersion(
   state->cpu_architecture = GetCurrentCpuArchitecture();
   state->platform = GetPlatform();
   state->hardware_class = ClientFilterableState::GetHardwareClass();
+  state->hardware_manufacturer =
+      ClientFilterableState::GetHardwareManufacturer();
 #if BUILDFLAG(IS_ANDROID)
   // This is set on Android only currently, because the IsLowEndDevice() API
   // on other platforms has no intrinsic meaning outside of a field trial that
@@ -394,6 +448,7 @@ VariationsFieldTrialCreator::GetClientFilterableStateForVersion(
   state->session_consistency_country = GetLatestCountry();
   state->permanent_consistency_country = LoadPermanentConsistencyCountry(
       version, state->session_consistency_country);
+  state->session_consistency_geolevel1 = GetLatestGeoLevel1();
   // Update the stored permanent consistency country
   permanent_consistency_country_ = state->permanent_consistency_country;
   permanent_consistency_country_initialized_ = true;
@@ -588,8 +643,7 @@ bool VariationsFieldTrialCreator::HasSeedExpired() {
   return has_seed_expired;
 }
 
-bool VariationsFieldTrialCreator::IsSeedForFutureMilestone(
-    bool is_safe_seed) {
+bool VariationsFieldTrialCreator::IsSeedForFutureMilestone(bool is_safe_seed) {
   int seed_milestone = is_safe_seed ? GetSeedStore()->GetSafeSeedMilestone()
                                     : GetSeedStore()->GetLatestMilestone();
 
@@ -603,6 +657,28 @@ bool VariationsFieldTrialCreator::IsSeedForFutureMilestone(
   return seed_milestone > client_milestone;
 }
 
+base::flat_set<std::string>
+VariationsFieldTrialCreator::GetEnterpriseGroupsFromPrefs() {
+  base::flat_set<std::string> groups;
+  if (!client_->IsChromeEnterpriseCoreSupported()) {
+    return groups;
+  }
+
+  RemovePrefsForDeletedProfiles(
+      enterprise_groups::kEnterpriseGroupsProfilePref);
+
+  AddGroupsFromList(
+      local_state()->GetList(enterprise_groups::kEnterpriseGroupsBrowserPref),
+      groups);
+
+  const base::DictValue& profiles_dict =
+      local_state()->GetDict(enterprise_groups::kEnterpriseGroupsProfilePref);
+  for (const auto profile : profiles_dict) {
+    AddGroupsFromList(profile.second.GetList(), groups);
+  }
+  return groups;
+}
+
 base::flat_set<uint64_t>
 VariationsFieldTrialCreator::GetGoogleGroupsFromPrefs() {
   // Before using Google groups information, ensure that there any information
@@ -612,7 +688,7 @@ VariationsFieldTrialCreator::GetGoogleGroupsFromPrefs() {
   // reason it is currently done here is simply to allow a safer gradual
   // rollout of the initial feature, as this code is only run if there is at
   // least one study that filters by Google group membership.
-  client_->RemoveGoogleGroupsFromPrefsForDeletedProfiles(local_state());
+  RemovePrefsForDeletedProfiles(prefs::kVariationsGoogleGroups);
 
   base::flat_set<uint64_t> groups = base::flat_set<uint64_t>();
 
@@ -665,8 +741,6 @@ CreateTrialsResult VariationsFieldTrialCreator::CreateTrialsFromSeed(
   std::string seed_data;              // Only set if not in safe mode.
   std::string base64_seed_signature;  // Only set if not in safe mode.
   const bool run_in_safe_mode = seed_type_ == SeedType::kSafeSeed;
-  // TODO: crbug.com/445600380 - Check if we can avoid copying the seed data
-  // when loading the seed.
   const bool seed_loaded =
       run_in_safe_mode
           ? GetSeedStore()->LoadSafeSeedSync(&seed, client_state.get())
@@ -706,8 +780,8 @@ CreateTrialsResult VariationsFieldTrialCreator::CreateTrialsFromSeed(
   // is the case for clients on platforms, like Android WebView, that do not
   // support limited entropy randomization. For such clients,
   // `SeedHasMisconfiguredEntropy()`is always false.
-  const MisconfiguredEntropyResult result =
-      SeedHasMisconfiguredEntropy(*client_state, seed);
+  const MisconfiguredEntropyResult result = SeedHasMisconfiguredEntropy(
+      *client_state, seed, GetMaxLimitedEntropyInBits(client_state->platform));
   if (result.is_misconfigured) {
     RecordVariationsSeedUsage(
         run_in_safe_mode ? SeedUsage::kMisconfiguredSafeSeedNotUsed
@@ -730,17 +804,18 @@ CreateTrialsResult VariationsFieldTrialCreator::CreateTrialsFromSeed(
   // to create the field trials. But, as an optimization, skip this step when
   // running in safe mode – once running in safe mode, there can never be a need
   // to save the active state to the safe seed prefs.
+  const size_t applied_seed_size = seed_data.size();
   if (!run_in_safe_mode) {
     safe_seed_manager->SetActiveSeedState(
-        seed_data, base64_seed_signature,
+        std::move(seed_data), std::move(base64_seed_signature),
         local_state()->GetInteger(prefs::kVariationsSeedMilestone),
         std::move(client_state), seed_store_->GetLatestSeedFetchTime());
   }
 
-  base::UmaHistogramCounts1M("Variations.AppliedSeed.Size", seed_data.size());
+  base::UmaHistogramCounts1M("Variations.AppliedSeed.Size", applied_seed_size);
 #if BUILDFLAG(IS_WIN)
   base::UmaHistogramCounts10M("Variations.AppliedSeed.Size.V2",
-                              seed_data.size());
+                              applied_seed_size);
 #endif  // BUILDFLAG(IS_WIN)
   base::UmaHistogramTimes("Variations.SeedProcessingTime",
                           base::TimeTicks::Now() - start_time);
@@ -795,6 +870,7 @@ void VariationsFieldTrialCreator::LoadSeedFromJsonFile(
   }
   seed_store_->StoreSeedData(/*done_callback=*/base::DoNothing(), decoded_seed,
                              seed_signature->GetString(), /*country_code=*/"",
+                             /*geo_level1=*/"",
                              /*date_fetched=*/base::Time(),
                              /*is_delta_compressed=*/false,
                              /*is_gzip_compressed=*/true,
@@ -803,6 +879,32 @@ void VariationsFieldTrialCreator::LoadSeedFromJsonFile(
 
 VariationsSeedStore* VariationsFieldTrialCreator::GetSeedStore() {
   return seed_store_.get();
+}
+
+void VariationsFieldTrialCreator::RemovePrefsForDeletedProfiles(
+    std::string_view pref_name) {
+  std::optional<base::flat_set<std::string>> existing_profiles =
+      client_->GetAllProfilesKeys(local_state());
+  if (!existing_profiles.has_value()) {
+    return;
+  }
+
+  // Get the current value of the local state dict.
+  const base::DictValue& cached_variations_profiles =
+      local_state()->GetDict(pref_name);
+  std::vector<std::string> variations_profiles_to_delete;
+  for (const auto&& [profile_key, unused_value] : cached_variations_profiles) {
+    if (!existing_profiles->contains(profile_key)) {
+      variations_profiles_to_delete.push_back(profile_key);
+    }
+  }
+
+  ScopedDictPrefUpdate variations_prefs_update(local_state(), pref_name);
+  std::ranges::for_each(
+      variations_profiles_to_delete,
+      [&variations_prefs_update](const std::string& profile_key) {
+        variations_prefs_update->Remove(profile_key);
+      });
 }
 
 }  // namespace variations

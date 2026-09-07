@@ -17,6 +17,8 @@ import android.graphics.Color;
 import android.graphics.Matrix;
 import android.graphics.Point;
 
+import androidx.annotation.Nullable;
+
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
@@ -25,12 +27,11 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.FakeTimeTestRule;
 import org.chromium.base.TimeUtils;
-import org.chromium.base.test.BaseRobolectricTestRule;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.base.test.util.Features;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils;
@@ -44,7 +45,6 @@ import java.io.File;
 
 /** Unit tests for {@link NtpThemeDailyRefreshManager}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 @Features.EnableFeatures({ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_V2})
 public class NtpThemeDailyRefreshManagerUnitTest {
     @Rule public MockitoRule mMockitoJUnit = MockitoJUnit.rule();
@@ -295,7 +295,7 @@ public class NtpThemeDailyRefreshManagerUnitTest {
         File dailyRefreshFile = NtpCustomizationUtils.createDailyRefreshBackgroundImageFile();
         NtpCustomizationUtils.saveBitmapImageToFile(
                 Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888), dailyRefreshFile);
-        BaseRobolectricTestRule.runAllBackgroundAndUi(); // Wait for async file operations.
+        RobolectricUtil.runAllBackgroundAndUi(); // Wait for async file operations.
         assertTrue(dailyRefreshFile.exists());
 
         // 3. Apply daily update status in the manager.
@@ -304,7 +304,7 @@ public class NtpThemeDailyRefreshManagerUnitTest {
 
         // 4. Call the method.
         mManager.maybeSaveDailyRefreshAndReset(mOnDailyRefreshThemeCollectionApplied);
-        BaseRobolectricTestRule.runAllBackgroundAndUi(); // Wait for rename.
+        RobolectricUtil.runAllBackgroundAndUi(); // Wait for rename.
 
         // 5. Verify results.
         assertEquals(timeStamp, NtpCustomizationUtils.getDailyRefreshTimestampToSharedPreference());
@@ -320,5 +320,37 @@ public class NtpThemeDailyRefreshManagerUnitTest {
         assertNull(mManager.getLastDailyUpdateTimestampForTesting());
         assertNull(mManager.getNtpThemeColorIdForTesting());
         assertFalse(mManager.getIsDailyUpdateAppliedForTesting());
+    }
+
+    @Test
+    public void testReadNtpBackgroundImageForThemeCollection_dailyUpdateApplied() {
+        testReadNtpBackgroundImageForThemeCollectionImpl(
+                /* isDailyUpdateApplied= */ true, /* filePath= */ null);
+    }
+
+    @Test
+    public void testReadNtpBackgroundImageForThemeCollection_dailyUpdateNotApplied() {
+        File customFile =
+                NtpCustomizationUtils.createThemeCollectionImageFileInDirForTesting("test_read");
+        testReadNtpBackgroundImageForThemeCollectionImpl(
+                /* isDailyUpdateApplied= */ false, customFile.getAbsolutePath());
+    }
+
+    private void testReadNtpBackgroundImageForThemeCollectionImpl(
+            boolean isDailyUpdateApplied, @Nullable String filePath) {
+        Bitmap bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
+        File targetFile =
+                isDailyUpdateApplied
+                        ? NtpCustomizationUtils.createDailyRefreshBackgroundImageFile()
+                        : new File(filePath);
+        NtpCustomizationUtils.saveBitmapImageToFile(bitmap, targetFile);
+        RobolectricUtil.runAllBackgroundAndUi();
+
+        if (isDailyUpdateApplied) {
+            mManager.setDailyUpdateStatusForThemeCollection(100);
+        }
+        mManager.readNtpBackgroundImageForThemeCollection(
+                (result) -> assertNotNull(result), /* executor= */ Runnable::run, filePath);
+        RobolectricUtil.runAllBackgroundAndUi();
     }
 }

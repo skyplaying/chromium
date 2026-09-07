@@ -15,7 +15,7 @@
 #include "chrome/browser/speech/fake_speech_recognition_service.h"
 #include "chrome/browser/speech/fake_speech_recognizer.h"
 #include "chrome/browser/speech/speech_recognizer_delegate.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/soda/soda_installer.h"
 #include "components/soda/soda_installer_impl_chromeos.h"
@@ -127,7 +127,7 @@ class SpeechRecognitionRecognizerClientImplTest
     // Replaces normal CrosSpeechRecognitionService with a fake one.
     CrosSpeechRecognitionServiceFactory::GetInstanceForTest()
         ->SetTestingFactoryAndUse(
-            browser()->profile(),
+            browser()->GetProfile(),
             base::BindRepeating(&SpeechRecognitionRecognizerClientImplTest::
                                     CreateTestSpeechRecognitionService,
                                 base::Unretained(this)));
@@ -159,7 +159,7 @@ class SpeechRecognitionRecognizerClientImplTest
         .WillOnce(InvokeWithoutArgs(&loop, &base::RunLoop::Quit))
         .RetiresOnSaturation();
     recognizer_ = std::make_unique<SpeechRecognitionRecognizerClientImpl>(
-        mock_speech_delegate_->GetWeakPtr(), browser()->profile(),
+        mock_speech_delegate_->GetWeakPtr(), browser()->GetProfile(),
         media::AudioDeviceDescription::kDefaultDeviceId,
         media::mojom::SpeechRecognitionOptions::New(
             media::mojom::SpeechRecognitionMode::kIme,

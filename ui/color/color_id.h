@@ -240,6 +240,8 @@
   E_CPONLY(kColorSysAiIllustrationShapeSurfaceGradientEnd) \
   /* Experimentation. */ \
   E_CPONLY(kColorSysOmniboxContainer) \
+  E_CPONLY(kColorSysSurfaceSection) \
+  E_CPONLY(kColorSysBaseContainerOnSurface) \
   /* Deprecated */ \
   E_CPONLY(kColorSysStateHover) \
   E_CPONLY(kColorSysStateFocus) \
@@ -358,6 +360,8 @@
   E_CPONLY(kColorFrameActive) \
   E_CPONLY(kColorFrameActiveUnthemed) \
   E_CPONLY(kColorFrameCaptionButtonUnfocused) \
+  E_CPONLY(kColorFrameCaptionForegroundActive) \
+  E_CPONLY(kColorFrameCaptionForegroundInactive) \
   E_CPONLY(kColorFrameInactive) \
   E_CPONLY(kColorHelpIconActive) \
   E_CPONLY(kColorHelpIconInactive) \
@@ -399,6 +403,8 @@
   E_CPONLY(kColorLiveCaptionBubbleForegroundSecondary) \
   E_CPONLY(kColorLiveCaptionBubbleCheckbox) \
   E_CPONLY(kColorLiveCaptionBubbleLink) \
+  E_CPONLY(kColorLiveCaptionDialogBackground) \
+  E_CPONLY(kColorLiveCaptionDialogForeground) \
   E_CPONLY(kColorLoadingGradientBorder) \
   E_CPONLY(kColorLoadingGradientEnd) \
   E_CPONLY(kColorLoadingGradientMiddle) \
@@ -581,6 +587,7 @@
   E_CPONLY(kColorWebNativeControlScrollbarArrowBackgroundPressed) \
   E_CPONLY(kColorWebNativeControlScrollbarArrowForeground) \
   E_CPONLY(kColorWebNativeControlScrollbarArrowForegroundDisabled) \
+  E_CPONLY(kColorWebNativeControlScrollbarArrowForegroundHovered) \
   E_CPONLY(kColorWebNativeControlScrollbarArrowForegroundPressed) \
   E_CPONLY(kColorWebNativeControlScrollbarCorner) \
   E_CPONLY(kColorWebNativeControlScrollbarThumb) \
@@ -646,14 +653,6 @@
   E_CPONLY(kColorAshSystemUIMenuIcon) \
   E_CPONLY(kColorAshSystemUIMenuItemBackgroundSelected) \
   E_CPONLY(kColorAshSystemUIMenuSeparator) \
-  \
-  /* TODO(b/291622042): Delete these colors when Jelly is launched */ \
-  E_CPONLY(kColorHighlightBorderBorder1) \
-  E_CPONLY(kColorHighlightBorderBorder2) \
-  E_CPONLY(kColorHighlightBorderBorder3) \
-  E_CPONLY(kColorHighlightBorderHighlight1) \
-  E_CPONLY(kColorHighlightBorderHighlight2) \
-  E_CPONLY(kColorHighlightBorderHighlight3) \
   \
   E_CPONLY(kColorCrosSystemHighlight) \
   E_CPONLY(kColorCrosSystemHighlightBorder) \

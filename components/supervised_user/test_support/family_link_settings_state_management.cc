@@ -21,6 +21,7 @@
 #include "components/content_settings/core/common/content_settings_utils.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/supervised_user/core/browser/family_link_settings_service.h"
 #include "components/supervised_user/core/browser/family_link_url_filter.h"
 #include "components/supervised_user/core/browser/fetcher_config.h"
 #include "components/supervised_user/core/browser/proto/kidsmanagement_messages.pb.h"
@@ -28,7 +29,6 @@
 #include "components/supervised_user/core/browser/proto_fetcher_status.h"
 #include "components/supervised_user/core/browser/supervised_user_preferences.h"
 #include "components/supervised_user/core/browser/supervised_user_service.h"
-#include "components/supervised_user/core/browser/supervised_user_service_observer.h"
 #include "components/supervised_user/core/common/pref_names.h"
 #include "components/supervised_user/core/common/supervised_user_constants.h"
 #include "components/supervised_user/test_support/testutil_proto_fetcher.h"
@@ -140,7 +140,7 @@ inline void AddWebsiteException(
 }
 
 bool AreSafeSitesConfigured(const FamilyLinkSettingsState::Services& services) {
-  return IsSafeSitesEnabled(services.pref_service.get());
+  return services.family_link_settings_service->IsSafeSitesEnabled();
 }
 
 bool IsUrlConfigured(
@@ -193,10 +193,10 @@ bool UrlFiltersAreConfigured(const FamilyLinkSettingsState::Services& services,
 }
 
 bool UrlFiltersAreEmpty(const FamilyLinkSettingsState::Services& services) {
-  return services.supervised_user_service->GetURLFilter()
-             ->GetFilteringStatistics()
-             .GetManagedSiteList() ==
-         FamilyLinkUrlFilter::ManagedSiteList::kEmpty;
+  return services.supervised_user_url_filtering_service
+      ->GetFamilyLinkUrlFilter()
+      .GetFilteringStatistics()
+      .IsEmpty();
 }
 
 bool ToggleHasExpectedValue(const FamilyLinkSettingsState::Services& services,
@@ -471,11 +471,13 @@ FamilyLinkSettingsState::Services::Services(
     const SupervisedUserUrlFilteringService&
         supervised_user_url_filtering_service,
     const PrefService& pref_service,
-    const HostContentSettingsMap& host_content_settings_map)
+    const HostContentSettingsMap& host_content_settings_map,
+    const FamilyLinkSettingsService& family_link_settings_service)
     : supervised_user_service(supervised_user_service),
       supervised_user_url_filtering_service(
           supervised_user_url_filtering_service),
       pref_service(pref_service),
-      host_content_settings_map(host_content_settings_map) {}
+      host_content_settings_map(host_content_settings_map),
+      family_link_settings_service(family_link_settings_service) {}
 
 }  // namespace supervised_user

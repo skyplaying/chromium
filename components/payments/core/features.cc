@@ -29,18 +29,40 @@ BASE_FEATURE(kAppStoreBilling,
 
 BASE_FEATURE(kAppStoreBillingDebug, base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kCanMakePaymentTrueWhenPrivate, base::FEATURE_ENABLED_BY_DEFAULT);
-
 BASE_FEATURE(kAllowJITInstallationWhenAppIconIsMissing,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kDelayNativePaymentAppScrimShow,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kEnforceFullDelegation, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kGPayAppDynamicUpdate, base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kRestrictIsReadyToPayQuery, base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kSecurePaymentConfirmationCredentialDiscoveryMode,
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kSecurePaymentConfirmationUseCredentialStoreAPIs,
+constexpr base::FeatureParam<CredentialDiscoveryMode>::Option
+    kCredentialDiscoveryModeOptions[] = {
+        {CredentialDiscoveryMode::kUserDatabaseOnly,
+         CredentialDiscoveryModeToString(
+             CredentialDiscoveryMode::kUserDatabaseOnly)},
+        {CredentialDiscoveryMode::kHybrid,
+         CredentialDiscoveryModeToString(CredentialDiscoveryMode::kHybrid)},
+        {CredentialDiscoveryMode::kOsOnly,
+         CredentialDiscoveryModeToString(CredentialDiscoveryMode::kOsOnly)},
+};
+
+const base::FeatureParam<CredentialDiscoveryMode> kCredentialDiscoveryModeParam{
+    &kSecurePaymentConfirmationCredentialDiscoveryMode, "mode",
+#if BUILDFLAG(IS_ANDROID)
+    CredentialDiscoveryMode::kOsOnly,
+#else
+    CredentialDiscoveryMode::kUserDatabaseOnly,
+#endif
+    &kCredentialDiscoveryModeOptions};
+
+BASE_FEATURE(kSecurePaymentConfirmationStoreCredentialsInOS,
 #if BUILDFLAG(IS_ANDROID)
              base::FEATURE_ENABLED_BY_DEFAULT
 #else
@@ -48,14 +70,34 @@ BASE_FEATURE(kSecurePaymentConfirmationUseCredentialStoreAPIs,
 #endif
 );
 
-BASE_FEATURE(kSecurePaymentConfirmationFallback,
-             base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kPaymentRequestUseRendererUrlLoader,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kPaymentRequestRejectTooSmallWindows,
              base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kPaymentHandlerDialogUseInitiatorInUrlLoad,
+#if BUILDFLAG(IS_ANDROID)
+             base::FEATURE_DISABLED_BY_DEFAULT
+#else
+             base::FEATURE_ENABLED_BY_DEFAULT
+#endif
+);
+
+BASE_FEATURE(kPaymentHandlerHtmlHeadThemeColor,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kPaymentRequestMandatoryPaymentAppUi,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kPaymentHandlerCameraAccess, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kPaymentHandlerCameraAccessUx, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kSPCLocaleValidation, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kThreeDSecureTelemetry, base::FEATURE_DISABLED_BY_DEFAULT);
 
 }  // namespace features
 }  // namespace payments

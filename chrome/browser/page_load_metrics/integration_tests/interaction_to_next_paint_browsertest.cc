@@ -5,16 +5,18 @@
 #include <string_view>
 
 #include "base/strings/string_number_conversions.h"
-#include "base/test/trace_event_analyzer.h"
+#include "base/test/tracing/trace_event_analyzer.h"
 #include "build/build_config.h"
 #include "chrome/browser/page_load_metrics/integration_tests/metric_integration_test.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/page_load_metrics/browser/page_load_metrics_test_waiter.h"
 #include "components/page_load_metrics/browser/page_load_metrics_util.h"
 #include "content/common/content_navigation_policy.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -22,6 +24,7 @@
 #include "content/public/test/hit_test_region_observer.h"
 #include "content/test/content_browser_test_utils_internal.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
+#include "ui/base/page_transition_types.h"
 
 using base::Bucket;
 using std::optional;
@@ -32,12 +35,6 @@ using ukm::builders::PageLoad;
 
 class InteractionToNextPaintTest : public MetricIntegrationTest {
  protected:
-  // This function will extract the target UKM value from ukm_recorder
-  // by the given metric_name in PageLoad.
-  bool ExtractUKMPageLoadMetric(const ukm::TestUkmRecorder& ukm_recorder,
-                                std::string_view metric_name,
-                                int64_t* extracted_value);
-
   // This function extract the maximum duration for EventTiming from
   // trace data.
   int ExtractMaxInteractionDurationFromTrace(TraceEventVector events);
@@ -54,21 +51,6 @@ class InteractionToNextPaintTest : public MetricIntegrationTest {
   // Perform hit test and frame waiter to ensure the frame is ready.
   void WaitForFrameReady();
 };
-
-bool InteractionToNextPaintTest::ExtractUKMPageLoadMetric(
-    const ukm::TestUkmRecorder& ukm_recorder,
-    std::string_view metric_name,
-    int64_t* extracted_value) {
-  std::map<ukm::SourceId, ukm::mojom::UkmEntryPtr> merged_entries =
-      ukm_recorder.GetMergedEntriesByName(PageLoad::kEntryName);
-  const auto& kv = merged_entries.begin();
-  auto* metric_value =
-      ukm::TestUkmRecorder::GetEntryMetric(kv->second.get(), metric_name);
-  if (!metric_value)
-    return false;
-  *extracted_value = *metric_value;
-  return true;
-}
 
 int InteractionToNextPaintTest::ExtractMaxInteractionDurationFromTrace(
     TraceEventVector events) {
@@ -115,16 +97,13 @@ bool InteractionToNextPaintTest::VerifyUKMAndTraceData(
   int64_t INP_98th_value;
 
   bool extract_num_of_interaction = ExtractUKMPageLoadMetric(
-      ukm_recorder(),
       ukm::builders::PageLoad::kInteractiveTiming_NumInteractionsName,
       &INP_numOfInteraction_value);
   bool extract_worst_interaction = ExtractUKMPageLoadMetric(
-      ukm_recorder(),
       ukm::builders::PageLoad::
           kInteractiveTiming_WorstUserInteractionLatency_MaxEventDurationName,
       &INP_worst_value);
   bool extract_98th_interaction = ExtractUKMPageLoadMetric(
-      ukm_recorder(),
       ukm::builders::PageLoad::
           kInteractiveTiming_UserInteractionLatency_HighPercentile2_MaxEventDurationName,
       &INP_98th_value);
@@ -407,13 +386,13 @@ IN_PROC_BROWSER_TEST_F(InteractionToNextPaintTest,
   // Add a new tab and switch to it.
   std::unique_ptr<content::WebContents> web_contents_to_add =
       content::WebContents::Create(
-          content::WebContents::CreateParams(browser()->profile()));
+          content::WebContents::CreateParams(browser()->GetProfile()));
 
   web_contents_to_add->GetController().LoadURL(
       embedded_test_server()->GetURL("/resources/empty.html"),
       content::Referrer(), ::ui::PAGE_TRANSITION_AUTO_TOPLEVEL, std::string());
 
-  auto* tab_strip_model = browser()->tab_strip_model();
+  auto* tab_strip_model = browser()->GetTabStripModel();
 
   tab_strip_model->AddWebContents(std::move(web_contents_to_add), -1,
                                   ::ui::PAGE_TRANSITION_AUTO_TOPLEVEL,
@@ -421,11 +400,11 @@ IN_PROC_BROWSER_TEST_F(InteractionToNextPaintTest,
 
   // Verify the initial tab is backgrounded.
   EXPECT_NE(initial_web_contents,
-            browser()->tab_strip_model()->GetActiveWebContents());
+            browser()->GetTabStripModel()->GetActiveWebContents());
 
   // Switch back to the previous tab and navigate away to let the UKM entries be
   // recorded.
-  browser()->tab_strip_model()->ActivateTabAt(0);
+  browser()->GetTabStripModel()->ActivateTabAt(0);
 
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("about:blank")));
 
@@ -461,13 +440,13 @@ IN_PROC_BROWSER_TEST_F(InteractionToNextPaintTest,
   // Add a new tab and switch to it.
   std::unique_ptr<content::WebContents> web_contents_to_add =
       content::WebContents::Create(
-          content::WebContents::CreateParams(browser()->profile()));
+          content::WebContents::CreateParams(browser()->GetProfile()));
 
   web_contents_to_add->GetController().LoadURL(
       embedded_test_server()->GetURL("/resources/empty.html"),
       content::Referrer(), ::ui::PAGE_TRANSITION_AUTO_TOPLEVEL, std::string());
 
-  auto* tab_strip_model = browser()->tab_strip_model();
+  auto* tab_strip_model = browser()->GetTabStripModel();
 
   // Add the tab and foreground it. Effectively this is switching tab.
   tab_strip_model->AddWebContents(std::move(web_contents_to_add), -1,
@@ -476,22 +455,16 @@ IN_PROC_BROWSER_TEST_F(InteractionToNextPaintTest,
 
   // Verify the initial tab is backgrounded.
   EXPECT_NE(initial_web_contents,
-            browser()->tab_strip_model()->GetActiveWebContents());
+            browser()->GetTabStripModel()->GetActiveWebContents());
 
   waiter->Wait();
 
   // Close the initial tab.
   waiter->AddOnCompleteCalledExpectation();
 
-  // Get the tab index of the given WebContents.
-  int tab_index = tab_strip_model->GetIndexOfWebContents(initial_web_contents);
-
-  // Expect the tab index of the given WebContents is found.
-  EXPECT_NE(tab_index, TabStripModel::kNoTab);
-
   // Close the tab.
-  tab_strip_model->CloseWebContentsAt(tab_index,
-                                      TabCloseTypes::CLOSE_USER_GESTURE);
+  tab_strip_model->CloseWebContents(initial_web_contents,
+                                    TabCloseTypes::CLOSE_USER_GESTURE);
 
   waiter->Wait();
 

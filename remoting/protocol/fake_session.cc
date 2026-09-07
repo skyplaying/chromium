@@ -13,17 +13,15 @@
 #include "remoting/base/constants.h"
 #include "remoting/protocol/authenticator.h"
 #include "remoting/protocol/fake_authenticator.h"
-#include "remoting/protocol/jingle_message_xml_converter.h"
 #include "remoting/protocol/session_plugin.h"
-#include "third_party/libjingle_xmpp/xmllite/xmlelement.h"
+#include "remoting/signaling/jingle_message_xml_converter.h"
 
 namespace remoting::protocol {
 
 const char kTestJid[] = "host1@gmail.com/chromoting123";
 const char kTestAuthKey[] = "test_auth_key";
 
-FakeSession::FakeSession()
-    : config_(SessionConfig::ForTest()), jid_(kTestJid) {}
+FakeSession::FakeSession() : jid_(kTestJid) {}
 FakeSession::~FakeSession() = default;
 
 void FakeSession::SimulateConnection(FakeSession* peer) {
@@ -41,20 +39,28 @@ void FakeSession::SimulateConnection(FakeSession* peer) {
   authenticator_ =
       std::make_unique<FakeAuthenticator>(FakeAuthenticator::ACCEPT);
   authenticator_->set_auth_key(kTestAuthKey);
-  transport_->Start(authenticator_.get(),
-                    base::BindRepeating(&FakeSession::SendTransportInfo,
-                                        weak_factory_.GetWeakPtr()));
+  StartTransport();
 
   // Initialize transport and authenticator on the host.
   peer->authenticator_ =
       std::make_unique<FakeAuthenticator>(FakeAuthenticator::ACCEPT);
   peer->authenticator_->set_auth_key(kTestAuthKey);
-  peer->transport_->Start(
-      peer->authenticator_.get(),
-      base::BindRepeating(&FakeSession::SendTransportInfo, peer_));
+  peer->StartTransport();
 
   peer->event_handler_->OnSessionStateChange(AUTHENTICATED);
+  peer->StartTransport();
   event_handler_->OnSessionStateChange(AUTHENTICATED);
+  StartTransport();
+}
+
+void FakeSession::StartTransport() {
+  if (transport_started_ || !transport_ || !authenticator_) {
+    return;
+  }
+  transport_started_ = true;
+  transport_->Start(authenticator_->GetAuthKey(),
+                    base::BindRepeating(&FakeSession::SendTransportInfo,
+                                        weak_factory_.GetWeakPtr()));
 }
 
 void FakeSession::SetEventHandler(EventHandler* event_handler) {
@@ -69,24 +75,26 @@ const std::string& FakeSession::jid() {
   return jid_;
 }
 
-const SessionConfig& FakeSession::config() {
-  return *config_;
-}
-
 const Authenticator& FakeSession::authenticator() const {
   return *authenticator_;
 }
 
 void FakeSession::SetTransport(Transport* transport) {
   transport_ = transport;
+  StartTransport();
 }
 
 void FakeSession::Close(ErrorCode error,
                         std::string_view error_details,
                         const SourceLocation& error_location) {
+  if (closed_) {
+    return;
+  }
   closed_ = true;
   error_ = error;
-  event_handler_->OnSessionStateChange(CLOSED);
+  if (event_handler_) {
+    event_handler_->OnSessionStateChange(CLOSED);
+  }
 
   base::WeakPtr<FakeSession> peer = peer_;
   if (peer) {
@@ -135,27 +143,6 @@ void FakeSession::AddPlugin(SessionPlugin* plugin) {
   for (const auto& attachment : attachments_) {
     if (attachment.host_attributes || attachment.host_config) {
       plugin->OnIncomingMessage(attachment);
-    }
-  }
-}
-
-void FakeSession::SetAttachment(
-    size_t round,
-    std::unique_ptr<jingle_xmpp::XmlElement> attachment) {
-  if (!attachment) {
-    return;
-  }
-
-  Attachment attachment_struct;
-  if (AttachmentFromXml(attachment.get(), &attachment_struct)) {
-    SetAttachment(round, attachment_struct);
-  } else {
-    // Try wrapping it in an <attachments> element.
-    jingle_xmpp::XmlElement wrapper(
-        jingle_xmpp::QName(kChromotingXmlNamespace, "attachments"));
-    wrapper.AddElement(new jingle_xmpp::XmlElement(*attachment));
-    if (AttachmentFromXml(&wrapper, &attachment_struct)) {
-      SetAttachment(round, attachment_struct);
     }
   }
 }

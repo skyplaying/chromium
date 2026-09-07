@@ -6,7 +6,6 @@
 
 #include "base/functional/callback_helpers.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "components/constrained_window/constrained_window_views.h"
@@ -24,10 +23,10 @@ class CreateAppShortcutDialogTest : public DialogBrowserTest,
   // DialogBrowserTest:
   void ShowUi(const std::string& name) override {
     constrained_window::CreateBrowserModalDialogViews(
-        new CreateChromeApplicationShortcutView(browser()->profile(),
+        new CreateChromeApplicationShortcutView(browser()->GetProfile(),
                                                 /*is_extension=*/GetParam(),
                                                 base::DoNothing()),
-        browser()->window()->GetNativeWindow())
+        browser()->GetWindow()->GetNativeWindow())
         ->Show();
   }
 };

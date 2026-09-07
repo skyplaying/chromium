@@ -16,17 +16,18 @@ import android.credentials.GetCredentialRequest;
 import androidx.test.filters.SmallTest;
 
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(
-        manifest = Config.NONE,
         shadows = {
             ShadowCredentialOption.class,
             ShadowCredentialOption.ShadowBuilder.class,
@@ -36,6 +37,7 @@ import org.chromium.base.test.BaseRobolectricTestRunner;
             ShadowGetCredentialException.class
         })
 public class CredManGetCredentialRequestHelperRobolectricTest {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     private static final String REQUEST_AS_JSON = "coolest-request-as-json";
     private static final byte[] CLIENT_DATA_HASH = new byte[] {1, 1, 2};
 
@@ -45,7 +47,6 @@ public class CredManGetCredentialRequestHelperRobolectricTest {
 
     @Before
     public void setUp() throws Exception {
-        MockitoAnnotations.openMocks(this);
         mHelper =
                 new CredManGetCredentialRequestHelper.Builder(
                                 REQUEST_AS_JSON,

@@ -6,6 +6,7 @@ package org.chromium.chrome.browser.toolbar.menu_button;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -19,14 +20,14 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.LooperMode;
 
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.OneshotSupplierImpl;
+import org.chromium.base.supplier.SupplierUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.chrome.browser.browser_controls.BrowserStateBrowserControlsVisibilityDelegate;
 import org.chromium.chrome.browser.tabmodel.IncognitoStateProvider;
 import org.chromium.chrome.browser.theme.ThemeColorProvider;
@@ -42,12 +43,11 @@ import java.lang.ref.WeakReference;
 
 /** Unit tests for ToolbarAppMenuManager. */
 @RunWith(BaseRobolectricTestRunner.class)
-@LooperMode(LooperMode.Mode.LEGACY)
 public class MenuButtonCoordinatorTest {
 
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Mock private Activity mActivity;
-    @Mock private MenuButtonCoordinator.SetFocusFunction mFocusFunction;
+    @Mock private Runnable mClearOmniboxFocus;
     @Mock private AppMenuCoordinator mAppMenuCoordinator;
     @Mock private AppMenuHandler mAppMenuHandler;
     @Mock private AppMenuButtonHelper mAppMenuButtonHelper;
@@ -94,6 +94,7 @@ public class MenuButtonCoordinatorTest {
     @Test
     public void testEnterKeyPress() {
         mAppMenuSupplier.set(mAppMenuCoordinator);
+        RobolectricUtil.runAllBackgroundAndUi();
 
         mMenuButtonCoordinator.onEnterKeyPress();
         verify(mAppMenuButtonHelper).onEnterKeyPress(mImageButton);
@@ -106,6 +107,7 @@ public class MenuButtonCoordinatorTest {
     @Test
     public void testSetHighlight() {
         mAppMenuSupplier.set(mAppMenuCoordinator);
+        RobolectricUtil.runAllBackgroundAndUi();
 
         mMenuButtonCoordinator.highlightMenuItemOnShow(R.id.close_all_tabs_menu_id);
         verify(mAppMenuButtonHelper).highlightMenuItemOnShow(R.id.close_all_tabs_menu_id);
@@ -113,7 +115,7 @@ public class MenuButtonCoordinatorTest {
 
     @Test
     public void testVisibilityDelegate_isVisible() {
-        mVisibilityDelegate = Mockito.mock(MenuButtonCoordinator.VisibilityDelegate.class);
+        mVisibilityDelegate = mock(MenuButtonCoordinator.VisibilityDelegate.class);
         initMenuButtonCoordinator(mVisibilityDelegate);
 
         when(mVisibilityDelegate.isMenuButtonVisible()).thenReturn(true);
@@ -129,7 +131,7 @@ public class MenuButtonCoordinatorTest {
 
     @Test
     public void testVisibilityDelegate_disable() {
-        mVisibilityDelegate = Mockito.mock(MenuButtonCoordinator.VisibilityDelegate.class);
+        mVisibilityDelegate = mock(MenuButtonCoordinator.VisibilityDelegate.class);
         initMenuButtonCoordinator(mVisibilityDelegate);
 
         mMenuButtonCoordinator.disableMenuButton();
@@ -145,13 +147,13 @@ public class MenuButtonCoordinatorTest {
                         mAppMenuSupplier,
                         mControlsVisibilityDelegate,
                         mWindowAndroid,
-                        mFocusFunction,
+                        mClearOmniboxFocus,
                         mRequestRenderRunnable,
                         true,
-                        () -> false,
+                        SupplierUtils.alwaysFalse(),
                         mThemeColorProvider,
                         mIncognitoStateProvider,
-                        () -> null,
+                        SupplierUtils.ofNull(),
                         () -> {},
                         R.id.menu_button_wrapper,
                         visibilityDelegate,

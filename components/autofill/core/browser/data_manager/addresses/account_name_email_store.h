@@ -5,9 +5,14 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_DATA_MANAGER_ADDRESSES_ACCOUNT_NAME_EMAIL_STORE_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_DATA_MANAGER_ADDRESSES_ACCOUNT_NAME_EMAIL_STORE_H_
 
+#include <optional>
+#include <string>
+
 #include "base/memory/raw_ref.h"
 #include "base/scoped_observation.h"
+#include "build/buildflag.h"
 #include "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
+#include "components/autofill/core/browser/webdata/autofill_change.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/identity_manager/account_info.h"
@@ -52,6 +57,10 @@ namespace autofill {
 class AccountNameEmailStore : public signin::IdentityManager::Observer,
                               public syncer::SyncServiceObserver {
  public:
+  // The number of times the user has to not select the kAccountNameEmail
+  // profile suggestion before the `AutofillProfile` is removed.
+  static constexpr int kNotSelectedThreshold = 10;
+
   AccountNameEmailStore(AddressDataManager& address_data_manager,
                         signin::IdentityManager& identity_manager,
                         syncer::SyncService& sync_service,
@@ -76,6 +85,7 @@ class AccountNameEmailStore : public signin::IdentityManager::Observer,
 #if BUILDFLAG(IS_IOS)
   // The same as MaybeUpdateOrCreateAccountNameEmail(), but creates/updates the
   // kAccountNameEmail profile using `account_name` and `email`.
+  // If `account_name` is empty this method does nothing.
   // TODO(crbug.com/449708427): Remove once `AccountInfo` supports full_name on
   // IOS.
   void MaybeUpdateOrCreateAccountNameEmail(const std::string& account_name,

@@ -6,20 +6,22 @@
 
 #include "base/strings/string_number_conversions.h"
 #include "base/test/mock_callback.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/values_test_util.h"
+#include "components/autofill/core/browser/payments/payments_requests/payments_request_test_api.h"
+#include "components/autofill/core/common/autofill_payments_features.h"
+#include "components/version_info/version_info.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+namespace autofill::payments {
 namespace {
+
 using base::MockCallback;
 using base::test::IsJson;
 using testing::Field;
 using Dict = base::DictValue;
 using base::OnceCallback;
-using PaymentsRpcResult =
-    autofill::payments::PaymentsAutofillClient::PaymentsRpcResult;
-}  // namespace
-
-namespace autofill::payments {
+using PaymentsRpcResult = PaymentsAutofillClient::PaymentsRpcResult;
 
 class GetBnplPaymentInstrumentForFetchingUrlRequestTest : public testing::Test {
  public:
@@ -74,16 +76,27 @@ TEST_F(GetBnplPaymentInstrumentForFetchingUrlRequestTest,
 }
 
 TEST_F(GetBnplPaymentInstrumentForFetchingUrlRequestTest, GetRequestContent) {
+  base::test::ScopedFeatureList feature_list(
+      autofill::features::kAutofillAddChromeUserContextFields);
+
   Dict expected_request_dict =
       Dict()
           .Set("context",
                Dict()
                    .Set("billable_service",
-                        payments::kUnmaskPaymentMethodBillableServiceNumber)
+                        kUnmaskPaymentMethodBillableServiceNumber)
                    .Set("customer_context",
                         PaymentsRequest::BuildCustomerContextDictionary(
                             request_details_.billing_customer_number)))
-          .Set("chrome_user_context", Dict().Set("full_sync_enabled", true))
+          .Set(
+              "chrome_user_context",
+              base::DictValue()
+                  .Set("full_sync_enabled", true)
+                  .Set("chrome_major_version",
+                       version_info::GetMajorVersionNumberAsInt())
+                  .Set("client_type",
+                       static_cast<int>(test_api(request_.get())
+                                            .GetChromeUserContextClientType())))
           .Set("instrument_id", request_details_.instrument_id)
           .Set("risk_data_encoded",
                PaymentsRequest::BuildRiskDictionary(request_details_.risk_data))
@@ -202,6 +215,18 @@ TEST_F(GetBnplPaymentInstrumentForFetchingUrlRequestTest,
   EXPECT_FALSE(request_->IsResponseComplete());
 }
 
+TEST_F(GetBnplPaymentInstrumentForFetchingUrlRequestTest,
+       IsResponseComplete_ParseResponseCalled_NonHttpRedirectUrl) {
+  Dict response = GetFullResponse();
+  response.SetByDottedPath(
+      "buy_now_pay_later_info.get_redirect_url_response_"
+      "info.redirect_url",
+      "chrome://version/");
+  request_->ParseResponse(response);
+
+  EXPECT_FALSE(request_->IsResponseComplete());
+}
+
 TEST_F(GetBnplPaymentInstrumentForFetchingUrlRequestTest, RespondToDelegate) {
   Dict response_dict = Dict().Set(
       "buy_now_pay_later_info",
@@ -230,4 +255,5 @@ TEST_F(GetBnplPaymentInstrumentForFetchingUrlRequestTest, RespondToDelegate) {
   request_->RespondToDelegate(PaymentsRpcResult::kSuccess);
 }
 
+}  // namespace
 }  // namespace autofill::payments

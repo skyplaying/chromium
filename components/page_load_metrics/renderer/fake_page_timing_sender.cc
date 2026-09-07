@@ -28,14 +28,16 @@ void FakePageTimingSender::SendTiming(
     std::vector<mojom::EventTimingPtr> event_timings,
     const std::optional<blink::SubresourceLoadMetrics>&
         subresource_load_metrics,
-    const mojom::SoftNavigationMetricsPtr& soft_navigation_metrics) {
+    std::vector<mojom::SoftNavigationMetricsPtr> soft_navigation_metrics,
+    std::vector<mojom::LargestContentfulPaintTimingPtr>
+        soft_largest_contentful_paint,
+    std::vector<mojom::CustomUserTimingMarkPtr> user_timings,
+    const mojom::FontLoadingMetricsPtr& font_loading_metrics) {
   validator_->UpdateTiming(timing, metadata, new_features, resources,
                            render_data, cpu_timing, event_timings,
-                           subresource_load_metrics, soft_navigation_metrics);
+                           subresource_load_metrics, soft_navigation_metrics,
+                           soft_largest_contentful_paint, font_loading_metrics);
 }
-
-void FakePageTimingSender::SetUpDroppedFramesReporting(
-    base::ReadOnlySharedMemoryRegion dropped_frames_memory) {}
 
 void FakePageTimingSender::SendCustomUserTiming(
     mojom::CustomUserTimingMarkPtr timing) {}
@@ -94,12 +96,42 @@ void FakePageTimingSender::PageTimingValidator::
   }
 }
 
+void FakePageTimingSender::PageTimingValidator::
+    ExpectSoftLargestContentfulPaint(const mojom::LargestContentfulPaintTiming&
+                                         soft_largest_contentful_paint) {
+  VerifyExpectedSoftLargestContentfulPaint();
+  expected_soft_largest_contentful_paint_.push_back(
+      soft_largest_contentful_paint.Clone());
+}
+
+void FakePageTimingSender::PageTimingValidator::
+    VerifyExpectedSoftLargestContentfulPaint() const {
+  ASSERT_EQ(actual_soft_largest_contentful_paint_.size(),
+            expected_soft_largest_contentful_paint_.size());
+  for (size_t i = 0; i < actual_soft_largest_contentful_paint_.size(); ++i) {
+    if (actual_soft_largest_contentful_paint_.at(i)->Equals(
+            *expected_soft_largest_contentful_paint_.at(i))) {
+      continue;
+    }
+    ADD_FAILURE()
+        << "Actual soft largest contentful paint != expected at index " << i
+        << "\n"
+        << "Actual: "
+        << DebugString(*actual_soft_largest_contentful_paint_.at(i))
+        << "\nExpected: "
+        << DebugString(*expected_soft_largest_contentful_paint_.at(i));
+  }
+}
+
 void FakePageTimingSender::PageTimingValidator::UpdateExpectedInteractionTiming(
     const base::TimeDelta interaction_duration,
     uint64_t interaction_offset,
-    const base::TimeTicks interaction_time) {
+    const base::TimeTicks interaction_time,
+    const base::TimeTicks processing_start,
+    uint64_t performance_timeline_navigation_id) {
   expected_event_timings_.push_back(mojom::EventTiming::New(
-      interaction_duration, interaction_offset, interaction_time));
+      interaction_duration, interaction_offset, interaction_time,
+      processing_start, performance_timeline_navigation_id));
 }
 void FakePageTimingSender::PageTimingValidator::
     VerifyExpectedInteractionTiming() const {
@@ -161,10 +193,9 @@ void FakePageTimingSender::PageTimingValidator::VerifyExpectedRenderData()
   }
 }
 
-void FakePageTimingSender::PageTimingValidator::
-    VerifyExpectedMainFrameIntersectionRect() const {
-  EXPECT_EQ(expected_main_frame_intersection_rect_,
-            actual_main_frame_intersection_rect_);
+void FakePageTimingSender::PageTimingValidator::VerifyExpectedMainFrameRect()
+    const {
+  EXPECT_EQ(expected_main_frame_rect_, actual_main_frame_rect_);
 }
 
 void FakePageTimingSender::PageTimingValidator::
@@ -183,10 +214,17 @@ void FakePageTimingSender::PageTimingValidator::UpdateTiming(
     const std::vector<mojom::EventTimingPtr>& event_timings,
     const std::optional<blink::SubresourceLoadMetrics>&
         subresource_load_metrics,
-    const mojom::SoftNavigationMetricsPtr& soft_navigation_metrics) {
+    const std::vector<mojom::SoftNavigationMetricsPtr>& soft_navigation_metrics,
+    const std::vector<mojom::LargestContentfulPaintTimingPtr>&
+        soft_largest_contentful_paint,
+    const mojom::FontLoadingMetricsPtr& font_loading_metrics) {
   actual_timings_.push_back(timing.Clone());
-  actual_soft_navigation_metrics_.push_back(soft_navigation_metrics->Clone());
-
+  for (const auto& s : soft_navigation_metrics) {
+    actual_soft_navigation_metrics_.push_back(s->Clone());
+  }
+  for (const auto& s : soft_largest_contentful_paint) {
+    actual_soft_largest_contentful_paint_.push_back(s.Clone());
+  }
   if (!cpu_timing->task_time.is_zero()) {
     actual_cpu_timings_.push_back(cpu_timing.Clone());
   }
@@ -202,13 +240,11 @@ void FakePageTimingSender::PageTimingValidator::UpdateTiming(
     actual_render_data_.new_layout_shifts.emplace_back(entry.Clone());
   }
 
-  actual_main_frame_intersection_rect_ = metadata->main_frame_intersection_rect;
+  actual_main_frame_rect_ = metadata->main_frame_rect;
   actual_main_frame_viewport_rect_ = metadata->main_frame_viewport_rect;
 
   for (const mojom::EventTimingPtr& user_interaction : event_timings) {
-    actual_event_timings_.emplace_back(mojom::EventTiming::New(
-        user_interaction->duration, user_interaction->interaction_id,
-        user_interaction->start_time));
+    actual_event_timings_.emplace_back(user_interaction.Clone());
   }
 
   actual_subresource_load_metrics_ = subresource_load_metrics;
@@ -217,7 +253,7 @@ void FakePageTimingSender::PageTimingValidator::UpdateTiming(
   VerifyExpectedCpuTimings();
   VerifyExpectedFeatures();
   VerifyExpectedRenderData();
-  VerifyExpectedMainFrameIntersectionRect();
+  VerifyExpectedMainFrameRect();
   VerifyExpectedMainFrameViewportRect();
   VerifyExpectedSubresourceLoadMetrics();
   VerifyExpectedSoftNavigationMetrics();

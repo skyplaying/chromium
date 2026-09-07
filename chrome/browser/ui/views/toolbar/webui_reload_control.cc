@@ -4,17 +4,19 @@
 
 #include "chrome/browser/ui/views/toolbar/webui_reload_control.h"
 
+#include "base/time/time.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/ui/views/toolbar/webui_toolbar_web_view.h"
 #include "chrome/browser/ui/webui/webui_toolbar/webui_toolbar_ui.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/browser_apis/ui_controllers/toolbar/toolbar_ui_api_data_model.mojom.h"
 #include "ui/base/window_open_disposition_utils.h"
+#include "ui/gfx/geometry/rect.h"
 #include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/widget/widget.h"
 
-WebUIReloadControl::WebUIReloadControl(
-    WebUIToolbarWebView* webui_toolbar_web_view)
-    : webui_toolbar_web_view_(webui_toolbar_web_view) {
+WebUIReloadControl::WebUIReloadControl(WebUIToolbarControlDelegate* delegate)
+    : delegate_(delegate) {
   menu_model_ = std::make_unique<ui::SimpleMenuModel>(this);
   menu_model_->AddItemWithStringId(IDC_RELOAD,
                                    IDS_RELOAD_MENU_NORMAL_RELOAD_ITEM);
@@ -24,8 +26,8 @@ WebUIReloadControl::WebUIReloadControl(
                                    IDS_RELOAD_MENU_EMPTY_AND_HARD_RELOAD_ITEM);
 
   menu_runner_ = std::make_unique<views::MenuRunner>(
-      menu_model_.get(), views::MenuRunner::CONTEXT_MENU,
-      base::BindRepeating(&WebUIReloadControl::OnContextMenuClosed,
+      menu_model_.get(), views::MenuRunner::HAS_MNEMONICS,
+      base::BindRepeating(&WebUIReloadControl::UpdateState,
                           base::Unretained(this)));
 
   // The accessibility and tooltip attributes are handled by the WebUI.
@@ -36,21 +38,15 @@ WebUIReloadControl::~WebUIReloadControl() = default;
 void WebUIReloadControl::Init() {
   CHECK(!is_initialized_);
   is_initialized_ = true;
-
-  // TODO: These two mojo messages are likely unnecessary if `mode_` and
-  // `is_dev_tools_connected_` match the corresponding default values in
-  // TypeScript.
-  OnNavigationStatusChanged();
-  OnDevToolsStatusChanged();
+  UpdateState();
 }
 
 void WebUIReloadControl::ChangeMode(ReloadControl::Mode mode, bool force) {
-  // TODO(crbug.com/444358999): Now the mode is always updated immediately from
-  // the browser side, then a mojo IPC is sent to the renderer to make the
-  // change accordingly. We may need to implement the timer/force updating logic
-  // in the future.
   mode_ = mode;
-  OnNavigationStatusChanged();
+  if (force) {
+    ++state_token_;
+  }
+  UpdateState();
 }
 
 bool WebUIReloadControl::GetDevToolsStatusForTesting() const {
@@ -59,33 +55,18 @@ bool WebUIReloadControl::GetDevToolsStatusForTesting() const {
 
 void WebUIReloadControl::SetDevToolsStatus(bool is_dev_tools_connected) {
   is_dev_tools_connected_ = is_dev_tools_connected;
-  OnDevToolsStatusChanged();
+  UpdateState();
 }
 
 bool WebUIReloadControl::HandleContextMenu(views::Widget* widget,
-                                           gfx::Point screen_location,
+                                           const gfx::Rect& screen_rect,
                                            ui::mojom::MenuSourceType source) {
   if (is_dev_tools_connected_) {
-    auto* webui_toolbar_ui = webui_toolbar_web_view_->GetWebUIToolbarUI();
-    CHECK(webui_toolbar_ui);
-    webui_toolbar_ui->OnContextMenuStateChanged(
-        browser_controls_api::mojom::ContextMenuType::kReload,
-        browser_controls_api::mojom::ContextMenuState::kVisible);
-
-    menu_runner_->RunMenuAt(webui_toolbar_web_view_->GetWidget(), nullptr,
-                            gfx::Rect(screen_location, gfx::Size()),
-                            views::MenuAnchorPosition::kBubbleBottomRight,
-                            source);
+    menu_runner_->RunMenuAt(widget, nullptr, screen_rect,
+                            views::MenuAnchorPosition::kTopLeft, source);
+    UpdateState();
   }
   return true;
-}
-
-void WebUIReloadControl::OnContextMenuClosed() {
-  auto* webui_toolbar_ui = webui_toolbar_web_view_->GetWebUIToolbarUI();
-  CHECK(webui_toolbar_ui);
-  webui_toolbar_ui->OnContextMenuStateChanged(
-      browser_controls_api::mojom::ContextMenuType::kReload,
-      browser_controls_api::mojom::ContextMenuState::kHidden);
 }
 
 bool WebUIReloadControl::IsCommandIdChecked(int command_id) const {
@@ -103,36 +84,29 @@ bool WebUIReloadControl::IsCommandIdVisible(int command_id) const {
 bool WebUIReloadControl::GetAcceleratorForCommandId(
     int command_id,
     ui::Accelerator* accelerator) const {
-  return webui_toolbar_web_view_->GetWidget()->GetAccelerator(command_id,
-                                                              accelerator);
+  return delegate_->GetView()->GetWidget()->GetAccelerator(command_id,
+                                                           accelerator);
 }
 
 void WebUIReloadControl::ExecuteCommand(int command_id, int event_flags) {
-  CHECK(webui_toolbar_web_view_->controller());
-  webui_toolbar_web_view_->controller()->ExecuteCommandWithDisposition(
+  CHECK(delegate_->GetCommandController());
+  delegate_->GetCommandController()->ExecuteCommandWithDisposition(
       command_id, ui::DispositionFromEventFlags(event_flags));
 }
 
-void WebUIReloadControl::OnNavigationStatusChanged() {
-  auto* webui_toolbar_ui = webui_toolbar_web_view_->GetWebUIToolbarUI();
-
-  // If the WebUI toolbar is not ready yet, skip updating the UI state. It will
-  // be synchronized later on initialize.
-  if (!webui_toolbar_ui) {
-    return;
-  }
-
-  webui_toolbar_ui->OnNavigationStatusChanged(
-      (mode_ == ReloadControl::Mode::kStop)
-          ? browser_controls_api::mojom::NavigationState::kLoading
-          : browser_controls_api::mojom::NavigationState::kNotLoading);
+void WebUIReloadControl::SetDoubleClickIntervalForTesting(
+    base::TimeDelta double_click_interval) {
+  double_click_interval_ = double_click_interval;
+  UpdateState();
 }
 
-void WebUIReloadControl::OnDevToolsStatusChanged() {
-  auto* webui_toolbar_ui = webui_toolbar_web_view_->GetWebUIToolbarUI();
-  CHECK(webui_toolbar_ui);
-  webui_toolbar_ui->OnDevToolsStatusChanged(
-      is_dev_tools_connected_
-          ? browser_controls_api::mojom::DevToolsState::kConnected
-          : browser_controls_api::mojom::DevToolsState::kDisconnected);
+void WebUIReloadControl::UpdateState() {
+  auto state = toolbar_ui_api::mojom::ReloadControlState::New();
+  state->double_click_interval = double_click_interval_;
+  state->can_show_menu =
+      is_dev_tools_connected_ && (mode_ == ReloadControl::Mode::kReload);
+  state->is_navigation_loading = (mode_ == ReloadControl::Mode::kStop);
+  state->is_context_menu_visible = menu_runner_->IsRunning();
+  state->state_token = state_token_;
+  delegate_->OnReloadControlStateChanged(std::move(state));
 }

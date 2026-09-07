@@ -8,24 +8,37 @@
 
 #include <vector>
 
+#include "base/check.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
-#include "base/i18n/time_formatting.h"
+#include "base/logging.h"
+#include "base/no_destructor.h"
 #include "base/path_service.h"
 #include "base/strings/string_number_conversions.h"
-#include "remoting/base/file_path_util_linux.h"
+#include "base/strings/stringprintf.h"
+#include "base/time/time.h"
+#include "remoting/base/branding.h"
 #include "third_party/crashpad/crashpad/client/crash_report_database.h"
 #include "third_party/crashpad/crashpad/client/settings.h"
 
 #if BUILDFLAG(IS_WIN)
 #include "base/base_paths.h"
 #include "base/strings/utf_string_conversions.h"
+#elif BUILDFLAG(IS_LINUX)
+#include <sys/types.h>
+#include <unistd.h>
+
+#include "base/environment.h"
+#include "remoting/base/file_path_util_linux.h"
 #endif  // BUILDFLAG(IS_WIN)
 
+namespace remoting {
 namespace {
 
+#if !BUILDFLAG(IS_LINUX)
 const base::FilePath::CharType kChromotingCrashpadDatabasePath[] =
     FILE_PATH_LITERAL("crashpad");
+#endif
 
 // Maximum number of crash reports to log. Reports are sorted by timestamp so
 // the most recent N reports will be logged.
@@ -33,24 +46,90 @@ const size_t kMaxReportsToLog = 2;
 
 // Maximum number of crash reports to retain in the database. When the database
 // contains more than this number, the oldest ones will be deleted, regardless
-// of |kMaxReportDays|.
+// of `kMaxReportAgeDays`.
 const size_t kMaxReportsToRetain = 20;
 
 // Maximum number of days to keep reports around in the local database.
 const size_t kMaxReportAgeDays = 7;
 
+#if BUILDFLAG(IS_LINUX)
+inline base::FilePath GetUnifiedCrashpadDatabasePath() {
+  return GetVarLibDir().Append("crashpad");
+}
+#endif  // BUILDFLAG(IS_LINUX)
+
+// Formats a `base::Time` as a UTC string ("YYYY-MM-DD HH:MM:SS UTC").
+// We intentionally avoid `base::TimeFormatHTTP()` (and `//base:i18n` in
+// general) because `remoting_crashpad_handler` is a minimal, standalone binary
+// that does not initialize ICU or package `icudtl.dat`. Using ICU without
+// initialization would cause the handler to crash.
+std::string FormatTime(base::Time time) {
+  base::Time::Exploded exploded;
+  time.UTCExplode(&exploded);
+  return base::StringPrintf("%04d-%02d-%02d %02d:%02d:%02d UTC", exploded.year,
+                            exploded.month, exploded.day_of_month,
+                            exploded.hour, exploded.minute, exploded.second);
+}
+
 }  // namespace
 
-namespace remoting {
-
 base::FilePath GetCrashpadDatabasePath() {
-  base::FilePath database_path;
+  static const base::NoDestructor<base::FilePath> database_path([]() {
 #if BUILDFLAG(IS_WIN)
-  base::PathService::Get(base::BasePathKey::DIR_ASSETS, &database_path);
+    base::FilePath path;
+    base::PathService::Get(base::BasePathKey::DIR_ASSETS, &path);
+    return path.Append(kChromotingCrashpadDatabasePath);
+#elif BUILDFLAG(IS_LINUX)
+    if (getuid() == 0) {
+      // Used by the daemon process or the elevated start-host process.
+      return GetUnifiedCrashpadDatabasePath();
+    }
+    // 4-tier cascading resolution for non-root processes (e.g. single-process
+    // ME2ME host, IT2ME Native Messaging Host).
+    std::optional<std::string> xdg_runtime_dir =
+        base::Environment::Create()->GetVar("XDG_RUNTIME_DIR");
+    if (!xdg_runtime_dir.has_value() || xdg_runtime_dir->empty()) {
+      // $XDG_RUNTIME_DIR may not be available yet on the desktop process (since
+      // it is loaded from systemd in DesktopProcessMain()), but for modern
+      // Linux systems using systemd, it is always /run/user/<uid>.
+      // TODO: crbug.com/475611769 - Make DesktopProcessMain() execve() itself
+      // so that the environment variable is available here.
+      xdg_runtime_dir = base::StringPrintf("/run/user/%u", getuid());
+    }
+    base::FilePath xdg_runtime_dir_path(*xdg_runtime_dir);
+    if (base::DirectoryExists(xdg_runtime_dir_path)) {
+      return xdg_runtime_dir_path.Append("crd_crashpad");
+    }
+
+    base::FilePath config_dir = GetConfigDir();
+    if (!config_dir.empty()) {
+      return config_dir.Append("crashpad");
+    }
+
+    // Fallback to a unique secure temporary directory if XDG_RUNTIME_DIR is
+    // missing. This is critical to support the early start-host flow before the
+    // user has logged in. Note: Utilizing a dynamic temporary directory per
+    // process session breaks crash report persistence across process restarts,
+    // preventing uploads of previous unhandled crashes. This is an accepted
+    // trade-off to eliminate multi-user collision DoS risks and ensure absolute
+    // protection against CWE-377 pre-creation symlink traversal attacks in
+    // shared /tmp.
+    base::FilePath temp_dir;
+    if (base::GetTempDir(&temp_dir)) {
+      base::FilePath unique_temp_dir;
+      if (base::CreateTemporaryDirInDir(
+              temp_dir, /*prefix=*/FILE_PATH_LITERAL("crd_crashpad."),
+              &unique_temp_dir)) {
+        return unique_temp_dir;
+      }
+    }
+
+    return base::FilePath();
 #else
-  database_path = GetConfigDirectoryPath();
+    return GetConfigDir().Append(kChromotingCrashpadDatabasePath);
 #endif
-  return database_path.Append(kChromotingCrashpadDatabasePath);
+  }());
+  return *database_path;
 }
 
 CrashpadDatabaseManager::CrashpadDatabaseManager(Logger& logger)
@@ -58,21 +137,23 @@ CrashpadDatabaseManager::CrashpadDatabaseManager(Logger& logger)
 
 CrashpadDatabaseManager::~CrashpadDatabaseManager() = default;
 
-bool CrashpadDatabaseManager::InitializeCrashpadDatabase() {
-  base::FilePath database_path = GetCrashpadDatabasePath();
+bool CrashpadDatabaseManager::InitializeCrashpadDatabase(
+    const base::FilePath& database_path) {
+  base::FilePath target_database_path =
+      database_path.empty() ? GetCrashpadDatabasePath() : database_path;
   base::File::Error error;
-  if (!base::CreateDirectoryAndGetError(database_path, &error)) {
+  if (!base::CreateDirectoryAndGetError(target_database_path, &error)) {
 #if BUILDFLAG(IS_WIN)
     logger_->LogError("Unable to get directory for crash database: " +
-                      base::WideToUTF8(database_path.value()));
+                      base::WideToUTF8(target_database_path.value()));
 #else
     logger_->LogError("Unable to get directory for crash database: " +
-                      database_path.value());
+                      target_database_path.value());
 #endif
     logger_->LogError("File Error: " + base::File::ErrorToString(error));
     return false;
   }
-  database_ = crashpad::CrashReportDatabase::Initialize(database_path);
+  database_ = crashpad::CrashReportDatabase::Initialize(target_database_path);
   if (!database_) {
     logger_->LogError("Unable to initialize crash database");
     return false;
@@ -129,6 +210,7 @@ bool CrashpadDatabaseManager::CleanupCompletedCrashpadReports() {
 // private
 
 bool CrashpadDatabaseManager::LoadCompletedReports() {
+  completed_reports_.clear();
   crashpad::CrashReportDatabase::OperationStatus status =
       database_->GetCompletedReports(&completed_reports_);
   if (status != crashpad::CrashReportDatabase::OperationStatus::kNoError) {
@@ -141,6 +223,7 @@ bool CrashpadDatabaseManager::LoadCompletedReports() {
 }
 
 bool CrashpadDatabaseManager::LoadPendingReports() {
+  pending_reports_.clear();
   crashpad::CrashReportDatabase::OperationStatus status =
       database_->GetPendingReports(&pending_reports_);
   if (status != crashpad::CrashReportDatabase::OperationStatus::kNoError) {
@@ -164,7 +247,7 @@ void CrashpadDatabaseManager::SortCrashReports(
 void CrashpadDatabaseManager::LogCrashReportInfo(
     const crashpad::CrashReportDatabase::Report& report) {
   const std::string& id = report.id;
-  // |id| will only be assigned if the report has been successfully uploaded.
+  // `id` will only be assigned if the report has been successfully uploaded.
   if (id.empty()) {
     logger_->Log("  Crash id: <unassigned>");
   } else {
@@ -177,7 +260,7 @@ void CrashpadDatabaseManager::LogCrashReportInfo(
 #endif
   logger_->Log("    uuid: " + report.uuid.ToString());
   logger_->Log("    created: " +
-               TimeFormatHTTP(base::Time::FromTimeT(report.creation_time)));
+               FormatTime(base::Time::FromTimeT(report.creation_time)));
   std::string uploaded = report.uploaded ? "yes" : "no";
   logger_->Log("    uploaded: " + uploaded + " (attempts: " +
                base::NumberToString(report.upload_attempts) + ")");
@@ -215,7 +298,7 @@ bool CrashpadDatabaseManager::CleanupCrashReports(
     for (size_t i = kMaxReportsToRetain; i < num_reports; ++i) {
       const auto& report = reports[i];
       std::string creation_time =
-          base::TimeFormatHTTP(base::Time::FromTimeT(report.creation_time));
+          FormatTime(base::Time::FromTimeT(report.creation_time));
       logger_->Log("  Deleting crash report: " + report.id + " (" +
                    report.uuid.ToString() + ") " + creation_time);
       auto status = database_->DeleteReport(report.uuid);
@@ -243,7 +326,7 @@ bool CrashpadDatabaseManager::CleanupCrashReports(
                      base::NumberToString(kMaxReportAgeDays) + " days:");
       }
       logger_->Log("  Deleting crash report: " + report.id + " (" +
-                   base::TimeFormatHTTP(created) + ")");
+                   FormatTime(created) + ")");
       auto status = database_->DeleteReport(report.uuid);
       if (status != crashpad::CrashReportDatabase::OperationStatus::kNoError) {
         logger_->LogError("  Unable to delete uploaded crash report: " +
@@ -264,9 +347,9 @@ bool CrashpadDatabaseManager::CleanupCrashReports(
         logger_->Log("Deleting crash reports older than " +
                      base::NumberToString(kMaxReportAgeDays) + " days:");
       }
-      // We need to log |uuid| here because only uploaded reports have an |id|.
+      // We need to log `uuid` here because only uploaded reports have an `id`.
       logger_->Log("  Deleting crash report: " + report.uuid.ToString() + " (" +
-                   TimeFormatHTTP(created) + ")");
+                   FormatTime(created) + ")");
       auto status = database_->DeleteReport(report.uuid);
       if (status != crashpad::CrashReportDatabase::OperationStatus::kNoError) {
         logger_->LogError("  Unable to delete old crash report: " +

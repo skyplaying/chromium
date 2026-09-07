@@ -9,7 +9,6 @@ import android.content.res.ColorStateList;
 
 import androidx.annotation.ColorInt;
 import androidx.annotation.ColorRes;
-import androidx.appcompat.content.res.AppCompatResources;
 import androidx.core.content.ContextCompat;
 import androidx.core.graphics.ColorUtils;
 
@@ -44,13 +43,13 @@ public class TabCardThemeUtil {
     }
 
     /**
-     * Returns the ColorStateList for media indicator based on the incognito mode or selected.
+     * Returns the ColorStateList for alert indicator based on the incognito mode or selected.
      *
      * @param context {@link Context} used to retrieve color.
      * @param isIncognito Whether the color is used for incognito mode.
      * @param isSelected Whether the tab is currently selected.
      */
-    public static ColorStateList getMediaIndicatorColorStateList(
+    public static ColorStateList getAlertIndicatorColorStateList(
             Context context, boolean isIncognito, boolean isSelected) {
         return ColorStateList.valueOf(
                 getChromeOwnedFaviconTintColor(context, isIncognito, isSelected));
@@ -219,8 +218,7 @@ public class TabCardThemeUtil {
             @Nullable @TabGroupColorId Integer colorId) {
         if (isSelected) {
             return isIncognito
-                    ? AppCompatResources.getColorStateList(
-                            context, R.color.incognito_tab_action_button_selected_color)
+                    ? context.getColorStateList(R.color.incognito_tab_action_button_selected_color)
                     : ColorStateList.valueOf(
                             MaterialColors.getColor(context, R.attr.colorOnPrimary, TAG));
         }
@@ -230,8 +228,7 @@ public class TabCardThemeUtil {
                             context, colorId, isIncognito));
         }
         return isIncognito
-                ? AppCompatResources.getColorStateList(
-                        context, R.color.incognito_tab_action_button_color)
+                ? context.getColorStateList(R.color.incognito_tab_action_button_color)
                 : ColorStateList.valueOf(
                         MaterialColors.getColor(context, R.attr.colorOnSurfaceVariant, TAG));
     }
@@ -247,6 +244,6 @@ public class TabCardThemeUtil {
      */
     public static ColorStateList getToggleActionButtonBackgroundTintList(
             Context context, boolean isIncognito, boolean isSelected) {
-        return getActionButtonTintList(context, isIncognito, isSelected, /* colorId */ null);
+        return getActionButtonTintList(context, isIncognito, isSelected, /* colorId= */ null);
     }
 }

@@ -20,7 +20,6 @@
 #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
 #include "chrome/browser/media/webrtc/native_desktop_media_list.h"
 #include "chrome/browser/media/webrtc/tab_desktop_media_list.h"
-#include "chrome/grit/branded_strings.h"
 #include "content/public/browser/desktop_capture.h"
 #include "content/public/browser/desktop_streams_registry.h"
 #include "content/public/browser/render_frame_host.h"
@@ -34,6 +33,10 @@
 
 using ::content::DesktopMediaID;
 
+namespace {
+std::optional<bool> g_is_system_audio_capture_supported_for_testing;
+}  // namespace
+
 DesktopMediaPickerController::DesktopMediaPickerController(
     DesktopMediaPickerFactory* picker_factory)
     : picker_factory_(picker_factory
@@ -45,11 +48,13 @@ DesktopMediaPickerController::~DesktopMediaPickerController() = default;
 void DesktopMediaPickerController::Show(
     const Params& params,
     const std::vector<DesktopMediaList::Type>& sources,
-    DoneCallback done_callback) {
+    DoneCallback done_callback,
+    base::OnceClosure on_show_picker) {
   DCHECK(!std::ranges::contains(sources, DesktopMediaList::Type::kNone));
   DCHECK(!done_callback_);
 
   done_callback_ = std::move(done_callback);
+  on_show_picker_ = std::move(on_show_picker);
   params_ = params;
 
   Observe(params.web_contents);
@@ -86,8 +91,17 @@ void DesktopMediaPickerController::WebContentsDestroyed() {
 }
 
 // static
+void DesktopMediaPickerController::SetSystemAudioCaptureSupportedForTesting(
+    std::optional<bool> is_supported) {
+  g_is_system_audio_capture_supported_for_testing = is_supported;
+}
+
+// static
 bool DesktopMediaPickerController::IsSystemAudioCaptureSupported(
     Params::RequestSource request_source) {
+  if (g_is_system_audio_capture_supported_for_testing.has_value()) {
+    return *g_is_system_audio_capture_supported_for_testing;
+  }
   if (!media::IsSystemLoopbackCaptureSupported()) {
     return false;
   }
@@ -96,9 +110,7 @@ bool DesktopMediaPickerController::IsSystemAudioCaptureSupported(
     return (media::IsMacSckSystemLoopbackCaptureSupported() ||
             base::FeatureList::IsEnabled(media::kMacCatapLoopbackAudioForCast));
   } else {
-    return (media::IsMacCatapSystemLoopbackCaptureSupported() &&
-            base::FeatureList::IsEnabled(
-                media::kMacCatapLoopbackAudioForScreenShare));
+    return media::IsMacCatapSystemLoopbackCaptureSupported();
   }
 #elif BUILDFLAG(IS_LINUX)
   if (request_source == Params::RequestSource::kCast) {
@@ -137,6 +149,10 @@ void DesktopMediaPickerController::ShowPickerDialog() {
     OnPickerDialogResults(
         "Desktop Capture API is not yet implemented for this platform.", {});
     return;
+  }
+
+  if (on_show_picker_) {
+    std::move(on_show_picker_).Run();
   }
 
   picker_->Show(

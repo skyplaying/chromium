@@ -10,8 +10,8 @@
 #include <vector>
 
 #include "base/test/metrics/histogram_tester.h"
-#include "chrome/browser/web_applications/isolated_web_apps/isolation_data.h"
 #include "chrome/browser/web_applications/model/display_override.h"
+#include "chrome/browser/web_applications/model/isolation_data.h"
 #include "chrome/browser/web_applications/proto/web_app.pb.h"
 #include "chrome/browser/web_applications/proto/web_app_url_pattern.pb.h"
 #include "chrome/browser/web_applications/test/web_app_test.h"
@@ -81,14 +81,7 @@ TEST_F(WebAppDatabaseSerializationTest, RandomWebApps) {
     std::unique_ptr<WebApp> app = test::CreateRandomWebApp(params);
     std::unique_ptr<proto::WebApp> proto = WebAppToProto(*app);
 
-    // TODO(https://crbug.com/384536509): Store parent manifest ids in the
-    // database instead of app_ids.
-    std::optional<webapps::ManifestId> parent_manifest_id;
-    if (app->parent_app_id().has_value()) {
-      parent_manifest_id = params.parent_manifest_id;
-    }
-    webapps::AppId app_id =
-        GenerateAppIdFromManifestId(app->manifest_id(), parent_manifest_id);
+    webapps::AppId app_id = GenerateAppIdFromManifestId(app->manifest_id());
     std::unique_ptr<WebApp> parsed_app = ParseWebAppProto(*proto, app_id);
     ASSERT_THAT(parsed_app, NotNull());
     ASSERT_EQ(*app, *parsed_app);
@@ -629,6 +622,26 @@ TEST_F(WebAppDatabaseSerializationTest,
   isolation_data->mutable_proxy()->set_proxy_url("https://proxy.com");
   isolation_data->set_update_channel("");  // Invalid channel
   EXPECT_THAT(ParseWebAppProto(proto, app_id), IsNull());
+}
+
+TEST_F(WebAppDatabaseSerializationTest,
+       ParseWebAppProto_IsolationData_NonDevModeUpdateChannel) {
+  proto::WebApp proto;
+  webapps::AppId app_id;
+  std::tie(proto, app_id) =
+      CreateWebAppProtoForTesting("Test App", GURL("isolated-app://random_name"));
+  auto* isolation_data = proto.mutable_isolation_data();
+  isolation_data->set_version("1.0.0");
+  isolation_data->mutable_owned_bundle()->set_dir_name_ascii("bundle");
+  isolation_data->mutable_owned_bundle()->set_dev_mode(false);
+  isolation_data->set_update_channel("beta");
+
+  std::unique_ptr<WebApp> web_app = ParseWebAppProto(proto, app_id);
+  ASSERT_THAT(web_app, NotNull());
+  ASSERT_TRUE(web_app->isolation_data().has_value());
+  EXPECT_FALSE(web_app->isolation_data()->location().dev_mode());
+  EXPECT_EQ(*UpdateChannel::Create("beta"),
+            web_app->isolation_data()->update_channel());
 }
 
 // --- Tests for GeneratedIconFix ---
@@ -1569,7 +1582,7 @@ TEST_F(WebAppDatabaseSerializationTest,
       CreateWebAppProtoForTesting("Test App", GURL("https://example.com/"));
 
   auto* override_item = proto.add_display_overrides();
-  override_item->set_display_mode(proto::WebApp::DISPLAY_MODE_BORDERLESS);
+  override_item->set_display_mode(proto::WebApp::DISPLAY_MODE_UNFRAMED);
 
   proto.add_display_mode_override_deprecated(
       proto::WebApp::DISPLAY_MODE_MINIMAL_UI);
@@ -1588,7 +1601,7 @@ TEST_F(WebAppDatabaseSerializationTest,
       CreateWebAppProtoForTesting("Test App", GURL("https://example.com/"));
 
   auto* override_item = proto.add_display_overrides();
-  override_item->set_display_mode(proto::WebApp::DISPLAY_MODE_BORDERLESS);
+  override_item->set_display_mode(proto::WebApp::DISPLAY_MODE_UNFRAMED);
   auto* pattern = override_item->add_url_patterns();
   auto* part = pattern->add_pathname();
   // `PART_TYPE_UNSPECIFIED` causes `ToUrlPattern` to fail.
@@ -1615,7 +1628,7 @@ TEST_F(WebAppDatabaseSerializationTest,
       CreateWebAppProtoForTesting("Test App", GURL("https://example.com/"));
 
   auto* override_item = proto.add_display_overrides();
-  override_item->set_display_mode(proto::WebApp::DISPLAY_MODE_BORDERLESS);
+  override_item->set_display_mode(proto::WebApp::DISPLAY_MODE_UNFRAMED);
   auto* pattern_proto = override_item->add_url_patterns();
   auto* part = pattern_proto->add_pathname();
   part->set_part_type(proto::UrlPatternPart::PART_TYPE_FULL_WILDCARD);
@@ -1634,7 +1647,7 @@ TEST_F(WebAppDatabaseSerializationTest,
   std::unique_ptr<proto::WebApp> round_trip_proto = WebAppToProto(*web_app);
   ASSERT_THAT(round_trip_proto, NotNull());
   ASSERT_EQ(1, round_trip_proto->display_overrides_size());
-  EXPECT_EQ(proto::WebApp::DISPLAY_MODE_BORDERLESS,
+  EXPECT_EQ(proto::WebApp::DISPLAY_MODE_UNFRAMED,
             round_trip_proto->display_overrides(0).display_mode());
   ASSERT_EQ(1, round_trip_proto->display_overrides(0).url_patterns_size());
 }

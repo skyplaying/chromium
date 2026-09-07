@@ -5,11 +5,16 @@
 #ifndef DEVICE_VR_OPENXR_OPENXR_UTIL_H_
 #define DEVICE_VR_OPENXR_OPENXR_UTIL_H_
 
+#include <cstdint>
+#include <vector>
+
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "device/vr/public/mojom/pose.h"
 #include "device/vr/public/mojom/vr_service.mojom-forward.h"
 #include "device/vr/public/mojom/xr_session.mojom-forward.h"
+#include "device/vr/vr_export.h"
+#include "third_party/openxr/dev/xr_android.h"
 #include "third_party/openxr/src/include/openxr/openxr.h"
 #include "ui/gfx/geometry/transform.h"
 #include "ui/gfx/geometry/transform_util.h"
@@ -57,18 +62,33 @@ namespace device {
 
 // Returns the identity pose, where the position is {0, 0, 0} and the
 // orientation is {0, 0, 0, 1}.
-XrPosef PoseIdentity();
-gfx::Transform XrPoseToGfxTransform(const XrPosef& pose);
-device::Pose XrPoseToDevicePose(const XrPosef& pose);
-device::Pose ZNormalXrPoseToYNormalDevicePose(const XrPosef& pose);
-gfx::Point3F ZNormalPositionToYNormalPosition(const gfx::Point3F& point);
-XrPosef GfxTransformToXrPose(const gfx::Transform& transform);
-XrQuaternionf GfxQuaternionToXrQuaternion(const gfx::Quaternion& quaternion);
-mojom::VRFieldOfViewPtr XrFovToMojomFov(const XrFovf& xr_fov);
-bool IsPoseValid(XrSpaceLocationFlags locationFlags);
+DEVICE_VR_EXPORT XrPosef PoseIdentity();
+DEVICE_VR_EXPORT gfx::Transform XrPoseToGfxTransform(const XrPosef& pose);
+DEVICE_VR_EXPORT device::Pose XrPoseToDevicePose(const XrPosef& pose);
+DEVICE_VR_EXPORT device::Pose ZNormalXrPoseToYNormalDevicePose(
+    const XrPosef& pose);
+DEVICE_VR_EXPORT gfx::Point3F ZNormalPositionToYNormalPosition(
+    const gfx::Point3F& point);
+DEVICE_VR_EXPORT XrPosef GfxTransformToXrPose(const gfx::Transform& transform);
+DEVICE_VR_EXPORT XrQuaternionf
+GfxQuaternionToXrQuaternion(const gfx::Quaternion& quaternion);
+DEVICE_VR_EXPORT mojom::VRFieldOfViewPtr XrFovToMojomFov(const XrFovf& xr_fov);
+DEVICE_VR_EXPORT bool IsPoseValid(XrSpaceLocationFlags locationFlags);
 
 bool IsFeatureSupportedForMode(device::mojom::XRSessionFeature feature,
                                device::mojom::XRSessionMode mode);
+
+mojom::XRSemanticLabel ToMojomSemanticLabel(
+    XrSpatialPlaneSemanticLabelEXT label);
+mojom::XRSemanticLabel ToMojomSemanticLabel(
+    XrSceneMeshSemanticLabelANDROID label);
+
+bool IsConvexPolygon(
+    const std::vector<mojom::XRPlanePointDataPtr>& polygon);
+
+// Ear-clipping triangulation for simple (non-self-intersecting) 2D polygons.
+std::vector<uint32_t> EarClipTriangulate(
+    const std::vector<mojom::XRPlanePointDataPtr>& polygon);
 
 // Define a concept for a struct to help validate that it can be safely cast to
 // an XrBaseOutStructure.

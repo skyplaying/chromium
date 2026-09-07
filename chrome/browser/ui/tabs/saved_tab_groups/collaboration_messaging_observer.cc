@@ -9,24 +9,22 @@
 #include "base/uuid.h"
 #include "chrome/browser/collaboration/collaboration_service_factory.h"
 #include "chrome/browser/collaboration/messaging/messaging_backend_service_factory.h"
-#include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/collaboration_messaging_tab_data.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_metrics.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
-#include "chrome/browser/ui/tabs/saved_tab_groups/tab_group_action_context_desktop.h"
 #include "chrome/browser/ui/tabs/tab_group_attention_indicator.h"
 #include "chrome/browser/ui/tabs/tab_group_features.h"
 #include "chrome/browser/ui/tabs/tab_group_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/data_sharing/collaboration_controller_delegate_desktop.h"
-#include "chrome/browser/ui/views/data_sharing/data_sharing_bubble_controller.h"
 #include "components/collaboration/public/collaboration_flow_entry_point.h"
 #include "components/collaboration/public/collaboration_service.h"
 #include "components/saved_tab_groups/public/tab_group_sync_service.h"
 #include "components/saved_tab_groups/public/types.h"
+#include "components/tab_groups/tab_group_id.h"
 #include "components/tabs/public/tab_group.h"
+#include "ui/base/window_open_disposition.h"
 
 using collaboration::messaging::MessagingBackendServiceFactory;
 using collaboration::messaging::PersistentNotificationType;
@@ -43,49 +41,16 @@ std::optional<LocalTabGroupID> UnwrapTabGroupID(PersistentMessage message) {
   return std::nullopt;
 }
 
-// Returns the tab strip index of the tab. If the sync service is not
-// available, returns std::nullopt. Asserts that the tab can be found.
-std::optional<int> GetTabStripIndex(LocalTabID local_tab_id,
-                                    LocalTabGroupID local_tab_group_id) {
-  const Browser* const browser_with_local_group_id =
-      SavedTabGroupUtils::GetBrowserWithTabGroupId(local_tab_group_id);
-  if (!browser_with_local_group_id) {
-    return std::nullopt;
-  }
-
-  TabStripModel* tab_strip_model =
-      browser_with_local_group_id->tab_strip_model();
-  if (!tab_strip_model || !tab_strip_model->SupportsTabGroups()) {
-    return std::nullopt;
-  }
-
-  const gfx::Range tab_indices = tab_strip_model->group_model()
-                                     ->GetTabGroup(local_tab_group_id)
-                                     ->ListTabs();
-  for (size_t grouped_tab_index = tab_indices.start();
-       grouped_tab_index < tab_indices.end(); grouped_tab_index++) {
-    const tabs::TabInterface* const tab =
-        tab_strip_model->GetTabAtIndex(grouped_tab_index);
-    if (tab->GetHandle().raw_value() == local_tab_id) {
-      return grouped_tab_index;
-    }
-  }
-
-  return std::nullopt;
-}
-
 // Unwrapped tab information used to access the tab.
 struct TabInfo {
   LocalTabID local_tab_id;
   LocalTabGroupID local_tab_group_id;
-  int tabstrip_index;
 };
 
 // Returns the unwrapped tab information from the PersistentMessage.
 // Asserts
 // * tab metadata exists and contains the tab ID
 // * tab group metadata exists and contains the group ID
-// * the tab can be found in the tab strip
 std::optional<TabInfo> UnwrapTabInfo(PersistentMessage message) {
   auto local_tab_group_id = UnwrapTabGroupID(message);
   if (!local_tab_group_id.has_value()) {
@@ -102,14 +67,7 @@ std::optional<TabInfo> UnwrapTabInfo(PersistentMessage message) {
     return std::nullopt;
   }
 
-  auto tabstrip_index =
-      GetTabStripIndex(local_tab_id.value(), local_tab_group_id.value());
-  if (!tabstrip_index.has_value()) {
-    return std::nullopt;
-  }
-
-  return TabInfo(local_tab_id.value(), local_tab_group_id.value(),
-                 tabstrip_index.value());
+  return TabInfo(local_tab_id.value(), local_tab_group_id.value());
 }
 
 }  // namespace
@@ -117,16 +75,16 @@ std::optional<TabInfo> UnwrapTabInfo(PersistentMessage message) {
 void CollaborationMessagingObserver::HandleDirtyTabGroup(
     PersistentMessage message,
     MessageDisplayStatus display) {
-  // TODO(crbug.com/392604409): Refactor to use a TabGroupFeature.
   std::optional<LocalTabGroupID> local_tab_group_id = UnwrapTabGroupID(message);
   if (!local_tab_group_id) {
     return;
   }
 
-  if (Browser* browser = SavedTabGroupUtils::GetBrowserWithTabGroupId(
-          local_tab_group_id.value())) {
+  if (BrowserWindowInterface* browser =
+          SavedTabGroupUtils::GetBrowserWithTabGroupId(
+              local_tab_group_id.value())) {
     TabGroup* tab_group =
-        browser->tab_strip_model()->group_model()->GetTabGroup(
+        browser->GetTabStripModel()->group_model()->GetTabGroup(
             local_tab_group_id.value());
     if (tab_group) {
       tab_group->GetTabGroupFeatures()->attention_indicator()->SetHasAttention(
@@ -138,16 +96,19 @@ void CollaborationMessagingObserver::HandleDirtyTabGroup(
 void CollaborationMessagingObserver::HandleDirtyTab(
     PersistentMessage message,
     MessageDisplayStatus display) {
-  // TODO(crbug.com/392604409): Refactor to use a TabFeature.
   std::optional<TabInfo> tab_info = UnwrapTabInfo(message);
   if (!tab_info) {
     return;
   }
 
-  if (Browser* browser = SavedTabGroupUtils::GetBrowserWithTabGroupId(
-          tab_info->local_tab_group_id)) {
-    browser->tab_strip_model()->SetTabNeedsAttentionAt(
-        tab_info->tabstrip_index, display == MessageDisplayStatus::kDisplay);
+  if (BrowserWindowInterface* browser =
+          SavedTabGroupUtils::GetBrowserWithTabGroupId(
+              tab_info->local_tab_group_id)) {
+    if (tabs::TabInterface* tab = SavedTabGroupUtils::GetGroupedTab(
+            tab_info->local_tab_group_id, tab_info->local_tab_id)) {
+      browser->GetTabStripModel()->SetTabNeedsAttention(
+          tab->GetContents(), display == MessageDisplayStatus::kDisplay);
+    }
   }
 }
 
@@ -269,7 +230,7 @@ void CollaborationMessagingObserver::ReopenTabForCurrentInstantMessage() {
     return;
   }
 
-  if (Browser* browser =
+  if (BrowserWindowInterface* browser =
           tab_groups::SavedTabGroupUtils::GetBrowserWithTabGroupId(
               group_id.value())) {
     SavedTabGroupUtils::OpenTabInBrowser(
@@ -300,15 +261,10 @@ void CollaborationMessagingObserver::ManageSharingForCurrentInstantMessage(
     if (!sync_tab_group_id.has_value()) {
       return;
     }
-    auto* tab_group_service =
-        TabGroupSyncServiceFactory::GetForProfile(profile_);
-    CHECK(tab_group_service);
     std::optional<LocalTabGroupID> opened_group_id =
-        tab_group_service->OpenTabGroup(
-            sync_tab_group_id.value(),
-            std::make_unique<TabGroupActionContextDesktop>(
-                current_browser_window_interface->GetBrowserForMigrationOnly(),
-                OpeningSource::kOpenedFromToastAction));
+        tab_groups::SavedTabGroupUtils::OpenSavedTabGroup(
+            current_browser_window_interface, sync_tab_group_id.value(),
+            OpeningSource::kOpenedFromToastAction);
     if (!opened_group_id) {
       return;
     }
@@ -316,7 +272,7 @@ void CollaborationMessagingObserver::ManageSharingForCurrentInstantMessage(
     group_id = opened_group_id;
   }
 
-  if (Browser* browser =
+  if (BrowserWindowInterface* browser =
           tab_groups::SavedTabGroupUtils::GetBrowserWithTabGroupId(
               group_id.value())) {
     saved_tab_groups::metrics::RecordSharedTabGroupManageType(
@@ -327,7 +283,7 @@ void CollaborationMessagingObserver::ManageSharingForCurrentInstantMessage(
                                            data_sharing::FlowType::kManage);
     collaboration::CollaborationService* service =
         collaboration::CollaborationServiceFactory::GetForProfile(
-            browser->profile());
+            browser->GetProfile());
     std::unique_ptr<CollaborationControllerDelegateDesktop> delegate =
         std::make_unique<CollaborationControllerDelegateDesktop>(browser);
     service->StartShareOrManageFlow(

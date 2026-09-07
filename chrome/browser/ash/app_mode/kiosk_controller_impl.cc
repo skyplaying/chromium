@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "ash/constants/ash_switches.h"
+#include "ash/constants/chrome_switches.h"
 #include "ash/public/cpp/login_accelerators.h"
 #include "base/check.h"
 #include "base/check_deref.h"
@@ -45,12 +46,11 @@
 #include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/ash/policy/core/device_local_account.h"
 #include "chrome/browser/chromeos/app_mode/kiosk_app_level_logs_manager_wrapper.h"
-#include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/ui/ash/login/login_display_host.h"
-#include "chrome/common/chrome_switches.h"
 #include "chromeos/ash/components/settings/cros_settings.h"
 #include "components/account_id/account_id.h"
 #include "components/prefs/pref_service.h"
+#include "components/session_manager/core/session_manager.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
@@ -126,19 +126,21 @@ KioskApp EmptyKioskApp(const KioskAppId& app_id) {
 }  // namespace
 
 KioskControllerImpl::KioskControllerImpl(
-    PrefService& local_state,
+    PrefService* local_state,
+    const policy::PolicyService* policy_service,
     scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
     user_manager::UserManager* user_manager)
-    : local_state_(local_state),
-      cryptohome_remover_(&local_state),
-      iwa_manager_(local_state, &cryptohome_remover_),
-      web_app_manager_(&local_state,
+    : local_state_(CHECK_DEREF(local_state)),
+      policy_service_(CHECK_DEREF(policy_service)),
+      cryptohome_remover_(local_state),
+      iwa_manager_(CHECK_DEREF(local_state), &cryptohome_remover_),
+      web_app_manager_(local_state,
                        shared_url_loader_factory,
                        &cryptohome_remover_),
-      chrome_app_manager_(&local_state,
+      chrome_app_manager_(local_state,
                           shared_url_loader_factory,
                           &cryptohome_remover_),
-      arcvm_app_manager_(&local_state, &cryptohome_remover_) {
+      arcvm_app_manager_(local_state, &cryptohome_remover_) {
   user_manager_observation_.Observe(user_manager);
 }
 
@@ -198,13 +200,13 @@ std::optional<KioskApp> KioskControllerImpl::GetAutoLaunchApp() const {
 void KioskControllerImpl::InitializeKioskSystemSession(
     const KioskAppId& kiosk_app_id,
     Profile* profile,
-    const std::optional<std::string>& app_name) {
+    const std::optional<webapps::AppId>& app_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   CHECK(!system_session_.has_value())
       << "KioskSystemSession is already initialized";
 
-  system_session_.emplace(local_state_.get(), profile, kiosk_app_id, app_name);
+  system_session_.emplace(local_state_.get(), profile, kiosk_app_id, app_id);
 
   switch (kiosk_app_id.type) {
     case KioskAppType::kWebApp:
@@ -240,7 +242,7 @@ void KioskControllerImpl::StartSession(const KioskAppId& app_id,
       std::make_unique<chromeos::KioskAppLevelLogsManagerWrapper>(app_id);
 
   launch_controller_ = std::make_unique<KioskLaunchController>(
-      &local_state_.get(), host,
+      &local_state_.get(), &policy_service_.get(), host,
       /*app_launched_callback=*/
       base::BindOnce(&KioskControllerImpl::OnAppLaunched,
                      base::Unretained(this)),
@@ -354,17 +356,17 @@ void KioskControllerImpl::OnUserLoggedIn(const user_manager::User& user) {
   }
 
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-  command_line->AppendSwitch(::switches::kForceAppMode);
+  command_line->AppendSwitch(ash::chrome_switches::kForceAppMode);
 
   // Disables installation of preinstalled apps in kiosk sessions as
   // `UserManager::Observer::OnUserLoggedIn` is called before `Profile` creation
   // and `WebAppProvider::Start`.
   // TODO(crbug.com/385072112): Replace cmd line switch with proper filtering.
-  command_line->AppendSwitch(::switches::kDisableDefaultApps);
+  command_line->AppendSwitch(ash::chrome_switches::kDisableDefaultApps);
 
   // This happens in Web kiosks.
   if (!kiosk_app_id.empty()) {
-    command_line->AppendSwitchASCII(::switches::kAppId, kiosk_app_id);
+    command_line->AppendSwitchASCII(ash::chrome_switches::kAppId, kiosk_app_id);
   }
 
   // Disable window animation since kiosk app runs in a single full screen
@@ -383,8 +385,8 @@ void KioskControllerImpl::OnUserLoggedIn(const user_manager::User& user) {
 void KioskControllerImpl::OnAppLaunched(
     const KioskAppId& kiosk_app_id,
     Profile* profile,
-    const std::optional<std::string>& app_name) {
-  InitializeKioskSystemSession(kiosk_app_id, profile, app_name);
+    const std::optional<webapps::AppId>& app_id) {
+  InitializeKioskSystemSession(kiosk_app_id, profile, app_id);
 }
 
 void KioskControllerImpl::OnLaunchComplete(KioskAppLaunchError::Error error) {
@@ -417,16 +419,16 @@ void KioskControllerImpl::OnLaunchCompleteAfterCrash(
     const KioskAppId& app,
     Profile* profile,
     bool success,
-    const std::optional<std::string>& app_name) {
+    const std::optional<webapps::AppId>& app_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (success) {
     if (auto* input_controller =
             ui::OzonePlatform::GetInstance()->GetInputController()) {
       input_controller->DisableKeyboardImposterCheck();
     }
-    InitializeKioskSystemSession(app, profile, app_name);
+    InitializeKioskSystemSession(app, profile, app_id);
   } else {
-    chrome::AttemptUserExit();
+    session_manager::SessionManager::Get()->RequestSignOut();
   }
 
   // Delete launcher so it doesn't end up with dangling references.

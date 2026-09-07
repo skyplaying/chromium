@@ -20,7 +20,6 @@ import '../performance_page/performance_page_index.js';
 import '../privacy_page/privacy_page_index.js';
 import '../reset_page/reset_profile_banner.js';
 import '../search_page/search_page_index.js';
-import '../your_saved_info_page/your_saved_info_page_index.js';
 // <if expr="not is_chromeos">
 import '../default_browser_page/default_browser_page.js';
 
@@ -34,9 +33,6 @@ import {beforeNextRender, flush, PolymerElement} from 'chrome://resources/polyme
 
 import {ensureLazyLoaded} from '../ensure_lazy_loaded.js';
 import {loadTimeData} from '../i18n_setup.js';
-// <if expr="not is_chromeos">
-import type {LanguagesModel} from '../languages_page/languages_types.js';
-// </if>
 import {pageVisibility} from '../page_visibility.js';
 import type {PageVisibility} from '../page_visibility.js';
 import {getTopLevelRoute, routes} from '../route.js';
@@ -117,14 +113,10 @@ export class SettingsMainElement extends SettingsMainElementBase {
         value: false,
         notify: true,
       },
-
-      // <if expr="not is_chromeos">
-      languages_: Object,
-      // </if>
     };
   }
 
-  declare prefs: {[key: string]: any};
+  declare prefs: Record<string, unknown>;
   declare private pageVisibility_: PageVisibility;
   declare private lastRoute_: Route|null;
   declare private routes_: SettingsRoutes;
@@ -132,10 +124,6 @@ export class SettingsMainElement extends SettingsMainElementBase {
   declare private showNoResultsFound_: boolean;
   declare private showResetProfileBanner_: boolean;
   declare toolbarSpinnerActive: boolean;
-
-  // <if expr="not is_chromeos">
-  declare private languages_?: LanguagesModel;
-  // </if>
 
   private pendingViewSwitching_: PromiseResolver<void> = new PromiseResolver();
   private topLevelEquivalentRoute_: Route = getTopLevelRoute();
@@ -148,6 +136,10 @@ export class SettingsMainElement extends SettingsMainElementBase {
 
     // Request loading of the lazy loaded module within an idle callback.
     requestIdleCallback(() => ensureLazyLoaded());
+  }
+
+  override disconnectedCallback() {
+    super.disconnectedCallback();
   }
 
   private beforeNextRenderPromise_(): Promise<void> {
@@ -277,16 +269,6 @@ export class SettingsMainElement extends SettingsMainElementBase {
 
   private showAiPage_(visibility?: boolean): boolean {
     return loadTimeData.getBoolean('showAiPage') && this.showPage_(visibility);
-  }
-
-  private showAutofillPage_(visibility?: boolean): boolean {
-    return !loadTimeData.getBoolean('enableYourSavedInfoSettingsPage') &&
-        this.showPage_(visibility);
-  }
-
-  private showYourSavedInfoPage_(visibility?: boolean): boolean {
-    return loadTimeData.getBoolean('enableYourSavedInfoSettingsPage') &&
-        this.showPage_(visibility);
   }
 
   private showManagedHeader_(): boolean {

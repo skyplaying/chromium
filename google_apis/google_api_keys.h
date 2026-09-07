@@ -95,6 +95,9 @@ COMPONENT_EXPORT(GOOGLE_APIS) const std::string& GetRemotingAPIKey();
 // Retrieves the Speech On-Device API (SODA) API Key.
 COMPONENT_EXPORT(GOOGLE_APIS) const std::string& GetSodaAPIKey();
 
+// Retrieves the Translate Private API Key.
+COMPONENT_EXPORT(GOOGLE_APIS) const std::string& GetPartialTranslateAPIKey();
+
 #if !BUILDFLAG(IS_ANDROID)
 // Retrieves the HaTS API Key. This key is only used for desktop HaTS
 // and the internal API Key is only defined in non-Android builds.
@@ -125,6 +128,11 @@ COMPONENT_EXPORT(GOOGLE_APIS) const std::string& GetCrosChromeGeoAPIKey();
 
 // Retrieves the key used to sign metrics (UMA/UKM) uploads.
 COMPONENT_EXPORT(GOOGLE_APIS) const std::string& GetMetricsKey();
+
+#if BUILDFLAG(SUPPORT_CDM_SERVER_CERTIFICATE)
+// Returns the CDM certificate.
+COMPONENT_EXPORT(GOOGLE_APIS) const std::string& GetCdmServerCertificate();
+#endif
 
 // Represents the different sets of client IDs and secrets in use.
 enum OAuth2Client {

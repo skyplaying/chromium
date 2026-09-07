@@ -34,7 +34,7 @@ class ExtensionInstallPolicyInvalidator : public PolicyInvalidator {
   // |scope| indicates the invalidation scope that this invalidator
   // is responsible for.
   // |invalidation_listener| provides invalidations and is observed during the
-  // whole invaldiator's lifetime. Must remain valid until the invalidator is
+  // whole invalidator's lifetime. Must remain valid until the invalidator is
   // destroyed.
   // |core| is the cloud policy core which connects the various policy objects.
   // It must remain valid until Shutdown is called.
@@ -58,29 +58,6 @@ class ExtensionInstallPolicyInvalidator : public PolicyInvalidator {
   ExtensionInstallPolicyInvalidator& operator=(
       const ExtensionInstallPolicyInvalidator&) = delete;
   ~ExtensionInstallPolicyInvalidator() override;
-
-  std::string GetType() const override;
-
- private:
-  // Handles policy refresh depending on invalidations availability and incoming
-  // invalidations.
-  class ExtensionInstallPolicyInvalidationHandler
-      : public PolicyInvalidator::PolicyInvalidationHandler {
-   public:
-    ExtensionInstallPolicyInvalidationHandler(
-        PolicyInvalidationScope scope,
-        CloudPolicyCore* core,
-        const base::Clock* clock,
-        scoped_refptr<base::SequencedTaskRunner> task_runner);
-
-    ~ExtensionInstallPolicyInvalidationHandler() override;
-
-    CloudPolicyStore* GetCloudPolicyStore() const override;
-    const char* GetPolicyRefreshMetricName(
-        PolicyInvalidationScope scope) override;
-    const char* GetPolicyInvalidationMetricName(
-        PolicyInvalidationScope scope) override;
-  };
 };
 
 }  // namespace policy

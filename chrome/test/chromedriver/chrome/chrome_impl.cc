@@ -198,7 +198,7 @@ Status ChromeImpl::UpdateWebViews(const WebViewsInfo& views_info,
         view.type == WebViewInfo::kTab);
     // This web view may have closed itself between when it was returned by
     // `Target.getTargets` and when `chromedriver` attempted to attach to
-    // it. In that case, ignore this web view. See crbug.com/1506833 for an
+    // it. In that case, ignore this web view. See crbug.com/40947509 for an
     // example of this race.
     if (status.code() == kNoSuchWindow) {
       continue;
@@ -513,8 +513,8 @@ Status ChromeImpl::SetWindowBounds(
     params.SetByDottedPath("bounds.windowState", normal);
     status = devtools_websocket_client_->SendCommand("Browser.setWindowBounds",
                                                      params);
-    // Return success in case of `Browser.setWindowBounds` not implemented like
-    // on Android. crbug.com/1237183
+    // Preserve compatibility with browsers that do not implement
+    // Browser.setWindowBounds. crbug.com/40193012
     if (status.code() == kUnknownCommand)
       return Status(kOk);
 
@@ -559,12 +559,14 @@ Status ChromeImpl::SetWindowBounds(
     // Work around crbug.com/41469696. This block of code is necessary to ensure
     // that document.webkitIsFullScreen and document.fullscreenElement return
     // the correct values.
-    // But do not run when headless. see https://crbug.com/1049336
+    // But do not run when headless. see https://crbug.com/40672477
     WebView* web_view;
     status =
         GetActivePageByWebViewId(target_id, &web_view, /*wait_for_page=*/false);
     if (status.IsError())
       return status;
+
+    std::unique_ptr<WebViewHolder> holder = web_view->GetHolder();
 
     base::DictValue fullscreen_params;
     fullscreen_params.Set("expression",
@@ -593,15 +595,15 @@ Status ChromeImpl::SetWindowBounds(
   // crbug.com/41449121. When setWindowBounds is run before requestFullscreen,
   // we sometimes see a devtools crash. Because the latter call will
   // set fullscreen, do not call setWindowBounds with a fullscreen request
-  // unless running headless. see https://crbug.com/1049336
+  // unless running headless. see https://crbug.com/40672477
   params.Set("bounds", window_bounds.ToDict());
   status = devtools_websocket_client_->SendCommand("Browser.setWindowBounds",
                                                    params);
 
   // From this point the assertion window->state == normal does not have to hold
 
-  // Return success in case of `Browser.setWindowBounds` not implemented like
-  // on Android. crbug.com/1237183
+  // Preserve compatibility with browsers that do not implement
+  // Browser.setWindowBounds. crbug.com/40193012
   if (status.code() == kUnknownCommand)
     return Status(kOk);
 

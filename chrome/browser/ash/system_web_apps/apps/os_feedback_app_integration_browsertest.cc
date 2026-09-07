@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/chrome_pref_names.h"
 #include "ash/shell.h"
 #include "ash/webui/os_feedback_ui/url_constants.h"
 #include "ash/webui/sample_system_web_app_ui/url_constants.h"
@@ -14,17 +15,17 @@
 #include "chrome/browser/ash/system_web_apps/test_support/system_web_app_browsertest_base.h"
 #include "chrome/browser/ash/system_web_apps/test_support/system_web_app_integration_test.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "chromeos/ash/components/browser_delegate/browser_delegate.h"
 #include "components/prefs/pref_service.h"
 #include "components/webapps/browser/install_result_code.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/base_window.h"
 #include "ui/display/screen.h"
 #include "ui/display/test/display_manager_test_api.h"
 #include "ui/events/event_constants.h"
@@ -40,21 +41,23 @@ class OSFeedbackAppIntegrationTest : public ash::SystemWebAppIntegrationTest {
 
  protected:
   // Find the url of the active tab of the browser if any.
-  GURL FindActiveUrl(Browser* browser) {
+  GURL FindActiveUrl(BrowserWindowInterface* browser) {
     if (browser) {
-      return browser->tab_strip_model()->GetActiveWebContents()->GetURL();
+      return browser->GetTabStripModel()->GetActiveWebContents()->GetURL();
     }
     return GURL();
   }
 
-  Browser* FindFeedbackAppBrowser() {
-    return ash::FindSystemWebAppBrowser(browser()->profile(),
-                                        ash::SystemWebAppType::OS_FEEDBACK);
+  BrowserWindowInterface* FindFeedbackAppBrowser() {
+    ash::BrowserDelegate* delegate = ash::FindSystemWebAppBrowser(
+        browser()->GetProfile(), ash::SystemWebAppType::OS_FEEDBACK,
+        ash::BrowserType::kApp);
+    return delegate ? &delegate->GetBrowser() : nullptr;
   }
 
   // Launch the Feedback SWA and wait for launching is completed.
   // Returns the browser of the Feedback SWA if exists.
-  Browser* LaunchAndWait() {
+  BrowserWindowInterface* LaunchAndWait() {
     WaitForTestSystemAppInstall();
 
     content::TestNavigationObserver navigation_observer(feedback_url_);
@@ -65,15 +68,15 @@ class OSFeedbackAppIntegrationTest : public ash::SystemWebAppIntegrationTest {
     return FindFeedbackAppBrowser();
   }
 
-  Browser* ExpectFeedbackAppLaunched(const GURL& old_url) {
+  BrowserWindowInterface* ExpectFeedbackAppLaunched(const GURL& old_url) {
     // browser() tab contents should be unaffected.
-    EXPECT_EQ(1, browser()->tab_strip_model()->count());
+    EXPECT_EQ(1, browser()->GetTabStripModel()->count());
     EXPECT_EQ(old_url, FindActiveUrl(browser()));
 
     // We now have two browsers, one for the chrome window, one for the Feedback
     // app.
-    EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
-    Browser* app_browser = FindFeedbackAppBrowser();
+    EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
+    BrowserWindowInterface* app_browser = FindFeedbackAppBrowser();
     EXPECT_TRUE(app_browser);
     EXPECT_EQ(feedback_url_, FindActiveUrl(app_browser));
 
@@ -86,7 +89,7 @@ class OSFeedbackAppIntegrationTest : public ash::SystemWebAppIntegrationTest {
     EXPECT_EQ(old_url, FindActiveUrl(browser()));
 
     // We now still have one browser.
-    EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
+    EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
 
     EXPECT_EQ(nullptr, FindFeedbackAppBrowser());
   }
@@ -137,8 +140,8 @@ IN_PROC_BROWSER_TEST_P(OSFeedbackAppIntegrationTest, OpenFeedbackByHotKey) {
 IN_PROC_BROWSER_TEST_P(OSFeedbackAppIntegrationTest, UserFeedbackNotAllowed) {
   WaitForTestSystemAppInstall();
 
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kUserFeedbackAllowed,
-                                               false);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
+      ash::chrome_prefs::kUserFeedbackAllowed, false);
   GURL old_url = FindActiveUrl(browser());
 
   // Try to navigate to the feedback app in the browser.
@@ -159,7 +162,7 @@ IN_PROC_BROWSER_TEST_P(OSFeedbackAppIntegrationTest, DefaultWindowBounds) {
       ash::Shell::Get()->display_manager());
   display_manager_test.UpdateDisplay("1000x2000");
 
-  Browser* app_browser = LaunchAndWait();
+  BrowserWindowInterface* app_browser = LaunchAndWait();
   EXPECT_TRUE(app_browser);
 
   gfx::Rect work_area =
@@ -170,7 +173,7 @@ IN_PROC_BROWSER_TEST_P(OSFeedbackAppIntegrationTest, DefaultWindowBounds) {
   int x = (work_area.width() - expected_width) / 2;
   int y = (work_area.height() - expected_height) / 2;
   EXPECT_EQ(gfx::Rect(x, y, expected_width, expected_height),
-            app_browser->window()->GetBounds());
+            app_browser->GetWindow()->GetBounds());
 }
 
 // Test that when the policy UserFeedbackAllowed is true, the Feedback App
@@ -200,8 +203,8 @@ IN_PROC_BROWSER_TEST_P(OSFeedbackAppIntegrationTest, FeedbackAppAttributes) {
 IN_PROC_BROWSER_TEST_P(OSFeedbackAppIntegrationTest,
                        HideInLauncherAndSearchWhenUserFeedbackNotAllowed) {
   WaitForTestSystemAppInstall();
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kUserFeedbackAllowed,
-                                               false);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
+      ash::chrome_prefs::kUserFeedbackAllowed, false);
 
   // Check the correct attributes for Feedback App.
   auto* system_app =

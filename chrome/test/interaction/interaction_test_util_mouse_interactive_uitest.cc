@@ -2,12 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "ui/views/interaction/mouse/interaction_test_util_mouse.h"
+
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/toolbar/app_menu_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
@@ -19,7 +21,6 @@
 #include "ui/base/page_transition_types.h"
 #include "ui/base/test/ui_controls.h"
 #include "ui/views/interaction/element_tracker_views.h"
-#include "ui/views/interaction/interaction_test_util_mouse.h"
 #include "ui/views/view_utils.h"
 
 class InteractionTestUtilMouseUiTest
@@ -33,8 +34,7 @@ class InteractionTestUtilMouseUiTest
 
   void SetUpOnMainThread() override {
     InProcessBrowserTest::SetUpOnMainThread();
-    mouse_ = std::make_unique<Mouse>(
-        BrowserView::GetBrowserViewForBrowser(browser())->GetWidget());
+    mouse_ = std::make_unique<Mouse>(browser()->GetWindow()->GetNativeWindow());
     CHECK(mouse_->SetTouchMode(GetParam()));
   }
 
@@ -82,8 +82,7 @@ IN_PROC_BROWSER_TEST_P(InteractionTestUtilMouseUiTest, MoveAndClick) {
                              // - click the left mouse button
                              if (!mouse_->PerformGestures(
                                      Mouse::GestureParams(
-                                         view->GetWidget()->GetNativeWindow(),
-                                         false),
+                                         view->GetWidget()->GetNativeWindow()),
                                      Mouse::MoveTo(pos),
                                      Mouse::Click(ui_controls::LEFT))) {
                                seq->FailForTesting();
@@ -129,8 +128,7 @@ IN_PROC_BROWSER_TEST_P(InteractionTestUtilMouseUiTest, GestureAborted) {
                              // - click the left mouse button
                              EXPECT_FALSE(mouse_->PerformGestures(
                                  Mouse::GestureParams(
-                                     view->GetWidget()->GetNativeWindow(),
-                                     false),
+                                     view->GetWidget()->GetNativeWindow()),
                                  Mouse::MoveTo(pos),
                                  Mouse::Click(ui_controls::LEFT)));
                            })))
@@ -144,7 +142,7 @@ IN_PROC_BROWSER_TEST_P(InteractionTestUtilMouseUiTest, Drag) {
   UNCALLED_MOCK_CALLBACK(ui::InteractionSequence::CompletedCallback, completed);
 
   const GURL first_url =
-      browser()->tab_strip_model()->GetWebContentsAt(0)->GetURL();
+      browser()->GetTabStripModel()->GetWebContentsAt(0)->GetURL();
   const GURL kSecondUrl("chrome://version");
   ASSERT_TRUE(AddTabAtIndex(-1, kSecondUrl, ui::PAGE_TRANSITION_LINK));
 
@@ -175,8 +173,7 @@ IN_PROC_BROWSER_TEST_P(InteractionTestUtilMouseUiTest, Drag) {
                         // Drag the first tab into the second spot.
                         if (!mouse_->PerformGestures(
                                 Mouse::GestureParams(
-                                    tab_strip->GetWidget()->GetNativeWindow(),
-                                    false),
+                                    tab_strip->GetWidget()->GetNativeWindow()),
                                 Mouse::MoveTo(start),
                                 Mouse::DragAndRelease(end))) {
                           seq->FailForTesting();
@@ -196,11 +193,11 @@ IN_PROC_BROWSER_TEST_P(InteractionTestUtilMouseUiTest, Drag) {
                         tab_strip->StopAnimating();
 
                         EXPECT_EQ(kSecondUrl, browser()
-                                                  ->tab_strip_model()
+                                                  ->GetTabStripModel()
                                                   ->GetWebContentsAt(0)
                                                   ->GetURL());
                         EXPECT_EQ(first_url, browser()
-                                                 ->tab_strip_model()
+                                                 ->GetTabStripModel()
                                                  ->GetWebContentsAt(1)
                                                  ->GetURL());
                         // Clean up any drag gestures that have not yet properly

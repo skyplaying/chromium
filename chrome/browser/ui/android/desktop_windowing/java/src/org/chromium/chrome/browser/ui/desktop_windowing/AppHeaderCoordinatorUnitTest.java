@@ -43,8 +43,6 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
-import org.robolectric.annotation.LooperMode;
-import org.robolectric.annotation.LooperMode.Mode;
 import org.robolectric.util.ReflectionHelpers;
 
 import org.chromium.base.supplier.ObservableSuppliers;
@@ -66,13 +64,13 @@ import org.chromium.ui.edge_to_edge.EdgeToEdgeStateProvider;
 import org.chromium.ui.insets.CaptionBarInsetsRectProvider;
 import org.chromium.ui.insets.InsetObserver;
 import org.chromium.ui.insets.InsetsRectProvider;
+import org.chromium.ui.util.ColorUtils;
 
 import java.util.List;
 
 /** Unit test for {@link AppHeaderCoordinator}. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(sdk = 30)
-@LooperMode(Mode.PAUSED)
 public class AppHeaderCoordinatorUnitTest {
     private static final int WINDOW_WIDTH = 600;
     private static final int WINDOW_HEIGHT = 800;
@@ -234,7 +232,7 @@ public class AppHeaderCoordinatorUnitTest {
     }
 
     @Test
-    @Config(sdk = 36)
+    @Config(sdk = BaseRobolectricTestRunner.MAX_SDK)
     public void enabledOnExternalDisplayForSamsung_PostApi36() {
         ReflectionHelpers.setStaticField(Build.class, "MANUFACTURER", "samsung");
         DisplayUtil.setIsOnDefaultDisplayForTesting(false);
@@ -475,19 +473,58 @@ public class AppHeaderCoordinatorUnitTest {
     }
 
     @Test
-    public void updateForegroundColor() {
+    public void onBackgroundColorChanged() {
         var insetController = mSpyRootView.getWindowInsetsController();
 
-        mAppHeaderCoordinator.updateForegroundColor(Color.BLACK);
+        mAppHeaderCoordinator.onBackgroundColorChanged(Color.BLACK);
         assertEquals(
                 "Background is dark. Expecting APPEARANCE_LIGHT_CAPTION_BARS not set.",
                 0,
                 insetController.getSystemBarsAppearance() & APPEARANCE_LIGHT_CAPTION_BARS);
 
-        mAppHeaderCoordinator.updateForegroundColor(Color.WHITE);
+        mAppHeaderCoordinator.onBackgroundColorChanged(Color.WHITE);
         assertEquals(
                 "Background is light. Expecting APPEARANCE_LIGHT_CAPTION_BARS set.",
                 APPEARANCE_LIGHT_CAPTION_BARS,
+                insetController.getSystemBarsAppearance() & APPEARANCE_LIGHT_CAPTION_BARS);
+    }
+
+    @Test
+    public void onScrimColorChanged() {
+        var insetController = mSpyRootView.getWindowInsetsController();
+
+        mAppHeaderCoordinator.onBackgroundColorChanged(Color.WHITE);
+        assertEquals(
+                "Background is light. Expecting APPEARANCE_LIGHT_CAPTION_BARS set.",
+                APPEARANCE_LIGHT_CAPTION_BARS,
+                insetController.getSystemBarsAppearance() & APPEARANCE_LIGHT_CAPTION_BARS);
+
+        int darkScrimColor = ColorUtils.setAlphaComponentWithFloat(Color.BLACK, 0.8f);
+        mAppHeaderCoordinator.onScrimColorChanged(darkScrimColor);
+        assertEquals(
+                "Scrimmed background is dark. Expecting APPEARANCE_LIGHT_CAPTION_BARS not set.",
+                0,
+                insetController.getSystemBarsAppearance() & APPEARANCE_LIGHT_CAPTION_BARS);
+
+        mAppHeaderCoordinator.onScrimColorChanged(Color.TRANSPARENT);
+        assertEquals(
+                "Background is light again. Expecting APPEARANCE_LIGHT_CAPTION_BARS set.",
+                APPEARANCE_LIGHT_CAPTION_BARS,
+                insetController.getSystemBarsAppearance() & APPEARANCE_LIGHT_CAPTION_BARS);
+    }
+
+    @Test
+    public void onBackgroundColorChanged_withActiveScrim() {
+        var insetController = mSpyRootView.getWindowInsetsController();
+
+        int darkScrimColor = ColorUtils.setAlphaComponentWithFloat(Color.BLACK, 0.8f);
+        mAppHeaderCoordinator.onScrimColorChanged(darkScrimColor);
+
+        mAppHeaderCoordinator.onBackgroundColorChanged(Color.WHITE);
+        assertEquals(
+                "Composite background is dark due to scrim. Expecting APPEARANCE_LIGHT_CAPTION_BARS"
+                        + " not set.",
+                0,
                 insetController.getSystemBarsAppearance() & APPEARANCE_LIGHT_CAPTION_BARS);
     }
 

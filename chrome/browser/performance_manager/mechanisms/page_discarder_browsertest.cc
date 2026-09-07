@@ -7,11 +7,10 @@
 #include <utility>
 #include <vector>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/performance_manager/public/user_tuning/user_performance_tuning_manager.h"
 #include "chrome/browser/resource_coordinator/lifecycle_unit_state.mojom.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -64,7 +63,7 @@ IN_PROC_BROWSER_TEST_P(PageDiscarderBrowserTest, DiscardPageNodes) {
   // this page.
   GraphOperations::VisitFrameTreePreOrder(
       page_node.get(), [&total](const FrameNode* frame_node) {
-        constexpr base::ByteSize kUsage = base::KiBU(1);
+        constexpr base::ByteSize kUsage = base::KiB(1);
         total += kUsage;
         FrameNodeImpl::FromNode(frame_node)
             ->SetPrivateFootprintEstimate(kUsage);

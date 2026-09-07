@@ -41,6 +41,7 @@
 
 #if BUILDFLAG(IS_WIN)
 #include <d3d11.h>
+#include <d3d12.h>
 #include <wrl/client.h>
 #endif
 
@@ -50,11 +51,6 @@ class GLDisplay;
 class GLShareGroup;
 class GLSurface;
 }  // namespace gl
-
-namespace viz {
-class MetalContextProvider;
-class VulkanContextProvider;
-}  // namespace viz
 
 namespace skgpu::graphite {
 class PrecompileContext;
@@ -68,6 +64,8 @@ class GpuDriverBugWorkarounds;
 class GpuProcessShmCount;
 class ServiceTransferCache;
 class GraphiteSharedContext;
+class VulkanContextProvider;
+struct GpuFeatureInfo;
 
 namespace gles2 {
 class FeatureInfo;
@@ -109,8 +107,7 @@ class GPU_GLES2_EXPORT SharedContextState
       bool use_virtualized_gl_contexts,
       ContextLostCallback context_lost_callback,
       GrContextType gr_context_type,
-      viz::VulkanContextProvider* vulkan_context_provider = nullptr,
-      viz::MetalContextProvider* metal_context_provider = nullptr,
+      VulkanContextProvider* vulkan_context_provider = nullptr,
       DawnContextProvider* dawn_context_provider = nullptr,
       scoped_refptr<gpu::MemoryTracker::Observer> peak_memory_monitor = nullptr,
       bool direct_rendering_display_compositor_enabled = false,
@@ -135,21 +132,45 @@ class GPU_GLES2_EXPORT SharedContextState
     return gr_context_type_ == GrContextType::kVulkan;
   }
   bool IsGraphiteDawn() const;
-  bool IsGraphiteMetal() const;
   bool IsGraphiteDawnMetal() const;
   bool IsGraphiteDawnD3D() const;
   bool IsGraphiteDawnD3D11() const;
+  bool IsGraphiteDawnD3D12() const;
   bool IsGraphiteDawnVulkan() const;
   bool IsGraphiteDawnVulkanSwiftShader() const;
 
   bool InitializeGL(const GpuPreferences& gpu_preferences,
-                    scoped_refptr<gles2::FeatureInfo> feature_info);
+                    const GpuDriverBugWorkarounds& gpu_driver_bug_workarounds,
+                    const GpuFeatureInfo& gpu_feature_info);
+
   bool IsGLInitialized() const { return !!feature_info_; }
 
-  void FlushAndSubmit(bool sync_to_cpu);
-  void FlushWriteAccess(SkiaImageRepresentation::ScopedWriteAccess* access);
-  void SubmitIfNecessary(std::vector<GrBackendSemaphore> signal_semaphores,
+  bool FlushAndSubmit(bool sync_to_cpu);
+  bool FlushGraphiteRecorder();
+  bool FlushWriteAccess(SkiaImageRepresentation::ScopedWriteAccess* access);
+  bool SubmitIfNecessary(std::vector<GrBackendSemaphore> signal_semaphores,
                          bool need_graphite_submit);
+
+  // Sets the active SharedContextState for the calling thread using
+  // thread-local storage. This is typically set by the thread owner (such as
+  // GpuChannelManager on the GPU main thread, CompositorGpuThread on the
+  // compositor thread, or OutputSurfaceProviderWebView on WebView render
+  // thread) to allow downstream multi-threaded components (such as
+  // CompoundImageBacking fallback copies) to look up the active context on the
+  // current thread.
+  // Note that this and other methods below
+  // GetForCurrentThread()/ClearForCurrentThread() are currently not applicable
+  // to webview(hence OutputSurfaceProviderWebView) and should not be used for
+  // webview.
+  static void SetForCurrentThread(SharedContextState* state);
+
+  // Returns the active SharedContextState for the current thread, or nullptr
+  // if none is registered.
+  static SharedContextState* GetForCurrentThread();
+
+  // Clears the active SharedContextState for the current thread. Must be
+  // called before the registered SharedContextState is destroyed.
+  static void ClearForCurrentThread();
 
   // Returns true if context state is using GL, either for Skia to run on
   // or if there is no skia context and context state exists for WebGL fallback
@@ -160,7 +181,13 @@ class GPU_GLES2_EXPORT SharedContextState
   void MarkContextLost(error::ContextLostReason reason = error::kUnknown);
   bool IsCurrent(gl::GLSurface* surface, bool needs_gl = false);
 
-  void PurgeMemory(base::MemoryPressureLevel memory_pressure_level);
+  // Immediately evicts unlocked resources (scratch resources under moderate
+  // pressure, or all resources under critical pressure) down to `memory_limit`.
+  void PurgeMemory(int memory_limit);
+
+  // Updates internal memory target budgets non-destructively without forcing
+  // immediate resource purges.
+  void OnUpdateMemoryLimit(int memory_limit);
 
   void UpdateSkiaOwnedMemorySize();
   uint64_t GetMemoryUsage();
@@ -180,11 +207,8 @@ class GPU_GLES2_EXPORT SharedContextState
   gl::GLContext* real_context() const { return real_context_.get(); }
   gl::GLSurface* surface() const;
   gl::GLDisplay* display();  // non const since it calls GLSurface::GetGLDisplay
-  viz::VulkanContextProvider* vk_context_provider() const {
+  VulkanContextProvider* vk_context_provider() const {
     return vk_context_provider_;
-  }
-  viz::MetalContextProvider* metal_context_provider() const {
-    return metal_context_provider_;
   }
   DawnContextProvider* dawn_context_provider() const {
     return dawn_context_provider_;
@@ -202,6 +226,14 @@ class GPU_GLES2_EXPORT SharedContextState
   skgpu::graphite::Recorder* viz_compositor_graphite_recorder() const {
     return viz_compositor_graphite_recorder_.get();
   }
+  // Returns the Graphite cache controller for the Viz compositor thread.
+  // This is a weak pointer that is invalidated and dereferenced on the Viz
+  // compositor thread. Returned as a pointer to the WeakPtr so that the caller
+  // can create a new cache controller if needed.
+  base::WeakPtr<raster::GraphiteCacheController>*
+  viz_compositor_graphite_cache_controller_weak_ptr() {
+    return &viz_compositor_graphite_cache_controller_;
+  }
   GrContextType gr_context_type() const { return gr_context_type_; }
   // Handles Skia-reported shader compilation errors.
   void compileError(const char* shader,
@@ -212,6 +244,9 @@ class GPU_GLES2_EXPORT SharedContextState
   bool context_lost() const { return !!context_lost_reason_; }
   std::optional<error::ContextLostReason> context_lost_reason() {
     return context_lost_reason_;
+  }
+  base::WeakPtr<SharedContextState> GetWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
   }
   bool need_context_state_reset() const { return need_context_state_reset_; }
   void set_need_context_state_reset(bool reset) {
@@ -293,19 +328,24 @@ class GPU_GLES2_EXPORT SharedContextState
   int32_t GetMaxTextureSize();
 
 #if BUILDFLAG(IS_WIN)
-  // Get the D3D11 device used for the compositing.
+  // Get the D3D device and command queue used for compositing.
   Microsoft::WRL::ComPtr<ID3D11Device> GetD3D11Device() const;
+  Microsoft::WRL::ComPtr<ID3D12CommandQueue> GetD3D12CommandQueue() const;
 #endif
 
  private:
   friend class base::RefCounted<SharedContextState>;
   friend class raster::RasterDecoderTestBase;
+  FRIEND_TEST_ALL_PREFIXES(SharedContextStateTest, InitFailsIfLostContext);
   FRIEND_TEST_ALL_PREFIXES(SharedContextStateTest,
                            GLOptionsProviderSetsCustomOptions);
   FRIEND_TEST_ALL_PREFIXES(SharedContextStateTest,
                            VulkanOptionsProviderSetsCustomOptions);
 
   ~SharedContextState() override;
+
+  bool InitializeGLWithFeatureInfo(
+      scoped_refptr<gles2::FeatureInfo> feature_info);
 
   bool InitializeGanesh(
       const GpuPreferences& gpu_preferences,
@@ -319,9 +359,10 @@ class GPU_GLES2_EXPORT SharedContextState
                           const GpuDriverBugWorkarounds& workarounds,
                           GpuProcessShmCount* use_shader_cache_shm_count);
 
-  void FlushGraphiteRecorder();
-
   std::optional<error::ContextLostReason> GetResetStatus(bool needs_gl);
+
+  void PurgeGaneshMemory(int memory_limit);
+  void PurgeGraphiteMemory(int memory_limit);
 
   // gpu::GLContextVirtualDelegate implementation.
   bool initialized() const override;
@@ -351,8 +392,7 @@ class GPU_GLES2_EXPORT SharedContextState
   scoped_refptr<MemoryTracker> memory_tracker_shared_context_state_;
   scoped_refptr<MemoryTracker> memory_tracker_;
   gpu::MemoryTypeTracker memory_type_tracker_;
-  const raw_ptr<viz::VulkanContextProvider> vk_context_provider_ = nullptr;
-  const raw_ptr<viz::MetalContextProvider> metal_context_provider_ = nullptr;
+  const raw_ptr<VulkanContextProvider> vk_context_provider_ = nullptr;
   const raw_ptr<DawnContextProvider> dawn_context_provider_ = nullptr;
   raw_ptr<const GrContextOptionsProvider> gr_context_options_provider_ =
       nullptr;
@@ -415,7 +455,14 @@ class GPU_GLES2_EXPORT SharedContextState
   scoped_refptr<raster::GraphiteCacheController>
       gpu_main_graphite_cache_controller_;
 
+  // The graphite cache controller for |viz_compositor_graphite_recorder_|.
+  // Held as a weak pointer that is invalidated and dereferenced on the Viz
+  // compositor thread.
+  base::WeakPtr<raster::GraphiteCacheController>
+      viz_compositor_graphite_cache_controller_;
+
   std::optional<int> max_texture_size_;
+  size_t max_resource_cache_bytes_ = 0;
 
   base::WeakPtrFactory<SharedContextState> weak_ptr_factory_{this};
 };

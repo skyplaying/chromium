@@ -7,8 +7,10 @@
 #include "base/rand_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/mock_callback.h"
+#include "base/test/scoped_feature_list.h"
 #include "components/sessions/core/serialized_navigation_entry_test_helper.h"
 #include "components/sync/protocol/sync_enums.pb.h"
+#include "components/sync_sessions/features.h"
 #include "components/sync_sessions/mock_sync_sessions_client.h"
 #include "components/sync_sessions/test_matchers.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -25,6 +27,7 @@ using testing::Ne;
 using testing::NotNull;
 using testing::Pointee;
 using testing::Return;
+using testing::UnorderedElementsAre;
 
 namespace sync_sessions {
 
@@ -35,8 +38,8 @@ const char kSessionName[] = "sessionname";
 // Monday, September 2, 2024 13:31:31 GMT+2.
 const base::Time kSessionStartTime =
     base::Time::FromSecondsSinceUnixEpoch(1725283891);
-const sync_pb::SyncEnums::DeviceType kDeviceType =
-    sync_pb::SyncEnums_DeviceType_TYPE_PHONE;
+const syncer::DeviceInfo::DeviceType kDeviceType =
+    syncer::DeviceInfo::DeviceType::kPhone;
 const syncer::DeviceInfo::FormFactor kFormFactor =
     syncer::DeviceInfo::FormFactor::kPhone;
 const char kTag[] = "tag";
@@ -149,6 +152,7 @@ class SyncedSessionTrackerTest : public testing::Test {
       is_tab_node_unsynced_cb_;
   SyncedSessionTracker tracker_;
 };
+
 
 TEST_F(SyncedSessionTrackerTest, GetSession) {
   SyncedSession* session1 = tracker_.GetSession(kTag);
@@ -319,7 +323,7 @@ TEST_F(SyncedSessionTrackerTest, Complex) {
   ASSERT_EQ(2U, tracker_.num_synced_sessions());
   SyncedSession* session3 = tracker_.GetSession(kTag3);
   session3->SetDeviceTypeAndFormFactor(
-      sync_pb::SyncEnums_DeviceType_TYPE_LINUX,
+      syncer::DeviceInfo::DeviceType::kLinux,
       syncer::DeviceInfo::FormFactor::kDesktop);
   ASSERT_EQ(3U, tracker_.num_synced_sessions());
 
@@ -836,6 +840,34 @@ TEST_F(SyncedSessionTrackerTest, UpdateTrackerWithHeader) {
   EXPECT_THAT(tracker_.LookupSessionTab(kTag, kTab2), NotNull());
 }
 
+TEST_F(SyncedSessionTrackerTest, UpdateTrackerWithHeader_PreferredDeviceName) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
+      kSyncSessionsUsePreferredDisplayName);
+
+  constexpr char kOriginalClientName[] = "XPS 13";
+  constexpr char kDeviceInfoClientName[] = "Dell Computer";
+
+  // By default (no device info name available), it should use the raw client
+  // name.
+  sync_pb::SessionSpecifics header;
+  header.set_session_tag(kTag);
+  header.mutable_header()->set_client_name(kOriginalClientName);
+  UpdateTrackerWithSpecifics(header, base::Time::Now(), &tracker_);
+
+  EXPECT_THAT(tracker_.LookupSession(kTag),
+              MatchesSyncedSession(kTag, kOriginalClientName, _));
+
+  // Now set up the mock to return a preferred name.
+  ON_CALL(sessions_client_, GetSessionDisplayNameFromDeviceInfo(kTag))
+      .WillByDefault(Return(kDeviceInfoClientName));
+
+  // Trigger the update again. It should now use the preferred name.
+  UpdateTrackerWithSpecifics(header, base::Time::Now(), &tracker_);
+  EXPECT_THAT(tracker_.LookupSession(kTag),
+              MatchesSyncedSession(kTag, kDeviceInfoClientName, _));
+}
+
 TEST_F(SyncedSessionTrackerTest, UpdateTrackerWithIdenticalHeader) {
   sync_pb::SessionSpecifics header;
   header.set_session_tag(kTag);
@@ -991,7 +1023,7 @@ TEST_F(SyncedSessionTrackerTest, UpdateTrackerWithTwoTabsSameId) {
   EXPECT_THAT(tracker_.LookupSession(kTag),
               MatchesSyncedSession(kTag, /*window_id_to_tabs*/ {}));
   EXPECT_THAT(tracker_.LookupTabNodeIds(kTag),
-              ElementsAre(kTabNode1, kTabNode2));
+              UnorderedElementsAre(kTabNode1, kTabNode2));
 
   const sessions::SessionTab* tracked_tab =
       tracker_.LookupSessionTab(kTag, kTab1);

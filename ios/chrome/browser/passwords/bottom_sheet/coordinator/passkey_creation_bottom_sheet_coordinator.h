@@ -7,9 +7,8 @@
 
 #import <string>
 
+#import "components/webauthn/ios/ios_passkey_client.h"
 #import "ios/chrome/browser/shared/coordinator/chrome_coordinator/chrome_coordinator.h"
-
-@protocol BrowserCoordinatorCommands;
 
 // Coordinator for the passkey creation bottom sheet.
 @interface PasskeyCreationBottomSheetCoordinator : ChromeCoordinator
@@ -19,11 +18,13 @@
 // request which triggered this bottom sheet.
 - (instancetype)initWithBaseViewController:(UIViewController*)viewController
                                    browser:(Browser*)browser
-                                 requestID:(std::string)requestID;
+                               requestInfo:
+                                   (webauthn::IOSPasskeyClient::RequestInfo)
+                                       requestInfo;
 
-// Handler for Browser Coordinator Commands.
-@property(nonatomic, weak) id<BrowserCoordinatorCommands>
-    browserCoordinatorCommandsHandler;
+// Returns whether this coordinator is currently fulfilling the given request.
+- (BOOL)hasPendingRequest:
+    (const webauthn::IOSPasskeyClient::RequestInfo&)requestInfo;
 
 @end
 

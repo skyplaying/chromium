@@ -7,10 +7,14 @@ package org.chromium.chrome.browser.autofill.iban;
 import android.content.Context;
 
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.chrome.browser.autofill.AutofillSheetUiController;
+import org.chromium.chrome.browser.autofill.AutofillSheetUiControllerFactory;
+import org.chromium.chrome.browser.autofill.anchored_dialog.AnchoredDialogCoordinator;
 import org.chromium.chrome.browser.customtabs.CustomTabActivity;
 import org.chromium.chrome.browser.layouts.LayoutStateProvider;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.components.autofill.payments.AutofillSaveIbanUiInfo;
+import org.chromium.components.autofill.payments.LegalMessage;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.StateChangeReason;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -52,7 +56,9 @@ public class AutofillSaveIbanBottomSheetCoordinator {
      * @param uiInfo An object providing UI resources for the bottom sheet model.
      * @param context The context for this component.
      * @param bottomSheetController The bottom sheet controller where this bottom sheet will be
-     *     shown.
+     *     shown
+     * @param anchoredDialogCoordinator The anchored dialog coordinator where this bottom sheet will
+     *     be shown.
      * @param layoutStateProvider The LayoutStateProvider used to detect when the bottom sheet needs
      *     to be hidden after a change of layout (e.g. to the tab switcher).
      * @param tabModel The TabModel used to detect when the bottom sheet needs to be hidden after a
@@ -63,6 +69,7 @@ public class AutofillSaveIbanBottomSheetCoordinator {
             AutofillSaveIbanUiInfo uiInfo,
             Context context,
             BottomSheetController bottomSheetController,
+            AnchoredDialogCoordinator anchoredDialogCoordinator,
             LayoutStateProvider layoutStateProvider,
             TabModel tabModel) {
         mContext = context;
@@ -93,18 +100,22 @@ public class AutofillSaveIbanBottomSheetCoordinator {
                                 v -> this.onCancelButtonClick())
                         .with(
                                 AutofillSaveIbanBottomSheetProperties.LEGAL_MESSAGE,
-                                new AutofillSaveIbanBottomSheetProperties.LegalMessage(
+                                new LegalMessage(
                                         uiInfo.getLegalMessageLines(), this::openLegalMessageLink))
                         .build();
         PropertyModelChangeProcessor.create(
                 mModel, mView, AutofillSaveIbanBottomSheetViewBinder::bind);
+
+        AutofillSheetUiController uiController =
+                AutofillSheetUiControllerFactory.createUiController(
+                        mContext, bottomSheetController, anchoredDialogCoordinator);
 
         mMediator =
                 new AutofillSaveIbanBottomSheetMediator(
                         delegate,
                         new AutofillSaveIbanBottomSheetContent(
                                 mView.mContentView, mView.mScrollView),
-                        bottomSheetController,
+                        uiController,
                         layoutStateProvider,
                         tabModel,
                         uiInfo.isServerSave());

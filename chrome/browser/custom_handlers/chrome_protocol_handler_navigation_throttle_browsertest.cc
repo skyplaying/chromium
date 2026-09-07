@@ -5,6 +5,7 @@
 #include "chrome/browser/custom_handlers/chrome_protocol_handler_registry_delegate.h"
 #include "chrome/browser/custom_handlers/protocol_handler_registry_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/custom_handlers/protocol_handler.h"
@@ -62,7 +63,7 @@ class ChromeProtocolHandlerNavigationThrottleBrowserBaseTest
 
   custom_handlers::ProtocolHandlerRegistry* registry() {
     return ProtocolHandlerRegistryFactory::GetForBrowserContext(
-        browser()->profile());
+        browser()->GetProfile());
   }
   content::WebContents* web_contents() {
     return browser()->tab_strip_model()->GetActiveWebContents();
@@ -81,7 +82,7 @@ class ChromeProtocolHandlerNavigationThrottleBrowserBaseTest
     custom_handlers::ProtocolHandler ph1 =
         CreateUnconfirmedProtocolHandler(scheme, handler_url);
     registry()->OnAcceptRegisterProtocolHandler(ph1);
-    ASSERT_TRUE(registry()->IsHandledProtocol(scheme));
+    ASSERT_TRUE(registry()->HasDefaultHandler(scheme));
     ASSERT_FALSE(registry()->IsProtocolHandlerConfirmed(scheme));
   }
 

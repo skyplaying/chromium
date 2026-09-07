@@ -7,12 +7,14 @@ package org.chromium.chrome.browser.media.document_picture_in_picture_header;
 import android.content.Context;
 import android.content.res.ColorStateList;
 import android.graphics.Rect;
+import android.text.TextUtils;
 import android.view.View;
 
 import androidx.annotation.ColorInt;
 import androidx.annotation.VisibleForTesting;
 import androidx.core.graphics.Insets;
 
+import org.chromium.base.DeviceInfo;
 import org.chromium.base.Log;
 import org.chromium.build.annotations.MonotonicNonNull;
 import org.chromium.build.annotations.NullMarked;
@@ -26,6 +28,13 @@ import org.chromium.components.embedder_support.util.UrlConstants;
 import org.chromium.components.omnibox.SecurityStatusIcon;
 import org.chromium.components.security_state.ConnectionMaliciousContentStatus;
 import org.chromium.components.security_state.ConnectionSecurityLevel;
+import org.chromium.components.security_state.SecurityStateModel;
+import org.chromium.components.url_formatter.SchemeDisplay;
+import org.chromium.components.url_formatter.UrlFormatter;
+import org.chromium.content_public.browser.WebContents;
+import org.chromium.content_public.browser.WebContentsObserver;
+import org.chromium.ui.display.DisplayAndroid;
+import org.chromium.ui.display.DisplayUtil;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.url.GURL;
 
@@ -48,13 +57,17 @@ public class DocumentPictureInPictureHeaderMediator
     private @MonotonicNonNull AppHeaderState mCurrentHeaderState;
     private final DesktopWindowStateManager mDesktopWindowStateManager;
     private final ThemeColorProvider mThemeColorProvider;
-    private final Context mContext;
     private final DocumentPictureInPictureHeaderDelegate mDelegate;
     private final Rect mBackToTabRect = new Rect();
     private final Rect mSecurityIconRect = new Rect();
     private final List<Rect> mNonDraggableAreas = new ArrayList<>();
     private final int mMinHeaderHeight;
     private final int mComponentSize;
+    private final int mMinUnoccludedWidthPx;
+    private final WebContents mOpenerWebContents;
+    private final WebContents mWebContents;
+    private final WebContentsObserver mOpenerWebContentsObserver;
+    private final WebContentsObserver mWebContentsObserver;
 
     public DocumentPictureInPictureHeaderMediator(
             PropertyModel model,
@@ -63,50 +76,60 @@ public class DocumentPictureInPictureHeaderMediator
             Context context,
             DocumentPictureInPictureHeaderDelegate delegate,
             boolean isBackToTabShown,
-            @ConnectionSecurityLevel int securityLevel,
-            @ConnectionMaliciousContentStatus int maliciousContentStatus,
-            GURL url) {
+            WebContents openerWebContents,
+            WebContents webContents) {
         mModel = model;
         mThemeColorProvider = themeColorProvider;
-        mContext = context;
         mDelegate = delegate;
-        mMinHeaderHeight =
-                mContext.getResources()
-                        .getDimensionPixelSize(
-                                R.dimen.document_picture_in_picture_header_min_height);
-        mComponentSize =
-                mContext.getResources()
-                        .getDimensionPixelSize(
-                                R.dimen.document_picture_in_picture_header_component_size);
+        mOpenerWebContents = openerWebContents;
+        mWebContents = webContents;
+
+        boolean isDesktop = DeviceInfo.isDesktop();
+        int minHeaderHeightRes =
+                isDesktop
+                        ? R.dimen.document_picture_in_picture_header_min_height_desktop
+                        : R.dimen.document_picture_in_picture_header_min_height;
+        int componentSizeRes =
+                isDesktop
+                        ? R.dimen.document_picture_in_picture_header_component_size_desktop
+                        : R.dimen.document_picture_in_picture_header_component_size;
+        int minUnoccludedWidthPxRes =
+                isDesktop
+                        ? R.dimen.document_picture_in_picture_header_min_unoccluded_width_desktop
+                        : R.dimen.document_picture_in_picture_header_min_unoccluded_width;
+
+        mMinHeaderHeight = context.getResources().getDimensionPixelSize(minHeaderHeightRes);
+        mComponentSize = context.getResources().getDimensionPixelSize(componentSizeRes);
+        mMinUnoccludedWidthPx =
+                context.getResources().getDimensionPixelSize(minUnoccludedWidthPxRes);
+
+        mModel.set(DocumentPictureInPictureHeaderProperties.COMPONENT_SIZE, mComponentSize);
         mModel.set(DocumentPictureInPictureHeaderProperties.IS_BACK_TO_TAB_SHOWN, isBackToTabShown);
 
         mModel.set(
                 DocumentPictureInPictureHeaderProperties.ON_BACK_TO_TAB_CLICK_LISTENER,
-                v -> onBackToTab());
+                _ -> onBackToTab());
         mModel.set(
                 DocumentPictureInPictureHeaderProperties.ON_SECURITY_ICON_CLICK_LISTENER,
-                v -> onSecurityIconClicked());
+                _ -> onSecurityIconClicked());
         mModel.set(
                 DocumentPictureInPictureHeaderProperties.ON_LAYOUT_CHANGE_LISTENER,
-                (v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) ->
-                        updateNonDraggableAreas(v));
+                (v, _, _, _, _, _, _, _, _) -> updateNonDraggableAreas(v));
 
         mDesktopWindowStateManager = desktopWindowStateManager;
         mDesktopWindowStateManager.addObserver(this);
         onAppHeaderStateChanged(mDesktopWindowStateManager.getAppHeaderState());
 
+        updateSecurityIcon();
+        GURL visibleUrl = mOpenerWebContents.getVisibleUrl();
+        mModel.set(DocumentPictureInPictureHeaderProperties.URL_STRING, getUrlString(visibleUrl));
+        // To prevent spoofing, local URLs are tail-elided (keeping the scheme prefix
+        // visible) and standard web URLs are head-elided, matching desktop elision behavior.
         mModel.set(
-                DocumentPictureInPictureHeaderProperties.SECURITY_ICON,
-                SecurityStatusIcon.getSecurityIconResource(
-                        securityLevel,
-                        () -> maliciousContentStatus,
-                        /* isSmallDevice= */ false,
-                        /* skipIconForNeutralState= */ false,
-                        /* useLockIconForSecureState= */ false));
-        mModel.set(
-                DocumentPictureInPictureHeaderProperties.SECURITY_ICON_CONTENT_DESCRIPTION_RES_ID,
-                SecurityStatusIcon.getSecurityIconContentDescriptionResourceId(securityLevel));
-        mModel.set(DocumentPictureInPictureHeaderProperties.URL_STRING, getUrlString(url));
+                DocumentPictureInPictureHeaderProperties.URL_ELLIPSIZE_BEHAVIOR,
+                isLocalFileOrContentScheme(visibleUrl.getScheme())
+                        ? TextUtils.TruncateAt.END
+                        : TextUtils.TruncateAt.START);
 
         mThemeColorProvider.addThemeColorObserver(this);
         mThemeColorProvider.addTintObserver(this);
@@ -115,6 +138,21 @@ public class DocumentPictureInPictureHeaderMediator
                 mThemeColorProvider.getTint(),
                 mThemeColorProvider.getActivityFocusTint(),
                 mThemeColorProvider.getBrandedColorScheme());
+
+        mWebContentsObserver =
+                new WebContentsObserver(mWebContents) {
+                    @Override
+                    public void didChangeVisibleSecurityState() {
+                        updateSecurityIcon();
+                    }
+                };
+        mOpenerWebContentsObserver =
+                new WebContentsObserver(mOpenerWebContents) {
+                    @Override
+                    public void didChangeVisibleSecurityState() {
+                        updateSecurityIcon();
+                    }
+                };
     }
 
     // TODO(crbug.com/477855428): Resize pip window if width doesn't fit header content.
@@ -124,6 +162,19 @@ public class DocumentPictureInPictureHeaderMediator
         if (newState.equals(mCurrentHeaderState)) return;
 
         mCurrentHeaderState = newState;
+
+        // Window resize is done programmatically instead of setting minWidth in the manifest file
+        // because the different OEMs can have different window insets, making the available
+        // unoccluded width different.
+        if (mDelegate.isWindowPinned()) {
+            int unoccludedRectWidthPx = mCurrentHeaderState.getUnoccludedRectWidth();
+            if (unoccludedRectWidthPx < mMinUnoccludedWidthPx) {
+                DisplayAndroid display = mDelegate.getDisplayAndroid();
+                int widthDiffDp =
+                        DisplayUtil.pxToDp(display, mMinUnoccludedWidthPx - unoccludedRectWidthPx);
+                mDelegate.resizeWindow(widthDiffDp, 0);
+            }
+        }
 
         // TODO(crbug.com/475181474): The header should always be shown, we need to handle the case
         // where the caption bars are not available to draw into.
@@ -135,7 +186,7 @@ public class DocumentPictureInPictureHeaderMediator
 
     @Override
     public void onThemeColorChanged(@ColorInt int color, boolean shouldAnimate) {
-        mDesktopWindowStateManager.updateForegroundColor(color);
+        mDesktopWindowStateManager.onBackgroundColorChanged(color);
         mModel.set(DocumentPictureInPictureHeaderProperties.BACKGROUND_COLOR, color);
     }
 
@@ -149,7 +200,7 @@ public class DocumentPictureInPictureHeaderMediator
                 DocumentPictureInPictureHeaderProperties.BRANDED_COLOR_SCHEME, brandedColorScheme);
     }
 
-    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+    @VisibleForTesting
     public void onBackToTab() {
         mDelegate.onBackToTab();
     }
@@ -232,6 +283,11 @@ public class DocumentPictureInPictureHeaderMediator
                 DocumentPictureInPictureHeaderProperties.NON_DRAGGABLE_AREAS, mNonDraggableAreas);
     }
 
+    private boolean isLocalFileOrContentScheme(@Nullable String scheme) {
+        return UrlConstants.FILE_SCHEME.equals(scheme)
+                || UrlConstants.CONTENT_SCHEME.equals(scheme);
+    }
+
     private String getUrlString(GURL url) {
         if (url.getScheme().equals(UrlConstants.FILE_SCHEME)) {
             // File scheme URLs do not have a host, so we use the path instead.
@@ -244,12 +300,35 @@ public class DocumentPictureInPictureHeaderMediator
             return url.getSpec();
         }
 
-        return url.getHost();
+        return UrlFormatter.formatUrlForSecurityDisplay(url, SchemeDisplay.OMIT_HTTP_AND_HTTPS);
+    }
+
+    private void updateSecurityIcon() {
+        @ConnectionSecurityLevel
+        int securityLevel = SecurityStateModel.getSecurityLevelForWebContents(mOpenerWebContents);
+        @ConnectionMaliciousContentStatus
+        int maliciousContentStatus =
+                SecurityStateModel.getMaliciousContentStatusForWebContents(mWebContents);
+
+        mModel.set(
+                DocumentPictureInPictureHeaderProperties.SECURITY_ICON,
+                SecurityStatusIcon.getSecurityIconResource(
+                        securityLevel,
+                        () -> maliciousContentStatus,
+                        /* isSmallDevice= */ false,
+                        /* skipIconForNeutralState= */ false,
+                        /* useLockIconForSecureState= */ false,
+                        /* isShowingHttpsFirstWarning= */ false));
+        mModel.set(
+                DocumentPictureInPictureHeaderProperties.SECURITY_ICON_CONTENT_DESCRIPTION_RES_ID,
+                SecurityStatusIcon.getSecurityIconContentDescriptionResourceId(securityLevel));
     }
 
     public void destroy() {
         mDesktopWindowStateManager.removeObserver(this);
         mThemeColorProvider.removeThemeColorObserver(this);
         mThemeColorProvider.removeTintObserver(this);
+        mOpenerWebContentsObserver.observe(null);
+        mWebContentsObserver.observe(null);
     }
 }

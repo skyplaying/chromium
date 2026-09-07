@@ -8,13 +8,14 @@
 
 #include "base/check.h"
 #include "base/functional/bind.h"
+#include "base/no_destructor.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/extensions/controlled_home_dialog_controller.h"
 #include "chrome/browser/ui/extensions/extension_settings_overridden_dialog.h"
-#include "chrome/browser/ui/extensions/extensions_dialogs.h"
 #include "chrome/browser/ui/extensions/extensions_overrides/simple_overrides.h"
+#include "chrome/browser/ui/extensions/settings_overridden_dialog.h"
 #include "chrome/browser/ui/extensions/settings_overridden_params_providers.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "components/search_engines/template_url.h"
@@ -27,7 +28,31 @@
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_features.h"
 
+namespace {
+
+base::WeakPtr<DefaultSearchExtensionControlledController>&
+GetDialogCurrentlyShowingRef() {
+  static base::NoDestructor<
+      base::WeakPtr<DefaultSearchExtensionControlledController>>
+      g_currently_showing;
+  return *g_currently_showing;
+}
+
+}  // namespace
+
 DEFINE_USER_DATA(DefaultSearchExtensionControlledController);
+
+// static
+base::WeakPtr<DefaultSearchExtensionControlledController>
+DefaultSearchExtensionControlledController::GetDialogCurrentlyShowing() {
+  return GetDialogCurrentlyShowingRef();
+}
+
+// static
+void DefaultSearchExtensionControlledController::SetDialogCurrentlyShowing(
+    base::WeakPtr<DefaultSearchExtensionControlledController> controller) {
+  GetDialogCurrentlyShowingRef() = std::move(controller);
+}
 
 DefaultSearchExtensionControlledController::
     DefaultSearchExtensionControlledController(
@@ -43,7 +68,11 @@ DefaultSearchExtensionControlledController::
 }
 
 DefaultSearchExtensionControlledController::
-    ~DefaultSearchExtensionControlledController() = default;
+    ~DefaultSearchExtensionControlledController() {
+  if (GetDialogCurrentlyShowing().get() == this) {
+    SetDialogCurrentlyShowing(nullptr);
+  }
+}
 
 // static
 DefaultSearchExtensionControlledController*
@@ -54,6 +83,10 @@ DefaultSearchExtensionControlledController::From(
 
 bool DefaultSearchExtensionControlledController::
     ShouldRequestConfirmationForExtensionDse(const GURL& url) const {
+  if (GetDialogCurrentlyShowing()) {
+    return false;
+  }
+
   // 1) DSE must be extension-controlled.
   TemplateURLService* template_url_service =
       TemplateURLServiceFactory::GetForProfile(base::to_address(profile_));
@@ -102,24 +135,33 @@ bool DefaultSearchExtensionControlledController::
   }
 
   // 5) Don't show if the user has already seen or acknowledged the dialog.
-  if (ExtensionSettingsOverriddenDialog::HasShownFor(base::to_address(profile_),
+  if (ExtensionSettingsOverriddenDialog::HasShownFor(*profile_,
                                                      extension->id())) {
     return false;
   }
 
   // 6) Don't show if the user has already acknowledged the dialog.
   if (ExtensionSettingsOverriddenDialog::HasAcknowledgedExtension(
-          base::to_address(profile_), extension->id(),
+          *profile_, extension->id(),
           ControlledHomeDialogController::kAcknowledgedPreference)) {
+    return false;
+  }
+
+  // 7) Don't show if the extension set the same search engine the user was
+  // already using. Nothing was actually overridden, so there is nothing to
+  // confirm. See https://crbug.com/540532980.
+  if (settings_overridden_params::ExtensionSearchOverrideMatchesExistingEngine(
+          base::to_address(profile_))) {
     return false;
   }
 
   // TODO(crbug.com/463712739): Remove this check to show the Dialog for all
   // extensions.
   //
-  // 7) Don't show for "simple override" extensions.
+  // 8) Don't show for "simple override" extensions.
   if (simple_overrides::IsSimpleOverrideExtension(*extension)) {
-    return false;
+    return ExtensionSettingsOverriddenDialog::
+        ShouldShowForSimpleOverrideExtension(*profile_, *extension);
   }
 
   // If we reach here, we should show the confirmation.
@@ -129,27 +171,32 @@ bool DefaultSearchExtensionControlledController::
 void DefaultSearchExtensionControlledController::ShowConfirmationDialog(
     content::WebContents& web_contents,
     ConfirmationCallback callback) {
-  confirmation_callback_ = std::move(callback);
+  SetDialogCurrentlyShowing(weak_factory_.GetWeakPtr());
 
   settings_overridden_params::GetSearchOverriddenParamsThenRun(
       &web_contents,
       base::BindOnce(
           &DefaultSearchExtensionControlledController::OnParamsLoaded,
-          weak_factory_.GetWeakPtr()));
+          weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 void DefaultSearchExtensionControlledController::OnParamsLoaded(
+    ConfirmationCallback callback,
     std::unique_ptr<ExtensionSettingsOverriddenDialog::Params> params) {
+  confirmation_callback_ = std::move(callback);
   if (!params) {
-    DialogResolved(SettingsOverriddenDialogController::DialogResult::
-                       kDialogClosedWithoutUserAction);
+    // Confirmation turned out to be unnecessary, or the extension state
+    // changed while the parameters were loading. No dialog was shown. See
+    // https://crbug.com/540532980.
+    DialogResolved(std::nullopt);
     return;
   }
 
   auto dialog = std::make_unique<ExtensionSettingsOverriddenDialog>(
-      std::move(*params), base::to_address(profile_));
+      std::move(*params), *profile_);
   CHECK(dialog->ShouldShow());
 
+  // A dialog is being shown, so every outcome from here on is a user decision.
   dialog->SetDialogResultCallback(base::BindOnce(
       &DefaultSearchExtensionControlledController::DialogResolved,
       weak_factory_.GetWeakPtr()));
@@ -163,7 +210,11 @@ void DefaultSearchExtensionControlledController::OnParamsLoaded(
 }
 
 void DefaultSearchExtensionControlledController::DialogResolved(
-    SettingsOverriddenDialogController::DialogResult dialog_result) {
+    std::optional<SettingsOverriddenDialogController::DialogResult>
+        dialog_result) {
+  if (GetDialogCurrentlyShowing().get() == this) {
+    SetDialogCurrentlyShowing(nullptr);
+  }
   CHECK(confirmation_callback_);
   std::move(confirmation_callback_).Run(dialog_result);
 }

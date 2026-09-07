@@ -37,6 +37,8 @@
 
 namespace media {
 
+using Error = AudioInputStream::AudioInputCallback::Error;
+
 namespace {
 
 // Limits the number of delay measurements we can store in an array and
@@ -161,7 +163,7 @@ class FullDuplexAudioSinkSource
   }
 
   // AudioInputStream::AudioInputCallback.
-  void OnError() override {}
+  void OnError(Error error_code) override {}
   void OnData(const AudioBus* src,
               base::TimeTicks capture_time,
               double volume,
@@ -253,7 +255,7 @@ class FullDuplexAudioSinkSource
 
 class AudioInputStreamTraits {
  public:
-  typedef AudioInputStream StreamType;
+  using StreamType = AudioInputStream;
 
   static AudioParameters GetDefaultAudioStreamParameters(
       AudioManager* audio_manager) {
@@ -271,7 +273,7 @@ class AudioInputStreamTraits {
 
 class AudioOutputStreamTraits {
  public:
-  typedef AudioOutputStream StreamType;
+  using StreamType = AudioOutputStream;
 
   static AudioParameters GetDefaultAudioStreamParameters(
       AudioManager* audio_manager) {
@@ -294,7 +296,7 @@ class AudioOutputStreamTraits {
 template <typename StreamTraits>
 class StreamWrapper {
  public:
-  typedef typename StreamTraits::StreamType StreamType;
+  using StreamType = typename StreamTraits::StreamType;
 
   explicit StreamWrapper(AudioManager* audio_manager)
       : audio_manager_(audio_manager),
@@ -334,7 +336,7 @@ class StreamWrapper {
     StreamType* stream = StreamTraits::CreateStream(
         audio_manager_,
         AudioParameters(format_,
-                        ChannelLayoutConfig(channel_layout_, channels()),
+                        ChannelLayoutConfig::FromLayout(channel_layout_),
                         sample_rate_, samples_per_packet_));
     EXPECT_TRUE(stream);
     return stream;
@@ -347,8 +349,8 @@ class StreamWrapper {
   int samples_per_packet_;
 };
 
-typedef StreamWrapper<AudioInputStreamTraits> AudioInputStreamWrapper;
-typedef StreamWrapper<AudioOutputStreamTraits> AudioOutputStreamWrapper;
+using AudioInputStreamWrapper = StreamWrapper<AudioInputStreamTraits>;
+using AudioOutputStreamWrapper = StreamWrapper<AudioOutputStreamTraits>;
 
 // This test is intended for manual tests and should only be enabled
 // when it is required to make a real-time test of audio in full duplex and

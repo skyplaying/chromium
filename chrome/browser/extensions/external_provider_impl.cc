@@ -16,6 +16,8 @@
 #include "base/check.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
+#include "base/i18n/language_tag.h"
+#include "base/i18n/tag_converters.h"
 #include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/field_trial.h"
@@ -59,7 +61,6 @@
 #include "ui/base/l10n/l10n_util.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "chrome/browser/extensions/preinstalled_apps.h"
 #include "chrome/browser/web_applications/preinstalled_app_install_features.h"
 #endif
 
@@ -75,12 +76,14 @@
 #include "chrome/browser/chromeos/app_mode/kiosk_app_external_loader.h"
 #include "chrome/browser/chromeos/extensions/external_loader/device_local_account_external_policy_loader.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_types.h"
+#include "chromeos/ash/components/policy/device_local_account/device_local_account_type.h"
 #include "chromeos/ash/experiences/arc/arc_util.h"
 #include "chromeos/components/kiosk/kiosk_utils.h"
 #include "chromeos/components/mgs/managed_guest_session_utils.h"
 #include "chromeos/constants/chromeos_features.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #else
-#include "chromeos/ash/components/policy/device_local_account/device_local_account_type.h"
+#include "chrome/browser/extensions/preinstalled_extensions.h"
 #endif
 
 #if BUILDFLAG(IS_WIN)
@@ -93,8 +96,10 @@ using content::BrowserThread;
 using extensions::mojom::ManifestLocation;
 
 namespace extensions {
-
 namespace {
+
+using ::base::i18n::LanguageTag;
+using ::base::i18n::LanguageTagConverter;
 
 #if BUILDFLAG(IS_CHROMEOS)
 
@@ -346,24 +351,35 @@ void ExternalProviderImpl::RetrieveExtensionsFromPrefs(
     const base::ListValue* supported_locales =
         extension_dict.FindList(kSupportedLocales);
     if (supported_locales) {
-      std::vector<std::string> browser_locales = l10n_util::GetParentLocales(
-          g_browser_process->GetApplicationLocale());
+      std::vector<LanguageTag> browser_tags;
+      if (std::optional<LanguageTag> tag =
+              LanguageTagConverter::GetInstance().FromString(
+                  g_browser_process->GetApplicationLocale())) {
+        browser_tags = tag->GetLineage();
+      }
 
       bool locale_supported = false;
       for (const base::Value& locale : *supported_locales) {
         const std::string* current_locale = locale.GetIfString();
-        if (current_locale && l10n_util::IsValidLocaleSyntax(*current_locale)) {
-          std::string normalized_locale =
-              l10n_util::NormalizeLocale(*current_locale);
-          if (std::ranges::contains(browser_locales, normalized_locale)) {
-            locale_supported = true;
-            break;
-          }
-        } else {
+        if (!current_locale) {
           LOG(WARNING) << "Unrecognized locale '"
-                       << (current_locale ? *current_locale : "(Not a string)")
+                       << "(Not a string)"
                        << "' found as supported locale for extension: "
                        << extension_id;
+          continue;
+        }
+        std::optional<LanguageTag> current_tag =
+            LanguageTagConverter::GetInstance().FromString(*current_locale);
+        if (!current_tag) {
+          LOG(WARNING) << "Unrecognized locale '" << *current_locale
+                       << "' found as supported locale for extension: "
+                       << extension_id;
+          continue;
+        }
+
+        if (std::ranges::contains(browser_tags, *current_tag)) {
+          locale_supported = true;
+          break;
         }
       }
 
@@ -683,7 +699,8 @@ void ExternalProviderImpl::CreateExternalProviders(
     // type |TYPE_LOGIN_SCREEN_EXTENSION| with limited API capabilities.
     crx_location = ManifestLocation::kExternalPolicyDownload;
     external_loader = base::MakeRefCounted<
-        chromeos::AuthenticationScreenExtensionsExternalLoader>(profile);
+        chromeos::AuthenticationScreenExtensionsExternalLoader>(
+        g_browser_process->shared_url_loader_factory(), profile);
     auto signin_profile_provider = std::make_unique<ExternalProviderImpl>(
         service, external_loader, profile, crx_location,
         ManifestLocation::kExternalPolicyDownload, Extension::FOR_LOGIN_SCREEN);
@@ -827,10 +844,10 @@ void ExternalProviderImpl::CreateExternalProviders(
     // OEM pre-installed apps.
     int oem_extension_creation_flags =
         bundled_extension_creation_flags | Extension::WAS_INSTALLED_BY_OEM;
-    ash::ServicesCustomizationDocument* customization =
+    ash::ServicesCustomizationDocument& customization =
         ash::ServicesCustomizationDocument::GetInstance();
     provider_list->push_back(std::make_unique<ExternalProviderImpl>(
-        service, customization->CreateExternalLoader(profile), profile,
+        service, customization.CreateExternalLoader(profile), profile,
         ManifestLocation::kExternalPref,
         ManifestLocation::kExternalPrefDownload, oem_extension_creation_flags));
   }
@@ -878,14 +895,16 @@ void ExternalProviderImpl::CreateExternalProviders(
 #endif
   }
 
-#if !BUILDFLAG(IS_CHROMEOS) && BUILDFLAG(ENABLE_EXTENSIONS)
-  // The pre-installed apps are installed as INTERNAL but use the external
-  // extension installer codeflow.
-  provider_list->push_back(std::make_unique<preinstalled_apps::Provider>(
-      profile, service,
-      base::MakeRefCounted<ExternalPrefLoader>(
-          chrome::DIR_DEFAULT_APPS, ExternalPrefLoader::NONE, nullptr),
-      ManifestLocation::kInternal, ManifestLocation::kInternal,
+#if !BUILDFLAG(IS_CHROMEOS)
+  // The pre-installed apps and extensions are installed as
+  // `ManifestLocation::kInternal` but use the external extension installer
+  // codeflow. `download_location` must be `ManifestLocation::kInternal` so the
+  // Chrome Web Store requests will include `installedby=internal` and allow
+  // certain extension downloads (e.g. Docs Offline). Unused on Chrome OS, which
+  // has its own mechanism for preinstalls.
+  provider_list->push_back(std::make_unique<preinstalled_extensions::Provider>(
+      profile, service, ManifestLocation::kInternal,
+      ManifestLocation::kInternal,
       Extension::FROM_WEBSTORE | Extension::WAS_INSTALLED_BY_DEFAULT));
 #endif
 

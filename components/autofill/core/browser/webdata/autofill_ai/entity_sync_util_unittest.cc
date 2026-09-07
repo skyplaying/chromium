@@ -6,11 +6,16 @@
 
 #include "base/i18n/time_formatting.h"
 #include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/scoped_feature_list.h"
+#include "components/autofill/core/browser/autofill_format_string.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance_test_api.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/proto/autofill_ai_chrome_metadata.pb.h"
-#include "components/autofill/core/browser/test_utils/entity_data_test_utils.h"
+#include "components/autofill/core/browser/test_utils/entity_data_test_util.h"
+#include "components/autofill/core/common/autofill_features.h"
 #include "components/sync/protocol/autofill_valuable_metadata_specifics.pb.h"
 #include "components/sync/protocol/autofill_valuable_specifics.pb.h"
 #include "components/sync/test/unknown_field_util.h"
@@ -28,6 +33,16 @@ std::string GetStringValue(const EntityInstance& entity,
                            AttributeTypeName attribute_type_name) {
   return base::UTF16ToUTF8(entity.attribute(AttributeType(attribute_type_name))
                                ->GetCompleteRawInfo());
+}
+
+std::string GetDateValue(const EntityInstance& entity,
+                         AttributeTypeName attribute_type_name,
+                         const std::u16string& format) {
+  AttributeType attribute_type(attribute_type_name);
+  return base::UTF16ToUTF8(
+      entity.attribute(attribute_type)
+          ->GetInfo(attribute_type.field_type(), "en_US",
+                    AutofillFormatString(format, FormatString_Type_DATE)));
 }
 
 // Returns a `sync_pb::AutofillValuableSpecifics` message with
@@ -90,6 +105,137 @@ sync_pb::AutofillValuableSpecifics TestVehicleSpecifics() {
   specifics.mutable_vehicle_registration()->set_license_plate_country("US");
   specifics.mutable_vehicle_registration()->set_owner_name("Owner Name");
 
+  return specifics;
+}
+
+// `date_str` is expected to have the form "dd/mm/yyyy".
+sync_pb::NaiveDate StringToProtoDate(std::u16string_view date_str) {
+  int day = 0, month = 0, year = 0;
+  EXPECT_TRUE(base::StringToInt(date_str.substr(0, 2), &day));
+  EXPECT_TRUE(base::StringToInt(date_str.substr(3, 2), &month));
+  EXPECT_TRUE(base::StringToInt(date_str.substr(6, 4), &year));
+  sync_pb::NaiveDate proto;
+  proto.set_day(day);
+  proto.set_month(month);
+  proto.set_year(year);
+  return proto;
+}
+
+std::u16string ProtoDateToString(const sync_pb::NaiveDate& proto) {
+  return base::UTF8ToUTF16(base::StringPrintf("%02d/%02d/%04d", proto.day(),
+                                              proto.month(), proto.year()));
+}
+
+// Returns a `sync_pb::AutofillValuableSpecifics` message with the passport
+// entity type.
+sync_pb::AutofillValuableSpecifics TestPassportSpecifics(
+    test::PassportEntityOptions options = {}) {
+  sync_pb::AutofillValuableSpecifics specifics;
+  specifics.set_id(options.guid);
+  sync_pb::Passport* passport = specifics.mutable_passport();
+  passport->set_masked_number(base::UTF16ToUTF8(options.number));
+  passport->set_owner_name(base::UTF16ToUTF8(options.name));
+  passport->set_country_code(base::UTF16ToUTF8(options.country));
+  *passport->mutable_issue_date() = StringToProtoDate(options.issue_date);
+  *passport->mutable_expiration_date() = StringToProtoDate(options.expiry_date);
+
+  return specifics;
+}
+
+// Returns a `sync_pb::AutofillValuableSpecifics` message with the driver's
+// license entity type.
+sync_pb::AutofillValuableSpecifics TestDriversLicenseSpecifics(
+    test::DriversLicenseOptions options = {}) {
+  sync_pb::AutofillValuableSpecifics specifics;
+  specifics.set_id(std::string(options.guid));
+  sync_pb::DriverLicense* license = specifics.mutable_driver_license();
+  license->set_masked_number(base::UTF16ToUTF8(options.number));
+  license->set_owner_name(base::UTF16ToUTF8(options.name));
+  license->set_region(base::UTF16ToUTF8(options.region));
+  *license->mutable_issue_date() = StringToProtoDate(options.issue_date);
+  *license->mutable_expiration_date() =
+      StringToProtoDate(options.expiration_date);
+
+  return specifics;
+}
+
+// Returns a `sync_pb::AutofillValuableSpecifics` message with the national ID
+// card entity type.
+sync_pb::AutofillValuableSpecifics TestNationalIdCardSpecifics(
+    test::NationalIdCardOptions options = {}) {
+  sync_pb::AutofillValuableSpecifics specifics;
+  specifics.set_id(std::string(options.guid));
+  sync_pb::NationalIdCard* card = specifics.mutable_national_id_card();
+  card->set_masked_number(base::UTF16ToUTF8(options.number));
+  card->set_owner_name(base::UTF16ToUTF8(options.name));
+  card->set_country_code(base::UTF16ToUTF8(options.country));
+  *card->mutable_issue_date() = StringToProtoDate(options.issue_date);
+  *card->mutable_expiration_date() = StringToProtoDate(options.expiry_date);
+
+  return specifics;
+}
+
+// Returns a `sync_pb::AutofillValuableSpecifics` message with the redress
+// number entity type.
+sync_pb::AutofillValuableSpecifics TestRedressNumberSpecifics(
+    test::RedressNumberOptions options = {}) {
+  sync_pb::AutofillValuableSpecifics specifics;
+  specifics.set_id(std::string(options.guid));
+  sync_pb::RedressNumber* redress = specifics.mutable_redress_number();
+  redress->set_masked_number(base::UTF16ToUTF8(options.number));
+  redress->set_owner_name(base::UTF16ToUTF8(options.name));
+
+  return specifics;
+}
+
+// Returns a `sync_pb::AutofillValuableSpecifics` message with the known
+// traveler number entity type.
+sync_pb::AutofillValuableSpecifics TestKnownTravelerNumberSpecifics(
+    test::KnownTravelerNumberOptions options = {}) {
+  sync_pb::AutofillValuableSpecifics specifics;
+  specifics.set_id(std::string(options.guid));
+  sync_pb::KnownTravelerNumber* ktn = specifics.mutable_known_traveler_number();
+  ktn->set_masked_number(base::UTF16ToUTF8(options.number));
+  ktn->set_owner_name(base::UTF16ToUTF8(options.name));
+  *ktn->mutable_expiration_date() = StringToProtoDate(options.expiration_date);
+
+  return specifics;
+}
+
+// Returns a `sync_pb::AutofillValuableSpecifics` message with the order
+// entity type.
+sync_pb::AutofillValuableSpecifics TestOrderSpecifics(
+    test::OrderOptions options = {}) {
+  sync_pb::AutofillValuableSpecifics specifics;
+  specifics.set_id(std::string(options.guid));
+  sync_pb::Order* order = specifics.mutable_order();
+  order->set_id(base::UTF16ToUTF8(options.id));
+  order->set_account(base::UTF16ToUTF8(options.account));
+  *order->mutable_order_date() = StringToProtoDate(options.date);
+  order->set_merchant_name(base::UTF16ToUTF8(options.merchant_name));
+  order->set_merchant_domain(base::UTF16ToUTF8(options.merchant_domain));
+  // Product names are not derived from options.product_names because
+  // EntityInstance represents the product names as a single string.
+  order->add_product_names("Product 1");
+  order->add_product_names("Product 2");
+  return specifics;
+}
+
+// Returns a `sync_pb::AutofillValuableSpecifics` message with the shipment
+// entity type.
+sync_pb::AutofillValuableSpecifics TestShipmentSpecifics(
+    test::ShipmentOptions options = {}) {
+  sync_pb::AutofillValuableSpecifics specifics;
+  specifics.set_id(std::string(options.guid));
+  sync_pb::Shipment* shipment = specifics.mutable_shipment();
+  shipment->set_tracking_number(base::UTF16ToUTF8(options.tracking_number));
+  shipment->set_delivery_zip_code(base::UTF16ToUTF8(options.delivery_zip_code));
+  *shipment->mutable_shipping_date() = StringToProtoDate(options.shipped_date);
+  shipment->set_carrier_name(base::UTF16ToUTF8(options.carrier_name));
+  shipment->set_carrier_domain(base::UTF16ToUTF8(options.carrier_domain));
+  shipment->set_merchant_name(base::UTF16ToUTF8(options.merchant_name));
+  shipment->add_product_names("Product 1");
+  shipment->add_product_names("Product 2");
   return specifics;
 }
 
@@ -271,7 +417,7 @@ TEST(EntitySyncUtilTest,
       EntityType(EntityTypeName::kVehicle), std::move(attributes),
       EntityInstance::EntityId("00000000-0000-4000-8000-200000000000"),
       /*nickname=*/"", /*date_modified=*/{}, /*use_count=*/0, /*use_date=*/{},
-      EntityInstance::RecordType::kServerWallet,
+      EntityInstance::WalletRecordTypePayload{},
       EntityInstance::AreAttributesReadOnly(false),
       /*frecency_override=*/"");
 
@@ -335,7 +481,7 @@ TEST(EntitySyncUtilTest, CreateEntityInstanceFromSpecifics_FlightReservation) {
 TEST(EntitySyncUtilTest,
      CreateEntityInstanceFromSpecifics_FlightReservation_EmptyDepartureTime) {
   sync_pb::AutofillValuableSpecifics specifics =
-      TestFlightReservationSpecifics();
+      TestFlightReservationSpecifics({.departure_time = std::nullopt});
 
   std::optional<EntityInstance> flight_reservation =
       CreateEntityInstanceFromSpecifics(specifics);
@@ -643,7 +789,374 @@ TEST(EntitySyncUtilTest, EntityTypeToPassType) {
             sync_pb::AutofillValuableMetadataSpecifics::FLIGHT_RESERVATION);
   EXPECT_EQ(EntityTypeToPassType(EntityType(kVehicle)),
             sync_pb::AutofillValuableMetadataSpecifics::VEHICLE_REGISTRATION);
-  EXPECT_FALSE(EntityTypeToPassType(EntityType(kPassport)).has_value());
+  EXPECT_EQ(EntityTypeToPassType(EntityType(kPassport)),
+            sync_pb::AutofillValuableMetadataSpecifics::PASSPORT);
+  EXPECT_EQ(EntityTypeToPassType(EntityType(kDriversLicense)),
+            sync_pb::AutofillValuableMetadataSpecifics::DRIVER_LICENSE);
+  EXPECT_EQ(EntityTypeToPassType(EntityType(kNationalIdCard)),
+            sync_pb::AutofillValuableMetadataSpecifics::NATIONAL_ID_CARD);
+  EXPECT_EQ(EntityTypeToPassType(EntityType(kRedressNumber)),
+            sync_pb::AutofillValuableMetadataSpecifics::REDRESS_NUMBER);
+  EXPECT_EQ(EntityTypeToPassType(EntityType(kKnownTravelerNumber)),
+            sync_pb::AutofillValuableMetadataSpecifics::KNOWN_TRAVELER_NUMBER);
+  EXPECT_EQ(EntityTypeToPassType(EntityType(kOrder)),
+            sync_pb::AutofillValuableMetadataSpecifics::ORDER);
+  EXPECT_EQ(EntityTypeToPassType(EntityType(kShipment)),
+            sync_pb::AutofillValuableMetadataSpecifics::SHIPMENT);
+}
+
+// Tests that no attributes are created for fields with unset or empty values.
+TEST(EntitySyncUtilTest, CreateEntityInstanceFromSpecifics_EmptyFields) {
+  base::test::ScopedFeatureList feature{
+      features::kAutofillAiImportConstraintsForSync};
+  // Passport is used as an example here. This is representative of the general
+  // case because the implementation uses generic helpers across all entities.
+  sync_pb::AutofillValuableSpecifics specifics;
+  specifics.mutable_passport()->set_owner_name("florian");
+  // Empty, explicitly set values are expected to be omitted.
+  specifics.mutable_passport()->set_country_code("");
+  // Incomplete dates and unset values like passport number and issue date are
+  // expected to be omitted.
+  specifics.mutable_passport()->mutable_expiration_date()->set_year(2030);
+  std::optional<EntityInstance> passport =
+      CreateEntityInstanceFromSpecifics(specifics);
+  ASSERT_TRUE(passport.has_value());
+  EXPECT_EQ(GetStringValue(*passport, AttributeTypeName::kPassportName),
+            "florian");
+  EXPECT_FALSE(
+      passport->attribute(AttributeType(AttributeTypeName::kPassportCountry))
+          .has_value());
+  EXPECT_FALSE(
+      passport->attribute(AttributeType(AttributeTypeName::kPassportNumber))
+          .has_value());
+  EXPECT_FALSE(
+      passport->attribute(AttributeType(AttributeTypeName::kPassportIssueDate))
+          .has_value());
+  EXPECT_FALSE(
+      passport
+          ->attribute(AttributeType(AttributeTypeName::kPassportExpirationDate))
+          .has_value());
+}
+
+// Tests that `CreateEntityInstanceFromSpecifics` correctly deserializes
+// the passport entity from its proto representation.
+TEST(EntitySyncUtilTest, CreateEntityInstanceFromSpecifics_Passport) {
+  // The specifics require country code.
+  test::PassportEntityOptions options{.country = u"DE",
+                                      .expiry_date = u"30/08/2019",
+                                      .issue_date = u"01/09/2010"};
+  sync_pb::AutofillValuableSpecifics specifics = TestPassportSpecifics(options);
+  std::optional<EntityInstance> passport =
+      CreateEntityInstanceFromSpecifics(specifics);
+
+  ASSERT_TRUE(passport.has_value());
+  EXPECT_EQ(passport->guid().value(), specifics.id());
+  EXPECT_EQ(GetStringValue(*passport, AttributeTypeName::kPassportNumber),
+            specifics.passport().masked_number());
+  EXPECT_TRUE(
+      passport->attribute(AttributeType(AttributeTypeName::kPassportNumber))
+          ->masked());
+  EXPECT_EQ(GetStringValue(*passport, AttributeTypeName::kPassportName),
+            specifics.passport().owner_name());
+  EXPECT_EQ(GetStringValue(*passport, AttributeTypeName::kPassportCountry),
+            specifics.passport().country_code());
+  EXPECT_EQ(GetDateValue(*passport, AttributeTypeName::kPassportIssueDate,
+                         u"DD/MM/YYYY"),
+            base::UTF16ToUTF8(options.issue_date));
+  EXPECT_EQ(GetDateValue(*passport, AttributeTypeName::kPassportExpirationDate,
+                         u"DD/MM/YYYY"),
+            base::UTF16ToUTF8(options.expiry_date));
+  EXPECT_EQ(passport->record_type(), EntityInstance::RecordType::kServerWallet);
+}
+
+// Tests that `CreateSpecificsFromEntityInstance` correctly serializes
+// fields.
+TEST(EntitySyncUtilTest, CreateSpecificsFromEntityInstance_Passport) {
+  // The specifics require country code.
+  test::PassportEntityOptions options{.country = u"DE",
+                                      .expiry_date = u"30/08/2019",
+                                      .issue_date = u"01/09/2010"};
+  std::optional<EntityInstance> maybe_passport =
+      CreateEntityInstanceFromSpecifics(TestPassportSpecifics(options));
+  ASSERT_TRUE(maybe_passport.has_value());
+  EntityInstance passport = *maybe_passport;
+
+  sync_pb::AutofillValuableSpecifics specifics =
+      CreateSpecificsFromEntityInstance(passport, /*base_specifics=*/{});
+
+  EXPECT_EQ(passport.guid().value(), specifics.id());
+  EXPECT_EQ(GetStringValue(passport, AttributeTypeName::kPassportNumber),
+            specifics.passport().masked_number());
+  EXPECT_EQ(GetStringValue(passport, AttributeTypeName::kPassportName),
+            specifics.passport().owner_name());
+  EXPECT_EQ(GetStringValue(passport, AttributeTypeName::kPassportCountry),
+            specifics.passport().country_code());
+  EXPECT_EQ(ProtoDateToString(specifics.passport().issue_date()),
+            options.issue_date);
+  EXPECT_EQ(ProtoDateToString(specifics.passport().expiration_date()),
+            options.expiry_date);
+}
+
+// Tests that `CreateEntityInstanceFromSpecifics` correctly deserializes
+// the driver's license entity from its proto representation.
+TEST(EntitySyncUtilTest, CreateEntityInstanceFromSpecifics_DriverLicense) {
+  test::DriversLicenseOptions options;
+  sync_pb::AutofillValuableSpecifics specifics =
+      TestDriversLicenseSpecifics(options);
+  std::optional<EntityInstance> license =
+      CreateEntityInstanceFromSpecifics(specifics);
+
+  ASSERT_TRUE(license.has_value());
+  EXPECT_EQ(license->guid().value(), options.guid);
+  EXPECT_EQ(GetStringValue(*license, AttributeTypeName::kDriversLicenseNumber),
+            base::UTF16ToUTF8(options.number));
+  EXPECT_TRUE(
+      license
+          ->attribute(AttributeType(AttributeTypeName::kDriversLicenseNumber))
+          ->masked());
+  EXPECT_EQ(GetStringValue(*license, AttributeTypeName::kDriversLicenseName),
+            base::UTF16ToUTF8(options.name));
+  EXPECT_EQ(GetStringValue(*license, AttributeTypeName::kDriversLicenseState),
+            base::UTF16ToUTF8(options.region));
+  EXPECT_EQ(GetDateValue(*license, AttributeTypeName::kDriversLicenseIssueDate,
+                         u"DD/MM/YYYY"),
+            base::UTF16ToUTF8(options.issue_date));
+  EXPECT_EQ(
+      GetDateValue(*license, AttributeTypeName::kDriversLicenseExpirationDate,
+                   u"DD/MM/YYYY"),
+      base::UTF16ToUTF8(options.expiration_date));
+  EXPECT_EQ(license->record_type(), EntityInstance::RecordType::kServerWallet);
+}
+
+// Tests that `CreateSpecificsFromEntityInstance` correctly serializes
+// fields.
+TEST(EntitySyncUtilTest, CreateSpecificsFromEntityInstance_DriverLicense) {
+  test::DriversLicenseOptions options;
+  std::optional<EntityInstance> maybe_license =
+      CreateEntityInstanceFromSpecifics(TestDriversLicenseSpecifics(options));
+  ASSERT_TRUE(maybe_license.has_value());
+  EntityInstance license = *maybe_license;
+
+  sync_pb::AutofillValuableSpecifics specifics =
+      CreateSpecificsFromEntityInstance(license, /*base_specifics=*/{});
+
+  EXPECT_EQ(license.guid().value(), specifics.id());
+  EXPECT_EQ(GetStringValue(license, AttributeTypeName::kDriversLicenseNumber),
+            specifics.driver_license().masked_number());
+  EXPECT_EQ(GetStringValue(license, AttributeTypeName::kDriversLicenseName),
+            specifics.driver_license().owner_name());
+  EXPECT_EQ(GetStringValue(license, AttributeTypeName::kDriversLicenseState),
+            specifics.driver_license().region());
+  EXPECT_EQ(ProtoDateToString(specifics.driver_license().issue_date()),
+            options.issue_date);
+  EXPECT_EQ(ProtoDateToString(specifics.driver_license().expiration_date()),
+            options.expiration_date);
+}
+
+// Tests that `CreateEntityInstanceFromSpecifics` correctly deserializes
+// the national ID card entity from its proto representation.
+TEST(EntitySyncUtilTest, CreateEntityInstanceFromSpecifics_NationalIdCard) {
+  // The specifics require country code.
+  test::NationalIdCardOptions options{.country = u"DE"};
+  sync_pb::AutofillValuableSpecifics specifics =
+      TestNationalIdCardSpecifics(options);
+  std::optional<EntityInstance> card =
+      CreateEntityInstanceFromSpecifics(specifics);
+
+  ASSERT_TRUE(card.has_value());
+  EXPECT_EQ(card->guid().value(), options.guid);
+  EXPECT_EQ(GetStringValue(*card, AttributeTypeName::kNationalIdCardNumber),
+            base::UTF16ToUTF8(options.number));
+  EXPECT_TRUE(
+      card->attribute(AttributeType(AttributeTypeName::kNationalIdCardNumber))
+          ->masked());
+  EXPECT_EQ(GetStringValue(*card, AttributeTypeName::kNationalIdCardName),
+            base::UTF16ToUTF8(options.name));
+  EXPECT_EQ(GetStringValue(*card, AttributeTypeName::kNationalIdCardCountry),
+            base::UTF16ToUTF8(options.country));
+  EXPECT_EQ(GetDateValue(*card, AttributeTypeName::kNationalIdCardIssueDate,
+                         u"DD/MM/YYYY"),
+            base::UTF16ToUTF8(options.issue_date));
+  EXPECT_EQ(
+      GetDateValue(*card, AttributeTypeName::kNationalIdCardExpirationDate,
+                   u"DD/MM/YYYY"),
+      base::UTF16ToUTF8(options.expiry_date));
+  EXPECT_EQ(card->record_type(), EntityInstance::RecordType::kServerWallet);
+}
+
+// Tests that `CreateSpecificsFromEntityInstance` correctly serializes
+// fields.
+TEST(EntitySyncUtilTest, CreateSpecificsFromEntityInstance_NationalIdCard) {
+  // The specifics require country code.
+  test::NationalIdCardOptions options{.country = u"DE"};
+  std::optional<EntityInstance> maybe_card =
+      CreateEntityInstanceFromSpecifics(TestNationalIdCardSpecifics(options));
+  ASSERT_TRUE(maybe_card.has_value());
+  EntityInstance card = *maybe_card;
+
+  sync_pb::AutofillValuableSpecifics specifics =
+      CreateSpecificsFromEntityInstance(card, /*base_specifics=*/{});
+
+  EXPECT_EQ(card.guid().value(), specifics.id());
+  EXPECT_EQ(GetStringValue(card, AttributeTypeName::kNationalIdCardNumber),
+            specifics.national_id_card().masked_number());
+  EXPECT_EQ(GetStringValue(card, AttributeTypeName::kNationalIdCardName),
+            specifics.national_id_card().owner_name());
+  EXPECT_EQ(GetStringValue(card, AttributeTypeName::kNationalIdCardCountry),
+            specifics.national_id_card().country_code());
+  EXPECT_EQ(ProtoDateToString(specifics.national_id_card().issue_date()),
+            options.issue_date);
+  EXPECT_EQ(ProtoDateToString(specifics.national_id_card().expiration_date()),
+            options.expiry_date);
+}
+
+// Tests that `CreateEntityInstanceFromSpecifics` correctly deserializes
+// the redress number entity from its proto representation.
+TEST(EntitySyncUtilTest, CreateEntityInstanceFromSpecifics_RedressNumber) {
+  test::RedressNumberOptions options;
+  sync_pb::AutofillValuableSpecifics specifics =
+      TestRedressNumberSpecifics(options);
+  std::optional<EntityInstance> redress =
+      CreateEntityInstanceFromSpecifics(specifics);
+
+  ASSERT_TRUE(redress.has_value());
+  EXPECT_EQ(redress->guid().value(), options.guid);
+  EXPECT_EQ(GetStringValue(*redress, AttributeTypeName::kRedressNumberNumber),
+            base::UTF16ToUTF8(options.number));
+  EXPECT_TRUE(
+      redress->attribute(AttributeType(AttributeTypeName::kRedressNumberNumber))
+          ->masked());
+  EXPECT_EQ(GetStringValue(*redress, AttributeTypeName::kRedressNumberName),
+            base::UTF16ToUTF8(options.name));
+  EXPECT_EQ(redress->record_type(), EntityInstance::RecordType::kServerWallet);
+}
+
+// Tests that `CreateSpecificsFromEntityInstance` correctly serializes
+// fields.
+TEST(EntitySyncUtilTest, CreateSpecificsFromEntityInstance_RedressNumber) {
+  test::RedressNumberOptions options;
+  std::optional<EntityInstance> maybe_redress =
+      CreateEntityInstanceFromSpecifics(TestRedressNumberSpecifics(options));
+  ASSERT_TRUE(maybe_redress.has_value());
+  EntityInstance redress = *maybe_redress;
+
+  sync_pb::AutofillValuableSpecifics specifics =
+      CreateSpecificsFromEntityInstance(redress, /*base_specifics=*/{});
+
+  EXPECT_EQ(redress.guid().value(), specifics.id());
+  EXPECT_EQ(GetStringValue(redress, AttributeTypeName::kRedressNumberNumber),
+            specifics.redress_number().masked_number());
+  EXPECT_EQ(GetStringValue(redress, AttributeTypeName::kRedressNumberName),
+            specifics.redress_number().owner_name());
+}
+
+// Tests that `CreateEntityInstanceFromSpecifics` correctly deserializes
+// the known traveler number entity from its proto representation.
+TEST(EntitySyncUtilTest,
+     CreateEntityInstanceFromSpecifics_KnownTravelerNumber) {
+  test::KnownTravelerNumberOptions options;
+  sync_pb::AutofillValuableSpecifics specifics =
+      TestKnownTravelerNumberSpecifics(options);
+  std::optional<EntityInstance> ktn =
+      CreateEntityInstanceFromSpecifics(specifics);
+
+  ASSERT_TRUE(ktn.has_value());
+  EXPECT_EQ(ktn->guid().value(), options.guid);
+  EXPECT_EQ(GetStringValue(*ktn, AttributeTypeName::kKnownTravelerNumberNumber),
+            base::UTF16ToUTF8(options.number));
+  EXPECT_TRUE(ktn->attribute(AttributeType(
+                                 AttributeTypeName::kKnownTravelerNumberNumber))
+                  ->masked());
+  EXPECT_EQ(GetStringValue(*ktn, AttributeTypeName::kKnownTravelerNumberName),
+            base::UTF16ToUTF8(options.name));
+  EXPECT_EQ(
+      GetDateValue(*ktn, AttributeTypeName::kKnownTravelerNumberExpirationDate,
+                   u"DD/MM/YYYY"),
+      base::UTF16ToUTF8(options.expiration_date));
+  EXPECT_EQ(ktn->record_type(), EntityInstance::RecordType::kServerWallet);
+}
+
+// Tests that `CreateSpecificsFromEntityInstance` correctly serializes
+// fields.
+TEST(EntitySyncUtilTest,
+     CreateSpecificsFromEntityInstance_KnownTravelerNumber) {
+  test::KnownTravelerNumberOptions options;
+  std::optional<EntityInstance> maybe_ktn = CreateEntityInstanceFromSpecifics(
+      TestKnownTravelerNumberSpecifics(options));
+  ASSERT_TRUE(maybe_ktn.has_value());
+  EntityInstance ktn = *maybe_ktn;
+
+  sync_pb::AutofillValuableSpecifics specifics =
+      CreateSpecificsFromEntityInstance(ktn, /*base_specifics=*/{});
+
+  EXPECT_EQ(ktn.guid().value(), specifics.id());
+  EXPECT_EQ(GetStringValue(ktn, AttributeTypeName::kKnownTravelerNumberNumber),
+            specifics.known_traveler_number().masked_number());
+  EXPECT_EQ(GetStringValue(ktn, AttributeTypeName::kKnownTravelerNumberName),
+            specifics.known_traveler_number().owner_name());
+  EXPECT_EQ(
+      ProtoDateToString(specifics.known_traveler_number().expiration_date()),
+      options.expiration_date);
+}
+
+// Tests that `CreateEntityInstanceFromSpecifics` correctly deserializes
+// the order entity from its proto representation.
+TEST(EntitySyncUtilTest, CreateEntityInstanceFromSpecifics_Order) {
+  // Overwrite the default date for compatibility with `StringToProtoDate()`.
+  test::OrderOptions options{.date = u"15/01/2025"};
+  sync_pb::AutofillValuableSpecifics specifics = TestOrderSpecifics(options);
+  std::optional<EntityInstance> order =
+      CreateEntityInstanceFromSpecifics(specifics);
+
+  ASSERT_TRUE(order.has_value());
+  EXPECT_EQ(order->guid().value(), options.guid);
+  EXPECT_EQ(order->type().name(), EntityTypeName::kOrder);
+  EXPECT_EQ(order->record_type(), EntityInstance::RecordType::kServerWallet);
+  EXPECT_EQ(GetStringValue(*order, AttributeTypeName::kOrderId),
+            base::UTF16ToUTF8(options.id));
+  EXPECT_EQ(GetStringValue(*order, AttributeTypeName::kOrderAccount),
+            base::UTF16ToUTF8(options.account));
+  EXPECT_EQ(GetDateValue(*order, AttributeTypeName::kOrderDate, u"DD/MM/YYYY"),
+            base::UTF16ToUTF8(options.date));
+  EXPECT_EQ(GetStringValue(*order, AttributeTypeName::kOrderMerchantName),
+            base::UTF16ToUTF8(options.merchant_name));
+  EXPECT_EQ(GetStringValue(*order, AttributeTypeName::kOrderMerchantDomain),
+            base::UTF16ToUTF8(options.merchant_domain));
+  EXPECT_EQ(GetStringValue(*order, AttributeTypeName::kOrderProductNames),
+            "Product 1, Product 2");
+}
+
+// Tests that `CreateEntityInstanceFromSpecifics` correctly deserializes
+// the shipment entity from its proto representation.
+TEST(EntitySyncUtilTest, CreateEntityInstanceFromSpecifics_Shipment) {
+  // Overwrite the default date for compatibility with `StringToProtoDate()`.
+  test::ShipmentOptions options{.shipped_date = u"01/12/2025"};
+  sync_pb::AutofillValuableSpecifics specifics = TestShipmentSpecifics(options);
+  std::optional<EntityInstance> shipment =
+      CreateEntityInstanceFromSpecifics(specifics);
+
+  ASSERT_TRUE(shipment.has_value());
+  EXPECT_EQ(shipment->guid().value(), options.guid);
+  EXPECT_EQ(shipment->type().name(), EntityTypeName::kShipment);
+  EXPECT_EQ(shipment->record_type(), EntityInstance::RecordType::kServerWallet);
+  EXPECT_EQ(
+      GetStringValue(*shipment, AttributeTypeName::kShipmentTrackingNumber),
+      base::UTF16ToUTF8(options.tracking_number));
+  EXPECT_EQ(
+      GetStringValue(*shipment, AttributeTypeName::kShipmentDeliveryZipCode),
+      base::UTF16ToUTF8(options.delivery_zip_code));
+  EXPECT_EQ(GetDateValue(*shipment, AttributeTypeName::kShipmentShippedDate,
+                         u"DD/MM/YYYY"),
+            base::UTF16ToUTF8(options.shipped_date));
+  EXPECT_EQ(GetStringValue(*shipment, AttributeTypeName::kShipmentCarrierName),
+            base::UTF16ToUTF8(options.carrier_name));
+  EXPECT_EQ(
+      GetStringValue(*shipment, AttributeTypeName::kShipmentCarrierDomain),
+      base::UTF16ToUTF8(options.carrier_domain));
+  EXPECT_EQ(GetStringValue(*shipment, AttributeTypeName::kShipmentMerchantName),
+            base::UTF16ToUTF8(options.merchant_name));
+  EXPECT_EQ(GetStringValue(*shipment, AttributeTypeName::kShipmentProductNames),
+            "Product 1, Product 2");
 }
 
 }  // namespace

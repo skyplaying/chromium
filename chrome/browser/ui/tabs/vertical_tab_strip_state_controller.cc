@@ -7,23 +7,35 @@
 #include <optional>
 
 #include "base/i18n/rtl.h"
+#include "base/metrics/user_metrics.h"
+#include "base/metrics/user_metrics_action.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/to_string.h"
+#include "base/timer/timer.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sessions/session_service.h"
 #include "chrome/browser/sessions/session_service_factory.h"
+#include "chrome/browser/ui/actions/actions_util.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
-#include "chrome/browser/ui/browser_actions.h"
+#include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/tabs/features.h"
+#include "chrome/browser/ui/toasts/api/toast_id.h"
+#include "chrome/browser/ui/toasts/toast_controller.h"
+#include "chrome/browser/ui/user_education/browser_user_education_interface.h"
+#include "chrome/browser/ui/views/interaction/browser_elements_views.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/feature_engagement/public/feature_constants.h"
 #include "components/prefs/pref_notifier_impl.h"
 #include "components/prefs/pref_service.h"
 #include "components/sessions/core/session_id.h"
 #include "ui/actions/actions.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/views/vector_icons.h"
 
 namespace tabs {
@@ -47,10 +59,24 @@ VerticalTabStripStateController::VerticalTabStripStateController(
                                 *this) {
   pref_change_registrar_.Init(pref_service_);
 
+  is_vertical_tabs_enabled_ =
+      pref_service_->GetBoolean(prefs::kVerticalTabsEnabled);
+
   pref_change_registrar_.Add(
       prefs::kVerticalTabsEnabled,
-      base::BindRepeating(&VerticalTabStripStateController::NotifyModeChanged,
+      base::BindRepeating(&VerticalTabStripStateController::OnModeChanged,
                           base::Unretained(this)));
+
+  if (IsVerticalTabsExpandOnHoverFeatureEnabled()) {
+    is_expand_on_hover_enabled_ =
+        pref_service_->GetBoolean(prefs::kVerticalTabsExpandOnHoverEnabled);
+
+    pref_change_registrar_.Add(
+        prefs::kVerticalTabsExpandOnHoverEnabled,
+        base::BindRepeating(
+            &VerticalTabStripStateController::OnExpandOnHoverEnabledChanged,
+            base::Unretained(this)));
+  }
 
   if (restored_state_collapsed.has_value()) {
     SetCollapsed(restored_state_collapsed.value());
@@ -60,6 +86,12 @@ VerticalTabStripStateController::VerticalTabStripStateController(
   }
 
   UpdateCollapseActionItem();
+
+  // Observe active browser to update most recently used vertical tabs pref
+  // accordingly.
+  did_become_active_subscription_ = browser_window_->RegisterDidBecomeActive(
+      base::BindRepeating(&VerticalTabStripStateController::OnDidBecomeActive,
+                          base::Unretained(this)));
 
   if (session_service_) {
     session_service_->AddObserver(this);
@@ -78,6 +110,16 @@ VerticalTabStripStateController::VerticalTabStripStateController(
           GlobalBrowserCollection::GetInstance());
     }
   }
+
+  // Wait before attempting to show the expand on hover IPH on startup. This is
+  // an anti-pattern and is generally discouraged for snooze promos.
+  if (base::SequencedTaskRunner::HasCurrentDefault()) {
+    expand_on_hover_iph_collapse_timer_.Start(
+        FROM_HERE, base::Minutes(10),
+        base::BindOnce(
+            &VerticalTabStripStateController::MaybeShowExpandOnHoverIPH,
+            base::Unretained(this)));
+  }
 }
 
 VerticalTabStripStateController::~VerticalTabStripStateController() {
@@ -85,6 +127,31 @@ VerticalTabStripStateController::~VerticalTabStripStateController() {
     session_service_->RemoveObserver(this);
     session_service_ = nullptr;
   }
+
+  // Prevent dangling pointer.
+  if (delegate_) {
+    delegate_->SetCollapsedStateUpdatedCallback(base::DoNothing());
+  }
+}
+
+VerticalTabStripStateController::ScopedEnableStateLock::ScopedEnableStateLock(
+    VerticalTabStripStateController* controller)
+    : controller_(controller) {
+  if (controller_) {
+    controller_->OnLockCreated();
+  }
+}
+
+VerticalTabStripStateController::ScopedEnableStateLock::
+    ~ScopedEnableStateLock() {
+  if (controller_) {
+    controller_->OnLockDestroyed();
+  }
+}
+
+std::unique_ptr<VerticalTabStripStateController::ScopedEnableStateLock>
+VerticalTabStripStateController::GetEnableStateLock() {
+  return std::make_unique<ScopedEnableStateLock>(this);
 }
 
 // static
@@ -101,11 +168,27 @@ VerticalTabStripStateController* VerticalTabStripStateController::From(
                         : nullptr;
 }
 
+void VerticalTabStripStateController::SetDelegate(Delegate* delegate) {
+  delegate_ = delegate;
+  if (delegate_) {
+    delegate_->SetCollapsedStateUpdatedCallback(
+        base::BindRepeating(&VerticalTabStripStateController::SetCollapsed,
+                            base::Unretained(this)));
+  }
+}
+
 bool VerticalTabStripStateController::ShouldDisplayVerticalTabs() const {
-  return pref_service_->GetBoolean(prefs::kVerticalTabsEnabled);
+  return is_vertical_tabs_enabled_;
 }
 
 void VerticalTabStripStateController::SetVerticalTabsEnabled(bool enabled) {
+  // If the user already has a pending mode switch, but tries to change tab
+  // strip mode again, ensure the toast is displayed.
+  if (enable_state_lock_count_ > 0 && enabled != is_vertical_tabs_enabled_ &&
+      pref_service_->GetBoolean(prefs::kVerticalTabsEnabled) == enabled) {
+    MaybeShowDelayedToast(enabled);
+    return;
+  }
   NotifyModeWillChange();
   pref_service_->SetBoolean(prefs::kVerticalTabsEnabled, enabled);
 }
@@ -114,10 +197,36 @@ bool VerticalTabStripStateController::IsCollapsed() const {
   return state_.collapsed;
 }
 
-void VerticalTabStripStateController::SetCollapsed(bool collapsed) {
-  if (state_.collapsed != collapsed) {
-    state_.collapsed = collapsed;
+VerticalTabStripCollapseState
+VerticalTabStripStateController::GetCollapseState() const {
+  if (IsCollapsed()) {
+    return VerticalTabStripCollapseState::kCollapsed;
+  }
+  if (delegate_ && delegate_->IsCollapsing()) {
+    return VerticalTabStripCollapseState::kCollapsing;
+  }
+  return VerticalTabStripCollapseState::kExpanded;
+}
+
+void VerticalTabStripStateController::RequestCollapse(bool collapse) {
+  if (!delegate_) {
+    return;
+  }
+
+  delegate_->RequestCollapse(collapse);
+
+  if (delegate_->IsCollapsing()) {
     NotifyCollapseChanged();
+  }
+
+  // Wait a short duration before attempting to show the expand on hover IPH
+  // after collapsing.
+  if (base::SequencedTaskRunner::HasCurrentDefault()) {
+    expand_on_hover_iph_startup_timer_.Start(
+        FROM_HERE, base::Seconds(3),
+        base::BindOnce(
+            &VerticalTabStripStateController::MaybeShowExpandOnHoverIPH,
+            base::Unretained(this)));
   }
 }
 
@@ -132,19 +241,39 @@ void VerticalTabStripStateController::SetUncollapsedWidth(int width) {
   }
 }
 
-void VerticalTabStripStateController::SetState(
-    const VerticalTabStripState& state) {
-  if (state_.collapsed != state.collapsed ||
-      state_.uncollapsed_width != state.uncollapsed_width) {
-    state_ = state;
-    NotifyCollapseChanged();
+bool VerticalTabStripStateController::IsExpandOnHoverEnabled() const {
+  return is_expand_on_hover_enabled_;
+}
+
+void VerticalTabStripStateController::SetExpandOnHoverEnabled(bool enabled) {
+  pref_service_->SetBoolean(prefs::kVerticalTabsExpandOnHoverEnabled, enabled);
+}
+
+void VerticalTabStripStateController::SetIsResizing(bool is_resizing) {
+  if (is_resizing_ == is_resizing) {
+    return;
   }
+  is_resizing_ = is_resizing;
+  on_resizing_changed_callback_list_.Notify(is_resizing_);
+}
+
+base::CallbackListSubscription
+VerticalTabStripStateController::RegisterOnResizingChanged(
+    ResizingChangeCallback callback) {
+  return on_resizing_changed_callback_list_.Add(std::move(callback));
 }
 
 base::CallbackListSubscription
 VerticalTabStripStateController::RegisterOnCollapseChanged(
-    StateChangedCallback callback) {
+    CollapseChangeCallback callback) {
   return on_collapse_changed_callback_list_.Add(std::move(callback));
+}
+
+base::CallbackListSubscription
+VerticalTabStripStateController::RegisterOnExpandOnHoverEnabledChanged(
+    base::RepeatingCallback<void(bool)> callback) {
+  return on_expand_on_hover_enabled_changed_callback_list_.Add(
+      std::move(callback));
 }
 
 base::CallbackListSubscription
@@ -160,9 +289,15 @@ VerticalTabStripStateController::RegisterOnModeChanged(
 }
 
 void VerticalTabStripStateController::NotifyCollapseChanged() {
-  UpdateSessionService();
+  on_collapse_changed_callback_list_.Notify(GetCollapseState());
   UpdateCollapseActionItem();
-  on_collapse_changed_callback_list_.Notify(this);
+  UpdateSessionService();
+  UpdatePrefService();
+}
+
+void VerticalTabStripStateController::NotifyExpandOnHoverEnabledChanged() {
+  on_expand_on_hover_enabled_changed_callback_list_.Notify(
+      is_expand_on_hover_enabled_);
 }
 
 void VerticalTabStripStateController::NotifyModeWillChange() {
@@ -171,6 +306,71 @@ void VerticalTabStripStateController::NotifyModeWillChange() {
 
 void VerticalTabStripStateController::NotifyModeChanged() {
   on_mode_changed_callback_list_.Notify(this);
+}
+
+void VerticalTabStripStateController::OnModeChanged() {
+  const bool new_enabled =
+      pref_service_->GetBoolean(prefs::kVerticalTabsEnabled);
+  if (new_enabled &&
+      !pref_service_->GetBoolean(prefs::kVerticalTabsEnabledFirstTime)) {
+    base::RecordAction(
+        base::UserMetricsAction("VerticalTabs_EnabledFirstTime"));
+    pref_service_->SetBoolean(prefs::kVerticalTabsEnabledFirstTime, true);
+  }
+  if (enable_state_lock_count_ > 0) {
+    if (new_enabled != is_vertical_tabs_enabled_) {
+      MaybeShowDelayedToast(new_enabled);
+    }
+    return;
+  }
+
+  is_vertical_tabs_enabled_ = new_enabled;
+
+  NotifyModeChanged();
+  UpdateCollapseActionItem();
+}
+
+void VerticalTabStripStateController::OnExpandOnHoverEnabledChanged() {
+  is_expand_on_hover_enabled_ =
+      pref_service_->GetBoolean(prefs::kVerticalTabsExpandOnHoverEnabled);
+  if (is_expand_on_hover_enabled_) {
+    base::RecordAction(
+        base::UserMetricsAction("VerticalTabs_ExpandOnHover_Enabled"));
+  } else {
+    base::RecordAction(
+        base::UserMetricsAction("VerticalTabs_ExpandOnHover_Disabled"));
+  }
+  NotifyExpandOnHoverEnabledChanged();
+}
+
+void VerticalTabStripStateController::SetCollapsed(bool collapsed) {
+  if (state_.collapsed != collapsed) {
+    state_.collapsed = collapsed;
+    NotifyCollapseChanged();
+    if (auto* browser_element_views =
+            BrowserElementsViews::From(browser_window_);
+        collapsed && browser_element_views) {
+      browser_element_views->NotifyEvent(
+          kTabStripRegionElementId, kVerticalTabStripCollapsedCustomEventId);
+    }
+  }
+}
+
+void VerticalTabStripStateController::OnLockCreated() {
+  enable_state_lock_count_++;
+}
+
+void VerticalTabStripStateController::OnLockDestroyed() {
+  CHECK_GT(enable_state_lock_count_, 0);
+  enable_state_lock_count_--;
+
+  if (enable_state_lock_count_ == 0) {
+    bool new_state = pref_service_->GetBoolean(prefs::kVerticalTabsEnabled);
+    if (new_state != is_vertical_tabs_enabled_) {
+      is_vertical_tabs_enabled_ = new_state;
+      NotifyModeChanged();
+    }
+  }
 }
 
 void VerticalTabStripStateController::UpdateSessionService() {
@@ -183,13 +383,27 @@ void VerticalTabStripStateController::UpdateSessionService() {
   }
 }
 
+void VerticalTabStripStateController::UpdatePrefService() {
+  if (pref_service_) {
+    pref_service_->SetBoolean(prefs::kVerticalTabsCollapsedState,
+                              state_.collapsed);
+    pref_service_->SetInteger(prefs::kVerticalTabsUncollapsedWidth,
+                              state_.uncollapsed_width);
+  }
+}
+
 void VerticalTabStripStateController::UpdateCollapseActionItem() {
-  const gfx::VectorIcon& icon = (IsCollapsed() == base::i18n::IsRTL())
-                                    ? views::kMenuOpenIcon
-                                    : views::kMenuCloseIcon;
+  const bool is_collapsed =
+      GetCollapseState() != VerticalTabStripCollapseState::kExpanded;
+
+  const gfx::VectorIcon& icon = (is_collapsed == base::i18n::IsRTL())
+                                    ? features::IsRoundedIconsEnabled()
+                                          ? views::kMenuOpenIcon
+                                          : views::kMenuOpenOldIcon
+                                    : views::kMenuCloseCustomIcon;
 
   const auto& text =
-      IsCollapsed() ? IDS_EXPAND_VERTICAL_TABS : IDS_COLLAPSE_VERTICAL_TABS;
+      is_collapsed ? IDS_EXPAND_VERTICAL_TABS : IDS_COLLAPSE_VERTICAL_TABS;
 
   actions::ActionItem* collapse_action =
       actions::ActionManager::Get().FindAction(kActionToggleCollapseVertical,
@@ -197,11 +411,17 @@ void VerticalTabStripStateController::UpdateCollapseActionItem() {
   if (collapse_action) {
     collapse_action->SetImage(
         ui::ImageModel::FromVectorIcon(icon, ui::kColorIcon));
-    collapse_action->SetText(BrowserActions::GetCleanTitleAndTooltipText(
-        l10n_util::GetStringUTF16(text)));
-    collapse_action->SetTooltipText(BrowserActions::GetCleanTitleAndTooltipText(
-        l10n_util::GetStringUTF16(text)));
+    collapse_action->SetText(
+        chrome::GetCleanTitleAndTooltipText(l10n_util::GetStringUTF16(text)));
+    collapse_action->SetTooltipText(
+        chrome::GetCleanTitleAndTooltipText(l10n_util::GetStringUTF16(text)));
+    collapse_action->SetEnabled(ShouldDisplayVerticalTabs());
   }
+}
+
+void VerticalTabStripStateController::OnDidBecomeActive(
+    BrowserWindowInterface* browser) {
+  UpdatePrefService();
 }
 
 void VerticalTabStripStateController::OnDestroying(
@@ -217,6 +437,29 @@ void VerticalTabStripStateController::OnBrowserCreated(
   if (browser == browser_window_) {
     browser_collection_observation_.Reset();
     UpdateSessionService();
+    UpdatePrefService();
+  }
+}
+
+void VerticalTabStripStateController::MaybeShowExpandOnHoverIPH() {
+  if (tabs::IsVerticalTabsExpandOnHoverFeatureEnabled() &&
+      ShouldDisplayVerticalTabs() &&
+      GetCollapseState() != VerticalTabStripCollapseState::kExpanded &&
+      pref_service_->FindPreference(prefs::kVerticalTabsExpandOnHoverEnabled)
+          ->IsDefaultValue()) {
+    BrowserUserEducationInterface::From(browser_window_)
+        ->MaybeShowFeaturePromo(
+            feature_engagement::kIPHVerticalTabsExpandOnHoverFeature);
+  }
+}
+
+void VerticalTabStripStateController::MaybeShowDelayedToast(bool new_enabled) {
+  ToastController* const toast_controller =
+      ToastController::From(browser_window_);
+  if (toast_controller) {
+    toast_controller->MaybeShowToast(
+        ToastParams(new_enabled ? ToastId::kTabStripSwitchDelayedVertical
+                                : ToastId::kTabStripSwitchDelayedHorizontal));
   }
 }
 

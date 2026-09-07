@@ -6,14 +6,18 @@ package org.chromium.chrome.browser.bookmarks;
 
 import static androidx.test.espresso.Espresso.onView;
 import static androidx.test.espresso.action.ViewActions.click;
+import static androidx.test.espresso.matcher.ViewMatchers.isDescendantOfA;
+import static androidx.test.espresso.matcher.ViewMatchers.withId;
 import static androidx.test.espresso.matcher.ViewMatchers.withText;
 
+import static org.hamcrest.Matchers.allOf;
+import static org.hamcrest.Matchers.startsWith;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNativeBookmarksUrl;
 import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNativeNtpUrl;
-import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNonNativeNtpUrl;
+import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNtpUrl;
 
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.test.filters.MediumTest;
@@ -33,12 +37,12 @@ import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DoNotBatch;
 import org.chromium.base.test.util.ImportantFormFactors;
 import org.chromium.base.test.util.UserActionTester;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.app.bookmarks.BookmarkActivity;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.ui.signin.signin_promo.SigninPromoCoordinator;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ntp.IncognitoNewTabPageStation;
@@ -51,7 +55,7 @@ import org.chromium.chrome.test.util.MenuUtils;
 import org.chromium.components.bookmarks.BookmarkId;
 import org.chromium.components.browser_ui.widget.RecyclerViewTestUtils;
 import org.chromium.components.embedder_support.util.UrlConstants;
-import org.chromium.ui.accessibility.AccessibilityState;
+import org.chromium.ui.accessibility.AccessibilityStateTestHelper;
 import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.url.GURL;
 
@@ -126,7 +130,8 @@ public class BookmarkOpenerTest {
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    AccessibilityState.setIsAnyAccessibilityServiceEnabledForTesting(false);
+                    AccessibilityStateTestHelper.setIsAnyAccessibilityServiceEnabledForTesting(
+                            false);
                     mBookmarkOpener = mBookmarkManagerCoordinator.getBookmarkOpenerForTesting();
                 });
     }
@@ -141,14 +146,22 @@ public class BookmarkOpenerTest {
         openRootFolder();
 
         // Mobile bookmarks is merged into all bookmarks when improved bookmark is enabled.
-        onView(withText("Mobile bookmarks")).perform(click());
+        onView(
+                        allOf(
+                                withText(startsWith("Mobile bookmarks")),
+                                isDescendantOfA(withId(R.id.selectable_list_recycler_view))))
+                .perform(click());
         InstrumentationRegistry.getInstrumentation().waitForIdleSync();
     }
 
     void openReadingList() {
         openRootFolder();
 
-        onView(withText("Reading list")).perform(click());
+        onView(
+                        allOf(
+                                withText(startsWith("Reading list")),
+                                isDescendantOfA(withId(R.id.selectable_list_recycler_view))))
+                .perform(click());
         InstrumentationRegistry.getInstrumentation().waitForIdleSync();
     }
 
@@ -238,8 +251,8 @@ public class BookmarkOpenerTest {
 
         List<BookmarkId> ids = new ArrayList<>();
         ids.add(addMobileBookmark("test", url));
-        ids.add(addMobileBookmark("test1", new GURL(getOriginalNonNativeNtpUrl())));
-        ids.add(addMobileBookmark("test2", new GURL(getOriginalNonNativeNtpUrl())));
+        ids.add(addMobileBookmark("test1", new GURL(getOriginalNtpUrl())));
+        ids.add(addMobileBookmark("test2", new GURL(getOriginalNtpUrl())));
 
         ChromeTabbedActivity cta = mPage.getActivity();
         openBookmarkManager(mPage);
@@ -272,8 +285,8 @@ public class BookmarkOpenerTest {
 
         List<BookmarkId> ids = new ArrayList<>();
         ids.add(addMobileBookmark("test", url));
-        ids.add(addMobileBookmark("test1", new GURL(getOriginalNonNativeNtpUrl())));
-        ids.add(addMobileBookmark("test2", new GURL(getOriginalNonNativeNtpUrl())));
+        ids.add(addMobileBookmark("test1", new GURL(getOriginalNtpUrl())));
+        ids.add(addMobileBookmark("test2", new GURL(getOriginalNtpUrl())));
 
         IncognitoNewTabPageStation incognitoPageStation = mPage.openNewIncognitoTabOrWindowFast();
         ChromeTabbedActivity cta = incognitoPageStation.getActivity();

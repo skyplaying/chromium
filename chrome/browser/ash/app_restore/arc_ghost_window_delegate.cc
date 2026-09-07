@@ -12,6 +12,7 @@
 #include "chromeos/ui/base/window_state_type.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
+#include "ui/display/types/display_constants.h"
 
 namespace ash::full_restore {
 
@@ -180,6 +181,7 @@ bool ArcGhostWindowDelegate::SetDisplayId(int64_t display_id) {
   std::optional<double> scale_factor = GetDisplayScaleFactor(display_id);
   if (!scale_factor.has_value()) {
     LOG(ERROR) << "Invalid display id for ARC Ghost Window";
+    display_id_ = display::kInvalidDisplayId;
     scale_factor_ = 1.;
     return false;
   }

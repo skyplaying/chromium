@@ -5,8 +5,11 @@
 #include "components/payments/content/payment_app.h"
 
 #include <algorithm>
+#include <optional>
 
 #include "base/functional/callback.h"
+#include "base/notreached.h"
+#include "url/origin.h"
 
 namespace payments {
 namespace {
@@ -53,6 +56,11 @@ const SkBitmap* PaymentApp::icon_bitmap() const {
 std::vector<PaymentApp::PaymentEntityLogo*>
 PaymentApp::GetPaymentEntitiesLogos() {
   return {};
+}
+
+const mojom::PaymentItemPtr& PaymentApp::GetTotalForSpc() const {
+  NOTREACHED()
+      << "Only SecurePaymentConfirmationApp is expected to return the total.";
 }
 
 std::string PaymentApp::GetApplicationIdentifierToHide() const {
@@ -156,6 +164,10 @@ bool PaymentApp::operator<(const PaymentApp& other) const {
   if (CanPreselect() != other.CanPreselect())
     return CanPreselect();
   return false;
+}
+
+std::optional<url::Origin> PaymentApp::GetPaymentHandlerOrigin() const {
+  return std::nullopt;
 }
 
 }  // namespace payments

@@ -21,9 +21,7 @@
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
 #include "chrome/browser/signin/signin_promo.h"
 #include "chrome/browser/signin/signin_util.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/webui/signin/inline_login_handler_impl.h"
@@ -34,9 +32,7 @@
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/credential_provider/common/gcp_strings.h"
-#include "chrome/grit/branded_strings.h"
-#include "chrome/grit/generated_resources.h"
-#include "chrome/test/base/chrome_test_utils.h"
+#include "chrome/test/base/chrome_test_path_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/test_browser_window.h"
 #include "chrome/test/base/test_chrome_web_ui_controller_factory.h"
@@ -47,9 +43,10 @@
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
-#include "content/public/browser/session_storage_namespace.h"
+#include "content/public/browser/session_storage_namespace_handle.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui_controller.h"
@@ -69,9 +66,11 @@
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/window_open_disposition.h"
 
 using ::testing::_;
 using ::testing::AtLeast;
@@ -98,14 +97,14 @@ struct ContentInfo {
   raw_ptr<content::StoragePartition> storage_partition;
 };
 
-ContentInfo NavigateAndGetInfo(Browser* browser,
+ContentInfo NavigateAndGetInfo(BrowserWindowInterface* browser,
                                const GURL& url,
                                WindowOpenDisposition disposition) {
   ui_test_utils::NavigateToURLWithDisposition(
       browser, url, disposition,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
   content::WebContents* contents =
-      browser->tab_strip_model()->GetActiveWebContents();
+      browser->GetTabStripModel()->GetActiveWebContents();
   content::RenderProcessHost* process =
       contents->GetPrimaryMainFrame()->GetProcess();
   return ContentInfo(contents, process->GetDeprecatedID(),
@@ -196,7 +195,7 @@ MockInlineSigninHelper::MockInlineSigninHelper(
 
 class InlineLoginUIBrowserTest : public InProcessBrowserTest {};
 
-// crbug.com/422868
+// crbug.com/41136981
 IN_PROC_BROWSER_TEST_F(InlineLoginUIBrowserTest, DSABLED_DifferentStorageId) {
   ContentInfo info = NavigateAndGetInfo(browser(), GetSigninPromoURL(),
                                         WindowOpenDisposition::CURRENT_TAB);
@@ -270,7 +269,7 @@ class InlineLoginHelperBrowserTest : public InProcessBrowserTest {
 
   void SetUp() override {
     // Don't spin up the IO thread yet since no threads are allowed while
-    // spawning sandbox host process. See crbug.com/322732.
+    // spawning sandbox host process. See crbug.com/41076404.
     ASSERT_TRUE(embedded_test_server()->InitializeAndListen());
 
     InProcessBrowserTest::SetUp();
@@ -324,7 +323,6 @@ class InlineLoginHelperBrowserTest : public InProcessBrowserTest {
                                     const std::string& refresh_token) {
     GaiaAuthConsumer::ClientOAuthResult result(
         refresh_token, /*access_token=*/"", /*expires_in_secs=*/0,
-        /*is_child_account*/ false,
         /*is_under_advanced_protection=*/false, /*is_bound_to_key=*/false);
     consumer->OnClientOAuthSuccess(result);
     base::RunLoop().RunUntilIdle();
@@ -382,7 +380,7 @@ class InlineLoginUISafeIframeBrowserTest : public InProcessBrowserTest {
         base::BindRepeating(&EmptyHtmlResponseHandler));
 
     // Don't spin up the IO thread yet since no threads are allowed while
-    // spawning sandbox host process. See crbug.com/322732.
+    // spawning sandbox host process. See crbug.com/41076404.
     ASSERT_TRUE(embedded_test_server()->InitializeAndListen());
 
     InProcessBrowserTest::SetUp();
@@ -454,7 +452,7 @@ IN_PROC_BROWSER_TEST_F(InlineLoginUISafeIframeBrowserTest,
   WaitUntilUIReady(browser());
 
   content::WebContents* contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   EXPECT_EQ(url, contents->GetVisibleURL());
 
   content::NavigationController& controller = contents->GetController();
@@ -519,7 +517,7 @@ class InlineLoginCorrectGaiaUrlBrowserTest : public InProcessBrowserTest {
         &HtmlRequestTracker::HtmlResponseHandler, base::Unretained(&tracker_)));
 
     // Don't spin up the IO thread yet since no threads are allowed while
-    // spawning sandbox host process. See crbug.com/322732.
+    // spawning sandbox host process. See crbug.com/41076404.
     ASSERT_TRUE(embedded_test_server()->InitializeAndListen());
 
     InProcessBrowserTest::SetUp();

@@ -22,13 +22,13 @@
 #include "net/log/net_log_source.h"
 #include "net/socket/socket_tag.h"
 #include "net/storage_access_api/status.h"
+#include "net/url_request/redirect_info.h"
 #include "net/url_request/referrer_policy.h"
 #include "services/network/public/cpp/fetch_retry_options.h"
 #include "services/network/public/cpp/optional_trust_token_params.h"
 #include "services/network/public/cpp/permissions_policy/permissions_policy.h"
 #include "services/network/public/cpp/resource_request_body.h"
 #include "services/network/public/mojom/accept_ch_frame_observer.mojom.h"
-#include "services/network/public/mojom/attribution.mojom.h"
 #include "services/network/public/mojom/client_security_state.mojom.h"
 #include "services/network/public/mojom/cookie_access_observer.mojom-forward.h"
 #include "services/network/public/mojom/cors.mojom-shared.h"
@@ -136,6 +136,10 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE) ResourceRequest {
     scoped_refptr<SharedDataPipeProducerHandle> response_body_stream;
     scoped_refptr<net::HttpResponseHeaders>
         expected_response_headers_for_synthetic_response;
+
+    // No new consumers should use this. It will be removed once the deprecated
+    // Protected Audiences code is removed.
+    bool is_ad_auction_trusted_signals_request = false;
   };
 
   // Typemapped to network.mojom.WebBundleTokenParams, see comments there
@@ -244,18 +248,18 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE) ResourceRequest {
       mojom::RequestDestination::kEmpty;
   scoped_refptr<ResourceRequestBody> request_body;
   bool keepalive = false;
-  bool browsing_topics = false;
-  bool ad_auction_headers = false;
-  bool shared_storage_writable_eligible = false;
   bool has_user_gesture = false;
   bool enable_load_timing = false;
   bool enable_upload_progress = false;
   bool do_not_prompt_for_login = false;
   bool is_outermost_main_frame = false;
   int transition_type = 0;
+  bool is_reload_navigation = false;
   int previews_state = 0;
   bool upgrade_if_insecure = false;
   bool is_revalidating = false;
+  std::optional<std::string> revalidation_etag;
+  std::optional<std::string> revalidation_last_modified;
   std::optional<base::UnguessableToken> throttling_profile_id;
   std::optional<base::UnguessableToken> fetch_window_id;
   std::optional<std::string> devtools_request_id;
@@ -280,22 +284,17 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE) ResourceRequest {
 
   net::StorageAccessApiStatus storage_access_api_status =
       net::StorageAccessApiStatus::kNone;
-  network::mojom::AttributionSupport attribution_reporting_support =
-      network::mojom::AttributionSupport::kUnset;
-  mojom::AttributionReportingEligibility attribution_reporting_eligibility =
-      mojom::AttributionReportingEligibility::kUnset;
   bool shared_dictionary_writer_enabled = false;
-  std::optional<base::UnguessableToken> attribution_reporting_src_token;
   std::optional<base::UnguessableToken> keepalive_token;
   bool is_ad_tagged = false;
   bool client_side_content_decoding_enabled = false;
   std::optional<base::UnguessableToken> prefetch_token;
   net::SocketTag socket_tag;
 
-  // Whether this request is allowed to register device bound sessions
-  // or accept challenges for device bound sessions (e.g. due to an
-  // origin trial).
-  bool allows_device_bound_session_registration = false;
+  // Whether this request is allowed to belong to a device bound session. This
+  // includes registering a new session, accepting challenges, or deferring the
+  // request until a session is refreshed.
+  bool allows_device_bound_sessions = true;
 
   std::optional<network::PermissionsPolicy> permissions_policy;
 
@@ -307,6 +306,11 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE) ResourceRequest {
 COMPONENT_EXPORT(NETWORK_CPP_BASE)
 net::ReferrerPolicy ReferrerPolicyForUrlRequest(
     mojom::ReferrerPolicy referrer_policy);
+
+// Returns a bitmask of net::LOAD_* flags that are allowed for requests from
+// untrusted processes.
+COMPONENT_EXPORT(NETWORK_CPP_BASE)
+int GetAllowedLoadFlagsForUntrustedRequests();
 
 namespace debug {
 

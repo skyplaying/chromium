@@ -5,12 +5,18 @@
 #include "content/public/browser/desktop_capture.h"
 
 #include "base/feature_list.h"
+#include "base/no_destructor.h"
 #include "build/build_config.h"
 #include "content/browser/media/capture/pip_screen_capture_coordinator.h"
+#include "content/browser/media/capture/screenshot_capture_request_impl.h"
+#if BUILDFLAG(IS_MAC)
+#include "content/browser/media/capture/desktop_capture_util_mac.h"
+#endif
 #include "content/browser/renderer_host/media/media_stream_manager.h"
 #include "content/browser/renderer_host/media/video_capture_manager.h"
 #include "content/common/features.h"
 #include "content/public/common/content_features.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "content/browser/media/capture/desktop_capturer_ash.h"
@@ -44,27 +50,14 @@ bool CGDisplayStreamCreateIsAvailable() {
 
 namespace content::desktop_capture {
 
-#if BUILDFLAG(IS_WIN)
-// This feature controls the rollout of a field trial experiment that enables
-// a heuristic for finding the editor window of a presentation application
-// (e.g., PowerPoint) when the user shares the slideshow window.
-// TODO(crbug.com/409473386): Remove this feature once it has been in stable for
-// at least one milestone.
-BASE_FEATURE(kUseHeuristicForFindingEditor, base::FEATURE_DISABLED_BY_DEFAULT);
-#endif
-
 webrtc::DesktopCaptureOptions CreateDesktopCaptureOptions() {
   auto options = webrtc::DesktopCaptureOptions::CreateDefault();
   // Leave desktop effects enabled during WebRTC captures.
   options.set_disable_effects(false);
 #if BUILDFLAG(IS_WIN)
-  options.full_screen_window_detector()->SetHeuristicForFindingEditor(
-      base::FeatureList::IsEnabled(kUseHeuristicForFindingEditor));
-
   // TODO(crbug.com/webrtc/15045): Possibly remove this flag. Keeping for now
   // to force fallback to GDI.
-  static BASE_FEATURE(kDirectXCapturer, "DirectXCapturer",
-                      base::FEATURE_ENABLED_BY_DEFAULT);
+  static BASE_FEATURE(kDirectXCapturer, base::FEATURE_ENABLED_BY_DEFAULT);
   if (base::FeatureList::IsEnabled(kDirectXCapturer)) {
     // Results in DirectX as main capture API and GDI as fallback solution.
     options.set_allow_directx_capturer(true);
@@ -138,32 +131,62 @@ bool ShouldEnumerateCurrentProcessWindows() {
 #endif
 }
 
+namespace {
+OpenNativePickerCallbackForTesting& GetCallbackForTesting() {
+  static base::NoDestructor<OpenNativePickerCallbackForTesting> callback;
+  return *callback;
+}
+}  // namespace
+
 void OpenNativeScreenCapturePicker(
     content::DesktopMediaID::Type type,
     base::OnceCallback<void(DesktopMediaID::Id)> created_callback,
     base::OnceCallback<void(webrtc::DesktopCapturer::Source)> picker_callback,
     base::OnceCallback<void()> cancel_callback,
     base::OnceCallback<void()> error_callback) {
-  content::MediaStreamManager::GetInstance()
-      ->video_capture_manager()
-      ->OpenNativeScreenCapturePicker(
-          type, std::move(created_callback), std::move(picker_callback),
-          std::move(cancel_callback), std::move(error_callback));
+  if (const auto& testing_callback = GetCallbackForTesting()) {
+    testing_callback.Run(type, std::move(created_callback),
+                         std::move(picker_callback), std::move(cancel_callback),
+                         std::move(error_callback));
+    return;
+  }
+  auto* manager = content::MediaStreamManager::GetInstance();
+  if (!manager) {
+    if (error_callback) {
+      std::move(error_callback).Run();
+    }
+    return;
+  }
+  manager->OpenNativeScreenCapturePicker(
+      type, std::move(created_callback), std::move(picker_callback),
+      std::move(cancel_callback), std::move(error_callback));
 }
 
 void CloseNativeScreenCapturePicker(DesktopMediaID source_id) {
-  content::MediaStreamManager::GetInstance()
-      ->video_capture_manager()
-      ->CloseNativeScreenCapturePicker(source_id);
+  auto* manager = content::MediaStreamManager::GetInstance();
+  if (manager && manager->video_capture_manager()) {
+    manager->video_capture_manager()->CloseNativeScreenCapturePicker(source_id);
+  }
 }
 
-std::optional<DesktopMediaID::Id> GetPipWindowToExcludeFromScreenCapture(
-    DesktopMediaID::Id desktop_id) {
-  if (auto* coordinator = content::PipScreenCaptureCoordinator::GetInstance()) {
-    return coordinator->GetPipWindowToExcludeFromScreenCapture(desktop_id);
-  }
+#if BUILDFLAG(IS_MAC)
+void GetApplicationAudioCaptureId(
+    DesktopMediaID desktop_media_id,
+    GetApplicationAudioCaptureIdCallback callback) {
+  content::GetApplicationAudioCaptureIdInternal(desktop_media_id,
+                                                std::move(callback));
+}
+#endif  // BUILDFLAG(IS_MAC)
 
-  return std::nullopt;
+void SetOpenNativeScreenCapturePickerCallbackForTesting(  // IN-TEST
+    OpenNativePickerCallbackForTesting callback) {
+  GetCallbackForTesting() = std::move(callback);  // IN-TEST
+}
+
+std::unique_ptr<ScreenshotCaptureRequest> CaptureScreenshot(
+    DesktopMediaID source,
+    base::OnceCallback<void(const ::SkBitmap&)> callback) {
+  return CreateScreenshotCaptureRequest(source, std::move(callback));
 }
 
 }  // namespace content::desktop_capture

@@ -74,6 +74,7 @@ network::ResourceRequest CopyResourceRequest(
   new_request.url = request.url;
   new_request.mode = request.mode;
   new_request.headers = request.headers;
+  new_request.trusted_params = request.trusted_params;
   return new_request;
 }
 
@@ -177,9 +178,7 @@ AndroidStreamReaderURLLoader::AndroidStreamReaderURLLoader(
 AndroidStreamReaderURLLoader::~AndroidStreamReaderURLLoader() = default;
 
 void AndroidStreamReaderURLLoader::FollowRedirect(
-    const std::vector<std::string>& removed_headers,
-    const net::HttpRequestHeaders& modified_headers,
-    const net::HttpRequestHeaders& modified_cors_exempt_headers,
+    network::HttpRequestHeadersUpdateParams headers_update_params,
     const std::optional<GURL>& new_url) {}
 void AndroidStreamReaderURLLoader::SetPriority(net::RequestPriority priority,
                                                int intra_priority_value) {}

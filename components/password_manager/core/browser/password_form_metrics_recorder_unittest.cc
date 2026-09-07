@@ -20,9 +20,11 @@
 #include "components/autofill/core/common/form_data.h"
 #include "components/autofill/core/common/form_data_test_api.h"
 #include "components/autofill/core/common/form_field_data.h"
+#include "components/metrics/profile_metrics_service.h"
 #include "components/password_manager/core/browser/password_manager.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
 #include "components/password_manager/core/browser/password_store/interactions_stats.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
@@ -58,9 +60,11 @@ using StoreSet = std::set<std::pair<std::u16string, PasswordForm::Store>>;
 // Create a UkmEntryBuilder with kTestSourceId.
 scoped_refptr<PasswordFormMetricsRecorder> CreatePasswordFormMetricsRecorder(
     bool is_main_frame_secure,
-    PrefService* pref_service) {
+    PrefService* pref_service,
+    metrics::ProfileMetricsService* profile_metrics_service) {
   return base::MakeRefCounted<PasswordFormMetricsRecorder>(
-      is_main_frame_secure, kTestSourceId, pref_service);
+      is_main_frame_secure, kTestSourceId, pref_service,
+      profile_metrics_service);
 }
 
 // Checks if the metric `metric_name` was recorded in the single entry of
@@ -84,7 +88,7 @@ void ExpectUkmEntryRecorded(ukm::TestUkmRecorder* test_ukm_recorder,
 
 }  // namespace
 
-class PasswordFormMetricsRecorderTest : public PlatformTest {
+class PasswordFormMetricsRecorderTest : public testing::Test {
  public:
   void SetUp() override {
     PasswordManager::RegisterProfilePrefs(pref_service_.registry());
@@ -94,6 +98,8 @@ class PasswordFormMetricsRecorderTest : public PlatformTest {
   base::test::TaskEnvironment task_environment_;
   base::HistogramTester histogram_tester_;
   sync_preferences::TestingPrefServiceSyncable pref_service_;
+  metrics::ProfileMetricsService profile_metrics_service_{
+      metrics::ProfileMetricsContext(1)};
 };
 
 // Test the metrics recorded around password generation and the user's
@@ -124,7 +130,8 @@ TEST_F(PasswordFormMetricsRecorderTest, Generation) {
     // on destruction.
     {
       auto recorder = CreatePasswordFormMetricsRecorder(
-          /*is_main_frame_secure*/ true, &pref_service_);
+          /*is_main_frame_secure*/ true, &pref_service_,
+          &profile_metrics_service_);
       if (test.has_generated_password) {
         recorder->SetGeneratedPasswordStatus(
             PasswordFormMetricsRecorder::GeneratedPasswordStatus::
@@ -221,7 +228,8 @@ TEST_F(PasswordFormMetricsRecorderTest, SubmittedFormType) {
     // on destruction.
     {
       auto recorder = CreatePasswordFormMetricsRecorder(
-          /*is_main_frame_secure=*/true, &pref_service_);
+          /*is_main_frame_secure=*/true, &pref_service_,
+          &profile_metrics_service_);
       if (test.form_type) {
         recorder->SetSubmittedFormType(test.form_type.value());
       }
@@ -306,7 +314,8 @@ TEST_F(PasswordFormMetricsRecorderTest, RecordPasswordBubbleShown) {
     ukm::TestAutoSetUkmRecorder test_ukm_recorder;
     {
       auto recorder = CreatePasswordFormMetricsRecorder(
-          true /*is_main_frame_secure*/, &pref_service_);
+          true /*is_main_frame_secure*/, &pref_service_,
+          &profile_metrics_service_);
       recorder->RecordPasswordBubbleShown(test.credential_source_type,
                                           test.display_disposition);
     }
@@ -368,7 +377,8 @@ TEST_F(PasswordFormMetricsRecorderTest, RecordUIDismissalReason) {
     ukm::TestAutoSetUkmRecorder test_ukm_recorder;
     {
       auto recorder = CreatePasswordFormMetricsRecorder(
-          true /*is_main_frame_secure*/, &pref_service_);
+          true /*is_main_frame_secure*/, &pref_service_,
+          &profile_metrics_service_);
       recorder->RecordPasswordBubbleShown(
           metrics_util::CredentialSourceType::kPasswordManager,
           test.display_disposition);
@@ -395,7 +405,8 @@ TEST_F(PasswordFormMetricsRecorderTest, SequencesOfBubbles) {
   ukm::TestAutoSetUkmRecorder test_ukm_recorder;
   {
     auto recorder = CreatePasswordFormMetricsRecorder(
-        true /*is_main_frame_secure*/, &pref_service_);
+        true /*is_main_frame_secure*/, &pref_service_,
+        &profile_metrics_service_);
     // Open and confirm an automatically triggered saving prompt.
     recorder->RecordPasswordBubbleShown(
         metrics_util::CredentialSourceType::kPasswordManager,
@@ -439,7 +450,8 @@ TEST_F(PasswordFormMetricsRecorderTest, RecordDetailedUserAction) {
   ukm::TestAutoSetUkmRecorder test_ukm_recorder;
   {
     auto recorder = CreatePasswordFormMetricsRecorder(
-        true /*is_main_frame_secure*/, &pref_service_);
+        true /*is_main_frame_secure*/, &pref_service_,
+        &profile_metrics_service_);
     recorder->RecordDetailedUserAction(Action::kCorrectedUsernameInForm);
     recorder->RecordDetailedUserAction(Action::kCorrectedUsernameInForm);
     recorder->RecordDetailedUserAction(Action::kEditedUsernameInBubble);
@@ -474,7 +486,8 @@ TEST_F(PasswordFormMetricsRecorderTest, RecordShowManualFallbackForSaving) {
     ukm::TestAutoSetUkmRecorder test_ukm_recorder;
     {
       auto recorder = CreatePasswordFormMetricsRecorder(
-          true /*is_main_frame_secure*/, &pref_service_);
+          true /*is_main_frame_secure*/, &pref_service_,
+          &profile_metrics_service_);
       recorder->RecordShowManualFallbackForSaving(test.has_generated_password,
                                                   test.is_update);
     }
@@ -492,7 +505,8 @@ TEST_F(PasswordFormMetricsRecorderTest, NoRecordShowManualFallbackForSaving) {
   ukm::TestAutoSetUkmRecorder test_ukm_recorder;
   {
     auto recorder = CreatePasswordFormMetricsRecorder(
-        true /*is_main_frame_secure*/, &pref_service_);
+        true /*is_main_frame_secure*/, &pref_service_,
+        &profile_metrics_service_);
   }
   auto entries = test_ukm_recorder.GetEntriesByName(UkmEntry::kEntryName);
   ASSERT_EQ(1u, entries.size());
@@ -507,7 +521,8 @@ TEST_F(PasswordFormMetricsRecorderTest,
   ukm::TestAutoSetUkmRecorder test_ukm_recorder;
   {
     auto recorder = CreatePasswordFormMetricsRecorder(
-        true /*is_main_frame_secure*/, &pref_service_);
+        true /*is_main_frame_secure*/, &pref_service_,
+        &profile_metrics_service_);
     recorder->RecordShowManualFallbackForSaving(true, false);
     recorder->RecordShowManualFallbackForSaving(true, true);
   }
@@ -521,14 +536,14 @@ TEST_F(PasswordFormMetricsRecorderTest,
 
 TEST_F(PasswordFormMetricsRecorderTest, FormChangeBitmapNoMetricRecorded) {
   auto recorder = CreatePasswordFormMetricsRecorder(
-      true /*is_main_frame_secure*/, &pref_service_);
+      true /*is_main_frame_secure*/, &pref_service_, &profile_metrics_service_);
   recorder.reset();
   histogram_tester_.ExpectTotalCount("PasswordManager.DynamicFormChanges", 0);
 }
 
 TEST_F(PasswordFormMetricsRecorderTest, FormChangeBitmapRecordedOnce) {
   auto recorder = CreatePasswordFormMetricsRecorder(
-      true /*is_main_frame_secure*/, &pref_service_);
+      true /*is_main_frame_secure*/, &pref_service_, &profile_metrics_service_);
   recorder->RecordFormChangeBitmask(PasswordFormMetricsRecorder::kFieldsNumber);
   recorder.reset();
   histogram_tester_.ExpectUniqueSample("PasswordManager.DynamicFormChanges",
@@ -537,7 +552,7 @@ TEST_F(PasswordFormMetricsRecorderTest, FormChangeBitmapRecordedOnce) {
 
 TEST_F(PasswordFormMetricsRecorderTest, FormChangeBitmapRecordedMultipleTimes) {
   auto recorder = CreatePasswordFormMetricsRecorder(
-      true /*is_main_frame_secure*/, &pref_service_);
+      true /*is_main_frame_secure*/, &pref_service_, &profile_metrics_service_);
   recorder->RecordFormChangeBitmask(PasswordFormMetricsRecorder::kFieldsNumber);
   recorder->RecordFormChangeBitmask(
       PasswordFormMetricsRecorder::kFormControlTypes);
@@ -605,7 +620,7 @@ PasswordForm ConvertToPasswordForm(
     std::u16string value =
         ASCIIToUTF16(field.user_input.empty() ? field.value : field.user_input);
     if (field.is_password) {
-      password_form.password_value = value;
+      password_form.password_value = PasswordString(std::move(value));
     } else {
       password_form.username_value = value;
     }
@@ -646,6 +661,7 @@ std::string PickFirstValueInStoreSet(StoreSet store_set) {
 }
 
 void CheckFillingAssistanceTestCase(
+    metrics::ProfileMetricsService* profile_metrics_service,
     const FillingAssistanceTestCase& test_case) {
   struct SubCase {
     bool is_main_frame_secure;
@@ -719,7 +735,7 @@ void CheckFillingAssistanceTestCase(
                                      /*account_store_values=*/{});
 
     auto recorder = CreatePasswordFormMetricsRecorder(
-        sub_case.is_main_frame_secure, &pref_service);
+        sub_case.is_main_frame_secure, &pref_service, profile_metrics_service);
     if (test_case.submission_detected) {
       recorder->CalculateFillingAssistanceMetric(
           password_form_data, saved_usernames, saved_passwords,
@@ -788,16 +804,27 @@ void CheckFillingAssistanceTestCase(
     if (test_case.expectation) {
       histogram_tester.ExpectUniqueSample("PasswordManager.FillingAssistance",
                                           *test_case.expectation, 1);
+      histogram_tester.ExpectUniqueSample(
+          "PasswordManager.FillingAssistance.Profile1", *test_case.expectation,
+          1);
 
       histogram_tester.ExpectUniqueSample(
           sub_case.is_main_frame_secure
               ? "PasswordManager.FillingAssistance.SecureOrigin"
               : "PasswordManager.FillingAssistance.InsecureOrigin",
           *test_case.expectation, 1);
+      histogram_tester.ExpectUniqueSample(
+          sub_case.is_main_frame_secure
+              ? "PasswordManager.FillingAssistance.SecureOrigin.Profile1"
+              : "PasswordManager.FillingAssistance.InsecureOrigin.Profile1",
+          *test_case.expectation, 1);
 
       if (sub_case.is_main_frame_secure && sub_case.is_mixed_form) {
         histogram_tester.ExpectUniqueSample(
             "PasswordManager.FillingAssistance.MixedForm",
+            *test_case.expectation, 1);
+        histogram_tester.ExpectUniqueSample(
+            "PasswordManager.FillingAssistance.MixedForm.Profile1",
             *test_case.expectation, 1);
       }
 
@@ -818,41 +845,48 @@ void CheckFillingAssistanceTestCase(
       }
       histogram_tester.ExpectUniqueSample(account_storage_histogram,
                                           *test_case.expectation, 1);
+      histogram_tester.ExpectUniqueSample(
+          account_storage_histogram + ".Profile1", *test_case.expectation, 1);
     }
   }
 }
 
 TEST_F(PasswordFormMetricsRecorderTest, FillingAssistance_NoSubmission) {
-  CheckFillingAssistanceTestCase({
-      .description_for_logging = "No submission, no histogram recorded",
-      .submission_detected = false,
-      .fields = {{.value = "user1", .automatically_filled = true},
-                 {.value = "password1",
-                  .automatically_filled = true,
-                  .is_password = true}},
-      .saved_usernames = {"user1", "user2"},
-      .saved_passwords = {"password1", "secret"},
-  });
+  CheckFillingAssistanceTestCase(
+      &profile_metrics_service_,
+      {
+          .description_for_logging = "No submission, no histogram recorded",
+          .submission_detected = false,
+          .fields = {{.value = "user1", .automatically_filled = true},
+                     {.value = "password1",
+                      .automatically_filled = true,
+                      .is_password = true}},
+          .saved_usernames = {"user1", "user2"},
+          .saved_passwords = {"password1", "secret"},
+      });
 }
 
 TEST_F(PasswordFormMetricsRecorderTest,
        FillingAssistance_NoSuccessfulSubmission) {
-  CheckFillingAssistanceTestCase({
-      .description_for_logging =
-          "No sucessful submission, no histogram recorded",
-      .submission_detected = true,
-      .submission_is_successful = false,
-      .fields = {{.value = "user1", .automatically_filled = true},
-                 {.value = "password1",
-                  .automatically_filled = true,
-                  .is_password = true}},
-      .saved_usernames = {"user1", "user2"},
-      .saved_passwords = {"password1", "secret"},
-  });
+  CheckFillingAssistanceTestCase(
+      &profile_metrics_service_,
+      {
+          .description_for_logging =
+              "No successful submission, no histogram recorded",
+          .submission_detected = true,
+          .submission_is_successful = false,
+          .fields = {{.value = "user1", .automatically_filled = true},
+                     {.value = "password1",
+                      .automatically_filled = true,
+                      .is_password = true}},
+          .saved_usernames = {"user1", "user2"},
+          .saved_passwords = {"password1", "secret"},
+      });
 }
 
 TEST_F(PasswordFormMetricsRecorderTest, FillingAssistance_NoSavedCredentials) {
   CheckFillingAssistanceTestCase(
+      &profile_metrics_service_,
       {.description_for_logging =
            "No credentials, even when automatically filled",
        // This case might happen when credentials were filled that the user
@@ -871,6 +905,7 @@ TEST_F(PasswordFormMetricsRecorderTest, FillingAssistance_NoSavedCredentials) {
 TEST_F(PasswordFormMetricsRecorderTest,
        FillingAssistance_PasswordNotTypedNorFilled) {
   CheckFillingAssistanceTestCase(
+      &profile_metrics_service_,
       {.description_for_logging =
            "Form submitted without detected typing or filling",
        .fields = {{.value = ""},
@@ -884,6 +919,7 @@ TEST_F(PasswordFormMetricsRecorderTest,
 
 TEST_F(PasswordFormMetricsRecorderTest, FillingAssistance_AutomaticFilling) {
   CheckFillingAssistanceTestCase(
+      &profile_metrics_service_,
       {.description_for_logging = "Automatically filled sign-in form",
        .fields = {{.value = "user1", .automatically_filled = true},
                   {.value = "password1",
@@ -898,6 +934,7 @@ TEST_F(PasswordFormMetricsRecorderTest, FillingAssistance_AutomaticFilling) {
 
 TEST_F(PasswordFormMetricsRecorderTest, FillingAssistance_ManualFilling) {
   CheckFillingAssistanceTestCase(
+      &profile_metrics_service_,
       {.description_for_logging = "Manually filled sign-in form",
        .fields = {{.value = "user2", .manually_filled = true},
                   {.value = "password2",
@@ -912,6 +949,7 @@ TEST_F(PasswordFormMetricsRecorderTest, FillingAssistance_ManualFilling) {
 TEST_F(PasswordFormMetricsRecorderTest,
        FillingAssistance_AutomaticAndManualFilling) {
   CheckFillingAssistanceTestCase(
+      &profile_metrics_service_,
       {.description_for_logging =
            "Manually filled sign-in form after automatic fill",
        .fields = {{.value = "user2",
@@ -929,6 +967,7 @@ TEST_F(PasswordFormMetricsRecorderTest,
 
 TEST_F(PasswordFormMetricsRecorderTest, FillingAssistance_UserTypedPassword) {
   CheckFillingAssistanceTestCase(
+      &profile_metrics_service_,
       {.description_for_logging = "The user typed into password field",
        .fields = {{.value = "user2", .automatically_filled = true},
                   {.user_input = "password2",
@@ -944,6 +983,7 @@ TEST_F(PasswordFormMetricsRecorderTest, FillingAssistance_UserTypedPassword) {
 
 TEST_F(PasswordFormMetricsRecorderTest, FillingAssistance_UserTypedUsername) {
   CheckFillingAssistanceTestCase(
+      &profile_metrics_service_,
       {.description_for_logging = "The user typed into password field",
        .fields = {{.value = "user2", .user_typed = true},
                   {.user_input = "password2",
@@ -959,6 +999,7 @@ TEST_F(PasswordFormMetricsRecorderTest, FillingAssistance_UserTypedUsername) {
 TEST_F(PasswordFormMetricsRecorderTest,
        FillingAssistance_UserTypedNewCredentials) {
   CheckFillingAssistanceTestCase(
+      &profile_metrics_service_,
       {.description_for_logging = "New credentials were typed",
        .fields = {{
                       .value = "user2",
@@ -977,6 +1018,7 @@ TEST_F(PasswordFormMetricsRecorderTest,
 
 TEST_F(PasswordFormMetricsRecorderTest, FillingAssistance_ChangePasswordForm) {
   CheckFillingAssistanceTestCase(
+      &profile_metrics_service_,
       {.description_for_logging = "Change password form",
        .fields =
            {{.value = "old_password",
@@ -993,6 +1035,7 @@ TEST_F(PasswordFormMetricsRecorderTest, FillingAssistance_ChangePasswordForm) {
 TEST_F(PasswordFormMetricsRecorderTest,
        FillingAssistance_AutomaticallyFilledUserTypedInOtherFields) {
   CheckFillingAssistanceTestCase(
+      &profile_metrics_service_,
       {.description_for_logging =
            "Credentials filled, the user typed in other fields",
        .fields =
@@ -1015,6 +1058,7 @@ TEST_F(PasswordFormMetricsRecorderTest,
 TEST_F(PasswordFormMetricsRecorderTest,
        FillingAssistance_ManuallyFilledUserTypedInOtherFields) {
   CheckFillingAssistanceTestCase(
+      &profile_metrics_service_,
       {.description_for_logging = "A password filled manually, a username "
                                   "manually, the user typed in other fields",
        .fields =
@@ -1035,6 +1079,7 @@ TEST_F(PasswordFormMetricsRecorderTest,
 
 TEST_F(PasswordFormMetricsRecorderTest, FillingAssistance_BlocklistedDomain) {
   CheckFillingAssistanceTestCase(
+      &profile_metrics_service_,
       {.description_for_logging = "Submission while domain is blocklisted",
        .is_blocklisted = true,
        .fields = {{.value = "user1"},
@@ -1048,6 +1093,7 @@ TEST_F(PasswordFormMetricsRecorderTest, FillingAssistance_BlocklistedDomain) {
 TEST_F(PasswordFormMetricsRecorderTest,
        FillingAssistance_BlocklistedDomainWithCredential) {
   CheckFillingAssistanceTestCase(
+      &profile_metrics_service_,
       {.description_for_logging =
            "Submission while domain is blocklisted but a credential is stored",
        .is_blocklisted = true,
@@ -1066,6 +1112,7 @@ TEST_F(PasswordFormMetricsRecorderTest,
 TEST_F(PasswordFormMetricsRecorderTest,
        FillingAssistance_BlocklistedBySmartBubble) {
   CheckFillingAssistanceTestCase(
+      &profile_metrics_service_,
       {.description_for_logging = "Submission without saved credentials while "
                                   "smart bubble suppresses saving",
        .fields = {{.value = "user1"},
@@ -1081,6 +1128,7 @@ TEST_F(PasswordFormMetricsRecorderTest,
 TEST_F(PasswordFormMetricsRecorderTest,
        FillingAssistance_FilledPasswordMatchesSavedUsername) {
   CheckFillingAssistanceTestCase(
+      &profile_metrics_service_,
       {.description_for_logging = "A filled password matches a saved username",
        .fields = {{.value = "secret",
                    .automatically_filled = true,
@@ -1095,6 +1143,7 @@ TEST_F(PasswordFormMetricsRecorderTest,
 TEST_F(PasswordFormMetricsRecorderTest,
        FillingAssistance_FilledValueMatchesSavedUsernameAndPassword) {
   CheckFillingAssistanceTestCase(
+      &profile_metrics_service_,
       {.description_for_logging =
            "A filled value matches a saved username and password. Field is "
            "likely not a password field",
@@ -1124,7 +1173,7 @@ TEST_F(PasswordFormMetricsRecorderTest,
 
   // Calculate filling assistance metrics for the given form.
   auto recorder = CreatePasswordFormMetricsRecorder(
-      /*is_main_frame_secure=*/true, &pref_service_);
+      /*is_main_frame_secure=*/true, &pref_service_, &profile_metrics_service_);
   recorder->CalculateFillingAssistanceMetric(
       password_form_data, saved_usernames, /*saved_passwords=*/{},
       /*is_blocklisted=*/false, /*interactions_stats=*/{},
@@ -1160,7 +1209,7 @@ TEST_F(PasswordFormMetricsRecorderTest,
 
   // Calculate filling assistance metrics for the given form.
   auto recorder = CreatePasswordFormMetricsRecorder(
-      /*is_main_frame_secure=*/true, &pref_service_);
+      /*is_main_frame_secure=*/true, &pref_service_, &profile_metrics_service_);
   recorder->CalculateFillingAssistanceMetric(
       password_form_data, saved_usernames, /*saved_passwords=*/{},
       /*is_blocklisted=*/false, /*interactions_stats=*/{},
@@ -1196,7 +1245,7 @@ TEST_F(PasswordFormMetricsRecorderTest,
 
   // Calculate filling assistance metrics for the given form.
   auto recorder = CreatePasswordFormMetricsRecorder(
-      /*is_main_frame_secure=*/true, &pref_service_);
+      /*is_main_frame_secure=*/true, &pref_service_, &profile_metrics_service_);
   recorder->CalculateFillingAssistanceMetric(
       password_form_data, saved_usernames, /*saved_passwords=*/{},
       /*is_blocklisted=*/false, /*interactions_stats=*/{},
@@ -1230,7 +1279,7 @@ TEST_F(PasswordFormMetricsRecorderTest,
 
   // Calculate filling assistance metrics for the given form.
   auto recorder = CreatePasswordFormMetricsRecorder(
-      /*is_main_frame_secure=*/true, &pref_service_);
+      /*is_main_frame_secure=*/true, &pref_service_, &profile_metrics_service_);
   recorder->CalculateFillingAssistanceMetric(
       password_form_data, saved_usernames, /*saved_passwords=*/{},
       /*is_blocklisted=*/false, /*interactions_stats=*/{},
@@ -1266,7 +1315,7 @@ TEST_F(PasswordFormMetricsRecorderTest,
 
   // Calculate filling assistance metrics for the given form.
   auto recorder = CreatePasswordFormMetricsRecorder(
-      /*is_main_frame_secure=*/true, &pref_service_);
+      /*is_main_frame_secure=*/true, &pref_service_, &profile_metrics_service_);
   recorder->CalculateFillingAssistanceMetric(
       password_form_data, saved_usernames, /*saved_passwords=*/{},
       /*is_blocklisted=*/false, /*interactions_stats=*/{},
@@ -1302,7 +1351,7 @@ TEST_F(
 
   // Calculate filling assistance metrics for the given form.
   auto recorder = CreatePasswordFormMetricsRecorder(
-      /*is_main_frame_secure=*/true, &pref_service_);
+      /*is_main_frame_secure=*/true, &pref_service_, &profile_metrics_service_);
   recorder->CalculateFillingAssistanceMetric(
       password_form_data, saved_usernames, /*saved_passwords=*/{},
       /*is_blocklisted=*/false, /*interactions_stats=*/{},
@@ -1334,7 +1383,7 @@ TEST_F(PasswordFormMetricsRecorderTest,
 
   // Calculate filling assistance metrics for the given form.
   auto recorder = CreatePasswordFormMetricsRecorder(
-      /*is_main_frame_secure=*/true, &pref_service_);
+      /*is_main_frame_secure=*/true, &pref_service_, &profile_metrics_service_);
   recorder->CalculateFillingAssistanceMetric(
       password_form_data, /*saved_usernames=*/{}, /*saved_passwords=*/{},
       /*is_blocklisted=*/false, /*interactions_stats=*/{},
@@ -1365,7 +1414,7 @@ TEST_F(PasswordFormMetricsRecorderTest,
 
   // Calculate filling assistance metrics for the given form.
   auto recorder = CreatePasswordFormMetricsRecorder(
-      /*is_main_frame_secure=*/true, &pref_service_);
+      /*is_main_frame_secure=*/true, &pref_service_, &profile_metrics_service_);
   recorder->CalculateFillingAssistanceMetric(
       password_form_data, /*saved_usernames=*/{}, /*saved_passwords=*/{},
       /*is_blocklisted=*/true, /*interactions_stats=*/{},
@@ -1400,7 +1449,7 @@ TEST_F(PasswordFormMetricsRecorderTest,
 
   // Calculate filling assistance metrics for the given form.
   auto recorder = CreatePasswordFormMetricsRecorder(
-      /*is_main_frame_secure=*/true, &pref_service_);
+      /*is_main_frame_secure=*/true, &pref_service_, &profile_metrics_service_);
   recorder->CalculateFillingAssistanceMetric(
       password_form_data, /*saved_usernames=*/saved_usernames,
       /*saved_passwords=*/{},
@@ -1436,7 +1485,7 @@ TEST_F(PasswordFormMetricsRecorderTest,
 
   // Calculate filling assistance metrics for the given form.
   auto recorder = CreatePasswordFormMetricsRecorder(
-      /*is_main_frame_secure=*/true, &pref_service_);
+      /*is_main_frame_secure=*/true, &pref_service_, &profile_metrics_service_);
   recorder->CalculateFillingAssistanceMetric(
       password_form_data, /*saved_usernames=*/{}, /*saved_passwords=*/{},
       /*is_blocklisted=*/false, std::move(interactions_stats),
@@ -1469,7 +1518,7 @@ TEST_F(PasswordFormMetricsRecorderTest,
   auto filled_username_value = PickFirstValueInStoreSet(saved_usernames);
 
   auto recorder = CreatePasswordFormMetricsRecorder(
-      /*is_main_frame_secure=*/true, &pref_service_);
+      /*is_main_frame_secure=*/true, &pref_service_, &profile_metrics_service_);
 
   {
     // 1. Calculate filling assistance metrics when the form is a single
@@ -1523,7 +1572,9 @@ struct FillingSourceTestCase {
   std::optional<PasswordFormMetricsRecorder::FillingSource> expectation;
 };
 
-void CheckFillingSourceTestCase(const FillingSourceTestCase& test_case) {
+void CheckFillingSourceTestCase(
+    metrics::ProfileMetricsService* profile_metrics_service,
+    const FillingSourceTestCase& test_case) {
   sync_preferences::TestingPrefServiceSyncable pref_service;
   PasswordManager::RegisterProfilePrefs(pref_service.registry());
   base::HistogramTester histogram_tester;
@@ -1537,7 +1588,7 @@ void CheckFillingSourceTestCase(const FillingSourceTestCase& test_case) {
 
   {
     auto recorder = CreatePasswordFormMetricsRecorder(
-        /*is_main_frame_secure=*/true, &pref_service);
+        /*is_main_frame_secure=*/true, &pref_service, profile_metrics_service);
     recorder->CalculateFillingAssistanceMetric(
         password_form_data, saved_usernames, saved_passwords,
         /*is_blocklisted=*/false,
@@ -1555,84 +1606,94 @@ void CheckFillingSourceTestCase(const FillingSourceTestCase& test_case) {
 }
 
 TEST_F(PasswordFormMetricsRecorderTest, FillingSourceNone) {
-  CheckFillingSourceTestCase({
-      .fields = {{.value = "manualuser", .automatically_filled = true},
-                 {.value = "manualpass",
-                  .automatically_filled = true,
-                  .is_password = true}},
-      .saved_profile_usernames = {"profileuser"},
-      .saved_profile_passwords = {"profilepass"},
-      .saved_account_usernames = {"accountuser"},
-      .saved_account_passwords = {"accountpass"},
-      .expectation = PasswordFormMetricsRecorder::FillingSource::kNotFilled,
-  });
+  CheckFillingSourceTestCase(
+      &profile_metrics_service_,
+      {
+          .fields = {{.value = "manualuser", .automatically_filled = true},
+                     {.value = "manualpass",
+                      .automatically_filled = true,
+                      .is_password = true}},
+          .saved_profile_usernames = {"profileuser"},
+          .saved_profile_passwords = {"profilepass"},
+          .saved_account_usernames = {"accountuser"},
+          .saved_account_passwords = {"accountpass"},
+          .expectation = PasswordFormMetricsRecorder::FillingSource::kNotFilled,
+      });
 }
 
 TEST_F(PasswordFormMetricsRecorderTest, FillingSourceProfile) {
-  CheckFillingSourceTestCase({
-      .fields = {{.value = "profileuser", .automatically_filled = true},
-                 {.value = "profilepass",
-                  .automatically_filled = true,
-                  .is_password = true}},
-      .saved_profile_usernames = {"profileuser"},
-      .saved_profile_passwords = {"profilepass"},
-      .saved_account_usernames = {"accountuser"},
-      .saved_account_passwords = {"accountpass"},
-      .expectation =
-          PasswordFormMetricsRecorder::FillingSource::kFilledFromProfileStore,
-  });
+  CheckFillingSourceTestCase(
+      &profile_metrics_service_,
+      {
+          .fields = {{.value = "profileuser", .automatically_filled = true},
+                     {.value = "profilepass",
+                      .automatically_filled = true,
+                      .is_password = true}},
+          .saved_profile_usernames = {"profileuser"},
+          .saved_profile_passwords = {"profilepass"},
+          .saved_account_usernames = {"accountuser"},
+          .saved_account_passwords = {"accountpass"},
+          .expectation = PasswordFormMetricsRecorder::FillingSource::
+              kFilledFromProfileStore,
+      });
 }
 
 TEST_F(PasswordFormMetricsRecorderTest, FillingSourceAccount) {
-  CheckFillingSourceTestCase({
-      .fields = {{.value = "accountuser", .automatically_filled = true},
-                 {.value = "accountpass",
-                  .automatically_filled = true,
-                  .is_password = true}},
-      .saved_profile_usernames = {"profileuser"},
-      .saved_profile_passwords = {"profilepass"},
-      .saved_account_usernames = {"accountuser"},
-      .saved_account_passwords = {"accountpass"},
-      .expectation =
-          PasswordFormMetricsRecorder::FillingSource::kFilledFromAccountStore,
-  });
+  CheckFillingSourceTestCase(
+      &profile_metrics_service_,
+      {
+          .fields = {{.value = "accountuser", .automatically_filled = true},
+                     {.value = "accountpass",
+                      .automatically_filled = true,
+                      .is_password = true}},
+          .saved_profile_usernames = {"profileuser"},
+          .saved_profile_passwords = {"profilepass"},
+          .saved_account_usernames = {"accountuser"},
+          .saved_account_passwords = {"accountpass"},
+          .expectation = PasswordFormMetricsRecorder::FillingSource::
+              kFilledFromAccountStore,
+      });
 }
 
 TEST_F(PasswordFormMetricsRecorderTest, FillingSourceBoth) {
-  CheckFillingSourceTestCase({
-      .fields = {{.value = "user", .automatically_filled = true},
-                 {.value = "pass",
-                  .automatically_filled = true,
-                  .is_password = true}},
-      .saved_profile_usernames = {"user"},
-      .saved_profile_passwords = {"pass"},
-      .saved_account_usernames = {"user"},
-      .saved_account_passwords = {"pass"},
-      .expectation =
-          PasswordFormMetricsRecorder::FillingSource::kFilledFromBothStores,
-  });
+  CheckFillingSourceTestCase(
+      &profile_metrics_service_,
+      {
+          .fields = {{.value = "user", .automatically_filled = true},
+                     {.value = "pass",
+                      .automatically_filled = true,
+                      .is_password = true}},
+          .saved_profile_usernames = {"user"},
+          .saved_profile_passwords = {"pass"},
+          .saved_account_usernames = {"user"},
+          .saved_account_passwords = {"pass"},
+          .expectation =
+              PasswordFormMetricsRecorder::FillingSource::kFilledFromBothStores,
+      });
 }
 
 TEST_F(PasswordFormMetricsRecorderTest, FillingSourceBothDifferent) {
   // This test covers a rare edge case: If a password from the profile store and
   // a *different* password from the account store were both filled, then this
   // should also be recorded as kFilledFromBothStores.
-  CheckFillingSourceTestCase({
-      .fields = {{.value = "profileuser", .manually_filled = true},
-                 {.value = "profilepass",
-                  .manually_filled = true,
-                  .is_password = true},
-                 {.value = "accountuser", .manually_filled = true},
-                 {.value = "accountpass",
-                  .manually_filled = true,
-                  .is_password = true}},
-      .saved_profile_usernames = {"profileuser"},
-      .saved_profile_passwords = {"profilepass"},
-      .saved_account_usernames = {"accountuser"},
-      .saved_account_passwords = {"accountpass"},
-      .expectation =
-          PasswordFormMetricsRecorder::FillingSource::kFilledFromBothStores,
-  });
+  CheckFillingSourceTestCase(
+      &profile_metrics_service_,
+      {
+          .fields = {{.value = "profileuser", .manually_filled = true},
+                     {.value = "profilepass",
+                      .manually_filled = true,
+                      .is_password = true},
+                     {.value = "accountuser", .manually_filled = true},
+                     {.value = "accountpass",
+                      .manually_filled = true,
+                      .is_password = true}},
+          .saved_profile_usernames = {"profileuser"},
+          .saved_profile_passwords = {"profilepass"},
+          .saved_account_usernames = {"accountuser"},
+          .saved_account_passwords = {"accountpass"},
+          .expectation =
+              PasswordFormMetricsRecorder::FillingSource::kFilledFromBothStores,
+      });
 }
 
 TEST_F(PasswordFormMetricsRecorderTest, StoresUsedForFillingInLast7And28Days) {
@@ -1650,7 +1711,8 @@ TEST_F(PasswordFormMetricsRecorderTest, StoresUsedForFillingInLast7And28Days) {
          {.value = "pass", .manually_filled = true, .is_password = true}});
     {
       auto recorder = CreatePasswordFormMetricsRecorder(
-          /*is_main_frame_secure=*/true, &pref_service_);
+          /*is_main_frame_secure=*/true, &pref_service_,
+          &profile_metrics_service_);
       recorder->CalculateFillingAssistanceMetric(
           password_form_data, saved_usernames, saved_passwords,
           /*is_blocklisted=*/false,
@@ -1681,7 +1743,8 @@ TEST_F(PasswordFormMetricsRecorderTest, StoresUsedForFillingInLast7And28Days) {
           .is_password = true}});
     {
       auto recorder = CreatePasswordFormMetricsRecorder(
-          /*is_main_frame_secure=*/true, &pref_service_);
+          /*is_main_frame_secure=*/true, &pref_service_,
+          &profile_metrics_service_);
       recorder->CalculateFillingAssistanceMetric(
           password_form_data, saved_usernames, saved_passwords,
           /*is_blocklisted=*/false,
@@ -1712,7 +1775,8 @@ TEST_F(PasswordFormMetricsRecorderTest, StoresUsedForFillingInLast7And28Days) {
           .is_password = true}});
     {
       auto recorder = CreatePasswordFormMetricsRecorder(
-          /*is_main_frame_secure=*/true, &pref_service_);
+          /*is_main_frame_secure=*/true, &pref_service_,
+          &profile_metrics_service_);
       recorder->CalculateFillingAssistanceMetric(
           password_form_data, saved_usernames, saved_passwords,
           /*is_blocklisted=*/false,
@@ -1743,7 +1807,8 @@ TEST_F(PasswordFormMetricsRecorderTest, StoresUsedForFillingInLast7And28Days) {
          {.value = "pass", .manually_filled = true, .is_password = true}});
     {
       auto recorder = CreatePasswordFormMetricsRecorder(
-          /*is_main_frame_secure=*/true, &pref_service_);
+          /*is_main_frame_secure=*/true, &pref_service_,
+          &profile_metrics_service_);
       recorder->CalculateFillingAssistanceMetric(
           password_form_data, saved_usernames, saved_passwords,
           /*is_blocklisted=*/false,
@@ -1787,7 +1852,8 @@ TEST_F(PasswordFormMetricsRecorderTest,
           .is_password = true}});
     {
       auto recorder = CreatePasswordFormMetricsRecorder(
-          /*is_main_frame_secure=*/true, &pref_service_);
+          /*is_main_frame_secure=*/true, &pref_service_,
+          &profile_metrics_service_);
       recorder->set_clock_for_testing(&clock);
       recorder->CalculateFillingAssistanceMetric(
           password_form_data, saved_usernames, saved_passwords,
@@ -1821,7 +1887,8 @@ TEST_F(PasswordFormMetricsRecorderTest,
           .is_password = true}});
     {
       auto recorder = CreatePasswordFormMetricsRecorder(
-          /*is_main_frame_secure=*/true, &pref_service_);
+          /*is_main_frame_secure=*/true, &pref_service_,
+          &profile_metrics_service_);
       recorder->set_clock_for_testing(&clock);
       recorder->CalculateFillingAssistanceMetric(
           password_form_data, saved_usernames, saved_passwords,
@@ -1857,7 +1924,8 @@ TEST_F(PasswordFormMetricsRecorderTest,
           .is_password = true}});
     {
       auto recorder = CreatePasswordFormMetricsRecorder(
-          /*is_main_frame_secure=*/true, &pref_service_);
+          /*is_main_frame_secure=*/true, &pref_service_,
+          &profile_metrics_service_);
       recorder->set_clock_for_testing(&clock);
       recorder->CalculateFillingAssistanceMetric(
           password_form_data, saved_usernames, saved_passwords,
@@ -1891,7 +1959,8 @@ TEST_F(PasswordFormMetricsRecorderTest,
          {.value = "pass", .manually_filled = true, .is_password = true}});
     {
       auto recorder = CreatePasswordFormMetricsRecorder(
-          /*is_main_frame_secure=*/true, &pref_service_);
+          /*is_main_frame_secure=*/true, &pref_service_,
+          &profile_metrics_service_);
       recorder->set_clock_for_testing(&clock);
       recorder->CalculateFillingAssistanceMetric(
           password_form_data, saved_usernames, saved_passwords,
@@ -1926,7 +1995,8 @@ TEST_F(PasswordFormMetricsRecorderTest,
          {.value = "pass", .manually_filled = true, .is_password = true}});
     {
       auto recorder = CreatePasswordFormMetricsRecorder(
-          /*is_main_frame_secure=*/true, &pref_service_);
+          /*is_main_frame_secure=*/true, &pref_service_,
+          &profile_metrics_service_);
       recorder->set_clock_for_testing(&clock);
       recorder->CalculateFillingAssistanceMetric(
           password_form_data, saved_usernames, saved_passwords,
@@ -1956,7 +2026,8 @@ TEST_F(PasswordFormMetricsRecorderTest, FormParsingDifferenceNone) {
   ukm::TestAutoSetUkmRecorder test_ukm_recorder;
   {
     auto recorder = CreatePasswordFormMetricsRecorder(
-        /*is_main_frame_secure=*/true, &pref_service_);
+        /*is_main_frame_secure=*/true, &pref_service_,
+        &profile_metrics_service_);
     PasswordForm form;
     form.username_element_renderer_id = FieldRendererId(1);
     form.password_element_renderer_id = FieldRendererId(2);
@@ -1980,7 +2051,8 @@ TEST_F(PasswordFormMetricsRecorderTest, FormParsingDifferenceUsername) {
   ukm::TestAutoSetUkmRecorder test_ukm_recorder;
   {
     auto recorder = CreatePasswordFormMetricsRecorder(
-        /*is_main_frame_secure=*/true, &pref_service_);
+        /*is_main_frame_secure=*/true, &pref_service_,
+        &profile_metrics_service_);
     PasswordForm form;
     form.username_element_renderer_id = FieldRendererId(2);
     form.password_element_renderer_id = FieldRendererId(3);
@@ -2002,7 +2074,7 @@ TEST_F(PasswordFormMetricsRecorderTest, FormParsingDifferenceUsername) {
 TEST_F(PasswordFormMetricsRecorderTest, ActorLoginLatencyRecorded) {
   base::HistogramTester histogram_tester;
   auto recorder = CreatePasswordFormMetricsRecorder(
-      /*is_main_frame_secure=*/true, &pref_service_);
+      /*is_main_frame_secure=*/true, &pref_service_, &profile_metrics_service_);
   base::TimeDelta expected_latency = base::Seconds(5);
   recorder->SetActorLoginStartTime(base::TimeTicks::Now() - expected_latency);
   recorder->LogSubmitPassed();
@@ -2015,7 +2087,7 @@ TEST_F(PasswordFormMetricsRecorderTest,
        ActorLoginLatencyNotRecordedIfStartMissing) {
   base::HistogramTester histogram_tester;
   auto recorder = CreatePasswordFormMetricsRecorder(
-      /*is_main_frame_secure=*/true, &pref_service_);
+      /*is_main_frame_secure=*/true, &pref_service_, &profile_metrics_service_);
   recorder->LogSubmitPassed();
   histogram_tester.ExpectTotalCount(
       "PasswordManager.ActorLogin.TimeFromAttemptToSuccess", 0);
@@ -2024,7 +2096,7 @@ TEST_F(PasswordFormMetricsRecorderTest,
 TEST_F(PasswordFormMetricsRecorderTest, ActorLoginLatencyNotRecordedOnFailure) {
   base::HistogramTester histogram_tester;
   auto recorder = CreatePasswordFormMetricsRecorder(
-      /*is_main_frame_secure=*/true, &pref_service_);
+      /*is_main_frame_secure=*/true, &pref_service_, &profile_metrics_service_);
   recorder->SetActorLoginStartTime(base::TimeTicks::Now());
   recorder->LogSubmitFailed();
   histogram_tester.ExpectTotalCount(
@@ -2038,7 +2110,8 @@ TEST_F(PasswordFormMetricsRecorderTest, FormParsingDifferencePassword) {
   ukm::TestAutoSetUkmRecorder test_ukm_recorder;
   {
     auto recorder = CreatePasswordFormMetricsRecorder(
-        /*is_main_frame_secure=*/true, &pref_service_);
+        /*is_main_frame_secure=*/true, &pref_service_,
+        &profile_metrics_service_);
     PasswordForm form;
     form.username_element_renderer_id = FieldRendererId(1);
     form.password_element_renderer_id = FieldRendererId(2);
@@ -2072,7 +2145,8 @@ TEST_F(PasswordFormMetricsRecorderTest, AutomationRate) {
 
   {
     auto recorder = CreatePasswordFormMetricsRecorder(
-        /*is_main_frame_secure=*/true, &pref_service_);
+        /*is_main_frame_secure=*/true, &pref_service_,
+        &profile_metrics_service_);
     recorder->CalculateFillingAssistanceMetric(
         password_form_data, /*saved_usernames=*/{}, /*saved_passwords=*/{},
         /*is_blocklisted=*/false,
@@ -2116,6 +2190,7 @@ struct ClassificationCorrectnessTestCase {
 };
 
 void CheckClassificationCorrectnessTestCase(
+    metrics::ProfileMetricsService* profile_metrics_service,
     const ClassificationCorrectnessTestCase& test_case) {
   SCOPED_TRACE(testing::Message("Test description: ")
                << test_case.description_for_logging);
@@ -2125,7 +2200,7 @@ void CheckClassificationCorrectnessTestCase(
   PasswordManager::RegisterProfilePrefs(pref_service.registry());
 
   auto recorder = CreatePasswordFormMetricsRecorder(
-      /*is_main_frame_secure=*/true, &pref_service);
+      /*is_main_frame_secure=*/true, &pref_service, profile_metrics_service);
 
   PasswordForm parsed_form;
   parsed_form.username_element_renderer_id = test_case.username_field_id;
@@ -2179,51 +2254,61 @@ void CheckClassificationCorrectnessTestCase(
 
 TEST_F(PasswordFormMetricsRecorderTest,
        ClassificationCorrectness_NoSubmission) {
-  CheckClassificationCorrectnessTestCase({
-      .description_for_logging = "No submission, no histogram recorded",
-      .submission_detected = false,
-      .username_field_id = kUsernameFieldId,
-      .password_field_id = kPasswordFieldId,
-      .fields = {{.value = kSavedUsername, .renderer_id = kUsernameFieldId},
-                 {.value = kSavedPassword, .renderer_id = kPasswordFieldId}},
-      .saved_usernames = {kSavedUsername},
-      .saved_passwords = {kSavedPassword},
-  });
+  CheckClassificationCorrectnessTestCase(
+      &profile_metrics_service_,
+      {
+          .description_for_logging = "No submission, no histogram recorded",
+          .submission_detected = false,
+          .username_field_id = kUsernameFieldId,
+          .password_field_id = kPasswordFieldId,
+          .fields = {{.value = kSavedUsername, .renderer_id = kUsernameFieldId},
+                     {.value = kSavedPassword,
+                      .renderer_id = kPasswordFieldId}},
+          .saved_usernames = {kSavedUsername},
+          .saved_passwords = {kSavedPassword},
+      });
 }
 
 TEST_F(PasswordFormMetricsRecorderTest,
        ClassificationCorrectness_NoSuccessfulSubmission) {
-  CheckClassificationCorrectnessTestCase({
-      .description_for_logging =
-          "No sucessful submission, no histogram recorded",
-      .submission_detected = true,
-      .submission_is_successful = false,
-      .username_field_id = kUsernameFieldId,
-      .password_field_id = kPasswordFieldId,
-      .fields = {{.value = kSavedUsername, .renderer_id = kUsernameFieldId},
-                 {.value = kSavedPassword, .renderer_id = kPasswordFieldId}},
-      .saved_usernames = {kSavedUsername},
-      .saved_passwords = {kSavedPassword},
-  });
+  CheckClassificationCorrectnessTestCase(
+      &profile_metrics_service_,
+      {
+          .description_for_logging =
+              "No sucessful submission, no histogram recorded",
+          .submission_detected = true,
+          .submission_is_successful = false,
+          .username_field_id = kUsernameFieldId,
+          .password_field_id = kPasswordFieldId,
+          .fields = {{.value = kSavedUsername, .renderer_id = kUsernameFieldId},
+                     {.value = kSavedPassword,
+                      .renderer_id = kPasswordFieldId}},
+          .saved_usernames = {kSavedUsername},
+          .saved_passwords = {kSavedPassword},
+      });
 }
 
 TEST_F(PasswordFormMetricsRecorderTest,
        ClassificationCorrectness_NoSavedCredentials) {
-  CheckClassificationCorrectnessTestCase({
-      .description_for_logging =
-          "No saved credentials, cannot estimate correctness",
-      .username_field_id = kUsernameFieldId,
-      .password_field_id = kPasswordFieldId,
-      .fields = {{.value = kSavedUsername, .renderer_id = kUsernameFieldId},
-                 {.value = kSavedPassword, .renderer_id = kPasswordFieldId}},
-      .saved_usernames = {},
-      .saved_passwords = {},
-  });
+  CheckClassificationCorrectnessTestCase(
+      &profile_metrics_service_,
+      {
+          .description_for_logging =
+              "No saved credentials, cannot estimate correctness",
+          .username_field_id = kUsernameFieldId,
+          .password_field_id = kPasswordFieldId,
+          .fields = {{.value = kSavedUsername, .renderer_id = kUsernameFieldId},
+                     {.value = kSavedPassword,
+                      .renderer_id = kPasswordFieldId}},
+          .saved_usernames = {},
+          .saved_passwords = {},
+      });
 }
 
 TEST_F(PasswordFormMetricsRecorderTest,
        ClassificationCorrectness_CorrectlyClassifiedUsernameAndPassword) {
   CheckClassificationCorrectnessTestCase(
+      &profile_metrics_service_,
       {.description_for_logging =
            "Correct classification: username and password fields contain saved "
            "values",
@@ -2239,6 +2324,7 @@ TEST_F(PasswordFormMetricsRecorderTest,
 TEST_F(PasswordFormMetricsRecorderTest,
        ClassificationCorrectness_WronglyClassifiedUsernameAndPassword) {
   CheckClassificationCorrectnessTestCase(
+      &profile_metrics_service_,
       {.description_for_logging =
            "Incorrect classification: fields that were not classififed as "
            "username and password contain previously saved values.",
@@ -2258,6 +2344,7 @@ TEST_F(PasswordFormMetricsRecorderTest,
 TEST_F(PasswordFormMetricsRecorderTest,
        ClassificationCorrectness_UnknownUsernameAndPassword) {
   CheckClassificationCorrectnessTestCase(
+      &profile_metrics_service_,
       {.description_for_logging =
            "Unknown correctness: there were saved values, but some other "
            "values were submitted",
@@ -2273,6 +2360,7 @@ TEST_F(PasswordFormMetricsRecorderTest,
 TEST_F(PasswordFormMetricsRecorderTest,
        ClassificationCorrectness_FieldMissingAtSubmisisonTime) {
   CheckClassificationCorrectnessTestCase(
+      &profile_metrics_service_,
       {.description_for_logging =
            "Username field was present during inital parsing, but missing at "
            "submisison time. Record histogram only for the password field.",
@@ -2287,6 +2375,7 @@ TEST_F(PasswordFormMetricsRecorderTest,
 TEST_F(PasswordFormMetricsRecorderTest,
        ClassificationCorrectness_NewPasswordFieldOnly) {
   CheckClassificationCorrectnessTestCase(
+      &profile_metrics_service_,
       {.description_for_logging =
            "Incorrect classification: the field classified as new password "
            "contains a previously saved password value",
@@ -2296,6 +2385,7 @@ TEST_F(PasswordFormMetricsRecorderTest,
        .saved_passwords = {kSavedPassword},
        .expectation = {{"NewPassword", kWrong}}});
   CheckClassificationCorrectnessTestCase(
+      &profile_metrics_service_,
       {.description_for_logging =
            "Incorrect classification: the field classified as new password "
            "contains a previously saved username value",
@@ -2305,6 +2395,7 @@ TEST_F(PasswordFormMetricsRecorderTest,
        .saved_passwords = {kSavedPassword},
        .expectation = {{"NewPassword", kWrong}}});
   CheckClassificationCorrectnessTestCase(
+      &profile_metrics_service_,
       {.description_for_logging =
            "Correct classification: the field classified as new password "
            "contains a previously unseen value",
@@ -2314,6 +2405,7 @@ TEST_F(PasswordFormMetricsRecorderTest,
        .saved_passwords = {kSavedPassword},
        .expectation = {{"NewPassword", kCorrect}}});
   CheckClassificationCorrectnessTestCase(
+      &profile_metrics_service_,
       {.description_for_logging =
            "Unknown correctness of new password classification: no saved "
            "values and no confirmation field",
@@ -2328,6 +2420,7 @@ TEST_F(PasswordFormMetricsRecorderTest,
        ClassificationCorrectness_NewAndConfirmationPasswordFields) {
   constexpr FieldRendererId kSecondPasswordFieldId(3);
   CheckClassificationCorrectnessTestCase(
+      &profile_metrics_service_,
       {.description_for_logging = "New and confirmation password values don't "
                                   "match, and there are no saved values.",
        .new_password_field_id = kPasswordFieldId,
@@ -2342,6 +2435,7 @@ TEST_F(PasswordFormMetricsRecorderTest,
        .expectation = {{"NewPassword", kWrong},
                        {"ConfirmationPassword", kWrong}}});
   CheckClassificationCorrectnessTestCase(
+      &profile_metrics_service_,
       {.description_for_logging = "New and confirmation password values "
                                   "match, and there are no saved values.",
        .new_password_field_id = kPasswordFieldId,
@@ -2357,6 +2451,7 @@ TEST_F(PasswordFormMetricsRecorderTest,
        .expectation = {{"NewPassword", kCorrect},
                        {"ConfirmationPassword", kCorrect}}});
   CheckClassificationCorrectnessTestCase(
+      &profile_metrics_service_,
       {.description_for_logging =
            "New and confirmation password values "
            "match, but saved values indicate it's not a new password.",
@@ -2372,6 +2467,7 @@ TEST_F(PasswordFormMetricsRecorderTest,
        .expectation = {{"NewPassword", kWrong},
                        {"ConfirmationPassword", kCorrect}}});
   CheckClassificationCorrectnessTestCase(
+      &profile_metrics_service_,
       {.description_for_logging =
            "New and confirmation password values do not match, but saved "
            "values confirm that the new password is new.",

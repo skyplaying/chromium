@@ -4,10 +4,14 @@
 
 #include "ui/base/x/x11_os_exchange_data_provider.h"
 
+#include <stdint.h>
+
 #include <optional>
 #include <string_view>
 #include <utility>
+#include <vector>
 
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/notimplemented.h"
@@ -15,7 +19,6 @@
 #include "base/strings/string_util.h"
 #include "base/strings/string_view_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "build/build_config.h"
 #include "net/base/filename_util.h"
 #include "ui/base/clipboard/clipboard_constants.h"
 #include "ui/base/clipboard/clipboard_format_type.h"
@@ -27,10 +30,6 @@
 #include "ui/base/x/x11_util.h"
 #include "ui/gfx/x/atom_cache.h"
 #include "ui/gfx/x/connection.h"
-
-#if BUILDFLAG(IS_LINUX)
-#include "ui/base/clipboard/clipboard_util_linux.h"
-#endif
 
 // Note: the GetBlah() methods are used immediately by the
 // web_contents_view_aura.cc:PrepareDropData(), while the omnibox is a
@@ -97,6 +96,11 @@ SelectionFormatMap XOSExchangeDataProvider::GetFormatMap() const {
 std::unique_ptr<OSExchangeDataProvider> XOSExchangeDataProvider::Clone() const {
   std::unique_ptr<XOSExchangeDataProvider> ret(new XOSExchangeDataProvider());
   ret->set_format_map(format_map());
+  ret->SetDragImage(GetDragImage(), GetDragImageOffset());
+  ret->set_file_contents_name(file_contents_name());
+  if (IsFromPrivileged()) {
+    ret->MarkAsFromPrivileged();
+  }
   return std::move(ret);
 }
 
@@ -216,17 +220,6 @@ void XOSExchangeDataProvider::SetFilenames(
       base::MakeRefCounted<base::RefCountedString>(
           base::JoinString(paths, "\n")));
   format_map_.Insert(x11::GetAtom(kMimeTypeUriList), mem);
-
-#if BUILDFLAG(IS_LINUX)
-  // Synchronously register files to get the key. This blocks the UI thread
-  // briefly but ensures the key is ready for the data offer.
-  std::string key = ui::clipboard_util::RegisterFilesWithPortal(filenames);
-  if (!key.empty()) {
-    auto mem_key = base::MakeRefCounted<base::RefCountedString>(key);
-    format_map_.Insert(x11::GetAtom(kMimeTypePortalFileTransfer), mem_key);
-    format_map_.Insert(x11::GetAtom(kMimeTypePortalFiles), mem_key);
-  }
-#endif
 }
 
 void XOSExchangeDataProvider::SetPickledData(const ClipboardFormatType& format,
@@ -273,13 +266,14 @@ std::vector<ClipboardUrlInfo> XOSExchangeDataProvider::GetURLs(
     std::u16string unparsed;
     data.AssignTo(&unparsed);
 
-    std::vector<std::u16string> tokens = base::SplitString(
+    std::vector<std::u16string_view> tokens = base::SplitStringPiece(
         unparsed, u"\n", base::KEEP_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
     if (!tokens.empty()) {
       GURL url(tokens[0]);
       if (url.is_valid()) {
-        url_infos.emplace_back(
-            url, tokens.size() > 1 ? std::move(tokens[1]) : std::u16string());
+        url_infos.emplace_back(url, tokens.size() > 1
+                                        ? std::u16string(tokens[1])
+                                        : std::u16string());
       }
     }
   }
@@ -421,7 +415,7 @@ bool XOSExchangeDataProvider::HasCustomFormat(
 
 void XOSExchangeDataProvider::SetFileContents(
     const base::FilePath& filename,
-    const std::string& file_contents) {
+    base::span<const uint8_t> file_contents) {
   DCHECK(!filename.empty());
   DCHECK(!format_map().contains(x11::GetAtom(kMimeTypeMozillaUrl)));
   set_file_contents_name(filename);
@@ -446,7 +440,7 @@ void XOSExchangeDataProvider::SetFileContents(
           base::MakeRefCounted<base::RefCountedString>(std::string("F"))));
   InsertData(x11::GetAtom(kMimeTypeOctetStream),
              scoped_refptr<base::RefCountedMemory>(
-                 base::MakeRefCounted<base::RefCountedString>(file_contents)));
+                 base::MakeRefCounted<base::RefCountedBytes>(file_contents)));
 }
 
 std::optional<OSExchangeDataProvider::FileContentsInfo>
@@ -472,7 +466,7 @@ XOSExchangeDataProvider::GetFileContents() const {
     return std::nullopt;
   }
 
-  std::string file_contents;
+  std::vector<uint8_t> file_contents;
   data.AssignTo(&file_contents);
   return FileContentsInfo{.filename = filename,
                           .file_contents = std::move(file_contents)};

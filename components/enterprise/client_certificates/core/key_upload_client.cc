@@ -15,6 +15,7 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
+#include "base/notreached.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/types/expected.h"
@@ -23,8 +24,12 @@
 #include "components/enterprise/client_certificates/core/private_key_types.h"
 #include "components/policy/core/common/cloud/dmserver_job_configurations.h"
 #include "components/policy/proto/device_management_backend.pb.h"
-#include "crypto/signature_verifier.h"
+#include "crypto/evp.h"
+#include "crypto/sign.h"
+#include "net/cert/asn1_util.h"
 #include "net/cert/x509_certificate.h"
+#include "net/cert/x509_util.h"
+#include "third_party/boringssl/src/include/openssl/evp.h"
 
 using BPKUR = enterprise_management::BrowserPublicKeyUploadRequest;
 
@@ -36,38 +41,52 @@ BPKUR::KeyTrustLevel SourceToTrustLevel(PrivateKeySource source) {
   switch (source) {
     case PrivateKeySource::kAndroidKey:
     case PrivateKeySource::kUnexportableKey:
+    case PrivateKeySource::kChromeOsHwKey:
       return BPKUR::CHROME_BROWSER_HW_KEY;
     case PrivateKeySource::kSoftwareKey:
     case PrivateKeySource::kOsSoftwareKey:
+    case PrivateKeySource::kChromeOsSwKey:
       return BPKUR::CHROME_BROWSER_OS_KEY;
   }
 }
 
-BPKUR::KeyType AlgorithmToType(
-    crypto::SignatureVerifier::SignatureAlgorithm algorithm) {
+BPKUR::KeyType AlgorithmToType(crypto::sign::SignatureKind algorithm) {
   switch (algorithm) {
-    case crypto::SignatureVerifier::RSA_PKCS1_SHA1:
-    case crypto::SignatureVerifier::RSA_PKCS1_SHA256:
-    case crypto::SignatureVerifier::RSA_PSS_SHA256:
+    case crypto::sign::RSA_PKCS1_SHA1:
+    case crypto::sign::RSA_PKCS1_SHA256:
+    case crypto::sign::RSA_PKCS1_SHA384:
+    case crypto::sign::RSA_PKCS1_SHA512:
+    case crypto::sign::RSA_PSS_SHA256:
+    case crypto::sign::RSA_PSS_SHA384:
+    case crypto::sign::RSA_PSS_SHA512:
       return BPKUR::RSA_KEY;
-    case crypto::SignatureVerifier::ECDSA_SHA256:
+    case crypto::sign::ECDSA_SHA1:
+    case crypto::sign::ECDSA_SHA256:
+    case crypto::sign::ECDSA_SHA384:
+    case crypto::sign::ECDSA_SHA512:
       return BPKUR::EC_KEY;
+    case crypto::sign::ED25519:
+    case crypto::sign::MLDSA_44:
+    case crypto::sign::MLDSA_65:
+    case crypto::sign::MLDSA_87:
+      NOTREACHED();
   }
 }
 
-UploadClientErrorOr<enterprise_management::DeviceManagementRequest>
-CreateRequest(scoped_refptr<PrivateKey> private_key, bool create_certificate) {
-  if (!private_key) {
-    return base::unexpected(UploadClientError::kInvalidKeyParameter);
+void OnSignatureCreated(
+    scoped_refptr<PrivateKey> private_key,
+    bool create_certificate,
+    base::OnceCallback<void(
+        UploadClientErrorOr<enterprise_management::DeviceManagementRequest>)>
+        callback,
+    std::optional<std::vector<uint8_t>> signature) {
+  if (!signature.has_value()) {
+    std::move(callback).Run(
+        base::unexpected(UploadClientError::kSignatureCreationFailed));
+    return;
   }
 
-  // Generate the proof-of-possesion.
   std::vector<uint8_t> pubkey = private_key->GetSubjectPublicKeyInfo();
-  std::optional<std::vector<uint8_t>> signature =
-      private_key->SignSlowly(pubkey);
-  if (!signature.has_value()) {
-    return base::unexpected(UploadClientError::kSignatureCreationFailed);
-  }
 
   enterprise_management::DeviceManagementRequest overall_request;
   auto* mutable_upload_request =
@@ -80,7 +99,29 @@ CreateRequest(scoped_refptr<PrivateKey> private_key, bool create_certificate) {
       AlgorithmToType(private_key->GetAlgorithm()));
   mutable_upload_request->set_provision_certificate(create_certificate);
 
-  return overall_request;
+  std::move(callback).Run(std::move(overall_request));
+}
+
+bool VerifySPKI(const net::X509Certificate* cert,
+                const PrivateKey* private_key) {
+  std::string_view extracted_spki;
+  if (!net::asn1::ExtractSPKIFromDERCert(
+          net::x509_util::CryptoBufferAsStringPiece(cert->cert_buffer()),
+          &extracted_spki)) {
+    return false;
+  }
+  std::vector<uint8_t> expected_spki = private_key->GetSubjectPublicKeyInfo();
+
+  bssl::UniquePtr<EVP_PKEY> cert_key =
+      crypto::evp::PublicKeyFromBytes(base::as_byte_span(extracted_spki));
+  bssl::UniquePtr<EVP_PKEY> platform_key =
+      crypto::evp::PublicKeyFromBytes(expected_spki);
+
+  if (!cert_key || !platform_key) {
+    return false;
+  }
+
+  return EVP_PKEY_cmp(cert_key.get(), platform_key.get()) == 1;
 }
 
 }  // namespace
@@ -109,11 +150,13 @@ class KeyUploadClientImpl : public KeyUploadClient {
           callback);
 
   void OnCertificateRequestCreated(
+      scoped_refptr<PrivateKey> private_key,
       CreateCertificateCallback callback,
       UploadClientErrorOr<enterprise_management::DeviceManagementRequest>
           request);
 
-  void OnCertificateResponseReceived(CreateCertificateCallback callback,
+  void OnCertificateResponseReceived(scoped_refptr<PrivateKey> private_key,
+                                     CreateCertificateCallback callback,
                                      policy::DMServerJobResult result);
 
   void OnSyncRequestCreated(
@@ -151,7 +194,8 @@ void KeyUploadClientImpl::CreateCertificate(
     CreateCertificateCallback callback) {
   GetRequest(private_key, /*create_certificate=*/true,
              base::BindOnce(&KeyUploadClientImpl::OnCertificateRequestCreated,
-                            weak_factory_.GetWeakPtr(), std::move(callback)));
+                            weak_factory_.GetWeakPtr(), private_key,
+                            std::move(callback)));
 }
 
 void KeyUploadClientImpl::SyncKey(scoped_refptr<PrivateKey> private_key,
@@ -173,13 +217,20 @@ void KeyUploadClientImpl::GetRequest(
     return;
   }
 
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::MayBlock()},
-      base::BindOnce(CreateRequest, std::move(private_key), create_certificate),
-      std::move(callback));
+  if (!private_key) {
+    std::move(callback).Run(
+        base::unexpected(UploadClientError::kInvalidKeyParameter));
+    return;
+  }
+
+  std::vector<uint8_t> pubkey = private_key->GetSubjectPublicKeyInfo();
+  auto* key = private_key.get();
+  key->Sign(pubkey, base::BindOnce(&OnSignatureCreated, std::move(private_key),
+                                   create_certificate, std::move(callback)));
 }
 
 void KeyUploadClientImpl::OnCertificateRequestCreated(
+    scoped_refptr<PrivateKey> private_key,
     CreateCertificateCallback callback,
     UploadClientErrorOr<enterprise_management::DeviceManagementRequest>
         request) {
@@ -191,10 +242,12 @@ void KeyUploadClientImpl::OnCertificateRequestCreated(
   management_delegate_->UploadBrowserPublicKey(
       std::move(request.value()),
       base::BindOnce(&KeyUploadClientImpl::OnCertificateResponseReceived,
-                     weak_factory_.GetWeakPtr(), std::move(callback)));
+                     weak_factory_.GetWeakPtr(), private_key,
+                     std::move(callback)));
 }
 
 void KeyUploadClientImpl::OnCertificateResponseReceived(
+    scoped_refptr<PrivateKey> private_key,
     CreateCertificateCallback callback,
     policy::DMServerJobResult result) {
   scoped_refptr<net::X509Certificate> certificate = nullptr;
@@ -202,15 +255,14 @@ void KeyUploadClientImpl::OnCertificateResponseReceived(
       result.response.has_browser_public_key_upload_response() &&
       result.response.browser_public_key_upload_response()
           .has_pem_encoded_certificate()) {
-    // Try to parse the client certificate.
     std::string_view pem_encoded_certificate =
         result.response.browser_public_key_upload_response()
             .pem_encoded_certificate();
     net::CertificateList certs =
         net::X509Certificate::CreateCertificateListFromBytes(
             base::as_byte_span(pem_encoded_certificate),
-            net::X509Certificate::FORMAT_AUTO);
-    if (!certs.empty()) {
+            net::X509Certificate::FORMAT_PEM_CERT_SEQUENCE);
+    if (!certs.empty() && VerifySPKI(certs[0].get(), private_key.get())) {
       certificate = certs[0];
     }
   }

@@ -6,6 +6,9 @@
 
 #include <utility>
 
+#include "base/check.h"
+#include "base/check_op.h"
+#include "base/logging.h"
 #include "components/viz/common/resources/shared_image_format_utils.h"
 #include "gpu/vulkan/vulkan_fence_helper.h"
 #include "gpu/vulkan/vulkan_implementation.h"
@@ -86,6 +89,7 @@ ExternalVkImageSkiaImageRepresentation::BeginWriteAccess(
       if (!surface) {
         DLOG(ERROR) << "MakeFromBackendTexture() failed.";
         context_state_->EraseCachedSkSurface(promise_texture.get());
+        EndAccess(/*readonly=*/false);
         return {};
       }
       context_state_->CacheSkSurface(promise_texture.get(), surface);

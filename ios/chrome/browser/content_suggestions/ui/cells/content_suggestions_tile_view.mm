@@ -4,7 +4,6 @@
 
 #import "ios/chrome/browser/content_suggestions/ui/cells/content_suggestions_tile_view.h"
 
-#import "ios/chrome/browser/shared/ui/util/dynamic_type_util.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
@@ -16,8 +15,6 @@ namespace {
 const NSInteger kLabelNumLines = 2;
 const CGFloat kSpaceIconTitle = 10;
 const CGFloat kMagicStackIconSize = 52;
-// Standard width of tiles.
-const CGFloat kPreferredMaxWidth = 74;
 // Image container corner radius.
 const CGFloat kCornerRadius = 8.0;
 
@@ -31,6 +28,7 @@ const CGFloat kCornerRadius = 8.0;
 
 @implementation ContentSuggestionsTileView {
   ContentSuggestionsTileType _type;
+  NSLayoutConstraint* _imageBackgroundWidthConstraint;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame
@@ -42,7 +40,6 @@ const CGFloat kCornerRadius = 8.0;
     _titleLabel.textColor = [UIColor colorNamed:kTextSecondaryColor];
     _titleLabel.font = [self titleLabelFont];
     _titleLabel.textAlignment = NSTextAlignmentCenter;
-    _titleLabel.preferredMaxLayoutWidth = kPreferredMaxWidth;
     _titleLabel.numberOfLines = kLabelNumLines;
     _titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
 
@@ -68,14 +65,16 @@ const CGFloat kCornerRadius = 8.0;
       [self addSubview:backgroundView];
       [self addSubview:_imageContainerView];
 
+      _imageBackgroundWidthConstraint = [backgroundView.widthAnchor
+          constraintEqualToConstant:kMagicStackIconSize];
       [NSLayoutConstraint activateConstraints:@[
-        [backgroundView.widthAnchor
-            constraintEqualToConstant:kMagicStackIconSize],
+        _imageBackgroundWidthConstraint,
         [backgroundView.heightAnchor
             constraintEqualToAnchor:backgroundView.widthAnchor],
         [backgroundView.centerXAnchor
-            constraintEqualToAnchor:_titleLabel.centerXAnchor],
+            constraintEqualToAnchor:_titleLabel.centerXAnchor]
       ]];
+
       AddSameCenterConstraints(_imageContainerView, backgroundView);
       UIView* containerView = backgroundView;
 
@@ -107,6 +106,13 @@ const CGFloat kCornerRadius = 8.0;
       UIFontTextStyleCaption1,
       self.traitCollection.preferredContentSizeCategory,
       UIContentSizeCategoryAccessibilityLarge);
+}
+
+- (void)setImageBackgroundSize:(CGFloat)size {
+  if (size == _imageBackgroundWidthConstraint.constant) {
+    return;
+  }
+  _imageBackgroundWidthConstraint.constant = size;
 }
 
 #pragma mark - UIPointerInteractionDelegate

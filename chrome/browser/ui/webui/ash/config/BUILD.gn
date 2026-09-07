@@ -8,10 +8,8 @@ assert(is_chromeos)
 
 static_library("config") {
   sources = [
-    "chrome_untrusted_web_ui_configs_chromeos.cc",
-    "chrome_untrusted_web_ui_configs_chromeos.h",
-    "chrome_web_ui_configs_chromeos.cc",
-    "chrome_web_ui_configs_chromeos.h",
+    "ash_web_ui_config_manager.cc",
+    "ash_web_ui_config_manager.h",
   ]
 
   deps = [
@@ -30,7 +28,6 @@ static_library("config") {
     "//ash/webui/mall",
     "//ash/webui/os_feedback_ui",
     "//ash/webui/print_management",
-    "//ash/webui/print_preview_cros",
     "//ash/webui/sanitize_ui",
     "//ash/webui/scanner_feedback_ui",
     "//ash/webui/scanning",
@@ -38,9 +35,14 @@ static_library("config") {
     "//ash/webui/shortcut_customization_ui",
     "//ash/webui/status_area_internals",
     "//ash/webui/vc_background_ui",
+    "//chrome/browser:browser_process",
+    "//chrome/browser:global_features",
+    "//chrome/browser/app_mode",
     "//chrome/browser/ash/annotator",
     "//chrome/browser/ash/app_mode",
     "//chrome/browser/ash/boca/receiver",
+    "//chrome/browser/ash/borealis",
+    "//chrome/browser/ash/diagnostics",
     "//chrome/browser/ash/eche_app",
     "//chrome/browser/ash/login/demo_mode",
     "//chrome/browser/ash/mall",
@@ -61,9 +63,10 @@ static_library("config") {
     "//chrome/browser/ash/system_web_apps/apps/projector_app",
     "//chrome/browser/ash/system_web_apps/apps/recorder_app",
     "//chrome/browser/ash/system_web_apps/apps/vc_background_ui",
+    "//chrome/browser/consent_auditor",
     "//chrome/browser/ui",
     "//chrome/browser/ui/ash/holding_space",
-    "//chrome/browser/ui/views/borealis",
+    "//chrome/browser/ui/select_file_policy",
     "//chrome/browser/ui/webui/about",
     "//chrome/browser/ui/webui/ash/account_manager",
     "//chrome/browser/ui/webui/ash/add_supervision",
@@ -71,7 +74,6 @@ static_library("config") {
     "//chrome/browser/ui/webui/ash/arc_overview_tracing",
     "//chrome/browser/ui/webui/ash/arc_power_control",
     "//chrome/browser/ui/webui/ash/bluetooth",
-    "//chrome/browser/ui/webui/ash/borealis_installer",
     "//chrome/browser/ui/webui/ash/cellular_setup",
     "//chrome/browser/ui/webui/ash/cloud_upload",
     "//chrome/browser/ui/webui/ash/crostini_installer",
@@ -105,9 +107,12 @@ static_library("config") {
     "//chrome/browser/ui/webui/ash/slow",
     "//chrome/browser/ui/webui/ash/smb_shares",
     "//chrome/browser/ui/webui/ash/sys_internals",
-    "//chrome/browser/ui/webui/ash/vm",
+    "//chrome/browser/ui/webui/chromeos/chrome_url_disabled",
+    "//chrome/browser/ui/webui/nearby_internals",
     "//chrome/browser/ui/webui/nearby_share",
     "//chromeos/ash/components/boca/receiver",
+    "//chromeos/ash/components/browser_context_helper",
+    "//chromeos/ash/components/signin:identity_manager_provider",
     "//chromeos/ash/experiences/guest_os/borealis/motd",
     "//components/cross_device/logging",
     "//ui/webui",
@@ -115,8 +120,22 @@ static_library("config") {
 
   if (!is_official_build) {
     deps += [ "//ash/webui/sample_system_web_app_ui" ]
-    if (!use_real_dbus_clients) {
-      deps += [ "//chrome/browser/ui/webui/ash/emulator" ]
-    }
   }
+}
+
+source_set("unit_tests") {
+  testonly = true
+
+  sources = [ "ash_web_ui_config_manager_unittest.cc" ]
+
+  deps = [
+    ":config",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser:global_features",
+    "//chrome/test:test_support",
+    "//content/test:test_support",
+    "//testing/gtest",
+    "//url",
+  ]
 }

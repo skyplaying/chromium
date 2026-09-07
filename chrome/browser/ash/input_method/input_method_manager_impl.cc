@@ -13,9 +13,11 @@
 #include <utility>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_pref_names.h"
 #include "base/check.h"
 #include "base/check_deref.h"
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/hash/hash.h"
@@ -39,8 +41,6 @@
 #include "chrome/browser/ui/ash/input_method/input_method_menu_item.h"
 #include "chrome/browser/ui/ash/input_method/input_method_menu_manager.h"
 #include "chrome/browser/ui/ash/keyboard/chrome_keyboard_controller_client.h"
-#include "chrome/common/chrome_features.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/language_preferences/language_preferences.h"
 #include "components/application_locale_storage/application_locale_storage.h"
 #include "components/prefs/pref_service.h"
@@ -783,7 +783,7 @@ void InputMethodManagerImpl::StateImpl::SetInputMethodLoginDefaultFromVPD(
   manager_->GetMigratedInputMethodIDs(&input_method_ids);
 
   PrefService* local_state = &manager_->local_state_.get();
-  local_state->SetString(prefs::kHardwareKeyboardLayout,
+  local_state->SetString(ash::prefs::kHardwareKeyboardLayout,
                          base::JoinString(input_method_ids, ","));
 
   // This asks the file thread to save the prefs (i.e. doesn't block).
@@ -1187,12 +1187,15 @@ void InputMethodManagerImpl::ChangeInputMethodInternalFromActiveState(
   const std::string& component_id =
       extension_ime_util::GetComponentIDByInputMethodID(
           state_->GetCurrentInputMethod().id());
-  if (!engine_map_.count(state_->GetProfile()) ||
-      !engine_map_[state_->GetProfile()].count(extension_id)) {
+
+  auto [it, inserted] = engine_map_.try_emplace(state_->GetProfile());
+  auto [engine_it, engine_inserted] = it->second.try_emplace(extension_id);
+
+  if (inserted || engine_inserted) {
     LOG_IF(ERROR, base::SysInfo::IsRunningOnChromeOS())
         << "IMEEngine for \"" << extension_id << "\" is not registered";
   }
-  engine = engine_map_[state_->GetProfile()][extension_id];
+  engine = engine_it->second.get();
 
   IMEBridge::Get()->SetCurrentEngineHandler(engine);
 
@@ -1316,7 +1319,7 @@ scoped_refptr<InputMethodManager::State> InputMethodManagerImpl::CreateNewState(
   std::string initial_input_method_id;
   if (user_prefs) {
     initial_input_method_id =
-        user_prefs->GetString(prefs::kLanguageCurrentInputMethod);
+        user_prefs->GetString(ash::prefs::kLanguageCurrentInputMethod);
   }
   if (initial_input_method_id.empty()) {
     initial_input_method_id =

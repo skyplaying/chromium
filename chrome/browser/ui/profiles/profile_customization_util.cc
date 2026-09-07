@@ -5,7 +5,6 @@
 #include "chrome/browser/ui/profiles/profile_customization_util.h"
 
 #include "base/auto_reset.h"
-#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/browser_process.h"
@@ -50,8 +49,7 @@ void FinalizeNewProfileSetup(Profile* profile,
   entry->SetLocalProfileName(profile_name, is_default_name);
 
   if (signin_util::IsForceSigninEnabled()) {
-    if (!base::FeatureList::IsEnabled(
-            syncer::kReplaceSyncPromosWithSignInPromos)) {
+    if (!syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
       // Managed accounts do not need to have Sync consent set.
       if (!entry->CanBeManaged()) {
         signin::IdentityManager* identity_manager =
@@ -138,7 +136,7 @@ void ProfileNameResolver::RunWithProfileName(NameResolvedCallback callback) {
 void ProfileNameResolver::OnExtendedAccountInfoUpdated(
     const AccountInfo& account_info) {
   if (!account_info.IsValid() ||
-      core_account_info_.account_id != account_info.account_id) {
+      core_account_info_.account_id != account_info.GetAccountId()) {
     return;
   }
 

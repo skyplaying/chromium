@@ -17,7 +17,6 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
-#include "base/memory/memory_pressure_monitor.h"
 #include "base/memory/ptr_util.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
@@ -67,8 +66,6 @@
 #include "chromecast/public/cast_media_shlib.h"
 #include "chromecast/service/cast_service.h"
 #include "chromecast/ui/display_settings_manager_impl.h"
-#include "components/heap_profiling/multi_process/client_connection_manager.h"
-#include "components/heap_profiling/multi_process/supervisor.h"
 #include "components/input/switches.h"
 #include "components/memory_pressure/multi_source_memory_pressure_monitor.h"
 #include "components/prefs/pref_service.h"
@@ -252,14 +249,6 @@ void DeregisterKillOnAlarm() {
 
 #endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_FUCHSIA)
 
-std::unique_ptr<heap_profiling::ClientConnectionManager>
-CreateClientConnectionManager(
-    base::WeakPtr<heap_profiling::Controller> controller_weak_ptr,
-    heap_profiling::Mode mode) {
-  return std::make_unique<heap_profiling::ClientConnectionManager>(
-      std::move(controller_weak_ptr), mode);
-}
-
 #if defined(USE_AURA)
 
 // Provide a basic implementation. No need to override anything since we're not
@@ -311,25 +300,14 @@ const DefaultCommandLineSwitch kDefaultSwitches[] = {
     // GPU shader disk cache disabling is largely to conserve disk space.
     {switches::kDisableGpuShaderDiskCache, ""},
 #endif
-#if BUILDFLAG(IS_CAST_AUDIO_ONLY)
-    {switches::kDisableGpu, ""},
-    {switches::kDisableSoftwareRasterizer, ""},
-    {switches::kDisableGpuCompositing, ""},
-#if BUILDFLAG(IS_ANDROID)
-    {switches::kDisableFrameRateLimit, ""},
-    {switches::kDisableGLDrawingForTests, ""},
-    {switches::kDisableThreadedAnimation, ""},
-#endif  // BUILDFLAG(IS_ANDROID)
-#endif  // BUILDFLAG(IS_CAST_AUDIO_ONLY)
+
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #if defined(ARCH_CPU_X86_FAMILY)
     // This is needed for now to enable the x11 Ozone platform to work with
     // current Linux/NVidia OpenGL drivers.
     {switches::kIgnoreGpuBlocklist, ""},
 #elif defined(ARCH_CPU_ARM_FAMILY)
-#if !BUILDFLAG(IS_CAST_AUDIO_ONLY)
     {switches::kEnableHardwareOverlays, "cast"},
-#endif
 #endif
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
     // It's better to start GPU process on demand. For example, for TV platforms
@@ -535,7 +513,7 @@ int CastBrowserMainParts::PreCreateThreads() {
   return 0;
 }
 
-void CastBrowserMainParts::PostCreateThreads() {
+int CastBrowserMainParts::PostCreateThreads() {
   if (GetSwitchValueBoolean(switches::kInProcessBroker, true)) {
     auto* service_manager_connector =
         ServiceManagerConnection::GetForProcess()->GetConnector();
@@ -550,22 +528,14 @@ void CastBrowserMainParts::PostCreateThreads() {
   media_connector_ = connector_->Clone();
   browser_service_ =
       std::make_unique<external_service_support::ExternalService>();
-  heap_profiling::Supervisor* supervisor =
-      heap_profiling::Supervisor::GetInstance();
-  supervisor->SetClientConnectionManagerConstructor(
-      &CreateClientConnectionManager);
-  supervisor->Start(base::NullCallback());
+  return content::RESULT_CODE_NORMAL_EXIT;
 }
 
 int CastBrowserMainParts::PreMainMessageLoopRun() {
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_FUCHSIA)
-  // static_cast is safe because this is the only implementation of
-  // MemoryPressureMonitor.
-  auto* monitor =
-      static_cast<memory_pressure::MultiSourceMemoryPressureMonitor*>(
-          base::MemoryPressureMonitor::Get());
   // |monitor| may be nullptr in browser tests.
-  if (monitor) {
+  if (auto* monitor =
+          memory_pressure::MultiSourceMemoryPressureMonitor::Get()) {
     monitor->SetSystemEvaluator(
         std::make_unique<CastSystemMemoryPressureEvaluator>(
             monitor->CreateVoter()));
@@ -620,9 +590,7 @@ int CastBrowserMainParts::PreMainMessageLoopRun() {
   }
 #endif
 
-  window_manager_ = std::make_unique<CastWindowManagerAura>(
-      CAST_IS_DEBUG_BUILD() ||
-      GetSwitchValueBoolean(switches::kEnableInput, false));
+  window_manager_ = std::make_unique<CastWindowManagerAura>();
   window_manager_->Setup();
 
   display_change_observer_ = std::make_unique<DisplayConfiguratorObserver>(
@@ -674,9 +642,6 @@ int CastBrowserMainParts::PreMainMessageLoopRun() {
   // initialized by cast service.
   cast_browser_process_->cast_browser_metrics()->Initialize();
   cast_content_browser_client_->InitializeURLLoaderThrottleDelegate();
-
-  cast_content_browser_client_->CreateGeneralAudienceBrowsingService();
-
   // Disable RenderFrameHost's Javascript injection restrictions so that the
   // Cast Web Service can implement its own JS injection policy at a higher
   // level.

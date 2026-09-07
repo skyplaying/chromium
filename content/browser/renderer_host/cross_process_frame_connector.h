@@ -139,7 +139,6 @@ class CONTENT_EXPORT CrossProcessFrameConnector : public FrameConnector {
   const viz::LocalSurfaceId& GetLocalSurfaceId() override;
   const blink::mojom::ViewportIntersectionState& GetIntersectionState()
       override;
-  uint32_t GetCaptureSequenceNumber() override;
   const gfx::Rect& GetRectInParentViewInDip() override;
   const gfx::Size& GetLocalFrameSizeInDip() override;
   const gfx::Size& GetLocalFrameSizeInPixels() override;
@@ -169,18 +168,7 @@ class CONTENT_EXPORT CrossProcessFrameConnector : public FrameConnector {
 
   void SetRectInParentView(const gfx::Rect& rect_in_parent_view) override;
 
-  void SetIsInert(bool inert) override;
-
-  void OnSetInheritedEffectiveTouchAction(cc::TouchAction) override;
   void OnVisibilityChanged(blink::mojom::FrameVisibility visibility) override;
-
-  void UpdateRenderThrottlingStatus(bool is_throttled,
-                                    bool subtree_throttled,
-                                    bool display_locked) override;
-  void UpdateViewportIntersection(
-      const blink::mojom::ViewportIntersectionState& intersection_state,
-      const std::optional<blink::FrameVisualProperties>& visual_properties)
-      override;
 
   bool IsVisible() override;
 
@@ -190,10 +178,23 @@ class CONTENT_EXPORT CrossProcessFrameConnector : public FrameConnector {
       const blink::FrameVisualProperties& visual_properties) override;
 
   Visibility EmbedderVisibility() override;
+  void SetKeepSurfaceAlive(bool keep_alive) override;
+  bool IsKeepingAlive() const override;
 
   // ChildFrameInputHelper::Delegate implementation.
   input::RenderWidgetHostViewInput* GetParentViewInput() override;
   input::RenderWidgetHostViewInput* GetRootViewInput() override;
+
+  // Handlers for messages received from the parent frame called
+  // from RenderFrameProxyHost to be sent to `view_`.
+  void SetIsInert(bool inert);
+  void OnSetInheritedEffectiveTouchAction(cc::TouchAction);
+  void UpdateRenderThrottlingStatus(bool is_throttled,
+                                    bool subtree_throttled,
+                                    bool display_locked);
+  void UpdateViewportIntersection(
+      const blink::mojom::ViewportIntersectionState& intersection_state,
+      const std::optional<blink::FrameVisualProperties>& visual_properties);
 
   // These enums back crashed frame histograms - see MaybeLogCrash() and
   // MaybeLogShownCrash() below.  Please do not modify or remove existing enum
@@ -262,8 +263,6 @@ class CONTENT_EXPORT CrossProcessFrameConnector : public FrameConnector {
   viz::LocalSurfaceId local_surface_id_;
 
   bool has_size_ = false;
-
-  uint32_t capture_sequence_number_ = 0u;
 
   // Gets the current RenderFrameHost for the
   // |frame_proxy_in_parent_renderer_|'s (i.e., the child frame's)

@@ -11,7 +11,6 @@
 #include "build/build_config.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/constrained_window/constrained_window_views.h"
@@ -31,7 +30,10 @@
 #include "ui/base/models/table_model.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/base/ui_base_features.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/base/window_open_disposition_utils.h"
 #include "ui/gfx/favicon_size.h"
 #include "ui/gfx/image/image_skia.h"
@@ -61,7 +63,9 @@ class DeprecatedAppsDialogView::DeprecatedAppsTableModel
               ->GetInstalledExtension(app_id);
       DCHECK(extension);
       const gfx::ImageSkia default_icon = gfx::CreateVectorIcon(
-          vector_icons::kExtensionIcon, gfx::kFaviconSize, gfx::kGoogleGrey700);
+          features::IsRoundedIconsEnabled() ? vector_icons::kExtensionFilledIcon
+                                            : vector_icons::kExtensionOldIcon,
+          gfx::kFaviconSize, gfx::kGoogleGrey700);
 
       auto app_icon = std::make_unique<extensions::IconImage>(
           browser_context, extension,
@@ -81,14 +85,14 @@ class DeprecatedAppsDialogView::DeprecatedAppsTableModel
   ~DeprecatedAppsTableModel() override = default;
 
   // ui::TableModel implementations:
-  size_t RowCount() override { return rows_.size(); }
+  size_t RowCount() const override { return rows_.size(); }
 
-  std::u16string GetText(size_t index, int column_id) override {
+  std::u16string GetText(size_t index, int column_id) const override {
     DCHECK(index < RowCount());
     return base::UTF8ToUTF16(rows_[index].app_name);
   }
 
-  ui::ImageModel GetIcon(size_t index) override {
+  ui::ImageModel GetIcon(size_t index) const override {
     return ui::ImageModel::FromImageSkia(rows_[index].icon->image_skia());
   }
 

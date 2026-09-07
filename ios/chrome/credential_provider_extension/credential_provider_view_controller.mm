@@ -48,6 +48,7 @@
 #import "ios/components/credential_provider_extension/password_util.h"
 
 using app_group::UserDefaultsStringForKey;
+using webauthn::PasskeyUserVerificationStatus;
 
 namespace {
 
@@ -76,22 +77,15 @@ enum class PasskeyCreationEligibility {
   kExcludedPasskey,
 };
 
-enum class PasskeyUserVerificationStatus {
-  kNotRequired,
-  kRequired,
-  kCompleted
-};
-
 }  // namespace
 
 // TODO(crbug.com/454307667): Add unit tests for the whole file.
 @interface CredentialProviderViewController () <
     ConfirmationAlertActionHandler,
     CredentialResponseHandler,
+    MultiProfilePasskeyCreationViewControllerDelegate,
     PasskeyKeychainProviderBridgeDelegate,
     PasskeyWelcomeScreenViewControllerDelegate,
-    MultiProfilePasskeyCreationViewControllerDelegate,
-    SuccessfulReauthTimeAccessor,
     UIAdaptivePresentationControllerDelegate>
 
 // Interface for the persistent credential store.
@@ -103,9 +97,6 @@ enum class PasskeyUserVerificationStatus {
 // Consent coordinator that shows a view requesting device auth in order to
 // enable the extension.
 @property(nonatomic, strong) ConsentCoordinator* consentCoordinator;
-
-// Date kept for ReauthenticationModule.
-@property(nonatomic, strong) NSDate* lastSuccessfulReauthTime;
 
 // Reauthentication Module used for reauthentication.
 @property(nonatomic, strong) ReauthenticationModule* reauthenticationModule;
@@ -161,9 +152,8 @@ enum class PasskeyUserVerificationStatus {
 
   UINavigationBar* navigationBar = [self createNavigationBar];
   [self.view addSubview:navigationBar];
-  AddSameConstraintsToSides(
-      navigationBar, self.view.safeAreaLayoutGuide,
-      LayoutSides::kTrailing | LayoutSides::kTop | LayoutSides::kLeading);
+  AddSameConstraintsToSides(navigationBar, self.view.safeAreaLayoutGuide,
+                            LayoutSides::kTop | LayoutSides::kHorizontal);
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -324,9 +314,16 @@ enum class PasskeyUserVerificationStatus {
   }
 }
 
-// Only available in iOS 18.0+.
 - (void)performPasskeyRegistrationWithoutUserInteractionIfPossible:
-    (ASPasskeyCredentialRequest*)registrationRequest API_AVAILABLE(ios(18.0)) {
+    (ASPasskeyCredentialRequest*)registrationRequest {
+  // TODO(crbug.com/515318495): Force disable registration to prevent the CPE
+  // startup crash in M149
+  [self exitWithErrorCode:ASExtensionErrorCodeFailed];
+  return;
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunreachable-code"
+
   PasskeyRequestDetails* passkeyRequestDetails =
       [self passkeyDetailsFromConditionalCreateRequest:registrationRequest];
   if (![passkeyRequestDetails
@@ -349,6 +346,8 @@ enum class PasskeyUserVerificationStatus {
 
   // Try to create a passkey while user interaction is disallowed.
   [self createPasskeyWithDetails:passkeyRequestDetails gaia:gaia];
+
+#pragma clang diagnostic pop
 }
 
 - (void)prepareInterfaceForPasskeyRegistration:
@@ -382,13 +381,7 @@ enum class PasskeyUserVerificationStatus {
       [self exitWithErrorCode:ASExtensionErrorCodeFailed];
       return;
     case PasskeyCreationEligibility::kExcludedPasskey:
-      // Note: ASExtensionErrorCodeMatchedExcludedCredential is iOS 18.0+ only,
-      // but so is the excludedCredentials array, so we can't reach this point
-      // if the iOS version is below 18.0, which is why there's no need for an
-      // else statement.
-      if (@available(iOS 18.0, *)) {
-        [self exitWithErrorCode:ASExtensionErrorCodeMatchedExcludedCredential];
-      }
+      [self exitWithErrorCode:ASExtensionErrorCodeMatchedExcludedCredential];
       return;
     case PasskeyCreationEligibility::kCanCreateWithUserInteraction:
       if ([self isUsingMultiProfile]) {
@@ -409,9 +402,6 @@ enum class PasskeyUserVerificationStatus {
 
 - (void)reportUnknownPublicKeyCredentialForRelyingParty:(NSString*)relyingParty
                                            credentialID:(NSData*)credentialID {
-  if (!IsSignalAPIEnabled()) {
-    return;
-  }
 
   NSArray<id<Credential>>* credentials = self.credentialStore.credentials;
   NSUInteger credentialIndex =
@@ -433,9 +423,6 @@ enum class PasskeyUserVerificationStatus {
 - (void)reportPublicKeyCredentialUpdateForRelyingParty:(NSString*)relyingParty
                                             userHandle:(NSData*)userHandle
                                                newName:(NSString*)newName {
-  if (!IsSignalAPIEnabled()) {
-    return;
-  }
 
   NSArray<id<Credential>>* credentials = self.credentialStore.credentials;
   NSUInteger credentialIndex =
@@ -467,9 +454,6 @@ enum class PasskeyUserVerificationStatus {
                                        acceptedCredentialIDs:
                                            (NSArray<NSData*>*)
                                                acceptedCredentialIDs {
-  if (!IsSignalAPIEnabled()) {
-    return;
-  }
 
   NSArray<id<Credential>>* credentials = self.credentialStore.credentials;
   NSUInteger credentialIndex =
@@ -530,8 +514,7 @@ enum class PasskeyUserVerificationStatus {
 
 - (ReauthenticationModule*)reauthenticationModule {
   if (!_reauthenticationModule) {
-    _reauthenticationModule = [[ReauthenticationModule alloc]
-        initWithSuccessfulReauthTimeAccessor:self];
+    _reauthenticationModule = [[ReauthenticationModule alloc] init];
   }
   return _reauthenticationModule;
 }
@@ -653,9 +636,10 @@ enum class PasskeyUserVerificationStatus {
 
 #pragma mark - PasskeyKeychainProviderBridgeDelegate
 
-- (void)performUserVerificationIfNeeded:(ProceduralBlock)completion {
+- (void)performUserVerificationIfNeeded:
+    (UserVerificationCompletionBlock)completion {
   if (_userVerificationStatus != PasskeyUserVerificationStatus::kRequired) {
-    completion();
+    completion(YES);
     return;
   }
 
@@ -663,9 +647,10 @@ enum class PasskeyUserVerificationStatus {
   [self
       reauthenticateIfNeededToAccessPasskeys:YES
                        withCompletionHandler:^(ReauthenticationResult result) {
-                         if (result != ReauthenticationResult::kFailure) {
-                           completion();
-                         } else {
+                         BOOL success =
+                             (result != ReauthenticationResult::kFailure);
+                         completion(success);
+                         if (!success) {
                            [weakSelf
                                exitWithErrorCode:ASExtensionErrorCodeFailed];
                          }
@@ -716,13 +701,6 @@ enum class PasskeyUserVerificationStatus {
     }
     [weakSelf createPasskeyWithDetails:passkeyRequestDetails gaia:gaia];
   }];
-}
-
-#pragma mark - SuccessfulReauthTimeAccessor
-
-- (void)updateSuccessfulReauthTime {
-  self.lastSuccessfulReauthTime = [[NSDate alloc] init];
-  UpdateUMACountForKey(app_group::kCredentialExtensionReauthCount);
 }
 
 #pragma mark - UIAdaptivePresentationControllerDelegate
@@ -836,11 +814,10 @@ enum class PasskeyUserVerificationStatus {
 // or an access to passwords (when `NO`).
 - (void)reauthenticateIfNeededToAccessPasskeys:(BOOL)forPasskeys
                          withCompletionHandler:
-                             (void (^)(ReauthenticationResult))
-                                 completionHandler {
+                             (ReauthenticationResultBlock)completionHandler {
   __weak __typeof__(self) weakSelf = self;
   auto handlerWrapper = ^(ReauthenticationResult result) {
-    if (result == ReauthenticationResult::kSuccess) {
+    if (result != ReauthenticationResult::kFailure) {
       weakSelf.userVerificationStatus =
           PasskeyUserVerificationStatus::kCompleted;
     }
@@ -1019,7 +996,6 @@ enum class PasskeyUserVerificationStatus {
        credentialResponseHandler:self];
   self.listCoordinator.passkeyRequestDetails = _passkeyRequestDetails;
   [self.listCoordinator start];
-  UpdateUMACountForKey(app_group::kCredentialExtensionDisplayCount);
 }
 
 // Convenience wrapper for
@@ -1179,7 +1155,7 @@ enum class PasskeyUserVerificationStatus {
       _userVerificationStatus == PasskeyUserVerificationStatus::kCompleted;
 
   if (passkeyRequestDetails.userVerificationRequired) {
-    CHECK(didCompleteUserVerification, base::NotFatalUntil::M144);
+    CHECK(didCompleteUserVerification);
   }
 
   ASPasskeyRegistrationCredential* passkeyRegistrationCredential =
@@ -1228,7 +1204,7 @@ enum class PasskeyUserVerificationStatus {
       _userVerificationStatus == PasskeyUserVerificationStatus::kCompleted;
 
   if (passkeyRequestDetails.userVerificationRequired) {
-    CHECK(didCompleteUserVerification, base::NotFatalUntil::M144);
+    CHECK(didCompleteUserVerification);
   }
 
   ASPasskeyAssertionCredential* passkeyCredential = [passkeyRequestDetails
@@ -1252,7 +1228,7 @@ enum class PasskeyUserVerificationStatus {
   if (userVerificationRequired) {
     _userVerificationStatus = PasskeyUserVerificationStatus::kRequired;
     // Since UV is required, do not allow a previous reauth to be reused.
-    self.lastSuccessfulReauthTime = nil;
+    [self.reauthenticationModule clearAuthValidity];
   } else {
     _userVerificationStatus = PasskeyUserVerificationStatus::kNotRequired;
   }

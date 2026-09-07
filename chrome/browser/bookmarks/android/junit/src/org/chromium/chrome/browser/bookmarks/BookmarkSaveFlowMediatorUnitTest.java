@@ -22,10 +22,11 @@ import org.robolectric.annotation.Config;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
+import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.commerce.PriceTrackingUtils;
 import org.chromium.chrome.browser.commerce.PriceTrackingUtilsJni;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.price_tracking.PriceDropNotificationManager;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.components.bookmarks.BookmarkId;
@@ -46,11 +47,12 @@ import org.chromium.ui.shadows.ShadowAppCompatResources;
 import org.chromium.url.GURL;
 
 /** Unit tests for {@link BookmarkSaveFlowMediator}. */
-@Batch(Batch.UNIT_TESTS)
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(
-        manifest = Config.NONE,
-        shadows = {ShadowAppCompatResources.class})
+@Config(shadows = {ShadowAppCompatResources.class})
+@DisableFeatures({
+    ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_LAYOUT,
+    ChromeFeatureList.ANDROID_DESKTOP_BOOKMARK_DIALOG
+})
 public class BookmarkSaveFlowMediatorUnitTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -143,8 +145,8 @@ public class BookmarkSaveFlowMediatorUnitTest {
                         false,
                         0,
                         false,
-                        0, /* isAccountBookmark */
-                        true);
+                        0,
+                        /* isAccountBookmark= */ true);
         Mockito.doReturn(accountBookmarkItem).when(mModel).getBookmarkById(Mockito.any());
         Mockito.doReturn("title").when(mModel).getBookmarkTitle(Mockito.any());
 

@@ -18,6 +18,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
+#include "base/scoped_observation.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager_observer.h"
 #include "chrome/browser/ash/drive/drive_integration_service.h"
@@ -37,6 +38,7 @@
 #include "services/device/public/mojom/mtp_manager.mojom.h"
 #include "ui/base/clipboard/clipboard_observer.h"
 
+class PrefService;
 class Profile;
 
 namespace chromeos {
@@ -86,7 +88,9 @@ class VolumeManager
   // Callback for `RemoveSftpGuestOsVolume`.
   using RemoveSftpGuestOsVolumeCallback = base::OnceCallback<void(bool)>;
 
+  // `local_state` must be non-null and must outlive `this`.
   VolumeManager(
+      PrefService* local_state,
       Profile* profile,
       drive::DriveIntegrationService* drive_integration_service,
       chromeos::PowerManagerClient* power_manager_client,
@@ -203,6 +207,7 @@ class VolumeManager
   // DriveIntegrationService::Observer implementation.
   void OnFileSystemMounted() override;
   void OnFileSystemBeingUnmounted() override;
+  void OnDriveIntegrationServiceDestroyed() override;
 
   // ash::disks::DiskMountManager::Observer overrides.
   void OnAutoMountableDiskEvent(ash::disks::DiskMountManager::DiskEvent event,
@@ -269,11 +274,6 @@ class VolumeManager
 
   // ui::ClipboardObserver:
   void OnClipboardDataChanged() override;
-
-  // For SmbFs.
-  void AddSmbFsVolume(const base::FilePath& mount_point,
-                      const std::string& display_name);
-  void RemoveSmbFsVolume(const base::FilePath& mount_point);
 
   void ConvertFuseBoxFSPVolumeIdToFSPIfNeeded(std::string* volume_id) const;
 
@@ -391,6 +391,11 @@ class VolumeManager
   // thus removing all local volumes.
   void OnMigrationReset() override;
 
+  // For SmbFs.
+  void AddSmbFsVolume(const base::FilePath& mount_point,
+                      const std::string& display_name);
+  void RemoveSmbFsVolume(const base::FilePath& mount_point);
+
   std::optional<policy::DeviceId> GetDeviceIdFromDevicePath(
       std::string_view device_path);
 
@@ -419,9 +424,16 @@ class VolumeManager
   // Whether a read only version of local folders (My Files) is needed.
   bool read_only_local_folders_ = true;
 
+  base::ScopedObservation<drive::DriveIntegrationService,
+                          drive::DriveIntegrationService::Observer>
+      drive_observation_{this};
+
   base::ScopedObservation<arc::ArcSessionManager,
                           arc::ArcSessionManagerObserver>
       arc_session_manager_observation_{this};
+
+  class SmbObserver;
+  std::unique_ptr<SmbObserver> smb_observer_;
 
   // Note: This should remain the last member so it'll be destroyed and
   // invalidate its weak pointers before any other members are destroyed.

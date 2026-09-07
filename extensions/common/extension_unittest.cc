@@ -6,16 +6,20 @@
 
 #include <optional>
 #include <string_view>
+#include <utility>
 
 #include "base/command_line.h"
+#include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/scoped_command_line.h"
 #include "base/test/scoped_feature_list.h"
 #include "extensions/common/error_utils.h"
+#include "extensions/common/extension_builder.h"
 #include "extensions/common/extension_features.h"
 #include "extensions/common/manifest_constants.h"
 #include "extensions/common/switches.h"
+#include "extensions/common/url_pattern_set.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using extensions::mojom::ManifestLocation;
@@ -47,7 +51,7 @@ testing::AssertionResult RunManifestVersionSuccess(
 
   if (extension->GetType() != expected_type) {
     return testing::AssertionFailure()
-           << "Wrong type: " << extension->GetType();
+           << "Wrong type: " << std::to_underlying(extension->GetType());
   }
 
   if (extension->manifest_version() != expected_manifest_version) {
@@ -100,7 +104,7 @@ testing::AssertionResult RunCreationWithFlags(
 
   if (extension->GetType() != expected_type) {
     return testing::AssertionFailure()
-           << "Wrong type: " << extension->GetType();
+           << "Wrong type: " << std::to_underlying(extension->GetType());
   }
   return testing::AssertionSuccess();
 }
@@ -384,6 +388,51 @@ TEST(ExtensionTest, ExtensionVersionFormat) {
   EXPECT_TRUE(RunVersionFailure("-1.0"));
   EXPECT_TRUE(RunVersionFailure("1.-1"));
   EXPECT_TRUE(RunVersionFailure("-0.0"));
+}
+
+// Verifies that short_name is sanitized by collapsing whitespace and
+// terminating bidirectional control characters.
+// Regression test for crbug.com/514071697.
+TEST(ExtensionTest, ExtensionShortNameSanitization) {
+  base::DictValue manifest =
+      base::DictValue()
+          .Set(manifest_keys::kName, "My Extension")
+          .Set(manifest_keys::kShortName, "Sec\n\nUpdate\u202E")
+          .Set(manifest_keys::kVersion, "0.1")
+          .Set(manifest_keys::kManifestVersion, 3);
+
+  std::u16string error;
+  scoped_refptr<const Extension> extension =
+      Extension::Create(base::FilePath(), ManifestLocation::kInternal, manifest,
+                        Extension::NO_FLAGS, &error);
+  ASSERT_TRUE(extension) << "Extension creation failed: " << error;
+
+  EXPECT_EQ(std::string("SecUpdate") + "\xE2\x80\xAE" + "\xE2\x80\xAC",
+            extension->short_name());
+}
+
+TEST(ExtensionTest, ResourceMatchesCaseSensitivity) {
+  scoped_refptr<const Extension> extension = ExtensionBuilder("test").Build();
+  ASSERT_TRUE(extension);
+
+  URLPatternSet pattern_set;
+  URLPattern pattern(URLPattern::SCHEME_EXTENSION);
+  ASSERT_EQ(URLPattern::ParseResult::kSuccess,
+            pattern.Parse(extension->url().spec() + "path.html"));
+  pattern_set.AddPattern(pattern);
+
+  // Exact match succeeds for both case_sensitive = true and false.
+  EXPECT_TRUE(extension->ResourceMatches(pattern_set, "path.html",
+                                         /*case_sensitive=*/true));
+  EXPECT_TRUE(extension->ResourceMatches(pattern_set, "path.html",
+                                         /*case_sensitive=*/false));
+
+  // Case mismatch fails when case_sensitive = true, and succeeds when
+  // case_sensitive = false.
+  EXPECT_FALSE(extension->ResourceMatches(pattern_set, "Path.html",
+                                          /*case_sensitive=*/true));
+  EXPECT_TRUE(extension->ResourceMatches(pattern_set, "Path.html",
+                                         /*case_sensitive=*/false));
 }
 
 }  // namespace extensions

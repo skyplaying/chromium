@@ -8,7 +8,6 @@
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
-#include "base/memory/weak_ptr.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/permissions/ios/content/permission_prompt/permission_dialog_delegate.h"
 #include "components/permissions/permission_prompt.h"
@@ -37,7 +36,6 @@ class PermissionPromptIOS : public PermissionPrompt {
   bool UpdateAnchor() override;
   TabSwitchingBehavior GetTabSwitchingBehavior() override;
   std::optional<gfx::Rect> GetViewBoundsInScreen() const override;
-  bool ShouldFinalizeRequestAfterDecided() const override;
   std::vector<permissions::ElementAnchoredBubbleVariant> GetPromptVariants()
       const override;
   bool IsAskPrompt() const override;
@@ -57,8 +55,8 @@ class PermissionPromptIOS : public PermissionPrompt {
   ContentSettingsType GetContentSettingType(size_t position) const;
   virtual PermissionRequest::AnnotatedMessageText GetAnnotatedMessageText()
       const;
-  virtual const std::vector<base::WeakPtr<permissions::PermissionRequest>>&
-  Requests() const;
+  virtual const std::vector<std::unique_ptr<PermissionRequest>>& Requests()
+      const;
   GURL GetRequestingOrigin() const;
   PermissionDialogDelegate* permission_dialog_delegate() const {
     return permission_dialog_delegate_;
@@ -73,7 +71,7 @@ class PermissionPromptIOS : public PermissionPrompt {
 
   // Check if grouped permission requests can only be Mic+Camera, Camera+Mic.
   void CheckValidRequestGroup(
-      const std::vector<base::WeakPtr<PermissionRequest>>& requests) const;
+      const std::vector<std::unique_ptr<PermissionRequest>>& requests) const;
 
  private:
   // PermissionPromptIOS is owned by PermissionRequestManager, so it should
@@ -83,8 +81,6 @@ class PermissionPromptIOS : public PermissionPrompt {
 
   // |delegate_| is the PermissionRequestManager, which owns this object.
   const raw_ptr<Delegate> delegate_;
-
-  std::vector<base::WeakPtr<permissions::PermissionRequest>> requests_;
 
   // Owns a `PermissionDialogDelegate` object.
   __strong PermissionDialogDelegate* permission_dialog_delegate_;

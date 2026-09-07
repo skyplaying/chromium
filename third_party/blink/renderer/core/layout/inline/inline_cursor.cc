@@ -6,7 +6,9 @@
 
 #include <algorithm>
 
+#include "base/compiler_specific.h"
 #include "base/containers/adapters.h"
+#include "base/containers/span.h"
 #include "third_party/blink/renderer/core/editing/frame_selection.h"
 #include "third_party/blink/renderer/core/editing/position_with_affinity.h"
 #include "third_party/blink/renderer/core/html/html_br_element.h"
@@ -14,12 +16,14 @@
 #include "third_party/blink/renderer/core/layout/geometry/writing_mode_converter.h"
 #include "third_party/blink/renderer/core/layout/inline/fragment_items.h"
 #include "third_party/blink/renderer/core/layout/inline/inline_item_span.h"
+#include "third_party/blink/renderer/core/layout/inline/inline_node_data.h"
 #include "third_party/blink/renderer/core/layout/inline/physical_line_box_fragment.h"
 #include "third_party/blink/renderer/core/layout/layout_block_flow.h"
 #include "third_party/blink/renderer/core/layout/layout_text.h"
 #include "third_party/blink/renderer/core/layout/layout_text_combine.h"
 #include "third_party/blink/renderer/core/layout/physical_box_fragment.h"
 #include "third_party/blink/renderer/core/paint/inline_paint_context.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 class HTMLBRElement;
@@ -27,7 +31,9 @@ class HTMLBRElement;
 namespace {
 
 bool IsBidiControl(StringView string) {
-  return string.length() == 1 && Character::IsBidiControl(string[0]);
+  // SAFETY: length of one implies first element valid.
+  return string.length() == 1 &&
+         Character::IsBidiControl(UNSAFE_BUFFERS(string[0]));
 }
 
 LogicalRect ExpandedSelectionRectForSoftLineBreakIfNeeded(
@@ -410,19 +416,24 @@ UBiDiLevel InlineCursorPosition::BidiLevel() const {
     }
     const auto& layout_text = *To<LayoutText>(GetLayoutObject());
     DCHECK(!layout_text.NeedsLayout()) << this;
-    const auto* const items = layout_text.GetInlineItems();
-    if (!items || items->size() == 0) {
+    const auto [items, check_layout_object] = InlineItemsFor(layout_text);
+    if (items.empty()) {
       // In case of <br>, <wbr>, text-combine-upright, etc.
       return 0;
     }
     const TextOffsetRange offset = TextOffset();
-    const auto item_it = std::ranges::find_if(
-        *items, [offset](const Member<InlineItem>& item_ptr) {
+    const auto item_it =
+        std::ranges::find_if(items, [offset, &layout_text, check_layout_object](
+                                        const Member<InlineItem>& item_ptr) {
           const InlineItem& item = *item_ptr;
+          if (check_layout_object && item.GetLayoutObject() != &layout_text)
+              [[unlikely]] {
+            return false;
+          }
           return item.StartOffset() <= offset.start &&
                  item.EndOffset() >= offset.end;
         });
-    CHECK(item_it != items->end()) << this;
+    CHECK(item_it != items.end()) << this;
     return (*item_it)->BidiLevel();
   }
 
@@ -439,6 +450,25 @@ UBiDiLevel InlineCursorPosition::BidiLevel() const {
   }
 
   NOTREACHED();
+}
+
+std::pair<base::span<const Member<InlineItem>>, bool>
+InlineCursorPosition::InlineItemsFor(const LayoutText& layout_text) const {
+  const auto* const items = layout_text.GetInlineItems();
+  if (!items || items->empty()) [[unlikely]] {
+    return {{}, false};
+  }
+  if (UsesFirstLineStyle()) [[unlikely]] {
+    if (const LayoutBlockFlow* block_flow =
+            layout_text.FragmentItemsContainer()) {
+      if (const InlineNodeData* node_data = block_flow->GetInlineNodeData()) {
+        if (node_data->HasFirstLineItems()) {
+          return {node_data->ItemsData(true).items, true};
+        }
+      }
+    }
+  }
+  return {items->Items(), false};
 }
 
 const DisplayItemClient* InlineCursorPosition::GetSelectionDisplayItemClient()
@@ -501,8 +531,8 @@ PhysicalRect InlineCursor::CurrentLocalSelectionRectForText(
       Current().IsLineBreak() &&
       // This is for old compatible that old doesn't paint last br in a page.
       !IsLastBRInPage(*Current().GetLayoutObject())) {
-    logical_rect.size.inline_size =
-        LayoutUnit(Current().Style().GetFont()->SpaceWidth());
+    logical_rect.size.inline_size = LayoutUnit(
+        Current()->ScaledFont().SpaceWidth() * Current()->GetTextFitScale());
   }
   const LogicalRect line_break_extended_rect =
       Current().IsLineBreak() ? logical_rect
@@ -1524,8 +1554,14 @@ const LayoutObject* InlineCursor::CulledInlineTraversal::Find(
       return child;
 
     if (child->IsBox()) {
-      if (!child->IsFloatingOrOutOfFlowPositioned())
+      if (!child->IsFloatingOrOutOfFlowPositioned() &&
+          // Some objects are out of the IFC although they look like in-flow
+          // (`!IsFloatingOrOutOfFlowPositioned()`), such as ruby annotations or
+          // after block-in-inline splits.
+          (!RuntimeEnabledFeatures::InlineCursorSkipNonIfcEnabled() ||
+           child->IsInLayoutNGInlineFormattingContext())) {
         return child;
+      }
       child = child->NextInPreOrderAfterChildren(layout_inline_);
       continue;
     }

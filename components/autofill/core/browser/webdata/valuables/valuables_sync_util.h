@@ -5,7 +5,11 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_WEBDATA_VALUABLES_VALUABLES_SYNC_UTIL_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_WEBDATA_VALUABLES_VALUABLES_SYNC_UTIL_H_
 
+#include <memory>
+
 #include "components/autofill/core/browser/data_model/valuables/loyalty_card.h"
+#include "components/autofill/core/browser/data_model/valuables/valuable_types.h"
+#include "components/sync/protocol/autofill_valuable_metadata_specifics.pb.h"
 #include "components/sync/protocol/autofill_valuable_specifics.pb.h"
 #include "components/sync/protocol/entity_data.h"
 
@@ -39,6 +43,11 @@ sync_pb::AutofillValuableMetadataSpecifics CreateSpecificsFromValuableMetadata(
     const ValuableMetadata& metadata,
     const sync_pb::AutofillValuableMetadataSpecifics::PassType pass_type,
     const sync_pb::AutofillValuableMetadataSpecifics& base_specifics);
+
+// Converts the given valuable metadata `specifics` into an equivalent
+// ValuableMetadata instance.
+ValuableMetadata CreateValuableMetadataFromSpecifics(
+    const sync_pb::AutofillValuableMetadataSpecifics& specifics);
 
 // Clears all supported fields from `specifics`. Supported
 // fields are all fields in the protobuf definition that have already been

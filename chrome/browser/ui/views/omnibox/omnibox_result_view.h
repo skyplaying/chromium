@@ -16,7 +16,6 @@
 #include "chrome/browser/ui/views/omnibox/omnibox_mouse_enter_exit_handler.h"
 #include "components/omnibox/browser/autocomplete_match.h"
 #include "components/omnibox/browser/omnibox_popup_selection.h"
-#include "components/omnibox/browser/suggestion_answer.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/window_open_disposition.h"
@@ -103,6 +102,7 @@ class OmniboxResultView : public views::View {
 
  private:
   FRIEND_TEST_ALL_PREFIXES(OmniboxPopupViewViewsTest, DeleteSuggestion);
+  FRIEND_TEST_ALL_PREFIXES(OmniboxResultViewTest, ContextualSecondaryText);
 
   void OpenIphLink();
 
@@ -113,6 +113,10 @@ class OmniboxResultView : public views::View {
   void UpdateHoverState();
 
   void UpdateDividerLineVisibility();
+
+  // Sets the visibility of the secondary text (description) based on the
+  // current state. Only applies to contextual suggestions.
+  void UpdateSecondaryTextVisibility();
 
   // Sets the visibility of the |thumbs_up_button_| and |thumbs_down_button_|
   // based on the current state.

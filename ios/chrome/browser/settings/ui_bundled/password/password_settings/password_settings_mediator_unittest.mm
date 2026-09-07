@@ -5,11 +5,12 @@
 #import "ios/chrome/browser/settings/ui_bundled/password/password_settings/password_settings_mediator.h"
 
 #import "base/rand_util.h"
-#import "base/run_loop.h"
+#import "base/test/run_until.h"
 #import "base/test/task_environment.h"
 #import "components/affiliations/core/browser/fake_affiliation_service.h"
 #import "components/keyed_service/core/service_access_type.h"
 #import "components/password_manager/core/browser/password_manager_test_utils.h"
+#import "components/password_manager/core/browser/password_store/password_form_converters.h"
 #import "components/password_manager/core/browser/password_store/test_password_store.h"
 #import "components/password_manager/core/browser/ui/saved_passwords_presenter.h"
 #import "components/signin/public/identity_manager/objc/identity_manager_observer_bridge.h"
@@ -129,7 +130,8 @@ void SetSyncStatus(SyncServiceForPasswordTests* sync_service,
 
 }  // namespace
 
-class PasswordSettingsMediatorTest : public PlatformTest {
+class PasswordSettingsMediatorTest : public PlatformTest,
+                                     public SavedPasswordsPresenter::Observer {
  protected:
   void SetUp() override {
     TestProfileIOS::Builder builder;
@@ -154,15 +156,22 @@ class PasswordSettingsMediatorTest : public PlatformTest {
                 .get()));
     presenter_ = std::make_unique<SavedPasswordsPresenter>(
         &affiliation_service_, profile_store_, /*account_store=*/nullptr);
+    presenter_->AddObserver(this);
     trusted_vault_backend_ = std::make_unique<MockTrustedVaultClientBackend>();
   }
 
   void TearDown() override {
+    presenter_->RemoveObserver(this);
     EXPECT_OCMOCK_VERIFY(consumer_);
     EXPECT_OCMOCK_VERIFY(export_handler_);
     EXPECT_OCMOCK_VERIFY(bulk_move_passwords_to_account_handler_);
     EXPECT_OCMOCK_VERIFY(reauth_module_);
     [mediator_ disconnect];
+  }
+
+  void OnSavedPasswordsChanged(
+      const password_manager::PasswordStoreChangeList& changes) override {
+    saved_passwords_changed_count_++;
   }
 
   void CreateMediator() {
@@ -185,16 +194,22 @@ class PasswordSettingsMediatorTest : public PlatformTest {
   void AddPassword(std::string url,
                    std::u16string password,
                    PasswordForm::Store store) {
-    auto form = std::make_unique<PasswordForm>();
-    form->username_value = u"user@gmail.com";
-    form->password_value = password;
-    form->url = GURL(url);
-    form->signon_realm = "https://www.example.com/";
-    form->in_store = store;
+    password_manager::StoredCredential cred;
+    cred.username_value = u"user@gmail.com";
+    cred.password_value = password_manager::PasswordString(std::move(password));
+    cred.url = GURL(url);
+    cred.signon_realm = "https://www.example.com/";
+    cred.in_store = store;
 
-    base::RunLoop run_loop;
-    profile_store_->AddLogin(*form, run_loop.QuitClosure());
-    run_loop.Run();
+    size_t prev_count = saved_passwords_changed_count_;
+    profile_store_->AddLogin(std::move(cred));
+    // AddLogin's completion callback only waits for the password store write,
+    // which is not sufficient because SavedPasswordsPresenter performs
+    // asynchronous affiliation grouping via AffiliationService before updating
+    // its cache and notifying observers. Wait until OnSavedPasswordsChanged
+    // fires.
+    ASSERT_TRUE(base::test::RunUntil(
+        [&]() { return saved_passwords_changed_count_ > prev_count; }));
   }
 
   void AddPasskey() {
@@ -212,6 +227,7 @@ class PasswordSettingsMediatorTest : public PlatformTest {
   web::WebTaskEnvironment task_env_;
   SyncServiceForPasswordTests sync_service_;
   affiliations::FakeAffiliationService affiliation_service_;
+  size_t saved_passwords_changed_count_ = 0;
   scoped_refptr<TestPasswordStore> profile_store_;
   std::unique_ptr<SavedPasswordsPresenter> presenter_;
   std::unique_ptr<TestProfileIOS> profile_;
@@ -268,12 +284,11 @@ TEST_F(PasswordSettingsMediatorTest,
   CreateMediator();
   ASSERT_TRUE(
       [mediator_ conformsToProtocol:@protocol(SyncObserverModelBridge)]);
-  PasswordSettingsMediator<IdentityManagerObserverBridgeDelegate>*
-      syncObserver = static_cast<
-          PasswordSettingsMediator<IdentityManagerObserverBridgeDelegate>*>(
+  PasswordSettingsMediator<IdentityManagerObserving>* syncObserver =
+      static_cast<PasswordSettingsMediator<IdentityManagerObserving>*>(
           mediator_);
   const signin::PrimaryAccountChangeEvent event;
-  [syncObserver onPrimaryAccountChanged:event];
+  [syncObserver primaryAccountDidChange:event];
   [[consumer_ verify] setOnDeviceEncryptionState:
                           PasswordSettingsOnDeviceEncryptionStateNotShown];
 }
@@ -364,7 +379,6 @@ TEST_F(PasswordSettingsMediatorTest, CountsProfileStorePasswordsAsLocal) {
   [[consumer_ verify] setCanBulkMove:NO localPasswordsCount:2];
 }
 
-#if BUILDFLAG(IOS_CREDENTIAL_EXCHANGE_ENABLED)
 // Tests that the export button is enabled/disabled based on passkey presence
 // when the Credential Exchange feature is enabled.
 TEST_F(PasswordSettingsMediatorTest, UpdatesExportStateWhenPasskeysChange) {
@@ -375,4 +389,3 @@ TEST_F(PasswordSettingsMediatorTest, UpdatesExportStateWhenPasskeysChange) {
   AddPasskey();
   [[consumer_ verify] setCanExportCredentials:YES];
 }
-#endif

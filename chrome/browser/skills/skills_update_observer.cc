@@ -9,22 +9,24 @@
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/skills/skills_service_factory.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "components/optimization_guide/core/hints/optimization_guide_decider.h"
 #include "components/optimization_guide/core/hints/optimization_guide_decision.h"
 #include "components/optimization_guide/core/hints/optimization_metadata.h"
 #include "components/skills/features.h"
 #include "components/skills/proto/skill.pb.h"
+#include "components/skills/public/skills_features.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
 
 namespace {
-std::vector<glic::mojom::SkillPtr> ConvertSkillsListToSkills(
+std::vector<glic::mojom::SkillPreviewPtr> ConvertSkillsListToSkillPreviews(
     const skills::proto::SkillsList* skills_list) {
-  std::vector<glic::mojom::SkillPtr> skills;
+  std::vector<glic::mojom::SkillPreviewPtr> skill_previews;
   if (!skills_list) {
-    return skills;
+    return skill_previews;
   }
   for (const skills::proto::Skill& skill_proto : skills_list->skills()) {
     glic::mojom::SkillPreviewPtr skill_preview =
@@ -33,13 +35,10 @@ std::vector<glic::mojom::SkillPtr> ConvertSkillsListToSkills(
     skill_preview->name = skill_proto.name();
     skill_preview->icon = skill_proto.icon();
     skill_preview->source = glic::mojom::SkillSource::kFirstParty;
-
-    glic::mojom::SkillPtr skill = glic::mojom::Skill::New();
-    skill->preview = std::move(skill_preview);
-    skill->prompt = skill_proto.prompt();
-    skills.push_back(std::move(skill));
+    skill_preview->description = skill_proto.description();
+    skill_previews.push_back(std::move(skill_preview));
   }
-  return skills;
+  return skill_previews;
 }
 }  // namespace
 
@@ -77,8 +76,7 @@ void SkillsUpdateObserver::DidFinishNavigation(
   }
 
   if (!navigation_handle->HasCommitted() ||
-      !navigation_handle->IsInPrimaryMainFrame() ||
-      navigation_handle->IsSameDocument()) {
+      !navigation_handle->IsInPrimaryMainFrame()) {
     return;
   }
 
@@ -107,6 +105,11 @@ void SkillsUpdateObserver::OnOptimizationGuideDecision(
 }
 
 void SkillsUpdateObserver::MaybeUpdateContextualSkills() {
+  Profile* profile =
+      Profile::FromBrowserContext(tab_->GetContents()->GetBrowserContext());
+  if (!skills::SkillsServiceFactory::IsSkillsEnabledForProfile(profile)) {
+    return;
+  }
   glic::GlicKeyedService* glic_keyed_service = glic::GlicKeyedService::Get(
       Profile::FromBrowserContext(tab_->GetContents()->GetBrowserContext()));
   if (!glic_keyed_service) {
@@ -114,13 +117,18 @@ void SkillsUpdateObserver::MaybeUpdateContextualSkills() {
   }
   if (glic::GlicInstance* instance =
           glic_keyed_service->GetInstanceForTab(&(*tab_))) {
-    instance->host().skills_manager().UpdateSkillPreviews(&(*tab_));
+    instance->UpdateSkillPreviews(&(*tab_));
   }
 }
 
-std::vector<glic::mojom::SkillPtr>
-SkillsUpdateObserver::GetContextualSkills() const {
-  return ConvertSkillsListToSkills(contextual_skills_.get());
+std::vector<glic::mojom::SkillPreviewPtr>
+SkillsUpdateObserver::GetContextualSkillPreviews() const {
+  Profile* profile =
+      Profile::FromBrowserContext(tab_->GetContents()->GetBrowserContext());
+  if (!skills::SkillsServiceFactory::IsSkillsEnabledForProfile(profile)) {
+    return {};
+  }
+  return ConvertSkillsListToSkillPreviews(contextual_skills_.get());
 }
 
 }  // namespace skills

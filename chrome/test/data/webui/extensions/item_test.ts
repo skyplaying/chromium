@@ -5,7 +5,8 @@
 /** @fileoverview Suite of tests for extension-item. */
 
 import type {CrIconElement, ExtensionsItemElement} from 'chrome://extensions/extensions.js';
-import {Mv2ExperimentStage, navigation, Page} from 'chrome://extensions/extensions.js';
+import {navigation, Page} from 'chrome://extensions/extensions.js';
+import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {assertDeepEquals, assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {isChildVisible, microtasksFinished} from 'chrome://webui-test/test_util.js';
 
@@ -108,6 +109,20 @@ function getErrorsButtonInfo(item: HTMLElement):
   };
 }
 
+/**
+ * Helper to create an extension info object for a standard store extension.
+ */
+function createStoreItemData(
+    overrides?: Partial<chrome.developerPrivate.ExtensionInfo>):
+    chrome.developerPrivate.ExtensionInfo {
+  return createExtensionInfo(Object.assign(
+      {
+        webStoreUrl: 'https://chromewebstore.google.com/detail/foo',
+        location: chrome.developerPrivate.Location.FROM_STORE,
+      },
+      overrides));
+}
+
 suite('ExtensionItemTest', function() {
   /**
    * Extension item created before each test.
@@ -198,6 +213,20 @@ suite('ExtensionItemTest', function() {
         item.shadowRoot.querySelector<HTMLElement>(
             '#inspect-views a[is="action-link"]')!,
         'inspectItemView', [item.data.id, item.data.views[0]]);
+
+    loadTimeData.overrideValues({cwsReviewPromptingEnabled: true});
+    const dataWithStoreUrl = createExtensionInfo(item.data);
+    dataWithStoreUrl.webStoreUrl =
+        'https://chromewebstore.google.com/detail/foo';
+    dataWithStoreUrl.location = chrome.developerPrivate.Location.FROM_STORE;
+    item.data = dataWithStoreUrl;
+    await microtasksFinished();
+    const reviewLink =
+        item.shadowRoot.querySelector<HTMLElement>('#rate-link')!;
+    assertTrue(!!reviewLink);
+    assertTrue(!!reviewLink.querySelector('cr-icon[icon="cr:open-in-new"]'));
+    await mockDelegate.testClickingCalls(
+        reviewLink, 'openReviewPage', [item.data.id]);
 
     // Setup for testing navigation buttons.
     let currentPage = null;
@@ -454,21 +483,29 @@ suite('ExtensionItemTest', function() {
     let icon = item.shadowRoot.querySelector<CrIconElement>(
         '#source-indicator cr-icon');
     assertTrue(!!icon);
-    assertEquals('extensions-icons:unpacked', icon.icon);
+    assertEquals('extensions-icons:unpacked-custom', icon.icon);
 
     data = createExtensionInfo(item.data);
     data.location = chrome.developerPrivate.Location.THIRD_PARTY;
     item.data = data;
     await microtasksFinished();
     assertTrue(isChildVisible(item, '#source-indicator'));
-    assertEquals('extensions-icons:input', icon.icon);
+    assertEquals(
+        loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'extensions-icons:input' :
+            'extensions-icons:input-old',
+        icon.icon);
 
     data = createExtensionInfo(item.data);
     data.location = chrome.developerPrivate.Location.UNKNOWN;
     item.data = data;
     await microtasksFinished();
     assertTrue(isChildVisible(item, '#source-indicator'));
-    assertEquals('extensions-icons:input', icon.icon);
+    assertEquals(
+        loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'extensions-icons:input' :
+            'extensions-icons:input-old',
+        icon.icon);
 
     data = createExtensionInfo(item.data);
     data.location = chrome.developerPrivate.Location.INSTALLED_BY_DEFAULT;
@@ -487,7 +524,11 @@ suite('ExtensionItemTest', function() {
     icon = item.shadowRoot.querySelector<CrIconElement>(
         '#source-indicator cr-icon');
     assertTrue(!!icon);
-    assertEquals('extensions-icons:business', icon.icon);
+    assertEquals(
+        loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+            'extensions-icons:domain' :
+            'extensions-icons:business-old',
+        icon.icon);
 
     data = createExtensionInfo(item.data);
     data.controlledInfo = undefined;
@@ -525,7 +566,7 @@ suite('ExtensionItemTest', function() {
 
     // This section tests that the enable toggle is visible but disabled
     // when disableReasons.blockedByPolicy is true. This test prevents a
-    // regression to crbug/1003014.
+    // regression to crbug.com/40646977.
     data = createExtensionInfo(item.data);
     data.disableReasons.blockedByPolicy = true;
     item.data = data;
@@ -563,23 +604,12 @@ suite('ExtensionItemTest', function() {
     testVisible(item, '#enableToggle', true);
     assertFalse(item.$.enableToggle.disabled);
 
-    // MV2 deprecation tests cases.
-    // Extension toggle is visible and enabled when MV2 experiment is 'disable
-    // with re-enable' and extension is disabled due to unsupported manifest
-    // version.
+    // Extension toggle is visible and disabled when extension is disabled
+    // due to unsupported manifest version.
     data = createExtensionInfo(item.data);
     data.disableReasons.custodianApprovalRequired = false;
     data.disableReasons.unsupportedManifestVersion = true;
-    item.mv2ExperimentStage = Mv2ExperimentStage.DISABLE_WITH_REENABLE;
     item.data = data;
-    await microtasksFinished();
-    testVisible(item, '#enableToggle', true);
-    assertFalse(item.$.enableToggle.disabled);
-
-    // Extension toggle is visible and disabled when MV2 experiment is
-    // 'unsupported' and extension is disabled due to unsupported manifest
-    // version.
-    item.mv2ExperimentStage = Mv2ExperimentStage.UNSUPPORTED;
     await microtasksFinished();
     testVisible(item, '#enableToggle', true);
     assertTrue(item.$.enableToggle.disabled);
@@ -761,5 +791,142 @@ suite('ExtensionItemTest', function() {
     assertTrue(
         buttonInfo.isError,
         'Button should have error class when both errors and warnings exist');
+  });
+
+  test('RateExtensionLinkVisibility', async () => {
+    const card = item.shadowRoot.querySelector<HTMLElement>('#card')!;
+    card.style.transition = 'none';
+
+    function assertCardHeight(expected: number) {
+      assertEquals(expected, Math.round(card.getBoundingClientRect().height));
+    }
+
+    // Hidden when feature flag is disabled.
+    loadTimeData.overrideValues({cwsReviewPromptingEnabled: false});
+    item.data = createStoreItemData();
+    await microtasksFinished();
+    testVisible(item, '#rate-link', false);
+    assertFalse(card.classList.contains('review-prompting-enabled'));
+    assertCardHeight(160);
+
+    item.inDevMode = true;
+    await microtasksFinished();
+    assertCardHeight(208);
+    item.inDevMode = false;
+
+    // Enable feature flag for all remaining layout state tests.
+    loadTimeData.overrideValues({cwsReviewPromptingEnabled: true});
+    item.data = createStoreItemData();
+    await microtasksFinished();
+    assertTrue(card.classList.contains('review-prompting-enabled'));
+    assertCardHeight(180);
+
+    // Hidden by default when webStoreUrl is empty.
+    item.data = createExtensionInfo();
+    await microtasksFinished();
+    testVisible(item, '#rate-link', false);
+
+    // Visible when webStoreUrl is present and item is from store.
+    item.data = createStoreItemData();
+    await microtasksFinished();
+    testVisible(item, '#rate-link', true);
+
+    // Visible in developer mode as well, expanding to 228px.
+    item.inDevMode = true;
+    await microtasksFinished();
+    testVisible(item, '#rate-link', true);
+    assertCardHeight(228);
+    item.inDevMode = false;
+
+    // Hidden for local developer unpacked extensions.
+    item.data = createStoreItemData({
+      location: chrome.developerPrivate.Location.UNPACKED,
+    });
+    await microtasksFinished();
+    testVisible(item, '#rate-link', false);
+
+    // Hidden for third-party extensions.
+    item.data = createStoreItemData({
+      location: chrome.developerPrivate.Location.THIRD_PARTY,
+    });
+    await microtasksFinished();
+    testVisible(item, '#rate-link', false);
+
+    // Hidden for default pre-installed component extensions.
+    item.data = createStoreItemData({
+      location: chrome.developerPrivate.Location.INSTALLED_BY_DEFAULT,
+    });
+    await microtasksFinished();
+    testVisible(item, '#rate-link', false);
+
+    // Hidden for unknown installation location.
+    item.data = createStoreItemData({
+      location: chrome.developerPrivate.Location.UNKNOWN,
+    });
+    await microtasksFinished();
+    testVisible(item, '#rate-link', false);
+
+    // Hidden for policy-controlled extensions.
+    item.data = createStoreItemData({
+      controlledInfo: {text: 'policy'},
+    });
+    await microtasksFinished();
+    testVisible(item, '#rate-link', false);
+
+    // Hidden when extension must remain installed.
+    item.data = createStoreItemData({mustRemainInstalled: true});
+    await microtasksFinished();
+    testVisible(item, '#rate-link', false);
+
+    // Hidden when extension is corrupted (repair state active).
+    const corruptedData = createStoreItemData();
+    corruptedData.disableReasons.corruptInstall = true;
+    item.data = corruptedData;
+    await microtasksFinished();
+    testVisible(item, '#rate-link', false);
+
+    // Hidden when extension is terminated (reload button active).
+    item.data = createStoreItemData({
+      state: chrome.developerPrivate.ExtensionState.TERMINATED,
+    });
+    await microtasksFinished();
+    testVisible(item, '#rate-link', false);
+
+    // Visible when runtime errors exist on the card (description still valid,
+    // Errors button in strip).
+    const errorData = createStoreItemData();
+    errorData.runtimeErrors = [createRuntimeError(errorData.id)];
+    item.data = errorData;
+    await microtasksFinished();
+    testVisible(item, '#rate-link', true);
+
+    // Visible when install warnings exist on the card (description still valid,
+    // Warnings button in strip).
+    const installWarningData = createStoreItemData();
+    installWarningData.installWarnings = ['Some install warning'];
+    item.data = installWarningData;
+    await microtasksFinished();
+    testVisible(item, '#rate-link', true);
+
+    // Hidden when severe runtime warnings replace description banner.
+    const severeWarningData = createStoreItemData();
+    severeWarningData.runtimeWarnings = ['Severe runtime warning'];
+    item.data = severeWarningData;
+    await microtasksFinished();
+    testVisible(item, '#rate-link', false);
+
+    // Hidden when MV2 deprecation warning replaces description banner.
+    const mv2Data = createStoreItemData();
+    mv2Data.disableReasons.unsupportedManifestVersion = true;
+    item.data = mv2Data;
+    await microtasksFinished();
+    testVisible(item, '#rate-link', false);
+
+    // Hidden when Safe Browsing allowlist warning replaces description banner.
+    const allowlistData = createStoreItemData();
+    allowlistData.showSafeBrowsingAllowlistWarning = true;
+    item.data = allowlistData;
+    await microtasksFinished();
+    testVisible(item, '#rate-link', false);
   });
 });

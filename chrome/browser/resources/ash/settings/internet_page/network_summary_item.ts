@@ -6,7 +6,7 @@
  * @fileoverview Polymer element for displaying the network state for a specific
  * type and a list of networks for that type. NOTE: It both Cellular and Tether
  * technologies are available, they are combined into a single 'Mobile data'
- * section. See crbug.com/726380.
+ * section. See crbug.com/40522596.
  */
 
 import 'chrome://resources/ash/common/network/network_icon.js';
@@ -103,14 +103,14 @@ export class NetworkSummaryItemElement extends NetworkSummaryItemElementBase {
     };
   }
 
-  activeNetworkState: OncMojo.NetworkStateProperties|undefined;
-  deviceState: OncMojo.DeviceStateProperties|undefined;
-  globalPolicy: GlobalPolicy|undefined;
-  networkStateList: OncMojo.NetworkStateProperties[];
-  networkTitleText: string|undefined;
-  tetherDeviceState: OncMojo.DeviceStateProperties|undefined;
+  declare activeNetworkState: OncMojo.NetworkStateProperties|undefined;
+  declare deviceState: OncMojo.DeviceStateProperties|undefined;
+  declare globalPolicy: GlobalPolicy|undefined;
+  declare networkStateList: OncMojo.NetworkStateProperties[];
+  declare networkTitleText: string|undefined;
+  declare tetherDeviceState: OncMojo.DeviceStateProperties|undefined;
   private browserProxy_: InternetPageBrowserProxy;
-  private showTechnologyBadge_: boolean;
+  declare private showTechnologyBadge_: boolean;
 
   constructor() {
     super();
@@ -177,7 +177,7 @@ export class NetworkSummaryItemElement extends NetworkSummaryItemElementBase {
     if (OncMojo.connectionStateIsConnected(connectionState)) {
       // Ethernet networks always have the display name 'Ethernet' so we use the
       // state text 'Connected' to avoid repeating the label in the sublabel.
-      // See http://crbug.com/989907 for details.
+      // See http://crbug.com/41474069 for details.
       return networkState.type === NetworkType.kEthernet ?
           this.i18n('networkListItemConnected') :
           name;

@@ -8,6 +8,7 @@
 #include "base/callback_list.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "ui/base/unowned_user_data/unowned_user_data_host.h"
 
 class MockBrowserWindowInterface : public BrowserWindowInterface {
  public:
@@ -18,8 +19,12 @@ class MockBrowserWindowInterface : public BrowserWindowInterface {
   MOCK_METHOD(const Profile*, GetProfile, (), (const override));
   MOCK_METHOD(const SessionID&, GetSessionID, (), (const override));
   MOCK_METHOD(bool, IsDeleteScheduled, (), (const override));
+  MOCK_METHOD(base::CallbackListSubscription,
+              RegisterBrowserDidClose,
+              (BrowserDidCloseCallback callback),
+              (override));
   // The non-const version should never return something different from the
-  // const version, so implement one in terms of th other.
+  // const version, so implement one in terms of the other.
   ui::UnownedUserDataHost& GetUnownedUserDataHost() override;
   MOCK_METHOD(const ui::UnownedUserDataHost&,
               GetUnownedUserDataHost,
@@ -49,11 +54,6 @@ class MockBrowserWindowInterface : public BrowserWindowInterface {
   MOCK_METHOD(TabStripModel*, GetTabStripModel, (), (override));
   MOCK_METHOD(const TabStripModel*, GetTabStripModel, (), (const, override));
   MOCK_METHOD(bool, IsTabStripVisible, (), (override));
-  MOCK_METHOD(bool, ShouldHideUIForFullscreen, (), (const, override));
-  MOCK_METHOD(base::CallbackListSubscription,
-              RegisterBrowserDidClose,
-              (BrowserDidCloseCallback callback),
-              (override));
   MOCK_METHOD(base::CallbackListSubscription,
               RegisterBrowserCloseCancelled,
               (BrowserCloseCancelledCallback callback),
@@ -82,32 +82,24 @@ class MockBrowserWindowInterface : public BrowserWindowInterface {
               RegisterDidBecomeInactive,
               (DidBecomeInactiveCallback callback),
               (override));
-  MOCK_METHOD(ExclusiveAccessManager*,
-              GetExclusiveAccessManager,
-              (),
-              (override));
-  MOCK_METHOD(BrowserActions*, GetActions, (), (override));
   MOCK_METHOD(std::vector<tabs::TabInterface*>,
               GetAllTabInterfaces,
               (),
               (override));
-  MOCK_METHOD(Browser*, GetBrowserForMigrationOnly, (), (override));
-  MOCK_METHOD(const Browser*,
-              GetBrowserForMigrationOnly,
-              (),
-              (const, override));
-  MOCK_METHOD(bool, IsTabModalPopupDeprecated, (), (const, override));
+  MOCK_METHOD(bool, IsTabModalPopup, (), (const, override));
+  MOCK_METHOD(void,
+              SetIsTabModalPopup,
+              (bool, base::PassKey<internal::ScopedBrowserShower>),
+              (override));
+  MOCK_METHOD(bool, CreatedBySessionRestore, (), (const, override));
   MOCK_METHOD(DesktopBrowserWindowCapabilities*, capabilities, (), (override));
   MOCK_METHOD(const DesktopBrowserWindowCapabilities*,
               capabilities,
               (),
               (const, override));
-  MOCK_METHOD(bool, CanShowCallToAction, (), (const, override));
-  MOCK_METHOD(std::unique_ptr<ScopedWindowCallToAction>,
-              ShowCallToAction,
-              (),
-              (override));
 #endif
+ private:
+  ui::UnownedUserDataHost unowned_user_data_host_;
 };
 
 #endif  // CHROME_BROWSER_UI_BROWSER_WINDOW_TEST_MOCK_BROWSER_WINDOW_INTERFACE_H_

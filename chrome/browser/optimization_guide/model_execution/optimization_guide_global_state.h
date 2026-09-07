@@ -7,18 +7,20 @@
 
 #include <memory>
 
+#include "base/feature_list.h"
+#include "base/functional/callback.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/optimization_guide/prediction/chrome_profile_download_service_tracker.h"
 #include "components/optimization_guide/core/delivery/optimization_guide_model_provider.h"
 #include "components/optimization_guide/core/delivery/prediction_manager.h"
+#include "components/optimization_guide/core/delivery/prediction_model_component_update_listener.h"
 #include "components/optimization_guide/core/delivery/prediction_model_store.h"
-#include "components/optimization_guide/core/model_execution/model_broker_state.h"
-#include "components/optimization_guide/core/model_execution/on_device_asset_manager.h"
 #include "components/optimization_guide/core/model_execution/on_device_capability.h"
 #include "components/optimization_guide/core/optimization_guide_enums.h"
 #include "services/on_device_model/public/cpp/buildflags.h"
+#include "services/on_device_model/public/mojom/on_device_model_service.mojom.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "components/optimization_guide/core/model_execution/android/model_broker_android.h"
@@ -26,8 +28,14 @@
 
 namespace optimization_guide {
 
-class ChromeModelComponentStateManagerObserver;
+BASE_DECLARE_FEATURE(kOptimizationGuideManifestBroker);
+
 class OptimizationGuideGlobalFeature;
+class OptimizationGuideGlobalStateTest;
+
+void RegisterPredictionModelComponent(
+    proto::OptimizationTarget target,
+    base::WeakPtr<PredictionModelComponentUpdateListener> listener);
 
 // Constructs and initializes a PredictionManager with it's dependencies.
 class ChromePredictionManager {
@@ -39,6 +47,9 @@ class ChromePredictionManager {
     return prediction_model_store_;
   }
   PredictionManager& prediction_manager() { return prediction_manager_; }
+  OptimizationGuideModelProvider& model_provider() {
+    return prediction_manager_;
+  }
 
  private:
   PredictionModelStore prediction_model_store_;
@@ -46,8 +57,8 @@ class ChromePredictionManager {
   ChromeProfileDownloadServiceTracker profile_download_service_tracker_;
 };
 
-// This holds the ModelBrokerState and other common objects shared between
-// profiles. Since some of the membersit hold raw_ptr to browser process level
+// This holds the ManifestBrokerState and other common objects shared between
+// profiles. Since some of the members hold raw_ptr to browser process level
 // objects, such as local state prefs, profile manager, it must not outlive the
 // browser process, so each profile holds a ref to it in
 // OptimizationGuideKeyedService to keep it alive until all profiles are
@@ -58,13 +69,7 @@ class OptimizationGuideGlobalState final
   // Retrieves or creates the instance.
   static scoped_refptr<OptimizationGuideGlobalState> CreateOrGet();
 
-#if BUILDFLAG(USE_ON_DEVICE_MODEL_SERVICE)
-  // This accessor is mainly for the chrome://on-device-internals page and
-  // tests.
-  ModelBrokerState& model_broker_state() { return on_device_capability_; }
-#endif  // BUILDFLAG(USE_ON_DEVICE_MODEL_SERVICE)
-
-  OnDeviceCapability& on_device_capability() { return on_device_capability_; }
+  OnDeviceCapability& on_device_capability() { return *on_device_capability_; }
 
   PredictionModelStore& prediction_model_store() {
     return prediction_manager_.prediction_model_store();
@@ -72,24 +77,44 @@ class OptimizationGuideGlobalState final
   PredictionManager& prediction_manager() {
     return prediction_manager_.prediction_manager();
   }
+  OptimizationGuideModelProvider& model_provider() {
+    return *prediction_model_component_update_listener_;
+  }
+  PredictionModelComponentUpdateListener&
+  prediction_model_component_update_listener() {
+    return *prediction_model_component_update_listener_;
+  }
 
  private:
   friend base::RefCounted<OptimizationGuideGlobalState>;
+  friend OptimizationGuideGlobalStateTest;
 
-  OptimizationGuideGlobalState();
   ~OptimizationGuideGlobalState();
+
+#if BUILDFLAG(USE_ON_DEVICE_MODEL_SERVICE)
+  using LaunchServiceCallback = base::RepeatingCallback<void(
+      mojo::PendingReceiver<on_device_model::mojom::OnDeviceModelService>)>;
+
+  explicit OptimizationGuideGlobalState(
+      LaunchServiceCallback launch_service_callback);
+
+  static scoped_refptr<OptimizationGuideGlobalState> CreateForTesting();
+
+#else
+  OptimizationGuideGlobalState();
+#endif  // BUILDFLAG(USE_ON_DEVICE_MODEL_SERVICE)
 
   ChromePredictionManager prediction_manager_;
 
-#if BUILDFLAG(USE_ON_DEVICE_MODEL_SERVICE)
-  ModelBrokerState on_device_capability_;
-  std::unique_ptr<ChromeModelComponentStateManagerObserver>
-      component_state_manager_observer_;
-#elif BUILDFLAG(IS_ANDROID)
-  ModelBrokerAndroid on_device_capability_;
-#else
-  OnDeviceCapability on_device_capability_;
-#endif  // BUILDFLAG(USE_ON_DEVICE_MODEL_SERVICE)
+  // Registers the prediction model component for `target` with the component
+  // updater.
+  std::unique_ptr<PredictionModelComponentUpdateListener>
+      prediction_model_component_update_listener_ =
+          std::make_unique<PredictionModelComponentUpdateListener>(
+              prediction_manager_.model_provider(),
+              base::BindRepeating(&RegisterPredictionModelComponent));
+
+  std::unique_ptr<OnDeviceCapability> on_device_capability_;
 
   base::WeakPtrFactory<OptimizationGuideGlobalState> weak_ptr_factory_{this};
 };

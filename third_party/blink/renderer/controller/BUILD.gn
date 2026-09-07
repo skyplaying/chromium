@@ -30,9 +30,6 @@ component("controller") {
     "//v8",
   ]
 
-  if (use_blink_extensions_chromeos) {
-    deps += [ "//third_party/blink/renderer/extensions/chromeos" ]
-  }
   if (use_blink_extensions_webview) {
     deps += [ "//third_party/blink/renderer/extensions/webview" ]
   }
@@ -192,11 +189,17 @@ test("blink_unittests") {
 
   fuzztests = [
     "BlinkAttributeFuzzTestFixture.NoElementAttributeCrashes",
+    "AccessibilityDomScenarioRunner.AnimationAndAria",
+    "AccessibilityDomScenarioRunner.CarouselAndAria",
     "AccessibilityDomScenarioRunner.HtmlAndAria",
     "AccessibilityDomScenarioRunner.CanvasFallbackContent",
+    "AccessibilityDomScenarioRunner.CustomizableSelectAndAria",
     "AccessibilityDomScenarioRunner.SvgAndAria",
     "AccessibilityDomScenarioRunner.MathMLAndAria",
     "AccessibilityDomScenarioRunner.ProblematicMarkup",
+    "AccessibilityDomScenarioRunner.ReadingFlowAndOrder",
+    "AccessibilityDomScenarioRunner.DialogAndAria",
+    "AccessibilityDomScenarioRunner.SelectAndAria",
     "AccessibilityDomScenarioRunner.ValidTableAndAria",
     "HTMLDomScenarioRunner.HTML",
     "HTMLDomScenarioRunner.MathMLInHTML",
@@ -205,6 +208,7 @@ test("blink_unittests") {
 }
 
 test("blink_perf_tests") {
+  configs += [ "//build/config/compiler:thinlto_optimize_max" ]
   deps = [ ":blink_perf_tests_sources" ]
 }
 

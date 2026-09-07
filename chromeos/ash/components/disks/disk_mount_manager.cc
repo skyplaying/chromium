@@ -116,8 +116,8 @@ void FixPermissions(const std::string_view path) {
   // that no race condition could possibly affect the next steps.
   base::StrAppend(&path_so_far,
                   {"/", parts[1], "/", parts[2], "/", parts[3], "/", parts[4]});
-  base::ScopedFD fd(
-      HANDLE_EINTR(open(path_so_far.c_str(), O_DIRECTORY | O_PATH)));
+  base::ScopedFD fd(HANDLE_EINTR(
+      open(path_so_far.c_str(), O_DIRECTORY | O_PATH | O_NOFOLLOW)));
   if (!fd.is_valid()) {
     PLOG(ERROR) << "Cannot open " << path_so_far;
     return;
@@ -139,8 +139,8 @@ void FixPermissions(const std::string_view path) {
     // ensures that the item is really a directory and that no race condition
     // could possibly affect the next steps.
     base::StrAppend(&path_so_far, {"/", dir_name});
-    fd.reset(
-        HANDLE_EINTR(openat(fd.get(), dir_name.c_str(), O_DIRECTORY | O_PATH)));
+    fd.reset(HANDLE_EINTR(
+        openat(fd.get(), dir_name.c_str(), O_DIRECTORY | O_PATH | O_NOFOLLOW)));
     if (!fd.is_valid()) {
       PLOG(ERROR) << "Cannot open " << path_so_far;
       return;
@@ -192,7 +192,8 @@ void FixPermissions(const std::string_view path) {
   // Get a file descriptor to the file. Using openat ensures that no race
   // condition could possibly affect the next steps.
   base::StrAppend(&path_so_far, {"/", file_name});
-  fd.reset(HANDLE_EINTR(openat(fd.get(), file_name.c_str(), O_PATH)));
+  fd.reset(
+      HANDLE_EINTR(openat(fd.get(), file_name.c_str(), O_PATH | O_NOFOLLOW)));
   if (!fd.is_valid()) {
     PLOG(ERROR) << "Cannot open " << path_so_far;
     return;
@@ -1313,7 +1314,13 @@ class DiskMountManagerImpl : public DiskMountManager,
   }
 
   // Mount event change observers.
-  base::ObserverList<Observer> observers_;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      Observer,
+      /*check_empty=*/false,
+      /*reentrancy=*/
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>
+      observers_;
 
   const raw_ptr<CrosDisksClient> cros_disks_client_ = CrosDisksClient::Get();
 

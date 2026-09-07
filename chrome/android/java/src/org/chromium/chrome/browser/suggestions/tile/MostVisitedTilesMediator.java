@@ -12,6 +12,9 @@ import static org.chromium.chrome.browser.suggestions.tile.MostVisitedTilesPrope
 import android.content.Context;
 import android.content.res.Configuration;
 import android.content.res.Resources;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.ViewGroup.MarginLayoutParams;
 
 import org.chromium.build.annotations.Initializer;
 import org.chromium.build.annotations.NullMarked;
@@ -19,6 +22,7 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.native_page.ContextMenuManager;
+import org.chromium.chrome.browser.ntp.NewTabPageUtils;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationConfigManager;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationConfigManager.HomepageStateListener;
 import org.chromium.chrome.browser.offlinepages.OfflinePageBridge;
@@ -29,6 +33,7 @@ import org.chromium.chrome.browser.suggestions.SuggestionsUiDelegate;
 import org.chromium.chrome.browser.suggestions.mostvisited.MostVisitedSitesMetadataUtils;
 import org.chromium.chrome.browser.user_education.UserEducationHelper;
 import org.chromium.components.browser_ui.widget.displaystyle.UiConfig;
+import org.chromium.components.omnibox.OmniboxCapabilities;
 import org.chromium.ui.modelutil.PropertyModel;
 
 import java.util.List;
@@ -46,14 +51,15 @@ public class MostVisitedTilesMediator implements TileGroup.Observer {
     private final Context mContext;
     private final Resources mResources;
     private final UiConfig mUiConfig;
+    private final View mMvTilesContainerLayout;
     private final MostVisitedTilesLayout mMvTilesLayout;
     private final PropertyModel mModel;
+    private final boolean mIsLff;
     private final boolean mIsTablet;
     private final int mTileViewLandscapePadding;
     private final int mTileViewPortraitEdgePadding;
     private final @Nullable Runnable mSnapshotTileGridChangedRunnable;
     private final @Nullable Runnable mTileCountChangedRunnable;
-    private final boolean mNtpCustomizationForMvtFeatureEnabled;
 
     private @Nullable HomepageStateListener mMvtVisibilityListener;
     private int mTileViewPortraitIntervalPadding;
@@ -69,10 +75,10 @@ public class MostVisitedTilesMediator implements TileGroup.Observer {
     public MostVisitedTilesMediator(
             Context context,
             UiConfig uiConfig,
-            MostVisitedTilesLayout mvTilesLayout,
+            View mvTilesContainerLayout,
             TileRenderer renderer,
             PropertyModel propertyModel,
-            boolean isTablet,
+            boolean isLff,
             @Nullable Runnable snapshotTileGridChangedRunnable,
             @Nullable Runnable tileCountChangedRunnable) {
         mContext = context;
@@ -80,10 +86,12 @@ public class MostVisitedTilesMediator implements TileGroup.Observer {
         mUiConfig = uiConfig;
         mRenderer = renderer;
         mModel = propertyModel;
-        mIsTablet = isTablet;
+        mIsLff = isLff;
+        mIsTablet = mIsLff && !OmniboxCapabilities.isDesktopPlatform();
         mSnapshotTileGridChangedRunnable = snapshotTileGridChangedRunnable;
         mTileCountChangedRunnable = tileCountChangedRunnable;
-        mMvTilesLayout = mvTilesLayout;
+        mMvTilesContainerLayout = mvTilesContainerLayout;
+        mMvTilesLayout = mvTilesContainerLayout.findViewById(R.id.mv_tiles_layout);
 
         mTileViewLandscapePadding =
                 mResources.getDimensionPixelSize(R.dimen.tile_view_padding_landscape);
@@ -99,14 +107,10 @@ public class MostVisitedTilesMediator implements TileGroup.Observer {
 
         maybeSetPortraitIntervalPaddings();
 
-        mNtpCustomizationForMvtFeatureEnabled =
-                ChromeFeatureList.sNewTabPageCustomizationForMvt.isEnabled();
         addMostVisitedTilesVisibilityListener();
     }
 
     private void addMostVisitedTilesVisibilityListener() {
-        if (!mNtpCustomizationForMvtFeatureEnabled) return;
-
         mMvtVisibilityListener =
                 new HomepageStateListener() {
                     @Override
@@ -169,36 +173,11 @@ public class MostVisitedTilesMediator implements TileGroup.Observer {
     /**
      * Sets the visibility of the Most Visited Tiles (MVT) section.
      *
-     * <p>If the `NewTabPageCustomizationForMvt` feature is disabled: The section is visible as long
-     * as it has content, which means there are either tiles to show or custom links are enabled
-     * (showing the "Add new" button).
-     *
-     * <p>If the `NewTabPageCustomizationForMvt` feature is enabled: Visibility is also controlled
-     * by a user accessible toggle. The section will only be visible if the user has the toggle
-     * turned on and the section has content.
-     *
-     * <p>Once the MVT customization feature flag is enabled by default, the code should be changed
-     * to:
-     *
-     * <p>boolean isMvtVisible = !ChromeFeatureList.sNewTabPageCustomizationForMvt.isEnabled() ||
-     * NtpCustomizationConfigManager.getInstance().getPrefIsMvtToggleOn();
-     *
-     * <p>mModel.set(IS_VISIBLE, isMvtVisible);
+     * <p>The visibility of MVT is controlled by a user accessible toggle. The section will be
+     * visible if and only if the user has the toggle turned on.
      */
     void updateMvtVisibility() {
-        // The section has content if the "Add new" button is present or there are tiles.
-        boolean hasContent =
-                ChromeFeatureList.sMostVisitedTilesCustomization.isEnabled()
-                        || (mTileGroup != null && !mTileGroup.isEmpty());
-
-        boolean isMvtVisible = hasContent;
-        if (ChromeFeatureList.sNewTabPageCustomizationForMvt.isEnabled()) {
-            // The toggle turns off the whole MVT section regardless the section has something to
-            // show.
-            isMvtVisible &= NtpCustomizationConfigManager.getInstance().getPrefIsMvtToggleOn();
-        }
-
-        mModel.set(IS_VISIBLE, isMvtVisible);
+        mModel.set(IS_VISIBLE, NtpCustomizationConfigManager.getInstance().getPrefIsMvtToggleOn());
     }
 
     @Override
@@ -248,6 +227,42 @@ public class MostVisitedTilesMediator implements TileGroup.Observer {
         return mTileGroup == null;
     }
 
+    /**
+     * Updates the width and lateral margins of the MVT container.
+     *
+     * <p>The lateral margins are symmetrically calculated based on the difference between the total
+     * width and the target MVT width. On tablets, if the content fits, the width is set to
+     * WRAP_CONTENT to cooperate with {@link MostVisitedTilesLayout}'s internal centering.
+     *
+     * @param totalWidth The total available width of the parent layout.
+     * @param mvtWidth The target width that the MVT layout should align to.
+     */
+    void updateMvtWidth(int totalWidth, int mvtWidth) {
+        MarginLayoutParams marginLayoutParams =
+                (MarginLayoutParams) mMvTilesContainerLayout.getLayoutParams();
+        int lateralMargin = (totalWidth - mvtWidth) / 2;
+        marginLayoutParams.leftMargin = lateralMargin;
+        marginLayoutParams.rightMargin = lateralMargin;
+
+        if (mIsTablet && mMvTilesLayout.contentFitsOnLff(mvtWidth)) {
+            // On tablet, use WRAP_CONTENT to permits {@link MostVisitedTilesLayout} to calculate
+            // and apply expanded edge margins to center its tiles.
+            marginLayoutParams.width = ViewGroup.LayoutParams.WRAP_CONTENT;
+        } else {
+            marginLayoutParams.width = mvtWidth;
+        }
+    }
+
+    /**
+     * Updates the margins for the most visited tiles layout based on what is shown above it.
+     *
+     * @param shouldShowLogo Whether the logo is shown.
+     * @param isLff Whether the device is a large form factor device.
+     */
+    void updateTilesLayoutMargins(boolean shouldShowLogo, boolean isLff) {
+        NewTabPageUtils.updateTilesLayoutTopMargin(mMvTilesContainerLayout, shouldShowLogo, isLff);
+    }
+
     public void onSwitchToForeground() {
         mTileGroup.onSwitchToForeground(/* trackLoadTask= */ false);
     }
@@ -278,7 +293,7 @@ public class MostVisitedTilesMediator implements TileGroup.Observer {
                 || mTileViewPortraitIntervalPadding != 0) {
             return;
         }
-        if (!mIsTablet) {
+        if (!mIsLff) {
             boolean isSmallDevice = mUiConfig.getCurrentDisplayStyle().isSmall();
             int screenWidth = mResources.getDisplayMetrics().widthPixels - mLateralMarginSum;
             int tileViewWidth =
@@ -304,7 +319,7 @@ public class MostVisitedTilesMediator implements TileGroup.Observer {
         // Skip if no children (tile or otherwise).
         if (mMvTilesLayout.getChildCount() < 1) return;
 
-        if (mIsTablet) {
+        if (mIsLff) {
             mModel.set(HORIZONTAL_EDGE_PADDINGS, mTileViewEdgePaddingForTablet);
             mModel.set(HORIZONTAL_INTERVAL_PADDINGS, mTileViewIntervalPaddingForTablet);
             return;

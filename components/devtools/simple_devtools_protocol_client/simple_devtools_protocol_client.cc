@@ -132,8 +132,11 @@ void SimpleDevToolsProtocolClient::DispatchProtocolMessageTask(
     auto it = pending_response_map_.find(*id);
     if (it == pending_response_map_.cend()) {
       LOG(ERROR) << "Unexpected message id=" << *id;
-      agent_host_->GetProcessHost()->ShutdownForBadMessage(
-          content::RenderProcessHost::CrashReportMode::GENERATE_CRASH_DUMP);
+      if (agent_host_) {
+        agent_host_->GetProcessHost()->ShutdownForBadMessage(
+            content::RenderProcessHost::CrashReportMode::GENERATE_CRASH_DUMP);
+      }
+      return;
     }
 
     // Result handler callback may add more callbacks, so make sure we use
@@ -178,8 +181,7 @@ void SimpleDevToolsProtocolClient::SendProtocolMessage(
 
   VLOG(kVLogLevel) << "\n[CDP SEND] " << message.DebugString();
 
-  std::string json_message =
-      base::WriteJson(base::Value(std::move(message))).value_or("");
+  std::string json_message = base::WriteJson(message).value_or("");
   agent_host_->DispatchProtocolMessage(this, base::as_byte_span(json_message));
 }
 

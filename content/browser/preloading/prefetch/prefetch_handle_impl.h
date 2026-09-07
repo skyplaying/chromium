@@ -5,59 +5,19 @@
 #ifndef CONTENT_BROWSER_PRELOADING_PREFETCH_PREFETCH_HANDLE_IMPL_H_
 #define CONTENT_BROWSER_PRELOADING_PREFETCH_PREFETCH_HANDLE_IMPL_H_
 
+#include <atomic>
+
 #include "base/functional/callback.h"
+#include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
-#include "content/browser/preloading/prefetch/prefetch_container.h"
+#include "content/browser/preloading/prefetch/prefetch_container_async_observer.h"
 #include "content/public/browser/prefetch_handle.h"
 
 namespace content {
 
+class PrefetchContainer;
 class PrefetchService;
 enum class PrefetchStatus;
-
-// Currently, it must be visible from `PrefetchResponseReader` for `friend`.
-//
-// TODO(crbug.com/400761083): Put it into `namespace prefetch_handle`.
-class PrefetchContainerObserver final : public PrefetchContainer::Observer {
- public:
-  PrefetchContainerObserver();
-  ~PrefetchContainerObserver() override;
-
-  // Not movable nor copyable.
-  PrefetchContainerObserver(PrefetchContainerObserver&& other) = delete;
-  PrefetchContainerObserver& operator=(PrefetchContainerObserver&& other) =
-      delete;
-  PrefetchContainerObserver(const PrefetchContainerObserver&) = delete;
-  PrefetchContainerObserver& operator=(const PrefetchContainerObserver&) =
-      delete;
-
-  void SetOnPrefetchHeadReceivedCallback(
-      base::RepeatingCallback<void(const network::mojom::URLResponseHead&)>
-          on_prefetch_head_received);
-  void SetOnPrefetchCompletedOrFailedCallback(
-      base::RepeatingCallback<
-          void(const network::URLLoaderCompletionStatus& completion_status,
-               const std::optional<int>& response_code)>
-          on_prefetch_completed_or_failed);
-
-  // Implements `PrefetchContainer::Observer`.
-  void OnWillBeDestroyed(const PrefetchContainer& prefetch_container) override;
-  void OnGotInitialEligibility(const PrefetchContainer& prefetch_container,
-                               PreloadingEligibility eligibility) override;
-  void OnDeterminedHead(const PrefetchContainer& prefetch_container) override;
-  void OnPrefetchCompletedOrFailed(
-      const PrefetchContainer& prefetch_container,
-      const network::URLLoaderCompletionStatus& completion_status,
-      const std::optional<int>& response_code) override;
-
- private:
-  base::RepeatingCallback<void(const network::mojom::URLResponseHead&)>
-      on_prefetch_head_received_;
-  base::RepeatingCallback<void(
-      const network::URLLoaderCompletionStatus& completion_status,
-      const std::optional<int>& response_code)>
-      on_prefetch_completed_or_failed_;
-};
 
 class PrefetchHandleImpl final : public PrefetchHandle {
  public:
@@ -75,6 +35,7 @@ class PrefetchHandleImpl final : public PrefetchHandle {
                const std::optional<int>& response_code)>
           on_prefetch_completed_or_failed) override;
   bool IsAlive() const override;
+  bool IsPrefetchStale() const override;
 
   // TODO(crbug.com/390329781): The following methods are tentative interface
   // for incrementally migrating `//content/` internal code to `PrefetchHandle`.
@@ -86,10 +47,35 @@ class PrefetchHandleImpl final : public PrefetchHandle {
   void SetPrefetchStatusOnReleaseStartedPrefetch(
       PrefetchStatus prefetch_status_on_release_started_prefetch);
 
+ protected:
+  scoped_refptr<PrefetchStalenessAtomicState> GetStalenessAtomicState()
+      const override;
+
  private:
+  class PrefetchContainerObserverForCallback;
+
+  // The `content::PrefetchContainerObserver` to be registered to
+  // `PrefetchContainer`.
+  PrefetchContainerObserver& GetObserver() const;
+  // The underlying `PrefetchHandleImpl::PrefetchContainerObserver`, for setting
+  // the callbacks.
+  PrefetchContainerObserverForCallback& GetUnderlyingObserver() const;
+
   base::WeakPtr<PrefetchService> prefetch_service_;
   base::WeakPtr<PrefetchContainer> prefetch_container_;
-  PrefetchContainerObserver prefetch_container_observer_;
+
+  using AsyncObserverForCallback =
+      PrefetchContainerAsyncObserver<PrefetchContainerObserverForCallback>;
+
+  // Exactly one of these two is non-null, depending on
+  // `features::kPrefetchAsyncPrefetchHandleCallback`.
+  // TODO(crbug.com/480271813): Cleanup this once the feature is settled.
+  std::unique_ptr<PrefetchContainerObserverForCallback>
+      prefetch_container_observer_;
+  std::unique_ptr<AsyncObserverForCallback> prefetch_container_async_observer_;
+
+  scoped_refptr<PrefetchStalenessAtomicState> is_stale_;
+
   std::optional<PrefetchStatus> prefetch_status_on_release_started_prefetch_;
 };
 

@@ -11,6 +11,7 @@
 
 #include "base/containers/flat_set.h"
 #include "base/containers/span.h"
+#include "base/containers/to_vector.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/location.h"
@@ -38,7 +39,6 @@
 #include "device/fido/fido_device.h"
 #include "device/fido/fido_device_authenticator.h"
 #include "device/fido/fido_discovery_base.h"
-#include "device/fido/fido_parsing_utils.h"
 #include "device/fido/fido_test_data.h"
 #include "device/fido/make_credential_request_handler.h"
 #include "device/fido/make_credential_task.h"
@@ -87,18 +87,19 @@ class FidoMakeCredentialHandlerTest : public ::testing::Test {
   }
 
   void ForgeDiscoveries() {
-    discovery_ = fake_discovery_factory_->ForgeNextHidDiscovery();
-    nfc_discovery_ = fake_discovery_factory_->ForgeNextNfcDiscovery();
-    platform_discovery_ = fake_discovery_factory_->ForgeNextPlatformDiscovery();
+    discovery_ = fake_discovery_factory_->ForgeNextHidDiscovery()->GetWeakPtr();
+    nfc_discovery_ =
+        fake_discovery_factory_->ForgeNextNfcDiscovery()->GetWeakPtr();
+    platform_discovery_ =
+        fake_discovery_factory_->ForgeNextPlatformDiscovery()->GetWeakPtr();
   }
 
   std::unique_ptr<MakeCredentialRequestHandler> CreateMakeCredentialHandler(
       AuthenticatorSelectionCriteria authenticator_selection_criteria = {}) {
     ForgeDiscoveries();
     PublicKeyCredentialRpEntity rp(test_data::kRelyingPartyId);
-    PublicKeyCredentialUserEntity user(
-        fido_parsing_utils::Materialize(test_data::kUserId), "nia",
-        std::nullopt);
+    PublicKeyCredentialUserEntity user(base::ToVector(test_data::kUserId),
+                                       "nia", std::nullopt);
     PublicKeyCredentialParams credential_params(
         std::vector<PublicKeyCredentialParams::CredentialInfo>(1));
 
@@ -143,8 +144,10 @@ class FidoMakeCredentialHandlerTest : public ::testing::Test {
         ::testing::UnorderedElementsAreArray(transports));
   }
 
-  test::FakeFidoDiscovery* discovery() const { return discovery_; }
-  test::FakeFidoDiscovery* nfc_discovery() const { return nfc_discovery_; }
+  test::FakeFidoDiscovery* discovery() const { return discovery_.get(); }
+  test::FakeFidoDiscovery* nfc_discovery() const {
+    return nfc_discovery_.get();
+  }
   TestMakeCredentialRequestFuture& future() { return future_; }
 
   void set_mock_platform_device(std::unique_ptr<MockFidoDevice> device) {
@@ -161,10 +164,9 @@ class FidoMakeCredentialHandlerTest : public ::testing::Test {
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
   std::unique_ptr<test::FakeFidoDiscoveryFactory> fake_discovery_factory_ =
       std::make_unique<test::FakeFidoDiscoveryFactory>();
-  raw_ptr<test::FakeFidoDiscovery, AcrossTasksDanglingUntriaged> discovery_;
-  raw_ptr<test::FakeFidoDiscovery, AcrossTasksDanglingUntriaged> nfc_discovery_;
-  raw_ptr<test::FakeFidoDiscovery, AcrossTasksDanglingUntriaged>
-      platform_discovery_;
+  base::WeakPtr<test::FakeFidoDiscovery> discovery_;
+  base::WeakPtr<test::FakeFidoDiscovery> nfc_discovery_;
+  base::WeakPtr<test::FakeFidoDiscovery> platform_discovery_;
   scoped_refptr<::testing::NiceMock<MockBluetoothAdapter>> mock_adapter_;
   std::unique_ptr<MockFidoDevice> pending_mock_platform_device_;
   TestMakeCredentialRequestFuture future_;

@@ -210,6 +210,8 @@ std::u16string JsCommunicationHost::AddWebMessageHostFactory(
     // navigation notifications for it will be sent.
     // TODO(https://crbug.com/332809183): Guard this behind an origin trial
     // check later on.
+    // Changing this could break downstream apps, see
+    // https://crbug.com/494548175 for more details.
     has_navigation_listener_ = true;
     NavigationWebMessageSender::CreateForPageIfNeeded(
         web_contents()->GetPrimaryPage(), js_object_name, factory.get());
@@ -347,7 +349,8 @@ void JsCommunicationHost::NotifyFrameForWebMessageListener(
             render_frame_host,
             pending_remote.InitWithNewEndpointAndPassReceiver(),
             factory.InitWithNewEndpointAndPassRemote(),
-            js_object->factory.get(), js_object->allowed_origin_rules);
+            js_object->factory.get(), js_object->allowed_origin_rules,
+            js_object->name, js_object->world_id);
     js_objects.push_back(mojom::JsObject::New(
         js_object->name, std::move(pending_remote), std::move(factory),
         js_object->allowed_origin_rules, js_object->world_id));

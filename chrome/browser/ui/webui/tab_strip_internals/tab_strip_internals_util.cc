@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/webui/tab_strip_internals/tab_strip_internals_util.h"
 
+#include <ranges>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -14,18 +15,32 @@
 #include "chrome/browser/ui/tabs/alert/tab_alert_controller.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "components/sessions/core/serialized_navigation_entry.h"
+#include "components/sessions/core/session_id.h"
 #include "components/sessions/core/tab_restore_types.h"
+#include "components/split_tabs/split_tab_visual_data.h"
 #include "components/tabs/public/split_tab_collection.h"
 #include "components/tabs/public/split_tab_data.h"
 #include "components/tabs/public/tab_collection.h"
 #include "components/tabs/public/tab_group.h"
 #include "components/tabs/public/tab_group_tab_collection.h"
 #include "components/tabs/public/tab_interface.h"
+#include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
 
 namespace tab_strip_internals {
 
 namespace {
+
+mojom::SplitTabVisualData::Layout MapSplitLayout(
+    split_tabs::SplitTabLayout layout) {
+  switch (layout) {
+    case split_tabs::SplitTabLayout::kSideBySide:
+      return mojom::SplitTabVisualData::Layout::kSideBySide;
+    case split_tabs::SplitTabLayout::kStacked:
+      return mojom::SplitTabVisualData::Layout::kStacked;
+  }
+  NOTREACHED();
+}
 
 // Returns the root TabCollection for a given tab.
 const tabs::TabCollection* GetRootCollectionForTab(
@@ -68,11 +83,7 @@ mojom::DataPtr BuildMojoCollection(const tabs::TabCollection* collection) {
           static_cast<const tabs::TabGroupTabCollection*>(collection);
       const TabGroup* tab_group = group_collection->GetTabGroup();
       if (tab_group) {
-        group_tabs->visualData = mojom::TabGroupVisualData::New();
-        group_tabs->visualData->title = tab_group->visual_data()->title();
-        group_tabs->visualData->color = tab_group->visual_data()->color();
-        group_tabs->visualData->is_collapsed =
-            tab_group->visual_data()->is_collapsed();
+        group_tabs->visualData = *tab_group->visual_data();
       }
       return mojom::Data::NewTabGroupCollection(std::move(group_tabs));
     }
@@ -86,8 +97,7 @@ mojom::DataPtr BuildMojoCollection(const tabs::TabCollection* collection) {
         if (auto* visual_data = split_tab_data->visual_data()) {
           split_tabs->visualData = mojom::SplitTabVisualData::New();
           split_tabs->visualData->layout =
-              static_cast<mojom::SplitTabVisualData::Layout>(
-                  static_cast<int>(visual_data->split_layout()));
+              MapSplitLayout(visual_data->split_layout());
           split_tabs->visualData->split_ratio = visual_data->split_ratio();
         }
       }
@@ -160,10 +170,16 @@ mojom::TabRestoreTabPtr BuildTabRestoreTab(
     mojo_tab->group_id = tab.group->token();
   }
 
-  if (tab.group_visual_data.has_value()) {
-    const auto& data = *tab.group_visual_data;
-    mojo_tab->group_visual_data = mojom::TabGroupVisualData::New(
-        data.title(), data.color(), data.is_collapsed());
+  mojo_tab->group_visual_data = tab.group_visual_data;
+
+  if (tab.split_id.has_value()) {
+    mojo_tab->split_id = tab.split_id->token();
+  }
+
+  if (tab.split_visual_data.has_value()) {
+    const auto& data = *tab.split_visual_data;
+    mojo_tab->split_visual_data = mojom::SplitTabVisualData::New(
+        MapSplitLayout(data.split_layout()), data.split_ratio());
   }
 
   return mojo_tab;
@@ -179,15 +195,39 @@ mojom::TabRestoreGroupPtr BuildTabRestoreGroup(
   mojo_group->restore_entry = BuildTabRestoreEntryBase(group);
   mojo_group->browser_id = mojom::SessionID::New(group.browser_id);
   mojo_group->group_id = group.group_id.token();
-  mojo_group->visual_data = mojom::TabGroupVisualData::New(
-      group.visual_data.title(), group.visual_data.color(),
-      group.visual_data.is_collapsed());
+  mojo_group->visual_data = group.visual_data;
 
   for (const std::unique_ptr<sessions::tab_restore::Tab>& tab : group.tabs) {
     mojo_group->tabs.push_back(BuildTabRestoreTab(*tab));
   }
 
   return mojo_group;
+}
+
+// Build a single TabRestoreSplit entry.
+// i.e. maps input to corresponding mojo type.
+mojom::TabRestoreSplitPtr BuildTabRestoreSplit(
+    const sessions::tab_restore::Split& split) {
+  auto mojo_split = mojom::TabRestoreSplit::New();
+  mojo_split->id = MakeNodeId(base::NumberToString(split.id.id()),
+                              mojom::NodeId::Type::kTabRestoreSplit);
+  mojo_split->restore_entry = BuildTabRestoreEntryBase(split);
+  SessionID::id_type browser_id = 0;
+  if (!split.tabs.empty() && split.tabs[0]) {
+    browser_id = split.tabs[0]->browser_id;
+  }
+  mojo_split->browser_id = mojom::SessionID::New(browser_id);
+  mojo_split->split_id =
+      split.split_id.value_or(split_tabs::SplitTabId::CreateEmpty()).token();
+  mojo_split->visual_data = mojom::SplitTabVisualData::New(
+      MapSplitLayout(split.visual_data.split_layout()),
+      split.visual_data.split_ratio());
+
+  for (const std::unique_ptr<sessions::tab_restore::Tab>& tab : split.tabs) {
+    mojo_split->tabs.push_back(BuildTabRestoreTab(*tab));
+  }
+
+  return mojo_split;
 }
 
 // Build a single TabRestoreWindow entry.
@@ -246,9 +286,7 @@ mojom::SessionTabGroupPtr BuildSessionTabGroup(
     const sessions::SessionTabGroup& group) {
   auto mojo_group = mojom::SessionTabGroup::New();
   mojo_group->group_id = group.id.token();
-  mojo_group->visual_data = mojom::TabGroupVisualData::New(
-      group.visual_data.title(), group.visual_data.color(),
-      group.visual_data.is_collapsed());
+  mojo_group->visual_data = group.visual_data;
   return mojo_group;
 }
 
@@ -259,8 +297,7 @@ mojom::SessionSplitTabPtr BuildSessionSplitTab(
   auto mojo_split = mojom::SessionSplitTab::New();
   mojo_split->split_id = split.id_.token();
   mojo_split->split_visual_data = mojom::SplitTabVisualData::New(
-      static_cast<mojom::SplitTabVisualData::Layout>(
-          static_cast<int>(split.split_visual_data_.split_layout())),
+      MapSplitLayout(split.split_visual_data_.split_layout()),
       split.split_visual_data_.split_ratio());
   return mojo_split;
 }
@@ -335,7 +372,7 @@ mojom::NodePtr BuildTabCollectionTree(const TabStripModel* model) {
 
     // Walk the chain in a top-down fashion.
     mojom::Node* parent_node = root_node.get();
-    for (auto collection : base::Reversed(chain)) {
+    for (auto collection : std::views::reverse(chain)) {
       mojom::Node*& child_node = map_collection[collection];
 
       if (!child_node) {
@@ -408,6 +445,13 @@ mojom::TabRestoreDataPtr BuildTabRestoreData(
             static_cast<const sessions::tab_restore::Group*>(entry.get());
         mojo_entry =
             mojom::TabRestoreEntry::NewGroup(BuildTabRestoreGroup(*group));
+        break;
+      }
+      case sessions::tab_restore::Type::SPLIT: {
+        const auto* split =
+            static_cast<const sessions::tab_restore::Split*>(entry.get());
+        mojo_entry =
+            mojom::TabRestoreEntry::NewSplit(BuildTabRestoreSplit(*split));
         break;
       }
     }

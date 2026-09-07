@@ -12,7 +12,7 @@
 #include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/download/public/common/download_item.h"
@@ -35,7 +35,7 @@ namespace policy {
 namespace {
 // Downloads a file named |file| and expects it to be saved to |dir|, which
 // must be empty.
-void DownloadAndVerifyFile(Browser* browser,
+void DownloadAndVerifyFile(BrowserWindowInterface* browser,
                            const base::FilePath& dir,
                            const base::FilePath& file) {
   net::EmbeddedTestServer embedded_test_server;
@@ -44,7 +44,7 @@ void DownloadAndVerifyFile(Browser* browser,
   embedded_test_server.ServeFilesFromDirectory(test_data_directory);
   ASSERT_TRUE(embedded_test_server.Start());
   content::DownloadManager* download_manager =
-      browser->profile()->GetDownloadManager();
+      browser->GetProfile()->GetDownloadManager();
   content::DownloadTestObserverTerminal observer(
       download_manager, 1,
       content::DownloadTestObserver::ON_DANGEROUS_DOWNLOAD_FAIL);
@@ -66,11 +66,11 @@ void DownloadAndVerifyFile(Browser* browser,
 // Verifies that the download directory can be forced by policy.
 IN_PROC_BROWSER_TEST_F(PolicyTest, DownloadDirectory) {
   // Don't prompt for the download location during this test.
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kPromptForDownload,
-                                               false);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kPromptForDownload,
+                                                  false);
 
   base::FilePath initial_dir =
-      DownloadPrefs(browser()->profile()).DownloadPath();
+      DownloadPrefs(browser()->GetProfile()).DownloadPath();
 
   // Verify that downloads end up on the default directory.
   base::ScopedAllowBlockingForTesting allow_blocking;
@@ -103,10 +103,10 @@ IN_PROC_BROWSER_TEST_F(PolicyTest, DownloadDirectory_Drive) {
     UpdateProviderPolicy(policies);
 
     EXPECT_EQ(drive::DriveIntegrationServiceFactory::FindForProfile(
-                  browser()->profile())
+                  browser()->GetProfile())
                   ->GetMountPointPath()
                   .AppendASCII("root"),
-              DownloadPrefs(browser()->profile())
+              DownloadPrefs(browser()->GetProfile())
                   .DownloadPath()
                   .StripTrailingSeparators());
   }
@@ -118,10 +118,10 @@ IN_PROC_BROWSER_TEST_F(PolicyTest, DownloadDirectory_Drive) {
   UpdateProviderPolicy(policies);
 
   EXPECT_EQ(drive::DriveIntegrationServiceFactory::FindForProfile(
-                browser()->profile())
+                browser()->GetProfile())
                 ->GetMountPointPath()
                 .AppendASCII("root/Downloads"),
-            DownloadPrefs(browser()->profile())
+            DownloadPrefs(browser()->GetProfile())
                 .DownloadPath()
                 .StripTrailingSeparators());
 }

@@ -7,16 +7,18 @@
 #include "base/containers/flat_set.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
+#include "build/build_config.h"
 #include "chrome/browser/lifetime/browser_shutdown.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sessions/exit_type_service_factory.h"
 #include "chrome/browser/sessions/session_restore.h"
 #include "chrome/browser/sessions/session_service.h"
 #include "chrome/browser/sessions/session_service_utils.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_init_state.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
@@ -26,9 +28,9 @@
 namespace {
 
 // Value written to prefs for ExitType::kCrashed and ExitType::kForcedShutdown.
-const char kPrefExitTypeCrashed[] = "Crashed";
-const char kPrefExitTypeNormal[] = "Normal";
-const char kPrefExitTypeForcedShutdown[] = "SessionEnded";
+constexpr char kPrefExitTypeCrashed[] = "Crashed";
+constexpr char kPrefExitTypeNormal[] = "Normal";
+constexpr char kPrefExitTypeForcedShutdown[] = "SessionEnded";
 
 // Converts the `kSessionExitType` pref to the corresponding EXIT_TYPE.
 ExitType SessionTypePrefValueToExitType(const std::string& value) {
@@ -75,14 +77,13 @@ class ExitTypeService::BrowserTabObserverImpl
 
   // BrowserCollectionObserver:
   void OnBrowserCreated(BrowserWindowInterface* browser) override {
-    if (browser->GetBrowserForMigrationOnly()->omit_from_session_restore() ||
+    if (BrowserInitState::From(browser)->omit_from_session_restore() ||
         !SessionService::IsRelevantWindowType(
             WindowTypeForBrowserType(browser->GetType()))) {
       return;
     }
-    if (browser->GetBrowserForMigrationOnly()
-            ->create_params()
-            .creation_source != Browser::CreationSource::kStartupCreator) {
+    if (BrowserInitState::From(browser)->create_params().creation_source !=
+        BrowserWindowCreateParams::CreationSource::kStartupCreator) {
       // Ideally this would call directly to `service_`, but at the time this
       // is called it is too early to do that. So, this waits for the first tab
       // to be added.
@@ -227,6 +228,10 @@ void ExitTypeService::CheckUserAckedCrash() {
             &ExitTypeService::OnSessionRestoreDone, base::Unretained(this)));
     return;
   }
+
+#if BUILDFLAG(IS_WIN)
+  profile_->AckCrashForTracking();
+#endif
 
   waiting_for_user_to_ack_crash_ = false;
 

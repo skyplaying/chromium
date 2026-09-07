@@ -2,12 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/signin/signin_view_controller.h"
+
 #include <optional>
 #include <utility>
 
 #include "base/feature_list.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/no_destructor.h"
 #include "base/run_loop.h"
 #include "base/scoped_observation.h"
 #include "base/task/current_thread.h"
@@ -16,13 +19,12 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/signin_browser_test_base.h"
 #include "chrome/browser/signin/web_signin_interceptor.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
 #include "chrome/browser/ui/signin/dice_web_signin_interceptor_delegate.h"
-#include "chrome/browser/ui/signin/signin_view_controller.h"
 #include "chrome/browser/ui/signin/signin_view_controller_delegate.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
@@ -37,9 +39,11 @@
 #include "chrome/test/interaction/webcontents_interaction_test_util.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/base/signin_metrics.h"
+#include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
 #include "components/sync/base/features.h"
+#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -64,11 +68,11 @@ DEFINE_LOCAL_CUSTOM_ELEMENT_EVENT_TYPE(kEmailConfirmationCompleted);
 // Synchronously waits for the Sync confirmation to be closed.
 class SyncConfirmationClosedObserver : public LoginUIService::Observer {
  public:
-  explicit SyncConfirmationClosedObserver(Browser* browser)
+  explicit SyncConfirmationClosedObserver(BrowserWindowInterface* browser)
       : browser_(browser) {
     DCHECK(browser_);
     login_ui_service_observation_.Observe(
-        LoginUIServiceFactory::GetForProfile(browser_->profile()));
+        LoginUIServiceFactory::GetForProfile(browser_->GetProfile()));
   }
 
   LoginUIService::SyncConfirmationUIClosedResult WaitForConfirmationClosed() {
@@ -82,11 +86,11 @@ class SyncConfirmationClosedObserver : public LoginUIService::Observer {
       LoginUIService::SyncConfirmationUIClosedResult result) override {
     login_ui_service_observation_.Reset();
     result_ = result;
-    browser_->GetFeatures().signin_view_controller()->CloseModalSignin();
+    SigninViewController::From(browser_)->CloseModalSignin();
     run_loop_.Quit();
   }
 
-  const raw_ptr<Browser> browser_;
+  const raw_ptr<BrowserWindowInterface> browser_;
   base::RunLoop run_loop_;
   base::ScopedObservation<LoginUIService, LoginUIService::Observer>
       login_ui_service_observation_{this};
@@ -103,17 +107,17 @@ class SignInViewControllerBrowserTest : public InProcessBrowserTest {
     // also why this test must be an interactive_ui_test rather than a browser
     // test.
     ASSERT_TRUE(ui_test_utils::ShowAndFocusNativeWindow(
-        browser()->window()->GetNativeWindow()));
+        browser()->GetWindow()->GetNativeWindow()));
   }
 
   signin::IdentityManager* GetIdentityManager() {
-    return IdentityManagerFactory::GetForProfile(browser()->profile());
+    return IdentityManagerFactory::GetForProfile(browser()->GetProfile());
   }
 };
 
 IN_PROC_BROWSER_TEST_F(SignInViewControllerBrowserTest, Accelerators) {
-  ASSERT_EQ(1, browser()->tab_strip_model()->count());
-  browser()->GetFeatures().signin_view_controller()->ShowSignin(
+  ASSERT_EQ(1, browser()->GetTabStripModel()->count());
+  SigninViewController::From(browser())->ShowSignin(
       signin_metrics::AccessPoint::kSettings);
 
   ui_test_utils::TabAddedWaiter wait_for_new_tab(browser());
@@ -130,7 +134,7 @@ IN_PROC_BROWSER_TEST_F(SignInViewControllerBrowserTest, Accelerators) {
 
   wait_for_new_tab.Wait();
 
-  EXPECT_EQ(2, browser()->tab_strip_model()->count());
+  EXPECT_EQ(2, browser()->GetTabStripModel()->count());
 }
 
 class SignInViewControllerInteractiveBrowserTest
@@ -166,9 +170,7 @@ IN_PROC_BROWSER_TEST_F(SignInViewControllerInteractiveBrowserTest,
   RunTestSequence(
       // Show the dialog and verify that it has shown.
       Do([&] {
-        browser()
-            ->GetFeatures()
-            .signin_view_controller()
+        SigninViewController::From(browser())
             ->ShowModalSigninEmailConfirmationDialog(
                 "alice@gmail.com", "bob@gmail.com",
                 base::BindLambdaForTesting(
@@ -179,15 +181,13 @@ IN_PROC_BROWSER_TEST_F(SignInViewControllerInteractiveBrowserTest,
                     }));
       }),
       WaitForShow(kConstrainedDialogWebViewElementId), Check([&] {
-        return browser()
-            ->GetFeatures()
-            .signin_view_controller()
-            ->ShowsModalDialog();
+        return SigninViewController::From(browser())->ShowsModalDialog();
       }),
 
       // Confirm the dialog.
       InstrumentNonTabWebView(kWebContentsId,
                               kConstrainedDialogWebViewElementId),
+      WaitForWebContentsPainted(kWebContentsId),
       WaitForElementExists(kWebContentsId, kConfirmButton),
       SendAccelerator(kWebContentsId,
                       ui::Accelerator(ui::VKEY_RETURN, ui::EF_NONE))
@@ -208,9 +208,7 @@ IN_PROC_BROWSER_TEST_F(SignInViewControllerInteractiveBrowserTest,
           RunSubsequence(WaitForHide(kConstrainedDialogWebViewElementId),
                          CheckResult(
                              [&] {
-                               return browser()
-                                   ->GetFeatures()
-                                   .signin_view_controller()
+                               return SigninViewController::From(browser())
                                    ->ShowsModalDialog();
                              },
                              false))));
@@ -223,11 +221,18 @@ IN_PROC_BROWSER_TEST_F(SignInViewControllerBrowserTest,
   content::TestNavigationObserver content_observer(
       GURL("chrome://signin-error/"));
   content_observer.StartWatchingNewWebContents();
-  auto* signin_view_controller =
-      browser()->GetFeatures().signin_view_controller();
+  auto* signin_view_controller = SigninViewController::From(browser());
   signin_view_controller->ShowModalSigninErrorDialog();
   EXPECT_TRUE(signin_view_controller->ShowsModalDialog());
   content_observer.Wait();
+
+  // Wait for the modal dialog sheet window to be presented and receive focus.
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    auto* web_contents =
+        signin_view_controller->GetModalDialogWebContentsForTesting();
+    return web_contents && web_contents->GetRenderWidgetHostView() &&
+           web_contents->GetRenderWidgetHostView()->HasFocus();
+  }));
 
   content::WebContentsDestroyedWatcher dialog_destroyed_watcher(
       signin_view_controller->GetModalDialogWebContentsForTesting());
@@ -259,12 +264,32 @@ enum class ButtonToClick : int {
 class HistorySyncOptinViewControllerInteractiveBrowserTest
     : public SigninBrowserTestBaseT<InteractiveBrowserTest>,
       public testing::WithParamInterface<ButtonToClick> {
- public:
-  const InteractiveBrowserTest::DeepQuery kHistoryOptinAcceptButton = {
-      "history-sync-optin-app", "#acceptButton"};
-  const InteractiveBrowserTest::DeepQuery kHistoryOptinRejectButton = {
-      "history-sync-optin-app", "#rejectButton"};
+ protected:
   const char* kIsDisabledFn = "(e) => { return e.disabled; }";
+
+  const InteractiveBrowserTest::DeepQuery& GetHistoryOptinAcceptButtonQuery() {
+    if (base::FeatureList::IsEnabled(switches::kFirstRunDesktopRefresh)) {
+      static const base::NoDestructor<InteractiveBrowserTest::DeepQuery> kQuery(
+          {"history-sync-optin-app-refresh", "#acceptButton"});
+      return *kQuery;
+    } else {
+      static const base::NoDestructor<InteractiveBrowserTest::DeepQuery> kQuery(
+          {"history-sync-optin-app", "#acceptButton"});
+      return *kQuery;
+    }
+  }
+
+  const InteractiveBrowserTest::DeepQuery& GetHistoryOptinRejectButtonQuery() {
+    if (base::FeatureList::IsEnabled(switches::kFirstRunDesktopRefresh)) {
+      static const base::NoDestructor<InteractiveBrowserTest::DeepQuery> kQuery(
+          {"history-sync-optin-app-refresh", "#rejectButton"});
+      return *kQuery;
+    } else {
+      static const base::NoDestructor<InteractiveBrowserTest::DeepQuery> kQuery(
+          {"history-sync-optin-app", "#rejectButton"});
+      return *kQuery;
+    }
+  }
 
   auto ClickButton(ui::ElementIdentifier parent_element_id,
                    DeepQuery button_query) {
@@ -275,18 +300,19 @@ class HistorySyncOptinViewControllerInteractiveBrowserTest
   auto CheckButtonsState(ui::ElementIdentifier parent_element_id,
                          DialogButtonEnableState state) {
     bool is_disabled = state == DialogButtonEnableState::kDisabled;
-    return Steps(CheckJsResultAt(parent_element_id, kHistoryOptinAcceptButton,
-                                 kIsDisabledFn, is_disabled),
-                 CheckJsResultAt(parent_element_id, kHistoryOptinRejectButton,
-                                 kIsDisabledFn, is_disabled));
+    return Steps(
+        CheckJsResultAt(parent_element_id, GetHistoryOptinAcceptButtonQuery(),
+                        kIsDisabledFn, is_disabled),
+        CheckJsResultAt(parent_element_id, GetHistoryOptinRejectButtonQuery(),
+                        kIsDisabledFn, is_disabled));
   }
 
   const InteractiveBrowserTest::DeepQuery& GetButtonToClick() {
     switch (GetParam()) {
       case ButtonToClick::kAcceptButton:
-        return kHistoryOptinAcceptButton;
+        return GetHistoryOptinAcceptButtonQuery();
       case ButtonToClick::kRejectButton:
-        return kHistoryOptinRejectButton;
+        return GetHistoryOptinRejectButtonQuery();
     }
   }
 
@@ -316,12 +342,9 @@ IN_PROC_BROWSER_TEST_P(HistorySyncOptinViewControllerInteractiveBrowserTest,
   RunTestSequence(
       // Show the dialog and verify that it has shown.
       Do([&] {
-        browser()
-            ->GetFeatures()
-            .signin_view_controller()
-            ->ShowModalHistorySyncOptInDialog(
-                should_close_modal_dialog,
-                std::move(history_optin_completed_callback));
+        SigninViewController::From(browser())->ShowModalHistorySyncOptInDialog(
+            should_close_modal_dialog,
+            std::move(history_optin_completed_callback));
       }),
       WaitForShow(SigninViewController::kHistorySyncOptinViewId),
       InstrumentNonTabWebView(kHistorySyncOptinDialogContentsId,

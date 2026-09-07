@@ -13,6 +13,7 @@
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted_memory.h"
+#include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/values.h"
@@ -37,27 +38,27 @@ namespace {
 
 const char* TypeToString(extensions::Manifest::Type type) {
   switch (type) {
-    case extensions::Manifest::TYPE_UNKNOWN:
+    case extensions::Manifest::Type::kUnknown:
       return "TYPE_UNKNOWN";
-    case extensions::Manifest::TYPE_EXTENSION:
+    case extensions::Manifest::Type::kExtension:
       return "TYPE_EXTENSION";
-    case extensions::Manifest::TYPE_THEME:
+    case extensions::Manifest::Type::kTheme:
       return "TYPE_THEME";
-    case extensions::Manifest::TYPE_USER_SCRIPT:
+    case extensions::Manifest::Type::kUserScript:
       return "TYPE_USER_SCRIPT";
-    case extensions::Manifest::TYPE_HOSTED_APP:
+    case extensions::Manifest::Type::kHostedApp:
       return "TYPE_HOSTED_APP";
-    case extensions::Manifest::TYPE_LEGACY_PACKAGED_APP:
+    case extensions::Manifest::Type::kLegacyPackagedApp:
       return "TYPE_LEGACY_PACKAGED_APP";
-    case extensions::Manifest::TYPE_PLATFORM_APP:
+    case extensions::Manifest::Type::kPlatformApp:
       return "TYPE_PLATFORM_APP";
-    case extensions::Manifest::TYPE_SHARED_MODULE:
+    case extensions::Manifest::Type::kSharedModule:
       return "TYPE_SHARED_MODULE";
-    case extensions::Manifest::TYPE_LOGIN_SCREEN_EXTENSION:
+    case extensions::Manifest::Type::kLoginScreenExtension:
       return "TYPE_LOGIN_SCREEN_EXTENSION";
-    case extensions::Manifest::TYPE_CHROMEOS_SYSTEM_EXTENSION:
+    case extensions::Manifest::Type::kChromeOSSystemExtension:
       return "TYPE_CHROMEOS_SYSTEM_EXTENSION";
-    case extensions::Manifest::NUM_LOAD_TYPES:
+    case extensions::Manifest::Type::kNumLoadTypes:
       break;
   }
   NOTREACHED();
@@ -138,12 +139,6 @@ base::ListValue CreationFlagsToList(int creation_flags) {
   if (creation_flags & extensions::Extension::WAS_INSTALLED_BY_DEFAULT) {
     flags_value.Append("WAS_INSTALLED_BY_DEFAULT");
   }
-  if (creation_flags & extensions::Extension::REQUIRE_PERMISSIONS_CONSENT) {
-    flags_value.Append("REQUIRE_PERMISSIONS_CONSENT");
-  }
-  if (creation_flags & extensions::Extension::IS_EPHEMERAL) {
-    flags_value.Append("IS_EPHEMERAL");
-  }
   if (creation_flags & extensions::Extension::WAS_INSTALLED_BY_OEM) {
     flags_value.Append("WAS_INSTALLED_BY_OEM");
   }
@@ -158,7 +153,7 @@ base::ListValue CreationFlagsToList(int creation_flags) {
 
 base::ListValue DisableReasonsToList(
     const extensions::DisableReasonSet& disable_reasons) {
-  static_assert(extensions::disable_reason::DISABLE_REASON_LAST == 1 << 27,
+  static_assert(extensions::disable_reason::DISABLE_REASON_LAST == (1LL << 28),
                 "Please add your new disable reason here.");
 
   base::ListValue disable_reasons_value;
@@ -243,6 +238,10 @@ base::ListValue DisableReasonsToList(
   if (disable_reasons.contains(
           extensions::disable_reason::DISABLE_BLOCKED_BY_CLOUD_POLICY_CHECK)) {
     disable_reasons_value.Append("DISABLE_BLOCKED_BY_CLOUD_POLICY_CHECK");
+  }
+  if (disable_reasons.contains(
+          extensions::disable_reason::DISABLE_BY_ANOTHER_EXTENSION)) {
+    disable_reasons_value.Append("DISABLE_BY_ANOTHER_EXTENSION");
   }
   if (disable_reasons.contains(extensions::disable_reason::DISABLE_UNKNOWN)) {
     disable_reasons_value.Append("DISABLE_UNKNOWN");

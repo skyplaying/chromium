@@ -124,7 +124,7 @@ proto_library("net_quic_test_tools_proto") {
   cc_include = "net/base/net_export.h"
   component_build_force_source_set = true
 
-  link_deps = [ "//net:net_export_header" ]
+  link_deps = [ "//net/base:net_export_header" ]
 
   defines = [ "NET_IMPLEMENTATION" ]
 
@@ -518,7 +518,6 @@ source_set("quiche_tests") {
     "src/quiche/common/simple_buffer_allocator_test.cc",
     "src/quiche/common/structured_headers_generated_test.cc",
     "src/quiche/common/structured_headers_test.cc",
-    "src/quiche/common/test_tools/mock_streams_test.cc",
     "src/quiche/common/test_tools/quiche_test_utils_test.cc",
     "src/quiche/common/wire_serialization_test.cc",
     "src/quiche/http2/adapter/event_forwarder_test.cc",
@@ -884,13 +883,24 @@ proto_library("blind_sign_auth_proto") {
   sources = protobuf_blind_sign_auth
   cc_generator_options = "lite=true,dllexport_decl=COMPONENT_EXPORT(QUICHE):"
   cc_include = "base/component_export.h"
+
+  # In component builds, blind_sign_auth_proto should be part of the
+  # blind_sign_auth component.
   component_build_force_source_set = true
 
   proto_in_dir = "src"
 
   link_public_deps = [ "//base" ]
 
-  deps = [ "//third_party/anonymous_tokens:anonymous_tokens_cc_proto" ]
+  deps = [
+    "//third_party/anonymous_tokens:anonymous_tokens_cc_proto",
+    "//third_party/protobuf:timestamp_proto",
+  ]
+  if (use_fuzzing_engine) {
+    deps += [ "//third_party/protobuf:any_full_proto" ]
+  } else {
+    deps += [ "//third_party/protobuf:any_proto" ]
+  }
 
   import_dirs = [ "//third_party/anonymous_tokens/src/" ]
 
@@ -915,6 +925,12 @@ source_set("blind_sign_auth_test_support") {
     ":quiche_test_support",
     ":quiche_tool_support",
   ]
+  if (use_fuzzing_engine) {
+    deps += [ "//third_party/protobuf:any_full_proto" ]
+  } else {
+    deps += [ "//third_party/protobuf:any_proto" ]
+  }
+
   public_deps =
       [ "//third_party/anonymous_tokens:anonymous_tokens_test_support" ]
 }

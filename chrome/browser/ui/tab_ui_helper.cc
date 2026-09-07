@@ -4,34 +4,95 @@
 
 #include "chrome/browser/ui/tab_ui_helper.h"
 
+#include <optional>
+
+#include "base/byte_size.h"
 #include "base/callback_list.h"
+#include "base/check_op.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback_forward.h"
 #include "base/process/kill.h"
 #include "build/build_config.h"
 #include "chrome/browser/favicon/favicon_utils.h"
+#include "chrome/browser/resource_coordinator/lifecycle_unit_state.mojom.h"
 #include "chrome/browser/sessions/session_restore.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/color/chrome_color_id.h"
+#include "chrome/browser/ui/performance_controls/memory_saver_utils.h"
+#include "chrome/browser/ui/tabs/features.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_web_contents_listener.h"
 #include "chrome/browser/ui/tabs/split_tab_metrics.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/web_applications/app_browser_controller.h"
+#include "chrome/browser/ui/web_applications/web_app_browser_controller.h"
+#include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/security_interstitials/content/security_interstitial_tab_helper.h"
 #include "components/tabs/public/tab_interface.h"
+#include "components/tabs/public/tab_network_state.h"
+#include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/url_constants.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/models/image_model.h"
+#include "ui/gfx/image/image_skia.h"
 #include "ui/resources/grit/ui_resources.h"
-
-#if !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"  // nogncheck
-#endif
+#include "url/gurl.h"
 
 namespace {
 
-// Whether the throbber should be shown for a restored tab after it becomes
-// visible, instead of when it's active in the tab strip (this signal is known
-// to be broken crbug.com/413080225#comment8).
-BASE_FEATURE(kSessionRestoreShowThrobberOnVisible,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+// Returns the tab-background color id for the default globe favicon, resolved
+// from the tab's active state and the window's active state. Bound into the
+// favicon model and queried at raster time, so the globe's light/dark variant
+// tracks both. crbug.com/544891511
+ui::ColorId GetDefaultFaviconBackgroundColorId(
+    base::WeakPtr<tabs::TabInterface> tab) {
+  if (!tab) {
+    return kColorTabBackgroundActiveFrameActive;
+  }
+  const BrowserWindowInterface* const window = tab->GetBrowserWindowInterface();
+  const bool frame_active = window && window->IsActive();
+  if (tab->IsActivated()) {
+    return frame_active ? kColorTabBackgroundActiveFrameActive
+                        : kColorTabBackgroundActiveFrameInactive;
+  }
+  return frame_active ? kColorTabBackgroundInactiveFrameActive
+                      : kColorTabBackgroundInactiveFrameInactive;
+}
 
+bool IsNTP(const GURL& url) {
+  return url.SchemeIs(content::kChromeUIScheme) &&
+         (url.host() == chrome::kChromeUINewTabHost ||
+          url.host() == chrome::kChromeUITabSearchHost ||
+          url.host() == chrome::kChromeUINewTabPageHost);
+}
+
+web_app::WebAppBrowserController* GetWebAppBrowserController(
+    tabs::TabInterface* tab_interface) {
+  // The browser window interface can be null during unit tests.
+  BrowserWindowInterface* const browser_window_interface =
+      tab_interface->GetBrowserWindowInterface();
+  return browser_window_interface
+             ? web_app::WebAppBrowserController::From(browser_window_interface)
+             : nullptr;
+}
+
+bool ShouldShowAppIcon(web_app::WebAppBrowserController* app_controller,
+                       tabs::TabInterface* tab_interface) {
+  if (!app_controller) {
+    return false;
+  }
+
+  BrowserWindowInterface* const browser_window_interface =
+      tab_interface->GetBrowserWindowInterface();
+  CHECK(browser_window_interface);
+  const int index = browser_window_interface->GetTabStripModel()->GetIndexOfTab(
+      tab_interface);
+  return app_controller->ShouldShowAppIconOnTab(index);
+}
 }  // namespace
 
 DEFINE_USER_DATA(TabUIHelper);
@@ -39,6 +100,10 @@ DEFINE_USER_DATA(TabUIHelper);
 TabUIHelper::TabUIHelper(tabs::TabInterface& tab_interface)
     : ContentsObservingTabFeature(tab_interface),
       scoped_unowned_user_data_(tab_interface.GetUnownedUserDataHost(), *this) {
+  // Register for tab pin state change because pin state affects whether the
+  // favicon should show or not.
+  pin_tab_subscription_ = tab().RegisterPinnedStateChanged(base::BindRepeating(
+      &TabUIHelper::OnTabPinnedStatusChange, base::Unretained(this)));
 }
 
 TabUIHelper::~TabUIHelper() = default;
@@ -53,13 +118,20 @@ TabUIHelper* TabUIHelper::From(tabs::TabInterface* tab) {
   return Get(tab->GetUnownedUserDataHost());
 }
 
+base::CallbackListSubscription TabUIHelper::AddTabUIChangeCallback(
+    base::RepeatingClosure callback) {
+  return tab_ui_change_callbacks_.Add(std::move(callback));
+}
+
 std::u16string TabUIHelper::GetTitle() const {
-  const tab_groups::SavedTabGroupWebContentsListener* wc_listener =
-      tab().GetTabFeatures()->saved_tab_group_web_contents_listener();
-  if (wc_listener) {
-    if (const std::optional<tab_groups::DeferredTabState>& deferred_tab_state =
-            wc_listener->deferred_tab_state()) {
-      return deferred_tab_state.value().title();
+  if (auto* tab_features = tab().GetTabFeatures()) {
+    const tab_groups::SavedTabGroupWebContentsListener* wc_listener =
+        tab_features->saved_tab_group_web_contents_listener();
+    if (wc_listener) {
+      if (const std::optional<tab_groups::DeferredTabState>&
+              deferred_tab_state = wc_listener->deferred_tab_state()) {
+        return deferred_tab_state.value().title();
+      }
     }
   }
 
@@ -75,7 +147,55 @@ std::u16string TabUIHelper::GetTitle() const {
 #endif
 }
 
-ui::ImageModel TabUIHelper::GetFavicon() const {
+bool TabUIHelper::ShouldRenderLoadingTitle() {
+  return GetTitle().empty() &&
+         !GetVisibleURL().SchemeIs(content::kChromeUIUntrustedScheme);
+}
+
+bool TabUIHelper::ShouldThemifyFavicon() {
+  content::NavigationEntry* const entry =
+      tab().GetContents()->GetController().GetLastCommittedEntry();
+  return entry && favicon::ShouldThemifyFaviconForEntry(entry);
+}
+
+bool TabUIHelper::ShouldDisplayFavicon() {
+  // BrowserWindowInterface can be null during unit tests
+  BrowserWindowInterface* const browser_window_interface =
+      tab().GetBrowserWindowInterface();
+  if (browser_window_interface) {
+    // Remove for all tabbed web apps.
+    web_app::AppBrowserController* const app_browser_controller =
+        web_app::AppBrowserController::From(browser_window_interface);
+    if (app_browser_controller && app_browser_controller->has_tab_strip()) {
+      return false;
+    }
+  }
+
+  if (tab().IsPinned()) {
+    return true;
+  }
+
+  // Don't show favicon when on an interstitial.
+  security_interstitials::SecurityInterstitialTabHelper* const
+      security_interstitial_tab_helper = security_interstitials::
+          SecurityInterstitialTabHelper::FromWebContents(tab().GetContents());
+  if (security_interstitial_tab_helper &&
+      security_interstitial_tab_helper->IsDisplayingInterstitial()) {
+    return false;
+  }
+
+  // Otherwise, always display the favicon.
+  return true;
+}
+
+bool TabUIHelper::IsMonochromeFavicon() {
+  web_app::WebAppBrowserController* const web_app_browser_controller =
+      GetWebAppBrowserController(&tab());
+  return ShouldShowAppIcon(web_app_browser_controller, &tab()) &&
+         !web_app_browser_controller->GetHomeTabIcon().isNull();
+}
+
+ui::ImageModel TabUIHelper::GetFavicon() {
   const tab_groups::SavedTabGroupWebContentsListener* wc_listener =
       tab().GetTabFeatures()->saved_tab_group_web_contents_listener();
   if (wc_listener) {
@@ -83,6 +203,43 @@ ui::ImageModel TabUIHelper::GetFavicon() const {
             wc_listener->deferred_tab_state()) {
       return deferred_tab_state.value().favicon();
     }
+  }
+
+  web_app::WebAppBrowserController* const web_app_browser_controller =
+      GetWebAppBrowserController(&tab());
+  if (ShouldShowAppIcon(web_app_browser_controller, &tab())) {
+    const gfx::ImageSkia home_tab_icon =
+        web_app_browser_controller->GetHomeTabIcon();
+    if (!home_tab_icon.isNull()) {
+      return ui::ImageModel::FromImageSkia(home_tab_icon);
+    } else {
+      gfx::ImageSkia fallback_home_icon =
+          web_app_browser_controller->GetFallbackHomeTabIcon();
+      if (!fallback_home_icon.isNull()) {
+        return ui::ImageModel::FromImageSkia(fallback_home_icon);
+      }
+    }
+  }
+
+  // When the page provides no favicon of its own, use the tab-background-aware
+  // default globe. Its light/dark variant is resolved against this tab's
+  // background at raster time -- which depends on the tab's active state and
+  // the window's active state -- rather than the global color scheme, which can
+  // disagree and render the globe low-contrast ("dim") on some Linux themes
+  // (e.g. the built-in PDF viewer). crbug.com/544891511
+  const favicon::FaviconDriver* const favicon_driver =
+      favicon::ContentFaviconDriver::FromWebContents(web_contents());
+  if (!favicon_driver || !favicon_driver->FaviconIsValid()) {
+    // Cache the model so repeated calls return an equal ImageModel; TabData
+    // compares favicons by value, and a fresh BindRepeating each call would
+    // never compare equal. The bound resolver still re-runs at raster time, so
+    // the variant continues to track the tab's and window's active state.
+    if (default_favicon_model_.IsEmpty()) {
+      default_favicon_model_ =
+          favicon::GetDefaultFaviconModel(base::BindRepeating(
+              &GetDefaultFaviconBackgroundColorId, tab().GetWeakPtr()));
+    }
+    return default_favicon_model_;
   }
 
   return ui::ImageModel::FromImage(
@@ -93,16 +250,14 @@ bool TabUIHelper::ShouldHideThrobber() const {
   // We want to hide a background tab's throbber during page load if it is
   // created by session restore. A restored tab's favicon is already fetched
   // by |SessionRestoreDelegate|.
-  if (created_by_session_restore_ && !was_active_at_least_once_) {
-    return true;
-  }
-
-  return false;
+  return created_by_session_restore_ && !was_active_at_least_once_;
 }
 
 void TabUIHelper::SetWasActiveAtLeastOnce() {
-  if (!base::FeatureList::IsEnabled(kSessionRestoreShowThrobberOnVisible)) {
-    was_active_at_least_once_ = true;
+  const bool was_hiding_throbber = ShouldHideThrobber();
+  was_active_at_least_once_ = true;
+  if (was_hiding_throbber != ShouldHideThrobber()) {
+    tab_ui_change_callbacks_.Notify();
   }
 }
 
@@ -119,13 +274,38 @@ bool TabUIHelper::IsCrashed() {
           crashed_status == base::TERMINATION_STATUS_LAUNCH_FAILED);
 }
 
-base::CallbackListSubscription TabUIHelper::AddTitleUpdatedCallback(
-    TitleUpdatedCallbackList::CallbackType callback) {
-  return title_change_callbacks_.Add(std::move(callback));
+bool TabUIHelper::ShouldDisplayURL() {
+  content::WebContents* const web_contents = tab().GetContents();
+  // If the tab is showing a lookalike interstitial ("Did you mean example.com"
+  // on éxample.com), don't show the URL in the hover card because it's
+  // misleading.
+  security_interstitials::SecurityInterstitialTabHelper*
+      security_interstitial_tab_helper = security_interstitials::
+          SecurityInterstitialTabHelper::FromWebContents(web_contents);
+  // NTP URLs are hidden to match the omnibox behavior.
+  return !IsNTP(web_contents->GetVisibleURL()) &&
+         (!security_interstitial_tab_helper ||
+          !security_interstitial_tab_helper->IsDisplayingInterstitial() ||
+          security_interstitial_tab_helper->ShouldDisplayURL());
+}
+
+GURL TabUIHelper::GetVisibleURL() {
+  content::WebContents* const contents = tab().GetContents();
+  content::NavigationEntry* entry =
+      contents->GetController().GetLastCommittedEntry();
+  const bool missing_navigation_entry = !entry || entry->IsInitialEntry();
+  // In the case of reverted uncommitted navigations, there might not be a valid
+  // NavigationEntry. In that case, show about:blank to match the omnibox.
+  return missing_navigation_entry ? GURL(url::kAboutBlankURL)
+                                  : contents->GetVisibleURL();
+}
+
+GURL TabUIHelper::GetLastCommittedURL() {
+  return tab().GetContents()->GetLastCommittedURL();
 }
 
 void TabUIHelper::TitleWasSet(content::NavigationEntry* entry) {
-  title_change_callbacks_.Notify(GetTitle());
+  tab_ui_change_callbacks_.Notify();
 }
 
 void TabUIHelper::DidStopLoading() {
@@ -136,18 +316,108 @@ void TabUIHelper::DidStopLoading() {
 }
 
 void TabUIHelper::OnVisibilityChanged(content::Visibility visiblity) {
-  if (base::FeatureList::IsEnabled(kSessionRestoreShowThrobberOnVisible) &&
+  if (base::FeatureList::IsEnabled(
+          tabs::kSessionRestoreShowThrobberOnVisible) &&
       visiblity == content::Visibility::VISIBLE) {
-    was_active_at_least_once_ = true;
+    SetWasActiveAtLeastOnce();
   }
 }
 
-#if !BUILDFLAG(IS_ANDROID)
+void TabUIHelper::WasDiscarded() {
+  // Notify observers that the tab should update its UI to show discard status.
+  if (ShouldShowDiscardStatus()) {
+    tab_ui_change_callbacks_.Notify();
+  }
+}
+
+void TabUIHelper::DidFinishNavigation(
+    content::NavigationHandle* navigation_handle) {
+  // Navigation committed so the visible URL might have changed.
+  tab_ui_change_callbacks_.Notify();
+}
+
+void TabUIHelper::PrimaryMainFrameRenderProcessGone(
+    base::TerminationStatus status) {
+  // The tab's main frame was crashed so observers should be notified.
+  if (IsCrashed()) {
+    tab_ui_change_callbacks_.Notify();
+  }
+}
+
 void TabUIHelper::PrimaryPageChanged(content::Page& page) {
+  // Drop the cached default-favicon model on navigation so its identity is
+  // stable only within a page. TabData compares favicons by value, so the model
+  // must be equal across calls on the same page; but a new page must yield a
+  // different favicon (e.g. once its own favicon loads), so the cache must not
+  // persist across navigations. crbug.com/544891511
+  default_favicon_model_ = ui::ImageModel();
+
   if (tab().IsSplit()) {
     split_tabs::LogSplitViewUpdatedUKM(
         tab().GetBrowserWindowInterface()->GetTabStripModel(),
         tab().GetSplit().value());
   }
 }
-#endif
+
+void TabUIHelper::SetCreatedBySessionRestore(bool created_by_session_restore) {
+  const bool was_hiding_throbber = ShouldHideThrobber();
+  created_by_session_restore_ = created_by_session_restore;
+  if (was_hiding_throbber != ShouldHideThrobber()) {
+    tab_ui_change_callbacks_.Notify();
+  }
+}
+
+void TabUIHelper::SetNeedsAttention(bool needs_attention) {
+  if (needs_attention == needs_attention_) {
+    return;
+  }
+
+  needs_attention_ = needs_attention;
+  tab_ui_change_callbacks_.Notify();
+}
+
+bool TabUIHelper::IsDiscarded() {
+  return tab().GetContents()->WasDiscarded();
+}
+
+bool TabUIHelper::ShouldShowDiscardStatus() {
+  content::WebContents* const web_contents = tab().GetContents();
+  std::optional<mojom::LifecycleUnitDiscardReason> discard_reason =
+      memory_saver::GetDiscardReason(web_contents);
+
+  // Only show discard status for tabs that were proactively discarded or
+  // suggested by the PerformanceDetectionManager to prevent confusion to users
+  // on why a tab was discarded. Also, the favicon discard animation may use
+  // resources so the animation should be limited to prevent performance issues.
+  return memory_saver::IsURLSupported(web_contents->GetURL()) &&
+         web_contents->WasDiscarded() && discard_reason.has_value() &&
+         (discard_reason.value() ==
+              mojom::LifecycleUnitDiscardReason::PROACTIVE ||
+          discard_reason.value() ==
+              mojom::LifecycleUnitDiscardReason::SUGGESTED);
+}
+
+std::optional<base::ByteSize> TabUIHelper::GetDiscardedMemorySavings() {
+  content::WebContents* const web_contents = tab().GetContents();
+  return web_contents->WasDiscarded()
+             ? std::make_optional(
+                   memory_saver::GetDiscardedMemorySavings(web_contents))
+             : std::nullopt;
+}
+
+void TabUIHelper::NotifyTabUIChanged(
+    base::PassKey<BrowserUiController> pass_key) {
+  // Notify subscribers because data might have updated since the browser is
+  // batching updates.
+  tab_ui_change_callbacks_.Notify();
+}
+
+tabs::TabNetworkState TabUIHelper::GetTabNetworkState() {
+  return tabs::TabNetworkStateForWebContents(tab().GetContents());
+}
+
+void TabUIHelper::OnTabPinnedStatusChange(tabs::TabInterface* tab_interface,
+                                          bool new_pinned_state) {
+  CHECK_EQ(&tab(), tab_interface);
+  tab_ui_change_callbacks_.Notify();
+}

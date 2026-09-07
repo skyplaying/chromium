@@ -106,6 +106,9 @@ TryPromoteDrawQuadForDelegation(
       case OverlayCandidate::CandidateStatus::kFailRpdqWithTransform:
         return base::unexpected(
             DelegationStatus::kCompositedCandidateRpdqWithTransform);
+      case OverlayCandidate::CandidateStatus::kFailBackdropFilter:
+        return base::unexpected(
+            DelegationStatus::kCompositedCandidateBackdropFilter);
       default:
         return base::unexpected(DelegationStatus::kCompositedCandidateFailed);
     }
@@ -132,9 +135,8 @@ void DebugLogAfterDelegation(DelegationStatus status,
   TRACE_COUNTER1(TRACE_DISABLED_BY_DEFAULT("viz.debug.overlay_planes"),
                  "Scheduled overlay planes", candidates.size());
 
-  TRACE_EVENT_INSTANT1(TRACE_DISABLED_BY_DEFAULT("viz.debug.overlay_planes"),
-                       "DelegatedCompositingStatus", TRACE_EVENT_SCOPE_THREAD,
-                       "delegated_status", status);
+  TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("viz.debug.overlay_planes"),
+                      "DelegatedCompositingStatus", "delegated_status", status);
 }
 
 bool ForceDisableDelegation() {

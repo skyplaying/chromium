@@ -6,7 +6,9 @@
 
 #import "base/test/metrics/histogram_tester.h"
 #import "base/test/metrics/user_action_tester.h"
-#import "ios/chrome/browser/intelligence/bwg/utils/bwg_constants.h"
+#import "components/contextual_cueing/contextual_cueing_enums.h"
+#import "components/optimization_guide/core/hints/optimization_guide_decision.h"
+#import "ios/chrome/browser/intelligence/bwg/utils/gemini_constants.h"
 #import "testing/platform_test.h"
 
 namespace {
@@ -36,6 +38,7 @@ const char kFeedbackThumbsDown[] = "MobileGeminiFeedbackThumbsDown";
 const char kImageActionButtonTapped[] = "MobileGeminiImageActionButtonTapped";
 const char kInputPlateAttachmentOptionTapped[] =
     "MobileGeminiInputPlateAttachmentOptionTapped";
+const char kEntryPointAvailable[] = "MobileGeminiEntryPointAvailable";
 }  // namespace
 
 class GeminiMetricsTest : public PlatformTest {
@@ -168,34 +171,41 @@ TEST_F(GeminiMetricsTest, RecordGeminiCameraFlowGoToOSSettingsAlertResult) {
 }
 
 // Tests that response latency is recorded to the correct histograms based on
-// page context and generated image presence.
+// page context, generated image presence, and multi-tab usage.
 TEST_F(GeminiMetricsTest, TestResponseLatencyMetrics) {
   base::TimeDelta latency = base::Milliseconds(100);
 
-  // Case 1: Page context present & generated image present.
-  RecordResponseLatency(latency, true, true);
+  // Case 1: Page context present & generated image present & multi-tab not
+  // used.
+  RecordResponseLatency(latency, true, true, false);
   histogram_tester_.ExpectTimeBucketCount(kResponseLatencyWithContextHistogram,
                                           latency, 1);
   histogram_tester_.ExpectTimeBucketCount(
       kResponseLatencyWithGeneratedImageHistogram, latency, 1);
+  histogram_tester_.ExpectTimeBucketCount(
+      kResponseLatencyMultiTabNotUsedHistogram, latency, 1);
+  histogram_tester_.ExpectTotalCount(kResponseLatencyMultiTabUsedHistogram, 0);
   histogram_tester_.ExpectTotalCount(kResponseLatencyWithoutContextHistogram,
                                      0);
   histogram_tester_.ExpectTotalCount(
       kResponseLatencyWithoutGeneratedImageHistogram, 0);
 
-  // Case 2: Page context present & generated image absent.
-  RecordResponseLatency(latency, true, false);
+  // Case 2: Page context present & generated image absent & multi-tab not used.
+  RecordResponseLatency(latency, true, false, false);
   histogram_tester_.ExpectTimeBucketCount(kResponseLatencyWithContextHistogram,
                                           latency, 2);
   histogram_tester_.ExpectTimeBucketCount(
       kResponseLatencyWithoutGeneratedImageHistogram, latency, 1);
+  histogram_tester_.ExpectTimeBucketCount(
+      kResponseLatencyMultiTabNotUsedHistogram, latency, 2);
+  histogram_tester_.ExpectTotalCount(kResponseLatencyMultiTabUsedHistogram, 0);
   histogram_tester_.ExpectTotalCount(kResponseLatencyWithoutContextHistogram,
                                      0);
   histogram_tester_.ExpectTimeBucketCount(
       kResponseLatencyWithGeneratedImageHistogram, latency, 1);
 
-  // Case 3: Page context absent, generated image present.
-  RecordResponseLatency(latency, false, true);
+  // Case 3: Page context absent, generated image present & multi-tab not used.
+  RecordResponseLatency(latency, false, true, false);
   histogram_tester_.ExpectTimeBucketCount(kResponseLatencyWithContextHistogram,
                                           latency, 2);
   histogram_tester_.ExpectTimeBucketCount(
@@ -204,9 +214,12 @@ TEST_F(GeminiMetricsTest, TestResponseLatencyMetrics) {
       kResponseLatencyWithGeneratedImageHistogram, latency, 2);
   histogram_tester_.ExpectTimeBucketCount(
       kResponseLatencyWithoutGeneratedImageHistogram, latency, 1);
+  histogram_tester_.ExpectTimeBucketCount(
+      kResponseLatencyMultiTabNotUsedHistogram, latency, 3);
+  histogram_tester_.ExpectTotalCount(kResponseLatencyMultiTabUsedHistogram, 0);
 
-  // Case 4: Page context absent, generated image absent.
-  RecordResponseLatency(latency, false, false);
+  // Case 4: Page context absent, generated image absent & multi-tab used.
+  RecordResponseLatency(latency, false, false, true);
   histogram_tester_.ExpectTimeBucketCount(kResponseLatencyWithContextHistogram,
                                           latency, 2);
   histogram_tester_.ExpectTimeBucketCount(
@@ -215,6 +228,10 @@ TEST_F(GeminiMetricsTest, TestResponseLatencyMetrics) {
       kResponseLatencyWithGeneratedImageHistogram, latency, 2);
   histogram_tester_.ExpectTimeBucketCount(
       kResponseLatencyWithoutGeneratedImageHistogram, latency, 2);
+  histogram_tester_.ExpectTimeBucketCount(
+      kResponseLatencyMultiTabNotUsedHistogram, latency, 3);
+  histogram_tester_.ExpectTimeBucketCount(kResponseLatencyMultiTabUsedHistogram,
+                                          latency, 1);
 }
 
 TEST_F(GeminiMetricsTest, RecordGeminiCameraFlowBegan) {
@@ -379,4 +396,62 @@ TEST_F(GeminiMetricsTest, RecordGeminiIneligibilityReasons) {
       1);
 
   histogram_tester_.ExpectTotalCount(histogram, 2);
+}
+
+TEST_F(GeminiMetricsTest, RecordGeminiEditMenuSelectedTextLength) {
+  RecordGeminiEditMenuSelectedTextLength(100);
+  histogram_tester_.ExpectBucketCount(kEditMenuSelectedTextLengthHistogram, 100,
+                                      1);
+}
+
+TEST_F(GeminiMetricsTest, RecordGeminiEntryPointAvailable) {
+  RecordGeminiEntryPointAvailable(gemini::EntryPoint::EditMenu);
+  histogram_tester_.ExpectBucketCount(kEntryPointAvailableHistogram,
+                                      gemini::EntryPoint::EditMenu, 1);
+  EXPECT_EQ(1, user_action_tester_.GetActionCount(kEntryPointAvailable));
+}
+
+TEST_F(GeminiMetricsTest, RecordGeminiPageAvailability) {
+  RecordGeminiPageAvailability(IOSGeminiPageAvailability::kAvailable);
+  histogram_tester_.ExpectUniqueSample(kGeminiPageAvailabilityHistogram,
+                                       IOSGeminiPageAvailability::kAvailable,
+                                       1);
+
+  RecordGeminiPageAvailability(IOSGeminiPageAvailability::kSearchResultPage);
+  histogram_tester_.ExpectBucketCount(
+      kGeminiPageAvailabilityHistogram,
+      IOSGeminiPageAvailability::kSearchResultPage, 1);
+
+  RecordGeminiPageAvailability(IOSGeminiPageAvailability::kUnavailable);
+  histogram_tester_.ExpectBucketCount(kGeminiPageAvailabilityHistogram,
+                                      IOSGeminiPageAvailability::kUnavailable,
+                                      1);
+}
+
+TEST_F(GeminiMetricsTest, RecordGeminiGlicContextualCueDecision) {
+  RecordGeminiGlicContextualCueDecision(
+      optimization_guide::OptimizationGuideDecision::kTrue);
+  histogram_tester_.ExpectBucketCount(
+      kGlicContextualCueDecisionHistogram,
+      optimization_guide::OptimizationGuideDecision::kTrue, 1);
+
+  RecordGeminiGlicContextualCueDecision(
+      optimization_guide::OptimizationGuideDecision::kFalse);
+  histogram_tester_.ExpectBucketCount(
+      kGlicContextualCueDecisionHistogram,
+      optimization_guide::OptimizationGuideDecision::kFalse, 1);
+}
+
+TEST_F(GeminiMetricsTest, RecordContextualCueingDecision) {
+  RecordContextualCueingDecision(
+      contextual_cueing::ContextualCueingDecision::kSuccess);
+  histogram_tester_.ExpectBucketCount(
+      kContextualCueingDecisionHistogram,
+      contextual_cueing::ContextualCueingDecision::kSuccess, 1);
+
+  RecordContextualCueingDecision(
+      contextual_cueing::ContextualCueingDecision::kHistorySyncOff);
+  histogram_tester_.ExpectBucketCount(
+      kContextualCueingDecisionHistogram,
+      contextual_cueing::ContextualCueingDecision::kHistorySyncOff, 1);
 }

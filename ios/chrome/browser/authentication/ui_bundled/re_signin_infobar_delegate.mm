@@ -12,6 +12,7 @@
 #import "base/logging.h"
 #import "base/memory/ptr_util.h"
 #import "components/infobars/core/infobar_manager.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/base/signin_metrics.h"
 #import "components/strings/grit/components_strings.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin_presenter.h"
@@ -98,7 +99,7 @@ std::u16string ReSignInInfoBarDelegate::GetButtonLabel(
 
 ui::ImageModel ReSignInInfoBarDelegate::GetIcon() const {
   return ui::ImageModel::FromImage(gfx::Image(
-      DefaultSymbolWithPointSize(kWarningFillSymbol, kInfobarSymbolPointSize)));
+      SymbolWithPointSize(SymbolWarningFill, kInfobarSymbolPointSize)));
 }
 
 bool ReSignInInfoBarDelegate::Accept() {

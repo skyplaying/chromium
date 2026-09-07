@@ -115,7 +115,7 @@ class DownloadInterstitialMediator {
         mModel.set(ListProperties.CALLBACK_REMOVE, this::onDeleteItem);
         mModel.set(ListProperties.PROVIDER_VISUALS, (i, w, h, c) -> CallbackUtils.emptyRunnable());
         mModel.set(ListProperties.CALLBACK_RENAME, this::onRenameItem);
-        mModel.set(ListProperties.CALLBACK_SELECTION, (item) -> {});
+        mModel.set(ListProperties.CALLBACK_SELECTION, CallbackUtils.emptyCallback());
 
         mObserver = getOfflineContentProviderObserver();
         mProvider.addObserver(mObserver);
@@ -323,9 +323,9 @@ class DownloadInterstitialMediator {
     }
 
     private void startRename(String name, RenameDialogManager.RenameCallback callback) {
-        RenameDialogManager mRenameDialogManager =
+        RenameDialogManager renameDialogManager =
                 new RenameDialogManager(mContextSupplier.get(), mModalDialogManager);
-        mRenameDialogManager.startRename(name, callback);
+        renameDialogManager.startRename(name, callback);
         UmaHelper.logUiAction(UmaHelper.Action.RENAMED);
     }
 

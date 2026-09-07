@@ -7,35 +7,59 @@
 #include <string>
 #include <utility>
 
-#include "base/containers/span.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/default_browser/default_browser_modal_handler.h"
+#include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/chrome_unscaled_resources.h"
 #include "chrome/grit/default_browser_modal_resources.h"
 #include "chrome/grit/default_browser_modal_resources_map.h"
 #include "chrome/grit/generated_resources.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
+#include "content/public/common/url_constants.h"
 #include "net/base/url_util.h"
 #include "ui/webui/webui_util.h"
+
+DefaultBrowserModalUIConfig::DefaultBrowserModalUIConfig()
+    : DefaultTopChromeWebUIConfig(content::kChromeUIScheme,
+                                  chrome::kChromeUIDefaultBrowserModalHost) {}
+
+DefaultBrowserModalUIConfig::~DefaultBrowserModalUIConfig() = default;
+
+bool DefaultBrowserModalUIConfig::ShouldAutoResizeHost() {
+  return true;
+}
 
 DefaultBrowserModalUI::DefaultBrowserModalUI(content::WebUI* web_ui)
     : TopChromeWebUIController(web_ui, /*enable_chrome_send=*/false) {
   bool use_settings_illustration = false;
+  bool can_pin_to_taskbar = false;
+  bool is_modal = false;
   std::string value;
   if (net::GetValueForKeyInQuery(web_ui->GetWebContents()->GetVisibleURL(),
                                  "illustration", &value)) {
     use_settings_illustration = value == "true";
   }
+  if (net::GetValueForKeyInQuery(web_ui->GetWebContents()->GetVisibleURL(),
+                                 "can_pin_to_taskbar", &value)) {
+    can_pin_to_taskbar = value == "true";
+  }
+  if (net::GetValueForKeyInQuery(web_ui->GetWebContents()->GetVisibleURL(),
+                                 "is_modal", &value)) {
+    is_modal = value == "true";
+  }
 
+  Profile* profile = Profile::FromWebUI(web_ui);
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
-      web_ui->GetWebContents()->GetBrowserContext(),
-      chrome::kChromeUIDefaultBrowserModalHost);
+      profile, chrome::kChromeUIDefaultBrowserModalHost);
+  content::URLDataSource::Add(profile, std::make_unique<ThemeSource>(profile));
 
   webui::SetupWebUIDataSource(
-      source, base::span(kDefaultBrowserModalResources),
+      source, kDefaultBrowserModalResources,
       IDR_DEFAULT_BROWSER_MODAL_DEFAULT_BROWSER_MODAL_HTML);
 
   static constexpr webui::LocalizedString kStrings[] = {
@@ -52,16 +76,17 @@ DefaultBrowserModalUI::DefaultBrowserModalUI(content::WebUI* web_ui)
   source->AddLocalizedString(
       "bodyText",
       use_settings_illustration
-          ? IDS_DEFAULT_BROWSER_MODAL_BODY_WITH_SETTINGS_ILLUSTRATION
+          ? can_pin_to_taskbar
+                ? IDS_DEFAULT_BROWSER_MODAL_BODY_WITH_SETTINGS_ILLUSTRATION_UNPINNED
+                : IDS_DEFAULT_BROWSER_MODAL_BODY_WITH_SETTINGS_ILLUSTRATION
+      : can_pin_to_taskbar
+          ? IDS_DEFAULT_BROWSER_MODAL_BODY_WITHOUT_SETTINGS_ILLUSTRATION_UNPINNED
           : IDS_DEFAULT_BROWSER_MODAL_BODY_WITHOUT_SETTINGS_ILLUSTRATION);
 
   source->AddResourcePath("chrome_logo.svg", IDR_PRODUCT_LOGO_SVG);
-  source->AddResourcePath("illustration.svg",
-                          IDR_DEFAULT_BROWSER_MODAL_SETTINGS_ILLUSTRATION_SVG);
-  source->AddResourcePath("header_background.svg",
-                          IDR_DEFAULT_BROWSER_MODAL_HEADER_BACKGROUND_SVG);
 
   source->AddBoolean("useSettingsIllustration", use_settings_illustration);
+  source->AddBoolean("isModal", is_modal);
 }
 
 WEB_UI_CONTROLLER_TYPE_IMPL(DefaultBrowserModalUI)

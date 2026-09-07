@@ -5,16 +5,22 @@
 #include "extensions/browser/extension_web_contents_observer.h"
 
 #include "base/check.h"
+#include "base/feature_list.h"
 #include "components/sessions/content/session_tab_helper.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/child_process_security_policy.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/browser/site_instance.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/url_constants.h"
 #include "extensions/browser/extension_api_frame_id_map.h"
+#include "extensions/browser/extension_config_map.h"
+#include "extensions/browser/extension_config_map_factory.h"
 #include "extensions/browser/extension_frame_host.h"
+#include "extensions/browser/extension_mojo_binder_registry.h"
+#include "extensions/browser/extension_mojo_binder_registry_factory.h"
 #include "extensions/browser/extension_navigation_registry.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry.h"
@@ -30,7 +36,9 @@
 #include "extensions/common/extension_id.h"
 #include "extensions/common/mojom/view_type.mojom.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/autoplay/autoplay.mojom.h"
+#include "third_party/blink/public/mojom/devtools/console_message.mojom.h"
 #include "url/origin.h"
 
 namespace extensions {
@@ -175,10 +183,10 @@ void ExtensionWebContentsObserver::SetUpRenderFrameHost(
   //
   // Note: Keep this logic in sync with related logic in
   // ChromeContentBrowserClient::RegisterNonNetworkSubresourceURLLoaderFactories.
-  if (type == Manifest::TYPE_EXTENSION ||
+  if (type == Manifest::Type::kExtension ||
       type == Manifest::Type::kLegacyPackagedApp) {
     util::InitializeFileSchemeAccessForExtension(
-        render_frame_host->GetProcess()->GetDeprecatedID(), extension->id(),
+        render_frame_host->GetProcess()->GetID(), extension->id(),
         browser_context_);
   }
 
@@ -192,11 +200,20 @@ void ExtensionWebContentsObserver::SetUpRenderFrameHost(
   // isolation is turned on.
   RendererStartupHelperFactory::GetForBrowserContext(browser_context_)
       ->ActivateExtensionInProcess(*extension, render_frame_host->GetProcess());
+
+  if (IsMojoJsEnabled(*extension)) {
+    render_frame_host->EnableMojoJsBindings(/*features=*/nullptr);
+  }
+
+  if (IsJsErrorReportingEnabled(*extension)) {
+    render_frame_host->SetWantErrorMessageStackTrace();
+  }
 }
 
 void ExtensionWebContentsObserver::RenderFrameDeleted(
     content::RenderFrameHost* render_frame_host) {
   DCHECK(initialized_);
+  extension_frame_host_->RenderFrameDeleted(render_frame_host);
   local_frame_map_.erase(render_frame_host);
   ProcessManager::Get(browser_context_)
       ->UnregisterRenderFrameHost(render_frame_host);
@@ -205,6 +222,22 @@ void ExtensionWebContentsObserver::RenderFrameDeleted(
 
 void ExtensionWebContentsObserver::ReadyToCommitNavigation(
     content::NavigationHandle* navigation_handle) {
+#if !BUILDFLAG(IS_ANDROID)
+  // If the navigation is for the TopChrome WebUI, we can skip extension
+  // initialization for optimization. Otherwise, we ensure the renderer process
+  // is initialized including the non-TopChrome WebUI navigation.
+  content::RenderProcessHost* process =
+      navigation_handle->GetRenderFrameHost()->GetProcess();
+  if (process->IsForTopChromeWebUI() &&
+      base::FeatureList::IsEnabled(
+          blink::features::kInitialWebUIWithoutExtensions)) {
+    if (!navigation_handle->IsInitialWebUINavigation()) {
+      RendererStartupHelperFactory::GetForBrowserContext(browser_context_)
+          ->InitializeProcess(process);
+    }
+  }
+#endif  // !BUILDFLAG(IS_ANDROID)
+
   SetUpRenderFrameHost(navigation_handle->GetRenderFrameHost());
 
   ScriptInjectionTracker::ReadyToCommitNavigation(PassKey(), navigation_handle);
@@ -382,5 +415,72 @@ void ExtensionWebContentsObserver::OnWindowIdChanged(SessionID id) {
         }
       });
 }
+
+bool ExtensionWebContentsObserver::IsMojoJsEnabled(
+    const Extension& extension) const {
+  const auto* registry =
+      ExtensionMojoBinderRegistryFactory::GetForBrowserContext(
+          browser_context_);
+  return registry && registry->IsMojoJsEnabledForFrame(extension);
+}
+
+bool ExtensionWebContentsObserver::IsJsErrorReportingEnabled(
+    const Extension& extension) const {
+  auto* config_map =
+      ExtensionConfigMapFactory::GetForBrowserContext(browser_context_);
+  auto* provider =
+      config_map ? config_map->GetConfigProvider(extension) : nullptr;
+  return provider && provider->IsJsErrorReportingEnabled();
+}
+
+void ExtensionWebContentsObserver::OnDidAddMessageToConsole(
+    content::RenderFrameHost* source_frame,
+    blink::mojom::ConsoleMessageLevel log_level,
+    const std::u16string& message,
+    int32_t line_no,
+    const std::u16string& source_id,
+    const std::optional<std::u16string>& untrusted_stack_trace) {
+  if (log_level != blink::mojom::ConsoleMessageLevel::kError) {
+    return;
+  }
+
+  if (!source_frame) {
+    return;
+  }
+
+  // If source_id is not a valid extension script URL, fall back to the frame's
+  // committed URL so errors originating from the extension frame are captured.
+  GURL url(source_id);
+  if (!url.is_valid() || !url.SchemeIs(kExtensionScheme)) {
+    url = source_frame->GetLastCommittedURL();
+  }
+  if (!url.is_valid() || !url.SchemeIs(kExtensionScheme)) {
+    return;
+  }
+
+  // Ignore console messages from frames that are pending deletion to avoid
+  // reporting errors during frame teardown.
+  if (source_frame->GetLifecycleState() ==
+      content::RenderFrameHost::LifecycleState::kPendingDeletion) {
+    return;
+  }
+
+  const Extension* extension =
+      GetExtensionFromFrame(source_frame, /*verify_url=*/false);
+  if (!extension || !IsJsErrorReportingEnabled(*extension)) {
+    return;
+  }
+
+  OnExtensionJsError(source_frame, *extension, message, line_no, url,
+                     untrusted_stack_trace);
+}
+
+void ExtensionWebContentsObserver::OnExtensionJsError(
+    content::RenderFrameHost* source_frame,
+    const Extension& extension,
+    const std::u16string& message,
+    int32_t line_no,
+    const GURL& url,
+    const std::optional<std::u16string>& untrusted_stack_trace) {}
 
 }  // namespace extensions

@@ -35,6 +35,7 @@
 #include "components/history/core/browser/expire_history_backend.h"
 #include "components/history/core/browser/history_backend_notifier.h"
 #include "components/history/core/browser/history_types.h"
+#include "components/history/core/browser/journeys/history_backend_for_journeys_sync.h"
 #include "components/history/core/browser/keyword_id.h"
 #include "components/history/core/browser/sync/history_backend_for_sync.h"
 #include "components/history/core/browser/visit_tracker.h"
@@ -61,6 +62,10 @@ class DataTypeControllerDelegate;
 }
 
 namespace history {
+namespace journeys {
+class JourneysSyncBridge;
+}  // namespace journeys
+
 struct DownloadRow;
 class HistoryBackendClient;
 class HistoryBackendDBBaseTest;
@@ -121,6 +126,7 @@ class QueuedHistoryDBTask {
 // here, see the history service for behavior.
 class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
                        public HistoryBackendForSync,
+                       public journeys::HistoryBackendForJourneysSync,
                        public HistoryBackendNotifier,
                        public favicon::FaviconBackendDelegate {
  public:
@@ -207,6 +213,10 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
   // and is deleted.
   static constexpr int kExpireDaysThreshold = 90;
 
+  // The maximum redirect chain depth to traverse before stopping. Prevents
+  // quadratic sql query floods on unbounded client-redirect chains.
+  static constexpr size_t kMaxRedirectChainLength = 30;
+
   // Init must be called to complete object creation. This object can be
   // constructed on any thread, but all other functions including Init() must
   // be called on the history thread.
@@ -267,9 +277,6 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
                              int nav_entry_id,
                              const GURL& url,
                              base::Time end_ts);
-  void SetBrowsingTopicsAllowed(ContextID context_id,
-                                int nav_entry_id,
-                                const GURL& url);
   void SetPageLanguageForVisit(ContextID context_id,
                                int nav_entry_id,
                                const GURL& url,
@@ -300,6 +307,7 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
   // Querying ------------------------------------------------------------------
 
   QueryURLResult QueryURL(const GURL& url);
+  std::optional<std::vector<URLID>> QueryUrlIds(const std::vector<GURL>& urls);
   QueryURLAndVisitsResult QueryURLAndVisits(
       const GURL& url,
       VisitQuery404sPolicy policy_for_404s);
@@ -559,26 +567,26 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
   // this boundary won't be clustered nor cause re-clustering.
   base::Time FindMostRecentClusteredTime();
 
-  void ReplaceClusters(const std::vector<int64_t>& ids_to_delete,
+  void ReplaceClusters(const std::vector<ClusterId>& ids_to_delete,
                        const std::vector<Cluster>& clusters_to_add);
 
-  int64_t ReserveNextClusterIdWithVisit(const ClusterVisit& cluster_visit);
+  ClusterId ReserveNextClusterIdWithVisit(ClusterVisit cluster_visit);
 
-  void AddVisitsToCluster(int64_t cluster_id,
-                          const std::vector<ClusterVisit>& visits);
+  void AddVisitsToCluster(ClusterId cluster_id,
+                          std::vector<ClusterVisit> visits);
 
   // Adds `cluster_visit` to the local cluster with `originator_cache_guid` and
   // `originator_cluster_id`. If an existing cluster does not exist with those
   // synced details, a new one will be created.
   void AddVisitToSyncedCluster(const history::ClusterVisit& cluster_visit,
                                const std::string& originator_cache_guid,
-                               int64_t originator_cluster_id) override;
+                               ClusterId originator_cluster_id) override;
 
   void UpdateClusterTriggerability(const std::vector<Cluster>& clusters);
 
   void HideVisits(const std::vector<VisitID>& visit_ids);
 
-  void UpdateClusterVisit(const history::ClusterVisit& cluster_visit);
+  void UpdateClusterVisit(history::ClusterVisit cluster_visit);
 
   std::vector<Cluster> GetMostRecentClusters(
       base::Time inclusive_min_time,
@@ -590,13 +598,13 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
   // Get a `Cluster`. Since `keyword_to_data_map` and `visits.duplicate_visits`
   // aren't always useful and require extra SQL executions, they're only
   // populated if `include_keywords_and_duplicates` is true.
-  Cluster GetCluster(int64_t cluster_id,
+  Cluster GetCluster(ClusterId cluster_id,
                      bool include_keywords_and_duplicates = true);
 
   // Returns the ID of the cluster containing `visit_id`. Returns 0 if
   // `visit_id` is not in a cluster.
   // HistoryBackendForSync:
-  int64_t GetClusterIdContainingVisit(VisitID visit_id) override;
+  ClusterId GetClusterIdContainingVisit(VisitID visit_id) override;
 
   // Finds the 1st visit in the redirect chain containing `visit`.
   // Unlike `GetRedirectsToSpecificVisit()`, this only considers actual
@@ -749,8 +757,21 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
   base::WeakPtr<syncer::DataTypeControllerDelegate>
   GetHistorySyncControllerDelegate();
 
+  // Returns the sync controller delegate for syncing journeys, owned by
+  // `journeys_sync_bridge_`. The bridge is reset during database closing in
+  // backend teardown, in practice giving this a backend lifetime expectation.
+  base::WeakPtr<syncer::DataTypeControllerDelegate>
+  GetJourneysSyncControllerDelegate();
+
   // Sends the SyncService's TransportState `state` to the HistorySyncBridge.
   void SetSyncTransportState(syncer::SyncService::TransportState state);
+
+  // HistoryBackendForJourneysSync:
+  bool AddOrUpdateJourneys(
+      const std::vector<journeys::JourneyRow>& journeys) override;
+  bool DeleteJourneys(const std::vector<std::string>& journey_ids) override;
+  std::vector<journeys::JourneyRow> GetAllJourneys() override;
+  bool DeleteAllJourneys() override;
 
   // Deleting ------------------------------------------------------------------
 
@@ -1151,6 +1172,10 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
   // HistoryBackend::Init() is called. Defined after `observers_` because
   // it unregisters itself as observer during destruction.
   std::unique_ptr<HistorySyncBridge> history_sync_bridge_;
+
+  // Used to manage syncing of the journeys datatype. It will be null before
+  // HistoryBackend::Init() is called.
+  std::unique_ptr<journeys::JourneysSyncBridge> journeys_sync_bridge_;
 
   // Contains device information for all syncing devices.
   SyncDeviceInfoMap sync_device_info_;

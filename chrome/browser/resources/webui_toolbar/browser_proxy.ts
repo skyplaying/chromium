@@ -4,24 +4,66 @@
 
 import '//resources/js/cr.js';
 
-import {
-  BrowserControlsObserverCallbackRouter,
-  BrowserControlsService,
-} from './browser_controls_api.mojom-webui.js';
-import type {BrowserControlsServiceInterface} from './browser_controls_api.mojom-webui.js';
-import {ClickDispositionFlag, ContextMenuState, ContextMenuType, DevToolsState, NavigationState} from './browser_controls_api_data_model.mojom-webui.js';
+import {BrowserControlsService} from '/shared/browser_controls_api.mojom-webui.js';
+import type {BrowserControlsServiceInterface} from '/shared/browser_controls_api.mojom-webui.js';
+import {EventDispositionFlag} from '/shared/browser_controls_api_data_model.mojom-webui.js';
+import type {IconUpdate} from '/shared/icon_handle.mojom-webui.js';
+import {ToolbarUIObserverCallbackRouter, ToolbarUIService} from '/shared/toolbar_ui_api.mojom-webui.js';
+import type {ToolbarUIServiceInterface} from '/shared/toolbar_ui_api.mojom-webui.js';
+import {ContextMenuType} from '/shared/toolbar_ui_api_data_model.mojom-webui.js';
+import type {BackForwardButtonState, FocusRequestTarget, NavigationControlsState, OmniboxViewState, ReloadControlState} from '/shared/toolbar_ui_api_data_model.mojom-webui.js';
 
 export {
-  ClickDispositionFlag,
-  ContextMenuState,
   ContextMenuType,
-  DevToolsState,
-  NavigationState,
+  EventDispositionFlag,
+};
+export type {
+  BackForwardButtonState,
+  IconUpdate,
+  NavigationControlsState,
+  OmniboxViewState,
+  ReloadControlState,
 };
 
-export interface BrowserProxy {
-  callbackRouter: BrowserControlsObserverCallbackRouter;
-  handler: BrowserControlsServiceInterface;
+export type NavigationControlsStateListener =
+    (icons: IconUpdate[], state: NavigationControlsState) => void;
+
+export type NavigationControlsStateListenerHandle = number;
+export const INVALID_NAVIGATION_CONTROLS_STATE_LISTENER_HANDLE:
+    NavigationControlsStateListenerHandle = -1;
+/*
+ * Listener type for invocations to
+ *    toolbar_ui_api.mojom.ToolbarUIObserver.OnFocusRequested method.
+ *
+ * Declare handle:
+ *   listenerHandle : FocusRequestHandle = INVALID_FOCUS_REQUEST_HANDLE;
+ *
+ * Subscribe:
+ *   listenerHandle = browserProxy.addFocusRequestListener(
+ *       (target: FocusRequestTarget) => {
+ *   });
+ *
+ * Unsubscribe:
+ *   browserProxy.removeFocusRequestListener(listenerHandle);
+ *
+ * Calling removeFocus with INVALID_FOCUS_REQUEST_HANDLE is OK; so it's
+ * the preferred initialization value for FocusRequestHandle type.
+ */
+export type FocusRequestListener = (target: FocusRequestTarget) => void;
+export type FocusRequestHandle = number;
+export const INVALID_FOCUS_REQUEST_HANDLE: FocusRequestHandle = -1;
+
+export type ShowSplitTabsContextMenuListener = () => void;
+export type ShowSplitTabsContextMenuHandle = number;
+export const INVALID_SHOW_SPLIT_TABS_CONTEXT_MENU_HANDLE:
+    ShowSplitTabsContextMenuHandle = -1;
+
+import type {PermissionChipDelegate} from '/shared/permission_chip_delegate.js';
+import type {LhsChipIdentifier} from '/shared/toolbar_ui_api_data_model.mojom-webui.js';
+
+export interface BrowserProxy extends PermissionChipDelegate {
+  browserControlsHandler: BrowserControlsServiceInterface;
+  toolbarUIHandler: ToolbarUIServiceInterface;
 
   /**
    * Records a value in a histogram.
@@ -31,17 +73,54 @@ export interface BrowserProxy {
    */
   recordInHistogram(histogramName: string, value: number, maxValue: number):
       void;
+
+  addNavigationStateListener(listener: NavigationControlsStateListener):
+      NavigationControlsStateListenerHandle;
+  addFocusRequestListener(listener: FocusRequestListener): FocusRequestHandle;
+  addShowSplitTabsContextMenuListener(
+      listener: ShowSplitTabsContextMenuListener):
+      ShowSplitTabsContextMenuHandle;
+
+  removeNavigationStateListener(handle: NavigationControlsStateListenerHandle):
+      void;
+  removeFocusRequestListener(handle: FocusRequestHandle): void;
+  removeShowSplitTabsContextMenuListener(
+      handle: ShowSplitTabsContextMenuHandle): void;
 }
 
 export class BrowserProxyImpl implements BrowserProxy {
-  callbackRouter: BrowserControlsObserverCallbackRouter;
-  handler: BrowserControlsServiceInterface;
+  private callbackRouter: ToolbarUIObserverCallbackRouter;
+  browserControlsHandler: BrowserControlsServiceInterface;
+  toolbarUIHandler: ToolbarUIServiceInterface;
 
   private constructor() {
-    this.callbackRouter = new BrowserControlsObserverCallbackRouter();
-    this.handler = BrowserControlsService.getRemote();
-    this.handler.addObserver(
-        this.callbackRouter.$.bindNewPipeAndPassRemote());
+    this.callbackRouter = new ToolbarUIObserverCallbackRouter();
+    this.browserControlsHandler = BrowserControlsService.getRemote();
+    this.toolbarUIHandler = ToolbarUIService.getRemote();
+  }
+
+  onChipClicked(id: LhsChipIdentifier, isPointer: boolean) {
+    this.toolbarUIHandler.onLhsChipClicked(id, isPointer);
+  }
+
+  onChipPointerEntered(id: LhsChipIdentifier) {
+    this.toolbarUIHandler.onLhsChipPointerEntered(id);
+  }
+
+  onChipPointerExited(id: LhsChipIdentifier) {
+    this.toolbarUIHandler.onLhsChipPointerExited(id);
+  }
+
+  onChipMousePressed(id: LhsChipIdentifier, isMiddleClick: boolean = false) {
+    this.toolbarUIHandler.onLhsChipMousePressed(id, isMiddleClick);
+  }
+
+  onChipExpandAnimationEnded(id: LhsChipIdentifier) {
+    this.toolbarUIHandler.onLhsChipExpandAnimationEnded(id);
+  }
+
+  onChipCollapseAnimationEnded(id: LhsChipIdentifier) {
+    this.toolbarUIHandler.onLhsChipCollapseAnimationEnded(id);
   }
 
   /**
@@ -53,6 +132,47 @@ export class BrowserProxyImpl implements BrowserProxy {
   recordInHistogram(histogramName: string, value: number, maxValue: number) {
     chrome.send(
         'metricsHandler:recordInHistogram', [histogramName, value, maxValue]);
+  }
+
+  addNavigationStateListener(listener: NavigationControlsStateListener) {
+    const handle =
+        this.callbackRouter.onNavigationControlsStateChanged.addListener(
+            listener);
+    this.toolbarUIHandler.bind().then(fence => {
+      listener(fence.icons, fence.state);
+      this.callbackRouter.$.bindHandle(fence.updateStream.handle);
+    });
+    return handle;
+  }
+
+  addFocusRequestListener(listener: FocusRequestListener) {
+    // This assumes addNavigationStateListener will happen or has happened to
+    // actually connect the router.
+    return this.callbackRouter.onFocusRequested.addListener(listener);
+  }
+
+  addShowSplitTabsContextMenuListener(
+      listener: ShowSplitTabsContextMenuListener) {
+    return this.callbackRouter.showSplitTabsContextMenu.addListener(listener);
+  }
+
+  removeNavigationStateListener(handle: NavigationControlsStateListenerHandle) {
+    if (handle !== INVALID_NAVIGATION_CONTROLS_STATE_LISTENER_HANDLE) {
+      this.callbackRouter.removeListener(handle);
+    }
+  }
+
+  removeFocusRequestListener(handle: FocusRequestHandle) {
+    if (handle !== INVALID_FOCUS_REQUEST_HANDLE) {
+      this.callbackRouter.removeListener(handle);
+    }
+  }
+
+  removeShowSplitTabsContextMenuListener(
+      handle: ShowSplitTabsContextMenuHandle) {
+    if (handle !== INVALID_SHOW_SPLIT_TABS_CONTEXT_MENU_HANDLE) {
+      this.callbackRouter.removeListener(handle);
+    }
   }
 
   static getInstance(): BrowserProxy {

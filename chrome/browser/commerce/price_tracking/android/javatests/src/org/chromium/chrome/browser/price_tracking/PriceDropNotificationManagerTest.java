@@ -42,7 +42,6 @@ import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
-import org.chromium.base.Callback;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.IntentUtils;
 import org.chromium.base.ThreadUtils;
@@ -64,7 +63,6 @@ import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 import org.chromium.chrome.browser.price_tracking.PriceDropNotificationManagerImpl.DismissNotificationChromeActivity;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileManager;
-import org.chromium.chrome.test.ChromeBrowserTestRule;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.components.browser_ui.notifications.BaseNotificationManagerProxyFactory;
 import org.chromium.components.browser_ui.notifications.NotificationManagerProxy;
@@ -76,6 +74,8 @@ import org.chromium.components.commerce.core.CommerceSubscription;
 import org.chromium.components.commerce.core.IdentifierType;
 import org.chromium.components.commerce.core.ManagementType;
 import org.chromium.components.commerce.core.ShoppingService;
+import org.chromium.content_public.browser.test.NativeLibraryTestUtils;
+import org.chromium.ui.test.util.MockitoHelper;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -87,10 +87,6 @@ import java.util.concurrent.atomic.AtomicReference;
         ChromeFeatureList.PRICE_ANNOTATIONS + ":user_managed_notification_max_number/2")
 @CommandLineFlags.Add(ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE)
 public class PriceDropNotificationManagerTest {
-    private static final String ACTION_APP_NOTIFICATION_SETTINGS =
-            "android.settings.APP_NOTIFICATION_SETTINGS";
-    private static final String EXTRA_APP_PACKAGE = "app_package";
-    private static final String EXTRA_APP_UID = "app_uid";
     private static final String ACTION_ID_VISIT_SITE = "visit_site";
     private static final String ACTION_ID_TURN_OFF_ALERT = "turn_off_alert";
     private static final String TEST_URL = "www.test.com";
@@ -101,10 +97,8 @@ public class PriceDropNotificationManagerTest {
     private NotificationManagerProxy mMockNotificationManager;
 
     private PriceDropNotificationManager mPriceDropNotificationManager;
-    private BookmarkModel mMockBookmarkModel;
 
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
-    @Rule public ChromeBrowserTestRule mBrowserTestRule = new ChromeBrowserTestRule();
 
     @Mock private ShoppingService mMockShoppingService;
     @Mock private CommerceFeatureUtils.Natives mCommerceFeatureUtilsJniMock;
@@ -114,6 +108,7 @@ public class PriceDropNotificationManagerTest {
 
     @Before
     public void setUp() {
+        NativeLibraryTestUtils.loadNativeLibraryAndInitBrowserProcess();
         CommerceFeatureUtilsJni.setInstanceForTesting(mCommerceFeatureUtilsJniMock);
         doReturn(true).when(mCommerceFeatureUtilsJniMock).isShoppingListEligible(anyLong());
 
@@ -296,7 +291,7 @@ public class PriceDropNotificationManagerTest {
         mPriceDropNotificationManager.onNotificationActionClicked(
                 ACTION_ID_TURN_OFF_ALERT, TEST_URL, offerId, null, false);
         verify(mMockShoppingService, times(1))
-                .unsubscribe(mSubscriptionCaptor.capture(), any(Callback.class));
+                .unsubscribe(mSubscriptionCaptor.capture(), MockitoHelper.anyCallback());
         assertEquals(IdentifierType.OFFER_ID, mSubscriptionCaptor.getValue().idType);
         assertEquals(offerId, mSubscriptionCaptor.getValue().id);
         assertEquals(ManagementType.CHROME_MANAGED, mSubscriptionCaptor.getValue().managementType);

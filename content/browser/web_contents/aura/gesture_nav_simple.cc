@@ -7,7 +7,6 @@
 #include <utility>
 
 #include "base/memory/raw_ptr.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
 #include "cc/paint/paint_flags.h"
 #include "components/vector_icons/vector_icons.h"
@@ -18,8 +17,10 @@
 #include "content/public/browser/overscroll_configuration.h"
 #include "content/public/browser/preloading.h"
 #include "ui/aura/window.h"
-#include "ui/compositor/layer.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/compositor/layer_delegate.h"
+#include "ui/compositor/layer_not_drawn.h"
+#include "ui/compositor/layer_textured.h"
 #include "ui/compositor/paint_recorder.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
@@ -28,6 +29,7 @@
 #include "ui/gfx/animation/tween.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/color_palette.h"
+#include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/gfx/shadow_value.h"
 #include "ui/gfx/skia_paint_util.h"
@@ -112,8 +114,8 @@ NavigationDirection GetDirectionFromMode(OverscrollMode mode) {
 // Records UMA histogram and also user action for the cancelled overscroll.
 void RecordGestureOverscrollCancelled(NavigationDirection direction,
                                       OverscrollSource source) {
-  DCHECK_NE(direction, NavigationDirection::NONE);
-  DCHECK_NE(source, OverscrollSource::NONE);
+  CHECK_NE(direction, NavigationDirection::NONE, base::NotFatalUntil::M158);
+  CHECK_NE(source, OverscrollSource::NONE, base::NotFatalUntil::M158);
   if (direction == NavigationDirection::BACK) {
     RecordAction(base::UserMetricsAction("Overscroll_Cancelled.Back"));
   } else if (direction == NavigationDirection::FORWARD) {
@@ -195,10 +197,10 @@ class Affordance : public ui::LayerDelegate, public gfx::AnimationDelegate {
 
   // Root layer of the affordance. This is used to clip the affordance to the
   // content bounds.
-  ui::Layer root_layer_;
+  ui::LayerNotDrawn root_layer_;
 
   // Layer that actually paints the affordance.
-  ui::Layer painted_layer_;
+  ui::LayerTextured painted_layer_;
 
   // Image icon of the arrow inside the affordance.
   raw_ptr<const gfx::VectorIcon> arrow_icon_ = nullptr;
@@ -216,22 +218,23 @@ Affordance::Affordance(GestureNavSimple* owner,
                        OverscrollMode mode,
                        const gfx::Rect& content_bounds,
                        float max_drag_progress)
-    : owner_(owner),
-      mode_(mode),
-      max_drag_progress_(max_drag_progress),
-      root_layer_(ui::LAYER_NOT_DRAWN),
-      painted_layer_(ui::LAYER_TEXTURED) {
-  DCHECK(mode_ == OVERSCROLL_EAST || mode_ == OVERSCROLL_WEST ||
-         mode_ == OVERSCROLL_SOUTH);
+    : owner_(owner), mode_(mode), max_drag_progress_(max_drag_progress) {
+  CHECK(mode_ == OVERSCROLL_EAST || mode_ == OVERSCROLL_WEST ||
+            mode_ == OVERSCROLL_SOUTH,
+        base::NotFatalUntil::M158);
   if (mode_ == OVERSCROLL_EAST) {
-    arrow_icon_ = &vector_icons::kBackArrowIcon;
+    arrow_icon_ =
+        &(features::IsRoundedIconsEnabled() ? vector_icons::kArrowBackIcon
+                                            : vector_icons::kBackArrowOldIcon);
   } else if (mode_ == OVERSCROLL_WEST) {
-    arrow_icon_ = &vector_icons::kForwardArrowIcon;
+    arrow_icon_ = &(features::IsRoundedIconsEnabled()
+                        ? vector_icons::kArrowForwardIcon
+                        : vector_icons::kForwardArrowOldIcon);
   } else if (mode_ == OVERSCROLL_SOUTH) {
-    arrow_icon_ = &vector_icons::kReloadIcon;
+    arrow_icon_ = &vector_icons::kReloadCustomIcon;
   }
 
-  DCHECK(arrow_icon_);
+  CHECK(arrow_icon_, base::NotFatalUntil::M158);
   root_layer_.SetBounds(content_bounds);
   root_layer_.SetMasksToBounds(true);
 
@@ -248,8 +251,8 @@ Affordance::Affordance(GestureNavSimple* owner,
 Affordance::~Affordance() {}
 
 void Affordance::SetDragProgress(float progress) {
-  DCHECK_EQ(State::DRAGGING, state_);
-  DCHECK_LE(0.f, progress);
+  CHECK_EQ(State::DRAGGING, state_, base::NotFatalUntil::M158);
+  CHECK_LE(0.f, progress, base::NotFatalUntil::M158);
 
   if (drag_progress_ == progress) {
     return;
@@ -261,7 +264,7 @@ void Affordance::SetDragProgress(float progress) {
 }
 
 void Affordance::Abort() {
-  DCHECK_EQ(State::DRAGGING, state_);
+  CHECK_EQ(State::DRAGGING, state_, base::NotFatalUntil::M158);
 
   state_ = State::ABORTING;
 
@@ -272,7 +275,9 @@ void Affordance::Abort() {
 }
 
 void Affordance::Complete() {
-  DCHECK_EQ(State::DRAGGING, state_);
+  CHECK_EQ(State::DRAGGING, state_, base::NotFatalUntil::M158);
+  // TODO(crbug.com/553920158): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
   DCHECK_LE(1.f, drag_progress_);
 
   state_ = State::COMPLETING;
@@ -285,7 +290,7 @@ void Affordance::Complete() {
 
 gfx::Point Affordance::GetPaintedLayerOrigin(
     const gfx::Rect& content_bounds) const {
-  DCHECK_NE(OVERSCROLL_NONE, mode_);
+  CHECK_NE(OVERSCROLL_NONE, mode_, base::NotFatalUntil::M158);
   gfx::Point origin;
   if (mode_ == OVERSCROLL_SOUTH) {
     origin.set_x(
@@ -322,9 +327,9 @@ void Affordance::SchedulePaint() {
 }
 
 void Affordance::SetAbortProgress(float progress) {
-  DCHECK_EQ(State::ABORTING, state_);
-  DCHECK_LE(0.f, progress);
-  DCHECK_GE(1.f, progress);
+  CHECK_EQ(State::ABORTING, state_, base::NotFatalUntil::M158);
+  CHECK_LE(0.f, progress, base::NotFatalUntil::M158);
+  CHECK_GE(1.f, progress, base::NotFatalUntil::M158);
 
   if (abort_progress_ == progress) {
     return;
@@ -336,9 +341,9 @@ void Affordance::SetAbortProgress(float progress) {
 }
 
 void Affordance::SetCompleteProgress(float progress) {
-  DCHECK_EQ(State::COMPLETING, state_);
-  DCHECK_LE(0.f, progress);
-  DCHECK_GE(1.f, progress);
+  CHECK_EQ(State::COMPLETING, state_, base::NotFatalUntil::M158);
+  CHECK_LE(0.f, progress, base::NotFatalUntil::M158);
+  CHECK_GE(1.f, progress, base::NotFatalUntil::M158);
 
   if (complete_progress_ == progress) {
     return;
@@ -371,9 +376,12 @@ float Affordance::GetAffordanceProgress() const {
 }
 
 void Affordance::OnPaintLayer(const ui::PaintContext& context) {
-  DCHECK(drag_progress_ >= 1.f || state_ != State::COMPLETING);
-  DCHECK(abort_progress_ == 0.f || state_ == State::ABORTING);
-  DCHECK(complete_progress_ == 0.f || state_ == State::COMPLETING);
+  CHECK(drag_progress_ >= 1.f || state_ != State::COMPLETING,
+        base::NotFatalUntil::M158);
+  CHECK(abort_progress_ == 0.f || state_ == State::ABORTING,
+        base::NotFatalUntil::M158);
+  CHECK(complete_progress_ == 0.f || state_ == State::COMPLETING,
+        base::NotFatalUntil::M158);
 
   ui::PaintRecorder recorder(context, painted_layer_.size());
   gfx::Canvas* canvas = recorder.canvas();
@@ -464,6 +472,8 @@ bool GestureNavSimple::OnOverscrollUpdate(float delta_x, float delta_y) {
     return false;
   }
   float delta = std::abs(mode_ == OVERSCROLL_SOUTH ? delta_y : delta_x);
+  // TODO(crbug.com/554386214): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
   DCHECK_LE(delta, max_delta_);
   affordance_->SetDragProgress(delta / completion_threshold_);
   return true;
@@ -476,7 +486,7 @@ void GestureNavSimple::OnOverscrollComplete(OverscrollMode overscroll_mode) {
     return;
   }
 
-  DCHECK_EQ(mode_, overscroll_mode);
+  CHECK_EQ(mode_, overscroll_mode, base::NotFatalUntil::M158);
 
   mode_ = OVERSCROLL_NONE;
   OverscrollSource overscroll_source = source_;
@@ -518,19 +528,20 @@ void GestureNavSimple::OnOverscrollModeChange(OverscrollMode old_mode,
                                               OverscrollMode new_mode,
                                               OverscrollSource source,
                                               cc::OverscrollBehavior behavior) {
-  DCHECK(old_mode == OverscrollMode::OVERSCROLL_NONE ||
-         new_mode == OverscrollMode::OVERSCROLL_NONE);
+  CHECK(old_mode == OverscrollMode::OVERSCROLL_NONE ||
+            new_mode == OverscrollMode::OVERSCROLL_NONE,
+        base::NotFatalUntil::M158);
 
   // Do not start a new gesture-nav if overscroll-behavior-x is not auto.
   if ((new_mode == OverscrollMode::OVERSCROLL_EAST ||
        new_mode == OverscrollMode::OVERSCROLL_WEST) &&
-      behavior.x != cc::OverscrollBehavior::Type::kAuto) {
+      !behavior.PropagatesXScroll()) {
     return;
   }
 
   // Do not start a new pull-to-refresh if overscroll-behavior-y is not auto.
   if (new_mode == OverscrollMode::OVERSCROLL_SOUTH &&
-      behavior.y != cc::OverscrollBehavior::Type::kAuto) {
+      !behavior.PropagatesYScroll()) {
     return;
   }
 
@@ -541,7 +552,7 @@ void GestureNavSimple::OnOverscrollModeChange(OverscrollMode old_mode,
     return;
   }
 
-  DCHECK_EQ(mode_, old_mode);
+  CHECK_EQ(mode_, old_mode, base::NotFatalUntil::M158);
   if (mode_ == new_mode) {
     return;
   }
@@ -560,7 +571,7 @@ void GestureNavSimple::OnOverscrollModeChange(OverscrollMode old_mode,
     return;
   }
 
-  DCHECK_NE(OverscrollSource::NONE, source);
+  CHECK_NE(OverscrollSource::NONE, source, base::NotFatalUntil::M158);
   source_ = source;
 
   if (ShouldNavigateBack(&controller, mode_)) {
@@ -585,7 +596,7 @@ void GestureNavSimple::OnOverscrollModeChange(OverscrollMode old_mode,
                                       << " and is_touchpad=" << is_touchpad;
 
   max_delta_ = max_size - start_threshold;
-  DCHECK_LE(0, max_delta_);
+  CHECK_LE(0, max_delta_, base::NotFatalUntil::M158);
 
   aura::Window* window = web_contents_->GetNativeView();
   affordance_ = std::make_unique<Affordance>(

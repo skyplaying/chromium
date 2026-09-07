@@ -4,15 +4,15 @@
 
 package org.chromium.chrome.browser.omnibox.suggestions.carousel;
 
+import static org.junit.Assert.assertEquals;
+
 import android.content.Context;
 
 import androidx.annotation.NonNull;
 
-import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -22,7 +22,6 @@ import org.chromium.ui.modelutil.PropertyModel;
 
 /** Tests for {@link BaseCarouselSuggestionProcessor}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class BaseCarouselSuggestionProcessorUnitTest {
 
     private Context mContext;
@@ -78,9 +77,9 @@ public class BaseCarouselSuggestionProcessorUnitTest {
                         .getDimensionPixelSize(R.dimen.omnibox_suggestion_header_height);
 
         BaseCarouselSuggestionProcessorTestClass.sReportedItemViewHeight = 0;
-        Assert.assertEquals(baseHeight, mProcessor.getMinimumViewHeight());
+        assertEquals(baseHeight, mProcessor.getMinimumViewHeight());
 
         BaseCarouselSuggestionProcessorTestClass.sReportedItemViewHeight = 100;
-        Assert.assertEquals(100 + baseHeight, mProcessor.getMinimumViewHeight());
+        assertEquals(100 + baseHeight, mProcessor.getMinimumViewHeight());
     }
 }

@@ -13,7 +13,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.graphics.Bitmap;
-import android.media.AudioManager;
 import android.os.Handler;
 import android.os.Looper;
 import android.support.v4.media.MediaMetadataCompat;
@@ -21,6 +20,7 @@ import android.support.v4.media.session.MediaSessionCompat;
 import android.support.v4.media.session.PlaybackStateCompat;
 import android.text.TextUtils;
 import android.util.SparseArray;
+import android.view.KeyEvent;
 
 import androidx.annotation.VisibleForTesting;
 import androidx.core.app.NotificationCompat;
@@ -29,10 +29,12 @@ import org.chromium.base.CollectionUtil;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.IntentUtils;
 import org.chromium.base.Log;
+import org.chromium.base.TimeUtils;
 import org.chromium.build.annotations.EnsuresNonNull;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.build.annotations.RequiresNonNull;
+import org.chromium.components.browser_ui.media.MediaNotificationManager.MediaTypeId;
 import org.chromium.components.browser_ui.notifications.BaseNotificationManagerProxy;
 import org.chromium.components.browser_ui.notifications.BaseNotificationManagerProxyFactory;
 import org.chromium.components.browser_ui.notifications.ForegroundServiceUtils;
@@ -68,6 +70,9 @@ public class MediaNotificationController {
 
     // Used to help initialize `mPendingIntentActionSwipe`.
     @VisibleForTesting public @Nullable PendingIntentInitializer mPendingIntentInitializer;
+
+    public static final String EXTRA_NOTIFICATION_ID =
+            "org.chromium.components.browser_ui.media.EXTRA_NOTIFICATION_ID";
 
     public static final String ACTION_PLAY = "org.chromium.components.browser_ui.media.ACTION_PLAY";
     public static final String ACTION_PAUSE =
@@ -109,6 +114,10 @@ public class MediaNotificationController {
 
     // |mMediaNotificationInfo| should be not null if and only if the notification is showing.
     @VisibleForTesting public @Nullable MediaNotificationInfo mMediaNotificationInfo;
+
+    @VisibleForTesting public long mTimeOfLastPauseMs = -1;
+
+    private boolean mIsForeground;
 
     @VisibleForTesting public @Nullable MediaSessionCompat mMediaSession;
 
@@ -213,13 +222,10 @@ public class MediaNotificationController {
             // `mThrottleTask` takes care of clearing itself and `mLastPendingInfo` controls when to
             // exit the throttled state.
             mThrottleTask =
-                    new Runnable() {
-                        @Override
-                        public void run() {
-                            mThrottleTask = null;
-                            if (mLastPendingInfo != null) {
-                                showNotificationImmediately(mLastPendingInfo);
-                            }
+                    () -> {
+                        mThrottleTask = null;
+                        if (mLastPendingInfo != null) {
+                            showNotificationImmediately(mLastPendingInfo);
                         }
                     };
 
@@ -291,13 +297,7 @@ public class MediaNotificationController {
          */
         @VisibleForTesting
         public void postDelayedTask() {
-            mSwipeInitTask =
-                    new Runnable() {
-                        @Override
-                        public void run() {
-                            createPendingIntentActionSwipeIfNeeded();
-                        }
-                    };
+            mSwipeInitTask = () -> createPendingIntentActionSwipeIfNeeded();
             mHandler.postDelayed(mSwipeInitTask, MAX_INIT_WAIT_TIME_MILLIS);
         }
 
@@ -327,6 +327,28 @@ public class MediaNotificationController {
 
     private final MediaSessionCompat.Callback mMediaSessionCallback =
             new MediaSessionCompat.Callback() {
+                @Override
+                public boolean onMediaButtonEvent(Intent mediaButtonIntent) {
+                    if (mediaButtonIntent == null) {
+                        return super.onMediaButtonEvent(mediaButtonIntent);
+                    }
+                    KeyEvent event =
+                            IntentUtils.safeGetParcelableExtra(
+                                    mediaButtonIntent, Intent.EXTRA_KEY_EVENT);
+                    if (event != null
+                            && event.getAction() == KeyEvent.ACTION_DOWN
+                            && mMediaNotificationInfo != null
+                            && mMediaNotificationInfo.isPaused) {
+                        long timeSincePauseMs =
+                                mTimeOfLastPauseMs >= 0
+                                        ? TimeUtils.elapsedRealtimeMillis() - mTimeOfLastPauseMs
+                                        : -1;
+                        MediaSessionUma.recordMediaButtonWhilePaused(
+                                event.getKeyCode(), timeSincePauseMs);
+                    }
+                    return super.onMediaButtonEvent(mediaButtonIntent);
+                }
+
                 @Override
                 public void onPlay() {
                     MediaNotificationController.this.onPlay(
@@ -369,6 +391,10 @@ public class MediaNotificationController {
                 }
             };
 
+    public MediaSessionCompat.Callback getMediaSessionCallbackForTesting() {
+        return mMediaSessionCallback;
+    }
+
     /**
      * Finishes starting the service on O+.
      *
@@ -378,10 +404,13 @@ public class MediaNotificationController {
      * @param service the {@link Service} on which {@link Context#startForegroundService()} has been
      *     called.
      * @param notification a minimal version of the notification associated with the service.
-     * @return true if {@link Service#startForeground()} was called.
+     * @return true if {@link Service#startForeground()} succeeded, false otherwise.
      */
     public static boolean finishStartingForegroundServiceOnO(
             Service service, NotificationWrapper notification) {
+        if (service == null || notification == null || notification.getNotification() == null) {
+            return false;
+        }
         try {
             ForegroundServiceUtils.getInstance()
                     .startForeground(
@@ -389,18 +418,21 @@ public class MediaNotificationController {
                             notification.getMetadata().id,
                             notification.getNotification(),
                             ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
+            return true;
         } catch (RuntimeException e) {
             Log.e(TAG, "Unable to start media foreground service", e);
+            return false;
         }
-        return true;
     }
 
     @VisibleForTesting
     public PendingIntentProvider createPendingIntent(String action) {
         Intent intent = assumeNonNull(mDelegate.createServiceIntent()).setAction(action);
+        int notificationId = mDelegate.getNotificationId();
+        intent.putExtra(EXTRA_NOTIFICATION_ID, notificationId);
         return PendingIntentProvider.getService(
                 getContext(),
-                0,
+                notificationId,
                 intent,
                 PendingIntent.FLAG_CANCEL_CURRENT
                         | IntentUtils.getPendingIntentMutabilityFlag(false));
@@ -451,6 +483,13 @@ public class MediaNotificationController {
 
         /** Called when a notification has been shown and should be logged in UMA. */
         void logNotificationShown(NotificationWrapper notification);
+
+        /** Returns the media type ID associated with this delegate. */
+        @MediaTypeId
+        int getMediaTypeId();
+
+        /** Returns the unique notification ID associated with this delegate. */
+        int getNotificationId();
     }
 
     public MediaNotificationController(Delegate delegate) {
@@ -524,12 +563,43 @@ public class MediaNotificationController {
         if (mService == service) return;
 
         mService = service;
-        updateNotification(/* serviceStarting= */ true, /* shouldLogNotification= */ true);
+        MediaNotificationManager.setService(getMediaTypeId(), service);
+
+        if (mMediaNotificationInfo == null) {
+            finishStartingForegroundServiceOnO(
+                    mService,
+                    mDelegate.createNotificationWrapperBuilder().buildNotificationWrapper());
+            ForegroundServiceUtils.getInstance()
+                    .stopForeground(mService, Service.STOP_FOREGROUND_REMOVE);
+            return;
+        }
+
+        // Record UMA metrics for the show event.
+        if (shouldBeForeground() && !mIsForeground) {
+            promote(/* shouldLogNotification= */ true);
+        } else {
+            // Android O+ requires startForeground() after startForegroundService() even if the
+            // media
+            // is now paused/inactive. Start FGS then immediately demote to a background
+            // notification.
+            updateMediaSession();
+            updateNotificationBuilder();
+            NotificationWrapper notification = mNotificationBuilder.buildNotificationWrapper();
+            finishStartingForegroundServiceOnO(mService, notification);
+
+            boolean stopFgs = true;
+            if (MediaNotificationManager.isMultipleMediaNotificationsEnabled()) {
+                stopFgs = !MediaNotificationManager.hasPlayingController(getMediaTypeId());
+            }
+            demoteInternal(stopFgs);
+            updateNotification(/* shouldLogNotification= */ true);
+        }
     }
 
     /** Handles the service destruction. */
     public void onServiceDestroyed() {
         mService = null;
+        MediaNotificationManager.setService(getMediaTypeId(), null);
     }
 
     public boolean processIntent(Service service, @Nullable Intent intent) {
@@ -556,9 +626,8 @@ public class MediaNotificationController {
             onPlay(MediaNotificationListener.ACTION_SOURCE_MEDIA_NOTIFICATION);
         } else if (ACTION_PAUSE.equals(action)) {
             onPause(MediaNotificationListener.ACTION_SOURCE_MEDIA_NOTIFICATION);
-        } else if (AudioManager.ACTION_AUDIO_BECOMING_NOISY.equals(action)) {
-            onPause(MediaNotificationListener.ACTION_SOURCE_HEADSET_UNPLUG);
         } else if (ACTION_PREVIOUS_TRACK.equals(action)) {
+
             onMediaSessionAction(MediaSessionAction.PREVIOUS_TRACK);
         } else if (ACTION_NEXT_TRACK.equals(action)) {
             onMediaSessionAction(MediaSessionAction.NEXT_TRACK);
@@ -576,6 +645,7 @@ public class MediaNotificationController {
         // or something that isn't properly cleaned up but given that the
         // crashes are rare and the fix is simple, null check was enough.
         if (mMediaNotificationInfo == null || !mMediaNotificationInfo.isPaused) return;
+
         mMediaNotificationInfo.listener.onPlay(actionSource);
     }
 
@@ -585,21 +655,7 @@ public class MediaNotificationController {
         // is no longer available. It's unclear if it is a Support Library issue
         // or something that isn't properly cleaned up but given that the
         // crashes are rare and the fix is simple, null check was enough.
-        if (mMediaNotificationInfo == null) return;
-
-        if (mMediaNotificationInfo.isPaused) {
-            // If already paused, receiving a PAUSE command from the MediaSession indicates
-            // the external controller is out of sync (e.g. it believes the audio stream is active).
-            // We interpret this redundant PAUSE as a user intent to resume playback.
-            //
-            // We specifically check for ACTION_SOURCE_MEDIA_SESSION to avoid side effects from
-            // other pause sources, such as unplugging headphones (ACTION_SOURCE_HEADSET_UNPLUG),
-            // which should never trigger playback.
-            if (actionSource == MediaNotificationListener.ACTION_SOURCE_MEDIA_SESSION) {
-                onPlay(actionSource);
-            }
-            return;
-        }
+        if (mMediaNotificationInfo == null || mMediaNotificationInfo.isPaused) return;
 
         mMediaNotificationInfo.listener.onPause(actionSource);
     }
@@ -640,26 +696,47 @@ public class MediaNotificationController {
             return;
         }
 
+        updateTimeOfLastPause(mediaNotificationInfo.isPaused);
+
         mMediaNotificationInfo = mediaNotificationInfo;
 
-        // If there's no pending service start request, don't try to start service. If there is a
-        // pending service start request but the service haven't started yet, only update the
-        // |mMediaNotificationInfo|. The service will update the notification later once it's
-        // started.
         if (mService == null && mediaNotificationInfo.isPaused) return;
 
         if (mService == null) {
             updateMediaSession();
             updateNotificationBuilder();
-            // This is not allowed from the background, and there is no workaround on S+.  Just
-            // catch the exception, and `mService` will remain null for us to try again later.
-            try {
-                ForegroundServiceUtils.getInstance()
-                        .startForegroundService(assertNonNull(mDelegate.createServiceIntent()));
-            } catch (RuntimeException e) {
+            // If a foreground service is already running for another tab, reuse it instead
+            // of starting a new one. Android only permits one active FGS instance of this
+            // class, and starting another from the background would crash on Android S+.
+            Service sharedService = MediaNotificationManager.getService(getMediaTypeId());
+            if (sharedService != null) {
+                mService = sharedService;
+                // Reusing an existing service means this notification is newly shown for this
+                // controller. Record UMA metrics for the show event.
+                if (shouldBeForeground() && !mIsForeground) {
+                    promote(/* shouldLogNotification= */ true);
+                } else {
+                    updateNotification(/* shouldLogNotification= */ true);
+                }
+            } else {
+                // This is not allowed from the background, and there is no workaround on S+. If it
+                // fails, `mService` will remain null for us to try again later.
+                try {
+                    Intent intent = assertNonNull(mDelegate.createServiceIntent());
+                    intent.putExtra(EXTRA_NOTIFICATION_ID, mediaNotificationInfo.id);
+                    ForegroundServiceUtils.getInstance().startForegroundService(intent);
+                } catch (RuntimeException e) {
+                    Log.e(TAG, "Failed to start foreground service", e);
+                }
             }
         } else {
-            updateNotification(false, false);
+            // The service is already running for this controller. This is just an update to
+            // an existing notification, so do not record the UMA show event again.
+            if (shouldBeForeground() && !mIsForeground) {
+                promote(/* shouldLogNotification= */ false);
+            } else {
+                updateNotification(/* shouldLogNotification= */ false);
+            }
         }
     }
 
@@ -679,9 +756,11 @@ public class MediaNotificationController {
 
     public void clearNotification() {
         mThrottler.clearPendingNotifications();
-        if (mMediaNotificationInfo == null) return;
-
-        BaseNotificationManagerProxyFactory.create().cancel(mMediaNotificationInfo.id);
+        if (mMediaNotificationInfo != null) {
+            BaseNotificationManagerProxyFactory.create().cancel(mMediaNotificationInfo.id);
+            mMediaNotificationInfo = null;
+            mTimeOfLastPauseMs = -1;
+        }
 
         if (mMediaSession != null) {
             mMediaSession.setCallback(null);
@@ -690,11 +769,23 @@ public class MediaNotificationController {
             mMediaSession = null;
         }
         stopListenerService();
-        mMediaNotificationInfo = null;
         mNotificationBuilder = null;
     }
 
+    private void updateTimeOfLastPause(boolean isPaused) {
+        if (isPaused) {
+            if (mTimeOfLastPauseMs < 0) {
+                mTimeOfLastPauseMs = TimeUtils.elapsedRealtimeMillis();
+            }
+        } else {
+            mTimeOfLastPauseMs = -1;
+        }
+    }
+
     public void queueNotification(MediaNotificationInfo mediaNotificationInfo) {
+        // Record pause timestamp immediately at the time the pause event is received,
+        // preventing the timestamp from being delayed by Throttler (up to 500ms).
+        updateTimeOfLastPause(mediaNotificationInfo.isPaused);
         mThrottler.queueNotification(mediaNotificationInfo);
     }
 
@@ -718,9 +809,17 @@ public class MediaNotificationController {
     public void stopListenerService() {
         if (mService == null) return;
 
+        if (MediaNotificationManager.isServiceNeeded(
+                getMediaTypeId(), mDelegate.getNotificationId())) {
+            mService = null;
+            return;
+        }
+
         ForegroundServiceUtils.getInstance()
                 .stopForeground(mService, Service.STOP_FOREGROUND_REMOVE);
         mService.stopSelf();
+        mService = null;
+        mIsForeground = false;
     }
 
     @VisibleForTesting
@@ -761,59 +860,31 @@ public class MediaNotificationController {
     }
 
     @VisibleForTesting
-    public void updateNotification(boolean serviceStarting, boolean shouldLogNotification) {
-        if (mService == null) return;
+    public boolean updateNotification(boolean shouldLogNotification) {
+        if (mService == null) return false;
+        if (mMediaNotificationInfo == null) return false;
 
-        if (mMediaNotificationInfo == null) {
-            if (serviceStarting) {
-                finishStartingForegroundServiceOnO(
-                        mService,
-                        mDelegate.createNotificationWrapperBuilder().buildNotificationWrapper());
-                ForegroundServiceUtils.getInstance()
-                        .stopForeground(mService, Service.STOP_FOREGROUND_REMOVE);
-            }
-            return;
-        }
         updateMediaSession();
         updateNotificationBuilder();
 
         NotificationWrapper notification = mNotificationBuilder.buildNotificationWrapper();
 
-        // On O, finish starting the foreground service nevertheless, or Android will
-        // crash Chrome.
-        boolean finishedForegroundingService =
-                serviceStarting && finishStartingForegroundServiceOnO(mService, notification);
-
-        // We keep the service as a foreground service while the media is playing. When it is not,
-        // the service isn't stopped but is no longer in foreground, thus at a lower priority.
-        // While the service is in foreground, the associated notification can't be swipped away.
-        // Moving it back to background allows the user to remove the notification.
-        if (mMediaNotificationInfo.supportsSwipeAway() && mMediaNotificationInfo.isPaused) {
-            ForegroundServiceUtils.getInstance()
-                    .stopForeground(mService, Service.STOP_FOREGROUND_DETACH);
-            BaseNotificationManagerProxy manager = BaseNotificationManagerProxyFactory.create();
-            manager.notify(notification);
-        } else if (!finishedForegroundingService) {
-            // We did not foreground the service and update the notification above, so we should do
-            // so here.  On S and later, we cannot foreground the service if we're not currently
-            // in the foreground, and on Q and later the background activity start restrictions
-            // prevent us from launching a trampoline to fix it.  Try it, and see if it works.  If
-            // not, then update the notification and leave the service in the background.
-            try {
-                ForegroundServiceUtils.getInstance()
-                        .startForeground(
-                                mService,
-                                mMediaNotificationInfo.id,
-                                notification.getNotification(),
-                                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
-            } catch (RuntimeException e) {
+        boolean success = false;
+        if (mIsForeground) {
+            success = promoteInternal(notification);
+            if (success) {
                 BaseNotificationManagerProxy manager = BaseNotificationManagerProxyFactory.create();
                 manager.notify(notification);
             }
+        } else {
+            BaseNotificationManagerProxy manager = BaseNotificationManagerProxyFactory.create();
+            manager.notify(notification);
+            success = true;
         }
         if (shouldLogNotification) {
             mDelegate.logNotificationShown(notification);
         }
+        return success;
     }
 
     @VisibleForTesting
@@ -828,8 +899,15 @@ public class MediaNotificationController {
         mNotificationBuilder.setSmallIcon(mMediaNotificationInfo.notificationSmallIcon);
         mNotificationBuilder.setAutoCancel(false);
         mNotificationBuilder.setLocalOnly(true);
-        mNotificationBuilder.setGroup(mDelegate.getNotificationGroupName());
-        mNotificationBuilder.setGroupSummary(true);
+        // Do not group notifications when multiple media notifications are enabled.
+        // Otherwise, Android SystemUI will group them and the media carousel may
+        // only show a single card for the group instead of individual cards for each tab.
+        if (MediaNotificationManager.isMultipleMediaNotificationsEnabled()) {
+            mNotificationBuilder.setGroup(Integer.toString(mMediaNotificationInfo.id));
+        } else {
+            mNotificationBuilder.setGroup(mDelegate.getNotificationGroupName());
+            mNotificationBuilder.setGroupSummary(true);
+        }
 
         if (mMediaNotificationInfo.supportsSwipeAway()) {
             mNotificationBuilder.setOngoing(!mMediaNotificationInfo.isPaused);
@@ -1128,6 +1206,126 @@ public class MediaNotificationController {
         }
 
         return CollectionUtil.integerCollectionToIntArray(compactActions);
+    }
+
+    public boolean isPaused() {
+        return mMediaNotificationInfo == null || mMediaNotificationInfo.isPaused;
+    }
+
+    public @MediaTypeId int getMediaTypeId() {
+        return mDelegate.getMediaTypeId();
+    }
+
+    /**
+     * Internal helper to detach FGS status and update state without re-entering
+     * updateNotification().
+     */
+    private void demoteInternal(boolean stopFgs) {
+        if (mService == null) return;
+        if (stopFgs) {
+            ForegroundServiceUtils.getInstance()
+                    .stopForeground(mService, Service.STOP_FOREGROUND_DETACH);
+        }
+        mIsForeground = false;
+    }
+
+    /** Internal helper to start FGS and update state using a pre-built notification wrapper. */
+    private boolean promoteInternal(NotificationWrapper notification) {
+        if (mService == null || mMediaNotificationInfo == null) return false;
+        if (notification == null || notification.getNotification() == null) return false;
+
+        try {
+            ForegroundServiceUtils.getInstance()
+                    .startForeground(
+                            mService,
+                            mMediaNotificationInfo.id,
+                            notification.getNotification(),
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
+            mIsForeground = true;
+            return true;
+        } catch (RuntimeException e) {
+            // Android S+ background execution restrictions or OEM-specific rules may throw an
+            // exception if trying to start a foreground service from the background. Fall back to
+            // showing a normal background notification so media controls remain visible.
+            mIsForeground = false;
+            BaseNotificationManagerProxy manager = BaseNotificationManagerProxyFactory.create();
+            manager.notify(notification);
+            return false;
+        }
+    }
+
+    /**
+     * Promotes this controller's notification to own the Foreground Service (FGS). This transitions
+     * the shared service to the foreground and displays this notification as the active,
+     * non-swipeable FGS notification to protect playback.
+     */
+    public boolean promote() {
+        return promote(false);
+    }
+
+    public boolean promote(boolean shouldLogNotification) {
+        if (mService == null || mMediaNotificationInfo == null) return false;
+        if (mIsForeground) return true;
+
+        mIsForeground = true;
+        boolean success = updateNotification(shouldLogNotification);
+        if (!success) {
+            mIsForeground = false;
+        }
+        return success;
+    }
+
+    /**
+     * Demotes this controller's notification from the Foreground Service (FGS). This transitions
+     * the shared service to the background, making this notification a normal background
+     * notification that the user can swipe away.
+     *
+     * @param stopFgs If true, stops the Foreground Service FGS status entirely. If false, keeps the
+     *     service running in the background.
+     */
+    public void demote(boolean stopFgs) {
+        if (mService == null) return;
+        if (!mIsForeground) return;
+
+        mIsForeground = false;
+        demoteInternal(stopFgs);
+        updateNotification(/* shouldLogNotification= */ false);
+    }
+
+    public boolean isForeground() {
+        return mIsForeground;
+    }
+
+    /**
+     * Checks if this controller's notification should be attached to the Foreground Service (FGS).
+     *
+     * <p>A notification should be in the foreground if:
+     *
+     * <ul>
+     *   <li>It has active notification info, AND
+     *   <li>It is not paused (unless it is non-swipeable, in which case it remains in FGS even when
+     *       paused), AND
+     *   <li>It is the active notification for its media type (or multiple notifications are
+     *       disabled).
+     * </ul>
+     *
+     * @return True if the notification should be in the foreground, false otherwise.
+     */
+    private boolean shouldBeForeground() {
+        if (mMediaNotificationInfo == null) {
+            return false;
+        }
+        if (mMediaNotificationInfo.supportsSwipeAway() && mMediaNotificationInfo.isPaused) {
+            return false;
+        }
+        if (!MediaNotificationManager.isMultipleMediaNotificationsEnabled()) {
+            return true;
+        }
+        return MediaNotificationManager.isNotificationActive(mDelegate.getNotificationId());
+    }
+
+    public void setIsForegroundForTesting(boolean isForeground) {
+        mIsForeground = isForeground;
     }
 
     private static Context getContext() {

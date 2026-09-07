@@ -14,6 +14,7 @@
 #include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "components/sessions/content/content_serialized_navigation_builder.h"
 #include "components/sessions/core/session_types.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/restore_type.h"
 #include "content/public/browser/web_contents.h"
@@ -97,9 +98,13 @@ content::WebContents* SessionRestore::RestoreForeignSessionTab(
   DCHECK(disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB ||
          disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB);
   // Do not select a tab here it will interrupt bulk session restores.
-  tab_model->CreateTab(
-      current_tab, std::move(new_web_contents), TabModel::kInvalidIndex,
-      TabModel::TabLaunchType::FROM_RECENT_TABS, /*should_pin=*/false);
+  TabModel::TabLaunchType launch_type =
+      disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB
+          ? TabModel::TabLaunchType::FROM_RECENT_TABS_FOREGROUND
+          : TabModel::TabLaunchType::FROM_RECENT_TABS;
+  tab_model->CreateTab(current_tab, std::move(new_web_contents),
+                       TabModel::kInvalidIndex, launch_type,
+                       /*should_pin=*/false);
   return raw_new_web_contents;
 }
 

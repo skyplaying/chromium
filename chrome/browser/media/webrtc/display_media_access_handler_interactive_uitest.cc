@@ -2,16 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/media/webrtc/display_media_access_handler.h"
+
 #include "base/run_loop.h"
 #include "base/test/run_until.h"
 #include "build/build_config.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/media/webrtc/desktop_media_picker_manager.h"
-#include "chrome/browser/media/webrtc/display_media_access_handler.h"
 #include "chrome/browser/media/webrtc/webrtc_browsertest_base.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/preloading/scoped_prewarm_feature_list.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/browser_widget.h"
@@ -23,6 +24,11 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/window_open_disposition.h"
+
+#if BUILDFLAG(IS_OZONE)
+#include "ui/ozone/public/ozone_platform.h"
+#endif
 
 namespace {
 
@@ -62,7 +68,7 @@ class DisplayMediaAccessHandlerInteractiveUITest
 
     // Don't allow system audio to be selected.
     content::WebContents* web_contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
     HostContentSettingsMap* content_settings =
         HostContentSettingsMapFactory::GetForProfile(
             web_contents->GetBrowserContext());
@@ -103,16 +109,15 @@ IN_PROC_BROWSER_TEST_P(DisplayMediaAccessHandlerInteractiveUITest,
   const bool focus_opener = std::get<0>(GetParam());
   const bool request_from_opener = std::get<1>(GetParam());
 #if BUILDFLAG(IS_LINUX)
-#if BUILDFLAG(SUPPORTS_OZONE_WAYLAND)
   // Wayland doesn't support changing window activation programmatically, so we
   // can't focus the opener.  The pip window will have the focus when it opens.
   // Note that if it doesn't have focus for some reason (i.e., something
   // changes), then the `FocusAndWait()` call, below, will time out waiting for
   // it to become focused.
-  if (focus_opener) {
-    GTEST_SKIP();
+  if (focus_opener && ::ui::OzonePlatform::RunningOnWaylandForTest()) {
+    GTEST_SKIP() << "Wayland doesn't support changing window activation "
+                    "programmatically";
   }
-#endif
 #endif
 
   // Navigate to an empty page.
@@ -123,7 +128,7 @@ IN_PROC_BROWSER_TEST_P(DisplayMediaAccessHandlerInteractiveUITest,
   picker_manager->AddObserver(this);
 
   content::WebContents* opener_web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   run_loop_ = std::make_unique<base::RunLoop>();
   // Open a pip window and wait for it to show up.  This allows us to change the
   // focus if we want.
@@ -170,11 +175,12 @@ INSTANTIATE_TEST_SUITE_P(DisplayMediaAccessHandlerInteractiveUITest,
 IN_PROC_BROWSER_TEST_F(DisplayMediaAccessHandlerInteractiveUITest,
                        PickerShowsUpEvenIfOpenerIsHidden) {
 #if BUILDFLAG(IS_LINUX)
-#if BUILDFLAG(SUPPORTS_OZONE_WAYLAND)
   // Wayland doesn't support changing window activation programmatically, so we
   // can't re-focus the pip window.
-  GTEST_SKIP();
-#endif
+  if (::ui::OzonePlatform::RunningOnWaylandForTest()) {
+    GTEST_SKIP() << "Wayland doesn't support changing window activation "
+                    "programmatically";
+  }
 #endif
 
   ASSERT_TRUE(embedded_test_server()->Start());
@@ -187,7 +193,7 @@ IN_PROC_BROWSER_TEST_F(DisplayMediaAccessHandlerInteractiveUITest,
   picker_manager->AddObserver(this);
 
   content::WebContents* opener_web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   run_loop_ = std::make_unique<base::RunLoop>();
   // Open a pip window and wait for it to show up.
   EXPECT_EQ(true, content::EvalJs(opener_web_contents->GetPrimaryMainFrame(),

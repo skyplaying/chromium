@@ -7,21 +7,23 @@ import 'chrome://tab-search.top-chrome/tab_search.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {MetricsReporterImpl} from 'chrome://resources/js/metrics_reporter/metrics_reporter.js';
 import type {ProfileData, RecentlyClosedTab, Tab, TabSearchItemElement, TabSearchPageElement} from 'chrome://tab-search.top-chrome/tab_search.js';
-import {SEARCH_QUERY_MAX_LENGTH, TabGroupColor, TabSearchApiProxyImpl} from 'chrome://tab-search.top-chrome/tab_search.js';
-import {assertEquals, assertFalse, assertGT, assertNotEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
+import {SEARCH_QUERY_MAX_LENGTH, SearchApiProxyImpl, SplitTabLayout, SplitViewData, TabGroupColor, TabSearchApiProxyImpl, TabSearchUserAction} from 'chrome://tab-search.top-chrome/tab_search.js';
+import {assertDeepEquals, assertEquals, assertFalse, assertGT, assertNotEquals, assertTrue} from 'chrome://webui-test/chai_assert.js';
 import {keyDownOn} from 'chrome://webui-test/keyboard_mock_interactions.js';
+import {fakeMetricsPrivate} from 'chrome://webui-test/metrics_test_support.js';
 import {MockedMetricsReporter} from 'chrome://webui-test/mocked_metrics_reporter.js';
 import {eventToPromise, microtasksFinished} from 'chrome://webui-test/test_util.js';
 
 import {createProfileData, createTab, generateSampleDataFromSiteNames, generateSampleRecentlyClosedTabs, generateSampleRecentlyClosedTabsFromSiteNames, generateSampleTabsFromSiteNames, SAMPLE_RECENTLY_CLOSED_DATA, SAMPLE_WINDOW_HEIGHT, sampleToken} from './tab_search_test_data.js';
 import {initLoadTimeDataWithDefaults} from './tab_search_test_helper.js';
+import {TestSearchApiProxy} from './test_search_api_proxy.js';
 import {TestTabSearchApiProxy} from './test_tab_search_api_proxy.js';
 
 suite('TabSearchAppTest', () => {
   let tabSearchPage: TabSearchPageElement;
   let testProxy: TestTabSearchApiProxy;
 
-  // http://crbug.com/1481787: Replace this function with
+  // http://crbug.com/40072096: Replace this function with
   // tabSearchPage.setValue() to be able to reproduce the bug.
   function setSearchText(text: string) {
     tabSearchPage.getSearchInput().value = text;
@@ -37,7 +39,7 @@ suite('TabSearchAppTest', () => {
 
   function queryRows(): NodeListOf<HTMLElement> {
     return tabSearchPage.$.tabsList.querySelectorAll(
-        'tab-search-item, tab-search-group-item');
+        'tab-search-item, tab-search-group-item, tab-search-split-item');
   }
 
   function queryListTitle(): NodeListOf<HTMLElement> {
@@ -59,6 +61,7 @@ suite('TabSearchAppTest', () => {
     testProxy = new TestTabSearchApiProxy();
     testProxy.setProfileData(sampleData);
     TabSearchApiProxyImpl.setInstance(testProxy);
+    SearchApiProxyImpl.setInstance(new TestSearchApiProxy());
 
     tabSearchPage = document.createElement('tab-search-page');
     tabSearchPage.availableHeight = 500;
@@ -82,7 +85,7 @@ suite('TabSearchAppTest', () => {
             active: true,
             isHostWindow: true,
             height: SAMPLE_WINDOW_HEIGHT,
-            tabs: generateSampleTabsFromSiteNames(['OpenTab1'], true),
+            tabs: generateSampleTabsFromSiteNames(['OpenTab1']),
           }],
           recentlyClosedTabs: generateSampleRecentlyClosedTabs(
               'Sample Tab', sampleTabCount, sampleToken(0n, 1n)),
@@ -96,6 +99,7 @@ suite('TabSearchAppTest', () => {
             lastActiveTime: {internalValue: BigInt(sampleTabCount + 1)},
             lastActiveElapsedText: '',
           }],
+          recentlyClosedSplitViews: [],
           recentlyClosedSectionExpanded: true,
         },
         {
@@ -127,7 +131,7 @@ suite('TabSearchAppTest', () => {
             active: true,
             isHostWindow: true,
             height: SAMPLE_WINDOW_HEIGHT,
-            tabs: generateSampleTabsFromSiteNames(['OpenTab1'], true),
+            tabs: generateSampleTabsFromSiteNames(['OpenTab1']),
           }],
           recentlyClosedTabs: generateSampleRecentlyClosedTabsFromSiteNames(
               ['RecentlyClosedTab1', 'RecentlyClosedTab2']),
@@ -183,7 +187,7 @@ suite('TabSearchAppTest', () => {
             active: true,
             isHostWindow: true,
             height: SAMPLE_WINDOW_HEIGHT,
-            tabs: generateSampleTabsFromSiteNames(['Open sample tab'], true),
+            tabs: generateSampleTabsFromSiteNames(['Open sample tab']),
           }],
           recentlyClosedTabs: generateSampleRecentlyClosedTabs(
               'Sample Tab', sampleTabCount, sampleToken(0n, 1n)),
@@ -255,6 +259,7 @@ suite('TabSearchAppTest', () => {
       lastActiveElapsedText: '',
       lastActiveTime: {internalValue: BigInt(11)},
       groupId: null,
+      splitId: null,
     };
 
     await setupTest(createProfileData({
@@ -275,12 +280,11 @@ suite('TabSearchAppTest', () => {
     const tabSearchItem = tabSearchPage.$.tabsList.querySelector<HTMLElement>(
         'tab-search-item[id="100"]')!;
     tabSearchItem.click();
-    const [tabId, withSearch, isTab, index] =
+    const [tabId, withSearch, isTab] =
         await testProxy.whenCalled('openRecentlyClosedEntry');
     assertEquals(tabData.tabId, tabId);
     assertFalse(withSearch);
     assertTrue(isTab);
-    assertEquals(0, index);
   });
 
   test('Click on recently closed tab group item triggers action', async () => {
@@ -312,12 +316,11 @@ suite('TabSearchAppTest', () => {
     const tabSearchItem =
         tabSearchPage.$.tabsList.querySelector('tab-search-group-item')!;
     tabSearchItem.click();
-    const [id, withSearch, isTab, index] =
+    const [id, withSearch, isTab] =
         await testProxy.whenCalled('openRecentlyClosedEntry');
     assertEquals(tabGroupData.sessionId, id);
     assertFalse(withSearch);
     assertFalse(isTab);
-    assertEquals(0, index);
   });
 
   test('Keyboard navigation on an empty list', async () => {
@@ -481,7 +484,7 @@ suite('TabSearchAppTest', () => {
         active: true,
         isHostWindow: true,
         height: SAMPLE_WINDOW_HEIGHT,
-        tabs: generateSampleTabsFromSiteNames(['OpenTab1'], true),
+        tabs: generateSampleTabsFromSiteNames(['OpenTab1']),
       }],
     }));
     verifyTabIds(queryRows(), [1]);
@@ -528,8 +531,7 @@ suite('TabSearchAppTest', () => {
         active: true,
         isHostWindow: true,
         height: SAMPLE_WINDOW_HEIGHT,
-        tabs:
-            generateSampleTabsFromSiteNames(['SampleTab', 'SampleTab2'], true),
+        tabs: generateSampleTabsFromSiteNames(['SampleTab', 'SampleTab2']),
       }],
       recentlyClosedSectionExpanded: true,
     }));
@@ -544,6 +546,7 @@ suite('TabSearchAppTest', () => {
         url: 'https://www.sampletab.com',
         lastActiveTime: {internalValue: BigInt(3)},
         lastActiveElapsedText: '',
+        splitId: null,
       }],
     });
     await microtasksFinished();
@@ -561,12 +564,15 @@ suite('TabSearchAppTest', () => {
     await microtasksFinished();
     assertEquals(1, testProxy.getCallCount('getProfileData'));
 
-    // When visible visibilitychange should trigger the data callback.
+    // When visible visibilitychange should trigger the data callback if
+    // optimizations are disabled, or rely on TabsChanged if enabled.
     Object.defineProperty(
         document, 'visibilityState', {value: 'visible', writable: true});
     document.dispatchEvent(new Event('visibilitychange'));
     await microtasksFinished();
-    assertEquals(2, testProxy.getCallCount('getProfileData'));
+    const expectedCalls =
+        loadTimeData.getBoolean('tabSearchPerformanceImprovements') ? 1 : 2;
+    assertEquals(expectedCalls, testProxy.getCallCount('getProfileData'));
   });
 
   test('Verify hiding document resets selection and search text', async () => {
@@ -580,7 +586,7 @@ suite('TabSearchAppTest', () => {
     verifyTabIds(queryRows(), [6, 4]);
     assertEquals(0, tabSearchPage.getSelectedTabIndex());
     keyDownOn(searchField, 0, [], 'ArrowDown');
-    assertEquals('Apple', tabSearchPage.getSearchTextForTesting());
+    assertEquals('Apple', tabSearchPage.getSearchInput().value);
     assertEquals(1, tabSearchPage.getSelectedTabIndex());
 
     // When hidden visibilitychange should reset selection and search text.
@@ -589,7 +595,7 @@ suite('TabSearchAppTest', () => {
     document.dispatchEvent(new Event('visibilitychange'));
     await microtasksFinished();
     verifyTabIds(queryRows(), [1, 5, 6, 2, 3, 4]);
-    assertEquals('', tabSearchPage.getSearchTextForTesting());
+    assertEquals('', tabSearchPage.getSearchInput().value);
     assertEquals(0, tabSearchPage.getSelectedTabIndex());
 
     // State should match that of the hidden state when visible again.
@@ -598,35 +604,44 @@ suite('TabSearchAppTest', () => {
     document.dispatchEvent(new Event('visibilitychange'));
     await microtasksFinished();
     verifyTabIds(queryRows(), [1, 5, 6, 2, 3, 4]);
-    assertEquals('', tabSearchPage.getSearchTextForTesting());
+    assertEquals('', tabSearchPage.getSearchInput().value);
     assertEquals(0, tabSearchPage.getSelectedTabIndex());
   });
 
   test('Verify tab switch is called correctly', async () => {
+    const metrics = fakeMetricsPrivate();
     await setupTest(createProfileData());
-    // Make sure that tab data has been recieved.
+    // Make sure that tab data has been received.
     verifyTabIds(queryRows(), [1, 5, 6, 2, 3, 4]);
 
-    // Click the first element with tabId 1.
+    // Click the first element with tabId 1 (current window tab).
     let tabSearchItem = tabSearchPage.$.tabsList.querySelector<HTMLElement>(
         'tab-search-item[id="1"]')!;
     tabSearchItem.click();
 
     // Assert switchToTab() was called appropriately for an unfiltered tab list.
-    await testProxy.whenCalled('switchToTab').then(([tabInfo]) => {
-      assertEquals(1, tabInfo.tabId);
-    });
+    let [tabInfo] = await testProxy.whenCalled('switchToTab');
+    assertEquals(1, tabInfo.tabId);
+    assertEquals(
+        1,
+        metrics.count(
+            'Tabs.TabSearch.WebUI.Action',
+            TabSearchUserAction.IN_UNFILTERED_LIST_SWITCHED_TAB));
 
     testProxy.reset();
-    // Click the first element with tabId 6.
+    // Click element with tabId 2 (other window tab).
     tabSearchItem = tabSearchPage.$.tabsList.querySelector<HTMLElement>(
-        'tab-search-item[id="6"]')!;
+        'tab-search-item[id="2"]')!;
     tabSearchItem.click();
 
     // Assert switchToTab() was called appropriately for an unfiltered tab list.
-    await testProxy.whenCalled('switchToTab').then(([tabInfo]) => {
-      assertEquals(6, tabInfo.tabId);
-    });
+    [tabInfo] = await testProxy.whenCalled('switchToTab');
+    assertEquals(2, tabInfo.tabId);
+    assertEquals(
+        1,
+        metrics.count(
+            'Tabs.TabSearch.WebUI.Action',
+            TabSearchUserAction.IN_UNFILTERED_LIST_SWITCHED_OTHER_WINDOW_TAB));
 
     // Force a change to filtered tab data that would result in a
     // re-render.
@@ -635,27 +650,50 @@ suite('TabSearchAppTest', () => {
     verifyTabIds(queryRows(), [2]);
 
     testProxy.reset();
-    // Click the only remaining element with tabId 2.
+    // Click the only remaining element with tabId 2 (other window tab, in
+    // filtered list).
     tabSearchItem = tabSearchPage.$.tabsList.querySelector<HTMLElement>(
         'tab-search-item[id="2"]')!;
     tabSearchItem.click();
 
-    // Assert switchToTab() was called appropriately for a tab list fitlered by
+    // Assert switchToTab() was called appropriately for a tab list filtered by
     // the search query.
-    await testProxy.whenCalled('switchToTab').then(([tabInfo]) => {
-      assertEquals(2, tabInfo.tabId);
-    });
+    [tabInfo] = await testProxy.whenCalled('switchToTab');
+    assertEquals(2, tabInfo.tabId);
+    assertEquals(
+        1,
+        metrics.count(
+            'Tabs.TabSearch.WebUI.Action',
+            TabSearchUserAction.IN_FILTERED_LIST_SWITCHED_OTHER_WINDOW_TAB));
+
+    setSearchText('google');
+    await microtasksFinished();
+    verifyTabIds(queryRows(), [1]);
+
+    testProxy.reset();
+    // Click element with tabId 1 (current window tab, in filtered list).
+    tabSearchItem = tabSearchPage.$.tabsList.querySelector<HTMLElement>(
+        'tab-search-item[id="1"]')!;
+    tabSearchItem.click();
+
+    [tabInfo] = await testProxy.whenCalled('switchToTab');
+    assertEquals(1, tabInfo.tabId);
+    assertEquals(
+        1,
+        metrics.count(
+            'Tabs.TabSearch.WebUI.Action',
+            TabSearchUserAction.IN_FILTERED_LIST_SWITCHED_TAB));
   });
 
-  test('Verify notifySearchUiReadyToShow() is called correctly', async () => {
+  test('Verify maybeShowUi() is called correctly', async () => {
     await setupTest(createProfileData());
 
     // Make sure that tab data has been received.
     verifyTabIds(queryRows(), [1, 5, 6, 2, 3, 4]);
 
-    // Ensure that notifySearchUiReadyToShow() has been called after the
+    // Ensure that maybeShowUi() has been called after the
     // initial data has been rendered.
-    await testProxy.whenCalled('notifySearchUiReadyToShow');
+    await testProxy.whenCalled('maybeShowUi');
 
     // Force a change to filtered tab data that would result in a
     // re-render.
@@ -663,21 +701,19 @@ suite('TabSearchAppTest', () => {
     await microtasksFinished();
     verifyTabIds(queryRows(), [2]);
 
-    // |notifySearchUiReadyToShow()| should still have only been called once.
-    assertEquals(1, testProxy.getCallCount('notifySearchUiReadyToShow'));
+    // |maybeShowUi()| should still have only been called once.
+    assertEquals(1, testProxy.getCallCount('maybeShowUi'));
   });
 
   test('Sort by most recent active tabs', async () => {
     const tabs = [
       createTab({
-        index: 0,
         tabId: 1,
         title: 'Google',
         url: 'https://www.google.com',
         lastActiveTimeTicks: {internalValue: BigInt(2)},
       }),
       createTab({
-        index: 1,
         tabId: 2,
         title: 'Bing',
         url: 'https://www.bing.com',
@@ -686,7 +722,6 @@ suite('TabSearchAppTest', () => {
         visible: true,
       }),
       createTab({
-        index: 2,
         tabId: 3,
         title: 'Gmail',
         url: 'https://www.gmail.com',
@@ -695,7 +730,6 @@ suite('TabSearchAppTest', () => {
         visible: true,
       }),
       createTab({
-        index: 3,
         tabId: 4,
         title: 'Yahoo',
         url: 'https://www.yahoo.com',
@@ -754,7 +788,7 @@ suite('TabSearchAppTest', () => {
         active: true,
         isHostWindow: true,
         height: SAMPLE_WINDOW_HEIGHT,
-        tabs: generateSampleTabsFromSiteNames(['SampleOpenTab'], true),
+        tabs: generateSampleTabsFromSiteNames(['SampleOpenTab']),
       }],
       recentlyClosedTabs: SAMPLE_RECENTLY_CLOSED_DATA,
       recentlyClosedSectionExpanded: true,
@@ -882,5 +916,324 @@ suite('TabSearchAppTest', () => {
         tabSearchPage.$.tabsList.querySelector('tab-search-item')!;
     assertEquals(
         loadTimeData.getString('blobUrlSource'), tabSearchItem.data.hostname);
+  });
+
+  test('group open split tabs by splitId', async () => {
+    const token = sampleToken(1n, 1n);
+    const tabs = [
+      createTab({
+        tabId: 10,
+        title: 'Tab A',
+        url: 'https://google.com',
+        splitId: token,
+        splitLayout: SplitTabLayout.kSideBySide,
+      }),
+      createTab({
+        tabId: 20,
+        title: 'Tab B',
+        url: 'https://paypal.com',
+        splitId: token,
+        splitLayout: SplitTabLayout.kSideBySide,
+      }),
+      createTab({
+        tabId: 30,
+        title: 'Tab C',
+        url: 'https://yahoo.com',
+      }),
+    ];
+
+    await setupTest(createProfileData({
+      windows: [{
+        active: true,
+        isHostWindow: true,
+        height: SAMPLE_WINDOW_HEIGHT,
+        tabs,
+      }],
+    }));
+
+    assertEquals(2, queryRows().length);
+
+    const splitViewRow =
+        tabSearchPage.$.tabsList.items.find(
+            item => item instanceof SplitViewData) as SplitViewData;
+    assertTrue(!!splitViewRow);
+    assertEquals('Split View', splitViewRow.title);
+    assertEquals(2, splitViewRow.tabCount);
+    assertEquals('https://google.com', splitViewRow.tabUrls[0]);
+    assertEquals('https://paypal.com', splitViewRow.tabUrls[1]);
+
+    const splitViewEl =
+        Array.from(queryRows())
+            .find(row => row.tagName.toLowerCase() === 'tab-search-split-item');
+    assertTrue(!!splitViewEl);
+    assertEquals(
+        'Split view, google.com, paypal.com. Open split view',
+        splitViewEl.getAttribute('aria-label'));
+  });
+
+  test('process recently closed split view into a single row', async () => {
+    const token = sampleToken(2n, 2n);
+    await setupTest(createProfileData({
+      recentlyClosedSplitViews: [{
+        sessionId: 200,
+        id: token,
+        tabCount: 2,
+        lastActiveTime: {internalValue: 0n},
+        lastActiveElapsedText: '3 mins ago',
+        tabUrls: ['https://google.com', 'https://paypal.com'],
+        layout: SplitTabLayout.kSideBySide,
+        groupId: null,
+      }],
+      recentlyClosedSectionExpanded: true,
+    }));
+
+    await tabSearchPage.$.tabsList.ensureAllDomItemsAvailable();
+
+    const rows = queryRows();
+    assertEquals(7, rows.length);
+
+    const splitViewRow =
+        tabSearchPage.$.tabsList.items.find(
+            item => item instanceof SplitViewData) as SplitViewData;
+    assertTrue(!!splitViewRow);
+    assertEquals('Split View', splitViewRow.title);
+    assertEquals(2, splitViewRow.tabCount);
+    assertEquals('https://google.com', splitViewRow.tabUrls[0]);
+    assertEquals('https://paypal.com', splitViewRow.tabUrls[1]);
+
+    const splitViewEl = Array.from(rows).find(
+        row => row.tagName.toLowerCase() === 'tab-search-split-item');
+    assertTrue(!!splitViewEl);
+    const expectedLabel = 'Split view, google.com, paypal.com, 3 mins ago. ' +
+        'Recently closed split view';
+    assertEquals(expectedLabel, splitViewEl.getAttribute('aria-label'));
+  });
+
+  test('group open split tabs gets group info and updates', async () => {
+    const splitToken = sampleToken(1n, 1n);
+    const groupToken = sampleToken(2n, 2n);
+    const tabs = [
+      createTab({
+        tabId: 10,
+        title: 'Tab A',
+        url: 'https://google.com',
+        splitId: splitToken,
+        splitLayout: SplitTabLayout.kSideBySide,
+        groupId: groupToken,
+      }),
+      createTab({
+        tabId: 20,
+        title: 'Tab B',
+        url: 'https://paypal.com',
+        splitId: splitToken,
+        splitLayout: SplitTabLayout.kSideBySide,
+        groupId: groupToken,
+      }),
+    ];
+
+    const tabGroups = [{
+      id: groupToken,
+      color: TabGroupColor.kBlue,
+      title: 'Work Group',
+    }];
+
+    await setupTest(createProfileData({
+      windows: [{
+        active: true,
+        isHostWindow: true,
+        height: SAMPLE_WINDOW_HEIGHT,
+        tabs,
+      }],
+      tabGroups,
+    }));
+
+    assertEquals(1, queryRows().length);
+
+    let splitViewRow =
+        tabSearchPage.$.tabsList.items.find(
+            item => item instanceof SplitViewData) as SplitViewData;
+    assertTrue(!!splitViewRow);
+    assertTrue(!!splitViewRow.tabGroup);
+    assertEquals('Work Group', splitViewRow.tabGroup.title);
+    assertEquals(TabGroupColor.kBlue, splitViewRow.tabGroup.color);
+
+    const newGroupToken = sampleToken(3n, 3n);
+    const updatedTab = createTab({
+      tabId: 10,
+      title: 'Tab A',
+      url: 'https://google.com',
+      splitId: splitToken,
+      splitLayout: SplitTabLayout.kSideBySide,
+      groupId: newGroupToken,
+    });
+
+    testProxy.getCallbackRouterRemote().tabsChanged(createProfileData({
+      windows: [{
+        active: true,
+        isHostWindow: true,
+        height: SAMPLE_WINDOW_HEIGHT,
+        tabs: [updatedTab, tabs[1]!],
+      }],
+      tabGroups: [
+        tabGroups[0]!,
+        {
+          id: newGroupToken,
+          color: TabGroupColor.kRed,
+          title: 'Personal Group',
+        },
+      ],
+    }));
+    await microtasksFinished();
+
+    splitViewRow = tabSearchPage.$.tabsList.items.find(
+                       item => item instanceof SplitViewData) as SplitViewData;
+    assertTrue(!!splitViewRow);
+    assertTrue(!!splitViewRow.tabGroup);
+    assertEquals('Personal Group', splitViewRow.tabGroup.title);
+    assertEquals(TabGroupColor.kRed, splitViewRow.tabGroup.color);
+  });
+
+  test('search matches across both sub-tab titles', async () => {
+    const token = sampleToken(1n, 1n);
+    const tabs = [
+      createTab({
+        tabId: 10,
+        title: 'SearchEngine',
+        url: 'https://google.com',
+        splitId: token,
+      }),
+      createTab({
+        tabId: 20,
+        title: 'PaymentGateway',
+        url: 'https://paypal.com',
+        splitId: token,
+      }),
+    ];
+
+    await setupTest(createProfileData({
+      windows: [{
+        active: true,
+        isHostWindow: true,
+        height: SAMPLE_WINDOW_HEIGHT,
+        tabs,
+      }],
+    }));
+
+    assertEquals(1, queryRows().length);
+
+    setSearchText('Engine');
+    await microtasksFinished();
+    assertEquals(1, queryRows().length);
+
+    setSearchText('Payment');
+    await microtasksFinished();
+    assertEquals(1, queryRows().length);
+
+    setSearchText('Twitter');
+    await microtasksFinished();
+    assertEquals(0, queryRows().length);
+  });
+
+  test('Click on split view close button calls closeTabs', async () => {
+    const token = sampleToken(1n, 1n);
+    const tabs = [
+      createTab({
+        tabId: 10,
+        title: 'SearchEngine',
+        url: 'https://google.com',
+        splitId: token,
+      }),
+      createTab({
+        tabId: 20,
+        title: 'PaymentGateway',
+        url: 'https://paypal.com',
+        splitId: token,
+      }),
+    ];
+
+    await setupTest(createProfileData({
+      windows: [{
+        active: true,
+        isHostWindow: true,
+        height: SAMPLE_WINDOW_HEIGHT,
+        tabs,
+      }],
+    }));
+
+    await tabSearchPage.$.tabsList.ensureAllDomItemsAvailable();
+
+    const splitViewElement =
+        tabSearchPage.$.tabsList.querySelector('tab-search-split-item');
+    assertTrue(!!splitViewElement);
+
+    const closeButton =
+        splitViewElement.shadowRoot.querySelector('cr-icon-button');
+    assertTrue(!!closeButton);
+
+    closeButton.click();
+    const [closedTabIds] = await testProxy.whenCalled('closeTabs');
+    assertDeepEquals([10, 20], closedTabIds);
+  });
+
+  test('aria-activedescendant updates', async () => {
+    await setupTest(createProfileData());
+    const searchInput = tabSearchPage.$.searchInput;
+
+    // Initially, aria-activedescendant is not set.
+    assertFalse(searchInput.hasAttribute('aria-activedescendant'));
+
+    // Type in search input, it should still not be set.
+    setSearchText('Apple');
+    await microtasksFinished();
+    assertFalse(searchInput.hasAttribute('aria-activedescendant'));
+
+    // Press ArrowDown. This should activate keyboard navigation and set
+    // aria-activedescendant.
+    const searchField = tabSearchPage.$.searchField;
+    keyDownOn(searchField, 0, [], 'ArrowDown');
+    await microtasksFinished();
+
+    assertTrue(searchInput.hasAttribute('aria-activedescendant'));
+    const activeId1 = searchInput.getAttribute('aria-activedescendant');
+    assertTrue(!!activeId1);
+
+    const rows = queryRows();
+    const activeIndex = tabSearchPage.getSelectedTabIndex();
+    const activeElementId = rows[activeIndex]!.id;
+    assertEquals(activeElementId, activeId1);
+
+    // Press ArrowDown again. This should move selection and update
+    // aria-activedescendant.
+    keyDownOn(searchField, 0, [], 'ArrowDown');
+    await microtasksFinished();
+
+    const activeId2 = searchInput.getAttribute('aria-activedescendant');
+    const activeIndex2 = tabSearchPage.getSelectedTabIndex();
+    const activeElementId2 = rows[activeIndex2]!.id;
+    assertEquals(activeElementId2, activeId2, 'hello');
+    assertNotEquals(activeId1, activeId2);
+
+    // Type again. This should remove aria-activedescendant.
+    setSearchText('A');
+    await microtasksFinished();
+    assertFalse(searchInput.hasAttribute('aria-activedescendant'));
+
+    // Reactivate keyboard navigation.
+    keyDownOn(searchField, 0, [], 'ArrowDown');
+    await microtasksFinished();
+    assertTrue(searchInput.hasAttribute('aria-activedescendant'));
+  });
+
+  test('aria-posinset and aria-setsize', async () => {
+    await setupTest(createProfileData());
+
+    await tabSearchPage.$.tabsList.ensureAllDomItemsAvailable();
+    const rows = queryRows();
+
+    assertEquals(6, rows.length);
+    rows.forEach((row, index) => {
+      assertEquals((index + 1).toString(), row.ariaPosInSet);
+      assertEquals('6', row.ariaSetSize);
+    });
   });
 });

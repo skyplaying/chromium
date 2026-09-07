@@ -6,6 +6,7 @@
 #include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/autofill/content/browser/content_autofill_driver.h"
 #include "components/autofill/content/browser/test_autofill_client_injector.h"
@@ -16,7 +17,7 @@
 #include "components/autofill/core/browser/data_model/payments/credit_card.h"
 #include "components/autofill/core/browser/foundations/browser_autofill_manager.h"
 #include "components/autofill/core/browser/foundations/test_autofill_manager_waiter.h"
-#include "components/autofill/core/common/autofill_test_utils.h"
+#include "components/autofill/core/common/autofill_test_util.h"
 #include "components/optimization_guide/content/browser/page_content_proto_provider.h"
 #include "components/optimization_guide/content/browser/page_content_proto_util.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
@@ -50,7 +51,7 @@ class AutofillAnnotationsProviderBrowserTest : public InProcessBrowserTest {
  public:
   class TestAutofillManager : public BrowserAutofillManager {
    public:
-    explicit TestAutofillManager(autofill::ContentAutofillDriver* driver)
+    explicit TestAutofillManager(ContentAutofillDriver* driver)
         : BrowserAutofillManager(driver) {}
 
     [[nodiscard]] testing::AssertionResult WaitForFormsSeen(
@@ -59,9 +60,9 @@ class AutofillAnnotationsProviderBrowserTest : public InProcessBrowserTest {
     }
 
    private:
-    autofill::TestAutofillManagerWaiter forms_seen_waiter_{
+    TestAutofillManagerWaiter forms_seen_waiter_{
         *this,
-        {autofill::AutofillManagerEvent::kFormsSeen}};
+        {AutofillManagerEvent::kFormsSeen}};
   };
 
   void SetUpOnMainThread() override {
@@ -144,7 +145,7 @@ class AutofillAnnotationsProviderBrowserTest : public InProcessBrowserTest {
   net::EmbeddedTestServer* https_server() { return https_server_.get(); }
 
   content::WebContents* web_contents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
   TestAutofillManager* autofill_manager() {
@@ -160,11 +161,10 @@ class AutofillAnnotationsProviderBrowserTest : public InProcessBrowserTest {
   }
 
  protected:
-  autofill::test::AutofillBrowserTestEnvironment autofill_test_environment_;
+  test::AutofillBrowserTestEnvironment autofill_test_environment_;
   TestAutofillClientInjector<TestContentAutofillClient>
       autofill_client_injector_;
-  autofill::TestAutofillManagerInjector<TestAutofillManager>
-      autofill_manager_injector_;
+  TestAutofillManagerInjector<TestAutofillManager> autofill_manager_injector_;
   std::unique_ptr<net::EmbeddedTestServer> https_server_;
   std::optional<optimization_guide::proto::AnnotatedPageContent> page_content_;
 };

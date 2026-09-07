@@ -49,6 +49,7 @@
 #include "services/data_decoder/public/cpp/test_support/in_process_data_decoder.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/ui_base_features.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/display/test/test_screen.h"
 
 namespace app_list {
@@ -209,7 +210,7 @@ class AppContextMenuTest : public AppListTestBase {
 
   void TearDown() override {
     // Let any in-flight tasks finish, e.g. clear the background thread icon
-    // decode, otherwise the test might flake (crbug.com/1115763).
+    // decode, otherwise the test might flake (crbug.com/40711525).
     base::RunLoop().RunUntilIdle();
     menu_delegate_.reset();
     controller_.reset();

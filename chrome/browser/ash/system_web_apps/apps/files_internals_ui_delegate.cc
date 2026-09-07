@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ash/system_web_apps/apps/files_internals_ui_delegate.h"
 
+#include "ash/constants/ash_pref_names.h"
 #include "base/barrier_callback.h"
 #include "base/files/file_enumerator.h"
 #include "base/strings/escape.h"
@@ -12,16 +13,15 @@
 #include "base/values.h"
 #include "chrome/browser/ash/extensions/file_manager/event_router.h"
 #include "chrome/browser/ash/extensions/file_manager/event_router_factory.h"
-#include "chrome/browser/ash/file_manager/file_manager_pref_names.h"
 #include "chrome/browser/ash/file_manager/file_tasks.h"
 #include "chrome/browser/ash/file_manager/fileapi_util.h"
 #include "chrome/browser/ash/file_manager/office_file_tasks.h"
 #include "chrome/browser/ash/file_manager/path_util.h"
 #include "chrome/browser/ash/fusebox/fusebox_server.h"
+#include "chrome/browser/ash/smb_client/smb_constants.h"
 #include "chrome/browser/chromeos/upload_office_to_cloud/upload_office_to_cloud.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
-#include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "extensions/browser/api/file_handlers/directory_util.h"
@@ -245,22 +245,22 @@ void ChromeFilesInternalsUIDelegate::GetFileTasks(
 bool ChromeFilesInternalsUIDelegate::GetSmbfsEnableVerboseLogging() const {
   Profile* profile = Profile::FromWebUI(web_ui_);
   return profile && profile->GetPrefs()->GetBoolean(
-                        file_manager::prefs::kSmbfsEnableVerboseLogging);
+                        ash::smb_client::kSmbfsEnableVerboseLogging);
 }
 
 void ChromeFilesInternalsUIDelegate::SetSmbfsEnableVerboseLogging(
     bool enabled) {
   Profile* profile = Profile::FromWebUI(web_ui_);
   if (profile) {
-    profile->GetPrefs()->SetBoolean(
-        file_manager::prefs::kSmbfsEnableVerboseLogging, enabled);
+    profile->GetPrefs()->SetBoolean(ash::smb_client::kSmbfsEnableVerboseLogging,
+                                    enabled);
   }
 }
 
 std::string ChromeFilesInternalsUIDelegate::GetOfficeFileHandlers() const {
   Profile* profile = Profile::FromWebUI(web_ui_);
   const base::DictValue& extension_task_prefs =
-      profile->GetPrefs()->GetDict(prefs::kDefaultTasksBySuffix);
+      profile->GetPrefs()->GetDict(ash::prefs::kDefaultTasksBySuffix);
   base::DictValue filtered_prefs;
 
   for (const std::string& extension :
@@ -299,7 +299,7 @@ void ChromeFilesInternalsUIDelegate::ClearOfficeFileHandlers() {
     return;
   }
   ScopedDictPrefUpdate mime_type_pref(profile->GetPrefs(),
-                                      prefs::kDefaultTasksByMimeType);
+                                      ash::prefs::kDefaultTasksByMimeType);
   for (const std::string& mime_type :
        file_manager::file_tasks::WordGroupMimeTypes()) {
     mime_type_pref->Remove(mime_type);
@@ -314,7 +314,7 @@ void ChromeFilesInternalsUIDelegate::ClearOfficeFileHandlers() {
   }
 
   ScopedDictPrefUpdate extension_pref(profile->GetPrefs(),
-                                      prefs::kDefaultTasksBySuffix);
+                                      ash::prefs::kDefaultTasksBySuffix);
   for (const std::string& extension :
        file_manager::file_tasks::WordGroupExtensions()) {
     extension_pref->Remove(extension);

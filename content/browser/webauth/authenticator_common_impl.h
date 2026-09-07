@@ -46,7 +46,7 @@ namespace content {
 
 class BrowserContext;
 class RenderFrameHost;
-class WebAuthRequestSecurityChecker;
+class WebAuthRequestSecurityCheckerImpl;
 
 enum class RequestExtension;
 enum class AttestationErasureOption;
@@ -65,6 +65,7 @@ inline constexpr char kUserVerifyingPlatformAuthenticator[] =
     "userVerifyingPlatformAuthenticator";
 inline constexpr char kRelatedOrigins[] = "relatedOrigins";
 inline constexpr char kImmediateGet[] = "immediateGet";
+inline constexpr char kAmbientGet[] = "ambientGet";
 inline constexpr char kSignalAllAcceptedCredentials[] =
     "signalAllAcceptedCredentials";
 inline constexpr char kSignalCurrentUserDetails[] = "signalCurrentUserDetails";
@@ -121,6 +122,13 @@ class CONTENT_EXPORT AuthenticatorCommonImpl : public AuthenticatorCommon {
   void DisableTLSCheck() override;
   RenderFrameHost* GetRenderFrameHost() const override;
   void EnableRequestProxyExtensionsAPISupport() override;
+  bool IsGetMatchingCredentialIdsSupported() override;
+  void GetMatchingCredentialIds(
+      std::string_view relying_party_id,
+      base::span<const std::vector<uint8_t>> credential_ids,
+      bool require_third_party_payment_bit,
+      base::OnceCallback<void(std::vector<std::vector<uint8_t>>)> callback)
+      override;
 
   // GetClientCapabilities returns a list WebAuthn capabilities of the browser
   // via the `callback` parameter. Websites can use this information to
@@ -360,12 +368,6 @@ class CONTENT_EXPORT AuthenticatorCommonImpl : public AuthenticatorCommon {
       blink::mojom::PaymentOptionsPtr payment_options,
       blink::mojom::Authenticator::GetCredentialCallback callback);
 
-  void UpdateChallengeFromUrl(
-      webauthn::ClientDataJsonParams params,
-      blink::mojom::PaymentOptionsPtr payment_options,
-      std::string payment_rp,
-      std::optional<base::span<const uint8_t>> challenge);
-
   // Get an identifier for the current request. Callbacks that might span a
   // cancelation must hold one of these values to check whether they're still
   // pertinent when called.
@@ -375,7 +377,7 @@ class CONTENT_EXPORT AuthenticatorCommonImpl : public AuthenticatorCommon {
 
   const GlobalRenderFrameHostId render_frame_host_id_;
   const ServingRequestsFor serving_requests_for_;
-  const scoped_refptr<WebAuthRequestSecurityChecker> security_checker_;
+  const scoped_refptr<WebAuthRequestSecurityCheckerImpl> security_checker_;
 
   // These members hold state that spans different requests. All
   // request-specific state should go in `RequestState` to ensure that it's

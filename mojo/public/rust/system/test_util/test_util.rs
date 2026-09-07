@@ -24,8 +24,6 @@ impl<T: FnMut(&CxxString) + Send + 'static> From<T> for RustRepeatingStringCallb
 mod ffi {
     unsafe extern "C++" {
         include!("mojo/core/embedder/embedder.h");
-        #[namespace = "mojo::core"]
-        fn Init();
     }
 
     extern "Rust" {
@@ -39,23 +37,9 @@ mod ffi {
     unsafe extern "C++" {
         include!("mojo/public/rust/system/test_util/cxx_shim.h");
 
-        // FOR_RELEASE: This doesn't logically need to be boxed, but cxx
-        // requires it. See if we can avoid it, maybe be making
-        // RustRepeatingStringCallback a type alias instead of a struct
+        // This doesn't logically need to be boxed, but cxx requires it.
         fn SetDefaultProcessErrorHandler(handler: Box<RustRepeatingStringCallback>);
     }
-}
-
-use std::sync::LazyLock;
-
-// Used to initialize Mojo in contexts where it has not already been
-// initialized, e.g. in standalone Rust binaries or outside of Chromium/gtest.
-// FOR_RELEASE(https://crbug.com/457920507): Make this idempotent if it's not.
-pub fn init_mojo_if_needed() {
-    static INITIALIZED: LazyLock<()> = LazyLock::new(|| {
-        ffi::Init();
-    });
-    LazyLock::force(&INITIALIZED);
 }
 
 /// Set the default behavior when mojo receives a report of a bad message.

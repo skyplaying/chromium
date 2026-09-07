@@ -4,6 +4,7 @@
 
 #include "ui/views/accessibility/ax_virtual_view.h"
 
+#include <algorithm>
 #include <memory>
 #include <tuple>
 #include <utility>
@@ -13,9 +14,11 @@
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/accessibility/accessibility_features.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/accessibility/platform/ax_platform_for_test.h"
@@ -97,6 +100,14 @@ class TestAXUpdateObserver : public AXUpdateObserver {
   base::ScopedObservation<AXUpdateNotifier, AXUpdateObserver> observation_{
       this};
 };
+
+ui::AXNodeID GetUniqueId(const View* view) {
+  return static_cast<ui::AXNodeID>(view->GetViewAccessibility().GetUniqueId());
+}
+
+ui::AXNodeID GetOffsetContainerId(const AXVirtualView* virtual_view) {
+  return virtual_view->GetData().relative_bounds.offset_container_id;
+}
 
 }  // namespace
 
@@ -355,6 +366,69 @@ TEST_P(AXVirtualViewTest, AddingAndRemovingVirtualChildren) {
                       ax::mojom::Event::kChildrenChanged)});
 }
 
+TEST_P(AXVirtualViewTest, OffsetContainerId_NoOwnerView) {
+  auto virtual_view = std::make_unique<AXVirtualView>();
+
+  EXPECT_EQ(GetOffsetContainerId(virtual_view.get()), ui::kInvalidAXNodeID);
+}
+
+TEST_P(AXVirtualViewTest, OffsetContainerId_VirtualViewOwnedByView) {
+  EXPECT_EQ(GetOffsetContainerId(virtual_label_), GetUniqueId(button_));
+}
+
+TEST_P(AXVirtualViewTest, OffsetContainerId_NestedVirtualViews) {
+  auto* virtual_child = new AXVirtualView;
+  virtual_label_->AddChildView(base::WrapUnique(virtual_child));
+  auto* virtual_grandchild = new AXVirtualView;
+  virtual_child->AddChildView(base::WrapUnique(virtual_grandchild));
+
+  EXPECT_EQ(GetOffsetContainerId(virtual_child), GetUniqueId(button_));
+  EXPECT_EQ(GetOffsetContainerId(virtual_grandchild), GetUniqueId(button_));
+}
+
+TEST_P(AXVirtualViewTest, OffsetContainerId_SubtreeMovedToOtherOwnerView) {
+  auto* virtual_child = new AXVirtualView;
+  virtual_label_->AddChildView(base::WrapUnique(virtual_child));
+  auto* virtual_grandchild = new AXVirtualView;
+  virtual_child->AddChildView(base::WrapUnique(virtual_grandchild));
+
+  auto* other_button =
+      widget_->GetContentsView()->AddChildView(std::make_unique<TestButton>());
+  other_button->GetViewAccessibility().AddVirtualChildView(
+      virtual_label_->RemoveChildView(virtual_child));
+
+  EXPECT_EQ(GetOffsetContainerId(virtual_child), GetUniqueId(other_button));
+  EXPECT_EQ(GetOffsetContainerId(virtual_grandchild),
+            GetUniqueId(other_button));
+  EXPECT_EQ(GetOffsetContainerId(virtual_label_), GetUniqueId(button_));
+}
+
+TEST_P(AXVirtualViewTest, OffsetContainerId_ClearedWhenRemovedFromVirtualView) {
+  auto* virtual_child = new AXVirtualView;
+  virtual_label_->AddChildView(base::WrapUnique(virtual_child));
+  auto* virtual_grandchild = new AXVirtualView;
+  virtual_child->AddChildView(base::WrapUnique(virtual_grandchild));
+  ASSERT_EQ(GetOffsetContainerId(virtual_child), GetUniqueId(button_));
+
+  std::unique_ptr<AXVirtualView> removed =
+      virtual_label_->RemoveChildView(virtual_child);
+
+  EXPECT_EQ(GetOffsetContainerId(removed.get()), ui::kInvalidAXNodeID);
+  EXPECT_EQ(GetOffsetContainerId(virtual_grandchild), ui::kInvalidAXNodeID);
+}
+
+TEST_P(AXVirtualViewTest, OffsetContainerId_ClearedWhenRemovedFromOwnerView) {
+  auto* virtual_view = new AXVirtualView;
+  button_->GetViewAccessibility().AddVirtualChildView(
+      base::WrapUnique(virtual_view));
+  ASSERT_EQ(GetOffsetContainerId(virtual_view), GetUniqueId(button_));
+
+  std::unique_ptr<AXVirtualView> removed =
+      button_->GetViewAccessibility().RemoveVirtualChildView(virtual_view);
+
+  EXPECT_EQ(GetOffsetContainerId(removed.get()), ui::kInvalidAXNodeID);
+}
+
 TEST_P(AXVirtualViewTest, NotifiesUpdateObserverForVirtualChildChanges) {
   TestAXUpdateObserver observer;
   ASSERT_TRUE(observer.child_events().empty());
@@ -382,6 +456,93 @@ TEST_P(AXVirtualViewTest, NotifiesUpdateObserverForVirtualChildChanges) {
   EXPECT_EQ(raw_child, std::get<1>(remove_event));
   EXPECT_EQ(virtual_label_, std::get<2>(remove_event));
 
+  observer.Reset();
+}
+
+TEST_P(AXVirtualViewTest, NotifiesUpdateObserverForSubtreeAddedToView) {
+  TestAXUpdateObserver observer;
+  auto parent = std::make_unique<AXVirtualView>();
+  auto child = std::make_unique<AXVirtualView>();
+  auto grandchild = std::make_unique<AXVirtualView>();
+  AXVirtualView* parent_ptr = parent.get();
+  AXVirtualView* child_ptr = child.get();
+  AXVirtualView* grandchild_ptr = grandchild.get();
+  child->AddChildView(std::move(grandchild));
+  parent->AddChildView(std::move(child));
+  observer.Reset();
+
+  auto owner = std::make_unique<View>();
+  owner->GetViewAccessibility().AddVirtualChildView(std::move(parent));
+
+  ASSERT_EQ(3u, observer.child_events().size());
+  EXPECT_EQ(std::make_tuple(TestAXUpdateObserver::ChildEventType::kAdded,
+                            parent_ptr, &owner->GetViewAccessibility()),
+            observer.child_events()[0]);
+  EXPECT_EQ(std::make_tuple(TestAXUpdateObserver::ChildEventType::kAdded,
+                            child_ptr, parent_ptr),
+            observer.child_events()[1]);
+  EXPECT_EQ(std::make_tuple(TestAXUpdateObserver::ChildEventType::kAdded,
+                            grandchild_ptr, child_ptr),
+            observer.child_events()[2]);
+
+  observer.Reset();
+  std::unique_ptr<AXVirtualView> removed =
+      owner->GetViewAccessibility().RemoveVirtualChildView(parent_ptr);
+
+  ASSERT_EQ(3u, observer.child_events().size());
+  EXPECT_EQ(std::make_tuple(TestAXUpdateObserver::ChildEventType::kRemoved,
+                            grandchild_ptr, child_ptr),
+            observer.child_events()[0]);
+  EXPECT_EQ(std::make_tuple(TestAXUpdateObserver::ChildEventType::kRemoved,
+                            child_ptr, parent_ptr),
+            observer.child_events()[1]);
+  EXPECT_EQ(std::make_tuple(TestAXUpdateObserver::ChildEventType::kRemoved,
+                            parent_ptr, &owner->GetViewAccessibility()),
+            observer.child_events()[2]);
+  observer.Reset();
+}
+
+TEST_P(AXVirtualViewTest, NotifiesUpdateObserverForSubtreeAddedToVirtualView) {
+  TestAXUpdateObserver observer;
+  auto parent = std::make_unique<AXVirtualView>();
+  auto child = std::make_unique<AXVirtualView>();
+  auto grandchild = std::make_unique<AXVirtualView>();
+  AXVirtualView* parent_ptr = parent.get();
+  AXVirtualView* child_ptr = child.get();
+  AXVirtualView* grandchild_ptr = grandchild.get();
+  child->AddChildView(std::move(grandchild));
+  parent->AddChildView(std::move(child));
+  observer.Reset();
+
+  auto host = std::make_unique<AXVirtualView>();
+  AXVirtualView* host_ptr = host.get();
+  host_ptr->AddChildView(std::move(parent));
+
+  ASSERT_EQ(3u, observer.child_events().size());
+  EXPECT_EQ(std::make_tuple(TestAXUpdateObserver::ChildEventType::kAdded,
+                            parent_ptr, host_ptr),
+            observer.child_events()[0]);
+  EXPECT_EQ(std::make_tuple(TestAXUpdateObserver::ChildEventType::kAdded,
+                            child_ptr, parent_ptr),
+            observer.child_events()[1]);
+  EXPECT_EQ(std::make_tuple(TestAXUpdateObserver::ChildEventType::kAdded,
+                            grandchild_ptr, child_ptr),
+            observer.child_events()[2]);
+
+  observer.Reset();
+  std::unique_ptr<AXVirtualView> removed =
+      host_ptr->RemoveChildView(parent_ptr);
+
+  ASSERT_EQ(3u, observer.child_events().size());
+  EXPECT_EQ(std::make_tuple(TestAXUpdateObserver::ChildEventType::kRemoved,
+                            grandchild_ptr, child_ptr),
+            observer.child_events()[0]);
+  EXPECT_EQ(std::make_tuple(TestAXUpdateObserver::ChildEventType::kRemoved,
+                            child_ptr, parent_ptr),
+            observer.child_events()[1]);
+  EXPECT_EQ(std::make_tuple(TestAXUpdateObserver::ChildEventType::kRemoved,
+                            parent_ptr, host_ptr),
+            observer.child_events()[2]);
   observer.Reset();
 }
 
@@ -910,7 +1071,178 @@ TEST_P(AXVirtualViewTest, GetTargetForEvents) {
 }
 #endif  // BUILDFLAG(IS_WIN)
 
+TEST_P(AXVirtualViewTest, ContainerLiveStatusPropagatedToVirtualChildren) {
+  button_->GetViewAccessibility().SetLiveRegionContainer(
+      ViewAccessibility::LiveRegionStatus::kPolite);
+
+  ui::AXNodeData label_data;
+  virtual_label_->GetAccessibleNodeData(&label_data);
+  EXPECT_EQ("polite", label_data.GetStringAttribute(
+                          ax::mojom::StringAttribute::kContainerLiveStatus));
+  EXPECT_EQ("additions text",
+            label_data.GetStringAttribute(
+                ax::mojom::StringAttribute::kContainerLiveRelevant));
+  // virtual_label_ should NOT have kLiveStatus, kLiveRelevant, or kLiveAtomic
+  // itself.
+  EXPECT_FALSE(
+      label_data.HasStringAttribute(ax::mojom::StringAttribute::kLiveStatus));
+  EXPECT_FALSE(
+      label_data.HasStringAttribute(ax::mojom::StringAttribute::kLiveRelevant));
+  EXPECT_FALSE(
+      label_data.HasBoolAttribute(ax::mojom::BoolAttribute::kLiveAtomic));
+}
+
+TEST_P(AXVirtualViewTest,
+       ContainerLiveStatusPropagatedToNestedVirtualChildren) {
+  button_->GetViewAccessibility().SetLiveRegionContainer(
+      ViewAccessibility::LiveRegionStatus::kPolite);
+
+  auto grandchild = std::make_unique<AXVirtualView>();
+  grandchild->SetRole(ax::mojom::Role::kStaticText);
+  grandchild->SetName("Nested text");
+  AXVirtualView* grandchild_ptr = grandchild.get();
+  virtual_label_->AddChildView(std::move(grandchild));
+
+  ui::AXNodeData gc_data;
+  grandchild_ptr->GetAccessibleNodeData(&gc_data);
+  EXPECT_EQ("polite", gc_data.GetStringAttribute(
+                          ax::mojom::StringAttribute::kContainerLiveStatus));
+  EXPECT_EQ("additions text",
+            gc_data.GetStringAttribute(
+                ax::mojom::StringAttribute::kContainerLiveRelevant));
+}
+
+TEST_P(AXVirtualViewTest, LiveRegionChangedOnVirtualViewNameChange) {
+  button_->GetViewAccessibility().SetRole(ax::mojom::Role::kStatus);
+  button_->GetViewAccessibility().SetLiveRegionContainer(
+      ViewAccessibility::LiveRegionStatus::kPolite);
+
+  std::vector<ax::mojom::Event> fired_events;
+  button_->GetViewAccessibility().set_accessibility_events_callback(
+      base::BindRepeating(
+          [](std::vector<ax::mojom::Event>* events,
+             const ui::AXPlatformNodeDelegate*,
+             ax::mojom::Event event) { events->push_back(event); },
+          &fired_events));
+
+  // Only the container's own name change should fire kLiveRegionChanged.
+  button_->GetViewAccessibility().SetName("Updated container");
+
+  EXPECT_NE(std::find(fired_events.begin(), fired_events.end(),
+                      ax::mojom::Event::kLiveRegionChanged),
+            fired_events.end());
+}
+
+TEST_P(AXVirtualViewTest, LiveRegionChangedOnVirtualChildAddition) {
+  button_->GetViewAccessibility().SetLiveRegionContainer(
+      ViewAccessibility::LiveRegionStatus::kPolite);
+
+  std::vector<ax::mojom::Event> fired_events;
+  button_->GetViewAccessibility().set_accessibility_events_callback(
+      base::BindRepeating(
+          [](std::vector<ax::mojom::Event>* events,
+             const ui::AXPlatformNodeDelegate*,
+             ax::mojom::Event event) { events->push_back(event); },
+          &fired_events));
+
+  auto grandchild = std::make_unique<AXVirtualView>();
+  grandchild->SetRole(ax::mojom::Role::kStaticText);
+  grandchild->SetName("New child");
+  virtual_label_->AddChildView(std::move(grandchild));
+
+  EXPECT_NE(std::find(fired_events.begin(), fired_events.end(),
+                      ax::mojom::Event::kLiveRegionChanged),
+            fired_events.end());
+}
+
+TEST_P(AXVirtualViewTest,
+       VirtualChildRemovalFromLiveRegionNoEventWithDefaultRelevant) {
+  button_->GetViewAccessibility().SetLiveRegionContainer(
+      ViewAccessibility::LiveRegionStatus::kPolite);
+
+  auto grandchild = std::make_unique<AXVirtualView>();
+  grandchild->SetRole(ax::mojom::Role::kStaticText);
+  grandchild->SetName("Removable child");
+  AXVirtualView* grandchild_ptr = grandchild.get();
+  virtual_label_->AddChildView(std::move(grandchild));
+
+  std::vector<ax::mojom::Event> fired_events;
+  button_->GetViewAccessibility().set_accessibility_events_callback(
+      base::BindRepeating(
+          [](std::vector<ax::mojom::Event>* events,
+             const ui::AXPlatformNodeDelegate*,
+             ax::mojom::Event event) { events->push_back(event); },
+          &fired_events));
+
+  virtual_label_->RemoveChildView(grandchild_ptr);
+
+  // Default relevant is "additions text", removals should NOT fire.
+  EXPECT_EQ(std::find(fired_events.begin(), fired_events.end(),
+                      ax::mojom::Event::kLiveRegionChanged),
+            fired_events.end());
+}
+
 // Instantiate the values of device scale factor in the parameterized tests.
 INSTANTIATE_TEST_SUITE_P(All, AXVirtualViewTest, ::testing::Values(1.0f, 2.0f));
+
+class AXVirtualViewViewsAXTest : public ViewsTestBase {
+ public:
+  AXVirtualViewViewsAXTest() : ax_mode_setter_(ui::kAXModeComplete) {
+    feature_list_.InitAndEnableFeature(features::kAccessibilityTreeForViews);
+  }
+
+  void SetUp() override {
+    ViewsTestBase::SetUp();
+
+    widget_ = std::make_unique<Widget>();
+    Widget::InitParams params =
+        CreateParams(Widget::InitParams::CLIENT_OWNS_WIDGET,
+                     Widget::InitParams::TYPE_WINDOW);
+    params.bounds = gfx::Rect(0, 0, 200, 200);
+    widget_->Init(std::move(params));
+    button_ = widget_->GetContentsView()->AddChildView(
+        std::make_unique<TestButton>());
+    button_->SetSize(gfx::Size(20, 20));
+    button_->GetViewAccessibility().SetName(u"Button");
+    widget_->Show();
+  }
+
+  void TearDown() override {
+    button_ = nullptr;
+    if (!widget_->IsClosed()) {
+      widget_->Close();
+    }
+    widget_.reset();
+    ViewsTestBase::TearDown();
+  }
+
+ protected:
+  std::unique_ptr<Widget> widget_;
+  raw_ptr<Button> button_ = nullptr;
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+  ::ui::ScopedAXModeSetter ax_mode_setter_;
+};
+
+TEST_F(AXVirtualViewViewsAXTest, NotifyEventDoesNotCrash) {
+  // Some platforms (e.g. ChromeOS) never enable ViewsAX regardless of the
+  // feature flag.
+  if (!ViewAccessibility::IsViewsAccessibilityTreeEnabled()) {
+    GTEST_SKIP() << "ViewsAX not supported on this platform";
+  }
+
+  auto virtual_view = std::make_unique<AXVirtualView>();
+  ASSERT_FALSE(virtual_view->ax_platform_node());
+
+  virtual_view->SetRole(ax::mojom::Role::kListBoxOption);
+  virtual_view->SetName("Item");
+  AXVirtualView* virtual_view_ptr = virtual_view.get();
+  button_->GetViewAccessibility().AddVirtualChildView(
+      std::move(virtual_view));
+
+  virtual_view_ptr->SetIsExpanded();
+  virtual_view_ptr->SetIsCollapsed();
+}
 
 }  // namespace views::test

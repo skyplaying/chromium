@@ -11,10 +11,13 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import android.content.Context;
+import android.view.ViewGroup;
+
+import androidx.test.core.app.ApplicationProvider;
 import androidx.test.filters.SmallTest;
 
 import org.junit.Before;
@@ -39,22 +42,20 @@ import org.chromium.chrome.browser.magic_stack.ModuleProvider;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.setup_list.SetupListManager;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.ui.default_browser_promo.DefaultBrowserPromoUtils;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.feature_engagement.FeatureConstants;
 import org.chromium.components.feature_engagement.Tracker;
 import org.chromium.components.segmentation_platform.InputContext;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.ui.shadows.ShadowAppCompatResources;
 
 /** Test relating to {@link EducationalTipModuleBuilder} */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(
-        manifest = Config.NONE,
-        shadows = {ShadowAppCompatResources.class})
+@Config(shadows = {ShadowAppCompatResources.class})
+@EnableFeatures({ChromeFeatureList.SEGMENTATION_PLATFORM_EPHEMERAL_CARD_RANKER})
 public class EducationalTipModuleBuilderUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -65,18 +66,19 @@ public class EducationalTipModuleBuilderUnitTest {
     @Mock private Tracker mTracker;
     @Mock private DefaultBrowserPromoUtils mMockDefaultBrowserPromoUtils;
     @Mock private TabModelSelector mTabModelSelector;
-    @Mock private TabGroupModelFilter mNormalFilter;
-    @Mock private TabGroupModelFilter mIncognitoFilter;
     @Mock private TabModel mNormalModel;
     @Mock private TabModel mIncognitoModel;
     @Mock private IdentityServicesProvider mIdentityServicesProvider;
     @Mock private IdentityManager mIdentityManagerMock;
     @Mock private SetupListManager mSetupListManager;
+    @Mock private BottomSheetController mBottomSheetController;
 
     private EducationalTipModuleBuilder mModuleBuilder;
 
     @Before
     public void setUp() {
+        Context context = ApplicationProvider.getApplicationContext();
+        when(mActionDelegate.getContext()).thenReturn(context);
         SetupListManager.setInstanceForTesting(mSetupListManager);
         when(mSetupListManager.isSetupListActive()).thenReturn(false);
         when(mSetupListManager.getManualRank(anyInt())).thenReturn(null);
@@ -88,23 +90,39 @@ public class EducationalTipModuleBuilderUnitTest {
         when(mTracker.wouldTriggerHelpUi(FeatureConstants.DEFAULT_BROWSER_PROMO_MAGIC_STACK))
                 .thenReturn(true);
         when(mActionDelegate.getTabModelSelector()).thenReturn(mTabModelSelector);
-        when(mTabModelSelector.getTabGroupModelFilter(/* isIncognito= */ false))
-                .thenReturn(mNormalFilter);
-        when(mTabModelSelector.getTabGroupModelFilter(/* isIncognito= */ true))
-                .thenReturn(mIncognitoFilter);
-        when(mNormalFilter.getTabGroupCount()).thenReturn(0);
-        when(mIncognitoFilter.getTabGroupCount()).thenReturn(0);
         when(mTabModelSelector.getModel(/* incognito= */ false)).thenReturn(mNormalModel);
         when(mTabModelSelector.getModel(/* incognito= */ true)).thenReturn(mIncognitoModel);
+        when(mNormalModel.getTabGroupCount()).thenReturn(0);
+        when(mIncognitoModel.getTabGroupCount()).thenReturn(0);
         when(mNormalModel.getCount()).thenReturn(0);
         when(mIncognitoModel.getCount()).thenReturn(0);
         IdentityServicesProvider.setInstanceForTests(mIdentityServicesProvider);
         when(IdentityServicesProvider.get().getIdentityManager(any()))
                 .thenReturn(mIdentityManagerMock);
-        when(mIdentityManagerMock.hasPrimaryAccount(ConsentLevel.SIGNIN)).thenReturn(false);
+        when(mIdentityManagerMock.hasPrimaryAccount()).thenReturn(false);
+        when(mActionDelegate.getBottomSheetController()).thenReturn(mBottomSheetController);
 
         mModuleBuilder =
                 new EducationalTipModuleBuilder(ModuleType.QUICK_DELETE_PROMO, mActionDelegate);
+    }
+
+    @Test
+    @SmallTest
+    public void testCreateView_CelebratoryPromoUsesCustomLayout() {
+        EducationalTipModuleBuilder celebratoryBuilder =
+                new EducationalTipModuleBuilder(
+                        ModuleType.SETUP_LIST_CELEBRATORY_PROMO, mActionDelegate);
+        ViewGroup view = celebratoryBuilder.createView(null);
+        assertEquals(R.id.setup_list_celebratory_promo_layout, view.getId());
+    }
+
+    @Test
+    @SmallTest
+    public void testCreateView_RegularPromoUsesStandardLayout() {
+        EducationalTipModuleBuilder regularBuilder =
+                new EducationalTipModuleBuilder(ModuleType.QUICK_DELETE_PROMO, mActionDelegate);
+        ViewGroup view = regularBuilder.createView(null);
+        assertEquals(R.id.educational_tip_module_layout, view.getId());
     }
 
     @Test
@@ -113,18 +131,6 @@ public class EducationalTipModuleBuilderUnitTest {
     public void testBuildEducationalTipModule_Eligible() {
         assertTrue(mModuleBuilder.build(mModuleDelegate, mBuildCallback));
         verify(mBuildCallback).onResult(any(ModuleProvider.class));
-    }
-
-    @Test
-    @SmallTest
-    @EnableFeatures({ChromeFeatureList.SEGMENTATION_PLATFORM_EPHEMERAL_CARD_RANKER})
-    @DisableFeatures({ChromeFeatureList.EDUCATIONAL_TIP_DEFAULT_BROWSER_PROMO_CARD})
-    public void testBuildEducationalTipDefaultBrowserModule_NotEligible() {
-        EducationalTipModuleBuilder moduleBuilderForDefaultBrowser =
-                new EducationalTipModuleBuilder(ModuleType.DEFAULT_BROWSER_PROMO, mActionDelegate);
-
-        assertFalse(moduleBuilderForDefaultBrowser.build(mModuleDelegate, mBuildCallback));
-        verify(mBuildCallback, never()).onResult(any(ModuleProvider.class));
     }
 
     @Test
@@ -144,6 +150,8 @@ public class EducationalTipModuleBuilderUnitTest {
     @SmallTest
     @EnableFeatures({ChromeFeatureList.SEGMENTATION_PLATFORM_EPHEMERAL_CARD_RANKER})
     public void testCreateInputContext() {
+        when(mSetupListManager.isSetupListActive()).thenReturn(true);
+        when(mSetupListManager.isModuleEligible(anyInt())).thenReturn(true);
         EducationalTipModuleBuilder moduleBuilderForDefaultBrowserPromo =
                 new EducationalTipModuleBuilder(ModuleType.DEFAULT_BROWSER_PROMO, mActionDelegate);
         InputContext inputContextForTest = moduleBuilderForDefaultBrowserPromo.createInputContext();
@@ -176,6 +184,8 @@ public class EducationalTipModuleBuilderUnitTest {
     public void testIsEligible_SetupList_StrictlyFollowsManager() {
         // Mock Setup List module.
         int setupListModule = ModuleType.SIGN_IN_PROMO;
+        when(mSetupListManager.isSetupListActive()).thenReturn(true);
+        when(mSetupListManager.isSetupListModule(setupListModule)).thenReturn(true);
         EducationalTipModuleBuilder builder =
                 new EducationalTipModuleBuilder(setupListModule, mActionDelegate);
 
@@ -205,6 +215,21 @@ public class EducationalTipModuleBuilderUnitTest {
         when(mActionDelegate.getProfileSupplier())
                 .thenReturn(ObservableSuppliers.createNonNull(mProfile));
         assertTrue(builder.isEligible());
+    }
+
+    @Test
+    @SmallTest
+    @DisableFeatures({ChromeFeatureList.SEGMENTATION_PLATFORM_EPHEMERAL_CARD_RANKER})
+    public void testBuild_SetupList_BypassesGlobalKillSwitch() {
+        int setupListModule = ModuleType.DEFAULT_BROWSER_PROMO;
+        when(mSetupListManager.isSetupListActive()).thenReturn(true);
+        when(mSetupListManager.isSetupListModule(setupListModule)).thenReturn(true);
+        EducationalTipModuleBuilder builder =
+                new EducationalTipModuleBuilder(setupListModule, mActionDelegate);
+
+        // Even though the global feature is disabled, it should build because SUL is active.
+        assertTrue(builder.build(mModuleDelegate, mBuildCallback));
+        verify(mBuildCallback).onResult(any(ModuleProvider.class));
     }
 
     @Test

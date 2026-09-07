@@ -14,11 +14,12 @@
 #include "base/containers/map_util.h"
 #include "base/debug/crash_logging.h"
 #include "base/debug/stack_trace.h"
+#include "base/feature.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/system/sys_info.h"
 #include "base/task/common/task_annotator.h"
 #include "base/task/sequenced_task_runner.h"
@@ -29,6 +30,7 @@
 #include "cc/base/features.h"
 #include "components/input/utils.h"
 #include "components/viz/common/constants.h"
+#include "components/viz/common/display/display_scheduler_draw_result.h"
 #include "components/viz/common/features.h"
 #include "components/viz/common/frame_sinks/begin_frame_args.h"
 #include "components/viz/common/frame_sinks/begin_frame_source.h"
@@ -36,6 +38,7 @@
 #include "components/viz/common/quads/compositor_frame_metadata.h"
 #include "components/viz/common/quads/compositor_render_pass.h"
 #include "components/viz/common/quads/trees_in_viz_timing.h"
+#include "components/viz/common/resources/resource_id.h"
 #include "components/viz/common/surfaces/surface_info.h"
 #include "components/viz/common/surfaces/video_capture_target.h"
 #include "components/viz/common/viz_utils.h"
@@ -67,9 +70,12 @@ bool HasElapsedCadenceInterval(
 namespace viz {
 namespace {
 
-// The maximum amount of time to wait for a new interactive frame before
-// assuming that interaction has ended.
-constexpr base::TimeDelta kInteractionTimeout = base::Milliseconds(250);
+// If enabled, CompositorFrameSinkSupport cleans up unhandled/orphaned reserved
+// resource IDs when in-flight frame resources are returned after their owning
+// SurfaceAnimationManager (or other delegate) has already been destroyed (e.g.,
+// due to a premature kRelease directive during rapid view transitions).
+BASE_FEATURE(kCleanupOrphanedReservedResourceIds,
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 bool RecordShouldSendBeginFrame(const std::string& reason, bool should_send) {
   TRACE_EVENT2("viz", "SendBeginFrameDecision", "reason", reason, "should_send",
@@ -281,16 +287,7 @@ void CompositorFrameSinkSupport::SetAllowThrottling(bool allowed) {
   throttler_.SetAllowThrottling(allowed);
 }
 
-void CompositorFrameSinkSupport::SetIsHandlingInteraction(
-    bool is_handling_interaction) {
-  if (is_handling_interaction_ != is_handling_interaction) {
-    is_handling_interaction_ = is_handling_interaction;
-  }
 
-  if (is_handling_interaction_) {
-    last_interaction_time_ = base::TimeTicks::Now();
-  }
-}
 
 void CompositorFrameSinkSupport::OnSurfaceCommitted(Surface* surface) {
   if (surface->HasPendingFrame()) {
@@ -438,40 +435,88 @@ void CompositorFrameSinkSupport::OnSurfacePresented(
     base::TimeTicks draw_start_timestamp,
     const gfx::SwapTimings& swap_timings,
     const gfx::PresentationFeedback& feedback) {
-  // If the frame was submitted locally (from inside viz), do not tell the
-  // client about it, since the client did not send it.
-  if (frame_token != kLocalFrameToken) {
-    DidPresentCompositorFrame(frame_token, draw_start_timestamp, swap_timings,
-                              feedback);
-  }
+  DidPresentCompositorFrame(frame_token, draw_start_timestamp, swap_timings,
+                            feedback);
 }
 
 void CompositorFrameSinkSupport::RefResources(
     const std::vector<TransferableResource>& resources) {
-  ForAllReservedResourceDelegates(
-      [&resources](ReservedResourceDelegate& delegate) {
-        delegate.RefResources(resources);
-      });
+  std::vector<TransferableResource> unhandled_resources =
+      surface_resource_holder_.RefResources(resources);
 
-  surface_resource_holder_.RefResources(resources);
+  if (unhandled_resources.empty()) {
+    return;
+  }
+
+  // `SurfaceAnimationManager` removes anything it owns from
+  // `unhandled_resources`.
+  for (auto& [_, manager] : view_transition_token_to_animation_manager_) {
+    manager->RefResources(unhandled_resources);
+  }
+
+  // Any remaining reserved resource IDs in `unhandled_resources` were not
+  // claimed by any active `SurfaceAnimationManager` (e.g. because the manager
+  // was destroyed upon receiving a kRelease directive before all in-flight
+  // frames were drawn). If the cleanup feature is enabled, directly ref them on
+  // the `ReservedResourceIdTracker` so that when the display compositor returns
+  // them, the ref counts match.
+  if (base::FeatureList::IsEnabled(kCleanupOrphanedReservedResourceIds)) {
+    auto* id_tracker = frame_sink_manager_->reserved_resource_id_tracker();
+    for (const auto& resource : unhandled_resources) {
+      // SurfaceResourceHolder will only leave reserved range resources
+      // unhandled.
+      CHECK_GE(resource.id, kVizReservedRangeStartId);
+      if (id_tracker->IsTracked(resource.id)) {
+        id_tracker->RefId(resource.id, /*count=*/1);
+      }
+    }
+  }
 }
 
 void CompositorFrameSinkSupport::UnrefResources(
     std::vector<ReturnedResourceViz> resources) {
-  // `ReservedResourceDelegate` allocates ResourceIds in a different range
-  // than the client so it can process returned resources before
-  // |surface_resource_holder_|.
-  ForAllReservedResourceDelegates(
-      [&resources](ReservedResourceDelegate& delegate) {
-        delegate.UnrefResources(resources);
-      });
+  // SurfaceResourceHolder handles all client allocated resources. Anything
+  // remaining in unhandled_resources came from viz.
+  std::vector<ReturnedResourceViz> unhandled_resources =
+      surface_resource_holder_.UnrefResources(std::move(resources));
 
-  surface_resource_holder_.UnrefResources(std::move(resources));
+  if (unhandled_resources.empty()) {
+    return;
+  }
+
+  // `SurfaceAnimationManager` removes anything it owns from
+  // `unhandled_resources`.
+  for (auto& [_, manager] : view_transition_token_to_animation_manager_) {
+    manager->UnrefResources(unhandled_resources);
+  }
+
+  // Any remaining reserved resource IDs in `unhandled_resources` were not
+  // claimed by any active `SurfaceAnimationManager` (e.g. because the delegate
+  // was destroyed upon receiving a kRelease directive before the in-flight
+  // frame resources were returned). If the cleanup feature is enabled, directly
+  // unref them on the `ReservedResourceIdTracker` to prevent leaking IDs.
+  if (base::FeatureList::IsEnabled(kCleanupOrphanedReservedResourceIds)) {
+    auto* id_tracker = frame_sink_manager_->reserved_resource_id_tracker();
+    for (const auto& resource : unhandled_resources) {
+      // SurfaceResourceHolder will only leave reserved range resources
+      // unhandled.
+      CHECK_GE(resource.id, kVizReservedRangeStartId);
+      if (id_tracker->IsTracked(resource.id)) {
+        id_tracker->UnrefId(resource.id, resource.count);
+      }
+    }
+  }
 }
 
 void CompositorFrameSinkSupport::ReturnResources(
     std::vector<ReturnedResource> resources) {
   if (resources.empty()) {
+    return;
+  }
+
+  if (resource_return_delegate_) {
+    CHECK(base::FeatureList::IsEnabled(features::kTreesInViz));
+    resource_return_delegate_->ReceiveReturnsFromParent(std::move(resources));
     return;
   }
 
@@ -500,10 +545,9 @@ void CompositorFrameSinkSupport::DoReturnResources(
 
 void CompositorFrameSinkSupport::ReceiveFromChild(
     const std::vector<TransferableResource>& resources) {
-  ForAllReservedResourceDelegates(
-      [&resources](ReservedResourceDelegate& delegate) {
-        delegate.ReceiveFromChild(resources);
-      });
+  for (auto& [_, manager] : view_transition_token_to_animation_manager_) {
+    manager->ReceiveFromChild(resources);
+  }
 
   surface_resource_holder_.ReceiveFromChild(resources);
 }
@@ -593,7 +637,6 @@ void CompositorFrameSinkSupport::EvictLastActiveSurface() {
 
 void CompositorFrameSinkSupport::SetNeedsBeginFrame(bool needs_begin_frame) {
   client_needs_begin_frame_ = needs_begin_frame;
-  SetIsHandlingInteraction(false);
   UpdateNeedsBeginFramesInternal();
 }
 
@@ -616,6 +659,9 @@ bool CompositorFrameSinkSupport::WantsAnimateOnlyBeginFrames() const {
 void CompositorFrameSinkSupport::BindLayerContext(
     mojom::PendingLayerContext& context,
     mojom::LayerContextSettingsPtr settings) {
+  if (!base::FeatureList::IsEnabled(features::kTreesInViz)) {
+    return;
+  }
   layer_context_ =
       std::make_unique<LayerContextImpl>(this, context, std::move(settings));
 }
@@ -627,10 +673,9 @@ void CompositorFrameSinkSupport::SetThreads(
     threads_ = std::move(unverified_threads);
     return;
   }
-  base::flat_set<base::PlatformThreadId> thread_ids;
-  for (const auto& thread : unverified_threads) {
-    thread_ids.insert(base::PlatformThreadId(thread.id));
-  }
+  auto thread_ids = base::MakeFlatSet<base::PlatformThreadId>(
+      unverified_threads, /*comp=*/{},
+      [&](const auto& thread) { return base::PlatformThreadId(thread.id); });
   frame_sink_manager_->VerifySandboxedThreadIds(
       thread_ids,
       base::BindOnce(
@@ -654,7 +699,7 @@ void CompositorFrameSinkSupport::UpdateThreadIdsPostVerification(
   }
 }
 
-void CompositorFrameSinkSupport::DidNotProduceFrame(const BeginFrameAck& ack) {
+bool CompositorFrameSinkSupport::DidNotProduceFrame(const BeginFrameAck& ack) {
   TRACE_EVENT(
       "viz,benchmark,graphics.pipeline", "Graphics.Pipeline",
       perfetto::Flow::Global(ack.trace_id), [&](perfetto::EventContext ctx) {
@@ -666,20 +711,15 @@ void CompositorFrameSinkSupport::DidNotProduceFrame(const BeginFrameAck& ack) {
         frame_sink_id_.WriteIntoTrace(ctx.Wrap(data->set_frame_sink_id()));
         data->set_surface_frame_trace_id(ack.trace_id);
       });
-  DCHECK(ack.frame_id.IsSequenceValid());
+  if (!ack.frame_id.IsSequenceValid()) {
+    return false;
+  }
 
   begin_frame_tracker_.ReceivedAck(ack);
 
   // Override the has_damage flag (ignoring invalid data from clients).
   BeginFrameAck modified_ack(ack);
   modified_ack.has_damage = false;
-
-  // We only check for a timeout if we are currently handling an interaction.
-  if (is_handling_interaction_ &&
-      (last_interaction_time_ - last_begin_frame_args_.frame_time) >=
-          kInteractionTimeout) {
-    SetIsHandlingInteraction(false);
-  }
 
   // If the client doesn't produce a frame, we assume it's no longer interactive
   // for scheduling.
@@ -689,9 +729,11 @@ void CompositorFrameSinkSupport::DidNotProduceFrame(const BeginFrameAck& ack) {
   }
 
   if (begin_frame_source_) {
-    begin_frame_source_->DidFinishFrame(this);
+    begin_frame_source_->DidFinishFrame(
+        this, DisplaySchedulerDrawResult::kDidNotDraw);
     frame_sink_manager_->DidFinishFrame(frame_sink_id_, last_begin_frame_args_);
   }
+  return true;
 }
 
 void CompositorFrameSinkSupport::SubmitCompositorFrame(
@@ -746,9 +788,19 @@ SubmitResult CompositorFrameSinkSupport::MaybeSubmitCompositorFrame(
             frame.metadata.begin_frame_ack.trace_id);
       });
 
-  DCHECK(local_surface_id.is_valid());
-  DCHECK(!frame.render_pass_list.empty());
-  DCHECK(!frame.size_in_pixels().IsEmpty());
+  if (!local_surface_id.is_valid() || frame.render_pass_list.empty() ||
+      frame.size_in_pixels().IsEmpty()) {
+    return SubmitResult::INVALID_FRAME;
+  }
+
+  if (!is_root_ &&
+      frame.metadata.display_transform_hint != gfx::OVERLAY_TRANSFORM_NONE) {
+    return SubmitResult::INVALID_DISPLAY_TRANSFORM;
+  }
+
+  if (!frame.metadata.begin_frame_ack.frame_id.IsSequenceValid()) {
+    return SubmitResult::INVALID_BEGIN_FRAME_ACK;
+  }
 
   CHECK(callback_received_begin_frame_);
   CHECK(callback_received_receive_ack_);
@@ -763,16 +815,8 @@ SubmitResult CompositorFrameSinkSupport::MaybeSubmitCompositorFrame(
           now_time, frame.metadata.trees_in_viz_timing_details,
           surface_manager_));
 
-#if BUILDFLAG(IS_ANDROID)
-  // If the renderer thread has requested a temporary boost for
-  // interaction, we ask ADPF to temporarily lift CPU capacity restrictions.
-  frame_sink_manager_->SetPreferEfficientScheduling(
-      frame.metadata.prefer_efficient_scheduling);
-#endif
-
   // Override the has_damage flag (ignoring invalid data from clients).
   frame.metadata.begin_frame_ack.has_damage = true;
-  DCHECK(frame.metadata.begin_frame_ack.frame_id.IsSequenceValid());
 
   if (!ui::LatencyInfo::Verify(
           frame.metadata.latency_info,
@@ -782,6 +826,7 @@ SubmitResult CompositorFrameSinkSupport::MaybeSubmitCompositorFrame(
     }
     std::vector<ui::LatencyInfo>().swap(frame.metadata.latency_info);
   }
+
   for (ui::LatencyInfo& latency : frame.metadata.latency_info) {
     if (latency.latency_components().size() > 0) {
       latency.AddLatencyNumberWithTimestamp(
@@ -796,8 +841,7 @@ SubmitResult CompositorFrameSinkSupport::MaybeSubmitCompositorFrame(
 
   // Ensure no CopyOutputRequests have been submitted if they are banned.
   if (!allow_copy_output_requests_ && frame.HasCopyOutputRequests()) {
-    TRACE_EVENT_INSTANT0("viz", "CopyOutputRequests not allowed",
-                         TRACE_EVENT_SCOPE_THREAD);
+    TRACE_EVENT_INSTANT("viz", "CopyOutputRequests not allowed");
     return SubmitResult::COPY_OUTPUT_REQUESTS_NOT_ALLOWED;
   }
 
@@ -824,10 +868,9 @@ SubmitResult CompositorFrameSinkSupport::MaybeSubmitCompositorFrame(
       // lower than a full frame interval.
       if ((last_known_frame_interval_ - preferred_frame_interval).magnitude() >
           base::Milliseconds(2)) {
-        TRACE_EVENT_INSTANT2("viz", "Set sink framerate",
-                             TRACE_EVENT_SCOPE_THREAD, "interval",
-                             preferred_frame_interval, "sourceid",
-                             frame.metadata.begin_frame_ack.frame_id.source_id);
+        TRACE_EVENT_INSTANT("viz", "Set sink framerate", "interval",
+                            preferred_frame_interval, "sourceid",
+                            frame.metadata.begin_frame_ack.frame_id.source_id);
         last_known_frame_interval_ = preferred_frame_interval;
         // Only throttle simple cadences.
         throttler_.SetCadenceThrottleInterval(preferred_frame_interval);
@@ -881,16 +924,14 @@ SubmitResult CompositorFrameSinkSupport::MaybeSubmitCompositorFrame(
     if (local_surface_id.embed_token() ==
             last_created_local_surface_id.embed_token() &&
         !monotonically_increasing_id) {
-      TRACE_EVENT_INSTANT0("viz", "LocalSurfaceId decreased",
-                           TRACE_EVENT_SCOPE_THREAD);
+      TRACE_EVENT_INSTANT("viz", "LocalSurfaceId decreased");
       return SubmitResult::SURFACE_ID_DECREASED;
     }
 
     // Don't recreate a surface that was previously evicted. Drop the
     // CompositorFrame and return all its resources.
     if (IsEvicted(local_surface_id)) {
-      TRACE_EVENT_INSTANT0("viz", "Submit rejected to evicted surface",
-                           TRACE_EVENT_SCOPE_THREAD);
+      TRACE_EVENT_INSTANT("viz", "Submit rejected to evicted surface");
       return SubmitResult::ACCEPTED;
     }
 
@@ -912,13 +953,9 @@ SubmitResult CompositorFrameSinkSupport::MaybeSubmitCompositorFrame(
     // If that happens, we will rely on the GC of the current surface to remove
     // the reference.
     if (has_copy_request_against_prev_surface) {
-      using ResultDestination = CopyOutputRequest::ResultDestination;
-      auto destination =
-          features::IsBackForwardTransitionsSameDocSharedImageEnabled()
-              ? ResultDestination::kSharedImage
-              : ResultDestination::kSystemMemory;
       auto copy_request = std::make_unique<CopyOutputRequest>(
-          CopyOutputRequest::ResultFormat::RGBA, destination,
+          CopyOutputRequest::ResultFormat::RGBA,
+          CopyOutputResult::Destination::kSharedImage,
           base::BindOnce(
               &RemoveSurfaceReferenceAndDispatchCopyOutputRequestCallback,
               frame_sink_manager_->GetWeakPtr(), surface_info.id(),
@@ -942,8 +979,7 @@ SubmitResult CompositorFrameSinkSupport::MaybeSubmitCompositorFrame(
     }
 
     if (!create_surface_return.has_value()) {
-      TRACE_EVENT_INSTANT0("viz", "Surface belongs to another client",
-                           TRACE_EVENT_SCOPE_THREAD);
+      TRACE_EVENT_INSTANT("viz", "Surface belongs to another client");
 
       static auto* const crash_key_local_surface_id =
           base::debug::AllocateCrashKeyString(
@@ -997,20 +1033,17 @@ SubmitResult CompositorFrameSinkSupport::MaybeSubmitCompositorFrame(
 
   // QueueFrame can fail in unit tests, so SubmitHitTestRegionList has to be
   // called before that.
-  frame_sink_manager()->SubmitHitTestRegionList(
-      last_created_surface_id_, frame_index, std::move(hit_test_region_list));
-  // Update the interaction state at the end of this method to ensure it only
-  // reflects valid frames that were successfully accepted. This prevents
-  // invalid frames (e.g. those with a size mismatch) from affecting the global
-  // interaction state.
-  SetIsHandlingInteraction(frame.metadata.is_handling_interaction);
+  if (!frame_sink_manager()->SubmitHitTestRegionList(
+          last_created_surface_id_, frame_index,
+          std::move(hit_test_region_list))) {
+    return SubmitResult::HIT_TEST_DATA_INVALID;
+  }
 
   Surface::QueueFrameResult result = current_surface->QueueFrame(
       std::move(frame), frame_index, std::move(frame_rejected_callback));
   switch (result) {
     case Surface::QueueFrameResult::REJECTED:
-      TRACE_EVENT_INSTANT0("viz", "QueueFrame failed",
-                           TRACE_EVENT_SCOPE_THREAD);
+      TRACE_EVENT_INSTANT("viz", "QueueFrame failed");
       return SubmitResult::SIZE_MISMATCH;
     case Surface::QueueFrameResult::ACCEPTED_PENDING:
       // Pending frames are processed in OnSurfaceCommitted.
@@ -1021,7 +1054,8 @@ SubmitResult CompositorFrameSinkSupport::MaybeSubmitCompositorFrame(
   }
 
   if (begin_frame_source_) {
-    begin_frame_source_->DidFinishFrame(this);
+    begin_frame_source_->DidFinishFrame(this,
+                                        DisplaySchedulerDrawResult::kUnknown);
     frame_sink_manager_->DidFinishFrame(frame_sink_id_, last_begin_frame_args_);
   }
 
@@ -1043,7 +1077,7 @@ SurfaceReference CompositorFrameSinkSupport::MakeTopLevelRootReference(
 }
 
 void CompositorFrameSinkSupport::DidReceiveCompositorFrameAck() {
-  DCHECK_GT(pending_frames_, 0);
+  CHECK_GT(pending_frames_, 0);
   pending_frames_--;
 
   if (!client_) {
@@ -1066,7 +1100,6 @@ void CompositorFrameSinkSupport::DidPresentCompositorFrame(
     const gfx::SwapTimings& swap_timings,
     const gfx::PresentationFeedback& feedback) {
   CHECK_NE(frame_token, kInvalidFrameToken);
-  CHECK_NE(frame_token, kLocalFrameToken);
   DCHECK((feedback.flags & gfx::PresentationFeedback::kFailure) ||
          (!draw_start_timestamp.is_null() && !swap_timings.is_null()));
 
@@ -1122,8 +1155,7 @@ void CompositorFrameSinkSupport::DidRejectCompositorFrame(
     uint32_t frame_token,
     std::vector<TransferableResource> frame_resource_list,
     std::vector<ui::LatencyInfo> latency_info) {
-  TRACE_EVENT_INSTANT0("viz", "DidRejectCompositorFrame",
-                       TRACE_EVENT_SCOPE_THREAD);
+  TRACE_EVENT_INSTANT("viz", "DidRejectCompositorFrame");
   // TODO(eseckler): Should these be stored and attached to the next successful
   // frame submission instead?
   for (ui::LatencyInfo& info : latency_info) {
@@ -1157,29 +1189,13 @@ void CompositorFrameSinkSupport::OnBeginFrame(const BeginFrameArgs& args) {
   int64_t trace_id = base::trace_event::GetNextGlobalTraceId();
   TRACE_EVENT(
       "viz,benchmark,graphics.pipeline", "Graphics.Pipeline",
-      perfetto::Flow::Global(trace_id),
-      [trace_id, &args](perfetto::EventContext ctx) {
+      perfetto::Flow::Global(trace_id), [trace_id](perfetto::EventContext ctx) {
         base::TaskAnnotator::EmitTaskTimingDetails(ctx);
         auto* event = ctx.event<perfetto::protos::pbzero::ChromeTrackEvent>();
         auto* data = event->set_chrome_graphics_pipeline();
         data->set_step(perfetto::protos::pbzero::ChromeGraphicsPipeline::
                            StepName::STEP_ISSUE_BEGIN_FRAME);
         data->set_surface_frame_trace_id(trace_id);
-        auto* possible_deadlines = data->set_possible_deadlines();
-        possible_deadlines->set_frame_time_us(
-            args.frame_time.since_origin().InMicroseconds());
-        if (args.possible_deadlines.has_value()) {
-          for (const PossibleDeadline& deadline :
-               args.possible_deadlines->deadlines) {
-            auto* timeline = possible_deadlines->add_frame_timeline();
-            timeline->set_vsync_id(deadline.vsync_id);
-            timeline->set_latch_delta_us(deadline.latch_delta.InMicroseconds());
-            timeline->set_present_delta_us(
-                deadline.present_delta.InMicroseconds());
-          }
-          possible_deadlines->set_preferred_frame_timeline_index(
-              args.possible_deadlines->preferred_index);
-        }
       });
 
   CheckPendingSurfaces();
@@ -1246,7 +1262,8 @@ void CompositorFrameSinkSupport::OnBeginFrame(const BeginFrameArgs& args) {
       frame_timing_details_.clear();
     }
   } else if (begin_frame_source_) {
-    begin_frame_source_->DidFinishFrame(this);
+    begin_frame_source_->DidFinishFrame(
+        this, DisplaySchedulerDrawResult::kDidNotDraw);
   }
 }
 
@@ -1370,6 +1387,16 @@ CompositorFrameSinkSupport::GetRequestRegionProperties(
 
   // If we don't have a sub target, capture everything in the frame.
   if (IsEntireTabCapture(sub_target)) {
+#if BUILDFLAG(IS_ANDROID)
+    // On Android, the browser viewport includes the space used for browser
+    // controls so that scrolling can hide controls smoothly without the need to
+    // resize the viewport. However, for media capture scenarios (e.g. tab
+    // sharing), the desired capture area is just the web content viewport.
+    if (!frame.metadata.visible_viewport_size.IsEmpty()) {
+      out.render_pass_subrect = gfx::Rect(frame.metadata.visible_viewport_size);
+      return out;
+    }
+#endif
     out.render_pass_subrect = gfx::Rect(out.root_render_pass_size);
     return out;
   }
@@ -1463,6 +1490,14 @@ const char* CompositorFrameSinkSupport::GetSubmitResultAsString(
       return "LocalSurfaceId sequence numbers decreased";
     case SubmitResult::SURFACE_OWNED_BY_ANOTHER_CLIENT:
       return "Surface belongs to another client";
+    case SubmitResult::HIT_TEST_DATA_INVALID:
+      return "Invalid hit-test data";
+    case SubmitResult::INVALID_FRAME:
+      return "Invalid CompositorFrame";
+    case SubmitResult::INVALID_DISPLAY_TRANSFORM:
+      return "Invalid display transform hint";
+    case SubmitResult::INVALID_BEGIN_FRAME_ACK:
+      return "Invalid BeginFrameAck sequence";
   }
   NOTREACHED();
 }
@@ -1503,6 +1538,7 @@ bool CompositorFrameSinkSupport::ShouldSendBeginFrame(
     // during the lifetime of the CompositorFrameSinkSupport, our active frame
     // index must be at least as large as our last drawn frame index.
     DCHECK_GE(active_frame_index, last_drawn_frame_index_);
+    DCHECK_NE(active_frame_index, kInvalidFrameToken);
 
     // Throttle clients that have submitted too many undrawn frames, unless the
     // active frame requests that it doesn't.
@@ -1620,8 +1656,7 @@ void CompositorFrameSinkSupport::ProcessCompositorFrameTransitionDirective(
         return;
       }
 
-      if (features::ShouldAckCOREarlyForViewTransition() &&
-          !directive.maybe_cross_frame_sink() &&
+      if (!directive.maybe_cross_frame_sink() &&
           directive.delay_layer_tree_view_deletion()) {
         // Register the token for same-doc transitions to ensure
         // CopyOutputRequest can complete.
@@ -1712,10 +1747,15 @@ void CompositorFrameSinkSupport::OnSaveTransitionDirectiveProcessed(
         directive.sequence_id());
   }
 
+  // Subtle: the iterator `it` may be invalidated after the call to
+  // `CacheSurfaceAnimationManager` due to new SurfaceAnimationManager being
+  // created and put into the map. This can happen due to the FrameSinkObserver
+  // getting notified of the view transition saving surface being activated.
   if (directive.maybe_cross_frame_sink()) {
     frame_sink_manager_->CacheSurfaceAnimationManager(
         directive.transition_token(), std::move(it->second));
-    view_transition_token_to_animation_manager_.erase(it);
+    view_transition_token_to_animation_manager_.erase(
+        directive.transition_token());
   }
 }
 
@@ -1774,11 +1814,6 @@ void CompositorFrameSinkSupport::ClearAllPendingCopyOutputRequests() {
   copy_output_requests_.clear();
 }
 
-void CompositorFrameSinkSupport::SetExternalReservedResourceDelegate(
-    ReservedResourceDelegate* delegate) {
-  external_reserved_resource_delegate_ = delegate;
-}
-
 void CompositorFrameSinkSupport::SetLayerContextWantsBeginFrames(
     bool wants_begin_frames) {
   layer_context_wants_begin_frames_ = wants_begin_frames;
@@ -1808,17 +1843,6 @@ void CompositorFrameSinkSupport::ScheduleSelfDestruction() {
   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&CompositorFrameSinkSupport::DestroySelf,
                                 weak_factory_.GetWeakPtr()));
-}
-
-void CompositorFrameSinkSupport::ForAllReservedResourceDelegates(
-    base::FunctionRef<void(ReservedResourceDelegate&)> func) {
-  if (external_reserved_resource_delegate_) {
-    func(*external_reserved_resource_delegate_);
-  }
-
-  for (auto& it : view_transition_token_to_animation_manager_) {
-    func(*it.second);
-  }
 }
 
 CompositorFrameSinkSupport::PendingFrameDetails::PendingFrameDetails(

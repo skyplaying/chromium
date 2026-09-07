@@ -10,9 +10,9 @@
 #import "components/omnibox/browser/autocomplete_match.h"
 #import "components/omnibox/browser/autocomplete_match_classification.h"
 #import "components/omnibox/browser/autocomplete_result.h"
-#import "components/omnibox/browser/omnibox_client.h"
 #import "components/omnibox/browser/omnibox_field_trial.h"
 #import "components/prefs/pref_service.h"
+#import "ios/chrome/browser/omnibox/model/omnibox_client_ios.h"
 #import "ios/chrome/browser/omnibox/model/suggestions/autocomplete_match_formatter.h"
 #import "ios/chrome/browser/omnibox/model/suggestions/autocomplete_result_wrapper_delegate.h"
 #import "ios/chrome/browser/omnibox/model/suggestions/autocomplete_suggestion.h"
@@ -38,12 +38,12 @@
   /// List of suggestions without the pedal group. Used to debounce pedals.
   NSArray<id<AutocompleteSuggestionGroup>>* _nonPedalSuggestionsGroups;
   /// The omnibox client.
-  base::WeakPtr<OmniboxClient> _omniboxClient;
+  base::WeakPtr<OmniboxClientIOS> _omniboxClient;
   /// The autocomplete client.
   base::WeakPtr<AutocompleteProviderClient> _autocompleteProviderClient;
 }
 
-- (instancetype)initWithOmniboxClient:(OmniboxClient*)omniboxClient
+- (instancetype)initWithOmniboxClient:(OmniboxClientIOS*)omniboxClient
            autocompleteProviderClient:
                (AutocompleteProviderClient*)autocompleteProviderClient {
   self = [super init];
@@ -62,14 +62,16 @@
   _autocompleteProviderClient = nullptr;
 }
 
-- (NSArray<id<AutocompleteSuggestionGroup>>*)wrapAutocompleteResultInGroups:
-    (const AutocompleteResult&)autocompleteResult {
+- (NSArray<id<AutocompleteSuggestionGroup>>*)
+    wrapAutocompleteResultInGroups:(const AutocompleteResult&)autocompleteResult
+        suppressVerbatimFromResult:(BOOL)shouldSkipVerbatim {
   NSMutableArray<id<AutocompleteSuggestionGroup>>* groups =
       [[NSMutableArray alloc] init];
 
   // Group the suggestions by the section Id.
   NSMutableArray<AutocompleteMatchFormatter*>* allMatches =
-      [self wrapMatchesFromResult:autocompleteResult];
+      [self wrapMatchesFromResult:autocompleteResult
+          suppressVerbatimFromResult:shouldSkipVerbatim];
   NSArray<id<AutocompleteSuggestionGroup>>* allGroups =
       [self groupSuggestions:allMatches
           usingACResultAsHeaderMap:autocompleteResult];
@@ -176,8 +178,9 @@
 
 /// Wraps the autocomplete results from the given AutocompleteResult object into
 /// an array of AutocompleteSuggestion objects.
-- (NSMutableArray<AutocompleteMatchFormatter*>*)wrapMatchesFromResult:
-    (const AutocompleteResult&)autocompleteResult {
+- (NSMutableArray<AutocompleteMatchFormatter*>*)
+         wrapMatchesFromResult:(const AutocompleteResult&)autocompleteResult
+    suppressVerbatimFromResult:(BOOL)shouldSkipVerbatim {
   NSMutableArray<AutocompleteMatchFormatter*>* wrappedMatches =
       [[NSMutableArray alloc] init];
 
@@ -186,6 +189,11 @@
   BOOL tileNavSuggestHandled = NO;
   for (size_t i = 0; i < autocompleteResult.size(); i++) {
     const AutocompleteMatch& match = autocompleteResult.match_at((NSUInteger)i);
+    if (match.type == AutocompleteMatchType::SEARCH_WHAT_YOU_TYPED) {
+      if (shouldSkipVerbatim) {
+        continue;
+      }
+    }
     if (match.type == AutocompleteMatchType::TILE_NAVSUGGEST) {
       if (tileNavSuggestHandled) {
         continue;

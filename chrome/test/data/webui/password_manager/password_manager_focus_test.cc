@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 #include "base/test/scoped_feature_list.h"
-#include "build/branding_buildflags.h"
 #include "chrome/test/base/web_ui_mocha_browser_test.h"
 #include "components/password_manager/content/common/web_ui_constants.h"
 #include "components/password_manager/core/common/password_manager_features.h"
@@ -16,8 +15,9 @@ class PasswordManagerUIFocusTest : public WebUIMochaBrowserTest {
   }
 };
 
-// https://crbug.com/1444623: Flaky on Mac.
-#if BUILDFLAG(IS_MAC)
+// https://crbug.com/40267789: Flaky on Mac.
+// TODO(crbug.com/545328093): Flaky on Windows.
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 #define MAYBE_All DISABLED_All
 #else
 #define MAYBE_All All

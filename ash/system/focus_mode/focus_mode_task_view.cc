@@ -222,8 +222,7 @@ FocusModeTaskView::FocusModeTaskView(bool is_network_connected)
                               weak_factory_.GetWeakPtr())));
   textfield_->GetViewAccessibility().SetName(l10n_util::GetStringUTF16(
       IDS_ASH_STATUS_TRAY_FOCUS_MODE_TASK_TEXTFIELD_PLACEHOLDER));
-  textfield_->SetBackgroundEnabled(false);
-  textfield_->UpdateBackground();
+  textfield_->SetBackgroundMode(SystemTextfield::BackgroundMode::kNever);
   textfield_->SetPlaceholderText(l10n_util::GetStringUTF16(
       IDS_ASH_STATUS_TRAY_FOCUS_MODE_TASK_TEXTFIELD_PLACEHOLDER));
   textfield_->SetPlaceholderTextColorId(is_network_connected
@@ -458,7 +457,7 @@ void FocusModeTaskView::PaintFocusRingAndUpdateStyle() {
     ClearFocusForTextfield(textfield_);
   }
   textfield_->UpdateElideBehavior(is_active);
-  views::FocusRing::Get(textfield_container_)->SchedulePaint();
+  views::FocusRing::Get(textfield_container_)->Refresh();
 }
 
 void FocusModeTaskView::OnCompleteTask() {

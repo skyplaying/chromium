@@ -68,6 +68,8 @@ export class SettingsGoogleDriveSubpageElement extends
     SettingsGoogleDriveSubpageElementBase {
   constructor() {
     super();
+    this.contentCacheSize_ = ContentCacheSizeType.CALCULATING;
+    this.showSpinner = false;
     this.proxy_ = GoogleDriveBrowserProxy.getInstance();
   }
 
@@ -137,17 +139,17 @@ export class SettingsGoogleDriveSubpageElement extends
   /**
    * Reflects the state of `prefs.gdata.disabled` pref.
    */
-  private driveDisabled_: boolean;
+  private driveDisabled_: boolean = false;
 
   /**
    * Reflects the state of `prefs.drivefs.bulk_pinning.visible` pref.
    */
-  private bulkPinningVisible_: boolean;
+  private bulkPinningVisible_: boolean = false;
 
   /**
    * A connection with the browser process to send/receive messages.
    */
-  private proxy_: GoogleDriveBrowserProxy;
+  private proxy_ = GoogleDriveBrowserProxy.getInstance();
 
   /**
    * Keeps track of the latest response about bulk pinning from the page
@@ -168,8 +170,7 @@ export class SettingsGoogleDriveSubpageElement extends
   /**
    * Keeps track of the last requested total content cache size.
    */
-  private contentCacheSize_: string|ContentCacheSizeType =
-      ContentCacheSizeType.CALCULATING;
+  declare private contentCacheSize_: string|ContentCacheSizeType;
 
   /**
    * The number of files that have currently been listed, this count is the one
@@ -186,12 +187,12 @@ export class SettingsGoogleDriveSubpageElement extends
   /**
    * Whether to show the spinner in the top right of the settings page.
    */
-  private showSpinner: boolean = false;
+  declare private showSpinner: boolean;
 
-  private updateContentCacheSizeInterval_: number;
+  private updateContentCacheSizeInterval_: number = -1;
 
-  private readonly isDriveFsBulkPinningEnabled_: boolean;
-  private readonly isDriveFsMirrorSyncEnabled_: boolean;
+  declare private readonly isDriveFsBulkPinningEnabled_: boolean;
+  declare private readonly isDriveFsMirrorSyncEnabled_: boolean;
 
   /**
    * Returns the browser proxy page handler (to invoke functions).

@@ -11,6 +11,7 @@
 #include <string>
 #include <utility>
 
+#include "ash/constants/ash_pref_names.h"
 #include "base/check_op.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -19,8 +20,6 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "chrome/browser/ash/browser_delegate/browser_controller.h"
-#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/ash/extensions/dictionary_event_router.h"
 #include "chrome/browser/ash/extensions/ime_menu_event_router.h"
 #include "chrome/browser/ash/extensions/input_method_event_router.h"
@@ -34,9 +33,10 @@
 #include "chrome/browser/spellchecker/spellcheck_factory.h"
 #include "chrome/browser/spellchecker/spellcheck_service.h"
 #include "chrome/browser/ui/ash/keyboard/chrome_keyboard_controller_client.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/common/extensions/api/input_method_private.h"
-#include "chrome/common/pref_names.h"
+#include "chromeos/ash/components/browser_delegate/browser_controller.h"
+#include "chromeos/ash/components/browser_delegate/browser_delegate.h"
 #include "chromeos/ash/components/language_packs/handwriting.h"
 #include "chromeos/ash/components/language_packs/language_pack_manager.h"
 #include "chromeos/components/kiosk/kiosk_utils.h"
@@ -50,6 +50,7 @@
 #include "ui/base/ime/ash/input_method_descriptor.h"
 #include "ui/base/ime/ash/input_method_manager.h"
 #include "ui/base/ime/ash/input_method_util.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
 
 namespace {
@@ -132,7 +133,7 @@ InputMethodPrivateGetInputMethodConfigFunction::Run() {
   output.Set("isImeMenuActivated",
              Profile::FromBrowserContext(browser_context())
                  ->GetPrefs()
-                 ->GetBoolean(prefs::kLanguageImeMenuActivated));
+                 ->GetBoolean(ash::prefs::kLanguageImeMenuActivated));
   return RespondNow(WithArguments(std::move(output)));
 }
 
@@ -373,7 +374,7 @@ ExtensionFunction::ResponseAction InputMethodPrivateGetSettingsFunction::Run() {
   const base::DictValue& input_methods =
       Profile::FromBrowserContext(browser_context())
           ->GetPrefs()
-          ->GetDict(prefs::kLanguageInputMethodSpecificSettings);
+          ->GetDict(ash::prefs::kLanguageInputMethodSpecificSettings);
   const base::DictValue* engine_result =
       input_methods.FindDictByDottedPath(params->engine_id);
   base::Value result;
@@ -401,7 +402,7 @@ ExtensionFunction::ResponseAction InputMethodPrivateSetSettingsFunction::Run() {
 
   ScopedDictPrefUpdate update(
       Profile::FromBrowserContext(browser_context())->GetPrefs(),
-      prefs::kLanguageInputMethodSpecificSettings);
+      ash::prefs::kLanguageInputMethodSpecificSettings);
   update->SetByDottedPath(params->engine_id, params->settings.ToValue());
 
   // The router will only send the event to extensions that are listening.

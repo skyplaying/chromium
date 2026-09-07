@@ -12,22 +12,23 @@
  * #css_wrapper_metadata_end */
 
 :host {
-  --product-logo-size: 4.5rem;
-  --card-background-color: var(--google-white);
+  --card-background-color: var(--cr-fallback-color-surface);
+  --card-icon-background-color: var(--cr-fallback-color-on-surface);
+  --card-bottom-padding: 1.5rem;
   --card-description-color: var(--cr-secondary-text-color);
   --card-description-font-size: 0.81rem;
-  --card-title-font-size: 1rem;
-  --card-width: 15rem;
-  --disclaimer-border-color: var(--google-grey-200);
-  --disclaimer-color: var(--google-grey-700);
-  --gap-between-cards: 0.5rem;
-  --icon-color: var(--google-blue-600);
-  --icon-container-color: var(--google-grey-100);
-  --card-horizontal-padding: 0;
+  --card-horizontal-padding: 1.5rem;
   --card-horizontal-size:
       calc(var(--card-width) + 2 * var(--card-horizontal-padding));
+  --card-title-font-size: 0.94rem;
+  --card-top-padding: 1.5rem;
+  --card-width: 11.75rem;
   --content-width:
       calc(3 * var(--card-horizontal-size) + 2 * var(--gap-between-cards));
+  --disclaimer-border-color: var(--cr-fallback-color-surface-variant);
+  --disclaimer-color: var(--google-grey-700);
+  --gap-between-cards: 0.75rem;
+  --product-logo-size: 72px;
   align-items: center;
   box-sizing: border-box;
   color: var(--cr-primary-text-color);
@@ -42,10 +43,8 @@
 
 @media (prefers-color-scheme: dark) {
   :host {
-    --card-background-color: var(--google-grey-800);
-    --card-description-color: white;
-    --icon-color: var(--google-blue-300);
-    --icon-container-color: var(--google-grey-700);
+    --card-background-color: var(--cr-fallback-color-surface2);
+    --card-description-color: var(--cr-fallback-color-on-surface);
     --disclaimer-border-color: var(--google-grey-600);
     --disclaimer-color: var(--google-grey-100);
   }
@@ -56,7 +55,7 @@
     --card-description-font-size: 0.75rem;
     --card-title-font-size: 0.81rem;
     --card-width: 152px;
-    --product-logo-size: 60px;
+    --product-logo-size: 48px;
     gap: 1.5rem;
   }
 }
@@ -74,6 +73,18 @@
   }
 }
 
+@media screen and ((max-width: 900px) or (max-height: 650px)) {
+  .animation {
+    display: none;
+  }
+}
+
+@media screen and ((max-width: 1000px) or (max-height: 750px)) {
+  :host([is-pre-first-run-desktop-refresh-enabled_]) .animation {
+    display: none;
+  }
+}
+
 @keyframes fade-in-animation {
   0% {
     opacity: 0;
@@ -87,8 +98,100 @@ p {
   margin: 0;
 }
 
+.animation {
+  position: fixed;
+  z-index: -1;
+  pointer-events: none;
+}
+
+#leftAnimation {
+  top: 35%;
+  /* Check how much space is between 50% of screen width and 50% of content
+   * width, then subtract 100% of the animation's size (arbitrary value) to push
+   * it to the edge of the content. If the result is positive, min it with 0 to
+   * prevent the animation from being pulled from left edge to the center. */
+  transform: translate(
+    min(0px, calc(50vw - var(--content-width) / 2 - 100%)),
+    -50%);
+  left: 0;
+  height: 62.5vh;
+  aspect-ratio: 288 / 620; /* To prevent cr-lottie from adding white padding. */
+}
+
+:host([is-pre-first-run-desktop-refresh-enabled_]) #leftAnimation {
+  height: 75vh;
+}
+
+#rightAnimation {
+  top: 50%;
+  /* First push the animation by 70%  (arbitrary value) of its size and check
+   * how much space is between 50% of screen width and 50% of content width.
+   * Dividing by 2 makes the animation push out smoother, 1px of animation size
+   * for every 2px of space shrank.
+   * Everything is maxed with 0 to prevent the animation from being pulled
+   * from the right edge to the center of the screen. */
+  transform: translate(
+    max(0px, calc(70% - (50vw - var(--content-width) / 2) / 2)),
+    -50%);
+  right: 0;
+  height: 65vh;
+  width: auto;
+  aspect-ratio: 311 / 657;
+}
+
+:host([is-pre-first-run-desktop-refresh-enabled_]) #rightAnimation {
+  height: 80vh;
+}
+
+#bottomAnimation {
+  bottom: -5px;
+  left: 20%;
+  /* First push the animation by 50% of its size and check how much space is
+   * between 50% of screen height and 300px (arbitrary value, around half of
+   * the screen height we cut out the animations at).
+   * Dividing it by 2 makes the animation push out smoother, 1px of animation
+   * for every 2px of space shrank.
+   * Everything is maxed with 0 to prevent the animation from being
+   * pushed out of the bottom edge to the center of the screen. */
+  transform: translate(-50%, max(0px, calc(50% - (50vh - 300px) / 2)));
+  width: 40vw;
+  height: auto;
+  aspect-ratio: 600 / 215;
+}
+
+:host([is-pre-first-run-desktop-refresh-enabled_]) #bottomAnimation {
+  transform: translate(-50%, max(0px, calc(35% - (50vh - 300px) / 2)));
+}
+
+/* For RTL languages, flip the direction */
+:host-context([dir=rtl]) #left-animation {
+  left: auto;
+  right: 0;
+  transform: scaleX(-1) translate(
+    min(0px, calc(50vw - var(--content-width) / 2 - 100%)),
+    -50%);
+}
+
+:host-context([dir=rtl]) #right-animation {
+  left: 0;
+  right: auto;
+  transform: scaleX(-1) translate(
+    max(0px, calc(70% - (50vw - var(--content-width) / 2) / 2)),
+    -50%);
+}
+
+:host-context([dir=rtl]) #bottom-animation {
+  left: auto;
+  right: 20%;
+  transform: scaleX(-1) translate(-50%, max(0px, calc(50% - (50vh - 300px) / 2)));
+}
+
+:host-context([dir=rtl]):host([is-pre-first-run-desktop-refresh-enabled_]) #bottom-animation {
+  transform: scaleX(-1) translate(-50%, max(0px, calc(35% - (50vh - 300px) / 2)));
+}
+
 .title {
-  font-size: 3.75rem;
+  font-size: 2.5rem;
   font-weight: 700;
   margin: 0;
   max-width: var(--content-width);
@@ -98,7 +201,7 @@ h2 {
   font-size: var(--card-title-font-size);
   font-weight: 500;
   line-height: 22px;
-  margin: 0 0 4px;
+  margin: 0;
 }
 
 .fade-in {
@@ -109,8 +212,9 @@ h2 {
   animation: fade-in-animation 300ms ease-in-out;
 }
 
-#illustrationContainer {
-  display: flex;
+#product-logo-container {
+  width: var(--product-logo-size);
+  height: var(--product-logo-size);
 }
 
 #textContainer  {
@@ -123,7 +227,7 @@ h2 {
 
 @media screen and ((max-width: 780px) or (max-height: 600px)) {
   .title {
-    font-size: 2.5rem;
+    font-size: 1.5rem;
   }
 
   h2 {
@@ -135,9 +239,16 @@ h2 {
   }
 }
 
-#productLogo {
-  height: var(--product-logo-size);
-  width: var(--product-logo-size);
+#product-logo-animation {
+  /* Because 50% of the svg file is the padding, we scale it by 2. */
+  height: calc(var(--product-logo-size) * 2);
+  width: calc(var(--product-logo-size) * 2);
+  /* Center the ball exactly in the middle of the parent container. */
+  transform: translate(-25%, -25%);
+}
+
+:host-context([dir=rtl]) #product-logo-animation {
+  transform: translate(25%, -25%);
 }
 
 #benefitCardsContainer {
@@ -145,7 +256,6 @@ h2 {
   flex-direction: row;
   justify-content: center;
   gap: var(--gap-between-cards);
-  height: 10rem;
 }
 
 .benefit-card {
@@ -155,7 +265,9 @@ h2 {
   box-shadow: 0 1px 5px 0 rgba(0, 0, 0, 0.25);
   display: flex;
   flex-direction: column;
-  padding: 1.5rem;
+  gap: 0.25rem;
+  padding: var(--card-top-padding) var(--card-horizontal-padding)
+      var(--card-bottom-padding);
   width: var(--card-width);
 }
 
@@ -166,15 +278,17 @@ h2 {
   line-height: 20px;
 }
 
+#buttonRow {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+}
+
 #buttonContainer {
   display: flex;
-  gap: 12px;
-  <if expr="not is_win">
   flex-direction: row;
-  </if>
-  <if expr="is_win">
-  flex-direction: row-reverse;
-  </if>
+  gap: 12px;
+  justify-content: center;
 }
 
 .tangible-button {
@@ -190,8 +304,9 @@ h2 {
   color: var(--disclaimer-color);
   display: flex;
   flex-direction: row;
-  padding-block: 1.5rem;
-  padding-inline-end: 18px;
+  gap: 0.5rem;
+  padding: 1.5rem;
+  max-width: var(--content-width);
 
   font-size: var(--card-description-font-size);
 }
@@ -206,24 +321,22 @@ h2 {
 }
 
 #iconContainer {
-  --icon-container-size: 28px;
-  background-color: var(--icon-container-color);
+  --icon-container-size: 20px;
   border-radius: 50%;
   height: var(--icon-container-size);
-  margin-inline: 16px;
   width: var(--icon-container-size);
 }
 
 #iconContainer cr-icon {
-  --iron-icon-width: 16px;
-  --iron-icon-height: 16px;
+  --iron-icon-width: 20px;
+  --iron-icon-height: 20px;
   top: 50%;
   transform: translateY(-50%);
 }
 
 #security {
   <if expr="not _google_chrome">
-  --cr-icon-image: url(images/security.svg);
+  --cr-icon-image: url(images/security_old.svg);
   </if>
   <if expr="_google_chrome">
   --cr-icon-image: url(images/gshield.svg);
@@ -231,19 +344,80 @@ h2 {
 }
 
 #devices {
-  --cr-icon-image: url(images/devices.svg);
+  --cr-icon-image: url(images/devices_old.svg);
 }
 
 #cloud-upload {
-  --cr-icon-image: url(images/cloud_upload.svg);
+  --cr-icon-image: url(images/cloud_upload_old.svg);
 }
 
 .cr-icon {
   --cr-icon-size: 36px;
-  margin: 0 0 16px;
+  background-color: var(--card-icon-background-color);
+  margin: 0;
 }
 
 /* Prevent the icons from being flipped in RTL mode. */
 :host-context([dir=rtl]) .cr-icon {
   transform: scaleX(1);
+}
+
+#top-right-corner-container {
+  inset-inline-end: 1.5rem;
+  position: absolute;
+  top: 1.5rem;
+}
+
+#top-right-corner-container.has-effects-control-button {
+  align-items: center;
+  display: flex;
+  flex-direction: row;
+  /* Native: 16px toolbar padding + 28px button width + 6px separator margin
+   * = 50px. */
+  inset-inline-end: 50px;
+  /* Align vertically with the native toolbar (8px padding). */
+  top: 8px;
+}
+
+#declineSignInButton.no-border {
+  --cr-button-background-color: transparent;
+  --cr-button-border: none;
+  background-color: transparent;
+  border: none;
+  box-shadow: none;
+  min-width: 0;
+   /* Native: 6px toolbar padding + 8px label margin = 14px horizontal. */
+  padding: 6px 14px;
+}
+
+#separator {
+  background-color: var(--color-sys-divider, var(--cr-fallback-color-divider));
+  height: 16px;
+  margin-inline-end: 6px;
+  margin-inline-start: 2px;
+  /* Fine-tune vertical alignment to perfectly match native. */
+  transform: translateY(-1px);
+  width: 2px;
+}
+
+#create-account-disclaimer {
+  color: var(--cr-secondary-text-color);
+  font-size: var(--card-description-font-size);
+  margin-bottom: 1rem;
+}
+
+:host-context([webui-rounded-icons]) {
+  #devices {
+    --cr-icon-image: url(images/devices.svg);
+  }
+
+  #cloud-upload {
+    --cr-icon-image: url(images/cloud_upload.svg);
+  }
+
+  <if expr="not _google_chrome">
+  #security {
+    --cr-icon-image: url(images/security.svg);
+  }
+  </if>
 }

@@ -12,11 +12,13 @@
 #include <vector>
 
 #include "base/check.h"
+#include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
 #include "base/memory/raw_ptr.h"
 #include "base/rand_util.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
+#include "components/viz/common/display/display_scheduler_draw_result.h"
 #include "components/viz/common/display/update_vsync_parameters_callback.h"
 #include "components/viz/common/frame_sinks/begin_frame_args.h"
 #include "components/viz/common/frame_sinks/delay_based_time_source.h"
@@ -85,8 +87,8 @@ class VIZ_COMMON_EXPORT BeginFrameObserver {
 // Users of this class should;
 //  - Implement the OnBeginFrameDerivedImpl function.
 //  - Recommended (but not required) to call
-//    BeginFrameObserverBase::OnValueInto in their overridden OnValueInto
-//    function.
+//    BeginFrameObserverBase::AsProtozeroInto in their overridden
+//    AsProtozeroInto function.
 class VIZ_COMMON_EXPORT BeginFrameObserverBase : public BeginFrameObserver {
  public:
   BeginFrameObserverBase();
@@ -217,11 +219,15 @@ class VIZ_COMMON_EXPORT BeginFrameSource {
   void SetSchedulerClient(SchedulerClient* scheduler_client);
   void SetInputClient(InputClient* input_client);
 
+  static base::flat_set<base::TimeDelta> GetDefaultSupportedFrameIntervals(
+      base::TimeDelta interval);
+
   // BeginFrameObservers use DidFinishFrame to provide back pressure to a frame
   // source about frame processing (rather than toggling SetNeedsBeginFrames
   // every frame). For example, the BackToBackFrameSource uses them to make sure
   // only one frame is pending at a time.
-  virtual void DidFinishFrame(BeginFrameObserver* obs) = 0;
+  virtual void DidFinishFrame(BeginFrameObserver* obs,
+                              DisplaySchedulerDrawResult result) = 0;
 
   // Add/Remove an observer from the source. When no observers are added the BFS
   // should shut down its timers, disable vsync, etc.
@@ -237,10 +243,11 @@ class VIZ_COMMON_EXPORT BeginFrameSource {
   virtual void SetVSyncDisplayID(int64_t display_id, bool force_update) {}
 
 #if BUILDFLAG(IS_MAC)
-  // Connect to a new DisplayLinkMac, the VSync source, if needed.
-  // The browser initiates this call whenever a display is either added or
-  // removed.
-  virtual void UpdateVSyncDisplay() {}
+  // Notifies the source that it may need to reconnect to a VSync source (e.g.,
+  // DisplayLinkMac) for the specified display. This is typically triggered by
+  // display configuration changes in the browser process.
+  virtual void UpdateVSyncDisplay(int64_t display_id) {}
+
 #endif
 
   virtual void SetUpdateVSyncParametersCallback(
@@ -305,7 +312,8 @@ class VIZ_COMMON_EXPORT StubBeginFrameSource : public BeginFrameSource {
  public:
   StubBeginFrameSource();
 
-  void DidFinishFrame(BeginFrameObserver* obs) override {}
+  void DidFinishFrame(BeginFrameObserver* obs,
+                      DisplaySchedulerDrawResult result) override {}
   void AddObserver(BeginFrameObserver* obs) override {}
   void RemoveObserver(BeginFrameObserver* obs) override {}
   void OnGpuNoLongerBusy() override {}
@@ -344,7 +352,8 @@ class VIZ_COMMON_EXPORT BackToBackBeginFrameSource
   // BeginFrameSource implementation.
   void AddObserver(BeginFrameObserver* obs) override;
   void RemoveObserver(BeginFrameObserver* obs) override;
-  void DidFinishFrame(BeginFrameObserver* obs) override;
+  void DidFinishFrame(BeginFrameObserver* obs,
+                      DisplaySchedulerDrawResult result) override;
   void OnGpuNoLongerBusy() override;
 
   // SyntheticBeginFrameSource implementation.
@@ -385,7 +394,8 @@ class VIZ_COMMON_EXPORT DelayBasedBeginFrameSource
   // BeginFrameSource implementation.
   void AddObserver(BeginFrameObserver* obs) override;
   void RemoveObserver(BeginFrameObserver* obs) override;
-  void DidFinishFrame(BeginFrameObserver* obs) override {}
+  void DidFinishFrame(BeginFrameObserver* obs,
+                      DisplaySchedulerDrawResult result) override {}
   void OnGpuNoLongerBusy() override;
 
   // SyntheticBeginFrameSource implementation.
@@ -449,7 +459,8 @@ class VIZ_COMMON_EXPORT ExternalBeginFrameSource : public BeginFrameSource {
   // BeginFrameSource implementation.
   void AddObserver(BeginFrameObserver* obs) override;
   void RemoveObserver(BeginFrameObserver* obs) override;
-  void DidFinishFrame(BeginFrameObserver* obs) override {}
+  void DidFinishFrame(BeginFrameObserver* obs,
+                      DisplaySchedulerDrawResult result) override {}
   void AsProtozeroInto(
       perfetto::EventContext& ctx,
       perfetto::protos::pbzero::BeginFrameSourceStateV2* state) const override;
@@ -462,7 +473,7 @@ class VIZ_COMMON_EXPORT ExternalBeginFrameSource : public BeginFrameSource {
     return last_begin_frame_args_;
   }
 
-#if BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_MAC)
   // Notifies when the refresh rate of the display is updated. |refresh_rate| is
   // the rate in frames per second.
   virtual void UpdateRefreshRate(float refresh_rate) {}
@@ -471,6 +482,16 @@ class VIZ_COMMON_EXPORT ExternalBeginFrameSource : public BeginFrameSource {
   // Notifies the begin frame source of the desired frame interval for the
   // observers.
   virtual void SetPreferredInterval(base::TimeDelta interval) {}
+
+  // Sets the refresh rates supported by the display. See
+  // https://developer.android.com/reference/android/view/Display#getSupportedRefreshRates().
+  //
+  // `supported_rates` is a map from supported VSync intervals to the equivalent
+  // supported refresh rates. For example, if the display supports 60 Hz and 120
+  // Hz, `supported_rates` will contain two entries: `base::Milliseconds(8.333)`
+  // → `120.0f` and `base::Milliseconds(16.666)` → `60.0f`.
+  virtual void SetSupportedRefreshRates(
+      const base::flat_map<base::TimeDelta, float>& supported_rates) {}
 
   // Returns the minimium supported frame interval for a given BFS.
   // This gives the maximium refresh rate that can be requested.
@@ -492,7 +513,6 @@ class VIZ_COMMON_EXPORT ExternalBeginFrameSource : public BeginFrameSource {
 
  private:
   BeginFrameArgs pending_begin_frame_args_;
-  base::MetricsSubSampler metrics_sub_sampler_;
 };
 
 }  // namespace viz

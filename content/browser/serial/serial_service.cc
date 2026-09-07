@@ -9,8 +9,10 @@
 
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
-#include "content/browser/renderer_host/back_forward_cache_disable.h"
+#include "content/browser/back_forward_cache/back_forward_cache_disable.h"
+#include "content/browser/renderer_host/frame_tree_node.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/back_forward_cache.h"
 #include "content/public/browser/content_browser_client.h"
@@ -22,13 +24,16 @@
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "services/device/public/mojom/serial.mojom.h"
 #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom.h"
+#include "third_party/blink/public/mojom/frame/user_activation_notification_type.mojom.h"
+#include "third_party/blink/public/mojom/frame/user_activation_update_types.mojom.h"
 
 namespace content {
 
 SerialService::SerialService(RenderFrameHost* rfh)
     : DocumentUserData<SerialService>(rfh) {
-  DCHECK(render_frame_host().IsFeatureEnabled(
-      network::mojom::PermissionsPolicyFeature::kSerial));
+  CHECK(render_frame_host().IsFeatureEnabled(
+            network::mojom::PermissionsPolicyFeature::kSerial),
+        base::NotFatalUntil::M159);
   // Serial API is not supported for back-forward cache for now because we
   // don't have support for closing/freezing ports when the frame is added to
   // the back-forward cache, so we mark frames that use this API as disabled
@@ -74,9 +79,10 @@ void SerialService::GetPorts(GetPortsCallback callback) {
   }
 
   delegate->GetPortManager(&render_frame_host())
-      ->GetDevices(base::BindOnce(&SerialService::FinishGetPorts,
-                                  weak_factory_.GetWeakPtr(),
-                                  std::move(callback)));
+      ->GetDevices(
+          /*allow_bluetooth_system_prompt=*/false,
+          base::BindOnce(&SerialService::FinishGetPorts,
+                         weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 void SerialService::RequestPort(
@@ -85,21 +91,38 @@ void SerialService::RequestPort(
         allowed_bluetooth_service_class_ids,
     RequestPortCallback callback) {
   SerialDelegate* delegate = GetContentClient()->browser()->GetSerialDelegate();
-  if (!delegate) {
+  if (!delegate || !delegate->CanRequestPortPermission(&render_frame_host())) {
     std::move(callback).Run(nullptr);
     return;
   }
 
-  if (!delegate->CanRequestPortPermission(&render_frame_host())) {
+  // Ensure the requesting document is still active and consume transient user
+  // activation to prevent stale/pending-deletion frames from opening choosers
+  // or consuming user gestures from newly committed documents.
+  if (!render_frame_host().IsActive() ||
+      !FrameTreeNode::From(&render_frame_host())
+           ->UpdateUserActivationState(
+               blink::mojom::UserActivationUpdateType::
+                   kConsumeTransientActivation,
+               blink::mojom::UserActivationNotificationType::kNone)) {
     std::move(callback).Run(nullptr);
     return;
   }
 
-  chooser_ = delegate->RunChooser(
+  // The delegate's chooser implementation may spin a nested message loop (e.g.
+  // to drop fullscreen), during which the frame may be detached and the
+  // service destroyed. Check that the service is still alive before accessing
+  // member variables.
+  base::WeakPtr<SerialService> weak_this = weak_factory_.GetWeakPtr();
+  auto chooser = delegate->RunChooser(
       &render_frame_host(), std::move(filters),
       allowed_bluetooth_service_class_ids,
       base::BindOnce(&SerialService::FinishRequestPort,
                      weak_factory_.GetWeakPtr(), std::move(callback)));
+  if (!weak_this) {
+    return;
+  }
+  chooser_ = std::move(chooser);
 }
 
 void SerialService::OpenPort(
@@ -162,6 +185,9 @@ void SerialService::OnPortAdded(const device::mojom::SerialPortInfo& port) {
 
 void SerialService::OnPortRemoved(const device::mojom::SerialPortInfo& port) {
   OnPortConnectedStateChanged(port);
+  if (auto persistent_identifier = GetPersistentIdentifier(port)) {
+    token_map_.erase(*persistent_identifier);
+  }
 }
 
 void SerialService::OnPortConnectedStateChanged(
@@ -258,7 +284,6 @@ void SerialService::DecrementActiveFrameCount() {
 blink::mojom::SerialPortInfoPtr SerialService::ToBlinkType(
     const device::mojom::SerialPortInfo& port) {
   auto info = blink::mojom::SerialPortInfo::New();
-  std::optional<std::string> persistent_identifier;
 
   info->has_usb_vendor_id = port.has_vendor_id;
   if (port.has_vendor_id) {
@@ -270,10 +295,9 @@ blink::mojom::SerialPortInfoPtr SerialService::ToBlinkType(
   }
   if (port.bluetooth_service_class_id) {
     info->bluetooth_service_class_id = port.bluetooth_service_class_id;
-    // Mac address + service uuid can persistently identify a serial port.
-    persistent_identifier = base::UTF16ToUTF8(port.path.LossyDisplayName()) +
-                            info->bluetooth_service_class_id->value();
   }
+  std::optional<std::string> persistent_identifier =
+      GetPersistentIdentifier(port);
   info->connected = port.connected;
   if (persistent_identifier) {
     auto it = token_map_.find(*persistent_identifier);
@@ -287,6 +311,17 @@ blink::mojom::SerialPortInfoPtr SerialService::ToBlinkType(
     info->token = port.token;
   }
   return info;
+}
+
+// static
+std::optional<std::string> SerialService::GetPersistentIdentifier(
+    const device::mojom::SerialPortInfo& port) {
+  if (!port.bluetooth_service_class_id) {
+    return std::nullopt;
+  }
+  // Mac address + service uuid can persistently identify a serial port.
+  return base::StrCat({base::UTF16ToUTF8(port.path.LossyDisplayName()),
+                       port.bluetooth_service_class_id->value()});
 }
 
 DOCUMENT_USER_DATA_KEY_IMPL(SerialService);

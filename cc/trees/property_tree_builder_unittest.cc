@@ -209,7 +209,10 @@ TEST_F(PropertyTreeBuilderTest, RenderSurfaceListForTransparentChild) {
   EXPECT_EQ(0, GetRenderSurfaceImpl(root)->num_contributors());
   EXPECT_EQ(1U, GetRenderSurfaceList().size());
   EXPECT_EQ(static_cast<viz::CompositorRenderPassId>(root->id()),
-            GetRenderSurfaceList().at(0)->render_pass_id());
+            host_impl()
+                ->active_tree()
+                ->GetRenderSurface(GetRenderSurfaceList().at(0))
+                ->render_pass_id());
   EXPECT_EQ(gfx::Rect(), ImplOf(root)->visible_drawable_content_rect());
 }
 
@@ -565,7 +568,7 @@ TEST_F(PropertyTreeBuilderTest, DelayedFilterAnimationCreatesRenderSurface) {
       std::move(curve), 0, 1,
       KeyframeModel::TargetPropertyId(TargetProperty::FILTER));
   keyframe_model->set_fill_mode(KeyframeModel::FillMode::NONE);
-  keyframe_model->set_time_offset(base::Milliseconds(-1000));
+  keyframe_model->set_start_delay(base::Milliseconds(1000));
 
   AddKeyframeModelToElementWithAnimation(child->element_id(), timeline(),
                                          std::move(keyframe_model));

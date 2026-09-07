@@ -9,17 +9,9 @@
 #include "base/check.h"
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
-#include "base/feature_list.h"
-#include "third_party/blink/renderer/platform/image-decoders/jpeg/jpeg_image_decoder.h"
-#include "third_party/blink/renderer/platform/image-decoders/png/png_image_decoder.h"
 #include "third_party/skia/include/core/SkColorSpace.h"
 
 namespace {
-
-// See https://crbug.com/456842524 for more details about the plan to
-// remove the support for JPG-or-PNG-embedded-in-BMP feature.
-BASE_FEATURE(kRemoveBmpExtensionForEmbeddingJpegOrPng,
-             base::FEATURE_ENABLED_BY_DEFAULT);
 
 // See comments on lookup_table_spans_ in the header.
 constexpr auto nBitTo8BitlookupTable = std::to_array<uint8_t>({
@@ -73,9 +65,6 @@ BMPImageReader::~BMPImageReader() = default;
 void BMPImageReader::SetData(scoped_refptr<SegmentReader> data) {
   data_ = data;
   fast_reader_.SetData(std::move(data));
-  if (alternate_decoder_) {
-    alternate_decoder_->SetData(data_.get(), parent_->IsAllDataReceived());
-  }
 }
 
 bool BMPImageReader::DecodeBMP(bool only_size) {
@@ -99,10 +88,7 @@ bool BMPImageReader::DecodeBMP(bool only_size) {
   // space is as well.  Unfortunately, since the profile appears after
   // everything else, this may delay processing until all data is received.
   // Luckily, few BMPs have an embedded color profile.
-  const bool use_alternate_decoder =
-      (info_header_.compression == JPEG) || (info_header_.compression == PNG);
-  if (!use_alternate_decoder && info_header_.profile_data &&
-      !ProcessEmbeddedColorProfile()) {
+  if (info_header_.profile_data && !ProcessEmbeddedColorProfile()) {
     return false;
   }
 
@@ -118,10 +104,6 @@ bool BMPImageReader::DecodeBMP(bool only_size) {
 
   if (only_size) {
     return true;
-  }
-
-  if (use_alternate_decoder) {
-    return DecodeAlternateFormat();
   }
 
   // Read and process the bitmasks, if needed.
@@ -319,15 +301,11 @@ bool BMPImageReader::ReadInfoHeader() {
     } else if ((compression == 4) && (info_header_.bit_count == 24)) {
       info_header_.compression = RLE24;
       is_os22x_ = true;
-    } else if (compression > ALPHABITFIELDS) {
+    } else if ((compression > ALPHABITFIELDS) || (compression == JPEG) ||
+               (compression == PNG)) {
       return parent_->SetFailed();  // Some type we don't understand.
     } else {
       info_header_.compression = static_cast<CompressionType>(compression);
-      if ((compression == JPEG || compression == PNG) &&
-          base::FeatureList::IsEnabled(
-              kRemoveBmpExtensionForEmbeddingJpegOrPng)) {
-        return parent_->SetFailed();  // Some type we don't understand.
-      }
     }
   }
 
@@ -368,9 +346,6 @@ bool BMPImageReader::ReadInfoHeader() {
     const uint32_t cs_type = ReadUint32(56);
     switch (cs_type) {
       case kLcsCalibratedRGB: {  // Endpoints and gamma specified directly
-        skcms_ICCProfile profile;
-        skcms_Init(&profile);
-
         // Convert chromaticity values from 2.30 fixed point to floating point.
         const auto fxpt2dot30_to_float = [](uint32_t fxpt2dot30) {
           return fxpt2dot30 * 9.31322574615478515625e-10f;
@@ -384,16 +359,10 @@ bool BMPImageReader::ReadInfoHeader() {
         // BMPs do not explicitly encode a white point.  Using the sRGB
         // illuminant (D65) seems reasonable given that Windows' system color
         // space is sRGB.
-        constexpr float kD65x = 0.31271;
-        constexpr float kD65y = 0.32902;
-        skcms_Matrix3x3 to_xyzd50;
-        if (!skcms_PrimariesToXYZD50(rx, ry, gx, gy, bx, by, kD65x, kD65y,
-                                     &to_xyzd50)) {
-          // Some real-world images have bogus values, e.g. all zeros.  Ignore
-          // the color space data in such cases, rather than failing.
-          break;
-        }
-        skcms_SetXYZD50(&profile, &to_xyzd50);
+        constexpr float kD65x = 0.31271f;
+        constexpr float kD65y = 0.32902f;
+        const SkColorSpacePrimaries primaries = {rx, ry, gx,    gy,
+                                                 bx, by, kD65x, kD65y};
 
         // Convert gamma values from 16.16 fixed point to transfer functions.
         const auto fxpt16dot16_to_fn = [](uint32_t fxpt16dot16) {
@@ -406,23 +375,20 @@ bool BMPImageReader::ReadInfoHeader() {
           fn.g = SkFixedToFloat(fxpt16dot16);
           return fn;
         };
-        profile.has_trc = true;
-        profile.trc[0].table_entries = 0;
-        profile.trc[0].parametric = fxpt16dot16_to_fn(ReadUint32(96));
-        profile.trc[1].table_entries = 0;
-        profile.trc[1].parametric = fxpt16dot16_to_fn(ReadUint32(100));
-        profile.trc[2].table_entries = 0;
-        profile.trc[2].parametric = fxpt16dot16_to_fn(ReadUint32(104));
 
-        parent_->SetEmbeddedColorProfile(
-            std::make_unique<ColorProfile>(profile));
+        if (auto profile = skia::ColorProfile::Make(
+                primaries, fxpt16dot16_to_fn(ReadUint32(96)),
+                fxpt16dot16_to_fn(ReadUint32(100)),
+                fxpt16dot16_to_fn(ReadUint32(104)))) {
+          parent_->SetEmbeddedColorProfile(std::move(profile));
+        }
         break;
       }
 
       case kLcssRGB:               // sRGB
       case kLcsWindowsColorSpace:  // "The Windows default color space" (sRGB)
         parent_->SetEmbeddedColorProfile(
-            std::make_unique<ColorProfile>(*skcms_sRGB_profile()));
+            skia::ColorProfile::Make(SkColorSpace::MakeSRGB()));
         break;
 
       case kProfileEmbedded:  // Embedded ICC profile
@@ -502,16 +468,6 @@ bool BMPImageReader::IsInfoHeaderValid() const {
       }
       break;
 
-    case JPEG:
-    case PNG:
-      // Only valid for Windows V3+.  We don't support embedding these inside
-      // ICO files.
-      if (is_os21x_ || is_os22x_ || info_header_.bit_count ||
-          !img_data_offset_) {
-        return false;
-      }
-      break;
-
     case HUFFMAN1D:
       // Only valid for OS/2 2.x.
       if (!is_os22x_ || (info_header_.bit_count != 1)) {
@@ -550,44 +506,6 @@ bool BMPImageReader::IsInfoHeaderValid() const {
   return true;
 }
 
-bool BMPImageReader::DecodeAlternateFormat() {
-  CHECK(
-      !base::FeatureList::IsEnabled(kRemoveBmpExtensionForEmbeddingJpegOrPng));
-
-  // Create decoder if necessary.
-  if (!alternate_decoder_) {
-    if (info_header_.compression == JPEG) {
-      alternate_decoder_ = std::make_unique<JPEGImageDecoder>(
-          parent_->GetAlphaOption(), parent_->GetColorBehavior(),
-          parent_->GetAuxImage(), parent_->GetMaxDecodedBytes(),
-          img_data_offset_);
-    } else {
-      alternate_decoder_ = std::make_unique<PngImageDecoder>(
-          parent_->GetAlphaOption(), parent_->GetColorBehavior(),
-          parent_->GetMaxDecodedBytes(), img_data_offset_);
-    }
-    alternate_decoder_->SetData(data_.get(), parent_->IsAllDataReceived());
-  }
-
-  // Decode the image.
-  if (alternate_decoder_->IsSizeAvailable()) {
-    if (alternate_decoder_->Size() != parent_->Size()) {
-      return parent_->SetFailed();
-    }
-
-    alternate_decoder_->SetMemoryAllocator(buffer_->GetAllocator());
-    const auto* frame = alternate_decoder_->DecodeFrameBufferAtIndex(0);
-    alternate_decoder_->SetMemoryAllocator(nullptr);
-
-    if (frame) {
-      *buffer_ = *frame;
-    }
-  }
-  return alternate_decoder_->Failed()
-             ? parent_->SetFailed()
-             : (buffer_->GetStatus() == ImageFrame::kFrameComplete);
-}
-
 bool BMPImageReader::ProcessEmbeddedColorProfile() {
   // Ensure we have received the whole profile.
   if ((info_header_.profile_data > data_->size()) ||
@@ -601,7 +519,7 @@ bool BMPImageReader::ProcessEmbeddedColorProfile() {
       base::HeapArray<uint8_t>::WithSize(info_header_.profile_size);
   base::span<const uint8_t> buffer = fast_reader_.GetConsecutiveData(
       info_header_.profile_data, info_header_.profile_size, owned_buffer);
-  auto profile = ColorProfile::Create(buffer);
+  auto profile = skia::ColorProfile::Make(buffer);
   if (!profile) {
     return parent_->SetFailed();
   }
@@ -1130,27 +1048,19 @@ void BMPImageReader::ColorCorrectCurrentRow() {
     return;
   }
   // Postprocess the image data according to the profile.
-  const ColorProfileTransform* const transform = parent_->ColorTransform();
-  if (!transform) {
+  if (!parent_->NeedsDecodeTimeColorTransform()) {
     return;
   }
+
   int decoder_width = parent_->Size().width();
-  // Enforce 0 ≤ current row < bitmap height.
+  // Enforce 0 ≤ current row < bitmap height.
   CHECK_GE(coord_.y(), 0);
   CHECK_LT(coord_.y(), buffer_->Bitmap().height());
   // Enforce decoder width == bitmap width exactly. (The bitmap rowbytes might
   // add a bit of padding, but we are only converting one row at a time.)
   CHECK_EQ(decoder_width, buffer_->Bitmap().width());
-  ImageFrame::PixelData* const row = buffer_->GetAddr(0, coord_.y());
-  const skcms_PixelFormat fmt = XformColorFormat();
-  const skcms_AlphaFormat alpha =
-      (buffer_->HasAlpha() && buffer_->PremultiplyAlpha())
-          ? skcms_AlphaFormat_PremulAsEncoded
-          : skcms_AlphaFormat_Unpremul;
-  const bool success =
-      skcms_Transform(row, fmt, alpha, transform->SrcProfile(), row, fmt, alpha,
-                      transform->DstProfile(), decoder_width);
-  DCHECK(success);
+  parent_->DoDecodeTimeColorTransformIfNeeded(
+      *buffer_, SkIRect::MakeXYWH(0, coord_.y(), decoder_width, 1));
   buffer_->SetPixelsChanged(true);
 }
 

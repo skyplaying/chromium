@@ -19,6 +19,7 @@
 #include "net/spdy/spdy_read_queue.h"
 #include "net/spdy/spdy_stream.h"
 #include "net/third_party/quiche/src/quiche/common/http/http_header_block.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_stream_priority.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "net/websockets/websocket_basic_stream.h"
 #include "net/websockets/websocket_quic_spdy_stream.h"
@@ -124,9 +125,17 @@ class NET_EXPORT_PRIVATE WebSocketSpdyStreamAdapter
   // Call WebSocketSpdyStreamAdapter::Delegate::OnClose().
   void CallDelegateOnClose();
 
+  // Send the zero-length final DATA frame that closes our half of the stream,
+  // if no other write is in flight, otherwise queue it.
+  void MaybeSendEndStream();
+
   // True if SpdyStream::Delegate::OnHeadersSent() has been called.
   // SpdyStream::SendData() must not be called before that.
   bool headers_sent_ = false;
+
+  // True once the final DATA frame has been sent to SendData(). This indicates
+  // that the stream should accept no more writes.
+  bool end_stream_sent_ = false;
 
   // The underlying SpdyStream.
   base::WeakPtr<SpdyStream> stream_;
@@ -195,6 +204,9 @@ class NET_EXPORT_PRIVATE WebSocketQuicStreamAdapter
 
   size_t WriteHeaders(quiche::HttpHeaderBlock header_block, bool fin);
 
+  // Sets the priority of the underlying QUIC stream.
+  void SetPriority(const quic::QuicStreamPriority& priority);
+
   // WebSocketBasicStream::Adapter methods.
   // TODO(momoka): Add functions that are needed to implement
   // WebSocketHttp3HandshakeStream.
@@ -213,6 +225,10 @@ class NET_EXPORT_PRIVATE WebSocketQuicStreamAdapter
   void Disconnect() override;
   bool is_initialized() const override;
 
+  // Byte count accessors. Return 0 after Disconnect().
+  uint64_t stream_bytes_read() const;
+  uint64_t stream_bytes_written() const;
+
   // WebSocketQuicSpdyStream::Delegate methods.
   void OnInitialHeadersComplete(
       bool fin,
@@ -230,6 +246,9 @@ class NET_EXPORT_PRIVATE WebSocketQuicStreamAdapter
   //  `websocket_quic_spdy_stream_` notifies this object of its destruction,
   //  because they may be destroyed in any order.
   raw_ptr<WebSocketQuicSpdyStream> websocket_quic_spdy_stream_;
+
+  // Close error returned by Read() and Write() after the stream is cleared.
+  int stream_error_ = ERR_UNEXPECTED;
 
   raw_ptr<Delegate> delegate_;
 

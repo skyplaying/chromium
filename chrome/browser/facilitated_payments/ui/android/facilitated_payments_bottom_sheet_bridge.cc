@@ -8,6 +8,7 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
+#include "base/android/jni_string.h"
 #include "base/containers/span.h"
 #include "chrome/browser/autofill/android/personal_data_manager_android.h"
 #include "chrome/browser/facilitated_payments/ui/android/facilitated_payments_controller.h"
@@ -116,14 +117,52 @@ void FacilitatedPaymentsBottomSheetBridge::Dismiss() {
   Java_FacilitatedPaymentsPaymentMethodsViewBridge_dismiss(env, java_bridge_);
 }
 
-void FacilitatedPaymentsBottomSheetBridge::ShowPixAccountLinkingPrompt() {
+void FacilitatedPaymentsBottomSheetBridge::ShowPixAccountLinkingPrompt(
+    int strike_count,
+    const std::string& account_email) {
+  if (!GetJavaBridge()) {
+    return;
+  }
+
+  Java_FacilitatedPaymentsPaymentMethodsViewBridge_showPixAccountLinkingPrompt(
+      base::android::AttachCurrentThread(), GetJavaBridge(), strike_count,
+      account_email);
+}
+
+void FacilitatedPaymentsBottomSheetBridge::
+    ShowPixAccountLinkingSuccessScreen() {
   if (!GetJavaBridge()) {
     return;
   }
 
   JNIEnv* env = base::android::AttachCurrentThread();
-  Java_FacilitatedPaymentsPaymentMethodsViewBridge_showPixAccountLinkingPrompt(
+  Java_FacilitatedPaymentsPaymentMethodsViewBridge_showPixAccountLinkingSuccessScreen(
       env, GetJavaBridge());
+}
+
+bool FacilitatedPaymentsBottomSheetBridge::ShowAccountLinkingPrompt(
+    const AccountLinkingParams& params) {
+  if (!GetJavaBridge()) {
+    return false;
+  }
+
+  JNIEnv* env = base::android::AttachCurrentThread();
+
+  Java_FacilitatedPaymentsPaymentMethodsViewBridge_showAccountLinkingPrompt(
+      env, GetJavaBridge(), static_cast<int>(params.fop_type),
+      params.fop_display_name, params.strike_count);
+  return true;
+}
+
+void FacilitatedPaymentsBottomSheetBridge::
+    ShowAccountLinkingFailureNotification(FacilitatedPaymentsType fop_type) {
+  if (!GetJavaBridge()) {
+    return;
+  }
+
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_FacilitatedPaymentsPaymentMethodsViewBridge_showAccountLinkingFailureNotification(
+      env, GetJavaBridge(), static_cast<int>(fop_type));
 }
 
 base::android::ScopedJavaLocalRef<jobject>

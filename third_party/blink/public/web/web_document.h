@@ -35,6 +35,7 @@
 #include <vector>
 
 #include "base/types/expected.h"
+#include "base/unguessable_token.h"
 #include "net/cookies/site_for_cookies.h"
 #include "net/storage_access_api/status.h"
 #include "net/url_request/referrer_policy.h"
@@ -49,6 +50,7 @@
 #include "third_party/blink/public/web/web_css_origin.h"
 #include "third_party/blink/public/web/web_draggable_region.h"
 #include "third_party/blink/public/web/web_node.h"
+#include "third_party/blink/public/web/web_script_tool_types.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/accessibility/ax_error_types.h"
 
@@ -140,9 +142,9 @@ class BLINK_EXPORT WebDocument : public WebNode {
   std::vector<WebFormElement> Forms() const;
   WebElement ScrollingElement();
 
-  // Returns all form elements that have no shadow-tree including ancestor that
-  // is also a form element. This includes form elements inside shadow trees.
-  std::vector<WebFormElement> GetTopLevelForms() const;
+  // Returns all form elements that have no shadow-including ancestor that is
+  // also a form element. This includes form elements inside shadow trees.
+  std::vector<WebFormElement> GetOutermostForms() const;
 
   WebURL CompleteURL(const WebString&) const;
   WebElement GetElementById(const WebString&) const;
@@ -200,11 +202,6 @@ class BLINK_EXPORT WebDocument : public WebNode {
   // Returns the referrer for this document.
   WebString OutgoingReferrer() const;
 
-  // (Experimental) Initiates Link Preview for `url`.
-  //
-  // It is intended to be used in WebLinkPreviewTriggerer.
-  void InitiatePreview(const WebURL& url);
-
   void SnapshotAccessibilityTree(
       size_t max_nodes,
       base::TimeDelta timeout,
@@ -216,57 +213,33 @@ class BLINK_EXPORT WebDocument : public WebNode {
   // document's ResourceFetcher.
   size_t ActiveResourceRequestCount() const;
 
+  // Returns the number of times the document's cookies have been modified.
+  uint64_t CookieModificationCount() const;
+
   // Executes a script tool with the given `name` and `input_arguments`.
   //
   // The associated callback is invoked once the async execution of the tool is
   // finished along with the result of the execution and the tool declaration.
-  // A null response indicates a navigation was triggered and the response will
-  // be on the next Document.
-  // An error is returned if the execution failed.
-  //
-  // The return value is a document-scoped execution ID which can be used to
-  // cancel the tool execution.
-  struct BLINK_EXPORT ScriptToolError {
-    enum Code {
-      kInvalidToolName,
-      kInvalidInputArguments,
-      kMissingRequiredSubmitButton,
-      kToolInvocationFailed,
-      kToolCancelled,
-    };
-    Code code;
-    WebString message;
-
-    ScriptToolError(Code code, WebString message = WebString())
-        : code(code), message(std::move(message)) {}
-
-    bool operator==(const ScriptToolError& other) const {
-      return code == other.code;
-    }
-    bool operator==(Code other_code) const { return code == other_code; }
-  };
-  struct BLINK_EXPORT ScriptToolDeclaration {
-    WebString description;
-    WebString input_schema;
-    std::optional<bool> read_only;
-  };
-  using ScriptToolResultCallback =
-      base::OnceCallback<void(std::unique_ptr<ScriptToolDeclaration>,
-                              base::expected<WebString, ScriptToolError>)>;
-  std::optional<uint32_t> ExecuteScriptTool(
-      const WebString& name,
-      const WebString& input_arguments,
-      ScriptToolResultCallback tool_result_cb);
+  // Returns true for success.
+  bool ExecuteScriptTool(const base::UnguessableToken& invocation_id,
+                         const WebString& name,
+                         const WebString& input_arguments,
+                         WebScriptToolResultCallback tool_result_cb);
 
   // Provides the result of a script tool execution initiated on an old
   // Document.
   using CrossDocumentScriptToolResultCallback =
       base::OnceCallback<void(WebString)>;
   void GetCrossDocumentScriptToolResult(
+      const base::UnguessableToken& invocation_id,
       CrossDocumentScriptToolResultCallback result_callback);
 
   // Cancels a script tool with the given execution ID.
-  void CancelScriptTool(uint32_t execution_id);
+  void CancelScriptTool(const base::UnguessableToken& invocation_id);
+
+  // Returns whether the AutofillEvent runtime feature is enabled for this
+  // document's execution context (including origin trial tokens).
+  bool IsAutofillEventEnabled() const;
 
   // Dispatches an autofill event on the document with the given field data.
   // This is called by the autofill agent before filling form fields.

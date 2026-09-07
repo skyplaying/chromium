@@ -19,7 +19,6 @@ import android.content.res.ColorStateList;
 import android.view.ContextThemeWrapper;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.ImageView;
 
 import androidx.test.core.app.ApplicationProvider;
 
@@ -34,6 +33,7 @@ import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.incognito.IncognitoUtils;
@@ -43,14 +43,11 @@ import org.chromium.ui.modelutil.PropertyModel;
 
 /** Unit tests for {@link ComposeplateCoordinator}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class ComposeplateCoordinatorUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Mock private ViewGroup mParentView;
     @Mock private ComposeplateView mComposeplateView;
-    @Mock private ImageView mVoiceSearchButton;
-    @Mock private ImageView mLensButton;
     @Mock private View mIncognitoButton;
     @Mock private View mComposeplateButton;
     @Mock private View.OnClickListener mOriginalOnClickListener;
@@ -72,32 +69,13 @@ public class ComposeplateCoordinatorUnitTest {
         when(mParentView.findViewById(R.id.composeplate_view)).thenReturn(mComposeplateView);
         when(mParentView.getResources()).thenReturn(mContext.getResources());
         when(mComposeplateView.getContext()).thenReturn(mContext);
-        when(mComposeplateView.findViewById(R.id.voice_search_button))
-                .thenReturn(mVoiceSearchButton);
-        when(mComposeplateView.findViewById(R.id.lens_camera_button)).thenReturn(mLensButton);
+        when(mComposeplateView.getResources()).thenReturn(mContext.getResources());
         when(mComposeplateView.findViewById(R.id.incognito_button)).thenReturn(mIncognitoButton);
         when(mComposeplateView.findViewById(R.id.composeplate_button))
                 .thenReturn(mComposeplateButton);
 
         mCoordinator = new ComposeplateCoordinator(mParentView, mProfile);
         mPropertyModel = mCoordinator.getModelForTesting();
-    }
-
-    @Test
-    public void testSetVisibilityV1() {
-        HistogramWatcher histogramWatcher =
-                HistogramWatcher.newSingleRecordWatcher(
-                        ComposeplateMetricsUtils.HISTOGRAM_COMPOSEPLATE_IMPRESSION, true);
-        mCoordinator.setVisibilityV1(/* visible= */ true, /* isCurrentPage= */ true);
-        verify(mComposeplateView).setVisibility(View.VISIBLE);
-        histogramWatcher.assertExpected();
-
-        histogramWatcher =
-                HistogramWatcher.newSingleRecordWatcher(
-                        ComposeplateMetricsUtils.HISTOGRAM_COMPOSEPLATE_IMPRESSION, false);
-        mCoordinator.setVisibilityV1(/* visible= */ false, /* isCurrentPage= */ true);
-        verify(mComposeplateView).setVisibility(View.GONE);
-        histogramWatcher.assertExpected();
     }
 
     @Test
@@ -115,82 +93,6 @@ public class ComposeplateCoordinatorUnitTest {
         mCoordinator.setVisibility(/* visible= */ false, /* isCurrentPage= */ true);
         verify(mComposeplateView).setVisibility(View.GONE);
         histogramWatcher.assertExpected();
-    }
-
-    @Test
-    public void testSetIncognitoButtonVisibilityV1() {
-        assertFalse(ChromeFeatureList.sAndroidComposeplateHideIncognitoButton.getValue());
-        mCoordinator.setVisibilityV1(/* visible= */ true, /* isCurrentPage= */ true);
-        verify(mComposeplateView).setVisibility(View.VISIBLE);
-        verify(mIncognitoButton).setVisibility(View.VISIBLE);
-
-        mCoordinator.setVisibilityV1(/* visible= */ false, /* isCurrentPage= */ true);
-        verify(mComposeplateView).setVisibility(View.GONE);
-        verify(mIncognitoButton).setVisibility(View.GONE);
-    }
-
-    @Test
-    public void testSetIncognitoButtonVisibilityV1_HideIncognitoButton() {
-        ChromeFeatureList.sAndroidComposeplateHideIncognitoButton.setForTesting(true);
-        mCoordinator = new ComposeplateCoordinator(mParentView, mProfile);
-
-        mCoordinator.setVisibilityV1(/* visible= */ true, /* isCurrentPage= */ true);
-        verify(mComposeplateView).setVisibility(View.VISIBLE);
-        verify(mIncognitoButton).setVisibility(View.GONE);
-
-        mCoordinator.setVisibilityV1(/* visible= */ false, /* isCurrentPage= */ true);
-        verify(mComposeplateView).setVisibility(View.GONE);
-        verify(mIncognitoButton).setVisibility(View.GONE);
-    }
-
-    @Test
-    public void testSetIncognitoButtonVisibilityV1_IncognitoDisabled() {
-        IncognitoUtils.setEnabledForTesting(false);
-        assertFalse(IncognitoUtils.isIncognitoModeEnabled(mProfile));
-        assertFalse(ChromeFeatureList.sAndroidComposeplateHideIncognitoButton.getValue());
-        mCoordinator = new ComposeplateCoordinator(mParentView, mProfile);
-
-        mCoordinator.setVisibilityV1(/* visible= */ true, /* isCurrentPage= */ true);
-        verify(mComposeplateView).setVisibility(View.VISIBLE);
-        verify(mIncognitoButton).setVisibility(View.GONE);
-
-        mCoordinator.setVisibilityV1(/* visible= */ false, /* isCurrentPage= */ true);
-        verify(mComposeplateView).setVisibility(View.GONE);
-        verify(mIncognitoButton).setVisibility(View.GONE);
-    }
-
-    @Test
-    public void testSetVoiceSearchClickListener() {
-        mCoordinator.setVoiceSearchClickListener(mOriginalOnClickListener);
-        View.OnClickListener enhancedListener = getCapturedOnClickListener(mVoiceSearchButton);
-
-        HistogramWatcher histogramWatcher =
-                HistogramWatcher.newSingleRecordWatcher(
-                        "NewTabPage.Module.Click",
-                        ModuleTypeOnStartAndNtp.COMPOSEPLATE_VIEW_VOICE_SEARCH_BUTTON);
-
-        View clickedView = mock(View.class);
-        enhancedListener.onClick(clickedView);
-
-        histogramWatcher.assertExpected();
-        verify(mOriginalOnClickListener).onClick(clickedView);
-    }
-
-    @Test
-    public void testSetLensClickListener() {
-        mCoordinator.setLensClickListener(mOriginalOnClickListener);
-        View.OnClickListener enhancedListener = getCapturedOnClickListener(mLensButton);
-
-        HistogramWatcher histogramWatcher =
-                HistogramWatcher.newSingleRecordWatcher(
-                        "NewTabPage.Module.Click",
-                        ModuleTypeOnStartAndNtp.COMPOSEPLATE_VIEW_LENS_BUTTON);
-
-        View clickedView = mock(View.class);
-        enhancedListener.onClick(clickedView);
-
-        histogramWatcher.assertExpected();
-        verify(mOriginalOnClickListener).onClick(clickedView);
     }
 
     @Test
@@ -228,20 +130,14 @@ public class ComposeplateCoordinatorUnitTest {
 
     @Test
     public void testDestroy() {
-        mCoordinator.setVoiceSearchClickListener(mOriginalOnClickListener);
-        mCoordinator.setLensClickListener(mOriginalOnClickListener);
         mCoordinator.setIncognitoClickListener(mOriginalOnClickListener);
         mCoordinator.setComposeplateButtonClickListener(mOriginalOnClickListener);
 
-        assertNotNull(mPropertyModel.get(ComposeplateProperties.VOICE_SEARCH_CLICK_LISTENER));
-        assertNotNull(mPropertyModel.get(ComposeplateProperties.LENS_CLICK_LISTENER));
         assertNotNull(mPropertyModel.get(ComposeplateProperties.INCOGNITO_CLICK_LISTENER));
         assertNotNull(
                 mPropertyModel.get(ComposeplateProperties.COMPOSEPLATE_BUTTON_CLICK_LISTENER));
 
         mCoordinator.destroy();
-        assertNull(mPropertyModel.get(ComposeplateProperties.VOICE_SEARCH_CLICK_LISTENER));
-        assertNull(mPropertyModel.get(ComposeplateProperties.LENS_CLICK_LISTENER));
         assertNull(mPropertyModel.get(ComposeplateProperties.INCOGNITO_CLICK_LISTENER));
         assertNull(mPropertyModel.get(ComposeplateProperties.COMPOSEPLATE_BUTTON_CLICK_LISTENER));
     }
@@ -253,21 +149,48 @@ public class ComposeplateCoordinatorUnitTest {
         int textStyleResId = ComposeplateUtils.getSearchBoxTextStyleResId(apply);
         ColorStateList colorStateList =
                 ComposeplateUtils.getSearchBoxIconColorTint(mContext, apply);
-        mCoordinator.applyWhiteBackgroundWithShadow(true);
-        assertTrue(mPropertyModel.get(ComposeplateProperties.APPLY_WHITE_BACKGROUND_WITH_SHADOW));
+        mCoordinator.applyWhiteBackground(true);
+        assertTrue(mPropertyModel.get(ComposeplateProperties.APPLY_WHITE_BACKGROUND));
         assertEquals(colorStateList, mPropertyModel.get(ComposeplateProperties.COLOR_STATE_LIST));
         assertEquals(textStyleResId, mPropertyModel.get(ComposeplateProperties.TEXT_STYLE_RES_ID));
-        verify(mComposeplateView).applyWhiteBackgroundWithShadow(eq(true));
+        verify(mComposeplateView).applyWhiteBackground(eq(true));
 
         // Tests the case to remove the white background with shadow.
         apply = false;
         textStyleResId = ComposeplateUtils.getSearchBoxTextStyleResId(apply);
         colorStateList = ComposeplateUtils.getSearchBoxIconColorTint(mContext, apply);
-        mCoordinator.applyWhiteBackgroundWithShadow(false);
-        assertFalse(mPropertyModel.get(ComposeplateProperties.APPLY_WHITE_BACKGROUND_WITH_SHADOW));
+        mCoordinator.applyWhiteBackground(false);
+        assertFalse(mPropertyModel.get(ComposeplateProperties.APPLY_WHITE_BACKGROUND));
         assertEquals(colorStateList, mPropertyModel.get(ComposeplateProperties.COLOR_STATE_LIST));
         assertEquals(textStyleResId, mPropertyModel.get(ComposeplateProperties.TEXT_STYLE_RES_ID));
-        verify(mComposeplateView).applyWhiteBackgroundWithShadow(eq(false));
+        verify(mComposeplateView).applyWhiteBackground(eq(false));
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.NTP_AURORA + ":change_button_color/true")
+    public void testSetLayoutWidth_buttonColorEnabled_phone() {
+        verifyComposeplateWidth(
+                /* lateralMargin= */ mContext.getResources()
+                        .getDimensionPixelSize(R.dimen.composeplate_view_lateral_margin));
+    }
+
+    @Test
+    @Config(qualifiers = "sw600dp")
+    @EnableFeatures(ChromeFeatureList.NTP_AURORA + ":change_button_color/true")
+    public void testSetLayoutWidth_buttonColorEnabled_tablet() {
+        verifyComposeplateWidth(
+                /* lateralMargin= */ mContext.getResources()
+                        .getDimensionPixelSize(R.dimen.composeplate_view_lateral_margin));
+    }
+
+    private void verifyComposeplateWidth(int lateralMargin) {
+        ViewGroup.MarginLayoutParams layoutParams = new ViewGroup.MarginLayoutParams(100, 100);
+        when(mComposeplateView.getLayoutParams()).thenReturn(layoutParams);
+
+        int searchBoxWidth = 400;
+        mCoordinator.setLayoutWidth(searchBoxWidth);
+
+        assertEquals(searchBoxWidth - 2 * lateralMargin, layoutParams.width);
     }
 
     private View.OnClickListener getCapturedOnClickListener(View button) {

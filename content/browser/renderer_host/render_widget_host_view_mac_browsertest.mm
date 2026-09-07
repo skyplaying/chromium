@@ -6,9 +6,12 @@
 
 #import <Carbon/Carbon.h>
 
+#include <memory>
 #include <string>
 #include <string_view>
 
+#include "base/command_line.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #import "base/mac/mac_util.h"
 #include "base/run_loop.h"
@@ -18,10 +21,13 @@
 #include "base/test/scoped_feature_list.h"
 #import "content/app_shim_remote_cocoa/render_widget_host_view_cocoa.h"
 #include "content/browser/web_contents/web_contents_impl.h"
+#include "content/common/features.h"
 #include "content/public/browser/browser_accessibility_state.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/scoped_accessibility_mode.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_features.h"
+#include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
@@ -245,6 +251,14 @@ class RenderWidgetHostViewMacTest : public ContentBrowserTest {
         features::kSonomaAccessibilityActivationRefinements);
   }
 
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    ContentBrowserTest::SetUpCommandLine(command_line);
+    // UpdateInputFlags asserts the spec-default autocorrect IME mapping, which
+    // is gated behind the WebAutocorrectByDefault runtime feature.
+    command_line->AppendSwitchASCII(switches::kEnableBlinkFeatures,
+                                    "WebAutocorrectByDefault");
+  }
+
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
 };
@@ -273,6 +287,13 @@ IN_PROC_BROWSER_TEST_F(RenderWidgetHostViewMacTest, GetPageTextForSpeech) {
 // isn't in the active selection, which requires a sync IPC to the renderer.
 IN_PROC_BROWSER_TEST_F(RenderWidgetHostViewMacTest,
                        GetFirstRectForCharacterRangeUncached) {
+  // If AllowRangeOutsideSelection is enabled, the result is allowed to be empty
+  // to skip the sync IPC.
+  if (base::FeatureList::IsEnabled(
+          features::kCachedFirstRectAllowRangeOutsideSelection)) {
+    GTEST_SKIP();
+  }
+
   GURL url("data:text/html,Hello");
   EXPECT_TRUE(NavigateToURL(shell(), url));
 
@@ -298,7 +319,8 @@ IN_PROC_BROWSER_TEST_F(RenderWidgetHostViewMacTest,
 IN_PROC_BROWSER_TEST_F(RenderWidgetHostViewMacTest, UpdateInputFlags) {
   class InputMethodObserver {};
 
-  GURL url("data:text/html,<!doctype html><textarea id=ta></textarea>");
+  GURL url("data:text/html,<!doctype html><textarea id=ta></textarea>"
+           "<input type=email id=em>");
   EXPECT_TRUE(NavigateToURL(shell(), url));
 
   RenderWidgetHostView* rwhv =
@@ -318,6 +340,15 @@ IN_PROC_BROWSER_TEST_F(RenderWidgetHostViewMacTest, UpdateInputFlags) {
   EXPECT_TRUE(ExecJs(
       shell(),
       "ta.setAttribute('autocorrect', 'off'); console.log(ta.outerHTML);"));
+  [flag_change_waiter wait];
+  EXPECT_TRUE(rwhv_cocoa.textInputFlags &
+              blink::kWebTextInputFlagAutocorrectOff);
+
+  // An <input type=email> (and likewise type=url/password) has a used
+  // autocorrection state of Off per spec even without an autocorrect
+  // attribute, so the Off flag is set. Focusing it also changes the
+  // autocapitalize bits, so textInputFlags is observed to change.
+  EXPECT_TRUE(ExecJs(shell(), "em.focus();"));
   [flag_change_waiter wait];
   EXPECT_TRUE(rwhv_cocoa.textInputFlags &
               blink::kWebTextInputFlagAutocorrectOff);
@@ -403,6 +434,37 @@ IN_PROC_BROWSER_TEST_F(RenderWidgetHostViewMacTest,
   // Calling -accessibilityRole on the RenderWidgetHostViewCocoa should have
   // activated basic accessibility support.
   EXPECT_EQ(accessibility_state->GetAccessibilityMode(), ui::kAXModeBasic);
+}
+
+IN_PROC_BROWSER_TEST_F(RenderWidgetHostViewMacTest,
+                       WebAccessibilityRootUsesScrollArea) {
+  GURL url("data:text/html,<!doctype html><p>Web content</p>");
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  std::unique_ptr<ScopedAccessibilityMode> accessibility_mode =
+      BrowserAccessibilityState::GetInstance()->CreateScopedModeForProcess(
+          ui::kAXModeComplete);
+
+  RenderWidgetHostView* rwhv =
+      shell()->web_contents()->GetPrimaryMainFrame()->GetView();
+  RenderWidgetHostViewMac* rwhv_mac =
+      static_cast<RenderWidgetHostViewMac*>(rwhv);
+  RenderWidgetHostViewCocoa* rwhv_cocoa = rwhv_mac->GetInProcessNSView();
+
+  ASSERT_TRUE(base::test::RunUntil(
+      [&]() { return rwhv_mac->GetRootBrowserAccessibilityElement() != nil; }));
+
+  id web_area = rwhv_mac->GetRootBrowserAccessibilityElement();
+  EXPECT_TRUE(rwhv_cocoa.isAccessibilityElement);
+  EXPECT_TRUE(
+      [rwhv_cocoa.accessibilityRole isEqual:NSAccessibilityScrollAreaRole]);
+  ASSERT_EQ(1u, rwhv_cocoa.accessibilityChildren.count);
+  EXPECT_EQ(web_area, rwhv_cocoa.accessibilityChildren[0]);
+  EXPECT_EQ(rwhv_cocoa, [web_area accessibilityParent]);
+
+  NSArray* children = NSAccessibilityUnignoredChildren(@[ rwhv_cocoa ]);
+  ASSERT_EQ(1u, children.count);
+  EXPECT_EQ(rwhv_cocoa, children[0]);
 }
 
 // Tests that text replacement is not accepted during intermediate selection
@@ -569,6 +631,58 @@ IN_PROC_BROWSER_TEST_F(RenderWidgetHostViewMacTest,
   text = EvalJs(shell(), "editor.editContext.text").ExtractString();
   EXPECT_EQ("On my way ", text)
       << "Text replacement should be accepted on space.";
+}
+
+// Tests that selection is synced between browser and renderer when
+// `EditContext::updateSelection` is called from a selectionchange handler. The
+// browser's cached selectedRange must reflect the current selection for IME
+// queries.
+IN_PROC_BROWSER_TEST_F(RenderWidgetHostViewMacTest,
+                       EditContextSelectionSyncOnUpdateSelection) {
+  if (!base::FeatureList::IsEnabled(features::kEditContextSelectionSync)) {
+    GTEST_SKIP();
+  }
+  GURL url(
+      "data:text/html,"
+      "<div id=editor contenteditable style='font-size:20px'>hello world</div>"
+      "<script>"
+      "const editor = document.getElementById('editor');"
+      "const ec = new EditContext({text: 'hello world'});"
+      "editor.editContext = ec;"
+      "document.addEventListener('selectionchange', () => {"
+      "  const sel = document.getSelection();"
+      "  if (sel.rangeCount > 0 && editor.contains(sel.anchorNode)) {"
+      "    ec.updateSelection(sel.anchorOffset, sel.focusOffset);"
+      "  }"
+      "});"
+      "</script>");
+  EXPECT_TRUE(NavigateToURL(shell(), url));
+
+  RenderWidgetHostView* rwhv =
+      shell()->web_contents()->GetPrimaryMainFrame()->GetView();
+  RenderWidgetHostViewMac* rwhv_mac =
+      static_cast<RenderWidgetHostViewMac*>(rwhv);
+  RenderWidgetHostViewCocoa* rwhv_cocoa = rwhv_mac->GetInProcessNSView();
+
+  EXPECT_TRUE(ExecJs(shell(), "editor.focus()"));
+
+  TextSelectionWaiter selection_waiter(rwhv_mac);
+
+  // Select "hello" in the renderer to trigger selection sync to browser.
+  EXPECT_TRUE(ExecJs(shell(), "const range = document.createRange();"
+                              "range.setStart(editor.firstChild, 0);"
+                              "range.setEnd(editor.firstChild, 5);"
+                              "const sel = document.getSelection();"
+                              "sel.removeAllRanges();"
+                              "sel.addRange(range);"));
+
+  // Wait for selection sync between browser and renderer process.
+  selection_waiter.Wait();
+
+  // Verify the browser-side cached selection matches the renderer's selection.
+  NSRange selected_range = [rwhv_cocoa selectedRange];
+  EXPECT_EQ(0lu, selected_range.location);
+  EXPECT_EQ(5lu, selected_range.length);
 }
 
 }  // namespace content

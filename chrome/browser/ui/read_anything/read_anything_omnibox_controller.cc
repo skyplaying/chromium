@@ -7,24 +7,31 @@
 #include "base/metrics/histogram_functions.h"
 #include "chrome/browser/dom_distiller/tab_utils.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
+#include "chrome/browser/ui/page_action/page_action_controller.h"
 #include "chrome/browser/ui/read_anything/read_anything_controller.h"
+#include "chrome/browser/ui/read_anything/read_anything_enums.h"
 #include "chrome/browser/ui/read_anything/read_anything_side_panel_controller_utils.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "content/public/browser/page.h"
 #include "content/public/browser/web_contents.h"
 #include "read_anything_entry_point_controller.h"
+#include "services/metrics/public/cpp/ukm_builders.h"
+#include "services/metrics/public/cpp/ukm_recorder.h"
 #include "ui/accessibility/accessibility_features.h"
 
 ReadAnythingOmniboxController::ReadAnythingOmniboxController(
     tabs::TabInterface* tab)
-    : content::WebContentsObserver(tab->GetContents()),
+    : tabs::ContentsObservingTabFeature(*tab),
       PageActionObserver(kActionSidePanelShowReadAnything),
       tab_(tab) {
   // This class should only be instantiated if the omnibox entrypoint is
   // enabled.
-  CHECK(features::IsReadAnythingOmniboxChipEnabled() &&
-        base::FeatureList::IsEnabled(features::kPageActionsMigration));
+  CHECK(features::IsReadAnythingOmniboxChipEnabled());
+
+  read_anything::ReadAnythingEntryPointController::
+      RegisterForSuggestReadingMode(
+          tab_->GetBrowserWindowInterface()->GetProfile());
 
   RegisterAsPageActionObserver(
       *tab_->GetTabFeatures()->page_action_controller());
@@ -38,11 +45,9 @@ ReadAnythingOmniboxController::ReadAnythingOmniboxController(
       base::BindRepeating(&ReadAnythingOmniboxController::OnTabBackgrounded,
                           weak_factory_.GetWeakPtr())));
 
-  if (features::IsImmersiveReadAnythingEnabled()) {
-    auto* read_anything_controller = ReadAnythingController::From(tab_);
-    CHECK(read_anything_controller);
-    read_anything_controller->AddObserver(this);
-  }
+  auto* read_anything_controller = ReadAnythingController::From(tab_);
+  CHECK(read_anything_controller);
+  read_anything_controller->AddObserver(this);
 }
 
 ReadAnythingOmniboxController::~ReadAnythingOmniboxController() = default;
@@ -58,7 +63,9 @@ void ReadAnythingOmniboxController::TabWillDetach(
 }
 
 void ReadAnythingOmniboxController::OnTabForegrounded(tabs::TabInterface* tab) {
-  DebounceCheckSuggestion();
+  if (!was_page_checked_) {
+    DebounceCheckSuggestion();
+  }
 }
 
 void ReadAnythingOmniboxController::OnTabBackgrounded(tabs::TabInterface* tab) {
@@ -67,7 +74,8 @@ void ReadAnythingOmniboxController::OnTabBackgrounded(tabs::TabInterface* tab) {
 
 void ReadAnythingOmniboxController::Activate(
     bool active,
-    std::optional<ReadAnythingOpenTrigger> open_trigger) {
+    ReadAnythingOpenTrigger open_trigger,
+    std::optional<base::TimeDelta> completed_session_duration) {
   if (active) {
     if (iph_response_timer_ && iph_response_timer_->IsRunning()) {
       iph_response_timer_->Stop();
@@ -75,43 +83,91 @@ void ReadAnythingOmniboxController::Activate(
     }
 
     if (features::IsReadAnythingOmniboxChipEnabled() &&
-        base::FeatureList::IsEnabled(features::kPageActionsMigration) &&
-        open_trigger.has_value() && GetCurrentPageActionState().showing) {
+        open_trigger !=
+            ReadAnythingOpenTrigger::kReadAnythingTogglePresentationButton &&
+        GetCurrentPageActionState().showing) {
+      // Ignore the toggle presentation button for this metric, since that can
+      // only be used after RM is already open.
       base::UmaHistogramEnumeration(
-          "Accessibility.ReadAnything.EntryPointAfterOmnibox",
-          open_trigger.value());
+          "Accessibility.ReadAnything.EntryPointAfterOmnibox", open_trigger);
     }
     // Hide the omnibox entrypoint now that RM is already showing.
     read_anything::ReadAnythingEntryPointController::UpdatePageActionVisibility(
-        /*should_show_page_action=*/false, tab_->GetBrowserWindowInterface());
+        /*should_show_page_action=*/false, tab_);
+
+    if (open_trigger == ReadAnythingOpenTrigger::kOmniboxChip) {
+      was_triggered_ = true;
+    }
+  }
+}
+
+void ReadAnythingOmniboxController::OnReadingModePresenterChanged() {
+  auto* read_anything_controller = ReadAnythingController::From(tab_);
+  CHECK(read_anything_controller);
+  // If Reading mode was just closed by the user, show the omnibox entrypoint.
+  if (read_anything_controller->GetPresentationState() ==
+          ReadAnythingController::PresentationState::kInactive &&
+      last_close_reason_.has_value() &&
+      last_close_reason_ == ReadAnythingCloseReason::kClosedByUser) {
+    read_anything::ReadAnythingEntryPointController::UpdatePageActionVisibility(
+        /*should_show_page_action=*/true, tab_);
   }
 }
 
 void ReadAnythingOmniboxController::OnDestroyed() {
+  LogUkm();
   StopTimers();
-  if (features::IsImmersiveReadAnythingEnabled()) {
-    auto* read_anything_controller = ReadAnythingController::From(tab_);
-    CHECK(read_anything_controller);
-    read_anything_controller->RemoveObserver(this);
-  }
+  auto* read_anything_controller = ReadAnythingController::From(tab_);
+  CHECK(read_anything_controller);
+  read_anything_controller->RemoveObserver(this);
+}
+
+void ReadAnythingOmniboxController::OnWillClose(
+    ReadAnythingCloseReason reason) {
+  last_close_reason_ = reason;
+}
+
+void ReadAnythingOmniboxController::OnDiscardContents(
+    tabs::TabInterface* tab,
+    content::WebContents* old_contents,
+    content::WebContents* new_contents) {
+  tabs::ContentsObservingTabFeature::OnDiscardContents(tab, old_contents,
+                                                       new_contents);
+  LogUkm();
+  read_anything::ReadAnythingEntryPointController::UpdatePageActionVisibility(
+      /*should_show_page_action=*/false, tab_);
+  StopTimers();
+  was_last_checked_page_distillable_ = false;
+  was_page_checked_ = false;
+  candidate_check_triggered_time_ms_ = base::TimeTicks();
 }
 
 void ReadAnythingOmniboxController::PrimaryPageChanged(content::Page& page) {
-  UpdateIgnored(GetCurrentPageActionState().showing);
-  if (!read_anything::ReadAnythingEntryPointController::
-          CheckIfShouldSuggestReadingModeNaive(
-              tab_->GetBrowserWindowInterface())) {
-    UpdateVisibility(false);
+  LogUkm();
+  // Reset the distillable indicator when the page changes.
+  was_last_checked_page_distillable_ = false;
+  was_page_checked_ = false;
+  if (IsIrrelevant()) {
+    return;
   }
 
   StopTimers();
-}
-
-void ReadAnythingOmniboxController::DidStopLoading() {
+  UpdateIgnored(GetCurrentPageActionState().showing);
   DebounceCheckSuggestion();
 }
 
+void ReadAnythingOmniboxController::DidStopLoading() {
+  if (check_suggestion_debouncer_ && check_suggestion_debouncer_->IsRunning()) {
+    check_suggestion_debouncer_->Reset();
+  }
+}
+
 void ReadAnythingOmniboxController::DebounceCheckSuggestion() {
+  if (IsIrrelevant()) {
+    return;
+  }
+
+  candidate_check_triggered_time_ms_ = base::TimeTicks::Now();
   if (!check_suggestion_debouncer_) {
     check_suggestion_debouncer_ = std::make_unique<base::OneShotTimer>();
   }
@@ -123,11 +179,10 @@ void ReadAnythingOmniboxController::DebounceCheckSuggestion() {
 }
 
 void ReadAnythingOmniboxController::CheckIfShouldSuggestReadingMode() {
-  if (!tab_->IsActivated()) {
+  if (IsIrrelevant()) {
     return;
   }
 
-  candidate_check_triggered_time_ms_ = base::TimeTicks::Now();
   read_anything::ReadAnythingEntryPointController::
       CheckIfShouldSuggestReadingMode(
           tab_->GetBrowserWindowInterface(),
@@ -142,7 +197,13 @@ void ReadAnythingOmniboxController::OnShouldSuggestReadingModeResult(
   // entry point is hidden when the tab is closed, but a closed tab should
   // count as "ignored".
   was_last_checked_page_distillable_ = should_show;
-  if (!tab_->IsActivated()) {
+  was_page_checked_ = true;
+  if (tab_ && tab_->GetContents() &&
+      tab_->GetContents()->GetPrimaryMainFrame()) {
+    ukm_source_id_ =
+        tab_->GetContents()->GetPrimaryMainFrame()->GetPageUkmSourceId();
+  }
+  if (IsIrrelevant()) {
     return;
   }
 
@@ -151,17 +212,26 @@ void ReadAnythingOmniboxController::OnShouldSuggestReadingModeResult(
 
 void ReadAnythingOmniboxController::UpdateVisibility(bool should_show) {
   // Don't show the entrypoint if the tab is no longer active.
-  if (!tab_->IsActivated()) {
+  if (IsIrrelevant()) {
     return;
   }
 
   read_anything::ReadAnythingEntryPointController::UpdatePageActionVisibility(
-      should_show, tab_->GetBrowserWindowInterface(),
+      should_show, tab_,
       base::BindOnce(&ReadAnythingOmniboxController::OnShowPromoResult,
                      weak_factory_.GetWeakPtr()));
 }
 
+void ReadAnythingOmniboxController::OnPageActionIconShown(
+    const page_actions::PageActionState& page_action) {
+  was_shown_ = true;
+}
+
 void ReadAnythingOmniboxController::UpdateIgnored(bool is_showing) {
+  if (!is_showing) {
+    return;
+  }
+
   // Indicate that the omnibox entrypoint was ignored if it's still showing when
   // the page changes or tab closes, and the user was on the previous page for a
   // non-trivial amount of time. Without this time check, the omnibox would be
@@ -171,12 +241,10 @@ void ReadAnythingOmniboxController::UpdateIgnored(bool is_showing) {
       candidate_check_triggered_time_ms_.is_null()
           ? base::Milliseconds(0)
           : base::TimeTicks::Now() - candidate_check_triggered_time_ms_;
-  if (is_showing && time_on_previous_page.InMilliseconds() >
-                        kTimeOnPreviousPageBeforeIgnored) {
-    if (auto* browser_window_interface = tab_->GetBrowserWindowInterface()) {
-      read_anything::ReadAnythingEntryPointController::OnPageActionIgnored(
-          browser_window_interface);
-    }
+  if (time_on_previous_page.InMilliseconds() >
+      kTimeOnPreviousPageBeforeIgnored) {
+    read_anything::ReadAnythingEntryPointController::OnPageActionIgnored(
+        tab_->GetBrowserWindowInterface());
   }
 }
 
@@ -208,4 +276,22 @@ void ReadAnythingOmniboxController::StopTimers() {
   if (check_suggestion_debouncer_ && check_suggestion_debouncer_->IsRunning()) {
     check_suggestion_debouncer_->Stop();
   }
+}
+
+bool ReadAnythingOmniboxController::IsIrrelevant() {
+  return !tab_->IsActivated() ||
+         read_anything::ReadAnythingEntryPointController::IsUIShowing(
+             tab_->GetBrowserWindowInterface());
+}
+
+void ReadAnythingOmniboxController::LogUkm() {
+  if (ukm_source_id_ != ukm::kInvalidSourceId && was_page_checked_) {
+    ukm::builders::Accessibility_ReadAnything_OmniboxEntryPoint(ukm_source_id_)
+        .SetShown(was_shown_)
+        .SetTriggered(was_triggered_)
+        .Record(ukm::UkmRecorder::Get());
+  }
+  ukm_source_id_ = ukm::kInvalidSourceId;
+  was_triggered_ = false;
+  was_shown_ = false;
 }

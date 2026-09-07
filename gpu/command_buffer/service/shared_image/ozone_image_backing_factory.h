@@ -9,6 +9,7 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
+#include "gpu/command_buffer/common/shared_image_info.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
 #include "gpu/command_buffer/service/shared_image/ozone_image_backing.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_backing_factory.h"
@@ -18,6 +19,7 @@
 
 namespace gpu {
 class SharedContextState;
+class VulkanContextProvider;
 
 // Implementation of SharedImageBackingFactory that produces NativePixmap
 // backed SharedImages.
@@ -31,7 +33,7 @@ class GPU_GLES2_EXPORT OzoneImageBackingFactory
   ~OzoneImageBackingFactory() override;
 
   static gfx::GpuMemoryBufferHandle CreateGpuMemoryBufferHandle(
-      viz::VulkanContextProvider* vulkan_context_provider,
+      VulkanContextProvider* vulkan_context_provider,
       const gfx::Size& size,
       viz::SharedImageFormat format,
       gfx::BufferUsage usage);
@@ -39,50 +41,26 @@ class GPU_GLES2_EXPORT OzoneImageBackingFactory
   // SharedImageBackingFactory implementation
   std::unique_ptr<SharedImageBacking> CreateSharedImage(
       const Mailbox& mailbox,
-      viz::SharedImageFormat format,
+      const SharedImageInfo& si_info,
       SurfaceHandle surface_handle,
-      const gfx::Size& size,
-      const gfx::ColorSpace& color_space,
-      GrSurfaceOrigin surface_origin,
-      SkAlphaType alpha_type,
-      SharedImageUsageSet usage,
-      std::string debug_label,
       bool is_thread_safe) override;
 
   std::unique_ptr<SharedImageBacking> CreateSharedImage(
       const Mailbox& mailbox,
-      viz::SharedImageFormat format,
-      const gfx::Size& size,
-      const gfx::ColorSpace& color_space,
-      GrSurfaceOrigin surface_origin,
-      SkAlphaType alpha_type,
-      SharedImageUsageSet usage,
-      std::string debug_label,
+      const SharedImageInfo& si_info,
       bool is_thread_safe,
       base::span<const uint8_t> pixel_data) override;
 
   std::unique_ptr<SharedImageBacking> CreateSharedImage(
       const Mailbox& mailbox,
-      viz::SharedImageFormat format,
-      const gfx::Size& size,
-      const gfx::ColorSpace& color_space,
-      GrSurfaceOrigin surface_origin,
-      SkAlphaType alpha_type,
-      SharedImageUsageSet usage,
-      std::string debug_label,
+      const SharedImageInfo& si_info,
       bool is_thread_safe,
       gfx::GpuMemoryBufferHandle handle) override;
 
   std::unique_ptr<SharedImageBacking> CreateSharedImage(
       const Mailbox& mailbox,
-      viz::SharedImageFormat format,
+      const SharedImageInfo& si_info,
       SurfaceHandle surface_handle,
-      const gfx::Size& size,
-      const gfx::ColorSpace& color_space,
-      GrSurfaceOrigin surface_origin,
-      SkAlphaType alpha_type,
-      SharedImageUsageSet usage,
-      std::string debug_label,
       bool is_thread_safe,
       gfx::BufferUsage buffer_usage) override;
 
@@ -93,6 +71,10 @@ class GPU_GLES2_EXPORT OzoneImageBackingFactory
                    gfx::GpuMemoryBufferType gmb_type,
                    GrContextType gr_context_type,
                    base::span<const uint8_t> pixel_data) override;
+
+  bool IsSupportedForAccessStream(SharedImageAccessStream stream,
+                                  viz::SharedImageFormat format,
+                                  const AccessParams* params) const override;
 
   SharedImageBackingType GetBackingType() override;
 
@@ -110,14 +92,8 @@ class GPU_GLES2_EXPORT OzoneImageBackingFactory
   // SharedImageUsage at which point BufferUsage should be removed.
   std::unique_ptr<OzoneImageBacking> CreateSharedImageInternal(
       const Mailbox& mailbox,
-      viz::SharedImageFormat format,
+      const SharedImageInfo& si_info,
       SurfaceHandle surface_handle,
-      const gfx::Size& size,
-      const gfx::ColorSpace& color_space,
-      GrSurfaceOrigin surface_origin,
-      SkAlphaType alpha_type,
-      SharedImageUsageSet usage,
-      std::string debug_label,
       std::optional<gfx::BufferUsage> buffer_usage = std::nullopt);
 };
 

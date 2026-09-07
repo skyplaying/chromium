@@ -12,7 +12,6 @@
 #include <type_traits>
 
 #include "base/check.h"
-#include "base/debug/dump_without_crashing.h"
 #include "base/feature_list.h"
 #include "base/functional/callback_helpers.h"
 #include "base/notreached.h"
@@ -30,7 +29,6 @@
 #include "device/vr/openxr/openxr_view_configuration.h"
 #include "device/vr/public/cpp/features.h"
 #include "device/vr/public/mojom/xr_session.mojom.h"
-#include "device/vr/test/test_hook.h"
 #include "gpu/GLES2/gl2extchromium.h"
 #include "gpu/command_buffer/client/shared_image_interface.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
@@ -136,11 +134,6 @@ std::vector<XrEnvironmentBlendMode> OpenXrApiWrapper::GetSupportedBlendModes(
   return environment_blend_modes;
 }
 
-// static
-bool OpenXrApiWrapper::NeedsSeparateActivity() {
-  return test_hook_ == nullptr;
-}
-
 OpenXrApiWrapper::OpenXrApiWrapper() = default;
 
 OpenXrApiWrapper::~OpenXrApiWrapper() {
@@ -206,16 +199,6 @@ bool OpenXrApiWrapper::Initialize(XrInstance instance,
 
   DCHECK(IsInitialized());
 
-  if (test_hook_) {
-    // Allow our mock implementation of OpenXr to be controlled by tests.
-    // The mock implementation of xrCreateInstance returns a pointer to the
-    // service test hook (g_test_helper) as the instance.
-    service_test_hook_ = reinterpret_cast<ServiceTestHook*>(instance_);
-    service_test_hook_->SetTestHook(test_hook_);
-
-    test_hook_->AttachCurrentThread();
-  }
-
   return true;
 }
 
@@ -236,6 +219,18 @@ XrResult OpenXrApiWrapper::ShutdownSession() {
 void OpenXrApiWrapper::Uninitialize() {
   // The instance is owned by the OpenXRDevice, so don't destroy it here.
 
+  // Child handles are implicitly destroyed with their parent XrSession, and
+  // destroying them afterwards is undefined behavior (runtimes may return
+  // XR_ERROR_HANDLE_INVALID or fault). Tear down everything that owns a
+  // session-parented handle here, while the session is still valid, instead
+  // of letting these destructors run after xrDestroySession(). Reset() below
+  // re-clears them as a no-op.
+  input_helper_.reset();
+  depth_sensor_.reset();
+  light_estimator_.reset();
+  scene_understanding_manager_.reset();
+  mesh_manager_.reset();
+
   // Destroying an session in OpenXr also destroys all child objects of that
   // instance (including the swapchain, and spaces objects),
   // so they don't need to be manually destroyed.
@@ -245,9 +240,6 @@ void OpenXrApiWrapper::Uninitialize() {
                           : nullptr);
     xrDestroySession(session_);
   }
-
-  if (test_hook_)
-    test_hook_->DetachCurrentThread();
 
   if (on_session_ended_callback_) {
     on_session_ended_callback_.Run(ExitXrPresentReason::kOpenXrUninitialize);
@@ -424,9 +416,13 @@ OpenXrApiWrapper::PickEnvironmentBlendModeForSession(
 
 OpenXrPlaneManager* OpenXrApiWrapper::GetPlaneManager() {
   return scene_understanding_manager_ &&
-                 IsFeatureEnabled(mojom::XRSessionFeature::PLANE_DETECTION)
+                 (IsFeatureEnabled(mojom::XRSessionFeature::PLANE_DETECTION))
              ? scene_understanding_manager_->GetPlaneManager()
              : nullptr;
+}
+
+OpenXrMeshManager* OpenXrApiWrapper::GetMeshManager() {
+  return mesh_manager_.get();
 }
 
 OpenXrAnchorManager* OpenXrApiWrapper::GetAnchorManager() {
@@ -598,6 +594,14 @@ XrResult OpenXrApiWrapper::EnableSupportedFeatures(
         // Enabled if the extension check is good and the graphics binding
         // also supports it.
         is_enabled = graphics_binding_->SupportsLayers();
+        break;
+
+      case mojom::XRSessionFeature::MESH_DETECTION:
+        if (!mesh_manager_) {
+          mesh_manager_ = extension_helper.CreateMeshManager(
+              session_, local_space_);
+        }
+        is_enabled = mesh_manager_ != nullptr;
         break;
 
       case mojom::XRSessionFeature::FRONT_FACING:
@@ -853,6 +857,12 @@ OpenXrApiWrapper::GetXrLocationFromNativeOriginInformation(
           native_origin_from_object);
     case mojom::XRNativeOriginInformation::Tag::kImageIndex:
       NOTREACHED();
+    case mojom::XRNativeOriginInformation::Tag::kMeshId:
+      if (auto* mesh_manager = GetMeshManager(); mesh_manager) {
+        return mesh_manager->GetXrLocationFromMesh(native_origin.get_mesh_id(),
+                                                   native_origin_from_object);
+      }
+      return std::nullopt;
   }
 }
 
@@ -1060,9 +1070,10 @@ XrResult OpenXrApiWrapper::BeginFrame() {
     frame_state.next = &secondary_view_frame_states;
   }
 
-  TRACE_EVENT_BEGIN0("xr", "xrWaitFrame");
-  RETURN_IF_XR_FAILED(xrWaitFrame(session_, &wait_frame_info, &frame_state));
-  TRACE_EVENT_END0("xr", "xrWaitFrame");
+  {
+    TRACE_EVENT("xr", "xrWaitFrame");
+    RETURN_IF_XR_FAILED(xrWaitFrame(session_, &wait_frame_info, &frame_state));
+  }
 
   frame_state_ = frame_state;
 
@@ -1079,8 +1090,29 @@ XrResult OpenXrApiWrapper::BeginFrame() {
   RETURN_IF_XR_FAILED(xrBeginFrame(session_, &begin_frame_info));
   pending_frame_ = true;
 
-  RETURN_IF_XR_FAILED(graphics_binding_->ActivateSwapchainImages(
-      context_provider_->SharedImageInterface()));
+  // On context loss a binding that requires shared images (the Linux Vulkan
+  // path) has none until the replacement context provider arrives; skip the
+  // acquisition in that window rather than dereference a null pointer.
+  const bool acquire_swapchain_images =
+      !graphics_binding_->RequiresSharedImages() || !!context_provider_;
+
+  if (acquire_swapchain_images) {
+    RETURN_IF_XR_FAILED(graphics_binding_->AcquireSwapchainImages(
+        context_provider_->SharedImageInterface()));
+
+    XrResult wait_result = XR_TIMEOUT_EXPIRED;
+    while (wait_result == XR_TIMEOUT_EXPIRED) {
+      wait_result = graphics_binding_->WaitSwapchainImages(
+          context_provider_->SharedImageInterface());
+      if (wait_result == XR_TIMEOUT_EXPIRED) {
+        if (UpdateAndGetSessionEnded()) {
+          return XR_ERROR_SESSION_LOST;
+        }
+      }
+    }
+
+    RETURN_IF_XR_FAILED(wait_result);
+  }
 
   RETURN_IF_XR_FAILED(UpdateViewConfigurations());
 
@@ -1200,9 +1232,10 @@ XrResult OpenXrApiWrapper::EndFrame() {
 
   RETURN_IF_XR_FAILED(graphics_binding_->ReleaseActiveSwapchainImages());
 
-  TRACE_EVENT_BEGIN0("xr", "xrEndFrame");
-  RETURN_IF_XR_FAILED(xrEndFrame(session_, &end_frame_info));
-  TRACE_EVENT_END0("xr", "xrEndFrame");
+  {
+    TRACE_EVENT("xr", "xrEndFrame");
+    RETURN_IF_XR_FAILED(xrEndFrame(session_, &end_frame_info));
+  }
   pending_frame_ = false;
 
   return XR_SUCCESS;
@@ -1553,8 +1586,7 @@ XrResult OpenXrApiWrapper::ProcessEvents() {
       DCHECK(session_ != XR_NULL_HANDLE);
       // TODO(https://crbug.com/1335240): Properly handle Instance Loss Pending.
       LOG(ERROR) << "Received Instance Loss Event";
-      TRACE_EVENT_INSTANT0("xr", "InstanceLossPendingEvent",
-                           TRACE_EVENT_SCOPE_THREAD);
+      TRACE_EVENT_INSTANT("xr", "InstanceLossPendingEvent");
       Uninitialize();
       return XR_ERROR_INSTANCE_LOST;
     } else if (event_data.type ==
@@ -1581,6 +1613,10 @@ XrResult OpenXrApiWrapper::ProcessEvents() {
         // TODO(crbug.com/40653515): Properly handle unbounded reference
         // space change events.
       }
+
+      if (mesh_manager_) {
+        mesh_manager_->OnReferenceSpaceChanged();
+      }
     } else if (event_data.type ==
                XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED) {
       XrEventDataInteractionProfileChanged* interaction_profile_changed =
@@ -1606,14 +1642,12 @@ XrResult OpenXrApiWrapper::ProcessEvents() {
       }
     } else {
       DVLOG(1) << __func__ << " Unhandled event type: " << event_data.type;
-      TRACE_EVENT_INSTANT1("xr", "UnandledXrEvent", TRACE_EVENT_SCOPE_THREAD,
-                           "type", event_data.type);
+      TRACE_EVENT_INSTANT("xr", "UnandledXrEvent", "type", event_data.type);
     }
 
     if (XR_FAILED(xr_result)) {
-      TRACE_EVENT_INSTANT2("xr", "EventProcessingFailed",
-                           TRACE_EVENT_SCOPE_THREAD, "type", event_data.type,
-                           "xr_result", xr_result);
+      TRACE_EVENT_INSTANT("xr", "EventProcessingFailed", "type",
+                          event_data.type, "xr_result", xr_result);
       Uninitialize();
       return xr_result;
     }
@@ -1624,8 +1658,7 @@ XrResult OpenXrApiWrapper::ProcessEvents() {
 
   // This catches the error where we failed to poll events only.
   if (XR_FAILED(xr_result)) {
-    TRACE_EVENT_INSTANT1("xr", "EventPollingFailed", TRACE_EVENT_SCOPE_THREAD,
-                         "xr_result", xr_result);
+    TRACE_EVENT_INSTANT("xr", "EventPollingFailed", "xr_result", xr_result);
     Uninitialize();
   }
   return xr_result;
@@ -1634,8 +1667,6 @@ XrResult OpenXrApiWrapper::ProcessEvents() {
 uint32_t OpenXrApiWrapper::GetRecommendedSwapchainSampleCount() const {
   DCHECK(IsInitialized());
 
-  // TODO(crbug.com/444681345) : Add the recommended sample count for the mono
-  // layout.
   return std::ranges::min_element(
              primary_view_config_.Properties(), {},
              [](const OpenXrViewProperties& view) {
@@ -1761,19 +1792,6 @@ std::optional<gfx::Transform> OpenXrApiWrapper::GetBaseSpaceFromSpace(
   gfx::Transform base_space_from_space =
       gfx::Transform::Compose(base_space_from_space_decomp);
 
-  // TODO(crbug.com/41495208): Check for crash dumps.
-  std::array<float, 16> transform_data;
-  base_space_from_space.GetColMajorF(transform_data);
-  bool contains_nan = std::ranges::any_of(
-      transform_data, [](const float f) { return std::isnan(f); });
-
-  if (contains_nan) {
-    // It's unclear if this could be tripping on every frame, but reporting once
-    // per day per user (the default throttling) should be sufficient for future
-    // investigation.
-    base::debug::DumpWithoutCrashing();
-    return std::nullopt;
-  }
   return base_space_from_space;
 }
 
@@ -1786,31 +1804,17 @@ void OpenXrApiWrapper::SetXrSessionState(XrSessionState new_state) {
   DVLOG(1) << __func__ << " Transitioning from: " << old_state_name
            << " to: " << new_state_name;
 
+  auto track = perfetto::NamedTrack::FromPointer("XRSessionState", this);
   if (session_state_ != XR_SESSION_STATE_UNKNOWN) {
     TRACE_EVENT_END("xr", /*"XRSessionState"*/
-                    perfetto::Track::FromPointer(this), "state",
-                    old_state_name);
+                    track, "state", old_state_name);
   }
 
   if (new_state != XR_SESSION_STATE_UNKNOWN) {
-    TRACE_EVENT_BEGIN("xr", "XRSessionState",
-                      perfetto::Track::FromPointer(this), "state",
-                      new_state_name);
+    TRACE_EVENT_BEGIN("xr", "XRSessionState", track, "state", new_state_name);
   }
 
   session_state_ = new_state;
-}
-
-VRTestHook* OpenXrApiWrapper::test_hook_ = nullptr;
-ServiceTestHook* OpenXrApiWrapper::service_test_hook_ = nullptr;
-void OpenXrApiWrapper::SetTestHook(VRTestHook* hook) {
-  // This may be called from any thread - tests are responsible for
-  // maintaining thread safety, typically by not changing the test hook
-  // while presenting.
-  test_hook_ = hook;
-  if (service_test_hook_) {
-    service_test_hook_->SetTestHook(test_hook_);
-  }
 }
 
 }  // namespace device

@@ -61,6 +61,7 @@
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/json/json_values.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/text/platform_locale.h"
 #include "third_party/blink/renderer/platform/text/text_direction.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
@@ -209,7 +210,7 @@ void RangeInputType::HandleKeydownEvent(KeyboardEvent& event) {
   // FIXME: We can't use stepUp() for the step value "any". So, we increase
   // or decrease the value by 1/100 of the value range. Is it reasonable?
   const Decimal step =
-      EqualIgnoringASCIICase(
+      EqualIgnoringAsciiCase(
           GetElement().FastGetAttribute(html_names::kStepAttr), "any")
           ? (step_range.Maximum() - step_range.Minimum()) / 100
           : step_range.Step();
@@ -278,7 +279,10 @@ void RangeInputType::CreateShadowSubtree() {
   track->SetShadowPseudoId(shadow_element_names::kPseudoSliderTrack);
   track->setAttribute(html_names::kIdAttr,
                       shadow_element_names::kIdSliderTrack);
-  track->AppendChild(MakeGarbageCollected<SliderThumbElement>(document));
+  auto* thumb = MakeGarbageCollected<SliderThumbElement>(document);
+  thumb->setAttribute(html_names::kIdAttr,
+                      shadow_element_names::kIdSliderThumb);
+  track->AppendChild(thumb);
   auto* container = MakeGarbageCollected<SliderContainerElement>(document);
   container->AppendChild(track);
   GetElement().UserAgentShadowRoot()->AppendChild(container);
@@ -303,14 +307,6 @@ String RangeInputType::Serialize(const Decimal& value) const {
   if (!value.IsFinite())
     return String();
   return SerializeForNumberType(value);
-}
-
-// FIXME: Could share this with KeyboardClickableInputTypeView and
-// BaseCheckableInputType if we had a common base class.
-void RangeInputType::AccessKeyAction(
-    SimulatedClickCreationScope creation_scope) {
-  InputTypeView::AccessKeyAction(creation_scope);
-  GetElement().DispatchSimulatedClick(nullptr, creation_scope);
 }
 
 void RangeInputType::SanitizeValueInResponseToMinOrMaxAttributeChange() {
@@ -355,7 +351,7 @@ void RangeInputType::WarnIfValueIsInvalid(const String& value) const {
   if (value.empty() || !GetElement().SanitizeValue(value).empty())
     return;
   AddWarningToConsole(
-      "The specified value %s cannot be parsed, or is out of range.", value);
+      "The specified value {} cannot be parsed, or is out of range.", value);
 }
 
 String RangeInputType::ValueNotEqualText(const Decimal& value) const {
@@ -380,12 +376,21 @@ String RangeInputType::RangeInvalidText(const Decimal& minimum,
                                  LocalizeValue(Serialize(maximum)));
 }
 
-void RangeInputType::DisabledAttributeChanged() {
+void RangeInputType::DisabledAttributeChanged(DisabledChangedReason reason) {
   if (!HasCreatedShadowSubtree()) {
     return;
   }
-  if (GetElement().IsDisabledFormControl())
-    GetSliderThumbElement()->StopDragging();
+  if (GetElement().IsDisabledFormControl()) {
+    bool avoid_dispatch =
+        RuntimeEnabledFeatures::
+            DisableFormControlChangeEventDuringMutationEnabled() &&
+        (GetElement().GetDocument().StatePreservingAtomicMoveInProgress() ||
+         reason == DisabledChangedReason::kFieldsetChildrenChanged);
+    SliderThumbElement::EventDispatch dispatch =
+        avoid_dispatch ? SliderThumbElement::kEventDispatchDisallowed
+                       : SliderThumbElement::kEventDispatchAllowed;
+    GetSliderThumbElement()->StopDragging(dispatch);
+  }
 }
 
 bool RangeInputType::ShouldRespectListAttribute() {

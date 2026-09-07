@@ -16,6 +16,7 @@
 #include "chrome/browser/ui/webui/top_chrome/top_chrome_web_ui_controller.h"
 #include "chrome/browser/ui/webui/top_chrome/top_chrome_webui_config.h"
 #include "chrome/browser/ui/webui_name_variants.h"
+#include "components/web_modal/web_contents_modal_dialog_manager_delegate.h"
 #include "content/public/browser/file_select_listener.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
@@ -28,15 +29,18 @@
 // This class notifies the Host when it should be shown or hidden via ShowUI()
 // and CloseUI() in addition to passing through resize events so the Host can
 // adjust bounds accordingly.
-class WebUIContentsWrapper : public content::WebContentsDelegate,
-                             public content::WebContentsObserver,
-                             public ProfileObserver,
-                             public TopChromeWebUIController::Embedder {
+class WebUIContentsWrapper
+    : public content::WebContentsDelegate,
+      public content::WebContentsObserver,
+      public ProfileObserver,
+      public TopChromeWebUIController::Embedder,
+      public web_modal::WebContentsModalDialogManagerDelegate {
  public:
   class Host {
    public:
     virtual void CloseUI() = 0;
     virtual void ShowUI() = 0;
+    virtual void OnPreHandleEscapeKey() {}
     virtual void ShowCustomContextMenu(
         gfx::Point point,
         std::unique_ptr<ui::MenuModel> menu_model) {}
@@ -66,6 +70,12 @@ class WebUIContentsWrapper : public content::WebContentsDelegate,
         content::WebContents* contents) {}
     virtual void SetContentsBounds(content::WebContents* source,
                                    const gfx::Rect& bounds) {}
+    virtual void FindReply(content::WebContents* web_contents,
+                           int request_id,
+                           int number_of_matches,
+                           const gfx::Rect& selection_rect,
+                           int active_match_ordinal,
+                           bool final_update) {}
     virtual content::WebContents* AddNewContents(
         content::WebContents* source,
         std::unique_ptr<content::WebContents> new_contents,
@@ -74,6 +84,8 @@ class WebUIContentsWrapper : public content::WebContentsDelegate,
         const blink::mojom::WindowFeatures& window_features,
         bool user_gesture,
         bool* was_blocked);
+    virtual web_modal::WebContentsModalDialogHost*
+    GetWebContentsModalDialogHost(content::WebContents* web_contents);
   };
 
   WebUIContentsWrapper(const GURL& webui_url,
@@ -115,6 +127,12 @@ class WebUIContentsWrapper : public content::WebContentsDelegate,
       content::WebContents* contents) override;
   void SetContentsBounds(content::WebContents* source,
                          const gfx::Rect& bounds) override;
+  void FindReply(content::WebContents* web_contents,
+                 int request_id,
+                 int number_of_matches,
+                 const gfx::Rect& selection_rect,
+                 int active_match_ordinal,
+                 bool final_update) override;
   content::WebContents* AddNewContents(
       content::WebContents* source,
       std::unique_ptr<content::WebContents> new_contents,
@@ -123,6 +141,10 @@ class WebUIContentsWrapper : public content::WebContentsDelegate,
       const blink::mojom::WindowFeatures& window_features,
       bool user_gesture,
       bool* was_blocked) override;
+
+  // web_modal::WebContentsModalDialogManagerDelegate:
+  web_modal::WebContentsModalDialogHost* GetWebContentsModalDialogHost(
+      content::WebContents* web_contents) override;
 
   // content::WebContentsObserver:
   void PrimaryPageChanged(content::Page& page) override;
@@ -246,7 +268,11 @@ class WebUIContentsWrapperT : public WebUIContentsWrapper {
 
   // May return null.
   T* GetWebUIController() {
-    content::WebUI* const webui = web_contents()->GetWebUI();
+    return const_cast<T*>(std::as_const(*this).GetWebUIController());
+  }
+  const T* GetWebUIController() const {
+    content::WebUI* const webui =
+        const_cast<WebUIContentsWrapperT*>(this)->web_contents()->GetWebUI();
     return webui && webui->GetController()
                ? webui->GetController()->template GetAs<T>()
                : nullptr;

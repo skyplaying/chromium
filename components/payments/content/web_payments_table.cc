@@ -54,12 +54,6 @@ bool WebPaymentsTable::CreateTablesIfNecessary() {
     return false;
   }
 
-  // TODO(crbug.com/384940851): Update secure_payment_confirmation_instrument's
-  // primary key to the pair of (credential_id, relying_party_id).
-
-  // The `credential_id` column is 20 bytes for UbiKey on Linux, but the size
-  // can vary for different authenticators. The relatively small sizes make it
-  // OK to make `credential_id` the primary key.
   if (!db()->Execute(
           "CREATE TABLE IF NOT EXISTS secure_payment_confirmation_instrument ( "
           "credential_id BLOB NOT NULL PRIMARY KEY, "
@@ -89,6 +83,64 @@ bool WebPaymentsTable::CreateTablesIfNecessary() {
             "user_id BLOB")) {
       LOG(ERROR)
           << "Cannot alter the secure_payment_confirmation_instrument table";
+      return false;
+    }
+  }
+
+  // If the table was created with only `credential_id` as the primary key,
+  // migrate it to a composite primary key of (credential_id, relying_party_id).
+  bool spc_instrument_needs_key_migration = false;
+  {
+    sql::Statement s(db()->GetUniqueStatement(
+        "PRAGMA table_info(secure_payment_confirmation_instrument)"));
+    // PRAGMA table_info schema: 0: cid, 1: name, 2: type, 3: notnull,
+    // 4: dflt_value, 5: pk (0 if not in primary key, >=1 if part of PK).
+    constexpr int kTableInfoNameColumn = 1;
+    constexpr int kTableInfoPkColumn = 5;
+    while (s.Step()) {
+      if (s.ColumnString(kTableInfoNameColumn) == "relying_party_id" &&
+          s.ColumnInt(kTableInfoPkColumn) == 0) {
+        spc_instrument_needs_key_migration = true;
+        break;
+      }
+    }
+  }
+
+  if (spc_instrument_needs_key_migration) {
+    if (!db()->Execute(
+            "CREATE TABLE secure_payment_confirmation_instrument_temp ( "
+            "credential_id BLOB NOT NULL, "
+            "relying_party_id VARCHAR NOT NULL, "
+            "label VARCHAR NOT NULL, "
+            "icon BLOB NOT NULL, "
+            "date_created INTEGER NOT NULL DEFAULT 0, "
+            "user_id BLOB, "
+            "PRIMARY KEY (credential_id, relying_party_id))")) {
+      LOG(ERROR)
+          << "Cannot create temp secure_payment_confirmation_instrument table";
+      return false;
+    }
+
+    if (!db()->Execute(
+            "INSERT INTO secure_payment_confirmation_instrument_temp "
+            "SELECT credential_id, relying_party_id, label, icon, "
+            "date_created, user_id FROM "
+            "secure_payment_confirmation_instrument")) {
+      LOG(ERROR) << "Cannot copy secure_payment_confirmation_instrument data";
+      return false;
+    }
+
+    if (!db()->Execute("DROP TABLE secure_payment_confirmation_instrument")) {
+      LOG(ERROR)
+          << "Cannot drop old secure_payment_confirmation_instrument table";
+      return false;
+    }
+
+    if (!db()->Execute(
+            "ALTER TABLE secure_payment_confirmation_instrument_temp "
+            "RENAME TO secure_payment_confirmation_instrument")) {
+      LOG(ERROR)
+          << "Cannot rename temp secure_payment_confirmation_instrument table";
       return false;
     }
   }
@@ -204,7 +256,13 @@ std::vector<std::string> WebPaymentsTable::GetManifest(
 
 bool WebPaymentsTable::AddSecurePaymentConfirmationCredential(
     const SecurePaymentConfirmationCredential& credential) {
+  VLOG(1) << "WebPaymentsTable::AddSecurePaymentConfirmationCredential: "
+          << "credential id="
+          << std::string(credential.credential_id.begin(),
+                         credential.credential_id.end());
   if (!credential.IsValidNewCredential()) {
+    VLOG(1) << "WebPaymentsTable::AddSecurePaymentConfirmationCredential: "
+               "credential is not a valid new credential!";
     return false;
   }
 
@@ -214,27 +272,17 @@ bool WebPaymentsTable::AddSecurePaymentConfirmationCredential(
   }
 
   {
-    // Check for credential identifier reuse by a different relying party.
-    sql::Statement s0(
-        db()->GetUniqueStatement("SELECT label "
-                                 "FROM secure_payment_confirmation_instrument "
-                                 "WHERE credential_id=? "
-                                 "AND relying_party_id<>?"));
-    int index = 0;
-    s0.BindBlob(index++, credential.credential_id);
-    s0.BindString(index++, credential.relying_party_id);
-    if (s0.Step()) {
-      return false;
-    }
-  }
-
-  {
     sql::Statement s1(db()->GetUniqueStatement(
         "DELETE FROM secure_payment_confirmation_instrument "
-        "WHERE credential_id=?"));
-    s1.BindBlob(0, credential.credential_id);
+        "WHERE credential_id=? "
+        "AND relying_party_id=?"));
+    int index = 0;
+    s1.BindBlob(index++, credential.credential_id);
+    s1.BindString(index++, credential.relying_party_id);
 
     if (!s1.Run()) {
+      VLOG(1) << "WebPaymentsTable::AddSecurePaymentConfirmationCredential: "
+                 "failed to delete existing credential with credential_id";
       return false;
     }
   }
@@ -251,6 +299,9 @@ bool WebPaymentsTable::AddSecurePaymentConfirmationCredential(
     s2.BindBlob(index++, credential.user_id);
 
     if (!s2.Run()) {
+      VLOG(1) << "WebPaymentsTable::AddSecurePaymentConfirmationCredential: "
+                 "failed to delete existing credential with relying party id "
+                 "and user id";
       return false;
     }
   }
@@ -269,14 +320,20 @@ bool WebPaymentsTable::AddSecurePaymentConfirmationCredential(
     s3.BindTime(index++, base::Time::Now());
 
     if (!s3.Run()) {
+      VLOG(1) << "WebPaymentsTable::AddSecurePaymentConfirmationCredential: "
+                 "failed to insert new credential";
       return false;
     }
   }
 
   if (!transaction.Commit()) {
+    VLOG(1) << "WebPaymentsTable::AddSecurePaymentConfirmationCredential: "
+               "failed to commit transaction";
     return false;
   }
 
+  VLOG(1) << "WebPaymentsTable::AddSecurePaymentConfirmationCredential: "
+             "Successfully stored credential";
   return true;
 }
 
@@ -284,6 +341,10 @@ std::vector<std::unique_ptr<SecurePaymentConfirmationCredential>>
 WebPaymentsTable::GetSecurePaymentConfirmationCredentials(
     std::vector<std::vector<uint8_t>> credential_ids,
     const std::string& relying_party_id) {
+  VLOG(1) << "WebPaymentsTable::GetSecurePaymentConfirmationCredentials: "
+          << "query credential_ids count=" << credential_ids.size()
+          << ", relying_party_id=" << relying_party_id;
+
   std::vector<std::unique_ptr<SecurePaymentConfirmationCredential>> credentials;
   sql::Statement s(
       db()->GetUniqueStatement("SELECT relying_party_id, user_id "
@@ -295,13 +356,21 @@ WebPaymentsTable::GetSecurePaymentConfirmationCredentials(
   for (auto& credential_id : credential_ids) {
     s.Reset(true);
     if (credential_id.empty()) {
+      VLOG(1) << "WebPaymentsTable::GetSecurePaymentConfirmationCredentials: "
+                 "credential_id is empty, skipping";
       continue;
     }
+
+    VLOG(1) << "WebPaymentsTable::GetSecurePaymentConfirmationCredentials: "
+               "Querying for credential_id="
+            << std::string(credential_id.begin(), credential_id.end());
 
     s.BindBlob(0, credential_id);
     s.BindString(1, relying_party_id);
 
     if (!s.Step()) {
+      VLOG(1) << "WebPaymentsTable::GetSecurePaymentConfirmationCredentials: "
+                 "No match in DB for queried credential";
       continue;
     }
 
@@ -313,12 +382,24 @@ WebPaymentsTable::GetSecurePaymentConfirmationCredentials(
     credential->user_id = s.ColumnBlobAsVector(index++);
 
     if (!credential->IsValid()) {
+      VLOG(1)
+          << "WebPaymentsTable::GetSecurePaymentConfirmationCredentials: "
+             "Found row in DB but credential is not valid [relying_party_id="
+          << credential->relying_party_id << ", user_id="
+          << std::string(credential->user_id.begin(), credential->user_id.end())
+          << "]";
       continue;
     }
+
+    VLOG(1) << "WebPaymentsTable::GetSecurePaymentConfirmationCredentials: "
+               "Matched credential in DB";
 
     credentials.push_back(std::move(credential));
   }
 
+  VLOG(1) << "WebPaymentsTable::GetSecurePaymentConfirmationCredentials: "
+             "Returning "
+          << credentials.size() << " matching credentials";
   return credentials;
 }
 

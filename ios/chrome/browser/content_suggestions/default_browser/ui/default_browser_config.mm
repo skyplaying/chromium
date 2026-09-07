@@ -40,7 +40,7 @@ constexpr CGFloat kIconSize = 40;
   return ContentSuggestionsModuleType::kDefaultBrowser;
 }
 
-#pragma mark - IconDetailViewConfiguration
+#pragma mark - IconDetailViewConfig
 
 - (NSString*)titleText {
   return GetNSString(IDS_IOS_SET_UP_LIST_DEFAULT_BROWSER_TITLE);
@@ -59,11 +59,11 @@ constexpr CGFloat kIconSize = 40;
   return kDefaultBrowserViewAccessibilityId;
 }
 
-- (NSString*)iconName {
+- (Symbol)symbol {
 #if BUILDFLAG(IOS_USE_BRANDED_ASSETS)
-  return kMulticolorChromeballSymbol;
+  return SymbolMulticolorChromeball;
 #else
-  return kChromeProductSymbol;
+  return SymbolChromeProduct;
 #endif  // BUILDFLAG(IOS_USE_BRANDED_ASSETS)
 }
 

@@ -4,20 +4,25 @@
 
 #import "ios/chrome/browser/shared/coordinator/scene/task_updater_scene_agent.h"
 
+#import "components/signin/public/base/consent_level.h"
 #import "ios/chrome/app/application_delegate/app_state.h"
 #import "ios/chrome/app/profile/profile_state.h"
 #import "ios/chrome/app/profile/profile_state_observer.h"
 #import "ios/chrome/app/task_orchestrator.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
+#import "ios/chrome/browser/shared/coordinator/scene/state/scene_ui_blocker_state.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
 
 @interface TaskUpdaterSceneAgent () <ProfileStateObserver,
+                                     SceneUIBlockerStateObserver,
                                      UIBlockerManagerObserver>
 @end
 
-@implementation TaskUpdaterSceneAgent
+@implementation TaskUpdaterSceneAgent {
+  BOOL _didUpdateToUIReady;
+}
 
 #pragma mark - ObservingSceneAgent
 
@@ -25,6 +30,13 @@
   [super setSceneState:sceneState];
   [self.sceneState.profileState addObserver:self];
   [self.sceneState.profileState addUIBlockerManagerObserver:self];
+  [self.sceneState.uiBlockerState addObserver:self];
+
+  [NSNotificationCenter.defaultCenter
+      addObserver:self
+         selector:@selector(maybeUpdateToUIReady)
+             name:UIApplicationDidBecomeActiveNotification
+           object:nil];
 
   // Make sure that the execution stage is updated also if a scene is connected
   // after the ProfileState has reached stage ProfileInitStage::kProfileLoaded
@@ -60,18 +72,17 @@
   [self maybeUpdateToUIReady];
 }
 
-- (void)sceneStateDidHideModalOverlay:(SceneState*)sceneState {
-  [self maybeUpdateToUIReady];
-}
-
 - (void)sceneStateDidEnableUI:(SceneState*)sceneState {
   [self maybeUpdateToUIReady];
 }
 
 - (void)sceneStateDidDisableUI:(SceneState*)sceneState {
+  [self updateToStageNone];
   [self.sceneState.profileState removeObserver:self];
   [self.sceneState removeObserver:self];
   [self.sceneState.profileState removeUIBlockerManagerObserver:self];
+  [self.sceneState.uiBlockerState removeObserver:self];
+  [NSNotificationCenter.defaultCenter removeObserver:self];
 }
 
 - (void)signinDidEnd:(SceneState*)sceneState {
@@ -80,7 +91,27 @@
   [self maybeUpdateToUIReady];
 }
 
+#pragma mark - SceneUIBlockerStateObserver
+
+- (void)didHideModalOverlay {
+  [self maybeUpdateToUIReady];
+}
+
 #pragma mark - Private
+
+// Resets the scene from TaskExecutionUIReady to TaskExecutionProfileLoaded
+// if the profile is still loaded.
+- (void)resetExecutionStage {
+  _didUpdateToUIReady = NO;
+  [self updateToProfileLoaded];
+}
+
+// Updates the scene to TaskExecutionStageNone.
+- (void)updateToStageNone {
+  [self.sceneState.profileState.appState.taskOrchestrator
+      updateToStage:TaskExecutionStage::TaskExecutionStageNone
+           forScene:self.sceneState.sceneSessionID];
+}
 
 // Updates the scene to TaskExecutionProfileLoaded.
 - (void)updateToProfileLoaded {
@@ -92,11 +123,17 @@
 // Updates the scene to TaskExecutionUIReady if conditions are met.
 - (void)maybeUpdateToUIReady {
   if (![self canUpdateToUIReady]) {
+    // Reset the execution stage if ui is not ready anymore.
+    if (_didUpdateToUIReady) {
+      [self resetExecutionStage];
+    }
     return;
   }
+
   [self.sceneState.profileState.appState.taskOrchestrator
       updateToStage:TaskExecutionStage::TaskExecutionUIReady
            forScene:self.sceneState.sceneSessionID];
+  _didUpdateToUIReady = YES;
 }
 
 // YES if UI is ready to handle tasks.
@@ -111,13 +148,17 @@
   if (sceneState.activationLevel < SceneActivationLevelForegroundActive) {
     return NO;
   }
-  if (sceneState.presentingModalOverlay) {
+  if (sceneState.uiBlockerState.presentingModalOverlay) {
     return NO;
   }
   if (sceneState.profileState.initStage < ProfileInitStage::kFinal) {
     return NO;
   }
   if ([self signinStatusInSyncWithPolicy]) {
+    return NO;
+  }
+  if ([[UIApplication sharedApplication] applicationState] !=
+      UIApplicationStateActive) {
     return NO;
   }
   return YES;

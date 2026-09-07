@@ -19,7 +19,6 @@ namespace content {
 
 FontUniqueNameLookupService::FontUniqueNameLookupService()
     : font_unique_name_lookup_(::content::FontUniqueNameLookup::GetInstance()) {
-  DCHECK(base::FeatureList::IsEnabled(features::kFontSrcLocalMatching));
 }
 
 FontUniqueNameLookupService::~FontUniqueNameLookupService() {}
@@ -43,7 +42,8 @@ FontUniqueNameLookupService::GetTaskRunner() {
 
 void FontUniqueNameLookupService::GetUniqueNameLookupTable(
     GetUniqueNameLookupTableCallback callback) {
-  DCHECK(GetTaskRunner()->RunsTasksInCurrentSequence());
+  CHECK(GetTaskRunner()->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M159);
   if (font_unique_name_lookup_->IsValid()) {
     std::move(callback).Run(font_unique_name_lookup_->DuplicateMemoryRegion());
   } else {
@@ -54,7 +54,8 @@ void FontUniqueNameLookupService::GetUniqueNameLookupTable(
 
 void FontUniqueNameLookupService::GetUniqueNameLookupTableIfAvailable(
     GetUniqueNameLookupTableIfAvailableCallback callback) {
-  DCHECK(GetTaskRunner()->RunsTasksInCurrentSequence());
+  CHECK(GetTaskRunner()->RunsTasksInCurrentSequence(),
+        base::NotFatalUntil::M159);
 
   base::ReadOnlySharedMemoryRegion invalid_region;
   callback = mojo::WrapCallbackWithDefaultInvokeIfNotRun(

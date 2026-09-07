@@ -25,8 +25,8 @@
 #include "components/bookmarks/browser/base_bookmark_model_observer.h"
 #include "components/bookmarks/browser/bookmark_node.h"
 #include "components/bookmarks/browser/bookmark_test_util.h"
+#include "components/sync/engine/cryptographer.h"
 #include "components/sync/engine/loopback_server/loopback_server_entity.h"
-#include "components/sync/engine/nigori/cryptographer.h"
 #include "components/sync/test/fake_server.h"
 #include "components/sync_bookmarks/bookmark_model_view.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -185,9 +185,8 @@ void ReverseChildOrder(int profile, const bookmarks::BookmarkNode* parent);
 // other. Returns true if they match.
 [[nodiscard]] bool ModelsMatch(int profile_a, int profile_b);
 
-// Checks if the bookmark models of all sync profiles match each other. Does
-// not compare them with the verifier bookmark model. Returns true if they
-// match.
+// Checks if the bookmark models of all sync profiles match each other. Returns
+// true if they match.
 [[nodiscard]] bool AllModelsMatch();
 
 // Checks if the bookmark model of profile |profile| contains any instances of
@@ -254,7 +253,8 @@ std::u16string IndexedSubsubfolderName(size_t i);
 // URL.
 std::unique_ptr<syncer::LoopbackServerEntity> CreateBookmarkServerEntity(
     const std::u16string& title,
-    const GURL& url);
+    const GURL& url,
+    const base::Uuid& uuid = base::Uuid::GenerateRandomV4());
 
 // Helper class that reacts to any BookmarkModelObserver event by running a
 // callback provided in the constructor.
@@ -317,8 +317,6 @@ class BookmarksMatchChecker : public BookmarkModelStatusChangeChecker {
   // StatusChangeChecker implementation.
   bool IsExitConditionSatisfied(std::ostream* os) override;
 
- protected:
-  void WillStartWaiting() override;
 };
 
 // Base class used for checkers that verify the state of a single BookmarkModel
@@ -348,7 +346,8 @@ class SingleBookmarkModelStatusChangeChecker
 class SingleBookmarksModelMatcherChecker
     : public SingleBookmarkModelStatusChangeChecker {
  public:
-  using Matcher = testing::Matcher<std::vector<const bookmarks::BookmarkNode*>>;
+  using Matcher =
+      testing::Matcher<std::vector<raw_ptr<const bookmarks::BookmarkNode>>>;
 
   SingleBookmarksModelMatcherChecker(int profile_index, const Matcher& matcher);
   ~SingleBookmarksModelMatcherChecker() override;

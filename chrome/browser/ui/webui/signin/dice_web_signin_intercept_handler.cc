@@ -13,6 +13,7 @@
 #include "base/notreached.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/enterprise/browser_management/management_identity.h"
 #include "chrome/browser/enterprise/browser_management/management_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_attributes_entry.h"
@@ -22,6 +23,7 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/managed_ui.h"
 #include "chrome/browser/ui/profiles/profile_colors_util.h"
+#include "chrome/browser/ui/signin/account_preview_utils.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
@@ -46,7 +48,7 @@ namespace {
 BASE_FEATURE(kSigninInterceptSimpleButtons, base::FEATURE_ENABLED_BY_DEFAULT);
 
 constexpr char kEnterprizeBadgeSource[] = "cr:domain";
-constexpr char kSupervisedBadgeSource[] = "cr:kite";
+constexpr char kSupervisedBadgeSource[] = "cr:family-link";
 
 // Returns true if the account capabilities are marked as supervised.
 bool IsSupervisedUser(const AccountCapabilities& capabilities) {
@@ -70,7 +72,7 @@ base::DictValue GetAccountInfoValue(const AccountInfo& info) {
   std::string avatar_badge_alt_text = "";
   if (info.IsManaged() == signin::Tribool::kTrue) {
     avatar_badge = kEnterprizeBadgeSource;
-  } else if (IsSupervisedUser(info.capabilities)) {
+  } else if (IsSupervisedUser(info.GetAccountCapabilities())) {
     avatar_badge = kSupervisedBadgeSource;
     avatar_badge_alt_text =
         l10n_util::GetStringUTF8(IDS_MANAGED_BY_PARENT_A11Y);
@@ -138,10 +140,10 @@ void DiceWebSigninInterceptHandler::OnExtendedAccountInfoUpdated(
   }
 
   bool should_fire_event = false;
-  if (info.account_id == intercepted_account().account_id) {
+  if (info.GetAccountId() == intercepted_account().GetAccountId()) {
     should_fire_event = true;
     bubble_parameters_.intercepted_account = info;
-  } else if (info.account_id == primary_account().account_id) {
+  } else if (info.GetAccountId() == primary_account().GetAccountId()) {
     should_fire_event = true;
     bubble_parameters_.primary_account = info;
   }
@@ -290,6 +292,11 @@ DiceWebSigninInterceptHandler::GetInterceptionParametersValue() {
                  color_utils::SkColorToRgbaString(
                      GetProfileHighlightColor(Profile::FromWebUI(web_ui()))));
   parameters.Set("useV2Design", GetShouldUseV2Design());
+  parameters.Set(
+      "useV2ProfileSwitchDesign",
+      base::FeatureList::IsEnabled(switches::kSigninInterceptGraphicUpdate) &&
+          bubble_parameters_.interception_type ==
+              WebSigninInterceptor::SigninInterceptionType::kProfileSwitch);
   parameters.Set("showManagedDisclaimer",
                  bubble_parameters_.show_managed_disclaimer);
 
@@ -352,8 +359,18 @@ std::string DiceWebSigninInterceptHandler::GetChromeSigninSubtitle() {
     return l10n_util::GetStringUTF8(
         IDS_SIGNIN_DICE_WEB_INTERCEPT_BUBBLE_CHROME_SIGNIN_SUBTITLE_SUPERVISED);
   }
+
+  if (bubble_parameters_.account_preview_preference.has_value()) {
+    if (std::optional<std::string> subtitle =
+            signin::GetAccountPreviewPromoSubtitle(
+                *bubble_parameters_.account_preview_preference);
+        subtitle.has_value() && !subtitle->empty()) {
+      return *subtitle;
+    }
+  }
+
   return l10n_util::GetStringUTF8(
-      base::FeatureList::IsEnabled(syncer::kReplaceSyncPromosWithSignInPromos)
+      syncer::IsReplaceSyncPromosWithSignInPromosEnabled()
           ? IDS_SIGNIN_DICE_WEB_INTERCEPT_BUBBLE_CHROME_SIGNIN_SUBTITLE_WITH_BOOKMARKS
           : IDS_SIGNIN_DICE_WEB_INTERCEPT_BUBBLE_CHROME_SIGNIN_SUBTITLE);
 }
@@ -409,6 +426,20 @@ std::string DiceWebSigninInterceptHandler::GetBodyText() {
         IDS_SIGNIN_DICE_WEB_INTERCEPT_CREATE_BUBBLE_DESC_SUPERVISED,
         base::UTF8ToUTF16(intercepted_account().GetEmail()));
   }
+
+  if (bubble_parameters_.interception_type ==
+          WebSigninInterceptor::SigninInterceptionType::kMultiUser &&
+      bubble_parameters_.account_preview_preference.has_value()) {
+    if (std::optional<std::string> subtitle =
+            signin::GetAccountPreviewProfileSeparationSubtitle(
+                primary_account().GetGivenName().value_or(""),
+                intercepted_account().GetEmail(),
+                *bubble_parameters_.account_preview_preference);
+        subtitle.has_value() && !subtitle->empty()) {
+      return *subtitle;
+    }
+  }
+
   return l10n_util::GetStringFUTF8(
       IDS_SIGNIN_DICE_WEB_INTERCEPT_CREATE_BUBBLE_DESC,
       base::UTF8ToUTF16(primary_account().GetGivenName().value_or("")),

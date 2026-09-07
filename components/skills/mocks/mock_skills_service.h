@@ -6,6 +6,7 @@
 #define COMPONENTS_SKILLS_MOCKS_MOCK_SKILLS_SERVICE_H_
 
 #include "components/skills/public/skill.h"
+#include "components/skills/public/skills_provider.h"
 #include "components/skills/public/skills_service.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
@@ -24,7 +25,15 @@ class MockSkillsService : public SkillsService {
               GetSkills,
               (),
               (const));
-  MOCK_METHOD(const SkillsMap&, Get1PSkills, (), (const));
+  MOCK_METHOD((const std::unordered_map<std::string, std::unique_ptr<Skill>>&),
+              GetProvidedSkills,
+              (),
+              (const, override));
+  MOCK_METHOD(const SkillProtoList&, Get1PSkills, (), (const, override));
+  MOCK_METHOD(const std::vector<skills::proto::TopicInfo>&,
+              Get1PTopicsInfo,
+              (),
+              (const, override));
   MOCK_METHOD(const Skill*,
               AddSkill,
               (const std::string&,
@@ -50,7 +59,11 @@ class MockSkillsService : public SkillsService {
   MOCK_METHOD(ServiceStatus, GetServiceStatus, (), (const));
   MOCK_METHOD(void, DeleteSkill, (std::string_view, UpdateSource));
   MOCK_METHOD(void, FetchDiscoverySkills, ());
-  MOCK_METHOD(void, Handle1pSkillsMap, (std::unique_ptr<SkillsMap>));
+  MOCK_METHOD(void, RefreshDiscoverySkills, ());
+  MOCK_METHOD(void,
+              Handle1pSkills,
+              (std::unique_ptr<FirstPartySkillData>),
+              (override));
   MOCK_METHOD(void, AddObserver, (Observer*));
   MOCK_METHOD(void, RemoveObserver, (Observer*));
   MOCK_METHOD(base::WeakPtr<syncer::DataTypeControllerDelegate>,
@@ -58,6 +71,16 @@ class MockSkillsService : public SkillsService {
               ());
   MOCK_METHOD(void, SyncStatusChanged, ());
   MOCK_METHOD(void, SetServiceStatusForTesting, (ServiceStatus));
+  MOCK_METHOD(void,
+              NotifyTemporarySkillDisplayChanged,
+              (std::string_view, DisplayState));
+  MOCK_METHOD(void, NotifyPanelWillOpen, ());
+  MOCK_METHOD(void, AddProvider, (std::unique_ptr<SkillsProvider>));
+
+ private:
+  std::vector<std::unique_ptr<Skill>> empty_skills_;
+  std::unordered_map<std::string, std::unique_ptr<Skill>>
+      empty_provided_skill_objects_map_;
 };
 
 }  // namespace skills

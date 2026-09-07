@@ -279,7 +279,7 @@ export class PrintPreviewPagesSettingsElement extends
     this.selection_ = parseInt(value, 10);
   }
 
-  protected onCollapseChanged_() {
+  protected onTransitionend_() {
     if (this.selection_ === PagesValue.CUSTOM) {
       this.$.pageSettingsCustomInput.inputElement.focus();
     }
@@ -422,7 +422,7 @@ export class PrintPreviewPagesSettingsElement extends
    *     user.
    */
   private getNupPages_(): number[] {
-    const pagesPerSheet = this.getSettingValue('pagesPerSheet') as number;
+    const pagesPerSheet = this.getSettingValue('pagesPerSheet');
     if (pagesPerSheet <= 1 || this.pagesToPrint_.length === 0) {
       return this.pagesToPrint_;
     }
@@ -453,8 +453,8 @@ export class PrintPreviewPagesSettingsElement extends
     }
 
     const nupPages = this.getNupPages_();
-    const rangesChanged = !areRangesEqual(
-        this.rangesToPrint_, this.getSettingValue('ranges') as Range[]);
+    const rangesChanged =
+        !areRangesEqual(this.rangesToPrint_, this.getSettingValue('ranges'));
     if (rangesChanged ||
         nupPages.length !== this.getSettingValue('pages').length) {
       this.setSetting('pages', nupPages);
@@ -487,8 +487,7 @@ export class PrintPreviewPagesSettingsElement extends
       this.resetString();
       this.restoreLastInput_ = false;
     }
-    this.dispatchEvent(new CustomEvent(
-        'custom-input-blurred-for-test', {bubbles: true, composed: true}));
+    this.fire('custom-input-blurred-for-test');
   }
 
   /**

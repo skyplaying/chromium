@@ -4,14 +4,10 @@
 
 #include "chrome/browser/ui/views/extensions/extension_view_views.h"
 
-#include <memory>
-#include <utility>
-
 #include "base/functional/bind.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/extension_view_host.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/views/extensions/extension_popup.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_widget_host_view.h"
@@ -61,17 +57,10 @@ void ExtensionViewViews::VisibilityChanged(View* starting_from,
   views::WebView::VisibilityChanged(starting_from, is_visible);
 
   if (starting_from == this) {
-    // Also tell RenderWidgetHostView the new visibility. Despite its name, it
-    // is not part of the View hierarchy and does not know about the change
-    // unless we tell it.
-    content::RenderWidgetHostView* host_view =
-        host_->main_frame_host()->GetView();
-    if (host_view) {
-      if (is_visible) {
-        host_view->Show();
-      } else {
-        host_view->Hide();
-      }
+    if (is_visible) {
+      web_contents()->WasShown();
+    } else {
+      web_contents()->WasHidden();
     }
   }
 }

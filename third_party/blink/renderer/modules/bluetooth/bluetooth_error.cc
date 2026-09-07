@@ -8,14 +8,15 @@
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/platform/bindings/exception_code.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
 namespace {
 
-const char kGATTServerNotConnectedBase[] =
+constexpr char kGATTServerNotConnectedBase[] =
     "GATT Server is disconnected. "
-    "Cannot %s. (Re)connect first with `device.gatt.connect`.";
+    "Cannot {}. (Re)connect first with `device.gatt.connect`.";
 
 }  // namespace
 
@@ -37,8 +38,7 @@ String BluetoothError::CreateNotConnectedExceptionMessage(
       operation_string = "perform GATT operations";
       break;
   }
-  return UNSAFE_TODO(
-      String::Format(kGATTServerNotConnectedBase, operation_string));
+  return Format(kGATTServerNotConnectedBase, operation_string);
 }
 
 // static
@@ -144,6 +144,8 @@ DOMException* BluetoothError::CreateDOMException(
                 "GATT operation already in progress.");
       MAP_ERROR(CONNECT_CONN_FAILED, DOMExceptionCode::kNetworkError,
                 "Connection Error: Connection attempt failed.");
+      MAP_ERROR(BLUETOOTH_NOT_ALLOWED, DOMExceptionCode::kNetworkError,
+                "Bluetooth permission has been blocked.");
 
       // NotFoundErrors:
       MAP_ERROR(WEB_BLUETOOTH_NOT_SUPPORTED, DOMExceptionCode::kNotFoundError,

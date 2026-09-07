@@ -11,23 +11,23 @@
 #include "chrome/browser/data_sharing/data_sharing_service_factory.h"
 #include "chrome/browser/image_fetcher/image_fetcher_service_factory.h"
 #include "chrome/browser/profiles/profile_key.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/collaboration_messaging_tab_data.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
 #include "chrome/browser/ui/tabs/tab_group_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/toasts/api/toast_id.h"
+#include "chrome/browser/ui/toasts/toast_controller.h"
 #include "chrome/browser/ui/toasts/toast_features.h"
 #include "chrome/browser/ui/toasts/toast_view.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/tabs/tab_strip.h"
 #include "components/collaboration/public/messaging/message.h"
 #include "components/data_sharing/public/data_sharing_service.h"
 #include "components/image_fetcher/core/image_fetcher_service.h"
 #include "components/saved_tab_groups/public/tab_group_sync_service.h"
 #include "components/signin/public/base/avatar_icon_util.h"
+#include "components/tab_groups/tab_group_id.h"
 #include "components/tabs/public/tab_group.h"
 
 namespace tab_groups {
@@ -185,13 +185,13 @@ void InstantMessageQueueProcessor::MaybeShowInstantMessage() {
       FROM_HERE,
       base::BindOnce(
           &InstantMessageQueueProcessor::ProcessQueueAfterMessageShown,
-          base::Unretained(this)),
+          weak_factory_.GetWeakPtr()),
       GetMessageInterval());
 }
 
-Browser* InstantMessageQueueProcessor::GetBrowser(
+BrowserWindowInterface* InstantMessageQueueProcessor::GetBrowser(
     const InstantMessage& message) {
-  Browser* browser = nullptr;
+  BrowserWindowInterface* browser = nullptr;
 
   const bool is_tab_removed_message =
       message.collaboration_event == CollaborationEvent::TAB_REMOVED &&
@@ -214,7 +214,8 @@ Browser* InstantMessageQueueProcessor::GetBrowser(
     // In the case of TAB_GROUP_REMOVED, the group may or may not be open.
     // Find a fallback browser for this profile.
     if (!browser) {
-      browser = chrome::FindLastActiveWithProfile(profile_);
+      browser = ProfileBrowserCollection::GetForProfile(profile_)
+                    ->GetLastActiveBrowser();
     }
   }
 
@@ -222,7 +223,7 @@ Browser* InstantMessageQueueProcessor::GetBrowser(
 }
 
 bool InstantMessageQueueProcessor::MaybeShowToastInBrowser(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     std::optional<ToastParams> params) {
   if (!browser) {
     // Browser state does not support showing this message or this is
@@ -235,8 +236,7 @@ bool InstantMessageQueueProcessor::MaybeShowToastInBrowser(
     return false;
   }
 
-  ToastController* toast_controller =
-      browser->browser_window_features()->toast_controller();
+  ToastController* toast_controller = ToastController::From(browser);
   if (!toast_controller) {
     // Encountered an issue with the toast controller for this browser.
     return false;
@@ -283,15 +283,13 @@ base::TimeDelta InstantMessageQueueProcessor::GetMessageInterval() {
   // Take the maximum time a toast can show and add a second to ensure
   // that we wait until a message has completely timed out before trying
   // to show the next message.
-  // TODO(crbug.com/390814333): Determine the correct heuristic for
-  // time-between-messages.
   return base::Seconds(1) + std::max(ToastController::kToastDefaultTimeout,
                                      ToastController::kToastWithActionTimeout);
 }
 
 void InstantMessageQueueProcessor::ProcessQueueAfterMessageShown() {
   // This function is only entered if a toast was successfully shown and is
-  // solely responsible for resetting the |is_showing_instant_message_| bool.
+  // solely responsible for resetting the `is_showing_instant_message_` bool.
   CHECK(IsMessageShowing());
   is_showing_instant_message_ = false;
   ProceedToNextQueueMessage();

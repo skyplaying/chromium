@@ -2,12 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#import "ios/public/provider/chrome/browser/lottie/lottie_animation_api.h"
+#ifndef IOS_CHROME_BROWSER_SHARED_UI_ANIMATED_PROMO_ANIMATED_PROMO_UTILS_H_
+#define IOS_CHROME_BROWSER_SHARED_UI_ANIMATED_PROMO_ANIMATED_PROMO_UTILS_H_
 
-// Configures the animation with semantic colors.
-// Iterate over the list of semantic colors and set the color value for the
-// keypath `**COLOR_NAME.**.Color`.
-void ConfigureAnimationSemanticColors(id<LottieAnimation> animation);
+#import "ios/public/provider/chrome/browser/lottie/lottie_animation_api.h"
 
 // Configures the animation with the given semantic color.
 // Sets the color value for the keypath `**key.**.Color`.
@@ -22,3 +20,5 @@ void ConfigureAnimationCustomColor(id<LottieAnimation> animation,
                                    NSString* key,
                                    UIColor* light_color,
                                    UIColor* dark_color);
+
+#endif  // IOS_CHROME_BROWSER_SHARED_UI_ANIMATED_PROMO_ANIMATED_PROMO_UTILS_H_

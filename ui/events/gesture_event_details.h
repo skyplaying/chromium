@@ -94,6 +94,16 @@ struct EVENTS_BASE_EXPORT GestureEventDetails {
     return data_.scroll_begin.delta_hint_units;
   }
 
+  ui::GestureScrollRailsMode scroll_begin_rails_mode() const {
+    DCHECK_EQ(EventType::kGestureScrollBegin, type_);
+    return data_.scroll_begin.rails_mode;
+  }
+
+  void set_scroll_begin_rails_mode(ui::GestureScrollRailsMode rails_mode) {
+    DCHECK_EQ(EventType::kGestureScrollBegin, type_);
+    data_.scroll_begin.rails_mode = rails_mode;
+  }
+
   float scroll_x() const {
     DCHECK_EQ(EventType::kGestureScrollUpdate, type_);
     return data_.scroll_update.x;
@@ -104,9 +114,66 @@ struct EVENTS_BASE_EXPORT GestureEventDetails {
     return data_.scroll_update.y;
   }
 
+  void set_scroll_x(float x) {
+    DCHECK_EQ(EventType::kGestureScrollUpdate, type_);
+    data_.scroll_update.x = x;
+  }
+
+  void set_scroll_y(float y) {
+    DCHECK_EQ(EventType::kGestureScrollUpdate, type_);
+    data_.scroll_update.y = y;
+  }
+
+  // TODO(crbug.com/535432422): Remove unconstrained deltas once
+  // kApplyScrollRailingInRenderer is enabled by default.
+  float scroll_x_unconstrained() const {
+    DCHECK_EQ(EventType::kGestureScrollUpdate, type_);
+    return data_.scroll_update.x_unconstrained;
+  }
+
+  float scroll_y_unconstrained() const {
+    DCHECK_EQ(EventType::kGestureScrollUpdate, type_);
+    return data_.scroll_update.y_unconstrained;
+  }
+
+  void set_scroll_x_unconstrained(float x) {
+    DCHECK_EQ(EventType::kGestureScrollUpdate, type_);
+    data_.scroll_update.x_unconstrained = x;
+  }
+
+  void set_scroll_y_unconstrained(float y) {
+    DCHECK_EQ(EventType::kGestureScrollUpdate, type_);
+    data_.scroll_update.y_unconstrained = y;
+  }
+
+  ui::GestureScrollRailsMode scroll_update_rails_mode() const {
+    DCHECK_EQ(EventType::kGestureScrollUpdate, type_);
+    return data_.scroll_update.rails_mode;
+  }
+
+  void set_scroll_update_rails_mode(ui::GestureScrollRailsMode rails_mode) {
+    DCHECK_EQ(EventType::kGestureScrollUpdate, type_);
+    data_.scroll_update.rails_mode = rails_mode;
+  }
+
   ui::ScrollGranularity scroll_update_units() const {
     DCHECK_EQ(EventType::kGestureScrollUpdate, type_);
     return data_.scroll_update.delta_units;
+  }
+
+  float scroll_x_compensated() const {
+    DCHECK_EQ(EventType::kGestureScrollEnd, type_);
+    return data_.scroll_end.x_compensated;
+  }
+
+  float scroll_y_compensated() const {
+    DCHECK_EQ(EventType::kGestureScrollEnd, type_);
+    return data_.scroll_end.y_compensated;
+  }
+
+  ui::ScrollGranularity scroll_end_units() const {
+    DCHECK_EQ(EventType::kGestureScrollEnd, type_);
+    return data_.scroll_end.delta_units;
   }
 
   float velocity_x() const {
@@ -117,6 +184,16 @@ struct EVENTS_BASE_EXPORT GestureEventDetails {
   float velocity_y() const {
     DCHECK_EQ(EventType::kScrollFlingStart, type_);
     return data_.fling_velocity.y;
+  }
+
+  ui::GestureScrollRailsMode fling_rails_mode() const {
+    DCHECK_EQ(EventType::kScrollFlingStart, type_);
+    return data_.fling_velocity.rails_mode;
+  }
+
+  void set_fling_rails_mode(ui::GestureScrollRailsMode rails_mode) {
+    DCHECK_EQ(EventType::kScrollFlingStart, type_);
+    data_.fling_velocity.rails_mode = rails_mode;
   }
 
   float first_finger_width() const {
@@ -236,15 +313,32 @@ struct EVENTS_BASE_EXPORT GestureEventDetails {
       float x_hint;
       float y_hint;
       ui::ScrollGranularity delta_hint_units;
+      ui::GestureScrollRailsMode rails_mode;
     } scroll_begin;
 
     struct {  // SCROLL delta.
       float x;
       float y;
+      // The raw, unconstrained scroll deltas before any axis locking (railing)
+      // or snapping constraints are applied by the browser. Used when
+      // scroll-axis-lock: none is active to allow diagonal scrolling.
+      // TODO(crbug.com/535432422): Remove unconstrained deltas once
+      // kApplyScrollRailingInRenderer is enabled by default.
+      float x_unconstrained;
+      float y_unconstrained;
+      ui::GestureScrollRailsMode rails_mode;
       ui::ScrollGranularity delta_units;
       // Whether any previous scroll update in the current scroll sequence was
       // suppressed because the underlying touch was consumed.
     } scroll_update;
+
+    struct {
+      // The scroll delta that is compensated for latency i.e. the scroll delta
+      // that was not sent to the renderer as scroll updates.
+      float x_compensated;
+      float y_compensated;
+      ui::ScrollGranularity delta_units;
+    } scroll_end;
 
     struct {  // PINCH details.
       float scale;
@@ -254,6 +348,7 @@ struct EVENTS_BASE_EXPORT GestureEventDetails {
     struct {  // FLING velocity.
       float x;
       float y;
+      ui::GestureScrollRailsMode rails_mode;
     } fling_velocity;
 
     // Dimensions of the first finger's enclosing rectangle for

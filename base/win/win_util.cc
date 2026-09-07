@@ -85,13 +85,24 @@
 #include "base/win/windows_version.h"
 #include "base/win/wmi.h"
 
-namespace base {
-namespace win {
+namespace base::win {
 
 namespace {
 
 using QueryKeyFunction =
     ScopedDeviceConvertibilityStateForTesting::QueryFunction;
+
+DSREG_JOIN_TYPE ToDSREGJoinType(
+    ScopedAzureADJoinStateForTesting::AzureADJoinType join_type) {
+  switch (join_type) {
+    case ScopedAzureADJoinStateForTesting::AzureADJoinType::kUnknown:
+      return DSREG_UNKNOWN_JOIN;
+    case ScopedAzureADJoinStateForTesting::AzureADJoinType::kDevice:
+      return DSREG_DEVICE_JOIN;
+    case ScopedAzureADJoinStateForTesting::AzureADJoinType::kWorkplace:
+      return DSREG_WORKPLACE_JOIN;
+  }
+}
 
 // Sets the value of |property_key| to |property_value| in |property_store|.
 bool SetPropVariantValueForPropertyStore(
@@ -127,7 +138,7 @@ void __cdecl ForceCrashOnSigAbort(int) {
 // Returns the current platform role. We use the PowerDeterminePlatformRoleEx
 // API for that.
 POWER_PLATFORM_ROLE GetPlatformRole() {
-  return PowerDeterminePlatformRoleEx(POWER_PLATFORM_ROLE_V2);
+  return ::PowerDeterminePlatformRoleEx(POWER_PLATFORM_ROLE_V2);
 }
 
 // Enable V2 per-monitor high-DPI support for the process. This will cause
@@ -156,7 +167,7 @@ bool EnablePerMonitorV2() {
 }
 
 bool* GetDomainEnrollmentStateStorage() {
-  static bool state = IsOS(OS_DOMAINMEMBER);
+  static bool state = ::IsOS(OS_DOMAINMEMBER);
   return &state;
 }
 
@@ -191,9 +202,8 @@ bool* GetRegisteredWithManagementStateStorage() {
   return &state;
 }
 
-// TODO (crbug/1300219): return a DSREG_JOIN_TYPE* instead of bool*.
-bool* GetAzureADJoinStateStorage() {
-  static bool state = [] {
+std::optional<DSREG_JOIN_TYPE>& GetAzureADJoinStateStorage() {
+  static std::optional<DSREG_JOIN_TYPE> state = [] {
     base::ElapsedTimer timer;
 
     // Mitigate the issues caused by loading DLLs on a background thread
@@ -203,14 +213,14 @@ bool* GetAzureADJoinStateStorage() {
     ScopedNativeLibrary netapi32(
         base::LoadSystemLibrary(FILE_PATH_LITERAL("netapi32.dll")));
     if (!netapi32.is_valid()) {
-      return false;
+      return std::optional<DSREG_JOIN_TYPE>(std::nullopt);
     }
 
     const auto net_get_aad_join_information_function =
         reinterpret_cast<decltype(&::NetGetAadJoinInformation)>(
             netapi32.GetFunctionPointer("NetGetAadJoinInformation"));
     if (!net_get_aad_join_information_function) {
-      return false;
+      return std::optional<DSREG_JOIN_TYPE>(std::nullopt);
     }
 
     const auto net_free_aad_join_information_function =
@@ -221,16 +231,19 @@ bool* GetAzureADJoinStateStorage() {
     DSREG_JOIN_INFO* join_info = nullptr;
     HRESULT hr = net_get_aad_join_information_function(/*pcszTenantId=*/nullptr,
                                                        &join_info);
-    const bool is_aad_joined = SUCCEEDED(hr) && join_info;
+    std::optional<DSREG_JOIN_TYPE> join_type = std::nullopt;
+    if (SUCCEEDED(hr) && join_info) {
+      join_type = join_info->joinType;
+    }
     if (join_info) {
       net_free_aad_join_information_function(join_info);
     }
 
     base::UmaHistogramTimes("EnterpriseCheck.AzureADJoinStatusCheckTime",
                             timer.Elapsed());
-    return is_aad_joined;
+    return join_type;
   }();
-  return &state;
+  return state;
 }
 
 NativeLibrary PinUser32Internal(NativeLibraryLoadError* error) {
@@ -446,7 +459,7 @@ bool& IsDeviceFormConvertible() {
     using lpfnRtlGetDeviceFamilyInfo =
         VOID(WINAPI*)(ULONGLONG*, DWORD*, DWORD*);
     static const lpfnRtlGetDeviceFamilyInfo get_device_family_info_fn =
-        reinterpret_cast<lpfnRtlGetDeviceFamilyInfo>(GetProcAddress(
+        reinterpret_cast<lpfnRtlGetDeviceFamilyInfo>(::GetProcAddress(
             ::GetModuleHandle(L"ntdll.dll"), "RtlGetDeviceFamilyInfoEnum"));
     PCHECK(get_device_family_info_fn);
     get_device_family_info_fn(/*pullUAPInfo=*/nullptr,
@@ -658,7 +671,7 @@ void IsDeviceSlateWithKeyboard(HWND hwnd,
   // If no touch screen detected, assume keyboard attached.
   // TODO(crbug.com/383267933) If the device is mouse only with no touch screen,
   // this will determine that the device has a keyboard.
-  if ((GetSystemMetrics(SM_DIGITIZER) & NID_INTEGRATED_TOUCH) !=
+  if ((::GetSystemMetrics(SM_DIGITIZER) & NID_INTEGRATED_TOUCH) !=
       NID_INTEGRATED_TOUCH) {
     reason << "NID_INTEGRATED_TOUCH\n";
   }
@@ -858,7 +871,7 @@ bool IsDeviceUsedAsATablet(std::string* reason) {
   // reason is NULL.
   std::optional<bool> ret;
 
-  if (GetSystemMetrics(SM_MAXIMUMTOUCHES) == 0) {
+  if (::GetSystemMetrics(SM_MAXIMUMTOUCHES) == 0) {
     if (!reason) {
       return false;
     }
@@ -868,7 +881,7 @@ bool IsDeviceUsedAsATablet(std::string* reason) {
   }
 
   // If the device is docked, the user is treating the device as a PC.
-  if (GetSystemMetrics(SM_SYSTEMDOCKED) != 0) {
+  if (::GetSystemMetrics(SM_SYSTEMDOCKED) != 0) {
     if (!reason) {
       return false;
     }
@@ -883,7 +896,7 @@ bool IsDeviceUsedAsATablet(std::string* reason) {
   // a convertible or a detachable.
   // See
   // https://msdn.microsoft.com/en-us/library/windows/desktop/dn629263(v=vs.85).aspx
-  using GetAutoRotationStateType = decltype(GetAutoRotationState)*;
+  using GetAutoRotationStateType = decltype(::GetAutoRotationState)*;
   static const auto get_auto_rotation_state_func =
       reinterpret_cast<GetAutoRotationStateType>(
           GetUser32FunctionPointer("GetAutoRotationState"));
@@ -899,7 +912,7 @@ bool IsDeviceUsedAsATablet(std::string* reason) {
   POWER_PLATFORM_ROLE role = GetPlatformRole();
   bool is_tablet = false;
   if (role == PlatformRoleMobile || role == PlatformRoleSlate) {
-    is_tablet = !GetSystemMetrics(SM_CONVERTIBLESLATEMODE);
+    is_tablet = !::GetSystemMetrics(SM_CONVERTIBLESLATEMODE);
     if (!is_tablet) {
       if (!reason) {
         return false;
@@ -934,14 +947,20 @@ bool IsDeviceRegisteredWithManagement() {
 }
 
 bool IsJoinedToAzureAD() {
-  return *GetAzureADJoinStateStorage();
+  auto join_type = GetAzureADJoinStateStorage();
+  return join_type.has_value();
+}
+
+bool IsDeviceJoinedToAzureAD() {
+  const auto& join_type = GetAzureADJoinStateStorage();
+  return join_type && *join_type == DSREG_DEVICE_JOIN;
 }
 
 bool IsUser32AndGdi32Available() {
   static const bool is_user32_and_gdi32_available = [] {
     // If win32k syscalls aren't disabled, then user32 and gdi32 are available.
     PROCESS_MITIGATION_SYSTEM_CALL_DISABLE_POLICY policy = {};
-    if (::GetProcessMitigationPolicy(GetCurrentProcess(),
+    if (::GetProcessMitigationPolicy(::GetCurrentProcess(),
                                      ProcessSystemCallDisablePolicy, &policy,
                                      sizeof(policy))) {
       return policy.DisallowWin32kSystemCalls == 0;
@@ -1035,7 +1054,7 @@ std::wstring WStringFromGUID(const ::GUID& rguid) {
   constexpr int kGuidStringCharacters =
       1 + 8 + 1 + 4 + 1 + 4 + 1 + 4 + 1 + 12 + 1 + 1;
   wchar_t guid_string[kGuidStringCharacters];
-  CHECK(SUCCEEDED(StringCchPrintfW(
+  CHECK(SUCCEEDED(::StringCchPrintfW(
       guid_string, kGuidStringCharacters,
       L"{%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}", rguid.Data1,
       rguid.Data2, rguid.Data3, rguid.Data4[0], rguid.Data4[1], rguid.Data4[2],
@@ -1145,7 +1164,7 @@ bool IsCurrentSessionRemote() {
 }
 
 bool IsAppVerifierLoaded() {
-  return GetModuleHandleA(kApplicationVerifierDllName);
+  return ::GetModuleHandleA(kApplicationVerifierDllName);
 }
 
 std::optional<std::wstring> ExpandEnvironmentVariables(wcstring_view str) {
@@ -1287,11 +1306,35 @@ ScopedDeviceRegisteredWithManagementForTesting::
   *GetRegisteredWithManagementStateStorage() = initial_state_;
 }
 
-ScopedAzureADJoinStateForTesting::ScopedAzureADJoinStateForTesting(bool state)
-    : initial_state_(std::exchange(*GetAzureADJoinStateStorage(), state)) {}
+ScopedAzureADJoinStateForTesting::ScopedAzureADJoinStateForTesting(
+    std::optional<AzureADJoinType> state)
+    : initial_state_([&] {
+        const auto& storage = GetAzureADJoinStateStorage();
+        if (!storage.has_value()) {
+          return std::optional<AzureADJoinType>(std::nullopt);
+        }
+        switch (*storage) {
+          case DSREG_UNKNOWN_JOIN:
+            return std::optional<AzureADJoinType>(AzureADJoinType::kUnknown);
+          case DSREG_DEVICE_JOIN:
+            return std::optional<AzureADJoinType>(AzureADJoinType::kDevice);
+          case DSREG_WORKPLACE_JOIN:
+            return std::optional<AzureADJoinType>(AzureADJoinType::kWorkplace);
+        }
+      }()) {
+  if (state.has_value()) {
+    GetAzureADJoinStateStorage() = ToDSREGJoinType(*state);
+  } else {
+    GetAzureADJoinStateStorage() = std::nullopt;
+  }
+}
 
 ScopedAzureADJoinStateForTesting::~ScopedAzureADJoinStateForTesting() {
-  *GetAzureADJoinStateStorage() = initial_state_;
+  if (initial_state_.has_value()) {
+    GetAzureADJoinStateStorage() = ToDSREGJoinType(*initial_state_);
+  } else {
+    GetAzureADJoinStateStorage() = std::nullopt;
+  }
 }
 
 ScopedDeviceConvertibilityStateForTesting::
@@ -1313,5 +1356,4 @@ ScopedDeviceConvertibilityStateForTesting::
 ScopedDeviceConvertibilityStateForTesting::
     ~ScopedDeviceConvertibilityStateForTesting() = default;
 
-}  // namespace win
-}  // namespace base
+}  // namespace base::win

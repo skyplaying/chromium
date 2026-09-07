@@ -75,6 +75,8 @@ class KeyboardAccessoryProperties {
             new WritableBooleanPropertyKey("has_suggestions");
     static final WritableBooleanPropertyKey HAS_STICKY_LAST_ITEM =
             new WritableBooleanPropertyKey("has_sticky_last_item");
+    static final WritableObjectPropertyKey<@Nullable Integer> SELECTED_SUGGESTION_INDEX =
+            new WritableObjectPropertyKey<>("selected_suggestion_index");
     static final WritableBooleanPropertyKey ANIMATE_SUGGESTIONS_FROM_TOP =
             new WritableBooleanPropertyKey("animate_suggestions_from_top");
 
@@ -96,6 +98,7 @@ class KeyboardAccessoryProperties {
                         SHOW_SWIPING_IPH,
                         HAS_SUGGESTIONS,
                         HAS_STICKY_LAST_ITEM,
+                        SELECTED_SUGGESTION_INDEX,
                         ANIMATE_SUGGESTIONS_FROM_TOP,
                         ANIMATION_LISTENER)
                 .with(BAR_ITEMS_FIXED, new ListModel<>())
@@ -105,6 +108,7 @@ class KeyboardAccessoryProperties {
                 .with(DISABLE_ANIMATIONS_FOR_TESTING, false)
                 .with(SHOW_SWIPING_IPH, false)
                 .with(HAS_SUGGESTIONS, false)
+                .with(SELECTED_SUGGESTION_INDEX, null)
                 .with(ANIMATE_SUGGESTIONS_FROM_TOP, false);
     }
 
@@ -157,6 +161,13 @@ class KeyboardAccessoryProperties {
         }
 
         /**
+         * Updates the state of this item when a suggestion is accepted.
+         *
+         * @param acceptedSuggestion The suggestion that was accepted, or null if none.
+         */
+        void updateStateOnItemAcceptance(@Nullable AutofillSuggestion acceptedSuggestion) {}
+
+        /**
          * If this {@link BarItem} is a instance of {@link ActionBarItem}, returns itself in a list.
          * Otherwise, returns a list of {@link ActionBarItem} contained in this group.
          */
@@ -176,6 +187,13 @@ class KeyboardAccessoryProperties {
         }
 
         @Override
+        void updateStateOnItemAcceptance(@Nullable AutofillSuggestion acceptedSuggestion) {
+            for (ActionBarItem item : mActionBarItems) {
+                item.updateStateOnItemAcceptance(acceptedSuggestion);
+            }
+        }
+
+        @Override
         List<ActionBarItem> getActionBarItems() {
             return Collections.unmodifiableList(mActionBarItems);
         }
@@ -188,6 +206,7 @@ class KeyboardAccessoryProperties {
     static class ActionBarItem extends BarItem {
         private final @Nullable Action mAction;
         private final @StringRes int mCaptionId;
+        private boolean mIsEnabled = true;
 
         /**
          * Creates a new item. An action item must have a type and can have an action.
@@ -200,6 +219,14 @@ class KeyboardAccessoryProperties {
             super(type);
             mAction = action;
             mCaptionId = captionId;
+        }
+
+        boolean isEnabled() {
+            return mIsEnabled;
+        }
+
+        void setEnabled(boolean isEnabled) {
+            mIsEnabled = isEnabled;
         }
 
         @Override
@@ -257,6 +284,7 @@ class KeyboardAccessoryProperties {
     static class AutofillBarItem extends ActionBarItem {
         private final AutofillSuggestion mSuggestion;
         private @Nullable String mFeature;
+        private boolean mIsLoading;
 
         /**
          * Creates a new autofill item with a suggestion for the view's representation and an action
@@ -269,6 +297,30 @@ class KeyboardAccessoryProperties {
         AutofillBarItem(AutofillSuggestion suggestion, Action action, Profile profile) {
             super(getBarItemType(suggestion, profile), action, 0);
             mSuggestion = suggestion;
+        }
+
+        /**
+         * Returns the ground-truth index of this suggestion in the original backend suggestions
+         * list. This index remains stable even when suggestions are filtered, grouped, or reordered
+         * in the accessory bar.
+         *
+         * @return The index in the native suggestion list.
+         */
+        int getOriginalIndex() {
+            return mSuggestion.getOriginalIndex();
+        }
+
+        @Override
+        boolean isEnabled() {
+            return mSuggestion.isSelectable() && super.isEnabled();
+        }
+
+        boolean isLoading() {
+            return mSuggestion.isLoading() || mIsLoading;
+        }
+
+        void setLoading(boolean isLoading) {
+            mIsLoading = isLoading;
         }
 
         AutofillSuggestion getSuggestion() {
@@ -362,7 +414,7 @@ class KeyboardAccessoryProperties {
                     Type.DISMISS_CHIP,
                     new Action(
                             AccessoryAction.DISMISS,
-                            unused -> {
+                            _ -> {
                                 ManualFillingMetricsRecorder.recordActionSelected(
                                         AccessoryAction.DISMISS);
                                 dismissRunnable.run();

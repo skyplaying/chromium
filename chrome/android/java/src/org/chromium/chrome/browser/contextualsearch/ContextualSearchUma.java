@@ -14,9 +14,9 @@ import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.chrome.browser.compositor.bottombar.OverlayPanel.PanelState;
-import org.chromium.chrome.browser.compositor.bottombar.OverlayPanel.StateChangeReason;
+import org.chromium.chrome.browser.compositor.overlay_panel.OverlayPanel.StateChangeReason;
 import org.chromium.chrome.browser.contextualsearch.ResolvedSearchTerm.CardTag;
+import org.chromium.chrome.browser.overlay_panel.PanelState;
 import org.chromium.chrome.browser.profiles.Profile;
 
 import java.lang.annotation.Retention;
@@ -502,8 +502,9 @@ public class ContextualSearchUma {
 
     /**
      * Logs the primary CoCa {@link CardTag} for searches where the panel contents was seen,
-     * including {@codeCardTag.CT_NONE} when no card or tag, and {@codeCardTag.CT_OTHER} when it's
-     * one we do not recognize.
+     * including {@code codeCardTag.CT_NONE} when no card or tag, and {@code codeCardTag.CT_OTHER}
+     * when it's one we do not recognize.
+     *
      * @param wasSearchContentViewSeen Whether the panel was seen.
      * @param cardTagEnum The primary CoCa card Tag for the result seen.
      */

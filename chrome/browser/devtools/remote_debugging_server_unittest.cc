@@ -71,7 +71,7 @@ TEST_F(RemoteDebuggingServerTest, StartsAndStopsWithPref) {
   auto server = std::make_unique<NiceMock<MockRemoteDebuggingServer>>();
 
   EXPECT_CALL(*server, StartHttpServer).Times(0);
-  server->StartHttpServerInApprovalMode(local_state);
+  server->StartHttpServerInApprovalModeIfEnabled(local_state);
   testing::Mock::VerifyAndClearExpectations(server.get());
 
   base::RunLoop start_run_loop;
@@ -89,6 +89,27 @@ TEST_F(RemoteDebuggingServerTest, StartsAndStopsWithPref) {
   local_state->SetUserPref(prefs::kDevToolsRemoteDebuggingEnabled,
                            std::make_unique<base::Value>(false));
   stop_run_loop.Run();
+  testing::Mock::VerifyAndClearExpectations(server.get());
+}
+
+TEST_F(RemoteDebuggingServerTest, DoesNotStartWhenPolicyAllowedDynamically) {
+  TestingPrefServiceSimple* local_state =
+      TestingBrowserProcess::GetGlobal()->GetTestingLocalState();
+  auto server = std::make_unique<NiceMock<MockRemoteDebuggingServer>>();
+
+  // Start with policy disallowed, but user pref enabled.
+  local_state->SetManagedPref(prefs::kDevToolsRemoteDebuggingAllowed,
+                              std::make_unique<base::Value>(false));
+  local_state->SetUserPref(prefs::kDevToolsRemoteDebuggingEnabled,
+                           std::make_unique<base::Value>(true));
+
+  EXPECT_CALL(*server, StartHttpServer).Times(0);
+  server->StartHttpServerInApprovalModeIfEnabled(local_state);
+
+  // Policy dynamically changes to allowed.
+  // The server should NOT automatically start.
+  local_state->SetManagedPref(prefs::kDevToolsRemoteDebuggingAllowed,
+                              std::make_unique<base::Value>(true));
   testing::Mock::VerifyAndClearExpectations(server.get());
 }
 
@@ -164,4 +185,15 @@ TEST_F(RemoteDebuggingServerTest, GetPortFromUserDataDir) {
   ASSERT_TRUE(base::DeleteFile(active_port_file));
   EXPECT_EQ(RemoteDebuggingServer::kDefaultDevToolsPort,
             RemoteDebuggingServer::GetPortFromUserDataDir(temp_dir.GetPath()));
+}
+
+TEST_F(RemoteDebuggingServerTest, ReturnsInstanceWhenPrefDisabled) {
+  // The instance needs to be returned because the server can be started later
+  // in the approval mode and the instance is listening to the pref changes.
+  TestingPrefServiceSimple* local_state =
+      TestingBrowserProcess::GetGlobal()->GetTestingLocalState();
+  local_state->SetUserPref(prefs::kDevToolsRemoteDebuggingEnabled,
+                           std::make_unique<base::Value>(false));
+  auto server = RemoteDebuggingServer::GetInstance(local_state);
+  EXPECT_TRUE(server.has_value());
 }

@@ -6,6 +6,7 @@
 #define GPU_COMMAND_BUFFER_SERVICE_SHARED_IMAGE_TEST_IMAGE_BACKING_H_
 
 #include "base/memory/raw_ptr.h"
+#include "gpu/command_buffer/common/shared_image_info.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_backing.h"
 #include "gpu/command_buffer/service/texture_manager.h"
@@ -17,21 +18,11 @@ class TestImageBacking : public SharedImageBacking {
  public:
   // Constructor which uses a dummy GL texture ID for the backing.
   TestImageBacking(const Mailbox& mailbox,
-                   viz::SharedImageFormat format,
-                   const gfx::Size& size,
-                   const gfx::ColorSpace& color_space,
-                   GrSurfaceOrigin surface_origin,
-                   SkAlphaType alpha_type,
-                   SharedImageUsageSet usage,
+                   const SharedImageInfo& si_info,
                    size_t estimated_size);
   // Constructor which uses a provided GL texture ID for the backing.
   TestImageBacking(const Mailbox& mailbox,
-                   viz::SharedImageFormat format,
-                   const gfx::Size& size,
-                   const gfx::ColorSpace& color_space,
-                   GrSurfaceOrigin surface_origin,
-                   SkAlphaType alpha_type,
-                   SharedImageUsageSet usage,
+                   const SharedImageInfo& si_info,
                    size_t estimated_size,
                    GLuint texture_id);
   ~TestImageBacking() override;
@@ -60,6 +51,9 @@ class TestImageBacking : public SharedImageBacking {
   GLuint service_id() const { return textures_[0]->service_id(); }
   void set_can_access(bool can_access) { can_access_ = can_access; }
   bool can_access() const { return can_access_; }
+  void set_upload_from_memory_succeeds(bool succeeds) {
+    upload_from_memory_succeeds_ = succeeds;
+  }
 
 #if BUILDFLAG(IS_APPLE)
   void set_in_use_by_window_server(bool in_use_by_window_server) {
@@ -99,6 +93,10 @@ class TestImageBacking : public SharedImageBacking {
   std::unique_ptr<OverlayImageRepresentation> ProduceOverlay(
       SharedImageManager* manager,
       MemoryTypeTracker* tracker) override;
+  std::unique_ptr<VideoImageRepresentation> ProduceVideo(
+      SharedImageManager* manager,
+      MemoryTypeTracker* tracker,
+      VideoDevice device) override;
 
  private:
   std::vector<raw_ptr<gles2::Texture>> textures_;
@@ -110,6 +108,7 @@ class TestImageBacking : public SharedImageBacking {
 #endif
 
   bool upload_from_memory_called_ = false;
+  bool upload_from_memory_succeeds_ = true;
   bool readback_to_memory_called_ = false;
   PurgeableCallback set_purgeable_callback_;
   PurgeableCallback set_not_purgeable_callback_;
@@ -139,6 +138,28 @@ class TestOverlayImageRepresentation : public OverlayImageRepresentation {
  private:
   bool IsInUseByWindowServer() const override;
 #endif  // BUILDFLAG(IS_APPLE)
+};
+
+class TestVideoImageRepresentation : public VideoImageRepresentation {
+ public:
+  TestVideoImageRepresentation(SharedImageManager* manager,
+                               SharedImageBacking* backing,
+                               MemoryTypeTracker* tracker)
+      : VideoImageRepresentation(manager, backing, tracker) {}
+
+ private:
+  bool BeginWriteAccess() override;
+  void EndWriteAccess() override;
+  bool BeginReadAccess() override;
+  void EndReadAccess() override;
+
+#if BUILDFLAG(IS_WIN)
+  D3D11TextureAndArrayIndex GetD3D11Texture() const override;
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+  AHardwareBuffer* GetAHardwareBuffer() const override;
+#endif
 };
 
 }  // namespace gpu

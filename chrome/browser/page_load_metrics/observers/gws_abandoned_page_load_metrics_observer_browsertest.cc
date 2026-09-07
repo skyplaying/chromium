@@ -16,7 +16,8 @@
 #include "chrome/browser/page_load_metrics/observers/gws_abandoned_page_load_metrics_observer_browsertest.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ssl/https_upgrades_util.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/page_load_metrics/browser/observers/abandoned_page_load_metrics_observer.h"
@@ -26,6 +27,7 @@
 #include "components/page_load_metrics/google/browser/google_url_util.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "content/public/browser/back_forward_cache.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_features.h"
@@ -37,7 +39,9 @@
 #include "content/public/test/test_navigation_throttle.h"
 #include "content/public/test/test_navigation_throttle_inserter.h"
 #include "net/test/embedded_test_server/request_handler_util.h"
+#include "services/metrics/public/cpp/metrics_utils.h"
 #include "services/network/public/cpp/network_quality_tracker.h"
+#include "ui/base/page_transition_types.h"
 
 namespace {
 
@@ -196,7 +200,7 @@ std::unique_ptr<PageLoadMetricsTestWaiter>
 GWSAbandonedPageLoadMetricsObserverBrowserTest::
     CreatePageLoadMetricsTestWaiter() {
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   return std::make_unique<PageLoadMetricsTestWaiter>(web_contents);
 }
 
@@ -364,7 +368,7 @@ void GWSAbandonedPageLoadMetricsObserverBrowserTest::TestNavigationAbandonment(
   // Navigate again to another SRP page, so that tests that need to do history
   // navigation before the SRP navigation commits can do so.
   EXPECT_TRUE(content::NavigateToURL(
-      browser()->tab_strip_model()->GetActiveWebContents(), url_non_srp_2()));
+      browser()->GetTabStripModel()->GetActiveWebContents(), url_non_srp_2()));
 
   // Navigate to SRP, but pause it just after we reach the desired milestone.
   content::TestNavigationManager navigation(web_contents, target_url);
@@ -402,7 +406,7 @@ void GWSAbandonedPageLoadMetricsObserverBrowserTest::TestNavigationAbandonment(
   // WebContents we navigate for metrics flushing purposes, so we navigate
   // the active one.
   EXPECT_TRUE(content::NavigateToURL(
-      browser()->tab_strip_model()->GetActiveWebContents(), url_non_srp()));
+      browser()->GetTabStripModel()->GetActiveWebContents(), url_non_srp()));
 
   bool redirected_from_non_srp = (target_url == url_non_srp_redirect_to_srp());
   bool has_redirect =
@@ -1151,7 +1155,7 @@ IN_PROC_BROWSER_TEST_F(GWSAbandonedPageLoadMetricsObserverBrowserTest,
                        content::JsReplace("window.open($1)", url_non_srp())));
     popup_observer.Wait();
     content::WebContents* popup_contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
 
     TestNavigationAbandonment(
         AbandonReason::kFrameRemoved, milestone,
@@ -1378,6 +1382,8 @@ IN_PROC_BROWSER_TEST_P(
   // Pause the navigation at request start.
   EXPECT_TRUE(nav_manager.WaitForRequestStart());
 
+  ukm::TestAutoSetUkmRecorder ukm_recorder;
+
   // 2. Navigate again, also to `url_srp()`.
   base::WeakPtr<content::NavigationHandle> nav_handle_for_url =
       web_contents()->GetController().LoadURL(url_srp(), content::Referrer(),
@@ -1412,6 +1418,13 @@ IN_PROC_BROWSER_TEST_P(
                           GetAbandonReasonAtMilestoneHistogramName(milestone))
                       .empty());
     }
+
+    auto ukm_entries =
+        ukm_recorder.GetEntriesByName("Navigation.DuplicateNavigationsIgnored");
+    EXPECT_EQ(ukm_entries.size(), 1ul);
+    ukm_recorder.ExpectEntryMetric(
+        ukm_entries[0], "IgnoredDuplicateNavigationCount",
+        ukm::GetExponentialBucketMinForCounts1000(1));
   } else {
     // Check that the abandonment reason is set correctly.
     EXPECT_THAT(histogram_tester().GetTotalCountsForPrefix(
@@ -1424,6 +1437,10 @@ IN_PROC_BROWSER_TEST_P(
         GetAbandonReasonAtMilestoneHistogramName(
             NavigationMilestone::kNavigationStart),
         AbandonReason::kNewDuplicateNavigation, 1);
+
+    auto ukm_entries =
+        ukm_recorder.GetEntriesByName("Navigation.DuplicateNavigationsIgnored");
+    EXPECT_EQ(ukm_entries.size(), 0ul);
   }
 }
 
@@ -1433,12 +1450,19 @@ IN_PROC_BROWSER_TEST_P(
   const bool ignore_duplicate_navs_enabled = IsIgnoreDuplicateNavsEnabled();
   EXPECT_TRUE(content::NavigateToURL(web_contents(), url_non_srp()));
 
+  auto waiter = CreatePageLoadMetricsTestWaiter();
+  waiter->AddPageExpectation(
+      PageLoadMetricsTestWaiter::TimingField::kLoadEvent);
+  waiter->AddCustomUserTimingMarkExpectation("SearchBodyEnd");
+
   // 1. Start renderer-initiated navigation to `url_srp()`
   content::TestNavigationManager nav_manager(web_contents(), url_srp());
   EXPECT_TRUE(ExecJs(web_contents(),
                      content::JsReplace("location.href = $1;", url_srp())));
   // Pause the navigation at request start.
   EXPECT_TRUE(nav_manager.WaitForRequestStart());
+
+  ukm::TestAutoSetUkmRecorder ukm_recorder;
 
   // 2. Navigate again, also to `url_srp()`.
   EXPECT_TRUE(ExecJs(web_contents(),
@@ -1449,7 +1473,7 @@ IN_PROC_BROWSER_TEST_P(
   // Otherwise, it's cancelled by the second.
   EXPECT_EQ(nav_manager.was_committed(), ignore_duplicate_navs_enabled);
 
-  EXPECT_TRUE(content::WaitForLoadStop(web_contents()));
+  waiter->Wait();
   EXPECT_EQ(url_srp(),
             web_contents()->GetPrimaryMainFrame()->GetLastCommittedURL());
 
@@ -1472,6 +1496,13 @@ IN_PROC_BROWSER_TEST_P(
                           GetAbandonReasonAtMilestoneHistogramName(milestone))
                       .empty());
     }
+
+    auto ukm_entries =
+        ukm_recorder.GetEntriesByName("Navigation.DuplicateNavigationsIgnored");
+    EXPECT_EQ(ukm_entries.size(), 1ul);
+    ukm_recorder.ExpectEntryMetric(
+        ukm_entries[0], "IgnoredDuplicateNavigationCount",
+        ukm::GetExponentialBucketMinForCounts1000(1));
   } else {
     // Check that the abandonment reason is set correctly.
     EXPECT_THAT(histogram_tester().GetTotalCountsForPrefix(
@@ -1484,6 +1515,10 @@ IN_PROC_BROWSER_TEST_P(
         GetAbandonReasonAtMilestoneHistogramName(
             NavigationMilestone::kNavigationStart),
         AbandonReason::kNewDuplicateNavigation, 1);
+
+    auto ukm_entries =
+        ukm_recorder.GetEntriesByName("Navigation.DuplicateNavigationsIgnored");
+    EXPECT_EQ(ukm_entries.size(), 0ul);
   }
 }
 
@@ -1538,12 +1573,12 @@ IN_PROC_BROWSER_TEST_F(GWSAbandonedPageLoadMetricsObserverBrowserTest,
   // Explicitly allow http access for the incognito mode. Otherwise the
   // incognito mode cannot reach to the SRP domain.
   ScopedAllowHttpForHostnamesForTesting allow_http(
-      {kSRPDomain}, browser()->profile()->GetPrefs());
+      {kSRPDomain}, browser()->GetProfile()->GetPrefs());
 
   // Navigate to SRP with incognito mode.
-  Browser* incognito = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito = CreateIncognitoBrowser();
   content::WebContents* web_contents =
-      incognito->tab_strip_model()->GetActiveWebContents();
+      incognito->GetTabStripModel()->GetActiveWebContents();
   EXPECT_TRUE(content::NavigateToURL(web_contents, url_srp()));
 
   // Navigate to a non-SRP page to flush the metrics.

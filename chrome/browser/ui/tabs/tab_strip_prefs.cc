@@ -5,66 +5,57 @@
 #include "chrome/browser/ui/tabs/tab_strip_prefs.h"
 
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/tab_search_feature.h"
+#include "chrome/browser/ui/actions/chrome_action_id.h"
 #include "chrome/browser/ui/tabs/features.h"
+#include "chrome/browser/ui/tabs/vertical_tab_strip_state.h"
+#include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
+#include "chrome/browser/ui/toolbar/toolbar_pref_names.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
-
-namespace {
-
-std::optional<bool> g_tab_search_trailing_tabstrip_at_startup = std::nullopt;
-}
+#include "ui/actions/actions.h"
 
 namespace tabs {
 
-bool GetDefaultTabSearchRightAligned() {
-  // These platforms are all left aligned, the others should be right.
-#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
-  return false;
-#else
-  return true;
-#endif
-}
-
 void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
-  registry->RegisterBooleanPref(prefs::kTabSearchRightAligned,
-                                GetDefaultTabSearchRightAligned());
+  registry->RegisterBooleanPref(prefs::kTabSearchPinnedToTabstrip, true);
+  registry->RegisterBooleanPref(prefs::kOrganizerPanelPinnedToTabstrip, true);
+  registry->RegisterBooleanPref(prefs::kEverythingMenuPinnedToTabstrip, true);
+  registry->RegisterBooleanPref(prefs::kTabScrollButtonsPinnedToTabstrip, true);
+  registry->RegisterBooleanPref(prefs::kVerticalTabsEnabled, false);
   registry->RegisterBooleanPref(
-      prefs::kVerticalTabsEnabled, false,
-      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+      prefs::kVerticalTabsExpandOnHoverEnabled,
+      tabs::kVerticalTabsExpandOnHoverDefaultEnabled.Get());
+  registry->RegisterBooleanPref(prefs::kVerticalTabsEnabledFirstTime, false);
+  registry->RegisterBooleanPref(prefs::kVerticalTabsCollapsedState, false);
+  registry->RegisterIntegerPref(prefs::kVerticalTabsUncollapsedWidth,
+                                kVerticalTabStripDefaultUncollapsedWidth);
 }
 
-TabSearchPosition GetTabSearchPosition(const Profile* profile) {
-  if (tabs::IsVerticalTabsFeatureEnabled() &&
-      profile->GetPrefs()->GetBoolean(prefs::kVerticalTabsEnabled)) {
-    return TabSearchPosition::kVerticalTabstrip;
+void MigrateHoverCardMemoryPref(PrefService* local_prefs) {
+  if (!features::IsTabStripDeclutterEnabled() ||
+      local_prefs->GetBoolean(
+          prefs::kHoverCardMemoryUsageDisableMigrationComplete)) {
+    return;
   }
 
-  if (base::FeatureList::IsEnabled(tabs::kHorizontalTabStripComboButton)) {
-    return TabSearchPosition::kLeadingHorizontalTabstrip;
-  }
-
-  const bool has_tab_search_toolbar_button =
-      features::HasTabSearchToolbarButton();
-  if (has_tab_search_toolbar_button) {
-    return TabSearchPosition::kToolbarButton;
-  }
-
-  // If this pref has already been read, we need to return the same value.
-  if (!g_tab_search_trailing_tabstrip_at_startup.has_value()) {
-    g_tab_search_trailing_tabstrip_at_startup =
-        GetDefaultTabSearchRightAligned();
-  }
-
-  return g_tab_search_trailing_tabstrip_at_startup.value()
-             ? TabSearchPosition::kTrailingHorizontalTabstrip
-             : TabSearchPosition::kLeadingHorizontalTabstrip;
+  local_prefs->SetBoolean(prefs::kHoverCardMemoryUsageEnabled, false);
+  local_prefs->SetBoolean(prefs::kHoverCardMemoryUsageDisableMigrationComplete,
+                          true);
 }
 
-void SetTabSearchRightAlignedForTesting(bool is_right_aligned) {
-  g_tab_search_trailing_tabstrip_at_startup = is_right_aligned;
+TabSearchPosition GetTabSearchPosition(
+    const BrowserWindowInterface* browser_window) {
+  if (browser_window) {
+    auto* const controller =
+        tabs::VerticalTabStripStateController::From(browser_window);
+    if (controller && controller->ShouldDisplayVerticalTabs()) {
+      return TabSearchPosition::kVerticalTabstrip;
+    }
+  }
+  return TabSearchPosition::kLeadingHorizontalTabstrip;
 }
 
 }  // namespace tabs

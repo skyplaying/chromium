@@ -11,19 +11,26 @@
 #include <utility>
 
 #include "base/check_op.h"
+#include "base/containers/to_vector.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/supports_user_data.h"
 #include "base/synchronization/waitable_event.h"
+#include "base/task/task_traits.h"
+#include "base/task/thread_pool.h"
+#include "base/timer/elapsed_timer.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profiles_state.h"
+#include "chrome/browser/search/search.h"
 #include "chrome/browser/spellchecker/spellcheck_factory.h"
 #include "chrome/browser/spellchecker/spellcheck_hunspell_dictionary.h"
+#include "chrome/common/chrome_features.h"
 #include "components/language/core/browser/pref_names.h"
 #include "components/prefs/pref_member.h"
 #include "components/prefs/pref_service.h"
@@ -41,6 +48,7 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/common/content_features.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -84,22 +92,40 @@ SpellcheckService::SpellcheckService(content::BrowserContext* context)
     : context_(context) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
+  bool defer_spellcheck =
+      base::FeatureList::IsEnabled(::features::kDeferSpellcheckInitialization);
+
   PrefService* prefs = user_prefs::UserPrefs::Get(context);
   pref_change_registrar_.Init(prefs);
   StringListPrefMember dictionaries_pref;
   dictionaries_pref.Init(spellcheck::prefs::kSpellCheckDictionaries, prefs);
   std::string first_of_dictionaries;
 
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_MAC)
+  if (defer_spellcheck) {
+    // Defer Cocoa spellchecker initialization to a post-startup idle task to
+    // avoid blocking the main thread during critical startup path.
+    // This is safe because:
+    // 1. Spellcheck is not needed immediately on startup.
+    // 2. Renderers that don't need spellcheck (like Top Chrome WebUI and NTP)
+    //    are bypassed entirely in `InitForRenderer`, so they won't trigger
+    //    early initialization of the service.
+    base::ThreadPool::PostTaskAndReplyWithResult(
+        FROM_HERE, {base::TaskPriority::BEST_EFFORT, base::MayBlock()},
+        base::BindOnce(&spellcheck_platform::GetSpellCheckerLanguage),
+        base::BindOnce(&SpellcheckService::InitMacDeferredSpellcheck,
+                       weak_ptr_factory_.GetWeakPtr()));
+  } else {
+    InitializePlatformLanguageMacWithLanguage(
+        spellcheck_platform::GetSpellCheckerLanguage());
+  }
+#elif BUILDFLAG(IS_ANDROID)
   // Ensure that the renderer always knows the platform spellchecking
   // language. This language is used for initialization of the text iterator.
   // If the iterator is not initialized, then the context menu does not show
   // spellcheck suggestions.
-  // No migration is necessary, because the spellcheck language preference is
-  // not user visible or modifiable in Chrome on Mac.
   dictionaries_pref.SetValue(std::vector<std::string>(
       1, spellcheck_platform::GetSpellCheckerLanguage()));
-  first_of_dictionaries = dictionaries_pref.GetValue().front();
 #else
   // Migrate preferences from single-language to multi-language schema.
   StringPrefMember single_dictionary_pref;
@@ -162,7 +188,30 @@ SpellcheckService::SpellcheckService(content::BrowserContext* context)
   custom_dictionary_ =
       std::make_unique<SpellcheckCustomDictionary>(context_->GetPath());
   custom_dictionary_->AddObserver(this);
-  custom_dictionary_->Load();
+
+  // Determine if dictionary initialization should be deferred or skipped in
+  // this constructor.
+  bool run_custom_dict_load = true;
+  bool run_hunspell_init = true;
+
+#if BUILDFLAG(IS_MAC)
+  if (defer_spellcheck) {
+    run_custom_dict_load = false;
+    run_hunspell_init = false;
+  }
+#endif
+
+  // 1. Load custom dictionary.
+  if (run_custom_dict_load) {
+    if (defer_spellcheck) {
+      content::GetUIThreadTaskRunner({base::TaskPriority::BEST_EFFORT})
+          ->PostTask(FROM_HERE,
+                     base::BindOnce(&SpellcheckCustomDictionary::Load,
+                                    custom_dictionary_->GetWeakPtr()));
+    } else {
+      custom_dictionary_->Load();
+    }
+  }
 
 #if BUILDFLAG(IS_WIN)
   if (spellcheck::UseBrowserSpellChecker()) {
@@ -173,7 +222,18 @@ SpellcheckService::SpellcheckService(content::BrowserContext* context)
   }
 #endif  // BUILDFLAG(IS_WIN)
 
-  InitializeDictionaries(base::DoNothing());
+  // 2. Initialize Hunspell dictionaries.
+  if (run_hunspell_init) {
+    if (defer_spellcheck) {
+      content::GetUIThreadTaskRunner({base::TaskPriority::BEST_EFFORT})
+          ->PostTask(FROM_HERE,
+                     base::BindOnce(&SpellcheckService::InitializeDictionaries,
+                                    weak_ptr_factory_.GetWeakPtr(),
+                                    base::DoNothing()));
+    } else {
+      InitializeDictionaries(base::DoNothing());
+    }
+  }
 }
 
 SpellcheckService::~SpellcheckService() {
@@ -184,6 +244,55 @@ SpellcheckService::~SpellcheckService() {
 base::WeakPtr<SpellcheckService> SpellcheckService::GetWeakPtr() {
   return weak_ptr_factory_.GetWeakPtr();
 }
+
+#if BUILDFLAG(IS_MAC)
+void SpellcheckService::InitializePlatformLanguageMacWithLanguage(
+    const std::string& platform_lang) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  PrefService* prefs = user_prefs::UserPrefs::Get(context_);
+  StringListPrefMember dictionaries_pref;
+  dictionaries_pref.Init(spellcheck::prefs::kSpellCheckDictionaries, prefs);
+
+  // Ensure that the renderer always knows the platform spellchecking
+  // language. This language is used for initialization of the text iterator.
+  // If the iterator is not initialized, then the context menu does not show
+  // spellcheck suggestions.
+  // No migration is necessary, because the spellcheck language preference is
+  // not user visible or modifiable in Chrome on Mac.
+  if (dictionaries_pref.GetValue().empty() ||
+      dictionaries_pref.GetValue().front() != platform_lang) {
+    dictionaries_pref.SetValue(std::vector<std::string>(1, platform_lang));
+  }
+}
+
+// InitMacDeferredSpellcheck orchestrates the startup sequence for Mac
+// spellcheck when deferred initialization is enabled.
+//
+// The initialization flow works as follows:
+// 1. Get the system's preferred spellchecker language off-thread (called via
+//    ThreadPool::PostTaskAndReplyWithResult in the constructor). This is
+//    done because querying the platform language can block the main thread.
+// 2. Once the language is resolved, InitMacDeferredSpellcheck is run on the
+//    UI thread.
+// 3. Initialize Hunspell dictionaries first. This sets up the dictionary
+//    infrastructure and StartRecordingMetrics() so metrics are not dropped.
+// 4. Initialize platform language. If the preference changes, the preference
+//    observer will trigger LoadDictionaries() to perform the actual load.
+// 5. Load the custom dictionary database asynchronously.
+void SpellcheckService::InitMacDeferredSpellcheck(
+    const std::string& platform_lang) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  // 1. Initialize Hunspell dictionaries first to set up metrics.
+  InitializeDictionaries(base::DoNothing());
+
+  // 2. Initialize platform language. If it updates the preference, the
+  // observer will automatically call LoadDictionaries() again.
+  InitializePlatformLanguageMacWithLanguage(platform_lang);
+
+  // 3. Load custom dictionary database.
+  custom_dictionary_->Load();
+}
+#endif
 
 #if !BUILDFLAG(IS_MAC)
 // static
@@ -390,6 +499,20 @@ void SpellcheckService::StartRecordingMetrics(bool spellcheck_enabled) {
 }
 
 void SpellcheckService::InitForRenderer(content::RenderProcessHost* host) {
+  base::ScopedUmaHistogramTimer timer("SpellCheck.Browser.InitForRendererTime");
+  // Skip initialization of the spellcheck service for top chrome and NTP web UI
+  // pages when Initial WebUI feature is enabled for optimizing browser startup.
+  if (host->IsForTopChromeWebUI() &&
+      base::FeatureList::IsEnabled(features::kInitialWebUI) &&
+      features::kInitialWebUIWithoutSpellCheck.Get()) {
+    return;
+  }
+  if (base::FeatureList::IsEnabled(
+          features::kInitialWebUIWithoutSpellCheckForNtp) &&
+      host->GetUserData(search::kIsNTPProcessKey)) {
+    return;
+  }
+
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   content::BrowserContext* context = host->GetBrowserContext();
@@ -542,16 +665,17 @@ void SpellcheckService::OnCustomDictionaryChanged(
     const SpellcheckCustomDictionary::Change& change) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
-  const std::vector<std::string> additions(change.to_add().begin(),
-                                           change.to_add().end());
-  const std::vector<std::string> deletions(change.to_remove().begin(),
-                                           change.to_remove().end());
-  for (content::RenderProcessHost::iterator it(
-           content::RenderProcessHost::AllHostsIterator());
-       !it.IsAtEnd(); it.Advance()) {
+  const auto additions = base::ToVector(change.to_add());
+  const auto deletions = base::ToVector(change.to_remove());
+  for (auto it = content::RenderProcessHost::AllHostsIterator(); !it.IsAtEnd();
+       it.Advance()) {
     content::RenderProcessHost* process = it.GetCurrentValue();
-    if (!process->IsInitializedAndNotDead())
+    if (!process->IsInitializedAndNotDead() ||
+        SpellcheckServiceFactory::GetForContext(process->GetBrowserContext()) !=
+            this) {
       continue;
+    }
+
     GetSpellCheckerForProcess(process)->CustomDictionaryChanged(additions,
                                                                 deletions);
   }
@@ -818,12 +942,17 @@ SpellcheckService::GetSpellCheckerForProcess(content::RenderProcessHost* host) {
 
 void SpellcheckService::InitForAllRenderers() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  for (content::RenderProcessHost::iterator i(
-           content::RenderProcessHost::AllHostsIterator());
-       !i.IsAtEnd(); i.Advance()) {
-    content::RenderProcessHost* process = i.GetCurrentValue();
-    if (process && process->GetProcess().Handle())
+  for (auto it = content::RenderProcessHost::AllHostsIterator(); !it.IsAtEnd();
+       it.Advance()) {
+    content::RenderProcessHost* process = it.GetCurrentValue();
+    // Do not test GetProcess().Handle() here: a renderer that has been
+    // initialized but whose process is still launching has no handle yet, and
+    // skipping it drops the notification for good. Its mojo channel already
+    // exists, so messages queue up and are delivered once the process is up.
+    // This matches OnCustomDictionaryChanged() below.
+    if (process && process->IsInitializedAndNotDead()) {
       InitForRenderer(process);
+    }
   }
 }
 

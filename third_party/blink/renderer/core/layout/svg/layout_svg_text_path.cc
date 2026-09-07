@@ -26,15 +26,18 @@
 #include "third_party/blink/renderer/core/svg/svg_path_element.h"
 #include "third_party/blink/renderer/core/svg/svg_text_path_element.h"
 #include "third_party/blink/renderer/platform/geometry/path_builder.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
 PathPositionMapper::PathPositionMapper(const Path& path,
                                        float computed_path_length,
-                                       float start_offset)
+                                       float start_offset,
+                                       bool reverse_direction)
     : position_calculator_(path),
       path_length_(computed_path_length),
-      path_start_offset_(start_offset) {}
+      path_start_offset_(start_offset),
+      reverse_direction_(reverse_direction) {}
 
 PathPositionMapper::PositionType PathPositionMapper::PointAndNormalAtLength(
     float length,
@@ -46,7 +49,17 @@ PathPositionMapper::PositionType PathPositionMapper::PointAndNormalAtLength(
   DCHECK_GE(length, 0);
   DCHECK_LE(length, path_length_);
 
-  point_and_tangent = position_calculator_.PointAndNormalAtLength(length);
+  // If the 'side' attribute of the 'textPath' element is 'right', the path
+  // is conceptually reversed: distances are measured from the path's end,
+  // and the tangent points the opposite way.
+  // https://svgwg.org/svg2-draft/text.html#TextPathElementSideAttribute
+  if (reverse_direction_) {
+    point_and_tangent =
+        position_calculator_.PointAndNormalAtLength(path_length_ - length);
+    point_and_tangent.tangent_in_degrees += 180;
+  } else {
+    point_and_tangent = position_calculator_.PointAndNormalAtLength(length);
+  }
   return kOnPath;
 }
 
@@ -66,14 +79,14 @@ std::unique_ptr<PathPositionMapper> LayoutSVGTextPath::LayoutPath() const {
   NOT_DESTROYED();
   const auto& text_path_element = To<SVGTextPathElement>(*GetNode());
 
-  Path path;
-  if (RuntimeEnabledFeatures::SvgTextPathPathAttributeEnabled()) {
-    // Check if 'path' attribute is valid and its value is non-empty
-    path = text_path_element.path()->CurrentValue()->GetStylePath()->GetPath();
-    // The 'path' attribute defines path data inline, not in a separate
-    // element, so there's no element with a 'pathLength' attribute to
-    // provide an author path length. We use only the computed path length.
-  }
+  // Check if 'path' attribute is valid and its value is non-empty.
+  Path path = text_path_element.path()
+                  ->CurrentValue()
+                  ->GetStylePath()
+                  ->GetUnzoomedPath();
+  // The 'path' attribute defines path data inline, not in a separate
+  // element, so there's no element with a 'pathLength' attribute to
+  // provide an author path length. We use only the computed path length.
 
   float author_path_length = std::numeric_limits<float>::quiet_NaN();
   // If path attribute was not present or produced an empty/invalid path,
@@ -129,8 +142,14 @@ std::unique_ptr<PathPositionMapper> LayoutSVGTextPath::LayoutPath() const {
           conversion_data, author_path_length);
   path_start_offset *= offset_scale;
 
-  return std::make_unique<PathPositionMapper>(path, computed_path_length,
-                                              path_start_offset);
+  const bool reverse_direction =
+      RuntimeEnabledFeatures::SVGTextPathSideAttributeEnabled() &&
+      text_path_element.side()
+              ->CurrentValue()
+              ->EnumValue<SVGTextPathSideType>() == SVGTextPathSideType::kRight;
+
+  return std::make_unique<PathPositionMapper>(
+      path, computed_path_length, path_start_offset, reverse_direction);
 }
 
 }  // namespace blink

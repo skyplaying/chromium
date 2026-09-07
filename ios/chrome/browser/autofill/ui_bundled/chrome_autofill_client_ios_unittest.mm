@@ -2,9 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef IOS_CHROME_BROWSER_UI_AUTOFILL_CHROME_AUTOFILL_CLIENT_IOS_UNITTEST_H_
-#define IOS_CHROME_BROWSER_UI_AUTOFILL_CHROME_AUTOFILL_CLIENT_IOS_UNITTEST_H_
-
 #import "ios/chrome/browser/autofill/ui_bundled/chrome_autofill_client_ios.h"
 
 #import <memory>
@@ -13,13 +10,18 @@
 #import "base/functional/callback.h"
 #import "base/functional/callback_helpers.h"
 #import "base/memory/raw_ptr.h"
+#import "base/test/scoped_feature_list.h"
+#import "base/test/values_test_util.h"
 #import "base/time/time.h"
+#import "base/values.h"
 #import "components/autofill/core/browser/foundations/autofill_manager_test_api.h"
 #import "components/autofill/core/browser/foundations/browser_autofill_manager.h"
 #import "components/autofill/core/browser/foundations/test_autofill_manager_waiter.h"
 #import "components/autofill/core/browser/integrators/password_form_classification.h"
+#import "components/autofill/core/common/autofill_debug_features.h"
 #import "components/autofill/core/common/autofill_features.h"
-#import "components/autofill/core/common/autofill_test_utils.h"
+#import "components/autofill/core/common/autofill_prefs.h"
+#import "components/autofill/core/common/autofill_test_util.h"
 #import "components/autofill/core/common/form_data.h"
 #import "components/autofill/core/common/form_field_data.h"
 #import "components/autofill/ios/browser/autofill_agent.h"
@@ -27,15 +29,21 @@
 #import "components/autofill/ios/browser/autofill_driver_ios_factory.h"
 #import "components/autofill/ios/browser/test_autofill_client_ios.h"
 #import "components/autofill/ios/browser/test_autofill_manager_injector.h"
+#import "components/infobars/core/infobar.h"
+#import "components/infobars/core/infobar_delegate.h"
 #import "components/infobars/core/infobar_manager.h"
 #import "ios/chrome/browser/autofill/model/autofill_agent_delegate.h"
+#import "ios/chrome/browser/autofill/model/autofill_policy_service_factory.h"
 #import "ios/chrome/browser/infobars/model/infobar_manager_impl.h"
+#import "ios/chrome/browser/intelligence/actor/model/actor_tab_helper.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/model/browser/test/test_browser.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
+#import "ios/chrome/browser/shared/public/commands/autofill_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/snackbar_commands.h"
 #import "ios/chrome/browser/web/model/chrome_web_client.h"
+#import "ios/chrome/browser/webdata_services/model/web_data_service_factory.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/web/public/js_messaging/web_frames_manager.h"
 #import "ios/web/public/test/scoped_testing_web_client.h"
@@ -75,8 +83,11 @@ class ChromeAutofillClientIOSTest : public PlatformTest {
  public:
   ChromeAutofillClientIOSTest()
       : web_client_(std::make_unique<ChromeWebClient>()) {
-    scene_state_ = [[SceneState alloc] initWithAppState:nil];
-    profile_ = TestProfileIOS::Builder().Build();
+    scene_state_ = [[SceneState alloc] init];
+    TestProfileIOS::Builder builder;
+    builder.AddTestingFactory(ios::WebDataServiceFactory::GetInstance(),
+                              ios::WebDataServiceFactory::GetDefaultFactory());
+    profile_ = std::move(builder).Build();
 
     browser_ = std::make_unique<TestBrowser>(profile_.get(), scene_state_);
 
@@ -91,7 +102,8 @@ class ChromeAutofillClientIOSTest : public PlatformTest {
 
     mock_snackbar_handler_ = OCMStrictProtocolMock(@protocol(SnackbarCommands));
     autofill_agent_delegate_ = [[AutofillAgentDelegate alloc]
-        initWithCommandHandler:mock_snackbar_handler_];
+        initWithSnackbarHandler:mock_snackbar_handler_
+                atMemoryHandler:nil];
 
     CommandDispatcher* dispatcher = browser_->GetCommandDispatcher();
     [dispatcher startDispatchingToTarget:mock_snackbar_handler_
@@ -102,6 +114,7 @@ class ChromeAutofillClientIOSTest : public PlatformTest {
                                           webState:web_state_.get()];
 
     autofill_agent.delegate = autofill_agent_delegate_;
+    ActorTabHelper::CreateForWebState(web_state_.get());
     InfoBarManagerImpl::CreateForWebState(web_state_.get());
     autofill_client_ =
         std::make_unique<WithFakedFromWebState<ChromeAutofillClientIOS>>(
@@ -137,20 +150,35 @@ class ChromeAutofillClientIOSTest : public PlatformTest {
   id autofill_agent_delegate_;
   id mock_snackbar_handler_;
 
+  TestProfileIOS* profile() { return profile_.get(); }
+
  private:
+  web::WebTaskEnvironment task_environment_;
   IOSChromeScopedTestingLocalState scoped_testing_local_state_;
   test::AutofillUnitTestEnvironment autofill_environment_{
       {.disable_server_communication = true}};
-  web::WebTaskEnvironment task_environment_;
+
   web::ScopedTestingWebClient web_client_;
   std::unique_ptr<TestProfileIOS> profile_;
-  std::unique_ptr<ChromeAutofillClientIOS> autofill_client_;
   std::unique_ptr<web::WebState> web_state_;
+  std::unique_ptr<ChromeAutofillClientIOS> autofill_client_;
   std::unique_ptr<TestAutofillManagerInjector<TestAutofillManager>>
       autofill_manager_injector_;
   std::unique_ptr<TestBrowser> browser_;
   SceneState* scene_state_;
 };
+
+// Tests that GetAutofillManagerForPrimaryMainFrame() returns the main frame's
+// AutofillManager.
+TEST_F(ChromeAutofillClientIOSTest, GetAutofillManagerForPrimaryMainFrame) {
+  ASSERT_TRUE(LoadHtmlAndWaitForFormsSeen(
+      @"<form>"
+       "<input name='username' autocomplete='username'>"
+       "</form>",
+      1));
+  EXPECT_EQ(client().GetAutofillManagerForPrimaryMainFrame(),
+            main_frame_manager());
+}
 
 // Tests that ClassifyAsPasswordForm correctly classifies a login form.
 TEST_F(ChromeAutofillClientIOSTest, ClassifyAsPasswordForm) {
@@ -253,17 +281,266 @@ TEST_F(ChromeAutofillClientIOSTest,
       PasswordFormClassification{});
 }
 
-// Tests that the call to `ShowPlusAddressEmailOverrideNotification` shows a
-// snackbar.
-TEST_F(ChromeAutofillClientIOSTest, CallToAgentUndoSnackbar) {
-  OCMExpect([mock_snackbar_handler_ showSnackbarWithMessage:[OCMArg isNotNil]
-                                                 buttonText:[OCMArg isNotNil]
-                                              messageAction:[OCMArg isNotNil]
-                                           completionAction:nil]);
-  client().ShowPlusAddressEmailOverrideNotification("", base::DoNothing());
-  EXPECT_OCMOCK_VERIFY(mock_snackbar_handler_);
+// Tests that `ShowAutofillAiPreFetchFailureNotification()` successfully adds
+// the prefetch failure infobar to the InfoBarManager.
+TEST_F(ChromeAutofillClientIOSTest, ShowAutofillAiPreFetchFailureNotification) {
+  infobars::InfoBarManager* infobar_manager =
+      InfoBarManagerImpl::FromWebState(web_state());
+  ASSERT_EQ(infobar_manager->infobars().size(), 0u);
+
+  client().ShowAutofillAiPreFetchFailureNotification();
+
+  EXPECT_EQ(infobar_manager->infobars().size(), 1u);
+  infobars::InfoBar* infobar = infobar_manager->infobars()[0];
+  EXPECT_EQ(infobar->delegate()->GetIdentifier(),
+            infobars::InfoBarDelegate::
+                AUTOFILL_AI_PRE_FETCH_FAILURE_INFOBAR_DELEGATE_IOS);
+
+  // Calling it again should replace the existing one, so count remains 1.
+  client().ShowAutofillAiPreFetchFailureNotification();
+  EXPECT_EQ(infobar_manager->infobars().size(), 1u);
+}
+
+// Tests that `ShowAutofillAiPrivateInferenceNotice()` dispatches the command to
+// show the Autofill AI Private Inference notice bottom sheet.
+TEST_F(ChromeAutofillClientIOSTest, ShowAutofillAiPrivateInferenceNotice) {
+  id mock_autofill_commands_handler =
+      OCMStrictProtocolMock(@protocol(AutofillCommands));
+  client().set_commands_handler(mock_autofill_commands_handler);
+
+  OCMExpect(
+      [mock_autofill_commands_handler showAutofillAIPrivateInferenceNotice]);
+
+  client().ShowAutofillAiPrivateInferenceNotice();
+
+  EXPECT_OCMOCK_VERIFY(mock_autofill_commands_handler);
+}
+
+// Tests that IsAutofillTypeBlockedByPolicy returns true when a domain
+// is blocked by enterprise policy, and false otherwise.
+TEST_F(ChromeAutofillClientIOSTest, IsAutofillTypeBlockedByPolicy) {
+  base::test::ScopedFeatureList feature_list(
+      features::kAutofillEnableAutofillSettingsEnterprisePolicy);
+
+  // Default is not blocked.
+  EXPECT_FALSE(client().IsAutofillTypeBlockedByPolicy(
+      GURL("https://www.example.com"),
+      AutofillClient::AutofillPolicyDataCategory::kContactInfo));
+  EXPECT_TRUE(client().IsAutofillProfileEnabled());
+
+  // Block the domain.
+  base::ListValue blocked_list;
+  base::DictValue entry;
+  entry.Set("url_pattern", "https://[*.]example.com");
+  base::ListValue blocked_types;
+  blocked_types.Append("contact_info");
+  entry.Set("blocked_types", std::move(blocked_types));
+  blocked_list.Append(std::move(entry));
+  profile()->GetPrefs()->SetList(prefs::kAutofillTypesBlocked,
+                                 std::move(blocked_list));
+
+  EXPECT_TRUE(client().IsAutofillTypeBlockedByPolicy(
+      GURL("https://www.example.com"),
+      AutofillClient::AutofillPolicyDataCategory::kContactInfo));
+
+  // Navigate to blocked domain.
+  web::test::LoadHtml(@"<body></body>", GURL("https://www.example.com"),
+                      web_state());
+  EXPECT_FALSE(client().IsAutofillProfileEnabled());
+
+  // Different category is not blocked.
+  EXPECT_FALSE(client().IsAutofillTypeBlockedByPolicy(
+      GURL("https://www.example.com"),
+      AutofillClient::AutofillPolicyDataCategory::kPayments));
+
+  // Different domain is not blocked.
+  EXPECT_FALSE(client().IsAutofillTypeBlockedByPolicy(
+      GURL("https://www.google.com"),
+      AutofillClient::AutofillPolicyDataCategory::kContactInfo));
+
+  // Navigate to unblocked domain.
+  web::test::LoadHtml(@"<body></body>", GURL("https://www.google.com"),
+                      web_state());
+  EXPECT_TRUE(client().IsAutofillProfileEnabled());
+}
+
+// Tests that IsAutofillTypeBlockedByPolicy correctly applies the original
+// profile's enterprise policy settings when queried from an incognito profile.
+TEST_F(ChromeAutofillClientIOSTest, IsAutofillTypeBlockedByPolicy_Incognito) {
+  base::test::ScopedFeatureList feature_list(
+      features::kAutofillEnableAutofillSettingsEnterprisePolicy);
+
+  // Block the domain on the regular profile.
+  base::ListValue blocked_list;
+  base::DictValue entry;
+  entry.Set("url_pattern", "https://[*.]example.com");
+  base::ListValue blocked_types;
+  blocked_types.Append("contact_info");
+  entry.Set("blocked_types", std::move(blocked_types));
+  blocked_list.Append(std::move(entry));
+  profile()->GetPrefs()->SetList(prefs::kAutofillTypesBlocked,
+                                 std::move(blocked_list));
+
+  // Create an incognito profile.
+  TestProfileIOS* otr_profile =
+      profile()->CreateOffTheRecordProfileWithTestingFactories();
+
+  // Ensure the policy service maps to the regular profile's policy service.
+  EXPECT_EQ(AutofillPolicyServiceFactory::GetForProfile(profile()),
+            AutofillPolicyServiceFactory::GetForProfile(otr_profile));
+
+  // Create a client for the incognito profile.
+  web::WebState::CreateParams params(otr_profile);
+  std::unique_ptr<web::WebState> otr_web_state = web::WebState::Create(params);
+  otr_web_state->GetView();
+  otr_web_state->SetKeepRenderProcessAlive(true);
+
+  AutofillAgent* otr_autofill_agent =
+      [[AutofillAgent alloc] initWithPrefService:otr_profile->GetPrefs()
+                                        webState:otr_web_state.get()];
+  InfoBarManagerImpl::CreateForWebState(otr_web_state.get());
+  WithFakedFromWebState<ChromeAutofillClientIOS> otr_client(
+      otr_profile, otr_web_state.get(),
+      InfoBarManagerImpl::FromWebState(otr_web_state.get()),
+      otr_autofill_agent);
+
+  // The incognito client should correctly report the blocked policy.
+  EXPECT_TRUE(otr_client.IsAutofillTypeBlockedByPolicy(
+      GURL("https://www.example.com"),
+      AutofillClient::AutofillPolicyDataCategory::kContactInfo));
+}
+
+// Tests that IsAutofillEnabled correctly returns false when all active autofill
+// types (including AI data types) are globally blocked by policy.
+TEST_F(ChromeAutofillClientIOSTest, IsAutofillEnabled_BlockedByPolicy) {
+  base::test::ScopedFeatureList feature_list(
+      features::kAutofillEnableAutofillSettingsEnterprisePolicy);
+
+  // Disable profile and payments so IsAutofillEnabled depends on the AI types.
+  profile()->GetPrefs()->SetBoolean(prefs::kAutofillProfileEnabled, false);
+  profile()->GetPrefs()->SetBoolean(prefs::kAutofillCreditCardEnabled, false);
+
+  // Enable the AI types.
+  profile()->GetPrefs()->SetBoolean(prefs::kAutofillAiIdentityEntitiesEnabled,
+                                    true);
+  profile()->GetPrefs()->SetBoolean(prefs::kAutofillAiTravelEntitiesEnabled,
+                                    true);
+  profile()->GetPrefs()->SetBoolean(prefs::kAutofillAiShoppingEntitiesEnabled,
+                                    true);
+
+  web::test::LoadHtml(@"<body></body>", GURL("https://www.example.com"),
+                      web_state());
+  EXPECT_TRUE(client().IsAutofillEnabled());
+
+  // Block only identity docs.
+  profile()->GetPrefs()->Set(prefs::kAutofillTypesBlocked,
+                             base::test::ParseJson(
+                                 R"([
+            {
+              "url_pattern": "https://[*.]example.com",
+              "blocked_types": ["identity_docs"]
+            }
+          ])"));
+
+  // Still true because travel and shopping are enabled.
+  EXPECT_TRUE(client().IsAutofillEnabled());
+
+  // Block identity docs and travel.
+  profile()->GetPrefs()->Set(prefs::kAutofillTypesBlocked,
+                             base::test::ParseJson(
+                                 R"([
+            {
+              "url_pattern": "https://[*.]example.com",
+              "blocked_types": ["identity_docs", "travel"]
+            }
+          ])"));
+
+  EXPECT_TRUE(client().IsAutofillEnabled());
+
+  // Block all three.
+  profile()->GetPrefs()->Set(prefs::kAutofillTypesBlocked,
+                             base::test::ParseJson(
+                                 R"([
+            {
+              "url_pattern": "https://[*.]example.com",
+              "blocked_types": ["identity_docs", "travel", "shopping"]
+            }
+          ])"));
+
+  EXPECT_FALSE(client().IsAutofillEnabled());
+}
+
+// Tests that IsAutofillEnabled does not consider AI data types when the
+// enterprise policy feature flag is disabled, strictly adhering to the original
+// behavior.
+TEST_F(ChromeAutofillClientIOSTest,
+       IsAutofillEnabled_AiTypesGatedByEnterprisePolicyFeature) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      features::kAutofillEnableAutofillSettingsEnterprisePolicy);
+
+  // Disable profile and payments so IsAutofillEnabled depends on the AI types.
+  profile()->GetPrefs()->SetBoolean(prefs::kAutofillProfileEnabled, false);
+  profile()->GetPrefs()->SetBoolean(prefs::kAutofillCreditCardEnabled, false);
+
+  // Enable the AI types.
+  profile()->GetPrefs()->SetBoolean(prefs::kAutofillAiIdentityEntitiesEnabled,
+                                    true);
+  profile()->GetPrefs()->SetBoolean(prefs::kAutofillAiTravelEntitiesEnabled,
+                                    true);
+  profile()->GetPrefs()->SetBoolean(prefs::kAutofillAiShoppingEntitiesEnabled,
+                                    true);
+
+  EXPECT_FALSE(client().IsAutofillEnabled());
+}
+
+// Test that `IsTabInActorMode` returns true when `kAutofillForceActorMode` is
+// enabled.
+TEST_F(ChromeAutofillClientIOSTest, IsTabInActorMode_ForceActorMode) {
+  base::test::ScopedFeatureList feature_list(
+      features::debug::kAutofillForceActorMode);
+  EXPECT_TRUE(client().IsTabInActorMode());
+}
+
+// Test that `IsTabInActorMode` gets the actuation state from `ActorTabHelper`.
+TEST_F(ChromeAutofillClientIOSTest, IsTabInActorMode_ActorTabHelper) {
+  ActorTabHelper* actor_tab_helper = ActorTabHelper::FromWebState(web_state());
+  ASSERT_TRUE(actor_tab_helper);
+
+  EXPECT_FALSE(client().IsTabInActorMode());
+
+  actor_tab_helper->SetActuating(true);
+  EXPECT_TRUE(client().IsTabInActorMode());
+
+  actor_tab_helper->SetActuating(false);
+  EXPECT_FALSE(client().IsTabInActorMode());
+}
+
+// Test that `IsTabInActorMode` returns false when `ActorTabHelper` is not
+// attached.
+TEST_F(ChromeAutofillClientIOSTest, IsTabInActorMode_NoActorTabHelper) {
+  web_state()->RemoveUserData(ActorTabHelper::UserDataKey());
+  EXPECT_FALSE(client().IsTabInActorMode());
+}
+
+// Test that `OnActorTaskStateChange` reparses known forms when actuating.
+TEST_F(ChromeAutofillClientIOSTest, OnActorTaskStateChange_ReparsesForms) {
+  ActorTabHelper* actor_tab_helper = ActorTabHelper::FromWebState(web_state());
+  ASSERT_TRUE(actor_tab_helper);
+
+  NSString* html = @"<form><input name='name'><input name='address'></form>";
+  ASSERT_TRUE(LoadHtmlAndWaitForFormsSeen(html, 1));
+
+  actor_tab_helper->SetActuating(true);
+  ASSERT_TRUE(main_frame_manager()->waiter().Wait(1));
+  EXPECT_TRUE(client().IsTabInActorMode());
+}
+
+// Test that `GetEntitySuppressionManager` returns the manager for the profile.
+TEST_F(ChromeAutofillClientIOSTest, GetEntitySuppressionManager) {
+  base::test::ScopedFeatureList feature_list(
+      features::kAutofillAmbientAutofillSuppression);
+  EXPECT_NE(client().GetEntitySuppressionManager(), nullptr);
 }
 
 }  // namespace autofill
-
-#endif  // IOS_CHROME_BROWSER_UI_AUTOFILL_CHROME_AUTOFILL_CLIENT_IOS_UNITTEST_H_

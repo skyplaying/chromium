@@ -10,14 +10,14 @@
 #include <vector>
 
 #include "base/memory/weak_ptr.h"
-#include "base/time/time.h"
-#include "chrome/browser/password_manager/actor_login/internal/siwg_button_finder.h"
-#include "chrome/browser/webid/federated_actor_login_request.h"
 #include "chrome/common/actor.mojom-forward.h"
 #include "chrome/common/chrome_render_frame.mojom.h"
-#include "components/autofill/core/common/mojom/autofill_types.mojom-forward.h"
 #include "components/optimization_guide/content/browser/page_content_proto_provider.h"
+#include "components/password_manager/core/browser/actor_login/actor_login_permission_service.h"
+#include "components/password_manager/core/browser/actor_login/actor_login_quality_logger_interface.h"
 #include "components/password_manager/core/browser/actor_login/actor_login_types.h"
+#include "components/password_manager/core/browser/actor_login/internal/actor_login_metrics_helper.h"
+#include "components/password_manager/core/browser/actor_login/internal/actor_login_siwg_controller_interface.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
@@ -25,7 +25,6 @@
 
 namespace content {
 class WebContents;
-class RenderFrameHost;
 
 namespace webid {
 enum class FederatedLoginResult;
@@ -34,75 +33,124 @@ enum class FederatedLoginResult;
 
 namespace actor_login {
 
-// Controller for Sign-in with Google (SiwG) detection and interaction.
-// The flow is as follows:
-// 1. The controller is created and `StartFederatedLogin` is called.
-// 2. The controller starts capturing the annotated page content.
-// 3. Once captured, the controller goes through all frames and calls the
-//    renderers to extract potential SiwG buttons.
-// 4. The potential buttons are narrowed down using the page content and
-//    heuristics on the attributes from DOM.
-// 5. The controller clicks the first button that satisfies all requirements.
-class ActorLoginSiwgController : public content::WebContentsObserver {
+// Controller for Sign-in with Google interaction.
+// This class manages the federated login flow when user selects a federated
+// credential.
+//
+// Note: For any critical implementation changes, update its test double
+// `FakeActorLoginSiwgController`.
+class ActorLoginSiwgController : public ActorLoginSiwgControllerInterface,
+                                 public content::WebContentsObserver {
  public:
   using GetPageContentProvider =
       base::RepeatingCallback<void(content::WebContents*,
                                    blink::mojom::AIPageContentOptionsPtr,
                                    optimization_guide::OnAIPageContentDone)>;
+  using PostButtonClickLoginResultCallback = base::OnceCallback<void(bool)>;
 
-  ActorLoginSiwgController(content::WebContents* web_contents,
-                           LoginStatusResultOrErrorReply callback);
-  ActorLoginSiwgController(content::WebContents* web_contents,
-                           GetPageContentProvider get_page_content_provider,
-                           LoginStatusResultOrErrorReply callback);
+  ActorLoginSiwgController(
+      content::WebContents* web_contents,
+      const Credential& credential,
+      bool should_store_permission,
+      ActorLoginPermissionService& permission_service,
+      LoginStatusResultOrErrorReply on_finished_callback,
+      base::WeakPtr<ActionSequenceDelegate> action_sequence_delegate,
+      base::WeakPtr<ActorLoginQualityLoggerInterface> mqls_logger,
+      base::TimeTicks attempt_login_tool_start_time,
+      PostButtonClickLoginResultCallback
+          post_button_click_login_result_callback);
+  ActorLoginSiwgController(
+      content::WebContents* web_contents,
+      const Credential& credential,
+      GetPageContentProvider get_page_content_provider,
+      bool should_store_permission,
+      ActorLoginPermissionService& permission_service,
+      LoginStatusResultOrErrorReply on_finished_callback,
+      base::WeakPtr<ActionSequenceDelegate> action_sequence_delegate,
+      base::WeakPtr<ActorLoginQualityLoggerInterface> mqls_logger,
+      base::TimeTicks attempt_login_tool_start_time,
+      PostButtonClickLoginResultCallback
+          post_button_click_login_result_callback);
   ~ActorLoginSiwgController() override;
 
   // Not copyable or movable.
   ActorLoginSiwgController(const ActorLoginSiwgController&) = delete;
   ActorLoginSiwgController& operator=(const ActorLoginSiwgController&) = delete;
 
+  bool ShouldStorePermission() const override;
+
   // Starts the federated login flow. This will notify FedCM API that an
   // automated login is in progress, and then start the button detection and
   // click flow.
-  void StartFederatedLogin(const Credential& credential);
+  void StartFederatedLogin(
+      std::unique_ptr<ActorLoginMetricsHelper> metrics_helper) override;
 
-  // Starts the detection process for SiwG buttons on the current page and
-  // clicks the first one found.
-  void ClickSiwgButton();
+  // Calls `OnFedCmFederatedLogin` on `popup_observer_`.
+  // TODO(crbug.com/508169237): Utilize `WebContentsTester` instead.
+  void SimulateContinuationInPopupForTesting(bool success);
 
  private:
-  void OnPageContentReceived(
-      optimization_guide::AIPageContentResultOrError content);
+  class PopupObserver;
 
-  using FrameSiwgButtonCandidates =
-      std::pair<content::GlobalRenderFrameHostId,
-                std::vector<autofill::mojom::SiwgButtonDataPtr>>;
+  void OnActionSequenceEnded(bool success);
 
-  void OnPotentialSiwgButtonsFound(
-      content::GlobalRenderFrameHostId rfh_id,
-      base::OnceCallback<void(FrameSiwgButtonCandidates)>
-          all_frames_scanned_barrier,
-      std::vector<autofill::mojom::SiwgButtonDataPtr> buttons);
+  // content::WebContentsObserver implementation:
+  void OnFedCmFederatedLogin(bool success) override;
+  void DidOpenRequestedURL(content::WebContents* new_contents,
+                           content::RenderFrameHost* source_render_frame_host,
+                           const GURL& url,
+                           const content::Referrer& referrer,
+                           WindowOpenDisposition disposition,
+                           ui::PageTransition transition,
+                           bool started_from_context_menu,
+                           bool renderer_initiated) override;
 
-  void OnAllFramesScanned(std::vector<FrameSiwgButtonCandidates> results);
-
-  void ClickButton(content::RenderFrameHost* rfh,
-                   int dom_node_id,
-                   actor::mojom::ObservedToolTargetPtr observed_target);
-
-  void OnClickFinished(actor::mojom::ActionResultPtr result);
-
+  // Result that FedCM reports after we subscribe via
+  // `SetEmbedderLoginRequest()` as opposed to `OnFedCmFederatedLogin` that is
+  // potentially called for all federated logins.
   void OnFederatedLoginResultReceived(
+      std::unique_ptr<ActorLoginMetricsHelper> metrics_helper,
       content::webid::FederatedLoginResult result);
 
+  void LogFederatedLoginResult(content::webid::FederatedLoginResult result);
+
+  void GrantPermission();
+
   GetPageContentProvider get_page_content_provider_;
-  std::unique_ptr<SiwgButtonFinder> siwg_finder_;
+
+  // Invoked once the actions taken by this class to advance the login are
+  // complete. The login itself may still be in progress.
   LoginStatusResultOrErrorReply on_finished_callback_;
+  // Delegate to notify once the login request initiated by this class produces
+  // a result.
+  base::WeakPtr<ActionSequenceDelegate> action_sequence_delegate_;
+  base::CallbackListSubscription action_sequence_subscription_;
+
+  Credential credential_;
+  // Passed from the attempt login tool when the user clicked "Allow always".
+  bool should_store_permission_ = false;
+
+  // Whether we are waiting for the final success signal after a kContinuation.
+  bool waiting_for_continuation_success_ = false;
+
+  // `ProfileKeyedService`, will outlive this controller.
+  const base::raw_ref<ActorLoginPermissionService> permission_service_;
 
   // Remote for the `ChromeRenderFrame` in the local root of the frame where the
   // SiwG button was found. Keeps the remote alive for the duration of the click
   // action.
   mojo::AssociatedRemote<chrome::mojom::ChromeRenderFrame> chrome_render_frame_;
+
+  // Details of the current federated login attempt.
+  optimization_guide::proto::ActorLoginQuality_AttemptLoginDetails
+      federated_attempt_login_details_;
+
+  base::WeakPtr<ActorLoginQualityLoggerInterface> mqls_logger_;
+  base::TimeTicks attempt_login_tool_start_time_;
+
+  // Callback to notify when the federated login flow ends after a button click.
+  PostButtonClickLoginResultCallback post_button_click_login_result_callback_;
+  std::unique_ptr<PopupObserver> popup_observer_;
 
   base::WeakPtrFactory<ActorLoginSiwgController> weak_ptr_factory_{this};
 };

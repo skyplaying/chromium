@@ -6,14 +6,87 @@
 
 #include <windows.h>
 
+#include <iterator>
+#include <numeric>
+#include <string>
+#include <string_view>
+#include <vector>
+
 #include "base/check.h"
-#include "base/functional/bind.h"
+#include "base/containers/span.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/numerics/safe_conversions.h"
-#include "base/task/sequenced_task_runner.h"
+#include "base/process/process_handle.h"
+#include "base/rand_util.h"
+#include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions_win.h"
+#include "base/strings/sys_string_conversions.h"
+#include "base/task/task_traits.h"
+#include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "base/win/pdh_shim.h"
 #include "base/win/scoped_pdh_query.h"
+#include "chrome/browser/browser_features.h"
+#include "content/public/common/child_process_id.h"
+
+namespace {
+
+struct CounterDefinition {
+  std::wstring_view counter_name;
+  std::string_view uma_name;
+  DWORD format;
+};
+
+constexpr CounterDefinition kProcessCounterDefinitions[] = {
+    {L"% User Time", "UserTime", PDH_FMT_DOUBLE},
+    {L"% Privileged Time", "PrivilegedTime", PDH_FMT_DOUBLE},
+    {L"Handle Count", "HandleCount", PDH_FMT_LONG},
+    {L"IO Data Bytes/sec", "IODataBytesPerSec", PDH_FMT_LARGE},
+    {L"IO Data Operations/sec", "IODataOperationsPerSec", PDH_FMT_LONG},
+    {L"IO Other Bytes/sec", "IOOtherBytesPerSec", PDH_FMT_LARGE},
+    {L"IO Read Bytes/sec", "IOReadBytesPerSec", PDH_FMT_LARGE},
+    {L"IO Read Operations/sec", "IOReadOperationsPerSec", PDH_FMT_LONG},
+    {L"IO Write Bytes/sec", "IOWriteBytesPerSec", PDH_FMT_LARGE},
+    {L"IO Write Operations/sec", "IOWriteOperationsPerSec", PDH_FMT_LONG},
+    {L"Page Faults/sec", "PageFaultsPerSec", PDH_FMT_LONG},
+    {L"Page File Bytes", "PageFileBytes", PDH_FMT_LARGE},
+    {L"Page File Bytes Peak", "PageFileBytesPeak", PDH_FMT_LARGE},
+    {L"Private Bytes", "PrivateBytes", PDH_FMT_LARGE},
+    {L"Thread Count", "ThreadCount", PDH_FMT_LONG},
+    {L"Working Set", "WorkingSet", PDH_FMT_LARGE},
+    {L"Working Set - Private", "WorkingSetPrivate", PDH_FMT_LARGE},
+    {L"Working Set Peak", "WorkingSetPeak", PDH_FMT_LARGE},
+};
+
+}  // namespace
+
+namespace features {
+
+// When enabled, the browser process will register the Pdh metrics provider and
+// will listen to system-wide, and per-process (Process V2) Pdh counters in the
+// browser, network service, GPU, and a subset of renderer and utility
+// processes.
+BASE_FEATURE(kSystemPdhMetrics, base::FEATURE_DISABLED_BY_DEFAULT);
+
+// The downsampling ratio at which generic renderer/utility processes will be
+// recorded.
+const base::FeatureParam<int> kSystemPdhMetrics_DownsamplingFactor{
+    &kSystemPdhMetrics, "system_pdh_metrics_downsampling_factor", 20};
+
+// The period at which system Pdh metrics are sampled. Must be more than 1s as
+// per
+// https://learn.microsoft.com/en-us/windows/win32/PerfCtrs/about-performance-counters.
+//
+// The cost per sample does not increase as the sampling period goes up, so a
+// long sampling period can reduce the user-perceived cost.
+const base::FeatureParam<base::TimeDelta> kSystemPdhMetrics_SamplingPeriod{
+    &kSystemPdhMetrics, "system_pdh_metrics_sampling_period",
+    base::Seconds(30)};
+
+const base::FeatureParam<int> kSystemPdhMetrics_MetricsPerProcess{
+    &kSystemPdhMetrics, "system_pdh_metrics_metrics_per_process",
+    std::size(kProcessCounterDefinitions)};
+
+}  // namespace features
 
 SystemPdhMetricsProvider::SystemPdhMetricsProvider() = default;
 SystemPdhMetricsProvider::~SystemPdhMetricsProvider() = default;
@@ -27,166 +100,199 @@ void SystemPdhMetricsProvider::OnRecordingEnabled() {
       {base::MayBlock(), base::TaskPriority::BEST_EFFORT,
        base::ThreadPolicy::MUST_USE_FOREGROUND,
        base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN}));
+
+  process_observer_ = std::make_unique<metrics::MetricsProviderProcessObserver>(
+      this, features::kSystemPdhMetrics_DownsamplingFactor.Get());
 }
 
 void SystemPdhMetricsProvider::OnRecordingDisabled() {
+  process_observer_.reset();
   query_handler_.Reset();
 }
 
-SystemPdhMetricsProvider::PdhQueryHandler::PdhQueryHandler() {
+void SystemPdhMetricsProvider::StartListeningToProcess(
+    content::ChildProcessId content_id,
+    base::ProcessId pid,
+    std::string_view process_type_suffix) {
+  query_handler_
+      .AsyncCall(
+          &SystemPdhMetricsProvider::PdhQueryHandler::StartListeningToProcess)
+      .WithArgs(content_id, pid, process_type_suffix);
+}
+
+void SystemPdhMetricsProvider::StopListeningToProcess(
+    content::ChildProcessId content_id) {
+  query_handler_
+      .AsyncCall(
+          &SystemPdhMetricsProvider::PdhQueryHandler::StopListeningToProcess)
+      .WithArgs(content_id);
+}
+
+SystemPdhMetricsProvider::PdhQueryHandler::PdhQueryHandler()
+    : pdh_query_(base::win::ScopedPdhQuery::Create()) {
   // Any early return from this function will not start the timer, meaning that
   // if these calls fail, the metrics will not be recorded until
   // OnRecordingEnabled() is called once again.
-
-  // Do not reinitialize if the query is already initialized.
-  if (pdh_query_.is_valid()) {
-    return;
-  }
-
-  pdh_query_ = base::win::ScopedPdhQuery::Create();
-
   if (!pdh_query_.is_valid()) {
     return;
   }
 
-  // Pages Input/sec is the rate at which pages are read from disk to resolve
-  // hard page faults, system wide. Hard page faults occur when a process refers
-  // to a page in virtual memory that is not in its working set or elsewhere in
-  // physical memory, and must be retrieved from disk.
-  static constexpr wchar_t kPagesInputPerSecond[] =
-      L"\\Memory\\Pages Input/sec";
-  PDH_STATUS status =
-      ::PdhAddEnglishCounter(pdh_query_.get(), kPagesInputPerSecond,
-                             /*dwUserData=*/0, &pages_input_per_second_);
-  if (!VerifyPdhResult(status, nullptr)) {
-    return;
-  }
-
-  // Demand Zero Faults/sec is the rate at which page faults which must be
-  // fulfilled with a zero page are demanded from the operating system, system
-  // wide. Demand zero faults occur whenever a zero page must be provided, which
-  // includes every single private memory allocation.
-  static constexpr wchar_t kDemandZeroFaultsPerSecond[] =
-      L"\\Memory\\Demand Zero Faults/sec";
-  status =
-      ::PdhAddEnglishCounter(pdh_query_.get(), kDemandZeroFaultsPerSecond,
-                             /*dwUserData=*/0, &demand_zero_faults_per_second_);
-  if (!VerifyPdhResult(status, nullptr)) {
-    return;
-  }
-
-  // The amount of the Page File in use in percent.
-  static constexpr wchar_t kPagingFileUsage[] =
-      L"\\Paging File(_Total)\\% Usage";
-  status = ::PdhAddEnglishCounter(pdh_query_.get(), kPagingFileUsage,
-                                  /*dwUserData=*/0, &pagefile_utilization_);
-  if (!VerifyPdhResult(status, nullptr)) {
-    return;
-  }
-
-  // % Privileged Time is the percentage of elapsed time since the previous
-  // sample that all CPU cores spent executing code in privileged mode (i.e. in
-  // the kernel or in drivers), system wide. Does not include the idle process.
-  static constexpr wchar_t kKernelTime[] =
-      L"\\Processor(_Total)\\% Privileged Time";
-  status = ::PdhAddEnglishCounter(pdh_query_.get(), kKernelTime,
-                                  /*dwUserData=*/0, &kernel_cpu_time_);
-  if (!VerifyPdhResult(status, nullptr)) {
-    return;
-  }
-
-  // % User Time is the percentage of elapsed time since the previous sample all
-  // CPU cores spent in user mode.
-  static constexpr wchar_t kUserTime[] = L"\\Processor(_Total)\\% User Time";
-  status = ::PdhAddEnglishCounter(pdh_query_.get(), kUserTime, /*dwUserData=*/0,
-                                  &user_cpu_time_);
-  if (!VerifyPdhResult(status, nullptr)) {
-    return;
-  }
-
-  // The first time data is collected, it cannot be observed, since the counters
-  // are an average throughput over time, and thus only acquire meaning after 2+
-  // samples (>1s apart).
-  status = ::PdhCollectQueryData(pdh_query_.get());
-  if (!VerifyPdhResult(status, nullptr)) {
-    return;
-  }
-
-  timer_.Start(FROM_HERE, kSamplingPeriod, this,
-               &SystemPdhMetricsProvider::PdhQueryHandler::Sample);
+  timer_.Start(FROM_HERE, features::kSystemPdhMetrics_SamplingPeriod.Get(),
+               this, &SystemPdhMetricsProvider::PdhQueryHandler::Sample);
 }
 
 SystemPdhMetricsProvider::PdhQueryHandler::~PdhQueryHandler() = default;
 
 void SystemPdhMetricsProvider::PdhQueryHandler::StopRecording() {
   timer_.Stop();
+  process_counters_.clear();
   pdh_query_.reset();
+}
+
+SystemPdhMetricsProvider::PdhQueryHandler::ProcessCounter::ProcessCounter(
+    base::win::ScopedPdhQuery& query,
+    std::wstring_view instance_name,
+    std::wstring_view process_counter_name,
+    std::string_view uma_name,
+    std::string_view process_type_suffix,
+    DWORD format)
+    : uma_name_(uma_name),
+      process_type_suffix_(process_type_suffix),
+      counter_handle_(nullptr),
+      format_(format) {
+  if (!query.is_valid()) {
+    return;
+  }
+  auto path = base::StrCat(
+      {L"\\Process V2(", instance_name, L")\\", process_counter_name});
+  counter_handle_ = ScopedPdhCounter::Create(query.get(), path);
+  // It's possible the process has already died, so don't kill the entire
+  // metrics provider for a failure here.
+}
+
+SystemPdhMetricsProvider::PdhQueryHandler::ProcessCounter::~ProcessCounter() =
+    default;
+
+SystemPdhMetricsProvider::PdhQueryHandler::ProcessCounter::ProcessCounter(
+    ProcessCounter&&) = default;
+
+SystemPdhMetricsProvider::PdhQueryHandler::ProcessCounter&
+SystemPdhMetricsProvider::PdhQueryHandler::ProcessCounter::operator=(
+    ProcessCounter&&) = default;
+
+void SystemPdhMetricsProvider::PdhQueryHandler::ProcessCounter::Record() {
+  if (!counter_handle_.is_valid()) {
+    return;
+  }
+
+  // Since counters can't be observed until they are recorded twice, only
+  // observe on the next Record() call.
+  if (sampling_state_ == SamplingState::kNoBaseline) {
+    sampling_state_ = SamplingState::kHasBaseline;
+    return;
+  }
+
+  PDH_FMT_COUNTERVALUE process_value;
+  PDH_STATUS query_status =
+      ::PdhGetFormattedCounterValue(counter_handle_.get(), format_,
+                                    /*lpdwType=*/nullptr, &process_value);
+  if (query_status == ERROR_SUCCESS &&
+      (process_value.CStatus == PDH_CSTATUS_VALID_DATA ||
+       process_value.CStatus == PDH_CSTATUS_NEW_DATA)) {
+    static constexpr std::string_view kPrefix(
+        "Windows.Experimental.Pdh.ProcessV2.");
+    auto histogram_name =
+        base::StrCat({kPrefix, uma_name_, ".", process_type_suffix_});
+    if (sampling_state_ == SamplingState::kHasBaseline) {
+      sampling_state_ = SamplingState::kSteadyState;
+      base::StrAppend(&histogram_name, {".FirstSample"});
+    }
+    switch (format_) {
+      case PDH_FMT_DOUBLE:
+        base::UmaHistogramPercentage(
+            histogram_name, base::ClampRound(process_value.doubleValue));
+        break;
+
+      case PDH_FMT_LARGE:
+        base::UmaHistogramCustomCounts(histogram_name, process_value.largeValue,
+                                       1, 1000000000, 50);
+        break;
+
+      case PDH_FMT_LONG:
+        base::UmaHistogramCounts100000(histogram_name, process_value.longValue);
+        break;
+
+      default:
+        NOTREACHED();
+    }
+  } else if (query_status != ERROR_SUCCESS) {
+    counter_handle_.reset();
+    base::UmaHistogramSparse(base::win::ScopedPdhQuery::kQueryErrorHistogram,
+                             query_status);
+  } else if (process_value.CStatus != PDH_CSTATUS_VALID_DATA &&
+             process_value.CStatus != PDH_CSTATUS_NEW_DATA) {
+    // This has never been observed to occur in months of real world data, so if
+    // it does, something is likely wrong with the query, and it can be
+    // discarded.
+    counter_handle_.reset();
+  }
+}
+
+void SystemPdhMetricsProvider::PdhQueryHandler::StartListeningToProcess(
+    content::ChildProcessId content_id,
+    base::ProcessId pid,
+    std::string_view process_type_suffix) {
+  auto [it, inserted] = process_counters_.try_emplace(content_id);
+  if (!inserted) {
+    // Already tracking this process.
+    return;
+  }
+
+  // Format the instance name as expected by "Process V2".
+  std::wstring instance_name =
+      base::StrCat({process_base_name_, L":", base::NumberToWString(pid)});
+  const int metrics_per_process =
+      features::kSystemPdhMetrics_MetricsPerProcess.Get();
+  const size_t num_definitions = std::size(kProcessCounterDefinitions);
+
+  if (metrics_per_process <= 0 ||
+      static_cast<size_t>(metrics_per_process) > num_definitions) {
+    return;
+  }
+
+  std::vector<size_t> indices(num_definitions);
+  std::iota(indices.begin(), indices.end(), 0);
+  base::RandomShuffle(indices.begin(), indices.end());
+  indices.resize(metrics_per_process);
+  base::span<const CounterDefinition> definitions(kProcessCounterDefinitions);
+
+  it->second.reserve(indices.size());
+  for (size_t index : indices) {
+    it->second.emplace_back(pdh_query_, instance_name,
+                            definitions[index].counter_name,
+                            definitions[index].uma_name, process_type_suffix,
+                            definitions[index].format);
+  }
+}
+
+void SystemPdhMetricsProvider::PdhQueryHandler::StopListeningToProcess(
+    content::ChildProcessId content_id) {
+  process_counters_.erase(content_id);
 }
 
 void SystemPdhMetricsProvider::PdhQueryHandler::Sample() {
   CHECK(pdh_query_.is_valid());
 
   PDH_STATUS status = ::PdhCollectQueryData(pdh_query_.get());
-
   if (!VerifyPdhResult(status, nullptr)) {
     return;
   }
 
-  // Hard fault counts are absolute and can be seen in LONG.
-  PDH_FMT_COUNTERVALUE counter_value;
-  status = ::PdhGetFormattedCounterValue(pages_input_per_second_, PDH_FMT_LONG,
-                                         nullptr, &counter_value);
-  if (!VerifyPdhResult(status, &counter_value)) {
-    return;
+  for (auto& [pid, counters] : process_counters_) {
+    for (auto& counter : counters) {
+      counter.Record();
+    }
   }
-  base::UmaHistogramCounts100000(kHardFaultCountHistogram,
-                                 counter_value.longValue);
-
-  // Demand zero fault counts are absolute and can be seen in LONG.
-  status = ::PdhGetFormattedCounterValue(demand_zero_faults_per_second_,
-                                         PDH_FMT_LONG, nullptr, &counter_value);
-  if (!VerifyPdhResult(status, &counter_value)) {
-    return;
-  }
-  base::UmaHistogramCounts10M(kDemandZeroFaultCountHistogram,
-                              counter_value.longValue);
-
-  // Since pagefile utilization is a percentage in the range [0,100], read it as
-  // double, and ClampRound it to an integer.
-  status = ::PdhGetFormattedCounterValue(pagefile_utilization_, PDH_FMT_DOUBLE,
-                                         nullptr, &counter_value);
-  if (!VerifyPdhResult(status, &counter_value)) {
-    return;
-  }
-  base::UmaHistogramPercentage(kPagefileUtilizationHistogram,
-                               base::ClampRound(counter_value.doubleValue));
-
-  // Since kernel and user CPU time is a percentage in the range [0,100], we can
-  // use it as is.
-  PDH_FMT_COUNTERVALUE kernel_value;
-  status = ::PdhGetFormattedCounterValue(kernel_cpu_time_, PDH_FMT_DOUBLE,
-                                         nullptr, &kernel_value);
-  if (!VerifyPdhResult(status, &kernel_value)) {
-    return;
-  }
-  base::UmaHistogramPercentage(kKernelTimeHistogram,
-                               base::ClampRound(kernel_value.doubleValue));
-
-  PDH_FMT_COUNTERVALUE user_value;
-  status = ::PdhGetFormattedCounterValue(user_cpu_time_, PDH_FMT_DOUBLE,
-                                         nullptr, &user_value);
-  if (!VerifyPdhResult(status, &user_value)) {
-    return;
-  }
-  base::UmaHistogramPercentage(kUserTimeHistogram,
-                               base::ClampRound(user_value.doubleValue));
-
-  base::UmaHistogramPercentage(
-      kUserKernelRatioHistogram,
-      base::ClampRound<int, double>(base::ClampMul(
-          100.0, base::ClampDiv(user_value.doubleValue,
-                                base::ClampAdd(user_value.doubleValue,
-                                               kernel_value.doubleValue)))));
 }
 
 bool SystemPdhMetricsProvider::PdhQueryHandler::VerifyPdhResult(
@@ -203,8 +309,6 @@ bool SystemPdhMetricsProvider::PdhQueryHandler::VerifyPdhResult(
   // Only check `value` if it is present.
   if (value && value->CStatus != PDH_CSTATUS_VALID_DATA &&
       value->CStatus != PDH_CSTATUS_NEW_DATA) {
-    base::UmaHistogramSparse(base::win::ScopedPdhQuery::kResultErrorHistogram,
-                             value->CStatus);
     StopRecording();
     return false;
   }

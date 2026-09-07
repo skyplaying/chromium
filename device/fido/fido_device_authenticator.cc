@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/containers/to_vector.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
@@ -24,7 +25,6 @@
 #include "device/fido/ctap_get_assertion_request.h"
 #include "device/fido/ctap_make_credential_request.h"
 #include "device/fido/fido_device.h"
-#include "device/fido/fido_parsing_utils.h"
 #include "device/fido/get_assertion_task.h"
 #include "device/fido/large_blob.h"
 #include "device/fido/make_credential_task.h"
@@ -103,6 +103,9 @@ GetAssertionStatus ConvertDeviceResponseCodeToGetAssertionStatus(
     // interaction.
     case CtapDeviceResponseCode::kCtap2ErrInvalidCredential:
       return GetAssertionStatus::kAuthenticatorResponseInvalid;
+
+    case CtapDeviceResponseCode::kCtap2ErrFallbackUrlProcessed:
+      return GetAssertionStatus::kCrossDeviceFallback;
 
     // For all other errors, the authenticator will be dropped, and other
     // authenticators may continue.
@@ -322,8 +325,7 @@ void FidoDeviceAuthenticator::OnHaveCompressedLargeBlobForGetAssertion(
       DCHECK(request.large_blob_key);
       destination = &large_blob_;
     }
-    destination->emplace(fido_parsing_utils::Materialize(result.value()),
-                         original_size);
+    destination->emplace(base::ToVector(result.value()), original_size);
   }
 
   MaybeGetEphemeralKeyForGetAssertion(std::move(request), std::move(options),
@@ -334,8 +336,7 @@ void FidoDeviceAuthenticator::MaybeGetEphemeralKeyForMakeCredential(
     CtapMakeCredentialRequest request,
     MakeCredentialOptions options,
     CtapMakeCredentialCallback callback) {
-  if (request.prf_input && options_.supports_hmac_secret_mc &&
-      base::FeatureList::IsEnabled(device::kWebAuthnHmacSecretMcExtension)) {
+  if (request.prf_input && options_.supports_hmac_secret_mc) {
     GetEphemeralKey(base::BindOnce(
         &FidoDeviceAuthenticator::OnHaveEphemeralKeyForMakeCredential,
         weak_factory_.GetWeakPtr(), std::move(request), std::move(options),
@@ -1184,7 +1185,7 @@ void FidoDeviceAuthenticator::OnBlobUncompressed(
     bool set_blob = false;
     for (auto& response : responses) {
       if (response.large_blob_key == uncompressed_key) {
-        response.large_blob = fido_parsing_utils::Materialize(result.value());
+        response.large_blob = base::ToVector(result.value());
         set_blob = true;
         break;
       }
@@ -1214,8 +1215,7 @@ void FidoDeviceAuthenticator::OnLargeBlobExtensionUncompressed(
     base::expected<mojo_base::BigBuffer, std::string> result) {
   DCHECK_EQ(responses.size(), 1u);
   if (result.has_value()) {
-    responses.at(0).large_blob =
-        fido_parsing_utils::Materialize(result.value());
+    responses.at(0).large_blob = base::ToVector(result.value());
   } else {
     FIDO_LOG(ERROR) << "Could not uncompress blob: " << result.error();
   }

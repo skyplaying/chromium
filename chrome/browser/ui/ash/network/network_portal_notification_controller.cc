@@ -13,6 +13,7 @@
 #include "ash/constants/ash_features.h"
 #include "ash/constants/notifier_catalogs.h"
 #include "ash/public/cpp/notification_utils.h"
+#include "ash/resources/vector_icons/vector_icons.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/functional/bind.h"
@@ -21,9 +22,6 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/trace_event/trace_event.h"
-#include "chrome/app/vector_icons/vector_icons.h"
-#include "chrome/browser/notifications/notification_handler.h"
-#include "chrome/browser/notifications/system_notification_helper.h"
 #include "chrome/browser/ui/ash/network/network_portal_signin_controller.h"
 #include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/network/network_event_log.h"
@@ -34,6 +32,7 @@
 #include "components/session_manager/core/session_manager.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/message_center/message_center.h"
 #include "ui/message_center/public/cpp/notification.h"
 #include "ui/message_center/public/cpp/notification_types.h"
 #include "ui/message_center/public/cpp/notifier_id.h"
@@ -81,15 +80,16 @@ std::unique_ptr<message_center::Notification> CreateNotification(
                                      base::UTF8ToUTF16(network->name())),
           /*display_source=*/std::u16string(), /*origin_url=*/GURL(),
           notifier_id, data, std::move(delegate),
-          kNotificationCaptivePortalIcon,
+          ash::kNotificationCaptivePortalIcon,
           message_center::SystemNotificationWarningLevel::NORMAL);
   notification->set_never_timeout(true);
   return notification;
 }
 
 void CloseNotification() {
-  SystemNotificationHelper::GetInstance()->Close(
-      NetworkPortalNotificationController::kNotificationId);
+  message_center::MessageCenter::Get()->RemoveNotification(
+      NetworkPortalNotificationController::kNotificationId,
+      /*by_user=*/false);
 }
 
 }  // namespace
@@ -179,7 +179,8 @@ void NetworkPortalNotificationController::PortalStateChanged(
       CreateDefaultCaptivePortalNotification(network, portal_state);
   DCHECK(notification) << "Notification not created for portal state: "
                        << portal_state;
-  SystemNotificationHelper::GetInstance()->Display(*notification);
+  message_center::MessageCenter::Get()->AddNotification(
+      std::move(notification));
 }
 
 void NetworkPortalNotificationController::OnShuttingDown() {

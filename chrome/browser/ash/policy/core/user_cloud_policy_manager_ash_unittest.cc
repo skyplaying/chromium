@@ -15,7 +15,6 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/run_loop.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
@@ -23,15 +22,19 @@
 #include "base/test/test_mock_time_task_runner.h"
 #include "base/test/test_simple_task_runner.h"
 #include "base/time/time.h"
+#include "chrome/browser/ash/login/session/user_session_manager.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/ash/policy/core/user_cloud_policy_token_forwarder.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
+#include "chrome/browser/ash/settings/scoped_cros_settings_test_helper.h"
+#include "chrome/browser/ash/settings/scoped_testing_cros_settings.h"
+#include "chrome/browser/browser_process_platform_part.h"
+#include "chrome/browser/global_features.h"
 #include "chrome/browser/policy/cloud/cloud_policy_test_utils.h"
 #include "chrome/browser/prefs/browser_prefs.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
 #include "chrome/common/chrome_constants.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
@@ -56,6 +59,7 @@
 #include "components/prefs/testing_pref_service.h"
 #include "components/session_manager/core/fake_session_manager_delegate.h"
 #include "components/session_manager/core/session_manager.h"
+#include "components/signin/public/base/oauth_consumer_id.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/sync_preferences/pref_service_syncable.h"
 #include "components/user_manager/scoped_user_manager.h"
@@ -142,24 +146,34 @@ class UserCloudPolicyManagerAshTest : public testing::Test {
         external_data_manager_(nullptr),
         task_runner_(base::MakeRefCounted<base::TestMockTimeTaskRunner>()),
         profile_(nullptr),
-        signin_profile_(nullptr),
-        user_manager_(new ash::FakeChromeUserManager()),
-        user_manager_enabler_(base::WrapUnique(user_manager_.get())),
-        test_signin_shared_loader_factory_(
-            base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
-                &test_signin_url_loader_factory_)),
-        test_system_shared_loader_factory_(
-            base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
-                &test_system_url_loader_factory_)) {}
+        signin_profile_(nullptr) {}
 
   void SetUp() override {
     ash::ConciergeClient::InitializeFake(/*fake_cicerone_client=*/nullptr);
+
+    TestingBrowserProcess::GetGlobal()->SetSharedURLLoaderFactory(
+        test_url_loader_factory_.GetSafeWeakWrapper());
+
+    user_manager_.Reset(std::make_unique<ash::FakeChromeUserManager>());
+    user_session_manager_ = std::make_unique<ash::UserSessionManager>(
+        TestingBrowserProcess::GetGlobal()->local_state(),
+        TestingBrowserProcess::GetGlobal()
+            ->GetFeatures()
+            ->application_locale_storage(),
+        TestingBrowserProcess::GetGlobal()->shared_url_loader_factory(),
+        TestingBrowserProcess::GetGlobal()
+            ->platform_part()
+            ->browser_policy_connector_ash(),
+        TestingBrowserProcess::GetGlobal()
+            ->platform_part()
+            ->component_manager_ash());
 
     // The initialization path that blocks on the initial policy fetch requires
     // a signin Profile to use its URLRequestContext.
     profile_manager_ = std::make_unique<TestingProfileManager>(
         TestingBrowserProcess::GetGlobal());
     ASSERT_TRUE(profile_manager_->SetUp());
+
     TestingProfile::TestingFactories factories =
         IdentityTestEnvironmentProfileAdaptor::
             GetIdentityTestEnvironmentFactories();
@@ -175,11 +189,6 @@ class UserCloudPolicyManagerAshTest : public testing::Test {
     // attach it to the main Profile.
     signin_profile_ = TestingProfile::Builder().BuildIncognito(profile_);
     ASSERT_EQ(signin_profile_, ash::ProfileHelper::GetSigninProfile());
-
-    RegisterLocalState(prefs_.registry());
-
-    device_management_service_.ScheduleInitialization(0);
-    base::RunLoop().RunUntilIdle();
 
     // Set up a policy map for testing.
     GetExpectedDefaultPolicy(&policy_map_);
@@ -225,12 +234,18 @@ class UserCloudPolicyManagerAshTest : public testing::Test {
       manager_->RemoveObserver(&observer_);
       manager_->Shutdown();
     }
+
+    user_session_manager_->Shutdown();
+
     signin_profile_ = nullptr;
     profile_ = nullptr;
     identity_test_env_profile_adaptor_.reset();
-    profile_manager_->DeleteTestingProfile(chrome::kInitialProfile);
-    test_system_shared_loader_factory_->Detach();
-    test_signin_shared_loader_factory_->Detach();
+    profile_manager_.reset();
+
+    user_session_manager_.reset();
+    user_manager_.Reset();
+
+    TestingBrowserProcess::GetGlobal()->SetSharedURLLoaderFactory(nullptr);
 
     ash::ConciergeClient::Shutdown();
   }
@@ -278,23 +293,18 @@ class UserCloudPolicyManagerAshTest : public testing::Test {
       network::URLLoaderCompletionStatus ok_completion_status(net::OK);
       auto ok_response = network::CreateURLResponseHead(net::HTTP_OK);
       // Issue the access token.
-      EXPECT_TRUE(
-          test_system_url_loader_factory_.SimulateResponseForPendingRequest(
-              gaia_urls->oauth2_token_url(), ok_completion_status,
-              std::move(ok_response), kOAuth2AccessTokenData));
+      EXPECT_TRUE(test_url_loader_factory_.SimulateResponseForPendingRequest(
+          gaia_urls->oauth2_token_url(), ok_completion_status,
+          std::move(ok_response), kOAuth2AccessTokenData));
     } else {
       // Since the refresh token is available, IdentityManager was used
       // to request the access token and not UserCloudPolicyTokenForwarder.
       // Issue the access token with the former.
-      signin::ScopeSet scopes;
-      scopes.insert(GaiaConstants::kDeviceManagementServiceOAuth);
-      scopes.insert(GaiaConstants::kGoogleUserInfoEmail);
-
       identity_test_env()
-          ->WaitForAccessTokenRequestIfNecessaryAndRespondWithTokenForScopes(
+          ->WaitForAccessTokenRequestIfNecessaryAndRespondWithTokenForConsumerId(
               kOAuthToken,
               base::Time::Now() + base::Seconds(3600) /*expiration*/,
-              std::string() /*id_token*/, scopes);
+              signin::OAuthConsumerId::kCloudPolicyClientRegistration);
     }
 
     EXPECT_TRUE(job.IsActive());
@@ -348,6 +358,13 @@ class UserCloudPolicyManagerAshTest : public testing::Test {
     EXPECT_TRUE(manager_->policies().Equals(expected_bundle_));
   }
 
+  // NOTE: InstallAttributes is required to construct BrowserPolicyConnectorAsh.
+  // CrosSettings is needed because otherwise TestingProfile automatically
+  // creates ScopedCrosSettingsTestHelper, which conflicts with
+  // ScopedStubInstallAttributes.
+  ash::ScopedTestingCrosSettings scoped_testing_cros_settings_;
+  ash::ScopedStubInstallAttributes scoped_stub_install_attributes_;
+
   // Required by the refresh scheduler that's created by the manager and
   // for the cleanup of URLRequestContextGetter in the |signin_profile_|.
   content::BrowserTaskEnvironment task_environment_;
@@ -360,7 +377,6 @@ class UserCloudPolicyManagerAshTest : public testing::Test {
   PolicyBundle expected_bundle_;
 
   // Policy infrastructure.
-  TestingPrefServiceSimple prefs_;
   MockConfigurationPolicyObserver observer_;
   testing::StrictMock<MockJobCreationHandler> job_creation_handler_;
   FakeDeviceManagementService device_management_service_{
@@ -381,8 +397,10 @@ class UserCloudPolicyManagerAshTest : public testing::Test {
       identity_test_env_profile_adaptor_;
   user_manager::UserType user_type_ = user_manager::UserType::kRegular;
 
-  raw_ptr<ash::FakeChromeUserManager, DanglingUntriaged> user_manager_;
-  user_manager::ScopedUserManager user_manager_enabler_;
+  user_manager::TypedScopedUserManager<ash::FakeChromeUserManager>
+      user_manager_;
+  std::unique_ptr<ash::UserSessionManager> user_session_manager_;
+
   // This is automatically checked in TearDown() to ensure that we get a
   // fatal error iff |fatal_error_expected_| is true.
   bool fatal_error_expected_ = false;
@@ -395,27 +413,27 @@ class UserCloudPolicyManagerAshTest : public testing::Test {
     external_data_manager_->SetPolicyStore(store_);
     const user_manager::User* active_user = user_manager_->GetActiveUser();
     manager_ = std::make_unique<UserCloudPolicyManagerAsh>(
+        TestingBrowserProcess::GetGlobal()->local_state(),
+        test_url_loader_factory_.GetSafeWeakWrapper(),
+        TestingBrowserProcess::GetGlobal()
+            ->platform_part()
+            ->browser_policy_connector_ash(),
         ash::ProfileHelper::Get()->GetProfileByUser(active_user),
         std::move(store),
         /*extension_install_store=*/nullptr,
         base::WrapUnique<MockCloudExternalDataManager>(
             external_data_manager_.get()),
-        base::FilePath(), enforcement_type, &prefs_, fetch_timeout,
+        base::FilePath(), enforcement_type, fetch_timeout,
         base::BindOnce(&UserCloudPolicyManagerAshTest::OnFatalErrorEncountered,
                        base::Unretained(this)),
         active_user->GetAccountId(), task_runner_);
     manager_->AddObserver(&observer_);
-    manager_->SetSignInURLLoaderFactoryForTests(
-        test_signin_shared_loader_factory_);
-    manager_->SetSystemURLLoaderFactoryForTests(
-        test_system_shared_loader_factory_);
     manager_->SetUserContextRefreshTokenForTests("fake-user-context-rt");
   }
 
   void InitAndConnectManager() {
     manager_->Init(&schema_registry_);
-    manager_->ConnectManagementService(&device_management_service_,
-                                       /*system_url_loader_factory=*/nullptr);
+    manager_->ConnectManagementService(&device_management_service_);
     // Create the UserCloudPolicyTokenForwarder, which fetches the access
     // token using the IdentityManager and forwards it to the
     // UserCloudPolicyManagerAsh. This service is automatically created
@@ -430,12 +448,8 @@ class UserCloudPolicyManagerAshTest : public testing::Test {
                                              task_runner_);
   }
 
-  network::TestURLLoaderFactory* test_signin_url_loader_factory() {
-    return &test_signin_url_loader_factory_;
-  }
-
-  network::TestURLLoaderFactory* test_system_url_loader_factory() {
-    return &test_system_url_loader_factory_;
+  network::TestURLLoaderFactory* test_url_loader_factory() {
+    return &test_url_loader_factory_;
   }
 
   signin::IdentityTestEnvironment* identity_test_env() {
@@ -448,13 +462,7 @@ class UserCloudPolicyManagerAshTest : public testing::Test {
 
   bool fatal_error_encountered_ = false;
 
-  network::TestURLLoaderFactory test_signin_url_loader_factory_;
-  network::TestURLLoaderFactory test_system_url_loader_factory_;
-
-  scoped_refptr<network::WeakWrapperSharedURLLoaderFactory>
-      test_signin_shared_loader_factory_;
-  scoped_refptr<network::WeakWrapperSharedURLLoaderFactory>
-      test_system_shared_loader_factory_;
+  network::TestURLLoaderFactory test_url_loader_factory_;
 };
 
 TEST_F(UserCloudPolicyManagerAshTest, BlockingFirstFetch) {
@@ -556,12 +564,11 @@ TEST_F(UserCloudPolicyManagerAshTest, BlockingFetchOAuthError) {
   // The PolicyOAuth2TokenFetcher posts delayed retries on some errors. This
   // data will make it fail immediately.
 
-  EXPECT_TRUE(
-      test_system_url_loader_factory()->SimulateResponseForPendingRequest(
-          GaiaUrls::GetInstance()->oauth2_token_url(),
-          network::URLLoaderCompletionStatus(net::OK),
-          network::CreateURLResponseHead(net::HTTP_BAD_REQUEST),
-          "Error=BadAuthentication"));
+  EXPECT_TRUE(test_url_loader_factory()->SimulateResponseForPendingRequest(
+      GaiaUrls::GetInstance()->oauth2_token_url(),
+      network::URLLoaderCompletionStatus(net::OK),
+      network::CreateURLResponseHead(net::HTTP_BAD_REQUEST),
+      "Error=BadAuthentication"));
 
   // Server check failed, so profile should not be initialized.
   EXPECT_FALSE(manager_->IsInitializationComplete(POLICY_DOMAIN_CHROME));
@@ -752,7 +759,7 @@ TEST_F(UserCloudPolicyManagerAshTest, NonBlockingFirstFetch) {
       kEmail, signin::ConsentLevel::kSignin);
   EXPECT_TRUE(
       identity_test_env()->identity_manager()->HasAccountWithRefreshToken(
-          account_info.account_id));
+          account_info.GetAccountId()));
 
   // That should have notified the manager, which now issues the request for the
   // policy oauth token.
@@ -839,12 +846,6 @@ TEST_F(UserCloudPolicyManagerAshTest, TestLifetimeReportingEphemeralUser) {
   ASSERT_TRUE(register_request.register_request().has_lifetime());
   ASSERT_EQ(em::DeviceRegisterRequest::LIFETIME_EPHEMERAL_USER,
             register_request.register_request().lifetime());
-}
-
-TEST_F(UserCloudPolicyManagerAshTest, TestHasAppInstallEventLogUploader) {
-  ASSERT_NO_FATAL_FAILURE(MakeManagerWithEmptyStore(
-      base::TimeDelta(), PolicyEnforcement::kPolicyRequired));
-  EXPECT_TRUE(manager_->GetAppInstallEventLogUploader());
 }
 
 TEST_F(UserCloudPolicyManagerAshTest, TestReportSchedulerCreation) {
@@ -1013,10 +1014,9 @@ TEST_F(UserCloudPolicyManagerAshTest, Reregistration) {
   GaiaUrls* gaia_urls = GaiaUrls::GetInstance();
   network::URLLoaderCompletionStatus ok_completion_status(net::OK);
   auto ok_response = network::CreateURLResponseHead(net::HTTP_OK);
-  EXPECT_TRUE(
-      test_system_url_loader_factory()->SimulateResponseForPendingRequest(
-          gaia_urls->oauth2_token_url(), ok_completion_status,
-          std::move(ok_response), kOAuth2AccessTokenData));
+  EXPECT_TRUE(test_url_loader_factory()->SimulateResponseForPendingRequest(
+      gaia_urls->oauth2_token_url(), ok_completion_status,
+      std::move(ok_response), kOAuth2AccessTokenData));
 
   // Validate that re-registration sends the correct parameters.
   EXPECT_TRUE(register_request.register_request().reregister());
@@ -1100,10 +1100,9 @@ TEST_F(UserCloudPolicyManagerAshTest, ReregistrationFails) {
   GaiaUrls* gaia_urls = GaiaUrls::GetInstance();
   network::URLLoaderCompletionStatus ok_completion_status(net::OK);
   auto ok_response = network::CreateURLResponseHead(net::HTTP_OK);
-  EXPECT_TRUE(
-      test_system_url_loader_factory()->SimulateResponseForPendingRequest(
-          gaia_urls->oauth2_token_url(), ok_completion_status,
-          std::move(ok_response), kOAuth2AccessTokenData));
+  EXPECT_TRUE(test_url_loader_factory()->SimulateResponseForPendingRequest(
+      gaia_urls->oauth2_token_url(), ok_completion_status,
+      std::move(ok_response), kOAuth2AccessTokenData));
 
   // Validate re-registration state.
   ASSERT_TRUE(reregister_job.IsActive());
@@ -1136,13 +1135,10 @@ class UserCloudPolicyManagerAshChildTest
 
   // Issues OAuthToken for device management scopes.
   void IssueOAuth2AccessToken(base::TimeDelta token_lifetime) {
-    signin::ScopeSet scopes;
-    scopes.insert(GaiaConstants::kDeviceManagementServiceOAuth);
-    scopes.insert(GaiaConstants::kGoogleUserInfoEmail);
     identity_test_env()
-        ->WaitForAccessTokenRequestIfNecessaryAndRespondWithTokenForScopes(
+        ->WaitForAccessTokenRequestIfNecessaryAndRespondWithTokenForConsumerId(
             kOAuthToken, task_runner_->Now() + token_lifetime,
-            std::string() /*id_token*/, scopes);
+            signin::OAuthConsumerId::kCloudPolicyClientRegistration);
   }
 
  protected:

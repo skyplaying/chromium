@@ -9,8 +9,10 @@
 #include <vector>
 
 #include "base/base64.h"
+#include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/memory/raw_ref.h"
+#include "base/no_destructor.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/bind_post_task.h"
 #include "base/test/gmock_callback_support.h"
@@ -868,9 +870,10 @@ TEST_F(KcerNssTest, GetKeyInfoGenericAndCustomAttributes) {
   const PublicKey& public_key = generate_waiter.Get().value();
 
   KeyInfo expected_key_info;
-  // Hardware- vs software-backed indicators on real devices are provided by
-  // Chaps and are wrong in unit tests.
-  expected_key_info.is_hardware_backed = true;
+  // Hardware backing is a Chaps property. This test uses an NSS softoken slot
+  // (crypto::ScopedTestNSSDB), which Chaps does not provide, so nothing in it
+  // is hardware backed - same as a no-TPM device's software NSS fallback slot.
+  expected_key_info.is_hardware_backed = false;
   // NSS sets an empty nickname by default, this doesn't have to be like this
   // in general.
   expected_key_info.nickname = "";
@@ -1557,20 +1560,21 @@ std::vector<uint8_t> ReadTestFile(const std::string& file_name) {
 }
 
 const std::vector<uint8_t>& GetPkcs12DataRsa() {
-  static std::vector<uint8_t> pkcs12_data = ReadTestFile("client.p12");
-  return pkcs12_data;
+  static const base::NoDestructor<std::vector<uint8_t>> pkcs12_data(
+      ReadTestFile("client.p12"));
+  return *pkcs12_data;
 }
 
 const std::vector<uint8_t>& GetPkcs12DataEc() {
-  static std::vector<uint8_t> pkcs12_data =
-      ReadTestFile("client_with_ec_key.p12");
-  return pkcs12_data;
+  static const base::NoDestructor<std::vector<uint8_t>> pkcs12_data(
+      ReadTestFile("client_with_ec_key.p12"));
+  return *pkcs12_data;
 }
 
 const std::vector<uint8_t>& GetPkcs12DataWith2Certs() {
-  static std::vector<uint8_t> pkcs12_data =
-      ReadTestFile("2_client_certs_1_key.p12");
-  return pkcs12_data;
+  static const base::NoDestructor<std::vector<uint8_t>> pkcs12_data(
+      ReadTestFile("2_client_certs_1_key.p12"));
+  return *pkcs12_data;
 }
 
 base::flat_map<uint32_t /*attribute_id*/, const chaps::Attribute*> MakeMap(

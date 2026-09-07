@@ -11,6 +11,8 @@ import org.jni_zero.JNINamespace;
 import org.jni_zero.NativeMethods;
 
 import org.chromium.base.Callback;
+import org.chromium.base.TriState;
+import org.chromium.base.TriStateUtils;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.content.R;
@@ -31,6 +33,8 @@ public class RenderWidgetHostViewImpl implements RenderWidgetHostView {
 
     // Remember the stack for clearing native the native stack for debugging use after destroy.
     private @Nullable Throwable mNativeDestroyThrowable;
+
+    private @TriState int mIsGestureNavigationModeCached;
 
     private @Nullable Toast mPointerLockToast;
 
@@ -89,6 +93,18 @@ public class RenderWidgetHostViewImpl implements RenderWidgetHostView {
     @Override
     public void onResume() {
         RenderWidgetHostViewImplJni.get().onResume(getNativePtr());
+    }
+
+    @Override
+    public void setIsGestureNavigationMode(boolean isGestureNavigationMode) {
+        if (isDestroyed()) return;
+        @TriState int mode = TriStateUtils.from(isGestureNavigationMode);
+        if (mIsGestureNavigationModeCached == mode) {
+            return;
+        }
+        mIsGestureNavigationModeCached = mode;
+        RenderWidgetHostViewImplJni.get()
+                .setIsGestureNavigationMode(getNativePtr(), isGestureNavigationMode);
     }
 
     // TODO(https://crbug.com/419544853): Move the pointer lock logic to a separate class once
@@ -159,5 +175,8 @@ public class RenderWidgetHostViewImpl implements RenderWidgetHostView {
                 Callback<String> callback);
 
         void onResume(long nativeRenderWidgetHostViewAndroid);
+
+        void setIsGestureNavigationMode(
+                long nativeRenderWidgetHostViewAndroid, boolean isGestureNavigationMode);
     }
 }

@@ -8,7 +8,7 @@
 #include "components/user_education/webui/whats_new_registry.h"
 #include "url/gurl.h"
 
-class Browser;
+class BrowserWindowInterface;
 
 namespace whats_new {
 
@@ -29,7 +29,8 @@ enum class LoadEvent {
 
 // Gets the server side URL for the What's New page for the current version
 // of Chrome.
-GURL GetServerURL(bool is_staging = false);
+GURL GetServerURL(const whats_new::WhatsNewRegistry& whats_new_registry,
+                  bool is_staging = false);
 
 // Gets the server side URL for the What's New page including all
 // query parameters necessary to render the page.
@@ -39,7 +40,7 @@ GURL GetServerURLForRender(
 
 // Starts fetching the What's New page and will open the page in |browser| if
 // it exists.
-void StartWhatsNewFetch(Browser* browser);
+void StartWhatsNewFetch(BrowserWindowInterface* browser);
 
 }  // namespace whats_new
 

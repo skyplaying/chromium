@@ -116,14 +116,15 @@ MouseEvent* MouseEvent::Create(ScriptState* script_state,
   }
   return MakeGarbageCollected<MouseEvent>(
       type, initializer, base::TimeTicks::Now(), kRealOrIndistinguishable,
-      kMenuSourceNone, fallback_dom_window);
+      ui::mojom::blink::MenuSourceType::kNone, fallback_dom_window);
 }
 
-MouseEvent* MouseEvent::Create(const AtomicString& event_type,
-                               const MouseEventInit* initializer,
-                               base::TimeTicks platform_time_stamp,
-                               SyntheticEventType synthetic_event_type,
-                               WebMenuSourceType menu_source_type) {
+MouseEvent* MouseEvent::Create(
+    const AtomicString& event_type,
+    const MouseEventInit* initializer,
+    base::TimeTicks platform_time_stamp,
+    SyntheticEventType synthetic_event_type,
+    ui::mojom::blink::MenuSourceType menu_source_type) {
   return MakeGarbageCollected<MouseEvent>(
       event_type, initializer, platform_time_stamp, synthetic_event_type,
       menu_source_type);
@@ -140,7 +141,7 @@ MouseEvent::MouseEvent(const AtomicString& event_type,
                        const MouseEventInit* initializer,
                        base::TimeTicks platform_time_stamp,
                        SyntheticEventType synthetic_event_type,
-                       WebMenuSourceType menu_source_type,
+                       ui::mojom::blink::MenuSourceType menu_source_type,
                        LocalDOMWindow* fallback_dom_window)
     : UIEventWithKeyState(event_type, initializer, platform_time_stamp),
       screen_x_(initializer->screenX()),
@@ -174,7 +175,8 @@ void MouseEvent::InitCoordinates(const double client_x,
     if (LocalFrame* frame = local_dom_window->GetFrame()) {
       // Adjust page_x_ and page_y_ by layout viewport scroll offset.
       if (ScrollableArea* scrollable_area = frame->View()->LayoutViewport()) {
-        gfx::Vector2d scroll_offset = scrollable_area->ScrollOffsetInt();
+        gfx::Vector2d scroll_offset =
+            scrollable_area->PixelSnappedScrollOffset();
         page_x_ += scroll_offset.x() / zoom_factor;
         page_y_ += scroll_offset.y() / zoom_factor;
       }
@@ -490,7 +492,8 @@ void MouseEvent::ComputeRelativePosition() {
     // box.
     if (layout_object->IsBoxModelObject()) {
       const auto* layout_box = To<LayoutBoxModelObject>(layout_object);
-      local_pos.Offset(-layout_box->BorderLeft(), -layout_box->BorderTop());
+      const PhysicalOffset offset = layout_box->BorderOutsets().Offset();
+      local_pos.Offset(-offset.left, -offset.top);
     }
 
     offset_x_ = local_pos.x() * inverse_zoom_factor;
@@ -514,7 +517,7 @@ void MouseEvent::ComputeRelativePosition() {
     layer = layer->EnclosingSelfPaintingLayer();
 
     PhysicalOffset physical_offset =
-        layer->GetLayoutObject().LocalToAbsolutePoint(PhysicalOffset(), 0);
+        layer->GetLayoutObject().LocalToAbsolutePoint(PhysicalOffset());
     layer_location_ -= gfx::Vector2dF(physical_offset);
 
     layer_location_.Scale(inverse_zoom_factor);

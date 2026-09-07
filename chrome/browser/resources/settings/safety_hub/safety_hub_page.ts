@@ -25,7 +25,7 @@ import {WebUiListenerMixin} from 'chrome://resources/cr_elements/web_ui_listener
 import {assertNotReached} from 'chrome://resources/js/assert.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
-import {PasswordManagerImpl, PasswordManagerPage} from '../autofill_page/password_manager_proxy.js';
+import {PasswordManagerImpl, PasswordManagerPage} from '../autofill_page/passwords/password_manager_proxy.js';
 import type {MetricsBrowserProxy, SafetyHubCardState} from '../metrics_browser_proxy.js';
 import {MetricsBrowserProxyImpl, SafetyHubModuleType, SafetyHubSurfaces} from '../metrics_browser_proxy.js';
 import {RelaunchMixin, RestartType} from '../relaunch_mixin.js';
@@ -232,12 +232,12 @@ export class SettingsSafetyHubPageElement extends
       {
         origin: this.i18n('safetyHubUserEduDataHeader'),
         detail: this.i18nAdvanced('safetyHubUserEduDataSubheader'),
-        icon: 'settings20:chrome-filled',
+        icon: 'settings20:chrome-product',
       },
       {
         origin: this.i18n('safetyHubUserEduIncognitoHeader'),
         detail: this.i18nAdvanced('safetyHubUserEduIncognitoSubheader'),
-        icon: 'settings20:incognito-unfilled',
+        icon: 'settings20:incognito',
       },
       {
         origin: this.i18n('safetyHubUserEduSafeBrowsingHeader'),

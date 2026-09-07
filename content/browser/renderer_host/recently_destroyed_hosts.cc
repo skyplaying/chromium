@@ -7,7 +7,6 @@
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/time/time.h"
-#include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/process_lock.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
@@ -139,7 +138,7 @@ RecentlyDestroyedHosts::RecentlyDestroyedHosts() = default;
 
 RecentlyDestroyedHosts* RecentlyDestroyedHosts::GetInstance(
     BrowserContext* browser_context) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M158);
 
   RecentlyDestroyedHosts* recently_destroyed_hosts =
       static_cast<RecentlyDestroyedHosts*>(
@@ -193,7 +192,8 @@ void RecentlyDestroyedHosts::AddReuseInterval(const base::TimeDelta& interval) {
                          });
     reuse_intervals_.erase(oldest_entry);
   }
-  DCHECK_LE(reuse_intervals_.size(), kReuseIntervalsMaxSize);
+  CHECK_LE(reuse_intervals_.size(), kReuseIntervalsMaxSize,
+           base::NotFatalUntil::M158);
 }
 
 }  // namespace content

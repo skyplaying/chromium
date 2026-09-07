@@ -144,8 +144,7 @@ class BatterySaverControllerNotificationTest
     scoped_feature_list_.reset();
     base::FieldTrialParams parameters;
     parameters[features::kBatterySaverNotificationBehavior.name] =
-        UNSAFE_TODO(features::kBatterySaverNotificationBehavior.options[arm])
-            .name;
+        features::kBatterySaverNotificationBehavior.options[arm].name;
     scoped_feature_list_ = std::make_unique<base::test::ScopedFeatureList>();
     scoped_feature_list_->InitAndEnableFeatureWithParameters(
         features::kBatterySaver, parameters);
@@ -244,8 +243,6 @@ void ExpectEnabledMetrics(base::HistogramTester& histogram_tester,
                           base::HistogramBase::Count32 enabled_count) {
   histogram_tester.ExpectTotalCount("Ash.BatterySaver.BatteryPercent.Enabled",
                                     enabled_count);
-  histogram_tester.ExpectTotalCount("Ash.BatterySaver.TimeToEmpty.Enabled",
-                                    enabled_count);
 }
 
 // Metrics logged on enable when enabled via settings.
@@ -255,16 +252,12 @@ void ExpectSettingsEnabledMetrics(
   histogram_tester.ExpectTotalCount(
       "Ash.BatterySaver.BatteryPercent.EnabledSettings",
       settings_enabled_count);
-  histogram_tester.ExpectTotalCount(
-      "Ash.BatterySaver.TimeToEmpty.EnabledSettings", settings_enabled_count);
 }
 
 // Metrics always logged on disable.
 void ExpectDisabledMetrics(base::HistogramTester& histogram_tester,
                            base::HistogramBase::Count32 disabled_count) {
   histogram_tester.ExpectTotalCount("Ash.BatterySaver.BatteryPercent.Disabled",
-                                    disabled_count);
-  histogram_tester.ExpectTotalCount("Ash.BatterySaver.TimeToEmpty.Disabled",
                                     disabled_count);
   histogram_tester.ExpectTotalCount("Ash.BatterySaver.Duration",
                                     disabled_count);
@@ -311,8 +304,6 @@ void ExpectSettingsDisabledMetrics(
   histogram_tester.ExpectTotalCount(
       "Ash.BatterySaver.BatteryPercent.DisabledSettings",
       settings_disabled_count);
-  histogram_tester.ExpectTotalCount(
-      "Ash.BatterySaver.TimeToEmpty.DisabledSettings", settings_disabled_count);
   histogram_tester.ExpectTotalCount(
       "Ash.BatterySaver.Duration.DisabledSettings", settings_disabled_count);
 }

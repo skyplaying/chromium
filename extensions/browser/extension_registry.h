@@ -115,6 +115,10 @@ class ExtensionRegistry : public KeyedService {
   void TriggerOnUnloaded(const Extension* extension,
                          UnloadedExtensionReason reason);
 
+  // Invokes the observer method OnExtensionEnabled(). The extension must be
+  // enabled at the time of the call.
+  void TriggerOnEnabled(const Extension* extension);
+
   // If this is a fresh install then `is_update` is false and there must not be
   // any installed extension with `extension`'s ID. If this is an update then
   // `is_update` is true and must be an installed extension with `extension`'s
@@ -211,8 +215,12 @@ class ExtensionRegistry : public KeyedService {
   // subset of `enabled_extensions_`.
   ExtensionSet ready_extensions_;
 
-  base::ObserverList<ExtensionRegistryObserver>::UncheckedAndDanglingUntriaged
-      observers_;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      ExtensionRegistryObserver,
+      /*check_empty=*/false,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>::
+      UncheckedAndDanglingUntriaged observers_;
 
   const raw_ptr<content::BrowserContext> browser_context_;
 };

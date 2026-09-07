@@ -4,7 +4,6 @@
 
 #include "third_party/blink/renderer/modules/canvas/htmlcanvas/html_canvas_element_module.h"
 
-#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "components/viz/test/test_context_provider.h"
 #include "components/viz/test/test_raster_interface.h"
@@ -12,7 +11,6 @@
 #include "services/viz/public/mojom/hit_test/hit_test_region_list.mojom-blink.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/frame_sinks/embedded_frame_sink.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_testing.h"
 #include "third_party/blink/renderer/core/dom/document.h"
@@ -25,7 +23,9 @@
 #include "third_party/blink/renderer/core/html/canvas/canvas_rendering_context.h"
 #include "third_party/blink/renderer/core/html/canvas/html_canvas_element.h"
 #include "third_party/blink/renderer/core/offscreencanvas/offscreen_canvas.h"
+#include "third_party/blink/renderer/modules/canvas/canvas2d/canvas_rendering_context_2d.h"
 #include "third_party/blink/renderer/modules/canvas/offscreencanvas2d/offscreen_canvas_rendering_context_2d.h"
+#include "third_party/blink/renderer/platform/graphics/gpu/canvas_utils.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/shared_gpu_context.h"
 #include "third_party/blink/renderer/platform/graphics/test/gpu_compositing_test_platform.h"
 #include "third_party/blink/renderer/platform/graphics/test/gpu_test_utils.h"
@@ -67,7 +67,7 @@ class HTMLCanvasElementModuleTest : public ::testing::Test,
   void SetUp() override {
     web_view_helper_.Initialize();
     GetDocument().documentElement()->SetInnerHTMLWithoutTrustedTypes(
-        String::FromUTF8("<body><canvas id='c'></canvas></body>"));
+        "<body><canvas id='c'></canvas></body>");
     canvas_element_ =
         To<HTMLCanvasElement>(GetDocument().getElementById(AtomicString("c")));
   }
@@ -102,8 +102,8 @@ TEST_F(HTMLCanvasElementModuleTest, TransferControlToOffscreen) {
 
 // Test that lang and direction attributes are transferred correctly.
 TEST_F(HTMLCanvasElementModuleTest, TransferLangAndDirectionToOffscreen) {
-  canvas_element_->setAttribute(AtomicString("lang"), "zh-CN");
-  canvas_element_->setAttribute(AtomicString("dir"), "rtl");
+  canvas_element_->setAttribute(AtomicString("lang"), AtomicString("zh-CN"));
+  canvas_element_->setAttribute(AtomicString("dir"), AtomicString("rtl"));
 
   OffscreenCanvas* offscreen_canvas = TransferControlToOffscreen();
 
@@ -131,8 +131,10 @@ TEST_F(HTMLCanvasElementModuleTest,
 // Test that lang and direction from document are transferred correctly.
 TEST_F(HTMLCanvasElementModuleTest,
        TransferLangAndDirectionDocumentToOffscreen) {
-  GetDocument().documentElement()->setAttribute(AtomicString("lang"), "zh-CN");
-  GetDocument().documentElement()->setAttribute(AtomicString("dir"), "rtl");
+  GetDocument().documentElement()->setAttribute(AtomicString("lang"),
+                                                AtomicString("zh-CN"));
+  GetDocument().documentElement()->setAttribute(AtomicString("dir"),
+                                                AtomicString("rtl"));
   OffscreenCanvas* offscreen_canvas = TransferControlToOffscreen();
 
   const LayoutLocale* locale = offscreen_canvas->GetLocale();
@@ -148,11 +150,9 @@ TEST_F(HTMLCanvasElementModuleTest,
 TEST_P(HTMLCanvasElementModuleTest, LowLatencyCanvasCompositorFrameOpacity) {
   // TODO(crbug.com/922218): enable desynchronized on Mac.
 #if !BUILDFLAG(IS_MAC)
-  // This test relies on GpuMemoryBuffers being supported and enabled for low
-  // latency canvas.  The latter is true only on ChromeOS in production.
+  ScopedCanvasUtils scoped_canvas_utils;
   ScopedTestingPlatformSupport<LowLatencyTestPlatform> platform;
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(features::kLowLatencyCanvas2dImageChromium);
+  SetLowLatencyUsageSupportedForCanvas2DForTesting(true);
 
   auto context_provider = viz::TestContextProvider::CreateRaster();
 #if SK_PMCOLOR_BYTE_ORDER(B, G, R, A)
@@ -191,7 +191,9 @@ TEST_P(HTMLCanvasElementModuleTest, LowLatencyCanvasCompositorFrameOpacity) {
   EXPECT_TRUE(canvas_element().SurfaceLayerBridge());
   platform->RunUntilIdle();
 
-  // This call simulates having drawn something before FinalizeFrame().
+  // Initialize resource provider and simulate having drawn something.
+  static_cast<CanvasRenderingContext2D*>(context_.Get())
+      ->InitializeResourceProvider();
   canvas_element().DidDraw();
 
   EXPECT_CALL(mock_embedded_frame_sink_provider.mock_compositor_frame_sink(),
@@ -210,7 +212,6 @@ TEST_P(HTMLCanvasElementModuleTest, LowLatencyCanvasCompositorFrameOpacity) {
             EXPECT_NE(shared_quad_state_list.front()->are_contents_opaque,
                       context_alpha);
           }));
-  context_->PreFinalizeFrame();
   context_->FinalizeFrame(FlushReason::kOther);
   canvas_element().PostFinalizeFrame(FlushReason::kOther);
   platform->RunUntilIdle();

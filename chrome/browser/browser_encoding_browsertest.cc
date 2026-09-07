@@ -13,12 +13,11 @@
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/test/base/chrome_test_utils.h"
+#include "chrome/test/base/chrome_test_path_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/prefs/pref_service.h"
@@ -38,37 +37,36 @@ struct EncodingTestData {
 };
 
 const EncodingTestData kEncodingTestDatas[] = {
-  { "Big5.html", "Big5" },
-  { "EUC-JP.html", "EUC-JP" },
-  { "gb18030.html", "gb18030" },
-  { "iso-8859-1.html", "windows-1252" },
-  { "ISO-8859-2.html", "ISO-8859-2" },
-  { "ISO-8859-4.html", "ISO-8859-4" },
-  { "ISO-8859-5.html", "ISO-8859-5" },
-  { "ISO-8859-6.html", "ISO-8859-6" },
-  { "ISO-8859-7.html", "ISO-8859-7" },
-  { "ISO-8859-8.html", "ISO-8859-8" },
-  { "ISO-8859-13.html", "ISO-8859-13" },
-  { "ISO-8859-15.html", "ISO-8859-15" },
-  { "KOI8-R.html", "KOI8-R" },
-  { "KOI8-U.html", "KOI8-U" },
-  { "macintosh.html", "macintosh" },
-  { "Shift-JIS.html", "Shift_JIS" },
-  { "US-ASCII.html", "windows-1252" },  // http://crbug.com/15801
-  { "UTF-8.html", "UTF-8" },
-  { "UTF-16LE.html", "UTF-16LE" },
-  { "windows-874.html", "windows-874" },
-  { "EUC-KR.html", "EUC-KR" },
-  { "windows-1250.html", "windows-1250" },
-  { "windows-1251.html", "windows-1251" },
-  { "windows-1252.html", "windows-1252" },
-  { "windows-1253.html", "windows-1253" },
-  { "windows-1254.html", "windows-1254" },
-  { "windows-1255.html", "windows-1255" },
-  { "windows-1256.html", "windows-1256" },
-  { "windows-1257.html", "windows-1257" },
-  { "windows-1258.html", "windows-1258" }
-};
+    {"Big5.html", "Big5"},
+    {"EUC-JP.html", "EUC-JP"},
+    {"gb18030.html", "gb18030"},
+    {"iso-8859-1.html", "windows-1252"},
+    {"ISO-8859-2.html", "ISO-8859-2"},
+    {"ISO-8859-4.html", "ISO-8859-4"},
+    {"ISO-8859-5.html", "ISO-8859-5"},
+    {"ISO-8859-6.html", "ISO-8859-6"},
+    {"ISO-8859-7.html", "ISO-8859-7"},
+    {"ISO-8859-8.html", "ISO-8859-8"},
+    {"ISO-8859-13.html", "ISO-8859-13"},
+    {"ISO-8859-15.html", "ISO-8859-15"},
+    {"KOI8-R.html", "KOI8-R"},
+    {"KOI8-U.html", "KOI8-U"},
+    {"macintosh.html", "macintosh"},
+    {"Shift-JIS.html", "Shift_JIS"},
+    {"US-ASCII.html", "windows-1252"},  // http://crbug.com/40953158
+    {"UTF-8.html", "UTF-8"},
+    {"UTF-16LE.html", "UTF-16LE"},
+    {"windows-874.html", "windows-874"},
+    {"EUC-KR.html", "EUC-KR"},
+    {"windows-1250.html", "windows-1250"},
+    {"windows-1251.html", "windows-1251"},
+    {"windows-1252.html", "windows-1252"},
+    {"windows-1253.html", "windows-1253"},
+    {"windows-1254.html", "windows-1254"},
+    {"windows-1255.html", "windows-1255"},
+    {"windows-1256.html", "windows-1256"},
+    {"windows-1257.html", "windows-1257"},
+    {"windows-1258.html", "windows-1258"}};
 
 }  // namespace
 
@@ -95,7 +93,8 @@ class BrowserEncodingTest
     scoped_refptr<content::MessageLoopRunner> loop_runner(
         new content::MessageLoopRunner);
     content::SavePackageFinishedObserver observer(
-        browser()->profile()->GetDownloadManager(), loop_runner->QuitClosure());
+        browser()->GetProfile()->GetDownloadManager(),
+        loop_runner->QuitClosure());
     browser()->tab_strip_model()->GetActiveWebContents()->SavePage(
         full_file_name, temp_sub_resource_dir_,
         content::SAVE_PAGE_TYPE_AS_COMPLETE_HTML);
@@ -140,7 +139,7 @@ class BrowserEncodingTest
 };
 
 // TODO(jnd): 1. Some encodings are missing here. It'll be added later. See
-// http://crbug.com/13306.
+// http://crbug.com/40843332.
 // 2. Add more files with multiple encoding name variants for each canonical
 // encoding name). Webkit layout tests cover some, but testing in the UI test is
 // also necessary.
@@ -232,8 +231,8 @@ IN_PROC_BROWSER_TEST_F(BrowserEncodingTest, TestEncodingAutoDetect) {
   // Set the default charset to one of encodings not supported by the current
   // auto-detector (Please refer to the above comments) to make sure we
   // incorrectly decode the page. Now we use ISO-8859-4.
-  browser()->profile()->GetPrefs()->SetString(prefs::kDefaultCharset,
-                                              "ISO-8859-4");
+  browser()->GetProfile()->GetPrefs()->SetString(prefs::kDefaultCharset,
+                                                 "ISO-8859-4");
 
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();

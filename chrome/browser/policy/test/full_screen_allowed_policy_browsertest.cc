@@ -10,7 +10,6 @@
 #include "chrome/browser/apps/app_service/browser_app_launcher.h"
 #include "chrome/browser/policy/extension_policy_test_base.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "components/policy/core/common/policy_map.h"
@@ -82,7 +81,7 @@ IN_PROC_BROWSER_TEST_F(FullscreenPolicyTest, FullscreenAllowedBrowser) {
                nullptr);
   UpdateProviderPolicy(policies);
 
-  BrowserWindow* browser_window = browser()->window();
+  BrowserWindow* browser_window = BrowserWindow::FromBrowser(browser());
   ASSERT_TRUE(browser_window);
 
   EXPECT_FALSE(browser_window->IsFullscreen());
@@ -103,8 +102,8 @@ IN_PROC_BROWSER_TEST_F(FullscreenPolicyTest, FullscreenAllowedApp) {
 
   // Launch an app that tries to open a fullscreen window.
   TestAddAppWindowObserver add_window_observer(
-      extensions::AppWindowRegistry::Get(browser()->profile()));
-  apps::AppServiceProxyFactory::GetForProfile(browser()->profile())
+      extensions::AppWindowRegistry::Get(browser()->GetProfile()));
+  apps::AppServiceProxyFactory::GetForProfile(browser()->GetProfile())
       ->BrowserAppLauncher()
       ->LaunchAppWithParamsForTesting(apps::AppLaunchParams(
           extension->id(), apps::LaunchContainer::kLaunchContainerNone,

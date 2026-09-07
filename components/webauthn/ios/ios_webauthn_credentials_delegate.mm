@@ -4,6 +4,8 @@
 
 #import "components/webauthn/ios/ios_webauthn_credentials_delegate.h"
 
+#import <utility>
+
 #import "base/base64.h"
 #import "base/metrics/histogram_functions.h"
 #import "base/notimplemented.h"
@@ -25,17 +27,24 @@ void IOSWebAuthnCredentialsDelegate::LaunchSecurityKeyOrHybridFlow() {
   NOTREACHED() << "Security key or hybrid flow not supported on iOS";
 }
 
+std::optional<std::string> IOSWebAuthnCredentialsDelegate::GetCableQrString()
+    const {
+  return std::nullopt;
+}
+
 void IOSWebAuthnCredentialsDelegate::SelectPasskey(
     const std::string& backend_id,
     OnPasskeySelectedCallback callback) {
-  // Nothing can be done if the web state is not valid.
-  if (!web_state_) {
+  // Nothing can be done if the web state is not valid, a passkey was already
+  // selected, or no passkey request is pending.
+  if (!web_state_ || passkey_selected_ || passkey_request_id_.empty()) {
     return;
   }
+  passkey_selected_ = true;
 
-  // Note: HasPendingPasskeySelection() should always return false since this
-  // callback is run unconditionally.
   std::move(callback).Run();
+
+  std::string passkey_request_id = std::exchange(passkey_request_id_, "");
 
   // `backend_id` is the base64-encoded credential ID.
   std::string selected_credential_id;
@@ -45,8 +54,13 @@ void IOSWebAuthnCredentialsDelegate::SelectPasskey(
       PasskeyTabHelper::FromWebState(web_state_.get());
   CHECK(passkey_tab_helper);
 
-  passkey_tab_helper->StartPasskeyAssertion(passkey_request_id_,
-                                            std::move(selected_credential_id));
+  // Check if this passkey has been marked as user verified and consume the
+  // verification status by removing it from the set.
+  bool did_complete_uv = verified_backend_ids_.erase(backend_id) > 0;
+
+  passkey_tab_helper->StartPasskeyAssertion(std::move(passkey_request_id),
+                                            std::move(selected_credential_id),
+                                            did_complete_uv);
 }
 
 base::expected<const std::vector<password_manager::PasskeyCredential>*,
@@ -85,13 +99,16 @@ void IOSWebAuthnCredentialsDelegate::RequestNotificationWhenPasskeysReady(
 }
 
 bool IOSWebAuthnCredentialsDelegate::HasPendingPasskeySelection() {
-  // Always return false since the callback in SelectPasskey is run
-  // unconditionally.
-  return false;
+  return passkey_selected_;
 }
 
 base::WeakPtr<password_manager::WebAuthnCredentialsDelegate>
 IOSWebAuthnCredentialsDelegate::AsWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
+}
+
+base::WeakPtr<IOSWebAuthnCredentialsDelegate>
+IOSWebAuthnCredentialsDelegate::GetWeakPtr() {
   return weak_ptr_factory_.GetWeakPtr();
 }
 
@@ -107,6 +124,7 @@ void IOSWebAuthnCredentialsDelegate::OnCredentialsReceived(
 
   passkeys_ = std::move(credentials);
   passkey_request_id_ = passkey_request_id;
+  passkey_selected_ = false;
   NotifyClientsOfPasskeyAvailability();
 }
 
@@ -117,6 +135,28 @@ void IOSWebAuthnCredentialsDelegate::NotifyClientsOfPasskeyAvailability() {
   for (auto& callback : callbacks) {
     std::move(callback).Run();
   }
+}
+
+bool IOSWebAuthnCredentialsDelegate::CanReusePreviousSigninAuth() const {
+  if (!web_state_ || passkey_request_id_.empty()) {
+    return false;
+  }
+  PasskeyTabHelper* passkey_tab_helper =
+      PasskeyTabHelper::FromWebState(web_state_.get());
+  if (!passkey_tab_helper) {
+    return false;
+  }
+  std::optional<bool> should_perform_user_verification =
+      passkey_tab_helper->ShouldPerformUserVerification(passkey_request_id_);
+  if (should_perform_user_verification.has_value()) {
+    return !*should_perform_user_verification;
+  }
+  return false;
+}
+
+void IOSWebAuthnCredentialsDelegate::MarkPasskeyAsUserVerified(
+    const std::string& backend_id) {
+  verified_backend_ids_.insert(backend_id);
 }
 
 }  // namespace webauthn

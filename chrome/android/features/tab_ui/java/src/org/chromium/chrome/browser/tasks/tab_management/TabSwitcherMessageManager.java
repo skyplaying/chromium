@@ -44,14 +44,13 @@ import org.chromium.chrome.browser.tab_ui.TabContentManager;
 import org.chromium.chrome.browser.tab_ui.TabGridIphDialogCoordinator;
 import org.chromium.chrome.browser.tab_ui.TabSwitcher;
 import org.chromium.chrome.browser.tabmodel.TabCreator;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelObserver;
 import org.chromium.chrome.browser.tasks.tab_management.MessageCardViewProperties.MessageCardScope;
 import org.chromium.chrome.browser.tasks.tab_management.MessageService.Message;
 import org.chromium.chrome.browser.tasks.tab_management.PriceMessageService.PriceWelcomeMessageReviewActionProvider;
-import org.chromium.chrome.browser.tasks.tab_management.TabListCoordinator.TabListMode;
 import org.chromium.chrome.browser.tasks.tab_management.TabProperties.UiType;
+import org.chromium.chrome.browser.ui.desktop_windowing.AppHeaderUtils;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.components.browser_ui.desktop_windowing.DesktopWindowStateManager;
@@ -133,11 +132,16 @@ public class TabSwitcherMessageManager {
                 }
 
                 @Override
+                public void willCloseTabs(
+                        List<Tab> tabs, boolean isAllTabs, boolean allowUndo) {
+                    removeMessagesIfTabModelEmpty(/* numTabsToRemove= */ tabs.size());
+                }
+
+                @Override
                 public void tabClosureUndone(Tab tab) {
-                    TabGroupModelFilter tabGroupModelFilter =
-                            mCurrentTabGroupModelFilterSupplier.get();
-                    assumeNonNull(tabGroupModelFilter);
-                    if (tabGroupModelFilter.getTabModel().getCount() == 1) {
+                    TabModel tabModel = mCurrentTabModelSupplier.get();
+                    assumeNonNull(tabModel);
+                    if (tabModel.getCount() == 1) {
                         restoreAllAppendedMessage();
                     }
                 }
@@ -148,22 +152,20 @@ public class TabSwitcherMessageManager {
     private final ObserverList<MessageUpdateObserver> mObservers = new ObserverList<>();
     private final Activity mActivity;
     private final ActivityLifecycleDispatcher mLifecycleDispatcher;
-    private final NullableObservableSupplier<TabGroupModelFilter>
-            mCurrentTabGroupModelFilterSupplier;
+    private final NullableObservableSupplier<TabModel> mCurrentTabModelSupplier;
     private final TabGridIphDialogCoordinator mTabGridIphDialogCoordinator;
     private final MultiWindowModeStateDispatcher mMultiWindowModeStateDispatcher;
     private final SnackbarManager mSnackbarManager;
     private final ModalDialogManager mModalDialogManager;
     private final MessageCardProvider<@MessageType Integer, @UiType Integer> mMessageCardProvider;
-    private final Callback<@Nullable TabGroupModelFilter> mOnTabGroupModelFilterChanged =
-            new ValueChangedCallback<>(this::onTabGroupModelFilterChanged);
+    private final Callback<@Nullable TabModel> mOnTabModelChanged =
+            new ValueChangedCallback<>(this::onTabModelChanged);
     private final SettableNullableObservableSupplier<PriceWelcomeMessageReviewActionProvider>
             mPriceWelcomeMessageReviewActionProviderSupplier = ObservableSuppliers.createNullable();
     private final SettableNullableObservableSupplier<TabListCoordinator>
             mTabListCoordinatorSupplier = ObservableSuppliers.createNullable();
     private final BrowserControlsStateProvider mBrowserControlsStateProvider;
     private final TabContentManager mTabContentManager;
-    private final @TabListMode int mTabListMode;
     private final ViewGroup mRootView;
     private final TabCreator mRegularTabCreator;
     private final BackPressManager mBackPressManager;
@@ -182,15 +184,13 @@ public class TabSwitcherMessageManager {
     /**
      * @param activity The Android activity.
      * @param lifecycleDispatcher The {@link ActivityLifecycleDispatcher} for the activity.
-     * @param currentTabGroupModelFilterSupplier The supplier of the current {@link
-     *     TabGroupModelFilter}.
+     * @param currentTabModelSupplier The supplier of the current {@link TabModel}.
      * @param multiWindowModeStateDispatcher The {@link MultiWindowModeStateDispatcher} to observe
      *     for multi-window related changes.
      * @param snackbarManager The {@link SnackbarManager} for the activity.
      * @param modalDialogManager The {@link ModalDialogManager} for the activity.
      * @param browserControlStateProvider Provides the state of browser controls.
      * @param tabContentManager Serves tab content to UI components.
-     * @param tabListMode The {@link TabListMode} determining how the TabList will be displayed.
      * @param rootView The root {@link ViewGroup} to attach dialogs to.
      * @param regularTabCreator Manages the creation of regular tabs.
      * @param backPressManager Manages the different back press handlers in the app.
@@ -204,13 +204,12 @@ public class TabSwitcherMessageManager {
     public TabSwitcherMessageManager(
             Activity activity,
             ActivityLifecycleDispatcher lifecycleDispatcher,
-            NullableObservableSupplier<TabGroupModelFilter> currentTabGroupModelFilterSupplier,
+            NullableObservableSupplier<TabModel> currentTabModelSupplier,
             MultiWindowModeStateDispatcher multiWindowModeStateDispatcher,
             SnackbarManager snackbarManager,
             ModalDialogManager modalDialogManager,
             BrowserControlsStateProvider browserControlStateProvider,
             TabContentManager tabContentManager,
-            @TabListMode int tabListMode,
             ViewGroup rootView,
             TabCreator regularTabCreator,
             BackPressManager backPressManager,
@@ -221,13 +220,12 @@ public class TabSwitcherMessageManager {
             Supplier<LayoutStateProvider> layoutStateProviderSupplier) {
         mActivity = activity;
         mLifecycleDispatcher = lifecycleDispatcher;
-        mCurrentTabGroupModelFilterSupplier = currentTabGroupModelFilterSupplier;
+        mCurrentTabModelSupplier = currentTabModelSupplier;
         mMultiWindowModeStateDispatcher = multiWindowModeStateDispatcher;
         mSnackbarManager = snackbarManager;
         mModalDialogManager = modalDialogManager;
         mBrowserControlsStateProvider = browserControlStateProvider;
         mTabContentManager = tabContentManager;
-        mTabListMode = tabListMode;
         mRootView = rootView;
         mRegularTabCreator = regularTabCreator;
         mBackPressManager = backPressManager;
@@ -242,8 +240,7 @@ public class TabSwitcherMessageManager {
                 new TabGridIphDialogCoordinator(activity, mModalDialogManager);
 
         mMultiWindowModeStateDispatcher.addObserver(mMultiWindowModeObserver);
-        currentTabGroupModelFilterSupplier.addSyncObserverAndCallIfNonNull(
-                mOnTabGroupModelFilterChanged);
+        currentTabModelSupplier.addSyncObserverAndCallIfNonNull(mOnTabModelChanged);
         mEdgeToEdgeSupplier = edgeToEdgeSupplier;
         mPaneManagerSupplier = paneManagerSupplier;
         mTabGroupUiActionHandlerSupplier = tabGroupUiActionHandlerSupplier;
@@ -311,7 +308,7 @@ public class TabSwitcherMessageManager {
     }
 
     /** Post-native initialization. */
-    public void initWithNative(Profile profile, @TabListMode int mode) {
+    public void initWithNative(Profile profile) {
         assert profile != null;
         mProfile = profile;
 
@@ -321,7 +318,6 @@ public class TabSwitcherMessageManager {
                         ArchivedTabModelOrchestrator.getForProfile(mProfile),
                         mBrowserControlsStateProvider,
                         mTabContentManager,
-                        mTabListMode,
                         mRootView,
                         mSnackbarManager,
                         mRegularTabCreator,
@@ -335,7 +331,7 @@ public class TabSwitcherMessageManager {
                         TabGroupSyncServiceFactory.getForProfile(mProfile),
                         mPaneManagerSupplier,
                         mTabGroupUiActionHandlerSupplier,
-                        mCurrentTabGroupModelFilterSupplier,
+                        mCurrentTabModelSupplier,
                         mLayoutStateProviderSupplier);
         addObserver(mArchivedTabsMessageService);
         mMessageCardProvider.subscribeMessageService(mArchivedTabsMessageService);
@@ -363,7 +359,7 @@ public class TabSwitcherMessageManager {
             mTabGroupSuggestionMessageService =
                     new TabGroupSuggestionMessageService(
                             mActivity,
-                            mCurrentTabGroupModelFilterSupplier,
+                            mCurrentTabModelSupplier,
                             this::addTabGroupSuggestionMessage,
                             this::translateStartMergeAnimation);
             mMessageCardProvider.subscribeMessageService(mTabGroupSuggestionMessageService);
@@ -372,7 +368,7 @@ public class TabSwitcherMessageManager {
                 PriceWelcomeMessageController.build(
                         mActivity,
                         this,
-                        mCurrentTabGroupModelFilterSupplier,
+                        mCurrentTabModelSupplier,
                         mMessageCardProvider,
                         mPriceWelcomeMessageReviewActionProviderSupplier,
                         mProfile,
@@ -417,7 +413,7 @@ public class TabSwitcherMessageManager {
         // Unregister and re-register the TabModelObserver along with
         // TabListCoordinator#resetWithListOfTabs to ensure that the TabList gets observer
         // calls before the TabSwitcherMessageManager.
-        removeTabGroupModelFilterObservers(mCurrentTabGroupModelFilterSupplier.get());
+        removeTabModelObservers(mCurrentTabModelSupplier.get());
         if (mPriceWelcomeMessageController != null) {
             mPriceWelcomeMessageController.invalidate();
         }
@@ -425,7 +421,7 @@ public class TabSwitcherMessageManager {
 
     /** Called after resetting the list of tabs. */
     public void afterReset(int tabCount) {
-        onTabGroupModelFilterChanged(mCurrentTabGroupModelFilterSupplier.get(), null);
+        onTabModelChanged(mCurrentTabModelSupplier.get(), null);
         onAllTabsClosed();
         if (tabCount > 0) {
             appendMessagesTo(tabCount);
@@ -436,8 +432,8 @@ public class TabSwitcherMessageManager {
     @SuppressWarnings("NullAway")
     public void destroy() {
         mMultiWindowModeStateDispatcher.removeObserver(mMultiWindowModeObserver);
-        removeTabGroupModelFilterObservers(mCurrentTabGroupModelFilterSupplier.get());
-        mCurrentTabGroupModelFilterSupplier.removeObserver(mOnTabGroupModelFilterChanged);
+        removeTabModelObservers(mCurrentTabModelSupplier.get());
+        mCurrentTabModelSupplier.removeObserver(mOnTabModelChanged);
         if (mPriceWelcomeMessageController != null) {
             mPriceWelcomeMessageController.destroy();
         }
@@ -548,9 +544,9 @@ public class TabSwitcherMessageManager {
 
         if (scope == MessageCardScope.BOTH) return true;
 
-        TabGroupModelFilter filter = mCurrentTabGroupModelFilterSupplier.get();
-        assumeNonNull(filter);
-        return filter.getTabModel().isIncognito()
+        TabModel tabModel = mCurrentTabModelSupplier.get();
+        assumeNonNull(tabModel);
+        return tabModel.isIncognito()
                 ? scope == MessageCardScope.INCOGNITO
                 : scope == MessageCardScope.REGULAR;
     }
@@ -637,23 +633,28 @@ public class TabSwitcherMessageManager {
         }
     }
 
-    private void onTabGroupModelFilterChanged(
-            @Nullable TabGroupModelFilter newFilter, @Nullable TabGroupModelFilter oldFilter) {
-        removeTabGroupModelFilterObservers(oldFilter);
+    private void onTabModelChanged(@Nullable TabModel newTabModel, @Nullable TabModel oldTabModel) {
+        removeTabModelObservers(oldTabModel);
 
-        if (newFilter != null) {
-            newFilter.addObserver(mTabModelObserver);
+        if (newTabModel != null) {
+            newTabModel.addObserver(mTabModelObserver);
         }
     }
 
-    private void removeTabGroupModelFilterObservers(@Nullable TabGroupModelFilter filter) {
-        if (filter != null) {
-            filter.removeObserver(mTabModelObserver);
+    private void removeTabModelObservers(@Nullable TabModel tabModel) {
+        if (tabModel != null) {
+            tabModel.removeObserver(mTabModelObserver);
         }
+    }
+
+    private boolean shouldShowMessagesInDesktopWindow() {
+        return AppHeaderUtils.isAppInDesktopWindow(mDesktopWindowStateManager)
+                && ChromeFeatureList.sTabSwitcherMessagesOnDesktopWindowingKillSwitch.isEnabled();
     }
 
     private boolean shouldShowMessages() {
-        return !mMultiWindowModeStateDispatcher.isInMultiWindowMode()
+        return (!mMultiWindowModeStateDispatcher.isInMultiWindowMode()
+                        || shouldShowMessagesInDesktopWindow())
                 && mTabListCoordinatorSupplier.get() != null;
     }
 
@@ -697,17 +698,17 @@ public class TabSwitcherMessageManager {
     }
 
     private void removeMessagesIfTabModelEmpty(int numTabsToRemove) {
-        TabGroupModelFilter tabGroupModelFilter = mCurrentTabGroupModelFilterSupplier.get();
-        assumeNonNull(tabGroupModelFilter);
-        if (tabGroupModelFilter.getTabModel().getCount() == numTabsToRemove) {
+        TabModel tabModel = mCurrentTabModelSupplier.get();
+        assumeNonNull(tabModel);
+        if (tabModel.getCount() == numTabsToRemove) {
             onAllTabsClosed();
         }
     }
 
     private Profile getCurrentProfile() {
-        TabGroupModelFilter tabGroupModelFilter = mCurrentTabGroupModelFilterSupplier.get();
-        assumeNonNull(tabGroupModelFilter);
-        return assumeNonNull(tabGroupModelFilter.getTabModel().getProfile());
+        TabModel tabModel = mCurrentTabModelSupplier.get();
+        assumeNonNull(tabModel);
+        return assumeNonNull(tabModel.getProfile());
     }
 
     /** Check to see if a {@link TabListModel} only contains the Archived Message card. */

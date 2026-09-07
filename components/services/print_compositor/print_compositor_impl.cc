@@ -5,7 +5,6 @@
 #include "components/services/print_compositor/print_compositor_impl.h"
 
 #include <algorithm>
-#include <tuple>
 #include <utility>
 
 #include "base/logging.h"
@@ -19,9 +18,7 @@
 #include "components/services/print_compositor/public/cpp/print_service_mojo_types.h"
 #include "content/public/utility/utility_thread.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
-#include "mojo/public/cpp/system/platform_handle.h"
 #include "printing/common/metafile_utils.h"
-#include "printing/mojom/print.mojom.h"
 #include "skia/ext/font_utils.h"
 #include "third_party/blink/public/platform/web_image_generator.h"
 #include "third_party/skia/include/core/SkCanvas.h"
@@ -30,10 +27,10 @@
 #include "third_party/skia/include/core/SkSerialProcs.h"
 #include "third_party/skia/include/docs/SkMultiPictureDocument.h"
 #include "ui/accessibility/ax_tree_update.h"
+#include "ui/gfx/skia_span_util.h"
 
 #if BUILDFLAG(IS_WIN)
 #include "content/public/child/font_integration_init.h"
-#include "printing/backend/win_helper.h"  // nogncheck
 #elif BUILDFLAG(IS_APPLE)
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/skia/include/core/SkFontMgr.h"
@@ -42,8 +39,7 @@
 #endif
 
 #if BUILDFLAG(ENTERPRISE_WATERMARK)
-#include "components/enterprise/watermarking/mojom/watermark.mojom.h"  // nogncheck
-#include "components/enterprise/watermarking/watermark.h"  // nogncheck
+#include "components/services/print_compositor/print_watermark.h"
 #endif
 
 using MojoDiscardableSharedMemoryManager =
@@ -58,14 +54,7 @@ sk_sp<SkDocument> MakeDocument(
     const std::string& title,
     ui::AXTreeUpdate* accessibility_tree,
     mojom::GenerateDocumentOutline generate_document_outline,
-    mojom::PrintCompositor::DocumentType document_type,
     SkWStream& stream) {
-#if BUILDFLAG(IS_WIN)
-  if (document_type == mojom::PrintCompositor::DocumentType::kXPS) {
-    return MakeXpsDocument(&stream);
-  }
-#endif
-  CHECK_EQ(document_type, mojom::PrintCompositor::DocumentType::kPDF);
   return MakePdfDocument(
       creator, title,
       accessibility_tree ? *accessibility_tree : ui::AXTreeUpdate(),
@@ -74,32 +63,13 @@ sk_sp<SkDocument> MakeDocument(
 
 }  // namespace
 
-#if BUILDFLAG(ENTERPRISE_WATERMARK)
+void PrintCompositorImpl::Addon::OnDrawPage(SkCanvas* canvas,
+                                            const SkSize& size) {}
 
-void DrawEnterpriseWatermark(
-    SkCanvas* canvas,
-    SkSize size,
-    const watermark::mojom::WatermarkBlockPtr& watermark_block) {
-  if (!watermark_block) {
-    return;
-  }
-  base::ReadOnlySharedMemoryMapping mapping =
-      watermark_block->serialized_skpicture.Map();
-  if (!mapping.IsValid()) {
-    LOG(ERROR)
-        << "Error serializing the watermark block received from the browser";
-    return;
-  }
-  auto skpicture_span = mapping.GetMemoryAsSpan<uint8_t>();
-  SkMemoryStream stream(skpicture_span.data(), skpicture_span.size());
-  sk_sp<SkPicture> picture = SkPicture::MakeFromStream(&stream);
-
-  enterprise_watermark::DrawWatermark(canvas, picture.get(),
-                                      watermark_block->width,
-                                      watermark_block->height, size);
+base::ReadOnlySharedMemoryRegion PrintCompositorImpl::Addon::OnOverlayPdf(
+    base::ReadOnlySharedMemoryRegion pdf_region) {
+  return pdf_region;
 }
-
-#endif
 
 PrintCompositorImpl::PrintCompositorImpl(
     mojo::PendingReceiver<mojom::PrintCompositor> receiver,
@@ -153,6 +123,11 @@ PrintCompositorImpl::~PrintCompositorImpl() {
 #if BUILDFLAG(IS_WIN)
   content::UninitializeFontIntegration();
 #endif
+}
+
+void PrintCompositorImpl::SetAddonForTesting(std::unique_ptr<Addon> addon) {
+  addon_ = std::move(addon);
+  addon_init_failed_ = false;
 }
 
 void PrintCompositorImpl::NotifyUnavailableSubframe(uint64_t frame_guid) {
@@ -217,34 +192,32 @@ void PrintCompositorImpl::CompositePage(
     mojom::PrintCompositor::CompositePageCallback callback) {
   TRACE_EVENT0("print", "PrintCompositorImpl::CompositePage");
   // This function is always called to composite a page to PDF.
-  HandleCompositionRequest(
-      frame_guid, std::move(serialized_content), subframe_content_map,
-      mojom::PrintCompositor::DocumentType::kPDF, std::move(callback));
+  HandleCompositionRequest(frame_guid, std::move(serialized_content),
+                           subframe_content_map, /*is_pdf=*/false,
+                           std::move(callback));
 }
 
 void PrintCompositorImpl::CompositeDocument(
     uint64_t frame_guid,
     base::ReadOnlySharedMemoryRegion serialized_content,
+    bool is_pdf,
     const ContentToFrameMap& subframe_content_map,
-    mojom::PrintCompositor::DocumentType document_type,
     mojom::PrintCompositor::CompositeDocumentCallback callback) {
   TRACE_EVENT0("print", "PrintCompositorImpl::CompositeDocument");
   CHECK(!doc_info_);
   HandleCompositionRequest(frame_guid, std::move(serialized_content),
-                           subframe_content_map, document_type,
-                           std::move(callback));
+                           subframe_content_map, is_pdf, std::move(callback));
 }
 
 void PrintCompositorImpl::PrepareToCompositeDocument(
-    mojom::PrintCompositor::DocumentType document_type,
     mojom::PrintCompositor::PrepareToCompositeDocumentCallback callback) {
-  CHECK(!doc_info_);
-#if BUILDFLAG(IS_WIN)
-  if (document_type == mojom::PrintCompositor::DocumentType::kXPS) {
-    xps_initializer_ = std::make_unique<ScopedXPSInitializer>();
+  if (addon_init_failed_) {
+    std::move(callback).Run(
+        mojom::PrintCompositor::Status::kContentFormatError);
+    return;
   }
-#endif
-  doc_info_ = std::make_unique<DocumentInfo>(document_type);
+  CHECK(!doc_info_);
+  doc_info_ = std::make_unique<DocumentInfo>();
   std::move(callback).Run(mojom::PrintCompositor::Status::kSuccess);
 }
 
@@ -257,9 +230,9 @@ void PrintCompositorImpl::FinishDocumentComposition(
   doc_info_->callback = std::move(callback);
 
   if (!doc_info_->doc) {
-    doc_info_->doc = MakeDocument(
-        creator_, title_, &accessibility_tree_, generate_document_outline_,
-        doc_info_->document_type, doc_info_->compositor_stream);
+    doc_info_->doc =
+        MakeDocument(creator_, title_, &accessibility_tree_,
+                     generate_document_outline_, doc_info_->compositor_stream);
   }
 
   HandleDocumentCompletionRequest();
@@ -303,7 +276,7 @@ void PrintCompositorImpl::UpdateRequestsWithSubframeInfo(
 
     // Fulfill the request now.
     FulfillRequest(request->serialized_content, request->subframe_content_map,
-                   request->document_type, std::move(request->callback));
+                   std::move(request->callback));
 
     // Check for a collected print preview document that was waiting on
     // this page to finish.
@@ -352,8 +325,19 @@ void PrintCompositorImpl::HandleCompositionRequest(
     uint64_t frame_guid,
     base::ReadOnlySharedMemoryRegion serialized_content,
     const ContentToFrameMap& subframe_content_map,
-    mojom::PrintCompositor::DocumentType document_type,
+    bool is_pdf,
     CompositePagesCallback callback) {
+  if (addon_init_failed_) {
+    std::move(callback).Run(mojom::PrintCompositor::Status::kContentFormatError,
+                            base::ReadOnlySharedMemoryRegion());
+    return;
+  }
+
+  if (is_pdf) {
+    FulfillPdfRequest(std::move(serialized_content), std::move(callback));
+    return;
+  }
+
   base::ReadOnlySharedMemoryMapping mapping = serialized_content.Map();
   if (!mapping.IsValid()) {
     LOG(ERROR) << "HandleCompositionRequest: Cannot map input.";
@@ -371,7 +355,7 @@ void PrintCompositorImpl::HandleCompositionRequest(
     // fail by trying to use a typeface which hasn't been deserialized yet.
     if (requests_.empty()) {
       FulfillRequest(mapping.GetMemoryAsSpan<uint8_t>(), subframe_content_map,
-                     document_type, std::move(callback));
+                     std::move(callback));
       return;
     }
   }
@@ -384,7 +368,7 @@ void PrintCompositorImpl::HandleCompositionRequest(
 
   requests_.push_back(std::make_unique<RequestInfo>(
       mapping.GetMemoryAsSpan<uint8_t>(), subframe_content_map,
-      std::move(pending_subframes), document_type, std::move(callback)));
+      std::move(pending_subframes), std::move(callback)));
 }
 
 void PrintCompositorImpl::HandleDocumentCompletionRequest() {
@@ -400,15 +384,14 @@ void PrintCompositorImpl::HandleDocumentCompletionRequest() {
 mojom::PrintCompositor::Status PrintCompositorImpl::CompositePages(
     base::span<const uint8_t> serialized_content,
     const ContentToFrameMap& subframe_content_map,
-    base::ReadOnlySharedMemoryRegion* region,
-    mojom::PrintCompositor::DocumentType document_type) {
+    base::ReadOnlySharedMemoryRegion* region) {
   TRACE_EVENT0("print", "PrintCompositorImpl::CompositePages");
 
   PictureDeserializationContext subframes =
       GetPictureDeserializationContext(subframe_content_map);
 
   // Read in content and convert it into pdf.
-  SkMemoryStream stream(serialized_content.data(), serialized_content.size());
+  SkMemoryStream stream(gfx::MakeSkDataFromSpanWithoutCopy(serialized_content));
   int page_count = SkMultiPictureDocument::ReadPageCount(&stream);
   if (!page_count) {
     LOG(ERROR) << "CompositePages: No page is read.";
@@ -430,14 +413,14 @@ mojom::PrintCompositor::Status PrintCompositorImpl::CompositePages(
   SkDynamicMemoryWStream wstream;
   sk_sp<SkDocument> doc =
       MakeDocument(creator_, title_, doc_info_ ? nullptr : &accessibility_tree_,
-                   generate_document_outline_, document_type, wstream);
+                   generate_document_outline_, wstream);
 
   if (doc_info_) {
     // Create full document if needed.
     if (!doc_info_->doc) {
-      doc_info_->doc = MakeDocument(
-          creator_, title_, &accessibility_tree_, generate_document_outline_,
-          doc_info_->document_type, doc_info_->compositor_stream);
+      doc_info_->doc = MakeDocument(creator_, title_, &accessibility_tree_,
+                                    generate_document_outline_,
+                                    doc_info_->compositor_stream);
     }
   }
 
@@ -474,8 +457,8 @@ void PrintCompositorImpl::CompositeSubframe(FrameInfo* frame_info) {
       GetPictureDeserializationContext(frame_info->subframe_content_map);
 
   // Composite the entire frame.
-  SkMemoryStream stream(frame_info->serialized_content.data(),
-                        frame_info->serialized_content.size());
+  SkMemoryStream stream(
+      gfx::MakeSkDataFromSpanWithoutCopy(frame_info->serialized_content));
   SkDeserialProcs procs = DeserializationProcs(
       &subframes, &frame_info->typefaces, &frame_info->images);
   frame_info->content = SkPicture::MakeFromStream(&stream, &procs);
@@ -504,21 +487,43 @@ void PrintCompositorImpl::DrawPage(SkDocument* doc,
                                    const SkDocumentPage& page) {
   SkCanvas* canvas = doc->beginPage(page.fSize.width(), page.fSize.height());
   canvas->drawPicture(page.fPicture);
-#if BUILDFLAG(ENTERPRISE_WATERMARK)
-  DrawEnterpriseWatermark(canvas, page.fSize, watermark_block_);
-#endif
+  if (addon_) {
+    addon_->OnDrawPage(canvas, page.fSize);
+  }
   doc->endPage();
 }
 
 void PrintCompositorImpl::FulfillRequest(
     base::span<const uint8_t> serialized_content,
     const ContentToFrameMap& subframe_content_map,
-    mojom::PrintCompositor::DocumentType document_type,
     CompositePagesCallback callback) {
   base::ReadOnlySharedMemoryRegion region;
-  auto status = CompositePages(serialized_content, subframe_content_map,
-                               &region, document_type);
+  auto status =
+      CompositePages(serialized_content, subframe_content_map, &region);
   std::move(callback).Run(status, std::move(region));
+}
+
+void PrintCompositorImpl::FulfillPdfRequest(
+    base::ReadOnlySharedMemoryRegion serialized_content,
+    CompositePagesCallback callback) {
+  // Pass-through case: if no addon is attached, return the PDF content
+  // unmodified with kSuccess.
+  if (!addon_) {
+    std::move(callback).Run(mojom::PrintCompositor::Status::kSuccess,
+                            std::move(serialized_content));
+    return;
+  }
+
+  base::ReadOnlySharedMemoryRegion output_region =
+      addon_->OnOverlayPdf(std::move(serialized_content));
+
+  // If Addon post-processing fails, abort printing with kContentFormatError
+  // rather than silently falling back to unmodified PDF content.
+  mojom::PrintCompositor::Status status =
+      output_region.IsValid() ? mojom::PrintCompositor::Status::kSuccess
+                              : mojom::PrintCompositor::Status::kContentFormatError;
+
+  std::move(callback).Run(status, std::move(output_region));
 }
 
 void PrintCompositorImpl::FinishDocumentRequest(
@@ -555,11 +560,7 @@ PrintCompositorImpl::FrameContentInfo::FrameContentInfo() = default;
 
 PrintCompositorImpl::FrameContentInfo::~FrameContentInfo() = default;
 
-// TODO(crbug.com/40100562) Make use of `document_type` parameter once
-// `MakeXpsDocument()` is available.
-PrintCompositorImpl::DocumentInfo::DocumentInfo(
-    mojom::PrintCompositor::DocumentType document_type)
-    : document_type(document_type) {}
+PrintCompositorImpl::DocumentInfo::DocumentInfo() = default;
 
 PrintCompositorImpl::DocumentInfo::~DocumentInfo() = default;
 
@@ -567,11 +568,9 @@ PrintCompositorImpl::RequestInfo::RequestInfo(
     base::span<const uint8_t> content,
     const ContentToFrameMap& content_info,
     const base::flat_set<uint64_t>& pending_subframes,
-    mojom::PrintCompositor::DocumentType document_type,
     mojom::PrintCompositor::CompositePageCallback callback)
     : FrameContentInfo(content, content_info),
       pending_subframes(pending_subframes),
-      document_type(document_type),
       callback(std::move(callback)) {}
 
 PrintCompositorImpl::RequestInfo::~RequestInfo() = default;
@@ -588,14 +587,17 @@ void PrintCompositorImpl::SetTitle(const std::string& title) {
 #if BUILDFLAG(ENTERPRISE_WATERMARK)
 void PrintCompositorImpl::SetWatermarkBlock(
     watermark::mojom::WatermarkBlockPtr watermark_block) {
-  watermark_block_ = std::move(watermark_block);
+  if (watermark_block) {
+    auto watermark = PrintWatermark::Create(std::move(watermark_block));
+    watermark_for_testing_ = watermark.get();
+    addon_ = std::move(watermark);
+    addon_init_failed_ = !addon_;
+  } else {
+    watermark_for_testing_ = nullptr;
+    addon_.reset();
+    addon_init_failed_ = false;
+  }
 }
-
-const watermark::mojom::WatermarkBlockPtr&
-PrintCompositorImpl::watermark_block_for_testing() const {
-  return watermark_block_;
-}
-
 #endif
 
 }  // namespace printing

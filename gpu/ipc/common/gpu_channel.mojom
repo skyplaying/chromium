@@ -8,7 +8,10 @@ import "gpu/ipc/common/capabilities.mojom";
 import "gpu/ipc/common/constants.mojom";
 import "gpu/ipc/common/context_result.mojom";
 import "gpu/ipc/common/context_type.mojom";
+import "gpu/ipc/common/gpu_feature_info.mojom";
+import "gpu/ipc/common/gpu_info.mojom";
 import "gpu/ipc/common/mailbox.mojom";
+import "gpu/ipc/common/shared_image_capabilities.mojom";
 import "gpu/ipc/common/shared_image_metadata.mojom";
 import "gpu/ipc/common/shared_image_pool_id.mojom";
 import "gpu/ipc/common/shared_image_pool_client_interface.mojom";
@@ -37,13 +40,11 @@ enum SchedulingPriority {
 };
 
 struct RasterCreationAttribs {
-  bool lose_context_when_out_of_memory = false;
 };
 
 struct GLESCreationAttribs {
   gl.mojom.GpuPreference gpu_preference = kLowPower;
   bool fail_if_major_perf_caveat = false;
-  bool lose_context_when_out_of_memory = false;
   ContextType context_type = kOpenGLES2;
 };
 
@@ -102,6 +103,12 @@ interface GpuChannel {
   // Returns a globally unique token which can be used by other interfaces to
   // securely identify this GpuChannel endpoint within the GPU process.
   [Sync] GetChannelToken() => (mojo_base.mojom.UnguessableToken token);
+
+  // Returns the GPU information of the GPU process.
+  [Sync, NoInterrupt] GetGPUInfo() => (
+         gpu.mojom.GpuInfo gpu_info,
+         gpu.mojom.GpuFeatureInfo gpu_feature_info,
+         gpu.mojom.SharedImageCapabilities shared_image_capabilities);
 
   // A simple no-op message used as a fence to ensure all previously sent
   // messages have been received.
@@ -208,6 +215,9 @@ interface GpuChannel {
   CopyNativeGmbToSharedMemoryAsync(gfx.mojom.GpuMemoryBufferHandle
       buffer_handle, mojo_base.mojom.UnsafeSharedMemoryRegion shared_memory)
                      => (bool success);
+
+  // Signals the completion of an asynchronous wait for `sync_tokens`.
+  SignalSyncToken(array<SyncToken> sync_tokens) => ();
 };
 
 // Interface used to issue commands to a specific CommandBuffer instance in the
@@ -241,10 +251,6 @@ interface CommandBuffer {
   SignalQuery(uint32 query, uint32 signal_id);
 };
 
-// Corresponds to gpu::SwapBuffersCompleteParams.
-[Native]
-struct SwapBuffersCompleteParams;
-
 // Interface used by the GPU process to send the client messages from a specific
 // CommandBuffer instance.
 interface CommandBufferClient {
@@ -252,9 +258,6 @@ interface CommandBufferClient {
   // command buffer. These messages are intended to be exposed by
   // developer-facing UI such as the DevTools console.
   OnConsoleMessage(string message);
-
-  // Notifies the client of a GPU switch.
-  OnGpuSwitched();
 
   // Tells the proxy that there was an error and the command buffer had to be
   // destroyed for some reason.

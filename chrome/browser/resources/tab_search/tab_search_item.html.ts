@@ -22,14 +22,16 @@ export function getHtml(this: TabSearchItemElement) {
     <!-- We do not leverage a dom-if element as the element highlighting logic
         may trigger before the stamping has taken place -->
     <svg id="groupSvg" viewBox="-5 -5 10 10" xmlns="http://www.w3.org/2000/svg"
-        display="${this.groupSvgDisplay_()}">
+        display="${this.data.tabGroup ? 'block' : 'none'}">
       <circle id= "groupDot" cx="0" cy="0" r="4">
     </svg>
-    ${this.hasTabGroupWithTitle_() ? html`
+    ${this.data.tabGroup?.title ? html`
       <div id="groupTitle"></div>
       <div class="separator">•</div>
     ` : ''}
-    <div id="secondaryText" ?hidden="${this.hideUrl}"></div>
+    <div id="secondaryText" ?hidden="${this.hideUrl}">
+      <bdi id="secondaryTextInner"></bdi>
+    </div>
     ${!this.hideTimestamp ? html`
       <div class="separator" ?hidden="${!this.data.hostname || this.hideUrl}">•
       </div>
@@ -42,7 +44,7 @@ ${this.isCloseable_() ? html`
     <cr-icon-button id="closeButton" role="${this.getCloseButtonRole_()}"
         aria-label="${this.ariaLabelForButton_()}"
         iron-icon="${this.closeButtonIcon}" ?noink="${!this.buttonRipples_}"
-        no-ripple-on-focus @click="${this.onItemClose_}"
+        no-ripple-on-focus @click="${this.onCloseButtonClick_}"
         title="${this.tooltipForButton_()}"
         @focus="${this.onCloseButtonFocus_}" @blur="${this.onCloseButtonBlur_}">
     </cr-icon-button>

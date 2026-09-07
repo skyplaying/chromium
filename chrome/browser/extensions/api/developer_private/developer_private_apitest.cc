@@ -16,25 +16,33 @@
 #include "chrome/browser/extensions/api/developer_private/developer_private_functions.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
-#include "chrome/browser/extensions/manifest_v2_experiment_manager.h"
-#include "chrome/browser/extensions/mv2_experiment_stage.h"
+#include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/tab_list/tab_list_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/common/chrome_paths.h"
+#include "chrome/common/pref_names.h"
 #include "chrome/test/base/chrome_test_utils.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/service_worker_test_helpers.h"
+#include "content/public/test/test_navigation_observer.h"
 #include "extensions/browser/api_test_utils.h"
 #include "extensions/browser/browsertest_util.h"
 #include "extensions/browser/extension_host_test_helper.h"
+#include "extensions/browser/extension_prefs.h"
+#include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/offscreen_document_host.h"
+#include "extensions/browser/permissions/permissions_updater.h"
 #include "extensions/buildflags/buildflags.h"
+#include "extensions/common/extension_builder.h"
 #include "extensions/common/extension_features.h"
 #include "extensions/common/manifest_handlers/background_info.h"
+#include "extensions/common/mojom/manifest.mojom-shared.h"
 #include "extensions/common/mojom/view_type.mojom.h"
 #include "extensions/test/result_catcher.h"
 #include "extensions/test/test_extension_dir.h"
@@ -48,7 +56,6 @@
 #endif  // BUILDFLAG(ENABLE_PLATFORM_APPS)
 
 #if !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/ui/browser.h"
 #include "ui/views/widget/widget_delegate.h"
 #include "ui/views/window/dialog_delegate.h"
 #endif  // !BUILDFLAG(IS_ANDROID)
@@ -537,149 +544,112 @@ IN_PROC_BROWSER_TEST_F(DeveloperPrivateApiTest, UninstallMultipleExtensions) {
       extension_1_id, ExtensionRegistry::EVERYTHING));
 }
 
-class DeveloperPrivateApiWithMV2DeprecationApiTest
-    : public DeveloperPrivateApiTest,
-      public testing::WithParamInterface<MV2ExperimentStage> {
- public:
-  DeveloperPrivateApiWithMV2DeprecationApiTest() {
-    experiment_stage_ = GetParam();
-
-    std::vector<base::test::FeatureRef> enabled_features;
-    std::vector<base::test::FeatureRef> disabled_features;
-    switch (experiment_stage_) {
-      case MV2ExperimentStage::kWarning:
-        disabled_features.push_back(
-            extensions_features::kExtensionManifestV2Disabled);
-        disabled_features.push_back(
-            extensions_features::kExtensionManifestV2Unsupported);
-        break;
-      case MV2ExperimentStage::kDisableWithReEnable:
-        enabled_features.push_back(
-            extensions_features::kExtensionManifestV2Disabled);
-        disabled_features.push_back(
-            extensions_features::kExtensionManifestV2Unsupported);
-        break;
-      case MV2ExperimentStage::kUnsupported:
-        enabled_features.push_back(
-            extensions_features::kExtensionManifestV2Unsupported);
-        disabled_features.push_back(
-            extensions_features::kExtensionManifestV2Disabled);
-    }
-
-    feature_list_.InitWithFeatures(enabled_features, disabled_features);
-  }
-
-  MV2ExperimentStage experiment_stage() const { return experiment_stage_; }
-
+class DeveloperPrivateApiRateExtensionTest : public DeveloperPrivateApiTest {
  private:
-  base::test::ScopedFeatureList feature_list_;
-  MV2ExperimentStage experiment_stage_;
+  base::test::ScopedFeatureList feature_list_{
+      extensions_features::kCWSReviewPromptingNativeUI};
 };
 
-// Manefiest Version 2 is not allowed in Android.
-#if !BUILDFLAG(IS_ANDROID)
-INSTANTIATE_TEST_SUITE_P(
-    ,
-    DeveloperPrivateApiWithMV2DeprecationApiTest,
-    testing::Values(MV2ExperimentStage::kWarning,
-                    MV2ExperimentStage::kDisableWithReEnable,
-                    MV2ExperimentStage::kUnsupported),
-    [](const testing::TestParamInfo<MV2ExperimentStage>& info) {
-      switch (info.param) {
-        case MV2ExperimentStage::kWarning:
-          return "WarningExperiment";
-        case MV2ExperimentStage::kDisableWithReEnable:
-          return "DisableExperiment";
-        case MV2ExperimentStage::kUnsupported:
-          return "UnsupportedExperiment";
-      }
-    });
+IN_PROC_BROWSER_TEST_F(DeveloperPrivateApiRateExtensionTest,
+                       OpenReviewPage_NavigatesToCWS) {
+  scoped_refptr<const Extension> cws_extension =
+      ExtensionBuilder("CWS Extension")
+          .SetLocation(mojom::ManifestLocation::kInternal)
+          .AddFlags(Extension::FROM_WEBSTORE)
+          .Build();
+  PermissionsUpdater updater(profile());
+  updater.InitializePermissions(cws_extension.get());
+  updater.GrantActivePermissions(cws_extension.get());
+  extension_registrar()->AddExtension(cws_extension.get());
 
-// Tests that an extension's MV2 deprecation notice is marked as deprecated when
-// the function is called and by accepting the dialog, if necessary.
-// Note: we don't test cancelling the dialog since that's done extensively in
-// unit tests.
-IN_PROC_BROWSER_TEST_P(DeveloperPrivateApiWithMV2DeprecationApiTest,
-                       DismissMv2DeprecationNotice) {
-  // Load MV2 extension.
-  static constexpr char kManifest[] =
-      R"({
-           "name": "MV2 extension",
-           "manifest_version": 2,
-           "version": "0.1"
-         })";
-  TestExtensionDir test_dir;
-  test_dir.WriteManifest(kManifest);
-  const Extension* extension = LoadExtension(test_dir.UnpackedPath());
-  ASSERT_TRUE(extension);
+  base::DictValue cws_info_dict;
+  cws_info_dict.Set("is-present", true);
+  cws_info_dict.Set("is-live", true);
+  cws_info_dict.Set("violation-type", 0);
+  ExtensionPrefs::Get(profile())->UpdateExtensionPref(
+      cws_extension->id(), "cws-info", base::Value(std::move(cws_info_dict)));
 
-  // Verify extension is affected by the MV2 deprecation and its notice hasn't
-  // been marked as acknowledged.
-  ManifestV2ExperimentManager* experiment_manager =
-      ManifestV2ExperimentManager::Get(profile());
-  EXPECT_TRUE(experiment_manager->IsExtensionAffected(*extension));
-  EXPECT_FALSE(experiment_manager->DidUserAcknowledgeNotice(extension->id()));
+  content::WebContents* web_contents = GetActiveWebContents();
+  ASSERT_TRUE(web_contents);
 
-  // Create the dismiss notice function.
-  auto dismiss_notice_function = base::MakeRefCounted<
-      api::DeveloperPrivateDismissMv2DeprecationNoticeForExtensionFunction>();
-  std::string args = base::StringPrintf(R"(["%s"])", extension->id().c_str());
+  TabListInterface* tab_list =
+      TabListInterface::From(browser_window_interface());
+  ASSERT_TRUE(tab_list);
+  int initial_tab_count = tab_list->GetTabCount();
 
-  switch (experiment_stage()) {
-    case MV2ExperimentStage::kWarning:
-      api_test_utils::RunFunction(dismiss_notice_function.get(), args,
-                                  profile());
+  GURL expected_url = extensions::util::GetCWSWritingReviewUrl(
+      cws_extension->id(), extensions::util::CWSReviewSource::kExtensionsPage);
 
-      // Extension's notice should be marked as acknowledged.
-      EXPECT_TRUE(experiment_manager->IsExtensionAffected(*extension));
-      EXPECT_TRUE(
-          experiment_manager->DidUserAcknowledgeNotice(extension->id()));
-      break;
+  content::TestNavigationObserver observer(expected_url);
+  observer.StartWatchingNewWebContents();
 
-    case MV2ExperimentStage::kDisableWithReEnable: {
-      // The function will trigger a dialog for this stage. Add a waiter for the
-      // dialog.
-      views::NamedWidgetShownWaiter waiter(views::test::AnyWidgetTestPasskey{},
-                                           "Mv2DeprecationKeepDialog");
-      api_test_utils::SendResponseHelper response_helper(
-          dismiss_notice_function.get());
+  auto function =
+      base::MakeRefCounted<api::DeveloperPrivateOpenReviewPageFunction>();
+  function->SetRenderFrameHost(web_contents->GetPrimaryMainFrame());
 
-      // Add a dispatcher to wait for the response since the function won't
-      // return till the dialog is accepted/canceled.
-      std::unique_ptr<ExtensionFunctionDispatcher> dispatcher(
-          new ExtensionFunctionDispatcher(profile()));
-      dismiss_notice_function->SetDispatcher(dispatcher->AsWeakPtr());
-      dismiss_notice_function->SetArgs(base::test::ParseJsonList(args));
-      dismiss_notice_function->RunWithValidation().Execute();
+  std::string args =
+      base::StringPrintf(R"(["%s"])", cws_extension->id().c_str());
+  EXPECT_TRUE(api_test_utils::RunFunction(function.get(), args, profile()));
 
-      // Wait for the dialog and accept it.
-      auto* widget = waiter.WaitIfNeededAndGet();
-      widget->widget_delegate()->AsDialogDelegate()->AcceptDialog();
-      response_helper.WaitForResponse();
+  observer.Wait();
 
-      // Extension's notice should be marked as acknowledged.
-      EXPECT_TRUE(experiment_manager->IsExtensionAffected(*extension));
-      EXPECT_TRUE(
-          experiment_manager->DidUserAcknowledgeNotice(extension->id()));
-      break;
-    }
+  EXPECT_EQ(initial_tab_count + 1, tab_list->GetTabCount());
+  content::WebContents* new_tab = tab_list->GetActiveTab()->GetContents();
+  EXPECT_NE(web_contents, new_tab);
 
-    case MV2ExperimentStage::kUnsupported: {
-      std::string error = api_test_utils::RunFunctionAndReturnError(
-          dismiss_notice_function.get(), args, profile());
-      EXPECT_EQ(error, base::StringPrintf(
-                           "Cannot dismiss the MV2 deprecation notice for "
-                           "extension with ID '%s' on the unsupported stage.",
-                           extension->id().c_str()));
-
-      // Extension's notice should not be marked as acknowledged.
-      EXPECT_TRUE(experiment_manager->IsExtensionAffected(*extension));
-      EXPECT_FALSE(
-          experiment_manager->DidUserAcknowledgeNotice(extension->id()));
-      break;
-    }
-  }
+  EXPECT_EQ(expected_url, new_tab->GetLastCommittedURL());
 }
-#endif  // !BUILDFLAG(IS_ANDROID)
+
+IN_PROC_BROWSER_TEST_F(DeveloperPrivateApiRateExtensionTest,
+                       OpenReviewPage_IncognitoIneligible) {
+  content::WebContents* incognito_contents =
+      PlatformOpenURLOffTheRecord(profile(), GURL("about:blank"));
+  ASSERT_TRUE(incognito_contents);
+
+  Profile* incognito_profile =
+      Profile::FromBrowserContext(incognito_contents->GetBrowserContext());
+
+  scoped_refptr<const Extension> cws_extension =
+      ExtensionBuilder("CWS Extension")
+          .SetLocation(mojom::ManifestLocation::kInternal)
+          .AddFlags(Extension::FROM_WEBSTORE)
+          .Build();
+  PermissionsUpdater updater(profile());
+  updater.InitializePermissions(cws_extension.get());
+  updater.GrantActivePermissions(cws_extension.get());
+  extension_registrar()->AddExtension(cws_extension.get());
+
+  auto function =
+      base::MakeRefCounted<api::DeveloperPrivateOpenReviewPageFunction>();
+  function->SetRenderFrameHost(incognito_contents->GetPrimaryMainFrame());
+
+  std::string args =
+      base::StringPrintf(R"(["%s"])", cws_extension->id().c_str());
+  std::string error = api_test_utils::RunFunctionAndReturnError(
+      function.get(), args, incognito_profile);
+  EXPECT_EQ("The extension is ineligible for review prompts.", error);
+}
+
+IN_PROC_BROWSER_TEST_F(DeveloperPrivateApiRateExtensionTest,
+                       ExtensionsUI_CwsReviewPromptingEnabled) {
+  static constexpr char kScript[] =
+      "import('chrome://resources/js/load_time_data.js').then(m => "
+      "m.loadTimeData.getBoolean('cwsReviewPromptingEnabled'))";
+
+  content::WebContents* web_contents = GetActiveWebContents();
+  ASSERT_TRUE(web_contents);
+
+  // 1. Regular profile with policy allowed: cwsReviewPromptingEnabled is true.
+  ASSERT_TRUE(
+      content::NavigateToURL(web_contents, GURL("chrome://extensions")));
+  EXPECT_EQ(true, content::EvalJs(web_contents, kScript));
+
+  // 2. Enterprise policy disabled: cwsReviewPromptingEnabled is false.
+  profile()->GetPrefs()->SetBoolean(prefs::kExtensionReviewPromptsAllowed,
+                                    false);
+  ASSERT_TRUE(
+      content::NavigateToURL(web_contents, GURL("chrome://extensions")));
+  EXPECT_EQ(false, content::EvalJs(web_contents, kScript));
+}
 
 }  // namespace extensions

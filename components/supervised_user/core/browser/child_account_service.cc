@@ -14,6 +14,7 @@
 #include "base/no_destructor.h"
 #include "base/values.h"
 #include "build/build_config.h"
+#include "components/prefs/pref_change_registrar.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/account_info.h"
@@ -21,7 +22,6 @@
 #include "components/signin/public/identity_manager/tribool.h"
 #include "components/supervised_user/core/browser/family_link_settings_service.h"
 #include "components/supervised_user/core/browser/family_link_user_capabilities.h"
-#include "components/supervised_user/core/browser/list_family_members_service.h"
 #include "components/supervised_user/core/browser/proto/families_common.pb.h"
 #include "components/supervised_user/core/browser/proto_fetcher.h"
 #include "components/supervised_user/core/browser/supervised_user_preferences.h"
@@ -39,27 +39,27 @@ using ::base::BindRepeating;
 ChildAccountService::ChildAccountService(
     PrefService& user_prefs,
     signin::IdentityManager* identity_manager,
-    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-    base::OnceCallback<void(bool)> check_user_child_status_callback,
-    ListFamilyMembersService& list_family_members_service)
+    FamilyLinkSettingsService& family_link_settings_service,
+    base::OnceCallback<void(bool)> check_user_child_status_callback)
     : identity_manager_(identity_manager),
+      family_link_settings_service_(family_link_settings_service),
       user_prefs_(user_prefs),
-      url_loader_factory_(url_loader_factory),
       check_user_child_status_callback_(
           std::move(check_user_child_status_callback)) {
-  set_custodian_prefs_subscription_ =
-      list_family_members_service.SubscribeToSuccessfulFetches(BindRepeating(
-          &RegisterFamilyPrefs,
-          std::ref(user_prefs)));  // list_family_members_service is
-                                   // an instance of a keyed service
-                                   // and PrefService outlives it.
+  // Takes care of initializing the family link settings service from storage.
+  pref_change_registrar_.Init(&user_prefs);
+  pref_change_registrar_.Add(
+      prefs::kSupervisedUserId,
+      BindRepeating(&ChildAccountService::OnSupervisionStatusChanged,
+                    base::Unretained(this)));
+  OnSupervisionStatusChanged();
+
+  identity_manager_observer_.Observe(identity_manager);
 }
 
 ChildAccountService::~ChildAccountService() = default;
 
 void ChildAccountService::Init() {
-  identity_manager_->AddObserver(this);
-
   std::move(check_user_child_status_callback_)
       .Run(supervised_user::IsSubjectToParentalControls(user_prefs_.get()));
 
@@ -76,7 +76,7 @@ void ChildAccountService::Init() {
 }
 
 void ChildAccountService::Shutdown() {
-  identity_manager_->RemoveObserver(this);
+  identity_manager_observer_.Reset();
 }
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -106,9 +106,9 @@ ChildAccountService::AuthState ChildAccountService::GetGoogleAuthState() const {
   bool primary_account_has_cookie =
       accounts_in_cookie_jar_info.AreAccountsFresh() &&
       std::ranges::any_of(
-          accounts_in_cookie_jar_info.GetPotentiallyInvalidSignedInAccounts(),
+          accounts_in_cookie_jar_info.GetValidSignedInAccounts(),
           [primary_account_id](const gaia::ListedAccount& account) {
-            return account.id == primary_account_id && account.valid;
+            return account.id == primary_account_id;
           });
   bool primary_account_has_token =
       !identity_manager_->HasAccountWithRefreshTokenInPersistentErrorState(
@@ -148,6 +148,15 @@ void ChildAccountService::SetSupervisionStatusAndNotifyObservers(
     std::move(callback).Run();
   }
   status_received_callback_list_.clear();
+
+  // It's possible the supervision status change is caused by sign-in /
+  // sign-out event, which would also update the Google auth state.
+  OnAuthStateUpdated();
+}
+
+void ChildAccountService::OnSupervisionStatusChanged() {
+  family_link_settings_service_->SetActive(
+      IsSubjectToParentalControls(user_prefs_.get()));
 }
 
 void ChildAccountService::OnPrimaryAccountChanged(
@@ -197,13 +206,12 @@ void ChildAccountService::OnExtendedAccountInfoUpdated(
   // This class doesn't care about browser sync consent.
   CoreAccountId auth_account_id =
       identity_manager_->GetPrimaryAccountId(signin::ConsentLevel::kSignin);
-  if (info.account_id != auth_account_id) {
+  if (info.GetAccountId() != auth_account_id) {
     return;
   }
 
   SetSupervisionStatusAndNotifyObservers(info.IsChildAccount() ==
                                          signin::Tribool::kTrue);
-  OnAuthStateUpdated();
 }
 
 void ChildAccountService::OnRefreshTokenUpdatedForAccount(

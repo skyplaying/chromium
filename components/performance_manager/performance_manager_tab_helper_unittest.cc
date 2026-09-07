@@ -142,7 +142,7 @@ void PerformanceManagerTabHelperTest::CheckGraphTopology(
   EXPECT_EQ(4u, GraphOperations::GetFrameNodes(page).size());
   ASSERT_EQ(1u, page->GetMainFrameNodes().size());
 
-  auto* main_frame = page->GetMainFrameNode();
+  auto* main_frame = page->GetPrimaryMainFrameNode();
   EXPECT_EQ(kParentUrl, main_frame->GetURL().spec());
   EXPECT_EQ(2u, main_frame->GetChildFrameNodes().size());
 
@@ -370,6 +370,12 @@ TEST_P(PerformanceManagerTabHelperTest, GetFrameNode) {
 
 TEST_P(PerformanceManagerTabHelperTest,
        NotificationsFromInactiveFrameTreeAreIgnored) {
+  // When this feature is enabled, PerformanceManagerTabHelper does not ignore
+  // the first favicon/title update.
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      features::kUseLoadingStateToDetectBackgroundTitleOrFaviconUpdate);
+
   SetContents(CreateTestWebContents());
 
   content::NavigationSimulator::NavigateAndCommitFromBrowser(web_contents(),
@@ -392,21 +398,20 @@ TEST_P(PerformanceManagerTabHelperTest,
       PerformanceManagerTabHelper::FromWebContents(web_contents());
   ASSERT_TRUE(tab_helper);
 
-  // The first favicon change is always ignored, call DidUpdateFaviconURL twice
-  // to ensure that the test doesn't pass simply because of that.
-  tab_helper->DidUpdateFaviconURL(first_nav_main_rfh, {});
-  tab_helper->DidUpdateFaviconURL(first_nav_main_rfh, {});
+  tab_helper->DidUpdateFaviconURL(
+      first_nav_main_rfh, {},
+      blink::mojom::FaviconUpdateReason::kLinkElementChange);
 
   // The observer shouldn't have been called at this point.
   testing::Mock::VerifyAndClear(&observer);
   // Set the expectation for the next check.
-  EXPECT_CALL(observer, OnFaviconUpdated(::testing::_));
+  EXPECT_CALL(observer, OnFaviconUpdated(::testing::_, ::testing::_));
 
   // Sanity check to ensure that notification sent to the active main frame are
-  // forwarded. DidUpdateFaviconURL needs to be called twice as the first
-  // favicon change is always ignored.
-  tab_helper->DidUpdateFaviconURL(web_contents()->GetPrimaryMainFrame(), {});
-  tab_helper->DidUpdateFaviconURL(web_contents()->GetPrimaryMainFrame(), {});
+  // forwarded.
+  tab_helper->DidUpdateFaviconURL(
+      web_contents()->GetPrimaryMainFrame(), {},
+      blink::mojom::FaviconUpdateReason::kLinkElementChange);
 
   testing::Mock::VerifyAndClear(&observer);
   graph->RemovePageNodeObserver(&observer);

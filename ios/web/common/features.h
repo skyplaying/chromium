@@ -106,9 +106,6 @@ bool IsFullscreenScrollThresholdEnabled();
 // When true, an option to enable Web Inspector should be present in Settings.
 bool IsWebInspectorSupportEnabled();
 
-// Returns whether the TabHelpers should only be created for realized WebStates.
-bool CreateTabHelperOnlyForRealizedWebStates();
-
 // TODO(crbug.com/449156290): Clean up the kill switch for updating SSL status
 // on navigation item creation.
 // When enabled, trigger an update of the SSL status on navigation item
@@ -116,14 +113,46 @@ bool CreateTabHelperOnlyForRealizedWebStates();
 BASE_DECLARE_FEATURE(kUpdateSSLStatusOnNavigationItemLazyCreation);
 
 // Feature flag to enable BEContextMenuConfiguration.
+// This is used as a kill switch and should not be removed.
 BASE_DECLARE_FEATURE(kEnableBEContextMenuConfiguration);
 
 // Feature flag to enable a fix for a crash in
 // DownloadTaskImpl::GenerateFileName.
 BASE_DECLARE_FEATURE(kIOSDownloadSanitizeFilename);
 
-// Feature flag to enable the timeout in the context menu run loop.
-BASE_DECLARE_FEATURE(kEnableContextMenuTimeout);
+// TODO(crbug.com/487947859): Clean up the kill switch once confirmed this is
+// not causing regressions.
+// When enabled, NetErrorFromError searches the entire NSError chain for the
+// first translatable error code. This ensures accurate error mapping on iOS
+// 26.4+, where specific network failures are often nested within generic
+// container errors. When disabled, it only attempts to translate the final
+// underlying error in the chain, which was the pre-existing behavior.
+BASE_DECLARE_FEATURE(kNetErrorFromErrorChainKillSwitch);
+
+// Feature flag to enable Cobalt on iOS.
+BASE_DECLARE_FEATURE(kIOSCobalt);
+// Feature flag to enable the developer mode of Cobalt on iOS.
+BASE_DECLARE_FEATURE(kIOSCobaltDeveloperMode);
+
+// Returns whether Cobalt is enabled on iOS.
+bool IsCobaltEnabled();
+// Returns whether the developer mode of Cobalt is enabled on iOS.
+bool IsCobaltDeveloperModeEnabled();
+
+// Feature flag to enable the workaround for SecTrust evaluation inconsistency.
+// TODO(crbug.com/485184282): Remove this flag once it's confirmed that the
+// workaround is working as intended.
+BASE_DECLARE_FEATURE(kCertVerificationWorkaroundKillSwitch);
+
+// Feature flag to enable logging the time it takes to convert a WKScriptMessage
+// object into a web::ScriptMessage object.
+BASE_DECLARE_FEATURE(kIOSScriptMessageConversionDurationLogging);
+
+// Feature flag to enable the isolated world parent-child frame tree handshake.
+BASE_DECLARE_FEATURE(kWebFrameTree);
+
+// Enables the new geolocation permission delegate feature.
+BASE_DECLARE_FEATURE(kNewGeolocationPermissionDelegate);
 
 }  // namespace web::features
 

@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "media/capture/video/video_capture_device_client.h"
 
 #include <algorithm>
@@ -15,6 +10,7 @@
 #include <utility>
 
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
@@ -68,26 +64,41 @@ libyuv::RotationMode TranslateRotation(int rotation_degrees) {
   return rotation_mode;
 }
 
-void GetI420BufferAccess(
-    const media::VideoCaptureDevice::Client::Buffer& buffer,
-    const gfx::Size& dimensions,
-    uint8_t** y_plane_data,
-    uint8_t** u_plane_data,
-    uint8_t** v_plane_data,
-    int* y_plane_stride,
-    int* uv_plane_stride) {
-  *y_plane_data =
-      buffer.handle_provider->GetHandleForInProcessAccess()->data().data();
-  *u_plane_data = *y_plane_data + media::VideoFrame::PlaneSize(
-                                      media::PIXEL_FORMAT_I420,
-                                      media::VideoFrame::Plane::kY, dimensions)
-                                      .GetArea();
-  *v_plane_data = *u_plane_data + media::VideoFrame::PlaneSize(
-                                      media::PIXEL_FORMAT_I420,
-                                      media::VideoFrame::Plane::kU, dimensions)
-                                      .GetArea();
-  *y_plane_stride = dimensions.width();
-  *uv_plane_stride = *y_plane_stride / 2;
+struct I420BufferAccess {
+  raw_ptr<uint8_t> y_plane_data = nullptr;
+  raw_ptr<uint8_t> u_plane_data = nullptr;
+  raw_ptr<uint8_t> v_plane_data = nullptr;
+  int y_plane_stride = 0;
+  int uv_plane_stride = 0;
+};
+
+I420BufferAccess GetI420BufferAccess(base::span<uint8_t> data,
+                                     const gfx::Size& dimensions) {
+  const size_t y_plane_size =
+      media::VideoFrame::PlaneSize(media::PIXEL_FORMAT_I420,
+                                   media::VideoFrame::Plane::kY, dimensions)
+          .GetArea();
+  const size_t u_plane_size =
+      media::VideoFrame::PlaneSize(media::PIXEL_FORMAT_I420,
+                                   media::VideoFrame::Plane::kU, dimensions)
+          .GetArea();
+  const size_t v_plane_size =
+      media::VideoFrame::PlaneSize(media::PIXEL_FORMAT_I420,
+                                   media::VideoFrame::Plane::kV, dimensions)
+          .GetArea();
+
+  auto [y_plane, uv_data] = data.split_at(y_plane_size);
+  auto [u_plane, v_plane] = uv_data.split_at(u_plane_size);
+  CHECK_GE(v_plane.size(), v_plane_size);
+
+  const int y_plane_stride = dimensions.width();
+  return {
+      .y_plane_data = y_plane.data(),
+      .u_plane_data = u_plane.data(),
+      .v_plane_data = v_plane.data(),
+      .y_plane_stride = y_plane_stride,
+      .uv_plane_stride = y_plane_stride / 2,
+  };
 }
 
 gfx::ColorSpace OverrideColorSpaceForLibYuvConversion(
@@ -234,6 +245,7 @@ mojom::VideoFrameInfoPtr CreateNewVideoFrameInfo(
     const VideoCaptureFormat& format,
     const std::optional<VideoFrameMetadata>& current_metadata,
     const gfx::Rect& visible_rect,
+    const gfx::Size& natural_size,
     bool is_premapped,
     const gfx::ColorSpace& color_space) {
   VideoFrameMetadata metadata = current_metadata.value_or(VideoFrameMetadata{});
@@ -246,7 +258,7 @@ mojom::VideoFrameInfoPtr CreateNewVideoFrameInfo(
 
   return mojom::VideoFrameInfo::New(
       timestamp, metadata, format.pixel_format, format.frame_size, visible_rect,
-      is_premapped, color_space, mojom::PlaneStridesPtr{});
+      natural_size, is_premapped, color_space, mojom::PlaneStridesPtr{});
 }
 
 class ScopedAccessPermissionEndWithCallback
@@ -339,8 +351,7 @@ void VideoCaptureDeviceClient::OnCaptureConfigurationChanged() {
 }
 
 void VideoCaptureDeviceClient::OnIncomingCapturedData(
-    const uint8_t* data,
-    int length,
+    base::span<const uint8_t> data,
     const VideoCaptureFormat& format,
     const gfx::ColorSpace& data_color_space,
     int rotation,
@@ -354,11 +365,15 @@ void VideoCaptureDeviceClient::OnIncomingCapturedData(
   TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("video_and_image_capture"),
                "VideoCaptureDeviceClient::OnIncomingCapturedData");
 
-  // The input |length| can be greater than the required buffer size because of
-  // paddings and/or alignments, but it cannot be smaller.
-  CHECK_GE(static_cast<size_t>(length),
-           media::VideoFrame::AllocationSize(format.pixel_format,
-                                             format.frame_size));
+  if (base::FeatureList::IsEnabled(media::kWebRTCLogColorSpace)) {
+    LOG(ERROR) << "OnIncommingCapturedData: color_space = "
+               << data_color_space.ToString();
+  }
+
+  // The input `data.size()` can be greater than the required buffer size
+  // because of paddings and/or alignments, but it cannot be smaller.
+  CHECK_GE(data.size(), media::VideoFrame::AllocationSize(format.pixel_format,
+                                                          format.frame_size));
 
   if (last_captured_pixel_format_ != format.pixel_format) {
     OnLog("Pixel format: " + VideoPixelFormatToString(format.pixel_format));
@@ -382,9 +397,9 @@ void VideoCaptureDeviceClient::OnIncomingCapturedData(
   }
 
   if (format.pixel_format == PIXEL_FORMAT_Y16) {
-    return OnIncomingCapturedY16Data(data, length, format, reference_time,
-                                     timestamp, capture_begin_timestamp,
-                                     metadata, frame_feedback_id);
+    return OnIncomingCapturedY16Data(
+        data, format, data_color_space, reference_time, timestamp,
+        capture_begin_timestamp, metadata, frame_feedback_id);
   }
 
   // |new_unrotated_{width,height}| are the dimensions of the output buffer that
@@ -418,12 +433,9 @@ void VideoCaptureDeviceClient::OnIncomingCapturedData(
   const auto [fourcc_format, flip] =
       GetFourccAndFlipFromPixelFormat(format, flip_y);
 
-  uint8_t* y_plane_data;
-  uint8_t* u_plane_data;
-  uint8_t* v_plane_data;
-  int yplane_stride, uv_plane_stride;
-  GetI420BufferAccess(buffer, dimensions, &y_plane_data, &u_plane_data,
-                      &v_plane_data, &yplane_stride, &uv_plane_stride);
+  auto buffer_access = buffer.handle_provider->GetHandleForInProcessAccess();
+  const auto i420_buffer =
+      GetI420BufferAccess(buffer_access->data(), dimensions);
 
   const gfx::ColorSpace color_space = OverrideColorSpaceForLibYuvConversion(
       data_color_space, format.pixel_format);
@@ -439,8 +451,9 @@ void VideoCaptureDeviceClient::OnIncomingCapturedData(
                !flip) {
       if (on_started_using_gpu_cb_)
         std::move(on_started_using_gpu_cb_).Run();
-      external_jpeg_decoder_->DecodeCapturedData(
-          data, length, format, reference_time, timestamp, std::move(buffer));
+      external_jpeg_decoder_->DecodeCapturedData(data.data(), data.size(),
+                                                 format, reference_time,
+                                                 timestamp, std::move(buffer));
       return;
     }
   }
@@ -448,8 +461,10 @@ void VideoCaptureDeviceClient::OnIncomingCapturedData(
 
   // libyuv::ConvertToI420 uses Rec601 to convert RGB to YUV.
   if (libyuv::ConvertToI420(
-          data, length, y_plane_data, yplane_stride, u_plane_data,
-          uv_plane_stride, v_plane_data, uv_plane_stride, /*crop_x=*/0,
+          data.data(), data.size(), i420_buffer.y_plane_data,
+          i420_buffer.y_plane_stride, i420_buffer.u_plane_data,
+          i420_buffer.uv_plane_stride, i420_buffer.v_plane_data,
+          i420_buffer.uv_plane_stride, /*crop_x=*/0,
           /*crop_y=*/0, format.frame_size.width(),
           (flip ? -1 : 1) * format.frame_size.height(), new_unrotated_width,
           new_unrotated_height, rotation_mode, fourcc_format) != 0) {
@@ -474,11 +489,17 @@ void VideoCaptureDeviceClient::OnIncomingCapturedImage(
     base::TimeTicks reference_time,
     base::TimeDelta timestamp,
     std::optional<base::TimeTicks> capture_begin_timestamp,
+    const gfx::Size& natural_size,
     const std::optional<VideoFrameMetadata>& metadata,
     int frame_feedback_id) {
   DFAKE_SCOPED_RECURSIVE_LOCK(call_from_producer_);
   TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("video_and_image_capture"),
                "VideoCaptureDeviceClient::OnIncomingCapturedImage");
+
+  if (base::FeatureList::IsEnabled(media::kWebRTCLogColorSpace)) {
+    LOG(ERROR) << "OnIncomingCapturedImage: color_space = "
+               << shared_image->color_space().ToString();
+  }
 
   if (last_captured_pixel_format_ != frame_format.pixel_format) {
     OnLog("Pixel format: " +
@@ -497,7 +518,18 @@ void VideoCaptureDeviceClient::OnIncomingCapturedImage(
     OnIncomingCapturedImageZeroCopy(std::move(shared_image), frame_format,
                                     clockwise_rotation, reference_time,
                                     timestamp, capture_begin_timestamp,
-                                    metadata, frame_feedback_id);
+                                    natural_size, metadata, frame_feedback_id);
+    return;
+  }
+#elif BUILDFLAG(IS_WIN)
+  if (shared_image->usage().Has(gpu::SHARED_IMAGE_USAGE_SCANOUT)) {
+    // On Windows, shared images backed by DXGI textures (e.g. from WGC texture
+    // capture) cannot be CPU-mapped. Use the zero-copy path to pass the GPU
+    // texture directly to downstream consumers (e.g. video encoder).
+    OnIncomingCapturedImageZeroCopy(std::move(shared_image), frame_format,
+                                    clockwise_rotation, reference_time,
+                                    timestamp, capture_begin_timestamp,
+                                    natural_size, metadata, frame_feedback_id);
     return;
   }
 #endif
@@ -522,12 +554,14 @@ void VideoCaptureDeviceClient::OnIncomingCapturedImage(
     return;
   }
 
-  uint8_t* y_plane_data;
-  uint8_t* u_plane_data;
-  uint8_t* v_plane_data;
-  int y_plane_stride, uv_plane_stride;
-  GetI420BufferAccess(output_buffer, dimensions, &y_plane_data, &u_plane_data,
-                      &v_plane_data, &y_plane_stride, &uv_plane_stride);
+  if (base::FeatureList::IsEnabled(media::kWebRTCLogColorSpace)) {
+    LOG(ERROR) << "Dropping color space because shared image is copied to YUV";
+  }
+
+  auto buffer_access =
+      output_buffer.handle_provider->GetHandleForInProcessAccess();
+  const auto i420_buffer =
+      GetI420BufferAccess(buffer_access->data(), dimensions);
 
   auto scoped_mapping = shared_image->Map();
   if (!scoped_mapping) {
@@ -544,10 +578,11 @@ void VideoCaptureDeviceClient::OnIncomingCapturedImage(
           scoped_mapping->GetMemoryForPlane(0).data(),
           scoped_mapping->Stride(0),
           scoped_mapping->GetMemoryForPlane(1).data(),
-          scoped_mapping->Stride(1), y_plane_data, y_plane_stride, u_plane_data,
-          uv_plane_stride, v_plane_data, uv_plane_stride,
-          scoped_mapping->Size().width(), scoped_mapping->Size().height(),
-          rotation_mode);
+          scoped_mapping->Stride(1), i420_buffer.y_plane_data,
+          i420_buffer.y_plane_stride, i420_buffer.u_plane_data,
+          i420_buffer.uv_plane_stride, i420_buffer.v_plane_data,
+          i420_buffer.uv_plane_stride, scoped_mapping->Size().width(),
+          scoped_mapping->Size().height(), rotation_mode);
       break;
 
     default:
@@ -564,9 +599,10 @@ void VideoCaptureDeviceClient::OnIncomingCapturedImage(
 
   const VideoCaptureFormat output_format = VideoCaptureFormat(
       dimensions, frame_format.frame_rate, PIXEL_FORMAT_I420);
-  OnIncomingCapturedBuffer(std::move(output_buffer), output_format,
-                           reference_time, timestamp, capture_begin_timestamp,
-                           metadata);
+  OnIncomingCapturedBufferExt(std::move(output_buffer), output_format,
+                              shared_image->color_space(), reference_time,
+                              timestamp, capture_begin_timestamp,
+                              gfx::Rect(dimensions), metadata);
 }
 
 void VideoCaptureDeviceClient::OnIncomingCapturedImageZeroCopy(
@@ -576,11 +612,18 @@ void VideoCaptureDeviceClient::OnIncomingCapturedImageZeroCopy(
     base::TimeTicks reference_time,
     base::TimeDelta timestamp,
     std::optional<base::TimeTicks> capture_begin_timestamp,
+    const gfx::Size& natural_size,
     const std::optional<VideoFrameMetadata>& metadata,
     int frame_feedback_id) {
   gfx::ColorSpace color_space = shared_image->color_space();
+  gfx::Rect visible_rect(shared_image->size());
   CapturedExternalVideoBuffer buffer = CapturedExternalVideoBuffer(
       std::move(shared_image), frame_format, color_space);
+
+  if (base::FeatureList::IsEnabled(media::kWebRTCLogColorSpace)) {
+    LOG(ERROR) << "OnIncomingCapturedImageZeroCopy: color_space = "
+               << color_space.ToString();
+  }
 
   VideoFrameMetadata new_metadata = metadata.value_or(VideoFrameMetadata());
   media::VideoRotation video_rotation = media::VIDEO_ROTATION_0;
@@ -600,11 +643,10 @@ void VideoCaptureDeviceClient::OnIncomingCapturedImageZeroCopy(
   }
   new_metadata.transformation = media::VideoTransformation(video_rotation);
 
-  const gfx::Size buffer_size = buffer.client_shared_image->size();
   ReadyFrameInBuffer ready_frame;
   if (CreateReadyFrameFromExternalBuffer(
           std::move(buffer), reference_time, timestamp, capture_begin_timestamp,
-          gfx::Rect(buffer_size), new_metadata,
+          visible_rect, natural_size, new_metadata,
           &ready_frame) != ReserveResult::kSucceeded) {
     DVLOG(2) << __func__
              << " CreateReadyFrameFromExternalBuffer failed: reservation "
@@ -620,6 +662,7 @@ void VideoCaptureDeviceClient::OnIncomingCapturedExternalBuffer(
     base::TimeDelta timestamp,
     std::optional<base::TimeTicks> capture_begin_timestamp,
     const gfx::Rect& visible_rect,
+    const gfx::Size& natural_size,
     const std::optional<VideoFrameMetadata>& metadata) {
   DFAKE_SCOPED_RECURSIVE_LOCK(call_from_producer_);
   TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("video_and_image_capture"),
@@ -628,7 +671,8 @@ void VideoCaptureDeviceClient::OnIncomingCapturedExternalBuffer(
   ReadyFrameInBuffer ready_frame;
   if (CreateReadyFrameFromExternalBuffer(
           std::move(buffer), reference_time, timestamp, capture_begin_timestamp,
-          visible_rect, metadata, &ready_frame) != ReserveResult::kSucceeded) {
+          visible_rect, natural_size, metadata,
+          &ready_frame) != ReserveResult::kSucceeded) {
     DVLOG(2) << __func__
              << " CreateReadyFrameFromExternalBuffer failed: reservation "
                 "tracker failed.";
@@ -644,6 +688,7 @@ VideoCaptureDeviceClient::CreateReadyFrameFromExternalBuffer(
     base::TimeDelta timestamp,
     std::optional<base::TimeTicks> capture_begin_timestamp,
     const gfx::Rect& visible_rect,
+    const gfx::Size& natural_size,
     const std::optional<VideoFrameMetadata>& metadata,
     ReadyFrameInBuffer* ready_buffer) {
   // Reserve an ID for this buffer that will not conflict with any of the IDs
@@ -693,7 +738,13 @@ VideoCaptureDeviceClient::CreateReadyFrameFromExternalBuffer(
   // of this method.
   mojom::VideoFrameInfoPtr info = CreateNewVideoFrameInfo(
       reference_time, timestamp, capture_begin_timestamp, buffer.format,
-      metadata, visible_rect, /*is_premapped=*/false, buffer.color_space);
+      metadata, visible_rect, natural_size, /*is_premapped=*/false,
+      buffer.color_space);
+
+  if (base::FeatureList::IsEnabled(media::kWebRTCLogColorSpace)) {
+    LOG(ERROR) << "CreateReadyFrameFromExternalBuffer: color_space = "
+               << buffer.color_space.ToString();
+  }
 
   buffer_pool_->HoldForConsumers(buffer_id, 1);
   buffer_pool_->RelinquishProducerReservation(buffer_id);
@@ -764,20 +815,6 @@ VideoCaptureDeviceClient::ReserveOutputBuffer(const gfx::Size& frame_size,
   return ReserveResult::kSucceeded;
 }
 
-void VideoCaptureDeviceClient::OnIncomingCapturedBuffer(
-    Buffer buffer,
-    const VideoCaptureFormat& format,
-    base::TimeTicks reference_time,
-    base::TimeDelta timestamp,
-    std::optional<base::TimeTicks> capture_begin_timestamp,
-    const std::optional<VideoFrameMetadata>& metadata) {
-  DFAKE_SCOPED_RECURSIVE_LOCK(call_from_producer_);
-
-  OnIncomingCapturedBufferExt(
-      std::move(buffer), format, gfx::ColorSpace(), reference_time, timestamp,
-      capture_begin_timestamp, gfx::Rect(format.frame_size), metadata);
-}
-
 void VideoCaptureDeviceClient::OnIncomingCapturedBufferExt(
     Buffer buffer,
     const VideoCaptureFormat& format,
@@ -791,6 +828,11 @@ void VideoCaptureDeviceClient::OnIncomingCapturedBufferExt(
   TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("video_and_image_capture"),
                "VideoCaptureDeviceClient::OnIncomingCapturedBufferExt");
 
+  if (base::FeatureList::IsEnabled(media::kWebRTCLogColorSpace)) {
+    LOG(ERROR) << "OnIncomingCapturedBufferExt: color_space = "
+               << color_space.ToString();
+  }
+
   auto metadata = additional_metadata.value_or(VideoFrameMetadata{});
   if (auto fake_toggle_period = GetFakeBackgroundBlurTogglePeriodMillis()) {
     metadata.background_blur = media::EffectInfo{
@@ -800,7 +842,7 @@ void VideoCaptureDeviceClient::OnIncomingCapturedBufferExt(
 
   mojom::VideoFrameInfoPtr info = CreateNewVideoFrameInfo(
       reference_time, timestamp, capture_begin_timestamp, format, metadata,
-      visible_rect, buffer.is_premapped, color_space);
+      visible_rect, visible_rect.size(), buffer.is_premapped, color_space);
 
   buffer_pool_->HoldForConsumers(buffer.id, 1);
   receiver_->OnFrameReadyInBuffer(ReadyFrameInBuffer(
@@ -845,9 +887,9 @@ void VideoCaptureDeviceClient::OnStarted() {
 }
 
 void VideoCaptureDeviceClient::OnIncomingCapturedY16Data(
-    const uint8_t* data,
-    int length,
+    base::span<const uint8_t> data,
     const VideoCaptureFormat& format,
+    const gfx::ColorSpace& color_space,
     base::TimeTicks reference_time,
     base::TimeDelta timestamp,
     std::optional<base::TimeTicks> capture_begin_timestamp,
@@ -857,11 +899,10 @@ void VideoCaptureDeviceClient::OnIncomingCapturedY16Data(
   const auto reservation_result_code = ReserveOutputBuffer(
       format.frame_size, PIXEL_FORMAT_Y16, frame_feedback_id, &buffer,
       /*require_new_buffer_id=*/nullptr, /*retire_old_buffer_id=*/nullptr);
-  // The input |length| can be greater than the required buffer size because of
-  // paddings and/or alignments, but it cannot be smaller.
-  CHECK_GE(static_cast<size_t>(length),
-           media::VideoFrame::AllocationSize(format.pixel_format,
-                                             format.frame_size));
+  // The input `data.size()` can be greater than the required buffer size
+  // because of paddings and/or alignments, but it cannot be smaller.
+  CHECK_GE(data.size(), media::VideoFrame::AllocationSize(format.pixel_format,
+                                                          format.frame_size));
   // Failed to reserve output buffer, so drop the frame.
   if (reservation_result_code != ReserveResult::kSucceeded) {
     receiver_->OnFrameDropped(
@@ -869,11 +910,20 @@ void VideoCaptureDeviceClient::OnIncomingCapturedY16Data(
     return;
   }
   auto buffer_access = buffer.handle_provider->GetHandleForInProcessAccess();
-  memcpy(buffer_access->data().data(), data,
-         std::min(static_cast<size_t>(length), buffer_access->mapped_size()));
+  const size_t copy_length =
+      std::min(data.size(), buffer_access->data().size());
+  buffer_access->data()
+      .first(copy_length)
+      .copy_from_nonoverlapping(data.first(copy_length));
   const VideoCaptureFormat output_format = VideoCaptureFormat(
       format.frame_size, format.frame_rate, PIXEL_FORMAT_Y16);
-  OnIncomingCapturedBuffer(std::move(buffer), output_format, reference_time,
-                           timestamp, capture_begin_timestamp, metadata);
+  OnIncomingCapturedBufferExt(
+      std::move(buffer), output_format, color_space, reference_time, timestamp,
+      capture_begin_timestamp, gfx::Rect(format.frame_size), metadata);
+}
+
+void VideoCaptureDeviceClient::InvalidateBuffers() {
+  CHECK(buffer_pool_);
+  buffer_pool_->InvalidateBuffers();
 }
 }  // namespace media

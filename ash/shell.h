@@ -46,7 +46,6 @@ class Window;
 }  // namespace aura
 
 namespace chromeos {
-class ImmersiveContext;
 class SnapController;
 }  // namespace chromeos
 
@@ -137,7 +136,7 @@ class ColorPaletteController;
 class ControlVHistogramRecorder;
 class CoralController;
 class CoralDelegate;
-class CrosDisplayConfig;
+class CrosDisplayConfigImpl;
 class DarkLightModeControllerImpl;
 class DesksController;
 class DetachableBaseHandler;
@@ -217,7 +216,6 @@ class PeripheralBatteryNotifier;
 class PersistentWindowController;
 class PipController;
 class PolicyRecommendationRestorer;
-class PostLoginGlanceablesMetricsRecorder;
 class PowerButtonController;
 class PowerEventObserver;
 class PowerPrefs;
@@ -280,7 +278,6 @@ class WindowCycleController;
 class WindowRestoreController;
 class WindowTilingController;
 class WindowTreeHostManager;
-class WmModeController;
 class ArcInputMethodBoundsTracker;
 
 enum class LoginStatus;
@@ -495,7 +492,7 @@ class ASH_EXPORT Shell : public SessionObserver,
   ColorPaletteController* color_palette_controller() {
     return color_palette_controller_.get();
   }
-  CrosDisplayConfig* cros_display_config() {
+  CrosDisplayConfigImpl* cros_display_config() {
     return cros_display_config_.get();
   }
   ::wm::CursorManager* cursor_manager() { return cursor_manager_.get(); }
@@ -599,10 +596,6 @@ class ASH_EXPORT Shell : public SessionObserver,
   }
   GlanceablesController* glanceables_controller() {
     return glanceables_controller_.get();
-  }
-  PostLoginGlanceablesMetricsRecorder*
-  post_login_glanceables_metrics_reporter() {
-    return post_login_glanceables_metrics_reporter_.get();
   }
   ColorEnhancementController* color_enhancement_controller() {
     return color_enhancement_controller_.get();
@@ -895,6 +888,9 @@ class ASH_EXPORT Shell : public SessionObserver,
   // Sets a custom color for the cursor.
   void SetCursorColor(SkColor cursor_color);
 
+  // Sets whether the cursor should be inverted.
+  void SetCursorInverted(bool inverted);
+
   // Updates cursor compositing on/off. Native cursor is disabled when cursor
   // compositing is enabled, and vice versa.
   void UpdateCursorCompositingEnabled();
@@ -1078,7 +1074,7 @@ class ASH_EXPORT Shell : public SessionObserver,
   std::unique_ptr<CalendarController> calendar_controller_;
   std::unique_ptr<CameraEffectsController> camera_effects_controller_;
   std::unique_ptr<ColorPaletteController> color_palette_controller_;
-  std::unique_ptr<CrosDisplayConfig> cros_display_config_;
+  std::unique_ptr<CrosDisplayConfigImpl> cros_display_config_;
   std::unique_ptr<curtain::SecurityCurtainController>
       security_curtain_controller_;
   std::unique_ptr<DarkLightModeControllerImpl> dark_light_mode_controller_;
@@ -1101,8 +1097,6 @@ class ASH_EXPORT Shell : public SessionObserver,
   std::unique_ptr<GeolocationController> geolocation_controller_;
   std::unique_ptr<BootingAnimationController> booting_animation_controller_;
   std::unique_ptr<GlanceablesController> glanceables_controller_;
-  std::unique_ptr<PostLoginGlanceablesMetricsRecorder>
-      post_login_glanceables_metrics_reporter_;
   std::unique_ptr<HoldingSpaceController> holding_space_controller_;
   std::unique_ptr<PowerPrefs> power_prefs_;
   std::unique_ptr<SnapGroupController> snap_group_controller_;
@@ -1110,7 +1104,6 @@ class ASH_EXPORT Shell : public SessionObserver,
   std::unique_ptr<HumanPresenceOrientationController>
       human_presence_orientation_controller_;
   std::unique_ptr<ImeControllerImpl> ime_controller_;
-  std::unique_ptr<chromeos::ImmersiveContext> immersive_context_;
   std::unique_ptr<WebAuthNDialogControllerImpl> webauthn_dialog_controller_;
   std::unique_ptr<KeyboardBacklightColorController>
       keyboard_backlight_color_controller_;
@@ -1290,11 +1283,9 @@ class ASH_EXPORT Shell : public SessionObserver,
 
   std::unique_ptr<chromeos::SnapController> snap_controller_;
 
-  std::unique_ptr<WmModeController> wm_mode_controller_;
-
   // |native_cursor_manager_| is owned by |cursor_manager_|, but we keep a
   // pointer to vend to test code.
-  raw_ptr<NativeCursorManagerAsh, DanglingUntriaged> native_cursor_manager_;
+  raw_ptr<NativeCursorManagerAsh> native_cursor_manager_;
 
   // Cursor may be hidden on certain key events in Chrome OS, whereas we never
   // hide the cursor on Windows.
@@ -1331,6 +1322,8 @@ class ASH_EXPORT Shell : public SessionObserver,
 
   std::unique_ptr<CoralController> coral_controller_;
   std::unique_ptr<CoralDelegate> coral_delegate_;
+
+  bool shutting_down_ = false;
 
   base::WeakPtrFactory<Shell> weak_factory_{this};
 };

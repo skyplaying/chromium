@@ -8,11 +8,14 @@
 
 #import "base/apple/foundation_util.h"
 #import "base/check_op.h"
+#import "ios/chrome/browser/browser_view/ui_bundled/safe_area_provider.h"
+#import "ios/chrome/browser/fullscreen/model/fullscreen_browser_agent.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_animator.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_controller.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_ui_element.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_ui_updater.h"
 #import "ios/chrome/browser/main/ui/browser_layout_consumer.h"
+#import "ios/chrome/browser/shared/coordinator/scene/state/scene_layout_state.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/util/layout_guide_names.h"
 #import "ios/chrome/browser/shared/ui/util/named_guide.h"
@@ -24,7 +27,11 @@
 #import "ios/chrome/common/ui/util/ui_util.h"
 #import "ui/base/device_form_factor.h"
 
-@interface BrowserLayoutViewController () <FullscreenUIElement>
+namespace {
+constexpr CGFloat kContainedLayoutTabStripTopMargin = 4.0;
+}  // namespace
+
+@interface BrowserLayoutViewController () <SceneLayoutStateObserver>
 @end
 
 @implementation BrowserLayoutViewController {
@@ -47,6 +54,9 @@
 - (void)viewDidLoad {
   [super viewDidLoad];
 
+  if (IsFullscreenRefactoringEnabled()) {
+    self.view.translatesAutoresizingMaskIntoConstraints = NO;
+  }
   // Register for trait changes that affect the tab strip visibility.
   NSArray<UITrait>* traits = TraitCollectionSetForTraits(@[
     UITraitHorizontalSizeClass.class, UITraitVerticalSizeClass.class,
@@ -95,13 +105,19 @@
 
   // Add the new active view controller.
   [self addChildViewController:browserViewController];
-  // If the BVC's view has a transform, then its frame isn't accurate.
-  // Instead, remove the transform, set the frame, then reapply the transform.
-  CGAffineTransform oldTransform = browserViewController.view.transform;
-  browserViewController.view.transform = CGAffineTransformIdentity;
-  browserViewController.view.frame = self.view.bounds;
-  browserViewController.view.transform = oldTransform;
-  [self.view insertSubview:browserViewController.view atIndex:0];
+  if (IsFullscreenRefactoringEnabled()) {
+    browserViewController.view.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view insertSubview:browserViewController.view atIndex:0];
+    AddSameConstraints(self.view, browserViewController.view);
+  } else {
+    // If the BVC's view has a transform, then its frame isn't accurate.
+    // Instead, remove the transform, set the frame, then reapply the transform.
+    CGAffineTransform oldTransform = browserViewController.view.transform;
+    browserViewController.view.transform = CGAffineTransformIdentity;
+    browserViewController.view.frame = self.view.bounds;
+    browserViewController.view.transform = oldTransform;
+    [self.view insertSubview:browserViewController.view atIndex:0];
+  }
   [browserViewController didMoveToParentViewController:self];
   _browserViewController = browserViewController;
 
@@ -112,26 +128,19 @@
   CHECK_EQ(_browserViewController, browserViewController,
            base::NotFatalUntil::M150);
 
-  [self updateCurrentBVCLayoutInsets];
+  [self updateCurrentBVCLayoutInsetsWithTopInset:[self topInset]];
 }
 
-- (void)updateCurrentBVCLayoutInsets {
-  CGFloat topInset = 0;
+- (void)updateCurrentBVCLayoutInsetsWithTopInset:(CGFloat)topInset {
+  CGFloat finalInset = 0;
   if (CanShowTabStrip(self)) {
-    topInset = self.view.safeAreaInsets.top;
-
-    // `safeAreaInsets` propagation can be delayed by UIKit when a view is newly
-    // added to the view hierarchy (e.g., during transitions). Wait to propagate
-    // the top toolbar inset until `safeAreaInsets` are correctly populated.
-    if (topInset == 0) {
-      return;
-    }
+    finalInset = topInset;
 
     if (self.tabStripViewController) {
-      topInset += TabStripCollectionViewConstants.height;
+      finalInset += TabStripCollectionViewConstants.height;
     }
   }
-  self.browserViewController.topToolbarInset = topInset;
+  self.browserViewController.topToolbarInset = finalInset;
 }
 
 - (void)setUpFullscreenObservation:(FullscreenController*)fullscreenController {
@@ -145,7 +154,7 @@
 
 - (void)viewSafeAreaInsetsDidChange {
   [super viewSafeAreaInsetsDidChange];
-  [self updateCurrentBVCLayoutInsets];
+  [self updateCurrentBVCLayoutInsetsWithTopInset:[self topInset]];
   if (_tabStripViewController) {
     [self updateForFullscreenProgress:_fullscreenProgress];
   }
@@ -159,16 +168,20 @@
 }
 
 - (void)updateForFullscreenProgress:(CGFloat)progress {
+  [self updateForFullscreenProgress:progress withTopInset:[self topInset]];
+}
+
+- (void)updateForFullscreenProgress:(CGFloat)progress
+                       withTopInset:(CGFloat)topInset {
   _fullscreenProgress = progress;
   // Calculate offset based on progress (0 = collapsed/hidden, 1 =
   // expanded/visible).
   CGFloat offset =
-      AlignValueToPixel((1.0 - progress) * _fullscreenViewportInsetRange);
+      AlignValueToLowerPixel((1.0 - progress) * _fullscreenViewportInsetRange);
 
   // Update frame directly for synchronous layout.
   // We don't rely on constraints here to avoid fighting with the layout system
   // during safe area transitions.
-  CGFloat topInset = self.view.safeAreaInsets.top;
   CGRect frame = _tabStripViewController.view.frame;
   frame.origin.y = topInset - offset;
   _tabStripViewController.view.frame = frame;
@@ -196,32 +209,55 @@
   }];
 }
 
+#pragma mark - FullscreenBrowserAgentObserving
+
+- (void)fullscreenWillUpdateState:(FullscreenBrowserAgent*)agent {
+  CHECK(IsFullscreenRefactoringEnabled());
+  if (CanShowTabStrip(self)) {
+    CGFloat progress = agent->top_progress();
+    CGFloat height = TabStripCollectionViewConstants.height * progress;
+    agent->AddObscuredInset(UIRectEdgeTop, height);
+    [self updateForFullscreenProgress:progress];
+  }
+}
+
+- (void)fullscreenWillUpdateObscuredInsetRange:(FullscreenBrowserAgent*)agent {
+  CHECK(IsFullscreenRefactoringEnabled());
+  if (CanShowTabStrip(self)) {
+    agent->AddObscuredInsetRange(UIRectEdgeTop, 0,
+                                 TabStripCollectionViewConstants.height);
+  }
+}
+
+- (void)fullscreenDidUpdateObscuredInsetRange:(FullscreenBrowserAgent*)agent {
+  CHECK(IsFullscreenRefactoringEnabled());
+  _fullscreenViewportInsetRange =
+      agent->max_insets().top - agent->min_insets().top;
+}
+
 #pragma mark - Private
 
 // Updates the UI when the trait collection changes.
 - (void)updateUIOnTraitChange:(UITraitCollection*)previousTraitCollection {
   [self updateStatusBarBackgroundViews];
-  [self updateCurrentBVCLayoutInsets];
+  [self updateCurrentBVCLayoutInsetsWithTopInset:[self topInset]];
   if (_tabStripViewController) {
     _tabStripViewController.view.hidden = !CanShowTabStrip(self);
   }
 }
 
-// Updates the status bar background views properties and visibility.
-- (void)updateStatusBarBackgroundViews {
-  DCHECK(self.isViewLoaded);
-
-  // Remove views to reset constraints.
-  [_fadingStatusBarView removeFromSuperview];
-  [_staticStatusBarView removeFromSuperview];
-
-  // Only install status bar background when the tab strip is visible.
-  if (!CanShowTabStrip(self) || !_tabStripViewController) {
+// Ensures the status bar background views are created and installed in the
+// view hierarchy with proper constraints.
+- (void)ensureStatusBarViewsInstalled {
+  DCHECK(self.viewLoaded);
+  if ([self.fadingStatusBarView isDescendantOfView:self.view]) {
     return;
   }
 
-  // Ensure the tab strip is on top.
-  [self.view bringSubviewToFront:_tabStripViewController.view];
+  // Only install status bar background when the tab strip exists.
+  if (!_tabStripViewController) {
+    return;
+  }
 
   // Insert status bars below the tab strip.
   [self.view insertSubview:self.staticStatusBarView
@@ -240,6 +276,62 @@
         constraintEqualToAnchor:self.view.trailingAnchor],
   ]];
   AddSameConstraints(self.staticStatusBarView, self.fadingStatusBarView);
+}
+
+// Updates the status bar background views properties and visibility.
+- (void)updateStatusBarBackgroundViews {
+  DCHECK(self.viewLoaded);
+
+  bool shouldShow = CanShowTabStrip(self) && _tabStripViewController;
+
+  if (!shouldShow) {
+    _fadingStatusBarView.hidden = YES;
+    _staticStatusBarView.hidden = YES;
+    return;
+  }
+
+  // Ensure views are created and added once.
+  [self ensureStatusBarViewsInstalled];
+
+  _fadingStatusBarView.hidden = NO;
+  _staticStatusBarView.hidden = NO;
+
+  // Ensure the tab strip is on top.
+  [self.view bringSubviewToFront:_tabStripViewController.view];
+
+  [self updateOverlayContainerOrder];
+}
+
+// Updates the ordering of the overlay containers so that they are layered
+// directly on top of the tab strip UI. Banner overlays appear behind modal
+// overlays.
+- (void)updateOverlayContainerOrder {
+  // Both infobar overlay container views should exist in front of the entire
+  // browser UI, and the banner container should appear behind the modal
+  // container.
+  [self bringOverlayContainerToFront:
+            self.infobarBannerOverlayContainerViewController];
+  [self bringOverlayContainerToFront:
+            self.infobarModalOverlayContainerViewController];
+}
+
+// Helper method to bring the given `containerViewController` to the front.
+- (void)bringOverlayContainerToFront:
+    (UIViewController*)containerViewController {
+  if (!containerViewController) {
+    return;
+  }
+  [self.view bringSubviewToFront:containerViewController.view];
+  // If `containerViewController` is presenting a view over its current context,
+  // its presentation container view is added as a sibling to
+  // `containerViewController`'s view. This presented view should be brought in
+  // front of the container view.
+  UIView* presentedContainerView =
+      containerViewController.presentedViewController.presentationController
+          .containerView;
+  if (presentedContainerView.superview == self.view) {
+    [self.view bringSubviewToFront:presentedContainerView];
+  }
 }
 
 // Removes the tab strip view controller from the hierarchy.
@@ -271,12 +363,33 @@
   [_tabStripViewController didMoveToParentViewController:self];
 
   // Set default frame to ensure valid initial position.
-  CGFloat topInset = self.view.safeAreaInsets.top;
+  CGFloat topInset = [self topInset];
   CGRect frame = self.view.bounds;
   frame.origin.y = topInset;
   frame.size.height = TabStripCollectionViewConstants.height;
   tabStripView.frame = frame;
   tabStripView.hidden = !CanShowTabStrip(self);
+}
+
+// Returns the top inset based on the layout mode.
+- (CGFloat)topInset {
+  return [self topInsetForContainedLayout:_layoutState.containedLayoutActive];
+}
+
+// Returns the top inset for the specified contained layout state.
+- (CGFloat)topInsetForContainedLayout:(BOOL)containedLayout {
+  CGFloat topInset = containedLayout ? self.view.safeAreaInsets.top
+                                     : self.safeAreaProvider.safeArea.top;
+  if (CanShowTabStrip(self) && containedLayout) {
+    topInset += kContainedLayoutTabStripTopMargin;
+  }
+  return topInset;
+}
+
+// Updates the layout with the given top inset.
+- (void)updateLayoutWithTopInset:(CGFloat)topInset {
+  [self updateForFullscreenProgress:_fullscreenProgress withTopInset:topInset];
+  [self updateCurrentBVCLayoutInsetsWithTopInset:topInset];
 }
 
 #pragma mark - Properties
@@ -294,11 +407,24 @@
   _staticStatusBarView.overrideUserInterfaceStyle = style;
 }
 
+- (void)setLayoutState:(SceneLayoutState*)layoutState {
+  if (_layoutState == layoutState) {
+    return;
+  }
+  [_layoutState removeObserver:self];
+  _layoutState = layoutState;
+  [_layoutState addObserver:self];
+}
+
 // Sets the tab strip view controller and installs it in the view hierarchy.
 - (void)setTabStripViewController:(UIViewController*)tabStripViewController {
   if (_tabStripViewController == tabStripViewController) {
     return;
   }
+
+  // Remove status bar views because constraints depend on the tab strip view.
+  [_fadingStatusBarView removeFromSuperview];
+  [_staticStatusBarView removeFromSuperview];
 
   [self removeTabStripViewController];
 
@@ -308,13 +434,35 @@
   [self updateStatusBarBackgroundViews];
 
   // Notify the BVC about the layout inset changes.
-  [self updateCurrentBVCLayoutInsets];
+  [self updateCurrentBVCLayoutInsetsWithTopInset:[self topInset]];
 
   if (!_tabStripViewController) {
     return;
   }
 
   [self updateForFullscreenProgress:_fullscreenProgress];
+}
+
+- (void)setInfobarBannerOverlayContainerViewController:
+    (UIViewController*)infobarBannerOverlayContainerViewController {
+  if (_infobarBannerOverlayContainerViewController ==
+      infobarBannerOverlayContainerViewController) {
+    return;
+  }
+  _infobarBannerOverlayContainerViewController =
+      infobarBannerOverlayContainerViewController;
+  [self updateOverlayContainerOrder];
+}
+
+- (void)setInfobarModalOverlayContainerViewController:
+    (UIViewController*)infobarModalOverlayContainerViewController {
+  if (_infobarModalOverlayContainerViewController ==
+      infobarModalOverlayContainerViewController) {
+    return;
+  }
+  _infobarModalOverlayContainerViewController =
+      infobarModalOverlayContainerViewController;
+  [self updateOverlayContainerOrder];
 }
 
 - (UIView*)fadingStatusBarView {
@@ -345,6 +493,26 @@
 - (NamedGuide*)contentAreaGuide {
   return [NamedGuide guideWithName:kContentAreaGuide
                               view:self.browserViewController.view];
+}
+
+#pragma mark - SceneLayoutStateObserver
+
+- (void)layoutState:(SceneLayoutState*)layoutState
+    willChangeContainedLayout:(BOOL)containedLayoutActive
+    withTransitionCoordinator:(id<LayoutTransitionCoordinating>)coordinator {
+  CGFloat targetTopInset =
+      [self topInsetForContainedLayout:containedLayoutActive];
+
+  __weak __typeof(self) weakSelf = self;
+  if (coordinator) {
+    [coordinator
+        animateAlongsideTransition:^{
+          [weakSelf updateLayoutWithTopInset:targetTopInset];
+        }
+                        completion:nil];
+    return;
+  }
+  [self updateLayoutWithTopInset:targetTopInset];
 }
 
 @end

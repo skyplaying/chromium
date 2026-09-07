@@ -16,7 +16,7 @@
 #include "chrome/browser/ash/arc/arc_util.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/apps/app_dialog/app_block_dialog_view.h"
 #include "chrome/browser/ui/views/apps/app_dialog/app_local_block_dialog_view.h"
@@ -42,12 +42,12 @@ class AppDialogViewBrowserTest : public DialogBrowserTest {
   }
 
   void SetUpOnMainThread() override {
-    arc::SetArcPlayStoreEnabledForProfile(browser()->profile(), true);
+    arc::SetArcPlayStoreEnabledForProfile(browser()->GetProfile(), true);
 
     // Validating decoded content does not fit well for unit tests.
     ArcAppIcon::DisableSafeDecodingForTesting();
 
-    arc_app_list_pref_ = ArcAppListPrefs::Get(browser()->profile());
+    arc_app_list_pref_ = ArcAppListPrefs::Get(browser()->GetProfile());
     DCHECK(arc_app_list_pref_);
     base::RunLoop run_loop;
     arc_app_list_pref_->SetDefaultAppsReadyCallback(run_loop.QuitClosure());
@@ -103,7 +103,7 @@ class AppDialogViewBrowserTest : public DialogBrowserTest {
     EXPECT_EQ(nullptr, ActiveView(name));
 
     app_service_proxy_ =
-        apps::AppServiceProxyFactory::GetForProfile(browser()->profile());
+        apps::AppServiceProxyFactory::GetForProfile(browser()->GetProfile());
     ASSERT_TRUE(app_service_proxy_);
 
     base::RunLoop run_loop;

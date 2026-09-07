@@ -25,6 +25,7 @@ source_set("impl") {
   ]
   deps = [
     ":btm",
+    "//chrome/browser:chrome_content_browser_client",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/signin",
     "//components/content_settings/browser",
@@ -44,7 +45,6 @@ source_set("unit_tests") {
     ":btm",
     "//base",
     "//base/test:test_support",
-    "//chrome/browser",
     "//chrome/browser/content_settings:content_settings_factory",
     "//chrome/test:test_support",
     "//content/test:test_support",

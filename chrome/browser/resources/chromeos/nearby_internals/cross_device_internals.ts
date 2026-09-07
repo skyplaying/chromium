@@ -148,19 +148,24 @@ class CrossDeviceInternalsElement extends CrossDeviceInternalsElementBase {
     };
   }
 
-  private npDiscoveredDevicesList_: PresenceDevice[];
-  private featuresList_: SelectOption[];
-  private nearbyInfraActionList_: SelectOption[];
-  private nearbyShareActionList_: SelectOption[];
-  private fastPairActionList_: SelectOption[];
-  private actionsSelectList_: SelectOption[];
-  private logList_: LogMessage[];
-  private filteredLogList_: LogMessage[];
-  private currentFilter_: string;
-  private currentSeverity: Severity;
-  private logLevelList_: SelectOption[];
-  private logProvider_: LogProvider;
-  private currentLogTypes: FeatureValues[];
+  declare private npDiscoveredDevicesList_: PresenceDevice[];
+  declare private featuresList_: SelectOption[];
+  declare private nearbyInfraActionList_: SelectOption[];
+  declare private nearbyShareActionList_: SelectOption[];
+  declare private fastPairActionList_: SelectOption[];
+  declare private actionsSelectList_: SelectOption[];
+  declare private logList_: LogMessage[];
+  declare private filteredLogList_: LogMessage[];
+  private currentFilter_: string = '';
+  declare private currentSeverity: Severity;
+  declare private logLevelList_: SelectOption[];
+  private logProvider_: LogProvider = {
+    messageAddedEventName: 'log-message-added',
+    bufferClearedEventName: 'log-buffer-cleared',
+    logFilePrefix: 'cross_device_logs_',
+    getLogMessages: () => NearbyLogsBrowserProxy.getInstance().getLogMessages(),
+  };
+  declare private currentLogTypes: FeatureValues[];
 
   private nearbyPresenceBrowserProxy_: NearbyPresenceBrowserProxy =
       NearbyPresenceBrowserProxy.getInstance();
@@ -189,13 +194,6 @@ class CrossDeviceInternalsElement extends CrossDeviceInternalsElementBase {
         (device: PresenceDevice) => this.onPresenceDeviceLost_(device));
     this.set('actionsSelectList_', this.nearbyInfraActionList_);
 
-    this.logProvider_ = {
-      messageAddedEventName: 'log-message-added',
-      bufferClearedEventName: 'log-buffer-cleared',
-      logFilePrefix: 'cross_device_logs_',
-      getLogMessages: () =>
-          NearbyLogsBrowserProxy.getInstance().getLogMessages(),
-    };
     this.addWebUiListener(
         this.logProvider_.messageAddedEventName,
         (log: LogMessage) => this.onLogMessageAdded_(log));

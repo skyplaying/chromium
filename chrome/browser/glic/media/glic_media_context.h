@@ -15,6 +15,7 @@
 #include "chrome/browser/glic/media/glic_media_page_cache.h"
 #include "content/public/browser/document_user_data.h"
 #include "media/mojo/mojom/speech_recognition_result.h"
+#include "services/metrics/public/cpp/ukm_source_id.h"
 
 namespace content {
 class RenderFrameHost;
@@ -31,8 +32,6 @@ class GlicMediaContext : public content::DocumentUserData<GlicMediaContext>,
   ~GlicMediaContext() override;
 
   bool OnResult(const media::SpeechRecognitionResult&);
-
-  std::string GetContext() const;
 
   void OnPeerConnectionAdded();
   void OnPeerConnectionRemoved();
@@ -80,6 +79,12 @@ class GlicMediaContext : public content::DocumentUserData<GlicMediaContext>,
 
   // Returns a copy of the transcript chunks.
   std::list<TranscriptChunk> GetTranscriptChunks() const;
+
+  // Returns whether there are any final transcript chunks.
+  bool HasTranscriptChunks() const;
+
+  // Clears all stored transcripts.
+  void ClearAllTranscripts();
 
  protected:
   // Gets the current media session, if one exists. Virtual for testing.
@@ -145,6 +150,11 @@ class GlicMediaContext : public content::DocumentUserData<GlicMediaContext>,
   std::map<std::u16string, std::unique_ptr<Transcript>> transcripts_by_title_;
 
   size_t num_peer_connections_ = 0;
+
+  ukm::SourceId ukm_source_id_;
+
+  // Set to true if any final transcript chunk was recorded for any title.
+  bool has_recorded_any_final_chunk_ = false;
 };
 
 }  // namespace glic

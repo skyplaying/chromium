@@ -26,6 +26,7 @@
 #import "ios/chrome/browser/bookmarks/model/bookmark_model_factory.h"
 #import "ios/chrome/browser/bookmarks/model/bookmarks_utils.h"
 #import "ios/chrome/browser/composebox/coordinator/composebox_omnibox_client_delegate.h"
+#import "ios/chrome/browser/composebox/public/features.h"
 #import "ios/chrome/browser/default_browser/model/default_browser_interest_signals.h"
 #import "ios/chrome/browser/https_upgrades/model/https_upgrade_service_factory.h"
 #import "ios/chrome/browser/intents/model/intents_donation_helper.h"
@@ -169,6 +170,9 @@ ComposeboxOmniboxClient::GetPageClassification(bool is_prefetch) const {
 
 std::optional<lens::proto::LensOverlaySuggestInputs>
 ComposeboxOmniboxClient::GetLensOverlaySuggestInputs() const {
+  if (!delegate_) {
+    return std::nullopt;
+  }
   return [delegate_ suggestInputs];
 }
 
@@ -349,10 +353,22 @@ void ComposeboxOmniboxClient::OnAutocompleteAccept(
                      isSearchType:AutocompleteMatch::IsSearchType(match.type)];
 }
 
-base::WeakPtr<OmniboxClient> ComposeboxOmniboxClient::AsWeakPtr() {
+base::WeakPtr<OmniboxClientIOS> ComposeboxOmniboxClient::AsWeakPtr() {
   return weak_factory_.GetWeakPtr();
 }
 
 omnibox::InputState ComposeboxOmniboxClient::GetInputState() const {
-  return [delegate_ inputState];
+  std::optional<contextual_search::InputState> state = [delegate_ inputState];
+  return state.value_or(omnibox::InputState());
+}
+
+bool ComposeboxOmniboxClient::ShouldSkipZeroSuggestRequest() const {
+  return [delegate_ awaitingAttachmentSignals];
+}
+
+bool ComposeboxOmniboxClient::ShouldSuppressVerbatimSuggestion() const {
+  if (IsComposeboxVerbatimSuggestionInAIMEnabled()) {
+    return false;
+  }
+  return [delegate_ composeboxMode] != ComposeboxMode::kRegularSearch;
 }

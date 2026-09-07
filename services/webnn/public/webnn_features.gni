@@ -4,6 +4,7 @@
 
 import("//build/config/chrome_build.gni")
 import("//build/config/dcheck_always_on.gni")
+import("//services/webnn/features.gni")
 
 declare_args() {
   # This flag enables the graph dump feature for WebNN.

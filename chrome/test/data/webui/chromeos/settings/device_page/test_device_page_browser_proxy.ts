@@ -23,8 +23,9 @@ export class TestDevicePageBrowserProxy extends TestBrowserProxy implements
   private hasPointingStick_ = true;
   private hasTouchpad_ = true;
   private fakeBatteryStatus_: BatteryStatus = {} as BatteryStatus;
-  private onNoteTakingAppsUpdated_!:
-      (apps: NoteAppInfo[], waitingForAndroid: boolean) => void;
+  onNoteTakingAppsUpdated:
+      (apps: NoteAppInfo[],
+       waitingForAndroid: boolean) => void = (_apps, _waitingForAndroid) => {};
 
   constructor() {
     super([
@@ -119,7 +120,7 @@ export class TestDevicePageBrowserProxy extends TestBrowserProxy implements
   setNoteTakingAppsUpdatedCallback(
       callback: (apps: NoteAppInfo[], waitingForAndroid: boolean) => void):
       void {
-    this.onNoteTakingAppsUpdated_ = callback;
+    this.onNoteTakingAppsUpdated = callback;
   }
 
   requestNoteTakingApps(): void {
@@ -214,7 +215,7 @@ export class TestDevicePageBrowserProxy extends TestBrowserProxy implements
    * Invokes the registered note taking apps update callback.
    */
   private scheduleNoteTakingAppsUpdated_(): void {
-    this.onNoteTakingAppsUpdated_(
+    this.onNoteTakingAppsUpdated(
         this.noteTakingApps_.map((app) => {
           return Object.assign({}, app);
         }),

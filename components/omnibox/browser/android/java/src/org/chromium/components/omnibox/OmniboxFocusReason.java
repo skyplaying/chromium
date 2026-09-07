@@ -34,6 +34,8 @@ import java.lang.annotation.RetentionPolicy;
     OmniboxFocusReason.ACTIVITY_RECREATION_RESTORATION,
     OmniboxFocusReason.LOCATION_BAR_STATE_RESTORATION,
     OmniboxFocusReason.NTP_AI_MODE,
+    OmniboxFocusReason.FAKE_BOX_PLUS_BUTTON_TAP,
+    OmniboxFocusReason.KEYBOARD_NAVIGATION_FOCUS,
     // LINT.ThenChange(//tools/metrics/histograms/metadata/android/enums.xml:OmniboxFocusReason) -->
 })
 @Retention(RetentionPolicy.SOURCE)
@@ -63,5 +65,7 @@ public @interface OmniboxFocusReason {
     int ACTIVITY_RECREATION_RESTORATION = 17;
     int LOCATION_BAR_STATE_RESTORATION = 18;
     int NTP_AI_MODE = 19;
-    int NUM_ENTRIES = 20;
+    int FAKE_BOX_PLUS_BUTTON_TAP = 20;
+    int KEYBOARD_NAVIGATION_FOCUS = 21; // Omnibox focused via Tab/Shift-Tab traversal.
+    int NUM_ENTRIES = 22;
 }

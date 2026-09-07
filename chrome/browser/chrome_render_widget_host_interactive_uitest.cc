@@ -7,7 +7,6 @@
 #include "base/strings/stringprintf.h"
 #include "base/test/test_timeouts.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/omnibox/omnibox_view.h"
@@ -165,7 +164,7 @@ IN_PROC_BROWSER_TEST_F(ActiveRenderWidgetHostBrowserTest,
 
   // Focus the URL bar.
   OmniboxView* omnibox =
-      browser()->window()->GetLocationBar()->GetOmniboxView();
+      BrowserWindow::FromBrowser(browser())->GetLocationBar()->GetOmniboxView();
   // Give the omnibox focus.
   omnibox->SetFocus(/*is_user_initiated=*/true);
   base::RunLoop().RunUntilIdle();
@@ -232,7 +231,7 @@ IN_PROC_BROWSER_TEST_F(ActiveRenderWidgetHostBrowserTest, FocusOmniBox) {
 
   // Main frame is already focused at this point and now focus URL bar.
   OmniboxView* omnibox =
-      browser()->window()->GetLocationBar()->GetOmniboxView();
+      BrowserWindow::FromBrowser(browser())->GetLocationBar()->GetOmniboxView();
   // Give the omnibox focus.
   omnibox->SetFocus(/*is_user_initiated=*/true);
 

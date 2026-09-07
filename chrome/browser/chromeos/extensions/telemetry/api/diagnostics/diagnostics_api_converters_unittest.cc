@@ -7,7 +7,6 @@
 #include "base/time/time.h"
 #include "chrome/common/chromeos/extensions/api/diagnostics.h"
 #include "chromeos/ash/services/cros_healthd/public/mojom/cros_healthd_diagnostics.mojom-shared.h"
-#include "chromeos/crosapi/mojom/crosapi.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace chromeos::converters::diagnostics {
@@ -15,7 +14,6 @@ namespace chromeos::converters::diagnostics {
 namespace {
 
 namespace cx_diag = ::chromeos::api::os_diagnostics;
-namespace crosapi = ::crosapi::mojom;
 
 }  // namespace
 
@@ -183,40 +181,49 @@ TEST(TelemetryExtensionDiagnosticsApiConvertersUnitTest,
 }
 
 TEST(TelemetryExtensionDiagnosticsApiConvertersUnitTest, ConvertRoutineStatus) {
-  EXPECT_EQ(ConvertRoutineStatus(crosapi::DiagnosticsRoutineStatusEnum::kReady),
+  EXPECT_EQ(ConvertRoutineStatus(
+                ash::cros_healthd::mojom::DiagnosticRoutineStatusEnum::kReady),
             cx_diag::RoutineStatus::kReady);
   EXPECT_EQ(
-      ConvertRoutineStatus(crosapi::DiagnosticsRoutineStatusEnum::kRunning),
+      ConvertRoutineStatus(
+          ash::cros_healthd::mojom::DiagnosticRoutineStatusEnum::kRunning),
       cx_diag::RoutineStatus::kRunning);
   EXPECT_EQ(
-      ConvertRoutineStatus(crosapi::DiagnosticsRoutineStatusEnum::kWaiting),
+      ConvertRoutineStatus(
+          ash::cros_healthd::mojom::DiagnosticRoutineStatusEnum::kWaiting),
       cx_diag::RoutineStatus::kWaitingUserAction);
-  EXPECT_EQ(
-      ConvertRoutineStatus(crosapi::DiagnosticsRoutineStatusEnum::kPassed),
-      cx_diag::RoutineStatus::kPassed);
-  EXPECT_EQ(
-      ConvertRoutineStatus(crosapi::DiagnosticsRoutineStatusEnum::kFailed),
-      cx_diag::RoutineStatus::kFailed);
-  EXPECT_EQ(ConvertRoutineStatus(crosapi::DiagnosticsRoutineStatusEnum::kError),
+  EXPECT_EQ(ConvertRoutineStatus(
+                ash::cros_healthd::mojom::DiagnosticRoutineStatusEnum::kPassed),
+            cx_diag::RoutineStatus::kPassed);
+  EXPECT_EQ(ConvertRoutineStatus(
+                ash::cros_healthd::mojom::DiagnosticRoutineStatusEnum::kFailed),
+            cx_diag::RoutineStatus::kFailed);
+  EXPECT_EQ(ConvertRoutineStatus(
+                ash::cros_healthd::mojom::DiagnosticRoutineStatusEnum::kError),
             cx_diag::RoutineStatus::kError);
   EXPECT_EQ(
-      ConvertRoutineStatus(crosapi::DiagnosticsRoutineStatusEnum::kCancelled),
+      ConvertRoutineStatus(
+          ash::cros_healthd::mojom::DiagnosticRoutineStatusEnum::kCancelled),
       cx_diag::RoutineStatus::kCancelled);
-  EXPECT_EQ(ConvertRoutineStatus(
-                crosapi::DiagnosticsRoutineStatusEnum::kFailedToStart),
-            cx_diag::RoutineStatus::kFailedToStart);
   EXPECT_EQ(
-      ConvertRoutineStatus(crosapi::DiagnosticsRoutineStatusEnum::kRemoved),
+      ConvertRoutineStatus(ash::cros_healthd::mojom::
+                               DiagnosticRoutineStatusEnum::kFailedToStart),
+      cx_diag::RoutineStatus::kFailedToStart);
+  EXPECT_EQ(
+      ConvertRoutineStatus(
+          ash::cros_healthd::mojom::DiagnosticRoutineStatusEnum::kRemoved),
       cx_diag::RoutineStatus::kRemoved);
   EXPECT_EQ(
-      ConvertRoutineStatus(crosapi::DiagnosticsRoutineStatusEnum::kCancelling),
+      ConvertRoutineStatus(
+          ash::cros_healthd::mojom::DiagnosticRoutineStatusEnum::kCancelling),
       cx_diag::RoutineStatus::kCancelling);
   EXPECT_EQ(
-      ConvertRoutineStatus(crosapi::DiagnosticsRoutineStatusEnum::kUnsupported),
+      ConvertRoutineStatus(
+          ash::cros_healthd::mojom::DiagnosticRoutineStatusEnum::kUnsupported),
       cx_diag::RoutineStatus::kUnsupported);
-  EXPECT_EQ(
-      ConvertRoutineStatus(crosapi::DiagnosticsRoutineStatusEnum::kNotRun),
-      cx_diag::RoutineStatus::kNotRun);
+  EXPECT_EQ(ConvertRoutineStatus(
+                ash::cros_healthd::mojom::DiagnosticRoutineStatusEnum::kNotRun),
+            cx_diag::RoutineStatus::kNotRun);
 }
 
 TEST(TelemetryExtensionDiagnosticsApiConvertersUnitTest,
@@ -286,77 +293,77 @@ TEST(TelemetryExtensionDiagnosticsApiConvertersUnitTest,
      ConvertVolumeButtonRoutineButtonType) {
   EXPECT_EQ(
       ConvertVolumeButtonRoutineButtonType(cx_diag::VolumeButtonType::kNone),
-      crosapi::TelemetryDiagnosticVolumeButtonRoutineArgument::ButtonType::
+      ash::cros_healthd::mojom::VolumeButtonRoutineArgument::ButtonType::
           kUnmappedEnumField);
 
   EXPECT_EQ(ConvertVolumeButtonRoutineButtonType(
                 cx_diag::VolumeButtonType::kVolumeUp),
-            crosapi::TelemetryDiagnosticVolumeButtonRoutineArgument::
-                ButtonType::kVolumeUp);
+            ash::cros_healthd::mojom::VolumeButtonRoutineArgument::ButtonType::
+                kVolumeUp);
 
   EXPECT_EQ(ConvertVolumeButtonRoutineButtonType(
                 cx_diag::VolumeButtonType::kVolumeDown),
-            crosapi::TelemetryDiagnosticVolumeButtonRoutineArgument::
-                ButtonType::kVolumeDown);
+            ash::cros_healthd::mojom::VolumeButtonRoutineArgument::ButtonType::
+                kVolumeDown);
 }
 
 TEST(TelemetryExtensionDiagnosticsApiConvertersUnitTest, ConvertLedName) {
   EXPECT_EQ(ConvertLedName(cx_diag::LedName::kNone),
-            crosapi::TelemetryDiagnosticLedName::kUnmappedEnumField);
+            ash::cros_healthd::mojom::LedName::kUnmappedEnumField);
   EXPECT_EQ(ConvertLedName(cx_diag::LedName::kBattery),
-            crosapi::TelemetryDiagnosticLedName::kBattery);
+            ash::cros_healthd::mojom::LedName::kBattery);
   EXPECT_EQ(ConvertLedName(cx_diag::LedName::kPower),
-            crosapi::TelemetryDiagnosticLedName::kPower);
+            ash::cros_healthd::mojom::LedName::kPower);
   EXPECT_EQ(ConvertLedName(cx_diag::LedName::kAdapter),
-            crosapi::TelemetryDiagnosticLedName::kAdapter);
+            ash::cros_healthd::mojom::LedName::kAdapter);
   EXPECT_EQ(ConvertLedName(cx_diag::LedName::kLeft),
-            crosapi::TelemetryDiagnosticLedName::kLeft);
+            ash::cros_healthd::mojom::LedName::kLeft);
   EXPECT_EQ(ConvertLedName(cx_diag::LedName::kRight),
-            crosapi::TelemetryDiagnosticLedName::kRight);
+            ash::cros_healthd::mojom::LedName::kRight);
 }
 
 TEST(TelemetryExtensionDiagnosticsApiConvertersUnitTest, ConvertLedColor) {
   EXPECT_EQ(ConvertLedColor(cx_diag::LedColor::kNone),
-            crosapi::TelemetryDiagnosticLedColor::kUnmappedEnumField);
+            ash::cros_healthd::mojom::LedColor::kUnmappedEnumField);
   EXPECT_EQ(ConvertLedColor(cx_diag::LedColor::kRed),
-            crosapi::TelemetryDiagnosticLedColor::kRed);
+            ash::cros_healthd::mojom::LedColor::kRed);
   EXPECT_EQ(ConvertLedColor(cx_diag::LedColor::kGreen),
-            crosapi::TelemetryDiagnosticLedColor::kGreen);
+            ash::cros_healthd::mojom::LedColor::kGreen);
   EXPECT_EQ(ConvertLedColor(cx_diag::LedColor::kBlue),
-            crosapi::TelemetryDiagnosticLedColor::kBlue);
+            ash::cros_healthd::mojom::LedColor::kBlue);
   EXPECT_EQ(ConvertLedColor(cx_diag::LedColor::kYellow),
-            crosapi::TelemetryDiagnosticLedColor::kYellow);
+            ash::cros_healthd::mojom::LedColor::kYellow);
   EXPECT_EQ(ConvertLedColor(cx_diag::LedColor::kWhite),
-            crosapi::TelemetryDiagnosticLedColor::kWhite);
+            ash::cros_healthd::mojom::LedColor::kWhite);
   EXPECT_EQ(ConvertLedColor(cx_diag::LedColor::kAmber),
-            crosapi::TelemetryDiagnosticLedColor::kAmber);
+            ash::cros_healthd::mojom::LedColor::kAmber);
 }
 
 TEST(TelemetryExtensionDiagnosticsApiConvertersUnitTest, ConvertLedLitUpState) {
   EXPECT_EQ(ConvertLedLitUpState(cx_diag::LedLitUpState::kNone),
-            crosapi::TelemetryDiagnosticCheckLedLitUpStateReply::State::
+            ash::cros_healthd::mojom::CheckLedLitUpStateReply::State::
                 kUnmappedEnumField);
-  EXPECT_EQ(ConvertLedLitUpState(cx_diag::LedLitUpState::kCorrectColor),
-            crosapi::TelemetryDiagnosticCheckLedLitUpStateReply::State::
-                kCorrectColor);
+  EXPECT_EQ(
+      ConvertLedLitUpState(cx_diag::LedLitUpState::kCorrectColor),
+      ash::cros_healthd::mojom::CheckLedLitUpStateReply::State::kCorrectColor);
   EXPECT_EQ(
       ConvertLedLitUpState(cx_diag::LedLitUpState::kNotLitUp),
-      crosapi::TelemetryDiagnosticCheckLedLitUpStateReply::State::kNotLitUp);
+      ash::cros_healthd::mojom::CheckLedLitUpStateReply::State::kNotLitUp);
 }
 
 TEST(TelemetryExtensionDiagnosticsApiConvertersUnitTest,
      ConvertKeyboardBacklightState) {
   EXPECT_EQ(
       ConvertKeyboardBacklightState(cx_diag::KeyboardBacklightState::kNone),
-      crosapi::TelemetryDiagnosticCheckKeyboardBacklightStateReply::State::
+      ash::cros_healthd::mojom::CheckKeyboardBacklightStateReply::State::
           kUnmappedEnumField);
   EXPECT_EQ(
       ConvertKeyboardBacklightState(cx_diag::KeyboardBacklightState::kOk),
-      crosapi::TelemetryDiagnosticCheckKeyboardBacklightStateReply::State::kOk);
+      ash::cros_healthd::mojom::CheckKeyboardBacklightStateReply::State::kOk);
   EXPECT_EQ(ConvertKeyboardBacklightState(
                 cx_diag::KeyboardBacklightState::kAnyNotLitUp),
-            crosapi::TelemetryDiagnosticCheckKeyboardBacklightStateReply::
-                State::kAnyNotLitUp);
+            ash::cros_healthd::mojom::CheckKeyboardBacklightStateReply::State::
+                kAnyNotLitUp);
 }
 
 TEST(TelemetryExtensionDiagnosticsApiConvertersUnitTest,
@@ -412,8 +419,8 @@ TEST(TelemetryExtensionDiagnosticsApiConvertersUnitTest,
   ASSERT_FALSE(result.value().is_null());
   ASSERT_TRUE(result.value()->is_volume_button());
   EXPECT_EQ(result.value()->get_volume_button()->type,
-            crosapi::TelemetryDiagnosticVolumeButtonRoutineArgument::
-                ButtonType::kVolumeUp);
+            ash::cros_healthd::mojom::VolumeButtonRoutineArgument::ButtonType::
+                kVolumeUp);
   EXPECT_EQ(result.value()->get_volume_button()->timeout, base::Seconds(42));
 }
 
@@ -450,9 +457,9 @@ TEST(TelemetryExtensionDiagnosticsApiConvertersUnitTest,
   ASSERT_FALSE(result.value().is_null());
   ASSERT_TRUE(result.value()->is_led_lit_up());
   EXPECT_EQ(result.value()->get_led_lit_up()->name,
-            crosapi::TelemetryDiagnosticLedName::kBattery);
+            ash::cros_healthd::mojom::LedName::kBattery);
   EXPECT_EQ(result.value()->get_led_lit_up()->color,
-            crosapi::TelemetryDiagnosticLedColor::kRed);
+            ash::cros_healthd::mojom::LedColor::kRed);
 }
 
 TEST(TelemetryExtensionDiagnosticsApiConvertersUnitTest,

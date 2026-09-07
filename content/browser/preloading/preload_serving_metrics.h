@@ -15,6 +15,7 @@
 #include "content/browser/preloading/prefetch/prefetch_streaming_url_loader_common_types.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/preload_serving_metrics_capsule.h"
+#include "net/http/http_no_vary_search_data.h"
 
 namespace content {
 
@@ -52,12 +53,15 @@ struct CONTENT_EXPORT PrefetchContainerMetrics final {
 
   // Timing information for metrics
   //
-  // Constraint: That earlier one is null implies that later one is null.
+  // Constraint: That earlier one is null implies that later one is null,
+  // except for `time_domain_lookup_started`, which can be null if DNS
+  // resolution was not performed (e.g. socket reuse or HTTP cache hit).
   // E.g. `time_prefetch_start` is null implies
   // `time_header_determined_successfully` is null.
   std::optional<base::TimeTicks> time_added_to_prefetch_service;
   std::optional<base::TimeTicks> time_initial_eligibility_got;
   std::optional<base::TimeTicks> time_prefetch_started;
+  std::optional<base::TimeTicks> time_first_url_request_started;
   std::optional<base::TimeTicks> time_url_request_started;
   std::optional<base::TimeTicks> time_domain_lookup_started;
   std::optional<base::TimeTicks> time_header_determined_successfully;
@@ -67,6 +71,8 @@ struct CONTENT_EXPORT PrefetchContainerMetrics final {
   std::optional<base::TimeDelta> create_stream_delay;
   std::optional<base::TimeDelta> connected_callback_delay;
   std::optional<base::TimeDelta> initialize_stream_delay;
+
+  bool is_constructed_from_pre_prefetch = false;
 };
 
 // Debug information of prefetch ahead of prerender at prefetch matching.
@@ -98,6 +104,7 @@ struct CONTENT_EXPORT PrefetchMatchPrefetchAheadOfPrerenderDebugMetrics final {
   PrefetchPotentialCandidateCollectResult collect_result;
   PrefetchKey prefetch_key_navigated;
   PrefetchKey prefetch_key_ahead_of_prerender;
+  std::optional<net::HttpNoVarySearchData> prefetch_nvs_hint_ahead_of_prerender;
 };
 
 // Debug information of prefetch ahead of prerender at prefetch matching.
@@ -186,10 +193,6 @@ struct CONTENT_EXPORT PrefetchMatchMetrics final {
   std::unique_ptr<PrefetchContainerMetrics>
       prefetch_container_metrics_ahead_of_prerender = nullptr;
 
-  // Null if `!UsePrefetchScheduler()`.
-  //
-  // TODO(crbug.com/406402069): Remove the above comment.
-  //
   // Non null if the navigation is prerender initial navigation.
   std::unique_ptr<PrefetchMatchPrerenderDebugMetrics> prerender_debug_metrics;
 };
@@ -221,10 +224,13 @@ struct CONTENT_EXPORT PreloadServingMetrics final {
   // Returns nullptr if there is no `PrefetchMatchMetrics`.
   const PrefetchMatchMetrics* GetMeaningfulPrefetchMatchMetrics() const;
 
+  // Returns the instant load technology used for the navigation.
+  UsedInstantLoad GetUsedInstantLoad(
+      bool nav_used_bfcache,
+      bool is_served_by_legacy_search_prefetch) const;
+
   void RecordMetricsForNonPrerenderNavigationCommitted() const;
   void RecordMetricsForPrerenderInitialNavigationFailed() const;
-  void RecordFirstContentfulPaint(
-      base::TimeDelta corrected_first_contentful_paint) const;
 
   // Added per prefetch matching.
   std::vector<std::unique_ptr<PrefetchMatchMetrics>>
@@ -254,8 +260,9 @@ class CONTENT_EXPORT PreloadServingMetricsCapsuleImpl final
       NavigationHandle& navigation_handle);
 
   void RecordMetricsForNonPrerenderNavigationCommitted() const override;
-  void RecordFirstContentfulPaint(
-      base::TimeDelta corrected_first_contentful_paint) const override;
+  UsedInstantLoad GetUsedInstantLoad(
+      bool nav_used_bfcache,
+      bool is_served_by_legacy_search_prefetch) const override;
 
  private:
   explicit PreloadServingMetricsCapsuleImpl(

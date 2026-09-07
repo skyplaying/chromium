@@ -7,9 +7,11 @@
 #import <CoreText/CoreText.h>
 
 #import "base/apple/foundation_util.h"
+#import "base/check_is_test.h"
 #import "base/check_op.h"
 #import "base/command_line.h"
 #import "base/ios/ios_util.h"
+#import "base/metrics/user_metrics.h"
 #import "base/not_fatal_until.h"
 #import "base/notreached.h"
 #import "base/strings/sys_string_conversions.h"
@@ -17,20 +19,21 @@
 #import "components/omnibox/browser/autocomplete_input.h"
 #import "components/open_from_clipboard/clipboard_async_wrapper_ios.h"
 #import "ios/chrome/browser/autocomplete/model/autocomplete_scheme_classifier_impl.h"
+#import "ios/chrome/browser/composebox/public/features.h"
+#import "ios/chrome/browser/omnibox/public/omnibox_constants.h"
 #import "ios/chrome/browser/omnibox/public/omnibox_ui_features.h"
 #import "ios/chrome/browser/omnibox/public/omnibox_util.h"
 #import "ios/chrome/browser/omnibox/ui/omnibox_text_input.h"
 #import "ios/chrome/browser/omnibox/ui/omnibox_text_input_delegate.h"
 #import "ios/chrome/browser/shared/public/features/system_flags.h"
 #import "ios/chrome/browser/shared/ui/util/animation_util.h"
-#import "ios/chrome/browser/shared/ui/util/dynamic_type_util.h"
-#import "ios/chrome/browser/shared/ui/util/reversed_animation.h"
 #import "ios/chrome/browser/shared/ui/util/rtl_geometry.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/public/toolbar_constants.h"
 #import "ios/chrome/common/material_timing.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/common/ui/util/dynamic_type_util.h"
+#import "ios/chrome/common/ui/util/ui_util.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/chrome/grit/ios_theme_resources.h"
 #import "skia/ext/skia_utils_ios.h"
@@ -38,15 +41,11 @@
 #import "ui/base/l10n/l10n_util_mac.h"
 #import "ui/gfx/color_palette.h"
 #import "ui/gfx/image/image.h"
-#import "ui/gfx/ios/NSString+CrStringDrawing.h"
 #import "ui/gfx/scoped_cg_context_save_gstate_mac.h"
 
 using enum OmniboxKeyboardAction;
 
 namespace {
-
-/// Minimum vertical inset, defaults from UITextView.
-const CGFloat kMinVerticalInset = 8.0;
 
 /// The placeholder leading padding.
 const CGFloat kPlaceholderLeadingPadding = 5.0;
@@ -94,6 +93,10 @@ const CGFloat kVerticalOffset = 1;
 
   // Cached single line height.
   CGFloat _cachedSingleLineHeight;
+
+  // Whether a newline is being programmatically inserted (e.g. by
+  // Shift+Return).
+  BOOL _insertingNewline;
 }
 
 @synthesize omniboxTextInputDelegate = _omniboxTextInputDelegate;
@@ -120,16 +123,17 @@ const CGFloat kVerticalOffset = 1;
     self.autocorrectionType = UITextAutocorrectionTypeNo;
     self.autocapitalizationType = UITextAutocapitalizationTypeNone;
     self.enablesReturnKeyAutomatically = YES;
-    self.returnKeyType = UIReturnKeyGo;
+    BOOL isCobrowse =
+        _presentationContext == OmniboxPresentationContext::kCobrowse;
+    self.returnKeyType = isCobrowse ? UIReturnKeyDefault : UIReturnKeyGo;
     self.spellCheckingType = UITextSpellCheckingTypeNo;
     self.textAlignment = NSTextAlignmentNatural;
-    self.keyboardType = UIKeyboardTypeWebSearch;
+    self.keyboardType =
+        isCobrowse ? UIKeyboardTypeDefault : UIKeyboardTypeWebSearch;
     self.smartQuotesType = UITextSmartQuotesTypeNo;
     self.dataDetectorTypes = UIDataDetectorTypeNone;
     self.allowsEditingTextAttributes = NO;
-    if (@available(iOS 18, *)) {
-      self.writingToolsBehavior = UIWritingToolsBehaviorNone;
-    }
+    self.writingToolsBehavior = UIWritingToolsBehaviorNone;
     [self updateOmniboxTypingAttributes];
 
     // Disable drag on iPhone because there's nowhere to drag to
@@ -169,9 +173,7 @@ const CGFloat kVerticalOffset = 1;
 
     self.delegate = self;
 
-    NSArray<UITrait>* traits = TraitCollectionSetForTraits(
-        @[ UITraitPreferredContentSizeCategory.class ]);
-    [self registerForTraitChanges:(traits)
+    [self registerForTraitChanges:@[ UITraitPreferredContentSizeCategory.class ]
                        withAction:@selector(updateTextProperitesOnTraitChange)];
   }
   return self;
@@ -183,7 +185,8 @@ const CGFloat kVerticalOffset = 1;
 
 - (void)setPlaceholderLabel:(UILabel*)placeholderLabel {
   placeholderLabel.font = self.font;
-  placeholderLabel.textColor = [UIColor colorNamed:kTextfieldPlaceholderColor];
+  placeholderLabel.textColor = [UIColor colorNamed:kTextSecondaryColor];
+  placeholderLabel.isAccessibilityElement = NO;
   _placeholderLabel = placeholderLabel;
 
   // Align placeholder with the text view's content area by constraining it
@@ -563,11 +566,6 @@ const CGFloat kVerticalOffset = 1;
 - (void)beginFloatingCursorAtPoint:(CGPoint)point {
   // Exit preedit because it blocks the view of the textfield.
   [self exitPreEditState];
-  // Remove selection and put the caret at the end of the string.
-  if (!base::FeatureList::IsEnabled(kBeginCursorAtPointTentativeFix)) {
-    self.selectedTextRange = [self textRangeFromPosition:self.endOfDocument
-                                              toPosition:self.endOfDocument];
-  }
   [super beginFloatingCursorAtPoint:point];
 }
 
@@ -683,6 +681,12 @@ const CGFloat kVerticalOffset = 1;
     return [self.omniboxKeyboardDelegate canPerformKeyboardAction:kRightArrow];
   }
 
+  if (IsComposeboxPhysicalKeyboardReturnKeysEnabled()) {
+    if (action == @selector(forwardKeyCommandShiftReturn:)) {
+      return YES;
+    }
+  }
+
   // Handle pre-edit shortcuts.
   if ([self isPreEditing]) {
     // Allow cut and copy in preedit.
@@ -791,9 +795,19 @@ const CGFloat kVerticalOffset = 1;
   [self.omniboxKeyboardDelegate performKeyboardAction:kRightArrow];
 }
 
+- (void)forwardKeyCommandShiftReturn:(UIKeyCommand*)command {
+  base::RecordAction(
+      base::UserMetricsAction("IOS.Omnibox.PhysicalKeyboardShiftReturn"));
+  _insertingNewline = YES;
+  [self insertText:@"\n"];
+  _insertingNewline = NO;
+}
+
 // Arrow keys are forwarded to the main OmniboxKeyboardDelegate that will
 // dispatch them to OmniboxPopupViewController or OmniboxViewController, if they
 // don't handle them, default behavior of UITextField applies.
+// Return keys are overridden in composebox and cobrowse to send on
+// return/cmd+return, and add new line on shift+return.
 - (NSArray<UIKeyCommand*>*)keyCommands {
   UIKeyCommand* commandUp =
       [UIKeyCommand keyCommandWithInput:UIKeyInputUpArrow
@@ -816,16 +830,31 @@ const CGFloat kVerticalOffset = 1;
   commandDown.wantsPriorityOverSystemBehavior = YES;
   commandLeft.wantsPriorityOverSystemBehavior = YES;
   commandRight.wantsPriorityOverSystemBehavior = YES;
-  return @[ commandUp, commandDown, commandLeft, commandRight ];
+
+  NSMutableArray<UIKeyCommand*>* commands = [NSMutableArray
+      arrayWithObjects:commandUp, commandDown, commandLeft, commandRight, nil];
+
+  if (IsComposeboxPhysicalKeyboardReturnKeysEnabled() &&
+      (_presentationContext == OmniboxPresentationContext::kComposebox ||
+       _presentationContext == OmniboxPresentationContext::kCobrowse)) {
+    UIKeyCommand* commandShiftReturn = [UIKeyCommand
+        keyCommandWithInput:@"\r"
+              modifierFlags:UIKeyModifierShift
+                     action:@selector(forwardKeyCommandShiftReturn:)];
+
+    commandShiftReturn.wantsPriorityOverSystemBehavior = YES;
+
+    [commands addObject:commandShiftReturn];
+  }
+
+  return commands;
 }
 
 #pragma mark - UIAccessibilityElement
 
 - (NSString*)accessibilityValue {
-  if (NSClassFromString(@"XCTest")) {
-    return [NSString stringWithFormat:@"%@||||%@||||%@", self.userText ?: @"",
-                                      self.autocompleteText ?: @"",
-                                      self.attributedAdditionalText ?: @""];
+  if (self.text.length == 0) {
+    return self.placeholderLabel.text;
   }
   return self.text;
 }
@@ -1010,7 +1039,7 @@ const CGFloat kVerticalOffset = 1;
   }
 
   CHECK_LE(self.attributedAdditionalText.length, self.attributedText.length,
-           base::NotFatalUntil::M150);
+           base::NotFatalUntil::M160);
   /// This should not happen, tracking occurences with NotFatalUntil
   /// crbug.com/421229993.
   if (self.attributedText.length < self.attributedAdditionalText.length) {
@@ -1171,22 +1200,30 @@ const CGFloat kVerticalOffset = 1;
   self.placeholderLabel.font = self.font;
   [self setAttributedText:self.attributedText];
   [self updateOmniboxTypingAttributes];
+  [self.heightDelegate textViewContentChanged:self];
 }
 
 - (void)updateTextContainerInset {
+  BOOL isComposeboxIpad =
+      ui::GetDeviceFormFactor() != ui::DEVICE_FORM_FACTOR_PHONE;
+  CGFloat minVerticalInset =
+      isComposeboxIpad ? kOmniboxTextViewMinVerticalInsetIPadComposebox
+                       : kOmniboxTextViewMinVerticalInset;
   if (self.minimumHeight <= 0) {
     // Reset to default values.
     self.textContainerInset =
-        UIEdgeInsetsMake(kMinVerticalInset, 0, kMinVerticalInset, 0);
-    _placeholderTopConstraint.constant = kMinVerticalInset;
+        UIEdgeInsetsMake(minVerticalInset, 0, minVerticalInset, 0);
+    _placeholderTopConstraint.constant = minVerticalInset;
     return;
   }
   CGFloat lineHeight = [self singleLineHeight];
   CGFloat minHeight = self.minimumHeight;
   CGFloat verticalPadding =
-      MAX(kMinVerticalInset * 2.0, (minHeight - lineHeight));
+      MAX(minVerticalInset * 2.0, (minHeight - lineHeight));
   // Distribute padding.
-  CGFloat topPadding = verticalPadding / 2.0 + kVerticalOffset;
+  CGFloat verticalOffset =
+      IsRegularXRegularSizeClass(self.traitCollection) ? 0.0 : kVerticalOffset;
+  CGFloat topPadding = verticalPadding / 2.0 + verticalOffset;
   CGFloat bottomPadding = verticalPadding - topPadding;
   self.textContainerInset = UIEdgeInsetsMake(topPadding, 0, bottomPadding, 0);
   _placeholderTopConstraint.constant = topPadding;
@@ -1256,6 +1293,14 @@ const CGFloat kVerticalOffset = 1;
   [self updatePlaceholder];
 }
 
+- (NSString*)textValueForTesting {
+  CHECK_IS_TEST();
+  return
+      [NSString stringWithFormat:@"%@||||%@||||%@", self.userText ?: @"",
+                                 self.autocompleteText ?: @"",
+                                 self.attributedAdditionalText.string ?: @""];
+}
+
 #pragma mark - UITextViewDelegate
 
 - (void)textViewDidChange:(UITextView*)textView {
@@ -1272,8 +1317,13 @@ const CGFloat kVerticalOffset = 1;
 - (BOOL)textView:(UITextView*)textView
     shouldChangeTextInRange:(NSRange)range
             replacementText:(NSString*)text {
-  // Prevent new lines.
-  if ([text isEqualToString:@"\n"]) {
+  // Only check for characters sent by the Return/Enter key (\n and \r) to
+  // trigger submission. Other unicode line breaks (e.g. pasted paragraph
+  // separators) should be allowed to be inserted as text.
+  BOOL isNewline = [text isEqualToString:@"\n"] || [text isEqualToString:@"\r"];
+  BOOL isCobrowse =
+      _presentationContext == OmniboxPresentationContext::kCobrowse;
+  if (isNewline && !_insertingNewline && !isCobrowse) {
     return [self.omniboxTextInputDelegate textInputShouldReturn:self];
   }
   return [self.omniboxTextInputDelegate textInput:self

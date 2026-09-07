@@ -7,6 +7,8 @@
 #include <list>
 #include <utility>
 
+#include "base/feature.h"
+#include "base/feature_list.h"
 #include "build/build_config.h"
 #include "gpu/command_buffer/common/mailbox.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
@@ -19,6 +21,10 @@
 
 namespace gpu {
 namespace {
+
+// TODO(kylechar): Remove after M155 hits stable.
+BASE_FEATURE(kAllowCompressedGLTextureBackings,
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 constexpr SharedImageUsageSet kWebGPUUsages =
     SHARED_IMAGE_USAGE_WEBGPU_READ | SHARED_IMAGE_USAGE_WEBGPU_WRITE |
@@ -54,39 +60,24 @@ GLTextureImageBackingFactory::GLTextureImageBackingFactory(
 GLTextureImageBackingFactory::~GLTextureImageBackingFactory() = default;
 
 std::unique_ptr<SharedImageBacking>
-GLTextureImageBackingFactory::CreateSharedImage(
-    const Mailbox& mailbox,
-    viz::SharedImageFormat format,
-    SurfaceHandle surface_handle,
-    const gfx::Size& size,
-    const gfx::ColorSpace& color_space,
-    GrSurfaceOrigin surface_origin,
-    SkAlphaType alpha_type,
-    SharedImageUsageSet usage,
-    std::string debug_label,
-    bool is_thread_safe) {
+GLTextureImageBackingFactory::CreateSharedImage(const Mailbox& mailbox,
+                                                const SharedImageInfo& si_info,
+                                                SurfaceHandle surface_handle,
+                                                bool is_thread_safe) {
   CHECK(!is_thread_safe);
-  return CreateSharedImageInternal(
-      mailbox, format, surface_handle, size, color_space, surface_origin,
-      alpha_type, usage, std::move(debug_label), base::span<const uint8_t>());
+  return CreateSharedImageInternal(mailbox, si_info, surface_handle,
+                                   base::span<const uint8_t>());
 }
 
 std::unique_ptr<SharedImageBacking>
 GLTextureImageBackingFactory::CreateSharedImage(
     const Mailbox& mailbox,
-    viz::SharedImageFormat format,
-    const gfx::Size& size,
-    const gfx::ColorSpace& color_space,
-    GrSurfaceOrigin surface_origin,
-    SkAlphaType alpha_type,
-    SharedImageUsageSet usage,
-    std::string debug_label,
+    const SharedImageInfo& si_info,
     bool is_thread_safe,
     base::span<const uint8_t> pixel_data) {
   CHECK(!is_thread_safe);
-  return CreateSharedImageInternal(mailbox, format, kNullSurfaceHandle, size,
-                                   color_space, surface_origin, alpha_type,
-                                   usage, std::move(debug_label), pixel_data);
+  return CreateSharedImageInternal(mailbox, si_info, kNullSurfaceHandle,
+                                   pixel_data);
 }
 
 bool GLTextureImageBackingFactory::IsSupported(
@@ -119,6 +110,11 @@ bool GLTextureImageBackingFactory::IsSupported(
     }
   }
 
+  if (format.IsCompressed() &&
+      !base::FeatureList::IsEnabled(kAllowCompressedGLTextureBackings)) {
+    return false;
+  }
+
   // This is not beneficial on iOS. The main purpose of this is a multi-gpu
   // support.
   if (!support_all_metal_usages_) {
@@ -141,7 +137,10 @@ bool GLTextureImageBackingFactory::IsSupported(
   // running on top of GL. For the case WebGL fallback (GrContextType::kNone)
   // this usages aren't actually relevant but WebGL still adds them so ignore.
   if (gr_context_type != GrContextType::kGL &&
-      gr_context_type != GrContextType::kNone) {
+      gr_context_type != GrContextType::kNone &&
+      (gr_context_type != GrContextType::kGraphiteDawn ||
+       gl::GetGLImplementation() != gl::kGLImplementationEGLANGLE ||
+       gl::GetANGLEImplementation() != gl::ANGLEImplementation::kOpenGL)) {
     SharedImageUsageSet unsupported_usages =
         SHARED_IMAGE_USAGE_DISPLAY_READ | SHARED_IMAGE_USAGE_DISPLAY_WRITE |
         SHARED_IMAGE_USAGE_RASTER_READ | SHARED_IMAGE_USAGE_RASTER_WRITE;
@@ -187,30 +186,24 @@ void GLTextureImageBackingFactory::ForceSetUsingANGLEMetalForTesting(
 std::unique_ptr<SharedImageBacking>
 GLTextureImageBackingFactory::CreateSharedImageInternal(
     const Mailbox& mailbox,
-    viz::SharedImageFormat format,
+    const SharedImageInfo& si_info,
     SurfaceHandle surface_handle,
-    const gfx::Size& size,
-    const gfx::ColorSpace& color_space,
-    GrSurfaceOrigin surface_origin,
-    SkAlphaType alpha_type,
-    SharedImageUsageSet usage,
-    std::string debug_label,
     base::span<const uint8_t> pixel_data) {
-  DCHECK(CanCreateTexture(format, size, pixel_data, GL_TEXTURE_2D));
+  DCHECK(CanCreateTexture(si_info.format, si_info.size, pixel_data,
+                          GL_TEXTURE_2D));
 
   // GLTextureImageBackingFactory supports raster and display usage only for
   // Ganesh-GL, meaning that raster/display write usage implies GL writes
   // within Skia.
-  const bool for_framebuffer_attachment = usage.HasAny(
+  const bool for_framebuffer_attachment = si_info.usage.HasAny(
       SHARED_IMAGE_USAGE_GLES2_WRITE | SHARED_IMAGE_USAGE_RASTER_WRITE |
       SHARED_IMAGE_USAGE_DISPLAY_WRITE);
   const bool framebuffer_attachment_angle =
       for_framebuffer_attachment && texture_usage_angle_;
 
-  auto result = std::make_unique<GLTextureImageBacking>(
-      mailbox, format, size, color_space, surface_origin, alpha_type, usage,
-      std::move(debug_label), use_passthrough_);
-  result->InitializeGLTexture(GetFormatInfo(format), pixel_data,
+  auto result = std::make_unique<GLTextureImageBacking>(mailbox, si_info,
+                                                        use_passthrough_);
+  result->InitializeGLTexture(GetFormatInfo(si_info.format), pixel_data,
                               progress_reporter_, framebuffer_attachment_angle);
 
   return std::move(result);
@@ -218,6 +211,15 @@ GLTextureImageBackingFactory::CreateSharedImageInternal(
 
 SharedImageBackingType GLTextureImageBackingFactory::GetBackingType() {
   return SharedImageBackingType::kGLTexture;
+}
+
+bool GLTextureImageBackingFactory::IsSupportedForAccessStream(
+    SharedImageAccessStream stream,
+    viz::SharedImageFormat format,
+    const AccessParams* params) const {
+  AccessParams default_params;
+  return GLTextureImageBacking::CheckSupportForAccessStream(
+      stream, params ? *params : default_params);
 }
 
 }  // namespace gpu

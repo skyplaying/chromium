@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <map>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/containers/flat_map.h"
@@ -20,15 +21,21 @@
 #include "base/types/expected.h"
 #include "base/types/fixed_array.h"
 #include "mojo/public/cpp/base/big_buffer.h"
+#include "mojo/public/cpp/bindings/shared_remote.h"
+#include "services/webnn/buildflags.h"
 #include "services/webnn/public/cpp/context_properties.h"
 #include "services/webnn/public/cpp/operand_descriptor.h"
 #include "services/webnn/public/cpp/supported_data_types.h"
 #include "services/webnn/public/cpp/webnn_types.h"
-#include "services/webnn/public/mojom/webnn_context_provider.mojom-forward.h"
+#include "services/webnn/public/mojom/webnn_context_provider.mojom.h"
 #include "services/webnn/public/mojom/webnn_graph.mojom.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 #include "third_party/flatbuffers/src/include/flatbuffers/flatbuffers.h"
 #include "third_party/tflite/src/tensorflow/compiler/mlir/lite/schema/schema_generated.h"
+
+#if BUILDFLAG(WEBNN_USE_LITERT)
+#include "third_party/litert/src/litert/cc/litert_options.h"
+#endif
 
 namespace webnn {
 
@@ -86,7 +93,12 @@ class GraphBuilderTflite final {
            std::vector<std::pair<std::string, TensorDescriptor>>
                output_name_to_descriptor,
            base::File weights_file,
-           bool graph_requires_fp32_precision);
+           bool graph_requires_fp32_precision
+#if BUILDFLAG(WEBNN_USE_LITERT)
+           ,
+           ::litert::Options::ScopedWeightSectionMap weights_section_map
+#endif
+    );
     Result(const Result&) = delete;
     Result& operator=(const Result&) = delete;
     Result(Result&&);
@@ -100,6 +112,9 @@ class GraphBuilderTflite final {
         output_name_to_descriptor;
     base::File weights_file;
     bool graph_requires_fp32_precision;
+#if BUILDFLAG(WEBNN_USE_LITERT)
+    ::litert::Options::ScopedWeightSectionMap weights_section_map;
+#endif
   };
 
   GraphBuilderTflite(const GraphBuilderTflite&) = delete;
@@ -107,8 +122,12 @@ class GraphBuilderTflite final {
 
   // Factory method that creates a GraphBuilderTflite and builds a TFLite
   // Flatbuffer Returns unexpected if it fails.
+  //
+  // `context_device` selects the runtime accelerator the model is being
+  // built for.
   [[nodiscard]] static base::expected<Result, std::string> CreateAndBuild(
       ContextProperties context_properties,
+      mojom::Device context_device,
       const mojom::GraphInfo& graph_info,
       const base::flat_map<OperandId, std::unique_ptr<WebNNConstantOperand>>&
           constant_operands,
@@ -116,9 +135,15 @@ class GraphBuilderTflite final {
           operand_to_dependent_operations,
       const base::flat_map<OperandId, OperationId>
           operand_to_producing_operation,
-      base::File weights_file);
+      base::File weights_file,
+      mojo::SharedRemote<mojom::WeightsFileSession> session,
+      bool use_external_buffer);
 
-  static ContextProperties GetContextProperties();
+  // `context_device` selects the runtime accelerator the context targets. Some
+  // limits depend on the accelerator; for example the ML Drift GPU delegate
+  // does not support int64, so int64 is removed from all op support limits when
+  // `context_device` is `mojom::Device::kGpu`.
+  static ContextProperties GetContextProperties(mojom::Device context_device);
 
  private:
   using IdToOperandMap = base::flat_map<OperandId, mojom::OperandPtr>;
@@ -127,13 +152,15 @@ class GraphBuilderTflite final {
   using BufferOffset = flatbuffers::Offset<::tflite::Buffer>;
   using TensorOffset = flatbuffers::Offset<::tflite::Tensor>;
   using StringOffset = flatbuffers::Offset<flatbuffers::String>;
+  using ShapeOffset = flatbuffers::Offset<flatbuffers::Vector<int32_t>>;
+  using ExternalBufferOffset = flatbuffers::Offset<::tflite::ExternalBuffer>;
   using QuantizateParametersOffset =
       flatbuffers::Offset<::tflite::QuantizationParameters>;
-  using BufferIndex = uint32_t;
   using OperatorCodeIndex = uint32_t;
 
   GraphBuilderTflite(
       ContextProperties context_properties,
+      mojom::Device context_device,
       const mojom::GraphInfo& graph_info,
       const base::flat_map<OperandId, std::unique_ptr<WebNNConstantOperand>>&
           constant_operands,
@@ -141,8 +168,18 @@ class GraphBuilderTflite final {
           operand_to_dependent_operations,
       const base::flat_map<OperandId, OperationId>&
           operand_to_producing_operation,
-      base::File weights_file);
+      base::File weights_file,
+      mojo::SharedRemote<mojom::WeightsFileSession> session,
+      bool use_external_buffer);
   ~GraphBuilderTflite();
+
+  struct BufferInfo {
+    uint32_t index;
+
+    // Remains false for the mandatory TFLite empty buffer and non-constant
+    // tensors, even when external buffers are enabled.
+    bool is_external;
+  };
 
   // Maps to WebNN operand information.
   struct TensorInfo {
@@ -194,7 +231,7 @@ class GraphBuilderTflite final {
   // as input, for example the input data type has been overridden to float32 of
   // intermediate operands (Reshape), so the output tensor type should be
   // float32 with the argument.
-  TensorInfo SerializeOutputTensorInfo(
+  base::expected<TensorInfo, std::string> SerializeOutputTensorInfo(
       OperandId operand_id,
       QuantizateParametersOffset quantize_params = 0,
       bool operation_supports_float16 = false,
@@ -217,7 +254,7 @@ class GraphBuilderTflite final {
   // The `Buffer` in TFLite schema is the table of raw data buffers, it is used
   // for WebNN constant operations. Referenced by tensors with the index of
   // buffer.
-  base::expected<BufferIndex, std::string> SerializeBuffer(
+  base::expected<BufferInfo, std::string> SerializeBuffer(
       base::span<const uint8_t> buffer);
 
   // Serializes `buffer` as a tensor with the given `dimensions` and `type `to
@@ -247,6 +284,11 @@ class GraphBuilderTflite final {
   OperatorCodeIndex GetOperatorCodeIndex(::tflite::BuiltinOperator code,
                                          int32_t version = 1);
 
+  // Registers (once per unique name) a `BuiltinOperator_CUSTOM` operator code
+  // with the given custom name and returns its index.
+  OperatorCodeIndex GetCustomOperatorCodeIndex(std::string_view custom_code,
+                                               int32_t version = 1);
+
   // Returns the Operand corresponding to an `operand_id` from `graph_info_`.
   // Will crash if `graph_info_` does not contain `operand_id`.
   const mojom::Operand& GetOperand(OperandId operand_id) const;
@@ -258,6 +300,9 @@ class GraphBuilderTflite final {
 
   // Get the value from constant operand and cast it to int64 data type.
   base::FixedArray<int64_t> GetConstantInt64Value(OperandId operand_id);
+  // Returns the value of `operand_id` if it is a floating point constant with
+  // a single element.
+  std::optional<float> GetFloatScalarConstant(OperandId operand_id);
   // Get quantize scale value for float16 and float32 data type.
   base::FixedArray<float> GetQuantizeScaleValue(OperandId operand_id);
 
@@ -301,6 +346,33 @@ class GraphBuilderTflite final {
                                           TensorIndex rhs_tensor_index,
                                           TensorIndex output_tensor_index);
 
+  // Serialize a binary op with optional rank reduction when kernel
+  // broadcasting is limited by `max_broadcast_rank`.
+  base::expected<OperatorOffset, std::string>
+  SerializeBinaryOperationWithRankReduction(
+      ::tflite::BuiltinOperator code,
+      TensorIndex lhs_tensor_index,
+      base::span<const int32_t> lhs_dims,
+      ::tflite::TensorType lhs_tensor_type,
+      TensorIndex rhs_tensor_index,
+      base::span<const int32_t> rhs_dims,
+      ::tflite::TensorType rhs_tensor_type,
+      TensorIndex output_tensor_index,
+      base::span<const int32_t> output_dims,
+      ::tflite::TensorType output_tensor_type,
+      size_t max_broadcast_rank);
+
+  // Emit a BOOL-in / BOOL-out binary op for logicalAnd/Or/Xor, reducing rank
+  // when an input exceeds the kernel's 4D broadcast limit.
+  base::expected<void, std::string> InsertLogicalBinaryOperations(
+      ::tflite::BuiltinOperator code,
+      TensorIndex lhs_bool_tensor_index,
+      base::span<const int32_t> lhs_dims,
+      TensorIndex rhs_bool_tensor_index,
+      base::span<const int32_t> rhs_dims,
+      TensorIndex output_bool_tensor_index,
+      base::span<const int32_t> output_dims);
+
   // Serialize a sub graph (min appending max operation) for clamp.
   template <typename DataType>
   base::expected<OperatorOffset, std::string> SerializeSubGraphMaxMin(
@@ -315,7 +387,8 @@ class GraphBuilderTflite final {
       const TensorInfo& indices_tensor_info,
       const TensorInfo& input_tensor_info,
       std::optional<uint32_t> gather_axis = std::nullopt);
-  TensorIndex CastGatherIndices(const TensorInfo& indices_tensor_info);
+  base::expected<TensorIndex, std::string> CastGatherIndices(
+      const TensorInfo& indices_tensor_info);
 
   // This function is called by `SerializeGatherND` to serialize WebNN
   // gatherND or gatherElements.
@@ -335,7 +408,7 @@ class GraphBuilderTflite final {
 
   // This function is called by `SerializeConcat` to serialize WebNN
   // concat operator or used to emulate WebNN operations.
-  OperatorOffset SerializeConcatOperation(
+  base::expected<OperatorOffset, std::string> SerializeConcatOperation(
       base::span<const TensorIndex> input_tensor_indices,
       TensorIndex output_tensor_index,
       uint32_t axis);
@@ -490,28 +563,30 @@ class GraphBuilderTflite final {
                                          TensorIndex false_tensor_index,
                                          TensorIndex output_tensor_index);
 
-  // Insert a tempary pad operation if the `paddings` can't be converted to
-  // tflite padding mode.
+  // Insert a temporary pad operation if the `paddings` can't be converted to
+  // tflite padding mode. When `padding_value` is set, a PADV2 operator is
+  // used to fill the padded region with that constant.
   base::expected<TensorIndex, std::string> InsertPadOperation(
       const TensorInfo& input_tensor_info,
-      base::span<const uint32_t> paddings);
+      base::span<const int16_t> paddings,
+      std::optional<float> padding_value = std::nullopt);
 
-  // Insert a tempary transpose operation for input operand with calling
+  // Insert a temporary transpose operation for input operand with calling
   // `SerializeTransposeOperation`.
   base::expected<TensorIndex, std::string> InsertTransposeOperation(
       const TensorInfo& input_tensor_info,
       base::span<const uint32_t> permutation);
 
-  // Serialize a sub graph (pow appending mul operation) for erf operation.
-  base::expected<TensorIndex, std::string> SerializeSubGraphPowMul(
-      base::span<const int32_t> input_dimensions,
-      ::tflite::TensorType input_tensor_type,
-      TensorIndex input_tensor_index,
-      int pow_exponent,
-      float mul_alpha);
+  // Serializes the rank-2 constant `operand_id` with its two axes
+  // exchanged, so that no TRANSPOSE operator is emitted for it. A
+  // float16 constant is followed by the DEQUANTIZE which unpacks it,
+  // so the returned index may be that operator's output rather than
+  // the constant.
+  base::expected<TensorIndex, std::string> SerializeTransposedConstant2D(
+      OperandId operand_id);
 
   // Serialize a sub graph (input * weight + bias) for gru cell.
-  TensorIndex SerializeSubGraphMatmulAdd(
+  base::expected<TensorIndex, std::string> SerializeSubGraphMatmulAdd(
       base::span<const int32_t> input_dimensions,
       ::tflite::TensorType input_tensor_type,
       TensorIndex input_tensor_index,
@@ -657,7 +732,7 @@ class GraphBuilderTflite final {
       base::span<const int32_t> state_dimensions);
 
   // Serialize a sub graph (reshape appending concat operation) for gru /lstm.
-  TensorIndex SerializeSubGraphReshapeConcat(
+  base::expected<TensorIndex, std::string> SerializeSubGraphReshapeConcat(
       ::tflite::TensorType input_tensor_type,
       TensorIndex input_tensor_index,
       base::span<const int32_t> new_shape,
@@ -697,6 +772,10 @@ class GraphBuilderTflite final {
       const TensorInfo& output_tensor_info);
   base::expected<OperatorOffset, std::string> SerializeExpand(
       const mojom::Expand& expand);
+  base::expected<OperatorOffset, std::string> SerializeBroadcastToOperation(
+      TensorIndex input_tensor_index,
+      base::span<const int32_t> output_dimensions,
+      TensorIndex output_tensor_index);
   base::expected<OperatorOffset, std::string> SerializeGather(
       const mojom::Gather& gather);
   base::expected<OperatorOffset, std::string> SerializeGatherElements(
@@ -713,12 +792,19 @@ class GraphBuilderTflite final {
       const mojom::HardSigmoid& hard_sigmoid);
   base::expected<OperatorOffset, std::string> SerializeHardSwish(
       const mojom::HardSwish& hard_swish);
-  OperatorOffset SerializeIdentityOperation(TensorIndex input_tensor_index,
-                                            TensorIndex output_tensor_index,
-                                            base::span<const int32_t> shape);
+  // Returns Null OperatorOffset if the operation is elided, otherwise returns
+  // the OperatorOffset of the serialized operation.
+  base::expected<OperatorOffset, std::string> SerializeIdentityOperation(
+      OperandId input_operand_id,
+      OperandId output_operand_id);
+
   base::expected<OperatorOffset, std::string> SerializeInstanceNormalization(
       const mojom::InstanceNormalization& instance_normalization);
   base::expected<OperatorOffset, std::string> SerializeLayerNormalization(
+      const mojom::LayerNormalization& layer_normalization);
+  // Emits a `custom_call.LayerNorm` custom op if supported by
+  // `context_device_`. Returns `std::nullopt` otherwise.
+  std::optional<OperatorOffset> SerializeLayerNormalizationAsCustomCall(
       const mojom::LayerNormalization& layer_normalization);
   base::expected<OperatorOffset, std::string> SerializeLeakyRelu(
       const mojom::LeakyRelu& leaky_relu);
@@ -727,8 +813,9 @@ class GraphBuilderTflite final {
   base::expected<OperatorOffset, std::string> SerializeIsInfinite(
       const TensorInfo& input_tensor_info,
       const TensorInfo& output_tensor_info);
-  OperatorOffset SerializeLogicalNot(const TensorInfo& input_tensor_info,
-                                     const TensorInfo& output_tensor_info);
+  base::expected<OperatorOffset, std::string> SerializeLogicalNot(
+      const TensorInfo& input_tensor_info,
+      const TensorInfo& output_tensor_info);
   base::expected<OperatorOffset, std::string> SerializeLstmCell(
       const mojom::LstmCell& lstm_cell);
   base::expected<OperatorOffset, std::string> SerializeMatmul(
@@ -777,8 +864,9 @@ class GraphBuilderTflite final {
       const mojom::Softsign& softsign);
   base::expected<OperatorOffset, std::string> SerializeSplit(
       const mojom::Split& split);
-  OperatorOffset SerializeTan(const TensorInfo& input_tensor_info,
-                              const TensorInfo& output_tensor_info);
+  base::expected<OperatorOffset, std::string> SerializeTan(
+      const TensorInfo& input_tensor_info,
+      const TensorInfo& output_tensor_info);
   base::expected<OperatorOffset, std::string> SerializeTanh(
       const mojom::Tanh& tanh);
   base::expected<OperatorOffset, std::string> SerializeTile(
@@ -809,50 +897,52 @@ class GraphBuilderTflite final {
   // minimum and maximum can be mapped to tflite::ActivationFunctionType, if so
   // we can remove the relu / clamp operation and fuse the
   // ActivationFunctionType.
-  std::optional<FusedActivationOutputInfo> CanFuseActivationAndGetOutput(
-      OperandId output_operand_id);
+  base::expected<std::optional<FusedActivationOutputInfo>, std::string>
+  CanFuseActivationAndGetOutput(OperandId output_operand_id);
 
   // Check if inputs and outputs are quantized tensors and matches
   // op specific fusion criteria required by TFLite, if so we can remove the
   // preceding `dequantizeLinear` and subsequent `quantizeLinear`.
-  std::optional<TensorInfo> CanFuseQuantizeAndGetOutput(
-      const mojom::Clamp& clamp,
-      bool is_emulated);
-  std::optional<TensorInfo> CanFuseQuantizeAndGetOutput(
+  base::expected<std::optional<TensorInfo>, std::string>
+  CanFuseQuantizeAndGetOutput(const mojom::Clamp& clamp, bool is_emulated);
+  base::expected<std::optional<TensorInfo>, std::string>
+  CanFuseQuantizeAndGetOutput(
       const mojom::Conv2d& conv2d,
       std::optional<OperandId> activation_output_operand_id);
-  std::optional<TensorInfo> CanFuseQuantizeAndGetOutput(
-      const mojom::Concat& concat);
-  std::optional<TensorInfo> CanFuseQuantizeAndGetOutput(
-      const mojom::ElementWiseBinary& binary);
-  std::optional<TensorInfo> CanFuseQuantizeAndGetOutput(const mojom::Elu& elu);
-  std::optional<TensorInfo> CanFuseQuantizeAndGetOutput(
-      const mojom::Gather& gather);
-  std::optional<TensorInfo> CanFuseQuantizeAndGetOutput(
-      const mojom::Gemm& gemm);
-  std::optional<TensorInfo> CanFuseQuantizeAndGetOutput(const mojom::Pad& pad);
-  std::optional<TensorInfo> CanFuseQuantizeAndGetOutput(
-      const mojom::Pool2d& pool2d);
-  std::optional<TensorInfo> CanFuseQuantizeAndGetOutput(
-      const mojom::Reduce& reduce);
-  std::optional<TensorInfo> CanFuseQuantizeAndGetOutput(
-      const mojom::Resample2d& resample2d);
-  std::optional<TensorInfo> CanFuseQuantizeAndGetOutput(
-      const mojom::Reshape& reshape);
-  std::optional<TensorInfo> CanFuseQuantizeAndGetOutput(
-      const mojom::Slice& slice);
-  std::optional<TensorInfo> CanFuseQuantizeAndGetOutput(
-      const mojom::Softmax& softmax);
-  std::optional<base::FixedArray<TensorInfo>> CanFuseQuantizeAndGetOutput(
-      const mojom::Split& split);
-  std::optional<TensorInfo> CanFuseQuantizeAndGetOutput(
-      const mojom::Transpose& transpose);
-  std::optional<TensorInfo> CanFuseQuantizeAndGetOutput(
-      const mojom::Tanh& tanh);
-  std::optional<TensorInfo> CanFuseQuantizeAndGetOutput(
-      const mojom::Sigmoid& sigmoid);
-  std::optional<TensorInfo> CanFuseQuantizeAndGetOutput(
-      const mojom::LeakyRelu& leaky_relu);
+  base::expected<std::optional<TensorInfo>, std::string>
+  CanFuseQuantizeAndGetOutput(const mojom::Concat& concat);
+  base::expected<std::optional<TensorInfo>, std::string>
+  CanFuseQuantizeAndGetOutput(const mojom::ElementWiseBinary& binary);
+  base::expected<std::optional<TensorInfo>, std::string>
+  CanFuseQuantizeAndGetOutput(const mojom::Elu& elu);
+  base::expected<std::optional<TensorInfo>, std::string>
+  CanFuseQuantizeAndGetOutput(const mojom::Gather& gather);
+  base::expected<std::optional<TensorInfo>, std::string>
+  CanFuseQuantizeAndGetOutput(const mojom::Gemm& gemm);
+  base::expected<std::optional<TensorInfo>, std::string>
+  CanFuseQuantizeAndGetOutput(const mojom::Pad& pad);
+  base::expected<std::optional<TensorInfo>, std::string>
+  CanFuseQuantizeAndGetOutput(const mojom::Pool2d& pool2d);
+  base::expected<std::optional<TensorInfo>, std::string>
+  CanFuseQuantizeAndGetOutput(const mojom::Reduce& reduce);
+  base::expected<std::optional<TensorInfo>, std::string>
+  CanFuseQuantizeAndGetOutput(const mojom::Resample2d& resample2d);
+  base::expected<std::optional<TensorInfo>, std::string>
+  CanFuseQuantizeAndGetOutput(const mojom::Reshape& reshape);
+  base::expected<std::optional<TensorInfo>, std::string>
+  CanFuseQuantizeAndGetOutput(const mojom::Slice& slice);
+  base::expected<std::optional<TensorInfo>, std::string>
+  CanFuseQuantizeAndGetOutput(const mojom::Softmax& softmax);
+  base::expected<std::optional<base::FixedArray<TensorInfo>>, std::string>
+  CanFuseQuantizeAndGetOutput(const mojom::Split& split);
+  base::expected<std::optional<TensorInfo>, std::string>
+  CanFuseQuantizeAndGetOutput(const mojom::Transpose& transpose);
+  base::expected<std::optional<TensorInfo>, std::string>
+  CanFuseQuantizeAndGetOutput(const mojom::Tanh& tanh);
+  base::expected<std::optional<TensorInfo>, std::string>
+  CanFuseQuantizeAndGetOutput(const mojom::Sigmoid& sigmoid);
+  base::expected<std::optional<TensorInfo>, std::string>
+  CanFuseQuantizeAndGetOutput(const mojom::LeakyRelu& leaky_relu);
   // Helper for activation operations to check if specific fusion criteria
   // required by TFLite are met and return next quantizeLinear operation
   // information if so.
@@ -884,7 +974,7 @@ class GraphBuilderTflite final {
       OperationId operation_index);
   // Serialize `quantize_linear`'s output with quantization params and
   // mark the `quantize_linear` to be skipped.
-  TensorInfo SerializeQuantizedOutput(
+  base::expected<TensorInfo, std::string> SerializeQuantizedOutput(
       std::pair<OperationId, QuantizateParametersOffset> quantize_op_info);
   // Get next operation id if it exists and is the only one with the output
   // operand id of current operation.
@@ -921,13 +1011,24 @@ class GraphBuilderTflite final {
   bool AreConstantOperandsEqual(OperandId lhs_operand_id,
                                 OperandId rhs_operand_id);
 
+  flatbuffers::Offset<::tflite::Tensor> CreateTensor(
+      const BufferInfo& buffer_info,
+      ShapeOffset shape,
+      ::tflite::TensorType tensor_type,
+      StringOffset name = 0,
+      QuantizateParametersOffset quantize_params = 0);
+
   // No further methods may be called on this class after calling this method
   // because the buffer of `buffer_` is now owned by the detached buffer.
-  Result FinishAndTakeResult(base::span<const OperandId> input_operands,
-                             base::span<const OperandId> output_operands,
-                             bool has_fp32_operation);
+  base::expected<Result, std::string> FinishAndTakeResult(
+      base::span<const OperandId> input_operands,
+      base::span<const OperandId> output_operands,
+      bool graph_requires_fp32_precision);
 
   const ContextProperties context_properties_;
+
+  // The accelerator the compiled model will target.
+  const mojom::Device context_device_;
 
   // A reference to the WebNN compute graph that `this` instance is converting
   // to TFLite. The creator of `this` must ensure the GraphInfo reference passed
@@ -980,9 +1081,18 @@ class GraphBuilderTflite final {
   // and `SubGraph`.
   std::vector<BufferOffset> buffers_;
   std::vector<TensorOffset> tensors_;
+  std::vector<ExternalBufferOffset> external_buffers_;
 
   // A temporary file created in browser process to hold all weights.
   base::File weights_file_;
+
+  // Capacity host for incremental budget enforcement (in-renderer path only).
+  // Null on the GPU-process path and in incognito mode.
+  mojo::SharedRemote<mojom::WeightsFileSession> session_;
+
+  // If true, tensors are serialized using `external_buffer`. If false, tensors
+  // are serialized using the standard `buffer`.
+  const bool use_external_buffer_;
 
   // The following std::vector<Offset<tflite:XXX>>> stores all operator
   // information including operator type, the index of input output tensor to

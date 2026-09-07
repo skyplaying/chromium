@@ -29,10 +29,10 @@
 #include "base/types/expected.h"
 #include "build/build_config.h"
 #include "chrome/browser/web_applications/generated_icon_fix_util.h"
-#include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_integrity_block_data.h"
-#include "chrome/browser/web_applications/isolated_web_apps/isolation_data.h"
 #include "chrome/browser/web_applications/model/app_installed_by.h"
 #include "chrome/browser/web_applications/model/display_override.h"
+#include "chrome/browser/web_applications/model/integrity_block_data.h"
+#include "chrome/browser/web_applications/model/isolation_data.h"
 #include "chrome/browser/web_applications/proto/web_app.pb.h"
 #include "chrome/browser/web_applications/proto/web_app_install_state.pb.h"
 #include "chrome/browser/web_applications/proto/web_app_launch_handler.pb.h"
@@ -61,10 +61,8 @@
 #include "components/webapps/isolated_web_apps/types/storage_location.h"
 #include "components/webapps/isolated_web_apps/types/update_channel.h"
 #include "services/network/public/cpp/permissions_policy/origin_with_possible_wildcards.h"
-#include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "third_party/abseil-cpp/absl/functional/overload.h"
 #include "third_party/blink/public/common/manifest/manifest.h"
-#include "third_party/blink/public/common/permissions_policy/policy_helper_public.h"
 #include "third_party/blink/public/common/safe_url_pattern.h"
 #include "third_party/protobuf/src/google/protobuf/repeated_ptr_field.h"
 #include "url/gurl.h"
@@ -72,7 +70,7 @@
 
 // TODO(crbug.com/441959098): Consider removing chromeos includes.
 #if BUILDFLAG(IS_CHROMEOS)
-#include "ash/webui/system_apps/public/system_web_app_type.h"
+#include "chromeos/ash/components/system_web_apps/system_web_app_type.h"
 #include "chromeos/ash/experiences/system_web_apps/types/system_web_app_data.h"
 #endif
 
@@ -296,7 +294,7 @@ proto::TabStrip::Visibility TabStripVisibilityToProto(
 std::string FilePathToProto(const base::FilePath& path) {
   base::Pickle pickle;
   path.WriteToPickle(&pickle);
-  return std::string(pickle.data_as_char(), pickle.size());
+  return std::string(pickle.AsStringView());
 }
 
 std::optional<base::FilePath> ProtoToFilePath(const std::string& bytes) {
@@ -410,7 +408,7 @@ std::unique_ptr<WebApp> ParseWebAppProto(
     return nullptr;
   }
 
-  const sync_pb::WebAppSpecifics& sync_data = proto.sync_data();
+  sync_pb::WebAppSpecifics sync_data(proto.sync_data());
 
   if (!sync_data.has_start_url()) {
     RecordProtoParseResult(ProtoParseResult::kNoStartUrlInSyncData);
@@ -427,12 +425,12 @@ std::unique_ptr<WebApp> ParseWebAppProto(
   }
 
   if (sync_data.has_migrated_from_manifest_id()) {
-    webapps::ManifestId migrated_from_manifest_id(
-        sync_data.migrated_from_manifest_id());
-    if (!migrated_from_manifest_id.is_valid()) {
+    std::optional<webapps::ManifestId> manifest_id =
+          webapps::ManifestId::Create(sync_data.migrated_from_manifest_id());
+    if (!manifest_id.has_value()) {
       RecordProtoParseResult(ProtoParseResult::kMigratedFromManifestIdInvalid);
       DLOG(ERROR) << "WebApp sync proto migrated from manifest id parse error "
-                  << migrated_from_manifest_id.possibly_invalid_spec();
+                  << sync_data.migrated_from_manifest_id();
       return nullptr;
     }
   }
@@ -487,20 +485,32 @@ std::unique_ptr<WebApp> ParseWebAppProto(
   }
   webapps::AppId app_id = GenerateAppIdFromManifestId(manifest_id);
 
+  if (app_id != expected_app_id) {
+    DLOG(ERROR) << "WebApp proto app_id error for " << manifest_id
+                << ", where '" << app_id << "' does not match expected '"
+                << expected_app_id << "'";
+
+    if (proto.has_parent_app_id()) {
+      RecordProtoParseResult(ProtoParseResult::kAppIdMismatchForSubApp);
+    } else {
+      RecordProtoParseResult(ProtoParseResult::kAppIdMismatch);
+    }
+
+    return nullptr;
+  }
+
+  if (start_url.spec() != sync_data.start_url()) {
+    sync_data.clear_start_url();
+    sync_data.set_start_url(start_url.spec());
+  }
+  if (scope.spec() != sync_data.scope()) {
+    sync_data.clear_scope();
+    sync_data.set_scope(scope.spec());
+  }
+
   std::unique_ptr<WebApp> web_app = std::make_unique<WebApp>(sync_data);
   if (proto.has_parent_app_id()) {
     web_app->SetParentAppId(proto.parent_app_id());
-    web_app->SetStartUrl(start_url);
-    web_app->SetScope(scope);
-  } else {
-    if (app_id != expected_app_id) {
-      DLOG(ERROR) << "WebApp proto app_id error for " << manifest_id
-                  << ", where '" << app_id << "' does not match expected '"
-                  << expected_app_id << "'";
-      return nullptr;
-    }
-    web_app->SetStartUrl(start_url);
-    web_app->SetScope(scope);
   }
 
   if (!sync_data.has_user_display_mode_cros() &&
@@ -686,8 +696,11 @@ std::unique_ptr<WebApp> ParseWebAppProto(
         syncer::ProtoTimeToTime(proto.last_badging_time()));
   }
   if (proto.has_last_launch_time()) {
-    web_app->SetLastLaunchTime(
-        syncer::ProtoTimeToTime(proto.last_launch_time()));
+    base::Time last_launch_time =
+        syncer::ProtoTimeToTime(proto.last_launch_time());
+    if (!last_launch_time.is_null()) {
+      web_app->SetLastLaunchTime(std::move(last_launch_time));
+    }
   }
   if (proto.has_latest_install_source()) {
     int install_source = proto.latest_install_source();
@@ -787,15 +800,6 @@ std::unique_ptr<WebApp> ParseWebAppProto(
       }
       file_handler.accept.push_back(std::move(accept_entry));
     }
-
-    std::optional<std::vector<apps::IconInfo>> file_handler_icon_infos =
-        ParseAppIconInfos("WebApp", file_handler_proto.downloaded_icons());
-    if (!file_handler_icon_infos) {
-      RecordProtoParseResult(ProtoParseResult::kInvalidIconsInFileHandler);
-      // ParseAppIconInfos() reports any errors.
-      return nullptr;
-    }
-    file_handler.downloaded_icons = std::move(file_handler_icon_infos.value());
 
     file_handlers.push_back(std::move(file_handler));
   }
@@ -928,7 +932,7 @@ std::unique_ptr<WebApp> ParseWebAppProto(
     shortcuts_menu_icons_sizes.push_back(std::move(icon_sizes));
   }
   // Due to the bitmaps possibly being not populated (see
-  // https://crbug.com/1427444), we just have empty bitmap data in that case.
+  // https://crbug.com/40899887), we just have empty bitmap data in that case.
   while (shortcuts_menu_icons_sizes.size() < shortcut_menu_item_size) {
     shortcuts_menu_icons_sizes.emplace_back();
   }
@@ -1078,6 +1082,14 @@ std::unique_ptr<WebApp> ParseWebAppProto(
   }
   web_app->SetValidatedScopeExtensions(std::move(valid_scope_extensions));
 
+  if (proto.has_origin_association_last_validation_check_time()) {
+    base::Time time = syncer::ProtoTimeToTime(
+        proto.origin_association_last_validation_check_time());
+    if (!time.is_null()) {
+      web_app->SetOriginAssociationLastValidationCheckTime(std::move(time));
+    }
+  }
+
   if (proto.has_lock_screen_start_url()) {
     web_app->SetLockScreenStartUrl(GURL(proto.lock_screen_start_url()));
   }
@@ -1114,36 +1126,6 @@ std::unique_ptr<WebApp> ParseWebAppProto(
 
   if (proto.has_launch_handler()) {
     web_app->SetLaunchHandler(ProtoToLaunchHandler(proto.launch_handler()));
-  }
-
-  if (proto.permissions_policy_size()) {
-    network::ParsedPermissionsPolicy policy;
-    const auto& name_to_feature_map =
-        blink::GetPermissionsPolicyNameToFeatureMap();
-    for (const auto& decl_proto : proto.permissions_policy()) {
-      network::ParsedPermissionsPolicyDeclaration decl;
-      const auto feature_enum = name_to_feature_map.find(decl_proto.feature());
-      if (feature_enum == name_to_feature_map.end()) {
-        continue;
-      }
-      decl.feature = feature_enum->second;
-
-      for (const std::string& origin : decl_proto.allowed_origins()) {
-        std::optional<network::OriginWithPossibleWildcards>
-            maybe_origin_with_possible_wildcards =
-                network::OriginWithPossibleWildcards::Parse(
-                    origin,
-                    network::OriginWithPossibleWildcards::NodeType::kHeader);
-        if (maybe_origin_with_possible_wildcards.has_value()) {
-          decl.allowed_origins.emplace_back(
-              *maybe_origin_with_possible_wildcards);
-        }
-      }
-      decl.matches_all_origins = decl_proto.matches_all_origins();
-      decl.matches_opaque_src = decl_proto.matches_opaque_src();
-      policy.push_back(decl);
-    }
-    web_app->SetPermissionsPolicy(policy);
   }
 
   WebApp::ExternalConfigMap management_to_external_config;
@@ -1221,6 +1203,7 @@ std::unique_ptr<WebApp> ParseWebAppProto(
       return nullptr;
     }
 
+    bool isolation_location_dev_mode = location->dev_mode();
     auto isolation_data_builder =
         IsolationData::Builder(*std::move(location), *std::move(iwa_version));
 
@@ -1244,7 +1227,7 @@ std::unique_ptr<WebApp> ParseWebAppProto(
             << pending_location.error();
         return nullptr;
       }
-      if (pending_location->dev_mode() != location->dev_mode()) {
+      if (pending_location->dev_mode() != isolation_location_dev_mode) {
         RecordProtoParseResult(
             ProtoParseResult::kDevModeMismatchInIsolationData);
         DLOG(ERROR) << "WebApp proto isolation_data.pending_update_info "
@@ -1268,10 +1251,9 @@ std::unique_ptr<WebApp> ParseWebAppProto(
         return nullptr;
       }
 
-      std::optional<IsolatedWebAppIntegrityBlockData>
-          pending_integrity_block_data;
+      std::optional<IntegrityBlockData> pending_integrity_block_data;
       if (pending_update_info_proto.has_integrity_block_data()) {
-        auto result = IsolatedWebAppIntegrityBlockData::FromProto(
+        auto result = IntegrityBlockData::FromProto(
             pending_update_info_proto.integrity_block_data());
         if (!result.has_value()) {
           RecordProtoParseResult(
@@ -1292,7 +1274,7 @@ std::unique_ptr<WebApp> ParseWebAppProto(
     }
 
     if (proto.isolation_data().has_integrity_block_data()) {
-      auto result = IsolatedWebAppIntegrityBlockData::FromProto(
+      auto result = IntegrityBlockData::FromProto(
           proto.isolation_data().integrity_block_data());
       if (!result.has_value()) {
         RecordProtoParseResult(ProtoParseResult::kInvalidIntegrityBlockData);
@@ -1506,48 +1488,30 @@ std::unique_ptr<WebApp> ParseWebAppProto(
   }
   web_app->SetInstalledBy(InstalledByPassKey(), std::move(installed_by_data));
 
-  auto is_valid_migration_source =
-      [](const proto::WebAppMigrationSource& source) {
-        if (!source.has_manifest_id() || !source.has_behavior()) {
-          return false;
-        }
-        GURL manifest_id(source.manifest_id());
-        if (!manifest_id.is_valid() ||
-            url::Origin::Create(manifest_id).opaque()) {
-          return false;
-        }
-        if (source.has_install_url()) {
-          GURL install_url(source.install_url());
-          if (!install_url.is_valid() ||
-              !url::IsSameOriginWith(manifest_id, install_url)) {
-            return false;
-          }
-        }
-        return true;
-      };
-
-  std::vector<proto::WebAppMigrationSource> unvalidated_migration_sources;
+  std::vector<MigrationSource> unvalidated_migration_sources;
   for (const auto& source_proto : proto.unvalidated_migration_sources()) {
-    if (!is_valid_migration_source(source_proto)) {
+    std::optional<MigrationSource> source =
+        MigrationSource::ParseAndCreate(source_proto);
+    if (!source) {
       RecordProtoParseResult(
           ProtoParseResult::kInvalidWebAppUnvalidatedMigrationSource);
-      DLOG(ERROR) << "WebApp proto Unvalidated MigrationSource parse error";
       return nullptr;
     }
-    unvalidated_migration_sources.push_back(source_proto);
+    unvalidated_migration_sources.push_back(std::move(*source));
   }
   web_app->SetUnvalidatedMigrationSources(
       std::move(unvalidated_migration_sources));
 
-  std::vector<proto::WebAppMigrationSource> validated_migration_sources;
+  std::vector<MigrationSource> validated_migration_sources;
   for (const auto& source_proto : proto.validated_migration_sources()) {
-    if (!is_valid_migration_source(source_proto)) {
+    std::optional<MigrationSource> source =
+        MigrationSource::ParseAndCreate(source_proto);
+    if (!source) {
       RecordProtoParseResult(
           ProtoParseResult::kInvalidWebAppValidatedMigrationSource);
-      DLOG(ERROR) << "WebApp proto Validated MigrationSource parse error";
       return nullptr;
     }
-    validated_migration_sources.push_back(source_proto);
+    validated_migration_sources.push_back(std::move(*source));
   }
   web_app->SetValidatedMigrationSources(std::move(validated_migration_sources));
 
@@ -1559,7 +1523,8 @@ std::unique_ptr<WebApp> ParseWebAppProto(
       DLOG(ERROR) << "WebApp proto PendingMigrationInfo parse error";
       return nullptr;
     }
-    web_app->SetPendingMigrationInfo(info_proto);
+    web_app->SetPendingMigrationInfo(
+        PendingMigrationInfo::ParseAndCreate(info_proto));
   }
 
   RecordProtoParseResult(ProtoParseResult::kSuccess);
@@ -1649,9 +1614,9 @@ std::unique_ptr<proto::WebApp> WebAppToProto(const WebApp& web_app) {
     local_data->set_last_badging_time(
         syncer::TimeToProtoTime(web_app.last_badging_time()));
   }
-  if (!web_app.last_launch_time().is_null()) {
+  if (web_app.last_launch_time().has_value()) {
     local_data->set_last_launch_time(
-        syncer::TimeToProtoTime(web_app.last_launch_time()));
+        syncer::TimeToProtoTime(*web_app.last_launch_time()));
   }
   if (!web_app.first_install_time().is_null()) {
     local_data->set_first_install_time(
@@ -1735,11 +1700,6 @@ std::unique_ptr<proto::WebApp> WebAppToProto(const WebApp& web_app) {
       for (const auto& file_extension : accept_entry.file_extensions) {
         accept_entry_proto->add_file_extensions(file_extension);
       }
-    }
-
-    for (const apps::IconInfo& icon_info : file_handler.downloaded_icons) {
-      *(file_handler_proto->add_downloaded_icons()) =
-          AppIconInfoToSyncProto(icon_info);
     }
   }
 
@@ -1866,6 +1826,12 @@ std::unique_ptr<proto::WebApp> WebAppToProto(const WebApp& web_app) {
         valid_extension.has_origin_wildcard);
   }
 
+  if (web_app.origin_association_last_validation_check_time().has_value()) {
+    local_data->set_origin_association_last_validation_check_time(
+        syncer::TimeToProtoTime(
+            *web_app.origin_association_last_validation_check_time()));
+  }
+
   if (web_app.lock_screen_start_url().is_valid()) {
     local_data->set_lock_screen_start_url(
         web_app.lock_screen_start_url().spec());
@@ -1893,27 +1859,6 @@ std::unique_ptr<proto::WebApp> WebAppToProto(const WebApp& web_app) {
 
   if (web_app.parent_app_id_) {
     local_data->set_parent_app_id(*web_app.parent_app_id_);
-  }
-
-  if (!web_app.permissions_policy().empty()) {
-    auto& policy = *local_data->mutable_permissions_policy();
-    const auto& feature_to_name_map =
-        blink::GetPermissionsPolicyFeatureToNameMap();
-    for (const auto& decl : web_app.permissions_policy()) {
-      proto::WebAppPermissionsPolicy proto_policy;
-      const auto feature_name = feature_to_name_map.find(decl.feature);
-      if (feature_name == feature_to_name_map.end()) {
-        continue;
-      }
-      const std::string feature_string(feature_name->second);
-      proto_policy.set_feature(feature_string);
-      for (const auto& allowed_origin : GetSerializedAllowedOrigins(decl)) {
-        proto_policy.add_allowed_origins(allowed_origin);
-      }
-      proto_policy.set_matches_all_origins(decl.matches_all_origins);
-      proto_policy.set_matches_opaque_src(decl.matches_opaque_src);
-      policy.Add(std::move(proto_policy));
-    }
   }
 
   if (!web_app.management_to_external_config_map().empty()) {
@@ -2118,16 +2063,16 @@ std::unique_ptr<proto::WebApp> WebAppToProto(const WebApp& web_app) {
   }
 
   for (const auto& source : web_app.unvalidated_migration_sources()) {
-    *local_data->add_unvalidated_migration_sources() = source;
+    *local_data->add_unvalidated_migration_sources() = source.ToProto();
   }
 
   for (const auto& source : web_app.validated_migration_sources()) {
-    *local_data->add_validated_migration_sources() = source;
+    *local_data->add_validated_migration_sources() = source.ToProto();
   }
 
   if (web_app.pending_migration_info().has_value()) {
     *local_data->mutable_pending_migration_info() =
-        *web_app.pending_migration_info();
+        web_app.pending_migration_info()->ToProto();
   }
 
   return local_data;

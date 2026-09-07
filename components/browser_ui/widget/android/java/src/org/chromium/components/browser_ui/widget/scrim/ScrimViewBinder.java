@@ -32,8 +32,18 @@ import org.chromium.ui.modelutil.PropertyModel;
 class ScrimViewBinder {
     static void bind(PropertyModel model, ScrimView view, PropertyKey propertyKey) {
         if (TOP_MARGIN == propertyKey || BOTTOM_MARGIN == propertyKey) {
-            // Noop; this is not used until the anchor is set as the view won't have layout params
+            // Noop until the anchor is set as the view won't have layout params
             // until it is attached to its parent.
+            if (model.get(ANCHOR_VIEW) != null) {
+                assert view.getLayoutParams() instanceof MarginLayoutParams;
+                var layoutParams = (MarginLayoutParams) view.getLayoutParams();
+                if (TOP_MARGIN == propertyKey) {
+                    layoutParams.topMargin = model.get(TOP_MARGIN);
+                } else {
+                    layoutParams.bottomMargin = model.get(BOTTOM_MARGIN);
+                }
+                view.setLayoutParams(layoutParams);
+            }
         } else if (AFFECTS_STATUS_BAR == propertyKey) {
             // Noop; the mediator handles this interaction.
         } else if (ANCHOR_VIEW == propertyKey) {

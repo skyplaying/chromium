@@ -10,6 +10,7 @@ load("@chromium-luci//gn_args.star", "gn_args")
 load("@chromium-luci//try.star", "try_")
 load("//lib/siso.star", "siso")
 load("//lib/try_constants.star", "try_constants")
+load("//project.star", "settings")
 
 try_.defaults.set(
     executable = try_constants.DEFAULT_EXECUTABLE,
@@ -23,6 +24,7 @@ try_.defaults.set(
     execution_timeout = try_constants.DEFAULT_EXECUTION_TIMEOUT,
     experiments = {
         "chromium_tests.resultdb_module": 100,
+        "luci.buildbucket.run_in_turboci": 100,
     },
     orchestrator_cores = 4,
     service_account = try_constants.DEFAULT_SERVICE_ACCOUNT,
@@ -50,6 +52,18 @@ try_.builder(
     ),
     cores = 32,
     ssd = True,
+    properties = {
+        # The format of these properties is defined at archive/properties.proto
+        "$build/archive": {
+            "source_side_spec_path": [
+                "src",
+                "infra",
+                "archive_config",
+                "android-desktop-arm64-archive-rel.json",
+            ],
+            "verify_paths_only": True,
+        },
+    },
 )
 
 try_.builder(
@@ -66,6 +80,18 @@ try_.builder(
     ),
     cores = 32,
     ssd = True,
+    properties = {
+        # The format of these properties is defined at archive/properties.proto
+        "$build/archive": {
+            "source_side_spec_path": [
+                "src",
+                "infra",
+                "archive_config",
+                "android-desktop-x64-archive-rel.json",
+            ],
+            "verify_paths_only": True,
+        },
+    },
 )
 
 try_.builder(
@@ -103,15 +129,24 @@ try_.orchestrator_builder(
     ),
     compilator = "android-desktop-x64-rel-compilator",
     coverage_test_types = ["unit", "overall"],
-    experiments = {
-        # crbug.com/40617829
-        "chromium.enable_cleandead": 100,
-    },
-    main_list_view = "try",
     # TODO(crbug.com/40241638): Use orchestrator pool once overloaded test pools
     # are addressed
     # use_orchestrator_pool = True,
-    tryjob = try_.job(),
+    cq_settings = try_.cq_settings(
+        equivalent_builder = "{}:try/android-internal-desktop-x64-rel".format(settings.chrome_project),
+        equivalent_builder_percentage = 100,
+        equivalent_builder_whitelist = "google/chrome-al-eng@google.com",
+        on_default_cq = True,
+    ),
+    experiments = {
+        # crbug.com/40617829
+        "chromium.enable_cleandead": 100,
+        # go/rts-project-proposal
+        "chromium_rts.filter_file_analysis": 100,
+        # crbug.com/40280175
+        "chromium_checkout.expand_submodules": 100,
+    },
+    main_list_view = "try",
     use_clang_coverage = True,
     use_java_coverage = True,
 )
@@ -235,7 +270,6 @@ try_.builder(
             "official_optimize",
             # TODO(crbug.com/433988303): Swap to stable.
             "dev_channel",
-            "v8_release_branch",
         ],
     ),
     cores = 32,
@@ -278,7 +312,6 @@ try_.builder(
             "official_optimize",
             # TODO(crbug.com/433988303): Swap to stable.
             "dev_channel",
-            "v8_release_branch",
         ],
     ),
     cores = 32,

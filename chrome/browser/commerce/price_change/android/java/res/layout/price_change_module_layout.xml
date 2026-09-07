@@ -13,7 +13,6 @@ found in the LICENSE file.
     android:id="@+id/price_change_module_layout"
     android:layout_marginEnd="@dimen/mvt_container_lateral_margin"
     android:layout_marginStart="@dimen/mvt_container_lateral_margin"
-    android:layout_marginTop="@dimen/price_change_module_margin_top"
     android:layout_width="match_parent"
     android:layout_height="wrap_content">
     <LinearLayout
@@ -53,7 +52,7 @@ found in the LICENSE file.
                     android:layout_width="@dimen/price_change_module_product_image_size"
                     android:layout_margin="@dimen/price_change_module_product_image_margin"
                     android:scaleType="centerCrop" />
-                <org.chromium.ui.widget.ChromeImageView
+                <ImageView
                     android:id="@+id/favicon_image"
                     android:background="@drawable/price_change_module_favicon_background"
                     android:elevation="4dp"

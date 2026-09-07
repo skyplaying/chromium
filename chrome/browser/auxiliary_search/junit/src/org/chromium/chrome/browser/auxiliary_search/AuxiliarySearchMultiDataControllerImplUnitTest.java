@@ -31,16 +31,17 @@ import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
 import org.chromium.base.FakeTimeTestRule;
+import org.chromium.base.ServiceLoaderUtil;
 import org.chromium.base.TimeUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.ui.favicon.FaviconHelper;
+import org.chromium.ui.test.util.MockitoHelper;
 import org.chromium.url.JUnitTestGURLs;
 
 import java.util.ArrayList;
@@ -48,7 +49,6 @@ import java.util.List;
 
 /** Unit tests for {@link AuxiliarySearchMultiDataControllerImpl} */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class AuxiliarySearchMultiDataControllerImplUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     public @Rule FakeTimeTestRule mFakeTime = new FakeTimeTestRule();
@@ -80,7 +80,7 @@ public class AuxiliarySearchMultiDataControllerImplUnitTest {
         when(mContext.getResources()).thenReturn(mResources);
 
         var factory = AuxiliarySearchControllerFactory.getInstance();
-        factory.setHooksForTesting(mHooks);
+        ServiceLoaderUtil.setInstanceForTesting(AuxiliarySearchHooks.class, mHooks);
         factory.setSupportMultiDataSourceForTesting(true);
         createController();
     }
@@ -112,7 +112,7 @@ public class AuxiliarySearchMultiDataControllerImplUnitTest {
 
         histogramWatcher.assertExpected();
         verify(mAuxiliarySearchDonor, never())
-                .donateEntries(eq(entries), any(int[].class), any(Callback.class));
+                .donateEntries(eq(entries), any(int[].class), MockitoHelper.anyCallback());
         verify(runnableMock).run();
     }
 
@@ -123,8 +123,7 @@ public class AuxiliarySearchMultiDataControllerImplUnitTest {
 
         mDataEntry1 =
                 new AuxiliarySearchDataEntry(
-                        /* type= */ org.chromium.chrome.browser.auxiliary_search
-                                .AuxiliarySearchEntryType.TAB,
+                        /* type= */ AuxiliarySearchEntryType.TAB,
                         /* url= */ JUnitTestGURLs.URL_1,
                         /* title= */ "Title 1",
                         /* lastActiveTime= */ now - 2,
@@ -134,8 +133,7 @@ public class AuxiliarySearchMultiDataControllerImplUnitTest {
                         /* score= */ 0);
         mDataEntry2 =
                 new AuxiliarySearchDataEntry(
-                        /* type= */ org.chromium.chrome.browser.auxiliary_search
-                                .AuxiliarySearchEntryType.TAB,
+                        /* type= */ AuxiliarySearchEntryType.TAB,
                         /* url= */ JUnitTestGURLs.URL_2,
                         /* title= */ "Title 2",
                         /* lastActiveTime= */ now - 1,

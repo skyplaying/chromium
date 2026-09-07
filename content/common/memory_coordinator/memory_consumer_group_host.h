@@ -5,9 +5,10 @@
 #ifndef CONTENT_COMMON_MEMORY_COORDINATOR_MEMORY_CONSUMER_GROUP_HOST_H_
 #define CONTENT_COMMON_MEMORY_COORDINATOR_MEMORY_CONSUMER_GROUP_HOST_H_
 
-#include <string_view>
+#include <vector>
 
 #include "content/common/content_export.h"
+#include "content/public/common/memory_consumer_update.h"
 
 namespace content {
 
@@ -18,12 +19,12 @@ class CONTENT_EXPORT MemoryConsumerGroupHost {
  public:
   virtual ~MemoryConsumerGroupHost() = default;
 
-  // Sets the memory limit for the consumer group with `consumer_id`.
-  virtual void UpdateMemoryLimit(std::string_view consumer_id,
-                                 int percentage) = 0;
+  // Notifies of multiple changes at once.
+  virtual void UpdateConsumers(std::vector<MemoryConsumerUpdate> updates) = 0;
 
-  // Releases memory for the consumer group with `consumer_id`.
-  virtual void ReleaseMemory(std::string_view consumer_id) = 0;
+  // Sets or clears an override limit on consumers in this host.
+  virtual void SetOverrideLimit(uint32_t consumer_id, int percentage) = 0;
+  virtual void ClearOverrideLimit(uint32_t consumer_id, int policy_limit) = 0;
 };
 
 }  // namespace content

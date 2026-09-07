@@ -9,9 +9,10 @@
 #include <ranges>
 
 #include "base/feature_list.h"
+#include "base/logging.h"
 #include "base/types/optional_ref.h"
 #include "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
-#include "components/autofill/core/browser/integrators/autofill_ai/autofill_ai_import_utils.h"
+#include "components/autofill/core/browser/integrators/autofill_ai/autofill_ai_import_util.h"
 #include "components/autofill/core/common/autofill_features.h"
 
 namespace autofill {
@@ -65,6 +66,15 @@ EntityAttributeUpdateDetails::GetUpdatedAttributesDetails(
     const std::string& app_locale) {
   std::vector<EntityAttributeUpdateDetails> details;
 
+  auto get_attribute_value = [](const AttributeInstance& attribute,
+                                const std::string& app_locale) {
+    if (std::optional<std::u16string> date = MaybeGetLocalizedDate(attribute)) {
+      return *date;
+    } else {
+      return attribute.GetCompleteInfo(app_locale);
+    }
+  };
+
   auto get_attribute_update_type =
       [&](const AttributeInstance& new_entity_attribute) {
         if (!old_entity) {
@@ -73,8 +83,24 @@ EntityAttributeUpdateDetails::GetUpdatedAttributesDetails(
 
         base::optional_ref<const AttributeInstance> old_entity_attribute =
             old_entity->attribute(new_entity_attribute.type());
-        if (!old_entity_attribute) {
+        if (!old_entity_attribute ||
+            get_attribute_value(*old_entity_attribute, app_locale).empty()) {
           return EntityAttributeUpdateType::kNewEntityAttributeAdded;
+        }
+
+        // Since masked attributes for Wallet passes are only partially
+        // available in existing entities, raw string comparison wouldn't work.
+        // We compare their suffixes instead.
+        if (old_entity_attribute->masked()) {
+          std::u16string old_value =
+              old_entity_attribute->GetCompleteInfo(app_locale);
+          std::u16string new_value =
+              new_entity_attribute.GetCompleteInfo(app_locale);
+          size_t suffix_length = std::min(old_value.size(), new_value.size());
+          return old_value.substr(old_value.size() - suffix_length) ==
+                         new_value.substr(new_value.size() - suffix_length)
+                     ? EntityAttributeUpdateType::kNewEntityAttributeUnchanged
+                     : EntityAttributeUpdateType::kNewEntityAttributeUpdated;
         }
 
         return std::ranges::all_of(
@@ -90,15 +116,6 @@ EntityAttributeUpdateDetails::GetUpdatedAttributesDetails(
                    ? EntityAttributeUpdateType::kNewEntityAttributeUnchanged
                    : EntityAttributeUpdateType::kNewEntityAttributeUpdated;
       };
-
-  auto get_attribute_value = [](const AttributeInstance& attribute,
-                                const std::string& app_locale) {
-    if (std::optional<std::u16string> date = MaybeGetLocalizedDate(attribute)) {
-      return *date;
-    } else {
-      return attribute.GetCompleteInfo(app_locale);
-    }
-  };
 
   for (const AttributeInstance& attribute : new_entity.attributes()) {
     EntityAttributeUpdateType update_type =

@@ -52,6 +52,7 @@ import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.IntentHandler;
 import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
 import org.chromium.chrome.browser.browserservices.intents.SessionHolder;
@@ -72,9 +73,9 @@ import org.chromium.chrome.browser.ui.appmenu.AppMenuHandler;
 import org.chromium.chrome.browser.ui.appmenu.AppMenuTestSupport;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.OverrideContextWrapperTestRule;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.util.ChromeTabUtils;
 import org.chromium.components.browser_ui.styles.ChromeColors;
+import org.chromium.components.page_info.PageInfoController;
 import org.chromium.components.user_prefs.UserPrefs;
 import org.chromium.net.test.EmbeddedTestServerRule;
 
@@ -255,7 +256,7 @@ public class CustomTabActivityEphemeralTest {
     public void testHiddenTabCreationIsBlocked() throws Exception {
         // mayLaunchUrl should be blocked for ephemeral mode since it runs with always regular
         // profile. Need to update the test if the mayLaunchUrl is ever
-        // allowed in OTR profiles. (crbug.com/1106757)
+        // allowed in OTR profiles. (crbug.com/40706528)
         Intent intent = createEphemeralCustomTabIntent();
         final CustomTabsConnection connection = CustomTabsTestUtils.warmUpAndWait();
         final var sessionHolder = SessionHolder.getSessionHolderFromIntent(intent);
@@ -371,12 +372,16 @@ public class CustomTabActivityEphemeralTest {
         var tab = activity.getActivityTab();
         ChromeTabUtils.waitForTabPageLoaded(tab, mTestPage);
 
-        // TODO(sinansahin): Find a better way to test omnibox interactivity because titleBar is
-        // going to have a click listener to show page info.
-        if (ChromeFeatureList.sCctNestedSecurityIcon.isEnabled()) return;
-
         var titleBar = activity.findViewById(R.id.title_url_container);
-        Assert.assertFalse(titleBar.hasOnClickListeners());
+        assertNull(
+                "Page info hasn't been shown, so PageInfoController should be null.",
+                PageInfoController.getLastPageInfoController());
+        // For a non-interactive omnibox, clicking the title bar should show Page Info instead of
+        // activating the omnibox.
+        ThreadUtils.runOnUiThreadBlocking(() -> titleBar.performClick());
+        assertNotNull(
+                "Page info should have been shown.",
+                PageInfoController.getLastPageInfoController());
     }
 
     @Test

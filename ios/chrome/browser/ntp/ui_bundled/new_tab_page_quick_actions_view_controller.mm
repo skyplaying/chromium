@@ -14,9 +14,12 @@
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_utils.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
+#import "ios/chrome/browser/shared/ui/util/layout_guide_names.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
+#import "ios/chrome/browser/shared/ui/util/util_swift.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
+#import "ios/chrome/common/ui/util/ui_util.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ui/base/l10n/l10n_util.h"
 
@@ -26,32 +29,48 @@ namespace {
 const CGFloat kButtonStackViewSpacing = 8.0;
 
 // The height for the quick actions button row.
-const CGFloat kQuickActionsHeight = 44.0;
+constexpr CGFloat kQuickActionsHeight = 44.0;
+constexpr CGFloat kQuickActionsHeightUICleanup = 50.0;
 
 // The border radius for a quick action button.
 const CGFloat kButtonCornerRadius = 24.0;
 
-// The sise of the quick actions symbols.
-const CGFloat kSymbolPointSize = 18.0;
+// The size of the quick actions symbols.
+constexpr CGFloat kSymbolPointSize = 18.0;
+constexpr CGFloat kSymbolPointSizeUICleanup = 14.0;
 
 // The maximum font size for the quick actions button.
 const CGFloat kMaximumFontSize = 20.0;
+
+// The horizontal inset margin for the button stack view in a regular x regular
+// size class.
+constexpr CGFloat kHorizontalInsetRegularXRegular = 36.0;
+
+// Returns the leading margin for the button stack based on the window's size
+// class.
+CGFloat HorizontalInsetForQuickActions(
+    id<UITraitEnvironment> trait_environment) {
+  if (!IsNewTabPageUICleanupEnabled()) {
+    return 0.0;
+  }
+  return IsRegularXRegularSizeClass(trait_environment)
+             ? kHorizontalInsetRegularXRegular
+             : 0.0;
+}
 
 // The color used to match the fakebox background.
 NSString* const kFakeboxMatchingBackgroundColor =
     @"fake_omnibox_bottom_gradient_color";
 
 // Returns the color needed for the background of the button.
-UIColor* ButtonBackgroundColor(NewTabPageColorPalette* colorPalette) {
-  if (GetNTPMIAEntrypointVariation() ==
-      NTPMIAEntrypointVariation::kOmniboxContainedSingleButton) {
-    return colorPalette ? colorPalette.secondaryCellColor
-                        : [UIColor colorNamed:kBackgroundColor];
+UIColor* ButtonBackgroundColor(NewTabPageColorPalette* color_palette) {
+  if (color_palette) {
+    return color_palette.omniboxColor;
   }
-
-  // All other treatments use the same color as the fakebox.
-  return colorPalette ? colorPalette.omniboxColor
-                      : [UIColor colorNamed:kFakeboxMatchingBackgroundColor];
+  if (IsNewTabPageUICleanupEnabled()) {
+    return [UIColor colorNamed:kNTPQuickActionChipColor];
+  }
+  return [UIColor colorNamed:kFakeboxMatchingBackgroundColor];
 }
 
 }  // namespace
@@ -59,63 +78,65 @@ UIColor* ButtonBackgroundColor(NewTabPageColorPalette* colorPalette) {
 @implementation NewTabPageQuickActionsViewController {
   // The stack view containing the quick actions buttons.
   UIStackView* _buttonStackView;
+
+  // Constraints for the leading and trailing edges of the `_buttonStackView`.
+  NSLayoutConstraint* _stackViewLeadingConstraint;
+  NSLayoutConstraint* _stackViewTrailingConstraint;
 }
+
+#pragma mark - UIViewController
 
 - (void)viewDidLoad {
   [super viewDidLoad];
   _buttonStackView = [self createButtonStackView];
   [self.view addSubview:_buttonStackView];
 
-  AddSameConstraints(_buttonStackView, self.view);
-  [NSLayoutConstraint
-      activateConstraints:@[ [_buttonStackView.heightAnchor
-                              constraintEqualToConstant:kQuickActionsHeight] ]];
-  BOOL showAIMEntrypoint = GetNTPMIAEntrypointVariation() ==
-                           NTPMIAEntrypointVariation::kAIMInQuickAction;
-  if (showAIMEntrypoint) {
+  CGFloat inset = HorizontalInsetForQuickActions(self);
+
+  _stackViewLeadingConstraint = [_buttonStackView.leadingAnchor
+      constraintEqualToAnchor:self.view.leadingAnchor
+                     constant:inset];
+  _stackViewTrailingConstraint = [_buttonStackView.trailingAnchor
+      constraintEqualToAnchor:self.view.trailingAnchor
+                     constant:-inset];
+
+  [NSLayoutConstraint activateConstraints:@[
+    [_buttonStackView.topAnchor constraintEqualToAnchor:self.view.topAnchor],
+    [_buttonStackView.bottomAnchor
+        constraintEqualToAnchor:self.view.bottomAnchor],
+    [_buttonStackView.heightAnchor
+        constraintEqualToConstant:IsNewTabPageUICleanupEnabled()
+                                      ? kQuickActionsHeightUICleanup
+                                      : kQuickActionsHeight],
+    _stackViewLeadingConstraint,
+    _stackViewTrailingConstraint,
+  ]];
+
+  if (IsNewTabPageUICleanupEnabled()) {
+    [self registerForTraitChanges:@[
+      UITraitHorizontalSizeClass.class, UITraitVerticalSizeClass.class
+    ]
+                       withAction:@selector(updateButtonStackConstraints)];
+  }
+
+  if (IsAimEnabledInNtp()) {
     _aimButton =
-        [self createButtonWithSymbolName:kMagnifyingglassSparkSymbol
-                                   title:l10n_util::GetNSString(
-                                             IDS_IOS_NTP_QUICK_ACTIONS_AIM)];
-    [_buttonStackView addArrangedSubview:_aimButton];
-  }
-
-  BOOL showIncognito = GetNTPMIAEntrypointVariation() !=
-                       NTPMIAEntrypointVariation::kEnlargedFakeboxNoIncognito;
-  if (showIncognito) {
-    if (showAIMEntrypoint) {
-      _incognitoButton = [self
-          createButtonWithSymbolName:kIncognitoSymbol
+        [self createButtonWithSymbol:SymbolMagnifyingglassSpark
                                title:l10n_util::GetNSString(
-                                         IDS_IOS_NTP_QUICK_ACTIONS_INCOGNITO)];
-    } else {
-      _incognitoButton = [self createButtonWithSymbolName:kIncognitoSymbol];
-    }
-    [_buttonStackView addArrangedSubview:_incognitoButton];
+                                         IDS_IOS_NTP_QUICK_ACTIONS_AIM)];
+    [_buttonStackView addArrangedSubview:_aimButton];
+    [self.layoutGuideCenter referenceView:_aimButton
+                                underName:kNTPAIMButtonGuide];
   }
 
-  BOOL showVoiceLens = GetNTPMIAEntrypointVariation() !=
-                       NTPMIAEntrypointVariation::kAIMInQuickAction;
-
-  if (showVoiceLens) {
-    _voiceSearchButton = [self createButtonWithSymbolName:kVoiceSymbol];
-    _lensButton = [self createButtonWithSymbolName:kCameraLensSymbol];
-
-    [_buttonStackView addArrangedSubview:_voiceSearchButton];
-    [_buttonStackView addArrangedSubview:_lensButton];
-  }
+  _incognitoButton =
+      [self createButtonWithSymbol:SymbolIncognito
+                             title:l10n_util::GetNSString(
+                                       IDS_IOS_NTP_QUICK_ACTIONS_INCOGNITO)];
+  [_buttonStackView addArrangedSubview:_incognitoButton];
 
   [self setupQuickActionsButtonsAccessibility];
 
-  [_lensButton addTarget:self
-                  action:@selector(openLensViewFinder)
-        forControlEvents:UIControlEventTouchUpInside];
-  [_voiceSearchButton addTarget:self
-                         action:@selector(loadVoiceSearch)
-               forControlEvents:UIControlEventTouchUpInside];
-  [_voiceSearchButton addTarget:self
-                         action:@selector(preloadVoiceSearch:)
-               forControlEvents:UIControlEventTouchDown];
   [_incognitoButton addTarget:self
                        action:@selector(openIncognitoSearch)
              forControlEvents:UIControlEventTouchUpInside];
@@ -125,21 +146,30 @@ UIColor* ButtonBackgroundColor(NewTabPageColorPalette* colorPalette) {
 }
 
 - (CGSize)preferredContentSize {
-  return CGSizeMake(super.preferredContentSize.width, kQuickActionsHeight);
+  return CGSizeMake(super.preferredContentSize.width,
+                    IsNewTabPageUICleanupEnabled()
+                        ? kQuickActionsHeightUICleanup
+                        : kQuickActionsHeight);
 }
 
 #pragma mark - Private
+
+// Updates the horizontal constraints for the button stack view based on the
+// layout environment.
+- (void)updateButtonStackConstraints {
+  CHECK(IsNewTabPageUICleanupEnabled());
+  if (!_stackViewLeadingConstraint && !_stackViewTrailingConstraint) {
+    return;
+  }
+  CGFloat inset = HorizontalInsetForQuickActions(self);
+  _stackViewLeadingConstraint.constant = inset;
+  _stackViewTrailingConstraint.constant = -inset;
+}
 
 - (void)setupQuickActionsButtonsAccessibility {
   _incognitoButton.accessibilityLabel =
       l10n_util::GetNSString(IDS_IOS_ACCNAME_NEW_INCOGNITO_TAB);
   _incognitoButton.accessibilityIdentifier = kNTPIncognitoQuickActionIdentifier;
-  _lensButton.accessibilityLabel = l10n_util::GetNSString(IDS_IOS_ACCNAME_LENS);
-  _lensButton.accessibilityIdentifier = kNTPLensQuickActionIdentifier;
-  _voiceSearchButton.accessibilityLabel =
-      l10n_util::GetNSString(IDS_IOS_ACCNAME_VOICE_SEARCH);
-  _voiceSearchButton.accessibilityIdentifier =
-      kNTPVoiceSearchQuickActionIdentifier;
 }
 
 // Creates a new horizontal button stack view.
@@ -155,19 +185,27 @@ UIColor* ButtonBackgroundColor(NewTabPageColorPalette* colorPalette) {
 }
 
 // Creates a new quick action button with the given `icon`.
-- (UIButton*)createButtonWithSymbolName:(NSString*)symbolName {
-  return [self createButtonWithSymbolName:symbolName title:nil];
+- (UIButton*)createButtonWithSymbol:(Symbol)symbol {
+  return [self createButtonWithSymbol:symbol title:nil];
 }
 
 // Creates a new quick action button with the given `icon` and title.
-- (UIButton*)createButtonWithSymbolName:(NSString*)symbolName
-                                  title:(NSString*)title {
+- (UIButton*)createButtonWithSymbol:(Symbol)symbol title:(NSString*)title {
   UIButtonConfiguration* configuration =
       [UIButtonConfiguration plainButtonConfiguration];
   configuration.background.backgroundColor = ButtonBackgroundColor(nil);
   configuration.background.cornerRadius = kButtonCornerRadius;
   configuration.baseForegroundColor = [UIColor colorNamed:kGrey700Color];
-  UIImage* icon = CustomSymbolWithPointSize(symbolName, kSymbolPointSize);
+  UIImage* icon;
+  if (IsNewTabPageUICleanupEnabled()) {
+    UIImageSymbolConfiguration* symbolConfiguration =
+        [UIImageSymbolConfiguration
+            configurationWithPointSize:kSymbolPointSizeUICleanup
+                                weight:UIImageSymbolWeightSemibold];
+    icon = SymbolWithConfiguration(symbol, symbolConfiguration);
+  } else {
+    icon = SymbolWithPointSize(symbol, kSymbolPointSize);
+  }
   configuration.image = MakeSymbolMonochrome(icon);
 
   if (title) {
@@ -184,23 +222,13 @@ UIColor* ButtonBackgroundColor(NewTabPageColorPalette* colorPalette) {
   UIButton* button = [[UIButton alloc] init];
   UIColor* baseTintColor =
       content_suggestions::DefaultIconTintColorWithAIMAllowed(YES);
-  if (GetNTPMIAEntrypointVariation() ==
-      NTPMIAEntrypointVariation::kOmniboxContainedSingleButton) {
-    button.configurationUpdateHandler =
-        CreateThemedButtonConfigurationUpdateHandler(
-            baseTintColor, ^(NewTabPageColorPalette* palette) {
-              return ButtonBackgroundColor(palette);
-            });
-  } else {
-    // Other variations change the blur background to match the omnibox.
-    button.configurationUpdateHandler =
-        CreateThemedButtonConfigurationUpdateHandler(
-            baseTintColor,
-            ^(NewTabPageColorPalette* palette) {
-              return ButtonBackgroundColor(palette);
-            },
-            UIBlurEffectStyleSystemThickMaterial);
-  }
+  button.configurationUpdateHandler =
+      CreateThemedButtonConfigurationUpdateHandler(
+          baseTintColor,
+          ^(NewTabPageColorPalette* palette) {
+            return ButtonBackgroundColor(palette);
+          },
+          UIBlurEffectStyleSystemThickMaterial);
 
   button.translatesAutoresizingMaskIntoConstraints = NO;
   button.configuration = configuration;
@@ -209,27 +237,19 @@ UIColor* ButtonBackgroundColor(NewTabPageColorPalette* colorPalette) {
 
 #pragma mark - Button actions
 
-- (void)openLensViewFinder {
-  [self.NTPShortcutsHandler openLensViewFinder];
-}
-
-- (void)loadVoiceSearch {
-  [self.NTPShortcutsHandler loadVoiceSearchFromView:_voiceSearchButton];
-}
-
-- (void)preloadVoiceSearch:(id)sender {
-  [sender removeTarget:self
-                action:@selector(preloadVoiceSearch:)
-      forControlEvents:UIControlEventTouchDown];
-  [self.NTPShortcutsHandler preloadVoiceSearch];
-}
-
 - (void)openIncognitoSearch {
   [self.NTPShortcutsHandler openIncognitoSearch];
 }
 
 - (void)openAIM {
-  [self.NTPShortcutsHandler openMIA];
+  [self.NTPShortcutsHandler openAIM];
+}
+
+- (void)setLayoutGuideCenter:(LayoutGuideCenter*)layoutGuideCenter {
+  _layoutGuideCenter = layoutGuideCenter;
+  if (_aimButton) {
+    [_layoutGuideCenter referenceView:_aimButton underName:kNTPAIMButtonGuide];
+  }
 }
 
 @end

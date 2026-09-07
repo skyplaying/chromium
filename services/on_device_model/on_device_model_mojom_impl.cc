@@ -31,8 +31,12 @@ constexpr char kIdleDisconnectReason[] = "Disconnected due to idle timeout.";
 
 // The amount of time a session can remain inactive before the model unloads.
 const base::FeatureParam<base::TimeDelta> kModelIdleTimeout{
-    &optimization_guide::features::kOptimizationGuideOnDeviceModel,
+    &optimization_guide::features::kOptimizationGuideModelExecution,
     "on_device_model_active_session_idle_timeout", kDefaultModelIdleTimeout};
+
+constexpr base::TimeDelta kAsrIdleTimerUpdateInterval = base::Seconds(10);
+
+}  // namespace
 
 class AsrStreamWrapper;
 
@@ -43,6 +47,12 @@ class SessionWrapper final : public mojom::Session {
                  std::unique_ptr<BackendSession> session,
                  mojom::Priority priority);
   ~SessionWrapper() override;
+
+  void UpdateIdleTimer() {
+    if (model_) {
+      model_->UpdateIdleTimer();
+    }
+  }
 
   SessionWrapper(const SessionWrapper&) = delete;
   SessionWrapper& operator=(const SessionWrapper&) = delete;
@@ -61,6 +71,7 @@ class SessionWrapper final : public mojom::Session {
       GetProbabilitiesBlockingCallback callback) override;
   void Clone(mojo::PendingReceiver<mojom::Session> session) override;
   void SetPriority(mojom::Priority priority) override { priority_ = priority; }
+  void Hint(mojom::HintOptionsPtr options) override;
 
   mojo::Receiver<mojom::Session>& receiver() { return receiver_; }
   BackendSession& backend() { return *session_; }
@@ -73,12 +84,15 @@ class SessionWrapper final : public mojom::Session {
     return priority_ == mojom::Priority::kForeground;
   }
 
+  void OnAsrStreamDisconnected();
+
  private:
   void AppendInternal(mojom::AppendOptionsPtr options,
                       mojo::PendingRemote<mojom::ContextClient> client,
+                      mojo::ReportBadMessageCallback bad_message_callback,
                       base::OnceClosure on_complete) {
     session_->Append(std::move(options), std::move(client),
-                     std::move(on_complete));
+                     std::move(bad_message_callback), std::move(on_complete));
   }
 
   void GenerateInternal(mojom::GenerateOptionsPtr input,
@@ -88,10 +102,12 @@ class SessionWrapper final : public mojom::Session {
                        std::move(on_complete));
   }
 
-  void GetSizeInTokensInternal(mojom::InputPtr input,
-                               GetSizeInTokensCallback callback,
-                               base::OnceClosure on_complete) {
-    session_->SizeInTokens(std::move(input),
+  void GetSizeInTokensInternal(
+      mojom::InputPtr input,
+      mojo::ReportBadMessageCallback bad_message_callback,
+      GetSizeInTokensCallback callback,
+      base::OnceClosure on_complete) {
+    session_->SizeInTokens(std::move(input), std::move(bad_message_callback),
                            std::move(callback).Then(std::move(on_complete)));
   }
 
@@ -107,6 +123,12 @@ class SessionWrapper final : public mojom::Session {
       base::OnceClosure on_complete) {
     session_->GetProbabilitiesBlocking(
         text, std::move(callback).Then(std::move(on_complete)));
+  }
+
+  void HintInternal(mojom::HintOptionsPtr options,
+                    base::OnceClosure on_complete) {
+    session_->Hint(std::move(options));
+    std::move(on_complete).Run();
   }
 
   void CloneInternal(mojo::PendingReceiver<mojom::Session> session);
@@ -128,15 +150,32 @@ class AsrStreamWrapper final : public mojom::AsrStreamInput {
  public:
   AsrStreamWrapper(base::WeakPtr<SessionWrapper> session,
                    mojo::PendingReceiver<mojom::AsrStreamInput> receiver)
-      : session_(session), receiver_(this, std::move(receiver)) {}
+      : session_(session), receiver_(this, std::move(receiver)) {
+    receiver_.set_disconnect_handler(base::BindOnce(
+        &AsrStreamWrapper::OnDisconnect, weak_ptr_factory_.GetWeakPtr()));
+  }
   ~AsrStreamWrapper() override = default;
 
   AsrStreamWrapper(const AsrStreamWrapper&) = delete;
   AsrStreamWrapper& operator=(const AsrStreamWrapper&) = delete;
 
+  void OnDisconnect() {
+    if (session_) {
+      session_->OnAsrStreamDisconnected();
+    }
+  }
+
   void AddAudioChunk(mojom::AudioDataPtr data) override {
     if (!session_) {
       return;  // Session was already closed.
+    }
+    auto now = base::TimeTicks::Now();
+
+    // Throttle timer resets to avoid flooding the sequence manager with dead
+    // delayed tasks.
+    if (now - last_timer_restart_ > kAsrIdleTimerUpdateInterval) {
+      session_->UpdateIdleTimer();
+      last_timer_restart_ = now;
     }
     session_->backend().AsrAddAudioChunk(std::move(data));
   }
@@ -144,6 +183,7 @@ class AsrStreamWrapper final : public mojom::AsrStreamInput {
  private:
   base::WeakPtr<SessionWrapper> session_;
   mojo::Receiver<mojom::AsrStreamInput> receiver_;
+  base::TimeTicks last_timer_restart_ = base::TimeTicks::Now();
   base::WeakPtrFactory<AsrStreamWrapper> weak_ptr_factory_{this};
 };
 
@@ -158,14 +198,21 @@ SessionWrapper::SessionWrapper(base::WeakPtr<OnDeviceModelMojomImpl> model,
 
 SessionWrapper::~SessionWrapper() = default;
 
+void SessionWrapper::OnAsrStreamDisconnected() {
+  asr_session_.reset();
+}
+
 void SessionWrapper::Append(mojom::AppendOptionsPtr options,
                             mojo::PendingRemote<mojom::ContextClient> client) {
   if (!model_) {
     return;
   }
-  auto append_internal = base::BindOnce(&SessionWrapper::AppendInternal,
-                                        weak_ptr_factory_.GetWeakPtr(),
-                                        std::move(options), std::move(client));
+
+  mojo::ReportBadMessageCallback bad_message_callback =
+      base::BindPostTaskToCurrentDefault(receiver_.GetBadMessageCallback());
+  auto append_internal = base::BindOnce(
+      &SessionWrapper::AppendInternal, weak_ptr_factory_.GetWeakPtr(),
+      std::move(options), std::move(client), std::move(bad_message_callback));
 
   model_->AddAndRunPendingTask(std::move(append_internal),
                                weak_ptr_factory_.GetWeakPtr());
@@ -192,9 +239,11 @@ void SessionWrapper::GetSizeInTokens(mojom::InputPtr input,
     return;
   }
 
+  mojo::ReportBadMessageCallback bad_message_callback =
+      base::BindPostTaskToCurrentDefault(receiver_.GetBadMessageCallback());
   auto size_in_tokens_internal = base::BindOnce(
       &SessionWrapper::GetSizeInTokensInternal, weak_ptr_factory_.GetWeakPtr(),
-      std::move(input), std::move(callback));
+      std::move(input), std::move(bad_message_callback), std::move(callback));
 
   model_->AddAndRunPendingTask(std::move(size_in_tokens_internal),
                                weak_ptr_factory_.GetWeakPtr());
@@ -237,6 +286,16 @@ void SessionWrapper::Clone(mojo::PendingReceiver<mojom::Session> session) {
       weak_ptr_factory_.GetWeakPtr());
 }
 
+void SessionWrapper::Hint(mojom::HintOptionsPtr options) {
+  if (!model_) {
+    return;
+  }
+  model_->AddAndRunPendingTask(
+      base::BindOnce(&SessionWrapper::HintInternal,
+                     weak_ptr_factory_.GetWeakPtr(), std::move(options)),
+      weak_ptr_factory_.GetWeakPtr());
+}
+
 void SessionWrapper::AsrStream(
     mojom::AsrStreamOptionsPtr options,
     mojo::PendingReceiver<mojom::AsrStreamInput> stream,
@@ -268,14 +327,12 @@ void SessionWrapper::AsrStreamInternal(
   if (!model_) {
     return;
   }
-  DCHECK_EQ(asr_session_, nullptr);
   auto speech_stream_wrapper = std::make_unique<AsrStreamWrapper>(
       weak_ptr_factory_.GetWeakPtr(), std::move(stream));
   asr_session_ = std::move(speech_stream_wrapper);
   session_->AsrStream(std::move(options), std::move(response));
+  std::move(on_complete).Run();
 }
-
-}  // namespace
 
 struct OnDeviceModelMojomImpl::PendingTask {
   base::WeakPtr<SessionWrapper> session;
@@ -456,6 +513,14 @@ void OnDeviceModelMojomImpl::RestartIdleTimer() {
   idle_timer_->Start(FROM_HERE, kModelIdleTimeout.Get(),
                      base::BindOnce(&OnDeviceModelMojomImpl::OnIdleTimeout,
                                     base::Unretained(this)));
+}
+
+void OnDeviceModelMojomImpl::UpdateIdleTimer() {
+  // Only restart if active to avoid accidentally re-enabling the timer while a
+  // standard text task is running.
+  if (idle_timer_) {
+    RestartIdleTimer();
+  }
 }
 
 void OnDeviceModelMojomImpl::OnIdleTimeout() {

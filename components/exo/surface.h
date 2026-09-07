@@ -45,7 +45,6 @@ class TracedValue;
 
 namespace gfx {
 class ColorSpace;
-class GpuFence;
 struct PresentationFeedback;
 }  // namespace gfx
 
@@ -112,9 +111,6 @@ class Surface final : public ui::PropertyHandler {
 
   aura::Window* window() const { return window_.get(); }
 
-  std::vector<raw_ptr<aura::Window, VectorExperimental>> GetChildWindows()
-      const;
-
   void set_leave_enter_callback(LeaveEnterCallback callback) {
     leave_enter_callback_ = callback;
   }
@@ -125,6 +121,8 @@ class Surface final : public ui::PropertyHandler {
 
   bool is_augmented() const { return is_augmented_; }
   void set_is_augmented(bool augmented) { is_augmented_ = augmented; }
+
+  bool is_destroying() const { return is_destroying_; }
 
   // Called when the display the surface is on has changed.
   // Returns true if successful, and false if it fails.
@@ -291,14 +289,6 @@ class Surface final : public ui::PropertyHandler {
 
   // Returns whether this surface or any of its subsurfaces contains a video.
   bool ContainsVideo();
-
-  // Request that the attached surface buffer at the next commit is associated
-  // with a gpu fence to be signaled when the buffer is ready for use.
-  void SetAcquireFence(std::unique_ptr<gfx::GpuFence> gpu_fence);
-  // Returns whether the surface has an uncommitted acquire fence.
-  bool HasPendingAcquireFence() const;
-  // Returns whether the surface has a committed acquire fence.
-  bool HasAcquireFence() const;
 
   // Surface state (damage regions, attached buffers, etc.) is double-buffered.
   // A Commit() call atomically applies all pending state, replacing the
@@ -557,14 +547,13 @@ class Surface final : public ui::PropertyHandler {
   //    subtree) is committed.
   // 3. State is committed.
   // Some fields are persisted between commits (e.g. which buffer is attached),
-  // and some fields are not (e.g. acquire fence). For fields that are
-  // persisted, they either need to be copyable, or if they are move only, they
-  // need to be wrapped in std::optional and only copied on commit if they
-  // have been changed. Not doing this can lead to broken behaviour, such as
-  // losing the attached buffer if some unrelated field is updated in a commit.
-  // If you add new fields to this struct, please document whether the field
-  // should be persisted between commits.
-  // See crbug.com/1283305 for context.
+  // and some fields are not. For fields that are persisted, they either need to
+  // be copyable, or if they are move only, they need to be wrapped in
+  // std::optional and only copied on commit if they have been changed. Not
+  // doing this can lead to broken behaviour, such as losing the attached buffer
+  // if some unrelated field is updated in a commit. If you add new fields to
+  // this struct, please document whether the field should be persisted between
+  // commits. See crbug.com/1283305 for context.
   struct ExtendedState {
     ExtendedState();
     ~ExtendedState();
@@ -588,9 +577,6 @@ class Surface final : public ui::PropertyHandler {
     // contents have been presented.
     // Not persisted between commits.
     std::list<PresentationCallback> presentation_callbacks;
-    // The acquire gpu fence to associate with the surface buffer.
-    // Not persisted between commits.
-    std::unique_ptr<gfx::GpuFence> acquire_fence;
     // The hint for overlay prioritization
     // Persisted between commits.
     OverlayPriority overlay_priority_hint = OverlayPriority::REGULAR;
@@ -774,7 +760,7 @@ class Surface final : public ui::PropertyHandler {
   raw_ptr<SurfaceDelegate> delegate_ = nullptr;
 
   // Surface observer list. Surface does not own the observers.
-  base::ObserverList<SurfaceObserver, true>::Unchecked observers_;
+  base::ObserverList<SurfaceObserver, true> observers_;
 
   std::unique_ptr<ash::OutputProtectionDelegate> output_protection_;
 
@@ -782,6 +768,7 @@ class Surface final : public ui::PropertyHandler {
 
   bool keyboard_shortcuts_inhibited_ = false;
   bool legacy_buffer_release_skippable_ = false;
+  bool is_destroying_ = false;
 
   // Display id state for unmapped surfaces.
   int64_t display_id_ = display::kInvalidDisplayId;

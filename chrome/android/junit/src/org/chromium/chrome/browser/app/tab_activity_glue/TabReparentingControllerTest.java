@@ -9,7 +9,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNativeNtpUrl;
-import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNonNativeNtpUrl;
+import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNtpUrl;
 
 import org.junit.After;
 import org.junit.Assert;
@@ -21,7 +21,6 @@ import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.UserDataHost;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -46,7 +45,6 @@ import java.util.Map;
 
 /** Unit tests for {@link TabReparentingControllerTest}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class TabReparentingControllerTest {
     class FakeNightModeReparentingDelegate implements Delegate {
         TabModelSelector mTabModelSelector;
@@ -66,7 +64,7 @@ public class TabReparentingControllerTest {
 
         @Override
         public boolean isNtpUrl(GURL url) {
-            return getOriginalNonNativeNtpUrl().equals(url.getSpec())
+            return getOriginalNtpUrl().equals(url.getSpec())
                     || getOriginalNativeNtpUrl().equals(url.getSpec());
         }
     }

@@ -17,7 +17,6 @@
 #import "components/pref_registry/pref_registry_syncable.h"
 #import "components/signin/ios/browser/account_consistency_service.h"
 #import "components/signin/ios/browser/signin_enabled_datasource.h"
-#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/base/signin_metrics.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
@@ -106,13 +105,12 @@ class AuthenticationService : public KeyedService,
   // Returns true if the user is signed in.
   // While the AuthenticationService is in background, this will reload the
   // credentials to ensure the value is up to date.
-  bool HasPrimaryIdentity(signin::ConsentLevel consent_level) const;
+  bool HasPrimaryIdentity() const;
 
   // Returns true if the user is signed in and the identity is considered
   // managed.
   // Virtual for testing.
-  virtual bool HasPrimaryIdentityManaged(
-      signin::ConsentLevel consent_level) const;
+  virtual bool HasPrimaryIdentityManaged() const;
 
   // Returns true if data from the signed-in period should be cleared on
   // sign-out.
@@ -121,16 +119,16 @@ class AuthenticationService : public KeyedService,
   // Retrieves the identity of the currently authenticated user or `nil` if
   // the user is not authenticated.
   // Virtual for testing.
-  virtual id<SystemIdentity> GetPrimaryIdentity(
-      signin::ConsentLevel consent_level) const;
+  virtual id<SystemIdentity> GetPrimaryIdentity() const;
 
-  // Grants signin::ConsentLevel::kSignin to `identity` and records the signin
-  // at `access_point`. Virtual for testing.
+  // Signs in `identity` and records the signin at `access_point`. Virtual for
+  // testing.
   virtual void SignIn(id<SystemIdentity> identity,
                       signin_metrics::AccessPoint access_point);
 
-  // Signs the authenticated user out of Chrome and clears the browsing
-  // data if the account is managed.
+  // Please use signin::MultiProfileSignOutForProfile().
+  // Signs the authenticated user out of Chrome. This method only works for
+  // the personal profile. This method should only be used by the sign-in team.
   // Sync consent is automatically removed from all signed-out accounts.
   // `completion` is then executed asynchronously.
   // Virtual for testing.
@@ -142,7 +140,9 @@ class AuthenticationService : public KeyedService,
 
   // Shows the MDM Error dialog for `identity` if it has an associated MDM
   // error. Returns true if `identity` had an associated error, false otherwise.
-  bool ShowMDMErrorDialogForIdentity(id<SystemIdentity> identity);
+  bool ShowMDMErrorDialogForIdentity(
+      id<SystemIdentity> identity,
+      base::OnceCallback<void(bool)> callback = base::NullCallback());
 
   // Returns a weak pointer of this.
   base::WeakPtr<AuthenticationService> GetWeakPtr();
@@ -268,7 +268,8 @@ class AuthenticationService : public KeyedService,
   // Clears the account settings prefs of all removed accounts from device.
   void ClearAccountSettingsPrefsOfRemovedAccounts();
 
-  // Returns whether the
+  // Returns whether the service’s profile is personal (that is: a profile that
+  // does not contains any managed account).
   bool IsPersonalProfile();
 
   // Returns the active identities for MDM.
@@ -286,7 +287,12 @@ class AuthenticationService : public KeyedService,
   raw_ptr<ChromeAccountManagerService> account_manager_service_ = nullptr;
   raw_ptr<signin::IdentityManager> identity_manager_ = nullptr;
   raw_ptr<syncer::SyncService> sync_service_ = nullptr;
-  base::ObserverList<AuthenticationServiceObserver, true> observer_list_;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      AuthenticationServiceObserver,
+      true,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>
+      observer_list_;
   // Whether Initialize() has been called.
   bool initialized_ = false;
 

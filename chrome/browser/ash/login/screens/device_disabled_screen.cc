@@ -23,18 +23,16 @@ system::DeviceDisablingManager* DeviceDisablingManager() {
   return g_browser_process->platform_part()->device_disabling_manager();
 }
 
-policy::DeviceRestrictionScheduleController&
-DeviceRestrictionScheduleController() {
-  return CHECK_DEREF(g_browser_process->platform_part()
-                         ->device_restriction_schedule_controller());
-}
-
 }  // namespace
 
 DeviceDisabledScreen::DeviceDisabledScreen(
+    policy::DeviceRestrictionScheduleController*
+        device_restriction_schedule_controller,
     base::WeakPtr<DeviceDisabledScreenView> view)
     : BaseScreen(DeviceDisabledScreenView::kScreenId,
                  OobeScreenPriority::SCREEN_DEVICE_DISABLED),
+      device_restriction_schedule_controller_(
+          CHECK_DEREF(device_restriction_schedule_controller)),
       view_(std::move(view)) {}
 
 DeviceDisabledScreen::~DeviceDisabledScreen() = default;
@@ -48,13 +46,15 @@ void DeviceDisabledScreen::ShowImpl() {
   params.serial = DeviceDisablingManager()->serial_number();
   params.domain = DeviceDisablingManager()->enrollment_domain();
   params.message = DeviceDisablingManager()->disabled_message();
+  params.location_tracking_enabled =
+      DeviceDisablingManager()->location_tracking_enabled();
   params.device_restriction_schedule_enabled =
-      DeviceRestrictionScheduleController().RestrictionScheduleEnabled();
+      device_restriction_schedule_controller_->RestrictionScheduleEnabled();
   params.device_name = ui::GetChromeOSDeviceName();
   params.restriction_schedule_end_day =
-      DeviceRestrictionScheduleController().RestrictionScheduleEndDay();
+      device_restriction_schedule_controller_->RestrictionScheduleEndDay();
   params.restriction_schedule_end_time =
-      DeviceRestrictionScheduleController().RestrictionScheduleEndTime();
+      device_restriction_schedule_controller_->RestrictionScheduleEndTime();
   view_->Show(params);
   observation_.Observe(DeviceDisablingManager());
 }
@@ -74,11 +74,18 @@ void DeviceDisabledScreen::OnDisabledMessageChanged(
   }
 }
 
+void DeviceDisabledScreen::OnLocationTrackingEnabledChanged(
+    bool location_tracking_enabled) {
+  if (view_) {
+    view_->UpdateLocationTracking(location_tracking_enabled);
+  }
+}
+
 void DeviceDisabledScreen::OnRestrictionScheduleMessageChanged() {
   if (view_) {
     view_->UpdateRestrictionScheduleMessage(
-        DeviceRestrictionScheduleController().RestrictionScheduleEndDay(),
-        DeviceRestrictionScheduleController().RestrictionScheduleEndTime());
+        device_restriction_schedule_controller_->RestrictionScheduleEndDay(),
+        device_restriction_schedule_controller_->RestrictionScheduleEndTime());
   }
 }
 

@@ -35,32 +35,33 @@ import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Matchers;
+import org.chromium.base.test.util.RequiresRestart;
 import org.chromium.base.test.util.Restriction;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.layouts.LayoutTestUtils;
 import org.chromium.chrome.browser.layouts.LayoutType;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabCreationState;
 import org.chromium.chrome.browser.tab.TabLaunchType;
+import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.chrome.browser.tab.TabSelectionType;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelObserver;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.chrome.test.util.ChromeTabUtils;
 import org.chromium.chrome.test.util.browser.edge_to_edge.TestEdgeToEdgeController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent.HeightMode;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.SheetState;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.StateChangeReason;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetObserver;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetTestSupport;
-import org.chromium.components.browser_ui.bottomsheet.EmptyBottomSheetObserver;
 import org.chromium.components.browser_ui.bottomsheet.TestBottomSheetContent;
 import org.chromium.components.browser_ui.widget.gesture.BackPressHandler;
 import org.chromium.components.browser_ui.widget.scrim.ScrimManager;
@@ -79,7 +80,7 @@ import java.util.concurrent.TimeoutException;
  */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add(ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE)
-@Restriction(DeviceFormFactor.PHONE) // TODO(mdjones): Remove this (crbug.com/837838).
+@Restriction(DeviceFormFactor.PHONE) // TODO(mdjones): Remove this (crbug.com/40574069).
 @Batch(Batch.PER_CLASS)
 public class BottomSheetControllerTest {
     @Rule
@@ -218,6 +219,7 @@ public class BottomSheetControllerTest {
     @Test
     @SmallTest
     @Feature({"BottomSheetController"})
+    @RequiresRestart("crbug.com/535986752")
     public void testShowWithBottomInset_LargeBottomInsets() {
         mEdgeToEdgeController.bottomInset = 2000;
 
@@ -241,6 +243,68 @@ public class BottomSheetControllerTest {
                                         .findViewById(R.id.bottom_sheet_content)
                                         .getPaddingBottom(),
                                 Matchers.equalTo(bottomInsets)));
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"BottomSheetController"})
+    @DisabledTest(message = "Flaky, http://crbug.com/397476647")
+    public void testShowWithBottomInset_resizeContent() {
+        mEdgeToEdgeController.bottomInset = 500;
+        mNonPeekableContent.setFullHeightRatio(HeightMode.RESIZE_CONTENT);
+        requestContentInSheet(mNonPeekableContent, true);
+
+        View bottomSheet = mActivity.findViewById(R.id.bottom_sheet);
+        View bottomSheetContent = bottomSheet.findViewById(R.id.bottom_sheet_content);
+        int heightWithoutBottomInset = bottomSheetContent.getHeight();
+        float transYWithBottomInset = bottomSheet.getTranslationY();
+
+        CriteriaHelper.pollUiThread(
+                () ->
+                        Criteria.checkThat(
+                                "The transition should be non-negative.",
+                                transYWithBottomInset,
+                                Matchers.greaterThanOrEqualTo(0.f)));
+
+        int bottomInsets = ViewUtils.dpToPx(mActivity, mEdgeToEdgeController.bottomInset);
+        CriteriaHelper.pollUiThread(
+                () ->
+                        Criteria.checkThat(
+                                "The height of the sheet should decrease by the bottom insets.",
+                                bottomSheetContent.getHeight(),
+                                Matchers.equalTo(
+                                        Math.max(0, heightWithoutBottomInset - bottomInsets))));
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"BottomSheetController"})
+    @RequiresRestart("crbug.com/535986752")
+    public void testShowWithBottomInset_resizeContent_LargeBottomInsets() {
+        mEdgeToEdgeController.bottomInset = 2000;
+        mNonPeekableContent.setFullHeightRatio(HeightMode.RESIZE_CONTENT);
+        requestContentInSheet(mNonPeekableContent, true);
+
+        View bottomSheet = mActivity.findViewById(R.id.bottom_sheet);
+        View bottomSheetContent = bottomSheet.findViewById(R.id.bottom_sheet_content);
+        int heightWithoutBottomInset = bottomSheetContent.getHeight();
+        float transYWithBottomInset = bottomSheet.getTranslationY();
+
+        CriteriaHelper.pollUiThread(
+                () ->
+                        Criteria.checkThat(
+                                "The transition should be non-negative.",
+                                transYWithBottomInset,
+                                Matchers.greaterThanOrEqualTo(0.f)));
+
+        int bottomInsets = ViewUtils.dpToPx(mActivity, mEdgeToEdgeController.bottomInset);
+        CriteriaHelper.pollUiThread(
+                () ->
+                        Criteria.checkThat(
+                                "The height of the sheet should decrease by the bottom insets.",
+                                bottomSheetContent.getHeight(),
+                                Matchers.equalTo(
+                                        Math.max(0, heightWithoutBottomInset - bottomInsets))));
     }
 
     @Test
@@ -325,7 +389,7 @@ public class BottomSheetControllerTest {
     @Test
     @MediumTest
     @Feature({"BottomSheetController"})
-    @DisabledTest(message = "https://crbug.com/1523222")
+    @DisabledTest(message = "https://crbug.com/41496174")
     public void testGestureCannotMoveSheetDuringHideAnimation() {
         Rect visibleViewportRect = new Rect();
         mActivity.getWindow().getDecorView().getWindowVisibleDisplayFrame(visibleViewportRect);
@@ -523,7 +587,7 @@ public class BottomSheetControllerTest {
     }
 
     @Test
-    @DisabledTest(message = "https://crbug.com/837809")
+    @DisabledTest(message = "https://crbug.com/41385989")
     @MediumTest
     @Feature({"BottomSheetController"})
     public void testSwitchTabsMultipleTimes() throws TimeoutException {
@@ -593,7 +657,7 @@ public class BottomSheetControllerTest {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     tab.addObserver(
-                            new EmptyTabObserver() {
+                            new TabObserver() {
                                 @Override
                                 public void onPageLoadStarted(Tab tab, GURL url) {
                                     pageLoadStartedHelper.notifyCalled();
@@ -660,7 +724,7 @@ public class BottomSheetControllerTest {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     mSheetController.addObserver(
-                            new EmptyBottomSheetObserver() {
+                            new BottomSheetObserver() {
                                 @Override
                                 public void onSheetClosed(@StateChangeReason int reason) {
                                     closedHelper.notifyCalled();
@@ -681,7 +745,7 @@ public class BottomSheetControllerTest {
         requestContentInSheet(mHighPriorityContent, true);
         CallbackHelper closedCallbackHelper = new CallbackHelper();
         BottomSheetObserver observer =
-                new EmptyBottomSheetObserver() {
+                new BottomSheetObserver() {
                     @Override
                     public void onSheetClosed(@StateChangeReason int reason) {
                         closedCallbackHelper.notifyCalled();
@@ -952,7 +1016,7 @@ public class BottomSheetControllerTest {
     @MediumTest
     public void testReplaceLowPriorityContentWhileOpen() {
         // Allow the content to be replaced without first closing the sheet.
-        mLowPriorityContent.setCanSuppressInAnyState(true);
+        mLowPriorityContent.setCanBeSuppressed(true);
         requestContentInSheet(mLowPriorityContent, true);
 
         ThreadUtils.runOnUiThreadBlocking(
@@ -1060,7 +1124,7 @@ public class BottomSheetControllerTest {
      * @param shown Whether the tab switcher should be shown.
      */
     private void setTabSwitcherState(boolean shown) {
-        @LayoutType int targetLayout = shown ? LayoutType.TAB_SWITCHER : LayoutType.BROWSING;
+        @LayoutType int targetLayout = shown ? LayoutType.HUB : LayoutType.BROWSING;
         LayoutTestUtils.startShowingAndWaitForLayout(
                 mActivity.getLayoutManager(), targetLayout, false);
         ThreadUtils.runOnUiThreadBlocking(mTestSupport::endAllAnimations);

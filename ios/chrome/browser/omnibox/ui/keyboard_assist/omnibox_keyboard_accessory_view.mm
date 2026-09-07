@@ -94,9 +94,7 @@ constexpr CGFloat kShadowOpacity = 0.12;
     self.templateURLService = templateURLService;
     [self addSubviews];
 
-    NSArray<UITrait>* traits =
-        TraitCollectionSetForTraits(@[ UITraitUserInterfaceStyle.class ]);
-    [self registerForTraitChanges:traits
+    [self registerForTraitChanges:@[ UITraitUserInterfaceStyle.class ]
                        withAction:@selector(updateLensAppearanceOnTraitChange)];
   }
   return self;
@@ -138,8 +136,7 @@ constexpr CGFloat kShadowOpacity = 0.12;
     heightConstraint.priority = UILayoutPriorityRequired;
     heightConstraint.active = YES;
     AddSameConstraintsToSidesWithInsets(
-        _effectView, self,
-        LayoutSides::kTrailing | LayoutSides::kLeading | LayoutSides::kBottom,
+        _effectView, self, LayoutSides::kBottom | LayoutSides::kHorizontal,
         effectViewInsets);
     AddSameConstraints(_effectView, _effectView.contentView);
     return _effectView.contentView;

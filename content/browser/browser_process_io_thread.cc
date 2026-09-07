@@ -16,6 +16,7 @@
 #include "content/browser/browser_child_process_host_impl.h"
 #include "content/browser/browser_thread_impl.h"
 #include "content/browser/child_process_host_impl.h"
+#include "content/browser/scheduler/browser_io_thread_delegate.h"
 #include "content/browser/service_host/utility_process_host.h"
 #include "content/public/browser/browser_child_process_host_iterator.h"
 #include "content/public/common/process_type.h"
@@ -31,8 +32,10 @@
 
 namespace content {
 
-BrowserProcessIOThread::BrowserProcessIOThread()
-    : base::Thread(BrowserThreadImpl::GetThreadName(BrowserThread::IO)) {
+BrowserProcessIOThread::BrowserProcessIOThread(
+    std::unique_ptr<BrowserIOThreadDelegate> delegate)
+    : base::Thread(BrowserThreadImpl::GetThreadName(BrowserThread::IO),
+                   std::move(delegate)) {
   // Not bound to creation thread.
   DETACH_FROM_THREAD(browser_thread_checker_);
 }
@@ -42,15 +45,15 @@ BrowserProcessIOThread::~BrowserProcessIOThread() {
 }
 
 void BrowserProcessIOThread::RegisterAsBrowserThread() {
-  DCHECK(IsRunning());
+  CHECK(IsRunning(), base::NotFatalUntil::M159);
 
-  DCHECK(!browser_thread_);
+  CHECK(!browser_thread_, base::NotFatalUntil::M159);
   browser_thread_.reset(
       new BrowserThreadImpl(BrowserThread::IO, task_runner()));
 }
 
 void BrowserProcessIOThread::AllowBlockingForTesting() {
-  DCHECK(!IsRunning());
+  CHECK(!IsRunning(), base::NotFatalUntil::M159);
   is_blocking_allowed_for_testing_ = true;
 }
 

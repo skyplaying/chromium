@@ -14,11 +14,13 @@
 #include "base/task/thread_pool.h"
 #include "base/test/bind.h"
 #include "base/test/gmock_callback_support.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/test/with_feature_override.h"
 #include "base/trace_event/memory_allocator_dump_guid.h"
 #include "base/uuid.h"
 #include "components/services/storage/dom_storage/async_dom_storage_database.h"
+#include "components/services/storage/dom_storage/db_status.h"
 #include "components/services/storage/dom_storage/dom_storage_database.h"
 #include "components/services/storage/dom_storage/features.h"
 #include "components/services/storage/dom_storage/session_storage_data_map.h"
@@ -26,7 +28,7 @@
 #include "components/services/storage/dom_storage/test_support/dom_storage_database_testing.h"
 #include "components/services/storage/dom_storage/test_support/storage_area_test_util.h"
 #include "mojo/public/cpp/bindings/remote.h"
-#include "storage/common/database/db_status.h"
+#include "mojo/public/cpp/test_support/test_utils.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
@@ -65,7 +67,16 @@ class SessionStorageNamespaceImplTest
       : base::test::WithFeatureOverride(kDomStorageSqlite),
         test_namespace_id1_(base::Uuid::GenerateRandomV4().AsLowercaseString()),
         test_namespace_id2_(
-            base::Uuid::GenerateRandomV4().AsLowercaseString()) {}
+            base::Uuid::GenerateRandomV4().AsLowercaseString()) {
+    // Match the state of `kDomStorageSqliteInMemory` to the top level
+    // kDomStorageSqlite. That way in-memory databases will use the backend
+    // expected by the param state.
+    if (GetParam()) {
+      feature_list_.InitAndEnableFeature(kDomStorageSqliteInMemory);
+    } else {
+      feature_list_.InitAndDisableFeature(kDomStorageSqliteInMemory);
+    }
+  }
   ~SessionStorageNamespaceImplTest() override = default;
 
   void SetUp() override {
@@ -75,7 +86,9 @@ class SessionStorageNamespaceImplTest
         StorageType::kSessionStorage,
         /*database_path=*/base::FilePath(),
         /*memory_dump_id=*/std::nullopt,
-        base::BindLambdaForTesting([&](DbStatus) { loop.Quit(); }));
+        /*dir_to_destroy=*/base::FilePath(),
+        base::BindLambdaForTesting(
+            [&](AsyncDomStorageDatabase::OpenOutcome) { loop.Quit(); }));
     loop.Run();
 
     auto map_locator =
@@ -148,6 +161,7 @@ class SessionStorageNamespaceImplTest
   }
 
  protected:
+  base::test::ScopedFeatureList feature_list_;
   base::test::TaskEnvironment task_environment_;
   const std::string test_namespace_id1_;
   const std::string test_namespace_id2_;
@@ -224,7 +238,8 @@ TEST_P(SessionStorageNamespaceImplTest, MetadataLoadWithMapOperations) {
       .Times(1)
       .WillOnce([&](auto error) { commit_loop.Quit(); });
   test::PutSync(storage_area_1.get(), StdStringToUint8Vector("key2"),
-                StdStringToUint8Vector("data2"), std::nullopt, "");
+                StdStringToUint8Vector("data2"), std::nullopt,
+                test::MakeStorageAreaSource());
   commit_loop.Run();
 
   std::vector<blink::mojom::KeyValuePtr> data =
@@ -279,7 +294,8 @@ TEST_P(SessionStorageNamespaceImplTest, CloneBeforeBind) {
       .WillRepeatedly([&](auto error) { commit_callback.Run(); });
   EXPECT_CALL(listener_, OnDataMapCreation(/*map_id=*/1, testing::_)).Times(1);
   test::PutSync(storage_area_2.get(), StdStringToUint8Vector("key2"),
-                StdStringToUint8Vector("data2"), std::nullopt, "");
+                StdStringToUint8Vector("data2"), std::nullopt,
+                test::MakeStorageAreaSource());
   commit_loop.Run();
 
   std::vector<blink::mojom::KeyValuePtr> data =
@@ -294,6 +310,36 @@ TEST_P(SessionStorageNamespaceImplTest, CloneBeforeBind) {
 
   EXPECT_CALL(listener_, OnDataMapDestruction(/*map_id=*/0)).Times(1);
   EXPECT_CALL(listener_, OnDataMapDestruction(/*map_id=*/1)).Times(1);
+  namespaces_.clear();
+}
+
+TEST_P(SessionStorageNamespaceImplTest,
+       CloneWithInvalidNamespaceIdIsBadMessage) {
+  // A compromised renderer can call Clone() with an arbitrary string over the
+  // SessionStorageNamespace mojo interface. An id whose length isn't
+  // `blink::kSessionStorageNamespaceIdLength` must be rejected as a bad message
+  // rather than crashing later when the shared map's metadata key is written.
+  SessionStorageNamespaceImpl* namespace_impl1 =
+      CreateSessionStorageNamespaceImpl(test_namespace_id1_);
+
+  EXPECT_CALL(listener_, OnDataMapCreation(/*map_id=*/0, testing::_)).Times(1);
+
+  namespace_impl1->PopulateFromMetadata(
+      database_.get(),
+      metadata_.GetOrCreateNamespaceEntry(test_namespace_id1_));
+
+  mojo::Remote<blink::mojom::SessionStorageNamespace> ss_namespace1;
+  namespace_impl1->Bind(ss_namespace1.BindNewPipeAndPassReceiver());
+
+  mojo::test::BadMessageObserver bad_message_observer;
+  ss_namespace1->Clone("1");
+  EXPECT_EQ("Invalid session storage namespace ID.",
+            bad_message_observer.WaitForBadMessage());
+
+  // No clone namespace should have been registered.
+  EXPECT_EQ(namespaces_.find("1"), namespaces_.end());
+
+  EXPECT_CALL(listener_, OnDataMapDestruction(/*map_id=*/0)).Times(1);
   namespaces_.clear();
 }
 
@@ -345,7 +391,8 @@ TEST_P(SessionStorageNamespaceImplTest, CloneAfterBind) {
       .Times(1)
       .WillOnce([&](auto error) { commit_loop.Quit(); });
   test::PutSync(storage_area_n2_o2.get(), StdStringToUint8Vector("key2"),
-                StdStringToUint8Vector("data2"), std::nullopt, "");
+                StdStringToUint8Vector("data2"), std::nullopt,
+                test::MakeStorageAreaSource());
   commit_loop.Run();
 
   std::vector<blink::mojom::KeyValuePtr> data =
@@ -388,7 +435,7 @@ TEST_P(SessionStorageNamespaceImplTest, RemoveStorageKeyData) {
   storage_area_1.FlushForTesting();
 
   base::RunLoop loop;
-  EXPECT_CALL(mock_observer, AllDeleted(true, "\n"))
+  EXPECT_CALL(mock_observer, AllDeleted(true, testing::_))
       .WillOnce(base::test::RunClosure(loop.QuitClosure()));
 
   base::RunLoop commit_loop;

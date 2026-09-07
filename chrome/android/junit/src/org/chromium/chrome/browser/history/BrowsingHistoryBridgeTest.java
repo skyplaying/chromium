@@ -17,7 +17,6 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.HistogramWatcher;
@@ -31,7 +30,6 @@ import java.util.List;
 
 /** Unit tests for BrowsingHistoryBridge. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class BrowsingHistoryBridgeTest {
 
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
@@ -67,14 +65,19 @@ public class BrowsingHistoryBridgeTest {
         HistoryContentManager contentManager = mock(HistoryContentManager.class);
         HistoryAdapter adapter =
                 new HistoryAdapter(
-                        contentManager, mBrowsingHistoryBridge, mHistorySyncPromoCoordinator);
+                        contentManager,
+                        mBrowsingHistoryBridge,
+                        mHistorySyncPromoCoordinator,
+                        /* shouldClusterByDomain= */ false,
+                        /* snackbarManager= */ null,
+                        /* profile= */ null);
         mBrowsingHistoryBridge.setObserver(adapter);
 
         List<HistoryItem> items = new ArrayList<>();
         long[] timestamps = new long[0];
         String appId = "org.chromium.dino.Trex";
         BrowsingHistoryBridge.createHistoryItemAndAddToList(
-                items, GURL.emptyGURL(), "domain.com", "title", appId, 0, timestamps, false);
+                items, GURL.emptyGURL(), "domain.com", "title", appId, 0, timestamps, false, false);
         mBrowsingHistoryBridge.onQueryHistoryComplete(items, false);
 
         adapter.markItemForRemoval(items.get(0));

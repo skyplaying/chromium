@@ -4,6 +4,7 @@
 
 #include "chromecast/graphics/cast_window_manager_aura.h"
 
+#include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "build/build_config.h"
 #include "chromecast/base/cast_features.h"
@@ -169,8 +170,7 @@ void CastLayoutManager::SetChildBounds(aura::Window* child,
 
 }  // namespace
 
-CastWindowManagerAura::CastWindowManagerAura(bool enable_input)
-    : enable_input_(enable_input) {}
+CastWindowManagerAura::CastWindowManagerAura() {}
 
 CastWindowManagerAura::~CastWindowManagerAura() {
   TearDown();
@@ -190,7 +190,7 @@ void CastWindowManagerAura::Setup() {
   LOG(INFO) << "Starting window manager, bounds: " << host_bounds.ToString();
   CHECK(aura::Env::GetInstance());
   window_tree_host_ = std::make_unique<CastWindowTreeHostAura>(
-      enable_input_, std::move(properties));
+      std::move(properties));
   window_tree_host_->InitHost();
   aura::Window* root_window = window_tree_host_->window();
   root_window->SetLayoutManager(
@@ -224,10 +224,6 @@ void CastWindowManagerAura::Setup() {
   side_swipe_detector_ = std::make_unique<SideSwipeDetector>(
       system_gesture_dispatcher_.get(), root_window);
 
-#if BUILDFLAG(IS_CAST_AUDIO_ONLY)
-  window_tree_host_->compositor()->SetDisplayVSyncParameters(
-      base::TimeTicks(), base::Milliseconds(250));
-#endif
 
   // Chromecast devices do not support cut/copy/paste.
   DCHECK(!ui::TouchSelectionMenuRunner::GetInstance());

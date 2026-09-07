@@ -190,6 +190,16 @@ function StartFetchFromServiceWorker() {
     .then(filterMessage);
 }
 
+function StartFetchFromServiceWorkerResolve() {
+  const onMessagePromise = new Promise(resolve => {
+    navigator.serviceWorker.addEventListener('message', resolve);
+  });
+  return navigator.serviceWorker.ready
+    .then(reg => reg.active.postMessage('fetch_resolves'))
+    .then(() => onMessagePromise)
+    .then(event => event.data);
+}
+
 function StartFetchFromServiceWorkerNoWait() {
   navigator.serviceWorker.ready.then(
     reg => reg.active.postMessage('fetchnowait'));
@@ -211,4 +221,28 @@ function StartFetchFromIframeNoWait() {
     iframe.src = '/background_fetch/background_fetch_iframe_nowait.html';
     document.body.appendChild(iframe);
   }).then(filterMessage);
+}
+
+function StartFetchFromServiceWorkerWithUrl(url) {
+  const onMessagePromise = new Promise(resolve => {
+    navigator.serviceWorker.addEventListener('message', resolve);
+  });
+  return navigator.serviceWorker.ready
+      .then(reg => reg.active.postMessage({url: url}))
+      .then(() => onMessagePromise)
+      .then(filterMessage);
+}
+
+function StartFetchFromWindowWithUrl(url) {
+  return navigator.serviceWorker.ready
+      .then(swRegistration => {
+        const onMessagePromise = new Promise(resolve => {
+          navigator.serviceWorker.addEventListener(
+              'message', resolve, {once: true});
+        });
+        return swRegistration.backgroundFetch.fetch(kBackgroundFetchId, url)
+            .then(() => onMessagePromise)
+            .then(filterMessage);
+      })
+      .catch(formatError);
 }

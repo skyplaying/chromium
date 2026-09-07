@@ -25,7 +25,12 @@
 #include "ui/views/widget/widget_delegate.h"
 #include "ui/views/widget/widget_observer.h"
 
-class Browser;
+namespace base {
+template <typename T>
+class DeleteHelper;
+}
+
+class BrowserWindowInterface;
 
 namespace autofill {
 
@@ -61,7 +66,7 @@ class PopupBaseView : public PopupRowView::AccessibilitySelectionDelegate,
   void NotifyAXSelection(views::View& view) override;
 
   // Returns the browser in which this popup is shown.
-  Browser* GetBrowser();
+  BrowserWindowInterface* GetBrowser();
 
  protected:
   PopupBaseView(base::WeakPtr<AutofillPopupViewDelegate> delegate,
@@ -93,6 +98,10 @@ class PopupBaseView : public PopupRowView::AccessibilitySelectionDelegate,
   // testing).
   [[nodiscard]] virtual bool DoUpdateBoundsAndRedrawPopup();
 
+  // Checks whether the popup at `popup_bounds` overlaps with any open prompts,
+  // permission bubbles, or HTML form popups.
+  bool OverlapsWithAnotherPrompt(const gfx::Rect& popup_bounds) const;
+
   // Returns the optimal bounds to place the popup with `preferred_size` and
   // places an arrow on the popup border to point towards `element_bounds`
   // within `max_bounds_for_popup`. The `preferred_popup_sides` are tried
@@ -104,6 +113,7 @@ class PopupBaseView : public PopupRowView::AccessibilitySelectionDelegate,
       base::span<const views::BubbleArrowSide> preferred_popup_sides);
 
  private:
+  friend class base::DeleteHelper<PopupBaseView>;
   friend class PopupBaseViewBrowsertest;
 
   class Widget;
@@ -144,6 +154,9 @@ class PopupBaseView : public PopupRowView::AccessibilitySelectionDelegate,
 
   // Ensures that the menu start event is not fired redundantly.
   bool is_ax_menu_start_event_fired_ = false;
+
+  // Ensures that hiding logic and deletion are only executed once.
+  bool is_hiding_ = false;
 
   // Responsible for blocking (and re-enabling) custom cursors across all
   // browser windows.

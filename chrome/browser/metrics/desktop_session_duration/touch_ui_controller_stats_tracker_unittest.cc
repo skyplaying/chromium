@@ -6,18 +6,12 @@
 
 #include <memory>
 
-#include "base/command_line.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/time/time.h"
 #include "chrome/browser/metrics/desktop_session_duration/desktop_session_duration_tracker.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/common/chrome_switches.h"
-#include "chrome/test/base/test_browser_window.h"
 #include "chrome/test/base/testing_browser_process.h"
-#include "chrome/test/base/testing_profile.h"
-#include "chrome/test/base/testing_profile_manager.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/pointer/touch_ui_controller.h"
@@ -67,16 +61,10 @@ class SessionEndWaiter
 
 class SessionStatsTrackerTestBase : public ::testing::Test {
  public:
-  SessionStatsTrackerTestBase()
-      : profile_manager_(TestingBrowserProcess::GetGlobal()) {
-    base::CommandLine::ForCurrentProcess()->AppendSwitch(switches::kNoFirstRun);
-  }
+  SessionStatsTrackerTestBase() = default;
   ~SessionStatsTrackerTestBase() override = default;
 
   void SetUp() override {
-    ASSERT_TRUE(profile_manager_.SetUp());
-    profile_ = profile_manager_.CreateTestingProfile("p1");
-
     metrics::DesktopSessionDurationTracker::Initialize();
     metrics::DesktopSessionDurationTracker::Get()
         ->SetInactivityTimeoutForTesting(kInactivityTimeout);
@@ -84,25 +72,23 @@ class SessionStatsTrackerTestBase : public ::testing::Test {
     stats_tracker_ = std::make_unique<TouchUIControllerStatsTracker>(
         metrics::DesktopSessionDurationTracker::Get(),
         ui::TouchUiController::Get());
-
-    Browser::CreateParams params(profile_, false);
-    browser_ = CreateBrowserWithTestWindowForParams(params);
   }
 
   void TearDown() override {
-    browser_.reset();
     stats_tracker_.reset();
     metrics::DesktopSessionDurationTracker::CleanupForTesting();
   }
 
   void StartSession() {
-    browser_->DidBecomeActive();
+    metrics::DesktopSessionDurationTracker::Get()->OnVisibilityChanged(
+        true, base::TimeDelta());
     task_environment_.RunUntilIdle();
-    metrics::DesktopSessionDurationTracker::Get()->OnUserEvent();
+    metrics::DesktopSessionDurationTracker::Get()->OnUserEvent(std::nullopt);
   }
 
   void EndSession() {
-    browser_->DidBecomeInactive();
+    metrics::DesktopSessionDurationTracker::Get()->OnVisibilityChanged(
+        false, base::TimeDelta());
     SessionEndWaiter waiter(metrics::DesktopSessionDurationTracker::Get());
     waiter.Wait();
   }
@@ -110,12 +96,7 @@ class SessionStatsTrackerTestBase : public ::testing::Test {
  protected:
   content::BrowserTaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
-  raw_ptr<Profile, DanglingUntriaged> profile_;
   std::unique_ptr<TouchUIControllerStatsTracker> stats_tracker_;
-
- private:
-  TestingProfileManager profile_manager_;
-  std::unique_ptr<Browser> browser_;
 };
 
 class TouchModeStatsTrackerTest : public SessionStatsTrackerTestBase {};
@@ -219,6 +200,9 @@ TEST_F(DevicePostureModeStatsTrackerTest, TabletSession) {
   histograms.ExpectUniqueTimeSample(
       TouchUIControllerStatsTracker::kSessionTabletDurationHistogramName,
       base::Minutes(1), 1);
+  histograms.ExpectUniqueSample(
+      TouchUIControllerStatsTracker::kSessionTabletPercentHistogramName, 100,
+      1);
 }
 
 // The tablet duration logged should be 0 for a non-tablet session.
@@ -239,6 +223,8 @@ TEST_F(DevicePostureModeStatsTrackerTest, NonTabletSession) {
   histograms.ExpectUniqueTimeSample(
       TouchUIControllerStatsTracker::kSessionTabletDurationHistogramName,
       base::TimeDelta(), 1);
+  histograms.ExpectUniqueSample(
+      TouchUIControllerStatsTracker::kSessionTabletPercentHistogramName, 0, 1);
 }
 
 // If the tablet mode changes during a session, the logged duration
@@ -271,6 +257,10 @@ TEST_F(DevicePostureModeStatsTrackerTest, TabletModeChangesDuringSession) {
     histograms.ExpectUniqueTimeSample(
         TouchUIControllerStatsTracker::kSessionTabletDurationHistogramName,
         base::Seconds(30), 1);
+    // 30s of tablet mode out of a 75s session.
+    histograms.ExpectUniqueSample(
+        TouchUIControllerStatsTracker::kSessionTabletPercentHistogramName, 40,
+        1);
   }
 
   posture_mode_override.UpdateTabletMode(true);

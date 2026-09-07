@@ -5,7 +5,7 @@
 #include "media/gpu/windows/d3d11_copying_texture_wrapper.h"
 
 #include "media/base/video_types.h"
-#include "media/gpu/windows/d3d11_picture_buffer.h"
+#include "media/gpu/windows/d3d_picture_buffer.h"
 #include "ui/gfx/color_space.h"
 
 namespace media {
@@ -13,11 +13,13 @@ namespace media {
 // TODO(tmathmeyer) What D3D11 Resources do we need to do the copying?
 CopyingTexture2DWrapper::CopyingTexture2DWrapper(
     const gfx::Size& size,
+    const gfx::ColorSpace& input_color_space,
     const gfx::ColorSpace& output_color_space,
     std::unique_ptr<Texture2DWrapper> output_wrapper,
     scoped_refptr<VideoProcessorProxy> processor,
     ComD3D11Texture2D output_texture)
     : size_(size),
+      input_color_space_(input_color_space),
       output_color_space_(output_color_space),
       video_processor_(std::move(processor)),
       output_texture_wrapper_(std::move(output_wrapper)),
@@ -31,7 +33,6 @@ D3D11Status CopyingTexture2DWrapper::BeginSharedImageAccess() {
 }
 
 D3D11Status CopyingTexture2DWrapper::ProcessTexture(
-    const gfx::ColorSpace& input_color_space,
     scoped_refptr<gpu::ClientSharedImage>& shared_image_dest) {
   // Acquire keyed mutex for VideoProcessorBlt ops.
   D3D11Status status = output_texture_wrapper_->BeginSharedImageAccess();
@@ -64,13 +65,6 @@ D3D11Status CopyingTexture2DWrapper::ProcessTexture(
   streams.Enable = TRUE;
   streams.pInputSurface = input_view.Get();
 
-  if (!previous_input_color_space_) {
-    previous_input_color_space_ = input_color_space;
-    video_processor_->SetStreamColorSpace(input_color_space);
-    video_processor_->SetOutputColorSpace(output_color_space_);
-  }
-  CHECK_EQ(*previous_input_color_space_, input_color_space);
-
   hr = video_processor_->VideoProcessorBlt(output_view.Get(),
                                            0,  // output_frameno
                                            1,  // stream_count
@@ -79,8 +73,11 @@ D3D11Status CopyingTexture2DWrapper::ProcessTexture(
     return {D3D11Status::Codes::kVideoProcessorBltFailed, hr};
   }
 
-  return output_texture_wrapper_->ProcessTexture(output_color_space_,
-                                                 shared_image_dest);
+  return output_texture_wrapper_->ProcessTexture(shared_image_dest);
+}
+
+const gfx::Size& CopyingTexture2DWrapper::GetSize() const {
+  return size_;
 }
 
 D3D11Status CopyingTexture2DWrapper::Init(
@@ -88,7 +85,7 @@ D3D11Status CopyingTexture2DWrapper::Init(
     GetCommandBufferHelperCB get_helper_cb,
     ComD3D11Texture2D texture,
     size_t array_slice,
-    scoped_refptr<media::D3D11PictureBuffer> picture_buffer,
+    scoped_refptr<media::D3DPictureBuffer> picture_buffer,
     PictureBufferGPUResourceInitDoneCB
         picture_buffer_gpu_resource_init_done_cb) {
   auto result = video_processor_->Init(size_.width(), size_.height());
@@ -99,6 +96,9 @@ D3D11Status CopyingTexture2DWrapper::Init(
   // it.
   texture_ = texture;
   array_slice_ = array_slice;
+
+  video_processor_->SetStreamColorSpace(input_color_space_);
+  video_processor_->SetOutputColorSpace(output_color_space_);
 
   return output_texture_wrapper_->Init(
       std::move(gpu_task_runner), std::move(get_helper_cb), output_texture_,

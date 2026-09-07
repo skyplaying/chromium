@@ -15,8 +15,6 @@ import android.view.ViewGroup;
 import android.view.ViewOutlineProvider;
 import android.widget.FrameLayout;
 
-import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.Callback;
@@ -25,12 +23,13 @@ import org.chromium.base.metrics.TimingMetric;
 import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.omnibox.OmniboxMetrics;
 import org.chromium.chrome.browser.omnibox.R;
 import org.chromium.chrome.browser.omnibox.suggestions.OmniboxSuggestionsDropdownEmbedder.OmniboxAlignment;
 import org.chromium.chrome.browser.omnibox.suggestions.base.BaseSuggestionViewBinder;
 import org.chromium.components.browser_ui.widget.RoundedCornerOutlineProvider;
-import org.chromium.components.omnibox.OmniboxFeatures;
+import org.chromium.components.omnibox.OmniboxCapabilities;
 import org.chromium.ui.KeyboardVisibilityDelegate;
 import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.base.ViewUtils;
@@ -52,7 +51,7 @@ public class OmniboxSuggestionsContainer extends FrameLayout {
     private final Callback<OmniboxAlignment> mOmniboxAlignmentObserver =
             this::onOmniboxAlignmentChanged;
 
-    public OmniboxSuggestionsContainer(@NonNull Context context, @Nullable AttributeSet attrs) {
+    public OmniboxSuggestionsContainer(Context context, @Nullable AttributeSet attrs) {
         super(context, attrs);
     }
 
@@ -64,7 +63,7 @@ public class OmniboxSuggestionsContainer extends FrameLayout {
 
     @Override
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-        boolean isTablet = mEmbedder != null && mEmbedder.isTablet();
+        boolean shouldWrapDropdownHeight = mEmbedder != null && !mEmbedder.isPhoneStyleWindow();
 
         try (TraceEvent tracing = TraceEvent.scoped("OmniboxSuggestionsList.Measure");
                 TimingMetric metric = OmniboxMetrics.recordSuggestionListMeasureTime();
@@ -79,9 +78,9 @@ public class OmniboxSuggestionsContainer extends FrameLayout {
             heightMeasureSpec =
                     MeasureSpec.makeMeasureSpec(
                             availableViewportHeight,
-                            isTablet ? MeasureSpec.AT_MOST : MeasureSpec.EXACTLY);
+                            shouldWrapDropdownHeight ? MeasureSpec.AT_MOST : MeasureSpec.EXACTLY);
             super.onMeasure(widthMeasureSpec, heightMeasureSpec);
-            if (isTablet) {
+            if (shouldWrapDropdownHeight) {
                 setRoundingCorners(mShouldRoundTopCorners, shouldRoundBottomCorners());
             }
         }
@@ -95,15 +94,6 @@ public class OmniboxSuggestionsContainer extends FrameLayout {
     @Override
     @SuppressLint("ClickableViewAccessibility")
     public boolean onTouchEvent(MotionEvent event) {
-        // Propagate touch events, to make possible touch elements behind this container. Omnibox
-        // autofocus feature prevents the Scrim to be shown as a result tab content is covered by
-        // this transparent container.
-        boolean shouldPassThroughUnhandledTouchEvents =
-                mEmbedder != null && mEmbedder.shouldPassThroughUnhandledTouchEvents();
-        if (shouldPassThroughUnhandledTouchEvents) {
-            return false;
-        }
-
         // Swallow all touch events, especially if these were not consumed by the Dropdown.
         // This ensures that touching the blank areas of the container does not dismiss the
         // Omnibox.
@@ -111,6 +101,23 @@ public class OmniboxSuggestionsContainer extends FrameLayout {
         // activators, including keyboard <Enter> key.
         super.onTouchEvent(event);
         return true;
+    }
+
+    @Override
+    public boolean onGenericMotionEvent(MotionEvent event) {
+        if (!OmniboxCapabilities.isDesktopPlatform()) return super.onGenericMotionEvent(event);
+        // On desktop, we have no scrim which means the ContentView underneath the LocationBar will
+        // eagerly handle ACTION_BUTTON_PRESS, gaining focus and unfocusing the omnibox. Stop it
+        // from doing so by returning true for these events.
+        switch (event.getAction()) {
+            case MotionEvent.ACTION_BUTTON_PRESS:
+                if (event.getActionButton() != 0) {
+                    return true;
+                }
+                return super.onGenericMotionEvent(event);
+            default:
+                return super.onGenericMotionEvent(event);
+        }
     }
 
     /**
@@ -229,7 +236,7 @@ public class OmniboxSuggestionsContainer extends FrameLayout {
             mEmbedder.removeAlignmentObserver(mOmniboxAlignmentObserver);
         }
 
-        if (!OmniboxFeatures.shouldPreWarmRecyclerViewPool()) {
+        if (!OmniboxCapabilities.shouldPreWarmRecyclerViewPool()) {
             mDropdown.getRecycledViewPool().clear();
         }
     }
@@ -295,5 +302,10 @@ public class OmniboxSuggestionsContainer extends FrameLayout {
     @VisibleForTesting
     void setSuggestionsDropdownForTest(OmniboxSuggestionsDropdown dropdown) {
         mDropdown = dropdown;
+    }
+
+    public OmniboxSuggestionsDropdown takeDropdownView() {
+        removeView(mDropdown);
+        return mDropdown;
     }
 }

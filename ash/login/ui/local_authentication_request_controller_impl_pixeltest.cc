@@ -21,6 +21,7 @@
 #include "ash/test/pixel/ash_pixel_test_helper.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "chromeos/ash/components/cryptohome/system_salt_getter.h"
 #include "chromeos/ash/components/dbus/cryptohome/account_identifier_operators.h"
@@ -199,7 +200,16 @@ class LocalAuthenticationRequestControllerImplPixelTest
       PressAndReleaseKey(ui::KeyboardCode::VKEY_A);
     }
     PressAndReleaseKey(ui::KeyboardCode::VKEY_RETURN);
-    base::RunLoop().RunUntilIdle();
+    if (success) {
+      ASSERT_TRUE(
+          base::test::RunUntil([&] { return successful_validation_ == 1; }));
+    } else {
+      ASSERT_TRUE(base::test::RunUntil([] {
+        auto* view = LocalAuthenticationRequestWidget::GetViewForTesting();
+        return view && LocalAuthenticationRequestView::TestApi(view).state() ==
+                           LocalAuthenticationRequestViewState::kError;
+      }));
+    }
   }
 
   base::test::ScopedFeatureList scoped_features_;
@@ -246,14 +256,14 @@ TEST_P(LocalAuthenticationRequestControllerImplPixelTest, FailedValidation) {
   // Verify the UI.
   EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
       GenerateScreenshotName("Ready"),
-      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 5 : 0,
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 6 : 1,
       view));
 
   SimulateValidation(false);
   // Verify the UI.
   EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
       GenerateScreenshotName("Fail"),
-      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 5 : 0,
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 6 : 1,
       view));
 }
 
@@ -277,7 +287,7 @@ TEST_P(LocalAuthenticationRequestControllerImplPixelTest, ThemeChange) {
   // Verify the UI.
   EXPECT_TRUE(GetPixelDiffer()->CompareUiComponentsOnPrimaryScreen(
       GenerateScreenshotName("Light"),
-      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 4 : 0,
+      /*revision_number=*/pixel_test_helper()->IsSystemBlurEnabled() ? 5 : 1,
       view));
 }
 

@@ -49,11 +49,13 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/quick_insert/quick_insert_file_suggester.h"
 #include "chrome/browser/ui/ash/quick_insert/quick_insert_thumbnail_loader.h"
+#include "chromeos/ash/components/browser_context_helper/annotated_account_id.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/drivefs/mojom/drivefs.mojom.h"
 #include "chromeos/ash/components/editor_menu/public/cpp/editor_context.h"
 #include "chromeos/ash/components/editor_menu/public/cpp/editor_mode.h"
 #include "chromeos/ash/components/editor_menu/public/cpp/preset_text_query.h"
+#include "chromeos/ash/components/search_engines/template_url_service_provider.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
@@ -159,9 +161,10 @@ std::unique_ptr<app_list::SearchProvider> CreateDriveSearchProvider(
 }
 
 std::unique_ptr<app_list::SearchProvider> CreateFileSearchProvider(
+    PrefService* local_state,
     Profile* profile) {
   return std::make_unique<app_list::FileSearchProvider>(
-      profile, base::FileEnumerator::FileType::FILES,
+      local_state, profile, base::FileEnumerator::FileType::FILES,
       std::vector<std::string>{".jpg", ".jpeg", ".png", ".gif", ".webp"});
 }
 
@@ -187,8 +190,7 @@ std::vector<ash::QuickInsertSearchResult> ConvertSearchResults(
           continue;
         }
 
-        if (std::optional<GURL> result_url = result->url();
-            result_url.has_value()) {
+        if (std::optional<GURL> result_url = result->url(); result_url) {
           quick_insert_results.push_back(ash::QuickInsertBrowsingHistoryResult(
               *result_url, result->title(), result->icon().icon,
               result->best_match()));
@@ -210,7 +212,7 @@ std::vector<ash::QuickInsertSearchResult> ConvertSearchResults(
         break;
       default:
         LOG(DFATAL) << "Got unexpected search result type "
-                    << static_cast<int>(result->result_type());
+                    << std::to_underlying(result->result_type());
         break;
     }
   }
@@ -242,9 +244,12 @@ std::vector<ash::QuickInsertSearchResult> GetEditorResultsFromEditorContext(
 }  // namespace
 
 QuickInsertClientImpl::QuickInsertClientImpl(
+    PrefService* local_state,
     ash::QuickInsertController* controller,
     user_manager::UserManager* user_manager)
-    : announcer_(kAnnouncementViewName), controller_(controller) {
+    : local_state_(CHECK_DEREF(local_state)),
+      announcer_(kAnnouncementViewName),
+      controller_(controller) {
   controller_->SetClient(this);
 
   // As `QuickInsertClientImpl` is initialised in
@@ -273,7 +278,7 @@ void QuickInsertClientImpl::StartCrosSearch(
     CrosSearchResultsCallback callback) {
   ranker_manager_->Start(query, {{.category = app_list::Category::kWeb},
                                  {.category = app_list::Category::kFiles}});
-  if (!category.has_value()) {
+  if (!category) {
     CHECK(search_engine_);
     search_engine_->StartSearch(
         query, app_list::SearchOptions(),
@@ -294,7 +299,7 @@ void QuickInsertClientImpl::StartCrosSearch(
     case ash::QuickInsertCategory::kDatesTimes:
     case ash::QuickInsertCategory::kUnitsMaths:
       DLOG(FATAL) << "Unexpected category for StartCrosSearch: "
-                  << static_cast<int>(*category);
+                  << std::to_underlying(*category);
       break;
     case ash::QuickInsertCategory::kLinks:
     case ash::QuickInsertCategory::kDriveFiles:
@@ -534,7 +539,8 @@ void QuickInsertClientImpl::SetProfile(Profile* profile) {
   search_engine_ = std::make_unique<app_list::SearchEngine>(profile_);
   search_engine_->AddProvider(CreateOmniboxProvider(
       /*bookmarks=*/true, /*history=*/true, /*open_tabs=*/true));
-  search_engine_->AddProvider(CreateFileSearchProvider(profile_));
+  search_engine_->AddProvider(
+      CreateFileSearchProvider(&local_state_.get(), profile_));
   search_engine_->AddProvider(CreateDriveSearchProvider(profile_));
   filtered_search_engine_ = nullptr;
   current_filter_category_ = std::nullopt;
@@ -556,6 +562,8 @@ QuickInsertClientImpl::CreateOmniboxProvider(bool bookmarks,
                                              bool open_tabs) {
   return std::make_unique<app_list::OmniboxProvider>(
       profile_, GetEmptyAppListControllerDelegate(),
+      ash::TemplateURLServiceProvider::Get().Find(CHECK_DEREF(
+          ash::AnnotatedAccountId::Get(profile_->GetOriginalProfile()))),
       LauncherSearchProviderTypes(bookmarks, history, open_tabs));
 }
 
@@ -574,7 +582,7 @@ QuickInsertClientImpl::CreateSearchProviderForCategory(
     case ash::QuickInsertCategory::kDatesTimes:
     case ash::QuickInsertCategory::kUnitsMaths:
       DLOG(FATAL) << "Unexpected category for autocomplete: "
-                  << static_cast<int>(category);
+                  << std::to_underlying(category);
       return nullptr;
     case ash::QuickInsertCategory::kLinks:
       return CreateOmniboxProvider(/*bookmarks=*/true, /*history=*/true,
@@ -582,7 +590,7 @@ QuickInsertClientImpl::CreateSearchProviderForCategory(
     case ash::QuickInsertCategory::kDriveFiles:
       return CreateDriveSearchProvider(profile_);
     case ash::QuickInsertCategory::kLocalFiles:
-      return CreateFileSearchProvider(profile_);
+      return CreateFileSearchProvider(&local_state_.get(), profile_);
   }
 }
 

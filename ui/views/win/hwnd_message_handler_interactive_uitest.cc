@@ -5,9 +5,11 @@
 #include <algorithm>
 #include <memory>
 
+#include "base/test/run_until.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/ime/mock_input_method.h"
+#include "ui/base/win/window_event_target.h"
 #include "ui/events/event_constants.h"
 #include "ui/views/test/widget_test.h"
 #include "ui/views/win/hwnd_message_handler.h"
@@ -34,6 +36,8 @@ class TestHWNDMessageHandlerDelegate : public HWNDMessageHandlerDelegate {
   }
   bool HasNonClientView() const override { return false; }
   FrameMode GetFrameMode() const override { return FrameMode::SYSTEM_DRAWN; }
+  void ShowCustomSystemMenu(const gfx::Point& screen_point) override {}
+  bool UsesNativeSystemMenu() const override { return true; }
   bool HasFrame() const override { return false; }
   bool ShouldPaintAsActive() const override { return false; }
   void SchedulePaint() override {}
@@ -95,6 +99,8 @@ class TestHWNDMessageHandlerDelegate : public HWNDMessageHandlerDelegate {
   void HandleEndWMSizeMove() override {}
   void HandleBeginUserResize() override {}
   void HandleEndUserResize() override {}
+  void HandleBeginUserDrag() override {}
+  void HandleEndUserDrag() override {}
   void HandleMove() override {}
   void HandleWorkAreaChanged() override {}
   void HandleVisibilityChanged(bool visible) override {}
@@ -125,8 +131,6 @@ class TestHWNDMessageHandlerDelegate : public HWNDMessageHandlerDelegate {
   void PostHandleMSG(UINT message, WPARAM w_param, LPARAM l_param) override {}
   bool HandleScrollEvent(ui::ScrollEvent* event) override { return false; }
   bool HandleGestureEvent(ui::GestureEvent* event) override { return false; }
-  void HandleWindowSizeChanging() override {}
-  void HandleWindowSizeUnchanged() override {}
   void HandleWindowScaleFactorChanged(float window_scale_factor) override {}
   void HandleHeadlessWindowBoundsChanged(const gfx::Rect& bounds) override {}
   HBRUSH GetBackgroundPaintBrush() override { return nullptr; }
@@ -281,6 +285,75 @@ TEST_F(HWNDMessageHandlerTest, RawInputButtonStateResetOnDisable) {
   EXPECT_EQ(ui::EF_NONE, handler->raw_input_button_state_for_testing());
 
   handler->CloseNow();
+}
+
+TEST_F(HWNDMessageHandlerTest, UsesNativeSystemMenuControlsCapture) {
+  class MockDelegate : public TestHWNDMessageHandlerDelegate {
+   public:
+    void set_uses_native_system_menu(bool uses) { uses_native_ = uses; }
+    bool UsesNativeSystemMenu() const override { return uses_native_; }
+    void ShowCustomSystemMenu(const gfx::Point& screen_point) override {}
+
+   private:
+    bool uses_native_ = true;
+  };
+
+  MockDelegate delegate;
+  std::unique_ptr<HWNDMessageHandler> handler(
+      HWNDMessageHandler::Create(&delegate, "test"));
+  ASSERT_TRUE(handler);
+  handler->Init(nullptr, gfx::Rect(0, 0, 100, 100));
+  ASSERT_TRUE(handler->hwnd());
+
+  // Case 1: UsesNativeSystemMenu is true.
+  delegate.set_uses_native_system_menu(true);
+
+  ::SetCapture(nullptr);  // Clear capture first.
+  ::SendMessage(handler->hwnd(), WM_NCRBUTTONDOWN, HTCAPTION,
+                MAKELPARAM(10, 10));
+
+  EXPECT_EQ(handler->hwnd(), ::GetCapture());
+
+  // Clean up capture.
+  ::ReleaseCapture();
+
+  // Case 2: UsesNativeSystemMenu is false.
+  delegate.set_uses_native_system_menu(false);
+
+  ::SetCapture(nullptr);  // Clear capture first.
+  ::SendMessage(handler->hwnd(), WM_NCRBUTTONDOWN, HTCAPTION,
+                MAKELPARAM(10, 10));
+
+  EXPECT_NE(handler->hwnd(), ::GetCapture());
+
+  handler->CloseNow();
+}
+
+TEST_F(HWNDMessageHandlerTest, DeferredDestruction) {
+  TestHWNDMessageHandlerDelegate delegate;
+  HWNDMessageHandler* handler =
+      HWNDMessageHandler::Create(&delegate, "test").release();
+  ASSERT_TRUE(handler);
+  handler->Init(nullptr, gfx::Rect(0, 0, 100, 100));
+  ASSERT_TRUE(handler->hwnd());
+
+  base::WeakPtr<HWNDMessageHandler> weak_handler = handler->GetWeakPtr();
+  ASSERT_TRUE(weak_handler);
+
+  handler->DestroyHandler();
+
+  EXPECT_TRUE(weak_handler);
+  EXPECT_TRUE(weak_handler->delete_pending_);
+
+  ui::WindowEventTarget* target = weak_handler.get();
+  ASSERT_TRUE(target);
+  bool handled = false;
+  target->HandlePointerMessage(WM_POINTERDOWN, 0, 0, &handled);
+  EXPECT_FALSE(handled);
+
+  EXPECT_TRUE(base::test::RunUntil([&]() { return !weak_handler; }));
+
+  EXPECT_FALSE(weak_handler);
 }
 
 }  // namespace views

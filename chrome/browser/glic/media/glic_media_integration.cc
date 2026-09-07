@@ -4,8 +4,10 @@
 
 #include "chrome/browser/glic/media/glic_media_integration.h"
 
+#include "base/memory/weak_ptr.h"
 #include "base/supports_user_data.h"
 #include "chrome/browser/accessibility/live_caption/live_caption_controller_factory.h"
+#include "chrome/browser/glic/glic_pref_names.h"
 #include "chrome/browser/glic/media/glic_media_context.h"
 #include "chrome/browser/glic/media/glic_media_page_cache.h"
 #include "chrome/browser/glic/media/media_transcript_provider_impl.h"
@@ -19,6 +21,7 @@
 #include "components/live_caption/pref_names.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/proto/features/common_quality_data.pb.h"
+#include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/peer_connection_tracker_host_observer.h"
 #include "content/public/browser/web_contents.h"
@@ -127,6 +130,7 @@ class GlicMediaIntegrationImpl : public glic::GlicMediaIntegration,
 
   // GlicMediaIntegrationImpl:
   void OnContextUpdated(glic::GlicMediaContext* context);
+  void OnListenerDestroyed();
 
   // Returns whether `web_contents` should be excluded by origin checks.  This
   // includes subframes.
@@ -144,12 +148,26 @@ class GlicMediaIntegrationImpl : public glic::GlicMediaIntegration,
   std::unique_ptr<GlicMediaPeerConnectionObserver> rtc_observer_;
   std::vector<url::Origin> excluded_origins_;
   base::CallbackListSubscription subscription_;
+
+ private:
+  void OnPrefChanged();
+
+  PrefChangeRegistrar pref_change_registrar_;
+  raw_ptr<captions::CaptionControllerBase::Listener> listener_ = nullptr;
+
+  base::WeakPtrFactory<GlicMediaIntegrationImpl> weak_ptr_factory_{this};
 };
 
 class CaptionListenerImpl : public captions::CaptionControllerBase::Listener {
  public:
-  explicit CaptionListenerImpl(Profile* profile) : profile_(profile) {}
-  ~CaptionListenerImpl() override = default;
+  explicit CaptionListenerImpl(
+      base::WeakPtr<GlicMediaIntegrationImpl> integration)
+      : integration_(integration) {}
+  ~CaptionListenerImpl() override {
+    if (integration_) {
+      integration_->OnListenerDestroyed();
+    }
+  }
 
   bool OnTranscription(content::RenderFrameHost* rfh,
                        captions::CaptionBubbleContext*,
@@ -185,7 +203,7 @@ class CaptionListenerImpl : public captions::CaptionControllerBase::Listener {
       const media::mojom::LanguageIdentificationEventPtr&) override {}
 
  private:
-  raw_ptr<Profile> profile_;
+  base::WeakPtr<GlicMediaIntegrationImpl> integration_;
 };
 
 GlicMediaIntegrationImpl::GlicMediaIntegrationImpl(Profile* profile)
@@ -207,8 +225,14 @@ void GlicMediaIntegrationImpl::Initialize() {
   CHECK(!rtc_observer_);
 
   rtc_observer_ = std::make_unique<GlicMediaPeerConnectionObserver>();
-  auto* lc = captions::LiveCaptionControllerFactory::GetForProfile(profile_);
-  lc->AddListener(std::make_unique<CaptionListenerImpl>(profile_));
+
+  pref_change_registrar_.Init(profile_->GetPrefs());
+  pref_change_registrar_.Add(
+      glic::prefs::kGlicMediaUnderstandingEnabled,
+      base::BindRepeating(&GlicMediaIntegrationImpl::OnPrefChanged,
+                          base::Unretained(this)));
+
+  OnPrefChanged();
 
   // For now, enable the pref if we get this far.  Do this after getting the
   // Live Caption controller, since it resets the pref to false.
@@ -219,6 +243,34 @@ void GlicMediaIntegrationImpl::Initialize() {
       url::Origin::Create(GURL("https://www.youtube.com")),
       url::Origin::Create(GURL("http://www.youtube.com"))};
   SetExcludedOrigins(std::move(excluded_origins));
+}
+
+void GlicMediaIntegrationImpl::OnPrefChanged() {
+  bool enabled = profile_->GetPrefs()->GetBoolean(
+      glic::prefs::kGlicMediaUnderstandingEnabled);
+  auto* lc = captions::LiveCaptionControllerFactory::GetForProfile(profile_);
+  if (enabled) {
+    if (!listener_) {
+      auto listener =
+          std::make_unique<CaptionListenerImpl>(weak_ptr_factory_.GetWeakPtr());
+      listener_ = listener.get();
+      lc->AddListener(std::move(listener));
+    }
+  } else {
+    if (listener_) {
+      lc->RemoveSoon(listener_);
+      listener_ = nullptr;
+
+      // Discard all transcripts when disabled.
+      for (base::LinkNode<glic::GlicMediaPageCache::Entry>* node =
+               page_cache_.head();
+           node != page_cache_.end(); node = node->next()) {
+        auto* entry = static_cast<glic::GlicMediaPageCache::Entry*>(node);
+        auto* context = static_cast<glic::GlicMediaContext*>(entry);
+        context->ClearAllTranscripts();
+      }
+    }
+  }
 }
 
 bool GlicMediaIntegrationImpl::IsExcludedByOrigin(
@@ -263,10 +315,7 @@ void GlicMediaIntegrationImpl::AppendContext(
   content::RenderFrameHost* rfh = nullptr;
   web_contents->ForEachRenderFrameHost([&rfh](content::RenderFrameHost* host) {
     auto* context = glic::GlicMediaContext::GetForCurrentDocument(host);
-    if (!context) {
-      return;
-    }
-    if (context->GetContext() != "") {
+    if (context && context->HasTranscriptChunks()) {
       rfh = host;
     }
   });
@@ -281,38 +330,57 @@ void GlicMediaIntegrationImpl::AppendContextForFrame(
   if (!rfh) {
     return;
   }
-  context_root->mutable_content_attributes()->set_attribute_type(
-      optimization_guide::proto::CONTENT_ATTRIBUTE_TEXT);
-
-  auto* context = glic::GlicMediaContext::GetForCurrentDocument(rfh);
-  std::string result;
-  if (context != nullptr &&
-      !IsExcludedByOrigin(content::WebContents::FromRenderFrameHost(rfh))) {
-    result = context->GetContext();
-  }
-
-  if (result.length() == 0) {
+  if (IsExcludedByOrigin(content::WebContents::FromRenderFrameHost(rfh))) {
     return;
   }
+
+  auto* context = glic::GlicMediaContext::GetForCurrentDocument(rfh);
+  if (!context) {
+    return;
+  }
+
+  auto chunks = context->GetTranscriptChunks();
+  if (chunks.empty()) {
+    return;
+  }
+  std::vector<std::string_view> pieces;
+  pieces.reserve(chunks.size());
+  for (const auto& chunk : chunks) {
+    pieces.push_back(chunk.text);
+  }
+
+  std::string result = base::JoinString(pieces, "");
 
   // Trim to `max_size_bytes_`.  Note that we should utf8-trim.
   if (size_t result_size = result.length()) {
     if (result_size > max_size_bytes_) {
       // Remove the beginning of the result, leaving the end.
-      result = result.substr(result_size - max_size_bytes_);
+      size_t start_index = result_size - max_size_bytes_;
+      // Ensure we don't cut in the middle of a UTF-8 multi-byte character.
+      // UTF-8 continuation bytes start with 10xxxxxx (0x80 to 0xBF).
+      while (start_index < result_size &&
+             (static_cast<unsigned char>(result[start_index]) & 0xC0) == 0x80) {
+        start_index++;
+      }
+      result = std::move(result).substr(start_index);
     }
   }
 
   // Include the entire context in one node.  This could be split into multiple
   // nodes too.
-  context_root->mutable_content_attributes()
-      ->mutable_text_data()
-      ->set_text_content(std::move(result));
+  auto* content_attributes = context_root->mutable_content_attributes();
+  content_attributes->set_attribute_type(
+      optimization_guide::proto::CONTENT_ATTRIBUTE_TEXT);
+  content_attributes->mutable_text_data()->set_text_content(std::move(result));
 }
 
 void GlicMediaIntegrationImpl::OnContextUpdated(
     glic::GlicMediaContext* context) {
   page_cache_.PlaceAtFront(context);
+}
+
+void GlicMediaIntegrationImpl::OnListenerDestroyed() {
+  listener_ = nullptr;
 }
 
 void GlicMediaIntegrationImpl::OnPeerConnectionAddedForTesting(

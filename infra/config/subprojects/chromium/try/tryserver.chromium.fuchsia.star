@@ -24,6 +24,7 @@ try_.defaults.set(
     execution_timeout = try_constants.DEFAULT_EXECUTION_TIMEOUT,
     experiments = {
         "chromium_tests.resultdb_module": 100,
+        "luci.buildbucket.run_in_turboci": 100,
     },
     orchestrator_cores = 2,
     orchestrator_siso_remote_jobs = siso.remote_jobs.HIGH_JOBS_FOR_CQ,
@@ -54,16 +55,20 @@ try_.builder(
             "release_try_builder",
         ],
     ),
+    # TODO(crbug.com/549757519): Restore to the CQ when test pool is recovered.
+    # cq_settings = try_.cq_settings(
+    #     location_filters = [
+    #         # This is the only bot that builds //chromecast code for Fuchsia on
+    #         # ARM64, so trigger it when changes are made.
+    #         "chromecast/.+",
+    #         # Always trigger this builder when drilling the fuchsia-sdk.
+    #         "build/fuchsia/sdk_override.txt",
+    #     ],
+    # ),
+    experiments = {
+        "luci.buildbucket.run_in_turboci": 100,
+    },
     main_list_view = "try",
-    tryjob = try_.job(
-        location_filters = [
-            # This is the only bot that builds //chromecast code for Fuchsia on
-            # ARM64, so trigger it when changes are made.
-            "chromecast/.+",
-            # Always trigger this builder when drilling the fuchsia-sdk.
-            "build/fuchsia/sdk_override.txt",
-        ],
-    ),
 )
 
 try_.builder(
@@ -82,6 +87,9 @@ try_.builder(
     ),
     builderless = not settings.is_main,
     cores = 16 if settings.is_main else 8,
+    cq_settings = try_.cq_settings(
+        on_default_cq = True,
+    ),
     properties = {
         "$build/binary_size": {
             "analyze_targets": [
@@ -95,7 +103,6 @@ try_.builder(
     # b/325854950 - 1280 concurrent remote jobs might cause slow downloads
     # because this builder doesn't use SSD.
     siso_remote_jobs = 640,
-    tryjob = try_.job(),
 )
 
 try_.builder(
@@ -114,12 +121,15 @@ try_.builder(
         ],
     ),
     contact_team_email = "chrome-fuchsia-engprod@google.com",
-    tryjob = try_.job(
+    cq_settings = try_.cq_settings(
         location_filters = [
             ".*fuchsia.+",
             cq.location_filter(exclude = True, path_regexp = ".*\\.md"),
         ],
     ),
+    experiments = {
+        "luci.buildbucket.run_in_turboci": 100,
+    },
 )
 
 try_.builder(
@@ -134,6 +144,9 @@ try_.builder(
         ],
     ),
     free_space = builders.free_space.high,
+    experiments = {
+        "luci.buildbucket.run_in_turboci": 100,
+    },
 )
 
 try_.builder(
@@ -168,16 +181,20 @@ try_.builder(
             "debug_try_builder",
         ],
     ),
+    free_space = builders.free_space.high,
     contact_team_email = "chrome-fuchsia-engprod@google.com",
-    execution_timeout = 10 * time.hour,
-    main_list_view = "try",
     # This is the only bot that builds //chromecast code for Fuchsia on x64
     # so trigger it when changes are made.
-    tryjob = try_.job(
+    cq_settings = try_.cq_settings(
         location_filters = [
             "chromecast/.+",
         ],
     ),
+    execution_timeout = 10 * time.hour,
+    experiments = {
+        "luci.buildbucket.run_in_turboci": 100,
+    },
+    main_list_view = "try",
 )
 
 try_.orchestrator_builder(
@@ -204,14 +221,22 @@ try_.orchestrator_builder(
     ),
     compilator = "fuchsia-x64-cast-receiver-rel-compilator",
     coverage_test_types = ["unit", "overall"],
+    cq_settings = try_.cq_settings(
+        on_default_cq = True,
+    ),
     experiments = {
         # go/nplus1shardsproposal
         "chromium.add_one_test_shard": 10,
         # crbug.com/940930
         "chromium.enable_cleandead": 100,
+        # go/rts-project-proposal
+        "chromium_rts.filter_file_analysis": 100,
+        # crbug.com/40280175
+        "chromium_checkout.expand_submodules": 100,
+        # TODO(https://crbug.com/521401232): Increase to 100
+        "luci.buildbucket.run_in_turboci": 100,
     },
     main_list_view = "try",
-    tryjob = try_.job(),
     use_clang_coverage = True,
 )
 
@@ -242,5 +267,5 @@ try_.builder(
     name = "fuchsia-code-coverage",
     mirrors = ["ci/fuchsia-code-coverage"],
     gn_args = "ci/fuchsia-code-coverage",
-    execution_timeout = 20 * time.hour,
+    execution_timeout = 10 * time.hour,
 )

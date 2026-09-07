@@ -4,55 +4,61 @@
 
 #include "chrome/browser/ui/views/toolbar/webui_split_tabs_control.h"
 
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/split_tab_menu_model.h"
+#include "chrome/browser/ui/tabs/split_tab_metrics.h"
 #include "chrome/browser/ui/tabs/split_tab_util.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/toolbar/pinned_action_toolbar_button_menu_model.h"
 #include "chrome/browser/ui/views/toolbar/webui_toolbar_web_view.h"
-#include "chrome/browser/ui/webui/webui_toolbar/split_tabs_utils.h"
+#include "chrome/browser/ui/webui/webui_toolbar/utils/split_tabs_utils.h"
+#include "chrome/browser/ui/webui/webui_toolbar/utils/toolbar_button_utils.h"
 #include "chrome/browser/ui/webui/webui_toolbar/webui_toolbar_ui.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/grit/generated_resources.h"
+#include "components/browser_apis/ui_controllers/toolbar/toolbar_ui_api_data_model.mojom.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "ui/base/base_window.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/mojom/menu_source_type.mojom.h"
-#include "ui/gfx/geometry/point.h"
+#include "ui/gfx/geometry/rect.h"
+#include "ui/views/controls/menu/menu_item_view.h"
+#include "ui/views/controls/menu/menu_model_adapter.h"
 #include "ui/views/controls/menu/menu_runner.h"
+#include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
 
-WebUISplitTabsControl::WebUISplitTabsControl(WebUIToolbarWebView* toolbar_view)
-    : toolbar_view_(toolbar_view) {}
+WebUISplitTabsControl::WebUISplitTabsControl(
+    WebUIToolbarControlDelegate* delegate)
+    : delegate_(delegate) {}
 
 WebUISplitTabsControl::~WebUISplitTabsControl() {
-  if (toolbar_view_->browser_ && toolbar_view_->browser_->GetTabStripModel()) {
-    toolbar_view_->browser_->GetTabStripModel()->RemoveObserver(this);
+  if (delegate_->GetBrowser() && delegate_->GetBrowser()->GetTabStripModel()) {
+    delegate_->GetBrowser()->GetTabStripModel()->RemoveObserver(this);
   }
 }
 
 void WebUISplitTabsControl::Init() {
-  BrowserWindowInterface* browser = toolbar_view_->browser_;
+  BrowserWindowInterface* browser = delegate_->GetBrowser();
   pin_state_.Init(prefs::kPinSplitTabButton, browser->GetProfile()->GetPrefs(),
-                  base::BindRepeating(&WebUISplitTabsControl::UpdatePinState,
+                  base::BindRepeating(&WebUISplitTabsControl::UpdateState,
                                       base::Unretained(this)));
 
   if (auto* tab_strip_model = browser->GetTabStripModel()) {
     tab_strip_model->AddObserver(this);
   }
 
-  SplitTabsButtonState state = GetCurrentState();
-  UpdateVisibility(state);
-  last_sent_tab_split_status_ = state.split_status;
-  last_sent_pin_state_ = state.is_pinned;
+  UpdateState();
 }
 
 bool WebUISplitTabsControl::IsVisible() const {
@@ -60,61 +66,89 @@ bool WebUISplitTabsControl::IsVisible() const {
 }
 
 void WebUISplitTabsControl::HandleContextMenu(
-    browser_controls_api::mojom::ContextMenuType menu_type,
-    const gfx::Point& screen_location,
-    ui::mojom::MenuSourceType source) {
-  BrowserWindowInterface* browser = toolbar_view_->browser_;
-  current_menu_type_ = menu_type;
-  if (auto* webui_toolbar_ui = toolbar_view_->GetWebUIToolbarUI()) {
-    webui_toolbar_ui->OnContextMenuStateChanged(
-        current_menu_type_,
-        browser_controls_api::mojom::ContextMenuState::kVisible);
+    toolbar_ui_api::mojom::ContextMenuType menu_type,
+    const gfx::Rect& screen_rect,
+    ui::mojom::MenuSourceType source_type,
+    std::optional<uint32_t> show_menu_token) {
+  if (show_menu_token.has_value()) {
+    menu_open_token_ = show_menu_token.value();
   }
 
-  if (menu_type ==
-      browser_controls_api::mojom::ContextMenuType::kSplitTabsAction) {
+  if (menu_runner_ && menu_runner_->IsRunning()) {
+    menu_runner_->Cancel();
+    UpdateState();
+    return;
+  }
+  BrowserWindowInterface* browser = delegate_->GetBrowser();
+
+  if (menu_type == toolbar_ui_api::mojom::ContextMenuType::kSplitTabsAction) {
     // Only show "Separate Views" menu if actually in split.
     auto* tab_strip_model = browser->GetTabStripModel();
     if (!tab_strip_model || !tab_strip_model->GetActiveTab() ||
         !tab_strip_model->GetActiveTab()->IsSplit()) {
+      UpdateState();
       return;
     }
+    // Destroy the old menu runner first to avoid a dangling pointer since it
+    // holds a raw_ptr to the old menu model.
+    menu_runner_.reset();
     split_tab_menu_ = std::make_unique<SplitTabMenuModel>(
         tab_strip_model, SplitTabMenuModel::MenuSource::kToolbarButton);
-    RunMenuAt(screen_location.x(), screen_location.y());
+    RunMenuAt(screen_rect, source_type, /*is_action_menu=*/true);
   } else if (menu_type ==
-             browser_controls_api::mojom::ContextMenuType::kSplitTabsContext) {
-    Browser* actual_browser =
-        chrome::FindBrowserWithWindow(browser->GetWindow()->GetNativeWindow());
-    if (actual_browser) {
-      split_tab_menu_ = std::make_unique<PinnedActionToolbarButtonMenuModel>(
-          actual_browser, kActionSplitTab);
-      RunMenuAt(screen_location.x(), screen_location.y());
-    }
+             toolbar_ui_api::mojom::ContextMenuType::kSplitTabsContext) {
+    // Destroy the old menu runner first to avoid a dangling pointer since it
+    // holds a raw_ptr to the old menu model.
+    menu_runner_.reset();
+    split_tab_menu_ = std::make_unique<PinnedActionToolbarButtonMenuModel>(
+        browser, kActionSplitTab);
+    RunMenuAt(screen_rect, source_type, /*is_action_menu=*/false);
   }
 }
 
-void WebUISplitTabsControl::RunMenuAt(int x, int y) {
-  menu_runner_ = std::make_unique<views::MenuRunner>(
-      split_tab_menu_.get(),
-      views::MenuRunner::HAS_MNEMONICS | views::MenuRunner::CONTEXT_MENU,
-      base::BindRepeating(&WebUISplitTabsControl::OnMenuClosed,
-                          base::Unretained(this)));
+void WebUISplitTabsControl::HandleContextMenuOverflowClick() {
+  // If the tab isn't split, all we need to do is split it, and we're done.
+  if (!webui_toolbar::ComputeTabSplitStatus(delegate_->GetBrowser()).is_split) {
+    chrome::NewSplitTab(delegate_->GetBrowser(),
+                        split_tabs::SplitTabLayout::kSideBySide,
+                        split_tabs::SplitTabCreatedSource::kToolbarButton);
+    return;
+  }
 
-  menu_runner_->RunMenuAt(toolbar_view_->GetWidget(), nullptr,
-                          gfx::Rect(gfx::Point(x, y), gfx::Size()),
-                          views::MenuAnchorPosition::kTopLeft,
-                          ui::mojom::MenuSourceType::kMouse);
+  // If the tab is already split, send a request the WebUI renderer to show the
+  // split tab menu. Can't show it here because the button is almost certainly
+  // hidden, so the renderer will need to first show it and then calculate the
+  // coordinates for the menu.
+  if (WebUIToolbarUI* web_ui = delegate_->GetWebUIToolbarUI()) {
+    web_ui->ShowSplitTabsContextMenu();
+  }
 }
 
-void WebUISplitTabsControl::OnMenuClosed() {
-  if (auto* webui_toolbar_ui = toolbar_view_->GetWebUIToolbarUI()) {
-    webui_toolbar_ui->OnContextMenuStateChanged(
-        current_menu_type_,
-        browser_controls_api::mojom::ContextMenuState::kHidden);
+void WebUISplitTabsControl::RunMenuAt(const gfx::Rect& screen_rect,
+                                      ui::mojom::MenuSourceType source_type,
+                                      bool is_action_menu) {
+  last_source_type_for_testing_ = source_type;
+  if (is_action_menu) {
+    menu_runner_ = std::make_unique<views::MenuRunner>(
+        split_tab_menu_.get(), views::MenuRunner::HAS_MNEMONICS,
+        base::BindRepeating(&WebUISplitTabsControl::UpdateState,
+                            base::Unretained(this)));
+  } else {
+    menu_model_adapter_ = std::make_unique<views::MenuModelAdapter>(
+        split_tab_menu_.get(),
+        base::BindRepeating(&WebUISplitTabsControl::UpdateState,
+                            base::Unretained(this)));
+    std::unique_ptr<views::MenuItemView> root =
+        menu_model_adapter_->CreateMenu();
+
+    menu_runner_ = std::make_unique<views::MenuRunner>(
+        std::move(root), views::MenuRunner::HAS_MNEMONICS);
   }
-  current_menu_type_ =
-      browser_controls_api::mojom::ContextMenuType::kUnspecified;
+
+  menu_runner_->RunMenuAt(delegate_->GetView()->GetWidget(), nullptr,
+                          screen_rect, views::MenuAnchorPosition::kTopLeft,
+                          source_type);
+  UpdateState();
 }
 
 void WebUISplitTabsControl::OnTabStripModelChanged(
@@ -122,64 +156,40 @@ void WebUISplitTabsControl::OnTabStripModelChanged(
     const TabStripModelChange& change,
     const TabStripSelectionChange& selection) {
   if (selection.active_tab_changed()) {
-    UpdateTabSplitStatus();
+    // Force the menu to close if it's open because the active tab may have
+    // changed and invalidated the menu.
+    if (menu_runner_ && menu_runner_->IsRunning()) {
+      menu_runner_->Cancel();
+    }
+    UpdateState();
   }
 }
 
 void WebUISplitTabsControl::OnSplitTabChanged(const SplitTabChange& change) {
   if (change.type == SplitTabChange::Type::kAdded ||
       change.type == SplitTabChange::Type::kRemoved ||
-      change.type == SplitTabChange::Type::kContentsChanged) {
-    UpdateTabSplitStatus();
+      change.type == SplitTabChange::Type::kContentsChanged ||
+      change.type == SplitTabChange::Type::kVisualsChanged) {
+    UpdateState();
   }
-}
-
-WebUISplitTabsControl::SplitTabsButtonState
-WebUISplitTabsControl::GetCurrentState() const {
-  BrowserWindowInterface* browser = toolbar_view_->browser_;
-  return {
-      webui_toolbar::ComputeTabSplitStatus(browser),
-      webui_toolbar::IsButtonPinned(
-          browser, browser_controls_api::mojom::ToolbarButtonType::kSplitTabs)};
 }
 
 void WebUISplitTabsControl::UpdateVisibility(
-    const SplitTabsButtonState& state) {
-  bool should_be_visible = state.is_pinned || state.split_status.is_split;
-
-  if (should_be_visible != is_visible_) {
-    is_visible_ = should_be_visible;
-    toolbar_view_->PreferredSizeChanged();
+    const toolbar_ui_api::mojom::SplitTabsControlState* state) {
+  if (state->should_be_shown != is_visible_) {
+    is_visible_ = state->should_be_shown;
+    delegate_->OnPreferredSizeChanged();
   }
 }
 
-void WebUISplitTabsControl::UpdateTabSplitStatus() {
-  SplitTabsButtonState state = GetCurrentState();
-  UpdateVisibility(state);
-
-  if (state.split_status == last_sent_tab_split_status_) {
-    return;
-  }
-  last_sent_tab_split_status_ = state.split_status;
-
-  if (auto* webui_toolbar_ui = toolbar_view_->GetWebUIToolbarUI()) {
-    webui_toolbar_ui->OnTabSplitStatusChanged(state.split_status.is_split,
-                                              state.split_status.location);
-  }
-}
-
-void WebUISplitTabsControl::UpdatePinState() {
-  SplitTabsButtonState state = GetCurrentState();
-  UpdateVisibility(state);
-
-  if (state.is_pinned == last_sent_pin_state_) {
-    return;
-  }
-  last_sent_pin_state_ = state.is_pinned;
-
-  if (auto* webui_toolbar_ui = toolbar_view_->GetWebUIToolbarUI()) {
-    webui_toolbar_ui->OnButtonPinStateChanged(
-        browser_controls_api::mojom::ToolbarButtonType::kSplitTabs,
-        state.is_pinned);
-  }
+void WebUISplitTabsControl::UpdateState() {
+  auto state = toolbar_ui_api::mojom::SplitTabsControlState::New();
+  auto s = webui_toolbar::ComputeTabSplitStatus(delegate_->GetBrowser());
+  state->is_current_tab_split = s.is_split;
+  state->location = s.location;
+  state->should_be_shown = pin_state_.GetValue() || s.is_split;
+  state->is_context_menu_visible = menu_runner_ && menu_runner_->IsRunning();
+  state->menu_open_token = menu_open_token_;
+  UpdateVisibility(state.get());
+  delegate_->OnSplitTabsControlStateChanged(std::move(state));
 }

@@ -66,13 +66,8 @@ static_assert(offsetof(Channel::Message::LegacyHeader, message_type) ==
 const size_t kReadBufferSize = 4096;
 const size_t kMaxUnusedReadBufferCapacity = 4096;
 
-#if BUILDFLAG(IS_FUCHSIA)
-// Fuchsia: The zx_channel_write() API supports up to 64 handles.
-const size_t kMaxAttachedHandles = 64;
-#else
-// Linux: The platform imposes a limit of 253 handles per sendmsg().
-const size_t kMaxAttachedHandles = 253;
-#endif  // BUILDFLAG(IS_FUCHSIA)
+// Limit on the number of handles that may be received per Mojo message.
+const size_t kMaxAttachedHandles = 256;
 
 static_assert(alignof(std::max_align_t) >= kChannelMessageAlignment, "");
 Channel::AlignedBuffer MakeAlignedBuffer(size_t size) {
@@ -261,7 +256,8 @@ static_assert(sizeof(TrivialMessage) == TrivialMessage::kIntendedMessageSize,
               "The TrivialMessage is of wrong size");
 
 bool ShouldRecordSubsampledHistograms() {
-  return base::ShouldRecordSubsampledMetric(0.001);
+  return base::ShouldRecordSubsampledMetric(
+      Channel::kMetricSubsamplingProbability);
 }
 
 }  // namespace
@@ -400,13 +396,8 @@ Channel::MessagePtr Channel::Message::CreateMessage(size_t payload_size,
 Channel::MessagePtr Channel::Message::CreateMessage(size_t capacity,
                                                     size_t payload_size,
                                                     size_t max_handles) {
-#if defined(MOJO_CORE_LEGACY_PROTOCOL)
-  return CreateMessage(capacity, payload_size, max_handles,
-                       Message::MessageType::NORMAL_LEGACY);
-#else
   return CreateMessage(capacity, payload_size, max_handles,
                        Message::MessageType::NORMAL);
-#endif
 }
 
 // static
@@ -472,8 +463,8 @@ Channel::MessagePtr Channel::Message::Deserialize(
   }
 
   uint32_t extra_header_size = 0;
-  auto data_span = UNSAFE_TODO(
-      base::span<const char>(static_cast<const char*>(data), data_num_bytes));
+  auto data_span = UNSAFE_TODO(base::span<const char>(
+      base::unchecked, static_cast<const char*>(data), data_num_bytes));
   base::span<const char> payload_span{};
   if (!header) {
     payload_span = data_span.subspan(sizeof(LegacyHeader),
@@ -938,7 +929,12 @@ class Channel::ReadBuffer {
 
   // Ensures the ReadBuffer has enough contiguous space allocated to hold
   // |num_bytes| more bytes; returns the address of the first available byte.
+  // If computing the new size overflows, returns nullptr.
   char* Reserve(size_t num_bytes) {
+    const auto new_size = base::CheckAdd(num_bytes, size_);
+    if (!new_size.IsValid()) {
+      return nullptr;
+    }
     if (num_occupied_bytes_ + num_bytes > size_) {
       size_ = std::max(static_cast<size_t>(size_ * kGrowthFactor),
                        num_occupied_bytes_ + num_bytes);
@@ -1092,23 +1088,19 @@ bool Channel::OnReadComplete(size_t bytes_read, size_t* next_read_size_hint) {
     }
 
     DispatchResult result = TryDispatchMessage(
-        UNSAFE_TODO(base::span(read_buffer_->occupied_bytes(),
+        UNSAFE_TODO(base::span(base::unchecked, read_buffer_->occupied_bytes(),
                                read_buffer_->num_occupied_bytes())),
         next_read_size_hint);
     if (result == DispatchResult::kOK) {
-      if (ShouldRecordSubsampledHistograms()) {
-        RecordReceivedMessageProcessType();
-      }
       read_buffer_->Discard(*next_read_size_hint);
       *next_read_size_hint = 0;
 
       if (!DispatchDelayedMessages()) {
         return false;
       }
-    } else if (result == DispatchResult::kNotEnoughData) {
+    } else if (result == DispatchResult::kNotEnoughData ||
+               result == DispatchResult::kMissingHandles) {
       return true;
-    } else if (result == DispatchResult::kMissingHandles) {
-      break;
     } else if (result == DispatchResult::kError) {
       return false;
     }
@@ -1324,7 +1316,7 @@ MOJO_SYSTEM_IMPL_EXPORT void Channel::OfferChannelUpgrade() {
 }
 #endif
 
-void Channel::RecordSentMessageMetrics(size_t payload_size) {
+void Channel::RecordSentMessageMetricsSubsampled(size_t payload_size) {
   if (ShouldRecordSubsampledHistograms()) {
     UMA_HISTOGRAM_COUNTS_100000("Mojo.Channel.WriteMessageSize", payload_size);
     RecordSentMessageProcessType();
@@ -1382,12 +1374,6 @@ void Channel::DelayMessage(uint32_t channel_sequence_number,
                             std::move(delayed_message));
 }
 
-// static
-void Channel::RecordReceivedMessageProcessType() {
-  UMA_HISTOGRAM_ENUMERATION(
-      "Mojo.Channel.WriteReceiveMessageProcessType",
-      base::CurrentProcess::GetInstance().GetShortType({}));
-}
 
 // static
 void Channel::RecordSentMessageProcessType() {

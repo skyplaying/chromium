@@ -21,13 +21,22 @@
 #include <mach/vm_map.h>
 #include <sys/mman.h>
 #elif BUILDFLAG(IS_POSIX)
+#include <fcntl.h>
 #include <sys/mman.h>
+#include <unistd.h>
 
 #include "base/debug/proc_maps_linux.h"
+#include "base/files/file_path.h"
+#include "base/files/file_util.h"
+#include "base/posix/eintr_wrapper.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #elif BUILDFLAG(IS_WIN)
 #include <windows.h>
 
+#include "base/features.h"
 #include "base/logging.h"
+#include "base/test/scoped_feature_list.h"
 #elif BUILDFLAG(IS_FUCHSIA)
 #include <lib/zx/object.h>
 #include <lib/zx/process.h>
@@ -388,6 +397,111 @@ TEST_F(PlatformSharedMemoryRegionTest, ConvertToUnsafeInvalidatesSecondHandle) {
 }
 #endif
 
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+namespace {
+
+// Returns true if |fd| refers to a memfd. Regions are backed by memfd unless
+// the kernel does not support memfd_create(), in which case they fall back to
+// an unlinked file in /dev/shm and the memfd-specific expectations below do
+// not apply.
+bool IsMemfd(int fd) {
+  FilePath target;
+  if (!ReadSymbolicLink(FilePath(StringPrintf("/proc/self/fd/%d", fd)),
+                        &target)) {
+    return false;
+  }
+  return StartsWith(target.value(), "/memfd:");
+}
+
+}  // namespace
+
+// Tests that memfd-backed regions have their size sealed, so that no holder of
+// a descriptor can shrink or grow them, and that the set of seals is final.
+TEST_F(PlatformSharedMemoryRegionTest, MemfdRegionsAreSizeSealed) {
+  for (auto create : {&PlatformSharedMemoryRegion::CreateWritable,
+                      &PlatformSharedMemoryRegion::CreateUnsafe}) {
+    PlatformSharedMemoryRegion region = create(kRegionSize);
+    ASSERT_TRUE(region.IsValid());
+    const int fd = region.GetPlatformHandle().fd;
+    if (!IsMemfd(fd)) {
+      GTEST_SKIP() << "memfd_create() is not supported here";
+    }
+    const int seals = fcntl(fd, F_GET_SEALS);
+    ASSERT_NE(seals, -1);
+    EXPECT_EQ(seals & (F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_SEAL),
+              F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_SEAL);
+    EXPECT_EQ(seals & (F_SEAL_WRITE | F_SEAL_FUTURE_WRITE), 0);
+    EXPECT_EQ(-1, HANDLE_EINTR(ftruncate(fd, 0)));
+    EXPECT_EQ(EPERM, errno);
+    EXPECT_EQ(-1, HANDLE_EINTR(ftruncate(fd, kRegionSize * 2)));
+    EXPECT_EQ(EPERM, errno);
+    // The region is still fully usable.
+    WritableSharedMemoryMapping mapping = MapForTesting(&region);
+    ASSERT_TRUE(mapping.IsValid());
+    std::ranges::fill(mapping.GetMemoryAsSpan<uint8_t>(), 0xab);
+  }
+}
+
+// Tests that the read-only descriptor of a memfd-backed writable region refers
+// to the same memory and cannot be used to map it writable.
+TEST_F(PlatformSharedMemoryRegionTest, MemfdReadOnlyDescriptor) {
+  PlatformSharedMemoryRegion region =
+      PlatformSharedMemoryRegion::CreateWritable(kRegionSize);
+  ASSERT_TRUE(region.IsValid());
+  if (!IsMemfd(region.GetPlatformHandle().fd)) {
+    GTEST_SKIP() << "memfd_create() is not supported here";
+  }
+  WritableSharedMemoryMapping rw_mapping = MapForTesting(&region);
+  ASSERT_TRUE(rw_mapping.IsValid());
+  std::ranges::fill(rw_mapping.GetMemoryAsSpan<uint8_t>(), 0x5a);
+
+  const int readonly_fd = region.GetPlatformHandle().readonly_fd;
+  ASSERT_GE(readonly_fd, 0);
+  EXPECT_TRUE(IsMemfd(readonly_fd));
+  EXPECT_EQ(O_RDONLY, fcntl(readonly_fd, F_GETFL) & O_ACCMODE);
+  void* rw = mmap(nullptr, kRegionSize, PROT_READ | PROT_WRITE, MAP_SHARED,
+                  readonly_fd, 0);
+  EXPECT_EQ(MAP_FAILED, rw);
+  void* ro = mmap(nullptr, kRegionSize, PROT_READ, MAP_SHARED, readonly_fd, 0);
+  ASSERT_NE(MAP_FAILED, ro);
+  EXPECT_EQ(-1, mprotect(ro, kRegionSize, PROT_READ | PROT_WRITE));
+  munmap(ro, kRegionSize);
+
+  // After conversion the region is accepted as read-only and still maps the
+  // same memory.
+  ASSERT_TRUE(region.ConvertToReadOnly());
+  auto read_only_region = PlatformSharedMemoryRegion::TakeOrFail(
+      region.PassPlatformHandle(), PlatformSharedMemoryRegion::Mode::kReadOnly,
+      kRegionSize, UnguessableToken::Create());
+  ASSERT_THAT(read_only_region, HasValue());
+  WritableSharedMemoryMapping ro_mapping =
+      MapForTesting(&read_only_region.value());
+  ASSERT_TRUE(ro_mapping.IsValid());
+  EXPECT_EQ(0x5a, ro_mapping.GetMemoryAsSpan<const uint8_t>()[kRegionSize - 1]);
+}
+
+// Tests that CreateUnsafeAnonymous() produces a working, sealed, unsafe region
+// without a read-only descriptor.
+TEST_F(PlatformSharedMemoryRegionTest, CreateUnsafeAnonymous) {
+  PlatformSharedMemoryRegion region =
+      PlatformSharedMemoryRegion::CreateUnsafeAnonymous(kRegionSize);
+  if (!region.IsValid()) {
+    GTEST_SKIP() << "memfd_create() is not supported here";
+  }
+  EXPECT_EQ(PlatformSharedMemoryRegion::Mode::kUnsafe, region.GetMode());
+  EXPECT_EQ(kRegionSize, region.GetSize());
+  EXPECT_TRUE(IsMemfd(region.GetPlatformHandle().fd));
+  EXPECT_LT(region.GetPlatformHandle().readonly_fd, 0);
+  const int seals = fcntl(region.GetPlatformHandle().fd, F_GET_SEALS);
+  EXPECT_EQ(seals & (F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_SEAL),
+            F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_SEAL);
+  WritableSharedMemoryMapping mapping = MapForTesting(&region);
+  ASSERT_TRUE(mapping.IsValid());
+  std::ranges::fill(mapping.GetMemoryAsSpan<uint8_t>(), 1);
+  EXPECT_FALSE(PlatformSharedMemoryRegion::CreateUnsafeAnonymous(0).IsValid());
+}
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+
 void CheckReadOnlyMapProtection(void* addr) {
 #if BUILDFLAG(IS_APPLE)
   vm_region_basic_info_64 basic_info;
@@ -596,5 +710,89 @@ TEST_F(PlatformSharedMemoryRegionTest, UnsafeRegionConvertToUnsafeDeathTest) {
   ASSERT_TRUE(region.IsValid());
   EXPECT_DEATH_IF_SUPPORTED(region.ConvertToUnsafe(), kErrorRegex);
 }
+
+#if BUILDFLAG(IS_WIN)
+namespace {
+
+int g_fake_create_file_mapping_call_count = 0;
+
+// Fake CreateFileMapping() implementation for testing.
+// It simulates ERROR_COMMITMENT_LIMIT failures for the first 5 calls,
+// then delegates to the real API.
+HANDLE WINAPI FakeCreateFileMapping(HANDLE file,
+                                    SECURITY_ATTRIBUTES* sa,
+                                    DWORD protect,
+                                    DWORD max_size_high,
+                                    DWORD max_size_low,
+                                    LPCWSTR name) {
+  g_fake_create_file_mapping_call_count++;
+
+  // Fail the first 5 times to trigger the retry logic.
+  if (g_fake_create_file_mapping_call_count <= 5) {
+    ::SetLastError(ERROR_COMMITMENT_LIMIT);
+    return nullptr;
+  }
+
+  // On the 6th try, call the real API to return a valid handle.
+  return ::CreateFileMapping(file, sa, protect, max_size_high, max_size_low,
+                             name);
+}
+
+}  // namespace
+
+// Tests that the retry logic operates correctly when CreateFileMapping() fails
+// with ERROR_COMMITMENT_LIMIT.
+TEST_F(PlatformSharedMemoryRegionTest, CreateRetryOnCommitLimit) {
+  // Enable the retry feature.
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      features::kRetryCreateFileMappingOnCommitLimit);
+
+  // Install the hook.
+  g_fake_create_file_mapping_call_count = 0;
+  PlatformSharedMemoryRegion::SetCreateFileMappingCallbackForTesting(
+      &FakeCreateFileMapping);
+
+  // Create a region.
+  // This will fail 5 times inside the loop, wait, and succeed on the 6th try.
+  PlatformSharedMemoryRegion region =
+      PlatformSharedMemoryRegion::CreateWritable(kRegionSize);
+
+  // Verify that the retry loop ran exactly as expected (5 failures + 1
+  // success).
+  EXPECT_EQ(g_fake_create_file_mapping_call_count, 6);
+  EXPECT_TRUE(region.IsValid());
+
+  // Cleanup: Remove the hook to avoid affecting other tests.
+  PlatformSharedMemoryRegion::SetCreateFileMappingCallbackForTesting(nullptr);
+}
+
+// Tests that the retry logic does not run if the feature is disabled.
+TEST_F(PlatformSharedMemoryRegionTest, NoRetryWhenFeatureDisabled) {
+  // Disable the retry feature.
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      features::kRetryCreateFileMappingOnCommitLimit);
+
+  // Install the hook.
+  g_fake_create_file_mapping_call_count = 0;
+  PlatformSharedMemoryRegion::SetCreateFileMappingCallbackForTesting(
+      &FakeCreateFileMapping);
+
+  // Create a region.
+  // The hook fails immediately with ERROR_COMMITMENT_LIMIT.
+  // Since the feature is disabled, it should return an invalid region
+  // immediately without retrying.
+  PlatformSharedMemoryRegion region =
+      PlatformSharedMemoryRegion::CreateWritable(kRegionSize);
+
+  // Verify that only 1 call was made (the failure).
+  EXPECT_EQ(g_fake_create_file_mapping_call_count, 1);
+  EXPECT_FALSE(region.IsValid());
+
+  // Cleanup: Remove the hook to avoid affecting other tests.
+  PlatformSharedMemoryRegion::SetCreateFileMappingCallbackForTesting(nullptr);
+}
+#endif  // BUILDFLAG(IS_WIN)
 
 }  // namespace base::subtle

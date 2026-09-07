@@ -2,20 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/password_manager/web_app_profile_switcher.h"
+
 #include "ash/constants/web_app_id_constants.h"
 #include "base/files/file_path.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/notifications/notification_display_service_tester.h"
-#include "chrome/browser/password_manager/web_app_profile_switcher.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_test_util.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/profiles/profile_picker.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
@@ -53,6 +54,18 @@ webapps::AppId GetTestWebAppId() {
       webapps::ManifestId(GURL(kTestWebUIManifestId)));
 }
 
+size_t GetTabbedBrowserCount(Profile* profile) {
+  size_t count = 0;
+  ProfileBrowserCollection::GetForProfile(profile)->ForEach(
+      [&](BrowserWindowInterface* browser) {
+        if (browser->GetType() == BrowserWindowInterface::TYPE_NORMAL) {
+          count++;
+        }
+        return true;
+      });
+  return count;
+}
+
 Profile* CreateAdditionalProfile() {
   ProfileManager* profile_manager = g_browser_process->profile_manager();
   size_t starting_number_of_profiles = profile_manager->GetNumberOfProfiles();
@@ -87,7 +100,8 @@ IN_PROC_BROWSER_TEST_F(WebAppProfileSwitcherBrowserTest,
 
   // Create a second profile.
   Profile* second_profile = CreateAdditionalProfile();
-  ASSERT_FALSE(chrome::FindBrowserWithProfile(second_profile));
+  ASSERT_FALSE(ProfileBrowserCollection::GetForProfile(second_profile)
+                   ->GetLastActiveBrowser());
   // Confirm that the profile has no installed app.
   ASSERT_FALSE(web_app::FindInstalledAppWithUrlInScope(second_profile,
                                                        GURL(kTestWebUIAppURL)));
@@ -104,16 +118,18 @@ IN_PROC_BROWSER_TEST_F(WebAppProfileSwitcherBrowserTest,
   EXPECT_EQ(new_web_contents->GetVisibleURL(), GURL(kTestWebUIAppURL));
 
   // Check that the new WebContents belong to the second profile.
-  Browser* new_browser = chrome::FindBrowserWithProfile(second_profile);
-  ASSERT_TRUE(new_browser);
-  EXPECT_EQ(new_browser->tab_strip_model()->GetActiveWebContents(),
+  BrowserWindowInterface* new_browser_window =
+      ProfileBrowserCollection::GetForProfile(second_profile)
+          ->GetLastActiveBrowser();
+  ASSERT_TRUE(new_browser_window);
+  EXPECT_EQ(new_browser_window->tab_strip_model()->GetActiveWebContents(),
             new_web_contents);
 
   std::optional<webapps::AppId> app_id =
       web_app::FindInstalledAppWithUrlInScope(second_profile,
                                               GURL(kTestWebUIAppURL));
   ASSERT_TRUE(app_id);
-  EXPECT_TRUE(web_app::AppBrowserController::IsWebApp(new_browser));
+  EXPECT_TRUE(web_app::AppBrowserController::IsWebApp(new_browser_window));
   web_app::WebAppProvider* provider =
       web_app::WebAppProvider::GetForTest(second_profile);
   EXPECT_EQ(provider->registrar_unsafe().GetAppUserDisplayMode(app_id.value()),
@@ -130,7 +146,8 @@ IN_PROC_BROWSER_TEST_F(WebAppProfileSwitcherBrowserTest,
   // Create a second profile and install the app for it.
   Profile* second_profile = CreateAdditionalProfile();
   InstallAppForProfile(second_profile, GetTestWebAppInstallInfo());
-  ASSERT_FALSE(chrome::FindBrowserWithProfile(second_profile));
+  ASSERT_FALSE(ProfileBrowserCollection::GetForProfile(second_profile)
+                   ->GetLastActiveBrowser());
 
   // Verify that the app is launched for the second profile.
   ui_test_utils::AllBrowserTabAddedWaiter waiter;
@@ -139,12 +156,14 @@ IN_PROC_BROWSER_TEST_F(WebAppProfileSwitcherBrowserTest,
                                          profile_switch_complete.GetCallback());
   profile_switcher.SwitchToProfile(second_profile->GetPath());
 
-  Browser* new_browser = ui_test_utils::WaitForBrowserToOpen();
+  BrowserWindowInterface* new_browser = ui_test_utils::WaitForBrowserToOpen();
 
   // Check that the new Browser belong to the second profile and Password
   // Manager is opened.
   ASSERT_TRUE(new_browser);
-  EXPECT_EQ(chrome::FindBrowserWithProfile(second_profile), new_browser);
+  EXPECT_EQ(ProfileBrowserCollection::GetForProfile(second_profile)
+                ->GetLastActiveBrowser(),
+            new_browser);
   EXPECT_EQ(
       GURL(kTestWebUIAppURL),
       new_browser->tab_strip_model()->GetActiveWebContents()->GetVisibleURL());
@@ -164,7 +183,7 @@ IN_PROC_BROWSER_TEST_F(WebAppProfileSwitcherBrowserTest,
       web_app::AppBrowserController::FindForWebApp(*first_profile,
                                                    ash::kPasswordManagerAppId);
   ASSERT_TRUE(first_profile_app_browser);
-  ASSERT_EQ(chrome::FindAllTabbedBrowsersWithProfile(first_profile).size(), 1U);
+  ASSERT_EQ(GetTabbedBrowserCount(first_profile), 1U);
 
   // Create a second profile and install the app for it.
   Profile* second_profile = CreateAdditionalProfile();
@@ -175,8 +194,8 @@ IN_PROC_BROWSER_TEST_F(WebAppProfileSwitcherBrowserTest,
       web_app::AppBrowserController::FindForWebApp(*second_profile,
                                                    ash::kPasswordManagerAppId);
   ASSERT_TRUE(second_profile_app_browser);
-  EXPECT_EQ(chrome::FindLastActive(),
-            second_profile_app_browser->GetBrowserForMigrationOnly());
+  EXPECT_EQ(GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser(),
+            second_profile_app_browser);
 
   // Switch to the first profile from the second.
   base::test::TestFuture<void> profile_switch_complete;
@@ -184,15 +203,14 @@ IN_PROC_BROWSER_TEST_F(WebAppProfileSwitcherBrowserTest,
                                          *second_profile,
                                          profile_switch_complete.GetCallback());
   profile_switcher.SwitchToProfile(first_profile->GetPath());
-  ui_test_utils::BrowserActivationWaiter(
-      first_profile_app_browser->GetBrowserForMigrationOnly())
+  ui_test_utils::BrowserActivationWaiter(first_profile_app_browser)
       .WaitForActivation();
   EXPECT_TRUE(profile_switch_complete.Wait());
 
   // Check that there is only one browser for the first_profile and it's active.
-  ASSERT_EQ(chrome::FindAllTabbedBrowsersWithProfile(first_profile).size(), 1U);
-  EXPECT_EQ(chrome::FindBrowserWithActiveWindow(),
-            first_profile_app_browser->GetBrowserForMigrationOnly());
+  ASSERT_EQ(GetTabbedBrowserCount(first_profile), 1U);
+  EXPECT_EQ(GlobalBrowserCollection::GetInstance()->GetActiveBrowser(),
+            first_profile_app_browser);
 
   EXPECT_THAT(histogram_tester.GetAllSamples("PasswordManager.ShortcutMetric"),
               base::BucketsAre(base::Bucket(2, 1)));

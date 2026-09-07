@@ -59,7 +59,7 @@
 #include "ui/color/color_provider.h"
 #include "ui/compositor/clip_recorder.h"
 #include "ui/compositor/compositor.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_textured.h"
 #include "ui/compositor/layer_type.h"
 #include "ui/compositor/paint_context.h"
 #include "ui/compositor/paint_recorder.h"
@@ -184,7 +184,7 @@ class VIEWS_EXPORT ViewMaskLayer : public ui::LayerDelegate,
   base::ScopedObservation<View, ViewObserver> observed_view_{this};
 
   SkPath path_;
-  ui::Layer layer_;
+  ui::LayerTextured layer_;
 };
 
 ViewMaskLayer::ViewMaskLayer(const SkPath& path, View* observed_view)
@@ -685,6 +685,10 @@ bool View::GetIsDrawn() const {
   return IsDrawn();
 }
 
+bool View::GetIsPaintLocked() const {
+  return IsPaintLocked();
+}
+
 bool View::GetEnabled() const {
   return enabled_;
 }
@@ -805,9 +809,11 @@ void View::RemoveLayerFromRegions(ui::Layer* old_layer) {
   RemoveLayerFromRegionsKeepInLayerTree(old_layer);
 
   // Note that |old_layer| may have already been removed from its parent.
-  ui::Layer* parent_layer = layer()->parent();
-  if (parent_layer && parent_layer == old_layer->parent()) {
-    parent_layer->Remove(old_layer);
+  if (layer()) {
+    ui::Layer* parent_layer = layer()->parent();
+    if (parent_layer && parent_layer == old_layer->parent()) {
+      parent_layer->Remove(old_layer);
+    }
   }
 
   CreateOrDestroyLayer();
@@ -825,9 +831,8 @@ void View::RemoveLayerFromRegionsKeepInLayerTree(ui::Layer* old_layer) {
         old_layer->RemoveObserver(this);
         return true;
       };
-  const bool layer_removed =
-      remove_layer(layers_below_) || remove_layer(layers_above_);
-  DCHECK(layer_removed) << "Attempted to remove a layer that was never added.";
+  remove_layer(layers_below_);
+  remove_layer(layers_above_);
 }
 
 std::vector<ui::Layer*> View::GetLayersInOrder(ViewLayer view_layer) {
@@ -947,6 +952,11 @@ void View::DeprecatedLayoutImmediately() {
 
 void View::Layout(PassKey) {
   needs_layout_ = false;
+
+  if (GetProperty(kViewDoesNotLayOutChildren)) {
+    CHECK(!HasLayoutManager());
+    return;
+  }
 
   // If we have a layout manager, let it handle the layout for us.
   if (HasLayoutManager()) {
@@ -1605,7 +1615,10 @@ View* View::GetEventHandlerForRect(const gfx::Rect& rect) {
 }
 
 bool View::GetCanProcessEventsWithinSubtree() const {
-  return can_process_events_within_subtree_;
+  if (!can_process_events_within_subtree_) {
+    return false;
+  }
+  return parent() ? parent()->GetCanProcessEventsWithinSubtree() : true;
 }
 
 void View::SetCanProcessEventsWithinSubtree(bool can_process) {
@@ -1722,9 +1735,10 @@ bool View::OnMouseWheel(const ui::MouseWheelEvent& event) {
 }
 
 void View::OnEvent(ui::Event* event) {
-  if (!GetEnabledInViewsSubtree()) {
-    // if this view or any of it parent is disabled, we should "eat" events
-    // without processing
+  if (!GetEnabledInViewsSubtree() || !GetCanProcessEventsWithinSubtree()) {
+    // If this view or any of it parent is disabled, we should "eat" events
+    // without processing. Similarly we should honor views configured to
+    // ignore events within its subtree.
     return;
   }
   ui::EventHandler::OnEvent(event);
@@ -1833,7 +1847,7 @@ WordLookupClient* View::GetWordLookupClient() {
 }
 
 bool View::CanAcceptEvent(const ui::Event& event) {
-  return IsDrawn();
+  return IsDrawn() && GetCanProcessEventsWithinSubtree();
 }
 
 ui::EventTarget* View::GetParentTarget() {
@@ -2708,7 +2722,7 @@ void View::AddLayerToRegionImpl(
 
   CreateOrDestroyLayer();
 
-  if (layer()->type() != ui::LAYER_SOLID_COLOR) {
+  if (!layer()->AsSolidColor()) {
     layer()->SetFillsBoundsOpaquely(false);
   }
 }
@@ -2783,12 +2797,24 @@ void View::UpdateLayerClipForVisibleBounds(bool remove_layer_clip) {
 void View::ReorderChildLayers(ui::Layer* parent_layer) {
   if (layer() && layer() != parent_layer) {
     DCHECK_EQ(parent_layer, layer()->parent());
+    // Do not restack if this view's layer is not a direct child of
+    // `parent_layer`. Transient states (such as LayerTreeOwner window state
+    // transitions, animations, or unparented views during multi-step tree
+    // construction) can momentarily leave layers unparented or in a separate
+    // layer hierarchy during a layout pass.
+    if (layer()->parent() != parent_layer) {
+      return;
+    }
     for (ui::Layer* layer_above : layers_above_) {
-      parent_layer->StackAtBottom(layer_above);
+      if (layer_above->parent() == parent_layer) {
+        parent_layer->StackAtBottom(layer_above);
+      }
     }
     parent_layer->StackAtBottom(layer());
     for (ui::Layer* layer_below : layers_below_) {
-      parent_layer->StackAtBottom(layer_below);
+      if (layer_below->parent() == parent_layer) {
+        parent_layer->StackAtBottom(layer_below);
+      }
     }
   } else {
     // Iterate backwards through the children so that a child with a layer
@@ -2966,19 +2992,33 @@ void View::HandlePropertyChangeEffects(PropertyEffects effects) {
 }
 
 void View::AfterPropertyChange(const void* key, int64_t old_value) {
-  if (key == kElementIdentifierKey) {
-    const ui::ElementIdentifier old_element_id =
-        ui::ElementIdentifier::FromRawValue(
-            base::checked_cast<intptr_t>(old_value));
-    if (old_element_id) {
-      views::ElementTrackerViews::GetInstance()->UnregisterView(old_element_id,
+  if (life_cycle_state_ == LifeCycleState::kAlive) {
+    // Only care about changes to identifiers while the view is alive; when the
+    // view is being destroyed it will naturally be removed from the tracker.
+    if (key == kElementIdentifierKey) {
+      const ui::ElementIdentifier old_element_id =
+          ui::ElementIdentifier::FromRawValue(
+              base::checked_cast<intptr_t>(old_value));
+      if (old_element_id) {
+        views::ElementTrackerViews::GetInstance()->UnregisterView(
+            old_element_id, this);
+      }
+      const ui::ElementIdentifier new_element_id =
+          GetProperty(kElementIdentifierKey);
+      if (new_element_id) {
+        views::ElementTrackerViews::GetInstance()->RegisterView(new_element_id,
                                                                 this);
-    }
-    const ui::ElementIdentifier new_element_id =
-        GetProperty(kElementIdentifierKey);
-    if (new_element_id) {
-      views::ElementTrackerViews::GetInstance()->RegisterView(new_element_id,
-                                                              this);
+      }
+    } else if (key == kElementSecondaryIdentifierKey) {
+      const auto primary_id = GetProperty(kElementIdentifierKey);
+      if (primary_id) {
+        // Since for a tracked element the ids are immutable, need to recreate
+        // it.
+        views::ElementTrackerViews::GetInstance()->UnregisterView(primary_id,
+                                                                  this);
+        views::ElementTrackerViews::GetInstance()->RegisterView(primary_id,
+                                                                this);
+      }
     }
   }
   observers_.Notify(&ViewObserver::OnViewPropertyChanged, this, key, old_value);
@@ -3037,11 +3077,54 @@ void View::DragInfo::PossibleDrag(const gfx::Point& p) {
 
 // Painting --------------------------------------------------------------------
 
+void View::AddPaintLock() {
+  paint_lock_count_++;
+}
+
+void View::RemovePaintLock() {
+  CHECK_GT(paint_lock_count_, 0);
+  paint_lock_count_--;
+  if (paint_lock_count_ == 0) {
+    UnlockPaint();
+  }
+}
+
+bool View::IsPaintLocked() const {
+  if (paint_lock_count_ > 0) {
+    return true;
+  }
+
+  return parent_ ? parent_->IsPaintLocked() : false;
+}
+
+void View::UnlockPaint() {
+  if (IsPaintLocked()) {
+    return;
+  }
+
+  if (paint_pending_while_locked_) {
+    paint_pending_while_locked_ = false;
+    SchedulePaint();
+  }
+
+  for (View* child : children_) {
+    if (child->paint_lock_count_ == 0) {
+      child->UnlockPaint();
+    }
+  }
+}
+
 void View::SchedulePaintInRectImpl(const gfx::Rect& rect) {
+  if (IsPaintLocked()) {
+    paint_pending_while_locked_ = true;
+    return;
+  }
+
   OnDidSchedulePaint(rect);
   if (!visible_) {
     return;
   }
+
   if (layer()) {
     layer()->SchedulePaint(rect);
   } else if (parent_) {
@@ -3081,7 +3164,7 @@ void View::SchedulePaintOnParent() {
 }
 
 bool View::ShouldPaint() const {
-  return visible_ && !size().IsEmpty();
+  return visible_ && !size().IsEmpty() && !IsPaintLocked();
 }
 
 void View::SetUpTransformRecorderForPainting(
@@ -3235,7 +3318,13 @@ void View::AddChildViewAtImpl(View* view, size_t index) {
   // events from being fired until accessibility is fully initialized, and if we
   // need to update the accessible focusable state before the cache is fully
   // initialized. If so, let's merge these two functions.
-  view->GetViewAccessibility().OnViewHasNewAncestor(this);
+  view->GetViewAccessibility().OnViewParentChanged();
+
+  // Fire the live region event if needed on the parent of the added view, not
+  // the view itself, so the right live region container is notified of the
+  // addition.
+  GetViewAccessibility().FireLiveRegionChangedIfNeeded(
+      ViewAccessibility::LiveRegionEventTrigger::kAdditions);
 
   if (widget) {
     // There are scenarios where we might be reparenting a view from a widget
@@ -3318,11 +3407,15 @@ void View::DoRemoveChildView(View* view,
   }
 
   if (view->parent_) {
+    view->parent_->GetViewAccessibility().FireLiveRegionChangedIfNeeded(
+        ViewAccessibility::LiveRegionEventTrigger::kRemovals);
     view->parent_->GetViewAccessibility().NotifyEvent(
         ax::mojom::Event::kChildrenChanged, true);
   }
 
   view->parent_ = nullptr;
+  view->GetViewAccessibility().OnViewParentChanged();
+
   // Make sure the sub-tree of this view detaches from widget the same moment
   // they're removed from previous view hierarchy.
   if (is_removed_from_widget) {
@@ -3650,7 +3743,7 @@ void View::CreateLayer(ui::LayerType layer_type) {
     }
   }
 
-  SetLayer(std::make_unique<ui::Layer>(layer_type));
+  SetLayer(ui::Layer::Create(layer_type));
   layer()->set_delegate(this);
   layer()->SetName(std::string(GetClassName()));
 
@@ -3702,24 +3795,14 @@ bool View::UpdateParentLayers() {
 void View::OrphanLayers() {
   if (layer()) {
     if (ui::Layer* parent = layer()->parent()) {
+      base::WeakPtr<ui::Layer> weak_parent = layer()->parent()->AsWeakPtr();
       for (ui::Layer* layer : GetLayersInOrder()) {
-        // TODO(http://b/319941708): Please remove the below crash keys once the
-        // the crash is fixed. It seems one of the layers returned by
-        // `GetLayersInOrder()` is not a sibling of this view's `layer()` (i.e.
-        // the parent is different).
-        SCOPED_CRASH_KEY_BOOL("OrphanLayers", "layer_valid", !!layer);
-        SCOPED_CRASH_KEY_BOOL("OrphanLayers", "layer_is_sibling",
-                              layer->parent() == parent);
-        SCOPED_CRASH_KEY_STRING256("OrphanLayers", "this_layer_name",
-                                   this->layer()->name());
-        SCOPED_CRASH_KEY_STRING256("OrphanLayers", "parent_layer_name",
-                                   parent->name());
-        SCOPED_CRASH_KEY_STRING256("OrphanLayers", "sibling_layer_name",
-                                   layer->name());
-        SCOPED_CRASH_KEY_STRING256("OrphanLayers", "widget_name",
-                                   GetWidget() ? GetWidget()->GetName() : "");
-        SCOPED_CRASH_KEY_STRING256("OrphanLayers", "view_class_name",
-                                   GetClassName());
+        // Layer::Remove() will stop any layer animation on the parent, notify
+        // LayerAnimationObserver::OnLayerAnimationAborted(). If the observer
+        // deletes the layer, the weak_parent will become null.
+        if (!weak_parent) {
+          break;
+        }
         parent->Remove(layer);
       }
     }
@@ -3753,7 +3836,7 @@ void View::ReparentLayer(ui::Layer* parent_layer) {
 void View::CreateMaskLayer() {
   DCHECK(layer());
   mask_layer_ = std::make_unique<views::ViewMaskLayer>(clip_path_, this);
-  layer()->SetMaskLayer(mask_layer_->layer());
+  layer()->SetMaskLayer(mask_layer_->layer()->AsTextured());
 }
 
 // Layout ----------------------------------------------------------------------
@@ -4063,8 +4146,8 @@ bool View::DoDrag(const ui::LocatedEvent& event,
   // the RootView can detect it and avoid calling us back.
   gfx::Point widget_location(event.location());
   ConvertPointToWidget(this, &widget_location);
-  widget->RunShellDrag(this, std::move(data), widget_location, drag_operations,
-                       source);
+  widget->RunDragDropLoop(this, std::move(data), widget_location,
+                          drag_operations, source);
   // WARNING: we may have been deleted.
   return true;
 }
@@ -4106,6 +4189,7 @@ ADD_PROPERTY_METADATA(int, OwnedGroup)
 ADD_PROPERTY_METADATA(int, Height)
 ADD_PROPERTY_METADATA(int, ID)
 ADD_READONLY_PROPERTY_METADATA(bool, IsDrawn);
+ADD_READONLY_PROPERTY_METADATA(bool, IsPaintLocked)
 ADD_READONLY_PROPERTY_METADATA(gfx::Size, MaximumSize)
 ADD_READONLY_PROPERTY_METADATA(gfx::Size, MinimumSize)
 ADD_PROPERTY_METADATA(bool, Mirrored)

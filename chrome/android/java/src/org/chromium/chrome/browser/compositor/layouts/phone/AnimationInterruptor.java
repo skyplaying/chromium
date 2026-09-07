@@ -15,7 +15,6 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.layouts.LayoutStateProvider;
 import org.chromium.chrome.browser.layouts.LayoutStateProvider.LayoutStateObserver;
 import org.chromium.chrome.browser.layouts.LayoutType;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabContextMenuData;
 import org.chromium.chrome.browser.tab.TabObserver;
@@ -37,8 +36,7 @@ class AnimationInterruptor implements Destroyable {
             new LayoutStateObserver() {
                 @Override
                 public void onStartedShowing(@LayoutType int layoutType) {
-                    if (layoutType == LayoutType.TAB_SWITCHER
-                            || layoutType == LayoutType.TOOLBAR_SWIPE) {
+                    if (layoutType == LayoutType.HUB || layoutType == LayoutType.TOOLBAR_SWIPE) {
                         interruptAnimation();
                     }
                     // Ignore BROWSING as that is what we are showing over and a new
@@ -50,7 +48,7 @@ class AnimationInterruptor implements Destroyable {
     private final Callback<@Nullable Tab> mCurrentTabObserver = this::onCurrentTabChanged;
 
     private final TabObserver mTabObserver =
-            new EmptyTabObserver() {
+            new TabObserver() {
                 @Override
                 public void onPageLoadStarted(Tab tab, GURL url) {
                     interruptAnimation();

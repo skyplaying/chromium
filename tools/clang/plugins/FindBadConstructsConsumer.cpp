@@ -299,7 +299,7 @@ void FindBadConstructsConsumer::Traverse(ASTContext& context) {
     layout_visitor_->VisitLayoutObjectMethods(context);
   }
 
-  if (options_.check_std_ranges_pipe_operator) {
+  {
     llvm::TimeTraceScope TimeScope(
         "CheckStdRangesPipeOperator in FindBadConstructsConsumer::Traverse");
     StdRangesPipeOperatorVisitor visitor(*this);
@@ -488,6 +488,12 @@ void FindBadConstructsConsumer::CheckCtorDtorWeight(
     return;
   }
 
+  // Aggregate types are exempt from the complex ctor/dtor checks despite the
+  // potential for binary bloat to allow the use of designated initializers.
+  if (IsRecursivelyAggregate(record)) {
+    return;
+  }
+
   // Skip records that derive from ignored base classes.
   if (HasIgnoredBases(record)) {
     return;
@@ -618,6 +624,21 @@ void FindBadConstructsConsumer::CheckCtorDtorWeight(
       }
     }
   }
+}
+
+bool FindBadConstructsConsumer::IsRecursivelyAggregate(CXXRecordDecl* record) {
+  if (!record->isAggregate()) {
+    return false;
+  }
+  // Also make sure all base classes are aggregates, which `isAggregate()` does
+  // not currently enforce.
+  for (const auto& base : record->bases()) {
+    CXXRecordDecl* base_record = base.getType()->getAsCXXRecordDecl();
+    if (base_record && !IsRecursivelyAggregate(base_record)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 SuppressibleDiagnosticBuilder
@@ -1015,8 +1036,8 @@ bool FindBadConstructsConsumer::HasPublicDtorCallback(
     return false;
   }
 
-  CXXRecordDecl* record = dyn_cast<CXXRecordDecl>(
-      base->getType()->getAs<RecordType>()->getOriginalDecl());
+  CXXRecordDecl* record =
+      dyn_cast<CXXRecordDecl>(base->getType()->getAs<RecordType>()->getDecl());
   SourceLocation unused;
   return None != CheckRecordForRefcountIssue(record, unused);
 }
@@ -1132,7 +1153,7 @@ void FindBadConstructsConsumer::CheckRefCountedDtors(
     // The record with the problem will always be the last record
     // in the path, since it is the record that stopped the search.
     const CXXRecordDecl* problem_record = dyn_cast<CXXRecordDecl>(
-        it->back().Base->getType()->getAs<RecordType>()->getOriginalDecl());
+        it->back().Base->getType()->getAs<RecordType>()->getDecl());
 
     issue = CheckRecordForRefcountIssue(problem_record, loc);
 
@@ -1399,7 +1420,7 @@ void FindBadConstructsConsumer::CheckConstructingSpanFromStringLiteral(
   }
 
   value_expr = value_expr->IgnoreParens();
-  if (auto* lit_expr = clang::dyn_cast<clang::StringLiteral>(value_expr)) {
+  if (clang::isa<clang::StringLiteral>(value_expr)) {
     ReportIfSpellingLocNotIgnored(loc, diag_span_from_string_literal_);
     ReportIfSpellingLocNotIgnored(loc, diag_note_span_from_string_literal1_);
   }

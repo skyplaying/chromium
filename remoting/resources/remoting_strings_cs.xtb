@@ -9,7 +9,7 @@
 <translation id="1480046233931937785">Poděkování</translation>
 <translation id="1520828917794284345">Přizpůsobit velikost plochy obrazovce</translation>
 <translation id="1546934824884762070">Došlo k neočekávané chybě. Nahlaste prosím tento problém vývojářům.</translation>
-<translation id="1697532407822776718">Vše je nastaveno!</translation>
+<translation id="1697532407822776718">Hotovo!</translation>
 <translation id="1742469581923031760">Připojování...</translation>
 <translation id="177040763384871009">Aby bylo možné v prohlížeči klienta otevírat odkazy, na které kliknete na vzdáleném zařízení, bude nutné změnit webový prohlížeč systému na <ph name="URL_FORWARDER_NAME" />.</translation>
 <translation id="177096447311351977">IP adresa kanálu pro klienta: <ph name="CLIENT_GAIA_IDENTIFIER" /> ip='<ph name="CLIENT_IP_ADDRESS_AND_PORT" />' host_ip='<ph name="HOST_IP_ADDRESS_AND_PORT" />' channel='<ph name="CHANNEL_TYPE" />' connection='<ph name="CONNECTION_TYPE" />'.</translation>
@@ -48,6 +48,7 @@ Pokud je položka <ph name="SERVICE_SCRIPT_NAME" /> již zaškrtnutá, zrušte j
 <translation id="3197730452537982411">Vzdálená plocha</translation>
 <translation id="3236334139428307578">Copyright 2026 Autoři prohlížeče Chromium. Všechna práva vyhrazena.</translation>
 <translation id="324272851072175193">Zaslat tyto pokyny e-mailem</translation>
+<translation id="3254626532848657899">Přesunout na konec</translation>
 <translation id="3305934114213025800">Aplikace <ph name="PRODUCT_NAME" /> chce provést změny.</translation>
 <translation id="3339299787263251426">Přistupujte ke svému počítači bezpečně přes internet</translation>
 <translation id="3385242214819933234">Neplatný vlastník hostitele.</translation>
@@ -166,6 +167,7 @@ Pokud je položka <ph name="SERVICE_SCRIPT_NAME" /> již zaškrtnutá, zrušte j
 <translation id="8073845705237259513">Chcete-li používat Vzdálenou plochu Chrome, budete do zařízení muset přidat účet Google.</translation>
 <translation id="809687642899217504">Mé počítače</translation>
 <translation id="8116630183974937060">Došlo k chybě sítě. Zkontrolujte prosím, zda je zařízení online a zkuste to znovu.</translation>
+<translation id="8249310407154411074">Přesunout na začátek</translation>
 <translation id="8295077433896346116">Chcete-li používat službu <ph name="PRODUCT_NAME" />, musíte jí udělit oprávnění Přístupnost, aby do tohoto počítače Mac bylo možné vkládat obsah ze vzdáleného počítače.
 
 Chcete-li udělit toto oprávnění, klikněte na tlačítko <ph name="BUTTON_NAME" /> níže. Na panelu Přístupnost, který se otevře, pak zaškrtněte políčko vedle položky <ph name="SERVICE_SCRIPT_NAME" />.

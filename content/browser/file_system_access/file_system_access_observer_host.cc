@@ -75,7 +75,8 @@ void FileSystemAccessObserverHost::DidResolveTransferTokenToObserve(
     FileSystemAccessTransferTokenImpl* resolved_token) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  if (!resolved_token) {
+  if (!resolved_token ||
+      resolved_token->origin() != binding_context_.storage_key.origin()) {
     std::move(callback).Run(
         file_system_access_error::FromStatus(
             blink::mojom::FileSystemAccessStatus::kInvalidArgument),
@@ -133,7 +134,8 @@ void FileSystemAccessObserverHost::DidResolveTransferTokenToObserve(
             if (!base::NormalizeFilePath(path, &check_path)) {
               check_path = path;
             }
-            DCHECK(path.empty() == check_path.empty());
+            CHECK(path.empty() == check_path.empty(),
+                  base::NotFatalUntil::M159);
             return check_path != path;
           },
           std::move(path)),

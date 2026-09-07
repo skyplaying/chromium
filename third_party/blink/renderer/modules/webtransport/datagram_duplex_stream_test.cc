@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/modules/webtransport/datagram_duplex_stream.h"
 
+#include <limits>
 #include <memory>
 #include <utility>
 
@@ -15,6 +16,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_testing.h"
 #include "third_party/blink/renderer/modules/webtransport/test_utils.h"
+#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
@@ -25,7 +27,7 @@ namespace blink {
 
 namespace {
 
-constexpr int32_t kInitialOutgoingHighWaterMark = 1;
+constexpr uint32_t kInitialOutgoingMaxBufferedDatagrams = 1;
 
 // Tiny implementation of network::mojom::blink::WebTransport with only the
 // functionality needed for these tests.
@@ -49,6 +51,7 @@ class StubWebTransport final : public network::mojom::blink::WebTransport {
   void CreateStream(
       mojo::ScopedDataPipeConsumerHandle output_consumer,
       mojo::ScopedDataPipeProducerHandle input_producer,
+      network::mojom::blink::WebTransportStreamPriorityPtr priority,
       base::OnceCallback<void(bool, uint32_t)> callback) override {
     NOTREACHED();
   }
@@ -79,11 +82,20 @@ class StubWebTransport final : public network::mojom::blink::WebTransport {
 
   void StopSending(uint32_t stream_id, uint8_t code) override {}
 
+  void SetStreamPriority(
+      uint32_t stream_id,
+      network::mojom::blink::WebTransportStreamPriorityPtr priority) override {}
+
   void SetOutgoingDatagramExpirationDuration(base::TimeDelta value) override {
     outgoing_datagram_expiration_duration_value_ = value;
   }
 
   void GetStats(GetStatsCallback callback) override {
+    std::move(callback).Run(nullptr);
+  }
+
+  void GetReceiveStreamStats(uint32_t stream_id,
+                             GetReceiveStreamStatsCallback callback) override {
     std::move(callback).Run(nullptr);
   }
 
@@ -137,7 +149,7 @@ class ScopedDatagramDuplexStream final {
       : scoped_web_transport_(v8_testing_scope_),
         duplex_(MakeGarbageCollected<DatagramDuplexStream>(
             scoped_web_transport_.GetWebTransport(),
-            kInitialOutgoingHighWaterMark)) {}
+            kInitialOutgoingMaxBufferedDatagrams)) {}
   ScopedDatagramDuplexStream(const ScopedDatagramDuplexStream&) = delete;
   ScopedDatagramDuplexStream& operator=(const ScopedDatagramDuplexStream&) =
       delete;
@@ -158,8 +170,15 @@ TEST(DatagramDuplexStreamTest, Defaults) {
   auto* duplex = scope.Duplex();
   EXPECT_FALSE(duplex->incomingMaxAge().has_value());
   EXPECT_FALSE(duplex->outgoingMaxAge().has_value());
-  EXPECT_EQ(duplex->incomingHighWaterMark(), kDefaultIncomingHighWaterMark);
-  EXPECT_EQ(duplex->outgoingHighWaterMark(), kInitialOutgoingHighWaterMark);
+  // New attributes and deprecated aliases expose the same default values.
+  EXPECT_EQ(duplex->incomingMaxBufferedDatagrams(),
+            kMinimumMaxBufferedDatagrams);
+  EXPECT_EQ(duplex->outgoingMaxBufferedDatagrams(),
+            kInitialOutgoingMaxBufferedDatagrams);
+  EXPECT_EQ(duplex->incomingHighWaterMark(),
+            static_cast<int32_t>(kMinimumMaxBufferedDatagrams));
+  EXPECT_EQ(duplex->outgoingHighWaterMark(),
+            static_cast<int32_t>(kInitialOutgoingMaxBufferedDatagrams));
 }
 
 TEST(DatagramDuplexStreamTest, SetIncomingMaxAge) {
@@ -167,18 +186,37 @@ TEST(DatagramDuplexStreamTest, SetIncomingMaxAge) {
   ScopedDatagramDuplexStream scope;
   auto* duplex = scope.Duplex();
 
-  duplex->setIncomingMaxAge(1.0);
+  duplex->setIncomingMaxAge(1.0, ASSERT_NO_EXCEPTION);
   ASSERT_TRUE(duplex->incomingMaxAge().has_value());
   EXPECT_EQ(duplex->incomingMaxAge().value(), 1.0);
 
-  duplex->setIncomingMaxAge(std::nullopt);
+  duplex->setIncomingMaxAge(std::nullopt, ASSERT_NO_EXCEPTION);
   ASSERT_FALSE(duplex->incomingMaxAge().has_value());
 
-  duplex->setIncomingMaxAge(0.0);
+  duplex->setIncomingMaxAge(0.0, ASSERT_NO_EXCEPTION);
   ASSERT_FALSE(duplex->incomingMaxAge().has_value());
 
-  duplex->setIncomingMaxAge(-1.0);
-  ASSERT_FALSE(duplex->incomingMaxAge().has_value());
+  duplex->setIncomingMaxAge(2.0, ASSERT_NO_EXCEPTION);
+  DummyExceptionStateForTesting negative_exception_state;
+  duplex->setIncomingMaxAge(-1.0, negative_exception_state);
+  EXPECT_TRUE(negative_exception_state.HadException());
+  EXPECT_EQ(duplex->incomingMaxAge(), 2.0);
+
+  DummyExceptionStateForTesting nan_exception_state;
+  duplex->setIncomingMaxAge(std::numeric_limits<double>::quiet_NaN(),
+                            nan_exception_state);
+  EXPECT_TRUE(nan_exception_state.HadException());
+  EXPECT_EQ(duplex->incomingMaxAge(), 2.0);
+
+  DummyExceptionStateForTesting negative_infinity_exception_state;
+  duplex->setIncomingMaxAge(-std::numeric_limits<double>::infinity(),
+                            negative_infinity_exception_state);
+  EXPECT_TRUE(negative_infinity_exception_state.HadException());
+  EXPECT_EQ(duplex->incomingMaxAge(), 2.0);
+
+  duplex->setIncomingMaxAge(std::numeric_limits<double>::infinity(),
+                            ASSERT_NO_EXCEPTION);
+  EXPECT_EQ(duplex->incomingMaxAge(), std::numeric_limits<double>::infinity());
 }
 
 TEST(DatagramDuplexStreamTest, SetOutgoingMaxAge) {
@@ -187,7 +225,7 @@ TEST(DatagramDuplexStreamTest, SetOutgoingMaxAge) {
   auto* duplex = scope.Duplex();
   auto* stub = scope.Stub();
 
-  duplex->setOutgoingMaxAge(1.0);
+  duplex->setOutgoingMaxAge(1.0, ASSERT_NO_EXCEPTION);
   ASSERT_TRUE(duplex->outgoingMaxAge().has_value());
   EXPECT_EQ(duplex->outgoingMaxAge().value(), 1.0);
   test::RunPendingTasks();
@@ -195,14 +233,14 @@ TEST(DatagramDuplexStreamTest, SetOutgoingMaxAge) {
   ASSERT_TRUE(expiration_duration.has_value());
   EXPECT_EQ(expiration_duration.value(), base::Milliseconds(1.0));
 
-  duplex->setOutgoingMaxAge(std::nullopt);
+  duplex->setOutgoingMaxAge(std::nullopt, ASSERT_NO_EXCEPTION);
   ASSERT_FALSE(duplex->outgoingMaxAge().has_value());
   test::RunPendingTasks();
   expiration_duration = stub->OutgoingDatagramExpirationDurationValue();
   ASSERT_TRUE(expiration_duration.has_value());
   EXPECT_EQ(expiration_duration.value(), base::Milliseconds(0.0));
 
-  duplex->setOutgoingMaxAge(0.5);
+  duplex->setOutgoingMaxAge(0.5, ASSERT_NO_EXCEPTION);
   ASSERT_TRUE(duplex->outgoingMaxAge().has_value());
   EXPECT_EQ(duplex->outgoingMaxAge().value(), 0.5);
   test::RunPendingTasks();
@@ -210,23 +248,51 @@ TEST(DatagramDuplexStreamTest, SetOutgoingMaxAge) {
   ASSERT_TRUE(expiration_duration.has_value());
   EXPECT_EQ(expiration_duration.value(), base::Milliseconds(0.5));
 
-  duplex->setOutgoingMaxAge(0.0);
-  ASSERT_TRUE(duplex->outgoingMaxAge().has_value());
-  EXPECT_EQ(duplex->outgoingMaxAge().value(), 0.5);  // unchanged
+  duplex->setOutgoingMaxAge(0.0, ASSERT_NO_EXCEPTION);
+  EXPECT_FALSE(duplex->outgoingMaxAge().has_value());
   test::RunPendingTasks();
   expiration_duration = stub->OutgoingDatagramExpirationDurationValue();
   ASSERT_TRUE(expiration_duration.has_value());
-  EXPECT_EQ(expiration_duration.value(),
-            base::Milliseconds(0.5));  // Unchanged
+  EXPECT_EQ(expiration_duration.value(), base::Milliseconds(0.0));
 
-  duplex->setOutgoingMaxAge(-1.0);
-  ASSERT_TRUE(duplex->outgoingMaxAge().has_value());
-  EXPECT_EQ(duplex->outgoingMaxAge().value(), 0.5);  // unchanged
+  duplex->setOutgoingMaxAge(0.5, ASSERT_NO_EXCEPTION);
+  test::RunPendingTasks();
+  DummyExceptionStateForTesting negative_exception_state;
+  duplex->setOutgoingMaxAge(-1.0, negative_exception_state);
+  EXPECT_TRUE(negative_exception_state.HadException());
+  EXPECT_EQ(duplex->outgoingMaxAge(), 0.5);
   test::RunPendingTasks();
   expiration_duration = stub->OutgoingDatagramExpirationDurationValue();
   ASSERT_TRUE(expiration_duration.has_value());
-  EXPECT_EQ(expiration_duration.value(),
-            base::Milliseconds(0.5));  // Unchanged
+  EXPECT_EQ(expiration_duration.value(), base::Milliseconds(0.5));
+
+  DummyExceptionStateForTesting nan_exception_state;
+  duplex->setOutgoingMaxAge(std::numeric_limits<double>::quiet_NaN(),
+                            nan_exception_state);
+  EXPECT_TRUE(nan_exception_state.HadException());
+  EXPECT_EQ(duplex->outgoingMaxAge(), 0.5);
+  test::RunPendingTasks();
+  expiration_duration = stub->OutgoingDatagramExpirationDurationValue();
+  ASSERT_TRUE(expiration_duration.has_value());
+  EXPECT_EQ(expiration_duration.value(), base::Milliseconds(0.5));
+
+  DummyExceptionStateForTesting negative_infinity_exception_state;
+  duplex->setOutgoingMaxAge(-std::numeric_limits<double>::infinity(),
+                            negative_infinity_exception_state);
+  EXPECT_TRUE(negative_infinity_exception_state.HadException());
+  EXPECT_EQ(duplex->outgoingMaxAge(), 0.5);
+  test::RunPendingTasks();
+  expiration_duration = stub->OutgoingDatagramExpirationDurationValue();
+  ASSERT_TRUE(expiration_duration.has_value());
+  EXPECT_EQ(expiration_duration.value(), base::Milliseconds(0.5));
+
+  duplex->setOutgoingMaxAge(std::numeric_limits<double>::infinity(),
+                            ASSERT_NO_EXCEPTION);
+  EXPECT_EQ(duplex->outgoingMaxAge(), std::numeric_limits<double>::infinity());
+  test::RunPendingTasks();
+  expiration_duration = stub->OutgoingDatagramExpirationDurationValue();
+  ASSERT_TRUE(expiration_duration.has_value());
+  EXPECT_EQ(expiration_duration.value(), base::TimeDelta::Max());
 }
 
 TEST(DatagramDuplexStreamTest, SetIncomingHighWaterMark) {
@@ -236,12 +302,19 @@ TEST(DatagramDuplexStreamTest, SetIncomingHighWaterMark) {
 
   duplex->setIncomingHighWaterMark(10);
   EXPECT_EQ(duplex->incomingHighWaterMark(), 10);
+  EXPECT_EQ(duplex->incomingMaxBufferedDatagrams(), 10u);
 
   duplex->setIncomingHighWaterMark(0);
-  EXPECT_EQ(duplex->incomingHighWaterMark(), 0);
+  EXPECT_EQ(duplex->incomingHighWaterMark(),
+            static_cast<int32_t>(kMinimumMaxBufferedDatagrams));
+  EXPECT_EQ(duplex->incomingMaxBufferedDatagrams(),
+            kMinimumMaxBufferedDatagrams);
 
   duplex->setIncomingHighWaterMark(-1);
-  EXPECT_EQ(duplex->incomingHighWaterMark(), 0);
+  EXPECT_EQ(duplex->incomingHighWaterMark(),
+            static_cast<int32_t>(kMinimumMaxBufferedDatagrams));
+  EXPECT_EQ(duplex->incomingMaxBufferedDatagrams(),
+            kMinimumMaxBufferedDatagrams);
 }
 
 TEST(DatagramDuplexStreamTest, SetOutgoingHighWaterMark) {
@@ -251,12 +324,67 @@ TEST(DatagramDuplexStreamTest, SetOutgoingHighWaterMark) {
 
   duplex->setOutgoingHighWaterMark(10);
   EXPECT_EQ(duplex->outgoingHighWaterMark(), 10);
+  EXPECT_EQ(duplex->outgoingMaxBufferedDatagrams(), 10u);
 
   duplex->setOutgoingHighWaterMark(0);
-  EXPECT_EQ(duplex->outgoingHighWaterMark(), 0);
+  EXPECT_EQ(duplex->outgoingHighWaterMark(),
+            static_cast<int32_t>(kMinimumMaxBufferedDatagrams));
+  EXPECT_EQ(duplex->outgoingMaxBufferedDatagrams(),
+            kMinimumMaxBufferedDatagrams);
 
   duplex->setOutgoingHighWaterMark(-1);
-  EXPECT_EQ(duplex->outgoingHighWaterMark(), 0);
+  EXPECT_EQ(duplex->outgoingHighWaterMark(),
+            static_cast<int32_t>(kMinimumMaxBufferedDatagrams));
+  EXPECT_EQ(duplex->outgoingMaxBufferedDatagrams(),
+            kMinimumMaxBufferedDatagrams);
+}
+
+TEST(DatagramDuplexStreamTest, SetIncomingMaxBufferedDatagrams) {
+  test::TaskEnvironment task_environment;
+  ScopedDatagramDuplexStream scope;
+  auto* duplex = scope.Duplex();
+
+  duplex->setIncomingMaxBufferedDatagrams(10u);
+  EXPECT_EQ(duplex->incomingMaxBufferedDatagrams(), 10u);
+
+  duplex->setIncomingMaxBufferedDatagrams(0u);
+  EXPECT_EQ(duplex->incomingMaxBufferedDatagrams(),
+            kMinimumMaxBufferedDatagrams);
+}
+
+TEST(DatagramDuplexStreamTest, SetOutgoingMaxBufferedDatagrams) {
+  test::TaskEnvironment task_environment;
+  ScopedDatagramDuplexStream scope;
+  auto* duplex = scope.Duplex();
+
+  duplex->setOutgoingMaxBufferedDatagrams(10u);
+  EXPECT_EQ(duplex->outgoingMaxBufferedDatagrams(), 10u);
+
+  duplex->setOutgoingMaxBufferedDatagrams(0u);
+  EXPECT_EQ(duplex->outgoingMaxBufferedDatagrams(),
+            kMinimumMaxBufferedDatagrams);
+}
+
+TEST(DatagramDuplexStreamTest, OldSetterUpdatesNewGetter) {
+  test::TaskEnvironment task_environment;
+  ScopedDatagramDuplexStream scope;
+  auto* duplex = scope.Duplex();
+
+  // Setting via old setter should be visible via new getter.
+  duplex->setIncomingHighWaterMark(7);
+  EXPECT_EQ(duplex->incomingMaxBufferedDatagrams(), 7u);
+  EXPECT_EQ(duplex->incomingHighWaterMark(), 7);
+
+  duplex->setOutgoingHighWaterMark(3);
+  EXPECT_EQ(duplex->outgoingMaxBufferedDatagrams(), 3u);
+  EXPECT_EQ(duplex->outgoingHighWaterMark(), 3);
+
+  // Setting via new setter should be visible via old getter.
+  duplex->setIncomingMaxBufferedDatagrams(42u);
+  EXPECT_EQ(duplex->incomingHighWaterMark(), 42);
+
+  duplex->setOutgoingMaxBufferedDatagrams(99u);
+  EXPECT_EQ(duplex->outgoingHighWaterMark(), 99);
 }
 
 TEST(DatagramDuplexStreamTest, InitialMaxDatagramSize) {

@@ -4,11 +4,11 @@
 
 #include "ash/ash_element_identifiers.h"
 #include "ash/style/switch.h"
+#include "chrome/browser/ash/login/lock/screen_locker_tester.h"
 #include "chrome/test/base/ash/interactive/hotspot/hotspot_state_observer.h"
 #include "chrome/test/base/ash/interactive/interactive_ash_test.h"
 #include "chrome/test/base/ash/interactive/network/shill_service_util.h"
 #include "chrome/test/base/ash/interactive/settings/interactive_uitest_elements.h"
-#include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
 #include "chromeos/ash/components/dbus/shill/shill_manager_client.h"
 #include "chromeos/ash/components/dbus/shill/shill_service_client.h"
 #include "third_party/cros_system_api/dbus/shill/dbus-constants.h"
@@ -29,6 +29,10 @@ constexpr char kMobileDataNotSupportedLink[] =
     "Your mobile data may not support hotspot.";
 
 DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kOSSettingsId);
+
+DEFINE_LOCAL_POLLING_VIEW_PROPERTY_STATE_IDENTIFIER(views::ToggleButton,
+                                                    GetIsOn,
+                                                    kToggleButtonState);
 
 DEFINE_LOCAL_STATE_IDENTIFIER_VALUE(HotspotStateObserver, kHotspotStateService);
 
@@ -92,8 +96,6 @@ class ToggleHotspotInteractiveUITest : public InteractiveAshTest {
       base::RunLoop().RunUntilIdle();
     }));
   }
-
-  void LockScreen() { SessionManagerClient::Get()->RequestLockScreen(); }
 
  private:
   const ShillServiceInfo shill_service_info_ =
@@ -167,10 +169,6 @@ IN_PROC_BROWSER_TEST_F(ToggleHotspotInteractiveUITest,
       ->GetTestInterface()
       ->SetSimulateTetheringEnableResult(FakeShillSimulatedResult::kSuccess,
                                          shill::kTetheringEnableResultSuccess);
-  using Observer =
-      views::test::PollingViewPropertyObserver<bool, views::ToggleButton>;
-  DEFINE_LOCAL_STATE_IDENTIFIER_VALUE(Observer, kPollingViewPropertyState);
-
   RunTestSequence(
       Log("Open quick settings and make sure hotspot does not show"),
 
@@ -231,10 +229,9 @@ IN_PROC_BROWSER_TEST_F(ToggleHotspotInteractiveUITest,
       Log("Open quick settings and navigate to hotspot page"),
 
       OpenQuickSettings(), NavigateQuickSettingsToHotspotPage(),
-      PollViewProperty(kPollingViewPropertyState,
-                       ash::kHotspotDetailedViewToggleElementId,
-                       &views::ToggleButton::GetIsOn),
-      WaitForState(kPollingViewPropertyState, false),
+      PollViewProperty(kToggleButtonState,
+                       ash::kHotspotDetailedViewToggleElementId),
+      WaitForState(kToggleButtonState, false),
 
       Log("Click on the toggle to turn on hotspot from Quick Settings"),
 
@@ -244,7 +241,7 @@ IN_PROC_BROWSER_TEST_F(ToggleHotspotInteractiveUITest,
 
       WaitForState(kHotspotStateService,
                    hotspot_config::mojom::HotspotState::kEnabled),
-      WaitForState(kPollingViewPropertyState, true),
+      WaitForState(kToggleButtonState, true),
 
       Log("Click on the toggle to turn off hotspot from Quick Settings"),
 
@@ -254,7 +251,7 @@ IN_PROC_BROWSER_TEST_F(ToggleHotspotInteractiveUITest,
 
       WaitForState(kHotspotStateService,
                    hotspot_config::mojom::HotspotState::kDisabled),
-      WaitForState(kPollingViewPropertyState, false),
+      WaitForState(kToggleButtonState, false),
 
       Log("Turn on and off hotspot from Quick Settings complete"));
 }
@@ -392,7 +389,7 @@ IN_PROC_BROWSER_TEST_F(ToggleHotspotInteractiveUITest, AutoDisableHotspot) {
 
 IN_PROC_BROWSER_TEST_F(ToggleHotspotInteractiveUITest,
                        ToggleHotspotFromLockScreen) {
-  LockScreen();
+  ScreenLockerTester().Lock();
   SimulateHotspotUsedBefore();
   AddCellularService();
   ShillManagerClient::Get()
@@ -400,18 +397,13 @@ IN_PROC_BROWSER_TEST_F(ToggleHotspotInteractiveUITest,
       ->SetSimulateTetheringEnableResult(FakeShillSimulatedResult::kSuccess,
                                          shill::kTetheringEnableResultSuccess);
 
-  using Observer =
-      views::test::PollingViewPropertyObserver<bool, views::ToggleButton>;
-  DEFINE_LOCAL_STATE_IDENTIFIER_VALUE(Observer, kPollingViewPropertyState);
-
   RunTestSequence(
       Log("Open quick settings and navigate to hotspot page"),
 
       OpenQuickSettings(), NavigateQuickSettingsToHotspotPage(),
-      PollViewProperty(kPollingViewPropertyState,
-                       ash::kHotspotDetailedViewToggleElementId,
-                       &views::ToggleButton::GetIsOn),
-      WaitForState(kPollingViewPropertyState, false),
+      PollViewProperty(kToggleButtonState,
+                       ash::kHotspotDetailedViewToggleElementId),
+      WaitForState(kToggleButtonState, false),
 
       Log("Click on the toggle to turn on hotspot from Quick Settings"),
 
@@ -423,7 +415,7 @@ IN_PROC_BROWSER_TEST_F(ToggleHotspotInteractiveUITest,
                    std::make_unique<HotspotStateObserver>()),
       WaitForState(kHotspotStateService,
                    hotspot_config::mojom::HotspotState::kEnabled),
-      WaitForState(kPollingViewPropertyState, true),
+      WaitForState(kToggleButtonState, true),
 
       Log("Click on the toggle to turn off hotspot from Quick Settings"),
 
@@ -433,7 +425,7 @@ IN_PROC_BROWSER_TEST_F(ToggleHotspotInteractiveUITest,
 
       WaitForState(kHotspotStateService,
                    hotspot_config::mojom::HotspotState::kDisabled),
-      WaitForState(kPollingViewPropertyState, false),
+      WaitForState(kToggleButtonState, false),
 
       Log("Turn on and off hotspot from Quick Settings complete"));
 }

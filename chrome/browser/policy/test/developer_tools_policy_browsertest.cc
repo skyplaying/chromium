@@ -7,6 +7,7 @@
 #include "base/strings/to_string.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/values.h"
+#include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/devtools/devtools_window_testing.h"
@@ -15,17 +16,17 @@
 #include "chrome/browser/extensions/scoped_test_mv2_enabler.h"
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/url_constants.h"
-#include "chrome/test/base/chrome_test_utils.h"
+#include "chrome/test/base/chrome_test_path_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
-#include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/policy_constants.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
@@ -36,6 +37,7 @@
 #include "extensions/common/extension.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "third_party/blink/public/common/chrome_debug_urls.h"
+#include "ui/base/window_open_disposition.h"
 
 using extensions::mojom::ManifestLocation;
 
@@ -88,7 +90,7 @@ PolicyMap MakeDeveloperToolsAvailabilityMap(int value) {
 // ui_test_utils::BROWSER_TEST_NO_WAIT flag passed in results this returning
 // right after the Browser::OpenURL() call without waiting for any load
 // events.
-void NavigateToURLNoWait(Browser* browser, const GURL& url) {
+void NavigateToURLNoWait(BrowserWindowInterface* browser, const GURL& url) {
   ui_test_utils::NavigateToURLWithDisposition(
       browser, url, WindowOpenDisposition::CURRENT_TAB,
       ui_test_utils::BROWSER_TEST_NO_WAIT);
@@ -96,7 +98,7 @@ void NavigateToURLNoWait(Browser* browser, const GURL& url) {
 
 // Utility to navigate the current tab of the browser to the specified page and
 // then kill it using chrome://kill, verifying that the page ends up crashed.
-void VerifyPageAllowsKill(Browser* browser, const GURL& url) {
+void VerifyPageAllowsKill(BrowserWindowInterface* browser, const GURL& url) {
   SCOPED_TRACE(base::StringPrintf("Verifying url allows kill: '%s'",
                                   url.spec().c_str()));
   EXPECT_TRUE(ui_test_utils::NavigateToURL(browser, url));
@@ -124,7 +126,7 @@ void VerifyPageAllowsKill(Browser* browser, const GURL& url) {
 // Utility to navigate the current tab of the browser to the specified page and
 // then attempt to kill it using chrome://kill, verifying that the kill is
 // blocked before any navigation is started.
-void VerifyPageBlocksKill(Browser* browser, const GURL& url) {
+void VerifyPageBlocksKill(BrowserWindowInterface* browser, const GURL& url) {
   SCOPED_TRACE(base::StringPrintf("Verifying url blocks kill: '%s'",
                                   url.spec().c_str()));
   EXPECT_TRUE(ui_test_utils::NavigateToURL(browser, url));
@@ -141,7 +143,7 @@ void VerifyPageBlocksKill(Browser* browser, const GURL& url) {
 
 // Utility to navigate the current tab of the browser to the specified page and
 // return true if a javascript URL can be run on it, false otherwise.
-bool PageAllowsJavascriptURL(Browser* browser, const GURL& url) {
+bool PageAllowsJavascriptURL(BrowserWindowInterface* browser, const GURL& url) {
   SCOPED_TRACE(base::StringPrintf("Checking url allows javascript URLs: '%s'",
                                   url.spec().c_str()));
   EXPECT_TRUE(ui_test_utils::NavigateToURL(browser, url));
@@ -446,7 +448,7 @@ IN_PROC_BROWSER_TEST_F(PolicyTest,
   base::FilePath crx_path(chrome_test_utils::GetTestFilePath(
       base::FilePath().AppendASCII("devtools").AppendASCII("extensions"),
       base::FilePath().AppendASCII("options.crx")));
-  extensions::ChromeTestExtensionLoader loader(browser()->profile());
+  extensions::ChromeTestExtensionLoader loader(browser()->GetProfile());
   // TODO(crbug.com/40269105): We shouldn't need to ignore manifest warnings
   // here, but there's an issue related to the _metadata folder added for
   // content verification when force-installing an off-store crx in a branded

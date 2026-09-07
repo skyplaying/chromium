@@ -12,7 +12,6 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "chrome/browser/ash/policy/skyvault/policy_utils.h"
 #include "chrome/browser/download/download_dir_util.h"
 #include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/policy/policy_path_parser.h"
@@ -25,6 +24,11 @@
 #include "components/policy/policy_constants.h"
 #include "components/prefs/pref_value_map.h"
 #include "components/strings/grit/components_strings.h"
+
+#if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_pref_names.h"
+#include "chrome/browser/ash/policy/skyvault/policy_utils.h"
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 DownloadDirPolicyHandler::DownloadDirPolicyHandler()
     : TypeCheckingPolicyHandler(policy::key::kDownloadDirectory,
@@ -109,16 +113,16 @@ void DownloadDirPolicyHandler::ApplyPolicySettingsWithParameters(
     if (download_to_drive) {
       prefs->SetBoolean(drive::prefs::kDisableDrive, false);
     } else if (download_to_one_drive) {
-      prefs->SetBoolean(prefs::kAllowUserToRemoveODFS, false);
+      prefs->SetBoolean(ash::prefs::kAllowUserToRemoveODFS, false);
     }
   }
 
   // Set the Files App default folder, regardless of policy enforcement.
   if (download_to_drive) {
-    prefs->SetString(prefs::kFilesAppDefaultLocation,
+    prefs->SetString(ash::prefs::kFilesAppDefaultLocation,
                      download_dir_util::kLocationGoogleDrive);
   } else if (download_to_one_drive) {
-    prefs->SetString(prefs::kFilesAppDefaultLocation,
+    prefs->SetString(ash::prefs::kFilesAppDefaultLocation,
                      download_dir_util::kLocationOneDrive);
   }
 #endif  // BUILDFLAG(IS_CHROMEOS)

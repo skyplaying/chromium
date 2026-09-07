@@ -49,6 +49,7 @@
 #include "components/bookmarks/test/test_matchers.h"
 #include "components/favicon/core/favicon_service.h"
 #include "components/favicon_base/favicon_util.h"
+#include "components/sync/base/server_defined_unique_tags.h"
 #include "components/sync/base/unique_position.h"
 #include "components/sync/protocol/bookmark_specifics.pb.h"
 #include "components/sync/protocol/entity_specifics.pb.h"
@@ -70,20 +71,16 @@ namespace bookmarks_helper {
 
 namespace {
 
-const char kBookmarkBarTag[] = "bookmark_bar";
-const char kSyncedBookmarksTag[] = "synced_bookmarks";
-const char kOtherBookmarksTag[] = "other_bookmarks";
-
 const BookmarkNode* GetPermanentNodeForServerTag(
     const sync_bookmarks::BookmarkModelView& model_view,
     const std::string& server_defined_unique_tag) {
-  if (server_defined_unique_tag == kBookmarkBarTag) {
+  if (server_defined_unique_tag == syncer::kBookmarkBarTag) {
     return model_view.bookmark_bar_node();
   }
-  if (server_defined_unique_tag == kSyncedBookmarksTag) {
+  if (server_defined_unique_tag == syncer::kSyncedBookmarksTag) {
     return model_view.mobile_node();
   }
-  if (server_defined_unique_tag == kOtherBookmarksTag) {
+  if (server_defined_unique_tag == syncer::kOtherBookmarksTag) {
     return model_view.other_node();
   }
 
@@ -261,8 +258,7 @@ std::optional<FaviconData> GetFaviconData(BookmarkModel* model,
                      node->icon_url() ? *node->icon_url() : GURL());
 }
 
-// Sets the favicon for |profile| and |node|. |profile| may be
-// |test()->verifier()|.
+// Sets the favicon for |profile| and |node|.
 void SetFaviconImpl(Profile* profile,
                     const BookmarkNode* node,
                     const GURL& icon_url,
@@ -285,8 +281,7 @@ void SetFaviconImpl(Profile* profile,
   observer.WaitUntilFaviconChangedToIconURL();
 }
 
-// Expires the favicon for |profile| and |node|. |profile| may be
-// |test()->verifier()|.
+// Expires the favicon for |profile| and |node|.
 void ExpireFaviconImpl(Profile* profile, const BookmarkNode* node) {
   favicon::FaviconService* favicon_service =
       FaviconServiceFactory::GetForProfile(profile,
@@ -304,8 +299,7 @@ void OnGotFaviconData(
   std::move(callback).Run();
 }
 
-// Deletes favicon mappings for |profile| and |node|. |profile| may be
-// |test()->verifier()|.
+// Deletes favicon mappings for |profile| and |node|.
 void DeleteFaviconMappingsImpl(Profile* profile,
                                const BookmarkNode* node,
                                FaviconSource favicon_source) {
@@ -321,9 +315,8 @@ void DeleteFaviconMappingsImpl(Profile* profile,
     favicon_service->DeleteFaviconMappings({node->url()},
                                            favicon_base::IconType::kFavicon);
   } else {
-    ApplyBookmarkFavicon(
-        node, favicon_service, /*icon_url=*/GURL(),
-        scoped_refptr<base::RefCountedString>(new base::RefCountedString()));
+    ApplyBookmarkFavicon(node, favicon_service, /*icon_url=*/GURL(),
+                         base::MakeRefCounted<base::RefCountedString>());
   }
 
   // Wait for the favicon for |node| to be deleted.
@@ -449,9 +442,9 @@ bool BookmarkModelsMatch(BookmarkModel* model_a, BookmarkModel* model_b) {
   return !iterator_b.has_next();
 }
 
-std::vector<const BookmarkNode*> GetAllBookmarkNodes(
+std::vector<raw_ptr<const BookmarkNode>> GetAllBookmarkNodes(
     const BookmarkModel* model) {
-  std::vector<const BookmarkNode*> all_nodes;
+  std::vector<raw_ptr<const BookmarkNode>> all_nodes;
 
   // Add root node separately as iterator does not include it.
   all_nodes.push_back(model->root_node());
@@ -879,10 +872,11 @@ std::u16string IndexedSubsubfolderName(size_t i) {
 
 std::unique_ptr<syncer::LoopbackServerEntity> CreateBookmarkServerEntity(
     const std::u16string& title,
-    const GURL& url) {
+    const GURL& url,
+    const base::Uuid& uuid) {
   fake_server::EntityBuilderFactory entity_builder_factory;
   fake_server::BookmarkEntityBuilder bookmark_builder =
-      entity_builder_factory.NewBookmarkEntityBuilder(title);
+      entity_builder_factory.NewBookmarkEntityBuilder(title, uuid);
   return bookmark_builder.BuildBookmark(url);
 }
 
@@ -950,13 +944,15 @@ BookmarksMatchChecker::BookmarksMatchChecker() {
 
 bool BookmarksMatchChecker::IsExitConditionSatisfied(std::ostream* os) {
   *os << "Waiting for matching models";
-  return AllModelsMatch();
-}
-
-void BookmarksMatchChecker::WillStartWaiting() {
+  // Trigger favicon loading for all nodes across all models to ensure
+  // concurrent asynchronous lookups rather than sequential loading.
+  // AllModelsMatch() early-outs on the first missing favicon, so failing
+  // to eagerly load them here would cause the checker to sequentially wait for
+  // each node one-by-one.
   for (int i = 0; i < sync_datatype_helper::test()->num_clients(); ++i) {
     TriggerAllFaviconLoading(GetBookmarkModel(i));
   }
+  return AllModelsMatch();
 }
 
 SingleBookmarkModelStatusChangeChecker::SingleBookmarkModelStatusChangeChecker(
@@ -988,8 +984,7 @@ SingleBookmarksModelMatcherChecker::~SingleBookmarksModelMatcherChecker() =
 
 bool SingleBookmarksModelMatcherChecker::IsExitConditionSatisfied(
     std::ostream* os) {
-  const std::vector<const BookmarkNode*> all_bookmark_nodes =
-      GetAllBookmarkNodes(bookmark_model());
+  const auto all_bookmark_nodes = GetAllBookmarkNodes(bookmark_model());
 
   testing::StringMatchResultListener result_listener;
   const bool matches = testing::ExplainMatchResult(matcher_, all_bookmark_nodes,

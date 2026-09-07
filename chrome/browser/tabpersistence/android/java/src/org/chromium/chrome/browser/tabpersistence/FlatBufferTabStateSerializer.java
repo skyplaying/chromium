@@ -123,10 +123,11 @@ public class FlatBufferTabStateSerializer implements TabStateSerializer {
 
             Token tabGroupId = null;
             var flatBufferTabGroupId = tabStateFlatBuffer.tabGroupId();
-            if (flatBufferTabGroupId != null) {
+            if (flatBufferTabGroupId != null
+                    && (flatBufferTabGroupId.high() != 0 || flatBufferTabGroupId.low() != 0)) {
                 tabGroupId = new Token(flatBufferTabGroupId.high(), flatBufferTabGroupId.low());
             }
-            state.tabGroupId = (tabGroupId == null || tabGroupId.isZero()) ? null : tabGroupId;
+            state.tabGroupId = tabGroupId;
             state.userAgent = getTabUserAgentTypeFromFlatBuffer(tabStateFlatBuffer.userAgent());
             state.tabLaunchTypeAtCreation =
                     getLaunchTypeFromFlatBuffer(tabStateFlatBuffer.launchTypeAtCreation());
@@ -247,6 +248,10 @@ public class FlatBufferTabStateSerializer implements TabStateSerializer {
                 return TabLaunchType.FROM_LINK_CREATING_NEW_WINDOW;
             case TabLaunchTypeAtCreation.FROM_TIPS_NOTIFICATIONS:
                 return TabLaunchType.FROM_TIPS_NOTIFICATIONS;
+            case TabLaunchTypeAtCreation.FROM_TAB_LIST_INTERFACE_BACKGROUND:
+                return TabLaunchType.FROM_TAB_LIST_INTERFACE_BACKGROUND;
+            case TabLaunchTypeAtCreation.FROM_SESSION_STARTUP_WITH_URLS_PREF:
+                return TabLaunchType.FROM_SESSION_STARTUP_WITH_URLS_PREF;
             case TabLaunchTypeAtCreation.SIZE:
                 return TabLaunchType.SIZE;
             case TabLaunchTypeAtCreation.UNKNOWN:
@@ -331,6 +336,10 @@ public class FlatBufferTabStateSerializer implements TabStateSerializer {
                 return TabLaunchTypeAtCreation.FROM_LINK_CREATING_NEW_WINDOW;
             case TabLaunchType.FROM_TIPS_NOTIFICATIONS:
                 return TabLaunchTypeAtCreation.FROM_TIPS_NOTIFICATIONS;
+            case TabLaunchType.FROM_TAB_LIST_INTERFACE_BACKGROUND:
+                return TabLaunchTypeAtCreation.FROM_TAB_LIST_INTERFACE_BACKGROUND;
+            case TabLaunchType.FROM_SESSION_STARTUP_WITH_URLS_PREF:
+                return TabLaunchTypeAtCreation.FROM_SESSION_STARTUP_WITH_URLS_PREF;
             case TabLaunchType.SIZE:
                 return TabLaunchTypeAtCreation.SIZE;
             default:

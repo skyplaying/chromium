@@ -6,7 +6,7 @@
 
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "components/network_session_configurator/common/network_switches.h"
 #include "content/public/test/back_forward_cache_util.h"
 #include "content/public/test/browser_test_base.h"
@@ -22,9 +22,7 @@
 
 std::string EncodeRelativeURL(std::string_view relative_url) {
   CHECK(relative_url.starts_with("/")) << relative_url;
-  url::RawCanonOutputT<char> buffer;
-  url::EncodeURIComponent(relative_url, &buffer);
-  return std::string(buffer.view());
+  return url::EncodeUriComponent(relative_url);
 }
 
 ChromeKeepAliveRequestBrowserTestBase::ChromeKeepAliveRequestBrowserTestBase()

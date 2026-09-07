@@ -53,23 +53,17 @@ std::optional<double> FindSizeForContainerAxis(
   DCHECK(requested_axis == kPhysicalAxesHorizontal ||
          requested_axis == kPhysicalAxesVertical);
 
-  ContainerSelector selector;
-  const TreeScope* tree_scope = nullptr;
-  if (container_name) {
-    selector = ContainerSelector(container_name->GetName(), requested_axis,
-                                 kLogicalAxesNone, /*scroll_state=*/false,
-                                 /*anchored_query=*/false);
-    tree_scope = container_name->GetTreeScope();
-  } else {
-    selector = ContainerSelector(requested_axis);
-    tree_scope = context_element ? &context_element->GetTreeScope() : nullptr;
-  }
+  ContainerSelector selector =
+      container_name ? ContainerSelector(container_name->GetName(),
+                                         requested_axis, kLogicalAxesNone,
+                                         /*scroll_state=*/false,
+                                         /*anchored_query=*/false)
+                     : ContainerSelector(requested_axis);
 
-  for (Element* container = ContainerQueryEvaluator::FindContainer(
-           context_element, selector, tree_scope);
+  for (Element* container =
+           ContainerQueryEvaluator::FindContainer(context_element, selector);
        container; container = ContainerQueryEvaluator::FindContainer(
-                      FlatTreeTraversal::ParentElement(*container), selector,
-                      tree_scope)) {
+                      FlatTreeTraversal::ParentElement(*container), selector)) {
     ContainerQueryEvaluator& evaluator =
         container->EnsureContainerQueryEvaluator();
     evaluator.SetReferencedByUnit();
@@ -198,9 +192,8 @@ CSSToLengthConversionData::LineHeightSize::LineHeightSize(
     const FontSizeStyle& style,
     const ComputedStyle* root_style)
     : LineHeightSize(
-          style.SpecifiedLineHeight(),
-          root_style ? root_style->SpecifiedLineHeight()
-                     : style.SpecifiedLineHeight(),
+          style.LineHeight(),
+          root_style ? root_style->LineHeight() : style.LineHeight(),
           style.GetFont(),
           root_style ? root_style->GetFont() : style.GetFont(),
           style.EffectiveZoom(),
@@ -307,10 +300,10 @@ std::optional<double> CSSToLengthConversionData::ContainerSizes::FindNamedSize(
 
 CSSToLengthConversionData::AnchorData::AnchorData(
     AnchorEvaluator* evaluator,
-    const StylePositionAnchor& position_anchor,
+    const DefaultAnchorData& default_anchor_data,
     const std::optional<PositionAreaOffsets>& position_area_offsets)
     : evaluator_(evaluator),
-      position_anchor_(position_anchor),
+      default_anchor_data_(default_anchor_data),
       position_area_offsets_(position_area_offsets) {}
 
 CSSToLengthConversionData::CSSToLengthConversionData(

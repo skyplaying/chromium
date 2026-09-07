@@ -35,6 +35,8 @@ inline constexpr char kApp[] = "app";
 inline constexpr char kAutomation[] = "automation";
 inline constexpr char kBackground[] = "background";
 inline constexpr char kBackgroundAllowJsAccess[] = "background.allow_js_access";
+inline constexpr char kBackgroundAsyncListenerRegistration[] =
+    "background.async_listener_registration";
 inline constexpr char kBackgroundPage[] = "background.page";
 inline constexpr char kBackgroundPersistent[] = "background.persistent";
 inline constexpr char kBackgroundScripts[] = "background.scripts";
@@ -101,6 +103,7 @@ inline constexpr char kLayouts[] = "layouts";
 inline constexpr char kLinkedAppIcons[] = "app.linked_icons";
 inline constexpr char kManifestVersion[] = "manifest_version";
 inline constexpr char kMatches[] = "matches";
+inline constexpr char kMessageSerialization[] = "message_serialization";
 inline constexpr char kMIMETypes[] = "mime_types";
 inline constexpr char kMimeTypesHandler[] = "mime_types_handler";
 inline constexpr char kMinimumChromeVersion[] = "minimum_chrome_version";
@@ -143,7 +146,6 @@ inline constexpr char kTheme[] = "theme";
 inline constexpr char kThemeColors[] = "colors";
 inline constexpr char kThemeDisplayProperties[] = "properties";
 inline constexpr char kThemeImages[] = "images";
-inline constexpr char kThemeTabGroupColorPalette[] = "tab_group_color_palette";
 inline constexpr char kThemeTints[] = "tints";
 inline constexpr char kTrialTokens[] = "trial_tokens";
 inline constexpr char kTtsEngine[] = "tts_engine";
@@ -186,6 +188,9 @@ inline constexpr char kActionCommandEvent[] = "_execute_action";
 inline constexpr char kBrowserActionCommandEvent[] = "_execute_browser_action";
 inline constexpr char kLaunchContainerPanelDeprecated[] = "panel";
 inline constexpr char kLaunchContainerTab[] = "tab";
+inline constexpr char kMessageSerializationStructuredClone[] =
+    "structured_clone";
+inline constexpr char kMessageSerializationJson[] = "json";
 inline constexpr char kPageActionCommandEvent[] = "_execute_page_action";
 
 }  // namespace manifest_values
@@ -287,6 +292,12 @@ inline constexpr char16_t kInvalidBackground[] =
     u"Invalid value for 'background_page'.";
 inline constexpr char16_t kInvalidBackgroundAllowJsAccess[] =
     u"Invalid value for 'background.allow_js_access'.";
+inline constexpr char16_t kInvalidBackgroundAsyncListenerRegistration[] =
+    u"Invalid value for 'background.async_listener_registration'.";
+inline constexpr char16_t
+    kInvalidBackgroundAsyncListenerRegistrationNoServiceWorker[] =
+        u"Must specify background.service_worker to use"
+        " background.async_listener_registration.";
 inline constexpr char16_t kInvalidBackgroundCombination[] =
     u"Only one of 'background.page', 'background.scripts', and "
     "'background.service_worker' can be specified.";
@@ -475,6 +486,9 @@ inline constexpr char kInvalidManifestVersionMissingKey[] =
 inline constexpr char kInvalidManifestVersionUnsupported[] =
     "Invalid value for 'manifest_version'. Must be an integer *. "
     "See developer.chrome.com/*/manifestVersion for details.";
+inline constexpr char kInvalidMessageSerialization[] =
+    "Invalid value for 'message_serialization'. Must be 'json' or "
+    "'structured_clone'.";
 inline constexpr char kInvalidMatch[] =
     "Invalid value for 'content_scripts[*].matches[*]': *";
 inline constexpr char kInvalidMatchCount[] =
@@ -567,9 +581,6 @@ inline constexpr char kThemeImageMissingFileExtension[] =
     "unsupported in the future.";
 inline constexpr char16_t kInvalidThemeTints[] =
     u"Invalid value for theme images - tints must be decimal numbers.";
-inline constexpr char16_t kInvalidThemeTabGroupColorPalette[] =
-    u"Invalid value for theme tab group color palette - tab group color "
-    u"palette values must be integers.";
 inline constexpr char kInvalidThemeDictImagePath[] =
     "Invalid path for theme image: entry '*', scale '*', path '*'.";
 inline constexpr char kInvalidTrialTokensNonEmptyList[] =
@@ -639,7 +650,7 @@ inline constexpr char kInvalidWebviewPartitionName[] =
 inline constexpr char16_t kInvalidWebviewPartitionsList[] =
     u"Invalid value for 'webview.partitions'.";
 inline constexpr char kInvalidWebURL[] = "Invalid value for 'app.urls[*]': *";
-inline constexpr char kInvalidWebURLs[] = "Invalid value for 'app.urls'.";
+inline constexpr char16_t kInvalidWebURLs[] = u"Invalid value for 'app.urls'.";
 inline constexpr char16_t kLaunchPathAndExtentAreExclusive[] =
     u"The 'app.launch.local_path' and 'app.urls' keys cannot both be set.";
 inline constexpr char16_t kLaunchPathAndURLAreExclusive[] =

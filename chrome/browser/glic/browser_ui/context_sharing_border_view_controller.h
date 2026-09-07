@@ -8,7 +8,7 @@
 #include "base/memory/raw_ptr.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
 
-class Browser;
+class BrowserWindowInterface;
 class ContentsWebView;
 
 namespace glic {
@@ -22,15 +22,11 @@ class ContextSharingBorderViewController {
   // Initialization. Starts observing the state of the browser.
   virtual void Initialize(ContextSharingBorderView* border_view,
                           ContentsWebView* contents_web_view,
-                          Browser* browser) = 0;
+                          BrowserWindowInterface* browser) = 0;
 
   // Returns the ContentWebView around which the border is to be created.
   virtual ContentsWebView* contents_web_view() = 0;
 
-  // Returns whether the currently shown UI is in side panel mode.
-  // For contextual tasks, it will be always true. For glic, it will return
-  // GlicEnabling::IsMultiInstanceEnabled.
-  virtual bool IsSidePanelOpen() const = 0;
 };
 
 }  // namespace glic

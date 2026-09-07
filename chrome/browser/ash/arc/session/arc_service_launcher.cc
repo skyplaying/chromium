@@ -12,6 +12,7 @@
 #include "base/check_deref.h"
 #include "base/check_is_test.h"
 #include "base/check_op.h"
+#include "base/feature_list.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/task/sequenced_task_runner.h"
@@ -50,11 +51,9 @@
 #include "chrome/browser/ash/arc/net/cert_manager_impl.h"
 #include "chrome/browser/ash/arc/notification/arc_boot_error_notification.h"
 #include "chrome/browser/ash/arc/notification/arc_provision_notification_service.h"
-#include "chrome/browser/ash/arc/notification/arc_vm_data_migration_notifier.h"
 #include "chrome/browser/ash/arc/pip/arc_pip_bridge.h"
 #include "chrome/browser/ash/arc/policy/arc_policy_bridge.h"
 #include "chrome/browser/ash/arc/print_spooler/arc_print_spooler_bridge.h"
-#include "chrome/browser/ash/arc/privacy_items/arc_privacy_items_bridge.h"
 #include "chrome/browser/ash/arc/screen_capture/arc_screen_capture_bridge.h"
 #include "chrome/browser/ash/arc/session/arc_disk_space_monitor.h"
 #include "chrome/browser/ash/arc/session/arc_initial_optin_metrics_recorder_factory.h"
@@ -65,7 +64,6 @@
 #include "chrome/browser/ash/arc/tracing/arc_app_performance_tracing.h"
 #include "chrome/browser/ash/arc/tracing/arc_tracing_bridge.h"
 #include "chrome/browser/ash/arc/tts/arc_tts_service.h"
-#include "chrome/browser/ash/arc/user_session/arc_user_session_service.h"
 #include "chrome/browser/ash/arc/vmm/arc_system_state_bridge.h"
 #include "chrome/browser/ash/arc/vmm/arc_vmm_manager.h"
 #include "chrome/browser/ash/arc/wallpaper/arc_wallpaper_service.h"
@@ -104,6 +102,7 @@
 #include "chromeos/ash/experiences/arc/pay/arc_digital_goods_bridge.h"
 #include "chromeos/ash/experiences/arc/pay/arc_payment_app_bridge.h"
 #include "chromeos/ash/experiences/arc/power/arc_power_bridge.h"
+#include "chromeos/ash/experiences/arc/privacy_items/arc_privacy_items_bridge.h"
 #include "chromeos/ash/experiences/arc/process/arc_process_service.h"
 #include "chromeos/ash/experiences/arc/safety/arc_safety_bridge.h"
 #include "chromeos/ash/experiences/arc/sensor/arc_iio_sensor_bridge.h"
@@ -111,8 +110,8 @@
 #include "chromeos/ash/experiences/arc/session/arc_session.h"
 #include "chromeos/ash/experiences/arc/session/arc_session_runner.h"
 #include "chromeos/ash/experiences/arc/system_ui/arc_system_ui_bridge.h"
-#include "chromeos/ash/experiences/arc/timer/arc_timer_bridge.h"
 #include "chromeos/ash/experiences/arc/usb/usb_host_bridge.h"
+#include "chromeos/ash/experiences/arc/user_session/arc_user_session_service.h"
 #include "chromeos/ash/experiences/arc/video/gpu_arc_video_service_host.h"
 #include "chromeos/ash/experiences/arc/volume_mounter/arc_volume_mounter_bridge.h"
 #include "chromeos/ash/experiences/arc/wake_lock/arc_wake_lock_bridge.h"
@@ -146,9 +145,12 @@ ArcSessionRunner* g_arc_session_runner_for_testing = nullptr;
 
 // `local_state` and `application_locale_storage` must be non-null and must
 // outlive the returned object.
+// `metrics_service` may be null in tests. If non-null, it must remain valid
+// until Shutdown() of the returned object is called.
 std::unique_ptr<ArcSessionManager> CreateArcSessionManager(
     PrefService* local_state,
     const ApplicationLocaleStorage* application_locale_storage,
+    metrics::MetricsService* metrics_service,
     ArcBridgeService* arc_bridge_service,
     version_info::Channel channel,
     ash::SchedulerConfigurationManagerBase* scheduler_configuration_manager,
@@ -162,8 +164,8 @@ std::unique_ptr<ArcSessionManager> CreateArcSessionManager(
                             scheduler_configuration_manager, delegate.get()));
   }
   return std::make_unique<ArcSessionManager>(
-      local_state, application_locale_storage, std::move(runner),
-      std::move(delegate), arc_dlc_installer);
+      local_state, application_locale_storage, metrics_service,
+      std::move(runner), std::move(delegate), arc_dlc_installer);
 }
 
 }  // namespace
@@ -171,15 +173,18 @@ std::unique_ptr<ArcSessionManager> CreateArcSessionManager(
 ArcServiceLauncher::ArcServiceLauncher(
     PrefService* local_state,
     const ApplicationLocaleStorage* application_locale_storage,
+    metrics::MetricsService* metrics_service,
     ash::SchedulerConfigurationManagerBase* scheduler_configuration_manager)
     : local_state_(CHECK_DEREF(local_state)),
       application_locale_storage_(CHECK_DEREF(application_locale_storage)),
+      metrics_service_(metrics_service),
       arc_service_manager_(std::make_unique<ArcServiceManager>()),
       scheduler_configuration_manager_(scheduler_configuration_manager),
       arc_dlc_installer_(std::make_unique<ArcDlcInstaller>()),
       arc_session_manager_(
           CreateArcSessionManager(&local_state_.get(),
                                   &application_locale_storage_.get(),
+                                  metrics_service_,
                                   arc_service_manager_->arc_bridge_service(),
                                   ash::GetChannel(),
                                   scheduler_configuration_manager,
@@ -364,7 +369,9 @@ void ArcServiceLauncher::OnPrimaryUserProfilePrepared(Profile* profile) {
   ArcSharesheetBridge::GetForBrowserContext(profile);
   ArcSurveyService::GetForBrowserContext(profile);
   ArcSystemUIBridge::GetForBrowserContext(profile);
-  ArcTracingBridge::GetForBrowserContext(profile);
+  if (base::FeatureList::IsEnabled(kArcTracingDataSource)) {
+    ArcTracingBridge::GetForBrowserContext(profile);
+  }
   ArcTtsService::GetForBrowserContext(profile);
   ArcUsbHostBridge::GetForBrowserContext(profile);
   ArcUsbHostPermissionManager::GetForBrowserContext(profile);
@@ -388,10 +395,6 @@ void ArcServiceLauncher::OnPrimaryUserProfilePrepared(Profile* profile) {
     ArcSafetyBridge::GetForBrowserContext(profile);
     ArcSystemStateBridge::GetForBrowserContext(profile);
 
-    if (base::FeatureList::IsEnabled(kEnableArcVmDataMigration)) {
-      arc_vm_data_migration_notifier_ =
-          std::make_unique<ArcVmDataMigrationNotifier>(profile);
-    }
     ArcIdleManager::GetForBrowserContext(profile);
     if (ShouldUseArcKeyMint()) {
       auto serial_number = arc_session_manager_->GetSerialNumberForKeyMint();
@@ -400,7 +403,6 @@ void ArcServiceLauncher::OnPrimaryUserProfilePrepared(Profile* profile) {
     }
   } else {
     // ARC Container-only services.
-    ArcTimerBridge::GetForBrowserContext(profile);
     ArcAppfuseBridge::GetForBrowserContext(profile);
     ArcObbMounterBridge::GetForBrowserContext(profile);
   }
@@ -427,21 +429,24 @@ void ArcServiceLauncher::Shutdown() {
   web_apk_manager_.reset();
   arc_net_url_opener_.reset();
   arc_icon_cache_delegate_provider_.reset();
+  metrics_service_ = nullptr;
 }
 
 void ArcServiceLauncher::ResetForTesting() {
   // First destroy the internal states, then re-initialize them.
   // These are for workaround of singletonness DCHECK in their ctors/dtors.
+  metrics::MetricsService* metrics_service = metrics_service_.get();
   Shutdown();
   arc_session_manager_.reset();
 
+  metrics_service_ = metrics_service;
   arc_dlc_installer_ = std::make_unique<ArcDlcInstaller>();
 
   // No recreation of arc_service_manager. Pointers to its ArcBridgeService
   // may be referred from existing KeyedService, so destoying it would cause
   // unexpected behavior, specifically on test teardown.
   arc_session_manager_ = CreateArcSessionManager(
-      &local_state_.get(), &application_locale_storage_.get(),
+      &local_state_.get(), &application_locale_storage_.get(), metrics_service_,
       arc_service_manager_->arc_bridge_service(), ash::GetChannel(),
       scheduler_configuration_manager_, arc_dlc_installer_.get());
 }
@@ -554,7 +559,6 @@ void ArcServiceLauncher::EnsureFactoriesBuilt() {
   ArcSurveyService::EnsureFactoryBuilt();
   ArcSystemUIBridge::EnsureFactoryBuilt();
   ArcSystemStateBridge::EnsureFactoryBuilt();
-  ArcTimerBridge::EnsureFactoryBuilt();
   ArcTracingBridge::EnsureFactoryBuilt();
   ArcTtsService::EnsureFactoryBuilt();
   ArcUsbHostBridge::EnsureFactoryBuilt();

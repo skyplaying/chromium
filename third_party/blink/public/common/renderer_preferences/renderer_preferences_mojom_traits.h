@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "build/build_config.h"
+#include "mojo/public/cpp/base/string16_mojom_traits.h"
 #include "mojo/public/cpp/base/time_mojom_traits.h"
 #include "mojo/public/cpp/bindings/struct_traits.h"
 #include "third_party/blink/public/common/common_export.h"
@@ -21,10 +22,6 @@
 #include "third_party/blink/public/mojom/peerconnection/webrtc_ip_handling_policy.mojom.h"
 #include "third_party/blink/public/mojom/renderer_preferences.mojom-shared.h"
 #include "ui/gfx/mojom/font_render_params_mojom_traits.h"
-
-#if BUILDFLAG(IS_WIN)
-#include "mojo/public/cpp/base/string16_mojom_traits.h"
-#endif
 
 namespace mojo {
 
@@ -133,7 +130,8 @@ struct BLINK_COMMON_EXPORT
     return data.enable_encrypted_media;
   }
 
-#if BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || \
+    BUILDFLAG(IS_WIN)
   static const bool& use_overlay_scrollbar(
       const ::blink::RendererPreferences& data) {
     return data.use_overlay_scrollbar;
@@ -247,22 +245,6 @@ struct BLINK_COMMON_EXPORT
       const ::blink::RendererPreferences& data) {
     return data.message_font_height;
   }
-  static const int32_t& vertical_scroll_bar_width_in_dips(
-      const ::blink::RendererPreferences& data) {
-    return data.vertical_scroll_bar_width_in_dips;
-  }
-  static const int32_t& horizontal_scroll_bar_height_in_dips(
-      const ::blink::RendererPreferences& data) {
-    return data.horizontal_scroll_bar_height_in_dips;
-  }
-  static const int32_t& arrow_bitmap_height_vertical_scroll_bar_in_dips(
-      const ::blink::RendererPreferences& data) {
-    return data.arrow_bitmap_height_vertical_scroll_bar_in_dips;
-  }
-  static const int32_t& arrow_bitmap_width_horizontal_scroll_bar_in_dips(
-      const ::blink::RendererPreferences& data) {
-    return data.arrow_bitmap_width_horizontal_scroll_bar_in_dips;
-  }
 #endif
 
   static const bool& plugin_fullscreen_allowed(
@@ -282,6 +264,21 @@ struct BLINK_COMMON_EXPORT
   }
 #endif  // BUILDFLAG(IS_ANDROID)
 
+  static int32_t autofill_shortcut_key_code(
+      const ::blink::RendererPreferences& data) {
+    return static_cast<int32_t>(data.autofill_shortcut_key_code);
+  }
+
+  static int32_t autofill_shortcut_modifiers(
+      const ::blink::RendererPreferences& data) {
+    return data.autofill_shortcut_modifiers;
+  }
+
+  static const std::u16string& autofill_trigger_string(
+      const ::blink::RendererPreferences& data) {
+    return data.autofill_trigger_string;
+  }
+
   static const std::vector<uint16_t>& explicitly_allowed_network_ports(
       const ::blink::RendererPreferences& data) {
     return data.explicitly_allowed_network_ports;
@@ -290,6 +287,16 @@ struct BLINK_COMMON_EXPORT
   static bool view_source_line_wrap_enabled(
       const ::blink::RendererPreferences& data) {
     return data.view_source_line_wrap_enabled;
+  }
+
+  static bool system_color_chooser_is_modal(
+      const ::blink::RendererPreferences& data) {
+    return data.system_color_chooser_is_modal;
+  }
+
+  static bool is_global_privacy_control_setting_enabled(
+      const ::blink::RendererPreferences& data) {
+    return data.is_global_privacy_control_setting_enabled;
   }
 
   static bool Read(blink::mojom::RendererPreferencesDataView,

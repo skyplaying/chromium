@@ -68,9 +68,7 @@ import java.util.Arrays;
 /** Tests for {@link PriceTrackingBottomSheetContentMediator}. */
 @RunWith(BaseRobolectricTestRunner.class)
 @EnableFeatures({NotificationFeatureMap.CACHE_NOTIIFICATIONS_ENABLED})
-@Config(
-        manifest = Config.NONE,
-        shadows = {ShadowToast.class})
+@Config(shadows = {ShadowToast.class})
 public class PriceTrackingBottomSheetContentMediatorTest {
 
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
@@ -239,7 +237,8 @@ public class PriceTrackingBottomSheetContentMediatorTest {
                                 boolean newState = invocation.getArgument(1);
                                 mPriceTrackingStateSupplier.set(newState);
                             }
-                            ((Callback<Boolean>) invocation.getArgument(2)).onResult(success);
+                            Callback<Boolean> callback = invocation.getArgument(2);
+                            callback.onResult(success);
                             return null;
                         })
                 .when(mMockPriceInsightsDelegate)

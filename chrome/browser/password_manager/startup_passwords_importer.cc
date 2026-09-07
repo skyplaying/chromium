@@ -13,8 +13,8 @@
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/affiliations/affiliation_service_factory.h"
-#include "chrome/browser/password_manager/account_password_store_factory.h"
-#include "chrome/browser/password_manager/profile_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/account_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_switches.h"
 #include "components/affiliations/core/browser/affiliation_service.h"
@@ -41,7 +41,7 @@ StartupPasswordsImporter::StartupPasswordsImporter(Profile* profile)
           affiliation_service, profile_store, account_store);
 
   password_importer_ = std::make_unique<password_manager::PasswordImporter>(
-      saved_passwords_presenter_.get());
+      *saved_passwords_presenter_);
 }
 
 StartupPasswordsImporter::~StartupPasswordsImporter() = default;

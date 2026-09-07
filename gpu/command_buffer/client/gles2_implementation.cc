@@ -28,6 +28,7 @@
 #include "base/compiler_specific.h"
 #include "base/containers/heap_array.h"
 #include "base/containers/span.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/numerics/ostream_operators.h"
@@ -42,6 +43,7 @@
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
 #include "gpu/command_buffer/client/buffer_tracker.h"
+#include "gpu/command_buffer/client/client_shared_image.h"
 #include "gpu/command_buffer/client/gles2_cmd_helper.h"
 #include "gpu/command_buffer/client/gpu_control.h"
 #include "gpu/command_buffer/client/program_info_manager.h"
@@ -56,9 +58,13 @@
 #include "gpu/command_buffer/common/id_allocator.h"
 #include "gpu/command_buffer/common/swap_buffers_complete_params.h"
 #include "gpu/command_buffer/common/sync_token.h"
+#include "third_party/skia/include/core/SkAlphaType.h"
+#include "third_party/skia/include/core/SkColorType.h"
+#include "third_party/skia/include/gpu/ganesh/GrTypes.h"
 #include "ui/gfx/color_space.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_f.h"
+#include "ui/gfx/geometry/size.h"
 #include "ui/gl/gpu_preference.h"
 
 #if defined(GPU_CLIENT_DEBUG)
@@ -106,27 +112,54 @@
 namespace gpu {
 namespace gles2 {
 
+
 namespace {
 
-void CopyRectToBuffer(const void* pixels,
+#if !BUILDFLAG(IS_ANDROID)
+// Valid gl texture internal format that can try to use direct uploading path.
+bool ValidFormatForDirectUploading(GLenum format, uint32_t type) {
+  switch (format) {
+    case GL_RGBA:
+      return type == GL_UNSIGNED_BYTE || type == GL_UNSIGNED_SHORT_4_4_4_4;
+    case GL_RGB:
+      return type == GL_UNSIGNED_BYTE || type == GL_UNSIGNED_SHORT_5_6_5;
+    // WebGL2 supported sized formats
+    case GL_RGBA8:
+    case GL_RGB565:
+    case GL_RGBA16F:
+    case GL_RGB8:
+    case GL_RGB10_A2:
+    case GL_RGBA4:
+      // TODO(crbug.com/356649879): RasterContextProvider never has ES3 context.
+      // Use the correct WebGL major version here.
+      return false;
+    default:
+      return false;
+  }
+}
+#endif
+
+
+void CopyRectToBuffer(base::span<const uint8_t> pixels,
                       uint32_t height,
                       uint32_t unpadded_row_size,
                       uint32_t pixels_padded_row_size,
-                      void* buffer,
+                      base::span<uint8_t> buffer,
                       uint32_t buffer_padded_row_size) {
   if (height == 0)
     return;
-  const int8_t* source = static_cast<const int8_t*>(pixels);
-  int8_t* dest = static_cast<int8_t*>(buffer);
   if (pixels_padded_row_size != buffer_padded_row_size) {
+    uint32_t buffer_offset = 0;
+    uint32_t pixels_offset = 0;
     for (uint32_t ii = 0; ii < height; ++ii) {
-      UNSAFE_TODO(memcpy(dest, source, unpadded_row_size));
-      UNSAFE_TODO(dest += buffer_padded_row_size);
-      UNSAFE_TODO(source += pixels_padded_row_size);
+      buffer.subspan(buffer_offset, unpadded_row_size)
+          .copy_from(pixels.subspan(pixels_offset, unpadded_row_size));
+      buffer_offset += buffer_padded_row_size;
+      pixels_offset += pixels_padded_row_size;
     }
   } else {
     uint32_t size = (height - 1) * pixels_padded_row_size + unpadded_row_size;
-    UNSAFE_TODO(memcpy(dest, source, size));
+    buffer.copy_prefix_from(pixels.first(size));
   }
 }
 
@@ -144,7 +177,7 @@ bool IsReadbackUsage(GLenum usage) {
 void UpdateProgramInfo(base::span<const uint8_t>& data,
                        ProgramInfoManager* manager,
                        ProgramInfoManager::ProgramInfoType type) {
-  DCHECK(data.size() > sizeof(cmds::GLES2ReturnProgramInfo));
+  CHECK(data.size() >= sizeof(cmds::GLES2ReturnProgramInfo));
   const cmds::GLES2ReturnProgramInfo* return_program_info =
       reinterpret_cast<const cmds::GLES2ReturnProgramInfo*>(data.data());
   uint32_t program = return_program_info->program_client_id;
@@ -152,6 +185,56 @@ void UpdateProgramInfo(base::span<const uint8_t>& data,
       reinterpret_cast<const int8_t*>(return_program_info->deserialized_buffer),
       data.size() - sizeof(cmds::GLES2ReturnProgramInfo)));
   manager->UpdateProgramInfo(program, info, type);
+}
+
+bool CanCopySharedImageToGLTextureViaTextureCopy(
+    ClientSharedImage* shared_image) {
+  const bool si_format_has_single_texture =
+      shared_image->format().is_single_plane() ||
+      shared_image->format().PrefersExternalSampler();
+  const bool si_usable_by_gles2_interface =
+      shared_image->GetTextureTarget() != 0;
+
+  // Copying the shared image to the destination texture via a direct
+  // texture-to-texture copy requires being able to obtain a client-side GL
+  // texture for the shared image, which in turn requires that the shared image
+  // be either single-plane or use external sampler and that it be usable by GL.
+  return si_format_has_single_texture && si_usable_by_gles2_interface;
+}
+
+bool CanCopySharedImageToGLTextureViaSkia(bool is_opaque,
+                                          uint32_t shared_image_target,
+                                          uint32_t dst_target,
+                                          uint32_t dst_internal_format,
+                                          uint32_t dst_type,
+                                          int32_t dst_level,
+                                          SkAlphaType dst_alpha_type) {
+  // NOTE: CopySharedImageToGLTextureINTERNAL() is implemented only in the
+  // passthrough command decoder, which is not yet fully rolled out on Android.
+  // Hence, disable this codepath on Android.
+  // TODO(crbug.com/40075313): Enable on Android once the passthrough command
+  // decoder is used universally there.
+#if BUILDFLAG(IS_ANDROID)
+  return false;
+#else
+  bool si_usable_by_gles2_interface = shared_image_target != 0;
+  // Since skia always produces premultiply alpha outputs, trying direct
+  // uploading path when the source is opaque or premultiply alpha been
+  // requested.
+  // TODO(crbug.com/40159723): Figure out whether premultiply options here are
+  // accurate.
+  // TODO(crbug.com/492116792): Remove the `is_opaque` param by querying the
+  // SharedImage's format directly after verifying that this doesn't change
+  // behavior for any existing callers.
+  bool is_premul = is_opaque || dst_alpha_type == kPremul_SkAlphaType;
+  bool supports_one_copy_format = ValidFormatForDirectUploading(
+      static_cast<GLenum>(dst_internal_format), dst_type);
+  // dst texture mipLevel must be 0.
+  // TODO(crbug.com/40141173): Support more texture target, e.g.
+  // 2d array, 3d etc.
+  return si_usable_by_gles2_interface && dst_level == 0 && is_premul &&
+         dst_target == GL_TEXTURE_2D && supports_one_copy_format;
+#endif  // BUILDFLAG(IS_ANDROID)
 }
 
 }  // anonymous namespace
@@ -300,10 +383,6 @@ GLES2Implementation::~GLES2Implementation() {
 
   query_tracker_.reset();
 
-  // Release remaining BufferRange mem; This is when a MapBufferRange() is
-  // called but not the UnmapBuffer() pair.
-  ClearMappedBufferRangeMap();
-
   // Release remaining BufferMap mem; This is when a MapBufferSubData() is
   // called but not the UnmapBufferSubData() pair.
   ClearMappedBufferMap();
@@ -363,17 +442,120 @@ void GLES2Implementation::OnGpuControlErrorMessage(const char* message,
   SendErrorMessage(message, id);
 }
 
-void GLES2Implementation::OnGpuSwitched() {
-  gpu_switched_ = true;
+GLboolean GLES2Implementation::DidGpuSwitch(gl::GpuPreference* active_gpu) {
+  return GL_FALSE;
 }
 
-GLboolean GLES2Implementation::DidGpuSwitch(gl::GpuPreference* active_gpu) {
-  if (gpu_switched_) {
-    *active_gpu = gl::GpuPreference::kDefault;
+bool GLES2Implementation::CanCopySharedImageDirectlyToGLTexture(
+    bool is_opaque,
+    ClientSharedImage* shared_image,
+    uint32_t dst_target,
+    uint32_t dst_internal_format,
+    uint32_t dst_type,
+    int32_t dst_level,
+    SkAlphaType dst_alpha_type) {
+  return CanCopySharedImageToGLTextureViaTextureCopy(shared_image) ||
+         CanCopySharedImageToGLTextureViaSkia(
+             is_opaque, shared_image->GetTextureTarget(), dst_target,
+             dst_internal_format, dst_type, dst_level, dst_alpha_type);
+}
+
+CopySharedImageSyncCallback
+GLES2Implementation::CopySharedImageToGLTextureViaTextureCopy(
+    const gfx::Rect& src_rect,
+    ClientSharedImage* source_shared_image,
+    const gpu::SyncToken& source_sync_token,
+    uint32_t dst_target,
+    uint32_t dst_texture,
+    uint32_t dst_internal_format,
+    uint32_t dst_format,
+    uint32_t dst_type,
+    int32_t dst_level,
+    SkAlphaType dst_alpha_type,
+    GrSurfaceOrigin dst_origin) {
+  auto si_texture = source_shared_image->CreateGLTexture(this);
+  auto scoped_si_access =
+      si_texture->BeginAccess(source_sync_token, /*readonly=*/true);
+
+  const bool do_premultiply_alpha =
+      dst_alpha_type == kPremul_SkAlphaType &&
+      source_shared_image->alpha_type() == kUnpremul_SkAlphaType;
+  const bool do_unpremultiply_alpha =
+      dst_alpha_type == kUnpremul_SkAlphaType &&
+      source_shared_image->alpha_type() == kPremul_SkAlphaType;
+
+  const bool do_flip_y = source_shared_image->surface_origin() != dst_origin;
+  // There should always be enough data in the source texture to
+  // cover this copy.
+  GPU_CLIENT_DCHECK(src_rect.width() <= source_shared_image->size().width());
+  GPU_CLIENT_DCHECK(src_rect.height() <= source_shared_image->size().height());
+  // TODO(crbug.com/378688985): `src_rect` is always in top-left
+  // coordinate space, but CopySubTextureCHROMIUM requires it to be in texture
+  // space, so this is incorrect if `source_shared_image` origin is bottom
+  // left.
+  CopySubTextureCHROMIUM(
+      scoped_si_access->texture_id(), 0, dst_target, dst_texture, dst_level, 0,
+      0, src_rect.x(), src_rect.y(), src_rect.width(), src_rect.height(),
+      do_flip_y, do_premultiply_alpha, do_unpremultiply_alpha);
+  return base::BindOnce(
+      [](std::unique_ptr<SharedImageTexture::ScopedAccess> si_access,
+         std::unique_ptr<SharedImageTexture> si_texture) {
+        return gpu::SharedImageTexture::ScopedAccess::EndAccess(
+            std::move(si_access));
+      },
+      std::move(scoped_si_access), std::move(si_texture));
+}
+
+CopySharedImageSyncCallback
+GLES2Implementation::CopySharedImageDirectlyToGLTexture(
+    const gfx::Rect& src_rect,
+    ClientSharedImage* source_shared_image,
+    const gpu::SyncToken& source_sync_token,
+    bool is_opaque,
+    uint32_t dst_target,
+    uint32_t dst_texture,
+    uint32_t dst_internal_format,
+    uint32_t dst_format,
+    uint32_t dst_type,
+    int32_t dst_level,
+    SkAlphaType dst_alpha_type,
+    GrSurfaceOrigin dst_origin) {
+  CopySharedImageSyncCallback sync_callback;
+  if (CanCopySharedImageToGLTextureViaTextureCopy(source_shared_image)) {
+    sync_callback = CopySharedImageToGLTextureViaTextureCopy(
+        src_rect, source_shared_image, source_sync_token, dst_target,
+        dst_texture, dst_internal_format, dst_format, dst_type, dst_level,
+        dst_alpha_type, dst_origin);
+    ShallowFlushCHROMIUM();
+  } else {
+    CHECK(CanCopySharedImageToGLTextureViaSkia(
+        is_opaque, source_shared_image->GetTextureTarget(), dst_target,
+        dst_internal_format, dst_type, dst_level, dst_alpha_type));
+    // Do a service-side copy from the SharedImage to the destination texture
+    // via Skia wrapping the destination texture in an SkSurface. Note that
+    // this relies on the service-side GL implementation using a Ganesh/GL
+    // context. Currently this assumption is satisfied as the passthrough
+    // decoder always uses a Ganesh/GL context.
+    // TODO(crbug.com/40064510): Eliminate this reliance to enable one-copy
+    // upload to work for Graphite *without* depending on being able to create a
+    // Ganesh/GL context.
+
+    std::unique_ptr<gpu::RasterScopedAccess> destination_access =
+        source_shared_image->BeginGLAccessForCopySharedImage(
+            this, source_sync_token, /*readonly=*/true);
+
+    const bool is_dst_origin_top_left = dst_origin == kTopLeft_GrSurfaceOrigin;
+    CopySharedImageToTextureINTERNAL(
+        dst_texture, dst_target, dst_internal_format, dst_type, src_rect.x(),
+        src_rect.y(), src_rect.width(), src_rect.height(),
+        is_dst_origin_top_left, source_shared_image->mailbox().name);
+    sync_callback = base::BindOnce(
+        [](std::unique_ptr<gpu::RasterScopedAccess> ri_access) {
+          return gpu::RasterScopedAccess::EndAccess(std::move(ri_access));
+        },
+        std::move(destination_access));
   }
-  GLboolean result = gpu_switched_ ? GL_TRUE : GL_FALSE;
-  gpu_switched_ = false;
-  return result;
+  return sync_callback;
 }
 
 void GLES2Implementation::SendErrorMessage(std::string message, int32_t id) {
@@ -407,7 +589,7 @@ void GLES2Implementation::CallDeferredErrorCallbacks() {
 
 void GLES2Implementation::OnGpuControlReturnData(
     base::span<const uint8_t> data) {
-  DCHECK(data.size() > sizeof(cmds::GLES2ReturnDataHeader));
+  CHECK(data.size() >= sizeof(cmds::GLES2ReturnDataHeader));
   const cmds::GLES2ReturnDataHeader& gles2ReturnDataHeader =
       *reinterpret_cast<const cmds::GLES2ReturnDataHeader*>(data.data());
 
@@ -1429,18 +1611,6 @@ void GLES2Implementation::Finish() {
   FinishHelper();
 }
 
-void GLES2Implementation::ShallowFinishCHROMIUM() {
-  GPU_CLIENT_SINGLE_THREAD_CHECK();
-  TRACE_EVENT0("gpu", "GLES2::ShallowFinishCHROMIUM");
-  flush_id_ = GenerateNextFlushId();
-  // Flush our command buffer (tell the service to execute up to the flush cmd
-  // and don't return until it completes).
-  helper_->CommandBufferHelper::Finish();
-
-  if (aggressively_free_resources_)
-    FreeEverything();
-}
-
 void GLES2Implementation::FinishHelper() {
   GPU_CLIENT_LOG("[" << GetLogPrefix() << "] glFinish()");
   TRACE_EVENT0("gpu", "GLES2::Finish");
@@ -2059,8 +2229,6 @@ void GLES2Implementation::BufferDataHelper(GLenum target,
     GLuint id = GetBoundBufferHelper(target);
     readback_buffer_shadow_tracker_->GetOrCreateBuffer(id, size);
   }
-
-  RemoveMappedBufferRangeByTarget(target);
 
   // If there is no data just send BufferData
   if (size == 0 || !data) {
@@ -2876,6 +3044,7 @@ void GLES2Implementation::TexImage2D(GLenum target,
     SetGLError(GL_INVALID_VALUE, func_name, "image size too large");
     return;
   }
+  const uint32_t client_pixels_size = size;
 
   if (bound_pixel_unpack_buffer_) {
     base::CheckedNumeric<uint32_t> offset = ToGLuint(pixels);
@@ -2940,12 +3109,13 @@ void GLES2Implementation::TexImage2D(GLenum target,
   }
 
   // advance pixels pointer past the skip rows and skip pixels
-  pixels = UNSAFE_TODO(reinterpret_cast<const int8_t*>(pixels) + skip_size);
+  auto pixels_span = UNSAFE_TODO(base::span<const uint8_t>(
+      static_cast<const uint8_t*>(pixels) + skip_size, client_pixels_size));
 
   // Check if we can send it all at once.
   int32_t shm_id = 0;
   uint32_t shm_offset = 0;
-  void* buffer_pointer = nullptr;
+  base::span<uint8_t> buffer_span;
 
   ScopedTransferBufferPtr transfer_alloc(size, helper_, transfer_buffer_);
   ScopedMappedMemoryPtr mapped_alloc(0, helper_, mapped_memory_.get());
@@ -2953,7 +3123,7 @@ void GLES2Implementation::TexImage2D(GLenum target,
   if (transfer_alloc.valid() && transfer_alloc.size() >= size) {
     shm_id = transfer_alloc.shm_id();
     shm_offset = transfer_alloc.offset();
-    buffer_pointer = transfer_alloc.address();
+    buffer_span = transfer_alloc.as_byte_span();
   } else if (size < max_extra_transfer_buffer_size_) {
     mapped_alloc.Reset(size);
     if (mapped_alloc.valid()) {
@@ -2962,13 +3132,13 @@ void GLES2Implementation::TexImage2D(GLenum target,
       mapped_alloc.SetFlushAfterRelease(true);
       shm_id = mapped_alloc.shm_id();
       shm_offset = mapped_alloc.offset();
-      buffer_pointer = mapped_alloc.address();
+      buffer_span = mapped_alloc.as_byte_span();
     }
   }
 
-  if (buffer_pointer) {
-    CopyRectToBuffer(pixels, height, unpadded_row_size, padded_row_size,
-                     buffer_pointer, service_padded_row_size);
+  if (!buffer_span.empty()) {
+    CopyRectToBuffer(pixels_span, height, unpadded_row_size, padded_row_size,
+                     buffer_span, service_padded_row_size);
     helper_->TexImage2D(target, level, internalformat, width, height, format,
                         type, shm_id, shm_offset);
     CheckGLError();
@@ -2979,7 +3149,7 @@ void GLES2Implementation::TexImage2D(GLenum target,
   helper_->TexImage2D(target, level, internalformat, width, height, format,
                       type, 0, 0);
   TexSubImage2DImpl(target, level, 0, 0, width, height, format, type,
-                    unpadded_row_size, pixels, padded_row_size, GL_TRUE,
+                    unpadded_row_size, pixels_span, padded_row_size, GL_TRUE,
                     &transfer_alloc, service_padded_row_size);
   CheckGLError();
 }
@@ -3034,6 +3204,7 @@ void GLES2Implementation::TexImage3D(GLenum target,
     SetGLError(GL_INVALID_VALUE, func_name, "image size too large");
     return;
   }
+  const uint32_t client_pixels_size = size;
 
   if (bound_pixel_unpack_buffer_) {
     base::CheckedNumeric<uint32_t> offset = ToGLuint(pixels);
@@ -3101,12 +3272,13 @@ void GLES2Implementation::TexImage3D(GLenum target,
       unpack_image_height_ > 0 ? unpack_image_height_ : height;
 
   // advance pixels pointer past the skip images/rows/pixels
-  pixels = UNSAFE_TODO(reinterpret_cast<const int8_t*>(pixels) + skip_size);
+  auto pixels_span = UNSAFE_TODO(base::span<const uint8_t>(
+      static_cast<const uint8_t*>(pixels) + skip_size, client_pixels_size));
 
   // Check if we can send it all at once.
   int32_t shm_id = 0;
   uint32_t shm_offset = 0;
-  void* buffer_pointer = nullptr;
+  base::span<uint8_t> buffer_span;
 
   ScopedTransferBufferPtr transfer_alloc(size, helper_, transfer_buffer_);
   ScopedMappedMemoryPtr mapped_alloc(0, helper_, mapped_memory_.get());
@@ -3114,7 +3286,7 @@ void GLES2Implementation::TexImage3D(GLenum target,
   if (transfer_alloc.valid() && transfer_alloc.size() >= size) {
     shm_id = transfer_alloc.shm_id();
     shm_offset = transfer_alloc.offset();
-    buffer_pointer = transfer_alloc.address();
+    buffer_span = transfer_alloc.as_byte_span();
   } else if (size < max_extra_transfer_buffer_size_) {
     mapped_alloc.Reset(size);
     if (mapped_alloc.valid()) {
@@ -3123,18 +3295,22 @@ void GLES2Implementation::TexImage3D(GLenum target,
       mapped_alloc.SetFlushAfterRelease(true);
       shm_id = mapped_alloc.shm_id();
       shm_offset = mapped_alloc.offset();
-      buffer_pointer = mapped_alloc.address();
+      buffer_span = mapped_alloc.as_byte_span();
     }
   }
 
-  if (buffer_pointer) {
+  if (!buffer_span.empty()) {
+    uint32_t image_size_src = padded_row_size * src_height;
+    uint32_t image_size_dst = service_padded_row_size * height;
+    uint32_t pixels_offset = 0;
+    uint32_t buffer_offset = 0;
     for (GLsizei z = 0; z < depth; ++z) {
-      CopyRectToBuffer(pixels, height, unpadded_row_size, padded_row_size,
-                       buffer_pointer, service_padded_row_size);
-      pixels = UNSAFE_TODO(reinterpret_cast<const int8_t*>(pixels) +
-                           padded_row_size * src_height);
-      buffer_pointer = UNSAFE_TODO(reinterpret_cast<int8_t*>(buffer_pointer) +
-                                   service_padded_row_size * height);
+      CopyRectToBuffer(pixels_span.subspan(pixels_offset), height,
+                       unpadded_row_size, padded_row_size,
+                       buffer_span.subspan(buffer_offset),
+                       service_padded_row_size);
+      pixels_offset += image_size_src;
+      buffer_offset += image_size_dst;
     }
     helper_->TexImage3D(target, level, internalformat, width, height, depth,
                         format, type, shm_id, shm_offset);
@@ -3146,7 +3322,7 @@ void GLES2Implementation::TexImage3D(GLenum target,
   helper_->TexImage3D(target, level, internalformat, width, height, depth,
                       format, type, 0, 0);
   TexSubImage3DImpl(target, level, 0, 0, 0, width, height, depth, format, type,
-                    unpadded_row_size, pixels, padded_row_size, GL_TRUE,
+                    unpadded_row_size, pixels_span, padded_row_size, GL_TRUE,
                     &transfer_alloc, service_padded_row_size);
   CheckGLError();
 }
@@ -3193,6 +3369,7 @@ void GLES2Implementation::TexSubImage2D(GLenum target,
     SetGLError(GL_INVALID_VALUE, func_name, "image size to large");
     return;
   }
+  const uint32_t client_pixels_size = size;
 
   if (bound_pixel_unpack_buffer_) {
     base::CheckedNumeric<uint32_t> offset = ToGLuint(pixels);
@@ -3257,7 +3434,8 @@ void GLES2Implementation::TexSubImage2D(GLenum target,
   }
 
   // advance pixels pointer past the skip rows and skip pixels
-  pixels = UNSAFE_TODO(reinterpret_cast<const int8_t*>(pixels) + skip_size);
+  auto pixels_span = UNSAFE_TODO(base::span<const uint8_t>(
+      static_cast<const uint8_t*>(pixels) + skip_size, client_pixels_size));
 
   ScopedTransferBufferPtr buffer(size, helper_, transfer_buffer_);
   base::CheckedNumeric<GLint> checked_xoffset = xoffset;
@@ -3273,8 +3451,8 @@ void GLES2Implementation::TexSubImage2D(GLenum target,
     return;
   }
   TexSubImage2DImpl(target, level, xoffset, yoffset, width, height, format,
-                    type, unpadded_row_size, pixels, padded_row_size, GL_FALSE,
-                    &buffer, service_padded_row_size);
+                    type, unpadded_row_size, pixels_span, padded_row_size,
+                    GL_FALSE, &buffer, service_padded_row_size);
   CheckGLError();
 }
 
@@ -3326,6 +3504,7 @@ void GLES2Implementation::TexSubImage3D(GLenum target,
     SetGLError(GL_INVALID_VALUE, func_name, "image size to large");
     return;
   }
+  const uint32_t client_pixels_size = size;
 
   if (bound_pixel_unpack_buffer_) {
     base::CheckedNumeric<uint32_t> offset = ToGLuint(pixels);
@@ -3390,7 +3569,8 @@ void GLES2Implementation::TexSubImage3D(GLenum target,
   }
 
   // advance pixels pointer past the skip images/rows/pixels
-  pixels = UNSAFE_TODO(reinterpret_cast<const int8_t*>(pixels) + skip_size);
+  auto pixels_span = UNSAFE_TODO(base::span<const uint8_t>(
+      static_cast<const uint8_t*>(pixels) + skip_size, client_pixels_size));
 
   ScopedTransferBufferPtr buffer(size, helper_, transfer_buffer_);
   base::CheckedNumeric<GLint> checked_xoffset = xoffset;
@@ -3412,7 +3592,7 @@ void GLES2Implementation::TexSubImage3D(GLenum target,
     return;
   }
   TexSubImage3DImpl(target, level, xoffset, yoffset, zoffset, width, height,
-                    depth, format, type, unpadded_row_size, pixels,
+                    depth, format, type, unpadded_row_size, pixels_span,
                     padded_row_size, GL_FALSE, &buffer,
                     service_padded_row_size);
   CheckGLError();
@@ -3443,7 +3623,7 @@ void GLES2Implementation::TexSubImage2DImpl(GLenum target,
                                             GLenum format,
                                             GLenum type,
                                             uint32_t unpadded_row_size,
-                                            const void* pixels,
+                                            base::span<const uint8_t> pixels,
                                             uint32_t pixels_padded_row_size,
                                             GLboolean internal,
                                             ScopedTransferBufferPtr* buffer,
@@ -3455,8 +3635,8 @@ void GLES2Implementation::TexSubImage2DImpl(GLenum target,
   DCHECK_GE(xoffset, 0);
   DCHECK_GE(yoffset, 0);
 
-  const int8_t* source = reinterpret_cast<const int8_t*>(pixels);
   // Transfer by rows.
+  uint32_t pixels_offset = 0;
   while (height) {
     unsigned int desired_size =
         buffer_padded_row_size * (height - 1) + unpadded_row_size;
@@ -3470,16 +3650,16 @@ void GLES2Implementation::TexSubImage2DImpl(GLenum target,
     GLint num_rows = ComputeNumRowsThatFitInBuffer(
         buffer_padded_row_size, unpadded_row_size, buffer->size(), height);
     num_rows = std::min(num_rows, height);
-    CopyRectToBuffer(source, num_rows, unpadded_row_size,
-                     pixels_padded_row_size, buffer->address(),
+    CopyRectToBuffer(pixels.subspan(pixels_offset), num_rows, unpadded_row_size,
+                     pixels_padded_row_size, buffer->as_byte_span(),
                      buffer_padded_row_size);
     helper_->TexSubImage2D(target, level, xoffset, yoffset, width, num_rows,
                            format, type, buffer->shm_id(), buffer->offset(),
                            internal);
     buffer->Release();
     yoffset += num_rows;
-    UNSAFE_TODO(source += num_rows * pixels_padded_row_size);
     height -= num_rows;
+    pixels_offset += num_rows * pixels_padded_row_size;
   }
 }
 
@@ -3494,7 +3674,7 @@ void GLES2Implementation::TexSubImage3DImpl(GLenum target,
                                             GLenum format,
                                             GLenum type,
                                             uint32_t unpadded_row_size,
-                                            const void* pixels,
+                                            base::span<const uint8_t> pixels,
                                             uint32_t pixels_padded_row_size,
                                             GLboolean internal,
                                             ScopedTransferBufferPtr* buffer,
@@ -3507,9 +3687,9 @@ void GLES2Implementation::TexSubImage3DImpl(GLenum target,
   DCHECK_GE(xoffset, 0);
   DCHECK_GE(yoffset, 0);
   DCHECK_GE(zoffset, 0);
-  const int8_t* source = reinterpret_cast<const int8_t*>(pixels);
   GLsizei total_rows = height * depth;
   GLint row_index = 0, depth_index = 0;
+  uint32_t pixels_offset = 0;
   while (total_rows) {
     // Each time, we either copy one or more images, or copy one or more rows
     // within a single image, depending on the buffer size limit.
@@ -3552,21 +3732,21 @@ void GLES2Implementation::TexSubImage3DImpl(GLenum target,
     }
 
     if (num_images > 0) {
-      int8_t* buffer_pointer = reinterpret_cast<int8_t*>(buffer->address());
+      auto buffer_span = buffer->as_byte_span();
       uint32_t src_height =
           unpack_image_height_ > 0 ? unpack_image_height_ : height;
       uint32_t image_size_dst = buffer_padded_row_size * height;
       uint32_t image_size_src = pixels_padded_row_size * src_height;
       for (GLint ii = 0; ii < num_images; ++ii) {
-        CopyRectToBuffer(UNSAFE_TODO(source + ii * image_size_src), my_height,
-                         unpadded_row_size, pixels_padded_row_size,
-                         UNSAFE_TODO(buffer_pointer + ii * image_size_dst),
+        CopyRectToBuffer(pixels.subspan(pixels_offset + ii * image_size_src),
+                         my_height, unpadded_row_size, pixels_padded_row_size,
+                         buffer_span.subspan(ii * image_size_dst),
                          buffer_padded_row_size);
       }
     } else {
-      CopyRectToBuffer(source, my_height, unpadded_row_size,
-                       pixels_padded_row_size, buffer->address(),
-                       buffer_padded_row_size);
+      CopyRectToBuffer(pixels.subspan(pixels_offset), my_height,
+                       unpadded_row_size, pixels_padded_row_size,
+                       buffer->as_byte_span(), buffer_padded_row_size);
     }
     helper_->TexSubImage3D(target, level, xoffset, yoffset + row_index,
                            zoffset + depth_index, width, my_height, my_depth,
@@ -3589,12 +3769,12 @@ void GLES2Implementation::TexSubImage3DImpl(GLenum target,
           num_image_paddings++;
         }
       }
-      UNSAFE_TODO(source += num_rows * pixels_padded_row_size);
+      uint32_t advance = num_rows * pixels_padded_row_size;
       if (unpack_image_height_ > height && num_image_paddings > 0) {
-        UNSAFE_TODO(source += num_image_paddings *
-                              (unpack_image_height_ - height) *
-                              pixels_padded_row_size);
+        advance += num_image_paddings * (unpack_image_height_ - height) *
+                   pixels_padded_row_size;
       }
+      pixels_offset += advance;
     }
   }
 }
@@ -4449,12 +4629,15 @@ GLboolean GLES2Implementation::ReadbackARGBImagePixelsINTERNAL(
   if (!*readback_result) {
     return GL_FALSE;
   }
-  // We need to use `RelaxedAtomicWriteMemcpy` because we might be writing into
-  // memory observed by JS at the same time.
   auto dst = UNSAFE_TODO(base::span(static_cast<uint8_t*>(pixels), dst_size));
   auto src = UNSAFE_TODO(
       base::span(static_cast<uint8_t*>(shm_address) + pixels_offset, dst_size));
-  base::subtle::RelaxedAtomicWriteMemcpy(dst, src);
+  size_t min_row_bytes =
+      dst_width *
+      SkColorTypeBytesPerPixel(static_cast<SkColorType>(dst_sk_color_type));
+  RelaxedAtomicWriteMemcpyImageRowsSkippingPadding(
+      /*dst=*/dst, /*src=*/src, /*row_bytes=*/min_row_bytes,
+      /*height=*/dst_height, /*stride=*/dst_row_bytes);
   return GL_TRUE;
 }
 
@@ -5045,8 +5228,6 @@ void GLES2Implementation::DeleteBuffersHelper(GLsizei n,
     if (UNSAFE_TODO(buffers[ii]) == bound_pixel_unpack_transfer_buffer_id_) {
       bound_pixel_unpack_transfer_buffer_id_ = 0;
     }
-
-    RemoveMappedBufferRangeById(UNSAFE_TODO(buffers[ii]));
   }
 }
 
@@ -5347,28 +5528,6 @@ GLenum GLES2Implementation::GetGraphicsResetStatusKHR() {
   return GL_NO_ERROR;
 }
 
-GLboolean GLES2Implementation::EnableFeatureCHROMIUM(const char* feature) {
-  GPU_CLIENT_SINGLE_THREAD_CHECK();
-  GPU_CLIENT_LOG("[" << GetLogPrefix() << "] glEnableFeatureCHROMIUM("
-                     << feature << ")");
-  TRACE_EVENT0("gpu", "GLES2::EnableFeatureCHROMIUM");
-  typedef cmds::EnableFeatureCHROMIUM::Result Result;
-  SetBucketAsCString(kResultBucketId, feature);
-  auto result = GetResultAs<Result>();
-  if (!result) {
-    return false;
-  }
-  *result = 0;
-  helper_->EnableFeatureCHROMIUM(kResultBucketId, GetResultShmId(),
-                                 result.offset());
-  if (!WaitForCmd()) {
-    return false;
-  }
-  helper_->SetBucketSize(kResultBucketId, 0);
-  GPU_CLIENT_LOG("   returned " << GLES2Util::GetStringBool(*result));
-  return *result != 0;
-}
-
 void* GLES2Implementation::MapBufferSubDataCHROMIUM(GLuint target,
                                                     GLintptr offset,
                                                     GLsizeiptr size,
@@ -5434,33 +5593,6 @@ GLuint GLES2Implementation::GetBoundBufferHelper(GLenum target) {
   return static_cast<GLuint>(id);
 }
 
-void GLES2Implementation::RemoveMappedBufferRangeByTarget(GLenum target) {
-  GLuint buffer = GetBoundBufferHelper(target);
-  RemoveMappedBufferRangeById(buffer);
-}
-
-void GLES2Implementation::RemoveMappedBufferRangeById(GLuint buffer) {
-  if (buffer > 0) {
-    auto iter = mapped_buffer_range_map_.find(buffer);
-    if (iter != mapped_buffer_range_map_.end() &&
-        !iter->second.shm_memory.empty()) {
-      mapped_memory_->FreePendingToken(iter->second.shm_memory.data(),
-                                       helper_->InsertToken());
-      mapped_buffer_range_map_.erase(iter);
-    }
-  }
-}
-
-void GLES2Implementation::ClearMappedBufferRangeMap() {
-  for (auto& buffer_range : mapped_buffer_range_map_) {
-    if (!buffer_range.second.shm_memory.empty()) {
-      mapped_memory_->FreePendingToken(buffer_range.second.shm_memory.data(),
-                                       helper_->InsertToken());
-    }
-  }
-  mapped_buffer_range_map_.clear();
-}
-
 void GLES2Implementation::ClearMappedBufferMap() {
   for (auto& buffer : mapped_buffers_) {
     if (!buffer.second.shm_memory.empty()) {
@@ -5479,149 +5611,6 @@ void GLES2Implementation::ClearMappedTextureMap() {
     }
   }
   mapped_textures_.clear();
-}
-
-void* GLES2Implementation::MapBufferRange(GLenum target,
-                                          GLintptr offset,
-                                          GLsizeiptr size,
-                                          GLbitfield access) {
-  GPU_CLIENT_SINGLE_THREAD_CHECK();
-  GPU_CLIENT_LOG("[" << GetLogPrefix() << "] glMapBufferRange("
-                     << GLES2Util::GetStringEnum(target) << ", " << offset
-                     << ", " << size << ", " << access << ")");
-  if (!ValidateSize("glMapBufferRange", size) ||
-      !ValidateOffset("glMapBufferRange", offset)) {
-    return nullptr;
-  }
-
-  GLuint buffer = GetBoundBufferHelper(target);
-
-  base::span<uint8_t> span_buffer;
-
-  // Early return if we have a valid shadow copy for readback
-  if (access == GL_MAP_READ_BIT) {
-    // This will return an incorrect result if the client does the following:
-    // * Writes into a buffer
-    // * Issues query (GL_READBACK_SHADOW_COPIES_UPDATED_CHROMIUM)
-    // * Writes into the buffer using transform feedback (but doesn't issue
-    //   InvalidateReadbackBufferShadowDataCHROMIUM correctly)
-    // * Waits on the query
-    // * Reads from the buffer (may return results from before the transfom
-    //   feedback operation).
-    // Therefore, if (and only if) a client uses the
-    // GL_READBACK_SHADOW_COPIES_UPDATED_CHROMIUM query, it must also correctly
-    // use InvalidateReadbackBufferShadowDataCHROMIUM. WebGL (at the time of
-    // this writing) is expected to be the only client which uses
-    // GL_READBACK_SHADOW_COPIES_UPDATED_CHROMIUM.
-    if (auto* buffer_object =
-            readback_buffer_shadow_tracker_->GetBuffer(buffer)) {
-      span_buffer = buffer_object->MapReadbackShm(offset, size);
-      if (span_buffer.empty()) {
-        // (If there's no valid shadow copy, warn and fall back to usual logic.)
-        SendErrorMessage(
-            "performance warning: READ-usage buffer was read back without "
-            "waiting on a fence. This caused a graphics pipeline stall.",
-            0);
-      }
-    }
-  }
-
-  // Usual, round-trip path if we're not doing a shadow-copy readback
-  int32_t shm_id = 0;
-  unsigned int shm_offset = 0;
-  if (span_buffer.empty()) {
-    span_buffer = mapped_memory_->Alloc(size, &shm_id, &shm_offset);
-    auto result = GetResultAs<cmds::MapBufferRange::Result>();
-    if (span_buffer.empty() || !result) {
-      SetGLError(GL_OUT_OF_MEMORY, "glMapBufferRange", "out of memory");
-      return nullptr;
-    }
-
-    *result = 0;
-    helper_->MapBufferRange(target, offset, size, access, shm_id, shm_offset,
-                            GetResultShmId(), result.offset());
-    // TODO(zmo): For write only mode with MAP_INVALID_*_BIT, we should
-    // consider an early return without WaitForCmd(). crbug.com/465804.
-    if (!WaitForCmd()) {
-      return nullptr;
-    }
-    if (*result) {
-      const GLbitfield kInvalidateBits =
-          GL_MAP_INVALIDATE_BUFFER_BIT | GL_MAP_INVALIDATE_RANGE_BIT;
-      if ((access & kInvalidateBits) != 0) {
-        // We do not read back from the buffer, therefore, we set the client
-        // side memory to zero to avoid uninitialized data.
-        std::ranges::fill(span_buffer, 0);
-      }
-    } else {
-      mapped_memory_->Free(span_buffer.data());
-      span_buffer = {};
-    }
-  }
-
-  // Track this mapping regardless of which path was taken above.
-  if (!span_buffer.empty()) {
-    DCHECK_NE(0u, buffer);
-    // glMapBufferRange fails on an already mapped buffer.
-    DCHECK(mapped_buffer_range_map_.find(buffer) ==
-           mapped_buffer_range_map_.end());
-    auto iter = mapped_buffer_range_map_.insert(
-        std::make_pair(buffer, MappedBuffer(access, shm_id, span_buffer,
-                                            shm_offset, target, offset, size)));
-    DCHECK(iter.second);
-  }
-
-  GPU_CLIENT_LOG("  returned " << span_buffer.data());
-  CheckGLError();
-  return span_buffer.data();
-}
-
-GLboolean GLES2Implementation::UnmapBuffer(GLenum target) {
-  GPU_CLIENT_SINGLE_THREAD_CHECK();
-  GPU_CLIENT_LOG("[" << GetLogPrefix() << "] glUnmapBuffer("
-                     << GLES2Util::GetStringEnum(target) << ")");
-  switch (target) {
-    case GL_ARRAY_BUFFER:
-    case GL_ELEMENT_ARRAY_BUFFER:
-    case GL_COPY_READ_BUFFER:
-    case GL_COPY_WRITE_BUFFER:
-    case GL_PIXEL_PACK_BUFFER:
-    case GL_PIXEL_UNPACK_BUFFER:
-    case GL_TRANSFORM_FEEDBACK_BUFFER:
-    case GL_UNIFORM_BUFFER:
-      break;
-    default:
-      SetGLError(GL_INVALID_ENUM, "glUnmapBuffer", "invalid target");
-      return GL_FALSE;
-  }
-  GLuint buffer = GetBoundBufferHelper(target);
-  if (buffer == 0) {
-    SetGLError(GL_INVALID_OPERATION, "glUnmapBuffer", "no buffer bound");
-    return GL_FALSE;
-  }
-  auto iter = mapped_buffer_range_map_.find(buffer);
-  if (iter == mapped_buffer_range_map_.end()) {
-    SetGLError(GL_INVALID_OPERATION, "glUnmapBuffer", "buffer is unmapped");
-    return GL_FALSE;
-  }
-
-  bool was_mapped_by_readback_tracker = false;
-  if (auto* buffer_object =
-          readback_buffer_shadow_tracker_->GetBuffer(buffer)) {
-    was_mapped_by_readback_tracker = buffer_object->UnmapReadbackShm();
-  }
-  if (!was_mapped_by_readback_tracker) {
-    helper_->UnmapBuffer(target);
-    InvalidateReadbackBufferShadowDataCHROMIUM(GetBoundBufferHelper(target));
-  }
-  RemoveMappedBufferRangeById(buffer);
-
-  // TODO(zmo): There is a rare situation that data might be corrupted and
-  // GL_FALSE should be returned. We lose context on that sitatuon, so we
-  // don't have to WaitForCmd().
-  GPU_CLIENT_LOG("  returned " << GL_TRUE);
-  CheckGLError();
-  return GL_TRUE;
 }
 
 void* GLES2Implementation::MapTexSubImage2DCHROMIUM(GLenum target,
@@ -6041,10 +6030,13 @@ void GLES2Implementation::AllocateShadowCopiesForReadback() {
     if (!buffer) {
       continue;
     }
-    int32_t shm_id = 0;
+    int32_t shm_id = -1;
     uint32_t shm_offset = 0;
     bool already_allocated = false;
     uint32_t size = buffer->Alloc(&shm_id, &shm_offset, &already_allocated);
+    if (shm_id == -1) {
+      continue;
+    }
     if (already_allocated) {
       SendErrorMessage(
           "performance warning: READ-usage buffer was written, then "
@@ -6854,6 +6846,42 @@ void GLES2Implementation::SetActiveURLCHROMIUM(const char* url) {
                     base::CheckMin(len, kMaxStrLen).ValueOrDie());
   helper_->SetActiveURLCHROMIUM(kResultBucketId);
   helper_->SetBucketSize(kResultBucketId, 0);
+}
+
+void GLES2Implementation::GetBufferSubDataCHROMIUM(GLenum target,
+                                                   GLintptr offset,
+                                                   GLsizeiptr size,
+                                                   void* data) {
+  GPU_CLIENT_SINGLE_THREAD_CHECK();
+  GPU_CLIENT_LOG("[" << GetLogPrefix() << "] glGetBufferSubDataCHROMIUM("
+                     << GLES2Util::GetStringEnum(target) << ", " << offset
+                     << ", " << size << ", " << data << ")");
+  if (!ValidateSize("glGetBufferSubDataCHROMIUM", size) ||
+      !ValidateOffset("glGetBufferSubDataCHROMIUM", offset)) {
+    return;
+  }
+
+  int32_t shm_id = 0;
+  unsigned int shm_offset = 0;
+  base::span<uint8_t> span_buffer =
+      mapped_memory_->Alloc(size, &shm_id, &shm_offset);
+  if (span_buffer.empty()) {
+    SetGLError(GL_OUT_OF_MEMORY, "glGetBufferSubDataCHROMIUM", "out of memory");
+    return;
+  }
+
+  // Zero-initialize the buffer. The GPU process will not write to the buffer in
+  // case of an error.
+  std::ranges::fill(span_buffer, 0);
+
+  helper_->GetBufferSubDataCHROMIUM(target, offset, size, shm_id, shm_offset);
+
+  if (!WaitForCmd()) {
+    return;
+  }
+
+  UNSAFE_TODO(memcpy(data, span_buffer.data(), size));
+  mapped_memory_->Free(span_buffer.data());
 }
 
 // Include the auto-generated part of this file. We split this because it means

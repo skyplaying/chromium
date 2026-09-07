@@ -24,12 +24,15 @@
 #include "base/strings/stringprintf.h"
 #include "base/test/bind.h"
 #include "base/test/gtest_util.h"
+#include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/values_test_util.h"
 #include "base/values.h"
 #include "chrome/browser/extensions/api/developer_private/developer_private_functions.h"
 #include "chrome/browser/extensions/api/developer_private/extension_info_generator.h"
 #include "chrome/browser/extensions/api/developer_private/profile_info_generator.h"
 #include "chrome/browser/extensions/chrome_test_extension_loader.h"
+#include "chrome/browser/extensions/cws_info_service_factory.h"
 #include "chrome/browser/extensions/error_console/error_console.h"
 #include "chrome/browser/extensions/extension_action_test_util.h"
 #include "chrome/browser/extensions/extension_install_prompt_show_params.h"
@@ -39,7 +42,6 @@
 #include "chrome/browser/extensions/extension_service_test_with_install.h"
 #include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/extensions/external_provider_manager.h"
-#include "chrome/browser/extensions/manifest_v2_experiment_manager.h"
 #include "chrome/browser/extensions/signin_test_util.h"
 #include "chrome/browser/extensions/sync/account_extension_tracker.h"
 #include "chrome/browser/extensions/sync/extension_sync_data.h"
@@ -63,6 +65,7 @@
 #include "content/public/test/mock_render_process_host.h"
 #include "content/public/test/web_contents_tester.h"
 #include "extensions/browser/api_test_utils.h"
+#include "extensions/browser/cws_info_service.h"
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/event_router_factory.h"
 #include "extensions/browser/extension_creator.h"
@@ -135,9 +138,9 @@ bool DoesItemChangedEventMatch(
     const ExtensionId& extension_id,
     const api::developer_private::EventType event_type,
     api::developer_private::ExtensionInfo* info_from_event) {
-  CHECK_GE(1u, event.event_args.size());
+  CHECK_GE(1u, event.args().size());
   std::optional<api::developer_private::EventData> event_data =
-      api::developer_private::EventData::FromValue(event.event_args[0]);
+      api::developer_private::EventData::FromValue(event.args()[0]);
   if (!event_data) {
     return false;
   }
@@ -184,9 +187,9 @@ bool WasUserSiteSettingsChangedEventDispatched(
   }
 
   const Event& event = *iter->second;
-  CHECK_GE(1u, event.event_args.size());
+  CHECK_GE(1u, event.args().size());
   auto site_settings =
-      api::developer_private::UserSiteSettings::FromValue(event.event_args[0]);
+      api::developer_private::UserSiteSettings::FromValue(event.args()[0]);
   if (!site_settings) {
     return false;
   }
@@ -436,6 +439,21 @@ base::FilePath GetUnpackedPath(TestExtensionDir& dir) {
   return absolute_file_path;
 #endif  // BUILDFLAG(IS_ANDROID)
 }
+
+class MockCWSInfoServiceForReview : public CWSInfoService {
+ public:
+  explicit MockCWSInfoServiceForReview(Profile* profile)
+      : CWSInfoService(profile) {}
+  ~MockCWSInfoServiceForReview() override = default;
+
+  std::optional<CWSInfo> GetCWSInfo(const Extension& extension) const override {
+    CWSInfo info;
+    info.is_present = true;
+    info.is_live = true;
+    info.violation_type = CWSViolationType::kNone;
+    return info;
+  }
+};
 
 }  // namespace
 
@@ -724,6 +742,13 @@ void DeveloperPrivateApiUnitTest::SetUp() {
 
   ExtensionServiceInitParams init_params;
   init_params.profile_is_supervised = ProfileIsSupervised();
+  init_params.testing_factories.emplace_back(
+      CWSInfoServiceFactory::GetInstance(),
+      base::BindRepeating([](content::BrowserContext* context)
+                              -> std::unique_ptr<KeyedService> {
+        return std::make_unique<MockCWSInfoServiceForReview>(
+            Profile::FromBrowserContext(context));
+      }));
   InitializeExtensionService(std::move(init_params));
   extension_action_test_util::CreateToolbarModelForProfile(profile());
 
@@ -772,8 +797,11 @@ TEST_F(DeveloperPrivateApiUnitTest,
                            /*expected_default_value=*/false);
 
   TestExtensionPrefSetting(
-      base::BindRepeating(&HasPrefsPermission, &util::IsIncognitoEnabled,
-                          profile(), id),
+      base::BindRepeating(
+          &HasPrefsPermission,
+          static_cast<bool (*)(const ExtensionId&, content::BrowserContext*)>(
+              &util::IsIncognitoEnabled),
+          profile(), id),
       "incognitoAccess", id, /*expected_default_value=*/false);
   TestExtensionPrefSetting(
       base::BindRepeating(&HasPrefsPermission, &util::AllowFileAccess,
@@ -1556,9 +1584,13 @@ TEST_F(DeveloperPrivateApiUnitTest, DeveloperPrivateRequestFileSource) {
   std::optional<api::developer_private::RequestFileSourceResponse> response =
       api::developer_private::RequestFileSourceResponse::FromValue(
           response_value);
-  EXPECT_FALSE(response->before_highlight.empty());
-  EXPECT_EQ("\"name\": \"foo\"", response->highlight);
-  EXPECT_FALSE(response->after_highlight.empty());
+
+  ASSERT_TRUE(response);
+  ASSERT_TRUE(response->source);
+
+  EXPECT_FALSE(response->source->before_highlight.empty());
+  EXPECT_EQ("\"name\": \"foo\"", response->source->highlight);
+  EXPECT_FALSE(response->source->after_highlight.empty());
   EXPECT_EQ("foo: manifest.json", response->title);
   EXPECT_EQ(kErrorMessage, response->message);
 }
@@ -1759,6 +1791,31 @@ TEST_F(DeveloperPrivateApiUnitTest, DeveloperPrivateDevMode) {
   }
 }
 
+TEST_F(DeveloperPrivateApiUnitTest,
+       DeveloperPrivateToggleExtensionsPinnedByDefault) {
+  base::HistogramTester histograms;
+  auto function1 = base::MakeRefCounted<
+      api::DeveloperPrivateUpdateProfileConfigurationFunction>();
+  base::ListValue args1 = base::ListValue().Append(
+      base::DictValue().Set("extensionsPinnedByDefault", false));
+  EXPECT_TRUE(RunFunction(function1, args1)) << function1->GetError();
+  EXPECT_FALSE(
+      profile()->GetPrefs()->GetBoolean(prefs::kExtensionsPinnedByDefault));
+  histograms.ExpectBucketCount("Extensions.Settings.DefaultPinningToggled",
+                               false, 1);
+
+  auto function2 = base::MakeRefCounted<
+      api::DeveloperPrivateUpdateProfileConfigurationFunction>();
+  base::ListValue args2 = base::ListValue().Append(
+      base::DictValue().Set("extensionsPinnedByDefault", true));
+  EXPECT_TRUE(RunFunction(function2, args2)) << function2->GetError();
+  EXPECT_TRUE(
+      profile()->GetPrefs()->GetBoolean(prefs::kExtensionsPinnedByDefault));
+  histograms.ExpectBucketCount("Extensions.Settings.DefaultPinningToggled",
+                               true, 1);
+  histograms.ExpectTotalCount("Extensions.Settings.DefaultPinningToggled", 2);
+}
+
 TEST_F(DeveloperPrivateApiUnitTest, LoadUnpackedFailsWithoutDevMode) {
   std::unique_ptr<content::WebContents> web_contents(
       content::WebContentsTester::CreateTestWebContents(profile(), nullptr));
@@ -1881,30 +1938,6 @@ TEST_F(DeveloperPrivateApiUnitTest, InstallDroppedFileCrx) {
       observer.WaitForExtensionInstalled();
   ASSERT_TRUE(extension);
   EXPECT_EQ("foo", extension->name());
-}
-
-TEST_F(DeveloperPrivateApiUnitTest, InstallDroppedFileUserScript) {
-  base::FilePath script_path =
-      data_dir().AppendASCII("user_script_basic.user.js");
-  base::AutoReset<bool> disable_ui =
-      ExtensionInstallUI::disable_ui_for_tests(true);
-  ScopedTestDialogAutoConfirm auto_confirm(ScopedTestDialogAutoConfirm::ACCEPT);
-
-  std::unique_ptr<content::WebContents> web_contents(
-      content::WebContentsTester::CreateTestWebContents(profile(), nullptr));
-  SetDraggedFile(web_contents.get(), script_path);
-
-  auto function =
-      base::MakeRefCounted<api::DeveloperPrivateInstallDroppedFileFunction>();
-  function->SetRenderFrameHost(web_contents->GetPrimaryMainFrame());
-
-  TestExtensionRegistryObserver observer(registry());
-  ASSERT_TRUE(api_test_utils::RunFunction(function.get(), "[]", profile()))
-      << function->GetError();
-  scoped_refptr<const Extension> extension =
-      observer.WaitForExtensionInstalled();
-  ASSERT_TRUE(extension);
-  EXPECT_EQ("My user script", extension->name());
 }
 
 TEST_F(DeveloperPrivateApiUnitTest, GrantHostPermission) {
@@ -2371,7 +2404,7 @@ TEST_F(DeveloperPrivateApiZipFileUnitTest, InstallDroppedFileZip) {
   // unpacked install directory. E.g. /a/b/c/d == /a/b/c + /d.
   //
   // Make sure we're comparing absolute paths to avoid failures like
-  // https://crbug.com/1453671 on macOS 14.
+  // https://crbug.com/40916556 on macOS 14.
   base::FilePath absolute_extension_path =
       base::MakeAbsoluteFilePath(extension->path());
   base::FilePath absolute_expected_extension_install_directory =
@@ -3402,159 +3435,14 @@ TEST_F(DeveloperPrivateApiSupervisedUserUnitTest,
       content::WebContentsTester::CreateTestWebContents(profile(), nullptr));
   base::FilePath path = data_dir().AppendASCII("simple_with_popup");
 
-    EXPECT_TRUE(supervised_user::AreExtensionsPermissionsEnabled(profile()));
-    auto function =
-        base::MakeRefCounted<api::DeveloperPrivateLoadUnpackedFunction>();
-    function->SetRenderFrameHost(web_contents->GetPrimaryMainFrame());
-    std::string error = api_test_utils::RunFunctionAndReturnError(
-        function.get(), "[]", profile());
-    EXPECT_THAT(error, testing::HasSubstr("Child account"));
-}
-
-// Test suite for cases where the user is in the  MV2 deprecation "warning"
-// experiment phase.
-class DeveloperPrivateApiWithMV2DeprecationWarningUnitTest
-    : public DeveloperPrivateApiUnitTest {
- public:
-  DeveloperPrivateApiWithMV2DeprecationWarningUnitTest() {
-    feature_list_.InitWithFeatures(
-        /*enabled_features=*/{},
-        /*disabled_features=*/{
-            extensions_features::kExtensionManifestV2Disabled,
-            extensions_features::kExtensionManifestV2Unsupported});
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
-// Test suite for cases where the user is in the  MV2 deprecation "disabled"
-// experiment phase.
-class DeveloperPrivateApiWithMV2DeprecationDisabledUnitTest
-    : public DeveloperPrivateApiUnitTest {
- public:
-  DeveloperPrivateApiWithMV2DeprecationDisabledUnitTest() {
-    feature_list_.InitWithFeatures(
-        {extensions_features::kExtensionManifestV2Disabled},
-        {extensions_features::kExtensionManifestV2Unsupported});
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
-// Extension of manifest version 2 is not supported on Android.
-#if !BUILDFLAG(IS_ANDROID)
-TEST_F(DeveloperPrivateApiWithMV2DeprecationWarningUnitTest,
-       TestAcknowledgingAnExtension) {
-  // Add an extension that is affected by the MV2 deprecation.
-  scoped_refptr<const Extension> extension =
-      ExtensionBuilder("ext").SetManifestVersion(2).Build();
-  registrar()->AddExtension(extension.get());
-
-  ManifestV2ExperimentManager* experiment_manager =
-      ManifestV2ExperimentManager::Get(browser_context());
-  EXPECT_TRUE(experiment_manager->IsExtensionAffected(*extension));
-  EXPECT_FALSE(experiment_manager->DidUserAcknowledgeNotice(extension->id()));
-
-  base::ListValue args;
-  args.Append(extension->id());
-
-  // Dismiss the extension's notice.
-  auto dismiss_notice_function = base::MakeRefCounted<
-      api::DeveloperPrivateDismissMv2DeprecationNoticeForExtensionFunction>();
-  dismiss_notice_function->set_source_context_type(mojom::ContextType::kWebUi);
-  EXPECT_TRUE(RunFunction(dismiss_notice_function, args));
-
-  // Extension's notice should be marked as acknowledged.
-  EXPECT_TRUE(experiment_manager->IsExtensionAffected(*extension));
-  EXPECT_TRUE(experiment_manager->DidUserAcknowledgeNotice(extension->id()));
-}
-
-TEST_F(DeveloperPrivateApiWithMV2DeprecationWarningUnitTest,
-       TestAcknowledgingANonAffectedExtension) {
-  // Add an extension that is not affected by the MV2 deprecation.
-  scoped_refptr<const Extension> extension = ExtensionBuilder("ext").Build();
-  registrar()->AddExtension(extension.get());
-
-  std::string args = base::StringPrintf(R"(["%s"])", extension->id().c_str());
-  auto dismiss_notice_function = base::MakeRefCounted<
-      api::DeveloperPrivateDismissMv2DeprecationNoticeForExtensionFunction>();
-  dismiss_notice_function->set_source_context_type(mojom::ContextType::kWebUi);
-
-  // Cannot dismiss an extension's notice whe the extension is not affected by
-  // the MV2 deprecation.
+  EXPECT_TRUE(supervised_user::AreExtensionsPermissionsEnabled(profile()));
+  auto function =
+      base::MakeRefCounted<api::DeveloperPrivateLoadUnpackedFunction>();
+  function->SetRenderFrameHost(web_contents->GetPrimaryMainFrame());
   std::string error = api_test_utils::RunFunctionAndReturnError(
-      dismiss_notice_function, args, profile());
-  EXPECT_EQ(error,
-            ErrorUtils::FormatErrorMessage(
-                "Extension with ID '*' is not affected by the MV2 deprecation.",
-                extension->id()));
-
-  // Extension notice should not be marked as acknowledged.
-  ManifestV2ExperimentManager* experiment_manager =
-      ManifestV2ExperimentManager::Get(browser_context());
-  EXPECT_FALSE(experiment_manager->DidUserAcknowledgeNotice(extension->id()));
+      function.get(), "[]", profile());
+  EXPECT_THAT(error, testing::HasSubstr("Child account"));
 }
-#endif  // !BUILDFLAG(IS_ANDROID)
-
-TEST_F(DeveloperPrivateApiWithMV2DeprecationWarningUnitTest,
-       TestAcknowledgingNoticeGlobally) {
-  ManifestV2ExperimentManager* experiment_manager =
-      ManifestV2ExperimentManager::Get(browser_context());
-  EXPECT_FALSE(experiment_manager->DidUserAcknowledgeNoticeGlobally());
-
-  auto update_profile_function = base::MakeRefCounted<
-      api::DeveloperPrivateUpdateProfileConfigurationFunction>();
-  update_profile_function->set_source_context_type(mojom::ContextType::kWebUi);
-
-  base::ListValue args;
-  args.Append(base::DictValue().Set("isMv2DeprecationNoticeDismissed", true));
-  EXPECT_TRUE(RunFunction(update_profile_function, args));
-
-  EXPECT_TRUE(experiment_manager->DidUserAcknowledgeNoticeGlobally());
-}
-
-// Extension of manifest version 2 is not supported on Android.
-#if !BUILDFLAG(IS_ANDROID)
-TEST_F(DeveloperPrivateApiWithMV2DeprecationDisabledUnitTest,
-       TestAcknowledgingAnExtension) {
-  // Add an extension that is affected by the MV2 deprecation.
-  scoped_refptr<const Extension> extension =
-      ExtensionBuilder("ext").SetManifestVersion(2).Build();
-  registrar()->AddExtension(extension.get());
-
-  ManifestV2ExperimentManager* experiment_manager =
-      ManifestV2ExperimentManager::Get(browser_context());
-  EXPECT_TRUE(experiment_manager->IsExtensionAffected(*extension));
-  EXPECT_FALSE(experiment_manager->DidUserAcknowledgeNotice(extension->id()));
-
-  base::ListValue args;
-  args.Append(extension->id());
-
-  // Call the dismiss notice function, and cancel the dismissal.
-  auto dismiss_notice_function = base::MakeRefCounted<
-      api::DeveloperPrivateDismissMv2DeprecationNoticeForExtensionFunction>();
-  dismiss_notice_function->set_source_context_type(mojom::ContextType::kWebUi);
-  dismiss_notice_function->accept_bubble_for_testing(false);
-  EXPECT_TRUE(RunFunction(dismiss_notice_function, args));
-
-  // Extension notice should NOT be marked as acknowledged.
-  EXPECT_TRUE(experiment_manager->IsExtensionAffected(*extension));
-  EXPECT_FALSE(experiment_manager->DidUserAcknowledgeNotice(extension->id()));
-
-  // Call the dismiss notice function, and accept the dismissal.
-  dismiss_notice_function = base::MakeRefCounted<
-      api::DeveloperPrivateDismissMv2DeprecationNoticeForExtensionFunction>();
-  dismiss_notice_function->set_source_context_type(mojom::ContextType::kWebUi);
-  dismiss_notice_function->accept_bubble_for_testing(true);
-  EXPECT_TRUE(RunFunction(dismiss_notice_function, args));
-
-  // Extension's notice should be marked as acknowledged.
-  EXPECT_TRUE(experiment_manager->IsExtensionAffected(*extension));
-  EXPECT_TRUE(experiment_manager->DidUserAcknowledgeNotice(extension->id()));
-}
-#endif  // !BUILDFLAG(IS_ANDROID)
 
 // Signing into transport mode and Sign outs are not supported for ChromeOS
 // hence DeveloperPrivateApiTransportModeUnitTest is not run for ChromeOS.
@@ -3965,5 +3853,83 @@ TEST_F(DeveloperPrivateApiTransportModeUnitTest,
   EXPECT_FALSE(CanUploadToAccount(*extension));
 }
 #endif  // !BUILDFLAG(IS_CHROMEOS)
+
+TEST_F(DeveloperPrivateApiUnitTest,
+       DeveloperPrivateOpenReviewPage_PolicyDisabled) {
+  base::test::ScopedFeatureList feature_list{
+      extensions_features::kCWSReviewPromptingNativeUI};
+
+  profile()->GetPrefs()->SetBoolean(prefs::kExtensionReviewPromptsAllowed,
+                                    false);
+
+  scoped_refptr<const Extension> extension =
+      ExtensionBuilder("Test Extension")
+          .SetLocation(mojom::ManifestLocation::kInternal)
+          .AddFlags(Extension::FROM_WEBSTORE)
+          .Build();
+  registrar()->AddExtension(extension.get());
+
+  std::unique_ptr<content::WebContents> web_contents(
+      content::WebContentsTester::CreateTestWebContents(profile(), nullptr));
+
+  base::ListValue args;
+  args.Append(extension->id());
+
+  auto function =
+      base::MakeRefCounted<api::DeveloperPrivateOpenReviewPageFunction>();
+  function->SetRenderFrameHost(web_contents->GetPrimaryMainFrame());
+  EXPECT_EQ("Review prompts are disabled by policy.",
+            api_test_utils::RunFunctionAndReturnError(
+                function.get(), std::move(args), profile()));
+}
+
+TEST_F(DeveloperPrivateApiUnitTest,
+       DeveloperPrivateOpenReviewPage_FeatureDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      extensions_features::kCWSReviewPromptingNativeUI);
+
+  scoped_refptr<const Extension> extension =
+      ExtensionBuilder("Test Extension")
+          .SetLocation(mojom::ManifestLocation::kInternal)
+          .AddFlags(Extension::FROM_WEBSTORE)
+          .Build();
+  registrar()->AddExtension(extension.get());
+
+  std::unique_ptr<content::WebContents> web_contents(
+      content::WebContentsTester::CreateTestWebContents(profile(), nullptr));
+
+  base::ListValue args;
+  args.Append(extension->id());
+
+  auto function =
+      base::MakeRefCounted<api::DeveloperPrivateOpenReviewPageFunction>();
+  function->SetRenderFrameHost(web_contents->GetPrimaryMainFrame());
+  EXPECT_EQ("The extension is ineligible for review prompts.",
+            api_test_utils::RunFunctionAndReturnError(
+                function.get(), std::move(args), profile()));
+}
+
+TEST_F(DeveloperPrivateApiUnitTest,
+       DeveloperPrivateOpenReviewPage_NoWebContents) {
+  base::test::ScopedFeatureList feature_list{
+      extensions_features::kCWSReviewPromptingNativeUI};
+
+  scoped_refptr<const Extension> extension =
+      ExtensionBuilder("Test Extension")
+          .SetLocation(mojom::ManifestLocation::kInternal)
+          .AddFlags(Extension::FROM_WEBSTORE)
+          .Build();
+  registrar()->AddExtension(extension.get());
+
+  base::ListValue args;
+  args.Append(extension->id());
+
+  auto function =
+      base::MakeRefCounted<api::DeveloperPrivateOpenReviewPageFunction>();
+  EXPECT_EQ("Could not find a valid web contents.",
+            api_test_utils::RunFunctionAndReturnError(
+                function.get(), std::move(args), profile()));
+}
 
 }  // namespace extensions

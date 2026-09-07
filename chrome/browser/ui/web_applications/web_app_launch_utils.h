@@ -14,8 +14,6 @@
 #include "base/functional/callback_helpers.h"
 #include "base/memory/stack_allocated.h"
 #include "base/time/time.h"
-#include "base/values.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/web_applications/web_app_ui_manager.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "components/webapps/common/web_app_id.h"
@@ -23,11 +21,10 @@
 #include "ui/gfx/geometry/rect.h"
 
 class Profile;
-class Browser;
+struct BrowserWindowCreateParams;
 class BrowserWindowInterface;
 class GURL;
 enum class WindowOpenDisposition;
-struct NavigateParams;
 
 namespace apps {
 struct AppLaunchParams;
@@ -45,7 +42,7 @@ namespace web_app {
 // required to be the active web contents in `source_browser`.
 //
 // Note: This will CHECK-fail if `contents` is not in `source_browser`.
-void ReparentWebContentsIntoBrowserImpl(Browser* source_browser,
+void ReparentWebContentsIntoBrowserImpl(BrowserWindowInterface* source_browser,
                                         content::WebContents* contents,
                                         BrowserWindowInterface* target_browser,
                                         bool insert_as_pinned_home_tab = false);
@@ -61,7 +58,8 @@ enum class LaunchedAppType {
   kMaxValue = kCrafted,
 };
 
-std::optional<webapps::AppId> GetWebAppForActiveTab(const Browser* browser);
+std::optional<webapps::AppId> GetWebAppForActiveTab(
+    const BrowserWindowInterface* browser);
 
 // Clears navigation history prior to user entering app scope.
 void PrunePreScopeNavigationHistory(const GURL& scope,
@@ -70,7 +68,8 @@ void PrunePreScopeNavigationHistory(const GURL& scope,
 // Invokes ReparentWebContentsIntoAppBrowser() for the active tab for the
 // web app that has the tab's URL in its scope. Does nothing if there is no web
 // app in scope.
-BrowserWindowInterface* ReparentWebAppForActiveTab(Browser* browser);
+BrowserWindowInterface* ReparentWebAppForActiveTab(
+    BrowserWindowInterface* browser);
 
 // Reparents `contents` into a standalone web app window for `app_id`.
 // - If the web app has a launch_handler set to reuse existing windows and there
@@ -105,36 +104,28 @@ void MaybeAddPinnedHomeTab(BrowserWindowInterface* browser,
 // the IPH is permitted to show).
 void MaybeShowNavigationCaptureIph(webapps::AppId app_id,
                                    Profile* profile,
-                                   Browser* browser);
+                                   BrowserWindowInterface* browser);
 
 // This creates appropriate CreateParams for creating a PWA window or PWA popup
 // window.
-Browser::CreateParams CreateParamsForApp(const webapps::AppId& app_id,
-                                         bool is_popup,
-                                         bool trusted_source,
-                                         const gfx::Rect& window_bounds,
-                                         Profile* profile,
-                                         bool user_gesture);
+BrowserWindowCreateParams CreateParamsForApp(const webapps::AppId& app_id,
+                                             bool is_popup,
+                                             bool trusted_source,
+                                             const gfx::Rect& window_bounds,
+                                             Profile* profile,
+                                             bool user_gesture);
 
-Browser* CreateWebAppWindowMaybeWithHomeTab(
+BrowserWindowInterface* CreateWebAppWindowMaybeWithHomeTab(
     const webapps::AppId& app_id,
-    const Browser::CreateParams& params);
+    BrowserWindowCreateParams params);
 
-content::WebContents* NavigateWebAppUsingParams(NavigateParams& nav_params);
-
-// RecordLaunchMetrics methods report UMA metrics. It shouldn't have other
-// side-effects (e.g. updating app launch time).
-void RecordLaunchMetrics(const webapps::AppId& app_id,
-                         apps::LaunchContainer container,
-                         apps::LaunchSource launch_source,
-                         const GURL& launch_url,
-                         content::WebContents* web_contents);
-
-// Updates statistics about web app launch. For example, app's last launch time
-// (populates recently launched app list) and site engagement stats.
-void UpdateLaunchStats(content::WebContents* web_contents,
-                       const webapps::AppId& app_id,
-                       const GURL& launch_url);
+// Report UMA metrics and updates  app's last launch time, site engagement
+// stats, etc.
+void UpdateLaunchMetricsAndStats(const webapps::AppId& app_id,
+                                 apps::LaunchContainer container,
+                                 apps::LaunchSource launch_source,
+                                 const GURL& launch_url,
+                                 content::WebContents* web_contents);
 
 // Locks that lock apps all have the WithAppResources mixin, allowing any
 // app-locking lock to call this method.
@@ -143,14 +134,6 @@ void LaunchWebApp(apps::AppLaunchParams params,
                   Profile& profile,
                   WithAppResources& app_resources,
                   LaunchWebAppDebugValueCallback callback);
-
-// Will enqueue the given url in the launch params for this web contents. Does
-// not check if the url is within scope of the app.
-void EnqueueLaunchParams(content::WebContents* contents,
-                         const webapps::AppId& app_id,
-                         const GURL& url,
-                         bool wait_for_navigation_to_complete,
-                         base::TimeTicks time_navigation_started);
 
 // Focus the app container depending on whether the `browser` is an app window
 // or if it is a normal tabbed browser. `browser` shouldn't be a nullptr, and

@@ -37,10 +37,10 @@ std::unique_ptr<web::FakeDownloadTask> CreateTask(
   auto task = std::make_unique<web::FakeDownloadTask>(GURL(kUrl), "test/test");
   NSData* data = [NSData dataWithBytes:kDownloadFileData.data()
                                 length:kDownloadFileData.size()];
-  task->SetResponseData(data);
-  task->SetGeneratedFileName(base::FilePath(kDownloadFileName));
   task->Start(file_path);
-  task->SetState(web::DownloadTask::State::kComplete);
+  task->SetResponseData(std::move(data));
+  task->SetGeneratedFileName(base::FilePath(kDownloadFileName));
+
   return task;
 }
 
@@ -78,8 +78,10 @@ class AutoDeletionServiceTest : public PlatformTest {
   AutoDeletionService* service() { return auto_deletion_service_.get(); }
   const base::FilePath& directory() const { return directory_; }
 
- private:
+ protected:
   base::test::TaskEnvironment task_environment_;
+
+ private:
   IOSChromeScopedTestingLocalState scoped_testing_local_state_;
   std::unique_ptr<AutoDeletionService> auto_deletion_service_;
   base::ScopedTempDir scoped_temp_directory_;
@@ -90,34 +92,44 @@ class AutoDeletionServiceTest : public PlatformTest {
 // deletion.
 TEST_F(AutoDeletionServiceTest, ScheduleOneFileForDeletion) {
   // Create web::DownloadTask & schedule download for auto deletion.
-  std::unique_ptr<web::DownloadTask> task = CreateTask(directory());
-  web::DownloadTask* task_ptr = task.get();
-  service()->MarkTaskForDeletion(
-      task_ptr, auto_deletion::DeletionEnrollmentStatus::kEnrolled);
-  service()->MarkTaskForDeletion(task_ptr, directory());
+  std::unique_ptr<web::FakeDownloadTask> task = CreateTask(directory());
+  service()->SetDownloadTask(task.get());
+  service()->SetEnrollmentStatus(
+      auto_deletion::DeletionEnrollmentStatus::kEnrolled);
+  service()->SetDownloadPath(directory());
+
+  task->SetState(web::DownloadTask::State::kComplete);
+  // Wait until the ThreadPool finishes executing all its tasks.
+  task_environment_.RunUntilIdle();
 
   // Check that the pref has one value.
   EXPECT_EQ(GetNumberOfFilesScheduledForDeletion(), 1u);
+  service()->Reset();
 }
 
 TEST_F(AutoDeletionServiceTest,
        ScheduleOneFileForDeletionWhenFileLocationIsSetFirst) {
   // Create web::DownloadTask & schedule download for auto deletion.
-  std::unique_ptr<web::DownloadTask> task = CreateTask(directory());
-  web::DownloadTask* task_ptr = task.get();
-  service()->MarkTaskForDeletion(task_ptr, directory());
-  service()->MarkTaskForDeletion(
-      task_ptr, auto_deletion::DeletionEnrollmentStatus::kEnrolled);
+  std::unique_ptr<web::FakeDownloadTask> task = CreateTask(directory());
+  service()->SetDownloadTask(task.get());
+  service()->SetDownloadPath(directory());
+  service()->SetEnrollmentStatus(
+      auto_deletion::DeletionEnrollmentStatus::kEnrolled);
+
+  task->SetState(web::DownloadTask::State::kComplete);
+  // Wait until the ThreadPool finishes executing all its tasks.
+  task_environment_.RunUntilIdle();
 
   // Check that the pref has one value.
   EXPECT_EQ(GetNumberOfFilesScheduledForDeletion(), 1u);
+  service()->Reset();
 }
 
 // Tests that the auto deletion service successfully schedules multiple file for
 // deletion.
 TEST_F(AutoDeletionServiceTest, ScheduleMultipleFilesForDeletion) {
   // Create multiple web::DownloadTask tasks.
-  std::vector<std::unique_ptr<web::DownloadTask>> tasks;
+  std::vector<std::unique_ptr<web::FakeDownloadTask>> tasks;
   for (int i = 0; i < 10; i++) {
     auto task = CreateTask(directory());
     tasks.push_back(std::move(task));
@@ -125,10 +137,14 @@ TEST_F(AutoDeletionServiceTest, ScheduleMultipleFilesForDeletion) {
 
   // Invoke the FileSchedule on all the `tasks`.
   for (const auto& task : tasks) {
-    web::DownloadTask* task_ptr = task.get();
-    service()->MarkTaskForDeletion(
-        task_ptr, auto_deletion::DeletionEnrollmentStatus::kEnrolled);
-    service()->MarkTaskForDeletion(task_ptr, directory());
+    service()->SetDownloadTask(task.get());
+    service()->SetDownloadPath(directory());
+    service()->SetEnrollmentStatus(
+        auto_deletion::DeletionEnrollmentStatus::kEnrolled);
+    task->SetState(web::DownloadTask::State::kComplete);
+    // Wait until the ThreadPool finishes executing all its tasks.
+    task_environment_.RunUntilIdle();
+    service()->Reset();
   }
 
   // Check that the pref has multiple values.
@@ -182,22 +198,21 @@ TEST_F(AutoDeletionServiceTest, DeleteAllFilesScheduledForDeletion) {
   service()->RemoveScheduledFilesReadyForDeletion(run_loop.QuitClosure());
 
   EXPECT_EQ(GetNumberOfFilesScheduledForDeletion(), 10u);
-
   run_loop.Run();
-
   EXPECT_EQ(GetNumberOfFilesScheduledForDeletion(), 0u);
 }
 
 // Tests that the auto deletion service untracks the scheduled file.
 TEST_F(AutoDeletionServiceTest, UntrackScheduledFileWhenServiceIsDisabled) {
   // Create web::DownloadTask & schedule download for auto deletion.
-  std::unique_ptr<web::DownloadTask> task = CreateTask(directory());
-  web::DownloadTask* task_ptr = task.get();
-  service()->MarkTaskForDeletion(
-      task_ptr, auto_deletion::DeletionEnrollmentStatus::kEnrolled);
-  service()->MarkTaskForDeletion(task_ptr, directory());
-  // Check that the pref has one value.
-  ASSERT_EQ(GetNumberOfFilesScheduledForDeletion(), 1u);
+  std::unique_ptr<web::FakeDownloadTask> task = CreateTask(directory());
+  service()->SetDownloadTask(task.get());
+  service()->SetDownloadPath(directory());
+  service()->SetEnrollmentStatus(
+      auto_deletion::DeletionEnrollmentStatus::kEnrolled);
+  task->SetState(web::DownloadTask::State::kComplete);
+  // Wait until the ThreadPool finishes executing all its tasks.
+  task_environment_.RunUntilIdle();
 
   // This function is invoked when the Auto-deletion feature is disabled.
   service()->Clear();
@@ -213,21 +228,17 @@ TEST_F(AutoDeletionServiceTest,
   // Create web::DownloadTask.
   std::unique_ptr<web::FakeDownloadTask> task = CreateTask(directory());
   task->SetState(web::DownloadTask::State::kInProgress);
-  web::DownloadTask* task_ptr = task.get();
-
-  service()->MarkTaskForDeletion(
-      task_ptr, auto_deletion::DeletionEnrollmentStatus::kEnrolled);
-  service()->MarkTaskForDeletion(task_ptr, directory());
+  service()->SetDownloadTask(task.get());
+  service()->SetDownloadPath(directory());
+  service()->SetEnrollmentStatus(
+      auto_deletion::DeletionEnrollmentStatus::kEnrolled);
   ASSERT_EQ(GetNumberOfFilesScheduledForDeletion(), 0u);
   task->SetState(web::DownloadTask::State::kComplete);
-  // Wait for the AutoDeletionService to be notified of the change in the
-  // DownloadTask's state and schedule the file for deletion.
-  ASSERT_TRUE(base::test::ios::WaitUntilConditionOrTimeout(
-      base::test::ios::kSpinDelaySeconds, ^{
-        return GetNumberOfFilesScheduledForDeletion() == 1u;
-      }));
+  // Wait until the ThreadPool finishes executing all its tasks.
+  task_environment_.RunUntilIdle();
 
   EXPECT_EQ(GetNumberOfFilesScheduledForDeletion(), 1u);
+  service()->Reset();
 }
 
 }  // namespace auto_deletion

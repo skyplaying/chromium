@@ -21,7 +21,7 @@
 #include "chrome/browser/safe_browsing/safe_browsing_navigation_observer_manager_factory.h"
 #include "chrome/browser/safe_browsing/test_safe_browsing_navigation_observer_manager.h"
 #include "chrome/browser/safe_browsing/test_safe_browsing_service.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -30,10 +30,12 @@
 #include "components/prefs/pref_service.h"
 #include "components/safe_browsing/content/browser/safe_browsing_navigation_observer_manager.h"
 #include "components/sessions/content/session_tab_helper.h"
+#include "components/sessions/core/session_id.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/download_item_utils.h"
 #include "content/public/browser/download_manager.h"
 #include "content/public/browser/global_routing_id.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/fenced_frame_test_util.h"
@@ -43,6 +45,7 @@
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "third_party/blink/public/common/features.h"
+#include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
 #include "url/url_canon.h"
 
@@ -183,29 +186,29 @@ class SBNavigationObserverBrowserTest : public InProcessBrowserTest {
     // Disable Safe Browsing service so we can directly control when
     // SafeBrowsingNavigationObserverManager and SafeBrowsingNavigationObserver
     // are instantiated.
-    browser()->profile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled,
-                                                 false);
+    browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled,
+                                                    false);
     ASSERT_TRUE(embedded_test_server()->Start());
     host_resolver()->AddRule("*", "127.0.0.1");
     observer_manager_ =
         std::make_unique<TestSafeBrowsingNavigationObserverManager>(browser());
     observer_manager_->ObserveContents(
-        browser()->tab_strip_model()->GetActiveWebContents());
+        browser()->GetTabStripModel()->GetActiveWebContents());
     ASSERT_TRUE(InitialSetup());
   }
 
   content::WebContents* web_contents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
   bool InitialSetup() {
     if (!browser())
       return false;
 
-    browser()->profile()->GetPrefs()->SetBoolean(prefs::kPromptForDownload,
-                                                 false);
+    browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kPromptForDownload,
+                                                    false);
     content::DownloadManager* manager =
-        browser()->profile()->GetDownloadManager();
+        browser()->GetProfile()->GetDownloadManager();
     DownloadPrefs::FromDownloadManager(manager)->ResetAutoOpenByUser();
 
     return true;
@@ -224,7 +227,7 @@ class SBNavigationObserverBrowserTest : public InProcessBrowserTest {
   void CancelDownloads() {
     std::vector<raw_ptr<DownloadItem, VectorExperimental>> download_items;
     content::DownloadManager* manager =
-        browser()->profile()->GetDownloadManager();
+        browser()->GetProfile()->GetDownloadManager();
     manager->GetAllDownloads(&download_items);
     for (download::DownloadItem* item : download_items) {
       if (!item->IsDone())
@@ -235,7 +238,7 @@ class SBNavigationObserverBrowserTest : public InProcessBrowserTest {
   DownloadItem* GetDownload() {
     std::vector<raw_ptr<DownloadItem, VectorExperimental>> download_items;
     content::DownloadManager* manager =
-        browser()->profile()->GetDownloadManager();
+        browser()->GetProfile()->GetDownloadManager();
     manager->GetAllDownloads(&download_items);
     if (download_items.empty())
       DownloadItemCreatedObserver(manager).WaitForDownloadItem(&download_items);
@@ -253,7 +256,7 @@ class SBNavigationObserverBrowserTest : public InProcessBrowserTest {
                      int number_of_navigations,
                      const GURL& page_url,
                      int subframe_index = -1) {
-    TabStripModel* tab_strip = browser()->tab_strip_model();
+    TabStripModel* tab_strip = browser()->GetTabStripModel();
     content::WebContents* current_web_contents =
         tab_strip->GetActiveWebContents();
     ASSERT_TRUE(content::WaitForLoadStop(current_web_contents));
@@ -298,7 +301,7 @@ class SBNavigationObserverBrowserTest : public InProcessBrowserTest {
                             int number_of_navigations,
                             const GURL& page_url,
                             int subframe_index = -1) {
-    TabStripModel* tab_strip = browser()->tab_strip_model();
+    TabStripModel* tab_strip = browser()->GetTabStripModel();
     content::WebContents* current_web_contents =
         tab_strip->GetActiveWebContents();
     ASSERT_TRUE(content::WaitForLoadStop(current_web_contents));
@@ -332,9 +335,9 @@ class SBNavigationObserverBrowserTest : public InProcessBrowserTest {
   void TriggerDownloadViaHtml5FileApi() {
     std::vector<raw_ptr<DownloadItem, VectorExperimental>> items;
     content::DownloadManager* manager =
-        browser()->profile()->GetDownloadManager();
+        browser()->GetProfile()->GetDownloadManager();
     content::WebContents* current_web_contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
     ASSERT_TRUE(content::ExecJs(current_web_contents, "downloadViaFileApi()"));
     manager->GetAllDownloads(&items);
     ASSERT_EQ(0U, items.size());
@@ -473,7 +476,7 @@ class SBNavigationObserverBrowserTest : public InProcessBrowserTest {
 
   void SimulateUserGesture() {
     observer_manager_->RecordUserGestureForWebContents(
-        browser()->tab_strip_model()->GetActiveWebContents());
+        browser()->GetTabStripModel()->GetActiveWebContents());
   }
 
   NavigationEventList* navigation_event_list() {
@@ -488,12 +491,12 @@ class SBNavigationObserverBrowserTest : public InProcessBrowserTest {
       bool enhanced_protection_enabled,
       bool is_incognito,
       SafeBrowsingNavigationObserverManager::AttributionResult result) {
-    SetEnhancedProtectionPrefForTests(browser()->profile()->GetPrefs(),
+    SetEnhancedProtectionPrefForTests(browser()->GetProfile()->GetPrefs(),
                                       enhanced_protection_enabled);
-    auto* maybe_otr_profile = is_incognito
-                                  ? browser()->profile()->GetPrimaryOTRProfile(
-                                        /*create_if_needed=*/true)
-                                  : browser()->profile();
+    auto* maybe_otr_profile =
+        is_incognito ? browser()->GetProfile()->GetPrimaryOTRProfile(
+                           /*create_if_needed=*/true)
+                     : browser()->GetProfile();
     return SafeBrowsingNavigationObserverManager::
         CountOfRecentNavigationsToAppend(maybe_otr_profile,
                                          maybe_otr_profile->GetPrefs(), result);
@@ -2102,7 +2105,7 @@ IN_PROC_BROWSER_TEST_F(SBNavigationObserverBrowserTest,
   ReferrerChain referrer_chain;
   SimulateUserGesture();
   IdentifyReferrerChainForWebContents(
-      browser()->tab_strip_model()->GetActiveWebContents(), &referrer_chain);
+      browser()->GetTabStripModel()->GetActiveWebContents(), &referrer_chain);
   ASSERT_EQ(2, referrer_chain.size());
 
   // Verify url fragment is cleared in referrer chain.
@@ -2772,7 +2775,7 @@ IN_PROC_BROWSER_TEST_F(SBNavigationObserverBrowserTest,
   EXPECT_EQ(3U, nav_list->NavigationEventsSize());
 
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   // Simulates back.
   web_contents->GetController().GoBack();
   EXPECT_TRUE(WaitForLoadStop(web_contents));
@@ -2797,7 +2800,7 @@ IN_PROC_BROWSER_TEST_F(SBNavigationObserverBrowserTest, ReloadNotRecorded) {
 
   // Simulates reload.
   ASSERT_TRUE(
-      content::ExecJs(browser()->tab_strip_model()->GetActiveWebContents(),
+      content::ExecJs(browser()->GetTabStripModel()->GetActiveWebContents(),
                       "location.reload();"));
   base::RunLoop().RunUntilIdle();
 
@@ -2824,7 +2827,7 @@ IN_PROC_BROWSER_TEST_F(SBNavigationObserverBrowserTest,
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), initial_url));
 
   ASSERT_TRUE(
-      content::ExecJs(browser()->tab_strip_model()->GetActiveWebContents(),
+      content::ExecJs(browser()->GetTabStripModel()->GetActiveWebContents(),
                       "window.location='../signed.exe'"));
   base::RunLoop().RunUntilIdle();
 
@@ -2851,7 +2854,7 @@ IN_PROC_BROWSER_TEST_F(SBNavigationObserverBrowserTest,
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), initial_url));
 
   content::WebContents* opener_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
 
   ui_test_utils::TabAddedWaiter tab_added(browser());
   content::TestNavigationObserver new_tab_nav(initial_popup_url);
@@ -2986,7 +2989,7 @@ IN_PROC_BROWSER_TEST_F(SBNavigationObserverBrowserTest,
   // Navigate to landing_url. Keep the navigation in pending state so we can
   // test on the pending event API.
   content::TestNavigationManager navigation_manager(
-      browser()->tab_strip_model()->GetActiveWebContents(), landing_url);
+      browser()->GetTabStripModel()->GetActiveWebContents(), landing_url);
   ClickTestLinkPending("link_to_landing", 1, landing_referrer_url);
   EXPECT_TRUE(navigation_manager.WaitForResponse());
 
@@ -3052,13 +3055,16 @@ IN_PROC_BROWSER_TEST_F(SBNavigationObserverBrowserTest,
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), initial_url));
 
   content::TestNavigationManager navigation_manager(
-      browser()->tab_strip_model()->GetActiveWebContents(), request_url);
+      browser()->GetTabStripModel()->GetActiveWebContents(), request_url);
 
   // Navigate to request_url. Keep the navigation in pending state so we can
   // test on the pending event API.
-  browser()->tab_strip_model()->GetActiveWebContents()->GetController().LoadURL(
-      request_url, content::Referrer(), ui::PAGE_TRANSITION_LINK,
-      std::string());
+  browser()
+      ->GetTabStripModel()
+      ->GetActiveWebContents()
+      ->GetController()
+      .LoadURL(request_url, content::Referrer(), ui::PAGE_TRANSITION_LINK,
+               std::string());
   EXPECT_TRUE(navigation_manager.WaitForResponse());
 
   auto* nav_list = navigation_event_list();
@@ -3119,7 +3125,7 @@ IN_PROC_BROWSER_TEST_F(SBNavigationObserverBrowserTest,
   allowlist.Append(iframe_url.GetHost());
   allowlist.Append(iframe_retargeting_url.GetHost());
   allowlist.Append(download_url.GetHost());
-  browser()->profile()->GetPrefs()->SetList(
+  browser()->GetProfile()->GetPrefs()->SetList(
       prefs::kSafeBrowsingAllowlistDomains, std::move(allowlist));
 
   ReferrerChain referrer_chain;
@@ -3191,7 +3197,7 @@ IN_PROC_BROWSER_TEST_F(SBNavigationObserverBrowserTest,
   allowlist.Append(initial_url.GetHost());
   allowlist.Append(download_url.GetHost());
   allowlist.Append(request_url.GetHost());
-  browser()->profile()->GetPrefs()->SetList(
+  browser()->GetProfile()->GetPrefs()->SetList(
       prefs::kSafeBrowsingAllowlistDomains, std::move(allowlist));
 
   ReferrerChain referrer_chain;
@@ -3224,7 +3230,7 @@ IN_PROC_BROWSER_TEST_F(SBNavigationObserverBrowserTest,
   base::ListValue allowlist;
   allowlist.Append(initial_url.GetHost());
   allowlist.Append(download_url.GetHost());
-  browser()->profile()->GetPrefs()->SetList(
+  browser()->GetProfile()->GetPrefs()->SetList(
       prefs::kSafeBrowsingAllowlistDomains, std::move(allowlist));
 
   ReferrerChain referrer_chain;
@@ -3256,7 +3262,7 @@ IN_PROC_BROWSER_TEST_F(SBNavigationObserverBrowserTest,
   EXPECT_TRUE(referrer_chain.Get(1).is_url_removed_by_policy());
 }
 
-// Test failure on macOS: crbug.com/1287901
+// Test failure on macOS: crbug.com/40816558
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_AppendRecentNavigationsToEmptyReferrerChain \
   DISABLED_AppendRecentNavigationsToEmptyReferrerChain

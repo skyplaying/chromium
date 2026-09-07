@@ -8,8 +8,9 @@
 #include "base/rand_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
-#include "chrome/browser/password_manager/profile_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
 #include "chrome/browser/ui/views/webauthn/authenticator_gpm_pin_sheet_view.h"
 #include "chrome/browser/ui/views/webauthn/combined_selector_sheet_view.h"
@@ -20,7 +21,9 @@
 #include "chrome/test/interaction/webcontents_interaction_test_util.h"
 #include "components/network_session_configurator/common/network_switches.h"
 #include "components/password_manager/core/browser/password_form.h"
+#include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/password_store_interface.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/sync/protocol/webauthn_credential_specifics.pb.h"
 #include "components/webauthn/core/browser/passkey_model.h"
 #include "content/public/test/browser_test.h"
@@ -34,7 +37,7 @@
 
 // These tests are disabled under MSAN. The enclave subprocess is written in
 // Rust and FFI from Rust to C++ doesn't work in Chromium at this time
-// (crbug.com/1369167).
+// (crbug.com/40240570).
 #if !defined(MEMORY_SANITIZER)
 
 namespace {
@@ -66,11 +69,7 @@ const DeepQuery kMessage{"#message-container"};
 using Fixture = InteractiveBrowserTestMixin<EnclaveAuthenticatorTestBase>;
 class WebAuthnImmediateGetTest : public Fixture {
  public:
-  WebAuthnImmediateGetTest() {
-    feature_list_.InitWithFeatures(
-        {device::kWebAuthnImmediateGet},
-        {device::kWebAuthnImmediateRequestRateLimit});
-  }
+  WebAuthnImmediateGetTest() = default;
 
   ~WebAuthnImmediateGetTest() override = default;
 
@@ -111,19 +110,18 @@ class WebAuthnImmediateGetTest : public Fixture {
   void AddPassword(const std::string& username, const std::string& password) {
     password_manager::PasswordForm form;
     form.username_value = base::ASCIIToUTF16(username);
-    form.password_value = base::ASCIIToUTF16(password);
+    form.password_value =
+        password_manager::PasswordString(base::ASCIIToUTF16(password));
     form.signon_realm = GetHttpsURL().DeprecatedGetOriginAsURL().spec();
     form.url = GetHttpsURL().DeprecatedGetOriginAsURL();
     form.match_type = password_manager::PasswordForm::MatchType::kExact;
 
     scoped_refptr<password_manager::PasswordStoreInterface> password_store =
         ProfilePasswordStoreFactory::GetForProfile(
-            browser()->profile(), ServiceAccessType::IMPLICIT_ACCESS);
-    password_store->AddLogin(form);
+            browser()->GetProfile(), ServiceAccessType::IMPLICIT_ACCESS);
+    password_store->AddLogin(password_manager::FromPasswordForm(form));
   }
 
- private:
-  base::test::ScopedFeatureList feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_F(WebAuthnImmediateGetTest,
@@ -133,7 +131,7 @@ IN_PROC_BROWSER_TEST_F(WebAuthnImmediateGetTest,
 
 IN_PROC_BROWSER_TEST_F(WebAuthnImmediateGetTest,
                        ImmediateMediationNotAllowedIncognito) {
-  Browser* incognito_browser = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito_browser = CreateIncognitoBrowser();
   ui_test_utils::BrowserActivationWaiter(incognito_browser).WaitForActivation();
   RunTestSequenceInContext(
       BrowserElements::From(incognito_browser)->GetContext(),

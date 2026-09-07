@@ -17,6 +17,7 @@
 
 namespace blink {
 
+class InstallParams;
 class ScriptState;
 
 // It is owned by Navigator, and an instance is created lazily by calling
@@ -38,14 +39,7 @@ class MODULES_EXPORT NavigatorWebInstall final
   static ScriptPromise<WebInstallResult> install(
       ScriptState* script_state,
       Navigator& navigator,
-      const String& install_url,
-      ExceptionState& exception_state);
-
-  static ScriptPromise<WebInstallResult> install(
-      ScriptState* script_state,
-      Navigator& navigator,
-      const String& install_url,
-      const String& manifest_id,
+      const InstallParams* params,
       ExceptionState& exception_state);
 
   void Trace(Visitor*) const override;
@@ -53,18 +47,17 @@ class MODULES_EXPORT NavigatorWebInstall final
  private:
   static NavigatorWebInstall& From(Navigator&);
 
-  // `install_url` and/or `manifest_id` may be empty depending on which of the 3
-  // versions of `install()` was called.
-  ScriptPromise<WebInstallResult> InstallImpl(
+  // Handles the no-argument `install()` overload, which installs the current
+  // document.
+  ScriptPromise<WebInstallResult> InstallImpl(ScriptState* script_state,
+                                              ExceptionState& exception_state);
+  ScriptPromise<WebInstallResult> InstallFromParamsImpl(
       ScriptState* script_state,
-      const std::optional<String>& install_url,
-      const std::optional<String>& manifest_id,
+      const InstallParams* params,
       ExceptionState& exception_state);
   HeapMojoRemote<mojom::blink::WebInstallService>& GetService();
   void OnConnectionError();
   bool CheckPreconditionsMaybeThrow(ScriptState*, ExceptionState&);
-  bool IsInstallUrlValid(const String& install_url);
-  KURL ValidateAndResolveManifestId(const String& manifest_id);
 
   HeapMojoRemote<mojom::blink::WebInstallService> service_;
 };

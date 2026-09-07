@@ -7,7 +7,6 @@
 #include "base/files/file_path.h"
 #include "base/functional/callback_helpers.h"
 #include "base/test/mock_callback.h"
-#include "base/test/test_future.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
 #include "chrome/browser/profiles/profile.h"
@@ -15,7 +14,7 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_test_util.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_view_test_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/profile_destruction_waiter.h"
@@ -55,7 +54,7 @@ IN_PROC_BROWSER_TEST_F(ProfilePickerGlicFlowControllerBrowserTest,
   Profile* new_profile =
       &profiles::testing::CreateProfileSync(profile_manager, new_profile_path);
   ProfileDestructionWaiter profile_destruction_waiter(new_profile);
-  Browser* new_browser = CreateBrowser(new_profile);
+  BrowserWindowInterface* new_browser = CreateBrowser(new_profile);
   CloseBrowserSynchronously(new_browser);
   profile_destruction_waiter.Wait();
 
@@ -105,14 +104,14 @@ IN_PROC_BROWSER_TEST_F(ProfilePickerGlicFlowControllerBrowserTest,
   base::MockCallback<base::OnceCallback<void(Profile*)>>
       picked_profile_callback;
   // Return the currently active profile right away if it is already loaded.
-  EXPECT_CALL(picked_profile_callback, Run(browser()->profile()));
+  EXPECT_CALL(picked_profile_callback, Run(browser()->GetProfile()));
 
   ProfilePickerGlicFlowController controller(
       host(), ClearHostClosure(clear_host_callback.Get()),
       picked_profile_callback.Get());
   base::MockCallback<base::OnceCallback<void(bool)>> mock_callback;
   EXPECT_CALL(mock_callback, Run(true));
-  controller.PickProfile(browser()->profile()->GetPath(),
+  controller.PickProfile(browser()->GetProfile()->GetPath(),
                          ProfilePicker::ProfilePickingArgs(),
                          mock_callback.Get());
 }

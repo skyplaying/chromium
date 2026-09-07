@@ -16,8 +16,8 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
-#include "chrome/browser/safe_browsing/cloud_content_scanning/multipart_uploader.h"
 #include "components/enterprise/connectors/core/cloud_content_scanning/common.h"
+#include "components/enterprise/connectors/core/cloud_content_scanning/multipart_uploader.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
@@ -25,6 +25,7 @@
 #include "content/public/test/test_utils.h"
 #include "net/http/http_status_code.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/test/test_shared_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -32,6 +33,7 @@ namespace safe_browsing {
 
 using ::enterprise_connectors::ConnectorUploadRequest;
 using ::enterprise_connectors::ConnectorUploadRequestFactory;
+using ::enterprise_connectors::MultipartUploadRequest;
 
 namespace {
 
@@ -72,7 +74,8 @@ FakeUploader::FakeUploader(
                              false,
                              histogram_suffix,
                              traffic_annotation,
-                             base::DoNothing()),
+                             base::DoNothing(),
+                             content::GetUIThreadTaskRunner({})),
       base_url_(base_url),
       metadata_(metadata),
       file_path_(file_path),

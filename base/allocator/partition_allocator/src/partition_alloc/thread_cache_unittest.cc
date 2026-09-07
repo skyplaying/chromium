@@ -2,25 +2,26 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "partition_alloc/thread_cache.h"
-
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <vector>
 
 #include "partition_alloc/build_config.h"
 #include "partition_alloc/buildflags.h"
 #include "partition_alloc/extended_api.h"
+#include "partition_alloc/internal/partition_root_internal.h"
+#include "partition_alloc/internal/thread_cache_internal.h"
 #include "partition_alloc/internal_allocator.h"
 #include "partition_alloc/partition_address_space.h"
 #include "partition_alloc/partition_alloc_base/compiler_specific.h"
+#include "partition_alloc/partition_alloc_base/containers/span.h"
 #include "partition_alloc/partition_alloc_base/thread_annotations.h"
 #include "partition_alloc/partition_alloc_base/threading/platform_thread_for_testing.h"
 #include "partition_alloc/partition_alloc_config.h"
 #include "partition_alloc/partition_alloc_for_testing.h"
 #include "partition_alloc/partition_freelist_entry.h"
 #include "partition_alloc/partition_lock.h"
-#include "partition_alloc/partition_root.h"
 #include "partition_alloc/tagging.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -28,12 +29,12 @@
 // cannot test the thread cache.
 //
 // Finally, the thread cache is not supported on all platforms.
-#if !defined(MEMORY_TOOL_REPLACES_ALLOCATOR) && \
+#if !PA_BUILDFLAG(MEMORY_TOOL_REPLACES_ALLOCATOR) && \
     PA_CONFIG(THREAD_CACHE_SUPPORTED)
 
-namespace partition_alloc {
+namespace partition_alloc::internal {
 
-namespace internal::base {
+namespace base {
 
 // For gtest-printers. This `operator<<` makes failures of EXPECT-s, which
 // compare TimeDelta values, human-readable.
@@ -46,7 +47,7 @@ std::ostream& operator<<(std::ostream& os, TimeDelta time_delta) {
   return os << time_delta.InSecondsF() << " s";
 }
 
-}  // namespace internal::base
+}  // namespace base
 
 using BucketDistribution = PartitionRoot::BucketDistribution;
 
@@ -62,7 +63,8 @@ namespace {
 
 constexpr size_t kSmallSize = 33;  // Must be large enough to fit extras.
 constexpr size_t kDefaultCountForSmallBucket =
-    ThreadCache::kSmallBucketBaseCount * ThreadCache::kDefaultMultiplier;
+    ThreadCache::kSmallBucketBaseCount *
+    partition_alloc::ThreadCache::kDefaultMultiplier;
 constexpr size_t kFillCountForSmallBucket =
     kDefaultCountForSmallBucket / ThreadCache::kBatchFillRatio;
 
@@ -86,14 +88,15 @@ class DeltaCounter {
 };
 
 // Forbid extras, since they make finding out which bucket is used harder.
-std::unique_ptr<PartitionAllocatorForTesting> CreateAllocator() {
+std::unique_ptr<partition_alloc::PartitionAllocatorForTesting>
+CreateAllocator() {
   PartitionOptions opts;
 #if !PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
   opts.thread_cache = PartitionOptions::kEnabled;
   opts.thread_cache_index = internal::kDefaultRootThreadCacheIndex;
 #endif  // PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
-  std::unique_ptr<PartitionAllocatorForTesting> allocator =
-      std::make_unique<PartitionAllocatorForTesting>(opts);
+  std::unique_ptr<partition_alloc::PartitionAllocatorForTesting> allocator =
+      std::make_unique<partition_alloc::PartitionAllocatorForTesting>(opts);
   allocator->root()->UncapEmptySlotSpanMemoryForTesting();
 
   return allocator;
@@ -128,7 +131,7 @@ class PartitionAllocThreadCacheTest
     }
 
     ThreadCacheRegistry::Instance().SetThreadCacheMultiplier(
-        ThreadCache::kDefaultMultiplier);
+        partition_alloc::ThreadCache::kDefaultMultiplier);
     ThreadCache::SetLargestCachedSize(ThreadCache::kLargeSizeThreshold);
 
     // Make sure that enough slot spans have been touched, otherwise cache fill
@@ -201,7 +204,7 @@ class PartitionAllocThreadCacheTest
               target_cached_memory);
   }
 
-  std::unique_ptr<PartitionAllocatorForTesting> allocator_;
+  std::unique_ptr<partition_alloc::PartitionAllocatorForTesting> allocator_;
   internal::ThreadCacheProcessScopeForTesting scope_;
 };
 
@@ -298,7 +301,7 @@ TEST_P(PartitionAllocThreadCacheTest, Purge) {
 
 TEST_P(PartitionAllocThreadCacheTest, NoCrossPartitionCache) {
   PartitionOptions opts;
-  PartitionAllocatorForTesting allocator(opts);
+  partition_alloc::PartitionAllocatorForTesting allocator(opts);
 
   size_t bucket_index = FillThreadCacheAndReturnIndex(kSmallSize);
   void* ptr = allocator.root()->Alloc(
@@ -976,7 +979,7 @@ TEST_P(PartitionAllocThreadCacheTest, DynamicCountPerBucket) {
             tcache->bucket_for_testing(bucket_index).count);
 
   ThreadCacheRegistry::Instance().SetThreadCacheMultiplier(
-      ThreadCache::kDefaultMultiplier / 2);
+      partition_alloc::ThreadCache::kDefaultMultiplier / 2);
   // No immediate batch deallocation.
   EXPECT_EQ(kDefaultCountForMediumBucket,
             tcache->bucket_for_testing(bucket_index).count);
@@ -998,7 +1001,7 @@ TEST_P(PartitionAllocThreadCacheTest, DynamicCountPerBucket) {
 
   // Limit can be raised.
   ThreadCacheRegistry::Instance().SetThreadCacheMultiplier(
-      ThreadCache::kDefaultMultiplier * 2);
+      partition_alloc::ThreadCache::kDefaultMultiplier * 2);
   FillThreadCacheAndReturnIndex(kMediumSize, 1000);
   EXPECT_GT(tcache->bucket_for_testing(bucket_index).count,
             kDefaultCountForMediumBucket / 2);
@@ -1008,7 +1011,7 @@ TEST_P(PartitionAllocThreadCacheTest, DynamicCountPerBucketClamping) {
   auto* tcache = root()->thread_cache_for_testing();
 
   ThreadCacheRegistry::Instance().SetThreadCacheMultiplier(
-      ThreadCache::kDefaultMultiplier / 1000.);
+      partition_alloc::ThreadCache::kDefaultMultiplier / 1000.);
   for (size_t i = 0; i < ThreadCache::kBucketCount; i++) {
     // Invalid bucket.
     if (!tcache->bucket_for_testing(i).limit.load(std::memory_order_relaxed)) {
@@ -1022,7 +1025,7 @@ TEST_P(PartitionAllocThreadCacheTest, DynamicCountPerBucketClamping) {
   }
 
   ThreadCacheRegistry::Instance().SetThreadCacheMultiplier(
-      ThreadCache::kDefaultMultiplier * 1000.);
+      partition_alloc::ThreadCache::kDefaultMultiplier * 1000.);
   for (size_t i = 0; i < ThreadCache::kBucketCount; i++) {
     // Invalid bucket.
     if (!tcache->bucket_for_testing(i).limit.load(std::memory_order_relaxed)) {
@@ -1097,7 +1100,7 @@ TEST_P(PartitionAllocThreadCacheTest, DynamicCountPerBucketMultipleThreads) {
   // Change the ratio before starting the threads, checking that it will applied
   // to newly-created threads.
   ThreadCacheRegistry::Instance().SetThreadCacheMultiplier(
-      ThreadCache::kDefaultMultiplier + 1);
+      partition_alloc::ThreadCache::kDefaultMultiplier + 1);
 
   ThreadDelegateForDynamicCountPerBucketMultipleThreads delegate(
       root(), other_thread_started, threshold_changed, bucket_index,
@@ -1152,6 +1155,79 @@ TEST_P(PartitionAllocThreadCacheTest, DynamicSizeThreshold) {
   ThreadCache::SetLargestCachedSize(too_large);
   FillThreadCacheAndReturnIndex(too_large);
   EXPECT_EQ(3u, alloc_miss_too_large_counter.Delta());
+}
+
+namespace {
+
+class ThreadDelegateForDynamicSizeThresholdMultipleThreads
+    : public internal::base::PlatformThreadForTesting::Delegate {
+ public:
+  ThreadDelegateForDynamicSizeThresholdMultipleThreads(
+      PartitionRoot* root,
+      std::atomic<bool>& other_thread_started,
+      std::atomic<bool>& threshold_changed,
+      BucketDistribution bucket_distribution)
+      : root_(root),
+        other_thread_started_(other_thread_started),
+        threshold_changed_(threshold_changed),
+        bucket_distribution_(bucket_distribution) {}
+
+  void ThreadMain() override {
+    FillThreadCacheAndReturnIndex(
+        root_, ThreadCache::kDefaultSizeThreshold, bucket_distribution_);
+    auto* this_thread_tcache = root_->thread_cache_for_testing();
+    EXPECT_TRUE(this_thread_tcache);
+
+    DeltaCounter alloc_miss_too_large_counter{
+        this_thread_tcache->stats_for_testing().alloc_miss_too_large};
+
+    // Too large to be cached with default threshold.
+    FillThreadCacheAndReturnIndex(
+        root_, ThreadCache::kDefaultSizeThreshold + 1, bucket_distribution_);
+    EXPECT_EQ(1u, alloc_miss_too_large_counter.Delta());
+
+    other_thread_started_.store(true, std::memory_order_release);
+    while (!threshold_changed_.load(std::memory_order_acquire)) {
+    }
+
+    // Now large threshold is set, so it should be cached without new miss.
+    FillThreadCacheAndReturnIndex(
+        root_, ThreadCache::kDefaultSizeThreshold + 1, bucket_distribution_);
+    EXPECT_EQ(1u, alloc_miss_too_large_counter.Delta());
+  }
+
+ private:
+  PartitionRoot* root_ = nullptr;
+  std::atomic<bool>& other_thread_started_;
+  std::atomic<bool>& threshold_changed_;
+  BucketDistribution bucket_distribution_;
+};
+
+}  // namespace
+
+TEST_P(PartitionAllocThreadCacheTest, DynamicSizeThresholdMultipleThreads) {
+  std::atomic<bool> other_thread_started{false};
+  std::atomic<bool> threshold_changed{false};
+
+  ThreadCache::SetLargestCachedSize(ThreadCache::kDefaultSizeThreshold);
+
+  ThreadDelegateForDynamicSizeThresholdMultipleThreads delegate(
+      root(), other_thread_started, threshold_changed,
+      GetParam().bucket_distribution);
+
+  internal::base::PlatformThreadHandle thread_handle;
+  internal::base::PlatformThreadForTesting::Create(0, &delegate,
+                                                   &thread_handle);
+
+  while (!other_thread_started.load(std::memory_order_acquire)) {
+  }
+
+  ThreadCache::SetLargestCachedSize(ThreadCache::kLargeSizeThreshold);
+  threshold_changed.store(true, std::memory_order_release);
+
+  internal::base::PlatformThreadForTesting::Join(thread_handle);
+
+  ThreadCache::SetLargestCachedSize(ThreadCache::kDefaultSizeThreshold);
 }
 
 // Disabled due to flakiness: crbug.com/1287811
@@ -1212,7 +1288,7 @@ TEST_P(PartitionAllocThreadCacheTest, ClearFromTail) {
 }
 
 TEST_P(PartitionAllocThreadCacheTest, Bookkeeping) {
-  void* arr[kFillCountForMediumBucket] = {};
+  std::array<void*, kFillCountForMediumBucket> arr = {};
   auto* tcache = root()->thread_cache_for_testing();
 
   root()->PurgeMemory(PurgeFlags::kDecommitEmptySlotSpans |
@@ -1249,7 +1325,7 @@ TEST_P(PartitionAllocThreadCacheTest, Bookkeeping) {
 
   // These allocations all come from the thread-cache.
   for (size_t i = 0; i < kFillCountForMediumBucket; i++) {
-    PA_UNSAFE_TODO(arr[i]) =
+    arr[i] =
         root()->Alloc(root()->AdjustSizeForExtrasSubtract(kMediumSize), "");
     EXPECT_EQ(expected_committed_size, root()->total_size_of_committed_pages_);
     EXPECT_EQ(expected_committed_size, root()->max_size_of_committed_pages_);
@@ -1339,12 +1415,18 @@ TEST_P(PartitionAllocThreadCacheTest, AllocationRecordingAligned) {
   // - Direct-mapped with large alignment
   size_t alloc_count = 0;
   size_t total_size = 0;
-  size_t size_alignments[][2] = {{128, 4},
-                                 {128, 128},
-                                 {1024, 128},
-                                 {128, 1024},
-                                 {128, 2 * internal::PartitionPageSize()},
-                                 {(4 << 20) + 1, 1 << 19}};
+  struct SizeAndAlignment {
+    size_t requested_size;
+    size_t alignment;
+  };
+  const auto size_alignments = std::to_array<SizeAndAlignment>({
+      {.requested_size = 128, .alignment = 4},
+      {.requested_size = 128, .alignment = 128},
+      {.requested_size = 1024, .alignment = 128},
+      {.requested_size = 128, .alignment = 1024},
+      {.requested_size = 128, .alignment = 2 * internal::PartitionPageSize()},
+      {.requested_size = (4 << 20) + 1, .alignment = 1 << 19},
+  });
   for (auto [requested_size, alignment] : size_alignments) {
     void* ptr = root()->AlignedAlloc(alignment, requested_size);
     ASSERT_TRUE(ptr);
@@ -1377,13 +1459,18 @@ TEST_P(PartitionAllocThreadCacheTest, AllocationRecordingRealloc) {
   size_t dealloc_count = 0;
   size_t total_alloc_size = 0;
   size_t total_dealloc_size = 0;
-  size_t size_new_sizes[][2] = {
-      {16, 15},
-      {16, 64},
-      {16, internal::PartitionPageSize() + 1},
-      {4 << 20, 8 << 20},
-      {8 << 20, 4 << 20},
-      {(8 << 20) - internal::SystemPageSize(), 8 << 20}};
+  struct SizeAndNewSize {
+    size_t size;
+    size_t new_size;
+  };
+  const auto size_new_sizes = std::to_array<SizeAndNewSize>({
+      {.size = 16, .new_size = 15},
+      {.size = 16, .new_size = 64},
+      {.size = 16, .new_size = internal::PartitionPageSize() + 1},
+      {.size = 4 << 20, .new_size = 8 << 20},
+      {.size = 8 << 20, .new_size = 4 << 20},
+      {.size = (8 << 20) - internal::SystemPageSize(), .new_size = 8 << 20},
+  });
   for (auto [size, new_size] : size_new_sizes) {
     void* ptr = root()->Alloc(size);
     ASSERT_TRUE(ptr);
@@ -1420,7 +1507,7 @@ TEST_P(PartitionAllocThreadCacheTest, AllocationRecordingRealloc) {
             tcache->thread_alloc_stats().dealloc_total_size);
 }
 
-}  // namespace partition_alloc
+}  // namespace partition_alloc::internal
 
-#endif  // !defined(MEMORY_TOOL_REPLACES_ALLOCATOR) &&
+#endif  // !PA_BUILDFLAG(MEMORY_TOOL_REPLACES_ALLOCATOR) &&
         // PA_CONFIG(THREAD_CACHE_SUPPORTED)

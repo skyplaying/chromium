@@ -49,9 +49,6 @@ void FillScrollbarThemeParams(
   }
   params->jump_on_track_click =
       [defaults boolForKey:@"AppleScrollerPagingBehavior"];
-  params->preferred_scroller_style =
-      static_cast<blink::ScrollerStyle>([NSScroller preferredScrollerStyle]);
-
   id rubber_band_value = [defaults objectForKey:@"NSScrollViewRubberbanding"];
   params->scroll_view_rubber_banding =
       rubber_band_value ? [rubber_band_value boolValue] : YES;
@@ -175,17 +172,17 @@ SkColor NSColorToSkColor(NSColor* color) {
                   object:nil
       suspensionBehavior:NSNotificationSuspensionBehaviorDeliverImmediately];
 
+  NSNotificationCenter* center = [NSNotificationCenter defaultCenter];
+  [center
+      addObserver:self
+         selector:@selector(registeredFontsChanged:)
+             name:(NSString*)kCTFontManagerRegisteredFontsChangedNotification
+           object:nil];
+
   // In single-process mode, renderers will catch these notifications
   // themselves and listening for them here may trigger the DCHECK in Observe().
   if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kSingleProcess)) {
-    NSNotificationCenter* center = [NSNotificationCenter defaultCenter];
-
-    [center addObserver:self
-               selector:@selector(behaviorPrefsChanged:)
-                   name:NSPreferredScrollerStyleDidChangeNotification
-                 object:nil];
-
     [center addObserver:self
                selector:@selector(systemColorsChanged:)
                    name:NSSystemColorsDidChangeNotification
@@ -197,6 +194,7 @@ SkColor NSColorToSkColor(NSColor* color) {
 
 - (void)dealloc {
   [NSDistributedNotificationCenter.defaultCenter removeObserver:self];
+  [NSNotificationCenter.defaultCenter removeObserver:self];
 }
 
 - (void)appearancePrefsChanged:(NSNotification*)notification {
@@ -205,6 +203,13 @@ SkColor NSColorToSkColor(NSColor* color) {
 
 - (void)behaviorPrefsChanged:(NSNotification*)notification {
   [self notifyPrefsChangedWithRedraw:NO];
+}
+
+- (void)registeredFontsChanged:(NSNotification*)notification {
+  for (RenderProcessHost::iterator it(RenderProcessHost::AllHostsIterator());
+       !it.IsAtEnd(); it.Advance()) {
+    it.GetCurrentValue()->GetRendererInterface()->OnRegisteredFontsChanged();
+  }
 }
 
 - (void)systemColorsChanged:(NSNotification*)notification {

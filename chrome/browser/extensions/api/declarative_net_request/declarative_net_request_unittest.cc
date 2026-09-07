@@ -31,6 +31,7 @@
 #include "build/build_config.h"
 #include "chrome/browser/extensions/api/declarative_net_request/dnr_test_base.h"
 #include "chrome/browser/extensions/chrome_test_extension_loader.h"
+#include "chrome/browser/extensions/extension_garbage_collector.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_utils.h"
 #include "extensions/browser/api/declarative_net_request/composite_matcher.h"
@@ -51,6 +52,7 @@
 #include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/load_error_reporter.h"
 #include "extensions/browser/test_extension_registry_observer.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/api/declarative_net_request/constants.h"
 #include "extensions/common/api/declarative_net_request/test_utils.h"
 #include "extensions/common/error_utils.h"
@@ -58,6 +60,7 @@
 #include "extensions/common/file_util.h"
 #include "extensions/common/install_warning.h"
 #include "extensions/common/manifest_constants.h"
+#include "extensions/common/mojom/manifest.mojom-shared.h"
 #include "extensions/common/url_pattern.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -419,8 +422,9 @@ class DeclarativeNetRequestUnittest : public DNRTestBase {
 
     std::u16string error;
     std::vector<std::string> actual_ids;
-    for (const auto& val : result->GetList())
+    for (const auto& val : result->GetList()) {
       actual_ids.push_back(val.GetString());
+    }
 
     EXPECT_THAT(expected_ids, UnorderedElementsAreArray(actual_ids));
   }
@@ -546,8 +550,9 @@ class DeclarativeNetRequestUnittest : public DNRTestBase {
         helper.GetAllocatedGlobalRuleCount(extension_id, actual_rules_count);
 
     EXPECT_EQ(expected_rules_count.has_value(), has_allocated_rules_count);
-    if (expected_rules_count.has_value())
+    if (expected_rules_count.has_value()) {
       EXPECT_EQ(*expected_rules_count, actual_rules_count);
+    }
   }
 
   void VerifyGetAvailableStaticRuleCountFunction(
@@ -639,12 +644,13 @@ class SingleRulesetTest : public DeclarativeNetRequestUnittest {
   void LoadAndExpectSuccess(
       const std::optional<size_t>& expected_rules_count = std::nullopt) {
     size_t rules_count = 0;
-    if (expected_rules_count)
+    if (expected_rules_count) {
       rules_count = *expected_rules_count;
-    else if (rules_value_ && rules_value_->is_list())
+    } else if (rules_value_ && rules_value_->is_list()) {
       rules_count = rules_value_->GetList().size();
-    else
+    } else {
       rules_count = rules_list_.size();
+    }
 
     // We only index up to GetMaximumRulesPerRuleset() rules per ruleset.
     rules_count =
@@ -656,8 +662,9 @@ class SingleRulesetTest : public DeclarativeNetRequestUnittest {
  private:
   // DeclarativeNetRequestUnittest override:
   void WriteExtensionData() override {
-    if (!rules_value_)
+    if (!rules_value_) {
       rules_value_ = base::Value(ToListValue(rules_list_));
+    }
 
     WriteManifestAndRuleset(
         extension_dir(),
@@ -1749,10 +1756,12 @@ TEST_P(SingleRulesetTest, SharedDynamicAndSessionRegexRuleLimits) {
   // Add 50 session-scoped regex rules, along with 10 non-regex rules.
   std::vector<TestRule> session_rules;
   int rule_id = kMinValidID;
-  for (size_t i = 0; i < 50; ++i)
+  for (size_t i = 0; i < 50; ++i) {
     session_rules.push_back(CreateRegexRule(rule_id++));
-  for (size_t i = 0; i < 10; ++i)
+  }
+  for (size_t i = 0; i < 10; ++i) {
     session_rules.push_back(CreateGenericRule(rule_id++));
+  }
 
   ASSERT_NO_FATAL_FAILURE(
       RunUpdateRulesFunction(*extension(), /*rule_ids_to_remove=*/{},
@@ -1844,8 +1853,9 @@ class MultipleRulesetsTest : public DeclarativeNetRequestUnittest {
       rules.push_back(rule);
     }
 
-    for (size_t i = 0; i < num_regex_rules; ++i, ++id)
+    for (size_t i = 0; i < num_regex_rules; ++i, ++id) {
       rules.push_back(CreateRegexRule(id));
+    }
 
     return TestRulesetInfo(manifest_id_and_path, ToListValue(rules), enabled);
   }
@@ -1868,8 +1878,9 @@ class MultipleRulesetsTest : public DeclarativeNetRequestUnittest {
       count = std::min(count, static_rule_limit);
 
       rules_count += count;
-      if (info.enabled)
+      if (info.enabled) {
         rules_enabled_count += count;
+      }
     }
 
     DeclarativeNetRequestUnittest::LoadAndExpectSuccess(
@@ -1905,8 +1916,9 @@ TEST_P(MultipleRulesetsTest, ZeroRulesets) {
 TEST_P(MultipleRulesetsTest, EmptyRulesets) {
   size_t kNumRulesets = 7;
 
-  for (size_t i = 0; i < kNumRulesets; ++i)
+  for (size_t i = 0; i < kNumRulesets; ++i) {
     AddRuleset(CreateRuleset(base::NumberToString(i), 0, 0, true));
+  }
 
   LoadAndExpectSuccess();
 }
@@ -1977,8 +1989,9 @@ TEST_P(MultipleRulesetsTest, InstallWarnings) {
     std::vector<InstallWarning> warnings =
         GetFilteredInstallWarnings(*extension());
     std::vector<std::string> warning_strings;
-    for (const InstallWarning& warning : warnings)
+    for (const InstallWarning& warning : warnings) {
       warning_strings.push_back(warning.message);
+    }
 
     EXPECT_THAT(warning_strings, UnorderedElementsAreArray(expected_warnings));
   }
@@ -2103,8 +2116,9 @@ TEST_P(MultipleRulesetsTest,
     bool enabled = i < kMaxEnabledRulesetCount - 1;
     std::string id = base::StringPrintf("%d.json", i);
     ruleset_ids.push_back(id);
-    if (enabled)
+    if (enabled) {
       expected_enabled_ruleset_ids.push_back(id);
+    }
     AddRuleset(CreateRuleset(id, 1, 1, enabled));
   }
 
@@ -2640,7 +2654,7 @@ TEST_P(MultipleRulesetsTest,
   VerifyGetEnabledRulesetsFunction(*extension(), {kId2, kId3});
 
   // Ensure the set of enabled rulesets persists across extension reloads.
-  // Regression test for crbug.com/1346185.
+  // Regression test for crbug.com/40232393.
   const ExtensionId extension_id = extension()->id();
   registrar()->DisableExtension(extension_id,
                                 {disable_reason::DISABLE_USER_ACTION});
@@ -2659,7 +2673,7 @@ TEST_P(MultipleRulesetsTest,
 }
 
 // Tests attempting to disable rulesets when there are no rulesets active.
-// Regression test for https://crbug.com/1354385.
+// Regression test for https://crbug.com/40859034.
 TEST_P(MultipleRulesetsTest,
        UpdateAndGetEnabledRulesets_DisableRulesetsWhenEmptyEnabledRulesets) {
   AddRuleset(CreateRuleset(kId1, 90, 0, false));
@@ -3140,6 +3154,204 @@ TEST_P(MultipleRulesetsTest_Unpacked, UpdateAllocationOnReload) {
   // reloaded.
   EXPECT_EQ(50u, global_rules_tracker.GetAllocatedGlobalRuleCountForTesting());
   CheckExtensionAllocationInPrefs(extension_id, 50);
+}
+
+// Regression test for crbug.com/520262201: an unpacked extension whose source
+// directory is deleted while the browser is closed never loads on restart, so
+// its DNR global rule allocation leaks. Verifies that
+// ExtensionGarbageCollector reclaims it via the OnExtensionPrefsDeleted path.
+TEST_P(MultipleRulesetsTest_Unpacked,
+       OrphanedUnpackedExtensionAllocationReclaimed) {
+  const size_t kAllocation = 50;
+  AddRuleset(CreateRuleset(
+      kId1, GetStaticGuaranteedMinimumRuleCount() + kAllocation, 0, true));
+
+  RulesetManagerObserver ruleset_waiter(manager());
+  LoadAndExpectSuccess(GetStaticGuaranteedMinimumRuleCount() + kAllocation);
+  ruleset_waiter.WaitForExtensionsWithRulesetsCount(1);
+
+  const ExtensionId extension_id = extension()->id();
+  const base::FilePath source_dir = extension()->path();
+
+  GlobalRulesTracker& global_rules_tracker =
+      RulesMonitorService::Get(browser_context())->global_rules_tracker();
+
+  ASSERT_EQ(kAllocation,
+            global_rules_tracker.GetAllocatedGlobalRuleCountForTesting());
+  CheckExtensionAllocationInPrefs(extension_id, kAllocation);
+
+  const size_t total_limit =
+      global_rules_tracker.GetUnallocatedRuleCount() + kAllocation;
+
+  // Simulate orphan state: source dir gone, extension absent from registry,
+  // but prefs survived. RemoveEnabled (unlike uninstall) doesn't release the
+  // allocation, matching the never-loaded startup state.
+  ASSERT_TRUE(base::DeletePathRecursively(source_dir));
+  ASSERT_FALSE(base::PathExists(source_dir));
+  ASSERT_TRUE(registry()->RemoveEnabled(extension_id));
+  ASSERT_FALSE(registry()->GetInstalledExtension(extension_id));
+
+  // Can't use GetAllocatedGlobalRuleCountForTesting() here because it
+  // cross-checks against the registry (which no longer has this extension).
+  EXPECT_EQ(total_limit - kAllocation,
+            global_rules_tracker.GetUnallocatedRuleCount());
+  CheckExtensionAllocationInPrefs(extension_id, kAllocation);
+
+  ExtensionGarbageCollector::Get(browser_context())
+      ->GarbageCollectExtensionsForTest();
+  content::RunAllTasksUntilIdle();
+
+  // After garbage collection, the rule counter should have updated to remove
+  // the allocation for the no-longer-present extension.
+  EXPECT_EQ(total_limit, global_rules_tracker.GetUnallocatedRuleCount());
+  CheckExtensionAllocationInPrefs(extension_id, std::nullopt);
+}
+
+// Control: ensures garbage collection doesn't reclaim allocations from
+// extensions that are still installed (not orphaned).
+TEST_P(MultipleRulesetsTest_Unpacked,
+       LoadedUnpackedExtensionAllocationPreserved) {
+  const size_t kAllocation = 50;
+  AddRuleset(CreateRuleset(
+      kId1, GetStaticGuaranteedMinimumRuleCount() + kAllocation, 0, true));
+
+  RulesetManagerObserver ruleset_waiter(manager());
+  LoadAndExpectSuccess(GetStaticGuaranteedMinimumRuleCount() + kAllocation);
+  ruleset_waiter.WaitForExtensionsWithRulesetsCount(1);
+
+  const ExtensionId extension_id = extension()->id();
+  GlobalRulesTracker& global_rules_tracker =
+      RulesMonitorService::Get(browser_context())->global_rules_tracker();
+
+  ASSERT_EQ(kAllocation,
+            global_rules_tracker.GetAllocatedGlobalRuleCountForTesting());
+  CheckExtensionAllocationInPrefs(extension_id, kAllocation);
+
+  ExtensionGarbageCollector::Get(browser_context())
+      ->GarbageCollectExtensionsForTest();
+  content::RunAllTasksUntilIdle();
+
+  EXPECT_EQ(kAllocation,
+            global_rules_tracker.GetAllocatedGlobalRuleCountForTesting());
+  CheckExtensionAllocationInPrefs(extension_id, kAllocation);
+}
+
+// Regression test for crbug.com/520262201: orphan-reclaim must NOT touch
+// kCommandLine extensions. They are excluded from budget seeding at startup
+// (GlobalRulesTracker::CalculateInitialAllocatedGlobalRuleCount), so clearing
+// a stale pref would underflow allocated_global_rule_count_.
+TEST_P(MultipleRulesetsTest_Unpacked,
+       OrphanedCommandLineExtensionAllocationNotReclaimed) {
+  const size_t kAllocation = 50;
+  AddRuleset(CreateRuleset(
+      kId1, GetStaticGuaranteedMinimumRuleCount() + kAllocation, 0, true));
+
+  RulesetManagerObserver ruleset_waiter(manager());
+  LoadAndExpectSuccess(GetStaticGuaranteedMinimumRuleCount() + kAllocation);
+  ruleset_waiter.WaitForExtensionsWithRulesetsCount(1);
+
+  const ExtensionId extension_id = extension()->id();
+  const base::FilePath source_dir = extension()->path();
+
+  GlobalRulesTracker& global_rules_tracker =
+      RulesMonitorService::Get(browser_context())->global_rules_tracker();
+  ASSERT_EQ(kAllocation,
+            global_rules_tracker.GetAllocatedGlobalRuleCountForTesting());
+  CheckExtensionAllocationInPrefs(extension_id, kAllocation);
+
+  // Fake a kCommandLine install so GC skips this extension.
+  extension_prefs()->SetInstallLocation(extension_id,
+                                        mojom::ManifestLocation::kCommandLine);
+
+  ASSERT_TRUE(base::DeletePathRecursively(source_dir));
+  ASSERT_FALSE(base::PathExists(source_dir));
+  ASSERT_TRUE(registry()->RemoveEnabled(extension_id));
+  ASSERT_FALSE(registry()->GetInstalledExtension(extension_id));
+
+  ExtensionGarbageCollector::Get(browser_context())
+      ->GarbageCollectExtensionsForTest();
+  content::RunAllTasksUntilIdle();
+
+  CheckExtensionAllocationInPrefs(extension_id, kAllocation);
+}
+
+// Regression test for crbug.com/520262201: UNINSTALL_REASON_REINSTALL must
+// preserve the allocation. Without `extensions_handled_by_uninstall_`, the
+// synchronous OnExtensionPrefsDeleted would wrongly release it.
+TEST_P(MultipleRulesetsTest_Unpacked, ReinstallPreservesGlobalRuleAllocation) {
+  const size_t kAllocation = 50;
+  AddRuleset(CreateRuleset(
+      kId1, GetStaticGuaranteedMinimumRuleCount() + kAllocation, 0, true));
+
+  RulesetManagerObserver ruleset_waiter(manager());
+  LoadAndExpectSuccess(GetStaticGuaranteedMinimumRuleCount() + kAllocation);
+  ruleset_waiter.WaitForExtensionsWithRulesetsCount(1);
+
+  const ExtensionId extension_id = extension()->id();
+  GlobalRulesTracker& global_rules_tracker =
+      RulesMonitorService::Get(browser_context())->global_rules_tracker();
+
+  ASSERT_EQ(kAllocation,
+            global_rules_tracker.GetAllocatedGlobalRuleCountForTesting());
+  CheckExtensionAllocationInPrefs(extension_id, kAllocation);
+
+  const size_t total_limit =
+      global_rules_tracker.GetUnallocatedRuleCount() + kAllocation;
+
+  ASSERT_TRUE(registrar()->UninstallExtension(
+      extension_id, UNINSTALL_REASON_REINSTALL, /*error=*/nullptr));
+  content::RunAllTasksUntilIdle();
+
+  // Allocation still held: reinstall path preserved it.
+  EXPECT_EQ(total_limit - kAllocation,
+            global_rules_tracker.GetUnallocatedRuleCount());
+}
+
+// Regression test for crbug.com/40807910. Stale dynamic rules left on disk from
+// a prior installation should be cleaned up when the extension is loaded, so
+// that new dynamic rules reusing the same IDs can be added.
+TEST_P(SingleRulesetTest, StaleDynamicRulesCleanedUpOnLoad) {
+  RulesetManagerObserver ruleset_waiter(manager());
+
+  AddRule(CreateGenericRule());
+  LoadAndExpectSuccess();
+  ruleset_waiter.WaitForExtensionsWithRulesetsCount(1);
+
+  // Simulate stale dynamic rules left on disk from a previous installation.
+  FileBackedRulesetSource dynamic_source =
+      FileBackedRulesetSource::CreateDynamic(browser_context(),
+                                             extension()->id());
+  base::CreateDirectory(dynamic_source.json_path().DirName());
+  const std::string stale_rules =
+      R"([{"id":1,"priority":1,"action":{"type":"block"},)"
+      R"("condition":{"urlFilter":"stale"}}])";
+  ASSERT_TRUE(base::WriteFile(dynamic_source.json_path(), stale_rules));
+
+  // No stored dynamic ruleset checksum in prefs means no established dynamic
+  // ruleset, so loading the extension should delete the stale files.
+  int dynamic_checksum = 0;
+  ASSERT_FALSE(
+      PrefsHelper(*ExtensionPrefs::Get(browser_context()))
+          .GetDynamicRulesetChecksum(extension()->id(), dynamic_checksum));
+
+  // Reloading the extension (disable then enable) triggers the cleanup in
+  // OnExtensionLoaded().
+  registrar()->DisableExtension(extension()->id(),
+                                {disable_reason::DISABLE_USER_ACTION});
+  ruleset_waiter.WaitForExtensionsWithRulesetsCount(0);
+  registrar()->EnableExtension(extension()->id());
+  ruleset_waiter.WaitForExtensionsWithRulesetsCount(1);
+
+  // Adding a dynamic rule reusing the stale ID should succeed.
+  TestRule dynamic_rule = CreateGenericRule();
+  dynamic_rule.id = 1;
+  dynamic_rule.condition->url_filter = std::string("new_filter");
+  ASSERT_NO_FATAL_FAILURE(
+      RunUpdateRulesFunction(*extension(), {} /* rule_ids_to_remove */,
+                             {dynamic_rule}, RulesetScope::kDynamic));
+
+  VerifyPublicRulesetIDs(*extension(),
+                         {kDefaultRulesetID, dnr_api::DYNAMIC_RULESET_ID});
 }
 
 INSTANTIATE_TEST_SUITE_P(All,

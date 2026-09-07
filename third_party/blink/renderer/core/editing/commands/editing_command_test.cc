@@ -45,7 +45,7 @@ class EditingCommandTest : public EditingTestBase {};
 TEST_F(EditingCommandTest, EditorCommandOrder) {
   for (size_t i = 1; i < std::size(kCommandNameEntries); ++i) {
     EXPECT_GT(0,
-              CodeUnitCompareIgnoringASCIICase(kCommandNameEntries[i - 1].name,
+              CodeUnitCompareIgnoringAsciiCase(kCommandNameEntries[i - 1].name,
                                                kCommandNameEntries[i].name))
         << "EDITOR_COMMAND_MAP must be case-folding ordered. Incorrect index:"
         << i;
@@ -65,11 +65,11 @@ TEST_F(EditingCommandTest, CreateCommandFromStringCaseFolding) {
   Editor& dummy_editor = GetDocument().GetFrame()->GetEditor();
   for (const auto& entry : kCommandNameEntries) {
     const EditorCommand lower_name_command =
-        dummy_editor.CreateCommand(String(entry.name).LowerASCII());
+        dummy_editor.CreateCommand(String(entry.name).ToAsciiLower());
     EXPECT_EQ(static_cast<int>(entry.type), lower_name_command.IdForHistogram())
         << entry.name;
     const EditorCommand upper_name_command =
-        dummy_editor.CreateCommand(String(entry.name).UpperASCII());
+        dummy_editor.CreateCommand(String(entry.name).ToAsciiUpper());
     EXPECT_EQ(static_cast<int>(entry.type), upper_name_command.IdForHistogram())
         << entry.name;
   }
@@ -164,6 +164,102 @@ TEST_F(EditingCommandTest, DeleteSoftLineBackwardTargetRanges) {
   EXPECT_EQ("123", range.startContainer()->textContent());
   EXPECT_EQ(0u, range.startOffset());
   EXPECT_EQ(range.startContainer(), range.endContainer());
+  EXPECT_EQ(3u, range.endOffset());
+}
+
+// http://crbug.com/539754135
+TEST_F(EditingCommandTest, DeleteBackwardTargetRangesInGraphemeCluster) {
+  Editor& editor = GetFrame().GetEditor();
+  const EditorCommand command = editor.CreateCommand("DeleteBackward");
+
+  // The Thai word "ที่" is a single grapheme cluster made of
+  // three code points, but Backspace deletes only its last code point.
+  Selection().SetSelection(
+      SetSelectionTextToBody(
+          "<div contenteditable>&#x0E17;&#x0E35;&#x0E48;|</div>"),
+      SetSelectionOptions());
+  Element* div = QuerySelector("div");
+  GetDocument().SetFocusedElement(
+      div, FocusParams(SelectionBehaviorOnFocus::kNone,
+                       mojom::blink::FocusType::kNone, nullptr));
+  const GCedStaticRangeVector* ranges = command.GetTargetRanges();
+  ASSERT_EQ(1u, ranges->size());
+  const StaticRange& range = *ranges->at(0);
+  EXPECT_EQ(div->firstChild(), range.startContainer());
+  EXPECT_EQ(2u, range.startOffset());
+  EXPECT_EQ(div->firstChild(), range.endContainer());
+  EXPECT_EQ(3u, range.endOffset());
+}
+
+// http://crbug.com/539754135
+TEST_F(EditingCommandTest, DeleteBackwardTargetRangesInEmojiSequence) {
+  Editor& editor = GetFrame().GetEditor();
+  const EditorCommand command = editor.CreateCommand("DeleteBackward");
+
+  // Unlike a grapheme cluster of combining characters, Backspace deletes the
+  // whole regional indicator pair "\U0001F1FA\U0001F1F8", so the target ranges
+  // should cover all of its four code units.
+  Selection().SetSelection(
+      SetSelectionTextToBody("<div contenteditable>&#x1F1FA;&#x1F1F8;|</div>"),
+      SetSelectionOptions());
+  Element* div = QuerySelector("div");
+  GetDocument().SetFocusedElement(
+      div, FocusParams(SelectionBehaviorOnFocus::kNone,
+                       mojom::blink::FocusType::kNone, nullptr));
+  const GCedStaticRangeVector* ranges = command.GetTargetRanges();
+  ASSERT_EQ(1u, ranges->size());
+  const StaticRange& range = *ranges->at(0);
+  EXPECT_EQ(div->firstChild(), range.startContainer());
+  EXPECT_EQ(0u, range.startOffset());
+  EXPECT_EQ(div->firstChild(), range.endContainer());
+  EXPECT_EQ(4u, range.endOffset());
+}
+
+// http://crbug.com/539754135
+TEST_F(EditingCommandTest, DeleteBackwardTargetRangesWithRangeSelection) {
+  Editor& editor = GetFrame().GetEditor();
+  const EditorCommand command = editor.CreateCommand("DeleteBackward");
+
+  // A non-collapsed selection is deleted as is, even when it ends in the middle
+  // of a grapheme cluster.
+  Selection().SetSelection(
+      SetSelectionTextToBody(
+          "<div contenteditable>^&#x0E17;&#x0E35;&#x0E48;|</div>"),
+      SetSelectionOptions());
+  Element* div = QuerySelector("div");
+  GetDocument().SetFocusedElement(
+      div, FocusParams(SelectionBehaviorOnFocus::kNone,
+                       mojom::blink::FocusType::kNone, nullptr));
+  const GCedStaticRangeVector* ranges = command.GetTargetRanges();
+  ASSERT_EQ(1u, ranges->size());
+  const StaticRange& range = *ranges->at(0);
+  EXPECT_EQ(div->firstChild(), range.startContainer());
+  EXPECT_EQ(0u, range.startOffset());
+  EXPECT_EQ(div->firstChild(), range.endContainer());
+  EXPECT_EQ(3u, range.endOffset());
+}
+
+// http://crbug.com/539754135
+TEST_F(EditingCommandTest, DeleteForwardTargetRangesInGraphemeCluster) {
+  Editor& editor = GetFrame().GetEditor();
+  const EditorCommand command = editor.CreateCommand("DeleteForward");
+
+  // Forward deletion removes the whole grapheme cluster, hence the target
+  // ranges should cover all of its code points.
+  Selection().SetSelection(
+      SetSelectionTextToBody(
+          "<div contenteditable>|&#x0E17;&#x0E35;&#x0E48;</div>"),
+      SetSelectionOptions());
+  Element* div = QuerySelector("div");
+  GetDocument().SetFocusedElement(
+      div, FocusParams(SelectionBehaviorOnFocus::kNone,
+                       mojom::blink::FocusType::kNone, nullptr));
+  const GCedStaticRangeVector* ranges = command.GetTargetRanges();
+  ASSERT_EQ(1u, ranges->size());
+  const StaticRange& range = *ranges->at(0);
+  EXPECT_EQ(div->firstChild(), range.startContainer());
+  EXPECT_EQ(0u, range.startOffset());
+  EXPECT_EQ(div->firstChild(), range.endContainer());
   EXPECT_EQ(3u, range.endOffset());
 }
 

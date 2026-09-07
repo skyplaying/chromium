@@ -18,8 +18,8 @@
 #include "base/containers/flat_set.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/memory/singleton.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/scoped_observation_traits.h"
@@ -43,10 +43,23 @@
 #include "ui/base/ime/ash/input_method_manager.h"
 
 class AccountId;
+class ApplicationLocaleStorage;
 class GURL;
 class PrefRegistrySimple;
 class PrefService;
 class Profile;
+
+namespace component_updater {
+class ComponentManagerAsh;
+}  // namespace component_updater
+
+namespace network {
+class SharedURLLoaderFactory;
+}  // namespace network
+
+namespace policy {
+class BrowserPolicyConnectorAsh;
+}  // namespace policy
 
 namespace user_manager {
 class User;
@@ -60,6 +73,7 @@ class OnboardingUserActivityCounter;
 class AuthenticatorBuilder;
 class LegacyTokenHandleFetcher;
 class EolNotification;
+class FrozenUpdateNotification;
 class InputEventsBlocker;
 class TokenHandleService;
 
@@ -78,15 +92,6 @@ class UserSessionManagerDelegate {
 
  protected:
   virtual ~UserSessionManagerDelegate() = default;
-};
-
-class UserSessionStateObserver : public base::CheckedObserver {
- public:
-  // Called when UserManager finishes restoring user sessions after crash.
-  virtual void PendingUserSessionsRestoreFinished() {}
-
- protected:
-  ~UserSessionStateObserver() override = default;
 };
 
 class UserAuthenticatorObserver : public base::CheckedObserver {
@@ -158,8 +163,20 @@ class UserSessionManager
   // Returns UserSessionManager instance.
   static UserSessionManager* GetInstance();
 
+  // `local_state`, `application_locale_storage` and
+  // `browser_policy_connector_ash` must be non-null and must outlive `this`.
+  // `shared_url_loader_factory` must be non-null.
+  // `component_manager_ash` may be null in unit tests.
+  UserSessionManager(
+      PrefService* local_state,
+      ApplicationLocaleStorage* application_locale_storage,
+      scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
+      policy::BrowserPolicyConnectorAsh* browser_policy_connector_ash,
+      scoped_refptr<component_updater::ComponentManagerAsh>
+          component_manager_ash);
   UserSessionManager(const UserSessionManager&) = delete;
   UserSessionManager& operator=(const UserSessionManager&) = delete;
+  ~UserSessionManager() override;
 
   // Registers session related preferences.
   static void RegisterPrefs(PrefRegistrySimple* registry);
@@ -259,9 +276,6 @@ class UserSessionManager
   bool RestartToApplyPerSessionFlagsIfNeed(Profile* profile,
                                            bool early_restart);
 
-  void AddSessionStateObserver(ash::UserSessionStateObserver* observer);
-  void RemoveSessionStateObserver(ash::UserSessionStateObserver* observer);
-
   void AddUserAuthenticatorObserver(UserAuthenticatorObserver* observer);
   void RemoveUserAuthenticatorObserver(UserAuthenticatorObserver* observer);
 
@@ -274,6 +288,10 @@ class UserSessionManager
   // Check to see if given profile should show EndOfLife Notification
   // and show the message accordingly.
   void CheckEolInfo(Profile* profile);
+
+  // Check to see if given user should show Frozen Update Notification
+  // and show the message accordingly.
+  void CheckFrozenUpdateInfo(user_manager::User* user);
 
   // Removes a profile from the per-user input methods states map.
   void RemoveProfileForTesting(Profile* profile);
@@ -333,18 +351,23 @@ class UserSessionManager
   void SetEolNotificationHandlerFactoryForTesting(
       const EolNotificationHandlerFactoryCallback& eol_notification_factory);
 
-  base::WeakPtr<UserSessionManager> GetUserSessionManagerAsWeakPtr();
+  using FrozenUpdateNotificationHandlerFactoryCallback =
+      base::RepeatingCallback<std::unique_ptr<FrozenUpdateNotification>(
+          PrefService& prefs)>;
+  void SetFrozenUpdateNotificationHandlerFactoryForTesting(
+      const FrozenUpdateNotificationHandlerFactoryCallback&
+          frozen_update_notification_factory);
+  // Sets a testing callback which invoked when session restore is finished.
+  // The caller should check `UserSessionsRestored()` is false beforehand.
+  void SetOnPendingUserSessionRestoreFinishedForTesting(
+      base::OnceClosure callback);
 
- protected:
-  // Protected for testability reasons.
-  UserSessionManager();
-  ~UserSessionManager() override;
+  base::WeakPtr<UserSessionManager> GetUserSessionManagerAsWeakPtr();
 
  private:
   // Observes the Device Account's LST and informs UserSessionManager about it.
   class DeviceAccountGaiaTokenObserver;
   friend class test::UserSessionManagerTestApi;
-  friend struct base::DefaultSingletonTraits<UserSessionManager>;
 
   using SigninSessionRestoreStateSet = std::set<AccountId>;
 
@@ -418,6 +441,10 @@ class UserSessionManager
   // Finalized profile preparation.
   void FinalizePrepareProfile(Profile* profile);
 
+  // Checks and enforces the correct primary account consent level based on the
+  // active feature flags.
+  void MaybeMigrateConsentLevelToSync(Profile* profile);
+
   // Launch browser or proceed to alternative login flow. Should be called after
   // profile is ready.
   void InitializeBrowser(Profile* profile);
@@ -488,7 +515,7 @@ class UserSessionManager
   void UpdateTokenHandle(Profile* const profile, const AccountId& account_id);
 
   // Test API methods.
-  void InjectAuthenticatorBuilder(
+  void InjectAuthenticatorBuilderForTesting(
       std::unique_ptr<AuthenticatorBuilder> builder);
 
   // Controls whether browser instance should be launched after sign in
@@ -527,6 +554,15 @@ class UserSessionManager
   void FetchTokenHandleLegacy(Profile* profile, const user_manager::User* user);
   void FetchTokenHandle(Profile* profile, const user_manager::User* user);
 
+  const raw_ref<PrefService> local_state_;
+  const raw_ref<ApplicationLocaleStorage> application_locale_storage_;
+  const scoped_refptr<network::SharedURLLoaderFactory>
+      shared_url_loader_factory_;
+  const raw_ref<policy::BrowserPolicyConnectorAsh>
+      browser_policy_connector_ash_;
+  const scoped_refptr<component_updater::ComponentManagerAsh>
+      component_manager_ash_;
+
   base::WeakPtr<UserSessionManagerDelegate> delegate_;
 
   // Used to listen to network changes.
@@ -556,8 +592,7 @@ class UserSessionManager
 
   PendingUserSessions pending_user_sessions_;
 
-  base::ObserverList<ash::UserSessionStateObserver>
-      session_state_observer_list_;
+  base::OnceClosure on_pending_user_session_restore_finished_for_testsing_;
 
   base::ObserverList<UserAuthenticatorObserver> authenticator_observer_list_;
 
@@ -574,6 +609,10 @@ class UserSessionManager
   // Per-user-session EndofLife Notification
   std::map<Profile*, std::unique_ptr<EolNotification>, ProfileCompare>
       eol_notification_handler_;
+
+  // Per-user-session Frozen Update Notification
+  std::map<AccountId, std::unique_ptr<FrozenUpdateNotification>>
+      frozen_update_notification_handler_;
 
   // Keeps track of which password-requiring-service has already told us whether
   // they need the login password or not.
@@ -608,7 +647,10 @@ class UserSessionManager
 
   scoped_refptr<HatsNotificationController> hats_notification_controller_;
 
-  // Mapped to `chrome::AttemptRestart`, except in tests.
+  // Mapped to `session_manager::SessionManager::Get()->RequestRestart()`,
+  // except in tests.
+  // TODO(crbug.com/479113713): Now we should be able to inject the behavior
+  // at SessionManager.
   base::RepeatingClosure attempt_restart_closure_;
 
   base::flat_set<raw_ptr<Profile, CtnExperimental>>
@@ -630,6 +672,11 @@ class UserSessionManager
 
   // Callback that allows tests to inject a test EolNotification implementation.
   EolNotificationHandlerFactoryCallback eol_notification_handler_test_factory_;
+
+  // Callback that allows tests to inject a test
+  // FrozenUpdateNotification implementation.
+  FrozenUpdateNotificationHandlerFactoryCallback
+      frozen_update_notification_handler_test_factory_;
 
   // Whether `metrics::BeginFirstWebContentsProfiling()` has been called. Should
   // only be called once per program lifetime.

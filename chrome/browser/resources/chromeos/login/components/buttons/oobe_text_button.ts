@@ -18,7 +18,7 @@
  *
  * Attributes:
  *  'disabled' - button is disabled when the attribute is set.
- *  (See crbug.com/900640)
+ *  (See crbug.com/41423700)
  *  'inverse' - makes text white and background blue.
  *  'text-key' - ID of localized string to be used as button text.
  *  'border' - adds border to the button.
@@ -60,8 +60,8 @@ export class OobeTextButton extends OobeBaseButton {
     };
   }
 
-  inverse: boolean;
-  border: boolean;
+  declare inverse: boolean;
+  declare border: boolean;
 
   private onInverseChanged(): void {
     this.$.button.classList.toggle('action-button', this.inverse);

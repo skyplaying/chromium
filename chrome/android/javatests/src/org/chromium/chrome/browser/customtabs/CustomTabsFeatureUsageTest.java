@@ -22,6 +22,7 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import org.chromium.base.CallbackUtils;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.test.util.ApplicationTestUtils;
@@ -37,7 +38,7 @@ import org.chromium.ui.test.util.BlankUiTestActivity;
 @DoNotBatch(
         reason =
                 "Some tests are Testing CCT start up behavior. "
-                        + "Unit test conversion tracked in crbug.com/1217031")
+                        + "Unit test conversion tracked in crbug.com/40185034")
 public class CustomTabsFeatureUsageTest {
     private static final String TEST_PAGE = "/chrome/test/data/android/google.html";
 
@@ -93,7 +94,7 @@ public class CustomTabsFeatureUsageTest {
                         ApplicationProvider.getApplicationContext(),
                         mTestPage,
                         false,
-                        builder -> {});
+                        CallbackUtils.emptyCallback());
         CustomTabsConnection connection = CustomTabsTestUtils.warmUpAndWait();
         CustomTabsSessionToken token = CustomTabsSessionToken.getSessionTokenFromIntent(intent);
         connection.newSession(token);

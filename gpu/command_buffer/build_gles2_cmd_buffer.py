@@ -1549,6 +1549,22 @@ _NAMED_TYPE_INFO = {
       'GL_SHARED_IMAGE_ACCESS_MODE_READ_CHROMIUM',
     ],
   },
+  'FramebufferPixelLocalStorageParameter': {
+    'type': 'GLenum',
+    'valid': [
+      'GL_MAX_PIXEL_LOCAL_STORAGE_PLANES_ANGLE',
+      'GL_MAX_COMBINED_DRAW_BUFFERS_AND_PIXEL_LOCAL_STORAGE_PLANES_ANGLE',
+      'GL_PIXEL_LOCAL_STORAGE_ACTIVE_PLANES_ANGLE',
+      'GL_PIXEL_LOCAL_INTERNAL_FORMAT_ANGLE',
+      'GL_PIXEL_LOCAL_TEXTURE_NAME_ANGLE',
+      'GL_PIXEL_LOCAL_TEXTURE_LEVEL_ANGLE',
+      'GL_PIXEL_LOCAL_TEXTURE_LAYER_ANGLE',
+      'GL_PIXEL_LOCAL_USAGE_ANGLE',
+      'GL_PIXEL_LOCAL_CLEAR_VALUE_FLOAT_ANGLE',
+      'GL_PIXEL_LOCAL_CLEAR_VALUE_INT_ANGLE',
+      'GL_PIXEL_LOCAL_CLEAR_VALUE_UNSIGNED_INT_ANGLE',
+    ],
+  },
 }
 
 # A function info object specifies the type and other special data for the
@@ -1814,15 +1830,6 @@ _FUNCTION_INFO = {
   'ClearStencil': {
     'type': 'StateSet',
     'state': 'ClearStencil',
-  },
-  'EnableFeatureCHROMIUM': {
-    'type': 'Custom',
-    'data_transfer_methods': ['shm'],
-    'decoder_func': 'DoEnableFeatureCHROMIUM',
-    'cmd_args': 'GLuint bucket_id, GLint* result',
-    'result': ['GLint'],
-    'extension': 'GL_CHROMIUM_enable_feature',
-    'pepper_interface': 'ChromiumEnableFeature',
   },
   'CompileShader': {'decoder_func': 'DoCompileShader', 'unit_test': False},
   'CompressedTexImage2D': {
@@ -2291,6 +2298,16 @@ _FUNCTION_INFO = {
     'decoder_func': 'DoGetBufferParameteriv',
     'expectation': False,
     'shadowed': True,
+  },
+    'GetBufferSubDataCHROMIUM': {
+    'type': 'Custom',
+    'data_transfer_methods': ['shm'],
+    'impl_func': False,
+    'client_test': False,
+    'cmd_args':
+        'GLenumBufferTarget target, GLintptr offset, GLsizeiptr size,'
+        'uint32_t data_shm_id, uint32_t data_shm_offset',
+    'trace_level': 1,
   },
   'GetError': {
     'type': 'Is',
@@ -3652,10 +3669,6 @@ _FUNCTION_INFO = {
     'unit_test': False,
     'pepper_interface': 'VertexArrayObject',
   },
-  'ShallowFinishCHROMIUM': {
-    'type': 'NoCommand',
-    'extension': 'CHROMIUM_ordering_barrier',
-  },
   'OrderingBarrierCHROMIUM': {
     'type': 'NoCommand',
     'extension': 'CHROMIUM_ordering_barrier',
@@ -3917,7 +3930,14 @@ _FUNCTION_INFO = {
     'count': 1,
     'unit_test': False,
     'es3': True,
-    'decoder_func': 'DoBeginPixelLocalStorageANGLE',
+    'decoder_func': 'DoEndPixelLocalStorageANGLE',
+  },
+  'EndPixelLocalStorageImplicitANGLE': {
+    'extension': 'ANGLE_shader_pixel_local_storage',
+    'extension_flag': 'angle_shader_pixel_local_storage',
+    'unit_test': False,
+    'es3': True,
+    'decoder_func': 'DoEndPixelLocalStorageImplicitANGLE',
   },
   'PixelLocalStorageBarrierANGLE': {
     'extension': 'ANGLE_shader_pixel_local_storage',
@@ -3957,6 +3977,15 @@ _FUNCTION_INFO = {
     'es3': True,
     'result': ['SizedResult<GLint>'],
     'decoder_func': 'DoGetFramebufferPixelLocalStorageParameterivANGLE',
+  },
+  'GetFramebufferPixelLocalStorageParameteruivANGLE': {
+    'extension': 'ANGLE_shader_pixel_local_storage',
+    'extension_flag': 'angle_shader_pixel_local_storage',
+    'type': 'GETn',
+    'unit_test': False,
+    'es3': True,
+    'result': ['SizedResult<GLuint>'],
+    'decoder_func': 'DoGetFramebufferPixelLocalStorageParameteruivANGLE',
   },
 
 }

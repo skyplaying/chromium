@@ -7,12 +7,15 @@ import 'chrome://resources/cr_elements/cr_icon/cr_icon.js';
 import 'chrome://resources/cr_elements/icons.html.js';
 import './card.js';
 import './icons.html.js';
+import './error_page.js';
+import './skills_empty.js';
 
+import {loadTimeData} from '//resources/js/load_time_data.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
-import {assert} from 'chrome://resources/js/assert.js';
 
 import type {Skill} from './skill.mojom-webui.js';
-import {SkillsDialogType} from './skills.mojom-webui.js';
+import {SkillsDialogType} from './skill.mojom-webui.js';
+import {SkillsManagementAction, SkillsManagementPage} from './skill_metrics.mojom-webui.js';
 import {SkillsPageBrowserProxy} from './skills_page_browser_proxy.js';
 import {getCss} from './user_skills_page.css.js';
 import {getHtml} from './user_skills_page.html.js';
@@ -35,6 +38,8 @@ export class UserSkillsPageElement extends CrLitElement {
       skills_: {type: Object},
       searchTerm_: {type: String},
       addSkillButtonDisabled_: {type: Boolean},
+      shouldDisableBrowseSkillsPage_: {type: Boolean},
+      webuiRoundedIconsEnabled_: {type: Boolean},
     };
   }
 
@@ -42,37 +47,23 @@ export class UserSkillsPageElement extends CrLitElement {
   protected accessor skills_: Map<string, Skill> = new Map();
   protected accessor addSkillButtonDisabled_: boolean = false;
   protected accessor searchTerm_: string = '';
+  protected accessor shouldDisableBrowseSkillsPage_: boolean =
+      loadTimeData.getBoolean('shouldDisableBrowseSkillsPage');
+  protected accessor webuiRoundedIconsEnabled_: boolean =
+      loadTimeData.getBoolean('webuiRoundedIconsEnabled');
   private proxy_: SkillsPageBrowserProxy = SkillsPageBrowserProxy.getInstance();
   private listenerIds_: number[] = [];
   private addSkillButtonDisabledTimer_: number|undefined = undefined;
 
-  get filteredSkills_(): Skill[] {
-    const term = this.searchTerm_.toLowerCase();
-    const allSkillsArray = Array.from(this.skills_.values());
-
-    if (!term) {
-      return allSkillsArray;
-    }
-
-    return allSkillsArray.filter(
-        skill => skill.name.toLowerCase().includes(term) ||
-            skill.prompt.toLowerCase().includes(term));
-  }
-
   override connectedCallback() {
     super.connectedCallback();
     this.proxy_.handler.getInitialUserSkills().then(({skills}) => {
-      for (const skill of skills) {
-        assert(!this.skills_.has(skill.id));
-        this.skills_.set(skill.id, skill);
-      }
-      // Manually update as Lit does not detect changes in a map.
-      this.requestUpdate();
+      this.skills_ = new Map(skills.map(skill => [skill.id, skill]));
     });
 
     this.listenerIds_ = [
-      this.proxy_.callbackRouter.updateSkill.addListener(
-          this.updateSkill_.bind(this)),
+      this.proxy_.callbackRouter.updateSkills.addListener(
+          this.updateSkills_.bind(this)),
       this.proxy_.callbackRouter.removeSkill.addListener(
           this.removeSkill_.bind(this)),
     ];
@@ -90,10 +81,8 @@ export class UserSkillsPageElement extends CrLitElement {
     this.addSkillButtonDisabled_ = false;
   }
 
-  private updateSkill_(skill: Skill) {
-    this.skills_.set(skill.id, skill);
-    // Manually update as Lit does not detect changes in a map.
-    this.requestUpdate();
+  private updateSkills_(skills: Skill[]) {
+    this.skills_ = new Map(skills.map(skill => [skill.id, skill]));
   }
 
   private removeSkill_(skillId: string) {
@@ -102,11 +91,43 @@ export class UserSkillsPageElement extends CrLitElement {
     this.requestUpdate();
   }
 
+  // Called whenever the text in the search input field changes.
+  // This event is debounced by the <cr-toolbar> component.
   onSearchChanged(searchTerm: string) {
     this.searchTerm_ = searchTerm;
+
+    if (this.shouldShowNoSearchResults_()) {
+      this.proxy_.handler.recordSkillsManagementAction(
+          SkillsManagementPage.kYourSkills,
+          SkillsManagementAction.kEmptySearch);
+    } else if (this.searchTerm_.length > 0) {
+      this.proxy_.handler.recordSkillsManagementAction(
+          SkillsManagementPage.kYourSkills,
+          SkillsManagementAction.kNonEmptySearch);
+    }
+  }
+
+  protected filteredSkills_(): Skill[] {
+    const term = this.searchTerm_.toLowerCase();
+    const allSkillsArray = Array.from(this.skills_.values());
+
+    if (!term) {
+      return allSkillsArray;
+    }
+
+    return allSkillsArray.filter(
+        skill => skill.name.toLowerCase().includes(term) ||
+            skill.prompt.toLowerCase().includes(term));
+  }
+
+  protected shouldShowNoSearchResults_(): boolean {
+    return this.filteredSkills_().length === 0 && this.searchTerm_.length > 0;
   }
 
   protected onExploreButtonClick_() {
+    this.proxy_.handler.recordSkillsManagementAction(
+        SkillsManagementPage.kYourSkills,
+        SkillsManagementAction.kClickedBrowseSkills);
     const path = '/browse';
     this.fire('route-click', {path});
   }
@@ -115,6 +136,9 @@ export class UserSkillsPageElement extends CrLitElement {
     if (this.addSkillButtonDisabled_) {
       return;
     }
+    this.proxy_.handler.recordSkillsManagementAction(
+        SkillsManagementPage.kYourSkills,
+        SkillsManagementAction.kClickedAddSkill);
     this.addSkillButtonDisabled_ = true;
     SkillsPageBrowserProxy.getInstance().handler.openSkillsDialog(
         SkillsDialogType.kAdd, /*skill=*/ null);

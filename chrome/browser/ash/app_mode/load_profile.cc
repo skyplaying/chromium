@@ -18,7 +18,6 @@
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
-#include "base/notimplemented.h"
 #include "base/notreached.h"
 #include "base/sequence_checker.h"
 #include "base/syslog_logging.h"
@@ -31,6 +30,8 @@
 #include "chrome/browser/ash/app_mode/retry_runner.h"
 #include "chrome/browser/ash/login/auth/chrome_login_performer.h"
 #include "chrome/browser/ash/login/session/user_session_manager.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chromeos/ash/components/dbus/cryptohome/UserDataAuth.pb.h"
 #include "chromeos/ash/components/dbus/userdataauth/userdataauth_client.h"
@@ -40,6 +41,7 @@
 #include "chromeos/ash/components/login/auth/public/user_context.h"
 #include "components/account_id/account_id.h"
 #include "components/user_manager/user_names.h"
+#include "third_party/abseil-cpp/absl/functional/overload.h"
 
 namespace ash::kiosk {
 
@@ -150,6 +152,10 @@ class SigninPerformer : public LoginPerformer::Delegate, public CancellableJob {
       : local_state_(CHECK_DEREF(local_state)),
         on_done_(std::move(on_done)),
         login_performer_(std::make_unique<ChromeLoginPerformer>(
+            &local_state_.get(),
+            // TODO(crbug.com/404129026): Avoid using g_browser_process.
+            g_browser_process->shared_url_loader_factory(),
+            g_browser_process->platform_part()->browser_policy_connector_ash(),
             this,
             AuthEventsRecorder::Get())) {}
 
@@ -273,7 +279,7 @@ void LogErrorToSyslog(KioskAppLaunchError::Error error) {
       SYSLOG(ERROR) << "LoginPerformer disallowed Kiosk user sign in.";
       break;
     default:
-      SYSLOG(ERROR) << "Unexpected error " << (int)error;
+      SYSLOG(ERROR) << "Unexpected error " << static_cast<int>(error);
   }
 }
 
@@ -395,14 +401,19 @@ void ProfileLoader::LoginAsKioskAccount() {
 
 void ProfileLoader::DidLoginAsKioskAccount(PerformSigninResult result) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (result.has_value()) {
-    return PrepareProfile(result.value());
-  } else if (auto* error = std::get_if<PerformSigninError>(&result.error())) {
-    return ReturnError(SigninErrorToKioskLaunchError(*error));
-  } else if (auto* auth_failure = std::get_if<AuthFailure>(&result.error())) {
-    return ReturnError(LoginFailureToKioskLaunchError(*auth_failure));
+  if (!result.has_value()) {
+    ReturnError(std::visit(absl::Overload{
+                               [](PerformSigninError& error) {
+                                 return SigninErrorToKioskLaunchError(error);
+                               },
+                               [](AuthFailure& error) {
+                                 return LoginFailureToKioskLaunchError(error);
+                               },
+                           },
+                           result.error()));
+  } else {
+    PrepareProfile(result.value());
   }
-  NOTREACHED();
 }
 
 void ProfileLoader::PrepareProfile(const UserContext& user_context) {

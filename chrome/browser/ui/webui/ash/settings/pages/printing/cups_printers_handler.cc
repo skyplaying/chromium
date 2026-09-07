@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/public/cpp/new_window_delegate.h"
 #include "base/containers/flat_map.h"
 #include "base/files/file_path.h"
@@ -26,25 +27,22 @@
 #include "base/strings/stringprintf.h"
 #include "base/task/thread_pool.h"
 #include "base/values.h"
-#include "chrome/browser/ash/browser_delegate/browser_controller.h"
-#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/ash/printing/cups_printers_manager.h"
 #include "chrome/browser/ash/printing/ppd_provider_factory.h"
 #include "chrome/browser/ash/printing/printer_event_tracker.h"
 #include "chrome/browser/ash/printing/printer_event_tracker_factory.h"
 #include "chrome/browser/ash/printing/printer_info.h"
 #include "chrome/browser/ash/printing/server_printers_fetcher.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/local_discovery/endpoint_resolver.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/chrome_pages.h"
-#include "chrome/browser/ui/chrome_select_file_policy.h"
+#include "chrome/browser/ui/ash/system_web_apps/system_web_app_utils.h"
+#include "chrome/browser/ui/select_file_policy/chrome_select_file_policy.h"
 #include "chrome/browser/ui/webui/ash/settings/pages/printing/server_printer_url_util.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
+#include "chromeos/ash/components/browser_delegate/browser_controller.h"
+#include "chromeos/ash/components/browser_delegate/browser_delegate.h"
 #include "chromeos/printing/cups_printer_status.h"
 #include "chromeos/printing/ppd_line_reader.h"
 #include "chromeos/printing/printer_configuration.h"
@@ -419,7 +417,7 @@ void CupsPrintersHandler::HandleUpdateCupsPrinter(const base::ListValue& args) {
   Printer printer(printer_id);
   printer.set_display_name(printer_name);
 
-  if (!profile_->GetPrefs()->GetBoolean(prefs::kUserPrintersAllowed)) {
+  if (!profile_->GetPrefs()->GetBoolean(ash::prefs::kUserPrintersAllowed)) {
     PRINTER_LOG(DEBUG) << "HandleUpdateCupsPrinter() called when "
                           "kUserPrintersAllowed is set to false";
     OnAddedOrEditedPrinterCommon(printer,
@@ -573,9 +571,11 @@ void CupsPrintersHandler::WriteAndDisplayPpdFile(
   const base::FilePath downloads_path =
       DownloadPrefs::FromDownloadManager(profile_->GetDownloadManager())
           ->DownloadPath();
-  // To make sure an appropriate filename is created, remove any dir separators.
+  // To make sure an appropriate filename is created, remove any dir separators
+  // and characters that are significant in URL syntax (the path is later turned
+  // into a file:// URL).
   std::string sanitized_name = printer_name;
-  base::ReplaceChars(sanitized_name, "/", "_", &sanitized_name);
+  base::ReplaceChars(sanitized_name, "/\\#?%", "_", &sanitized_name);
   const base::FilePath ppd_file_path_base =
       downloads_path.Append(sanitized_name).AddExtension("ppd");
 
@@ -594,9 +594,14 @@ void CupsPrintersHandler::DisplayPpdFile(const base::FilePath& ppd_file_path) {
   }
 
   PRINTER_LOG(DEBUG) << "PPD saved to " << ppd_file_path;
+  GURL file_url = net::FilePathToFileURL(ppd_file_path);
+  if (!file_url.is_valid()) {
+    PRINTER_LOG(ERROR) << ppd_file_path << " is not a valid file url";
+    return;
+  }
+
   ash::NewWindowDelegate::GetInstance()->OpenUrl(
-      GURL(base::StringPrintf("file://%s", ppd_file_path.value().c_str())),
-      ash::NewWindowDelegate::OpenUrlFrom::kUserInteraction,
+      file_url, ash::NewWindowDelegate::OpenUrlFrom::kUserInteraction,
       ash::NewWindowDelegate::Disposition::kSwitchToTab);
 }
 
@@ -843,7 +848,7 @@ void CupsPrintersHandler::AddOrReconfigurePrinter(const base::ListValue& args,
     return;
   }
 
-  if (!profile_->GetPrefs()->GetBoolean(prefs::kUserPrintersAllowed)) {
+  if (!profile_->GetPrefs()->GetBoolean(ash::prefs::kUserPrintersAllowed)) {
     PRINTER_LOG(DEBUG) << "AddOrReconfigurePrinter() called when "
                           "kUserPrintersAllowed is set to false";
     OnAddedOrEditedPrinterCommon(*printer,
@@ -936,11 +941,11 @@ void CupsPrintersHandler::OnAddedOrEditedPrinterCommon(
     const Printer& printer,
     PrinterSetupResult result_code) {
   if (printer.IsZeroconf()) {
-    UMA_HISTOGRAM_ENUMERATION("Printing.CUPS.ZeroconfPrinterSetupResult",
-                              result_code, PrinterSetupResult::kMaxValue);
+    base::UmaHistogramEnumeration("Printing.CUPS.ZeroconfPrinterSetupResult",
+                                  result_code);
   } else {
-    UMA_HISTOGRAM_ENUMERATION("Printing.CUPS.PrinterSetupResult", result_code,
-                              PrinterSetupResult::kMaxValue);
+    base::UmaHistogramEnumeration("Printing.CUPS.PrinterSetupResult",
+                                  result_code);
   }
 
   switch (result_code) {
@@ -1552,12 +1557,12 @@ void CupsPrintersHandler::OnQueryPrintServerCompleted(
 void CupsPrintersHandler::HandleOpenPrintManagementApp(
     const base::ListValue& args) {
   DCHECK(args.empty());
-  chrome::ShowPrintManagementApp(profile_);
+  ash::ShowPrintManagementApp(profile_);
 }
 
 void CupsPrintersHandler::HandleOpenScanningApp(const base::ListValue& args) {
   DCHECK(args.empty());
-  chrome::ShowScanningApp(profile_);
+  ash::ShowScanningApp(profile_);
 }
 
 void CupsPrintersHandler::HandleRequestPrinterStatus(

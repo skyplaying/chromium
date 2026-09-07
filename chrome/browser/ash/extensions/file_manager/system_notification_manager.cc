@@ -32,10 +32,11 @@
 #include "chrome/browser/ash/policy/dlp/files_policy_notification_manager.h"
 #include "chrome/browser/ash/policy/dlp/files_policy_notification_manager_factory.h"
 #include "chrome/browser/platform_util.h"
-#include "chrome/browser/ui/settings_window_manager_chromeos.h"
 #include "chrome/common/extensions/api/file_manager_private.h"
 #include "chrome/grit/generated_resources.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/experiences/arc/arc_prefs.h"
+#include "chromeos/ash/experiences/settings_ui/settings_app_manager.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
@@ -382,9 +383,9 @@ void SystemNotificationManager::HandleDeviceEvent(
   const std::string id = ToString(event.type);
   switch (event.type) {
     case fmp::DeviceEventType::kDisabled:
-      notification =
-          CreateNotification(id, IDS_REMOVABLE_DEVICE_DETECTION_TITLE,
-                             IDS_EXTERNAL_STORAGE_DISABLED_MESSAGE);
+      notification = CreateNotification(
+          id, IDS_REMOVABLE_DEVICE_DETECTION_TITLE,
+          IDS_REMOVABLE_DEVICE_EXTERNAL_STORAGE_DISABLED_MESSAGE);
       RecordDeviceNotificationMetric(
           DeviceNotificationUmaType::DEVICE_EXTERNAL_STORAGE_DISABLED);
       break;
@@ -401,8 +402,9 @@ void SystemNotificationManager::HandleDeviceEvent(
       break;
 
     case fmp::DeviceEventType::kHardUnplugged:
-      notification = CreateNotification(id, IDS_DEVICE_HARD_UNPLUGGED_TITLE,
-                                        IDS_DEVICE_HARD_UNPLUGGED_MESSAGE);
+      notification =
+          CreateNotification(id, IDS_REMOVABLE_DEVICE_HARD_UNPLUGGED_TITLE,
+                             IDS_REMOVABLE_DEVICE_HARD_UNPLUGGED_MESSAGE);
       RecordDeviceNotificationMetric(
           DeviceNotificationUmaType::DEVICE_HARD_UNPLUGGED);
       break;
@@ -452,9 +454,9 @@ void SystemNotificationManager::HandleDeviceEvent(
       break;
 
     case fmp::DeviceEventType::kRenameFail:
-      notification =
-          CreateNotification(id, IDS_RENAMING_OF_DEVICE_FAILED_TITLE,
-                             IDS_RENAMING_OF_DEVICE_FINISHED_FAILURE_MESSAGE);
+      notification = CreateNotification(
+          id, IDS_REMOVABLE_DEVICE_RENAMING_OF_DEVICE_FAILED_TITLE,
+          IDS_REMOVABLE_DEVICE_RENAMING_OF_DEVICE_FINISHED_FAILURE_MESSAGE);
       RecordDeviceNotificationMetric(DeviceNotificationUmaType::RENAME_FAIL);
       break;
 
@@ -476,8 +478,14 @@ void SystemNotificationManager::HandleDeviceEvent(
 static const char kBulkPinningNotificationId[] = "drive-bulk-pinning-error";
 
 void SystemNotificationManager::HandleBulkPinningNotificationClick() {
-  chrome::SettingsWindowManager::GetInstance()->ShowOSSettings(
-      profile_, chromeos::settings::mojom::kGoogleDriveSubpagePath);
+  if (auto* user = ash::BrowserContextHelper::Get()->GetUserByBrowserContext(
+          profile_.get())) {
+    // TODO(crbug.com/447287122): Revisit here to check if there should be a
+    // case that profile is not user profile.
+    ash::SettingsAppManager::Get()->Open(
+        *user,
+        {.sub_page = chromeos::settings::mojom::kGoogleDriveSubpagePath});
+  }
   GetNotificationDisplayService()->Close(NotificationHandler::Type::TRANSIENT,
                                          kBulkPinningNotificationId);
 }
@@ -485,10 +493,10 @@ void SystemNotificationManager::HandleBulkPinningNotificationClick() {
 NotificationPtr SystemNotificationManager::MakeBulkPinningErrorNotification(
     const Event& event) {
   // Parse the event args as a bulk-pinning progress struct.
-  DCHECK(!event.event_args.empty());
-  auto progress = fmp::BulkPinProgress::FromValue(event.event_args[0]);
+  DCHECK(!event.args().empty());
+  auto progress = fmp::BulkPinProgress::FromValue(event.args()[0]);
   if (!progress) {
-    LOG(ERROR) << "Cannot parse BulkPinProgress from " << event.event_args[0];
+    LOG(ERROR) << "Cannot parse BulkPinProgress from " << event.args()[0];
     return nullptr;
   }
 
@@ -554,11 +562,10 @@ NotificationPtr SystemNotificationManager::MakeBulkPinningErrorNotification(
 
 NotificationPtr SystemNotificationManager::MakeDriveSyncErrorNotification(
     const Event& event) {
-  DCHECK(!event.event_args.empty());
-  auto sync_error = fmp::DriveSyncErrorEvent::FromValue(event.event_args[0]);
+  DCHECK(!event.args().empty());
+  auto sync_error = fmp::DriveSyncErrorEvent::FromValue(event.args()[0]);
   if (!sync_error) {
-    LOG(ERROR) << "Cannot parse DriveSyncErrorEvent from "
-               << event.event_args[0];
+    LOG(ERROR) << "Cannot parse DriveSyncErrorEvent from " << event.args()[0];
     return nullptr;
   }
 
@@ -641,12 +648,11 @@ void SystemNotificationManager::HandleDriveDialogClick(
 
 NotificationPtr SystemNotificationManager::MakeDriveConfirmDialogNotification(
     const Event& event) {
-  DCHECK(!event.event_args.empty());
-  auto dialog_event =
-      fmp::DriveConfirmDialogEvent::FromValue(event.event_args[0]);
+  DCHECK(!event.args().empty());
+  auto dialog_event = fmp::DriveConfirmDialogEvent::FromValue(event.args()[0]);
   if (!dialog_event) {
     LOG(ERROR) << "Cannot parse DriveConfirmDialogEvent from "
-               << event.event_args[0];
+               << event.args()[0];
     return nullptr;
   }
 
@@ -666,7 +672,7 @@ NotificationPtr SystemNotificationManager::MakeDriveConfirmDialogNotification(
 }
 
 void SystemNotificationManager::HandleEvent(const Event& event) {
-  if (event.event_args.empty()) {
+  if (event.args().empty()) {
     DLOG(WARNING) << "Ignored empty Event {name: " << event.event_name
                   << ", histogram_value: " << event.histogram_value << "}";
     return;
@@ -694,7 +700,7 @@ void SystemNotificationManager::HandleEvent(const Event& event) {
     default:
       VLOG(1) << "Ignored Event {name: " << event.event_name
               << ", histogram_value: " << event.histogram_value
-              << ", args: " << event.event_args << "}";
+              << ", args: " << event.args() << "}";
       return;
   }
 
@@ -805,8 +811,16 @@ void SystemNotificationManager::HandleRemovableNotificationClick(
       base::FilePath volume_root(path);
       platform_util::ShowItemInFolder(profile_, volume_root);
     } else {
-      chrome::SettingsWindowManager::GetInstance()->ShowOSSettings(
-          profile_, chromeos::settings::mojom::kExternalStorageSubpagePath);
+      if (auto* user =
+              ash::BrowserContextHelper::Get()->GetUserByBrowserContext(
+                  profile_.get())) {
+        // TODO(crbug.com/447287122): Revisit here to check if there should be a
+        // case that profile is not user profile.
+        ash::SettingsAppManager::Get()->Open(
+            *user,
+            {.sub_page =
+                 chromeos::settings::mojom::kExternalStorageSubpagePath});
+      }
     }
     if (base::checked_cast<size_t>(button_index.value()) <
         uma_types_for_buttons.size()) {
@@ -855,23 +869,26 @@ NotificationPtr SystemNotificationManager::MakeMountErrorNotification(
     case MOUNT_STATUS_CHILD_ERROR:
       if (event.status == fmp::MountError::kUnsupportedFilesystem) {
         if (volume.drive_label().empty()) {
-          message = GetStringUTF16(IDS_DEVICE_UNSUPPORTED_DEFAULT_MESSAGE);
+          message =
+              GetStringUTF16(IDS_REMOVABLE_DEVICE_UNSUPPORTED_DEFAULT_MESSAGE);
         } else {
-          message = GetStringFUTF16(IDS_DEVICE_UNSUPPORTED_MESSAGE,
+          message = GetStringFUTF16(IDS_REMOVABLE_DEVICE_UNSUPPORTED_MESSAGE,
                                     UTF8ToUTF16(volume.drive_label()));
         }
         RecordDeviceNotificationMetric(DeviceNotificationUmaType::DEVICE_FAIL);
       } else {
         if (volume.drive_label().empty()) {
-          message = GetStringUTF16(IDS_DEVICE_UNKNOWN_DEFAULT_MESSAGE);
+          message =
+              GetStringUTF16(IDS_REMOVABLE_DEVICE_UNKNOWN_DEFAULT_MESSAGE);
         } else {
-          message = GetStringFUTF16(IDS_DEVICE_UNKNOWN_MESSAGE,
+          message = GetStringFUTF16(IDS_REMOVABLE_DEVICE_UNKNOWN_MESSAGE,
                                     UTF8ToUTF16(volume.drive_label()));
         }
 
         if (!volume.is_read_only()) {
           // Give a format device button on the notification.
-          buttons.emplace_back(GetStringUTF16(IDS_DEVICE_UNKNOWN_BUTTON_LABEL));
+          buttons.emplace_back(
+              GetStringUTF16(IDS_REMOVABLE_DEVICE_UNKNOWN_BUTTON_LABEL));
           uma_types_for_buttons.push_back(
               DeviceNotificationUserActionUmaType::OPEN_MEDIA_DEVICE_FAIL);
           RecordDeviceNotificationMetric(
@@ -887,11 +904,12 @@ NotificationPtr SystemNotificationManager::MakeMountErrorNotification(
     // failed.
     case MOUNT_STATUS_MULTIPART_ERROR:
       if (volume.drive_label().empty()) {
-        message =
-            GetStringUTF16(IDS_MULTIPART_DEVICE_UNSUPPORTED_DEFAULT_MESSAGE);
+        message = GetStringUTF16(
+            IDS_REMOVABLE_DEVICE_MULTIPART_DEVICE_UNSUPPORTED_DEFAULT_MESSAGE);
       } else {
-        message = GetStringFUTF16(IDS_MULTIPART_DEVICE_UNSUPPORTED_MESSAGE,
-                                  UTF8ToUTF16(volume.drive_label()));
+        message = GetStringFUTF16(
+            IDS_REMOVABLE_DEVICE_MULTIPART_DEVICE_UNSUPPORTED_MESSAGE,
+            UTF8ToUTF16(volume.drive_label()));
       }
       RecordDeviceNotificationMetric(DeviceNotificationUmaType::DEVICE_FAIL);
       break;

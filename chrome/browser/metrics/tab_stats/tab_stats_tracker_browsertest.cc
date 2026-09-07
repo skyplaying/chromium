@@ -39,8 +39,9 @@
 #include "chrome/browser/ui/android/tab_model/tab_model_test_helper.h"
 #include "chrome/test/base/android/android_browser_test.h"
 #else
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/geometry/rect.h"
@@ -414,8 +415,16 @@ IN_PROC_BROWSER_TEST_F(TabStatsTrackerBrowserTest,
   EnsureTabDuplicateHistogramsMatchExpectations(expected_histograms);
 }
 
+// TODO(crbug.com/449230856): Consistently failing on Android.
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_AdditionalTabStatsObserverGetsInitiliazed \
+  DISABLED_AdditionalTabStatsObserverGetsInitiliazed
+#else
+#define MAYBE_AdditionalTabStatsObserverGetsInitiliazed \
+  AdditionalTabStatsObserverGetsInitiliazed
+#endif
 IN_PROC_BROWSER_TEST_F(TabStatsTrackerBrowserTest,
-                       AdditionalTabStatsObserverGetsInitiliazed) {
+                       MAYBE_AdditionalTabStatsObserverGetsInitiliazed) {
   // Assert that the |TabStatsTracker| instance is initialized during the
   // creation of the main browser.
   ASSERT_TRUE(tab_stats_tracker_ != nullptr);
@@ -557,12 +566,12 @@ IN_PROC_BROWSER_TEST_F(TabStatsTrackerBrowserTest,
   // Make sure that the 2 windows don't overlap to avoid some unexpected
   // visibility change events because one tab occludes the other.
   // This resizes the two windows so they're right next to each other.
-  const gfx::NativeWindow window = browser()->window()->GetNativeWindow();
+  const gfx::NativeWindow window = browser()->GetWindow()->GetNativeWindow();
   gfx::Rect work_area =
       display::Screen::Get()->GetDisplayNearestWindow(window).work_area();
   const gfx::Size size(work_area.width() / 3, work_area.height() / 2);
   gfx::Rect browser_rect(work_area.origin(), size);
-  browser()->window()->SetBounds(browser_rect);
+  browser()->GetWindow()->SetBounds(browser_rect);
   browser_rect.set_x(browser_rect.right());
   window2->browser_window_interface()->GetWindow()->SetBounds(browser_rect);
   auto expected_window1_tab1_visibility = content::Visibility::VISIBLE;
@@ -716,7 +725,14 @@ class AudioStartObserver : public content::WebContentsObserver {
 
 }  // namespace
 
-IN_PROC_BROWSER_TEST_F(TabStatsTrackerBrowserTest, AddObserverAudibleTab) {
+// TODO(crbug.com/449389404): Consistently failing on Android.
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_AddObserverAudibleTab DISABLED_AddObserverAudibleTab
+#else
+#define MAYBE_AddObserverAudibleTab AddObserverAudibleTab
+#endif
+IN_PROC_BROWSER_TEST_F(TabStatsTrackerBrowserTest,
+                       MAYBE_AddObserverAudibleTab) {
   // Set up the embedded test server to serve the test javascript file.
   embedded_test_server()->ServeFilesFromSourceDirectory(
       media::GetTestDataPath());
@@ -846,9 +862,19 @@ class TabStatsTrackerSubFrameBrowserTest : public TabStatsTrackerBrowserTest {
   content::test::FencedFrameTestHelper fenced_frame_helper_;
 };
 
+// TODO(crbug.com/532509057): Fix the flakiness on Android and re-enable the
+// test.
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_VerifyBehaviorOnSubFrameNavigation \
+  DISABLED_VerifyBehaviorOnSubFrameNavigation
+#else
+#define MAYBE_VerifyBehaviorOnSubFrameNavigation \
+  VerifyBehaviorOnSubFrameNavigation
+#endif
+
 // Ensure that subframe navigation cannot affect TabStatsTracker.
 IN_PROC_BROWSER_TEST_F(TabStatsTrackerSubFrameBrowserTest,
-                       VerifyBehaviorOnSubFrameNavigation) {
+                       MAYBE_VerifyBehaviorOnSubFrameNavigation) {
   MockTabStatsObserver mock_observer;
   TestTabStatsObserver count_observer;
   tab_stats_tracker_->AddObserverAndSetInitialState(&mock_observer);

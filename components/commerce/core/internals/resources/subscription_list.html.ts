@@ -8,7 +8,8 @@ import type {SubscriptionListElement} from './subscription_list.js';
 
 export function getHtml(this: SubscriptionListElement) {
   // clang-format off
-  return this.subscriptions_.length > 0 ? html`
+  return html`
+${this.subscriptions_.length > 0 ? html`
   <table class="list">
     <thead>
       <tr>
@@ -23,10 +24,10 @@ export function getHtml(this: SubscriptionListElement) {
       ${this.subscriptions_.map(subscription =>
         subscription.productInfos.length === 0 ? html`
           <tr>
-            <td>${BigInt(subscription.clusterId)}</td>
+            <td>${subscription.clusterId}</td>
           </tr>` : subscription.productInfos.map(productInfo => html`
           <tr>
-            <td>${BigInt(productInfo.info.clusterId)}</td>
+            <td>${productInfo.info.clusterId}</td>
             <td>${productInfo.info.domain}</td>
             <td>${productInfo.info.currentPrice}</td>
             <td>${productInfo.info.previousPrice}</td>
@@ -42,6 +43,7 @@ export function getHtml(this: SubscriptionListElement) {
             </td>
           </tr>`))}
     </tbody>
-  </table>` : html`<div>No subscriptions found.</div>`;
+  </table>
+` : html`<div>No subscriptions found.</div>`}`;
   // clang-format on
 }

@@ -5,6 +5,7 @@
 import '/strings.m.js';
 import 'chrome://resources/cr_elements/cr_button/cr_button.js';
 
+import {ColorChangeUpdater} from 'chrome://resources/cr_components/color_change_listener/colors_css_updater.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
@@ -34,8 +35,19 @@ export class DefaultBrowserModalAppElement extends CrLitElement {
     };
   }
 
+  override firstUpdated() {
+    ColorChangeUpdater.forDocument().start();
+
+    if (!this.isModal_) {
+      return;
+    }
+    BrowserProxy.getInstance().handler.showUI();
+  }
+
   accessor useSettingsIllustration: boolean =
       loadTimeData.getBoolean('useSettingsIllustration');
+
+  private isModal_: boolean = loadTimeData.getBoolean('isModal');
 
   protected onCancelClick_() {
     BrowserProxy.getInstance().handler.cancel();

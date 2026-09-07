@@ -29,7 +29,6 @@ import android.view.WindowMetrics;
 
 import androidx.test.ext.junit.rules.ActivityScenarioRule;
 
-import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
@@ -42,7 +41,6 @@ import org.mockito.junit.MockitoRule;
 import org.robolectric.annotation.Config;
 import org.robolectric.annotation.Implementation;
 import org.robolectric.annotation.Implements;
-import org.robolectric.annotation.Resetter;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -62,30 +60,7 @@ import org.chromium.ui.display.DisplayUtil;
 
 /** Unit tests for {@link TabUtils}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(
-        manifest = Config.NONE,
-        shadows = {TabUtilsUnitTest.ShadowProfile.class})
 public class TabUtilsUnitTest {
-    /** A fake {@link Profile} used to reduce dependency. */
-    @Implements(Profile.class)
-    static class ShadowProfile {
-        private static Profile sProfile;
-
-        static void setProfile(Profile profile) {
-            sProfile = profile;
-        }
-
-        @Resetter
-        static void reset() {
-            sProfile = null;
-        }
-
-        @Implementation
-        public static Profile fromWebContents(WebContents webContents) {
-            return sProfile;
-        }
-    }
-
     @Implements(WindowMetrics.class)
     public static class ShadowWindowMetrics {
         @Implementation
@@ -128,7 +103,7 @@ public class TabUtilsUnitTest {
 
     @Before
     public void setup() {
-        ShadowProfile.setProfile(mProfile);
+        Profile.setProfileFromWebContentsForTesting(mProfile);
         WebsitePreferenceBridgeJni.setInstanceForTesting(mWebsitePreferenceBridgeJniMock);
 
         when(mTab.isNativePage()).thenReturn(false);
@@ -179,11 +154,6 @@ public class TabUtilsUnitTest {
                                             TEST_NAVIGATION_BAR_HEIGHT))
                             .build();
         }
-    }
-
-    @After
-    public void tearDown() {
-        ShadowProfile.reset();
     }
 
     @Test

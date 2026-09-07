@@ -6,6 +6,7 @@
 
 #include <set>
 #include <string>
+#include <utility>
 
 #include "base/barrier_closure.h"
 #include "base/files/file_util.h"
@@ -15,14 +16,13 @@
 #include "chrome/browser/extensions/component_loader.h"
 #include "chrome/browser/extensions/corrupted_extension_reinstaller.h"
 #include "chrome/browser/extensions/data_deleter.h"
-#include "chrome/browser/extensions/extension_allowlist.h"
+#include "chrome/browser/extensions/extension_allowlist_factory.h"
 #include "chrome/browser/extensions/extension_disabled_ui.h"
 #include "chrome/browser/extensions/extension_management.h"
 #include "chrome/browser/extensions/extension_special_storage_policy.h"
 #include "chrome/browser/extensions/external_install_manager.h"
 #include "chrome/browser/extensions/install_verifier_factory.h"
 #include "chrome/browser/extensions/installed_loader.h"
-#include "chrome/browser/extensions/managed_installation_mode.h"
 #include "chrome/browser/extensions/profile_util.h"
 #include "chrome/browser/extensions/updater/extension_updater.h"
 #include "chrome/browser/profiles/profile.h"
@@ -31,6 +31,7 @@
 #include "components/favicon_base/favicon_url_parser.h"
 #include "extensions/browser/delayed_install_manager.h"
 #include "extensions/browser/disable_reason.h"
+#include "extensions/browser/extension_allowlist.h"
 #include "extensions/browser/extension_assets_manager.h"
 #include "extensions/browser/extension_file_task_runner.h"
 #include "extensions/browser/extension_prefs.h"
@@ -273,7 +274,7 @@ void ChromeExtensionRegistrarDelegate::DoLoadExtensionForReload(
 
   // Check the installed extensions to see if what we're reloading was already
   // installed.
-  std::optional<ExtensionInfo> installed_extension(
+  std::optional<ExtensionPrefs::InstallRecord> installed_extension(
       extension_prefs_->GetInstalledExtensionInfo(extension_id));
   if (installed_extension && installed_extension->extension_manifest.get()) {
     InstalledLoader(profile_).Load(*installed_extension, false);
@@ -350,14 +351,43 @@ void ChromeExtensionRegistrarDelegate::UpdateExternalExtensionAlert() {
   ExternalInstallManager::Get(profile_)->UpdateExternalExtensionAlert();
 }
 
+base::flat_set<int>
+ChromeExtensionRegistrarDelegate::GetDisableReasonsOnInstalled(
+    const Extension* extension,
+    int install_flags) {
+  base::flat_set<int> disable_reasons =
+      extension_registrar_->GetDisableReasonsOnInstalled(extension);
+
+  // If the old version of the extension was disabled due to corruption, this
+  // new install may correct the problem.
+  disable_reasons.erase(disable_reason::DISABLE_CORRUPTED);
+
+  // Unsupported requirements overrides the management policy.
+  if (install_flags & kInstallFlagHasRequirementErrors) {
+    disable_reasons.insert(disable_reason::DISABLE_UNSUPPORTED_REQUIREMENT);
+  } else {
+    // Requirement is supported now, remove the corresponding disable reason
+    // instead.
+    disable_reasons.erase(disable_reason::DISABLE_UNSUPPORTED_REQUIREMENT);
+  }
+
+  // Check if the extension was disabled because of the minimum version
+  // requirements from enterprise policy, and satisfies it now.
+  if (ExtensionManagementFactory::GetForBrowserContext(profile_)
+          ->CheckMinimumVersion(extension, nullptr)) {
+    // And remove the corresponding disable reason.
+    disable_reasons.erase(disable_reason::DISABLE_UPDATE_REQUIRED_BY_POLICY);
+  }
+
+  return disable_reasons;
+}
+
 void ChromeExtensionRegistrarDelegate::OnExtensionInstalled(
     const Extension* extension,
     const syncer::StringOrdinal& page_ordinal,
     int install_flags,
     base::DictValue ruleset_install_prefs) {
   const std::string& id = extension->id();
-  base::flat_set<int> disable_reasons =
-      extension_registrar_->GetDisableReasonsOnInstalled(extension);
   std::string install_parameter;
   auto* pending_extension_manager = PendingExtensionManager::Get(profile_);
   const PendingExtensionInfo* pending_extension_info =
@@ -386,7 +416,8 @@ void ChromeExtensionRegistrarDelegate::OnExtensionInstalled(
       ExtensionManagement* management =
           ExtensionManagementFactory::GetForBrowserContext(profile_);
       LOG(WARNING) << "ShouldAllowInstall() returned false for " << id
-                   << " of type " << extension->GetType() << " and update URL "
+                   << " of type " << std::to_underlying(extension->GetType())
+                   << " and update URL "
                    << management->GetEffectiveUpdateURL(*extension).spec()
                    << "; not installing";
 
@@ -402,34 +433,6 @@ void ChromeExtensionRegistrarDelegate::OnExtensionInstalled(
 
     install_parameter = pending_extension_info->install_parameter();
     pending_extension_manager->Remove(id);
-  } else if (!is_reinstall_for_corruption) {
-    // We explicitly want to re-enable an uninstalled external
-    // extension; if we're here, that means the user is manually
-    // installing the extension.
-    if (extension_prefs_->IsExternalExtensionUninstalled(id)) {
-      disable_reasons.clear();
-    }
-  }
-
-  // If the old version of the extension was disabled due to corruption, this
-  // new install may correct the problem.
-  disable_reasons.erase(disable_reason::DISABLE_CORRUPTED);
-
-  // Unsupported requirements overrides the management policy.
-  if (install_flags & kInstallFlagHasRequirementErrors) {
-    disable_reasons.insert(disable_reason::DISABLE_UNSUPPORTED_REQUIREMENT);
-  } else {
-    // Requirement is supported now, remove the corresponding disable reason
-    // instead.
-    disable_reasons.erase(disable_reason::DISABLE_UNSUPPORTED_REQUIREMENT);
-  }
-
-  // Check if the extension was disabled because of the minimum version
-  // requirements from enterprise policy, and satisfies it now.
-  if (ExtensionManagementFactory::GetForBrowserContext(profile_)
-          ->CheckMinimumVersion(extension, nullptr)) {
-    // And remove the corresponding disable reason.
-    disable_reasons.erase(disable_reason::DISABLE_UPDATE_REQUIRED_BY_POLICY);
   }
 
   if (install_flags & kInstallFlagIsBlocklistedForMalware) {
@@ -445,7 +448,8 @@ void ChromeExtensionRegistrarDelegate::OnExtensionInstalled(
 
   RecordInstallHistograms(extension);
 
-  ExtensionAllowlist::Get(profile_)->OnExtensionInstalled(id, install_flags);
+  ExtensionAllowlistFactory::GetForBrowserContext(profile_)
+      ->OnExtensionInstalled(id, install_flags);
 
   DelayedInstallManager* delayed_install_manager =
       DelayedInstallManager::Get(profile_);
@@ -458,13 +462,13 @@ void ChromeExtensionRegistrarDelegate::OnExtensionInstalled(
   switch (action) {
     case InstallGate::INSTALL:
       extension_registrar_->AddNewOrUpdatedExtension(
-          extension, disable_reasons, install_flags, page_ordinal,
-          install_parameter, std::move(ruleset_install_prefs));
+          extension, install_flags, page_ordinal, install_parameter,
+          std::move(ruleset_install_prefs));
       return;
     case InstallGate::DELAY:
       extension_prefs_->SetDelayedInstallInfo(
-          extension, disable_reasons, install_flags, delay_reason, page_ordinal,
-          install_parameter, std::move(ruleset_install_prefs));
+          extension, {install_flags, delay_reason, page_ordinal,
+                      install_parameter, std::move(ruleset_install_prefs)});
 
       // Transfer ownership of |extension|.
       delayed_install_manager->Insert(extension);
@@ -590,9 +594,11 @@ void ChromeExtensionRegistrarDelegate::CheckPermissionsIncrease(
 
 void ChromeExtensionRegistrarDelegate::UpdateActiveExtensionsInCrashReporter() {
   std::set<std::string> extension_ids;
+  std::set<std::string> component_extension_names;
   for (const auto& extension : registry_->enabled_extensions()) {
-    if (!extension->is_theme() &&
-        extension->location() != ManifestLocation::kComponent) {
+    if (extension->location() == mojom::ManifestLocation::kComponent) {
+      component_extension_names.insert(extension->name());
+    } else if (!extension->is_theme()) {
       extension_ids.insert(extension->id());
     }
   }
@@ -601,6 +607,7 @@ void ChromeExtensionRegistrarDelegate::UpdateActiveExtensionsInCrashReporter() {
   // crash_keys::SetActiveExtensions is per-process. See
   // http://crbug.com/41096321.
   crash_keys::SetActiveExtensions(extension_ids);
+  crash_keys::SetActiveComponentExtensions(component_extension_names);
 }
 
 // static

@@ -4,14 +4,19 @@
 
 #include "chrome/browser/ui/views/toolbar/back_forward_button.h"
 
+#include "base/metrics/user_metrics.h"
+#include "base/time/time.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/chained_back_navigation_tracker.h"
 #include "chrome/browser/preloading/chrome_preloading.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/toolbar/back_forward_menu_model.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/view_ids.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/grit/browser_resources.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
@@ -19,28 +24,34 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/ui_base_features.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/base/window_open_disposition_utils.h"
+#include "ui/gfx/animation/tween.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/view_class_properties.h"
 
 BackForwardButton::BackForwardButton(Direction direction,
                                      PressedCallback callback,
-                                     Browser* browser)
+                                     BrowserWindowInterface* browser)
     : ToolbarButton(std::move(callback),
                     std::make_unique<BackForwardMenuModel>(
                         browser,
                         direction == Direction::kBack
                             ? BackForwardMenuModel::ModelType::kBackward
                             : BackForwardMenuModel::ModelType::kForward),
-                    browser->tab_strip_model()),
+                    browser->GetTabStripModel()),
       browser_(browser),
       direction_(direction) {
   SetHideInkDropWhenShowingContextMenu(false);
   SetTriggerableEventFlags(ui::EF_LEFT_MOUSE_BUTTON |
                            ui::EF_MIDDLE_MOUSE_BUTTON);
   if (direction == Direction::kBack) {
-    SetVectorIcons(vector_icons::kBackArrowChromeRefreshIcon,
-                   kBackArrowTouchIcon);
+    SetVectorIcons(features::IsRoundedIconsEnabled()
+                       ? vector_icons::kArrowBackIcon
+                       : vector_icons::kBackArrowChromeRefreshOldIcon,
+                   features::IsRoundedIconsEnabled()
+                       ? vector_icons::kArrowBackIcon
+                       : kBackArrowTouchOldIcon);
     SetTooltipText(l10n_util::GetStringUTF16(IDS_TOOLTIP_BACK));
     GetViewAccessibility().SetName(l10n_util::GetStringUTF16(IDS_ACCNAME_BACK));
     GetViewAccessibility().SetDescription(
@@ -49,8 +60,12 @@ BackForwardButton::BackForwardButton(Direction direction,
     SetProperty(views::kElementIdentifierKey, kToolbarBackButtonElementId);
     set_menu_identifier(kToolbarBackButtonMenuElementId);
   } else {
-    SetVectorIcons(vector_icons::kForwardArrowChromeRefreshIcon,
-                   kForwardArrowTouchIcon);
+    SetVectorIcons(features::IsRoundedIconsEnabled()
+                       ? vector_icons::kArrowForwardIcon
+                       : vector_icons::kForwardArrowChromeRefreshOldIcon,
+                   features::IsRoundedIconsEnabled()
+                       ? vector_icons::kArrowForwardIcon
+                       : kForwardArrowTouchOldIcon);
     SetTooltipText(l10n_util::GetStringUTF16(IDS_TOOLTIP_FORWARD));
     GetViewAccessibility().SetName(
         l10n_util::GetStringUTF16(IDS_ACCNAME_FORWARD));
@@ -89,12 +104,37 @@ void BackForwardButton::NotifyClick(const ui::Event& event) {
   }
 
   content::WebContents* web_contents =
-      browser_->tab_strip_model()->GetActiveWebContents();
+      browser_->GetTabStripModel()->GetActiveWebContents();
   if (web_contents) {
     ChainedBackNavigationTracker* tracker =
         ChainedBackNavigationTracker::FromWebContents(web_contents);
     CHECK(tracker);
     tracker->RecordBackButtonClickForChainedBackNavigation();
+  }
+
+  if (direction_ == Direction::kBack) {
+    base::RecordAction(base::UserMetricsAction("Toolbar_BackButton_Clicked"));
+  }
+
+  bool play_animation = features::IsToolbarGlowUpBackForwardEnabled() &&
+                        !ui::TouchUiController::Get()->touch_ui() &&
+                        event.IsMouseEvent() &&
+                        event.AsMouseEvent()->IsOnlyLeftMouseButton();
+
+  if (play_animation) {
+    views::SingleAnimatedImageContainer::AnimationConfig config{
+        .boundary =
+            views::SingleAnimatedImageContainer::AnimationBoundary{
+                .start_offset = 0.0f, .end_offset = 0.5f},
+        .tween = gfx::Tween::FAST_OUT_SLOW_IN_3,
+        .duration = base::Milliseconds(300)};
+    animated_image_container().PlayAnimation(
+        {direction_ == Direction::kBack ? IDR_BACK_ARROW_LOTTIE
+                                        : IDR_FORWARD_ARROW_LOTTIE,
+         GetForegroundColor(GetState()),
+         views::SingleAnimatedImageContainer::AnimationDirection::kForward,
+         views::SingleAnimatedImageContainer::AnimationEndBehavior::kReset},
+        config);
   }
 
   // Do this last because upon activation the MenuModel gets updated, removing
@@ -112,7 +152,7 @@ void BackForwardButton::StateChanged(ButtonState old_state) {
   if (old_state == ButtonState::STATE_NORMAL &&
       GetState() == ButtonState::STATE_HOVERED) {
     content::WebContents* active_contents =
-        browser_->tab_strip_model()->GetActiveWebContents();
+        browser_->GetTabStripModel()->GetActiveWebContents();
     if (active_contents) {
       active_contents->BackNavigationLikely(
           chrome_preloading_predictor::kBackButtonHover,
@@ -130,6 +170,10 @@ void BackForwardButton::OnMouseEntered(const ui::MouseEvent& event) {
   }
 
   ToolbarButton::OnMouseEntered(event);
+}
+
+bool BackForwardButton::OnMousePressed(const ui::MouseEvent& event) {
+  return ToolbarButton::OnMousePressed(event);
 }
 
 bool BackForwardButton::ShouldShowInkdropAfterIphInteraction() {

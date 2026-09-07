@@ -12,6 +12,7 @@
 
 namespace blink {
 
+class Document;
 class Element;
 class GridFocusgroupStructureInfo;
 class KeyboardEvent;
@@ -39,17 +40,21 @@ enum class FocusgroupItemPosition { kFirst, kLast };
 //   scope and behavior for its focusgroup items.
 //
 // - Focusgroup Scope: The DOM subtree under a focusgroup owner, containing
-//   all potential focusgroup items. The scope ends at nested focusgroup owners
-//   or opted-out subtrees (focusgroup="none").
+//   all potential focusgroup items. The scope ends at nested focusgroup owners,
+//   opted-out subtrees (focusgroup="none"), or top-layer element subtrees
+//   (popovers, modal dialogs, fullscreen elements).
 //
 // - Focusgroup Item: A focusable element within a focusgroup scope that is not
-//   inside a nested focusgroup or opted-out subtree. These are the elements
-//   that participate in focusgroup arrow key navigation.
+//   inside a nested focusgroup, opted-out subtree, or top-layer subtree.
+//   These are the elements that participate in focusgroup arrow key navigation.
 //
 // - Focusgroup Segment: A contiguous sequence of focusgroup items within a
 //   focusgroup scope, bounded by barriers. Barriers include items in nested
-//   focusgroups, opted-out subtrees, and focused native arrow key handlers.
+//   focusgroups, opted-out subtrees (focusgroup="none"), and top-layer
+//   subtrees.
 //   Segments determine guaranteed tab stops during sequential navigation.
+//   Tab escape from arrow key handlers is handled via the entry override
+//   in IsNonEntryFocusgroupItem and does not affect segment boundaries.
 //
 // Example:
 //   <div focusgroup="toolbar">           <!-- Focusgroup Owner -->
@@ -65,8 +70,14 @@ class CORE_EXPORT FocusgroupControllerUtils {
   STATIC_ONLY(FocusgroupControllerUtils);
 
  public:
+  // Maps the physical arrow key from |event| to a logical focusgroup
+  // direction, accounting for the writing direction (RTL, vertical writing
+  // modes) of |focused_element|. The caller passes the currently focused
+  // element so that arrow keys follow its local writing direction. Returns
+  // kNone for non-arrow keys or when modifier keys are held.
   static FocusgroupDirection FocusgroupDirectionForEvent(
-      const KeyboardEvent* event);
+      const KeyboardEvent* event,
+      const Element& focused_element);
   static bool IsDirectionBackward(FocusgroupDirection direction);
   static bool IsDirectionForward(FocusgroupDirection direction);
   static bool IsDirectionInline(FocusgroupDirection direction);
@@ -124,6 +135,11 @@ class CORE_EXPORT FocusgroupControllerUtils {
   // focusgroup actually creates a segment boundary (only subtrees with
   // focusable content act as barriers in the tab order).
   static bool ContainsKeyboardFocusableContent(const Element& element);
+
+  // Returns true if |element| or any of its flat-tree descendants is the
+  // document's focused element. Used to detect segment barriers when a
+  // focused element is nested inside an opted-out subtree wrapper.
+  static bool ContainsFocusedElement(const Element& element);
 
   // Returns the first/last item in the segment containing |item|, or nullptr
   // if |item| is not a focusgroup item. See class comment for segment
@@ -185,47 +201,78 @@ class CORE_EXPORT FocusgroupControllerUtils {
 
   // Returns true if the element has focusgroup="none".
   static bool HasExplicitOptOut(const Element* element);
-  // Returns true if element or any ancestor (up to focusgroup root) has
-  // focusgroup="none".
-  static bool IsInExplicitlyOptedOutSubtree(const Element* element);
 
-  // Returns true if |element| is itself a native arrow key handler or is
+  // Returns true if |element| is itself a native directional key handler or is
   // within a subtree rooted at one for its nearest ancestor focusgroup owner.
-  // Native arrow key handlers are interactive controls whose built-in arrow
+  // Native directional key handlers are interactive controls whose built-in
   // key behavior should take precedence over focusgroup navigation (e.g. text
   // inputs, textareas, select controls, contenteditable regions, focusable
   // scroll containers, media elements with controls, and frame elements).
   // Elements with author-defined script handlers are not considered here.
-  // When this returns true, focusgroup arrow navigation should not run while
+  // When this returns true, focusgroup navigation should not run while
   // focus is within the handler element.
-  static bool IsInArrowKeyHandler(const Element* element);
+  static bool IsInDirectionalKeyHandler(const Element* element);
 
-  // Returns true if |element| is in a native arrow key handler that handles
-  // the specified |direction|. This allows per-axis detection, e.g., a
+  // Returns true if |element| is in a native directional key handler on either
+  // axis, stopping at |focusgroup_owner|. |focusgroup_owner| must own
+  // |element|.
+  static bool IsInDirectionalKeyHandlerForAnyAxis(
+      const Element& element,
+      const Element& focusgroup_owner);
+
+  // Returns true if |element| is in a native directional key handler that
+  // handles the specified |direction|. This allows per-axis detection, e.g., a
   // horizontal-only scroll container only handles inline (left/right)
   // navigation, not block (up/down) navigation.
-  static bool IsInArrowKeyHandler(const Element& element,
-                                  FocusgroupDirection direction);
+  static bool IsInDirectionalKeyHandler(const Element& element,
+                                        FocusgroupDirection direction);
 
-  // Returns the nearest ancestor (or self) that is a native arrow key handler
-  // for |element|'s nearest focusgroup owner, or nullptr if none exists.
-  static const Element* GetArrowKeyHandlerRoot(const Element* element);
+  // Returns the nearest ancestor (or self) that is a native directional key
+  // handler on an axis enabled by |element|'s nearest focusgroup owner, or
+  // nullptr if none exists.
+  static const Element* GetDirectionalKeyHandlerRoot(const Element* element);
 
-  // Returns true if |element| itself is an excluded subtree root:
-  // 1. Has focusgroup="none" (explicit opt-out), OR
-  // 2. Is the root of a focused native arrow key handler subtree.
-  // These are subtrees excluded from the focusgroup scope but are not nested
-  // focusgroups (which are checked separately during traversal).
+  // If the document's currently focused element is within a directional key
+  // handler subtree, returns the handler root. Otherwise returns nullptr.
+  static const Element* GetDirectionalKeyHandlerRootForFocusedElement(
+      const Document& document);
+
+  // Returns true if |element| itself is an excluded subtree root: it has
+  // focusgroup="none" (explicit opt-out) or is a top-layer element without
+  // its own focusgroup. Top-layer elements with their own focusgroup are NOT
+  // treated as excluded subtree roots, since their descendants participate in
+  // the inner focusgroup. Explicit IsInTopLayer() checks at traversal call
+  // sites handle those elements separately.
   static bool IsExcludedSubtreeRoot(const Element* element);
 
   // Returns the nearest excluded subtree root ancestor (or self), stopping at
   // focusgroup boundaries. Returns nullptr if not in an excluded subtree.
   static const Element* FindExcludedSubtreeRoot(const Element* element);
 
+  // Returns true if |element| is excluded from any ancestor focusgroup. This
+  // collapses the three exclusion conditions into a single question for
+  // callers that only care whether the element can participate as an item in
+  // some ancestor focusgroup:
+  //   * |element| itself is in the top layer (popover, modal dialog,
+  //     fullscreen): excluded regardless of whether it defines its own
+  //     focusgroup;
+  //   * |element| has focusgroup="none" (explicit opt-out);
+  //   * |element| is inside an excluded subtree (an ancestor up to the
+  //     nearest focusgroup boundary is opted out or is a top-layer element
+  //     without its own focusgroup).
+  static bool IsExcludedFromAncestorFocusgroup(const Element* element);
+
   // Returns true if the element has the focusgroupstart attribute.
   // This boolean attribute marks an element as the preferred entry point when
   // entering a focusgroup segment via sequential focus navigation.
   static bool IsFocusgroupStart(const Element& element);
+
+  // Returns true when |element| is a focusgroup item that is not the entry
+  // element for its segment. The caller must verify the element is a focus
+  // scope owner (shadow host, slot, popover invoker, reading-flow owner,
+  // etc.). Used by sequential focus navigation so that scope owners which
+  // are non-entry focusgroup items are skipped instead of receiving focus.
+  static bool IsNonEntryFocusgroupScopeOwner(const Element& element);
 
   static GridFocusgroupStructureInfo*
   CreateGridFocusgroupStructureInfoForGridRoot(const Element* root);

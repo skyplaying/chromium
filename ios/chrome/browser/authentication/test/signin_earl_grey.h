@@ -65,6 +65,24 @@ class GURL;
 // Simulates a persistent authentication error for an account.
 - (void)setPersistentAuthErrorForAccount:(const CoreAccountId&)accountId;
 
+// Triggers a persistent MDM error for the provided identity.
+- (void)setMDMErrorForIdentity:(FakeSystemIdentity*)fakeIdentity
+                userActionable:(BOOL)userActionable;
+
+// Clears the persistent MDM error for the provided identity.
+- (void)clearMDMErrorForIdentity:(FakeSystemIdentity*)fakeIdentity;
+
+// Resets the recorded MDM notification display status in
+// `FakeSystemIdentityManager`.
+- (void)resetMDMNotificationDisplayed;
+
+// Returns YES if `DisplayMDMNotification()` was called on
+// `FakeSystemIdentityManager`.
+- (BOOL)wasMDMNotificationDisplayed;
+
+// Waits for the MDM notification to be displayed.
+- (void)waitForMDMNotificationDisplayed;
+
 // Returns the gaia ID of the signed-in account.
 // If there is no signed-in account returns an empty string.
 - (GaiaId)primaryAccountGaiaID;
@@ -160,12 +178,6 @@ class GURL;
 // `fakeIdentity` is a managed account. That dialog may be shown on signing in
 // if User Policy is enabled.
 - (void)closeManagedAccountSignInDialogIfAny:(FakeSystemIdentity*)fakeIdentity;
-
-// Returns whether the feature to put each managed account into its own separate
-// profile is enabled. This depends on the `kSeparateProfilesForManagedAccounts`
-// feature flag, plus some additional conditions which can't be directly checked
-// in the test app.
-- (BOOL)areSeparateProfilesForManagedAccountsEnabled;
 
 @end
 

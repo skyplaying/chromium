@@ -6,6 +6,7 @@
 
 #include "base/synchronization/waitable_event.h"
 #include "build/build_config.h"
+#include "components/viz/common/resources/shared_image_format.h"
 #include "components/viz/common/resources/shared_image_format_utils.h"
 #include "gpu/command_buffer/client/client_shared_image.h"
 #include "gpu/command_buffer/common/shared_image_capabilities.h"
@@ -59,6 +60,7 @@ scoped_refptr<ClientSharedImage>
 GpuChannelSharedImageInterface::CreateSharedImageForAndroidVideo(
     const gfx::Size& size,
     const gfx::ColorSpace& color_space,
+    SharedImageUsageSet usage,
     scoped_refptr<StreamTextureSharedImageInterface> image,
     scoped_refptr<RefCountedLock> drdc_lock) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(gpu_sequence_checker_);
@@ -76,16 +78,13 @@ GpuChannelSharedImageInterface::CreateSharedImageForAndroidVideo(
     return nullptr;
   }
 
+  SharedImageInfo si_info(viz::SinglePlaneFormat::kRGBA_8888, size, color_space,
+                          kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType, usage,
+                          /*debug_label=*/"SIForAndroidVideo");
+
   auto shared_image_backing = AndroidVideoImageBacking::Create(
-      mailbox, size, color_space, kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType,
-      /*debug_label=*/"SIForAndroidVideo", std::move(image),
-      std::move(shared_context), std::move(drdc_lock));
-  SharedImageMetadata metadata{shared_image_backing->format(),
-                               shared_image_backing->size(),
-                               shared_image_backing->color_space(),
-                               shared_image_backing->surface_origin(),
-                               shared_image_backing->alpha_type(),
-                               shared_image_backing->usage()};
+      mailbox, si_info, std::move(image), std::move(shared_context),
+      std::move(drdc_lock));
 
   // Register it with shared image mailbox. This keeps |shared_image_backing|
   // around until its destruction cb is called.
@@ -95,9 +94,9 @@ GpuChannelSharedImageInterface::CreateSharedImageForAndroidVideo(
   shared_image_stub_->factory()->RegisterBacking(
       std::move(shared_image_backing));
 
-  SharedImageInfo info(metadata, /*debug_label=*/"SIForAndroidVideo");
-  return base::WrapRefCounted<ClientSharedImage>(new ClientSharedImage(
-      mailbox, info, GenVerifiedSyncToken(), holder_, GL_TEXTURE_EXTERNAL_OES));
+  return base::WrapRefCounted<ClientSharedImage>(
+      new ClientSharedImage(mailbox, si_info, GenVerifiedSyncToken(), holder_,
+                            GL_TEXTURE_EXTERNAL_OES));
 }
 #endif
 
@@ -116,7 +115,6 @@ GpuChannelSharedImageInterface::CreateSharedImageForD3D11Video(
   }
 
   auto mailbox = Mailbox::Generate();
-  auto metadata = si_info.meta;
   auto caps = shared_image_stub_->shared_context_state()->GetGLFormatCaps();
   // The target must be GL_TEXTURE_EXTERNAL_OES as the texture is not created
   // with D3D11_BIND_RENDER_TARGET bind flag and so it cannot be bound to the
@@ -124,10 +122,8 @@ GpuChannelSharedImageInterface::CreateSharedImageForD3D11Video(
   // it to be GL_TEXTURE_EXTERNAL_OES.
   std::unique_ptr<gpu::SharedImageBacking> backing =
       gpu::D3DImageBacking::Create(
-          mailbox, metadata.format, metadata.size, metadata.color_space,
-          metadata.surface_origin, metadata.alpha_type, metadata.usage,
-          si_info.debug_label, texture, std::move(dxgi_shared_handle_state),
-          caps, GL_TEXTURE_EXTERNAL_OES, array_slice,
+          mailbox, si_info, texture, std::move(dxgi_shared_handle_state), caps,
+          GL_TEXTURE_EXTERNAL_OES, array_slice,
           /*use_update_subresource1=*/false,
           /*want_dcomp_texture=*/false, is_thread_safe);
   if (!backing) {

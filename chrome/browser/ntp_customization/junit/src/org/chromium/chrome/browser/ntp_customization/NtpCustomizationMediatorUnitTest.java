@@ -6,7 +6,6 @@ package org.chromium.chrome.browser.ntp_customization;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
@@ -29,16 +28,16 @@ import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationCoor
 import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationCoordinator.BottomSheetType.SINGLE_THEME_COLLECTION;
 import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationCoordinator.BottomSheetType.THEME;
 import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationCoordinator.BottomSheetType.THEME_COLLECTIONS;
-import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundType.THEME_COLLECTION;
+import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationCoordinator.BottomSheetType.THEME_TIP;
 import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationViewProperties.LAYOUT_TO_DISPLAY;
 import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationViewProperties.LIST_CONTAINER_VIEW_DELEGATE;
 import static org.chromium.chrome.browser.ntp_customization.NtpCustomizationViewProperties.MAIN_BOTTOM_SHEET_FEED_SECTION_SUBTITLE;
+import static org.chromium.components.browser_ui.bottomsheet.BottomSheetController.StateChangeReason.BACK_PRESS;
 
+import android.app.Activity;
 import android.content.Context;
-import android.graphics.Bitmap;
 import android.os.Build;
 import android.view.View;
-import android.view.Window;
 
 import androidx.test.core.app.ApplicationProvider;
 
@@ -50,27 +49,34 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
+import org.robolectric.Robolectric;
 import org.robolectric.annotation.Config;
 
-import org.chromium.base.UnownedUserDataHost;
+import org.chromium.base.DeviceInfo;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.browser.feed.FeedFeatures;
 import org.chromium.chrome.browser.feed.FeedServiceBridge;
 import org.chromium.chrome.browser.feed.FeedServiceBridgeJni;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationCoordinator.BottomSheetType;
-import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils.NtpBackgroundType;
 import org.chromium.chrome.browser.ntp_customization.policy.NtpCustomizationPolicyManager;
+import org.chromium.chrome.browser.ntp_customization.theme.NtpCustomizationPromoManager;
+import org.chromium.chrome.browser.ntp_customization.theme.NtpCustomizationPromoManager.SnackBarState;
 import org.chromium.chrome.browser.ntp_customization.theme.NtpThemeStateProvider;
-import org.chromium.chrome.browser.ntp_customization.theme.chrome_colors.NtpThemeColorInfo;
 import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
+import org.chromium.chrome.browser.ui.messages.snackbar.Snackbar;
+import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetObserver;
 import org.chromium.components.prefs.PrefService;
+import org.chromium.components.search_engines.TemplateUrlService;
+import org.chromium.ui.base.ViewUtils;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.edge_to_edge.EdgeToEdgeStateProvider;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -81,7 +87,7 @@ import java.util.function.Supplier;
 
 /** Unit tests for {@link NtpCustomizationMediator} */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE, sdk = Build.VERSION_CODES.R)
+@Config(sdk = Build.VERSION_CODES.R)
 public class NtpCustomizationMediatorUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -95,8 +101,10 @@ public class NtpCustomizationMediatorUnitTest {
     @Mock private NtpCustomizationConfigManager mConfigManager;
     @Mock private NtpCustomizationPolicyManager mNtpCustomizationPolicyManager;
     @Mock private WindowAndroid mWindowAndroid;
-
+    @Mock private TemplateUrlService mTemplateUrlService;
+    @Mock private SnackbarManager mSnackbarManager;
     private NtpCustomizationMediator mMediator;
+    private final Runnable mShowMainBottomSheetRunnable = () -> mMediator.showBottomSheet(MAIN);
     private Map<Integer, Integer> mViewFlipperMap;
     private ListContainerViewDelegate mListDelegate;
     private Context mContext;
@@ -111,25 +119,11 @@ public class NtpCustomizationMediatorUnitTest {
         FeedServiceBridgeJni.setInstanceForTesting(mFeedServiceBridgeJniMock);
         FeedFeatures.setFakePrefsForTest(mPrefService);
         NtpCustomizationConfigManager.setInstanceForTesting(mConfigManager);
+        TemplateUrlServiceFactory.setInstanceForTesting(mTemplateUrlService);
         when(mNtpCustomizationPolicyManager.isNtpCustomBackgroundEnabled()).thenReturn(true);
         NtpCustomizationPolicyManager.setInstanceForTesting(mNtpCustomizationPolicyManager);
 
-        // Creates a data container so the Edge-to-Edge provider can be registered on the mocked
-        // WindowAndroid.
-        UnownedUserDataHost windowUserDataHost = new UnownedUserDataHost();
-        when(mWindowAndroid.getUnownedUserDataHost()).thenReturn(windowUserDataHost);
-
-        // Mocks the DecorView to avoid a NullPointerException by providing a non-null DecorView for
-        // WindowCompat to use when toggling edge-to-edge mode.
-        Window window = mock(Window.class);
-        View decorView = mock(View.class);
-        when(window.getDecorView()).thenReturn(decorView);
-
-        // Initialize the provider and acquire a token to force the Edge-to-Edge state to "enabled"
-        // for the tests.
-        mE2EProvider = new EdgeToEdgeStateProvider(window);
-        mE2EProvider.attach(mWindowAndroid);
-        mE2EProvider.acquireSetDecorFitsSystemWindowToken();
+        mE2EProvider = NtpCustomizationTestHelper.setupEdgeToEdge(mWindowAndroid);
 
         mMediator =
                 new NtpCustomizationMediator(
@@ -139,13 +133,16 @@ public class NtpCustomizationMediatorUnitTest {
                         mViewFlipperPropertyModel,
                         mContainerPropertyModel,
                         mProfileSupplier,
-                        mWindowAndroid);
+                        mWindowAndroid,
+                        mSnackbarManager,
+                        mShowMainBottomSheetRunnable);
         mViewFlipperMap = mMediator.getViewFlipperMapForTesting();
         mListDelegate = mMediator.createListDelegate();
     }
 
     @After
     public void tearDown() {
+        NtpCustomizationPromoManager.resetForTesting();
         NtpCustomizationUtils.resetSharedPreferenceForTesting();
         if (mE2EProvider != null) mE2EProvider.detach();
     }
@@ -273,6 +270,20 @@ public class NtpCustomizationMediatorUnitTest {
     }
 
     @Test
+    public void testBackPressOnThemeTipBottomSheet() {
+        mMediator.setCurrentBottomSheetForTesting(THEME_TIP);
+
+        mMediator.backPressOnCurrentBottomSheet();
+
+        // Verifies that hideContent() is called and mCurrentBottomSheet is set to null.
+        verify(mBottomSheetController).hideContent(eq(mBottomSheetContent), eq(true));
+        assertNull(mMediator.getCurrentBottomSheetType());
+
+        // Verifies that showBottomSheet() is not called.
+        verify(mViewFlipperPropertyModel, never()).set(eq(LAYOUT_TO_DISPLAY), anyInt());
+    }
+
+    @Test
     public void testBackPressOnNtpCardsBottomSheet() {
         mViewFlipperMap.put(BottomSheetType.MAIN, 10);
         mMediator.setCurrentBottomSheetForTesting(BottomSheetType.NTP_CARDS);
@@ -308,12 +319,15 @@ public class NtpCustomizationMediatorUnitTest {
         // Verifies mTypeToListenerMap is cleared.
         Map<Integer, View.OnClickListener> typeToListenerMap =
                 mMediator.getTypeToListenersForTesting();
-        typeToListenerMap.put(BottomSheetType.NTP_CARDS, view -> {});
+        typeToListenerMap.put(BottomSheetType.NTP_CARDS, ViewUtils.emptyClickListener());
         assertEquals(1, typeToListenerMap.size());
 
         // Verifies mListContent is cleared.
         List<Integer> listItems = mListDelegate.getListItems();
         assertFalse(listItems.isEmpty());
+
+        mMediator.setCurrentBottomSheetForTesting(BottomSheetType.MAIN);
+        assertEquals(MAIN, (int) mMediator.getCurrentBottomSheetType());
 
         mMediator.destroy();
 
@@ -321,6 +335,7 @@ public class NtpCustomizationMediatorUnitTest {
         assertEquals(0, typeToListenerMap.size());
         assertTrue(listItems.isEmpty());
         verify(mContainerPropertyModel).set(eq(LIST_CONTAINER_VIEW_DELEGATE), eq(null));
+        assertNull(mMediator.getCurrentBottomSheetType());
     }
 
     @Test
@@ -354,13 +369,20 @@ public class NtpCustomizationMediatorUnitTest {
         mMediator.onNewColorSelected(/* isDifferentColor= */ true);
         observer.onSheetClosed(2);
         verify(ntpThemeStateProvider).notifyApplyThemeChanges();
+        verify(mConfigManager).maybeSaveUserSelectedBackgroundTypeToSharedPreference(eq(mContext));
+        assertTrue(NtpCustomizationUtils.getLastApplyThemeTimestampFromSharedPreference() > 0);
 
         clearInvocations(ntpThemeStateProvider);
+        clearInvocations(mConfigManager);
+        NtpCustomizationUtils.setLastApplyThemeTimestampToSharedPreference(0);
 
         // Verifies notifyApplyThemeChanges() is NOT called when theme color isn't changed.
         mMediator.onNewColorSelected(/* isDifferentColor= */ false);
         observer.onSheetClosed(2);
         verify(ntpThemeStateProvider, never()).notifyApplyThemeChanges();
+        verify(mConfigManager, never())
+                .maybeSaveUserSelectedBackgroundTypeToSharedPreference(any());
+        assertEquals(0, NtpCustomizationUtils.getLastApplyThemeTimestampFromSharedPreference());
 
         NtpThemeStateProvider.setInstanceForTesting(null);
     }
@@ -400,15 +422,12 @@ public class NtpCustomizationMediatorUnitTest {
     }
 
     @Test
-    @Features.EnableFeatures({
-        ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_V2,
-        ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_FOR_MVT
-    })
+    @Features.EnableFeatures(ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_V2)
     public void testBuildListContent_IncludesTheme() {
         // Condition Check:
         // 1. Feature Flag V2: Enabled via @EnableFeatures
         // 2. Policy: Enabled via setUp
-        // 3. !isTablet: True (Robolectric context is phone by default)
+        // 3. !isLff: True (Robolectric context is phone by default)
         // 4. SDK >= R: True via @Config
         // 5. E2E Enabled for Window: True via setUp (token acquired)
 
@@ -421,11 +440,21 @@ public class NtpCustomizationMediatorUnitTest {
     @Test
     @Features.EnableFeatures({
         ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_V2,
-        ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_FOR_MVT
+        ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_THEME_SYNC
     })
+    public void testBuildListContent_SyncEnabled_ExcludesTheme() {
+        List<Integer> listContent = mMediator.buildListContent(mContext);
+
+        assertFalse(
+                "List should NOT contain THEME when sync is enabled", listContent.contains(THEME));
+        assertEquals(List.of(MVT, NTP_CARDS), listContent);
+    }
+
+    @Test
+    @Features.EnableFeatures(ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_V2)
     public void testBuildListContent_ExcludesThemeWhenE2EDisabled() {
         // Release the token so E2E returns false
-        mE2EProvider.releaseSetDecorFitsSystemWindowToken(0);
+        mE2EProvider.releaseEdgeToEdgeToken(0);
 
         List<Integer> listContent = mMediator.buildListContent(mContext);
 
@@ -436,13 +465,10 @@ public class NtpCustomizationMediatorUnitTest {
 
     @Test
     @Config(qualifiers = "sw600dp")
-    @Features.EnableFeatures({
-        ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_V2,
-        ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_FOR_MVT
-    })
+    @Features.EnableFeatures(ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_V2)
     public void testBuildListContent_IncludesThemeWhenE2EDisabled_tablet() {
         // Release the token so E2E returns false
-        mE2EProvider.releaseSetDecorFitsSystemWindowToken(0);
+        mE2EProvider.releaseEdgeToEdgeToken(0);
 
         List<Integer> listContent = mMediator.buildListContent(mContext);
 
@@ -454,13 +480,6 @@ public class NtpCustomizationMediatorUnitTest {
     public void testBuildListContentWhenProfileIsNotReady() {
         List<Integer> listContent = mMediator.buildListContent(mContext);
         assertEquals(List.of(MVT, NTP_CARDS, THEME), listContent);
-    }
-
-    @Test
-    @Features.DisableFeatures({ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_FOR_MVT})
-    public void testBuildListContentWhenProfileIsNotReadyAsNtpCustomizationForMvtFeatureDisabled() {
-        List<Integer> listContent = mMediator.buildListContent(mContext);
-        assertEquals(List.of(NTP_CARDS, THEME), listContent);
     }
 
     @Test
@@ -481,23 +500,6 @@ public class NtpCustomizationMediatorUnitTest {
     }
 
     @Test
-    @Features.DisableFeatures(ChromeFeatureList.NEW_TAB_PAGE_CUSTOMIZATION_FOR_MVT)
-    public void testBuildListContentWithNtpCustomizationForMvtFeatureDisabled() {
-        // Mock dependencies to enable FeedFeatures.isFeedEnabled(profile) to return true.
-        when(mPrefService.getBoolean(Pref.ENABLE_SNIPPETS_BY_DSE)).thenReturn(true);
-        when(mFeedServiceBridgeJniMock.isEnabled()).thenReturn(true);
-
-        assertTrue(FeedFeatures.isFeedEnabled(mProfile));
-        assertEquals(List.of(NTP_CARDS, FEED, THEME), mMediator.buildListContent(mContext));
-
-        // Mock dependencies to enable FeedFeatures.isFeedEnabled(profile) to return false.
-        when(mPrefService.getBoolean(Pref.ENABLE_SNIPPETS_BY_DSE)).thenReturn(false);
-
-        assertFalse(FeedFeatures.isFeedEnabled(mProfile));
-        assertEquals(List.of(NTP_CARDS, THEME), mMediator.buildListContent(mContext));
-    }
-
-    @Test
     public void testBuildListContent_themeDisabledByPolicy() {
         when(mPrefService.getBoolean(Pref.ENABLE_SNIPPETS_BY_DSE)).thenReturn(true);
         when(mFeedServiceBridgeJniMock.isEnabled()).thenReturn(true);
@@ -510,6 +512,32 @@ public class NtpCustomizationMediatorUnitTest {
     }
 
     @Test
+    public void testBuildListContent_ExcludesFeedOnAndroidDesktop() {
+        DeviceInfo.setIsDesktopForTesting(true);
+        when(mPrefService.getBoolean(Pref.ENABLE_SNIPPETS_BY_DSE)).thenReturn(true);
+        when(mFeedServiceBridgeJniMock.isEnabled()).thenReturn(true);
+
+        assertFalse(FeedFeatures.isFeedEnabled(mProfile));
+        assertFalse(mMediator.buildListContent(mContext).contains(FEED));
+    }
+
+    @Test
+    public void testBuildListContent_ExcludesNtpCardsOnAndroidDesktop() {
+        DeviceInfo.setIsDesktopForTesting(true);
+
+        List<Integer> listContent = mMediator.buildListContent(mContext);
+        assertFalse(listContent.contains(NTP_CARDS));
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.USE_WEB_UI_NTP_ANDROID)
+    public void testBuildListContent_ExcludesThemeWhenWebUiNtpEnabled() {
+        DeviceInfo.setIsDesktopForTesting(true);
+        List<Integer> listContent = mMediator.buildListContent(mContext);
+        assertFalse(listContent.contains(THEME));
+    }
+
+    @Test
     public void testUpdateFeedSectionSubtitle() {
         mMediator.updateFeedSectionSubtitle(/* isFeedVisible= */ true);
         verify(mContainerPropertyModel)
@@ -517,6 +545,30 @@ public class NtpCustomizationMediatorUnitTest {
         mMediator.updateFeedSectionSubtitle(/* isFeedVisible= */ false);
         verify(mContainerPropertyModel)
                 .set(eq(MAIN_BOTTOM_SHEET_FEED_SECTION_SUBTITLE), eq(R.string.text_off));
+    }
+
+    @Test
+    public void testSetParentForBackOperations() {
+        mMediator.registerBottomSheetLayout(THEME_TIP);
+        mMediator.registerBottomSheetLayout(THEME);
+        mMediator.registerBottomSheetLayout(MAIN);
+        int themeTipIndex = mViewFlipperMap.get(THEME_TIP);
+        int mainIndex = mViewFlipperMap.get(MAIN);
+
+        mMediator.setCurrentBottomSheetForTesting(THEME);
+
+        // Initially THEME should go back to MAIN (if not in map)
+        when(mPrefService.getBoolean(Pref.ARTICLES_LIST_VISIBLE)).thenReturn(true);
+        mMediator.backPressOnCurrentBottomSheet();
+        assertEquals(MAIN, (int) mMediator.getCurrentBottomSheetType());
+        verify(mViewFlipperPropertyModel).set(eq(LAYOUT_TO_DISPLAY), eq(mainIndex));
+
+        // Set THEME_TIP as parent of THEME
+        mMediator.setParentForBackOperations(THEME, THEME_TIP);
+        mMediator.setCurrentBottomSheetForTesting(THEME);
+        mMediator.backPressOnCurrentBottomSheet();
+        assertEquals(THEME_TIP, (int) mMediator.getCurrentBottomSheetType());
+        verify(mViewFlipperPropertyModel).set(eq(LAYOUT_TO_DISPLAY), eq(themeTipIndex));
     }
 
     @Test
@@ -548,48 +600,262 @@ public class NtpCustomizationMediatorUnitTest {
     }
 
     @Test
-    public void testOnNewThemeCollectionImageSelected_onSheetClosed() {
+    public void testOnSheetClosed() {
         BottomSheetObserver observer = mMediator.getBottomSheetObserverForTesting();
-        NtpCustomizationUtils.resetSharedPreferenceForTesting();
-        assertEquals(
-                NtpThemeColorInfo.COLOR_NOT_SET,
-                NtpCustomizationUtils.getCustomizedPrimaryColorFromSharedPreference());
 
-        // Verifies pickAndSavePrimaryColor() is called when a new theme collection image is
-        // selected and the background image type is THEME_COLLECTION.
-        Bitmap bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
-        mMediator.onNewThemeCollectionImageSelected(bitmap);
-        when(mConfigManager.getBackgroundType()).thenReturn(THEME_COLLECTION);
-
+        // Case 1: mShouldRecreate is false.
         observer.onSheetClosed(0);
+        verify(mConfigManager, never())
+                .maybeSaveUserSelectedBackgroundTypeToSharedPreference(any());
 
-        assertNotEquals(
-                NtpThemeColorInfo.COLOR_NOT_SET,
-                NtpCustomizationUtils.getCustomizedPrimaryColorFromSharedPreference());
-
-        // Verifies pickAndSavePrimaryColor() is NOT called if background image type is not
-        // THEME_COLLECTION.
-        NtpCustomizationUtils.resetSharedPreferenceForTesting();
-        when(mConfigManager.getBackgroundType()).thenReturn(NtpBackgroundType.IMAGE_FROM_DISK);
-        mMediator.onNewThemeCollectionImageSelected(bitmap);
+        // Case 2: mShouldRecreate is true.
+        mMediator.onNewColorSelected(/* isDifferentColor= */ true);
         observer.onSheetClosed(0);
-        assertEquals(
-                NtpThemeColorInfo.COLOR_NOT_SET,
-                NtpCustomizationUtils.getCustomizedPrimaryColorFromSharedPreference());
+        verify(mConfigManager).maybeSaveUserSelectedBackgroundTypeToSharedPreference(eq(mContext));
+    }
 
-        // Verifies pickAndSavePrimaryColor() is not called when mNewThemeCollectionImage is null.
-        mMediator.onNewThemeCollectionImageSelected(null);
-        // Clean up shared preference for the test.
-        NtpCustomizationUtils.resetSharedPreferenceForTesting();
-        when(mConfigManager.getBackgroundType()).thenReturn(THEME_COLLECTION);
-        assertEquals(
-                NtpThemeColorInfo.COLOR_NOT_SET,
-                NtpCustomizationUtils.getCustomizedPrimaryColorFromSharedPreference());
+    @Test
+    public void testTemplateUrlServiceObserverRegistration() {
+        verify(mTemplateUrlService).addObserver(mMediator);
+    }
 
-        observer.onSheetClosed(0);
+    @Test
+    public void
+            testOnTemplateURLServiceChanged_OnMainBottomSheet_RemovesFeedWhenChangingDseFromGoogleToNonGoogle() {
+        when(mTemplateUrlService.isDefaultSearchEngineGoogle()).thenReturn(true);
+        when(mPrefService.getBoolean(Pref.ENABLE_SNIPPETS_BY_DSE)).thenReturn(true);
+        when(mFeedServiceBridgeJniMock.isEnabled()).thenReturn(true);
 
+        mMediator =
+                new NtpCustomizationMediator(
+                        mContext,
+                        mBottomSheetController,
+                        mBottomSheetContent,
+                        mViewFlipperPropertyModel,
+                        mContainerPropertyModel,
+                        mProfileSupplier,
+                        mWindowAndroid,
+                        mSnackbarManager,
+                        mShowMainBottomSheetRunnable);
+        mListDelegate = mMediator.createListDelegate();
+        mMediator.setCurrentBottomSheetForTesting(MAIN);
+
+        assertTrue(mListDelegate.getListItems().contains(FEED));
+
+        when(mTemplateUrlService.isDefaultSearchEngineGoogle()).thenReturn(false);
+        when(mPrefService.getBoolean(Pref.ENABLE_SNIPPETS_BY_DSE)).thenReturn(false);
+        clearInvocations(mContainerPropertyModel);
+
+        mMediator.onTemplateURLServiceChanged();
+
+        assertFalse(mListDelegate.getListItems().contains(FEED));
+        verify(mContainerPropertyModel)
+                .set(eq(LIST_CONTAINER_VIEW_DELEGATE), any(ListContainerViewDelegate.class));
+    }
+
+    @Test
+    public void
+            testOnTemplateURLServiceChanged_OnMainBottomSheet_AddsFeedWhenChangingDseFromNonGoogleToGoogle() {
+        when(mTemplateUrlService.isDefaultSearchEngineGoogle()).thenReturn(false);
+        when(mPrefService.getBoolean(Pref.ENABLE_SNIPPETS_BY_DSE)).thenReturn(false);
+        when(mFeedServiceBridgeJniMock.isEnabled()).thenReturn(true);
+
+        mMediator =
+                new NtpCustomizationMediator(
+                        mContext,
+                        mBottomSheetController,
+                        mBottomSheetContent,
+                        mViewFlipperPropertyModel,
+                        mContainerPropertyModel,
+                        mProfileSupplier,
+                        mWindowAndroid,
+                        mSnackbarManager,
+                        mShowMainBottomSheetRunnable);
+        mListDelegate = mMediator.createListDelegate();
+        mMediator.setCurrentBottomSheetForTesting(MAIN);
+
+        assertFalse(mListDelegate.getListItems().contains(FEED));
+
+        when(mTemplateUrlService.isDefaultSearchEngineGoogle()).thenReturn(true);
+        when(mPrefService.getBoolean(Pref.ENABLE_SNIPPETS_BY_DSE)).thenReturn(true);
+        clearInvocations(mContainerPropertyModel);
+
+        mMediator.onTemplateURLServiceChanged();
+
+        assertTrue(mListDelegate.getListItems().contains(FEED));
+        verify(mContainerPropertyModel)
+                .set(eq(LIST_CONTAINER_VIEW_DELEGATE), any(ListContainerViewDelegate.class));
+    }
+
+    @Test
+    public void
+            testOnTemplateURLServiceChanged_OnMainBottomSheet_DoesNotNotifyWhenChangingDseFromNonGoogleToAnotherNonGoogle() {
+        when(mTemplateUrlService.isDefaultSearchEngineGoogle()).thenReturn(false);
+        when(mFeedServiceBridgeJniMock.isEnabled()).thenReturn(true);
+
+        mMediator =
+                new NtpCustomizationMediator(
+                        mContext,
+                        mBottomSheetController,
+                        mBottomSheetContent,
+                        mViewFlipperPropertyModel,
+                        mContainerPropertyModel,
+                        mProfileSupplier,
+                        mWindowAndroid,
+                        mSnackbarManager,
+                        mShowMainBottomSheetRunnable);
+        mListDelegate = mMediator.createListDelegate();
+        mMediator.setCurrentBottomSheetForTesting(MAIN);
+
+        when(mTemplateUrlService.isDefaultSearchEngineGoogle()).thenReturn(false);
+        clearInvocations(mContainerPropertyModel);
+
+        mMediator.onTemplateURLServiceChanged();
+
+        verify(mContainerPropertyModel, never()).set(eq(LIST_CONTAINER_VIEW_DELEGATE), any());
+    }
+
+    @Test
+    public void testOnTemplateURLServiceChanged_OnFeedBottomSheet_DismissesSheet() {
+        when(mTemplateUrlService.isDefaultSearchEngineGoogle()).thenReturn(true);
+        when(mFeedServiceBridgeJniMock.isEnabled()).thenReturn(true);
+
+        mMediator =
+                new NtpCustomizationMediator(
+                        mContext,
+                        mBottomSheetController,
+                        mBottomSheetContent,
+                        mViewFlipperPropertyModel,
+                        null, // Standalone sheets do not have a container property model
+                        mProfileSupplier,
+                        mWindowAndroid,
+                        mSnackbarManager,
+                        mShowMainBottomSheetRunnable);
+        mMediator.setCurrentBottomSheetForTesting(FEED);
+
+        when(mTemplateUrlService.isDefaultSearchEngineGoogle()).thenReturn(false);
+
+        clearInvocations(mBottomSheetController);
+        mMediator.onTemplateURLServiceChanged();
+
+        verify(mBottomSheetController).hideContent(eq(mBottomSheetContent), eq(true));
+        assertNull(
+                "Current bottom sheet type should be reset", mMediator.getCurrentBottomSheetType());
+    }
+
+    @Test
+    public void testOnTemplateURLServiceChanged_StandaloneThemeTipSheet() {
+        when(mTemplateUrlService.isDefaultSearchEngineGoogle()).thenReturn(true);
+
+        mMediator =
+                new NtpCustomizationMediator(
+                        mContext,
+                        mBottomSheetController,
+                        mBottomSheetContent,
+                        mViewFlipperPropertyModel,
+                        null, // Standalone sheets do not have a container property model
+                        mProfileSupplier,
+                        mWindowAndroid,
+                        mSnackbarManager,
+                        mShowMainBottomSheetRunnable);
+        mMediator.setCurrentBottomSheetForTesting(THEME_TIP);
+
+        when(mTemplateUrlService.isDefaultSearchEngineGoogle()).thenReturn(false);
+
+        clearInvocations(mBottomSheetController);
+
+        // This should not throw NullPointerException despite the  container property model being
+        // null. It should also not attempt to dismiss since the sheet type is THEME_TIP and not
+        // FEED.
+        mMediator.onTemplateURLServiceChanged();
+
+        verify(mBottomSheetController, never()).hideContent(any(), anyBoolean());
+    }
+
+    @Test
+    public void testOnTemplateURLServiceChanged_NoChange_DoesNotNotify() {
+        clearInvocations(mContainerPropertyModel);
+        mMediator.onTemplateURLServiceChanged();
+        verify(mContainerPropertyModel, never()).set(eq(LIST_CONTAINER_VIEW_DELEGATE), any());
+    }
+
+    @Test
+    public void testTemplateUrlServiceObserverRemoval() {
+        mMediator.destroy();
+        verify(mTemplateUrlService).removeObserver(mMediator);
+    }
+
+    @Test
+    public void testBottomSheetObserver_onSheetClosed_recreateWithActivity() {
+        // Create a mediator with an Activity context to allow updating Snackbar state after
+        // recreating.
+        Activity activity = Robolectric.buildActivity(Activity.class).setup().get();
+        NtpCustomizationMediator mediatorWithActivity =
+                new NtpCustomizationMediator(
+                        activity,
+                        mBottomSheetController,
+                        mBottomSheetContent,
+                        mViewFlipperPropertyModel,
+                        mContainerPropertyModel,
+                        mProfileSupplier,
+                        mWindowAndroid,
+                        mSnackbarManager,
+                        mShowMainBottomSheetRunnable);
+
+        NtpThemeStateProvider ntpThemeStateProvider = mock(NtpThemeStateProvider.class);
+        NtpThemeStateProvider.setInstanceForTesting(ntpThemeStateProvider);
+
+        // When the bottom sheet is closed and recreates the activity, verifies the Snackbar isn't
+        // shown immediately, but state transitioned to PENDING_ON_RECREATE and taskId is set before
+        // recreating.
+        verifySnackbarStateAfterCloseBottomSheet(
+                mediatorWithActivity,
+                /* newThemeSelected= */ true,
+                /* expectSnackbarShown= */ false,
+                SnackBarState.PENDING_ON_RECREATE);
         assertEquals(
-                NtpThemeColorInfo.COLOR_NOT_SET,
-                NtpCustomizationUtils.getCustomizedPrimaryColorFromSharedPreference());
+                activity.getTaskId(),
+                NtpCustomizationPromoManager.getTaskIdForRecreateForTesting());
+    }
+
+    @Test
+    public void testBottomSheetObserver_onSheetClosed_dismiss() {
+        // When the bottom sheet is closed without recreating, verifies the Snackbar is shown
+        // immediately.
+        verifySnackbarStateAfterCloseBottomSheet(
+                mMediator,
+                /* newThemeSelected= */ false,
+                /* expectSnackbarShown= */ true,
+                SnackBarState.SHOWN);
+    }
+
+    private void verifySnackbarStateAfterCloseBottomSheet(
+            NtpCustomizationMediator mediator,
+            boolean newThemeSelected,
+            boolean expectSnackbarShown,
+            @SnackBarState int expectedState) {
+        // Set initial state to PROMO_OPEN so transition to PENDING_ON_RECREATE can happen.
+        NtpCustomizationPromoManager.setStateForTesting(SnackBarState.PROMO_OPEN);
+
+        BottomSheetObserver observer = mediator.getBottomSheetObserverForTesting();
+
+        clearInvocations(mSnackbarManager);
+        mediator.onNewColorSelected(newThemeSelected);
+        observer.onSheetClosed(BACK_PRESS);
+
+        if (expectSnackbarShown) {
+            // Verify snackbar is shown
+            verify(mSnackbarManager).showSnackbar(any(Snackbar.class));
+            assertTrue(NtpCustomizationUtils.isThemeSnackbarShownFromSharedPreference());
+            verify(mConfigManager, never())
+                    .maybeSaveUserSelectedBackgroundTypeToSharedPreference(any());
+        } else {
+            // Verify snackbar isn't shown.
+            verify(mSnackbarManager, never()).showSnackbar(any(Snackbar.class));
+            assertFalse(NtpCustomizationUtils.isThemeSnackbarShownFromSharedPreference());
+            verify(mConfigManager).maybeSaveUserSelectedBackgroundTypeToSharedPreference(any());
+        }
+
+        assertEquals(expectedState, NtpCustomizationPromoManager.getStateForTesting());
     }
 }

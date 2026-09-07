@@ -26,6 +26,7 @@
 #include "third_party/blink/renderer/core/animation/css/css_animations.h"
 #include "third_party/blink/renderer/core/css/css_crossfade_value.h"
 #include "third_party/blink/renderer/core/css/css_gradient_value.h"
+#include "third_party/blink/renderer/core/css/css_identifier_value.h"
 #include "third_party/blink/renderer/core/css/css_image_set_value.h"
 #include "third_party/blink/renderer/core/css/css_light_dark_value_pair.h"
 #include "third_party/blink/renderer/core/css/css_property_value_set.h"
@@ -74,6 +75,22 @@ Element* ComputeStyledElement(const StyleRequest& style_request,
         style_request.pseudo_id, style_request.pseudo_argument);
   }
   return styled_element;
+}
+
+// image(transparent) is used to substitute 'none' inside light-dark() image
+// values per CSS Color 5.
+// https://drafts.csswg.org/css-color-5/#valdef-light-dark-none
+cssvalue::CSSColorImageValue& TransparentImage() {
+  DEFINE_STATIC_LOCAL(
+      Persistent<cssvalue::CSSColorImageValue>, image,
+      (MakeGarbageCollected<cssvalue::CSSColorImageValue>(
+          CSSIdentifierValue::Create(CSSValueID::kTransparent))));
+  return *image;
+}
+
+bool IsNoneValue(const CSSValue& value) {
+  const auto* ident = DynamicTo<CSSIdentifierValue>(value);
+  return ident && ident->GetValueID() == CSSValueID::kNone;
 }
 
 }  // namespace
@@ -152,6 +169,10 @@ EInsideLink StyleResolverState::InsideLink() const {
     // [1] https://drafts.csswg.org/css-pseudo-4/#highlight-cascade
     inside_link_ = ElementLinkState();
   }
+  if (*inside_link_ == EInsideLink::kInsideVisitedLink &&
+      GetElement().IsInCanvasSubtree()) {
+    inside_link_ = EInsideLink::kInsideUnvisitedLink;
+  }
   return *inside_link_;
 }
 
@@ -180,7 +201,7 @@ void StyleResolverState::UpdateLengthConversionData() const {
       GetDocument().GetStyleEngine().GetViewportSize(),
       CSSToLengthConversionData::ContainerSizes(ContainerUnitContext()),
       CSSToLengthConversionData::AnchorData(
-          GetAnchorEvaluator(), StyleBuilder().PositionAnchor(),
+          GetAnchorEvaluator(), StyleBuilder().GetDefaultAnchorData(),
           StyleBuilder().PositionAreaOffsets()),
       StyleBuilder().EffectiveZoom(), length_conversion_flags_, &GetElement());
   if (should_update_line_height_) {
@@ -209,7 +230,7 @@ CSSToLengthConversionData StyleResolverState::UnzoomedLengthConversionData(
   CSSToLengthConversionData::ContainerSizes container_sizes(
       ContainerUnitContext());
   CSSToLengthConversionData::AnchorData anchor_data(
-      GetAnchorEvaluator(), StyleBuilder().PositionAnchor(),
+      GetAnchorEvaluator(), StyleBuilder().GetDefaultAnchorData(),
       StyleBuilder().PositionAreaOffsets());
   return CSSToLengthConversionData(StyleBuilder().GetWritingMode(), font_sizes,
                                    line_height_size, viewport_size,
@@ -259,8 +280,7 @@ void StyleResolverState::SetLayoutParentStyle(
 
 void StyleResolverState::LoadPendingResources() {
   if (pseudo_request_type_ == StyleRequest::kForComputedStyle ||
-      (ParentStyle() && ParentStyle()->IsEnsuredInDisplayNone()) ||
-      StyleBuilder().IsEnsuredOutsideFlatTree()) {
+      (ParentStyle() && ParentStyle()->IsEnsuredInDisplayNone())) {
     return;
   }
   if (StyleBuilder().Display() == EDisplay::kNone && GetStyledElement() &&
@@ -362,24 +382,52 @@ void StyleResolverState::SetTextOrientation(ETextOrientation text_orientation) {
 
 void StyleResolverState::SetPositionAnchor(
     const StylePositionAnchor& position_anchor) {
-  if (StyleBuilder().PositionAnchor() != position_anchor) {
-    StyleBuilder().SetPositionAnchor(position_anchor);
-    MutableCssToLengthConversionData().SetAnchorData(
-        CSSToLengthConversionData::AnchorData(
-            GetAnchorEvaluator(), position_anchor,
-            StyleBuilder().PositionAreaOffsets()));
+  if (StyleBuilder().PositionAnchor() == position_anchor) {
+    return;
   }
+
+  StyleBuilder().SetPositionAnchor(position_anchor);
+  MutableCssToLengthConversionData().SetAnchorData(
+      CSSToLengthConversionData::AnchorData(
+          GetAnchorEvaluator(), StyleBuilder().GetDefaultAnchorData(),
+          StyleBuilder().PositionAreaOffsets()));
 }
 
-void StyleResolverState::SetPositionAreaOffsets(
-    const std::optional<PositionAreaOffsets>& position_area_offsets) {
-  if (StyleBuilder().PositionAreaOffsets() != position_area_offsets) {
-    StyleBuilder().SetPositionAreaOffsets(position_area_offsets);
-    MutableCssToLengthConversionData().SetAnchorData(
-        CSSToLengthConversionData::AnchorData(GetAnchorEvaluator(),
-                                              StyleBuilder().PositionAnchor(),
-                                              position_area_offsets));
+void StyleResolverState::SetPositionArea(PositionArea position_area) {
+  if (StyleBuilder().GetPositionArea() == position_area) {
+    return;
   }
+
+  // Update the position-area.
+  StyleBuilder().SetPositionArea(position_area);
+  MutableCssToLengthConversionData().SetAnchorData(
+      CSSToLengthConversionData::AnchorData(
+          GetAnchorEvaluator(), StyleBuilder().GetDefaultAnchorData(),
+          StyleBuilder().PositionAreaOffsets()));
+
+  if (position_area.IsNone()) {
+    return;
+  }
+  StyleBuilder().SetHasAnchorFunctions();
+
+  // Now update the position-area offsets.
+  AnchorEvaluator* evaluator = GetAnchorEvaluator();
+  if (!evaluator) {
+    return;
+  }
+
+  const std::optional<PositionAreaOffsets> position_area_offsets =
+      evaluator->ComputePositionAreaOffsetsForLayout(
+          StyleBuilder().GetDefaultAnchorData());
+  if (StyleBuilder().PositionAreaOffsets() == position_area_offsets) {
+    return;
+  }
+
+  StyleBuilder().SetPositionAreaOffsets(position_area_offsets);
+  MutableCssToLengthConversionData().SetAnchorData(
+      CSSToLengthConversionData::AnchorData(
+          evaluator, StyleBuilder().GetDefaultAnchorData(),
+          position_area_offsets));
 }
 
 WritingDirectionMode StyleResolverState::GetAnchoredContainerWritingDirection()
@@ -408,43 +456,61 @@ PseudoElement* StyleResolverState::GetPseudoElement() const {
 }
 
 const CSSValue& StyleResolverState::ResolveLightDarkPair(
-    const CSSValue& value) {
+    const CSSValue& value) const {
   if (const auto* pair = DynamicTo<CSSLightDarkValuePair>(value)) {
-    if (StyleBuilder().UsedColorScheme() == mojom::blink::ColorScheme::kLight) {
-      return pair->First();
-    }
-    return pair->Second();
+    const CSSValue& resolved =
+        StyleBuilder().UsedColorScheme() == mojom::blink::ColorScheme::kLight
+            ? pair->First()
+            : pair->Second();
+    // Recurse to handle nested light-dark() pairs.
+    return ResolveLightDarkPair(resolved);
   }
   return value;
 }
 
 const CSSValue& StyleResolverState::ResolveGradients(
     const CSSValue& value) const {
+  const bool was_light_dark_pair = IsA<CSSLightDarkValuePair>(value);
+  const CSSValue& resolved_value = ResolveLightDarkPair(value);
+  // Per CSS Color 5: 'none' inside a light-dark() image value computes to
+  // image(transparent).
+  // https://drafts.csswg.org/css-color-5/#valdef-light-dark-none
+  if (was_light_dark_pair && IsNoneValue(resolved_value)) {
+    return TransparentImage();
+  }
   if (const auto* gradient_value =
-          DynamicTo<cssvalue::CSSGradientValue>(value)) {
+          DynamicTo<cssvalue::CSSGradientValue>(resolved_value)) {
     return gradient_value->ResolveValuesIfNeeded(*this);
   }
-  if (const auto* image_set_value = DynamicTo<CSSImageSetValue>(value)) {
+  if (const auto* image_set_value =
+          DynamicTo<CSSImageSetValue>(resolved_value)) {
     return image_set_value->ResolveValuesIfNeeded(*this);
   }
   if (const auto* cross_fade_value =
-          DynamicTo<cssvalue::CSSCrossfadeValue>(value)) {
+          DynamicTo<cssvalue::CSSCrossfadeValue>(resolved_value)) {
     return cross_fade_value->ResolveValuesIfNeeded(*this);
   }
-  return value;
+  return resolved_value;
 }
 
 CSSValue& StyleResolverState::ResolveGradients(CSSValue& value) const {
-  if (auto* gradient_value = DynamicTo<cssvalue::CSSGradientValue>(value)) {
+  const bool was_light_dark_pair = IsA<CSSLightDarkValuePair>(value);
+  CSSValue& resolved_value = const_cast<CSSValue&>(ResolveLightDarkPair(value));
+  if (was_light_dark_pair && IsNoneValue(resolved_value)) {
+    return TransparentImage();
+  }
+  if (auto* gradient_value =
+          DynamicTo<cssvalue::CSSGradientValue>(resolved_value)) {
     return gradient_value->ResolveValuesIfNeeded(*this);
   }
-  if (auto* image_set_value = DynamicTo<CSSImageSetValue>(value)) {
+  if (auto* image_set_value = DynamicTo<CSSImageSetValue>(resolved_value)) {
     return image_set_value->ResolveValuesIfNeeded(*this);
   }
-  if (auto* cross_fade_value = DynamicTo<cssvalue::CSSCrossfadeValue>(value)) {
+  if (auto* cross_fade_value =
+          DynamicTo<cssvalue::CSSCrossfadeValue>(resolved_value)) {
     return cross_fade_value->ResolveValuesIfNeeded(*this);
   }
-  return value;
+  return resolved_value;
 }
 
 void StyleResolverState::UpdateFont() {

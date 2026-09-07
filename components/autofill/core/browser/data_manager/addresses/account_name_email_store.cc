@@ -4,18 +4,31 @@
 
 #include "components/autofill/core/browser/data_manager/addresses/account_name_email_store.h"
 
+#include <memory>
 #include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
 
+#include "base/check.h"
+#include "base/functional/bind.h"
 #include "base/hash/hash.h"
+#include "base/no_destructor.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "build/buildflag.h"
+#include "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
+#include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/browser/webdata/autofill_change.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_prefs.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/sync/base/data_type.h"
 #include "components/sync/base/features.h"
 #include "components/sync/base/user_selectable_type.h"
 #include "components/sync/service/sync_service.h"
@@ -39,10 +52,9 @@ bool AutofillProfileMatchesAccountInfo(const AutofillProfile& profile,
 }
 
 void RemoveNickname(std::string& name) {
-  static base::NoDestructor<std::unique_ptr<const RE2>> nickname_pattern(
-      std::make_unique<const RE2>(
-          features::kAutofillNameAndEmailProfileNicknameRegex.Get()));
-  RE2::GlobalReplace(&name, **nickname_pattern, "");
+  static const base::NoDestructor<RE2> nickname_pattern(
+      R"(\s+\([^)]*\)|\s+\"[^\"]*\")");
+  RE2::GlobalReplace(&name, *nickname_pattern, "");
 
   name = base::UTF16ToUTF8(base::TrimWhitespace(base::UTF8ToUTF16(name),
                                                 base::TrimPositions::TRIM_ALL));
@@ -78,7 +90,7 @@ void AccountNameEmailStore::OnExtendedAccountInfoUpdated(
       identity_manager_observer_.GetSource()->GetPrimaryAccountInfo(
           signin::ConsentLevel::kSignin);
   if (!primary_info.has_value() ||
-      (!primary_info->IsEmpty() && info.gaia != primary_info->gaia)) {
+      (!primary_info->IsEmpty() && info.GetGaiaId() != primary_info->gaia)) {
     return;
   }
   MaybeUpdateOrCreateAccountNameEmail();
@@ -127,6 +139,10 @@ void AccountNameEmailStore::MaybeUpdateOrCreateAccountNameEmail(
   if (identity_manager_observer_.GetSource()
           ->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin)
           .IsEmpty()) {
+    return;
+  }
+
+  if (account_name.empty()) {
     return;
   }
 
@@ -183,7 +199,7 @@ void AccountNameEmailStore::ApplyChange(const AutofillProfileChange& change) {
       // REMOVE indicates a hard removal, thus the pref needs to be set.
       pref_service_->SetInteger(
           prefs::kAutofillNameAndEmailProfileNotSelectedCounter,
-          features::kAutofillNameAndEmailProfileNotSelectedThreshold.Get() + 1);
+          kNotSelectedThreshold + 1);
       return;
     case AutofillProfileChange::UPDATE:
       // Although the kAccountNameEmail profile is read-only from the user POV,
@@ -243,7 +259,7 @@ void AccountNameEmailStore::UpdateOrCreateAccountNameEmail(
   const bool was_hard_removed =
       pref_service_->GetInteger(
           prefs::kAutofillNameAndEmailProfileNotSelectedCounter) >
-      features::kAutofillNameAndEmailProfileNotSelectedThreshold.Get();
+      kNotSelectedThreshold;
 
   if (!hashes_different && was_hard_removed) {
     // User signed out and then signed in, but previously a hard remove had
@@ -310,8 +326,7 @@ AccountNameEmailStore::GetBlockAccountNameEmailUpdateReason() {
     return ProfileUpdateBlockReason::kUserSignedOut;
   }
 
-  if (!base::FeatureList::IsEnabled(
-          syncer::kReplaceSyncPromosWithSignInPromos) &&
+  if (!syncer::IsReplaceSyncPromosWithSignInPromosEnabled() &&
       !sync_service_observer_.GetSource()->IsSyncFeatureEnabled()) {
     return ProfileUpdateBlockReason::kSyncDisabled;
   }
@@ -338,7 +353,7 @@ AccountNameEmailStore::GetBlockAccountNameEmailUpdateReason() {
 void AccountNameEmailStore::OnCounterPrefUpdated() {
   if (pref_service_->GetInteger(
           prefs::kAutofillNameAndEmailProfileNotSelectedCounter) <=
-      features::kAutofillNameAndEmailProfileNotSelectedThreshold.Get()) {
+      kNotSelectedThreshold) {
     return;
   }
 

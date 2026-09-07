@@ -8,9 +8,9 @@
 #include "ash/public/cpp/tab_cluster/tab_cluster_ui_item.h"
 #include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/ash/browser_delegate/browser_controller.h"
-#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chromeos/ash/components/browser_delegate/browser_controller.h"
+#include "chromeos/ash/components/browser_delegate/browser_delegate.h"
 #include "content/public/browser/web_contents.h"
 
 namespace {
@@ -93,7 +93,6 @@ void TabClusterUIClient::OnTabStripModelChanged(
 }
 
 void TabClusterUIClient::OnTabChangedAt(tabs::TabInterface* tab,
-                                        int index,
                                         TabChangeType change_type) {
   content::WebContents* contents = tab->GetContents();
   // Some tests may manually add tabs to browser such that the newly added tabs

@@ -23,9 +23,11 @@ inline constexpr char16_t kMimeTypePlainText16[] = u"text/plain";
 inline constexpr char kMimeTypeUtf8PlainText[] = "text/plain;charset=utf-8";
 inline constexpr char kMimeTypeUriList[] = "text/uri-list";
 inline constexpr char16_t kMimeTypeUriList16[] = u"text/uri-list";
-// Non-standard type for downloading files after drop events. Only works on
-// Windows. See https://crbug.com/41399675 and https://crbug.com/40390016.
+// Non-standard drag types for downloading files after drop events. Currently
+// supported on Windows and Mac. See https://crbug.com/41399675 and
+// https://crbug.com/40390016.
 inline constexpr char kMimeTypeDownloadUrl[] = "downloadurl";
+inline constexpr char kMimeTypeDownloadUrlList[] = "downloadurl-list";
 inline constexpr char kMimeTypeMozillaUrl[] = "text/x-moz-url";
 inline constexpr char16_t kMimeTypeMozillaUrl16[] = u"text/x-moz-url";
 inline constexpr char kMimeTypeHtml[] = "text/html";
@@ -67,12 +69,18 @@ inline constexpr char kMimeTypeSourceUrl[] = "chromium/x-source-url";
 #if !BUILDFLAG(IS_APPLE)
 
 // TODO(dcheng): This name is temporary. See https://crbug.com/40123727.
+// LINT.IfChange(kMimeTypeDataTransferCustomData)
 inline constexpr char kMimeTypeDataTransferCustomData[] =
     "chromium/x-web-custom-data";
+// LINT.ThenChange(/ui/android/java/src/org/chromium/ui/base/ClipboardImpl.java)
 inline constexpr char16_t kMimeTypeDataTransferCustomData16[] =
     u"chromium/x-web-custom-data";
 inline constexpr char kMimeTypeWebkitSmartPaste[] = "chromium/x-webkit-paste";
 
+// The MIME type for the clipboard format for bookmark entries. This type is
+// not used on the Mac.
+inline constexpr char kMimeTypeBookmarkEntries[] =
+    "chromium/x-bookmark-entries";
 #else
 
 // ----- APPLE UNIFORM TYPES -----
@@ -139,6 +147,16 @@ extern NSString* const kUTTypeWebKitWebUrlsWithTitles;
 // A type used to track the source URL of data put in the clipboard.
 COMPONENT_EXPORT(UI_BASE_CLIPBOARD_TYPES)
 extern NSString* const kUTTypeChromiumSourceUrl;
+
+// A type used to carry the Content-Disposition value (which encodes the
+// original filename) for file contents on the pasteboard during drag-and-drop.
+COMPONENT_EXPORT(UI_BASE_CLIPBOARD_TYPES)
+extern NSString* const kUTTypeChromiumContentDisposition;
+
+// UTI for dictionary containing bookmark structure consisting of individual
+// bookmark nodes and/or bookmark folders.
+COMPONENT_EXPORT(UI_BASE_CLIPBOARD_TYPES)
+extern NSString* const kUTTypeChromiumBookmarkDictionaryList;
 
 #endif  //  __OBJC__
 

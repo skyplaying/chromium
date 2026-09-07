@@ -6,9 +6,10 @@
 #define COMPONENTS_USER_EDUCATION_COMMON_USER_EDUCATION_CONTEXT_H_
 
 #include "base/memory/ref_counted.h"
+#include "components/user_education/common/anchor_element_provider.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/interaction/element_identifier.h"
-#include "ui/base/interaction/framework_specific_implementation.h"
+#include "ui/base/interaction/safe_castable.h"
 
 namespace user_education {
 
@@ -20,7 +21,7 @@ namespace user_education {
 // Because e.g. preconditions need to reference a context whose surface or
 // window may have already gone away, these objects are refcounted, and
 // primarily passed via `UserEducationContextPtr` (see below).
-class UserEducationContext : public ui::FrameworkSpecificImplementation,
+class UserEducationContext : public ui::SafeCastable,
                              public base::RefCounted<UserEducationContext> {
  public:
   // Returns whether the information in this object can still be used.
@@ -35,6 +36,12 @@ class UserEducationContext : public ui::FrameworkSpecificImplementation,
   // Gets the element context, which corresponds to the surface or window in
   // question, if one is specified.
   virtual ui::ElementContext GetElementContext() const = 0;
+
+  // Returns a default filter to use for elements. This could, for example,
+  // limit the elements found to only the active window tree, the current
+  // profile, etc.
+  virtual user_education::AnchorElementFilter GetDefaultElementFilter()
+      const = 0;
 
   // Gets the accelerator provider associated with the window, surface, or
   // application.

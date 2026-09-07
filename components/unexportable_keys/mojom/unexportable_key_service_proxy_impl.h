@@ -11,10 +11,11 @@
 #include <vector>
 
 #include "base/memory/raw_ref.h"
+#include "base/memory/weak_ptr.h"
 #include "components/unexportable_keys/background_task_priority.h"
 #include "components/unexportable_keys/mojom/unexportable_key_service.mojom.h"
 #include "components/unexportable_keys/unexportable_key_service.h"
-#include "crypto/signature_verifier.h"
+#include "crypto/sign.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 
@@ -43,8 +44,7 @@ class UnexportableKeyServiceProxyImpl : public mojom::UnexportableKeyService {
   ~UnexportableKeyServiceProxyImpl() override;
 
   void GenerateSigningKey(
-      const std::vector<crypto::SignatureVerifier::SignatureAlgorithm>&
-          acceptable_algorithms,
+      const std::vector<crypto::sign::SignatureKind>& acceptable_algorithms,
       BackgroundTaskPriority priority,
       GenerateSigningKeyCallback callback) override;
 
@@ -52,28 +52,61 @@ class UnexportableKeyServiceProxyImpl : public mojom::UnexportableKeyService {
                              BackgroundTaskPriority priority,
                              FromWrappedSigningKeyCallback callback) override;
 
-  void Sign(const UnexportableKeyId& token,
+  void GenerateAttestationKey(
+      const std::vector<crypto::sign::SignatureKind>& acceptable_algorithms,
+      BackgroundTaskPriority priority,
+      GenerateAttestationKeyCallback callback) override;
+
+  void FromWrappedAttestationKey(
+      const std::vector<uint8_t>& wrapped_key,
+      BackgroundTaskPriority priority,
+      FromWrappedAttestationKeyCallback callback) override;
+
+  void Sign(const UnexportableSigningKeyId& key_id,
             const std::vector<uint8_t>& data,
             BackgroundTaskPriority priority,
             SignCallback callback) override;
 
-  void GetAllSigningKeysForGarbageCollection(
-      BackgroundTaskPriority priority,
-      GetAllSigningKeysForGarbageCollectionCallback callback) override;
+  void Certify(const UnexportableAttestationKeyId& attestation_key_id,
+               const UnexportableSigningKeyId& signing_key_id,
+               const std::vector<uint8_t>& challenge,
+               BackgroundTaskPriority priority,
+               CertifyCallback callback) override;
 
-  void DeleteKeys(const std::vector<UnexportableKeyId>& key_ids,
+  void GetAllKeysForGarbageCollection(
+      BackgroundTaskPriority priority,
+      GetAllKeysForGarbageCollectionCallback callback) override;
+
+  void DeleteKeys(const std::vector<UnexportableSigningKeyId>& key_ids,
                   BackgroundTaskPriority priority,
                   DeleteKeysCallback callback) override;
 
   void DeleteAllKeys(DeleteAllKeysCallback result) override;
 
  private:
+  using NewSigningKeyCallback =
+      base::OnceCallback<void(ServiceErrorOr<mojom::NewSigningKeyDataPtr>)>;
+  using NewAttestationKeyCallback =
+      base::OnceCallback<void(ServiceErrorOr<mojom::NewAttestationKeyDataPtr>)>;
+
+  void OnSigningKeyCreated(
+      NewSigningKeyCallback callback,
+      ServiceErrorOr<UnexportableSigningKeyId> error_or_key_id);
+  void OnAttestationKeyCreated(
+      NewAttestationKeyCallback callback,
+      ServiceErrorOr<UnexportableAttestationKeyId> error_or_key_id);
+  void OnGetAllKeysForGarbageCollection(
+      GetAllKeysForGarbageCollectionCallback callback,
+      ServiceErrorOr<std::vector<UnexportableSigningKeyId>> error_or_key_ids);
+
   mojo::Receiver<mojom::UnexportableKeyService> receiver_{this};
   // The underlying UnexportableKeyService instance. Not owned.
   // This pointer must remain valid for the entire lifetime of the
   // UnexportableKeyServiceProxyImpl object.
   const raw_ref<unexportable_keys::UnexportableKeyService>
       unexportable_key_service_;
+
+  base::WeakPtrFactory<UnexportableKeyServiceProxyImpl> weak_ptr_factory_{this};
 };
 
 }  // namespace unexportable_keys

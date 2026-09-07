@@ -13,9 +13,11 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "base/check.h"
@@ -29,7 +31,6 @@
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
-#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "base/time/time.h"
@@ -40,20 +41,22 @@
 #include "chrome/updater/updater_branding.h"
 #include "chrome/updater/updater_scope.h"
 #include "chrome/updater/util/win_util.h"
+#include "third_party/abseil-cpp/absl/strings/str_format.h"
 
 namespace updater {
 namespace {
 
 // Names of the TaskSchedulerV2 libraries so we can pin them below.
-const wchar_t kV2Library[] = L"taskschd.dll";
+constexpr wchar_t kV2Library[] = L"taskschd.dll";
 
 // Text for times used in the V2 API of the Task Scheduler.
-const wchar_t kOneHourText[] = L"PT1H";
-const wchar_t kFiveHoursText[] = L"PT5H";
-const wchar_t kOneDayText[] = L"P1D";
+constexpr wchar_t kOneMinuteText[] = L"PT1M";
+constexpr wchar_t kOneHourText[] = L"PT1H";
+constexpr wchar_t kFiveHoursText[] = L"PT5H";
+constexpr wchar_t kOneDayText[] = L"P1D";
 
-const size_t kNumDeleteTaskRetry = 3;
-const size_t kDeleteRetryDelayInMs = 100;
+constexpr size_t kNumDeleteTaskRetry = 3;
+constexpr size_t kDeleteRetryDelayInMs = 100;
 
 // Returns true if `error` is HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND) or
 // HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND).
@@ -70,7 +73,7 @@ std::wstring GetTimestampString(base::Time timestamp) {
   base::Time::Exploded exploded_time;
   // The Z timezone info at the end of the string means UTC.
   timestamp.UTCExplode(&exploded_time);
-  return base::UTF8ToWide(base::StringPrintf(
+  return base::UTF8ToWide(absl::StrFormat(
       "%04d-%02d-%02dT%02d:%02d:%02dZ", exploded_time.year, exploded_time.month,
       exploded_time.day_of_month, exploded_time.hour, exploded_time.minute,
       exploded_time.second));
@@ -88,26 +91,22 @@ std::wstring GetTimestampString(base::Time timestamp) {
   return true;
 }
 
-[[nodiscard]] bool GetCurrentUser(base::win::ScopedBstr& user_name) {
-  static_assert(sizeof(OLECHAR) == sizeof(WCHAR));
-  ULONG user_name_size = 256;
-  if (!::GetUserNameExW(
-          NameSamCompatible,
-          user_name.AllocateBytes(user_name_size * sizeof(OLECHAR)),
-          &user_name_size)) {
+[[nodiscard]] std::optional<std::wstring> GetCurrentUser() {
+  ULONG size = 256;
+  std::wstring user_name(size, L'\0');
+  if (!::GetUserNameExW(NameSamCompatible, user_name.data(), &size)) {
     if (::GetLastError() != ERROR_MORE_DATA) {
       PLOG(ERROR) << "GetUserNameEx failed.";
-      return false;
+      return std::nullopt;
     }
-    if (!::GetUserNameExW(
-            NameSamCompatible,
-            user_name.AllocateBytes(user_name_size * sizeof(OLECHAR)),
-            &user_name_size)) {
-      PLOG(ERROR) << "GetUserNameEx failed.";
-      return false;
+    user_name.resize(size);  // Includes the terminating 0.
+    if (!::GetUserNameExW(NameSamCompatible, user_name.data(), &size)) {
+      PLOG(ERROR) << "GetUserNameEx retry failed.";
+      return std::nullopt;
     }
   }
-  return true;
+  user_name.resize(size);  // Shrink to actual length.
+  return user_name;
 }
 
 void PinModule(const wchar_t* module_name) {
@@ -210,7 +209,7 @@ class TaskSchedulerV2 final : public TaskScheduler {
     // local times.
     // The returned local times are already adjusted for DST.
     FILETIME local_file_time = {};
-    if (!::SystemTimeToFileTime(&run_times[0], &local_file_time)) {
+    if (!::SystemTimeToFileTime(run_times.get(), &local_file_time)) {
       return false;
     }
     next_run_time = base::Time::FromFileTime(local_file_time);
@@ -308,7 +307,7 @@ class TaskSchedulerV2 final : public TaskScheduler {
     }
 
     for (const std::wstring& task_name : task_names) {
-      if (base::StartsWith(task_name, task_prefix)) {
+      if (task_name.starts_with(task_prefix)) {
         return task_name;
       }
     }
@@ -418,7 +417,7 @@ class TaskSchedulerV2 final : public TaskScheduler {
     if (use_task_subfolders_) {
       // Try to delete \\Company\Product first and \\Company second.
       if (DeleteFolderIfEmpty(GetTaskSubfolderName())) {
-        std::ignore = DeleteFolderIfEmpty(GetTaskCompanyFolder());
+        DeleteFolderIfEmpty(GetTaskCompanyFolder());
       }
     }
 
@@ -510,10 +509,12 @@ class TaskSchedulerV2 final : public TaskScheduler {
     }
 
     const bool is_system = IsSystemInstall(scope_);
-    base::win::ScopedBstr user_name(L"NT AUTHORITY\\SYSTEM");
-    if (!is_system && !GetCurrentUser(user_name)) {
+    const std::optional<std::wstring> current_user =
+        is_system ? L"NT AUTHORITY\\SYSTEM" : GetCurrentUser();
+    if (!current_user) {
       return false;
     }
+    const base::win::ScopedBstr user_name(*current_user);
 
     Microsoft::WRL::ComPtr<IPrincipal> principal;
     hr = task->get_Principal(&principal);
@@ -724,6 +725,18 @@ class TaskSchedulerV2 final : public TaskScheduler {
             return false;
           }
         }
+
+        // Delay the logon-triggered run so that the task does not compete for
+        // CPU and disk with the rest of the logon sequence. The delay applies
+        // only to this trigger, so the periodic triggers on the same task keep
+        // their cadence and update freshness is unaffected.
+        hr = logon_trigger->put_Delay(
+            base::win::ScopedBstr(kOneMinuteText).Get());
+        if (FAILED(hr)) {
+          PLOG(ERROR) << "Can't put 'Delay' to " << kOneMinuteText << ". "
+                      << std::hex << hr;
+          return false;
+        }
       }
     }
 
@@ -814,7 +827,7 @@ class TaskSchedulerV2 final : public TaskScheduler {
     }
 
     for (const std::wstring& task_name : task_names) {
-      if (base::StartsWith(task_name, prefix)) {
+      if (task_name.starts_with(prefix)) {
         callback(task_name);
       }
     }
@@ -916,12 +929,8 @@ class TaskSchedulerV2 final : public TaskScheduler {
     // Calling ITaskService::Connect crashes when the current user is empty.
     // This is correlated with a Windows update followed by a computer
     // restart (crbug.com/434269515).
-    const std::wstring current_user = [] {
-      base::win::ScopedBstr user_name;
-      return GetCurrentUser(user_name) ? std::wstring(user_name.Get())
-                                       : std::wstring();
-    }();
-    if (current_user.empty()) {
+    const std::optional<std::wstring> current_user = GetCurrentUser();
+    if (!current_user || current_user->empty()) {
       return nullptr;
     }
     hr = task_service->Connect(base::win::ScopedVariant::kEmptyVariant,
@@ -1333,7 +1342,7 @@ class TaskSchedulerV2 final : public TaskScheduler {
 
   // If the task folder specified by |folder_name| is empty, try to delete it.
   // Ignore failures. Returns true if the folder is successfully deleted.
-  [[nodiscard]] bool DeleteFolderIfEmpty(const std::wstring& folder_name) {
+  bool DeleteFolderIfEmpty(const std::wstring& folder_name) {
     // Try deleting if empty. Race conditions here should be handled by the API.
     Microsoft::WRL::ComPtr<ITaskFolder> root_task_folder;
     HRESULT hr = task_service_->GetFolder(base::win::ScopedBstr(L"\\").Get(),
@@ -1441,7 +1450,7 @@ std::ostream& operator<<(std::ostream& stream,
     stream << ", exec_action: " << exec_action;
   }
 
-  return stream << ", logon_type: " << base::StringPrintf("0x%x", t.logon_type)
+  return stream << ", logon_type: " << absl::StrFormat("0x%x", t.logon_type)
                 << ", user_id: " << t.user_id;
 }
 

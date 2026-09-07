@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/webui/new_tab_page/action_chips/action_chips_handler.h"
 
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -13,35 +14,48 @@
 #include "base/time/time.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/contextual_search/contextual_search_web_contents_helper.h"
+#include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webui/new_tab_page/action_chips/action_chips.mojom.h"
 #include "chrome/browser/ui/webui/new_tab_page/action_chips/action_chips_generator.h"
 #include "chrome/browser/ui/webui/new_tab_page/action_chips/action_chips_metrics.h"
 #include "chrome/browser/ui/webui/new_tab_page/action_chips/tab_id_generator.h"
-#include "chrome/browser/ui/webui/new_tab_page/new_tab_page_ui.h"
 #include "chrome/common/pref_names.h"
 #include "components/contextual_search/contextual_search_metrics_recorder.h"
 #include "components/contextual_search/contextual_search_service.h"
 #include "components/contextual_search/contextual_search_session_handle.h"
+#include "components/feature_engagement/public/feature_constants.h"
 #include "components/google/core/common/google_util.h"
+#include "components/lens/lens_overlay_invocation_source.h"
 #include "components/search/ntp_features.h"
+#include "components/search_engines/template_url_service.h"
+#include "components/search_engines/util.h"
 #include "components/sessions/content/session_tab_helper.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/clipboard_types.h"
+#include "content/public/browser/page_navigator.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/url_constants.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
+#include "third_party/omnibox_proto/chrome_aim_entry_point.pb.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
+#include "ui/base/window_open_disposition_utils.h"
 #include "url/gurl.h"
 #include "url/mojom/url.mojom.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/user_education/browser_user_education_interface.h"
+#include "chrome/browser/ui/webui/webui_embedding_context.h"
+#endif
 
 namespace {
 using ::action_chips::RecordActionChipsRetrievalLatencyMetrics;
 using ::action_chips::RecordImpressionMetrics;
 using ::action_chips::mojom::ActionChip;
 using ::action_chips::mojom::ActionChipPtr;
-using ::action_chips::mojom::ChipType;
 using ::action_chips::mojom::TabInfo;
 using ::action_chips::mojom::TabInfoPtr;
 using ::tabs::TabInterface;
@@ -54,6 +68,7 @@ using ::tabs::TabInterface;
  * - Chrome internal page
  * - Chrome untrusted internal page
  */
+#if !BUILDFLAG(IS_ANDROID)
 bool IsInvalidMostRecentTab(content::WebContents& contents) {
   const GURL& url = contents.GetLastCommittedURL();
   return google_util::IsGoogleSearchUrl(url) || !url.is_valid() ||
@@ -105,6 +120,7 @@ bool IsTabReadyForActionChipsRetrieval(content::WebContents* web_contents,
 
   return tabs::TabInterface::GetFromContents(web_contents)->IsActivated();
 }
+#endif  // !BUILDFLAG(IS_ANDROID)
 }  // namespace
 
 ActionChipsHandler::ActionChipsHandler(
@@ -112,18 +128,23 @@ ActionChipsHandler::ActionChipsHandler(
     mojo::PendingRemote<action_chips::mojom::Page> page,
     Profile* profile,
     content::WebUI* web_ui,
-    std::unique_ptr<ActionChipsGenerator> action_chips_generator)
+    std::unique_ptr<ActionChipsGenerator> action_chips_generator,
+    GetSessionHandleCallback get_session_handle_callback)
     : receiver_(this, std::move(receiver)),
       page_(std::move(page)),
       profile_(profile),
       web_ui_(web_ui),
-      action_chips_generator_(std::move(action_chips_generator)) {
-  content::WebContents* web_contents = web_ui_->GetWebContents();
-  auto* browser_window_interface =
-      webui::GetBrowserWindowInterface(web_contents);
-  // No need to call RemoveObserver later since TabStripModelObserver takes care
-  // of it in its destructor.
-  browser_window_interface->GetTabStripModel()->AddObserver(this);
+      action_chips_generator_(std::move(action_chips_generator)),
+      get_session_handle_callback_(std::move(get_session_handle_callback)) {
+#if !BUILDFLAG(IS_ANDROID)
+  browser_window_interface_subscription_ =
+      webui::RegisterBrowserWindowInterfaceChanged(
+          web_ui_->GetWebContents(),
+          base::BindRepeating(
+              &ActionChipsHandler::OnBrowserWindowInterfaceChanged,
+              weak_factory_.GetWeakPtr()));
+  UpdateTabStripModelObservation();
+#endif  // !BUILDFLAG(IS_ANDROID)
   pref_change_registrar_.Init(profile_->GetPrefs());
   pref_change_registrar_.Add(
       prefs::kNtpToolChipsVisible,
@@ -140,10 +161,12 @@ void ActionChipsHandler::StartActionChipsRetrieval() {
   }
 
   TabInterface* tab = nullptr;
+#if !BUILDFLAG(IS_ANDROID)
   if (contextual_search::ContextualSearchService::IsContextSharingEnabled(
           profile_->GetPrefs())) {
     tab = FindMostRecentTab(*web_ui_);
   }
+#endif  // !BUILDFLAG(IS_ANDROID)
 
   const GURL current_url =
       tab != nullptr ? tab->GetContents()->GetLastCommittedURL() : GURL();
@@ -158,14 +181,9 @@ void ActionChipsHandler::StartActionChipsRetrieval() {
 }
 
 void ActionChipsHandler::ActivateMetricsFunnel(const std::string& funnel_name) {
-  auto* controller = web_ui_->GetController();
-  NewTabPageUI* ntp_ui =
-      controller ? controller->GetAs<NewTabPageUI>() : nullptr;
-  if (!ntp_ui) {
-    return;
-  }
-
-  auto* session_handle = ntp_ui->GetOrCreateContextualSessionHandle();
+  auto* session_handle = get_session_handle_callback_
+                             ? get_session_handle_callback_.Run()
+                             : nullptr;
   if (!session_handle) {
     return;
   }
@@ -176,13 +194,17 @@ void ActionChipsHandler::ActivateMetricsFunnel(const std::string& funnel_name) {
   }
 }
 
+void ActionChipsHandler::SetActionChipsVisibility(bool is_visible) {
+  profile_->GetPrefs()->SetBoolean(prefs::kNtpToolChipsVisible, is_visible);
+}
+
+
 void ActionChipsHandler::SendActionChipsToUi(base::TimeTicks start_time,
                                              std::vector<ActionChipPtr> chips) {
   if (!page_.is_bound()) {
     return;
   }
-  if (!ntp_features::kNtpNextShowSimplificationUIParam.Get() &&
-      chips.size() <= 1) {
+  if (chips.size() <= 1) {
     // We show a chip only when there are more than one chip. This occurs when
     // there is no tab opened and only one of the AIM features are enabled.
     // This branch ensures that no chip is displayed by returning an empty list.
@@ -191,11 +213,15 @@ void ActionChipsHandler::SendActionChipsToUi(base::TimeTicks start_time,
 
   RecordActionChipsRetrievalLatencyMetrics(base::TimeTicks::Now() - start_time);
   RecordImpressionMetrics(chips);
-  action_chips::RecordActionChipsAnyShown(!chips.empty());
+  if (!has_recorded_any_shown_) {
+    action_chips::RecordActionChipsAnyShown(!chips.empty());
+    has_recorded_any_shown_ = true;
+  }
 
   page_->OnActionChipsChanged(std::move(chips));
 }
 
+#if !BUILDFLAG(IS_ANDROID)
 void ActionChipsHandler::OnTabStripModelChanged(
     TabStripModel*,
     const TabStripModelChange& change,
@@ -205,6 +231,26 @@ void ActionChipsHandler::OnTabStripModelChanged(
   }
   StartActionChipsRetrieval();
 }
+
+bool ActionChipsHandler::UpdateTabStripModelObservation() {
+  TabStripModelObserver::StopObservingAll(this);
+  content::WebContents* web_contents = web_ui_->GetWebContents();
+  auto* browser_window_interface =
+      webui::GetBrowserWindowInterface(web_contents);
+  if (browser_window_interface) {
+    browser_window_interface->GetTabStripModel()->AddObserver(this);
+  }
+  return browser_window_interface != nullptr;
+}
+
+void ActionChipsHandler::OnBrowserWindowInterfaceChanged() {
+  if (!UpdateTabStripModelObservation()) {
+    return;
+  }
+  last_processed_url_.reset();
+  StartActionChipsRetrieval();
+}
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 bool ActionChipsHandler::ShouldThrottleRetrieval(const GURL& current_url) {
   if (last_processed_url_ == current_url) {
@@ -219,4 +265,33 @@ void ActionChipsHandler::OnVisibilityChanged() {
     last_processed_url_.reset();
     StartActionChipsRetrieval();
   }
+}
+
+void ActionChipsHandler::NavigateToAim(
+    const std::string& query_text,
+    uint8_t mouse_button,
+    searchbox::mojom::ActionModifiersPtr modifiers) {
+  TemplateURLService* template_url_service =
+      TemplateURLServiceFactory::GetForProfile(profile_);
+  if (!template_url_service ||
+      !template_url_service->GetDefaultSearchProvider()) {
+    return;
+  }
+
+  GURL aim_url = GetUrlForAim(
+      template_url_service,
+      omnibox::ChromeAimEntryPoint::DESKTOP_CHROME_NTP_ACTION_CHIPS_ENTRY_POINT,
+      base::Time::Now(), base::UTF8ToUTF16(query_text),
+      lens::LensOverlayInvocationSource::kNtpActionChips,
+      /*additional_params=*/{});
+
+  const WindowOpenDisposition disposition = ui::DispositionFromClick(
+      /*middle_button=*/mouse_button == 1, modifiers->alt_key,
+      modifiers->ctrl_key, modifiers->meta_key, modifiers->shift_key);
+
+  content::OpenURLParams params(aim_url, content::Referrer(), disposition,
+                                ui::PAGE_TRANSITION_GENERATED,
+                                /*is_renderer_initiated=*/false);
+  web_ui_->GetWebContents()->OpenURL(params,
+                                     /*navigation_handle_callback=*/{});
 }

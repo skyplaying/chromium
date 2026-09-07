@@ -34,9 +34,10 @@ import java.util.Map;
 import java.util.TreeMap;
 
 /**
- * An implementation of {@link HttpURLConnection} that uses Cronet to send
- * requests and receive responses.
- * {@hide}
+ * An implementation of {@link HttpURLConnection} that uses Cronet to send requests and receive
+ * responses.
+ *
+ * @hide
  */
 public class CronetHttpURLConnection extends HttpURLConnection {
     private static final String TAG = CronetHttpURLConnection.class.getSimpleName();
@@ -375,7 +376,7 @@ public class CronetHttpURLConnection extends HttpURLConnection {
         setRequestPropertyInternal(key, value, true);
     }
 
-    private final void setRequestPropertyInternal(String key, String value, boolean overwrite) {
+    private void setRequestPropertyInternal(String key, String value, boolean overwrite) {
         if (connected) {
             throw new IllegalStateException(
                     "Cannot modify request property after connection is made.");

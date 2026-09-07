@@ -19,7 +19,6 @@
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/transform.h"
-#include "ui/gfx/icc_profile.h"
 
 namespace display {
 namespace {
@@ -177,7 +176,7 @@ Display::Display(int64_t id, const gfx::Rect& bounds)
 
 Display::Display(const Display& other) = default;
 
-Display::~Display() {}
+Display::~Display() = default;
 
 // static
 Display Display::GetDefaultDisplay() {
@@ -325,6 +324,7 @@ bool Display::EqualExceptForHdrHeadroom(const Display& lhs,
          lhs.native_origin_ == rhs.native_origin_ &&
          lhs.detected_ == rhs.detected_ && lhs.work_area_ == rhs.work_area_ &&
          lhs.device_scale_factor_ == rhs.device_scale_factor_ &&
+         lhs.text_scale_multiplier_ == rhs.text_scale_multiplier_ &&
          lhs.rotation_ == rhs.rotation_ &&
          lhs.touch_support_ == rhs.touch_support_ &&
          lhs.accelerometer_support_ == rhs.accelerometer_support_ &&

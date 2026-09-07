@@ -62,11 +62,6 @@ BASE_FEATURE(kV8CodeMemoryWriteProtection, kFeatureDefaultStateControlledByV8);
 // Enables fallback to a breadth-first regexp engine on excessive backtracking.
 BASE_FEATURE(kV8ExperimentalRegexpEngine, kFeatureDefaultStateControlledByV8);
 
-// Enable accounting for external memory limits as part of global limits in v8
-// Heap.
-BASE_FEATURE(kV8ExternalMemoryAccountedInGlobalLimit,
-             kFeatureDefaultStateControlledByV8);
-
 // Enables the Turbofan compiler.
 BASE_FEATURE(kV8Turbofan, kFeatureDefaultStateControlledByV8);
 
@@ -82,6 +77,8 @@ BASE_FEATURE(kV8TurboshaftInstructionSelection,
 BASE_FEATURE(kV8Maglev, kFeatureDefaultStateControlledByV8);
 BASE_FEATURE(kV8ConcurrentMaglevHighPriorityThreads,
              kFeatureDefaultStateControlledByV8);
+
+BASE_FEATURE(kV8MaxValidPolymorphicMapCount, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kV8HighEndAndroid, kFeatureDefaultStateControlledByV8);
 
@@ -161,12 +158,9 @@ BASE_FEATURE(kV8SlowHistogramsCodeMemoryWriteProtection,
 BASE_FEATURE(kV8SlowHistogramsSparkplug, base::FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE(kV8SlowHistogramsSparkplugAndroid,
              base::FEATURE_DISABLED_BY_DEFAULT);
-BASE_FEATURE(kV8SlowHistogramsNoTurbofan, base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kV8ConcurrentMarkingHighPriorityThreads,
              kFeatureDefaultStateControlledByV8);
-
-BASE_FEATURE(kV8UseLibmTrigFunctions, kFeatureDefaultStateControlledByV8);
 
 BASE_FEATURE(kV8UseOriginalMessageForStackTrace,
              kFeatureDefaultStateControlledByV8);
@@ -180,18 +174,8 @@ BASE_FEATURE(kV8IgnitionElideRedundantTdzChecks,
 
 // JavaScript language features.
 
-// Enables the RegExp modifiers proposal.
-BASE_FEATURE(kJavaScriptRegExpModifiers, kFeatureDefaultStateControlledByV8);
-
 // Enables the `with` syntax for the Import Attributes proposal.
 BASE_FEATURE(kJavaScriptImportAttributes, kFeatureDefaultStateControlledByV8);
-
-// Enables the RegExp duplicate named capture groups proposal.
-BASE_FEATURE(kJavaScriptRegExpDuplicateNamedGroups,
-             kFeatureDefaultStateControlledByV8);
-
-// Enables the Promise.try proposal.
-BASE_FEATURE(kJavaScriptPromiseTry, kFeatureDefaultStateControlledByV8);
 
 // WebAssembly features (currently none).
 

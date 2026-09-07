@@ -132,14 +132,19 @@ export class SettingsPrivacyHubGeolocationSubpage extends
       },
       currentTimeZoneName_: {
         type: String,
+        value: () => loadTimeData.getString('timeZoneName'),
         notify: true,
       },
       currentSunRiseTime_: {
         type: String,
+        value: () =>
+            loadTimeData.getString('privacyHubSystemServicesInitSunRiseTime'),
         notify: true,
       },
       currentSunSetTime_: {
         type: String,
+        value: () =>
+            loadTimeData.getString('privacyHubSystemServicesInitSunSetTime'),
         notify: true,
       },
       nightLightText_: {
@@ -187,38 +192,26 @@ export class SettingsPrivacyHubGeolocationSubpage extends
     Setting.kGeolocationAdvanced,
   ]);
 
-  private geolocationAccessLevelPrefValues_: {[key: string]: number};
-  private geolocationModeDescriptionText_: string;
-  private appList_: App[];
-  private appPermissionsObserverReceiver_: AppPermissionsObserverReceiver|null;
-  private isSecondaryUser_: boolean;
-  private systemGeolocationAccessLevel_: GeolocationAccessLevel;
-  private isGeolocationAllowedForApps_: boolean;
-  private mojoInterfaceProvider_: AppPermissionsHandlerInterface;
-  private browserProxy_: PrivacyHubBrowserProxy;
-  private currentTimeZoneName_: string;
-  private currentSunRiseTime_: string;
-  private currentSunSetTime_: string;
-  private shouldShowManageGeolocationDialog_: boolean;
-  private automaticTimeZoneText_: string;
-  private darkThemeText_: string;
-  private localWeatherText_: string;
-  private nightLightText_: string;
-
-  constructor() {
-    super();
-
-    this.mojoInterfaceProvider_ = getAppPermissionProvider();
-
-    this.appPermissionsObserverReceiver_ = null;
-    this.browserProxy_ = PrivacyHubBrowserProxyImpl.getInstance();
-    // Assigning the initial time zone name.
-    this.currentTimeZoneName_ = this.i18n('timeZoneName');
-    this.currentSunRiseTime_ =
-        this.i18n('privacyHubSystemServicesInitSunRiseTime');
-    this.currentSunSetTime_ =
-        this.i18n('privacyHubSystemServicesInitSunSetTime');
-  }
+  declare private geolocationAccessLevelPrefValues_: {[key: string]: number};
+  private geolocationModeDescriptionText_: string = '';
+  declare private appList_: App[];
+  private appPermissionsObserverReceiver_: AppPermissionsObserverReceiver|null =
+      null;
+  declare private isSecondaryUser_: boolean;
+  declare private systemGeolocationAccessLevel_: GeolocationAccessLevel;
+  declare private isGeolocationAllowedForApps_: boolean;
+  private mojoInterfaceProvider_: AppPermissionsHandlerInterface =
+      getAppPermissionProvider();
+  private browserProxy_: PrivacyHubBrowserProxy =
+      PrivacyHubBrowserProxyImpl.getInstance();
+  declare private currentTimeZoneName_: string;
+  declare private currentSunRiseTime_: string;
+  declare private currentSunSetTime_: string;
+  private shouldShowManageGeolocationDialog_: boolean = false;
+  declare private automaticTimeZoneText_: string;
+  declare private darkThemeText_: string;
+  declare private localWeatherText_: string;
+  declare private nightLightText_: string;
 
   override ready(): void {
     super.ready();
@@ -353,7 +346,8 @@ export class SettingsPrivacyHubGeolocationSubpage extends
   }
 
   private isAutomaticTimeZoneConfigured_(): boolean {
-    return this.getPref('generated.resolve_timezone_by_geolocation_on_off')
+    return this
+        .getPref<boolean>('generated.resolve_timezone_by_geolocation_on_off')
         .value;
   }
 
@@ -447,7 +441,7 @@ export class SettingsPrivacyHubGeolocationSubpage extends
   }
 
   private isLocalWeatherConfiguredToUseGeolocation_(): boolean {
-    return this.getPref('settings.ambient_mode.enabled').value;
+    return this.getPref<boolean>('settings.ambient_mode.enabled').value;
   }
 
   private computeLocalWeatherText_(): string {

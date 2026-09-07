@@ -57,11 +57,11 @@ enum class StorageAccessResult {
   ACCESS_ALLOWED_STORAGE_ACCESS_GRANT = 2,
   // OBSOLETE_ACCESS_ALLOWED_FORCED = 3 /*(DEPRECATED)*/,
   ACCESS_ALLOWED_TOP_LEVEL_STORAGE_ACCESS_GRANT = 4,
-  ACCESS_ALLOWED_3PCD_TRIAL = 5,
-  ACCESS_ALLOWED_3PCD_METADATA_GRANT = 6,
-  ACCESS_ALLOWED_3PCD_HEURISTICS_GRANT = 7,
+  // ACCESS_ALLOWED_3PCD_TRIAL = 5,  // Deprecated
+  // ACCESS_ALLOWED_3PCD_METADATA_GRANT = 6,  // Deprecated
+  // ACCESS_ALLOWED_3PCD_HEURISTICS_GRANT = 7,  // Deprecated
   // ACCESS_ALLOWED_CORS_EXCEPTION = 8,  // Deprecated
-  ACCESS_ALLOWED_TOP_LEVEL_3PCD_TRIAL = 9,
+  // ACCESS_ALLOWED_TOP_LEVEL_3PCD_TRIAL = 9,  // Deprecated
   ACCESS_ALLOWED_SCHEME = 10,
   ACCESS_ALLOWED_SANDBOX_VALUE = 11,
   kMaxValue = ACCESS_ALLOWED_SANDBOX_VALUE,
@@ -105,27 +105,6 @@ enum class StorageAccessStatusOutcome {
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
-// The values of this enum correspond to possible reasons the
-// `Sec-Fetch-Storage-Access` header may be omitted from a request, as well as
-// the possible values of the header when it is included.
-enum class SecFetchStorageAccessOutcome {
-  // The request's storage access status is nullopt.
-  kOmittedStatusMissing = 0,
-  // The request's credentials mode is not "include".
-  kOmittedRequestOmitsCredentials = 1,
-  // The `Sec-Fetch-Storage-Access` header is included and has the value `none`.
-  kValueNone = 2,
-  // The `Sec-Fetch-Storage-Access` header is included and has the value
-  // `inactive`.
-  kValueInactive = 3,
-  // The `Sec-Fetch-Storage-Access` header is included and has the value
-  // `active`.
-  kValueActive = 4,
-  kMaxValue = kValueActive
-};
-
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
 // The values of this enum correspond to the possible outcomes of a call to
 // URLRequest::ShouldSetLoadWithStorageAccess().
 //
@@ -144,28 +123,6 @@ enum class ActivateStorageAccessLoadOutcome {
   kMaxValue = kSuccess
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/storage/enums.xml:ActivateStorageAccessLoadOutcome)
-
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
-// The values of this enum correspond to the possible outcomes of a call to
-// URLRequestHttpJob::NeedsRetryWithStorageAccess().
-//
-// LINT.IfChange(ActivateStorageAccessRetryOutcome)
-enum class ActivateStorageAccessRetryOutcome {
-  // Applies when the `Activate-Storage-Access` header behavior is not enabled
-  // under the existing feature flags or content settings.
-  // kFailureHeaderDisabled = 0, // Deprecated (feature is always enabled).
-  // Applies when a response includes a well-formed
-  // `Activate-Storage-Access: retry; ..." header, but the corresponding
-  // request's `Sec-Fetch-Storage-Access` header is not `inactive`.
-  kFailureIneffectiveRetry = 1,
-  // Applies when a response includes a well-formed
-  // "Activate-Storage-Access: retry; ..." header, and that header is honored
-  // by the browser.
-  kSuccess = 2,
-  kMaxValue = kSuccess
-};
-// LINT.ThenChange(//tools/metrics/histograms/metadata/storage/enums.xml:ActivateStorageAccessRetryOutcome)
 
 // Helper to fire telemetry indicating if a given request for storage was
 // allowed or not by the provided |result|.
@@ -421,19 +378,12 @@ NET_EXPORT bool IsTimeLimitedInsecureCookiesEnabled();
 
 // Computes the First-Party Sets metadata and cache match information.
 // `isolation_info` must be fully populated.
-//
-// The result may be returned synchronously, or `callback` may be invoked
-// asynchronously with the result. The callback will be invoked iff the return
-// value is nullopt; i.e. a result will be provided via return value or
-// callback, but not both, and not neither.
-[[nodiscard]] NET_EXPORT std::optional<
-    std::pair<FirstPartySetMetadata, FirstPartySetsCacheFilter::MatchInfo>>
-ComputeFirstPartySetMetadataMaybeAsync(
-    const SchemefulSite& request_site,
-    const IsolationInfo& isolation_info,
-    const CookieAccessDelegate* cookie_access_delegate,
-    base::OnceCallback<void(FirstPartySetMetadata,
-                            FirstPartySetsCacheFilter::MatchInfo)> callback);
+[[nodiscard]] NET_EXPORT
+    std::pair<FirstPartySetMetadata, FirstPartySetsCacheFilter::MatchInfo>
+    ComputeFirstPartySetMetadata(
+        const SchemefulSite& request_site,
+        const IsolationInfo& isolation_info,
+        const CookieAccessDelegate* cookie_access_delegate);
 
 // Converts a string representing the http request method to its enum
 // representation.

@@ -61,11 +61,12 @@ LayoutObject* LayoutTreeBuilderForElement::NextLayoutObject() const {
   if (node_->IsScrollMarkerPseudoElement()) {
     return nullptr;
   }
-  // Overscroll areas are the only child within their
+  // Overscroll areas are the last child within their
   // ::-internal-overscroll-area-parent.
   if (style_->IsInternalOverscrollPositionAuto()) {
     return nullptr;
   }
+
   if (style_->IsRenderedInTopLayer(*node_)) {
     if (LayoutObject* next_in_top_layer =
             LayoutTreeBuilderTraversal::NextInTopLayer(*node_)) {
@@ -141,7 +142,9 @@ void LayoutTreeBuilderForElement::CreateLayoutObject() {
   LayoutObject* next_layout_object = NextLayoutObject();
   node_->SetLayoutObject(new_layout_object);
 
-  DCHECK(!new_layout_object->Style());
+#if DCHECK_IS_ON()
+  DCHECK(!new_layout_object->HasStyle());
+#endif
   new_layout_object->SetStyle(style_);
 
   parent_layout_object->AddChild(new_layout_object, next_layout_object);
@@ -152,8 +155,9 @@ LayoutTreeBuilderForText::CreateInlineWrapperStyleForDisplayContentsIfNeeded()
     const {
   // If the parent element is not a display:contents element, the style and the
   // parent style will be the same ComputedStyle object. Early out here.
-  if (style_ == context_.parent->Style())
+  if (style_ == &context_.parent->StyleRef()) {
     return nullptr;
+  }
 
   return node_->GetDocument()
       .GetStyleResolver()
@@ -172,7 +176,7 @@ LayoutTreeBuilderForText::CreateInlineWrapperForDisplayContentsIfNeeded(
   // inherited properties because the layout code expects the LayoutObject
   // parent of text nodes to have the same inherited properties.
   LayoutObject* inline_wrapper =
-      LayoutInline::CreateAnonymous(&node_->GetDocument());
+      LayoutInline::CreateAnonymous(node_->GetDocument());
   inline_wrapper->SetStyle(wrapper_style);
   if (!context_.parent->IsChildAllowed(inline_wrapper, *wrapper_style)) {
     inline_wrapper->Destroy();
@@ -210,7 +214,9 @@ void LayoutTreeBuilderForText::CreateLayoutObject() {
   new_layout_object->SetIsInsideMulticol(context_.parent->IsInsideMulticol());
 
   node_->SetLayoutObject(new_layout_object);
-  DCHECK(!new_layout_object->Style());
+#if DCHECK_IS_ON()
+  DCHECK(!new_layout_object->HasStyle());
+#endif
   new_layout_object->SetStyle(style);
 
   layout_object_parent->AddChild(new_layout_object, next_layout_object);

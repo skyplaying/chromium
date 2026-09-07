@@ -11,13 +11,14 @@
 #import "base/strings/sys_string_conversions.h"
 #import "base/strings/utf_string_conversions.h"
 #import "components/browser_sync/sync_to_signin_migration.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/base/gaia_id_hash.h"
 #import "components/signin/public/base/signin_metrics.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "components/strings/grit/components_strings.h"
 #import "components/sync/base/account_pref_utils.h"
-#import "components/sync/base/features.h"
 #import "components/sync/service/sync_service.h"
+#import "components/sync_bookmarks/constants.h"
 #import "google_apis/gaia/gaia_id.h"
 #import "ios/chrome/browser/ntp/ui_bundled/new_tab_page_feature.h"
 #import "ios/chrome/browser/policy/model/browser_policy_connector_ios.h"
@@ -26,7 +27,6 @@
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
-#import "ios/chrome/browser/shared/model/profile/features.h"
 #import "ios/chrome/browser/shared/model/profile/profile_attributes_storage_ios.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios_util.h"
@@ -41,6 +41,17 @@
 #import "ui/base/l10n/l10n_util.h"
 
 namespace {
+
+// Returns the hosted domain for the primary account.
+std::u16string HostedDomainForPrimaryAccount(
+    signin::IdentityManager* identity_manager) {
+  return base::UTF8ToUTF16(
+      identity_manager
+          ->FindExtendedAccountInfo(identity_manager->GetPrimaryAccountInfo(
+              signin::ConsentLevel::kSignin))
+          .GetHostedDomain()
+          .value_or(std::string()));
+}
 
 // Returns the title associated to the given user sign-in state.
 // `account_profile_switch` is true if the flow was triggered for an account or
@@ -88,9 +99,7 @@ NSString* GetActionSheetCoordinatorMessage(
       // This dialog is triggered only if there is unsync data.
       if (account_profile_switch) {
         NSString* userEmail =
-            authentication_service
-                ->GetPrimaryIdentity(signin::ConsentLevel::kSignin)
-                .userEmail;
+            authentication_service->GetPrimaryIdentity().userEmail;
         return l10n_util::GetNSStringF(
             IDS_IOS_DATA_NOT_UPLOADED_SWITCH_DIALOG_BODY,
             base::SysNSStringToUTF16(userEmail));
@@ -101,7 +110,7 @@ NSString* GetActionSheetCoordinatorMessage(
                                   kBookmarksLimitExceeded) {
         return l10n_util::GetNSStringF(
             IDS_IOS_SIGNOUT_DIALOG_MESSAGE_WITH_BOOKMARKS_LIMIT_EXCEEDED,
-            base::FormatNumber(syncer::kSyncBookmarksLimit));
+            base::FormatNumber(sync_bookmarks::kSyncBookmarksLimit));
       }
 
       return l10n_util::GetNSString(
@@ -122,16 +131,6 @@ NSString* GetActionSheetCoordinatorMessage(
 }
 
 }  // namespace
-
-std::u16string HostedDomainForPrimaryAccount(
-    signin::IdentityManager* identity_manager) {
-  return base::UTF8ToUTF16(
-      identity_manager
-          ->FindExtendedAccountInfo(identity_manager->GetPrimaryAccountInfo(
-              signin::ConsentLevel::kSignin))
-          .GetHostedDomain()
-          .value_or(std::string()));
-}
 
 AlertCoordinator* ErrorCoordinator(NSError* error,
                                    ProceduralBlock dismissAction,
@@ -165,8 +164,8 @@ NSString* DialogMessageFromError(NSError* error) {
     if (errorDepth > 0) {
       [errorMessage appendString:@", "];
     }
-    [errorMessage
-        appendFormat:@"%@: %" PRIdNS, errorCursor.domain, errorCursor.code];
+    [errorMessage appendFormat:@"%@: %ld", errorCursor.domain,
+                               static_cast<long>(errorCursor.code)];
     errorCursor = errorCursor.userInfo[NSUnderlyingErrorKey];
   }
   [errorMessage appendString:@")"];
@@ -211,88 +210,6 @@ NSString* ViewControllerPresentationStatusDescription(
   return @"Not presented";
 }
 
-AlertCoordinator* ManagedConfirmationDialogContentForHostedDomain(
-    NSString* hosted_domain,
-    Browser* browser,
-    UIViewController* view_controller,
-    ProceduralBlock accept_block,
-    ProceduralBlock cancel_block) {
-  NSString* title = l10n_util::GetNSString(IDS_IOS_MANAGED_SIGNIN_TITLE);
-  NSString* subtitle =
-      l10n_util::GetNSStringF(IDS_IOS_MANAGED_SIGNIN_WITH_USER_POLICY_SUBTITLE,
-                              base::SysNSStringToUTF16(hosted_domain));
-  // If we ever use this method in a test where migration was forced, the button
-  // should be IDS_IOS_ENTERPRISE_PROFILE_CREATION_GOTIT.
-  NSString* accept_label =
-      l10n_util::GetNSString(IDS_IOS_ENTERPRISE_PROFILE_CREATION_CONTINUE);
-  NSString* cancel_label = l10n_util::GetNSString(IDS_CANCEL);
-
-  AlertCoordinator* managed_confirmation_alert_coordinator =
-      [[AlertCoordinator alloc] initWithBaseViewController:view_controller
-                                                   browser:browser
-                                                     title:title
-                                                   message:subtitle];
-
-  [managed_confirmation_alert_coordinator
-      addItemWithTitle:cancel_label
-                action:cancel_block
-                 style:UIAlertActionStyleCancel];
-  [managed_confirmation_alert_coordinator
-      addItemWithTitle:accept_label
-                action:accept_block
-                 style:UIAlertActionStyleDefault];
-  managed_confirmation_alert_coordinator.noInteractionAction = cancel_block;
-  [managed_confirmation_alert_coordinator start];
-  return managed_confirmation_alert_coordinator;
-}
-
-namespace {
-
-// Returns yes if the browser has machine level policies.
-bool HasMachineLevelPolicies() {
-  BrowserPolicyConnectorIOS* policy_connector =
-      GetApplicationContext()->GetBrowserPolicyConnector();
-  return policy_connector && policy_connector->HasMachineLevelPolicies();
-}
-
-}  // namespace
-
-BOOL ShouldShowManagedConfirmationForHostedDomain(
-    NSString* hosted_domain,
-    signin_metrics::AccessPoint access_point,
-    const GaiaId& gaia_id,
-    PrefService* prefs) {
-  if ([hosted_domain length] == 0) {
-    // No hosted domain, don't show the dialog as there is no host.
-    return NO;
-  }
-
-  if (!AreSeparateProfilesForManagedAccountsEnabled()) {
-    if (HasMachineLevelPolicies()) {
-      // Don't show the dialog if the browser has already machine level policies
-      // as the user already knows that their browser is managed.
-      return NO;
-    }
-
-    signin::GaiaIdHash gaia_id_hash =
-        signin::GaiaIdHash::FromGaiaId(GaiaId(gaia_id));
-    const base::Value* already_seen = syncer::GetAccountKeyedPrefValue(
-        prefs, prefs::kSigninHasAcceptedManagementDialog, gaia_id_hash);
-
-    if (already_seen && already_seen->GetIfBool().value_or(false)) {
-      return NO;
-    }
-  } else if (GetApplicationContext()
-                 ->GetAccountProfileMapper()
-                 ->IsProfileForGaiaIDFullyInitialized(GaiaId(gaia_id))) {
-    // If the corresponding profile is fully initialized, the user has
-    // already seen the confirmation screen.
-    return NO;
-  }
-
-  return YES;
-}
-
 SignedInUserState GetSignedInUserState(
     AuthenticationService* authentication_service,
     signin::IdentityManager* identity_manager,
@@ -300,8 +217,7 @@ SignedInUserState GetSignedInUserState(
   const bool is_managed_account_migrated_from_syncing =
       browser_sync::WasPrimaryAccountMigratedFromSyncingToSignedIn(
           identity_manager, profile_pref_service) &&
-      authentication_service->HasPrimaryIdentityManaged(
-          signin::ConsentLevel::kSignin);
+      authentication_service->HasPrimaryIdentityManaged();
 
   if (is_managed_account_migrated_from_syncing) {
     return SignedInUserState::kManagedAccountAndMigratedFromSyncing;
@@ -314,20 +230,23 @@ SignedInUserState GetSignedInUserState(
 
 bool ForceLeavingPrimaryAccountConfirmationDialog(
     SignedInUserState signed_in_user_state,
-    ProfileIOS* profile) {
+    ProfileIOS* profile,
+    const GaiaId& gaia_id_to_sign_in) {
   switch (signed_in_user_state) {
     case SignedInUserState::kNotSyncingAndReplaceSyncWithSignin:
       return false;
     case SignedInUserState::kManagedAccountClearsDataOnSignout:
     case SignedInUserState::kManagedAccountAndMigratedFromSyncing:
-      if (!AreSeparateProfilesForManagedAccountsEnabled()) {
-        return true;
-      }
-
       // Show the dialog only if a managed account is signing out from the
       // personal profile. (This can only happen for managed accounts that were
       // already signed in before there was multi-profile support.)
-      return IsPersonalProfile(profile);
+      // If the new account is different from the one in the personal profile,
+      // we are not actually signing it out.
+      return IsPersonalProfile(profile) &&
+             (gaia_id_to_sign_in.empty() ||
+              IdentityManagerFactory::GetForProfile(profile)
+                      ->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin)
+                      .gaia == gaia_id_to_sign_in);
   }
   NOTREACHED();
 }

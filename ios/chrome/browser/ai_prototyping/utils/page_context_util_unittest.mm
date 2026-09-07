@@ -4,10 +4,12 @@
 
 #import "ios/chrome/browser/ai_prototyping/utils/page_context_util.h"
 
+#import "base/base64.h"
 #import "base/files/file_util.h"
 #import "base/functional/callback_helpers.h"
 #import "components/optimization_guide/proto/features/common_quality_data.pb.h"
-#import "ios/chrome/browser/intelligence/proto_wrappers/page_context_wrapper.h"
+#import "ios/chrome/browser/intelligence/proto_wrappers/page_context_wrapper_config.h"
+#import "ios/web/public/test/fakes/fake_web_frames_manager.h"
 #import "ios/web/public/test/fakes/fake_web_state.h"
 #import "testing/platform_test.h"
 #import "third_party/ocmock/OCMock/OCMock.h"
@@ -20,17 +22,32 @@ constexpr base::TimeDelta kTimeout = base::Seconds(30);
 
 @interface MockPageContextWrapper : PageContextWrapper
 @property(nonatomic, assign) BOOL populateCalled;
+@property(nonatomic, assign) BOOL lastUseRichExtraction;
+@property(nonatomic, assign) BOOL lastUseRefactoredExtractor;
+@property(nonatomic, assign) BOOL lastGraftCrossOriginFrameContent;
+@property(nonatomic, assign) BOOL lastExtractPaidContent;
 @end
 
 @implementation MockPageContextWrapper
+
 - (instancetype)initWithWebState:(web::WebState*)webState
+                          config:(PageContextWrapperConfig)config
               completionCallback:
                   (base::OnceCallback<void(PageContextWrapperCallbackResponse)>)
                       completionCallback {
-  // Call the super designated initializer but we don't care about the callback
-  // since this is a fake.
-  return [super initWithWebState:webState completionCallback:base::DoNothing()];
+  self = [super initWithWebState:webState
+                          config:config
+              completionCallback:std::move(completionCallback)];
+  if (self) {
+    _lastUseRichExtraction = config.use_rich_extraction();
+    _lastUseRefactoredExtractor = config.use_refactored_extractor();
+    _lastGraftCrossOriginFrameContent =
+        config.graft_cross_origin_frame_content();
+    _lastExtractPaidContent = config.extract_paid_content();
+  }
+  return self;
 }
+
 - (void)populatePageContextFieldsAsync {
   self.populateCalled = YES;
 }
@@ -48,9 +65,10 @@ class PageContextUtilTest : public PlatformTest {
 
 TEST_F(PageContextUtilTest, PopulateWhenNotLoading) {
   id mockWrapperClass = OCMClassMock([PageContextWrapper class]);
-  MockPageContextWrapper* fakeWrapper =
-      [[MockPageContextWrapper alloc] initWithWebState:web_state_.get()
-                                    completionCallback:base::DoNothing()];
+  MockPageContextWrapper* fakeWrapper = [[MockPageContextWrapper alloc]
+        initWithWebState:web_state_.get()
+                  config:PageContextWrapperConfigBuilder().Build()
+      completionCallback:base::DoNothing()];
   OCMStub([mockWrapperClass alloc]).andReturn(fakeWrapper);
 
   web_state_->SetLoading(false);
@@ -61,9 +79,10 @@ TEST_F(PageContextUtilTest, PopulateWhenNotLoading) {
 
 TEST_F(PageContextUtilTest, PopulateWhenLoading) {
   id mockWrapperClass = OCMClassMock([PageContextWrapper class]);
-  MockPageContextWrapper* fakeWrapper =
-      [[MockPageContextWrapper alloc] initWithWebState:web_state_.get()
-                                    completionCallback:base::DoNothing()];
+  MockPageContextWrapper* fakeWrapper = [[MockPageContextWrapper alloc]
+        initWithWebState:web_state_.get()
+                  config:PageContextWrapperConfigBuilder().Build()
+      completionCallback:base::DoNothing()];
   OCMStub([mockWrapperClass alloc]).andReturn(fakeWrapper);
 
   web_state_->SetLoading(true);
@@ -77,9 +96,10 @@ TEST_F(PageContextUtilTest, PopulateWhenLoading) {
 
 TEST_F(PageContextUtilTest, PopulateWhenNotLoadingWithTimeout) {
   id mockWrapperClass = OCMClassMock([PageContextWrapper class]);
-  MockPageContextWrapper* fakeWrapper =
-      [[MockPageContextWrapper alloc] initWithWebState:web_state_.get()
-                                    completionCallback:base::DoNothing()];
+  MockPageContextWrapper* fakeWrapper = [[MockPageContextWrapper alloc]
+        initWithWebState:web_state_.get()
+                  config:PageContextWrapperConfigBuilder().Build()
+      completionCallback:base::DoNothing()];
   OCMStub([mockWrapperClass alloc]).andReturn(fakeWrapper);
 
   web_state_->SetLoading(false);
@@ -90,9 +110,10 @@ TEST_F(PageContextUtilTest, PopulateWhenNotLoadingWithTimeout) {
 
 TEST_F(PageContextUtilTest, PopulateWhenLoadingWithTimeout) {
   id mockWrapperClass = OCMClassMock([PageContextWrapper class]);
-  MockPageContextWrapper* fakeWrapper =
-      [[MockPageContextWrapper alloc] initWithWebState:web_state_.get()
-                                    completionCallback:base::DoNothing()];
+  MockPageContextWrapper* fakeWrapper = [[MockPageContextWrapper alloc]
+        initWithWebState:web_state_.get()
+                  config:PageContextWrapperConfigBuilder().Build()
+      completionCallback:base::DoNothing()];
   OCMStub([mockWrapperClass alloc]).andReturn(fakeWrapper);
 
   web_state_->SetLoading(true);
@@ -124,4 +145,51 @@ TEST_F(PageContextUtilTest, SaveAndLoadPageContext) {
 
   // Clean up
   EXPECT_TRUE(base::DeleteFile(result.file_path));
+}
+
+TEST_F(PageContextUtilTest, SaveAndLoadPageContextWithScreenshot) {
+  optimization_guide::proto::PageContext page_context;
+  page_context.set_url("https://www.example.com");
+  page_context.set_title("Example");
+  std::string dummy_png = "dummy_png_data";
+  page_context.set_tab_screenshot(base::Base64Encode(dummy_png));
+
+  SavePageContextResult result = SaveSerializedPageContextToDisk(page_context);
+  EXPECT_TRUE(result.success);
+  EXPECT_FALSE(result.file_path.empty());
+  EXPECT_TRUE(base::PathExists(result.file_path));
+  ASSERT_TRUE(result.screenshot_file_path.has_value());
+  EXPECT_TRUE(base::PathExists(*result.screenshot_file_path));
+
+  std::string screenshot_content;
+  EXPECT_TRUE(base::ReadFileToString(*result.screenshot_file_path,
+                                     &screenshot_content));
+  EXPECT_EQ(dummy_png, screenshot_content);
+
+  // Clean up
+  EXPECT_TRUE(base::DeleteFile(result.file_path));
+  EXPECT_TRUE(base::DeleteFile(*result.screenshot_file_path));
+}
+
+TEST_F(PageContextUtilTest, CreatePageContextWrapperWithRichExtraction) {
+  id mockWrapperClass = OCMClassMock([PageContextWrapper class]);
+  MockPageContextWrapper* mockWrapper = [MockPageContextWrapper alloc];
+  OCMStub([mockWrapperClass alloc]).andReturn(mockWrapper);
+
+  CreatePageContextWrapper(web_state_.get(), true, base::DoNothing());
+
+  EXPECT_TRUE(mockWrapper.lastUseRichExtraction);
+  EXPECT_TRUE(mockWrapper.lastUseRefactoredExtractor);
+  EXPECT_TRUE(mockWrapper.lastGraftCrossOriginFrameContent);
+  EXPECT_TRUE(mockWrapper.lastExtractPaidContent);
+}
+
+TEST_F(PageContextUtilTest, CreatePageContextWrapperWithoutRichExtraction) {
+  id mockWrapperClass = OCMClassMock([PageContextWrapper class]);
+  MockPageContextWrapper* mockWrapper = [MockPageContextWrapper alloc];
+  OCMStub([mockWrapperClass alloc]).andReturn(mockWrapper);
+
+  CreatePageContextWrapper(web_state_.get(), false, base::DoNothing());
+
+  EXPECT_FALSE(mockWrapper.lastUseRichExtraction);
 }

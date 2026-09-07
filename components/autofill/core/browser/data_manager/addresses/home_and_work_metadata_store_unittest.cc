@@ -14,7 +14,7 @@
 #include "base/time/time.h"
 #include "base/values.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile_test_api.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/browser/webdata/autofill_change.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_prefs.h"
@@ -42,8 +42,6 @@ class HomeAndWorkMetadataStoreTest : public testing::Test {
  private:
   base::test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
-  base::test::ScopedFeatureList feature_{
-      features::kAutofillEnableSupportForHomeAndWork};
   std::unique_ptr<PrefService> prefs_;
   syncer::TestSyncService sync_service_;
 };

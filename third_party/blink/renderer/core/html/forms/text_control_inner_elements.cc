@@ -38,6 +38,7 @@
 #include "third_party/blink/renderer/core/html/shadow/shadow_element_names.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/layout/forms/layout_text_control_inner_editor.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
@@ -60,6 +61,8 @@ const ComputedStyle* EditingViewPortElement::CustomStyleForLayoutObject(
   style_builder.SetMinHeight(Length::Fixed(0));
   style_builder.SetDisplay(EDisplay::kBlock);
   style_builder.SetDirection(TextDirection::kLtr);
+  style_builder.SetBaseTextDecorationData(
+      OwnerShadowHost()->ComputedStyleRef().AppliedTextDecorationData());
 
   // We don't want the shadow dom to be editable, so we set this block to
   // read-only in case the input itself is editable.
@@ -80,16 +83,19 @@ void TextControlInnerEditorElement::DefaultEventHandler(Event& event) {
   // Then we would add one to the text field's inner div, and we wouldn't need
   // this subclass.
   // Or possibly we could just use a normal event listener.
-  if (event.IsBeforeTextInsertedEvent() ||
-      event.type() == event_type_names::kWebkitEditableContentChanged) {
-    Element* shadow_ancestor = OwnerShadowHost();
-    // A TextControlInnerTextElement can have no host if its been detached,
-    // but kept alive by an EditCommand. In this case, an undo/redo can
-    // cause events to be sent to the TextControlInnerTextElement. To
-    // prevent an infinite loop, we must check for this case before sending
-    // the event up the chain.
-    if (shadow_ancestor)
-      shadow_ancestor->DefaultEventHandler(event);
+  if (!RuntimeEnabledFeatures::CleanUpActivationBehaviorEnabled()) {
+    if (event.IsBeforeTextInsertedEvent() ||
+        event.type() == event_type_names::kWebkitEditableContentChanged) {
+      Element* shadow_ancestor = OwnerShadowHost();
+      // A TextControlInnerTextElement can have no host if its been detached,
+      // but kept alive by an EditCommand. In this case, an undo/redo can
+      // cause events to be sent to the TextControlInnerTextElement. To
+      // prevent an infinite loop, we must check for this case before sending
+      // the event up the chain.
+      if (shadow_ancestor) {
+        shadow_ancestor->DefaultEventHandler(event);
+      }
+    }
   }
 
   if (event.type() == event_type_names::kScroll ||
@@ -105,6 +111,24 @@ void TextControlInnerEditorElement::DefaultEventHandler(Event& event) {
 
   if (!event.DefaultHandled())
     HTMLDivElement::DefaultEventHandler(event);
+}
+
+String TextControlInnerEditorElement::FilterBeforeTextInserted(
+    const String& text) {
+  CHECK(RuntimeEnabledFeatures::CleanUpActivationBehaviorEnabled());
+  Element* shadow_ancestor = OwnerShadowHost();
+  if (shadow_ancestor) {
+    return shadow_ancestor->FilterBeforeTextInserted(text);
+  }
+  return text;
+}
+
+void TextControlInnerEditorElement::NotifyEditableContentChanged() {
+  CHECK(RuntimeEnabledFeatures::CleanUpActivationBehaviorEnabled());
+  Element* shadow_ancestor = OwnerShadowHost();
+  if (shadow_ancestor) {
+    shadow_ancestor->NotifyEditableContentChanged();
+  }
 }
 
 void TextControlInnerEditorElement::SetVisibility(bool is_visible) {
@@ -150,6 +174,8 @@ const ComputedStyle* TextControlInnerEditorElement::CustomStyleForLayoutObject(
           ? EUserModify::kReadOnly
           : EUserModify::kReadWritePlaintextOnly);
   style_builder.SetDisplay(EDisplay::kBlock);
+  style_builder.SetBaseTextDecorationData(
+      OwnerShadowHost()->ComputedStyleRef().AppliedTextDecorationData());
   if (!start_style.ApplyControlFixedSize(host)) {
     const Font* font = start_style.GetFont();
     const SimpleFontData* font_data = font->PrimaryFont();
@@ -292,6 +318,14 @@ bool PasswordRevealButtonElement::WillRespondToMouseClickEvents() {
     return true;
 
   return HTMLDivElement::WillRespondToMouseClickEvents();
+}
+
+EmailVerificationIndicatorElement::EmailVerificationIndicatorElement(
+    Document& document)
+    : HTMLDivElement(document) {
+  SetShadowPseudoId(shadow_element_names::kPseudoEmailVerificationIndicator);
+  setAttribute(html_names::kIdAttr,
+               shadow_element_names::kIdEmailVerificationIndicator);
 }
 
 }  // namespace blink

@@ -16,8 +16,8 @@
 #include "build/build_config.h"
 #include "chrome/browser/notifications/notification_display_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
 #include "chrome/browser/web_applications/external_install_options.h"
@@ -105,7 +105,7 @@ class ExternallyManagedAppManagerBrowserTest : public WebAppBrowserTestBase {
     test::WaitUntilWebAppProviderAndSubsystemsReady(provider());
   }
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
   WebAppRegistrar& registrar() { return provider()->registrar_unsafe(); }
 
@@ -295,7 +295,7 @@ IN_PROC_BROWSER_TEST_F(ExternallyManagedAppManagerBrowserTest,
       registrar().IsPlaceholderApp(app_id.value(), WebAppManagement::kPolicy));
 
   // Open an app window so that the placeholder resolution is delayed.
-  Browser* app_browser = LaunchWebAppBrowser(app_id.value());
+  BrowserWindowInterface* app_browser = LaunchWebAppBrowser(app_id.value());
   EXPECT_NE(nullptr, app_browser);
   options.placeholder_resolution_behavior =
       PlaceholderResolutionBehavior::kWaitForAppWindowsClosed;
@@ -681,8 +681,12 @@ IN_PROC_BROWSER_TEST_F(ExternallyManagedAppManagerBrowserTest,
     install_info->title = u"Test user app";
     app_id = test::InstallWebApp(profile(), std::move(install_info));
     ASSERT_TRUE(app_id.has_value());
-    ASSERT_TRUE(registrar().WasInstalledByUser(app_id.value()));
-    ASSERT_FALSE(registrar().HasExternalApp(app_id.value()));
+    ASSERT_TRUE(registrar().AppMatches(app_id.value(),
+                                       WebAppFilter::InstalledByUser()));
+    ASSERT_TRUE(registrar()
+                    .GetAppById(app_id.value())
+                    ->management_to_external_config_map()
+                    .empty());
     ASSERT_EQ("Test user app", registrar().GetAppShortName(app_id.value()));
   }
   {
@@ -929,8 +933,11 @@ IN_PROC_BROWSER_TEST_F(ExternallyManagedAppManagerBrowserTest,
   install_info->title = u"Test user app";
   webapps::AppId app_id =
       test::InstallWebApp(profile(), std::move(install_info));
-  ASSERT_TRUE(registrar().WasInstalledByUser(app_id));
-  ASSERT_FALSE(registrar().HasExternalApp(app_id));
+  ASSERT_TRUE(registrar().AppMatches(app_id, WebAppFilter::InstalledByUser()));
+  ASSERT_TRUE(registrar()
+                  .GetAppById(app_id)
+                  ->management_to_external_config_map()
+                  .empty());
 
   // Install policy app
   std::optional<webapps::AppId> policy_app_id =

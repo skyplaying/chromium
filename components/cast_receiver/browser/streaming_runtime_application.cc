@@ -4,16 +4,20 @@
 
 #include "components/cast_receiver/browser/streaming_runtime_application.h"
 
+#include "base/functional/bind.h"
 #include "base/strings/stringprintf.h"
 #include "components/cast/message_port/platform_message_port.h"
-#include "components/cast_receiver/browser/application_client.h"
 #include "components/cast_receiver/browser/public/embedder_application.h"
 #include "components/cast_receiver/browser/public/message_port_service.h"
+#include "components/cast_receiver/browser/streaming_input_observer.h"
+#include "components/cast_receiver/browser/streaming_receiver_channel.h"
 #include "components/cast_streaming/common/public/app_ids.h"
 #include "components/cast_streaming/common/public/cast_streaming_url.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
+#include "ui/events/devices/device_data_manager.h"
+#include "ui/gfx/geometry/rect.h"
 
 namespace cast_receiver {
 namespace {
@@ -57,17 +61,47 @@ void StreamingRuntimeApplication::OnError() {
 void StreamingRuntimeApplication::Launch(StatusCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  DCHECK(embedder_application().GetWebContents());
+  CHECK(embedder_application().GetWebContents());
   SetContentPermissions(*embedder_application().GetWebContents());
 
   // Bind Cast Transport.
   auto* message_port_service = embedder_application().GetMessagePortService();
-  DCHECK(message_port_service);
+  CHECK(message_port_service);
   std::unique_ptr<cast_api_bindings::MessagePort> server_port;
   std::unique_ptr<cast_api_bindings::MessagePort> client_port;
   cast_api_bindings::CreatePlatformMessagePortPair(&client_port, &server_port);
   message_port_service->ConnectToPortAsync(kCastTransportBindingName,
                                            std::move(client_port));
+
+  // If extended input is supported, wrap server_port in StreamingReceiverChannel
+  // to intercept Exo bootstrap and input messages on cast_transport.
+  if (config().is_extended_input_supported) {
+    LOG(INFO) << "Extended input is supported, setting up input channels.";
+
+    content::WebContents* web_contents =
+        embedder_application().GetWebContents();
+    CHECK(web_contents);
+    gfx::Rect bounds = web_contents->GetContainerBounds();
+    int width = bounds.width();
+    int height = bounds.height();
+    if (width <= 0 || height <= 0) {
+      width = 1920;
+      height = 1080;
+    }
+    DisplayInfo display_info;
+    display_info.set_width_px(width);
+    display_info.set_height_px(height);
+    display_info.set_orientation(DisplayInfo::DEGREES_0);
+    display_info.set_dpi(160);
+    display_info.set_resizable(false);
+
+    auto exo_channel = std::make_unique<StreamingReceiverChannel>(
+        std::move(server_port), std::move(display_info),
+        base::BindOnce(&StreamingRuntimeApplication::OnBootstrapComplete,
+                       weak_factory_.GetWeakPtr()));
+    streaming_receiver_channel_ = exo_channel->GetWeakPtr();
+    server_port = std::move(exo_channel);
+  }
 
   // Initialize the streaming receiver.
   receiver_session_client_ = std::make_unique<StreamingReceiverSessionClient>(
@@ -97,6 +131,9 @@ void StreamingRuntimeApplication::StopApplication(
                   << " stop.";
   }
 
+  streaming_input_observer_.reset();
+  streaming_input_capabilities_observer_.reset();
+  streaming_receiver_channel_ = nullptr;
   receiver_session_client_.reset();
   RuntimeApplicationBase::StopApplication(stop_reason, net_error_code);
 }
@@ -104,6 +141,48 @@ void StreamingRuntimeApplication::StopApplication(
 bool StreamingRuntimeApplication::IsStreamingApplication() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   return true;
+}
+
+void StreamingRuntimeApplication::OnInputEvent(
+    const cast_receiver::InputEvent& event) {
+  if (streaming_receiver_channel_) {
+    streaming_receiver_channel_->SendInputEvent(event);
+  }
+}
+
+void StreamingRuntimeApplication::OnInputCapabilitiesChanged(
+    const cast_receiver::InputCapabilities& caps) {
+  if (streaming_receiver_channel_) {
+    streaming_receiver_channel_->SendInputCapabilities(caps);
+  }
+}
+
+void StreamingRuntimeApplication::OnBootstrapComplete(
+    ExoBootstrapMessage request) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  DVLOG(1) << "Bootstrap complete";
+
+  // Instantiate observers if input is supported.
+  if (config().is_extended_input_supported) {
+    LOG(INFO) << "Extended input is supported, setting up input observers.";
+
+    streaming_input_observer_ = std::make_unique<StreamingInputObserver>(
+        embedder_application().GetWebContents(),
+        base::BindRepeating(&StreamingRuntimeApplication::OnInputEvent,
+                            weak_factory_.GetWeakPtr()));
+
+    if (ui::DeviceDataManager::HasInstance()) {
+      streaming_input_capabilities_observer_ =
+          std::make_unique<StreamingInputCapabilitiesObserver>(
+              ui::DeviceDataManager::GetInstance(),
+              base::BindRepeating(
+                  &StreamingRuntimeApplication::OnInputCapabilitiesChanged,
+                  weak_factory_.GetWeakPtr()));
+    } else {
+      LOG(INFO) << "DeviceDataManager instance is unavailable. "
+                   "StreamingInputCapabilitiesObserver will not be created.";
+    }
+  }
 }
 
 }  // namespace cast_receiver

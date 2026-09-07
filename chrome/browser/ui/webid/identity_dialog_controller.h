@@ -20,6 +20,7 @@
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/page_user_data.h"
 #include "content/public/browser/webid/identity_request_dialog_controller.h"
+#include "third_party/blink/public/mojom/webid/federated_request.mojom-shared.h"
 #include "ui/gfx/native_ui_types.h"
 
 namespace content {
@@ -86,24 +87,26 @@ class IdentityDialogController
   int GetBrandIconIdealSize(blink::mojom::RpMode rp_mode) override;
 
   // content::IdentityRequestDialogController
-  void ShouldShowAccountsPassiveDialog(
-      ShouldShowAccountsPassiveDialogCallback cb) override;
+  void GetPassiveDialogVolume(GetPassiveDialogVolumeCallback cb) override;
   bool ShowAccountsDialog(
       content::RelyingPartyData rp_data,
       const std::vector<IdentityProviderDataPtr>& identity_provider_data,
       const std::vector<IdentityRequestAccountPtr>& accounts,
+      const std::vector<IdentityRequestAccountPtr>& filtered_accounts,
       blink::mojom::RpMode rp_mode,
       AccountSelectionCallback on_selected,
       LoginToIdPCallback on_add_account,
       DismissCallback dismiss_callback,
       AccountsDisplayedCallback accounts_displayed_callback) override;
-  bool ShowFailureDialog(const content::RelyingPartyData& rp_data,
-                         const std::string& idp_for_display,
-                         blink::mojom::RpContext rp_context,
-                         blink::mojom::RpMode rp_mode,
-                         const content::IdentityProviderMetadata& idp_metadata,
-                         DismissCallback dismiss_callback,
-                         LoginToIdPCallback login_callback) override;
+  bool ShowFailureDialog(
+      const content::RelyingPartyData& rp_data,
+      const std::string& idp_for_display,
+      blink::mojom::RpContext rp_context,
+      blink::mojom::RpMode rp_mode,
+      const content::IdentityProviderMetadata& idp_metadata,
+      const std::vector<IdentityRequestAccountPtr>& filtered_accounts,
+      DismissCallback dismiss_callback,
+      LoginToIdPCallback login_callback) override;
   bool ShowErrorDialog(const content::RelyingPartyData& rp_data,
                        const std::string& idp_for_display,
                        blink::mojom::RpContext rp_context,
@@ -133,14 +136,15 @@ class IdentityDialogController
   content::WebContents* ShowModalDialog(
       const GURL& url,
       blink::mojom::RpMode rp_mode,
-      DismissCallback dismiss_callback) override;
+      DismissCallback dismiss_callback,
+      content::IdentityRequestDialogController::ShownModalAsyncCallback
+          on_shown_async,
+      NativeAppResultCallback native_result_callback) override;
   void CloseModalDialog() override;
-  void OnFlowCompleted(content::webid::FederatedLoginResult result) override;
   content::WebContents* GetRpWebContents() override;
   void RequestIdPRegistrationPermision(
       const url::Origin& origin,
       base::OnceCallback<void(bool accepted)> callback) override;
-  bool DidShowUi() const override;
 
   // AccountSelectionView::Delegate:
   void OnAccountSelected(
@@ -152,20 +156,25 @@ class IdentityDialogController
                     const GURL& idp_login_url) override;
   void OnMoreDetails() override;
   void OnAccountsDisplayed() override;
+  void OnNativeAppResult(const std::string& token) override;
+  void OnNativeAppLoginFinished() override;
   gfx::NativeView GetNativeView() override;
   content::WebContents* GetWebContents() override;
+  content::IdentityRequestDialogController::PassiveDialogVolume
+  GetPassiveDialogVolume() const override;
 
   // Allows setting a mock AccountSelectionView for testing purposes.
   void SetAccountSelectionViewForTesting(
       std::unique_ptr<AccountSelectionView> account_view);
 
+  // Set acting_task_id for testing purposes.
+  void SetActingTaskIdForTesting(actor::TaskId task_id);
+
   // Requests a UI volume recommendation from |segmentation_platform_service_|.
   void RequestUiVolumeRecommendation(
       segmentation_platform::ClassificationResultCallback callback);
 
-  // Called when |RequestUiVolumeRecommendation| returns a result.
   void OnRequestUiVolumeRecommendationResultReceived(
-      ShouldShowAccountsPassiveDialogCallback cb,
       const segmentation_platform::ClassificationResult&
           ui_volume_recommendation);
 
@@ -187,27 +196,32 @@ class IdentityDialogController
   // Whether to show FedCM UI or not.
   bool ShouldShowFedCmUi();
 
-  void OnActorTaskStateChanged(actor::TaskId task_id,
-                               actor::ActorTask::State state);
+  void OnActorTaskStateChanged(actor::ActorTask& task);
 
   void UpdateTaskId(actor::TaskId task_id);
 
   void DidInvokeShowUi();
 
+  void NotifyEmbedderOfResult(content::webid::FederatedLoginResult result);
+
   std::unique_ptr<AccountSelectionView> account_view_{nullptr};
   AccountSelectionCallback on_account_selection_;
   DismissCallback on_dismiss_;
+  NativeAppResultCallback on_native_result_;
   LoginToIdPCallback on_login_;
   MoreDetailsCallback on_more_details_;
   AccountsDisplayedCallback on_accounts_displayed_;
   raw_ptr<content::WebContents> rp_web_contents_{nullptr};
-  blink::mojom::RpMode rp_mode_;
+  blink::mojom::RpMode rp_mode_ = blink::mojom::RpMode::kPassive;
   // Wheter we invoked any show methods. UI may be shown be not invoked in cases
   // such as an active actor task.
   bool did_invoke_show_ui_ = false;
   // Whether we show any FedCM UI or not. Excludes the loading dialog since that
   // one is not something that modifies user state or is actionable by the user.
   bool did_show_ui_ = false;
+  std::optional<content::IdentityRequestDialogController::PassiveDialogVolume>
+      passive_dialog_volume_;
+  GetPassiveDialogVolumeCallback passive_dialog_volume_callback_;
 
   // Request ID associated with a |GetClassificationResult| call to
   // |segmentation_platform_service_|. This is nullopt when the

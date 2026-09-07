@@ -13,6 +13,7 @@
 #include "base/command_line.h"
 #include "base/containers/fixed_flat_set.h"
 #include "base/dcheck_is_on.h"
+#include "base/feature_list.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_file.h"
@@ -218,11 +219,11 @@ class GbmDeviceWrapper {
       return;
     }
 
-    // For V4L2 testing with VISL, dumb driver is used with vkms for minigbm
-    // backend. In this case, the primary node needs to be used instead of the
-    // render node.
+    // For V4L2/VAAPI testing with VISL or libfake (virtual drivers), the dumb
+    // driver is used with vkms for minigbm backend. In this case, the primary
+    // node needs to be used instead of the render node.
     // TODO(b/316993034): Remove this when having a render node for vkms.
-#if BUILDFLAG(USE_V4L2_CODEC)
+#if BUILDFLAG(USE_V4L2_CODEC) || BUILDFLAG(USE_VAAPI)
     const base::CommandLine* cmd_line = base::CommandLine::ForCurrentProcess();
     CHECK(cmd_line);
 
@@ -371,6 +372,7 @@ void UniqueTrackingTokenHelper::SetUniqueTrackingToken(
 
 scoped_refptr<VideoFrame> CreateMappableSharedImageVideoFrame(
     VideoPixelFormat pixel_format,
+    const gfx::ColorSpace& color_space,
     const gfx::Size& coded_size,
     const gfx::Rect& visible_rect,
     const gfx::Size& natural_size,
@@ -385,13 +387,14 @@ scoped_refptr<VideoFrame> CreateMappableSharedImageVideoFrame(
   }
 
   return CreateVideoFrameFromGpuMemoryBufferHandle(
-      std::move(gmb_handle), pixel_format, coded_size, visible_rect,
-      natural_size, timestamp, buffer_usage, sii);
+      std::move(gmb_handle), pixel_format, color_space, coded_size,
+      visible_rect, natural_size, timestamp, buffer_usage, sii);
 }
 
 scoped_refptr<VideoFrame> CreateVideoFrameFromGpuMemoryBufferHandle(
     gfx::GpuMemoryBufferHandle gmb_handle,
     VideoPixelFormat pixel_format,
+    const gfx::ColorSpace& color_space,
     const gfx::Size& coded_size,
     const gfx::Rect& visible_rect,
     const gfx::Size& natural_size,
@@ -399,8 +402,6 @@ scoped_refptr<VideoFrame> CreateVideoFrameFromGpuMemoryBufferHandle(
     gfx::BufferUsage buffer_usage,
     gpu::SharedImageInterface* sii) {
   CHECK(sii);
-  const bool supports_zero_copy_webgpu_import =
-      gmb_handle.native_pixmap_handle().supports_zero_copy_webgpu_import;
 
   auto si_format = VideoPixelFormatToSharedImageFormat(pixel_format);
   DCHECK(si_format);
@@ -408,22 +409,20 @@ scoped_refptr<VideoFrame> CreateVideoFrameFromGpuMemoryBufferHandle(
   const auto si_usage = gpu::SHARED_IMAGE_USAGE_CPU_WRITE_ONLY |
                         gpu::SHARED_IMAGE_USAGE_DISPLAY_READ;
   auto shared_image = sii->CreateSharedImage(
-      {*si_format, coded_size, gfx::ColorSpace(),
-       gpu::SharedImageUsageSet(si_usage), "PlatformVideoFrameUtils"},
+      {*si_format, coded_size, color_space, gpu::SharedImageUsageSet(si_usage),
+       "PlatformVideoFrameUtils"},
       gpu::kNullSurfaceHandle, buffer_usage, std::move(gmb_handle));
+  auto creation_sync_token = shared_image->creation_sync_token();
+  sii->VerifySyncToken(creation_sync_token);
 
   auto video_frame = media::VideoFrame::WrapMappableSharedImage(
-      std::move(shared_image), sii->GenVerifiedSyncToken(),
-      base::NullCallback(), visible_rect, natural_size, timestamp);
+      std::move(shared_image), creation_sync_token, base::NullCallback(),
+      visible_rect, natural_size, timestamp);
 
   if (!video_frame) {
     return nullptr;
   }
 
-  // We only support importing non-DISJOINT multi-planar GbmBuffer right now.
-  // TODO(crbug.com/40201271): Add DISJOINT support.
-  video_frame->metadata().is_webgpu_compatible =
-      supports_zero_copy_webgpu_import;
   video_frame->metadata().tracking_token = base::UnguessableToken::Create();
 
   return video_frame;
@@ -522,7 +521,9 @@ gfx::GpuMemoryBufferHandle CreateGpuMemoryBufferHandle(
       for (size_t i = 0; i < num_planes; ++i) {
         const auto& plane = video_frame->layout().planes()[i];
         native_pixmap_handle.planes.emplace_back(
-            plane.stride, plane.offset, plane.size, std::move(duped_fds[i]));
+            base::checked_cast<uint32_t>(plane.stride),
+            base::strict_cast<uint64_t>(plane.offset),
+            base::strict_cast<uint64_t>(plane.size), std::move(duped_fds[i]));
       }
       handle = gfx::GpuMemoryBufferHandle(std::move(native_pixmap_handle));
     } break;
@@ -533,14 +534,11 @@ gfx::GpuMemoryBufferHandle CreateGpuMemoryBufferHandle(
   CHECK_EQ(handle.type, gfx::NATIVE_PIXMAP);
   if (video_frame->format() == PIXEL_FORMAT_MJPEG)
     return handle;
-#if DCHECK_IS_ON()
-  const bool is_handle_valid =
-      !handle.is_null() &&
-      VerifyGpuMemoryBufferHandle(video_frame->format(),
-                                  video_frame->coded_size(), handle);
-  DLOG_IF(WARNING, !is_handle_valid)
-      << __func__ << "(): Created GpuMemoryBufferHandle is invalid";
-#endif  // DCHECK_IS_ON()
+  if (!VerifyGpuMemoryBufferHandle(video_frame->format(),
+                                   video_frame->coded_size(), handle)) {
+    LOG(ERROR) << __func__ << "(): Created GpuMemoryBufferHandle is invalid";
+    return gfx::GpuMemoryBufferHandle();
+  }
   return handle;
 }
 

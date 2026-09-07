@@ -4,9 +4,12 @@
 
 #include "remoting/host/linux/linux_process_launcher_delegate.h"
 
+#include <grp.h>
 #include <sys/prctl.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+#include <optional>
 
 #include "base/check.h"
 #include "base/command_line.h"
@@ -17,11 +20,13 @@
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
 #include "base/notimplemented.h"
+#include "base/posix/global_descriptors.h"
 #include "base/process/launch.h"
 #include "base/process/process.h"
 #include "base/rand_util.h"
 #include "base/sequence_checker.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/task_traits.h"
@@ -32,12 +37,23 @@
 #include "mojo/public/cpp/bindings/generic_pending_associated_receiver.h"
 #include "mojo/public/cpp/platform/platform_channel.h"
 #include "mojo/public/cpp/system/invitation.h"
+#include "remoting/base/crash/crash_reporting_crashpad.h"
 #include "remoting/host/base/host_exit_codes.h"
 #include "remoting/host/base/switches.h"
 
 namespace remoting {
 
 namespace {
+
+bool IsTargetDescriptorUsed(const base::FileHandleMappingVector& mapping,
+                            int target_fd) {
+  for (const auto& [src, dest] : mapping) {
+    if (dest == target_fd) {
+      return true;
+    }
+  }
+  return false;
+}
 
 // An interval to wait for process exit. This allows
 // LinuxWorkerProcessLauncherDelegate to stop and destroy ProcessExitWatcher
@@ -47,8 +63,16 @@ constexpr base::TimeDelta kWaitForExitInterval = base::Seconds(10);
 
 class RunAsUserPreExecDelegate : public base::LaunchOptions::PreExecDelegate {
  public:
-  RunAsUserPreExecDelegate(bool new_session, int uid, int gid)
-      : new_session_(new_session), uid_(uid), gid_(gid) {}
+  RunAsUserPreExecDelegate(bool new_session,
+                           std::optional<uid_t> uid,
+                           std::optional<gid_t> gid,
+                           std::vector<gid_t> supplementary_gids)
+      : new_session_(new_session),
+        uid_(uid),
+        gid_(gid),
+        supplementary_gids_(std::move(supplementary_gids)) {
+    CHECK(uid_.has_value() == gid_.has_value());
+  }
   ~RunAsUserPreExecDelegate() override = default;
 
   RunAsUserPreExecDelegate(const RunAsUserPreExecDelegate&) = delete;
@@ -61,10 +85,20 @@ class RunAsUserPreExecDelegate : public base::LaunchOptions::PreExecDelegate {
         RAW_LOG(FATAL, "Failed to create a new session.");
       }
     }
-    if (gid_ >= 0 && setgid(gid_) != 0) {
+    if (!supplementary_gids_.empty()) {
+      if (setgroups(supplementary_gids_.size(), supplementary_gids_.data()) !=
+          0) {
+        RAW_LOG(FATAL, "Failed to set supplementary groups");
+      }
+    } else if (uid_.has_value() || gid_.has_value()) {
+      if (setgroups(0, nullptr) != 0) {
+        RAW_LOG(FATAL, "Failed to clear supplementary groups");
+      }
+    }
+    if (gid_.has_value() && setgid(*gid_) != 0) {
       RAW_LOG(FATAL, "Failed to setgid");
     }
-    if (uid_ >= 0 && setuid(uid_) != 0) {
+    if (uid_.has_value() && setuid(*uid_) != 0) {
       RAW_LOG(FATAL, "Failed to setuid");
     }
     // Kill the child process when the parent is dead.
@@ -77,8 +111,9 @@ class RunAsUserPreExecDelegate : public base::LaunchOptions::PreExecDelegate {
 
  private:
   bool new_session_;
-  int uid_;
-  int gid_;
+  std::optional<uid_t> uid_;
+  std::optional<gid_t> gid_;
+  std::vector<gid_t> supplementary_gids_;
 };
 
 }  // namespace
@@ -171,25 +206,44 @@ void LinuxWorkerProcessLauncherDelegate::LaunchProcess(
 
   base::LaunchOptions launch_options;
   if (!options_.working_dir.empty()) {
-    launch_options.current_directory = std::move(options_.working_dir);
+    launch_options.current_directory = options_.working_dir;
   }
   launch_options.clear_environment = true;
-  launch_options.environment = std::move(options_.environment_variables);
+  launch_options.environment = options_.environment_variables;
 
   RunAsUserPreExecDelegate pre_exec_delegate(options_.new_session, options_.uid,
-                                             options_.gid);
+                                             options_.gid,
+                                             options_.supplementary_gids);
   launch_options.pre_exec_delegate = &pre_exec_delegate;
 
   mojo::OutgoingInvitation invitation;
   std::string message_pipe_token = base::NumberToString(base::RandUint64());
   std::unique_ptr<IPC::ChannelProxy> server = IPC::ChannelProxy::Create(
-      invitation.AttachMessagePipe(message_pipe_token).release(),
+      invitation.AttachMessagePipe(message_pipe_token),
       IPC::Channel::MODE_SERVER, this, io_task_runner_,
       base::SingleThreadTaskRunner::GetCurrentDefault());
   base::CommandLine command_line = options_.command_line;
   command_line.AppendSwitchASCII(kMojoPipeToken, message_pipe_token);
   mojo::PlatformChannel channel;
   channel.PrepareToPassRemoteEndpoint(&launch_options, &command_line);
+
+#if BUILDFLAG(IS_LINUX)
+  base::ScopedFD crashpad_socket;
+  pid_t crashpad_pid = -1;
+  if (GetCrashpadHandlerSocket(crashpad_socket, crashpad_pid)) {
+    int target_fd = base::GlobalDescriptors::kBaseDescriptor;
+    while (IsTargetDescriptorUsed(launch_options.fds_to_remap, target_fd)) {
+      ++target_fd;
+    }
+    command_line.AppendSwitchASCII(kCrashpadHandlerSocketFd,
+                                   base::NumberToString(target_fd));
+    if (crashpad_pid > 0) {
+      command_line.AppendSwitchASCII(kCrashpadHandlerPid,
+                                     base::NumberToString(crashpad_pid));
+    }
+    launch_options.fds_to_remap.emplace_back(crashpad_socket.get(), target_fd);
+  }
+#endif  // BUILDFLAG(IS_LINUX)
 
   base::Process process = base::LaunchProcess(command_line, launch_options);
 
@@ -206,7 +260,7 @@ void LinuxWorkerProcessLauncherDelegate::LaunchProcess(
 
   channel_ = std::move(server);
 
-  // TODO: crbug.com/475611769 - watch for process exits.
+  WatchForProcessExit();
 }
 
 void LinuxWorkerProcessLauncherDelegate::GetRemoteAssociatedInterface(
@@ -242,6 +296,7 @@ void LinuxWorkerProcessLauncherDelegate::KillProcess() {
     worker_process_.Terminate(kSuccessExitCode, /*wait=*/true);
     worker_process_.Close();
   }
+  process_exit_watcher_.Reset();
 }
 
 void LinuxWorkerProcessLauncherDelegate::OnChannelConnected(int32_t peer_pid) {
@@ -281,12 +336,15 @@ void LinuxWorkerProcessLauncherDelegate::WatchForProcessExit() {
   DCHECK(worker_process_.IsValid());
   DCHECK(process_exit_watcher_.is_null());
 
-  auto task_runner = base::ThreadPool::CreateSingleThreadTaskRunner(
-      {base::MayBlock(), base::TaskPriority::BEST_EFFORT});
+  auto task_runner = base::ThreadPool::CreateSequencedTaskRunner(
+      {base::MayBlock(), base::WithBaseSyncPrimitives(),
+       base::TaskPriority::BEST_EFFORT});
   process_exit_watcher_.emplace(
       task_runner, worker_process_.Duplicate(),
-      base::BindOnce(&LinuxWorkerProcessLauncherDelegate::OnProcessExited,
-                     weak_ptr_factory_.GetWeakPtr()));
+      base::BindPostTask(
+          base::SequencedTaskRunner::GetCurrentDefault(),
+          base::BindOnce(&LinuxWorkerProcessLauncherDelegate::OnProcessExited,
+                         weak_ptr_factory_.GetWeakPtr())));
 }
 
 void LinuxWorkerProcessLauncherDelegate::OnProcessExited(int exit_code) {
@@ -295,7 +353,9 @@ void LinuxWorkerProcessLauncherDelegate::OnProcessExited(int exit_code) {
   worker_process_.Close();
   process_exit_watcher_.Reset();
 
-  event_handler_->OnProcessExited(exit_code);
+  if (event_handler_) {
+    event_handler_->OnProcessExited(exit_code);
+  }
 }
 
 void LinuxWorkerProcessLauncherDelegate::ReportFatalError() {

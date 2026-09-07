@@ -15,6 +15,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/android/chrome_jni_headers/WebApkInstallService_jni.h"
 #include "chrome/browser/android/shortcut_helper.h"
+#include "chrome/browser/android/tab_android.h"
 #include "chrome/browser/android/webapk/webapk_installer.h"
 #include "components/webapk/webapk.pb.h"
 #include "components/webapps/browser/android/shortcut_info.h"
@@ -113,10 +114,11 @@ void WebApkInstallService::OnFinishedInstall(
 
   bool show_failure_notification = base::FeatureList::IsEnabled(
       webapps::features::kWebApkInstallFailureNotification);
-  HandleFinishInstallNotifications(
-      shortcut_info.manifest_id, shortcut_info.url, shortcut_info.short_name,
-      primary_icon, shortcut_info.is_primary_icon_maskable, result,
-      webapk_package_name, show_failure_notification);
+  HandleFinishInstallNotificationsAndMaybeLaunch(
+      web_contents.get(), shortcut_info.manifest_id, shortcut_info.url,
+      shortcut_info.short_name, primary_icon,
+      shortcut_info.is_primary_icon_maskable, result, webapk_package_name,
+      show_failure_notification);
 
   // If the app was successfully installed, we need to notify the app banner
   // manager so that the installability status is reflected elsewhere in the UI.
@@ -153,15 +155,17 @@ void WebApkInstallService::OnFinishedInstallRestore(
     bool /* relax_updates */,
     const std::string& webapk_package_name) {
   install_ids_.erase(shortcut_info.manifest_id);
-  HandleFinishInstallNotifications(
-      shortcut_info.manifest_id, shortcut_info.url, shortcut_info.short_name,
-      primary_icon, shortcut_info.is_primary_icon_maskable, result,
-      webapk_package_name, /* show_failure_notification= */ true);
+  HandleFinishInstallNotificationsAndMaybeLaunch(
+      nullptr, shortcut_info.manifest_id, shortcut_info.url,
+      shortcut_info.short_name, primary_icon,
+      shortcut_info.is_primary_icon_maskable, result, webapk_package_name,
+      /* show_failure_notification= */ true);
 
   std::move(finish_callback).Run(result);
 }
 
-void WebApkInstallService::HandleFinishInstallNotifications(
+void WebApkInstallService::HandleFinishInstallNotificationsAndMaybeLaunch(
+    content::WebContents* web_contents,
     const GURL& notification_id,
     const GURL& url,
     const std::u16string& short_name,
@@ -171,8 +175,9 @@ void WebApkInstallService::HandleFinishInstallNotifications(
     const std::string& webapk_package_name,
     bool show_failure_notification) {
   if (result == webapps::WebApkInstallResult::SUCCESS) {
-    ShowInstalledNotification(notification_id, short_name, url, primary_icon,
-                              is_primary_icon_maskable, webapk_package_name);
+    ShowInstalledNotificationAndMaybeLaunch(
+        web_contents, notification_id, short_name, url, primary_icon,
+        is_primary_icon_maskable, webapk_package_name);
   } else if (show_failure_notification) {
     ShowInstallFailedNotification(notification_id, short_name, url,
                                   primary_icon, is_primary_icon_maskable,
@@ -200,7 +205,8 @@ void WebApkInstallService::ShowInstallInProgressNotification(
 }
 
 // static
-void WebApkInstallService::ShowInstalledNotification(
+void WebApkInstallService::ShowInstalledNotificationAndMaybeLaunch(
+    content::WebContents* web_contents,
     const GURL& notification_id,
     const std::u16string& short_name,
     const GURL& url,
@@ -211,9 +217,15 @@ void WebApkInstallService::ShowInstalledNotification(
   base::android::ScopedJavaLocalRef<jobject> java_primary_icon =
       !primary_icon.isNull() ? gfx::ConvertToJavaBitmap(primary_icon) : nullptr;
 
-  Java_WebApkInstallService_showInstalledNotification(
-      env, webapk_package_name, notification_id.spec(), short_name, url.spec(),
-      java_primary_icon, is_primary_icon_maskable);
+  // Resolve Java Tab directly from WebContents pointer
+  TabAndroid* tab =
+      web_contents ? TabAndroid::FromWebContents(web_contents) : nullptr;
+  base::android::ScopedJavaLocalRef<jobject> java_tab =
+      tab ? tab->GetJavaObject() : nullptr;
+
+  Java_WebApkInstallService_showInstalledNotificationAndMaybeLaunch(
+      env, java_tab, webapk_package_name, notification_id.spec(), short_name,
+      url.spec(), java_primary_icon, is_primary_icon_maskable);
 }
 
 // static

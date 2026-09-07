@@ -12,6 +12,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/strings/string_util.h"
 #include "base/task/single_thread_task_runner.h"
 #include "net/base/address_list.h"
 #include "net/base/port_util.h"
@@ -27,6 +28,7 @@
 #include "net/spdy/spdy_http_utils.h"
 #include "net/third_party/quiche/src/quiche/quic/core/http/web_transport_http3.h"
 #include "net/third_party/quiche/src/quiche/quic/core/quic_connection.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_constants.h"
 #include "net/third_party/quiche/src/quiche/quic/core/quic_types.h"
 #include "net/third_party/quiche/src/quiche/quic/core/quic_utils.h"
 #include "net/third_party/quiche/src/quiche/web_transport/web_transport_headers.h"
@@ -199,7 +201,8 @@ class DedicatedWebTransportHttp3ClientSession
                                     supported_versions,
                                     connection,
                                     server_id,
-                                    crypto_config),
+                                    crypto_config,
+                                    quic::QuicPriorityType::kWebTransport),
         client_(client) {}
 
   bool OnSettingsFrame(const quic::SettingsFrame& frame) override {
@@ -349,12 +352,33 @@ void RecordNegotiatedWebTransportVersion(
       "Net.WebTransport.NegotiatedWebTransportVersion", negotiated);
 }
 
-void AdjustSendAlgorithm(quic::QuicConnection& connection) {
-  if (!base::FeatureList::IsEnabled(kWebTransportCongestionControl)) {
+void AdjustSendAlgorithm(quic::QuicConnection& connection,
+                         WebTransportParameters::CongestionControlHint hint) {
+  // First check if the global feature flag overrides everything.
+  if (base::FeatureList::IsEnabled(kWebTransportCongestionControl)) {
+    connection.sent_packet_manager().SetSendAlgorithm(
+        kWebTransportCongestionControlAlgorithm.Get());
     return;
   }
-  connection.sent_packet_manager().SetSendAlgorithm(
-      kWebTransportCongestionControlAlgorithm.Get());
+
+  // Otherwise, apply the per-connection hint from the application.
+  switch (hint) {
+    case WebTransportParameters::CongestionControlHint::kDefault:
+      // Keep the default algorithm (Cubic); no change needed.
+      break;
+    case WebTransportParameters::CongestionControlHint::kThroughput:
+      // BBRv2 provides improved bandwidth estimation and better coexistence
+      // with loss-based algorithms, making it well-suited for bulk transfers.
+      connection.sent_packet_manager().SetSendAlgorithm(quic::kBBRv2);
+      break;
+    case WebTransportParameters::CongestionControlHint::kLowLatency:
+      // TODO(crbug.com/501268547): Revisit algorithm choice for low-latency
+      // when a better option becomes available.
+      connection.sent_packet_manager().SetSendAlgorithm(quic::kBBRv2);
+      break;
+    default:
+      NOTREACHED();
+  }
 }
 
 }  // namespace
@@ -364,12 +388,20 @@ DedicatedWebTransportHttp3Client::DedicatedWebTransportHttp3Client(
     const url::Origin& origin,
     WebTransportClientVisitor* visitor,
     const NetworkAnonymizationKey& anonymization_key,
+    handles::NetworkHandle target_network,
     URLRequestContext* context,
     const WebTransportParameters& parameters)
     : url_(url),
       origin_(origin),
       anonymization_key_(anonymization_key),
+      target_network_(target_network),
       application_protocols_(parameters.application_protocols),
+      congestion_control_hint_(parameters.congestion_control_hint),
+      anticipated_concurrent_incoming_unidirectional_streams_(
+          parameters.anticipated_concurrent_incoming_unidirectional_streams),
+      anticipated_concurrent_incoming_bidirectional_streams_(
+          parameters.anticipated_concurrent_incoming_bidirectional_streams),
+      additional_headers_(parameters.additional_headers),
       context_(context),
       visitor_(visitor),
       quic_context_(context->quic_context()),
@@ -448,6 +480,14 @@ quic::WebTransportSession* DedicatedWebTransportHttp3Client::session() {
   if (web_transport_session_ == nullptr)
     return nullptr;
   return web_transport_session_;
+}
+
+std::optional<quic::QuicByteCount>
+DedicatedWebTransportHttp3Client::GetMaxDatagramSize() const {
+  if (!session_ || !web_transport_session_ || !session_->SupportsH3Datagram()) {
+    return std::nullopt;
+  }
+  return web_transport_session_->GetMaxDatagramSize();
 }
 
 void DedicatedWebTransportHttp3Client::DoLoop(int rv) {
@@ -550,7 +590,8 @@ int DedicatedWebTransportHttp3Client::DoInit() {
 int DedicatedWebTransportHttp3Client::DoCheckProxy() {
   next_connect_state_ = CONNECT_STATE_CHECK_PROXY_COMPLETE;
   return context_->proxy_resolution_service()->ResolveProxy(
-      url_, /* method */ "CONNECT", anonymization_key_, &proxy_info_,
+      url_, /* method */ "CONNECT", anonymization_key_, target_network_,
+      &proxy_info_,
       base::BindOnce(&DedicatedWebTransportHttp3Client::DoLoop,
                      base::Unretained(this)),
       &proxy_resolution_request_, net_log_, DEFAULT_PRIORITY);
@@ -572,7 +613,8 @@ int DedicatedWebTransportHttp3Client::DoResolveHost() {
   next_connect_state_ = CONNECT_STATE_RESOLVE_HOST_COMPLETE;
   HostResolver::ResolveHostParameters parameters;
   resolve_host_request_ = context_->host_resolver()->CreateRequest(
-      url::SchemeHostPort(url_), anonymization_key_, net_log_, std::nullopt);
+      url::SchemeHostPort(url_), anonymization_key_, target_network_, net_log_,
+      std::nullopt);
   return resolve_host_request_->Start(base::BindOnce(
       &DedicatedWebTransportHttp3Client::DoLoop, base::Unretained(this)));
 }
@@ -614,8 +656,8 @@ int DedicatedWebTransportHttp3Client::DoConnect() {
   // (which currently has a lot of code specific to QuicChromiumClientSession).
   socket_ = context_->GetNetworkSessionContext()
                 ->client_socket_factory->CreateDatagramClientSocket(
-                    DatagramSocket::DEFAULT_BIND, net_log_.net_log(),
-                    net_log_.source());
+                    DatagramSocket::DEFAULT_BIND, target_network_,
+                    net_log_.net_log(), net_log_.source());
   if (quic_context_->params()->enable_socket_recv_optimization)
     socket_->EnableRecvOptimization();
   socket_->UseNonBlockingIO();
@@ -669,7 +711,16 @@ void DedicatedWebTransportHttp3Client::CreateConnection() {
   event_logger_ = std::make_unique<QuicEventLogger>(session_.get(), net_log_);
   connection_->set_debug_visitor(event_logger_.get());
   connection_->set_creator_debug_delegate(event_logger_.get());
-  AdjustSendAlgorithm(*connection_);
+  AdjustSendAlgorithm(*connection_, congestion_control_hint_);
+
+  if (anticipated_concurrent_incoming_unidirectional_streams_.has_value()) {
+    session_->config()->SetMaxUnidirectionalStreamsToSend(
+        *anticipated_concurrent_incoming_unidirectional_streams_);
+  }
+  if (anticipated_concurrent_incoming_bidirectional_streams_.has_value()) {
+    session_->config()->SetMaxBidirectionalStreamsToSend(
+        *anticipated_concurrent_incoming_bidirectional_streams_);
+  }
 
   session_->Initialize();
   packet_reader_->StartReading();
@@ -796,6 +847,11 @@ int DedicatedWebTransportHttp3Client::DoSendRequest() {
           *std::move(protocols_header);
     }
   }
+  for (const auto& [name, value] : additional_headers_) {
+    // "Characters in field names MUST be converted to lowercase prior to
+    // their encoding." -- RFC 9114 Section 4.2
+    headers.AppendValueOrAddHeader(base::ToLowerASCII(name), value);
+  }
   stream->WriteHeaders(std::move(headers), /*fin=*/false, nullptr);
 
   web_transport_session_ = stream->web_transport();
@@ -804,6 +860,14 @@ int DedicatedWebTransportHttp3Client::DoSendRequest() {
   }
   stream->web_transport()->SetVisitor(
       std::make_unique<WebTransportVisitorProxy>(this));
+  // Install the single-use draining callback before the handshake completes so
+  // a GOAWAY that drains the session during the handshake is not lost.
+  web_transport_session_->SetOnDraining(
+      [weak_this = weak_factory_.GetWeakPtr()]() mutable {
+        if (weak_this) {
+          weak_this->OnSessionDraining();
+        }
+      });
 
   next_connect_state_ = CONNECT_STATE_CONFIRM_CONNECTION;
   return ERR_IO_PENDING;
@@ -914,6 +978,13 @@ void DedicatedWebTransportHttp3Client::OnSessionClosed(
       FROM_HERE,
       base::BindOnce(&DedicatedWebTransportHttp3Client::TransitionToState,
                      weak_factory_.GetWeakPtr(), WebTransportState::CLOSED));
+}
+
+void DedicatedWebTransportHttp3Client::OnSessionDraining() {
+  if (IsTerminalState(state_)) {
+    return;
+  }
+  visitor_->OnDraining();
 }
 
 void DedicatedWebTransportHttp3Client::

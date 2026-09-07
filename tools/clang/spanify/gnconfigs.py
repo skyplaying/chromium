@@ -9,10 +9,10 @@
 # platforms you are interested in, and to configure them as required.
 
 import os
+import subprocess
 
 
 class GnConfigsImpl:
-
     # TODO: Consider switching to enum.Flag rather than a bool.
     def __init__(self, use_remoteexec) -> None:
         self.remoteexec_args = [
@@ -25,8 +25,9 @@ class GnConfigsImpl:
             'use_remoteexec=false',
             'use_siso=true',
         ]
-        current_exec = (self.remoteexec_args
-                        if use_remoteexec else self.localexec_args)
+        current_exec = (
+            self.remoteexec_args if use_remoteexec else self.localexec_args
+        )
 
         # TODO: Consider switching to straight defining a YAML file or json
         # struct to separate code from data more completely.
@@ -44,7 +45,7 @@ class GnConfigsImpl:
             'symbol_level=0',
             'target_cpu="x64"',
             'target_os="linux"',
-            'use_clang_coverage=true',
+            'use_clang_coverage=false',
         ] + current_exec
         self.linux_configs["linux-chromium-asan"] = [
             'dcheck_always_on=true',
@@ -117,7 +118,7 @@ class GnConfigsImpl:
             'symbol_level=0',
             'target_cpu="x64"',
             'target_os="mac"',
-            'use_clang_coverage=true',
+            'use_clang_coverage=false',
             # Below are args needed by mac-official
             # 'is_chrome_branded=true', Doesn't build locally.
             # 'is_official_build=true', Only needed for optimizations
@@ -146,7 +147,7 @@ class GnConfigsImpl:
             'symbol_level=0',
             'target_cpu="x64"',
             'target_os="win"',
-            'use_clang_coverage=true',
+            'use_clang_coverage=false',
         ] + current_exec
         self.win_configs['win_chromium_compile_dbg_ng'] = [
             'ffmpeg_branding="Chrome"',
@@ -180,7 +181,7 @@ class GnConfigsImpl:
             'symbol_level=0',
             'system_webview_package_name="com.google.android.chrome"',
             'target_cpu="arm64"',
-            'use_clang_coverage=true',
+            'use_clang_coverage=false',
         ] + current_exec
         self.android_configs['android-binary-size'] = [
             'android_channel="stable"',
@@ -191,7 +192,6 @@ class GnConfigsImpl:
             'symbol_level=1',
             'target_cpu="arm64"',
             'target_os="android"',
-            'v8_is_on_release_branch=true',
         ] + current_exec
         self.android_configs["android_compile_dbg"] = [
             'android_static_analysis="on"',
@@ -220,7 +220,7 @@ class GnConfigsImpl:
             'system_webview_shell_package_name="org.chromium.my_webview_shell"',
             'target_cpu="x86"',
             'target_os="android"',
-            'use_clang_coverage=true',
+            'use_clang_coverage=false',
             'use_jacoco_coverage=true',
         ] + current_exec
         # Finally official build (arm64 in this case)
@@ -281,36 +281,120 @@ class GnConfigsImpl:
             'symbol_level=1',
         ] + current_exec
 
+        # Project specific configs for standalone builds.
+        # TODO(crbug.com/497912213): Add more platforms and configs for these.
+        root_dir = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), '../../..')
+        )
+        clang_path = os.path.join(
+            root_dir, 'third_party/llvm-build/Release+Asserts/bin'
+        )
+        self.skia_configs = {
+            'linux': [
+                'is_debug=false',
+                'is_component_build=false',
+                'target_cpu="x64"',
+                'target_os="linux"',
+                f'cc="{os.path.join(clang_path, "clang")}"',
+                f'cxx="{os.path.join(clang_path, "clang++")}"',
+            ]
+        }
+
+        clang_base_path = os.path.join(
+            root_dir, 'third_party/llvm-build/Release+Asserts'
+        )
+        self.dawn_configs = {
+            'linux': [
+                'is_debug=false',
+                'is_component_build=false',
+                'symbol_level=0',
+                'target_cpu="x64"',
+                'target_os="linux"',
+            ]
+            + current_exec
+        }
+        self.angle_configs = {
+            'linux': [
+                'is_debug=false',
+                'is_component_build=false',
+                'symbol_level=0',
+                'target_cpu="x64"',
+                'target_os="linux"',
+                'build_with_chromium=false',
+            ]
+            + current_exec
+        }
+        self.webrtc_configs = {
+            'linux': [
+                'is_debug=false',
+                'is_component_build=false',
+                'symbol_level=0',
+                'target_cpu="x64"',
+                'target_os="linux"',
+                'build_with_chromium=false',
+            ]
+            + current_exec
+        }
+
         # A set of platforms that gives you minimum coverage.
         self.min_all_platforms = {}
         self.min_all_platforms['linux'] = self.linux_configs['linux-rel']
         self.min_all_platforms['android'] = self.android_configs[
-            'android-arm64-rel']
+            'android-arm64-rel'
+        ]
         self.min_all_platforms['mac'] = self.mac_configs['mac-rel']
         self.min_all_platforms['win'] = self.win_configs['win-rel']
         self.min_all_platforms['fuchsia'] = self.fuchsia_configs[
-            'fuchsia-arm64-official']
+            'fuchsia-arm64-official'
+        ]
         self.min_all_platforms['chromeos'] = self.chromeos_configs[
-            'chromeos-official']
+            'chromeos-official'
+        ]
 
         # A set of platforms that should give you reasonable CQ coverage.
-        self.all_platforms_and_configs = (self.linux_configs
-                                          | self.android_configs
-                                          | self.mac_configs | self.win_configs
-                                          | self.fuchsia_configs
-                                          | self.chromeos_configs)
+        self.all_platforms_and_configs = (
+            self.linux_configs
+            | self.android_configs
+            | self.mac_configs
+            | self.win_configs
+            | self.fuchsia_configs
+            | self.chromeos_configs
+        )
+
+    def get_config(self, platform, project='chrome'):
+        """
+        Returns the GN arguments for a given platform and project.
+        """
+        if project == 'chrome' or project == 'partition_alloc':
+            # Use standard chrome configs for these.
+            args = self.min_all_platforms.get(platform)
+            if args is None:
+                args = self.all_platforms_and_configs.get(platform)
+            return args
+
+        # Check for project-specific configs.
+        project_configs_key = '%s_configs' % project
+        if hasattr(self, project_configs_key):
+            project_configs = getattr(self, project_configs_key)
+            return project_configs.get(platform)
+
+        return None
 
     # Make it simple to get a certain config or all platform configs if you only
     # care about a single one.
     def __getitem__(self, key):
+        # First check if it's a project name.
         potential_platform_key = '%s_configs' % key
         if hasattr(self, potential_platform_key):
             return getattr(self, potential_platform_key)
+
+        # Then check if it's a specific config name (e.g., 'linux-rel').
         for name, config in self.all_platforms_and_configs.items():
-            print(name)
             if key == name:
                 return config
-        return None
+
+        # Finally, check if it's a platform name in min_all_platforms.
+        return self.min_all_platforms.get(key)
 
 
 # To prevent initializing it repeatedly if people call it as a simple accessor.
@@ -355,9 +439,11 @@ def GnConfigs(use_remoteexec) -> GnConfigsImpl:
 
 # This function will generate out/<target> to use <args> this is the same as
 # running `gn args` yourself and manually entering <args>.
-def GenerateGnTarget(target, args):
+def GenerateGnTarget(target, args, cwd=None):
     # Configure the target.
-    ret = os.system("gn gen out/%s --args='%s'" % (target, "\n".join(args)))
-    if os.WIFEXITED(ret) and os.WEXITSTATUS(ret) == 0:
-        return True
-    return False
+    cmd = ['gn', 'gen', f'out/{target}', f'--args={" ".join(args)}']
+    try:
+        result = subprocess.run(cmd, check=True, text=True, cwd=cwd)
+        return result.returncode == 0
+    except subprocess.CalledProcessError:
+        return False

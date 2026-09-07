@@ -25,6 +25,7 @@
 #include "chrome/browser/bookmarks/bookmark_parent_folder_children.h"
 #include "chrome/browser/bookmarks/managed_bookmark_service_factory.h"
 #include "chrome/browser/commerce/shopping_service_factory.h"
+#include "chrome/browser/enterprise/isolated_mode/isolated_mode_settings_service_factory.h"
 #include "chrome/browser/extensions/api/bookmark_manager_private/bookmark_manager_private_api.h"
 #include "chrome/browser/prefs/incognito_mode_prefs.h"
 #include "chrome/browser/profiles/profile.h"
@@ -34,13 +35,11 @@
 #include "chrome/browser/ui/bookmarks/bookmark_stats.h"
 #include "chrome/browser/ui/bookmarks/bookmark_ui_operations_helper.h"
 #include "chrome/browser/ui/bookmarks/bookmark_utils_desktop.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/chrome_pages.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/interaction/browser_elements_views.h"
 #include "chrome/browser/ui/webui/bookmarks/bookmark_prefs.h"
@@ -50,7 +49,6 @@
 #include "chrome/browser/ui/webui/side_panel/reading_list/reading_list_ui.h"
 #include "chrome/browser/ui/webui/webui_embedding_context.h"
 #include "chrome/browser/undo/bookmark_undo_service_factory.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/bookmark_node.h"
 #include "components/bookmarks/browser/bookmark_utils.h"
@@ -71,11 +69,10 @@
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
 
-namespace {
-
-class BookmarkContextMenu : public ui::SimpleMenuModel,
-                            public ui::SimpleMenuModel::Delegate,
-                            public BookmarkContextMenuControllerDelegate {
+class BookmarksPageHandler::BookmarkContextMenu
+    : public ui::SimpleMenuModel,
+      public ui::SimpleMenuModel::Delegate,
+      public BookmarkContextMenuControllerDelegate {
  public:
   explicit BookmarkContextMenu(
       BrowserWindowInterface* browser_window,
@@ -83,7 +80,8 @@ class BookmarkContextMenu : public ui::SimpleMenuModel,
       std::vector<raw_ptr<const bookmarks::BookmarkNode, VectorExperimental>>
           bookmarks,
       const side_panel::mojom::ActionSource& source,
-      commerce::ShoppingListContextMenuController* shopping_list_controller)
+      commerce::ShoppingListContextMenuController* shopping_list_controller,
+      bool can_paste)
       : ui::SimpleMenuModel(this),
         embedder_(embedder),
         controller_(base::WrapUnique(new BookmarkContextMenuController(
@@ -91,10 +89,11 @@ class BookmarkContextMenu : public ui::SimpleMenuModel,
                 ->GetPrimaryWindowWidget()
                 ->GetNativeWindow(),
             this,
-            browser_window->GetBrowserForMigrationOnly(),
+            browser_window,
             browser_window->GetProfile(),
             BookmarkLaunchLocation::kSidePanelContextMenu,
-            bookmarks))),
+            bookmarks,
+            can_paste))),
         shopping_list_controller_(shopping_list_controller),
         bookmarks_(bookmarks) {
     if (bookmarks.size() == 0) {
@@ -106,6 +105,10 @@ class BookmarkContextMenu : public ui::SimpleMenuModel,
       AddItem(IDC_BOOKMARK_BAR_OPEN_ALL);
       AddItem(IDC_BOOKMARK_BAR_OPEN_ALL_NEW_WINDOW);
       AddItem(IDC_BOOKMARK_BAR_OPEN_ALL_INCOGNITO);
+      if (enterprise_isolated_mode::IsolatedModeReplacesIncognito(
+              browser_window->GetProfile())) {
+        AddItem(IDC_BOOKMARK_BAR_OPEN_ALL_ISOLATED);
+      }
       if (bookmarks.size() == 1 && bookmarks.front()->is_url()) {
         AddItem(IDC_BOOKMARK_BAR_OPEN_SPLIT_VIEW);
       }
@@ -120,6 +123,10 @@ class BookmarkContextMenu : public ui::SimpleMenuModel,
     AddItem(IDC_BOOKMARK_BAR_OPEN_ALL);
     AddItem(IDC_BOOKMARK_BAR_OPEN_ALL_NEW_WINDOW);
     AddItem(IDC_BOOKMARK_BAR_OPEN_ALL_INCOGNITO);
+    if (enterprise_isolated_mode::IsolatedModeReplacesIncognito(
+            browser_window->GetProfile())) {
+      AddItem(IDC_BOOKMARK_BAR_OPEN_ALL_ISOLATED);
+    }
     if (bookmarks.size() == 1 && bookmarks.front()->is_url()) {
       AddItem(IDC_BOOKMARK_BAR_OPEN_SPLIT_VIEW);
     }
@@ -186,14 +193,11 @@ class BookmarkContextMenu : public ui::SimpleMenuModel,
       bookmarks_;
 };
 
-std::unique_ptr<BookmarkContextMenu> ContextMenuFromNodes(
-    const std::vector<int64_t> node_ids,
-    base::WeakPtr<TopChromeWebUIController::Embedder> embedder,
-    side_panel::mojom::ActionSource source,
-    commerce::ShoppingListContextMenuController* shopping_list_controller,
-    BrowserWindowInterface* browser_window) {
-  bookmarks::BookmarkModel* bookmark_model =
-      BookmarkModelFactory::GetForBrowserContext(browser_window->GetProfile());
+namespace {
+
+std::vector<raw_ptr<const bookmarks::BookmarkNode, VectorExperimental>>
+BookmarksFromNodeIds(const std::vector<int64_t> node_ids,
+                     bookmarks::BookmarkModel* bookmark_model) {
   std::vector<raw_ptr<const bookmarks::BookmarkNode, VectorExperimental>>
       bookmarks = {};
   for (const int64_t id : node_ids) {
@@ -203,11 +207,7 @@ std::unique_ptr<BookmarkContextMenu> ContextMenuFromNodes(
       bookmarks.push_back(bookmark);
     }
   }
-
-  return bookmarks.empty() ? nullptr
-                           : std::make_unique<BookmarkContextMenu>(
-                                 browser_window, embedder, bookmarks, source,
-                                 shopping_list_controller);
+  return bookmarks;
 }
 
 // Returns the Side Panel merged ID for permanent folders.
@@ -413,8 +413,7 @@ void BookmarksPageHandler::BookmarkCurrentTabInFolder(
     return;
   }
   chrome::BookmarkCurrentTabInFolder(
-      browser_window_interface_->GetBrowserForMigrationOnly(),
-      bookmark_merged_surface_->bookmark_model(),
+      browser_window_interface_, bookmark_merged_surface_->bookmark_model(),
       bookmark_merged_surface_->GetDefaultParentForNewNodes(*parent)->id());
 }
 
@@ -507,7 +506,7 @@ void BookmarksPageHandler::DropBookmarks(const std::string& folder_id,
                      /*index=*/parent_node->children().size(),
                      /*copy=*/false,
                      chrome::BookmarkReorderDropTarget::kBookmarkSidePanel,
-                     browser_window_interface_->GetBrowserForMigrationOnly());
+                     browser_window_interface_);
 }
 
 void BookmarksPageHandler::ExecuteOpenInNewTabCommand(
@@ -533,7 +532,7 @@ void BookmarksPageHandler::ExecuteOpenInNewWindowCommand(
                             IDC_BOOKMARK_BAR_OPEN_ALL_NEW_WINDOW);
 }
 
-void BookmarksPageHandler::ExecuteOpenInIncognitoWindowCommand(
+void BookmarksPageHandler::ExecuteOpenInOffTheRecordWindowCommand(
     const std::vector<std::string>& side_panel_ids,
     side_panel::mojom::ActionSource source) {
   const std::vector<int64_t> node_ids =
@@ -541,8 +540,11 @@ void BookmarksPageHandler::ExecuteOpenInIncognitoWindowCommand(
   if (node_ids.empty()) {
     return;
   }
-  ExecuteContextMenuCommand(node_ids, source,
-                            IDC_BOOKMARK_BAR_OPEN_ALL_INCOGNITO);
+  int command_id = enterprise_isolated_mode::IsolatedModeReplacesIncognito(
+                       browser_window_interface_->GetProfile())
+                       ? IDC_BOOKMARK_BAR_OPEN_ALL_ISOLATED
+                       : IDC_BOOKMARK_BAR_OPEN_ALL_INCOGNITO;
+  ExecuteContextMenuCommand(node_ids, source, command_id);
 }
 
 void BookmarksPageHandler::GetIncognitoAvailableCount(
@@ -564,7 +566,9 @@ void BookmarksPageHandler::GetIncognitoAvailableCount(
   for (const int64_t id : node_ids) {
     const bookmarks::BookmarkNode* bookmark =
         bookmarks::GetBookmarkNodeByID(bookmark_model, id);
-    if (bookmarks::IsOpenInIncognitoAllowed({bookmark}, profile)) {
+    // Check if the bookmark is present (i.e. not deleted) and if it is allowed
+    // in incognito mode.
+    if (bookmark && bookmarks::IsOpenInIncognitoAllowed({bookmark}, profile)) {
       count++;
     }
   }
@@ -626,13 +630,16 @@ void BookmarksPageHandler::ExecuteContextMenuCommand(
     const std::vector<int64_t>& node_ids,
     side_panel::mojom::ActionSource source,
     int command_id) {
-  std::unique_ptr<BookmarkContextMenu> context_menu = ContextMenuFromNodes(
+  CreateContextMenuForNodes(
       node_ids, bookmarks_ui_->embedder(), source,
-      bookmarks_ui_->GetShoppingListContextMenuController(),
-      browser_window_interface_);
-  if (context_menu && context_menu->IsCommandIdEnabled(command_id)) {
-    context_menu->ExecuteCommand(command_id, 0);
-  }
+      base::BindOnce(
+          [](int command_id,
+             std::unique_ptr<BookmarkContextMenu> context_menu) {
+            if (context_menu && context_menu->IsCommandIdEnabled(command_id)) {
+              context_menu->ExecuteCommand(command_id, 0);
+            }
+          },
+          command_id));
 }
 
 void BookmarksPageHandler::OpenBookmark(
@@ -650,9 +657,8 @@ void BookmarksPageHandler::OpenBookmark(
       click_modifiers->middle_button, click_modifiers->alt_key,
       click_modifiers->ctrl_key, click_modifiers->meta_key,
       click_modifiers->shift_key);
-  bookmarks::OpenAllIfAllowed(
-      browser_window_interface_->GetBrowserForMigrationOnly(), {bookmark_node},
-      open_location);
+  bookmarks::OpenAllIfAllowed(browser_window_interface_, {bookmark_node},
+                              open_location);
   if (source == side_panel::mojom::ActionSource::kPriceTracking) {
     return;
   }
@@ -700,7 +706,7 @@ void BookmarksPageHandler::MoveBookmark(int64_t node_id,
   bookmark_merged_surface_->Move(
       node_to_move, *parent,
       bookmark_merged_surface_->GetChildrenCount(*parent),
-      browser_window_interface_->GetBrowserForMigrationOnly());
+      browser_window_interface_);
 }
 
 void BookmarksPageHandler::RemoveBookmarks(const std::vector<int64_t>& node_ids,
@@ -757,11 +763,17 @@ void BookmarksPageHandler::ShowContextMenu(
 
   auto embedder = bookmarks_ui_->embedder();
   if (embedder) {
-    std::unique_ptr<BookmarkContextMenu> context_menu = ContextMenuFromNodes(
+    CreateContextMenuForNodes(
         {id}, embedder, source,
-        bookmarks_ui_->GetShoppingListContextMenuController(),
-        browser_window_interface_);
-    embedder->ShowContextMenu(point, std::move(context_menu));
+        base::BindOnce(
+            [](gfx::Point point,
+               base::WeakPtr<TopChromeWebUIController::Embedder> embedder,
+               std::unique_ptr<BookmarkContextMenu> context_menu) {
+              if (context_menu && embedder) {
+                embedder->ShowContextMenu(point, std::move(context_menu));
+              }
+            },
+            point, embedder));
   }
 }
 
@@ -857,6 +869,45 @@ void BookmarksPageHandler::SendAllBookmarks(GetAllBookmarksCallback callback) {
   }
 
   std::move(callback).Run(std::move(mojo_nodes));
+}
+
+void BookmarksPageHandler::CreateContextMenuForNodes(
+    const std::vector<int64_t> node_ids,
+    base::WeakPtr<TopChromeWebUIController::Embedder> embedder,
+    side_panel::mojom::ActionSource source,
+    base::OnceCallback<void(std::unique_ptr<BookmarkContextMenu>)> callback) {
+  auto bookmarks = BookmarksFromNodeIds(
+      node_ids, BookmarkModelFactory::GetForBrowserContext(
+                    browser_window_interface_->GetProfile()));
+  auto parent = BookmarkContextMenuController::GetParentForNewNodes(bookmarks);
+  if (!parent) {
+    std::move(callback).Run(nullptr);
+    return;
+  }
+  BookmarkUIOperationsHelperMergedSurfaces(bookmark_merged_surface_,
+                                           parent.get())
+      .CanPasteFromClipboard(
+          base::BindOnce(&BookmarksPageHandler::OnCanPasteFromClipboard,
+                         weak_ptr_factory_.GetWeakPtr(), node_ids, embedder,
+                         source, std::move(callback)));
+}
+
+void BookmarksPageHandler::OnCanPasteFromClipboard(
+    const std::vector<int64_t> node_ids,
+    base::WeakPtr<TopChromeWebUIController::Embedder> embedder,
+    side_panel::mojom::ActionSource source,
+    base::OnceCallback<void(std::unique_ptr<BookmarkContextMenu>)> callback,
+    bool can_paste) {
+  auto bookmarks = BookmarksFromNodeIds(
+      node_ids, BookmarkModelFactory::GetForBrowserContext(
+                    browser_window_interface_->GetProfile()));
+  std::move(callback).Run(
+      bookmarks.empty()
+          ? nullptr
+          : std::make_unique<BookmarkContextMenu>(
+                browser_window_interface_, embedder, bookmarks, source,
+                bookmarks_ui_->GetShoppingListContextMenuController(),
+                can_paste));
 }
 
 void BookmarksPageHandler::BookmarkNodeAdded(const BookmarkParentFolder& parent,

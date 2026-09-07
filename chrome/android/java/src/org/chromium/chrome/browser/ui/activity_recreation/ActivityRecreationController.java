@@ -22,9 +22,12 @@ import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.layouts.LayoutManager;
 import org.chromium.chrome.browser.layouts.LayoutStateProvider.LayoutStateObserver;
 import org.chromium.chrome.browser.layouts.LayoutType;
+import org.chromium.chrome.browser.tab_ui.TabSwitcherUtils;
 import org.chromium.chrome.browser.toolbar.ToolbarManager;
 import org.chromium.chrome.browser.ui.ExclusiveAccessManager;
+import org.chromium.components.omnibox.AutocompleteInput;
 import org.chromium.components.omnibox.OmniboxFocusReason;
+import org.chromium.components.omnibox.TextSelection;
 import org.chromium.ui.KeyboardVisibilityDelegate;
 
 /**
@@ -87,7 +90,7 @@ public class ActivityRecreationController {
 
         var layoutManager = mLayoutManagerSupplier.get();
         if (layoutManager != null) {
-            if (layoutManager.isLayoutVisible(LayoutType.TAB_SWITCHER)) {
+            if (layoutManager.isLayoutVisible(LayoutType.HUB)) {
                 mRetainedUiState.mIsTabSwitcherShown = true;
             }
         }
@@ -221,7 +224,7 @@ public class ActivityRecreationController {
             LayoutManager layoutManager,
             Handler layoutStateHandler,
             Runnable onLayoutFinishedShowing) {
-        /* TODO (crbug/1395495): Restore the UI state directly if the invocation of {@code
+        /* TODO (crbug.com/40249125): Restore the UI state directly if the invocation of {@code
          * StaticLayout#requestFocus(Tab)} in {@code StaticLayout#doneShowing()} is removed. We
          * should restore the desired UI state after the {@link StaticLayout} is done showing to
          * persist the state. If the layout is visible and done showing, it is safe to execute the
@@ -277,8 +280,8 @@ public class ActivityRecreationController {
 
     private static void restoreTabSwitcherState(
             boolean isTabSwitcherShown, LayoutManager layoutManager) {
-        if (!isTabSwitcherShown) return;
-        layoutManager.showLayout(LayoutType.TAB_SWITCHER, false);
+        if (!isTabSwitcherShown || TabSwitcherUtils.isGridTabSwitcherDisabled()) return;
+        layoutManager.showLayout(LayoutType.HUB, false);
     }
 
     private static void restoreExclusiveAccessState(
@@ -312,8 +315,12 @@ public class ActivityRecreationController {
 
     private static void setUrlBarFocusAndText(
             ToolbarManager toolbarManager, @Nullable String urlBarText) {
-        toolbarManager.setUrlBarFocusAndText(
-                true, OmniboxFocusReason.ACTIVITY_RECREATION_RESTORATION, urlBarText);
+        AutocompleteInput input =
+                new AutocompleteInput(OmniboxFocusReason.ACTIVITY_RECREATION_RESTORATION)
+                        .setUserText(urlBarText)
+                        .setSelection(TextSelection.SELECT_ALL);
+        // TODO(b/509988739): use proper session suspend/resume once we have this available.
+        toolbarManager.beginFuseboxInput(input);
     }
 
     private static void showSoftInput(ActivityTabProvider activityTabProvider) {

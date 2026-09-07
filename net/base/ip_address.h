@@ -116,6 +116,11 @@ class NET_EXPORT IPAddressBytes {
 
   size_t EstimateMemoryUsage() const;
 
+  template <typename H>
+  friend H AbslHashValue(H h, const IPAddressBytes& b) {
+    return H::combine(std::move(h), b.span());
+  }
+
  private:
   // Underlying sequence of bytes.
   IPAddressStorage bytes_;
@@ -235,6 +240,9 @@ class NET_EXPORT IPAddress {
   // IPv4-mapped-to-IPv6 addresses are considered publicly routable.
   bool IsPubliclyRoutable() const;
 
+  // Returns true if |ip_address_| represents a multicast address.
+  bool IsMulticast() const;
+
   // Returns true if the IP is "zero" (e.g. the 0.0.0.0 IPv4 address).
   bool IsZero() const;
 
@@ -318,6 +326,11 @@ class NET_EXPORT IPAddress {
   base::Value ToValue() const;
 
   size_t EstimateMemoryUsage() const;
+
+  template <typename H>
+  friend H AbslHashValue(H h, const IPAddress& address) {
+    return H::combine(std::move(h), address.ip_address_);
+  }
 
  private:
   IPAddressBytes ip_address_;

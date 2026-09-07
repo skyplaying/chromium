@@ -39,6 +39,18 @@ PendingInputBuffer::~PendingInputBuffer() = default;
 MediaFoundationStreamWrapper::MediaFoundationStreamWrapper() = default;
 MediaFoundationStreamWrapper::~MediaFoundationStreamWrapper() = default;
 
+IFACEMETHODIMP_(ULONG) MediaFoundationStreamWrapper::Release() {
+  ULONG ref_count = InternalRelease();
+  if (ref_count == 0) {
+    if (!task_runner_->RunsTasksInCurrentSequence()) {
+      task_runner_->DeleteSoon(FROM_HERE, this);
+    } else {
+      delete this;
+    }
+  }
+  return ref_count;
+}
+
 /*static*/
 HRESULT MediaFoundationStreamWrapper::Create(
     int stream_id,
@@ -79,16 +91,23 @@ HRESULT MediaFoundationStreamWrapper::RuntimeClassInitialize(
   {
     base::AutoLock auto_lock(lock_);
     parent_source_ = parent_source;
+    auto* mf_source = static_cast<MediaFoundationSourceWrapper*>(parent_source);
+    has_cdm_ = mf_source && mf_source->HasCdm();
+    demuxer_stream_ = demuxer_stream;
   }
-  demuxer_stream_ = demuxer_stream;
   stream_id_ = stream_id;
-  stream_type_ = demuxer_stream_->type();
+  stream_type_ = demuxer_stream->type();
+  is_encrypted_ = (stream_type_ == DemuxerStream::Type::VIDEO)
+                      ? demuxer_stream->video_decoder_config().is_encrypted()
+                      : demuxer_stream->audio_decoder_config().is_encrypted();
 
   DVLOG_FUNC(1) << "stream_id=" << stream_id
-                << ", stream_type=" << DemuxerStream::GetTypeName(stream_type_);
+                << ", stream_type=" << DemuxerStream::GetTypeName(stream_type_)
+                << ", is_encrypted=" << is_encrypted_;
 
   media_log_ = std::move(media_log);
-  if (base::FeatureList::IsEnabled(kMediaFoundationBatchRead)) {
+  batch_read_enabled_ = base::FeatureList::IsEnabled(kMediaFoundationBatchRead);
+  if (batch_read_enabled_) {
     if (kBatchReadCount.Get() < 1 || kBatchReadCount.Get() > 500) {
       DLOG(WARNING) << "batch_read_count_=" << kBatchReadCount.Get()
                     << " is out of range [1,500], "
@@ -127,6 +146,7 @@ void MediaFoundationStreamWrapper::DetachDemuxerStream() {
   DVLOG_FUNC(1);
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
 
+  base::AutoLock auto_lock(lock_);
   demuxer_stream_ = nullptr;
 }
 
@@ -189,6 +209,9 @@ void MediaFoundationStreamWrapper::Flush() {
   while (!post_flush_buffers_.empty()) {
     post_flush_buffers_.pop();
   }
+
+  // Mark any batched read still in flight as predating this flush.
+  ++flush_generation_;
 }
 
 bool MediaFoundationStreamWrapper::HasEnded() const {
@@ -309,11 +332,12 @@ void MediaFoundationStreamWrapper::ProcessRequestsIfPossible() {
         batch_read_count_,
         base::BindOnce(
             &MediaFoundationStreamWrapper::OnDemuxerStreamReadBuffers,
-            weak_factory_.GetWeakPtr()));
+            weak_factory_.GetWeakPtr(), flush_generation_));
   }
 }
 
 void MediaFoundationStreamWrapper::OnDemuxerStreamReadBuffers(
+    uint32_t flush_generation,
     DemuxerStream::Status status,
     DemuxerStream::DecoderBufferVector buffers) {
   DCHECK(task_runner_->RunsTasksInCurrentSequence());
@@ -325,6 +349,30 @@ void MediaFoundationStreamWrapper::OnDemuxerStreamReadBuffers(
     base::AutoLock auto_lock(lock_);
     DCHECK(pending_stream_read_);
     pending_stream_read_ = false;
+
+    // A read requested before a flush returns buffers from the position
+    // playback seeked away from. It cannot be cancelled: the demuxer has
+    // already fulfilled it, and MojoDemuxerStreamAdapter has no way to discard
+    // a batch it is still reassembling. Drop the buffers here and let the read
+    // issued below refill from the new position. A non-kOk status carries no
+    // buffer of its own and is kept, as OnDemuxerStreamRead() needs it to
+    // report a config change.
+    if (batch_read_enabled_ && flush_generation != flush_generation_ &&
+        status == DemuxerStream::Status::kOk && !buffers.empty()) {
+      DVLOG_FUNC(2) << "dropping " << buffers.size() << " stale buffer(s)";
+      // An end of stream buffer has no timestamp, so it is traced as -1.
+      const auto& first = buffers.front();
+      const auto& last = buffers.back();
+      TRACE_EVENT_INSTANT(
+          "media", "MFDropStaleBatchRead",
+          "StreamType:", DemuxerStream::GetTypeName(stream_type_),
+          "flush_generation", flush_generation_, "dropped_buffer_count",
+          buffers.size(), "first_timestamp_us",
+          first->end_of_stream() ? -1 : first->timestamp().InMicroseconds(),
+          "last_timestamp_us",
+          last->end_of_stream() ? -1 : last->timestamp().InMicroseconds());
+      buffers.clear();
+    }
 
     DemuxerStream::DecoderBufferVector pending_buffers =
         (status == DemuxerStream::Status::kOk)
@@ -623,7 +671,16 @@ HRESULT MediaFoundationStreamWrapper::QueueEvent(MediaEventType type,
 }
 
 HRESULT MediaFoundationStreamWrapper::GenerateStreamDescriptor() {
-  DVLOG_FUNC(2);
+  bool has_cdm = false;
+  {
+    base::AutoLock auto_lock(lock_);
+    has_cdm = has_cdm_;
+  }
+  const auto is_encrypted = IsEncrypted();
+  const bool is_video_stream = stream_type_ == DemuxerStream::Type::VIDEO;
+
+  DVLOG_FUNC(3) << "is_encrypted=" << is_encrypted << ", has_cdm=" << has_cdm
+                << ", is_video_stream=" << is_video_stream;
 
   ComPtr<IMFMediaType> media_type;
   IMFMediaType** mediaTypes = &media_type;
@@ -632,7 +689,18 @@ HRESULT MediaFoundationStreamWrapper::GenerateStreamDescriptor() {
   RETURN_IF_FAILED(MFCreateStreamDescriptor(stream_id_, 1, mediaTypes,
                                             &mf_stream_descriptor_));
 
-  if (IsEncrypted()) {
+  // For clear video playback, the initial stream might not be marked as
+  // encrypted. However, if a CDM is attached to the pipeline, we anticipate
+  // encryption later in the stream. We limit this logic to video streams
+  // (`is_video_stream`) to avoid the significant performance and memory
+  // overhead of instantiating an unnecessary audio decryptor MFT for streams
+  // that remain clear. Normal "clear lead" audio still works because the
+  // initial config evaluates to encrypted directly from the container metadata
+  // (meaning `is_encrypted` is true). The only scenario that would fail is
+  // playing a clear ad audio stream followed by an encrypted movie audio
+  // stream, which is not currently a common pipeline flow in the wild.
+  if (is_encrypted || (has_cdm && is_video_stream)) {
+    DVLOG_FUNC(1) << "Setting stream descriptor to protected.";
     RETURN_IF_FAILED(mf_stream_descriptor_->SetUINT32(MF_SD_PROTECTED, 1));
   }
 
@@ -641,6 +709,10 @@ HRESULT MediaFoundationStreamWrapper::GenerateStreamDescriptor() {
 
 bool MediaFoundationStreamWrapper::AreFormatChangesEnabled() {
   return true;
+}
+
+bool MediaFoundationStreamWrapper::IsEncrypted() const {
+  return is_encrypted_;
 }
 
 GUID MediaFoundationStreamWrapper::GetLastKeyId() const {

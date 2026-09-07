@@ -7,10 +7,10 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "build/build_config.h"
-#include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/process_lock.h"
 #include "content/browser/renderer_host/frame_tree_node.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/browser/site_info.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/common/frame.mojom.h"
@@ -25,6 +25,7 @@
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_content_browser_client.h"
 #include "content/public/test/content_browser_test_utils.h"
+#include "content/public/test/navigation_handle_observer.h"
 #include "content/public/test/scoped_web_ui_controller_factory_registration.h"
 #include "content/public/test/test_frame_navigation_observer.h"
 #include "content/public/test/test_navigation_observer.h"
@@ -48,12 +49,16 @@ const char kAddIframeScript[] =
 
 const char kAdditionalScheme[] = "test-webui-scheme";
 
-blink::mojom::OpenURLParamsPtr CreateOpenURLParams(const GURL& url) {
+blink::mojom::OpenURLParamsPtr CreateOpenURLParams(
+    const GURL& url,
+    const RenderFrameHostImpl* rfh) {
   auto params = blink::mojom::OpenURLParams::New();
   params->url = url;
   params->disposition = WindowOpenDisposition::CURRENT_TAB;
   params->should_replace_current_entry = false;
   params->user_gesture = true;
+  params->initiator_state_token = rfh->current_initiator_state_token();
+  params->initiator_document_token = rfh->GetDocumentToken();
   return params;
 }
 
@@ -435,7 +440,7 @@ IN_PROC_BROWSER_TEST_F(WebUINavigationBrowserTest,
   // navigation.
   TestNavigationObserver observer(shell()->web_contents());
   static_cast<mojom::FrameHost*>(child)->OpenURL(
-      CreateOpenURLParams(GetWebUIURL("web-ui/title1.html?noxfo=true")));
+      CreateOpenURLParams(GetWebUIURL("web-ui/title1.html?noxfo=true"), child));
   observer.Wait();
 
   child = root->child_at(0)->current_frame_host();
@@ -473,7 +478,7 @@ IN_PROC_BROWSER_TEST_F(
   // URL.
   TestNavigationObserver observer(shell()->web_contents());
   static_cast<mojom::FrameHost*>(child)->OpenURL(CreateOpenURLParams(
-      GetChromeUntrustedUIURL("test-iframe-host/title1.html")));
+      GetChromeUntrustedUIURL("test-iframe-host/title1.html"), child));
   observer.Wait();
 
   child = root->child_at(0)->current_frame_host();
@@ -1225,6 +1230,46 @@ IN_PROC_BROWSER_TEST_F(WebUINavigationBrowserTest,
   }
 }
 
+// Verify that renderer-initiated navigations from chrome-untrusted:// frames
+// have is_renderer_initiated() == true.
+IN_PROC_BROWSER_TEST_F(WebUINavigationBrowserTest,
+                       UntrustedWebUIsAreRendererInitiated) {
+  WebUIConfigMap::GetInstance().AddUntrustedWebUIConfig(
+      std::make_unique<ui::TestUntrustedWebUIConfig>("test-host"));
+
+  GURL untrusted_url1(GetChromeUntrustedUIURL("test-host/title1.html"));
+  GURL untrusted_url2(GetChromeUntrustedUIURL("test-host/title2.html"));
+
+  EXPECT_TRUE(NavigateToURL(shell(), untrusted_url1));
+
+  NavigationHandleObserver untrusted_observer(shell()->web_contents(),
+                                              untrusted_url2);
+  TestNavigationObserver untrusted_nav_observer(shell()->web_contents(), 1);
+  EXPECT_TRUE(
+      ExecJs(shell(), JsReplace("location.href = $1;", untrusted_url2)));
+  untrusted_nav_observer.Wait();
+  EXPECT_TRUE(untrusted_observer.has_committed());
+  EXPECT_TRUE(untrusted_observer.is_renderer_initiated());
+}
+
+// Verify that renderer-initiated navigations from trusted chrome:// frames
+// count as browser-initiated (is_renderer_initiated() == false).
+IN_PROC_BROWSER_TEST_F(WebUINavigationBrowserTest,
+                       TrustedWebUIsAreBrowserInitiated) {
+  GURL trusted_url1(GetWebUIURL("web-ui/title1.html"));
+  GURL trusted_url2(GetWebUIURL("web-ui/title2.html"));
+
+  EXPECT_TRUE(NavigateToURL(shell(), trusted_url1));
+
+  NavigationHandleObserver trusted_observer(shell()->web_contents(),
+                                            trusted_url2);
+  TestNavigationObserver trusted_nav_observer(shell()->web_contents(), 1);
+  EXPECT_TRUE(ExecJs(shell(), JsReplace("location.href = $1;", trusted_url2)));
+  trusted_nav_observer.Wait();
+  EXPECT_TRUE(trusted_observer.has_committed());
+  EXPECT_FALSE(trusted_observer.is_renderer_initiated());
+}
+
 class AdditionalSchemesWebUINavigationBrowserTest : public ContentBrowserTest {
  public:
   AdditionalSchemesWebUINavigationBrowserTest() {
@@ -1233,12 +1278,20 @@ class AdditionalSchemesWebUINavigationBrowserTest : public ContentBrowserTest {
   }
 
   void SetUpOnMainThread() override {
+    // Since this test injects a custom WebUI scheme below, ensure that the
+    // list of WebUI schemes isn't cached. Otherwise, early initialization
+    // of WebContents (like the initial empty document) may trigger caching
+    // before the custom WebUI scheme is registered, causing the custom WebUI
+    // scheme to never be seen and process locks not to be correctly applied.
+    URLDataManagerBackend::SetDisallowWebUISchemeCachingForTesting(true);
     test_content_browser_client_ = std::make_unique<TestContentBrowserClient>();
     factory_.SetSupportedScheme(kAdditionalScheme);
   }
 
-  void TearDownOnMainThread() override { test_content_browser_client_.reset(); }
-
+  void TearDownOnMainThread() override {
+    test_content_browser_client_.reset();
+    URLDataManagerBackend::SetDisallowWebUISchemeCachingForTesting(false);
+  }
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
     command_line->AppendSwitchASCII(switches::kTestRegisterStandardScheme,

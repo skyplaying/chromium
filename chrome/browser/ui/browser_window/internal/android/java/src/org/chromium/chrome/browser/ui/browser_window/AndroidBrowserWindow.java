@@ -15,6 +15,7 @@ import org.jni_zero.NativeMethods;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.ui.base.ActivityWindowAndroid;
 
 /** Java class for communicating with the native {@code AndroidBrowserWindow}. */
 @NullMarked
@@ -22,7 +23,9 @@ final class AndroidBrowserWindow {
 
     private final ChromeAndroidTask mChromeAndroidTask;
     private final Profile mProfile;
+    private final @BrowserWindowType int mBrowserWindowType;
     private final AndroidBaseWindow mAndroidBaseWindow;
+    private @Nullable ActivityWindowAndroid mActivityWindowAndroid;
 
     /** Address of the native {@code AndroidBrowserWindow}. */
     private long mNativeAndroidBrowserWindow;
@@ -33,10 +36,21 @@ final class AndroidBrowserWindow {
      */
     private boolean mIsDeleteScheduled;
 
-    AndroidBrowserWindow(ChromeAndroidTask chromeAndroidTask, Profile profile) {
+    AndroidBrowserWindow(
+            ChromeAndroidTask chromeAndroidTask,
+            Profile profile,
+            @BrowserWindowType int browserWindowType,
+            @Nullable ActivityWindowAndroid activityWindowAndroid) {
         mChromeAndroidTask = chromeAndroidTask;
         mProfile = profile;
-        mAndroidBaseWindow = new AndroidBaseWindow(chromeAndroidTask);
+        mBrowserWindowType = browserWindowType;
+        mAndroidBaseWindow = new AndroidBaseWindow(this);
+        mActivityWindowAndroid = activityWindowAndroid;
+    }
+
+    /** Returns the {@link ChromeAndroidTask} that owns this window. */
+    ChromeAndroidTask getTask() {
+        return mChromeAndroidTask;
     }
 
     /**
@@ -48,9 +62,18 @@ final class AndroidBrowserWindow {
     long getOrCreateNativePtr() {
         if (mNativeAndroidBrowserWindow == 0) {
             mNativeAndroidBrowserWindow =
-                    AndroidBrowserWindowJni.get()
-                            .create(this, mChromeAndroidTask.getBrowserWindowType(), mProfile);
+                    AndroidBrowserWindowJni.get().create(this, mBrowserWindowType, mProfile);
         }
+        return mNativeAndroidBrowserWindow;
+    }
+
+    /**
+     * Returns the address of the native {@code AndroidBrowserWindow}.
+     *
+     * <p>This method returns 0 if the native {@code AndroidBrowserWindow}
+     * hasn't been created.
+     */
+    long getNativePtr() {
         return mNativeAndroidBrowserWindow;
     }
 
@@ -80,10 +103,6 @@ final class AndroidBrowserWindow {
         return mIsDeleteScheduled;
     }
 
-    long getNativePtrForTesting() {
-        return mNativeAndroidBrowserWindow;
-    }
-
     long getNativeBaseWindowPtrForTesting() {
         return mAndroidBaseWindow.getNativePtrForTesting();
     }
@@ -96,15 +115,28 @@ final class AndroidBrowserWindow {
         return AndroidBrowserWindowJni.get().getSessionIdForTesting(mNativeAndroidBrowserWindow);
     }
 
-    @CalledByNative
-    private void clearNativePtr() {
-        mNativeAndroidBrowserWindow = 0;
+    Profile getProfile() {
+        return mProfile;
+    }
+
+    void setActivityWindowAndroid(ActivityWindowAndroid activityWindowAndroid) {
+        assert mActivityWindowAndroid == null
+                : "An Activity is already associated with this AndroidBrowserWindow";
+        mActivityWindowAndroid = activityWindowAndroid;
+    }
+
+    @Nullable ActivityWindowAndroid getActivityWindowAndroid() {
+        return mActivityWindowAndroid;
     }
 
     @CalledByNative
     @Nullable Activity getActivity() {
-        var activityWindowAndroid = mChromeAndroidTask.getTopActivityWindowAndroid();
-        return activityWindowAndroid == null ? null : activityWindowAndroid.getActivity().get();
+        return mActivityWindowAndroid == null ? null : mActivityWindowAndroid.getActivity().get();
+    }
+
+    @CalledByNative
+    private void clearNativePtr() {
+        mNativeAndroidBrowserWindow = 0;
     }
 
     @NativeMethods

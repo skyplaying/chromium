@@ -32,9 +32,9 @@
 #include "chrome/browser/policy/profile_policy_connector_builder.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/ui_thread_search_terms_data.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
@@ -49,12 +49,14 @@
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/policy_constants.h"
+#include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_member.h"
 #include "components/prefs/pref_service.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/browsing_data_remover.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_view_host.h"
@@ -79,6 +81,7 @@
 #include "net/test/url_request/url_request_mock_http_job.h"
 #include "services/network/public/cpp/features.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/window_open_disposition.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_features.h"
@@ -115,21 +118,23 @@ namespace {
   return content::EvalJs(render_frame_host, command).ExtractBool();
 }
 
-[[nodiscard]] bool IsDisplayingText(Browser* browser, const std::string& text) {
+[[nodiscard]] bool IsDisplayingText(BrowserWindowInterface* browser,
+                                    const std::string& text) {
   return IsDisplayingText(
       browser->tab_strip_model()->GetActiveWebContents()->GetPrimaryMainFrame(),
       text);
 }
 
 // Expands the details box on the currently displayed error page.
-void ToggleDetails(Browser* browser) {
+void ToggleDetails(BrowserWindowInterface* browser) {
   EXPECT_TRUE(
       content::ExecJs(browser->tab_strip_model()->GetActiveWebContents(),
                       "document.getElementById('details-button').click();"));
 }
 
 // Returns true if the diagnostics link suggestion is displayed.
-[[nodiscard]] bool IsDisplayingDiagnosticsLink(Browser* browser) {
+[[nodiscard]] bool IsDisplayingDiagnosticsLink(
+    BrowserWindowInterface* browser) {
   std::string command = base::StringPrintf(
       "var diagnose_link = document.getElementById('diagnose-link');"
       "diagnose_link != null;");
@@ -140,13 +145,14 @@ void ToggleDetails(Browser* browser) {
 
 // Checks that the error page is being displayed with the specified error
 // string.
-void ExpectDisplayingErrorPage(Browser* browser,
+void ExpectDisplayingErrorPage(BrowserWindowInterface* browser,
                                const std::string& error_string) {
   EXPECT_TRUE(IsDisplayingText(browser, error_string));
 }
 
 // Checks that the error page is being displayed with the specified error code.
-void ExpectDisplayingErrorPage(Browser* browser, net::Error error_code) {
+void ExpectDisplayingErrorPage(BrowserWindowInterface* browser,
+                               net::Error error_code) {
   ExpectDisplayingErrorPage(browser, net::ErrorToShortString(error_code));
 }
 
@@ -611,7 +617,7 @@ IN_PROC_BROWSER_TEST_F(DNSErrorPageTest, IFrameDNSError) {
 #else
 #define MAYBE_IFrameDNSError_GoBack IFrameDNSError_GoBack
 #endif
-// Test that a DNS error occuring in an iframe does not result in an
+// Test that a DNS error occurring in an iframe does not result in an
 // additional session history entry.
 IN_PROC_BROWSER_TEST_F(DNSErrorPageTest, MAYBE_IFrameDNSError_GoBack) {
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
@@ -629,7 +635,7 @@ IN_PROC_BROWSER_TEST_F(DNSErrorPageTest, MAYBE_IFrameDNSError_GoBack) {
 #else
 #define MAYBE_IFrameDNSError_GoBackAndForward IFrameDNSError_GoBackAndForward
 #endif
-// Test that a DNS error occuring in an iframe does not result in an
+// Test that a DNS error occurring in an iframe does not result in an
 // additional session history entry.
 IN_PROC_BROWSER_TEST_F(DNSErrorPageTest,
                        MAYBE_IFrameDNSError_GoBackAndForward) {
@@ -639,7 +645,7 @@ IN_PROC_BROWSER_TEST_F(DNSErrorPageTest,
   GoForwardAndWaitForTitle("Blah");
 }
 
-// Test that a DNS error occuring in an iframe, once the main document is
+// Test that a DNS error occurring in an iframe, once the main document is
 // completed loading, does not result in an additional session history entry.
 // To ensure that the main document has completed loading, JavaScript is used to
 // inject an iframe after loading is done.
@@ -749,7 +755,7 @@ IN_PROC_BROWSER_TEST_F(DNSErrorPageTest, CheckEasterEgg) {
 // Test error page in incognito mode. The only difference is that no network
 // diagnostic link is included, except on ChromeOS.
 IN_PROC_BROWSER_TEST_F(DNSErrorPageTest, Incognito) {
-  Browser* incognito_browser = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito_browser = CreateIncognitoBrowser();
 
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       incognito_browser,
@@ -1071,7 +1077,7 @@ class ErrorPageForIDNTest : public InProcessBrowserTest {
   // InProcessBrowserTest:
   void SetUpOnMainThread() override {
     // Clear AcceptLanguages to force punycode decoding.
-    browser()->profile()->GetPrefs()->SetString(
+    browser()->GetProfile()->GetPrefs()->SetString(
         language::prefs::kAcceptLanguages, std::string());
   }
 
@@ -1128,7 +1134,7 @@ IN_PROC_BROWSER_TEST_F(ErrorPageSniffTest,
 
 #if BUILDFLAG(IS_CHROMEOS)
 // For ChromeOS, launches appropriate diagnostics app.
-void ClickDiagnosticsLink(Browser* browser) {
+void ClickDiagnosticsLink(BrowserWindowInterface* browser) {
   DCHECK(IsDisplayingDiagnosticsLink(browser));
   EXPECT_TRUE(
       content::ExecJs(browser->tab_strip_model()->GetActiveWebContents(),
@@ -1155,8 +1161,10 @@ IN_PROC_BROWSER_TEST_F(ErrorPageOfflineAppLaunchTest, DiagnosticsConnectivity) {
   EXPECT_TRUE(observer.last_navigation_succeeded());
 
   // The active screen should be Connectivity Diagnostics app.
-  content::WebContents* contents =
-      ::chrome::FindLastActive()->tab_strip_model()->GetActiveWebContents();
+  content::WebContents* contents = GlobalBrowserCollection::GetInstance()
+                                       ->GetLastActiveBrowser()
+                                       ->GetTabStripModel()
+                                       ->GetActiveWebContents();
   EXPECT_EQ(expected_url, contents->GetVisibleURL());
 }
 #endif  // BUILDFLAG(IS_CHROMEOS)

@@ -13,6 +13,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/notimplemented.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/task/single_thread_task_runner.h"
@@ -35,6 +36,13 @@
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 
 namespace blink {
+
+// Defers Accept-Encoding injection to the network layer for media range
+// requests so service workers run before the user-agent header is added.
+// TODO(crbug.com/510987448): Remove this kill switch after the new behavior has
+// shipped to stable without regressions.
+BASE_FEATURE(kDeferMediaAcceptEncodingInjection,
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 // The number of milliseconds to wait before retrying a failed load.
 const int kLoaderFailedRetryDelayMs = 250;
@@ -70,8 +78,9 @@ ResourceMultiBufferDataProvider::ResourceMultiBufferDataProvider(
 }
 
 ResourceMultiBufferDataProvider::~ResourceMultiBufferDataProvider() {
-  base::UmaHistogramCustomCounts("Media.Network.TotalBytesReceived.SRC",
-                                 total_bytes_received_, 1024, 1073741824, 100);
+  base::UmaHistogramCustomCounts(
+      "Media.Network.TotalBytesReceived.SRC",
+      base::saturated_cast<int>(total_bytes_received_), 1024, 1073741824, 100);
 }
 
 void ResourceMultiBufferDataProvider::Start() {
@@ -93,9 +102,10 @@ void ResourceMultiBufferDataProvider::Start() {
       is_client_audio_element_
           ? network::mojom::blink::RequestDestination::kAudio
           : network::mojom::blink::RequestDestination::kVideo);
+
   request.SetHttpHeaderField(
-      WebString::FromUTF8(net::HttpRequestHeaders::kRange),
-      WebString::FromUTF8(
+      WebString::FromUtf8(net::HttpRequestHeaders::kRange),
+      WebString::FromUtf8(
           net::HttpByteRange::RightUnbounded(byte_pos()).GetHeaderValue()));
 
   // We would like to send an if-match header with the request to
@@ -105,10 +115,19 @@ void ResourceMultiBufferDataProvider::Start() {
   // along the way. See crbug.com/41185060 and crbug.com/41300485 for more
   // information.
 
-  // Disable compression, compression for audio/video doesn't make sense...
-  request.SetHttpHeaderField(
-      WebString::FromUTF8(net::HttpRequestHeaders::kAcceptEncoding),
-      WebString::FromUTF8("identity;q=1, *;q=0"));
+  if (url_data_->encoding_mode() ==
+      media::DataSource::EncodingMode::kAllowGzip) {
+    // Override range requests' default identity encoding for manifests or
+    // when explicitly requested.
+    request.SetHttpHeaderField(
+        WebString::FromUtf8(net::HttpRequestHeaders::kAcceptEncoding),
+        WebString("gzip, identity;q=1, *;q=0"));
+  } else if (!base::FeatureList::IsEnabled(
+                 kDeferMediaAcceptEncodingInjection)) {
+    request.SetHttpHeaderField(
+        WebString::FromUtf8(net::HttpRequestHeaders::kAcceptEncoding),
+        WebString("identity;q=1, *;q=0"));
+  }
 
   // Start resource loading.
   WebAssociatedURLLoaderOptions options;
@@ -188,7 +207,8 @@ bool ResourceMultiBufferDataProvider::WillFollowRedirect(
   // This test is vital for security!
   if (cors_mode_ == UrlData::CORS_UNSPECIFIED) {
     // We allow the redirect if the origin is the same.
-    if (!SecurityOrigin::AreSameOrigin(original_url_, redirects_to_)) {
+    if (!SecurityOrigin::AreSameOrigin(original_url_, redirects_to_) ||
+        !SecurityOrigin::AreSameOrigin(url_data_->url(), redirects_to_)) {
       // We also allow the redirect if we don't have any data in the
       // cache, as that means that no dangerous data mixing can occur.
       if (url_data_->multibuffer()->map().empty() && fifo_.empty())
@@ -276,7 +296,7 @@ void ResourceMultiBufferDataProvider::DidReceiveResponse(
   // received a response from HTTP/HTTPS protocol or the request was
   // successful (in particular range request). So we only verify the partial
   // response for HTTP and HTTPS protocol.
-  if (destination_url_data->url().ProtocolIsInHTTPFamily()) {
+  if (destination_url_data->url().ProtocolIsInHttpFamily()) {
     bool partial_response = (response.HttpStatusCode() == kHttpPartialContent);
     bool ok_response = (response.HttpStatusCode() == kHttpOK);
 
@@ -405,8 +425,8 @@ void ResourceMultiBufferDataProvider::DidReceiveData(
 
   auto bytes_data = base::as_bytes(data);
   if (bytes_to_discard_) {
-    const auto discard_length =
-        std::min<size_t>(bytes_to_discard_, bytes_data.size());
+    const auto discard_length = std::min<size_t>(
+        base::checked_cast<size_t>(bytes_to_discard_), bytes_data.size());
     bytes_data = bytes_data.subspan(discard_length);
     bytes_to_discard_ -= discard_length;
     if (bytes_data.empty()) {

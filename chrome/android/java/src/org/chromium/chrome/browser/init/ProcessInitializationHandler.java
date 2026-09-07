@@ -12,9 +12,6 @@ import android.content.Intent;
 import android.os.Build;
 import android.os.Process;
 import android.text.format.DateUtils;
-import android.view.inputmethod.InputMethodInfo;
-import android.view.inputmethod.InputMethodManager;
-import android.view.inputmethod.InputMethodSubtype;
 
 import androidx.annotation.CallSuper;
 import androidx.annotation.WorkerThread;
@@ -45,13 +42,14 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.AppHooks;
+import org.chromium.chrome.browser.BrowserExitReasonTracker;
 import org.chromium.chrome.browser.ChromeActivitySessionTracker;
 import org.chromium.chrome.browser.ChromeStrictMode;
-import org.chromium.chrome.browser.DefaultBrowserInfo;
 import org.chromium.chrome.browser.DeferredStartupHandler;
 import org.chromium.chrome.browser.DevToolsServer;
 import org.chromium.chrome.browser.FileProviderHelper;
 import org.chromium.chrome.browser.accessibility.settings.AccessibilitySettingsBridge;
+import org.chromium.chrome.browser.actor.ActorForegroundServiceManager;
 import org.chromium.chrome.browser.app.bluetooth.BluetoothNotificationService;
 import org.chromium.chrome.browser.app.flags.ChromeCachedFlags;
 import org.chromium.chrome.browser.app.usb.UsbNotificationService;
@@ -66,26 +64,29 @@ import org.chromium.chrome.browser.crash.LogcatExtractionRunnable;
 import org.chromium.chrome.browser.crash.MinidumpUploadServiceImpl;
 import org.chromium.chrome.browser.download.DownloadManagerService;
 import org.chromium.chrome.browser.download.OfflineContentAvailabilityStatusProvider;
-import org.chromium.chrome.browser.enterprise.util.EnterpriseInfo;
+import org.chromium.chrome.browser.feedback.FeedbackPolicyManager;
 import org.chromium.chrome.browser.firstrun.TosDialogBehaviorSharedPrefInvalidator;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.glic.GlicEnabling;
 import org.chromium.chrome.browser.history.HistoryDeletionBridge;
 import org.chromium.chrome.browser.homepage.HomepageManager;
 import org.chromium.chrome.browser.incognito.IncognitoTabLauncher;
 import org.chromium.chrome.browser.language.GlobalAppLocaleController;
+import org.chromium.chrome.browser.lifetime.ApplicationLifetime;
 import org.chromium.chrome.browser.locale.LocaleManager;
 import org.chromium.chrome.browser.media.MediaCaptureNotificationServiceImpl;
 import org.chromium.chrome.browser.media.MediaViewerUtils;
 import org.chromium.chrome.browser.metrics.LaunchMetrics;
 import org.chromium.chrome.browser.metrics.PackageMetrics;
-import org.chromium.chrome.browser.metrics.StorageSystem;
 import org.chromium.chrome.browser.metrics.UmaUtils;
+import org.chromium.chrome.browser.night_mode.GlobalNightModeStateProviderHolder;
 import org.chromium.chrome.browser.notifications.TrampolineActivityTracker;
 import org.chromium.chrome.browser.notifications.channels.ChannelsUpdater;
 import org.chromium.chrome.browser.offlinepages.measurements.OfflineMeasurementsBackgroundTask;
 import org.chromium.chrome.browser.optimization_guide.OptimizationGuideBridge;
 import org.chromium.chrome.browser.optimization_guide.OptimizationGuideBridgeFactory;
 import org.chromium.chrome.browser.partnercustomizations.PartnerBrowserCustomizations;
+import org.chromium.chrome.browser.pdf.PdfUtils;
 import org.chromium.chrome.browser.photo_picker.DecoderService;
 import org.chromium.chrome.browser.preferences.AllPreferenceKeyRegistries;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
@@ -100,11 +101,13 @@ import org.chromium.chrome.browser.profiles.ProfileManagerUtils;
 import org.chromium.chrome.browser.quickactionsearchwidget.QuickActionSearchWidgetProvider;
 import org.chromium.chrome.browser.rlz.RevenueStats;
 import org.chromium.chrome.browser.searchwidget.SearchWidgetProvider;
+import org.chromium.chrome.browser.share.send_tab_to_self.OtherDevicesShortcutControllerFactory;
 import org.chromium.chrome.browser.signin.SigninCheckerProvider;
 import org.chromium.chrome.browser.tab.state.PersistedTabData;
 import org.chromium.chrome.browser.tab.state.ShoppingPersistedTabData;
 import org.chromium.chrome.browser.tabmodel.TabPersistentStoreImpl;
 import org.chromium.chrome.browser.ui.cars.DrivingRestrictionsManager;
+import org.chromium.chrome.browser.ui.color.ColorProviderBridgeImpl;
 import org.chromium.chrome.browser.ui.hats.SurveyClientFactory;
 import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityPreferencesManager;
 import org.chromium.chrome.browser.usb.UsbNotificationManager;
@@ -115,7 +118,6 @@ import org.chromium.chrome.browser.webapps.WebappRegistry;
 import org.chromium.components.background_task_scheduler.BackgroundTaskSchedulerFactory;
 import org.chromium.components.browser_ui.accessibility.PageZoomUtils;
 import org.chromium.components.browser_ui.photo_picker.DecoderServiceHost;
-import org.chromium.components.browser_ui.photo_picker.PhotoPickerDelegateBase;
 import org.chromium.components.browser_ui.photo_picker.PhotoPickerDialog;
 import org.chromium.components.browser_ui.share.ClipboardImageFileProvider;
 import org.chromium.components.browser_ui.share.ShareImageFileUtils;
@@ -123,8 +125,9 @@ import org.chromium.components.content_capture.PlatformContentCaptureController;
 import org.chromium.components.crash.browser.ChildProcessCrashObserver;
 import org.chromium.components.embedder_support.util.UrlUtilities;
 import org.chromium.components.minidump_uploader.CrashFileManager;
-import org.chromium.components.optimization_guide.proto.HintsProto;
+import org.chromium.components.optimization_guide.proto.HintsProto.OptimizationType;
 import org.chromium.components.policy.CombinedPolicyProvider;
+import org.chromium.components.policy.EnterpriseInfo;
 import org.chromium.components.safe_browsing.SafeBrowsingApiBridge;
 import org.chromium.components.webapps.AppBannerManager;
 import org.chromium.components.webapps.AppDetailsDelegate;
@@ -134,24 +137,24 @@ import org.chromium.content_public.browser.SpeechRecognition;
 import org.chromium.net.NetworkChangeNotifier;
 import org.chromium.net.RegistrationPolicyApplicationStatus;
 import org.chromium.ui.accessibility.AccessibilityState;
+import org.chromium.ui.accessibility.ApplicationStatusAccessibilityStateVisibilityManager;
 import org.chromium.ui.base.Clipboard;
-import org.chromium.ui.base.PhotoPicker;
-import org.chromium.ui.base.PhotoPickerListener;
 import org.chromium.ui.base.SelectFileDialog;
 import org.chromium.ui.base.WindowAndroid;
+import org.chromium.ui.color.ColorProviderBridgeFactory;
 import org.chromium.ui.edge_to_edge.EdgeToEdgeStateProvider;
+import org.chromium.ui.native_theme.OsSettingsProviderAndroidBridge;
 import org.chromium.url.GURL;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 
 /**
- * Handles the initialization dependences of the browser process. This is meant to handle the
+ * Handles the initialization dependencies of the browser process. This is meant to handle the
  * initialization that is not tied to any particular Activity, and the logic that should only be
  * triggered a single time for the lifetime of the browser process.
  */
@@ -181,7 +184,7 @@ public class ProcessInitializationHandler {
     private final ProfileKeyedMap<Boolean> mStartupProfileTasksCompleted =
             new ProfileKeyedMap<>(
                     ProfileSelection.REDIRECTED_TO_ORIGINAL,
-                    ProfileKeyedMap.NO_REQUIRED_CLEANUP_ACTION);
+                    ProfileKeyedMap.noRequiredCleanupAction());
 
     /**
      * @return The ProcessInitializationHandler for use during the lifetime of the browser process.
@@ -213,7 +216,7 @@ public class ProcessInitializationHandler {
      * startup.
      */
     public final void initializePreNative() {
-        try (TraceEvent e =
+        try (TraceEvent _ =
                 TraceEvent.scoped("ProcessInitializationHandler.initializePreNative()")) {
             ThreadUtils.checkUiThread();
             if (mInitializedPreNative) return;
@@ -227,6 +230,10 @@ public class ProcessInitializationHandler {
     protected void handlePreNativeInitialization() {
         ChromeCachedFlags.getInstance().setFullListOfFlags();
         setProcessStateSummaryForAnrs();
+        ColorProviderBridgeFactory.setInstance(new ColorProviderBridgeImpl());
+
+        PostTask.setShutdownPostTaskPreNativeThreadPoolEnabled(
+                ChromeFeatureList.sShutdownPreNativeThreadPoolAfterStartup.isEnabled());
     }
 
     /**
@@ -239,7 +246,7 @@ public class ProcessInitializationHandler {
      * startup.
      */
     public final void initializePreNativeLibraryLoad() {
-        try (TraceEvent e =
+        try (TraceEvent _ =
                 TraceEvent.scoped(
                         "ProcessInitializationHandler.initializePreNativeLibraryLoad()")) {
             ThreadUtils.checkUiThread();
@@ -274,21 +281,32 @@ public class ProcessInitializationHandler {
         warmUpSharedPrefs();
 
         DeviceUtils.updateDeviceSpecificUserAgentSwitch(ContextUtils.getApplicationContext());
+        // ChromeLifetimeController is pure Java and safe to initialize pre-native. It is
+        // initialized early so that ApplicationLifetime.terminate() can restart the process
+        // if a locale change occurs before post-native initialization.
+        ChromeLifetimeController.initialize();
         ApplicationStatus.registerStateListenerForAllActivities(
-                (activity, newState) -> {
+                (_, newState) -> {
                     if (newState == ActivityState.CREATED || newState == ActivityState.DESTROYED) {
                         // When the app locale is overridden a change in system locale will not
                         // effect Chrome's UI language. There is race condition where the initial
                         // locale may not equal the overridden default locale
-                        // (https://crbug.com/1224756).
+                        // (https://crbug.com/40188103).
                         if (GlobalAppLocaleController.getInstance().isOverridden()) return;
                         // Android destroys Activities at some point after a locale change, but
                         // doesn't kill the process.  This can lead to a bug where Chrome is halfway
                         // RTL, where stale natively-loaded resources are not reloaded
-                        // (http://crbug.com/552618).
+                        // (http://crbug.com/41215786).
                         if (!mInitialLocale.equals(Locale.getDefault())) {
-                            Log.e(TAG, "Killing process because of locale change.");
-                            Process.killProcess(Process.myPid());
+                            // See http://crbug.com/545907093 for why we restart when the user
+                            // changes the locale within Chrome.
+                            if (ApplicationLifetime.shouldRestartForLocaleSwitch()) {
+                                Log.e(TAG, "Restarting process because of settings locale change.");
+                                ApplicationLifetime.terminate(/* restart= */ true);
+                            } else {
+                                Log.e(TAG, "Killing process because of OS locale change.");
+                                Process.killProcess(Process.myPid());
+                            }
                         }
                     }
                 });
@@ -300,10 +318,7 @@ public class ProcessInitializationHandler {
      */
     private void warmUpSharedPrefs() {
         PostTask.postTask(
-                TaskTraits.BEST_EFFORT_MAY_BLOCK,
-                () -> {
-                    DownloadManagerService.warmUpSharedPrefs();
-                });
+                TaskTraits.BEST_EFFORT_MAY_BLOCK, DownloadManagerService::warmUpSharedPrefs);
     }
 
     /**
@@ -389,44 +404,32 @@ public class ProcessInitializationHandler {
         ProfileManagerUtils.removeSessionCookiesForAllProfiles();
         AppBannerManager.setAppDetailsDelegate(
                 assumeNonNull(ServiceLoaderUtil.maybeCreate(AppDetailsDelegate.class)));
-        ChromeLifetimeController.initialize();
         Clipboard.getInstance().setImageFileProvider(new ClipboardImageFileProvider());
 
         DecoderServiceHost.setIntentSupplier(
-                () -> {
-                    return new Intent(ContextUtils.getApplicationContext(), DecoderService.class);
-                });
+                () -> new Intent(ContextUtils.getApplicationContext(), DecoderService.class));
 
         SelectFileDialog.setPhotoPickerDelegate(
-                new PhotoPickerDelegateBase() {
-                    @Override
-                    public PhotoPicker showPhotoPicker(
-                            WindowAndroid windowAndroid,
-                            PhotoPickerListener listener,
-                            boolean allowMultiple,
-                            List<String> mimeTypes) {
-                        Context context = windowAndroid.getContext().get();
-                        assumeNonNull(context);
-                        PhotoPickerDialog dialog =
-                                new PhotoPickerDialog(
-                                        windowAndroid,
-                                        context.getContentResolver(),
-                                        listener,
-                                        allowMultiple,
-                                        mimeTypes,
-                                        shouldDialogPadForContent(windowAndroid));
-                        assumeNonNull(dialog.getWindow()).getAttributes().windowAnimations =
-                                R.style.PickerDialogAnimation;
-                        dialog.show();
-                        return dialog;
-                    }
+                (windowAndroid, listener, allowMultiple, mimeTypes) -> {
+                    Context context = windowAndroid.getContext().get();
+                    assumeNonNull(context);
+                    PhotoPickerDialog dialog =
+                            new PhotoPickerDialog(
+                                    windowAndroid,
+                                    context.getContentResolver(),
+                                    listener,
+                                    allowMultiple,
+                                    mimeTypes,
+                                    shouldDialogPadForContent(windowAndroid));
+                    assumeNonNull(dialog.getWindow()).getAttributes().windowAnimations =
+                            R.style.PickerDialogAnimation;
+                    dialog.show();
+                    return dialog;
                 });
 
         ContactsPickerDelegateProvider.initialize();
 
         SearchActivityPreferencesManager.onNativeLibraryReady();
-        SearchWidgetProvider.initialize();
-        QuickActionSearchWidgetProvider.initialize();
 
         PrivacyPreferencesManagerImpl.getInstance().onNativeInitialized();
 
@@ -455,6 +458,17 @@ public class ProcessInitializationHandler {
 
         AccessibilityState.registerObservers();
 
+        boolean initialNightMode = GlobalNightModeStateProviderHolder.getInstance().isInNightMode();
+        OsSettingsProviderAndroidBridge.setPreferredColorScheme(initialNightMode);
+        GlobalNightModeStateProviderHolder.getInstance()
+                .addObserver(
+                        () -> {
+                            boolean isDark =
+                                    GlobalNightModeStateProviderHolder.getInstance()
+                                            .isInNightMode();
+                            OsSettingsProviderAndroidBridge.setPreferredColorScheme(isDark);
+                        });
+
         if (DeviceInfo.isAutomotive()) {
             DrivingRestrictionsManager.initialize();
         }
@@ -465,6 +479,10 @@ public class ProcessInitializationHandler {
         AppHooks.get().registerPolicyProviders(CombinedPolicyProvider.get());
         SpeechRecognition.initialize();
         TrampolineActivityTracker.getInstance().onNativeInitialized();
+
+        if (GlicEnabling.isEnabledByFlags()) {
+            ActorForegroundServiceManager.initialize();
+        }
     }
 
     /**
@@ -480,20 +498,17 @@ public class ProcessInitializationHandler {
         // extraction might fail. This is ok; in that case, the minidump will be found and uploaded
         // upon the next browser launch.
         ChildProcessCrashObserver.registerCrashCallback(
-                new ChildProcessCrashObserver.ChildCrashedCallback() {
-                    @Override
-                    public void childCrashed(int pid) {
-                        CrashFileManager crashFileManager =
-                                new CrashFileManager(
-                                        ContextUtils.getApplicationContext().getCacheDir());
+                pid -> {
+                    CrashFileManager crashFileManager =
+                            new CrashFileManager(
+                                    ContextUtils.getApplicationContext().getCacheDir());
 
-                        File minidump = crashFileManager.getMinidumpSansLogcatForPid(pid);
-                        if (minidump != null) {
-                            AsyncTask.THREAD_POOL_EXECUTOR.execute(
-                                    new LogcatExtractionRunnable(minidump));
-                        } else {
-                            Log.e(TAG, "Missing dump for child " + pid);
-                        }
+                    File minidump = crashFileManager.getMinidumpSansLogcatForPid(pid);
+                    if (minidump != null) {
+                        AsyncTask.THREAD_POOL_EXECUTOR.execute(
+                                new LogcatExtractionRunnable(minidump));
+                    } else {
+                        Log.e(TAG, "Missing dump for child %d", pid);
                     }
                 });
 
@@ -512,10 +527,8 @@ public class ProcessInitializationHandler {
         TraceEvent.begin("NetworkChangeNotifier.init");
         // Enable auto-detection of network connectivity state changes.
         NetworkChangeNotifier.init();
-        boolean forceUpdateNetworkState =
-                !ChromeFeatureList.sUseInitialNetworkStateAtStartup.isEnabled();
         NetworkChangeNotifier.setAutoDetectConnectivityState(
-                new RegistrationPolicyApplicationStatus(), forceUpdateNetworkState);
+                new RegistrationPolicyApplicationStatus());
         TraceEvent.end("NetworkChangeNotifier.init");
     }
 
@@ -622,11 +635,9 @@ public class ProcessInitializationHandler {
     protected void addPerApplicationStartupDeferredTasks(List<Runnable> tasks, Profile profile) {
         tasks.add(
                 () -> {
+                    BrowserExitReasonTracker.initForegroundBrowserProcess();
+
                     initAsyncDiskTask();
-
-                    StorageSystem.recordStorageType();
-
-                    DefaultBrowserInfo.initBrowserFetcher();
 
                     AfterStartupTaskUtils.setStartupComplete();
 
@@ -662,8 +673,6 @@ public class ProcessInitializationHandler {
                     UsbNotificationManager.clearUsbNotifications(UsbNotificationService.class);
 
                     startBindingManagementIfNeeded();
-
-                    recordKeyboardLocaleUma();
                 });
 
         tasks.add(() -> LocaleManager.getInstance().recordStartupMetrics());
@@ -688,6 +697,7 @@ public class ProcessInitializationHandler {
 
         tasks.add(() -> BackgroundTaskSchedulerFactory.getScheduler().doMaintenance());
 
+        tasks.add(PdfUtils::updatePdfLauncherActivityEnabled);
         tasks.add(MediaViewerUtils::updateMediaLauncherActivityEnabled);
 
         tasks.add(WebApkUninstallTracker::runDeferredTasks);
@@ -704,8 +714,17 @@ public class ProcessInitializationHandler {
         tasks.add(PersistedTabData::onDeferredStartup);
 
         // Asynchronously query system accessibility state so it is ready for clients.
-        tasks.add(AccessibilityState::initializeOnStartup);
+        tasks.add(
+                () -> {
+                    AccessibilityState.initializeOnStartup(
+                            new ApplicationStatusAccessibilityStateVisibilityManager());
+                });
         tasks.add(TabPersistentStoreImpl::onDeferredStartup);
+        tasks.add(
+                () -> {
+                    SearchWidgetProvider.initialize();
+                    QuickActionSearchWidgetProvider.initialize();
+                });
     }
 
     /**
@@ -725,6 +744,9 @@ public class ProcessInitializationHandler {
         // Initialize the SigninChecker.
         tasks.add(() -> SigninCheckerProvider.get(profile));
 
+        // Initialize the OtherDevicesShortcutController.
+        tasks.add(() -> OtherDevicesShortcutControllerFactory.getForProfile(profile));
+
         tasks.add(
                 () -> {
                     OptimizationGuideBridge optimizationGuideBridge =
@@ -733,7 +755,7 @@ public class ProcessInitializationHandler {
                         // OptimizationTypes which we give a guarantee will be registered when we
                         // pass the onDeferredStartup() signal to OptimizationGuide.
                         optimizationGuideBridge.registerOptimizationTypes(
-                                Arrays.asList(HintsProto.OptimizationType.PRICE_TRACKING));
+                                List.of(OptimizationType.PRICE_TRACKING));
                         optimizationGuideBridge.onDeferredStartup();
                     }
                     // TODO(crbug.com/40236066) Move to PersistedTabData.onDeferredStartup
@@ -741,6 +763,8 @@ public class ProcessInitializationHandler {
                         ShoppingPersistedTabData.onDeferredStartup();
                     }
                 });
+
+        tasks.add(() -> FeedbackPolicyManager.getInstance().onFinishNativeInitialization(profile));
     }
 
     private void initChannelsAsync() {
@@ -900,7 +924,7 @@ public class ProcessInitializationHandler {
 
             /**
              * Returns whether or not it's appropriate to try to extract recent logcat output and
-             * include that logcat output alongside the given {@param minidump} in a crash report.
+             * include that logcat output alongside the given {@code minidump} in a crash report.
              * Logcat output should only be extracted if (a) it hasn't already been extracted for
              * this minidump file, and (b) the minidump is fairly fresh. The freshness check is
              * important for two reasons: (1) First of all, it helps avoid including irrelevant
@@ -924,8 +948,8 @@ public class ProcessInitializationHandler {
     }
 
     /**
-     * Deletes the snapshot database which is no longer used because the feature has been removed
-     * in Chrome M41.
+     * Deletes the snapshot database which is no longer used because the feature has been removed in
+     * Chrome M41.
      */
     @WorkerThread
     private void removeSnapshotDatabase() {
@@ -940,34 +964,16 @@ public class ProcessInitializationHandler {
 
     private void startBindingManagementIfNeeded() {
         ChildProcessLauncherHelper.initialize();
+        // ProtectRecentlyVisibleTab feature disables BindingManager and ProcessRankPolicyAndroid in
+        // performance manager manages it instead.
+        // TODO(crbug.com/467504869): Remove desktop check once the feature is launched on Android.
+        boolean isProtectRecentlyVisibleTabEnabled =
+                DeviceInfo.isDesktop() || ChromeFeatureList.sProtectRecentlyVisibleTab.isEnabled();
         // Moderate binding doesn't apply to low end devices.
-        if (SysUtils.isLowEndDevice() || ChromeFeatureList.sProtectRecentlyVisibleTab.isEnabled()) {
+        if (SysUtils.isLowEndDevice() || isProtectRecentlyVisibleTabEnabled) {
             return;
         }
         ChildProcessLauncherHelper.startBindingManagement(ContextUtils.getApplicationContext());
-    }
-
-    @SuppressWarnings("deprecation") // InputMethodSubtype.getLocale() deprecated in API 24
-    private void recordKeyboardLocaleUma() {
-        InputMethodManager imm =
-                (InputMethodManager)
-                        ContextUtils.getApplicationContext()
-                                .getSystemService(Context.INPUT_METHOD_SERVICE);
-        List<InputMethodInfo> ims = imm.getEnabledInputMethodList();
-        ArrayList<String> uniqueLanguages = new ArrayList<>();
-        for (InputMethodInfo method : ims) {
-            List<InputMethodSubtype> submethods =
-                    imm.getEnabledInputMethodSubtypeList(method, true);
-            for (InputMethodSubtype submethod : submethods) {
-                if (submethod.getMode().equals("keyboard")) {
-                    String language = submethod.getLocale().split("_")[0];
-                    if (!uniqueLanguages.contains(language)) {
-                        uniqueLanguages.add(language);
-                    }
-                }
-            }
-        }
-        RecordHistogram.recordCount1MHistogram("InputMethod.ActiveCount", uniqueLanguages.size());
     }
 
     private static boolean shouldDialogPadForContent(WindowAndroid windowAndroid) {

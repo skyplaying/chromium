@@ -64,6 +64,7 @@ polymorphic.launcher(
         "ci/android-15-tablet-x64-rel",
         "ci/android-15-tablet-landscape-x64-rel",
         "ci/android-16-x64-rel",
+        "ci/android-14-automotive-landscape-x64-rel",
     ],
 )
 
@@ -224,13 +225,13 @@ polymorphic.launcher(
             builder = "ci/Mac Builder",
             dimensions = dimensions.dimensions(
                 builderless = True,
-                os = os.MAC_DEFAULT,
+                os = os.MAC_15,
                 cpu = cpu.X86_64,
                 ssd = True,
                 free_space = free_space.standard,
             ),
             testers = [
-                "ci/Mac12 Tests",
+                "ci/Mac13 Tests",
             ],
         ),
     ],

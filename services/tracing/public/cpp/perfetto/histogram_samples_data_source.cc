@@ -9,8 +9,9 @@
 #include "base/numerics/safe_conversions.h"
 #include "base/trace_event/trace_event.h"
 #include "base/tracing/trace_time.h"
-#include "services/tracing/public/mojom/perfetto_service.mojom.h"
+#include "services/tracing/public/cpp/perfetto/perfetto_data_source_names.h"
 #include "third_party/perfetto/include/perfetto/base/time.h"
+#include "third_party/perfetto/include/perfetto/tracing/track.h"
 #include "third_party/perfetto/include/perfetto/tracing/track_event_interned_data_index.h"
 #include "third_party/perfetto/protos/perfetto/common/data_source_descriptor.gen.h"
 #include "third_party/perfetto/protos/perfetto/config/chrome/chrome_config.gen.h"
@@ -74,7 +75,7 @@ struct HistogramSamplesTlsState {
 
 void HistogramSamplesDataSource::Register() {
   perfetto::DataSourceDescriptor desc;
-  desc.set_name(tracing::mojom::kHistogramSampleSourceName);
+  desc.set_name(kHistogramSampleSourceName);
   perfetto::DataSource<HistogramSamplesDataSource,
                        HistogramSamplesTraits>::Register(desc);
 }
@@ -207,6 +208,11 @@ void HistogramSamplesDataSource::OnMetricSampleImpl(
 void HistogramSamplesDataSource::ResetIncrementalState(
     TraceContext& ctx,
     bool records_all_histograms) {
+  // Ensure the process track descriptor is written, so that child tracks
+  // can be correctly resolved to this process by Trace Processor.
+  perfetto::internal::TrackRegistry::Get()->SerializeTrack(
+      perfetto::ProcessTrack::Current(), ctx.NewTracePacket());
+
   uint64_t track_uuid;
   if (records_all_histograms) {
     auto track = perfetto::ThreadTrack::Current();

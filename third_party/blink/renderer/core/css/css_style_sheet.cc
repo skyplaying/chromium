@@ -53,6 +53,7 @@
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/bindings/v8_per_isolate_data.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
@@ -103,8 +104,20 @@ const Document* CSSStyleSheet::SingleOwnerDocument(
 CSSStyleSheet* CSSStyleSheet::Create(Document& document,
                                      const CSSStyleSheetInit* options,
                                      ExceptionState& exception_state) {
-  return CSSStyleSheet::Create(document, document.BaseURL(), options,
-                               exception_state);
+  if (!RuntimeEnabledFeatures::CSSStyleSheetInitBaseURLEnabled() ||
+      options->baseURL().IsNull()) {
+    return CSSStyleSheet::Create(document, document.BaseURL(), options,
+                                 exception_state);
+  }
+
+  KURL baseUrl = KURL(document.BaseURL(), options->baseURL());
+  if (!baseUrl.IsValid()) {
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kNotAllowedError,
+        "The 'baseURL' provided in CSSStyleSheetInit is invalid.");
+    return nullptr;
+  }
+  return CSSStyleSheet::Create(document, baseUrl, options, exception_state);
 }
 
 CSSStyleSheet* CSSStyleSheet::Create(Document& document,
@@ -129,13 +142,13 @@ CSSStyleSheet* CSSStyleSheet::CreateInline(StyleSheetContents* sheet,
                                              start_position);
 }
 
-CSSStyleSheet* CSSStyleSheet::CreateInline(Node& owner_node,
-                                           const KURL& base_url,
-                                           const TextPosition& start_position,
-                                           const TextEncoding& encoding) {
-  Document& owner_node_document = owner_node.GetDocument();
+CSSParserContext* CSSStyleSheet::InlineParserContext(
+    Document& owner_node_document,
+    const KURL& base_url,
+    const TextEncoding& encoding) {
   auto* parser_context = MakeGarbageCollected<CSSParserContext>(
-      owner_node_document, owner_node_document.BaseURL(),
+      owner_node_document,
+      base_url.IsNull() ? owner_node_document.BaseURL() : base_url,
       true /* origin_clean */,
       Referrer(
           // Fetch requests from an inline CSS use the referrer of the owner
@@ -146,9 +159,19 @@ CSSStyleSheet* CSSStyleSheet::CreateInline(Node& owner_node,
           Referrer::ClientReferrerString(),
           network::mojom::ReferrerPolicy::kDefault),
       encoding);
-  if (AdTracker::IsAdScriptExecutingInDocument(&owner_node.GetDocument())) {
+  if (AdTracker::IsAdScriptExecutingInDocument(&owner_node_document)) {
     parser_context->SetIsAdRelated();
   }
+  return parser_context;
+}
+
+CSSStyleSheet* CSSStyleSheet::CreateInline(Node& owner_node,
+                                           const KURL& base_url,
+                                           const TextPosition& start_position,
+                                           const TextEncoding& encoding) {
+  Document& owner_node_document = owner_node.GetDocument();
+  CSSParserContext* parser_context =
+      InlineParserContext(owner_node_document, base_url, encoding);
   auto* sheet = MakeGarbageCollected<StyleSheetContents>(parser_context,
                                                          base_url.GetString());
   return MakeGarbageCollected<CSSStyleSheet>(sheet, owner_node, true,
@@ -234,10 +257,6 @@ void CSSStyleSheet::DidMutate(Mutation mutation) {
   if (!document || !document->IsActive()) {
     return;
   }
-  if (!custom_element_tag_names_.empty()) {
-    document->GetStyleEngine().ScheduleCustomElementInvalidations(
-        custom_element_tag_names_);
-  }
   bool invalidate_matched_properties_cache = false;
   if (ownerNode() && ownerNode()->isConnected()) {
     document->GetStyleEngine().SetNeedsActiveStyleUpdate(
@@ -255,7 +274,7 @@ void CSSStyleSheet::DidMutate(Mutation mutation) {
       invalidate_matched_properties_cache = true;
     }
   }
-  if (mutation == Mutation::kRules) {
+  if (mutation == Mutation::kRules || mutation == Mutation::kContents) {
     if (invalidate_matched_properties_cache) {
       document->GetStyleResolver().InvalidateMatchedPropertiesCache();
     }
@@ -310,6 +329,14 @@ void CSSStyleSheet::ReattachChildRuleCSSOMWrappers() {
       continue;
     }
     child_rule_cssom_wrappers_[i]->Reattach(contents_->RuleAt(i));
+  }
+}
+
+void CSSStyleSheet::DetachCSSOMWrappers() {
+  for (Member<CSSRule>& wrapper : child_rule_cssom_wrappers_) {
+    if (wrapper) {
+      wrapper->SetParentStyleSheet(nullptr);
+    }
   }
 }
 
@@ -630,7 +657,41 @@ void CSSStyleSheet::SetLoadCompleted(bool completed) {
 }
 
 void CSSStyleSheet::SetText(const String& text, CSSImportRules import_rules) {
+  DetachCSSOMWrappers();
   child_rule_cssom_wrappers_.clear();
+
+  const bool use_constructed_cache =
+      RuntimeEnabledFeatures::ConstructableStylesheetCacheEnabled() &&
+      IsConstructed() && OwnerDocument() &&
+      import_rules == CSSImportRules::kIgnoreWithWarning;
+
+  if (use_constructed_cache) {
+    if (StyleSheetContents* cached =
+            OwnerDocument()->GetStyleEngine().FindStyleSheetContents(
+                text, contents_->ParserContext())) {
+      SetContents(cached);
+      DidMutate(Mutation::kContents);
+      return;
+    }
+    SetContents(MakeGarbageCollected<StyleSheetContents>(
+        contents_->ParserContext(), contents_->OriginalURL()));
+    ParseSheetResult parse_result =
+        contents_->ParseString(text, /*allow_import_rules=*/false);
+    if (parse_result == ParseSheetResult::kHasUnallowedImportRule) {
+      OwnerDocument()->AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
+          mojom::blink::ConsoleMessageSource::kJavaScript,
+          mojom::blink::ConsoleMessageLevel::kWarning,
+          "@import rules are not allowed here. See "
+          "https://github.com/WICG/construct-stylesheets/issues/"
+          "119#issuecomment-588352418."));
+    }
+    DidMutate(Mutation::kContents);
+    if (parse_result == ParseSheetResult::kSucceeded &&
+        contents_->IsCacheableForStyleElement()) {
+      OwnerDocument()->GetStyleEngine().AddStyleSheetContents(text, contents_);
+    }
+    return;
+  }
 
   CSSStyleSheet::RuleMutationScope mutation_scope(this);
   contents_->ClearRules();
@@ -657,7 +718,7 @@ bool CSSStyleSheet::IsAlternate() const {
     auto* owner_element = DynamicTo<Element>(owner_node_.Get());
     return owner_element &&
            owner_element->FastGetAttribute(html_names::kRelAttr)
-               .Contains("alternate");
+               .contains("alternate");
   }
   return alternate_from_constructor_;
 }

@@ -4,20 +4,17 @@
 
 #include "components/autofill/core/browser/payments/payments_service_url.h"
 
+#include <stdint.h>
+
 #include <string>
 
 #include "base/command_line.h"
-#include "base/format_macros.h"
 #include "base/metrics/field_trial.h"
+#include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_util.h"
-#include "base/strings/utf_string_conversions.h"
 #include "components/autofill/core/browser/data_model/payments/bnpl_issuer.h"
-#include "components/autofill/core/browser/payments/constants.h"
-#include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/autofill/core/common/autofill_switches.h"
-#include "google_apis/gaia/gaia_urls.h"
 #include "net/base/url_util.h"
 #include "url/gurl.h"
 #include "url/origin.h"
@@ -34,6 +31,16 @@ const char kSandboxPaymentsSecureServiceUrl[] =
 const char kProdGooglePayScriptOrigin[] = "https://pay.google.com/";
 const char kSandboxGooglePayScriptOrigin[] = "https://pay.sandbox.google.com/";
 
+// URLs used when opening the Google Wallet settings page from
+// chrome://settings/payments.
+// LINT.IfChange(WALLET_REMINDER_NOTICE_URLS)
+const char kProdWalletManageSettingsUrl[] =
+    "https://wallet.google.com/wallet?"
+    "p=settings&utm_source=chrome&utm_medium=settings&utm_campaign=settings";
+const char kSandboxWalletManageSettingsUrl[] =
+    "https://wallet-web.sandbox.google.com/wallet?"
+    "p=settings&utm_source=chrome&utm_medium=settings&utm_campaign=settings";
+
 // URLs used when opening the Payment methods management page from
 // chrome://settings/payments.
 const char kProdPaymentsManageCardsUrl[] =
@@ -45,10 +52,18 @@ const char kSandboxPaymentsManageCardsUrl[] =
     "p=paymentmethods&utm_source=chrome&utm_medium=settings&utm_campaign="
     "paymentmethods";
 
-// URL used when opening the Loyalty cards page from chrome://settings/payments.
+// URLs used when opening the passes page, or specifically the loyalty cards
+// page, from chrome://settings/payments.
+const char kProdManagePassesUrl[] =
+    "https://wallet.google.com/wallet?"
+    "p=passes&utm_source=chrome&utm_medium=settings&utm_campaign=passes";
+const char kSandboxManagePassesUrl[] =
+    "https://wallet-web.sandbox.google.com/wallet?"
+    "p=passes&utm_source=chrome&utm_medium=settings&utm_campaign=passes";
 const char kManageLoyaltyCardsUrl[] =
     "https://wallet.google.com/wallet?"
     "p=passes&utm_source=chrome&utm_medium=settings&utm_campaign=loyalty";
+// LINT.ThenChange(//chrome/android/java/src/org/chromium/chrome/browser/autofill/settings/AutofillPaymentMethodsConstants.java)
 
 // LINT.IfChange
 const char kVirtualCardEnrollmentSupportUrl[] =
@@ -90,6 +105,11 @@ url::Origin GetGooglePayScriptOrigin() {
                                       : kSandboxGooglePayScriptOrigin));
 }
 
+GURL GetManageSettingsUrl() {
+  return GURL(IsPaymentsProductionEnabled() ? kProdWalletManageSettingsUrl
+                                            : kSandboxWalletManageSettingsUrl);
+}
+
 GURL GetManageInstrumentsUrl() {
   return GURL(IsPaymentsProductionEnabled() ? kProdPaymentsManageCardsUrl
                                             : kSandboxPaymentsManageCardsUrl);
@@ -102,6 +122,11 @@ GURL GetManageInstrumentUrl(int64_t instrument_id) {
   GURL::Replacements replacements;
   replacements.SetQueryStr(new_query);
   return url.ReplaceComponents(replacements);
+}
+
+GURL GetManagePassesUrl() {
+  return GURL(IsPaymentsProductionEnabled() ? kProdManagePassesUrl
+                                            : kSandboxManagePassesUrl);
 }
 
 GURL GetManageLoyaltyCardsUrl() {

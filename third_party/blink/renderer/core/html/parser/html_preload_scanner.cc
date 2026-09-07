@@ -33,6 +33,7 @@
 
 #include "base/task/sequenced_task_runner.h"
 #include "base/trace_event/trace_event.h"
+#include "services/network/public/mojom/content_security_policy.mojom-blink.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
 #include "third_party/blink/public/mojom/script/script_type.mojom-blink.h"
@@ -45,6 +46,7 @@
 #include "third_party/blink/renderer/core/css/parser/sizes_attribute_parser.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/execution_context/security_context.h"
+#include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/frame/viewport_data.h"
@@ -61,6 +63,8 @@
 #include "third_party/blink/renderer/core/html/parser/html_parser_idioms.h"
 #include "third_party/blink/renderer/core/html/parser/html_srcset_parser.h"
 #include "third_party/blink/renderer/core/html/parser/html_tokenizer.h"
+#include "third_party/blink/renderer/core/html/parser/html_tree_builder.h"
+#include "third_party/blink/renderer/core/html_element_lookup_trie.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/input_type_names.h"
 #include "third_party/blink/renderer/core/lcp_critical_path_predictor/lcp_critical_path_predictor.h"
@@ -68,9 +72,11 @@
 #include "third_party/blink/renderer/core/loader/fetch_priority_attribute.h"
 #include "third_party/blink/renderer/core/loader/preload_helper.h"
 #include "third_party/blink/renderer/core/loader/web_bundle/script_web_bundle_rule.h"
+#include "third_party/blink/renderer/core/mathml_names.h"
 #include "third_party/blink/renderer/core/probe/core_probes.h"
 #include "third_party/blink/renderer/core/script/script_loader.h"
 #include "third_party/blink/renderer/core/script_type_names.h"
+#include "third_party/blink/renderer/core/svg_names.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/loader/fetch/client_hints_preferences.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_initiator_type_names.h"
@@ -90,6 +96,23 @@ namespace {
 
 bool Match(const AtomicString& name, const QualifiedName& q_name) {
   return q_name.LocalName() == name;
+}
+
+// https://html.spec.whatwg.org/multipage/syntax.html#void-elements
+bool IsVoidElement(const StringImpl* tag_impl) {
+  return Match(tag_impl, html_names::kAreaTag) ||
+         Match(tag_impl, html_names::kBaseTag) ||
+         Match(tag_impl, html_names::kBrTag) ||
+         Match(tag_impl, html_names::kColTag) ||
+         Match(tag_impl, html_names::kEmbedTag) ||
+         Match(tag_impl, html_names::kHrTag) ||
+         Match(tag_impl, html_names::kImgTag) ||
+         Match(tag_impl, html_names::kInputTag) ||
+         Match(tag_impl, html_names::kLinkTag) ||
+         Match(tag_impl, html_names::kMetaTag) ||
+         Match(tag_impl, html_names::kSourceTag) ||
+         Match(tag_impl, html_names::kTrackTag) ||
+         Match(tag_impl, html_names::kWbrTag);
 }
 
 String InitiatorFor(const StringImpl* tag_impl, bool link_is_modulepreload) {
@@ -178,7 +201,8 @@ class TokenPreloadScanner::StartTagScanner {
       MediaValuesCached* media_values,
       TokenPreloadScanner::ScannerType scanner_type,
       const HashSet<String>* disabled_image_types,
-      features::LcppPreloadLazyLoadImageType preload_lazy_load_image_type)
+      features::LcppPreloadLazyLoadImageType preload_lazy_load_image_type,
+      std::optional<TokenPreloadScanner::ForeignContentType> foreign_content)
       : tag_impl_(tag_impl),
         media_values_(media_values),
         scanner_type_(scanner_type),
@@ -193,6 +217,24 @@ class TokenPreloadScanner::StartTagScanner {
       case features::LcppPreloadLazyLoadImageType::kNativeLazyLoading:
         use_data_src_attr_match_for_image_ = false;
         break;
+    }
+    // SVG <image> and <script> load via href/xlink:href, not src. Handle
+    // <image> like <img>, with the attribute mapping done in
+    // ProcessSVGHrefAttribute(). In MathML, script is an unknown element
+    // and loads nothing.
+    if (foreign_content == TokenPreloadScanner::ForeignContentType::kSvg) {
+      if (Match(tag_impl_, html_names::kImageTag)) {
+        is_svg_image_ = true;
+        tag_impl_ = html_names::kImgTag.LocalName().Impl();
+      } else if (Match(tag_impl_, html_names::kScriptTag)) {
+        is_svg_script_ = true;
+      }
+    } else if (RuntimeEnabledFeatures::
+                   PreloadScannerSkipMathMLScriptEnabled() &&
+               foreign_content ==
+                   TokenPreloadScanner::ForeignContentType::kMath &&
+               Match(tag_impl_, html_names::kScriptTag)) {
+      tag_impl_ = nullptr;
     }
     if (Match(tag_impl_, html_names::kImgTag) ||
         Match(tag_impl_, html_names::kSourceTag) ||
@@ -220,10 +262,40 @@ class TokenPreloadScanner::StartTagScanner {
       String attribute_value = html_token_attribute.Value();
       ProcessAttribute(attribute_name, attribute_value);
     }
+    MaybeClearNonceForDanglingMarkup(attributes);
     PostProcessAfterAttributes();
   }
 
+  // Mirror the dangling-markup-injection mitigation in
+  // ContentSecurityPolicy::IsNonceableElement so the preload scanner cannot
+  // be tricked into authorizing a speculative fetch with a hijacked nonce.
+  // This is done as a separate pass after ProcessAttributes so we can skip
+  // the work entirely when no nonce is present.
+  void MaybeClearNonceForDanglingMarkup(
+      const HTMLToken::AttributeList& attributes) {
+    if (nonce_.IsNull() || nonce_.empty())
+      return;
+    HashSet<AtomicString> seen_names;
+    for (const HTMLToken::Attribute& html_token_attribute : attributes) {
+      AtomicString attribute_name(html_token_attribute.GetName());
+      String attribute_value = html_token_attribute.Value();
+      if (!seen_names.insert(attribute_name).is_new_entry ||
+          ContentSecurityPolicy::ContainsDanglingMarkupSignal(
+              attribute_name, attribute_value)) {
+        SetNonce(String());
+        return;
+      }
+    }
+  }
+
   void PostProcessAfterAttributes() {
+    if (is_svg_image_ || is_svg_script_) {
+      // href takes precedence over the deprecated xlink:href.
+      SetUrlToLoad(
+          svg_href_value_.IsNull() ? svg_xlink_href_value_ : svg_href_value_,
+          kDisallowURLReplacement);
+      return;
+    }
     if (Match(tag_impl_, html_names::kImgTag) ||
         (link_is_preload_ && as_attribute_value_ == "image"))
       SetUrlFromImageAttributes();
@@ -297,10 +369,14 @@ class TokenPreloadScanner::StartTagScanner {
         (referrer_policy_ != network::mojom::ReferrerPolicy::kDefault)
             ? referrer_policy_
             : document_parameters.referrer_policy;
+    // The initiator shows up as PerformanceResourceTiming.initiatorType,
+    // which is the element's local name: "image" for SVG <image>.
     auto request = PreloadRequest::CreateIfNeeded(
-        InitiatorFor(tag_impl_, link_is_modulepreload_), url_to_load_,
-        predicted_base_url, type.value(), referrer_policy, is_image_set,
-        exclusion_info, resource_width_, resource_height_, request_type);
+        is_svg_image_ ? html_names::kImageTag.LocalName()
+                      : InitiatorFor(tag_impl_, link_is_modulepreload_),
+        url_to_load_, predicted_base_url, type.value(), referrer_policy,
+        is_image_set, exclusion_info, resource_width_, resource_height_,
+        request_type);
     if (!request)
       return nullptr;
 
@@ -330,21 +406,24 @@ class TokenPreloadScanner::StartTagScanner {
               : (is_async_ ? RenderBlockingBehavior::kPotentiallyBlocking
                            : RenderBlockingBehavior::kNonBlocking);
     } else if (is_script || type == ResourceType::kCSSStyleSheet) {
-      // CSS here is render blocking unless it's disabled, as non blocking
-      // doesn't get preloaded. JS here is a blocking one, as others would've
-      // been caught by the previous condition.
+      // JS here is a blocking one, as others would've been caught by the
+      // previous condition.
       render_blocking_behavior =
-          type == ResourceType::kCSSStyleSheet && disabled_attr_set_
-              ? RenderBlockingBehavior::kNonBlocking
-          : treat_links_as_in_body
-              ? RenderBlockingBehavior::kInBodyParserBlocking
-              : RenderBlockingBehavior::kBlocking;
+          treat_links_as_in_body ? RenderBlockingBehavior::kInBodyParserBlocking
+                                 : RenderBlockingBehavior::kBlocking;
     }
     request->SetRenderBlockingBehavior(render_blocking_behavior);
 
     if (type == ResourceType::kImage && is_img &&
         IsLazyLoadImageDeferable(document_parameters,
                                  is_potentially_lcp_element)) {
+      return nullptr;
+    }
+    // Don't preload video poster if loading="lazy" is set.
+    if (RuntimeEnabledFeatures::LazyLoadVideoAndAudioEnabled() &&
+        type == ResourceType::kImage &&
+        Match(tag_impl_, html_names::kVideoTag) &&
+        loading_attr_value_ == LoadingAttributeValue::kLazy) {
       return nullptr;
     }
     // Do not set integrity metadata for <link> elements for destinations not
@@ -362,15 +441,6 @@ class TokenPreloadScanner::StartTagScanner {
     if (scanner_type_ == ScannerType::kInsertion)
       request->SetFromInsertionScanner(true);
 
-    if (attributionsrc_attr_set_) {
-      DCHECK(is_script || is_img);
-      request->SetAttributionReportingEligibleImgOrScript(true);
-    }
-
-    if (shared_storage_writable_opted_in_) {
-      DCHECK(is_img);
-      request->SetSharedStorageWritableOptedIn(true);
-    }
 
     if (browsing_topics_attr_set_) {
       DCHECK(is_img);
@@ -416,8 +486,6 @@ class TokenPreloadScanner::StartTagScanner {
       SetFetchPriorityHint(attribute_value);
     } else if (Match(attribute_name, html_names::kBlockingAttr)) {
       blocking_attribute_value_ = attribute_value;
-    } else if (Match(attribute_name, html_names::kAttributionsrcAttr)) {
-      attributionsrc_attr_set_ = true;
     }
   }
 
@@ -455,10 +523,6 @@ class TokenPreloadScanner::StartTagScanner {
     } else if (loading_attr_value_ == LoadingAttributeValue::kAuto &&
                Match(attribute_name, html_names::kLoadingAttr)) {
       loading_attr_value_ = GetLoadingAttributeValue(attribute_value);
-    } else if (Match(attribute_name, html_names::kAttributionsrcAttr)) {
-      attributionsrc_attr_set_ = true;
-    } else if (Match(attribute_name, html_names::kSharedstoragewritableAttr)) {
-      shared_storage_writable_opted_in_ = true;
     } else if (Match(attribute_name, html_names::kBrowsingtopicsAttr)) {
       browsing_topics_attr_set_ = true;
     } else if (use_data_src_attr_match_for_image_ &&
@@ -510,7 +574,7 @@ class TokenPreloadScanner::StartTagScanner {
     } else if (Match(attribute_name, html_names::kNonceAttr)) {
       SetNonce(attribute_value);
     } else if (Match(attribute_name, html_names::kAsAttr)) {
-      as_attribute_value_ = attribute_value.DeprecatedLower();
+      as_attribute_value_ = attribute_value.ToAsciiLower();
     } else if (Match(attribute_name, html_names::kTypeAttr)) {
       type_attribute_value_ = attribute_value;
     } else if (!referrer_policy_set_ &&
@@ -546,7 +610,7 @@ class TokenPreloadScanner::StartTagScanner {
       SetUrlToLoad(attribute_value, kDisallowURLReplacement);
     } else if (Match(attribute_name, html_names::kTypeAttr)) {
       input_is_image_ =
-          EqualIgnoringASCIICase(attribute_value, input_type_names::kImage);
+          EqualIgnoringAsciiCase(attribute_value, input_type_names::kImage);
     }
   }
 
@@ -576,10 +640,24 @@ class TokenPreloadScanner::StartTagScanner {
 
   void ProcessVideoAttribute(const AtomicString& attribute_name,
                              const String& attribute_value) {
-    if (Match(attribute_name, html_names::kPosterAttr))
+    if (Match(attribute_name, html_names::kPosterAttr)) {
       SetUrlToLoad(attribute_value, kDisallowURLReplacement);
-    else if (Match(attribute_name, html_names::kCrossoriginAttr))
+    } else if (Match(attribute_name, html_names::kCrossoriginAttr)) {
       SetCrossOrigin(attribute_value);
+    } else if (RuntimeEnabledFeatures::LazyLoadVideoAndAudioEnabled() &&
+               loading_attr_value_ == LoadingAttributeValue::kAuto &&
+               Match(attribute_name, html_names::kLoadingAttr)) {
+      loading_attr_value_ = GetLoadingAttributeValue(attribute_value);
+    }
+  }
+
+  void ProcessSVGHrefAttribute(const AtomicString& attribute_name,
+                               const String& attribute_value) {
+    if (Match(attribute_name, html_names::kHrefAttr)) {
+      svg_href_value_ = attribute_value;
+    } else if (attribute_name == "xlink:href") {
+      svg_xlink_href_value_ = attribute_value;
+    }
   }
 
   void ProcessAttribute(const AtomicString& attribute_name,
@@ -587,15 +665,17 @@ class TokenPreloadScanner::StartTagScanner {
     if (Match(attribute_name, html_names::kCharsetAttr))
       charset_ = attribute_value;
 
-    if (Match(tag_impl_, html_names::kScriptTag))
+    if (is_svg_image_ || is_svg_script_) {
+      ProcessSVGHrefAttribute(attribute_name, attribute_value);
+    } else if (Match(tag_impl_, html_names::kScriptTag)) {
       ProcessScriptAttribute(attribute_name, attribute_value);
-    else if (Match(tag_impl_, html_names::kImgTag))
+    } else if (Match(tag_impl_, html_names::kImgTag)) {
       ProcessImgAttribute(attribute_name, attribute_value);
-    else if (Match(tag_impl_, html_names::kLinkTag))
+    } else if (Match(tag_impl_, html_names::kLinkTag)) {
       ProcessLinkAttribute(attribute_name, attribute_value);
-    else if (Match(tag_impl_, html_names::kInputTag))
+    } else if (Match(tag_impl_, html_names::kInputTag)) {
       ProcessInputAttribute(attribute_name, attribute_value);
-    else if (Match(tag_impl_, html_names::kSourceTag))
+    } else if (Match(tag_impl_, html_names::kSourceTag))
       ProcessSourceAttribute(attribute_name, attribute_value);
     else if (Match(tag_impl_, html_names::kVideoTag))
       ProcessVideoAttribute(attribute_name, attribute_value);
@@ -690,6 +770,10 @@ class TokenPreloadScanner::StartTagScanner {
 
   bool ShouldPreloadLink(std::optional<ResourceType>& type) const {
     if (link_is_style_sheet_) {
+      // Disabled stylesheets are not loaded by the tree builder either.
+      if (disabled_attr_set_) {
+        return false;
+      }
       return type_attribute_value_.empty() ||
              MIMETypeRegistry::IsSupportedStyleSheetMIMEType(
                  ContentType(type_attribute_value_).GetType());
@@ -734,10 +818,6 @@ class TokenPreloadScanner::StartTagScanner {
 
         case ScriptLoader::ScriptTypeAtPrepare::kImportMap:
           // TODO(crbug.com/922212): External import maps are not yet supported.
-          return false;
-
-        case ScriptLoader::ScriptTypeAtPrepare::kRouteMap:
-          // TODO(crbug.com/436805487): Support external route maps?
           return false;
 
         case ScriptLoader::ScriptTypeAtPrepare::kSpeculationRules:
@@ -830,13 +910,15 @@ class TokenPreloadScanner::StartTagScanner {
   TokenPreloadScanner::ScannerType scanner_type_;
   // For explanation, see TokenPreloadScanner's declaration.
   const HashSet<String>* disabled_image_types_;
-  bool attributionsrc_attr_set_ = false;
-  bool shared_storage_writable_opted_in_ = false;
   bool browsing_topics_attr_set_ = false;
   std::optional<float> resource_width_;
   std::optional<float> resource_height_;
   features::LcppPreloadLazyLoadImageType preload_lazy_load_image_type_;
   bool use_data_src_attr_match_for_image_ = false;
+  bool is_svg_image_ = false;
+  bool is_svg_script_ = false;
+  String svg_href_value_;
+  String svg_xlink_href_value_;
 };
 
 TokenPreloadScanner::TokenPreloadScanner(
@@ -853,7 +935,6 @@ TokenPreloadScanner::TokenPreloadScanner(
       in_script_web_bundle_(false),
       seen_body_(false),
       seen_img_(false),
-      template_count_(0),
       document_parameters_(std::move(document_parameters)),
       media_values_cached_data_(std::move(media_values_cached_data)),
       scanner_type_(scanner_type),
@@ -917,13 +998,13 @@ void TokenPreloadScanner::HandleMetaNameAttribute(
     return;
 
   String content_attribute_value(content_attribute->Value());
-  if (EqualIgnoringASCIICase(name_attribute_value, "viewport")) {
+  if (EqualIgnoringAsciiCase(name_attribute_value, "viewport")) {
     HandleMetaViewport(content_attribute_value, document_parameters_.get(),
                        EnsureMediaValues(), viewport);
     return;
   }
 
-  if (EqualIgnoringASCIICase(name_attribute_value, "referrer")) {
+  if (EqualIgnoringAsciiCase(name_attribute_value, "referrer")) {
     HandleMetaReferrer(content_attribute_value, document_parameters_.get(),
                        &css_scanner_);
   }
@@ -957,11 +1038,25 @@ void TokenPreloadScanner::Scan(const HTMLToken& token,
       const StringImpl* tag_impl = TagImplFor(token.Data());
       lcp_element_matcher_.ObserveEndTag(tag_impl);
       if (Match(tag_impl, html_names::kTemplateTag)) {
-        if (template_count_)
+        if (template_count_) {
+          // This is an end tag for a non-DSD <template> or a DSD <template>
+          // that is inside a non-DSD <template>.
           --template_count_;
+        } else if (dsd_count_) {
+          // This is an end tag for a DSD <template> that is not inside any
+          // regular <template>.
+          --dsd_count_;
+        }
         return;
       }
       if (template_count_) {
+        return;
+      }
+      if (Match(tag_impl, svg_names::kSVGTag) ||
+          Match(tag_impl, mathml_names::kMathTag)) {
+        if (!foreign_content_stack_.empty()) {
+          foreign_content_stack_.pop_back();
+        }
         return;
       }
       if (Match(tag_impl, html_names::kStyleTag)) {
@@ -996,18 +1091,44 @@ void TokenPreloadScanner::Scan(const HTMLToken& token,
         if (shadowrootmode_attribute) {
           String shadowrootmode_value(shadowrootmode_attribute->Value());
           is_declarative_shadow_root =
-              EqualIgnoringASCIICase(shadowrootmode_value, "open") ||
-              EqualIgnoringASCIICase(shadowrootmode_value, "closed");
+              EqualIgnoringAsciiCase(shadowrootmode_value, "open") ||
+              EqualIgnoringAsciiCase(shadowrootmode_value, "closed");
         }
-        // If this is a declarative shadow root <template shadowrootmode>
-        // element *and* we're not already inside a non-DSD <template> element,
-        // then we leave the template count at zero. Otherwise, increment it.
-        if (!(is_declarative_shadow_root && !template_count_)) {
+        if (is_declarative_shadow_root && !template_count_) {
+          // This is a <template> start tag for a DSD <template> *and* it's
+          // not nested inside of a regular (non-DSD) <template>.
+          ++dsd_count_;
+        } else {
+          // This is either a regular <template> start tag or a <template>
+          // start tag for a DSD <template> that has a regular template
+          // ancestor.
           ++template_count_;
         }
       }
-      if (template_count_)
+      if (template_count_) {
         return;
+      }
+      if (RuntimeEnabledFeatures::PreloadScannerSkipMathMLScriptEnabled() &&
+          !foreign_content_stack_.empty() &&
+          HTMLTreeBuilder::IsForeignContentBreakoutStartTag(
+              LookupHtmlTag(token.GetName()), token)) {
+        foreign_content_stack_.clear();
+      }
+      // The tree builder rewrites a bare <image> start tag to <img>, but not
+      // inside SVG/MathML foreign content, so gate the rewrite on the stack.
+      // https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-inbody
+      if (Match(tag_impl, svg_names::kSVGTag)) {
+        if (!token.SelfClosing()) {
+          foreign_content_stack_.push_back(ForeignContentType::kSvg);
+        }
+      } else if (Match(tag_impl, mathml_names::kMathTag)) {
+        if (!token.SelfClosing()) {
+          foreign_content_stack_.push_back(ForeignContentType::kMath);
+        }
+      } else if (foreign_content_stack_.empty() &&
+                 Match(tag_impl, html_names::kImageTag)) {
+        tag_impl = html_names::kImgTag.LocalName().Impl();
+      }
       // Don't early return, because the StartTagScanner needs to look at these
       // too.
       if (Match(tag_impl, html_names::kStyleTag)) {
@@ -1027,22 +1148,26 @@ void TokenPreloadScanner::Scan(const HTMLToken& token,
           in_script_web_bundle_ = true;
         }
       }
-      if (Match(tag_impl, html_names::kBaseTag)) {
+      // Check dsd_count_ since <base> elements are not processed inside of
+      // shadow DOM.
+      if (Match(tag_impl, html_names::kBaseTag) && !dsd_count_) {
         // The first <base> element is the one that wins.
         if (!predicted_base_element_url_.IsEmpty())
           return;
         UpdatePredictedBaseURL(token);
         return;
       }
-      if (Match(tag_impl, html_names::kMetaTag)) {
+      // Check dsd_count_ since <meta> elements are not processed inside of
+      // shadow DOM.
+      if (Match(tag_impl, html_names::kMetaTag) && !dsd_count_) {
         const HTMLToken::Attribute* equiv_attribute =
             token.GetAttributeItem(html_names::kHttpEquivAttr);
         if (equiv_attribute) {
           String equiv_attribute_value(equiv_attribute->Value());
-          if (EqualIgnoringASCIICase(equiv_attribute_value,
+          if (EqualIgnoringAsciiCase(equiv_attribute_value,
                                      "content-security-policy")) {
             ++(*csp_meta_tag_count);
-          } else if (EqualIgnoringASCIICase(equiv_attribute_value,
+          } else if (EqualIgnoringAsciiCase(equiv_attribute_value,
                                             http_names::kAcceptCH)) {
             const HTMLToken::Attribute* content_attribute =
                 token.GetAttributeItem(html_names::kContentAttr);
@@ -1053,7 +1178,7 @@ void TokenPreloadScanner::Scan(const HTMLToken& token,
                               .is_doc_preloader =
                                   scanner_type_ == ScannerType::kMainDocument});
             }
-          } else if (EqualIgnoringASCIICase(equiv_attribute_value,
+          } else if (EqualIgnoringAsciiCase(equiv_attribute_value,
                                             http_names::kDelegateCH)) {
             const HTMLToken::Attribute* content_attribute =
                 token.GetAttributeItem(html_names::kContentAttr);
@@ -1081,7 +1206,7 @@ void TokenPreloadScanner::Scan(const HTMLToken& token,
             token.GetAttributeItem(html_names::kSrcAttr);
         if (source_attribute) {
           String source_attribute_value(source_attribute->Value());
-          if (source_attribute_value.StartsWithIgnoringASCIICase("data:")) {
+          if (source_attribute_value.StartsWithIgnoringAsciiCase("data:")) {
             return;
           }
         }
@@ -1089,19 +1214,23 @@ void TokenPreloadScanner::Scan(const HTMLToken& token,
         in_picture_ = true;
         picture_data_ = PictureData();
         return;
-      } else if (!Match(tag_impl, html_names::kSourceTag) &&
-                 !Match(tag_impl, html_names::kImgTag)) {
-        // If found an "atypical" picture child, don't process it as a picture
-        // child.
+      } else if (!IsVoidElement(tag_impl)) {
+        // A non-void element may contain a subsequent <img>, which would then
+        // no longer be a direct <picture> child, so stop treating the current
+        // <picture> as the img's parent. Void elements cannot contain it.
         in_picture_ = false;
         picture_data_.picked = false;
       }
 
       MediaValuesCached* media_values = EnsureMediaValues();
+      std::optional<ForeignContentType> foreign_content;
+      if (!foreign_content_stack_.empty()) {
+        foreign_content = foreign_content_stack_.back();
+      }
       StartTagScanner scanner(
           tag_impl, media_values, scanner_type_,
           &document_parameters_->disabled_image_types,
-          document_parameters_->preload_lazy_load_image_type);
+          document_parameters_->preload_lazy_load_image_type, foreign_content);
       scanner.ProcessAttributes(token.Attributes());
 
       if (in_picture_ && media_values->Width()) {
@@ -1135,7 +1264,10 @@ void TokenPreloadScanner::UpdatePredictedBaseURL(const HTMLToken& token) {
     KURL url(document_url_,
              StripLeadingAndTrailingHtmlSpaces(href_attribute->Value()));
     bool is_valid_base_url =
-        url.IsValid() && !url.ProtocolIsData() && !url.ProtocolIsJavaScript();
+        url.IsValid() && !url.ProtocolIsData() && !url.ProtocolIsJavaScript() &&
+        ContentSecurityPolicy::AllowBaseURI(
+            url, document_parameters_->content_security_policy);
+
     predicted_base_element_url_ = is_valid_base_url ? url : KURL();
   }
 }
@@ -1255,7 +1387,7 @@ std::unique_ptr<PendingPreloadData> HTMLPreloadScanner::Scan(
       // Don't preload anything if a CSP meta tag is found. We should rarely
       // find them here because the HTMLPreloadScanner is only used for the
       // synchronous parsing path.
-      CHECK(csp_meta_tag_count >= 0);
+      CHECK_GE(csp_meta_tag_count, 0);
       if (csp_meta_tag_count) {
         // Reset the tokenizer, to avoid re-scanning tokens that we are about to
         // start parsing.
@@ -1316,6 +1448,14 @@ CachedDocumentParameters::CachedDocumentParameters(Document* document) {
           : kPreloadLazyLoadImageType;
   probe::GetDisabledImageTypes(document->GetExecutionContext(),
                                &disabled_image_types);
+  if (document->GetExecutionContext() &&
+      document->GetExecutionContext()->GetContentSecurityPolicy()) {
+    for (const auto& policy : document->GetExecutionContext()
+                                  ->GetContentSecurityPolicy()
+                                  ->GetParsedPolicies()) {
+      content_security_policy.push_back(policy->Clone());
+    }
+  }
 }
 
 // static

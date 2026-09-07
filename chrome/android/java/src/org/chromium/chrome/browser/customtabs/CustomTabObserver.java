@@ -6,7 +6,10 @@ package org.chromium.chrome.browser.customtabs;
 
 import static org.chromium.build.NullUtil.assertNonNull;
 
+import android.content.Context;
 import android.content.Intent;
+import android.content.res.Resources;
+import android.graphics.Rect;
 import android.net.Uri;
 import android.os.Process;
 import android.os.SystemClock;
@@ -15,21 +18,27 @@ import android.text.format.DateUtils;
 
 import androidx.annotation.IntDef;
 
+import org.chromium.base.ContextUtils;
+import org.chromium.base.TriState;
+import org.chromium.base.TriStateUtils;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.base.ColdStartTracker;
 import org.chromium.chrome.browser.browserservices.intents.SessionHolder;
 import org.chromium.chrome.browser.customtabs.ClientManager.CalledWarmup;
 import org.chromium.chrome.browser.customtabs.features.TabInteractionRecorder;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.intents.BrowserIntentUtils;
 import org.chromium.chrome.browser.metrics.SimpleStartupForegroundSessionDetector;
 import org.chromium.chrome.browser.page_load_metrics.PageLoadMetrics;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.Tab.LoadUrlResult;
 import org.chromium.chrome.browser.tab.TabHidingType;
 import org.chromium.chrome.browser.tab.TabObserver;
+import org.chromium.chrome.browser.tab.TabUtils;
+import org.chromium.components.browser_ui.share.ShareImageFileUtils;
 import org.chromium.components.ukm.UkmRecorder;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.NavigationHandle;
@@ -43,7 +52,7 @@ import java.util.List;
 
 /** A {@link TabObserver} that also handles custom tabs specific logging and messaging. */
 @NullMarked
-public class CustomTabObserver extends EmptyTabObserver {
+public class CustomTabObserver implements TabObserver {
     private final @Nullable CustomTabsConnection mCustomTabsConnection;
     private final @Nullable SessionHolder<?> mSession;
 
@@ -60,9 +69,9 @@ public class CustomTabObserver extends EmptyTabObserver {
     private long mLaunchedForSpeculationRealtimeMillis;
     private long mLaunchedForSpeculationUptimeMillis;
 
-    // true/false if the mayLaunchUrl API was used and the speculation was used/not used. null if
-    // the API was not used.
-    private @Nullable Boolean mUsedHiddenTabSpeculation;
+    // TriState indicating if the mayLaunchUrl API was used and the speculation was used/not used
+    // (TriState.TRUE / TriState.FALSE). TriState.NOT_SET if the API was not used.
+    private @TriState int mUsedHiddenTabSpeculation;
 
     // The time of the first navigation commit in the most recent Custom Tab launch.
     private long mFirstCommitRealtimeMillis;
@@ -76,6 +85,9 @@ public class CustomTabObserver extends EmptyTabObserver {
 
     // Lets Long press on links select the link text instead of triggering context menu.
     private boolean mLongPressLinkSelectText;
+
+    private int mContentBitmapWidth;
+    private int mContentBitmapHeight;
 
     @IntDef({State.RESET, State.WAITING_LOAD_START, State.WAITING_LOAD_FINISH})
     @Retention(RetentionPolicy.SOURCE)
@@ -154,6 +166,28 @@ public class CustomTabObserver extends EmptyTabObserver {
     public CustomTabObserver(boolean openedByChrome, @Nullable SessionHolder<?> token) {
         mCustomTabsConnection = openedByChrome ? null : CustomTabsConnection.getInstance();
         mSession = token;
+        if (mCustomTabsConnection != null
+                && ChromeFeatureList.sCctNavigationInfoScreenshot.isEnabled()
+                && mCustomTabsConnection.shouldSendNavigationInfoForSession(mSession)) {
+            Context appContext = ContextUtils.getApplicationContext();
+            Resources resources = appContext.getResources();
+            float desiredWidth =
+                    resources
+                            .getDimensionPixelSize(R.dimen.custom_tabs_screenshot_width);
+            float desiredHeight =
+                    resources
+                            .getDimensionPixelSize(R.dimen.custom_tabs_screenshot_height);
+            Rect bounds = TabUtils.estimateContentSize(appContext);
+            if (bounds.width() == 0 || bounds.height() == 0) {
+                mContentBitmapWidth = Math.round(desiredWidth);
+                mContentBitmapHeight = Math.round(desiredHeight);
+            } else {
+                float scale =
+                        Math.min(desiredWidth / bounds.width(), desiredHeight / bounds.height());
+                mContentBitmapWidth = Math.round(bounds.width() * scale);
+                mContentBitmapHeight = Math.round(bounds.height() * scale);
+            }
+        }
         resetPageLoadTracking();
     }
 
@@ -187,7 +221,7 @@ public class CustomTabObserver extends EmptyTabObserver {
         // If page load is already being tracked, it must have been an early nav - nothing to do
         // here.
         if (mIntentReceivedRealtimeMillis != 0) return;
-        mUsedHiddenTabSpeculation = usedSpeculation;
+        mUsedHiddenTabSpeculation = TriStateUtils.from(usedSpeculation);
         mLaunchedForSpeculationRealtimeMillis =
                 BrowserIntentUtils.getLaunchedRealtimeMillis(sourceIntent);
         mLaunchedForSpeculationUptimeMillis =
@@ -289,8 +323,8 @@ public class CustomTabObserver extends EmptyTabObserver {
         String suffix = null;
         long duration = 0;
         // Note that this will exclude Webapp launches in all cases due to either
-        // mUsedHiddenTabSpeculation being null, or mIntentReceivedTimestamp being 0.
-        if (mUsedHiddenTabSpeculation != null && mUsedHiddenTabSpeculation) {
+        // mUsedHiddenTabSpeculation being TriState.NOT_SET, or mIntentReceivedTimestamp being 0.
+        if (mUsedHiddenTabSpeculation == TriState.TRUE) {
             duration = mFirstCommitRealtimeMillis - mLaunchedForSpeculationRealtimeMillis;
             suffix = ".Speculated";
         } else if (mIntentReceivedRealtimeMillis > 0) {
@@ -367,8 +401,8 @@ public class CustomTabObserver extends EmptyTabObserver {
         String suffix = null;
         long duration = 0;
         // Note that this will exclude Webapp launches in all cases due to either
-        // mUsedHiddenTabSpeculation being null, or mIntentReceivedTimestamp being 0.
-        if (mUsedHiddenTabSpeculation != null && mUsedHiddenTabSpeculation) {
+        // mUsedHiddenTabSpeculation being TriState.NOT_SET, or mIntentReceivedTimestamp being 0.
+        if (mUsedHiddenTabSpeculation == TriState.TRUE) {
             duration = paintUptimeMillis - mLaunchedForSpeculationUptimeMillis;
             suffix = ".Speculated";
         } else if (mIntentReceivedRealtimeMillis > 0) {
@@ -397,7 +431,7 @@ public class CustomTabObserver extends EmptyTabObserver {
         }
         callOnTwaStartupTimeAvailable(
                 () -> {
-                    long twaDuration = mFirstCommitUptimeMillis - mTwaStartupUptimeMillis;
+                    long twaDuration = paintUptimeMillis - mTwaStartupUptimeMillis;
                     // The TWA durations are always relative to the startup time passed in the
                     // Intent.
                     RecordHistogram.recordCustomTimesHistogram(
@@ -437,6 +471,9 @@ public class CustomTabObserver extends EmptyTabObserver {
             PageLoadMetrics.removeObserver(mPageLoadMetricsObserver);
             mPageLoadMetricsObserver = null;
         }
+        // Cancel any pending capture Runnables so they don't keep the Tab (and transitively the
+        // owning Activity) alive in the main Looper's MessageQueue after destruction.
+        mNavigationInfoCaptureTrigger.destroy();
     }
 
     @Override
@@ -455,10 +492,24 @@ public class CustomTabObserver extends EmptyTabObserver {
     private void captureNavigationInfo(final Tab tab) {
         if (mCustomTabsConnection == null) return;
         if (!mCustomTabsConnection.shouldSendNavigationInfoForSession(mSession)) return;
-        if (tab.getWebContents() == null) return;
+        WebContents webContents = tab.getWebContents();
+        if (webContents == null) return;
         String title = tab.getTitle();
         if (TextUtils.isEmpty(title)) return;
-        mCustomTabsConnection.sendNavigationInfo(mSession, tab.getUrl().getSpec(), title, null);
+
+        String urlString = tab.getUrl().getSpec();
+        if (ChromeFeatureList.sCctNavigationInfoScreenshot.isEnabled()) {
+            ShareImageFileUtils.captureScreenshotForContents(
+                    webContents,
+                    mContentBitmapWidth,
+                    mContentBitmapHeight,
+                    (@Nullable Uri snapshotPath) ->
+                            mCustomTabsConnection.sendNavigationInfo(
+                                    mSession, urlString, title, snapshotPath));
+        } else {
+            mCustomTabsConnection.sendNavigationInfo(
+                    mSession, urlString, title, /* snapshotPath= */ null);
+        }
     }
 
     private void callOnTwaStartupTimeAvailable(Runnable callback) {

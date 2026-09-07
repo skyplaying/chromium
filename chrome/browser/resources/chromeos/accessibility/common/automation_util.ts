@@ -505,6 +505,67 @@ export class AutomationUtil {
 
     return null;
   }
+
+  /**
+   * Finds the first node in the subtree of |cur| matching |findParams| using
+   * pre-order traversal, stopping at the first match and without recursing into
+   * web views.
+   * @param cur Node to begin the search from.
+   * @param findParams Params to match against.
+   * @return The matching node, or null if none is found.
+   */
+  static findNodeInDesktopTree(
+      cur: AutomationNode,
+      findParams: chrome.automation.FindParams): AutomationNode|null {
+    if (!cur) {
+      return null;
+    }
+
+    if (cur.root?.role !== RoleType.DESKTOP) {
+      return null;
+    }
+
+    if (cur.matches(findParams)) {
+      return cur;
+    }
+
+    let child = cur.firstChild;
+    while (child) {
+      const ret = AutomationUtil.findNodeInDesktopTree(child, findParams);
+      if (ret) {
+        return ret;
+      }
+      child = child.nextSibling;
+    }
+    return null;
+  }
+
+  /**
+   * Determines whether a node is resident in the desktop tree hierarchy (i.e.,
+   * reachable up to the root desktop node).
+   * @param node The node to test.
+   * @param desktop Optional desktop node. If provided, ensures the ancestry
+   *     reaches this specific desktop node.
+   * @return Whether the node is connected to the desktop tree.
+   */
+  static isDesktopTreeResident(
+      node: AutomationNode|null|undefined,
+      desktop?: AutomationNode|null): boolean {
+    if (!node) {
+      return false;
+    }
+    let root: AutomationNode|undefined = node.root;
+    while (root) {
+      if (desktop ? root === desktop : root.role === RoleType.DESKTOP) {
+        return true;
+      }
+      if (!root.parent) {
+        break;
+      }
+      root = root.parent.root;
+    }
+    return false;
+  }
 }
 
 /**

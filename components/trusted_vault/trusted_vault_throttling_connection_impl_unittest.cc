@@ -50,9 +50,7 @@ class TrustedVaultThrottlingConnectionImplTest : public testing::Test {
     storage_ =
         StandaloneTrustedVaultStorage::CreateForTesting(std::move(file_access));
     storage_->ReadDataFromDisk();
-    if (storage_->FindUserVault(account_info().gaia) == nullptr) {
-      storage_->AddUserVault(account_info().gaia);
-    }
+    storage_->MutateUserVault(account_info().gaia, [](UserVault&) {});
 
     std::unique_ptr<NiceMock<MockTrustedVaultThrottlingConnection>> delegate =
         std::make_unique<NiceMock<MockTrustedVaultThrottlingConnection>>();
@@ -222,6 +220,29 @@ TEST_F(TrustedVaultThrottlingConnectionImplTest,
           account_info(),
           {trusted_vault_pb::SecurityDomainMember::MEMBER_TYPE_PHYSICAL_DEVICE},
           base::DoNothing(), base::DoNothing());
+  EXPECT_THAT(request, NotNull());
+}
+
+TEST_F(TrustedVaultThrottlingConnectionImplTest,
+       ShouldCallDownloadGaiaPasswordPublicKey) {
+  EXPECT_CALL(*delegate(), DownloadGaiaPasswordPublicKey)
+      .WillOnce(InvokeWithoutArgs([]() {
+        return std::make_unique<TrustedVaultConnection::Request>();
+      }));
+  std::unique_ptr<TrustedVaultConnection::Request> request =
+      throttling_connection()->DownloadGaiaPasswordPublicKey(account_info(),
+                                                             base::DoNothing());
+  EXPECT_THAT(request, NotNull());
+}
+
+TEST_F(TrustedVaultThrottlingConnectionImplTest, ShouldCallRotateSharedKey) {
+  EXPECT_CALL(*delegate(), RotateSharedKey).WillOnce(InvokeWithoutArgs([]() {
+    return std::make_unique<TrustedVaultConnection::Request>();
+  }));
+  std::unique_ptr<TrustedVaultConnection::Request> request =
+      throttling_connection()->RotateSharedKey(
+          account_info(), trusted_vault_pb::RotateSharedKeyRequest(),
+          base::DoNothing());
   EXPECT_THAT(request, NotNull());
 }
 

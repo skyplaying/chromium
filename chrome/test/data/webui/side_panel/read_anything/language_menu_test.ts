@@ -7,16 +7,18 @@ import 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js'
 import type {CrInputElement} from '//resources/cr_elements/cr_input/cr_input.js';
 import type {CrToggleElement} from '//resources/cr_elements/cr_toggle/cr_toggle.js';
 import type {LanguageMenuElement, LanguageToastElement} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
-import {AVAILABLE_GOOGLE_TTS_LOCALES, VoiceClientSideStatusCode, VoiceNotificationManager} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
+import {AVAILABLE_GOOGLE_TTS_LOCALES, ReadAloudSettingsChange, VoiceClientSideStatusCode, VoiceNotificationManager} from 'chrome-untrusted://read-anything-side-panel.top-chrome/read_anything.js';
 import {assertEquals, assertFalse, assertTrue} from 'chrome-untrusted://webui-test/chai_assert.js';
 import {microtasksFinished} from 'chrome-untrusted://webui-test/test_util.js';
 
-import {createSpeechSynthesisVoice} from './common.js';
+import {createSpeechSynthesisVoice, setupTestEnvironment} from './common.js';
+import type {TestMetricsBrowserProxy} from './test_metrics_browser_proxy.js';
 
 suite('LanguageMenu', () => {
   let languageMenu: LanguageMenuElement;
   let availableVoices: SpeechSynthesisVoice[];
   let enabledLangs: string[];
+  let metrics: TestMetricsBrowserProxy;
 
   function getLanguageLineItems() {
     return languageMenu.$.languageMenu.querySelectorAll<HTMLElement>(
@@ -58,9 +60,8 @@ suite('LanguageMenu', () => {
   }
 
   setup(() => {
-    // Clearing the DOM should always be done first.
-    document.body.innerHTML = window.trustedTypes!.emptyHTML;
-    VoiceNotificationManager.getInstance().clear();
+    const result = setupTestEnvironment();
+    metrics = result.metrics;
     languageMenu = document.createElement('language-menu');
     languageMenu.localesOfLangPackVoices = new Set(['it-it']);
   });
@@ -151,7 +152,7 @@ suite('LanguageMenu', () => {
           assertLanguageLineWithTextAndSwitch(
               'en-us', getLanguageLineItems()[1]!);
           assertEquals('', getLanguageSearchField().value);
-          assertEquals(true, getNoResultsFoundMessage()!.hidden);
+          assertTrue(getNoResultsFoundMessage()!.hidden);
         });
 
     suite('with display names for locales', () => {
@@ -175,7 +176,7 @@ suite('LanguageMenu', () => {
 
         assertTrue(isPositionedOnPage(languageMenu));
         assertEquals(0, getLanguageLineItems().length);
-        assertEquals(false, getNoResultsFoundMessage()!.hidden);
+        assertFalse(getNoResultsFoundMessage()!.hidden);
       });
 
       test('it displays matching language with a match', async () => {
@@ -185,7 +186,7 @@ suite('LanguageMenu', () => {
         assertEquals(1, getLanguageLineItems().length);
         assertLanguageLineWithTextAndSwitch(
             'English (United States)', getLanguageLineItems()[0]!);
-        assertEquals(true, getNoResultsFoundMessage()!.hidden);
+        assertTrue(getNoResultsFoundMessage()!.hidden);
       });
 
       test('it matches the language code', async () => {
@@ -195,7 +196,7 @@ suite('LanguageMenu', () => {
         assertEquals(1, getLanguageLineItems().length);
         assertLanguageLineWithTextAndSwitch(
             'English (United States)', getLanguageLineItems()[0]!);
-        assertEquals(true, getNoResultsFoundMessage()!.hidden);
+        assertTrue(getNoResultsFoundMessage()!.hidden);
       });
 
       test('shows clear button when search field has contents', async () => {
@@ -258,7 +259,7 @@ suite('LanguageMenu', () => {
         assertEquals(1, getLanguageLineItems().length);
         assertLanguageLineWithTextAndSwitch(
             portugueseDisplayName, getLanguageLineItems()[0]!);
-        assertEquals(true, getNoResultsFoundMessage()!.hidden);
+        assertTrue(getNoResultsFoundMessage()!.hidden);
       });
 
       test('it matches search with no accent', async () => {
@@ -268,7 +269,7 @@ suite('LanguageMenu', () => {
         assertEquals(1, getLanguageLineItems().length);
         assertLanguageLineWithTextAndSwitch(
             portugueseDisplayName, getLanguageLineItems()[0]!);
-        assertEquals(true, getNoResultsFoundMessage()!.hidden);
+        assertTrue(getNoResultsFoundMessage()!.hidden);
       });
 
       test('it matches the language code', async () => {
@@ -278,7 +279,7 @@ suite('LanguageMenu', () => {
         assertEquals(1, getLanguageLineItems().length);
         assertLanguageLineWithTextAndSwitch(
             portugueseDisplayName, getLanguageLineItems()[0]!);
-        assertEquals(true, getNoResultsFoundMessage()!.hidden);
+        assertTrue(getNoResultsFoundMessage()!.hidden);
       });
     });
   });
@@ -367,6 +368,19 @@ suite('LanguageMenu', () => {
         assertLanguageLineWithToggleChecked(false, getLanguageLineItems()[0]!);
         assertLanguageLineWithToggleChecked(false, getLanguageLineItems()[1]!);
         assertLanguageLineWithToggleChecked(true, getLanguageLineItems()[2]!);
+      });
+
+      test('it logs metric when switch is toggled', async () => {
+        await drawLanguageMenu();
+
+        const toggle = getLanguageLineItems()[0]!.querySelector('cr-toggle');
+        assertTrue(!!toggle);
+        toggle.click();
+
+        assertEquals(
+            ReadAloudSettingsChange.LANGUAGE_TOGGLE,
+            await metrics.whenCalled('recordSpeechSettingsChange'));
+        assertEquals(1, metrics.getCallCount('recordSpeechSettingsChange'));
       });
 
       test('it toggles switch when language pref changes', async () => {
@@ -602,6 +616,11 @@ suite('LanguageMenu', () => {
         assertLanguageLineWithTextAndSwitch(
             'Italian', getLanguageLineItems()[0]!);
       });
+
+      test('it has a close button label', async () => {
+        await drawLanguageMenu();
+        assertTrue(!!languageMenu.$.languageMenu.closeText);
+      });
     });
   });
 
@@ -691,11 +710,11 @@ function assertLanguageLineWithToggleChecked(
   if (expectedChecked) {
     assertTrue(toggle.checked);
     assertTrue(toggle.hasAttribute('checked'));
-    assertEquals('true', toggle.getAttribute('aria-pressed'));
+    assertEquals('true', toggle.getAttribute('aria-checked'));
   } else {
     assertFalse(toggle.checked);
     assertEquals(null, toggle.getAttribute('checked'));
-    assertEquals('false', toggle.getAttribute('aria-pressed'));
+    assertEquals('false', toggle.getAttribute('aria-checked'));
   }
 }
 

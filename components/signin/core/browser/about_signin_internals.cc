@@ -8,9 +8,11 @@
 
 #include <algorithm>
 #include <string>
+#include <string_view>
 #include <tuple>
 
 #include "base/command_line.h"
+#include "base/feature_list.h"
 #include "base/hash/hash.h"
 #include "base/i18n/time_formatting.h"
 #include "base/logging.h"
@@ -23,6 +25,7 @@
 #include "components/prefs/pref_service.h"
 #include "components/signin/core/browser/account_reconcilor.h"
 #include "components/signin/core/browser/signin_internals_util.h"
+#include "components/signin/internal/identity_manager/account_capabilities_constants.h"
 #include "components/signin/public/base/signin_client.h"
 #include "components/signin/public/base/signin_metrics.h"
 #include "components/signin/public/base/signin_switches.h"
@@ -30,6 +33,7 @@
 #include "components/signin/public/identity_manager/diagnostics_provider.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/load_credentials_state.h"
+#include "components/version_info/channel.h"
 #include "google_apis/gaia/gaia_id.h"
 #include "net/base/backoff_entry.h"
 
@@ -86,9 +90,9 @@ void AddSection(base::ListValue& parent_list,
 }
 
 void AddSectionEntry(base::ListValue& section_list,
-                     const std::string& field_name,
-                     const std::string& field_status,
-                     const std::string& field_time = "") {
+                     std::string_view field_name,
+                     std::string_view field_status,
+                     std::string_view field_time = "") {
   base::DictValue entry;
   entry.Set("label", field_name);
   entry.Set("status", field_status);
@@ -99,11 +103,15 @@ void AddSectionEntry(base::ListValue& section_list,
 void AddCookieEntry(base::ListValue& accounts_list,
                     const std::string& field_email,
                     const GaiaId& field_gaia_id,
-                    const std::string& field_valid) {
+                    const std::string& field_valid,
+                    const std::string& field_signed_in,
+                    const std::string& field_verified) {
   base::DictValue entry;
   entry.Set("email", field_email);
   entry.Set("gaia_id", field_gaia_id.ToString());
   entry.Set("valid", field_valid);
+  entry.Set("signed_in", field_signed_in);
+  entry.Set("verified", field_verified);
   accounts_list.Append(std::move(entry));
 }
 
@@ -393,6 +401,35 @@ base::DictValue AboutSigninInternals::GetSigninStatus() {
                                 account_reconcilor_);
 }
 
+bool AboutSigninInternals::CanOverrideAccountCapability(
+    const CoreAccountId& account_id,
+    std::string_view capability_name,
+    version_info::Channel channel) const {
+  if (capability_name == kCanOverrideAccountInfoCapabilityName) {
+    // Overriding this capability (eg. from true to false) would mean the user
+    // couldn't then undo their action.
+    return false;
+  }
+
+  switch (channel) {
+    case version_info::Channel::UNKNOWN:
+    case version_info::Channel::CANARY:
+    case version_info::Channel::DEV:
+      return true;
+    case version_info::Channel::BETA:
+    case version_info::Channel::STABLE:
+      break;
+  }
+
+  if (!identity_manager_) {
+    return false;
+  }
+  AccountInfo account_info =
+      identity_manager_->FindExtendedAccountInfoByAccountId(account_id);
+  return account_info.GetAccountCapabilities().can_override_account_info() ==
+         signin::Tribool::kTrue;
+}
+
 void AboutSigninInternals::OnAccessTokenRequested(
     const CoreAccountId& account_id,
     const std::string& consumer_id,
@@ -535,17 +572,16 @@ void AboutSigninInternals::OnAccountsInCookieUpdated(
   }
 
   base::ListValue cookie_info;
-  for (const auto& signed_in_account :
-       accounts_in_cookie_jar_info.GetPotentiallyInvalidSignedInAccounts()) {
-    AddCookieEntry(cookie_info, signed_in_account.raw_email,
-                   signed_in_account.gaia_id,
-                   signed_in_account.valid ? "Valid" : "Invalid");
+  for (const auto& account : accounts_in_cookie_jar_info.GetAllAccounts()) {
+    AddCookieEntry(cookie_info, account.raw_email, account.gaia_id,
+                   account.valid ? "Valid" : "Invalid",
+                   account.signed_out ? "Signed out" : "Signed in",
+                   account.verified ? "Verified" : "Not verified");
   }
 
-  if (accounts_in_cookie_jar_info.GetPotentiallyInvalidSignedInAccounts()
-          .size() == 0) {
-    AddCookieEntry(cookie_info, "No Accounts Present.", GaiaId(),
-                   std::string());
+  if (accounts_in_cookie_jar_info.GetAllAccounts().empty()) {
+    AddCookieEntry(cookie_info, "No Accounts Present.", GaiaId(), std::string(),
+                   std::string(), std::string());
   }
 
   base::DictValue cookie_status_dict;
@@ -713,7 +749,7 @@ base::DictValue AboutSigninInternals::SigninStatus::ToValue(
         AddSectionEntry(basic_info, "Auth Error Account Id",
                         error_account_id.ToString());
         AddSectionEntry(basic_info, "Auth Error Username",
-                        error_account_info.email);
+                        error_account_info.GetEmail());
       } else {
         AddSectionEntry(basic_info, "Auth Error", "None");
       }
@@ -834,11 +870,55 @@ base::DictValue AboutSigninInternals::SigninStatus::ToValue(
         entry.Set("isBound", identity_manager->HasAccountWithBoundRefreshToken(
                                  account_info.account_id));
       }
+      if (base::FeatureList::IsEnabled(switches::kEnableMtlsTokenBinding)) {
+        entry.Set("mtlsTokenBinding",
+                  identity_manager->HasAccountWithRefreshTokenBoundToMtls(
+                      account_info.account_id));
+      }
 #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
       account_info_section.Append(std::move(entry));
     }
   }
   signin_status.Set("accountInfo", std::move(account_info_section));
+
+  // Account capabilities section
+  base::ListValue account_capabilities_section;
+  for (const CoreAccountInfo& account_info : accounts_with_refresh_tokens) {
+    base::DictValue account_caps_entry;
+    account_caps_entry.Set("accountId", account_info.account_id.ToString());
+
+    AccountInfo extended_info =
+        identity_manager->FindExtendedAccountInfoByAccountId(
+            account_info.account_id);
+    AccountCapabilities capabilities = extended_info.GetAccountCapabilities();
+    const auto& overrides = capabilities.GetCapabilityOverrides();
+
+    base::ListValue capabilities_list;
+    for (std::string_view cap_name :
+         AccountCapabilities::GetSupportedAccountCapabilityNames()) {
+      base::DictValue cap_entry;
+      cap_entry.Set("name", std::string(cap_name));
+      cap_entry.Set("label",
+                    AccountCapabilities::GetCapabilityDisplayName(cap_name));
+
+      signin::Tribool current_value =
+          capabilities.GetFetchedCapabilityByName(cap_name);
+      cap_entry.Set("value", signin::TriboolToString(current_value));
+
+      auto override_it = overrides.find(cap_name);
+      if (override_it != overrides.end()) {
+        cap_entry.Set("override", signin::TriboolToString(override_it->second));
+      } else {
+        cap_entry.Set("override", "");
+      }
+
+      capabilities_list.Append(std::move(cap_entry));
+    }
+    account_caps_entry.Set("capabilities", std::move(capabilities_list));
+    account_capabilities_section.Append(std::move(account_caps_entry));
+  }
+  signin_status.Set("accountCapabilities",
+                    std::move(account_capabilities_section));
 
   // Refresh token events section
   base::ListValue refresh_token_events_value;

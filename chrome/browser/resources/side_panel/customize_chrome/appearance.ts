@@ -81,7 +81,7 @@ export class AppearanceElement extends AppearanceElementBase {
       showManagedDialog_: {type: Boolean},
       showEditTheme_: {type: Boolean},
       managedByName_: {type: String},
-      managedByDescription_: {type: String},
+      managedByDesc_: {type: String},
       newTabPageType_: {type: Number},
 
       wallpaperSearchButtonEnabled_: {
@@ -117,7 +117,7 @@ export class AppearanceElement extends AppearanceElementBase {
       NewTabPageType.kFirstPartyWebUI;
   protected accessor showEditTheme_: boolean = true;
   protected accessor managedByName_: string = '';
-  protected managedByDesc_: string = '';
+  protected accessor managedByDesc_: string = '';
   private listenerIds_: number[] = [];
   private apiProxy_: CustomizeChromeApiProxy =
       CustomizeChromeApiProxy.getInstance();
@@ -126,19 +126,19 @@ export class AppearanceElement extends AppearanceElementBase {
     super.connectedCallback();
 
     this.listenerIds_ = [
-      this.apiProxy_.callbackRouter.setTheme.addListener((theme: Theme) => {
+      this.apiProxy_.callbackRouter.setTheme.addListener(theme => {
         this.theme_ = theme;
       }),
       this.apiProxy_.callbackRouter.attachedTabStateUpdated.addListener(
-          (newTabPageType: NewTabPageType) => {
+          newTabPageType => {
             this.newTabPageType_ = newTabPageType;
           }),
       this.apiProxy_.callbackRouter.setThemeEditable.addListener(
-          (isThemeEditable: boolean) => {
+          isThemeEditable => {
             this.showEditTheme_ = isThemeEditable;
           }),
       this.apiProxy_.callbackRouter.ntpManagedByNameUpdated.addListener(
-          (name: string, description: string) => {
+          (name, description) => {
             this.managedByName_ = name;
             this.managedByDesc_ = description;
           }),
@@ -230,7 +230,7 @@ export class AppearanceElement extends AppearanceElementBase {
   }
 
   private computeShowBottomDivider_(): boolean {
-    return !!(this.showClassicChromeButton_ || this.showDeviceThemeToggle_);
+    return this.showClassicChromeButton_ || this.showDeviceThemeToggle_;
   }
 
   private computeShowClassicChromeButton_(): boolean {
@@ -281,7 +281,14 @@ export class AppearanceElement extends AppearanceElementBase {
         !!this.managedByName_;
   }
 
-  protected onEditThemeClicked_() {
+  protected onThemeSnapshotKeydown_(e: KeyboardEvent) {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      this.onEditThemeClick_();
+    }
+  }
+
+  protected onEditThemeClick_() {
     recordCustomizeChromeAction(CustomizeChromeAction.EDIT_THEME_CLICKED);
     if (this.handleClickForManagedThemes_()) {
       return;
@@ -289,7 +296,7 @@ export class AppearanceElement extends AppearanceElementBase {
     this.dispatchEvent(new Event('edit-theme-click'));
   }
 
-  protected onWallpaperSearchClicked_() {
+  protected onWallpaperSearchClick_() {
     recordCustomizeChromeAction(
         CustomizeChromeAction.WALLPAPER_SEARCH_APPEARANCE_BUTTON_CLICKED);
     if (this.handleClickForManagedThemes_()) {
@@ -316,7 +323,7 @@ export class AppearanceElement extends AppearanceElementBase {
     }
   }
 
-  protected onSetClassicChromeClicked_() {
+  protected onSetClassicChromeClick_() {
     if (this.handleClickForManagedThemes_()) {
       return;
     }
@@ -330,11 +337,11 @@ export class AppearanceElement extends AppearanceElementBase {
     this.apiProxy_.handler.setFollowDeviceTheme(e.detail);
   }
 
-  protected onManagedDialogClosed_() {
+  protected onManagedDialogClose_() {
     this.showManagedDialog_ = false;
   }
 
-  protected onNewTabPageManageByButtonClicked_() {
+  protected onNewTabPageManageByButtonClick_() {
     this.apiProxy_.handler.openNtpManagedByPage();
   }
 

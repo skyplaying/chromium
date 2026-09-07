@@ -14,7 +14,6 @@ import os
 
 
 class ReorderTarget:
-
     def __find_line_numbers(self):
         # Do we have any `#include`s above
         # * `#pragma allow_unsafe_buffers` or
@@ -57,6 +56,7 @@ class ReorderTarget:
 
     def __init__(self, path):
         self.lines = None
+        pa_base = 'partition_alloc/partition_alloc_base'
         self.lines_to_reorder = {
             '#include <array>': None,
             '#include <cstdint>': None,
@@ -64,6 +64,9 @@ class ReorderTarget:
             '#include "base/containers/span.h"': None,
             '#include "base/memory/raw_span.h"': None,
             '#include "base/numerics/safe_conversions.h"': None,
+            f'#include "{pa_base}/containers/span.h"': None,
+            f'#include "{pa_base}/memory/raw_span.h"': None,
+            f'#include "{pa_base}/numerics/safe_conversions.h"': None,
         }
         self.insertion_point = None
         self.guard_format = self._compute_guard_format(path)
@@ -102,7 +105,7 @@ def reorder_pragma_and_includes(path):
     #     we traverse the file.
     # 2.  `target.lines_to_reorder` is a nonempty dict.
     with open(path, 'w') as f:
-        for (line_number, line) in enumerate(target.lines):
+        for line_number, line in enumerate(target.lines):
             # Write out all lines except for the overly-high-up `#include`s
             # until we pass the the `UNSAFE_BUFFERS_BUILD` macro and the HEADER
             # guards (if present).
@@ -127,8 +130,9 @@ def reorder_pragma_and_includes(path):
 
 def main():
     modified_files = [
-        f for f in os.popen("git diff --name-only HEAD~..HEAD").read().split(
-            "\n") if f
+        f
+        for f in os.popen("git diff --name-only HEAD~..HEAD").read().split("\n")
+        if f
     ]
 
     for file in modified_files:

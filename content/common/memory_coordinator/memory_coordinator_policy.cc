@@ -12,4 +12,15 @@ MemoryCoordinatorPolicy::MemoryCoordinatorPolicy(
     MemoryCoordinatorPolicyManager& manager)
     : manager_(manager) {}
 
+MemoryCoordinatorPolicyRegistration::MemoryCoordinatorPolicyRegistration(
+    MemoryCoordinatorPolicyManager& manager,
+    MemoryCoordinatorPolicy& policy)
+    : manager_(manager), policy_(policy) {
+  manager_->AddPolicy(&policy_.get());
+}
+
+MemoryCoordinatorPolicyRegistration::~MemoryCoordinatorPolicyRegistration() {
+  manager_->RemovePolicy(&policy_.get());
+}
+
 }  // namespace content

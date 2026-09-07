@@ -253,6 +253,7 @@ class TestDataTypeSyncBridge : public FakeDataTypeSyncBridge {
     merge_call_count_++;
 
     if (merge_full_sync_data_error_.has_value()) {
+      metadata_change_list->DropAllChanges();
       return merge_full_sync_data_error_;
     }
 
@@ -539,6 +540,8 @@ class ClientTagBasedDataTypeProcessorTest : public ::testing::Test {
 
   bool error_reported() const { return error_reported_; }
 
+  base::HistogramTester* histogram_tester() { return histogram_tester_.get(); }
+
  private:
   // This sets SequencedTaskRunner::CurrentDefaultHandle on the current thread,
   // which the type processor will pick up as the sync task runner.
@@ -811,6 +814,48 @@ TEST_F(ClientTagBasedDataTypeProcessorTest, ShouldReportErrorDuringActivation) {
   EXPECT_EQ(type_processor()->GetError()->location(), error.location());
   ASSERT_TRUE(received_error.has_value());
   EXPECT_EQ(received_error->location(), error.location());
+}
+
+// Test that stopping sync while connection is in flight prevents ConnectSync()
+// from connecting the worker, and does not cause a CHECK failure when
+// OnSyncStarting() is called again.
+TEST_F(ClientTagBasedDataTypeProcessorTest,
+       ShouldIgnoreConnectSyncIfStoppedWhileInFlight) {
+  InitializeToMetadataLoaded();
+
+  DataTypeActivationRequest request;
+  request.error_handler = base::BindRepeating([](const ModelError& error) {});
+  request.cache_guid = kCacheGuid;
+  request.authenticated_gaia_id = kDefaultAuthenticatedGaiaId;
+  request.sync_mode = SyncMode::kFull;
+  request.configuration_start_time = base::Time::Now();
+
+  base::RunLoop loop;
+  std::unique_ptr<syncer::DataTypeActivationResponse>
+      data_type_activation_response;
+  type_processor()->OnSyncStarting(
+      request,
+      base::BindLambdaForTesting(
+          [&](std::unique_ptr<syncer::DataTypeActivationResponse> response) {
+            data_type_activation_response = std::move(response);
+            loop.Quit();
+          }));
+  loop.Run();
+
+  ASSERT_NE(nullptr, data_type_activation_response);
+
+  // Stop sync while connection is in flight (before ConnectSync is invoked).
+  type_processor()->OnSyncStopping(KEEP_METADATA);
+
+  // Mimic the in-flight connection completing on the sync thread and posting
+  // ConnectSync back to the model thread.
+  OnReadyToConnect(std::move(data_type_activation_response));
+
+  // The processor should not be connected since sync was stopped.
+  EXPECT_FALSE(type_processor()->IsConnected());
+
+  // Starting sync again should succeed and not trigger CHECK(!IsConnected()).
+  OnSyncStarting();
 }
 
 // Test that an error during the merge is propagated to the error handler.
@@ -2679,6 +2724,10 @@ TEST_F(ClientTagBasedDataTypeProcessorTest,
   // Upon a mismatch, metadata should have been cleared.
   EXPECT_EQ(0U, db()->metadata_count());
   EXPECT_FALSE(type_processor()->IsTrackingMetadata());
+  histogram_tester()->ExpectUniqueSample(
+      base::StrCat({"Sync.DataTypeMetadataConsistency.",
+                    DataTypeToHistogramSuffix(GetDataType())}),
+      /*sample=*/1 /*kCacheGuidMismatch*/, /*expected_bucket_count=*/1);
   // Initial update.
   worker()->UpdateFromServer();
   EXPECT_TRUE(type_processor()->IsTrackingMetadata());
@@ -2715,6 +2764,10 @@ TEST_F(ClientTagBasedDataTypeProcessorTest,
   EXPECT_NE(nullptr, worker());
   // Upon a mismatch, metadata should have been cleared.
   EXPECT_EQ(0U, db()->metadata_count());
+  histogram_tester()->ExpectUniqueSample(
+      base::StrCat({"Sync.DataTypeMetadataConsistency.",
+                    DataTypeToHistogramSuffix(GetDataType())}),
+      /*sample=*/2 /*kDataTypeIdMismatch*/, /*expected_bucket_count=*/1);
 }
 
 TEST_F(ClientTagBasedDataTypeProcessorTest,
@@ -3234,11 +3287,6 @@ TEST_F(ClientTagBasedDataTypeProcessorTest, ShouldResetForMissingStorageKey) {
   EXPECT_EQ(0U, db()->metadata_count());
   EXPECT_EQ(0U, ProcessorEntityCount());
   EXPECT_FALSE(type_processor()->IsTrackingMetadata());
-
-  histogram_tester.ExpectUniqueSample(
-      "Sync.ClearMetadataDueToEmptyStorageKey",
-      /*sample=*/DataTypeHistogramValue(GetDataType()),
-      /*expected_bucket_count=*/1);
 
   // Initial update.
   worker()->UpdateFromServer();

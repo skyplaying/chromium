@@ -13,7 +13,6 @@ import android.os.Bundle;
 import android.support.v4.media.session.MediaSessionCompat;
 import android.widget.RemoteViews;
 
-import androidx.annotation.NonNull;
 import androidx.core.app.NotificationCompat;
 
 import org.chromium.build.annotations.NullMarked;
@@ -23,8 +22,11 @@ import org.chromium.build.annotations.Nullable;
 @NullMarked
 public interface NotificationWrapperBuilder {
     // Android strips images > ~5mb (crbug.com/390677997), so resize bitmaps to be smaller than
-    // this to reduce memory and to avoid them from getting stripped.
+    // this to reduce memory and to avoid them from getting stripped. Android also has a maximum
+    // display size of 416 x 284 dp, so we will also resize to these dimensions.
     int BIG_PICTURE_BITMAP_MAX_SIZE_IN_KB = 4500;
+    int BIG_PICTURE_MAX_WIDTH_DP = 416;
+    int BIG_PICTURE_MAX_HEIGHT_DP = 284;
 
     NotificationWrapperBuilder setAutoCancel(boolean autoCancel);
 
@@ -62,16 +64,11 @@ public interface NotificationWrapperBuilder {
     @Deprecated
     NotificationWrapperBuilder addAction(int icon, CharSequence title, PendingIntent intent);
 
-    /** @param actionType is for UMA. In Chrome, this is {@link NotificationUmaTracker.ActionType}. */
+    /**
+     * @param actionType is for UMA. In Chrome, this is {@link NotificationUmaTracker.ActionType}.
+     */
     NotificationWrapperBuilder addAction(
             int icon, CharSequence title, PendingIntentProvider intent, int actionType);
-
-    @Deprecated
-    NotificationWrapperBuilder addAction(Notification.Action action);
-
-    /** @param actionType is for UMA. In Chrome, this is {@link NotificationUmaTracker.ActionType}. */
-    NotificationWrapperBuilder addAction(
-            Notification.Action action, int flags, int actionType, int requestCode);
 
     @Deprecated
     NotificationWrapperBuilder addAction(NotificationCompat.Action action);
@@ -117,7 +114,7 @@ public interface NotificationWrapperBuilder {
     NotificationWrapperBuilder setContent(RemoteViews views);
 
     NotificationWrapperBuilder setBigPictureStyle(
-            @NonNull Bitmap bigPicture, @Nullable CharSequence summaryText);
+            Bitmap bigPicture, @Nullable CharSequence summaryText);
 
     NotificationWrapperBuilder setBigTextStyle(@Nullable CharSequence bigText);
 

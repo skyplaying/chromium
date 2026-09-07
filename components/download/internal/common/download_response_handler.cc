@@ -123,6 +123,7 @@ void DownloadResponseHandler::OnReceiveResponse(
     std::optional<mojo_base::BigBuffer> cached_metadata) {
   create_info_ = CreateDownloadCreateInfo(*head);
   cert_status_ = head->cert_status;
+  fetched_via_service_worker_ = head->was_fetched_via_service_worker;
 
   // TODO(xingliu): Do not use http cache.
   if (head->headers) {
@@ -202,6 +203,7 @@ DownloadResponseHandler::CreateDownloadCreateInfo(
   create_info->credentials_mode = credentials_mode_;
   create_info->isolation_info = std::move(isolation_info_);
   create_info->require_safety_checks = require_safety_checks_;
+  create_info->fetched_via_service_worker = head.was_fetched_via_service_worker;
 
   HandleResponseHeaders(head.headers.get(), create_info.get());
   return create_info;
@@ -210,6 +212,16 @@ DownloadResponseHandler::CreateDownloadCreateInfo(
 void DownloadResponseHandler::OnReceiveRedirect(
     const net::RedirectInfo& redirect_info,
     network::mojom::URLResponseHeadPtr head) {
+  // Only responses to HTTP(S) requests can produce redirects. Loaders for
+  // local schemes such as blob: and data: never issue them, so treat a
+  // redirect while the current request URL is not HTTP(S) as invalid rather
+  // than appending the target URL to the download's URL chain.
+  if (url_chain_.empty() || !url_chain_.back().SchemeIsHTTPOrHTTPS()) {
+    abort_reason_ = DOWNLOAD_INTERRUPT_REASON_NETWORK_INVALID_REQUEST;
+    OnComplete(network::URLLoaderCompletionStatus(net::OK));
+    return;
+  }
+
   // Check if redirect URL is web safe.
   if (delegate_ && !delegate_->CanRequestURL(redirect_info.new_url)) {
     abort_reason_ = DOWNLOAD_INTERRUPT_REASON_NETWORK_INVALID_REQUEST;
@@ -276,7 +288,8 @@ void DownloadResponseHandler::OnComplete(
   completed_ = true;
   DownloadInterruptReason reason = HandleRequestCompletionStatus(
       static_cast<net::Error>(status.error_code), has_strong_validators_,
-      cert_status_, is_partial_request_, abort_reason_);
+      cert_status_, is_partial_request_, abort_reason_,
+      fetched_via_service_worker_);
 
   if (client_remote_) {
     client_remote_->OnStreamCompleted(

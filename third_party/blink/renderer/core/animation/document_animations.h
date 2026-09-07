@@ -42,13 +42,33 @@
 #include "third_party/blink/renderer/core/dom/trigger_scoped_name.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_set.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/heap/member.h"
+#include "third_party/blink/renderer/platform/heap/persistent.h"
 
 namespace blink {
 
 class AnimationTimeline;
 class Document;
 class PaintArtifactCompositor;
+
+class CORE_EXPORT SVGImageAnimationsToReset final
+    : public GarbageCollected<SVGImageAnimationsToReset> {
+ public:
+  void Trace(Visitor* visitor) const;
+
+  void Clear();
+  void Add(CSSAnimation&);
+  void Resume();
+
+  bool HasAnimationsForTesting() const {
+    return !animations_to_resume_.empty();
+  }
+  bool HasAnimationForTesting(const CSSAnimation&) const;
+
+ private:
+  HeapVector<Member<CSSAnimation>> animations_to_resume_;
+};
 
 class CORE_EXPORT DocumentAnimations final
     : public GarbageCollected<DocumentAnimations> {
@@ -67,6 +87,8 @@ class CORE_EXPORT DocumentAnimations final
   void GetAnimationsTargetingTreeScope(HeapVector<Member<Animation>>&,
                                        const TreeScope&);
 
+  void RetargetAnimationsForPseudoElement(PseudoElement* new_effect_target);
+
   // Updates existing animations as part of generating a new (document
   // lifecycle) frame. Note that this considers and updates state for
   // both composited and non-composited animations.
@@ -80,6 +102,8 @@ class CORE_EXPORT DocumentAnimations final
   void MarkAnimationsCompositorPending();
 
   HeapVector<Member<Animation>> getAnimations(const TreeScope&);
+  void PrepareAnimationsForSVGImageReset(
+      SVGImageAnimationsToReset& animations_to_reset);
 
   // Detach compositor timelines to prevent further ticking of any animations
   // associated with the timelines.  Detached timelines may be subsequently
@@ -100,6 +124,7 @@ class CORE_EXPORT DocumentAnimations final
                             Member<const StyleTriggerAttachment>>>;
   static void FindRelevantTriggerAttachments(
       CSSAnimation& animation,
+      TriggerScopedNameMap& global_trigger_map,
       TriggerAttachmentMap& relevant_attachments_out);
   static void UpdateTriggerAttachments(
       CSSAnimation& animation,
@@ -113,15 +138,12 @@ class CORE_EXPORT DocumentAnimations final
   // names declared in the trigger-instantiating property with the names
   // declared in the animation-trigger property.
   void UpdateAnimationTriggerAttachments();
-  // These two functions serve the same purpose as
-  // UpdateAnimationTriggerAttachments above but restricts the updates to
-  // animations with animation-trigger declarations, which is more efficient.
-  // They are only used behind a flag while the renderer hang in
-  // crbug.com/447174988 is investigated.
-  // TODO(crbug.com/447174988): Remove UpdateAnimationTriggerAttachments when
-  // the bug is resolved.
-  void ExecuteTriggerAttachmentUpdates();
-  void AddTriggeredAnimation(CSSAnimation* animation);
+  void AddCSSAnimationNeedingTriggerAttachment(CSSAnimation* animation);
+
+  const HeapHashSet<WeakMember<CSSAnimation>>&
+  CSSAnimationsNeedingTriggerAttachmentForTesting() const {
+    return css_animations_needing_trigger_attachment_;
+  }
 
   void UpdateCompositorAnimationTriggers(
       const PaintArtifactCompositor* paint_artifact_compositor);
@@ -147,7 +169,8 @@ class CORE_EXPORT DocumentAnimations final
   HeapHashSet<WeakMember<AnimationTrigger>> triggers_;
   // Animations which should be attached to triggers after style and layout
   // updates.
-  HeapHashSet<WeakMember<CSSAnimation>> triggered_animations_;
+  HeapHashSet<WeakMember<CSSAnimation>>
+      css_animations_needing_trigger_attachment_;
   // In the new timeline name scoping model, names have document-global
   // visibility by default. This is implementing by having CSSAnimations::
   // FindAncestor[Deferred]Timeline() look up names in this map

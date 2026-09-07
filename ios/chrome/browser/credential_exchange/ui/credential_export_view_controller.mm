@@ -237,7 +237,6 @@ NSString* const kCredentialSectionIdentifier = @"CredentialSection";
                   completion:completion];
 }
 
-// TODO(crbug.com/454566693): Add EGTest.
 // Updates the title and button states based on the selected items.
 - (void)updateUIForSelection {
   CHECK_GT(_affiliatedGroups.size(), 0U);
@@ -332,7 +331,7 @@ NSString* const kCredentialSectionIdentifier = @"CredentialSection";
 // Creates the menu button for the toolbar.
 - (UIBarButtonItem*)createExportMenuButton {
   UIImage* icon =
-      DefaultSymbolTemplateWithPointSize(kMenuSymbol, kSymbolActionPointSize);
+      SymbolTemplateWithPointSize(SymbolMenu, kSymbolActionPointSize);
 
   UIBarButtonItem* button =
       [[UIBarButtonItem alloc] initWithImage:icon
@@ -348,15 +347,15 @@ NSString* const kCredentialSectionIdentifier = @"CredentialSection";
 - (UIMenu*)createExportMenuEnabled:(BOOL)enabled {
   __weak __typeof(self) weakSelf = self;
 
-  UIAction* exportAction = [UIAction
-      actionWithTitle:l10n_util::GetNSString(
-                          IDS_IOS_EXPORT_PASSWORDS_DOWNLOAD_CSV)
-                image:DefaultSymbolWithPointSize(kArrowDownToLineSymbol,
-                                                 kSymbolActionPointSize)
-           identifier:nil
-              handler:^(UIAction* action) {
-                [weakSelf didTapExportCSV];
-              }];
+  UIAction* exportAction =
+      [UIAction actionWithTitle:l10n_util::GetNSString(
+                                    IDS_IOS_EXPORT_PASSWORDS_DOWNLOAD_CSV)
+                          image:SymbolWithPointSize(SymbolArrowDownToLine,
+                                                    kSymbolActionPointSize)
+                     identifier:nil
+                        handler:^(UIAction* action) {
+                          [weakSelf didTapExportCSV];
+                        }];
 
   if (!enabled) {
     exportAction.attributes = UIMenuElementAttributesDisabled;

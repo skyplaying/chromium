@@ -9,16 +9,17 @@
 #include "base/time/time.h"
 #include "components/payments/content/browser_binding/browser_bound_key.h"
 #include "components/payments/content/browser_binding/browser_bound_key_desktop.h"
-#include "components/unexportable_keys/mock_unexportable_key.h"
-#include "components/unexportable_keys/mock_unexportable_key_provider.h"
 #include "content/public/test/browser_task_environment.h"
-#include "crypto/signature_verifier.h"
+#include "crypto/mock_unexportable_key.h"
+#include "crypto/mock_unexportable_key_provider.h"
+#include "crypto/sign.h"
 #include "device/fido/public/public_key_credential_params.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
-using crypto::SignatureVerifier;
+using crypto::MockUnexportableKeyProvider;
+using crypto::MockUnexportableSigningKey;
 using device::CoseAlgorithmIdentifier;
 using device::PublicKeyCredentialParams;
 using testing::_;
@@ -27,8 +28,6 @@ using testing::ElementsAre;
 using testing::IsNull;
 using testing::NotNull;
 using testing::Return;
-using unexportable_keys::MockUnexportableKey;
-using unexportable_keys::MockUnexportableKeyProvider;
 }  // namespace
 
 namespace payments {
@@ -70,12 +69,11 @@ class BrowserBoundKeyStoreDesktopTest : public ::testing::Test {
 
 TEST_F(BrowserBoundKeyStoreDesktopTest,
        GetOrCreateBrowserBoundKeyForCredentialId_Get) {
-  std::unique_ptr<MockUnexportableKey> key =
-      std::make_unique<MockUnexportableKey>();
+  std::unique_ptr<MockUnexportableSigningKey> key =
+      std::make_unique<MockUnexportableSigningKey>();
   EXPECT_CALL(*key, Algorithm())
-      .WillRepeatedly(
-          Return(SignatureVerifier::SignatureAlgorithm::ECDSA_SHA256));
-  MockUnexportableKey* key_ptr = key.get();
+      .WillRepeatedly(Return(crypto::sign::ECDSA_SHA256));
+  MockUnexportableSigningKey* key_ptr = key.get();
 
   EXPECT_CALL(*key_provider(), FromWrappedSigningKeySlowly(
                                    base::span<const uint8_t>(kCredentialId)))
@@ -92,23 +90,20 @@ TEST_F(BrowserBoundKeyStoreDesktopTest,
 
 TEST_F(BrowserBoundKeyStoreDesktopTest,
        GetOrCreateBrowserBoundKeyForCredentialId_Create) {
-  std::unique_ptr<MockUnexportableKey> key =
-      std::make_unique<MockUnexportableKey>();
+  std::unique_ptr<MockUnexportableSigningKey> key =
+      std::make_unique<MockUnexportableSigningKey>();
   EXPECT_CALL(*key, Algorithm())
-      .WillRepeatedly(
-          Return(SignatureVerifier::SignatureAlgorithm::ECDSA_SHA256));
-  const std::vector<crypto::SignatureVerifier::SignatureAlgorithm> algorithms =
-      {SignatureVerifier::SignatureAlgorithm::ECDSA_SHA256,
-       SignatureVerifier::SignatureAlgorithm::RSA_PKCS1_SHA256};
-  MockUnexportableKey* key_ptr = key.get();
+      .WillRepeatedly(Return(crypto::sign::ECDSA_SHA256));
+  const std::vector<crypto::sign::SignatureKind> algorithms = {
+      crypto::sign::ECDSA_SHA256, crypto::sign::RSA_PKCS1_SHA256};
+  MockUnexportableSigningKey* key_ptr = key.get();
 
   EXPECT_CALL(*key_provider(), FromWrappedSigningKeySlowly(
                                    base::span<const uint8_t>(kCredentialId)))
       .WillOnce(Return(nullptr));
-  EXPECT_CALL(
-      *key_provider(),
-      GenerateSigningKeySlowly(
-          base::span<const SignatureVerifier::SignatureAlgorithm>(algorithms)))
+  EXPECT_CALL(*key_provider(),
+              GenerateSigningKeySlowly(
+                  base::span<const crypto::sign::SignatureKind>(algorithms)))
       .WillOnce(Return(std::move(key)));
 
   std::unique_ptr<BrowserBoundKey> browser_bound_key =
@@ -148,8 +143,7 @@ TEST_F(BrowserBoundKeyStoreDesktopTest, GetDeviceSupportsHardwareKeys) {
   EXPECT_TRUE(key_store()->GetDeviceSupportsHardwareKeys());
 #elif BUILDFLAG(IS_WIN)
   EXPECT_CALL(*key_provider(), SelectAlgorithm(_))
-      .WillRepeatedly(
-          Return(SignatureVerifier::SignatureAlgorithm::ECDSA_SHA256));
+      .WillRepeatedly(Return(crypto::sign::ECDSA_SHA256));
   EXPECT_TRUE(key_store()->GetDeviceSupportsHardwareKeys());
 #else  // !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_WIN)
   EXPECT_FALSE(key_store()->GetDeviceSupportsHardwareKeys());
@@ -170,6 +164,16 @@ TEST_F(BrowserBoundKeyStoreDesktopTest,
       .WillRepeatedly(Return(std::nullopt));
   EXPECT_FALSE(key_store()->GetDeviceSupportsHardwareKeys());
 }
+
+TEST_F(BrowserBoundKeyStoreDesktopTest,
+       GetDeviceSupportsHardwareKeys_MultipleCallsCachesData) {
+  EXPECT_CALL(*key_provider(), SelectAlgorithm(_))
+      .Times(1)
+      .WillOnce(Return(crypto::sign::ECDSA_SHA256));
+
+  EXPECT_TRUE(key_store()->GetDeviceSupportsHardwareKeys());
+  EXPECT_TRUE(key_store()->GetDeviceSupportsHardwareKeys());
+}
 #endif  // BUILDFLAG(IS_WIN)
 
 TEST_F(BrowserBoundKeyStoreDesktopTest,
@@ -177,12 +181,11 @@ TEST_F(BrowserBoundKeyStoreDesktopTest,
   base::HistogramTester histogram_tester;
   base::TimeDelta get_key_latency = base::Microseconds(10);
 
-  std::unique_ptr<MockUnexportableKey> key =
-      std::make_unique<MockUnexportableKey>();
+  std::unique_ptr<MockUnexportableSigningKey> key =
+      std::make_unique<MockUnexportableSigningKey>();
 
   EXPECT_CALL(*key, Algorithm())
-      .WillRepeatedly(
-          Return(SignatureVerifier::SignatureAlgorithm::ECDSA_SHA256));
+      .WillRepeatedly(Return(crypto::sign::ECDSA_SHA256));
   EXPECT_CALL(*key_provider(), FromWrappedSigningKeySlowly(
                                    base::span<const uint8_t>(kCredentialId)))
       .WillOnce(DoAll(
@@ -215,15 +218,13 @@ TEST_F(BrowserBoundKeyStoreDesktopTest,
   base::TimeDelta get_key_latency = base::Microseconds(10);
   base::TimeDelta create_key_latency = base::Microseconds(20);
 
-  const std::vector<crypto::SignatureVerifier::SignatureAlgorithm> algorithms =
-      {SignatureVerifier::SignatureAlgorithm::ECDSA_SHA256,
-       SignatureVerifier::SignatureAlgorithm::RSA_PKCS1_SHA256};
-  std::unique_ptr<MockUnexportableKey> key =
-      std::make_unique<MockUnexportableKey>();
+  const std::vector<crypto::sign::SignatureKind> algorithms = {
+      crypto::sign::ECDSA_SHA256, crypto::sign::RSA_PKCS1_SHA256};
+  std::unique_ptr<MockUnexportableSigningKey> key =
+      std::make_unique<MockUnexportableSigningKey>();
 
   EXPECT_CALL(*key, Algorithm())
-      .WillRepeatedly(
-          Return(SignatureVerifier::SignatureAlgorithm::ECDSA_SHA256));
+      .WillRepeatedly(Return(crypto::sign::ECDSA_SHA256));
   EXPECT_CALL(*key_provider(), FromWrappedSigningKeySlowly(
                                    base::span<const uint8_t>(kCredentialId)))
       .WillOnce(DoAll(
@@ -231,10 +232,9 @@ TEST_F(BrowserBoundKeyStoreDesktopTest,
             task_environment_.FastForwardBy(get_key_latency);
           },
           Return(nullptr)));
-  EXPECT_CALL(
-      *key_provider(),
-      GenerateSigningKeySlowly(
-          base::span<const SignatureVerifier::SignatureAlgorithm>(algorithms)))
+  EXPECT_CALL(*key_provider(),
+              GenerateSigningKeySlowly(
+                  base::span<const crypto::sign::SignatureKind>(algorithms)))
       .WillOnce(DoAll(
           [this, &create_key_latency] {
             task_environment_.FastForwardBy(create_key_latency);
@@ -258,6 +258,61 @@ TEST_F(BrowserBoundKeyStoreDesktopTest,
       "PaymentRequest.SecurePaymentConfirmation.BrowserBoundKeyStore."
       "GetKeyLatency.KeyFound",
       /*expected_count=*/0);
+}
+
+TEST_F(BrowserBoundKeyStoreDesktopTest, Metrics_GetDeviceSupportsHardwareKeys) {
+  base::HistogramTester histogram_tester;
+
+#if BUILDFLAG(IS_MAC)
+  EXPECT_TRUE(key_store()->GetDeviceSupportsHardwareKeys());
+  histogram_tester.ExpectUniqueTimeSample(
+      "PaymentRequest.SecurePaymentConfirmation.BrowserBoundKeyStore."
+      "DeviceSupportsHardwareKeysLatency.Supported",
+      base::Microseconds(0),
+      /*expected_bucket_count=*/1);
+#elif BUILDFLAG(IS_WIN)
+  base::TimeDelta latency = base::Microseconds(24);
+  EXPECT_CALL(*key_provider(), SelectAlgorithm(_))
+      .WillOnce(
+          DoAll([this, &latency] { task_environment_.FastForwardBy(latency); },
+                Return(crypto::sign::ECDSA_SHA256)));
+  EXPECT_TRUE(key_store()->GetDeviceSupportsHardwareKeys());
+  histogram_tester.ExpectUniqueTimeSample(
+      "PaymentRequest.SecurePaymentConfirmation.BrowserBoundKeyStore."
+      "DeviceSupportsHardwareKeysLatency.Supported",
+      latency,
+      /*expected_bucket_count=*/1);
+#else  // !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_WIN)
+  EXPECT_FALSE(key_store()->GetDeviceSupportsHardwareKeys());
+  histogram_tester.ExpectUniqueTimeSample(
+      "PaymentRequest.SecurePaymentConfirmation.BrowserBoundKeyStore."
+      "DeviceSupportsHardwareKeysLatency.NotSupported",
+      base::Microseconds(0),
+      /*expected_bucket_count=*/1);
+#endif
+}
+
+TEST_F(BrowserBoundKeyStoreDesktopTest,
+       Metrics_GetDeviceSupportsHardwareKeys_MultipleCalls) {
+  base::HistogramTester histogram_tester;
+
+  ON_CALL(*key_provider(), SelectAlgorithm(_))
+      .WillByDefault(Return(crypto::sign::ECDSA_SHA256));
+
+  // There shouldn't be any recorded metrics before the first call.
+  ASSERT_EQ(histogram_tester.GetTotalCountForPrefix(
+                "PaymentRequest.SecurePaymentConfirmation.BrowserBoundKeyStore."
+                "DeviceSupportsHardwareKeysLatency"),
+            0);
+
+  // The first call to GetDeviceSupportsHardwareKeys() should be recorded.
+  key_store()->GetDeviceSupportsHardwareKeys();
+  EXPECT_EQ(histogram_tester.GetTotalCountForPrefix("PaymentRequest"), 1);
+
+  // Subsequent calls should not be recorded, as the result should be
+  // cached.
+  key_store()->GetDeviceSupportsHardwareKeys();
+  EXPECT_EQ(histogram_tester.GetTotalCountForPrefix("PaymentRequest"), 1);
 }
 
 }  // namespace payments

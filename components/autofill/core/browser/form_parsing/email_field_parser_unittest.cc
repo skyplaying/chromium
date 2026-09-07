@@ -6,7 +6,7 @@
 
 #include "base/test/scoped_feature_list.h"
 #include "components/autofill/core/browser/field_types.h"
-#include "components/autofill/core/browser/form_parsing/parsing_test_utils.h"
+#include "components/autofill/core/browser/form_parsing/parsing_test_util.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -15,13 +15,7 @@ namespace autofill {
 class EmailFieldParserTest : public FormFieldParserTestBase,
                              public ::testing::Test {
  public:
-  EmailFieldParserTest() {
-    feature_list_.InitWithFeatures(
-        /*enabled_features=*/{features::kAutofillEnableLoyaltyCardsFilling,
-                              features::
-                                  kAutofillEnableEmailOrLoyaltyCardsFilling},
-        /*disabled_features=*/{});
-  }
+  EmailFieldParserTest() = default;
   EmailFieldParserTest(const EmailFieldParserTest&) = delete;
   EmailFieldParserTest& operator=(const EmailFieldParserTest&) = delete;
 

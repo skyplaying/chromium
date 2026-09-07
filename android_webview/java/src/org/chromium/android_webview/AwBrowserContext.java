@@ -18,11 +18,9 @@ import org.jni_zero.JNINamespace;
 import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
 
-import org.chromium.android_webview.common.AwFeatureMap;
 import org.chromium.android_webview.common.Lifetime;
 import org.chromium.android_webview.common.MediaIntegrityApiStatus;
 import org.chromium.android_webview.common.MediaIntegrityProvider;
-import org.chromium.base.BaseFeatures;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.StrictModeContext;
 import org.chromium.base.ThreadUtils;
@@ -97,6 +95,7 @@ public class AwBrowserContext implements BrowserContextHandle {
     @NonNull private final String mName;
     @NonNull private final String mRelativePath;
     @NonNull private final AwCookieManager mCookieManager;
+    @NonNull private final AwHttpCacheManager mHttpCacheManager;
     private final boolean mIsDefault;
     @NonNull private final SharedPreferences mSharedPreferences;
 
@@ -154,6 +153,7 @@ public class AwBrowserContext implements BrowserContextHandle {
                 AwBrowserContextJni.get().getDefaultContextName(),
                 AwBrowserContextJni.get().getDefaultContextRelativePath(),
                 AwCookieManager.getDefaultCookieManager(),
+                new AwHttpCacheManager(0),
                 new AwPrefetchManager(0),
                 new AwPreconnector(0),
                 true);
@@ -164,6 +164,7 @@ public class AwBrowserContext implements BrowserContextHandle {
             @NonNull String name,
             @NonNull String relativePath,
             @NonNull AwCookieManager cookieManager,
+            @NonNull AwHttpCacheManager httpCacheManager,
             @NonNull AwPrefetchManager prefetchManager,
             @NonNull AwPreconnector preconnector,
             boolean isDefault) {
@@ -171,6 +172,7 @@ public class AwBrowserContext implements BrowserContextHandle {
         mName = name;
         mRelativePath = relativePath;
         mCookieManager = cookieManager;
+        mHttpCacheManager = httpCacheManager;
         mPrefetchManager = prefetchManager;
         mPreconnector = preconnector;
         mIsDefault = isDefault;
@@ -178,11 +180,6 @@ public class AwBrowserContext implements BrowserContextHandle {
         try (StrictModeContext ignored = StrictModeContext.allowDiskWrites()) {
             // Prefs dir will be created if it doesn't exist, so must allow writes.
             mSharedPreferences = createSharedPrefs(relativePath);
-
-            if (isDefaultAwBrowserContext()) {
-                // Migration requires disk writes.
-                migrateGeolocationPreferences();
-            }
         }
 
         // Register MemoryPressureMonitor callbacks and make sure it polls only if there is at
@@ -193,16 +190,16 @@ public class AwBrowserContext implements BrowserContextHandle {
                         new AwContentsLifecycleNotifier.Observer() {
                             @Override
                             public void onFirstWebViewCreated() {
-                                MemoryPressureMonitor.INSTANCE.enablePolling(
-                                        AwFeatureMap.isEnabled(
-                                                BaseFeatures
-                                                        .POST_GET_MY_MEMORY_STATE_TO_BACKGROUND));
+                                MemoryPressureMonitor.INSTANCE.enablePolling();
                             }
 
                             @Override
                             public void onLastWebViewDestroyed() {
                                 MemoryPressureMonitor.INSTANCE.disablePolling();
                             }
+
+                            @Override
+                            public void onAppStateChanged(@AppState int appState) {}
                         });
     }
 
@@ -301,19 +298,13 @@ public class AwBrowserContext implements BrowserContextHandle {
     }
 
     @NonNull
-    public AwPreconnector getPreconnector() {
-        return mPreconnector;
+    public AwHttpCacheManager getHttpCacheManager() {
+        return mHttpCacheManager;
     }
 
-    private void migrateGeolocationPreferences() {
-        // Prefs dir will be created if it doesn't exist, so must allow writes
-        // for this and so that the actual prefs can be written to the new
-        // location if needed.
-        final String oldGlobalPrefsName = "WebViewChromiumPrefs";
-        SharedPreferences oldGlobalPrefs =
-                ContextUtils.getApplicationContext()
-                        .getSharedPreferences(oldGlobalPrefsName, Context.MODE_PRIVATE);
-        AwGeolocationPermissions.migrateGeolocationPreferences(oldGlobalPrefs, mSharedPreferences);
+    @NonNull
+    public AwPreconnector getPreconnector() {
+        return mPreconnector;
     }
 
     public void setOriginMatchedHeader(
@@ -428,9 +419,19 @@ public class AwBrowserContext implements BrowserContextHandle {
     }
 
     @UiThread
-    public void setMaxPrerenders(@Nullable Integer maxPrerenders) {
+    public void setMaxPrerenders(int maxPrerenders) {
         AwBrowserContextJni.get()
                 .setAllowedPrerenderingCount(mNativeAwBrowserContext, maxPrerenders);
+    }
+
+    @UiThread
+    public void clearMaxPrerenders() {
+        AwBrowserContextJni.get().clearAllowedPrerenderingCount(mNativeAwBrowserContext);
+    }
+
+    @UiThread
+    public int getAllowedPrerenderingCount() {
+        return AwBrowserContextJni.get().allowedPrerenderingCount(mNativeAwBrowserContext);
     }
 
     @UiThread
@@ -449,6 +450,7 @@ public class AwBrowserContext implements BrowserContextHandle {
             @JniType("std::string") String name,
             @JniType("std::string") String relativePath,
             AwCookieManager cookieManager,
+            AwHttpCacheManager httpCacheManager,
             AwPrefetchManager prefetchManager,
             AwPreconnector preconnector,
             boolean isDefault) {
@@ -457,6 +459,7 @@ public class AwBrowserContext implements BrowserContextHandle {
                 name,
                 relativePath,
                 cookieManager,
+                httpCacheManager,
                 prefetchManager,
                 preconnector,
                 isDefault);
@@ -511,6 +514,22 @@ public class AwBrowserContext implements BrowserContextHandle {
         AwBrowserContextJni.get().addQuicHints(mNativeAwBrowserContext, gurls);
     }
 
+    public void setCrossOriginIsolatedAllowList(@NonNull Set<String> originPatterns) {
+        List<String> mismatched =
+                org.chromium.android_webview.AwBrowserContextJni.get()
+                        .setCrossOriginIsolatedAllowList(mNativeAwBrowserContext, originPatterns);
+        if (!mismatched.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "Invalid origin(s): " + String.join(" ", mismatched));
+        }
+    }
+
+    public @NonNull Set<String> getCrossOriginIsolatedAllowList() {
+        return Set.copyOf(
+                org.chromium.android_webview.AwBrowserContextJni.get()
+                        .getCrossOriginIsolatedAllowList(mNativeAwBrowserContext));
+    }
+
     @NativeMethods
     interface Natives {
         AwBrowserContext getDefaultJava();
@@ -528,9 +547,11 @@ public class AwBrowserContext implements BrowserContextHandle {
         void setServiceWorkerIoThreadClient(
                 long nativeAwBrowserContext, AwContentsIoThreadClient ioThreadClient);
 
-        void setAllowedPrerenderingCount(
-                long nativeAwBrowserContext,
-                @JniType("std::optional<int>") @Nullable Integer maxPrerenders);
+        void setAllowedPrerenderingCount(long nativeAwBrowserContext, int maxPrerenders);
+
+        void clearAllowedPrerenderingCount(long nativeAwBrowserContext);
+
+        int allowedPrerenderingCount(long nativeAwBrowserContext);
 
         @JniType("std::vector<std::string>")
         List<String> setOriginMatchedHeader(
@@ -570,5 +591,13 @@ public class AwBrowserContext implements BrowserContextHandle {
 
         void addQuicHints(
                 long nativeAwBrowserContext, @JniType("std::vector<GURL>") GURL[] origins);
+
+        @JniType("std::vector<std::string>")
+        List<String> setCrossOriginIsolatedAllowList(
+                long nativeAwBrowserContext,
+                @JniType("std::vector<std::string>") @NonNull Set<String> originPatterns);
+
+        @JniType("std::vector<std::string>")
+        List<String> getCrossOriginIsolatedAllowList(long nativeAwBrowserContext);
     }
 }

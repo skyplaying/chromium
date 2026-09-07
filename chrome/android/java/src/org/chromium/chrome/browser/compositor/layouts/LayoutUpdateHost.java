@@ -56,10 +56,10 @@ public interface LayoutUpdateHost {
      *     org.chromium.chrome.browser.compositor.layouts.components.LayoutTab} to be initialized
      *     from a {@link Tab}.
      */
-    void initLayoutTabFromHost(final int tabId);
+    void initLayoutTabFromHost(int tabId);
 
     /**
-     * Creates or recycles a {@Link LayoutTab}.
+     * Creates or recycles a {@link LayoutTab}.
      *
      * @param id The id of the reference tab in the {@link
      *     org.chromium.chrome.browser.tabmodel.TabModel}.

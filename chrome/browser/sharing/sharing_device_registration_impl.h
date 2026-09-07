@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_SHARING_SHARING_DEVICE_REGISTRATION_IMPL_H_
 
 #include <optional>
+#include <set>
 #include <string>
 
 #include "base/functional/callback.h"
@@ -14,7 +15,6 @@
 #include "base/memory/weak_ptr.h"
 #include "components/gcm_driver/instance_id/instance_id.h"
 #include "components/sharing_message/sharing_device_registration.h"
-#include "components/sync/protocol/device_info_specifics.pb.h"
 #include "components/sync_device_info/device_info.h"
 
 class PrefService;
@@ -41,7 +41,6 @@ class SharingDeviceRegistrationImpl : public SharingDeviceRegistration {
       std::optional<syncer::DeviceInfo::SharingTargetInfo>)>;
 
   SharingDeviceRegistrationImpl(
-      PrefService* pref_service,
       SharingSyncPreference* prefs,
       instance_id::InstanceIDDriver* instance_id_driver,
       syncer::SyncService* sync_service);
@@ -59,12 +58,6 @@ class SharingDeviceRegistrationImpl : public SharingDeviceRegistration {
   // Un-registers device with sharing sync preferences.
   void UnregisterDevice(RegistrationCallback callback) override;
 
-  // Returns if device can handle receiving phone numbers for calling.
-  bool IsClickToCallSupported() const override;
-
-  // Returns if device can handle receiving of shared clipboard contents.
-  bool IsSharedClipboardSupported() const override;
-
   // Returns if device can handle receiving of sms fetcher requests.
   bool IsSmsFetcherSupported() const override;
 
@@ -79,10 +72,15 @@ class SharingDeviceRegistrationImpl : public SharingDeviceRegistration {
   // notification.
   bool IsOptimizationGuidePushNotificationSupported() const override;
 
+  // Returns if device can handle receiving of glic experimental triggering.
+  bool IsGlicExperimentalTriggeringSupported() const override;
+
+  // Returns if device can handle receiving of browser actuator.
+  bool IsBrowserActuatorSupported() const override;
+
   // For testing
   void SetEnabledFeaturesForTesting(
-      std::set<sync_pb::SharingSpecificFields_EnabledFeatures> enabled_features)
-      override;
+      std::set<syncer::DeviceInfo::SharingFeature> enabled_features) override;
 
  private:
   FRIEND_TEST_ALL_PREFIXES(SharingDeviceRegistrationImplTest,
@@ -113,14 +111,12 @@ class SharingDeviceRegistrationImpl : public SharingDeviceRegistration {
                          instance_id::InstanceID::Result result);
 
   // Computes and returns a set of all enabled features on the device.
-  std::set<sync_pb::SharingSpecificFields_EnabledFeatures> GetEnabledFeatures()
-      const;
+  std::set<syncer::DeviceInfo::SharingFeature> GetEnabledFeatures() const;
 
-  raw_ptr<PrefService> pref_service_;
   raw_ptr<SharingSyncPreference> sharing_sync_preference_;
   raw_ptr<instance_id::InstanceIDDriver> instance_id_driver_;
   raw_ptr<syncer::SyncService> sync_service_;
-  std::optional<std::set<sync_pb::SharingSpecificFields_EnabledFeatures>>
+  std::optional<std::set<syncer::DeviceInfo::SharingFeature>>
       enabled_features_testing_value_;
 
   base::WeakPtrFactory<SharingDeviceRegistrationImpl> weak_ptr_factory_{this};

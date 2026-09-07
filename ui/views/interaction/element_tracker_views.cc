@@ -45,6 +45,16 @@ gfx::NativeView TrackedElementViews::GetNativeView() const {
   return view()->GetWidget()->GetNativeView();
 }
 
+std::string TrackedElementViews::GetSecondaryIdentifier() const {
+  // Changing the secondary identifier destroys and recreates the element, so
+  // it's safe to always just read from the View property.
+  auto* const secondary_id =
+      view()->GetProperty(views::kElementSecondaryIdentifierKey);
+  return secondary_id && !secondary_id->empty()
+             ? *secondary_id
+             : TrackedElement::GetSecondaryIdentifier();
+}
+
 std::string TrackedElementViews::ToString() const {
   auto result = TrackedElement::ToString();
   result.append(" with view ");
@@ -52,7 +62,7 @@ std::string TrackedElementViews::ToString() const {
   return result;
 }
 
-DEFINE_FRAMEWORK_SPECIFIC_METADATA(TrackedElementViews)
+DEFINE_SAFE_CAST_TARGET(TrackedElementViews)
 
 // Tracks views associated with a specific ui::ElementIdentifier, whether or not
 // they are visible or attached to a widget.
@@ -134,20 +144,24 @@ class ElementTrackerViews::ElementDataViews : public ViewObserver {
     return nullptr;
   }
 
-  ViewList FindAllViewsInContext(ui::ElementContext context) {
+  ViewList FindAllViewsInContext(ui::ElementContext context,
+                                 bool require_visible) {
     ViewList result;
     for (const ViewData& data : view_data_) {
-      if (data.context == context) {
+      if (data.context == context && (!require_visible || data.visible())) {
         result.push_back(data.view);
       }
     }
     return result;
   }
 
-  ViewList GetAllViews() {
+  ViewList GetAllViews(bool require_visible) {
     ViewList result;
-    std::ranges::transform(view_data_lookup_, std::back_inserter(result),
-                           &ViewDataMap::value_type::first);
+    for (const ViewData& data : view_data_) {
+      if (!require_visible || data.visible()) {
+        result.push_back(data.view);
+      }
+    }
     return result;
   }
 
@@ -201,6 +215,16 @@ class ElementTrackerViews::ElementDataViews : public ViewObserver {
 
   void OnViewIsDeleting(View* observed_view) override {
     RemoveView(observed_view);
+  }
+
+  void OnViewHierarchyChanged(
+      View* observed_view,
+      const ViewHierarchyChangedDetails& details) override {
+    // Only pay attention to the add portion of a move, since that has the
+    // new state.
+    if (details.is_add && details.move_view) {
+      UpdateVisible(observed_view);
+    }
   }
 
   // Returns whether the specified view is visible to the user. Takes the view
@@ -337,21 +361,23 @@ View* ElementTrackerViews::GetFirstMatchingView(ui::ElementIdentifier id,
 
 ElementTrackerViews::ViewList ElementTrackerViews::GetAllMatchingViews(
     ui::ElementIdentifier id,
-    ui::ElementContext context) {
+    ui::ElementContext context,
+    bool require_visible) {
   const auto it = element_data_.find(id);
   if (it == element_data_.end()) {
     return ViewList();
   }
-  return it->second.FindAllViewsInContext(context);
+  return it->second.FindAllViewsInContext(context, require_visible);
 }
 
 ElementTrackerViews::ViewList
-ElementTrackerViews::GetAllMatchingViewsInAnyContext(ui::ElementIdentifier id) {
+ElementTrackerViews::GetAllMatchingViewsInAnyContext(ui::ElementIdentifier id,
+                                                     bool require_visible) {
   const auto it = element_data_.find(id);
   if (it == element_data_.end()) {
     return ViewList();
   }
-  return it->second.GetAllViews();
+  return it->second.GetAllViews(require_visible);
 }
 
 Widget* ElementTrackerViews::GetWidgetForContext(ui::ElementContext context) {

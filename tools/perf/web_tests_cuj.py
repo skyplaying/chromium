@@ -12,8 +12,9 @@ import sys
 CHROMIUM_SRC_DIR = pathlib.Path(__file__).absolute().parents[2]
 THIRD_PARTY_DIR = CHROMIUM_SRC_DIR / 'third_party'
 CROSSBENCH_DIR = THIRD_PARTY_DIR / 'crossbench'
-CUJ_RUNNER = (THIRD_PARTY_DIR /
-              'crossbench-web-tests/cuj/crossbench/runner/run.py')
+CUJ_RUNNER = (
+  THIRD_PARTY_DIR / 'crossbench-web-tests/cuj/crossbench/runner/run.py'
+)
 
 
 def main():
@@ -21,8 +22,19 @@ def main():
   env = os.environ.copy()
   env['PYTHONPATH'] = CROSSBENCH_DIR
 
-  # TODO(b:435031130): For initial testing, only run a single benchmark.
-  command_line = [CUJ_RUNNER, '--platform=cros', '--tests=speeometer3.1']
+  # TODO(b:435031130): For initial testing, only run the default
+  # variant of speedometer 3.1.
+  command_line = [
+    CUJ_RUNNER,
+    '--platform=adb',
+    '--tests=speedometer_3.1',
+    '--variants=$',
+  ]
+
+  # Pipe any input arguments passed to this script to the command_line list.
+  if len(sys.argv) > 1:
+    command_line.extend(sys.argv[1:])
+
   proc = subprocess.run(command_line, check=False, env=env)
   status = proc.returncode
 

@@ -18,13 +18,15 @@
 #include "chrome/browser/signin/dice_web_signin_interceptor.h"
 #include "chrome/browser/signin/dice_web_signin_interceptor_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/account_id/account_id.h"
 #include "components/password_manager/core/browser/password_form.h"
+#include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/test_password_store.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/identity_manager/accounts_mutator.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
@@ -72,8 +74,8 @@ void PasswordManagerSigninInterceptTestHelper::StoreGaiaCredentials(
   password_manager::PasswordForm signin_form;
   signin_form.signon_realm = GaiaUrls::GetInstance()->gaia_url().spec();
   signin_form.username_value = kGaiaUsername16;
-  signin_form.password_value = u"pw";
-  password_store->AddLogin(signin_form);
+  signin_form.password_value = password_manager::PasswordString(u"pw");
+  password_store->AddLogin(password_manager::FromPasswordForm(signin_form));
 }
 
 void PasswordManagerSigninInterceptTestHelper::NavigateToGaiaSigninPage(
@@ -84,8 +86,9 @@ void PasswordManagerSigninInterceptTestHelper::NavigateToGaiaSigninPage(
   DCHECK(gaia::HasGaiaSchemeHostPort(https_url));
 
   PasswordsNavigationObserver navigation_observer(contents);
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(chrome::FindBrowserWithTab(contents),
-                                           https_url));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(contents),
+      https_url));
   ASSERT_TRUE(navigation_observer.Wait());
 }
 

@@ -28,6 +28,7 @@
 
 #include <optional>
 
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
@@ -60,13 +61,18 @@ class CORE_EXPORT TypeAhead {
   };
   using MatchModeFlags = unsigned;
 
+  // Returns true if the provided event has the correct type, modifier keys, and
+  // character to be used for typeahead.
+  static bool ShouldHandleKeyboardEvent(const KeyboardEvent&);
+
   // Returns the index for the matching option.
   int HandleEvent(const KeyboardEvent&, UChar charCode, MatchModeFlags);
   bool HasActiveSession(const KeyboardEvent&);
   void ResetSession();
 
  private:
-  TypeAheadDataSource* data_source_;
+  raw_ptr<TypeAheadDataSource, UnprotectedInRelease | DanglingUntriaged>
+      data_source_;
   // platform timestamp of last keyboard event in seconds
   std::optional<base::TimeTicks> last_type_time_;
   UChar repeating_char_;

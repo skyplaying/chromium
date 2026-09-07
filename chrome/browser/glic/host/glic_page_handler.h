@@ -11,14 +11,15 @@
 #include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "chrome/browser/glic/host/glic.mojom.h"
+#include "chrome/browser/glic/host/glic_webui.mojom.h"
 #include "chrome/browser/glic/host/host.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 
 namespace content {
 class BrowserContext;
-class RenderFrameHost;
 class WebContents;
 }  // namespace content
 namespace gfx {
@@ -27,11 +28,11 @@ class Size;
 
 namespace glic {
 class GlicKeyedService;
-class GlicWebClientHandler;
 
 // Handles the Mojo requests coming from the Glic WebUI.
 class GlicPageHandler : public glic::mojom::PageHandler,
-                        public PanelStateObserver {
+                        public PanelStateObserver,
+                        public Host::Observer {
  public:
   GlicPageHandler(content::WebContents* webui_contents,
                   Host* host,
@@ -43,22 +44,22 @@ class GlicPageHandler : public glic::mojom::PageHandler,
 
   ~GlicPageHandler() override;
 
-  content::WebContents* webui_contents() { return webui_contents_; }
+  content::WebContents* webui_contents();
 
   void NotifyWindowIntentToShow();
 
-  // Returns the main frame of the guest view that lives within this WebUI. May
-  // be null.
-  content::RenderFrameHost* GetGuestMainFrame();
+  void Zoom(mojom::ZoomAction zoom_action, ZoomSource source);
+
+  Host& host();
 
   // glic::mojom::PageHandler implementation.
 
-  void CreateWebClient(::mojo::PendingReceiver<glic::mojom::WebClientHandler>
-                           web_client_receiver) override;
   void PrepareForClient(base::OnceCallback<void(mojom::PrepareForClientResult)>
                             callback) override;
   // Called whenever the webview main frame commits.
   void WebviewCommitted(const GURL& origin) override;
+
+  void OnZoomLevelChange(double zoom_factor) override;
 
   void ClosePanel(ClosePanelCallback callback) override;
 
@@ -67,6 +68,17 @@ class GlicPageHandler : public glic::mojom::PageHandler,
   void SignInAndClosePanel() override;
 
   void OpenDisabledByAdminLinkAndClosePanel() override;
+
+  void OpenLinkInPopup(const GURL& url,
+                       int32_t popup_width,
+                       int32_t popup_height) override;
+  void OpenLinkInNewTab(const GURL& url) override;
+
+  void ShouldAllowGeolocationPermissionRequest(
+      ShouldAllowGeolocationPermissionRequestCallback callback) override;
+
+  void OpenHelpCenterTopicAndClosePanel(
+      glic::mojom::HelpCenterTopic topic) override;
 
   void ResizeWidget(const gfx::Size& size,
                     base::TimeDelta duration,
@@ -81,41 +93,29 @@ class GlicPageHandler : public glic::mojom::PageHandler,
   void SetProfileReadyState(glic::mojom::ProfileReadyState ready_state);
   void UpdateProfileReadyState();
 
-  // Notifies the web client about zero state suggestions.
-  void ZeroStateSuggestionChanged(mojom::ZeroStateSuggestionsV2Ptr suggestions,
-                                  mojom::ZeroStateSuggestionsOptions options);
+  void OnWebUiStateChanged(glic::mojom::WebUiState new_state) override;
 
-  void WebUiStateChanged(glic::mojom::WebUiState new_state) override;
-
-  void GetInternalsDataPayload(
-      GetInternalsDataPayloadCallback callback) override;
-
-  void SetGuestUrlPresets(const GURL& autopush_url,
-                          const GURL& staging_url,
-                          const GURL& preprod_url,
-                          const GURL& prod_url) override;
+  // Host::Observer implementation.
+  void ClientReadyToShow(const mojom::OpenPanelInfo& open_info) override;
 
   // PanelStateObserver implementation.
-  void PanelStateChanged(const glic::mojom::PanelState& panel_state,
-                         const PanelStateContext& context) override;
+  void PanelStateChanged(const glic::mojom::PanelState& panel_state) override;
 
   void UpdatePageState(mojom::PanelStateKind panelStateKind);
 
-  Host& host() { return host_.get(); }
+  glic::mojom::Page* page() { return page_.get(); }
 
  private:
   GlicKeyedService* GetGlicService();
 
-  // HostManager keeps the host alive while GlicPageHandler is alive.
-  raw_ref<Host> host_;
-  // There should at most one WebClientHandler at a time. A new one is created
-  // each time the webview loads a page.
-  std::unique_ptr<GlicWebClientHandler> web_client_handler_;
+  // Cleared when the page handler unregisters.
+  raw_ptr<Host> host_;
   raw_ptr<content::WebContents> webui_contents_;
   raw_ptr<content::BrowserContext> browser_context_;
   mojo::Receiver<glic::mojom::PageHandler> receiver_;
   mojo::Remote<glic::mojom::Page> page_;
   mojo::Remote<glic::mojom::WebClient> web_client_;
+  base::ScopedObservation<Host, Host::Observer> host_observation_{this};
   std::vector<base::CallbackListSubscription> subscriptions_;
   base::WeakPtrFactory<GlicPageHandler> weak_ptr_factory_{this};
 };

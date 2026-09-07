@@ -10,6 +10,7 @@
 #import "base/notreached.h"
 #import "base/strings/sys_string_conversions.h"
 #import "components/feature_engagement/public/feature_constants.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/identity_manager/account_info.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "components/sync/service/sync_service.h"
@@ -18,11 +19,8 @@
 #import "ios/chrome/browser/post_restore_signin/ui_bundled/metrics.h"
 #import "ios/chrome/browser/promos_manager/model/constants.h"
 #import "ios/chrome/browser/promos_manager/model/promo_config.h"
-#import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
-#import "ios/chrome/browser/shared/model/browser/browser.h"
-#import "ios/chrome/browser/shared/model/browser/browser_provider.h"
-#import "ios/chrome/browser/shared/model/browser/browser_provider_interface.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/show_signin_command.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
@@ -43,27 +41,32 @@
 // Returns the given name of the last account that was signed in pre-restore.
 @property(readonly) NSString* userGivenName;
 
-// Profile pref used to retrieve and/or clear the pre-restore identity.
-@property(nonatomic, assign) PrefService* prefService;
-
 @end
 
 @implementation PostRestoreSignInProvider {
-  raw_ptr<syncer::SyncUserSettings, DanglingUntriaged> _syncUserSettings;
+  // Used to configure history and tab sync settings upon sign-in completion.
+  raw_ptr<syncer::SyncService> _syncService;
+  // Used to retrieve user's signed-in state.
+  raw_ptr<AuthenticationService> _authService;
+  // Used to query account info and verify sign-in status.
+  raw_ptr<signin::IdentityManager> _identityManager;
+  // Used to retrieve and clear pre-restore identity data.
+  raw_ptr<PrefService> _prefService;
   std::optional<AccountInfo> _accountInfo;
   bool _historySyncEnabled;
-  raw_ptr<Browser, DanglingUntriaged> _browser;
 }
 
 #pragma mark - Initializers
 
-- (instancetype)initForBrowser:(Browser*)browser {
+- (instancetype)initWithSyncService:(syncer::SyncService*)syncService
+              authenticationService:(AuthenticationService*)authService
+                    identityManager:(signin::IdentityManager*)identityManager
+                        prefService:(PrefService*)prefService {
   if ((self = [super init])) {
-    _browser = browser;
-    _syncUserSettings =
-        SyncServiceFactory::GetForProfile(_browser->GetProfile())
-            ->GetUserSettings();
-    _prefService = browser->GetProfile()->GetPrefs();
+    _syncService = syncService;
+    _authService = authService;
+    _identityManager = identityManager;
+    _prefService = prefService;
     _accountInfo = GetPreRestoreIdentity(_prefService);
     _historySyncEnabled = GetPreRestoreHistorySyncEnabled(_prefService);
   }
@@ -93,9 +96,7 @@
   base::UmaHistogramEnumeration(kIOSPostRestoreSigninChoiceHistogram,
                                 IOSPostRestoreSigninChoice::Continue);
   ClearPreRestoreIdentity(_prefService);
-  AuthenticationService* authenticationService =
-      AuthenticationServiceFactory::GetForProfile(_browser->GetProfile());
-  switch (authenticationService->GetServiceStatus()) {
+  switch (_authService->GetServiceStatus()) {
     case AuthenticationService::ServiceStatus::SigninForcedByPolicy:
     case AuthenticationService::ServiceStatus::SigninAllowed:
       break;
@@ -175,7 +176,7 @@
 
 // Shows the signin / sync UI flow.
 - (void)showSignin {
-  DCHECK(self.handler);
+  CHECK(self.sceneHandler, base::NotFatalUntil::M160);
 
   __weak __typeof(self) weakSelf = self;
   SigninCoordinatorCompletionCallback completion =
@@ -193,7 +194,7 @@
             promoAction:signin_metrics::PromoAction::
                             PROMO_ACTION_NO_SIGNIN_PROMO
              completion:completion];
-  [self.handler showSignin:command];
+  [self.sceneHandler showSignin:command baseViewController:nil];
 }
 
 - (void)signinDone {
@@ -201,17 +202,16 @@
     NOTREACHED(base::NotFatalUntil::M150);
     return;
   }
-  _syncUserSettings->SetSelectedType(syncer::UserSelectableType::kHistory,
-                                     _historySyncEnabled);
-  _syncUserSettings->SetSelectedType(syncer::UserSelectableType::kTabs,
-                                     _historySyncEnabled);
+  _syncService->GetUserSettings()->SetSelectedType(
+      syncer::UserSelectableType::kHistory, _historySyncEnabled);
+  _syncService->GetUserSettings()->SetSelectedType(
+      syncer::UserSelectableType::kTabs, _historySyncEnabled);
 }
 
 // Returns true if the user is signed-in.
 - (bool)isSignedIn {
   CoreAccountInfo primaryAccount =
-      IdentityManagerFactory::GetForProfile(_browser->GetProfile())
-          ->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin);
+      _identityManager->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin);
   return !primaryAccount.IsEmpty();
 }
 

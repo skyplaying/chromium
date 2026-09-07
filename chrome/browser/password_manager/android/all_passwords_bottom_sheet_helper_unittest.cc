@@ -12,12 +12,15 @@
 #include "chrome/test/base/testing_profile.h"
 #include "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
 #include "components/password_manager/core/browser/password_form.h"
+#include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/test_password_store.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/password_manager/core/common/password_manager_pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/test/browser_task_environment.h"
 
 using password_manager::PasswordForm;
+using password_manager::PasswordString;
 using password_manager::TestPasswordStore;
 
 constexpr char kExampleCom[] = "https://example.com";
@@ -32,7 +35,7 @@ PasswordForm MakeSavedPassword(std::string_view signon_realm,
   form.signon_realm = std::string(signon_realm);
   form.url = GURL(signon_realm);
   form.username_value = std::u16string(username);
-  form.password_value = kPassword;
+  form.password_value = PasswordString(kPassword);
   form.in_store = PasswordForm::Store::kProfileStore;
   return form;
 }
@@ -72,9 +75,11 @@ class AllPasswordsBottomSheetHelperTest
 
 TEST_P(AllPasswordsBottomSheetHelperTest, CallbackIsCalledAfterFetch) {
   if (GetParam()) {
-    account_store().AddLogin(MakeSavedPassword(kExampleCom, kUsername));
+    account_store().AddLogin(password_manager::FromPasswordForm(
+        MakeSavedPassword(kExampleCom, kUsername)));
   } else {
-    profile_store().AddLogin(MakeSavedPassword(kExampleCom, kUsername));
+    profile_store().AddLogin(password_manager::FromPasswordForm(
+        MakeSavedPassword(kExampleCom, kUsername)));
   }
 
   base::MockOnceClosure callback;
@@ -92,9 +97,11 @@ TEST_P(AllPasswordsBottomSheetHelperTest, CallbackIsCalledAfterFetch) {
 TEST_P(AllPasswordsBottomSheetHelperTest, CallbackIsNotCalledForEmptyStore) {
   // Exceptions don't count towards stored passwords!
   if (GetParam()) {
-    account_store().AddLogin(MakePasswordException(kExampleCom));
+    account_store().AddLogin(
+        password_manager::FromPasswordForm(MakePasswordException(kExampleCom)));
   } else {
-    profile_store().AddLogin(MakePasswordException(kExampleCom));
+    profile_store().AddLogin(
+        password_manager::FromPasswordForm(MakePasswordException(kExampleCom)));
   }
 
   base::MockOnceClosure callback;
@@ -111,9 +118,11 @@ TEST_P(AllPasswordsBottomSheetHelperTest, CallbackIsNotCalledForEmptyStore) {
 
 TEST_P(AllPasswordsBottomSheetHelperTest, CallbackIsNotCalledIfUnset) {
   if (GetParam()) {
-    account_store().AddLogin(MakeSavedPassword(kExampleCom, kUsername));
+    account_store().AddLogin(password_manager::FromPasswordForm(
+        MakeSavedPassword(kExampleCom, kUsername)));
   } else {
-    profile_store().AddLogin(MakeSavedPassword(kExampleCom, kUsername));
+    profile_store().AddLogin(password_manager::FromPasswordForm(
+        MakeSavedPassword(kExampleCom, kUsername)));
   }
 
   base::MockOnceClosure callback;
@@ -129,9 +138,11 @@ TEST_P(AllPasswordsBottomSheetHelperTest, CallbackIsNotCalledIfUnset) {
 
 TEST_P(AllPasswordsBottomSheetHelperTest, CallbackIsNotCalledForUnknownFields) {
   if (GetParam()) {
-    account_store().AddLogin(MakeSavedPassword(kExampleCom, kUsername));
+    account_store().AddLogin(password_manager::FromPasswordForm(
+        MakeSavedPassword(kExampleCom, kUsername)));
   } else {
-    profile_store().AddLogin(MakeSavedPassword(kExampleCom, kUsername));
+    profile_store().AddLogin(password_manager::FromPasswordForm(
+        MakeSavedPassword(kExampleCom, kUsername)));
   }
 
   base::MockOnceClosure callback;

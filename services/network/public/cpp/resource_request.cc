@@ -230,6 +230,8 @@ ResourceRequest::TrustedParams& ResourceRequest::TrustedParams::operator=(
   response_body_stream = other.response_body_stream;
   expected_response_headers_for_synthetic_response =
       other.expected_response_headers_for_synthetic_response;
+  is_ad_auction_trusted_signals_request =
+      other.is_ad_auction_trusted_signals_request;
   return *this;
 }
 
@@ -253,7 +255,9 @@ bool ResourceRequest::TrustedParams::EqualsForTesting(
          // comparison of the refptrs themselves.
          (!!response_body_stream == !!other.response_body_stream) &&
          expected_response_headers_for_synthetic_response ==
-             other.expected_response_headers_for_synthetic_response;
+             other.expected_response_headers_for_synthetic_response &&
+         is_ad_auction_trusted_signals_request ==
+             other.is_ad_auction_trusted_signals_request;
 }
 
 ResourceRequest::WebBundleTokenParams::WebBundleTokenParams() = default;
@@ -351,17 +355,18 @@ bool ResourceRequest::EqualsForTesting(const ResourceRequest& request) const {
          destination == request.destination &&
          request_body == request.request_body &&
          keepalive == request.keepalive &&
-         shared_storage_writable_eligible ==
-             request.shared_storage_writable_eligible &&
          has_user_gesture == request.has_user_gesture &&
          enable_load_timing == request.enable_load_timing &&
          enable_upload_progress == request.enable_upload_progress &&
          do_not_prompt_for_login == request.do_not_prompt_for_login &&
          is_outermost_main_frame == request.is_outermost_main_frame &&
          transition_type == request.transition_type &&
+         is_reload_navigation == request.is_reload_navigation &&
          previews_state == request.previews_state &&
          upgrade_if_insecure == request.upgrade_if_insecure &&
          is_revalidating == request.is_revalidating &&
+         revalidation_etag == request.revalidation_etag &&
+         revalidation_last_modified == request.revalidation_last_modified &&
          throttling_profile_id == request.throttling_profile_id &&
          fetch_window_id == request.fetch_window_id &&
          devtools_request_id == request.devtools_request_id &&
@@ -383,8 +388,7 @@ bool ResourceRequest::EqualsForTesting(const ResourceRequest& request) const {
          shared_dictionary_writer_enabled ==
              request.shared_dictionary_writer_enabled &&
          socket_tag == request.socket_tag &&
-         allows_device_bound_session_registration ==
-             request.allows_device_bound_session_registration &&
+         allows_device_bound_sessions == request.allows_device_bound_sessions &&
          permissions_policy == request.permissions_policy &&
          fetch_retry_options == request.fetch_retry_options;
 }
@@ -436,6 +440,15 @@ net::ReferrerPolicy ReferrerPolicyForUrlRequest(
       return net::ReferrerPolicy::REDUCE_GRANULARITY_ON_TRANSITION_CROSS_ORIGIN;
   }
   NOTREACHED();
+}
+
+int GetAllowedLoadFlagsForUntrustedRequests() {
+  return net::LOAD_VALIDATE_CACHE | net::LOAD_BYPASS_CACHE |
+         net::LOAD_SKIP_CACHE_VALIDATION | net::LOAD_ONLY_FROM_CACHE |
+         net::LOAD_DISABLE_CACHE | net::LOAD_PREFETCH |
+         net::LOAD_IGNORE_LIMITS | net::LOAD_DO_NOT_USE_EMBEDDED_IDENTITY |
+         net::LOAD_SUPPORT_ASYNC_REVALIDATION |
+         net::LOAD_RESTRICTED_PREFETCH_FOR_MAIN_FRAME;
 }
 
 namespace debug {

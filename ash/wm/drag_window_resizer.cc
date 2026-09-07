@@ -19,7 +19,7 @@
 #include "ui/aura/window_event_dispatcher.h"
 #include "ui/base/hit_test.h"
 #include "ui/base/ui_base_types.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/geometry/point_conversions.h"
 #include "ui/wm/core/coordinate_conversion.h"
@@ -73,6 +73,10 @@ void DragWindowResizer::RevertDrag() {
 void DragWindowResizer::FlingOrSwipe(ui::GestureEvent* event) {
   EndDragImpl();
   next_window_resizer_->FlingOrSwipe(event);
+}
+
+void DragWindowResizer::Pinch(const gfx::PointF& location, float scale) {
+  next_window_resizer_->Pinch(location, scale);
 }
 
 DragWindowResizer::DragWindowResizer(

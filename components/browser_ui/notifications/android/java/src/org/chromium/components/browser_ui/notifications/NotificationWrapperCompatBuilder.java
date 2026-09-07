@@ -4,7 +4,7 @@
 
 package org.chromium.components.browser_ui.notifications;
 
-import static org.chromium.components.browser_ui.notifications.BitmapUtils.resizeBitmap;
+import static org.chromium.components.browser_ui.notifications.BitmapUtils.resizeBitmapByMemory;
 
 import android.app.Notification;
 import android.app.PendingIntent;
@@ -33,6 +33,7 @@ public class NotificationWrapperCompatBuilder implements NotificationWrapperBuil
     private final NotificationCompat.Builder mBuilder;
     private final @Nullable NotificationMetadata mMetadata;
     private final Context mContext;
+    private boolean mIsSilent;
 
     public NotificationWrapperCompatBuilder(
             Context context,
@@ -167,19 +168,6 @@ public class NotificationWrapperCompatBuilder implements NotificationWrapperBuil
     }
 
     @Override
-    public NotificationWrapperBuilder addAction(Notification.Action action) {
-        Log.w(TAG, "Ignoring standard action in compat builder.");
-        return this;
-    }
-
-    @Override
-    public NotificationWrapperBuilder addAction(
-            Notification.Action action, int flags, int actionType, int requestCode) {
-        Log.w(TAG, "Ignoring standard action in compat builder.");
-        return this;
-    }
-
-    @Override
     public NotificationWrapperBuilder addAction(NotificationCompat.Action action) {
         mBuilder.addAction(action);
         return this;
@@ -258,6 +246,7 @@ public class NotificationWrapperCompatBuilder implements NotificationWrapperBuil
     @Override
     public NotificationWrapperBuilder setSilent(boolean silent) {
         mBuilder.setSilent(silent);
+        mIsSilent = silent;
         return this;
     }
 
@@ -288,9 +277,7 @@ public class NotificationWrapperCompatBuilder implements NotificationWrapperBuil
     @Override
     public NotificationWrapperBuilder setBigPictureStyle(
             @NonNull Bitmap bigPicture, @Nullable CharSequence summaryText) {
-        if (bigPicture.getAllocationByteCount() / 1000 > BIG_PICTURE_BITMAP_MAX_SIZE_IN_KB) {
-            bigPicture = resizeBitmap(bigPicture, BIG_PICTURE_BITMAP_MAX_SIZE_IN_KB);
-        }
+        bigPicture = resizeBitmapByMemory(bigPicture, BIG_PICTURE_BITMAP_MAX_SIZE_IN_KB);
 
         NotificationCompat.BigPictureStyle style =
                 new NotificationCompat.BigPictureStyle().bigPicture(bigPicture);
@@ -332,7 +319,8 @@ public class NotificationWrapperCompatBuilder implements NotificationWrapperBuil
     @Override
     public NotificationWrapper buildWithBigContentView(RemoteViews view) {
         assert mMetadata != null;
-        return new NotificationWrapper(mBuilder.setCustomBigContentView(view).build(), mMetadata);
+        return new NotificationWrapper(
+                mBuilder.setCustomBigContentView(view).build(), mMetadata, mIsSilent);
     }
 
     @Override
@@ -342,7 +330,7 @@ public class NotificationWrapperCompatBuilder implements NotificationWrapperBuil
         bigTextStyle.bigText(bigText);
 
         assert mMetadata != null;
-        return new NotificationWrapper(bigTextStyle.build(), mMetadata);
+        return new NotificationWrapper(bigTextStyle.build(), mMetadata, mIsSilent);
     }
 
     @Override
@@ -364,7 +352,7 @@ public class NotificationWrapperCompatBuilder implements NotificationWrapperBuil
     @Override
     public NotificationWrapper buildNotificationWrapper() {
         assert mMetadata != null;
-        return new NotificationWrapper(build(), mMetadata);
+        return new NotificationWrapper(build(), mMetadata, mIsSilent);
     }
 
     protected NotificationCompat.Builder getBuilder() {

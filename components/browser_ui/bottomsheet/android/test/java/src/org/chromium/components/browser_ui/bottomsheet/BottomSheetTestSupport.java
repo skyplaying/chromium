@@ -9,6 +9,7 @@ import android.view.ViewGroup;
 
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.CallbackHelper;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.SheetState;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.StateChangeReason;
 
@@ -71,6 +72,10 @@ public class BottomSheetTestSupport {
      */
     public float getCurrentOffsetPx() {
         return getBottomSheet().getCurrentOffsetPx();
+    }
+
+    public float getOffsetFromBrowserControls() {
+        return getBottomSheet().getOffsetFromBrowserControls();
     }
 
     /**
@@ -172,7 +177,7 @@ public class BottomSheetTestSupport {
     public static void waitForState(BottomSheetController controller, @SheetState int state) {
         CallbackHelper stateChangeHelper = new CallbackHelper();
         final BottomSheetObserver observer =
-                new EmptyBottomSheetObserver() {
+                new BottomSheetObserver() {
                     @Override
                     public void onSheetStateChanged(int newState, int reason) {
                         if (state == newState) stateChangeHelper.notifyCalled();
@@ -207,7 +212,7 @@ public class BottomSheetTestSupport {
         CallbackHelper stateChangeHelper = new CallbackHelper();
 
         final BottomSheetObserver observer =
-                new EmptyBottomSheetObserver() {
+                new BottomSheetObserver() {
                     @Override
                     public void onSheetStateChanged(int newState, int reason) {
                         if (newState == BottomSheetController.SheetState.HALF
@@ -259,9 +264,9 @@ public class BottomSheetTestSupport {
 
         CallbackHelper contentChangeHelper = new CallbackHelper();
         BottomSheetObserver observer =
-                new EmptyBottomSheetObserver() {
+                new BottomSheetObserver() {
                     @Override
-                    public void onSheetContentChanged(BottomSheetContent newContent) {
+                    public void onSheetContentChanged(@Nullable BottomSheetContent newContent) {
                         if ((contentShouldBeNull && newContent == null) || content == newContent) {
                             contentChangeHelper.notifyCalled();
                         }

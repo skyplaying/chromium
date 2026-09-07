@@ -6,15 +6,20 @@
 
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/prefs/pref_service.h"
+#include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/visibility.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/content_client.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_web_ui.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
 
 namespace settings {
@@ -26,7 +31,7 @@ class PerformanceHandlerTest : public InProcessBrowserTest {
   void SetUpOnMainThread() override {
     InProcessBrowserTest::SetUpOnMainThread();
     web_contents_ = content::WebContents::Create(
-        content::WebContents::CreateParams(browser()->profile()));
+        content::WebContents::CreateParams(browser()->GetProfile()));
     web_ui_ = std::make_unique<content::TestWebUI>();
     web_ui_->set_web_contents(web_contents_.get());
     handler_ = std::make_unique<PerformanceHandler>();
@@ -44,11 +49,12 @@ class PerformanceHandlerTest : public InProcessBrowserTest {
   content::TestWebUI* web_ui() { return web_ui_.get(); }
   PerformanceHandler* handler() { return handler_.get(); }
 
-  content::WebContents* AddTabToBrowser(Browser* browser, const GURL& url) {
+  content::WebContents* AddTabToBrowser(BrowserWindowInterface* browser,
+                                        const GURL& url) {
     ui_test_utils::NavigateToURLWithDisposition(
         browser, url, WindowOpenDisposition::NEW_FOREGROUND_TAB,
         ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
-    return browser->tab_strip_model()->GetActiveWebContents();
+    return browser->GetTabStripModel()->GetActiveWebContents();
   }
 
   void ExpectCurrentOpenSitesEquals(std::vector<std::string> expected_sites,
@@ -71,18 +77,19 @@ class PerformanceHandlerTest : public InProcessBrowserTest {
 };
 
 IN_PROC_BROWSER_TEST_F(PerformanceHandlerTest, GetCurrentOpenSites) {
-  Browser* first_browser = browser();
+  BrowserWindowInterface* first_browser = browser();
   AddTabToBrowser(first_browser, GURL("https://www.foo.com/ignorethispart"));
   content::WebContents* bar_tab =
       AddTabToBrowser(first_browser, GURL("https://bar.com"));
   AddTabToBrowser(first_browser, GURL("chrome://version"));
 
-  Browser* second_browser = CreateBrowser(browser()->profile());
+  BrowserWindowInterface* second_browser =
+      CreateBrowser(browser()->GetProfile());
   AddTabToBrowser(second_browser,
                   GURL("https://www.foo.com/ignorethispartaswell"));
   AddTabToBrowser(second_browser, GURL("http://www.baz.com"));
 
-  Browser* incognito_browser = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito_browser = CreateIncognitoBrowser();
   AddTabToBrowser(incognito_browser,
                   GURL("https://www.toshowthiswouldbeaprivacyviolation.com"));
 
@@ -91,7 +98,7 @@ IN_PROC_BROWSER_TEST_F(PerformanceHandlerTest, GetCurrentOpenSites) {
 
   // Activate the tab with "bar.com" to test that it is moved to the front of
   // the list.
-  TabStripModel* first_browser_tab_strip = first_browser->tab_strip_model();
+  TabStripModel* first_browser_tab_strip = first_browser->GetTabStripModel();
   int bar_tab_index = first_browser_tab_strip->GetIndexOfWebContents(bar_tab);
   ASSERT_NE(bar_tab_index, TabStripModel::kNoTab);
   first_browser_tab_strip->ActivateTabAt(bar_tab_index);
@@ -99,6 +106,48 @@ IN_PROC_BROWSER_TEST_F(PerformanceHandlerTest, GetCurrentOpenSites) {
 
   ExpectCurrentOpenSitesEquals({"bar.com", "www.baz.com", "www.foo.com"},
                                handler()->GetCurrentOpenSites());
+}
+
+IN_PROC_BROWSER_TEST_F(PerformanceHandlerTest, GetCpuPerformanceInfo) {
+  base::ListValue args;
+  args.Append("callback-id");
+
+  handler()->RegisterMessages();
+  handler()->AllowJavascriptForTesting();
+
+  // Call getCpuPerformanceInfo().
+  web_ui()->HandleReceivedMessage("getCpuPerformanceInfo", args);
+  const content::TestWebUI::CallData& data = *web_ui()->call_data().back();
+  EXPECT_EQ("cr.webUIResponse", data.function_name());
+  EXPECT_EQ("callback-id", data.arg1()->GetString());
+  EXPECT_TRUE(data.arg2()->GetBool());  // success
+
+  const base::DictValue& info = data.arg3()->GetDict();
+  std::optional<int> hardware_tier = info.FindInt("hardwareTier");
+  ASSERT_TRUE(hardware_tier.has_value());
+  EXPECT_TRUE(info.contains("model"));
+  EXPECT_TRUE(info.contains("cores"));
+
+  // Set an override and check that the handler still returns the hardware tier
+  // (not the override).
+  int override_tier = (*hardware_tier == 1) ? 2 : 1;
+  browser()->GetProfile()->GetPrefs()->SetInteger(
+      prefs::kCpuPerformanceTierOverride, override_tier);
+
+  // Check that the overridden setting reads correctly via the browser client.
+  std::optional<int> effective_override =
+      content::GetContentClientForTesting()
+          ->browser()
+          ->GetCpuPerformanceTierOverride(browser()->GetProfile());
+  ASSERT_TRUE(effective_override.has_value());
+  EXPECT_EQ(override_tier, *effective_override);
+
+  // Call getCpuPerformanceInfo() again and check that the hardware tier has not
+  // changed.
+  web_ui()->HandleReceivedMessage("getCpuPerformanceInfo", args);
+  const content::TestWebUI::CallData& data2 = *web_ui()->call_data().back();
+  const base::DictValue& info2 = data2.arg3()->GetDict();
+  EXPECT_EQ(*hardware_tier, info2.FindInt("hardwareTier"));
 }
 
 }  // namespace settings

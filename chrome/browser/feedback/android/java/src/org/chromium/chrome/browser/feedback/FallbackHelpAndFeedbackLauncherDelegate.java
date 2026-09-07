@@ -20,13 +20,14 @@ public class FallbackHelpAndFeedbackLauncherDelegate implements HelpAndFeedbackL
 
     @Override
     public void show(Activity activity, String helpContext, FeedbackCollector collector) {
-        Log.d(TAG, "Feedback data: " + collector.getBundle());
-        HelpAndFeedbackLauncherDelegate.launchFallbackSupportUri(activity);
+        Log.d(TAG, "Feedback data: %s", collector.getBundle());
+        HelpAndFeedbackLauncherDelegate.launchFallbackSupportUri(
+                activity, HelpAndFeedbackLauncherDelegate.getPLinkHelpUrl(helpContext));
     }
 
     @Override
     public void showFeedback(Activity activity, FeedbackCollector collector) {
-        Log.d(TAG, "Feedback data: " + collector.getBundle());
-        HelpAndFeedbackLauncherDelegate.launchFallbackSupportUri(activity);
+        Log.d(TAG, "Feedback data: %s", collector.getBundle());
+        HelpAndFeedbackLauncherDelegate.launchFallbackSupportUri(activity, /* url= */ null);
     }
 }

@@ -433,6 +433,14 @@ debugger API *may* in some cases also sidestep other typical restrictions, such
 as host permissions or file access. This is the reason for the broad security
 warning associated with the debugger API.
 
+The debugger API requires screenshot permissions (e.g. enterprise policies that
+disable screenshots will prevent attaching the debugger).
+
+The debugger API is disabled entirely if any runtime blocked hosts are configured
+by enterprise policy (e.g. `ExtensionSettings` specifying `runtime_blocked_hosts`).
+Because raw DevTools Protocol access cannot be safely constrained to specific origins,
+attaching the debugger is rejected on all hosts, including any listed in `runtime_allowed_hosts`.
+
 The debugger permission does not allow automating parts of the Chromium
 browser unrelated to websites. Automating WebUI or settings, installing
 extensions, downloading and executing a native binary, or executing custom
@@ -453,6 +461,19 @@ of the Chrome Web Store can easily use an arbitrary ID with the [`key`](https://
 field, and other binaries on a machine could launch the Native Messaging Host
 and communicate with it. Both of these are outside of Chrome's security model
 which [does not consider physically-local attacks to be security bugs][physically-local-attacks].
+
+### Are bugs that assume a compromised Chrome Web Store renderer considered security issues?
+
+In general, _no_, these are not be considered security bugs. The Chrome Web
+Store is process-isolated (meaning it won't share a process with other
+renderers), put in its own browsing instance, and runs trusted code. Similar to
+to other highly-privileged pages that still run HTML, CSS, and JS (like
+chrome://settings and other WebUI pages), these are not considered "inherently
+compromisable" in the same way that other web renderers are, and so issues that
+assume a compromise Chrome Web Store renderer are not typically considered
+security bugs. However, if you can trigger a renderer compromise in the Chrome
+Web Store renderer process, that may then be considered a security issue
+(subject to our other guidelines).
 
 ### What is your stance on click-jacking using extensions?
 

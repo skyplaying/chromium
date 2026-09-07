@@ -111,7 +111,7 @@ GenAiDefaultSettingsPolicyHandler::GenAiPolicyDetails::~GenAiPolicyDetails() =
     default;
 
 GenAiDefaultSettingsPolicyHandler::GenAiDefaultSettingsPolicyHandler(
-    std::vector<GenAiPolicyDetails>&& gen_ai_policies)
+    std::vector<GenAiPolicyDetails> gen_ai_policies)
     : TypeCheckingPolicyHandler(key::kGenAiDefaultSettings,
                                 base::Value::Type::INTEGER),
       gen_ai_policies_(std::move(gen_ai_policies)) {}
@@ -133,13 +133,6 @@ bool GenAiDefaultSettingsPolicyHandler::CheckPolicySettings(
   if (!TypeCheckingPolicyHandler::CheckPolicySettings(policies, errors)) {
     return false;
   }
-
-#if !BUILDFLAG(IS_CHROMEOS)
-  if (!CloudOnlyPolicyHandler::CheckCloudOnlyPolicySettings(policy_name(),
-                                                            policies, errors)) {
-    return false;
-  }
-#endif // !BUILDFLAG(IS_CHROMEOS)
 
   // If the map feature is enabled, check that any maps provided include all
   // expected policy values.

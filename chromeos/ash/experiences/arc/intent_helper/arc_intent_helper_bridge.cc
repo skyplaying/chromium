@@ -12,9 +12,8 @@
 #include "ash/public/cpp/wallpaper/wallpaper_controller.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
-#include "base/memory/singleton.h"
 #include "base/memory/weak_ptr.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/no_destructor.h"
 #include "base/strings/string_util.h"
 #include "base/values.h"
 #include "chromeos/ash/experiences/arc/arc_browser_context_keyed_service_factory_base.h"
@@ -51,7 +50,8 @@ class ArcIntentHelperBridgeFactory
   static constexpr const char* kName = "ArcIntentHelperBridgeFactory";
 
   static ArcIntentHelperBridgeFactory* GetInstance() {
-    return base::Singleton<ArcIntentHelperBridgeFactory>::get();
+    static base::NoDestructor<ArcIntentHelperBridgeFactory> instance;
+    return instance.get();
   }
 
   static void ShutDownForTesting(content::BrowserContext* context) {
@@ -61,7 +61,7 @@ class ArcIntentHelperBridgeFactory
   }
 
  private:
-  friend struct base::DefaultSingletonTraits<ArcIntentHelperBridgeFactory>;
+  friend base::NoDestructor<ArcIntentHelperBridgeFactory>;
 
   ArcIntentHelperBridgeFactory() = default;
   ~ArcIntentHelperBridgeFactory() override = default;
@@ -315,6 +315,15 @@ void ArcIntentHelperBridge::OnOpenAppWithIntent(
     arc::mojom::LaunchIntentPtr intent) {
   // Web app launches should only be invoked on HTTPS URLs.
   if (CanOpenWebAppForUrl(start_url)) {
+    // The intent data URL may be opened directly in the browser when no
+    // matching app is installed, so restrict it to the same set of schemes as
+    // OnOpenUrl.
+    if (intent->data &&
+        !allowed_arc_schemes_.contains(intent->data->GetScheme())) {
+      LOG(WARNING) << "Pruning disallowed intent data scheme: "
+                   << intent->data->GetScheme();
+      intent->data.reset();
+    }
     g_open_url_delegate->OpenAppWithIntent(start_url, std::move(intent));
   }
 }

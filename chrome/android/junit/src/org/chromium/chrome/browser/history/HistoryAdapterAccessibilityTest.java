@@ -15,7 +15,6 @@ import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.ui.signin.signin_promo.SigninPromoCoordinator;
@@ -30,7 +29,6 @@ import java.util.concurrent.TimeUnit;
  * turned on (HistoryContentManager::isScrollToLoadDisabled() == true).
  */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class HistoryAdapterAccessibilityTest {
     public static final int PAGING = 2;
 
@@ -48,7 +46,13 @@ public class HistoryAdapterAccessibilityTest {
         mHistoryProvider.setPaging(PAGING);
 
         mAdapter =
-                new HistoryAdapter(mContentManager, mHistoryProvider, mHistorySyncPromoCoordinator);
+                new HistoryAdapter(
+                        mContentManager,
+                        mHistoryProvider,
+                        mHistorySyncPromoCoordinator,
+                        /* shouldClusterByDomain= */ false,
+                        /* snackbarManager= */ null,
+                        /* profile= */ null);
         mAdapter.generateHeaderItemsForTest();
         mAdapter.generateFooterItemsForTest(mMockButton);
         mAdapter.setScrollToLoadDisabledForTest(true);

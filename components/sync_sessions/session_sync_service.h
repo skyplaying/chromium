@@ -37,6 +37,7 @@ class SessionSyncService : public KeyedService {
   // enabled or not currently syncing, returns nullptr.
   virtual OpenTabsUIDelegate* GetOpenTabsUIDelegate() = 0;
 
+
   // Allows client code to be notified when foreign sessions change.
   [[nodiscard]] virtual base::CallbackListSubscription
   SubscribeToForeignSessionsChanged(const base::RepeatingClosure& cb) = 0;

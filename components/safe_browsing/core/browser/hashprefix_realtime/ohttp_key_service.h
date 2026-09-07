@@ -19,10 +19,6 @@
 
 class PrefService;
 
-namespace net {
-class HttpResponseHeaders;
-}  // namespace net
-
 namespace network {
 class SharedURLLoaderFactory;
 class SimpleURLLoader;
@@ -58,10 +54,27 @@ class OhttpKeyService : public KeyedService {
     // The key fetch is triggered because the response from real-time lookup
     // contains key related error code.
     kKeyRelatedHttpErrorCode = 2,
-    // The key fetch is triggered because the response from real-time lookup
-    // contains key rotated header.
-    kKeyRotatedHeader = 3,
-    kMaxValue = kKeyRotatedHeader
+    // OBSOLETE: The key fetch is triggered because the response from real-time
+    // lookup contains key rotated header.
+    kObsoleteKeyRotatedHeader = 3,
+    kMaxValue = kObsoleteKeyRotatedHeader
+  };
+
+  // The outcome of a key fetch.
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  enum class FetchOutcome {
+    // The key fetch was successful and the key parsed successfully.
+    kSuccess = 0,
+    // The key fetch failed due to a network error.
+    kNetworkError = 1,
+    // The key fetch succeeded at the network level, but was empty.
+    kEmptyResponse = 2,
+    // The key fetch succeeded at the network level, but failed to parse.
+    kInvalidResponse = 3,
+    // The key fetch succeeded at the network level, but there were no keys.
+    kNoKeys = 4,
+    kMaxValue = kNoKeys,
   };
 
   OhttpKeyService(
@@ -86,13 +99,10 @@ class OhttpKeyService : public KeyedService {
   virtual void GetOhttpKey(Callback callback);
 
   // Notifies the key service with the response from the lookup request. |key|
-  // is used for the lookup request, |response_code| and |headers| are returned
+  // is used for the lookup request, and |response_code| is returned
   // from the lookup server. It may trigger a key fetch if the response contains
-  // key related error or header. This function is overridden in tests.
-  virtual void NotifyLookupResponse(
-      const std::string& key,
-      int response_code,
-      scoped_refptr<net::HttpResponseHeaders> headers);
+  // key related error. This function is overridden in tests.
+  virtual void NotifyLookupResponse(const std::string& key, int response_code);
 
   // KeyedService:
   // Called before the actual deletion of the object.

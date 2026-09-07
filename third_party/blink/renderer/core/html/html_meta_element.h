@@ -61,6 +61,10 @@ class CORE_EXPORT HTMLMetaElement final : public HTMLElement {
 
   explicit HTMLMetaElement(Document&, const CreateElementFlags);
 
+  ElementType GetElementType() const final {
+    return ElementType::kHTMLMetaElement;
+  }
+
   // Encoding computed from processing the http-equiv, charset and content
   // attributes.
   TextEncoding ComputeEncoding() const;
@@ -73,6 +77,11 @@ class CORE_EXPORT HTMLMetaElement final : public HTMLElement {
   const AtomicString& Itemprop() const;
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(HTMLMetaElementSimTest,
+                           ResponsiveEmbeddedSizingAllowOrigins);
+  FRIEND_TEST_ALL_PREFIXES(HTMLMetaElementSimTest,
+                           ResponsiveEmbeddedSizingAllowOriginsHttp);
+
   static void ProcessViewportKeyValuePair(Document*,
                                           bool report_warnings,
                                           const StringView& key,
@@ -96,10 +105,10 @@ class CORE_EXPORT HTMLMetaElement final : public HTMLElement {
                                    const StringView& value,
                                    bool* ok = nullptr);
 
-  static Length ParseViewportValueAsLength(Document*,
-                                           bool report_warnings,
-                                           const StringView& key,
-                                           const StringView& value);
+  static ViewportLength ParseViewportValueAsLength(Document*,
+                                                   bool report_warnings,
+                                                   const StringView& key,
+                                                   const StringView& value);
   static float ParseViewportValueAsZoom(
       Document*,
       bool report_warnings,
@@ -136,6 +145,7 @@ class CORE_EXPORT HTMLMetaElement final : public HTMLElement {
   void ProcessViewportContentAttribute(const String& content,
                                        ViewportDescription::Type origin);
   void ProcessColorScheme(const AtomicString& content);
+  bool IsAllowOrigins() const;
   void FinishParsingChildren() final;
 
   // ClientHintsPreferences::UpdateFromMetaCH needs to know if the synchronous

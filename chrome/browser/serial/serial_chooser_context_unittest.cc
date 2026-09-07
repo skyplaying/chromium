@@ -717,14 +717,15 @@ TEST_F(SerialChooserContextTest, PolicyAskForUrls) {
   port->token = base::UnguessableToken::Create();
   context()->GrantPortPermission(kFooOrigin, *port);
   context()->GrantPortPermission(kBarOrigin, *port);
+  context()->FlushScheduledSaveSettingsCalls();
 
   // Set the default to "block" so that the policy being tested overrides it.
   auto* profile_prefs = profile()->GetTestingPrefService();
+  profile_prefs->SetManagedPref(prefs::kManagedSerialAskForUrls,
+                                ParseJson(R"([ "https://foo.origin" ])"));
   profile_prefs->SetManagedPref(
       prefs::kManagedDefaultSerialGuardSetting,
       std::make_unique<base::Value>(CONTENT_SETTING_BLOCK));
-  profile_prefs->SetManagedPref(prefs::kManagedSerialAskForUrls,
-                                ParseJson(R"([ "https://foo.origin" ])"));
 
   EXPECT_TRUE(context()->CanRequestObjectPermission(kFooOrigin));
   EXPECT_TRUE(context()->HasPortPermission(kFooOrigin, *port));
@@ -750,6 +751,7 @@ TEST_F(SerialChooserContextTest, PolicyBlockedForUrls) {
   port->token = base::UnguessableToken::Create();
   context()->GrantPortPermission(kFooOrigin, *port);
   context()->GrantPortPermission(kBarOrigin, *port);
+  context()->FlushScheduledSaveSettingsCalls();
 
   auto* profile_prefs = profile()->GetTestingPrefService();
   profile_prefs->SetManagedPref(prefs::kManagedSerialBlockedForUrls,
@@ -872,14 +874,7 @@ TEST_P(SerialChooserContextAffiliatedTest, PolicyAllowForUrls) {
     ASSERT_EQ(1u, bar_objects.size());
     const auto& bar_object = bar_objects.front();
     EXPECT_EQ(kBarOrigin.GetURL(), bar_object->origin);
-#if BUILDFLAG(IS_ANDROID)
-    // Android doesn't include the USB device list because it takes too much
-    // space
-    EXPECT_EQ(u"USB device (18D1:4E11)",
-              context()->GetObjectDisplayName(bar_object->value));
-#else
     EXPECT_EQ(u"Nexus One", context()->GetObjectDisplayName(bar_object->value));
-#endif  // BUILDFLAG(IS_ANDROID)
     EXPECT_EQ(SettingSource::kPolicy, bar_object->source);
     EXPECT_FALSE(bar_object->incognito);
 
@@ -895,14 +890,7 @@ TEST_P(SerialChooserContextAffiliatedTest, PolicyAllowForUrls) {
       } else if (object->origin == kBarOrigin.GetURL()) {
         EXPECT_FALSE(found_bar_object);
         found_bar_object = true;
-#if BUILDFLAG(IS_ANDROID)
-        // Android doesn't include the USB device list because it takes too much
-        // space
-        EXPECT_EQ(u"USB device (18D1:4E11)",
-                  context()->GetObjectDisplayName(object->value));
-#else
         EXPECT_EQ(u"Nexus One", context()->GetObjectDisplayName(object->value));
-#endif  // BUILDFLAG(IS_ANDROID)
       }
       EXPECT_EQ(SettingSource::kPolicy, object->source);
       EXPECT_FALSE(object->incognito);
@@ -959,15 +947,8 @@ TEST_P(SerialChooserContextAffiliatedTest,
     auto google_objects = context()->GetGrantedObjects(
         url::Origin::Create(GURL("https://google.com")));
     ASSERT_EQ(1u, google_objects.size());
-#if BUILDFLAG(IS_ANDROID)
-    // Android doesn't include the USB device list because it takes too much
-    // space
-    EXPECT_EQ(u"USB devices from vendor 18D1",
-              context()->GetObjectDisplayName(google_objects[0]->value));
-#else
     EXPECT_EQ(u"USB devices from Google Inc.",
               context()->GetObjectDisplayName(google_objects[0]->value));
-#endif  // BUILDFLAG(IS_ANDROID)
 
     auto unknown_vendor_objects = context()->GetGrantedObjects(
         url::Origin::Create(GURL("https://unknown-vendor.com")));
@@ -979,17 +960,9 @@ TEST_P(SerialChooserContextAffiliatedTest,
     auto unknown_product_objects = context()->GetGrantedObjects(
         url::Origin::Create(GURL("https://unknown-product.google.com")));
     ASSERT_EQ(1u, unknown_product_objects.size());
-#if BUILDFLAG(IS_ANDROID)
-    // Android doesn't include the USB device list because it takes too much
-    // space
-    EXPECT_EQ(
-        u"USB device (18D1:162E)",
-        context()->GetObjectDisplayName(unknown_product_objects[0]->value));
-#else
     EXPECT_EQ(
         u"USB device from Google Inc. (product 162E)",
         context()->GetObjectDisplayName(unknown_product_objects[0]->value));
-#endif  // BUILDFLAG(IS_ANDROID)
 
     auto unknown_product_and_vendor_objects =
         context()->GetGrantedObjects(url::Origin::Create(
@@ -1132,6 +1105,83 @@ TEST_P(SerialChooserContextAffiliatedTest, BlocklistOverridesPolicy) {
   // policy.
   SetDynamicBlocklist("usb:18D1:58F0");
   EXPECT_FALSE(context()->HasPortPermission(origin, *port));
+}
+
+TEST_F(SerialChooserContextTest, ClearBrowsingDataStaleCache) {
+  const auto kOrigin = url::Origin::Create(GURL("https://google.com"));
+
+  auto port = device::mojom::SerialPortInfo::New();
+  port->token = base::UnguessableToken::Create();
+  port->path = base::FilePath(FILE_PATH_LITERAL("/dev/ttyUSB0"));
+  port->has_vendor_id = true;
+  port->vendor_id = 0x1234;
+  port->has_product_id = true;
+  port->product_id = 0x5678;
+  port->serial_number = "123456";
+  port->display_name = "Test Port";
+
+  port_manager().AddPort(port.Clone());
+
+  EXPECT_FALSE(context()->HasPortPermission(kOrigin, *port));
+
+  // Grant permission.
+  context()->GrantPortPermission(kOrigin, *port);
+  context()->FlushScheduledSaveSettingsCalls();
+  EXPECT_TRUE(context()->HasPortPermission(kOrigin, *port));
+
+  // Simulate Clear Browsing Data.
+  // Clearing SERIAL_CHOOSER_DATA will trigger one OnObjectPermissionChanged
+  // call from NotifyPermissionRevoked().
+  EXPECT_CALL(permission_observer(),
+              OnObjectPermissionChanged(
+                  std::make_optional(ContentSettingsType::SERIAL_GUARD),
+                  ContentSettingsType::SERIAL_CHOOSER_DATA));
+  EXPECT_CALL(permission_observer(), OnPermissionRevoked(kOrigin));
+
+  auto* map = HostContentSettingsMapFactory::GetForProfile(profile());
+  map->ClearSettingsForOneTypeWithPredicate(
+      ContentSettingsType::SERIAL_CHOOSER_DATA, base::Time(), base::Time::Max(),
+      HostContentSettingsMap::PatternSourcePredicate());
+
+  // Check if the permission is still returned.
+  // Should be FALSE because we fixed ObjectPermissionContextBase.
+  EXPECT_FALSE(context()->HasPortPermission(kOrigin, *port));
+}
+
+TEST_F(SerialChooserContextTest, ClearBrowsingDataEphemeralDevice) {
+  const auto kOrigin = url::Origin::Create(GURL("https://google.com"));
+
+  auto port = device::mojom::SerialPortInfo::New();
+  port->token = base::UnguessableToken::Create();
+  port->path = base::FilePath(FILE_PATH_LITERAL("/dev/ttyUSB0"));
+
+  port_manager().AddPort(port.Clone());
+
+  EXPECT_FALSE(context()->HasPortPermission(kOrigin, *port));
+
+  // Grant permission.
+  context()->GrantPortPermission(kOrigin, *port);
+  EXPECT_TRUE(context()->HasPortPermission(kOrigin, *port));
+
+  // Simulate Clear Browsing Data.
+  // Clearing SERIAL_CHOOSER_DATA will trigger one OnObjectPermissionChanged
+  // call from NotifyPermissionRevoked().
+  EXPECT_CALL(permission_observer(),
+              OnObjectPermissionChanged(
+                  std::make_optional(ContentSettingsType::SERIAL_GUARD),
+                  ContentSettingsType::SERIAL_CHOOSER_DATA));
+  EXPECT_CALL(permission_observer(), OnPermissionRevoked(kOrigin));
+
+  auto* map = HostContentSettingsMapFactory::GetForProfile(profile());
+  map->ClearSettingsForOneTypeWithPredicate(
+      ContentSettingsType::SERIAL_CHOOSER_DATA, base::Time(), base::Time::Max(),
+      HostContentSettingsMap::PatternSourcePredicate());
+  map->ClearSettingsForOneTypeWithPredicate(
+      ContentSettingsType::SERIAL_GUARD, base::Time(), base::Time::Max(),
+      HostContentSettingsMap::PatternSourcePredicate());
+
+  // Check if the permission is still returned.
+  EXPECT_FALSE(context()->HasPortPermission(kOrigin, *port));
 }
 
 // Boolean parameter means if user is affiliated on the device. Affiliated

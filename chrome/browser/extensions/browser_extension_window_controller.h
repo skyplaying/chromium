@@ -17,10 +17,6 @@ class BrowserWindowInterface;
 class GURL;
 class TabListInterface;
 
-#if !BUILDFLAG(IS_ANDROID)
-class BrowserWindow;
-#endif  // !BUILDFLAG(IS_ANDROID)
-
 namespace extensions {
 class Extension;
 namespace api::tabs {
@@ -53,7 +49,7 @@ class BrowserExtensionWindowController : public WindowController {
                          const GURL& extension_url) const override;
   BrowserWindowInterface* GetBrowserWindowInterface() override;
 #if !BUILDFLAG(IS_ANDROID)
-  Browser* GetBrowser() const override;
+  BrowserWindowInterface* GetBrowser() const override;
 #endif
   content::WebContents* GetActiveTab() const override;
   int GetTabCount() const override;
@@ -75,9 +71,6 @@ class BrowserExtensionWindowController : public WindowController {
   const raw_ref<BrowserWindowInterface> browser_;
   // TODO(https://crbug.com/423725749): Migrate these to cross-platform
   // concepts.
-#if !BUILDFLAG(IS_ANDROID)
-  const raw_ref<BrowserWindow> window_;
-#endif
   const raw_ref<TabListInterface> tab_list_;
   const SessionID session_id_;
   const api::tabs::WindowType window_type_;

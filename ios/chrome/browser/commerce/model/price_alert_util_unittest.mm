@@ -6,18 +6,22 @@
 
 #import "base/memory/raw_ptr.h"
 #import "components/commerce/core/commerce_feature_list.h"
+#import "components/sync/test/test_sync_service.h"
 #import "components/sync_preferences/testing_pref_service_syncable.h"
 #import "components/unified_consent/pref_names.h"
 #import "components/unified_consent/unified_consent_service.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
+#import "ios/chrome/browser/shared/model/profile/test/test_profile_manager_ios.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
 #import "ios/chrome/browser/signin/model/fake_authentication_service_delegate.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity_manager.h"
+#import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/web/public/test/web_task_environment.h"
 #import "testing/platform_test.h"
@@ -28,11 +32,20 @@ class PriceAlertUtilTest : public PlatformTest {
     TestProfileIOS::Builder builder;
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
+        AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
             std::make_unique<FakeAuthenticationServiceDelegate>()));
-    profile_ = std::move(builder).Build();
-    auth_service_ = AuthenticationServiceFactory::GetForProfile(profile_.get());
+    builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
+                              base::BindRepeating(&CreateTestSyncService));
+    profile_ = profile_manager_.AddProfileWithBuilder(std::move(builder));
+    auth_service_ = AuthenticationServiceFactory::GetForProfile(profile_);
     fake_identity_ = [FakeSystemIdentity fakeIdentity1];
+  }
+
+  void TearDown() override {
+    auth_service_ = nullptr;
+    fake_identity_ = nil;
+    profile_ = nullptr;
+    PlatformTest::TearDown();
   }
 
   void SetMSBB(bool enabled) {
@@ -61,7 +74,8 @@ class PriceAlertUtilTest : public PlatformTest {
  protected:
   web::WebTaskEnvironment task_environment_;
   IOSChromeScopedTestingLocalState scoped_testing_local_state_;
-  std::unique_ptr<TestProfileIOS> profile_;
+  TestProfileManagerIOS profile_manager_;
+  raw_ptr<TestProfileIOS> profile_ = nullptr;
   raw_ptr<AuthenticationService> auth_service_ = nullptr;
   FakeSystemIdentity* fake_identity_ = nullptr;
 };
@@ -69,26 +83,26 @@ class PriceAlertUtilTest : public PlatformTest {
 TEST_F(PriceAlertUtilTest, TestMSBBOff) {
   SetMSBB(false);
   SignIn();
-  EXPECT_FALSE(IsPriceAlertsEligible(profile_.get()));
+  EXPECT_FALSE(IsPriceAlertsEligible(profile_));
 }
 
 TEST_F(PriceAlertUtilTest, TestNotSignedIn) {
   SetMSBB(true);
-  EXPECT_FALSE(IsPriceAlertsEligible(profile_.get()));
+  EXPECT_FALSE(IsPriceAlertsEligible(profile_));
 }
 
 TEST_F(PriceAlertUtilTest, TestPriceAlertsAllowed) {
   SignIn();
   SetMSBB(true);
-  EXPECT_TRUE(IsPriceAlertsEligible(profile_.get()));
+  EXPECT_TRUE(IsPriceAlertsEligible(profile_));
 }
 
 TEST_F(PriceAlertUtilTest, TestPriceAlertsEligibleThenSignOut) {
   SignIn();
   SetMSBB(true);
-  EXPECT_TRUE(IsPriceAlertsEligible(profile_.get()));
+  EXPECT_TRUE(IsPriceAlertsEligible(profile_));
   SignOut();
-  EXPECT_FALSE(IsPriceAlertsEligible(profile_.get()));
+  EXPECT_FALSE(IsPriceAlertsEligible(profile_));
 }
 
 TEST_F(PriceAlertUtilTest, TestIncognito) {
@@ -101,12 +115,12 @@ TEST_F(PriceAlertUtilTest, TestUserSettingOn) {
   SignIn();
   SetMSBB(true);
   SetUserSetting(true);
-  EXPECT_TRUE(IsPriceAlertsEligible(profile_.get()));
+  EXPECT_TRUE(IsPriceAlertsEligible(profile_));
 }
 
 TEST_F(PriceAlertUtilTest, TestUserSettingOff) {
   SignIn();
   SetMSBB(true);
   SetUserSetting(false);
-  EXPECT_FALSE(IsPriceAlertsEligible(profile_.get()));
+  EXPECT_FALSE(IsPriceAlertsEligible(profile_));
 }

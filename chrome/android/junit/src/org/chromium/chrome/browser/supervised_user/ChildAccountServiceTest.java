@@ -24,21 +24,20 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.LooperMode;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.chrome.test.util.browser.signin.AccountManagerTestRule;
-import org.chromium.components.signin.base.CoreAccountInfo;
 import org.chromium.components.signin.test.util.FakeAccountManagerFacade;
 import org.chromium.components.signin.test.util.TestAccounts;
+import org.chromium.google_apis.gaia.CoreAccountId;
 import org.chromium.ui.base.WindowAndroid;
 
 import java.lang.ref.WeakReference;
 
 /** Unit tests for {@link ChildAccountService}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@LooperMode(LooperMode.Mode.LEGACY)
 public class ChildAccountServiceTest {
     private static final long FAKE_NATIVE_CALLBACK = 1000L;
 
@@ -65,6 +64,7 @@ public class ChildAccountServiceTest {
         when(mWindowAndroidMock.getActivity()).thenReturn(new WeakReference<>(null));
         ChildAccountService.reauthenticateChildAccount(
                 mWindowAndroidMock, TestAccounts.CHILD_ACCOUNT, FAKE_NATIVE_CALLBACK);
+        RobolectricUtil.runAllBackgroundAndUi();
         verify(mNativeMock).onReauthenticationFailed(FAKE_NATIVE_CALLBACK);
     }
 
@@ -74,17 +74,18 @@ public class ChildAccountServiceTest {
         when(mWindowAndroidMock.getActivity()).thenReturn(new WeakReference<>(activity));
         doAnswer(
                         invocation -> {
-                            CoreAccountInfo accountInfo = invocation.getArgument(0);
-                            Assert.assertEquals(TestAccounts.CHILD_ACCOUNT, accountInfo);
+                            CoreAccountId accountId = invocation.getArgument(0);
+                            Assert.assertEquals(TestAccounts.CHILD_ACCOUNT.getId(), accountId);
                             Callback<Boolean> callback = invocation.getArgument(2);
                             callback.onResult(true);
                             return null;
                         })
                 .when(mFakeFacade)
-                .updateCredentials(any(CoreAccountInfo.class), eq(activity), any());
+                .updateCredentials(any(CoreAccountId.class), eq(activity), any());
 
         ChildAccountService.reauthenticateChildAccount(
                 mWindowAndroidMock, TestAccounts.CHILD_ACCOUNT, FAKE_NATIVE_CALLBACK);
+        RobolectricUtil.runAllBackgroundAndUi();
         verify(mNativeMock, never()).onReauthenticationFailed(anyLong());
     }
 
@@ -94,17 +95,18 @@ public class ChildAccountServiceTest {
         when(mWindowAndroidMock.getActivity()).thenReturn(new WeakReference<>(activity));
         doAnswer(
                         invocation -> {
-                            CoreAccountInfo accountInfo = invocation.getArgument(0);
-                            Assert.assertEquals(TestAccounts.CHILD_ACCOUNT, accountInfo);
+                            CoreAccountId accountId = invocation.getArgument(0);
+                            Assert.assertEquals(TestAccounts.CHILD_ACCOUNT.getId(), accountId);
                             Callback<Boolean> callback = invocation.getArgument(2);
                             callback.onResult(false);
                             return null;
                         })
                 .when(mFakeFacade)
-                .updateCredentials(any(CoreAccountInfo.class), eq(activity), any());
+                .updateCredentials(any(CoreAccountId.class), eq(activity), any());
 
         ChildAccountService.reauthenticateChildAccount(
                 mWindowAndroidMock, TestAccounts.CHILD_ACCOUNT, FAKE_NATIVE_CALLBACK);
+        RobolectricUtil.runAllBackgroundAndUi();
         verify(mNativeMock).onReauthenticationFailed(FAKE_NATIVE_CALLBACK);
     }
 }

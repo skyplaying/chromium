@@ -58,9 +58,11 @@ std::optional<double> CSSAnimationData::InitialDuration() {
   return std::nullopt;
 }
 
-const AtomicString& CSSAnimationData::InitialName() {
-  DEFINE_STATIC_LOCAL(const AtomicString, name, (""));
-  return name;
+bool CSSAnimationData::NamesMatch(const CSSAnimationData& other) const {
+  return std::ranges::equal(name_list_, other.name_list_,
+                            [](const auto& a, const auto& b) {
+                              return base::ValuesEquivalent(a, b);
+                            });
 }
 
 const StyleTimeline& CSSAnimationData::InitialTimeline() {
@@ -76,8 +78,7 @@ const StyleTimeline& CSSAnimationData::InitialTimelineTriggerSource() {
 
 bool CSSAnimationData::AnimationsMatchForStyleRecalc(
     const CSSAnimationData& other) const {
-  return name_list_ == other.name_list_ &&
-         timeline_list_ == other.timeline_list_ &&
+  return NamesMatch(other) && timeline_list_ == other.timeline_list_ &&
          play_state_list_ == other.play_state_list_ &&
          iteration_count_list_ == other.iteration_count_list_ &&
          direction_list_ == other.direction_list_ &&
@@ -104,15 +105,17 @@ const StyleTimeline& CSSAnimationData::GetTimeline(size_t index) const {
 
 const StyleTimeline& CSSAnimationData::GetTimelineTriggerSource(
     size_t index) const {
-  DCHECK_LT(index, timeline_trigger_source_list_.size());
+  DCHECK_LT(index, timeline_trigger_name_list_.size());
   return GetRepeated(timeline_trigger_source_list_, index);
 }
 
 const Member<const StyleTriggerAttachmentVector>
 CSSAnimationData::GetTriggerAttachments(size_t index) const {
   DCHECK_LT(index, name_list_.size());
+  // `index` is less than `trigger_attachments_list_.size()`, which
+  // is wtf_size_t.
   return (index < trigger_attachments_list_.size())
-             ? trigger_attachments_list_.at(index)
+             ? trigger_attachments_list_.at(static_cast<wtf_size_t>(index))
              : nullptr;
 }
 

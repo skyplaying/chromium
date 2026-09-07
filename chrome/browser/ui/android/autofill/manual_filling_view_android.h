@@ -42,8 +42,8 @@ class ManualFillingViewAndroid : public ManualFillingViewInterface {
   void CloseAccessorySheet() override;
   void SwapSheetWithKeyboard() override;
   void Show(WaitForKeyboard wait_for_keyboard,
-            IsCredentialFieldOrHasAutofillSuggestions
-                is_credential_field_or_has_autofill_suggestions) override;
+            ShouldShowOnLargeFormFactor should_show_on_large_form_factor,
+            IsContentEditable is_content_editable) override;
   void Hide() override;
   void ShowAccessorySheetTab(
       const autofill::AccessoryTabType& tab_type) override;
@@ -55,7 +55,7 @@ class ManualFillingViewAndroid : public ManualFillingViewInterface {
       const base::android::JavaRef<jobject>& j_user_info_field);
   void OnPasskeySelected(JNIEnv* env,
                          int32_t tab_type,
-                         std::vector<uint8_t>& passkey);
+                         const std::vector<uint8_t>& passkey);
   void OnOptionSelected(JNIEnv* env, int32_t selected_action);
   void OnToggleChanged(JNIEnv* env, int32_t selected_action, bool enabled);
   void RequestAccessorySheet(JNIEnv* env, int32_t tab_type);

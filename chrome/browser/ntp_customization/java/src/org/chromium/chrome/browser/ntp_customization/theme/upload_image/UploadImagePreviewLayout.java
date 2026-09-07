@@ -12,7 +12,6 @@ import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
-import android.graphics.drawable.GradientDrawable;
 import android.util.AttributeSet;
 import android.view.View;
 import android.view.ViewGroup;
@@ -24,6 +23,7 @@ import androidx.constraintlayout.widget.Guideline;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.logo.LogoUtils;
+import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils;
 import org.chromium.chrome.browser.ntp_customization.R;
 
 /** A layout for previewing a custom NTP background image along with a save and a cancel button. */
@@ -31,8 +31,9 @@ import org.chromium.chrome.browser.ntp_customization.R;
 public class UploadImagePreviewLayout extends ConstraintLayout {
     private static final int GOOGLE_LOGO_TINT_COLOR = Color.WHITE;
     private ImageView mLogoView;
-    private @Nullable View mSearchBoxView;
     private Guideline mGuidelineTop;
+    private View mCancelButton;
+    private @Nullable ViewGroup mSearchBoxContainer;
 
     public UploadImagePreviewLayout(Context context, AttributeSet attrs) {
         super(context, attrs);
@@ -43,15 +44,18 @@ public class UploadImagePreviewLayout extends ConstraintLayout {
         super.onFinishInflate();
         mLogoView = findViewById(R.id.default_search_engine_logo);
         mGuidelineTop = findViewById(R.id.guideline_top);
-        mSearchBoxView = findViewById(R.id.search_box_container);
+        mSearchBoxContainer = findViewById(R.id.search_box_container);
+        mCancelButton = findViewById(R.id.cancel_button);
 
+        initializeSearchBox();
+    }
+
+    private void initializeSearchBox() {
         View searchBox = findViewById(R.id.search_box);
-        Drawable background = searchBox.getBackground();
+        if (mSearchBoxContainer == null || searchBox == null) return;
 
-        if (background instanceof GradientDrawable) {
-            GradientDrawable shape = (GradientDrawable) background.mutate();
-            shape.setColor(Color.WHITE);
-        }
+        NtpCustomizationUtils.applyWhiteBackgroundAndShadow(
+                getContext(), mSearchBoxContainer, searchBox, /* applyWhiteBackground= */ true);
     }
 
     void setLogo(@Nullable Bitmap logoBitmap) {
@@ -74,14 +78,14 @@ public class UploadImagePreviewLayout extends ConstraintLayout {
         LogoUtils.setLogoViewLayoutParamsForDoodle(mLogoView, logoHeight, logoTopMargin);
     }
 
-    void setSearchBoxTopMargin(int marginPx) {
-        if (mSearchBoxView == null) return;
+    void setSearchBoxContainerTopMargin(int marginPx) {
+        if (mSearchBoxContainer == null) return;
 
-        ViewGroup.LayoutParams params = mSearchBoxView.getLayoutParams();
+        ViewGroup.LayoutParams params = mSearchBoxContainer.getLayoutParams();
 
         if (params instanceof MarginLayoutParams marginParams) {
             marginParams.topMargin = marginPx;
-            mSearchBoxView.setLayoutParams(marginParams);
+            mSearchBoxContainer.setLayoutParams(marginParams);
         }
     }
 
@@ -102,21 +106,33 @@ public class UploadImagePreviewLayout extends ConstraintLayout {
         setPadding(insets.left, getPaddingTop(), insets.right, insets.bottom);
     }
 
-    void setSearchBoxWidth(int widthPx) {
-        if (mSearchBoxView == null) return;
+    void setButtonBottomMargin(int bottomMargin) {
+        if (mCancelButton == null) return;
 
-        mSearchBoxView.setVisibility(View.VISIBLE);
-        ViewGroup.LayoutParams params = mSearchBoxView.getLayoutParams();
-        params.width = widthPx;
-        mSearchBoxView.setLayoutParams(params);
+        ViewGroup.LayoutParams params = mCancelButton.getLayoutParams();
+        if (params instanceof MarginLayoutParams marginParams) {
+            if (marginParams.bottomMargin != bottomMargin) {
+                marginParams.bottomMargin = bottomMargin;
+                mCancelButton.setLayoutParams(marginParams);
+            }
+        }
     }
 
-    void setSearchBoxHeight(int heightPx) {
-        if (mSearchBoxView == null) return;
+    void setSearchBoxContainerWidth(int widthPx) {
+        if (mSearchBoxContainer == null) return;
 
-        mSearchBoxView.setVisibility(View.VISIBLE);
-        ViewGroup.LayoutParams params = mSearchBoxView.getLayoutParams();
+        mSearchBoxContainer.setVisibility(View.VISIBLE);
+        ViewGroup.LayoutParams params = mSearchBoxContainer.getLayoutParams();
+        params.width = widthPx;
+        mSearchBoxContainer.setLayoutParams(params);
+    }
+
+    void setSearchBoxContainerHeight(int heightPx) {
+        if (mSearchBoxContainer == null) return;
+
+        mSearchBoxContainer.setVisibility(View.VISIBLE);
+        ViewGroup.LayoutParams params = mSearchBoxContainer.getLayoutParams();
         params.height = heightPx;
-        mSearchBoxView.setLayoutParams(params);
+        mSearchBoxContainer.setLayoutParams(params);
     }
 }

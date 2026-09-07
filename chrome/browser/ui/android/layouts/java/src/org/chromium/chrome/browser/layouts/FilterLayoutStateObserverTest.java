@@ -12,7 +12,6 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.CallbackHelper;
@@ -20,7 +19,6 @@ import org.chromium.chrome.browser.layouts.LayoutStateProvider.LayoutStateObserv
 
 /** Tests for the {@link FilterLayoutStateObserver}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class FilterLayoutStateObserverTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
     private final CallbackHelper mStartedShowingCallbackHelper = new CallbackHelper();
@@ -66,7 +64,7 @@ public class FilterLayoutStateObserverTest {
                 "Event should not have triggered.",
                 initialCount,
                 mStartedShowingCallbackHelper.getCallCount());
-        observer.onStartedShowing(LayoutType.TAB_SWITCHER);
+        observer.onStartedShowing(LayoutType.HUB);
         assertEquals(
                 "Event should not have triggered with the specified layout.",
                 initialCount,

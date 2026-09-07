@@ -19,7 +19,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/account_reconcilor_factory.h"
 #include "chrome/browser/signin/signin_browser_test_base.h"
-#include "chrome/browser/ui/browser.h"
 #include "components/signin/core/browser/account_reconcilor.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/base/signin_switches.h"
@@ -209,8 +208,11 @@ class TurnSyncOnHelperBrowserTestWithParam
       : SigninBrowserTestBase(/*use_main_profile=*/false) {
     // Class `TurnSyncOnHelper` is only reachable and usable if the feature is
     // disabled.
-    scoped_feature_list_.InitAndDisableFeature(
-        syncer::kReplaceSyncPromosWithSignInPromos);
+    scoped_feature_list_.InitWithFeatures(
+        /*enabled_features=*/{},
+        /*disabled_features=*/{
+            syncer::kReplaceSyncPromosWithSignInPromos,
+            syncer::kReplaceSyncPromosWithSigninPromosNewSignin});
   }
 
   void SetUpOnMainThread() override {
@@ -236,7 +238,7 @@ class TurnSyncOnHelperBrowserTestWithParam
 IN_PROC_BROWSER_TEST_P(TurnSyncOnHelperBrowserTestWithParam,
                        PrimaryAccountResetAfterSyncOptInFlowAborted) {
   Profile* profile = GetProfile();
-  CoreAccountInfo primary_account_info = signin::MakeAccountAvailable(
+  AccountInfo primary_account_info = signin::MakeAccountAvailable(
       identity_manager(), identity_test_env()
                               ->CreateAccountAvailabilityOptionsBuilder()
                               .AsPrimary(signin::ConsentLevel::kSignin)
@@ -246,8 +248,8 @@ IN_PROC_BROWSER_TEST_P(TurnSyncOnHelperBrowserTestWithParam,
       SetAccountsCookiesAndTokens({"second@gmail.com", "third@gmail.com"});
   AccountInfo second_account_info = secondary_accounts_info[0];
   AccountInfo third_account_info = secondary_accounts_info[1];
-  CoreAccountId first_account_id = primary_account_info.account_id;
-  CoreAccountId second_account_id = second_account_info.account_id;
+  CoreAccountId first_account_id = primary_account_info.GetAccountId();
+  CoreAccountId second_account_id = second_account_info.GetAccountId();
 
   ASSERT_EQ(signin::ConsentLevel::kSignin,
             signin::GetPrimaryAccountConsentLevel(identity_manager()));
@@ -350,8 +352,11 @@ class TurnSyncOnHelperBrowserTest : public SigninBrowserTestBase {
       : SigninBrowserTestBase(/*use_main_profile=*/false) {
     // Class `TurnSyncOnHelper` is only reachable and usable if the feature is
     // disabled.
-    scoped_feature_list_.InitAndDisableFeature(
-        syncer::kReplaceSyncPromosWithSignInPromos);
+    scoped_feature_list_.InitWithFeatures(
+        /*enabled_features=*/{},
+        /*disabled_features=*/{
+            syncer::kReplaceSyncPromosWithSignInPromos,
+            syncer::kReplaceSyncPromosWithSigninPromosNewSignin});
   }
 
   void SetUpOnMainThread() override {
@@ -366,17 +371,17 @@ class TurnSyncOnHelperBrowserTest : public SigninBrowserTestBase {
   base::ScopedClosureRunner disclaimer_service_resetter_;
 };
 
-// Regression test for https://crbug.com/1404961
+// Regression test for https://crbug.com/40252085
 IN_PROC_BROWSER_TEST_F(TurnSyncOnHelperBrowserTest, UndoSyncRemoveAccount) {
   Profile* profile = GetProfile();
 
-  CoreAccountInfo account_info = signin::MakeAccountAvailable(
+  AccountInfo account_info = signin::MakeAccountAvailable(
       identity_manager(), identity_test_env()
                               ->CreateAccountAvailabilityOptionsBuilder()
                               .AsPrimary(signin::ConsentLevel::kSignin)
                               .WithCookie()
                               .Build("account@gmail.com"));
-  CoreAccountId account_id = account_info.account_id;
+  CoreAccountId account_id = account_info.GetAccountId();
 
   base::RunLoop run_loop;
   Delegate::Choices choices = {.sync_optin_choice = std::nullopt};
@@ -398,7 +403,7 @@ IN_PROC_BROWSER_TEST_F(TurnSyncOnHelperBrowserTest, UndoSyncRemoveAccount) {
 
   AccountReconcilor* reconcilor =
       AccountReconcilorFactory::GetForProfile(profile);
-  // For the scenario in https://crbug.com/1404961, the reconcilor has to be
+  // For the scenario in https://crbug.com/40252085, the reconcilor has to be
   // triggered by the account removal.
   ASSERT_EQ(reconcilor->GetState(),
             signin_metrics::AccountReconcilorState::kOk);
@@ -430,7 +435,7 @@ IN_PROC_BROWSER_TEST_F(TurnSyncOnHelperBrowserTest,
   AccountInfo first_account_info =
       identity_test_env()->MakeAccountAvailable("first@gmail.com");
   identity_test_env()->UpdateAccountInfoForAccount(first_account_info);
-  CoreAccountId first_account_id = first_account_info.account_id;
+  CoreAccountId first_account_id = first_account_info.GetAccountId();
 
   ASSERT_NE(signin::ConsentLevel::kSignin,
             signin::GetPrimaryAccountConsentLevel(identity_manager()));
@@ -477,7 +482,7 @@ IN_PROC_BROWSER_TEST_F(
     PrimaryAccountResetAfterSyncOptInFlowAbortedForSecondaryAccount) {
   Profile* profile = GetProfile();
   // Set up the primary account.
-  CoreAccountInfo primary_account_info = signin::MakeAccountAvailable(
+  AccountInfo primary_account_info = signin::MakeAccountAvailable(
       identity_manager(), identity_test_env()
                               ->CreateAccountAvailabilityOptionsBuilder()
                               .AsPrimary(signin::ConsentLevel::kSignin)
@@ -487,8 +492,8 @@ IN_PROC_BROWSER_TEST_F(
       SetAccountsCookiesAndTokens({"second@gmail.com", "third@gmail.com"});
   AccountInfo second_account_info = secondary_accounts_info[0];
   AccountInfo third_account_info = secondary_accounts_info[1];
-  CoreAccountId first_account_id = primary_account_info.account_id;
-  CoreAccountId second_account_id = second_account_info.account_id;
+  CoreAccountId first_account_id = primary_account_info.GetAccountId();
+  CoreAccountId second_account_id = second_account_info.GetAccountId();
 
   ASSERT_EQ(signin::ConsentLevel::kSignin,
             signin::GetPrimaryAccountConsentLevel(identity_manager()));
@@ -539,17 +544,17 @@ IN_PROC_BROWSER_TEST_F(
   Profile* profile = GetProfile();
 
   // Set up the primary account.
-  CoreAccountInfo primary_account_info = signin::MakeAccountAvailable(
+  AccountInfo primary_account_info = signin::MakeAccountAvailable(
       identity_manager(), identity_test_env()
                               ->CreateAccountAvailabilityOptionsBuilder()
                               .AsPrimary(signin::ConsentLevel::kSignin)
                               .WithCookie()
                               .Build("first@gmail.com"));
-  CoreAccountId first_account_id = primary_account_info.account_id;
+  CoreAccountId first_account_id = primary_account_info.GetAccountId();
   auto secondary_accounts_info =
       SetAccountsCookiesAndTokens({"second@gmail.com"});
   AccountInfo second_account_info = secondary_accounts_info[0];
-  CoreAccountId second_account_id = second_account_info.account_id;
+  CoreAccountId second_account_id = second_account_info.GetAccountId();
 
   ASSERT_EQ(signin::ConsentLevel::kSignin,
             signin::GetPrimaryAccountConsentLevel(identity_manager()));

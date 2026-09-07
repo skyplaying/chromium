@@ -14,6 +14,7 @@
 #include "components/input/touchscreen_tap_suppression_controller.h"
 #include "third_party/blink/public/mojom/input/input_event_result.mojom-shared.h"
 #include "ui/events/blink/fling_booster.h"
+#include "ui/events/event_constants.h"
 
 namespace blink {
 class WebGestureCurve;
@@ -78,7 +79,13 @@ class COMPONENT_EXPORT(INPUT) FlingController {
     gfx::PointF global_point;
     int modifiers;
     blink::WebGestureDevice source_device;
+    // Timestamp where the fling curve animation begins physics calculations.
     base::TimeTicks start_time;
+    // Timestamp of the original GestureFlingStart event.
+    base::TimeTicks fling_start_event_time;
+    // The scroll axis locking (railing) mode of the GestureFlingStart event,
+    // forwarded to the scroll updates generated throughout the fling.
+    ui::GestureScrollRailsMode rails_mode = ui::GestureScrollRailsMode::kNone;
 
     ActiveFlingParameters() : modifiers(0) {}
   };
@@ -173,10 +180,9 @@ class COMPONENT_EXPORT(INPUT) FlingController {
     return !last_progress_time_.is_null();
   }
 
-  raw_ptr<FlingControllerEventSenderClient, DanglingUntriaged>
-      event_sender_client_;
+  raw_ptr<FlingControllerEventSenderClient> event_sender_client_;
 
-  raw_ptr<FlingControllerSchedulerClient, DanglingUntriaged> scheduler_client_;
+  raw_ptr<FlingControllerSchedulerClient> scheduler_client_;
 
   // An object tracking the state of touchpad on the delivery of mouse events to
   // the renderer to filter mouse immediately after a touchpad fling canceling

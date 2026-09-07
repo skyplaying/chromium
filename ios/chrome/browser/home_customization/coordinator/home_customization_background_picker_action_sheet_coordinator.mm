@@ -17,7 +17,6 @@
 #import "ios/chrome/browser/home_customization/model/home_background_image_service_factory.h"
 #import "ios/chrome/browser/home_customization/ui/background_customization_configuration.h"
 #import "ios/chrome/browser/home_customization/ui/home_customization_background_color_picker_view_controller.h"
-#import "ios/chrome/browser/home_customization/ui/home_customization_background_photo_library_picker_view_controller.h"
 #import "ios/chrome/browser/home_customization/ui/home_customization_background_picker_presentation_delegate.h"
 #import "ios/chrome/browser/home_customization/ui/home_customization_background_preset_gallery_picker_view_controller.h"
 #import "ios/chrome/browser/home_customization/utils/home_customization_constants.h"
@@ -90,7 +89,7 @@ CGFloat const kSheetCornerRadius = 30;
       ImageFetcherServiceFactory::GetForProfile(self.profile);
   image_fetcher::ImageFetcher* imageFetcher =
       imageFetcherService->GetImageFetcher(
-          image_fetcher::ImageFetcherConfig::kDiskCacheOnly);
+          image_fetcher::ImageFetcherConfig::kReducedMode);
   HomeBackgroundImageService* homeBackgroundImageService =
       HomeBackgroundImageServiceFactory::GetForProfile(self.profile);
   HomeBackgroundCustomizationService* homeBackgroundCustomizationService =
@@ -204,6 +203,8 @@ CGFloat const kSheetCornerRadius = 30;
   if (_backgroundConfigurationMediator.themeHasChanged) {
     _backgroundConfigurationMediator.backgroundSelectionOutcome =
         BackgroundSelectionOutcome::kApplied;
+
+    [self.presentationDelegate schedulePhotoNotSyncedSnackbarOnDismiss];
   }
 
   [self.presentationDelegate dismissBackgroundPicker];
@@ -282,18 +283,29 @@ CGFloat const kSheetCornerRadius = 30;
 
   NSMutableArray<UISheetPresentationControllerDetent*>* detents =
       [NSMutableArray array];
-  [detents addObject:initialDetent];
 
-  // The preset gallery can be expanded full screen and therefore a grabber is
-  // shown.
-  if (_pickerStyle == HomeCustomizationBackgroundStyle::kPreset) {
-    presentationController.prefersGrabberVisible = YES;
+  // On iPad, use large detent only for the preset gallery so the sheet opens
+  // at full height and cannot be resized shorter. The base view controller is
+  // a form sheet with compact horizontal size class, so check the window's
+  // traits instead.
+  UITraitCollection* windowTraits =
+      self.baseViewController.view.window.traitCollection;
+  if (windowTraits.horizontalSizeClass == UIUserInterfaceSizeClassRegular &&
+      _pickerStyle == HomeCustomizationBackgroundStyle::kPreset) {
     [detents addObject:[UISheetPresentationControllerDetent largeDetent]];
+  } else {
+    [detents addObject:initialDetent];
+
+    // The preset gallery can be expanded full screen and therefore a grabber
+    // is shown.
+    if (_pickerStyle == HomeCustomizationBackgroundStyle::kPreset) {
+      presentationController.prefersGrabberVisible = YES;
+      [detents addObject:[UISheetPresentationControllerDetent largeDetent]];
+    }
+    presentationController.largestUndimmedDetentIdentifier =
+        kBottomSheetDetentIdentifier;
   }
   presentationController.detents = detents;
-
-  presentationController.largestUndimmedDetentIdentifier =
-      kBottomSheetDetentIdentifier;
 
   [self.baseViewController presentViewController:navigationController
                                         animated:YES

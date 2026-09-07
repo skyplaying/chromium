@@ -89,6 +89,19 @@ public abstract class AwContentsClient {
     private static final Pattern FILE_ANDROID_ASSET_PATTERN =
             Pattern.compile("^file:///android_(asset|res)/.*");
 
+    // A mask of flags that are safe for untrusted content to use when starting an Activity.
+    // This list is not exhaustive and flags not listed here are not necessarily unsafe.
+    private static final int ALLOWED_INTENT_FLAGS =
+            Intent.FLAG_EXCLUDE_STOPPED_PACKAGES
+                    | Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    | Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    | Intent.FLAG_ACTIVITY_MATCH_EXTERNAL
+                    | Intent.FLAG_ACTIVITY_NEW_TASK
+                    | Intent.FLAG_ACTIVITY_MULTIPLE_TASK
+                    | Intent.FLAG_ACTIVITY_NEW_DOCUMENT
+                    | Intent.FLAG_ACTIVITY_RETAIN_IN_RECENTS
+                    | Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT;
+
     public AwContentsClient() {
         this(Looper.myLooper());
     }
@@ -156,11 +169,11 @@ public abstract class AwContentsClient {
     public abstract void onReceivedSslError(Callback<Boolean> callback, SslError error);
 
     public abstract void onReceivedClientCertRequest(
-            final AwContentsClientBridge.ClientCertificateRequestCallback callback,
-            final String[] keyTypes,
-            final Principal[] principals,
-            final String host,
-            final int port);
+            AwContentsClientBridge.ClientCertificateRequestCallback callback,
+            String[] keyTypes,
+            Principal[] principals,
+            String host,
+            int port);
 
     public abstract void onReceivedLoginRequest(String realm, String account, String args);
 
@@ -229,6 +242,7 @@ public abstract class AwContentsClient {
         }
         // Sanitize the Intent, ensuring web pages can not bypass browser
         // security (only access to BROWSABLE activities).
+        intent.setFlags(intent.getFlags() & ALLOWED_INTENT_FLAGS);
         intent.addCategory(Intent.CATEGORY_BROWSABLE);
         intent.setComponent(null);
 
@@ -265,7 +279,9 @@ public abstract class AwContentsClient {
 
     private static void recordSendBrowsingIntentState(@SendIntentState int activityStarted) {
         RecordHistogram.recordEnumeratedHistogram(
-                "Android.WebView.SendBrowsingIntent", activityStarted, SendIntentState.MAX_VALUE);
+                "Android.WebView.SendBrowsingIntent",
+                activityStarted,
+                SendIntentState.MAX_VALUE + 1);
     }
 
     public static Uri[] parseFileChooserResult(int resultCode, Intent intent) {

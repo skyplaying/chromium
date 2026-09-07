@@ -48,15 +48,44 @@ decltype(&GetNetworkConnectivityHint) GetGetNetworkConnectivityHint() {
 }  // namespace
 
 NetworkChangeNotifierWin::NetworkChangeNotifierWin()
-    : NetworkChangeNotifier(NetworkChangeCalculatorParamsWin()),
+    : NetworkChangeNotifierWin(nullptr) {}
+
+NetworkChangeNotifierWin::NetworkChangeNotifierWin(
+    SystemDnsConfigChangeNotifier* dns_config_notifier)
+    : NetworkChangeNotifier(NetworkChangeCalculatorParamsWin(),
+                            dns_config_notifier),
       addr_overlapped_(),
       blocking_task_runner_(
           base::ThreadPool::CreateSequencedTaskRunner({base::MayBlock()})),
-      last_computed_connection_type_(RecomputeCurrentConnectionType()),
-      last_announced_offline_(last_computed_connection_type_ ==
-                              CONNECTION_NONE),
+      // When kDeferConnectionTypeAtStartup is enabled, CONNECTION_UNKNOWN is
+      // used as the initial value instead of calling
+      // RecomputeCurrentConnectionType() synchronously, which makes a
+      // cross-process call that can block the UI thread for ~50ms during
+      // startup. The actual connection type is computed asynchronously in
+      // WatchForAddressChange(). Callers that query before the async
+      // computation completes will see CONNECTION_UNKNOWN, meaning "connected,
+      // type not yet determined" -- IsOffline() will return false. If the
+      // machine turns out to be offline, OnInitialConnectionTypeComputed()
+      // corrects that optimistic assumption and notifies observers.
+      last_computed_connection_type_(
+          base::FeatureList::IsEnabled(features::kDeferConnectionTypeAtStartup)
+              ? CONNECTION_UNKNOWN
+              : RecomputeCurrentConnectionType()),
+      last_announced_offline_(
+          base::FeatureList::IsEnabled(features::kDeferConnectionTypeAtStartup)
+              ? false
+              : (last_computed_connection_type_ == CONNECTION_NONE)),
       sequence_runner_for_registration_(
           base::SequencedTaskRunner::GetCurrentDefault()) {
+  // WSACreateEvent() requires a successful WSAStartup() to have happened in
+  // this process. That used to be guaranteed by
+  // RecomputeCurrentConnectionType() running in the initializer list above,
+  // which no longer happens when kDeferConnectionTypeAtStartup is enabled (and
+  // never happened on the GetNetworkConnectivityHint() path). The network
+  // service process does not otherwise initialize Winsock before this point, so
+  // do it explicitly.
+  EnsureWinsockInit();
+
   addr_overlapped_.hEvent = WSACreateEvent();
 
   cost_change_notifier_ = NetworkCostChangeNotifierWin::CreateInstance(
@@ -314,6 +343,32 @@ void NetworkChangeNotifierWin::NotifyObservers(ConnectionType connection_type) {
                      /*num_polls_completed=*/0));
 }
 
+void NetworkChangeNotifierWin::OnInitialConnectionTypeComputed(
+    ConnectionType connection_type) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  SetCurrentConnectionType(connection_type);
+
+  // Transitions to a concrete online type are deliberately silent: the
+  // placeholder CONNECTION_UNKNOWN already means "online, type not yet
+  // determined", so announcing one would trigger a spurious network change
+  // during startup.
+  if (connection_type != CONNECTION_NONE) {
+    return;
+  }
+
+  // Being offline is a different story. The constructor optimistically reported
+  // CONNECTION_UNKNOWN, so IsOffline() has been answering false. Nothing else
+  // will correct that: NotifyAddrChange() only fires on address changes, which
+  // may never happen on a machine with no network. Announce it now.
+  last_announced_offline_ = true;
+  NotifyObserversOfConnectionTypeChange();
+  double max_bandwidth_mbps = 0.0;
+  ConnectionType max_connection_type = CONNECTION_NONE;
+  GetCurrentMaxBandwidthAndConnectionType(&max_bandwidth_mbps,
+                                          &max_connection_type);
+  NotifyObserversOfMaxBandwidthChange(max_bandwidth_mbps, max_connection_type);
+}
+
 void NetworkChangeNotifierWin::WatchForAddressChange() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!is_watching_);
@@ -336,9 +391,21 @@ void NetworkChangeNotifierWin::WatchForAddressChange() {
   // network change event, since network changes were not being observed in
   // that interval.
   if (sequential_failures_ > 0) {
+    initial_connection_type_initialized_ = true;
     RecomputeCurrentConnectionTypeOnBlockingSequence(
         base::BindOnce(&NetworkChangeNotifierWin::NotifyObservers,
                        weak_factory_.GetWeakPtr()));
+  } else if (!initial_connection_type_initialized_ &&
+             base::FeatureList::IsEnabled(
+                 features::kDeferConnectionTypeAtStartup)) {
+    // Compute the initial connection type asynchronously to avoid blocking
+    // startup. The constructor defers this work since
+    // RecomputeCurrentConnectionType() makes a cross-process call that can
+    // take ~50ms.
+    initial_connection_type_initialized_ = true;
+    RecomputeCurrentConnectionTypeOnBlockingSequence(base::BindOnce(
+        &NetworkChangeNotifierWin::OnInitialConnectionTypeComputed,
+        weak_factory_.GetWeakPtr()));
   }
 
   is_watching_ = true;

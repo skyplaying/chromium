@@ -15,21 +15,32 @@
 #import "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
 #import "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
 #import "components/autofill/core/browser/data_manager/personal_data_manager.h"
-#import "components/autofill/core/common/autofill_features.h"
+#import "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
+#import "components/autofill/core/browser/data_model/payments/credit_card.h"
+#import "components/autofill/ios/browser/autofill_client_ios.h"
 #import "components/autofill/ios/browser/form_suggestion.h"
 #import "components/autofill/ios/browser/form_suggestion_provider.h"
 #import "components/autofill/ios/browser/personal_data_manager_observer_bridge.h"
+#import "components/autofill/ios/common/features.h"
 #import "components/autofill/ios/form_util/form_activity_observer_bridge.h"
 #import "components/autofill/ios/form_util/form_activity_params.h"
 #import "components/feature_engagement/public/tracker.h"
 #import "components/omnibox/browser/omnibox_pref_names.h"
+#import "components/password_manager/core/browser/password_form.h"
+#import "components/password_manager/core/browser/password_string.h"
+#import "components/password_manager/core/browser/ui/credential_ui_entry.h"
+#import "components/password_manager/ios/password_suggestion_helper.h"
+#import "components/password_manager/ios/shared_password_controller.h"
 #import "components/prefs/pref_service.h"
+#import "components/webauthn/ios/ios_webauthn_credentials_delegate.h"
+#import "components/webauthn/ios/ios_webauthn_credentials_delegate_factory.h"
+#import "components/webauthn/ios/passkey_suggestion_utils.h"
 #import "ios/chrome/browser/autofill/form_input_accessory/coordinator/form_input_accessory_mediator_handler.h"
 #import "ios/chrome/browser/autofill/form_input_accessory/coordinator/keyboard_accessory_optional_update_scheduler.h"
 #import "ios/chrome/browser/autofill/form_input_accessory/public/form_input_accessory_chromium_text_data.h"
-#import "ios/chrome/browser/autofill/form_input_accessory/public/scoped_form_input_accessory_reauth_module_override.h"
 #import "ios/chrome/browser/autofill/form_input_accessory/ui/form_input_accessory_consumer.h"
 #import "ios/chrome/browser/autofill/form_input_accessory/ui/form_suggestion_view.h"
+#import "ios/chrome/browser/autofill/model/autofill_ai_util.h"
 #import "ios/chrome/browser/autofill/model/bottom_sheet/autofill_bottom_sheet_observer_bridge.h"
 #import "ios/chrome/browser/autofill/model/bottom_sheet/autofill_bottom_sheet_tab_helper.h"
 #import "ios/chrome/browser/autofill/model/features.h"
@@ -38,6 +49,7 @@
 #import "ios/chrome/browser/autofill/model/form_suggestion_tab_helper.h"
 #import "ios/chrome/browser/default_browser/model/default_browser_interest_signals.h"
 #import "ios/chrome/browser/passwords/model/password_counter_delegate_bridge.h"
+#import "ios/chrome/browser/passwords/model/password_tab_helper.h"
 #import "ios/chrome/browser/shared/coordinator/chrome_coordinator/chrome_coordinator.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_backed_boolean.h"
@@ -47,6 +59,7 @@
 #import "ios/chrome/browser/shared/public/commands/security_alert_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
+#import "ios/chrome/common/credential_provider/net_util.h"
 #import "ios/chrome/common/ui/elements/form_input_accessory_view.h"
 #import "ios/chrome/common/ui/reauthentication/reauthentication_event.h"
 #import "ios/chrome/common/ui/reauthentication/reauthentication_module.h"
@@ -60,19 +73,48 @@
 #import "ui/base/device_form_factor.h"
 #import "ui/base/l10n/l10n_util_mac.h"
 
+using ActivityType = autofill::FormActivityParams::ActivityType;
+using autofill::Suggestion;
+using autofill::SuggestionType;
 using base::UmaHistogramEnumeration;
 
 namespace {
 
 // Returns whether the input field type triggers the keyboard to open. If the
 // field type isn't recognized, it returns the provided default value.
-bool InputTriggersKeyboard(std::string field_type, bool default_value) {
-  static const auto triggers_keyboard = base::MakeFixedFlatSet<std::string>(
-      {"email", "number", "password", "search", "tel", "text", "url", "week"});
-  static const auto no_keyboard = base::MakeFixedFlatSet<std::string>(
-      {"button", "checkbox", "color", "date", "datetime-local", "file",
-       "hidden", "image", "month", "radio", "range", "reset", "submit",
-       "time"});
+bool InputTriggersKeyboard(autofill::FormActivityParams::FieldType field_type,
+                           bool default_value) {
+  if (field_type == autofill::FormActivityParams::FieldType::kContentEditable) {
+    return base::FeatureList::IsEnabled(kAutofillSupportContentEditableIos);
+  }
+  static const auto triggers_keyboard =
+      base::MakeFixedFlatSet<autofill::FormActivityParams::FieldType>({
+          autofill::FormActivityParams::FieldType::kEmail,
+          autofill::FormActivityParams::FieldType::kNumber,
+          autofill::FormActivityParams::FieldType::kObfuscated,
+          autofill::FormActivityParams::FieldType::kSearch,
+          autofill::FormActivityParams::FieldType::kTel,
+          autofill::FormActivityParams::FieldType::kText,
+          autofill::FormActivityParams::FieldType::kUrl,
+          autofill::FormActivityParams::FieldType::kWeek,
+      });
+  static const auto no_keyboard =
+      base::MakeFixedFlatSet<autofill::FormActivityParams::FieldType>({
+          autofill::FormActivityParams::FieldType::kButton,
+          autofill::FormActivityParams::FieldType::kCheckbox,
+          autofill::FormActivityParams::FieldType::kColor,
+          autofill::FormActivityParams::FieldType::kDate,
+          autofill::FormActivityParams::FieldType::kDateTimeLocal,
+          autofill::FormActivityParams::FieldType::kFile,
+          autofill::FormActivityParams::FieldType::kHidden,
+          autofill::FormActivityParams::FieldType::kImage,
+          autofill::FormActivityParams::FieldType::kMonth,
+          autofill::FormActivityParams::FieldType::kRadio,
+          autofill::FormActivityParams::FieldType::kRange,
+          autofill::FormActivityParams::FieldType::kReset,
+          autofill::FormActivityParams::FieldType::kSubmit,
+          autofill::FormActivityParams::FieldType::kTime,
+      });
 
   if (triggers_keyboard.contains(field_type)) {
     return true;
@@ -91,8 +133,8 @@ bool IsSuggestionRefreshAllowed() {
   // enabled.
   return base::FeatureList::IsEnabled(
              kThrottleFormInputAccessorySuggestionRefresh)
-             ? UIApplication.sharedApplication.applicationState ==
-                   UIApplicationStateActive
+             ? UIApplication.sharedApplication.applicationState !=
+                   UIApplicationStateBackground
              : true;
 }
 
@@ -107,13 +149,13 @@ bool IsStateless() {
 @interface FormInputAccessoryMediator () <
     AutofillBottomSheetObserving,
     BooleanObserver,
+    CRWWebStateObserver,
     FormActivityObserver,
     FormInputAccessoryViewDelegate,
-    CRWWebStateObserver,
+    KeyboardAccessoryOptionalUpdateSchedulerDelegate,
     PasswordCounterObserver,
     PersonalDataManagerObserver,
-    WebStateListObserving,
-    KeyboardAccessoryOptionalUpdateSchedulerDelegate>
+    WebStateListObserving>
 
 // The main consumer for this mediator.
 @property(nonatomic, weak) id<FormInputAccessoryConsumer> consumer;
@@ -205,6 +247,9 @@ bool IsStateless() {
   // The scheduler for optional updates.
   std::optional<KeyboardAccessoryOptionalUpdateScheduler>
       _optionalUpdateScheduler;
+
+  // Whether the mediator has been disconnected.
+  BOOL _isDisconnected;
 }
 
 - (instancetype)
@@ -248,7 +293,16 @@ bool IsStateless() {
         _webStateObserverBridge =
             std::make_unique<web::WebStateObserverBridge>(self);
         webState->AddObserver(_webStateObserverBridge.get());
+
+        autofill::AutofillClientIOS* client =
+            autofill::AutofillClientIOS::FromWebState(webState);
+        consumer.atMemoryButtonHidden =
+            !autofill::IsAutofillAtMemorySearchUIEnabled(client);
+      } else {
+        consumer.atMemoryButtonHidden = YES;
       }
+    } else {
+      consumer.atMemoryButtonHidden = YES;
     }
     _formNavigationHandler = [[FormInputAccessoryViewHandler alloc] init];
     _formNavigationHandler.webState = _webState;
@@ -332,6 +386,7 @@ bool IsStateless() {
 }
 
 - (void)disconnect {
+  _isDisconnected = YES;
   _optionalUpdateScheduler->CancelOptionalUpdate();
   _formActivityObserverBridge.reset();
   _autofillBottomSheetObserverBridge.reset();
@@ -364,7 +419,8 @@ bool IsStateless() {
 }
 
 - (BOOL)lastFocusedFieldWasObfuscated {
-  return _lastSeenParams.field_type == autofill::kObfuscatedFieldType;
+  return _lastSeenParams.field_type ==
+         autofill::FormActivityParams::FieldType::kObfuscated;
 }
 
 - (autofill::FillingProduct)currentProviderMainFillingProduct {
@@ -391,22 +447,17 @@ bool IsStateless() {
   }
 }
 
+- (void)resetSuggestions {
+  [self.consumer showAccessorySuggestions:@[]];
+  [self updateSuggestionsIfNeeded];
+}
+
 #pragma mark - KeyboardNotification
 
 - (void)keyboardWillShow:(NSNotification*)notification {
   _keyboardHeightChangeNotificationsEnabled = YES;
 
-  if (base::FeatureList::IsEnabled(
-          kSuppressKeyboardWillShowSuggestionRefresh)) {
-    return;
-  }
-
-  if (base::FeatureList::IsEnabled(
-          kAutofillThrottleOptionalSuggestionRefresh)) {
-    [self scheduleOptionalUpdate];
-  } else {
-    [self updateSuggestionsIfNeeded];
-  }
+  [self updateSuggestionsIfNeeded];
 }
 
 - (void)keyboardWillChangeFrame:(NSNotification*)notification {
@@ -482,10 +533,21 @@ bool IsStateless() {
     return;
   }
 
+  // Ignore form_changed events to prevent gestureless form changes from
+  // overwriting the active keyboard accessory's target web frame ID.
+  if (params.type == ActivityType::kFormChanged) {
+    return;
+  }
+
   BOOL isDefaultViewEnabled =
       IsIOSKeyboardAccessoryDefaultViewEnabled() &&
       ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_PHONE;
-  BOOL isSelectOne = params.field_type == "select-one";
+  BOOL isSelectOne =
+      params.field_type == autofill::FormActivityParams::FieldType::kSelectOne;
+  BOOL isContentEditable =
+      params.field_type ==
+      autofill::FormActivityParams::FieldType::kContentEditable;
+  self.consumer.contentEditable = isContentEditable;
 
   // Return early and reset if element is a picker.
   if (isSelectOne && !isDefaultViewEnabled) {
@@ -501,9 +563,9 @@ bool IsStateless() {
     return;
   }
 
-  // Don't look for suggestions in the next events.
-  if (params.type == "blur" || params.type == "change" ||
-      params.type == "form_changed") {
+  // Skip retrieving suggestions for blur or change events.
+  if (params.type == ActivityType::kBlur ||
+      params.type == ActivityType::kChange) {
     return;
   }
 
@@ -556,6 +618,12 @@ bool IsStateless() {
 - (void)formInputAccessoryViewDidTapAddressManualFillButton:
     (FormInputAccessoryView*)sender {
   [self.consumer addressManualFillButtonPressed:sender.addressManualFillButton];
+}
+
+- (void)formInputAccessoryViewDidTapAtMemoryManualFillButton:
+    (FormInputAccessoryView*)sender {
+  [self.consumer
+      atMemoryManualFillButtonPressed:sender.atMemoryManualFillButton];
 }
 
 - (FormInputAccessoryViewTextData*)textDataforFormInputAccessoryView:
@@ -665,14 +733,6 @@ bool IsStateless() {
 
 #pragma mark - Private
 
-// Returns the reauthentication module, which can be an override for testing
-// purposes.
-- (ReauthenticationModule*)reauthenticationModule {
-  id<ReauthenticationProtocol> overrideModule =
-      ScopedFormInputAccessoryReauthModuleOverride::Get();
-  return overrideModule ? overrideModule : _reauthenticationModule;
-}
-
 - (void)updateSuggestionsIfNeeded {
   if (!_webState || !_webState->IsVisible()) {
     return;
@@ -704,9 +764,16 @@ bool IsStateless() {
       self.provider = tabHelper->GetAccessoryViewProvider();
     }
     _formNavigationHandler.webState = webState;
+
+    autofill::AutofillClientIOS* client =
+        autofill::AutofillClientIOS::FromWebState(webState);
+    self.consumer.atMemoryButtonHidden =
+        !autofill::IsAutofillAtMemorySearchUIEnabled(client);
   } else {
     self.webState = nullptr;
     self.provider = nil;
+    self.consumer.atMemoryButtonHidden = YES;
+    self.consumer.contentEditable = NO;
   }
 }
 
@@ -715,6 +782,7 @@ bool IsStateless() {
 - (void)reset {
   _lastSeenParams = autofill::FormActivityParams();
   _hasLastSeenParams = NO;
+  self.consumer.contentEditable = NO;
   [self.consumer showAccessorySuggestions:@[]];
 
   [self.handler resetFormInputView];
@@ -745,24 +813,33 @@ bool IsStateless() {
                         webState:self.webState
         accessoryViewUpdateBlock:^(NSArray<FormSuggestion*>* suggestions,
                                    id<FormInputSuggestionsProvider> provider) {
-          // Ignore suggestions if the results aren't from the latest query
-          // which provides the most relevant suggestions to fit the current
-          // context (i.e. for the field being focused).
-          if (queryID != weakSelf.latestQueryId) {
-            return;
-          }
-
-          // No suggestions found, return and don't update suggestions in view
-          // model.
-          if (!suggestions) {
-            return;
-          }
-
-          [weakSelf updateWithProvider:provider suggestions:suggestions];
+          [weakSelf onSuggestionsRetrieved:suggestions
+                                  provider:provider
+                                   queryID:queryID];
         }];
 }
 
-// Post the passed `suggestions` to the consumer.
+// Handles retrieved suggestions for the given `queryID`.
+- (void)onSuggestionsRetrieved:(NSArray<FormSuggestion*>*)suggestions
+                      provider:(id<FormInputSuggestionsProvider>)provider
+                       queryID:(uint)queryID {
+  // Ignore suggestions if the results aren't from the latest query
+  // which provides the most relevant suggestions to fit the current
+  // context (i.e. for the field being focused).
+  if (queryID != _latestQueryId) {
+    return;
+  }
+
+  // No suggestions found, return and don't update suggestions in view
+  // model.
+  if (!suggestions) {
+    return;
+  }
+
+  [self updateWithProvider:provider suggestions:suggestions];
+}
+
+// Posts the passed `suggestions` to the consumer.
 - (void)updateWithProvider:(id<FormInputSuggestionsProvider>)provider
                suggestions:(NSArray<FormSuggestion*>*)suggestions {
   FormSuggestion* firstSuggestion = suggestions.firstObject;
@@ -779,7 +856,7 @@ bool IsStateless() {
   if (!self.suggestionsEnabled) {
     if (self.formInputInteractionDelegate) {
       [self.formInputInteractionDelegate
-          focusDidChangedWithFillingProduct:mainFillingProduct];
+          focusDidChangeWithFillingProduct:mainFillingProduct];
     }
     return;
   }
@@ -811,34 +888,18 @@ bool IsStateless() {
 // Logs information about what type of suggestion the user selected.
 - (void)logReauthenticationEvent:(ReauthenticationEvent)reauthenticationEvent
                    forSuggestion:(FormSuggestion*)suggestion {
-  SuggestionProviderType providerType =
-      [self getProviderTypeFromSuggestion:suggestion];
-
-  std::string histogramName;
-  if (providerType == SuggestionProviderTypePassword) {
-    histogramName = "IOS.Reauth.Password.Autofill";
-  } else if (providerType == SuggestionProviderTypeAutofill) {
-    switch (suggestion.type) {
-      case autofill::SuggestionType::kCreditCardEntry:
-      case autofill::SuggestionType::kVirtualCreditCardEntry:
-        histogramName = "IOS.Reauth.CreditCard.Autofill";
-        break;
-      case autofill::SuggestionType::kAddressEntry:
-        histogramName = "IOS.Reauth.Address.Autofill";
-        break;
-      default:
-        break;
-    }
-  }
-  if (!histogramName.empty()) {
-    UmaHistogramEnumeration(histogramName, reauthenticationEvent);
+  if ([self getProviderTypeFromSuggestion:suggestion] ==
+      SuggestionProviderTypePassword) {
+    UmaHistogramEnumeration("IOS.Reauth.Password.Autofill",
+                            reauthenticationEvent);
   }
 }
 
 // Handles the selection of a suggestion. `index` indicates the position of the
 // suggestion among the available suggestions.
 - (void)handleSuggestion:(FormSuggestion*)formSuggestion
-                 atIndex:(NSInteger)index {
+                 atIndex:(NSInteger)index
+              completion:(ProceduralBlock)completion {
   if ([self getProviderTypeFromSuggestion:formSuggestion] ==
       SuggestionProviderTypePassword) {
     default_browser::NotifyPasswordAutofillSuggestionUsed(
@@ -849,7 +910,9 @@ bool IsStateless() {
         notifyAutofillSuggestionWithIPHSelectedFor:formSuggestion
                                                        .featureForIPH];
   }
-  [self.currentProvider didSelectSuggestion:formSuggestion atIndex:index];
+  [self.currentProvider didSelectSuggestion:formSuggestion
+                                    atIndex:index
+                                 completion:completion];
 }
 
 // Sets the last focused form activity web frame ID with the given `frame`.
@@ -870,7 +933,11 @@ bool IsStateless() {
 #pragma mark - FormSuggestionClient
 
 - (void)didSelectSuggestion:(FormSuggestion*)formSuggestion
-                    atIndex:(NSInteger)index {
+                    atIndex:(NSInteger)index
+                 completion:(ProceduralBlock)completion {
+  if (_isDisconnected) {
+    return;
+  }
   if (IsStateless()) {
     // When using the stateless FormSuggestionsController, ensure the params
     // attached to the suggestion are the same as the ones held by this mediator
@@ -891,38 +958,87 @@ bool IsStateless() {
   if (!formSuggestion.requiresReauth) {
     [self logReauthenticationEvent:ReauthenticationEvent::kSuccess
                      forSuggestion:formSuggestion];
-    [self handleSuggestion:formSuggestion atIndex:index];
+    [self handleSuggestion:formSuggestion atIndex:index completion:completion];
     return;
   }
   if ([self.reauthenticationModule canAttemptReauth]) {
     NSString* reason = l10n_util::GetNSString(IDS_IOS_AUTOFILL_REAUTH_REASON);
+    BOOL canReusePreviousAuth =
+        [self canReusePreviousAuthForSuggestion:formSuggestion];
+
+    __weak __typeof(self) weakSelf = self;
     auto completionHandler = ^(ReauthenticationResult result) {
-      if (result != ReauthenticationResult::kFailure) {
-        [self logReauthenticationEvent:ReauthenticationEvent::kSuccess
-                         forSuggestion:formSuggestion];
-        [self handleSuggestion:formSuggestion atIndex:index];
-      } else {
-        [self logReauthenticationEvent:ReauthenticationEvent::kFailure
-                         forSuggestion:formSuggestion];
-      }
+      [weakSelf handleReauthenticationResult:result
+                               forSuggestion:formSuggestion
+                                     atIndex:index
+                                  completion:completion];
     };
 
     [self.reauthenticationModule
         attemptReauthWithLocalizedReason:reason
-                    canReusePreviousAuth:YES
+                    canReusePreviousAuth:canReusePreviousAuth
                                  handler:completionHandler];
   } else {
     [self logReauthenticationEvent:ReauthenticationEvent::kMissingPasscode
                      forSuggestion:formSuggestion];
-    [self handleSuggestion:formSuggestion atIndex:index];
+    [self handleSuggestion:formSuggestion atIndex:index completion:completion];
   }
 }
 
 - (void)didSelectSuggestion:(FormSuggestion*)formSuggestion
                     atIndex:(NSInteger)index
-                     params:(const autofill::FormActivityParams&)params {
+                     params:(const autofill::FormActivityParams&)params
+                 completion:(ProceduralBlock)completion {
+  if (_isDisconnected) {
+    return;
+  }
   CHECK_EQ(_lastSeenParams, params);
-  [self didSelectSuggestion:formSuggestion atIndex:index];
+  [self didSelectSuggestion:formSuggestion atIndex:index completion:completion];
+}
+
+- (NSString*)usernameForSuggestion:(FormSuggestion*)suggestion {
+  if (suggestion.type != autofill::SuggestionType::kWebauthnCredential) {
+    return nil;
+  }
+  webauthn::IOSWebAuthnCredentialsDelegate* delegate =
+      [self webAuthnCredentialsDelegate];
+  if (!delegate) {
+    return nil;
+  }
+  auto passkeys = delegate->GetPasskeys();
+  if (!passkeys.has_value()) {
+    return nil;
+  }
+  return webauthn::GetPasskeyUsernameForSuggestion(suggestion,
+                                                   *passkeys.value());
+}
+
+- (BOOL)shouldShowRPId:(NSString*)rpId {
+  if (!_webState) {
+    return NO;
+  }
+  NSString* pageHost =
+      base::SysUTF8ToNSString(_webState->GetLastCommittedURL().host());
+  return rpId.length && pageHost.length &&
+         !credential_provider::SecureHostsMatch(pageHost, rpId);
+}
+
+- (void)openEditForSuggestion:(FormSuggestion*)suggestion {
+  switch (suggestion.type) {
+    case SuggestionType::kPasswordEntry:
+    case SuggestionType::kBackupPasswordEntry:
+      [self openPasswordEditForSuggestion:suggestion];
+      break;
+    case SuggestionType::kCreditCardEntry:
+    case SuggestionType::kVirtualCreditCardEntry:
+      [self openCreditCardEditForSuggestion:suggestion];
+      break;
+    case SuggestionType::kAddressEntry:
+      [self openAddressEditForSuggestion:suggestion];
+      break;
+    default:
+      break;
+  }
 }
 
 #pragma mark - PasswordCounterObserver
@@ -969,6 +1085,59 @@ bool IsStateless() {
 
 #pragma mark - Private
 
+// Handles the reauthentication result of a selected suggestion.
+- (void)handleReauthenticationResult:(ReauthenticationResult)result
+                       forSuggestion:(FormSuggestion*)formSuggestion
+                             atIndex:(NSInteger)index
+                          completion:(ProceduralBlock)completion {
+  if (result != ReauthenticationResult::kFailure) {
+    [self logReauthenticationEvent:ReauthenticationEvent::kSuccess
+                     forSuggestion:formSuggestion];
+    if (result == ReauthenticationResult::kSuccess &&
+        formSuggestion.type == autofill::SuggestionType::kWebauthnCredential) {
+      [self markPasskeyAsUserVerifiedForSuggestion:formSuggestion];
+    }
+    [self handleSuggestion:formSuggestion atIndex:index completion:completion];
+  } else {
+    [self logReauthenticationEvent:ReauthenticationEvent::kFailure
+                     forSuggestion:formSuggestion];
+    if (completion) {
+      completion();
+    }
+  }
+}
+
+// Marks the passkey suggestion as user verified in the credentials delegate.
+- (void)markPasskeyAsUserVerifiedForSuggestion:(FormSuggestion*)suggestion {
+  webauthn::IOSWebAuthnCredentialsDelegate* delegate =
+      [self webAuthnCredentialsDelegate];
+  if (delegate) {
+    delegate->MarkPasskeyAsUserVerified(
+        webauthn::GetPasskeySuggestionEncodedCredentialId(suggestion));
+  }
+}
+
+// Returns whether the previous authentication can be reused for the given
+// suggestion.
+- (BOOL)canReusePreviousAuthForSuggestion:(FormSuggestion*)suggestion {
+  if (suggestion.type != autofill::SuggestionType::kWebauthnCredential) {
+    return YES;
+  }
+  webauthn::IOSWebAuthnCredentialsDelegate* delegate =
+      [self webAuthnCredentialsDelegate];
+  return delegate && delegate->CanReusePreviousSigninAuth();
+}
+
+// Returns the WebAuthn credentials delegate for the active frame.
+- (webauthn::IOSWebAuthnCredentialsDelegate*)webAuthnCredentialsDelegate {
+  if (!self.webState) {
+    return nullptr;
+  }
+  return webauthn::IOSWebAuthnCredentialsDelegateFactory::GetFactory(
+             self.webState)
+      ->GetDelegateForFrameId(_lastSeenParams.frame_id);
+}
+
 // Returns the SuggestionProviderType for the `suggestion` based on whether or
 // not the FormSuggestionController is stateless.
 - (SuggestionProviderType)getProviderTypeFromSuggestion:
@@ -1010,6 +1179,108 @@ bool IsStateless() {
 // the optional update.
 - (void)scheduleOptionalUpdate {
   _optionalUpdateScheduler->ScheduleOptionalUpdate();
+}
+
+- (void)openCreditCardEditForSuggestion:(FormSuggestion*)suggestion {
+  const autofill::CreditCard* card = nullptr;
+  const autofill::Suggestion::Payload& payload = suggestion.payload;
+  if (const Suggestion::Guid* guid = std::get_if<Suggestion::Guid>(&payload)) {
+    card = _personalDataManager->payments_data_manager().GetCreditCardByGUID(
+        guid->value());
+  } else if (const Suggestion::PaymentsPayload* payments_payload =
+                 std::get_if<Suggestion::PaymentsPayload>(&payload)) {
+    card = _personalDataManager->payments_data_manager().GetCreditCardByGUID(
+        payments_payload->guid.value());
+  } else if (const Suggestion::InstrumentId* instrument_id =
+                 std::get_if<Suggestion::InstrumentId>(&payload)) {
+    card = _personalDataManager->payments_data_manager()
+               .GetCreditCardByInstrumentId(
+                   static_cast<int64_t>(instrument_id->value()));
+  }
+
+  if (card) {
+    [self.handler openCreditCardDetails:*card inEditMode:YES];
+  }
+}
+
+- (void)openPasswordEditForSuggestion:(FormSuggestion*)suggestion {
+  if (!_webState) {
+    return;
+  }
+  PasswordTabHelper* password_tab_helper =
+      PasswordTabHelper::FromWebState(_webState);
+  if (!password_tab_helper) {
+    return;
+  }
+
+  GURL page_url = _webState->GetLastCommittedURL();
+  SharedPasswordController* password_controller =
+      password_tab_helper->GetSharedPasswordController();
+
+  password_manager::PasswordForm form;
+  form.url = page_url;
+
+  const autofill::Suggestion::Payload& payload = suggestion.payload;
+  if (const Suggestion::PasswordSuggestionDetails* details =
+          std::get_if<Suggestion::PasswordSuggestionDetails>(&payload)) {
+    form.username_value = details->username;
+    // TODO(crbug.com/513276101): Explicit construction of std::u16string
+    // R-Value to be removed once PasswordSuggestionDetails converted to use
+    // PasswordString
+    form.password_value =
+        password_manager::PasswordString(std::u16string(details->password));
+    form.signon_realm = details->signon_realm.value_or(
+        password_manager::GetSignonRealm(page_url));
+  } else {
+    form.username_value = base::SysNSStringToUTF16(suggestion.value);
+
+    // Try to retrieve the actual saved password and origin from suggestion
+    // helper cache.
+    if (password_controller && !_lastSeenParams.frame_id.empty()) {
+      password_manager::FillDataRetrievalResult fill_data_result =
+          [password_controller
+              passwordFillDataForUsername:suggestion.value
+                       isBackupCredential:suggestion.type ==
+                                          SuggestionType::kBackupPasswordEntry
+                               forFrameId:_lastSeenParams.frame_id];
+      if (fill_data_result.has_value()) {
+        // TODO(crbug.com/513276101): Explicit construction of std::u16string
+        // R-Value to be removed once FillDataRetrievalResult converted to use
+        // PasswordString
+        form.password_value = password_manager::PasswordString(
+            std::u16string(fill_data_result.value()->password_value));
+        std::string raw_realm = !fill_data_result.value()->realm.empty()
+                                    ? fill_data_result.value()->realm
+                                    : fill_data_result.value()->origin.spec();
+        form.signon_realm = password_manager::GetSignonRealm(GURL(raw_realm));
+      }
+    }
+
+    if (form.signon_realm.empty()) {
+      form.signon_realm =
+          suggestion.displayDescription.length > 0
+              ? base::SysNSStringToUTF8(suggestion.displayDescription)
+              : password_manager::GetSignonRealm(page_url);
+    }
+  }
+
+  password_manager::CredentialUIEntry credential(form);
+  if (!credential.username.empty() ||
+      !credential.GetFirstSignonRealm().empty()) {
+    [self.handler openPasswordDetailsInEditMode:credential];
+  }
+}
+
+- (void)openAddressEditForSuggestion:(FormSuggestion*)suggestion {
+  const autofill::Suggestion::Payload& payload = suggestion.payload;
+  if (const Suggestion::AutofillProfilePayload* profile_payload =
+          std::get_if<Suggestion::AutofillProfilePayload>(&payload)) {
+    if (const autofill::AutofillProfile* profile =
+            _personalDataManager->address_data_manager().GetProfileByGUID(
+                profile_payload->guid.value())) {
+      [self.handler openAddressDetailsInEditModeForSuggestion:*profile];
+    }
+  }
 }
 
 @end

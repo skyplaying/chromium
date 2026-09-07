@@ -13,6 +13,7 @@
 #include "third_party/blink/renderer/core/css/style_rule.h"
 #include "third_party/blink/renderer/core/css_value_keywords.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_utf8_adaptor.h"
 
 namespace blink {
 
@@ -145,8 +146,8 @@ bool CSSSupportsParser::ConsumeSupportsSelectorFn(
   CSSParserTokenStream::RestoringBlockGuard guard(stream);
   stream.ConsumeWhitespace();
 
-  if (CSSSelectorParser::SupportsComplexSelector(stream,
-                                                 parser_.GetContext()) &&
+  if (CSSSelectorParser::SupportsComplexSelector(stream, parser_.GetContext(),
+                                                 parser_.GetStyleSheet()) &&
       guard.Release()) {
     stream.ConsumeWhitespace();
     return true;
@@ -218,14 +219,24 @@ bool CSSSupportsParser::ConsumeAtRuleFn(CSSParserTokenStream& stream) {
   }
 
   // @charset is accepted in parsing but is not a valid at-rule.
-  return guard.Release() && at_rule_id != CSSAtRuleID::kCSSAtRuleCharset;
+  if (guard.Release() && at_rule_id != CSSAtRuleID::kCSSAtRuleCharset) {
+    stream.ConsumeWhitespace();
+    return true;
+  }
+  return false;
 }
 
 namespace {
 bool IsSupportedNamedFeature(CSSValueID id) {
   // When this list becomes longer we should use an algorithm better than
   // linear search.
-  return id == CSSValueID::kAlignContentOnDisplayBlock;
+  if (id == CSSValueID::kAnchorPositionFollowsTransforms) {
+    return true;
+  }
+  if (id == CSSValueID::kSingleAxisScrollContainer) {
+    return RuntimeEnabledFeatures::SingleAxisScrollContainersEnabled();
+  }
+  return false;
 }
 }  // namespace
 
@@ -295,7 +306,7 @@ bool CSSSupportsParser::ConsumeBlinkFeatureFn(CSSParserTokenStream& stream) {
   if (stream.Peek().GetType() == kIdentToken) {
     const CSSParserToken& feature_name = stream.ConsumeIncludingWhitespace();
     if (RuntimeEnabledFeatures::IsFeatureEnabledFromString(
-            feature_name.Value().Utf8()) &&
+            StringUtf8Adaptor(feature_name.Value()).AsStringView()) &&
         guard.Release()) {
       stream.ConsumeWhitespace();
       return true;

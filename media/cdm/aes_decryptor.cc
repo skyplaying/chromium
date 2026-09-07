@@ -13,7 +13,6 @@
 
 #include "base/containers/span.h"
 #include "base/logging.h"
-#include "base/not_fatal_until.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_view_util.h"
 #include "base/time/time.h"
@@ -578,8 +577,7 @@ bool AesDecryptor::AddDecryptionKey(const std::string& session_id,
   }
 
   // |key_id| not found, so need to create new entry.
-  std::unique_ptr<SessionIdDecryptionKeyMap> inner_map(
-      new SessionIdDecryptionKeyMap());
+  auto inner_map = std::make_unique<SessionIdDecryptionKeyMap>();
   inner_map->Insert(session_id, key);
   key_map_[key_id] = std::move(inner_map);
   return true;

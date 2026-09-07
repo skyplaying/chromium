@@ -167,9 +167,6 @@ const char kDesktopWindow1080p[] = "desktop-window-1080p";
 const char kForceMediaResolutionHeight[] = "force-media-resolution-height";
 const char kForceMediaResolutionWidth[] = "force-media-resolution-width";
 
-// Enables input event handling by the window manager.
-const char kEnableInput[] = "enable-input";
-
 // Background color used when Chromium hasn't rendered anything yet.
 const char kCastAppBackgroundColor[] = "cast-app-background-color";
 
@@ -253,6 +250,9 @@ const char kInProcessBroker[] = "in-process-broker";
 // Command-line arg to change the Unix domain socket path to connect to the
 // Cast Mojo broker.
 const char kCastMojoBrokerPath[] = "cast-mojo-broker-path";
+
+// Allows specifying the base::ASSETS dir for Cast via commandline.
+const char kCastAssetsDir[] = "cast-assets-dir";
 
 }  // namespace switches
 

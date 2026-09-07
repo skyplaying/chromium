@@ -8,9 +8,7 @@ import("//third_party/jni_zero/jni_zero.gni")
 import("//tools/grit/grit_rule.gni")
 
 generate_jni("jni") {
-  sources = [
-    "java/src/org/chromium/chrome/browser/touch_to_fill/TouchToFillBridge.java",
-  ]
+  sources = [ "java/src/org/chromium/chrome/browser/touch_to_fill/TouchToFillPasswordManagerBridge.java" ]
 }
 
 android_library("java") {
@@ -55,13 +53,13 @@ android_library("java") {
   ]
 
   sources = [
-    "java/src/org/chromium/chrome/browser/touch_to_fill/TouchToFillBridge.java",
-    "java/src/org/chromium/chrome/browser/touch_to_fill/TouchToFillCoordinator.java",
-    "java/src/org/chromium/chrome/browser/touch_to_fill/TouchToFillMediator.java",
-    "java/src/org/chromium/chrome/browser/touch_to_fill/TouchToFillProperties.java",
-    "java/src/org/chromium/chrome/browser/touch_to_fill/TouchToFillView.java",
-    "java/src/org/chromium/chrome/browser/touch_to_fill/TouchToFillViewBinder.java",
-    "java/src/org/chromium/chrome/browser/touch_to_fill/TouchToFillViewHolder.java",
+    "java/src/org/chromium/chrome/browser/touch_to_fill/TouchToFillPasswordManagerBridge.java",
+    "java/src/org/chromium/chrome/browser/touch_to_fill/TouchToFillPasswordManagerCoordinator.java",
+    "java/src/org/chromium/chrome/browser/touch_to_fill/TouchToFillPasswordManagerMediator.java",
+    "java/src/org/chromium/chrome/browser/touch_to_fill/TouchToFillPasswordManagerProperties.java",
+    "java/src/org/chromium/chrome/browser/touch_to_fill/TouchToFillPasswordManagerView.java",
+    "java/src/org/chromium/chrome/browser/touch_to_fill/TouchToFillPasswordManagerViewBinder.java",
+    "java/src/org/chromium/chrome/browser/touch_to_fill/TouchToFillPasswordManagerViewHolder.java",
   ]
 
   resources_package = "org.chromium.chrome.browser.touch_to_fill"
@@ -74,11 +72,11 @@ android_resources("java_resources") {
   ]
   sources = [
     "java/res/drawable/touch_to_fill_more_passkeys_icon.xml",
-    "java/res/layout/touch_to_fill_footer_item.xml",
-    "java/res/layout/touch_to_fill_header_item.xml",
-    "java/res/layout/touch_to_fill_list_item.xml",
-    "java/res/layout/touch_to_fill_more_passkeys_item.xml",
-    "java/res/layout/touch_to_fill_sheet.xml",
+    "java/res/layout/touch_to_fill_password_manager_footer_item.xml",
+    "java/res/layout/touch_to_fill_password_manager_header_item.xml",
+    "java/res/layout/touch_to_fill_password_manager_list_item.xml",
+    "java/res/layout/touch_to_fill_password_manager_more_passkeys_item.xml",
+    "java/res/layout/touch_to_fill_password_manager_sheet.xml",
     "java/res/values/dimens.xml",
   ]
 }
@@ -86,4 +84,7 @@ android_resources("java_resources") {
 java_strings_grd("java_strings_grd") {
   defines = chrome_grit_defines
   grd_file = "java/strings/android_touch_to_fill_strings.grd"
+  inputs = process_file_template(
+          xtb_locales,
+          [ "java/strings/translations/android_touch_to_fill_strings_{{source_name_part}}.xtb" ])
 }

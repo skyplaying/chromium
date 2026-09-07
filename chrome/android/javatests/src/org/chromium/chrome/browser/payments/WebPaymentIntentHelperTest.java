@@ -19,11 +19,15 @@ import org.junit.Test;
 import org.junit.rules.ExpectedException;
 import org.junit.runner.RunWith;
 
+import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.components.payments.Address;
 import org.chromium.components.payments.ErrorStrings;
 import org.chromium.components.payments.PayerData;
+import org.chromium.components.payments.PaymentFeatureList;
 import org.chromium.components.payments.intent.WebPaymentIntentHelper;
 import org.chromium.components.payments.intent.WebPaymentIntentHelperType.PaymentCurrencyAmount;
 import org.chromium.components.payments.intent.WebPaymentIntentHelperType.PaymentDetailsModifier;
@@ -31,6 +35,7 @@ import org.chromium.components.payments.intent.WebPaymentIntentHelperType.Paymen
 import org.chromium.components.payments.intent.WebPaymentIntentHelperType.PaymentMethodData;
 import org.chromium.components.payments.intent.WebPaymentIntentHelperType.PaymentOptions;
 import org.chromium.components.payments.intent.WebPaymentIntentHelperType.PaymentShippingOption;
+import org.chromium.payments.mojom.PaymentEventResponseType;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -42,10 +47,12 @@ import java.util.Map;
 
 /** Tests for {@link WebPaymentIntentHelper}. */
 @RunWith(ChromeJUnit4ClassRunner.class)
+@Batch(Batch.UNIT_TESTS)
 public class WebPaymentIntentHelperTest {
     @Rule public ExpectedException thrown = ExpectedException.none();
 
     // Used to receive the result of {@link #parsePaymentResponse}.
+    private @PaymentEventResponseType.EnumType int mErrorType;
     private String mErrorString;
     private String mDetails;
     private String mMethodName;
@@ -825,8 +832,12 @@ public class WebPaymentIntentHelperTest {
                 Activity.RESULT_OK,
                 /* data= */ null,
                 /* requestedPaymentOptions= */ null,
-                (errorString) -> mErrorString = errorString,
+                paymentAppError -> {
+                    mErrorType = paymentAppError.responseType;
+                    mErrorString = paymentAppError.errorMessage;
+                },
                 (methodName, details, payerData) -> Assert.fail("Parsing should fail."));
+        Assert.assertEquals(PaymentEventResponseType.PAYMENT_EVENT_INTERNAL_ERROR, mErrorType);
         Assert.assertEquals(ErrorStrings.MISSING_INTENT_DATA, mErrorString);
     }
 
@@ -839,8 +850,12 @@ public class WebPaymentIntentHelperTest {
                 Activity.RESULT_CANCELED,
                 /* data= */ null,
                 /* requestedPaymentOptions= */ null,
-                (errorString) -> mErrorString = errorString,
+                paymentAppError -> {
+                    mErrorType = paymentAppError.responseType;
+                    mErrorString = paymentAppError.errorMessage;
+                },
                 (methodName, details, payerData) -> Assert.fail("Payment should have error."));
+        Assert.assertEquals(PaymentEventResponseType.PAYMENT_HANDLER_WINDOW_CLOSING, mErrorType);
         Assert.assertEquals(ErrorStrings.RESULT_CANCELED, mErrorString);
     }
 
@@ -853,8 +868,12 @@ public class WebPaymentIntentHelperTest {
                 Activity.RESULT_CANCELED,
                 /* data= */ new Intent(),
                 /* requestedPaymentOptions= */ null,
-                (errorString) -> mErrorString = errorString,
+                paymentAppError -> {
+                    mErrorType = paymentAppError.responseType;
+                    mErrorString = paymentAppError.errorMessage;
+                },
                 (methodName, details, payerData) -> Assert.fail("Payment should have error."));
+        Assert.assertEquals(PaymentEventResponseType.PAYMENT_HANDLER_WINDOW_CLOSING, mErrorType);
         Assert.assertEquals(ErrorStrings.RESULT_CANCELED, mErrorString);
     }
 
@@ -868,8 +887,12 @@ public class WebPaymentIntentHelperTest {
                 Activity.RESULT_OK,
                 intent,
                 /* requestedPaymentOptions= */ null,
-                (errorString) -> mErrorString = errorString,
+                paymentAppError -> {
+                    mErrorType = paymentAppError.responseType;
+                    mErrorString = paymentAppError.errorMessage;
+                },
                 (methodName, details, payerData) -> Assert.fail("Parsing should fail."));
+        Assert.assertEquals(PaymentEventResponseType.PAYMENT_EVENT_INTERNAL_ERROR, mErrorType);
         Assert.assertEquals(ErrorStrings.MISSING_INTENT_EXTRAS, mErrorString);
     }
 
@@ -884,9 +907,83 @@ public class WebPaymentIntentHelperTest {
                 Activity.RESULT_CANCELED,
                 intent,
                 /* requestedPaymentOptions= */ null,
-                (errorString) -> mErrorString = errorString,
+                paymentAppError -> {
+                    mErrorType = paymentAppError.responseType;
+                    mErrorString = paymentAppError.errorMessage;
+                },
                 (methodName, details, payerData) -> Assert.fail("Payment should have error."));
+        Assert.assertEquals(PaymentEventResponseType.PAYMENT_HANDLER_WINDOW_CLOSING, mErrorType);
         Assert.assertEquals(ErrorStrings.RESULT_CANCELED, mErrorString);
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"Payments"})
+    public void parsePaymentResponseResultInternalAppErrorTest() throws Throwable {
+        Intent intent = new Intent();
+        intent.putExtras(new Bundle());
+        mErrorString = null;
+        WebPaymentIntentHelper.parsePaymentResponse(
+                WebPaymentIntentHelper.RESULT_INTERNAL_APP_ERROR,
+                intent,
+                /* requestedPaymentOptions= */ null,
+                paymentAppError -> {
+                    mErrorType = paymentAppError.responseType;
+                    mErrorString = paymentAppError.errorMessage;
+                },
+                (methodName, details, payerData) -> Assert.fail("Payment should have error."));
+        Assert.assertEquals(PaymentEventResponseType.PAYMENT_EVENT_INTERNAL_ERROR, mErrorType);
+        Assert.assertEquals(ErrorStrings.RESULT_INTERNAL_APP_ERROR, mErrorString);
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"Payments"})
+    @EnableFeatures({PaymentFeatureList.SURFACE_WALLET_ERROR_CODE_FROM_INTENT})
+    public void parsePaymentResponseResultInternalAppErrorWithWalletErrorCodeTest()
+            throws Throwable {
+        Intent intent = new Intent();
+        Bundle extras = new Bundle();
+        extras.putInt(WebPaymentIntentHelper.EXTRA_WALLET_ERROR_CODE, 409);
+        intent.putExtras(extras);
+        mErrorString = null;
+        WebPaymentIntentHelper.parsePaymentResponse(
+                WebPaymentIntentHelper.RESULT_INTERNAL_APP_ERROR,
+                intent,
+                /* requestedPaymentOptions= */ null,
+                paymentAppError -> {
+                    mErrorType = paymentAppError.responseType;
+                    mErrorString = paymentAppError.errorMessage;
+                },
+                (methodName, details, payerData) -> Assert.fail("Payment should have error."));
+        Assert.assertEquals(PaymentEventResponseType.PAYMENT_EVENT_INTERNAL_ERROR, mErrorType);
+        Assert.assertEquals(
+                "Internal payment app returned error with status code: 409", mErrorString);
+    }
+
+    @Test
+    @SmallTest
+    @Feature({"Payments"})
+    @DisableFeatures({PaymentFeatureList.SURFACE_WALLET_ERROR_CODE_FROM_INTENT})
+    public void
+            surfaceWalletErrorCodeFromIntentDisabled_parsePaymentResponseResultInternalAppErrorWithWalletErrorCodeTest()
+                    throws Throwable {
+        Intent intent = new Intent();
+        Bundle extras = new Bundle();
+        extras.putInt(WebPaymentIntentHelper.EXTRA_WALLET_ERROR_CODE, 409);
+        intent.putExtras(extras);
+        mErrorString = null;
+        WebPaymentIntentHelper.parsePaymentResponse(
+                WebPaymentIntentHelper.RESULT_INTERNAL_APP_ERROR,
+                intent,
+                /* requestedPaymentOptions= */ null,
+                paymentAppError -> {
+                    mErrorType = paymentAppError.responseType;
+                    mErrorString = paymentAppError.errorMessage;
+                },
+                (methodName, details, payerData) -> Assert.fail("Payment should have error."));
+        Assert.assertEquals(PaymentEventResponseType.PAYMENT_EVENT_INTERNAL_ERROR, mErrorType);
+        Assert.assertEquals(ErrorStrings.RESULT_INTERNAL_APP_ERROR, mErrorString);
     }
 
     @Test
@@ -900,8 +997,12 @@ public class WebPaymentIntentHelperTest {
                 /* resultCode= */ 123,
                 intent,
                 /* requestedPaymentOptions= */ null,
-                (errorString) -> mErrorString = errorString,
+                paymentAppError -> {
+                    mErrorType = paymentAppError.responseType;
+                    mErrorString = paymentAppError.errorMessage;
+                },
                 (methodName, details, payerData) -> Assert.fail("Parsing should fail."));
+        Assert.assertEquals(PaymentEventResponseType.PAYMENT_EVENT_INTERNAL_ERROR, mErrorType);
         Assert.assertEquals(
                 String.format(Locale.US, ErrorStrings.UNRECOGNIZED_ACTIVITY_RESULT, 123),
                 mErrorString);
@@ -919,8 +1020,12 @@ public class WebPaymentIntentHelperTest {
                 Activity.RESULT_OK,
                 intent,
                 /* requestedPaymentOptions= */ null,
-                (errorString) -> mErrorString = errorString,
+                paymentAppError -> {
+                    mErrorType = paymentAppError.responseType;
+                    mErrorString = paymentAppError.errorMessage;
+                },
                 (methodName, details, payerData) -> Assert.fail("Parsing should fail."));
+        Assert.assertEquals(PaymentEventResponseType.PAYMENT_DETAILS_ABSENT, mErrorType);
         Assert.assertEquals(ErrorStrings.MISSING_DETAILS_FROM_PAYMENT_APP, mErrorString);
     }
 
@@ -936,8 +1041,12 @@ public class WebPaymentIntentHelperTest {
                 Activity.RESULT_OK,
                 intent,
                 /* requestedPaymentOptions= */ null,
-                (errorString) -> mErrorString = errorString,
+                paymentAppError -> {
+                    mErrorType = paymentAppError.responseType;
+                    mErrorString = paymentAppError.errorMessage;
+                },
                 (methodName, details, payerData) -> Assert.fail("Parsing should fail."));
+        Assert.assertEquals(PaymentEventResponseType.PAYMENT_METHOD_NAME_EMPTY, mErrorType);
         Assert.assertEquals(ErrorStrings.MISSING_METHOD_NAME_FROM_PAYMENT_APP, mErrorString);
     }
 
@@ -958,8 +1067,12 @@ public class WebPaymentIntentHelperTest {
                         /* requestPayerPhone= */ false,
                         /* requestShipping= */ true,
                         /* shippingType= */ "shipping"),
-                (errorString) -> mErrorString = errorString,
+                paymentAppError -> {
+                    mErrorType = paymentAppError.responseType;
+                    mErrorString = paymentAppError.errorMessage;
+                },
                 (methodName, details, payerData) -> Assert.fail("Parsing should fail."));
+        Assert.assertEquals(PaymentEventResponseType.SHIPPING_ADDRESS_INVALID, mErrorType);
         Assert.assertEquals(ErrorStrings.SHIPPING_ADDRESS_INVALID, mErrorString);
     }
 
@@ -980,8 +1093,12 @@ public class WebPaymentIntentHelperTest {
                         /* requestPayerPhone= */ false,
                         /* requestShipping= */ true,
                         /* shippingType= */ "shipping"),
-                (errorString) -> mErrorString = errorString,
+                paymentAppError -> {
+                    mErrorType = paymentAppError.responseType;
+                    mErrorString = paymentAppError.errorMessage;
+                },
                 (methodName, details, payerData) -> Assert.fail("Parsing should fail."));
+        Assert.assertEquals(PaymentEventResponseType.SHIPPING_OPTION_EMPTY, mErrorType);
         Assert.assertEquals(ErrorStrings.SHIPPING_OPTION_EMPTY, mErrorString);
     }
 
@@ -1002,8 +1119,12 @@ public class WebPaymentIntentHelperTest {
                         /* requestPayerPhone= */ false,
                         /* requestShipping= */ false,
                         /* shippingType= */ ""),
-                (errorString) -> mErrorString = errorString,
+                paymentAppError -> {
+                    mErrorType = paymentAppError.responseType;
+                    mErrorString = paymentAppError.errorMessage;
+                },
                 (methodName, details, payerData) -> Assert.fail("Parsing should fail."));
+        Assert.assertEquals(PaymentEventResponseType.PAYER_NAME_EMPTY, mErrorType);
         Assert.assertEquals(ErrorStrings.PAYER_NAME_EMPTY, mErrorString);
     }
 
@@ -1024,8 +1145,12 @@ public class WebPaymentIntentHelperTest {
                         /* requestPayerPhone= */ false,
                         /* requestShipping= */ false,
                         /* shippingType= */ ""),
-                (errorString) -> mErrorString = errorString,
+                paymentAppError -> {
+                    mErrorType = paymentAppError.responseType;
+                    mErrorString = paymentAppError.errorMessage;
+                },
                 (methodName, details, payerData) -> Assert.fail("Parsing should fail."));
+        Assert.assertEquals(PaymentEventResponseType.PAYER_EMAIL_EMPTY, mErrorType);
         Assert.assertEquals(ErrorStrings.PAYER_EMAIL_EMPTY, mErrorString);
     }
 
@@ -1046,8 +1171,12 @@ public class WebPaymentIntentHelperTest {
                         /* requestPayerPhone= */ true,
                         /* requestShipping= */ false,
                         /* shippingType= */ ""),
-                (errorString) -> mErrorString = errorString,
+                paymentAppError -> {
+                    mErrorType = paymentAppError.responseType;
+                    mErrorString = paymentAppError.errorMessage;
+                },
                 (methodName, details, payerData) -> Assert.fail("Parsing should fail."));
+        Assert.assertEquals(PaymentEventResponseType.PAYER_PHONE_EMPTY, mErrorType);
         Assert.assertEquals(ErrorStrings.PAYER_PHONE_EMPTY, mErrorString);
     }
 
@@ -1084,7 +1213,7 @@ public class WebPaymentIntentHelperTest {
                         /* requestPayerPhone= */ true,
                         /* requestShipping= */ true,
                         /* shippingType= */ "shipping"),
-                (errorString) -> Assert.fail("Parsing should succeed."),
+                paymentAppError -> Assert.fail("Parsing should succeed."),
                 (methodName, details, payerData) -> {
                     mMethodName = methodName;
                     mDetails = details;
@@ -1129,7 +1258,7 @@ public class WebPaymentIntentHelperTest {
                 Activity.RESULT_OK,
                 intent,
                 /* requestedPaymentOptions= */ null,
-                (errorString) -> Assert.fail("Parsing should succeed."),
+                paymentAppError -> Assert.fail("Parsing should succeed."),
                 (methodName, details, payerData) -> {
                     mMethodName = methodName;
                     mDetails = details;
@@ -1185,8 +1314,9 @@ public class WebPaymentIntentHelperTest {
                 .isEqualTo(new byte[] {0});
 
         Assert.assertEquals(
-                new HashSet(Arrays.asList("bobPay", "maxPay")),
-                new HashSet(bundle.getStringArrayList(WebPaymentIntentHelper.EXTRA_METHOD_NAMES)));
+                new HashSet<>(Arrays.asList("bobPay", "maxPay")),
+                new HashSet<>(
+                        bundle.getStringArrayList(WebPaymentIntentHelper.EXTRA_METHOD_NAMES)));
 
         Bundle methodDataBundle = bundle.getParcelable(WebPaymentIntentHelper.EXTRA_METHOD_DATA);
         Assert.assertEquals(2, methodDataBundle.keySet().size());

@@ -25,7 +25,7 @@ import org.chromium.ui.base.LocalizationUtils;
 
 /** Tests for {@link StripStacker}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE, qualifiers = "sw600dp")
+@Config(qualifiers = "sw600dp")
 public class StripStackerUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -61,7 +61,7 @@ public class StripStackerUnitTest {
     }
 
     @Test
-    @DisabledTest(message = "https://crbug.com/1385702")
+    @DisabledTest(message = "https://crbug.com/40879363")
     public void testComputeNewTabButtonIdealX() {
         float result =
                 mTarget.computeNewTabButtonIdealX(
@@ -120,6 +120,8 @@ public class StripStackerUnitTest {
 
         @Override
         public void pushDrawPropertiesToViews(
-                StripLayoutView[] indexOrderedViews, float leftBound, float rightBound) {}
+                StripLayoutView[] indexOrderedViews,
+                float visibleLeftBound,
+                float visibleRightBound) {}
     }
 }

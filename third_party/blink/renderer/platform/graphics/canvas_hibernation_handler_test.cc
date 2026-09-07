@@ -20,7 +20,7 @@
 #include "gpu/command_buffer/common/shared_image_usage.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features.h"
-#include "third_party/blink/renderer/platform/graphics/canvas_resource_provider.h"
+#include "third_party/blink/renderer/platform/graphics/canvas_2d_resource_provider.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/shared_gpu_context.h"
 #include "third_party/blink/renderer/platform/graphics/skia/skia_utils.h"
 #include "third_party/blink/renderer/platform/graphics/static_bitmap_image.h"
@@ -52,17 +52,23 @@ class TestHibernationHandlerDelegate
     is_hibernating_ = is_hibernating;
   }
 
-  CanvasResourceProvider* GetResourceProvider() const override {
+  Canvas2DResourceProvider* GetSharedImageProvider() const override {
     return resource_provider_.get();
+  }
+  bool HasResourceProvider() const override {
+    return resource_provider_ != nullptr;
   }
   void ResetResourceProvider() override { resource_provider_.reset(); }
 
+  std::optional<cc::PaintRecord> FlushCanvas(FlushReason reason) override {
+    return std::nullopt;
+  }
+
   void CreateResourceProvider() {
-    CHECK(!GetResourceProvider());
-    resource_provider_ = Canvas2DResourceProviderSharedImage::Create(
+    CHECK(!GetSharedImageProvider());
+    resource_provider_ = Canvas2DResourceProvider::CreateWithClear(
         size_, GetN32FormatForCanvas(), kPremul_SkAlphaType,
-        gfx::ColorSpace::CreateSRGB(),
-        CanvasResourceProvider::ShouldInitialize::kCallClear,
+        gfx::ColorSpace::CreateSRGB(), gfx::HDRMetadata(),
         SharedGpuContext::ContextProviderWrapper(), RasterMode::kGPU,
         gpu::SHARED_IMAGE_USAGE_DISPLAY_READ | gpu::SHARED_IMAGE_USAGE_SCANOUT);
   }
@@ -74,7 +80,7 @@ class TestHibernationHandlerDelegate
   }
 
  private:
-  std::unique_ptr<CanvasResourceProvider> resource_provider_;
+  std::unique_ptr<Canvas2DResourceProvider> resource_provider_;
   bool page_visible_ = true;
   bool is_hibernating_ = false;
   gfx::Size size_;
@@ -147,10 +153,10 @@ class CanvasHibernationHandlerTest
   }
 
  protected:
+  base::test::ScopedFeatureList scoped_feature_list_;
   test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
   scoped_refptr<viz::TestContextProvider> test_context_provider_;
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 namespace {
@@ -170,7 +176,7 @@ void SetPageVisible(
   } else {
     // End hibernation.
     if (hibernation_handler->IsHibernating()) {
-      if (!delegate->GetResourceProvider()) {
+      if (!delegate->GetSharedImageProvider()) {
         delegate->CreateResourceProvider();
       }
       hibernation_handler->Clear();
@@ -187,15 +193,6 @@ std::map<std::string, uint64_t> GetEntries(
     result.insert({entry.name, entry.value_uint64});
   }
   return result;
-}
-
-void Draw(TestHibernationHandlerDelegate& delegate) {
-  if (!delegate.GetResourceProvider()) {
-    delegate.CreateResourceProvider();
-  }
-  CanvasResourceProvider* provider = delegate.GetResourceProvider();
-  provider->Canvas().drawLine(0, 0, 2, 2, cc::PaintFlags());
-  provider->FlushCanvas(FlushReason::kOther);
 }
 
 class TestSingleThreadTaskRunner : public base::SingleThreadTaskRunner {
@@ -251,7 +248,7 @@ TEST_P(CanvasHibernationHandlerTest, SimpleTest) {
   CanvasHibernationHandler handler(delegate);
   handler.SetBackgroundTaskRunnerForTesting(task_runner);
 
-  Draw(delegate);
+  delegate.CreateResourceProvider();
   SetPageVisible(&delegate, &handler, platform, false);
 
   auto delay = WaitForHibernation();
@@ -296,7 +293,7 @@ TEST_P(CanvasHibernationHandlerTest, SimpleTest) {
   EXPECT_FALSE(handler.is_encoded());
 
   EXPECT_FALSE(handler.IsHibernating());
-  EXPECT_TRUE(delegate.GetResourceProvider()->IsValid());
+  EXPECT_TRUE(delegate.GetSharedImageProvider()->IsValid());
 }
 
 TEST_P(CanvasHibernationHandlerTest, ForegroundBeforeHibernation) {
@@ -304,7 +301,7 @@ TEST_P(CanvasHibernationHandlerTest, ForegroundBeforeHibernation) {
   TestHibernationHandlerDelegate delegate(gfx::Size(300, 200));
   CanvasHibernationHandler handler(delegate);
 
-  Draw(delegate);
+  delegate.CreateResourceProvider();
 
   SetPageVisible(&delegate, &handler, platform, false);
   SetPageVisible(&delegate, &handler, platform, true);
@@ -321,7 +318,7 @@ TEST_P(CanvasHibernationHandlerTest,
   TestHibernationHandlerDelegate delegate(gfx::Size(300, 200));
   CanvasHibernationHandler handler(delegate);
 
-  Draw(delegate);
+  delegate.CreateResourceProvider();
 
   handler.SetBackgroundTaskRunnerForTesting(task_runner);
   SetPageVisible(&delegate, &handler, platform, false);
@@ -343,7 +340,7 @@ TEST_P(CanvasHibernationHandlerTest,
   TestHibernationHandlerDelegate delegate(gfx::Size(300, 200));
   CanvasHibernationHandler handler(delegate);
 
-  Draw(delegate);
+  delegate.CreateResourceProvider();
 
   handler.SetBackgroundTaskRunnerForTesting(task_runner);
   SetPageVisible(&delegate, &handler, platform, false);
@@ -369,7 +366,7 @@ TEST_P(CanvasHibernationHandlerTest, ForegroundBackgroundWithDelay) {
   TestHibernationHandlerDelegate delegate(gfx::Size(300, 200));
   CanvasHibernationHandler handler(delegate);
 
-  Draw(delegate);
+  delegate.CreateResourceProvider();
 
   handler.SetBackgroundTaskRunnerForTesting(task_runner);
   SetPageVisible(&delegate, &handler, platform, false);
@@ -411,7 +408,7 @@ TEST_P(CanvasHibernationHandlerTest, ForegroundFlipFlopBeforeHibernation) {
   CanvasHibernationHandler handler(delegate);
   handler.SetBackgroundTaskRunnerForTesting(task_runner);
 
-  Draw(delegate);
+  delegate.CreateResourceProvider();
 
   SetPageVisible(&delegate, &handler, platform, false);
   task_environment_.FastForwardBy(base::Seconds(1));
@@ -457,7 +454,7 @@ TEST_P(CanvasHibernationHandlerTest, ForegroundFlipFlopDuringCompression) {
   CanvasHibernationHandler handler(delegate);
   handler.SetBackgroundTaskRunnerForTesting(task_runner);
 
-  Draw(delegate);
+  delegate.CreateResourceProvider();
 
   SetPageVisible(&delegate, &handler, platform, false);
 
@@ -497,7 +494,7 @@ TEST_P(CanvasHibernationHandlerTest, ClearEndsHibernation) {
   TestHibernationHandlerDelegate delegate(gfx::Size(300, 200));
   CanvasHibernationHandler handler(delegate);
 
-  Draw(delegate);
+  delegate.CreateResourceProvider();
 
   SetPageVisible(&delegate, &handler, platform, false);
   WaitForHibernation();
@@ -524,7 +521,7 @@ TEST_P(CanvasHibernationHandlerTest, ClearWhileCompressingEndsHibernation) {
   CanvasHibernationHandler handler(delegate);
   handler.SetBackgroundTaskRunnerForTesting(task_runner);
 
-  Draw(delegate);
+  delegate.CreateResourceProvider();
 
   // Set the page to hidden to kick off hibernation.
   SetPageVisible(&delegate, &handler, platform, false);
@@ -557,7 +554,7 @@ TEST_P(CanvasHibernationHandlerTest, HibernationMemoryMetrics) {
   TestHibernationHandlerDelegate delegate(gfx::Size(300, 200));
   auto handler = std::make_unique<CanvasHibernationHandler>(delegate);
 
-  Draw(delegate);
+  delegate.CreateResourceProvider();
 
   SetPageVisible(&delegate, handler.get(), platform, false);
   auto delay = WaitForHibernation();

@@ -75,7 +75,7 @@ class TestLogStore : public LogStore {
       staged_log_hash_ = metrics::Sha1ForUnsentLogStore(logs_.front().log);
     }
   }
-  void DiscardStagedLog(std::string_view reason) override {
+  void DiscardStagedLogImpl(std::string_view reason) override {
     if (!has_staged_log()) {
       return;
     }
@@ -178,6 +178,7 @@ TEST_F(ReportingServiceTest, BasicTest) {
   EXPECT_FALSE(client_.uploader()->is_uploading());
 }
 
+#if BUILDFLAG(IS_CHROMEOS)
 TEST_F(ReportingServiceTest, UserIdLogsUploadedIfUserConsented) {
   uint64_t user_id = 12345;
 
@@ -218,6 +219,7 @@ TEST_F(ReportingServiceTest, UserIdLogsNotUploadedIfUserNotConsented) {
       base::Seconds(MetricsScheduler::GetInitialIntervalSeconds()));
   EXPECT_EQ(client_.uploader(), nullptr);
 }
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 TEST_F(ReportingServiceTest, ForceDiscard) {
   TestReportingService service(&client_, GetLocalState());

@@ -27,12 +27,14 @@ class Label;
 class MdTextButton;
 class MenuModelAdapter;
 class MenuRunner;
+class Throbber;
 }  // namespace views
 
 namespace toasts {
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
+// LINT.IfChange(ToastCloseReason)
 enum class ToastCloseReason {
   kAutoDismissed = 0,
   kActionButton = 1,
@@ -43,6 +45,7 @@ enum class ToastCloseReason {
   kAbort = 6,
   kMaxValue = kAbort
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/toasts/enums.xml:ToastCloseReason)
 
 // The view for toasts.
 class ToastView : public views::BubbleDialogDelegateView,
@@ -58,7 +61,12 @@ class ToastView : public views::BubbleDialogDelegateView,
       views::View* anchor_view,
       const std::u16string& toast_text,
       const gfx::VectorIcon& icon,
-      const ui::ImageModel* image_override,
+      std::optional<ui::ImageModel> image_override,
+      bool should_hide_ui_for_fullscreen,
+      base::RepeatingCallback<void(ToastCloseReason)> on_toast_close_callback);
+  ToastView(
+      views::View* anchor_view,
+      const std::u16string& toast_text,
       bool should_hide_ui_for_fullscreen,
       base::RepeatingCallback<void(ToastCloseReason)> on_toast_close_callback);
   ~ToastView() override;
@@ -79,6 +87,11 @@ class ToastView : public views::BubbleDialogDelegateView,
   // views::BubbleDialogDelegateView::CreateBubble).
   void AddMenu(std::unique_ptr<ui::MenuModel> model);
 
+  // Adds an animated throbber spinner replacing the leading static icon.
+  // Must be called prior to `Init` (which is called from
+  // views::BubbleDialogDelegateView::CreateBubble).
+  void AddThrobber();
+
   // views::BubbleDialogDelegateView:
   void Init() override;
 
@@ -95,7 +108,15 @@ class ToastView : public views::BubbleDialogDelegateView,
 
   views::Label* label_for_testing() { return label_; }
   views::MdTextButton* action_button_for_testing() { return action_button_; }
+  const views::MdTextButton* action_button_for_testing() const {
+    return action_button_;
+  }
   views::ImageButton* close_button_for_testing() { return close_button_; }
+  const views::ImageButton* close_button_for_testing() const {
+    return close_button_;
+  }
+  views::ImageView* icon_view_for_testing() { return icon_view_; }
+  views::Throbber* throbber_for_testing() { return throbber_; }
 
   // Gets the icon/image size from the layout provider.
   static int GetIconSize();
@@ -121,11 +142,12 @@ class ToastView : public views::BubbleDialogDelegateView,
   gfx::Tween::Type height_animation_tween_;
 
   const std::u16string toast_text_;
-  const raw_ref<const gfx::VectorIcon> icon_;
-  const raw_ptr<const ui::ImageModel> image_override_;
+  const raw_ptr<const gfx::VectorIcon> icon_ = nullptr;
+  const std::optional<ui::ImageModel> image_override_;
   bool render_toast_over_web_contents_;
   bool has_close_button_ = false;
   bool has_action_button_ = false;
+  bool has_throbber_ = false;
   std::u16string action_button_text_;
   base::RepeatingClosure action_button_callback_;
   base::RepeatingClosure close_button_callback_;
@@ -139,6 +161,7 @@ class ToastView : public views::BubbleDialogDelegateView,
   // Raw pointers to child views.
   raw_ptr<views::Label> label_ = nullptr;
   raw_ptr<views::ImageView> icon_view_ = nullptr;
+  raw_ptr<views::Throbber> throbber_ = nullptr;
   raw_ptr<views::MdTextButton> action_button_ = nullptr;
   raw_ptr<views::ImageButton> close_button_ = nullptr;
 

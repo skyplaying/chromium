@@ -12,6 +12,8 @@
 #include "base/types/pass_key.h"
 #include "components/messages/android/message_wrapper.h"
 
+class GURL;
+
 namespace autofill {
 
 class AutofillMessageControllerImpl;
@@ -33,6 +35,14 @@ class AutofillMessageModel {
     kEntitySaveUpdateFlow = 3,
     // Used to ask the user to save or update an address profile.
     kAddressSaveUpdateFlow = 4,
+    // Used to notify the user that fetching data for personal context
+    // suggestions has failed.
+    kPersonalContextFetchingFailure = 5,
+    // Used to notify the user that page content will now be processed privately
+    // by default.
+    kPrivateInferenceNotice = 6,
+    // Used when an email has been automatically confirmed on supported sites.
+    kEmailVerified = 7,
   };
 
   AutofillMessageModel(std::unique_ptr<messages::MessageWrapper> message,
@@ -53,6 +63,15 @@ class AutofillMessageModel {
   static std::unique_ptr<AutofillMessageModel> CreateForSaveCardFailure();
   static std::unique_ptr<AutofillMessageModel>
   CreateForVirtualCardEnrollFailure(std::u16string card_label);
+  static std::unique_ptr<AutofillMessageModel>
+  CreateForPersonalContextFetchingFailure();
+  static std::unique_ptr<AutofillMessageModel> CreateForPrivateInferenceNotice(
+      base::OnceClosure action_callback,
+      messages::MessageWrapper::DismissCallback dismiss_callback,
+      base::RepeatingClosure secondary_action_callback);
+  static std::unique_ptr<AutofillMessageModel> CreateForEmailVerified(
+      const GURL& issuer,
+      base::OnceClosure action_callback);
 
   // Converts a message model type to a string for debugging and metrics.
   static std::string_view TypeToString(Type message_type);

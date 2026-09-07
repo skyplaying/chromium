@@ -1,8 +1,7 @@
 # Copyright 2022 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-"""A collection of functions used by other python files
-"""
+"""A collection of functions used by other python files"""
 
 import os
 import sys
@@ -15,9 +14,10 @@ sys.path.append(PYJSON5_PATH)
 import json5
 
 
-def load_metadata():
-  flags_path = os.path.join(ROOT_PATH, 'chrome', 'browser',
-                            'flag-metadata.json')
+def load_metadata(root_path: os.PathLike[str] = ROOT_PATH):
+  flags_path = os.path.join(
+    root_path, 'chrome', 'browser', 'flag-metadata.json'
+  )
   return json5.load(open(flags_path))
 
 

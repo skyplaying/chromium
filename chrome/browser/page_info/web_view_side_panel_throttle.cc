@@ -4,6 +4,7 @@
 
 #include "chrome/browser/page_info/web_view_side_panel_throttle.h"
 
+#include "components/google/core/common/google_util.h"
 #include "components/navigation_interception/intercept_navigation_throttle.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_handle.h"
@@ -12,6 +13,7 @@
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/web_contents.h"
 #include "net/base/url_util.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
 
 const char kWebViewSidePanelWebContentsUserDataKey[] =
@@ -25,7 +27,8 @@ bool CanNavigateInPanel(content::NavigationHandle* handle,
   // Server redirects of the observed_url URL are allowed to stay in the
   // SidePanel.
   const GURL& original_url = handle->GetRedirectChain().front();
-  if (handle->WasServerRedirect() && original_url == observed_url) {
+  if (handle->WasServerRedirect() && original_url == observed_url &&
+      google_util::IsGoogleAssociatedDomainUrl(next_url)) {
     return true;
   }
   // Same URL navigations are allowed to stay in the SidePanel.

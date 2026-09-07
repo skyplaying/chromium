@@ -42,26 +42,25 @@ std::optional<blink::InspectorPlayerError> ErrorFromParams(
       if (!file || !line.has_value())
         continue;
       blink::InspectorPlayerError::SourceLocation entry = {
-          blink::WebString::FromUTF8(*file), *line};
+          blink::WebString::FromUtf8(*file), *line};
       stack_vec.push_back(std::move(entry));
     }
   }
 
   std::vector<blink::InspectorPlayerError::Data> data_vec;
   if (auto* data = param.FindDict(media::StatusConstants::kDataKey)) {
-    for (const auto pair : *data) {
-      std::string json = base::WriteJson(pair.second).value_or("");
+    for (const auto [key, value] : *data) {
+      std::string json = base::WriteJson(value).value_or("");
       blink::InspectorPlayerError::Data entry = {
-          blink::WebString::FromUTF8(pair.first),
-          blink::WebString::FromUTF8(json)};
+          blink::WebString::FromUtf8(key), blink::WebString::FromUtf8(json)};
       data_vec.push_back(std::move(entry));
     }
   }
 
   blink::InspectorPlayerError result = {
-      blink::WebString::FromUTF8(*group),
+      blink::WebString::FromUtf8(*group),
       *code,
-      blink::WebString::FromUTF8(message ? *message : ""),
+      blink::WebString::FromUtf8(message ? *message : ""),
       std::move(stack_vec),
       std::move(caused_by),
       std::move(data_vec)};
@@ -71,15 +70,15 @@ std::optional<blink::InspectorPlayerError> ErrorFromParams(
 
 blink::WebString ToString(const base::Value& value) {
   if (value.is_string()) {
-    return blink::WebString::FromUTF8(value.GetString());
+    return blink::WebString::FromUtf8(value.GetString());
   }
   std::string output_str = base::WriteJson(value).value_or("");
-  return blink::WebString::FromUTF8(output_str);
+  return blink::WebString::FromUtf8(output_str);
 }
 
 blink::WebString ToString(const base::DictValue& value) {
   std::string output_str = base::WriteJson(value).value_or("");
-  return blink::WebString::FromUTF8(output_str);
+  return blink::WebString::FromUtf8(output_str);
 }
 
 // TODO(tmathmeyer) stop using a string here eventually. This means rewriting
@@ -110,9 +109,11 @@ InspectorMediaEventHandler::InspectorMediaEventHandler(
 // this method is no longer needed. Refactor MediaLogRecord at some point.
 void InspectorMediaEventHandler::SendQueuedMediaEvents(
     std::vector<media::MediaLogRecord> events_to_send) {
-  // If the video player is gone, the whole frame
-  if (video_player_destroyed_)
+  // If the video player is gone, drop the events to avoid a dangling pointer.
+  if (video_player_destroyed_) {
+    DCHECK(!inspector_context_);
     return;
+  }
 
   blink::InspectorPlayerProperties properties;
   blink::InspectorPlayerMessages messages;
@@ -122,18 +123,18 @@ void InspectorMediaEventHandler::SendQueuedMediaEvents(
   for (media::MediaLogRecord event : events_to_send) {
     switch (event.type) {
       case media::MediaLogRecord::Type::kMessage: {
-        for (auto&& itr : event.params) {
+        for (const auto [level, text] : event.params) {
           blink::InspectorPlayerMessage msg = {
-              LevelFromString(itr.first),
-              blink::WebString::FromUTF8(itr.second.GetString())};
+              LevelFromString(level),
+              blink::WebString::FromUtf8(text.GetString())};
           messages.emplace_back(std::move(msg));
         }
         break;
       }
       case media::MediaLogRecord::Type::kMediaPropertyChange: {
-        for (auto&& itr : event.params) {
+        for (const auto [name, value] : event.params) {
           blink::InspectorPlayerProperty prop = {
-              blink::WebString::FromUTF8(itr.first), ToString(itr.second)};
+              blink::WebString::FromUtf8(name), ToString(value)};
           properties.emplace_back(std::move(prop));
         }
         break;
@@ -167,7 +168,10 @@ void InspectorMediaEventHandler::SendQueuedMediaEvents(
 
 void InspectorMediaEventHandler::OnWebMediaPlayerDestroyed() {
   video_player_destroyed_ = true;
-  inspector_context_->DestroyPlayer(player_id_);
+  if (inspector_context_) {
+    inspector_context_->DestroyPlayer(player_id_);
+    inspector_context_ = nullptr;
+  }
 }
 
 }  // namespace content

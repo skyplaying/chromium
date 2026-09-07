@@ -15,8 +15,9 @@
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/feedback/feedback_dialog_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webui/feedback/feedback_dialog.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/webui_url_constants.h"
@@ -51,8 +52,10 @@ IN_PROC_BROWSER_TEST_F(ShowFeedbackPageBrowserTest, UserFeedbackDisallowed) {
                            /*extra_diagnostics=*/unused,
                            /*autofill_metadata=*/base::DictValue());
   histogram_tester.ExpectTotalCount("Feedback.RequestSource", 1);
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kUserFeedbackAllowed,
-                                               false);
+  histogram_tester.ExpectTotalCount("Feedback.NotAllowed.RequestSource", 0);
+
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kUserFeedbackAllowed,
+                                                  false);
   chrome::ShowFeedbackPage(browser(), feedback::kFeedbackSourceBrowserCommand,
                            /*description_template=*/unused,
                            /*description_placeholder_text=*/unused,
@@ -60,19 +63,20 @@ IN_PROC_BROWSER_TEST_F(ShowFeedbackPageBrowserTest, UserFeedbackDisallowed) {
                            /*extra_diagnostics=*/unused,
                            /*autofill_metadata=*/base::DictValue());
   histogram_tester.ExpectTotalCount("Feedback.RequestSource", 1);
+  histogram_tester.ExpectTotalCount("Feedback.NotAllowed.RequestSource", 1);
 }
 
 // Test that when the policy of UserFeedbackAllowed is true, feedback app is
 // opened and the os_feedback is used when the feature kOsFeedback is enabled.
 IN_PROC_BROWSER_TEST_F(ShowFeedbackPageBrowserTest,
                        OsFeedbackIsOpenedWhenFeatureEnabled) {
-  ash::SystemWebAppManager::GetForTest(browser()->profile())
+  ash::SystemWebAppManager::GetForTest(browser()->GetProfile())
       ->InstallSystemAppsForTesting();
 
   base::HistogramTester histogram_tester;
-  EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
   const GURL page_url = chrome::GetTargetTabUrl(
-      browser(), browser()->tab_strip_model()->active_index());
+      browser(), browser()->GetTabStripModel()->active_index());
   const GURL expected_url(base::StrCat(
       {ash::kChromeUIOSFeedbackUrl, "/?page_url=",
        base::EscapeQueryParamValue(page_url.spec(), /*use_plus=*/false)}));
@@ -80,8 +84,8 @@ IN_PROC_BROWSER_TEST_F(ShowFeedbackPageBrowserTest,
   navigation_observer.StartWatchingNewWebContents();
 
   std::string unused;
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kUserFeedbackAllowed,
-                                               true);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kUserFeedbackAllowed,
+                                                  true);
   chrome::ShowFeedbackPage(browser(), feedback::kFeedbackSourceBrowserCommand,
                            /*description_template=*/unused,
                            /*description_placeholder_text=*/unused,
@@ -91,9 +95,10 @@ IN_PROC_BROWSER_TEST_F(ShowFeedbackPageBrowserTest,
   navigation_observer.Wait();
 
   histogram_tester.ExpectTotalCount("Feedback.RequestSource", 1);
-  EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
-  const GURL visible_url = chrome::FindLastActive()
-                               ->tab_strip_model()
+  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
+  const GURL visible_url = GlobalBrowserCollection::GetInstance()
+                               ->GetLastActiveBrowser()
+                               ->GetTabStripModel()
                                ->GetActiveWebContents()
                                ->GetVisibleURL();
   EXPECT_TRUE(visible_url.has_query());
@@ -109,11 +114,11 @@ IN_PROC_BROWSER_TEST_F(ShowFeedbackPageBrowserTest,
 // - `from_assistant` set true.
 IN_PROC_BROWSER_TEST_F(ShowFeedbackPageBrowserTest,
                        OsFeedbackAdditionalAssistantContextAddedToUrl) {
-  ash::SystemWebAppManager::GetForTest(browser()->profile())
+  ash::SystemWebAppManager::GetForTest(browser()->GetProfile())
       ->InstallSystemAppsForTesting();
   std::string unused;
   const GURL page_url = chrome::GetTargetTabUrl(
-      browser(), browser()->tab_strip_model()->active_index());
+      browser(), browser()->GetTabStripModel()->active_index());
   const std::string extra_diagnostics = "extra diagnostics param";
   const std::string description_template = "Q1: Question one?";
   const std::string description_placeholder_text =
@@ -137,8 +142,8 @@ IN_PROC_BROWSER_TEST_F(ShowFeedbackPageBrowserTest,
   content::TestNavigationObserver navigation_observer(expected_url);
   navigation_observer.StartWatchingNewWebContents();
 
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kUserFeedbackAllowed,
-                                               true);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kUserFeedbackAllowed,
+                                                  true);
   chrome::ShowFeedbackPage(
       browser(), feedback::kFeedbackSourceAssistant,
       /*description_template=*/description_template,
@@ -148,8 +153,9 @@ IN_PROC_BROWSER_TEST_F(ShowFeedbackPageBrowserTest,
       /*autofill_metadata=*/base::DictValue());
   navigation_observer.Wait();
 
-  const GURL visible_url = chrome::FindLastActive()
-                               ->tab_strip_model()
+  const GURL visible_url = GlobalBrowserCollection::GetInstance()
+                               ->GetLastActiveBrowser()
+                               ->GetTabStripModel()
                                ->GetActiveWebContents()
                                ->GetVisibleURL();
   EXPECT_TRUE(visible_url.has_query());
@@ -166,11 +172,11 @@ IN_PROC_BROWSER_TEST_F(ShowFeedbackPageBrowserTest,
 IN_PROC_BROWSER_TEST_F(
     ShowFeedbackPageBrowserTest,
     OsFeedbackAdditionalSettingsSearchNoFingerprintContextAddedToUrl) {
-  ash::SystemWebAppManager::GetForTest(browser()->profile())
+  ash::SystemWebAppManager::GetForTest(browser()->GetProfile())
       ->InstallSystemAppsForTesting();
   std::string unused;
   const GURL page_url = chrome::GetTargetTabUrl(
-      browser(), browser()->tab_strip_model()->active_index());
+      browser(), browser()->GetTabStripModel()->active_index());
   const std::string extra_diagnostics = "extra diagnostics param";
   const std::string description_template = "Q1: Question one?";
   const std::string description_placeholder_text =
@@ -194,8 +200,8 @@ IN_PROC_BROWSER_TEST_F(
   content::TestNavigationObserver navigation_observer(expected_url);
   navigation_observer.StartWatchingNewWebContents();
 
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kUserFeedbackAllowed,
-                                               true);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kUserFeedbackAllowed,
+                                                  true);
 
   chrome::ShowFeedbackPage(
       browser(), feedback::kFeedbackSourceOsSettingsSearch,
@@ -206,8 +212,9 @@ IN_PROC_BROWSER_TEST_F(
       /*autofill_metadata=*/base::DictValue());
   navigation_observer.Wait();
 
-  const GURL visible_url = chrome::FindLastActive()
-                               ->tab_strip_model()
+  const GURL visible_url = GlobalBrowserCollection::GetInstance()
+                               ->GetLastActiveBrowser()
+                               ->GetTabStripModel()
                                ->GetActiveWebContents()
                                ->GetVisibleURL();
   EXPECT_TRUE(visible_url.has_query());
@@ -226,11 +233,11 @@ IN_PROC_BROWSER_TEST_F(
 IN_PROC_BROWSER_TEST_F(
     ShowFeedbackPageBrowserTest,
     OsFeedbackAdditionalSettingsSearchWithFingerprintContextAddedToUrl) {
-  ash::SystemWebAppManager::GetForTest(browser()->profile())
+  ash::SystemWebAppManager::GetForTest(browser()->GetProfile())
       ->InstallSystemAppsForTesting();
   std::string unused;
   const GURL page_url = chrome::GetTargetTabUrl(
-      browser(), browser()->tab_strip_model()->active_index());
+      browser(), browser()->GetTabStripModel()->active_index());
   const std::string extra_diagnostics = "extra diagnostics param";
   const std::string description_template = "Q1: Question one fingerprint?";
   const std::string description_placeholder_text =
@@ -252,8 +259,8 @@ IN_PROC_BROWSER_TEST_F(
   content::TestNavigationObserver navigation_observer(expected_url);
   navigation_observer.StartWatchingNewWebContents();
 
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kUserFeedbackAllowed,
-                                               true);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kUserFeedbackAllowed,
+                                                  true);
 
   chrome::ShowFeedbackPage(
       browser(), feedback::kFeedbackSourceOsSettingsSearch,
@@ -264,8 +271,9 @@ IN_PROC_BROWSER_TEST_F(
       /*autofill_metadata=*/base::DictValue());
   navigation_observer.Wait();
 
-  const GURL visible_url = chrome::FindLastActive()
-                               ->tab_strip_model()
+  const GURL visible_url = GlobalBrowserCollection::GetInstance()
+                               ->GetLastActiveBrowser()
+                               ->GetTabStripModel()
                                ->GetActiveWebContents()
                                ->GetVisibleURL();
   EXPECT_TRUE(visible_url.has_query());
@@ -282,11 +290,11 @@ IN_PROC_BROWSER_TEST_F(
 // - `autofill_metadata` string.
 IN_PROC_BROWSER_TEST_F(ShowFeedbackPageBrowserTest,
                        OsFeedbackAdditionalAutofillMetadataAddedToUrl) {
-  ash::SystemWebAppManager::GetForTest(browser()->profile())
+  ash::SystemWebAppManager::GetForTest(browser()->GetProfile())
       ->InstallSystemAppsForTesting();
   std::string unused;
   const GURL page_url = chrome::GetTargetTabUrl(
-      browser(), browser()->tab_strip_model()->active_index());
+      browser(), browser()->GetTabStripModel()->active_index());
   const std::string extra_diagnostics = "extra diagnostics param";
   const std::string description_template = "Q1: Question one?";
   const std::string description_placeholder_text =
@@ -318,8 +326,8 @@ IN_PROC_BROWSER_TEST_F(ShowFeedbackPageBrowserTest,
   content::TestNavigationObserver navigation_observer(expected_url);
   navigation_observer.StartWatchingNewWebContents();
 
-  browser()->profile()->GetPrefs()->SetBoolean(prefs::kUserFeedbackAllowed,
-                                               true);
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kUserFeedbackAllowed,
+                                                  true);
 
   chrome::ShowFeedbackPage(
       browser(), feedback::kFeedbackSourceAutofillContextMenu,
@@ -330,8 +338,9 @@ IN_PROC_BROWSER_TEST_F(ShowFeedbackPageBrowserTest,
       /*autofill_metadata=*/std::move(autofill_metadata));
   navigation_observer.Wait();
 
-  const GURL visible_url = chrome::FindLastActive()
-                               ->tab_strip_model()
+  const GURL visible_url = GlobalBrowserCollection::GetInstance()
+                               ->GetLastActiveBrowser()
+                               ->GetTabStripModel()
                                ->GetActiveWebContents()
                                ->GetVisibleURL();
   EXPECT_TRUE(visible_url.has_query());

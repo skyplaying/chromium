@@ -2,6 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import type {Notification} from '../menus/menu_util.js';
+
+import {AudioBrowserProxyImpl} from './audio_browser_proxy.js';
+
 export type VoicePackStatus = VoicePackServerResponseSuccess|
     VoicePackServerResponseError|VoicePackServerResponseParsingError;
 
@@ -75,11 +79,11 @@ export enum VoiceClientSideStatusCode {
   NOT_INSTALLED,         // Available to be downloaded but not installed
   SENT_INSTALL_REQUEST,  // We sent an install request
   SENT_INSTALL_REQUEST_ERROR_RETRY,  // We sent an install request retrying a
-                                     // previously failed download
+  // previously failed download
   INSTALLED_AND_UNAVAILABLE,  // The server says voice is on disk, but it's not
-                              // available to the local speechSynthesis API yet
+  // available to the local speechSynthesis API yet
   AVAILABLE,  // The voice is installed and available to be used by the local
-              // speechSynthesis API
+  // speechSynthesis API
   ERROR_INSTALLING,          // Couldn't install
   INSTALL_ERROR_ALLOCATION,  // Couldn't install due to not enough memory
 }
@@ -89,7 +93,7 @@ export enum NotificationType {
   DOWNLOADING,                // Language is downloading.
   DOWNLOADED,                 // Language is downloaded.
   GOOGLE_VOICES_UNAVAILABLE,  // Google voices are not available due to not
-                              // accessing the extension.
+  // accessing the extension.
   NO_INTERNET,  // No available voices for this language due to no internet.
   NO_SPACE,     // No available voices for this language due to no space.
   NO_SPACE_HQ,  // No high-quality voices for this language due to no space.
@@ -103,71 +107,28 @@ const ESPEAK_STRING_IDENTIFIER = 'eSpeak';
 // Google voices that are not Natural.
 const GOOGLE_STRING_IDENTIFIER = 'Google';
 
-// Helper for filtering the voice list broken into a separate method
-// that doesn't modify instance data to simplify testing.
-export function getFilteredVoiceList(possibleVoices: SpeechSynthesisVoice[]):
-    SpeechSynthesisVoice[] {
-  let availableVoices = possibleVoices;
-  if (availableVoices.some(({localService}) => localService)) {
-    availableVoices = availableVoices.filter(({localService}) => localService);
-  }
-  // Filter out Android voices on ChromeOS. Android Speech Recognition
-  // voices are technically network voices, but for some reason, some
-  // voices are marked as localService voices, so filtering localService
-  // doesn't filter them out. Since they can cause unexpected behavior
-  // in Read Aloud, go ahead and filter them out. To avoid causing any
-  // unexpected behavior outside of ChromeOS, just filter them on ChromeOS.
-  if (chrome.readingMode.isChromeOsAsh) {
-    availableVoices = availableVoices.filter(
-        ({name}) => !name.toLowerCase().includes('android'));
-    // Filter out espeak voices if there exists a Google voice in the same
-    // locale.
-    availableVoices = availableVoices.filter(
-        voice => !isEspeak(voice) ||
-            convertLangOrLocaleToExactVoicePackLocale(voice.lang) ===
-                undefined);
-  } else {
-    // Group non-Google voices by language and select a default voice for each
-    // language. This represents the system voice for each language.
-    const languageToNonGoogleVoices =
-        availableVoices.filter(voice => !isGoogle(voice))
-            .reduce((map, voice) => {
-              map[voice.lang] = map[voice.lang] || [];
-              map[voice.lang]!.push(voice);
-              return map;
-            }, {} as {[language: string]: SpeechSynthesisVoice[]});
-    // Only keep system voices that exactly match Google TTS supported locales,
-    // or for languages for which there are no Google TTS supported locales.
-    const systemVoices =
-        Object.values(languageToNonGoogleVoices)
-            .map((voices) => {
-              const defaultVoice = voices.find(voice => voice.default);
-              return defaultVoice || voices[0];
-            })
-            .filter(
-                systemVoice => AVAILABLE_GOOGLE_TTS_LOCALES.has(
-                                   systemVoice!.lang.toLowerCase()) ||
-                    convertLangOrLocaleToExactVoicePackLocale(
-                        systemVoice!.lang.toLowerCase()) === undefined);
 
-    // Keep all Google voices and one system voice per language.
-    availableVoices = availableVoices.filter(
-        voice => isGoogle(voice) || systemVoices.includes(voice));
-  }
 
-  return availableVoices;
-}
-
-export function isNatural(voice: SpeechSynthesisVoice) {
+export function hasNaturalIdentifier(voice: SpeechSynthesisVoice) {
   return voice.name.includes(NATURAL_STRING_IDENTIFIER);
 }
 
-export function isEspeak(voice?: SpeechSynthesisVoice|null) {
-  return voice && voice.name.includes(ESPEAK_STRING_IDENTIFIER);
+export function defaultIsNatural(voice: SpeechSynthesisVoice) {
+  return hasNaturalIdentifier(voice);
 }
 
-export function isGoogle(voice: SpeechSynthesisVoice|undefined) {
-  return voice && voice.name.includes(GOOGLE_STRING_IDENTIFIER);
+export function hasEspeakIdentifier(voice?: SpeechSynthesisVoice|null):
+    boolean {
+  return !!(voice && voice.name.includes(ESPEAK_STRING_IDENTIFIER));
+}
+
+export function hasGoogleIdentifier(voice: SpeechSynthesisVoice|undefined):
+    boolean {
+  return !!(voice && voice.name.includes(GOOGLE_STRING_IDENTIFIER));
+}
+
+export function defaultIsGoogle(voice: SpeechSynthesisVoice|undefined) {
+  return hasGoogleIdentifier(voice);
 }
 
 export function getNaturalVoiceOrDefault(voices: SpeechSynthesisVoice[]):
@@ -176,7 +137,7 @@ export function getNaturalVoiceOrDefault(voices: SpeechSynthesisVoice[]):
     return null;
   }
 
-  const naturalVoice = voices.find(v => isNatural(v));
+  const naturalVoice = voices.find(v => hasNaturalIdentifier(v));
   if (naturalVoice) {
     return naturalVoice;
   }
@@ -305,8 +266,9 @@ export function convertLangToAnAvailableLangIfPresent(
   }
 
   // If all else fails, try the browser language.
-  const defaultLanguage =
-      chrome.readingMode.defaultLanguageForSpeech.toLowerCase();
+  const defaultLanguage = AudioBrowserProxyImpl.getInstance()
+                              .getDefaultLanguageForSpeech()
+                              .toLowerCase();
   if (availableLangs.includes(defaultLanguage)) {
     return defaultLanguage;
   }
@@ -555,4 +517,37 @@ export function areVoicesEqual(
   return voice1.default === voice2.default && voice1.lang === voice2.lang &&
       voice1.localService === voice2.localService &&
       voice1.name === voice2.name && voice1.voiceURI === voice2.voiceURI;
+}
+
+/**
+ * Maps a language code and notification dictionary to a Notification structure
+ * containing error state and localization string ID.
+ */
+export function getNotificationFor(
+    lang: string, currentNotifications: {[language: string]: NotificationType}):
+    Notification {
+  const voicePackLanguage = getVoicePackConvertedLangIfExists(lang);
+  const notification = currentNotifications[voicePackLanguage];
+  if (notification === undefined) {
+    return {isError: false};
+  }
+
+  switch (notification) {
+    case NotificationType.DOWNLOADING:
+      return {isError: false, text: 'readingModeLanguageMenuDownloading'};
+    case NotificationType.NO_INTERNET:
+      return {isError: true, text: 'readingModeLanguageMenuNoInternet'};
+    case NotificationType.GENERIC_ERROR:
+      return {isError: true, text: 'languageMenuDownloadFailed'};
+    case NotificationType.NO_SPACE_HQ:
+      return {isError: true, text: 'allocationErrorHighQuality'};
+    case NotificationType.NO_SPACE:
+      return {isError: true, text: 'allocationError'};
+    case NotificationType.DOWNLOADED:
+    case NotificationType.GOOGLE_VOICES_UNAVAILABLE:
+    case NotificationType.NONE:
+      return {isError: false};
+    default:
+      return notification satisfies never;
+  }
 }

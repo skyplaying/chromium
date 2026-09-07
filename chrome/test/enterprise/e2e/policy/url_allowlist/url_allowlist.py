@@ -18,8 +18,8 @@ class UrlAllowlistTest(ChromeEnterpriseTestCase):
 
   This policy provides exceptions to the URLBlocklist policy.
 
-  See https://cloud.google.com/docs/chrome-enterprise/policies/?policy=URLBlocklist
-  and https://cloud.google.com/docs/chrome-enterprise/policies/?policy=URLAllowlist"""
+  See https://chromeenterprise.google/policies/?policy=URLBlocklist
+  and https://chromeenterprise.google/policies/?policy=URLAllowlist"""
 
   @before_all
   def setup(self):
@@ -40,8 +40,9 @@ class UrlAllowlistTest(ChromeEnterpriseTestCase):
 
     dir = os.path.dirname(os.path.abspath(__file__))
     logging.info('Opening page: %s' % url)
-    output = self.RunWebDriverTest(self.win_config['client'],
-                                   os.path.join(dir, '../open_page.py'), args)
+    output = self.RunWebDriverTest(
+      self.win_config['client'], os.path.join(dir, '../open_page.py'), args
+    )
     return output
 
   @test

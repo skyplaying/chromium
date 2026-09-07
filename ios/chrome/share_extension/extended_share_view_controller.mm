@@ -35,8 +35,10 @@ const NSUInteger kSearchCharacterLimit = 1000;
 
 }  // namespace
 
-@interface ExtendedShareViewController () <ShareExtensionDelegate,
-                                           NSURLSessionDelegate>
+@interface ExtendedShareViewController () <
+    NSURLSessionDelegate,
+    ShareExtensionDelegate,
+    UIAdaptivePresentationControllerDelegate>
 
 // The sheet to display when an item is shared.
 @property(nonatomic, strong) ShareExtensionSheet* shareSheet;
@@ -116,6 +118,7 @@ const NSUInteger kSearchCharacterLimit = 1000;
   _navigationController = [[UINavigationController alloc]
       initWithRootViewController:self.shareSheet];
   _navigationController.modalPresentationStyle = UIModalPresentationFormSheet;
+  _navigationController.presentationController.delegate = self;
   if (@available(iOS 26, *)) {
     [self addChildViewController:_navigationController];
   }
@@ -329,6 +332,17 @@ const NSUInteger kSearchCharacterLimit = 1000;
       [self handleURL:task.originalRequest.URL forItem:nil];
     });
   }
+}
+
+#pragma mark - UIAdaptivePresentationControllerDelegate
+
+- (void)presentationControllerDidDismiss:
+    (UIPresentationController*)presentationController {
+  [self
+      handleSheetDismissalForItem:nil
+                            error:[NSError errorWithDomain:NSCocoaErrorDomain
+                                                      code:NSUserCancelledError
+                                                  userInfo:nil]];
 }
 
 #pragma mark - Private methods
@@ -560,19 +574,48 @@ const NSUInteger kSearchCharacterLimit = 1000;
                 withError:(NSError*)error {
   if ([idImage isKindOfClass:[UIImage class]]) {
     self.shareImage = base::apple::ObjCCast<UIImage>(idImage);
+    [self continueHandlingSharedImageForItem:item];
   } else if ([idImage isKindOfClass:[NSURL class]]) {
-    self.shareImage = [UIImage
-        imageWithData:[NSData
-                          dataWithContentsOfURL:base::apple::ObjCCast<NSURL>(
-                                                    idImage)]];
-    if (!self.shareImage) {
-      // If the data for a given URL is nil, consider the URL to no longer be an
-      // image.
-      [self handleURL:idImage forItem:item];
-      return;
-    }
+    // Load image data on a background queue to avoid blocking the main
+    // thread, as shared images can be large.
+    NSURL* imageURL = base::apple::ObjCCast<NSURL>(idImage);
+    __weak ExtendedShareViewController* weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+      [weakSelf loadImageDataFromURL:imageURL forItem:item];
+    });
+  } else {
+    [self continueHandlingSharedImageForItem:item];
   }
+}
 
+// Loads image data from `imageURL` on a background thread and dispatches
+// the result back to the main thread for processing.
+- (void)loadImageDataFromURL:(NSURL*)imageURL forItem:(NSExtensionItem*)item {
+  NSData* data = [NSData dataWithContentsOfURL:imageURL];
+  UIImage* image = data ? [UIImage imageWithData:data] : nil;
+  __weak ExtendedShareViewController* weakSelf = self;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [weakSelf didLoadImage:image fromURL:imageURL forItem:item];
+  });
+}
+
+// Called on the main thread after the image data has been loaded.
+- (void)didLoadImage:(UIImage*)image
+             fromURL:(NSURL*)imageURL
+             forItem:(NSExtensionItem*)item {
+  self.shareImage = image;
+  if (!self.shareImage) {
+    // If the data for a given URL is nil, consider the URL to no
+    // longer be an image.
+    [self handleURL:imageURL forItem:item];
+    return;
+  }
+  [self continueHandlingSharedImageForItem:item];
+}
+
+// Continues processing the shared item by displaying the share sheet or
+// an error view.
+- (void)continueHandlingSharedImageForItem:(NSExtensionItem*)item {
   self.shareItem = item;
   if (self.shareImage) {
     [self resizeAndScaleShareImage];

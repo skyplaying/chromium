@@ -20,16 +20,15 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Tests for {@link ChromeTransitionDrawable} class. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class ChromeTransitionDrawableTest {
     @Rule public MockitoRule mockitoRule = MockitoJUnit.rule();
 
@@ -105,7 +104,7 @@ public class ChromeTransitionDrawableTest {
         assertEquals(255, mInitialDrawableAlpha);
         assertEquals(0, mFinalDrawableAlpha);
 
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertEquals(255, mFinalDrawableAlpha);
         assertEquals(0, mInitialDrawableAlpha);
     }
@@ -189,7 +188,7 @@ public class ChromeTransitionDrawableTest {
         assertEquals(255 - mFinalDrawableAlpha, mInitialDrawableAlpha);
         assertFalse(endActionRan.get());
 
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertEquals(255, mInitialDrawableAlpha);
         assertEquals(0, mFinalDrawableAlpha);
     }
@@ -206,7 +205,7 @@ public class ChromeTransitionDrawableTest {
         ShadowLooper.runMainLooperOneTask();
 
         mTransitionDrawable.reverseTransition().withEndAction(() -> endActionRan2.set(true));
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
         assertFalse(endActionRan.get());
         assertTrue(endActionRan2.get());
     }

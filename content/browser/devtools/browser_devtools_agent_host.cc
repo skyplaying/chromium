@@ -80,8 +80,8 @@ class BrowserDevToolsAgentHost::BrowserAutoAttacher final
   // ServiceWorkerDevToolsManager::Observer implementation.
   void WorkerCreated(ServiceWorkerDevToolsAgentHost* host,
                      bool* should_pause_on_start) override {
-    *should_pause_on_start = wait_for_debugger_on_start();
-    DispatchAutoAttach(host, *should_pause_on_start);
+    *should_pause_on_start =
+        DispatchAutoAttach(host, wait_for_debugger_on_start());
   }
 
   void WorkerDestroyed(ServiceWorkerDevToolsAgentHost* host) override {
@@ -91,8 +91,8 @@ class BrowserDevToolsAgentHost::BrowserAutoAttacher final
   // SharedWorkerDevToolsManager::Observer implementation.
   void SharedWorkerCreated(SharedWorkerDevToolsAgentHost* host,
                            bool* should_pause_on_start) override {
-    *should_pause_on_start = wait_for_debugger_on_start();
-    DispatchAutoAttach(host, *should_pause_on_start);
+    *should_pause_on_start =
+        DispatchAutoAttach(host, wait_for_debugger_on_start());
   }
 
   void SharedWorkerDestroyed(SharedWorkerDevToolsAgentHost* host) override {
@@ -172,9 +172,6 @@ class BrowserDevToolsAgentHost::BrowserAutoAttacher final
     if (host->GetType() == DevToolsAgentHost::kTypeSharedWorker) {
       return true;
     }
-    if (host->GetType() == DevToolsAgentHost::kTypeSharedStorageWorklet) {
-      return true;
-    }
     if (host->GetType() == DevToolsAgentHost::kTypeTab) {
       return true;
     }
@@ -244,7 +241,7 @@ bool BrowserDevToolsAgentHost::AttachSession(DevToolsSession* session) {
 #endif
   session->CreateAndAddHandler<protocol::IOHandler>(GetIOContext());
   session->CreateAndAddHandler<protocol::FetchHandler>(
-      GetIOContext(),
+      GetIOContext(), session->GetRootSession()->GetClient(),
       base::BindRepeating([](base::OnceClosure cb) { std::move(cb).Run(); }));
   session->CreateAndAddHandler<protocol::MemoryHandler>();
   session->CreateAndAddHandler<protocol::SecurityHandler>();
@@ -257,7 +254,8 @@ bool BrowserDevToolsAgentHost::AttachSession(DevToolsSession* session) {
         socket_callback_, tethering_task_runner_);
   }
   session->CreateAndAddHandler<protocol::TracingHandler>(
-      this, GetIOContext(), /* root_session */ nullptr);
+      this, GetIOContext(), /* root_session */ nullptr,
+      session->GetClient()->IsTrusted());
 
 #if BUILDFLAG(CLANG_PROFILING_INSIDE_SANDBOX) && BUILDFLAG(CLANG_PGO_PROFILING)
   session->CreateAndAddHandler<protocol::NativeProfilingHandler>();

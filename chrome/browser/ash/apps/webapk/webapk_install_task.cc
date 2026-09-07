@@ -9,6 +9,7 @@
 #include <string>
 #include <utility>
 
+#include "ash/constants/chrome_switches.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
@@ -23,13 +24,12 @@
 #include "chrome/browser/ash/apps/webapk/webapk_prefs.h"
 #include "chrome/browser/ash/apps/webapk/webapk_utils.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/web_applications/model/web_app_icon_types.h"
 #include "chrome/browser/web_applications/web_app_filter.h"
 #include "chrome/browser/web_applications/web_app_icon_manager.h"
-#include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
-#include "chrome/common/chrome_switches.h"
 #include "chromeos/ash/experiences/arc/mojom/webapk.mojom.h"
 #include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
 #include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
@@ -108,7 +108,7 @@ constexpr net::NetworkTrafficAnnotationTag kWebApksTrafficAnnotation =
 GURL GetServerUrl() {
   std::string server_url =
       base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
-          switches::kWebApkServerUrl);
+          ash::chrome_switches::kWebApkServerUrl);
 
   if (server_url.empty()) {
     server_url = base::StrCat({kWebApkServerUrl, google_apis::GetAPIKey()});

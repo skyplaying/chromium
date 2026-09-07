@@ -4,13 +4,17 @@
 
 package org.chromium.chrome.browser.util;
 
+import android.content.Context;
 import android.view.KeyEvent;
 
 import androidx.annotation.IntDef;
 
 import org.chromium.base.Log;
 import org.chromium.base.metrics.RecordHistogram;
+import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.mojom.WindowOpenDisposition;
 
 /** Deals with multiple parts of browser UI code calls. */
@@ -95,6 +99,23 @@ public class BrowserUiUtils {
     }
 
     /**
+     * Records metrics when the tab switcher button is clicked.
+     *
+     * @param isExit Whether the click is exiting the tab switcher.
+     * @param isCurrentTabRegularNtp Whether the current tab is a regular new tab page.
+     */
+    public static void recordTabSwitcherButtonClicked(
+            boolean isExit, boolean isCurrentTabRegularNtp) {
+        if (isExit) {
+            RecordUserAction.record("MobileHubExitViaButton");
+        } else {
+            if (isCurrentTabRegularNtp) {
+                recordModuleClickHistogram(ModuleTypeOnStartAndNtp.TAB_SWITCHER_BUTTON);
+            }
+        }
+    }
+
+    /**
      * Records histograms of showing the home surface. Nothing will be recorded if timeDurationMs
      * isn't valid.
      */
@@ -123,5 +144,14 @@ public class BrowserUiUtils {
             return WindowOpenDisposition.NEW_WINDOW;
         }
         return WindowOpenDisposition.CURRENT_TAB;
+    }
+
+    /**
+     * @param context The current context (should be the activity context when possible).
+     * @return Whether the page info item should be moved to the app menu.
+     */
+    public static boolean isPageInfoMovedToAppMenu(Context context) {
+        return ChromeFeatureList.sAndroidPageInfoAsAppMenuItem.isEnabled()
+                && !DeviceFormFactor.isNonMultiDisplayContextOnTablet(context);
     }
 }

@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/android/device_info.h"
 #include "base/android/jni_string.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -16,7 +17,7 @@
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/uuid.h"
-#include "chrome/browser/android/profile_key_util.h"
+#include "chrome/browser/android/profile_key_util.h"  // nogncheck crbug.com/40147906
 #include "chrome/browser/android/tab_android.h"
 #include "chrome/browser/download/android/download_controller_base.h"
 #include "chrome/browser/download/android/download_dialog_utils.h"
@@ -35,6 +36,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_key.h"
 #include "chrome/browser/transition_manager/full_browser_transition_manager.h"
+#include "components/download/public/common/download_features.h"
 #include "components/download/public/common/download_url_parameters.h"
 #include "components/offline_items_collection/core/offline_content_aggregator.h"
 #include "components/offline_items_collection/core/offline_content_provider.h"
@@ -308,7 +310,7 @@ void OfflinePageDownloadBridge::Destroy(JNIEnv* env) {
 static void JNI_OfflinePageDownloadBridge_StartDownload(
     JNIEnv* env,
     const JavaRef<jobject>& j_tab,
-    std::string& origin) {
+    const std::string& origin) {
   TabAndroid* tab = TabAndroid::GetNativeTab(env, j_tab);
   if (!tab)
     return;
@@ -331,8 +333,12 @@ static void JNI_OfflinePageDownloadBridge_StartDownload(
     return;
   }
 
-  // Off the record save page are handled separately.
-  if (web_contents->GetBrowserContext()->IsOffTheRecord()) {
+  // Off the record save page and save as enabled on desktop android are
+  // handled via standard SavePackage.
+  if (web_contents->GetBrowserContext()->IsOffTheRecord() ||
+      (base::FeatureList::IsEnabled(
+           download::features::kEnableDownloadSaveAsContextMenu) &&
+       base::android::device_info::is_desktop())) {
     web_contents->OnSavePage();
     return;
   }

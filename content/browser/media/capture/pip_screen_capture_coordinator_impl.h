@@ -43,6 +43,8 @@ class CONTENT_EXPORT PipScreenCaptureCoordinatorImpl
       const PipScreenCaptureCoordinatorImpl&) = delete;
 
   // PipScreenCaptureCoordinator:
+  void OnPipInitiated(
+      const GlobalRenderFrameHostId& pip_owner_render_frame_host_id) override;
   void OnPipShown(
       WebContents& pip_web_contents,
       const GlobalRenderFrameHostId& pip_owner_render_frame_host_id) override;
@@ -50,6 +52,17 @@ class CONTENT_EXPORT PipScreenCaptureCoordinatorImpl
   std::unique_ptr<PipScreenCaptureCoordinatorProxy> CreateProxy() override;
   std::optional<DesktopMediaID::Id> GetPipWindowToExcludeFromScreenCapture(
       DesktopMediaID::Id desktop_id) override;
+
+  void AddExclusionObserver(
+      desktop_capture::PipScreenCaptureExclusionObserver* observer) override;
+  void RemoveExclusionObserver(
+      desktop_capture::PipScreenCaptureExclusionObserver* observer) override;
+  bool IsExcludedFromScreenCapture() const override;
+
+  base::UnguessableToken RegisterMediaPickerAsCapture(
+      const GlobalRenderFrameHostId& render_frame_host_id) override;
+  void UnregisterMediaPickerAsCapture(
+      const base::UnguessableToken& session_id) override;
 
   void OnPipShown(
       DesktopMediaID::Id pip_window_id,
@@ -69,12 +82,15 @@ class CONTENT_EXPORT PipScreenCaptureCoordinatorImpl
       PipScreenCaptureCoordinatorProxy::CaptureInfo capture_info);
   void RemoveCaptureOnUIThread(const base::UnguessableToken& session_id);
   void NotifyStateChanged();
+  void NotifyExclusionChanged(bool was_excluded);
   friend class base::NoDestructor<PipScreenCaptureCoordinatorImpl>;
   PipScreenCaptureCoordinatorImpl();
 
   std::optional<DesktopMediaID::Id> pip_window_id_;
   GlobalRenderFrameHostId pip_owner_render_frame_host_id_;
   base::ObserverList<Observer> observers_;
+  base::ObserverList<desktop_capture::PipScreenCaptureExclusionObserver>
+      exclusion_observers_;
   std::vector<PipScreenCaptureCoordinatorProxy::CaptureInfo> captures_;
   base::WeakPtrFactory<PipScreenCaptureCoordinatorImpl> weak_factory_{this};
 };

@@ -10,7 +10,9 @@
 #include "base/android/jni_string.h"
 #include "base/android/scoped_java_ref.h"
 #include "base/feature_list.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "base/trace_event/named_trigger.h"
 #include "base/trace_event/trace_event.h"
 #include "content/browser/android/navigation_handle_proxy.h"
@@ -40,23 +42,17 @@ namespace content {
 // TODO(dcheng): File a bug. This class incorrectly passes just a frame ID,
 // which is not sufficient to identify a frame (since frame IDs are scoped per
 // render process, and so may collide).
-WebContentsObserverProxy::WebContentsObserverProxy(
-    JNIEnv* env,
-    const base::android::JavaRef<jobject>& obj,
-    WebContents* web_contents)
-    : WebContentsObserver(web_contents), java_observer_(env, obj) {
-  DCHECK(obj);
-}
+WebContentsObserverProxy::WebContentsObserverProxy(WebContents* web_contents)
+    : WebContentsObserver(web_contents) {}
 
 WebContentsObserverProxy::~WebContentsObserverProxy() {}
 
 static int64_t JNI_WebContentsObserverProxy_Init(JNIEnv* env,
-                                                 const JavaRef<jobject>& obj,
                                                  WebContents* web_contents) {
   CHECK(web_contents);
 
   WebContentsObserverProxy* native_observer =
-      new WebContentsObserverProxy(env, obj, web_contents);
+      new WebContentsObserverProxy(web_contents);
   return reinterpret_cast<intptr_t>(native_observer);
 }
 
@@ -105,9 +101,6 @@ void WebContentsObserverProxy::PrimaryMainFrameRenderProcessGone(
 void WebContentsObserverProxy::DidStartLoading() {
   TRACE_EVENT("browser", "WebContentsObserverProxy::DidStartLoading");
   JNIEnv* env = AttachCurrentThread();
-  if (auto* entry = web_contents()->GetController().GetPendingEntry()) {
-    base_url_of_last_started_data_url_ = entry->GetBaseURLForDataURL();
-  }
   Java_WebContentsObserverProxy_didStartLoading(
       env, GetJavaObjectChecked(env),
       url::GURLAndroid::FromNativeGURL(env, web_contents()->GetVisibleURL()));
@@ -117,8 +110,6 @@ void WebContentsObserverProxy::DidStopLoading() {
   JNIEnv* env = AttachCurrentThread();
   GURL url = web_contents()->GetLastCommittedURL();
   bool assume_valid = SetToBaseURLForDataURLIfNeeded(&url);
-  // DidStopLoading is the last event we should get.
-  base_url_of_last_started_data_url_ = GURL();
   Java_WebContentsObserverProxy_didStopLoading(
       env, GetJavaObjectChecked(env),
       url::GURLAndroid::FromNativeGURL(env, url), assume_valid);
@@ -179,9 +170,13 @@ void WebContentsObserverProxy::DidFinishNavigation(
   if (navigation_handle->IsInPrimaryMainFrame()) {
     base::trace_event::EmitNamedTrigger("did-finish-navigation-in-pmf");
     JNIEnv* env = AttachCurrentThread();
+    base::TimeTicks start_time = base::TimeTicks::Now();
     Java_WebContentsObserverProxy_didFinishNavigationInPrimaryMainFrame(
         env, GetJavaObjectChecked(env),
         navigation_handle->GetJavaNavigationHandle());
+    base::UmaHistogramTimes(
+        "Android.Navigation.JavaObserverDuration.DidFinishNavigation",
+        base::TimeTicks::Now() - start_time);
   }
 }
 
@@ -324,12 +319,6 @@ bool WebContentsObserverProxy::SetToBaseURLForDataURLIfNeeded(GURL* url) {
   if (entry && !entry->GetBaseURLForDataURL().is_empty()) {
     *url = entry->GetBaseURLForDataURL();
     return false;
-  } else if (!base_url_of_last_started_data_url_.is_empty()) {
-    // NavigationController can lose the pending entry and recreate it without
-    // a base URL if there has been a loadUrl("javascript:...") after
-    // loadDataWithBaseUrl.
-    *url = base_url_of_last_started_data_url_;
-    return false;
   }
   return true;
 }
@@ -382,8 +371,10 @@ void WebContentsObserverProxy::WasDiscarded() {
 
 ScopedJavaLocalRef<jobject> WebContentsObserverProxy::GetJavaObjectChecked(
     JNIEnv* env) const {
-  auto obj = java_observer_.get(env);
-  DCHECK(!obj.is_null());
+  CHECK(web_contents());
+  auto obj =
+      Java_WebContentsObserverProxy_getFromWebContents(env, web_contents());
+  CHECK(!obj.is_null(), base::NotFatalUntil::M159);
   return obj;
 }
 

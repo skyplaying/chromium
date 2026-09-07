@@ -13,8 +13,10 @@
 #include "ash/test/pixel/ash_pixel_test_init_params.h"
 #include "base/functional/callback_helpers.h"
 #include "base/i18n/rtl.h"
+#include "base/i18n/test/scoped_rtl_for_testing.h"
 #include "base/test/scoped_feature_list.h"
 #include "components/vector_icons/vector_icons.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/rect.h"
@@ -102,7 +104,9 @@ class FeatureTilePixelTest : public AshTestBase {
 
 TEST_F(FeatureTilePixelTest, PrimaryTile) {
   auto* tile = CreateQSFeatureTileBase(widget_.get());
-  tile->SetVectorIcon(vector_icons::kDogfoodIcon);
+  tile->SetVectorIcon(::features::IsRoundedIconsEnabled()
+                          ? vector_icons::kPetsIcon
+                          : vector_icons::kDogfoodOldIcon);
   tile->SetLabel(u"Label");
   tile->SetSubLabel(u"Sub-label");
   // Needed for accessibility paint checks.
@@ -133,7 +137,9 @@ TEST_F(FeatureTilePixelTest, PrimaryTile) {
 
 TEST_F(FeatureTilePixelTest, PrimaryTileWithoutDiveInButton) {
   auto* tile = CreateQSFeatureTileBase(widget_.get());
-  tile->SetVectorIcon(vector_icons::kDogfoodIcon);
+  tile->SetVectorIcon(::features::IsRoundedIconsEnabled()
+                          ? vector_icons::kPetsIcon
+                          : vector_icons::kDogfoodOldIcon);
   tile->SetLabel(u"Label");
   tile->SetSubLabel(u"Sub-label");
   // Needed for accessibility paint checks.
@@ -163,12 +169,13 @@ TEST_F(FeatureTilePixelTest, PrimaryTileWithoutDiveInButton) {
 
 TEST_F(FeatureTilePixelTest, PrimaryTile_RTL) {
   // Turn on RTL mode.
-  base::i18n::SetRTLForTesting(true);
-  base::RunLoop().RunUntilIdle();
+  base::i18n::ScopedRTLForTesting scoped_rtl(true);
   EXPECT_TRUE(base::i18n::IsRTL());
 
   auto* tile = CreateQSFeatureTileBase(widget_.get());
-  tile->SetVectorIcon(vector_icons::kDogfoodIcon);
+  tile->SetVectorIcon(::features::IsRoundedIconsEnabled()
+                          ? vector_icons::kPetsIcon
+                          : vector_icons::kDogfoodOldIcon);
   tile->SetLabel(u"Label");
   tile->SetSubLabel(u"Sub-label");
   tile->CreateDecorativeDrillInArrow();
@@ -183,7 +190,9 @@ TEST_F(FeatureTilePixelTest, PrimaryTile_RTL) {
 
 TEST_F(FeatureTilePixelTest, CompactTile) {
   auto* tile = CreateQSFeatureTileBase(widget_.get(), /*is_compact=*/true);
-  tile->SetVectorIcon(vector_icons::kDogfoodIcon);
+  tile->SetVectorIcon(::features::IsRoundedIconsEnabled()
+                          ? vector_icons::kPetsIcon
+                          : vector_icons::kDogfoodOldIcon);
   tile->SetLabel(u"Multi-line label");
   // Needed for accessibility paint checks.
   tile->SetTooltipText(u"Tooltip");
@@ -278,7 +287,9 @@ class FeatureTileVcDlcUiEnabledPixelTest : public FeatureTilePixelTest {
     tile_->SetProperty(views::kBoxLayoutFlexKey,
                        views::BoxLayoutFlexSpecification());
     tile_->SetTooltipText(u"Tooltip");
-    tile_->SetVectorIcon(vector_icons::kDogfoodIcon);
+    tile_->SetVectorIcon(::features::IsRoundedIconsEnabled()
+                             ? vector_icons::kPetsIcon
+                             : vector_icons::kDogfoodOldIcon);
     tile_->SetLabel(u"One-line label");
   }
   void TearDown() override {

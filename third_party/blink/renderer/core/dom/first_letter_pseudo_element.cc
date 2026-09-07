@@ -339,8 +339,7 @@ void FirstLetterPseudoElement::UpdateTextFragments() {
   unsigned length = FirstLetterPseudoElement::FirstLetterLength(
       old_text, preserve_breaks, punctuation);
   remaining_text_layout_object_->SetTextFragment(
-      old_text.Impl()->Substring(length, old_text.length()), length,
-      old_text.length() - length);
+      old_text.substr(length), length, old_text.length() - length);
   remaining_text_layout_object_->InvalidateInlineItems();
 
   for (auto* child = GetLayoutObject()->SlowFirstChild(); child;
@@ -351,8 +350,7 @@ void FirstLetterPseudoElement::UpdateTextFragments() {
     if (child_fragment->GetFirstLetterPseudoElement() != this)
       continue;
 
-    child_fragment->SetTextFragment(old_text.Impl()->Substring(0, length), 0,
-                                    length);
+    child_fragment->SetTextFragment(old_text.substr(0, length), 0, length);
     child_fragment->InvalidateInlineItems();
 
     // Make sure the first-letter layoutObject is set to require a layout as it
@@ -441,7 +439,7 @@ const ComputedStyle* FirstLetterPseudoElement::CustomStyleForLayoutObject(
   return ParentOrShadowHostElement()->StyleForPseudoElement(
       style_recalc_context,
       StyleRequest(GetPseudoId(),
-                   first_letter_text->Parent()->FirstLineStyle()));
+                   &first_letter_text->Parent()->FirstLineStyleRef()));
 }
 
 void FirstLetterPseudoElement::AttachFirstLetterTextLayoutObjects(
@@ -491,7 +489,7 @@ void FirstLetterPseudoElement::AttachFirstLetterTextLayoutObjects(
 
   remaining_text->SetFirstLetterPseudoElement(this);
   remaining_text->SetIsRemainingTextLayoutObject(true);
-  remaining_text->SetStyle(first_letter_text->Style());
+  remaining_text->SetStyle(&first_letter_text->StyleRef());
 
   if (remaining_text->GetNode())
     remaining_text->GetNode()->SetLayoutObject(remaining_text);

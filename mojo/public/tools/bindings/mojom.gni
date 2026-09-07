@@ -99,12 +99,12 @@ mojom_generator_sources =
       "$mojom_generator_root/checks/__init__.py",
       "$mojom_generator_root/checks/mojom_attributes_check.py",
       "$mojom_generator_root/checks/mojom_definitions_check.py",
-      "$mojom_generator_root/checks/mojom_interface_direct_receiver_check.py",
       "$mojom_generator_root/checks/mojom_interface_feature_check.py",
       "$mojom_generator_root/checks/mojom_restrictions_check.py",
       "$mojom_generator_root/generators/__init__.py",
       "$mojom_generator_root/generators/cpp_util.py",
       "$mojom_generator_root/generators/mojom_cpp_generator.py",
+      "$mojom_generator_root/generators/mojom_fuzzilli_generator.py",
       "$mojom_generator_root/generators/mojom_java_generator.py",
       "$mojom_generator_root/generators/mojom_js_generator.py",
       "$mojom_generator_root/generators/mojom_mojolpm_generator.py",
@@ -216,6 +216,14 @@ if (enable_scrambled_message_ids) {
 #       Every typemap is a GN scope describing how one or more mojom types maps
 #       to a non-mojom ts type, including the converter type name and the import
 #       path for the converter.
+#
+#   rust_typemaps (optional)
+#       A list of typemaps to be applied to the generated Rust bindings for this
+#       mojom target.
+#
+#       Every typemap is a GN scope describing how one or more mojom types maps
+#       to a non-mojom Rust type, including the source file defining the
+#       conversion. See the Typemaps section below.
 #
 #   blink_cpp_typemaps (optional)
 #       Same as above, but for the Blink variant of generated C++ bindings.
@@ -401,9 +409,9 @@ if (enable_scrambled_message_ids) {
 #
 # Typemaps
 # ========
-# The cpp_typemaps and blink_cpp_typemaps each specify an optional list of
-# typemapping configurations. Each configuration is a GN scope with metadata
-# describing what and how to map.
+# The cpp_typemaps, blink_cpp_typemaps, and rust_typemaps each specify an
+# optional list of typemapping configurations. Each configuration is a GN scope
+# with metadata describing what and how to map.
 #
 # Typemap scope parameters:
 #   types
@@ -423,10 +431,14 @@ if (enable_scrambled_message_ids) {
 #             The fully qualified name of a mojom type to be mapped. This is a
 #             string like "foo.mojom.Bar".
 #
-#         cpp (required)
+#         cpp (required for C++ typemaps)
 #             The fully qualified name of the C++ type to which the mojom type
 #             should be mapped in generated bindings. This is a string like
 #             "::base::Value" or "std::vector<::base::Value>".
+#
+#         rust (required for Rust typemaps)
+#             The name of the Rust type to which the mojom type should be mapped
+#             in generated bindings. This is a string like "MyCustomStruct".
 #
 #         copyable_pass_by_value (optional)
 #             A boolean value (default false) which effectively indicates
@@ -507,6 +519,11 @@ if (enable_scrambled_message_ids) {
 #   traits_deps / traits_public_deps (optional)
 #       Any dependencies of sources in |traits_headers| or |traits_sources| must
 #       be listed here.
+#
+#   traits_file (optional)
+#       The relative path to a .rs source file defining From and TryFrom trait
+#       implementations for the Rust typemap. This file is included as a module
+#       inside the generated Rust crate.
 #
 template("mojom") {
   assert(
@@ -903,11 +920,10 @@ template("mojom") {
     action(generator_cpp_message_ids_target_name) {
       script = mojom_generator_script
       inputs = mojom_generator_sources + jinja2_sources
-      sources = sources_list +
-                [ "$root_gen_dir/mojo/public/tools/bindings/cpp_templates.zip" ]
+      sources = sources_list
       deps = [
         ":$parser_target_name",
-        "//mojo/public/tools/bindings:precompile_templates",
+        "//mojo/public/tools/bindings:precompile_cpp_templates",
       ]
       if (defined(invoker.parser_deps)) {
         deps += invoker.parser_deps
@@ -951,11 +967,10 @@ template("mojom") {
       visibility = [ ":*" ]
       script = mojom_generator_script
       inputs = mojom_generator_sources + jinja2_sources
-      sources = sources_list +
-                [ "$root_gen_dir/mojo/public/tools/bindings/cpp_templates.zip" ]
+      sources = sources_list
       deps = [
         ":$parser_target_name",
-        "//mojo/public/tools/bindings:precompile_templates",
+        "//mojo/public/tools/bindings:precompile_cpp_templates",
       ]
       if (defined(invoker.parser_deps)) {
         deps += invoker.parser_deps
@@ -1086,14 +1101,10 @@ template("mojom") {
     action(generator_mojolpm_proto_target_name) {
       script = mojom_generator_script
       inputs = mojom_generator_sources + jinja2_sources
-      sources =
-          invoker.sources + [
-            "$root_gen_dir/mojo/public/tools/bindings/cpp_templates.zip",
-            "$root_gen_dir/mojo/public/tools/bindings/mojolpm_templates.zip",
-          ]
+      sources = invoker.sources
       deps = [
         ":$parser_target_name",
-        "//mojo/public/tools/bindings:precompile_templates",
+        "//mojo/public/tools/bindings:precompile_mojolpm_templates",
       ]
 
       outputs = []
@@ -1357,22 +1368,17 @@ template("mojom") {
         visibility = [ ":*" ]
         script = mojom_generator_script
         inputs = mojom_generator_sources + jinja2_sources
-        sources =
-            sources_list + [
-              "$root_gen_dir/mojo/public/tools/bindings/cpp_templates.zip",
-              type_mappings_path,
-            ]
-        if (generate_mojolpm_fuzzing &&
-            !defined(bindings_configuration.variant)) {
-          sources += [
-            "$root_gen_dir/mojo/public/tools/bindings/mojolpm_templates.zip",
-          ]
-        }
+        sources = sources_list + [ type_mappings_path ]
         deps = [
           ":$parser_target_name",
           ":$type_mappings_target_name",
-          "//mojo/public/tools/bindings:precompile_templates",
+          "//mojo/public/tools/bindings:precompile_cpp_templates",
         ]
+        if (generate_mojolpm_fuzzing &&
+            !defined(bindings_configuration.variant)) {
+          deps +=
+              [ "//mojo/public/tools/bindings:precompile_mojolpm_templates" ]
+        }
 
         if (defined(invoker.parser_deps)) {
           deps += invoker.parser_deps
@@ -1474,8 +1480,6 @@ template("mojom") {
 
     _typemap_config_filename =
         "$target_gen_dir/${target_name}${variant_suffix}.typemap_config"
-    _typemap_stamp_filename = "${_typemap_config_filename}.validated"
-    _typemap_validator_target_name = "${type_mappings_target_name}__validator"
     _rebased_typemap_configs = []
     foreach(config, cpp_typemap_configs) {
       _rebased_config = {
@@ -1495,47 +1499,20 @@ template("mojom") {
     }
     write_file(_typemap_config_filename, _rebased_typemap_configs, "json")
 
-    action(_typemap_validator_target_name) {
-      script = "$mojom_generator_root/validate_typemap_config.py"
-      inputs = [ _typemap_config_filename ]
-      outputs = [ _typemap_stamp_filename ]
-      args = [
-        get_label_info(_mojom_target_name, "label_no_toolchain"),
-        rebase_path(_typemap_config_filename, root_build_dir),
-        rebase_path(_typemap_stamp_filename, root_build_dir),
-      ]
-    }
-
     _ts_typemap_config_filename =
         "$target_gen_dir/${target_name}${variant_suffix}.ts_typemap_config"
-    _ts_typemap_stamp_filename = "${_ts_typemap_config_filename}.validated"
-    _ts_typemap_validator_target_name =
-        "${type_mappings_target_name}_ts__validator"
     write_file(_ts_typemap_config_filename, ts_typemap_configs, "json")
 
-    action(_ts_typemap_validator_target_name) {
-      script = "$mojom_generator_root/validate_ts_typemap_config.py"
-      inputs = [ _ts_typemap_config_filename ]
-      outputs = [ _ts_typemap_stamp_filename ]
-      args = [
-        get_label_info(_mojom_target_name, "label_no_toolchain"),
-        rebase_path(_ts_typemap_config_filename, root_build_dir),
-        rebase_path(_ts_typemap_stamp_filename, root_build_dir),
-      ]
-    }
-
     action(type_mappings_target_name) {
-      inputs =
-          mojom_generator_sources + jinja2_sources + [ _typemap_stamp_filename ]
+      inputs = mojom_generator_sources + jinja2_sources
       outputs = [ type_mappings_path ]
       script = "$mojom_generator_root/generate_type_mappings.py"
-      deps = [
-        ":$_ts_typemap_validator_target_name",
-        ":$_typemap_validator_target_name",
-      ]
+      deps = []
       args = [
         "--output",
         rebase_path(type_mappings_path, root_build_dir),
+        "--target",
+        get_label_info(_mojom_target_name, "label_no_toolchain"),
       ]
 
       sources = []
@@ -1618,6 +1595,9 @@ template("mojom") {
 
     if (generate_rust) {
       mojom_rust("${output_target_name}_rust") {
+        if (defined(invoker.rust_typemaps)) {
+          rust_typemaps = invoker.rust_typemaps
+        }
       }
     }
 
@@ -1810,7 +1790,7 @@ template("mojom") {
           deps = [
             ":$parser_target_name",
             ":$type_mappings_target_name",
-            "//mojo/public/tools/bindings:precompile_templates",
+            "//mojo/public/tools/bindings:precompile_java_templates",
           ]
           outputs = []
           args = common_generator_args
@@ -1918,7 +1898,7 @@ template("mojom") {
         sources = sources_list
         deps = [
           ":$parser_target_name",
-          "//mojo/public/tools/bindings:precompile_templates",
+          "//mojo/public/tools/bindings:precompile_js_templates",
         ]
         if (defined(invoker.parser_deps)) {
           deps += invoker.parser_deps
@@ -2063,7 +2043,7 @@ template("mojom") {
         deps = [
           ":$parser_target_name",
           ":$type_mappings_target_name",
-          "//mojo/public/tools/bindings:precompile_templates",
+          "//mojo/public/tools/bindings:precompile_ts_templates",
         ]
 
         outputs = []

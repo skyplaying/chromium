@@ -21,6 +21,10 @@
 #include "components/signin/public/identity_manager/identity_test_utils.h"
 #include "google_apis/gaia/gaia_id.h"
 
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+#include "components/signin/public/base/binding_key_registration_token_result.h"
+#endif
+
 class FakeProfileOAuth2TokenService;
 class IdentityTestEnvironmentBrowserStateAdaptor;
 class IdentityTestEnvironmentProfileAdaptor;
@@ -29,6 +33,10 @@ class TestSigninClient;
 
 namespace sync_preferences {
 class TestingPrefServiceSyncable;
+}
+
+namespace metrics {
+class ProfileMetricsService;
 }
 
 namespace network {
@@ -134,7 +142,7 @@ class IdentityTestEnvironment : public IdentityManager::DiagnosticsObserver,
   // See `MakePrimaryAccountAvailable()` for a method that also adds a refresh
   // token for the account, or `MakeAccountAvailable()` for the more openly
   // configurable equivalent.
-  CoreAccountInfo SetPrimaryAccount(const std::string& email,
+  CoreAccountInfo SetPrimaryAccount(std::string_view email,
                                     ConsentLevel consent_level);
 
   // Sets a refresh token for the primary account (which must already be set).
@@ -163,7 +171,7 @@ class IdentityTestEnvironment : public IdentityManager::DiagnosticsObserver,
   // Returns the AccountInfo of the newly-available account.
   //
   // See `MakeAccountAvailable()` for a more configurable equivalent.
-  AccountInfo MakePrimaryAccountAvailable(const std::string& email,
+  AccountInfo MakePrimaryAccountAvailable(std::string_view email,
                                           ConsentLevel consent_level);
 
 #if !BUILDFLAG(IS_CHROMEOS)
@@ -235,6 +243,13 @@ class IdentityTestEnvironment : public IdentityManager::DiagnosticsObserver,
   // When this is set, access token requests will be automatically granted with
   // an access token value of "access_token".
   void SetAutomaticIssueOfAccessTokens(bool grant);
+
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+  void EnableTokenBindingRegistration();
+  void IssueTokenBindingRegistrationTokenForAuthCode(
+      std::string_view auth_code,
+      std::optional<signin::BindingKeyRegistrationTokenResult> result);
+#endif
 
   // Issues |token| in response to any access token request that either has (a)
   // already occurred and has not been matched by a previous call to this or
@@ -321,7 +336,7 @@ class IdentityTestEnvironment : public IdentityManager::DiagnosticsObserver,
   // passing in a null callback, before the Wait* methods can be used again.
   void SetCallbackForNextAccessTokenRequest(base::OnceClosure callback);
 
-  // Updates the info for |account_info.account_id|, which must be a known
+  // Updates the info for |account_info.GetAccountId()|, which must be a known
   // account.
   void UpdateAccountInfoForAccount(AccountInfo account_info);
 
@@ -350,13 +365,13 @@ class IdentityTestEnvironment : public IdentityManager::DiagnosticsObserver,
   // Simulate account fetching using AccountTrackerService without sending
   // network requests.
   void SimulateSuccessfulFetchOfAccountInfo(const CoreAccountId& account_id,
-                                            const std::string& email,
+                                            std::string_view email,
                                             const GaiaId& gaia,
-                                            const std::string& hosted_domain,
-                                            const std::string& full_name,
-                                            const std::string& given_name,
-                                            const std::string& locale,
-                                            const std::string& picture_url);
+                                            std::string_view hosted_domain,
+                                            std::string_view full_name,
+                                            std::string_view given_name,
+                                            std::string_view locale,
+                                            std::string_view picture_url);
 
   // Simulates a log out failure with |auth_error| as the error.
   void SimulateGaiaLogOutFailure(const GoogleServiceAuthError& auth_error);
@@ -414,13 +429,15 @@ class IdentityTestEnvironment : public IdentityManager::DiagnosticsObserver,
   static std::unique_ptr<IdentityManager> BuildIdentityManagerForTests(
       SigninClient* signin_client,
       PrefService* pref_service,
+      metrics::ProfileMetricsService* profile_metrics_service,
       base::FilePath user_data_dir);
 
   static std::unique_ptr<IdentityManager> FinishBuildIdentityManagerForTests(
       std::unique_ptr<AccountTrackerService> account_tracker_service,
       std::unique_ptr<ProfileOAuth2TokenService> token_service,
       SigninClient* signin_client,
-      PrefService* pref_service
+      PrefService* pref_service,
+      metrics::ProfileMetricsService* profile_metrics_service
 #if BUILDFLAG(IS_CHROMEOS)
       ,
       account_manager::AccountManagerFacade* account_manager_facade

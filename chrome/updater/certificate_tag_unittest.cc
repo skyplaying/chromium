@@ -4,6 +4,7 @@
 
 #include "chrome/updater/certificate_tag.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -13,6 +14,7 @@
 
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
+#include "base/containers/to_vector.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/memory_mapped_file.h"
@@ -241,14 +243,13 @@ void VerifyEntries(size_t added,
   while (first_free > 0 && old_entries[first_free - 1] == kFatFreeSector) {
     --first_free;
   }
-  const std::vector<uint32_t> same_entries = std::vector<uint32_t>(
-      new_entries.begin(), new_entries.begin() + first_free);
-  const std::vector<uint32_t> diff_entries = std::vector<uint32_t>(
-      new_entries.begin() + first_free,
-      new_entries.begin() + first_free + changed_entries.size());
-  const std::vector<uint32_t> free_entries = std::vector<uint32_t>(
-      new_entries.begin() + first_free + changed_entries.size(),
-      new_entries.end());
+  auto span_new_entries = base::span(new_entries);
+  const std::vector<uint32_t> same_entries =
+      base::ToVector(span_new_entries.first(first_free));
+  const std::vector<uint32_t> diff_entries = base::ToVector(
+      span_new_entries.subspan(first_free, changed_entries.size()));
+  const std::vector<uint32_t> free_entries = base::ToVector(
+      span_new_entries.subspan(first_free + changed_entries.size()));
   for (size_t i = 0; i < same_entries.size(); ++i) {
     EXPECT_EQ(old_entries[i], same_entries[i]);
   }
@@ -549,7 +550,7 @@ UNSAFE_TODO(INSTANTIATE_TEST_SUITE_P(
          [] {
            std::vector<uint8_t> expected_tag(8632);
            static constexpr char magic[] = "Gact2.0Omaha";
-           std::memcpy(&expected_tag[0], magic, sizeof(magic));
+           std::memcpy(expected_tag.data(), magic, sizeof(magic));
            static constexpr char tag[] =
                "appguid={8A69D345-D564-463C-AFF1-A69D9E530F96}&iid={2D8C18E9-"
                "8D3A-4EFC-6D61-AE23E3530EA2}&lang=en&browser=4&usagestats=0&"

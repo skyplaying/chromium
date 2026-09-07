@@ -35,18 +35,20 @@
 #include "base/functional/function_ref.h"
 #include "base/gtest_prod_util.h"
 #include "base/time/time.h"
+#include "cc/metrics/begin_main_frame_metrics.h"
 #include "third_party/blink/public/common/metrics/document_update_reason.h"
 #include "third_party/blink/public/mojom/frame/lifecycle.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/frame/viewport_intersection_state.mojom-blink.h"
 #include "third_party/blink/public/mojom/scroll/scroll_into_view_params.mojom-blink-forward.h"
+#include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-blink-forward.h"
+#include "third_party/blink/renderer/core/ad_tracker/overlay_interstitial_ad_detector.h"
+#include "third_party/blink/renderer/core/ad_tracker/sticky_ad_detector.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/document_lifecycle.h"
 #include "third_party/blink/renderer/core/dom/document_resize_options.h"
 #include "third_party/blink/renderer/core/frame/frame_view.h"
 #include "third_party/blink/renderer/core/frame/layout_subtree_root_list.h"
-#include "third_party/blink/renderer/core/frame/local_frame_ukm_aggregator.h"
-#include "third_party/blink/renderer/core/frame/overlay_interstitial_ad_detector.h"
-#include "third_party/blink/renderer/core/frame/sticky_ad_detector.h"
+#include "third_party/blink/renderer/core/frame/local_frame_metrics_aggregator.h"
 #include "third_party/blink/renderer/core/layout/hit_test_request.h"
 #include "third_party/blink/renderer/core/paint/layout_object_counter.h"
 #include "third_party/blink/renderer/core/view_transition/view_transition_request_forward.h"
@@ -67,11 +69,11 @@
 #include "ui/gfx/geometry/rect.h"
 
 namespace cc {
+class AnimatedImageFrameIndexMap;
 class AnimationHost;
 class AnimationTimeline;
 class Layer;
 class PaintRecord;
-enum class PaintHoldingCommitTrigger;
 enum class PropertyChangeForcesCommitCriteria;
 struct PaintBenchmarkResult;
 }
@@ -97,6 +99,8 @@ class Element;
 class FragmentAnchor;
 class Frame;
 class FrameViewAutoSizeInfo;
+class GraphicsContext;
+class HTMLCanvasElement;
 class HTMLVideoElement;
 class HitTestLocation;
 class HitTestResult;
@@ -118,7 +122,6 @@ class PaintController;
 class PaintControllerPersistentData;
 class PaintLayer;
 class PaintLayerScrollableArea;
-class PaintTimingDetector;
 class RemoteFrameView;
 class RootFrameViewport;
 class ScrollableArea;
@@ -135,7 +138,6 @@ enum class PaintBenchmarkMode;
 
 typedef uint64_t DOMTimeStamp;
 using LayerTreeFlags = unsigned;
-using MainThreadScrollingReasons = uint32_t;
 
 struct LifecycleData {
   LifecycleData() {}
@@ -196,12 +198,12 @@ class CORE_EXPORT LocalFrameView final
   bool LifecycleUpdatesActive() const;
   void SetLifecycleUpdatesThrottledForTesting(bool throttled = true);
   void ScheduleRelayout();
-  void ScheduleRelayoutOfSubtree(LayoutObject*);
+  void ScheduleRelayoutOfSubtree(LayoutObject&);
   bool LayoutPending() const;
   bool IsInPerformLayout() const;
 
   // Methods to capture forced layout metrics.
-  void WillStartForcedLayout(DocumentUpdateReason);
+  void WillStartForcedLayout(DocumentUpdateReason, bool is_potentially_clean);
   void DidFinishForcedLayout();
 
   void ClearLayoutSubtreeRoot(const LayoutObject&);
@@ -234,16 +236,14 @@ class CORE_EXPORT LocalFrameView final
   void UpdateStyleAndLayout();
 
   // Marks this frame, and ancestor frames, as needing one intersection
-  // observervation. This overrides throttling for one frame, up to
-  // kLayoutClean. The order of these enums is important - they must proceed
+  // observation. This overrides throttling for one frame through
+  // kPrePaintClean. The order of these enums is important - they must proceed
   // from "least required to most required".
   enum IntersectionObservationState {
     // The next painting frame does not need an intersection observation.
     kNotNeeded = 0,
-    // The next painting frame needs to update
-    // - intersection observations whose MinScrollDeltaToUpdate is exceeded by
-    //   the accumulated scroll delta in the frame.
-    // - intersection observers that trackVisibility.
+    // The next painting frame needs to update intersection observers for
+    // scroll and intersection observers that trackVisibility.
     kScrollAndVisibilityOnly = 1,
     // The next painting frame needs to update all intersection observations.
     kDesired = 2,
@@ -255,7 +255,6 @@ class CORE_EXPORT LocalFrameView final
   // Sets the internal IntersectionObservationState to the max of the
   // current value and the provided one.
   void SetIntersectionObservationState(IntersectionObservationState);
-  void UpdateIntersectionObservationStateOnScroll(gfx::Vector2dF scroll_delta);
   IntersectionObservationState GetIntersectionObservationStateForTesting()
       const {
     return intersection_observation_state_;
@@ -263,7 +262,8 @@ class CORE_EXPORT LocalFrameView final
 
   // Get the InstersectionObservation::ComputeFlags for target elements in this
   // view.
-  unsigned GetIntersectionObservationFlags(unsigned parent_flags) const;
+  IntersectionObservation::ComputeFlags GetIntersectionObservationFlags(
+      IntersectionObservation::ComputeFlags parent_flags) const;
 
   void ForceUpdateViewportIntersections();
 
@@ -304,9 +304,9 @@ class CORE_EXPORT LocalFrameView final
   };
 
   std::optional<NaturalSizingInfo> GetNaturalDimensions() const override;
+  void ClearNaturalDimensions() override;
 
   void Dispose() override;
-  void PropagateFrameRects() override;
   void ZoomFactorChanged(float zoom_factor) override;
   void InvalidateAllCustomScrollbarsOnActiveChanged();
 
@@ -341,6 +341,7 @@ class CORE_EXPORT LocalFrameView final
   void ViewportSizeChanged();
   void InvalidateLayoutForViewportConstrainedObjects();
   void DynamicViewportUnitsChanged();
+  void LargeViewportUnitsChanged();
 
   AtomicString MediaType() const;
   void SetMediaType(const AtomicString&);
@@ -453,10 +454,15 @@ class CORE_EXPORT LocalFrameView final
   friend class InvalidationDisallowedScope;
 
   // This for doing work that needs to run synchronously at the end of lifecycle
-  // updates, but needs to happen outside of the lifecycle code. It's OK to
-  // schedule another animation frame here, but the layout tree should not be
-  // invalidated.
+  // updates.
   void RunPostLifecycleSteps();
+  // Called just before the impl commit. This runs post-lifecycle steps
+  // immediately if they are required to happen before the commit (e.g.
+  // canvas.onpaint).
+  void WillCommit();
+  // Called after the main frame is complete. If post-lifecycle steps have not
+  // run yet, they will execute here.
+  void DidBeginMainFrame();
   bool InvalidationDisallowed() const;
 
   void ScheduleVisualUpdateForVisualOverflowIfNeeded();
@@ -477,6 +483,8 @@ class CORE_EXPORT LocalFrameView final
   void SetIsVisuallyNonEmpty() { is_visually_non_empty_ = true; }
   void EnableAutoSizeMode(const gfx::Size& min_size, const gfx::Size& max_size);
   void DisableAutoSizeMode();
+  bool IsAutoSizeModeEnabled() const { return auto_size_info_; }
+  bool IsBeingAutoSized() const { return is_being_auto_sized_; }
 
   void ForceLayoutForPagination(float maximum_shrink_factor);
 
@@ -533,16 +541,17 @@ class CORE_EXPORT LocalFrameView final
 
   void ServiceScrollAnimations(base::TimeTicks);
 
-  void ScheduleAnimation(base::TimeDelta = base::TimeDelta(),
-                         base::Location location = base::Location::Current(),
-                         bool urgent = false);
+  void ScheduleAnimation(
+      cc::BeginMainFrameReason reason = cc::BeginMainFrameReason::kOther,
+      base::TimeDelta = base::TimeDelta(),
+      base::Location location = base::Location::Current(),
+      bool urgent = false);
 
   void OnCommitRequested();
 
-  // FIXME: This should probably be renamed as the 'inSubtreeLayout' parameter
-  // passed around the LocalFrameView layout methods can be true while this
-  // returns false.
-  bool IsSubtreeLayout() const { return !layout_subtree_root_list_.IsEmpty(); }
+  bool HasSubtreeLayoutRoots() const {
+    return !layout_subtree_root_list_.IsEmpty();
+  }
 
   // The window that hosts the LocalFrameView. The LocalFrameView will
   // communicate scrolls and repaints to the host window in the window's
@@ -647,7 +656,6 @@ class CORE_EXPORT LocalFrameView final
   void Hide() override;
 
   bool IsLocalFrameView() const override { return true; }
-  bool ShouldReportMainFrameIntersection() const override { return true; }
 
   void Trace(Visitor*) const override;
 
@@ -773,19 +781,24 @@ class CORE_EXPORT LocalFrameView final
   cc::AnimationTimeline* GetScrollAnimationTimeline() const;
 
   LayoutShiftTracker& GetLayoutShiftTracker() { return *layout_shift_tracker_; }
-  PaintTimingDetector& GetPaintTimingDetector() const {
-    return *paint_timing_detector_;
-  }
 
   MobileFriendlinessChecker* GetMobileFriendlinessChecker() const {
     return mobile_friendliness_checker_.Get();
   }
   void RegisterTapEvent(Element* target);
 
-  // Returns the UKM aggregator for this frame's local root, creating it if
+  // Returns the metrics aggregator for this frame's local root, creating it if
   // necessary. Returns null if no aggregator is needed, such as for SVG images.
-  LocalFrameUkmAggregator* GetUkmAggregator();
-  void ResetUkmAggregatorForTesting();
+  LocalFrameMetricsAggregator* GetMetricsAggregator();
+  void ResetMetricsAggregatorForTesting();
+
+  // Checks whether paint holding should be released without FCP.
+  // If the page has been painted and the document has finished parsing,
+  // but FCP hasn't fired (i.e., the page has no text or images), stops
+  // deferred commits so the page doesn't wait for the full paint holding
+  // timeout. Called from both the First Paint and FinishedParsing paths
+  // to handle either ordering.
+  void MaybeStopDeferringCommitsWithoutContentfulPaint();
 
   // Report the First Contentful Paint signal to the LocalFrameView.
   // This causes Deferred Commits to be restarted and tells the UKM
@@ -820,6 +833,14 @@ class CORE_EXPORT LocalFrameView final
   // mostly filling the viewport.
   void NotifyVideoIsDominantVisibleStatus(HTMLVideoElement* element,
                                           bool is_dominant);
+
+  void DidPaintCanvasChild(HTMLCanvasElement& canvas, Element& child);
+  void RequestCanvasOnpaint(HTMLCanvasElement&, Element* child = nullptr);
+
+  scoped_refptr<const cc::AnimatedImageFrameIndexMap>
+  GetAnimatedImageFrameIndexes() const;
+  void SetAnimatedImageFrameIndexes(
+      scoped_refptr<const cc::AnimatedImageFrameIndexMap> indexes);
 
   bool HasDominantVideoElement() const;
 
@@ -878,10 +899,14 @@ class CORE_EXPORT LocalFrameView final
   // thread needs to be involved during the animation.
   bool HasRunningAnchorTransformAnimation() const;
 
+  mojom::blink::WebFeature SvgFilterPaintedCounter() const override;
+
  protected:
   void FrameRectsChanged(const gfx::Rect&) override;
   void SelfVisibleChanged() override;
   void ParentVisibleChanged() override;
+  void PropagateFrameRectsInternal() override;
+  void PropagateFrameRectsRecursively(bool force = false);
   void NotifyFrameRectsChangedIfNeeded();
 
   // Updates viewport intersection state when LocalFrame's scroll positions,
@@ -977,8 +1002,7 @@ class CORE_EXPORT LocalFrameView final
                            const gfx::Vector2d& paint_offset) const;
 
   // EmbeddedContentView implementation
-  void Paint(GraphicsContext&,
-             PaintFlags,
+  void Paint(const PaintInfo&,
              const CullRect&,
              const gfx::Vector2d&) const final;
 
@@ -997,7 +1021,8 @@ class CORE_EXPORT LocalFrameView final
   // The internal version that does the work after the proper context and checks
   // have passed in the above function call.
   void UpdateLifecyclePhasesInternal(
-      DocumentLifecycle::LifecycleState target_state);
+      DocumentLifecycle::LifecycleState target_state,
+      DocumentUpdateReason reason);
   // Four lifecycle phases helper functions corresponding to StyleAndLayout,
   // Compositing, PrePaint, and Paint phases. If the return value is true, it
   // means further lifecycle phases need to be run. This is used to abort
@@ -1076,18 +1101,22 @@ class CORE_EXPORT LocalFrameView final
   bool HasActiveIntersectionObservations() const override;
   bool NeedsOcclusionTracking() const override;
   void UpdateViewportIntersectionsForSubtree(
-      unsigned parent_flags,
+      IntersectionObservation::ComputeFlags parent_flags,
       ComputeIntersectionsContext&) override;
   void DeliverSynchronousIntersectionObservations();
 
   // https://drafts.csswg.org/cssom-view/#post-layout-snapshot
-  bool RunSnapshotPostLayoutStateSteps();
+  bool RunSnapshotPostLayoutStateSteps(
+      DocumentLifecycle::LifecycleState target_state,
+      DocumentUpdateReason reason);
 
   bool ShouldDeferLayoutSnap() const;
 
   bool NotifyResizeObservers();
   bool RunResizeObserverSteps(DocumentLifecycle::LifecycleState target_state);
   void ClearResizeObserverLimit();
+
+  bool RunContainerQueryListSteps();
 
   bool RunViewTransitionSteps(DocumentLifecycle::LifecycleState target_state);
 
@@ -1101,8 +1130,9 @@ class CORE_EXPORT LocalFrameView final
   // This is a recursive helper for determining intersection observations which
   // need to happen in post-layout. Returns true if there are any active
   // post-layout observations.
-  void ComputePostLayoutIntersections(unsigned parent_flags,
-                                      ComputeIntersectionsContext&);
+  void ComputePostLayoutIntersections(
+      IntersectionObservation::ComputeFlags parent_flags,
+      ComputeIntersectionsContext&);
 
   // Returns true if the root object was laid out. Returns false if the layout
   // was prevented (e.g. by ancestor display-lock) or not needed.
@@ -1132,7 +1162,7 @@ class CORE_EXPORT LocalFrameView final
 
   void UpdateCanCompositeBackgroundAttachmentFixed();
 
-  void EnqueueScrollSnapChangingFromImplIfNecessary();
+  void RunCanvasOnpaintSteps();
 
   typedef HeapHashSet<Member<LayoutEmbeddedContent>> EmbeddedContentSet;
   EmbeddedContentSet part_update_set_;
@@ -1186,6 +1216,8 @@ class CORE_EXPORT LocalFrameView final
   std::optional<gfx::Size> layout_size_for_natural_size_;
   bool layout_size_fixed_to_frame_size_;
 
+  bool is_being_auto_sized_ = false;
+
   bool needs_update_geometries_;
 
 #if DCHECK_IS_ON()
@@ -1238,7 +1270,6 @@ class CORE_EXPORT LocalFrameView final
   // True if this FrameView or any descendant FrameView has active
   // IntersectionObservers for which observer->trackVisibility() is true.
   bool needs_occlusion_tracking_ = false;
-  gfx::Vector2dF accumulated_scroll_delta_since_last_intersection_update_;
   // Used only if the frame is the local root.
   HeapTaskRunnerTimer<LocalFrameView> delayed_intersection_timer_;
   // Set on the local root when the above timer is fired. Will force update
@@ -1284,11 +1315,9 @@ class CORE_EXPORT LocalFrameView final
   Member<PaintControllerPersistentData> paint_controller_persistent_data_;
   Member<PaintArtifactCompositor> paint_artifact_compositor_;
 
-  MainThreadScrollingReasons main_thread_scrolling_reasons_;
-
-  scoped_refptr<LocalFrameUkmAggregator> ukm_aggregator_;
+  scoped_refptr<LocalFrameMetricsAggregator> metrics_aggregator_;
   unsigned forced_layout_stack_depth_;
-  std::optional<LocalFrameUkmAggregator::ScopedForcedLayoutTimer>
+  std::optional<LocalFrameMetricsAggregator::ScopedForcedLayoutTimer>
       forced_layout_timer_;
 
   // From the beginning of the document, how many frames have painted.
@@ -1296,7 +1325,6 @@ class CORE_EXPORT LocalFrameView final
 
   UniqueObjectId unique_id_;
   Member<LayoutShiftTracker> layout_shift_tracker_;
-  Member<PaintTimingDetector> paint_timing_detector_;
 
   // Non-null in the outermost main frame of an ordinary page only.
   Member<MobileFriendlinessChecker> mobile_friendliness_checker_;
@@ -1304,6 +1332,19 @@ class CORE_EXPORT LocalFrameView final
   Member<TapFriendlinessChecker> tap_friendliness_checker_;
 
   HeapHashSet<WeakMember<LifecycleNotificationObserver>> lifecycle_observers_;
+
+  // Map of canvas elements which need onpaint. The value is a set of children
+  // of the <canvas> which painted during the current paint lifecycle update.
+  // The set of children may be empty if the onpaint event has been requested
+  // with `requestPaint`. This map is cleared at the end of the lifecycle
+  // update.
+  using CanvasOnpaintMap =
+      HeapHashMap<Member<HTMLCanvasElement>,
+                  Member<GCedHeapLinkedHashSet<Member<Element>>>>;
+  CanvasOnpaintMap canvas_elements_needing_onpaint_;
+  bool did_run_post_lifecycle_steps_before_commit_ = false;
+  scoped_refptr<const cc::AnimatedImageFrameIndexMap>
+      animated_image_frame_indexes_;
 
   HeapHashSet<WeakMember<HTMLVideoElement>> fullscreen_video_elements_;
 
@@ -1321,8 +1362,7 @@ class CORE_EXPORT LocalFrameView final
   // A set of objects needing a transform property tree update. These updates
   // are deferred until the end prepaint and updating them directly, if
   // possible, avoids needing to walk the tree to update them. See:
-  // https://chromium.googlesource.com/chromium/src/+/main/third_party/blink/renderer/core/paint/README.md#Transform-update-optimization
-  // for more on the fast path
+  // ../paint/README.md#Property-tree-update-optimization
   // TODO(yotha): unify these into one HeapHashMap.
   Member<GCedHeapHashSet<Member<LayoutObject>>> pending_transform_updates_;
   Member<GCedHeapHashSet<Member<LayoutObject>>> pending_opacity_updates_;

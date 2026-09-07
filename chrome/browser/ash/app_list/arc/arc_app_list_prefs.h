@@ -210,7 +210,7 @@ class ArcAppListPrefs : public KeyedService,
                                  const AppInfo& app_info) {}
     // Notifies an observer that app states have been changed.
     //
-    // State includes the the following AppInfo fields:
+    // State includes the following AppInfo fields:
     //  - sticky
     //  - notifications_enabled
     //  - ready
@@ -707,7 +707,12 @@ class ArcAppListPrefs : public KeyedService,
       app_connection_holder_for_testing_;
 
   // List of observers.
-  base::ObserverList<Observer> observer_list_;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      Observer,
+      /*check_empty=*/false,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>
+      observer_list_;
   // Keeps root folder where ARC app icons for different scale factor are
   // stored.
   base::FilePath base_path_;

@@ -31,10 +31,10 @@
 
 #include "base/check_op.h"
 #include "base/dcheck_is_on.h"
+#include "base/memory/raw_ptr.h"
 #include "third_party/blink/renderer/core/dom/attribute.h"
 #include "third_party/blink/renderer/core/html/parser/html_parser_idioms.h"
 #include "third_party/blink/renderer/core/html/parser/literal_buffer.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 
@@ -68,7 +68,6 @@ struct DOMPartData {
 
  public:
   explicit DOMPartData(DOMPartTokenType type) : type_(type) {
-    DCHECK(RuntimeEnabledFeatures::DOMPartsAPIEnabled());
   }
   DOMPartData(const DOMPartData&) = delete;
   DOMPartData& operator=(const DOMPartData&) = delete;
@@ -107,7 +106,6 @@ class HTMLToken {
     kComment,
     kCharacter,
     kEndOfFile,
-    kDOMPart,
     kProcessingInstruction,
   };
 
@@ -156,10 +154,9 @@ class HTMLToken {
     copy->data_ = std::move(data_);
     copy->attributes_ = std::move(attributes_);
     copy->doctype_data_ = std::move(doctype_data_);
-    copy->dom_part_data_ = std::move(dom_part_data_);
     copy->type_ = type_;
     copy->self_closing_ = self_closing_;
-    copy->dom_parts_needed_ = dom_parts_needed_;
+    copy->has_entity_ = has_entity_;
     // Reset to uninitialized.
     Clear();
     return copy;
@@ -170,6 +167,7 @@ class HTMLToken {
       return;
 
     type_ = kUninitialized;
+    has_entity_ = false;
     data_.clear();
     processing_instruction_target_.reset();
     if (current_attribute_) {
@@ -291,7 +289,6 @@ class HTMLToken {
     DCHECK_EQ(type_, kUninitialized);
     type_ = kStartTag;
     self_closing_ = false;
-    dom_parts_needed_ = {};
     DCHECK(!current_attribute_);
     DCHECK(attributes_.empty());
 
@@ -386,6 +383,9 @@ class HTMLToken {
     processing_instruction_target_->AddChar(character);
   }
 
+  bool HasEntity() const { return has_entity_; }
+  void SetHasEntity() { has_entity_ = true; }
+
   /* Comment Tokens */
 
   const DataVector& Comment() const {
@@ -410,20 +410,6 @@ class HTMLToken {
     data_.AddChar(character);
   }
 
-  /* DOM Part Tokens */
-
-  ALWAYS_INLINE void BeginDOMPart(DOMPartTokenType type) {
-    DCHECK_EQ(type_, kUninitialized);
-    DCHECK(RuntimeEnabledFeatures::DOMPartsAPIEnabled());
-    type_ = kDOMPart;
-    dom_part_data_ = std::make_unique<DOMPartData>(type);
-  }
-
-  std::unique_ptr<DOMPartData> ReleaseDOMPartData() {
-    DCHECK(RuntimeEnabledFeatures::DOMPartsAPIEnabled());
-    return std::move(dom_part_data_);
-  }
-
   /* Processing Instruction Tokens */
 
   ALWAYS_INLINE void BeginProcessingInstruction() {
@@ -432,41 +418,24 @@ class HTMLToken {
     processing_instruction_target_ = std::make_optional<DataVector>();
   }
 
-  DOMPartsNeeded GetDOMPartsNeeded() {
-    DCHECK_EQ(type_, kStartTag);
-    return dom_parts_needed_;
-  }
-
-  void SetNeedsNodePart() {
-    DCHECK_EQ(type_, kStartTag);
-    dom_parts_needed_.needs_node_part = true;
-  }
-
-  void SetNeedsAttributePart() {
-    DCHECK_EQ(type_, kStartTag);
-    DCHECK(!current_attribute_->NameIsEmpty());
-    dom_parts_needed_.needs_attribute_parts.push_back(
-        current_attribute_->GetName());
-  }
-
  private:
   DataVector data_;
 
   AttributeList attributes_;
 
   // A pointer into attributes_ used during lexing.
-  Attribute* current_attribute_ = nullptr;
+  raw_ptr<Attribute, UnprotectedInRelease | DanglingUntriaged>
+      current_attribute_ = nullptr;
 
   // For DOCTYPE
   std::unique_ptr<DoctypeData> doctype_data_;
 
   std::optional<DataVector> processing_instruction_target_;
 
-  // For DOM Parts API
-  std::unique_ptr<DOMPartData> dom_part_data_;
-  DOMPartsNeeded dom_parts_needed_;
-
   TokenType type_ = kUninitialized;
+
+  // True if this token contains an entity reference.
+  bool has_entity_ = false;
 
   // For StartTag and EndTag
   bool self_closing_;

@@ -10,18 +10,17 @@
 #include <optional>
 #include <string>
 
+#include "ash/constants/ash_pref_names.h"
 #include "base/functional/bind.h"
 #include "base/lazy_instance.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
 #include "base/task/single_thread_task_runner.h"
-#include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/app_mode/kiosk_browser_window_handler.h"
 #include "chrome/browser/chromeos/app_mode/kiosk_metrics_service.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/common/pref_names.h"
+#include "chromeos/ash/components/browser_delegate/browser_delegate.h"
 #include "chromeos/dbus/power/power_manager_client.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_registry_simple.h"
@@ -153,16 +152,6 @@ class KioskBrowserSession::PluginHandlerDelegateImpl
     // to be updated when adding more plugin types here.
     return false;
   }
-  void OnPluginCrashed(const base::FilePath& plugin_path) override {
-    if (owner_->is_shutting_down()) {
-      return;
-    }
-    owner_->metrics_service_->RecordKioskSessionPluginCrashed();
-    owner_->is_shutting_down_ = true;
-
-    LOG(ERROR) << "Reboot due to plugin crash, path=" << plugin_path.value();
-    RebootDevice();
-  }
 
   void OnPluginHung(const std::set<int>& hung_plugins) override {
     if (owner_->is_shutting_down()) {
@@ -180,14 +169,15 @@ class KioskBrowserSession::PluginHandlerDelegateImpl
 };
 #endif
 
-KioskBrowserSession::KioskBrowserSession(Profile* profile)
-    : KioskBrowserSession(profile,
-                          base::BindOnce(chrome::AttemptUserExit),
-                          g_browser_process->local_state()) {}
+KioskBrowserSession::KioskBrowserSession(PrefService* local_state,
+                                         Profile* profile)
+    : KioskBrowserSession(local_state,
+                          profile,
+                          base::BindOnce(chrome::AttemptUserExit)) {}
 
-KioskBrowserSession::KioskBrowserSession(Profile* profile,
-                                         base::OnceClosure attempt_user_exit,
-                                         PrefService* local_state)
+KioskBrowserSession::KioskBrowserSession(PrefService* local_state,
+                                         Profile* profile,
+                                         base::OnceClosure attempt_user_exit)
     : KioskBrowserSession(profile,
                           std::move(attempt_user_exit),
                           std::make_unique<KioskMetricsService>(local_state)) {}
@@ -200,9 +190,9 @@ KioskBrowserSession::~KioskBrowserSession() {
 
 // static
 std::unique_ptr<KioskBrowserSession> KioskBrowserSession::CreateForTesting(
+    PrefService* local_state,
     Profile* profile,
     base::OnceClosure attempt_user_exit,
-    PrefService* local_state,
     const std::vector<std::string>& crash_dirs) {
   return base::WrapUnique(new KioskBrowserSession(
       profile, std::move(attempt_user_exit),
@@ -211,20 +201,23 @@ std::unique_ptr<KioskBrowserSession> KioskBrowserSession::CreateForTesting(
 
 void KioskBrowserSession::RegisterLocalStatePrefs(
     PrefRegistrySimple* registry) {
-  registry->RegisterDictionaryPref(prefs::kKioskMetrics);
+  registry->RegisterDictionaryPref(ash::prefs::kKioskMetrics);
 }
 
 void KioskBrowserSession::RegisterProfilePrefs(
     user_prefs::PrefRegistrySyncable* registry) {
-  registry->RegisterBooleanPref(prefs::kNewWindowsInKioskAllowed, false);
-  registry->RegisterBooleanPref(prefs::kKioskTroubleshootingToolsEnabled,
+  registry->RegisterBooleanPref(ash::prefs::kNewWindowsInKioskAllowed, false);
+  registry->RegisterBooleanPref(ash::prefs::kKioskTroubleshootingToolsEnabled,
                                 false);
-  registry->RegisterListPref(prefs::kKioskBrowserPermissionsAllowedForOrigins,
-                             PrefRegistrySimple::NO_REGISTRATION_FLAGS);
-  registry->RegisterBooleanPref(prefs::kKioskWebAppOfflineEnabled, true);
-  registry->RegisterBooleanPref(prefs::kKioskChromeAppsForceAllowed, false);
-  registry->RegisterBooleanPref(prefs::kKioskApplicationLogCollectionEnabled,
+  registry->RegisterListPref(
+      ash::prefs::kKioskBrowserPermissionsAllowedForOrigins,
+      PrefRegistrySimple::NO_REGISTRATION_FLAGS);
+  registry->RegisterBooleanPref(ash::prefs::kKioskWebAppOfflineEnabled, true);
+  registry->RegisterBooleanPref(ash::prefs::kKioskPinchToZoomAllowed, true);
+  registry->RegisterBooleanPref(ash::prefs::kKioskChromeAppsForceAllowed,
                                 false);
+  registry->RegisterBooleanPref(
+      ash::prefs::kKioskApplicationLogCollectionEnabled, false);
 }
 
 void KioskBrowserSession::InitForChromeAppKiosk(const std::string& app_id) {
@@ -238,15 +231,13 @@ void KioskBrowserSession::InitForChromeAppKiosk(const std::string& app_id) {
   metrics_service_->RecordKioskSessionStarted();
 }
 
-void KioskBrowserSession::InitForWebKiosk(
-    const std::optional<std::string>& web_app_name) {
-  CreateBrowserWindowHandler(web_app_name);
+void KioskBrowserSession::InitForWebKiosk(const webapps::AppId& web_app_id) {
+  CreateBrowserWindowHandler(web_app_id);
   metrics_service_->RecordKioskSessionWebStarted();
 }
 
-void KioskBrowserSession::InitForIwaKiosk(
-    const std::optional<std::string>& app_name) {
-  CreateBrowserWindowHandler(app_name);
+void KioskBrowserSession::InitForIwaKiosk(const webapps::AppId& app_id) {
+  CreateBrowserWindowHandler(app_id);
   metrics_service_->RecordKioskSessionIwaStarted();
 }
 
@@ -274,9 +265,9 @@ KioskBrowserSession::KioskBrowserSession(
 }
 
 void KioskBrowserSession::CreateBrowserWindowHandler(
-    const std::optional<std::string>& web_app_name) {
+    const std::optional<webapps::AppId>& web_app_id) {
   browser_window_handler_ = std::make_unique<KioskBrowserWindowHandler>(
-      profile(), web_app_name,
+      profile(), web_app_id,
       base::BindRepeating(&KioskBrowserSession::OnHandledNewBrowserWindow,
                           weak_ptr_factory_.GetWeakPtr()),
       base::BindOnce(&KioskBrowserSession::Shutdown,
@@ -329,11 +320,11 @@ void KioskBrowserSession::Shutdown() {
   std::move(attempt_user_exit_).Run();
 }
 
-Browser* KioskBrowserSession::GetSettingsBrowserForTesting() {
-  if (browser_window_handler_) {
-    return browser_window_handler_->GetSettingsBrowserForTesting();  // IN-TEST
-  }
-  return nullptr;
+ash::BrowserDelegate* KioskBrowserSession::GetSettingsBrowserForTesting() {
+  return browser_window_handler_
+             ? browser_window_handler_
+                   ->GetSettingsBrowserForTesting()  // IN-TEST
+             : nullptr;
 }
 
 }  // namespace chromeos

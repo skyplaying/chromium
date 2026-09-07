@@ -123,7 +123,7 @@ class MockAudioManager : public media::FakeAudioManager {
     return communications_device_id_;
   }
 
-  void GetAudioInputDeviceNames(
+  bool GetAudioInputDeviceNames(
       media::AudioDeviceNames* device_names) override {
     DCHECK(device_names->empty());
     if (default_device_id_ != std::string()) {
@@ -154,9 +154,11 @@ class MockAudioManager : public media::FakeAudioManager {
     if (bogus_invalidation_closure_) {
       bogus_invalidation_closure_.Run();
     }
+
+    return true;
   }
 
-  void GetAudioOutputDeviceNames(
+  bool GetAudioOutputDeviceNames(
       media::AudioDeviceNames* device_names) override {
     DCHECK(device_names->empty());
     for (size_t i = 0; i < num_output_devices_; i++) {
@@ -165,6 +167,8 @@ class MockAudioManager : public media::FakeAudioManager {
           std::string("fake_device_id_") + base::NumberToString(i)));
     }
     MockGetAudioOutputDeviceNames(device_names);
+
+    return true;
   }
 
   media::AudioParameters GetOutputStreamParameters(
@@ -454,7 +458,7 @@ class MediaDevicesManagerTest : public ::testing::Test {
         base::BindRepeating(&GetSaltAndOrigin));
     media_devices_manager_->SetPermissionChecker(
         std::make_unique<MediaDevicesPermissionChecker>(true));
-    media_devices_manager_->StartMonitoring();
+    media_devices_manager_->StartMonitoringAndPopulateCache();
   }
 
   void TearDown() override {
@@ -507,7 +511,8 @@ class MediaDevicesManagerTest : public ::testing::Test {
     media_devices_manager_->video_capture_service_device_changed_observer_ =
         std::make_unique<
             MediaDevicesManager::VideoCaptureDevicesChangedObserver>(
-            /*disconnect_cb=*/base::BindRepeating([]() {}),
+            /*invalidate_cache_cb=*/base::BindRepeating([]() {}),
+            /*enumerate_system_devices_cb=*/base::BindRepeating([]() {}),
             /*listener_cb=*/base::BindRepeating([]() {}));
   }
 
@@ -656,7 +661,7 @@ TEST_F(MediaDevicesManagerTest, EnumerateNoCacheAudioInputRanked) {
     EXPECT_CALL(browser_client_, PreferenceRankAudioDeviceInfos(
                                      &browser_context_, audio_devices));
     base::RunLoop run_loop;
-    media_devices_manager_->EnumerateAndRankDevices(
+    media_devices_manager_->HandleEnumerateDevicesRequest(
         render_frame_host_->GetGlobalId(), devices_to_enumerate,
         /*request_video_input_capabilities=*/false,
         /*request_audio_input_capabilities=*/true,
@@ -699,7 +704,7 @@ TEST_F(MediaDevicesManagerTest, EnumerateNoCacheVideoInputRanked) {
     base::RunLoop run_loop;
     EXPECT_CALL(browser_client_, PreferenceRankVideoDeviceInfos(
                                      &browser_context_, video_devices));
-    media_devices_manager_->EnumerateAndRankDevices(
+    media_devices_manager_->HandleEnumerateDevicesRequest(
         render_frame_host_->GetGlobalId(), devices_to_enumerate, true, false,
         base::BindLambdaForTesting(
             [&run_loop, kNumDevices](
@@ -1251,7 +1256,7 @@ TEST_F(MediaDevicesManagerTest, EnumerateDevicesWithCapabilities) {
   InitializeRenderFrameHost();
 
   base::RunLoop run_loop;
-  media_devices_manager_->EnumerateAndRankDevices(
+  media_devices_manager_->HandleEnumerateDevicesRequest(
       {-1, -1}, devices_to_enumerate, true, true,
       base::BindOnce(
           &MediaDevicesManagerTest::EnumerateWithCapabilitiesCallback,
@@ -1555,6 +1560,39 @@ TEST_F(MediaDevicesManagerTest, EnumerateVideoInputFailsOnce) {
                                         /*error_count=*/1);
 }
 
+TEST_F(MediaDevicesManagerTest,
+       EnumerateVideoInputInvalidatedDuringEnumeration) {
+  VideoCaptureProvider::GetDeviceInfosCallback saved_callback;
+  EXPECT_CALL(*mock_video_capture_provider_, GetDeviceInfosAsync(_))
+      .WillOnce([&](VideoCaptureProvider::GetDeviceInfosCallback callback) {
+        saved_callback = std::move(callback);
+      })
+      .WillRepeatedly(
+          [](VideoCaptureProvider::GetDeviceInfosCallback callback) {});
+
+  MediaDevicesManager::BoolDeviceTypes devices_to_enumerate;
+  devices_to_enumerate[static_cast<size_t>(MediaDeviceType::kMediaVideoInput)] =
+      true;
+
+  EXPECT_CALL(*this, MockCallback(_));
+  base::RunLoop run_loop;
+  media_devices_manager_->EnumerateDevices(
+      devices_to_enumerate,
+      base::BindOnce(&MediaDevicesManagerTest::EnumerateCallback,
+                     base::Unretained(this), &run_loop));
+
+  // Simulate an invalidation while GetDeviceInfosAsync is pending.
+  media_devices_manager_->OnDevicesChanged(
+      base::SystemMonitor::DEVTYPE_VIDEO_CAPTURE);
+
+  // Now respond to the pending GetDeviceInfosAsync.
+  std::move(saved_callback)
+      .Run(DeviceEnumerationResult::kErrorCaptureServiceCrash, {});
+
+  // The client request callback should still be invoked (not hang).
+  run_loop.Run();
+}
+
 TEST_F(MediaDevicesManagerTest, RegisterUnregisterDispatcherHosts) {
   mojo::Remote<blink::mojom::MediaDevicesDispatcherHost> client1;
   media_devices_manager_->RegisterDispatcherHost(
@@ -1802,8 +1840,8 @@ TEST_F(MediaDevicesManagerTest, StartAndStopMonitoringWithModes) {
             MediaDevicesManager::CachePolicy::NO_CACHE);
 
   // Monitor video only.
-  media_devices_manager_->StartMonitoring(
-      MediaDevicesManager::DeviceStartMonitoringMode::kStartVideo);
+  media_devices_manager_->StartMonitoringAndPopulateCache(
+      0, MediaDevicesManager::DeviceStartMonitoringMode::kStartVideo);
   EXPECT_EQ(GetCachePolicy(MediaDeviceType::kMediaAudioInput),
             MediaDevicesManager::CachePolicy::NO_CACHE);
   EXPECT_EQ(GetCachePolicy(MediaDeviceType::kMediaAudioOutput),
@@ -1812,8 +1850,8 @@ TEST_F(MediaDevicesManagerTest, StartAndStopMonitoringWithModes) {
             MediaDevicesManager::CachePolicy::SYSTEM_MONITOR);
 
   // Monitor audio only on top of the video monitoring.
-  media_devices_manager_->StartMonitoring(
-      MediaDevicesManager::DeviceStartMonitoringMode::kStartAudio);
+  media_devices_manager_->StartMonitoringAndPopulateCache(
+      0, MediaDevicesManager::DeviceStartMonitoringMode::kStartAudio);
   EXPECT_EQ(GetCachePolicy(MediaDeviceType::kMediaAudioInput),
             MediaDevicesManager::CachePolicy::SYSTEM_MONITOR);
   EXPECT_EQ(GetCachePolicy(MediaDeviceType::kMediaAudioOutput),
@@ -1842,8 +1880,8 @@ TEST_F(MediaDevicesManagerTest, StartAndStopMonitoringWithModes) {
             MediaDevicesManager::CachePolicy::NO_CACHE);
 
   // Start audio and video monitoring.
-  media_devices_manager_->StartMonitoring(
-      MediaDevicesManager::DeviceStartMonitoringMode::kStartAudioAndVideo);
+  media_devices_manager_->StartMonitoringAndPopulateCache(
+      0, MediaDevicesManager::DeviceStartMonitoringMode::kStartAudioAndVideo);
   EXPECT_EQ(GetCachePolicy(MediaDeviceType::kMediaAudioInput),
             MediaDevicesManager::CachePolicy::SYSTEM_MONITOR);
   EXPECT_EQ(GetCachePolicy(MediaDeviceType::kMediaAudioOutput),
@@ -1875,8 +1913,8 @@ TEST_F(MediaDevicesManagerTest, StopMonitoringReleaseVideoChangedObserver) {
   // StopMonitoring will reset VideoChangedObserver as well as its
   // disconnect video source provider timer.
   auto system_monitor = std::make_unique<base::SystemMonitor>();
-  media_devices_manager_->StartMonitoring(
-      MediaDevicesManager::DeviceStartMonitoringMode::kStartVideo);
+  media_devices_manager_->StartMonitoringAndPopulateCache(
+      0, MediaDevicesManager::DeviceStartMonitoringMode::kStartVideo);
 
   // Create VideoCaptureDevicesChangedObserver manually.
   InitVideoCaptureDevicesChangedObserver();

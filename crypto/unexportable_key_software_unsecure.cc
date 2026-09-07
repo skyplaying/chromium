@@ -2,152 +2,317 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
+#include <array>
+#include <utility>
+
 #include "base/check.h"
 #include "base/compiler_specific.h"
-#include "build/build_config.h"
-#include "crypto/hash.h"
-#include "crypto/signature_verifier.h"
-#include "crypto/unexportable_key.h"
-#include "third_party/boringssl/src/include/openssl/bn.h"
-#include "third_party/boringssl/src/include/openssl/bytestring.h"
-#include "third_party/boringssl/src/include/openssl/ec.h"
-#include "third_party/boringssl/src/include/openssl/ec_key.h"
-#include "third_party/boringssl/src/include/openssl/ecdsa.h"
-#include "third_party/boringssl/src/include/openssl/evp.h"
-#include "third_party/boringssl/src/include/openssl/obj.h"
-#include "third_party/boringssl/src/include/openssl/rsa.h"
-
-#if BUILDFLAG(IS_APPLE)
+#include "base/containers/span.h"
+#include "base/containers/span_writer.h"
+#include "base/containers/to_vector.h"
 #include "base/notreached.h"
-#endif  // BUILDFLAG(IS_APPLE)
+#include "base/numerics/byte_conversions.h"
+#include "base/types/expected_macros.h"
+#include "build/build_config.h"
+#include "crypto/ecdsa_utils.h"
+#include "crypto/hash.h"
+#include "crypto/keypair.h"
+#include "crypto/sign.h"
+#include "crypto/tpm_parser.h"
+#include "crypto/unexportable_key.h"
 
 namespace crypto {
 
 namespace {
 
-std::vector<uint8_t> CBBToVector(const CBB* cbb) {
-  return std::vector<uint8_t>(CBB_data(cbb),
-                              UNSAFE_TODO(CBB_data(cbb) + CBB_len(cbb)));
+// Small helper to write a TPM2B sized buffer. Consisting of a uint16_t size and
+// payload.
+void WriteTpm2b(base::SpanWriter<uint8_t>& writer,
+                base::span<const uint8_t> data) {
+  CHECK_LE(data.size(), std::numeric_limits<uint16_t>::max());
+  CHECK(writer.WriteU16BigEndian(data.size()));
+  CHECK(writer.Write(data));
 }
 
-class SoftwareECDSA : public UnexportableSigningKey {
- public:
-  explicit SoftwareECDSA(bssl::UniquePtr<EC_KEY> key) : key_(std::move(key)) {}
-  ~SoftwareECDSA() override = default;
+// Generates a fake TPM 2.0 certification statement (TPMS_ATTEST) for the
+// given signing key and challenge.
+// See TCG TPM 2.0 Library Specification, Part 2: Structures
+// (https://trustedcomputinggroup.org/wp-content/uploads/Trusted-Platform-Module-2.0-Library-Part-2-Structures_Version-185_pub.pdf).
+std::vector<uint8_t> CreateTpm2bAttestationStatement(
+    const UnexportableSigningKey& signing_key,
+    base::span<const uint8_t> challenge) {
+  // TPM_ALG_SHA256 + hash
+  static constexpr size_t kNameBufSize = 2 + hash::kSha256Size;
+  static constexpr size_t kExtraDataBufSize = 2 + hash::kSha256Size;
 
-  SignatureVerifier::SignatureAlgorithm Algorithm() const override {
-    return SignatureVerifier::SignatureAlgorithm::ECDSA_SHA256;
-  }
+  // TPMS_ATTEST structure size:
+  // - magic: 4 bytes (TPM_GENERATED)
+  // - type: 2 bytes (TPMI_ST_ATTEST)
+  // - qualifiedSigner: 2 bytes (TPM2B_NAME header, empty name)
+  // - extraData: 34 bytes (TPM2B_DATA with 32-byte SHA-256 digest of challenge)
+  // - clockInfo: 17 bytes (TPMS_CLOCK_INFO)
+  // - firmwareVersion: 8 bytes (uint64_t)
+  // - attested (TPMS_CERTIFY_INFO):
+  //   - name: 36 bytes (TPM2B_NAME with SHA-256 algorithm ID + 32-byte digest)
+  //   - qualifiedName: 2 bytes (TPM2B_NAME header, empty name)
+  static constexpr size_t kAttestationStatementFixedSize =
+      4 + 2 + 2 + kExtraDataBufSize + 17 + 8 + (2 + kNameBufSize) + 2;
+
+  std::vector<uint8_t> attestation_statement(kAttestationStatementFixedSize);
+  base::SpanWriter<uint8_t> attest_writer(attestation_statement);
+  attest_writer.WriteEnumBigEndian(tpm::TPM_GENERATED_VALUE);
+  attest_writer.WriteEnumBigEndian(tpm::TPM_ST_ATTEST_CERTIFY);
+  // qualifiedSigner (empty)
+  attest_writer.WriteU16BigEndian(0);
+
+  // extraData
+  WriteTpm2b(attest_writer, hash::Sha256(challenge));
+
+  // TPMS_CLOCK_INFO (17 bytes)
+  attest_writer.WriteU64BigEndian(0);  // clock
+  attest_writer.WriteU32BigEndian(0);  // resetCount
+  attest_writer.WriteU32BigEndian(0);  // restartCount
+  attest_writer.WriteU8BigEndian(1);   // safe (YES)
+
+  // firmwareVersion
+  attest_writer.WriteU64BigEndian(0);
+
+  // TPMS_CERTIFY_INFO
+  // name: TPM2B_NAME
+  std::array<uint8_t, kNameBufSize> name_buf;
+  base::SpanWriter<uint8_t> name_writer(name_buf);
+  name_writer.WriteEnumBigEndian(tpm::TPM_ALG_SHA256);
+  name_writer.Write(hash::Sha256(signing_key.GetSubjectPublicKeyInfo()));
+  CHECK_EQ(name_writer.remaining(), 0u);
+
+  WriteTpm2b(attest_writer, name_buf);
+
+  // qualifiedName: TPM2B_NAME (empty)
+  attest_writer.WriteU16BigEndian(0);
+
+  CHECK_EQ(attest_writer.remaining(), 0u);
+  return attestation_statement;
+}
+
+// Converts a DER-encoded ECDSA signature to a TPM-compatible signature
+// (TPMT_SIGNATURE) format for P-256 keys.
+// See TPMT_SIGNATURE specification in TCG TPM 2.0 Library Specification,
+// Part 2: Structures
+// (https://trustedcomputinggroup.org/wp-content/uploads/Trusted-Platform-Module-2.0-Library-Part-2-Structures_Version-185_pub.pdf#page=187).
+std::vector<uint8_t> CreateTpmEcdsaSignature(
+    const keypair::PrivateKey& key,
+    base::span<const uint8_t> der_signature) {
+  // For P-256, R and S are 32 bytes each.
+  static constexpr size_t kPrimeSize = 32;
+
+  std::optional<std::vector<uint8_t>> raw_sig = ConvertEcdsaDerSignatureToRaw(
+      keypair::PublicKey::FromPrivateKey(key), der_signature);
+  CHECK(raw_sig.has_value());
+  CHECK_EQ(raw_sig->size(), kPrimeSize * 2);
+
+  base::span<const uint8_t, kPrimeSize * 2> sig_span(*raw_sig);
+  auto [r_bytes, s_bytes] = sig_span.split_at<kPrimeSize>();
+
+  constexpr size_t kEcdsaTpmSigSize = 2 + 2 + 2 * (2 + kPrimeSize);
+
+  std::vector<uint8_t> signature(kEcdsaTpmSigSize);
+  base::SpanWriter<uint8_t> sig_writer(signature);
+  sig_writer.WriteEnumBigEndian(tpm::TPM_ALG_ECDSA);
+  sig_writer.WriteEnumBigEndian(tpm::TPM_ALG_SHA256);
+
+  WriteTpm2b(sig_writer, r_bytes);
+  WriteTpm2b(sig_writer, s_bytes);
+  CHECK_EQ(sig_writer.remaining(), 0u);
+  return signature;
+}
+
+// Formats a DER-encoded RSA signature into a TPM-compatible signature
+// (TPMT_SIGNATURE) format.
+// See TPMT_SIGNATURE specification in TCG TPM 2.0 Library Specification,
+// Part 2: Structures
+// (https://trustedcomputinggroup.org/wp-content/uploads/Trusted-Platform-Module-2.0-Library-Part-2-Structures_Version-185_pub.pdf#page=187).
+std::vector<uint8_t> CreateTpmRsaSignature(
+    base::span<const uint8_t> der_signature) {
+  // For RSA-2048, the signature size is always 256 bytes.
+  constexpr size_t kRsa2048SigSize = 256;
+  CHECK_EQ(der_signature.size(), kRsa2048SigSize);
+  std::vector<uint8_t> signature(2 + 2 + 2 + kRsa2048SigSize);
+  base::SpanWriter<uint8_t> sig_writer(signature);
+  sig_writer.WriteEnumBigEndian(tpm::TPM_ALG_RSASSA);
+  sig_writer.WriteEnumBigEndian(tpm::TPM_ALG_SHA256);
+  WriteTpm2b(sig_writer, der_signature);
+  CHECK_EQ(sig_writer.remaining(), 0u);
+  return signature;
+}
+
+template <typename BaseInterface>
+class SoftwareKeyImpl : public BaseInterface {
+ public:
+  explicit SoftwareKeyImpl(crypto::keypair::PrivateKey key)
+      : key_(std::move(key)) {}
+
+  sign::SignatureKind Algorithm() const override { return GetSignatureKind(); }
 
   std::vector<uint8_t> GetSubjectPublicKeyInfo() const override {
-    bssl::UniquePtr<EVP_PKEY> pkey(EVP_PKEY_new());
-    CHECK(EVP_PKEY_set1_EC_KEY(pkey.get(), key_.get()));
-
-    bssl::ScopedCBB cbb;
-    CHECK(CBB_init(cbb.get(), /*initial_capacity=*/128) &&
-          EVP_marshal_public_key(cbb.get(), pkey.get()));
-    return CBBToVector(cbb.get());
+    return key_.ToSubjectPublicKeyInfo();
   }
 
   std::vector<uint8_t> GetWrappedKey() const override {
-    bssl::ScopedCBB cbb;
-    CHECK(
-        CBB_init(cbb.get(), /*initial_capacity=*/128) &&
-        EC_KEY_marshal_private_key(cbb.get(), key_.get(),
-                                   EC_PKEY_NO_PARAMETERS | EC_PKEY_NO_PUBKEY));
-    return CBBToVector(cbb.get());
-  }
-
-  std::optional<std::vector<uint8_t>> SignSlowly(
-      base::span<const uint8_t> data) override {
-    std::vector<uint8_t> ret(ECDSA_size(key_.get()));
-    std::array<uint8_t, hash::kSha256Size> digest = hash::Sha256(data);
-    unsigned int ret_size;
-    CHECK(ECDSA_sign(0, digest.data(), digest.size(), ret.data(), &ret_size,
-                     key_.get()));
-    ret.resize(ret_size);
-    return ret;
-  }
-
-  StatefulUnexportableSigningKey* AsStatefulUnexportableSigningKey() override {
-    return nullptr;
+    switch (GetSignatureKind()) {
+      case sign::RSA_PKCS1_SHA256:
+        return key_.ToRSAPrivateKey();
+      case sign::ECDSA_SHA256:
+        return key_.ToEcP256PrivateKey();
+      case sign::RSA_PKCS1_SHA1:
+      case sign::RSA_PKCS1_SHA384:
+      case sign::RSA_PKCS1_SHA512:
+      case sign::RSA_PSS_SHA256:
+      case sign::RSA_PSS_SHA384:
+      case sign::RSA_PSS_SHA512:
+      case sign::ECDSA_SHA1:
+      case sign::ECDSA_SHA384:
+      case sign::ECDSA_SHA512:
+      case sign::ED25519:
+      case sign::MLDSA_44:
+      case sign::MLDSA_65:
+      case sign::MLDSA_87:
+        NOTREACHED();
+    }
   }
 
 #if BUILDFLAG(IS_APPLE)
   SecKeyRef GetSecKeyRef() const override { NOTREACHED(); }
 #elif BUILDFLAG(IS_WIN)
+  NCRYPT_KEY_HANDLE GetNCryptKeyHandle() const override { NOTREACHED(); }
+#endif
+
+  std::optional<std::vector<uint8_t>> SignSlowly(
+      base::span<const uint8_t> data) override {
+    return sign::Sign(GetSignatureKind(), key(), data);
+  }
+
+#if BUILDFLAG(IS_WIN)
   bool SupportsTls13() override { return true; }
-#endif  // BUILDFLAG(IS_APPLE)
+#endif  // BUILDFLAG(IS_WIN)
+
+ protected:
+  const crypto::keypair::PrivateKey& key() const { return key_; }
+
+  sign::SignatureKind GetSignatureKind() const {
+    if (key_.IsRsa()) {
+      return sign::RSA_PKCS1_SHA256;
+    }
+    if (key_.IsEcP256()) {
+      return sign::ECDSA_SHA256;
+    }
+    NOTREACHED();
+  }
 
  private:
-  bssl::UniquePtr<EC_KEY> key_;
+  crypto::keypair::PrivateKey key_;
 };
 
-class SoftwareRSA : public UnexportableSigningKey {
+class SoftwareSigningKey : public SoftwareKeyImpl<UnexportableSigningKey> {
  public:
-  explicit SoftwareRSA(bssl::UniquePtr<RSA> key) : key_(std::move(key)) {}
-  ~SoftwareRSA() override = default;
+  using Base = SoftwareKeyImpl<UnexportableSigningKey>;
 
-  SignatureVerifier::SignatureAlgorithm Algorithm() const override {
-    return SignatureVerifier::SignatureAlgorithm::RSA_PKCS1_SHA256;
-  }
+  explicit SoftwareSigningKey(crypto::keypair::PrivateKey key)
+      : Base(std::move(key)) {}
+};
 
-  std::vector<uint8_t> GetSubjectPublicKeyInfo() const override {
-    bssl::UniquePtr<EVP_PKEY> pkey(EVP_PKEY_new());
-    CHECK(EVP_PKEY_set1_RSA(pkey.get(), key_.get()));
+class SoftwareAttestationKey
+    : public SoftwareKeyImpl<UnexportableAttestationKey> {
+ public:
+  using Base = SoftwareKeyImpl<UnexportableAttestationKey>;
 
-    bssl::ScopedCBB cbb;
-    CHECK(CBB_init(cbb.get(), /*initial_capacity=*/384) &&
-          EVP_marshal_public_key(cbb.get(), pkey.get()));
-    return CBBToVector(cbb.get());
-  }
-
-  std::vector<uint8_t> GetWrappedKey() const override {
-    bssl::ScopedCBB cbb;
-    CHECK(CBB_init(cbb.get(), 384) &&
-          RSA_marshal_private_key(cbb.get(), key_.get()));
-    return CBBToVector(cbb.get());
-  }
+  explicit SoftwareAttestationKey(crypto::keypair::PrivateKey key)
+      : Base(std::move(key)) {}
 
   std::optional<std::vector<uint8_t>> SignSlowly(
       base::span<const uint8_t> data) override {
-    std::vector<uint8_t> ret(RSA_size(key_.get()));
-    std::array<uint8_t, hash::kSha256Size> digest = hash::Sha256(data);
-    unsigned int ret_size;
-    CHECK(RSA_sign(NID_sha256, digest.data(), digest.size(), ret.data(),
-                   &ret_size, key_.get()));
-    ret.resize(ret_size);
-    return ret;
+    // Emulate TPM 2.0 restricted signing key behavior: hardware TPMs refuse to
+    // sign external data starting with `TPM_GENERATED_VALUE` (0xFF544347) via
+    // TPM2_Hash/TPM2_Sign to prevent forging TPM-generated attestation
+    // structures (e.g., TPMS_ATTEST).
+    return std::ranges::starts_with(
+               data, base::EnumToBigEndian(tpm::TPM_GENERATED_VALUE))
+               ? std::nullopt
+               : Base::SignSlowly(data);
   }
 
-#if BUILDFLAG(IS_APPLE)
-  SecKeyRef GetSecKeyRef() const override { NOTREACHED(); }
-#elif BUILDFLAG(IS_WIN)
-  bool SupportsTls13() override { return true; }
-#endif  // BUILDFLAG(IS_APPLE)
+  // Certifies the signing key by generating a fake TPM 2.0 certification
+  // output. This emulates the behavior of a TPM-backed key provider for
+  // testing.
+  //
+  // The returned AttestationStatement contains a TPMS_ATTEST and TPMT_SIGNATURE
+  // structure.
+  //
+  // See https://github.com/WICG/dbsc-sso for details.
+  std::optional<AttestationStatement> CertifySlowly(
+      const UnexportableSigningKey& signing_key,
+      base::span<const uint8_t> challenge) override {
+    std::vector<uint8_t> attestation_statement =
+        CreateTpm2bAttestationStatement(signing_key, challenge);
 
-  StatefulUnexportableSigningKey* AsStatefulUnexportableSigningKey() override {
-    return nullptr;
+    const std::vector<uint8_t> der_signature =
+        sign::Sign(GetSignatureKind(), key(), attestation_statement);
+
+    switch (GetSignatureKind()) {
+      case sign::ECDSA_SHA256:
+        return AttestationStatement{
+            .format = AttestationStatement::kTpm,
+            .statement = std::move(attestation_statement),
+            .signature = CreateTpmEcdsaSignature(key(), der_signature),
+        };
+      case sign::RSA_PKCS1_SHA256:
+        return AttestationStatement{
+            .format = AttestationStatement::kTpm,
+            .statement = std::move(attestation_statement),
+            .signature = CreateTpmRsaSignature(der_signature),
+        };
+      case sign::RSA_PKCS1_SHA1:
+      case sign::RSA_PKCS1_SHA384:
+      case sign::RSA_PKCS1_SHA512:
+      case sign::RSA_PSS_SHA256:
+      case sign::RSA_PSS_SHA384:
+      case sign::RSA_PSS_SHA512:
+      case sign::ECDSA_SHA1:
+      case sign::ECDSA_SHA384:
+      case sign::ECDSA_SHA512:
+      case sign::ED25519:
+      case sign::MLDSA_44:
+      case sign::MLDSA_65:
+      case sign::MLDSA_87:
+        NOTREACHED();
+    }
   }
-
- private:
-  bssl::UniquePtr<RSA> key_;
 };
 
 class SoftwareProvider : public UnexportableKeyProvider {
  public:
   ~SoftwareProvider() override = default;
 
-  std::optional<SignatureVerifier::SignatureAlgorithm> SelectAlgorithm(
-      base::span<const SignatureVerifier::SignatureAlgorithm>
-          acceptable_algorithms) override {
+  std::optional<sign::SignatureKind> SelectAlgorithm(
+      base::span<const sign::SignatureKind> acceptable_algorithms) override {
     for (auto algo : acceptable_algorithms) {
       switch (algo) {
-        case SignatureVerifier::SignatureAlgorithm::ECDSA_SHA256:
-        case SignatureVerifier::SignatureAlgorithm::RSA_PKCS1_SHA256:
+        case sign::ECDSA_SHA256:
+        case sign::RSA_PKCS1_SHA256:
           return algo;
-        case SignatureVerifier::SignatureAlgorithm::RSA_PKCS1_SHA1:
-        case SignatureVerifier::SignatureAlgorithm::RSA_PSS_SHA256:
+        case sign::RSA_PKCS1_SHA1:
+        case sign::RSA_PKCS1_SHA384:
+        case sign::RSA_PKCS1_SHA512:
+        case sign::RSA_PSS_SHA256:
+        case sign::RSA_PSS_SHA384:
+        case sign::RSA_PSS_SHA512:
+        case sign::ECDSA_SHA1:
+        case sign::ECDSA_SHA384:
+        case sign::ECDSA_SHA512:
+        case sign::ED25519:
+        case sign::MLDSA_44:
+        case sign::MLDSA_65:
+        case sign::MLDSA_87:
           continue;  // Not supported
       }
     }
@@ -156,30 +321,35 @@ class SoftwareProvider : public UnexportableKeyProvider {
   }
 
   std::unique_ptr<UnexportableSigningKey> GenerateSigningKeySlowly(
-      base::span<const SignatureVerifier::SignatureAlgorithm>
-          acceptable_algorithms) override {
+      base::span<const sign::SignatureKind> acceptable_algorithms) override {
     if (!SelectAlgorithm(acceptable_algorithms)) {
       return nullptr;
     }
 
     for (auto algo : acceptable_algorithms) {
       switch (algo) {
-        case SignatureVerifier::SignatureAlgorithm::ECDSA_SHA256: {
-          bssl::UniquePtr<EC_KEY> key(
-              EC_KEY_new_by_curve_name(NID_X9_62_prime256v1));
-          CHECK(EC_KEY_generate_key(key.get()));
-          return std::make_unique<SoftwareECDSA>(std::move(key));
+        case sign::ECDSA_SHA256: {
+          return std::make_unique<SoftwareSigningKey>(
+              crypto::keypair::PrivateKey::GenerateEcP256());
         }
 
-        case SignatureVerifier::SignatureAlgorithm::RSA_PKCS1_SHA256: {
-          bssl::UniquePtr<RSA> key(RSA_new());
-          bssl::UniquePtr<BIGNUM> e(BN_new());
-          BN_set_word(e.get(), RSA_F4);
-          RSA_generate_key_ex(key.get(), 2048, e.get(), nullptr);
-          return std::make_unique<SoftwareRSA>(std::move(key));
+        case sign::RSA_PKCS1_SHA256: {
+          return std::make_unique<SoftwareSigningKey>(
+              crypto::keypair::PrivateKey::GenerateRsa2048());
         }
-        case SignatureVerifier::SignatureAlgorithm::RSA_PKCS1_SHA1:
-        case SignatureVerifier::SignatureAlgorithm::RSA_PSS_SHA256:
+        case sign::RSA_PKCS1_SHA1:
+        case sign::RSA_PKCS1_SHA384:
+        case sign::RSA_PKCS1_SHA512:
+        case sign::RSA_PSS_SHA256:
+        case sign::RSA_PSS_SHA384:
+        case sign::RSA_PSS_SHA512:
+        case sign::ECDSA_SHA1:
+        case sign::ECDSA_SHA384:
+        case sign::ECDSA_SHA512:
+        case sign::ED25519:
+        case sign::MLDSA_44:
+        case sign::MLDSA_65:
+        case sign::MLDSA_87:
           continue;  // Not supported
       }
     }
@@ -189,24 +359,66 @@ class SoftwareProvider : public UnexportableKeyProvider {
 
   std::unique_ptr<UnexportableSigningKey> FromWrappedSigningKeySlowly(
       base::span<const uint8_t> wrapped_key) override {
-    {  // Try to parse ECDSA
-      CBS cbs;
-      CBS_init(&cbs, wrapped_key.data(), wrapped_key.size());
-      bssl::UniquePtr<EC_GROUP> p256(
-          EC_GROUP_new_by_curve_name(NID_X9_62_prime256v1));
-      bssl::UniquePtr<EC_KEY> key(EC_KEY_parse_private_key(&cbs, p256.get()));
-      if (key && CBS_len(&cbs) == 0) {
-        return std::make_unique<SoftwareECDSA>(std::move(key));
+    if (auto key =
+            crypto::keypair::PrivateKey::FromEcP256PrivateKey(wrapped_key)) {
+      return std::make_unique<SoftwareSigningKey>(std::move(*key));
+    }
+
+    if (auto key =
+            crypto::keypair::PrivateKey::FromRSAPrivateKey(wrapped_key)) {
+      return std::make_unique<SoftwareSigningKey>(std::move(*key));
+    }
+
+    return nullptr;
+  }
+
+  std::unique_ptr<UnexportableAttestationKey> GenerateAttestationKeySlowly(
+      base::span<const sign::SignatureKind> acceptable_algorithms) override {
+    if (!SelectAlgorithm(acceptable_algorithms)) {
+      return nullptr;
+    }
+
+    for (auto algo : acceptable_algorithms) {
+      switch (algo) {
+        case sign::ECDSA_SHA256: {
+          return std::make_unique<SoftwareAttestationKey>(
+              crypto::keypair::PrivateKey::GenerateEcP256());
+        }
+
+        case sign::RSA_PKCS1_SHA256: {
+          return std::make_unique<SoftwareAttestationKey>(
+              crypto::keypair::PrivateKey::GenerateRsa2048());
+        }
+        case sign::RSA_PKCS1_SHA1:
+        case sign::RSA_PKCS1_SHA384:
+        case sign::RSA_PKCS1_SHA512:
+        case sign::RSA_PSS_SHA256:
+        case sign::RSA_PSS_SHA384:
+        case sign::RSA_PSS_SHA512:
+        case sign::ECDSA_SHA1:
+        case sign::ECDSA_SHA384:
+        case sign::ECDSA_SHA512:
+        case sign::ED25519:
+        case sign::MLDSA_44:
+        case sign::MLDSA_65:
+        case sign::MLDSA_87:
+          continue;  // Not supported
       }
     }
 
-    {  // Try RSA
-      CBS cbs;
-      CBS_init(&cbs, wrapped_key.data(), wrapped_key.size());
-      bssl::UniquePtr<RSA> key(RSA_parse_private_key(&cbs));
-      if (key && CBS_len(&cbs) == 0) {
-        return std::make_unique<SoftwareRSA>(std::move(key));
-      }
+    return nullptr;
+  }
+
+  std::unique_ptr<UnexportableAttestationKey> FromWrappedAttestationKeySlowly(
+      base::span<const uint8_t> wrapped_key) override {
+    if (auto key =
+            crypto::keypair::PrivateKey::FromEcP256PrivateKey(wrapped_key)) {
+      return std::make_unique<SoftwareAttestationKey>(std::move(*key));
+    }
+
+    if (auto key =
+            crypto::keypair::PrivateKey::FromRSAPrivateKey(wrapped_key)) {
+      return std::make_unique<SoftwareAttestationKey>(std::move(*key));
     }
 
     return nullptr;

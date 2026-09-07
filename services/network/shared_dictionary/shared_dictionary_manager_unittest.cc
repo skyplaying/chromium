@@ -8,13 +8,15 @@
 #include <string>
 #include <vector>
 
+#include "base/byte_size.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/format_macros.h"
 #include "base/functional/callback.h"
-#include "base/memory/memory_pressure_listener_registry.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory_coordinator/test_memory_consumer_registry.h"
+#include "base/memory_coordinator/utils.h"
 #include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/bind.h"
@@ -195,12 +197,12 @@ class SharedDictionaryManagerTest
   std::unique_ptr<SharedDictionaryManager> CreateSharedDictionaryManager() {
     switch (GetManagerType()) {
       case TestManagerType::kInMemory:
-        return SharedDictionaryManager::CreateInMemory(/*cache_max_size=*/0,
-                                                       kCacheMaxCount);
+        return SharedDictionaryManager::CreateInMemory(
+            /*cache_max_size=*/std::nullopt, kCacheMaxCount);
       case TestManagerType::kOnDisk:
         return SharedDictionaryManager::CreateOnDisk(
-            database_path_, cache_directory_path_, /*cache_max_size=*/0,
-            kCacheMaxCount,
+            database_path_, cache_directory_path_,
+            /*cache_max_size=*/std::nullopt, kCacheMaxCount,
 #if BUILDFLAG(IS_ANDROID)
             disk_cache::ApplicationStatusListenerGetter(),
 #endif  // BUILDFLAG(IS_ANDROID)
@@ -245,8 +247,9 @@ class SharedDictionaryManagerTest
     return result.Get();
   }
 
-  base::MemoryPressureListenerRegistry memory_pressure_listener_registry_;
+  base::TestMemoryConsumerRegistry test_memory_consumer_registry_;
 
+  base::test::ScopedFeatureList scoped_feature_list_;
   base::test::TaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
 
@@ -254,7 +257,6 @@ class SharedDictionaryManagerTest
   base::ScopedTempDir tmp_directory_;
   base::FilePath database_path_;
   base::FilePath cache_directory_path_;
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 INSTANTIATE_TEST_SUITE_P(
@@ -392,8 +394,11 @@ TEST_P(SharedDictionaryManagerTest,
   std::unique_ptr<SharedDictionaryManager> manager =
       CreateSharedDictionaryManager();
 
-  base::MemoryPressureListener::SimulatePressureNotificationAsync(
-      base::MEMORY_PRESSURE_LEVEL_MODERATE, task_environment_.QuitClosure());
+  test_memory_consumer_registry_.NotifyUpdateMemoryLimitAsync(
+      base::kModerateMemoryPressureThreshold, task_environment_.QuitClosure());
+  task_environment_.RunUntilQuit();
+  test_memory_consumer_registry_.NotifyReleaseMemoryAsync(
+      task_environment_.QuitClosure());
   task_environment_.RunUntilQuit();
 
   scoped_refptr<SharedDictionaryStorage> storage =
@@ -424,8 +429,11 @@ TEST_P(SharedDictionaryManagerTest,
   std::unique_ptr<SharedDictionaryManager> manager =
       CreateSharedDictionaryManager();
 
-  base::MemoryPressureListener::SimulatePressureNotificationAsync(
-      base::MEMORY_PRESSURE_LEVEL_CRITICAL, task_environment_.QuitClosure());
+  test_memory_consumer_registry_.NotifyUpdateMemoryLimitAsync(
+      base::kCriticalMemoryPressureThreshold, task_environment_.QuitClosure());
+  task_environment_.RunUntilQuit();
+  test_memory_consumer_registry_.NotifyReleaseMemoryAsync(
+      task_environment_.QuitClosure());
   task_environment_.RunUntilQuit();
 
   scoped_refptr<SharedDictionaryStorage> storage =
@@ -451,6 +459,11 @@ TEST_P(SharedDictionaryManagerTest,
 
 TEST_P(SharedDictionaryManagerTest,
        CachedStorageClearedOnModerateMemoryPressure) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      {features::kPervasiveSharedDictionaries,
+       features::kCacheSharingForPervasiveResources},
+      {});
   net::SharedDictionaryIsolationKey isolation_key(url::Origin::Create(kUrl1),
                                                   kSite1);
   std::unique_ptr<SharedDictionaryManager> manager =
@@ -458,20 +471,32 @@ TEST_P(SharedDictionaryManagerTest,
 
   scoped_refptr<SharedDictionaryStorage> storage =
       manager->GetStorage(isolation_key);
+  scoped_refptr<SharedDictionaryStorage> pervasive_storage =
+      manager->GetPervasiveStorage();
   // Write the test data to the dictionary.
   WriteDictionary(storage.get(), GURL("https://origin1.test/dict"), "p*",
                   {"Hello"});
+  WriteDictionary(pervasive_storage.get(),
+                  GURL("https://origin1.test/pervasive_dict"), "pervasive*",
+                  {"Pervasive"});
   if (GetManagerType() == TestManagerType::kOnDisk) {
     FlushCacheTasks();
   }
 
   EXPECT_TRUE(storage->GetDictionarySync(GURL("https://origin1.test/p?"),
                                          mojom::RequestDestination::kEmpty));
+  EXPECT_TRUE(pervasive_storage->GetDictionarySync(
+      GURL("https://origin1.test/pervasive_item"),
+      mojom::RequestDestination::kEmpty));
 
   storage.reset();
+  pervasive_storage.reset();
 
-  base::MemoryPressureListener::SimulatePressureNotificationAsync(
-      base::MEMORY_PRESSURE_LEVEL_MODERATE, task_environment_.QuitClosure());
+  test_memory_consumer_registry_.NotifyUpdateMemoryLimitAsync(
+      base::kModerateMemoryPressureThreshold, task_environment_.QuitClosure());
+  task_environment_.RunUntilQuit();
+  test_memory_consumer_registry_.NotifyReleaseMemoryAsync(
+      task_environment_.QuitClosure());
   task_environment_.RunUntilQuit();
 
   // If `manager` observed moderate memory pressure, it should clear the cached
@@ -479,10 +504,19 @@ TEST_P(SharedDictionaryManagerTest,
   storage = manager->GetStorage(isolation_key);
   EXPECT_FALSE(storage->GetDictionarySync(GURL("https://origin1.test/p?"),
                                           mojom::RequestDestination::kEmpty));
+  pervasive_storage = manager->GetPervasiveStorage();
+  EXPECT_FALSE(pervasive_storage->GetDictionarySync(
+      GURL("https://origin1.test/pervasive_item"),
+      mojom::RequestDestination::kEmpty));
 }
 
 TEST_P(SharedDictionaryManagerTest,
        CachedStorageClearedOnCriticalMemoryPressure) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      {features::kPervasiveSharedDictionaries,
+       features::kCacheSharingForPervasiveResources},
+      {});
   net::SharedDictionaryIsolationKey isolation_key(url::Origin::Create(kUrl1),
                                                   kSite1);
   std::unique_ptr<SharedDictionaryManager> manager =
@@ -490,20 +524,32 @@ TEST_P(SharedDictionaryManagerTest,
 
   scoped_refptr<SharedDictionaryStorage> storage =
       manager->GetStorage(isolation_key);
+  scoped_refptr<SharedDictionaryStorage> pervasive_storage =
+      manager->GetPervasiveStorage();
   // Write the test data to the dictionary.
   WriteDictionary(storage.get(), GURL("https://origin1.test/dict"), "p*",
                   {"Hello"});
+  WriteDictionary(pervasive_storage.get(),
+                  GURL("https://origin1.test/pervasive_dict"), "pervasive*",
+                  {"Pervasive"});
   if (GetManagerType() == TestManagerType::kOnDisk) {
     FlushCacheTasks();
   }
 
   EXPECT_TRUE(storage->GetDictionarySync(GURL("https://origin1.test/p?"),
                                          mojom::RequestDestination::kEmpty));
+  EXPECT_TRUE(pervasive_storage->GetDictionarySync(
+      GURL("https://origin1.test/pervasive_item"),
+      mojom::RequestDestination::kEmpty));
 
   storage.reset();
+  pervasive_storage.reset();
 
-  base::MemoryPressureListener::SimulatePressureNotificationAsync(
-      base::MEMORY_PRESSURE_LEVEL_CRITICAL, task_environment_.QuitClosure());
+  test_memory_consumer_registry_.NotifyUpdateMemoryLimitAsync(
+      base::kCriticalMemoryPressureThreshold, task_environment_.QuitClosure());
+  task_environment_.RunUntilQuit();
+  test_memory_consumer_registry_.NotifyReleaseMemoryAsync(
+      task_environment_.QuitClosure());
   task_environment_.RunUntilQuit();
 
   // If `manager` observed critical memory pressure, it should clear the cached
@@ -511,6 +557,10 @@ TEST_P(SharedDictionaryManagerTest,
   storage = manager->GetStorage(isolation_key);
   EXPECT_FALSE(storage->GetDictionarySync(GURL("https://origin1.test/p?"),
                                           mojom::RequestDestination::kEmpty));
+  pervasive_storage = manager->GetPervasiveStorage();
+  EXPECT_FALSE(pervasive_storage->GetDictionarySync(
+      GURL("https://origin1.test/pervasive_item"),
+      mojom::RequestDestination::kEmpty));
 }
 
 TEST_P(SharedDictionaryManagerTest, WriterForUseAsDictionaryHeader) {
@@ -544,13 +594,20 @@ TEST_P(SharedDictionaryManagerTest, WriterForUseAsDictionaryHeader) {
       // List `match` value is not supported.
       {"match=(\"test1\" \"test2\")",
        mojom::SharedDictionaryError::kWriteErrorNonStringMatchField},
+      // Single-element list `match` value is not supported
+      // (http://crbug.com/546075205).
+      {"match=(\"test1\")",
+       mojom::SharedDictionaryError::kWriteErrorNonStringMatchField},
       // Token `match` value is not supported.
       {"match=test",
        mojom::SharedDictionaryError::kWriteErrorNonStringMatchField},
 
       // We support `raw` type.
       {"match=\"test\", type=raw", /*error_status=*/std::nullopt},
-      {"match=\"test\", type=(raw)", /*error_status=*/std::nullopt},
+      // Single-element list `type` value is not supported
+      // (http://crbug.com/546075205).
+      {"match=\"test\", type=(raw)", /*error_status=*/mojom::
+           SharedDictionaryError::kWriteErrorNonTokenTypeField},
       // The type must be a token.
       {"match=\"test\", type=\"raw\"",
        mojom::SharedDictionaryError::kWriteErrorNonTokenTypeField},
@@ -678,6 +735,10 @@ TEST_P(SharedDictionaryManagerTest, DictionaryLifetimeFromTTLOption) {
       {"match=\"test\"", kDefaultExpiration},
       // Valid value
       {"match=\"test\", ttl=100", base::Seconds(100)},
+      // Single-element list is not supported (http://crbug.com/546075205).
+      {"match=\"test\", ttl=(100)",
+       base::unexpected(
+           mojom::SharedDictionaryError::kWriteErrorNonIntegerTTLField)},
       // Wrong type
       {"match=\"test\", ttl=token",
        base::unexpected(
@@ -919,6 +980,10 @@ TEST_P(SharedDictionaryManagerTest, WriterForUseAsDictionaryIdOption) {
       {"match=\"test\", id=(\"id1\" \"id2\")",
        base::unexpected(
            mojom::SharedDictionaryError::kWriteErrorNonStringIdField)},
+      // `id` should not be a single-element list (http://crbug.com/546075205).
+      {"match=\"test\", id=(\"id1\")",
+       base::unexpected(
+           mojom::SharedDictionaryError::kWriteErrorNonStringIdField)},
       // `id` can be 1024 characters long.
       {base::StrCat({"match=\"test\", id=\"", std::string(1024, 'x'), "\""}),
        std::string(1024, 'x')},
@@ -997,8 +1062,12 @@ TEST_P(SharedDictionaryManagerTest, WriterForUseAsDictionaryMatchDestOption) {
       {"match=\"test\", match-dest=\"document\"",
        base::unexpected(
            mojom::SharedDictionaryError::kWriteErrorNonListMatchDestField)},
-      // Unknown `match-dest` value should be treated as empty.
-      {"match=\"test\", match-dest=(\"unknown\")", {}},
+      // Explicitly empty `match-dest` value acts as wildcard.
+      {"match=\"test\", match-dest=()", {}},
+      // Unknown `match-dest` value should return an error.
+      {"match=\"test\", match-dest=(\"unknown\")",
+       base::unexpected(
+           mojom::SharedDictionaryError::kWriteErrorInvalidMatchDestList)},
       //`match-dest` should not be a sf-token.
       // https://github.com/httpwg/http-extensions/issues/2723
       {"match=\"test\", match-dest=(document)",
@@ -1459,6 +1528,113 @@ TEST_P(SharedDictionaryManagerTest, LongestMatchDictionaryWin) {
   EXPECT_EQ("Longer match", std::string(dict->data()->data(), dict->size()));
 }
 
+TEST_P(SharedDictionaryManagerTest, MatchDestWinOverLongerMatchWithoutDest) {
+  std::unique_ptr<SharedDictionaryManager> manager =
+      CreateSharedDictionaryManager();
+  net::SharedDictionaryIsolationKey isolation_key(url::Origin::Create(kUrl1),
+                                                  kSite1);
+  scoped_refptr<SharedDictionaryStorage> storage =
+      manager->GetStorage(isolation_key);
+  ASSERT_TRUE(storage);
+
+  // Dictionary 1: Short match pattern, specifies matching destination for
+  // empty.
+  WriteDictionary(storage.get(), GURL("https://origin1.test/dict1"), "test*",
+                  {"Shorter match with dest"}, ", match-dest=(\"\")");
+
+  // Dictionary 2: Long match pattern, does NOT specify a destination.
+  WriteDictionary(storage.get(), GURL("https://origin1.test/dict2"),
+                  "*estfile*", {"Longer match without dest"});
+
+  if (GetManagerType() == TestManagerType::kOnDisk) {
+    FlushCacheTasks();
+  }
+
+  // Request destination is kEmpty ("").
+  auto dict = storage->GetDictionarySync(GURL("https://origin1.test/testfile"),
+                                         mojom::RequestDestination::kEmpty);
+  ASSERT_TRUE(dict);
+  net::TestCompletionCallback read_callback;
+  EXPECT_EQ(net::OK,
+            read_callback.GetResult(dict->ReadAll(read_callback.callback())));
+  EXPECT_EQ("Shorter match with dest",
+            std::string(dict->data()->data(), dict->size()));
+}
+
+TEST_P(SharedDictionaryManagerTest, MatchDestFilteringDocument) {
+  std::unique_ptr<SharedDictionaryManager> manager =
+      CreateSharedDictionaryManager();
+  net::SharedDictionaryIsolationKey isolation_key(url::Origin::Create(kUrl1),
+                                                  kSite1);
+  scoped_refptr<SharedDictionaryStorage> storage =
+      manager->GetStorage(isolation_key);
+  ASSERT_TRUE(storage);
+
+  // Dictionary 1: Short match pattern, specifies matching destination for
+  // empty.
+  WriteDictionary(storage.get(), GURL("https://origin1.test/dict1"), "test*",
+                  {"Shorter match with dest"}, ", match-dest=(\"\")");
+
+  // Dictionary 2: Long match pattern, does NOT specify a destination.
+  WriteDictionary(storage.get(), GURL("https://origin1.test/dict2"),
+                  "*estfile*", {"Longer match without dest"});
+
+  if (GetManagerType() == TestManagerType::kOnDisk) {
+    FlushCacheTasks();
+  }
+
+  // Request destination is kDocument.
+  auto dict = storage->GetDictionarySync(GURL("https://origin1.test/testfile"),
+                                         mojom::RequestDestination::kDocument);
+  ASSERT_TRUE(dict);
+  net::TestCompletionCallback read_callback;
+  EXPECT_EQ(net::OK,
+            read_callback.GetResult(dict->ReadAll(read_callback.callback())));
+  EXPECT_EQ("Longer match without dest",
+            std::string(dict->data()->data(), dict->size()));
+}
+
+TEST_P(SharedDictionaryManagerTest, MatchDestPriorityAndLength) {
+  std::unique_ptr<SharedDictionaryManager> manager =
+      CreateSharedDictionaryManager();
+  net::SharedDictionaryIsolationKey isolation_key(url::Origin::Create(kUrl1),
+                                                  kSite1);
+  scoped_refptr<SharedDictionaryStorage> storage =
+      manager->GetStorage(isolation_key);
+  ASSERT_TRUE(storage);
+
+  // Dictionary 1: Short match pattern, specifies matching destination for
+  // document.
+  WriteDictionary(storage.get(), GURL("https://origin1.test/dict1"), "test*",
+                  {"Shorter match with dest"}, ", match-dest=(\"document\")");
+
+  // Dictionary 2: Longer match pattern, specifies matching destination for
+  // document.
+  WriteDictionary(storage.get(), GURL("https://origin1.test/dict2"), "testfi*",
+                  {"Longer match with dest"}, ", match-dest=(\"document\")");
+
+  // Dictionary 3: Longest match pattern, does NOT specify a destination.
+  WriteDictionary(storage.get(), GURL("https://origin1.test/dict3"),
+                  "*estfile*", {"Longest match without dest"});
+
+  if (GetManagerType() == TestManagerType::kOnDisk) {
+    FlushCacheTasks();
+  }
+
+  // Request destination is kDocument.
+  // Prioritization should select Dictionary 2:
+  // - Matches destination (beats Dictionary 3)
+  // - Longer match pattern than Dictionary 1 (beats Dictionary 1)
+  auto dict = storage->GetDictionarySync(GURL("https://origin1.test/testfile"),
+                                         mojom::RequestDestination::kDocument);
+  ASSERT_TRUE(dict);
+  net::TestCompletionCallback read_callback;
+  EXPECT_EQ(net::OK,
+            read_callback.GetResult(dict->ReadAll(read_callback.callback())));
+  EXPECT_EQ("Longer match with dest",
+            std::string(dict->data()->data(), dict->size()));
+}
+
 TEST_P(SharedDictionaryManagerTest, LastFetchedDictionaryWin) {
   std::unique_ptr<SharedDictionaryManager> manager =
       CreateSharedDictionaryManager();
@@ -1612,7 +1788,8 @@ TEST_P(SharedDictionaryManagerTest,
 
   task_environment_.FastForwardBy(base::Seconds(1));
 
-  manager->SetCacheMaxSize(/*cache_max_size=*/kTestData1.size() * 2);
+  manager->SetCacheMaxSize(
+      /*cache_max_size=*/base::ByteSize(kTestData1.size() * 2));
 
   if (GetManagerType() == TestManagerType::kOnDisk) {
     FlushCacheTasks();
@@ -1626,7 +1803,42 @@ TEST_P(SharedDictionaryManagerTest,
                                          mojom::RequestDestination::kEmpty));
 }
 
-TEST_P(SharedDictionaryManagerTest, CacheEvictionZeroMaxSizeCountExceeded) {
+TEST_P(SharedDictionaryManagerTest, CacheEvictionZeroMaxSize) {
+  net::SharedDictionaryIsolationKey isolation_key(url::Origin::Create(kUrl1),
+                                                  kSite1);
+
+  std::unique_ptr<SharedDictionaryManager> manager =
+      CreateSharedDictionaryManager();
+  scoped_refptr<SharedDictionaryStorage> storage =
+      manager->GetStorage(isolation_key);
+  ASSERT_TRUE(storage);
+
+  WriteDictionary(storage.get(), GURL("https://origin1.test/d1"), "p1*",
+                  {kTestData1});
+  task_environment_.FastForwardBy(base::Seconds(1));
+  WriteDictionary(storage.get(), GURL("https://origin2.test/d2"), "p2*",
+                  {kTestData1});
+
+  if (GetManagerType() == TestManagerType::kOnDisk) {
+    FlushCacheTasks();
+  }
+
+  task_environment_.FastForwardBy(base::Seconds(1));
+
+  manager->SetCacheMaxSize(base::ByteSize(0));
+
+  if (GetManagerType() == TestManagerType::kOnDisk) {
+    FlushCacheTasks();
+  }
+
+  EXPECT_FALSE(storage->GetDictionarySync(GURL("https://origin1.test/p1?"),
+                                          mojom::RequestDestination::kEmpty));
+  EXPECT_FALSE(storage->GetDictionarySync(GURL("https://origin2.test/p2?"),
+                                          mojom::RequestDestination::kEmpty));
+}
+
+TEST_P(SharedDictionaryManagerTest,
+       CacheEvictionUnlimitedMaxSizeCountExceeded) {
   std::unique_ptr<SharedDictionaryManager> manager =
       CreateSharedDictionaryManager();
 
@@ -1708,7 +1920,8 @@ TEST_P(SharedDictionaryManagerTest,
 
   std::unique_ptr<SharedDictionaryManager> manager =
       CreateSharedDictionaryManager();
-  manager->SetCacheMaxSize(/*cache_max_size=*/kTestData1.size() * 2);
+  manager->SetCacheMaxSize(
+      /*cache_max_size=*/base::ByteSize(kTestData1.size() * 2));
   scoped_refptr<SharedDictionaryStorage> storage1 =
       manager->GetStorage(isolation_key1);
   ASSERT_TRUE(storage1);
@@ -1789,7 +2002,8 @@ TEST_P(SharedDictionaryManagerTest, CacheEvictionAfterUpdatingLastUsedTime) {
 
   // Set the max size to kTestData1.size() * 3. The low water mark will be
   // kTestData1.size() * 2.7 (3 * 0.9).
-  manager->SetCacheMaxSize(/*cache_max_size=*/kTestData1.size() * 3);
+  manager->SetCacheMaxSize(
+      /*cache_max_size=*/base::ByteSize(kTestData1.size() * 3));
 
   if (GetManagerType() == TestManagerType::kOnDisk) {
     FlushCacheTasks();
@@ -1816,7 +2030,8 @@ TEST_P(SharedDictionaryManagerTest, CacheEvictionPerSiteSizeExceeded) {
   std::unique_ptr<SharedDictionaryManager> manager =
       CreateSharedDictionaryManager();
   // The size limit per site is kTestData1.size() * 4 / 2.
-  manager->SetCacheMaxSize(/*cache_max_size=*/kTestData1.size() * 4);
+  manager->SetCacheMaxSize(
+      /*cache_max_size=*/base::ByteSize(kTestData1.size() * 4));
 
   scoped_refptr<SharedDictionaryStorage> storage1 =
       manager->GetStorage(isolation_key1);
@@ -1860,7 +2075,7 @@ TEST_P(SharedDictionaryManagerTest, CacheEvictionPerSiteSizeExceeded) {
 }
 
 TEST_P(SharedDictionaryManagerTest,
-       CacheEvictionPerSiteZeroMaxSizeCountExceeded) {
+       CacheEvictionPerSiteUnlimitedMaxSizeCountExceeded) {
   net::SharedDictionaryIsolationKey isolation_key(url::Origin::Create(kUrl1),
                                                   kSite1);
 
@@ -1911,14 +2126,14 @@ TEST_P(SharedDictionaryManagerTest,
 }
 
 TEST_P(SharedDictionaryManagerTest,
-       CacheEvictionPerSiteNonZeroMaxSizeCountExceeded) {
+       CacheEvictionPerSiteLimitedMaxSizeCountExceeded) {
   net::SharedDictionaryIsolationKey isolation_key(url::Origin::Create(kUrl1),
                                                   kSite1);
 
   std::unique_ptr<SharedDictionaryManager> manager =
       CreateSharedDictionaryManager();
-  manager->SetCacheMaxSize(/*cache_max_size=*/kTestData1.size() *
-                           kCacheMaxCount);
+  manager->SetCacheMaxSize(
+      /*cache_max_size=*/base::ByteSize(kTestData1.size() * kCacheMaxCount));
   scoped_refptr<SharedDictionaryStorage> storage =
       manager->GetStorage(isolation_key);
   ASSERT_TRUE(storage);
@@ -1970,8 +2185,8 @@ TEST_P(SharedDictionaryManagerTest,
 
   std::unique_ptr<SharedDictionaryManager> manager =
       CreateSharedDictionaryManager();
-  manager->SetCacheMaxSize(/*cache_max_size=*/kTestData1.size() *
-                           kCacheMaxCount);
+  manager->SetCacheMaxSize(
+      /*cache_max_size=*/base::ByteSize(kTestData1.size() * kCacheMaxCount));
   scoped_refptr<SharedDictionaryStorage> storage =
       manager->GetStorage(isolation_key);
   ASSERT_TRUE(storage);
@@ -2762,6 +2977,187 @@ TEST_P(SharedDictionaryManagerTest, PreloadedDictionaryConditionalUseDisabled) {
   // dictionary.
   EXPECT_TRUE(
       dictionary_getter.Run(isolation_key, GURL("https://origin1.test/p2")));
+}
+
+TEST_P(SharedDictionaryManagerTest, PreferPervasiveOverPartitioned) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      {features::kPervasiveSharedDictionaries,
+       features::kCacheSharingForPervasiveResources},
+      {});
+  std::unique_ptr<SharedDictionaryManager> manager =
+      CreateSharedDictionaryManager();
+  net::SharedDictionaryIsolationKey normal_key(url::Origin::Create(kUrl1),
+                                               kSite1);
+  scoped_refptr<SharedDictionaryStorage> normal_storage =
+      manager->GetStorage(normal_key);
+  scoped_refptr<SharedDictionaryStorage> pervasive_storage =
+      manager->GetPervasiveStorage();
+  ASSERT_TRUE(pervasive_storage);
+
+  // Write a pervasive dictionary.
+  WriteDictionary(pervasive_storage.get(), GURL("https://origin1.test/dict1"),
+                  "target*", {"Pervasive"});
+  // Write a partitioned dictionary with a more specific pattern.
+  WriteDictionary(normal_storage.get(), GURL("https://origin1.test/dict2"),
+                  "target_specific*", {"PartitionedSpecific"});
+  if (GetManagerType() == TestManagerType::kOnDisk) {
+    FlushCacheTasks();
+  }
+
+  auto dictionary_getter = manager->MaybeCreateSharedDictionaryGetter(
+      net::LOAD_CAN_USE_SHARED_DICTIONARY,
+      mojom::RequestDestination::kDocument);
+
+  // Should prefer pervasive over partitioned regardless of pattern specificity.
+  scoped_refptr<net::SharedDictionary> dict = dictionary_getter.Run(
+      normal_key, GURL("https://origin1.test/target_specific_item"));
+  ASSERT_TRUE(dict);
+  EXPECT_EQ(dict->size(), 9u);  // Size of "Pervasive"
+}
+
+TEST_P(SharedDictionaryManagerTest, PervasiveFallbackToPartitioned) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      {features::kPervasiveSharedDictionaries,
+       features::kCacheSharingForPervasiveResources},
+      {});
+  std::unique_ptr<SharedDictionaryManager> manager =
+      CreateSharedDictionaryManager();
+  net::SharedDictionaryIsolationKey normal_key(url::Origin::Create(kUrl1),
+                                               kSite1);
+  scoped_refptr<SharedDictionaryStorage> normal_storage =
+      manager->GetStorage(normal_key);
+
+  WriteDictionary(normal_storage.get(), GURL("https://origin1.test/dict2"),
+                  "target*", {"Partitioned"});
+  if (GetManagerType() == TestManagerType::kOnDisk) {
+    FlushCacheTasks();
+  }
+
+  auto dictionary_getter = manager->MaybeCreateSharedDictionaryGetter(
+      net::LOAD_CAN_USE_SHARED_DICTIONARY,
+      mojom::RequestDestination::kDocument);
+
+  // With no pervasive dictionary present, should fall back to partitioned.
+  scoped_refptr<net::SharedDictionary> dict = dictionary_getter.Run(
+      normal_key, GURL("https://origin1.test/target_item"));
+  ASSERT_TRUE(dict);
+  EXPECT_EQ(dict->size(), 11u);  // Size of "Partitioned"
+}
+
+TEST_P(SharedDictionaryManagerTest,
+       PervasiveSupportInactiveWhenEitherFeatureDisabled) {
+  struct {
+    bool pervasive_support;
+    bool cache_sharing;
+  } kTestCases[] = {
+      {false, false},
+      {true, false},
+      {false, true},
+  };
+
+  for (const auto& test_case : kTestCases) {
+    base::test::ScopedFeatureList scoped_feature_list;
+    std::vector<base::test::FeatureRef> enabled;
+    std::vector<base::test::FeatureRef> disabled;
+    if (test_case.pervasive_support) {
+      enabled.push_back(features::kPervasiveSharedDictionaries);
+    } else {
+      disabled.push_back(features::kPervasiveSharedDictionaries);
+    }
+    if (test_case.cache_sharing) {
+      enabled.push_back(features::kCacheSharingForPervasiveResources);
+    } else {
+      disabled.push_back(features::kCacheSharingForPervasiveResources);
+    }
+    scoped_feature_list.InitWithFeatures(enabled, disabled);
+
+    std::unique_ptr<SharedDictionaryManager> manager =
+        CreateSharedDictionaryManager();
+    EXPECT_EQ(nullptr, manager->GetPervasiveStorage());
+  }
+}
+
+TEST_P(SharedDictionaryManagerTest, PervasiveDeletionScopingAndUsageInfo) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      {features::kPervasiveSharedDictionaries,
+       features::kCacheSharingForPervasiveResources},
+      {});
+  std::unique_ptr<SharedDictionaryManager> manager =
+      CreateSharedDictionaryManager();
+  scoped_refptr<SharedDictionaryStorage> pervasive_storage =
+      manager->GetPervasiveStorage();
+  ASSERT_TRUE(pervasive_storage);
+
+  net::SharedDictionaryIsolationKey normal_key(url::Origin::Create(kUrl1),
+                                               kSite1);
+  scoped_refptr<SharedDictionaryStorage> normal_storage =
+      manager->GetStorage(normal_key);
+
+  WriteDictionary(normal_storage.get(), kUrl1, "*", {"LocalData"});
+  WriteDictionary(pervasive_storage.get(), kUrl2, "*", {"PervasiveData"});
+  if (GetManagerType() == TestManagerType::kOnDisk) {
+    FlushCacheTasks();
+  }
+
+  // Verify GetUsageInfo excludes pervasive isolation key records (only
+  // normal_key present).
+  base::RunLoop run_loop1;
+  manager->GetUsageInfo(base::BindLambdaForTesting(
+      [&](const std::vector<net::SharedDictionaryUsageInfo>& usage) {
+        EXPECT_EQ(1u, usage.size());
+        if (!usage.empty()) {
+          EXPECT_EQ(normal_key, usage[0].isolation_key);
+        }
+        run_loop1.Quit();
+      }));
+  run_loop1.Run();
+
+  // Verify GetOriginsBetween excludes pervasive isolation key frame origin
+  // (only kUrl1's origin present).
+  base::RunLoop run_loop2;
+  manager->GetOriginsBetween(
+      base::Time::Min(), base::Time::Max(),
+      base::BindLambdaForTesting([&](const std::vector<url::Origin>& origins) {
+        EXPECT_EQ(1u, origins.size());
+        if (!origins.empty()) {
+          EXPECT_EQ(url::Origin::Create(kUrl1), origins[0]);
+        }
+        run_loop2.Quit();
+      }));
+  run_loop2.Run();
+
+  // Confirm both dictionaries are readable before clearing.
+  EXPECT_NE(nullptr, normal_storage->GetDictionarySync(
+                         kUrl1, mojom::RequestDestination::kDocument));
+  EXPECT_NE(nullptr, pervasive_storage->GetDictionarySync(
+                         kUrl2, mojom::RequestDestination::kDocument));
+
+  // Site-specific deletion via ClearDataForIsolationKey leaves pervasive
+  // dictionary untouched.
+  base::RunLoop run_loop3;
+  manager->ClearDataForIsolationKey(normal_key, run_loop3.QuitClosure());
+  run_loop3.Run();
+  if (GetManagerType() == TestManagerType::kOnDisk) {
+    FlushCacheTasks();
+  }
+  EXPECT_EQ(nullptr, normal_storage->GetDictionarySync(
+                         kUrl1, mojom::RequestDestination::kDocument));
+  EXPECT_NE(nullptr, pervasive_storage->GetDictionarySync(
+                         kUrl2, mojom::RequestDestination::kDocument));
+
+  // Bulk user-initiated ClearData purges pervasive dictionary records.
+  base::RunLoop run_loop4;
+  manager->ClearData(base::Time::Min(), base::Time::Max(), base::NullCallback(),
+                     run_loop4.QuitClosure());
+  run_loop4.Run();
+  if (GetManagerType() == TestManagerType::kOnDisk) {
+    FlushCacheTasks();
+  }
+  EXPECT_EQ(nullptr, pervasive_storage->GetDictionarySync(
+                         kUrl2, mojom::RequestDestination::kDocument));
 }
 
 }  // namespace network

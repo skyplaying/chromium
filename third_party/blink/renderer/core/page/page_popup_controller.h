@@ -33,6 +33,8 @@
 
 #include <optional>
 
+#include "base/memory/raw_ref.h"
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
@@ -49,7 +51,8 @@ class Page;
 class PagePopup;
 class PagePopupClient;
 
-class PagePopupController : public ScriptWrappable, public Supplement<Page> {
+class CORE_EXPORT PagePopupController : public ScriptWrappable,
+                                        public Supplement<Page> {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
@@ -89,13 +92,13 @@ class PagePopupController : public ScriptWrappable, public Supplement<Page> {
   void debugLog(const String&);
 
  private:
-  PagePopup& popup_;
+  const raw_ref<PagePopup, UnprotectedInRelease | DanglingUntriaged> popup_;
   std::optional<gfx::Point> popup_origin_;
 
   Vector<gfx::Rect> options_bounds_;
 
  protected:
-  PagePopupClient* popup_client_;
+  Member<PagePopupClient> popup_client_;
 };
 
 }  // namespace blink

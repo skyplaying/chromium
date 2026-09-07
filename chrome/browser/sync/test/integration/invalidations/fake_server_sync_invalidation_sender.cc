@@ -4,8 +4,11 @@
 
 #include "chrome/browser/sync/test/integration/invalidations/fake_server_sync_invalidation_sender.h"
 
+#include <algorithm>
 #include <vector>
 
+#include "base/check_deref.h"
+#include "base/containers/flat_map.h"
 #include "base/logging.h"
 #include "base/time/time.h"
 #include "components/gcm_driver/instance_id/fake_gcm_driver_for_instance_id.h"
@@ -15,23 +18,25 @@ namespace fake_server {
 
 FakeServerSyncInvalidationSender::FakeServerSyncInvalidationSender(
     FakeServer* fake_server)
-    : fake_server_(fake_server) {
-  DCHECK(fake_server_);
-  fake_server_->AddObserver(this);
+    : fake_server_(CHECK_DEREF(fake_server)) {
+  fake_server_observation_.Observe(fake_server);
 }
 
 FakeServerSyncInvalidationSender::~FakeServerSyncInvalidationSender() {
-  fake_server_->RemoveObserver(this);
-  for (instance_id::FakeGCMDriverForInstanceID* fake_gcm_driver :
-       fake_gcm_drivers_) {
+  for (const base::WeakPtr<instance_id::FakeGCMDriverForInstanceID>&
+           fake_gcm_driver : fake_gcm_drivers_) {
     fake_gcm_driver->RemoveConnectionObserver(this);
   }
 }
 
 void FakeServerSyncInvalidationSender::AddFakeGCMDriver(
     instance_id::FakeGCMDriverForInstanceID* fake_gcm_driver) {
+  CHECK(!std::ranges::contains(
+      fake_gcm_drivers_, fake_gcm_driver,
+      &base::WeakPtr<instance_id::FakeGCMDriverForInstanceID>::get))
+      << "AddFakeGCMDriver called for already registered FakeGCMDriver!";
   // It's safe to cast since SyncTest uses FakeGCMProfileService.
-  fake_gcm_drivers_.push_back(fake_gcm_driver);
+  fake_gcm_drivers_.push_back(fake_gcm_driver->GetWeakPtr());
   fake_gcm_driver->AddConnectionObserver(this);
 
   DVLOG(1) << "Added FakeGCMDriver";
@@ -42,8 +47,22 @@ void FakeServerSyncInvalidationSender::AddFakeGCMDriver(
 
 void FakeServerSyncInvalidationSender::RemoveFakeGCMDriver(
     instance_id::FakeGCMDriverForInstanceID* fake_gcm_driver) {
-  fake_gcm_driver->RemoveConnectionObserver(this);
-  std::erase(fake_gcm_drivers_, fake_gcm_driver);
+  auto it = std::ranges::find_if(
+      fake_gcm_drivers_,
+      [fake_gcm_driver](
+          const base::WeakPtr<instance_id::FakeGCMDriverForInstanceID>&
+              weak_driver) {
+        CHECK(weak_driver);
+        return weak_driver.get() == fake_gcm_driver;
+      });
+
+  if (it != fake_gcm_drivers_.end()) {
+    (*it)->RemoveConnectionObserver(this);
+  }
+
+  std::erase_if(fake_gcm_drivers_, [fake_gcm_driver](const auto& weak_driver) {
+    return !weak_driver || weak_driver.get() == fake_gcm_driver;
+  });
 }
 
 void FakeServerSyncInvalidationSender::OnWillCommit() {
@@ -72,9 +91,16 @@ void FakeServerSyncInvalidationSender::OnCommit(
           syncer::GetSpecificsFieldNumberFromDataType(data_type));
     }
 
-    // Versions are used to keep hints ordered. Versions are not really used by
-    // tests, just use current time.
-    payload.set_version(base::Time::Now().InMillisecondsSinceUnixEpoch());
+    // Versions are used to keep hints ordered. SyncEngineBackend interprets the
+    // version as microseconds since the Unix epoch when calculating transit
+    // latency. Additionally, set the dedicated publish and dispatch time
+    // fields.
+    payload.set_version(
+        (base::Time::Now() - base::Time::UnixEpoch()).InMicroseconds());
+    payload.set_server_publish_time_unix_epoch_millis(
+        (base::Time::Now() - base::Time::UnixEpoch()).InMilliseconds());
+    payload.set_server_dispatch_time_unix_epoch_millis(
+        (base::Time::Now() - base::Time::UnixEpoch()).InMilliseconds());
     payload.set_hint("hint");
 
     invalidations_to_deliver_[token].push_back(std::move(payload));
@@ -126,8 +152,7 @@ void FakeServerSyncInvalidationSender::DeliverInvalidationsToHandlers() {
 instance_id::FakeGCMDriverForInstanceID*
 FakeServerSyncInvalidationSender::GetFakeGCMDriverByToken(
     const std::string& fcm_registration_token) const {
-  for (instance_id::FakeGCMDriverForInstanceID* fake_gcm_driver :
-       fake_gcm_drivers_) {
+  for (const auto& fake_gcm_driver : fake_gcm_drivers_) {
 #if !BUILDFLAG(IS_ANDROID)
     // On Android platform FCM registration token is returned from Java
     // implementation, so HasTokenForAppId() does not contain these tokens.
@@ -142,14 +167,14 @@ FakeServerSyncInvalidationSender::GetFakeGCMDriverByToken(
     // AppHandler may not be registered while SyncSetup() is not called yet, the
     // server should keep invalidations to deliver them later.
     if (fake_gcm_driver->GetAppHandler(kSyncInvalidationsAppId)) {
-      return fake_gcm_driver;
+      return fake_gcm_driver.get();
     }
   }
   return nullptr;
 }
 
 void FakeServerSyncInvalidationSender::UpdateTokenToInterestedDataTypesMap() {
-  std::map<std::string, base::Time> token_to_mtime;
+  base::flat_map<std::string, base::Time> token_to_mtime;
   for (const sync_pb::SyncEntity& entity :
        fake_server_->GetSyncEntitiesByDataType(syncer::DEVICE_INFO)) {
     const sync_pb::InvalidationSpecificFields& invalidation_fields =
@@ -165,8 +190,8 @@ void FakeServerSyncInvalidationSender::UpdateTokenToInterestedDataTypesMap() {
     // TODO(crbug.com/40225423): remove once fixed.
     const base::Time last_updated = syncer::ProtoTimeToTime(
         entity.specifics().device_info().last_updated_timestamp());
-    if (token_to_mtime.find(token) != token_to_mtime.end() &&
-        token_to_mtime[token] >= last_updated) {
+    auto it = token_to_mtime.find(token);
+    if (it != token_to_mtime.end() && it->second >= last_updated) {
       continue;
     }
 
@@ -176,7 +201,7 @@ void FakeServerSyncInvalidationSender::UpdateTokenToInterestedDataTypesMap() {
          invalidation_fields.interested_data_type_ids()) {
       const syncer::DataType data_type =
           syncer::GetDataTypeFromSpecificsFieldNumber(field_number);
-      DCHECK(syncer::IsRealDataType(data_type));
+      CHECK(syncer::IsRealDataType(data_type));
       token_to_interested_data_types_[token].Put(data_type);
     }
   }

@@ -17,6 +17,7 @@
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_view_views.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_view_views.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/omnibox/browser/omnibox_triggered_feature_service.h"
 #include "components/omnibox/common/omnibox_features.h"
@@ -26,6 +27,9 @@
 // Base class for omnibox browser and ui tests.
 class OmniboxPopupViewViewsTest : public InProcessBrowserTest {
  public:
+  OmniboxPopupViewViewsTest() {
+    feature_list_.InitAndDisableFeature(features::kWebUILocationBar);
+  }
   // Helper to wait for theme changes. The wait is triggered when an instance of
   // this class goes out of scope.
   class ThemeChangeWaiter {
@@ -39,6 +43,8 @@ class OmniboxPopupViewViewsTest : public InProcessBrowserTest {
    private:
     test::ThemeServiceChangedWaiter waiter_;
   };
+
+  void SetUpOnMainThread() override;
 
   views::Widget* CreatePopupForTestQuery();
   views::Widget* GetPopupWidget() { return popup_view()->GetWidget(); }
@@ -63,28 +69,32 @@ class OmniboxPopupViewViewsTest : public InProcessBrowserTest {
   OmniboxEditModel* edit_model() { return controller()->edit_model(); }
   OmniboxPopupViewViews* popup_view() {
     return static_cast<OmniboxPopupViewViews*>(
-        location_bar()->GetOmniboxPopupViewForTesting());
+        location_bar()->GetOmniboxPopupView());
   }
 
-  SkColor GetSelectedColor(Browser* browser) {
+  base::WeakPtr<OmniboxPopupViewViews> GetMetricsWeakPtr() {
+    return popup_view()->metrics_weak_factory_.GetWeakPtr();
+  }
+
+  SkColor GetSelectedColor(BrowserWindowInterface* browser) {
     return BrowserView::GetBrowserViewForBrowser(browser)
         ->GetColorProvider()
         ->GetColor(kColorOmniboxResultsBackgroundSelected);
   }
 
-  SkColor GetNormalColor(Browser* browser) {
+  SkColor GetNormalColor(BrowserWindowInterface* browser) {
     return BrowserView::GetBrowserViewForBrowser(browser)
         ->GetColorProvider()
         ->GetColor(kColorOmniboxResultsBackground);
   }
 
   void SetIsGrayscale(bool is_grayscale) {
-    ThemeServiceFactory::GetForProfile(browser()->profile())
+    ThemeServiceFactory::GetForProfile(browser()->GetProfile())
         ->SetIsGrayscale(is_grayscale);
   }
 
   void SetUseDeviceTheme(bool use_device_theme) {
-    ThemeServiceFactory::GetForProfile(browser()->profile())
+    ThemeServiceFactory::GetForProfile(browser()->GetProfile())
         ->UseDeviceTheme(use_device_theme);
   }
 
@@ -101,6 +111,7 @@ class OmniboxPopupViewViewsTest : public InProcessBrowserTest {
  private:
   ui::MockOsSettingsProvider os_settings_provider_;
   OmniboxTriggeredFeatureService triggered_feature_service_;
+  base::test::ScopedFeatureList feature_list_;
 };
 
 class OmniboxPopupSuggestionGroupHeadersTest

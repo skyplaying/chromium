@@ -17,6 +17,7 @@
 #include <array>
 #include <memory>
 
+#include "base/bits.h"
 #include "base/compiler_specific.h"
 #include "base/containers/heap_array.h"
 #include "base/containers/span.h"
@@ -403,7 +404,8 @@ class GLES2ImplementationTest : public testing::Test {
     ExpectedMemoryInfo mem;
 
     // Temporarily allocate memory and expect that memory block to be reused.
-    mem.ptr = gl_->mapped_memory_->Alloc(size, &mem.id, &mem.offset).data();
+    mem.span = gl_->mapped_memory_->Alloc(size, &mem.id, &mem.offset);
+    mem.ptr = mem.span.data();
     gl_->mapped_memory_->Free(mem.ptr);
 
     return mem;
@@ -435,6 +437,12 @@ class GLES2ImplementationTest : public testing::Test {
   bool AllowExtraTransferBufferSize() {
     return gl_->max_extra_transfer_buffer_size_ > 0;
   }
+
+  void SetQueryProcessCount(QueryTracker::Query* q, int32_t count) {
+    q->info_.sync->process_count = count;
+  }
+
+  MappedMemoryManager* mapped_memory() { return gl_->mapped_memory_.get(); }
 
   static SharedMemoryLimits SharedMemoryLimitsForTesting() {
     SharedMemoryLimits limits;
@@ -800,6 +808,31 @@ TEST_F(GLES2ImplementationTest, GetShaderSource) {
   EXPECT_EQ(sizeof(kString) - 1, static_cast<size_t>(length));
   EXPECT_STREQ(kString.str, buf);
   EXPECT_EQ(buf[sizeof(kString)], kBad);
+}
+
+// Check that for GETn functions (like glShaderiv) the writes to the result
+// pointer are clamped even if the service side returns more data. See
+// http://issues.chromium.org/issues/551593376.
+TEST_F(GLES2ImplementationTest, GetShaderiv_OversizeReturn) {
+  // Make the SizedResult hold two GLints instead of the single one for
+  // GL_SHADER_TYPE.
+  struct TwoInts {
+    GLint first = 0xBEEF;
+    GLint second = 0xCAFE;
+  };
+
+  ExpectedMemoryInfo resultBuffer =
+      GetExpectedResultMemory(sizeof(uint32_t) + sizeof(TwoInts));
+  EXPECT_CALL(*command_buffer(), OnFlush())
+      .WillOnce(SetMemory(resultBuffer.ptr, SizedResultHelper<TwoInts>({})))
+      .RetiresOnSaturation();
+
+  std::array<GLint, 2> resultAndGuard = {{0, 0}};
+  gl_->GetShaderiv(123, GL_SHADER_TYPE, resultAndGuard.data());
+
+  // Only the first GLint should be written to the output.
+  EXPECT_EQ(0xBEEF, resultAndGuard[0]);
+  EXPECT_EQ(0, resultAndGuard[1]);
 }
 
 TEST_F(GLES2ImplementationTest, ReadPixels2Reads) {
@@ -3499,158 +3532,6 @@ TEST_F(GLES2ImplementationTest, WaitSync) {
   UNSAFE_TODO(EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected))));
 }
 
-TEST_F(GLES2ImplementationTest, MapBufferRangeUnmapBufferWrite) {
-  ExpectedMemoryInfo result =
-      GetExpectedResultMemory(sizeof(cmds::MapBufferRange::Result));
-
-  EXPECT_CALL(*command_buffer(), OnFlush())
-      .WillOnce(SetMemory(result.ptr, uint32_t(1)))
-      .RetiresOnSaturation();
-
-  GLuint buffer_id;
-  gl_->GenBuffers(1, &buffer_id);
-  gl_->BindBuffer(GL_ARRAY_BUFFER, buffer_id);
-
-  void* mem = gl_->MapBufferRange(GL_ARRAY_BUFFER, 10, 64, GL_MAP_WRITE_BIT);
-  EXPECT_TRUE(mem != nullptr);
-
-  EXPECT_TRUE(gl_->UnmapBuffer(GL_ARRAY_BUFFER));
-}
-
-TEST_F(GLES2ImplementationTest, MapBufferRangeWriteWithInvalidateBit) {
-  ExpectedMemoryInfo result =
-      GetExpectedResultMemory(sizeof(cmds::MapBufferRange::Result));
-
-  EXPECT_CALL(*command_buffer(), OnFlush())
-      .WillOnce(SetMemory(result.ptr, uint32_t(1)))
-      .RetiresOnSaturation();
-
-  GLuint buffer_id;
-  gl_->GenBuffers(1, &buffer_id);
-  gl_->BindBuffer(GL_ARRAY_BUFFER, buffer_id);
-
-  GLsizeiptr kSize = 64;
-  void* mem = gl_->MapBufferRange(
-      GL_ARRAY_BUFFER, 10, kSize,
-      GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_RANGE_BIT);
-  EXPECT_TRUE(mem != nullptr);
-  std::vector<int8_t> zero(kSize);
-  UNSAFE_TODO(memset(&zero[0], 0, kSize));
-  UNSAFE_TODO(EXPECT_EQ(0, memcmp(mem, &zero[0], kSize)));
-}
-
-TEST_F(GLES2ImplementationTest, MapBufferRangeWriteWithGLError) {
-  ExpectedMemoryInfo result =
-      GetExpectedResultMemory(sizeof(cmds::MapBufferRange::Result));
-
-  // Return a result of 0 to indicate an GL error.
-  EXPECT_CALL(*command_buffer(), OnFlush())
-      .WillOnce(SetMemory(result.ptr, uint32_t(0)))
-      .RetiresOnSaturation();
-
-  GLuint buffer_id;
-  gl_->GenBuffers(1, &buffer_id);
-  gl_->BindBuffer(GL_ARRAY_BUFFER, buffer_id);
-
-  void* mem = gl_->MapBufferRange(GL_ARRAY_BUFFER, 10, 64, GL_MAP_WRITE_BIT);
-  EXPECT_TRUE(mem == nullptr);
-}
-
-TEST_F(GLES2ImplementationTest, MapBufferRangeUnmapBufferRead) {
-  ExpectedMemoryInfo result =
-      GetExpectedResultMemory(sizeof(cmds::MapBufferRange::Result));
-
-  EXPECT_CALL(*command_buffer(), OnFlush())
-      .WillOnce(SetMemory(result.ptr, uint32_t(1)))
-      .RetiresOnSaturation();
-
-  GLuint buffer_id;
-  gl_->GenBuffers(1, &buffer_id);
-  gl_->BindBuffer(GL_ARRAY_BUFFER, buffer_id);
-
-  void* mem = gl_->MapBufferRange(GL_ARRAY_BUFFER, 10, 64, GL_MAP_READ_BIT);
-  EXPECT_TRUE(mem != nullptr);
-
-  EXPECT_TRUE(gl_->UnmapBuffer(GL_ARRAY_BUFFER));
-}
-
-TEST_F(GLES2ImplementationTest, MapBufferRangeReadWithGLError) {
-  ExpectedMemoryInfo result =
-      GetExpectedResultMemory(sizeof(cmds::MapBufferRange::Result));
-
-  // Return a result of 0 to indicate an GL error.
-  EXPECT_CALL(*command_buffer(), OnFlush())
-      .WillOnce(SetMemory(result.ptr, uint32_t(0)))
-      .RetiresOnSaturation();
-
-  GLuint buffer_id;
-  gl_->GenBuffers(1, &buffer_id);
-  gl_->BindBuffer(GL_ARRAY_BUFFER, buffer_id);
-
-  void* mem = gl_->MapBufferRange(GL_ARRAY_BUFFER, 10, 64, GL_MAP_READ_BIT);
-  EXPECT_TRUE(mem == nullptr);
-}
-
-TEST_F(GLES2ImplementationTest, UnmapBufferFails) {
-  // No bound buffer.
-  EXPECT_FALSE(gl_->UnmapBuffer(GL_ARRAY_BUFFER));
-  EXPECT_EQ(GL_INVALID_OPERATION, CheckError());
-
-  GLuint buffer_id;
-  gl_->GenBuffers(1, &buffer_id);
-  gl_->BindBuffer(GL_ARRAY_BUFFER, buffer_id);
-
-  // Buffer is unmapped.
-  EXPECT_FALSE(gl_->UnmapBuffer(GL_ARRAY_BUFFER));
-  EXPECT_EQ(GL_INVALID_OPERATION, CheckError());
-}
-
-TEST_F(GLES2ImplementationTest, BufferDataUnmapsDataStore) {
-  ExpectedMemoryInfo result =
-      GetExpectedResultMemory(sizeof(cmds::MapBufferRange::Result));
-
-  EXPECT_CALL(*command_buffer(), OnFlush())
-      .WillOnce(SetMemory(result.ptr, uint32_t(1)))
-      .RetiresOnSaturation();
-
-  GLuint buffer_id;
-  gl_->GenBuffers(1, &buffer_id);
-  gl_->BindBuffer(GL_ARRAY_BUFFER, buffer_id);
-
-  void* mem = gl_->MapBufferRange(GL_ARRAY_BUFFER, 10, 64, GL_MAP_WRITE_BIT);
-  EXPECT_TRUE(mem != nullptr);
-
-  std::vector<uint8_t> data(16);
-  // BufferData unmaps the data store.
-  gl_->BufferData(GL_ARRAY_BUFFER, 16, &data[0], GL_STREAM_DRAW);
-
-  EXPECT_FALSE(gl_->UnmapBuffer(GL_ARRAY_BUFFER));
-  EXPECT_EQ(GL_INVALID_OPERATION, CheckError());
-}
-
-TEST_F(GLES2ImplementationTest, DeleteBuffersUnmapsDataStore) {
-  ExpectedMemoryInfo result =
-      GetExpectedResultMemory(sizeof(cmds::MapBufferRange::Result));
-
-  EXPECT_CALL(*command_buffer(), OnFlush())
-      .WillOnce(SetMemory(result.ptr, uint32_t(1)))
-      .RetiresOnSaturation();
-
-  GLuint buffer_id = 0;
-  gl_->GenBuffers(1, &buffer_id);
-  gl_->BindBuffer(GL_ARRAY_BUFFER, buffer_id);
-
-  void* mem = gl_->MapBufferRange(GL_ARRAY_BUFFER, 10, 64, GL_MAP_WRITE_BIT);
-  EXPECT_TRUE(mem != nullptr);
-
-  std::vector<uint8_t> data(16);
-  // DeleteBuffers unmaps the data store.
-  gl_->DeleteBuffers(1, &buffer_id);
-
-  EXPECT_FALSE(gl_->UnmapBuffer(GL_ARRAY_BUFFER));
-  EXPECT_EQ(GL_INVALID_OPERATION, CheckError());
-}
-
 TEST_F(GLES2ImplementationTest, GetInternalformativ) {
   const GLint kNumSampleCounts = 8;
   struct Cmds {
@@ -3920,6 +3801,163 @@ TEST_F(GLES2ImplementationTest, BindSampler) {
   gl_->GenSamplers(1, &expected.id);
   gl_->BindSampler(1, expected.id);
   UNSAFE_TODO(EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected))));
+}
+
+// Test that ClearMappedBufferMap correctly cleans up buffers mapped via
+// MapBufferSubDataCHROMIUM.
+TEST_F(GLES2ImplementationTest, ClearMappedBufferMap) {
+  GLuint buffer;
+  gl_->GenBuffers(1, &buffer);
+  gl_->BindBuffer(GL_ARRAY_BUFFER, buffer);
+  gl_->BufferData(GL_ARRAY_BUFFER, 64, nullptr, GL_STATIC_DRAW);
+
+  EXPECT_CALL(*command_buffer(), OnFlush()).Times(testing::AnyNumber());
+  void* addr =
+      gl_->MapBufferSubDataCHROMIUM(GL_ARRAY_BUFFER, 0, 1, GL_WRITE_ONLY);
+  ASSERT_TRUE(addr);
+}
+
+// Test that AllocateShadowCopiesForReadback skips buffers that have been
+// deleted while in the unfenced list.
+TEST_F(GLES2ImplementationTest, AllocateShadowCopiesForReadbackNullBuffer) {
+  GLuint buffer;
+  gl_->GenBuffers(1, &buffer);
+  gl_->BindBuffer(GL_ARRAY_BUFFER, buffer);
+  gl_->BufferData(GL_ARRAY_BUFFER, 64, nullptr, GL_STREAM_READ);
+
+  gl_->DeleteBuffers(1, &buffer);
+
+  GLuint query;
+  gl_->GenQueriesEXT(1, &query);
+  EXPECT_CALL(*command_buffer(), OnFlush()).Times(testing::AnyNumber());
+  gl_->BeginQueryEXT(GL_READBACK_SHADOW_COPIES_UPDATED_CHROMIUM, query);
+  // Prior to the fix, this would crash in AllocateShadowCopiesForReadback
+  // because it would dereference a null WeakPtr for the deleted buffer.
+}
+
+// Test that AllocateShadowCopiesForReadback correctly handles shadow buffer
+// allocation failures.
+TEST_F(GLES2ImplementationTest, AllocateShadowCopiesForReadbackAllocFail) {
+  GLuint buffer;
+  gl_->GenBuffers(1, &buffer);
+  gl_->BindBuffer(GL_ARRAY_BUFFER, buffer);
+  gl_->BufferData(GL_ARRAY_BUFFER, 64, nullptr, GL_STREAM_READ);
+
+  mapped_memory()->set_max_allocated_bytes(0);
+
+  GLuint query;
+  gl_->GenQueriesEXT(1, &query);
+  EXPECT_CALL(*command_buffer(), OnFlush()).Times(testing::AnyNumber());
+  gl_->BeginQueryEXT(GL_READBACK_SHADOW_COPIES_UPDATED_CHROMIUM, query);
+  // Prior to the fix, this would incorrectly attempt to issue a shadow
+  // allocation command with an invalid shared memory ID (-1).
+}
+
+// Test that AllocateShadowCopiesForReadback issues a performance warning if a
+// READ-usage buffer is written to again while a shadow copy is already
+// allocated.
+TEST_F(GLES2ImplementationTest,
+       AllocateShadowCopiesForReadbackAlreadyAllocated) {
+  GLuint buffer;
+  gl_->GenBuffers(1, &buffer);
+  gl_->BindBuffer(GL_ARRAY_BUFFER, buffer);
+  gl_->BufferData(GL_ARRAY_BUFFER, 64, nullptr, GL_STREAM_READ);
+
+  // Trigger first allocation
+  GLuint query1;
+  gl_->GenQueriesEXT(1, &query1);
+  EXPECT_CALL(*command_buffer(), OnFlush()).Times(testing::AnyNumber());
+  gl_->BeginQueryEXT(GL_READBACK_SHADOW_COPIES_UPDATED_CHROMIUM, query1);
+  gl_->EndQueryEXT(GL_READBACK_SHADOW_COPIES_UPDATED_CHROMIUM);
+
+  // Write again, adding back to unfenced list
+  const char data = 'a';
+  gl_->BufferSubData(GL_ARRAY_BUFFER, 0, 1, &data);
+
+  // Capture warning
+  std::string last_error;
+  gl_->SetErrorMessageCallback(
+      base::BindRepeating([](std::string* error, const char* message,
+                             int32_t id) { *error = message; },
+                          &last_error));
+
+  // Trigger second allocation
+  GLuint query2;
+  gl_->GenQueriesEXT(1, &query2);
+  gl_->BeginQueryEXT(GL_READBACK_SHADOW_COPIES_UPDATED_CHROMIUM, query2);
+
+  EXPECT_THAT(last_error,
+              testing::HasSubstr("READ-usage buffer was written, then fenced, "
+                                 "but written again"));
+}
+
+TEST_F(GLES2ImplementationTest, ReadbackARGBImagePixelsINTERNALPadding) {
+  gpu::Mailbox mailbox = gpu::Mailbox::Generate();
+
+  GLuint dst_width = 2;
+  GLuint dst_height = 2;
+  GLuint dst_sk_color_type = 4;  // kRGBA_8888_SkColorType
+  GLuint dst_sk_alpha_type = 1;  // kPremul_SkAlphaType
+  GLuint dst_row_bytes =
+      12;  // 2 pixels * 4 bytes/pixel = 8 bytes. Row padding = 4 bytes.
+  GLuint dst_size = dst_height * dst_row_bytes;
+
+  GLuint color_space_offset = base::bits::AlignUp(
+      sizeof(cmds::ReadbackARGBImagePixelsINTERNAL::Result), sizeof(uint64_t));
+  GLuint mailbox_offset = color_space_offset;
+  GLuint pixels_offset = base::bits::AlignUp(
+      mailbox_offset + sizeof(gpu::Mailbox), sizeof(uint64_t));
+
+  GLuint total_size =
+      pixels_offset +
+      base::bits::AlignUp(dst_size, static_cast<GLuint>(sizeof(uint64_t)));
+
+  ExpectedMemoryInfo mem = GetExpectedMappedMemory(total_size);
+
+  std::vector<uint8_t> dst_pixels(dst_size, 0xAA);
+
+  EXPECT_CALL(*command_buffer(), OnFlush())
+      .WillOnce([mem, pixels_offset, dst_size]() {
+        // Write 1 to readback_result (at the beginning of shm).
+        auto* result =
+            reinterpret_cast<cmds::ReadbackARGBImagePixelsINTERNAL::Result*>(
+                mem.ptr);
+        *result = 1;
+
+        // Write test data to the pixel portion of the shared memory.
+        auto src_pixels = mem.span.subspan(pixels_offset, dst_size);
+        // Fill src_pixels with distinct values, e.g. 1 to dst_size
+        for (size_t i = 0; i < dst_size; ++i) {
+          src_pixels[i] = static_cast<uint8_t>(i + 1);
+        }
+      })
+      .RetiresOnSaturation();
+
+  GLboolean success = gl_->ReadbackARGBImagePixelsINTERNAL(
+      mailbox.name, /*dst_color_space=*/nullptr,
+      /*dst_color_space_size=*/0, dst_size, dst_width, dst_height,
+      dst_sk_color_type, dst_sk_alpha_type, dst_row_bytes, /*src_x=*/0,
+      /*src_y=*/0, /*plane_index=*/0, dst_pixels.data());
+
+  EXPECT_TRUE(success);
+
+  // Expected output:
+  // Row 1 (pixels: 0 to 7) copied from src_pixels (0 to 7): 1, 2, 3, 4, 5, 6,
+  // 7, 8. Row 1 (padding: 8 to 11) untouched: 0xAA, 0xAA, 0xAA, 0xAA. Row 2
+  // (pixels: 12 to 19) copied from src_pixels (12 to 19): 13, 14, 15, 16, 17,
+  // 18, 19, 20. Row 2 (padding: 20 to 23) untouched: 0xAA, 0xAA, 0xAA, 0xAA.
+
+  std::vector<uint8_t> expected_pixels(dst_size, 0xAA);
+  size_t min_row_bytes = 8;  // 2 pixels * 4 bytes/pixel = 8.
+  for (size_t y = 0; y < dst_height; ++y) {
+    for (size_t x = 0; x < min_row_bytes; ++x) {
+      size_t dst_idx = y * dst_row_bytes + x;
+      size_t src_idx = y * dst_row_bytes + x;
+      expected_pixels[dst_idx] = static_cast<uint8_t>(src_idx + 1);
+    }
+  }
+
+  EXPECT_EQ(dst_pixels, expected_pixels);
 }
 
 #include "gpu/command_buffer/client/gles2_implementation_unittest_autogen.h"

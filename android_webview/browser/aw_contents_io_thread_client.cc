@@ -14,8 +14,8 @@
 #include "android_webview/browser/network_service/aw_web_resource_request.h"
 #include "android_webview/common/aw_features.h"
 #include "android_webview/common/devtools_instrumentation.h"
+#include "base/android/callback_android.h"
 #include "base/android/jni_array.h"
-#include "base/android/jni_callback.h"
 #include "base/android/jni_string.h"
 #include "base/android/jni_weak_ref.h"
 #include "base/containers/flat_set.h"
@@ -53,10 +53,8 @@
 
 using base::LazyInstance;
 using base::android::AttachCurrentThread;
-using base::android::ConvertUTF8ToJavaString;
 using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
-using base::android::ToJavaArrayOfStrings;
 using content::BrowserThread;
 using content::RenderFrameHost;
 using content::WebContents;
@@ -431,6 +429,10 @@ void AwContentsIoThreadClient::SubFrameCreated(
     int child_id,
     const blink::LocalFrameToken& parent_frame_token,
     const blink::LocalFrameToken& child_frame_token) {
+  if (base::FeatureList::IsEnabled(
+          features::kWebViewSubFrameCreatedDoNotUpdateClientMap)) {
+    return;
+  }
   RfhToIoThreadClientMap* map = RfhToIoThreadClientMap::GetInstance();
   std::optional<JavaObjectWeakGlobalRef> opt_delegate_weak_ref = map->Get(
       content::GlobalRenderFrameHostToken(child_id, parent_frame_token));

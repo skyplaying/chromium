@@ -14,20 +14,20 @@
 #include "components/tracing/common/background_tracing_state_manager.h"
 #include "components/tracing/common/tracing_scenarios_config.h"
 #include "content/browser/tracing/background_tracing_manager_impl.h"
-#include "content/browser/tracing/trace_report_database.h"
-#include "content/browser/tracing/trace_upload_list.h"
 #include "content/browser/tracing/tracing_controller_impl.h"
-#include "content/public/browser/background_tracing_manager.h"
 #include "content/public/browser/tracing_delegate.h"
 #include "mojo/public/cpp/base/big_buffer.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "services/tracing/public/cpp/background_tracing/trace_report_database.h"
+#include "services/tracing/public/cpp/background_tracing/trace_upload_list.h"
 #include "services/tracing/public/cpp/perfetto/perfetto_session.h"
+#include "third_party/perfetto/protos/perfetto/common/data_source_descriptor.gen.h"
+#include "third_party/perfetto/protos/perfetto/common/tracing_service_state.gen.h"
+#include "third_party/perfetto/protos/perfetto/common/track_event_descriptor.gen.h"
 #include "third_party/perfetto/protos/perfetto/config/trace_config.gen.h"
 #include "third_party/snappy/src/snappy.h"
-#include "third_party/webrtc_overrides/init_webrtc.h"
-#include "v8/include/v8-trace-categories.h"
 
 #if BUILDFLAG(IS_WIN)
 #include "base/functional/bind.h"
@@ -110,29 +110,6 @@ class TraceReader : public base::RefCountedThreadSafe<TraceReader> {
   ~TraceReader() = default;
 };
 
-void AddCategoriesToList(
-    const perfetto::internal::TrackEventCategoryRegistry& registry,
-    std::vector<traces_internals::mojom::TraceCategoryPtr>& categories) {
-  for (size_t i = 0; i < registry.category_count(); ++i) {
-    const auto* category = registry.GetCategory(i);
-    auto mojom_category = traces_internals::mojom::TraceCategory::New();
-    mojom_category->name = category->name;
-    mojom_category->is_group = category->IsGroup();
-    if (category->description) {
-      mojom_category->description = category->description;
-    }
-    std::vector<std::string> tags_vector;
-    for (const char* tag : category->tags) {
-      if (!tag) {
-        break;
-      }
-      tags_vector.push_back(tag);
-    }
-    mojom_category->tags = std::move(tags_vector);
-    categories.push_back(std::move(mojom_category));
-  }
-}
-
 }  // namespace
 
 TracesInternalsHandler::TracesInternalsHandler(
@@ -152,7 +129,7 @@ TracesInternalsHandler::TracesInternalsHandler(
 TracesInternalsHandler::TracesInternalsHandler(
     mojo::PendingReceiver<traces_internals::mojom::PageHandler> receiver,
     mojo::PendingRemote<traces_internals::mojom::Page> page,
-    TraceUploadList& trace_upload_list,
+    tracing::TraceUploadList& trace_upload_list,
     BackgroundTracingManagerImpl& background_tracing_manager,
     TracingDelegate* tracing_delegate)
     : task_runner_(base::SequencedTaskRunner::GetCurrentDefault()),
@@ -280,16 +257,27 @@ void TracesInternalsHandler::StopTraceSession(
 
 void TracesInternalsHandler::GetTrackEventCategories(
     GetTrackEventCategoriesCallback callback) {
-  std::vector<traces_internals::mojom::TraceCategoryPtr> categories;
-
-  AddCategoriesToList(base::perfetto_track_event::internal::kCategoryRegistry,
-                      categories);
-#ifdef V8_USE_PERFETTO
-  AddCategoriesToList(v8::GetTrackEventCategoryRegistry(), categories);
-#endif  // V8_USE_PERFETTO
-  AddCategoriesToList(GetWebRtcTrackEventCategoryRegistry(), categories);
-
-  std::move(callback).Run(std::move(categories));
+  tracing::QueryTrackEventCategories(
+      CreateTracingSession(),
+      base::BindOnce(
+          [](GetTrackEventCategoriesCallback callback,
+             std::vector<perfetto::protos::gen::TrackEventCategory>
+                 categories) {
+            std::vector<traces_internals::mojom::TraceCategoryPtr>
+                mojom_categories;
+            for (const auto& category : categories) {
+              auto mojom_category =
+                  traces_internals::mojom::TraceCategory::New();
+              mojom_category->name = category.name();
+              mojom_category->is_group = false;
+              mojom_category->description = category.description();
+              mojom_category->tags = category.tags();
+              mojom_categories.push_back(std::move(mojom_category));
+            }
+            std::move(callback).Run(std::move(mojom_categories));
+          },
+          std::move(callback)),
+      task_runner_);
 }
 
 void TracesInternalsHandler::GetBufferUsage(GetBufferUsageCallback callback) {
@@ -360,7 +348,7 @@ void TracesInternalsHandler::GetAllTraceReports(
 
 void TracesInternalsHandler::OnGetAllReportsTaskComplete(
     GetAllTraceReportsCallback callback,
-    std::vector<ClientTraceReport> results) {
+    std::vector<tracing::ClientTraceReport> results) {
   std::vector<traces_internals::mojom::ClientTraceReportPtr> reports;
   for (const auto& report : results) {
     reports.push_back(traces_internals::mojom::ClientTraceReport::New(
@@ -424,11 +412,11 @@ void TracesInternalsHandler::SetScenariosConfigFromBuffer(
 
 bool TracesInternalsHandler::SetScenariosConfig(
     const perfetto::protos::gen::ChromeFieldTracingConfig& config) {
-  content::BackgroundTracingManager::DataFiltering data_filtering =
+  tracing::BackgroundTracingManager::DataFiltering data_filtering =
       tracing::BackgroundTracingStateManager::GetInstance()
               .privacy_filter_enabled()
-          ? content::BackgroundTracingManager::ANONYMIZE_DATA
-          : content::BackgroundTracingManager::NO_DATA_FILTERING;
+          ? tracing::BackgroundTracingManager::ANONYMIZE_DATA
+          : tracing::BackgroundTracingManager::NO_DATA_FILTERING;
   background_tracing_manager_->OverwritePresetScenarios(std::move(config),
                                                         data_filtering);
   const auto& enabled_scenarios =
@@ -448,10 +436,10 @@ void TracesInternalsHandler::MaybeSetupPresetTracingFromFieldTrial() {
     return;
   }
   auto& config = tracing::BackgroundTracingStateManager::GetInstance();
-  content::BackgroundTracingManager::DataFiltering data_filtering =
+  tracing::BackgroundTracingManager::DataFiltering data_filtering =
       config.privacy_filter_enabled()
-          ? content::BackgroundTracingManager::ANONYMIZE_DATA
-          : content::BackgroundTracingManager::NO_DATA_FILTERING;
+          ? tracing::BackgroundTracingManager::ANONYMIZE_DATA
+          : tracing::BackgroundTracingManager::NO_DATA_FILTERING;
   background_tracing_manager_->AddPresetScenarios(
       std::move(*tracing_scenarios_config), data_filtering);
 }

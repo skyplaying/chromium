@@ -75,6 +75,8 @@ constexpr float k360DegreesInRadians = base::DegToRad(360.0f);
 constexpr float kPointsToPixels = static_cast<float>(printing::kPixelsPerInch) /
                                   static_cast<float>(printing::kPointsPerInch);
 
+constexpr float kFontSizeMinimumFactor = 3.0f;
+
 gfx::SizeF GetPageSizeInPoints(FPDF_PAGE page) {
   return gfx::SizeF(FPDF_GetPageWidthF(page), FPDF_GetPageHeightF(page));
 }
@@ -220,25 +222,29 @@ bool FloatAtLeastHalf(float f1, float f2) {
   return ratio >= 0.5f;
 }
 
-bool IsRadioButtonOrCheckBox(int button_type) {
-  return button_type == FPDF_FORMFIELD_CHECKBOX ||
-         button_type == FPDF_FORMFIELD_RADIOBUTTON;
-}
-
 template <typename T>
 bool CompareTextRuns(const T& a, const T& b) {
   return a.text_range.index < b.text_range.index;
 }
 
-// Set text run style information based on the `text_object` associated with a
-// character of the text run.
-AccessibilityTextStyleInfo CalculateTextRunStyleInfo(
-    FPDF_PAGEOBJECT text_object) {
+// Set text run style information based on the text_object associated with the
+// given `text_page` at the given `char_index` of the text run.
+AccessibilityTextStyleInfo CalculateTextRunStyleInfo(FPDF_TEXTPAGE text_page,
+                                                     int char_index) {
   AccessibilityTextStyleInfo style_info;
-
   float font_size;
+  FPDF_PAGEOBJECT text_object = FPDFText_GetTextObject(text_page, char_index);
   if (FPDFTextObj_GetFontSize(text_object, &font_size)) {
-    style_info.font_size = font_size;
+    FS_MATRIX matrix;
+    if (::features::IsPdfAccessibilityHeuristicEnhancementsEnabled() &&
+        FPDFText_GetMatrix(text_page, char_index, &matrix)) {
+      // Scale the font size with the font matrix to get a more accurate size.
+      // Font size is based only on the vertical height, which corresponds to
+      // c & d in the matrix.
+      style_info.font_size = font_size * std::hypot(matrix.c, matrix.d);
+    } else {
+      style_info.font_size = font_size;
+    }
   }
 
   FPDF_FONT font = FPDFTextObj_GetFont(text_object);
@@ -259,12 +265,9 @@ AccessibilityTextStyleInfo CalculateTextRunStyleInfo(
     style_info.is_italic = (font_flags & kFlagItalic);
   }
 
-  // Bold text is considered bold when greater than or equal to 700.
-  constexpr int kStandardBoldValue = 700;
   int font_weight = FPDFFont_GetWeight(font);
   if (font_weight != -1) {
     style_info.font_weight = font_weight;
-    style_info.is_bold = style_info.font_weight >= kStandardBoldValue;
   }
 
   unsigned int fill_r;
@@ -299,14 +302,15 @@ AccessibilityTextStyleInfo CalculateTextRunStyleInfo(
   return style_info;
 }
 
-// Returns true if the `text_object` associated with a given character has the
-// same text style as the text run. `is_searchified` indicates that the text
-// and style are from searchify.
-bool AreTextStyleEqual(FPDF_PAGEOBJECT text_object,
+// Returns true if the text_object on the given `text_page` at the given
+// `char_index` has the same text style as the text run. `is_searchified`
+// indicates that the text and style are from searchify.
+bool AreTextStyleEqual(FPDF_TEXTPAGE text_page,
+                       int char_index,
                        const AccessibilityTextStyleInfo& style,
                        bool is_searchified) {
   AccessibilityTextStyleInfo char_style =
-      CalculateTextRunStyleInfo(text_object);
+      CalculateTextRunStyleInfo(text_page, char_index);
 
   // Font size of the searchify text is set based on the height of the bounding
   // box around each word. Therefore the font size depends on whether that word
@@ -324,8 +328,7 @@ bool AreTextStyleEqual(FPDF_PAGEOBJECT text_object,
          char_style.render_mode == style.render_mode &&
          char_style.fill_color == style.fill_color &&
          char_style.stroke_color == style.stroke_color &&
-         char_style.is_italic == style.is_italic &&
-         char_style.is_bold == style.is_bold;
+         char_style.is_italic == style.is_italic;
 }
 
 gfx::RectF GetRotatedRectF(PageRotation rotation,
@@ -438,17 +441,17 @@ PDFiumPage::LinkTarget::~LinkTarget() = default;
 PDFiumPage::PDFiumPage(PDFiumEngine* engine, uint32_t i)
     : engine_(engine), index_(i) {}
 
-PDFiumPage::PDFiumPage(PDFiumPage&& that) = default;
-
 PDFiumPage::~PDFiumPage() {
-  DCHECK_EQ(0, preventing_unload_count_);
+  DCHECK_EQ(0, preventing_page_unload_count_);
+  DCHECK_EQ(0, preventing_text_page_unload_count_);
 }
 
-void PDFiumPage::Unload() {
+bool PDFiumPage::Unload() {
   // Do not unload while in the middle of a load, or if some external source
   // expects `this` to stay loaded.
-  if (preventing_unload_count_)
-    return;
+  if (preventing_page_unload_count_ || preventing_text_page_unload_count_) {
+    return false;
+  }
 
   text_page_.reset();
 
@@ -458,6 +461,7 @@ void PDFiumPage::Unload() {
     }
     page_.reset();
   }
+  return true;
 }
 
 FPDF_PAGE PDFiumPage::GetPage() {
@@ -465,7 +469,7 @@ FPDF_PAGE PDFiumPage::GetPage() {
   if (!available_)
     return nullptr;
   if (!page_) {
-    ScopedUnloadPreventer scoped_unload_preventer(this);
+    ScopedPageUnloadPreventer scoped_unload_preventer(this);
     page_.reset(FPDF_LoadPage(engine_->doc(), index_));
     if (page_) {
 #if BUILDFLAG(ENABLE_SCREEN_AI_SERVICE)
@@ -483,14 +487,15 @@ FPDF_TEXTPAGE PDFiumPage::GetTextPage() {
   if (!available_)
     return nullptr;
   if (!text_page_) {
-    ScopedUnloadPreventer scoped_unload_preventer(this);
+    ScopedPageUnloadPreventer scoped_page_unload_preventer(this);
+    ScopedTextPageUnloadPreventer scoped_text_page_unload_preventer(this);
     text_page_.reset(FPDFText_LoadPage(GetPage()));
   }
   return text_page();
 }
 
 void PDFiumPage::ReloadTextPage() {
-  CHECK_EQ(preventing_unload_count_, 0);
+  CHECK_EQ(preventing_text_page_unload_count_, 0);
   text_page_.reset();
   GetTextPage();
 }
@@ -709,6 +714,10 @@ std::unique_ptr<AccessibilityStructureElement> PDFiumPage::GetStructureSubtree(
   tree_node->language = base::UTF16ToUTF8(CallPDFiumWideStringBufferApi(
       base::BindRepeating(&FPDF_StructElement_GetLang, element),
       /*check_expected_size=*/true));
+  tree_node->abbreviation_expansion =
+      base::UTF16ToUTF8(CallPDFiumWideStringBufferApi(
+          base::BindRepeating(&FPDF_StructElement_GetExpansion, element),
+          /*check_expected_size=*/true));
 
   AssociateMarkedContentWithStructureElement(element, tree_node.get());
 
@@ -955,8 +964,8 @@ bool PDFiumPage::IsPageSearchified() const {
   return has_searchify_added_text_.has_value();
 }
 
-bool PDFiumPage::PageCanBeUnloaded() const {
-  return preventing_unload_count_ == 0;
+bool PDFiumPage::CanReloadTextPage() const {
+  return preventing_text_page_unload_count_ == 0;
 }
 #endif  // BUILDFLAG(ENABLE_SCREEN_AI_SERVICE)
 
@@ -986,35 +995,6 @@ std::vector<AccessibilityHighlightInfo> PDFiumPage::GetHighlightInfo() {
   std::sort(highlight_info.begin(), highlight_info.end(),
             CompareTextRuns<AccessibilityHighlightInfo>);
   return highlight_info;
-}
-
-std::vector<AccessibilityTextFieldInfo> PDFiumPage::GetTextFieldInfo() {
-  std::vector<AccessibilityTextFieldInfo> text_field_info;
-  if (!available_)
-    return text_field_info;
-
-  CalculateTextRuns();
-  PopulateAnnotations();
-
-  text_field_info.reserve(text_fields_.size());
-  for (size_t i = 0; i < text_fields_.size(); ++i) {
-    const TextField& text_field = text_fields_[i];
-    AccessibilityTextFieldInfo cur_info;
-    cur_info.name = text_field.name;
-    cur_info.value = text_field.value;
-    cur_info.index_in_page = i;
-    cur_info.is_read_only = !!(text_field.flags & FPDF_FORMFLAG_READONLY);
-    cur_info.is_required = !!(text_field.flags & FPDF_FORMFLAG_REQUIRED);
-    cur_info.is_password = !!(text_field.flags & FPDF_FORMFLAG_TEXT_PASSWORD);
-    // TODO(crbug.com/40661774): Update text run index to nearest text run to
-    // text field bounds.
-    cur_info.text_run_index = text_runs_.size();
-    cur_info.bounds = gfx::RectF(
-        text_field.bounding_rect.x(), text_field.bounding_rect.y(),
-        text_field.bounding_rect.width(), text_field.bounding_rect.height());
-    text_field_info.push_back(std::move(cur_info));
-  }
-  return text_field_info;
 }
 
 PDFiumPage::Area PDFiumPage::GetLinkTargetAtIndex(int link_index,
@@ -1314,9 +1294,7 @@ AccessibilityTextRunInfo PDFiumPage::CalculateTextRunInfoAt(
 
   uint32_t char_index = actual_start_char_index;
 
-  // Set text run's style info from the first character of the text run.
-  FPDF_PAGEOBJECT text_object = FPDFText_GetTextObject(text_page, char_index);
-  info.style = CalculateTextRunStyleInfo(text_object);
+  info.style = CalculateTextRunStyleInfo(text_page, char_index);
 
   gfx::RectF start_char_rect =
       GetFloatCharRectInPixels(page, text_page, char_index);
@@ -1327,12 +1305,7 @@ AccessibilityTextRunInfo PDFiumPage::CalculateTextRunInfoAt(
   // Without it, if a text run starts with a '.', its small bounding box could
   // lead to a break in the text run after only one space. Ex: ". Hello World"
   // would be split in two runs: "." and "Hello World".
-  float font_size_minimum;
-  if (FPDFTextObj_GetFontSize(text_object, &font_size_minimum)) {
-    font_size_minimum /= 3.0f;
-  } else {
-    font_size_minimum = 0.0f;
-  }
+  float font_size_minimum = info.style.font_size / kFontSizeMinimumFactor;
   gfx::SizeF avg_char_size(font_size_minimum, font_size_minimum);
   int non_whitespace_chars_count = 1;
   AddCharSizeToAverageCharSize(start_char_rect.size(), &avg_char_size,
@@ -1368,6 +1341,9 @@ AccessibilityTextRunInfo PDFiumPage::CalculateTextRunInfoAt(
   float character_distance_break_threshold_ratio =
       info.is_searchified ? 5.0f : 2.5f;
 
+  FPDF_PAGEOBJECT text_object =
+      FPDFText_GetTextObject(text_page, actual_start_char_index);
+
   // Continue adding characters until heuristics indicate we should end the text
   // run.
   while (char_index < chars_count) {
@@ -1389,7 +1365,7 @@ AccessibilityTextRunInfo PDFiumPage::CalculateTextRunInfoAt(
       FPDF_PAGEOBJECT current_text_object =
           FPDFText_GetTextObject(text_page, char_index);
       if (current_text_object != text_object &&
-          !AreTextStyleEqual(current_text_object, info.style,
+          !AreTextStyleEqual(text_page, char_index, info.style,
                              info.is_searchified)) {
         break;
       }
@@ -1696,23 +1672,6 @@ void PDFiumPage::PopulateTextRunTypeAndImageAltTextForStructElement(
         FPDF_StructElement_GetMarkedContentIdAtIndex(current_element, 0);
   }
   if (marked_content_id >= 0) {
-    if (base::FeatureList::IsEnabled(chrome_pdf::features::kPdfTags)) {
-      auto text_runs_iter =
-          marked_content_id_to_text_runs_map_.find(marked_content_id);
-      if (text_runs_iter != marked_content_id_to_text_runs_map_.end()) {
-        const std::vector<size_t>& text_run_indices = text_runs_iter->second;
-        const std::string tag_type =
-            base::UTF16ToUTF8(CallPDFiumWideStringBufferApi(
-                base::BindRepeating(&FPDF_StructElement_GetType,
-                                    current_element),
-                /*check_expected_size=*/true));
-        for (size_t text_run_index : text_run_indices) {
-          CHECK_LT(text_run_index, text_runs_.size());
-          text_runs_[text_run_index].tag_type = tag_type;
-        }
-      }
-    }
-
     auto image_iter = marked_content_id_to_images_map_.find(marked_content_id);
     if (image_iter != marked_content_id_to_images_map_.end() &&
         images_[image_iter->second].alt_text.empty()) {
@@ -1749,10 +1708,6 @@ void PDFiumPage::PopulateAnnotations() {
     switch (subtype) {
       case FPDF_ANNOT_HIGHLIGHT: {
         PopulateHighlight(annot.get());
-        break;
-      }
-      case FPDF_ANNOT_WIDGET: {
-        PopulateFormField(annot.get());
         break;
       }
       default:
@@ -1806,122 +1761,6 @@ void PDFiumPage::PopulateHighlight(FPDF_ANNOTATION annot) {
       /*check_expected_size=*/true));
 
   highlights_.push_back(std::move(highlight));
-}
-
-void PDFiumPage::PopulateTextField(FPDF_ANNOTATION annot) {
-  DCHECK(annot);
-  FPDF_FORMHANDLE form_handle = engine_->form();
-  DCHECK_EQ(FPDFAnnot_GetFormFieldType(form_handle, annot),
-            FPDF_FORMFIELD_TEXTFIELD);
-
-  TextField text_field;
-  if (!PopulateFormFieldProperties(annot, &text_field))
-    return;
-
-  text_field.value = base::UTF16ToUTF8(CallPDFiumWideStringBufferApi(
-      base::BindRepeating(&FPDFAnnot_GetFormFieldValue, form_handle, annot),
-      /*check_expected_size=*/true));
-  text_fields_.push_back(std::move(text_field));
-}
-
-void PDFiumPage::PopulateChoiceField(FPDF_ANNOTATION annot) {
-  DCHECK(annot);
-  FPDF_FORMHANDLE form_handle = engine_->form();
-  int form_field_type = FPDFAnnot_GetFormFieldType(form_handle, annot);
-  DCHECK(form_field_type == FPDF_FORMFIELD_LISTBOX ||
-         form_field_type == FPDF_FORMFIELD_COMBOBOX);
-
-  ChoiceField choice_field;
-  if (!PopulateFormFieldProperties(annot, &choice_field))
-    return;
-
-  int options_count = FPDFAnnot_GetOptionCount(form_handle, annot);
-  if (options_count < 0)
-    return;
-
-  choice_field.options.resize(options_count);
-  for (int i = 0; i < options_count; ++i) {
-    choice_field.options[i].name =
-        base::UTF16ToUTF8(CallPDFiumWideStringBufferApi(
-            base::BindRepeating(&FPDFAnnot_GetOptionLabel, form_handle, annot,
-                                i),
-            /*check_expected_size=*/true));
-    choice_field.options[i].is_selected =
-        FPDFAnnot_IsOptionSelected(form_handle, annot, i);
-  }
-  choice_fields_.push_back(std::move(choice_field));
-}
-
-void PDFiumPage::PopulateButton(FPDF_ANNOTATION annot) {
-  DCHECK(annot);
-  FPDF_FORMHANDLE form_handle = engine_->form();
-  int button_type = FPDFAnnot_GetFormFieldType(form_handle, annot);
-  DCHECK(button_type == FPDF_FORMFIELD_PUSHBUTTON ||
-         IsRadioButtonOrCheckBox(button_type));
-
-  Button button;
-  if (!PopulateFormFieldProperties(annot, &button))
-    return;
-
-  button.type = button_type;
-  if (IsRadioButtonOrCheckBox(button_type)) {
-    button.control_count = FPDFAnnot_GetFormControlCount(form_handle, annot);
-    if (button.control_count <= 0)
-      return;
-
-    button.control_index = FPDFAnnot_GetFormControlIndex(form_handle, annot);
-    button.value = base::UTF16ToUTF8(CallPDFiumWideStringBufferApi(
-        base::BindRepeating(&FPDFAnnot_GetFormFieldExportValue, form_handle,
-                            annot),
-        /*check_expected_size=*/true));
-    button.is_checked = FPDFAnnot_IsChecked(form_handle, annot);
-  }
-  buttons_.push_back(std::move(button));
-}
-
-void PDFiumPage::PopulateFormField(FPDF_ANNOTATION annot) {
-  DCHECK_EQ(FPDFAnnot_GetSubtype(annot), FPDF_ANNOT_WIDGET);
-  int form_field_type = FPDFAnnot_GetFormFieldType(engine_->form(), annot);
-
-  // TODO(crbug.com/40661774): Populate other types of form fields too.
-  switch (form_field_type) {
-    case FPDF_FORMFIELD_PUSHBUTTON:
-    case FPDF_FORMFIELD_CHECKBOX:
-    case FPDF_FORMFIELD_RADIOBUTTON: {
-      PopulateButton(annot);
-      break;
-    }
-    case FPDF_FORMFIELD_COMBOBOX:
-    case FPDF_FORMFIELD_LISTBOX: {
-      PopulateChoiceField(annot);
-      break;
-    }
-    case FPDF_FORMFIELD_TEXTFIELD: {
-      PopulateTextField(annot);
-      break;
-    }
-    default:
-      break;
-  }
-}
-
-bool PDFiumPage::PopulateFormFieldProperties(FPDF_ANNOTATION annot,
-                                             FormField* form_field) {
-  DCHECK(annot);
-  const std::optional<PdfRect> maybe_rect = GetAnnotRect(annot);
-  if (!maybe_rect.has_value()) {
-    return false;
-  }
-
-  // We use the bounding box of the form field as the bounding rect.
-  form_field->bounding_rect = PageToScreen(
-      gfx::Point(), 1.0, maybe_rect.value(), PageOrientation::kOriginal);
-  FPDF_FORMHANDLE form_handle = engine_->form();
-  form_field->name = base::UTF16ToUTF8(CallPDFiumWideStringBufferApi(
-      base::BindRepeating(&FPDFAnnot_GetFormFieldName, form_handle, annot),
-      /*check_expected_size=*/true));
-  form_field->flags = FPDFAnnot_GetFormFieldFlags(form_handle, annot);
-  return true;
 }
 
 bool PDFiumPage::GetUnderlyingTextRangeForRect(const gfx::RectF& rect,
@@ -2113,27 +1952,39 @@ void PDFiumPage::MarkAvailable() {
     std::move(thumbnail_callback_).Run();
 }
 
-PDFiumPage::ScopedUnloadPreventer::ScopedUnloadPreventer(PDFiumPage* page)
+PDFiumPage::ScopedPageUnloadPreventer::ScopedPageUnloadPreventer(
+    PDFiumPage* page)
     : page_(page) {
-  page_->preventing_unload_count_++;
+  page_->preventing_page_unload_count_++;
 }
 
-PDFiumPage::ScopedUnloadPreventer::ScopedUnloadPreventer(
-    const ScopedUnloadPreventer& that)
-    : ScopedUnloadPreventer(that.page_) {}
+PDFiumPage::ScopedPageUnloadPreventer::ScopedPageUnloadPreventer(
+    const ScopedPageUnloadPreventer& that)
+    : ScopedPageUnloadPreventer(that.page_) {}
 
-PDFiumPage::ScopedUnloadPreventer& PDFiumPage::ScopedUnloadPreventer::operator=(
-    const ScopedUnloadPreventer& that) {
+PDFiumPage::ScopedPageUnloadPreventer&
+PDFiumPage::ScopedPageUnloadPreventer::operator=(
+    const ScopedPageUnloadPreventer& that) {
   if (page_ != that.page_) {
-    page_->preventing_unload_count_--;
+    page_->preventing_page_unload_count_--;
     page_ = that.page_;
-    page_->preventing_unload_count_++;
+    page_->preventing_page_unload_count_++;
   }
   return *this;
 }
 
-PDFiumPage::ScopedUnloadPreventer::~ScopedUnloadPreventer() {
-  page_->preventing_unload_count_--;
+PDFiumPage::ScopedPageUnloadPreventer::~ScopedPageUnloadPreventer() {
+  page_->preventing_page_unload_count_--;
+}
+
+PDFiumPage::ScopedTextPageUnloadPreventer::ScopedTextPageUnloadPreventer(
+    PDFiumPage* page)
+    : page_(page) {
+  page_->preventing_text_page_unload_count_++;
+}
+
+PDFiumPage::ScopedTextPageUnloadPreventer::~ScopedTextPageUnloadPreventer() {
+  page_->preventing_text_page_unload_count_--;
 }
 
 PDFiumPage::Link::Link() = default;
@@ -2153,36 +2004,5 @@ PDFiumPage::Highlight::Highlight() = default;
 PDFiumPage::Highlight::Highlight(const Highlight& that) = default;
 
 PDFiumPage::Highlight::~Highlight() = default;
-
-PDFiumPage::FormField::FormField() = default;
-
-PDFiumPage::FormField::FormField(const FormField& that) = default;
-
-PDFiumPage::FormField::~FormField() = default;
-
-PDFiumPage::TextField::TextField() = default;
-
-PDFiumPage::TextField::TextField(const TextField& that) = default;
-
-PDFiumPage::TextField::~TextField() = default;
-
-PDFiumPage::ChoiceFieldOption::ChoiceFieldOption() = default;
-
-PDFiumPage::ChoiceFieldOption::ChoiceFieldOption(
-    const ChoiceFieldOption& that) = default;
-
-PDFiumPage::ChoiceFieldOption::~ChoiceFieldOption() = default;
-
-PDFiumPage::ChoiceField::ChoiceField() = default;
-
-PDFiumPage::ChoiceField::ChoiceField(const ChoiceField& that) = default;
-
-PDFiumPage::ChoiceField::~ChoiceField() = default;
-
-PDFiumPage::Button::Button() = default;
-
-PDFiumPage::Button::Button(const Button& that) = default;
-
-PDFiumPage::Button::~Button() = default;
 
 }  // namespace chrome_pdf

@@ -7,12 +7,15 @@ package org.chromium.chrome.browser.findinpage;
 import android.view.ActionMode;
 import android.view.View;
 import android.view.ViewStub;
+import android.widget.FrameLayout;
 
 import org.chromium.base.ObserverList;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.back_press.BackPressManager;
+import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
+import org.chromium.chrome.browser.ui.side_ui.SideUiStateProvider;
 import org.chromium.components.browser_ui.widget.gesture.BackPressHandler;
 import org.chromium.ui.base.WindowAndroid;
 
@@ -26,27 +29,42 @@ public class FindToolbarManager {
     private final ActionMode.Callback mCallback;
     private final ObserverList<FindToolbarObserver> mObservers;
     private final BackPressManager mBackPressManager;
+    private final FrameLayout mSecondaryUiContainer;
+    private final @Nullable View mAnchorView;
+    private final BrowserControlsStateProvider mBrowserControlsStateProvider;
+    private @Nullable SideUiStateProvider mSideUiStateProvider;
 
     /**
      * Creates an instance of a {@link FindToolbarManager}.
+     *
      * @param findToolbarStub The {@link ViewStub} where for the find toolbar.
      * @param tabModelSelector The {@link TabModelSelector} for the containing activity.
      * @param windowAndroid The {@link WindowAndroid} for the containing activity.
-     * @param callback The ActionMode.Callback that will be used when selection occurs on the
-     *         {@link FindToolbar}.
+     * @param callback The ActionMode.Callback that will be used when selection occurs on the {@link
+     *     FindToolbar}.
      * @param backPressManager The {@link BackPressManager} for intercepting back press.
+     * @param secondaryUiContainer The {@link FrameLayout} that will hold the {@link FindResultBar}.
+     * @param anchorView The {@link View} below which the find toolbar and result bar are
+     *     positioned.
+     * @param browserControlsStateProvider Provider for browser controls state.
      */
     public FindToolbarManager(
             ViewStub findToolbarStub,
             TabModelSelector tabModelSelector,
             WindowAndroid windowAndroid,
             ActionMode.Callback callback,
-            BackPressManager backPressManager) {
+            BackPressManager backPressManager,
+            FrameLayout secondaryUiContainer,
+            @Nullable View anchorView,
+            BrowserControlsStateProvider browserControlsStateProvider) {
         mFindToolbarStub = findToolbarStub;
         mTabModelSelector = tabModelSelector;
         mWindowAndroid = windowAndroid;
         mCallback = callback;
         mBackPressManager = backPressManager;
+        mSecondaryUiContainer = secondaryUiContainer;
+        mAnchorView = anchorView;
+        mBrowserControlsStateProvider = browserControlsStateProvider;
         mObservers = new ObserverList<>();
     }
 
@@ -83,6 +101,10 @@ public class FindToolbarManager {
             mFindToolbar.setTabModelSelector(mTabModelSelector);
             mFindToolbar.setWindowAndroid(mWindowAndroid);
             mFindToolbar.setActionModeCallbackForTextEdit(mCallback);
+            mFindToolbar.setSecondaryUiContainer(mSecondaryUiContainer);
+            mFindToolbar.setAnchorView(mAnchorView);
+            mFindToolbar.setBrowserControlsStateProvider(mBrowserControlsStateProvider);
+            mFindToolbar.setSideUiStateProvider(mSideUiStateProvider);
             mFindToolbar.setObserver(
                     new FindToolbarObserver() {
                         @Override
@@ -107,6 +129,25 @@ public class FindToolbarManager {
             mBackPressManager.addHandler(mFindToolbar, BackPressHandler.Type.FIND_TOOLBAR);
         }
         mFindToolbar.activate();
+    }
+
+    /**
+     * Sets the {@link SideUiStateProvider} to observe side UI changes.
+     *
+     * @param sideUiStateProvider The {@link SideUiStateProvider} object.
+     */
+    public void setSideUiStateProvider(@Nullable SideUiStateProvider sideUiStateProvider) {
+        mSideUiStateProvider = sideUiStateProvider;
+        if (mFindToolbar != null) {
+            mFindToolbar.setSideUiStateProvider(mSideUiStateProvider);
+        }
+    }
+
+    /** Destroys the {@link FindToolbarManager} and cleans up observers. */
+    public void destroy() {
+        if (mFindToolbar != null) {
+            mFindToolbar.destroy();
+        }
     }
 
     /** Sets the find query text string. */

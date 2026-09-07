@@ -16,6 +16,7 @@
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
+#include "build/build_config.h"
 #include "chrome/browser/apps/app_service/chrome_app_deprecation/chrome_app_deprecation.h"
 #include "chrome/browser/ash/drive/drive_integration_service.h"
 #include "chrome/browser/ash/drive/drive_integration_service_factory.h"
@@ -30,6 +31,7 @@
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/ash/cast_config/cast_config_controller_media_router.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/common/chrome_constants.h"
@@ -116,7 +118,7 @@ class JSTestStarter : public content::TestNavigationObserver {
   }
 
   // TestNavigationObserver:
-  void OnDidFinishNavigation(
+  void NavigationOfInterestDidFinish(
       content::NavigationHandle* navigation_handle) override {
     // If the background page scripts have run, the test will exist, so just run
     // it. Otherwise, schedule the test to be run at the end of the background
@@ -131,8 +133,6 @@ class JSTestStarter : public content::TestNavigationObserver {
     ASSERT_TRUE(content::ExecJs(
         navigation_handle->GetRenderFrameHost(),
         base::ReplaceStringPlaceholders(kScript, {test_name_}, nullptr)));
-
-    TestNavigationObserver::OnDidFinishNavigation(navigation_handle);
   }
 
  private:
@@ -453,7 +453,8 @@ class DriveFileSystemExtensionApiTest : public FileSystemExtensionApiTestBase {
     fake_drivefs_helper_ = std::make_unique<drive::FakeDriveFsHelper>(
         profile, drivefs_mount_point.DirName());
     return new drive::DriveIntegrationService(
-        g_browser_process->local_state(), profile, "",
+        g_browser_process->local_state(), profile,
+        IdentityManagerFactory::GetForProfile(profile), "",
         test_cache_root_.GetPath(),
         fake_drivefs_helper_->CreateFakeDriveFsListenerFactory());
   }
@@ -562,8 +563,9 @@ class MultiProfileDriveFileSystemExtensionApiTest
     const auto& drivefs_helper = fake_drivefs_helpers_[profile] =
         std::make_unique<drive::FakeDriveFsHelper>(profile, drivefs_dir);
     return new drive::DriveIntegrationService(
-        g_browser_process->local_state(), profile, std::string(), cache_dir,
-        drivefs_helper->CreateFakeDriveFsListenerFactory());
+        g_browser_process->local_state(), profile,
+        IdentityManagerFactory::GetForProfile(profile), std::string(),
+        cache_dir, drivefs_helper->CreateFakeDriveFsListenerFactory());
   }
 
   base::ScopedTempDir tmp_dir_;
@@ -631,7 +633,8 @@ class LocalAndDriveFileSystemExtensionApiTest
     fake_drivefs_helper_ = std::make_unique<drive::FakeDriveFsHelper>(
         profile, drivefs_mount_point.DirName());
     return new drive::DriveIntegrationService(
-        g_browser_process->local_state(), profile, "",
+        g_browser_process->local_state(), profile,
+        IdentityManagerFactory::GetForProfile(profile), "",
         test_cache_root_.GetPath(),
         fake_drivefs_helper_->CreateFakeDriveFsListenerFactory());
   }
@@ -661,7 +664,7 @@ class FileSystemExtensionApiTestWithApps
 
   // FileManagerPrivateApiTest:
   void SetUpOnMainThread() override {
-    Profile* profile = browser()->profile();
+    Profile* profile = browser()->GetProfile();
     file_manager::test::AddDefaultComponentExtensionsOnMainThread(profile);
     ash::SystemWebAppManager::GetForTest(profile)
         ->InstallSystemAppsForTesting();
@@ -696,7 +699,11 @@ constexpr char kAppLaunchMetric[] = "Apps.DefaultAppLaunch.FromFileManager";
 //
 // A separate bug (crbug.com/431933537) is filed to specifically track the
 // blink::CSSParserImpl::ParseStyleSheet issue.
-#if defined(MEMORY_SANITIZER)
+//
+// TODO(crbug.com/494946255): Disabled on CrOS x ASan: consistently
+// fails on "Linux Chromium OS ASan LSan Tests."
+#if defined(MEMORY_SANITIZER) || \
+    (BUILDFLAG(IS_CHROMEOS) && defined(ADDRESS_SANITIZER))
 #define MAYBE_OpenGalleryForPng DISABLED_OpenGalleryForPng
 #else
 #define MAYBE_OpenGalleryForPng OpenGalleryForPng
@@ -763,9 +770,7 @@ IN_PROC_BROWSER_TEST_F(LocalFileSystemExtensionApiTest, DefaultFileHandler) {
 //
 // DriveFileSystemExtensionApiTests.
 //
-// This test is flaky. See https://crbug.com/1008880.
-IN_PROC_BROWSER_TEST_F(DriveFileSystemExtensionApiTest,
-                       DISABLED_FileSystemOperations) {
+IN_PROC_BROWSER_TEST_F(DriveFileSystemExtensionApiTest, FileSystemOperations) {
   EXPECT_TRUE(RunFileSystemExtensionApiTest(
       "file_browser/filesystem_operations_test",
       FILE_PATH_LITERAL("manifest.json"), "", FLAGS_NONE))

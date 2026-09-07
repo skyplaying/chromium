@@ -2,17 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import type {RecentlyClosedTab, Tab, TabGroup, TabSearchItemElement} from 'chrome://tab-search.top-chrome/tab_search.js';
 import {TabAlertState, TabData, TabGroupColor, TabItemType} from 'chrome://tab-search.top-chrome/tab_search.js';
 import {assertDeepEquals, assertEquals, assertNotEquals, assertNotReached} from 'chrome://webui-test/chai_assert.js';
 import {microtasksFinished} from 'chrome://webui-test/test_util.js';
 
 import {createTab, sampleToken} from './tab_search_test_data.js';
+import {initLoadTimeDataWithDefaults} from './tab_search_test_helper.js';
 
 suite('TabSearchItemTest', () => {
   let tabSearchItem: TabSearchItemElement;
 
-  function setupTest(data: TabData) {
+  function setupTest(
+      data: TabData,
+      loadTimeOverriddenData?: {[key: string]: number|string|boolean}) {
+    initLoadTimeDataWithDefaults(loadTimeOverriddenData);
     tabSearchItem = document.createElement('tab-search-item');
     tabSearchItem.data = data;
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
@@ -44,10 +49,12 @@ suite('TabSearchItemTest', () => {
   }
 
   function assertHighlight(node: HTMLElement, expected: string[]) {
-    assertDeepEquals(
-        expected,
-        Array.from(node.querySelectorAll('.search-highlight-hit'))
-            .map(e => e ? e.textContent : ''));
+    const hits =
+        Array.from(node.querySelectorAll<HTMLElement>('.search-highlight-hit'));
+    assertDeepEquals(expected, hits.map(e => e ? e.textContent : ''));
+    for (const hit of hits) {
+      assertEquals('700', getComputedStyle(hit).fontWeight);
+    }
   }
 
   test('Highlight', () => {
@@ -125,8 +132,14 @@ suite('TabSearchItemTest', () => {
         tabSearchItem.shadowRoot.querySelector('#groupDot')!;
     assertNotEquals(null, groupDotElement);
     const groupDotComputedStyle = getComputedStyle(groupDotElement);
+
+    const useColorRefresh = loadTimeData.getBoolean('useTabGroupColorRefresh');
+    const expectedColorVar = useColorRefresh ?
+        '--tab-group-refresh-color-blue' :
+        '--tab-group-color-blue';
+
     assertEquals(
-        groupDotComputedStyle.getPropertyValue('--tab-group-color-blue'),
+        groupDotComputedStyle.getPropertyValue(expectedColorVar),
         groupDotComputedStyle.getPropertyValue('--group-dot-color'));
 
     assertNotEquals(
@@ -179,5 +192,15 @@ suite('TabSearchItemTest', () => {
       assertNotReached(
           `Should not have thrown error: '${(e as Error).message}`);
     }
+  });
+
+  // Regression test for crbug.com/504594425
+  test('SecondaryTextDirection', () => {
+    const secondaryTextInner =
+        tabSearchItem.shadowRoot.querySelector('#secondaryTextInner')!;
+    assertEquals(
+        'ltr',
+        (secondaryTextInner.computedStyleMap().get('direction') as CSSUnitValue)
+            .value);
   });
 });

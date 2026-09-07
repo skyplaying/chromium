@@ -17,9 +17,10 @@ import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.ActivityTabProvider;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsVisibilityManager;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.chrome.browser.theme.ThemeColorProvider;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.dom_distiller.core.DomDistillerFeatures;
 import org.chromium.components.dom_distiller.core.DomDistillerUrlUtils;
@@ -27,7 +28,7 @@ import org.chromium.content_public.browser.NavigationHandle;
 
 /** Manages the lifespan of the {@link ReaderModeBottomSheetCoordinator}. */
 @NullMarked
-public class ReaderModeBottomSheetManager extends EmptyTabObserver implements Destroyable {
+public class ReaderModeBottomSheetManager implements Destroyable {
     // Delay before the bottom sheet automatically peeks on initial load.
     private static int sBottomSheetPeekDelay = 1500;
 
@@ -35,8 +36,8 @@ public class ReaderModeBottomSheetManager extends EmptyTabObserver implements De
         sBottomSheetPeekDelay = delayMs;
     }
 
-    private final EmptyTabObserver mEmptyTabObserver =
-            new EmptyTabObserver() {
+    private final TabObserver mTabObserver =
+            new TabObserver() {
                 @Override
                 public void onDidFinishNavigationInPrimaryMainFrame(
                         Tab tab, NavigationHandle navigationHandle) {
@@ -137,13 +138,13 @@ public class ReaderModeBottomSheetManager extends EmptyTabObserver implements De
 
     private void addTabObservers() {
         if (mActiveTab != null) {
-            mActiveTab.addObserver(mEmptyTabObserver);
+            mActiveTab.addObserver(mTabObserver);
         }
     }
 
     private void removeTabObservers() {
         if (mActiveTab != null) {
-            mActiveTab.removeObserver(mEmptyTabObserver);
+            mActiveTab.removeObserver(mTabObserver);
         }
     }
 
@@ -158,7 +159,7 @@ public class ReaderModeBottomSheetManager extends EmptyTabObserver implements De
         if (browserControlHiddenRatio == 0) {
             cancelDelayedBottomSheetPeekTask();
             assert activeTab != null;
-            show(activeTab);
+            show(activeTab, /* isShowOnScroll= */ true);
         } else if (browserControlHiddenRatio >= 0.5f) {
             hide();
         }
@@ -171,7 +172,7 @@ public class ReaderModeBottomSheetManager extends EmptyTabObserver implements De
             if (!DomDistillerFeatures.sReaderModeDelayBottomSheetPeek.isEnabled()
                     || sBottomSheetPeekDelay == 0) {
                 assert activeTab != null;
-                show(activeTab);
+                show(activeTab, /* isShowOnScroll= */ false);
                 return;
             }
             mDelayBottomSheetPeekTask =
@@ -180,7 +181,7 @@ public class ReaderModeBottomSheetManager extends EmptyTabObserver implements De
                                 Tab tab = mActiveTab;
                                 if (shouldShowBottomSheet(tab)) {
                                     assert tab != null;
-                                    show(tab);
+                                    show(tab, /* isShowOnScroll= */ false);
                                 }
                                 mDelayBottomSheetPeekTask = null;
                             });
@@ -208,7 +209,15 @@ public class ReaderModeBottomSheetManager extends EmptyTabObserver implements De
     }
 
     // Creates and shows the reader mode bottom sheet.
-    private void show(Tab tab) {
+    private void show(Tab tab, boolean isShowOnScroll) {
+        if (isShowOnScroll) {
+            BottomSheetContent currentContent = mBottomSheetController.getCurrentSheetContent();
+            if (currentContent != null
+                    && currentContent.getPriority()
+                            == BottomSheetContent.ContentPriority.COBROWSE) {
+                return;
+            }
+        }
         if (mCoordinator == null) {
             mCoordinator =
                     new ReaderModeBottomSheetCoordinator(

@@ -2,7 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
+import("//build/config/chromeos/args.gni")
 
 assert(is_chromeos)
 
@@ -22,7 +22,6 @@ static_library("os_feedback") {
     "//ash/webui/os_feedback_ui",
     "//ash/webui/os_feedback_ui/backend",
     "//ash/webui/os_feedback_ui/mojom",
-    "//ash/webui/system_apps/public:system_web_app_type",
     "//base",
     "//chrome/browser:browser_process",
     "//chrome/browser/ash/browser_delegate",
@@ -31,15 +30,18 @@ static_library("os_feedback") {
     "//chrome/browser/ash/system_web_apps/apps",
     "//chrome/browser/feedback",
     "//chrome/browser/profiles:profile",
-    "//chrome/browser/signin",
-    "//chrome/browser/ui:browser_list",
     "//chrome/browser/ui/ash/system_web_apps",
     "//chrome/browser/ui/dialogs:browser_dialogs",
     "//chrome/browser/ui/webui/ash/diagnostics_dialog",
     "//chrome/common",
+    "//chromeos/ash/components/browser_context_helper",
+    "//chromeos/ash/components/signin:identity_manager_provider",
+    "//chromeos/ash/components/system_web_apps:system_web_app_type",
     "//chromeos/ash/services/multidevice_setup/public/cpp",
+    "//components/account_id",
     "//components/feedback",
     "//components/feedback/content",
+    "//components/signin/public/identity_manager",
     "//content/public/browser",
     "//extensions/browser",
     "//mojo/public/cpp/base",
@@ -87,13 +89,16 @@ source_set("browser_tests") {
     "//chrome/browser/ash/system_web_apps",
     "//chrome/browser/signin",
     "//chrome/browser/ui",
+    "//chrome/browser/ui:chrome_pages",
     "//chrome/browser/ui/ash/system_web_apps",
     "//chrome/browser/ui/webui/ash/os_feedback_dialog",
+    "//chrome/common",
     "//chrome/test:test_support",
     "//components/feedback",
     "//components/feedback/content",
     "//components/feedback/content:factory",
     "//components/prefs",
+    "//components/user_manager",
     "//content/test:test_support",
     "//extensions/browser",
     "//testing/gmock",
@@ -121,6 +126,7 @@ if (!is_chromeos_device) {
       "//base",
       "//base/test:test_support",
       "//chrome/browser/ui",
+      "//chrome/browser/ui:chrome_pages",
       "//chrome/test:test_support",
       "//chrome/test/base/ash/interactive:test_support",
       "//components/feedback",

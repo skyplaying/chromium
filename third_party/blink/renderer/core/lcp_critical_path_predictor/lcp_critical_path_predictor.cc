@@ -231,11 +231,9 @@ void LCPCriticalPathPredictor::OnLargestContentfulPaintUpdated(
     if (maybe_image_url.has_value()) {
       const KURL& lcp_image_url = *maybe_image_url;
       if (!lcp_image_url.IsEmpty() && lcp_image_url.IsValid() &&
-          lcp_image_url.ProtocolIsInHTTPFamily()) {
+          lcp_image_url.ProtocolIsInHttpFamily()) {
         auto lcp_origin = url::Origin::Create((GURL)lcp_image_url);
         bool is_lcp_cross_origin = !lcp_origin.IsSameOriginWith(root_origin);
-        base::UmaHistogramBoolean("Blink.LCPP.CrossOriginLcpImage",
-                                  is_lcp_cross_origin);
         if (is_lcp_cross_origin) {
           GetHost().AddPreconnectOrigin(SecurityOrigin::Create(lcp_image_url));
         }
@@ -282,7 +280,7 @@ void LCPCriticalPathPredictor::OnLargestContentfulPaintUpdated(
         }
         KURL parsed_url(url);
         if (parsed_url.IsEmpty() || !parsed_url.IsValid() ||
-            !parsed_url.ProtocolIsInHTTPFamily()) {
+            !parsed_url.ProtocolIsInHttpFamily()) {
           continue;
         }
         filtered_script_urls.push_back(parsed_url);
@@ -318,7 +316,7 @@ void LCPCriticalPathPredictor::OnFontFetched(const KURL& url) {
   if (!base::FeatureList::IsEnabled(blink::features::kLCPPFontURLPredictor)) {
     return;
   }
-  if (!url.ProtocolIsInHTTPFamily()) {
+  if (!url.ProtocolIsInHttpFamily()) {
     return;
   }
   if (url.GetString().length() > GetLCPPFontURLPredictorMaxUrlLength()) {
@@ -339,7 +337,7 @@ void LCPCriticalPathPredictor::OnStartPreload(
   if (!frame_->IsOutermostMainFrame()) {
     return;
   }
-  if (!url.ProtocolIsInHTTPFamily()) {
+  if (!url.ProtocolIsInHttpFamily()) {
     return;
   }
   if (url.GetString().length() >

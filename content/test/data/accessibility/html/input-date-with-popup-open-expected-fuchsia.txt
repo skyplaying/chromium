@@ -5,20 +5,20 @@ UNKNOWN focusable
 ++++++++UNKNOWN hidden
 ++++++++++UNKNOWN
 ++++++++++++UNKNOWN
-++++++++++++++UNKNOWN focusable label='Month' actions='{SET_VALUE}' value='09'
+++++++++++++++UNKNOWN label='Month' actions='{SET_VALUE}' value='09'
 ++++++++++++++++STATIC_TEXT label='09'
 ++++++++++++++++++UNKNOWN label='09'
 ++++++++++++++STATIC_TEXT label='/'
 ++++++++++++++++UNKNOWN label='/'
-++++++++++++++UNKNOWN focusable label='Day' actions='{SET_VALUE}' value='01'
+++++++++++++++UNKNOWN label='Day' actions='{SET_VALUE}' value='01'
 ++++++++++++++++STATIC_TEXT label='01'
 ++++++++++++++++++UNKNOWN label='01'
 ++++++++++++++STATIC_TEXT label='/'
 ++++++++++++++++UNKNOWN label='/'
-++++++++++++++UNKNOWN focusable label='Year' actions='{SET_VALUE}' value='2008'
+++++++++++++++UNKNOWN label='Year' actions='{SET_VALUE}' value='2008'
 ++++++++++++++++STATIC_TEXT label='2008'
 ++++++++++++++++++UNKNOWN label='2008'
-++++++++++UNKNOWN focusable label='Show date picker' actions='{DEFAULT}'
+++++++++++UNKNOWN label='Show date picker' actions='{DEFAULT}'
 ++++++++UNKNOWN
 ++++++++++UNKNOWN hidden
 ++++++++++++UNKNOWN actions='{DEFAULT}'
@@ -26,9 +26,10 @@ UNKNOWN focusable
 ++++++++++++++++UNKNOWN
 ++++++++++++++++++UNKNOWN hidden
 ++++++++++++++++++++UNKNOWN
-++++++++++++++++++++++BUTTON focusable label='Show month selection panel' actions='{DEFAULT}'
-++++++++++++++++++++++++STATIC_TEXT label='September 2008'
-++++++++++++++++++++++++++UNKNOWN label='September 2008'
+++++++++++++++++++++++BUTTON focusable label='September 2008' actions='{DEFAULT}' secondary_label='Show month selection panel'
+++++++++++++++++++++++++UNKNOWN
+++++++++++++++++++++++++++STATIC_TEXT label='September 2008'
+++++++++++++++++++++++++++++UNKNOWN label='September 2008'
 ++++++++++++++++++++++++IMAGE
 ++++++++++++++++++++BUTTON focusable label='Show previous month' actions='{DEFAULT}' secondary_label='Show previous month'
 ++++++++++++++++++++++IMAGE

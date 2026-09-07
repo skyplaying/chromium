@@ -3,12 +3,13 @@
 // found in the LICENSE file.
 
 #include "base/test/test_future.h"
-#include "chrome/browser/actor/actor_features.h"
 #include "chrome/browser/actor/actor_test_util.h"
 #include "chrome/browser/actor/tools/tool_request.h"
 #include "chrome/browser/actor/tools/tools_test_util.h"
 #include "chrome/common/actor.mojom.h"
 #include "chrome/common/chrome_features.h"
+#include "components/actor/core/actor_features.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -46,10 +47,10 @@ class ActorNavigateToolBrowserTest : public ActorToolsTest {
 
 // Basic test of the NavigateTool.
 IN_PROC_BROWSER_TEST_F(ActorNavigateToolBrowserTest, NavigateTool) {
-  const GURL url_start =
-      embedded_test_server()->GetURL("/actor/blank.html?start");
-  const GURL url_target =
-      embedded_test_server()->GetURL("/actor/blank.html?target");
+  const GURL url_start = embedded_https_test_server().GetURL(
+      "example.com", "/actor/blank.html?start");
+  const GURL url_target = embedded_https_test_server().GetURL(
+      "example.com", "/actor/blank.html?target");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url_start));
 
   std::unique_ptr<ToolRequest> action =
@@ -65,10 +66,10 @@ IN_PROC_BROWSER_TEST_F(ActorNavigateToolBrowserTest, NavigateTool) {
 // completion until the new page has fired the load event.
 IN_PROC_BROWSER_TEST_F(ActorNavigateToolBrowserTest,
                        NavigateTool_DelaysUntilLoad) {
-  const GURL url_first =
-      embedded_test_server()->GetURL("/actor/simple_iframe.html?start");
-  const GURL url_second =
-      embedded_test_server()->GetURL("/actor/simple_iframe.html?target");
+  const GURL url_first = embedded_https_test_server().GetURL(
+      "example.com", "/actor/simple_iframe.html?start");
+  const GURL url_second = embedded_https_test_server().GetURL(
+      "example.com", "/actor/simple_iframe.html?target");
 
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url_first));
   const GURL url_subframe =
@@ -126,8 +127,8 @@ IN_PROC_BROWSER_TEST_F(ActorNavigateToolBrowserTest,
                        NavigateTool_RecordActingOnTask) {
   ASSERT_TRUE(actor_task().GetTabs().empty());
 
-  const GURL url_target =
-      embedded_test_server()->GetURL("/actor/blank.html?target");
+  const GURL url_target = embedded_https_test_server().GetURL(
+      "example.com", "/actor/blank.html?target");
 
   std::unique_ptr<ToolRequest> action =
       MakeNavigateRequest(*active_tab(), url_target.spec());

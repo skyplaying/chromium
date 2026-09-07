@@ -41,6 +41,10 @@ std::string ReasonIdToString(DisabledReasonId reason_id) {
       return "RequestedByWebViewClient";
     case DisabledReasonId::kPostMessageByWebViewClient:
       return "PostMessageByWebViewClient";
+    case DisabledReasonId::kExtensionFrame:
+      return "ExtensionFrame";
+    case DisabledReasonId::kPrivilegedWebContents:
+      return "PrivilegedWebContents";
   }
 }
 
@@ -50,6 +54,7 @@ std::string ReasonIdToReportString(DisabledReasonId reason_id) {
   switch (reason_id) {
     case DisabledReasonId::kExtensionMessaging:
     case DisabledReasonId::kExtensionSentMessageToCachedFrame:
+    case DisabledReasonId::kExtensionFrame:
       return base::FeatureList::IsEnabled(
                  blink::features::kBackForwardCacheUpdateNotRestoredReasonsName)
                  ? "masked"

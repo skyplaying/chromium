@@ -6,19 +6,19 @@
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/permissions/exclusive_access_permission_prompt_view.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
+#include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/common/content_settings.h"
-#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "ui/views/views_switches.h"
-#include "url/url_constants.h"
 
 namespace {
 
@@ -109,7 +109,7 @@ class ExclusiveAccessPermissionPromptInteractiveTest
         [=, this]() {
           HostContentSettingsMap* hcsm =
               HostContentSettingsMapFactory::GetForProfile(
-                  browser()->profile());
+                  browser()->GetProfile());
           for (const auto& type : GetContentSettings(test_content_settings)) {
             if (hcsm->GetContentSetting(GetOrigin(), GetOrigin(), type) !=
                 expected_value) {
@@ -125,9 +125,9 @@ class ExclusiveAccessPermissionPromptInteractiveTest
   MultiStep CheckPointerLockPrompt(bool displayed) {
     return Steps(CheckResult(
         [=, this]() {
-          return static_cast<content::WebContentsDelegate*>(browser())
+          return BrowserWebContentsDelegate::From(browser())
               ->IsWaitingForPointerLockPrompt(
-                  browser()->tab_strip_model()->GetActiveWebContents());
+                  browser()->GetTabStripModel()->GetActiveWebContents());
         },
         displayed));
   }
@@ -220,7 +220,7 @@ IN_PROC_BROWSER_TEST_P(ExclusiveAccessPermissionPromptInteractiveTest,
       HideTabModalUI(), ClickOnElement(TestContentSettings::kKeyboardLock),
       PressPromptButton(GetButtonViewId(CONTENT_SETTING_ALLOW)), Do([&]() {
         auto* manager = permissions::PermissionRequestManager::FromWebContents(
-            browser()->tab_strip_model()->GetActiveWebContents());
+            browser()->GetTabStripModel()->GetActiveWebContents());
         ASSERT_FALSE(manager->has_pending_requests());
       }));
 }

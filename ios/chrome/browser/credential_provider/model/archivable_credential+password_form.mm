@@ -7,11 +7,13 @@
 #import "components/affiliations/core/browser/affiliation_utils.h"
 #import "components/password_manager/core/browser/password_form.h"
 #import "components/password_manager/core/browser/password_manager_util.h"
+#import "components/password_manager/core/browser/password_string.h"
 #import "components/password_manager/core/browser/password_ui_utils.h"
 #import "ios/chrome/browser/credential_provider/model/archivable_credential+password_form.h"
 #import "ios/chrome/browser/credential_provider/model/credential_provider_util.h"
 #import "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #import "url/gurl.h"
+#import "url/origin.h"
 
 namespace {
 
@@ -30,9 +32,10 @@ password_manager::PasswordForm PasswordFormFromCredential(
   DCHECK(url.is_valid());
 
   form.url = password_manager_util::StripAuthAndParams(url);
-  form.signon_realm = form.url.DeprecatedGetOriginAsURL().spec();
+  form.signon_realm = url::Origin::Create(form.url).GetURL().spec();
   form.username_value = SysNSStringToUTF16(credential.username);
-  form.password_value = SysNSStringToUTF16(credential.password);
+  form.password_value =
+      password_manager::PasswordString(SysNSStringToUTF16(credential.password));
   form.times_used_in_html_form = credential.rank;
   form.SetNoteWithEmptyUniqueDisplayName(SysNSStringToUTF16(credential.note));
 
@@ -91,18 +94,26 @@ password_manager::PasswordForm PasswordFormFromCredential(
 
   DCHECK(serviceIdentifier.length);
 
+  base::Time max_time =
+      std::max({passwordForm.date_created, passwordForm.date_last_filled,
+                passwordForm.date_last_used});
+  int64_t lastUsedTimeMicroseconds =
+      max_time.ToDeltaSinceWindowsEpoch().InMicroseconds();
+
   BOOL inAccountStore = (passwordForm.in_store ==
                          password_manager::PasswordForm::Store::kAccountStore);
   return [self initWithFavicon:favicon
                           gaia:inAccountStore ? gaia : nil
-                      password:SysUTF16ToNSString(passwordForm.password_value)
+                      password:SysUTF16ToNSString(
+                                   passwordForm.password_value.value())
                           rank:passwordForm.times_used_in_html_form
               recordIdentifier:RecordIdentifierForPasswordForm(passwordForm)
              serviceIdentifier:serviceIdentifier
                    serviceName:serviceName
       registryControlledDomain:registryControlledDomain
                       username:SysUTF16ToNSString(passwordForm.username_value)
-                          note:note];
+                          note:note
+                  lastUsedTime:lastUsedTimeMicroseconds];
 }
 
 @end

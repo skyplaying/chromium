@@ -7,6 +7,7 @@
 #include <memory>
 #include <utility>
 
+#include "base/memory/raw_ptr.h"
 #include "cc/layers/layer.h"
 #include "media/mojo/mojom/media_player.mojom-blink.h"
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
@@ -86,6 +87,8 @@ class VideoWakeLockPictureInPictureService final
       bool,
       mojo::PendingRemote<mojom::blink::PictureInPictureSessionObserver>,
       const gfx::Rect&,
+      bool,
+      const media::VideoSpatialFormat&,
       StartSessionCallback callback) override {
     mojo::PendingRemote<mojom::blink::PictureInPictureSession> session_remote;
     session_ = std::make_unique<VideoWakeLockPictureInPictureSession>(
@@ -164,7 +167,8 @@ class VideoWakeLockTestWebFrameClient
   }
 
  private:
-  MediaPlayerClient* media_player_client_ = nullptr;
+  raw_ptr<MediaPlayerClient, UnprotectedInRelease | DanglingUntriaged>
+      media_player_client_ = nullptr;
   std::unique_ptr<WebMediaPlayer> web_media_player_;
 };
 
@@ -309,7 +313,8 @@ class VideoWakeLockTest : public testing::Test {
   Persistent<HTMLVideoElement> video_;
   Persistent<VideoWakeLock> video_wake_lock_;
 
-  VideoWakeLockMediaPlayer* media_player_ = nullptr;
+  raw_ptr<VideoWakeLockMediaPlayer, UnprotectedInRelease | DanglingUntriaged>
+      media_player_ = nullptr;
   scoped_refptr<cc::Layer> fake_layer_;
 
   VideoWakeLockPictureInPictureService pip_service_;

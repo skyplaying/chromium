@@ -13,6 +13,7 @@
 
 #include "base/byte_size.h"
 #include "base/check_op.h"
+#include "base/containers/span.h"
 #include "base/debug/debugging_buildflags.h"
 #include "base/features.h"
 #include "base/numerics/clamped_math.h"
@@ -326,9 +327,9 @@ void StackTrace::InitializeFeatures() {
   if (FeatureList::IsEnabled(
           features::kStackScanMaxFramePointerToStackEndGap)) {
     g_stack_scan_max_fp_to_stack_end_gap_bytes =
-        MiBU(checked_cast<unsigned>(
-                 features::kStackScanMaxFramePointerToStackEndGapThresholdMB
-                     .Get()))
+        MiB(checked_cast<unsigned>(
+                features::kStackScanMaxFramePointerToStackEndGapThresholdMB
+                    .Get()))
             .InBytes();
   }
 #endif  // BUILDFLAG(CAN_UNWIND_WITH_FRAME_POINTERS)
@@ -372,7 +373,7 @@ std::string StackTrace::ToStringWithPrefix(cstring_view prefix_string) const {
 #if !defined(__UCLIBC__) && !defined(_AIX)
   OutputToStreamWithPrefix(&stream, prefix_string);
 #endif
-  return stream.str();
+  return std::move(stream).str();
 }
 
 // static

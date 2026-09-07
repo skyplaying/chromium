@@ -59,6 +59,7 @@ class NullDelegate : public EventListenerMap::Delegate {
  public:
   void OnListenerAdded(const EventListener* listener) override {}
   void OnListenerRemoved(const EventListener* listener) override {}
+  void OnListenerUpdated(const EventListener* listener) override {}
 };
 
 // Testing subclass of MDnsAPI which replaces calls to core browser components
@@ -123,12 +124,12 @@ class EventServiceListSizeMatcher
 
   bool MatchAndExplain(const Event& e,
                        testing::MatchResultListener* listener) const override {
-    if (e.event_args.size() != 1) {
+    if (e.args().size() != 1) {
       *listener << "event.event_arg.GetSize() should be 1 but is "
-                << e.event_args.size();
+                << e.args().size();
       return false;
     }
-    const base::ListValue* services = e.event_args[0].GetIfList();
+    const base::ListValue* services = e.args()[0].GetIfList();
     if (!services) {
       *listener << "event's service list argument is not a base::ListValue";
       return false;

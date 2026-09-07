@@ -25,7 +25,6 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.HistogramWatcher;
@@ -40,7 +39,6 @@ import java.util.Set;
 
 /** Unit tests for {@link CreditCardScannerManager}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class CreditCardScannerManagerTest {
     @Rule public final MockitoRule mockito = MockitoJUnit.rule();
 
@@ -191,7 +189,7 @@ public class CreditCardScannerManagerTest {
     public void onFieldEditToScannedField() {
         CreditCardScannerManager manager = new CreditCardScannerManager(mDelegate);
         manager.setScanResultForTesting(ScanResult.SCANNED_WITHOUT_ADDITIONAL_USER_EDITS);
-        FieldType field = FieldType.NUMBER;
+        @FieldType int field = FieldType.NUMBER;
         manager.getFieldsFilledByScannerForTesting().add(field);
 
         manager.fieldEdited(field);
@@ -272,7 +270,7 @@ public class CreditCardScannerManagerTest {
         manager.onScanCompleted(
                 /* cardholderName= */ "", cardNumber, /* expirationMonth= */ 0, expirationYear);
 
-        Set<FieldType> fieldTypes = manager.getFieldsFilledByScannerForTesting();
+        Set<@FieldType Integer> fieldTypes = manager.getFieldsFilledByScannerForTesting();
 
         // Only fields populated with real values (i.e. card number and expiration year) should be
         // in the set as fields filled by the scanner.

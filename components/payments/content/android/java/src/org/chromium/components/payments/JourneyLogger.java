@@ -85,6 +85,21 @@ public class JourneyLogger {
         JourneyLoggerJni.get().setPayClicked(mJourneyLoggerAndroid);
     }
 
+    /** Records that PaymentRequest.canMakePayment() was called. */
+    public void setCanMakePaymentCalled() {
+        JourneyLoggerJni.get().setCanMakePaymentCalled(mJourneyLoggerAndroid);
+    }
+
+    /** Records that PaymentRequest.hasEnrolledInstrument() was called. */
+    public void setHasEnrolledInstrumentCalled() {
+        JourneyLoggerJni.get().setHasEnrolledInstrumentCalled(mJourneyLoggerAndroid);
+    }
+
+    /** Records that the PaymentRequest was initiated in a cross-site iframe. */
+    public void setInitiatedInCrossSiteIframe() {
+        JourneyLoggerJni.get().setInitiatedInCrossSiteIframe(mJourneyLoggerAndroid);
+    }
+
     /**
      * Records the method that has been selected and invoked.
      *
@@ -170,11 +185,6 @@ public class JourneyLogger {
         }
     }
 
-    /** Records that the No Matching Credentials UX was shown to the user. */
-    public void setNoMatchingCredentialsShown() {
-        JourneyLoggerJni.get().setNoMatchingCredentialsShown(mJourneyLoggerAndroid);
-    }
-
     /**
      * Records that the payment request has entered the given checkout step.
      *
@@ -215,6 +225,12 @@ public class JourneyLogger {
 
         void setPayClicked(long nativeJourneyLoggerAndroid);
 
+        void setCanMakePaymentCalled(long nativeJourneyLoggerAndroid);
+
+        void setHasEnrolledInstrumentCalled(long nativeJourneyLoggerAndroid);
+
+        void setInitiatedInCrossSiteIframe(long nativeJourneyLoggerAndroid);
+
         void setSelectedMethod(long nativeJourneyLoggerAndroid, int paymentMethodCategory);
 
         void setRequestedInformation(
@@ -231,8 +247,6 @@ public class JourneyLogger {
         void setAborted(long nativeJourneyLoggerAndroid, int reason);
 
         void setNotShown(long nativeJourneyLoggerAndroid);
-
-        void setNoMatchingCredentialsShown(long nativeJourneyLoggerAndroid);
 
         void recordCheckoutStep(long nativeJourneyLoggerAndroid, int step);
 

@@ -10,11 +10,13 @@ import {MetricsReporterImpl} from '//resources/js/metrics_reporter/metrics_repor
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
 import type {AutocompleteMatch, AutocompleteResult, OmniboxPopupSelection} from '//resources/mojo/components/omnibox/browser/searchbox.mojom-webui.js';
-import {RenderType, SideType} from '//resources/mojo/components/omnibox/browser/searchbox.mojom-webui.js';
+import {RenderType, SelectionLineState, SideType} from '//resources/mojo/components/omnibox/browser/searchbox.mojom-webui.js';
 
 import {getCss} from './searchbox_dropdown.css.js';
 import {getHtml} from './searchbox_dropdown.html.js';
+import {kDefaultSelection} from './searchbox_match.js';
 import type {SearchboxMatchElement} from './searchbox_match.js';
+import {selectionsEqual} from './searchbox_selection_mixin.js';
 import {renderTypeToClass, sideTypeToClass} from './utils.js';
 
 // The '%' operator in JS returns negative numbers. This workaround avoids that.
@@ -77,13 +79,22 @@ export class SearchboxDropdownElement extends CrLitElement {
 
       result: {type: Object},
 
-      /** Index of the selected match. */
+      // TODO(crbug.com/519713849): Remove selectedMatchIndex once
+      // kRealboxVirtualFocusNavigation is launched.
       selectedMatchIndex: {
         type: Number,
         notify: true,
       },
 
+      /** Omnibox focused selection state. */
+      selection: {
+        type: Object,
+        notify: true,
+      },
+
       showThumbnail: {type: Boolean},
+
+      virtualFocusEnabled: {type: Boolean},
 
       //========================================================================
       // Private properties
@@ -104,12 +115,19 @@ export class SearchboxDropdownElement extends CrLitElement {
   accessor hasSecondarySide: boolean = false;
   accessor hasEmptyInput: boolean = false;
   accessor result: AutocompleteResult|null = null;
+  // TODO(crbug.com/519713849): Remove selectedMatchIndex once
+  // kRealboxVirtualFocusNavigation is launched.
   accessor selectedMatchIndex: number = -1;
+  accessor selection: OmniboxPopupSelection = kDefaultSelection;
   accessor showThumbnail: boolean = false;
+  accessor virtualFocusEnabled: boolean =
+      loadTimeData.valueExists('realboxVirtualFocusNavigation') &&
+      loadTimeData.getBoolean('realboxVirtualFocusNavigation');
   private accessor showSecondarySide_: boolean = false;
 
   /** The list of selectable match elements. */
   private selectableMatchElements_: SearchboxMatchElement[] = [];
+
 
   override willUpdate(changedProperties: PropertyValues<this>) {
     super.willUpdate(changedProperties);
@@ -122,6 +140,18 @@ export class SearchboxDropdownElement extends CrLitElement {
     if (changedProperties.has('result') ||
         changedProperties.has('canShowSecondarySide')) {
       this.showSecondarySide_ = this.computeShowSecondarySide_();
+    }
+
+    if (changedProperties.has('result') && this.virtualFocusEnabled) {
+      if (this.selection.state !== SelectionLineState.kNormal &&
+          this.selection.state !== SelectionLineState.kFocusedButtonAim) {
+        this.selection = {
+          line: this.selection.line,
+          state: SelectionLineState.kNormal,
+          actionIndex: 0,
+        };
+        this.fire('selection-changed', {value: this.selection});
+      }
     }
   }
 
@@ -149,6 +179,10 @@ export class SearchboxDropdownElement extends CrLitElement {
   /** Unselects the currently selected match, if any. */
   unselect() {
     this.selectedMatchIndex = -1;
+    this.selection = kDefaultSelection;
+    if (this.virtualFocusEnabled) {
+      this.fire('selection-changed', {value: this.selection});
+    }
   }
 
   /** Focuses the selected match, if any. */
@@ -158,31 +192,34 @@ export class SearchboxDropdownElement extends CrLitElement {
 
   /** Selects the first match. */
   selectFirst() {
-    this.selectedMatchIndex = 0;
-    return this.updateComplete;
+    return this.selectIndex(0);
   }
 
   /** Selects the match at the given index. */
   selectIndex(index: number) {
     this.selectedMatchIndex = index;
+    if (this.virtualFocusEnabled) {
+      const match = this.result?.matches[index];
+      const newSelection: OmniboxPopupSelection =
+          match && (!match.isHidden || match.allowedToBeDefaultMatch) ?
+          {
+            line: index,
+            state: SelectionLineState.kNormal,
+            actionIndex: 0,
+          } :
+          kDefaultSelection;
+      if (!selectionsEqual(this.selection, newSelection)) {
+        this.selection = newSelection;
+        this.fire('selection-changed', {value: this.selection});
+      }
+    }
     return this.updateComplete;
   }
 
   updateSelection(
-      oldSelection: OmniboxPopupSelection, selection: OmniboxPopupSelection) {
-    // If the updated selection is a new match, remove any remaining selection
-    // on the previously selected match.
-    if (oldSelection.line !== selection.line) {
-      const oldMatch = this.selectableMatchElements[this.selectedMatchIndex];
-      if (oldMatch) {
-        oldMatch.selection = selection;
-      }
-    }
+      _oldSelection: OmniboxPopupSelection, selection: OmniboxPopupSelection) {
     this.selectIndex(selection.line);
-    const newMatch = this.selectableMatchElements[this.selectedMatchIndex];
-    if (newMatch) {
-      newMatch.selection = selection;
-    }
+    this.selection = selection;
   }
 
   /**
@@ -279,7 +316,9 @@ export class SearchboxDropdownElement extends CrLitElement {
   }
 
   protected isSelected_(match: AutocompleteMatch): boolean {
-    return this.matchIndex_(match) === this.selectedMatchIndex;
+    const selectedIndex = this.virtualFocusEnabled ? this.selection.line :
+                                                     this.selectedMatchIndex;
+    return this.matchIndex_(match) === selectedIndex;
   }
 
   /**

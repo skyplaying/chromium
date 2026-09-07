@@ -5,6 +5,7 @@
 #include "cc/metrics/compositor_frame_reporting_controller.h"
 
 #include <algorithm>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
@@ -18,12 +19,14 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_tick_clock.h"
-#include "base/test/test_trace_processor.h"
+#include "base/test/tracing/test_trace_processor.h"
 #include "base/time/time.h"
 #include "cc/base/features.h"
 #include "cc/metrics/event_metrics.h"
 #include "cc/metrics/frame_sequence_metrics.h"
 #include "cc/metrics/frame_sequence_tracker_collection.h"
+#include "cc/metrics/scroll_timing_info.h"
+#include "cc/paint/element_id.h"
 #include "cc/scheduler/commit_earlyout_reason.h"
 #include "cc/scheduler/scheduler.h"
 #include "components/viz/common/frame_timing_details.h"
@@ -36,18 +39,23 @@ namespace cc {
 namespace {
 
 using ::testing::Each;
+using ::testing::ElementsAre;
 using ::testing::IsEmpty;
 using ::testing::NotNull;
 using SmoothEffectDrivingThread = FrameInfo::SmoothEffectDrivingThread;
+
+constexpr ElementId kScrollTimingScroller(101);
 
 class TestCompositorFrameReportingController
     : public CompositorFrameReportingController {
  public:
   explicit TestCompositorFrameReportingController(
-      bool is_trees_in_viz_client = false)
+      bool should_report_histograms = true,
+      bool is_trees_in_viz_client = false,
+      bool should_report_scroll_timing = false)
       : CompositorFrameReportingController(
-            /*should_report_histograms=*/true,
-            /*should_report_ukm=*/false,
+            should_report_histograms,
+            should_report_scroll_timing,
             /*layer_tree_host_id=*/1,
             /*is_trees_in_viz_client=*/is_trees_in_viz_client) {}
 
@@ -126,12 +134,33 @@ class TestCompositorFrameReportingController
   void trees_in_viz_client(bool new_value) {
     set_trees_in_viz_client_for_testing(new_value);
   }
+
+  std::vector<ScrollTimingInfo> TakeCompletedScrollTimingInfos() {
+    return std::exchange(completed_scroll_timing_infos_, {});
+  }
+
+ protected:
+  void OnScrollTimingInfosCompleted(
+      std::vector<ScrollTimingInfo> scroll_timing_infos) override {
+    completed_scroll_timing_infos_.insert(
+        completed_scroll_timing_infos_.end(),
+        std::make_move_iterator(scroll_timing_infos.begin()),
+        std::make_move_iterator(scroll_timing_infos.end()));
+  }
+
+ private:
+  std::vector<ScrollTimingInfo> completed_scroll_timing_infos_;
 };
 
 class CompositorFrameReportingControllerTest : public testing::Test {
  public:
-  CompositorFrameReportingControllerTest()
-      : current_id_(1, 1), tracker_collection_(false) {
+  explicit CompositorFrameReportingControllerTest(
+      bool should_report_scroll_timing = false)
+      : current_id_(1, 1),
+        tracker_collection_(false),
+        reporting_controller_(/*should_report_histograms=*/true,
+                              /*is_trees_in_viz_client=*/false,
+                              should_report_scroll_timing) {
     test_tick_clock_.SetNowTicks(base::TimeTicks::Now());
     reporting_controller_.set_tick_clock(&test_tick_clock_);
     args_ = SimulateBeginFrameArgs(current_id_);
@@ -293,10 +322,17 @@ class CompositorFrameReportingControllerTest : public testing::Test {
     const base::TimeTicks event_time = AdvanceNowByMs(10);
     const base::TimeTicks arrived_in_browser_main_timestamp = AdvanceNowByMs(3);
     AdvanceNowByMs(10);
-    return SetupEventMetrics(ScrollEventMetrics::CreateForTesting(
+    auto metrics = SetupEventMetrics(ScrollEventMetrics::CreateForTesting(
         ui::EventType::kGestureScrollBegin, input_type,
         /*is_inertial=*/false, event_time, arrived_in_browser_main_timestamp,
-        &test_tick_clock_));
+        &test_tick_clock_,
+        /*scroll_begin_generated_timestamp=*/base::TimeTicks(),
+        /*scroll_begin_arrival_timestamp=*/base::TimeTicks()));
+    scroll_begin_generated_timestamp_ =
+        metrics->AsScroll()->scroll_begin_generated_timestamp();
+    scroll_begin_arrival_timestamp_ =
+        metrics->AsScroll()->scroll_begin_arrival_timestamp();
+    return metrics;
   }
 
   std::unique_ptr<EventMetrics> CreateScrollEndEventMetrics(
@@ -308,7 +344,9 @@ class CompositorFrameReportingControllerTest : public testing::Test {
     std::unique_ptr<EventMetrics> metrics =
         SetupEventMetrics(ScrollEventMetrics::CreateForTesting(
             ui::EventType::kGestureScrollEnd, input_type, is_inertial,
-            event_time, arrived_in_browser_main_timestamp, &test_tick_clock_));
+            event_time, arrived_in_browser_main_timestamp, &test_tick_clock_,
+            scroll_begin_generated_timestamp_,
+            scroll_begin_arrival_timestamp_));
     metrics->set_caused_frame_update(false);
     return metrics;
   }
@@ -325,7 +363,8 @@ class CompositorFrameReportingControllerTest : public testing::Test {
     auto scroll_update = ScrollUpdateEventMetrics::CreateForTesting(
         ui::EventType::kGestureScrollUpdate, input_type, is_inertial,
         scroll_update_type, /*delta=*/10.0f, event_time,
-        arrived_in_browser_main_timestamp, &test_tick_clock_, trace_id);
+        arrived_in_browser_main_timestamp, &test_tick_clock_, trace_id,
+        scroll_begin_generated_timestamp_, scroll_begin_arrival_timestamp_);
     scroll_update->set_did_scroll(true);
     return SetupEventMetrics(std::move(scroll_update));
   }
@@ -375,6 +414,8 @@ class CompositorFrameReportingControllerTest : public testing::Test {
   FrameSequenceTrackerCollection tracker_collection_;
   TestCompositorFrameReportingController reporting_controller_;
   ::base::test::TracingEnvironment tracing_environment_;
+  base::TimeTicks scroll_begin_generated_timestamp_;
+  base::TimeTicks scroll_begin_arrival_timestamp_;
 };
 
 TEST_F(CompositorFrameReportingControllerTest, ActiveReporterCounts) {
@@ -495,6 +536,273 @@ TEST_F(CompositorFrameReportingControllerTest,
   histogram_tester.ExpectBucketCount(
       "CompositorLatency2.Type",
       CompositorFrameReporter::FrameReportType::kDroppedFrame, 0);
+}
+
+class ScrollTimingCompositorFrameReportingControllerTest
+    : public CompositorFrameReportingControllerTest {
+ public:
+  ScrollTimingCompositorFrameReportingControllerTest()
+      : CompositorFrameReportingControllerTest(
+            /*should_report_scroll_timing=*/true) {}
+
+ protected:
+  EventMetricsSet CreateScrollTimingUpdateWithAppliedScrollObservation(
+      ScrollUpdateEventMetrics::ScrollUpdateType update_type) {
+    std::unique_ptr<EventMetrics> update = CreateScrollUpdateEventMetrics(
+        ui::ScrollInputType::kTouchscreen, /*is_inertial=*/false, update_type,
+        /*trace_id=*/std::nullopt);
+    update->set_caused_frame_update(true);
+    update->AsScrollUpdate()->AddAppliedScrollObservation(
+        kScrollTimingScroller);
+    EventMetrics::List updates;
+    updates.push_back(std::move(update));
+    return EventMetricsSet(/*main_thread_event_metrics=*/{},
+                           /*impl_thread_event_metrics=*/std::move(updates),
+                           /*raster_thread_event_metrics=*/{});
+  }
+
+  EventMetricsSet CreateScrollTimingEnd() {
+    EventMetrics::List ends;
+    ends.push_back(CreateScrollEndEventMetrics(
+        ui::ScrollInputType::kTouchscreen, /*is_inertial=*/false));
+    return EventMetricsSet(/*main_thread_event_metrics=*/{},
+                           /*impl_thread_event_metrics=*/std::move(ends),
+                           /*raster_thread_event_metrics=*/{});
+  }
+
+  base::TimeTicks PresentSubmittedFrame(bool success = true) {
+    viz::FrameTimingDetails details;
+    details.presentation_feedback.timestamp = AdvanceNowByMs(10);
+    if (!success) {
+      details.presentation_feedback.flags |=
+          gfx::PresentationFeedback::kFailure;
+    }
+    reporting_controller_.DidPresentCompositorFrame(*current_token_, details);
+    return details.presentation_feedback.timestamp;
+  }
+};
+
+TEST_F(ScrollTimingCompositorFrameReportingControllerTest,
+       PresentedScrollEndDrainsRecord) {
+  CreateScrollBeginEventMetrics(ui::ScrollInputType::kTouchscreen);
+  const base::TimeTicks start_time = scroll_begin_generated_timestamp_;
+  SimulateSubmitCompositorFrame(
+      CreateScrollTimingUpdateWithAppliedScrollObservation(
+          ScrollUpdateEventMetrics::ScrollUpdateType::kStarted));
+  const base::TimeTicks movement_presentation = PresentSubmittedFrame();
+  EXPECT_THAT(reporting_controller_.TakeCompletedScrollTimingInfos(),
+              IsEmpty());
+
+  SimulateSubmitCompositorFrame(CreateScrollTimingEnd());
+  PresentSubmittedFrame();
+
+  EXPECT_THAT(reporting_controller_.TakeCompletedScrollTimingInfos(),
+              ElementsAre(ScrollTimingInfo{
+                  .start_time = start_time,
+                  .end_time = movement_presentation,
+                  .input_type = ui::ScrollInputType::kTouchscreen,
+                  .element_id = kScrollTimingScroller,
+              }));
+}
+
+TEST_F(ScrollTimingCompositorFrameReportingControllerTest,
+       CompositorIdleFlushesOnce) {
+  CreateScrollBeginEventMetrics(ui::ScrollInputType::kTouchscreen);
+  const base::TimeTicks start_time = scroll_begin_generated_timestamp_;
+  SimulateSubmitCompositorFrame(
+      CreateScrollTimingUpdateWithAppliedScrollObservation(
+          ScrollUpdateEventMetrics::ScrollUpdateType::kStarted));
+  const base::TimeTicks movement_presentation = PresentSubmittedFrame();
+
+  reporting_controller_.OnStoppedRequestingBeginFrames();
+  reporting_controller_.OnStoppedRequestingBeginFrames();
+
+  EXPECT_THAT(reporting_controller_.TakeCompletedScrollTimingInfos(),
+              ElementsAre(ScrollTimingInfo{
+                  .start_time = start_time,
+                  .end_time = movement_presentation,
+                  .input_type = ui::ScrollInputType::kTouchscreen,
+                  .element_id = kScrollTimingScroller,
+              }));
+}
+
+TEST_F(ScrollTimingCompositorFrameReportingControllerTest,
+       CompositorIdleWaitsForSubmittedFrame) {
+  CreateScrollBeginEventMetrics(ui::ScrollInputType::kTouchscreen);
+  const base::TimeTicks start_time = scroll_begin_generated_timestamp_;
+  SimulateSubmitCompositorFrame(
+      CreateScrollTimingUpdateWithAppliedScrollObservation(
+          ScrollUpdateEventMetrics::ScrollUpdateType::kStarted));
+
+  reporting_controller_.OnStoppedRequestingBeginFrames();
+  EXPECT_THAT(reporting_controller_.TakeCompletedScrollTimingInfos(),
+              IsEmpty());
+
+  const base::TimeTicks movement_presentation = PresentSubmittedFrame();
+  EXPECT_THAT(reporting_controller_.TakeCompletedScrollTimingInfos(),
+              ElementsAre(ScrollTimingInfo{
+                  .start_time = start_time,
+                  .end_time = movement_presentation,
+                  .input_type = ui::ScrollInputType::kTouchscreen,
+                  .element_id = kScrollTimingScroller,
+              }));
+}
+
+TEST_F(ScrollTimingCompositorFrameReportingControllerTest,
+       DroppedMovementBlocksFlushUntilAdopted) {
+  CreateScrollBeginEventMetrics(ui::ScrollInputType::kTouchscreen);
+  const base::TimeTicks start_time = scroll_begin_generated_timestamp_;
+  SimulateSubmitCompositorFrame(
+      CreateScrollTimingUpdateWithAppliedScrollObservation(
+          ScrollUpdateEventMetrics::ScrollUpdateType::kStarted));
+  PresentSubmittedFrame();
+
+  SimulateSubmitCompositorFrame(
+      CreateScrollTimingUpdateWithAppliedScrollObservation(
+          ScrollUpdateEventMetrics::ScrollUpdateType::kContinued));
+  reporting_controller_.OnStoppedRequestingBeginFrames();
+  PresentSubmittedFrame(/*success=*/false);
+
+  EXPECT_THAT(reporting_controller_.TakeCompletedScrollTimingInfos(),
+              IsEmpty());
+
+  SimulateBeginImplFrame();
+  SimulateSubmitCompositorFrame(EventMetricsSet());
+  const base::TimeTicks adopted_movement_presentation = PresentSubmittedFrame();
+  EXPECT_THAT(reporting_controller_.TakeCompletedScrollTimingInfos(),
+              IsEmpty());
+
+  reporting_controller_.OnStoppedRequestingBeginFrames();
+  EXPECT_THAT(reporting_controller_.TakeCompletedScrollTimingInfos(),
+              ElementsAre(ScrollTimingInfo{
+                  .start_time = start_time,
+                  .end_time = adopted_movement_presentation,
+                  .input_type = ui::ScrollInputType::kTouchscreen,
+                  .element_id = kScrollTimingScroller,
+              }));
+}
+
+TEST_F(ScrollTimingCompositorFrameReportingControllerTest,
+       DroppedMovementFromAnotherGestureDoesNotBlockFlush) {
+  CreateScrollBeginEventMetrics(ui::ScrollInputType::kTouchscreen);
+  const base::TimeTicks start_time = scroll_begin_generated_timestamp_;
+  SimulateSubmitCompositorFrame(
+      CreateScrollTimingUpdateWithAppliedScrollObservation(
+          ScrollUpdateEventMetrics::ScrollUpdateType::kStarted));
+  const base::TimeTicks movement_presentation = PresentSubmittedFrame();
+
+  CreateScrollBeginEventMetrics(ui::ScrollInputType::kTouchscreen);
+  SimulateSubmitCompositorFrame(
+      CreateScrollTimingUpdateWithAppliedScrollObservation(
+          ScrollUpdateEventMetrics::ScrollUpdateType::kStarted));
+  reporting_controller_.OnStoppedRequestingBeginFrames();
+  PresentSubmittedFrame(/*success=*/false);
+
+  EXPECT_THAT(reporting_controller_.TakeCompletedScrollTimingInfos(),
+              ElementsAre(ScrollTimingInfo{
+                  .start_time = start_time,
+                  .end_time = movement_presentation,
+                  .input_type = ui::ScrollInputType::kTouchscreen,
+                  .element_id = kScrollTimingScroller,
+              }));
+}
+
+TEST_F(ScrollTimingCompositorFrameReportingControllerTest,
+       ResumedFrameProductionCancelsFlush) {
+  CreateScrollBeginEventMetrics(ui::ScrollInputType::kTouchscreen);
+  const base::TimeTicks start_time = scroll_begin_generated_timestamp_;
+  SimulateSubmitCompositorFrame(
+      CreateScrollTimingUpdateWithAppliedScrollObservation(
+          ScrollUpdateEventMetrics::ScrollUpdateType::kStarted));
+  PresentSubmittedFrame();
+
+  SimulateSubmitCompositorFrame(
+      CreateScrollTimingUpdateWithAppliedScrollObservation(
+          ScrollUpdateEventMetrics::ScrollUpdateType::kContinued));
+  reporting_controller_.OnStoppedRequestingBeginFrames();
+  SimulateBeginImplFrame();
+  const base::TimeTicks final_presentation = PresentSubmittedFrame();
+  EXPECT_THAT(reporting_controller_.TakeCompletedScrollTimingInfos(),
+              IsEmpty());
+
+  reporting_controller_.OnStoppedRequestingBeginFrames();
+  EXPECT_THAT(reporting_controller_.TakeCompletedScrollTimingInfos(),
+              ElementsAre(ScrollTimingInfo{
+                  .start_time = start_time,
+                  .end_time = final_presentation,
+                  .input_type = ui::ScrollInputType::kTouchscreen,
+                  .element_id = kScrollTimingScroller,
+              }));
+}
+
+TEST_F(ScrollTimingCompositorFrameReportingControllerTest,
+       HiddenPageSuppressesInFlightGesture) {
+  CreateScrollBeginEventMetrics(ui::ScrollInputType::kTouchscreen);
+  SimulateSubmitCompositorFrame(
+      CreateScrollTimingUpdateWithAppliedScrollObservation(
+          ScrollUpdateEventMetrics::ScrollUpdateType::kStarted));
+
+  reporting_controller_.SetVisible(false);
+  reporting_controller_.OnStoppedRequestingBeginFrames();
+  PresentSubmittedFrame();
+  EXPECT_THAT(reporting_controller_.TakeCompletedScrollTimingInfos(),
+              IsEmpty());
+
+  reporting_controller_.SetVisible(true);
+  SimulateSubmitCompositorFrame(
+      CreateScrollTimingUpdateWithAppliedScrollObservation(
+          ScrollUpdateEventMetrics::ScrollUpdateType::kContinued));
+  PresentSubmittedFrame();
+  reporting_controller_.OnStoppedRequestingBeginFrames();
+  EXPECT_THAT(reporting_controller_.TakeCompletedScrollTimingInfos(),
+              IsEmpty());
+
+  CreateScrollBeginEventMetrics(ui::ScrollInputType::kTouchscreen);
+  const base::TimeTicks next_start_time = scroll_begin_generated_timestamp_;
+  SimulateSubmitCompositorFrame(
+      CreateScrollTimingUpdateWithAppliedScrollObservation(
+          ScrollUpdateEventMetrics::ScrollUpdateType::kStarted));
+  const base::TimeTicks next_presentation = PresentSubmittedFrame();
+  reporting_controller_.OnStoppedRequestingBeginFrames();
+
+  EXPECT_THAT(reporting_controller_.TakeCompletedScrollTimingInfos(),
+              ElementsAre(ScrollTimingInfo{
+                  .start_time = next_start_time,
+                  .end_time = next_presentation,
+                  .input_type = ui::ScrollInputType::kTouchscreen,
+                  .element_id = kScrollTimingScroller,
+              }));
+}
+
+TEST_F(ScrollTimingCompositorFrameReportingControllerTest,
+       HiddenPageSuppressesGesturePresentedWhileHidden) {
+  reporting_controller_.SetVisible(false);
+  CreateScrollBeginEventMetrics(ui::ScrollInputType::kTouchscreen);
+  SimulateSubmitCompositorFrame(
+      CreateScrollTimingUpdateWithAppliedScrollObservation(
+          ScrollUpdateEventMetrics::ScrollUpdateType::kStarted));
+  PresentSubmittedFrame();
+  SimulateSubmitCompositorFrame(CreateScrollTimingEnd());
+  PresentSubmittedFrame();
+
+  EXPECT_THAT(reporting_controller_.TakeCompletedScrollTimingInfos(),
+              IsEmpty());
+}
+
+TEST_F(ScrollTimingCompositorFrameReportingControllerTest,
+       HiddenPageSuppressesGesturePresentedAfterShow) {
+  reporting_controller_.SetVisible(false);
+  CreateScrollBeginEventMetrics(ui::ScrollInputType::kTouchscreen);
+  EventMetricsSet update = CreateScrollTimingUpdateWithAppliedScrollObservation(
+      ScrollUpdateEventMetrics::ScrollUpdateType::kStarted);
+
+  reporting_controller_.SetVisible(true);
+  SimulateSubmitCompositorFrame(std::move(update));
+  PresentSubmittedFrame();
+  reporting_controller_.OnStoppedRequestingBeginFrames();
+
+  EXPECT_THAT(reporting_controller_.TakeCompletedScrollTimingInfos(),
+              IsEmpty());
 }
 
 TEST_F(CompositorFrameReportingControllerTest,
@@ -3126,6 +3434,78 @@ TEST_F(CompositorFrameReportingControllerTest, VsyncIntervalArg) {
                                   std::vector<std::string>{"interval", "cnt"},
                                   std::vector<std::string>{"8", "1"},
                                   std::vector<std::string>{"32", "1"}));
+}
+
+TEST_F(CompositorFrameReportingControllerTest,
+       NoScrollJankMetricsInSingleThreadedMode) {
+  base::HistogramTester histogram_tester;
+
+  {
+    FrameSorter local_frame_sorter;
+    FrameSequenceTrackerCollection local_tracker_collection(false);
+    // Simulate single-threaded mode by disabling histograms.
+    TestCompositorFrameReportingController reporting_controller_no_histograms(
+        /*should_report_histograms=*/false,
+        /*is_trees_in_viz_client=*/false,
+        /*should_report_scroll_timing=*/true);
+    reporting_controller_no_histograms.set_tick_clock(&test_tick_clock_);
+    reporting_controller_no_histograms.SetFrameSorter(&local_frame_sorter);
+    reporting_controller_no_histograms.SetFrameSequenceTrackerCollection(
+        &local_tracker_collection);
+
+    std::unique_ptr<EventMetrics> scroll_metrics =
+        CreateScrollUpdateEventMetrics(
+            ui::ScrollInputType::kWheel, /*is_inertial=*/false,
+            ScrollUpdateEventMetrics::ScrollUpdateType::kStarted, std::nullopt);
+
+    base::TimeDelta vsync_interval = base::Milliseconds(16);
+    args_.interval = vsync_interval;
+    base::TimeTicks first_begin_frame_ts = test_tick_clock_.NowTicks();
+
+    IncrementCurrentId();
+    args_.frame_time = test_tick_clock_.NowTicks();
+    reporting_controller_no_histograms.WillBeginImplFrame(
+        args_, /*will_throttle_main=*/false);
+    reporting_controller_no_histograms.OnFinishImplFrame(
+        current_id_, /*waiting_for_main=*/false);
+
+    // Use WillInvalidateOnImplSide to advance the reporter to the correct state
+    // for activation in single-threaded/impl-side invalidation mode.
+    reporting_controller_no_histograms.WillInvalidateOnImplSide();
+    reporting_controller_no_histograms.WillActivate();
+    reporting_controller_no_histograms.DidActivate();
+
+    EventMetrics::List metrics_list;
+    metrics_list.push_back(std::move(scroll_metrics));
+
+    uint32_t frame_token = ++current_token_;
+    SubmitInfo submit_info(frame_token, base::TimeTicks::Now());
+    submit_info.events_metrics.impl_event_metrics = std::move(metrics_list);
+
+    reporting_controller_no_histograms.DidSubmitCompositorFrame(
+        submit_info, current_id_, last_activated_id_);
+
+    viz::FrameTimingDetails details = {};
+    details.presentation_feedback.timestamp =
+        first_begin_frame_ts + 2 * vsync_interval;
+    reporting_controller_no_histograms.DidPresentCompositorFrame(frame_token,
+                                                                 details);
+    reporting_controller_no_histograms.OnStoppedRequestingBeginFrames();
+    reporting_controller_no_histograms.SetVisible(false);
+    EXPECT_THAT(
+        reporting_controller_no_histograms.TakeCompletedScrollTimingInfos(),
+        IsEmpty());
+  }
+
+  // Verify that no ScrollJank metrics are reported.
+  histogram_tester.ExpectTotalCount("Event.ScrollJank.MissedVsyncs.PerFrame",
+                                    0);
+  histogram_tester.ExpectTotalCount(
+      "Event.ScrollJank.DelayedFramesPercentage.PerScroll", 0);
+  histogram_tester.ExpectTotalCount(
+      "Event.ScrollJank.DelayedFramesPercentage4.PerScroll", 0);
+  histogram_tester.ExpectTotalCount("Event.Jank.PredictorJankyFramePercentage2",
+                                    0);
 }
 
 }  // namespace

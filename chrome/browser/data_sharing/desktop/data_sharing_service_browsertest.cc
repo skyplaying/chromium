@@ -9,7 +9,6 @@
 #include "build/branding_buildflags.h"
 #include "chrome/browser/data_sharing/data_sharing_service_factory.h"
 #include "chrome/browser/data_sharing/desktop/data_sharing_sdk_delegate_desktop.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/data_sharing/public/features.h"
 #include "content/public/test/browser_test.h"
@@ -34,7 +33,7 @@ IN_PROC_BROWSER_TEST_F(DataSharingServiceBrowserTest, ReadGroup) {
 #else
   base::RunLoop run_loop;
   auto* service = data_sharing::DataSharingServiceFactory::GetForProfile(
-      browser()->profile());
+      browser()->GetProfile());
   // TODO(crbug.com/338431049): This test should use synchronous ReadGroup()
   // instead of ReadGroupDeprecated(). Note that this will require receiving a
   // GroupId from the sync server first (as part of COLLABORATION_GROUP
@@ -78,7 +77,7 @@ IN_PROC_BROWSER_TEST_F(DataSharingServiceBrowserTest, ReadGroupWithToken) {
 #else
   base::RunLoop run_loop;
   auto* service = data_sharing::DataSharingServiceFactory::GetForProfile(
-      browser()->profile());
+      browser()->GetProfile());
   service->ReadNewGroup(
       data_sharing::GroupToken(data_sharing::GroupId("12345"), "access_token"),
       base::BindOnce(
@@ -115,7 +114,7 @@ IN_PROC_BROWSER_TEST_F(DataSharingServiceBrowserTest, DeleteGroup) {
 #else
   base::RunLoop run_loop;
   auto* service = data_sharing::DataSharingServiceFactory::GetForProfile(
-      browser()->profile());
+      browser()->GetProfile());
   service->DeleteGroup(
       data_sharing::GroupId("12345"),
       base::BindOnce(
@@ -137,7 +136,7 @@ IN_PROC_BROWSER_TEST_F(DataSharingServiceBrowserTest, LeaveGroup) {
 #else
   base::RunLoop run_loop;
   auto* service = data_sharing::DataSharingServiceFactory::GetForProfile(
-      browser()->profile());
+      browser()->GetProfile());
   service->LeaveGroup(
       data_sharing::GroupId("12345"),
       base::BindOnce(

@@ -55,7 +55,9 @@ WebGPUCommandBufferStub::WebGPUCommandBufferStub(
 
 WebGPUCommandBufferStub::~WebGPUCommandBufferStub() {
   // Must run before memory_tracker_ is destroyed.
-  decoder_context()->Destroy(false);
+  if (decoder_context()) {
+    decoder_context()->Destroy(false);
+  }
 
   memory_tracker_ = nullptr;
 }
@@ -86,8 +88,6 @@ gpu::ContextResult WebGPUCommandBufferStub::Initialize(
   }
 
   share_group_ = manager->share_group();
-  use_virtualized_gl_context_ = false;
-
   memory_tracker_ = CreateMemoryTracker();
 
   webgpu::DawnCacheOptions dawn_cache_options = {
@@ -136,10 +136,6 @@ gpu::ContextResult WebGPUCommandBufferStub::Initialize(
   initialized_ = true;
   return gpu::ContextResult::kSuccess;
 #endif  // BUILDFLAG(IS_FUCHSIA)
-}
-
-MemoryTracker* WebGPUCommandBufferStub::GetContextGroupMemoryTracker() const {
-  return nullptr;
 }
 
 base::WeakPtr<CommandBufferStub> WebGPUCommandBufferStub::AsWeakPtr() {

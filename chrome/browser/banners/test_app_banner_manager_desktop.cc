@@ -14,33 +14,36 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/gmock_callback_support.h"
 #include "chrome/browser/webapps/webapps_client_desktop.h"
-#include "components/password_manager/content/common/web_ui_constants.h"
+#include "components/tabs/public/tab_interface.h"
 #include "components/webapps/browser/banners/app_banner_manager.h"
 #include "components/webapps/browser/installable/installable_data.h"
+#include "components/webapps/browser/web_app_url_config.h"
 #include "components/webapps/browser/webapps_client.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/common/url_utils.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "third_party/blink/public/common/manifest/manifest_util.h"
 
 namespace webapps {
 
 TestAppBannerManagerDesktop::TestAppBannerManagerDesktop(
+    tabs::TabInterface& tab,
     content::WebContents* web_contents)
-    : AppBannerManagerDesktop(web_contents) {
-  // Ensure no real instance exists. This must be the only instance to avoid
-  // observers of AppBannerManager left observing the wrong one.
-  DCHECK_EQ(AppBannerManagerDesktop::FromWebContents(web_contents), nullptr);
-  AddObserver(this);
+    : AppBannerManagerDesktop(tab, web_contents),
+      content::WebContentsObserver(web_contents) {
+  // The UnownedUserDataHost CHECKs that this is the only instance registered
+  // on the tab, so observers of AppBannerManager cannot be left observing the
+  // wrong one.
+  app_banner_manager()->AddObserver(this);
 }
 
 TestAppBannerManagerDesktop::~TestAppBannerManagerDesktop() {
-  RemoveObserver(this);
+  app_banner_manager()->RemoveObserver(this);
 }
 
 static std::unique_ptr<AppBannerManagerDesktop> CreateTestAppBannerManager(
+    tabs::TabInterface& tab,
     content::WebContents* web_contents) {
-  return std::make_unique<TestAppBannerManagerDesktop>(web_contents);
+  return std::make_unique<TestAppBannerManagerDesktop>(tab, web_contents);
 }
 
 void TestAppBannerManagerDesktop::SetUp() {
@@ -56,7 +59,8 @@ TestAppBannerManagerDesktop* TestAppBannerManagerDesktop::FromWebContents(
   DCHECK_EQ(
       AppBannerManagerDesktop::override_app_banner_manager_desktop_for_testing_,
       CreateTestAppBannerManager);
-  auto* manager = AppBannerManagerDesktop::FromWebContents(web_contents);
+  auto* manager = AppBannerManagerDesktop::From(
+      tabs::TabInterface::GetFromContents(web_contents));
   DCHECK(manager);
   DCHECK(manager->AsTestAppBannerManagerDesktopForTesting());
   return manager->AsTestAppBannerManagerDesktopForTesting();
@@ -75,7 +79,7 @@ bool TestAppBannerManagerDesktop::WaitForInstallableCheck() {
     run_loop.Run();
   }
   CHECK(!installable_check_in_progress_);
-  return IsPromotableWebApp();
+  return app_banner_manager()->IsPromotableWebApp();
 }
 
 void TestAppBannerManagerDesktop::SetBannerPromptReplyCallback(
@@ -88,8 +92,8 @@ void TestAppBannerManagerDesktop::SetCompleteCallback(
   on_complete_ = std::move(on_complete);
 }
 
-AppBannerManager::State TestAppBannerManagerDesktop::state() {
-  return AppBannerManager::state();
+AppBannerManager::State TestAppBannerManagerDesktop::state_for_testing() const {
+  return app_banner_manager()->state_for_testing();
 }
 
 void TestAppBannerManagerDesktop::AwaitAppInstall() {
@@ -107,8 +111,9 @@ void TestAppBannerManagerDesktop::ResetCurrentPageData() {
   debug_log_.Append("ResetCurrentPageData");
   AppBannerManagerDesktop::ResetCurrentPageData();
   installable_check_in_progress_ = true;
-  if (tear_down_quit_closure_)
+  if (tear_down_quit_closure_) {
     std::move(tear_down_quit_closure_).Run();
+  }
 }
 
 TestAppBannerManagerDesktop*
@@ -120,16 +125,13 @@ void TestAppBannerManagerDesktop::DidFinishLoad(
     content::RenderFrameHost* render_frame_host,
     const GURL& validated_url) {
   debug_log_.Append(base::StrCat({"DidFinishLoad ", validated_url.spec()}));
-  // This mirrors AppBannerManager::UrlType::kInvalidPrimaryFrameUrl in
-  // AppBannerManager::GetUrlType()
-  if (content::HasWebUIScheme(validated_url) &&
-      (validated_url.GetHost() !=
-       password_manager::kChromeUIPasswordManagerHost)) {
+  // If the URL is not eligible for web apps, AppBannerManager::DidFinishLoad
+  // will return early without starting the installable check pipeline. In that
+  // case, we need to unblock WaitForInstallableCheck() ourselves.
+  if (!IsUrlEligibleForWebApp(validated_url)) {
     RunInstallableQuitClosureIfNeeded();
     return;
   }
-
-  AppBannerManagerDesktop::DidFinishLoad(render_frame_host, validated_url);
 }
 
 void TestAppBannerManagerDesktop::RunInstallableQuitClosureIfNeeded() {
@@ -160,7 +162,15 @@ void TestAppBannerManagerDesktop::OnBannerPromptReply() {
   }
 }
 
-void TestAppBannerManagerDesktop::OnComplete() {
+void TestAppBannerManagerDesktop::OnBannerShown() {
+  RunInstallableQuitClosureIfNeeded();
+  if (on_complete_) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, std::move(on_complete_));
+  }
+}
+
+void TestAppBannerManagerDesktop::OnComplete(InstallableStatusCode code) {
   RunInstallableQuitClosureIfNeeded();
   if (on_complete_) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(

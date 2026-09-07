@@ -11,6 +11,7 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/callback_helpers.h"
 #include "base/json/values_util.h"
 #include "base/strings/strcat.h"
 #include "base/task/current_thread.h"
@@ -42,8 +43,11 @@
 #include "components/permissions/permission_decision_auto_blocker.h"
 #include "components/permissions/permission_uma_util.h"
 #include "components/permissions/permission_util.h"
+#include "components/safe_browsing/buildflags.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/browser/site_instance.h"
+#include "content/public/browser/storage_partition_config.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_renderer_host.h"
@@ -75,6 +79,11 @@
 #include "chrome/browser/enterprise/connectors/test/deep_scanning_test_utils.h"  // nogncheck
 #include "chrome/browser/enterprise/connectors/test/fake_content_analysis_delegate.h"
 #include "chrome/browser/policy/dm_token_utils.h"
+#include "storage/browser/file_system/external_mount_points.h"
+#endif
+
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+#include "components/safe_browsing/content/common/file_type_policies_test_util.h"
 #endif
 
 using content::BrowserContext;
@@ -161,8 +170,9 @@ class SelfDestructingPermissionGrantObserver
 #if BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
 constexpr char kDummyDmToken[] = "dm_token";
 
-void EnableEnterpriseAnalysis(Profile* profile) {
-  static constexpr char kEnabled[] = R"(
+void EnableEnterpriseAnalysis(Profile* profile, bool fail_closed = false) {
+  std::string policy_value = base::StrCat({
+      R"(
     {
         "service_provider": "google",
         "enable": [
@@ -171,10 +181,12 @@ void EnableEnterpriseAnalysis(Profile* profile) {
             "tags": ["dlp"]
           }
         ],
-        "block_until_verdict": 1
-    })";
+        "block_until_verdict": 1)",
+      fail_closed ? R"(, "default_action": "block")" : "",
+      R"(
+    })"});
   enterprise_connectors::test::SetAnalysisConnector(
-      profile->GetPrefs(), enterprise_connectors::FILE_ATTACHED, kEnabled);
+      profile->GetPrefs(), enterprise_connectors::FILE_ATTACHED, policy_value);
   enterprise_connectors::ContentAnalysisDelegate::DisableUIForTesting();
   policy::SetDMTokenForTesting(
       policy::DMToken::CreateValidToken(kDummyDmToken));
@@ -513,14 +525,34 @@ class ChromeFileSystemAccessPermissionContextTest : public testing::Test {
     }));
   }
 
+  std::unique_ptr<content::WebContents> CreateGuestWebContents(
+      const GURL& url) {
+    const content::StoragePartitionConfig kGuestConfig =
+        content::StoragePartitionConfig::Create(
+            profile(), "test_partition", "guest_partition", /*in_memory=*/true);
+    scoped_refptr<content::SiteInstance> guest_instance =
+        content::SiteInstance::CreateForGuest(profile(), kGuestConfig);
+    std::unique_ptr<content::WebContents> guest_contents =
+        content::WebContentsTester::CreateTestWebContents(profile(),
+                                                          guest_instance);
+    content::WebContentsTester::For(guest_contents.get())
+        ->NavigateAndCommit(url);
+    return guest_contents;
+  }
+
   content::BrowserTaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
   base::ScopedTempDir temp_dir_;
   base::ScopedTempDir profile_dir_;
-  std::unique_ptr<ChromeFileSystemAccessPermissionContext> permission_context_;
   content::RenderViewHostTestEnabler render_view_host_test_enabler_;
   std::unique_ptr<TestingProfile> profile_;
   std::unique_ptr<WebContents> web_contents_;
+  // `permission_context_` must be declared after `profile_` (and
+  // `web_contents_`) so that it is destroyed BEFORE them. The base class
+  // `ObjectPermissionContextBase` holds a raw pointer to
+  // `HostContentSettingsMap` (owned by `profile_`) and accesses it during
+  // destruction, so the profile must outlive the context.
+  std::unique_ptr<ChromeFileSystemAccessPermissionContext> permission_context_;
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
@@ -547,6 +579,39 @@ class ChromeFileSystemAccessPermissionContextSymbolicLinkCheckTest
  protected:
   base::test::ScopedFeatureList scoped_feature_list_;
 };
+
+class ChromeFileSystemAccessPermissionContextNoSymbolicLinkCheckTest
+    : public ChromeFileSystemAccessPermissionContextTest {
+ public:
+  ChromeFileSystemAccessPermissionContextNoSymbolicLinkCheckTest() {
+    scoped_feature_list_.InitAndDisableFeature(
+        features::kFileSystemAccessSymbolicLinkCheck);
+  }
+
+ protected:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+TEST_F(ChromeFileSystemAccessPermissionContextTest,
+       CanShowFilePicker_BlocksGuestViews) {
+  // 1. Test HTTPS Guest (should be blocked)
+  {
+    std::unique_ptr<content::WebContents> guest =
+        CreateGuestWebContents(GURL("https://example.com/"));
+    EXPECT_FALSE(permission_context()
+                     ->CanShowFilePicker(guest->GetPrimaryMainFrame())
+                     .has_value());
+  }
+
+  // 2. Test about:blank Guest (should be blocked)
+  {
+    std::unique_ptr<content::WebContents> guest =
+        CreateGuestWebContents(GURL("about:blank"));
+    EXPECT_FALSE(permission_context()
+                     ->CanShowFilePicker(guest->GetPrimaryMainFrame())
+                     .has_value());
+  }
+}
 
 TEST_F(ChromeFileSystemAccessPermissionContextTest,
        ConfirmSensitiveEntryAccess_NoSpecialPath) {
@@ -636,20 +701,22 @@ TEST_F(ChromeFileSystemAccessPermissionContextTest,
   EXPECT_TRUE(IsOpenAbort(app_data_dir.AppendASCII("foo"), HandleType::kFile));
   EXPECT_TRUE(
       IsOpenAbort(app_data_dir.AppendASCII("foo"), HandleType::kDirectory));
+#endif  // BUILDFLAG(IS_ANDROID)
 
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
   base::FilePath cache_dir = temp_dir_.GetPath().AppendASCII("cache");
   base::ScopedPathOverride cache_override(base::DIR_CACHE, cache_dir, true,
                                           true);
   ResetBlockPath();
-  // The android cache directory, its parent and paths inside should not be
+  // The cache directory, its parent and paths inside should not be
   // allowed.
   EXPECT_TRUE(IsOpenAbort(cache_dir, HandleType::kDirectory));
   EXPECT_TRUE(IsOpenAbort(temp_dir_.GetPath(), HandleType::kDirectory));
   EXPECT_TRUE(IsOpenAbort(cache_dir.AppendASCII("foo"), HandleType::kFile));
   EXPECT_TRUE(
       IsOpenAbort(cache_dir.AppendASCII("foo"), HandleType::kDirectory));
-
-#endif  // BUILDFLAG(IS_ANDROID)
+#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) ||
+        // BUILDFLAG(IS_ANDROID)
 }
 
 // TODO(crbug.com/432011571): Flaky test.
@@ -910,8 +977,15 @@ TEST_F(ChromeFileSystemAccessPermissionContextTest,
 #endif  // BUILDFLAG(IS_MAC)
 
 #if BUILDFLAG(IS_WIN)
-TEST_F(ChromeFileSystemAccessPermissionContextTest,
+TEST_F(ChromeFileSystemAccessPermissionContextNoSymbolicLinkCheckTest,
        ConfirmSensitiveEntryAccess_UNCPath) {
+  // The synthetic UNC paths tested here do not exist on disk/network;
+  // attempting to normalize them triggers slow Windows network/SMB timeouts on
+  // non-existent hosts before returning the original path unmodified. Testing
+  // with `features::kFileSystemAccessSymbolicLinkCheck` disabled allows
+  // testing the UNC syntax and admin share parsing logic directly in memory
+  // without timeouts. Symbolic link resolution itself is tested separately in
+  // `ChromeFileSystemAccessPermissionContextSymbolicLinkCheckTest`.
   EXPECT_EQ(ConfirmSensitiveEntryAccessSync(
                 permission_context(),
                 PathInfo(FILE_PATH_LITERAL("\\\\server\\share\\foo\\bar")),
@@ -1036,6 +1110,221 @@ TEST_F(ChromeFileSystemAccessPermissionContextTest,
                 HandleType::kDirectory, UserAction::kOpen),
             SensitiveDirectoryResult::kAbort);
 }
+
+// Verifies that Windows Subsystem for Linux (WSL) Universal Naming Convention
+// (UNC) paths are rejected by sensitive entry access checks.
+//
+// WSL exposes Linux distribution filesystems through the \\wsl.localhost and
+// legacy \\wsl$ UNC namespaces. Because these paths alias local system files
+// and shell configuration dotfiles without using DOS drive letters, they must
+// Verifies that Windows Subsystem for Linux (WSL) Universal Naming Convention
+// (UNC) distribution root paths are rejected by sensitive entry access checks.
+TEST_F(ChromeFileSystemAccessPermissionContextNoSymbolicLinkCheckTest,
+       ConfirmSensitiveEntryAccess_WSL_DistroRoot) {
+  // Distribution root paths should be blocked.
+  EXPECT_EQ(ConfirmSensitiveEntryAccessSync(
+                permission_context(),
+                PathInfo(FILE_PATH_LITERAL("\\\\wsl.localhost\\Ubuntu")),
+                HandleType::kDirectory, UserAction::kOpen),
+            SensitiveDirectoryResult::kAbort);
+  EXPECT_EQ(ConfirmSensitiveEntryAccessSync(
+                permission_context(),
+                PathInfo(FILE_PATH_LITERAL("\\\\wsl.localhost\\Ubuntu\\")),
+                HandleType::kDirectory, UserAction::kOpen),
+            SensitiveDirectoryResult::kAbort);
+}
+
+// Verifies that WSL system configuration directories and files are blocked.
+TEST_F(ChromeFileSystemAccessPermissionContextNoSymbolicLinkCheckTest,
+       ConfirmSensitiveEntryAccess_WSL_SystemPaths) {
+  // Distribution system configuration directories should be blocked.
+  EXPECT_EQ(ConfirmSensitiveEntryAccessSync(
+                permission_context(),
+                PathInfo(FILE_PATH_LITERAL("\\\\wsl.localhost\\Ubuntu\\etc")),
+                HandleType::kDirectory, UserAction::kOpen),
+            SensitiveDirectoryResult::kAbort);
+  EXPECT_EQ(
+      ConfirmSensitiveEntryAccessSync(
+          permission_context(),
+          PathInfo(FILE_PATH_LITERAL("\\\\wsl.localhost\\Ubuntu\\etc\\shadow")),
+          HandleType::kFile, UserAction::kOpen),
+      SensitiveDirectoryResult::kAbort);
+  EXPECT_EQ(ConfirmSensitiveEntryAccessSync(
+                permission_context(),
+                PathInfo(FILE_PATH_LITERAL("\\\\wsl.localhost\\Ubuntu\\root")),
+                HandleType::kDirectory, UserAction::kOpen),
+            SensitiveDirectoryResult::kAbort);
+}
+
+// Verifies that WSL user home directories, .ssh, and shell init dotfiles
+// (.bashrc) are blocked across picker open, save, and non-prompted resolution
+// (kNone).
+TEST_F(ChromeFileSystemAccessPermissionContextNoSymbolicLinkCheckTest,
+       ConfirmSensitiveEntryAccess_WSL_UserPaths) {
+  // User home directories and shell configuration files should be blocked.
+  EXPECT_EQ(
+      ConfirmSensitiveEntryAccessSync(
+          permission_context(),
+          PathInfo(FILE_PATH_LITERAL("\\\\wsl.localhost\\Ubuntu\\home\\user")),
+          HandleType::kDirectory, UserAction::kOpen),
+      SensitiveDirectoryResult::kAbort);
+  EXPECT_EQ(ConfirmSensitiveEntryAccessSync(
+                permission_context(),
+                PathInfo(FILE_PATH_LITERAL(
+                    "\\\\wsl.localhost\\Ubuntu\\home\\user\\.ssh")),
+                HandleType::kDirectory, UserAction::kOpen),
+            SensitiveDirectoryResult::kAbort);
+  EXPECT_EQ(ConfirmSensitiveEntryAccessSync(
+                permission_context(),
+                PathInfo(FILE_PATH_LITERAL(
+                    "\\\\wsl.localhost\\Ubuntu\\home\\user\\.ssh")),
+                HandleType::kDirectory, UserAction::kNone),
+            SensitiveDirectoryResult::kAbort);
+  EXPECT_EQ(ConfirmSensitiveEntryAccessSync(
+                permission_context(),
+                PathInfo(FILE_PATH_LITERAL(
+                    "\\\\wsl.localhost\\Ubuntu\\home\\user\\.bashrc")),
+                HandleType::kFile, UserAction::kSave),
+            SensitiveDirectoryResult::kAbort);
+  EXPECT_EQ(ConfirmSensitiveEntryAccessSync(
+                permission_context(),
+                PathInfo(FILE_PATH_LITERAL(
+                    "\\\\wsl.localhost\\Ubuntu\\home\\user\\.bashrc")),
+                HandleType::kFile, UserAction::kOpen),
+            SensitiveDirectoryResult::kAbort);
+  EXPECT_EQ(ConfirmSensitiveEntryAccessSync(
+                permission_context(),
+                PathInfo(FILE_PATH_LITERAL(
+                    "\\\\wsl.localhost\\Ubuntu\\home\\user\\.bashrc")),
+                HandleType::kFile, UserAction::kNone),
+            SensitiveDirectoryResult::kAbort);
+}
+
+// Verifies that WSL UNC paths with case variations, trailing dot FQDN syntax,
+// and forward slash separators are blocked.
+TEST_F(ChromeFileSystemAccessPermissionContextNoSymbolicLinkCheckTest,
+       ConfirmSensitiveEntryAccess_WSL_PathVariations) {
+  // Case variations should be blocked.
+  EXPECT_EQ(
+      ConfirmSensitiveEntryAccessSync(
+          permission_context(),
+          PathInfo(FILE_PATH_LITERAL("\\\\WSL.LOCALHOST\\Ubuntu\\home\\user")),
+          HandleType::kDirectory, UserAction::kOpen),
+      SensitiveDirectoryResult::kAbort);
+  EXPECT_EQ(ConfirmSensitiveEntryAccessSync(
+                permission_context(),
+                PathInfo(FILE_PATH_LITERAL("\\\\Wsl.LocalHost\\Ubuntu\\etc")),
+                HandleType::kDirectory, UserAction::kOpen),
+            SensitiveDirectoryResult::kAbort);
+  EXPECT_EQ(ConfirmSensitiveEntryAccessSync(
+                permission_context(),
+                PathInfo(FILE_PATH_LITERAL(
+                    "\\\\WSL.LOCALHOST\\UBUNTU\\home\\user\\.bashrc")),
+                HandleType::kFile, UserAction::kSave),
+            SensitiveDirectoryResult::kAbort);
+  EXPECT_EQ(ConfirmSensitiveEntryAccessSync(
+                permission_context(),
+                PathInfo(FILE_PATH_LITERAL(
+                    "\\\\WSL.LOCALHOST\\UBUNTU\\home\\user\\.bashrc")),
+                HandleType::kFile, UserAction::kNone),
+            SensitiveDirectoryResult::kAbort);
+
+  // Fully qualified domain name syntax with trailing dot should be blocked.
+  EXPECT_EQ(
+      ConfirmSensitiveEntryAccessSync(
+          permission_context(),
+          PathInfo(FILE_PATH_LITERAL("\\\\wsl.localhost.\\Ubuntu\\home\\user")),
+          HandleType::kDirectory, UserAction::kOpen),
+      SensitiveDirectoryResult::kAbort);
+
+  // Forward slash path separators should be blocked.
+  EXPECT_EQ(ConfirmSensitiveEntryAccessSync(
+                permission_context(),
+                PathInfo(FILE_PATH_LITERAL("//wsl.localhost/Ubuntu/home/user")),
+                HandleType::kDirectory, UserAction::kOpen),
+            SensitiveDirectoryResult::kAbort);
+}
+
+// Verifies that legacy \\wsl$ redirector paths are rejected.
+TEST_F(ChromeFileSystemAccessPermissionContextNoSymbolicLinkCheckTest,
+       ConfirmSensitiveEntryAccess_WSL_LegacyRedirector) {
+  EXPECT_EQ(
+      ConfirmSensitiveEntryAccessSync(
+          permission_context(), PathInfo(FILE_PATH_LITERAL("\\\\wsl$\\Ubuntu")),
+          HandleType::kDirectory, UserAction::kOpen),
+      SensitiveDirectoryResult::kAbort);
+  EXPECT_EQ(ConfirmSensitiveEntryAccessSync(
+                permission_context(),
+                PathInfo(FILE_PATH_LITERAL("\\\\wsl$\\Ubuntu\\home\\user")),
+                HandleType::kDirectory, UserAction::kOpen),
+            SensitiveDirectoryResult::kAbort);
+  EXPECT_EQ(
+      ConfirmSensitiveEntryAccessSync(
+          permission_context(),
+          PathInfo(FILE_PATH_LITERAL("\\\\WSL$\\Ubuntu\\home\\user\\.ssh")),
+          HandleType::kDirectory, UserAction::kOpen),
+      SensitiveDirectoryResult::kAbort);
+}
+
+// Verifies that legitimate remote UNC shares remain allowed.
+TEST_F(ChromeFileSystemAccessPermissionContextNoSymbolicLinkCheckTest,
+       ConfirmSensitiveEntryAccess_RemoteUNC_Allowed) {
+  EXPECT_EQ(ConfirmSensitiveEntryAccessSync(
+                permission_context(),
+                PathInfo(FILE_PATH_LITERAL("\\\\server\\share\\foo\\bar")),
+                HandleType::kDirectory, UserAction::kOpen),
+            SensitiveDirectoryResult::kAllowed);
+  EXPECT_EQ(ConfirmSensitiveEntryAccessSync(
+                permission_context(),
+                PathInfo(FILE_PATH_LITERAL("\\\\remote-nas\\projects\\my-app")),
+                HandleType::kDirectory, UserAction::kOpen),
+            SensitiveDirectoryResult::kAllowed);
+  EXPECT_EQ(ConfirmSensitiveEntryAccessSync(
+                permission_context(),
+                PathInfo(FILE_PATH_LITERAL("\\\\corp.domain.com\\dfs\\team")),
+                HandleType::kDirectory, UserAction::kOpen),
+            SensitiveDirectoryResult::kAllowed);
+}
+
+// Testing that the */.git/hooks are all blocked.
+TEST_F(ChromeFileSystemAccessPermissionContextTest,
+       ConfirmSensitiveEntryAccess_SuffixWriteBlock) {
+  // Parent folder is not blocked.
+  EXPECT_EQ(ConfirmSensitiveEntryAccessSync(
+                permission_context(), PathInfo(FILE_PATH_LITERAL("\\\\.git")),
+                HandleType::kDirectory, UserAction::kSave),
+            SensitiveDirectoryResult::kAllowed);
+  // .git/hooks is blocked for save.
+  EXPECT_EQ(
+      ConfirmSensitiveEntryAccessSync(
+          permission_context(), PathInfo(FILE_PATH_LITERAL("\\\\.git\\hooks")),
+          HandleType::kDirectory, UserAction::kSave),
+      SensitiveDirectoryResult::kAbort);
+  // .git/hooks is not blocked for read.
+  EXPECT_EQ(
+      ConfirmSensitiveEntryAccessSync(
+          permission_context(), PathInfo(FILE_PATH_LITERAL("\\\\.git\\hooks")),
+          HandleType::kDirectory, UserAction::kOpen),
+      SensitiveDirectoryResult::kAllowed);
+  // .git/hooks inside another folder is blocked for save.
+  EXPECT_EQ(ConfirmSensitiveEntryAccessSync(
+                permission_context(),
+                PathInfo(FILE_PATH_LITERAL("\\\\a\\.git\\hooks")),
+                HandleType::kDirectory, UserAction::kSave),
+            SensitiveDirectoryResult::kAbort);
+  // The subfolder under .git/hooks folder is blocked for save.
+  EXPECT_EQ(ConfirmSensitiveEntryAccessSync(
+                permission_context(),
+                PathInfo(FILE_PATH_LITERAL("\\\\a\\.git\\hooks\\b")),
+                HandleType::kDirectory, UserAction::kSave),
+            SensitiveDirectoryResult::kAbort);
+  // Other suffix is allowed.
+  EXPECT_EQ(
+      ConfirmSensitiveEntryAccessSync(
+          permission_context(), PathInfo(FILE_PATH_LITERAL("\\\\.git\\hook")),
+          HandleType::kDirectory, UserAction::kSave),
+      SensitiveDirectoryResult::kAllowed);
+}
 #endif
 
 #if BUILDFLAG(IS_ANDROID)
@@ -1051,6 +1340,42 @@ TEST_F(ChromeFileSystemAccessPermissionContextTest,
       base::FilePath(
           base::StrCat({"content://", base::android::apk_info::package_name(),
                         ".fileprovider/cache/file"})),
+      HandleType::kFile));
+
+  // Percent-encoded authority should also fail.
+  EXPECT_TRUE(IsOpenAbort(
+      base::FilePath(
+          base::StrCat({"content://", base::android::apk_info::package_name(),
+                        "%2Efileprovider/cache/dir"})),
+      HandleType::kDirectory));
+  EXPECT_TRUE(IsOpenAbort(
+      base::FilePath(
+          base::StrCat({"content://", base::android::apk_info::package_name(),
+                        "%2efileprovider/cache/file"})),
+      HandleType::kFile));
+
+  // Authority exactly matching package name (no dot) should fail.
+  EXPECT_TRUE(IsOpenAbort(
+      base::FilePath(
+          base::StrCat({"content://", base::android::apk_info::package_name(),
+                        "/cache/dir"})),
+      HandleType::kDirectory));
+  EXPECT_TRUE(IsOpenAbort(
+      base::FilePath(
+          base::StrCat({"content://", base::android::apk_info::package_name(),
+                        "/cache/file"})),
+      HandleType::kFile));
+
+  // Userinfo bypass should also fail.
+  EXPECT_TRUE(IsOpenAbort(
+      base::FilePath(base::StrCat({"content://user@",
+                                   base::android::apk_info::package_name(),
+                                   ".fileprovider/cache/dir"})),
+      HandleType::kDirectory));
+  EXPECT_TRUE(IsOpenAbort(
+      base::FilePath(base::StrCat({"content://user@",
+                                   base::android::apk_info::package_name(),
+                                   "/cache/file"})),
       HandleType::kFile));
 
   EXPECT_TRUE(IsOpenAllowed(base::FilePath("content://authority/dir"),
@@ -1121,6 +1446,26 @@ TEST_F(ChromeFileSystemAccessPermissionContextSymbolicLinkCheckTest,
       SensitiveDirectoryResult::kAbort);
 }
 
+#if BUILDFLAG(IS_WIN)
+TEST_F(ChromeFileSystemAccessPermissionContextSymbolicLinkCheckTest,
+       ConfirmSensitiveEntryAccess_ResolveSymbolicLinkToLocalUNC) {
+  base::FilePath symlink = temp_dir_.GetPath().AppendASCII("symlink_to_unc");
+  base::FilePath target(FILE_PATH_LITERAL("\\\\localhost\\c$\\Windows"));
+
+  CreateSymbolicLinkResult result =
+      CreateSymbolicLinkForTesting(target, symlink);
+  if (result == CreateSymbolicLinkResult::kUnsupported) {
+    GTEST_SKIP();
+  }
+  ASSERT_EQ(result, CreateSymbolicLinkResult::kSucceeded);
+
+  EXPECT_EQ(ConfirmSensitiveEntryAccessSync(
+                permission_context(), PathInfo(symlink), HandleType::kDirectory,
+                UserAction::kOpen),
+            SensitiveDirectoryResult::kAbort);
+}
+#endif  // BUILDFLAG(IS_WIN)
+
 TEST_F(ChromeFileSystemAccessPermissionContextTest,
        ConfirmSensitiveEntryAccess_DangerousFile) {
   base::FilePath home_dir = temp_dir_.GetPath().AppendASCII("home");
@@ -1158,6 +1503,159 @@ TEST_F(ChromeFileSystemAccessPermissionContextTest,
       SensitiveDirectoryResult::kAbort);
 }
 
+#if BUILDFLAG(IS_ANDROID)
+// TODO(crbug.com/465668234): This test is disabled on Android because
+// `NormalizeFilePath` fails for non-existent paths on Android (where
+// `/data/user/0` is a symlink to `/data/data`), causing a mismatch between the
+// normalized rule and the un-normalized checked path.
+// We add this test as a protection in case the big refactoring in
+// http://crrev.com/c/7665590 breaks the `ConfirmSensitiveEntryAccess()` logic.
+// Even without Android, it serves the purpose.
+#define MAYBE_ConfirmSensitiveEntryAccess_AllPlatformBlockedPaths \
+  DISABLED_ConfirmSensitiveEntryAccess_AllPlatformBlockedPaths
+#else
+#define MAYBE_ConfirmSensitiveEntryAccess_AllPlatformBlockedPaths \
+  ConfirmSensitiveEntryAccess_AllPlatformBlockedPaths
+#endif
+TEST_F(ChromeFileSystemAccessPermissionContextTest,
+       MAYBE_ConfirmSensitiveEntryAccess_AllPlatformBlockedPaths) {
+  struct TestCase {
+    int base_path_key;
+    const base::FilePath::CharType* path;
+    bool block_all_children;
+    bool block_nested_directories;
+  };
+
+  constexpr const int kNoBasePathKey = -1;
+
+  static const TestCase kTestCases[] = {
+      // Common
+      {base::DIR_HOME, nullptr, false, false},
+      {base::DIR_USER_DESKTOP, nullptr, false, false},
+      {chrome::DIR_USER_DOCUMENTS, nullptr, false, false},
+      {chrome::DIR_DEFAULT_DOWNLOADS, nullptr, false, false},
+      {chrome::DIR_DEFAULT_DOWNLOADS_SAFE, nullptr, false, false},
+      {base::DIR_EXE, nullptr, true, false},
+      {base::DIR_MODULE, nullptr, true, false},
+      {base::DIR_ASSETS, nullptr, true, false},
+      {chrome::DIR_USER_DATA, nullptr, true, false},
+      {base::DIR_HOME, FILE_PATH_LITERAL(".ssh"), true, false},
+      {base::DIR_HOME, FILE_PATH_LITERAL(".gnupg"), true, false},
+
+#if BUILDFLAG(IS_WIN)
+      {base::DIR_PROGRAM_FILES, nullptr, true, false},
+      {base::DIR_PROGRAM_FILESX86, nullptr, true, false},
+      {base::DIR_PROGRAM_FILES6432, nullptr, true, false},
+      {base::DIR_WINDOWS, nullptr, true, false},
+      {base::DIR_ROAMING_APP_DATA, nullptr, true, false},
+      {base::DIR_LOCAL_APP_DATA, nullptr, true, false},
+      {base::DIR_COMMON_APP_DATA, nullptr, true, false},
+      {base::DIR_IE_INTERNET_CACHE, nullptr, false, true},
+#endif
+
+#if BUILDFLAG(IS_MAC)
+      {base::DIR_APP_DATA, nullptr, true, false},
+      {chrome::DIR_OUTER_BUNDLE, nullptr, true, false},
+      {base::DIR_HOME, FILE_PATH_LITERAL("Applications"), true, false},
+      {kNoBasePathKey, FILE_PATH_LITERAL("/Applications"), true, false},
+      {base::DIR_HOME, FILE_PATH_LITERAL("Library"), true, false},
+      {base::DIR_HOME, FILE_PATH_LITERAL("Library/CloudStorage"), false, false},
+      {base::DIR_HOME, FILE_PATH_LITERAL("Library/Containers"), false, false},
+      {base::DIR_HOME, FILE_PATH_LITERAL("Library/Mobile Documents"), false,
+       false},
+      {base::DIR_HOME,
+       FILE_PATH_LITERAL("Library/Mobile Documents/com~apple~CloudDocs"), false,
+       false},
+#endif
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
+      {kNoBasePathKey, FILE_PATH_LITERAL("/dev"), true, false},
+      {kNoBasePathKey, FILE_PATH_LITERAL("/proc"), true, false},
+      {kNoBasePathKey, FILE_PATH_LITERAL("/sys"), true, false},
+      {kNoBasePathKey, FILE_PATH_LITERAL("/boot"), true, false},
+      {kNoBasePathKey, FILE_PATH_LITERAL("/etc"), true, false},
+      {base::DIR_HOME, FILE_PATH_LITERAL(".config"), true, false},
+      {base::DIR_HOME, FILE_PATH_LITERAL(".dbus"), true, false},
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+      {base::DIR_ANDROID_APP_DATA, nullptr, true, false},
+      {base::DIR_CACHE, nullptr, true, false},
+#endif
+  };
+
+  for (const auto& test_case : kTestCases) {
+    base::FilePath base_path;
+    base::ScopedTempDir case_temp_dir;
+    std::unique_ptr<base::ScopedPathOverride> path_override;
+    std::unique_ptr<ScopedHomeDirOverride> home_override_ptr;
+
+    if (test_case.base_path_key != kNoBasePathKey) {
+      ASSERT_TRUE(case_temp_dir.CreateUniqueTempDir());
+      base_path = case_temp_dir.GetPath();
+      if (test_case.base_path_key == base::DIR_HOME) {
+        home_override_ptr.reset(
+            new ScopedHomeDirOverride(OverrideHomeDir(base_path)));
+      } else {
+        path_override = std::make_unique<base::ScopedPathOverride>(
+            test_case.base_path_key, base_path, true, true);
+      }
+    } else {
+      base_path = base::FilePath(test_case.path);
+    }
+    ResetBlockPath();
+
+    base::FilePath path_to_check = base_path;
+    if (test_case.base_path_key != kNoBasePathKey && test_case.path) {
+      path_to_check = base_path.Append(test_case.path);
+    }
+
+    EXPECT_EQ(ConfirmSensitiveEntryAccessSync(
+                  permission_context(), PathInfo(path_to_check),
+                  HandleType::kDirectory, UserAction::kOpen),
+              SensitiveDirectoryResult::kAbort)
+        << "Failed for " << path_to_check.value();
+
+    base::FilePath child_file = path_to_check.AppendASCII("child_file");
+    base::FilePath child_dir = path_to_check.AppendASCII("child_dir");
+
+    if (test_case.block_all_children) {
+      EXPECT_EQ(ConfirmSensitiveEntryAccessSync(
+                    permission_context(), PathInfo(child_file),
+                    HandleType::kFile, UserAction::kOpen),
+                SensitiveDirectoryResult::kAbort)
+          << "Failed for " << child_file.value();
+      EXPECT_EQ(ConfirmSensitiveEntryAccessSync(
+                    permission_context(), PathInfo(child_dir),
+                    HandleType::kDirectory, UserAction::kOpen),
+                SensitiveDirectoryResult::kAbort)
+          << "Failed for " << child_dir.value();
+    } else if (test_case.block_nested_directories) {
+      EXPECT_EQ(ConfirmSensitiveEntryAccessSync(
+                    permission_context(), PathInfo(child_file),
+                    HandleType::kFile, UserAction::kOpen),
+                SensitiveDirectoryResult::kAllowed)
+          << "Failed for " << child_file.value();
+      EXPECT_EQ(ConfirmSensitiveEntryAccessSync(
+                    permission_context(), PathInfo(child_dir),
+                    HandleType::kDirectory, UserAction::kOpen),
+                SensitiveDirectoryResult::kAbort)
+          << "Failed for " << child_dir.value();
+    } else {
+      EXPECT_EQ(ConfirmSensitiveEntryAccessSync(
+                    permission_context(), PathInfo(child_file),
+                    HandleType::kFile, UserAction::kOpen),
+                SensitiveDirectoryResult::kAllowed)
+          << "Failed for " << child_file.value();
+      EXPECT_EQ(ConfirmSensitiveEntryAccessSync(
+                    permission_context(), PathInfo(child_dir),
+                    HandleType::kDirectory, UserAction::kOpen),
+                SensitiveDirectoryResult::kAllowed)
+          << "Failed for " << child_dir.value();
+    }
+  }
+}
+
 TEST_F(ChromeFileSystemAccessPermissionContextTest,
        CanObtainWritePermission_ContentSettingAsk) {
   SetDefaultContentSettingValue(ContentSettingsType::FILE_SYSTEM_WRITE_GUARD,
@@ -1178,6 +1676,16 @@ TEST_F(ChromeFileSystemAccessPermissionContextTest,
   // setting here because `ALLOW` is not an acceptable option.
   EXPECT_TRUE(permission_context()->CanObtainWritePermission(kChromeOrigin));
 }
+
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+TEST_F(ChromeFileSystemAccessPermissionContextTest, IsFileTypeDangerous) {
+  safe_browsing::FileTypePoliciesTestOverlay scoped_dangerous =
+      safe_browsing::ScopedMarkAllFilesDangerousForTesting();
+
+  const base::FilePath kPath(FILE_PATH_LITERAL("/foo/bar.dll"));
+  EXPECT_TRUE(permission_context()->IsFileTypeDangerous(kPath));
+}
+#endif  // BUILDFLAG(SAFE_BROWSING_AVAILABLE)
 
 TEST_F(ChromeFileSystemAccessPermissionContextTest, PolicyReadGuardPermission) {
   auto* prefs = profile()->GetTestingPrefService();
@@ -3435,6 +3943,246 @@ TEST_F(ChromeFileSystemAccessPermissionContextTest,
       kTestOrigin, file_path_info.path));
 }
 
+// Tests that calling NotifyEntryRemoved with a directory path correctly revokes
+// read permission grants for all descendants of that directory.
+// Regression test for crbug.com/501810874.
+TEST_F(ChromeFileSystemAccessPermissionContextTest,
+       NotifyEntryRemoved_RecursiveDir_DescendantFileGrantDowngraded) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      blink::features::kFileSystemAccessRevokeReadOnRemove);
+  FileSystemAccessPermissionRequestManager::FromWebContents(web_contents())
+      ->set_auto_response_for_test(PermissionAction::GRANTED);
+
+  // Sets up a directory path and a child file path to be the test targets.
+  const auto dir_info = kTestPathInfo;
+  const auto file_info = PathInfo(dir_info.path.AppendASCII("config.json"));
+
+  // Grant a standalone read permission for the child file.
+  auto file_read_grant = permission_context()->GetReadPermissionGrant(
+      kTestOrigin, file_info, HandleType::kFile, UserAction::kOpen);
+  ASSERT_EQ(file_read_grant->GetStatus(), PermissionStatus::GRANTED);
+
+  // Grant read and write permission to the directory.
+  auto dir_read_grant = permission_context()->GetReadPermissionGrant(
+      kTestOrigin, dir_info, HandleType::kDirectory, UserAction::kOpen);
+  {
+    base::test::TestFuture<PermissionRequestOutcome> f;
+    dir_read_grant->RequestPermission(
+        frame_id(), UserActivationState::kNotRequired, f.GetCallback());
+    ASSERT_EQ(f.Get(), PermissionRequestOutcome::kUserGranted);
+  }
+  auto dir_write_grant = permission_context()->GetWritePermissionGrant(
+      kTestOrigin, dir_info, HandleType::kDirectory, UserAction::kOpen);
+  {
+    base::test::TestFuture<PermissionRequestOutcome> f;
+    dir_write_grant->RequestPermission(
+        frame_id(), UserActivationState::kNotRequired, f.GetCallback());
+    ASSERT_EQ(f.Get(), PermissionRequestOutcome::kUserGranted);
+  }
+  ASSERT_EQ(dir_read_grant->GetStatus(), PermissionStatus::GRANTED);
+  ASSERT_EQ(dir_write_grant->GetStatus(), PermissionStatus::GRANTED);
+
+  // Revoke permissions for the directory. This represents a recursive removal
+  // of the directory.
+  permission_context()->NotifyEntryRemoved(kTestOrigin, dir_info);
+
+  // Verify that the directory's own read permission is downgraded.
+  EXPECT_EQ(dir_read_grant->GetStatus(), PermissionStatus::DENIED);
+  EXPECT_TRUE(permission_context()->IsPathInDowngradedReadPathsForTesting(
+      kTestOrigin, dir_info.path));
+
+  // Verify that the descendant file's read permission is also downgraded.
+  EXPECT_EQ(file_read_grant->GetStatus(), PermissionStatus::DENIED);
+  EXPECT_TRUE(permission_context()->IsPathInDowngradedReadPathsForTesting(
+      kTestOrigin, file_info.path));
+
+  // Verify that a fresh lookup also sees the downgraded status while the grant
+  // is still in memory.
+  EXPECT_EQ(permission_context()
+                ->GetReadPermissionGrant(kTestOrigin, file_info,
+                                         HandleType::kFile, UserAction::kNone)
+                ->GetStatus(),
+            PermissionStatus::DENIED);
+
+  // Once the grant is no longer in memory, its status should revert to ASK.
+  file_read_grant.reset();
+  EXPECT_EQ(permission_context()
+                ->GetReadPermissionGrant(kTestOrigin, file_info,
+                                         HandleType::kFile, UserAction::kNone)
+                ->GetStatus(),
+            PermissionStatus::ASK);
+}
+
+// Verifies that moving an entry with a downgraded read grant transfers the
+// downgraded state to the destination path, and moving the entry back to its
+// original path does not restore the read grant.
+TEST_F(ChromeFileSystemAccessPermissionContextTest,
+       NotifyEntryMoved_DowngradedReadGrantFollowsMove) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      blink::features::kFileSystemAccessRevokeReadOnRemove);
+  permission_context()->SetOriginHasExtendedPermissionForTesting(kTestOrigin);
+
+  const auto file_path_info =
+      PathInfo(kTestPathInfo.path.AppendASCII("test_file.txt"));
+  const auto temp_path_info =
+      PathInfo(kTestPathInfo.path.AppendASCII("temp_file.txt"));
+
+  // Initialize read and write permissions for the target file path.
+  auto read_grant = permission_context()->GetReadPermissionGrant(
+      kTestOrigin, file_path_info, HandleType::kFile, UserAction::kSave);
+  auto write_grant = permission_context()->GetWritePermissionGrant(
+      kTestOrigin, file_path_info, HandleType::kFile, UserAction::kSave);
+  EXPECT_EQ(read_grant->GetStatus(), PermissionStatus::GRANTED);
+  EXPECT_EQ(write_grant->GetStatus(), PermissionStatus::GRANTED);
+
+  // Calling `NotifyEntryRemoved()` downgrades the read grant and records the
+  // path in `downgraded_read_paths`.
+  permission_context()->NotifyEntryRemoved(kTestOrigin, file_path_info);
+  EXPECT_EQ(read_grant->GetStatus(), PermissionStatus::DENIED);
+  EXPECT_EQ(write_grant->GetStatus(), PermissionStatus::GRANTED);
+  EXPECT_TRUE(permission_context()->IsPathInDowngradedReadPathsForTesting(
+      kTestOrigin, file_path_info.path));
+
+  // Calling `NotifyEntryMoved()` transfers the downgraded read state to the
+  // destination path.
+  permission_context()->NotifyEntryMoved(kTestOrigin, file_path_info,
+                                         temp_path_info);
+  EXPECT_EQ(read_grant->GetPath(), temp_path_info.path);
+  EXPECT_EQ(read_grant->GetStatus(), PermissionStatus::DENIED);
+  EXPECT_FALSE(permission_context()->IsPathInDowngradedReadPathsForTesting(
+      kTestOrigin, file_path_info.path));
+  EXPECT_TRUE(permission_context()->IsPathInDowngradedReadPathsForTesting(
+      kTestOrigin, temp_path_info.path));
+
+  // Moving the entry back to its original path retains the `DENIED` read grant
+  // because the origin has not authored new content at the destination.
+  permission_context()->NotifyEntryMoved(kTestOrigin, temp_path_info,
+                                         file_path_info);
+  EXPECT_EQ(read_grant->GetPath(), file_path_info.path);
+  EXPECT_EQ(read_grant->GetStatus(), PermissionStatus::DENIED);
+  EXPECT_EQ(write_grant->GetStatus(), PermissionStatus::GRANTED);
+  EXPECT_TRUE(permission_context()->IsPathInDowngradedReadPathsForTesting(
+      kTestOrigin, file_path_info.path));
+  EXPECT_FALSE(permission_context()->IsPathInDowngradedReadPathsForTesting(
+      kTestOrigin, temp_path_info.path));
+
+  // Calling `NotifyEntryModified()` at the original path restores the read
+  // grant.
+  permission_context()->NotifyEntryModified(kTestOrigin, file_path_info);
+  EXPECT_EQ(read_grant->GetStatus(), PermissionStatus::GRANTED);
+  EXPECT_FALSE(permission_context()->IsPathInDowngradedReadPathsForTesting(
+      kTestOrigin, file_path_info.path));
+}
+
+// Verifies that moving a handle with a downgraded read grant successfully
+// updates the grant path without triggering assertion failures.
+TEST_F(ChromeFileSystemAccessPermissionContextTest,
+       NotifyEntryMoved_DowngradedReadGrantMigratesWithoutAssertionFailure) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      blink::features::kFileSystemAccessRevokeReadOnRemove);
+  permission_context()->SetOriginHasExtendedPermissionForTesting(kTestOrigin);
+
+  const auto file_path_info =
+      PathInfo(kTestPathInfo.path.AppendASCII("test_file.txt"));
+  const auto temp_path_info =
+      PathInfo(kTestPathInfo.path.AppendASCII("temp_file.txt"));
+
+  // Initialize read and write grants.
+  auto read_grant = permission_context()->GetReadPermissionGrant(
+      kTestOrigin, file_path_info, HandleType::kFile, UserAction::kSave);
+  auto write_grant = permission_context()->GetWritePermissionGrant(
+      kTestOrigin, file_path_info, HandleType::kFile, UserAction::kSave);
+  EXPECT_EQ(read_grant->GetStatus(), PermissionStatus::GRANTED);
+  EXPECT_EQ(write_grant->GetStatus(), PermissionStatus::GRANTED);
+
+  // Downgrade the read grant to `DENIED` via `NotifyEntryRemoved()`.
+  permission_context()->NotifyEntryRemoved(kTestOrigin, file_path_info);
+  EXPECT_EQ(read_grant->GetStatus(), PermissionStatus::DENIED);
+
+  // Moving the handle invokes `PermissionGrantImpl::UpdateGrantPath()`.
+  // This operation must successfully update the grant path for a `DENIED`
+  // grant without triggering assertion failures in debug builds.
+  permission_context()->NotifyEntryMoved(kTestOrigin, file_path_info,
+                                         temp_path_info);
+  EXPECT_EQ(read_grant->GetPath(), temp_path_info.path);
+  EXPECT_EQ(read_grant->GetStatus(), PermissionStatus::DENIED);
+}
+
+// Tests that calling NotifyEntryRemoved with a directory path also revokes
+// read permission grants for descendants whose stored path differs only in
+// case from the removed directory. Native file pickers on case-insensitive
+// filesystems can return such case-variant paths for the same on-disk entry.
+TEST_F(ChromeFileSystemAccessPermissionContextTest,
+       NotifyEntryRemoved_RecursiveDir_CaseInsensitiveDescendantDowngraded) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      blink::features::kFileSystemAccessRevokeReadOnRemove);
+  FileSystemAccessPermissionRequestManager::FromWebContents(web_contents())
+      ->set_auto_response_for_test(PermissionAction::GRANTED);
+
+  // Set up a directory path and a child file path that differ only in the
+  // case of one component.
+  const auto dir_info = PathInfo(FILE_PATH_LITERAL("/foo/project"));
+  const auto file_info =
+      PathInfo(FILE_PATH_LITERAL("/foo/Project/config.json"));
+  const auto sibling_info =
+      PathInfo(FILE_PATH_LITERAL("/foo/projects/config.json"));
+
+  // Grant a standalone read permission for the case-variant child file.
+  auto file_read_grant = permission_context()->GetReadPermissionGrant(
+      kTestOrigin, file_info, HandleType::kFile, UserAction::kOpen);
+  ASSERT_EQ(file_read_grant->GetStatus(), PermissionStatus::GRANTED);
+
+  // Grant a standalone read permission for an unrelated sibling whose path
+  // shares a case-insensitive prefix string but is not actually a descendant.
+  auto sibling_read_grant = permission_context()->GetReadPermissionGrant(
+      kTestOrigin, sibling_info, HandleType::kFile, UserAction::kOpen);
+  ASSERT_EQ(sibling_read_grant->GetStatus(), PermissionStatus::GRANTED);
+
+  // Grant read and write permission to the directory.
+  auto dir_read_grant = permission_context()->GetReadPermissionGrant(
+      kTestOrigin, dir_info, HandleType::kDirectory, UserAction::kOpen);
+  {
+    base::test::TestFuture<PermissionRequestOutcome> f;
+    dir_read_grant->RequestPermission(
+        frame_id(), UserActivationState::kNotRequired, f.GetCallback());
+    ASSERT_EQ(f.Get(), PermissionRequestOutcome::kUserGranted);
+  }
+  auto dir_write_grant = permission_context()->GetWritePermissionGrant(
+      kTestOrigin, dir_info, HandleType::kDirectory, UserAction::kOpen);
+  {
+    base::test::TestFuture<PermissionRequestOutcome> f;
+    dir_write_grant->RequestPermission(
+        frame_id(), UserActivationState::kNotRequired, f.GetCallback());
+    ASSERT_EQ(f.Get(), PermissionRequestOutcome::kUserGranted);
+  }
+  ASSERT_EQ(dir_read_grant->GetStatus(), PermissionStatus::GRANTED);
+  ASSERT_EQ(dir_write_grant->GetStatus(), PermissionStatus::GRANTED);
+
+  // Revoke permissions for the directory. This represents a recursive removal
+  // of the directory.
+  permission_context()->NotifyEntryRemoved(kTestOrigin, dir_info);
+
+  // Verify that the directory's own read permission is downgraded.
+  EXPECT_EQ(dir_read_grant->GetStatus(), PermissionStatus::DENIED);
+  EXPECT_TRUE(permission_context()->IsPathInDowngradedReadPathsForTesting(
+      kTestOrigin, dir_info.path));
+
+  // Verify that the case-variant descendant file's read permission is also
+  // downgraded.
+  EXPECT_EQ(file_read_grant->GetStatus(), PermissionStatus::DENIED);
+  EXPECT_TRUE(permission_context()->IsPathInDowngradedReadPathsForTesting(
+      kTestOrigin, file_info.path));
+
+  // Verify that the unrelated sibling is not affected.
+  EXPECT_EQ(sibling_read_grant->GetStatus(), PermissionStatus::GRANTED);
+  EXPECT_FALSE(permission_context()->IsPathInDowngradedReadPathsForTesting(
+      kTestOrigin, sibling_info.path));
+}
+
 // Tests that moving a file to a destination with a pre-existing permission
 // grant works correctly.
 TEST_F(ChromeFileSystemAccessPermissionContextTest,
@@ -3500,6 +4248,136 @@ TEST_F(ChromeFileSystemAccessPermissionContextTest,
       kTestOrigin, path_info2, HandleType::kFile, UserAction::kNone);
   EXPECT_EQ(old_file2_read_grant->GetStatus(), PermissionStatus::ASK);
   EXPECT_EQ(old_file2_write_grant->GetStatus(), PermissionStatus::ASK);
+}
+
+// Regression test for crbug.com/499078161.
+TEST_F(ChromeFileSystemAccessPermissionContextTest,
+       RevokeActiveGrants_ClearsDowngradedReadPaths) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      blink::features::kFileSystemAccessRevokeReadOnRemove);
+  FileSystemAccessPermissionRequestManager::FromWebContents(web_contents())
+      ->set_auto_response_for_test(PermissionAction::GRANTED);
+  permission_context()->SetOriginHasExtendedPermissionForTesting(kTestOrigin);
+
+  // Sets up a file path to be the test target.
+  const auto file_path_info =
+      PathInfo(kTestPathInfo.path.AppendASCII("test_file.txt"));
+
+  // Grant read and write permission to the file path.
+  EXPECT_EQ(permission_context()
+                ->GetReadPermissionGrant(kTestOrigin, file_path_info,
+                                         HandleType::kFile, UserAction::kSave)
+                ->GetStatus(),
+            PermissionStatus::GRANTED);
+  EXPECT_EQ(permission_context()
+                ->GetWritePermissionGrant(kTestOrigin, file_path_info,
+                                          HandleType::kFile, UserAction::kSave)
+                ->GetStatus(),
+            PermissionStatus::GRANTED);
+
+  // 1. Revoke the read permission for the file path by calling NotifyEntryRemoved.
+  // This adds the path to downgraded_read_paths.
+  permission_context()->NotifyEntryRemoved(kTestOrigin, file_path_info);
+
+  // Verify the path is added to downgraded_read_paths.
+  EXPECT_TRUE(permission_context()->IsPathInDowngradedReadPathsForTesting(
+      kTestOrigin, file_path_info.path));
+
+  // 2. Revoke all active grants for the origin. This should clear downgraded_read_paths.
+  permission_context()->RevokeActiveGrantsForTesting(kTestOrigin);
+
+  // Verify the path is removed from downgraded_read_paths.
+  EXPECT_FALSE(permission_context()->IsPathInDowngradedReadPathsForTesting(
+      kTestOrigin, file_path_info.path));
+}
+
+// Regression test for crbug.com/499078161.
+TEST_F(ChromeFileSystemAccessPermissionContextTest,
+       RevokeActiveGrants_SpecificPath_ClearsDowngradedReadPaths) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      blink::features::kFileSystemAccessRevokeReadOnRemove);
+  FileSystemAccessPermissionRequestManager::FromWebContents(web_contents())
+      ->set_auto_response_for_test(PermissionAction::GRANTED);
+  permission_context()->SetOriginHasExtendedPermissionForTesting(kTestOrigin);
+
+  // Sets up file paths to be the test targets.
+  const auto file_path_info1 =
+      PathInfo(kTestPathInfo.path.AppendASCII("test_file1.txt"));
+  const auto file_path_info2 =
+      PathInfo(kTestPathInfo.path.AppendASCII("test_file2.txt"));
+
+  // Grant read and write permission to the file paths.
+  EXPECT_EQ(permission_context()
+                ->GetReadPermissionGrant(kTestOrigin, file_path_info1,
+                                         HandleType::kFile, UserAction::kSave)
+                ->GetStatus(),
+            PermissionStatus::GRANTED);
+  EXPECT_EQ(permission_context()
+                ->GetReadPermissionGrant(kTestOrigin, file_path_info2,
+                                         HandleType::kFile, UserAction::kSave)
+                ->GetStatus(),
+            PermissionStatus::GRANTED);
+
+  // 1. Revoke the read permission for the file paths by calling NotifyEntryRemoved.
+  // This adds the paths to downgraded_read_paths.
+  permission_context()->NotifyEntryRemoved(kTestOrigin, file_path_info1);
+  permission_context()->NotifyEntryRemoved(kTestOrigin, file_path_info2);
+
+  // Verify the paths are added to downgraded_read_paths.
+  EXPECT_TRUE(permission_context()->IsPathInDowngradedReadPathsForTesting(
+      kTestOrigin, file_path_info1.path));
+  EXPECT_TRUE(permission_context()->IsPathInDowngradedReadPathsForTesting(
+      kTestOrigin, file_path_info2.path));
+
+  // 2. Revoke active grant for a specific path.
+  permission_context()->RevokeActiveGrantsForTesting(kTestOrigin,
+                                                     file_path_info1.path);
+
+  // Verify file_path_info1 is removed from downgraded_read_paths.
+  EXPECT_FALSE(permission_context()->IsPathInDowngradedReadPathsForTesting(
+      kTestOrigin, file_path_info1.path));
+  // Verify file_path_info2 is STILL in downgraded_read_paths.
+  EXPECT_TRUE(permission_context()->IsPathInDowngradedReadPathsForTesting(
+      kTestOrigin, file_path_info2.path));
+}
+
+// Regression test for crbug.com/499078161.
+TEST_F(ChromeFileSystemAccessPermissionContextTest,
+       RevokeAllActiveGrants_ClearsDowngradedReadPaths) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      blink::features::kFileSystemAccessRevokeReadOnRemove);
+  FileSystemAccessPermissionRequestManager::FromWebContents(web_contents())
+      ->set_auto_response_for_test(PermissionAction::GRANTED);
+  permission_context()->SetOriginHasExtendedPermissionForTesting(kTestOrigin);
+
+  // Sets up a file path to be the test target.
+  const auto file_path_info =
+      PathInfo(kTestPathInfo.path.AppendASCII("test_file.txt"));
+
+  // Grant read and write permission to the file path.
+  EXPECT_EQ(permission_context()
+                ->GetReadPermissionGrant(kTestOrigin, file_path_info,
+                                         HandleType::kFile, UserAction::kSave)
+                ->GetStatus(),
+            PermissionStatus::GRANTED);
+
+  // 1. Revoke the read permission for the file path by calling NotifyEntryRemoved.
+  // This adds the path to downgraded_read_paths.
+  permission_context()->NotifyEntryRemoved(kTestOrigin, file_path_info);
+
+  // Verify the path is added to downgraded_read_paths.
+  EXPECT_TRUE(permission_context()->IsPathInDowngradedReadPathsForTesting(
+      kTestOrigin, file_path_info.path));
+
+  // 2. Revoke all active grants. This should clear downgraded_read_paths for all origins.
+  permission_context()->RevokeAllActiveGrants();
+
+  // Verify the path is removed from downgraded_read_paths.
+  EXPECT_FALSE(permission_context()->IsPathInDowngradedReadPathsForTesting(
+      kTestOrigin, file_path_info.path));
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
@@ -3787,13 +4665,113 @@ TEST_F(ChromeFileSystemAccessPermissionContextTest,
   EXPECT_EQ(future.Get<0>()[0].path, path_foo);
 }
 
+#if BUILDFLAG(IS_CHROMEOS)
+TEST_F(ChromeFileSystemAccessPermissionContextTest,
+       CheckPathsAgainstEnterprisePolicy_ExternalFile) {
+  EnableEnterpriseAnalysis(profile());
+
+  // 1. Set up the external mount point.
+  base::FilePath mount_path = temp_dir_.GetPath().AppendASCII("mount");
+  ASSERT_TRUE(base::CreateDirectory(mount_path));
+  base::FilePath physical_path = mount_path.AppendASCII("foo");
+  EXPECT_TRUE(CreateNonEmptyFile(physical_path));
+
+  const std::string mount_name = "test_mount";
+  scoped_refptr<storage::ExternalMountPoints> mount_points =
+      storage::ExternalMountPoints::GetSystemInstance();
+  // Revoke if already exists (should not, but good practice)
+  mount_points->RevokeFileSystem(mount_name);
+  EXPECT_TRUE(mount_points->RegisterFileSystem(
+      mount_name, storage::kFileSystemTypeLocal,
+      storage::FileSystemMountOption(), mount_path));
+  base::ScopedClosureRunner cleanup_mount(
+      base::BindOnce([](scoped_refptr<storage::ExternalMountPoints> mp,
+                        std::string name) { mp->RevokeFileSystem(name); },
+                     mount_points, mount_name));
+
+  // The virtual path that the FSA manager would see.
+  base::FilePath virtual_path =
+      mount_points->CreateVirtualRootPath(mount_name).AppendASCII("foo");
+
+  // 2. Set up the fake delegate to verify it receives the PHYSICAL path.
+  ContentAnalysisDelegate::SetFactoryForTesting(base::BindRepeating(
+      &FakeContentAnalysisDelegate::Create, base::DoNothing(),
+      base::BindLambdaForTesting([physical_path](const std::string& contents,
+                                                 const base::FilePath& path) {
+        // VERIFY: The path passed to the scanner must be the physical path!
+        EXPECT_EQ(path, physical_path);
+        return FakeContentAnalysisDelegate::SuccessfulResponse({"dlp"});
+      }),
+      kDummyDmToken));
+
+  std::vector<PathInfo> entries{
+      {PathType::kExternal, virtual_path},
+  };
+
+  // 3. Run the check.
+  base::test::TestFuture<std::vector<PathInfo>> future;
+  permission_context_->CheckPathsAgainstEnterprisePolicy(entries, frame_id(),
+                                                         future.GetCallback());
+
+  // VERIFY: The returned entry must have the original VIRTUAL path and
+  // kExternal type.
+  EXPECT_THAT(future.Get<0>(), testing::ElementsAreArray(entries));
+}
+
+TEST_F(ChromeFileSystemAccessPermissionContextTest,
+       CheckPathsAgainstEnterprisePolicy_ResolutionFailure_FailClosed) {
+  EnableEnterpriseAnalysis(profile(), /*fail_closed=*/true);
+
+  // We do NOT register the mount point, so virtual_path will fail to resolve.
+  base::FilePath virtual_path(
+      FILE_PATH_LITERAL("/special/mount/test_mount/foo"));
+
+  std::vector<PathInfo> entries{
+      {PathType::kExternal, virtual_path},
+  };
+
+  // Run the check.
+  base::test::TestFuture<std::vector<PathInfo>> future;
+  permission_context_->CheckPathsAgainstEnterprisePolicy(entries, frame_id(),
+                                                         future.GetCallback());
+
+  // VERIFY: The returned entries must be empty because the unresolved file
+  // is blocked under the fail-closed policy.
+  EXPECT_TRUE(future.Get<0>().empty());
+}
+
+TEST_F(ChromeFileSystemAccessPermissionContextTest,
+       CheckPathsAgainstEnterprisePolicy_ResolutionFailure_FailOpen) {
+  EnableEnterpriseAnalysis(profile());  // Default policy is fail-open
+
+  // We do NOT register the mount point, so virtual_path will fail to resolve.
+  base::FilePath virtual_path(
+      FILE_PATH_LITERAL("/special/mount/test_mount/foo"));
+
+  std::vector<PathInfo> entries{
+      {PathType::kExternal, virtual_path},
+  };
+
+  // Run the check.
+  base::test::TestFuture<std::vector<PathInfo>> future;
+  permission_context_->CheckPathsAgainstEnterprisePolicy(entries, frame_id(),
+                                                         future.GetCallback());
+
+  // VERIFY: The returned entry must have the original VIRTUAL path and
+  // kExternal type because the unresolved file is allowed under the fail-open
+  // policy.
+  EXPECT_THAT(future.Get<0>(), testing::ElementsAreArray(entries));
+}
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
 #endif  // BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
 
 #if BUILDFLAG(IS_WIN)
 // Regression test for crbug.com/428455312.
 // `GetUserDocumentsDirectory()` may return invalid paths on Windows by calling
-// `SHGetFolderPath()` Windows OS API, which may return a path value that customers and
-// enterprises can override to be an invalid path like "C:PC\\Documents".
+// `SHGetFolderPath()` Windows OS API, which may return a path value that
+// customers and enterprises can override to be an invalid path like
+// "C:PC\\Documents".
 TEST_F(ChromeFileSystemAccessPermissionContextTest,
        ConfirmSensitiveEntryAccess_DontBlockOnInvalidPath) {
   base::FilePath home_dir(FILE_PATH_LITERAL("C:PC\\Documents"));

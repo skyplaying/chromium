@@ -7,13 +7,13 @@
 
 #include "components/user_education/common/user_education_context.h"
 #include "testing/gmock/include/gmock/gmock.h"
-#include "ui/base/interaction/framework_specific_implementation.h"
+#include "ui/base/interaction/safe_castable.h"
 
 namespace user_education::test {
 
 class MockUserEducationContext : public UserEducationContext {
  public:
-  DECLARE_FRAMEWORK_SPECIFIC_METADATA()
+  DECLARE_SAFE_CAST_TARGET()
 
   MockUserEducationContext();
 
@@ -21,6 +21,10 @@ class MockUserEducationContext : public UserEducationContext {
   MOCK_METHOD(ui::ElementContext, GetElementContext, (), (const, override));
   MOCK_METHOD(const ui::AcceleratorProvider*,
               GetAcceleratorProvider,
+              (),
+              (const, override));
+  MOCK_METHOD(user_education::AnchorElementFilter,
+              GetDefaultElementFilter,
               (),
               (const, override));
 

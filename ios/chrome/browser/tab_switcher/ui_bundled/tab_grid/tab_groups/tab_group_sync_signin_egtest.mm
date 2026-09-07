@@ -76,7 +76,7 @@ void WaitForEntitiesOnFakeServer(int entity_count) {
   GREYAssert(base::test::ios::WaitUntilConditionOrTimeout(kSyncOperationTimeout,
                                                           condition),
              @"Expected %d %s entities but found %d", entity_count,
-             syncer::DataTypeToDebugString(entity_type),
+             std::string(syncer::DataTypeToDebugString(entity_type)).c_str(),
              [ChromeEarlGrey numberOfSyncEntitiesWithType:entity_type]);
 }
 
@@ -194,7 +194,8 @@ void WaitForEntitiesOnFakeServer(int entity_count) {
 
 // Tests that signing out keeps groups created before syncing and deletes groups
 // created since.
-- (void)testSignOutKeepsPreviousGroupDeletesNewGroup {
+// TODO(crbug.com/520299135): Test is flaky.
+- (void)FLAKY_testSignOutKeepsPreviousGroupDeletesNewGroup {
   [ChromeEarlGreyUI openTabGrid];
 
   // Switch over to the tab groups page and delete existing saved groups.
@@ -323,13 +324,6 @@ void WaitForEntitiesOnFakeServer(int entity_count) {
 
 // Tests that tab groups don't get reopened after signing out and back in
 - (void)testSignOutAndBackInDoesNotReopenGroups {
-  // TODO(crbug.com/415554855): Test is flaky on iPad device from 18.2.
-  if (@available(iOS 18, *)) {
-    if ([ChromeEarlGrey isIPadIdiom]) {
-      EARL_GREY_TEST_DISABLED(@"Disabled on iOS 18+ on iPad.");
-    }
-  }
-
   // Ensure that there are no tab groups initially.
   [ChromeEarlGreyUI openTabGrid];
   [[EarlGrey selectElementWithMatcher:TabGridTabGroupsPanelButton()]

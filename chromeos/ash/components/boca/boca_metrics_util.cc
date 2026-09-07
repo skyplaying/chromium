@@ -45,6 +45,10 @@ void RecordOnTaskNumOfTabsWhenSessionEnded(int num_of_tabs) {
   UMA_HISTOGRAM_COUNTS_100(kBocaOnTaskNumOfTabsWhenSessionEnded, num_of_tabs);
 }
 
+void RecordOnTaskOAuthTriggered() {
+  base::UmaHistogramBoolean(kBocaOnTaskOAuthTriggered, true);
+}
+
 void RecordOnTaskMaxNumOfTabsDuringSession(int max_num_of_tabs) {
   UMA_HISTOGRAM_COUNTS_100(kBocaOnTaskMaxNumOfTabsDuringSession,
                            max_num_of_tabs);
@@ -250,6 +254,14 @@ void RecordPresentStudentScreenFailureReason(
     BocaPresentStudentScreenFailureReason reason) {
   base::UmaHistogramEnumeration(
       kBocaScreenSharePresentStudentScreenFailureReason, reason);
+}
+
+void RecordTeacherGetGeminiStatusEnabled(bool enabled) {
+  base::UmaHistogramBoolean(kBocaTeacherGetGeminiStatusEnabled, enabled);
+}
+
+void RecordStudentGeminiStatusEnabled(bool enabled) {
+  base::UmaHistogramBoolean(kBocaStudentGeminiStatusEnabled, enabled);
 }
 
 }  // namespace ash::boca

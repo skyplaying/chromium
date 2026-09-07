@@ -1890,7 +1890,7 @@ message OBSOLETE_ExtendedFkeysModifierProto {
 }
 
 message ChromeDeviceSettingsProto {
-  reserved 61, 71, 90, 131;
+  reserved 61, 71, 90, 131, 1478, 1479, 1480;
   optional DevicePolicyRefreshRateProto device_policy_refresh_rate = 1;
   optional UserWhitelistProto user_whitelist = 2;
   optional GuestModeEnabledProto guest_mode_enabled = 3;
@@ -2116,7 +2116,8 @@ message ChromeDeviceSettingsProto {
   optional BooleanPolicyProto DeviceExtensionsSystemLogEnabled = 1252;
   optional BooleanPolicyProto DeviceAllowEnterpriseRemoteAccessConnections =
       1268;
-  optional BooleanPolicyProto DevicePostQuantumKeyAgreementEnabled = 1276;
+  optional BooleanPolicyProto DevicePostQuantumKeyAgreementEnabled = 1276
+      [deprecated = true];
   optional StringPolicyProto DeviceRestrictionSchedule = 1290;
   optional BooleanPolicyProto DeviceNativeClientForceAllowed = 1314
       [deprecated = true];
@@ -2130,4 +2131,7 @@ message ChromeDeviceSettingsProto {
       1385;
   optional StringPolicyProto DeviceLoginScreenPreferSlowKexAlgorithms = 1414;
   optional StringPolicyProto DeviceLoginScreenPreferSlowCiphers = 1415;
+  optional IntegerPolicyProto DeviceWeeklyScheduledResuspendDelayMs = 1461;
+  optional IntegerPolicyProto DeviceOnlinePasswordMismatchBehavior = 1470;
+  optional IntegerPolicyProto DeviceOsMigrationTargetDate = 1481;
 }

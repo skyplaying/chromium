@@ -7,6 +7,7 @@
 #include <string>
 
 #include "base/feature_list.h"
+#include "base/i18n/legacy_language_tag_helpers.h"
 #include "build/build_config.h"
 #include "components/soda/constants.h"
 #include "components/soda/soda_installer.h"
@@ -16,14 +17,13 @@
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_features.h"
-#include "base/feature_list.h"
 #endif
 
 #if BUILDFLAG(IS_WIN)
 #include "base/win/windows_version.h"
 #endif
 
-#if BUILDFLAG(IS_LINUX) && defined(ARCH_CPU_X86_FAMILY)
+#if defined(ARCH_CPU_X86_FAMILY)
 #include "base/cpu.h"
 #endif
 
@@ -43,9 +43,9 @@ bool IsSupportedChromeOS() {
 bool IsSupportedLinux() {
 #if defined(ARCH_CPU_X86_FAMILY)
   // Check if the CPU has the required instruction set to run the Speech
-  // On-Device API (SODA) library.
-  static bool has_sse41 = base::CPU().has_sse41();
-  return has_sse41;
+  // On-Device API (SODA) library. SODA requires AVX support on x86.
+  static bool has_avx = base::CPU().has_avx();
+  return has_avx;
 #else
   // Other architectures are not supported.
   return false;
@@ -53,15 +53,33 @@ bool IsSupportedLinux() {
 }
 #endif  // BUILDFLAG(IS_LINUX)
 
+#if BUILDFLAG(IS_MAC)
+bool IsSupportedMac() {
+#if defined(ARCH_CPU_X86_FAMILY)
+  // Check if the CPU has the required instruction set to run the Speech
+  // On-Device API (SODA) library. SODA requires AVX support on x86.
+  // Pre-2011 Intel Macs (e.g. Penryn, Nehalem, Westmere) running modern
+  // macOS via OpenCore Legacy Patcher lack AVX. Without AVX, SODA falls
+  // back to a gemmlowp kernel that crashes.
+  static bool has_avx = base::CPU().has_avx();
+  return has_avx;
+#elif defined(ARCH_CPU_ARM_FAMILY)
+  return true;
+#else
+  return false;
+#endif  // defined(ARCH_CPU_X86_FAMILY)
+}
+#endif  // BUILDFLAG(IS_MAC)
+
 #if BUILDFLAG(IS_WIN)
 bool IsSupportedWin() {
-#if defined(ARCH_CPU_ARM64)
-  // The Speech On-Device API (SODA) component does not support Windows on
-  // arm64.
-  return false;
+#if defined(ARCH_CPU_X86_FAMILY)
+  // SODA requires AVX support on x86.
+  static bool has_avx = base::CPU().has_avx();
+  return has_avx;
 #else
   return true;
-#endif  // defined(ARCH_CPU_ARM64)
+#endif  // defined(ARCH_CPU_X86_FAMILY)
 }
 #endif  // BUILDFLAG(IS_WIN)
 
@@ -75,10 +93,12 @@ bool IsOnDeviceSpeechRecognitionSupported() {
   return IsSupportedChromeOS();
 #elif BUILDFLAG(IS_LINUX)
   return IsSupportedLinux();
+#elif BUILDFLAG(IS_MAC)
+  return IsSupportedMac();
 #elif BUILDFLAG(IS_WIN)
   return IsSupportedWin();
 #else
-  return true;
+  return false;
 #endif
 }
 
@@ -99,8 +119,8 @@ media::mojom::AvailabilityStatus GetSodaAvailabilityStatus(
   bool is_language_supported = false;
   speech::LanguageCode lang_code = speech::LanguageCode::kNone;
   for (auto const& available_lang : soda_installer->GetAvailableLanguages()) {
-    if (l10n_util::GetLanguage(available_lang) ==
-        l10n_util::GetLanguage(language)) {
+    if (base::i18n::GetLanguageSubtagUsingLanguageTag(available_lang) ==
+        base::i18n::GetLanguageSubtagUsingLanguageTag(language)) {
       is_language_supported = true;
       lang_code = speech::GetLanguageCode(available_lang);
       break;

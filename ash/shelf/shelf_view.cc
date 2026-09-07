@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <ranges>
 #include <utility>
 
 #include "ash/app_list/app_list_controller_impl.h"
@@ -17,11 +18,9 @@
 #include "ash/keyboard/keyboard_util.h"
 #include "ash/keyboard/ui/keyboard_ui_controller.h"
 #include "ash/public/cpp/app_list/app_list_features.h"
-#include "ash/public/cpp/metrics_util.h"
 #include "ash/public/cpp/shelf_item.h"
 #include "ash/public/cpp/shelf_model.h"
 #include "ash/public/cpp/shelf_types.h"
-#include "ash/public/cpp/window_properties.h"
 #include "ash/screen_util.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shelf/hotseat_widget.h"
@@ -44,17 +43,14 @@
 #include "ash/system/status_area_widget.h"
 #include "ash/user_education/user_education_class_properties.h"
 #include "ash/wm/desks/desks_util.h"
-#include "ash/wm/mru_window_tracker.h"
 #include "ash/wm/window_pin_util.h"
 #include "ash/wm/window_util.h"
 #include "base/auto_reset.h"
 #include "base/check_op.h"
-#include "base/containers/adapters.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
-#include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
 #include "base/scoped_observation.h"
@@ -66,7 +62,6 @@
 #include "components/account_id/account_id.h"
 #include "components/services/app_service/public/cpp/app_registry_cache_wrapper.h"
 #include "components/services/app_service/public/cpp/app_types.h"
-#include "components/user_education/common/user_education_events.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/aura/window.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
@@ -76,7 +71,6 @@
 #include "ui/base/mojom/menu_source_type.mojom.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
-#include "ui/compositor/animation_throughput_reporter.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animation_observer.h"
 #include "ui/compositor/layer_animator.h"
@@ -100,6 +94,7 @@
 #include "ui/views/controls/separator.h"
 #include "ui/views/focus/focus_search.h"
 #include "ui/views/interaction/element_tracker_views.h"
+#include "ui/views/interaction/view_subregion_anchor.h"
 #include "ui/views/view_class_properties.h"
 #include "ui/views/view_model.h"
 #include "ui/views/view_model_utils.h"
@@ -136,13 +131,6 @@ using BoundsAnimatorDelegate = gfx::AnimationDelegate;
 constexpr int kSeparatorSize = 20;
 constexpr int kSeparatorThickness = 1;
 
-constexpr char kShelfIconMoveAnimationHistogram[] =
-    "Ash.ShelfIcon.AnimationSmoothness.Move";
-constexpr char kShelfIconFadeInAnimationHistogram[] =
-    "Ash.ShelfIcon.AnimationSmoothness.FadeIn";
-constexpr char kShelfIconFadeOutAnimationHistogram[] =
-    "Ash.ShelfIcon.AnimationSmoothness.FadeOut";
-
 // A class to temporarily disable a given bounds animator.
 class BoundsAnimatorDisabler {
  public:
@@ -166,18 +154,6 @@ class BoundsAnimatorDisabler {
   raw_ptr<views::BoundsAnimator> bounds_animator_;
 };
 
-void ReportMoveAnimationSmoothness(int smoothness) {
-  base::UmaHistogramPercentage(kShelfIconMoveAnimationHistogram, smoothness);
-}
-
-void ReportFadeInAnimationSmoothness(int smoothness) {
-  base::UmaHistogramPercentage(kShelfIconFadeInAnimationHistogram, smoothness);
-}
-
-void ReportFadeOutAnimationSmoothness(int smoothness) {
-  base::UmaHistogramPercentage(kShelfIconFadeOutAnimationHistogram, smoothness);
-}
-
 // Returns the id of the display on which |view| is shown.
 int64_t GetDisplayIdForView(const View* view) {
   aura::Window* window = view->GetWidget()->GetNativeWindow();
@@ -191,7 +167,6 @@ bool ShelfButtonIsInDrag(const ShelfItemType item_type,
     case TYPE_PINNED_APP:
     case TYPE_BROWSER_SHORTCUT:
     case TYPE_APP:
-    case TYPE_UNPINNED_BROWSER_SHORTCUT:
       return static_cast<const ShelfAppButton*>(item_view)->state() &
              ShelfAppButton::STATE_DRAGGING;
     case TYPE_DIALOG:
@@ -391,7 +366,7 @@ int ShelfView::GetSizeOfAppButtons(int count, int button_size) {
   return button_size * count + button_spacing * std::max(0, count - 1);
 }
 
-void ShelfView::Init(views::FocusSearch* focus_search) {
+void ShelfView::Init(std::unique_ptr<views::FocusSearch> focus_search) {
   auto separator = std::make_unique<views::Separator>();
   separator->SetColorId(ui::kColorAshSystemUIMenuSeparator);
   separator->SetPreferredLength(kSeparatorSize);
@@ -414,7 +389,7 @@ void ShelfView::Init(views::FocusSearch* focus_search) {
 
   fade_in_animation_delegate_ = std::make_unique<FadeInAnimationDelegate>(this);
 
-  focus_search_ = focus_search;
+  focus_search_ = std::move(focus_search);
 
   // We'll layout when our bounds change.
 }
@@ -528,30 +503,6 @@ bool ShelfView::ShouldHideTooltip(const gfx::Point& cursor_location,
   // in the gaps, but the tooltip should hide if the mouse moved totally outside
   // of the buttons area.
   return !LocationInsideVisibleShelfItemBounds(cursor_location);
-}
-
-const std::vector<aura::Window*> ShelfView::GetOpenWindowsForView(
-    views::View* view) {
-  std::vector<raw_ptr<aura::Window, VectorExperimental>> window_list =
-      Shell::Get()->mru_window_tracker()->BuildWindowForCycleList(kActiveDesk);
-  std::vector<aura::Window*> open_windows;
-  const ShelfItem* item = ShelfItemForView(view);
-
-  // The concept of a list of open windows doesn't make sense for something
-  // that isn't an app shortcut: return an empty list.
-  if (!item)
-    return open_windows;
-
-  for (aura::Window* window : window_list) {
-    const std::string window_app_id =
-        ShelfID::Deserialize(window->GetProperty(kShelfIDKey)).app_id;
-    if (window_app_id == item->id.app_id) {
-      // TODO: In the very first version we only show one window. Add the proper
-      // UI to show all windows for a given open app.
-      open_windows.push_back(window);
-    }
-  }
-  return open_windows;
 }
 
 std::u16string ShelfView::GetTitleForView(const views::View* view) const {
@@ -690,7 +641,7 @@ View* ShelfView::GetTooltipHandlerForPoint(const gfx::Point& point) {
   // Similar implementation as views::View, but without going into each
   // child's subviews.
   View::Views children = GetChildrenInZOrder();
-  for (views::View* child : base::Reversed(children)) {
+  for (views::View* child : std::views::reverse(children)) {
     if (!child->GetVisible())
       continue;
 
@@ -779,7 +730,6 @@ void ShelfView::ButtonPressed(views::Button* sender,
     case TYPE_PINNED_APP:
     case TYPE_BROWSER_SHORTCUT:
     case TYPE_APP:
-    case TYPE_UNPINNED_BROWSER_SHORTCUT:
       base::RecordAction(base::UserMetricsAction("Launcher_ClickOnApp"));
       break;
 
@@ -816,7 +766,7 @@ bool ShelfView::IsShowingMenuForView(const views::View* view) const {
 // ShelfView, FocusTraversable implementation:
 
 views::FocusSearch* ShelfView::GetFocusSearch() {
-  return focus_search_;
+  return focus_search_.get();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1021,7 +971,6 @@ views::View* ShelfView::CreateViewForItem(const ShelfItem& item) {
     case TYPE_PINNED_APP:
     case TYPE_BROWSER_SHORTCUT:
     case TYPE_APP:
-    case TYPE_UNPINNED_BROWSER_SHORTCUT:
     case TYPE_DIALOG: {
       ShelfAppButton* button = new ShelfAppButton(
           this, shelf_button_delegate_ ? shelf_button_delegate_.get() : this);
@@ -1070,7 +1019,7 @@ void ShelfView::UpdateSeparatorIndex() {
   const bool can_drag_view_across_separator =
       drag_view_ && CanDragAcrossSeparator(drag_view_);
 
-  for (size_t i : base::Reversed(visible_views_indices_)) {
+  for (size_t i : std::views::reverse(visible_views_indices_)) {
     const auto& item = model()->items()[i];
     if (IsItemPinned(item)) {
       // The dragged item is temporarily moved to the end of the shelf if it is
@@ -1477,7 +1426,7 @@ void ShelfView::LayoutToIdealBounds() {
   // Notify user education features that anchor bounds have changed.
   if (features::IsUserEducationEnabled()) {
     views::ElementTrackerViews::GetInstance()->NotifyCustomEvent(
-        user_education::kHelpBubbleAnchorBoundsChangedEvent, this);
+        views::ViewSubregionAnchor::kAnchorBoundsChangedEvent, this);
   }
 }
 
@@ -1495,11 +1444,6 @@ void ShelfView::OnTabletModeChanged() {
 
 void ShelfView::AnimateToIdealBounds() {
   CalculateIdealBounds();
-
-  move_animation_tracker_.emplace(
-      GetWidget()->GetCompositor()->RequestNewCompositorMetricsTracker());
-  move_animation_tracker_->Start(metrics_util::ForSmoothnessV3(
-      base::BindRepeating(&ReportMoveAnimationSmoothness)));
 
   for (size_t i = 0; i < view_model_->view_size(); ++i) {
     View* view = view_model_->view_at(i);
@@ -1560,11 +1504,6 @@ void ShelfView::FadeIn(views::View* view) {
   fade_in_animation_settings.SetPreemptionStrategy(
       ui::LayerAnimator::IMMEDIATELY_SET_NEW_TARGET);
   fade_in_animation_settings.AddObserver(fade_in_animation_delegate_.get());
-
-  ui::AnimationThroughputReporter reporter(
-      fade_in_animation_settings.GetAnimator(),
-      metrics_util::ForSmoothnessV3(
-          base::BindRepeating(&ReportFadeInAnimationSmoothness)));
 
   view->layer()->SetOpacity(1.f);
 }
@@ -1992,11 +1931,6 @@ void ShelfView::OnFadeInAnimationEnded() {
 }
 
 void ShelfView::OnFadeOutAnimationEnded() {
-  if (fade_out_animation_tracker_) {
-    fade_out_animation_tracker_->Stop();
-    fade_out_animation_tracker_.reset();
-  }
-
   // Call PreferredSizeChanged() to notify container to re-layout at the end
   // of removal animation.
   PreferredSizeChanged();
@@ -2350,15 +2284,6 @@ void ShelfView::ShelfItemRemoved(int model_index, const ShelfItem& old_item) {
   if (view->GetVisible() && view->layer()->opacity() > 0.0f) {
     UpdateShelfItemViewsVisibility();
 
-    // There could be multiple fade out animations running. Only start
-    // tracking for the first one.
-    if (!fade_out_animation_tracker_) {
-      fade_out_animation_tracker_.emplace(
-          GetWidget()->GetCompositor()->RequestNewCompositorMetricsTracker());
-      fade_out_animation_tracker_->Start(metrics_util::ForSmoothnessV3(
-          base::BindRepeating(&ReportFadeOutAnimationSmoothness)));
-    }
-
     // The first animation fades out the view. When done we'll animate the rest
     // of the views to their target location.
     bounds_animator_->AnimateViewTo(view.get(), view->bounds());
@@ -2417,7 +2342,6 @@ void ShelfView::ShelfItemChanged(int model_index, const ShelfItem& old_item) {
     case TYPE_PINNED_APP:
     case TYPE_BROWSER_SHORTCUT:
     case TYPE_APP:
-    case TYPE_UNPINNED_BROWSER_SHORTCUT:
     case TYPE_DIALOG: {
       CHECK(views::IsViewClass<ShelfAppButton>(view));
       ShelfAppButton* button = static_cast<ShelfAppButton*>(view);
@@ -2677,7 +2601,7 @@ void ShelfView::OnBoundsAnimatorProgressed(views::BoundsAnimator* animator) {
   // Notify user education features that anchor bounds have changed.
   if (features::IsUserEducationEnabled()) {
     views::ElementTrackerViews::GetInstance()->NotifyCustomEvent(
-        user_education::kHelpBubbleAnchorBoundsChangedEvent, this);
+        views::ViewSubregionAnchor::kAnchorBoundsChangedEvent, this);
   }
 
   // Do not call PreferredSizeChanged() so that container does not re-layout
@@ -2685,11 +2609,6 @@ void ShelfView::OnBoundsAnimatorProgressed(views::BoundsAnimator* animator) {
 }
 
 void ShelfView::OnBoundsAnimatorDone(views::BoundsAnimator* animator) {
-  if (move_animation_tracker_) {
-    move_animation_tracker_->Stop();
-    move_animation_tracker_.reset();
-  }
-
   if (snap_back_from_rip_off_view_ && animator == bounds_animator_.get()) {
     if (!animator->IsAnimating(snap_back_from_rip_off_view_)) {
       // Coming here the animation of the ShelfAppButton is finished and the

@@ -203,7 +203,7 @@ void CrashesDOMHandler::UpdateUI() {
 #endif
   bool allow_manual_uploads =
       manual_uploads_supported &&
-      (crash_reporting_enabled || !IsMetricsReportingPolicyManaged());
+      (crash_reporting_enabled || !metrics::IsMetricsReportingPolicyManaged());
 
   // Show crash reports regardless of |crash_reporting_enabled| when it is
   // possible to manually upload reports.
@@ -230,7 +230,7 @@ void CrashesDOMHandler::HandleRequestSingleCrashUpload(
     const base::ListValue& args) {
   // Only allow manual uploads if crash uploads aren’t disabled by policy.
   if (!ChromeMetricsServiceAccessor::IsMetricsAndCrashReportingEnabled() &&
-      IsMetricsReportingPolicyManaged()) {
+      metrics::IsMetricsReportingPolicyManaged()) {
     return;
   }
 
@@ -254,7 +254,7 @@ CrashesUI::CrashesUI(content::WebUI* web_ui) : WebUIController(web_ui) {
 }
 
 // static
-base::RefCountedMemory* CrashesUI::GetFaviconResourceBytes(
+scoped_refptr<base::RefCountedMemory> CrashesUI::GetFaviconResourceBytes(
     ui::ResourceScaleFactor scale_factor) {
   return ui::ResourceBundle::GetSharedInstance().LoadDataResourceBytesForScale(
       IDR_CRASH_SAD_FAVICON, scale_factor);

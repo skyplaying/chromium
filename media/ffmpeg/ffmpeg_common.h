@@ -38,11 +38,14 @@ extern "C" {
 #if BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
 #include <libavutil/dovi_meta.h>
 #endif  // BUILDFLAG(ENABLE_PLATFORM_DOLBY_VISION)
+#include <libavutil/hdr_dynamic_metadata.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/log.h>
 #include <libavutil/mastering_display_metadata.h>
 #include <libavutil/mathematics.h>
 #include <libavutil/opt.h>
+#include <libavutil/spherical.h>
+#include <libavutil/stereo3d.h>
 }  // extern "C"
 
 namespace media {

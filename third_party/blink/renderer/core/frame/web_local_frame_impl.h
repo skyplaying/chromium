@@ -39,6 +39,7 @@
 #include <vector>
 
 #include "base/dcheck_is_on.h"
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/types/pass_key.h"
@@ -129,10 +130,13 @@ class CORE_EXPORT WebLocalFrameImpl final
   WebLocalFrameClient* Client() const override { return client_; }
   void SetAutofillClient(WebAutofillClient*) override;
   WebAutofillClient* AutofillClient() override;
+  void SetRecordReplayClient(WebRecordReplayClient*) override;
+  WebRecordReplayClient* RecordReplayClient() override;
   void SetContentCaptureClient(WebContentCaptureClient*) override;
   WebContentCaptureClient* ContentCaptureClient() const override;
   BrowserInterfaceBrokerProxy& GetBrowserInterfaceBroker() override;
   WebDocument GetDocument() const override;
+  InitiatorStateToken GetInitiatorStateToken() const override;
   WebString AssignedName() const override;
   ui::AXTreeID GetAXTreeID() const override;
   void SetName(const WebString&) override;
@@ -147,8 +151,6 @@ class CORE_EXPORT WebLocalFrameImpl final
       const override;
   bool IsInFencedFrameTree() const override;
   void SendPings(const WebURL& destination_url) override;
-  void SendAttributionSrc(const std::optional<Impression>&,
-                          bool did_navigate) override;
   void StartReload(WebFrameLoadType) override;
   void ClearActiveFindMatchForTesting() override;
   void EnableViewSourceMode(bool enable) override;
@@ -201,7 +203,8 @@ class CORE_EXPORT WebLocalFrameImpl final
                             WebScriptExecutionCallback,
                             BackForwardCacheAware back_forward_cache_aware,
                             mojom::blink::WantResultOption,
-                            mojom::blink::PromiseResultOption) override;
+                            mojom::blink::PromiseResultOption,
+                            const WebString& script_injector_id) override;
   bool IsInspectorConnected() override;
   void Alert(const WebString& message) override;
   bool Confirm(const WebString& message) override;
@@ -317,7 +320,8 @@ class CORE_EXPORT WebLocalFrameImpl final
   std::unique_ptr<WebAssociatedURLLoader> CreateAssociatedURLLoader(
       const WebAssociatedURLLoaderOptions&) override;
   void DeprecatedStopLoading() override;
-  void RequestNetworkIdleCallback(base::OnceClosure callback) override;
+  [[nodiscard]] base::CallbackListSubscription RequestNetworkIdleCallback(
+      base::OnceClosure callback) override;
   gfx::PointF GetScrollOffset() const override;
   bool SetScrollOffset(const gfx::PointF&) override;
   gfx::Size DocumentSize() const override;
@@ -442,13 +446,15 @@ class CORE_EXPORT WebLocalFrameImpl final
       WindowAgentFactory*,
       WebFrame* opener,
       const DocumentToken& document_token,
+      const InitiatorStateToken& initiator_state_token,
       mojo::PendingRemote<mojom::blink::BrowserInterfaceBroker>
           interface_broker,
       std::unique_ptr<blink::WebPolicyContainer> policy_container,
       const StorageKey& storage_key,
       const KURL& creator_base_url,
       network::mojom::blink::WebSandboxFlags sandbox_flags =
-          network::mojom::blink::WebSandboxFlags::kNone);
+          network::mojom::blink::WebSandboxFlags::kNone,
+      std::unique_ptr<base::UnguessableToken> sandbox_origin_token = nullptr);
   LocalFrame* GetFrame() const { return frame_.Get(); }
 
   void WillBeDetached();
@@ -465,8 +471,10 @@ class CORE_EXPORT WebLocalFrameImpl final
       const WebString& name,
       network::mojom::blink::WebSandboxFlags,
       const DocumentToken& document_token,
+      const InitiatorStateToken& initiator_state_token,
       std::unique_ptr<WebPolicyContainer>,
-      const WebURL& creator_base_url);
+      const WebURL& creator_base_url,
+      std::unique_ptr<base::UnguessableToken> sandbox_origin_token);
   static WebLocalFrameImpl* CreateProvisional(
       WebLocalFrameClient*,
       InterfaceRegistry*,
@@ -657,6 +665,7 @@ class CORE_EXPORT WebLocalFrameImpl final
       WindowAgentFactory*,
       WebFrame* opener,
       const DocumentToken& document_token,
+      const InitiatorStateToken& initiator_state_token,
       mojo::PendingRemote<mojom::blink::BrowserInterfaceBroker>
           interface_broker,
       std::unique_ptr<PolicyContainer> policy_container,
@@ -664,7 +673,8 @@ class CORE_EXPORT WebLocalFrameImpl final
       ukm::SourceId document_ukm_source_id,
       const KURL& creator_base_url,
       network::mojom::blink::WebSandboxFlags sandbox_flags =
-          network::mojom::blink::WebSandboxFlags::kNone);
+          network::mojom::blink::WebSandboxFlags::kNone,
+      std::unique_ptr<base::UnguessableToken> sandbox_origin_token = nullptr);
 
   // This function converts mojom::BackForwardCacheNotRestoredReasonsPtr to
   // mojom::blink::BackForwardCacheNotRestoredReasonsPtr.
@@ -674,7 +684,8 @@ class CORE_EXPORT WebLocalFrameImpl final
   // Returns whether we should perform compositor warm-up.
   bool ShouldWarmUpCompositor();
 
-  WebLocalFrameClient* client_;
+  raw_ptr<WebLocalFrameClient, UnprotectedInRelease | DanglingUntriaged>
+      client_;
 
   // TODO(dcheng): Inline this field directly rather than going through Member.
   const Member<LocalFrameClientImpl> local_frame_client_;
@@ -690,11 +701,17 @@ class CORE_EXPORT WebLocalFrameImpl final
 
   Member<WebDevToolsAgentImpl> dev_tools_agent_;
 
-  WebAutofillClient* autofill_client_ = nullptr;
+  raw_ptr<WebAutofillClient, UnprotectedInRelease | DanglingUntriaged>
+      autofill_client_ = nullptr;
 
-  WebContentCaptureClient* content_capture_client_ = nullptr;
+  raw_ptr<WebRecordReplayClient, UnprotectedInRelease | DanglingUntriaged>
+      record_replay_client_ = nullptr;
 
-  WebContentSettingsClient* content_settings_client_ = nullptr;
+  raw_ptr<WebContentCaptureClient, UnprotectedInRelease | DanglingUntriaged>
+      content_capture_client_ = nullptr;
+
+  raw_ptr<WebContentSettingsClient, UnprotectedInRelease | DanglingUntriaged>
+      content_settings_client_ = nullptr;
 
   Member<FindInPage> find_in_page_;
 
@@ -707,20 +724,24 @@ class CORE_EXPORT WebLocalFrameImpl final
   Member<ChromePrintContext> print_context_;
 
   // Borrowed pointers to Mojo objects.
-  InterfaceRegistry* interface_registry_;
+  raw_ptr<InterfaceRegistry, UnprotectedInRelease | DanglingUntriaged>
+      interface_registry_;
 
   WebInputMethodControllerImpl input_method_controller_;
 
-  WebTextCheckClient* text_check_client_;
+  raw_ptr<WebTextCheckClient, UnprotectedInRelease | DanglingUntriaged>
+      text_check_client_;
 
-  WebSpellCheckPanelHostClient* spell_check_panel_host_client_;
+  raw_ptr<WebSpellCheckPanelHostClient,
+          UnprotectedInRelease | DanglingUntriaged>
+      spell_check_panel_host_client_;
 
   mojom::BackForwardCacheNotRestoredReasonsPtr not_restored_reasons_;
 
   // Oilpan: WebLocalFrameImpl must remain alive until close() is called.
   // Accomplish that by keeping a self-referential Persistent<>. It is
   // cleared upon close().
-  SelfKeepAlive<WebLocalFrameImpl> self_keep_alive_{this};
+  SelfKeepAlive<WebLocalFrameImpl> self_keep_alive_{{}, this};
 
 #if DCHECK_IS_ON()
   // True if DispatchBeforePrintEvent() was called, and

@@ -4,10 +4,10 @@
 package org.chromium.components.browser_ui.widget.chips;
 
 import static org.chromium.base.ThreadUtils.runOnUiThreadBlocking;
-import static org.chromium.ui.base.LocalizationUtils.setRtlForTesting;
 
 import android.app.Activity;
 import android.graphics.Color;
+import android.view.View;
 import android.view.ViewGroup;
 import android.widget.LinearLayout;
 import android.widget.LinearLayout.LayoutParams;
@@ -29,7 +29,7 @@ import org.chromium.base.test.params.ParameterSet;
 import org.chromium.base.test.params.ParameterizedRunner;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Feature;
-import org.chromium.components.browser_ui.widget.test.R;
+import org.chromium.components.browser_ui.widget.R;
 import org.chromium.ui.test.util.BlankUiTestActivity;
 import org.chromium.ui.test.util.NightModeTestUtils;
 import org.chromium.ui.test.util.RenderTestRule;
@@ -66,13 +66,14 @@ public class ChipViewRenderTest {
     public final RenderTestRule mRenderTestRule =
             RenderTestRule.Builder.withPublicCorpus()
                     .setBugComponent(Component.UI_BROWSER_MOBILE)
-                    .setRevision(3)
+                    .setRevision(4)
                     .build();
 
+    private final boolean mUseRtlLayout;
     private ViewGroup mContentView;
 
     public ChipViewRenderTest(boolean nightModeEnabled, boolean useRtlLayout) {
-        setRtlForTesting(useRtlLayout);
+        mUseRtlLayout = useRtlLayout;
         NightModeTestUtils.setUpNightModeForBlankUiTestActivity(nightModeEnabled);
         mRenderTestRule.setNightModeEnabled(nightModeEnabled);
         mRenderTestRule.setVariantPrefix(useRtlLayout ? "RTL" : "LTR");
@@ -88,6 +89,9 @@ public class ChipViewRenderTest {
                             LinearLayout contentView = new LinearLayout(activity);
                             contentView.setOrientation(LinearLayout.VERTICAL);
                             contentView.setBackgroundColor(Color.WHITE);
+                            if (mUseRtlLayout) {
+                                contentView.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+                            }
 
                             activity.setContentView(
                                     contentView,
@@ -180,6 +184,23 @@ public class ChipViewRenderTest {
         reduceChipWidth(chip);
 
         renderChip(chip, "two_line_chip_with_reduced_width");
+    }
+
+    @Test
+    @MediumTest
+    @Feature({"RenderTest"})
+    public void renderLoadingTwoLineChip() throws Exception {
+        ChipView chip =
+                (ChipView)
+                        mActivityTestRule
+                                .getActivity()
+                                .getLayoutInflater()
+                                .inflate(R.layout.two_line_chip_view_test_item, null);
+        chip.getPrimaryTextView().setText("Primary text");
+        chip.getSecondaryTextView().setText("Secondary text");
+        chip.showLoadingView(/* loadingViewObserver= */ null);
+
+        renderChip(chip, "loading_two_line_chip");
     }
 
     private void renderChip(ChipView chipView, String name) throws Exception {

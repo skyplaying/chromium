@@ -100,11 +100,10 @@ public class SavePasswordsPromoCoordinator
         }
 
         if (mSavePasswordsBottomSheetContent != null) {
-            mActionDelegate
-                    .getBottomSheetController()
-                    .hideContent(mSavePasswordsBottomSheetContent, /* animate= */ false);
-            mSavePasswordsBottomSheetContent.destroy();
+            SavePasswordsInstructionalBottomSheetContent content = mSavePasswordsBottomSheetContent;
             mSavePasswordsBottomSheetContent = null;
+            mActionDelegate.getBottomSheetController().hideContent(content, /* animate= */ false);
+            content.destroy();
         }
     }
 
@@ -167,10 +166,10 @@ public class SavePasswordsPromoCoordinator
         final SavePasswordsInstructionalBottomSheetContent content =
                 mSavePasswordsBottomSheetContent;
         mGotItButton.setOnClickListener(
-                (v) -> {
-                    bottomSheetController.hideContent(
-                            content, /* animate= */ true, StateChangeReason.INTERACTION_COMPLETE);
-                    // TODO(crbug.com/469425754): Trigger completion animation here.
-                });
+                _ ->
+                        bottomSheetController.hideContent(
+                                content,
+                                /* animate= */ true,
+                                StateChangeReason.INTERACTION_COMPLETE));
     }
 }

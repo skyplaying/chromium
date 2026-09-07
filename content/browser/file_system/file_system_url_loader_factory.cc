@@ -7,15 +7,18 @@
 #include <algorithm>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <utility>
 #include <vector>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory/self_deleting.h"
 #include "base/memory/weak_ptr.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
@@ -23,7 +26,7 @@
 #include "components/file_access/scoped_file_access.h"
 #include "components/file_access/scoped_file_access_delegate.h"
 #include "components/services/filesystem/public/mojom/types.mojom.h"
-#include "content/browser/child_process_security_policy_impl.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/child_process_host.h"
@@ -35,10 +38,10 @@
 #include "mojo/public/cpp/system/data_pipe_producer.h"
 #include "mojo/public/cpp/system/string_data_source.h"
 #include "net/base/completion_repeating_callback.h"
-#include "net/base/directory_listing.h"
 #include "net/base/io_buffer.h"
 #include "net/base/mime_sniffer.h"
 #include "net/base/mime_util.h"
+#include "net/base/module/directory_listing.h"
 #include "net/http/http_byte_range.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_util.h"
@@ -96,7 +99,7 @@ scoped_refptr<net::HttpResponseHeaders> CreateHttpResponseHeaders(
 }
 
 bool GetMimeType(const FileSystemURL& url, std::string* mime_type) {
-  DCHECK(url.is_valid());
+  CHECK(url.is_valid(), base::NotFatalUntil::M159);
   return net::GetWellKnownMimeTypeFromFile(url.path(), mime_type);
 }
 
@@ -111,9 +114,7 @@ class FileSystemEntryURLLoader : public network::mojom::URLLoader {
 
   // network::mojom::URLLoader:
   void FollowRedirect(
-      const std::vector<std::string>& removed_headers,
-      const net::HttpRequestHeaders& modified_headers,
-      const net::HttpRequestHeaders& modified_cors_exempt_headers,
+      network::HttpRequestHeadersUpdateParams headers_update_params,
       const std::optional<GURL>& new_url) override {}
   void SetPriority(net::RequestPriority priority,
                    int32_t intra_priority_value) override {}
@@ -218,17 +219,16 @@ class FileSystemEntryURLLoader : public network::mojom::URLLoader {
             request.headers.GetHeader(net::HttpRequestHeaders::kRange);
         range_header) {
       std::vector<net::HttpByteRange> ranges;
-      if (net::HttpUtil::ParseRangeHeader(*range_header, &ranges)) {
-        if (ranges.size() == 1) {
-          byte_range_ = ranges[0];
-        } else {
-          // We don't support multiple range requests in one single URL request.
-          // TODO(adamk): decide whether we want to support multiple range
-          // requests.
-          OnClientComplete(net::ERR_REQUEST_RANGE_NOT_SATISFIABLE);
-          return;
-        }
+      if (!net::HttpUtil::ParseRangeHeader(*range_header, &ranges) ||
+          ranges.size() != 1) {
+        // We don't support multiple range requests in one single URL request.
+        // TODO(adamk): decide whether we want to support multiple range
+        // requests.
+        // Fail if the header is malformed or contains multiple ranges.
+        OnClientComplete(net::ERR_REQUEST_RANGE_NOT_SATISFIABLE);
+        return;
       }
+      byte_range_ = ranges[0];
     }
     url_ =
         params_.file_system_context->CrackURL(request.url, params_.storage_key);
@@ -292,7 +292,7 @@ class FileSystemDirectoryURLLoader final : public FileSystemEntryURLLoader {
       : FileSystemEntryURLLoader(params) {}
 
   void FileSystemIsMounted() override {
-    DCHECK(url_.is_valid());
+    CHECK(url_.is_valid(), base::NotFatalUntil::M159);
     if (!params_.file_system_context->CanServeURLRequest(url_)) {
       // In incognito mode the API is not usable and there should be no data.
       if (VirtualPath::IsRootPath(url_.virtual_path())) {
@@ -351,7 +351,7 @@ class FileSystemDirectoryURLLoader final : public FileSystemEntryURLLoader {
     const FileSystemURL entry_url =
         params_.file_system_context->CreateCrackedFileSystemURL(
             url_.storage_key(), url_.type(), url_.path().Append(entry.name));
-    DCHECK(entry_url.is_valid());
+    CHECK(entry_url.is_valid(), base::NotFatalUntil::M159);
     params_.file_system_context->operation_runner()->GetMetadata(
         entry_url,
         {storage::FileSystemOperation::GetMetadataField::kSize,
@@ -373,7 +373,10 @@ class FileSystemDirectoryURLLoader final : public FileSystemEntryURLLoader {
     data_.append(net::GetDirectoryListingEntry(
         name, std::string(),
         entry.type == filesystem::mojom::FsFileType::DIRECTORY,
-        base::ByteCount(file_info.size), file_info.last_modified));
+        file_info.size >= 0 ? std::make_optional<base::ByteSize>(
+                                  base::as_unsigned(file_info.size))
+                            : std::nullopt,
+        file_info.last_modified));
 
     if (index < entries_.size() - 1)
       GetMetadata(index + 1);
@@ -465,7 +468,7 @@ class FileSystemFileURLLoader final : public FileSystemEntryURLLoader {
         io_task_runner_(io_task_runner) {}
 
   void FileSystemIsMounted() override {
-    DCHECK(url_.is_valid());
+    CHECK(url_.is_valid(), base::NotFatalUntil::M159);
     if (!params_.file_system_context->CanServeURLRequest(url_)) {
       // In incognito mode the API is not usable and there should be no data.
       OnClientComplete(net::ERR_FILE_NOT_FOUND);
@@ -519,9 +522,9 @@ class FileSystemFileURLLoader final : public FileSystemEntryURLLoader {
 
     remaining_bytes_ = byte_range_.last_byte_position() -
                        byte_range_.first_byte_position() + 1;
-    DCHECK_GE(remaining_bytes_, 0);
+    CHECK_GE(remaining_bytes_, 0, base::NotFatalUntil::M159);
 
-    DCHECK(!reader_.get());
+    CHECK(!reader_.get(), base::NotFatalUntil::M159);
     reader_ = params_.file_system_context->CreateFileStreamReader(
         url_, byte_range_.first_byte_position(), remaining_bytes_, base::Time(),
         std::move(file_access_));
@@ -587,7 +590,7 @@ class FileSystemFileURLLoader final : public FileSystemEntryURLLoader {
     if (result == 0) {
       // If `remaining_bytes_` is 0, then we should've called OnFileWritten in
       // ReadMoreFileData.
-      DCHECK_NE(remaining_bytes_, 0);
+      CHECK_NE(remaining_bytes_, 0, base::NotFatalUntil::M159);
       OnFileWritten(net::ERR_REQUEST_RANGE_NOT_SATISFIABLE);
       return;
     }
@@ -608,7 +611,7 @@ class FileSystemFileURLLoader final : public FileSystemEntryURLLoader {
                                  std::nullopt);
     }
     remaining_bytes_ -= result;
-    DCHECK_GE(remaining_bytes_, 0);
+    CHECK_GE(remaining_bytes_, 0, base::NotFatalUntil::M159);
 
     WriteFileData(result);
   }
@@ -659,8 +662,9 @@ class FileSystemURLLoaderFactory
   FileSystemURLLoaderFactory(
       FactoryParams params,
       scoped_refptr<base::SequencedTaskRunner> io_task_runner,
-      mojo::PendingReceiver<network::mojom::URLLoaderFactory> factory_receiver)
-      : network::SelfDeletingURLLoaderFactory(std::move(factory_receiver)),
+      mojo::PendingReceiver<network::mojom::URLLoaderFactory> factory_receiver,
+      base::SelfDeletingPassKey key)
+      : network::SelfDeletingURLLoaderFactory(std::move(factory_receiver), key),
         params_(std::move(params)),
         io_task_runner_(io_task_runner) {}
 
@@ -668,9 +672,8 @@ class FileSystemURLLoaderFactory
   FileSystemURLLoaderFactory& operator=(const FileSystemURLLoaderFactory&) =
       delete;
 
-  ~FileSystemURLLoaderFactory() override = default;
-
  private:
+  ~FileSystemURLLoaderFactory() override = default;
   void CreateLoaderAndStart(
       mojo::PendingReceiver<network::mojom::URLLoader> loader,
       int32_t request_id,
@@ -720,7 +723,7 @@ CreateFileSystemURLLoaderFactory(
   // The FileSystemURLLoaderFactory will delete itself when there are no more
   // receivers - see the network::SelfDeletingURLLoaderFactory::OnDisconnect
   // method.
-  new FileSystemURLLoaderFactory(
+  base::MakeSelfDeleting<FileSystemURLLoaderFactory>(
       std::move(params), GetIOThreadTaskRunner({}),
       pending_remote.InitWithNewPipeAndPassReceiver());
 

@@ -43,7 +43,7 @@ struct PickObserverList<CheckedBase> {
   template <class TypeParam,
             bool check_empty = false,
             ObserverListReentrancyPolicy reentrancy =
-                ObserverListReentrancyPolicy::kAllowReentrancy>
+                ObserverListReentrancyPolicy::kDisallowReentrancy>
   using ObserverListType = ObserverList<TypeParam, check_empty, reentrancy>;
 };
 template <>
@@ -51,7 +51,7 @@ struct PickObserverList<UncheckedBase> {
   template <class TypeParam,
             bool check_empty = false,
             ObserverListReentrancyPolicy reentrancy =
-                ObserverListReentrancyPolicy::kAllowReentrancy>
+                ObserverListReentrancyPolicy::kDisallowReentrancy>
   using ObserverListType =
       typename ObserverList<TypeParam, check_empty, reentrancy>::Unchecked;
 };
@@ -821,9 +821,13 @@ TYPED_TEST(ObserverListTest, StdIteratorRemoveBack) {
 
 TYPED_TEST(ObserverListTest, NestedLoop) {
   DECLARE_TYPES;
-  ObserverListFoo observer_list;
+  using ReentrantObserverListFoo =
+      typename PickObserverList<Foo>::template ObserverListType<
+          Foo, /*check_empty=*/false,
+          ObserverListReentrancyPolicy::kAllowReentrancy>;
+  ReentrantObserverListFoo observer_list;
   Adder a(1), b(-1), c(1), d(-1);
-  Disrupter disrupter(&observer_list, true);
+  DisrupterT<ReentrantObserverListFoo> disrupter(&observer_list, true);
 
   observer_list.AddObserver(&disrupter);
   observer_list.AddObserver(&a);
@@ -847,11 +851,16 @@ TYPED_TEST(ObserverListTest, NestedLoop) {
 
 TYPED_TEST(ObserverListTest, NonCompactList) {
   DECLARE_TYPES;
-  ObserverListFoo observer_list;
+  using ReentrantObserverListFoo =
+      typename PickObserverList<Foo>::template ObserverListType<
+          Foo, /*check_empty=*/false,
+          ObserverListReentrancyPolicy::kAllowReentrancy>;
+  ReentrantObserverListFoo observer_list;
   Adder a(1), b(-1);
 
-  Disrupter disrupter2(&observer_list, true);  // Must outlive `disrupter1`.
-  Disrupter disrupter1(&observer_list, true);
+  DisrupterT<ReentrantObserverListFoo> disrupter2(
+      &observer_list, true);  // Must outlive `disrupter1`.
+  DisrupterT<ReentrantObserverListFoo> disrupter1(&observer_list, true);
 
   // Disrupt itself and another one.
   disrupter1.SetDoomed(&disrupter2);
@@ -877,11 +886,16 @@ TYPED_TEST(ObserverListTest, NonCompactList) {
 
 TYPED_TEST(ObserverListTest, BecomesEmptyThanNonEmpty) {
   DECLARE_TYPES;
-  ObserverListFoo observer_list;
+  using ReentrantObserverListFoo =
+      typename PickObserverList<Foo>::template ObserverListType<
+          Foo, /*check_empty=*/false,
+          ObserverListReentrancyPolicy::kAllowReentrancy>;
+  ReentrantObserverListFoo observer_list;
   Adder a(1), b(-1);
 
-  Disrupter disrupter2(&observer_list, true);  // Must outlive `disrupter1`.
-  Disrupter disrupter1(&observer_list, true);
+  DisrupterT<ReentrantObserverListFoo> disrupter2(
+      &observer_list, true);  // Must outlive `disrupter1`.
+  DisrupterT<ReentrantObserverListFoo> disrupter1(&observer_list, true);
 
   // Disrupt itself and another one.
   disrupter1.SetDoomed(&disrupter2);
@@ -946,11 +960,7 @@ class MockLogAssertHandler {
 #if DCHECK_IS_ON()
 TYPED_TEST(ObserverListTest, NonReentrantObserverList) {
   DECLARE_TYPES;
-  using NonReentrantObserverListFoo =
-      typename PickObserverList<Foo>::template ObserverListType<
-          Foo, /*check_empty=*/false,
-          ObserverListReentrancyPolicy::kDisallowReentrancy>;
-  NonReentrantObserverListFoo non_reentrant_observer_list;
+  ObserverListFoo non_reentrant_observer_list;
   Adder a(1);
   non_reentrant_observer_list.AddObserver(&a);
 
@@ -976,6 +986,23 @@ TYPED_TEST(ObserverListTest, ReentrantObserverList) {
   bool passed = false;
   for (const Foo& observer : reentrant_observer_list) {
     for (const Foo& nested_observer : reentrant_observer_list) {
+      std::ignore = observer;
+      std::ignore = nested_observer;
+      passed = true;
+    }
+  }
+  EXPECT_TRUE(passed);
+}
+
+TYPED_TEST(ObserverListTest, GetReentrantRange) {
+  DECLARE_TYPES;
+  ObserverListFoo non_reentrant_observer_list;
+  Adder a(1);
+  non_reentrant_observer_list.AddObserver(&a);
+  bool passed = false;
+  for (const Foo& observer : non_reentrant_observer_list) {
+    for (const Foo& nested_observer :
+         non_reentrant_observer_list.GetReentrantRange()) {
       std::ignore = observer;
       std::ignore = nested_observer;
       passed = true;

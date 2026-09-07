@@ -92,6 +92,8 @@ class MenuHost : public Widget, public WidgetObserver {
   // Releases a mouse grab installed by |ShowMenuHost|.
   void ReleaseMenuHostCapture();
 
+  bool destroying_for_testing() const { return destroying_; }
+
  private:
   friend class MenuControllerTest;
 
@@ -100,8 +102,8 @@ class MenuHost : public Widget, public WidgetObserver {
   void OnMouseCaptureLost() override;
   void OnNativeWidgetDestroyed() override;
   void OnOwnerClosing() override;
-  void OnDragWillStart() override;
-  void OnDragComplete() override;
+  void OnDragDropWillStart() override;
+  void OnDragDropCompleted() override;
   Widget* GetPrimaryWindowWidget() override;
   gfx::Insets GetCustomInsetsInDIP() const override;
 

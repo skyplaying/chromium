@@ -2,7 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/glic/host/glic_ui.h"
+
 #include <sstream>
+#include <utility>
 
 #include "base/scoped_observation.h"
 #include "base/strings/stringprintf.h"
@@ -13,16 +16,17 @@
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/glic/host/glic.mojom-shared.h"
-#include "chrome/browser/glic/host/glic_ui.h"
+#include "chrome/browser/glic/public/features.h"
 #include "chrome/browser/glic/test_support/interactive_glic_test.h"
 #include "chrome/browser/glic/test_support/interactive_test_util.h"
-#include "chrome/browser/glic/widget/glic_window_controller.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_test_util.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/common/chrome_features.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/optimization_guide/core/feature_registry/feature_registration.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/no_renderer_crashes_assertion.h"
@@ -165,37 +169,60 @@ class GlicUiInteractiveUiTestBase : public test::InteractiveGlicTest {
   auto CheckElementVisible(const DeepQuery& where, bool visible) {
     MultiStep steps;
     if (visible) {
-      steps =
-          InAnyContext(WaitForElementVisible(test::kGlicHostElementId, where));
+      steps = InAnyContext(WaitForElementVisible(kGlicHostElementId, where));
     }
-    steps += InAnyContext(CheckJsResultAt(test::kGlicHostElementId, where,
-                                          "(el) => el.hidden",
-                                          testing::Ne(visible)));
+    steps += InAnyContext(CheckJsResultAt(
+        kGlicHostElementId, where, "(el) => el.hidden", testing::Ne(visible)));
     AddDescriptionPrefix(steps, "CheckElementVisible");
     return steps;
   }
 
   auto CheckMockElementChecked(const DeepQuery& where, bool checked) {
-    MultiStep steps = Steps(InAnyContext(WaitForElementVisible(
-                                test::kGlicContentsElementId, {"body"})),
-                            InAnyContext(CheckJsResultAt(
-                                test::kGlicContentsElementId, where,
-                                "(el) => el.checked", testing::Eq(checked))));
+    MultiStep steps = Steps(
+        InAnyContext(WaitForElementVisible(kGlicContentsElementId, {"body"})),
+        InAnyContext(CheckJsResultAt(kGlicContentsElementId, where,
+                                     "(el) => el.checked",
+                                     testing::Eq(checked))));
     AddDescriptionPrefix(steps, "CheckElementChecked");
     return steps;
   }
 
+  auto WaitForMockElementChecked(const DeepQuery& where, bool checked) {
+    return Do([this, where, checked]() {
+      content::RenderFrameHost* frame = FindGlicGuestMainFrame();
+      ASSERT_TRUE(frame);
+      auto result =
+          content::EvalJs(frame, content::JsReplace(R"js(
+        (async () => {
+          return new Promise((resolve) => {
+            const check = () => {
+              const el = document.querySelector($1);
+              if (el && el.checked === $2) {
+                resolve(true);
+              } else {
+                setTimeout(check, 100);
+              }
+            };
+            check();
+          });
+        })()
+      )js",
+                                                    where[0], checked));
+      EXPECT_EQ(true, result);
+    });
+  }
+
   auto CheckEscapeKeyDismisses(const DeepQuery& panel) {
     return InAnyContext(
-        WaitForShow(test::kGlicHostElementId), CheckElementVisible(panel, true),
-        InSameContext(SendAccelerator(test::kGlicHostElementId, escape_key)
+        WaitForShow(kGlicHostElementId), CheckElementVisible(panel, true),
+        InSameContext(SendAccelerator(kGlicHostElementId, escape_key)
                           .SetMustRemainVisible(false),
                       WaitForHide(kGlicViewElementId)),
         CheckControllerHasWidget(false));
   }
 
   auto ChangeConnectionState(bool online) {
-    return ExecuteJs(test::kGlicHostElementId,
+    return ExecuteJs(kGlicHostElementId,
                      base::StringPrintf(R"(
         function () {
           const controller = window.appRouter.glicController;
@@ -242,11 +269,8 @@ class GlicUiInteractiveTest : public GlicUiInteractiveUiTestBase {
   ~GlicUiInteractiveTest() override = default;
 };
 
-IN_PROC_BROWSER_TEST_F(GlicUiInteractiveTest, OpenGlicWindow) {
-  if (base::FeatureList::IsEnabled(features::kGlicMultiInstance)) {
-    // TODO(b/453696965): Broken in multi-instance.
-    GTEST_SKIP() << "Skipping for kGlicMultiInstance";
-  }
+// TODO(b/453696965): Broken in multi-instance.
+IN_PROC_BROWSER_TEST_F(GlicUiInteractiveTest, DISABLED_OpenGlicWindow) {
   base::HistogramTester histogram_tester;
   RunTestSequence(ObserveState(kGlicUiStateHistory, GetHost()),
                   OpenGlic(GlicInstrumentMode::kHostOnly));
@@ -256,32 +280,16 @@ IN_PROC_BROWSER_TEST_F(GlicUiInteractiveTest, OpenGlicWindow) {
 }
 
 // Tests the network being connected at startup (as normal).
-class GlicUiConnectedUiTest : public GlicUiInteractiveUiTestBase,
-                              public testing::WithParamInterface<bool> {
+class GlicUiConnectedUiTest : public GlicUiInteractiveUiTestBase {
  public:
   GlicUiConnectedUiTest()
-      : GlicUiInteractiveUiTestBase(TestParams(/*connected=*/true)) {
-    if (IsDetachedOnlyModeEnabled()) {
-      feature_list_.InitAndEnableFeature(features::kGlicDetached);
-    } else {
-      feature_list_.InitAndDisableFeature(features::kGlicDetached);
-    }
-  }
+      : GlicUiInteractiveUiTestBase(TestParams(/*connected=*/true)) {}
   ~GlicUiConnectedUiTest() override = default;
-
-  bool IsDetachedOnlyModeEnabled() const { return GetParam(); }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
 };
 
-INSTANTIATE_TEST_SUITE_P(All, GlicUiConnectedUiTest, testing::Bool());
-
-IN_PROC_BROWSER_TEST_P(GlicUiConnectedUiTest, DisconnectedPanelHidden) {
-  if (base::FeatureList::IsEnabled(features::kGlicMultiInstance)) {
-    // TODO(b/453696965): Broken in multi-instance.
-    GTEST_SKIP() << "Skipping for kGlicMultiInstance";
-  }
+// TODO(b/453696965): Broken in multi-instance.
+IN_PROC_BROWSER_TEST_F(GlicUiConnectedUiTest,
+                       DISABLED_DisconnectedPanelHidden) {
   RunTestSequence(
       ObserveState(kGlicUiStateHistory, GetHost()),
       DeprecatedOpenGlicWindow(GlicWindowMode::kAttached,
@@ -290,12 +298,9 @@ IN_PROC_BROWSER_TEST_P(GlicUiConnectedUiTest, DisconnectedPanelHidden) {
       CheckElementVisible(kOfflinePanel, false));
 }
 
-IN_PROC_BROWSER_TEST_P(GlicUiConnectedUiTest,
-                       DoesNotHidePanelWhenReadyButOffline) {
-  if (base::FeatureList::IsEnabled(features::kGlicMultiInstance)) {
-    // TODO(b/453696965): Broken in multi-instance.
-    GTEST_SKIP() << "Skipping for kGlicMultiInstance";
-  }
+// TODO(b/453696965): Broken in multi-instance.
+IN_PROC_BROWSER_TEST_F(GlicUiConnectedUiTest,
+                       DISABLED_DoesNotHidePanelWhenReadyButOffline) {
   RunTestSequence(
       ObserveState(kGlicUiStateHistory, GetHost()),
       DeprecatedOpenGlicWindow(GlicWindowMode::kAttached,
@@ -305,46 +310,36 @@ IN_PROC_BROWSER_TEST_P(GlicUiConnectedUiTest,
       CheckState(kGlicUiStateHistory, IsCurrently(WebUiState::kReady)));
 }
 
-IN_PROC_BROWSER_TEST_P(GlicUiConnectedUiTest, CanAttachWithBrowserWindow) {
-  if (IsDetachedOnlyModeEnabled()) {
-    GTEST_SKIP() << "Skipping for kGlicDetached only mode";
-  }
-  if (base::FeatureList::IsEnabled(features::kGlicMultiInstance)) {
-    GTEST_SKIP() << "Skipping for kGlicMultiInstance";
-  }
+// Skipping for kGlicMultiInstance.
+IN_PROC_BROWSER_TEST_F(GlicUiConnectedUiTest,
+                       DISABLED_CanAttachWithBrowserWindow) {
   RunTestSequence(OpenGlic(GlicInstrumentMode::kHostAndContents),
                   CheckMockElementChecked({"#canAttachCheckbox"}, true));
 }
 
 // TODO(crbug.com/454087646): Not reliable yet.
-IN_PROC_BROWSER_TEST_P(GlicUiConnectedUiTest,
-                       DISABLED_CanNotAttachWithMinimizedBrowser) {
+IN_PROC_BROWSER_TEST_F(GlicUiConnectedUiTest,
+                       CanNotAttachWithMinimizedBrowser) {
   RunTestSequence(
-      OpenGlic(GlicInstrumentMode::kHostAndContents),
-      CheckMockElementChecked({"#canAttachCheckbox"}, true),
-      Do([&]() { browser()->GetBrowserView().Minimize(); }),
-      // TODO(harringtond): Ideally this would wait until not checked, rather
-      // than check only once. There's no guarantee the web client
-      // has been updated before this code runs. Currently, this
-      // test works, though it's a risk for flakiness.
-      CheckMockElementChecked({"#canAttachCheckbox"}, false));
+      OpenGlic(GlicInstrumentMode::kHostAndContents), Detach(),
+      WaitForMockElementChecked({"#canAttachCheckbox"}, true), Do([&]() {
+        BrowserView::GetBrowserViewForBrowser(browser())->Minimize();
+      }),
+      WaitForMockElementChecked({"#canAttachCheckbox"}, false));
 }
 
-IN_PROC_BROWSER_TEST_P(GlicUiConnectedUiTest,
-                       DoesNotNavigateToUnsupportedOrigin) {
-  if (base::FeatureList::IsEnabled(features::kGlicMultiInstance)) {
-    // TODO(b/453696965): Broken in multi-instance.
-    GTEST_SKIP() << "Skipping for kGlicMultiInstance";
-  }
+// TODO(b/453696965): Broken in multi-instance.
+IN_PROC_BROWSER_TEST_F(GlicUiConnectedUiTest,
+                       DISABLED_DoesNotNavigateToUnsupportedOrigin) {
   RunTestSequence(
       ObserveState(kGlicUiStateHistory, GetHost()),
       DeprecatedOpenGlicWindow(GlicWindowMode::kAttached,
                                GlicInstrumentMode::kHostAndContents),
-      WaitForElementVisible(test::kGlicContentsElementId, {"body"}),
-      InAnyContext(ExecuteJs(test::kGlicContentsElementId,
+      WaitForElementVisible(kGlicContentsElementId, {"body"}),
+      InAnyContext(ExecuteJs(kGlicContentsElementId,
                              R"js(()=>{location = 'http://b.test/page';})js")),
       // Just wait a bit and make sure the page doesn't navigate.
-      InAnyContext(CheckJsResult(test::kGlicContentsElementId, R"js(
+      InAnyContext(CheckJsResult(kGlicContentsElementId, R"js(
   ()=>{
     const {promise, resolve} = Promise.withResolvers();
     window.setTimeout(() => resolve(true), 1000);
@@ -352,21 +347,18 @@ IN_PROC_BROWSER_TEST_P(GlicUiConnectedUiTest,
   })js")));
 }
 
-IN_PROC_BROWSER_TEST_P(GlicUiConnectedUiTest,
-                       HidesTabAccessUIOnWebClientCrash) {
-  if (base::FeatureList::IsEnabled(features::kGlicMultiInstance)) {
-    // TODO(b/453696965): Broken in multi-instance.
-    GTEST_SKIP() << "Skipping for kGlicMultiInstance";
-  }
+// TODO(b/453696965): Broken in multi-instance.
+IN_PROC_BROWSER_TEST_F(GlicUiConnectedUiTest,
+                       DISABLED_HidesTabAccessUIOnWebClientCrash) {
   content::ScopedAllowRendererCrashes scoped_allow_renderer_crashes;
   RunTestSequence(
       ObserveState(kGlicUiStateHistory, GetHost()),
       ObserveState(kGlicContextAccessIndicatorHistory, glic_service()),
       DeprecatedOpenGlicWindow(GlicWindowMode::kAttached,
                                GlicInstrumentMode::kHostAndContents),
-      WaitForElementVisible(test::kGlicContentsElementId, {"body"}),
+      WaitForElementVisible(kGlicContentsElementId, {"body"}),
       InAnyContext(ExecuteJs(
-          test::kGlicContentsElementId,
+          kGlicContentsElementId,
           R"js(()=>{client.browser.setContextAccessIndicator(true);})js")),
       InAnyContext(WaitForState(kGlicContextAccessIndicatorHistory,
                                 IsContextAccessIndicatorCurrently(true))),
@@ -389,11 +381,9 @@ class GlicUiDisconnectedUiTest : public GlicUiInteractiveUiTestBase {
   base::test::ScopedFeatureList feature_list_;
 };
 
-IN_PROC_BROWSER_TEST_F(GlicUiDisconnectedUiTest, DisconnectedPanelShown) {
-  if (base::FeatureList::IsEnabled(features::kGlicMultiInstance)) {
-    // TODO(b/453696965): Broken in multi-instance.
-    GTEST_SKIP() << "Skipping for kGlicMultiInstance";
-  }
+// TODO(b/453696965): Broken in multi-instance.
+IN_PROC_BROWSER_TEST_F(GlicUiDisconnectedUiTest,
+                       DISABLED_DisconnectedPanelShown) {
   RunTestSequence(
       ObserveState(kGlicUiStateHistory, GetHost()),
       DeprecatedOpenGlicWindow(GlicWindowMode::kAttached,
@@ -402,18 +392,15 @@ IN_PROC_BROWSER_TEST_F(GlicUiDisconnectedUiTest, DisconnectedPanelShown) {
       CheckElementVisible(kOfflinePanel, true));
 }
 
-IN_PROC_BROWSER_TEST_F(GlicUiDisconnectedUiTest, LoadsWhenBackOnline) {
-  if (base::FeatureList::IsEnabled(features::kGlicMultiInstance)) {
-    // TODO(b/453696965): Broken in multi-instance.
-    GTEST_SKIP() << "Skipping for kGlicMultiInstance";
-  }
+// TODO(b/453696965): Broken in multi-instance.
+IN_PROC_BROWSER_TEST_F(GlicUiDisconnectedUiTest, DISABLED_LoadsWhenBackOnline) {
   RunTestSequence(
       ObserveState(kGlicUiStateHistory, GetHost()),
       DeprecatedOpenGlicWindow(GlicWindowMode::kAttached,
                                GlicInstrumentMode::kHostOnly),
       ChangeConnectionState(true),
       WaitForState(kGlicUiStateHistory, IsNotCurrently(WebUiState::kOffline)),
-      WaitForElementVisible(test::kGlicHostElementId, kContentsPanel),
+      WaitForElementVisible(kGlicHostElementId, kContentsPanel),
       CheckElementVisible(kOfflinePanel, false),
       CheckState(kGlicUiStateHistory, IsCurrently(WebUiState::kReady)));
 }
@@ -431,11 +418,8 @@ class GlicUiFullLoadingSequenceTest : public GlicUiInteractiveUiTestBase {
   ~GlicUiFullLoadingSequenceTest() override = default;
 };
 
-IN_PROC_BROWSER_TEST_F(GlicUiFullLoadingSequenceTest, Test) {
-  if (base::FeatureList::IsEnabled(features::kGlicMultiInstance)) {
-    // TODO(b/453696965): Broken in multi-instance.
-    GTEST_SKIP() << "Skipping for kGlicMultiInstance";
-  }
+// TODO(b/453696965): Broken in multi-instance.
+IN_PROC_BROWSER_TEST_F(GlicUiFullLoadingSequenceTest, DISABLED_Test) {
   RunTestSequence(
       ObserveState(kGlicUiStateHistory, GetHost()),
       DeprecatedOpenGlicWindow(GlicWindowMode::kAttached,
@@ -465,11 +449,8 @@ class GlicUiQuickLoadingSequenceNoHoldTest
   ~GlicUiQuickLoadingSequenceNoHoldTest() override = default;
 };
 
-IN_PROC_BROWSER_TEST_F(GlicUiQuickLoadingSequenceNoHoldTest, Test) {
-  if (base::FeatureList::IsEnabled(features::kGlicMultiInstance)) {
-    // TODO(b/453696965): Broken in multi-instance.
-    GTEST_SKIP() << "Skipping for kGlicMultiInstance";
-  }
+// TODO(b/453696965): Broken in multi-instance.
+IN_PROC_BROWSER_TEST_F(GlicUiQuickLoadingSequenceNoHoldTest, DISABLED_Test) {
   RunTestSequence(
       ObserveState(kGlicUiStateHistory, GetHost()),
       DeprecatedOpenGlicWindow(GlicWindowMode::kAttached,
@@ -498,11 +479,8 @@ class GlicUiQuickLoadingSequenceWithHoldTest
   ~GlicUiQuickLoadingSequenceWithHoldTest() override = default;
 };
 
-IN_PROC_BROWSER_TEST_F(GlicUiQuickLoadingSequenceWithHoldTest, Test) {
-  if (base::FeatureList::IsEnabled(features::kGlicMultiInstance)) {
-    // TODO(b/453696965): Broken in multi-instance.
-    GTEST_SKIP() << "Skipping for kGlicMultiInstance";
-  }
+// TODO(b/453696965): Broken in multi-instance.
+IN_PROC_BROWSER_TEST_F(GlicUiQuickLoadingSequenceWithHoldTest, DISABLED_Test) {
   RunTestSequence(
       ObserveState(kGlicUiStateHistory, GetHost()),
       DeprecatedOpenGlicWindow(GlicWindowMode::kAttached,
@@ -561,11 +539,8 @@ class GlicUiLoadingPanelWaitingTest : public GlicUiInteractiveUiTestBase {
   ~GlicUiLoadingPanelWaitingTest() override = default;
 };
 
-IN_PROC_BROWSER_TEST_F(GlicUiLoadingPanelWaitingTest, Test) {
-  if (base::FeatureList::IsEnabled(features::kGlicMultiInstance)) {
-    // TODO(b/453696965): Broken in multi-instance.
-    GTEST_SKIP() << "Skipping for kGlicMultiInstance";
-  }
+// TODO(b/453696965): Broken in multi-instance.
+IN_PROC_BROWSER_TEST_F(GlicUiLoadingPanelWaitingTest, DISABLED_Test) {
   RunTestSequence(ObserveState(kGlicUiStateHistory, GetHost()),
                   DeprecatedOpenGlicWindow(GlicWindowMode::kAttached,
                                            GlicInstrumentMode::kHostOnly),
@@ -587,11 +562,8 @@ class GlicUiLoadingPanelHoldingTest : public GlicUiInteractiveUiTestBase {
   ~GlicUiLoadingPanelHoldingTest() override = default;
 };
 
-IN_PROC_BROWSER_TEST_F(GlicUiLoadingPanelHoldingTest, Test) {
-  if (base::FeatureList::IsEnabled(features::kGlicMultiInstance)) {
-    // TODO(b/453696965): Broken in multi-instance.
-    GTEST_SKIP() << "Skipping for kGlicMultiInstance";
-  }
+// TODO(b/453696965): Broken in multi-instance.
+IN_PROC_BROWSER_TEST_F(GlicUiLoadingPanelHoldingTest, DISABLED_Test) {
   RunTestSequence(
       ObserveState(kGlicUiStateHistory, GetHost()),
       DeprecatedOpenGlicWindow(GlicWindowMode::kAttached,
@@ -603,11 +575,8 @@ IN_PROC_BROWSER_TEST_F(GlicUiLoadingPanelHoldingTest, Test) {
 // Test that the escape key can be used to dismiss the floaty window in various
 // loading and error states.
 
-IN_PROC_BROWSER_TEST_F(GlicUiDisconnectedUiTest, EscapeKeyDismisses) {
-  if (base::FeatureList::IsEnabled(features::kGlicMultiInstance)) {
-    // TODO(b/453696965): Broken in multi-instance.
-    GTEST_SKIP() << "Skipping for kGlicMultiInstance";
-  }
+// TODO(b/453696965): Broken in multi-instance.
+IN_PROC_BROWSER_TEST_F(GlicUiDisconnectedUiTest, DISABLED_EscapeKeyDismisses) {
   RunTestSequence(
       ObserveState(kGlicUiStateHistory, GetHost()),
       DeprecatedOpenGlicWindow(GlicWindowMode::kAttached,
@@ -616,11 +585,9 @@ IN_PROC_BROWSER_TEST_F(GlicUiDisconnectedUiTest, EscapeKeyDismisses) {
       CheckEscapeKeyDismisses(kOfflinePanel));
 }
 
-IN_PROC_BROWSER_TEST_F(GlicUiLoadingPanelWaitingTest, EscapeKeyDismisses) {
-  if (base::FeatureList::IsEnabled(features::kGlicMultiInstance)) {
-    // TODO(b/453696965): Broken in multi-instance.
-    GTEST_SKIP() << "Skipping for kGlicMultiInstance";
-  }
+// TODO(b/453696965): Broken in multi-instance.
+IN_PROC_BROWSER_TEST_F(GlicUiLoadingPanelWaitingTest,
+                       DISABLED_EscapeKeyDismisses) {
   RunTestSequence(ObserveState(kGlicUiStateHistory, GetHost()),
                   DeprecatedOpenGlicWindow(GlicWindowMode::kAttached,
                                            GlicInstrumentMode::kHostOnly),
@@ -629,11 +596,9 @@ IN_PROC_BROWSER_TEST_F(GlicUiLoadingPanelWaitingTest, EscapeKeyDismisses) {
                   CheckEscapeKeyDismisses(kLoadingPanel));
 }
 
-IN_PROC_BROWSER_TEST_F(GlicUiLoadingPanelHoldingTest, EscapeKeyDismisses) {
-  if (base::FeatureList::IsEnabled(features::kGlicMultiInstance)) {
-    // TODO(b/453696965): Broken in multi-instance.
-    GTEST_SKIP() << "Skipping for kGlicMultiInstance";
-  }
+// TODO(b/453696965): Broken in multi-instance.
+IN_PROC_BROWSER_TEST_F(GlicUiLoadingPanelHoldingTest,
+                       DISABLED_EscapeKeyDismisses) {
   RunTestSequence(
       ObserveState(kGlicUiStateHistory, GetHost()),
       DeprecatedOpenGlicWindow(GlicWindowMode::kAttached,
@@ -642,11 +607,9 @@ IN_PROC_BROWSER_TEST_F(GlicUiLoadingPanelHoldingTest, EscapeKeyDismisses) {
       CheckEscapeKeyDismisses(kLoadingPanel));
 }
 
-IN_PROC_BROWSER_TEST_F(GlicUiFullLoadingSequenceTest, EscapeKeyDismisses) {
-  if (base::FeatureList::IsEnabled(features::kGlicMultiInstance)) {
-    // TODO(b/453696965): Broken in multi-instance.
-    GTEST_SKIP() << "Skipping for kGlicMultiInstance";
-  }
+// TODO(b/453696965): Broken in multi-instance.
+IN_PROC_BROWSER_TEST_F(GlicUiFullLoadingSequenceTest,
+                       DISABLED_EscapeKeyDismisses) {
   RunTestSequence(
       ObserveState(kGlicUiStateHistory, GetHost()),
       DeprecatedOpenGlicWindow(GlicWindowMode::kAttached,
@@ -662,7 +625,7 @@ class GlicWithMultipleProfilesTest : public GlicUiInteractiveUiTestBase {
   GlicWithMultipleProfilesTest() : GlicUiInteractiveUiTestBase({}) {}
   ~GlicWithMultipleProfilesTest() override = default;
 
-  Browser* CreateBrowserWithNewProfile() {
+  BrowserWindowInterface* CreateBrowserWithNewProfile() {
     ProfileManager* profile_manager = g_browser_process->profile_manager();
     base::FilePath new_path =
         profile_manager->GenerateNextProfileDirectoryPath();
@@ -675,13 +638,11 @@ class GlicWithMultipleProfilesTest : public GlicUiInteractiveUiTestBase {
 
 // Creates two browsers with different profiles. Opens glic in each and verifies
 // it loads, doesn't crash, and hides the other glic window.
-IN_PROC_BROWSER_TEST_F(GlicWithMultipleProfilesTest, OpenGlicInEachProfile) {
-  if (base::FeatureList::IsEnabled(features::kGlicMultiInstance)) {
-    // TODO(b/453696965): Broken in multi-instance.
-    GTEST_SKIP() << "Skipping for kGlicMultiInstance";
-  }
-  Browser* first_browser = browser();
-  Browser* second_browser = CreateBrowserWithNewProfile();
+// TODO(b/453696965): Broken in multi-instance.
+IN_PROC_BROWSER_TEST_F(GlicWithMultipleProfilesTest,
+                       DISABLED_OpenGlicInEachProfile) {
+  BrowserWindowInterface* first_browser = browser();
+  BrowserWindowInterface* second_browser = CreateBrowserWithNewProfile();
   SetActiveBrowser(second_browser);
 
   RunTestSequence(
@@ -782,23 +743,19 @@ class GlicApiUiRedirectTest : public test::InteractiveGlicTest,
   base::test::ScopedFeatureList redirect_features_;
 };
 
-IN_PROC_BROWSER_TEST_P(GlicApiUiRedirectTest, AccessDeniedAdmin) {
-  if (base::FeatureList::IsEnabled(features::kGlicMultiInstance)) {
-    // TODO(b/453696965): Broken in multi-instance.
-    GTEST_SKIP() << "Skipping for kGlicMultiInstance";
-  }
+// TODO(b/453696965): Broken in multi-instance.
+IN_PROC_BROWSER_TEST_P(GlicApiUiRedirectTest, DISABLED_AccessDeniedAdmin) {
   auto https_server_running =
       embedded_https_test_server().StartAcceptingConnectionsAndReturnHandle();
 
   RunTestSequence(
       OpenGlic(GlicInstrumentMode::kHostOnly),
       InAnyContext(WaitForElementVisible(
-          test::kGlicHostElementId, {"#disabledByAdminPanel:not([hidden])"})),
+          kGlicHostElementId, {"#disabledByAdminPanel:not([hidden])"})),
       CheckTabCount(1),
-      InAnyContext(WaitForElementVisible(test::kGlicHostElementId,
+      InAnyContext(WaitForElementVisible(kGlicHostElementId,
                                          {"#disabledByAdminPanel .notice a"})),
-      ClickElement(test::kGlicHostElementId,
-                   {"#disabledByAdminPanel .notice a"})
+      ClickElement(kGlicHostElementId, {"#disabledByAdminPanel .notice a"})
           .SetContext(ui::InteractionSequence::ContextMode::kAny)
           .SetMustRemainVisible(false),
       InAnyContext(Do([&]() {
@@ -811,248 +768,22 @@ IN_PROC_BROWSER_TEST_P(GlicApiUiRedirectTest, AccessDeniedAdmin) {
 
 INSTANTIATE_TEST_SUITE_P(All, GlicApiUiRedirectTest, ::testing::Bool());
 
-IN_PROC_BROWSER_TEST_P(GlicUiConnectedUiTest, AccessDeniedAdminWithoutLink) {
-  if (base::FeatureList::IsEnabled(features::kGlicMultiInstance)) {
-    // TODO(b/453696965): Broken in multi-instance.
-    GTEST_SKIP() << "Skipping for kGlicMultiInstance";
-  }
+// TODO(b/453696965): Broken in multi-instance.
+IN_PROC_BROWSER_TEST_F(GlicUiConnectedUiTest,
+                       DISABLED_AccessDeniedAdminWithoutLink) {
   RunTestSequence(
       OpenGlic(GlicInstrumentMode::kHostOnly), InAnyContext(Do([&]() {
-        browser()->profile()->GetPrefs()->SetInteger(
-            ::prefs::kGeminiSettings,
-            static_cast<int>(glic::prefs::SettingsPolicyState::kDisabled));
+        browser()->GetProfile()->GetPrefs()->SetInteger(
+            optimization_guide::prefs::kGeminiSettings,
+            std::to_underlying(optimization_guide::prefs::
+                                   GeminiSettingsPolicyState::kDisabled));
       })),
 
       InAnyContext(WaitForElementVisible(
-          test::kGlicHostElementId, {"#disabledByAdminPanel:not(.show-disabled-"
-                                     "by-admin-link) .without-link"})),
-      InAnyContext(EnsureNotVisible(test::kGlicHostElementId,
-                                    {"#disabledByAdminPanel a"})));
-}
-
-DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kGlicFreInnerContentsElementId);
-DEFINE_LOCAL_STATE_IDENTIFIER_VALUE(ui::test::PollingStateObserver<bool>,
-                                    kControllerIsShowingState);
-
-class GlicUiUnifiedFreIntegrationTest : public GlicUiInteractiveUiTestBase {
- public:
-  GlicUiUnifiedFreIntegrationTest()
-      : GlicUiInteractiveUiTestBase(TestParams(/*connected=*/true)) {
-    feature_list_.InitWithFeatures(
-        {features::kGlicUnifiedFreScreen, features::kGlicMultiInstance}, {});
-  }
-  ~GlicUiUnifiedFreIntegrationTest() override = default;
-
-  void SetUpOnMainThread() override {
-    host_resolver()->AddRule("glic.test", "127.0.0.1");
-    GlicUiInteractiveUiTestBase::SetUpOnMainThread();
-    ASSERT_TRUE(embedded_https_test_server().Start());
-    browser()->profile()->GetPrefs()->SetInteger(
-        glic::prefs::kGlicCompletedFre,
-        static_cast<int>(glic::prefs::FreStatus::kNotStarted));
-  }
-
-  const DeepQuery kFreContainer = {"#fre-app-container"};
-  const DeepQuery kGlicContainer = {"#glic-app-container"};
-  const DeepQuery kGlicGuestPanel = {"#glic-app-container", "#guestPanel"};
-
-  const DeepQuery kMockFreClientNoThanksButton = {"#noThanks"};
-  const DeepQuery kMockFreClientContinueButton = {"#continue"};
-
-  auto InstrumentFreWebview() {
-    return Steps(InAnyContext(WaitForElementVisible(
-                     test::kGlicHostElementId,
-                     {"#fre-app-container", "#freGuestFrame"})),
-                 InAnyContext(InstrumentInnerWebContents(
-                     kGlicFreInnerContentsElementId, test::kGlicHostElementId,
-                     0)));  // Index 0 for the FRE webview
-  }
-
-  auto ClickFreWebviewElement(const DeepQuery& where) {
-    return InAnyContext(ClickElement(kGlicFreInnerContentsElementId, where));
-  }
-
-  auto CheckElementHidden(const DeepQuery& query, bool hidden = true) {
-    return CheckJsResultAt(test::kGlicHostElementId, query, "(el) => el.hidden",
-                           hidden);
-  }
-
- protected:
-  net::EmbeddedTestServer glic_server_;
-  GURL fre_url_;
-  GURL glic_guest_url_;
-  base::test::ScopedFeatureList feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_F(GlicUiUnifiedFreIntegrationTest, ShowsFreInsteadOfGlic) {
-  if (base::FeatureList::IsEnabled(features::kGlicMultiInstance)) {
-    // TODO(b/453696965): Broken in multi-instance.
-    GTEST_SKIP() << "Skipping for kGlicMultiInstance";
-  }
-  RunTestSequence(
-      ObserveState(kGlicUiStateHistory, GetHost()),
-      OpenGlic(GlicInstrumentMode::kHostOnly),
-      InAnyContext(WaitForShow(test::kGlicHostElementId)),
-      CheckState(kGlicUiStateHistory, IsNotCurrently(WebUiState::kReady)),
-      CheckElementVisible(kFreContainer, true),
-      CheckElementVisible(kGlicContainer, false));
-}
-
-IN_PROC_BROWSER_TEST_F(GlicUiUnifiedFreIntegrationTest,
-                       AcceptFreTransitionsToGlic) {
-  if (base::FeatureList::IsEnabled(features::kGlicMultiInstance)) {
-    // TODO(b/453696965): Broken in multi-instance.
-    GTEST_SKIP() << "Skipping for kGlicMultiInstance";
-  }
-  RunTestSequence(
-      ObserveState(kGlicUiStateHistory, GetHost()),
-      OpenGlic(GlicInstrumentMode::kHostOnly),
-      InAnyContext(WaitForShow(test::kGlicHostElementId)),
-
-      InstrumentFreWebview(),
-      WaitForElementVisible(kGlicFreInnerContentsElementId,
-                            kMockFreClientContinueButton),
-      ClickFreWebviewElement(kMockFreClientContinueButton),
+          kGlicHostElementId, {"#disabledByAdminPanel:not(.show-disabled-"
+                               "by-admin-link) .without-link"})),
       InAnyContext(
-          WaitForElementVisible(test::kGlicHostElementId, kGlicContainer)),
-      InAnyContext(CheckElementHidden(kFreContainer, true)),
-      InAnyContext(
-          WaitForElementVisible(test::kGlicHostElementId, kGlicGuestPanel)),
-      CheckResult(
-          [this]() {
-            return static_cast<glic::prefs::FreStatus>(
-                browser()->profile()->GetPrefs()->GetInteger(
-                    glic::prefs::kGlicCompletedFre));
-          },
-          glic::prefs::FreStatus::kCompleted),
-      WaitForState(kGlicUiStateHistory, IsCurrently(WebUiState::kReady)),
-      CheckControllerShowing(true));
-}
-
-IN_PROC_BROWSER_TEST_F(GlicUiUnifiedFreIntegrationTest, RejectFreClosesPanel) {
-  if (base::FeatureList::IsEnabled(features::kGlicMultiInstance)) {
-    // TODO(b/453696965): Broken in multi-instance.
-    GTEST_SKIP() << "Skipping for kGlicMultiInstance";
-  }
-  RunTestSequence(
-      ObserveState(kGlicUiStateHistory, GetHost()),
-      OpenGlic(GlicInstrumentMode::kHostOnly),
-      InAnyContext(WaitForShow(test::kGlicHostElementId)),
-      WaitForElementVisible(test::kGlicHostElementId, kFreContainer),
-
-      InAnyContext(InstrumentFreWebview()),
-      WaitForElementVisible(kGlicFreInnerContentsElementId,
-                            kMockFreClientNoThanksButton),
-      InAnyContext(ClickElement(kGlicFreInnerContentsElementId,
-                                kMockFreClientNoThanksButton)
-                       .SetMustRemainVisible(false)),
-      WaitForHide(kGlicViewElementId),
-      PollState(kControllerIsShowingState,
-                [this]() { return GetWindowControllerImpl().IsShowing(); }),
-      WaitForState(kControllerIsShowingState, false),
-      CheckControllerShowing(false),
-      CheckResult(
-          [this]() {
-            return static_cast<glic::prefs::FreStatus>(
-                browser()->profile()->GetPrefs()->GetInteger(
-                    glic::prefs::kGlicCompletedFre));
-          },
-          glic::prefs::FreStatus::kNotStarted));
-}
-
-IN_PROC_BROWSER_TEST_F(GlicUiUnifiedFreIntegrationTest,
-                       DismissFreWithEscClosesPanel) {
-  if (base::FeatureList::IsEnabled(features::kGlicMultiInstance)) {
-    // TODO(b/453696965): Broken in multi-instance.
-    GTEST_SKIP() << "Skipping for kGlicMultiInstance";
-  }
-  RunTestSequence(
-      ObserveState(kGlicUiStateHistory, GetHost()),
-      OpenGlic(GlicInstrumentMode::kHostOnly),
-      InAnyContext(WaitForShow(test::kGlicHostElementId)),
-      WaitForElementVisible(test::kGlicHostElementId, kFreContainer),
-      InAnyContext(SendAccelerator(test::kGlicHostElementId, escape_key)
-                       .SetMustRemainVisible(false)),
-      WaitForHide(kGlicViewElementId), CheckControllerShowing(false));
-}
-
-IN_PROC_BROWSER_TEST_F(GlicUiUnifiedFreIntegrationTest,
-                       MultiWindowFreToGlicTransition) {
-  if (base::FeatureList::IsEnabled(features::kGlicMultiInstance)) {
-    // TODO(b/453696965): Broken in multi-instance.
-    GTEST_SKIP() << "Skipping for kGlicMultiInstance";
-  }
-  Browser* browser1 = browser();
-  Browser* browser2 = nullptr;
-  const GURL glic_url = GURL(features::kGlicGuestURL.Get());
-  ASSERT_TRUE(glic_url.is_valid());
-
-  RunTestSequence(
-      // Open Window 1 and verify FRE screen shows.
-      OpenGlic(GlicInstrumentMode::kHostOnly),
-      InAnyContext(WaitForShow(test::kGlicHostElementId)),
-      InAnyContext(CheckElementVisible(kFreContainer, true)),
-      InAnyContext(CheckElementVisible(kGlicContainer, false)),
-      // Open Window 2 and verify FRE screen shows.
-      Do([&]() {
-        browser2 = CreateBrowser(browser1->profile());
-        // SetActiveBrowser to the newly opened window
-        SetActiveBrowser(browser2);
-        EXPECT_NE(browser(), browser1) << "Failed to switch to new browser";
-      }),
-      Do([&]() {
-        ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), glic_url));
-      }),
-      InAnyContext(WaitForShow(kGlicViewElementId)),
-      InAnyContext(WaitForShow(test::kGlicHostElementId)),
-      InAnyContext(CheckElementVisible(kFreContainer, true)),
-      InAnyContext(CheckElementVisible(kGlicContainer, false)),
-      // Accept FRE in Window 1.
-      Do([&]() { SetActiveBrowser(browser1); }), InstrumentFreWebview(),
-      WaitForElementVisible(kGlicFreInnerContentsElementId,
-                            kMockFreClientContinueButton),
-      ClickFreWebviewElement(kMockFreClientContinueButton),
-      // Window 1 transitions to Glic app.
-      InAnyContext(
-          WaitForElementVisible(test::kGlicHostElementId, kGlicContainer)),
-      InAnyContext(CheckElementHidden(kFreContainer, true)),
-      InAnyContext(
-          WaitForElementVisible(test::kGlicHostElementId, kGlicGuestPanel)),
-      // Window 2 also transitions to Glic app.
-      Do([&]() { SetActiveBrowser(browser2); }),
-      InAnyContext(
-          WaitForElementVisible(test::kGlicHostElementId, kGlicContainer)),
-      InAnyContext(CheckElementHidden(kFreContainer, true)),
-      InAnyContext(
-          WaitForElementVisible(test::kGlicHostElementId, kGlicGuestPanel)));
-}
-
-class GlicUiTrustFirstOnboardingTest : public GlicUiInteractiveUiTestBase {
- public:
-  GlicUiTrustFirstOnboardingTest()
-      : GlicUiInteractiveUiTestBase(TestParams(/*connected=*/true)) {
-    feature_list_.InitAndEnableFeature(features::kGlicTrustFirstOnboarding);
-  }
-  ~GlicUiTrustFirstOnboardingTest() override = default;
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_F(GlicUiTrustFirstOnboardingTest, FreIsSkipped) {
-  if (base::FeatureList::IsEnabled(features::kGlicMultiInstance)) {
-    // TODO(crbug.com/453696965): Broken in multi-instance.
-    GTEST_SKIP() << "Skipping for kGlicMultiInstance";
-  }
-  const DeepQuery kFreContainer = {"#fre-app-container"};
-  const DeepQuery kGlicContainer = {"#glic-app-container"};
-  RunTestSequence(ObserveState(kGlicUiStateHistory, GetHost()),
-                  OpenGlic(GlicInstrumentMode::kHostOnly),
-                  InAnyContext(WaitForShow(test::kGlicHostElementId)),
-                  // Check that the FRE is not shown.
-                  CheckElementVisible(kFreContainer, false),
-                  // Check that the main Glic container is shown.
-                  CheckElementVisible(kGlicContainer, true));
+          EnsureNotVisible(kGlicHostElementId, {"#disabledByAdminPanel a"})));
 }
 
 }  // namespace glic

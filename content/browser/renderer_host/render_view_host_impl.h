@@ -32,7 +32,7 @@
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/render_process_host_observer.h"
 #include "content/public/browser/render_view_host.h"
-#include "ipc/constants.mojom.h"
+#include "ipc/constants.mojom-forward.h"
 #include "net/base/load_states.h"
 #include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
@@ -223,10 +223,11 @@ class CONTENT_EXPORT RenderViewHostImpl
 
   // Tells the renderer process to request a page-scale animation based on the
   // specified point/rect.
-  void AnimateDoubleTapZoom(const gfx::Point& point, const gfx::Rect& rect);
+  void AnimateDoubleTapZoom(const gfx::Point& point,
+                            const gfx::Rect& rect) override;
 
   // Requests a page-scale animation based on the specified rect.
-  void ZoomToFindInPageRect(const gfx::Rect& rect_to_zoom);
+  void ZoomToFindInPageRect(const gfx::Rect& rect_to_zoom) override;
 
   // Tells the renderer view to focus the first (last if reverse is true) node.
   void SetInitialFocus(bool reverse);
@@ -241,10 +242,7 @@ class CONTENT_EXPORT RenderViewHostImpl
 
   // Called when the RenderFrameHostImpls/RenderFrameProxyHosts that own this
   // RenderViewHost enter the BackForwardCache.
-  // `new_navigation_request_url` is a URL for the next new page's
-  // navigation_request_url, not the bfcached page's URL.
-  void EnterBackForwardCache(
-      const base::optional_ref<const GURL> new_navigation_request_url);
+  void EnterBackForwardCache();
 
   // Indicates whether or not |this| has received an acknowledgement from
   // renderer that it has enered BackForwardCache.

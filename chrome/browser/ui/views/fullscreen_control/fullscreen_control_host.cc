@@ -5,29 +5,24 @@
 #include "chrome/browser/ui/views/fullscreen_control/fullscreen_control_host.h"
 
 #include "base/check_deref.h"
-#include "base/command_line.h"
 #include "base/functional/bind.h"
-#include "base/functional/callback.h"
+#include "base/logging.h"
 #include "base/metrics/user_metrics.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/app_mode/app_mode_utils.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_context.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
-#include "chrome/browser/ui/views/exclusive_access_bubble_views.h"
+#include "chrome/browser/ui/fullscreen/browser_window_fullscreen_controller.h"
+#include "chrome/browser/ui/views/exclusive_access/exclusive_access_bubble_views.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/common/channel_info.h"
-#include "chrome/common/chrome_switches.h"
-#include "components/fullscreen_control/fullscreen_control_view.h"
-#include "components/version_info/channel.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/common/content_features.h"
 #include "ui/events/event.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/events/types/event_type.h"
-#include "ui/gfx/geometry/rect.h"
 #include "ui/views/event_monitor.h"
 #include "ui/views/view.h"
 
@@ -83,10 +78,20 @@ bool IsExitUiEnabled() {
 
 }  // namespace
 
+DEFINE_USER_DATA(FullscreenControlHost);
+
+// static
+FullscreenControlHost* FullscreenControlHost::From(
+    BrowserWindowInterface* browser) {
+  return Get(browser->GetUnownedUserDataHost());
+}
+
 FullscreenControlHost::FullscreenControlHost(
     BrowserView* browser_view,
-    ExclusiveAccessManager* exclusive_access_manager)
-    : browser_view_(browser_view),
+    ExclusiveAccessManager* exclusive_access_manager,
+    ui::UnownedUserDataHost& host)
+    : scoped_unowned_user_data_(host, *this),
+      browser_view_(browser_view),
       exclusive_access_manager_(CHECK_DEREF(exclusive_access_manager)) {}
 
 FullscreenControlHost::~FullscreenControlHost() = default;
@@ -340,7 +345,8 @@ void FullscreenControlHost::OnPopupTimeout(
 bool FullscreenControlHost::IsExitUiNeeded() {
   return browser_view_->IsFullscreen() &&
          browser_view_->GetExclusiveAccessContext()->CanUserExitFullscreen() &&
-         browser_view_->ShouldHideUIForFullscreen();
+         BrowserWindowFullscreenController::From(browser_view_->browser())
+             ->ShouldHideUIForFullscreen();
 }
 
 bool FullscreenControlHost::IsPointerLocked() {

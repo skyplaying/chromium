@@ -16,6 +16,7 @@
 #include "components/affiliations/core/browser/mock_affiliation_source.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_store/test_password_store.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -62,7 +63,7 @@ PasswordForm GetTestCredential(std::string_view signon_realm) {
   form.scheme = PasswordForm::Scheme::kHtml;
   form.signon_realm = signon_realm;
   form.username_value = kTestUsername;
-  form.password_value = kTestPassword;
+  form.password_value = PasswordString(kTestPassword);
   return form;
 }
 
@@ -82,7 +83,7 @@ class PasswordAffiliationSourceAdapterTest : public testing::Test {
   void SetUp() override {
     mock_source_observer_ =
         std::make_unique<testing::StrictMock<MockAffiliationSourceObserver>>();
-    password_store()->Init(/*affiliated_match_helper=*/nullptr);
+    password_store()->Init();
     adapter_ = std::make_unique<PasswordAffiliationSourceAdapter>();
     adapter_->RegisterPasswordStore(password_store());
     RunUntilIdle();
@@ -101,12 +102,13 @@ class PasswordAffiliationSourceAdapterTest : public testing::Test {
   void RunUntilIdle() { task_environment_.RunUntilIdle(); }
 
   void AddLoginAndWait(const PasswordForm& form) {
-    password_store()->AddLogin(form);
+    password_store()->AddLogin(password_manager::FromPasswordForm(form));
     RunUntilIdle();
   }
 
   void RemoveLoginAndWait(const PasswordForm& form) {
-    password_store_->RemoveLogin(FROM_HERE, form);
+    password_store_->RemoveLogin(FROM_HERE,
+                                 password_manager::FromPasswordForm(form));
     RunUntilIdle();
   }
 
@@ -255,7 +257,9 @@ TEST_F(PasswordAffiliationSourceAdapterTest,
   PasswordForm old_form(GetTestCredential(kTestAndroidRealmAlpha3));
   PasswordForm new_form(old_form);
   new_form.username_value = u"NewUserName";
-  password_store()->UpdateLoginWithPrimaryKey(new_form, old_form);
+  password_store()->UpdateLoginWithPrimaryKey(
+      password_manager::FromPasswordForm(std::move(new_form)),
+      password_manager::FromPasswordForm(std::move(old_form)));
   RunUntilIdle();
 }
 

@@ -52,9 +52,9 @@ const char kUmaDownloadMobileConfigFileUI[] =
 const char kUmaDownloadAppleWalletOrderFileUI[] =
     "Download.IOSDownloadAppleWalletOrderFileUI";
 
-@interface SafariDownloadCoordinator () <TabsDependencyInstalling,
-                                         SafariDownloadTabHelperDelegate,
-                                         SFSafariViewControllerDelegate>
+@interface SafariDownloadCoordinator () <SafariDownloadTabHelperDelegate,
+                                         SFSafariViewControllerDelegate,
+                                         TabsDependencyInstalling>
 
 // SFSafariViewController used to download files.
 @property(nonatomic, strong) SFSafariViewController* safariViewController;
@@ -275,6 +275,10 @@ const char kUmaDownloadAppleWalletOrderFileUI[] =
   [self.baseViewController presentViewController:_alertController
                                         animated:YES
                                       completion:nil];
+}
+
+- (void)dismissDownloadAlert {
+  [self dismissAlert];
 }
 
 #pragma mark - SFSafariViewControllerDelegate

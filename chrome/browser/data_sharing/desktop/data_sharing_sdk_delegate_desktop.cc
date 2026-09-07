@@ -9,6 +9,7 @@
 #include "chrome/browser/ui/webui/data_sharing/data_sharing_page_handler.h"
 #include "chrome/common/webui_url_constants.h"
 #include "content/public/browser/navigation_controller.h"
+#include "ui/base/page_transition_types.h"
 
 namespace data_sharing {
 
@@ -42,10 +43,10 @@ void DataSharingSDKDelegateDesktop::ReadGroups(
       [](data_sharing_pb::ReadGroupsParams params, ReadGroupsCallback callback,
          DataSharingSDKDelegateDesktop* delegate,
          content::WebContents* web_contents) {
-        DataSharingPageHandler* handler =
-            static_cast<DataSharingUI*>(
-                web_contents->GetWebUI()->GetController())
-                ->page_handler();
+        DataSharingPageHandler* handler = web_contents->GetWebUI()
+                                              ->GetController()
+                                              ->GetAs<DataSharingUI>()
+                                              ->page_handler();
         CHECK(handler);
         auto mojom_params = data_sharing::mojom::ReadGroupsParams::New();
         for (const auto& group_param : params.group_params()) {
@@ -82,10 +83,10 @@ void DataSharingSDKDelegateDesktop::LeaveGroup(
          base::OnceCallback<void(const absl::Status&)> callback,
          DataSharingSDKDelegateDesktop* delegate,
          content::WebContents* web_contents) {
-        DataSharingPageHandler* handler =
-            static_cast<DataSharingUI*>(
-                web_contents->GetWebUI()->GetController())
-                ->page_handler();
+        DataSharingPageHandler* handler = web_contents->GetWebUI()
+                                              ->GetController()
+                                              ->GetAs<DataSharingUI>()
+                                              ->page_handler();
         CHECK(handler);
         handler->LeaveGroup(
             params.group_id(),
@@ -103,10 +104,10 @@ void DataSharingSDKDelegateDesktop::DeleteGroup(
          base::OnceCallback<void(const absl::Status&)> callback,
          DataSharingSDKDelegateDesktop* delegate,
          content::WebContents* web_contents) {
-        DataSharingPageHandler* handler =
-            static_cast<DataSharingUI*>(
-                web_contents->GetWebUI()->GetController())
-                ->page_handler();
+        DataSharingPageHandler* handler = web_contents->GetWebUI()
+                                              ->GetController()
+                                              ->GetAs<DataSharingUI>()
+                                              ->page_handler();
         CHECK(handler);
         handler->DeleteGroup(
             params.group_id(),
@@ -151,7 +152,8 @@ void DataSharingSDKDelegateDesktop::MaybeLoadWebContents(
   // If the API is already initialized, run the callback here, otherwise add the
   // callback to the queue and run it when `ApiInitComplete` is called.
   DataSharingUI* data_sharing_ui =
-      static_cast<DataSharingUI*>(web_contents_->GetWebUI()->GetController());
+      web_contents_->GetWebUI()->GetController()->GetAs<DataSharingUI>();
+  CHECK(data_sharing_ui);
   if (data_sharing_ui->IsApiInitialized()) {
     std::move(callback).Run(web_contents_.get());
   } else {
@@ -168,7 +170,8 @@ void DataSharingSDKDelegateDesktop::ApiInitComplete() {
   // At this point the page handler should be created.
   // Invoke the callbacks and clear the subscriptions.
   DataSharingUI* data_sharing_ui =
-      static_cast<DataSharingUI*>(web_contents_->GetWebUI()->GetController());
+      web_contents_->GetWebUI()->GetController()->GetAs<DataSharingUI>();
+  CHECK(data_sharing_ui);
   data_sharing_ui->SetDelegate(nullptr);
   CHECK(data_sharing_ui->page_handler());
   callbacks_.Notify(web_contents_.get());
@@ -238,10 +241,10 @@ void DataSharingSDKDelegateDesktop::ReadGroupWithToken(
          ReadGroupWithTokenCallback callback,
          DataSharingSDKDelegateDesktop* delegate,
          content::WebContents* web_contents) {
-        DataSharingPageHandler* handler =
-            static_cast<DataSharingUI*>(
-                web_contents->GetWebUI()->GetController())
-                ->page_handler();
+        DataSharingPageHandler* handler = web_contents->GetWebUI()
+                                              ->GetController()
+                                              ->GetAs<DataSharingUI>()
+                                              ->page_handler();
         CHECK(handler);
         auto mojom_param = data_sharing::mojom::ReadGroupWithTokenParam::New();
         mojom_param->group_id = params.group_id();

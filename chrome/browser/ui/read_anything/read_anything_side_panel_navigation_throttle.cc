@@ -7,11 +7,10 @@
 #include <memory>
 
 #include "base/memory/ptr_util.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/read_anything/read_anything_entry_point_controller.h"
 #include "chrome/browser/ui/read_anything/read_anything_side_panel_controller_utils.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_enums.h"
+#include "chrome/browser/ui/side_panel/side_panel_enums.h"
 #include "chrome/common/webui_url_constants.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/navigation_handle.h"
@@ -54,7 +53,8 @@ ReadAnythingSidePanelNavigationThrottle::HandleSidePanelRequest() {
           navigation_handle()->GetWebContents())) {
     read_anything::ReadAnythingEntryPointController::ShowUI(
         tab->GetBrowserWindowInterface(),
-        ReadAnythingOpenTrigger::kReadAnythingNavigationThrottle);
+        read_anything::mojom::ReadAnythingOpenTrigger::
+            kReadAnythingNavigationThrottle);
   }
   return content::NavigationThrottle::CANCEL_AND_IGNORE;
 }

@@ -54,6 +54,10 @@
 {%- if not for_blink %}
 #include <string>
 #include <vector>
+{%- if uses_hash_map %}
+#include "mojo/public/cpp/bindings/map_traits_absl.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
+{%- endif %}
 {%- else %}
 {# hash_util.h includes template specializations that should be present for
    every use of {Inlined}StructPtr. #}
@@ -115,6 +119,9 @@
 {#--- Interfaces -#}
 {%  for interface in interfaces %}
 {%    include "interface_declaration.tmpl" %}
+{%-   if interface | should_generate_direct_return_stub %}
+{%-     include "interface_direct_return_stub_with_bridge.tmpl" %}
+{%-   endif %}
 {%- endfor %}
 
 {#--- Interface Proxies -#}

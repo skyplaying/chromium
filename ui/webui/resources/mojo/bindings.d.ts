@@ -189,9 +189,9 @@ export namespace mojo {
         removeListener(id: number): boolean;
       }
 
-      class InterfaceCallbackReceiver {
+      class InterfaceCallbackReceiver<Listener> {
         constructor(router: CallbackRouter);
-        addListener(listener: Function): number;
+        addListener(listener: Listener): number;
         createReceiverHandler(expectsResponse: boolean): Function;
       }
 
@@ -213,6 +213,23 @@ export namespace mojo {
         associateAndPassRemote(): T;
         close(): void;
         flush(): Promise<void>;
+      }
+
+      // The next few interfaces are necessary to prevent name mangling in ts.
+      interface InterfaceRemote<T> {
+        $: InterfaceRemoteBaseWrapper<T>;
+        onConnectionError?: ConnectionErrorEventRouter;
+      }
+
+      interface InterfaceReceiver<T, E> {
+        $: InterfaceReceiverHelper<T, E>;
+        onConnectionError?: ConnectionErrorEventRouter;
+      }
+
+      interface InterfaceCallbackRouter<T, E> {
+        $: InterfaceReceiverHelper<T, E>;
+        onConnectionError?: ConnectionErrorEventRouter;
+        removeListener(id: number): boolean;
       }
     }
 

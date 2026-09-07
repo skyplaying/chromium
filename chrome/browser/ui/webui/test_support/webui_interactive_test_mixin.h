@@ -10,7 +10,6 @@
 
 #include "base/strings/strcat.h"
 #include "base/test/bind.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -22,9 +21,9 @@
 
 class WebUiInteractiveTestMixinBase {
  public:
-  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kElementRenders);
-  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kButtonWasClicked);
-  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kIronCollapseContentShows);
+  DECLARE_CLASS_CUSTOM_ELEMENT_EVENT_TYPE(kElementRenders);
+  DECLARE_CLASS_CUSTOM_ELEMENT_EVENT_TYPE(kButtonWasClicked);
+  DECLARE_CLASS_CUSTOM_ELEMENT_EVENT_TYPE(kIronCollapseContentShows);
 };
 
 // Template to be used as a mixin class for performance settings webui

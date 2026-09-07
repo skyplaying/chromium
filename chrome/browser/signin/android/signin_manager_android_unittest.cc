@@ -2,63 +2,42 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "signin_manager_android.h"
+#include "chrome/browser/signin/android/signin_manager_android.h"
 
 #include <memory>
-#include <set>
 
 #include "base/android/device_info.h"
 #include "base/functional/bind.h"
-#include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/utf_string_conversions.h"
-#include "base/test/bind.h"
-#include "base/test/scoped_feature_list.h"
-#include "base/test/test_future.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
-#include "chrome/browser/browsing_data/chrome_browsing_data_remover_constants.h"
-#include "chrome/browser/browsing_data/chrome_browsing_data_remover_delegate_factory.h"
 #include "chrome/browser/download/chrome_download_manager_delegate.h"
+#include "chrome/browser/download/download_core_service.h"
 #include "chrome/browser/download/download_core_service_factory.h"
-#include "chrome/browser/download/download_core_service_impl.h"
-#include "chrome/browser/history/history_service_factory.h"
-#include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/offline_pages/offline_page_model_factory.h"
-#include "chrome/browser/password_manager/account_password_store_factory.h"
-#include "chrome/browser/password_manager/profile_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/account_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
 #include "chrome/browser/profiles/profile_key.h"
-#include "chrome/browser/reading_list/reading_list_model_factory.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/test/bookmark_test_helpers.h"
-#include "components/history/core/browser/history_service.h"
-#include "components/history/core/common/pref_names.h"
-#include "components/history/core/test/history_service_test_util.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/keyed_service/core/service_access_type.h"
 #include "components/keyed_service/core/simple_factory_key.h"
 #include "components/offline_pages/core/stub_offline_page_model.h"
-#include "components/password_manager/core/browser/features/password_features.h"
+#include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_manager_test_utils.h"
+#include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/test_password_store.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/password_manager/core/browser/split_stores_and_local_upm.h"
-#include "components/prefs/pref_service.h"
-#include "components/reading_list/core/reading_list_model.h"
-#include "components/reading_list/core/reading_list_test_utils.h"
-#include "components/signin/public/base/signin_pref_names.h"
-#include "content/public/browser/background_tracing_manager.h"
+#include "content/public/browser/background_tracing.h"
 #include "content/public/browser/browser_context.h"
-#include "content/public/browser/browsing_data_remover.h"
-#include "content/public/browser/storage_partition.h"
+#include "content/public/browser/tracing_delegate.h"
 #include "content/public/test/browser_task_environment.h"
-#include "content/public/test/browsing_data_remover_test_util.h"
-#include "net/cookies/cookie_store.h"
-#include "services/network/public/mojom/cookie_manager.mojom.h"
+#include "services/tracing/public/cpp/background_tracing/background_tracing_manager.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/common/storage_key/storage_key.h"
-#include "url/origin.h"
+#include "url/gurl.h"
 
 using ::testing::IsEmpty;
 using ::testing::Pair;
@@ -117,7 +96,7 @@ class SigninManagerAndroidTest : public ::testing::Test {
     profile_ = profile_builder.Build();
 
     background_tracing_manager_ =
-        content::BackgroundTracingManager::CreateInstance(&tracing_delegate_);
+        content::CreateBackgroundTracingManager(&tracing_delegate_);
 
     // Creating a BookmarkModel also a creates a StubOfflinePageModel.
     // We need to replace this with a mock that responds to deletions.
@@ -175,7 +154,7 @@ class SigninManagerAndroidTest : public ::testing::Test {
   content::BrowserTaskEnvironment task_environment_;
   std::unique_ptr<TestingProfile> profile_;
   content::TracingDelegate tracing_delegate_;
-  std::unique_ptr<content::BackgroundTracingManager>
+  std::unique_ptr<tracing::BackgroundTracingManager>
       background_tracing_manager_;
 };
 
@@ -184,14 +163,6 @@ TEST_F(SigninManagerAndroidTest, DeleteBookmarksWhenWipingAllData) {
   bookmarks::BookmarkModel* bookmark_model = AddTestBookmarks();
   ASSERT_GE(bookmark_model->bookmark_bar_node()->children().size(), 0u);
   WipeData(ClearedTypes::kAllData);
-  EXPECT_EQ(0u, bookmark_model->bookmark_bar_node()->children().size());
-}
-
-// Tests that wiping sync data also deletes bookmarks.
-TEST_F(SigninManagerAndroidTest, DeleteBookmarksWhenWipingSyncData) {
-  bookmarks::BookmarkModel* bookmark_model = AddTestBookmarks();
-  ASSERT_GE(bookmark_model->bookmark_bar_node()->children().size(), 0u);
-  WipeData(ClearedTypes::kSyncData);
   EXPECT_EQ(0u, bookmark_model->bookmark_bar_node()->children().size());
 }
 
@@ -205,23 +176,25 @@ TEST_F(SigninManagerAndroidTest, DontDeleteBookmarksWhenDeletingSWCaches) {
             bookmark_model->bookmark_bar_node()->children().size());
 }
 
-TEST_F(SigninManagerAndroidTest, DoNotWipePasswordsIfLocalUpmOn) {
+TEST_F(SigninManagerAndroidTest, WipeLocalPasswords) {
   password_manager::PasswordForm profile_store_form;
   profile_store_form.username_value = u"username";
-  profile_store_form.password_value = u"password";
+  profile_store_form.password_value =
+      password_manager::PasswordString(u"password");
   profile_store_form.signon_realm = "https://local.com";
   password_manager::PasswordForm account_store_form = profile_store_form;
   account_store_form.signon_realm = "htts://account.com";
-  profile_password_store()->AddLogin(profile_store_form);
+  profile_password_store()->AddLogin(
+      password_manager::FromPasswordForm(profile_store_form));
   ASSERT_TRUE(account_password_store());
-  account_password_store()->AddLogin(account_store_form);
+  account_password_store()->AddLogin(
+      password_manager::FromPasswordForm(account_store_form));
 
   WipeData(ClearedTypes::kAllData);
 
+  EXPECT_THAT(GetAllLoginsSync(profile_password_store()), IsEmpty());
+  // TODO(crbug.com/506130502): This is weird, this API should be removed.
   EXPECT_THAT(
-      profile_password_store()->stored_passwords(),
-      UnorderedElementsAre(Pair(profile_store_form.signon_realm, SizeIs(1))));
-  EXPECT_THAT(
-      account_password_store()->stored_passwords(),
+      GetAllLoginsSync(account_password_store()),
       UnorderedElementsAre(Pair(account_store_form.signon_realm, SizeIs(1))));
 }

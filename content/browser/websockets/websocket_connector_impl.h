@@ -12,9 +12,11 @@
 #include "base/unguessable_token.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/global_routing_id.h"
+#include "content/public/browser/weak_document_ptr.h"
 #include "net/base/isolation_info.h"
 #include "net/storage_access_api/status.h"
 #include "services/network/public/mojom/client_security_state.mojom.h"
+#include "services/network/public/mojom/ip_address_space.mojom.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/websocket.mojom.h"
 #include "third_party/blink/public/mojom/websockets/websocket_connector.mojom.h"
@@ -36,33 +38,38 @@ class WebSocketConnectorImpl final : public blink::mojom::WebSocketConnector {
   //   IPC::mojom::kRoutingIdNone because they do not have a frame.
   WebSocketConnectorImpl(
       const content::GlobalRenderFrameHostId& frame_id,
+      WeakDocumentPtr weak_document,
       const url::Origin& origin,
       const net::IsolationInfo& isolation_info,
-      network::mojom::ClientSecurityStatePtr client_security_state);
+      network::mojom::ClientSecurityStatePtr client_security_state,
+      net::StorageAccessApiStatus storage_access_api_status,
+      const base::UnguessableToken& network_restrictions_id,
+      std::optional<base::UnguessableToken> devtools_worker_token);
   ~WebSocketConnectorImpl() override;
 
   // WebSocketConnector implementation
-  void Connect(const GURL& url,
-               const std::vector<std::string>& requested_protocols,
-               const net::SiteForCookies& site_for_cookies,
-               const std::optional<std::string>& user_agent,
-               net::StorageAccessApiStatus storage_access_api_status,
-               mojo::PendingRemote<network::mojom::WebSocketHandshakeClient>
-                   handshake_client,
-               const std::optional<base::UnguessableToken>&
-                   throttling_profile_id) override;
+  void Connect(
+      const GURL& url,
+      const std::vector<std::string>& requested_protocols,
+      const std::optional<std::string>& user_agent,
+      mojo::PendingRemote<network::mojom::WebSocketHandshakeClient>
+          handshake_client,
+      const std::optional<base::UnguessableToken>& throttling_profile_id,
+      network::mojom::IPAddressSpace target_address_space) override;
 
  private:
   static void ConnectCalledByContentBrowserClient(
       const std::vector<std::string>& requested_protocols,
-      const net::SiteForCookies& site_for_cookies,
       net::StorageAccessApiStatus storage_access_api_status,
       const net::IsolationInfo& isolation_info,
       const content::GlobalRenderFrameHostId& frame_id,
+      std::optional<base::UnguessableToken> devtools_worker_token,
       const url::Origin& origin,
       network::mojom::ClientSecurityStatePtr client_security_state,
       uint32_t options,
       std::optional<base::UnguessableToken> throttling_profile_id,
+      const base::UnguessableToken& network_restrictions_id,
+      network::mojom::IPAddressSpace target_address_space,
       const GURL& url,
       std::vector<network::mojom::HttpHeaderPtr> additional_headers,
       mojo::PendingRemote<network::mojom::WebSocketHandshakeClient>
@@ -73,9 +80,13 @@ class WebSocketConnectorImpl final : public blink::mojom::WebSocketConnector {
           trusted_header_client);
 
   const content::GlobalRenderFrameHostId frame_id_;
+  const WeakDocumentPtr weak_document_;
   const url::Origin origin_;
   const net::IsolationInfo isolation_info_;
   const network::mojom::ClientSecurityStatePtr client_security_state_;
+  const net::StorageAccessApiStatus storage_access_api_status_;
+  const base::UnguessableToken network_restrictions_id_;
+  const std::optional<base::UnguessableToken> devtools_worker_token_;
 };
 
 }  // namespace content

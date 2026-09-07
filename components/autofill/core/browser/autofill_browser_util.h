@@ -7,6 +7,7 @@
 
 #include <stddef.h>
 
+#include "components/autofill/core/browser/filling/filling_product.h"
 #include "components/autofill/core/common/form_data.h"
 
 namespace autofill {
@@ -14,17 +15,19 @@ namespace autofill {
 class AutofillClient;
 class FormStructure;
 
-// Checks whether a given form is considered insecure (by origin or action).
-bool IsFormOrClientNonSecure(const AutofillClient& client,
-                             const FormData& form);
-
-// Checks whether a given form is considered insecure (by origin or action).
-bool IsFormOrClientNonSecure(const AutofillClient& client,
-                             const FormStructure& form);
-
 // Checks whether a given form is considered mixed content. A form is mixed
 // content if is displayed on a secure context, but submits to an insecure one.
 bool IsFormMixedContent(const AutofillClient& client, const FormData& form);
+
+// Returns true if `form` is considered "perfectly filled".
+//
+// A form is perfectly filled if the user did not have to manually type into any
+// field that Autofill didn't assist with.
+bool IsFormStructurePerfectlyFilled(const FormStructure& form);
+
+// Returns whether a filling action for `filling_product` should be included in
+// the form autofill history, in order to support Undo operations later.
+bool ShouldRecordFillingHistory(FillingProduct filling_product);
 
 }  // namespace autofill
 

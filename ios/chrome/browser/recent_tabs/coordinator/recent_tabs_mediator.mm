@@ -11,6 +11,7 @@
 #import "base/notreached.h"
 #import "base/timer/timer.h"
 #import "components/sessions/core/tab_restore_service.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/identity_manager/objc/identity_manager_observer_bridge.h"
 #import "components/signin/public/identity_manager/primary_account_change_event.h"
 #import "components/sync/service/sync_service.h"
@@ -30,8 +31,11 @@
 #import "ios/chrome/browser/shared/model/browser/browser_provider_interface.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list_observer_bridge.h"
+#import "ios/chrome/browser/signin/model/authentication_service.h"
+#import "ios/chrome/browser/signin/model/authentication_service_observer_bridge.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
 #import "ios/chrome/browser/sync/model/session_sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/sync_observer_bridge.h"
 #import "ios/chrome/common/ui/favicon/favicon_constants.h"
 #import "url/gurl.h"
 
@@ -56,6 +60,7 @@ bool UserActionIsRequiredToHaveTabSyncWork(syncer::SyncService* sync_service) {
 
     // These errors effectively amount to disabled sync or effectively paused.
     case syncer::SyncService::UserActionableError::kSignInNeedsUpdate:
+    case syncer::SyncService::UserActionableError::kDeviceManagementError:
     case syncer::SyncService::UserActionableError::kNeedsPassphrase:
     case syncer::SyncService::UserActionableError::
         kNeedsTrustedVaultKeyForEverything:
@@ -84,16 +89,21 @@ bool UserActionIsRequiredToHaveTabSyncWork(syncer::SyncService* sync_service) {
 
 }  // namespace
 
-@interface RecentTabsMediator () <IdentityManagerObserverBridgeDelegate,
-                                  SyncedSessionsObserver> {
+@interface RecentTabsMediator () <AuthenticationServiceObserving,
+                                  IdentityManagerObserving,
+                                  SyncedSessionsObserver,
+                                  SyncObserverModelBridge> {
   std::unique_ptr<synced_sessions::SyncedSessionsObserverBridge>
       _syncedSessionsObserver;
   std::unique_ptr<signin::IdentityManagerObserverBridge>
       _identityManagerObserver;
   std::unique_ptr<recent_tabs::ClosedTabsObserverBridge> _closedTabsObserver;
+  std::unique_ptr<SyncObserverBridge> _syncObserver;
   // Time to ensure that the updates to the consumer are only happening once all
   // the updates are complete.
   std::unique_ptr<base::RetainingOneShotTimer> _timer;
+  std::unique_ptr<AuthenticationServiceObserverBridge>
+      _authServiceObserverBridge;
 }
 
 // Return the user's current sign-in and chrome-sync state.
@@ -113,14 +123,24 @@ bool UserActionIsRequiredToHaveTabSyncWork(syncer::SyncService* sync_service) {
 - (instancetype)
     initWithSessionSyncService:
         (sync_sessions::SessionSyncService*)sessionSyncService
+                   authService:(AuthenticationService*)authService
                identityManager:(signin::IdentityManager*)identityManager
                 restoreService:(sessions::TabRestoreService*)restoreService
                  faviconLoader:(FaviconLoader*)faviconLoader
                    syncService:(syncer::SyncService*)syncService {
   self = [super init];
   if (self) {
+    CHECK(authService, base::NotFatalUntil::M155);
+    CHECK(sessionSyncService, base::NotFatalUntil::M155);
+    CHECK(identityManager, base::NotFatalUntil::M155);
+    CHECK(restoreService, base::NotFatalUntil::M155);
+    CHECK(faviconLoader, base::NotFatalUntil::M155);
+    CHECK(syncService, base::NotFatalUntil::M155);
     _sessionSyncService = sessionSyncService;
     _identityManager = identityManager;
+    _authServiceObserverBridge =
+        std::make_unique<AuthenticationServiceObserverBridge>(authService,
+                                                              self);
     _restoreService = restoreService;
     _faviconLoader = faviconLoader;
     _syncService = syncService;
@@ -146,6 +166,10 @@ bool UserActionIsRequiredToHaveTabSyncWork(syncer::SyncService* sync_service) {
         std::make_unique<signin::IdentityManagerObserverBridge>(
             self.identityManager, self);
   }
+  if (!_syncObserver && self.syncService) {
+    _syncObserver =
+        std::make_unique<SyncObserverBridge>(self, self.syncService);
+  }
   if (!_closedTabsObserver) {
     _closedTabsObserver =
         std::make_unique<recent_tabs::ClosedTabsObserverBridge>(self);
@@ -159,6 +183,7 @@ bool UserActionIsRequiredToHaveTabSyncWork(syncer::SyncService* sync_service) {
 - (void)disconnect {
   _syncedSessionsObserver.reset();
   _identityManagerObserver.reset();
+  _syncObserver.reset();
 
   if (_closedTabsObserver) {
     if (self.restoreService) {
@@ -168,6 +193,7 @@ bool UserActionIsRequiredToHaveTabSyncWork(syncer::SyncService* sync_service) {
     _sessionSyncService = nullptr;
     _identityManager = nullptr;
     _restoreService = nullptr;
+    _authServiceObserverBridge.reset();
     _faviconLoader = nullptr;
     _syncService = nullptr;
   }
@@ -193,9 +219,15 @@ bool UserActionIsRequiredToHaveTabSyncWork(syncer::SyncService* sync_service) {
   [self refreshSessionsView];
 }
 
-#pragma mark - IdentityManagerObserverBridgeDelegate
+#pragma mark - SyncObserverModelBridge
 
-- (void)onPrimaryAccountChanged:
+- (void)onSyncStateChanged {
+  [self refreshSessionsView];
+}
+
+#pragma mark - IdentityManagerObserving
+
+- (void)primaryAccountDidChange:
     (const signin::PrimaryAccountChangeEvent&)event {
   switch (event.GetEventTypeFor(signin::ConsentLevel::kSignin)) {
     case signin::PrimaryAccountChangeEvent::Type::kNone:
@@ -209,6 +241,13 @@ bool UserActionIsRequiredToHaveTabSyncWork(syncer::SyncService* sync_service) {
       [self refreshSessionsView];
       break;
   }
+}
+
+#pragma mark - AuthenticationServiceObserving
+
+- (void)onServiceStatusChanged {
+  // If sign-in get enabled/disabled, the promo may have to be refreshed.
+  [self refreshSessionsView];
 }
 
 #pragma mark - ClosedTabsObserving

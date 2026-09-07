@@ -25,6 +25,7 @@ component("tracing_config") {
     "common/background_tracing_state_manager.h",
     "common/pref_names.cc",
     "common/pref_names.h",
+    "common/preset_tracing_config.h",
     "common/tracing_scenarios_config.cc",
     "common/tracing_scenarios_config.h",
     "common/tracing_switches.cc",
@@ -51,6 +52,8 @@ if (is_win) {
       "common/etw_consumer_win.h",
       "common/etw_export_win.cc",
       "common/etw_export_win.h",
+      "common/etw_stack_sampling_win.cc",
+      "common/etw_stack_sampling_win.h",
       "common/etw_system_data_source_win.cc",
       "common/etw_system_data_source_win.h",
       "common/inclusion_policy_win.cc",
@@ -64,7 +67,9 @@ if (is_win) {
 
     deps = [
       "//base",
+      "//base/win:pe_image",
       "//crypto",
+      "//services/tracing/public/cpp:perfetto_interning_index",
       "//third_party/perfetto:libperfetto",
     ]
   }
@@ -83,10 +88,16 @@ component("tracing_metrics") {
 
   deps = [
     "//base",
-    "//components/metrics:content",
-    "//content/public/browser",
+    "//build:blink_buildflags",
+    "//components/metrics",
+    "//services/tracing/public/cpp",
+    "//services/tracing/public/cpp/background_tracing",
     "//third_party/metrics_proto",
   ]
+
+  if (use_blink) {
+    deps += [ "//components/metrics:content" ]
+  }
 }
 
 component("background_tracing_utils") {
@@ -100,7 +111,8 @@ component("background_tracing_utils") {
   deps = [
     ":tracing_config",
     "//base",
-    "//content/public/browser",
+    "//build:blink_buildflags",
+    "//services/tracing/public/cpp/background_tracing",
   ]
 }
 
@@ -114,10 +126,10 @@ source_set("unit_tests") {
     "//third_party/snappy",
   ]
 
-  sources = [
-    "common/background_tracing_state_manager_unittest.cc",
-    "common/background_tracing_utils_unittest.cc",
-  ]
+  sources = [ "common/background_tracing_state_manager_unittest.cc" ]
+  if (!is_ios) {
+    sources += [ "common/background_tracing_utils_unittest.cc" ]
+  }
   if (is_android) {
     sources += [ "common/graphics_memory_dump_provider_android_unittest.cc" ]
     deps += [ ":graphics_provider" ]
@@ -142,14 +154,23 @@ source_set("unit_tests") {
     ]
   }
   deps += [
-    ":background_tracing_utils",
     ":tracing_config",
     "//base/test:proto_test_support",
     "//components/metrics",
     "//components/prefs:test_support",
-    "//content/public/browser",
-    "//content/test:test_support",
+    "//sql:test_support",
   ]
+
+  if (!is_ios) {
+    deps += [
+      ":background_tracing_utils",
+      "//content/public/browser",
+      "//content/test:test_support",
+      "//services/tracing:lib",
+      "//services/tracing:test_utils",
+      "//services/tracing/public/cpp/background_tracing",
+    ]
+  }
 }
 
 test("tracing_perftests") {

@@ -143,6 +143,9 @@ BASE_FEATURE(kUnthrottledTabProcessReporting, base::FEATURE_ENABLED_BY_DEFAULT);
 
 #endif
 
+BASE_FEATURE(kLevelDBSiteDataStoreBestEffort,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
 BASE_FEATURE(kEnableBestEffortTaskInhibitingPolicy,
              base::FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE_PARAM(base::TimeDelta,
@@ -165,9 +168,8 @@ const base::FeatureParam<bool> kInheritParentPriority{
 const base::FeatureParam<bool> kRenderedOutOfViewIsNotVisible{
     &kPMProcessPriorityPolicy, "rendered_out_of_view_is_not_visible", false};
 
-const base::FeatureParam<bool> kNonSpareRendererHighInitialPriority{
-    &kPMProcessPriorityPolicy, "non_spare_renderer_high_initial_priority",
-    false};
+const base::FeatureParam<bool> kRendererHighInitialPriority{
+    &kPMProcessPriorityPolicy, "renderer_high_initial_priority", false};
 
 BASE_FEATURE(kPMLoadingPageVoter, base::FEATURE_DISABLED_BY_DEFAULT);
 
@@ -206,7 +208,7 @@ BASE_FEATURE_PARAM(base::TimeDelta,
                    "freezing_audio_protection_time",
                    base::Minutes(5));
 
-BASE_FEATURE(kFreezingFollowsDiscardOptOut, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kFreezingFollowsDiscardOptOut, base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kRecordFreezingEligibilityUKM, base::FEATURE_ENABLED_BY_DEFAULT);
 
@@ -244,6 +246,14 @@ BASE_FEATURE_PARAM(int,
                    &kInfiniteTabsFreezingOnMemoryPressure,
                    "percent_threshold",
                    15);
+
+BASE_FEATURE(kDiscardOnCommitLimit, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE_PARAM(int,
+                   kDiscardOnCommitLimit_MinAvailablePercent,
+                   &kDiscardOnCommitLimit,
+                   "min_available_percent",
+                   10);
 
 BASE_FEATURE(kResourceAttributionIncludeOrigins,
              base::FEATURE_ENABLED_BY_DEFAULT);
@@ -296,5 +306,16 @@ BASE_FEATURE(kExtensionServiceWorkerVoter, base::FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE(kBrowserProcessAboveNormalPriority,
              base::FEATURE_DISABLED_BY_DEFAULT);
 #endif
+// When enabled, this feature prevents the browser from proactively discarding
+// tabs to save memory. This is used to measure the impact of tab discarding on
+// memory usage and user experience compared to other memory saving features.
+BASE_FEATURE(kDisableTabDiscarding, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kUseLoadingStateToDetectBackgroundTitleOrFaviconUpdate,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kGlicActuationPriorityVoter, base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kIgnoreMediaQueryFaviconUpdates, base::FEATURE_ENABLED_BY_DEFAULT);
 
 }  // namespace performance_manager::features

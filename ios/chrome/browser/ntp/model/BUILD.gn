@@ -9,10 +9,6 @@ source_set("model") {
     "new_tab_page_tab_helper.h",
     "new_tab_page_tab_helper.mm",
     "new_tab_page_tab_helper_delegate.h",
-    "ntp_background_image_cache_service.h",
-    "ntp_background_image_cache_service.mm",
-    "ntp_background_image_cache_service_factory.h",
-    "ntp_background_image_cache_service_factory.mm",
   ]
   deps = [
     "//base",
@@ -47,11 +43,8 @@ source_set("util") {
     "//components/regional_capabilities",
     "//components/search",
     "//components/search_engines",
-    "//ios/chrome/browser/shared/model/browser",
-    "//ios/chrome/browser/shared/model/profile",
     "//ios/chrome/browser/shared/model/url",
     "//ios/chrome/browser/shared/model/url:constants",
-    "//ios/chrome/browser/shared/model/web_state_list",
     "//ios/web/public",
   ]
 }
@@ -135,7 +128,6 @@ source_set("unit_tests") {
   sources = [
     "browser_policy_new_tab_page_rewriter_unittest.mm",
     "new_tab_page_tab_helper_unittest.mm",
-    "ntp_background_image_cache_service_unittest.mm",
     "set_up_list_unittest.mm",
   ]
   deps = [
@@ -150,6 +142,7 @@ source_set("unit_tests") {
     "//components/prefs",
     "//components/prefs:test_support",
     "//components/strings",
+    "//components/sync:test_support",
     "//components/sync_preferences:test_support",
     "//components/themes",
     "//components/themes:prefs",
@@ -178,6 +171,7 @@ source_set("unit_tests") {
     "//ios/chrome/browser/signin/model:fake_system_identity_manager",
     "//ios/chrome/browser/signin/model:test_support",
     "//ios/chrome/browser/sync/model",
+    "//ios/chrome/browser/sync/model:test_support",
     "//ios/chrome/test:test_support",
     "//ios/web/public/test",
     "//ios/web/public/test/fakes",

@@ -5,6 +5,7 @@
 package org.chromium.chrome.browser.educational_tip;
 
 import android.content.Context;
+import android.graphics.Paint;
 import android.util.AttributeSet;
 import android.view.View;
 import android.widget.ImageView;
@@ -16,6 +17,7 @@ import androidx.annotation.VisibleForTesting;
 import org.chromium.base.TraceEvent;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.setup_list.SetupListModuleUtils;
 import org.chromium.ui.widget.ButtonCompat;
 
 /** View for the educational tip module. */
@@ -48,7 +50,7 @@ public class EducationalTipModuleView extends LinearLayout {
     @VisibleForTesting
     void setContentTitleViewOnLayoutChangeListener() {
         mOnLayoutChangeListener =
-                (v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) ->
+                (_, _, _, _, _, _, _, _, _) ->
                         mContentTitleView.post(this::updateContentTitleAndDescriptionMaxLines);
         mContentTitleView.addOnLayoutChangeListener(mOnLayoutChangeListener);
     }
@@ -60,7 +62,7 @@ public class EducationalTipModuleView extends LinearLayout {
      */
     @VisibleForTesting
     void updateContentTitleAndDescriptionMaxLines() {
-        try (TraceEvent e = TraceEvent.scoped(TAG + ".OnContentTitleLayoutChange()")) {
+        try (TraceEvent _ = TraceEvent.scoped(TAG + ".OnContentTitleLayoutChange()")) {
             if (mContentTitleView.getLayout() == null) {
                 return;
             }
@@ -98,7 +100,18 @@ public class EducationalTipModuleView extends LinearLayout {
     }
 
     void setContentImageResource(int imageResource) {
+        mContentImageView.setAlpha(1f);
         mContentImageView.setImageResource(imageResource);
+    }
+
+    void setContentImageResourceWithAnimation(int imageResource) {
+        SetupListModuleUtils.updateIconWithAnimation(mContentImageView, imageResource);
+    }
+
+    void setUseTransparentIconBackground(boolean useTransparentIconBackground) {
+        if (useTransparentIconBackground) {
+            mContentImageView.setBackground(null);
+        }
     }
 
     void setModuleButtonOnClickListener(View.OnClickListener onClickListener) {
@@ -127,16 +140,17 @@ public class EducationalTipModuleView extends LinearLayout {
         // Title
         mContentTitleView.setTextColor(disabledColor);
         mContentTitleView.setPaintFlags(
-                mContentTitleView.getPaintFlags() | android.graphics.Paint.STRIKE_THRU_TEXT_FLAG);
+                mContentTitleView.getPaintFlags() | Paint.STRIKE_THRU_TEXT_FLAG);
 
         // Description
         mContentDescriptionView.setTextColor(disabledColor);
         mContentDescriptionView.setPaintFlags(
-                mContentDescriptionView.getPaintFlags()
-                        | android.graphics.Paint.STRIKE_THRU_TEXT_FLAG);
+                mContentDescriptionView.getPaintFlags() | Paint.STRIKE_THRU_TEXT_FLAG);
 
         // Button
         mModuleButtonView.setEnabled(false);
         mModuleButtonView.setTextColor(disabledColor);
+
+        SetupListModuleUtils.setCompletedAccessibilityStateDescription(this);
     }
 }

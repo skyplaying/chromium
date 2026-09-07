@@ -5,6 +5,7 @@
 package org.chromium.chrome.browser.educational_tip.two_cell;
 
 import android.content.Context;
+import android.graphics.Paint;
 import android.util.AttributeSet;
 import android.view.View;
 import android.widget.ImageView;
@@ -14,6 +15,8 @@ import android.widget.TextView;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.educational_tip.R;
+import org.chromium.chrome.browser.setup_list.SetupListModuleUtils;
+import org.chromium.ui.base.ViewUtils;
 
 /**
  * View for a generic two-cell educational tip module. Contains UI elements to display two tip items
@@ -68,11 +71,17 @@ public class EducationalTipModuleTwoCellView extends LinearLayout {
     }
 
     public void setItem1Icon(int iconResId) {
+        mItem1IconView.setAlpha(1f);
         mItem1IconView.setImageResource(iconResId);
+    }
+
+    public void setItem1IconWithAnimation(int iconResId) {
+        SetupListModuleUtils.updateIconWithAnimation(mItem1IconView, iconResId);
     }
 
     public void setItem1OnClickListener(OnClickListener listener) {
         mItem1Layout.setOnClickListener(listener);
+        mItem1Layout.setOnLongClickListener(ViewUtils.emptyLongClickListener());
     }
 
     public void setItem2Title(String title) {
@@ -84,11 +93,17 @@ public class EducationalTipModuleTwoCellView extends LinearLayout {
     }
 
     public void setItem2Icon(int iconResId) {
+        mItem2IconView.setAlpha(1f);
         mItem2IconView.setImageResource(iconResId);
+    }
+
+    public void setItem2IconWithAnimation(int iconResId) {
+        SetupListModuleUtils.updateIconWithAnimation(mItem2IconView, iconResId);
     }
 
     public void setItem2OnClickListener(OnClickListener listener) {
         mItem2Layout.setOnClickListener(listener);
+        mItem2Layout.setOnLongClickListener(ViewUtils.emptyLongClickListener());
     }
 
     private void applyCompletedStyle(
@@ -96,16 +111,28 @@ public class EducationalTipModuleTwoCellView extends LinearLayout {
         if (isCompleted) {
             int disabledColor = getContext().getColor(R.color.default_text_color_disabled_list);
             titleView.setTextColor(disabledColor);
-            titleView.setPaintFlags(
-                    titleView.getPaintFlags() | android.graphics.Paint.STRIKE_THRU_TEXT_FLAG);
+            titleView.setPaintFlags(titleView.getPaintFlags() | Paint.STRIKE_THRU_TEXT_FLAG);
             descriptionView.setTextColor(disabledColor);
             descriptionView.setPaintFlags(
-                    descriptionView.getPaintFlags() | android.graphics.Paint.STRIKE_THRU_TEXT_FLAG);
+                    descriptionView.getPaintFlags() | Paint.STRIKE_THRU_TEXT_FLAG);
 
-            // Disable clicks on the item layout
+            itemLayout.setForeground(null);
+
+            // Accessibility
             itemLayout.setOnClickListener(null);
             itemLayout.setClickable(false);
-            itemLayout.setForeground(null);
+            SetupListModuleUtils.setCompletedAccessibilityStateDescription(itemLayout);
+        } else {
+            int titleColor = getContext().getColor(R.color.default_text_color_list);
+            int descriptionColor = getContext().getColor(R.color.default_text_color_secondary_list);
+            titleView.setTextColor(titleColor);
+            titleView.setPaintFlags(titleView.getPaintFlags() & ~Paint.STRIKE_THRU_TEXT_FLAG);
+            descriptionView.setTextColor(descriptionColor);
+            descriptionView.setPaintFlags(
+                    descriptionView.getPaintFlags() & ~Paint.STRIKE_THRU_TEXT_FLAG);
+
+            itemLayout.setClickable(true);
+            SetupListModuleUtils.clearAccessibilityStateDescription(itemLayout);
         }
     }
 

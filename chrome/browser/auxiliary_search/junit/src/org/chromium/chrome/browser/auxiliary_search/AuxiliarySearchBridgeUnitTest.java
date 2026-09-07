@@ -24,7 +24,6 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
 import org.chromium.base.ThreadUtils;
@@ -32,6 +31,7 @@ import org.chromium.base.TimeUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.ui.test.util.MockitoHelper;
 import org.chromium.url.JUnitTestGURLs;
 
 import java.util.ArrayList;
@@ -39,7 +39,6 @@ import java.util.List;
 
 /** Unit tests for {@link AuxiliarySearchBridge} */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public final class AuxiliarySearchBridgeUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -78,12 +77,15 @@ public final class AuxiliarySearchBridgeUnitTest {
         Tab tab = mock(Tab.class);
         List<Tab> tabList = new ArrayList<>();
         tabList.add(tab);
-        Callback callback = mock(Callback.class);
+        Callback<List<Tab>> callback = MockitoHelper.mockCallback();
         ThreadUtils.runOnUiThreadBlocking(() -> mBridge.getNonSensitiveTabs(tabList, callback));
 
         verify(callback).onResult(eq(null));
+        // JNI getNonSensitiveTabs takes Callback<Object[]> and the public
+        // method wraps our Callback<List<Tab>> before calling it, so eq(callback)
+        // would never match. Since this is a verify(..., never()), any() is fine.
         verify(mMockAuxiliarySearchBridgeJni, never())
-                .getNonSensitiveTabs(eq(NATIVE_BRIDGE), any(), eq(callback));
+                .getNonSensitiveTabs(eq(NATIVE_BRIDGE), any(), any());
     }
 
     @Test
@@ -102,7 +104,7 @@ public final class AuxiliarySearchBridgeUnitTest {
     @SmallTest
     public void testOnDataReady() {
         List<AuxiliarySearchDataEntry> entryList = new ArrayList<>();
-        Callback callback = mock(Callback.class);
+        Callback<List<AuxiliarySearchDataEntry>> callback = MockitoHelper.mockCallback();
 
         AuxiliarySearchBridge.onDataReady(entryList, callback);
         verify(callback).onResult(eq(entryList));
@@ -111,7 +113,7 @@ public final class AuxiliarySearchBridgeUnitTest {
     @Test
     @SmallTest
     public void testGetNonSensitiveHistoryData() {
-        Callback callback = mock(Callback.class);
+        Callback<List<AuxiliarySearchDataEntry>> callback = MockitoHelper.mockCallback();
         ThreadUtils.runOnUiThreadBlocking(() -> mBridge.getNonSensitiveHistoryData(callback));
 
         verify(mMockAuxiliarySearchBridgeJni)
@@ -124,7 +126,7 @@ public final class AuxiliarySearchBridgeUnitTest {
         when(mProfile.isOffTheRecord()).thenReturn(true);
         mBridge = new AuxiliarySearchBridge(mProfile);
 
-        Callback callback = mock(Callback.class);
+        Callback<List<AuxiliarySearchDataEntry>> callback = MockitoHelper.mockCallback();
         ThreadUtils.runOnUiThreadBlocking(() -> mBridge.getNonSensitiveHistoryData(callback));
 
         verify(callback).onResult(eq(null));

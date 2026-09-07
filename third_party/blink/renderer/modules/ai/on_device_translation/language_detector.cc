@@ -5,6 +5,8 @@
 #include "third_party/blink/renderer/modules/ai/on_device_translation/language_detector.h"
 
 #include "base/containers/fixed_flat_set.h"
+#include "base/metrics/histogram_functions.h"
+#include "components/language_detection/content/common/language_detection.mojom-blink.h"
 #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-blink.h"
 #include "third_party/blink/public/platform/web_runtime_features.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_create_monitor_callback.h"
@@ -28,22 +30,22 @@ namespace {
 // TODO(crbug.com/410949688): Figure out how to retrieve these from the model.
 static constexpr auto kSupportedLanguages =
     base::MakeFixedFlatSet<std::string_view>({
-        "af",      "am", "ar",      "ar-Latn", "az",      "be",  "bg",
-        "bg-Latn", "bn", "bs",      "ca",      "ceb",     "co",  "cs",
-        "cy",      "da", "de",      "el",      "el-Latn", "en",  "eo",
-        "es",      "et", "eu",      "fa",      "fi",      "fil", "fr",
-        "fy",      "ga", "gd",      "gl",      "gu",      "ha",  "haw",
-        "he",      "hi", "hi-Latn", "hmn",     "hr",      "ht",  "hu",
-        "hy",      "id", "ig",      "is",      "it",      "ja",  "ja-Latn",
-        "jv",      "ka", "kk",      "km",      "kn",      "ko",  "ku",
-        "ky",      "la", "lb",      "lo",      "lt",      "lv",  "mg",
-        "mi",      "mk", "ml",      "mn",      "mr",      "ms",  "mt",
-        "my",      "ne", "nl",      "no",      "ny",      "pa",  "pl",
-        "ps",      "pt", "ro",      "ru",      "ru-Latn", "sd",  "si",
-        "sk",      "sl", "sm",      "sn",      "so",      "sq",  "sr",
-        "st",      "su", "sv",      "sw",      "ta",      "te",  "tg",
-        "th",      "tr", "uk",      "ur",      "uz",      "vi",  "xh",
-        "yi",      "yo", "zh",      "zh-Latn", "zu",
+        "af",      "am", "ar",      "ar-Latn", "az",      "be",      "bg",
+        "bg-Latn", "bn", "bs",      "ca",      "ceb",     "co",      "cs",
+        "cy",      "da", "de",      "el",      "el-Latn", "en",      "eo",
+        "es",      "et", "eu",      "fa",      "fi",      "fil",     "fr",
+        "fy",      "ga", "gd",      "gl",      "gu",      "ha",      "haw",
+        "he",      "hi", "hi-Latn", "hmn",     "hr",      "ht",      "hu",
+        "hy",      "id", "ig",      "is",      "it",      "ja",      "ja-Latn",
+        "jv",      "ka", "kk",      "km",      "kn",      "ko",      "ku",
+        "ky",      "la", "lb",      "lo",      "lt",      "lv",      "mg",
+        "mi",      "mk", "ml",      "mn",      "mr",      "ms",      "mt",
+        "my",      "ne", "nl",      "no",      "ny",      "pa",      "pl",
+        "ps",      "pt", "ro",      "ru",      "ru-Latn", "sd",      "si",
+        "sk",      "sl", "sm",      "sn",      "so",      "sq",      "sr",
+        "st",      "su", "sv",      "sw",      "ta",      "te",      "tg",
+        "th",      "tr", "uk",      "ur",      "uz",      "vi",      "xh",
+        "yi",      "yo", "zh",      "zh-Hans", "zh-Hant", "zh-Latn", "zu",
     });
 
 bool RequiresUserActivation(
@@ -150,7 +152,7 @@ class LanguageDetectorCreateTask
           kSupportedLanguages, options_->expectedInputLanguages());
       if (!expected_input_languages.has_value()) {
         GetResolver()->Reject(MakeGarbageCollected<DOMException>(
-            DOMExceptionCode::kUnknownError, "Language not available"));
+            DOMExceptionCode::kNotSupportedError, "Language not available"));
         return;
       }
     }
@@ -159,7 +161,7 @@ class LanguageDetectorCreateTask
       switch (maybe_model.error()) {
         case DetectLanguageError::kUnavailable:
           GetResolver()->Reject(MakeGarbageCollected<DOMException>(
-              DOMExceptionCode::kUnknownError, "Model not available"));
+              DOMExceptionCode::kNotSupportedError, "Model not available"));
           break;
       }
       return;
@@ -366,6 +368,10 @@ ScriptPromise<IDLSequence<LanguageDetectionResult>> LanguageDetector::detect(
     return EmptyPromise();
   }
 
+  base::UmaHistogramCounts1M(AIMetrics::GetAISessionRequestSizeMetricName(
+                                 AIMetrics::AISessionType::kLanguageDetector),
+                             static_cast<int>(input.length()));
+
   auto* resolver = MakeGarbageCollected<
       ResolverWithAbortSignal<IDLSequence<LanguageDetectionResult>>>(
       script_state, composite_signal);
@@ -529,7 +535,8 @@ void LanguageDetector::OnDetectComplete(
   } else {
     switch (result.error()) {
       case DetectLanguageError::kUnavailable:
-        resolver->Reject("Model not available");
+        resolver->Reject(MakeGarbageCollected<DOMException>(
+            DOMExceptionCode::kNotSupportedError, "Model not available"));
     }
   }
 }

@@ -8,9 +8,11 @@ import android.view.View;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.bookmarks.BookmarkUiState.BookmarkUiMode;
+import org.chromium.components.bookmarks.BookmarkId;
 import org.chromium.components.browser_ui.widget.selectable_list.SelectionDelegate;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableBooleanPropertyKey;
+import org.chromium.ui.modelutil.PropertyModel.WritableIntDefPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableIntPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableObjectPropertyKey;
 
@@ -24,7 +26,7 @@ import java.util.function.Function;
 @NullMarked
 class BookmarkToolbarProperties {
     /** Dependencies */
-    static final WritableObjectPropertyKey<SelectionDelegate> SELECTION_DELEGATE =
+    static final WritableObjectPropertyKey<SelectionDelegate<BookmarkId>> SELECTION_DELEGATE =
             new WritableObjectPropertyKey<>();
 
     /** UI state properties. */
@@ -32,8 +34,8 @@ class BookmarkToolbarProperties {
     static final WritableObjectPropertyKey<String> TITLE =
             new WritableObjectPropertyKey<>(/* skipEquality= */ true);
 
-    static final WritableObjectPropertyKey<@BookmarkUiMode Integer> BOOKMARK_UI_MODE =
-            new WritableObjectPropertyKey<>();
+    static final WritableIntDefPropertyKey<BookmarkUiMode> BOOKMARK_UI_MODE =
+            new WritableIntDefPropertyKey<>(BookmarkUiMode.LOADING);
     static final WritableObjectPropertyKey<Boolean> SOFT_KEYBOARD_VISIBLE =
             new WritableObjectPropertyKey<>(/* skipEquality= */ true);
     static final WritableBooleanPropertyKey IS_DIALOG_UI = new WritableBooleanPropertyKey();
@@ -45,6 +47,7 @@ class BookmarkToolbarProperties {
             new WritableBooleanPropertyKey();
     static final WritableBooleanPropertyKey NEW_FOLDER_BUTTON_ENABLED =
             new WritableBooleanPropertyKey();
+    static final WritableBooleanPropertyKey CHROME_ICON_VISIBLE = new WritableBooleanPropertyKey();
     // Can change within SelectableListToolbar which makes the model value to become stale.
     static final WritableObjectPropertyKey<Integer> NAVIGATION_BUTTON_STATE =
             new WritableObjectPropertyKey<>(/* skipEquality= */ true);
@@ -93,6 +96,7 @@ class BookmarkToolbarProperties {
         EDIT_BUTTON_VISIBLE,
         NEW_FOLDER_BUTTON_VISIBLE,
         NEW_FOLDER_BUTTON_ENABLED,
+        CHROME_ICON_VISIBLE,
         NAVIGATION_BUTTON_STATE,
         SORT_MENU_IDS,
         SORT_MENU_IDS_ENABLED,

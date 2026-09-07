@@ -9,7 +9,9 @@
 #include "mojo/public/cpp/bindings/enum_traits.h"
 #include "mojo/public/cpp/bindings/struct_traits.h"
 #include "net/base/reconnect_notifier.h"
+#include "services/network/public/cpp/load_timing_internal_info_mojom_traits.h"
 #include "services/network/public/mojom/connection_change_observer_client.mojom-shared.h"
+#include "services/network/public/mojom/network_types.mojom.h"
 
 namespace mojo {
 
@@ -18,8 +20,8 @@ struct EnumTraits<network::mojom::NetworkChangeEvent, net::NetworkChangeEvent> {
   static network::mojom::NetworkChangeEvent ToMojom(
       net::NetworkChangeEvent event_type);
 
-  static bool FromMojom(network::mojom::NetworkChangeEvent event_type,
-                        net::NetworkChangeEvent* out);
+  static net::NetworkChangeEvent FromMojom(
+      network::mojom::NetworkChangeEvent event_type);
 };
 
 template <>
@@ -41,13 +43,47 @@ struct StructTraits<network::mojom::ConnectionKeepAliveConfigDataView,
     return keep_alive_config.enable_connection_keep_alive;
   }
 
-  static std::string quic_connection_options(
+  static const std::string& quic_connection_options(
       const net::ConnectionKeepAliveConfig& keep_alive_config) {
     return keep_alive_config.quic_connection_options;
   }
 
   static bool Read(network::mojom::ConnectionKeepAliveConfigDataView data,
                    net::ConnectionKeepAliveConfig* out);
+};
+
+template <>
+struct EnumTraits<network::mojom::ConnectionEstablishmentInitiator,
+                  net::ConnectionEstablishmentInitiator> {
+  static network::mojom::ConnectionEstablishmentInitiator ToMojom(
+      net::ConnectionEstablishmentInitiator initiator);
+
+  static net::ConnectionEstablishmentInitiator FromMojom(
+      network::mojom::ConnectionEstablishmentInitiator initiator);
+};
+
+template <>
+struct StructTraits<network::mojom::EstablishedConnectionInfoDataView,
+                    net::ConnectionChangeNotifier::EstablishedConnectionInfo> {
+ public:
+  static net::NextProto connection_info(
+      const net::ConnectionChangeNotifier::EstablishedConnectionInfo& info) {
+    return info.connection_info;
+  }
+
+  static const base::TimeDelta& connection_setup_time(
+      const net::ConnectionChangeNotifier::EstablishedConnectionInfo& info) {
+    return info.connection_setup_time;
+  }
+
+  static net::ConnectionEstablishmentInitiator initiator(
+      const net::ConnectionChangeNotifier::EstablishedConnectionInfo& info) {
+    return info.initiator;
+  }
+
+  static bool Read(
+      network::mojom::EstablishedConnectionInfoDataView data,
+      net::ConnectionChangeNotifier::EstablishedConnectionInfo* out);
 };
 
 }  // namespace mojo

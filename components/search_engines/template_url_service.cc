@@ -39,18 +39,21 @@
 #include "build/build_config.h"
 #include "components/country_codes/country_codes.h"
 #include "components/google/core/common/google_util.h"
+#include "components/metrics/profile_metrics_service.h"
 #include "components/omnibox/common/omnibox_feature_configs.h"
 #include "components/omnibox/common/omnibox_features.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
 #include "components/regional_capabilities/access/country_access_reason.h"
 #include "components/regional_capabilities/regional_capabilities_country_id.h"
+#include "components/regional_capabilities/regional_capabilities_service.h"
 #include "components/search_engines/choice_made_location.h"
 #include "components/search_engines/enterprise/enterprise_search_manager.h"
 #include "components/search_engines/keyword_web_data_service.h"
 #include "components/search_engines/regulatory_extension_type.h"
 #include "components/search_engines/search_engine_choice/search_engine_choice_service.h"
 #include "components/search_engines/search_engine_choice/search_engine_choice_utils.h"
+#include "components/search_engines/search_engine_split_metrics.h"
 #include "components/search_engines/search_engine_type.h"
 #include "components/search_engines/search_engines_pref_names.h"
 #include "components/search_engines/search_engines_switches.h"
@@ -62,6 +65,7 @@
 #include "components/search_engines/template_url_service_client.h"
 #include "components/search_engines/template_url_service_observer.h"
 #include "components/search_engines/template_url_starter_pack_data.h"
+#include "components/search_engines/ui_utils.h"
 #include "components/search_engines/util.h"
 #include "components/sync/base/features.h"
 #include "components/sync/model/sync_change.h"
@@ -226,7 +230,10 @@ TemplateURLData MergeEnterpriseSearchEngines(TemplateURLData existing_data,
   merged_data.suggestions_url = new_values.suggestions_url();
   merged_data.featured_by_policy = new_values.featured_by_policy();
   if (existing_data.policy_origin ==
-      TemplateURLData::PolicyOrigin::kSearchAggregator) {
+          TemplateURLData::PolicyOrigin::kSearchAggregator ||
+      (existing_data.policy_origin ==
+           TemplateURLData::PolicyOrigin::kSiteSearch &&
+       existing_data.url() != new_values.url())) {
     merged_data.favicon_url = new_values.favicon_url();
   }
   merged_data.enforced_by_policy = new_values.enforced_by_policy();
@@ -252,7 +259,7 @@ std::unique_ptr<TemplateURL> UpdateExistingURLWithAccountData(
 // If the TemplateURLData comes from a prepopulated URL available in the current
 // country, update all its fields save for the keyword, short name and id so
 // that they match the internal prepopulated URL. TemplateURLs not coming from
-// a prepopulated URL are not modified.
+// a regional prepopulated URL are not modified.
 TemplateURLData UpdateTemplateURLDataIfPrepopulated(
     const TemplateURLData& data,
     const TemplateURLPrepopulateData::Resolver& prepopulate_data_resolver) {
@@ -261,17 +268,14 @@ TemplateURLData UpdateTemplateURLDataIfPrepopulated(
     return data;
   }
 
-  std::vector<std::unique_ptr<TemplateURLData>> prepopulated_urls =
-      prepopulate_data_resolver.GetPrepopulatedEngines();
-
-  TemplateURL turl(data);
-  for (const auto& url : prepopulated_urls) {
-    if (url->prepopulate_id == prepopulate_id) {
-      MergeIntoEngineData(&turl, url.get());
-      return *url;
-    }
+  std::unique_ptr<TemplateURLData> prepopulated_url =
+      prepopulate_data_resolver.GetPrepopulatedEngine(prepopulate_id);
+  if (!prepopulated_url) {
+    return data;
   }
-  return data;
+
+  MergeIntoEngineData(data, *prepopulated_url.get());
+  return *prepopulated_url;
 }
 
 // Explicitly converts from ActiveStatus enum in sync protos to enum in
@@ -570,11 +574,36 @@ class TemplateURLService::PreLoadingProviders {
   TemplateURLService::OwnedTemplateURLVector search_engines_;
 };
 
+// TemplateURLService::CategorizedTemplateUrls --------------------------------
+
+TemplateURLService::CategorizedTemplateUrls::CategorizedTemplateUrls() =
+    default;
+TemplateURLService::CategorizedTemplateUrls::~CategorizedTemplateUrls() =
+    default;
+TemplateURLService::CategorizedTemplateUrls::CategorizedTemplateUrls(
+    const CategorizedTemplateUrls& other) = default;
+
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+// TemplateURLService::PrepopulatedAndRecentlyVisitedTemplateUrls -------------
+
+TemplateURLService::PrepopulatedAndRecentlyVisitedTemplateUrls::
+    PrepopulatedAndRecentlyVisitedTemplateUrls() = default;
+TemplateURLService::PrepopulatedAndRecentlyVisitedTemplateUrls::
+    ~PrepopulatedAndRecentlyVisitedTemplateUrls() = default;
+TemplateURLService::PrepopulatedAndRecentlyVisitedTemplateUrls::
+    PrepopulatedAndRecentlyVisitedTemplateUrls(
+        const PrepopulatedAndRecentlyVisitedTemplateUrls& other) = default;
+#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+
 // TemplateURLService ---------------------------------------------------------
+
 TemplateURLService::TemplateURLService(
     PrefService& prefs,
     search_engines::SearchEngineChoiceService& search_engine_choice_service,
     TemplateURLPrepopulateData::Resolver& prepopulate_data_resolver,
+    regional_capabilities::RegionalCapabilitiesService&
+        regional_capabilities_service,
+    metrics::ProfileMetricsService& profile_metrics_service,
     std::unique_ptr<SearchTermsData> search_terms_data,
     const scoped_refptr<KeywordWebDataService>& web_data_service,
     std::unique_ptr<TemplateURLServiceClient> client,
@@ -582,6 +611,8 @@ TemplateURLService::TemplateURLService(
     : prefs_(prefs),
       search_engine_choice_service_(search_engine_choice_service),
       prepopulate_data_resolver_(prepopulate_data_resolver),
+      regional_capabilities_service_(regional_capabilities_service),
+      profile_metrics_service_(profile_metrics_service),
       search_terms_data_(std::move(search_terms_data)),
       web_data_service_(web_data_service),
       client_(std::move(client)),
@@ -602,11 +633,16 @@ TemplateURLService::TemplateURLService(
     PrefService& prefs,
     search_engines::SearchEngineChoiceService& search_engine_choice_service,
     TemplateURLPrepopulateData::Resolver& prepopulate_data_resolver,
+    regional_capabilities::RegionalCapabilitiesService&
+        regional_capabilities_service,
+    metrics::ProfileMetricsService& profile_metrics_service,
     base::span<const TemplateURLService::Initializer> initializers)
     : TemplateURLService(
           prefs,
           search_engine_choice_service,
           prepopulate_data_resolver,
+          regional_capabilities_service,
+          profile_metrics_service,
           /*search_terms_data=*/std::make_unique<SearchTermsData>(),
           /*web_data_service=*/nullptr,
           /*client=*/nullptr,
@@ -813,6 +849,8 @@ TemplateURL* TemplateURLService::AddWithOverrides(
 }
 
 void TemplateURLService::Remove(const TemplateURL* template_url) {
+  const std::u16string keyword = template_url->keyword();
+
   // CHECK that we aren't trying to Remove() the default search provider.
   // This has happened before, and causes permanent damage to the user Profile,
   // which can then be Synced to other installations. It's better to crash
@@ -825,8 +863,8 @@ void TemplateURLService::Remove(const TemplateURL* template_url) {
     static base::debug::CrashKeyString* crash_key =
         base::debug::AllocateCrashKeyString("removed_turl_keyword",
                                             base::debug::CrashKeySize::Size256);
-    base::debug::ScopedCrashKeyString auto_clear(
-        crash_key, base::UTF16ToUTF8(template_url->keyword()));
+    base::debug::ScopedCrashKeyString auto_clear(crash_key,
+                                                 base::UTF16ToUTF8(keyword));
 
     CHECK_NE(template_url, default_provider);
 
@@ -846,16 +884,15 @@ void TemplateURLService::Remove(const TemplateURL* template_url) {
     }
   }
 
-  // To ensure that policy engines are not added again on next
-  // policy fetch, mark the keyword as overridden in the pref.
-  if (template_url->CanPolicyBeOverridden()) {
-    AddOverriddenKeywordForTemplateURL(template_url);
-  }
-
   auto i = FindTemplateURL(&template_urls_, template_url);
   if (i == template_urls_.end()) {
     return;
   }
+
+  // Capture `CanPolicyBeOverridden()` before `template_url` is removed and
+  // erased. Recording the overridden keyword is deferred to the end of
+  // `Remove()` to avoid synchronous re-entry while mutating `template_urls_`.
+  const bool can_policy_be_overridden = template_url->CanPolicyBeOverridden();
 
   Scoper scoper(this);
   model_mutated_notification_pending_ = true;
@@ -875,8 +912,13 @@ void TemplateURLService::Remove(const TemplateURL* template_url) {
                              syncer::SyncChange::ACTION_DELETE);
 
     // The default search engine can't be deleted. But the user defined DSE can
-    // be hidden by an extension or policy and then deleted. Clean up the user
-    // prefs then.
+    // be hidden by an extension. When this happens, deleting the user defined
+    // DSE should clear the pref so the extension DSE becomes the default.
+    if (default_search_provider_source_ == DefaultSearchManager::FROM_USER &&
+        default_search_provider_ == template_url) {
+      default_search_manager_.ClearUserSelectedDefaultSearchEngine();
+    }
+
     if (template_url->sync_guid() ==
         prefs_->GetString(prefs::kDefaultSearchProviderGUID)) {
       prefs_->SetString(prefs::kDefaultSearchProviderGUID, std::string());
@@ -888,6 +930,13 @@ void TemplateURLService::Remove(const TemplateURL* template_url) {
 
   if (loaded_ && client_) {
     client_->DeleteAllSearchTermsForKeyword(template_url->id());
+  }
+
+  // To ensure that policy engines are not added again on next
+  // policy fetch, mark the keyword as overridden in the pref.
+  if (can_policy_be_overridden && enterprise_search_manager_) {
+    enterprise_search_manager_->AddOverriddenKeyword(
+        base::UTF16ToUTF8(keyword));
   }
 }
 
@@ -1035,13 +1084,6 @@ void TemplateURLService::ResetTemplateURL(TemplateURL* url,
   DCHECK(!keyword.empty());
   DCHECK(!search_url.empty());
 
-  // Similar to `TemplateURLService::Remove`, mark the keyword as overridden
-  // in the pref to prevent a policy created search engine from overriding this
-  // one.
-  if (url->CanPolicyBeOverridden()) {
-    AddOverriddenKeywordForTemplateURL(url);
-  }
-
   TemplateURLData data(url->data());
   data.SetShortName(title);
   data.SetKeyword(keyword);
@@ -1055,10 +1097,26 @@ void TemplateURLService::ResetTemplateURL(TemplateURL* url,
   data.is_active = TemplateURLData::ActiveStatus::kTrue;
   data.policy_origin = TemplateURLData::PolicyOrigin::kNoPolicy;
 
+  // Capture `CanPolicyBeOverridden()` and the keyword before calling
+  // `Update()`, as updating `policy_origin` to `kNoPolicy` makes
+  // `CanPolicyBeOverridden()` return false. Recording the overridden keyword is
+  // deferred to the end of `ResetTemplateURL()` to avoid synchronous re-entry
+  // during `Update()`.
+  const bool can_policy_be_overridden = url->CanPolicyBeOverridden();
+  const std::u16string old_keyword = url->keyword();
+
   Update(url, base::FeatureList::IsEnabled(
                   syncer::kSeparateLocalAndAccountSearchEngines)
                   ? TemplateURL(data, data)
                   : TemplateURL(data));
+
+  // Similar to `TemplateURLService::Remove()`, mark the keyword as overridden
+  // in the pref to prevent a policy created search engine from overriding this
+  // one.
+  if (can_policy_be_overridden && enterprise_search_manager_) {
+    enterprise_search_manager_->AddOverriddenKeyword(
+        base::UTF16ToUTF8(old_keyword));
+  }
 }
 
 void TemplateURLService::SetIsActiveTemplateURL(TemplateURL* url,
@@ -1168,18 +1226,21 @@ bool TemplateURLService::ResetPlayAPISearchEngine(
     }
   }
 
-  // 1.B) We can only have 1 Play API engine at a time. we have to remove the
-  // old one, if it exits. If it's the current default, we'll have to remove it
-  // first.
-  auto found = std::ranges::find_if(template_urls_, [](const auto& turl) {
-    return turl->GetRegulatoryExtensionType() ==
-           RegulatoryExtensionType::kAndroidEEA;
-  });
+  // 1.B) We can only have 1 Play API engine at a time. Collect and remove all
+  // old ones.
+  std::vector<TemplateURL*> old_play_api_engines;
+  for (const auto& turl : template_urls_) {
+    if (turl->GetRegulatoryExtensionType() ==
+        RegulatoryExtensionType::kAndroidEEA) {
+      old_play_api_engines.push_back(turl.get());
+    }
+  }
 
-  if (found != template_urls_.cend()) {
-    // There is already an old Play API engine. To proceed we'll need to remove
-    // it.
-    TemplateURL* old_play_api_engine = found->get();
+  base::UmaHistogramCounts100(
+      "Search.ChoiceDebug.PreexistingProgramTaggedEntries",
+      old_play_api_engines.size());
+
+  for (TemplateURL* old_play_api_engine : old_play_api_engines) {
     old_play_keyword = old_play_api_engine->keyword();
     if (old_play_api_engine == default_search_provider_) {
       // The DSE can't be removed from the loaded engines. We need to clear the
@@ -1212,7 +1273,7 @@ bool TemplateURLService::ResetPlayAPISearchEngine(
   if (CanMakeDefault(new_play_api_turl_ptr)) {
     SetUserSelectedDefaultSearchProvider(
         new_play_api_turl_ptr,
-        search_engines::ChoiceMadeLocation::kChoiceScreen);
+        search_engines::ChoiceMadeLocation::kDeviceChoiceImport);
   }
 
   CHECK(default_search_provider_);
@@ -1251,11 +1312,7 @@ void TemplateURLService::UpdateProviderFavicons(
 }
 
 bool TemplateURLService::CanMakeDefault(const TemplateURL* url) const {
-  return (default_search_provider_source_ == DefaultSearchManager::FROM_USER ||
-          default_search_provider_source_ ==
-              DefaultSearchManager::FROM_POLICY_RECOMMENDED ||
-          default_search_provider_source_ ==
-              DefaultSearchManager::FROM_FALLBACK) &&
+  return CanDefaultSearchProviderBeModifiedByUser() &&
          (url != GetDefaultSearchProvider()) &&
          url->url_ref().SupportsReplacement(search_terms_data()) &&
          (url->type() == TemplateURL::NORMAL) &&
@@ -1279,9 +1336,7 @@ void TemplateURLService::SetUserSelectedDefaultSearchProvider(
 
   if (load_failed_) {
     // Skip the DefaultSearchManager, which will persist to user preferences.
-    if ((default_search_provider_source_ == DefaultSearchManager::FROM_USER) ||
-        (default_search_provider_source_ ==
-         DefaultSearchManager::FROM_FALLBACK)) {
+    if (CanDefaultSearchProviderBeModifiedByUser()) {
       ApplyDefaultSearchChange(url ? &url->data() : nullptr,
                                DefaultSearchManager::FROM_USER);
       selection_added = true;
@@ -1329,6 +1384,88 @@ const TemplateURL* TemplateURLService::GetDefaultSearchProvider() const {
                  : pre_loading_providers_->default_search_provider();
 }
 
+const TemplateURLService::CategorizedTemplateUrls
+TemplateURLService::GetCategorizedTemplateURLs(
+    template_url_starter_pack_data::StarterPackIdSet
+        disabled_starter_pack_ids) {
+  CategorizedTemplateUrls data;
+
+  for (TemplateURL* url : GetTemplateURLs()) {
+    // Exclude those URL's that cannot be enabled or should be hidden.
+    if (disabled_starter_pack_ids.Has(url->starter_pack_id()) ||
+        HiddenFromLists(url)) {
+      continue;
+    }
+
+    const bool is_starter_pack =
+        url->starter_pack_id() !=
+        template_url_starter_pack_data::StarterPackId::kNone;
+    const bool is_extension = url->type() == TemplateURL::OMNIBOX_API_EXTENSION;
+
+    if (ShowInDefaultList(url)) {
+      data.active_site_shortcuts.push_back(url);
+    } else if (is_starter_pack || is_extension) {
+      if (ShowInActivesList(url)) {
+        data.active_feature_shortcuts.push_back(url);
+      } else {
+        data.inactive_feature_shortcuts.push_back(url);
+      }
+    } else {
+      if (ShowInActivesList(url)) {
+        data.active_site_shortcuts.push_back(url);
+      } else {
+        data.inactive_site_shortcuts.push_back(url);
+      }
+    }
+  }
+
+  std::ranges::sort(
+      data.active_site_shortcuts,
+      internal::OrderTemplateUrlsByPrepopulatedAndManagedAndAlphabetically(
+          prepopulate_data_resolver_->GetPrepopulatedEngines()));
+  std::ranges::sort(data.inactive_site_shortcuts,
+                    internal::OrderTemplateUrlsByManagedAndAlphabetically());
+
+  return data;
+}
+
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+TemplateURLService::PrepopulatedAndRecentlyVisitedTemplateUrls
+TemplateURLService::GetPrepopulatedAndRecentlyVisitedTemplateURLs() {
+  PrepopulatedAndRecentlyVisitedTemplateUrls data;
+
+  for (TemplateURL* url : GetTemplateURLs()) {
+    if (HiddenFromLists(url)) {
+      continue;
+    }
+
+    if (ShowInDefaultList(url)) {
+      data.prepopulated_urls.push_back(url);
+      continue;
+    }
+
+    const bool is_starter_pack =
+        url->starter_pack_id() !=
+        template_url_starter_pack_data::StarterPackId::kNone;
+    const bool is_extension = url->type() == TemplateURL::OMNIBOX_API_EXTENSION;
+
+    if (is_starter_pack || is_extension) {
+      continue;
+    }
+
+    data.recently_visited_urls.push_back(url);
+  }
+
+  std::ranges::sort(
+      data.prepopulated_urls,
+      internal::OrderTemplateUrlsByPrepopulatedAndManagedAndAlphabetically(
+          prepopulate_data_resolver_->GetPrepopulatedEngines()));
+  internal::SortAndFilterRecentlyVisitedURLs(data.recently_visited_urls);
+
+  return data;
+}
+#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+
 url::Origin TemplateURLService::GetDefaultSearchProviderOrigin() const {
   const TemplateURL* template_url = GetDefaultSearchProvider();
   if (template_url) {
@@ -1352,7 +1489,19 @@ TemplateURLService::GetDefaultSearchProviderIgnoringExtensions() const {
         return TemplateURL::MatchesData(turl_to_check.get(), next_search.get(),
                                         search_terms_data());
       });
-  return iter == template_urls_.end() ? nullptr : iter->get();
+
+  if (iter != template_urls_.end()) {
+    return iter->get();
+  }
+
+  // If a strict match failed, try to match by GUID.
+  // TODO(http://crbug.com/498242147): Properly address this mismatch.
+  const TemplateURL* guid_match = GetTemplateURLForGUID(next_search->sync_guid);
+  if (guid_match) {
+    return guid_match;
+  }
+
+  return nullptr;
 }
 
 bool TemplateURLService::IsSearchResultsPageFromDefaultSearchProvider(
@@ -1416,7 +1565,8 @@ void TemplateURLService::RepairPrepopulatedSearchEngines() {
       prepopulate_data_resolver_->GetPrepopulatedEngines();
   DCHECK(!prepopulated_urls.empty());
   ActionsFromCurrentData actions(CreateActionsFromCurrentPrepopulateData(
-      &prepopulated_urls, template_urls_, default_search_provider_));
+      &prepopulated_urls, template_urls_, default_search_provider_,
+      prepopulate_data_resolver_.get()));
 
   // Remove items.
   for (auto i = actions.removed_engines.begin();
@@ -1501,6 +1651,33 @@ void TemplateURLService::RepairStarterPackEngines() {
            actions.added_engines.begin();
        i < actions.added_engines.end(); ++i) {
     Add(std::make_unique<TemplateURL>(*i));
+  }
+}
+
+void TemplateURLService::RemoveUserAddedTemplateURLs() {
+  DCHECK(loaded());
+
+  Scoper scoper(this);
+
+  const TemplateURL* default_provider = GetDefaultSearchProvider();
+
+  std::vector<const TemplateURL*> to_remove;
+  for (const auto& turl : template_urls_) {
+    if (turl.get() == default_provider) {
+      continue;
+    }
+    if (turl->prepopulate_id() == 0 &&
+        turl->starter_pack_id() ==
+            template_url_starter_pack_data::StarterPackId::kNone &&
+        turl->policy_origin() == TemplateURLData::PolicyOrigin::kNoPolicy &&
+        turl->type() != TemplateURL::Type::OMNIBOX_API_EXTENSION &&
+        turl->type() != TemplateURL::Type::NORMAL_CONTROLLED_BY_EXTENSION) {
+      to_remove.push_back(turl.get());
+    }
+  }
+
+  for (const auto* turl : to_remove) {
+    Remove(turl);
   }
 }
 
@@ -1749,7 +1926,8 @@ void TemplateURLService::OnWebDataServiceRequestDone(
               regional_capabilities::CountryAccessKey(
                   regional_capabilities::CountryAccessReason::
                       kTemplateURLServiceDatabaseMetadataCaching)));
-
+      web_data_service_->SetPrepopulatedEnginesMigrationState(
+          updated_keywords_metadata.prepopulated_engines_migration_state);
     }
 
     if (updated_keywords_metadata.HasStarterPackData()) {
@@ -1793,6 +1971,12 @@ void TemplateURLService::OnWebDataServiceRequestDone(
           "Search.DefaultSearchProviderType2.Fallback", engine_type,
           SEARCH_ENGINE_MAX);
     }
+  }
+
+  if (regional_capabilities_service_->IsSearchEngineSplitRegion()) {
+    search_engines::RecordSearchEngineSplitProfileLoadMetrics(
+        template_urls_, default_search_provider_, search_terms_data(),
+        *profile_metrics_service_);
   }
 }
 
@@ -2286,9 +2470,9 @@ void TemplateURLService::ClearSessionToken() {
   token_expiration_time_ = base::TimeTicks();
 }
 
-// static
-sync_pb::SearchEngineSpecifics_ActiveStatus
-TemplateURLService::ActiveStatusToSync(
+namespace {
+
+sync_pb::SearchEngineSpecifics_ActiveStatus ActiveStatusToSync(
     TemplateURLData::ActiveStatus is_active) {
   switch (is_active) {
     case TemplateURLData::ActiveStatus::kUnspecified:
@@ -2302,6 +2486,8 @@ TemplateURLService::ActiveStatusToSync(
           SearchEngineSpecifics_ActiveStatus_ACTIVE_STATUS_FALSE;
   }
 }
+
+}  // namespace
 
 // static
 syncer::SyncData TemplateURLService::CreateSyncDataFromTemplateURLData(
@@ -2734,6 +2920,13 @@ bool TemplateURLService::Update(TemplateURL* existing_turl,
       ProcessTemplateURLChange(FROM_HERE, existing_turl,
                                syncer::SyncChange::ACTION_UPDATE);
     }
+
+    if (!applying_default_search_engine_change_ &&
+        GetDefaultSearchProvider() == existing_turl &&
+        CanDefaultSearchProviderBeModifiedByUser()) {
+      default_search_manager_.SetUserSelectedDefaultSearchEngine(
+          existing_turl->data());
+    }
   }
 
   return true;
@@ -2910,6 +3103,10 @@ bool TemplateURLService::ApplyDefaultSearchChangeNoMetrics(
   // This may be deleted later. Use exclusively for pointer comparison to detect
   // a change.
   TemplateURL* previous_default_search_engine = default_search_provider_;
+  std::string previous_default_search_engine_guid =
+      previous_default_search_engine
+          ? previous_default_search_engine->sync_guid()
+          : "";
 
   Scoper scoper(this);
 
@@ -2932,6 +3129,10 @@ bool TemplateURLService::ApplyDefaultSearchChangeNoMetrics(
   // |default_search_provider_source_| must be set before calling Update(),
   // since that function needs to know the source of the update in question.
   default_search_provider_source_ = source;
+
+  if (source != DefaultSearchManager::FROM_POLICY) {
+    UpdateRecommendedDefaultSearchProvider();
+  }
 
   if (!data) {
     default_search_provider_ = nullptr;
@@ -2991,6 +3192,24 @@ bool TemplateURLService::ApplyDefaultSearchChangeNoMetrics(
     return false;
   }
 
+  // We must fetch the previous DSE via its GUID rather than using the
+  // `previous_default_search_engine` pointer directly. This is because
+  // operations earlier in this function (like
+  // `UpdateDefaultProvidersCreatedByPolicy()`) may have deleted the engine
+  // from memory, leaving the original pointer dangling.
+  TemplateURL* previous_turl =
+      previous_default_search_engine_guid.empty()
+          ? nullptr
+          : GetTemplateURLForGUID(previous_default_search_engine_guid);
+  if (previous_turl &&
+      previous_turl->starter_pack_id() ==
+          template_url_starter_pack_data::StarterPackId::kNone &&
+      !IsPrepopulatedOrDefaultProviderByPolicy(previous_turl) &&
+      base::FeatureList::IsEnabled(
+          switches::kVisitCustomSearchOnUndefaulting)) {
+    UpdateTemplateURLVisitTime(previous_turl);
+  }
+
   model_mutated_notification_pending_ = true;
   if (!postponed_deleted_default_engine_guid_.empty()) {
     // There was a postponed deletion for the previous default search engine,
@@ -3013,8 +3232,6 @@ void TemplateURLService::ApplyEnterpriseSearchChanges(
   CHECK(loaded_);
 
   Scoper scoper(this);
-
-  LogSearchPolicyConflict(policy_search_engines);
 
   base::flat_set<std::u16string> new_keywords;
   std::ranges::transform(
@@ -3206,6 +3423,53 @@ void TemplateURLService::UpdateDefaultProvidersCreatedByPolicy(
     if (Add(std::move(new_dse_ptr))) {
       default_search_provider_ = new_dse;
     }
+  }
+}
+
+// Synchronizes recommended policy search engines with template_urls_.
+// Removes non-enforced policy engines that no longer match the current
+// recommended policy preference, and adds the current recommended policy engine
+// if missing (so it remains available in search engine lists when not active).
+void TemplateURLService::UpdateRecommendedDefaultSearchProvider() {
+  std::unique_ptr<TemplateURLData> rec_data_ptr =
+      default_search_manager_.GetRecommendedDefaultSearchEngine();
+  bool has_rec_engine = false;
+
+  for (auto it = template_urls_.begin(); it != template_urls_.end();) {
+    TemplateURL* turl = it->get();
+    if (turl->CreatedByDefaultSearchProviderPolicy() &&
+        !turl->enforced_by_policy()) {
+      if (rec_data_ptr && TemplateURL::MatchesData(turl, rec_data_ptr.get(),
+                                                   search_terms_data())) {
+        has_rec_engine = true;
+        ++it;
+      } else {
+        if (default_search_provider_ == turl) {
+          default_search_provider_ = nullptr;
+        }
+        TemplateURLID id = turl->id();
+        RemoveFromMaps(turl);
+        it = template_urls_.erase(it);
+        if (web_data_service_) {
+          web_data_service_->RemoveKeyword(id);
+        }
+      }
+    } else {
+      ++it;
+    }
+  }
+
+  if (rec_data_ptr && !has_rec_engine) {
+    TemplateURLData rec_data(*rec_data_ptr);
+    if (rec_data.sync_guid.empty()) {
+      rec_data.GenerateSyncGUID();
+    }
+    rec_data.policy_origin =
+        TemplateURLData::PolicyOrigin::kDefaultSearchProvider;
+    rec_data.enforced_by_policy = false;
+    rec_data.safe_for_autoreplace = false;
+    rec_data.is_active = TemplateURLData::ActiveStatus::kTrue;
+    Add(std::make_unique<TemplateURL>(rec_data));
   }
 }
 
@@ -3609,54 +3873,3 @@ TemplateURLService::GetEnterpriseSearchManager(PrefService* prefs) {
 #endif
 }
 
-void TemplateURLService::AddOverriddenKeywordForTemplateURL(
-    const TemplateURL* template_url) {
-  CHECK(template_url && template_url->CanPolicyBeOverridden());
-  if (enterprise_search_manager_) {
-    enterprise_search_manager_->AddOverriddenKeyword(
-        base::UTF16ToUTF8(template_url->keyword()));
-  }
-}
-
-void TemplateURLService::LogSearchPolicyConflict(
-    const TemplateURLService::OwnedTemplateURLVector& policy_search_engines) {
-  if (policy_search_engines.empty()) {
-    // No need to record conflict histograms if the SearchSettings policy
-    // doesn't create any search engine.
-    return;
-  }
-
-  bool has_conflict_with_featured = false;
-  bool has_conflict_with_non_featured = false;
-  for (const auto& policy_turl : policy_search_engines) {
-    const std::u16string& keyword = policy_turl->keyword();
-    CHECK(!keyword.empty());
-
-    const auto match_range = keyword_to_turl_.equal_range(keyword);
-    bool conflicts_with_active =
-        std::any_of(match_range.first, match_range.second,
-                    [](const KeywordToTURL::value_type& entry) {
-                      return !entry.second->CreatedByPolicy() &&
-                             !entry.second->safe_for_autoreplace();
-                    });
-    SearchPolicyConflictType type =
-        conflicts_with_active
-            ? (policy_turl->featured_by_policy()
-                   ? SearchPolicyConflictType::kWithFeatured
-                   : SearchPolicyConflictType::kWithNonFeatured)
-            : SearchPolicyConflictType::kNone;
-    base::UmaHistogramEnumeration(kSearchPolicyConflictCountHistogramName,
-                                  type);
-
-    has_conflict_with_featured |=
-        type == SearchPolicyConflictType::kWithFeatured;
-    has_conflict_with_non_featured |=
-        type == SearchPolicyConflictType::kWithNonFeatured;
-  }
-
-  base::UmaHistogramBoolean(kSearchPolicyHasConflictWithFeaturedHistogramName,
-                            has_conflict_with_featured);
-  base::UmaHistogramBoolean(
-      kSearchPolicyHasConflictWithNonFeaturedHistogramName,
-      has_conflict_with_non_featured);
-}

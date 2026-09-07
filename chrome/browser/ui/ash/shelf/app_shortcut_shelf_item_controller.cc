@@ -17,23 +17,22 @@
 #include "base/memory/raw_ptr.h"
 #include "base/strings/string_util.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_utils.h"
-#include "chrome/browser/ash/browser_delegate/browser_controller.h"
-#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
-#include "chrome/browser/ash/browser_delegate/browser_type.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller_util.h"
 #include "chrome/browser/ui/ash/shelf/shelf_context_menu.h"
 #include "chrome/browser/ui/ash/shelf/shelf_controller_helper.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
 #include "chrome/browser/web_applications/proto/web_app_install_state.pb.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/common/extensions/manifest_handlers/app_launch_info.h"
+#include "chromeos/ash/components/browser_delegate/browser_controller.h"
+#include "chromeos/ash/components/browser_delegate/browser_delegate.h"
+#include "chromeos/ash/components/browser_delegate/browser_type.h"
 #include "components/account_id/account_id.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
@@ -59,7 +58,7 @@ ash::ShelfAction ActivateContentOrMinimize(bool allow_minimize,
                                            content::WebContents* content) {
   ash::BrowserDelegate* browser =
       ash::BrowserController::GetInstance()->GetBrowserForTab(content);
-  TabStripModel* tab_strip = browser->GetBrowser().tab_strip_model();
+  TabStripModel* tab_strip = browser->GetBrowser().GetTabStripModel();
   int index = tab_strip->GetIndexOfWebContents(content);
   DCHECK_NE(TabStripModel::kNoTab, index);
 
@@ -156,7 +155,7 @@ class AppMatcher {
                                   ash::BrowserDelegate* browser) const {
     DCHECK(extension_);
     DCHECK(!registrar_);
-    Profile* profile = browser->GetBrowser().profile();
+    Profile* profile = browser->GetBrowser().GetProfile();
 
     // If the browser is an app window, and the app name matches the extension,
     // then the contents match the app.
@@ -305,7 +304,7 @@ void AppShortcutShelfItemController::ItemSelected(
   // bug. http://b/315364997.
   //
   // A bug is filed to track future works for fixing this confusing naming
-  // disparity. https://crbug.com/1473895
+  // disparity. https://crbug.com/40279151
   if (event && event->type() == ui::EventType::kKeyReleased) {
     auto optional_action = AdvanceToNextApp(filter_predicate);
     if (optional_action.has_value()) {
@@ -423,7 +422,7 @@ void AppShortcutShelfItemController::ExecuteCommand(bool from_context_menu,
     ash::BrowserDelegate* browser = app_menu_browsers_[command_id];
     if (browser) {
       if (should_close) {
-        browser->GetBrowser().tab_strip_model()->CloseAllTabs();
+        browser->GetBrowser().GetTabStripModel()->CloseAllTabs();
       } else {
         ShowAndActivateBrowser(/*move_to_current_desktop=*/true, browser);
       }
@@ -436,7 +435,7 @@ void AppShortcutShelfItemController::ExecuteCommand(bool from_context_menu,
     ash::BrowserDelegate* browser =
         ash::BrowserController::GetInstance()->GetBrowserForTab(web_contents);
     TabStripModel* tab_strip =
-        browser ? browser->GetBrowser().tab_strip_model() : nullptr;
+        browser ? browser->GetBrowser().GetTabStripModel() : nullptr;
     const int index = tab_strip ? tab_strip->GetIndexOfWebContents(web_contents)
                                 : TabStripModel::kNoTab;
     if (index != TabStripModel::kNoTab) {
@@ -457,7 +456,7 @@ void AppShortcutShelfItemController::Close() {
   // Close all running 'programs' of this type.
   if (IsWindowedWebApp()) {
     for (ash::BrowserDelegate* browser : GetAppBrowsers(base::NullCallback())) {
-      browser->GetBrowser().tab_strip_model()->CloseAllTabs();
+      browser->GetBrowser().GetTabStripModel()->CloseAllTabs();
     }
   } else {
     for (content::WebContents* item : GetAppWebContents(base::NullCallback())) {
@@ -466,7 +465,7 @@ void AppShortcutShelfItemController::Close() {
       if (!browser || browser->GetAccountId() != GetActiveAccountId()) {
         continue;
       }
-      TabStripModel* tab_strip = browser->GetBrowser().tab_strip_model();
+      TabStripModel* tab_strip = browser->GetBrowser().GetTabStripModel();
       int index = tab_strip->GetIndexOfWebContents(item);
       DCHECK(index != TabStripModel::kNoTab);
       browser->CloseWebContentsAt(index,
@@ -592,7 +591,7 @@ AppShortcutShelfItemController::AdvanceToNextApp(
               // the index of the current active tab.
               if (browser && browser->IsActive()) {
                 TabStripModel* tab_strip =
-                    browser->GetBrowser().tab_strip_model();
+                    browser->GetBrowser().GetTabStripModel();
                 int index = tab_strip->GetIndexOfWebContents(web_content);
                 if (tab_strip->active_index() == index) {
                   *out_window = browser->GetNativeWindow();

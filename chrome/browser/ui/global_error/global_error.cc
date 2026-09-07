@@ -6,6 +6,8 @@
 
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/ui/global_error/global_error_bubble_view_base.h"
+#include "components/vector_icons/vector_icons.h"
+#include "ui/base/ui_base_features.h"
 
 // GlobalError ---------------------------------------------------------------
 
@@ -18,7 +20,9 @@ GlobalError::Severity GlobalError::GetSeverity() {
 }
 
 ui::ImageModel GlobalError::MenuItemIcon() {
-  return ui::ImageModel::FromVectorIcon(kBrowserToolsErrorIcon,
+  return ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                            ? vector_icons::kErrorFilledIcon
+                                            : kBrowserToolsErrorOldIcon,
                                         ui::kColorAlertMediumSeverityIcon);
 }
 
@@ -36,7 +40,8 @@ bool GlobalErrorWithStandardBubble::HasShownBubbleView() {
   return has_shown_bubble_view_;
 }
 
-void GlobalErrorWithStandardBubble::ShowBubbleView(Browser* browser) {
+void GlobalErrorWithStandardBubble::ShowBubbleView(
+    BrowserWindowInterface* browser) {
   has_shown_bubble_view_ = true;
   bubble_view_ =
       GlobalErrorBubbleViewBase::ShowStandardBubbleView(browser, AsWeakPtr());
@@ -60,14 +65,14 @@ GlobalErrorWithStandardBubble::GetBubbleViewDetailsButtonLabel() {
 }
 
 void GlobalErrorWithStandardBubble::BubbleViewDetailsButtonPressed(
-    Browser* browser) {}
+    BrowserWindowInterface* browser) {}
 
 bool GlobalErrorWithStandardBubble::ShouldAddElevationIconToAcceptButton() {
   return false;
 }
 
-void GlobalErrorWithStandardBubble::BubbleViewDidClose(Browser* browser) {
-  DCHECK(browser);
+void GlobalErrorWithStandardBubble::BubbleViewDidClose(
+    BrowserWindowInterface* browser) {
   bubble_view_ = nullptr;
   OnBubbleViewDidClose(browser);
 }

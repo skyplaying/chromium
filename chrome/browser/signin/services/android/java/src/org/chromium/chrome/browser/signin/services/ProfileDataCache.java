@@ -7,15 +7,15 @@ package org.chromium.chrome.browser.signin.services;
 import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.content.Context;
-import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.Bitmap.Config;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
-import android.graphics.Point;
 import android.graphics.PorterDuff;
 import android.graphics.PorterDuffXfermode;
+import android.graphics.Rect;
+import android.graphics.RectF;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 
@@ -29,31 +29,38 @@ import androidx.appcompat.content.res.AppCompatResources;
 import org.chromium.base.Callback;
 import org.chromium.base.ObserverList;
 import org.chromium.base.Promise;
+import org.chromium.base.ServiceLoaderUtil;
 import org.chromium.base.ThreadUtils;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.subscription_eligibility.SubscriptionEligibilityService;
 import org.chromium.components.browser_ui.util.AvatarGenerator;
-import org.chromium.components.signin.AccountEmailDisplayHook;
 import org.chromium.components.signin.AccountManagerFacade;
 import org.chromium.components.signin.AccountManagerFacadeProvider;
 import org.chromium.components.signin.AccountsChangeObserver;
+import org.chromium.components.signin.SigninFeatureMap;
+import org.chromium.components.signin.SigninFeatures;
 import org.chromium.components.signin.base.AccountInfo;
 import org.chromium.components.signin.base.CoreAccountInfo;
 import org.chromium.components.signin.identitymanager.IdentityManager;
+import org.chromium.components.signin.identitymanager.PrimaryAccountChangeEvent;
 import org.chromium.google_apis.gaia.CoreAccountId;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Function;
 
 /**
  * Fetches and caches Google Account profile images and full names for the accounts on the device.
  */
 @MainThread
 @NullMarked
-public class ProfileDataCache implements IdentityManager.Observer, AccountsChangeObserver {
+public class ProfileDataCache
+        implements IdentityManager.Observer, SubscriptionEligibilityService.Observer {
     /** Observer to get notifications about changes in profile data. */
     public interface Observer {
 
@@ -73,69 +80,16 @@ public class ProfileDataCache implements IdentityManager.Observer, AccountsChang
         void onProfileDataUpdated(DisplayableProfileData profileData);
     }
 
-    /**
-     * Encapsulates info necessary to overlay a circular badge (e.g., child account icon) on top of
-     * a user avatar.
-     */
-    private static class BadgeConfig {
-        private final int mBadgeResId;
-        private final Drawable mBadge;
-        private final @Px int mBadgeSize;
-        private final @Px int mBorderSize;
-        private final Point mPosition;
-
-        private BadgeConfig(
-                Context context,
-                @DrawableRes int badgeResId,
-                @Px int badgeSize,
-                @Px int borderSize,
-                Point position) {
-            assert badgeResId != 0;
-
-            mBadgeResId = badgeResId;
-            mBadge = AppCompatResources.getDrawable(context, badgeResId);
-            mBadgeSize = badgeSize;
-            mBorderSize = borderSize;
-            mPosition = position;
-        }
-
-        Drawable getBadge() {
-            return mBadge;
-        }
-
-        @Px
-        int getBadgeSize() {
-            return mBadgeSize;
-        }
-
-        @Px
-        int getBorderSize() {
-            return mBorderSize;
-        }
-
-        Point getPosition() {
-            return mPosition;
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            return o instanceof BadgeConfig bc
-                    && mBadgeResId == bc.mBadgeResId
-                    && mBadgeSize == bc.mBadgeSize
-                    && mBorderSize == bc.mBorderSize
-                    && mPosition.equals(bc.mPosition);
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(mBadgeResId, mBadgeSize, mBorderSize, mPosition);
-        }
-    }
-
     private final Context mContext;
     private final AccountManagerFacade mAccountManagerFacade;
+    private final @Nullable AccountManagerAccountsChangeObserver
+            mAccountManagerAccountsChangeObserver;
     private final IdentityManager mIdentityManager;
+    private final @Nullable IdentityManagerAccountsChangeObserver
+            mIdentityManagerAccountsChangeObserver;
     private final int mImageSize;
+    private final int mAvatarSize;
+    private final int mTotalPadding;
     // The badge for a given account is selected as follows:
     // * If there is a config for that specific account, use that
     // * Else if there is a default config, use that
@@ -145,22 +99,86 @@ public class ProfileDataCache implements IdentityManager.Observer, AccountsChang
     private final Drawable mPlaceholderImage;
     private final ObserverList<Observer> mObservers = new ObserverList<>();
     private final AccountsCache mAccountsCache = new AccountsCache();
+    private final boolean mAiTierRingEnabled;
+    private final @Nullable SubscriptionEligibilityService mSubscriptionEligibilityService;
+    private final @Px int mRingThicknessPx;
+    private final @Nullable SubscriptionTierBrandingDelegate mBrandingDelegate;
+    private @Nullable Drawable mPlaceholderImageWithAiTierRingPadding;
 
     @VisibleForTesting
     ProfileDataCache(
             Context context,
             AccountManagerFacade accountManagerFacade,
             IdentityManager identityManager,
+            @Nullable SubscriptionEligibilityService subscriptionEligibilityService,
             @Px int imageSize,
-            @Nullable BadgeConfig badgeConfig) {
+            @Px int ringThicknessPx,
+            @Nullable BadgeConfig badgeConfig,
+            boolean aiTierRingEnabled,
+            @Nullable SubscriptionTierBrandingDelegate brandingDelegate) {
         assert identityManager != null;
         mContext = context;
         mAccountManagerFacade = accountManagerFacade;
         mIdentityManager = identityManager;
+        if (SigninFeatureMap.isEnabled(SigninFeatures.MAKE_IDENTITY_MANAGER_SOURCE_OF_ACCOUNTS)) {
+            mAccountManagerAccountsChangeObserver = null;
+            mIdentityManagerAccountsChangeObserver = new IdentityManagerAccountsChangeObserver();
+        } else {
+            mAccountManagerAccountsChangeObserver = new AccountManagerAccountsChangeObserver();
+            mIdentityManagerAccountsChangeObserver = null;
+        }
         mImageSize = imageSize;
+        mRingThicknessPx = ringThicknessPx;
         mDefaultBadgeConfig = badgeConfig;
-        mPlaceholderImage = getScaledPlaceholderImage(context, imageSize);
-        populateCache();
+        mAiTierRingEnabled = aiTierRingEnabled;
+        mBrandingDelegate = brandingDelegate;
+        mSubscriptionEligibilityService = subscriptionEligibilityService;
+
+        if (mAiTierRingEnabled) {
+            int ringSpacingPx =
+                    context.getResources()
+                            .getDimensionPixelSize(
+                                    org.chromium.components.browser_ui.util.R.dimen
+                                            .ai_tier_ring_spacing);
+            mTotalPadding = mRingThicknessPx + ringSpacingPx;
+            mAvatarSize = mImageSize - 2 * mTotalPadding;
+        } else {
+            mTotalPadding = 0;
+            mAvatarSize = mImageSize;
+        }
+
+        mPlaceholderImage = getScaledPlaceholderImage(context, mAvatarSize);
+        updateCache();
+    }
+
+    /**
+     * @param context Context of the application to extract resources from.
+     * @param identityManager IdentityManager to use.
+     * @param subscriptionEligibilityService SubscriptionEligibilityService to observe.
+     * @param imageSize Size of the image.
+     * @param ringThicknessPx The thickness of the AI tier ring in pixels.
+     * @return A {@link ProfileDataCache} object configured to draw the AI tier ring. Note that the
+     *     final generated image size will strictly be `imageSize`. The inner avatar will be shrunk
+     *     to accommodate the ring.
+     */
+    public static ProfileDataCache createWithAiTierRing(
+            Context context,
+            IdentityManager identityManager,
+            SubscriptionEligibilityService subscriptionEligibilityService,
+            @Px int imageSize,
+            @Px int ringThicknessPx) {
+        SubscriptionTierBrandingDelegate brandingDelegate =
+                ServiceLoaderUtil.maybeCreate(SubscriptionTierBrandingDelegate.class);
+        return new ProfileDataCache(
+                context,
+                AccountManagerFacadeProvider.getInstance(),
+                identityManager,
+                subscriptionEligibilityService,
+                imageSize,
+                ringThicknessPx,
+                /* badgeConfig= */ null,
+                /* aiTierRingEnabled= */ true,
+                brandingDelegate);
     }
 
     /**
@@ -174,8 +192,12 @@ public class ProfileDataCache implements IdentityManager.Observer, AccountsChang
                 context,
                 AccountManagerFacadeProvider.getInstance(),
                 identityManager,
+                /* subscriptionEligibilityService= */ null,
                 context.getResources().getDimensionPixelSize(R.dimen.user_picture_size),
-                /* badgeConfig= */ null);
+                /* ringThicknessPx= */ 0,
+                /* badgeConfig= */ null,
+                /* aiTierRingEnabled= */ false,
+                /* brandingDelegate= */ null);
     }
 
     /**
@@ -192,71 +214,61 @@ public class ProfileDataCache implements IdentityManager.Observer, AccountsChang
                 context,
                 AccountManagerFacadeProvider.getInstance(),
                 identityManager,
+                /* subscriptionEligibilityService= */ null,
                 context.getResources().getDimensionPixelSize(R.dimen.user_picture_size),
-                createDefaultSizeChildAccountBadgeConfig(context, badgeResId));
+                /* ringThicknessPx= */ 0,
+                BadgeConfig.create(badgeResId).withDefaultSizeChildAccountConfig().build(context),
+                /* aiTierRingEnabled= */ false,
+                /* brandingDelegate= */ null);
     }
 
     /**
      * @param context Context of the application to extract resources from.
-     * @param imageSizeRedId Resource id of the image size.
+     * @param imageSizeResId Resource id of the image size.
      * @return A {@link ProfileDataCache} object with the given image size and no badge.
      */
     public static ProfileDataCache createWithoutBadge(
-            Context context, IdentityManager identityManager, @DimenRes int imageSizeRedId) {
+            Context context, IdentityManager identityManager, @DimenRes int imageSizeResId) {
         return new ProfileDataCache(
                 context,
                 AccountManagerFacadeProvider.getInstance(),
                 identityManager,
-                context.getResources().getDimensionPixelSize(imageSizeRedId),
-                /* badgeConfig= */ null);
+                /* subscriptionEligibilityService= */ null,
+                context.getResources().getDimensionPixelSize(imageSizeResId),
+                /* ringThicknessPx= */ 0,
+                /* badgeConfig= */ null,
+                /* aiTierRingEnabled= */ false,
+                /* brandingDelegate= */ null);
     }
 
     /**
-     * Creates a {@link BadgeConfig} with default badge size.
-     *
-     * @param context Context of the application to extract resources from.
-     * @param badgeResId Resource id of the badge to be attached.
-     * @return A {@link BadgeConfig} with default badge size(R.dimen.badge_size) of given badgeResId
-     *     provided.
+     * @return A {@link Drawable} containing the placeholder (padded for the AI tier ring if
+     *     enabled).
      */
-    public static BadgeConfig createDefaultSizeChildAccountBadgeConfig(
-            Context context, @DrawableRes int badgeResId) {
-        assert badgeResId != 0;
+    public Drawable getPlaceholderImage() {
+        Drawable accountCircle =
+                AppCompatResources.getDrawable(mContext, R.drawable.account_circle);
+        if (!mAiTierRingEnabled) {
+            return accountCircle;
+        }
+        if (mPlaceholderImageWithAiTierRingPadding == null) {
+            Bitmap paddedPicture =
+                    Bitmap.createBitmap(mImageSize, mImageSize, Bitmap.Config.ARGB_8888);
+            paddedPicture.setDensity(mContext.getResources().getDisplayMetrics().densityDpi);
+            Canvas canvas = new Canvas(paddedPicture);
 
-        Resources resources = context.getResources();
-        return new BadgeConfig(
-                context,
-                badgeResId,
-                resources.getDimensionPixelSize(R.dimen.badge_size),
-                resources.getDimensionPixelSize(R.dimen.badge_border_size),
-                new Point(
-                        resources.getDimensionPixelOffset(R.dimen.badge_position_x),
-                        resources.getDimensionPixelOffset(R.dimen.badge_position_y)));
-    }
-
-    /**
-     * Creates a {@link BadgeConfig} with toolbar identity disc badge size.
-     *
-     * @param context Context of the application to extract resources from.
-     * @param badgeResId Resource id of the badge to be attached.
-     * @return A {@link BadgeConfig} with toolbar identity disc badge size badge
-     *     size(R.dimen.toolbar_identity_disc_badge_size) of given badgeResId provided.
-     */
-    public static BadgeConfig createToolbarIdentityDiscBadgeConfig(
-            Context context, @DrawableRes int badgeResId) {
-        assert badgeResId != 0;
-
-        Resources resources = context.getResources();
-        return new BadgeConfig(
-                context,
-                badgeResId,
-                resources.getDimensionPixelSize(R.dimen.toolbar_identity_disc_badge_size),
-                resources.getDimensionPixelSize(R.dimen.toolbar_identity_disc_badge_border_size),
-                new Point(
-                        resources.getDimensionPixelOffset(
-                                R.dimen.toolbar_identity_disc_badge_position_x),
-                        resources.getDimensionPixelOffset(
-                                R.dimen.toolbar_identity_disc_badge_position_y)));
+            Rect oldBounds = accountCircle.getBounds();
+            accountCircle.setBounds(
+                    mTotalPadding,
+                    mTotalPadding,
+                    mImageSize - mTotalPadding,
+                    mImageSize - mTotalPadding);
+            accountCircle.draw(canvas);
+            accountCircle.setBounds(oldBounds);
+            mPlaceholderImageWithAiTierRingPadding =
+                    new BitmapDrawable(mContext.getResources(), paddedPicture);
+        }
+        return mPlaceholderImageWithAiTierRingPadding;
     }
 
     /**
@@ -273,23 +285,41 @@ public class ProfileDataCache implements IdentityManager.Observer, AccountsChang
     }
 
     /**
-     * @return The {@link DisplayableProfileData} containing the profile data corresponding to the
-     *     given account or a {@link DisplayableProfileData} with a placeholder image and null full
-     *     and given name.
+     * Returns cached {@link DisplayableProfileData} for the given account ID, or null if missing.
+     *
+     * <p>Method is synchronous and does not trigger any account info fetches. First it checks if
+     * the {@link DisplayableProfileData} is in the cache, then it updates the cache if the account
+     * is missing.
+     *
+     * @param accountId The account ID for which to get the profile data.
+     * @return The {@link DisplayableProfileData} for the given account ID, or null if not found.
      */
-    public DisplayableProfileData getProfileDataOrDefault(@Nullable String accountEmail) {
-        DisplayableProfileData profileData =
-                accountEmail != null ? mAccountsCache.getByEmail(accountEmail) : null;
-        if (profileData == null) {
-            assumeNonNull(accountEmail);
-            return new DisplayableProfileData(
-                    accountEmail,
-                    mPlaceholderImage,
-                    null,
-                    null,
-                    AccountEmailDisplayHook.canHaveEmailAddressDisplayed(accountEmail));
+    public @Nullable DisplayableProfileData tryGetById(CoreAccountId accountId) {
+        if (!mAccountsCache.isLoaded() || !mAccountsCache.contains(accountId)) {
+            updateCache();
         }
-        return profileData;
+
+        return mAccountsCache.getByAccountId(accountId);
+    }
+
+    /**
+     * Returns cached {@link DisplayableProfileData} for the given account ID.
+     *
+     * <p>Method is synchronous and does not trigger any account info fetches. First it checks if
+     * the {@link DisplayableProfileData} is in the cache, then it updates the cache if the account
+     * is missing. Throws an {@link IllegalArgumentException} if the account still cannot be found.
+     *
+     * @param accountId The account ID for which to get the profile data.
+     * @throws IllegalArgumentException if the account is not found.
+     * @return The {@link DisplayableProfileData} for the given account ID.
+     */
+    public DisplayableProfileData getById(CoreAccountId accountId) {
+        var profileData = tryGetById(accountId);
+        if (profileData != null) {
+            return profileData;
+        }
+
+        throw new IllegalArgumentException("Account not found");
     }
 
     /**
@@ -307,8 +337,7 @@ public class ProfileDataCache implements IdentityManager.Observer, AccountsChang
         }
 
         mDefaultBadgeConfig = badgeConfig;
-        mAccountsCache.clear();
-        populateCache();
+        updateCache();
     }
 
     /**
@@ -323,13 +352,21 @@ public class ProfileDataCache implements IdentityManager.Observer, AccountsChang
     public void setBadge(CoreAccountId accountId, @Nullable BadgeConfig badgeConfig) {
         if (mPerAccountBadgeConfig.containsKey(accountId)
                 && Objects.equals(mPerAccountBadgeConfig.get(accountId), badgeConfig)) {
-            // Update is a no-op. The per-account badge set to accountEmail is the same as the
+            // Update is a no-op. The per-account badge set to accountId is the same as the
             // badgeResId.
             return;
         }
         mPerAccountBadgeConfig.put(accountId, badgeConfig);
-        var accountInfo = mIdentityManager.findExtendedAccountInfoByAccountId(accountId);
-        onExtendedAccountInfoUpdated(accountInfo);
+        var accountInfo = findAccountInfo(accountId);
+        if (accountInfo != null) {
+            var displayableProfileData = toDisplayableProfileData(accountInfo);
+            mAccountsCache.putAccount(accountInfo.getId(), displayableProfileData);
+            fireOnProfileDataUpdated(displayableProfileData);
+        }
+    }
+
+    public @Nullable BadgeConfig getBadgeConfigForTesting(CoreAccountId accountId) {
+        return getBadgeConfigForAccount(accountId);
     }
 
     /**
@@ -338,8 +375,17 @@ public class ProfileDataCache implements IdentityManager.Observer, AccountsChang
     public void addObserver(Observer observer) {
         ThreadUtils.assertOnUiThread();
         if (mObservers.isEmpty()) {
-            mAccountManagerFacade.addObserver(this);
+            if (SigninFeatureMap.isEnabled(
+                    SigninFeatures.MAKE_IDENTITY_MANAGER_SOURCE_OF_ACCOUNTS)) {
+                mIdentityManager.addObserver(assumeNonNull(mIdentityManagerAccountsChangeObserver));
+            } else {
+                mAccountManagerFacade.addObserver(
+                        assumeNonNull(mAccountManagerAccountsChangeObserver));
+            }
             mIdentityManager.addObserver(this);
+            if (mAiTierRingEnabled && mSubscriptionEligibilityService != null) {
+                mSubscriptionEligibilityService.addObserver(this);
+            }
         }
         mObservers.addObserver(observer);
     }
@@ -351,98 +397,232 @@ public class ProfileDataCache implements IdentityManager.Observer, AccountsChang
         ThreadUtils.assertOnUiThread();
         mObservers.removeObserver(observer);
         if (mObservers.isEmpty()) {
-            mAccountManagerFacade.removeObserver(this);
             mIdentityManager.removeObserver(this);
+            if (mAiTierRingEnabled && mSubscriptionEligibilityService != null) {
+                mSubscriptionEligibilityService.removeObserver(this);
+            }
+            if (SigninFeatureMap.isEnabled(
+                    SigninFeatures.MAKE_IDENTITY_MANAGER_SOURCE_OF_ACCOUNTS)) {
+                mIdentityManager.removeObserver(
+                        assumeNonNull(mIdentityManagerAccountsChangeObserver));
+            } else {
+                mAccountManagerFacade.removeObserver(
+                        assumeNonNull(mAccountManagerAccountsChangeObserver));
+            }
         }
     }
 
+    /** Implements {@link SubscriptionEligibilityService.Observer}. */
     @Override
-    public void onCoreAccountInfosChanged() {
-        mAccountsCache.clear();
-        populateCache();
-        mAccountsCache
-                .getAll()
-                .then((Callback<List<DisplayableProfileData>>) this::notifyObservers);
+    public void onAiSubscriptionTierChanged() {
+        // AI tier rings are only displayed for eligible tiers. We must update the cache
+        // when the tier changes so that the ring is applied (or removed) accordingly.
+        if (!mAiTierRingEnabled) return;
+        updateCache();
     }
 
     /** Implements {@link IdentityManager.Observer}. */
     @Override
-    public void onExtendedAccountInfoUpdated(@Nullable AccountInfo accountInfo) {
-        // We don't update the cache if the account information and ProfileDataCache config mean
-        // that we would just be returning the default profile data.
-        if (accountInfo != null
-                && (accountInfo.hasDisplayableInfo()
-                        || getBadgeConfigForAccount(accountInfo.getId()) != null)) {
-            var displayableProfileData = toDisplayableProfileData(accountInfo);
-            mAccountsCache.putAccount(displayableProfileData);
-            notifyObservers(displayableProfileData);
+    public void onPrimaryAccountChanged(PrimaryAccountChangeEvent eventDetails) {
+        // AI tier rings are only displayed for the primary account. We must update the cache
+        // when the primary account changes so that the ring is applied (or removed) accordingly.
+        if (!mAiTierRingEnabled) return;
+        updateCache();
+    }
+
+    /** Implements {@link IdentityManager.Observer}. */
+    @Override
+    public void onExtendedAccountInfoUpdated(AccountInfo accountInfo) {
+        if (mIdentityManager.findExtendedAccountInfoByAccountId(accountInfo.getId()) == null) {
+            // Account was removed from the IdentityManager.
+            // Cache will be updated by onRefreshTokenRemovedForAccount() callback.
+            return;
         }
+        var displayableProfileData = toDisplayableProfileData(accountInfo);
+        mAccountsCache.putAccount(accountInfo.getId(), displayableProfileData);
+        fireOnProfileDataUpdated(displayableProfileData);
     }
 
-    /**
-     * @return Whether the cache contains non-default profile data for the given account.
-     */
-    public boolean hasProfileDataForTesting(String accountEmail) {
-        return mAccountsCache.getByEmail(accountEmail) != null;
+    /** Checks if the cache contains profile data for the given account ID. */
+    public boolean hasProfileDataForTesting(CoreAccountId accountId) {
+        return mAccountsCache.getByAccountId(accountId) != null;
     }
 
-    private void populateCache() {
-        var accountsPromise = mAccountManagerFacade.getAccounts();
-        if (accountsPromise.isFulfilled()) {
-            populateCacheForAllAccounts(accountsPromise.getResult());
-        } else {
-            accountsPromise.then((Callback<List<AccountInfo>>) this::populateCacheForAllAccounts);
+    private void updateCache() {
+        final @Nullable List<AccountInfo> coreAccounts = getCoreAccountsIfLoaded();
+        final @Nullable AccountInfo primaryAccountInfo = getPrimaryAccountInfo();
+
+        if (coreAccounts == null && primaryAccountInfo == null) {
+            return;
         }
+
+        // Primary account can be set before list of all accounts is loaded. To avoid that case, we
+        // need to add primary account to the list of all accounts manually. That makes potential
+        // duplicate on the list, but it will be handled by the updateCache(List<AccountInfo>)
+        // method.
+        final var allAccounts =
+                coreAccounts != null ? new ArrayList<>(coreAccounts) : new ArrayList<AccountInfo>();
+        if (primaryAccountInfo != null) {
+            allAccounts.add(primaryAccountInfo);
+        }
+        updateCache(allAccounts);
     }
 
-    private void populateCacheForAllAccounts(List<AccountInfo> accounts) {
-        List<DisplayableProfileData> displayableAccounts = new ArrayList<>();
-        for (CoreAccountInfo account : accounts) {
-            var accountInfo = mIdentityManager.findExtendedAccountInfoByAccountId(account.getId());
-            if (accountInfo != null
-                    && (accountInfo.hasDisplayableInfo()
-                            || getBadgeConfigForAccount(accountInfo.getId()) != null)) {
-                displayableAccounts.add(toDisplayableProfileData(accountInfo));
-            }
+    private void updateCache(List<AccountInfo> accounts) {
+        var displayableAccounts = new LinkedHashMap<CoreAccountId, DisplayableProfileData>();
+        for (AccountInfo account : accounts) {
+            // Accounts list is combined from accounts with refresh tokens and the primary account
+            // at the last position. Because list of accounts is manually combined, there is a
+            // chance that the primary account is duplicated. We want to use computeIfAbsent here to
+            // avoid overriding the existing entry and double avatar generation.
+            displayableAccounts.computeIfAbsent(
+                    account.getId(),
+                    id -> {
+                        var extendedAccountInfo =
+                                mIdentityManager.findExtendedAccountInfoByAccountId(id);
+                        return toDisplayableProfileData(
+                                extendedAccountInfo != null ? extendedAccountInfo : account);
+                    });
         }
         mAccountsCache.setAccounts(displayableAccounts);
+
+        mAccountsCache
+                .getAll()
+                .then((Callback<List<DisplayableProfileData>>) this::fireOnAccountsUpdated);
+        // TODO(crbug.com/485130949): Remove that callback after implementation of
+        // onAccountsUpdated() in all UIs. (Blocked by crbug.com/480239119)
+        mAccountsCache
+                .getAll()
+                .then((Callback<List<DisplayableProfileData>>) this::fireOnProfileDataUpdated);
     }
 
     private DisplayableProfileData toDisplayableProfileData(AccountInfo accountInfo) {
         Drawable croppedAvatar =
                 accountInfo.getAccountImage() != null
                         ? AvatarGenerator.makeRoundAvatar(
-                                mContext.getResources(), accountInfo.getAccountImage(), mImageSize)
+                                mContext.getResources(), accountInfo.getAccountImage(), mAvatarSize)
                         : mPlaceholderImage;
         BadgeConfig badgeConfig = getBadgeConfigForAccount(accountInfo.getId());
-        if (badgeConfig != null) {
-            croppedAvatar = overlayBadgeOnUserPicture(badgeConfig, croppedAvatar);
+        boolean hasAiTierRing = false;
+
+        if (mAiTierRingEnabled) {
+            croppedAvatar = padAvatarForAiTierRing(croppedAvatar);
         }
-        return new DisplayableProfileData(
-                accountInfo.getEmail(),
-                croppedAvatar,
-                accountInfo.getFullName(),
-                accountInfo.getGivenName(),
-                accountInfo.canHaveEmailAddressDisplayed());
+
+        if (badgeConfig != null) {
+            croppedAvatar =
+                    overlayBadgeOnUserPicture(badgeConfig, croppedAvatar, mAiTierRingEnabled);
+        } else {
+            hasAiTierRing = isEligibleForAiTierRing(accountInfo);
+            if (hasAiTierRing) {
+                croppedAvatar = overlayAiRingOnAvatar(croppedAvatar);
+            }
+        }
+
+        if (SigninFeatureMap.isEnabled(SigninFeatures.MAKE_IDENTITY_MANAGER_SOURCE_OF_ACCOUNTS)) {
+            return new DisplayableProfileData(
+                    accountInfo.getId(),
+                    accountInfo.getEmail(),
+                    croppedAvatar,
+                    accountInfo.getFullName(),
+                    accountInfo.getGivenName(),
+                    accountInfo.canHaveEmailAddressDisplayed(),
+                    hasAiTierRing);
+        } else {
+            final var shouldPopulateNames = accountInfo.hasDisplayableInfo() || badgeConfig != null;
+            return new DisplayableProfileData(
+                    accountInfo.getId(),
+                    accountInfo.getEmail(),
+                    croppedAvatar,
+                    shouldPopulateNames ? accountInfo.getFullName() : null,
+                    shouldPopulateNames ? accountInfo.getGivenName() : null,
+                    accountInfo.canHaveEmailAddressDisplayed(),
+                    hasAiTierRing);
+        }
     }
 
-    private void notifyObservers(List<DisplayableProfileData> accounts) {
+    private boolean isEligibleForAiTierRing(AccountInfo accountInfo) {
+        if (!mAiTierRingEnabled || mSubscriptionEligibilityService == null) return false;
+        AccountInfo primaryAccount = mIdentityManager.getPrimaryAccountInfo();
+        boolean isPrimary =
+                primaryAccount != null && primaryAccount.getId().equals(accountInfo.getId());
+        return isPrimary && mSubscriptionEligibilityService.getAiSubscriptionTier() > 0;
+    }
+
+    private void fireOnAccountsUpdated(List<DisplayableProfileData> accounts) {
         for (Observer observer : mObservers) {
             observer.onAccountsUpdated(accounts);
         }
     }
 
-    private void notifyObservers(DisplayableProfileData profileData) {
+    private void fireOnProfileDataUpdated(List<DisplayableProfileData> accounts) {
+        for (DisplayableProfileData profileData : accounts) {
+            fireOnProfileDataUpdated(profileData);
+        }
+    }
+
+    private void fireOnProfileDataUpdated(DisplayableProfileData profileData) {
         for (Observer observer : mObservers) {
             observer.onProfileDataUpdated(profileData);
         }
     }
 
+    private @Nullable AccountInfo findAccountInfo(CoreAccountId accountId) {
+        var accountInfo = mIdentityManager.findExtendedAccountInfoByAccountId(accountId);
+        if (accountInfo != null) {
+            return accountInfo;
+        }
+        var coreAccounts = getCoreAccountsIfLoaded();
+        if (coreAccounts != null) {
+            for (var coreAccountInfo : coreAccounts) {
+                if (coreAccountInfo.getId().equals(accountId)) {
+                    return coreAccountInfo;
+                }
+            }
+        }
+        var primaryAccountInfo = getPrimaryAccountInfo();
+        if (primaryAccountInfo != null && primaryAccountInfo.getId().equals(accountId)) {
+            return primaryAccountInfo;
+        }
+        return null;
+    }
+
+    private @Nullable AccountInfo getPrimaryAccountInfo() {
+        var primaryAccountInfo = mIdentityManager.getPrimaryAccountInfo();
+        if (primaryAccountInfo == null) {
+            return null;
+        }
+        return new AccountInfo.Builder(primaryAccountInfo).build();
+    }
+
+    private @Nullable List<AccountInfo> getCoreAccountsIfLoaded() {
+        if (SigninFeatureMap.isEnabled(SigninFeatures.MAKE_IDENTITY_MANAGER_SOURCE_OF_ACCOUNTS)) {
+            if (mIdentityManager.areRefreshTokensLoaded()) {
+                return mIdentityManager.getExtendedAccountInfoForAccountsWithRefreshToken();
+            }
+            return null;
+        } else {
+            var accounts = mAccountManagerFacade.getAccounts();
+            if (accounts.isFulfilled()) {
+                return accounts.getResult();
+            }
+            return null;
+        }
+    }
+
     // TODO(crbug.com/40944114): Consider using UiUtils.drawIconWithBadge instead.
-    private Drawable overlayBadgeOnUserPicture(BadgeConfig badgeConfig, Drawable userPicture) {
+    private Drawable overlayBadgeOnUserPicture(
+            BadgeConfig badgeConfig, Drawable userPicture, boolean isPadded) {
+        int padding = isPadded ? mTotalPadding : 0;
+
         int badgeSize = badgeConfig.getBadgeSize();
-        int badgedPictureWidth = Math.max(badgeConfig.getPosition().x + badgeSize, mImageSize);
-        int badgedPictureHeight = Math.max(badgeConfig.getPosition().y + badgeSize, mImageSize);
+        int badgeX = badgeConfig.getPosition().x + padding;
+        int badgeY = badgeConfig.getPosition().y + padding;
+        int borderSize = badgeConfig.getBorderSize();
+
+        int badgedPictureWidth = isPadded ? mImageSize : Math.max(badgeX + badgeSize, mImageSize);
+        int badgedPictureHeight = isPadded ? mImageSize : Math.max(badgeY + badgeSize, mImageSize);
+
         Bitmap badgedPicture =
                 Bitmap.createBitmap(
                         badgedPictureWidth, badgedPictureHeight, Bitmap.Config.ARGB_8888);
@@ -452,24 +632,58 @@ public class ProfileDataCache implements IdentityManager.Observer, AccountsChang
 
         // Cut a transparent hole through the background image.
         // This will serve as a border to the badge being overlaid.
-        Paint paint = new Paint();
-        paint.setAntiAlias(true);
+        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         paint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.CLEAR));
         float badgeRadius = (float) badgeSize / 2;
-        float badgeCenterX = badgeConfig.getPosition().x + badgeRadius;
-        float badgeCenterY = badgeConfig.getPosition().y + badgeRadius;
-        canvas.drawCircle(
-                badgeCenterX, badgeCenterY, badgeRadius + badgeConfig.getBorderSize(), paint);
+        float badgeCenterX = badgeX + badgeRadius;
+        float badgeCenterY = badgeY + badgeRadius;
+        canvas.drawCircle(badgeCenterX, badgeCenterY, badgeRadius + borderSize, paint);
 
         // Draw the badge
         Drawable badge = badgeConfig.getBadge();
-        badge.setBounds(
-                badgeConfig.getPosition().x,
-                badgeConfig.getPosition().y,
-                badgeConfig.getPosition().x + badgeSize,
-                badgeConfig.getPosition().y + badgeSize);
+        badge.setBounds(badgeX, badgeY, badgeX + badgeSize, badgeY + badgeSize);
         badge.draw(canvas);
         return new BitmapDrawable(mContext.getResources(), badgedPicture);
+    }
+
+    private Drawable padAvatarForAiTierRing(Drawable userPicture) {
+        Bitmap badgedPicture = Bitmap.createBitmap(mImageSize, mImageSize, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(badgedPicture);
+
+        Rect oldBounds = userPicture.getBounds();
+        userPicture.setBounds(
+                mTotalPadding,
+                mTotalPadding,
+                mImageSize - mTotalPadding,
+                mImageSize - mTotalPadding);
+        userPicture.draw(canvas);
+        userPicture.setBounds(oldBounds);
+
+        return new BitmapDrawable(mContext.getResources(), badgedPicture);
+    }
+
+    private Drawable overlayAiRingOnAvatar(Drawable paddedPicture) {
+        Bitmap badgedPicture = ((BitmapDrawable) paddedPicture).getBitmap();
+        Canvas canvas = new Canvas(badgedPicture);
+
+        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(mRingThicknessPx);
+
+        RectF bounds = new RectF(0, 0, badgedPicture.getWidth(), badgedPicture.getHeight());
+        float strokeInset = mRingThicknessPx / 2f;
+        bounds.inset(strokeInset, strokeInset);
+
+        if (mBrandingDelegate != null && !bounds.isEmpty()) {
+            paint.setShader(mBrandingDelegate.getRingShader(bounds));
+        } else {
+            // Fall back to the default solid blue color if no delegate or shader is provided.
+            paint.setColor(Color.BLUE);
+            paint.setShader(null);
+        }
+
+        canvas.drawOval(bounds, paint);
+        return paddedPicture;
     }
 
     private static Drawable getScaledPlaceholderImage(Context context, int imageSize) {
@@ -492,62 +706,97 @@ public class ProfileDataCache implements IdentityManager.Observer, AccountsChang
                 : mDefaultBadgeConfig;
     }
 
+    private class AccountManagerAccountsChangeObserver implements AccountsChangeObserver {
+
+        /** Implements {@link AccountsChangeObserver}. */
+        @Override
+        public void onAccountsChanged() {
+            assert !SigninFeatureMap.isEnabled(
+                    SigninFeatures.MAKE_IDENTITY_MANAGER_SOURCE_OF_ACCOUNTS);
+            updateCache(mAccountManagerFacade.getAccounts().getResult());
+        }
+    }
+
+    private class IdentityManagerAccountsChangeObserver implements IdentityManager.Observer {
+
+        /** Implements {@link IdentityManager.Observer}. */
+        @Override
+        public void onRefreshTokensLoaded() {
+            assert SigninFeatureMap.isEnabled(
+                    SigninFeatures.MAKE_IDENTITY_MANAGER_SOURCE_OF_ACCOUNTS);
+            updateCache(mIdentityManager.getExtendedAccountInfoForAccountsWithRefreshToken());
+        }
+
+        /** Implements {@link IdentityManager.Observer}. */
+        @Override
+        public void onRefreshTokenUpdatedForAccount(CoreAccountInfo coreAccountInfo) {
+            assert SigninFeatureMap.isEnabled(
+                    SigninFeatures.MAKE_IDENTITY_MANAGER_SOURCE_OF_ACCOUNTS);
+            if (mIdentityManager.areRefreshTokensLoaded()) {
+                updateCache(mIdentityManager.getExtendedAccountInfoForAccountsWithRefreshToken());
+            }
+        }
+
+        /** Implements {@link IdentityManager.Observer}. */
+        @Override
+        public void onRefreshTokenRemovedForAccount(CoreAccountId accountId) {
+            assert SigninFeatureMap.isEnabled(
+                    SigninFeatures.MAKE_IDENTITY_MANAGER_SOURCE_OF_ACCOUNTS);
+            if (mIdentityManager.areRefreshTokensLoaded()) {
+                updateCache(mIdentityManager.getExtendedAccountInfoForAccountsWithRefreshToken());
+            }
+        }
+    }
+
     private static final class AccountsCache {
-        private Promise<List<DisplayableProfileData>> mAccounts = new Promise<>();
+
+        private Promise<Map<CoreAccountId, DisplayableProfileData>> mAccounts = new Promise<>();
 
         private Promise<List<DisplayableProfileData>> getAll() {
-            return mAccounts;
-        }
-
-        private void setAccounts(List<DisplayableProfileData> accounts) {
-            final var accountsPromise = mAccounts;
-            if (accountsPromise.isFulfilled()) {
-                mAccounts = Promise.fulfilled(accounts);
+            if (mAccounts.isFulfilled()) {
+                return Promise.fulfilled(new ArrayList<>(mAccounts.getResult().values()));
             } else {
-                accountsPromise.fulfill(accounts);
+                return mAccounts.then(
+                        (Function<
+                                        Map<CoreAccountId, DisplayableProfileData>,
+                                        List<DisplayableProfileData>>)
+                                accounts -> new ArrayList<>(accounts.values()));
             }
         }
 
-        private void putAccount(DisplayableProfileData account) {
-            final var accountsPromise = mAccounts;
-            if (accountsPromise.isFulfilled()) {
-                var accounts = accountsPromise.getResult();
-                int index = 0;
-                for (var existingAccount : accounts) {
-                    if (existingAccount.getAccountEmail().equals(account.getAccountEmail())) {
-                        break;
-                    }
-                    ++index;
-                }
-                if (index < accounts.size()) {
-                    accounts.set(index, account);
-                } else {
-                    accounts.add(account);
-                }
+        private void setAccounts(Map<CoreAccountId, DisplayableProfileData> accounts) {
+            if (mAccounts.isFulfilled()) {
                 mAccounts = Promise.fulfilled(accounts);
             } else {
-                var accounts = new ArrayList<DisplayableProfileData>();
-                accounts.add(account);
-                accountsPromise.fulfill(accounts);
+                mAccounts.fulfill(accounts);
             }
         }
 
-        private @Nullable DisplayableProfileData getByEmail(String email) {
-            final var accountsPromise = mAccounts;
-            if (accountsPromise.isFulfilled()) {
-                for (var account : accountsPromise.getResult()) {
-                    if (account.getAccountEmail().equals(email)) {
-                        return account;
-                    }
-                }
+        private void putAccount(CoreAccountId accountId, DisplayableProfileData profileData) {
+            if (mAccounts.isFulfilled()) {
+                final var accounts = mAccounts.getResult();
+                accounts.put(accountId, profileData);
+                mAccounts = Promise.fulfilled(accounts);
+            } else {
+                final var accounts = new LinkedHashMap<CoreAccountId, DisplayableProfileData>();
+                accounts.put(accountId, profileData);
+                mAccounts.fulfill(accounts);
+            }
+        }
+
+        private @Nullable DisplayableProfileData getByAccountId(CoreAccountId accountId) {
+            if (mAccounts.isFulfilled()) {
+                return mAccounts.getResult().get(accountId);
             }
             return null;
         }
 
-        private void clear() {
-            if (mAccounts.isFulfilled()) {
-                mAccounts = new Promise<>();
-            }
+        private boolean contains(final CoreAccountId accountId) {
+            return getByAccountId(accountId) != null;
+        }
+
+        private boolean isLoaded() {
+            return mAccounts.isFulfilled();
         }
     }
 }

@@ -39,8 +39,11 @@ bool ValidateBoundary(ExecutionContext* execution_context,
                       bool allow_auto) {
   if (boundary->IsString()) {
     CSSParserTokenStream stream(boundary->GetAsString());
+    // We don't compute CSS random() function here, only check the grammar
+    // while parsing, since `value` is not used later. Hence we don't need
+    // property context here.
     CSSParserLocalContext local_context =
-        CSSParserLocalContext::CreateWithoutPropertyForAnimations();
+        CSSParserLocalContext::CreateWithoutPropertyForSyntaxParsing();
     const CSSValue* value = css_parsing_utils::ConsumeAnimationRange(
         stream,
         *To<LocalDOMWindow>(execution_context)
@@ -88,7 +91,7 @@ double ComputeTriggerBoundary(std::optional<TimelineOffset> offset,
                               double default_value,
                               const ScrollTimeline& timeline,
                               const TimelineRange::ScrollOffsets& range_offsets,
-                              Element& timeline_source) {
+                              const Node& timeline_source) {
   if (offset) {
     // |range_offsets| is in physical pixels. Get the range values in CSS
     // pixels.
@@ -275,11 +278,30 @@ const TimelineTriggerRange::Boundary* TimelineTriggerRange::activeRangeEnd(
   return active_range_end_;
 }
 
-TimelineTriggerRange::TriggerBoundaries
+Node* TimelineTriggerRange::ComputeBoundariesSource(
+    const ScrollTimeline& timeline) {
+  Node* timeline_source = timeline.ComputeResolvedSource();
+  if (!timeline_source) {
+    return nullptr;
+  }
+
+  if (IsA<LayoutView>(timeline_source->GetLayoutObject())) {
+    // If the source is the root document, it isn't an "Element", so we need
+    // to work with its scrollingElement
+    timeline_source = To<Document>(timeline_source)->ScrollingElementNoLayout();
+  }
+
+  return timeline_source;
+}
+
+std::optional<TimelineTriggerRange::TriggerBoundaries>
 TimelineTriggerRange::ComputeTriggerBoundaries(double current_offset,
                                                Element& timeline_source,
                                                const ScrollTimeline& timeline) {
   const auto timeline_state = timeline.ComputeTimelineState();
+  if (!timeline_state.scroll_offsets) {
+    return std::nullopt;
+  }
 
   TriggerBoundaries boundaries;
 
@@ -337,12 +359,13 @@ TimelineTriggerRange::ComputeTriggerBoundaries(double current_offset,
   return boundaries;
 }
 
-std::optional<TimelineTriggerState> TimelineTriggerRange::UpdateState() {
-  last_snapshot_state_ = ComputeState().value_or(last_snapshot_state_);
-  return last_snapshot_state_;
+std::optional<TimelineTriggerRange::State> TimelineTriggerRange::UpdateState() {
+  state_ = ComputeState().value_or(state_);
+  return state_;
 }
 
-std::optional<TimelineTriggerState> TimelineTriggerRange::ComputeState() {
+std::optional<TimelineTriggerRange::State>
+TimelineTriggerRange::ComputeState() {
   if (!timeline_ || !timeline_->IsActive()) {
     return std::nullopt;
   }
@@ -360,26 +383,18 @@ std::optional<TimelineTriggerState> TimelineTriggerRange::ComputeState() {
       return std::nullopt;
     }
 
-    Node* timeline_source = timeline->ComputeResolvedSource();
-    if (!timeline_source) {
-      return std::nullopt;
-    }
+    Node* timeline_source = ComputeBoundariesSource(*timeline);
 
     current_offset = AdjustForAbsoluteZoom::AdjustScroll(
         *current_offset, *timeline_source->GetLayoutObject());
 
-    if (IsA<LayoutView>(timeline_source->GetLayoutObject())) {
-      // If the source is the root document, it isn't an "Element", so we need
-      // to work with its scrollingElement
-      timeline_source =
-          To<Document>(timeline_source)->ScrollingElementNoLayout();
-      if (!timeline_source) {
-        return std::nullopt;
-      }
+    const std::optional<TriggerBoundaries>& trigger_boundaries =
+        ComputeTriggerBoundaries(*current_offset, *To<Element>(timeline_source),
+                                 *timeline);
+    if (!trigger_boundaries) {
+      return std::nullopt;
     }
-
-    boundaries = ComputeTriggerBoundaries(
-        *current_offset, *To<Element>(timeline_source), *timeline);
+    boundaries = *trigger_boundaries;
   } else {
     // Only scroll-triggered animations are supported at the moment.
     // Return values that indicate that the a trigger with the document timeline
@@ -397,7 +412,7 @@ std::optional<TimelineTriggerState> TimelineTriggerRange::ComputeState() {
       WithinRange(boundaries.current_offset, boundaries.active_start,
                   boundaries.active_end);
 
-  State previous_state = last_snapshot_state_;
+  State previous_state = state_;
   State new_state = previous_state;
 
   if (within_activation_range) {
@@ -416,6 +431,81 @@ std::optional<TimelineTriggerState> TimelineTriggerRange::ComputeState() {
   }
 
   return new_state;
+}
+
+std::optional<TimelineTriggerRange::CcBoundaries>
+TimelineTriggerRange::ComputeCcBoundaries(cc::AnimationTimeline* cc_timeline) {
+  if (!timeline_ || !timeline_->IsProgressBased()) {
+    // Non progress based triggers are always in a tripped state,
+    // no need to composite the trigger so we should not be in this function.
+    return std::nullopt;
+  }
+
+  ScrollTimeline* timeline =
+      DynamicTo<ScrollTimeline>(timeline_->ExposedTimeline());
+  if (!timeline) {
+    return std::nullopt;
+  }
+
+  const std::optional<cc::ScrollTimeline::ScrollOffsets>& pending_offsets =
+      static_cast<cc::ScrollTimeline*>(cc_timeline)->pending_offsets();
+  if (!pending_offsets) {
+    return std::nullopt;
+  }
+  Node* timeline_source = ComputeBoundariesSource(*timeline);
+  if (!timeline_source) {
+    return std::nullopt;
+  }
+
+  std::optional<TriggerBoundaries> trigger_boundaries =
+      ComputeTriggerBoundaries(
+          /*(unused) current_offset=*/0, *To<Element>(timeline_source),
+          *timeline);
+  if (!trigger_boundaries) {
+    return std::nullopt;
+  }
+
+  // Blink boundaries are calculated in CSS pixels, but cc ScrollTimeline
+  // offsets are in physical pixels. So, scale the blink boundaries into
+  // physical pixels.
+  // TODO(451238244): Update boundaries whenever zoom factor changes.
+  double zoom_factor =
+      timeline_source->GetLayoutBox()->StyleRef().EffectiveZoom();
+  trigger_boundaries->activation_start *= zoom_factor;
+  trigger_boundaries->activation_end *= zoom_factor;
+  trigger_boundaries->active_start *= zoom_factor;
+  trigger_boundaries->active_end *= zoom_factor;
+
+  const double ms_per_pixel_multiplier =
+      cc::ScrollTimeline::kScrollTimelineMicrosecondsPerPixel;
+
+  // In cc, we evaluate "enter" and "exit" using the current time of the
+  // timeline. The current time of the timeline is measured relative to the
+  // start of the timeline's range which, in the case of a view timeline, is the
+  // start of its cover range.
+  double timeline_start_offset = pending_offsets->start;
+
+  CcBoundaries cc_boundaries;
+  cc_boundaries.activation_start_time =
+      base::TimeTicks() +
+      base::Microseconds(
+          (trigger_boundaries->activation_start - timeline_start_offset) *
+          ms_per_pixel_multiplier);
+  cc_boundaries.activation_end_time =
+      base::TimeTicks() +
+      base::Microseconds(
+          (trigger_boundaries->activation_end - timeline_start_offset) *
+          ms_per_pixel_multiplier);
+  cc_boundaries.active_start_time =
+      base::TimeTicks() + base::Microseconds((trigger_boundaries->active_start -
+                                              timeline_start_offset) *
+                                             ms_per_pixel_multiplier);
+  cc_boundaries.active_end_time =
+      base::TimeTicks() + base::Microseconds((trigger_boundaries->active_end -
+                                              timeline_start_offset) *
+                                             ms_per_pixel_multiplier);
+
+  return cc_boundaries;
 }
 
 void TimelineTriggerRange::Trace(Visitor* visitor) const {

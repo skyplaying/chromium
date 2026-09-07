@@ -25,13 +25,16 @@ import '../settings_shared.css.js';
 import '../settings_vars.css.js';
 
 import type {SettingsPrefsElement} from '/shared/settings/prefs/prefs.js';
+import {ColorChangeUpdater, COLORS_CSS_SELECTOR} from 'chrome://resources/cr_components/color_change_listener/colors_css_updater.js';
 import type {CrDrawerElement} from 'chrome://resources/cr_elements/cr_drawer/cr_drawer.js';
 import type {CrToolbarElement} from 'chrome://resources/cr_elements/cr_toolbar/cr_toolbar.js';
 import {FindShortcutMixin} from 'chrome://resources/cr_elements/find_shortcut_mixin.js';
+import {assert} from 'chrome://resources/js/assert.js';
 import {listenOnce} from 'chrome://resources/js/util.js';
 import type {DomIf} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
+import {ActiveTimer} from '../active_timer.js';
 import {resetGlobalScrollTargetForTesting, setGlobalScrollTarget} from '../global_scroll_target_mixin.js';
 import {loadTimeData} from '../i18n_setup.js';
 import {routes} from '../route.js';
@@ -99,10 +102,12 @@ export class SettingsUiElement extends SettingsUiElementBase {
     };
   }
 
-  declare prefs: {[key: string]: any};
+  declare prefs: Record<string, unknown>;
   declare private toolbarSpinnerActive_: boolean;
   declare private narrow_: boolean;
   declare private lastSearchQuery_: string;
+
+  private activeTimer_: ActiveTimer|null = null;
 
   constructor() {
     super();
@@ -154,12 +159,24 @@ export class SettingsUiElement extends SettingsUiElementBase {
   override connectedCallback() {
     super.connectedCallback();
 
+    const enableThemedColors =
+        loadTimeData.getString('webuiRefresh2026') !== '' ||
+        loadTimeData.getString('settingsRefresh2026') !== '';
+    if (enableThemedColors) {
+      this.addThemedColors_();
+      ColorChangeUpdater.forDocument().start();
+    }
     document.documentElement.classList.remove('loading');
 
     // Preload bold Roboto so it doesn't load and flicker the first time used.
-    // https://github.com/microsoft/TypeScript/issues/13569
-    (document as any).fonts.load('bold 12px Roboto');
+    document.fonts.load('bold 12px Roboto');
     setGlobalScrollTarget(this.$.container);
+
+    this.activeTimer_ = new ActiveTimer((duration) => {
+      chrome.metricsPrivate.recordLongTime(
+          'WebUI.Settings.ActiveDuration', duration);
+    });
+    this.activeTimer_.start();
   }
 
   override disconnectedCallback() {
@@ -167,6 +184,11 @@ export class SettingsUiElement extends SettingsUiElementBase {
 
     Router.getInstance().resetRouteForTesting();
     resetGlobalScrollTargetForTesting();
+
+    if (this.activeTimer_) {
+      this.activeTimer_.stop();
+      this.activeTimer_ = null;
+    }
   }
 
   override currentRouteChanged(route: Route) {
@@ -296,6 +318,14 @@ export class SettingsUiElement extends SettingsUiElementBase {
       };
       this.$.drawer.addEventListener('close', boundCloseListener);
     }
+  }
+
+  private addThemedColors_() {
+    assert(document.body.querySelector(COLORS_CSS_SELECTOR) === null);
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = 'chrome://theme/colors.css?sets=ui,chrome';
+    document.body.appendChild(link);
   }
 }
 

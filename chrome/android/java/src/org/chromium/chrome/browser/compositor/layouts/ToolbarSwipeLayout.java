@@ -27,6 +27,7 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
+import org.chromium.chrome.browser.browser_controls.BrowserControlsVisibilityManager;
 import org.chromium.chrome.browser.compositor.layouts.components.LayoutTab;
 import org.chromium.chrome.browser.compositor.layouts.eventfilter.BlackHoleEventFilter;
 import org.chromium.chrome.browser.compositor.scene_layer.ToolbarSwipeSceneLayer;
@@ -44,8 +45,10 @@ import org.chromium.chrome.browser.tabmodel.TabClosureParams;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelUtils;
 import org.chromium.chrome.browser.tasks.tab_management.TabUiUtils;
-import org.chromium.chrome.browser.theme.TopUiThemeColorProvider;
+import org.chromium.chrome.browser.theme.ToolbarThemeColorProvider;
+import org.chromium.chrome.browser.toolbar.ControlContainer;
 import org.chromium.chrome.browser.toolbar.top.TopToolbarOverlayCoordinator;
+import org.chromium.chrome.browser.ui.native_page.NativePage;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
 import org.chromium.components.browser_ui.widget.gesture.SwipeGestureListener.ScrollDirection;
 import org.chromium.components.embedder_support.util.UrlUtilities;
@@ -90,9 +93,12 @@ public class ToolbarSwipeLayout extends Layout {
             ObservableSuppliers.createNullable();
 
     private final ViewGroup mContentContainer;
+    private final @Nullable View mControlView;
 
     // Whether or not to show the toolbar.
     private final boolean mMoveToolbar;
+
+    private final Runnable mForceLayoutUpdateAndCaptureRunnable;
 
     // Offsets are in pixels [0, width].
     private float mOffsetStart;
@@ -106,9 +112,9 @@ public class ToolbarSwipeLayout extends Layout {
     private final BlackHoleEventFilter mBlackHoleEventFilter;
     private @Nullable ToolbarSwipeSceneLayer mSceneLayer;
 
-    private final BrowserControlsStateProvider mBrowserControlsStateProvider;
+    private final BrowserControlsVisibilityManager mBrowserControlsVisibilityManager;
 
-    // This is a work around for crbug.com/1348624. We need to call switch to tab after
+    // This is a work around for crbug.com/40233431. We need to call switch to tab after
     // ToolbarSwipeLayout is shown when it's switching to a tab.
     private boolean mIsSwitchToStaticTab;
     private int mToTabId;
@@ -128,19 +134,23 @@ public class ToolbarSwipeLayout extends Layout {
             Context context,
             LayoutUpdateHost updateHost,
             LayoutRenderHost renderHost,
-            BrowserControlsStateProvider browserControlsStateProvider,
+            BrowserControlsVisibilityManager browserControlsVisibilityManager,
             LayoutManager layoutManager,
-            TopUiThemeColorProvider topUiColorProvider,
+            ToolbarThemeColorProvider toolbarColorProvider,
             NonNullObservableSupplier<Integer> bottomControlsOffsetSupplier,
-            ViewGroup contentContainer) {
+            ViewGroup contentContainer,
+            @Nullable ControlContainer controlContainer,
+            Runnable forceLayoutUpdateAndCaptureRunnable) {
         super(context, updateHost, renderHost);
+        mControlView = controlContainer instanceof View ? (View) controlContainer : null;
         mBlackHoleEventFilter = new BlackHoleEventFilter(context);
-        mBrowserControlsStateProvider = browserControlsStateProvider;
+        mBrowserControlsVisibilityManager = browserControlsVisibilityManager;
         Resources res = context.getResources();
         final float pxToDp = 1.0f / res.getDisplayMetrics().density;
         mCommitDistanceFromEdge = res.getDimension(R.dimen.toolbar_swipe_commit_distance) * pxToDp;
         mSpaceBetweenTabs = res.getDimension(R.dimen.toolbar_swipe_space_between_tabs) * pxToDp;
         mContentContainer = contentContainer;
+        mForceLayoutUpdateAndCaptureRunnable = forceLayoutUpdateAndCaptureRunnable;
 
         mMoveToolbar = !DeviceFormFactor.isNonMultiDisplayContextOnTablet(context);
 
@@ -155,9 +165,9 @@ public class ToolbarSwipeLayout extends Layout {
                             layoutManager,
                             CallbackUtils.emptyCallback(),
                             mLeftTabSupplier,
-                            mBrowserControlsStateProvider,
-                            () -> mRenderHost.getResourceManager(),
-                            topUiColorProvider,
+                            mBrowserControlsVisibilityManager,
+                            mRenderHost::getResourceManager,
+                            toolbarColorProvider,
                             bottomControlsOffsetSupplier,
                             ObservableSuppliers.alwaysFalse(),
                             LayoutType.TOOLBAR_SWIPE,
@@ -173,9 +183,9 @@ public class ToolbarSwipeLayout extends Layout {
                             layoutManager,
                             CallbackUtils.emptyCallback(),
                             mRightTabSupplier,
-                            mBrowserControlsStateProvider,
-                            () -> mRenderHost.getResourceManager(),
-                            topUiColorProvider,
+                            mBrowserControlsVisibilityManager,
+                            mRenderHost::getResourceManager,
+                            toolbarColorProvider,
                             bottomControlsOffsetSupplier,
                             ObservableSuppliers.alwaysFalse(),
                             LayoutType.TOOLBAR_SWIPE,
@@ -207,12 +217,18 @@ public class ToolbarSwipeLayout extends Layout {
 
     @Override
     public boolean forceHideBrowserControlsAndroidView() {
-        // If the toolbar moves, the android browser controls need to be hidden.
+        if (ChromeFeatureList.sControlsInBrowserToolbarSwipeMock.isEnabled()) {
+            return false;
+        }
         return super.forceHideBrowserControlsAndroidView() || mMoveToolbar;
     }
 
     @Override
     public void doneHiding() {
+        if (ChromeFeatureList.sControlsInBrowserToolbarSwipeMock.isEnabled()
+                && mControlView != null) {
+            mControlView.setTranslationX(0f);
+        }
         // Native pages already had thumbnails captured in `show()` so repeat work can be bypassed
         // by hiding the tab early. This also fixes a blank NTP from being captured after Feed
         // memory optimizations.
@@ -297,6 +313,12 @@ public class ToolbarSwipeLayout extends Layout {
                 (LocalizationUtils.isLayoutRtl() ^ dragFromLeftEdge)
                         ? fromIndex - 1
                         : fromIndex + 1;
+
+        Tab currentTab = mTabModelSelector.getCurrentTab();
+        NativePage nativePage = (currentTab != null) ? currentTab.getNativePage() : null;
+        if (nativePage != null && nativePage.supportsEdgeToEdgeOnTop()) {
+            mForceLayoutUpdateAndCaptureRunnable.run();
+        }
 
         prepareSwipeTabAnimation(direction, fromIndex, toIndex);
     }
@@ -523,6 +545,13 @@ public class ToolbarSwipeLayout extends Layout {
         //                that's what all layouts expect as input.
         final float dpToPx = getContext().getResources().getDisplayMetrics().density;
 
+        if (ChromeFeatureList.sControlsInBrowserToolbarSwipeMock.isEnabled()
+                && mControlView != null
+                && mFromTab != null) {
+            float fromX = (mFromTab == mLeftTab) ? leftX : rightX;
+            mControlView.setTranslationX(fromX * dpToPx);
+        }
+
         if (mLeftTab != null) {
             if (mLeftToolbarOverlay != null) {
                 mLeftToolbarOverlay.setManualVisibility(true);
@@ -530,7 +559,7 @@ public class ToolbarSwipeLayout extends Layout {
                 mLeftToolbarOverlay.setXOffset(leftX * dpToPx);
             }
             mLeftTab.setX(leftX);
-            mLeftTab.setY(mBrowserControlsStateProvider.getContentOffset() / dpToPx);
+            mLeftTab.setY(mBrowserControlsVisibilityManager.getContentOffset() / dpToPx);
             needUpdate = updateSnap(dt, mLeftTab) || needUpdate;
         } else if (mLeftToolbarOverlay != null) {
             mLeftToolbarOverlay.setManualVisibility(false);
@@ -543,7 +572,7 @@ public class ToolbarSwipeLayout extends Layout {
                 mRightToolbarOverlay.setXOffset(rightX * dpToPx);
             }
             mRightTab.setX(rightX);
-            mRightTab.setY(mBrowserControlsStateProvider.getContentOffset() / dpToPx);
+            mRightTab.setY(mBrowserControlsVisibilityManager.getContentOffset() / dpToPx);
             needUpdate = updateSnap(dt, mRightTab) || needUpdate;
         } else if (mRightToolbarOverlay != null) {
             mRightToolbarOverlay.setManualVisibility(false);
@@ -570,6 +599,10 @@ public class ToolbarSwipeLayout extends Layout {
     }
 
     private void init() {
+        if (ChromeFeatureList.sControlsInBrowserToolbarSwipeMock.isEnabled()
+                && mControlView != null) {
+            mControlView.setTranslationX(0f);
+        }
         mLayoutTabs = null;
         mFromTab = null;
         mLeftTab = null;
@@ -578,6 +611,15 @@ public class ToolbarSwipeLayout extends Layout {
         mOffsetStart = 0;
         mOffset = 0;
         mOffsetTarget = 0;
+    }
+
+    @Override
+    public void destroy() {
+        if (ChromeFeatureList.sControlsInBrowserToolbarSwipeMock.isEnabled()
+                && mControlView != null) {
+            mControlView.setTranslationX(0f);
+        }
+        super.destroy();
     }
 
     @Override

@@ -21,15 +21,14 @@
 #include "chrome/browser/profiles/profile_key.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_test_util.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/optimization_guide/core/delivery/model_store_metadata_entry.h"
 #include "components/optimization_guide/core/delivery/model_util.h"
 #include "components/optimization_guide/core/delivery/prediction_manager.h"
 #include "components/optimization_guide/core/delivery/prediction_model_fetch_timer.h"
-#include "components/optimization_guide/core/optimization_guide_constants.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
-#include "components/optimization_guide/core/optimization_guide_switches.h"
+#include "components/optimization_guide/core/optimization_guide_permissions_util.h"
 #include "components/optimization_guide/proto/models.pb.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -86,7 +85,7 @@ class PredictionModelStoreBrowserTestBase : public InProcessBrowserTest {
         net::EmbeddedTestServer::TYPE_HTTPS);
     net::EmbeddedTestServer::ServerCertificateConfig models_server_cert_config;
     models_server_cert_config.dns_names = {
-        GURL(kOptimizationGuideServiceGetModelsDefaultURL).GetHost()};
+        features::GetOptimizationGuideServiceGetModelsURL().GetHost()};
     models_server_cert_config.ip_addresses = {net::IPAddress::IPv4Localhost()};
     models_server_->SetSSLConfig(models_server_cert_config);
     models_server_->ServeFilesFromSourceDirectory(
@@ -113,12 +112,12 @@ class PredictionModelStoreBrowserTestBase : public InProcessBrowserTest {
   }
 
   void SetUpCommandLine(base::CommandLine* cmd) override {
-    cmd->AppendSwitch(switches::kGoogleApiKeyConfigurationCheckOverride);
+    cmd->AppendSwitch(kGoogleApiKeyConfigurationCheckOverrideSwitch);
     cmd->AppendSwitchASCII(
-        switches::kOptimizationGuideServiceGetModelsURL,
+        features::kOptimizationGuideServiceGetModelsURLSwitch,
         models_server_
             ->GetURL(
-                GURL(kOptimizationGuideServiceGetModelsDefaultURL).GetHost(),
+                features::GetOptimizationGuideServiceGetModelsURL().GetHost(),
                 "/")
             .spec());
     cmd->AppendSwitchASCII("force-variation-ids", "4");
@@ -155,7 +154,7 @@ class PredictionModelStoreBrowserTestBase : public InProcessBrowserTest {
         run_loop.get()));
 
     RegisterModelFileObserverWithKeyedService(
-        model_file_observer, profile ? profile : browser()->profile());
+        model_file_observer, profile ? profile : browser()->GetProfile());
     base::test::ScopedRunLoopTimeout model_file_download_timeout(
         FROM_HERE, kModelFileDownloadTimeout);
     run_loop->Run();
@@ -273,8 +272,7 @@ IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest,
   RegisterAndWaitForModelUpdate(&model_file_observer);
   EXPECT_EQ(model_file_observer.optimization_target(),
             proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD);
-  EXPECT_TRUE(
-      model_file_observer.model_info()->GetModelFilePath().IsAbsolute());
+  EXPECT_TRUE(model_file_observer.model_info()->model_file_path.IsAbsolute());
 
   histogram_tester_.ExpectUniqueSample(
       "OptimizationGuide.PredictionModelDownloadManager.DownloadStatus",
@@ -303,22 +301,22 @@ IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest,
       PredictionModelDownloadStatus::kSuccess, 1);
   EXPECT_EQ(model_file_observer.optimization_target(),
             proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD);
-  EXPECT_TRUE(
-      model_file_observer.model_info()->GetModelFilePath().IsAbsolute());
+  EXPECT_TRUE(model_file_observer.model_info()->model_file_path.IsAbsolute());
 
   base::HistogramTester histogram_tester_otr;
   ModelFileObserver model_file_observer_otr;
-  Browser* otr_browser = CreateIncognitoBrowser(browser()->profile());
+  BrowserWindowInterface* otr_browser =
+      CreateIncognitoBrowser(browser()->GetProfile());
   RegisterAndWaitForModelUpdate(&model_file_observer_otr,
-                                otr_browser->profile());
+                                otr_browser->GetProfile());
 
   // No more downloads should happen.
   histogram_tester_otr.ExpectTotalCount(
       "OptimizationGuide.PredictionModelDownloadManager.DownloadStatus", 0);
   EXPECT_EQ(model_file_observer_otr.optimization_target(),
             proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD);
-  EXPECT_EQ(model_file_observer.model_info()->GetModelFilePath(),
-            model_file_observer_otr.model_info()->GetModelFilePath());
+  EXPECT_EQ(model_file_observer.model_info()->model_file_path,
+            model_file_observer_otr.model_info()->model_file_path);
 }
 
 // Tests that two similar profiles share the model, and the model is not
@@ -333,8 +331,7 @@ IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest,
       PredictionModelDownloadStatus::kSuccess, 1);
   EXPECT_EQ(model_file_observer.optimization_target(),
             proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD);
-  EXPECT_TRUE(
-      model_file_observer.model_info()->GetModelFilePath().IsAbsolute());
+  EXPECT_TRUE(model_file_observer.model_info()->model_file_path.IsAbsolute());
 
   base::HistogramTester histogram_tester_foo;
   ModelFileObserver model_file_observer_foo;
@@ -346,8 +343,8 @@ IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest,
       "OptimizationGuide.PredictionModelDownloadManager.DownloadStatus", 0);
   EXPECT_EQ(model_file_observer_foo.optimization_target(),
             proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD);
-  EXPECT_EQ(model_file_observer.model_info()->GetModelFilePath(),
-            model_file_observer_foo.model_info()->GetModelFilePath());
+  EXPECT_EQ(model_file_observer.model_info()->model_file_path,
+            model_file_observer_foo.model_info()->model_file_path);
 }
 
 // Tests that two dissimilar profiles do not share the model, and the model will
@@ -362,8 +359,7 @@ IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest,
       PredictionModelDownloadStatus::kSuccess, 1);
   EXPECT_EQ(model_file_observer.optimization_target(),
             proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD);
-  EXPECT_TRUE(
-      model_file_observer.model_info()->GetModelFilePath().IsAbsolute());
+  EXPECT_TRUE(model_file_observer.model_info()->model_file_path.IsAbsolute());
 
   {
     base::HistogramTester histogram_tester_foo;
@@ -378,11 +374,11 @@ IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest,
         PredictionModelDownloadStatus::kSuccess, 1);
     EXPECT_EQ(model_file_observer_foo.optimization_target(),
               proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD);
-    EXPECT_NE(model_file_observer.model_info()->GetModelFilePath(),
-              model_file_observer_foo.model_info()->GetModelFilePath());
+    EXPECT_NE(model_file_observer.model_info()->model_file_path,
+              model_file_observer_foo.model_info()->model_file_path);
     EXPECT_TRUE(base::ContentsEqual(
-        model_file_observer.model_info()->GetModelFilePath(),
-        model_file_observer_foo.model_info()->GetModelFilePath()));
+        model_file_observer.model_info()->model_file_path,
+        model_file_observer_foo.model_info()->model_file_path));
   }
 }
 
@@ -404,7 +400,7 @@ IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest,
     EXPECT_EQ(model_file_observer_foo.optimization_target(),
               proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD);
     EXPECT_TRUE(
-        model_file_observer_foo.model_info()->GetModelFilePath().IsAbsolute());
+        model_file_observer_foo.model_info()->model_file_path.IsAbsolute());
   }
   {
     base::HistogramTester histogram_tester_bar;
@@ -417,8 +413,8 @@ IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest,
         "OptimizationGuide.PredictionModelDownloadManager.DownloadStatus", 0);
     EXPECT_EQ(model_file_observer_bar.optimization_target(),
               proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD);
-    EXPECT_EQ(model_file_observer_foo.model_info()->GetModelFilePath(),
-              model_file_observer_bar.model_info()->GetModelFilePath());
+    EXPECT_EQ(model_file_observer_foo.model_info()->model_file_path,
+              model_file_observer_bar.model_info()->model_file_path);
   }
 }
 
@@ -443,7 +439,7 @@ IN_PROC_BROWSER_TEST_F(
     EXPECT_EQ(model_file_observer_foo.optimization_target(),
               proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD);
     EXPECT_TRUE(
-        model_file_observer_foo.model_info()->GetModelFilePath().IsAbsolute());
+        model_file_observer_foo.model_info()->model_file_path.IsAbsolute());
   }
   {
     set_server_model_cache_key(CreateModelCacheKey(kTestLocaleBar));
@@ -459,11 +455,11 @@ IN_PROC_BROWSER_TEST_F(
         PredictionModelDownloadStatus::kSuccess, 1);
     EXPECT_EQ(model_file_observer_bar.optimization_target(),
               proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD);
-    EXPECT_NE(model_file_observer_foo.model_info()->GetModelFilePath(),
-              model_file_observer_bar.model_info()->GetModelFilePath());
+    EXPECT_NE(model_file_observer_foo.model_info()->model_file_path,
+              model_file_observer_bar.model_info()->model_file_path);
     EXPECT_TRUE(base::ContentsEqual(
-        model_file_observer_foo.model_info()->GetModelFilePath(),
-        model_file_observer_bar.model_info()->GetModelFilePath()));
+        model_file_observer_foo.model_info()->model_file_path,
+        model_file_observer_bar.model_info()->model_file_path));
   }
 }
 
@@ -487,7 +483,7 @@ IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest,
     EXPECT_EQ(model_file_observer_foo.optimization_target(),
               proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD);
     EXPECT_TRUE(
-        model_file_observer_foo.model_info()->GetModelFilePath().IsAbsolute());
+        model_file_observer_foo.model_info()->model_file_path.IsAbsolute());
   }
   {
     // Mark the downloaded model as old version, to simulate model version
@@ -510,11 +506,11 @@ IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest,
         PredictionModelDownloadStatus::kSuccess, 1);
     EXPECT_EQ(model_file_observer_bar.optimization_target(),
               proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD);
-    EXPECT_NE(model_file_observer_foo.model_info()->GetModelFilePath(),
-              model_file_observer_bar.model_info()->GetModelFilePath());
+    EXPECT_NE(model_file_observer_foo.model_info()->model_file_path,
+              model_file_observer_bar.model_info()->model_file_path);
     EXPECT_TRUE(base::ContentsEqual(
-        model_file_observer_foo.model_info()->GetModelFilePath(),
-        model_file_observer_bar.model_info()->GetModelFilePath()));
+        model_file_observer_foo.model_info()->model_file_path,
+        model_file_observer_bar.model_info()->model_file_path));
     histogram_tester_bar.ExpectUniqueSample(
         "OptimizationGuide.PredictionModelUpdateVersion.PainfulPageLoad",
         kSuccessfulModelVersion, 1);
@@ -535,8 +531,7 @@ IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest,
     RegisterAndWaitForModelUpdate(&model_file_observer);
     EXPECT_EQ(model_file_observer.optimization_target(),
               proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD);
-    EXPECT_TRUE(
-        model_file_observer.model_info()->GetModelFilePath().IsAbsolute());
+    EXPECT_TRUE(model_file_observer.model_info()->model_file_path.IsAbsolute());
     histogram_tester.ExpectUniqueSample(
         "OptimizationGuide.PredictionModelDownloadManager.DownloadStatus",
         PredictionModelDownloadStatus::kSuccess, 1);
@@ -556,7 +551,7 @@ IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest,
     // Trigger the periodic fetch timer.
     base::HistogramTester histogram_tester;
     auto* prediction_model_fetch_timer =
-        GetPredictionManager(browser()->profile())
+        GetPredictionManager(browser()->GetProfile())
             ->GetPredictionModelFetchTimerForTesting();
     EXPECT_EQ(PredictionModelFetchTimer::PredictionModelFetchTimerState::
                   kPeriodicFetch,
@@ -574,7 +569,7 @@ IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest,
     histogram_tester.ExpectUniqueSample(
         "OptimizationGuide.PredictionModelDownloadManager.DownloadStatus",
         PredictionModelDownloadStatus::kSuccess, 1);
-    GetPredictionManager(browser()->profile())
+    GetPredictionManager(browser()->GetProfile())
         ->RemoveObserverForOptimizationTargetModel(
             proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD, &model_file_observer);
     histogram_tester.ExpectUniqueSample(
@@ -621,14 +616,13 @@ IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest,
       PredictionModelDownloadStatus::kSuccess, 1);
   EXPECT_EQ(model_file_observer.optimization_target(),
             proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD);
-  EXPECT_TRUE(
-      model_file_observer.model_info()->GetModelFilePath().IsAbsolute());
+  EXPECT_TRUE(model_file_observer.model_info()->model_file_path.IsAbsolute());
 
   // Remove the model file so that model directory is inconsistent with local
   // state.
   {
     base::ScopedAllowBlockingForTesting allow_blocking;
-    base::DeleteFile(model_file_observer.model_info()->GetModelFilePath());
+    base::DeleteFile(model_file_observer.model_info()->model_file_path);
   }
 
   base::HistogramTester histogram_tester_foo;
@@ -643,7 +637,7 @@ IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest,
   EXPECT_EQ(model_file_observer_foo.optimization_target(),
             proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD);
   EXPECT_TRUE(
-      model_file_observer_foo.model_info()->GetModelFilePath().IsAbsolute());
+      model_file_observer_foo.model_info()->model_file_path.IsAbsolute());
 }
 
 }  // namespace optimization_guide

@@ -864,6 +864,31 @@ TEST_F(DownloadHistoryTest, CreateInProgressDownload) {
   EXPECT_FALSE(DownloadHistory::IsPersisted(&item(0)));
 }
 
+// Test that in-progress save package updates are only persisted when fields
+// actually change.
+TEST_F(DownloadHistoryTest, InProgressSavePackageNoopSecondUpdate) {
+  CreateDownloadHistory({});
+
+  history::DownloadRow row;
+  InitBasicItem(FILE_PATH_LITERAL("/foo/bar.pdf"), "http://example.com/bar.pdf",
+                "http://example.com/referrer.html",
+                download::DownloadItem::IN_PROGRESS, &row);
+  EXPECT_CALL(item(0), IsSavePackageDownload()).WillRepeatedly(Return(true));
+
+  // Save package downloads are persisted even while in progress.
+  CallOnDownloadCreated(0);
+  ExpectDownloadCreated(row);
+
+  EXPECT_CALL(item(0), GetReceivedBytes()).WillRepeatedly(Return(200));
+  item(0).NotifyObserversDownloadUpdated();
+  row.received_bytes = 200;
+  ExpectDownloadUpdated(row, false);
+
+  // No additional update should be issued if the state is unchanged.
+  item(0).NotifyObserversDownloadUpdated();
+  ExpectNoDownloadUpdated();
+}
+
 // Test that in-progress download already in history will be updated once it
 // becomes non-resumable.
 TEST_F(DownloadHistoryTest, InProgressHistoryItemBecomesNonResumable) {
@@ -915,7 +940,7 @@ TEST_F(DownloadHistoryTest, CreateLargeDataURLCompletedItem) {
 
   history::DownloadRow row;
   std::string data_url = "data:text/html,";
-  data_url.append(std::string(2048, 'a'));
+  data_url.append(std::string(10000, 'a'));
   InitBasicItem(FILE_PATH_LITERAL("/foo/bar.pdf"), data_url.c_str(),
                 "http://example.com/referrer.html",
                 download::DownloadItem::IN_PROGRESS, &row);
@@ -929,7 +954,7 @@ TEST_F(DownloadHistoryTest, CreateLargeDataURLCompletedItem) {
   EXPECT_CALL(item(0), GetState())
       .WillRepeatedly(Return(download::DownloadItem::COMPLETE));
   row.state = history::DownloadState::COMPLETE;
-  data_url.resize(1024);
+  data_url.resize(8192);
   row.url_chain.back() = GURL(data_url);
   item(0).NotifyObserversDownloadUpdated();
   ExpectDownloadCreated(row);

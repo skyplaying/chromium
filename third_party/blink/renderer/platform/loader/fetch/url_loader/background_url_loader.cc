@@ -9,16 +9,18 @@
 #include <memory>
 #include <variant>
 
+#include "base/byte_size.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/numerics/checked_math.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/url_loader_completion_status.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/loader/background_resource_fetch_histograms.h"
 #include "third_party/blink/public/common/loader/mime_sniffing_throttle.h"
 #include "third_party/blink/public/common/loader/referrer_utils.h"
@@ -35,10 +37,12 @@
 #include "third_party/blink/renderer/platform/loader/fetch/resource_loader_options.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_request.h"
 #include "third_party/blink/renderer/platform/loader/fetch/url_loader/background_response_processor.h"
+#include "third_party/blink/renderer/platform/loader/fetch/url_loader/code_cache_fetcher.h"
 #include "third_party/blink/renderer/platform/loader/fetch/url_loader/resource_request_client.h"
 #include "third_party/blink/renderer/platform/loader/fetch/url_loader/resource_request_sender.h"
 #include "third_party/blink/renderer/platform/loader/fetch/url_loader/url_loader_client.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
+#include "third_party/blink/renderer/platform/weborigin/scheme_registry.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_copier.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_copier_base.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_copier_mojo.h"
@@ -75,12 +79,40 @@ BackgroundResourceFetchSupportStatus CanHandleRequestInternal(
     return BackgroundResourceFetchSupportStatus::kUnsupportedNonGetRequest;
   }
 
-  // Currently, only supports HTTP family and blob URL because:
+  // Currently, only supports HTTP family and blob URLs, plus WebUI URLs
+  // (trusted chrome:// as well as untrusted chrome-untrusted://) when the
+  // `BackgroundResourceFetchSupportsWebUI` feature param is enabled.
   // - PDF plugin is using the mechanism of subresource overrides with
   //   "chrome-extension://" urls. But ChildURLLoaderFactoryBundle::Clone()
   //   can't clone `subresource_overrides_`. So BackgroundURLLoader can't handle
   //   requests from the PDF plugin.
-  if (!request.url.SchemeIsHTTPOrHTTPS() && !request.url.SchemeIsBlob()) {
+  // chrome-untrusted:// is matched explicitly because SchemeRegistry's
+  // IsWebUIScheme() only covers trusted WebUI schemes (and is used for
+  // security/navigation decisions elsewhere).
+  //
+  // 1. Check schemes (short-circuit for HTTP/HTTPS/Blob).
+  const bool is_http_or_blob =
+      request.url.SchemeIsHTTPOrHTTPS() || request.url.SchemeIsBlob();
+  bool is_webui = false;
+
+  // Only check for WebUI schemes if it's not HTTP(S)/Blob to avoid unnecessary
+  // String allocations.
+  if (!is_http_or_blob &&
+      features::kBackgroundResourceFetchSupportsWebUI.Get()) {
+    is_webui = request.url.SchemeIs("chrome-untrusted") ||
+               SchemeRegistry::IsWebUIScheme(String(request.url.GetScheme()));
+  }
+
+  if (!is_http_or_blob && !is_webui) {
+    return BackgroundResourceFetchSupportStatus::kUnsupportedNonHttpUrlRequest;
+  }
+
+  // 2. WebUI specific checks.
+  // Don't support WebUI resources served from the WebUI bundled code cache
+  // (build-time V8 bytecode). It's consumed on the main thread via
+  // WebUIBundledCachedMetadataHandler, which the background loader path
+  // bypasses.
+  if (is_webui && CodeCacheFetcher::ShouldFetchWebUIBundledCodeCache(request)) {
     return BackgroundResourceFetchSupportStatus::kUnsupportedNonHttpUrlRequest;
   }
 
@@ -263,12 +295,10 @@ class BackgroundURLLoader::Context
           &Context::OnReceivedResponse, context_, std::move(head),
           std::move(body), std::move(cached_metadata)));
     }
-    void OnTransferSizeUpdated(int transfer_size_diff) override {
+    void OnTransferSizeUpdated(base::ByteSize transfer_size_diff) override {
       CHECK(background_task_runner_->RunsTasksInCurrentSequence());
       if (waiting_for_background_response_processor_) {
-        deferred_transfer_size_diff_ =
-            base::CheckAdd(deferred_transfer_size_diff_, transfer_size_diff)
-                .ValueOrDie();
+        deferred_transfer_size_diff_ += transfer_size_diff;
         return;
       }
       context_->PostTaskToMainThread(CrossThreadBindOnce(
@@ -311,7 +341,7 @@ class BackgroundURLLoader::Context
     const scoped_refptr<base::SequencedTaskRunner> background_task_runner_;
     std::unique_ptr<BackgroundResponseProcessor> background_response_processor_;
 
-    int deferred_transfer_size_diff_ = 0;
+    base::ByteSize deferred_transfer_size_diff_;
     std::optional<network::URLLoaderCompletionStatus> deferred_status_;
     bool waiting_for_background_response_processor_ = false;
     base::WeakPtrFactory<RequestClient> weak_factory_{this};
@@ -469,10 +499,10 @@ class BackgroundURLLoader::Context
     net::HttpRequestHeaders modified_headers;
     if (client_->WillFollowRedirect(
             url_, redirect_info.new_site_for_cookies,
-            WebString::FromUTF8(redirect_info.new_referrer),
+            WebString::FromUtf8(redirect_info.new_referrer),
             ReferrerUtils::NetToMojoReferrerPolicy(
                 redirect_info.new_referrer_policy),
-            WebString::FromUTF8(redirect_info.new_method), response,
+            WebString::FromUtf8(redirect_info.new_method), response,
             has_devtools_request_id_, &removed_headers, modified_headers,
             redirect_info.insecure_scheme_was_upgraded)) {
       PostCrossThreadTask(
@@ -496,35 +526,37 @@ class BackgroundURLLoader::Context
       network::mojom::URLResponseHeadPtr head,
       BodyVariant body,
       std::optional<mojo_base::BigBuffer> cached_metadata,
-      int deferred_transfer_size_diff,
+      base::ByteSize deferred_transfer_size_diff,
       std::optional<network::URLLoaderCompletionStatus> deferred_status,
       int request_id) {
     DCHECK_CALLED_ON_VALID_SEQUENCE(main_thread_sequence_checker_);
 
     OnReceivedResponse(std::move(head), std::move(body),
                        std::move(cached_metadata), request_id);
-    if (client_ && deferred_transfer_size_diff > 0) {
+    if (client_ && deferred_transfer_size_diff.is_positive()) {
       OnTransferSizeUpdated(deferred_transfer_size_diff);
     }
     if (client_ && deferred_status) {
       OnCompletedRequest(*deferred_status);
     }
   }
-  void OnTransferSizeUpdated(int transfer_size_diff) {
+  void OnTransferSizeUpdated(base::ByteSize transfer_size_diff) {
     DCHECK_CALLED_ON_VALID_SEQUENCE(main_thread_sequence_checker_);
-    client_->DidReceiveTransferSizeUpdate(transfer_size_diff);
+    client_->DidReceiveTransferSizeUpdate(
+        base::checked_cast<int>(transfer_size_diff.InBytes()));
   }
   void OnCompletedRequest(const network::URLLoaderCompletionStatus& status) {
     DCHECK_CALLED_ON_VALID_SEQUENCE(main_thread_sequence_checker_);
-    int64_t total_transfer_size = status.encoded_data_length;
-    int64_t encoded_body_size = status.encoded_body_length;
+    int64_t total_transfer_size = status.encoded_data_length.InBytes();
+    int64_t encoded_body_size = status.encoded_body_length.InBytes();
     if (status.error_code != net::OK) {
       client_->DidFail(WebURLError::Create(status, url_),
                        status.completion_time, total_transfer_size,
-                       encoded_body_size, status.decoded_body_length);
+                       encoded_body_size, status.decoded_body_length.InBytes());
     } else {
       client_->DidFinishLoading(status.completion_time, total_transfer_size,
-                                encoded_body_size, status.decoded_body_length);
+                                encoded_body_size,
+                                status.decoded_body_length.InBytes());
     }
   }
 

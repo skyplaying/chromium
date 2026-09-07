@@ -12,8 +12,11 @@
 
 - (instancetype)copyWithZone:(NSZone*)zone {
   ShortcutsConfig* config = [[super copyWithZone:zone] init];
+  // The updates to properties must be reflected in the copy method.
+  // LINT.IfChange(Copy)
   config.shortcutItems = [self.shortcutItems copy];
   config.commandHandler = self.commandHandler;
+  // LINT.ThenChange(shortcuts_config.h:Copy)
   return config;
 }
 
@@ -21,6 +24,14 @@
 
 - (ContentSuggestionsModuleType)type {
   return ContentSuggestionsModuleType::kShortcuts;
+}
+
+- (BOOL)hasDifferentContentsFromConfig:(MagicStackModule*)config {
+  if ([super hasDifferentContentsFromConfig:config]) {
+    return YES;
+  }
+  ShortcutsConfig* shortcutsConfig = static_cast<ShortcutsConfig*>(config);
+  return ![self.shortcutItems isEqualToArray:shortcutsConfig.shortcutItems];
 }
 
 @end

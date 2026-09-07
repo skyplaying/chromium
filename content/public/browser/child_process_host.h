@@ -79,6 +79,9 @@ class CONTENT_EXPORT ChildProcessHost {
     // gdb). In this case, you'd use GetChildPath to get the real executable
     // file name, and then prepend the GDB command to the command line.
     CHILD_ALLOW_SELF = 1 << 0,
+
+    // Indicates that the child process to be launched is a separate renderer.
+    CHILD_RENDERER = 1 << 1,
 #elif BUILDFLAG(IS_MAC)
     // Note, on macOS these are not bitwise flags and each value is mutually
     // exclusive with the others. Each one of these options must correspond to a
@@ -97,21 +100,11 @@ class CONTENT_EXPORT ChildProcessHost {
     // allow-jit entitlement instead.
     CHILD_GPU,
 
-    // Starts a child process with the macOS entitlement that ignores the
-    // library validation code signing enforcement.
-    //
-    // Library validation mandates that all executable pages be backed by a code
-    // signature of either 1) Apple, or 2) the same Team ID as the main
-    // executable. Third-party plug-ins are not signed by the same Team ID as
-    // the main binary, so this flag must be used when loading them.
-    //
-    // This is deprecated and being removed; see https://crbug.com/461717105.
-    CHILD_PLUGIN,
-
     // Marker for the start of embedder-specific helper child process types.
-    // Values greater than CHILD_EMBEDDER_FIRST are reserved to be used by the
-    // embedder to add custom process types and will be resolved via
-    // ContentClient::GetChildPath().
+    // Values greater than CHILD_EMBEDDER_FIRST are reserved for embedder
+    // process types. Content provides no fallback resolution for these types;
+    // embedders must handle them in
+    // ContentBrowserClient::GetChildProcessPath().
     CHILD_EMBEDDER_FIRST,
 #endif
   };

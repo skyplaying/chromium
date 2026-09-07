@@ -14,6 +14,7 @@
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/navigation_throttle.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/storage_partition_config.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/url_constants.h"
@@ -79,7 +80,7 @@ bool ShouldBlockNavigationToPlatformAppResource(
       return false;
     }
 
-#if BUILDFLAG(ENABLE_PLATFORM_APPS)
+#if BUILDFLAG(IS_CHROMEOS)
     // Platform apps can be embedded by other platform apps using an <appview>
     // tag.
     auto* app_view = AppViewGuest::FromGuestViewBase(guest);
@@ -239,9 +240,12 @@ ExtensionNavigationThrottle::WillStartOrRedirectRequest() {
   // Block all navigations to blob: or filesystem: URLs with extension
   // origin from non-extension processes.  See https://crbug.com/40085339 and
   // https://crbug.com/40091207.
+  const auto& starting_principal =
+      navigation_handle()->GetStartingSiteInstance()->GetSecurityPrincipal();
   bool current_frame_is_extension_process =
-      !!registry->enabled_extensions().GetExtensionOrAppByURL(
-          navigation_handle()->GetStartingSiteInstance()->GetSiteURL());
+      starting_principal.SchemeIs(kExtensionScheme) &&
+      !!registry->enabled_extensions().GetByID(
+          ExtensionId(starting_principal.GetHost()));
 
   if (!url_has_extension_scheme && !current_frame_is_extension_process) {
     // Relax this restriction for apps that use <webview>.  See
@@ -268,14 +272,20 @@ ExtensionNavigationThrottle::WillStartOrRedirectRequest() {
 
     content::StoragePartitionConfig storage_partition_config =
         content::StoragePartitionConfig::CreateDefault(browser_context);
-    bool is_guest = navigation_handle()->GetStartingSiteInstance()->IsGuest();
+    bool is_guest = navigation_handle()
+                        ->GetStartingSiteInstance()
+                        ->GetSecurityPrincipal()
+                        .IsGuest();
     if (is_guest) {
       storage_partition_config = navigation_handle()
                                      ->GetStartingSiteInstance()
-                                     ->GetStoragePartitionConfig();
+                                     ->GetSecurityPrincipal()
+                                     .GetStoragePartitionConfig();
     }
-    CHECK_EQ(is_guest,
-             navigation_handle()->GetStartingSiteInstance()->IsGuest());
+    CHECK_EQ(is_guest, navigation_handle()
+                           ->GetStartingSiteInstance()
+                           ->GetSecurityPrincipal()
+                           .IsGuest());
 
     bool allowed = true;
     url_request_util::AllowCrossRendererResourceLoadHelper(

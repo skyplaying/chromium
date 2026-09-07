@@ -4,6 +4,7 @@
 
 import {html} from '//resources/lit/v3_0/lit.rollup.js';
 
+import {TraceConfig_BufferConfig_FillPolicy} from './perfetto_config.js';
 import type {TraceRecorderElement} from './trace_recorder.js';
 
 export function getHtml(this: TraceRecorderElement) {
@@ -11,12 +12,12 @@ export function getHtml(this: TraceRecorderElement) {
   return html`
     <h1>Record Trace</h1>
     <div id="control-container">
-      <div id="status-container" class="${this.statusClass}">
+      <div id="status-container" class="${this.getStatusClass()}">
         <div class="status-circle"></div>
         <h3>Status: ${this.tracingState}</h3>
       </div>
       <div id="progress-container"
-          ?hidden="${!this.isRecording}">
+          ?hidden="${!this.isRecording()}">
         <label for="buffer-progress">Buffer Usage:
             ${Math.round(this.bufferUsage * 100)}%
         </label>
@@ -26,18 +27,18 @@ export function getHtml(this: TraceRecorderElement) {
       </div>
       <div id="action-panel">
         <cr-button
-            @click="${this.startTracing_}"
-            ?disabled="${!this.isStartTracingEnabled}">
+            @click="${this.onStartTracingClick_}"
+            ?disabled="${!this.isStartTracingEnabled()}">
           Start Tracing
         </cr-button>
         <cr-button
-            @click="${this.stopTracing_}"
-            ?disabled="${!this.isRecording}">
+            @click="${this.onStopTracingClick_}"
+            ?disabled="${!this.isRecording()}">
           Stop Tracing
         </cr-button>
         <cr-button
-            @click="${this.cloneTraceSession_}"
-            ?disabled="${!this.isRecording}">
+            @click="${this.onCloneTraceSessionClick_}"
+            ?disabled="${!this.isRecording()}">
           Snapshot Trace
         </cr-button>
       </div>
@@ -52,7 +53,7 @@ export function getHtml(this: TraceRecorderElement) {
       <cr-toggle
           class="config-toggle"
           ?checked="${this.privacyFilterEnabled_}"
-          @change="${this.privacyFilterDidChange_}">
+          @change="${this.onPrivacyFilterChange_}">
       </cr-toggle>
     </div>
 
@@ -62,24 +63,26 @@ export function getHtml(this: TraceRecorderElement) {
         Buffer Configuration
       </cr-expand-button>
       <cr-collapse ?opened="${this.buffersExpanded_}">
-        <div class="buffer-config-container">
-          <div class="buffer-row-container growing-row">
+        <div class="config-controls-container">
+          <div class="config-control-container growing-row">
             <h3>In-memory buffer size: ${Math.floor(this.bufferSizeMb)}MB</h3>
             <cr-slider
-                min="4"
-                max="512"
-                .value="${this.bufferSizeMb}"
-                @cr-slider-value-changed="${this.onBufferSizeChanged_}">
+                .ticks="${this.bufferSizeTicks_}"
+                .value="${this.getTickIndex_(
+                    this.bufferSizeTicks_, this.bufferSizeMb)}"
+                @cr-slider-value-changed="${
+                    this.onBufferSizeCrSliderValueChanged_}">
             </cr-slider>
           </div>
-          <div class="buffer-row-container">
+          <div class="config-control-container">
             <h3>Recording mode</h3>
             <select class="md-select" value="${this.bufferFillPolicy}"
-                @change="${this.onBufferFillPolicyChanged_}">
-              <option value="${this.fillPolicyEnum.RING_BUFFER}">
+                @change="${this.onBufferFillPolicyChange_}">
+              <option
+                  value="${TraceConfig_BufferConfig_FillPolicy.RING_BUFFER}">
                 RING BUFFER
               </option>
-              <option value="${this.fillPolicyEnum.DISCARD}">
+              <option value="${TraceConfig_BufferConfig_FillPolicy.DISCARD}">
                 DISCARD
               </option>
             </select>
@@ -105,11 +108,11 @@ export function getHtml(this: TraceRecorderElement) {
               <input
                 type="checkbox" data-tag="${tagName}"
                 .checked="${this.isTagEnabled(tagName)}"
-                @change="${this.onTagsChangeTrue_}"/>
+                @change="${this.onTagsTrueChange_}"/>
               <input
                 type="checkbox" data-tag="${tagName}"
                 .checked="${this.isTagDisabled(tagName)}"
-                @change="${this.onTagsChangeFalse_}"/>
+                @change="${this.onTagsFalseChange_}"/>
               <div>${tagName}</div>
             </div>
           `)}
@@ -147,6 +150,108 @@ export function getHtml(this: TraceRecorderElement) {
         </div>
       </cr-collapse>
     </div>
+    <div class="card"><!-- Stack Sampling Card -->
+      <cr-expand-button
+          class="cr-row"
+          ?expanded="${this.stackSamplingExpanded_}"
+          @expanded-changed="${this.onStackSamplingExpandedChanged_}">
+        Stack Sampling
+      </cr-expand-button>
+      <cr-collapse
+          class="expanded-content"
+          ?opened="${this.stackSamplingExpanded_}">
+        <div class="config-toggle-container">
+          <div class="config-toggle-description">
+            <em>Enable stack sampling</em>
+            <span>
+              Periodically sample thread call stacks to profile CPU execution.
+            </span>
+          </div>
+          <cr-toggle
+              class="config-toggle"
+              ?checked="${this.stackSamplingEnabled}"
+              @change="${this.onStackSamplingToggleChange_}">
+          </cr-toggle>
+        </div>
+        <div
+            class="config-controls-container"
+            ?hidden="${!this.stackSamplingEnabled}">
+          <div class="config-control-container growing-row">
+            <h3>
+              Sampling interval: ${Math.floor(this.stackSamplingIntervalMs)}ms
+            </h3>
+            <cr-slider
+                .ticks="${this.stackSamplingIntervalTicks_}"
+                .value="${this.getTickIndex_(
+                    this.stackSamplingIntervalTicks_,
+                    this.stackSamplingIntervalMs)}"
+                @cr-slider-value-changed="${
+                    this.onStackSamplingIntervalCrSliderValueChanged_}">
+            </cr-slider>
+          </div>
+        </div>
+      </cr-collapse>
+    </div>
+    <div class="card"><!-- Heap Profiling Card -->
+      <cr-expand-button
+          class="cr-row"
+          ?expanded="${this.heapProfilingExpanded_}"
+          @expanded-changed="${this.onHeapProfilingExpandedChanged_}">
+        Heap Profiling
+      </cr-expand-button>
+      <cr-collapse
+          class="expanded-content"
+          ?opened="${this.heapProfilingExpanded_}">
+        <div class="config-toggle-container">
+          <div class="config-toggle-description">
+            <em>Enable heap profiling</em>
+            <span>
+              Sample native memory allocations to identify memory
+              usage patterns.
+            </span>
+          </div>
+          <cr-toggle
+              class="config-toggle"
+              ?checked="${this.heapProfilingEnabled}"
+              @change="${this.onHeapProfilingToggleChange_}">
+          </cr-toggle>
+        </div>
+        <div
+            class="config-controls-container"
+            ?hidden="${!this.heapProfilingEnabled}">
+          <div class="config-control-container growing-row">
+            <h3>
+              Sampling rate: ${Math.floor(this.heapSamplingIntervalKb)}KB
+            </h3>
+            <cr-slider
+                .ticks="${this.heapSamplingRateTicks_}"
+                .value="${this.getTickIndex_(
+                    this.heapSamplingRateTicks_,
+                    this.heapSamplingIntervalKb)}"
+                @cr-slider-value-changed="${
+                    this.onHeapSamplingIntervalCrSliderValueChanged_}">
+            </cr-slider>
+          </div>
+        </div>
+        <div
+            class="config-controls-container"
+            ?hidden="${!this.heapProfilingEnabled}">
+          <div class="config-control-container growing-row">
+            <h3>
+              Sampling interval: ${Math.floor(this.heapSamplingIntervalMs)}ms
+            </h3>
+            <cr-slider
+                .ticks="${this.heapSamplingIntervalTicks_}"
+                .value="${this.getTickIndex_(
+                    this.heapSamplingIntervalTicks_,
+                    this.heapSamplingIntervalMs)}"
+                @cr-slider-value-changed="${
+                    this.onHeapSamplingIntervalMsCrSliderValueChanged_}">
+            </cr-slider>
+          </div>
+        </div>
+      </cr-collapse>
+    </div>
     <if expr="is_win">
       <div class="card"><!-- ETW Configuration Card -->
         <cr-expand-button class="cr-row" ?expanded="${this.etwExpanded_}"
@@ -177,6 +282,28 @@ export function getHtml(this: TraceRecorderElement) {
         </cr-collapse>
       </div>
     </if>
+
+    <div class="card" ?hidden="${!this.encodedConfigString}">
+      <!-- Command Line Card -->
+      <cr-expand-button class="cr-row" ?expanded="${this.commandLineExpanded_}"
+          @expanded-changed="${this.onCommandLineExpandedChanged_}">
+        Command Line for Startup Tracing
+      </cr-expand-button>
+      <cr-collapse class="expanded-content"
+          ?opened="${this.commandLineExpanded_}">
+        <p>
+          Run Chrome with the following command line switch to record startup
+          trace with this configuration.
+        </p>
+        <div class="command-line-container">
+          <code class="command-line-text">${this.getCommandLine_()}</code>
+          <cr-icon-button class="icon-copy-content" title="Copy to clipboard"
+              aria-label="Copy command line"
+              @click="${this.onCopyCommandLineClick_}">
+          </cr-icon-button>
+        </div>
+      </cr-collapse>
+    </div>
 
     <cr-toast id="toast" duration="5000">
       <div>${this.toastMessage}</div>

@@ -13,7 +13,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/multi_user/multi_user_util.h"
 #include "chrome/common/extensions/extension_constants.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/grit/chromeos_app_icon_resources.h"
 #include "components/prefs/pref_service.h"
 #include "extensions/browser/extension_registry.h"
@@ -47,7 +46,7 @@ const struct {
     {"com.google.android.apps.maps", "lneaknkopdijkpnocmklfnjbeapigfbh"},
     // Calculator
     {"com.google.android.calculator", "joodangkbfjnajiiifokapkpmhfnpleo"},
-    // Google Calender
+    // Google Calendar
     {"com.google.android.calendar", "ejjicmeblgpmajnghnpcppodonldlgfn"},
     {"com.google.android.calendar", "fpgfohogebplgnamlafljlcidjedbdeb"},
     // Google Docs

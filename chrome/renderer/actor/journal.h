@@ -10,7 +10,7 @@
 #include "base/time/time.h"
 #include "base/types/pass_key.h"
 #include "chrome/common/actor.mojom.h"
-#include "chrome/common/actor/task_id.h"
+#include "components/actor/core/task_id.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
 
@@ -34,8 +34,10 @@ class Journal {
    public:
     // Creation of the event is only from the Journal itself. Use
     // `Journal::CreatePendingAsyncEntry` to create this object.
+    // Holds a WeakPtr<Journal> so on-stack entries survive frame/journal
+    // destruction during synchronous DOM events without crashing.
     PendingAsyncEntry(base::PassKey<Journal>,
-                      base::SafeRef<Journal> journal,
+                      base::WeakPtr<Journal> journal,
                       TaskId task_id,
                       std::string_view event_name);
     ~PendingAsyncEntry();
@@ -53,7 +55,7 @@ class Journal {
    private:
     base::PassKey<Journal> pass_key_;
     bool terminated_ = false;
-    base::SafeRef<Journal> journal_;
+    base::WeakPtr<Journal> journal_;
     TaskId task_id_;
     std::string event_name_;
   };

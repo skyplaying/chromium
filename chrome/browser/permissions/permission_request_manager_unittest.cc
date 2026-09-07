@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 
+#include "base/auto_reset.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
@@ -24,8 +25,8 @@
 #include "chrome/browser/permissions/permission_actions_history_factory.h"
 #include "chrome/browser/permissions/quiet_notification_permission_ui_config.h"
 #include "chrome/browser/permissions/quiet_notification_permission_ui_state.h"
+#include "chrome/browser/permissions/system/system_permission_settings.h"
 #include "chrome/common/chrome_features.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
@@ -45,20 +46,23 @@
 #include "components/permissions/test/mock_permission_request.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/scoped_user_pref_update.h"
-#include "components/site_engagement/content/site_engagement_service.h"
 #include "components/ukm/content/source_url_recorder.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "components/user_manager/scoped_user_manager.h"
+#include "content/public/browser/navigation_entry.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_pref_names.h"
 #include "chrome/browser/ash/app_mode/kiosk_cryptohome_remover.h"
 #include "chrome/browser/ash/app_mode/web_app/kiosk_web_app_manager.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #endif
 
-const double kTestEngagementScore = 29;
+#if BUILDFLAG(IS_ANDROID)
+#include "components/permissions/android/android_permission_util.h"
+#endif
 
 class PermissionRequestManagerTest
     : public ChromeRenderViewHostTestHarness,
@@ -82,11 +86,6 @@ class PermissionRequestManagerTest
     ChromeRenderViewHostTestHarness::SetUp();
     SetContents(CreateTestWebContents());
     NavigateAndCommit(GURL(permissions::MockPermissionRequest::kDefaultOrigin));
-
-    site_engagement::SiteEngagementService::Get(profile())
-        ->ResetBaseScoreForURL(
-            GURL(permissions::MockPermissionRequest::kDefaultOrigin),
-            kTestEngagementScore);
 
     permissions::PermissionRequestManager::CreateForWebContents(web_contents());
     manager_ =
@@ -134,7 +133,7 @@ class PermissionRequestManagerTest
 #if BUILDFLAG(IS_CHROMEOS)
   void SetKioskBrowserPermissionsAllowedForOrigins(const std::string& origin) {
     profile()->GetPrefs()->SetList(
-        prefs::kKioskBrowserPermissionsAllowedForOrigins,
+        ash::prefs::kKioskBrowserPermissionsAllowedForOrigins,
         base::ListValue().Append(std::move(origin)));
   }
 
@@ -196,22 +195,29 @@ class PermissionRequestManagerTest
 TEST_F(PermissionRequestManagerTest, UMAForSimpleAcceptedGestureBubble) {
   base::HistogramTester histograms;
 
+  permissions::RequestTypeForUma geolocation_request_type =
+      base::FeatureList::IsEnabled(
+          content_settings::features::kApproximateGeolocationPermission)
+          ? permissions::RequestTypeForUma::
+                PERMISSION_GEOLOCATION_APPROXIMATE_OR_PRECISE
+          : permissions::RequestTypeForUma::PERMISSION_GEOLOCATION;
+  std::string_view geolocation_prompt_name =
+      base::FeatureList::IsEnabled(
+          content_settings::features::kApproximateGeolocationPermission)
+          ? "GeolocationApproximateOrPrecise"
+          : "Geolocation";
+
   manager_->AddRequest(web_contents()->GetPrimaryMainFrame(),
                        CreateRequest(params_request1_));
   WaitForBubbleToBeShown();
   histograms.ExpectUniqueSample(
       permissions::PermissionUmaUtil::kPermissionsPromptShown,
-      static_cast<base::HistogramBase::Sample32>(
-          permissions::RequestTypeForUma::PERMISSION_GEOLOCATION),
-      1);
+      static_cast<base::HistogramBase::Sample32>(geolocation_request_type), 1);
   histograms.ExpectUniqueSample(
       permissions::PermissionUmaUtil::kPermissionsPromptShownGesture,
-      static_cast<base::HistogramBase::Sample32>(
-          permissions::RequestTypeForUma::PERMISSION_GEOLOCATION),
-      1);
+      static_cast<base::HistogramBase::Sample32>(geolocation_request_type), 1);
   histograms.ExpectTotalCount(
       permissions::PermissionUmaUtil::kPermissionsPromptShownNoGesture, 0);
-  histograms.ExpectTotalCount("Permissions.Engagement.Accepted.Geolocation", 0);
 
   Accept(base::FeatureList::IsEnabled(
              content_settings::features::kApproximateGeolocationPermission)
@@ -220,21 +226,15 @@ TEST_F(PermissionRequestManagerTest, UMAForSimpleAcceptedGestureBubble) {
              : std::monostate());
   histograms.ExpectUniqueSample(
       permissions::PermissionUmaUtil::kPermissionsPromptAccepted,
-      static_cast<base::HistogramBase::Sample32>(
-          permissions::RequestTypeForUma::PERMISSION_GEOLOCATION),
-      1);
+      static_cast<base::HistogramBase::Sample32>(geolocation_request_type), 1);
   histograms.ExpectTotalCount(
       permissions::PermissionUmaUtil::kPermissionsPromptDenied, 0);
 
   histograms.ExpectUniqueSample(
       permissions::PermissionUmaUtil::kPermissionsPromptAcceptedGesture,
-      static_cast<base::HistogramBase::Sample32>(
-          permissions::RequestTypeForUma::PERMISSION_GEOLOCATION),
-      1);
+      static_cast<base::HistogramBase::Sample32>(geolocation_request_type), 1);
   histograms.ExpectTotalCount(
       permissions::PermissionUmaUtil::kPermissionsPromptAcceptedNoGesture, 0);
-  histograms.ExpectUniqueSample("Permissions.Engagement.Accepted.Geolocation",
-                                kTestEngagementScore, 1);
 }
 
 TEST_F(PermissionRequestManagerTest, UMAForSimpleDeniedNoGestureBubble) {
@@ -251,8 +251,6 @@ TEST_F(PermissionRequestManagerTest, UMAForSimpleDeniedNoGestureBubble) {
       static_cast<base::HistogramBase::Sample32>(
           permissions::RequestTypeForUma::DOWNLOAD),
       1);
-  histograms.ExpectTotalCount("Permissions.Engagement.Denied.MultipleDownload",
-                              0);
   // No need to test the other UMA for showing prompts again, they were tested
   // in UMAForSimpleAcceptedBubble.
 
@@ -272,9 +270,6 @@ TEST_F(PermissionRequestManagerTest, UMAForSimpleDeniedNoGestureBubble) {
       1);
   histograms.ExpectTotalCount(
       permissions::PermissionUmaUtil::kPermissionsPromptDeniedGesture, 0);
-  histograms.ExpectUniqueSample(
-      "Permissions.Engagement.Denied.MultipleDownload", kTestEngagementScore,
-      1);
 }
 
 TEST_F(PermissionRequestManagerTest, UMAForMergedAcceptedBubble) {
@@ -295,8 +290,6 @@ TEST_F(PermissionRequestManagerTest, UMAForMergedAcceptedBubble) {
       permissions::PermissionUmaUtil::kPermissionsPromptShownGesture, 0);
   histograms.ExpectTotalCount(
       permissions::PermissionUmaUtil::kPermissionsPromptShownNoGesture, 0);
-  histograms.ExpectTotalCount(
-      "Permissions.Engagement.Accepted.AudioAndVideoCapture", 0);
 
   Accept();
 
@@ -305,9 +298,6 @@ TEST_F(PermissionRequestManagerTest, UMAForMergedAcceptedBubble) {
       static_cast<base::HistogramBase::Sample32>(
           permissions::RequestTypeForUma::MULTIPLE_AUDIO_AND_VIDEO_CAPTURE),
       1);
-  histograms.ExpectUniqueSample(
-      "Permissions.Engagement.Accepted.AudioAndVideoCapture",
-      kTestEngagementScore, 1);
 }
 
 TEST_F(PermissionRequestManagerTest, UMAForMergedDeniedBubble) {
@@ -318,8 +308,6 @@ TEST_F(PermissionRequestManagerTest, UMAForMergedDeniedBubble) {
   manager_->AddRequest(web_contents()->GetPrimaryMainFrame(),
                        CreateRequest(params_request_camera_));
   WaitForBubbleToBeShown();
-  histograms.ExpectTotalCount(
-      "Permissions.Engagement.Denied.AudioAndVideoCapture", 0);
   // No need to test UMA for showing prompts again, they were tested in
   // UMAForMergedAcceptedBubble.
 
@@ -330,36 +318,16 @@ TEST_F(PermissionRequestManagerTest, UMAForMergedDeniedBubble) {
       static_cast<base::HistogramBase::Sample32>(
           permissions::RequestTypeForUma::MULTIPLE_AUDIO_AND_VIDEO_CAPTURE),
       1);
-  histograms.ExpectUniqueSample(
-      "Permissions.Engagement.Denied.AudioAndVideoCapture",
-      kTestEngagementScore, 1);
-}
-
-TEST_F(PermissionRequestManagerTest, UMAForIgnores) {
-  base::HistogramTester histograms;
-
-  manager_->AddRequest(web_contents()->GetPrimaryMainFrame(),
-                       CreateRequest(params_request1_));
-  WaitForBubbleToBeShown();
-  histograms.ExpectTotalCount("Permissions.Engagement.Ignored.Geolocation", 0);
-
-  GURL youtube("http://www.youtube.com/");
-  NavigateAndCommit(youtube);
-  histograms.ExpectUniqueSample("Permissions.Engagement.Ignored.Geolocation",
-                                kTestEngagementScore, 1);
-
-  auto youtube_request = std::make_unique<permissions::MockPermissionRequest>(
-      youtube, permissions::RequestType::kCameraStream);
-  manager_->AddRequest(web_contents()->GetPrimaryMainFrame(),
-                       std::move(youtube_request));
-  WaitForBubbleToBeShown();
-
-  NavigateAndCommit(GURL(permissions::MockPermissionRequest::kDefaultOrigin));
-  histograms.ExpectUniqueSample("Permissions.Engagement.Ignored.VideoCapture",
-                                0, 1);
 }
 
 TEST_F(PermissionRequestManagerTest, TestEmbargoForEmbeddedPermissionRequest) {
+#if BUILDFLAG(IS_ANDROID)
+  base::AutoReset<bool> enable_android_permissions =
+      permissions::EnableAllAndroidPermissionsForTesting();
+#endif
+  system_permission_settings::ScopedSettingsForTesting scoped_system_permission(
+      ContentSettingsType::MEDIASTREAM_CAMERA, /*blocked=*/false);
+
   GURL url(permissions::MockPermissionRequest::kDefaultOrigin);
   permissions::RequestType request_type =
       permissions::RequestType::kCameraStream;

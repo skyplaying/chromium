@@ -16,7 +16,6 @@ import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
-import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Matchers;
 import org.chromium.base.test.util.UrlUtils;
@@ -34,13 +33,14 @@ import org.chromium.components.browser_ui.widget.gesture.BackPressHandler;
 import org.chromium.content_public.browser.SelectionPopupController;
 import org.chromium.content_public.browser.test.util.DOMUtils;
 
-import java.util.Iterator;
 import java.util.concurrent.TimeoutException;
 
 /** Test that verifies back press will dismiss the selection popup. */
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add({
     ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE,
+    // long press triggers contextual search
+    ChromeSwitches.DISABLE_CONTEXTUAL_SEARCH,
 })
 @Batch(Batch.PER_CLASS)
 public class SelectionPopupBackPressTest {
@@ -57,7 +57,6 @@ public class SelectionPopupBackPressTest {
     @Test
     @MediumTest
     @Feature({"TextInput", "SmartSelection"})
-    @DisabledTest(message = "flaky, see crbug.com/406312249")
     public void testBackPressClearSelection() throws TimeoutException {
         testBackPressClearSelectionInternal();
     }
@@ -121,9 +120,9 @@ public class SelectionPopupBackPressTest {
 
     private void testBackPressClearSelectionInternal() throws TimeoutException {
         mActivityTestRule.startOnUrl(TEST_PAGE);
-        DOMUtils.longPressNodeByJs(
-                mActivityTestRule.getWebContents(),
-                "document.getElementById('selection_popup_text')");
+        DOMUtils.waitForNonZeroNodeBounds(
+                mActivityTestRule.getWebContents(), "selection_popup_text");
+        DOMUtils.longPressNode(mActivityTestRule.getWebContents(), "selection_popup_text");
         SelectionPopupController controller =
                 ThreadUtils.runOnUiThreadBlocking(
                         () -> {
@@ -149,6 +148,7 @@ public class SelectionPopupBackPressTest {
                 () -> {
                     BackPressManager backPressManager =
                             mActivityTestRule.getActivity().getBackPressManagerForTesting();
+                    // suppress handlers of high priorities
                     if (backPressManager.has(BackPressHandler.Type.TEXT_BUBBLE)) {
                         mActivityTestRule
                                 .getActivity()
@@ -158,17 +158,14 @@ public class SelectionPopupBackPressTest {
                 });
 
         ThreadUtils.runOnUiThreadBlocking(
-                () -> {
-                    mActivityTestRule.getActivity().getOnBackPressedDispatcher().onBackPressed();
-                });
+                () -> mActivityTestRule.getActivity().getOnBackPressedDispatcher().onBackPressed());
 
         CriteriaHelper.pollUiThread(
-                () -> {
-                    Criteria.checkThat(
-                            "Selection popup should be dismissed after long press",
-                            controller.isSelectActionBarShowing(),
-                            Matchers.is(false));
-                });
+                () ->
+                        Criteria.checkThat(
+                                "Selection popup should be dismissed after back press",
+                                controller.isSelectActionBarShowing(),
+                                Matchers.is(false)));
         Assert.assertFalse(
                 "Selection popup should be dismissed on back press.", controller.hasSelection());
         Assert.assertFalse(
@@ -176,11 +173,11 @@ public class SelectionPopupBackPressTest {
                 controller.isSelectActionBarShowingSupplier().get());
     }
 
-    private boolean find(Iterator<TabObserver> observers, BackPressHandler handler) {
+    private boolean find(Iterable<TabObserver> observers, BackPressHandler handler) {
         return ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    while (observers.hasNext()) {
-                        if (observers.next() == handler) {
+                    for (TabObserver observer : observers) {
+                        if (observer == handler) {
                             return true;
                         }
                     }

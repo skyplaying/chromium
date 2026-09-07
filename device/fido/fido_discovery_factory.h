@@ -63,10 +63,9 @@ class COMPONENT_EXPORT(DEVICE_FIDO) FidoDiscoveryFactory {
   // WebAuthn testing API.
   virtual bool IsTestOverride();
 
-  // set_cable_data configures caBLE obtained via a WebAuthn extension.
+  // set_cable_data configures the QR code generator key for hybrid.
   virtual void set_cable_data(
       FidoRequestType request_type,
-      std::vector<CableDiscoveryData> cable_data,
       const std::optional<std::array<uint8_t, cablev2::kQRKeySize>>&
           qr_generator_key);
 
@@ -123,6 +122,13 @@ class COMPONENT_EXPORT(DEVICE_FIDO) FidoDiscoveryFactory {
   // available. Returns nullptr otherwise.
   virtual std::unique_ptr<FidoDiscoveryBase>
   MaybeCreateWinWebAuthnApiDiscovery();
+
+  // Configures whether hybrid discovery must be instantiated even if
+  // the platform WebAuthn API (such as Windows 11) reports hybrid support.
+  void set_force_hybrid_discovery(bool force_hybrid_discovery) {
+    force_hybrid_discovery_ = force_hybrid_discovery;
+  }
+  bool force_hybrid_discovery() const { return force_hybrid_discovery_; }
 #endif  // BUILDFLAG(IS_WIN)
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -158,7 +164,6 @@ class COMPONENT_EXPORT(DEVICE_FIDO) FidoDiscoveryFactory {
   bool allow_no_nswindow_for_testing_ = false;
 #endif  // BUILDFLAG(IS_MAC)
   NetworkContextFactory network_context_factory_;
-  std::optional<std::vector<CableDiscoveryData>> cable_data_;
   std::optional<std::array<uint8_t, cablev2::kQRKeySize>> qr_generator_key_;
   std::optional<FidoRequestType> request_type_;
   std::unique_ptr<
@@ -183,6 +188,9 @@ class COMPONENT_EXPORT(DEVICE_FIDO) FidoDiscoveryFactory {
   std::unique_ptr<FidoDiscoveryBase::EventStream<
       std::unique_ptr<enclave::CredentialRequest>>>
       enclave_ui_request_stream_;
+#if BUILDFLAG(IS_WIN)
+  bool force_hybrid_discovery_ = false;
+#endif  // BUILDFLAG(IS_WIN)
 };
 
 }  // namespace device

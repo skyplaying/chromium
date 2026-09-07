@@ -24,20 +24,22 @@ import androidx.appcompat.content.res.AppCompatResources;
 import androidx.test.core.app.ApplicationProvider;
 
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
 import org.mockito.Spy;
-import org.robolectric.annotation.Config;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.ui.R;
 
 /** Unit tests for {@link SpanBackgroundHelper}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class SpanBackgroundHelperTest {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
+
     private static class TestTextSpanSpec {
         private final int mSpanStart;
         private final int mSpanEnd;
@@ -85,9 +87,8 @@ public class SpanBackgroundHelperTest {
 
     @Before
     public void setup() {
-        MockitoAnnotations.openMocks(this);
-        Context mContext = ApplicationProvider.getApplicationContext();
-        mDrawable = spy(AppCompatResources.getDrawable(mContext, R.drawable.span_background));
+        Context context = ApplicationProvider.getApplicationContext();
+        mDrawable = spy(AppCompatResources.getDrawable(context, R.drawable.span_background));
         mSpanBackgroundHelper = new SpanBackgroundHelper(HORIZONTAL_PADDING, mDrawable);
     }
 

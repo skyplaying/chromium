@@ -13,17 +13,16 @@
 
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
-#include "base/i18n/time_formatting.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/system/sys_info.h"
 #include "base/time/time.h"
 #include "chromeos/strings/grit/chromeos_strings.h"
-#include "third_party/icu/source/i18n/unicode/timezone.h"
 
 namespace chromeos {
 namespace version_loader {
@@ -60,9 +59,10 @@ std::optional<std::string> GetVersion(VersionFormat format) {
     return std::nullopt;
   }
   if (format == VERSION_SHORT_WITH_DATE) {
-    version += base::UnlocalizedTimeFormatWithPattern(
-        base::SysInfo::GetLsbReleaseTime(), "-yy.MM.dd",
-        icu::TimeZone::getGMT());
+    base::Time::Exploded exploded;
+    base::SysInfo::GetLsbReleaseTime().UTCExplode(&exploded);
+    version += base::StringPrintf("-%02d.%02d.%02d", exploded.year % 100,
+                                  exploded.month, exploded.day_of_month);
   }
 
   return version;
@@ -100,7 +100,7 @@ std::string GetFirmware() {
   return firmware;
 }
 
-std::string ParseFirmware(const std::string& contents) {
+std::string ParseFirmware(std::string_view contents) {
   // The file contains lines such as:
   // vendor           | ...
   // version          | ...
@@ -110,21 +110,21 @@ std::string ParseFirmware(const std::string& contents) {
   //   the first character that is not "|" or space
 
   std::string_view firmware_prefix(kFirmwarePrefix);
-  for (const std::string& line : base::SplitString(
+  for (std::string_view line : base::SplitStringPiece(
            contents, "\n", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL)) {
     if (base::StartsWith(line, firmware_prefix,
                          base::CompareCase::INSENSITIVE_ASCII)) {
-      std::string str = line.substr(firmware_prefix.size());
+      std::string_view str = line.substr(firmware_prefix.size());
       size_t found = str.find_first_not_of("| ");
       if (found != std::string::npos)
-        return str.substr(found);
+        return std::string(str.substr(found));
     }
   }
   return std::string();
 }
 
-bool IsRollback(const std::string& current_version,
-                const std::string& new_version) {
+bool IsRollback(std::string_view current_version,
+                std::string_view new_version) {
   VLOG(1) << "Current version: " << current_version;
   VLOG(1) << "New version: " << new_version;
 
@@ -133,9 +133,9 @@ bool IsRollback(const std::string& current_version,
     return false;
   }
 
-  std::vector<std::string> current_version_parts = base::SplitString(
+  std::vector<std::string_view> current_version_parts = base::SplitStringPiece(
       current_version, ".", base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL);
-  std::vector<std::string> new_version_parts = base::SplitString(
+  std::vector<std::string_view> new_version_parts = base::SplitStringPiece(
       new_version, ".", base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL);
 
   for (size_t i = 0;

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "base/containers/id_map.h"
+#include "base/feature.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
@@ -30,6 +31,8 @@ class NetworkContext;
 }  // namespace network::mojom
 
 namespace content {
+
+CONTENT_EXPORT BASE_DECLARE_FEATURE(kPreconnectManagerDirectFastPath);
 
 class BrowserContext;
 
@@ -65,7 +68,7 @@ struct CONTENT_EXPORT PreresolveJob {
       mojo::PendingRemote<network::mojom::ConnectionChangeObserverClient>
           connection_change_observer_client,
       PreresolveInfo* info,
-      base::optional_ref<base::UnguessableToken> network_restrictions_id);
+      base::UnguessableToken network_restrictions_id);
 
   PreresolveJob(const PreresolveJob&) = delete;
   PreresolveJob& operator=(const PreresolveJob&) = delete;
@@ -99,7 +102,7 @@ struct CONTENT_EXPORT PreresolveJob {
   raw_ptr<PreresolveInfo, DanglingUntriaged> info;
   std::unique_ptr<ResolveHostClientImpl> resolve_host_client;
   base::TimeTicks creation_time;
-  std::optional<base::UnguessableToken> network_restrictions_id;
+  base::UnguessableToken network_restrictions_id;
 };
 
 class CONTENT_EXPORT PreconnectManagerImpl : public PreconnectManager {
@@ -123,21 +126,20 @@ class CONTENT_EXPORT PreconnectManagerImpl : public PreconnectManager {
       const net::NetworkAnonymizationKey& network_anonymization_key,
       net::NetworkTrafficAnnotationTag traffic_annotation,
       const content::StoragePartitionConfig* storage_partition_config,
-      base::optional_ref<base::UnguessableToken> network_restrictions_id)
-      override;
+      const base::UnguessableToken& network_restrictions_id) override;
   void StartPreresolveHosts(
       const std::vector<GURL>& urls,
       const net::NetworkAnonymizationKey& network_anonymization_key,
       net::NetworkTrafficAnnotationTag traffic_annotation,
       const content::StoragePartitionConfig* storage_partition_config,
-      base::optional_ref<base::UnguessableToken> network_restrictions_id)
-      override;
+      const base::UnguessableToken& network_restrictions_id) override;
   void StartPreconnectUrl(
       const GURL& url,
       bool allow_credentials,
       net::NetworkAnonymizationKey network_anonymization_key,
       net::NetworkTrafficAnnotationTag traffic_annotation,
       const content::StoragePartitionConfig* storage_partition_config,
+      const base::UnguessableToken& network_restrictions_id,
       std::optional<net::ConnectionKeepAliveConfig> keepalive_config,
       mojo::PendingRemote<network::mojom::ConnectionChangeObserverClient>
           connection_change_observer_client) override;
@@ -162,6 +164,7 @@ class CONTENT_EXPORT PreconnectManagerImpl : public PreconnectManager {
       const net::NetworkAnonymizationKey& network_anonymization_key,
       const net::NetworkTrafficAnnotationTag& traffic_annotation,
       const content::StoragePartitionConfig* storage_partition_config,
+      const base::UnguessableToken& network_restrictions_id,
       std::optional<net::ConnectionKeepAliveConfig> keepalive_config,
       mojo::PendingRemote<network::mojom::ConnectionChangeObserverClient>
           connection_change_observer_client) const;
@@ -169,7 +172,7 @@ class CONTENT_EXPORT PreconnectManagerImpl : public PreconnectManager {
       const GURL& url,
       const net::NetworkAnonymizationKey& network_anonymization_key,
       const content::StoragePartitionConfig* storage_partition_config,
-      base::optional_ref<base::UnguessableToken> network_restrictions_id,
+      const base::UnguessableToken& network_restrictions_id,
       ResolveHostCallback callback) const;
   void LookupProxyForUrl(
       const GURL& url,

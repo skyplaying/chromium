@@ -8,6 +8,7 @@
 
 #include "base/notreached.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
+#include "extensions/browser/event_router_factory.h"
 #include "extensions/browser/extension_registry_factory.h"
 #include "extensions/browser/extensions_browser_client.h"
 #include "extensions/browser/process_manager_factory.h"
@@ -26,13 +27,15 @@ ServiceWorkerTaskQueue* ServiceWorkerTaskQueueFactory::GetForBrowserContext(
 
 // static
 ServiceWorkerTaskQueueFactory* ServiceWorkerTaskQueueFactory::GetInstance() {
-  return base::Singleton<ServiceWorkerTaskQueueFactory>::get();
+  static base::NoDestructor<ServiceWorkerTaskQueueFactory> instance;
+  return instance.get();
 }
 
 ServiceWorkerTaskQueueFactory::ServiceWorkerTaskQueueFactory()
     : BrowserContextKeyedServiceFactory(
           "ServiceWorkerTaskQueue",
           BrowserContextDependencyManager::GetInstance()) {
+  DependsOn(EventRouterFactory::GetInstance());
   DependsOn(ExtensionRegistryFactory::GetInstance());
   DependsOn(ProcessManagerFactory::GetInstance());
 }

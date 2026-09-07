@@ -19,7 +19,6 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/wallpaper/wallpaper_controller_client_impl.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/test_chrome_web_ui_controller_factory.h"
 #include "chrome/test/base/web_ui_mocha_browser_test.h"
@@ -87,7 +86,7 @@ void PersonalizationAppMochaTestBase::SetUpOnMainThread() {
       std::make_unique<WallpaperControllerTestApi>(
           ::ash::Shell::Get()->wallpaper_controller());
   wallpaper_controller_test_api->SetDefaultWallpaper(
-      GetAccountId(browser()->profile()));
+      GetAccountId(browser()->GetProfile()));
 }
 
 // Initializes default wallpaper paths for regular users and writes JPEG

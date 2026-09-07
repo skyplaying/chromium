@@ -82,6 +82,31 @@ class FindOptions {
     return *this;
   }
 
+  bool RequireWordBoundedStart() const { return require_word_bounded_start_; }
+  FindOptions& SetRequireWordBoundedStart(bool v) {
+    require_word_bounded_start_ = v;
+    return *this;
+  }
+  bool RequireWordBoundedEnd() const { return require_word_bounded_end_; }
+  FindOptions& SetRequireWordBoundedEnd(bool v) {
+    require_word_bounded_end_ = v;
+    return *this;
+  }
+  bool AllowOverlapMatches() const { return allow_overlap_matches_; }
+  FindOptions& SetAllowOverlapMatches(bool v) {
+    allow_overlap_matches_ = v;
+    return *this;
+  }
+
+  // Construct the searchable text to allow matching across nodes that are
+  // ignored. hello<img>world becomes helloworld. This is used by
+  // text fragment matching.
+  bool MatchAcrossIgnoredNodes() const { return match_across_ignored_nodes_; }
+  FindOptions& SetMatchAcrossIgnoredNodes(bool v) {
+    match_across_ignored_nodes_ = v;
+    return *this;
+  }
+
  private:
   bool case_insensitive_ : 1 = false;
   bool backwards_ : 1 = false;
@@ -90,6 +115,10 @@ class FindOptions {
   bool whole_word_ : 1 = false;
   bool find_api_call_ : 1 = false;
   bool ruby_supported_ : 1 = false;
+  bool require_word_bounded_start_ : 1 = false;
+  bool require_word_bounded_end_ : 1 = false;
+  bool allow_overlap_matches_ : 1 = false;
+  bool match_across_ignored_nodes_ : 1 = false;
 };
 
 }  // namespace blink

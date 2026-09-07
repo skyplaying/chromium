@@ -17,11 +17,10 @@
 
 namespace blink {
 
-XRCompositionLayer::XRCompositionLayer(XRGraphicsBinding* binding,
+XRCompositionLayer::XRCompositionLayer(XRSession* session,
+                                       XRGraphicsBinding* binding,
                                        XRLayerDrawingContext* drawing_context)
-    : XRLayer(binding->session()),
-      binding_(binding),
-      drawing_context_(drawing_context) {
+    : XRLayer(session), binding_(binding), drawing_context_(drawing_context) {
   CHECK(drawing_context_);
   drawing_context_->SetCompositionLayer(this);
 }
@@ -37,15 +36,6 @@ bool XRCompositionLayer::blendTextureSourceAlpha() const {
 void XRCompositionLayer::setBlendTextureSourceAlpha(bool value) {
   blend_texture_source_alpha_ = value;
   SetModified(true);
-}
-
-std::optional<bool> XRCompositionLayer::chromaticAberrationCorrection() const {
-  return chromatic_aberration_correction_;
-}
-
-void XRCompositionLayer::setChromaticAberrationCorrection(
-    std::optional<bool> value) {
-  chromatic_aberration_correction_ = value;
 }
 
 bool XRCompositionLayer::forceMonoPresentation() const {
@@ -126,11 +116,15 @@ XRCompositionLayer::CreateLayerData() const {
   layer_data->read_only_data->texture_width = textureWidth();
   layer_data->read_only_data->texture_height = textureHeight();
   layer_data->read_only_data->is_static = isStatic();
+  layer_data->read_only_data->flip_y = drawing_context_->ShouldFlipY();
+  layer_data->read_only_data->needs_raster_access =
+      drawing_context_->NeedsRasterAccess();
   if (layout_ == V8XRLayerLayout::Enum::kStereo) {
     // We put the layers into a single texture. So the other side should treat
     // it as left-right. See XRWebGLTextureArraySwapChain.
     layer_data->read_only_data->layout =
         device::mojom::blink::XRLayerLayout::kStereoLeftRight;
+    layer_data->read_only_data->texture_width = textureWidth() * 2;
   } else {
     layer_data->read_only_data->layout = V8ToMojomLayerLayout(layout_);
   }

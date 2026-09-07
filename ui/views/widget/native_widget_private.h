@@ -218,6 +218,9 @@ class VIEWS_EXPORT NativeWidgetPrivate : public NativeWidget {
 #endif
   virtual void SetVisibleOnAllWorkspaces(bool always_visible) = 0;
   virtual bool IsVisibleOnAllWorkspaces() const = 0;
+#if BUILDFLAG(IS_MAC)
+  virtual void MoveToActiveFullscreenSpace() = 0;
+#endif  // BUILDFLAG(IS_MAC)
   virtual void Maximize() = 0;
   virtual void Minimize() = 0;
   virtual bool IsMaximized() const = 0;
@@ -240,11 +243,11 @@ class VIEWS_EXPORT NativeWidgetPrivate : public NativeWidget {
   virtual void SetAspectRatio(const gfx::SizeF& aspect_ratio,
                               const gfx::Size& excluded_margin) = 0;
   virtual void FlashFrame(bool flash) = 0;
-  virtual void RunShellDrag(std::unique_ptr<ui::OSExchangeData> data,
-                            const gfx::Point& location,
-                            int operation,
-                            ui::mojom::DragEventSource source) = 0;
-  virtual void CancelShellDrag(View* view) = 0;
+  virtual void RunDragDropLoop(std::unique_ptr<ui::OSExchangeData> data,
+                               const gfx::Point& location,
+                               int operation,
+                               ui::mojom::DragEventSource source) = 0;
+  virtual void CancelDragDropLoop(View* view) = 0;
   virtual void SchedulePaintInRect(const gfx::Rect& rect) = 0;
   virtual void ScheduleLayout() = 0;
   virtual void SetCursor(const ui::Cursor& cursor) = 0;
@@ -255,6 +258,8 @@ class VIEWS_EXPORT NativeWidgetPrivate : public NativeWidget {
   virtual void ClearNativeFocus() = 0;
   virtual gfx::Rect GetWorkAreaBoundsInScreen() const = 0;
   virtual bool IsMoveLoopSupported() const;
+  virtual void PrepareForMoveLoop(Widget::MoveLoopSource source) {}
+  virtual void SetBypassWindowManager(bool bypass) {}
   virtual Widget::MoveLoopResult RunMoveLoop(
       const gfx::Vector2d& drag_offset,
       Widget::MoveLoopSource source,
@@ -271,6 +276,10 @@ class VIEWS_EXPORT NativeWidgetPrivate : public NativeWidget {
   // Called before and after re-parenting of this or an ancestor widget.
   virtual void OnNativeViewHierarchyWillChange() = 0;
   virtual void OnNativeViewHierarchyChanged() = 0;
+#if BUILDFLAG(IS_WIN)
+  // Exclude this window from screen capture.
+  virtual void SetExcludeFromScreenCapture(bool exclude) = 0;
+#endif
   // Returns false if the setter did not use `allow` to change screenshot
   // availability.
   virtual bool SetAllowScreenshots(bool allow) = 0;

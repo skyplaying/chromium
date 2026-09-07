@@ -33,7 +33,6 @@
 #include "components/signin/public/identity_manager/account_info.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/service_manager/public/cpp/interface_provider.h"
-#include "third_party/protobuf/src/google/protobuf/repeated_field.h"
 #include "ui/gfx/geometry/size.h"
 
 class GURL;
@@ -119,11 +118,13 @@ class PasswordProtectionServiceBase : public history::HistoryServiceObserver {
       ReusedPasswordAccountType password_type) = 0;
 
   // Triggers the safeBrowsingPrivate.OnPolicySpecifiedPasswordReuseDetected.
-  virtual void MaybeReportPasswordReuseDetected(const GURL& main_frame_url,
-                                                const std::string& username,
-                                                PasswordType password_type,
-                                                bool is_phishing_url,
-                                                bool warning_shown) = 0;
+  virtual void MaybeReportPasswordReuseDetected(
+      const GURL& main_frame_url,
+      const std::string& username,
+      PasswordType password_type,
+      bool is_phishing_url,
+      bool warning_shown,
+      const ReferrerChain& referrer_chain) = 0;
 
   // Called when a protected password change is detected. Must be called on
   // UI thread.

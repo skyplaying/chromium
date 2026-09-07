@@ -23,6 +23,7 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
+import org.mockito.quality.Strictness;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -38,13 +39,14 @@ public class DynamicSpacingRecyclerViewItemDecorationUnitTest {
     private static final int ITEM_LAST = 2;
     private static final int ITEM_COUNT = ITEM_LAST + 1;
 
-    public @Rule MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Rule
+    public final MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
 
-    private @Mock RecyclerView mRecyclerView;
-    private @Mock RecyclerView.Adapter mAdapter;
-    private @Mock View mFirstView;
-    private @Mock View mMiddleView;
-    private @Mock View mLastView;
+    @Mock private RecyclerView mRecyclerView;
+    @Mock private RecyclerView.Adapter mAdapter;
+    @Mock private View mFirstView;
+    @Mock private View mMiddleView;
+    @Mock private View mLastView;
 
     private DynamicSpacingRecyclerViewItemDecoration mDecoration;
     private Rect mOffsets;
@@ -59,8 +61,6 @@ public class DynamicSpacingRecyclerViewItemDecorationUnitTest {
         lenient().doReturn(ITEM_MIDDLE).when(mRecyclerView).getChildAdapterPosition(mMiddleView);
         lenient().doReturn(ITEM_LAST).when(mRecyclerView).getChildAdapterPosition(mLastView);
         lenient().doReturn(ContextUtils.getApplicationContext()).when(mRecyclerView).getContext();
-
-        doReturn(CONTAINER_SIZE).when(mRecyclerView).getMeasuredWidth();
     }
 
     /**

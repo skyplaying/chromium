@@ -11,10 +11,10 @@
 
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/files/file_path.h"
-#include "base/strings/string_util.h"
 #include "base/win/registry.h"
 #include "chrome/updater/tag.h"
 #include "chrome/updater/util/win_util.h"
@@ -49,7 +49,8 @@ MsiHandleImpl::MsiHandleImpl(MSIHANDLE msi_handle) : msi_handle_(msi_handle) {}
 UINT MsiHandleImpl::GetProperty(const std::wstring& name,
                                 std::vector<wchar_t>& value,
                                 DWORD& value_length) const {
-  return ::MsiGetProperty(msi_handle_, name.c_str(), &value[0], &value_length);
+  return ::MsiGetProperty(msi_handle_, name.c_str(), value.data(),
+                          &value_length);
 }
 
 UINT MsiHandleImpl::SetProperty(const std::string& name,
@@ -115,7 +116,7 @@ std::optional<std::wstring> GetLastInstallerResultUIString(
                  key->ReadValueDW(kRegValueLastInstallerResult,
                                   &last_installer_result) == ERROR_SUCCESS &&
                  last_installer_result ==
-                     static_cast<DWORD>(InstallerApiResult::kCustomError) &&
+                     std::to_underlying(InstallerApiResult::kCustomError) &&
                  key->ReadValue(kRegValueLastInstallerResultUIString, &val) ==
                      ERROR_SUCCESS &&
                  !val.empty()

@@ -22,13 +22,18 @@
 #include "components/webapps/browser/installable/installable_metrics.h"
 #include "components/webapps/isolated_web_apps/types/source.h"
 #include "components/webapps/isolated_web_apps/types/storage_location.h"
+#include "components/webapps/isolated_web_apps/types/update_check_and_prepare_result.h"
 #include "extensions/common/features/feature_channel.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "ui/base/window_open_disposition.h"
 
-class Browser;
+class BrowserWindowInterface;
 class GURL;
 class Profile;
+
+namespace views {
+class View;
+}  // namespace views
 
 namespace content {
 class RenderFrameHost;
@@ -65,11 +70,11 @@ class IsolatedWebAppBrowserTestHarness : public WebAppBrowserTestBase {
       const webapps::AppId& app_id,
       std::optional<std::string_view> path = std::nullopt);
   content::RenderFrameHost* NavigateToURLInNewTab(
-      Browser* window,
+      BrowserWindowInterface* window,
       const GURL& url,
       WindowOpenDisposition disposition = WindowOpenDisposition::CURRENT_TAB);
 
-  Browser* GetBrowserFromFrame(content::RenderFrameHost* frame);
+  BrowserWindowInterface* GetBrowserFromFrame(content::RenderFrameHost* frame);
 
  private:
   base::test::ScopedFeatureList iwa_scoped_feature_list_;
@@ -81,8 +86,8 @@ class IsolatedWebAppBrowserTestHarness : public WebAppBrowserTestBase {
 
 class UpdateDiscoveryTaskResultWaiter
     : public IsolatedWebAppUpdateManager::Observer {
-  using TaskResultCallback = base::OnceCallback<void(
-      IsolatedWebAppUpdateDiscoveryTask::CompletionStatus status)>;
+  using TaskResultCallback =
+      base::OnceCallback<void(IwaUpdateCheckAndPrepareResult status)>;
 
  public:
   UpdateDiscoveryTaskResultWaiter(WebAppProvider& provider,
@@ -91,9 +96,9 @@ class UpdateDiscoveryTaskResultWaiter
   ~UpdateDiscoveryTaskResultWaiter() override;
 
   // IsolatedWebAppUpdateManager::Observer:
-  void OnUpdateDiscoveryTaskCompleted(
+  void OnUpdateDiscoverAndPrepareTaskCompleted(
       const webapps::AppId& app_id,
-      IsolatedWebAppUpdateDiscoveryTask::CompletionStatus status) override;
+      IwaUpdateCheckAndPrepareResult status) override;
 
  private:
   const webapps::AppId expected_app_id_;
@@ -231,6 +236,9 @@ MATCHER_P3(PendingUpdateInfoIs, location, version, integrity_block_data, "") {
                 integrity_block_data))),
       arg, result_listener);
 }
+
+bool HasChildLabelWithSubstring(views::View* parent,
+                                const std::u16string& substring);
 
 }  // namespace test
 

@@ -17,7 +17,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sharing/shared_clipboard/remote_copy_message_handler.h"
 #include "chrome/browser/sharing/sharing_service_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/sharing_message/shared_clipboard/remote_copy_handle_message_result.h"
@@ -72,9 +72,9 @@ class RemoteCopyBrowserTest : public InProcessBrowserTest {
   void SetUpOnMainThread() override {
     ui::TestClipboard::CreateForCurrentThread();
     notification_tester_ = std::make_unique<NotificationDisplayServiceTester>(
-        browser()->profile());
+        browser()->GetProfile());
     sharing_service_ =
-        SharingServiceFactory::GetForBrowserContext(browser()->profile());
+        SharingServiceFactory::GetForBrowserContext(browser()->GetProfile());
     auto* remote_copy_handler = static_cast<RemoteCopyMessageHandler*>(
         sharing_service_->GetSharingHandlerForTesting(
             components_sharing_message::SharingMessage::kRemoteCopyMessage));
@@ -127,22 +127,21 @@ class RemoteCopyBrowserTest : public InProcessBrowserTest {
   }
 
   std::vector<std::u16string> GetAvailableClipboardTypes() {
-    std::vector<std::u16string> types;
-    ui::Clipboard::GetForCurrentThread()->ReadAvailableTypes(
-        ui::ClipboardBuffer::kCopyPaste, /* data_dst = */ nullptr, &types);
-    return types;
+    return ui::clipboard_test_util::ReadAvailableTypes(
+        ui::Clipboard::GetForCurrentThread(), ui::ClipboardBuffer::kCopyPaste,
+        /* data_dst = */ nullptr);
   }
 
   std::string ReadClipboardText() {
-    std::u16string text;
-    ui::Clipboard::GetForCurrentThread()->ReadText(
-        ui::ClipboardBuffer::kCopyPaste, /* data_dst = */ nullptr, &text);
-    return base::UTF16ToUTF8(text);
+    return base::UTF16ToUTF8(ui::clipboard_test_util::ReadText(
+        ui::Clipboard::GetForCurrentThread(), ui::ClipboardBuffer::kCopyPaste,
+        /* data_dst = */ nullptr));
   }
 
   SkBitmap ReadClipboardImage() {
-    std::vector<uint8_t> png_data =
-        ui::clipboard_test_util::ReadPng(ui::Clipboard::GetForCurrentThread());
+    std::vector<uint8_t> png_data = ui::clipboard_test_util::ReadPng(
+        ui::Clipboard::GetForCurrentThread(), ui::ClipboardBuffer::kCopyPaste,
+        /*data_dst=*/nullptr);
     SkBitmap bitmap = gfx::PNGCodec::Decode(png_data);
     CHECK(!bitmap.isNull());
     return bitmap;

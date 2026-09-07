@@ -6,7 +6,8 @@
 
 #include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/content_settings/cookie_settings_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/content_settings/core/browser/cookie_settings.h"
@@ -176,12 +177,12 @@ class ThirdPartyMetricsObserverBrowserTest : public InProcessBrowserTest {
   }
 
   void Enable3pcForUrl(GURL url) {
-    CookieSettingsFactory::GetForProfile(browser()->profile())
+    CookieSettingsFactory::GetForProfile(browser()->GetProfile())
         ->SetCookieSetting(url, CONTENT_SETTING_ALLOW);
   }
 
   content::WebContents* web_contents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
   net::EmbeddedTestServer* https_server() {
@@ -193,7 +194,7 @@ IN_PROC_BROWSER_TEST_F(ThirdPartyMetricsObserverBrowserTest,
                        OneFirstPartyFrame_NoTimingRecorded) {
   base::HistogramTester histogram_tester;
   page_load_metrics::PageLoadMetricsTestWaiter waiter(
-      browser()->tab_strip_model()->GetActiveWebContents());
+      browser()->GetTabStripModel()->GetActiveWebContents());
   NavigateToPageWithFrameAndWaitForFrame("a.com", &waiter);
 
   // Navigate the frame to a first-party.
@@ -206,7 +207,7 @@ IN_PROC_BROWSER_TEST_F(ThirdPartyMetricsObserverBrowserTest,
   base::HistogramTester histogram_tester;
 
   page_load_metrics::PageLoadMetricsTestWaiter waiter(
-      browser()->tab_strip_model()->GetActiveWebContents());
+      browser()->GetTabStripModel()->GetActiveWebContents());
   NavigateToPageWithFrameAndWaitForFrame("a.com", &waiter);
 
   // Navigate the frame to a third-party.
@@ -227,7 +228,7 @@ IN_PROC_BROWSER_TEST_F(ThirdPartyMetricsObserverBrowserTest,
   base::HistogramTester histogram_tester;
 
   page_load_metrics::PageLoadMetricsTestWaiter waiter(
-      browser()->tab_strip_model()->GetActiveWebContents());
+      browser()->GetTabStripModel()->GetActiveWebContents());
   NavigateToPageWithFrameAndWaitForFrame("a.com", &waiter);
 
   // Navigate the frame to a third-party.
@@ -249,7 +250,7 @@ IN_PROC_BROWSER_TEST_F(ThirdPartyMetricsObserverBrowserTest,
   base::HistogramTester histogram_tester;
 
   page_load_metrics::PageLoadMetricsTestWaiter waiter(
-      browser()->tab_strip_model()->GetActiveWebContents());
+      browser()->GetTabStripModel()->GetActiveWebContents());
   NavigateToPageWithFrameAndWaitForFrame("a.com", &waiter);
 
   // Navigate the frame to a third-party page.
@@ -505,12 +506,10 @@ IN_PROC_BROWSER_TEST_F(ThirdPartyMetricsObserverBrowserTest,
   observer.Wait();
   NavigateToUntrackedUrl();
 
-  const int expected_reads =
-      base::FeatureList::IsEnabled(network::features::kGetCookiesOnSet) ? 1 : 0;
-  histogram_tester.ExpectUniqueSample(kReadCookieHistogram, expected_reads, 1);
+  histogram_tester.ExpectUniqueSample(kReadCookieHistogram, 0, 1);
   histogram_tester.ExpectBucketCount(
       "Blink.UseCounter.Features",
-      blink::mojom::WebFeature::kThirdPartyCookieRead, expected_reads);
+      blink::mojom::WebFeature::kThirdPartyCookieRead, 0);
   histogram_tester.ExpectBucketCount(
       "Blink.UseCounter.Features",
       blink::mojom::WebFeature::kThirdPartyCookieWrite, 1);

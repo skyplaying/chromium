@@ -57,7 +57,7 @@ public class AndroidPaymentAppsFragment extends ChromeBaseSettingsFragment
     public void onViewCreated(View view, @Nullable Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
 
-        // Disable animations of preference changes (crbug.com/986241).
+        // Disable animations of preference changes (crbug.com/41471927).
         getListView().setItemAnimator(null);
     }
 
@@ -73,14 +73,9 @@ public class AndroidPaymentAppsFragment extends ChromeBaseSettingsFragment
 
         ServiceWorkerPaymentAppBridge.getServiceWorkerPaymentAppsInfo(
                 getProfile(),
-                new ServiceWorkerPaymentAppBridge.GetServiceWorkerPaymentAppsInfoCallback() {
-                    @Override
-                    public void onGetServiceWorkerPaymentAppsInfo(
-                            Map<String, Pair<String, Bitmap>> appsInfo) {
+                (Map<String, Pair<String, Bitmap>> appsInfo) ->
                         addPaymentAppsPreference(
-                                AndroidPaymentAppFactory.getAndroidPaymentAppsInfo(), appsInfo);
-                    }
-                });
+                                AndroidPaymentAppFactory.getAndroidPaymentAppsInfo(), appsInfo));
     }
 
     private void addPaymentAppsPreference(

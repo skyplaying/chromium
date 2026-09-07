@@ -10,7 +10,6 @@
 #include "base/atomic_sequence_num.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "build/build_config.h"
 #include "build/chromecast_buildflags.h"
 #include "media/base/key_systems.h"
@@ -28,6 +27,7 @@
 
 #if BUILDFLAG(ENABLE_CAST_RECEIVER) && \
     (BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_ANDROID))
+#include "base/time/time.h"
 #include "media/mojo/services/playback_events_recorder.h"
 #endif
 
@@ -290,6 +290,7 @@ void MediaMetricsProvider::Initialize(
     mojom::MediaURLScheme url_scheme,
     mojom::MediaStreamType media_stream_type) {
   if (IsInitialized()) {
+    CHECK(mojo::IsInMessageDispatch());
     mojo::ReportBadMessage(kInvalidInitialize);
     return;
   }
@@ -396,6 +397,7 @@ void MediaMetricsProvider::AcquireWatchTimeRecorder(
     mojom::PlaybackPropertiesPtr properties,
     mojo::PendingReceiver<mojom::WatchTimeRecorder> receiver) {
   if (!IsInitialized()) {
+    CHECK(mojo::IsInMessageDispatch());
     mojo::ReportBadMessage(kInvalidInitialize);
     return;
   }
@@ -409,6 +411,7 @@ void MediaMetricsProvider::AcquireWatchTimeRecorder(
 void MediaMetricsProvider::AcquireVideoDecodeStatsRecorder(
     mojo::PendingReceiver<mojom::VideoDecodeStatsRecorder> receiver) {
   if (!IsInitialized()) {
+    CHECK(mojo::IsInMessageDispatch());
     mojo::ReportBadMessage(kInvalidInitialize);
     return;
   }

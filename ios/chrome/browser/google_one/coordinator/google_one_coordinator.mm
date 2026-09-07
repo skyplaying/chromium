@@ -4,15 +4,22 @@
 
 #import "ios/chrome/browser/google_one/coordinator/google_one_coordinator.h"
 
+#import "base/check.h"
+#import "base/functional/bind.h"
 #import "base/metrics/histogram_functions.h"
+#import "ios/chrome/app/profile/profile_state.h"
+#import "ios/chrome/browser/google_one/shared/google_one_deep_link_util.h"
 #import "ios/chrome/browser/scoped_ui_blocker/ui_bundled/scoped_ui_blocker.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/google_one_commands.h"
-#import "ios/chrome/browser/shared/public/commands/open_new_tab_command.h"
-#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
+#import "ios/chrome/browser/shared/ui/util/identity_snackbar/identity_snackbar_utils.h"
+#import "ios/chrome/browser/signin/model/authentication_service.h"
+#import "ios/chrome/browser/signin/model/authentication_service_factory.h"
+#import "ios/chrome/browser/url_loading/model/url_loading_browser_agent.h"
+#import "ios/chrome/browser/url_loading/model/url_loading_params.h"
 #import "ios/public/provider/chrome/browser/google_one/google_one_api.h"
 #import "net/base/apple/url_conversions.h"
 #import "url/gurl.h"
@@ -24,6 +31,7 @@ const char kOutcomeHistogramPrefix[] = "IOS.GoogleOne.Outcome";
 const char kSettingsHistogramSuffix[] = ".Settings";
 const char kDriveHistogramSuffix[] = ".Drive";
 const char kPhotosHistogramSuffix[] = ".Photos";
+const char kDeepLinkHistogramSuffix[] = ".DeepLink";
 
 // Returns the correct suffix based on `entry_point`.
 std::string HistogramSuffixForEntryPoint(GoogleOneEntryPoint entry_point) {
@@ -34,6 +42,8 @@ std::string HistogramSuffixForEntryPoint(GoogleOneEntryPoint entry_point) {
       return kDriveHistogramSuffix;
     case GoogleOneEntryPoint::kSaveToPhotosAlert:
       return kPhotosHistogramSuffix;
+    case GoogleOneEntryPoint::kDeepLink:
+      return kDeepLinkHistogramSuffix;
   }
 }
 
@@ -57,7 +67,8 @@ enum class GoogleOneOutcomeMetrics {
   kUserWillLeaveApp = 8,
   kLaunchFailed = 9,
   kInvalidParameters = 10,
-  kMaxValue = kInvalidParameters
+  kInvalidParametersFallbackToOpeningURLInNewTab = 11,
+  kMaxValue = kInvalidParametersFallbackToOpeningURLInNewTab
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/ios/enums.xml:GoogleOneOutcome)
 
@@ -90,6 +101,10 @@ GoogleOneOutcomeMetrics HistogramOutcomeBucket(GoogleOneOutcome outcome,
     case GoogleOneOutcome::kGoogleOneEntryOutcomeLaunchFailed:
       return GoogleOneOutcomeMetrics::kLaunchFailed;
     case GoogleOneOutcome::kGoogleOneEntryOutcomeInvalidParameters:
+      if (opened_url) {
+        return GoogleOneOutcomeMetrics::
+            kInvalidParametersFallbackToOpeningURLInNewTab;
+      }
       return GoogleOneOutcomeMetrics::kInvalidParameters;
   }
 }
@@ -100,6 +115,7 @@ GoogleOneOutcomeMetrics HistogramOutcomeBucket(GoogleOneOutcome outcome,
   GoogleOneEntryPoint _entryPoint;
   id<GoogleOneController> _controller;
   id<SystemIdentity> _identity;
+  GURL _inputURL;
   // UI blocker used while the there is only one buying flow at the time on
   // any window.
   std::unique_ptr<ScopedUIBlocker> _UIBlocker;
@@ -125,24 +141,74 @@ GoogleOneOutcomeMetrics HistogramOutcomeBucket(GoogleOneOutcome outcome,
   return self;
 }
 
+- (instancetype)initWithBaseViewController:(UIViewController*)viewController
+                                   browser:(Browser*)browser
+                                entryPoint:(GoogleOneEntryPoint)entryPoint
+                                  inputURL:(const GURL&)inputURL {
+  self = [super initWithBaseViewController:viewController browser:browser];
+  if (self) {
+    CHECK(inputURL.is_valid());
+    _entryPoint = entryPoint;
+    _inputURL = inputURL;
+  }
+  return self;
+}
+
 - (void)start {
   [super start];
+  id<SystemIdentity> identityToUse = _identity;
+  if (_inputURL.is_valid()) {
+    NSString* accountParam = GoogleOneAccountFromURL(_inputURL);
+    if (accountParam.length > 0) {
+      identityToUse = FindIdentityForGoogleOneAccount(accountParam);
+    }
+    if (!identityToUse) {
+      AuthenticationService* authService =
+          AuthenticationServiceFactory::GetForProfile(
+              self.browser->GetProfile());
+      identityToUse = authService->GetPrimaryIdentity();
+    }
+  }
+
+  // If the user is not signed in and there is no valid account specified in the
+  // URL, there is no account to show settings for. If there is an input URL,
+  // open it in a new tab. Otherwise, cancel the action.
+  if (!identityToUse) {
+    if (_inputURL.is_valid()) {
+      [self openURL:_inputURL];
+    }
+    [self flowDidCompleteWithOutcome:GoogleOneOutcome::
+                                         kGoogleOneEntryOutcomeInvalidParameters
+                               error:nil];
+    return;
+  }
+
   GoogleOneConfiguration* configuration = [[GoogleOneConfiguration alloc] init];
   configuration.entryPoint = _entryPoint;
-  configuration.identity = _identity;
+  configuration.identity = identityToUse;
+
   __weak __typeof(self) weakSelf = self;
   configuration.flowDidEndWithErrorCallback =
       ^(GoogleOneOutcome outcome, NSError* error) {
         [weakSelf flowDidCompleteWithOutcome:outcome error:error];
       };
   configuration.openURLCallback = ^(NSURL* url) {
-    [weakSelf openURL:url];
+    [weakSelf openURL:net::GURLWithNSURL(url)];
   };
   // There can be only one purchase flow in the application.
-  _UIBlocker = std::make_unique<ScopedUIBlocker>(self.browser->GetSceneState(),
-                                                 UIBlockerExtent::kApplication);
+  SceneState* sceneState = self.browser->GetSceneState();
+  _UIBlocker =
+      ScopedUIBlocker::AppScoped(sceneState, sceneState.profileState.appState);
   _controller = ios::provider::CreateGoogleOneController(configuration);
-  [_controller launchWithViewController:self.baseViewController completion:nil];
+  if (_inputURL.is_valid()) {
+    TriggerAccountSwitchSnackbarWithIdentity(identityToUse, self.browser);
+    [_controller launchWithViewController:self.baseViewController
+                                      URL:net::NSURLWithGURL(_inputURL)
+                               completion:nil];
+  } else {
+    [_controller launchWithViewController:self.baseViewController
+                               completion:nil];
+  }
 }
 
 - (void)stop {
@@ -159,18 +225,15 @@ GoogleOneOutcomeMetrics HistogramOutcomeBucket(GoogleOneOutcome outcome,
 
 #pragma mark - Private
 
-- (void)openURL:(NSURL*)url {
+- (void)openURL:(const GURL&)url {
   Browser* browser = self.browser;
   if (!browser) {
     return;
   }
   _openedURL = YES;
-  OpenNewTabCommand* command = [OpenNewTabCommand
-      commandWithURLFromChrome:net::GURLWithNSURL(url)
-                   inIncognito:browser->GetProfile()->IsOffTheRecord()];
-
-  [HandlerForProtocol(browser->GetCommandDispatcher(), SceneCommands)
-      openURLInNewTab:command];
+  UrlLoadParams params = UrlLoadParams::InNewTab(url);
+  params.in_incognito = browser->GetProfile()->IsOffTheRecord();
+  UrlLoadingBrowserAgent::FromBrowser(browser)->Load(params);
 }
 
 - (void)flowDidCompleteWithOutcome:(GoogleOneOutcome)outcome

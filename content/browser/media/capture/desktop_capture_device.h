@@ -37,6 +37,11 @@ namespace content {
 media::VideoPixelFormat CONTENT_EXPORT
 FourCCToVideoPixelFormat(webrtc::FourCC fourcc);
 
+#if BUILDFLAG(IS_WIN)
+// Returns true if Windows Graphics Capture (WGC) is enabled for screen capture.
+bool CONTENT_EXPORT IsWgcEnabledForScreenCapture();
+#endif
+
 // DesktopCaptureDevice implements VideoCaptureDevice for screens and windows.
 // It's essentially an adapter between webrtc::DesktopCapturer and
 // VideoCaptureDevice, i.e. it employs the third-party WebRTC code to use native
@@ -69,6 +74,7 @@ class CONTENT_EXPORT DesktopCaptureDevice : public media::VideoCaptureDevice {
   // a frame sent to the consumer with a delay of up to one second.
   void RequestRefreshFrame() override;
 
+  void InvalidateBuffers() override;
   // Set the platform-dependent window id for the notification window.
   void SetNotificationWindowId(gfx::NativeViewId window_id);
 

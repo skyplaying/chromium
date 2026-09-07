@@ -13,7 +13,6 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/logging.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/power_monitor/power_monitor.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/thread_annotations.h"
@@ -137,6 +136,12 @@ const std::string& AudioManager::GetGlobalAppName() {
 // static
 AudioManager* AudioManager::Get() {
   return g_last_created;
+}
+
+std::optional<base::CallbackListSubscription>
+AudioManager::AddInputMuteStateChangeCallback(
+    base::RepeatingCallback<void(bool)> /*callback*/) {
+  return std::nullopt;
 }
 
 bool AudioManager::Shutdown() {

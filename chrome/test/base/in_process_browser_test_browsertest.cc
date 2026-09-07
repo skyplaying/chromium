@@ -8,13 +8,13 @@
 #include <string.h>
 
 #include <array>
+#include <string_view>
 
 #include "base/compiler_specific.h"
 #include "base/path_service.h"
 #include "build/build_config.h"
 #include "chrome/browser/after_startup_task_utils.h"
 #include "chrome/browser/preloading/scoped_prewarm_feature_list.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/navigation_handle.h"
@@ -30,11 +30,11 @@
 
 #if defined(TOOLKIT_VIEWS)
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/toolbar/browser_app_menu_button.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
+#include "ui/views/interaction/element_tracker_views.h"
 #include "ui/views/view.h"
 #endif
 
@@ -78,10 +78,10 @@ class LoadFailObserver : public content::WebContentsObserver {
 
 class InProcessBrowserTestP
     : public InProcessBrowserTest,
-      public ::testing::WithParamInterface<const char*> {};
+      public ::testing::WithParamInterface<std::string_view> {};
 
 IN_PROC_BROWSER_TEST_P(InProcessBrowserTestP, TestP) {
-  UNSAFE_TODO(EXPECT_EQ(0, strcmp("foo", GetParam())));
+  EXPECT_EQ(GetParam(), "foo");
 }
 
 INSTANTIATE_TEST_SUITE_P(IPBTP,
@@ -177,9 +177,10 @@ END_METADATA
 IN_PROC_BROWSER_TEST_F(InProcessBrowserTest,
                        RunsScheduledLayoutOnAnchoredBubbles) {
   views::View* const anchor_view =
-      BrowserView::GetBrowserViewForBrowser(browser())
-          ->toolbar()
-          ->app_menu_button();
+      views::ElementTrackerViews::GetInstance()->GetFirstMatchingView(
+          kToolbarAppMenuButtonElementId,
+          BrowserView::GetBrowserViewForBrowser(browser())
+              ->GetElementContext());
 
   // Temporarily owned.
   views::BubbleDialogDelegateView* const bubble =

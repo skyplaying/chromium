@@ -58,7 +58,6 @@ class HTMLOptionElement;
 class HTMLFrameOwnerElement;
 class HTMLSelectElement;
 struct PhysicalRect;
-class WebPluginContainer;
 
 class CORE_EXPORT AXObjectCache : public GarbageCollected<AXObjectCache> {
  public:
@@ -140,7 +139,7 @@ class CORE_EXPORT AXObjectCache : public GarbageCollected<AXObjectCache> {
   virtual void HandleInitialFocus() = 0;
   virtual void HandleEditableTextContentChanged(Node*) = 0;
   virtual void HandleDeletionOrInsertionInTextField(
-      const SelectionInDOMTree& changed_selection,
+      const SelectionInDomTree& changed_selection,
       bool is_deletion) = 0;
   virtual void HandleTextMarkerDataAdded(Node* start, Node* end) = 0;
   virtual void HandleTextFormControlChanged(Node*) = 0;
@@ -190,6 +189,9 @@ class CORE_EXPORT AXObjectCache : public GarbageCollected<AXObjectCache> {
 
   // Called when the scroll offset changes.
   virtual void HandleScrollPositionChanged(LayoutObject*) = 0;
+
+  // Called when the scroll extent or dimensions of a scrollable area change.
+  virtual void HandleScrollDimensionsChanged(LayoutObject*) = 0;
 
   // Called when a scroll marker tab selection changes, affecting which
   // content is visible/accessible in a CSS scroll-marker-group tabs mode.

@@ -8,9 +8,11 @@
 #include <utility>
 
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/i18n/rtl.h"
 #include "base/memory/weak_ptr.h"
 #include "base/strings/strcat.h"
+#include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/extensions/extension_dialog_utils.h"
 #include "chrome/browser/ui/extensions/extension_installed_watcher.h"
@@ -27,7 +29,13 @@
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/dialog_model.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "chrome/common/pref_names.h"
+#include "components/prefs/pref_service.h"
+#endif
 
 #if !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/ui/views/extensions/extension_post_install_dialog_view_utils.h"
@@ -39,6 +47,7 @@ namespace {
 constexpr gfx::Size kMaxIconSize{43, 43};
 
 void ConfigurePostInstallDialogModel(
+    Profile* profile,
     ui::DialogModel::Builder& dialog_model_builder,
     ExtensionPostInstallDialogModel* model,
     base::RepeatingClosure manage_shortcuts_callback) {
@@ -65,9 +74,22 @@ void ConfigurePostInstallDialogModel(
                 manage_shortcuts_callback)));
   }
   if (model->show_how_to_manage()) {
-    dialog_model_builder.AddParagraph(ui::DialogModelLabel(
-        l10n_util::GetStringUTF16(IDS_EXTENSION_INSTALLED_MANAGE_INFO)));
+    int manage_info_string_id = IDS_EXTENSION_INSTALLED_MANAGE_INFO;
+#if BUILDFLAG(IS_ANDROID)
+    if (!profile->GetPrefs()->GetBoolean(prefs::kPinExtensionsMenuButton)) {
+      manage_info_string_id = IDS_EXTENSION_INSTALLED_MANAGE_INFO_IN_MAIN_MENU;
+    }
+#endif
+    dialog_model_builder.AddParagraph(
+        ui::DialogModelLabel(l10n_util::GetStringUTF16(manage_info_string_id)));
   }
+
+#if BUILDFLAG(IS_ANDROID)
+  dialog_model_builder.AddOkButton(
+      base::DoNothing(),
+      ui::DialogModel::Button::Params().SetLabel(
+          l10n_util::GetStringUTF16(IDS_EXTENSION_INSTALLED_OK_BUTTON)));
+#endif
 }
 
 void OpenExtensionsShortcutsPage(
@@ -98,8 +120,10 @@ class ExtensionPostInstallDialog : public ui::DialogModelDelegate {
   ExtensionPostInstallDialogModel* model() { return model_.get(); }
 
   void LinkClicked() {
-    extensions::OpenExtensionsShortcutsPage(web_contents_);
+    base::WeakPtr<content::WebContents> web_contents = web_contents_;
     dialog_model()->host()->Close();
+    // `this` might be deleted when `Close()` is called.
+    extensions::OpenExtensionsShortcutsPage(web_contents);
   }
 
  private:
@@ -110,7 +134,9 @@ class ExtensionPostInstallDialog : public ui::DialogModelDelegate {
 void ShowExtensionPostInstallDialog(
     Profile* profile,
     content::WebContents* web_contents,
-    std::unique_ptr<ExtensionPostInstallDialogModel> model) {
+    std::unique_ptr<ExtensionPostInstallDialogModel> model,
+    base::OnceCallback<void(base::WeakPtr<content::WebContents>)>
+        show_iph_callback) {
   if (!web_contents) {
     return;
   }
@@ -126,12 +152,21 @@ void ShowExtensionPostInstallDialog(
 
   ui::DialogModel::Builder dialog_model_builder(std::move(delegate));
 
+  if (!show_iph_callback.is_null()) {
+    dialog_model_builder.SetDialogDestroyingCallback(base::BindOnce(
+        base::IgnoreResult(&base::SequencedTaskRunner::PostTask),
+        base::SequencedTaskRunner::GetCurrentDefault(), FROM_HERE,
+        base::BindOnce(std::move(show_iph_callback),
+                       web_contents->GetWeakPtr())));
+  }
+
   auto manage_shortcuts_callback =
       base::BindRepeating(&ExtensionPostInstallDialog::LinkClicked,
                           base::Unretained(weak_delegate));
 
-  extensions::ConfigurePostInstallDialogModel(
-      dialog_model_builder, weak_delegate->model(), manage_shortcuts_callback);
+  ConfigurePostInstallDialogModel(profile, dialog_model_builder,
+                                  weak_delegate->model(),
+                                  manage_shortcuts_callback);
 
 #if !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID)
   // Add a sync or sign in promo in the footer if it should be shown.
@@ -158,7 +193,9 @@ void TriggerPostInstallDialog(
     Profile* profile,
     scoped_refptr<const extensions::Extension> extension,
     const SkBitmap& icon,
-    base::OnceCallback<content::WebContents*()> get_web_contents_callback) {
+    base::OnceCallback<content::WebContents*()> get_web_contents_callback,
+    base::OnceCallback<void(base::WeakPtr<content::WebContents>)>
+        show_iph_callback) {
   auto watcher = std::make_unique<ExtensionInstalledWatcher>(profile);
   ExtensionInstalledWatcher* watcher_ptr = watcher.get();
   watcher_ptr->WaitForInstall(
@@ -168,6 +205,8 @@ void TriggerPostInstallDialog(
              scoped_refptr<const extensions::Extension> ext, Profile* prof,
              const SkBitmap& icon_val,
              base::OnceCallback<content::WebContents*()> get_web_contents_cb,
+             base::OnceCallback<void(base::WeakPtr<content::WebContents>)>
+                 show_iph_cb,
              bool installed) {
             if (!installed) {
               return;
@@ -179,11 +218,11 @@ void TriggerPostInstallDialog(
             }
             auto model = std::make_unique<ExtensionPostInstallDialogModel>(
                 prof, ext.get(), icon_val);
-            extensions::ShowExtensionPostInstallDialog(prof, web_contents,
-                                                       std::move(model));
+            extensions::ShowExtensionPostInstallDialog(
+                prof, web_contents, std::move(model), std::move(show_iph_cb));
           },
           std::move(watcher), extension, profile, icon,
-          std::move(get_web_contents_callback)));
+          std::move(get_web_contents_callback), std::move(show_iph_callback)));
 }
 
 }  // namespace extensions

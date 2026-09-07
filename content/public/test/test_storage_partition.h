@@ -17,6 +17,7 @@
 #include "content/public/browser/storage_partition_config.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/network/public/mojom/cert_verifier_service_updater.mojom.h"
+#include "services/network/public/mojom/device_bound_sessions.mojom.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 
 namespace blink {
@@ -67,10 +68,9 @@ class TestStoragePartition : public StoragePartition {
     network_context_ = context;
   }
   network::mojom::NetworkContext* GetNetworkContext() override;
+  bool IsNetworkContextInitialized() override;
   cert_verifier::mojom::CertVerifierServiceUpdater*
   GetCertVerifierServiceUpdater() override;
-
-  storage::SharedStorageManager* GetSharedStorageManager() override;
 
   void set_url_loader_factory_for_browser_process(
       network::TestURLLoaderFactory* factory) {
@@ -150,11 +150,6 @@ class TestStoragePartition : public StoragePartition {
   }
   PlatformNotificationContext* GetPlatformNotificationContext() override;
 
-  InterestGroupManager* GetInterestGroupManager() override;
-
-  AttributionDataModel* GetAttributionDataModel() override;
-
-  PrivateAggregationDataModel* GetPrivateAggregationDataModel() override;
 
 #if BUILDFLAG(ENABLE_LIBRARY_CDMS)
   CdmStorageDataModel* GetCdmStorageDataModel() override;
@@ -162,18 +157,11 @@ class TestStoragePartition : public StoragePartition {
 
   network::mojom::DeviceBoundSessionManager* GetDeviceBoundSessionManager()
       override;
-  void set_device_bound_session_manager(
-      network::mojom::DeviceBoundSessionManager* device_bound_session_manager) {
-    device_bound_session_manager_ = device_bound_session_manager;
-  }
+  void OverrideDeviceBoundSessionManagerForTesting(
+      std::unique_ptr<network::mojom::DeviceBoundSessionManager>
+          device_bound_session_manager) override;
 
   void DeleteStaleSessionData() override {}
-
-  void set_browsing_topics_site_data_manager(
-      BrowsingTopicsSiteDataManager* manager) {
-    browsing_topics_site_data_manager_ = manager;
-  }
-  BrowsingTopicsSiteDataManager* GetBrowsingTopicsSiteDataManager() override;
 
   void set_devtools_background_services_context(
       DevToolsBackgroundServicesContext* context) {
@@ -208,21 +196,18 @@ class TestStoragePartition : public StoragePartition {
   ZoomLevelDelegate* GetZoomLevelDelegate() override;
 
   void ClearDataForOrigin(uint32_t remove_mask,
-                          uint32_t quota_storage_remove_mask,
                           const GURL& storage_origin,
                           base::OnceClosure callback) override;
   void ClearDataForBuckets(const blink::StorageKey& storage_key,
                            const std::set<std::string>& buckets,
                            base::OnceClosure callback) override;
   void ClearData(uint32_t remove_mask,
-                 uint32_t quota_storage_remove_mask,
                  const blink::StorageKey& storage_key,
                  const base::Time begin,
                  const base::Time end,
                  base::OnceClosure callback) override;
 
   void ClearData(uint32_t remove_mask,
-                 uint32_t quota_storage_remove_mask,
                  BrowsingDataFilterBuilder* filter_builder,
                  StorageKeyPolicyMatcherFunction storage_key_policy_matcher,
                  network::mojom::CookieDeletionFilterPtr cookie_deletion_filter,
@@ -240,19 +225,19 @@ class TestStoragePartition : public StoragePartition {
   void Flush() override;
 
   void ResetURLLoaderFactories() override;
+  void ClearBluetoothAllowedDevicesMap() override;
 
   void AddObserver(DataRemovalObserver* observer) override;
   void RemoveObserver(DataRemovalObserver* observer) override;
   int GetDataRemovalObserverCount();
 
-  void ClearBluetoothAllowedDevicesMapForTesting() override;
   void FlushNetworkInterfaceForTesting() override;
   void FlushCertVerifierInterfaceForTesting() override;
   void WaitForDeletionTasksForTesting() override;
   void SetNetworkContextForTesting(
       mojo::PendingRemote<network::mojom::NetworkContext>
           network_context_remote) override;
-  void OverrideDeleteStaleSessionOnlyCookiesDelayForTesting(
+  void OverrideDeleteStaleSessionCleanupDelayForTesting(
       const base::TimeDelta& delay) override {}
 
   base::WeakPtr<StoragePartition> GetWeakPtr();
@@ -278,10 +263,8 @@ class TestStoragePartition : public StoragePartition {
   raw_ptr<SharedWorkerService> shared_worker_service_ = nullptr;
   mojo::Remote<storage::mojom::CacheStorageControl> cache_storage_control_;
   raw_ptr<GeneratedCodeCacheContext> generated_code_cache_context_ = nullptr;
-  raw_ptr<network::mojom::DeviceBoundSessionManager>
-      device_bound_session_manager_ = nullptr;
-  raw_ptr<BrowsingTopicsSiteDataManager> browsing_topics_site_data_manager_ =
-      nullptr;
+  std::unique_ptr<network::mojom::DeviceBoundSessionManager>
+      device_bound_session_manager_;
   raw_ptr<PlatformNotificationContext> platform_notification_context_ = nullptr;
   raw_ptr<DevToolsBackgroundServicesContext>
       devtools_background_services_context_ = nullptr;

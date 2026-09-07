@@ -25,6 +25,7 @@ import org.chromium.components.embedder_support.util.UrlUtilities;
 import org.chromium.components.embedder_support.view.ContentView;
 import org.chromium.components.security_state.ConnectionSecurityLevel;
 import org.chromium.components.security_state.SecurityStateModel;
+import org.chromium.content_public.browser.AdditionalNavigationParams;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.NavigationHandle;
 import org.chromium.content_public.browser.WebContents;
@@ -32,6 +33,7 @@ import org.chromium.content_public.browser.WebContentsObserver;
 import org.chromium.content_public.common.ResourceRequestBody;
 import org.chromium.ui.widget.Toast;
 import org.chromium.url.GURL;
+import org.chromium.url.Origin;
 
 /** Mediator class for preview tab, responsible for communicating with other objects. */
 @NullMarked
@@ -103,11 +105,11 @@ public class EphemeralTabMediator {
     }
 
     /** Notify observers on navigation start. */
-    public void onNavigationStarted(GURL clickedUrl) {
+    public void onNavigationStarted(NavigationHandle navigation) {
         RewindableIterator<EphemeralTabObserver> observersIterator =
                 mObservers.rewindableIterator();
         while (observersIterator.hasNext()) {
-            observersIterator.next().onNavigationStarted(clickedUrl);
+            observersIterator.next().onNavigationStarted(navigation);
         }
     }
 
@@ -148,16 +150,34 @@ public class EphemeralTabMediator {
     }
 
     /** Loads a new URL into the tab and makes it visible. */
-    void requestShowContent(GURL url, String title) {
-        loadUrl(url);
+    void requestShowContent(
+            GURL url,
+            String title,
+            @Nullable Origin initiatorOrigin,
+            @Nullable AdditionalNavigationParams additionalNavigationParams) {
+        loadUrl(url, initiatorOrigin, additionalNavigationParams);
         assumeNonNull(mSheetContent);
         mSheetContent.updateTitle(title);
         mBottomSheetController.requestShowContent(mSheetContent, true);
     }
 
-    private void loadUrl(GURL url) {
+    private void loadUrl(GURL url, @Nullable Origin initiatorOrigin) {
+        loadUrl(url, initiatorOrigin, /* additionalNavigationParams= */ null);
+    }
+
+    private void loadUrl(
+            GURL url,
+            @Nullable Origin initiatorOrigin,
+            @Nullable AdditionalNavigationParams additionalNavigationParams) {
         assumeNonNull(mWebContents);
-        mWebContents.getNavigationController().loadUrl(new LoadUrlParams(url.getSpec()));
+        LoadUrlParams params = new LoadUrlParams(url);
+        params.setInitiatorOrigin(initiatorOrigin);
+        params.setAdditionalNavigationParams(additionalNavigationParams);
+        mWebContents.getNavigationController().loadUrl(params);
+    }
+
+    private @Nullable Origin getLastCommittedOrigin() {
+        return assumeNonNull(mWebContents).getMainFrame().getLastCommittedOrigin();
     }
 
     @EnsuresNonNull("mWebContentsObserver")
@@ -192,7 +212,7 @@ public class EphemeralTabMediator {
                                 return;
                             }
 
-                            onNavigationStarted(url);
+                            onNavigationStarted(navigation);
 
                             mCurrentUrl = url;
                             assumeNonNull(mProfile);
@@ -256,6 +276,11 @@ public class EphemeralTabMediator {
                     }
 
                     @Override
+                    public boolean canDownload(GURL url, String requestMethod) {
+                        return false;
+                    }
+
+                    @Override
                     public void openNewTab(
                             GURL url,
                             String extraHeaders,
@@ -263,12 +288,12 @@ public class EphemeralTabMediator {
                             int disposition,
                             boolean isRendererInitiated) {
                         // We never open a separate tab when navigating in a preview tab.
-                        loadUrl(url);
+                        loadUrl(url, getLastCommittedOrigin());
                     }
 
                     @Override
                     public boolean shouldCreateWebContents(GURL targetUrl) {
-                        loadUrl(targetUrl);
+                        loadUrl(targetUrl, getLastCommittedOrigin());
                         return false;
                     }
 

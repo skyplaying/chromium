@@ -11,46 +11,40 @@ MockAimEligibilityService::MockAimEligibilityService(
     TemplateURLService* template_url_service,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     signin::IdentityManager* identity_manager,
-    bool is_off_the_record)
+    Configuration configuration)
     : AimEligibilityService(pref_service,
                             template_url_service,
                             url_loader_factory,
                             identity_manager,
-                            is_off_the_record) {}
+                            "en-US",
+                            std::move(configuration)) {
+  ON_CALL(*this, IsServerEligibilityEnabled())
+      .WillByDefault(testing::Return(true));
+  ON_CALL(*this, IsAimAllowedByDse()).WillByDefault(testing::Return(true));
+  ON_CALL(*this, IsAimAllowedByFeatureAndPolicy())
+      .WillByDefault(testing::Return(true));
+  ON_CALL(*this, IsAimLocallyEligible()).WillByDefault(testing::Return(true));
+  ON_CALL(*this, IsAimEligible()).WillByDefault(testing::Return(true));
+  ON_CALL(*this, IsCanvasEligible()).WillByDefault(testing::Return(true));
+  ON_CALL(*this, IsCobrowseServerEligible())
+      .WillByDefault(testing::Invoke(
+          this, &MockAimEligibilityService::IsCobrowseEligible));
+  ON_CALL(*this, IsCobrowseEligible()).WillByDefault(testing::Return(true));
+  ON_CALL(*this, IsDeepSearchEligible()).WillByDefault(testing::Return(true));
+  ON_CALL(*this, IsCreateImagesEligible()).WillByDefault(testing::Return(true));
+  ON_CALL(*this, IsFuseboxEligible()).WillByDefault(testing::Return(true));
+  ON_CALL(*this, IsAimUrl(testing::_, testing::_))
+      .WillByDefault(testing::Return(true));
+  ON_CALL(*this, IsAimHost(testing::_, testing::_))
+      .WillByDefault(testing::Return(true));
+  ON_CALL(*this, HasNoCobrowseParams(testing::_))
+      .WillByDefault(testing::Return(false));
+  ON_CALL(*this, HasAimUrlParams(testing::_))
+      .WillByDefault(testing::Return(true));
+  ON_CALL(*this, GetSearchboxConfig())
+      .WillByDefault(testing::Return(&mock_config));
+  ON_CALL(*this, GetVariationsService())
+      .WillByDefault(testing::Return(nullptr));
+}
 
 MockAimEligibilityService::~MockAimEligibilityService() = default;
-
-const omnibox::SearchboxConfig* MockAimEligibilityService::GetSearchboxConfig()
-    const {
-  mock_config.Clear();
-  omnibox::SearchboxConfig* config = &mock_config;
-
-  auto* rule_set = config->mutable_rule_set();
-  rule_set->add_allowed_tools(omnibox::ToolMode::TOOL_MODE_DEEP_SEARCH);
-  rule_set->add_allowed_tools(omnibox::ToolMode::TOOL_MODE_IMAGE_GEN);
-  rule_set->add_allowed_tools(omnibox::ToolMode::TOOL_MODE_IMAGE_GEN_UPLOAD);
-
-  if (IsDeepSearchEligible()) {
-    auto* deep_search_rule = rule_set->add_tool_rules();
-    deep_search_rule->set_tool(omnibox::ToolMode::TOOL_MODE_DEEP_SEARCH);
-    deep_search_rule->set_allow_all_input_types(true);
-  }
-
-  if (IsCreateImagesEligible()) {
-    auto* image_gen_rule = rule_set->add_tool_rules();
-    image_gen_rule->set_tool(omnibox::ToolMode::TOOL_MODE_IMAGE_GEN);
-    image_gen_rule->set_allow_all_input_types(true);
-
-    auto* image_gen_upload_rule = rule_set->add_tool_rules();
-    image_gen_upload_rule->set_tool(
-        omnibox::ToolMode::TOOL_MODE_IMAGE_GEN_UPLOAD);
-    image_gen_upload_rule->set_allow_all_input_types(true);
-  }
-
-  auto* model_rule = rule_set->add_model_rules();
-  model_rule->set_model(omnibox::ModelMode::MODEL_MODE_GEMINI_REGULAR);
-  model_rule->set_allow_all_tools(true);
-  model_rule->set_allow_all_input_types(true);
-
-  return config;
-}

@@ -20,6 +20,72 @@ namespace blink {
 
 class StylePropertyMapTest : public PageTestBase {};
 
+namespace {
+
+// Sets |property| to a CSSKeywordValue holding |keyword|, and returns the
+// resulting specified value, or nullptr if set() threw.
+CSSStyleValue* SetKeyword(Document& document,
+                          StylePropertyMap* style_map,
+                          const char* property,
+                          const char* keyword) {
+  DummyExceptionStateForTesting exception_state;
+  HeapVector<Member<V8UnionCSSStyleValueOrString>> values;
+  values.push_back(MakeGarbageCollected<V8UnionCSSStyleValueOrString>(
+      CSSKeywordValue::Create(keyword, exception_state)));
+
+  style_map->clear();
+  style_map->set(document.GetExecutionContext(), property, values,
+                 exception_state);
+  if (exception_state.HadException()) {
+    return nullptr;
+  }
+  return style_map
+      ->get(document.GetExecutionContext(), property, exception_state)
+      ->GetAsCSSStyleValue();
+}
+
+}  // namespace
+
+// An identifier that happens to name a keyword of some other property is still
+// a perfectly good <custom-ident>, so setting one must not be rejected. 'auto'
+// is page's own keyword rather than a name, and must round-trip as well.
+TEST_F(StylePropertyMapTest, SetCustomIdentNamingAKeyword) {
+  StylePropertyMap* style_map = GetDocument().body()->attributeStyleMap();
+
+  for (const char* property : {"animation-name", "container-name", "page"}) {
+    for (const char* keyword : {"auto", "ease", "row", "red", "span"}) {
+      CSSStyleValue* value =
+          SetKeyword(GetDocument(), style_map, property, keyword);
+      ASSERT_TRUE(value) << property << " : " << keyword;
+      ASSERT_TRUE(IsA<CSSKeywordValue>(value)) << property << " : " << keyword;
+      EXPECT_EQ(keyword, To<CSSKeywordValue>(*value).value())
+          << property << " : " << keyword;
+    }
+  }
+}
+
+// Identifiers that the property's own grammar excludes must still be rejected,
+// even though CSSOMKeywords cannot enumerate them.
+TEST_F(StylePropertyMapTest, SetCustomIdentExcludedByTheProperty) {
+  StylePropertyMap* style_map = GetDocument().body()->attributeStyleMap();
+
+  // 'not', 'and' and 'or' are not valid container names, but they are ordinary
+  // custom idents for animation-name.
+  for (const char* keyword : {"not", "and", "or"}) {
+    EXPECT_FALSE(
+        SetKeyword(GetDocument(), style_map, "container-name", keyword))
+        << keyword;
+    EXPECT_TRUE(SetKeyword(GetDocument(), style_map, "animation-name", keyword))
+        << keyword;
+  }
+
+  // 'default' is excluded from <custom-ident> for every property.
+  EXPECT_FALSE(
+      SetKeyword(GetDocument(), style_map, "container-name", "default"));
+  EXPECT_FALSE(
+      SetKeyword(GetDocument(), style_map, "animation-name", "default"));
+}
+
 TEST_F(StylePropertyMapTest, SetRevertWithFeatureEnabled) {
   DummyExceptionStateForTesting exception_state;
 
@@ -47,13 +113,11 @@ TEST_F(StylePropertyMapTest, SetRevertWithFeatureEnabled) {
       map->get(GetDocument().GetExecutionContext(), "left", exception_state)
           ->GetAsCSSStyleValue();
 
-  ASSERT_TRUE(DynamicTo<CSSKeywordValue>(top));
-  EXPECT_EQ(CSSValueID::kRevert,
-            DynamicTo<CSSKeywordValue>(top)->KeywordValueID());
+  ASSERT_TRUE(IsA<CSSKeywordValue>(top));
+  EXPECT_EQ(CSSValueID::kRevert, To<CSSKeywordValue>(*top).KeywordValueID());
 
-  ASSERT_TRUE(DynamicTo<CSSKeywordValue>(left));
-  EXPECT_EQ(CSSValueID::kRevert,
-            DynamicTo<CSSKeywordValue>(top)->KeywordValueID());
+  ASSERT_TRUE(IsA<CSSKeywordValue>(left));
+  EXPECT_EQ(CSSValueID::kRevert, To<CSSKeywordValue>(*left).KeywordValueID());
 
   EXPECT_FALSE(exception_state.HadException());
 }
@@ -74,9 +138,8 @@ TEST_F(StylePropertyMapTest, SetOverflowClipString) {
   CSSStyleValue* overflow = map->get(GetDocument().GetExecutionContext(),
                                      "overflow-x", exception_state)
                                 ->GetAsCSSStyleValue();
-  ASSERT_TRUE(DynamicTo<CSSKeywordValue>(overflow));
-  EXPECT_EQ(CSSValueID::kClip,
-            DynamicTo<CSSKeywordValue>(overflow)->KeywordValueID());
+  ASSERT_TRUE(IsA<CSSKeywordValue>(overflow));
+  EXPECT_EQ(CSSValueID::kClip, To<CSSKeywordValue>(*overflow).KeywordValueID());
 
   EXPECT_FALSE(exception_state.HadException());
 }
@@ -97,9 +160,8 @@ TEST_F(StylePropertyMapTest, SetOverflowClipStyleValue) {
   CSSStyleValue* overflow = map->get(GetDocument().GetExecutionContext(),
                                      "overflow-x", exception_state)
                                 ->GetAsCSSStyleValue();
-  ASSERT_TRUE(DynamicTo<CSSKeywordValue>(overflow));
-  EXPECT_EQ(CSSValueID::kClip,
-            DynamicTo<CSSKeywordValue>(overflow)->KeywordValueID());
+  ASSERT_TRUE(IsA<CSSKeywordValue>(overflow));
+  EXPECT_EQ(CSSValueID::kClip, To<CSSKeywordValue>(*overflow).KeywordValueID());
 
   EXPECT_FALSE(exception_state.HadException());
 }
@@ -138,30 +200,14 @@ TEST_F(StylePropertyMapTest, CSSKeywordValuesTest) {
         // The properties skipped below have existing CSS Typed OM crash bugs.
         //
         // *** DO NOT ADD ADDITIONAL PROPERTIES BELOW ***
-        case CSSPropertyID::kAnimationDirection:
-        case CSSPropertyID::kAnimationFillMode:
-        case CSSPropertyID::kAnimationIterationCount:
-        case CSSPropertyID::kAnimationName:
-        case CSSPropertyID::kAnimationPlayState:
-        case CSSPropertyID::kAnimationTimeline:
         case CSSPropertyID::kAnimationTimingFunction:
         case CSSPropertyID::kBackgroundImage:
         case CSSPropertyID::kContain:
-        case CSSPropertyID::kContainerType:
         case CSSPropertyID::kFontSizeAdjust:
-        case CSSPropertyID::kFontVariantEastAsian:
-        case CSSPropertyID::kFontVariantLigatures:
-        case CSSPropertyID::kFontVariantNumeric:
-        case CSSPropertyID::kOffsetRotate:
         case CSSPropertyID::kScrollSnapType:
         case CSSPropertyID::kScrollbarGutter:
           // scrollbar-gutter:both-edges DCHECK fails for other reasons. Needs
           // investigation.
-        case CSSPropertyID::kTextDecorationLine:
-        case CSSPropertyID::kTimelineTriggerSource:
-        case CSSPropertyID::kTouchAction:
-        case CSSPropertyID::kTransitionBehavior:
-        case CSSPropertyID::kTransitionProperty:
         case CSSPropertyID::kTransitionTimingFunction:
           continue;
         default:

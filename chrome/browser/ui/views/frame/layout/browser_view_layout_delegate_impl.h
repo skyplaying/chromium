@@ -8,6 +8,7 @@
 #include "base/auto_reset.h"
 #include "base/memory/raw_ref.h"
 #include "chrome/browser/ui/views/frame/layout/browser_view_layout_delegate.h"
+#include "components/prefs/pref_change_registrar.h"
 
 class BrowserFrameView;
 class BrowserView;
@@ -21,12 +22,10 @@ class BrowserViewLayoutDelegateImpl : public BrowserViewLayoutDelegate {
   void operator=(const BrowserViewLayoutDelegateImpl&) = delete;
   ~BrowserViewLayoutDelegateImpl() override;
 
-  bool ShouldDrawTabStrip() const override;
-  bool ShouldUseTouchableTabstrip() const override;
-  bool ShouldDrawVerticalTabStrip() const override;
+  TabStripType GetTabStripType() const override;
   bool IsVerticalTabStripCollapsed() const override;
   bool ShouldDrawWebAppFrameToolbar() const override;
-  bool GetBorderlessModeEnabled() const override;
+  bool GetUnframedModeEnabled() const override;
   BrowserLayoutParams GetBrowserLayoutParams(
       bool use_browser_bounds) const override;
   WindowState GetBrowserWindowState() const override;
@@ -38,6 +37,7 @@ class BrowserViewLayoutDelegateImpl : public BrowserViewLayoutDelegate {
   bool IsActiveTabSplit() const override;
   bool IsActiveTabAtLeadingWindowEdge() const override;
   const ImmersiveModeController* GetImmersiveModeController() const override;
+  BrowserAnimationController* GetAnimationController() const override;
   ExclusiveAccessBubbleViews* GetExclusiveAccessBubble() const override;
   bool IsTopControlsSlideBehaviorEnabled() const override;
   float GetTopControlsSlideBehaviorShownRatio() const override;
@@ -49,6 +49,10 @@ class BrowserViewLayoutDelegateImpl : public BrowserViewLayoutDelegate {
       const gfx::Rect& available_titlebar_area) override;
   bool ShouldLayoutTabStrip() const override;
   int GetExtraInfobarOffset() const override;
+  bool IsOrganizerPanelVisible() const override;
+  base::CallbackListSubscription AddOnGlassModeChangedCallback(
+      base::RepeatingCallback<void(bool)> callback,
+      bool* current_state_out) override;
 
  protected:
   BrowserView& browser_view() { return browser_view_.get(); }
@@ -57,7 +61,11 @@ class BrowserViewLayoutDelegateImpl : public BrowserViewLayoutDelegate {
   const BrowserFrameView* GetFrameView() const;
 
  private:
+  void OnTabSearchPinnedStateChanged();
+
   const raw_ref<BrowserView> browser_view_;
+  PrefChangeRegistrar pref_registrar_;
+  bool tab_search_pinned_to_tab_strip_ = false;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_FRAME_LAYOUT_BROWSER_VIEW_LAYOUT_DELEGATE_IMPL_H_

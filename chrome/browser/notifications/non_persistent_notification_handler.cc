@@ -19,13 +19,14 @@
 #include "components/permissions/permission_util.h"
 #include "content/public/browser/notification_event_dispatcher.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/message_center/message_center_stats_collector.h"
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/notifications/platform_notification_service_factory.h"
 #include "chrome/browser/notifications/platform_notification_service_impl.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "ui/base/page_transition_types.h"
 #endif  // !BUILDFLAG(IS_ANDROID)
 

@@ -9,11 +9,13 @@
 #import "base/types/expected.h"
 #import "base/values.h"
 #import "components/webauthn/ios/passkey_request_params.h"
+#import "url/origin.h"
 
 namespace webauthn {
 
 // Events received from the Passkey JavaScript shim.
 enum class PasskeyScriptEvent {
+  kCancelRequest,
   kHandleGetRequest,
   kHandleCreateRequest,
   kLogGetRequest,
@@ -22,6 +24,9 @@ enum class PasskeyScriptEvent {
   kLogGetResolvedNonGpm,
   kLogCreateResolvedGpm,
   kLogCreateResolvedNonGpm,
+  kSignalUnknownCredential,
+  kSignalCurrentUserDetails,
+  kSignalAllAcceptedCredentials,
 };
 
 // Function to check if a credential exists in GPM.
@@ -88,9 +93,25 @@ BuildRegistrationRequestParams(IOSPasskeyClient::RequestInfo request_info,
 base::DictValue ToAuthenticationExtensionsClientOutputsJSON(
     passkey_model_utils::ExtensionOutputData extension_output_data);
 
+// Builds a SignalUnknownCredentialParams object from the parameters contained
+// in the provided dictionary.
+std::optional<SignalUnknownCredentialParams> BuildSignalUnknownCredentialParams(
+    const base::DictValue& dict);
+
+// Builds a SignalCurrentUserDetailsParams object from the parameters contained
+// in the provided dictionary.
+std::optional<SignalCurrentUserDetailsParams>
+BuildSignalCurrentUserDetailsParams(const base::DictValue& dict);
+
+// Builds a SignalAllAcceptedCredentialsParams object from the parameters
+// contained in the provided dictionary.
+std::optional<SignalAllAcceptedCredentialsParams>
+BuildSignalAllAcceptedCredentialsParams(const base::DictValue& dict);
+
 // Parses the event string into a strongly typed enum.
 std::optional<PasskeyScriptEvent> ParsePasskeyScriptEvent(
     const base::DictValue& dict,
+    const url::Origin& caller_origin,
     IsGpmPasskeyFunc is_gpm_passkey_func);
 
 }  // namespace webauthn

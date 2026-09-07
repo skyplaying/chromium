@@ -53,6 +53,7 @@
 #include "third_party/blink/renderer/core/workers/worker_global_scope.h"
 #include "third_party/blink/renderer/core/workers/worker_or_worklet_global_scope.h"
 #include "third_party/blink/renderer/core/workers/worker_thread.h"
+#include "third_party/blink/renderer/core/workers/worklet_global_scope.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/bindings/thread_debugger.h"
@@ -62,6 +63,39 @@
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
 
 namespace blink {
+
+namespace {
+
+const SecurityOrigin* GetMessagePortOriginForOriginCheck(
+    ExecutionContext* context,
+    const SerializedScriptValue& message) {
+  if (context->IsAudioWorkletGlobalScope() &&
+      message.GetOriginCheckRequirement() ==
+          SerializedScriptValue::OriginCheckRequirement::
+              kAllowRelatedAudioWorklet) {
+    // The WebAssembly serialization algorithm restricts modules to an agent
+    // cluster; it does not impose a same-origin restriction. HTML places a
+    // worklet in its creator's agent cluster even though the worklet has a
+    // unique opaque origin. Use the creator's origin for Chromium's additional
+    // origin check so that it does not reject an otherwise valid transfer. The
+    // agent-cluster check in CreateMessageEvent() remains enforced, and using
+    // the creator origin still rejects messages across document origins. See:
+    // https://html.spec.whatwg.org/multipage/webappapis.html#obtain-a-worklet-agent
+    // https://html.spec.whatwg.org/multipage/worklets.html#set-up-a-worklet-environment-settings-object
+    // https://webassembly.github.io/spec/web-api/#serialization
+    // File System Access handles, in contrast, require a strict same-origin
+    // check:
+    // https://fs.spec.whatwg.org/#filesystemhandle
+    auto* worklet_global_scope = To<WorkletGlobalScope>(context);
+    if (const SecurityOrigin* document_origin =
+            worklet_global_scope->DocumentSecurityOrigin()) {
+      return document_origin;
+    }
+  }
+  return context->GetSecurityOrigin();
+}
+
+}  // namespace
 
 MessagePort::MessagePort(ExecutionContext& execution_context)
     : ActiveScriptWrappable<MessagePort>({}),
@@ -135,8 +169,9 @@ void MessagePort::postMessage(ScriptState* script_state,
   msg.user_activation = PostMessageHelper::CreateUserActivationSnapshot(
       GetExecutionContext(), options);
 
-  msg.sender_origin =
-      GetExecutionContext()->GetSecurityOrigin()->IsolatedCopy();
+  const SecurityOrigin* sender_origin =
+      GetMessagePortOriginForOriginCheck(GetExecutionContext(), *msg.message);
+  msg.sender_origin = sender_origin->IsolatedCopy();
 
   ThreadDebugger* debugger = ThreadDebugger::From(script_state->GetIsolate());
   if (debugger)
@@ -146,12 +181,13 @@ void MessagePort::postMessage(ScriptState* script_state,
   msg.locked_to_sender_agent_cluster = msg.message->IsLockedToAgentCluster();
   msg.task_state_id = std::nullopt;
 
-  // Only pass the task state ID if we're in the main world, as isolated world
-  // task tracking is not yet supported. Also, only pass the task state if the
-  // port is still entangled to its initially entangled port.
+  // Only pass the task state if the port is still entangled to its initially
+  // entangled port. This is meant to enable propagating task state for
+  // MessageChannels that are used as a (same-frame) scheduling mechanism, which
+  // is common in web frameworks.
   if (initially_entangled_port_) {
     if (scheduler::TaskAttributionInfo* task_state =
-            CaptureCurrentTaskStateIfMainWorld(script_state)) {
+            CaptureCurrentTaskState(ExecutionContext::From(script_state))) {
       // Since `initially_entangled_port_` is not nullptr, neither should be
       // `post_message_task_container_`.
       CHECK(post_message_task_container_);
@@ -401,11 +437,6 @@ void MessagePort::DispatchMessageEvent(BlinkTransferableMessage message) {
       message.sender_origin->IsSameOriginWith(context->GetSecurityOrigin()) &&
       context->IsSameAgentCluster(message.sender_agent_cluster_id) &&
       context->IsWindow()) {
-    // It is not correct to assume we're running in the main world here,
-    // although if `task_state` is non-null, the message must have originated
-    // from the main world. And given isolated worlds cannot access main world
-    // variables and message ports aren't exposed through the DOM, we can assume
-    // we're propagating this in the main world.
     if (auto* tracker =
             scheduler::TaskAttributionTracker::From(context->GetIsolate())) {
       // Since `initially_entangled_port_` is not nullptr, neither should be
@@ -433,7 +464,8 @@ Event* MessagePort::CreateMessageEvent(BlinkTransferableMessage& message) {
   // Dispatch a messageerror event when the target is a remote origin that is
   // not allowed to access the message's data.
   if (message.message->IsOriginCheckRequired()) {
-    const SecurityOrigin* target_origin = context->GetSecurityOrigin();
+    const SecurityOrigin* target_origin =
+        GetMessagePortOriginForOriginCheck(context, *message.message);
     if (!message.sender_origin ||
         !message.sender_origin->IsSameOriginWith(target_origin)) {
       return MessageEvent::CreateError();

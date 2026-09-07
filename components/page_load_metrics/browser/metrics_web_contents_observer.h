@@ -16,8 +16,8 @@
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/time/time.h"
-#include "components/page_load_metrics/browser/page_load_metrics_observer_interface.h"
-#include "components/page_load_metrics/common/page_load_metrics.mojom-forward.h"
+#include "components/page_load_metrics/common/page_end_reason.h"
+#include "components/page_load_metrics/common/page_load_metrics.mojom.h"
 #include "components/page_load_metrics/common/page_load_timing.h"
 #include "content/public/browser/auction_result.h"
 #include "content/public/browser/render_frame_host_receiver_set.h"
@@ -43,7 +43,10 @@ class MetricsLifecycleObserver;
 class PageLoadMetricsEmbedderInterface;
 class PageLoadMetricsMemoryTracker;
 class PageLoadMetricsObserverDelegate;
+class PageLoadMetricsObserverInterface;
 class PageLoadTracker;
+enum class StorageType;
+struct UserInitiatedInfo;
 
 // MetricsWebContentsObserver tracks page loads and loading metrics
 // related data based on IPC messages received from a
@@ -118,7 +121,13 @@ class MetricsWebContentsObserver
   void ResourceLoadComplete(
       content::RenderFrameHost* render_frame_host,
       const content::GlobalRequestID& request_id,
+      const GURL& original_url,
       const blink::mojom::ResourceLoadInfo& resource_load_info) override;
+  void DidLoadResourceFromMemoryCache(
+      content::RenderFrameHost* render_frame_host,
+      const GURL& url,
+      const std::string& mime_type,
+      network::mojom::RequestDestination request_destination) override;
   void FrameReceivedUserActivation(
       content::RenderFrameHost* render_frame_host) override;
   void FrameDisplayStateChanged(content::RenderFrameHost* render_frame_host,
@@ -129,7 +138,6 @@ class MetricsWebContentsObserver
                          const content::CookieAccessDetails& details) override;
   void OnCookiesAccessed(content::RenderFrameHost* rfh,
                          const content::CookieAccessDetails& details) override;
-  void DidActivatePreviewedPage(base::TimeTicks activation_time) override;
 
   void OnStorageAccessed(content::RenderFrameHost* rfh,
                          const GURL& url,
@@ -184,15 +192,14 @@ class MetricsWebContentsObserver
       std::vector<mojom::EventTimingPtr> event_timings,
       const std::optional<blink::SubresourceLoadMetrics>&
           subresource_load_metrics,
-      mojom::SoftNavigationMetricsPtr);
+      std::vector<mojom::SoftNavigationMetricsPtr> soft_navigation_metrics,
+      std::vector<mojom::LargestContentfulPaintTimingPtr>
+          soft_largest_contentful_paint,
+      std::vector<mojom::CustomUserTimingMarkPtr> user_timings,
+      mojom::FontLoadingMetricsPtr font_loading_metrics);
 
   void OnCustomUserTimingUpdated(content::RenderFrameHost* rfh,
                                  mojom::CustomUserTimingMarkPtr custom_timing);
-
-  // Informs the observers of the currently committed primary page load that
-  // it's likely that prefetch will occur in this WebContents. This should
-  // not be called within WebContentsObserver::DidFinishNavigation methods.
-  void OnPrefetchLikely();
 
   // Called when a `SharedStorageWorkletHost` is created for `rfh`.
   void OnSharedStorageWorkletHostCreated(content::RenderFrameHost* rfh);
@@ -201,14 +208,14 @@ class MetricsWebContentsObserver
   // whose main frame is `main_rfh`.
   void OnSharedStorageSelectURLCalled(content::RenderFrameHost* main_rfh);
 
-  // Called when a Fledge auction completes.
-  void OnAdAuctionComplete(content::RenderFrameHost* rfh,
-                           bool is_server_auction,
-                           bool is_on_device_auction,
-                           content::AuctionResult result);
-
   // Returns the time this MetricsWebContentsObserver was created.
   base::TimeTicks GetCreated();
+
+  // Retrieves the PageLoadMetricsObserverInterface matching `name` for the
+  // specified `render_frame_host`. Returns null if the observer is not found.
+  base::WeakPtr<PageLoadMetricsObserverInterface> GetMetricsObserver(
+      content::RenderFrameHost* render_frame_host,
+      const char* name);
 
   base::WeakPtr<MetricsWebContentsObserver> AsWeakPtr() {
     return weak_ptr_factory_.GetWeakPtr();
@@ -265,12 +272,13 @@ class MetricsWebContentsObserver
       std::vector<mojom::EventTimingPtr> event_timings,
       const std::optional<blink::SubresourceLoadMetrics>&
           subresource_load_metrics,
-      mojom::SoftNavigationMetricsPtr soft_navigation_metrics) override;
+      std::vector<mojom::SoftNavigationMetricsPtr> soft_navigation_metrics,
+      std::vector<mojom::LargestContentfulPaintTimingPtr>
+          soft_largest_contentful_paint,
+      std::vector<mojom::CustomUserTimingMarkPtr> user_timings,
+      mojom::FontLoadingMetricsPtr font_loading_metrics) override;
   void AddCustomUserTiming(
       mojom::CustomUserTimingMarkPtr custom_timing) override;
-
-  void SetUpSharedMemoryForDroppedFrames(
-      base::ReadOnlySharedMemoryRegion dropped_frames_memory) override;
 
   // Common part for UpdateThroughput and OnTimingUpdated.
   bool DoesTimingUpdateHaveError(PageLoadTracker* tracker);
@@ -397,14 +405,6 @@ class MetricsWebContentsObserver
   // frame of the active page is in `primary_page_`.)
   base::flat_map<content::RenderFrameHost*, std::unique_ptr<PageLoadTracker>>
       inactive_pages_;
-
-  // This is currently set only for the main frame of each page associated with
-  // the WebContents. It maps to the shared memory for the smoothness and the
-  // dropped frame count UKMs.
-  base::flat_map<content::RenderFrameHost*, base::ReadOnlySharedMemoryRegion>
-      ukm_dropped_frames_data_;
-
-  std::vector<mojom::CustomUserTimingMarkPtr> page_load_custom_timings_;
 
   // Has the MWCO observed at least one navigation?
   bool has_navigated_;

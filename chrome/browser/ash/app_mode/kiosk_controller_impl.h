@@ -36,6 +36,10 @@ namespace network {
 class SharedURLLoaderFactory;
 }
 
+namespace policy {
+class PolicyService;
+}  // namespace policy
+
 namespace ash {
 
 class AppLaunchSplashScreen;
@@ -45,8 +49,11 @@ class KioskLaunchController;
 class KioskControllerImpl : public KioskController,
                             public user_manager::UserManager::Observer {
  public:
+  // `local_state` and `policy_service` must be non-null and must outlive
+  // `this`.
   KioskControllerImpl(
-      PrefService& local_state,
+      PrefService* local_state,
+      const policy::PolicyService* policy_service,
       scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
       user_manager::UserManager* user_manager);
   KioskControllerImpl(const KioskControllerImpl&) = delete;
@@ -86,15 +93,16 @@ class KioskControllerImpl : public KioskController,
 
   void OnAppLaunched(const KioskAppId& kiosk_app_id,
                      Profile* profile,
-                     const std::optional<std::string>& app_name);
+                     const std::optional<webapps::AppId>& app_id);
   void OnLaunchComplete(KioskAppLaunchError::Error error);
   void OnLaunchCompleteAfterCrash(const KioskAppId& app,
                                   Profile* profile,
                                   bool success,
-                                  const std::optional<std::string>& app_name);
-  void InitializeKioskSystemSession(const KioskAppId& kiosk_app_id,
-                                    Profile* profile,
-                                    const std::optional<std::string>& app_name);
+                                  const std::optional<webapps::AppId>& app_id);
+  void InitializeKioskSystemSession(
+      const KioskAppId& kiosk_app_id,
+      Profile* profile,
+      const std::optional<webapps::AppId>& app_id);
 
   void DeleteLaunchControllerAsync();
   void DeleteLaunchController();
@@ -107,6 +115,7 @@ class KioskControllerImpl : public KioskController,
   SEQUENCE_CHECKER(sequence_checker_);
 
   const raw_ref<PrefService> local_state_;
+  const raw_ref<const policy::PolicyService> policy_service_;
 
   KioskCryptohomeRemover cryptohome_remover_;
 

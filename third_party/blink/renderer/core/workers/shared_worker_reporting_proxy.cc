@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/core/workers/shared_worker_reporting_proxy.h"
 
 #include "base/location.h"
+#include "third_party/blink/public/common/loader/javascript_framework_detection.h"
 #include "third_party/blink/renderer/core/exported/web_shared_worker_impl.h"
 #include "third_party/blink/renderer/platform/bindings/source_location.h"
 #include "third_party/blink/renderer/platform/scheduler/public/main_thread.h"
@@ -30,7 +31,7 @@ void SharedWorkerReportingProxy::CountFeature(WebFeature feature) {
   PostCrossThreadTask(
       *main_thread_task_runner_, FROM_HERE,
       CrossThreadBindOnce(&WebSharedWorkerImpl::CountFeature,
-                          CrossThreadUnretained(worker_), feature));
+                          CrossThreadUnretained(worker_.get()), feature));
 }
 
 void SharedWorkerReportingProxy::ReportException(const String& error_message,
@@ -52,12 +53,12 @@ void SharedWorkerReportingProxy::ReportException(const String& error_message,
   // errors that occur during script evaluation are considered runtime errors
   // and should dispatch a detailed `ErrorEvent`. This should be replaced with a
   // more robust mechanism if one becomes available.
-  const bool is_eval_error = !error_message.Contains("SyntaxError");
+  const bool is_eval_error = !error_message.contains("SyntaxError");
 
   PostCrossThreadTask(
       *main_thread_task_runner_, FROM_HERE,
       CrossThreadBindOnce(
-          &WebSharedWorkerImpl::ReportException, CrossThreadUnretained(worker_),
+          &WebSharedWorkerImpl::ReportException, CrossThreadUnretained(worker_.get()),
           error_message, location->Url(), location->LineNumber(),
           location->ColumnNumber(), exception_id, is_eval_error));
 }
@@ -76,7 +77,7 @@ void SharedWorkerReportingProxy::DidFailToFetchClassicScript() {
   PostCrossThreadTask(
       *main_thread_task_runner_, FROM_HERE,
       CrossThreadBindOnce(&WebSharedWorkerImpl::DidFailToFetchClassicScript,
-                          CrossThreadUnretained(worker_)));
+                          CrossThreadUnretained(worker_.get())));
 }
 
 void SharedWorkerReportingProxy::DidFailToFetchModuleScript() {
@@ -84,17 +85,19 @@ void SharedWorkerReportingProxy::DidFailToFetchModuleScript() {
   PostCrossThreadTask(
       *main_thread_task_runner_, FROM_HERE,
       CrossThreadBindOnce(&WebSharedWorkerImpl::DidFailToFetchModuleScript,
-                          CrossThreadUnretained(worker_)));
+                          CrossThreadUnretained(worker_.get())));
 }
 
-void SharedWorkerReportingProxy::DidEvaluateTopLevelScript(bool success) {
+void SharedWorkerReportingProxy::DidEvaluateTopLevelScript(
+    bool success,
+    const JavaScriptFrameworkDetectionResult& result) {
   DCHECK(!IsMainThread());
   CHECK(!script_evaluated_);
   script_evaluated_ = true;
   PostCrossThreadTask(
       *main_thread_task_runner_, FROM_HERE,
       CrossThreadBindOnce(&WebSharedWorkerImpl::DidEvaluateTopLevelScript,
-                          CrossThreadUnretained(worker_), success));
+                          CrossThreadUnretained(worker_.get()), success));
 }
 
 void SharedWorkerReportingProxy::DidCloseWorkerGlobalScope() {
@@ -102,7 +105,7 @@ void SharedWorkerReportingProxy::DidCloseWorkerGlobalScope() {
   PostCrossThreadTask(
       *main_thread_task_runner_, FROM_HERE,
       CrossThreadBindOnce(&WebSharedWorkerImpl::DidCloseWorkerGlobalScope,
-                          CrossThreadUnretained(worker_)));
+                          CrossThreadUnretained(worker_.get())));
 }
 
 void SharedWorkerReportingProxy::DidTerminateWorkerThread() {
@@ -110,7 +113,7 @@ void SharedWorkerReportingProxy::DidTerminateWorkerThread() {
   PostCrossThreadTask(
       *main_thread_task_runner_, FROM_HERE,
       CrossThreadBindOnce(&WebSharedWorkerImpl::DidTerminateWorkerThread,
-                          CrossThreadUnretained(worker_)));
+                          CrossThreadUnretained(worker_.get())));
 }
 
 void SharedWorkerReportingProxy::Trace(Visitor* visitor) const {}

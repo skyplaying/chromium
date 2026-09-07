@@ -37,7 +37,7 @@ export class AppManagementAppItemElement extends
     };
   }
 
-  app: App;
+  declare app: App;
 
   override ready(): void {
     super.ready();
@@ -50,7 +50,7 @@ export class AppManagementAppItemElement extends
     chrome.metricsPrivate.recordEnumerationValue(
         AppManagementEntryPointsHistogramName,
         this.getAppManagementEntryPoint_(this.app.type),
-        Object.keys(AppManagementEntryPoint).length);
+        AppManagementEntryPoint.COUNT);
   }
 
   private iconUrlFromId_(app: App): string {
@@ -66,8 +66,6 @@ export class AppManagementAppItemElement extends
         return AppManagementEntryPoint.MAIN_VIEW_CHROME_APP;
       case AppType.kWeb:
         return AppManagementEntryPoint.MAIN_VIEW_WEB_APP;
-      case AppType.kPluginVm:
-        return AppManagementEntryPoint.MAIN_VIEW_PLUGIN_VM;
       case AppType.kBorealis:
         return AppManagementEntryPoint.MAIN_VIEW_BOREALIS;
       default:

@@ -9,14 +9,11 @@
 #include "chrome/browser/signin/e2e_tests/signin_util.h"
 #include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
-#include "chrome/browser/ui/tabs/saved_tab_groups/tab_group_action_context_desktop.h"
+#include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
 #include "chrome/browser/ui/tabs/tab_group_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/data_sharing/data_sharing_bubble_controller.h"
 #include "components/data_sharing/public/features.h"
-#include "components/saved_tab_groups/internal/tab_group_sync_service_impl.h"
-#include "components/saved_tab_groups/public/features.h"
 #include "components/saved_tab_groups/public/tab_group_sync_service.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/test_accounts.h"
@@ -25,6 +22,7 @@
 #include "components/tabs/public/tab_group.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/gfx/scoped_animation_duration_scale_mode.h"
 
 namespace {
@@ -124,14 +122,15 @@ class DataSharingLiveTest : public signin::test::LiveTest {
 
   tab_groups::TabGroupSyncService* tab_group_service() {
     return tab_groups::TabGroupSyncServiceFactory::GetForProfile(
-        browser()->profile());
+        browser()->GetProfile());
   }
 
   void SignIn() {
     signin::test::SignInFunctions sign_in_functions =
         signin::test::SignInFunctions(
-            base::BindLambdaForTesting(
-                [this]() -> Browser* { return this->browser(); }),
+            base::BindLambdaForTesting([this]() -> BrowserWindowInterface* {
+              return this->browser();
+            }),
             base::BindLambdaForTesting(
                 [this](int index, const GURL& url,
                        ui::PageTransition transition) -> bool {
@@ -157,16 +156,15 @@ class DataSharingLiveTest : public signin::test::LiveTest {
     for (const tab_groups::SavedTabGroup& group :
          tab_group_service->GetAllGroups()) {
       if (group.title() == title) {
-        tab_group_service->OpenTabGroup(
-            group.saved_guid(),
-            std::make_unique<tab_groups::TabGroupActionContextDesktop>(
-                browser(), tab_groups::OpeningSource::kUnknown));
+        tab_groups::SavedTabGroupUtils::OpenSavedTabGroup(
+            browser(), group.saved_guid(), tab_groups::OpeningSource::kUnknown,
+            tab_group_service);
         open = true;
       }
     }
     DCHECK(open);
     TabGroupModel* tab_group_model =
-        browser()->tab_strip_model()->group_model();
+        browser()->GetTabStripModel()->group_model();
     for (const tab_groups::TabGroupId& id : tab_group_model->ListTabGroups()) {
       const tab_groups::TabGroupVisualData* visual_data =
           tab_group_model->GetTabGroup(id)->visual_data();

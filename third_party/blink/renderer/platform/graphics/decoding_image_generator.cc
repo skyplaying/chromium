@@ -30,6 +30,7 @@
 #include <utility>
 
 #include "base/containers/heap_array.h"
+#include "skia/ext/skcolorspace_ext.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/platform/graphics/image_frame_generator.h"
 #include "third_party/blink/renderer/platform/graphics/skia/skia_utils.h"
@@ -93,7 +94,8 @@ DecodingImageGenerator::CreateAsSkImageGenerator(sk_sp<const SkData> data) {
       decoder->MakeMetadataForDecodeAcceleration();
   image_metadata.all_data_received_prior_to_decode = true;
   sk_sp<DecodingImageGenerator> generator = DecodingImageGenerator::Create(
-      std::move(frame), info, std::move(segment_reader), std::move(frames),
+      std::move(frame), info, decoder->GetHDRMetadata(),
+      std::move(segment_reader), std::move(frames),
       PaintImage::GetNextContentId(), true /* all_data_received */,
       false /* can_yuv_decode */, image_metadata);
   return std::make_unique<SkiaPaintImageGenerator>(
@@ -105,6 +107,7 @@ DecodingImageGenerator::CreateAsSkImageGenerator(sk_sp<const SkData> data) {
 sk_sp<DecodingImageGenerator> DecodingImageGenerator::Create(
     scoped_refptr<ImageFrameGenerator> frame_generator,
     const SkImageInfo& info,
+    const gfx::HDRMetadata& hdr_metadata,
     scoped_refptr<SegmentReader> data,
     std::vector<FrameMetadata> frames,
     PaintImage::ContentId content_id,
@@ -112,20 +115,22 @@ sk_sp<DecodingImageGenerator> DecodingImageGenerator::Create(
     bool can_yuv_decode,
     const cc::ImageHeaderMetadata& image_metadata) {
   return sk_sp<DecodingImageGenerator>(new DecodingImageGenerator(
-      std::move(frame_generator), info, std::move(data), std::move(frames),
-      content_id, all_data_received, can_yuv_decode, image_metadata));
+      std::move(frame_generator), info, hdr_metadata, std::move(data),
+      std::move(frames), content_id, all_data_received, can_yuv_decode,
+      image_metadata));
 }
 
 DecodingImageGenerator::DecodingImageGenerator(
     scoped_refptr<ImageFrameGenerator> frame_generator,
     const SkImageInfo& info,
+    const gfx::HDRMetadata& hdr_metadata,
     scoped_refptr<SegmentReader> data,
     std::vector<FrameMetadata> frames,
     PaintImage::ContentId complete_frame_content_id,
     bool all_data_received,
     bool can_yuv_decode,
     const cc::ImageHeaderMetadata& image_metadata)
-    : PaintImageGenerator(info, std::move(frames)),
+    : PaintImageGenerator(info, hdr_metadata, std::move(frames)),
       frame_generator_(std::move(frame_generator)),
       data_(std::move(data)),
       all_data_received_(all_data_received),
@@ -189,8 +194,8 @@ bool DecodingImageGenerator::GetPixels(SkPixmap dst_pixmap,
   sk_sp<SkColorSpace> decode_color_space = GetSkImageInfo().refColorSpace();
   SkImageInfo decode_info = target_info.makeColorSpace(decode_color_space);
 
-  const bool needs_color_xform = !ApproximatelyEqualSkColorSpaces(
-      decode_color_space, target_info.refColorSpace());
+  const bool needs_color_xform = !skia::ApproximatelyEqual(
+      decode_color_space.get(), target_info.colorSpace());
   if (needs_color_xform && !decode_info.isOpaque()) {
     decode_info = decode_info.makeAlphaType(kUnpremul_SkAlphaType);
   } else {
@@ -306,7 +311,7 @@ SkISize DecodingImageGenerator::GetSupportedDecodeSize(
 
 PaintImage::ContentId DecodingImageGenerator::GetContentIdForFrame(
     size_t frame_index) const {
-  DCHECK_LT(frame_index, GetFrameMetadata().size());
+  CHECK_LT(frame_index, GetFrameMetadata().size());
 
   // If we have all the data for the image, or this particular frame, we can
   // consider the decoded frame constant.

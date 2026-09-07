@@ -70,6 +70,9 @@ class TemplateUrlServiceAndroid : public TemplateURLServiceObserver {
       const base::android::JavaRef<jstring>& jalternate_term,
       bool jshould_prefetch,
       const base::android::JavaRef<jstring>& jprotocol_version);
+  base::android::ScopedJavaLocalRef<jobject> GetTemplateUrlForKeyword(
+      JNIEnv* env,
+      const std::u16string& keyword);
   base::android::ScopedJavaLocalRef<jstring> GetSearchEngineUrlFromTemplateUrl(
       JNIEnv* env,
       const base::android::JavaRef<jstring>& jkeyword);
@@ -111,7 +114,41 @@ class TemplateUrlServiceAndroid : public TemplateURLServiceObserver {
                         const std::u16string& keyword,
                         const std::u16string& short_name,
                         const std::u16string& new_keyword,
-                        const std::string& search_url);
+                        const std::string& display_url);
+
+  // Adds a search engine with the given attributes. The new search engine is
+  // active by default. Returns true if the search engine was successfully
+  // added, false if the search engine with the given keyword already exists or
+  // failed to add internally.
+  bool AddSearchEngine(JNIEnv* env,
+                       const std::u16string& short_name,
+                       const std::u16string& keyword,
+                       const std::string& display_url);
+
+  // Returns true if the value of |new_name| is a valid search engine name to
+  // use.
+  bool IsSearchEngineNameValid(JNIEnv* env, const std::u16string& new_name);
+
+  // Returns true if the value of |new_keyword| is a valid keyword for a new
+  // search engine.
+  bool IsSearchEngineKeywordValidToAdd(JNIEnv* env,
+                                       const std::u16string& new_keyword);
+
+  // Returns true if the value of |new_keyword| is a valid keyword for an
+  // existing search engine.
+  bool IsSearchEngineKeywordValidToEdit(JNIEnv* env,
+                                        const std::u16string& new_keyword,
+                                        const std::u16string& current_keyword);
+
+  // Returns true if the value of |new_url| is a valid search engine URL for
+  // adding a new search engine.
+  bool IsSearchEngineUrlValidToAdd(JNIEnv* env, const std::string& new_url);
+
+  // Returns true if the value of |new_url| is a valid search engine URL for
+  // editing an existing search engine.
+  bool IsSearchEngineUrlValidToEdit(JNIEnv* env,
+                                    const std::string& new_url,
+                                    const std::u16string& current_keyword);
 
   // Adds a custom search engine, sets |jkeyword| as its short_name and keyword,
   // and sets its date_created as |age_in_days| days before the current time.
@@ -132,7 +169,14 @@ class TemplateUrlServiceAndroid : public TemplateURLServiceObserver {
       JNIEnv* env,
       const base::android::JavaRef<jobject>& template_url_list_obj);
 
+  // Get the available search engines separated into two vectors from
+  // `TemplateURLService::GetPrepopulatedAndRecentlyVisitedTemplateURLs()`.
+  base::android::ScopedJavaLocalRef<jobject>
+  GetPrepopulatedAndRecentlyVisitedTemplateURLs(JNIEnv* env);
+
   // Get the available search engines filtered by |category|.
+  // For site search sections, the returned vector will be sorted by
+  // {@link OrderTemplateUrlsByManagedAndAlphabetically}.
   std::vector<const TemplateURL*> GetTemplateUrlsByCategory(
       JNIEnv* env,
       TemplateUrlCategory category);
@@ -141,15 +185,25 @@ class TemplateUrlServiceAndroid : public TemplateURLServiceObserver {
   base::android::ScopedJavaLocalRef<jobject> GetDefaultSearchEngine(
       JNIEnv* env);
 
+  std::u16string GetDisplayUrl(JNIEnv* env, int64_t template_url_ptr);
+
   // Get the image search url and the post content.
   base::android::ScopedJavaLocalRef<jobjectArray> GetImageUrlAndPostContent(
       JNIEnv* env);
+
+  // Activates the search engine with the given keyword.
+  void ActivateSearchEngine(JNIEnv* env, const std::u16string& keyword);
+
+  // Deactivates the search engine with the given keyword.
+  void DeactivateSearchEngine(JNIEnv* env, const std::u16string& keyword);
 
  private:
   FRIEND_TEST_ALL_PREFIXES(TemplateUrlServiceAndroidUnitTest,
                            FilterUserSelectableTemplateUrls);
   FRIEND_TEST_ALL_PREFIXES(TemplateUrlServiceAndroidUnitTest,
                            FilterTemplateUrlsByCategory);
+  FRIEND_TEST_ALL_PREFIXES(TemplateUrlServiceAndroidUnitTest,
+                           GetDisabledStarterPackIds);
 
   bool IsDefaultSearchEngineGoogle();
 
@@ -167,6 +221,8 @@ class TemplateUrlServiceAndroid : public TemplateURLServiceObserver {
       const std::vector<raw_ptr<TemplateURL, VectorExperimental>>&
           template_urls,
       TemplateUrlCategory category);
+
+  template_url_starter_pack_data::StarterPackIdSet GetDisabledStarterPackIds();
 
   base::android::ScopedJavaGlobalRef<jobject> java_ref_;
 

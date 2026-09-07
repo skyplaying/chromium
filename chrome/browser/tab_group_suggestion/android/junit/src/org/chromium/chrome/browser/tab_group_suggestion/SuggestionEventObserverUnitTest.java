@@ -34,12 +34,17 @@ import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.supplier.SettableNullableObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.hub.HubManager;
 import org.chromium.chrome.browser.hub.Pane;
 import org.chromium.chrome.browser.hub.PaneId;
 import org.chromium.chrome.browser.hub.PaneManager;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
+
+import java.util.List;
 import org.chromium.chrome.browser.tab.TabCreationState;
 import org.chromium.chrome.browser.tab.TabLaunchType;
 import org.chromium.chrome.browser.tab.TabSelectionType;
@@ -47,6 +52,7 @@ import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelObserver;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.components.visited_url_ranking.url_grouping.GroupSuggestionsService;
+import org.chromium.components.visited_url_ranking.url_grouping.TabSelectionCause;
 import org.chromium.content_public.browser.NavigationController;
 import org.chromium.content_public.browser.NavigationEntry;
 import org.chromium.content_public.browser.NavigationHandle;
@@ -91,6 +97,9 @@ public class SuggestionEventObserverUnitTest {
         mFocusedPaneSupplier.set(mPane);
 
         when(mTabModelSelector.getModel(false)).thenReturn(mTabModel);
+        doReturn(ObservableSuppliers.createMonotonic(mTabModel))
+                .when(mTabModelSelector)
+                .getCurrentTabModelSupplier();
         when(mTabModel.getProfile()).thenReturn(mProfile);
         SettableNullableObservableSupplier<Tab> currentTabSupplier =
                 ObservableSuppliers.createNullable(mTab);
@@ -150,8 +159,18 @@ public class SuggestionEventObserverUnitTest {
     }
 
     @Test
+    @DisableFeatures(ChromeFeatureList.TAB_CLOSURE_METHOD_REFACTOR)
     public void testWillCloseTab() {
         mTabModelObserverCaptor.getValue().willCloseTab(mTab, false);
+
+        verify(mGroupSuggestionsService).willCloseTab(eq(TAB_ID));
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.TAB_CLOSURE_METHOD_REFACTOR)
+    public void testWillCloseTab_WillCloseTabs() {
+        mTabModelObserverCaptor.getValue()
+                .willCloseTabs(List.of(mTab), /* isAllTabs= */ false, /* allowUndo= */ false);
 
         verify(mGroupSuggestionsService).willCloseTab(eq(TAB_ID));
     }
@@ -190,9 +209,7 @@ public class SuggestionEventObserverUnitTest {
                 .didSelectTab(
                         eq(TAB_ID),
                         eq(TEST_URL),
-                        eq(
-                                org.chromium.components.visited_url_ranking.url_grouping
-                                        .TabSelectionCause.FROM_NEW_TAB),
+                        eq(TabSelectionCause.FROM_NEW_TAB),
                         eq(Tab.INVALID_TAB_ID));
     }
 

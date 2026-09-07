@@ -4,16 +4,20 @@
 
 #include "chrome/browser/ui/webui/ash/settings/pages/people/os_sync_handler.h"
 
+#include "ash/constants/ash_pref_names.h"
+#include "ash/constants/chrome_webui_url_constants.h"
 #include "ash/public/cpp/new_window_delegate.h"
 #include "base/auto_reset.h"
 #include "base/check_op.h"
 #include "base/functional/bind.h"
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/ui/webui/ash/settings/pref_names.h"
-#include "chrome/common/webui_url_constants.h"
 #include "components/prefs/pref_service.h"
+#include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/sync/base/features.h"
 #include "components/sync/base/pref_names.h"
 #include "components/sync/base/user_selectable_type.h"
 #include "components/sync/service/sync_service.h"
@@ -82,6 +86,15 @@ void OSSyncHandler::OnSyncShutdown(syncer::SyncService* service) {
 }
 
 void OSSyncHandler::HandleDidNavigateToOsSyncPage(const base::ListValue& args) {
+  syncer::SyncService* service = GetSyncService();
+  if (service && !service->HasSyncConsent() &&
+      syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
+    // For signed-in non-syncing users, clearing this flag acts solely to
+    // dismiss the system/sync error notification without other side effects.
+    // Since the dashboard reset previously disabled all individual OS types,
+    // the user must still manually re-enable the toggles they want to sync.
+    service->GetUserSettings()->ClearSyncFeatureDisabledViaDashboard();
+  }
   HandleOsSyncPrefsDispatch(args);
 }
 
@@ -97,8 +110,13 @@ void OSSyncHandler::HandleDidNavigateAwayFromOsSyncPage(
 }
 
 void OSSyncHandler::HandleOpenBrowserSyncSettings(const base::ListValue& args) {
+  const GURL settings_url(ash::chrome_urls::kChromeUISettingsURL);
   ash::NewWindowDelegate::GetInstance()->OpenUrl(
-      GURL(chrome::kChromeUISettingsURL).Resolve(chrome::kSyncSetupSubPage),
+      IdentityManagerFactory::GetForProfile(profile_)->HasPrimaryAccount(
+          signin::ConsentLevel::kSync) ||
+              !syncer::IsReplaceSyncPromosWithSignInPromosEnabled()
+          ? settings_url.Resolve(ash::chrome_urls::kSyncSetupSubPage)
+          : settings_url.Resolve(ash::chrome_urls::kAccountSubPage),
       ash::NewWindowDelegate::OpenUrlFrom::kUserInteraction,
       ash::NewWindowDelegate::Disposition::kSwitchToTab);
 }
@@ -111,7 +129,7 @@ void OSSyncHandler::HandleSetOsSyncDatatypes(const base::ListValue& args) {
 
   // Wallpaper sync status is stored directly to the profile's prefs.
   bool wallpaper_synced = result.FindBool(kWallpaperEnabledKey).value();
-  profile_->GetPrefs()->SetBoolean(settings::prefs::kSyncOsWallpaper,
+  profile_->GetPrefs()->SetBoolean(ash::prefs::kSyncOsWallpaper,
                                    wallpaper_synced);
 
   // Start configuring the SyncService using the configuration passed to us from
@@ -169,9 +187,9 @@ void OSSyncHandler::PushSyncPrefs() {
 
   // Wallpaper sync status is fetched from prefs and is considered enabled if
   // all OS types are enabled; this mimics behavior of GetSelectedOsTypes().
-  args.Set(kWallpaperEnabledKey, user_settings->IsSyncAllOsTypesEnabled() ||
-                                     profile_->GetPrefs()->GetBoolean(
-                                         settings::prefs::kSyncOsWallpaper));
+  args.Set(kWallpaperEnabledKey,
+           user_settings->IsSyncAllOsTypesEnabled() ||
+               profile_->GetPrefs()->GetBoolean(ash::prefs::kSyncOsWallpaper));
 
   FireWebUIListener("os-sync-prefs-changed", args);
 }

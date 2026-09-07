@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/notifications/notification_platform_bridge_win.h"
+
 #include <wrl/client.h>
 #include <wrl/implements.h>
 
@@ -27,7 +29,6 @@
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/notifications/notification_display_service_tester.h"
-#include "chrome/browser/notifications/notification_platform_bridge_win.h"
 #include "chrome/browser/notifications/win/fake_itoastnotification.h"
 #include "chrome/browser/notifications/win/fake_itoastnotifier.h"
 #include "chrome/browser/notifications/win/notification_launch_id.h"
@@ -35,7 +36,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/shell_integration_win.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
@@ -137,7 +138,7 @@ class NotificationPlatformBridgeWinUITest : public InProcessBrowserTest {
   void SetUpOnMainThread() override {
     display_service_tester_ =
         std::make_unique<NotificationDisplayServiceTester>(
-            browser()->profile());
+            browser()->GetProfile());
   }
 
   void TearDownOnMainThread() override { display_service_tester_.reset(); }
@@ -391,7 +392,7 @@ IN_PROC_BROWSER_TEST_F(NotificationPlatformBridgeWinUITest, GetDisplayed) {
   {
     base::RunLoop run_loop;
     bridge->GetDisplayed(
-        browser()->profile(),
+        browser()->GetProfile(),
         base::BindOnce(
             &NotificationPlatformBridgeWinUITest::DisplayedNotifications,
             base::Unretained(this), run_loop.QuitClosure()));
@@ -558,7 +559,7 @@ IN_PROC_BROWSER_TEST_F(NotificationPlatformBridgeWinUITest,
               &NotificationPlatformBridgeWinUITest::OnHistogramRecorded,
               base::Unretained(this), display_run_loop.QuitClosure()));
   bridge->Display(NotificationHandler::Type::WEB_PERSISTENT,
-                  browser()->profile(), notification, /*metadata=*/nullptr);
+                  browser()->GetProfile(), notification, /*metadata=*/nullptr);
   display_run_loop.Run();
 
   // The notification should now be in the expected map.
@@ -572,7 +573,7 @@ IN_PROC_BROWSER_TEST_F(NotificationPlatformBridgeWinUITest,
           base::BindRepeating(
               &NotificationPlatformBridgeWinUITest::OnHistogramRecorded,
               base::Unretained(this), close_run_loop.QuitClosure()));
-  bridge->Close(browser()->profile(), notification.id());
+  bridge->Close(browser()->GetProfile(), notification.id());
   close_run_loop.Run();
 
   // Closing a notification should remove it from the expected map.

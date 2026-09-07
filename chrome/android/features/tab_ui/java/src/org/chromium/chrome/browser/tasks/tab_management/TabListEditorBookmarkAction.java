@@ -10,6 +10,7 @@ import android.graphics.drawable.Drawable;
 import androidx.appcompat.content.res.AppCompatResources;
 
 import org.chromium.base.ResettersForTesting;
+import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.bookmarks.BookmarkManagerOpenerImpl;
@@ -92,22 +93,24 @@ public class TabListEditorBookmarkAction extends TabListEditorAction {
             BookmarkModel bookmarkModel = BookmarkModel.getForProfile(profile);
             bookmarkModel.finishLoadingBookmarkModel(
                     () -> {
-                        BookmarkUtils.addBookmarksOnMultiSelect(
-                                activity,
-                                bookmarkModel,
-                                tabs,
-                                snackbarManager,
-                                new BookmarkManagerOpenerImpl());
+                        int count =
+                                BookmarkUtils.addTabsToBookmarks(
+                                        activity,
+                                        bookmarkModel,
+                                        tabs,
+                                        snackbarManager,
+                                        new BookmarkManagerOpenerImpl());
+                        if (count > 1) {
+                            RecordHistogram.recordCount100Histogram(
+                                    "Android.TabMultiSelectV2.BookmarkTabsCount", count);
+                        }
                     });
         }
     }
 
     @Override
     public void onSelectionStateChange(List<TabListEditorItemSelectionId> itemIds) {
-        int size =
-                editorSupportsActionOnRelatedTabs()
-                        ? getTabCountIncludingRelatedTabs(getTabGroupModelFilter(), itemIds)
-                        : itemIds.size();
+        int size = getSelectedTabCount(itemIds);
         setEnabledAndItemCount(!itemIds.isEmpty(), size);
     }
 

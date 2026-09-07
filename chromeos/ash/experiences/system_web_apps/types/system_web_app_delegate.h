@@ -5,15 +5,19 @@
 #ifndef CHROMEOS_ASH_EXPERIENCES_SYSTEM_WEB_APPS_TYPES_SYSTEM_WEB_APP_DELEGATE_H_
 #define CHROMEOS_ASH_EXPERIENCES_SYSTEM_WEB_APPS_TYPES_SYSTEM_WEB_APP_DELEGATE_H_
 
+#include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "ash/webui/system_apps/public/system_web_app_type.h"
+#include "base/containers/flat_set.h"
 #include "base/files/file_path.h"
 #include "base/memory/raw_ptr.h"
+#include "chromeos/ash/components/system_web_apps/system_web_app_type.h"
 #include "chromeos/ash/experiences/system_web_apps/types/system_web_app_background_task_info.h"
-#include "ui/menus/simple_menu_model.h"
+#include "components/tabs/public/tab_context_menu_command.h"
+#include "ui/gfx/geometry/size.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -182,16 +186,16 @@ class SystemWebAppDelegate {
   // If false, the application will not be installed.
   virtual bool IsAppEnabled() const;
 
-  // If true, GetTabMenuModel() is called to provide the tab menu model.
-  virtual bool HasCustomTabMenuModel() const;
-
-  // Optional custom tab menu model.
-  virtual std::unique_ptr<ui::SimpleMenuModel> GetTabMenuModel(
-      ui::SimpleMenuModel::Delegate* delegate) const;
+  // If std::nullopt (the default), the standard web app tab menu is built.
+  // If a set is returned, exactly those contained will be used (modulo pinned
+  // home tab restrictions).
+  virtual std::optional<base::flat_set<tabs::TabContextMenuCommand>>
+  GetAllowedTabMenuCommands() const;
 
   // Returns whether the specified Tab Context Menu shortcut should be shown.
-  virtual bool ShouldShowTabContextMenuShortcut(Profile* profile,
-                                                int command_id) const;
+  virtual bool ShouldShowTabContextMenuShortcut(
+      Profile* profile,
+      tabs::TabContextMenuCommand command) const;
 
   // Returns whether the override URL specified in AppLaunchParams should be
   // used when performing a full restore.
@@ -225,9 +229,6 @@ class SystemWebAppDelegate {
   //   2. Manifest color (if defined).
   //   3. Default color.
   virtual bool UseSystemThemeColor() const;
-
-  // Returns whether theme changes should be animated.
-  virtual bool ShouldAnimateThemeChanges() const;
 
   // TODO(crbug.com/1308961): Migrate to use PWA pinned home tab when ready.
   // Returns whether the specified tab should be pinned.

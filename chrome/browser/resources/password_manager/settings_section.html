@@ -87,22 +87,15 @@
       </pref-toggle-button>
     </template>
   </if>
-    <pref-toggle-button id="accountStorageToggle" class="hr"
-        hidden="[[!shouldShowAccountStorageSettingToggle_]]"
-        label="$i18n{accountStorageToggleLabel}"
-        sub-label="[[getAccountStorageSubLabel_(accountEmail)]]"
-        checked="[[isAccountStoreUser]]"
-        change-requires-validation
-        on-validate-and-change-pref="changeAccountStorageEnabled_">
-    </pref-toggle-button>
   <template is="dom-if"
       if="[[shouldShowMovePasswordsEntry_(isAccountStoreUser,
             passwordsOnDevice_, localPasswordCount_)]]"
       restamp>
     <cr-link-row class="cr-row" non-clickable label="[[movePasswordsLabel_]]"
-        sub-label="$i18n{movePasswordsInSettingsSubLabel}" hide-icon>
+        sub-label="$i18n{movePasswordsInSettingsSubLabel}" hide-icon
+        aria-show-label aria-show-sublabel>
       <cr-button id="movePasswordsButton" on-click="onMovePasswordsClicked_"
-          aria-label="[[getAriaLabelMovePasswordsButton_(movePasswordsLabel_)]]">
+          aria-description="[[getAriaDescriptionMovePasswordsButton_(movePasswordsLabel_)]]">
         $i18n{moveSinglePasswordButton}
       </cr-button>
     </cr-link-row>
@@ -124,10 +117,7 @@
       on-click="onTrustedVaultBannerClick_" external>
   </cr-link-row>
   <template is="dom-if" if="[[!passwordManagerDisabled_]]" restamp>
-    <passwords-importer account-email="[[accountEmail]]"
-        is-account-store-user="[[isAccountStoreUser]]"
-        is-user-syncing-passwords="[[isSyncingPasswords]]">
-    </passwords-importer>
+    <passwords-importer></passwords-importer>
   </template>
   <template is="dom-if" if="[[hasPasswordsToExport_]]" restamp>
     <passwords-exporter></passwords-exporter>
@@ -144,12 +134,12 @@
         class="cr-row settings-cr-link-row"
         label="$i18n{disconnectCloudAuthenticatorTitle}"
         sub-label="$i18n{disconnectCloudAuthenticatorDescription}"
-        hide-icon non-clickable>
+        hide-icon non-clickable aria-show-label aria-show-sublabel>
       <template is="dom-if"
           if="[[!isDisconnectCloudAuthenticatorInProgress_]]" restamp>
         <cr-button id="disconnectCloudAuthenticatorButton"
             class="cr-row-action-button"
-            aria-label="[[getAriaLabelForCloudAuthenticatorButton_()]]"
+            aria-description="[[getAriaDescriptionForCloudAuthenticatorButton_()]]"
             on-click="onDisconnectCloudAuthenticatorClick_">
           $i18n{disconnectCloudAuthenticatorButton}
         </cr-button>

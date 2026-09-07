@@ -4,16 +4,17 @@
 
 #include "chrome/browser/media/webrtc/tab_desktop_media_list.h"
 
+#include <ranges>
 #include <utility>
 
 #include "base/compiler_specific.h"
-#include "base/containers/adapters.h"
 #include "base/functional/bind.h"
 #include "base/hash/hash.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "chrome/browser/browser_features.h"
+#include "chrome/browser/enterprise/data_protection/data_protection_page_user_data.h"
 #include "chrome/browser/media/webrtc/desktop_media_list_layout_config.h"
 #include "chrome/browser/media/webrtc/desktop_media_picker_utils.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -165,11 +166,19 @@ void TabDesktopMediaList::Refresh(bool update_thumbnails) {
     }
     content::RenderFrameHost* main_frame = contents->GetPrimaryMainFrame();
     DCHECK(main_frame);
+
+    auto* page_user_data =
+        enterprise_data_protection::DataProtectionPageUserData::GetForPage(
+            contents->GetPrimaryPage());
+
     DesktopMediaID media_id(DesktopMediaID::TYPE_WEB_CONTENTS,
                             DesktopMediaID::kNullId,
                             content::WebContentsMediaCaptureId(
                                 main_frame->GetProcess()->GetDeprecatedID(),
                                 main_frame->GetRoutingID()));
+
+    media_id.is_sharing_blocked =
+        page_user_data && !page_user_data->settings().allow_screenshots;
 
     // Get tab's last active time stamp.
     const base::TimeTicks t = contents->GetLastActiveTimeTicks();
@@ -189,9 +198,11 @@ void TabDesktopMediaList::Refresh(bool update_thumbnails) {
     }
 
     // Only new or changed favicon need update.
-    new_favicon_hashes[media_id] = GetImageHash(favicon);
-    if (!favicon_hashes_.count(media_id) ||
-        (favicon_hashes_[media_id] != new_favicon_hashes[media_id])) {
+    auto new_it =
+        new_favicon_hashes.insert_or_assign(media_id, GetImageHash(favicon))
+            .first;
+    if (auto it = favicon_hashes_.find(media_id);
+        it == favicon_hashes_.end() || (it->second != new_it->second)) {
       gfx::ImageSkia image = favicon.AsImageSkia();
       image.MakeThreadSafe();
       favicon_pairs.emplace_back(media_id, image);
@@ -200,8 +211,9 @@ void TabDesktopMediaList::Refresh(bool update_thumbnails) {
   favicon_hashes_ = new_favicon_hashes;
 
   // Sort tab sources by time. Most recent one first. Then update sources list.
-  for (const auto& [time, tab_source] : base::Reversed(tab_map))
+  for (const auto& [time, tab_source] : std::views::reverse(tab_map)) {
     sources.push_back(tab_source);
+  }
 
   UpdateSourcesList(sources);
 

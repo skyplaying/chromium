@@ -4,7 +4,7 @@
 
 package org.chromium.chrome.browser.enterprise.util;
 
-import static org.chromium.chrome.browser.flags.ChromeFeatureList.ENABLE_CLIPBOARD_DATA_CONTROLS_ANDROID;
+import static org.chromium.chrome.browser.flags.ChromeFeatureList.DATA_CONTROLS_SEARCH_WITH;
 
 import androidx.annotation.VisibleForTesting;
 
@@ -13,12 +13,18 @@ import org.jni_zero.NativeMethods;
 
 import org.chromium.base.Callback;
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.content_public.browser.RenderFrameHost;
+import org.chromium.content_public.browser.WebContents;
 
 /** Provides access to the enterprise data protection utility methods. */
 @NullMarked
 public class DataProtectionBridge {
+    private static DataProtectionBridge.@Nullable Natives sNativesForTesting;
+
     /**
      * Runs the provided callback after verifying that copying the specified text is allowed by the
      * current data protection policies. The callback boolean input will be true if the copy action
@@ -34,12 +40,7 @@ public class DataProtectionBridge {
      */
     public static void verifyCopyTextIsAllowedByPolicy(
             String text, RenderFrameHost renderFrameHost, Callback<Boolean> callback) {
-        if (!ChromeFeatureList.isEnabled(ENABLE_CLIPBOARD_DATA_CONTROLS_ANDROID)) {
-            callback.onResult(true);
-            return;
-        }
-        DataProtectionBridgeJni.get()
-                .verifyCopyTextIsAllowedByPolicy(text, renderFrameHost, callback);
+        getJni().verifyCopyTextIsAllowedByPolicy(text, renderFrameHost, callback);
     }
 
     /**
@@ -56,12 +57,7 @@ public class DataProtectionBridge {
      */
     public static void verifyShareTextIsAllowedByPolicy(
             String text, RenderFrameHost renderFrameHost, Callback<Boolean> callback) {
-        if (!ChromeFeatureList.isEnabled(ENABLE_CLIPBOARD_DATA_CONTROLS_ANDROID)) {
-            callback.onResult(true);
-            return;
-        }
-        DataProtectionBridgeJni.get()
-                .verifyShareTextIsAllowedByPolicy(text, renderFrameHost, callback);
+        getJni().verifyShareTextIsAllowedByPolicy(text, renderFrameHost, callback);
     }
 
     /**
@@ -76,12 +72,7 @@ public class DataProtectionBridge {
      */
     public static void verifyCopyUrlIsAllowedByPolicy(
             String url, RenderFrameHost renderFrameHost, Callback<Boolean> callback) {
-        if (!ChromeFeatureList.isEnabled(ENABLE_CLIPBOARD_DATA_CONTROLS_ANDROID)) {
-            callback.onResult(true);
-            return;
-        }
-        DataProtectionBridgeJni.get()
-                .verifyCopyUrlIsAllowedByPolicy(url, renderFrameHost, callback);
+        getJni().verifyCopyUrlIsAllowedByPolicy(url, renderFrameHost, callback);
     }
 
     /**
@@ -98,12 +89,7 @@ public class DataProtectionBridge {
      */
     public static void verifyShareUrlIsAllowedByPolicy(
             String url, RenderFrameHost renderFrameHost, Callback<Boolean> callback) {
-        if (!ChromeFeatureList.isEnabled(ENABLE_CLIPBOARD_DATA_CONTROLS_ANDROID)) {
-            callback.onResult(true);
-            return;
-        }
-        DataProtectionBridgeJni.get()
-                .verifyShareUrlIsAllowedByPolicy(url, renderFrameHost, callback);
+        getJni().verifyShareUrlIsAllowedByPolicy(url, renderFrameHost, callback);
     }
 
     /**
@@ -118,12 +104,7 @@ public class DataProtectionBridge {
      */
     public static void verifyCopyImageIsAllowedByPolicy(
             String imageUri, RenderFrameHost renderFrameHost, Callback<Boolean> callback) {
-        if (!ChromeFeatureList.isEnabled(ENABLE_CLIPBOARD_DATA_CONTROLS_ANDROID)) {
-            callback.onResult(true);
-            return;
-        }
-        DataProtectionBridgeJni.get()
-                .verifyCopyImageIsAllowedByPolicy(imageUri, renderFrameHost, callback);
+        getJni().verifyCopyImageIsAllowedByPolicy(imageUri, renderFrameHost, callback);
     }
 
     /**
@@ -140,12 +121,7 @@ public class DataProtectionBridge {
      */
     public static void verifyShareImageIsAllowedByPolicy(
             String imageUri, RenderFrameHost renderFrameHost, Callback<Boolean> callback) {
-        if (!ChromeFeatureList.isEnabled(ENABLE_CLIPBOARD_DATA_CONTROLS_ANDROID)) {
-            callback.onResult(true);
-            return;
-        }
-        DataProtectionBridgeJni.get()
-                .verifyShareImageIsAllowedByPolicy(imageUri, renderFrameHost, callback);
+        getJni().verifyShareImageIsAllowedByPolicy(imageUri, renderFrameHost, callback);
     }
 
     /**
@@ -164,50 +140,125 @@ public class DataProtectionBridge {
      */
     public static void verifyGenericCopyImageActionIsAllowedByPolicy(
             String imageUri, RenderFrameHost renderFrameHost, Callback<Boolean> callback) {
-        if (!ChromeFeatureList.isEnabled(ENABLE_CLIPBOARD_DATA_CONTROLS_ANDROID)) {
-            callback.onResult(true);
+        getJni().verifyGenericCopyImageActionIsAllowedByPolicy(imageUri, renderFrameHost, callback);
+    }
+
+    /**
+     * Checks if the user is allowed to use the "Search for..." context menu item in the given
+     * WebContents based on DataControlsRules policies. Returns true if search is allowed, false
+     * otherwise.
+     */
+    public static boolean isSearchWithAllowed(@Nullable WebContents webContents) {
+        if (!ChromeFeatureList.isEnabled(DATA_CONTROLS_SEARCH_WITH)) {
+            return true;
+        }
+        return getJni().isSearchWithAllowed(webContents);
+    }
+
+    /**
+     * Checks if the user is allowed to use the "Search for..." context menu item in the given
+     * WebContents based on DataControlsRules policies. If the action is allowed (or reported/warned
+     * and bypassed), `callback` will be run.
+     */
+    public static void shouldAllowSearchWith(
+            int textLength, @Nullable WebContents webContents, Runnable callback) {
+        if (!ChromeFeatureList.isEnabled(DATA_CONTROLS_SEARCH_WITH)) {
+            callback.run();
             return;
         }
-        DataProtectionBridgeJni.get()
-                .verifyGenericCopyImageActionIsAllowedByPolicy(imageUri, renderFrameHost, callback);
+        getJni().shouldAllowSearchWith(textLength, webContents, callback);
+    }
+
+    /**
+     * Checks if there is any active Data Controls rule that applies a blocking screenshot
+     * restriction for the given profile.
+     */
+    public static boolean hasBlockingScreenshotRule(@Nullable Profile profile) {
+        if (profile == null) {
+            return false;
+        }
+        return getJni().hasBlockingScreenshotRule(profile);
+    }
+
+    /** Checks if screenshots are allowed for the given tab based on enterprise policy. */
+    public static boolean isScreenshotAllowed(Tab tab) {
+        return getJni().isScreenshotAllowed(tab);
+    }
+
+    /** Registers a callback to be notified when the screenshot allowed state changes for the tab */
+    public static void registerScreenshotSubscriptionCallback(Tab tab, Callback<Boolean> callback) {
+        getJni().registerScreenshotSubscriptionCallback(tab, callback);
+    }
+
+    public static void clearScreenshotSubscriptionCallback(Tab tab) {
+        getJni().clearScreenshotSubscriptionCallback(tab);
+    }
+
+    public static void setInstanceForTesting(DataProtectionBridge.Natives instance) {
+        sNativesForTesting = instance;
+    }
+
+    private static DataProtectionBridge.Natives getJni() {
+        if (sNativesForTesting != null) {
+            return sNativesForTesting;
+        }
+        return DataProtectionBridgeJni.get();
     }
 
     @NativeMethods
     @VisibleForTesting
     public interface Natives {
         void verifyCopyTextIsAllowedByPolicy(
-                String text,
-                RenderFrameHost renderFrameHost,
+                @JniType("std::u16string") String text,
+                @JniType("content::RenderFrameHost*") RenderFrameHost renderFrameHost,
                 @JniType("base::OnceCallback<void(bool)>") Callback<Boolean> callback);
 
         void verifyCopyUrlIsAllowedByPolicy(
-                String url,
-                RenderFrameHost renderFrameHost,
+                @JniType("std::u16string") String url,
+                @JniType("content::RenderFrameHost*") RenderFrameHost renderFrameHost,
                 @JniType("base::OnceCallback<void(bool)>") Callback<Boolean> callback);
 
         void verifyCopyImageIsAllowedByPolicy(
-                String imageUri,
-                RenderFrameHost renderFrameHost,
+                @JniType("std::u16string") String imageUri,
+                @JniType("content::RenderFrameHost*") RenderFrameHost renderFrameHost,
                 @JniType("base::OnceCallback<void(bool)>") Callback<Boolean> callback);
 
         void verifyShareTextIsAllowedByPolicy(
-                String text,
-                RenderFrameHost renderFrameHost,
+                @JniType("std::u16string") String text,
+                @JniType("content::RenderFrameHost*") RenderFrameHost renderFrameHost,
                 @JniType("base::OnceCallback<void(bool)>") Callback<Boolean> callback);
 
         void verifyShareUrlIsAllowedByPolicy(
-                String url,
-                RenderFrameHost renderFrameHost,
+                @JniType("std::u16string") String url,
+                @JniType("content::RenderFrameHost*") RenderFrameHost renderFrameHost,
                 @JniType("base::OnceCallback<void(bool)>") Callback<Boolean> callback);
 
         void verifyShareImageIsAllowedByPolicy(
-                String imageUri,
-                RenderFrameHost renderFrameHost,
+                @JniType("std::u16string") String imageUri,
+                @JniType("content::RenderFrameHost*") RenderFrameHost renderFrameHost,
                 @JniType("base::OnceCallback<void(bool)>") Callback<Boolean> callback);
 
         void verifyGenericCopyImageActionIsAllowedByPolicy(
-                String imageUri,
-                RenderFrameHost renderFrameHost,
+                @JniType("std::u16string") String imageUri,
+                @JniType("content::RenderFrameHost*") RenderFrameHost renderFrameHost,
                 @JniType("base::OnceCallback<void(bool)>") Callback<Boolean> callback);
+
+        boolean isSearchWithAllowed(
+                @JniType("content::WebContents*") @Nullable WebContents webContents);
+
+        void shouldAllowSearchWith(
+                int textLength,
+                @JniType("content::WebContents*") @Nullable WebContents webContents,
+                @JniType("base::OnceClosure") Runnable callback);
+
+        boolean hasBlockingScreenshotRule(@JniType("Profile*") Profile profile);
+
+        boolean isScreenshotAllowed(@JniType("TabAndroid*") Tab tab);
+
+        void registerScreenshotSubscriptionCallback(
+                @JniType("TabAndroid*") Tab tab,
+                @JniType("base::RepeatingCallback<void(bool)>") Callback<Boolean> callback);
+
+        void clearScreenshotSubscriptionCallback(@JniType("TabAndroid*") Tab tab);
     }
 }

@@ -18,7 +18,6 @@ component("image_decoders") {
   sources = [
     "bmp/bmp_decoder_factory.cc",
     "bmp/bmp_decoder_factory.h",
-    "bmp/bmp_features.cc",
     "bmp/bmp_features.h",
     "bmp/bmp_image_decoder.cc",
     "bmp/bmp_image_decoder.h",
@@ -30,15 +29,23 @@ component("image_decoders") {
     "fast_shared_buffer_reader.h",
     "gif/gif_image_decoder.cc",
     "gif/gif_image_decoder.h",
+    "ico/ico_decoder_factory.cc",
+    "ico/ico_decoder_factory.h",
     "ico/ico_image_decoder.cc",
     "ico/ico_image_decoder.h",
+    "ico/ico_rust_image_decoder.cc",
+    "ico/ico_rust_image_decoder.h",
     "image_animation.h",
     "image_decoder.cc",
     "image_decoder.h",
     "image_frame.cc",
     "image_frame.h",
+    "jpeg/jpeg_decoder_factory.cc",
+    "jpeg/jpeg_decoder_factory.h",
     "jpeg/jpeg_image_decoder.cc",
     "jpeg/jpeg_image_decoder.h",
+    "jpeg/jpeg_rust_image_decoder.cc",
+    "jpeg/jpeg_rust_image_decoder.h",
     "png/png_image_decoder.cc",
     "png/png_image_decoder.h",
     "rw_buffer.cc",
@@ -78,7 +85,7 @@ component("image_decoders") {
     "//ui/gfx/geometry:geometry_skia",
   ]
 
-  if (enable_av1_decoder) {
+  if (enable_dav1d_decoder) {
     sources += [
       "avif/avif_image_decoder.cc",
       "avif/avif_image_decoder.h",
@@ -92,7 +99,7 @@ component("image_decoders") {
       "jxl/jxl_image_decoder.cc",
       "jxl/jxl_image_decoder.h",
     ]
-    deps += [ "//third_party/rust/jxl/v0_3/wrapper:jxl_rs" ]
+    deps += [ "//third_party/rust/jxl/v0_6/wrapper:jxl_rs" ]
   }
 }
 
@@ -129,13 +136,16 @@ source_set("unit_tests") {
     deps += [ "//ui/base:pixel_diff_test_support" ]
   }
 
-  if (enable_av1_decoder) {
+  if (enable_dav1d_decoder) {
     sources += [ "avif/avif_image_decoder_test.cc" ]
   }
 
   if (enable_jxl_decoder) {
     sources += [ "jxl/jxl_image_decoder_test.cc" ]
-    deps += [ "//third_party/rust/jxl/v0_3/wrapper:jxl_rs" ]
+    deps += [
+      "//third_party/rust/jxl/v0_6/wrapper:jxl_rs",
+      "//third_party/rust/jxl/v0_6/wrapper:parallel_runner_unittests",
+    ]
   }
 
   # TODO(crbug.com/40031409): Fix code that adds exit-time destructors and

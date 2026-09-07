@@ -6,9 +6,11 @@ package org.chromium.chrome.browser.tab;
 
 import androidx.annotation.VisibleForTesting;
 
+import org.jni_zero.CalledByNative;
 import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
 
+import org.chromium.base.ThreadUtils;
 import org.chromium.base.lifetime.Destroyable;
 import org.chromium.base.lifetime.LifetimeAssert;
 import org.chromium.build.annotations.NullMarked;
@@ -23,7 +25,7 @@ import java.nio.ByteBuffer;
 
 /** Contains the state for a {@link WebContents}. */
 @NullMarked
-public class WebContentsState {
+public class WebContentsState implements Destroyable {
     /** Version number used to denote an invalid buffer. */
     public static final int INVALID_BUFFER_VERSION = -1;
 
@@ -45,6 +47,7 @@ public class WebContentsState {
     /** A packed (pickle) representation of the navigation entries for a {@link WebContents}. */
     private static class PackedData implements Destroyable {
         private final @Nullable LifetimeAssert mLifetimeAssert = LifetimeAssert.create(this);
+        private int mRefCount = 1;
 
         /**
          * mBuffer should not be modified once it is set. Also, it is required to be a "direct"
@@ -53,6 +56,7 @@ public class WebContentsState {
          * ByteBuffer.allocateDirect() or similar.
          */
         private final ByteBuffer mBuffer;
+
         private final int mVersion;
         private final boolean mLastEntryWasPending;
         private long mNativeStringPointer;
@@ -96,18 +100,83 @@ public class WebContentsState {
             return mLastEntryWasPending;
         }
 
+        /** Increments reference count for shared instances. */
+        public void acquire() {
+            ThreadUtils.assertOnUiThread();
+            assert mRefCount > 0 : "Cannot acquire a destroyed PackedData";
+            mRefCount++;
+        }
+
         /** Destroys the native string pointer. */
         @Override
         public void destroy() {
-            if (mNativeStringPointer != 0) {
-                WebContentsStateJni.get().freeStringPointer(mNativeStringPointer);
-                mNativeStringPointer = 0;
-                LifetimeAssert.destroy(mLifetimeAssert);
+            ThreadUtils.assertOnUiThread();
+            assert mRefCount > 0 : "Underflow in PackedData ref count";
+            mRefCount--;
+            if (mRefCount == 0) {
+                if (mNativeStringPointer != 0) {
+                    WebContentsStateJni.get().freeStringPointer(mNativeStringPointer);
+                    mNativeStringPointer = 0;
+                    LifetimeAssert.destroy(mLifetimeAssert);
+                }
             }
+        }
+
+        int getRefCountForTesting() {
+            return mRefCount;
         }
     }
 
+    /**
+     * Metadata extracted from the serialized WebContentsState buffer. Contains essential
+     * information needed to display the tab (title, URL, incognito status) without restoring the
+     * full WebContents.
+     */
+    public static class WebContentsStateMetadata {
+        /** The display title of the tab. */
+        public final String title;
+
+        /** The virtual URL of the tab. */
+        public final String virtualUrl;
+
+        /** Whether the tab is in incognito mode. */
+        public final boolean isOffTheRecord;
+
+        /**
+         * Creates an instance of WebContentsStateMetadata.
+         *
+         * @param title The display title.
+         * @param virtualUrl The virtual URL.
+         * @param isOffTheRecord Whether it is incognito.
+         */
+        public WebContentsStateMetadata(String title, String virtualUrl, boolean isOffTheRecord) {
+            this.title = title;
+            this.virtualUrl = virtualUrl;
+            this.isOffTheRecord = isOffTheRecord;
+        }
+    }
+
+    /**
+     * Factory method called by native code to create a WebContentsStateMetadata instance.
+     *
+     * @param title The display title.
+     * @param virtualUrl The virtual URL.
+     * @param isOffTheRecord Whether it is incognito.
+     * @return A new WebContentsStateMetadata instance.
+     */
+    @CalledByNative
+    public static WebContentsStateMetadata createMetadata(
+            @JniType("std::u16string") String title,
+            @JniType("std::string") String virtualUrl,
+            boolean isOffTheRecord) {
+        return new WebContentsStateMetadata(title, virtualUrl, isOffTheRecord);
+    }
+
+    // Cached metadata extracted from the buffer. Access is restricted to the UI thread.
+    private @Nullable WebContentsStateMetadata mMetadata;
+    private boolean mMetadataLoaded;
     private PackedData mPackedData;
+    private boolean mIsDestroyed;
 
     private @Nullable String mFallbackUrlForRestorationFailure;
 
@@ -182,9 +251,43 @@ public class WebContentsState {
                         buffer, version, /* lastEntryWasPending= */ false, nativeStringPointer);
     }
 
+    /**
+     * Copy constructor that creates a new {@link WebContentsState} sharing the underlying {@link
+     * PackedData} buffer with reference counting.
+     *
+     * @param other The existing WebContentsState to copy.
+     */
+    public WebContentsState(WebContentsState other) {
+        ThreadUtils.assertOnUiThread();
+        assert !other.mIsDestroyed : "Cannot copy a destroyed WebContentsState";
+        mPackedData = other.mPackedData;
+        mPackedData.acquire();
+        mFallbackUrlForRestorationFailure = other.mFallbackUrlForRestorationFailure;
+        if (other.mMetadataLoaded) {
+            mMetadata = other.mMetadata;
+            mMetadataLoaded = true;
+        }
+    }
+
     /** Destroys the {@link WebContentsState}. */
+    @Override
     public void destroy() {
+        ThreadUtils.assertOnUiThread();
+        if (mIsDestroyed) {
+            return;
+        }
+        mIsDestroyed = true;
         mPackedData.destroy();
+    }
+
+    /** Returns whether this {@link WebContentsState} has been destroyed. */
+    public boolean isDestroyed() {
+        return mIsDestroyed;
+    }
+
+    /** Returns the current reference count of the underlying packed data for testing. */
+    public int getRefCountForTesting() {
+        return mPackedData.getRefCountForTesting();
     }
 
     /** Returns the buffer for the {@link WebContentsState}. */
@@ -197,14 +300,31 @@ public class WebContentsState {
         return mPackedData.version();
     }
 
+    /**
+     * Returns the metadata for the {@link WebContentsState}, or null if it fails to extract. The
+     * metadata is extracted lazily on the first call and cached. Access is restricted to the UI
+     * thread.
+     *
+     * @return The extracted metadata, or null.
+     */
+    public @Nullable WebContentsStateMetadata getMetadata() {
+        if (!mMetadataLoaded && version() != INVALID_BUFFER_VERSION) {
+            mMetadata = WebContentsStateJni.get().getMetadata(buffer(), version());
+            mMetadataLoaded = true;
+        }
+        return mMetadata;
+    }
+
     /** Returns the title currently being displayed in the saved state's current entry. */
     public @Nullable String getDisplayTitleFromState() {
-        return WebContentsStateJni.get().getDisplayTitleFromByteBuffer(buffer(), version());
+        WebContentsStateMetadata metadata = getMetadata();
+        return metadata != null ? metadata.title : null;
     }
 
     /** Returns the URL currently being displayed in the saved state's current entry. */
     public @Nullable String getVirtualUrlFromState() {
-        return WebContentsStateJni.get().getVirtualUrlFromByteBuffer(buffer(), version());
+        WebContentsStateMetadata metadata = getMetadata();
+        return metadata != null ? metadata.virtualUrl : null;
     }
 
     /** Get the URL to be loaded if restoring the serialized web content state fails. */
@@ -294,7 +414,8 @@ public class WebContentsState {
         return maybeSwapPackedData(buffer, /* lastEntryWasPending= */ trackLastEntryWasPending);
     }
 
-    private boolean maybeSwapPackedData(@Nullable ByteBuffer buffer, boolean lastEntryWasPending) {
+    @VisibleForTesting
+    boolean maybeSwapPackedData(@Nullable ByteBuffer buffer, boolean lastEntryWasPending) {
         if (buffer == null) return false;
         mPackedData.destroy();
         mPackedData =
@@ -303,6 +424,8 @@ public class WebContentsState {
                         CONTENTS_STATE_CURRENT_VERSION,
                         lastEntryWasPending,
                         /* nativeStringPointer= */ 0);
+        mMetadata = null;
+        mMetadataLoaded = false;
         return true;
     }
 
@@ -315,17 +438,20 @@ public class WebContentsState {
     @NativeMethods
     @VisibleForTesting(otherwise = VisibleForTesting.PACKAGE_PRIVATE)
     public interface Natives {
-        @Nullable WebContents restoreContentsFromByteBuffer(
+        @Nullable
+        @JniType("content::WebContents*")
+        WebContents restoreContentsFromByteBuffer(
                 @JniType("Profile*") Profile profile,
                 ByteBuffer buffer,
                 int savedStateVersion,
                 boolean initiallyHidden,
                 boolean noRenderer);
 
-        @Nullable ByteBuffer getContentsStateAsByteBuffer(WebContents webcontents);
+        @Nullable ByteBuffer getContentsStateAsByteBuffer(
+                @JniType("content::WebContents*") WebContents webcontents);
 
         @Nullable ByteBuffer deleteNavigationEntries(
-                ByteBuffer state, int saveStateVersion, long predicate);
+                ByteBuffer state, int savedStateVersion, long predicate);
 
         @Nullable ByteBuffer createSingleNavigationStateAsByteBuffer(
                 @JniType("Profile*") Profile profile,
@@ -346,11 +472,7 @@ public class WebContentsState {
                 int referrerPolicy,
                 @JniType("std::optional<url::Origin>") @Nullable Origin initiatorOrigin);
 
-        @JniType("std::optional<std::u16string>")
-        @Nullable String getDisplayTitleFromByteBuffer(ByteBuffer state, int savedStateVersion);
-
-        @JniType("std::optional<std::string>")
-        @Nullable String getVirtualUrlFromByteBuffer(ByteBuffer state, int savedStateVersion);
+        @Nullable WebContentsStateMetadata getMetadata(ByteBuffer buffer, int version);
 
         void freeStringPointer(long stringPointer);
     }

@@ -6,12 +6,16 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
 #include "base/containers/flat_map.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/logging.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/sequence_checker.h"
 #include "components/update_client/cancellation.h"
 #include "components/update_client/network.h"
@@ -78,7 +82,7 @@ void FallbackNetFetcher::PostRequestDone(
     const std::string& header_set_cookie,
     int64_t xheader_retry_after_sec) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  const int should_fallback = net_error || (http_status_code_ != 200);
+  const bool should_fallback = net_error || (http_status_code_ != 200);
   if (should_fallback && next_) {
     VLOG(1) << __func__ << " Falling back to next NetFetcher for " << url
             << ", error: " << net_error
@@ -130,7 +134,7 @@ void FallbackNetFetcher::DownloadToFileDone(
     int64_t content_size) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   cancellation_->Clear();
-  const int should_fallback = net_error || (http_status_code_ != 200);
+  const bool should_fallback = net_error || (http_status_code_ != 200);
   if (should_fallback && next_) {
     VLOG(1) << __func__ << " Falling back to next NetFetcher for " << url;
     cancellation_->OnCancel(next_->DownloadToFile(

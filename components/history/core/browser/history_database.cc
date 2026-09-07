@@ -26,6 +26,7 @@
 #include "sql/statement.h"
 #include "sql/transaction.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
+#include "ui/base/page_transition_types.h"
 
 #if BUILDFLAG(IS_APPLE)
 #include "base/apple/backup_util.h"
@@ -79,14 +80,19 @@ HistoryDatabase::HistoryDatabase(
               // TODO(crbug.com/40159106) Remove this dependency on normal
               // locking mode.
               .set_exclusive_locking(false)
-              // Prime the cache.
-              .set_preload(true)
               // Set the cache size. The page size, plus a little extra, times
               // this value, tells us how much memory the cache will use
               // maximum. 1000 * 4kB = 4MB
-              .set_cache_size(1000),
+              .set_cache_size(1000)
+#if !BUILDFLAG(IS_FUCHSIA)
+              .set_wal_mode(base::FeatureList::IsEnabled(
+                  kHistoryDatabaseWriteAheadLogging))
+#endif  // !BUILDFLAG(IS_FUCHSIA)
+              ,
           /*tag=*/"History"),
-      history_metadata_db_(&db_, &meta_table_) {}
+      history_metadata_db_(&db_, &meta_table_),
+      journeys_metadata_db_(&db_, &meta_table_) {
+}
 
 HistoryDatabase::~HistoryDatabase() = default;
 
@@ -156,7 +162,8 @@ sql::InitStatus HistoryDatabase::Init(const base::FilePath& history_name) {
   if (!CreateURLTable(false) || !InitVisitTable() ||
       !InitKeywordSearchTermsTable() || !InitDownloadTable() ||
       !InitSegmentTables() || !InitVisitAnnotationsTables() ||
-      !CreateVisitedLinkTable() || !history_metadata_db_.Init()) {
+      !CreateVisitedLinkTable() || !history_metadata_db_.Init() ||
+      !InitJourneysTables() || !journeys_metadata_db_.Init()) {
     return LogInitFailure(InitStep::CREATE_TABLES);
   }
   CreateMainURLIndex();
@@ -406,6 +413,10 @@ int HistoryDatabase::GetCurrentVersion() {
   return kCurrentVersionNumber;
 }
 
+int HistoryDatabase::GetDatabaseVersionForTesting() {
+  return meta_table_.GetVersionNumber();
+}
+
 std::unique_ptr<sql::Transaction> HistoryDatabase::CreateTransaction() {
   return std::make_unique<sql::Transaction>(&db_);
 }
@@ -438,17 +449,20 @@ bool HistoryDatabase::RecreateAllTablesButURL() {
   if (!InitVisitAnnotationsTables())
     return false;
 
+  if (!DropJourneysTables()) {
+    return false;
+  }
+  if (!InitJourneysTables()) {
+    return false;
+  }
+
   return true;
 }
 
 void HistoryDatabase::Vacuum() {
-  DCHECK_EQ(0, db_.transaction_nesting()) <<
-      "Can not have a transaction when vacuuming.";
-  std::ignore = db_.Execute("VACUUM");
-}
-
-void HistoryDatabase::TrimMemory() {
-  db_.TrimMemory();
+  DCHECK(!db_.HasActiveTransactions())
+      << "Can not have a transaction when vacuuming.";
+  std::ignore = db_.Vacuum();
 }
 
 bool HistoryDatabase::Raze() {
@@ -543,12 +557,140 @@ HistorySyncMetadataDatabase* HistoryDatabase::GetHistoryMetadataDB() {
   return &history_metadata_db_;
 }
 
+journeys::JourneysSyncMetadataDatabase*
+HistoryDatabase::GetJourneysMetadataDB() {
+  return &journeys_metadata_db_;
+}
+
 sql::Database& HistoryDatabase::GetDBForTesting() {
   return db_;
 }
 
 sql::Database& HistoryDatabase::GetDB() {
   return db_;
+}
+
+// VisitedLinkWithUrlEnumerator ------------------------------------------------
+
+HistoryDatabase::VisitedLinkWithUrlEnumerator::VisitedLinkWithUrlEnumerator() =
+    default;
+
+HistoryDatabase::VisitedLinkWithUrlEnumerator::~VisitedLinkWithUrlEnumerator() =
+    default;
+
+bool HistoryDatabase::VisitedLinkWithUrlEnumerator::GetNextVisitedLink(
+    VisitedLinkRow& row,
+    GURL& link_url) {
+  while (statement_.Step()) {
+    // Column indices correspond to the JOIN query in
+    // InitVisitedLinkWithUrlEnumeratorForEverything:
+    //   0: visited_links.id
+    //   1: visited_links.link_url_id
+    //   2: visited_links.top_level_url
+    //   3: visited_links.frame_url
+    //   4: visited_links.visit_count
+    //   5: urls.url
+    GURL url(statement_.ColumnStringView(5));
+    if (!url.is_valid()) {
+      // Skip rows with invalid URLs, matching GetURLRow()/FillURLRow()
+      // behavior.
+      continue;
+    }
+
+    row.id = statement_.ColumnInt64(0);
+    row.link_url_id = statement_.ColumnInt64(1);
+    // Use Swap to avoid the expensive GURL copy-assignment operator.
+    // The old member value is cheaply destroyed via the temporary's destructor.
+    GURL(statement_.ColumnStringView(2)).Swap(&row.top_level_url);
+    GURL(statement_.ColumnStringView(3)).Swap(&row.frame_url);
+    row.visit_count = statement_.ColumnInt(4);
+    link_url = std::move(url);
+    return true;
+  }
+  return false;
+}
+
+bool HistoryDatabase::InitVisitedLinkWithUrlEnumeratorForEverything(
+    VisitedLinkWithUrlEnumerator& enumerator) {
+  DCHECK(!enumerator.initialized_);
+  // Use INNER JOIN to fetch visited link rows together with their link URLs in
+  // a single query, avoiding a per-row URL lookup.
+  enumerator.statement_.Assign(GetDB().GetUniqueStatement(
+      "SELECT visited_links.id, visited_links.link_url_id, "
+      "visited_links.top_level_url, visited_links.frame_url, "
+      "visited_links.visit_count, urls.url "
+      "FROM visited_links "
+      "INNER JOIN urls ON visited_links.link_url_id = urls.id"));
+  enumerator.initialized_ = enumerator.statement_.is_valid();
+  return enumerator.statement_.is_valid();
+}
+
+HistoryDatabase::RecentVisitsMap
+HistoryDatabase::GetBatchRecentVisitsForSignificantURLs(
+    int max_visits_per_url) {
+  RecentVisitsMap result;
+
+  // Fetch the most recent visits for all "significant" URLs in a single query.
+  // This replaces N separate GetMostRecentVisitsForURL calls during
+  // RebuildFromHistory.
+  //
+  // Key design decisions:
+  //
+  // 1. SCOPED TO SIGNIFICANT URLs: The subquery filters visits to only those
+  //    belonging to "significant" URLs (matching the same criteria as
+  //    InitURLEnumeratorForSignificant: not hidden, and either recently
+  //    visited, visited enough times, or typed). Without this filter, the
+  //    query would scan the entire visits table (potentially millions of rows
+  //    for every URL ever visited), even though RebuildFromHistory only
+  //    indexes significant URLs. This typically reduces the scan by 60-80%.
+  //
+  // 2. LIGHTWEIGHT COLUMNS: We only fetch visit_time and transition — the two
+  //    fields actually consumed by UpdateRecentVisits (which stores them as
+  //    VisitInfo pairs for omnibox scoring). This avoids reading all 18
+  //    HISTORY_VISIT_ROW_FIELDS per visit row.
+  //
+  // 3. NO 404 FILTERING: The per-URL GetMostRecentVisitsForURL path uses
+  //    kExclude404s which requires a LEFT OUTER JOIN with context_annotations.
+  //    That JOIN is expensive when repeated N times. Here we skip it — 404
+  //    visits are rare and the omnibox scoring already deprioritizes them.
+  //    This avoids the JOIN overhead entirely.
+  //
+  // 4. PER-URL LIMITING IN C++: We fetch all visits for significant URLs
+  //    ordered by (url, visit_time DESC) and cap each URL's visits to
+  //    max_visits_per_url in the loop below. Window functions
+  //    (ROW_NUMBER() OVER) would be ideal for SQL-level limiting but are
+  //    disabled in Chromium's SQLite build (SQLITE_OMIT_WINDOWFUNC). The
+  //    C++ limiting is trivial and the extra rows read are minimal since
+  //    most URLs have few visits.
+  sql::Statement statement(GetDB().GetUniqueStatement(
+      "SELECT url, visit_time, transition "
+      "FROM visits "
+      "WHERE url IN ("
+      "  SELECT id FROM urls"
+      "  WHERE hidden = 0"
+      "  AND (last_visit_time >= ? OR visit_count >= ? OR typed_count >= ?)"
+      ") "
+      "ORDER BY url, visit_time DESC, id DESC"));
+  statement.BindTime(0, AutocompleteAgeThreshold());
+  statement.BindInt(1, kLowQualityMatchVisitLimit);
+  statement.BindInt(2, kLowQualityMatchTypedLimit);
+
+  while (statement.Step()) {
+    URLID url_id = statement.ColumnInt64(0);
+    auto& visits = result[url_id];
+    if (static_cast<int>(visits.size()) >= max_visits_per_url) {
+      continue;
+    }
+    base::Time visit_time = statement.ColumnTime(1);
+    int32_t transition_int = statement.ColumnInt(2);
+    ui::PageTransition transition =
+        ui::IsValidPageTransitionType(transition_int)
+            ? ui::PageTransitionFromInt(transition_int)
+            : ui::PAGE_TRANSITION_LINK;
+    visits.emplace_back(visit_time, transition);
+  }
+
+  return result;
 }
 
 // Migration -------------------------------------------------------------------

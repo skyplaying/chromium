@@ -24,6 +24,8 @@
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/user_education/common/feature_promo/feature_promo_controller.h"
 #include "components/user_education/common/feature_promo/feature_promo_result.h"
+#include "components/user_education/common/feature_promo/impl/feature_promo_controller_impl.h"
+#include "components/user_education/common/user_education_features.h"
 #include "components/user_education/test/user_education_session_test_util.h"
 #include "content/public/browser/browser_context.h"
 #include "ui/base/interaction/interactive_test_internal.h"
@@ -35,7 +37,7 @@ class InteractiveFeaturePromoTestPrivate
       public InteractiveFeaturePromoTestCommon,
       public ProfileObserver {
  public:
-  DECLARE_FRAMEWORK_SPECIFIC_METADATA()
+  DECLARE_SAFE_CAST_TARGET()
 
   InteractiveFeaturePromoTestPrivate(
       ui::test::internal::InteractiveTestPrivate& test_impl,
@@ -44,23 +46,17 @@ class InteractiveFeaturePromoTestPrivate
       InitialSessionState initial_session_state);
   ~InteractiveFeaturePromoTestPrivate() override;
 
-  std::optional<ControllerMode> controller_mode() const {
-    return controller_mode_;
-  }
-  void SetControllerMode(ControllerMode mode);
-
   // This must be called during SetUp(), before calling base class SetUp().
-  void CommitControllerMode();
+  void ConfigureController();
 
   // This must be called during TearDown(), after calling base class TearDown().
-  void ResetControllerMode();
+  void ResetController();
 
   // InteractiveBrowserTestPrivate:
-  void DoTestSetUp() override;
   void DoTestTearDown() override;
 
   // Returns the mock tracker for `browser` if in `UseMockTracker` mode.
-  MockTracker* GetMockTrackerFor(Browser* browser);
+  MockTracker* GetMockTrackerFor(BrowserWindowInterface* browser);
 
   // Implementation for `InteractiveFeaturePromoTestApi` methods.
   ClockMode clock_mode() const { return clock_mode_; }
@@ -69,7 +65,7 @@ class InteractiveFeaturePromoTestPrivate
 
   // Waits for the tracker to be initialized if the appropriate tracker mode is
   // set.
-  void MaybeWaitForTrackerInitialization(Browser* browser);
+  void MaybeWaitForTrackerInitialization(BrowserWindowInterface* browser);
 
   bool use_shortened_timeouts_for_internal_testing() const {
     return use_shortened_timeouts_for_internal_testing_;
@@ -115,12 +111,11 @@ class InteractiveFeaturePromoTestPrivate
   const TrackerMode tracker_mode_;
   const ClockMode clock_mode_;
   const InitialSessionState initial_session_state_;
-  std::optional<ControllerMode> controller_mode_;
   bool use_shortened_timeouts_for_internal_testing_ = false;
   std::optional<base::Time> test_time_;
   std::map<Profile*, ProfileData> profile_data_;
   feature_engagement::test::ScopedIphFeatureList feature_list_;
-  user_education::FeaturePromoControllerCommon::TestLock activation_lock_;
+  user_education::FeaturePromoControllerImpl::TestLock activation_lock_;
   base::ScopedMultiSourceObservation<Profile, ProfileObserver>
       profile_observations_{this};
   base::CallbackListSubscription create_services_subscription_;
@@ -128,6 +123,8 @@ class InteractiveFeaturePromoTestPrivate
       feature_promo_result_context_;
   std::ostringstream feature_promo_result_string_;
   base::CallbackListSubscription feature_promo_result_subscription_;
+  user_education::features::testing::TimeoutOverrideHandle
+      timeout_override_handle_;
   base::WeakPtrFactory<InteractiveFeaturePromoTestPrivate> weak_ptr_factory_{
       this};
 };

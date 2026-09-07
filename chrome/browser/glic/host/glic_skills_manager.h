@@ -9,6 +9,7 @@
 
 #include "base/functional/callback_forward.h"
 #include "chrome/browser/glic/host/glic.mojom.h"
+#include "components/skills/public/skill.mojom-forward.h"
 
 namespace tabs {
 class TabInterface;
@@ -29,6 +30,9 @@ class GlicSkillsManager {
   GlicSkillsManager(const GlicSkillsManager&) = delete;
   GlicSkillsManager& operator=(const GlicSkillsManager&) = delete;
 
+  virtual void Bind(mojo::PendingReceiver<mojom::SkillsHandler> receiver,
+                    mojo::PendingRemote<mojom::SkillsClient> client) = 0;
+
   // Triggers sending skills previews to the web client. The |updated_tab|
   // is used when the preview update is due to a change at the tab level.
   // TODO(b:481051392): support updating all skill previews rather than just
@@ -40,11 +44,20 @@ class GlicSkillsManager {
   // attempt to create a new tab/window for the given profile.
   virtual void LaunchSkillsDialog(Profile* profile,
                                   skills::Skill skill,
+                                  skills::mojom::SkillsDialogType dialog_type,
                                   base::OnceCallback<void(bool)> callback) = 0;
 
-  // Get a contextual skill for the given tab.
-  virtual glic::mojom::SkillPtr GetContextualSkill(
-      std::string_view skill_id) = 0;
+  // Shows the Manage Skills UI.
+  virtual void ShowManageSkillsUi() = 0;
+
+  // Shows the Browse Skills UI.
+  virtual void ShowBrowseSkillsUi() = 0;
+
+  // Notify that a glic panel associated with the skill manager is being opened.
+  virtual void NotifyPanelOpenedOrActivated() = 0;
+
+  virtual void NotifyContextualSkillsChanged(
+      std::vector<mojom::SkillPreviewPtr> contextual_skill_previews) = 0;
 };
 
 }  // namespace glic

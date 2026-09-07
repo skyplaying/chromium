@@ -7,12 +7,13 @@
 #include "base/test/mock_callback.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ui/autofill/chrome_autofill_client.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "components/autofill/core/browser/payments/bnpl_util.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/browser/ui/payments/bnpl_tos_controller.h"
 #include "components/autofill/core/browser/ui/payments/select_bnpl_issuer_dialog_controller.h"
 #include "components/autofill/core/common/autofill_payments_features.h"
@@ -42,8 +43,13 @@ class DesktopBnplUiDelegateBrowserTest
  public:
   DesktopBnplUiDelegateBrowserTest() {
     if (GetParam().dialog == DialogEnum::kSelectBnplIssuerUpdate) {
-      feature_list_.InitAndEnableFeature(
-          features::kAutofillEnableAiBasedAmountExtraction);
+      feature_list_.InitWithFeatures(
+          {/*enabled_features=*/features::
+               kAutofillEnableAiBasedAmountExtraction},
+          {/*disabled_features=*/features::kAutofillEnablePayNowPayLaterTabs});
+    } else if (GetParam().dialog == DialogEnum::kSelectBnplIssuer) {
+      feature_list_.InitAndDisableFeature(
+          features::kAutofillEnablePayNowPayLaterTabs);
     }
   }
   DesktopBnplUiDelegateBrowserTest(const DesktopBnplUiDelegateBrowserTest&) =
@@ -75,9 +81,13 @@ class DesktopBnplUiDelegateBrowserTest
                                BnplIssuerEligibilityForPage::kIsEligible)},
             /*app_locale=*/"en-US", base::DoNothing(), base::DoNothing(),
             /*has_seen_ai_terms=*/true);
-        GetDesktopBnplUiDelegate()->UpdateBnplIssuerDialogUi(
+        GetDesktopBnplUiDelegate()->UpdateBnplIssuerUi(
             {BnplIssuerContext(test::GetTestUnlinkedBnplIssuer(),
-                               BnplIssuerEligibilityForPage::kIsEligible)});
+                               BnplIssuerEligibilityForPage::kIsEligible)},
+            /*extracted_amount=*/100,
+            /*is_amount_supported_by_any_issuer=*/true, /*app_locale=*/"en-US",
+            /*selected_issuer_callback=*/base::DoNothing(),
+            /*cancel_callback=*/base::DoNothing());
         break;
       }
     }
@@ -108,7 +118,7 @@ class DesktopBnplUiDelegateBrowserTest
   }
 
   content::WebContents* web_contents() const {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
  private:
@@ -147,7 +157,7 @@ IN_PROC_BROWSER_TEST_P(DesktopBnplUiDelegateBrowserTest,
                        ShowAndVerifyUi_ThenCloseWindow) {
   ShowAndVerifyUi();
   // Close the browser window.
-  browser()->window()->Close();
+  browser()->GetWindow()->Close();
   // Wait until the browser window is closed.
   base::RunLoop().RunUntilIdle();
 }

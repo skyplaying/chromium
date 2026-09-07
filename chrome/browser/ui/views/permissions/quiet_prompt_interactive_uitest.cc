@@ -2,36 +2,35 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <optional>
+
 #include "base/strings/stringprintf.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "chrome/browser/permissions/quiet_notification_permission_ui_config.h"
-#include "chrome/browser/permissions/quiet_notification_permission_ui_state.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/omnibox/omnibox_view.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/content_setting_bubble_contents.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/infobars/confirm_infobar.h"
-#include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/views/permissions/chip/permission_chip_view.h"
 #include "chrome/browser/ui/views/permissions/chip/permission_dashboard_view.h"
 #include "chrome/browser/ui/views/permissions/permission_prompt_bubble_base_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/grit/generated_resources.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
 #include "chrome/test/permissions/permission_request_manager_test_api.h"
 #include "components/infobars/content/content_infobar_manager.h"
-#include "components/infobars/core/infobar.h"
 #include "components/infobars/core/infobar_manager.h"
 #include "components/omnibox/browser/test_location_bar_model.h"
-#include "components/permissions/features.h"
 #include "components/permissions/permission_actions_history.h"
 #include "components/permissions/permission_uma_util.h"
 #include "components/permissions/permission_util.h"
 #include "components/permissions/permissions_client.h"
 #include "components/permissions/request_type.h"
 #include "components/permissions/test/mock_permission_ui_selector.h"
-#include "components/strings/grit/components_strings.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "net/dns/mock_host_resolver.h"
@@ -42,13 +41,12 @@
 #include "url/gurl.h"
 
 DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kWebContentsElementId);
-const char kLocationBarView[] = "LocationBarView";
-const auto QuietChipElementId = PermissionChipView::kElementIdForTesting;
+const auto QuietChipElementId =
+    PermissionChipView::kPermissionRequestChipElementId;
 const auto QuietBubbleAllowElementId =
     views::DialogClientView::kOkButtonElementId;
 const auto QuietBubbleElementId = ContentSettingBubbleContents::kMainElementId;
 const auto InfobarElementId = ConfirmInfoBar::kInfoBarElementId;
-using ::base::test::ScopedFeatureList;
 using ::testing::ValuesIn;
 
 class QuietPromptInteractiveUITest : public InteractiveBrowserTest {
@@ -93,14 +91,18 @@ class QuietPromptInteractiveUITest : public InteractiveBrowserTest {
     InteractiveBrowserTest::SetUpCommandLine(command_line);
   }
 
-  LocationBarView* GetLocationBarView() {
+  LocationBar* GetLocationBar() {
     return BrowserView::GetBrowserViewForBrowser(browser())
         ->toolbar()
-        ->location_bar_view();
+        ->location_bar();
+  }
+
+  PermissionDashboardController* GetDashboardController() {
+    return GetLocationBar()->GetPermissionDashboardController();
   }
 
   void OverrideVisibleUrlInLocationBar(const std::u16string& text) {
-    OmniboxView* omnibox_view = GetLocationBarView()->GetOmniboxView();
+    OmniboxView* omnibox_view = GetLocationBar()->GetOmniboxView();
     raw_ptr<TestLocationBarModel> test_location_bar_model_ =
         new TestLocationBarModel;
     std::unique_ptr<LocationBarModel> location_bar_model(
@@ -110,7 +112,7 @@ class QuietPromptInteractiveUITest : public InteractiveBrowserTest {
     test_location_bar_model_->set_formatted_full_url(text);
 
     // Normally the URL for display has portions elided. We aren't doing that in
-    // this case, because that is irrevelant for these tests.
+    // this case, because that is irrelevant for these tests.
     test_location_bar_model_->set_url_for_display(text);
 
     omnibox_view->Update();
@@ -127,14 +129,26 @@ class QuietPromptInteractiveUITest : public InteractiveBrowserTest {
   // Checks that the permission chip is visible and in the given mode.
   // If `is_request` is false, should be in indicator mode instead.
   auto CheckChipIsRequest(bool is_request) {
-    return CheckViewProperty(QuietChipElementId,
-                             &PermissionChipView::GetIsRequestForTesting,
-                             is_request);
+    return CheckResult(
+        [&]() -> std::optional<bool> {
+          auto* chip = GetDashboardController()
+                           ->permission_dashboard()
+                           ->GetRequestChip();
+          return chip ? std::optional(chip->GetIsRequestForTesting())
+                      : std::nullopt;
+        },
+        is_request);
   }
 
   auto CheckChipText(int id_string) {
-    return CheckViewProperty(QuietChipElementId, &PermissionChipView::GetText,
-                             l10n_util::GetStringUTF16(id_string));
+    return CheckResult(
+        [&]() -> std::optional<std::u16string> {
+          auto* chip = GetDashboardController()
+                           ->permission_dashboard()
+                           ->GetRequestChip();
+          return chip ? std::optional(chip->GetTextForTesting()) : std::nullopt;
+        },
+        l10n_util::GetStringUTF16(id_string));
   }
 
   auto CheckQuietPromptMessage(int id_string) {
@@ -147,7 +161,7 @@ class QuietPromptInteractiveUITest : public InteractiveBrowserTest {
   permissions::PermissionActionsHistory* GetPermissionActionsHistory() {
     return permissions::PermissionsClient::Get()->GetPermissionActionsHistory(
         browser()
-            ->tab_strip_model()
+            ->GetTabStripModel()
             ->GetActiveWebContents()
             ->GetBrowserContext());
   }
@@ -186,10 +200,9 @@ IN_PROC_BROWSER_TEST_F(QuietPromptInteractiveUITest,
       ExecuteJs(kWebContentsElementId, "requestNotification"),
       WaitForShow(QuietChipElementId), CheckChipIsRequest(true),
       CheckChipText(IDS_NOTIFICATIONS_QUIET_PERMISSION_BUBBLE_TITLE),
-      NameView(kLocationBarView, GetLocationBarView()),
       SetOnIncompatibleAction(OnIncompatibleAction::kIgnoreAndContinue,
                               "Screenshot not supported in all test modes."),
-      Screenshot(kLocationBarView, "RequestChip", "5875965"));
+      Screenshot(kLocationBarElementId, "RequestChip", "5875965"));
 }
 
 IN_PROC_BROWSER_TEST_F(QuietPromptInteractiveUITest,
@@ -280,10 +293,9 @@ IN_PROC_BROWSER_TEST_F(QuietPromptInteractiveUITest,
       ExecuteJs(kWebContentsElementId, "requestLocation"),
       WaitForShow(QuietChipElementId), CheckChipIsRequest(true),
       CheckChipText(IDS_GEOLOCATION_QUIET_PERMISSION_BUBBLE_TITLE),
-      NameView(kLocationBarView, GetLocationBarView()),
       SetOnIncompatibleAction(OnIncompatibleAction::kIgnoreAndContinue,
                               "Screenshot not supported in all test modes."),
-      Screenshot(kLocationBarView, "RequestChip", "5875965"));
+      Screenshot(kLocationBarElementId, "RequestChip", "5875965"));
 }
 
 IN_PROC_BROWSER_TEST_F(QuietPromptInteractiveUITest,
@@ -415,8 +427,7 @@ IN_PROC_BROWSER_TEST_P(QuietPromptInteractiveParamUITest,
             "Permissions.QuietPrompt.Preignore.PageReloadInfoBar", should_show,
             1);
       }),
-      NameView(kLocationBarView, GetLocationBarView()),
       SetOnIncompatibleAction(OnIncompatibleAction::kIgnoreAndContinue,
                               "Screenshot not supported in all test modes."),
-      Screenshot(kLocationBarView, test_name, "6768828"));
+      Screenshot(kLocationBarElementId, test_name, "6768828"));
 }

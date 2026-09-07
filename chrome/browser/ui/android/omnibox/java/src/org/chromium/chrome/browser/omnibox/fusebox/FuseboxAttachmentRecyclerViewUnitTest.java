@@ -18,6 +18,7 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
+import org.mockito.quality.Strictness;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.omnibox.fusebox.FuseboxAttachmentRecyclerView.ScrollToEndOnInsertionObserver;
@@ -25,10 +26,11 @@ import org.chromium.chrome.browser.omnibox.fusebox.FuseboxAttachmentRecyclerView
 /** Unit tests for {@link FuseboxAttachmentRecyclerView}. */
 @RunWith(BaseRobolectricTestRunner.class)
 public class FuseboxAttachmentRecyclerViewUnitTest {
-    public @Rule MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Rule
+    public final MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
 
-    private @Mock FuseboxAttachmentRecyclerView mScrollToEndOnInsertionMockView;
-    private @Mock RecyclerView.Adapter mAdapter;
+    @Mock private FuseboxAttachmentRecyclerView mScrollToEndOnInsertionMockView;
+    @Mock private RecyclerView.Adapter mAdapter;
 
     private ScrollToEndOnInsertionObserver mScrollToEndOnInsertionObserver;
 

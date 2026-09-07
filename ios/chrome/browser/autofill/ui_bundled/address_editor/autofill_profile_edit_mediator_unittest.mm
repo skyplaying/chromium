@@ -12,7 +12,7 @@
 #import "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #import "components/autofill/core/browser/geo/alternative_state_name_map_updater.h"
 #import "components/autofill/core/browser/geo/autofill_country.h"
-#import "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#import "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #import "components/autofill/core/browser/ui/country_combobox_model.h"
 #import "components/autofill/core/common/autofill_features.h"
 #import "components/variations/service/variations_service.h"
@@ -140,18 +140,17 @@ class AutofillProfileEditMediatorTest : public PlatformTest {
     return GetApplicationContext()->GetLocalState();
   }
 
-  AutofillProfileEditMediator* autofill_profile_edit_mediator_;
-  FakeAutofillProfileEditConsumer* fake_consumer_;
-  FakeAutofillProfileEditMediatorDelegate*
-      fake_autofill_profile_edit_mediator_delegate_;
-
- private:
+ protected:
   web::WebTaskEnvironment task_environment_;
   IOSChromeScopedTestingLocalState scoped_testing_local_state_;
   std::unique_ptr<TestProfileIOS> profileIOS_;
   raw_ptr<autofill::PersonalDataManager> personal_data_manager_;
   autofill::CountryComboboxModel country_model_;
   std::unique_ptr<autofill::AutofillProfile> profile_;
+  AutofillProfileEditMediator* autofill_profile_edit_mediator_;
+  FakeAutofillProfileEditConsumer* fake_consumer_;
+  FakeAutofillProfileEditMediatorDelegate*
+      fake_autofill_profile_edit_mediator_delegate_;
 };
 
 // Tests that the consumer is initialised and informed of the required fields on

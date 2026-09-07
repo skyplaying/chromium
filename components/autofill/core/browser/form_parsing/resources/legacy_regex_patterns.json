@@ -3600,7 +3600,79 @@
           "INPUT_NUMBER"
         ]
       }
-    ]
+    ],
+    "es": {
+      "AutofillEnableExpandIbanRegexPattern": [
+        {
+          "positive_pattern": "(\\biban(\\b|_)|international bank account number|número de cuentas)",
+          "positive_score": 0.975,
+          "negative_pattern": null,
+          "match_field_attributes": [
+            "LABEL",
+            "NAME"
+          ],
+          "form_control_types": [
+            "INPUT_TEXT",
+            "TEXT_AREA",
+            "INPUT_NUMBER"
+          ]
+        }
+      ]
+    },
+    "fr": {
+      "AutofillEnableExpandIbanRegexPattern": [
+        {
+          "positive_pattern": "(\\biban(\\b|_)|international bank account number|Coordonnées bancaires|numéro de compte|n° de compte)",
+          "positive_score": 0.975,
+          "negative_pattern": null,
+          "match_field_attributes": [
+            "LABEL",
+            "NAME"
+          ],
+          "form_control_types": [
+            "INPUT_TEXT",
+            "TEXT_AREA",
+            "INPUT_NUMBER"
+          ]
+        }
+      ]
+    },
+    "it": {
+      "AutofillEnableExpandIbanRegexPattern": [
+        {
+          "positive_pattern": "(\\biban(\\b|_)|international bank account number|Numero di conto)",
+          "positive_score": 0.975,
+          "negative_pattern": null,
+          "match_field_attributes": [
+            "LABEL",
+            "NAME"
+          ],
+          "form_control_types": [
+            "INPUT_TEXT",
+            "TEXT_AREA",
+            "INPUT_NUMBER"
+          ]
+        }
+      ]
+    },
+    "pl": {
+      "AutofillEnableExpandIbanRegexPattern": [
+        {
+          "positive_pattern": "(\\biban(\\b|_)|international bank account number|numer konta bankowego|numer konta)",
+          "positive_score": 0.975,
+          "negative_pattern": null,
+          "match_field_attributes": [
+            "LABEL",
+            "NAME"
+          ],
+          "form_control_types": [
+            "INPUT_TEXT",
+            "TEXT_AREA",
+            "INPUT_NUMBER"
+          ]
+        }
+      ]
+    }
   },
   "IN_DEPENDENT_LOCALITY": {
     "en": [
@@ -3900,22 +3972,6 @@
       }
     ]
   },
-  "LAST_NAME_PREFIX": {
-    "nl": [
-      {
-        "positive_pattern": "tussenv",
-        "positive_score": 0.9,
-        "negative_pattern": null,
-        "match_field_attributes": [
-          "LABEL",
-          "NAME"
-        ],
-        "form_control_types": [
-          "INPUT_TEXT"
-        ]
-      }
-    ]
-  },
   "LAST_NAME_SECOND": {
     "es": [
       {
@@ -3933,24 +3989,22 @@
     ]
   },
   "LOYALTY_MEMBERSHIP_ID": {
-    "en": {
-      "AutofillEnableLoyaltyCardsFilling": [
-        {
-          "positive_pattern": "loyalty.*(?:num|card)|frequent[\\s-]*flyer|(?:member|membership|traveler|flyer).*(?:number|no)",
-          "positive_score": 1.1,
-          "negative_pattern": null,
-          "match_field_attributes": [
-            "LABEL",
-            "NAME"
-          ],
-          "form_control_types": [
-            "INPUT_TEXT",
-            "INPUT_SEARCH",
-            "INPUT_NUMBER"
-          ]
-        }
-      ]
-    }
+    "en": [
+      {
+        "positive_pattern": "loyalty.*(?:num|card)|frequent[\\s-]*flyer|(?:member|membership|traveler|flyer).*(?:number|no)",
+        "positive_score": 1.1,
+        "negative_pattern": null,
+        "match_field_attributes": [
+          "LABEL",
+          "NAME"
+        ],
+        "form_control_types": [
+          "INPUT_TEXT",
+          "INPUT_SEARCH",
+          "INPUT_NUMBER"
+        ]
+      }
+    ]
   },
   "MERCHANT_PROMO_CODE": {
     "en": [
@@ -4269,6 +4323,23 @@
           "TEXT_AREA",
           "INPUT_NUMBER",
           "INPUT_SEARCH"
+        ]
+      }
+    ]
+  },
+  "ONE_TIME_CODE": {
+    "en": [
+      {
+        "positive_pattern": "otp|verification.code|2fa|six.digit",
+        "positive_score": 1.1,
+        "negative_pattern": null,
+        "match_field_attributes": [
+          "LABEL",
+          "NAME"
+        ],
+        "form_control_types": [
+          "INPUT_TEXT",
+          "INPUT_NUMBER"
         ]
       }
     ]

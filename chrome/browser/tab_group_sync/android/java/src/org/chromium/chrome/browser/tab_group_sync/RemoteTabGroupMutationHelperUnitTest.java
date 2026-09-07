@@ -22,13 +22,11 @@ import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Token;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.test.util.browser.tabmodel.MockTabModel;
 import org.chromium.components.tab_group_sync.LocalTabGroupId;
 import org.chromium.components.tab_group_sync.SavedTabGroup;
@@ -41,7 +39,6 @@ import java.util.List;
 
 /** Unit tests for the {@link RemoteTabGroupMutationHelper}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class RemoteTabGroupMutationHelperUnitTest {
     private static final int TAB_ID_1 = 1;
     private static final int TAB_ID_2 = 2;
@@ -56,7 +53,6 @@ public class RemoteTabGroupMutationHelperUnitTest {
     @Mock private Profile mProfile;
     private MockTabModel mTabModel;
 
-    private @Mock TabGroupModelFilter mTabGroupModelFilter;
     private @Mock LocalTabGroupMutationHelper mLocalTabGroupMutationHelper;
     private TabGroupSyncService mTabGroupSyncService;
     private RemoteTabGroupMutationHelper mRemoteMutationHelper;
@@ -80,13 +76,12 @@ public class RemoteTabGroupMutationHelperUnitTest {
         List<Tab> tabs = new ArrayList<>();
         tabs.add(mTab1);
         tabs.add(mTab2);
-        when(mTabGroupModelFilter.getTabsInGroup(eq(TOKEN_1))).thenReturn(tabs);
 
         mTabModel = spy(new MockTabModel(mProfile, null));
-        when(mTabGroupModelFilter.getTabModel()).thenReturn(mTabModel);
+        when(mTabModel.getTabsInGroup(eq(TOKEN_1))).thenReturn(tabs);
         mRemoteMutationHelper =
                 new RemoteTabGroupMutationHelper(
-                        mTabGroupModelFilter, mTabGroupSyncService, mLocalTabGroupMutationHelper);
+                        mTabModel, mTabGroupSyncService, mLocalTabGroupMutationHelper);
     }
 
     @Test
@@ -109,6 +104,6 @@ public class RemoteTabGroupMutationHelperUnitTest {
         assertEquals(TAB_URL_1, savedTab2.url);
         assertEquals(mSavedTabGroupCaptor.getValue().syncId, savedTab2.syncGroupId);
 
-        verify(mTabGroupModelFilter).getTabsInGroup(eq(TOKEN_1));
+        verify(mTabModel).getTabsInGroup(eq(TOKEN_1));
     }
 }

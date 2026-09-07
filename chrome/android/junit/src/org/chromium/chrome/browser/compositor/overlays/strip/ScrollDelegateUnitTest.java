@@ -20,8 +20,8 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.RuntimeEnvironment;
 
+import org.chromium.base.Token;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.chrome.browser.compositor.layouts.phone.stack.StackScroller;
 import org.chromium.chrome.browser.dragdrop.ChromeDropDataAndroid;
 import org.chromium.chrome.browser.dragdrop.ChromeTabDropDataAndroid;
 import org.chromium.chrome.browser.tab.Tab;
@@ -146,7 +146,7 @@ public class ScrollDelegateUnitTest {
         // Tab 2 has a trailing margin.
         when(mTab2.getTrailingMargin()).thenReturn(TRAILING_MARGIN_WIDTH);
         // Tabs 3 and 4 will be ignored.
-        when(mTab3.isClosed()).thenReturn(true);
+        when(mTab3.isDraggedOffStrip()).thenReturn(true);
         when(mTab4.isDraggedOffStrip()).thenReturn(true);
         setupDragDropState();
 
@@ -166,6 +166,52 @@ public class ScrollDelegateUnitTest {
         float expectedScrollOffsetLimit = -190.f;
         assertEquals(
                 /* message= */ "scrollOffsetLimit was not as calculated.",
+                expectedScrollOffsetLimit,
+                mScrollDelegate.getScrollOffsetLimitForTesting(),
+                /* delta= */ 0);
+    }
+
+    @Test
+    public void testUpdateScrollOffsetLimits_CollapsedGroup() {
+        // Setup mocks.
+        mViews = new StripLayoutView[] {mGroupTitle, mTab1, mTab2, mTab3, mTab4};
+        for (StripLayoutView view : mViews) {
+            when(view.getWidth()).thenReturn(VIEW_WIDTH);
+        }
+        when(mGroupTitle.isCollapsed()).thenReturn(true);
+        // Tab 2 has a trailing margin.
+        when(mTab2.getTrailingMargin()).thenReturn(TRAILING_MARGIN_WIDTH);
+        // Tabs 3 and 4 will be ignored.
+        when(mTab3.isDraggedOffStrip()).thenReturn(true);
+        when(mTab4.isDraggedOffStrip()).thenReturn(true);
+        setupDragDropState();
+
+        // stripWidth = width(150) - leftMargin(5) - rightMargin(5) = 140
+        // For mGroupTitle:
+        //   mGroupTitle.isCollapsed() is true, so overlapWidth = VIEW_OVERLAP_WIDTH(10) -
+        // COLLAPSED_MARGIN_ADJUSTMENT_DP(4) = 6
+        //   mGroupTitle contribution = getWidth(110) - overlapWidth(6) = 104
+        // For mTab1:
+        //   mTab1 contribution = getWidth(110) - tabOverlapWidth(10) = 100
+        // For mTab2:
+        //   mTab2 contribution = getWidth(110) - tabOverlapWidth(10) = 100
+        // viewsWidth = 104 + 100 + 100 = 304
+        // Correct fencepost: totalViewWidth = viewsWidth(304) + tabOverlapWidth(10) = 314
+        // marginsWidth = trailingMarginWidth(10) + reorderStartMargin(10) = 20
+        // expectedScrollOffsetLimit = totalViewWidth(314) + marginsWidth(20) - stripWidth(140) =
+        // -194
+        mScrollDelegate.setReorderStartMargin(REORDER_START_MARGIN);
+        mScrollDelegate.updateScrollOffsetLimits(
+                mViews,
+                STRIP_WIDTH,
+                LEFT_MARGIN,
+                RIGHT_MARGIN,
+                VIEW_WIDTH,
+                VIEW_OVERLAP_WIDTH,
+                VIEW_OVERLAP_WIDTH);
+        float expectedScrollOffsetLimit = -194.f;
+        assertEquals(
+                /* message= */ "scrollOffsetLimit was not as calculated for a collapsed group.",
                 expectedScrollOffsetLimit,
                 mScrollDelegate.getScrollOffsetLimitForTesting(),
                 /* delta= */ 0);
@@ -213,9 +259,9 @@ public class ScrollDelegateUnitTest {
     private void setupDragDropState() {
         ChromeDropDataAndroid dropData =
                 new ChromeTabDropDataAndroid.Builder().withTab(mDraggedTab).build();
-        DragDropGlobalState.TrackerToken dragTrackerToken =
+        Token dragToken =
                 DragDropGlobalState.store(
                         /* dragSourceInstanceId= */ 1, dropData, /* dragShadowBuilder= */ null);
-        TabDragHandlerBase.setDragTrackerTokenForTesting(dragTrackerToken);
+        TabDragHandlerBase.setDragTokenForTesting(dragToken);
     }
 }

@@ -5,7 +5,6 @@
 #include "cc/layers/tile_display_layer_impl.h"
 
 #include <algorithm>
-#include <limits>
 #include <memory>
 #include <utility>
 #include <variant>
@@ -174,100 +173,18 @@ std::unique_ptr<LayerImpl> TileDisplayLayerImpl::CreateLayerImpl(
   NOTREACHED();
 }
 
-void TileDisplayLayerImpl::PushPropertiesTo(LayerImpl* layer) {
+void TileDisplayLayerImpl::CopyPropertiesTo(LayerImpl* layer) const {
   NOTREACHED();
 }
 
-void TileDisplayLayerImpl::AppendQuadsSpecialization(
-    const AppendQuadsContext& context,
-    viz::CompositorRenderPass* render_pass,
-    AppendQuadsData* append_quads_data,
-    viz::SharedQuadState* shared_quad_state,
-    const Occlusion& scaled_occlusion,
-    const gfx::Vector2d& quad_offset,
-    float max_contents_scale) {
+bool TileDisplayLayerImpl::ComputeCheckerboardedNeedsRecord() {
   // NOTE: Currently it is not necessary to compute
-  // append_quads_data->checkerboarded_needs_recorded on the Viz side, as it is
-  // consumed only on the client side. However, it will become necessary when we
-  // introduce frames driven entirely by Viz. At that point, we should dedupe
-  // the relevant code into TileBasedLayerImpl.
+  // checkerboarded_needs_recorded on the Viz side, as it is consumed only on
+  // the client side. However, it will become necessary when we introduce
+  // frames driven entirely by Viz. At that point, we should dedupe the
+  // relevant code into TileBasedLayerImpl.
   // See crbug.com/482862751.
-
-  const float ideal_scale_key = GetIdealContentsScaleKey();
-
-  // Append quads for the tiles in this layer.
-  for (auto iter = Cover(shared_quad_state->visible_quad_layer_rect,
-                         max_contents_scale, ideal_scale_key);
-       iter; ++iter) {
-    AppendQuadForTile(iter, context, render_pass, append_quads_data,
-                      shared_quad_state, scaled_occlusion, quad_offset,
-                      max_contents_scale);
-  }
-}
-
-void TileDisplayLayerImpl::AppendQuadForTile(
-    TilingSetCoverageIterator<TileDisplayLayerTiling> iter,
-    const AppendQuadsContext& context,
-    viz::CompositorRenderPass* render_pass,
-    AppendQuadsData* append_quads_data,
-    viz::SharedQuadState* shared_quad_state,
-    const Occlusion& scaled_occlusion,
-    const gfx::Vector2d& quad_offset,
-    float max_contents_scale) {
-  const gfx::Rect scaled_recorded_bounds =
-      gfx::ScaleToEnclosingRect(recorded_bounds_, max_contents_scale);
-  const gfx::Rect geometry_rect = iter.geometry_rect();
-  gfx::Rect visible_geometry_rect;
-  if (ShouldSkipTile(geometry_rect, scaled_recorded_bounds, scaled_occlusion,
-                     visible_geometry_rect)) {
-    return;
-  }
-
-  gfx::Rect offset_geometry_rect = geometry_rect;
-  offset_geometry_rect.Offset(quad_offset);
-  gfx::Rect offset_visible_geometry_rect = visible_geometry_rect;
-  offset_visible_geometry_rect.Offset(quad_offset);
-
-  bool needs_blending = !contents_opaque();
-
-  uint64_t visible_geometry_area = visible_geometry_rect.size().Area64();
-  append_quads_data->visible_layer_area += visible_geometry_area;
-
-  bool has_draw_quad = false;
-  if (*iter) {
-    if (auto resource = iter->resource()) {
-      const gfx::RectF texture_rect = iter.texture_rect();
-      auto* quad = render_pass->CreateAndAppendDrawQuad<viz::TileDrawQuad>();
-      quad->SetNew(shared_quad_state, offset_geometry_rect,
-                   offset_visible_geometry_rect, needs_blending,
-                   resource->resource_id, texture_rect, nearest_neighbor_,
-                   !layer_tree_impl()->settings().enable_edge_anti_aliasing);
-      has_draw_quad = true;
-    } else if (auto color = iter->solid_color()) {
-      has_draw_quad = true;
-      const float alpha = color->fA * shared_quad_state->opacity;
-      if (alpha >= std::numeric_limits<float>::epsilon()) {
-        auto* quad =
-            render_pass->CreateAndAppendDrawQuad<viz::SolidColorDrawQuad>();
-        quad->SetNew(shared_quad_state, offset_geometry_rect,
-                     offset_visible_geometry_rect, *color,
-                     !layer_tree_impl()->settings().enable_edge_anti_aliasing);
-      }
-    } else if (iter->is_oom()) {
-      // Keep `has_draw_quad` false to end up checkerboarding below.
-    }
-  }
-  if (!has_draw_quad) {
-    // Checkerboard due to missing raster.
-    SkColor4f color = safe_opaque_background_color();
-    auto* quad =
-        render_pass->CreateAndAppendDrawQuad<viz::SolidColorDrawQuad>();
-    quad->SetNew(shared_quad_state, offset_geometry_rect,
-                 offset_visible_geometry_rect, color, false);
-    return;
-  }
-
-  AddScaleToLastAppendQuadsScales(iter.CurrentTiling()->contents_scale_key());
+  return false;
 }
 
 float TileDisplayLayerImpl::GetMaximumContentsScaleForUseInAppendQuads() const {
@@ -278,61 +195,34 @@ bool TileDisplayLayerImpl::IsDirectlyCompositedImage() const {
   return is_directly_composited_image_;
 }
 
-void TileDisplayLayerImpl::GetContentsResourceId(
-    viz::ResourceId* resource_id,
-    gfx::Size* resource_size,
-    gfx::SizeF* resource_uv_size) const {
-  *resource_id = viz::kInvalidResourceId;
-
-  // We need contents resource for backdrop filter masks only.
-  if (!is_backdrop_filter_mask()) {
-    return;
-  }
-
-  // Masks are only supported if they fit on exactly one tile.
-  if (tilings_.size() != 1u) {
-    return;
-  }
-
-  const float max_contents_scale = tilings_.front()->contents_scale_key();
-  gfx::Rect content_rect =
-      gfx::ScaleToEnclosingRect(gfx::Rect(bounds()), max_contents_scale);
-  auto iter = TilingSetCoverageIterator<TileDisplayLayerTiling>(
-      tilings_, content_rect, max_contents_scale, GetIdealContentsScaleKey());
-
-  // We cannot do anything if the mask resource was not provided.
-  if (!iter || !*iter || !iter->resource()) {
-    return;
-  }
-
-  DCHECK(iter.geometry_rect() == content_rect)
-      << "iter rect " << iter.geometry_rect().ToString() << " content rect "
-      << content_rect.ToString();
-
-  *resource_id = iter->resource()->resource_id;
-  *resource_size = iter->resource()->resource_size;
-  gfx::SizeF requested_tile_size =
-      gfx::SizeF(iter.CurrentTiling()->tile_size());
-  *resource_uv_size =
-      gfx::SizeF(requested_tile_size.width() / resource_size->width(),
-                 requested_tile_size.height() / resource_size->height());
-}
-
-gfx::Rect TileDisplayLayerImpl::GetDamageRect() const {
-  return damage_rect_;
-}
-
-void TileDisplayLayerImpl::ResetChangeTracking() {
-  LayerImpl::ResetChangeTracking();
-  damage_rect_.SetRect(0, 0, 0, 0);
+gfx::Rect TileDisplayLayerImpl::RecordedBounds() const {
+  return recorded_bounds_;
 }
 
 gfx::ContentColorUsage TileDisplayLayerImpl::GetContentColorUsage() const {
   return content_color_usage_;
 }
 
+DamageReasonSet TileDisplayLayerImpl::GetDamageReasons() const {
+  DamageReasonSet reasons =
+      LayerImpl::GetDamageReasonsFromLayerPropertyChange();
+  if (has_animated_image_update_rect_) {
+    reasons.Put(DamageReason::kAnimatedImage);
+  }
+  if (has_non_animated_image_update_rect_ || !GetDamageRect().IsEmpty()) {
+    reasons.Put(DamageReason::kUntracked);
+  }
+  return reasons;
+}
+
+void TileDisplayLayerImpl::ResetChangeTracking() {
+  TileBasedLayerImpl<TileDisplayLayerTiling>::ResetChangeTracking();
+  has_animated_image_update_rect_ = false;
+  has_non_animated_image_update_rect_ = false;
+}
+
 void TileDisplayLayerImpl::RecordDamage(const gfx::Rect& damage_rect) {
-  damage_rect_.Union(damage_rect);
+  UnionWithExistingDamage(damage_rect);
 }
 
 void TileDisplayLayerImpl::DiscardResource(viz::ResourceId resource) {
@@ -357,7 +247,20 @@ std::vector<float> TileDisplayLayerImpl::GetSafeToDeleteTilings() {
 
 float TileDisplayLayerImpl::GetIdealContentsScaleKey() const {
   const auto ideal_scale = GetIdealContentsScale();
-  return std::max(ideal_scale.x(), ideal_scale.y());
+  float ideal_scale_key = std::max(ideal_scale.x(), ideal_scale.y());
+
+  // external_page_scale_factor (e.g. an OOPIF scaled by its embedder) affects
+  // raster/ideal scale but not geometry, so it is not part of
+  // GetIdealContentsScale(). Apply it here to mirror
+  // PictureLayerImpl::UpdateIdealScales(); otherwise the coverage iterator
+  // would select a lower-resolution tiling, producing blurry content.
+  ideal_scale_key *= layer_tree_impl()->external_page_scale_factor();
+  return ideal_scale_key;
+}
+
+bool TileDisplayLayerImpl::ValidateTilingSetForContentsResourceId() const {
+  // Masks are only supported if they fit on exactly one tile.
+  return tilings_.size() == 1u;
 }
 
 void TileDisplayLayerImpl::AppendQuadsForResourcelessSoftwareDraw(
@@ -375,7 +278,7 @@ void TileDisplayLayerImpl::AppendQuadsForResourcelessSoftwareDraw(
 TilingSetCoverageIterator<TileDisplayLayerTiling> TileDisplayLayerImpl::Cover(
     const gfx::Rect& coverage_rect,
     float coverage_scale,
-    float ideal_contents_scale) {
+    float ideal_contents_scale) const {
   return TilingSetCoverageIterator<TileDisplayLayerTiling>(
       tilings_, coverage_rect, coverage_scale, ideal_contents_scale);
 }

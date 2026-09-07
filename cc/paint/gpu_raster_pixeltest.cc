@@ -3,18 +3,13 @@
 // found in the LICENSE file.
 
 #include <array>
-
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include <cmath>
 #include <memory>
 #include <tuple>
 #include <vector>
 
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
@@ -68,6 +63,7 @@
 #include "third_party/skia/include/gpu/graphite/Context.h"
 #include "third_party/skia/include/gpu/graphite/GraphiteTypes.h"
 #include "third_party/skia/include/gpu/graphite/Surface.h"
+#include "third_party/skia/include/private/SkHdrMetadata.h"
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/gl/gl_implementation.h"
@@ -255,7 +251,8 @@ class GpuRasterPixelTest : public testing::Test,
         options.full_raster_rect, options.playback_rect, options.post_translate,
         gfx::Vector2dF(options.post_scale, options.post_scale),
         options.requires_clear, /*raster_inducing_scroll_offsets=*/nullptr,
-        &max_op_size_limit);
+        &max_op_size_limit,
+        base::RepeatingCallback<void(SkCanvas*, uint32_t)>());
     for (const auto& list : options.additional_lists) {
       ri->RasterCHROMIUM(list.get(), &image_provider, options.content_size,
                          options.full_raster_rect, options.playback_rect,
@@ -263,7 +260,8 @@ class GpuRasterPixelTest : public testing::Test,
                          gfx::Vector2dF(options.post_scale, options.post_scale),
                          options.requires_clear,
                          /*raster_inducing_scroll_offsets=*/nullptr,
-                         &max_op_size_limit);
+                         &max_op_size_limit,
+                         base::RepeatingCallback<void(SkCanvas*, uint32_t)>());
     }
     ri->EndRasterCHROMIUM();
 
@@ -1045,9 +1043,6 @@ TEST_F(GpuRasterPixelTest, DrawHdrImageWithMetadata) {
   // Allow large quantization error on Android.
   // TODO(crbug.com/40238547): Ensure higher precision for HDR images.
   constexpr float kEpsilon = 1 / 16.f;
-#elif BUILDFLAG(IS_IOS) && BUILDFLAG(SKIA_USE_METAL)
-  // TODO(crbug.com/40280014): Allow larger errors on iOS as well.
-  constexpr float kEpsilon = 1 / 12.f;
 #else
   constexpr float kEpsilon = 1 / 32.f;
 #endif
@@ -1069,26 +1064,26 @@ TEST_F(GpuRasterPixelTest, DrawHdrImageWithMetadata) {
   };
   sk_sp<SkImage> image_500_nits = make_image(0.6765848107833876f);
   sk_sp<SkImage> image_250_nits = make_image(0.6025591549907524f);
+  sk_sp<SkImage> image_100_nits = make_image(0.508078421517399f);
 
   const auto make_display_item_list =
       [&](sk_sp<SkImage> image,
           std::optional<float> peak_luminance = std::nullopt,
           std::optional<float> white_luminance = std::nullopt,
           PaintFlags* paint_flags = nullptr) {
-        auto image_generator =
-            sk_make_sp<FakePaintImageGenerator>(image->imageInfo());
-        {
-          ImageHeaderMetadata image_metadata;
-          if (peak_luminance.has_value()) {
-            image_metadata.hdr_metadata.cta_861_3.emplace(
-                peak_luminance.value(), kContentAvgNits);
-          }
-          if (white_luminance.has_value()) {
-            image_metadata.hdr_metadata.ndwl.emplace(white_luminance.value());
-          }
-          image_generator->SetImageHeaderMetadata(image_metadata);
-          EXPECT_TRUE(image->peekPixels(&image_generator->GetPixmap()));
+        gfx::HDRMetadata hdr_metadata;
+        if (peak_luminance.has_value()) {
+          hdr_metadata.SetCLLI(skhdr::ContentLightLevelInformation{
+              peak_luminance.value(), kContentAvgNits});
         }
+        if (white_luminance.has_value()) {
+          hdr_metadata.SetNDWL(white_luminance.value());
+        }
+
+        auto image_generator = sk_make_sp<FakePaintImageGenerator>(
+            image->imageInfo(), std::vector<FrameMetadata>{FrameMetadata()},
+            true, std::vector<SkISize>{}, hdr_metadata);
+        EXPECT_TRUE(image->peekPixels(&image_generator->GetPixmap()));
 
         static int id_counter = 0;
         const PaintImage::Id kSomeId = 32 + id_counter++;
@@ -1179,6 +1174,21 @@ TEST_F(GpuRasterPixelTest, DrawHdrImageWithMetadata) {
     EXPECT_NEAR(color.fR, kExpected10kToSdr, kEpsilon);
     EXPECT_NEAR(color.fG, kExpected10kToSdr, kEpsilon);
     EXPECT_NEAR(color.fB, kExpected10kToSdr, kEpsilon);
+  }
+
+  // Draw with PaintFlags ignoring all HDR metadata.
+  {
+    constexpr float kExpected = 100.f / 203.f;
+    PaintFlags flags;
+    flags.setTargetedHdrHeadroom(
+        PaintFlags::TargetedHdrHeadroom::kDisableEverything);
+    scoped_refptr<DisplayItemList> display_item_list_10k_nits_sdr =
+        make_display_item_list(image_100_nits, 1000.f, 50.f, &flags);
+    auto actual = Raster(display_item_list_10k_nits_sdr, options);
+    auto color = actual.getColor4f(0, 0);
+    EXPECT_NEAR(color.fR, kExpected, kEpsilon);
+    EXPECT_NEAR(color.fG, kExpected, kEpsilon);
+    EXPECT_NEAR(color.fB, kExpected, kEpsilon);
   }
 }
 
@@ -1337,6 +1347,8 @@ class TestMailboxBacking : public TextureBacking {
 
   const SkImageInfo& GetSkImageInfo() override { return info_; }
   gpu::Mailbox GetMailbox() const override { return mailbox_; }
+  void Bind(scoped_refptr<TextureBackingContext>) override {}
+  void Unbind() override {}
   sk_sp<SkImage> GetSkImageViaReadback() override { return nullptr; }
   bool readPixels(const SkImageInfo& dstInfo,
                   void* dstPixels,
@@ -2814,17 +2826,17 @@ TEST_P(GpuRasterYUVToRGBPixelTest, CopyI420SharedImage) {
   // Create Y+U+V image planes for a solid blue image.
   SkBitmap y_bitmap;
   y_bitmap.allocPixels(y_info);
-  memset(y_bitmap.getPixels(), 0x1d, y_bitmap.computeByteSize());
+  UNSAFE_TODO(memset(y_bitmap.getPixels(), 0x1d, y_bitmap.computeByteSize()));
   pixmaps[0] = SkPixmap(y_info, y_bitmap.getPixels(), y_info.minRowBytes());
 
   SkBitmap u_bitmap;
   u_bitmap.allocPixels(uv_info);
-  memset(u_bitmap.getPixels(), 0xff, u_bitmap.computeByteSize());
+  UNSAFE_TODO(memset(u_bitmap.getPixels(), 0xff, u_bitmap.computeByteSize()));
   pixmaps[1] = SkPixmap(uv_info, u_bitmap.getPixels(), uv_info.minRowBytes());
 
   SkBitmap v_bitmap;
   v_bitmap.allocPixels(uv_info);
-  memset(v_bitmap.getPixels(), 0x6b, v_bitmap.computeByteSize());
+  UNSAFE_TODO(memset(v_bitmap.getPixels(), 0x6b, v_bitmap.computeByteSize()));
   pixmaps[2] = SkPixmap(uv_info, v_bitmap.getPixels(), uv_info.minRowBytes());
 
   SkYUVColorSpace yuv_color_space = kIdentity_SkYUVColorSpace;
@@ -2901,15 +2913,15 @@ TEST_F(GpuRasterPixelTest, CopyNV12SharedImage) {
   // Create Y+UV image planes for a solid blue image.
   SkBitmap y_bitmap;
   y_bitmap.allocPixels(y_info);
-  memset(y_bitmap.getPixels(), 0x1d, y_bitmap.computeByteSize());
+  UNSAFE_TODO(memset(y_bitmap.getPixels(), 0x1d, y_bitmap.computeByteSize()));
   pixmaps[0] = SkPixmap(y_info, y_bitmap.getPixels(), y_info.minRowBytes());
 
   SkBitmap uv_bitmap;
   uv_bitmap.allocPixels(uv_info);
   uint8_t* uv_pix = static_cast<uint8_t*>(uv_bitmap.getPixels());
   for (size_t i = 0; i < uv_bitmap.computeByteSize(); i += 2) {
-    uv_pix[i] = 0xff;
-    uv_pix[i + 1] = 0x6d;
+    UNSAFE_TODO(uv_pix[i]) = 0xff;
+    UNSAFE_TODO(uv_pix[i + 1]) = 0x6d;
   }
   pixmaps[1] = SkPixmap(uv_info, uv_bitmap.getPixels(), uv_info.minRowBytes());
 

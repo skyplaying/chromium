@@ -11,14 +11,14 @@
 #include "base/memory/safe_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
-#include "chrome/browser/actor/aggregated_journal.h"
-#include "chrome/browser/actor/enterprise_policy_url_checker.h"
-#include "chrome/browser/subscription_eligibility/subscription_eligibility_service.h"
-#include "chrome/common/actor/task_id.h"
+#include "chrome/browser/actor/enterprise_policy_checker.h"
+#include "chrome/browser/glic/glic_enums.h"
 #include "chrome/common/buildflags.h"
+#include "components/actor/core/aggregated_journal.h"
 #include "components/policy/core/browser/url_list/url_blocklist_manager.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/subscription_eligibility/subscription_eligibility_service.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
 #include "url/origin.h"
 
@@ -35,11 +35,12 @@ class AggregatedJournal;
 
 namespace glic {
 
-// The Glic implementation of an Actor EnterprisePolicyUrlChecker, used to
-// determine the act on web capability enabling state. This class blends various
-// signals from account, preferences, managed policies, etc. to make a
+// The Glic implementation of the EnterprisePolicyChecker interface, used to
+// determine the act on web capability
+// enabling state and validate content sent to the renderer. This class blends
+// various signals from account, preferences, managed policies, etc. to make a
 // determination.
-class GlicActorPolicyChecker : public actor::EnterprisePolicyUrlChecker,
+class GlicActorPolicyChecker : public actor::EnterprisePolicyChecker,
                                public signin::IdentityManager::Observer,
                                public subscription_eligibility::
                                    SubscriptionEligibilityService::Observer {
@@ -50,6 +51,15 @@ class GlicActorPolicyChecker : public actor::EnterprisePolicyUrlChecker,
   ~GlicActorPolicyChecker() override;
 
   static const base::flat_set<int32_t>& GetActorEligibleTiers();
+
+  // Returns true if Glic Actor considers the profile to belong to a managed
+  // Enterprise account. This check is specific to Glic Actor and should not
+  // be used as a generic check for managed Enterprise accounts.
+  static bool IsEnterpriseAccountForActor(Profile& profile,
+                                          actor::AggregatedJournal& journal);
+
+  // Returns true if the Chrome browser is managed by an IT administrator.
+  static bool IsBrowserManagedForActor(Profile& profile);
 
   // Adds a callback to run whenever the value of CanActOnWeb changes.
   using CanActOnWebChangedCallback =
@@ -70,28 +80,25 @@ class GlicActorPolicyChecker : public actor::EnterprisePolicyUrlChecker,
   base::CallbackListSubscription AddUrlListsUpdateObserverForTesting(
       base::RepeatingClosure callback);
 
-  enum class CannotActReason {
-    // Browser can actuate.
-    kNone,
-    // The enterprise policy disables the actuation feature. Only applicable to
-    // managed clients (Profile level, browser level or machine level).
-    kDisabledByPolicy,
-    // The account is not eligible for the actuation.
-    kAccountCapabilityIneligible,
-    // The account is not subscribed to one of the required AI subscription
-    // tiers.
-    kAccountMissingChromeBenefits,
-    // An enterprise account is logged in but there is no management to deliver
-    // the policy. Actuation is disabled because the policy pref default value
-    // is disabled.
-    kEnterpriseWithoutManagement,
-  };
+  using CannotActReason = ::glic::CannotActReason;
 
   bool CanActOnWeb() const;
   CannotActReason CannotActOnWebReason() const;
 
-  // EnterprisePolicyUrlChecker interface
-  actor::EnterprisePolicyBlockReason Evaluate(const GURL& url) const override;
+  // Whether the Glic API can act on Web. This is currently different than
+  // CanActOnWeb() in the following ways:
+  // - Dogfood is only enabled on internal accounts.
+  // - Enterprise accounts will always disable act on web.
+  // - Managed devices can disable act on web, otherwise fallback to tier check.
+  bool GlicApiCanActOnWeb() const;
+  CannotActReason GlicApiCannotActOnWebReason() const;
+
+  // EnterprisePolicyChecker interface
+  UrlBlockReason Evaluate(const GURL& url) const override;
+  void ValidateContentSentToRenderer(
+      content::RenderFrameHost* frame,
+      const std::string& content,
+      ContentValidationCallback callback) const override;
 
  private:
   void OnPrefOrAccountChanged();
@@ -103,7 +110,9 @@ class GlicActorPolicyChecker : public actor::EnterprisePolicyUrlChecker,
   };
   friend std::ostream& operator<<(std::ostream& os, CanActOutcome value);
 
-  std::pair<CanActOutcome, CannotActReason> ComputeActOnWebCapability();
+  // For glic_api_can_act_on_web_ disable_for_enterprise should be true.
+  std::pair<CanActOutcome, CannotActReason> ComputeActOnWebCapability(
+      bool disable_for_enterprise);
 
   // This class must be transitively owned by a Profile and cannot outlive it.
   raw_ptr<Profile> profile_;
@@ -116,6 +125,9 @@ class GlicActorPolicyChecker : public actor::EnterprisePolicyUrlChecker,
 
   CanActOutcome can_act_on_web_ = CanActOutcome::kYes;
   CannotActReason cannot_act_on_web_reason_;
+
+  CanActOutcome glic_api_can_act_on_web_ = CanActOutcome::kYes;
+  CannotActReason glic_api_cannot_act_on_web_reason_;
 
   // Stores enterprise allowlist/blocklist policies for specific URLs.
   policy::URLBlocklistManager url_blocklist_manager_;

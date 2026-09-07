@@ -7,10 +7,10 @@
 
 #include <string>
 
-#include "components/segmentation_platform/public/proto/output_config.pb.h"
-#include "components/segmentation_platform/public/proto/segmentation_platform.pb.h"
-
 namespace segmentation_platform {
+namespace proto {
+enum SegmentId : int;
+}  // namespace proto
 
 // SEGMENTATION_CLIENT_KEYS_BEGIN
 
@@ -175,7 +175,6 @@ const char kContextualPageActionModelLabelPriceTracking[] = "price_tracking";
 const char kContextualPageActionModelLabelReaderMode[] = "reader_mode";
 const char kContextualPageActionModelLabelPriceInsights[] = "price_insights";
 const char kContextualPageActionModelLabelTabGrouping[] = "tab_grouping";
-const char kContextualPageActionModelLabelGlic[] = "glic";
 
 // Labels for cross device segment.
 const char kNoCrossDeviceUsage[] = "NoCrossDeviceUsage";
@@ -230,6 +229,7 @@ const char kSafetyCheck[] = "SafetyCheck";
 const char kTabResumption[] = "TabResumption";
 const char kParcelTracking[] = "ParcelTracking";
 const char kShopCard[] = "ShopCard";
+const char kLevelUp[] = "LevelUp";
 
 // Input Context keys for freshness for IOS modules.
 const char kMostVisitedTilesFreshness[] = "most_visited_tiles_freshness";
@@ -239,6 +239,7 @@ const char kTabResumptionFreshness[] = "tab_resumption_freshness";
 const char kParcelTrackingFreshness[] = "parcel_tracking_freshness";
 const char kIsShowingStartSurface[] = "is_showing_start_surface";
 const char kShopCardFreshness[] = "shop_card_freshness";
+const char kLevelUpFreshness[] = "level_up_freshness";
 
 // Input Context keys for inputs for IOS default browser model.
 const char kClientAgeWeeks[] = "client_age_weeks";
@@ -263,7 +264,6 @@ const char kContextualPageActionModelInputPriceInsights[] =
 const char kContextualPageActionModelInputDiscounts[] = "has_discounts";
 const char kContextualPageActionModelInputTabGrouping[] =
     "has_tab_grouping_suggestion";
-const char kContextualPageActionModelInputGlic[] = "can_open_glic";
 
 const char kComposePrmotionLabelShow[] = "Show";
 const char kComposePrmotionLabelDontShow[] = "DontShow";
@@ -288,8 +288,14 @@ const char kEnhancedSafeBrowsing[] = "EnhancedSafeBrowsing";
 const char kQuickDelete[] = "QuickDelete";
 const char kGoogleLens[] = "GoogleLens";
 const char kBottomOmnibox[] = "BottomOmnibox";
+const char kPasswordAutofill[] = "PasswordAutofill";
+const char kSignin[] = "Signin";
+const char kCreateTabGroups[] = "CreateTabGroups";
+const char kCustomizeMVT[] = "CustomizeMVT";
+const char kRecentTabs[] = "RecentTabs";
 
 // Input Context keys for tips notifications ranker.
+// V1 Tips: ESB, Quick Delete, Google Lens, Bottom Omnibox
 const char kEnhancedSafeBrowsingStatus[] = "enhanced_safe_browsing_status";
 const char kQuickDeleteUsage[] = "quick_delete_usage";
 const char kBottomOmniboxStatus[] = "bottom_omnibox_status";
@@ -298,6 +304,13 @@ const char kEnhancedSafeBrowsingTipShown[] = "enhanced_safe_browsing_tip_shown";
 const char kQuickDeleteTipShown[] = "quick_delete_tip_shown";
 const char kGoogleLensTipShown[] = "google_lens_tip_shown";
 const char kBottomOmniboxTipShown[] = "bottom_omnibox_tip_shown";
+// V2 Tips: PW Autofill, Signin, Create Tab Groups, Customize MVT, Recent Tabs
+const char kTipsIsUserSignedIn[] = "is_user_signed_in";
+const char kPasswordAutofillTipShown[] = "password_autofill_tip_shown";
+const char kSigninTipShown[] = "signin_tip_shown";
+const char kCreateTabGroupsTipShown[] = "create_tab_groups_tip_shown";
+const char kCustomizeMVTTipShown[] = "customize_mvt_tip_shown";
+const char kRecentTabsTipShown[] = "recent_tabs_tip_shown";
 
 }  // namespace segmentation_platform
 

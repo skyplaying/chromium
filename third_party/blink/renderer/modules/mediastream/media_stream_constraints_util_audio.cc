@@ -10,12 +10,14 @@
 #include <tuple>
 #include <utility>
 
+#include "base/feature_list.h"
 #include "base/strings/string_number_conversions.h"
 #include "build/build_config.h"
 #include "media/audio/audio_features.h"
 #include "media/base/audio_parameters.h"
 #include "media/base/limits.h"
 #include "media/base/media_switches.h"
+#include "media/media_buildflags.h"
 #include "media/webrtc/constants.h"
 #include "media/webrtc/webrtc_features.h"
 #include "third_party/blink/public/common/mediastream/media_stream_controls.h"
@@ -28,6 +30,7 @@
 #include "third_party/blink/renderer/modules/mediastream/processed_local_audio_source.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_audio_processor_options.h"
 #include "third_party/blink/renderer/platform/mediastream/media_stream_audio_source.h"
+#include "third_party/blink/renderer/platform/mediastream/media_stream_audio_track.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
@@ -85,13 +88,68 @@ bool ShouldSupportExtendedEchoCancellationModes(AudioCaptureApi capture_type) {
          (capture_type == AudioCaptureApi::kGumMicrophone);
 }
 
-// This class encapsulates two values that together build up the score of each
-// processed candidate.
-// - Fitness, similarly defined by the W3C specification
-//   (https://w3c.github.io/mediacapture-main/#dfn-fitness-distance);
-// - Distance from the default device ID;
-// - The priority associated to the echo cancellation type selected.
-// - The priority of the associated processing-based container.
+// ============================================================================
+// 4-Tier Audio Candidate Container Hierarchy
+// ============================================================================
+// The audio constraint resolution engine organizes candidate configurations
+// into a 4-tier tree structure:
+//
+// [Tier 4: CandidatesContainer]
+//    Top-level orchestrator. Holds a Vector<DeviceContainer> for all eligible
+//    physical audio devices (or content capture capabilities). Coordinates the
+//    two-phase lifecycle: Phase 1 (ApplyConstraintSet for Basic/Advanced sets)
+//    followed by Phase 2 (SelectSettingsAndScore).
+//
+// [Tier 3: DeviceContainer]
+//    Encapsulates all candidate configurations for a single physical/virtual
+//    device. Manages device-level properties (deviceId, groupId,
+//    disableLocalEcho, renderToAssociatedSink) and owns up to three
+//    ProcessingBasedContainer variants.
+//
+// [Tier 2: ProcessingBasedContainer]
+//    Represents a specific audio capture pipeline for a device:
+//      - kUnprocessed: Raw hardware capture (LocalMediaStreamAudioSource).
+//      - kNoApmProcessed: Hardware capture with mirroring, no WebRTC APM.
+//      - kApmProcessed: Software APM capture (ProcessedLocalAudioSource) with
+//        WebRTC/AudioService AEC, AGC, NS, and ML Voice Isolation.
+//    Enforces pipeline-specific invariants and cross-constraint validation.
+//
+// [Tier 1: Specialized Property Containers]
+//    Leaf containers wrapping DiscreteSet or NumericRangeSet for individual
+//    properties:
+//      - BooleanContainer (disableLocalEcho, renderToAssociatedSink,
+//      noiseSuppression)
+//      - StringContainer (deviceId, groupId, mediaStreamSource)
+//      - NumericRangeSetContainer / NumericDiscreteSetContainer (sampleRate,
+//      latency, channels)
+//      - AutoGainControlContainer (handles AGC boolean set and ideal fitness)
+//      - VoiceIsolationContainer (handles VI boolean set, ExcludeEnabled,
+//      IsStrictlyEnabled)
+//      - EchoCancellationContainer (handles EchoCancellationModeSet and default
+//      propagation)
+
+// ============================================================================
+// Composite Scoring & Ranking (Score)
+// ============================================================================
+// Candidates surviving Phase 1 pruning are ranked using a 4-tuple composite
+// score compared lexicographically:
+//
+//   Score = <fitness, is_default_device, ec_mode_score, processing_priority>
+//
+// 1. fitness (double):
+//    Normalized W3C fitness value (similarly defined by the W3C specification:
+//    https://w3c.github.io/mediacapture-main/#dfn-fitness-distance).
+//    1.0 for an exact or ideal match; 1.0 - distance for continuous numeric
+//    properties.
+// 2. is_default_device (bool):
+//    Tie-breaker prioritizing the system default audio input device (1 if
+//    matched, 0 otherwise).
+// 3. ec_mode_score (EcModeScore enum):
+//    Prioritizes standard browser echo cancellation over restricted modes:
+//    kBrowserDecides (4) > kAll (3) > kRemoteOnly (2) > kDisabled (1).
+// 4. processing_priority (int):
+//    Prioritizes APM processing for microphone capture (kApmProcessed = 3)
+//    or unprocessed capture for desktop screen capture (kUnprocessed = 3).
 //
 // Differently from the definition in the W3C specification, the present
 // algorithm maximizes the score.
@@ -200,11 +258,13 @@ class BooleanContainer {
       bool default_setting) const {
     DCHECK(!IsEmpty());
 
-    if (constraint.HasIdeal() && allowed_values_.Contains(constraint.Ideal()))
+    if (constraint.HasIdeal() && allowed_values_.Contains(constraint.Ideal())) {
       return std::make_tuple(1.0, constraint.Ideal());
+    }
 
-    if (allowed_values_.is_universal())
+    if (allowed_values_.is_universal()) {
       return std::make_tuple(0.0, default_setting);
+    }
 
     DCHECK_EQ(allowed_values_.elements().size(), 1U);
     return std::make_tuple(0.0, allowed_values_.FirstElement());
@@ -240,8 +300,9 @@ class StringContainer {
     if (constraint.HasIdeal()) {
       for (const String& ideal_candidate : constraint.Ideal()) {
         std::string candidate = ideal_candidate.Utf8();
-        if (allowed_values_.Contains(candidate))
+        if (allowed_values_.Contains(candidate)) {
           return std::make_tuple(1.0, candidate);
+        }
       }
     }
 
@@ -286,8 +347,9 @@ class NumericRangeSetContainer {
     DCHECK(!IsEmpty());
 
     if (constraint.HasIdeal()) {
-      if (allowed_values_.Contains(constraint.Ideal()))
+      if (allowed_values_.Contains(constraint.Ideal())) {
         return std::make_tuple(1.0, constraint.Ideal());
+      }
 
       T value = SelectClosestValueTo(constraint.Ideal());
       double fitness = 1.0 - blink::NumericConstraintFitnessDistance(
@@ -296,8 +358,9 @@ class NumericRangeSetContainer {
     }
 
     if (default_setting) {
-      if (allowed_values_.Contains(*default_setting))
+      if (allowed_values_.Contains(*default_setting)) {
         return std::make_tuple(0.0, *default_setting);
+      }
 
       // If the default value provided is not contained, select the value
       // closest to it.
@@ -367,8 +430,9 @@ class NumericDiscreteSetContainer {
     DCHECK(!IsEmpty());
 
     if (constraint.HasIdeal()) {
-      if (allowed_values_.Contains(constraint.Ideal()))
+      if (allowed_values_.Contains(constraint.Ideal())) {
         return std::make_tuple(1.0, constraint.Ideal());
+      }
 
       T value = SelectClosestValueTo(constraint.Ideal());
       double fitness =
@@ -377,8 +441,9 @@ class NumericDiscreteSetContainer {
     }
 
     if (default_setting) {
-      if (allowed_values_.Contains(*default_setting))
+      if (allowed_values_.Contains(*default_setting)) {
         return std::make_tuple(0.0, *default_setting);
+      }
 
       // If the default value provided is not contained, select the value
       // closest to it.
@@ -478,7 +543,7 @@ class EchoCancellationContainer {
                             std::optional<SourceInfo> source_info,
                             AudioCaptureApi api,
                             media::AudioParameters device_parameters,
-                            bool is_reconfiguration_allowed)
+                            bool is_full_reconfiguration_allowed)
       : ec_allowed_values_(EchoCancellationModeSet(std::move(allowed_values))),
         device_parameters_(device_parameters),
         api_(api) {
@@ -507,7 +572,7 @@ class EchoCancellationContainer {
                               device_parameters.effects())
               .IsPlatformProvided());
 #endif
-    if (is_reconfiguration_allowed && is_aec_reconfiguration_supported) {
+    if (is_full_reconfiguration_allowed && is_aec_reconfiguration_supported) {
       return;
     }
 
@@ -526,8 +591,10 @@ class EchoCancellationContainer {
   }
 
   std::tuple<Score, EchoCancellationMode> SelectSettingsAndScore(
-      const ConstraintSet& constraint_set) const {
-    EchoCancellationMode selected_ec_mode = SelectBestEcMode(constraint_set);
+      const ConstraintSet& constraint_set,
+      bool exclude_remote_only) const {
+    EchoCancellationMode selected_ec_mode =
+        SelectBestEcMode(constraint_set, exclude_remote_only);
     double fitness =
         Fitness(selected_ec_mode, constraint_set.echo_cancellation);
     Score score(fitness);
@@ -536,6 +603,21 @@ class EchoCancellationContainer {
   }
 
   bool IsEmpty() const { return ec_allowed_values_.IsEmpty(); }
+
+  bool IsStrictlyRemoteOnly() const {
+    return ec_allowed_values_.Contains(EchoCancellationMode::kRemoteOnly) &&
+           !ec_allowed_values_.Contains(
+               EchoCancellationMode::kBrowserDecides) &&
+           !ec_allowed_values_.Contains(EchoCancellationMode::kAll) &&
+           !ec_allowed_values_.Contains(EchoCancellationMode::kDisabled);
+  }
+
+  void ExcludeRemoteOnly() {
+    ec_allowed_values_ =
+        ec_allowed_values_.Intersection(EchoCancellationModeSet(
+            {EchoCancellationMode::kBrowserDecides, EchoCancellationMode::kAll,
+             EchoCancellationMode::kDisabled}));
+  }
 
   // Audio-processing properties are disabled by default for content capture,
   // or if the |echo_cancellation| constraint is false.
@@ -548,7 +630,7 @@ class EchoCancellationContainer {
     properties->auto_gain_control &= default_audio_processing_value;
 
     properties->noise_suppression &= default_audio_processing_value;
-    properties->voice_isolation = VoiceIsolationType::kVoiceIsolationDefault;
+    properties->voice_isolation = kVoiceIsolationDefaultValue;
   }
 
   bool GetDefaultValueForAudioProperties(
@@ -583,49 +665,54 @@ class EchoCancellationContainer {
     }
   }
 
-  EchoCancellationMode SelectBestEcMode(
-      const ConstraintSet& constraint_set) const {
+  EchoCancellationMode SelectBestEcMode(const ConstraintSet& constraint_set,
+                                        bool exclude_remote_only) const {
     CHECK(!IsEmpty());
+    EchoCancellationModeSet candidates = ec_allowed_values_;
+    if (exclude_remote_only) {
+      candidates = candidates.Intersection(EchoCancellationModeSet(
+          {EchoCancellationMode::kBrowserDecides, EchoCancellationMode::kAll,
+           EchoCancellationMode::kDisabled}));
+    }
+    CHECK(!candidates.IsEmpty());
 
     // Try to use an ideal candidate, if supplied.
     std::optional<EchoCancellationMode> ideal_mode =
         IdealEchoCancellationModeFromConstraint(
             constraint_set.echo_cancellation, api_);
-    if (ideal_mode && ec_allowed_values_.Contains(*ideal_mode)) {
+    if (ideal_mode && candidates.Contains(*ideal_mode)) {
       return *ideal_mode;
     }
 
     // If no ideal could be selected and the set contains only one value, pick
     // that one.
-    if (ec_allowed_values_.elements().size() == 1) {
-      return ec_allowed_values_.FirstElement();
+    if (candidates.elements().size() == 1) {
+      return candidates.FirstElement();
     }
 
     switch (api_) {
       case AudioCaptureApi::kGumMicrophone:
       case AudioCaptureApi::kOther:
-        if (ec_allowed_values_.Contains(
-                EchoCancellationMode::kBrowserDecides)) {
+        if (candidates.Contains(EchoCancellationMode::kBrowserDecides)) {
           return EchoCancellationMode::kBrowserDecides;
         }
         if (RuntimeEnabledFeatures::
                 GetUserMediaEchoCancellationModesEnabled()) {
-          if (ec_allowed_values_.Contains(EchoCancellationMode::kAll)) {
+          if (candidates.Contains(EchoCancellationMode::kAll)) {
             return EchoCancellationMode::kAll;
           }
-          if (ec_allowed_values_.Contains(EchoCancellationMode::kRemoteOnly)) {
+          if (candidates.Contains(EchoCancellationMode::kRemoteOnly)) {
             return EchoCancellationMode::kRemoteOnly;
           }
         }
-        CHECK(ec_allowed_values_.Contains(EchoCancellationMode::kDisabled));
+        CHECK(candidates.Contains(EchoCancellationMode::kDisabled));
         return EchoCancellationMode::kDisabled;
 
       case AudioCaptureApi::kExtensionScreenShare:
-        if (ec_allowed_values_.Contains(EchoCancellationMode::kDisabled)) {
+        if (candidates.Contains(EchoCancellationMode::kDisabled)) {
           return EchoCancellationMode::kDisabled;
         }
-        CHECK(
-            ec_allowed_values_.Contains(EchoCancellationMode::kBrowserDecides));
+        CHECK(candidates.Contains(EchoCancellationMode::kBrowserDecides));
         return EchoCancellationMode::kBrowserDecides;
     }
   }
@@ -679,8 +766,9 @@ class AutoGainControlContainer {
 
     if (agc_constraint.HasIdeal()) {
       bool agc_ideal = agc_constraint.Ideal();
-      if (allowed_values_.Contains(agc_ideal))
+      if (allowed_values_.Contains(agc_ideal)) {
         return std::make_tuple(1.0, agc_ideal);
+      }
     }
 
     if (allowed_values_.is_universal()) {
@@ -717,7 +805,8 @@ class VoiceIsolationContainer {
     BooleanConstraint voice_isolation_constraint =
         constraint_set.voice_isolation;
 
-    if (voice_isolation_constraint.HasIdeal()) {
+    if (voice_isolation_constraint.HasIdeal() &&
+        allowed_values_.Contains(voice_isolation_constraint.Ideal())) {
       VoiceIsolationType voice_isolation_type_ideal =
           voice_isolation_constraint.Ideal()
               ? VoiceIsolationType::kVoiceIsolationEnabled
@@ -740,6 +829,14 @@ class VoiceIsolationContainer {
 
   bool IsEmpty() const { return allowed_values_.IsEmpty(); }
 
+  bool IsStrictlyEnabled() const {
+    return allowed_values_.Contains(true) && !allowed_values_.Contains(false);
+  }
+
+  void ExcludeEnabled() {
+    allowed_values_ = allowed_values_.Intersection(BoolSet({false}));
+  }
+
  private:
   BoolSet allowed_values_;
 };
@@ -750,28 +847,31 @@ Vector<int> GetApmSupportedChannels(
   // APM always supports mono output;
   result.push_back(1);
   const int channels = device_params.channels();
-  if (channels > 1)
+  if (channels > 1) {
     result.push_back(channels);
+  }
   return result;
 }
 
 // This container represents the supported audio settings for a given type of
-// audio source. In practice, there are three types of sources: processed using
-// APM, processed without APM, and unprocessed. Processing using APM has two
-// flavors: one for the systems where audio processing is done in the renderer,
-// another for the systems where audio processing is done in the audio service.
+// audio source. In practice, there are three types of sources: processed
+// using APM, processed without APM, and unprocessed. Processing using APM has
+// two flavors: one for the systems where audio processing is done in the
+// renderer, another for the systems where audio processing is done in the
+// audio service.
 class ProcessingBasedContainer {
  public:
   // Creates an instance of ProcessingBasedContainer for the WebRTC processed
   // source type. The source type allows (a) any type of echo cancellation,
-  // though the system echo cancellation type depends on the availability of the
-  // related |parameters.effects()|, and (b) any combination of processing
+  // though the system echo cancellation type depends on the availability of
+  // the related |parameters.effects()|, and (b) any combination of processing
   // properties settings.
   static ProcessingBasedContainer CreateApmProcessedContainer(
       std::optional<SourceInfo> source_info,
       AudioCaptureApi api,
       const media::AudioParameters& device_parameters,
-      bool is_reconfiguration_allowed) {
+      bool is_full_reconfiguration_allowed,
+      std::optional<bool> voice_isolation_value) {
     Vector<EchoCancellationMode> echo_cancellation_modes;
     echo_cancellation_modes.push_back(EchoCancellationMode::kBrowserDecides);
     if (ShouldSupportExtendedEchoCancellationModes(api)) {
@@ -785,48 +885,60 @@ class ProcessingBasedContainer {
       }
     }
     echo_cancellation_modes.push_back(EchoCancellationMode::kDisabled);
+    BoolSet voice_isolation_set(
+        GetSupportedVoiceIsolationValues(device_parameters.effects()));
+
+    // Apply specific source/track restriction if we haven't already
+    // disabled it due to lack of system support.
+    if (voice_isolation_set.Contains(true) &&
+        voice_isolation_value.has_value()) {
+      voice_isolation_set = BoolSet({*voice_isolation_value});
+    }
     return ProcessingBasedContainer(
         ProcessingType::kApmProcessed, std::move(echo_cancellation_modes),
         /*auto_gain_control_set=*/BoolSet(),
-        /*noise_suppression_set=*/BoolSet(),
-        /*voice_isolation_set=*/BoolSet(),
+        /*noise_suppression_set=*/BoolSet(), voice_isolation_set,
         /*sample_size_range=*/IntRangeSet::FromValue(GetSampleSize()),
         /*channels_set=*/GetApmSupportedChannels(device_parameters),
         /*sample_rate_range=*/
         IntRangeSet::FromValue(media::WebRtcAudioProcessingSampleRateHz()),
-        source_info, api, device_parameters, is_reconfiguration_allowed);
+        source_info, api, device_parameters, is_full_reconfiguration_allowed);
   }
 
-  // Creates an instance of ProcessingBasedContainer for the processed source
-  // type. The source type allows (a) either system echo cancellation, if
-  // allowed by the |parameters.effects()|, or none, while (b) all other
+  // Creates an instance of ProcessingBasedContainer for the processed
+  // source type. The source type allows (a) either system echo cancellation,
+  // if allowed by the |parameters.effects()|, or none, while (b) all
   // processing properties settings cannot be enabled.
   static ProcessingBasedContainer CreateNoApmProcessedContainer(
       std::optional<SourceInfo> source_info,
       AudioCaptureApi api,
       const media::AudioParameters& device_parameters,
-      bool is_reconfiguration_allowed) {
+      bool is_full_reconfiguration_allowed) {
+    BoolSet voice_isolation_set;
+#if !BUILDFLAG(IS_CHROMEOS)
+    // Voice Isolation is only supported on ChromeOS.
+    voice_isolation_set = BoolSet({false});
+#endif
     return ProcessingBasedContainer(
         ProcessingType::kNoApmProcessed, {EchoCancellationMode::kDisabled},
         /*auto_gain_control_set=*/BoolSet({false}),
-        /*noise_suppression_set=*/BoolSet({false}),
-        /*voice_isolation_set=*/BoolSet(),
+        /*noise_suppression_set=*/BoolSet({false}), voice_isolation_set,
         /*sample_size_range=*/IntRangeSet::FromValue(GetSampleSize()),
         /*channels_set=*/{device_parameters.channels()},
         /*sample_rate_range=*/
         IntRangeSet::FromValue(device_parameters.sample_rate()), source_info,
-        api, device_parameters, is_reconfiguration_allowed);
+        api, device_parameters, is_full_reconfiguration_allowed);
   }
 
-  // Creates an instance of ProcessingBasedContainer for the unprocessed source
-  // type. The source type allows (a) either system echo cancellation, if
-  // allowed by the |parameters.effects()|, or none, while (c) all processing
-  // properties settings cannot be enabled.
+  // Creates an instance of ProcessingBasedContainer for the unprocessed
+  // source type. The source type allows (a) either system echo cancellation,
+  // if allowed by the |parameters.effects()|, or none, while (c) all
+  // processing properties settings cannot be enabled.
   static ProcessingBasedContainer CreateUnprocessedContainer(
       std::optional<SourceInfo> source_info,
       AudioCaptureApi api,
       const media::AudioParameters& device_parameters,
-      bool is_reconfiguration_allowed) {
+      bool is_full_reconfiguration_allowed) {
     return ProcessingBasedContainer(
         ProcessingType::kUnprocessed, {EchoCancellationMode::kDisabled},
         /*auto_gain_control_set=*/BoolSet({false}),
@@ -836,7 +948,7 @@ class ProcessingBasedContainer {
         /*channels_set=*/{device_parameters.channels()},
         /*sample_rate_range=*/
         IntRangeSet::FromValue(device_parameters.sample_rate()), source_info,
-        api, device_parameters, is_reconfiguration_allowed);
+        api, device_parameters, is_full_reconfiguration_allowed);
   }
 
   const char* ApplyConstraintSet(const ConstraintSet& constraint_set) {
@@ -844,13 +956,15 @@ class ProcessingBasedContainer {
 
     failed_constraint_name =
         echo_cancellation_container_.ApplyConstraintSet(constraint_set);
-    if (failed_constraint_name)
+    if (failed_constraint_name) {
       return failed_constraint_name;
+    }
 
     failed_constraint_name =
         auto_gain_control_container_.ApplyConstraintSet(constraint_set);
-    if (failed_constraint_name)
+    if (failed_constraint_name) {
       return failed_constraint_name;
+    }
 
     failed_constraint_name =
         voice_isolation_container_.ApplyConstraintSet(constraint_set);
@@ -858,25 +972,46 @@ class ProcessingBasedContainer {
       return failed_constraint_name;
     }
 
+    // Cross-constraint validation and pruning: Voice Isolation (Audio Service)
+    // and Remote-Only Echo Cancellation (Renderer) cannot run concurrently.
+    // Prune mutually exclusive values and fail if any set becomes empty (see
+    // constraint matrix in SelectSettingsAndScore).
+    if (echo_cancellation_container_.IsStrictlyRemoteOnly()) {
+      voice_isolation_container_.ExcludeEnabled();
+      if (voice_isolation_container_.IsEmpty()) {
+        return constraint_set.voice_isolation.GetName();
+      }
+    }
+    if (voice_isolation_container_.IsStrictlyEnabled()) {
+      echo_cancellation_container_.ExcludeRemoteOnly();
+      if (echo_cancellation_container_.IsEmpty()) {
+        return constraint_set.echo_cancellation.GetName();
+      }
+    }
+
     failed_constraint_name =
         sample_size_container_.ApplyConstraintSet(constraint_set.sample_size);
-    if (failed_constraint_name)
+    if (failed_constraint_name) {
       return failed_constraint_name;
+    }
 
     failed_constraint_name =
         channels_container_.ApplyConstraintSet(constraint_set.channel_count);
-    if (failed_constraint_name)
+    if (failed_constraint_name) {
       return failed_constraint_name;
+    }
 
     failed_constraint_name =
         sample_rate_container_.ApplyConstraintSet(constraint_set.sample_rate);
-    if (failed_constraint_name)
+    if (failed_constraint_name) {
       return failed_constraint_name;
+    }
 
     failed_constraint_name =
         latency_container_.ApplyConstraintSet(constraint_set.latency);
-    if (failed_constraint_name)
+    if (failed_constraint_name) {
       return failed_constraint_name;
+    }
 
     failed_constraint_name = noise_suppression_container_.ApplyConstraintSet(
         constraint_set.noise_suppression);
@@ -936,10 +1071,6 @@ class ProcessingBasedContainer {
     }
 
     AudioProcessingProperties properties;
-    Score ec_score(0.0);
-    std::tie(ec_score, properties.echo_cancellation_mode) =
-        echo_cancellation_container_.SelectSettingsAndScore(constraint_set);
-    score += ec_score;
 
     // Update the default settings for each audio-processing properties
     // according to |echo_cancellation| and whether the source considered is
@@ -947,20 +1078,68 @@ class ProcessingBasedContainer {
     echo_cancellation_container_.UpdateDefaultValues(
         constraint_set.echo_cancellation, &properties);
 
-    std::tie(sub_score, properties.auto_gain_control) =
-        auto_gain_control_container_.SelectSettingsAndScore(
-            constraint_set, properties.auto_gain_control);
-    score += sub_score;
+    // ApplyConstraintSet guarantees that contradictory exact constraints were
+    // eliminated before reaching scoring.
+    if (voice_isolation_container_.IsStrictlyEnabled()) {
+      CHECK(!echo_cancellation_container_.IsStrictlyRemoteOnly());
+    }
+    if (echo_cancellation_container_.IsStrictlyRemoteOnly()) {
+      CHECK(!voice_isolation_container_.IsStrictlyEnabled());
+    }
 
+    // Voice Isolation requires ML processing in the Audio Service, whereas
+    // Remote-Only Echo Cancellation requires WebRTC playout reference audio
+    // available only in the Renderer process. Since APM cannot execute in both
+    // processes simultaneously, their combination is resolved as follows:
+    //
+    // 1. exact VI=true + exact AEC="remote-only":
+    //    Rejected with OverconstrainedError (handled in ApplyConstraintSet).
+    // 2. exact VI=true + ideal AEC="remote-only":
+    //    VI is enabled; "remote-only" AEC is excluded and relaxes to
+    //    kBrowserDecides.
+    // 3. ideal VI=true + exact AEC="remote-only":
+    //    AEC is "remote-only"; VI is forced to kVoiceIsolationDisabled.
+    // 4. ideal VI=true + ideal AEC="remote-only":
+    //    VI takes precedence and enables; AEC relaxes to kBrowserDecides.
+    // 5. exact/ideal VI=false + ideal AEC="remote-only":
+    //    VI remains disabled; "remote-only" AEC is selected.
+    // 6. VI=true + AEC="all" or AEC=false:
+    //    Both are satisfied (both run in the Audio Service).
+
+    // Voice Isolation runs in Audio Service and cannot run concurrently with
+    // Remote-Only Echo Cancellation (Renderer). Select Voice Isolation first.
     std::tie(sub_score, properties.voice_isolation) =
         voice_isolation_container_.SelectSettingsAndScore(
             constraint_set, properties.voice_isolation);
+    score += sub_score;
+
+    // If Voice Isolation is enabled, exclude Remote-Only Echo Cancellation.
+    bool exclude_remote_only =
+        (properties.voice_isolation ==
+         AudioProcessingProperties::VoiceIsolationType::kVoiceIsolationEnabled);
+
+    Score ec_score(0.0);
+    std::tie(ec_score, properties.echo_cancellation_mode) =
+        echo_cancellation_container_.SelectSettingsAndScore(
+            constraint_set, exclude_remote_only);
+    score += ec_score;
+
+    std::tie(sub_score, properties.auto_gain_control) =
+        auto_gain_control_container_.SelectSettingsAndScore(
+            constraint_set, properties.auto_gain_control);
     score += sub_score;
 
     std::tie(sub_score, properties.noise_suppression) =
         noise_suppression_container_.SelectSettingsAndScore(
             constraint_set.noise_suppression, properties.noise_suppression);
     score += sub_score;
+
+    // Voice Isolation and Remote-Only AEC cannot execute concurrently.
+    CHECK(!(properties.voice_isolation ==
+                AudioProcessingProperties::VoiceIsolationType::
+                    kVoiceIsolationEnabled &&
+            properties.echo_cancellation_mode ==
+                EchoCancellationMode::kRemoteOnly));
 
     score.set_processing_priority(
         GetProcessingPriority(constraint_set.echo_cancellation));
@@ -971,7 +1150,8 @@ class ProcessingBasedContainer {
   // The ProcessingBasedContainer is considered empty if at least one of the
   // containers owned by it is empty.
   bool IsEmpty() const {
-    return echo_cancellation_container_.IsEmpty() ||
+    return voice_isolation_container_.IsEmpty() ||
+           echo_cancellation_container_.IsEmpty() ||
            auto_gain_control_container_.IsEmpty() ||
            noise_suppression_container_.IsEmpty() ||
            sample_size_container_.IsEmpty() || channels_container_.IsEmpty() ||
@@ -995,7 +1175,7 @@ class ProcessingBasedContainer {
                            std::optional<SourceInfo> source_info,
                            AudioCaptureApi api,
                            media::AudioParameters device_parameters,
-                           bool is_reconfiguration_allowed)
+                           bool is_full_reconfiguration_allowed)
       : processing_type_(processing_type),
         sample_size_container_(sample_size_range),
         channels_container_(std::move(channels_set)),
@@ -1018,7 +1198,7 @@ class ProcessingBasedContainer {
     }
     echo_cancellation_container_ = EchoCancellationContainer(
         std::move(echo_cancellation_modes), source_info, api, device_parameters,
-        is_reconfiguration_allowed);
+        is_full_reconfiguration_allowed);
 
     auto_gain_control_container_ =
         AutoGainControlContainer(auto_gain_control_set);
@@ -1030,14 +1210,15 @@ class ProcessingBasedContainer {
     // Allow the full set of supported values when the device is not open or
     // when the candidate settings would open the device using an unprocessed
     // source.
-    if (!source_info || (is_reconfiguration_allowed &&
+    if (!source_info || (is_full_reconfiguration_allowed &&
                          processing_type_ == ProcessingType::kUnprocessed)) {
       return;
     }
 
     // If the device is already opened, restrict supported values for
-    // non-reconfigurable settings to what is already configured. The rationale
-    // for this is that opening multiple instances of the APM is costly.
+    // non-reconfigurable settings to what is already configured. The
+    // rationale for this is that opening multiple instances of the APM is
+    // costly.
     // TODO(crbug.com/1147928): Consider removing this restriction.
     auto_gain_control_container_ = AutoGainControlContainer(
         BoolSet({source_info->properties().auto_gain_control}));
@@ -1112,7 +1293,8 @@ class DeviceContainer {
   DeviceContainer(const AudioDeviceCaptureCapability& capability,
                   mojom::blink::MediaStreamType stream_type,
                   AudioCaptureApi api,
-                  bool is_reconfiguration_allowed)
+                  bool is_full_reconfiguration_allowed,
+                  const MediaStreamAudioTrack* current_track = nullptr)
       : device_parameters_(capability.Parameters()) {
     if (!capability.DeviceID().empty()) {
       device_id_container_ =
@@ -1124,26 +1306,71 @@ class DeviceContainer {
           StringContainer(StringSet({capability.GroupID().Utf8()}));
     }
 
-    // If the device is in use, a source will be provided and all containers
-    // must be initialized such that their only supported values correspond to
-    // the source settings. Otherwise, the containers are initialized to contain
-    // all possible values.
+    // If the device is in use, a source will be provided. If reconfiguration
+    // is not allowed (e.g., for applyConstraints), the containers are
+    // restricted to match the active source's settings. Otherwise, we can
+    // still open new sources of different types (e.g., an unprocessed source
+    // alongside a processed one).
     std::optional<SourceInfo> source_info =
         SourceInfo::FromSource(capability.source());
 
     // Three variations of the processing-based container. Each variant is
-    // associated to a different type of audio processing configuration, namely
-    // unprocessed, processed by WebRTC, or processed by other means.
-    processing_based_containers_.push_back(
-        ProcessingBasedContainer::CreateUnprocessedContainer(
-            source_info, api, device_parameters_, is_reconfiguration_allowed));
-    processing_based_containers_.push_back(
-        ProcessingBasedContainer::CreateNoApmProcessedContainer(
-            source_info, api, device_parameters_, is_reconfiguration_allowed));
-    processing_based_containers_.push_back(
-        ProcessingBasedContainer::CreateApmProcessedContainer(
-            source_info, api, device_parameters_, is_reconfiguration_allowed));
-    DCHECK_EQ(processing_based_containers_.size(), 3u);
+    // associated to a different type of audio processing configuration,
+    // namely unprocessed, processed by WebRTC, or processed by other means.
+    std::optional<bool> voice_isolation_value =
+        capability.GetVoiceIsolationExactConstraint(current_track);
+
+    bool add_unprocessed = true;
+    bool add_no_apm_processed = true;
+    bool add_apm_processed = true;
+
+    // If reconfiguration is not allowed (e.g., for applyConstraints on an
+    // existing or cloned track), we must restrict the candidate containers
+    // to the active source's processing type. This ensures we don't try to
+    // transition the track to a different source type (which is not allowed
+    // and would bypass exact constraint checks on sibling tracks).
+    if (!is_full_reconfiguration_allowed && source_info) {
+      if (capability.source()->IsProcessedSource()) {
+        add_unprocessed = false;
+        if (capability.source()->IsApmProcessedSource()) {
+          add_no_apm_processed = false;
+        } else {
+          add_apm_processed = false;
+        }
+      } else {
+        add_no_apm_processed = false;
+        add_apm_processed = false;
+      }
+    }
+
+    if (add_unprocessed) {
+      processing_based_containers_.push_back(
+          ProcessingBasedContainer::CreateUnprocessedContainer(
+              source_info, api, device_parameters_,
+              is_full_reconfiguration_allowed));
+    }
+    if (add_no_apm_processed) {
+      processing_based_containers_.push_back(
+          ProcessingBasedContainer::CreateNoApmProcessedContainer(
+              source_info, api, device_parameters_,
+              is_full_reconfiguration_allowed));
+    }
+    if (add_apm_processed) {
+      processing_based_containers_.push_back(
+          ProcessingBasedContainer::CreateApmProcessedContainer(
+              source_info, api, device_parameters_,
+              is_full_reconfiguration_allowed, voice_isolation_value));
+    }
+#if DCHECK_IS_ON()
+    size_t expected_size = 3u;
+    if (!is_full_reconfiguration_allowed && source_info) {
+      expected_size = 1u;
+    }
+    DCHECK_EQ(processing_based_containers_.size(), expected_size);
+    for (const auto& container : processing_based_containers_) {
+      DCHECK(!container.IsEmpty());
+    }
+#endif
 
     if (!source_info) {
       return;
@@ -1157,8 +1384,9 @@ class DeviceContainer {
         BooleanContainer(BoolSet({source->RenderToAssociatedSinkEnabled()}));
 
 #if DCHECK_IS_ON()
-    for (const auto& container : boolean_containers_)
+    for (const auto& container : boolean_containers_) {
       DCHECK(!container.IsEmpty());
+    }
 #endif
   }
 
@@ -1167,20 +1395,23 @@ class DeviceContainer {
 
     failed_constraint_name =
         device_id_container_.ApplyConstraintSet(constraint_set.device_id);
-    if (failed_constraint_name)
+    if (failed_constraint_name) {
       return failed_constraint_name;
+    }
 
     failed_constraint_name =
         group_id_container_.ApplyConstraintSet(constraint_set.group_id);
-    if (failed_constraint_name)
+    if (failed_constraint_name) {
       return failed_constraint_name;
+    }
 
     for (const auto& info : kBooleanPropertyContainerInfoMap) {
       failed_constraint_name =
           boolean_containers_[info.index].ApplyConstraintSet(
               constraint_set.*(info.constraint_member));
-      if (failed_constraint_name)
+      if (failed_constraint_name) {
         return failed_constraint_name;
+      }
     }
 
     // For each processing based container, apply the constraints and only fail
@@ -1240,8 +1471,9 @@ class DeviceContainer {
     std::optional<int> best_requested_buffer_size;
     int best_num_channels = 1;
     for (const auto& container : processing_based_containers_) {
-      if (container.IsEmpty())
+      if (container.IsEmpty()) {
         continue;
+      }
 
       auto [container_score, container_properties, requested_buffer_size,
             num_channels] =
@@ -1274,8 +1506,9 @@ class DeviceContainer {
     DCHECK(!boolean_containers_.empty());
 
     for (auto& container : boolean_containers_) {
-      if (container.IsEmpty())
+      if (container.IsEmpty()) {
         return true;
+      }
     }
 
     return device_id_container_.IsEmpty() || group_id_container_.IsEmpty();
@@ -1292,7 +1525,7 @@ class DeviceContainer {
   // DeviceContainer::boolean_containers_ and MediaTrackConstraintSetPlatform.
   struct BooleanPropertyContainerInfo {
     BooleanContainerId index;
-    BooleanConstraint ConstraintSet::*constraint_member;
+    BooleanConstraint ConstraintSet::* constraint_member;
   };
 
   static constexpr BooleanPropertyContainerInfo
@@ -1327,12 +1560,13 @@ class CandidatesContainer {
                       mojom::blink::MediaStreamType stream_type,
                       std::string& media_stream_source,
                       std::string& default_device_id,
-                      bool is_reconfiguration_allowed)
+                      bool is_full_reconfiguration_allowed,
+                      const MediaStreamAudioTrack* current_track = nullptr)
       : default_device_id_(default_device_id) {
     AudioCaptureApi api = GetAudioCaptureApi(stream_type, media_stream_source);
     for (const auto& capability : capabilities) {
       devices_.emplace_back(capability, stream_type, api,
-                            is_reconfiguration_allowed);
+                            is_full_reconfiguration_allowed, current_track);
       DCHECK(!devices_.back().IsEmpty());
     }
   }
@@ -1430,6 +1664,22 @@ Vector<EchoCancellationMode> GetSupportedEchoCancellationModes(
   return result;
 }
 
+Vector<bool> GetSupportedVoiceIsolationValues(int platform_effects) {
+  if (IsVoiceIsolationSupported() &&
+      (platform_effects & media::AudioParameters::VOICE_ISOLATION_SUPPORTED)) {
+    return {true, false};
+  }
+  return {false};
+}
+
+bool IsVoiceIsolationSupported() {
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(CHROME_WIDE_ECHO_CANCELLATION)
+  return true;
+#else
+  return false;
+#endif
+}
+
 AudioDeviceCaptureCapability::AudioDeviceCaptureCapability()
     : parameters_(media::AudioParameters::UnavailableDeviceParams()) {}
 
@@ -1467,13 +1717,34 @@ const media::AudioParameters& AudioDeviceCaptureCapability::Parameters() const {
   return source_ ? source_->device().input : parameters_;
 }
 
+std::optional<bool>
+AudioDeviceCaptureCapability::GetVoiceIsolationExactConstraint(
+    const MediaStreamAudioTrack* current_track) const {
+  if (!source_) {
+    return std::nullopt;
+  }
+  for (MediaStreamAudioTrack* track : source_->GetTracks()) {
+    if (track == current_track) {
+      continue;
+    }
+    std::optional<bool> voice_isolation =
+        track->VoiceIsolationExactConstraint();
+    if (voice_isolation.has_value()) {
+      return voice_isolation;
+    }
+  }
+  return std::nullopt;
+}
+
 AudioCaptureSettings SelectSettingsAudioCapture(
     const AudioDeviceCaptureCapabilities& capabilities,
     const MediaConstraints& constraints,
     mojom::blink::MediaStreamType stream_type,
-    bool is_reconfiguration_allowed) {
-  if (capabilities.empty())
+    bool is_full_reconfiguration_allowed,
+    const MediaStreamAudioTrack* current_track) {
+  if (capabilities.empty()) {
     return AudioCaptureSettings();
+  }
 
   std::string media_stream_source = GetMediaStreamSource(constraints);
   std::string default_device_id;
@@ -1483,20 +1754,23 @@ AudioCaptureSettings SelectSettingsAudioCapture(
     default_device_id = capabilities.begin()->DeviceID().Utf8();
   }
 
-  CandidatesContainer candidates(capabilities, stream_type, media_stream_source,
-                                 default_device_id, is_reconfiguration_allowed);
+  CandidatesContainer candidates(
+      capabilities, stream_type, media_stream_source, default_device_id,
+      is_full_reconfiguration_allowed, current_track);
   DCHECK(!candidates.IsEmpty());
 
   auto* failed_constraint_name =
       candidates.ApplyConstraintSet(constraints.Basic());
-  if (failed_constraint_name)
+  if (failed_constraint_name) {
     return AudioCaptureSettings(failed_constraint_name);
+  }
 
   for (const auto& advanced_set : constraints.Advanced()) {
     CandidatesContainer copy = candidates;
     failed_constraint_name = candidates.ApplyConstraintSet(advanced_set);
-    if (failed_constraint_name)
+    if (failed_constraint_name) {
       candidates = std::move(copy);
+    }
   }
   DCHECK(!candidates.IsEmpty());
 
@@ -1511,7 +1785,8 @@ AudioCaptureSettings SelectSettingsAudioCapture(
 
 AudioCaptureSettings SelectSettingsAudioCapture(
     blink::MediaStreamAudioSource* source,
-    const MediaConstraints& constraints) {
+    const MediaConstraints& constraints,
+    const MediaStreamAudioTrack* current_track) {
   DCHECK(source);
   if (source->device().type !=
           blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE &&
@@ -1549,9 +1824,9 @@ AudioCaptureSettings SelectSettingsAudioCapture(
   AudioDeviceCaptureCapabilities capabilities = {
       AudioDeviceCaptureCapability(source)};
 
-  return SelectSettingsAudioCapture(capabilities, constraints,
-                                    source->device().type,
-                                    /*is_reconfiguration_allowed=*/false);
+  return SelectSettingsAudioCapture(
+      capabilities, constraints, source->device().type,
+      /*is_full_reconfiguration_allowed=*/false, current_track);
 }
 
 MODULES_EXPORT base::expected<Vector<blink::AudioCaptureSettings>, std::string>
@@ -1559,12 +1834,12 @@ SelectEligibleSettingsAudioCapture(
     const AudioDeviceCaptureCapabilities& capabilities,
     const MediaConstraints& constraints,
     mojom::blink::MediaStreamType stream_type,
-    bool is_reconfiguration_allowed) {
+    bool is_full_reconfiguration_allowed) {
   Vector<AudioCaptureSettings> settings;
   std::string failed_constraint_name;
   for (const auto& device : capabilities) {
     const auto device_settings = SelectSettingsAudioCapture(
-        {device}, constraints, stream_type, is_reconfiguration_allowed);
+        {device}, constraints, stream_type, is_full_reconfiguration_allowed);
     if (device_settings.HasValue()) {
       settings.push_back(device_settings);
     } else {

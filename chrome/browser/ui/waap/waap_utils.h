@@ -5,10 +5,16 @@
 #ifndef CHROME_BROWSER_UI_WAAP_WAAP_UTILS_H_
 #define CHROME_BROWSER_UI_WAAP_WAAP_UTILS_H_
 
+#include <memory>
+
 #include "base/time/time.h"
 #include "url/gurl.h"
 
 class Profile;
+
+namespace content {
+class WebContents;
+}
 
 namespace waap {
 
@@ -21,23 +27,38 @@ enum class NewWindowCreationSource {
   kMaxValue = kSessionRestore,
 };
 
+// Result of initial surface synchronization for the WebUI toolbar.
+// LINT.IfChange(InitialWebUISurfaceSyncResult)
+enum class InitialWebUISurfaceSyncResult {
+  kReadyWithinDeadline = 0,
+  kDeadlineExceededPaintedLater = 1,
+  kDeadlineExceededClosedBeforePaint = 2,
+  kDeadlineExceededRenderProcessGone = 3,
+  kClosedBeforeBrowserPresentation = 4,
+  kRenderProcessGoneBeforeBrowserPresentation = 5,
+  kMaxValue = kRenderProcessGoneBeforeBrowserPresentation,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/ui/enums.xml:InitialWebUISurfaceSyncResult)
+
 // Returns true if the given URL is the initial WebUI scheme.
 // This is only relevant on non-Android platforms.
-// TODO(crbug.com/448794588): Some callers of this function assume that
-// `WaapUIMetricsService` is available when this returns true. This
-// assumption is no longer valid as the service is now gated by
-// features::kInitialWebUIMetrics. Introduce a new helper function,
-// e.g., ShouldLogMetricsForInitialWebUI(), that checks
-// features::kInitialWebUIMetrics and update those callers.
 bool IsForInitialWebUI(const GURL& url);
 
-// Returns true if the WaapUIMetricsService and related metrics logging are
-// enabled.
-// This is intentionally separate from IsForInitialWebUI() because when enabled,
-// the UI metrics should be logged for the UI views that are relevant to WaaP
-// experiment, which includes both the existing C++ version (not a InitialWebUI)
-// and the WebUI version.
-bool IsInitialWebUIMetricsLoggingEnabled();
+class PrewarmHelper {
+ public:
+  // Configures the WebContents used for the initial WebUI (e.g. page load
+  // metrics, background color, zoom gestures, and color provider source).
+  static void ConfigureWebUIContents(content::WebContents* web_contents,
+                                     Profile* profile);
+
+  // Prewarms the WebUI toolbar WebContents for the given profile.
+  // Creates the WebContents and configures it using ConfigureWebUIContents.
+  // If `pre_navigate` is true, starts loading the toolbar URL; otherwise, only
+  // initializes the renderer process.
+  static std::unique_ptr<content::WebContents> PrewarmWebUIContents(
+      Profile* profile,
+      bool pre_navigate);
+};
 
 }  // namespace waap
 

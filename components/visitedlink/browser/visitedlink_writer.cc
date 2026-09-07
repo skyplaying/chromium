@@ -34,7 +34,6 @@
 #include "content/public/browser/browser_thread.h"
 #include "third_party/abseil-cpp/absl/container/inlined_vector.h"
 #include "url/gurl.h"
-#include "url/origin.h"
 
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>
@@ -62,7 +61,7 @@ const size_t VisitedLinkWriter::kFileHeaderSize =
 
 // This value should also be the same as the smallest size in the lookup
 // table in NewTableSizeForCount (prime number).
-const unsigned VisitedLinkWriter::kDefaultTableSize = 16381;
+const int32_t VisitedLinkWriter::kDefaultTableSize = 16381;
 
 bool VisitedLinkWriter::fail_table_creation_for_testing_ = false;
 
@@ -140,8 +139,7 @@ enum class AddFingerprint {
 
 }  // namespace
 
-struct VisitedLinkWriter::LoadFromFileResult
-    : public base::RefCountedThreadSafe<LoadFromFileResult> {
+struct VisitedLinkWriter::LoadFromFileResult {
   LoadFromFileResult(base::ScopedFILE file,
                      base::MappedReadOnlyRegion hash_table_memory,
                      int32_t num_entries,
@@ -156,10 +154,6 @@ struct VisitedLinkWriter::LoadFromFileResult
   int32_t num_entries;
   int32_t used_count;
   LinkSalt salt;
-
- private:
-  friend class base::RefCountedThreadSafe<LoadFromFileResult>;
-  virtual ~LoadFromFileResult();
 };
 
 VisitedLinkWriter::LoadFromFileResult::LoadFromFileResult(
@@ -173,8 +167,6 @@ VisitedLinkWriter::LoadFromFileResult::LoadFromFileResult(
       num_entries(num_entries),
       used_count(used_count),
       salt(salt) {}
-
-VisitedLinkWriter::LoadFromFileResult::~LoadFromFileResult() = default;
 
 // TableBuilder ---------------------------------------------------------------
 
@@ -412,37 +404,17 @@ void VisitedLinkWriter::DeleteAllURLs() {
   listener_->Reset(false);
 }
 
-VisitedLinkDelegate* VisitedLinkWriter::GetDelegate() {
-  return delegate_;
-}
-
-std::optional<uint64_t> VisitedLinkWriter::GetOrAddOriginSalt(
-    const url::Origin& origin) {
-  // To avoid race conditions, we should not get from or add to the salt map
-  // while the hashtable is building.
-  if (table_builder_ || table_is_loading_from_file_) {
-    return std::nullopt;
-  }
-  // Obtain the salt for this origin if it already exists.
-  // Otherwise, generate a new salt for this origin.
-  auto [it, inserted] = salts_.try_emplace(origin);
-  if (inserted) {
-    it->second = base::RandUint64();
-  }
-  return it->second;
-}
-
-void VisitedLinkWriter::DeleteURLs(URLIterator* urls) {
-  if (!urls->HasNextURL())
+void VisitedLinkWriter::DeleteURLs(const std::vector<GURL>& urls) {
+  if (urls.empty()) {
     return;
+  }
 
   listener_->Reset(false);
 
   if (table_builder_.get() || table_is_loading_from_file_) {
     // A rebuild or load is in progress, save this deletion in the temporary
     // list so it can be added once rebuild is complete.
-    while (urls->HasNextURL()) {
-      const GURL& url(urls->NextURL());
+    for (const auto& url : urls) {
       if (!url.is_valid())
         continue;
 
@@ -467,8 +439,7 @@ void VisitedLinkWriter::DeleteURLs(URLIterator* urls) {
 
   // Compute the deleted URLs' fingerprints and delete them
   std::set<Fingerprint> deleted_fingerprints;
-  while (urls->HasNextURL()) {
-    const GURL& url(urls->NextURL());
+  for (const auto& url : urls) {
     if (!url.is_valid())
       continue;
     deleted_fingerprints.insert(ComputeURLFingerprint(url.spec(), salt_));
@@ -667,49 +638,41 @@ bool VisitedLinkWriter::InitFromFile() {
 // static
 void VisitedLinkWriter::LoadFromFile(const base::FilePath& filename,
                                      TableLoadCompleteCallback callback) {
-  scoped_refptr<LoadFromFileResult> load_from_file_result;
-  bool success = LoadApartFromFile(filename, &load_from_file_result);
-
   content::GetUIThreadTaskRunner({})->PostTask(
-      FROM_HERE, base::BindOnce(std::move(callback), success,
-                                std::move(load_from_file_result)));
+      FROM_HERE,
+      base::BindOnce(std::move(callback), LoadApartFromFile(filename)));
 }
 
 // static
-bool VisitedLinkWriter::LoadApartFromFile(
-    const base::FilePath& filename,
-    scoped_refptr<LoadFromFileResult>* load_from_file_result) {
-  DCHECK(load_from_file_result);
-
+std::unique_ptr<VisitedLinkWriter::LoadFromFileResult>
+VisitedLinkWriter::LoadApartFromFile(const base::FilePath& filename) {
   base::ScopedFILE file_closer(base::OpenFile(filename, "rb+"));
   if (!file_closer.get())
-    return false;
+    return nullptr;
 
   int32_t num_entries, used_count;
   LinkSalt salt;
   if (!ReadFileHeader(file_closer.get(), &num_entries, &used_count, salt))
-    return false;  // Header isn't valid.
+    return nullptr;  // Header isn't valid.
 
   // Allocate and read the table.
   base::MappedReadOnlyRegion hash_table_memory;
   if (!CreateApartURLTable(num_entries, salt, &hash_table_memory))
-    return false;
+    return nullptr;
 
   if (!ReadFromFile(file_closer.get(), kFileHeaderSize,
                     GetHashTableFromMapping(hash_table_memory.mapping),
                     num_entries * sizeof(Fingerprint))) {
-    return false;
+    return nullptr;
   }
 
-  *load_from_file_result = new LoadFromFileResult(
-      std::move(file_closer), std::move(hash_table_memory), num_entries,
-      used_count, salt);
-  return true;
+  return std::make_unique<LoadFromFileResult>(std::move(file_closer),
+                                              std::move(hash_table_memory),
+                                              num_entries, used_count, salt);
 }
 
 void VisitedLinkWriter::OnTableLoadComplete(
-    bool success,
-    scoped_refptr<LoadFromFileResult> load_from_file_result) {
+    std::unique_ptr<LoadFromFileResult> load_from_file_result) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DCHECK(persist_to_disk_);
   DCHECK(!table_builder_);
@@ -721,7 +684,7 @@ void VisitedLinkWriter::OnTableLoadComplete(
 
   table_is_loading_from_file_ = false;
 
-  if (!success) {
+  if (!load_from_file_result) {
     // This temporary sets are used only when table was loaded.
     added_since_load_.clear();
     deleted_since_load_.clear();
@@ -741,8 +704,6 @@ void VisitedLinkWriter::OnTableLoadComplete(
   added_since_rebuild_.clear();
   deleted_since_rebuild_.clear();
 
-  DCHECK(load_from_file_result);
-
   // Delete the previous table.
   DCHECK(mapped_table_memory_.region.IsValid());
   mapped_table_memory_ = base::MappedReadOnlyRegion();
@@ -750,8 +711,8 @@ void VisitedLinkWriter::OnTableLoadComplete(
   // Assign the open file.
   DCHECK(!scoped_file_holder_);
   DCHECK(load_from_file_result->file.get());
-  scoped_file_holder_ = std::make_unique<base::ScopedFILE>();
-  *scoped_file_holder_ = std::move(load_from_file_result->file);
+  scoped_file_holder_ = std::make_unique<base::ScopedFILE>(
+      std::move(load_from_file_result->file));
 
   // Assign the loaded table.
   DCHECK(load_from_file_result->hash_table_memory.region.IsValid() &&
@@ -771,8 +732,8 @@ void VisitedLinkWriter::OnTableLoadComplete(
 
   if (!added_since_load_.empty() || !deleted_since_load_.empty()) {
     // Resize the table if the table doesn't have enough capacity.
-    int new_used_items =
-        used_items_ + static_cast<int>(added_since_load_.size());
+    int32_t new_used_items =
+        used_items_ + static_cast<int32_t>(added_since_load_.size());
     if (new_used_items >= table_length_)
       ResizeTable(NewTableSizeForCount(new_used_items));
 
@@ -927,10 +888,10 @@ bool VisitedLinkWriter::CreateApartURLTable(
   if (!memory->IsValid())
     return false;
 
-  UNSAFE_TODO(memset(memory->mapping.memory(), 0, alloc_size));
+  std::ranges::fill(memory->mapping, 0);
 
   // Save the header for other processes to read.
-  SharedHeader* header = static_cast<SharedHeader*>(memory->mapping.memory());
+  auto* header = memory->mapping.GetMemoryAs<SharedHeader>();
   header->length = num_entries;
   header->salt = salt;
 
@@ -955,19 +916,19 @@ bool VisitedLinkWriter::ResizeTableIfNecessary() {
   // keeping the table not very full. This is because we use linear probing
   // which increases the likelihood of clumps of entries which will reduce
   // performance.
-  const float max_table_load = 0.5f;  // Grow when we're > this full.
-  const float min_table_load = 0.2f;  // Shrink when we're < this full.
+  constexpr float kMaxTableLoad = 0.5f;  // Grow when we're > this full.
+  constexpr float kMinTableLoad = 0.2f;  // Shrink when we're < this full.
 
   float load = ComputeTableLoad();
-  if (load < max_table_load &&
-      (table_length_ <= static_cast<float>(kDefaultTableSize) ||
-       load > min_table_load))
+  if (load < kMaxTableLoad &&
+      (table_length_ <= kDefaultTableSize || load > kMinTableLoad)) {
     return false;
+  }
 
   // Table needs to grow or shrink.
-  int new_size = NewTableSizeForCount(used_items_);
+  int32_t new_size = NewTableSizeForCount(used_items_);
   DCHECK(new_size > used_items_);
-  DCHECK(load <= min_table_load || new_size > table_length_);
+  DCHECK(load <= kMinTableLoad || new_size > table_length_);
   ResizeTable(new_size);
   return true;
 }
@@ -987,8 +948,6 @@ void VisitedLinkWriter::ResizeTable(int32_t new_size) {
     mapped_table_memory_.mapping = std::move(old_hash_table_mapping);
     return;
   }
-
-  shared_memory_serial_++;
 
   {
     Fingerprint* old_hash_table =
@@ -1015,17 +974,18 @@ void VisitedLinkWriter::ResizeTable(int32_t new_size) {
     WriteFullTable();
 }
 
-uint32_t VisitedLinkWriter::DefaultTableSize() const {
+int32_t VisitedLinkWriter::DefaultTableSize() const {
   if (table_size_override_)
     return table_size_override_;
 
   return kDefaultTableSize;
 }
 
-uint32_t VisitedLinkWriter::NewTableSizeForCount(int32_t item_count) const {
+// static
+int32_t VisitedLinkWriter::NewTableSizeForCount(int32_t item_count) {
   // These table sizes are selected to be the maximum prime number less than
   // a "convenient" multiple of 1K.
-  static constexpr auto kTableSizes = std::to_array<const int>({
+  static constexpr auto kTableSizes = std::to_array<const int32_t>({
       16381,     // 16K  = 16384   <- don't shrink below this table size
                  //                   (should be == default_table_size)
       32767,     // 32K  = 32768
@@ -1042,7 +1002,7 @@ uint32_t VisitedLinkWriter::NewTableSizeForCount(int32_t item_count) const {
   });
 
   // Try to leave the table 33% full.
-  int desired = item_count * 3;
+  int32_t desired = item_count * 3;
 
   // Find the closest prime.
   for (auto size : kTableSizes) {
@@ -1072,10 +1032,9 @@ void VisitedLinkWriter::OnTableRebuildComplete(
     const std::vector<Fingerprint>& fingerprints) {
   if (success) {
     // Replace the old table with a new blank one.
-    shared_memory_serial_++;
 
-    int new_table_size = NewTableSizeForCount(
-        static_cast<int>(fingerprints.size() + added_since_rebuild_.size()));
+    int32_t new_table_size = NewTableSizeForCount(static_cast<int32_t>(
+        fingerprints.size() + added_since_rebuild_.size()));
     if (CreateURLTable(new_table_size)) {
       // Add the stored fingerprints to the hash table.
       for (auto fingerprint : fingerprints) {
@@ -1215,8 +1174,8 @@ VisitedLinkCommon::Fingerprint* VisitedLinkWriter::GetHashTableFromMapping(
     base::WritableSharedMemoryMapping& hash_table_mapping) {
   DCHECK(hash_table_mapping.IsValid());
   // Our table pointer is just the data immediately following the header.
-  return reinterpret_cast<Fingerprint*>(UNSAFE_TODO(
-      static_cast<char*>(hash_table_mapping.memory()) + sizeof(SharedHeader)));
+  return reinterpret_cast<Fingerprint*>(
+      UNSAFE_TODO(hash_table_mapping.data() + sizeof(SharedHeader)));
 }
 
 }  // namespace visitedlink

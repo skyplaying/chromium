@@ -4,7 +4,7 @@
 
 import {MetricsReporterImpl} from 'chrome://resources/js/metrics_reporter/metrics_reporter.js';
 import type {ProfileData, Tab, TabSearchPageElement} from 'chrome://tab-search.top-chrome/tab_search.js';
-import {TabAlertState, TabSearchApiProxyImpl} from 'chrome://tab-search.top-chrome/tab_search.js';
+import {SearchApiProxyImpl, TabAlertState, TabSearchApiProxyImpl} from 'chrome://tab-search.top-chrome/tab_search.js';
 import {assertEquals} from 'chrome://webui-test/chai_assert.js';
 import {keyDownOn} from 'chrome://webui-test/keyboard_mock_interactions.js';
 import {MockedMetricsReporter} from 'chrome://webui-test/mocked_metrics_reporter.js';
@@ -12,6 +12,7 @@ import {eventToPromise, microtasksFinished} from 'chrome://webui-test/test_util.
 
 import {createProfileData, createTab, SAMPLE_WINDOW_DATA, SAMPLE_WINDOW_DATA_WITH_MEDIA_TAB, SAMPLE_WINDOW_HEIGHT} from './tab_search_test_data.js';
 import {initLoadTimeDataWithDefaults} from './tab_search_test_helper.js';
+import {TestSearchApiProxy} from './test_search_api_proxy.js';
 import {TestTabSearchApiProxy} from './test_tab_search_api_proxy.js';
 
 suite('TabSearchMediaTabsTest', () => {
@@ -48,6 +49,7 @@ suite('TabSearchMediaTabsTest', () => {
     testProxy = new TestTabSearchApiProxy();
     testProxy.setProfileData(sampleData);
     TabSearchApiProxyImpl.setInstance(testProxy);
+    SearchApiProxyImpl.setInstance(new TestSearchApiProxy());
 
     tabSearchPage = document.createElement('tab-search-page');
     tabSearchPage.availableHeight = 500;
@@ -108,7 +110,6 @@ suite('TabSearchMediaTabsTest', () => {
         active: false,
         visible: false,
         alertStates: [TabAlertState.kMediaRecording],
-        index: 0,
         tabId: 1,
         title: 'Meet',
         url: 'https://meet.google.com/',
@@ -118,7 +119,6 @@ suite('TabSearchMediaTabsTest', () => {
         active: false,
         visible: false,
         alertStates: [TabAlertState.kAudioPlaying],
-        index: 1,
         tabId: 2,
         title: 'Youtube',
         url: 'https://youtube.com/',
@@ -127,7 +127,6 @@ suite('TabSearchMediaTabsTest', () => {
       createTab({
         active: true,
         visible: true,
-        index: 2,
         tabId: 3,
         title: 'Google',
         url: 'https://www.google.com',
@@ -136,7 +135,6 @@ suite('TabSearchMediaTabsTest', () => {
       createTab({
         active: false,
         visible: false,
-        index: 3,
         tabId: 4,
         title: 'Example',
         url: 'https://www.example.com',

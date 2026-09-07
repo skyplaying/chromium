@@ -21,7 +21,7 @@
 #include "net/test/embedded_test_server/embedded_test_server.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/extensions/extension_action_test_helper.h"
 #endif
 
@@ -50,9 +50,6 @@ class ManifestV3BrowserTest : public ExtensionBrowserTest {
   ScopedCurrentChannel channel_override_{version_info::Channel::UNKNOWN};
 };
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-// TODO(crbug.com/371432155): Port to desktop Android when chrome.tabs works
-// better there (specifically, for onUpdated events).
 IN_PROC_BROWSER_TEST_F(ManifestV3BrowserTest, ProgrammaticScriptInjection) {
   constexpr char kManifest[] =
       R"({
@@ -114,7 +111,6 @@ IN_PROC_BROWSER_TEST_F(ManifestV3BrowserTest, ProgrammaticScriptInjection) {
 
   EXPECT_EQ(u"My New Title", GetActiveWebContents()->GetTitle());
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 // A simple end-to-end test exercising the new action API in Manifest V3.
 // More robust tests for the action API are in extension_action_apitest.cc.

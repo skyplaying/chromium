@@ -20,6 +20,7 @@
 #include "base/task/current_thread.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/thread_restrictions.h"
+#include "components/remote_cocoa/app_shim/window_move_loop.h"
 #include "components/remote_cocoa/browser/ns_view_ids.h"
 #include "components/remote_cocoa/common/application.mojom.h"
 #include "content/app_shim_remote_cocoa/web_contents_ns_view_bridge.h"
@@ -39,6 +40,7 @@
 #include "content/public/browser/web_contents_view_delegate.h"
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
+#include "third_party/blink/public/common/tokens/tokens.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
 #include "ui/display/display_util.h"
 #include "ui/gfx/mac/coordinate_conversion.h"
@@ -66,8 +68,8 @@ namespace {
 // is responsible for opening the file. It takes the drop data and an open file
 // stream.
 void PromiseWriterHelper(const DropData& drop_data, base::File file) {
-  DCHECK(file.IsValid());
-  file.WriteAtCurrentPos(base::as_bytes(base::span(drop_data.file_contents)));
+  CHECK(file.IsValid(), base::NotFatalUntil::M158);
+  file.WriteAtCurrentPos(drop_data.file_contents);
 }
 
 WebContentsViewMac::RenderWidgetHostViewCreateFunction
@@ -123,7 +125,7 @@ WebContentsViewMac::WebContentsViewMac(
 WebContentsViewMac::~WebContentsViewMac() {
   if (views_host_)
     views_host_->OnHostableViewDestroying();
-  DCHECK(!views_host_);
+  CHECK(!views_host_, base::NotFatalUntil::M158);
   in_process_ns_view_bridge_.reset();
 }
 
@@ -200,14 +202,26 @@ WebContentsViewMac::GetBackForwardTransitionAnimationManager() {
 void WebContentsViewMac::DestroyBackForwardTransitionAnimationManager() {}
 
 void WebContentsViewMac::StartDragging(
+    RenderFrameHost& source_rfh,
     const DropData& drop_data,
-    const url::Origin& source_origin,
     DragOperationsMask allowed_operations,
     const gfx::ImageSkia& image,
     const gfx::Vector2d& cursor_offset,
     const gfx::Rect& drag_obj_rect,
-    const blink::mojom::DragEventSourceInfo& event_info,
-    RenderWidgetHostImpl* source_rwh) {
+    const blink::mojom::DragEventSourceInfo& event_info) {
+  RenderWidgetHostImpl* source_rwh =
+      static_cast<RenderWidgetHostImpl*>(source_rfh.GetRenderWidgetHost());
+  // Disallow reentrant drag which could be an attempt to exploit drag state.
+  if (drag_source_start_rwh_) {
+    return;
+  }
+  // A window move loop already owns the held mouse button; refuse to start a
+  // dragging session that would interfere with it.
+  if (remote_cocoa::CocoaWindowMoveLoop::IsActive()) {
+    web_contents_->SystemDragEnded(source_rwh);
+    return;
+  }
+  url::Origin source_origin = source_rfh.GetLastCommittedOrigin();
   // By allowing nested tasks, the code below also allows Close(),
   // which would deallocate |this|.  The same problem can occur while
   // processing -sendEvent:, so Close() is deferred in that case.
@@ -219,26 +233,7 @@ void WebContentsViewMac::StartDragging(
   // processing events.
   base::CurrentThread::ScopedAllowApplicationTasksInNativeNestedLoop allow;
 
-  GURL source_url = web_contents_->GetPrimaryMainFrame()->GetLastCommittedURL();
-  ui::DataTransferEndpoint data_endpoint(
-      source_url,
-      {.notify_if_restricted = true,
-       .off_the_record = web_contents_->GetBrowserContext()->IsOffTheRecord()});
-
-  // TODO(crbug.com/410835513): Unify with other declarations of
-  // CreateClipboardEndpoint.
-  ClipboardEndpoint source_endpoint(
-      base::optional_ref<const ui::DataTransferEndpoint>(data_endpoint),
-      base::BindRepeating(
-          [](GlobalRenderFrameHostId rfh_id) -> BrowserContext* {
-            auto* rfh = RenderFrameHost::FromID(rfh_id);
-            if (!rfh) {
-              return nullptr;
-            }
-            return rfh->GetBrowserContext();
-          },
-          web_contents_->GetPrimaryMainFrame()->GetGlobalId()),
-      *web_contents_->GetPrimaryMainFrame());
+  ClipboardEndpoint source_endpoint = CreateClipboardEndpoint(source_rfh);
 
   // Checks if the drag operation is allowed by enterprise policies
   if (!GetContentClient()->browser()->IsDragAllowedByPolicy(source_endpoint,
@@ -258,11 +253,17 @@ void WebContentsViewMac::StartDragging(
 
   // TODO(crbug.com/40825138): The param `drag_obj_rect` is unused.
 
+  const content::ChildProcessId render_process_id =
+      source_rfh.GetProcess()->GetID();
+  const blink::DocumentToken& document_token =
+      static_cast<RenderFrameHostImpl&>(source_rfh).GetDocumentToken();
   if (remote_ns_view_) {
-    remote_ns_view_->StartDrag(drop_data, source_origin, mask, image,
-                               cursor_offset, is_privileged);
+    remote_ns_view_->StartDrag(render_process_id, document_token, source_origin,
+                               drop_data, mask, image, cursor_offset,
+                               is_privileged);
   } else {
-    in_process_ns_view_bridge_->StartDrag(drop_data, source_origin, mask, image,
+    in_process_ns_view_bridge_->StartDrag(render_process_id, document_token,
+                                          source_origin, drop_data, mask, image,
                                           cursor_offset, is_privileged);
   }
 }
@@ -413,6 +414,9 @@ void WebContentsViewMac::CreateView(gfx::NativeView context) {
   in_process_ns_view_bridge_ =
       std::make_unique<remote_cocoa::WebContentsNSViewBridge>(ns_view_id_,
                                                               this);
+  if (web_contents_->GetVisibility() == Visibility::HIDDEN) {
+    in_process_ns_view_bridge_->SetVisible(false);
+  }
 
   drag_dest_ = [[WebDragDest alloc] initWithWebContentsImpl:web_contents_];
   if (delegate_)
@@ -427,7 +431,7 @@ RenderWidgetHostViewBase* WebContentsViewMac::CreateViewForWidget(
     // this actually is happening (and somebody isn't accidentally creating the
     // view twice), we check for the RVH Factory, which will be set when we're
     // making special ones (which go along with the special views).
-    DCHECK(RenderViewHostFactory::has_factory());
+    CHECK(RenderViewHostFactory::has_factory(), base::NotFatalUntil::M158);
     return static_cast<RenderWidgetHostViewBase*>(
         render_widget_host->GetView());
   }
@@ -464,6 +468,13 @@ RenderWidgetHostViewBase* WebContentsViewMac::CreateViewForWidget(
                         positioned:NSWindowBelow
                         relativeTo:nil];
   [GetInProcessNSView() setNextKeyView:view_view];
+
+  // There is no NSWindow when running headless, so send the frame bounds to the
+  // view synchronously to ensure its initial screen info is accurate.
+  if (![GetInProcessNSView() window]) {
+    view->SetWindowFrameInScreen(
+        gfx::ScreenRectFromNSRect([GetInProcessNSView() frame]));
+  }
   return view;
 }
 
@@ -473,7 +484,7 @@ RenderWidgetHostViewBase* WebContentsViewMac::CreateViewForChildWidget(
       new RenderWidgetHostViewMac(render_widget_host);
 
   // If the parent RenderWidgetHostViewMac is hosted in another process, ensure
-  // that the popup window will be created created in the same process.
+  // that the popup window will be created in the same process.
   // https://crbug.com/1091179
   if (views_host_) {
     auto* remote_cocoa_application = views_host_->GetRemoteCocoaApplication();
@@ -606,12 +617,21 @@ bool WebContentsViewMac::PerformDragOperation(DraggingInfoPtr dragging_info,
   return true;
 }
 
-bool WebContentsViewMac::DragPromisedFileTo(const base::FilePath& file_path,
-                                            const DropData& drop_data,
-                                            const GURL& download_url,
-                                            const url::Origin& source_origin,
-                                            base::FilePath* out_file_path) {
+bool WebContentsViewMac::DragPromisedFileTo(
+    content::ChildProcessId render_process_id,
+    const blink::DocumentToken& document_token,
+    const base::FilePath& file_path,
+    const DropData& drop_data,
+    base::FilePath* out_file_path) {
   *out_file_path = file_path;
+
+  RenderFrameHostImpl* source_rfh =
+      RenderFrameHostImpl::FromDocumentToken(render_process_id, document_token);
+  if (!source_rfh) {
+    *out_file_path = base::FilePath();
+    return true;
+  }
+
   // This is called by -namesOfPromisedFilesDroppedAtDestination, which is
   // requesting, on the UI thread, the name of the file that will be written
   // by a drag operation. To know the name of this file, it is necessary to
@@ -625,12 +645,13 @@ bool WebContentsViewMac::DragPromisedFileTo(const base::FilePath& file_path,
 
   SetReadWritePermissionsForFile(file);
 
-  if (download_url.is_valid() && web_contents_) {
+  if (drop_data.download_metadata && web_contents_) {
     auto drag_file_downloader = std::make_unique<DragDownloadFile>(
-        *out_file_path, std::move(file), download_url,
-        content::Referrer(web_contents_->GetLastCommittedURL(),
+        source_rfh->GetWeakDocumentPtr(), *out_file_path, std::move(file),
+        drop_data.download_metadata->url,
+        content::Referrer(source_rfh->GetLastCommittedURL(),
                           drop_data.referrer_policy),
-        web_contents_->GetEncoding(), source_origin, web_contents_);
+        source_rfh->GetPage().GetEncoding());
 
     DragDownloadFile* downloader = drag_file_downloader.get();
     // The finalizer will take care of closing and deletion.
@@ -643,10 +664,6 @@ bool WebContentsViewMac::DragPromisedFileTo(const base::FilePath& file_path,
         base::BindOnce(&PromiseWriterHelper, drop_data, std::move(file)));
   }
 
-  // The DragDownloadFile constructor may have altered the value of
-  // |*out_file_path| if, say, an existing file at the drop site has the same
-  // name. Return the actual name that was used to write the file.
-  *out_file_path = file_path;
   return true;
 }
 
@@ -674,7 +691,7 @@ void WebContentsViewMac::PerformEndDrag(uint32_t drag_operation,
   // non-root RenderWidgetHosts they need to be transformed.
   gfx::PointF transformed_point = local_point;
   gfx::PointF transformed_screen_point = screen_point;
-  if (drag_source_start_rwh_ && web_contents_->GetRenderWidgetHostView()) {
+  if (web_contents_->GetRenderWidgetHostView()) {
     content::RenderWidgetHostViewBase* contentsViewBase =
         static_cast<content::RenderWidgetHostViewBase*>(
             web_contents_->GetRenderWidgetHostView());
@@ -692,6 +709,8 @@ void WebContentsViewMac::PerformEndDrag(uint32_t drag_operation,
       transformed_screen_point.x(), transformed_screen_point.y(),
       static_cast<ui::mojom::DragOperation>(drag_operation),
       drag_source_start_rwh_.get());
+
+  drag_source_start_rwh_.reset();
 }
 
 void WebContentsViewMac::DraggingEntered(DraggingInfoPtr dragging_info,
@@ -717,13 +736,13 @@ void WebContentsViewMac::PerformDragOperation(
 }
 
 void WebContentsViewMac::DragPromisedFileTo(
+    content::ChildProcessId render_process_id,
+    const blink::DocumentToken& document_token,
     const base::FilePath& file_path,
     const DropData& drop_data,
-    const GURL& download_url,
-    const url::Origin& source_origin,
     DragPromisedFileToCallback callback) {
   base::FilePath actual_file_path;
-  DragPromisedFileTo(file_path, drop_data, download_url, source_origin,
+  DragPromisedFileTo(render_process_id, document_token, file_path, drop_data,
                      &actual_file_path);
   std::move(callback).Run(actual_file_path);
 }
@@ -756,6 +775,9 @@ void WebContentsViewMac::ViewsHostableAttach(
 
     remote_cocoa_application->CreateWebContentsNSView(
         ns_view_id_, std::move(stub_host), std::move(stub_ns_view_receiver));
+    if (web_contents_->GetVisibility() == Visibility::HIDDEN) {
+      remote_ns_view_->SetVisible(false);
+    }
     remote_ns_view_->SetParentNSView(views_host_->GetNSViewId());
 
     // Because this view is being displayed from a remote process, reset the
@@ -777,6 +799,8 @@ void WebContentsViewMac::ViewsHostableAttach(
 }
 
 void WebContentsViewMac::ViewsHostableDetach() {
+  // TODO(crbug.com/553428210): CHECK-exclusion: Convert to a CHECK once
+  // we are confident it won't be triggered.
   DCHECK(views_host_);
   // Disconnect from the remote bridge, if it exists. This will have the effect
   // of destroying the associated bridge instance with its NSView.

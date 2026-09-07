@@ -19,12 +19,12 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 
-import org.chromium.base.ObserverList.RewindableIterator;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseJUnit4ClassRunner;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.price_tracking.PriceTrackingFeatures;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
@@ -50,7 +50,6 @@ public class TabModelSelectorTabObserverTest {
             new TabModelSelectorObserverTestRule();
 
     @Mock private TabDelegateFactory mTabDelegateFactory;
-    private int mTabId;
     private Profile mProfile;
     private Profile mIncognitoProfile;
 
@@ -161,16 +160,18 @@ public class TabModelSelectorTabObserverTest {
                                         boolean incognito) {
                                     return null;
                                 }
+
+                                @Override
+                                public @Nullable Profile getProfile(boolean offTheRecord) {
+                                    return null;
+                                }
                             };
                         });
         TestTabModelSelectorTabObserver observer = createTabModelSelectorTabObserver();
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     selector.initialize(
-                            TabModelHolderFactory.createTabModelHolderForTesting(
-                                    sTestRule.getNormalTabModel()),
-                            TabModelHolderFactory.createIncognitoTabModelHolderForTesting(
-                                    sTestRule.getIncognitoTabModel()));
+                            sTestRule.getNormalTabModel(), sTestRule.getIncognitoTabModel());
                 });
 
         Tab normalTab1 = createTestTab(false);
@@ -294,11 +295,10 @@ public class TabModelSelectorTabObserverTest {
     private static boolean tabHasObserver(Tab tab, TestTabModelSelectorTabObserver observer) {
         return ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    RewindableIterator<TabObserver> tabObservers =
-                            TabTestUtils.getTabObservers(tab);
-                    tabObservers.rewind();
                     boolean found = false;
-                    while (tabObservers.hasNext()) found |= observer.equals(tabObservers.next());
+                    for (TabObserver tabObserver : TabTestUtils.getTabObservers(tab)) {
+                        found |= observer.equals(tabObserver);
+                    }
                     return found;
                 });
     }

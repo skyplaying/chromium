@@ -11,12 +11,11 @@
 #include "base/strings/to_string.h"
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_context.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -26,6 +25,8 @@
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_utils.h"
 #include "third_party/blink/public/common/switches.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/events/keycodes/dom/keycode_converter.h"
 #include "ui/events/keycodes/keyboard_code_conversion.h"
 #include "ui/events/keycodes/keyboard_codes.h"
@@ -72,9 +73,7 @@ bool FullscreenKeyboardBrowserTestBase::IsActiveTabFullscreen() const {
 }
 
 bool FullscreenKeyboardBrowserTestBase::IsInBrowserFullscreen() const {
-  return GetActiveBrowser()
-      ->GetFeatures()
-      .exclusive_access_manager()
+  return ExclusiveAccessManager::From(GetActiveBrowser())
       ->fullscreen_controller()
       ->IsFullscreenForBrowser();
 }
@@ -93,7 +92,7 @@ int FullscreenKeyboardBrowserTestBase::GetTabCount() const {
 }
 
 size_t FullscreenKeyboardBrowserTestBase::GetBrowserCount() const {
-  return chrome::GetTotalBrowserCount();
+  return GlobalBrowserCollection::GetInstance()->GetSize();
 }
 
 BrowserWindowInterface* FullscreenKeyboardBrowserTestBase::GetActiveBrowser()
@@ -104,10 +103,10 @@ BrowserWindowInterface* FullscreenKeyboardBrowserTestBase::GetActiveBrowser()
 BrowserWindowInterface*
 FullscreenKeyboardBrowserTestBase::CreateNewBrowserInstance() {
   BrowserWindowInterface* const first_instance = GetActiveBrowser();
-  const size_t initial_browser_count = GetBrowserCount();
+  ui_test_utils::BrowserCreatedObserver creation_observer;
   EXPECT_NO_FATAL_FAILURE(SendShortcut(ui::VKEY_N));
-  WaitForBrowserCount(initial_browser_count + 1);
-  BrowserWindowInterface* const second_instance = GetActiveBrowser();
+  BrowserWindowInterface* const second_instance = creation_observer.Wait();
+  ui_test_utils::WaitForBrowserSetLastActive(second_instance);
   EXPECT_NE(first_instance, second_instance);
 
   return second_instance;
@@ -195,9 +194,7 @@ void FullscreenKeyboardBrowserTestBase::SendShiftShortcut(
 void FullscreenKeyboardBrowserTestBase::SendFullscreenShortcutAndWait() {
   // On MacOSX, entering and exiting fullscreen are not synchronous. So we wait
   // for the observer to notice the change of fullscreen state.
-  bool current = GetActiveBrowser()
-                     ->GetFeatures()
-                     .exclusive_access_manager()
+  bool current = ExclusiveAccessManager::From(GetActiveBrowser())
                      ->context()
                      ->IsFullscreen();
   ui_test_utils::FullscreenWaiter waiter(
@@ -418,9 +415,11 @@ void FullscreenKeyboardBrowserTestBase::VerifyShortcutsAreNotPrevented() {
   WaitForTabCount(initial_tab_count);
   ASSERT_EQ(initial_active_index, GetActiveTabIndex());
 
+  ui_test_utils::BrowserCreatedObserver creation_observer;
   // A new window should be created and focused.
   ASSERT_NO_FATAL_FAILURE(SendShortcut(ui::VKEY_N));
-  WaitForBrowserCount(initial_browser_count + 1);
+  BrowserWindowInterface* new_browser = creation_observer.Wait();
+  ui_test_utils::WaitForBrowserSetLastActive(new_browser);
   ASSERT_EQ(initial_browser_count + 1, GetBrowserCount());
 
   // The newly created window should be closed.

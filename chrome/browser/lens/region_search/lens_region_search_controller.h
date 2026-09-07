@@ -10,6 +10,7 @@
 #include "chrome/browser/image_editor/screenshot_flow.h"
 #include "components/lens/lens_metrics.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 #include "ui/gfx/image/image.h"
 #include "ui/views/widget/widget.h"
 
@@ -18,11 +19,13 @@ class WebContents;
 enum class Visibility;
 }  // namespace content
 
-class Browser;
+class BrowserWindowInterface;
 
 namespace views {
 class Widget;
 }  // namespace views
+
+class BrowserWindowInterface;
 
 namespace lens {
 
@@ -31,8 +34,15 @@ class LensRegionSearchController : public content::WebContentsObserver {
   using RegionSelectionFlowClosedCallback = base::OnceCallback<void()>;
   using BoundsCallback = base::RepeatingCallback<void(const gfx::Rect&)>;
 
-  LensRegionSearchController();
+  DECLARE_USER_DATA(LensRegionSearchController);
+
+  // `host` is the UnownedUserDataHost of the browser window this controller
+  // serves; tests may pass their own host.
+  explicit LensRegionSearchController(ui::UnownedUserDataHost& host);
   ~LensRegionSearchController() override;
+
+  // Returns the controller for `browser`, or null if it does not have one.
+  static LensRegionSearchController* From(BrowserWindowInterface* browser);
 
   // Creates and runs the drag and capture flow. When run, the user enters into
   // a screenshot capture mode with the ability to draw a rectagular region
@@ -93,8 +103,12 @@ class LensRegionSearchController : public content::WebContentsObserver {
   void OnCaptureCompleted(const image_editor::ScreenshotCaptureResult& result);
 
  private:
+  ui::ScopedUnownedUserData<LensRegionSearchController>
+      scoped_unowned_user_data_;
+
   // Helper methods for starting and handling the capture flow.
-  void StartCaptureInternal(Browser* browser, bool use_fullscreen_capture);
+  void StartCaptureInternal(BrowserWindowInterface* browser,
+                            bool use_fullscreen_capture);
   void OnRegionSelectionCompleted(
       const image_editor::RegionSelectionResult& result);
   void HandleCaptureSuccessForSearch(const gfx::Image& image,

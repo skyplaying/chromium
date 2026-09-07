@@ -44,8 +44,10 @@
 #include "third_party/blink/public/mojom/file_system_access/file_system_access_transfer_token.mojom.h"
 
 #if BUILDFLAG(IS_ANDROID)
+#include "base/strings/string_view_util.h"
+#include "crypto/obsolete/sha1.h"
 #include "base/path_service.h"
-#include "base/strings/escape.h"
+#include "base/strings/string_number_conversions.h"
 #include "content/public/common/content_paths.h"
 #endif
 
@@ -66,6 +68,17 @@ using storage::FileSystemOperation;
 using storage::FileSystemOperationRunner;
 
 namespace content {
+
+#if BUILDFLAG(IS_ANDROID)
+// Computes a SHA-1 hash of |url_path_value| and returns it as a hex string.
+// This function is intentionally declared in a separate header file
+// "crypto/obsolete/sha1.h", so as to easily monitor current usage of SHA-1 in
+// Chrome, since SHA-1 is now discouraged for new code.
+std::string GetHashedUrlPath(std::string_view url_path_value) {
+  return base::HexEncode(
+            base::as_string_view(crypto::obsolete::Sha1::Hash(url_path_value)));
+}
+#endif
 
 namespace {
 
@@ -192,7 +205,9 @@ void FileSystemAccessFileHandleImpl::CreateFileWriter(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   RunWithPermission(
-      FileSystemAccessManagerImpl::GetEffectiveWritePermissionMode(),
+      keep_existing_data
+          ? blink::mojom::FileSystemAccessPermissionMode::kReadWrite
+          : FileSystemAccessManagerImpl::GetEffectiveWritePermissionMode(),
       base::BindOnce(&FileSystemAccessFileHandleImpl::CreateFileWriterImpl,
                      weak_factory_.GetWeakPtr(), keep_existing_data, auto_close,
                      mode),
@@ -335,8 +350,8 @@ void FileSystemAccessFileHandleImpl::DoOpenIncognitoFile(
     OpenAccessHandleCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   // TODO(crbug.com/40276567): Update if this only needs write-only permission
-  DCHECK_EQ(GetReadWritePermissionStatus(),
-            blink::mojom::PermissionStatus::GRANTED);
+  CHECK_EQ(GetReadWritePermissionStatus(),
+           blink::mojom::PermissionStatus::GRANTED, base::NotFatalUntil::M159);
 
   mojo::PendingRemote<blink::mojom::FileSystemAccessFileDelegateHost>
       file_delegate_host_remote;
@@ -358,8 +373,8 @@ void FileSystemAccessFileHandleImpl::DoOpenFile(
     OpenAccessHandleCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   // TODO(crbug.com/40276567): Update if this only needs write-only permission
-  DCHECK_EQ(GetReadWritePermissionStatus(),
-            blink::mojom::PermissionStatus::GRANTED);
+  CHECK_EQ(GetReadWritePermissionStatus(),
+           blink::mojom::PermissionStatus::GRANTED, base::NotFatalUntil::M159);
 
   manager()->DoFileSystemOperation(
       FROM_HERE, &FileSystemOperationRunner::OpenFile,
@@ -424,7 +439,7 @@ void FileSystemAccessFileHandleImpl::DidOpenFileAndGetLength(
         mojo::NullRemote());
     return;
   }
-  DCHECK_GE(length_or_error.value(), 0);
+  CHECK_GE(length_or_error.value(), 0, base::NotFatalUntil::M159);
 
   mojo::PendingRemote<blink::mojom::FileSystemAccessFileModificationHost>
       file_modification_host_remote;
@@ -459,7 +474,7 @@ void FileSystemAccessFileHandleImpl::IsSameEntryImpl(
     IsSameEntryCallback callback,
     FileSystemAccessTransferTokenImpl* other) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!other) {
+  if (!other || other->origin() != context().storage_key.origin()) {
     std::move(callback).Run(
         file_system_access_error::FromStatus(
             blink::mojom::FileSystemAccessStatus::kOperationFailed),
@@ -534,8 +549,9 @@ void FileSystemAccessFileHandleImpl::CreateFileWriterImpl(
     blink::mojom::FileSystemAccessWritableFileStreamLockMode mode,
     CreateFileWriterCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK_EQ(GetEffectiveWritePermissionStatus(),
-            blink::mojom::PermissionStatus::GRANTED);
+  CHECK_EQ(keep_existing_data ? GetReadWritePermissionStatus()
+                              : GetEffectiveWritePermissionStatus(),
+           blink::mojom::PermissionStatus::GRANTED, base::NotFatalUntil::M159);
 
   // TODO(crbug.com/40194651): Expand this check to all backends.
   if (url().type() == storage::kFileSystemTypeLocal) {
@@ -597,7 +613,7 @@ void FileSystemAccessFileHandleImpl::StartCreateSwapFile(
     scoped_refptr<FileSystemAccessLockManager::LockHandle> lock) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   CHECK(start_count >= 0);
-  DCHECK(max_swap_files_ >= 0);
+  CHECK(max_swap_files_ >= 0, base::NotFatalUntil::M159);
 
   // We should not have gotten any farther than zero without a lock on the file.
   CHECK(start_count == 0 || lock);
@@ -610,7 +626,9 @@ void FileSystemAccessFileHandleImpl::StartCreateSwapFile(
     return;
   }
 
-  if (GetEffectiveWritePermissionStatus() != PermissionStatus::GRANTED) {
+  if ((keep_existing_data ? GetReadWritePermissionStatus()
+                          : GetEffectiveWritePermissionStatus()) !=
+      PermissionStatus::GRANTED) {
     std::move(callback).Run(file_system_access_error::FromStatus(
                                 FileSystemAccessStatus::kPermissionDenied),
                             mojo::NullRemote());
@@ -638,11 +656,14 @@ void FileSystemAccessFileHandleImpl::StartCreateSwapFile(
     //  copy back to the original content-URI when done.
     storage::FileSystemURL swap_url;
     if (url().path().IsContentUri()) {
-      // We must escape 'content://com.android...' to use it as the file name.
-      std::string file_name = base::EscapeAllExceptUnreserved(
-          url().path().DirName().Append(*opt_swap_name).value());
+      // Use SHA1 hash instead of escape to avoid exceeding filename length
+      // limits.
+      std::string file_name = GetHashedUrlPath(url().path().value());
+      if (count > 0) {
+        file_name += base::StringPrintf(".%d", count);
+      }
       swap_url = manager()->CreateFileSystemURLFromPath(
-          PathInfo(swap_dir_.Append(file_name)));
+          PathInfo(swap_dir_.Append(file_name).AddExtension(".crswap")));
     } else {
       swap_url = url().CreateSibling(*opt_swap_name);
     }
@@ -728,8 +749,8 @@ void FileSystemAccessFileHandleImpl::DidCheckSwapFileExists(
     CreateFileWriterCallback callback,
     base::File::Error result) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(count >= 0);
-  DCHECK(max_swap_files_ >= 0);
+  CHECK(count >= 0, base::NotFatalUntil::M159);
+  CHECK(max_swap_files_ >= 0, base::NotFatalUntil::M159);
 
   if (result != base::File::FILE_ERROR_NOT_FOUND) {
     // File already exists. We need to find an unused filename.
@@ -760,8 +781,8 @@ void FileSystemAccessFileHandleImpl::CreateSwapFileFromCopy(
     scoped_refptr<FileSystemAccessLockManager::LockHandle> swap_lock,
     CreateFileWriterCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(count >= 0);
-  DCHECK(max_swap_files_ >= 0);
+  CHECK(count >= 0, base::NotFatalUntil::M159);
+  CHECK(max_swap_files_ >= 0, base::NotFatalUntil::M159);
 
   manager()->DoFileSystemOperation(
       FROM_HERE, &FileSystemOperationRunner::Copy,
@@ -786,9 +807,9 @@ void FileSystemAccessFileHandleImpl::CreateClonedSwapFile(
     scoped_refptr<FileSystemAccessLockManager::LockHandle> swap_lock,
     CreateFileWriterCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(count >= 0);
-  DCHECK(max_swap_files_ >= 0);
-  DCHECK(CanUseCowSwapFile());
+  CHECK(count >= 0, base::NotFatalUntil::M159);
+  CHECK(max_swap_files_ >= 0, base::NotFatalUntil::M159);
+  CHECK(CanUseCowSwapFile(), base::NotFatalUntil::M159);
 
   auto after_clone_callback = base::BindOnce(
       &FileSystemAccessFileHandleImpl::DidCloneSwapFile,
@@ -815,7 +836,7 @@ void FileSystemAccessFileHandleImpl::DidCloneSwapFile(
     CreateFileWriterCallback callback,
     base::File::Error result) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(CanUseCowSwapFile());
+  CHECK(CanUseCowSwapFile(), base::NotFatalUntil::M159);
 
   swap_file_clone_result_for_testing_ = result;
 
@@ -888,7 +909,7 @@ void FileSystemAccessFileHandleImpl::GetUniqueId(GetUniqueIdCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   auto id = manager()->GetUniqueId(*this);
-  DCHECK(id.is_valid());
+  CHECK(id.is_valid(), base::NotFatalUntil::M159);
   std::move(callback).Run(file_system_access_error::Ok(),
                           id.AsLowercaseString());
 }

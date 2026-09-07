@@ -23,7 +23,6 @@ source_set("focus") {
   deps = [
     "//base",
     "//chrome/browser/profiles",
-    "//chrome/browser/ui:browser_list",
     "//chrome/browser/ui/browser_window",
     "//chrome/browser/ui/sync",
     "//chrome/browser/ui/tabs",
@@ -66,6 +65,7 @@ source_set("browser_tests") {
   deps = [
     ":focus",
     "//chrome/browser",
+    "//chrome/browser/ui/browser_window",
     "//chrome/browser/ui/web_applications",
     "//chrome/test:test_support",
     "//components/webapps/common",

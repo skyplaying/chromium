@@ -24,8 +24,8 @@
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/themes/theme_syncable_service.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/signin/signin_view_controller.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/profiles/avatar_toolbar_button.h"
@@ -149,7 +149,7 @@ class SigninInterceptFirstRunExperienceDialogBrowserTestBase : public TestBase {
     account_id_ = identity_test_env()
                       ->MakePrimaryAccountAvailable(
                           GetEmail(), signin::ConsentLevel::kSignin)
-                      .account_id;
+                      .GetAccountId();
     EXPECT_EQ(
         identity_manager()->GetPrimaryAccountId(signin::ConsentLevel::kSignin),
         account_id());
@@ -265,7 +265,7 @@ class SigninInterceptFirstRunExperienceDialogBrowserTestBase : public TestBase {
   }
 
   SigninViewController* controller() {
-    return browser()->GetFeatures().signin_view_controller();
+    return SigninViewController::From(browser());
   }
 
   SigninInterceptFirstRunExperienceDialog* dialog() {
@@ -276,8 +276,7 @@ class SigninInterceptFirstRunExperienceDialogBrowserTestBase : public TestBase {
   CoreAccountId account_id() { return account_id_; }
 
   bool InUnoPhase2ModelWithFastFollows() {
-    return base::FeatureList::IsEnabled(
-               syncer::kReplaceSyncPromosWithSignInPromos) &&
+    return syncer::IsReplaceSyncPromosWithSignInPromosEnabled() &&
            base::FeatureList::IsEnabled(syncer::kUnoPhase2FollowUp);
   }
 
@@ -343,9 +342,11 @@ class SigninInterceptFirstRunExperienceDialogBrowserTest
     std::vector<base::test::FeatureRef> disabled_features;
     if (std::get<0>(GetParam())) {
       enabled_features = {syncer::kReplaceSyncPromosWithSignInPromos,
+                          syncer::kReplaceSyncPromosWithSigninPromosNewSignin,
                           syncer::kUnoPhase2FollowUp};
     } else {
       disabled_features = {syncer::kReplaceSyncPromosWithSignInPromos,
+                           syncer::kReplaceSyncPromosWithSigninPromosNewSignin,
                            syncer::kUnoPhase2FollowUp};
     }
     scoped_features_.InitWithFeatures(enabled_features, disabled_features);
@@ -372,9 +373,11 @@ class SigninInterceptFirstRunExperienceDialogEnterpriseUserBrowserTest
     std::vector<base::test::FeatureRef> disabled_features;
     if (GetParam()) {
       enabled_features = {syncer::kReplaceSyncPromosWithSignInPromos,
+                          syncer::kReplaceSyncPromosWithSigninPromosNewSignin,
                           syncer::kUnoPhase2FollowUp};
     } else {
       disabled_features = {syncer::kReplaceSyncPromosWithSignInPromos,
+                           syncer::kReplaceSyncPromosWithSigninPromosNewSignin,
                            syncer::kUnoPhase2FollowUp};
     }
     scoped_features_.InitWithFeatures(enabled_features, disabled_features);
@@ -746,7 +749,7 @@ IN_PROC_BROWSER_TEST_P(
   ExpectPrimaryAccountWithExactConsentLevel(signin::ConsentLevel::kSync);
   // Browser displays a sync settings tab.
   EXPECT_EQ(
-      browser()->tab_strip_model()->GetActiveWebContents()->GetVisibleURL(),
+      browser()->GetTabStripModel()->GetActiveWebContents()->GetVisibleURL(),
       kSyncSettingsUrl);
   // Sync settings abort the fre dialog.
   EXPECT_FALSE(controller()->ShowsModalDialog());
@@ -983,8 +986,12 @@ class
     std::vector<base::test::FeatureRef> disabled_features;
     if (std::get<0>(GetParam())) {
       enabled_features.push_back(syncer::kReplaceSyncPromosWithSignInPromos);
+      enabled_features.push_back(
+          syncer::kReplaceSyncPromosWithSigninPromosNewSignin);
     } else {
       disabled_features.push_back(syncer::kReplaceSyncPromosWithSignInPromos);
+      disabled_features.push_back(
+          syncer::kReplaceSyncPromosWithSigninPromosNewSignin);
     }
     if (std::get<1>(GetParam())) {
       enabled_features.push_back(syncer::kUnoPhase2FollowUp);
@@ -1010,8 +1017,7 @@ class
   }
 
   bool InUnoPhase2ModelNoFastFollows() {
-    return base::FeatureList::IsEnabled(
-               syncer::kReplaceSyncPromosWithSignInPromos) &&
+    return syncer::IsReplaceSyncPromosWithSignInPromosEnabled() &&
            !base::FeatureList::IsEnabled(syncer::kUnoPhase2FollowUp);
   }
 

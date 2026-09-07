@@ -16,10 +16,14 @@
 #include "base/numerics/angle_conversions.h"
 #include "cc/trees/layer_tree_host.h"
 #include "ui/color/color_provider_utils.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_nine_patch.h"
+#include "ui/compositor/layer_solid_color.h"
+#include "ui/compositor/layer_test_api.h"
+#include "ui/compositor/layer_textured.h"
 #include "ui/compositor/layer_type.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/point_conversions.h"
+#include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/transform.h"
 #include "ui/gfx/interpolated_transform.h"
 
@@ -31,12 +35,10 @@ void PrintLayerHierarchyImp(const Layer* layer,
                             int indent,
                             const gfx::Point& mouse_location,
                             bool print_invisible,
-                            std::ostringstream* out,
-                            DebugLayerChildCallback child_cb) {
+                            std::ostringstream* out) {
   if (!print_invisible && !layer->visible()) {
     return;
   }
-
   std::string indent_str(indent, ' ');
 
   gfx::Point transformed_mouse_location = layer->transform()
@@ -68,6 +70,12 @@ void PrintLayerHierarchyImp(const Layer* layer,
     case ui::LAYER_NINE_PATCH:
       *out << " nine_patch";
       break;
+    case ui::LAYER_SURFACE:
+      *out << " surface";
+      break;
+    case ui::LAYER_WITH_EXTERNAL_TEXTURE:
+      *out << " with_external_texture";
+      break;
   }
 
   if (layer->fills_bounds_opaquely()) {
@@ -77,6 +85,10 @@ void PrintLayerHierarchyImp(const Layer* layer,
   if (!layer->visible())
     *out << " !visible";
 
+  if (layer->GetMasksToBounds()) {
+    *out << " masks-to-bounds";
+  }
+
   std::string property_indent_str(indent+3, ' ');
   *out << '\n' << property_indent_str;
   *out << "bounds: " << layer->bounds().x() << ',' << layer->bounds().y();
@@ -84,7 +96,8 @@ void PrintLayerHierarchyImp(const Layer* layer,
   if (!layer->GetSubpixelOffset().IsZero())
     *out << " " << layer->GetSubpixelOffset().ToString();
 
-  const cc::Layer* cc_layer = layer->cc_layer_for_testing();
+  const cc::Layer* cc_layer =
+      ui::LayerTestApi(const_cast<Layer*>(layer)).cc_layer();
   if (cc_layer) {
     // Property trees must be updated in order to get valid render surface
     // reasons.
@@ -110,12 +123,20 @@ void PrintLayerHierarchyImp(const Layer* layer,
          << layer->rounded_corner_radii().ToString();
   }
 
-  if (layer->type() == LAYER_SOLID_COLOR) {
+  if (auto* solid_layer = layer->AsSolidColor()) {
     *out << "\n" << property_indent_str;
-    *out << "background-color=" << ui::SkColorName(layer->background_color());
+    *out << "background-color="
+         << ui::SkColorName(solid_layer->background_color().toSkColor());
   }
 
-  const ui::Layer* mask = const_cast<ui::Layer*>(layer)->layer_mask_layer();
+  if (auto* nine_patch_layer = layer->AsNinePatch()) {
+    *out << "\n" << property_indent_str;
+    *out << "aperture: " << nine_patch_layer->aperture().ToString()
+         << " border: " << nine_patch_layer->border().ToString()
+         << " occlusion: " << nine_patch_layer->occlusion().ToString();
+  }
+
+  const ui::Layer* mask = layer->layer_mask_layer();
 
   if (mask) {
     *out << '\n' << property_indent_str;
@@ -147,11 +168,9 @@ void PrintLayerHierarchyImp(const Layer* layer,
 
   *out << '\n';
 
-  std::vector<raw_ptr<ui::Layer, VectorExperimental>> children =
-      child_cb ? child_cb.Run(layer) : layer->children();
-  for (ui::Layer* child : children) {
+  for (ui::Layer* child : layer->children()) {
     PrintLayerHierarchyImp(child, indent + 3, mouse_location_in_layer,
-                           print_invisible, out, child_cb);
+                           print_invisible, out);
   }
 }
 
@@ -169,11 +188,9 @@ void PrintLayerHierarchy(const Layer* layer,
 void PrintLayerHierarchy(const Layer* layer,
                          const gfx::Point& mouse_location,
                          bool print_invisible,
-                         std::ostringstream* out,
-                         DebugLayerChildCallback child_cb) {
+                         std::ostringstream* out) {
   *out << "Layer hierarchy:\n";
-  PrintLayerHierarchyImp(layer, 0, mouse_location, print_invisible, out,
-                         child_cb);
+  PrintLayerHierarchyImp(layer, 0, mouse_location, print_invisible, out);
 }
 
 }  // namespace ui

@@ -10,6 +10,7 @@
 #include "base/test/task_environment.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
+#include "components/sync/base/features.h"
 #include "content/public/browser/network_service_instance.h"
 #include "services/network/test/test_network_connection_tracker.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -170,14 +171,19 @@ void SpinCurrentSequenceTaskRunner() {
   run_loop.Run();
 }
 
+signin::ConsentLevel GetConsentLevel() {
+  return syncer::IsReplaceSyncPromosWithSignInPromosEnabled()
+             ? signin::ConsentLevel::kSignin
+             : signin::ConsentLevel::kSync;
+}
 }  // namespace
 
 TEST(ForceSigninVerifierTest, OnGetTokenSuccess) {
   base::test::TaskEnvironment scoped_task_env;
   signin::IdentityTestEnvironment identity_test_env;
   const AccountInfo account_info =
-      identity_test_env.MakePrimaryAccountAvailable(
-          "email@test.com", signin::ConsentLevel::kSync);
+      identity_test_env.MakePrimaryAccountAvailable("email@test.com",
+                                                    GetConsentLevel());
 
   ForceSigninVerifierWithAccessToInternalsForTesting verifier(
       identity_test_env.identity_manager());
@@ -187,7 +193,7 @@ TEST(ForceSigninVerifierTest, OnGetTokenSuccess) {
   ASSERT_FALSE(verifier.GetTokenIsValid().has_value());
 
   identity_test_env.WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
-      account_info.account_id, /*token=*/"", base::Time());
+      account_info.GetAccountId(), /*token=*/"", base::Time());
 
   ASSERT_EQ(nullptr, verifier.access_token_fetcher());
   std::optional<bool> token = verifier.GetTokenIsValid().has_value();
@@ -201,8 +207,8 @@ TEST(ForceSigninVerifierTest, OnGetTokenWaitForRefreshTokenThenSuccess) {
   base::test::TaskEnvironment scoped_task_env;
   signin::IdentityTestEnvironment identity_test_env;
   const AccountInfo account_info =
-      identity_test_env.MakePrimaryAccountAvailable(
-          "email@test.com", signin::ConsentLevel::kSync);
+      identity_test_env.MakePrimaryAccountAvailable("email@test.com",
+                                                    GetConsentLevel());
 
   // Simulate a reset to make the refresh tokens unavailable at first.
   identity_test_env.ResetToAccountsNotYetLoadedFromDiskState();
@@ -221,7 +227,7 @@ TEST(ForceSigninVerifierTest, OnGetTokenWaitForRefreshTokenThenSuccess) {
   EXPECT_NE(nullptr, verifier.access_token_fetcher());
 
   identity_test_env.WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
-      account_info.account_id, /*token=*/"", base::Time());
+      account_info.GetAccountId(), /*token=*/"", base::Time());
 
   ASSERT_EQ(nullptr, verifier.access_token_fetcher());
   std::optional<bool> token = verifier.GetTokenIsValid().has_value();
@@ -235,8 +241,8 @@ TEST(ForceSigninVerifierTest, OnGetTokenPersistentFailure) {
   base::test::TaskEnvironment scoped_task_env;
   signin::IdentityTestEnvironment identity_test_env;
   const AccountInfo account_info =
-      identity_test_env.MakePrimaryAccountAvailable(
-          "email@test.com", signin::ConsentLevel::kSync);
+      identity_test_env.MakePrimaryAccountAvailable("email@test.com",
+                                                    GetConsentLevel());
 
   ForceSigninVerifierWithAccessToInternalsForTesting verifier(
       identity_test_env.identity_manager());
@@ -246,8 +252,9 @@ TEST(ForceSigninVerifierTest, OnGetTokenPersistentFailure) {
   ASSERT_FALSE(verifier.GetTokenIsValid().has_value());
 
   identity_test_env.WaitForAccessTokenRequestIfNecessaryAndRespondWithError(
-      GoogleServiceAuthError(
-          GoogleServiceAuthError::State::INVALID_GAIA_CREDENTIALS));
+      GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
+          GoogleServiceAuthError::InvalidGaiaCredentialsReason::
+              CREDENTIALS_REJECTED_BY_SERVER));
 
   ASSERT_EQ(nullptr, verifier.access_token_fetcher());
   std::optional<bool> token = verifier.GetTokenIsValid();
@@ -261,8 +268,8 @@ TEST(ForceSigninVerifierTest, OnGetTokenTransientFailure) {
   base::test::TaskEnvironment scoped_task_env;
   signin::IdentityTestEnvironment identity_test_env;
   const AccountInfo account_info =
-      identity_test_env.MakePrimaryAccountAvailable(
-          "email@test.com", signin::ConsentLevel::kSync);
+      identity_test_env.MakePrimaryAccountAvailable("email@test.com",
+                                                    GetConsentLevel());
 
   ForceSigninVerifierWithAccessToInternalsForTesting verifier(
       identity_test_env.identity_manager());
@@ -272,7 +279,7 @@ TEST(ForceSigninVerifierTest, OnGetTokenTransientFailure) {
   ASSERT_FALSE(verifier.GetTokenIsValid().has_value());
 
   identity_test_env.WaitForAccessTokenRequestIfNecessaryAndRespondWithError(
-      GoogleServiceAuthError(GoogleServiceAuthError::State::CONNECTION_FAILED));
+      GoogleServiceAuthError::FromConnectionError(net::ERR_FAILED));
 
   ASSERT_EQ(nullptr, verifier.access_token_fetcher());
   ASSERT_FALSE(verifier.GetTokenIsValid().has_value());
@@ -284,14 +291,14 @@ TEST(ForceSigninVerifierTest, OnLostConnection) {
   base::test::TaskEnvironment scoped_task_env;
   signin::IdentityTestEnvironment identity_test_env;
   const AccountInfo account_info =
-      identity_test_env.MakePrimaryAccountAvailable(
-          "email@test.com", signin::ConsentLevel::kSync);
+      identity_test_env.MakePrimaryAccountAvailable("email@test.com",
+                                                    GetConsentLevel());
 
   ForceSigninVerifierWithAccessToInternalsForTesting verifier(
       identity_test_env.identity_manager());
 
   identity_test_env.WaitForAccessTokenRequestIfNecessaryAndRespondWithError(
-      GoogleServiceAuthError(GoogleServiceAuthError::State::CONNECTION_FAILED));
+      GoogleServiceAuthError::FromConnectionError(net::ERR_FAILED));
 
   ASSERT_EQ(1, verifier.FailureCount());
   ASSERT_EQ(nullptr, verifier.access_token_fetcher());
@@ -309,14 +316,14 @@ TEST(ForceSigninVerifierTest, OnReconnected) {
   base::test::TaskEnvironment scoped_task_env;
   signin::IdentityTestEnvironment identity_test_env;
   const AccountInfo account_info =
-      identity_test_env.MakePrimaryAccountAvailable(
-          "email@test.com", signin::ConsentLevel::kSync);
+      identity_test_env.MakePrimaryAccountAvailable("email@test.com",
+                                                    GetConsentLevel());
 
   ForceSigninVerifierWithAccessToInternalsForTesting verifier(
       identity_test_env.identity_manager());
 
   identity_test_env.WaitForAccessTokenRequestIfNecessaryAndRespondWithError(
-      GoogleServiceAuthError(GoogleServiceAuthError::State::CONNECTION_FAILED));
+      GoogleServiceAuthError::FromConnectionError(net::ERR_FAILED));
 
   ASSERT_EQ(1, verifier.FailureCount());
   ASSERT_EQ(nullptr, verifier.access_token_fetcher());
@@ -334,8 +341,8 @@ TEST(ForceSigninVerifierTest, GetNetworkStatusAsync) {
   base::test::TaskEnvironment scoped_task_env;
   signin::IdentityTestEnvironment identity_test_env;
   const AccountInfo account_info =
-      identity_test_env.MakePrimaryAccountAvailable(
-          "email@test.com", signin::ConsentLevel::kSync);
+      identity_test_env.MakePrimaryAccountAvailable("email@test.com",
+                                                    GetConsentLevel());
 
   ConfigureNetworkConnectionTracker(NetworkConnectionType::Undecided,
                                     NetworkResponseType::Asynchronous);
@@ -357,8 +364,8 @@ TEST(ForceSigninVerifierTest, LaunchVerifierWithoutNetwork) {
   base::test::TaskEnvironment scoped_task_env;
   signin::IdentityTestEnvironment identity_test_env;
   const AccountInfo account_info =
-      identity_test_env.MakePrimaryAccountAvailable(
-          "email@test.com", signin::ConsentLevel::kSync);
+      identity_test_env.MakePrimaryAccountAvailable("email@test.com",
+                                                    GetConsentLevel());
 
   ConfigureNetworkConnectionTracker(NetworkConnectionType::ConnectionNone,
                                     NetworkResponseType::Asynchronous);
@@ -387,8 +394,8 @@ TEST(ForceSigninVerifierTest, ChangeNetworkFromWIFITo4GWithOnGoingRequest) {
   base::test::TaskEnvironment scoped_task_env;
   signin::IdentityTestEnvironment identity_test_env;
   const AccountInfo account_info =
-      identity_test_env.MakePrimaryAccountAvailable(
-          "email@test.com", signin::ConsentLevel::kSync);
+      identity_test_env.MakePrimaryAccountAvailable("email@test.com",
+                                                    GetConsentLevel());
 
   ConfigureNetworkConnectionTracker(NetworkConnectionType::ConnectionWifi,
                                     NetworkResponseType::Asynchronous);
@@ -412,15 +419,15 @@ TEST(ForceSigninVerifierTest, ChangeNetworkFromWIFITo4GWithOnGoingRequest) {
   // There is still one on-going request.
   EXPECT_EQ(first_request, verifier.access_token_fetcher());
   identity_test_env.WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
-      account_info.account_id, /*token=*/"", base::Time());
+      account_info.GetAccountId(), /*token=*/"", base::Time());
 }
 
 TEST(ForceSigninVerifierTest, ChangeNetworkFromWIFITo4GWithFinishedRequest) {
   base::test::TaskEnvironment scoped_task_env;
   signin::IdentityTestEnvironment identity_test_env;
   const AccountInfo account_info =
-      identity_test_env.MakePrimaryAccountAvailable(
-          "email@test.com", signin::ConsentLevel::kSync);
+      identity_test_env.MakePrimaryAccountAvailable("email@test.com",
+                                                    GetConsentLevel());
 
   ConfigureNetworkConnectionTracker(NetworkConnectionType::ConnectionWifi,
                                     NetworkResponseType::Asynchronous);
@@ -438,7 +445,7 @@ TEST(ForceSigninVerifierTest, ChangeNetworkFromWIFITo4GWithFinishedRequest) {
 
   // Finishes the request.
   identity_test_env.WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
-      account_info.account_id, /*token=*/"", base::Time());
+      account_info.GetAccountId(), /*token=*/"", base::Time());
   EXPECT_EQ(nullptr, verifier.access_token_fetcher());
 
   // Network is changed to 4G.
@@ -449,13 +456,13 @@ TEST(ForceSigninVerifierTest, ChangeNetworkFromWIFITo4GWithFinishedRequest) {
   EXPECT_EQ(nullptr, verifier.access_token_fetcher());
 }
 
-// Regression test for https://crbug.com/1259864
+// Regression test for https://crbug.com/40057601
 TEST(ForceSigninVerifierTest, DeleteWithPendingRequestShouldNotCrash) {
   base::test::TaskEnvironment scoped_task_env;
   signin::IdentityTestEnvironment identity_test_env;
   const AccountInfo account_info =
-      identity_test_env.MakePrimaryAccountAvailable(
-          "email@test.com", signin::ConsentLevel::kSync);
+      identity_test_env.MakePrimaryAccountAvailable("email@test.com",
+                                                    GetConsentLevel());
 
   ConfigureNetworkConnectionTracker(NetworkConnectionType::Undecided,
                                     NetworkResponseType::Asynchronous);

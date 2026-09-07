@@ -13,16 +13,17 @@
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/app_service/launch_utils.h"
 #include "chrome/browser/apps/link_capturing/apps_intent_picker_delegate.h"
-#include "chrome/browser/apps/link_capturing/intent_picker_info.h"
 #include "chrome/browser/apps/link_capturing/metrics/intent_handling_metrics.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/web_applications/link_capturing_features.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
+#include "components/apps/link_capturing/intent_picker_info.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "components/services/app_service/public/cpp/icon_types.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/display/types/display_constants.h"
 #include "url/gurl.h"
 
@@ -107,6 +108,20 @@ void ChromeOsAppsIntentPickerDelegate::FindAllAppsForUrl(
 
   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(std::move(apps_callback), std::move(apps)));
+}
+
+std::optional<apps::IntentPickerAppInfo>
+ChromeOsAppsIntentPickerDelegate::GetAppInfoForId(const std::string& app_id) {
+  CHECK(proxy_);
+  std::optional<apps::IntentPickerAppInfo> info;
+  // ForOneApp runs the callback only if the app is present, so an absent app
+  // leaves `info` as nullopt.
+  proxy_->AppRegistryCache().ForOneApp(
+      app_id, [&info](const apps::AppUpdate& update) {
+        info.emplace(GetPickerEntryType(update.AppType()), ui::ImageModel(),
+                     update.AppId(), update.Name());
+      });
+  return info;
 }
 
 bool ChromeOsAppsIntentPickerDelegate::IsPreferredAppForSupportedLinks(
@@ -206,7 +221,7 @@ void ChromeOsAppsIntentPickerDelegate::LaunchApp(
                       /*prefer_container=*/true),
         url, LaunchSource::kFromLink,
         std::make_unique<WindowInfo>(display::kDefaultDisplayId),
-        base::IgnoreArgs<LaunchResult&&>(std::move(callback)));
+        base::IgnoreArgs<LaunchResult>(std::move(callback)));
     CloseOrGoBack(web_contents);
   }
 }

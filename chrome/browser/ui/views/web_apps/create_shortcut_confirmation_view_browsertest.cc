@@ -8,7 +8,8 @@
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/web_applications/web_app_dialogs.h"
 #include "chrome/browser/web_applications/test/web_app_icon_test_utils.h"
@@ -28,7 +29,6 @@
 enum CreateShortcutViewParams {
   kTabStripEnabled = 0,
   kTabStripDisabled = 1,
-  kCreateShortcutCreatesDiy = 2,
 };
 
 std::string ParamsToString(
@@ -38,8 +38,6 @@ std::string ParamsToString(
       return "TabStripEnabled";
     case kTabStripDisabled:
       return "TabStripDisabled";
-    case kCreateShortcutCreatesDiy:
-      return "CreateShortcutCreatesDiy";
   }
 }
 
@@ -74,7 +72,7 @@ class CreateShortcutConfirmationViewBrowserTest
                        std::unique_ptr<web_app::WebAppInstallInfo>) {};
 
     content::WebContents* web_contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
     std::unique_ptr<webapps::MlInstallOperationTracker> install_tracker =
         webapps::MLInstallabilityPromoter::FromWebContents(web_contents)
             ->RegisterCurrentInstallForWebContents(
@@ -87,29 +85,20 @@ class CreateShortcutConfirmationViewBrowserTest
 
   void SetUp() override {
     base::flat_map<base::test::FeatureRef, bool> features;
-    features.insert({features::kWebAppUsePrimaryIcon, true});
     switch (GetParam()) {
       case CreateShortcutViewParams::kTabStripEnabled:
         features.insert({blink::features::kDesktopPWAsTabStrip, true});
         features.insert({features::kDesktopPWAsTabStripSettings, true});
-        features.insert({features::kDisableShortcutsEnableDiy, false});
         break;
       case CreateShortcutViewParams::kTabStripDisabled:
         features.insert({blink::features::kDesktopPWAsTabStrip, false});
         features.insert({features::kDesktopPWAsTabStripSettings, false});
-        features.insert({features::kDisableShortcutsEnableDiy, false});
-        break;
-      case CreateShortcutViewParams::kCreateShortcutCreatesDiy:
-        features.insert({features::kDisableShortcutsEnableDiy, true});
         break;
     }
 
+    features.insert({::features::kWebAppInstallDialog, false});
     feature_list.InitWithFeatureStates(features);
     DialogBrowserTest::SetUp();
-  }
-
-  bool ShouldCreateDiyAppsForShortcutApps() {
-    return GetParam() == CreateShortcutViewParams::kCreateShortcutCreatesDiy;
   }
 
  private:
@@ -122,8 +111,12 @@ IN_PROC_BROWSER_TEST_P(CreateShortcutConfirmationViewBrowserTest,
       GURL("https://example.com"));
   app_info->title = u"Test app";
 
-  web_app::SetAutoAcceptWebAppDialogForTesting(/*auto_accept=*/true,
-                                               /*auto_open_in_window=*/true);
+  base::AutoReset<web_app::InstallDialogTestResponse> auto_accept =
+      web_app::SetPwaInstallationAutoRespondForTesting(
+          web_app::InstallDialogTestResponse::kAcceptAndLaunch);
+  base::AutoReset<web_app::CreateShortcutDialogCheckState> auto_check =
+      web_app::SetCreateShortcutDialogCheckStateForTesting(
+          web_app::CreateShortcutDialogCheckState::kChecked);
   bool is_accepted = false;
   std::unique_ptr<web_app::WebAppInstallInfo> install_info;
   auto callback = [&is_accepted, &install_info](
@@ -134,7 +127,7 @@ IN_PROC_BROWSER_TEST_P(CreateShortcutConfirmationViewBrowserTest,
   };
 
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   std::unique_ptr<webapps::MlInstallOperationTracker> install_tracker =
       webapps::MLInstallabilityPromoter::FromWebContents(web_contents)
           ->RegisterCurrentInstallForWebContents(
@@ -147,7 +140,7 @@ IN_PROC_BROWSER_TEST_P(CreateShortcutConfirmationViewBrowserTest,
 
   EXPECT_EQ(install_info->user_display_mode,
             web_app::mojom::UserDisplayMode::kStandalone);
-  EXPECT_EQ(install_info->is_diy_app, ShouldCreateDiyAppsForShortcutApps());
+  EXPECT_TRUE(install_info->is_diy_app);
 }
 
 IN_PROC_BROWSER_TEST_P(CreateShortcutConfirmationViewBrowserTest,
@@ -156,13 +149,11 @@ IN_PROC_BROWSER_TEST_P(CreateShortcutConfirmationViewBrowserTest,
       GURL("https://example.com"));
   app_info->title = u"Test app";
 
-  web_app::SetAutoAcceptWebAppDialogForTesting(/*auto_accept=*/false,
-                                               /*auto_open_in_window=*/false);
   base::test::TestFuture<bool, std::unique_ptr<web_app::WebAppInstallInfo>>
       install_result;
 
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   std::unique_ptr<webapps::MlInstallOperationTracker> install_tracker =
       webapps::MLInstallabilityPromoter::FromWebContents(web_contents)
           ->RegisterCurrentInstallForWebContents(
@@ -185,9 +176,8 @@ IN_PROC_BROWSER_TEST_P(CreateShortcutConfirmationViewBrowserTest,
   EXPECT_EQ(install_result.Get<std::unique_ptr<web_app::WebAppInstallInfo>>()
                 ->user_display_mode,
             web_app::mojom::UserDisplayMode::kBrowser);
-  EXPECT_EQ(install_result.Get<std::unique_ptr<web_app::WebAppInstallInfo>>()
-                ->is_diy_app,
-            ShouldCreateDiyAppsForShortcutApps());
+  EXPECT_TRUE(install_result.Get<std::unique_ptr<web_app::WebAppInstallInfo>>()
+                  ->is_diy_app);
 }
 
 IN_PROC_BROWSER_TEST_P(CreateShortcutConfirmationViewBrowserTest,
@@ -196,13 +186,11 @@ IN_PROC_BROWSER_TEST_P(CreateShortcutConfirmationViewBrowserTest,
       GURL("https://example.com"));
   app_info->title = u"Test app";
 
-  web_app::SetAutoAcceptWebAppDialogForTesting(/*auto_accept=*/false,
-                                               /*auto_open_in_window=*/false);
   base::test::TestFuture<bool, std::unique_ptr<web_app::WebAppInstallInfo>>
       install_result;
 
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   std::unique_ptr<webapps::MlInstallOperationTracker> install_tracker =
       webapps::MLInstallabilityPromoter::FromWebContents(web_contents)
           ->RegisterCurrentInstallForWebContents(
@@ -233,8 +221,12 @@ IN_PROC_BROWSER_TEST_P(CreateShortcutConfirmationViewBrowserTest,
 
 IN_PROC_BROWSER_TEST_P(CreateShortcutConfirmationViewBrowserTest,
                        NormalizeTitles) {
-  web_app::SetAutoAcceptWebAppDialogForTesting(/*auto_accept=*/true,
-                                               /*auto_open_in_window=*/true);
+  base::AutoReset<web_app::InstallDialogTestResponse> auto_accept =
+      web_app::SetPwaInstallationAutoRespondForTesting(
+          web_app::InstallDialogTestResponse::kAcceptAndLaunch);
+  base::AutoReset<web_app::CreateShortcutDialogCheckState> auto_check =
+      web_app::SetCreateShortcutDialogCheckStateForTesting(
+          web_app::CreateShortcutDialogCheckState::kChecked);
 
   struct TestCases {
     std::u16string input;
@@ -260,7 +252,7 @@ IN_PROC_BROWSER_TEST_P(CreateShortcutConfirmationViewBrowserTest,
     };
 
     content::WebContents* web_contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
     std::unique_ptr<webapps::MlInstallOperationTracker> install_tracker =
         webapps::MLInstallabilityPromoter::FromWebContents(web_contents)
             ->RegisterCurrentInstallForWebContents(
@@ -278,6 +270,5 @@ INSTANTIATE_TEST_SUITE_P(
     All,
     CreateShortcutConfirmationViewBrowserTest,
     ::testing::Values(CreateShortcutViewParams::kTabStripDisabled,
-                      CreateShortcutViewParams::kTabStripEnabled,
-                      CreateShortcutViewParams::kCreateShortcutCreatesDiy),
+                      CreateShortcutViewParams::kTabStripEnabled),
     ParamsToString);

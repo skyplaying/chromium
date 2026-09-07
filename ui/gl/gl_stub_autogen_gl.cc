@@ -8,11 +8,6 @@
 //    clang-format -i -style=chromium filename
 // DO NOT EDIT!
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "ui/gl/gl_stub_api_base.h"
 
 namespace gl {
@@ -43,14 +38,14 @@ GLint GLStubApiBase::glGetAttribLocationFn(GLuint program, const char* name) {
   return 0;
 }
 
-GLuint GLStubApiBase::glGetDebugMessageLogFn(GLuint count,
-                                             GLsizei bufSize,
-                                             GLenum* sources,
-                                             GLenum* types,
-                                             GLuint* ids,
-                                             GLenum* severities,
-                                             GLsizei* lengths,
-                                             char* messageLog) {
+GLuint GLStubApiBase::glGetDebugMessageLogKHRFn(GLuint count,
+                                                GLsizei bufSize,
+                                                GLenum* sources,
+                                                GLenum* types,
+                                                GLuint* ids,
+                                                GLenum* severities,
+                                                GLsizei* lengths,
+                                                char* messageLog) {
   return 0;
 }
 

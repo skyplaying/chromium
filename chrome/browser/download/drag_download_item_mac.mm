@@ -9,6 +9,7 @@
 #include "base/apple/foundation_util.h"
 #include "components/download/public/common/download_item.h"
 #include "components/remote_cocoa/common/native_widget_ns_window.mojom.h"
+#include "ui/gfx/geometry/clamp_float_geometry.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/native_ui_types.h"
 #include "ui/views/cocoa/native_widget_mac_ns_window_host.h"
@@ -27,7 +28,7 @@ void DragDownloadItem(const download::DownloadItem* download,
 
   // If this drag was initiated from a views::Widget, that widget may have
   // mouse capture. Drags via View::DoDrag() usually release it. The code below
-  // bypasses that, so release manually. See https://crbug.com/863377.
+  // bypasses that, so release manually. See https://crbug.com/41401418.
   if (widget) {
     widget->ReleaseCapture();
   }
@@ -58,6 +59,7 @@ void DragDownloadItem(const download::DownloadItem* download,
     file_drag_data->image_offset = gfx::Vector2d(8, 8);
   }
 
-  gfx::PointF mouse_point(mouse_location.x, mouse_location.y);
+  gfx::PointF mouse_point(gfx::ClampFloatGeometry(mouse_location.x),
+                          gfx::ClampFloatGeometry(mouse_location.y));
   mojo_window->BeginFileDrag(std::move(file_drag_data), mouse_point);
 }

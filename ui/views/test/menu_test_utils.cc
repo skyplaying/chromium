@@ -36,6 +36,18 @@ bool TestMenuDelegate::ShowContextMenu(MenuItemView* source,
   return !commands_without_context_menus_.contains(id);
 }
 
+bool TestMenuDelegate::IsItemChecked(int id) const {
+  return checked_commands_.contains(id);
+}
+
+void TestMenuDelegate::SetItemChecked(int id, bool checked) {
+  if (checked) {
+    checked_commands_.insert(id);
+  } else {
+    checked_commands_.erase(id);
+  }
+}
+
 void TestMenuDelegate::ExecuteCommand(int id) {
   execute_command_id_ = id;
 }
@@ -70,7 +82,7 @@ bool TestMenuDelegate::ShouldExecuteCommandWithoutClosingMenu(
   return should_execute_command_without_closing_menu_;
 }
 
-bool TestMenuDelegate::ShouldCloseOnDragComplete() {
+bool TestMenuDelegate::ShouldCloseOnDragDropCompleted() {
   return should_close_on_drag_complete_;
 }
 
@@ -80,27 +92,6 @@ void TestMenuDelegate::PerformDrop(
     std::unique_ptr<ui::LayerTreeOwner> drag_image_layer_owner) {
   is_drop_performed_ = true;
   output_drag_op = ui::mojom::DragOperation::kCopy;
-}
-
-// MenuControllerTestApi ------------------------------------------------------
-
-MenuControllerTestApi::MenuControllerTestApi()
-    : controller_(MenuController::GetActiveInstance()->AsWeakPtr()) {}
-
-MenuControllerTestApi::~MenuControllerTestApi() = default;
-
-void MenuControllerTestApi::ClearState() {
-  if (!controller_) {
-    return;
-  }
-  controller_->ClearStateForTest();
-}
-
-void MenuControllerTestApi::SetShowing(bool showing) {
-  if (!controller_) {
-    return;
-  }
-  controller_->showing_ = showing;
 }
 
 void DisableMenuClosureAnimations() {

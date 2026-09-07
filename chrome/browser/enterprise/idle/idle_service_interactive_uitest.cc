@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/enterprise/idle/idle_service.h"
+
 #include <array>
 #include <memory>
 
@@ -14,23 +16,25 @@
 #include "base/test/mock_callback.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_mock_time_task_runner.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/enterprise/idle/dialog_manager.h"
-#include "chrome/browser/enterprise/idle/idle_service.h"
 #include "chrome/browser/policy/profile_policy_connector_builder.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/focus/browser_focus_controller.h"
 #include "chrome/browser/ui/idle_bubble.h"
 #include "chrome/browser/ui/profiles/profile_picker.h"
 #include "chrome/browser/ui/profiles/profile_ui_test_utils.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/user_education/user_education_service_factory.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/test/base/chrome_test_utils.h"
+#include "chrome/test/base/chrome_test_path_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/testing_profile.h"
@@ -54,6 +58,10 @@
 #include "ui/base/idle/idle_time_provider.h"
 #include "ui/base/ozone_buildflags.h"
 #include "ui/base/test/idle_test_utils.h"
+
+#if BUILDFLAG(IS_OZONE)
+#include "ui/ozone/public/ozone_platform.h"
+#endif
 
 using base::TestMockTimeTaskRunner;
 using testing::_;
@@ -234,12 +242,14 @@ class IdleServiceTest : public InProcessBrowserTest {
   }
 
   void ActivateBrowser(BrowserWindowInterface* browser_window_interface) {
-#if BUILDFLAG(IS_LINUX) && BUILDFLAG(SUPPORTS_OZONE_WAYLAND)
+#if BUILDFLAG(IS_OZONE)
     // TODO(nicolaso): BrowserActivationWaiter times out on Wayland. Figure out
     // why.
-#else
+    if (::ui::OzonePlatform::RunningOnWaylandForTest()) {
+      return;
+    }
+#endif
     ActivateBrowserImpl(browser_window_interface);
-#endif  // BUILDFLAG(IS_LINUX) && BUILDFLAG(SUPPORTS_OZONE_WAYLAND)
   }
 
   void ActivateBrowserImpl(BrowserWindowInterface* browser_window_interface) {
@@ -313,11 +323,12 @@ IN_PROC_BROWSER_TEST_F(IdleServiceTest, Basic) {
           base::Bucket(metrics::IdleTimeoutDialogEvent::kDialogExpired, 1)));
   // Check that the success of idle timeout actions is recorded.
   histogram_tester->ExpectUniqueSample(
-      "Enterprise.IdleTimeoutPolicies.Success.ShowProfilePicker", true, 1);
+      "Enterprise.IdleTimeoutPolicies.ActionSuccess.ShowProfilePicker", true,
+      1);
   histogram_tester->ExpectUniqueSample(
-      "Enterprise.IdleTimeoutPolicies.Success.CloseBrowsers", true, 1);
+      "Enterprise.IdleTimeoutPolicies.ActionSuccess.CloseBrowsers", true, 1);
   histogram_tester->ExpectUniqueSample(
-      "Enterprise.IdleTimeoutPolicies.Success.AllActions", true, 1);
+      "Enterprise.IdleTimeoutPolicies.ActionSuccess.AllActions", true, 1);
 }
 
 IN_PROC_BROWSER_TEST_F(IdleServiceTest, DidNotClose) {
@@ -466,16 +477,9 @@ IN_PROC_BROWSER_TEST_F(IdleServiceTest, MAYBE_MultiProfile) {
   EXPECT_TRUE(ProfilePicker::IsOpen());
 }
 
-// TODO(crbug.com/40064501): Flaky on MacOS and Linux
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
-#define MAYBE_MultiProfileWithDifferentThresholds \
-  DISABLED_MultiProfileWithDifferentThresholds
-#else
-#define MAYBE_MultiProfileWithDifferentThresholds \
-  MultiProfileWithDifferentThresholds
-#endif
+// TODO(crbug.com/40064501): Re-enable the test.
 IN_PROC_BROWSER_TEST_F(IdleServiceTest,
-                       MAYBE_MultiProfileWithDifferentThresholds) {
+                       DISABLED_MultiProfileWithDifferentThresholds) {
   // `profile` has the IdleTimeout policy set to 5 minutes.
   EXPECT_CALL(idle_time_provider(), CalculateIdleTime())
       .WillOnce(Return(base::Seconds(299)));
@@ -826,7 +830,8 @@ IN_PROC_BROWSER_TEST_F(IdleServiceTest,
   EXPECT_FALSE(bubble->GetWidget()->IsActive());
 
   BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
-  browser_view->FocusInactivePopupForAccessibility();
+  BrowserFocusController::From(browser_view->browser())
+      ->FocusInactivePopupForAccessibility();
   EXPECT_TRUE(bubble->GetWidget()->IsActive());
 }
 
@@ -879,10 +884,10 @@ IN_PROC_BROWSER_TEST_F(IdleServiceTest,
   EXPECT_FALSE(bubble->GetWidget()->IsActive());
 
   BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
-  browser_view->RotatePaneFocus(true);
+  BrowserFocusController::From(browser_view->browser())->RotatePaneFocus(true);
   // Rotate pane focus is expected to keep the bubble focused until the user
   // deals with it, so a second call should have no effect.
-  browser_view->RotatePaneFocus(true);
+  BrowserFocusController::From(browser_view->browser())->RotatePaneFocus(true);
   EXPECT_TRUE(bubble->GetWidget()->IsActive());
 }
 

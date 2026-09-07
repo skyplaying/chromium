@@ -60,10 +60,6 @@ class AIWritingAssistanceCreateClient
       if (options->monitor()->Invoke(nullptr, monitor_).IsNothing()) {
         return;
       }
-      HeapMojoRemote<mojom::blink::AIManager>& ai_manager_remote =
-          AIInterfaceProxy::GetAIManagerRemote(GetExecutionContext());
-      ai_manager_remote->AddModelDownloadProgressObserver(
-          monitor_->BindRemote());
     }
 
     RemoteCanCreate(BindOnce(&AIWritingAssistanceCreateClient::Create,
@@ -85,7 +81,8 @@ class AIWritingAssistanceCreateClient
   }
 
   // AIMojoCreateClient:
-  void OnResult(mojo::PendingRemote<AIMojoClient> pending_remote) override {
+  void OnResult(mojo::PendingRemote<AIMojoClient> pending_remote,
+                uint64_t context_window) override {
     // Call `Cleanup` when this function returns.
     RunOnDestruction run_on_destruction(BindOnce(
         &AIWritingAssistanceCreateClient::Cleanup, WrapWeakPersistent(this)));
@@ -116,7 +113,7 @@ class AIWritingAssistanceCreateClient
     if (pending_remote) {
       this->GetResolver()->Resolve(MakeGarbageCollected<V8SessionObjectType>(
           this->GetScriptState(), task_runner_, std::move(pending_remote),
-          options_));
+          options_, context_window));
     } else {
       this->GetResolver()->RejectWithDOMException(
           DOMExceptionCode::kInvalidStateError,
@@ -152,12 +149,6 @@ class AIWritingAssistanceCreateClient
             static_cast<double>(quota_error_info->requested));
         break;
       }
-      case AIManagerCreateClientError::kUnsupportedLanguage: {
-        this->GetResolver()->RejectWithDOMException(
-            DOMExceptionCode::kNotSupportedError,
-            kExceptionMessageUnsupportedLanguages);
-        break;
-      }
     }
   }
 
@@ -181,7 +172,7 @@ class AIWritingAssistanceCreateClient
     auto availability = ConvertModelAvailabilityCheckResult(result);
     if (availability == Availability::kUnavailable) {
       this->GetResolver()->RejectWithDOMException(
-          DOMExceptionCode::kNotAllowedError,
+          DOMExceptionCode::kNotSupportedError,
           ConvertModelAvailabilityCheckResultToDebugString(result));
       return;
     }

@@ -7,14 +7,13 @@
 #include "base/files/file_path.h"
 #include "build/build_config.h"
 #include "chrome/browser/sessions/tab_restore_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/buildflags.h"
-#include "chrome/test/base/chrome_test_utils.h"
+#include "chrome/test/base/chrome_test_path_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/sessions/core/tab_restore_service.h"
@@ -24,6 +23,7 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
+#include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(ENABLE_SESSION_SERVICE)
@@ -48,9 +48,10 @@ class NavigationEntryRemoverTest : public InProcessBrowserTest {
     about_blank_ = GURL("about:blank");
   }
 
-  Profile* profile() { return browser()->profile(); }
+  Profile* profile() { return browser()->GetProfile(); }
 
-  void AddNavigations(Browser* browser, const std::vector<GURL>& urls) {
+  void AddNavigations(BrowserWindowInterface* browser,
+                      const std::vector<GURL>& urls) {
     for (const GURL& url : urls) {
       ui_test_utils::NavigateToURLWithDisposition(
           browser, url, WindowOpenDisposition::CURRENT_TAB,
@@ -58,7 +59,7 @@ class NavigationEntryRemoverTest : public InProcessBrowserTest {
     }
   }
 
-  void AddTab(Browser* browser, const std::vector<GURL>& urls) {
+  void AddTab(BrowserWindowInterface* browser, const std::vector<GURL>& urls) {
     ui_test_utils::NavigateToURLWithDisposition(
         browser, urls[0], WindowOpenDisposition::NEW_FOREGROUND_TAB,
         ui_test_utils::BROWSER_TEST_WAIT_FOR_TAB |
@@ -66,12 +67,13 @@ class NavigationEntryRemoverTest : public InProcessBrowserTest {
     AddNavigations(browser, {urls.begin() + 1, urls.end()});
   }
 
-  Browser* AddBrowser(Browser* browser, const std::vector<GURL>& urls) {
+  BrowserWindowInterface* AddBrowser(BrowserWindowInterface* browser,
+                                     const std::vector<GURL>& urls) {
     ui_test_utils::BrowserCreatedObserver browser_created_observer;
     ui_test_utils::NavigateToURLWithDisposition(
         browser, urls[0], WindowOpenDisposition::NEW_WINDOW,
         ui_test_utils::BROWSER_TEST_WAIT_FOR_BROWSER);
-    Browser* new_browser = browser_created_observer.Wait();
+    BrowserWindowInterface* new_browser = browser_created_observer.Wait();
 #if BUILDFLAG(IS_MAC)
     content::HandleMissingKeyWindow();
 #endif
@@ -157,14 +159,14 @@ IN_PROC_BROWSER_TEST_F(NavigationEntryRemoverTest, AddTab) {
 }
 
 IN_PROC_BROWSER_TEST_F(NavigationEntryRemoverTest, AddWindow) {
-  EXPECT_EQ(1U, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1U, GlobalBrowserCollection::GetInstance()->GetSize());
 
   AddBrowser(browser(), {url_a_, url_b_});
-  EXPECT_EQ(2U, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(2U, GlobalBrowserCollection::GetInstance()->GetSize());
   ExpectEntries({url_a_, url_b_, about_blank_}, GetEntries());
 
   AddBrowser(browser(), {url_c_, url_d_});
-  EXPECT_EQ(3U, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(3U, GlobalBrowserCollection::GetInstance()->GetSize());
   ExpectEntries({url_c_, url_d_, url_a_, url_b_, about_blank_}, GetEntries());
 }
 
@@ -196,7 +198,7 @@ IN_PROC_BROWSER_TEST_F(NavigationEntryRemoverTest, DeleteAfterNavigation) {
   browsing_data::RemoveNavigationEntries(
       profile(),
       DeletionInfo::ForUrls({history::URLResult(url_b_, base::Time())}, {}));
-  // The commited entry can't be removed.
+  // The committed entry can't be removed.
   ExpectEntries({about_blank_, url_a_, url_b_}, GetEntries());
 
   AddNavigations(browser(), {url_c_});
@@ -340,7 +342,7 @@ IN_PROC_BROWSER_TEST_F(NavigationEntryRemoverTest, RecentTabDeletion) {
 IN_PROC_BROWSER_TEST_F(NavigationEntryRemoverTest,
                        MAYBE_RecentTabWindowDeletion) {
   // Create a new browser with three tabs and close it.
-  Browser* new_browser = AddBrowser(browser(), {url_a_});
+  BrowserWindowInterface* new_browser = AddBrowser(browser(), {url_a_});
   AddTab(new_browser, {url_b_, url_c_});
   AddTab(new_browser, {url_d_});
   chrome::CloseWindow(new_browser);
@@ -392,7 +394,7 @@ IN_PROC_BROWSER_TEST_F(NavigationEntryRemoverTest,
 
 // Checks that we do not attempt to delete SessionService data when processing a
 // foreign history delete.
-// Test for crbug.com/1424800.
+// Test for crbug.com/40063610.
 IN_PROC_BROWSER_TEST_F(NavigationEntryRemoverTest,
                        ForeignHistoryDeleteDoesNotDeleteSessionServiceData) {
   AddNavigations(browser(), {url_a_, url_b_, url_c_, url_d_});

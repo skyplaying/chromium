@@ -4,12 +4,13 @@
 package org.chromium.chrome.browser.app.tabmodel;
 
 import static org.chromium.build.NullUtil.assumeNonNull;
-import static org.chromium.chrome.browser.app.tabmodel.ShadowTabStoreValidator.HEADLESS_TAG;
 import static org.chromium.chrome.browser.app.tabmodel.TabPersistentStoreFactory.buildAuthoritativeStore;
 import static org.chromium.chrome.browser.app.tabmodel.TabPersistentStoreFactory.buildShadowStore;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.lifetime.Destroyable;
+import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SupplierUtils;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.app.tabwindow.TabWindowManagerSingleton;
@@ -21,13 +22,14 @@ import org.chromium.chrome.browser.tab_ui.TabContentManager;
 import org.chromium.chrome.browser.tabmodel.AccumulatingTabCreator;
 import org.chromium.chrome.browser.tabmodel.HeadlessTabModelSelectorImpl;
 import org.chromium.chrome.browser.tabmodel.PersistentStoreMigrationManager;
+import org.chromium.chrome.browser.tabmodel.RecordingTabCreatorManager;
 import org.chromium.chrome.browser.tabmodel.TabCreatorManager;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.tabmodel.TabModelSelectorImpl;
+import org.chromium.chrome.browser.tabmodel.TabOrchestratorType;
 import org.chromium.chrome.browser.tabmodel.TabPersistencePolicy;
 import org.chromium.chrome.browser.tabmodel.TabPersistentStore;
 import org.chromium.chrome.browser.tabmodel.TabPersistentStore.TabPersistentStoreObserver;
-import org.chromium.chrome.browser.tabmodel.TabPersistentStoreImpl;
 import org.chromium.chrome.browser.tabmodel.TabbedModeTabPersistencePolicy;
 import org.chromium.chrome.browser.tabwindow.TabWindowManager;
 import org.chromium.chrome.browser.tabwindow.WindowId;
@@ -58,10 +60,16 @@ public class HeadlessTabModelOrchestrator implements Destroyable {
     public HeadlessTabModelOrchestrator(@WindowId int windowId, Profile profile) {
         TabPersistencePolicy policy =
                 new TabbedModeTabPersistencePolicy(
-                        windowId, /* mergeTabsOnStartup= */ false, /* tabMergingEnabled= */ false);
-        HeadlessTabCreator tabCreator = new HeadlessTabCreator(profile);
-        HeadlessTabCreator incogTabCreator = new HeadlessTabCreator(profile);
-        TabCreatorManager tabCreatorManager = (incog) -> incog ? tabCreator : incogTabCreator;
+                        windowId,
+                        /* mergeTabsOnStartup= */ false,
+                        /* tabMergingEnabled= */ false,
+                        ObservableSuppliers.createNonNull(false));
+        HeadlessTabCreator tabCreator = new HeadlessTabCreator(profile, /* isIncognito= */ false);
+        HeadlessTabCreator incogTabCreator =
+                new HeadlessTabCreator(profile, /* isIncognito= */ true);
+        TabCreatorManager tabCreatorManager = (incog) -> incog ? incogTabCreator : tabCreator;
+        RecordingTabCreatorManager recordingTabCreatorManager =
+                new RecordingTabCreatorManager(tabCreatorManager);
 
         mTabModelSelector = new HeadlessTabModelSelectorImpl(profile, tabCreatorManager);
         TabWindowManager tabWindowManager = TabWindowManagerSingleton.getInstance();
@@ -71,37 +79,34 @@ public class HeadlessTabModelOrchestrator implements Destroyable {
                 new PersistentStoreMigrationManagerImpl(windowTag);
         mTabPersistentStore =
                 buildAuthoritativeStore(
-                        TabPersistentStoreImpl.CLIENT_TAG_HEADLESS,
+                        TabOrchestratorType.HEADLESS,
                         migrationManager,
                         policy,
                         mTabModelSelector,
-                        tabCreatorManager,
+                        recordingTabCreatorManager,
                         tabWindowManager,
                         windowTag,
                         sCipherInstance,
-                        /* recordLegacyTabCountMetrics= */ true);
+                        /* recordLegacyTabCountMetrics= */ true,
+                        /* isFromRecreating= */ false);
 
         AccumulatingTabCreator regularShadowTabCreator = new AccumulatingTabCreator();
         AccumulatingTabCreator incognitoShadowTabCreator = new AccumulatingTabCreator();
 
-        // Headless specifically chooses not to restore incognito tabs by withholding passing a
-        // cipher factory to the store.
-        // 1. Incognito tabs may still be restored on subsequent restarts if a CipherFactory is
-        //    provided for the corresponding window tag when it is next launched.
-        // 2. By not restoring them for headless there may be missing data in headless compared to
-        //    regular operation mode.
-        // 3. Headless will not delete or modify the incognito tabs.
         mShadowTabPersistentStore =
                 buildShadowStore(
                         migrationManager,
                         regularShadowTabCreator,
                         incognitoShadowTabCreator,
                         mTabModelSelector,
+                        recordingTabCreatorManager,
                         policy,
                         mTabPersistentStore,
                         windowTag,
-                        /* cipherFactory= */ null,
-                        HEADLESS_TAG);
+                        sCipherInstance,
+                        TabOrchestratorType.HEADLESS,
+                        /* isNonOtrOnly= */ true,
+                        /* isFromRecreating= */ false);
 
         mTabModelSelector.selectModel(false);
         mTabPersistentStore.addObserver(
@@ -125,13 +130,18 @@ public class HeadlessTabModelOrchestrator implements Destroyable {
         mTabPersistentStore.onNativeLibraryReady();
         if (mShadowTabPersistentStore != null) mShadowTabPersistentStore.onNativeLibraryReady();
 
-        mTabPersistentStore.loadState(/* ignoreIncognitoFiles= */ false);
+        // Ignore incognito files since we don't support incognito.
+        // 1. We don't have a valid CipherFactory to decrypt from.
+        // 2. The purpose of headless is primarily for history/sync features which don't work on
+        // incognito.
+        mTabPersistentStore.loadState(
+                /* ignoreIncognitoFiles= */ true, /* ignoreRegularFiles= */ false);
         mTabPersistentStore.restoreTabs(/* setActiveTab= */ true);
 
         TabGroupSyncService tabGroupSyncService = TabGroupSyncServiceFactory.getForProfile(profile);
         assumeNonNull(tabGroupSyncService);
         PrefService prefs = UserPrefs.get(profile);
-        Supplier<Boolean> isActive = () -> false;
+        Supplier<Boolean> isActive = SupplierUtils.alwaysFalse();
         mTabGroupSyncController =
                 new TabGroupSyncControllerImpl(
                         mTabModelSelector, tabGroupSyncService, prefs, isActive);

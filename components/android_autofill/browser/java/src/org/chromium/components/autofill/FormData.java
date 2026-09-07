@@ -76,9 +76,7 @@ public class FormData {
                 child.setAutofillHints(field.mAutocompleteAttr.split(" +"));
             }
             child.setHint(field.mPlaceholder);
-            if (AndroidAutofillFeatures.ANDROID_AUTOFILL_FORWARD_IFRAME_ORIGIN.isEnabled()) {
-                child.setWebDomain(field.mOrigin);
-            }
+            child.setWebDomain(field.mOrigin);
 
             RectF bounds = field.getBoundsInContainerViewCoordinates();
             // Field has no scroll.
@@ -126,8 +124,6 @@ public class FormData {
                     }
                     break;
                 case FormFieldData.ControlType.TOGGLE:
-                    child.setAutofillType(View.AUTOFILL_TYPE_TOGGLE);
-                    child.setAutofillValue(AutofillValue.forToggle(field.isChecked()));
                     break;
                 case FormFieldData.ControlType.TEXT:
                 case FormFieldData.ControlType.DATALIST:

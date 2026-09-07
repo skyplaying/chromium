@@ -4,46 +4,69 @@
 
 #include "components/autofill/core/browser/foundations/autofill_client.h"
 
+#include <stdint.h>
+
+#include <map>
+#include <memory>
 #include <optional>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "base/containers/flat_set.h"
-#include "base/functional/callback.h"
-#include "base/memory/raw_ptr.h"
-#include "base/no_destructor.h"
+#include "base/containers/span.h"
+#include "base/i18n/rtl.h"
 #include "base/notimplemented.h"
 #include "build/build_config.h"
+#include "components/autofill/core/browser/country_type.h"
+#include "components/autofill/core/browser/data_model/autofill_ai/entity_type.h"
+#include "components/autofill/core/browser/data_model/autofill_ai/entity_type_names.h"
+#include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/filling/filling_product.h"
 #include "components/autofill/core/browser/integrators/autofill_ai/autofill_ai_manager.h"
 #include "components/autofill/core/browser/integrators/compose/autofill_compose_delegate.h"
 #include "components/autofill/core/browser/integrators/identity_credential/identity_credential_delegate.h"
+#include "components/autofill/core/browser/integrators/password_form_classification.h"
 #include "components/autofill/core/browser/integrators/password_manager/password_manager_delegate.h"
-#include "components/autofill/core/browser/integrators/plus_addresses/autofill_plus_address_delegate.h"
+#include "components/autofill/core/browser/integrators/touch_to_fill/touch_to_fill_autofill_delegate.h"
 #include "components/autofill/core/browser/payments/credit_card_access_manager.h"
 #include "components/autofill/core/browser/studies/autofill_ablation_study.h"
 #include "components/autofill/core/browser/studies/autofill_experiments.h"
 #include "components/autofill/core/browser/suggestions/suggestion.h"
 #include "components/autofill/core/browser/ui/popup_open_enums.h"
+#include "components/autofill/core/common/aliases.h"
+#include "components/autofill/core/common/unique_ids.h"
 #include "components/optimization_guide/core/model_execution/remote_model_executor.h"
-#include "components/optimization_guide/proto/features/common_quality_data.pb.h"
-#include "components/version_info/channel.h"
+#include "components/personal_context/core/personal_context_types.h"
+#include "components/profile_metrics/browser_profile_type.h"
+#include "net/base/schemeful_site.h"
+#include "ui/gfx/geometry/rect_f.h"
 
 namespace autofill {
 
 AutofillClient::PopupOpenArgs::PopupOpenArgs() = default;
 AutofillClient::PopupOpenArgs::PopupOpenArgs(
+    LocalFrameToken frame_token,
     const gfx::RectF& element_bounds,
     base::i18n::TextDirection text_direction,
     std::vector<Suggestion> suggestions,
     AutofillSuggestionTriggerSource trigger_source,
     int32_t form_control_ax_id,
-    PopupAnchorType anchor_type)
-    : element_bounds(element_bounds),
+    PopupAnchorType anchor_type,
+    bool show_tabbed_popup,
+    bool prefer_prev_arrow_side_on_suggestions_update,
+    std::u16string search_bar_initial_value)
+    : frame_token(std::move(frame_token)),
+      element_bounds(element_bounds),
       text_direction(text_direction),
       suggestions(std::move(suggestions)),
       trigger_source(trigger_source),
       form_control_ax_id(form_control_ax_id),
-      anchor_type(anchor_type) {}
+      anchor_type(anchor_type),
+      show_tabbed_popup(show_tabbed_popup),
+      prefer_prev_arrow_side_on_suggestions_update(
+          prefer_prev_arrow_side_on_suggestions_update),
+      search_bar_initial_value(std::move(search_bar_initial_value)) {}
 AutofillClient::PopupOpenArgs::PopupOpenArgs(
     const AutofillClient::PopupOpenArgs&) = default;
 AutofillClient::PopupOpenArgs::PopupOpenArgs(AutofillClient::PopupOpenArgs&&) =
@@ -102,17 +125,50 @@ AutofillClient::GetPasswordManagerFieldClassificationModelHandler() {
   return nullptr;
 }
 
-AutofillComposeDelegate* AutofillClient::GetComposeDelegate() {
+personal_context::PersonalContextFirstRunService*
+AutofillClient::GetPersonalContextFirstRunService() {
   return nullptr;
 }
 
-AutofillPlusAddressDelegate* AutofillClient::GetPlusAddressDelegate() {
+AutofillComposeDelegate* AutofillClient::GetComposeDelegate() {
+  return nullptr;
+}
+const AutofillComposeDelegate* AutofillClient::GetComposeDelegate() const {
+  return const_cast<AutofillClient*>(this)->GetComposeDelegate();
+}
+
+AtMemoryQueryService* AutofillClient::GetAtMemoryQueryService() {
+  return nullptr;
+}
+
+AtMemoryManager* AutofillClient::GetAtMemoryManager() {
+  return nullptr;
+}
+
+const AtMemoryManager* AutofillClient::GetAtMemoryManager() const {
+  return const_cast<AutofillClient*>(this)->GetAtMemoryManager();
+}
+
+personal_context::PersonalContextEligibilityState
+AutofillClient::GetPersonalContextEligibilityState() const {
+  return personal_context::PersonalContextEligibilityState::
+      kDisabledNotEligible;
+}
+
+personal_context::PersonalContextEligibilityService*
+AutofillClient::GetPersonalContextEligibilityService() const {
   return nullptr;
 }
 
 PasswordManagerDelegate* AutofillClient::GetPasswordManagerDelegate(
     const FieldGlobalId& field_id) {
   return nullptr;
+}
+
+const PasswordManagerDelegate* AutofillClient::GetPasswordManagerDelegate(
+    const FieldGlobalId& field_id) const {
+  return const_cast<AutofillClient*>(this)->GetPasswordManagerDelegate(
+      field_id);
 }
 
 void AutofillClient::GetAiPageContent(GetAiPageContentCallback callback) {
@@ -123,11 +179,35 @@ AutofillAiManager* AutofillClient::GetAutofillAiManager() {
   return nullptr;
 }
 
+AutofillAiPersonalContextAccessManager*
+AutofillClient::GetAutofillAiPersonalContextAccessManager() {
+  return nullptr;
+}
+
+const AutofillAiPersonalContextAccessManager*
+AutofillClient::GetAutofillAiPersonalContextAccessManager() const {
+  return const_cast<AutofillClient*>(this)
+      ->GetAutofillAiPersonalContextAccessManager();
+}
+
+EntitySuppressionManager* AutofillClient::GetEntitySuppressionManager() {
+  return nullptr;
+}
+
+const EntitySuppressionManager* AutofillClient::GetEntitySuppressionManager()
+    const {
+  return const_cast<AutofillClient*>(this)->GetEntitySuppressionManager();
+}
+
 AutofillAiModelCache* AutofillClient::GetAutofillAiModelCache() {
   return nullptr;
 }
 
 AutofillAiModelExecutor* AutofillClient::GetAutofillAiModelExecutor() {
+  return nullptr;
+}
+
+consent_auditor::ConsentAuditor* AutofillClient::GetConsentAuditor() {
   return nullptr;
 }
 
@@ -170,6 +250,11 @@ profile_metrics::BrowserProfileType AutofillClient::GetProfileType() const {
   return profile_metrics::BrowserProfileType::kRegular;
 }
 
+const subscription_eligibility::SubscriptionEligibilityService*
+AutofillClient::GetSubscriptionEligibilityService() const {
+  return nullptr;
+}
+
 LogManager* AutofillClient::GetCurrentLogManager() {
   return nullptr;
 }
@@ -183,9 +268,24 @@ const AutofillAblationStudy& AutofillClient::GetAblationStudy() const {
 }
 
 #if BUILDFLAG(IS_ANDROID)
+bool AutofillClient::ShowAmbientAutoFillNotice(
+    base::WeakPtr<TouchToFillAutofillDelegate> delegate) {
+  return false;
+}
+
+void AutofillClient::HideAmbientAutoFillNotice() {}
+
 AutofillSnackbarControllerImpl*
 AutofillClient::GetAutofillSnackbarController() {
   return nullptr;
+}
+
+void AutofillClient::ShowAutofillAiLoadingDialog() {
+  NOTIMPLEMENTED();
+}
+
+void AutofillClient::DismissAutofillAiLoadingDialog() {
+  NOTIMPLEMENTED();
 }
 #endif
 
@@ -207,30 +307,35 @@ void AutofillClient::TriggerAutofillAiFillingJourneySurvey(
   NOTIMPLEMENTED();
 }
 
-void AutofillClient::TriggerAutofillAiSavePromptSurvey(
-    bool prompt_accepted,
-    EntityType entity_type,
-    const base::flat_set<EntityTypeName>& saved_entities) {
-  NOTIMPLEMENTED();
-}
 
 bool AutofillClient::IsTabInActorMode() const {
   return false;
 }
 
+ActorAutofillManager* AutofillClient::GetActorAutofillManager() {
+  return nullptr;
+}
+
+int64_t AutofillClient::GetNavigationId() const {
+  return 0;
+}
+
 std::unique_ptr<device_reauth::DeviceAuthenticator>
-AutofillClient::GetDeviceAuthenticator(std::string histogram) {
+AutofillClient::GetDeviceAuthenticator(std::string histogram) const {
   return nullptr;
 }
 
 std::unique_ptr<device_reauth::DeviceAuthenticator>
-AutofillClient::GetDeviceAuthenticator() {
+AutofillClient::GetDeviceAuthenticator() const {
   return GetDeviceAuthenticator("");
 }
 
-void AutofillClient::ShowPlusAddressEmailOverrideNotification(
-    const std::string& original_email,
-    EmailOverrideUndoCallback email_override_undo_callback) {}
+bool AutofillClient::SupportsDeviceReauth() const {
+  std::unique_ptr<device_reauth::DeviceAuthenticator> authenticator =
+      GetDeviceAuthenticator();
+  return authenticator &&
+         authenticator->CanAuthenticateWithBiometricOrScreenLock();
+}
 
 bool AutofillClient::ShowAutofillFieldIphForFeature(
     const FormFieldData&,
@@ -290,9 +395,6 @@ PasswordFormClassification AutofillClient::ClassifyAsPasswordForm(
   return {};
 }
 
-void AutofillClient::TriggerPlusAddressUserPerceptionSurvey(
-    plus_addresses::hats::SurveyType survey_type) {}
-
 const syncer::SyncService* AutofillClient::GetSyncService() const {
   return const_cast<const syncer::SyncService*>(
       const_cast<AutofillClient*>(this)->GetSyncService());
@@ -317,15 +419,48 @@ void AutofillClient::ShowAutofillAiLocalSaveNotification() {
   NOTIMPLEMENTED();
 }
 
-void AutofillClient::ShowAutofillAiFailureNotification(std::u16string message) {
+void AutofillClient::ShowAutofillAiSaveToWalletFailureNotification() {
   NOTIMPLEMENTED();
 }
 
-void AutofillClient::ShowEmailVerifiedToast() {
+void AutofillClient::ShowAutofillAiFetchEntityFailureNotification() {
   NOTIMPLEMENTED();
+}
+
+void AutofillClient::ShowAtMemoryFetchFailureNotification(
+    std::optional<std::u16string> message_override) {
+  NOTIMPLEMENTED();
+}
+
+void AutofillClient::ShowAutofillAiPreFetchFailureNotification() {
+  NOTIMPLEMENTED();
+}
+
+void AutofillClient::ShowAutofillAiPrivateInferenceNotice() {
+  NOTIMPLEMENTED();
+}
+
+void AutofillClient::ShowEmailVerifiedToast(const GURL& issuer) {
+  NOTIMPLEMENTED();
+}
+
+void AutofillClient::ShowEmailVerificationPopup(
+    const gfx::RectF& element_bounds,
+    const net::SchemefulSite& issuer_site,
+    const std::u16string& email,
+    base::OnceCallback<void(EmailVerificationPermissionUiStatus)> callback) {
+  std::move(callback).Run(EmailVerificationPermissionUiStatus::kOther);
 }
 
 OtpFieldDetector* AutofillClient::GetOtpFieldDetector() {
+  return nullptr;
+}
+
+OtpMetricsTracker* AutofillClient::GetOtpMetricsTracker() {
+  return nullptr;
+}
+
+FormPredictionsTracker* AutofillClient::GetFormPredictionsTracker() {
   return nullptr;
 }
 
@@ -349,6 +484,21 @@ AutofillManager* AutofillClient::GetAutofillManagerForPrimaryMainFrame() {
 
 OtpPhishGuardDelegate* AutofillClient::GetOtpPhishGuardDelegate() {
   return nullptr;
+}
+
+void AutofillClient::OpenGeminiInSidebar(const std::u16string& prompt) {
+  // TODO(crbug.com/493824736): Implement opening Gemini in the sidebar.
+  NOTIMPLEMENTED();
+}
+
+bool AutofillClient::IsGlicEnabled() const {
+  return false;
+}
+
+bool AutofillClient::IsAutofillTypeBlockedByPolicy(
+    const GURL& url,
+    AutofillPolicyDataCategory category) const {
+  return false;
 }
 
 }  // namespace autofill

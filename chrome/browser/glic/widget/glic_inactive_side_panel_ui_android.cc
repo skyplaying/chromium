@@ -4,9 +4,11 @@
 
 #include "chrome/browser/glic/widget/glic_inactive_side_panel_ui_android.h"
 
+#include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "chrome/browser/glic/host/glic.mojom.h"
 #include "chrome/browser/glic/public/glic_side_panel_coordinator.h"
+#include "chrome/browser/glic/widget/conversions.h"
 #include "components/tabs/public/tab_interface.h"
 
 namespace glic {
@@ -26,8 +28,6 @@ GlicInactiveSidePanelUi::CreateForBackgroundTab(
     GlicUiEmbedder::Delegate& delegate) {
   auto inactive_side_panel =
       base::WrapUnique(new GlicInactiveSidePanelUi(tab, delegate));
-  // Mark the side panel for showing next time the tab becomes active.
-  inactive_side_panel->Show(ShowOptions::ForSidePanel(*tab));
   return inactive_side_panel;
 }
 
@@ -37,9 +37,10 @@ GlicInactiveSidePanelUi::GlicInactiveSidePanelUi(
     : tab_(tab), delegate_(delegate) {
   auto* glic_side_panel_coordinator = GetGlicSidePanelCoordinator();
   if (glic_side_panel_coordinator) {
-    // NEEDS_ANDROID_IMPL: This needs an equivalent of the inactive view
-    // controller that shows a screenshot of the web client with a scrim.
     glic_side_panel_coordinator->SetWebContents(nullptr);
+    state_subscription_ = glic_side_panel_coordinator->AddStateCallback(
+        base::BindRepeating(&GlicInactiveSidePanelUi::OnSidePanelStateChanged,
+                            base::Unretained(this)));
   }
 }
 
@@ -54,21 +55,16 @@ void GlicInactiveSidePanelUi::Show(const ShowOptions& options) {
   if (!glic_side_panel_coordinator) {
     return;
   }
-  bool suppress_animations = false;
-  if (const auto* side_panel_options =
-          std::get_if<SidePanelShowOptions>(&options.embedder_options)) {
-    suppress_animations = side_panel_options->suppress_opening_animation;
-  }
-  glic_side_panel_coordinator->Show(suppress_animations);
+  glic_side_panel_coordinator->Show(ConvertToCoordinatorShowOptions(
+      options, glic_side_panel_coordinator->SupportsPeek()));
 }
 
 bool GlicInactiveSidePanelUi::IsShowing() const {
-  auto* glic_side_panel_coordinator = GetGlicSidePanelCoordinator();
-  if (!glic_side_panel_coordinator) {
-    return false;
-  }
-  return glic_side_panel_coordinator->state() !=
-         GlicSidePanelCoordinator::State::kClosed;
+  return GlicSidePanelCoordinator::IsShowing(tab_.get());
+}
+
+bool GlicInactiveSidePanelUi::IsShowingOrBackgrounded() const {
+  return GlicSidePanelCoordinator::IsShowingOrBackgrounded(tab_.get());
 }
 
 void GlicInactiveSidePanelUi::Close(const CloseOptions& options) {
@@ -90,9 +86,19 @@ GlicSidePanelCoordinator* GlicInactiveSidePanelUi::GetGlicSidePanelCoordinator()
   return GlicSidePanelCoordinator::GetForTab(tab_.get());
 }
 
+void GlicInactiveSidePanelUi::OnSidePanelStateChanged(
+    GlicSidePanelCoordinator::State state) {
+  if (state == GlicSidePanelCoordinator::State::kShown && tab_) {
+    delegate_->Show(ShowOptions::ForSidePanel(*tab_));
+  } else if (state == GlicSidePanelCoordinator::State::kClosed && tab_) {
+    delegate_->DidCloseFor(SidePanelEmbedderKey{*tab_},
+                           EmbedderCloseReason::kExplicitlyClosed);
+  }
+}
+
 std::unique_ptr<GlicUiEmbedder>
 GlicInactiveSidePanelUi::CreateInactiveEmbedder() const {
-  return nullptr;
+  NOTREACHED() << "The embedder is already inactive.";
 }
 
 mojom::PanelState GlicInactiveSidePanelUi::GetPanelState() const {
@@ -103,6 +109,23 @@ mojom::PanelState GlicInactiveSidePanelUi::GetPanelState() const {
 
 gfx::Size GlicInactiveSidePanelUi::GetPanelSize() {
   return gfx::Size();
+}
+
+void GlicInactiveSidePanelUi::InitializeAfterRegistration() {
+  // When an active embedder is deactivated while its tab is still visible,
+  // we transition the bottom sheet to the peek state rather than closing it.
+  // This is called after the inactive embedder has been fully registered in the
+  // instance, ensuring the state is completely consistent to avoid synchronous
+  // reentrancy issues.
+  auto* glic_side_panel_coordinator = GetGlicSidePanelCoordinator();
+  if (tab_ && tab_->IsActivated() && glic_side_panel_coordinator &&
+      glic_side_panel_coordinator->SupportsPeek() &&
+      glic_side_panel_coordinator->state() ==
+          GlicSidePanelCoordinator::State::kShown) {
+    SidePanelShowOptions side_panel_options{*tab_};
+    side_panel_options.prefer_peek = true;
+    Show(ShowOptions{side_panel_options});
+  }
 }
 
 std::string GlicInactiveSidePanelUi::DescribeForTesting() {

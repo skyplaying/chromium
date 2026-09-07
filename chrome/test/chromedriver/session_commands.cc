@@ -88,6 +88,16 @@ Status EvaluateScriptAndIgnoreResult(Session* session,
   return web_view->EvaluateScript(frame_id, expression, await_promise, &result);
 }
 
+void SetSerializedTimeout(base::DictValue& timeouts,
+                          const std::string& key,
+                          base::TimeDelta timeout) {
+  if (timeout == base::TimeDelta::Max()) {
+    timeouts.Set(key, base::Value());
+  } else {
+    SetSafeInt(timeouts, key, timeout.InMilliseconds());
+  }
+}
+
 }  // namespace
 
 InitSessionParams::InitSessionParams(
@@ -193,16 +203,11 @@ base::DictValue CreateCapabilities(Session* session,
   } else {
     caps.Set("setWindowRect", true);
   }
-  if (session->script_timeout == base::TimeDelta::Max()) {
-    caps.SetByDottedPath("timeouts.script", base::Value());
-  } else {
-    SetSafeInt(caps, "timeouts.script",
-               session->script_timeout.InMilliseconds());
-  }
-  SetSafeInt(caps, "timeouts.pageLoad",
-             session->page_load_timeout.InMilliseconds());
-  SetSafeInt(caps, "timeouts.implicit",
-             session->implicit_wait.InMilliseconds());
+  base::DictValue timeouts;
+  SetSerializedTimeout(timeouts, "script", session->script_timeout);
+  SetSerializedTimeout(timeouts, "pageLoad", session->page_load_timeout);
+  SetSerializedTimeout(timeouts, "implicit", session->implicit_wait);
+  caps.Set("timeouts", std::move(timeouts));
   caps.Set("strictFileInteractability", session->strict_file_interactability);
   caps.Set(session->w3c_compliant ? "unhandledPromptBehavior"
                                   : "unexpectedAlertBehaviour",
@@ -215,6 +220,7 @@ base::DictValue CreateCapabilities(Session* session,
   caps.Set("webauthn:extension:minPinLength", !capabilities.IsAndroid());
   caps.Set("webauthn:extension:credBlob", !capabilities.IsAndroid());
   caps.Set("webauthn:extension:prf", !capabilities.IsAndroid());
+  caps.Set("webauthn:extension:cmtgKey", !capabilities.IsAndroid());
 
   // See https://github.com/fedidcg/FedCM/pull/478
   caps.Set("fedcm:accounts", true);
@@ -948,6 +954,7 @@ Status ExecuteSwitchToWindow(Session* session,
 
   // Find active web page view for each tab.
   std::unordered_map<std::string, WebView*> tab_to_active_webview;
+  std::vector<std::unique_ptr<WebViewHolder>> web_view_locks;
   for (auto& tab_id : tab_view_ids) {
     WebView* active_page = nullptr;
     status = session->chrome->GetActivePageByWebViewId(tab_id, &active_page,
@@ -958,6 +965,7 @@ Status ExecuteSwitchToWindow(Session* session,
       }
       return status;
     }
+    web_view_locks.push_back(active_page->GetHolder());
     tab_to_active_webview[tab_id] = active_page;
   }
 
@@ -1067,8 +1075,6 @@ Status ExecuteSetTimeoutsW3C(Session* session,
     base::TimeDelta timeout;
     const std::string& type = setting.first;
     if (setting.second.is_none()) {
-      if (type != "script")
-        return Status(kInvalidArgument, "timeout can not be null");
       timeout = base::TimeDelta::Max();
     } else {
       if (!GetOptionalSafeInt(params, setting.first, &timeout_ms_int64) ||
@@ -1103,13 +1109,9 @@ Status ExecuteGetTimeouts(Session* session,
                           const base::DictValue& params,
                           std::unique_ptr<base::Value>* value) {
   base::DictValue timeouts;
-  if (session->script_timeout == base::TimeDelta::Max())
-    timeouts.Set("script", base::Value());
-  else
-    SetSafeInt(timeouts, "script", session->script_timeout.InMilliseconds());
-
-  SetSafeInt(timeouts, "pageLoad", session->page_load_timeout.InMilliseconds());
-  SetSafeInt(timeouts, "implicit", session->implicit_wait.InMilliseconds());
+  SetSerializedTimeout(timeouts, "script", session->script_timeout);
+  SetSerializedTimeout(timeouts, "pageLoad", session->page_load_timeout);
+  SetSerializedTimeout(timeouts, "implicit", session->implicit_wait);
 
   *value = base::Value::ToUniquePtrValue(base::Value(std::move(timeouts)));
   return Status(kOk);
@@ -1509,6 +1511,7 @@ Status ExecuteSetNetworkConnection(Session* session,
       }
       return status;
     }
+    std::unique_ptr<WebViewHolder> scoped_web_view_lock = web_view->GetHolder();
     web_view->OverrideNetworkConditions(
         *session->overridden_network_conditions);
   }
@@ -1763,24 +1766,15 @@ Status ExecuteUpdateVirtualPressureSource(Session* session,
     return Status(kInvalidArgument, "'type' must be a string");
   }
 
-  const std::string* state = params.FindString("sample");
-  if (!state) {
+  const std::string* sample = params.FindString("sample");
+  if (!sample) {
     return Status(kInvalidArgument, "'sample' must be a string");
   }
 
   base::DictValue body;
   body.Set("source", *type);
-  body.Set("state", *state);
-
-  std::optional<double> maybe_estimate =
-      params.FindDouble("own_contribution_estimate");
-  if (!maybe_estimate.has_value()) {
-    body.Set("ownContributionEstimate", -1.0);
-  } else {
-    body.Set("ownContributionEstimate", maybe_estimate.value());
-  }
-
-  return web_view->SendCommand("Emulation.setPressureDataOverride", body);
+  body.Set("state", *sample);
+  return web_view->SendCommand("Emulation.setPressureStateOverride", body);
 }
 
 Status ExecuteRemoveVirtualPressureSource(Session* session,

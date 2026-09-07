@@ -9,6 +9,7 @@
 #include "content/browser/browser_context_impl.h"
 #include "content/browser/preloading/prefetch/no_vary_search_helper.h"
 #include "content/browser/preloading/prefetch/prefetch_container.h"
+#include "content/browser/preloading/prefetch/prefetch_features.h"
 #include "content/browser/preloading/prefetch/prefetch_handle_impl.h"
 #include "content/browser/preloading/prefetch/prefetch_params.h"
 #include "content/browser/preloading/prefetch/prefetch_request.h"
@@ -22,7 +23,6 @@
 #include "content/browser/preloading/speculation_rules/speculation_rules_util.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/public/browser/content_browser_client.h"
-#include "content/public/browser/prefetch_metrics.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_client.h"
@@ -33,6 +33,21 @@ namespace content {
 
 namespace {
 static PrefetchService* g_prefetch_service_for_testing = nullptr;
+
+// `SpeculationCandidate::tags` must never be empty: rules that specify no tags
+// carry a single null tag instead (see blink.mojom.SpeculationCandidate). Every
+// candidate reaching here has been through SpeculationHostImpl's
+// CandidatesAreValid(), which rejects an empty list as a bad message.
+//
+// This used to map an empty list to nullopt, which silently dropped the
+// Sec-Speculation-Tags header while the prerender path CHECK()ed on the very
+// same input, hiding half of crbug.com/550345163. Enforce the invariant so a
+// future regression is loud on both paths.
+SpeculationRulesTags TagsFromCandidate(
+    const blink::mojom::SpeculationCandidatePtr& candidate) {
+  CHECK(!candidate->tags.empty());
+  return SpeculationRulesTags(candidate->tags);
+}
 
 struct PrefetchUrlParams {
   explicit PrefetchUrlParams(
@@ -45,8 +60,7 @@ struct PrefetchUrlParams {
                       candidate->eagerness),
         referrer(*candidate->referrer),
         no_vary_search_hint(candidate->no_vary_search_hint.Clone()),
-        tags(candidate->tags.empty() ? std::nullopt
-                                     : std::make_optional(candidate->tags)) {
+        tags(TagsFromCandidate(candidate)) {
     if (prefetch_type.IsProxyRequiredWhenCrossOrigin() &&
         ShouldPrefetchBypassProxyForTestHost(prefetch_url.GetHost())) {
       // TODO(crbug.com/40942006): Remove SetProxyBypassedForTest, since it is
@@ -59,7 +73,7 @@ struct PrefetchUrlParams {
   PrefetchType prefetch_type;
   blink::mojom::Referrer referrer;
   network::mojom::NoVarySearchPtr no_vary_search_hint;
-  std::optional<SpeculationRulesTags> tags;
+  SpeculationRulesTags tags;
 };
 
 }  // namespace
@@ -194,7 +208,7 @@ void PrefetchDocumentManager::PrefetchUrl(
     const PrefetchType& prefetch_type,
     const PreloadingPredictor& enacting_predictor,
     const blink::mojom::Referrer& referrer,
-    std::optional<SpeculationRulesTags> speculation_rules_tags,
+    SpeculationRulesTags speculation_rules_tags,
     const network::mojom::NoVarySearchPtr& mojo_no_vary_search_hint,
     scoped_refptr<PreloadPipelineInfo> preload_pipeline_info) {
   const std::pair<GURL, PreloadingType> all_prefetches_key =
@@ -254,7 +268,6 @@ void PrefetchDocumentManager::PrefetchUrl(
       weak_method_factory_.GetWeakPtr(), std::move(preload_pipeline_info),
       attempt->GetWeakPtr());
 
-  referring_page_metrics_.prefetch_attempted_count++;
 
   all_prefetches_[all_prefetches_key] =
       prefetch_service->AddPrefetchRequestWithHandle(std::move(request));
@@ -297,27 +310,50 @@ PrefetchService* PrefetchDocumentManager::GetPrefetchService() const {
     return g_prefetch_service_for_testing;
   }
 
-  DCHECK(BrowserContextImpl::From(render_frame_host().GetBrowserContext())
-             ->GetPrefetchService());
+  CHECK(BrowserContextImpl::From(render_frame_host().GetBrowserContext())
+            ->GetPrefetchService(),
+        base::NotFatalUntil::M159);
   return BrowserContextImpl::From(render_frame_host().GetBrowserContext())
       ->GetPrefetchService();
 }
 
-void PrefetchDocumentManager::OnEligibilityCheckComplete(bool is_eligible) {
-  if (is_eligible) {
-    referring_page_metrics_.prefetch_eligible_count++;
+void PrefetchDocumentManager::OnPrefetchCompletedOrFailed(
+    const PrefetchContainer& prefetch_container) {
+  // TODO(crbug.com/433057364): Currently `PrefetchStatus::kPrefetchSuccessful`
+  // is used to preserve the existing behavior and metrics, but probably we
+  // should revamp this, e.g. because currently we don't count
+  // `PrefetchStatus::kPrefetchResponseUsed` cases.
+  if (prefetch_container.GetPrefetchStatus() !=
+      PrefetchStatus::kPrefetchSuccessful) {
+    return;
+  }
+  if (IsImmediateSpeculationEagerness(
+          prefetch_container.request().prefetch_type().GetEagerness())) {
+    completed_immediate_prefetches_.push_back(
+        prefetch_container.GetMutableWeakPtr());
+  } else {
+    completed_non_immediate_prefetches_.push_back(
+        prefetch_container.GetMutableWeakPtr());
   }
 }
 
-void PrefetchDocumentManager::OnPrefetchSuccessful(
-    PrefetchContainer* prefetch) {
-  referring_page_metrics_.prefetch_successful_count++;
-  if (IsImmediateSpeculationEagerness(
-          prefetch->request().prefetch_type().GetEagerness())) {
-    completed_immediate_prefetches_.push_back(prefetch->GetWeakPtr());
-  } else {
-    completed_non_immediate_prefetches_.push_back(prefetch->GetWeakPtr());
+size_t PrefetchDocumentManager::GetPrefetchLimit(
+    blink::mojom::SpeculationEagerness eagerness) const {
+  if (IsImmediateSpeculationEagerness(eagerness)) {
+    return kMaxNumberOfImmediatePrefetchesPerPage;
   }
+
+  switch (eagerness) {
+    case blink::mojom::SpeculationEagerness::kEager:
+      return features::kMaxNumberOfEagerPrefetchesPerPage.Get();
+    case blink::mojom::SpeculationEagerness::kModerate:
+      return features::kMaxNumberOfModeratePrefetchesPerPage.Get();
+    case blink::mojom::SpeculationEagerness::kConservative:
+      return kMaxNumberOfConservativePrefetchesPerPage;
+    case blink::mojom::SpeculationEagerness::kImmediate:
+      NOTREACHED();
+  }
+  NOTREACHED();
 }
 
 std::tuple<bool, base::WeakPtr<PrefetchContainer>>
@@ -330,19 +366,22 @@ PrefetchDocumentManager::CanPrefetchNow(PrefetchContainer* prefetch) {
           Visibility::VISIBLE) {
     return std::make_tuple(false, nullptr);
   }
-  if (IsImmediateSpeculationEagerness(
-          prefetch->request().prefetch_type().GetEagerness())) {
-    return std::make_tuple(completed_immediate_prefetches_.size() <
-                               kMaxNumberOfImmediatePrefetchesPerPage,
+
+  blink::mojom::SpeculationEagerness eagerness =
+      prefetch->request().prefetch_type().GetEagerness();
+
+  size_t limit = GetPrefetchLimit(eagerness);
+
+  if (IsImmediateSpeculationEagerness(eagerness)) {
+    return std::make_tuple(completed_immediate_prefetches_.size() < limit,
                            nullptr);
   } else {
-    if (completed_non_immediate_prefetches_.size() <
-        kMaxNumberOfNonImmediatePrefetchesPerPage) {
+    if (completed_non_immediate_prefetches_.size() < limit) {
       return std::make_tuple(true, nullptr);
     }
     // We are at capacity, and now need to evict the oldest non-immediate
     // prefetch to make space for a new one.
-    DCHECK(GetPrefetchService());
+    CHECK(GetPrefetchService(), base::NotFatalUntil::M159);
     base::WeakPtr<PrefetchContainer> oldest_prefetch =
         completed_non_immediate_prefetches_.front();
     // TODO(crbug.com/40064525): We should also be checking if the prefetch is
@@ -357,16 +396,16 @@ void PrefetchDocumentManager::SetPrefetchDestructionCallback(
   prefetch_destruction_callback_ = std::move(callback);
 }
 
-void PrefetchDocumentManager::PrefetchWillBeDestroyed(
-    PrefetchContainer* prefetch) {
-  prefetch_destruction_callback_.Run(prefetch->GetURL());
+void PrefetchDocumentManager::OnWillBeDestroyed(
+    const PrefetchContainer& prefetch_container) {
+  prefetch_destruction_callback_.Run(prefetch_container.GetURL());
 
   std::vector<base::WeakPtr<PrefetchContainer>>& completed_prefetches =
       IsImmediateSpeculationEagerness(
-          prefetch->request().prefetch_type().GetEagerness())
+          prefetch_container.request().prefetch_type().GetEagerness())
           ? completed_immediate_prefetches_
           : completed_non_immediate_prefetches_;
-  auto it = std::ranges::find(completed_prefetches, prefetch->key(),
+  auto it = std::ranges::find(completed_prefetches, prefetch_container.key(),
                               [&](const auto& p) { return p->key(); });
   if (it != completed_prefetches.end()) {
     completed_prefetches.erase(it);

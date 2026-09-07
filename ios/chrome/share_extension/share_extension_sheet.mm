@@ -250,6 +250,10 @@ NSString* const kAccountCellIdentifier = @"kAccountCellIdentifier";
   // Not used.
 }
 
+- (void)didDismissButtonStackViewController {
+  // Not used.
+}
+
 #pragma mark - Private
 
 // Sets up the content view.
@@ -289,13 +293,20 @@ NSString* const kAccountCellIdentifier = @"kAccountCellIdentifier";
              renderingMode:UIImageRenderingModeAlwaysOriginal];
 
   } else {
-    content.text = self.selectedAccountInfo.fullName;
+    NSString* name = self.selectedAccountInfo.fullName;
+    NSString* email = self.selectedAccountInfo.email;
+    BOOL nameIsSet = name.length > 0;
+
+    content.text = nameIsSet ? name : email;
     content.textProperties.numberOfLines = 1;
     content.textProperties.lineBreakMode = NSLineBreakByTruncatingTail;
 
-    content.secondaryText = self.selectedAccountInfo.email;
-    content.secondaryTextProperties.numberOfLines = 1;
-    content.secondaryTextProperties.lineBreakMode = NSLineBreakByTruncatingTail;
+    if (nameIsSet) {
+      content.secondaryText = email;
+      content.secondaryTextProperties.numberOfLines = 1;
+      content.secondaryTextProperties.lineBreakMode =
+          NSLineBreakByTruncatingTail;
+    }
 
     content.directionalLayoutMargins = NSDirectionalEdgeInsetsMake(8, 0, 8, 0);
 

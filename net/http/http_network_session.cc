@@ -164,6 +164,7 @@ HttpNetworkSession::HttpNetworkSession(const HttpNetworkSessionParams& params,
                          context.sct_auditing_delegate,
                          context.socket_performance_watcher_factory,
                          context.quic_crypto_client_stream_factory,
+                         context.network_quality_estimator,
                          context.quic_context),
       spdy_session_pool_(context.host_resolver,
                          &ssl_client_context_,
@@ -196,14 +197,14 @@ HttpNetworkSession::HttpNetworkSession(const HttpNetworkSessionParams& params,
   normal_socket_pool_manager_ = std::make_unique<ClientSocketPoolManagerImpl>(
       CreateCommonConnectJobParams(false /* for_websockets */),
       CreateCommonConnectJobParams(true /* for_websockets */),
-      NORMAL_SOCKET_POOL,
+      SocketPoolType::kNormal,
       // cleanup_on_ip_address_change
       !params.ignore_ip_address_changes);
   websocket_socket_pool_manager_ =
       std::make_unique<ClientSocketPoolManagerImpl>(
           CreateCommonConnectJobParams(false /* for_websockets */),
           CreateCommonConnectJobParams(true /* for_websockets */),
-          WEBSOCKET_SOCKET_POOL,
+          SocketPoolType::kWebSocket,
           // cleanup_on_ip_address_change
           !params.ignore_ip_address_changes);
 
@@ -443,13 +444,12 @@ void HttpNetworkSession::ApplyTestingFixedPort(
 ClientSocketPoolManager* HttpNetworkSession::GetSocketPoolManager(
     SocketPoolType pool_type) {
   switch (pool_type) {
-    case NORMAL_SOCKET_POOL:
+    case SocketPoolType::kNormal:
       return normal_socket_pool_manager_.get();
-    case WEBSOCKET_SOCKET_POOL:
+    case SocketPoolType::kWebSocket:
       return websocket_socket_pool_manager_.get();
-    default:
-      NOTREACHED();
   }
+  NOTREACHED();
 }
 
 void HttpNetworkSession::OnSuspend() {

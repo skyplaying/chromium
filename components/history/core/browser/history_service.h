@@ -109,11 +109,10 @@ class HistoryService : public KeyedService,
 
   ~HistoryService() override;
 
-  // Initializes the history service, returning true on success. On false, do
-  // not call any other functions. The given directory will be used for storing
-  // the history files.
-  bool Init(const HistoryDatabaseParams& history_database_params) {
-    return Init(false, history_database_params);
+  // Initializes the history service. The given directory will be used for
+  // storing the history files.
+  void Init(const HistoryDatabaseParams& history_database_params) {
+    Init(false, history_database_params);
   }
 
   // Returns the directory containing the History databases.
@@ -228,13 +227,6 @@ class HistoryService : public KeyedService,
                              const GURL& url,
                              base::Time end_ts);
 
-  // Updates the history database by setting the browsing topics allowed bit.
-  // The page can be identified by the combination of the context id, the
-  // navigation entry id and the url. No-op if the page is not found.
-  void SetBrowsingTopicsAllowed(ContextID context_id,
-                                int nav_entry_id,
-                                const GURL& url);
-
   // Updates the history database by setting the detected language of the page
   // content.
   // The page can be identified by the combination of the context id, the
@@ -311,6 +303,18 @@ class HistoryService : public KeyedService,
   virtual base::CancelableTaskTracker::TaskId QueryURL(
       const GURL& url,
       QueryURLCallback callback,
+      base::CancelableTaskTracker* tracker);
+
+  // Returns one `URLID` per input URL, in input order; unknown URLs map to 0.
+  // Returns `nullopt` if the history database is unavailable.
+  using QueryUrlIdsCallback =
+      base::OnceCallback<void(std::optional<std::vector<URLID>>)>;
+
+  // Bulk variant of `QueryURL` that resolves many URLs in a single backend
+  // round trip.
+  base::CancelableTaskTracker::TaskId QueryUrlIds(
+      const std::vector<GURL>& urls,
+      QueryUrlIdsCallback callback,
       base::CancelableTaskTracker* tracker);
 
   // Queries the basic information about the URL in the history database, and
@@ -650,28 +654,28 @@ class HistoryService : public KeyedService,
   // Delete and add 2 sets of clusters. Doing this in one call avoids an
   // additional thread hops.
   base::CancelableTaskTracker::TaskId ReplaceClusters(
-      const std::vector<int64_t>& ids_to_delete,
+      const std::vector<ClusterId>& ids_to_delete,
       const std::vector<Cluster>& clusters_to_add,
       base::OnceClosure callback,
       base::CancelableTaskTracker* tracker);
 
   // Implemented and called by `ReserveNextClusterIdWithVisit()` below with the
   // last cluster ID that was added to the database.
-  using ClusterIdCallback = base::OnceCallback<void(int64_t)>;
+  using ClusterIdCallback = base::OnceCallback<void(ClusterId)>;
 
   // Adds a cluster with `cluster_visit` and invokes `callback` with the ID of
   // the new cluster. It is expected for this to only be called for local
   // visits. Virtual for testing.
   virtual base::CancelableTaskTracker::TaskId ReserveNextClusterIdWithVisit(
-      const ClusterVisit& cluster_visit,
-      base::OnceCallback<void(int64_t)> callback,
+      ClusterVisit cluster_visit,
+      base::OnceCallback<void(ClusterId)> callback,
       base::CancelableTaskTracker* tracker);
 
   // Adds `visits` to the cluster `cluster_id`.
   // Virtual for testing.
   virtual base::CancelableTaskTracker::TaskId AddVisitsToCluster(
-      int64_t cluster_id,
-      const std::vector<ClusterVisit>& visits,
+      ClusterId cluster_id,
+      std::vector<ClusterVisit> visits,
       base::OnceClosure callback,
       base::CancelableTaskTracker* tracker);
 
@@ -691,7 +695,7 @@ class HistoryService : public KeyedService,
   // Updates the details of the existing cluster visit that has the same visit
   // ID as `new_cluster_visit`.
   virtual base::CancelableTaskTracker::TaskId UpdateClusterVisit(
-      const history::ClusterVisit& new_cluster_visit,
+      history::ClusterVisit new_cluster_visit,
       base::OnceClosure callback,
       base::CancelableTaskTracker* tracker);
 
@@ -804,6 +808,11 @@ class HistoryService : public KeyedService,
   std::unique_ptr<syncer::DataTypeControllerDelegate>
   GetHistorySyncControllerDelegate();
 
+  // For sync codebase only: instantiates a controller delegate to interact with
+  // JourneysSyncBridge. Must be called from the UI thread.
+  std::unique_ptr<syncer::DataTypeControllerDelegate>
+  GetJourneysSyncControllerDelegate();
+
   // Sends the SyncService's TransportState `state` to the backend, which will
   // pass it on to the HistorySyncBridge.
   void SetSyncTransportState(syncer::SyncService::TransportState state);
@@ -854,7 +863,7 @@ class HistoryService : public KeyedService,
 
   // Low-level Init().  Same as the public version, but adds a `no_db` parameter
   // that is only set by unittests which causes the backend to not init its DB.
-  bool Init(bool no_db, const HistoryDatabaseParams& history_database_params);
+  void Init(bool no_db, const HistoryDatabaseParams& history_database_params);
 
   // Notification from the backend that it has finished loading. Sends
   // notification (NOTIFY_HISTORY_LOADED) and sets backend_loaded_ to true.

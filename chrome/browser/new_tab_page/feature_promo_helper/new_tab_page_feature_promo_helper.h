@@ -28,6 +28,12 @@ enum class NTPCustomizeChromePromoEligibility {
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/new_tab_page/enums.xml:NTPCustomizeChromePromoEligibility)
 
+class Profile;
+
+namespace content {
+class WebContents;
+}
+
 class NewTabPageFeaturePromoHelper {
  public:
   virtual void RecordPromoFeatureUsageAndClosePromo(
@@ -35,8 +41,10 @@ class NewTabPageFeaturePromoHelper {
       content::WebContents* web_contents);
   virtual void SetDefaultSearchProviderIsGoogleForTesting(bool value);
   virtual bool DefaultSearchProviderIsGoogle(Profile* profile);
+#if !BUILDFLAG(IS_ANDROID)
   virtual void MaybeShowFeaturePromo(user_education::FeaturePromoParams params,
                                      content::WebContents* web_contents);
+#endif
   virtual bool IsSigninModalDialogOpen(content::WebContents* web_contents);
   virtual void MaybeTriggerAutomaticCustomizeChromePromo(
       content::WebContents* web_contents);
@@ -44,7 +52,7 @@ class NewTabPageFeaturePromoHelper {
   virtual ~NewTabPageFeaturePromoHelper() = default;
 
  private:
-  std::optional<bool> default_search_provider_is_google_ = std::nullopt;
+  std::optional<bool> default_search_provider_is_google_;
 };
 
 #endif  // CHROME_BROWSER_NEW_TAB_PAGE_FEATURE_PROMO_HELPER_NEW_TAB_PAGE_FEATURE_PROMO_HELPER_H_

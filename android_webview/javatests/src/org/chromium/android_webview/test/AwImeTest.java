@@ -9,6 +9,8 @@ import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.notNullValue;
 
+import static org.chromium.build.NullUtil.assertNonNull;
+
 import android.content.Context;
 import android.graphics.Rect;
 import android.view.KeyEvent;
@@ -63,7 +65,6 @@ public class AwImeTest extends AwParameterizedTest {
     private AwTestContainerView mTestContainerView;
     private EditText mEditText;
     private final TestJavascriptInterface mTestJavascriptInterface = new TestJavascriptInterface();
-    private TestInputMethodManagerWrapper mInputMethodManagerWrapper;
 
     public AwImeTest(AwSettingsMutation param) {
         this.mActivityTestRule = new AwActivityTestRule(param.getMutation());
@@ -96,8 +97,8 @@ public class AwImeTest extends AwParameterizedTest {
                             .getAwContents()
                             .addJavascriptInterface(mTestJavascriptInterface, "test");
                     // Let's not test against real input method.
-                    ImeAdapter imeAdapter =
-                            ImeAdapter.fromWebContents(mTestContainerView.getWebContents());
+                    WebContents webContents = mTestContainerView.getWebContents();
+                    ImeAdapter imeAdapter = assertNonNull(ImeAdapter.fromWebContents(webContents));
                     imeAdapter.setInputMethodManagerWrapper(
                             TestInputMethodManagerWrapper.create(imeAdapter));
                 });
@@ -117,24 +118,25 @@ public class AwImeTest extends AwParameterizedTest {
         // Shows an input at the bottom of the screen.
         final String htmlDocument =
                 """
-                        <html>
-                        <head>
-                            <style>
-                                html,
-                                body {
-                                    background-color: beige
-                                }
+                <html>
+                <head>
+                    <style>
+                        html,
+                        body {
+                            background-color: beige
+                        }
 
-                                div {
-                                    position: absolute;
-                                    top: 10000px;
-                                }
-                            </style>
-                        </head>
+                        div {
+                            position: absolute;
+                            top: 10000px;
+                        }
+                    </style>
+                </head>
 
-                        <body>Test<div id='footer'><input id='input_text'><br /></div>
-                        </body>
-                        </html>""";
+                <body>Test<div id='footer'><input id='input_text'><br /></div>
+                </body>
+                </html>
+                """;
         final CallbackHelper loadHelper = mContentsClient.getOnPageFinishedHelper();
 
         mActivityTestRule.loadHtmlSync(
@@ -173,13 +175,15 @@ public class AwImeTest extends AwParameterizedTest {
                         onDocumentFocused();
                 } else {
                         window.addEventListener('focus', onDocumentFocused)
-                }})();""");
+                }})();
+                """);
         mTestJavascriptInterface.getFocusCallbackHelper().waitForCallback(0);
     }
 
     private InputConnection getInputConnection() {
-        return ImeAdapter.fromWebContents(mTestContainerView.getWebContents())
-                .getInputConnectionForTest();
+        WebContents webContents = mTestContainerView.getWebContents();
+        ImeAdapter adapter = assertNonNull(ImeAdapter.fromWebContents(webContents));
+        return adapter.getInputConnectionForTest();
     }
 
     private void waitForNonNullInputConnection() {
@@ -323,7 +327,9 @@ public class AwImeTest extends AwParameterizedTest {
                 () -> {
                     // Expect that we may have a size change.
                     ImeAdapter imeAdapter =
-                            ImeAdapter.fromWebContents(mTestContainerView.getWebContents());
+                            assertNonNull(
+                                    ImeAdapter.fromWebContents(
+                                            mTestContainerView.getWebContents()));
                     imeAdapter.onShowKeyboardReceiveResult(InputMethodManager.RESULT_SHOWN);
 
                     // When a virtual keyboard shows up, the window and view size shrink. Note that

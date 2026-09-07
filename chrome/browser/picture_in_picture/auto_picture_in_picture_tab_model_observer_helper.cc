@@ -96,6 +96,18 @@ AutoPictureInPictureTabModelObserverHelper::GetActiveWebContents() const {
   return observed_tab_model_->GetActiveWebContents();
 }
 
+bool AutoPictureInPictureTabModelObserverHelper::IsTabActivated() {
+  // If we're currently observing the tab model, then `is_tab_activated_` is
+  // current so we can just return it.
+  if (is_observing_) {
+    return is_tab_activated_;
+  }
+
+  // Otherwise, calculate it now.
+  ReevaluateObservedModelAndState();
+  return is_tab_activated_;
+}
+
 void AutoPictureInPictureTabModelObserverHelper::DidSelectTab(
     TabAndroid* tab,
     TabModel::TabSelectionType type) {
@@ -113,6 +125,17 @@ void AutoPictureInPictureTabModelObserverHelper::DidSelectTab(
 
 void AutoPictureInPictureTabModelObserverHelper::TabRemoved(TabAndroid* tab) {
   ReevaluateObservedModelAndState();
+}
+
+void AutoPictureInPictureTabModelObserverHelper::WillCloseTabs(
+    const std::vector<TabAndroid*>& tabs,
+    bool is_all_tabs,
+    bool allow_undo) {
+  // If the tab is closing, we shouldn't trigger Auto-PiP. We pass false to
+  // skip checking the activation status, effectively freezing the state until
+  // the tab is destroyed. It's required because when closing a tab via
+  // WillCloseTabs, Clank doesn't immediately remove the tab from the TabModel.
+  ReevaluateObservedModelAndState(false);
 }
 
 void AutoPictureInPictureTabModelObserverHelper::WillCloseTab(TabAndroid* tab) {
@@ -152,6 +175,7 @@ void AutoPictureInPictureTabModelObserverHelper::
     UpdateIsTabActivated();
   }
 }
+
 void AutoPictureInPictureTabModelObserverHelper::UpdateIsTabActivated() {
   if (observed_tab_model_) {
     bool was_active = is_tab_activated_;
@@ -160,7 +184,7 @@ void AutoPictureInPictureTabModelObserverHelper::UpdateIsTabActivated() {
     // WebContents is the currently active one in that model.
     is_tab_activated_ = GetActiveWebContents() == GetObservedWebContents();
 
-    if (is_tab_activated_ != was_active) {
+    if (is_tab_activated_ != was_active && is_observing_) {
       RunCallback(is_tab_activated_);
     }
   }

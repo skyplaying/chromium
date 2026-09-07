@@ -165,7 +165,7 @@ public class OfflinePageUtils {
                 int tabId) {
             if (tabId == Tab.INVALID_TAB_ID) return;
 
-            Log.d(TAG, "showReloadSnackbar called with controller " + snackbarController);
+            Log.d(TAG, "showReloadSnackbar called with controller %s", snackbarController);
             Snackbar snackbar =
                     Snackbar.make(
                                     context.getString(R.string.offline_pages_viewing_offline_page),
@@ -757,6 +757,18 @@ public class OfflinePageUtils {
         }
 
         @Override
+        public void willCloseTabs(List<Tab> tabs, boolean isAllTabs, boolean allowUndo) {
+            Profile profile = mTabModelSelector.getModel(tabs.get(0).isIncognito()).getProfile();
+            OfflinePageBridge bridge = OfflinePageBridge.getForProfile(profile);
+            if (bridge == null) return;
+
+            for (Tab tab : tabs) {
+                WebContents webContents = tab.getWebContents();
+                if (webContents != null) bridge.willCloseTab(webContents);
+            }
+        }
+
+        @Override
         public void onFinishingTabClosure(Tab tab, @TabClosingSource int closingSource) {
             Profile profile = mTabModelSelector.getModel(tab.isIncognito()).getProfile();
             OfflinePageBridge bridge = OfflinePageBridge.getForProfile(profile);
@@ -772,11 +784,8 @@ public class OfflinePageUtils {
 
             bridge.deletePagesByClientId(
                     clientIds,
-                    new Callback<>() {
-                        @Override
-                        public void onResult(Integer result) {
-                            // Result is ignored.
-                        }
+                    result -> {
+                        // Result is ignored.
                     });
         }
     }

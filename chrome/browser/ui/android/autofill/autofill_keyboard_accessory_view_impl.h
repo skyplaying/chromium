@@ -50,8 +50,13 @@ class AutofillKeyboardAccessoryViewImpl : public AutofillKeyboardAccessoryView {
   // Methods called from Java via JNI
   // --------------------------------------------------------------------------
 
-  // Called when an autofill item was selected.
-  void SuggestionSelected(JNIEnv* env, int32_t list_index);
+  // Called when an autofill item was accepted.
+  void SuggestionAccepted(JNIEnv* env, int32_t list_index);
+
+  // Called when an autofill item's selection state changes.
+  void SuggestionSelectionStateChanged(JNIEnv* env,
+                                       int32_t list_index,
+                                       bool is_selected);
 
   // Called when the deletion of an autofill item was requested.
   void DeletionRequested(JNIEnv* env, int32_t list_index);
@@ -61,6 +66,9 @@ class AutofillKeyboardAccessoryViewImpl : public AutofillKeyboardAccessoryView {
 
   // Called when this view was dismissed.
   void ViewDismissed(JNIEnv* env);
+
+  // Called when opening settings for an entity type was requested.
+  void OpenSettingsForEntityType(JNIEnv* env, int32_t entity_type);
 
  private:
   // Weak reference to the controller of this view. It can be null if the

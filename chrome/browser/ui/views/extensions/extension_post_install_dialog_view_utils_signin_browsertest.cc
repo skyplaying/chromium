@@ -17,7 +17,6 @@
 #include "chrome/browser/signin/signin_promo_util.h"
 #include "chrome/browser/ui/extensions/extension_post_install_dialog.h"
 #include "chrome/browser/ui/signin/promos/bubble_signin_promo_delegate.h"
-#include "chrome/browser/ui/singleton_tabs.h"
 #include "chrome/browser/ui/views/extensions/extension_post_install_dialog_view_utils.h"
 #include "components/signin/public/base/signin_metrics.h"
 #include "components/signin/public/base/signin_prefs.h"
@@ -26,8 +25,8 @@
 #include "components/signin/public/identity_manager/identity_test_utils.h"
 #include "components/sync/base/features.h"
 #include "components/sync/service/local_data_description.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/test/browser_test.h"
-#include "content/public/test/test_utils.h"
 #include "extensions/browser/extension_registrar.h"
 #include "extensions/common/extension.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -68,8 +67,8 @@ class ExtensionPostInstallDialogViewUtilsSignInBrowserTest
     extensions::TriggerPostInstallDialog(
         profile(), extension, SkBitmap(),
         base::BindOnce(
-            [](Browser* b) {
-              return b->tab_strip_model()->GetActiveWebContents();
+            [](BrowserWindowInterface* b) {
+              return b->GetActiveTabInterface()->GetContents();
             },
             browser()));
 
@@ -113,12 +112,12 @@ class ExtensionPostInstallDialogViewUtilsSignInBrowserTest
     ASSERT_TRUE(bubble_view_widget->widget_delegate());
 
     // The sign in promo should be shown for a syncable extension.
-    EXPECT_TRUE(signin::ShouldShowExtensionSignInPromo(*browser()->profile(),
+    EXPECT_TRUE(signin::ShouldShowExtensionSignInPromo(*browser()->GetProfile(),
                                                        *extension));
 
     // Initiate a sign in from the promo.
-    BubbleSignInPromoDelegate delegate(
-        *browser()->tab_strip_model()->GetActiveWebContents(),
+    BubbleSignInPromoForSyncableDataTypeDelegate delegate(
+        *browser()->GetActiveTabInterface()->GetContents(),
         signin_metrics::AccessPoint::kExtensionInstallBubble,
         syncer::LocalDataItemModel::DataId(extension->id()));
     delegate.OnSignIn(account_info);
@@ -172,8 +171,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionPostInstallDialogViewUtilsSignInBrowserTest,
           .AsPrimary(signin::ConsentLevel::kSignin)
           .WithAccessPoint(signin_metrics::AccessPoint::kExtensionInstallBubble)
           .Build("testy@mctestface.com"));
-  ASSERT_TRUE(SigninPrefs(*profile()->GetPrefs())
-                  .GetExtensionsExplicitBrowserSignin(account_info.gaia));
+  ASSERT_TRUE(
+      SigninPrefs(*profile()->GetPrefs())
+          .GetExtensionsExplicitBrowserSignin(account_info.GetGaiaId()));
 
   // Check that the user is now signed in for the browser in transport mode and
   // syncing for extensions is enabled.
@@ -232,7 +232,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionPostInstallDialogViewUtilsSignInBrowserTest,
             GetAccountExtensionType(extension->id()));
 
   // This should be recorded as an extension explicit sign in.
-  EXPECT_TRUE(SigninPrefs(*profile()->GetPrefs())
-                  .GetExtensionsExplicitBrowserSignin(account_info.gaia));
+  EXPECT_TRUE(
+      SigninPrefs(*profile()->GetPrefs())
+          .GetExtensionsExplicitBrowserSignin(account_info.GetGaiaId()));
   EXPECT_TRUE(extensions::sync_util::IsSyncingExtensionsEnabled(profile()));
 }

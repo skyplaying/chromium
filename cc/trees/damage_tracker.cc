@@ -132,7 +132,7 @@ void DamageTracker::UpdateDamageTracking(LayerTreeImpl* layer_tree_impl) {
         parent_target->damage_tracker()->AccumulateDamageFromRenderSurface(
             current_target);
         current_target_effect_id =
-            effect_tree.Node(current_target_effect_id)->target_id;
+            effect_tree.Node(current_target_effect_id).target_id;
       }
       current_target_effect_id = next_target_effect_id;
     }
@@ -166,8 +166,9 @@ void DamageTracker::InitializeUpdateDamageTracking(
     LayerTreeImpl* layer_tree_impl,
     ViewTransitionElementResourceIdToRenderSurfaceMap&
         id_to_render_surface_map) {
-  for (RenderSurfaceImpl* render_surface :
-       layer_tree_impl->GetRenderSurfaceList()) {
+  for (int effect_id : layer_tree_impl->GetRenderSurfaceList()) {
+    RenderSurfaceImpl* render_surface =
+        layer_tree_impl->GetRenderSurface(effect_id);
     render_surface->damage_tracker()->PrepareForUpdate();
 
     // Build ViewTransitionElementResourceId to RenderSurface Map. This will be
@@ -471,10 +472,10 @@ void DamageTracker::AccumulateDamageFromLayer(
   bool property_change_on_non_target_node = false;
   if (layer->LayerPropertyChangedFromPropertyTrees()) {
     auto effect_id = layer->render_target()->EffectTreeIndex();
-    const auto* effect_node =
+    const auto& effect_node =
         layer->layer_tree_impl()->property_trees()->effect_tree().Node(
             effect_id);
-    auto transform_id = effect_node->transform_id;
+    auto transform_id = effect_node.transform_id;
     property_change_on_non_target_node =
         layer->effect_tree_index() != effect_id ||
         layer->transform_tree_index() != transform_id;

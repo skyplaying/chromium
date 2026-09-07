@@ -5,8 +5,6 @@
 package org.chromium.chrome.browser.tasks.tab_management;
 
 import static org.chromium.build.NullUtil.assumeNonNull;
-import static org.chromium.chrome.browser.tasks.tab_management.TabListModel.CardProperties.CARD_TYPE;
-import static org.chromium.chrome.browser.tasks.tab_management.TabListModel.CardProperties.ModelType.TAB;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
@@ -52,7 +50,7 @@ public class TabListRecyclerView extends RecyclerView
     private boolean mBlockTouchInput;
     private boolean mIsSmoothScrolling;
     // Null unless item animations are disabled.
-    private RecyclerView.@Nullable ItemAnimator mDisabledAnimatorHolder;
+    private @Nullable ItemAnimator mDisabledAnimatorHolder;
 
     private final RunOnNextLayoutDelegate mRunOnNextLayoutDelegate;
     private final SettableNonNullObservableSupplier<Boolean> mIsAnimatorRunningSupplier =
@@ -132,9 +130,14 @@ public class TabListRecyclerView extends RecyclerView
         }
     }
 
-    void setupCustomItemAnimator() {
+    public void setupCustomItemAnimator() {
+        setupCustomItemAnimator(/* useClipAnimations= */ false);
+    }
+
+    public void setupCustomItemAnimator(boolean useClipAnimations) {
         if (mTabListItemAnimator == null) {
-            mTabListItemAnimator = new TabListItemAnimator(mIsAnimatorRunningSupplier);
+            mTabListItemAnimator =
+                    new TabListItemAnimator(mIsAnimatorRunningSupplier, useClipAnimations);
             setItemAnimator(mTabListItemAnimator);
         }
     }
@@ -291,9 +294,11 @@ public class TabListRecyclerView extends RecyclerView
         if (position == -1) {
             return actions;
         }
-        GridLayoutManager layoutManager = (GridLayoutManager) getLayoutManager();
-        assumeNonNull(layoutManager);
-        int spanCount = layoutManager.getSpanCount();
+        LayoutManager layoutManager = getLayoutManager();
+        if (layoutManager == null) {
+            return actions;
+        }
+        int spanCount = (layoutManager instanceof GridLayoutManager glm) ? glm.getSpanCount() : 1;
         Context context = getContext();
 
         AccessibilityAction leftAction =
@@ -318,7 +323,8 @@ public class TabListRecyclerView extends RecyclerView
         // Decide whether the tab can be moved left/right based on current index and span count.
         if (position % spanCount == 0) {
             actions.remove(leftAction);
-        } else if (position % spanCount == spanCount - 1) {
+        }
+        if (position % spanCount == spanCount - 1) {
             actions.remove(rightAction);
         }
         // Cannot move up if the tab is in the first row.
@@ -338,10 +344,12 @@ public class TabListRecyclerView extends RecyclerView
 
     private int getSwappableItemCount() {
         int count = 0;
-        RecyclerView.Adapter adapter = getAdapter();
+        RecyclerView.Adapter<?> adapter = getAdapter();
         assumeNonNull(adapter);
         for (int i = 0; i < adapter.getItemCount(); i++) {
-            if (adapter.getItemViewType(i) == TabProperties.UiType.TAB) count++;
+            if (UiTypeHelper.isTabOrTabGroup(adapter.getItemViewType(i))) {
+                count++;
+            }
         }
         return count;
     }
@@ -353,15 +361,19 @@ public class TabListRecyclerView extends RecyclerView
         if (holder == null || tabIndex == TabModel.INVALID_TAB_INDEX) return Tab.INVALID_TAB_ID;
         PropertyModel model = holder.model;
         assumeNonNull(model);
-        return model.get(CARD_TYPE) == TAB ? model.get(TabProperties.TAB_ID) : Tab.INVALID_TAB_ID;
+        return TabProperties.isTabOrTabGroup(model)
+                ? model.get(TabProperties.TAB_ID)
+                : Tab.INVALID_TAB_ID;
     }
 
     @Override
     public Pair<Integer, Integer> getPositionsOfReorderAction(View view, int action) {
         int currentPosition = getChildAdapterPosition(view);
-        GridLayoutManager layoutManager = (GridLayoutManager) getLayoutManager();
-        assumeNonNull(layoutManager);
-        int spanCount = layoutManager.getSpanCount();
+        if (currentPosition == RecyclerView.NO_POSITION) {
+            return new Pair<>(currentPosition, -1);
+        }
+        LayoutManager layoutManager = getLayoutManager();
+        int spanCount = (layoutManager instanceof GridLayoutManager glm) ? glm.getSpanCount() : 1;
         int targetPosition = -1;
 
         if (action == R.id.move_tab_left) {

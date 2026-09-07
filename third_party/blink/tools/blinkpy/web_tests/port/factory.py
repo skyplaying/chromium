@@ -41,6 +41,7 @@ class PortFactory:
         'android.AndroidPort',
         'fuchsia.FuchsiaPort',
         'ios.IOSPort',
+        'tvos.TVOSPort',
         'linux.LinuxPort',
         'mac.MacPort',
         'mock_drt.MockDRTPort',
@@ -54,7 +55,7 @@ class PortFactory:
 
     def _default_port(self):
         platform = self._host.platform
-        if platform.is_linux() or platform.is_freebsd():
+        if platform.is_linux():
             return 'linux'
         elif platform.is_mac():
             return 'mac'

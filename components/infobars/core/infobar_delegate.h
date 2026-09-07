@@ -16,15 +16,6 @@
 class ConfirmInfoBarDelegate;
 class ThemeInstalledInfoBarDelegate;
 
-namespace blocked_content {
-class PopupBlockedInfoBarDelegate;
-}
-
-#if BUILDFLAG(IS_ANDROID)
-namespace offline_pages {
-class OfflinePageInfoBarDelegate;
-}
-#endif
 
 namespace translate {
 class TranslateInfoBarDelegate;
@@ -176,7 +167,7 @@ class InfoBarDelegate {
     SEND_TAB_TO_SELF_INFOBAR_DELEGATE = 92,
     TAB_SHARING_INFOBAR_DELEGATE = 93,
     // Removed SAFETY_TIP_INFOBAR_DELEGATE = 94,
-    WEBOTP_SERVICE_INFOBAR_DELEGATE = 95,
+    // Removed: WEBOTP_SERVICE_INFOBAR_DELEGATE = 95,
     KNOWN_INTERCEPTION_DISCLOSURE_INFOBAR_DELEGATE = 96,
     // Removed: SYNC_ERROR_INFOBAR_DELEGATE_ANDROID = 97,
     // Removed: INSECURE_DOWNLOAD_INFOBAR_DELEGATE_ANDROID = 98,
@@ -197,7 +188,7 @@ class InfoBarDelegate {
     EXTENSIONS_WEB_AUTH_FLOW_INFOBAR_DELEGATE = 113,
     // Removed: TAB_PICKUP_INFOBAR_DELEGATE = 114,
     LOCAL_TEST_POLICIES_APPLIED_INFOBAR = 115,
-    BIDDING_AND_AUCTION_CONSENTED_DEBUGGING_DELEGATE = 116,
+    // Removed: BIDDING_AND_AUCTION_CONSENTED_DEBUGGING_DELEGATE = 116,
     // Removed: PARCEL_TRACKING_INFOBAR_DELEGATE = 117,
     // Removed: TEST_THIRD_PARTY_COOKIE_PHASEOUT_DELEGATE = 118,
     ENABLE_LINK_CAPTURING_INFOBAR_DELEGATE = 119,
@@ -210,9 +201,17 @@ class InfoBarDelegate {
     COLLABORATION_OUT_OF_DATE_INFOBAR_DELEGATE = 126,
     PIN_INFOBAR_DELEGATE = 127,
     SESSION_RESTORE_INFOBAR_DELEGATE = 128,
-    ROLL_BACK_MODE_B_INFOBAR_DELEGATE = 129,
+    // Removed: ROLL_BACK_MODE_B_INFOBAR_DELEGATE = 129,
     DEV_TOOLS_REMOTE_DEBUGGING_INFOBAR_DELEGATE = 130,
     STARTUP_LAUNCH_INFOBAR_DELEGATE = 131,
+    AUTOFILL_AI_SAVE_ENTITY_INFOBAR_DELEGATE_IOS = 132,
+    JS_OPTIMIZATIONS_INFOBAR_DELEGATE = 133,
+    WEB_APP_BLOCKED_MIGRATION_INFOBAR_DELEGATE = 134,
+    OSCRYPTASYNC_AVAILABILITY_INFOBAR_DELEGATE = 135,
+    AUTOFILL_AI_PRE_FETCH_FAILURE_INFOBAR_DELEGATE_IOS = 136,
+    SIGNIN_QRCODE_INFOBAR_DELEGATE = 137,
+    FORMS_AI_PRIVATE_INFERENCE_INFOBAR_DELEGATE_IOS = 138,
+    PASSWORD_SAVED_INFOBAR_DELEGATE_IOS = 139,
   };
   // LINT.ThenChange(//tools/metrics/histograms/metadata/browser/enums.xml:InfoBarIdentifier)
 
@@ -323,15 +322,9 @@ class InfoBarDelegate {
   // Type-checking downcast routines:
   virtual ConfirmInfoBarDelegate* AsConfirmInfoBarDelegate();
   virtual const ConfirmInfoBarDelegate* AsConfirmInfoBarDelegate() const;
-  virtual blocked_content::PopupBlockedInfoBarDelegate*
-  AsPopupBlockedInfoBarDelegate();
   virtual ThemeInstalledInfoBarDelegate* AsThemePreviewInfobarDelegate();
 #if BUILDFLAG(IS_IOS)
   virtual translate::TranslateInfoBarDelegate* AsTranslateInfoBarDelegate();
-#endif
-#if BUILDFLAG(IS_ANDROID)
-  virtual offline_pages::OfflinePageInfoBarDelegate*
-  AsOfflinePageInfoBarDelegate();
 #endif
 
   void set_infobar(InfoBar* infobar) { infobar_ = infobar; }

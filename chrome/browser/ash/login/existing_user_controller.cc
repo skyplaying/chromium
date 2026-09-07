@@ -15,11 +15,14 @@
 #include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/constants/notifier_catalogs.h"
+#include "ash/login/resources/grit/ash_login_strings.h"
 #include "ash/metrics/login_unlock_throughput_recorder.h"
 #include "ash/public/cpp/login_screen.h"
 #include "ash/public/cpp/notification_utils.h"
 #include "ash/shell.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "base/barrier_closure.h"
+#include "base/check_deref.h"
 #include "base/check_is_test.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
@@ -63,12 +66,8 @@
 #include "chrome/browser/ash/policy/handlers/minimum_version_policy_handler.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/system/device_disabling_manager.h"
-#include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_process_platform_part.h"
-#include "chrome/browser/lifetime/application_lifetime.h"
-#include "chrome/browser/lifetime/application_lifetime_chromeos.h"
+#include "chrome/browser/enterprise/browser_management/management_identity.h"
 #include "chrome/browser/net/system_network_context_manager.h"
-#include "chrome/browser/notifications/system_notification_helper.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/chrome_device_id_helper.h"
@@ -79,15 +78,10 @@
 #include "chrome/browser/ui/ash/login/webui_login_view.h"
 #include "chrome/browser/ui/ash/system/system_tray_client_impl.h"
 #include "chrome/browser/ui/aura/accessibility/automation_manager_aura.h"
-#include "chrome/browser/ui/managed_ui.h"
 #include "chrome/browser/ui/webui/ash/login/encryption_migration_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/l10n_util.h"
 #include "chrome/browser/ui/webui/ash/login/tpm_error_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/update_required_screen_handler.h"
-#include "chrome/common/chrome_switches.h"
-#include "chrome/common/pref_names.h"
-#include "chrome/common/url_constants.h"
-#include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
 #include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
 #include "chromeos/ash/components/dbus/userdataauth/userdataauth_client.h"
@@ -97,6 +91,7 @@
 #include "chromeos/ash/components/login/auth/public/key.h"
 #include "chromeos/ash/components/login/session/session_termination_manager.h"
 #include "chromeos/ash/components/osauth/public/auth_hub.h"
+#include "chromeos/ash/components/osauth/public/auth_policy_connector.h"
 #include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "chromeos/ash/components/settings/user_login_permission_tracker.h"
@@ -104,6 +99,7 @@
 #include "chromeos/dbus/power/power_manager_client.h"
 #include "chromeos/strings/grit/chromeos_strings.h"
 #include "components/account_id/account_id.h"
+#include "components/application_locale_storage/application_locale_storage.h"
 #include "components/google/core/common/google_util.h"
 #include "components/policy/core/common/cloud/cloud_policy_core.h"
 #include "components/policy/core/common/cloud/device_management_service.h"
@@ -127,8 +123,10 @@
 #include "google_apis/gaia/google_service_auth_error.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/base/user_activity/user_activity_detector.h"
 #include "ui/base/user_activity/user_activity_observer.h"
+#include "ui/message_center/message_center.h"
 #include "ui/message_center/public/cpp/notification.h"
 #include "ui/message_center/public/cpp/notification_delegate.h"
 #include "ui/views/widget/widget.h"
@@ -153,30 +151,33 @@ const long int kSafeModeRestartUiDelayMs = 30000;
 
 // Makes a call to the policy subsystem to reload the policy when we detect
 // authentication change.
-void RefreshPoliciesOnUIThread() {
-  if (g_browser_process->policy_service()) {
-    g_browser_process->policy_service()->RefreshPolicies(
-        base::OnceClosure(), policy::PolicyFetchReason::kSignin);
-  }
+void RefreshPoliciesOnUIThread(policy::PolicyService& policy_service) {
+  policy_service.RefreshPolicies(base::OnceClosure(),
+                                 policy::PolicyFetchReason::kSignin);
 }
 
-void OnTranferredHttpAuthCaches() {
+// `policy_service` must be non-null and must live while the main RunLoop is
+// running.
+void OnTranferredHttpAuthCaches(policy::PolicyService* policy_service) {
   VLOG(1) << "Main request context populated with authentication data.";
   // Last but not least tell the policy subsystem to refresh now as it might
   // have been stuck until now too.
   content::GetUIThreadTaskRunner({})->PostTask(
-      FROM_HERE, base::BindOnce(&RefreshPoliciesOnUIThread));
+      FROM_HERE, base::BindOnce(&RefreshPoliciesOnUIThread,
+                                std::ref(CHECK_DEREF(policy_service))));
 }
 
 // Copies any authentication details that were entered in the login profile to
 // the main profile to make sure all subsystems of Chrome can access the network
 // with the provided authentication which are possibly for a proxy server.
-void TransferHttpAuthCaches() {
+// `policy_service` must be non-null and must live while the main RunLoop is
+// running.
+void TransferHttpAuthCaches(policy::PolicyService* policy_service) {
   content::StoragePartition* webview_storage_partition =
       login::GetSigninPartition();
-  base::RepeatingClosure completion_callback =
-      base::BarrierClosure(webview_storage_partition ? 2 : 1,
-                           base::BindOnce(&OnTranferredHttpAuthCaches));
+  base::RepeatingClosure completion_callback = base::BarrierClosure(
+      webview_storage_partition ? 2 : 1,
+      base::BindOnce(&OnTranferredHttpAuthCaches, policy_service));
   if (webview_storage_partition) {
     webview_storage_partition->GetNetworkContext()
         ->SaveHttpAuthCacheProxyEntries(base::BindOnce(
@@ -191,11 +192,10 @@ void TransferHttpAuthCaches() {
       &TransferHttpAuthCacheToSystemNetworkContext, completion_callback));
 }
 
-bool IsUpdateRequiredDeadlineReached() {
+bool IsUpdateRequiredDeadlineReached(
+    policy::BrowserPolicyConnectorAsh& browser_policy_connector_ash) {
   policy::MinimumVersionPolicyHandler* policy_handler =
-      g_browser_process->platform_part()
-          ->browser_policy_connector_ash()
-          ->GetMinimumVersionPolicyHandler();
+      browser_policy_connector_ash.GetMinimumVersionPolicyHandler();
   return policy_handler && policy_handler->DeadlineReached();
 }
 
@@ -243,6 +243,7 @@ void SetLoginExtensionApiCanLockManagedGuestSessionPref(
 }
 
 std::optional<EncryptionMigrationMode> GetEncryptionMigrationMode(
+    PrefService& local_state,
     const UserContext& user_context,
     bool has_incomplete_migration) {
   if (has_incomplete_migration) {
@@ -255,7 +256,7 @@ std::optional<EncryptionMigrationMode> GetEncryptionMigrationMode(
     return EncryptionMigrationMode::START_MIGRATION;
   }
 
-  user_manager::KnownUser known_user(g_browser_process->local_state());
+  user_manager::KnownUser known_user(&local_state);
   const bool profile_has_policy =
       known_user.GetProfileRequiresPolicy(user_context.GetAccountId()) ==
           user_manager::ProfileRequiresPolicy::kPolicyRequired ||
@@ -300,6 +301,33 @@ int CountRegularUsers(const user_manager::UserList& users) {
     }
   }
   return regular_users_counter;
+}
+
+bool UserHasAnyLocalAuthFactors(const UserContext& context) {
+  return (context.GetAuthFactorsData().FindLocalPasswordFactor() != nullptr ||
+          context.GetAuthFactorsData().FindPinFactor() != nullptr);
+}
+
+// Checks if the user has a PIN present, an online password present, AND
+// if the PIN is allowed by the QuickUnlock policy.
+//
+// Returns true if and only if all three conditions are met:
+//   1. The user has a PIN set up.
+//   2. The user also has an online password set up.
+//   3. The AuthPolicyConnector confirms that the PIN is allowed by the
+//      QuickUnlock policy for the account.
+//
+// Otherwise, returns false.
+bool IsPinPresentAndAllowedAsSecondaryFactor(const UserContext& context) {
+  // Treat unset as allowed as consumers should always have PIN enabled.
+  bool isPinAllowedByQuickUnlock =
+      AuthPolicyConnector::Get()
+          ->IsPinAllowedByQuickUnlockPolicy(context.GetAccountId())
+          .value_or(true);
+  bool has_pin = context.GetAuthFactorsData().FindPinFactor() != nullptr;
+  bool has_online_password =
+      context.GetAuthFactorsData().FindOnlinePasswordFactor() != nullptr;
+  return has_pin && has_online_password && isPinAllowedByQuickUnlock;
 }
 
 }  // namespace
@@ -357,10 +385,18 @@ ExistingUserController* ExistingUserController::current_controller() {
 ////////////////////////////////////////////////////////////////////////////////
 // ExistingUserController, public:
 
-ExistingUserController::ExistingUserController()
-    : cros_settings_(CrosSettings::Get()),
-      network_state_helper_(new login::NetworkStateHelper),
-      pin_salt_storage_(std::make_unique<quick_unlock::PinSaltStorage>()) {
+ExistingUserController::ExistingUserController(
+    PrefService* local_state,
+    const ApplicationLocaleStorage* application_locale_storage,
+    scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
+    policy::BrowserPolicyConnectorAsh* browser_policy_connector_ash)
+    : local_state_(CHECK_DEREF(local_state)),
+      application_locale_storage_(CHECK_DEREF(application_locale_storage)),
+      shared_url_loader_factory_(std::move(shared_url_loader_factory)),
+      browser_policy_connector_ash_(CHECK_DEREF(browser_policy_connector_ash)),
+      cros_settings_(CrosSettings::Get()),
+      network_state_helper_(new login::NetworkStateHelper) {
+  CHECK(shared_url_loader_factory_);
   HttpAuthDialog::AddObserver(this);
 
   enable_system_httpauth_ = HttpAuthDialog::Enable();
@@ -401,6 +437,8 @@ ExistingUserController::ExistingUserController()
     // for now because first session is very short and it will be a auto sign
     // out in 90s if idle.
     demo_login_controller_ = std::make_unique<ash::DemoLoginController>(
+        &local_state_.get(), shared_url_loader_factory_.get(),
+        browser_policy_connector_ash_->GetDeviceCloudPolicyManager(),
         base::BindRepeating(&ExistingUserController::ConfigureAutoLogin,
                             base::Unretained(this)));
   }
@@ -483,7 +521,9 @@ void ExistingUserController::HttpAuthDialogSupplied(
   // https://crbug.com/274707331.
   VLOG(1) << "Authentication was entered manually, possibly for proxyauth.";
   base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
-      FROM_HERE, base::BindOnce(&TransferHttpAuthCaches),
+      FROM_HERE,
+      base::BindOnce(&TransferHttpAuthCaches,
+                     browser_policy_connector_ash_->GetPolicyService()),
       kAuthCacheTransferDelayMs);
 }
 
@@ -561,8 +601,9 @@ void ExistingUserController::PerformLogin(
   if (!login_performer_.get() || num_login_attempts_ <= 1) {
     // Only one instance of LoginPerformer should exist at a time.
     login_performer_.reset(nullptr);
-    login_performer_ =
-        std::make_unique<ChromeLoginPerformer>(this, AuthEventsRecorder::Get());
+    login_performer_ = std::make_unique<ChromeLoginPerformer>(
+        &local_state_.get(), shared_url_loader_factory_,
+        &browser_policy_connector_ash_.get(), this, AuthEventsRecorder::Get());
   }
   // If plain text password is available, computes its salt, hash, and length,
   // and saves them in `user_context`. They will be saved to prefs when user
@@ -581,9 +622,12 @@ void ExistingUserController::PerformLogin(
       !new_user_context.GetChallengeResponseKeys().empty();
 
   if (new_user_context.IsUsingPin()) {
+    const quick_unlock::PinSaltStorageImpl pin_salt_storage(
+        &local_state_.get());
+
     std::optional<Key> key =
         quick_unlock::PinStorageCryptohome::TransformPinKey(
-            pin_salt_storage_.get(), new_user_context.GetAccountId(),
+            pin_salt_storage, new_user_context.GetAccountId(),
             *new_user_context.GetKey());
     if (key) {
       new_user_context.SetKey(*key);
@@ -707,7 +751,7 @@ void ExistingUserController::OnAuthFailure(const AuthFailure& failure) {
   } else if (is_known_user &&
              failure.reason() == AuthFailure::MISSING_CRYPTOHOME) {
     ForceOnlineLoginForAccountId(last_login_attempt_account_id_);
-    RecordReauthReason(last_login_attempt_account_id_,
+    RecordReauthReason(local_state_.get(), last_login_attempt_account_id_,
                        ReauthReason::kMissingCryptohome);
   } else if (is_known_user &&
              failure.reason() == AuthFailure::UNRECOVERABLE_CRYPTOHOME) {
@@ -716,7 +760,7 @@ void ExistingUserController::OnAuthFailure(const AuthFailure& failure) {
     // the condition met. We should surface that up and deal with it on the
     // chromium level, including making the decision user-driven.
     ForceOnlineLoginForAccountId(last_login_attempt_account_id_);
-    RecordReauthReason(last_login_attempt_account_id_,
+    RecordReauthReason(local_state_.get(), last_login_attempt_account_id_,
                        ReauthReason::kUnrecoverableCryptohome);
   } else {
     // Check networking after trying to login in case user is
@@ -777,22 +821,87 @@ void ExistingUserController::OnAuthSuccess(const UserContext& user_context) {
   if (MaybeShowPasswordSelectionScreen(user_context)) {
     return;
   }
+
+  // Start the remove local auth factors flow.
+  if (MaybeShowRemoveLocalAuthFactorsScreen(user_context)) {
+    return;
+  }
   FinalizeAuthAndStartSession(user_context, has_auth_cookies);
+}
+
+bool ExistingUserController::MaybeShowRemoveLocalAuthFactorsScreen(
+    const UserContext& user_context) {
+  bool has_required_feature_flags =
+      ash::features::IsRecoveryFlowReorderEnabled() &&
+      ash::features::IsManagedLocalPinAndPasswordEnabled();
+  if (!has_required_feature_flags ||
+      auth_mode_ != LoginPerformer::AuthorizationMode::kExternal) {
+    return false;
+  }
+
+  auto auth_setup_flow = GetLoginDisplayHost()
+                             ->GetWizardContext()
+                             ->knowledge_factor_setup.auth_setup_flow;
+  if (auth_setup_flow != WizardContext::AuthChangeFlow::kReauthentication) {
+    return false;
+  }
+
+  if (!user_context.GetAccountId().is_valid()) {
+    LOG(ERROR) << "Invalid AccountId detected";
+    return false;
+  }
+
+  user_manager::KnownUser known_user(
+      user_manager::UserManager::Get()->GetLocalState());
+  if (user_context.GetAuthFlow() == UserContext::AUTH_FLOW_GAIA_WITH_SAML ||
+      known_user.IsUsingSAML(user_context.GetAccountId())) {
+    return false;
+  }
+
+  if (!known_user.GetIsEnterpriseManaged(user_context.GetAccountId())) {
+    return false;
+  }
+
+  // If PIN is present and allowed as a secondary factor, we should not remove
+  // it, as it may have been setup by the QuickUnlock policy.
+  if (IsPinPresentAndAllowedAsSecondaryFactor(user_context)) {
+    return false;
+  }
+  // Only check for policy after the check for auth mode and auth flow,
+  // otherwise we might end up calling an auth policy connector in offline login
+  // where it might not have been properly initialized.
+  auto allowed_local_auth_factors =
+      AuthPolicyConnector::Get()->AllowedLocalAuthFactors(
+          user_context.GetAccountId());
+  // Policy is only unset for unmanaged users.
+  bool policy_unset = !allowed_local_auth_factors.has_value();
+  bool policy_allows_local_auth_factors =
+      allowed_local_auth_factors.has_value() &&
+      !allowed_local_auth_factors->empty();
+  if (policy_unset || policy_allows_local_auth_factors ||
+      !UserHasAnyLocalAuthFactors(user_context)) {
+    return false;
+  }
+  SetUserContext(*GetLoginDisplayHost()->GetWizardContext(),
+                 std::make_unique<UserContext>(user_context));
+
+  GetLoginDisplayHost()->GetSigninUI()->ShowRemoveLocalAuthFactorsScreen();
+  return true;
 }
 
 bool ExistingUserController::MaybeShowPasswordSelectionScreen(
     const UserContext& user_context) {
+  auto* wizard_context = GetLoginDisplayHost()->GetWizardContext();
   if (!ash::features::IsRecoveryFlowReorderEnabled() ||
       auth_mode_ != LoginPerformer::AuthorizationMode::kExternal ||
-      GetLoginDisplayHost()
-              ->GetWizardContext()
-              ->knowledge_factor_setup.auth_setup_flow !=
+      !wizard_context->allow_factor_change_during_recovery ||
+      wizard_context->knowledge_factor_setup.auth_setup_flow !=
           WizardContext::AuthChangeFlow::kRecovery) {
     return false;
   }
-  GetLoginDisplayHost()->GetWizardContext()->extra_factors_token =
-      AuthSessionStorage::Get()->Store(
-          std::make_unique<UserContext>(user_context));
+  wizard_context->allow_factor_change_during_recovery = false;
+  wizard_context->extra_factors_token = AuthSessionStorage::Get()->Store(
+      std::make_unique<UserContext>(user_context));
   GetLoginDisplayHost()->GetSigninUI()->ShowPasswordSelectionScreen();
 
   return true;
@@ -862,14 +971,12 @@ void ExistingUserController::FinalizeAuthAndStartSession(
       last_login_attempt_was_auto_login_) {
     const std::string& user_id = user_context.GetAccountId().GetUserEmail();
     policy::DeviceLocalAccountPolicyBroker* broker =
-        g_browser_process->platform_part()
-            ->browser_policy_connector_ash()
-            ->GetDeviceLocalAccountPolicyService()
+        browser_policy_connector_ash_->GetDeviceLocalAccountPolicyService()
             ->GetBrokerForUser(user_id);
-    bool privacy_warnings_enabled =
-        g_browser_process->local_state()->GetBoolean(
-            prefs::kManagedGuestSessionPrivacyWarningsEnabled);
-    if (ash::login::IsFullManagementDisclosureNeeded(broker) &&
+    bool privacy_warnings_enabled = local_state_->GetBoolean(
+        prefs::kManagedGuestSessionPrivacyWarningsEnabled);
+    if (ash::login::IsFullManagementDisclosureNeeded(local_state_.get(),
+                                                     broker) &&
         privacy_warnings_enabled) {
       ShowAutoLaunchManagedGuestSessionNotification();
     }
@@ -883,28 +990,30 @@ void ExistingUserController::ShowAutoLaunchManagedGuestSessionNotification() {
       l10n_util::GetStringUTF16(IDS_AUTO_LAUNCH_NOTIFICATION_BUTTON));
   const std::u16string title =
       l10n_util::GetStringUTF16(IDS_AUTO_LAUNCH_NOTIFICATION_TITLE);
-  policy::BrowserPolicyConnectorAsh* connector =
-      g_browser_process->platform_part()->browser_policy_connector_ash();
   const std::u16string message = l10n_util::GetStringFUTF16(
       IDS_ASH_LOGIN_MANAGED_SESSION_MONITORING_FULL_WARNING,
-      base::UTF8ToUTF16(connector->GetEnterpriseDomainManager()));
+      base::UTF8ToUTF16(
+          browser_policy_connector_ash_->GetEnterpriseDomainManager()));
   auto delegate =
       base::MakeRefCounted<message_center::HandleNotificationClickDelegate>(
           base::BindRepeating([](std::optional<int> button_index) {
             DCHECK(button_index);
             SystemTrayClientImpl::Get()->ShowEnterpriseInfo();
           }));
-  message_center::Notification notification = CreateSystemNotification(
+  auto notification = CreateSystemNotificationPtr(
       message_center::NOTIFICATION_TYPE_SIMPLE, kAutoLaunchNotificationId,
       title, message, std::u16string(), GURL(),
       message_center::NotifierId(message_center::NotifierType::SYSTEM_COMPONENT,
                                  kAutoLaunchNotifierId,
                                  NotificationCatalogName::kAutoLaunch),
-      data, std::move(delegate), vector_icons::kBusinessIcon,
+      data, std::move(delegate),
+      ::features::IsRoundedIconsEnabled() ? vector_icons::kDomainIcon
+                                          : vector_icons::kBusinessOldIcon,
       message_center::SystemNotificationWarningLevel::NORMAL);
-  notification.SetSystemPriority();
-  notification.set_pinned(true);
-  SystemNotificationHelper::GetInstance()->Display(notification);
+  notification->SetSystemPriority();
+  notification->set_pinned(true);
+  message_center::MessageCenter::Get()->AddNotification(
+      std::move(notification));
 }
 
 void ExistingUserController::OnProfilePrepared(Profile* profile,
@@ -925,7 +1034,7 @@ void ExistingUserController::OnProfilePrepared(Profile* profile,
       profile_connector->IsManaged() &&
       user_context.GetUserType() != user_manager::UserType::kChild;
 
-  user_manager::KnownUser known_user(g_browser_process->local_state());
+  user_manager::KnownUser known_user(&local_state_.get());
   known_user.SetIsEnterpriseManaged(user_context.GetAccountId(),
                                     is_enterprise_managed);
 
@@ -939,7 +1048,8 @@ void ExistingUserController::OnProfilePrepared(Profile* profile,
   if (is_enterprise_managed &&
       user_context.GetUserType() == user_manager::UserType::kRegular &&
       user_has_empty_password_.value_or(false) &&
-      !user_has_challenge_response_keys_.value_or(false)) {
+      !user_has_challenge_response_keys_.value_or(false) &&
+      !features::IsManagedLocalPinAndPasswordEnabled()) {
     // ERROR: Enterprise-managed regular user lacks an online password.
     // This scenario is unsupported.
     SYSLOG(ERROR) << "Authentication failed: Enterprise-managed user lacks an "
@@ -948,7 +1058,7 @@ void ExistingUserController::OnProfilePrepared(Profile* profile,
       auth_status_consumer.OnAuthFailure(
           AuthFailure(AuthFailure::AUTH_DISABLED));
     }
-    chrome::AttemptUserExit();
+    session_manager::SessionManager::Get()->RequestSignOut();
     return;
   }
 
@@ -980,8 +1090,8 @@ void ExistingUserController::OnOffTheRecordAuthSuccess() {
   // that would actually complete the login process.
 
   // Mark the device as registered., i.e. the second part of OOBE as completed.
-  if (!StartupUtils::IsDeviceRegistered()) {
-    StartupUtils::MarkDeviceRegistered(base::OnceClosure());
+  if (!StartupUtils::IsDeviceRegistered(local_state_.get())) {
+    StartupUtils::MarkDeviceRegistered(local_state_.get(), base::OnceClosure());
   }
 
   UserSessionManager::GetInstance()->CompleteGuestSessionLogin(guest_mode_url_);
@@ -1049,7 +1159,8 @@ void ExistingUserController::OnOldEncryptionDetected(
     std::unique_ptr<UserContext> user_context,
     bool has_incomplete_migration) {
   std::optional<EncryptionMigrationMode> encryption_migration_mode =
-      GetEncryptionMigrationMode(*user_context, has_incomplete_migration);
+      GetEncryptionMigrationMode(local_state_.get(), *user_context,
+                                 has_incomplete_migration);
   CHECK(login_performer_);
   if (!encryption_migration_mode.has_value()) {
     ContinuePerformLoginWithoutMigration(login_performer_->auth_mode(),
@@ -1166,8 +1277,9 @@ void ExistingUserController::LoginAsGuest() {
 
   // Only one instance of LoginPerformer should exist at a time.
   login_performer_.reset(nullptr);
-  login_performer_ =
-      std::make_unique<ChromeLoginPerformer>(this, AuthEventsRecorder::Get());
+  login_performer_ = std::make_unique<ChromeLoginPerformer>(
+      &local_state_.get(), shared_url_loader_factory_,
+      &browser_policy_connector_ash_.get(), this, AuthEventsRecorder::Get());
   login_performer_->LoginOffTheRecord();
   SendAccessibilityAlert(
       l10n_util::GetStringUTF8(IDS_CHROMEOS_ACC_LOGIN_SIGNIN_OFFRECORD));
@@ -1192,10 +1304,8 @@ void ExistingUserController::LoginAsPublicSession(
   // Public session login will fail if attempted if the associated policy
   // is not ready - wait for the policy to become available before starting the
   // auto-login timer.
-  policy::BrowserPolicyConnectorAsh* connector =
-      g_browser_process->platform_part()->browser_policy_connector_ash();
   policy::DeviceLocalAccountPolicyService* policy_service =
-      connector->GetDeviceLocalAccountPolicyService();
+      browser_policy_connector_ash_->GetDeviceLocalAccountPolicyService();
   const auto& user_id = user_context.GetAccountId().GetUserEmail();
   DCHECK(policy_service);
   if (!policy_service->IsPolicyAvailableForUser(user_id)) {
@@ -1226,9 +1336,7 @@ void ExistingUserController::LoginAsPublicSessionWhenPolicyAvailable(
     // first entry. Otherwise, `locale` will remain blank, indicating that the
     // public session should use the current UI locale.
     const policy::PolicyMap::Entry* entry =
-        g_browser_process->platform_part()
-            ->browser_policy_connector_ash()
-            ->GetDeviceLocalAccountPolicyService()
+        browser_policy_connector_ash_->GetDeviceLocalAccountPolicyService()
             ->GetBrokerForUser(user_context.GetAccountId().GetUserEmail())
             ->core()
             ->store()
@@ -1288,7 +1396,8 @@ void ExistingUserController::ConfigureAutoLogin() {
   VLOG(2) << "Autologin account in prefs: " << auto_login_account_id;
   const std::vector<policy::DeviceLocalAccount> device_local_accounts =
       policy::GetDeviceLocalAccounts(cros_settings_);
-  const bool show_update_required_screen = IsUpdateRequiredDeadlineReached();
+  const bool show_update_required_screen =
+      IsUpdateRequiredDeadlineReached(browser_policy_connector_ash_.get());
 
   public_session_auto_login_account_id_ = GetPublicSessionAutoLoginAccountId(
       device_local_accounts, auto_login_account_id);
@@ -1486,8 +1595,9 @@ void ExistingUserController::LoginAsPublicSessionInternal(
   SYSLOG(INFO) << "MGS: Performing login for account";
   // Only one instance of LoginPerformer should exist at a time.
   login_performer_.reset(nullptr);
-  login_performer_ =
-      std::make_unique<ChromeLoginPerformer>(this, AuthEventsRecorder::Get());
+  login_performer_ = std::make_unique<ChromeLoginPerformer>(
+      &local_state_.get(), shared_url_loader_factory_,
+      &browser_policy_connector_ash_.get(), this, AuthEventsRecorder::Get());
   login_performer_->LoginAsPublicSession(user_context);
   SendAccessibilityAlert(
       l10n_util::GetStringUTF8(IDS_CHROMEOS_ACC_LOGIN_SIGNIN_PUBLIC_ACCOUNT));
@@ -1581,7 +1691,7 @@ void ExistingUserController::ContinueLoginIfDeviceNotDisabled(
   }
 
   if (features::IsOobeAutoEnrollmentCheckForcedEnabled() &&
-      !StartupUtils::IsOobeCompleted()) {
+      !StartupUtils::IsOobeCompleted(local_state_.get())) {
     // If OOBE is not yet completed, abort the current login attempt. This
     // indicates a potential bypass attempt and an error screen is shown.
     ++num_login_attempts_;
@@ -1623,7 +1733,7 @@ void ExistingUserController::ContinueLoginIfDeviceNotDisabled(
 void ExistingUserController::DoCompleteLogin(
     const UserContext& login_user_context) {
   UserContext user_context = login_user_context;
-  user_manager::KnownUser known_user(g_browser_process->local_state());
+  user_manager::KnownUser known_user(&local_state_.get());
 
   if (user_context.GetDeviceId().empty()) {
     std::string device_id = known_user.GetDeviceId(user_context.GetAccountId());
@@ -1653,7 +1763,7 @@ void ExistingUserController::DoCompleteLogin(
   if (!user_context.GetAuthCode().empty()) {
     oauth2_token_initializer_ = std::make_unique<OAuth2TokenInitializer>();
     oauth2_token_initializer_->Start(
-        user_context,
+        shared_url_loader_factory_, user_context,
         base::BindOnce(&ExistingUserController::OnOAuth2TokensFetched,
                        weak_factory_.GetWeakPtr()));
     return;
@@ -1672,7 +1782,7 @@ void ExistingUserController::DoLogin(const UserContext& user_context,
       guest_mode_url_ = GURL(specifics.guest_mode_url);
       if (specifics.guest_mode_url_append_locale) {
         guest_mode_url_ = google_util::AppendGoogleLocaleParam(
-            guest_mode_url_, g_browser_process->GetApplicationLocale());
+            guest_mode_url_, application_locale_storage_->Get());
       }
     }
     LoginAsGuest();

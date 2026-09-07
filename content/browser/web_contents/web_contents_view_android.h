@@ -6,6 +6,7 @@
 #define CONTENT_BROWSER_WEB_CONTENTS_WEB_CONTENTS_VIEW_ANDROID_H_
 
 #include <memory>
+#include <optional>
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -115,14 +116,14 @@ class CONTENT_EXPORT WebContentsViewAndroid : public WebContentsView,
       bool right_aligned,
       bool allow_multiple_selection) override;
   ui::OverscrollRefreshHandler* GetOverscrollRefreshHandler() const override;
-  void StartDragging(const DropData& drop_data,
-                     const url::Origin& source_origin,
-                     blink::DragOperationsMask allowed_ops,
-                     const gfx::ImageSkia& image,
-                     const gfx::Vector2d& cursor_offset,
-                     const gfx::Rect& drag_obj_rect,
-                     const blink::mojom::DragEventSourceInfo& event_info,
-                     RenderWidgetHostImpl* source_rwh) override;
+  void StartDragging(
+      RenderFrameHost& source_rfh,
+      const DropData& drop_data,
+      blink::DragOperationsMask allowed_ops,
+      const gfx::ImageSkia& image,
+      const gfx::Vector2d& cursor_offset,
+      const gfx::Rect& drag_obj_rect,
+      const blink::mojom::DragEventSourceInfo& event_info) override;
   void UpdateDragOperation(ui::mojom::DragOperation operation,
                            bool document_is_handling_drag) override;
   void GotFocus(RenderWidgetHostImpl* render_widget_host) override;
@@ -205,6 +206,12 @@ class CONTENT_EXPORT WebContentsViewAndroid : public WebContentsView,
   void OnDragEnded();
   virtual void OnSystemDragEnded(RenderWidgetHost* source_rwh);
 
+  // Clears internal and system drag-and-drop state when a drag attempt fails to
+  // start (e.g. due to drag failures from system/OS errors during
+  // initiation). Unlike `OnDragEnded`, this does not dispatch a final `dragend`
+  // event since the drag never officially started
+  void ClearDragStateOnStartFailure(RenderWidgetHost* source_rwh);
+
   SelectPopup* GetSelectPopup();
 
   // Returns the current `SelectionPopupController` from the current
@@ -255,8 +262,6 @@ class CONTENT_EXPORT WebContentsViewAndroid : public WebContentsView,
 
   // Source RenderWidgetHost when dragging out of this WebContents.
   base::WeakPtr<RenderWidgetHostImpl> current_source_rwh_for_drag_;
-  // base::FeatureList::IsEnabled(features::kAndroidDragDropOopif).
-  bool drag_drop_oopif_enabled_ = false;
   // Current drop data set on drop event.
   std::unique_ptr<DropData> drop_data_;
   // Metadata for the current drag.
@@ -277,6 +282,17 @@ class CONTENT_EXPORT WebContentsViewAndroid : public WebContentsView,
 
   gfx::PointF drag_location_;
   gfx::PointF drag_screen_location_;
+
+  // The operation the target decided to perform on drop. Valid only if
+  // |drag_dropped_| is true.
+  ui::mojom::DragOperation drag_operation_ = ui::mojom::DragOperation::kNone;
+  // True if we received an ACTION_DROP. This is used to distinguish between a
+  // successfully completed drag and a cancelled drag (where the user releases
+  // the drag outside a valid target, firing ACTION_DRAG_ENDED without an
+  // ACTION_DROP). Without this, we might erroneously report a successful drop
+  // if the drag was cancelled while hovering over a valid target.
+  // This variable is only valid while handling ACTION_DRAG_ENDED.
+  bool drag_dropped_ = false;
 
   // Set to true when the document is handling the drag.  This means that
   // the document has registeted interest in the dropped data and the

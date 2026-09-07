@@ -4,11 +4,12 @@
 
 #include "chrome/browser/policy/safe_search_policy_test.h"
 
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/omnibox/omnibox_controller.h"
 #include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/policy/policy_constants.h"
@@ -51,7 +52,7 @@ GURL SafeSearchPolicyTest::GetExpectedSearchURL(bool expect_safe_search) {
 }
 
 // static
-void SafeSearchPolicyTest::CheckSafeSearch(Browser* browser,
+void SafeSearchPolicyTest::CheckSafeSearch(BrowserWindowInterface* browser,
                                            bool expect_safe_search,
                                            const std::string& url) {
   content::WebContents* web_contents =
@@ -59,8 +60,10 @@ void SafeSearchPolicyTest::CheckSafeSearch(Browser* browser,
   content::TestNavigationObserver observer(web_contents);
   ui_test_utils::SendToOmniboxAndSubmit(browser, url);
   observer.Wait();
-  OmniboxEditModel* model =
-      browser->window()->GetLocationBar()->GetOmniboxController()->edit_model();
+  OmniboxEditModel* model = BrowserWindow::FromBrowser(browser)
+                                ->GetLocationBar()
+                                ->GetOmniboxController()
+                                ->edit_model();
   EXPECT_TRUE(model->CurrentMatch().destination_url.is_valid());
   EXPECT_EQ(GetExpectedSearchURL(expect_safe_search),
             web_contents->GetLastCommittedURL());

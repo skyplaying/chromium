@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/strings/utf_ostream_operators.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/affiliations/core/browser/affiliation_utils.h"
 #include "components/password_manager/core/browser/password_form.h"
@@ -39,7 +40,7 @@ UiCredential::UiCredential(std::u16string username,
 UiCredential::UiCredential(const PasswordForm& form,
                            const url::Origin& affiliated_origin)
     : username_(form.username_value),
-      password_(form.password_value),
+      password_(form.password_value.value()),
       match_type_(password_manager_util::GetMatchType(form)),
       last_used_(form.date_last_used),
       is_shared_(form.type == PasswordForm::Type::kReceivedViaSharing),

@@ -125,7 +125,7 @@ class TaskGraphTest : public testing::Test {
 
         while (sequence->IsFrontTaskUnblocked()) {
           base::OnceClosure task_closure;
-          uint32_t order_num = sequence->BeginTask(&task_closure);
+          uint64_t order_num = sequence->BeginTask(&task_closure);
           SyncToken release = sequence->current_task_release();
 
           {
@@ -166,6 +166,8 @@ class TaskGraphTest : public testing::Test {
     CommandBufferId command_buffer_id;
   };
 
+  base::test::ScopedFeatureList scoped_feature_list_;
+
   base::test::SingleThreadTaskEnvironment task_environment_;
 
   std::vector<int> tasks_executed_;
@@ -182,8 +184,6 @@ class TaskGraphTest : public testing::Test {
   const CommandBufferNamespace kNamespaceId = CommandBufferNamespace::GPU_IO;
 
   int num_tasks_added_ = 0;
-
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 TEST_F(TaskGraphTest, DestroySequenceReleasesSyncPoints) {

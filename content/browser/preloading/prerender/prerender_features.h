@@ -11,7 +11,6 @@
 
 namespace features {
 
-CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrerender2FallbackPrefetchSpecRules);
 
 // Controls whether `PrefetchMatchResolver` use timeout for prefetch ahead of
 // prerender. We are going not to use timeout as it makes prerender fail. For
@@ -31,11 +30,6 @@ enum class Prerender2FallbackPrefetchSchedulerPolicy {
 CONTENT_EXPORT extern const base::FeatureParam<
     Prerender2FallbackPrefetchSchedulerPolicy>
     kPrerender2FallbackPrefetchSchedulerPolicy;
-
-// If enabled, `PreloadServingMetrics` is collected and metrics are rerpoted.
-// For more details, see `PreloadServingMetrics`.
-CONTENT_EXPORT extern const base::FeatureParam<bool>
-    kPrerender2FallbackUsePreloadServingMetrics;
 
 // This feature was used to launch Prerender2 support for No-Vary-Search header.
 // This work has finished and the old implementation was deleted. Now this flag
@@ -57,18 +51,33 @@ CONTENT_EXPORT extern const base::FeatureParam<int>
 CONTENT_EXPORT extern const base::FeatureParam<int>
     kPrerender2NoVarySearchWaitForHeadersTimeoutForEmbedders;
 
-// If enabled, suppresses prerendering on slow network.
-CONTENT_EXPORT BASE_DECLARE_FEATURE(kSuppressesPrerenderingOnSlowNetwork);
-
-CONTENT_EXPORT extern const base::FeatureParam<base::TimeDelta>
-    kSuppressesPrerenderingOnSlowNetworkThreshold;
-
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrerender2DisallowNonTrustworthyHttp);
 
 // If enabled, requests the compositor warm-up (crbug.com/41496019) for
 // Immediate/non-Immediate Speculation Rules prerenders.
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrerender2WarmUpCompositorForImmediate);
 CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrerender2WarmUpCompositorForNonImmediate);
+
+// If enabled, allows upgrading a prerender-until-script session to a full
+// prerender when a matching prerender speculation rule is added.
+CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrerenderUntilScriptUpgrade);
+
+// If enabled, allows prerender-until-script to reuse the initiator's process.
+// Enabled by default; acts as a killswitch.
+CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrerenderUntilScriptProcessReuse);
+
+// If enabled, allows a prerender to reuse its initiator's process while
+// remaining in a dedicated BrowsingInstance.
+CONTENT_EXPORT BASE_DECLARE_FEATURE(kPrerender2ReuseInitiatorProcess);
+CONTENT_EXPORT extern const base::FeatureParam<std::string>
+    kPrerender2ReuseInitiatorProcessActionType;
+CONTENT_EXPORT extern const base::FeatureParam<std::string>
+    kPrerender2ReuseInitiatorProcessEagerness;
+CONTENT_EXPORT extern const base::FeatureParam<int>
+    kPrerender2ReuseInitiatorProcessMaxReuseCount;
+
+CONTENT_EXPORT extern const base::FeatureParam<bool>
+    kPrerender2CrossOriginIframesNesting;
 
 CONTENT_EXPORT bool UsePrefetchPrerenderIntegration();
 }  // namespace features

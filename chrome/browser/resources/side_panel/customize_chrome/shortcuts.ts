@@ -31,6 +31,15 @@ export interface ShortcutsElement {
   };
 }
 
+interface ShortcutConfig {
+  type: TileType;
+  title: string;
+  description: string;
+  buttonName: string;
+  containerName: string;
+  disabled: boolean;
+}
+
 export class ShortcutsElement extends CrLitElement {
   static get is() {
     return 'customize-chrome-shortcuts';
@@ -54,7 +63,6 @@ export class ShortcutsElement extends CrLitElement {
       showEnterpriseShortcuts_: {type: Boolean},
       shortcutConfigs_: {type: Array},
       disabledShortcuts_: {type: Array},
-      ntpEnterpriseShortcutsMixingAllowed_: {type: Boolean},
     };
   }
 
@@ -64,10 +72,8 @@ export class ShortcutsElement extends CrLitElement {
   protected accessor show_: boolean = false;
   protected accessor showPersonalShortcuts_: boolean = false;
   protected accessor showEnterpriseShortcuts_: boolean = false;
-  protected accessor shortcutConfigs_: any[] = [];
+  protected accessor shortcutConfigs_: ShortcutConfig[] = [];
   protected accessor disabledShortcuts_: TileType[] = [];
-  protected accessor ntpEnterpriseShortcutsMixingAllowed_: boolean =
-      loadTimeData.getBoolean('ntpEnterpriseShortcutsMixingAllowed');
 
   private setMostVisitedSettingsListenerId_: number|null = null;
 
@@ -81,11 +87,9 @@ export class ShortcutsElement extends CrLitElement {
             (shortcutsTypes: TileType[], shortcutsVisible: boolean,
              shortcutsPersonalVisible: boolean,
              disabledShortcuts: TileType[]) => {
-              // If enterprise shortcuts mixing is allowed, only track personal
-              // shortcut types in `shortcutsType_`.
-              this.shortcutsType_ = shortcutsTypes.find(
-                  t => !this.ntpEnterpriseShortcutsMixingAllowed_ ||
-                      t !== TileType.kEnterpriseShortcuts);
+              // Only track personal shortcut types in `shortcutsType_`.
+              this.shortcutsType_ =
+                  shortcutsTypes.find(t => t !== TileType.kEnterpriseShortcuts);
               this.show_ = shortcutsVisible;
               this.disabledShortcuts_ = disabledShortcuts;
               this.showPersonalShortcuts_ = shortcutsPersonalVisible;
@@ -120,7 +124,7 @@ export class ShortcutsElement extends CrLitElement {
     }
   }
 
-  private computeShortcutConfigs_() {
+  private computeShortcutConfigs_(): ShortcutConfig[] {
     return [
       {
         type: TileType.kEnterpriseShortcuts,
@@ -152,8 +156,7 @@ export class ShortcutsElement extends CrLitElement {
 
   private setMostVisitedSettings_() {
     const types: TileType[] = [];
-    if (this.ntpEnterpriseShortcutsMixingAllowed_ &&
-        this.showEnterpriseShortcuts_) {
+    if (this.showEnterpriseShortcuts_) {
       types.push(TileType.kEnterpriseShortcuts);
     }
     if (this.shortcutsType_ !== undefined) {
@@ -184,9 +187,6 @@ export class ShortcutsElement extends CrLitElement {
   }
 
   private setShowPersonalShortcuts_(show: boolean) {
-    if (!this.ntpEnterpriseShortcutsMixingAllowed_) {
-      return;
-    }
     if (this.showPersonalShortcuts_ === show) {
       return;
     }
@@ -203,9 +203,6 @@ export class ShortcutsElement extends CrLitElement {
   }
 
   private setShowEnterpriseShortcuts_(show: boolean) {
-    if (!this.ntpEnterpriseShortcutsMixingAllowed_) {
-      return;
-    }
     if (this.showEnterpriseShortcuts_ === show) {
       return;
     }
@@ -221,7 +218,7 @@ export class ShortcutsElement extends CrLitElement {
     this.setShowEnterpriseShortcuts_(!this.showEnterpriseShortcuts_);
   }
 
-  protected onRadioSelectionChanged_(e: CustomEvent<{value: string}>) {
+  protected onRadioSelectionSelectedChanged_(e: CustomEvent<{value: string}>) {
     if (e.detail.value === this.radioSelection_) {
       return;
     }
@@ -250,12 +247,9 @@ export class ShortcutsElement extends CrLitElement {
   }
 
   protected getRadioSelectionShortcutConfigs_() {
-    // If ntpEnterpriseShortcutsMixingAllowed_ is true, do not show enterprise
-    // shortcut types in the radio selection.
+    // Only show personal shortcut types in the radio selection.
     return this.shortcutConfigs_.filter(
-        item => (!this.ntpEnterpriseShortcutsMixingAllowed_ ||
-                 item.type !== TileType.kEnterpriseShortcuts) &&
-            !item.disabled);
+        item => item.type !== TileType.kEnterpriseShortcuts && !item.disabled);
   }
 
   protected getEnterpriseShortcutConfigs_() {
@@ -264,9 +258,10 @@ export class ShortcutsElement extends CrLitElement {
   }
 
   protected showEnterprisePersonalMixedSidepanel_() {
-    return this.ntpEnterpriseShortcutsMixingAllowed_ &&
-        !this.disabledShortcuts_.includes(TileType.kEnterpriseShortcuts);
+    return !this.disabledShortcuts_.includes(TileType.kEnterpriseShortcuts);
   }
+
+
 }
 
 declare global {

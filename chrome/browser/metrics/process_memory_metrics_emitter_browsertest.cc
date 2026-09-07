@@ -17,20 +17,22 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
-#include "base/test/trace_event_analyzer.h"
+#include "base/test/tracing/trace_event_analyzer.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/trace_event/memory_dump_manager.h"
 #include "base/trace_event/trace_config_memory_test_util.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/tracing.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "content/public/browser/network_service_util.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/browser/site_instance.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/scoped_accessibility_mode_override.h"
 #include "content/public/test/test_utils.h"
@@ -43,6 +45,7 @@
 #include "services/resource_coordinator/public/cpp/memory_instrumentation/memory_instrumentation.h"
 #include "services/resource_coordinator/public/cpp/memory_instrumentation/os_metrics.h"
 #include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
+#include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
 #include "url/url_constants.h"
 
@@ -80,12 +83,12 @@ enum class ValueRestriction { NONE, ABOVE_ZERO };
 
 // Returns the number of renderers associated with top-level frames in
 // |browser|. There can be other renderers in the process (e.g. spare renderer).
-int GetNumRenderers(Browser* browser) {
+int GetNumRenderers(BrowserWindowInterface* browser) {
   // Since multiple tabs can be hosted in the same process, RenderProcessHosts
   // need to be deduped.
   std::set<content::RenderProcessHost*> render_process_hosts;
-  for (int i = 0; i < browser->tab_strip_model()->count(); ++i) {
-    render_process_hosts.insert(browser->tab_strip_model()
+  for (int i = 0; i < browser->GetTabStripModel()->count(); ++i) {
+    render_process_hosts.insert(browser->GetTabStripModel()
                                     ->GetWebContentsAt(i)
                                     ->GetSiteInstance()
                                     ->GetProcess());
@@ -904,7 +907,8 @@ IN_PROC_BROWSER_TEST_F(ProcessMemoryMetricsEmitterTest,
 
   // Hold a reference to an accessibility node so that there's one live node.
   Microsoft::WRL::ComPtr<IAccessible> root(
-      browser()->GetBrowserView().GetNativeViewAccessible());
+      BrowserView::GetBrowserViewForBrowser(browser())
+          ->GetNativeViewAccessible());
   ASSERT_TRUE(root);
 
   // Check for a live node.

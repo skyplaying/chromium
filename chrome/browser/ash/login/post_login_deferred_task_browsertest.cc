@@ -8,15 +8,18 @@
 #include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/wm/window_restore/window_restore_util.h"
+#include "base/check_deref.h"
 #include "base/run_loop.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/ash/login/login_manager_test.h"
 #include "chrome/browser/ash/login/startup_utils.h"
 #include "chrome/browser/ash/policy/server_backed_state/server_backed_device_state.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/sessions/exit_type_service.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
@@ -171,7 +174,8 @@ INSTANTIATE_TEST_SUITE_P(
 IN_PROC_BROWSER_TEST_P(PostLoginDeferredTaskTest, PRE_PRE_Basic) {
   if (ShouldPerformLogin()) {
     EXPECT_EQ(SessionState::OOBE, session_state());
-    StartupUtils::MarkOobeCompleted();
+    StartupUtils::MarkOobeCompleted(
+        CHECK_DEREF(g_browser_process->local_state()));
   }
 
   // This needs to happen before UserManager is created.
@@ -188,7 +192,7 @@ IN_PROC_BROWSER_TEST_P(PostLoginDeferredTaskTest, PRE_Basic) {
 
   // Creates a browser window and loads page other than new tab page.
   Profile* user_profile = ProfileManager::GetActiveUserProfile();
-  Browser* browser = CreateBrowser(user_profile);
+  BrowserWindowInterface* browser = CreateBrowser(user_profile);
   ASSERT_NE(browser, nullptr);
   ASSERT_TRUE(
       ui_test_utils::NavigateToURL(browser, GURL("http://www.google.com")));

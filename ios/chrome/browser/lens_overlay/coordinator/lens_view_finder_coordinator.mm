@@ -23,8 +23,8 @@
 #import "ios/chrome/browser/lens/ui_bundled/lens_availability.h"
 #import "ios/chrome/browser/lens/ui_bundled/lens_entrypoint.h"
 #import "ios/chrome/browser/lens_overlay/model/lens_overlay_configuration_factory.h"
-#import "ios/chrome/browser/lens_overlay/model/lens_overlay_entrypoint.h"
 #import "ios/chrome/browser/lens_overlay/model/lens_view_finder_metrics_recorder.h"
+#import "ios/chrome/browser/lens_overlay/public/lens_overlay_entrypoint.h"
 #import "ios/chrome/browser/lens_overlay/ui/lens_view_finder_transition_manager.h"
 #import "ios/chrome/browser/search_engines/model/template_url_service_factory.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
@@ -69,10 +69,10 @@ LensViewFinderTransition TransitionFromPresentationStyle(
 }  // namespace
 
 @interface LensViewFinderCoordinator () <
-    LensCommands,
     ChromeLensViewFinderDelegate,
-    UIViewControllerTransitioningDelegate,
-    UIAdaptivePresentationControllerDelegate>
+    LensCommands,
+    UIAdaptivePresentationControllerDelegate,
+    UIViewControllerTransitioningDelegate>
 
 // Whether post capture view is shown.
 @property(nonatomic, assign) BOOL postCaptureShown;
@@ -127,6 +127,7 @@ LensViewFinderTransition TransitionFromPresentationStyle(
       self.browser->GetCommandDispatcher(), LensOverlayCommands);
   [lensOverlayHandler
           searchImageWithLens:command.image
+                 rawImageData:command.rawImageData
                    entrypoint:LensOverlayEntrypoint::kSearchImageContextMenu
       initialPresentationBase:_baseViewController
       resultsPresenterFactory:nil
@@ -194,6 +195,10 @@ LensViewFinderTransition TransitionFromPresentationStyle(
 
 - (void)lensController:(id<ChromeLensViewFinderController>)lensController
           didSelectURL:(GURL)url {
+  if (!url.SchemeIsHTTPOrHTTPS()) {
+    return;
+  }
+
   [_metricsRecorder recordLensViewFinderCameraURLOpen];
   __weak __typeof(self) weakSelf = self;
   [self exitLensViewFinderAnimated:YES
@@ -362,7 +367,8 @@ LensViewFinderTransition TransitionFromPresentationStyle(
       GetApplicationContext()->GetLocalState()->GetBoolean(
           prefs::kLensCameraAssistedSearchPolicyAllowed) &&
       !base::FeatureList::IsEnabled(kDisableLensCamera) &&
-      ui::GetDeviceFormFactor() != ui::DEVICE_FORM_FACTOR_TABLET;
+      (ui::GetDeviceFormFactor() != ui::DEVICE_FORM_FACTOR_TABLET ||
+       base::FeatureList::IsEnabled(kEnableLensOnIPad));
   [sharedDefaults setBool:enableLensInWidget forKey:enableLensInWidgetKey];
 }
 

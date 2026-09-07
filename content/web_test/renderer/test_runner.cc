@@ -6,6 +6,7 @@
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <clocale>
 #include <limits>
 #include <string_view>
@@ -54,7 +55,9 @@
 #include "printing/page_number.h"
 #include "printing/page_range.h"
 #include "printing/print_settings.h"
+#include "services/device/public/mojom/screen_orientation_lock_types.mojom-shared.h"
 #include "services/network/public/mojom/cors.mojom.h"
+#include "skia/ext/skcolorspace_primaries.h"
 #include "third_party/abseil-cpp/absl/numeric/int128.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
 #include "third_party/blink/public/common/permissions/permission_utils.h"
@@ -91,13 +94,13 @@
 #include "third_party/blink/public/web/web_view_observer.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkCanvas.h"
+#include "third_party/skia/include/core/SkColorSpace.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/color_space.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/geometry/skia_conversions.h"
-#include "ui/gfx/test/icc_profiles.h"
 #include "v8/include/cppgc/allocation.h"
 #include "v8/include/cppgc/prefinalizer.h"
 #include "v8/include/v8-cppgc.h"
@@ -150,8 +153,7 @@ v8::LocalVector<v8::Value> ConvertBitmapToV8(
 
   blink::WebArrayBuffer buffer =
       blink::WebArrayBuffer::Create(info.computeByteSize(row_bytes), 1);
-  bool read = bitmap.readPixels(info, buffer.Data(), row_bytes, 0, 0);
-  CHECK(read);
+  CHECK(bitmap.readPixels(info, buffer.ByteSpan().data(), row_bytes, 0, 0));
 
   args.push_back(blink::WebArrayBufferConverter::ToV8Value(&buffer, isolate));
   return args;
@@ -279,6 +281,8 @@ class TestRunnerBindings final : public gin::Wrappable<TestRunnerBindings> {
   void ClearTrustTokenState(v8::Local<v8::Function> callback);
   void CopyImageThen(int x, int y, v8::Local<v8::Function> callback);
   void DisableMockScreenOrientation();
+  void SimulateScreenOrientationLockChanged(bool locked,
+                                            const std::string& orientation);
   void DispatchBeforeInstallPromptEvent(
       const std::vector<std::string>& event_platforms,
       v8::Local<v8::Function> callback);
@@ -311,6 +315,7 @@ class TestRunnerBindings final : public gin::Wrappable<TestRunnerBindings> {
   void ForceNextDrawingBufferCreationToFail();
   void ForceNextWebGLContextCreationToFail();
   void GetBluetoothManualChooserEvents(v8::Local<v8::Function> callback);
+  gin::Dictionary GetClipboardReadState(v8::Isolate* isolate);
   void GetManifestThen(v8::Local<v8::Function> callback);
   std::string GetWritableDirectory();
   void InsertStyleSheet(const std::string& source_code);
@@ -330,6 +335,7 @@ class TestRunnerBindings final : public gin::Wrappable<TestRunnerBindings> {
   void QueueReload();
   void RemoveSpellCheckResolvedCallback();
   void RemoveWebPageOverlay();
+  void ResetClipboardReadTracking();
   void ResolveBeforeInstallPromptPromise(const std::string& platform);
   void SendBluetoothManualChooserEvent(const std::string& event,
                                        const std::string& argument);
@@ -596,6 +602,8 @@ gin::ObjectTemplateBuilder TestRunnerBindings::GetObjectTemplateBuilder(
                  &TestRunnerBindings::DisableAutoResizeMode)
       .SetMethod("disableMockScreenOrientation",
                  &TestRunnerBindings::DisableMockScreenOrientation)
+      .SetMethod("simulateScreenOrientationLockChanged",
+                 &TestRunnerBindings::SimulateScreenOrientationLockChanged)
       // Sets up a WebDocumentSubresourceFilterImpl to disallow subsequent
       // subresource loads within the current document with the given path
       // |suffixes|. The filter is created and injected even if |suffixes| is
@@ -669,6 +677,12 @@ gin::ObjectTemplateBuilder TestRunnerBindings::GetObjectTemplateBuilder(
       // Returns the events recorded since the last call to this function.
       .SetMethod("getBluetoothManualChooserEvents",
                  &TestRunnerBindings::GetBluetoothManualChooserEvents)
+      // Returns the clipboard read tracking state from the mock clipboard host.
+      // The returned object has boolean properties: readTextCalled,
+      // readHtmlCalled, readUnsanitizedCustomFormatCalled,
+      // readAvailableFormatsCalled.
+      .SetMethod("getClipboardReadState",
+                 &TestRunnerBindings::GetClipboardReadState)
       .SetMethod("getManifestThen", &TestRunnerBindings::GetManifestThen)
       // Returns the absolute path to a directory this test can write data in.
       // This returns the path to a fresh empty directory every time this method
@@ -710,6 +724,9 @@ gin::ObjectTemplateBuilder TestRunnerBindings::GetObjectTemplateBuilder(
       // from inside the main frame.
       .SetMethod("removeWebPageOverlay",
                  &TestRunnerBindings::RemoveWebPageOverlay)
+      // Resets the clipboard read tracking state on the mock clipboard host.
+      .SetMethod("resetClipboardReadTracking",
+                 &TestRunnerBindings::ResetClipboardReadTracking)
       .SetMethod("resolveBeforeInstallPromptPromise",
                  &TestRunnerBindings::ResolveBeforeInstallPromptPromise)
       .SetMethod("selectionAsMarkup", &TestRunnerBindings::SelectionAsMarkup)
@@ -1070,8 +1087,8 @@ void TestRunnerBindings::ExecCommand(gin::Arguments* args) {
   }
 
   // Note: webkit's version does not return the boolean, so neither do we.
-  GetWebFrame()->ExecuteCommand(blink::WebString::FromUTF8(command),
-                                blink::WebString::FromUTF8(value));
+  GetWebFrame()->ExecuteCommand(blink::WebString::FromUtf8(command),
+                                blink::WebString::FromUtf8(value));
 }
 
 void TestRunnerBindings::TriggerTestInspectorIssue(gin::Arguments* args) {
@@ -1086,7 +1103,7 @@ bool TestRunnerBindings::IsCommandEnabled(const std::string& command) {
   if (!frame_) {
     return false;
   }
-  return GetWebFrame()->IsCommandEnabled(blink::WebString::FromUTF8(command));
+  return GetWebFrame()->IsCommandEnabled(blink::WebString::FromUtf8(command));
 }
 
 void TestRunnerBindings::SetDomainRelaxationForbiddenForURLScheme(
@@ -1096,7 +1113,7 @@ void TestRunnerBindings::SetDomainRelaxationForbiddenForURLScheme(
     return;
   }
   blink::SetDomainRelaxationForbiddenForTest(
-      forbidden, blink::WebString::FromUTF8(scheme));
+      forbidden, blink::WebString::FromUtf8(scheme));
 }
 
 void TestRunnerBindings::SetDumpConsoleMessages(bool enabled) {
@@ -1149,6 +1166,34 @@ std::string TestRunnerBindings::GetWritableDirectory() {
   return result.AsUTF8Unsafe();
 }
 
+gin::Dictionary TestRunnerBindings::GetClipboardReadState(
+    v8::Isolate* isolate) {
+  gin::Dictionary result = gin::Dictionary::CreateEmpty(isolate);
+  if (!frame_) {
+    return result;
+  }
+  bool read_text_called = false;
+  bool read_html_called = false;
+  bool read_unsanitized_custom_format_called = false;
+  bool read_available_formats_called = false;
+  frame_->GetWebTestControlHostRemote()->GetClipboardReadState(
+      &read_text_called, &read_html_called,
+      &read_unsanitized_custom_format_called, &read_available_formats_called);
+  result.Set("readTextCalled", read_text_called);
+  result.Set("readHtmlCalled", read_html_called);
+  result.Set("readUnsanitizedCustomFormatCalled",
+             read_unsanitized_custom_format_called);
+  result.Set("readAvailableFormatsCalled", read_available_formats_called);
+  return result;
+}
+
+void TestRunnerBindings::ResetClipboardReadTracking() {
+  if (!frame_) {
+    return;
+  }
+  frame_->GetWebTestControlHostRemote()->ResetClipboardReadTracking();
+}
+
 void TestRunnerBindings::SetFilePathForMockFileDialog(const std::string& path) {
   if (!frame_) {
     return;
@@ -1187,7 +1232,7 @@ TestRunnerBindings::EvaluateScriptInIsolatedWorldAndReturnValue(
     return {};
   }
 
-  blink::WebScriptSource source(blink::WebString::FromUTF8(script));
+  blink::WebScriptSource source(blink::WebString::FromUtf8(script));
   return GetWebFrame()->ExecuteScriptInIsolatedWorldAndReturnValue(
       world_id, source, blink::BackForwardCacheAware::kAllow);
 }
@@ -1199,7 +1244,7 @@ void TestRunnerBindings::EvaluateScriptInIsolatedWorld(
     return;
   }
 
-  blink::WebScriptSource source(blink::WebString::FromUTF8(script));
+  blink::WebScriptSource source(blink::WebString::FromUtf8(script));
   GetWebFrame()->ExecuteScriptInIsolatedWorld(
       world_id, source, blink::BackForwardCacheAware::kAllow);
 }
@@ -1212,7 +1257,7 @@ void TestRunnerBindings::EvaluateScriptInOwnTask(
     return;
   }
 
-  blink::WebScriptSource source(blink::WebString::FromUTF8(script),
+  blink::WebScriptSource source(blink::WebString::FromUtf8(script),
                                 blink::WebURL(GURL(url)));
   GetWebFrame()
       ->GetTaskRunner(blink::TaskType::kInternalTest)
@@ -1307,7 +1352,7 @@ void TestRunnerBindings::InsertStyleSheet(const std::string& source_code) {
     return;
   }
   GetWebFrame()->GetDocument().InsertStyleSheet(
-      blink::WebString::FromUTF8(source_code));
+      blink::WebString::FromUtf8(source_code));
 }
 
 bool TestRunnerBindings::FindString(
@@ -1336,7 +1381,7 @@ bool TestRunnerBindings::FindString(
   }
 
   const bool find_result = GetWebFrame()->FindForTesting(
-      0, blink::WebString::FromUTF8(search_text), match_case, forward,
+      0, blink::WebString::FromUtf8(search_text), match_case, forward,
       new_session, false /* force */, wrap_around, async);
   return find_result;
 }
@@ -1472,6 +1517,35 @@ void TestRunnerBindings::DisableMockScreenOrientation() {
     return;
   }
   runner_->DisableMockScreenOrientation(GetWebFrame()->View());
+}
+
+void TestRunnerBindings::SimulateScreenOrientationLockChanged(
+    bool locked,
+    const std::string& orientation) {
+  if (!frame_) {
+    return;
+  }
+
+  device::mojom::ScreenOrientationLockType lock_type =
+      device::mojom::ScreenOrientationLockType::DEFAULT;
+  if (orientation == "portrait-primary") {
+    lock_type = device::mojom::ScreenOrientationLockType::PORTRAIT_PRIMARY;
+  } else if (orientation == "portrait-secondary") {
+    lock_type = device::mojom::ScreenOrientationLockType::PORTRAIT_SECONDARY;
+  } else if (orientation == "landscape-primary") {
+    lock_type = device::mojom::ScreenOrientationLockType::LANDSCAPE_PRIMARY;
+  } else if (orientation == "landscape-secondary") {
+    lock_type = device::mojom::ScreenOrientationLockType::LANDSCAPE_SECONDARY;
+  } else if (orientation == "portrait") {
+    lock_type = device::mojom::ScreenOrientationLockType::PORTRAIT;
+  } else if (orientation == "landscape") {
+    lock_type = device::mojom::ScreenOrientationLockType::LANDSCAPE;
+  } else if (orientation == "any") {
+    lock_type = device::mojom::ScreenOrientationLockType::ANY;
+  }
+
+  frame_->GetWebTestControlHostRemote()->SimulateScreenOrientationLockChanged(
+      frame_->GetWebFrame()->GetLocalFrameToken(), locked, lock_type);
 }
 
 void TestRunnerBindings::SetDisallowedSubresourcePathSuffixes(
@@ -1922,14 +1996,14 @@ void TestRunnerBindings::SetBackingScaleFactor(
     return;
   }
 
-  // Limit backing scale factor to something low - 15x. Without
-  // this limit, arbitrarily large values can be used, which can lead to
-  // crashes and other problems. Examples of problems:
+  // Limit backing scale factor to something low - 15x and non-negative.
+  // Without this limit, arbitrarily large or negative values can be used,
+  // which can lead to crashes and other problems. Examples of problems:
   // gfx::Size::GetCheckedArea crashes with a size which overflows int;
   // GLES2DecoderImpl::TexStorageImpl fails with "dimensions out of range"; GL
   // ERROR :GL_OUT_OF_MEMORY. See https://crbug.com/899482 or
   // https://crbug.com/900271
-  double limited_value = fmin(15, value);
+  double limited_value = std::clamp(value, 0.0, 15.0);
 
   frame_->GetLocalRootWebFrameWidget()->SetDeviceScaleFactorForTesting(
       limited_value);
@@ -1946,15 +2020,52 @@ void TestRunnerBindings::SetColorProfile(const std::string& name,
     return;
   }
 
+  auto mix_primaries = [](const SkColorSpacePrimaries& a,
+                          const SkColorSpacePrimaries& b,
+                          float alpha) -> SkColorSpacePrimaries {
+    return {
+        alpha * a.fRX + (1.f - alpha) * b.fRX,
+        alpha * a.fRY + (1.f - alpha) * b.fRY,
+        alpha * a.fGX + (1.f - alpha) * b.fGX,
+        alpha * a.fGY + (1.f - alpha) * b.fGY,
+        alpha * a.fBX + (1.f - alpha) * b.fBX,
+        alpha * a.fBY + (1.f - alpha) * b.fBY,
+        alpha * a.fWX + (1.f - alpha) * b.fWX,
+        alpha * a.fWY + (1.f - alpha) * b.fWY,
+    };
+  };
+
   gfx::ColorSpace color_space;
   if (name == "genericRGB") {
-    color_space = gfx::ICCProfileForTestingGenericRGB().GetColorSpace();
+    constexpr skcms_TransferFunction kTransferFn1Dot801 = {
+        1.801f, 1.f, 0.f, 0.f, 0.f, 0.f, 0.f};
+    color_space = gfx::ColorSpace(SkNamedPrimariesExt::kAppleGenericRGB,
+                                  kTransferFn1Dot801);
   } else if (name == "sRGB") {
     color_space = gfx::ColorSpace::CreateSRGB();
   } else if (name == "colorSpin") {
-    color_space = gfx::ICCProfileForTestingColorSpin().GetColorSpace();
+    // Color spin is sRGB, but in GBR order, and with a 2.2 gamma.
+    const auto& srgb = SkNamedPrimariesExt::kSRGB;
+    SkColorSpacePrimaries srgb_spin = {
+        srgb.fGX, srgb.fGY, srgb.fBX, srgb.fBY,
+        srgb.fRX, srgb.fRY, srgb.fWX, srgb.fWY,
+    };
+    color_space = gfx::ColorSpace(srgb_spin, SkNamedTransferFn::k2Dot2);
   } else if (name == "adobeRGB") {
-    color_space = gfx::ICCProfileForTestingAdobeRGB().GetColorSpace();
+    color_space = gfx::ColorSpace(SkNamedPrimariesExt::kA98RGB,
+                                  SkNamedTransferFn::k2Dot2);
+  } else if (name == "almostP3") {
+    // Almost-P3 is a mix between sRGB and P3, biased towards P3 enough to cover
+    // 90% of the P3 gamut.
+    SkColorSpacePrimaries almost_p3 = mix_primaries(
+        SkNamedPrimariesExt::kSRGB, SkNamedPrimariesExt::kP3, 0.25f);
+    color_space = gfx::ColorSpace(almost_p3, SkNamedTransferFn::kSRGB);
+  } else if (name == "almostRec2020") {
+    // Almost-Rec2020 is a mix between P3 and Rec2020, biased towards Rec2020
+    // enough to cover 90% of the Rec2020 gamut.
+    SkColorSpacePrimaries almost_rec2020 = mix_primaries(
+        SkNamedPrimariesExt::kP3, SkNamedPrimaries::kRec2020, 0.25f);
+    color_space = gfx::ColorSpace(almost_rec2020, SkNamedTransferFn::kSRGB);
   }
   GetWebFrame()->View()->SetDeviceColorSpaceForTesting(color_space);
 
@@ -2593,7 +2704,7 @@ bool TestRunner::WorkQueue::ProcessWorkItemInternal(
           controller_->FindInProcessMainWindowMainFrame();
       DCHECK(main_frame);
       main_frame->GetWebFrame()->ExecuteScript(blink::WebScriptSource(
-          blink::WebString::FromUTF8(item_loading_script->script)));
+          blink::WebString::FromUtf8(item_loading_script->script)));
       return true;  // TODO(danakj): Did it really start a navigation?
     }
     case mojom::WorkItem::Tag::kNonLoadingScript: {
@@ -2603,7 +2714,7 @@ bool TestRunner::WorkQueue::ProcessWorkItemInternal(
           controller_->FindInProcessMainWindowMainFrame();
       DCHECK(main_frame);
       main_frame->GetWebFrame()->ExecuteScript(blink::WebScriptSource(
-          blink::WebString::FromUTF8(item_non_loading_script->script)));
+          blink::WebString::FromUtf8(item_non_loading_script->script)));
       return false;
     }
     case mojom::WorkItem::Tag::kLoad: {
@@ -2817,7 +2928,27 @@ int TestRunner::GetPrintingMargin() const {
   return web_test_runtime_flags_.printing_margin();
 }
 
-int TestRunner::GetSafePrintableInset() const {
+float TestRunner::GetSafePrintableInset(blink::WebLocalFrame* frame) const {
+  // First check for WPT-style <meta name="safe-printable-inset">
+  blink::WebElementCollection meta_iter =
+      frame->GetDocument().GetElementsByHTMLTagName("meta");
+  if (!meta_iter.IsNull()) {
+    for (blink::WebElement meta = meta_iter.FirstItem(); !meta.IsNull();
+         meta = meta_iter.NextItem()) {
+      if (meta.GetAttribute("name") == "safe-printable-inset") {
+        blink::WebString attr = meta.GetAttribute("content");
+        double inset;
+        if (!attr.IsNull() && base::StringToDouble(attr.Latin1(), &inset)) {
+          // The META element specifies the value in centimeters. Convert it to
+          // CSS pixels.
+          return inset * 96 / 2.54;
+        }
+        break;
+      }
+    }
+  }
+
+  // Fall back to runtime flags settings.
   return web_test_runtime_flags_.safe_printable_inset();
 }
 
@@ -2907,7 +3038,7 @@ SkBitmap TestRunner::PrintFrameToBitmap(blink::WebLocalFrame* frame) {
   print_params.default_page_description.margin_bottom = default_margin;
   print_params.default_page_description.margin_left = default_margin;
   gfx::RectF printable_area(page_size);
-  printable_area.Inset(GetSafePrintableInset());
+  printable_area.Inset(GetSafePrintableInset(frame));
   print_params.printable_area_in_css_pixels = printable_area;
   print_params.scale_factor = printing_scale_factor_;
   print_params.print_scaling_option =
@@ -2966,7 +3097,7 @@ SkBitmap TestRunner::DumpPixelsInRenderer(blink::WebLocalFrame* main_frame) {
   std::string frame_name = web_test_runtime_flags_.printing_frame();
   if (!frame_name.empty()) {
     blink::WebFrame* frame_to_print =
-        main_frame->FindFrameByName(blink::WebString::FromUTF8(frame_name));
+        main_frame->FindFrameByName(blink::WebString::FromUtf8(frame_name));
     if (frame_to_print && frame_to_print->IsWebLocalFrame())
       target_frame = frame_to_print->ToWebLocalFrame();
   }
@@ -3336,8 +3467,8 @@ void TestRunner::SetMainWindowAndTestConfiguration(
       command_line->GetSwitchValueASCII(switches::kWebSettingsForTesting);
   for (auto [key, value] :
        TestRunnerUtils::ParseWebSettingsString(web_settings_switch_value)) {
-    view->GetSettings()->SetFromStrings(blink::WebString::FromASCII(key),
-                                        blink::WebString::FromASCII(value));
+    view->GetSettings()->SetFromStrings(blink::WebString::FromAscii(key),
+                                        blink::WebString::FromAscii(value));
   }
 
   if (command_line->HasSwitch(switches::kTargetDeviceScaleForTesting)) {
@@ -3348,7 +3479,8 @@ void TestRunner::SetMainWindowAndTestConfiguration(
             TrimWhitespaceASCII(target_scale_factor_for_testing,
                                 base::TRIM_ALL),
             &scale_factor)) {
-      frame->FrameWidget()->SetDeviceScaleFactorForTesting(scale_factor);
+      frame->FrameWidget()->SetDeviceScaleFactorForTesting(
+          std::clamp(scale_factor, 0.0, 15.0));
     }
   }
 
@@ -3472,8 +3604,8 @@ void TestRunner::AddOriginAccessAllowListEntry(
     return;
 
   blink::WebSecurityPolicy::AddOriginAccessAllowListEntry(
-      url, blink::WebString::FromUTF8(destination_protocol),
-      blink::WebString::FromUTF8(destination_host), /*destination_port=*/0,
+      url, blink::WebString::FromUtf8(destination_protocol),
+      blink::WebString::FromUtf8(destination_host), /*destination_port=*/0,
       allow_destination_subdomains
           ? network::mojom::CorsDomainMatchMode::kAllowSubdomains
           : network::mojom::CorsDomainMatchMode::kDisallowSubdomains,
@@ -3718,7 +3850,7 @@ blink::WebString TestRunner::RegisterIsolatedFileSystem(
   std::string filesystem_id;
   source.GetWebTestControlHostRemote()->RegisterIsolatedFileSystem(
       file_paths, &filesystem_id);
-  return blink::WebString::FromUTF8(filesystem_id);
+  return blink::WebString::FromUtf8(filesystem_id);
 }
 
 void TestRunner::FocusWindow(RenderFrame* main_frame, bool focus) {

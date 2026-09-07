@@ -11,7 +11,6 @@
 #include <optional>
 
 #include "base/feature_list.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/sys_string_conversions.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/avatar_menu.h"
@@ -22,8 +21,6 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_metrics.h"
 #include "chrome/browser/profiles/profile_window.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
@@ -62,10 +59,12 @@ class Observer : public BrowserCollectionObserver, public AvatarMenuObserver {
 
   // BrowserCollectionObserver:
   void OnBrowserClosed(BrowserWindowInterface* browser) override {
-    [controller_ activeBrowserChangedTo:chrome::FindLastActive()];
+    BrowserWindowInterface* last_active =
+        GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
+    [controller_ activeBrowserChangedTo:last_active];
   }
   void OnBrowserActivated(BrowserWindowInterface* browser) override {
-    [controller_ activeBrowserChangedTo:browser->GetBrowserForMigrationOnly()];
+    [controller_ activeBrowserChangedTo:browser];
   }
 
   // AvatarMenuObserver:
@@ -75,7 +74,11 @@ class Observer : public BrowserCollectionObserver, public AvatarMenuObserver {
 
  private:
   ProfileMenuController* controller_;  // Weak; owns this.
-  base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
+
+  // TODO(crbug.com/495683109): remove when the Observer is no
+  // longer outliving the GlobalBrowserCollection it observes.
+  base::ScopedObservation<GlobalBrowserCollection,
+                          BrowserCollectionObserver>::LeakedDanglingUntriaged
       browser_collection_observation_{this};
 };
 
@@ -254,7 +257,7 @@ class Observer : public BrowserCollectionObserver, public AvatarMenuObserver {
 
 // Notifies the controller that the active browser has changed and that the
 // menu item and menu need to be updated to reflect that.
-- (void)activeBrowserChangedTo:(Browser*)browser {
+- (void)activeBrowserChangedTo:(BrowserWindowInterface*)browser {
   // Tell the menu that the browser has changed.
   _avatarMenu->ActiveBrowserChanged(browser);
 

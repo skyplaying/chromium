@@ -4,65 +4,103 @@
 
 #include "chrome/browser/android/omnibox/composebox_query_controller_bridge.h"
 
+#include <memory>
 #include <utility>
 
 #include "base/android/callback_android.h"
 #include "base/android/jni_android.h"
+#include "base/android/jni_array.h"
 #include "base/android/jni_bytebuffer.h"
+#include "base/android/jni_string.h"
 #include "base/base64.h"
+#include "base/check.h"
 #include "base/containers/span.h"
 #include "base/containers/to_vector.h"
 #include "base/functional/bind.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/time/time.h"
 #include "base/unguessable_token.h"
+#include "chrome/browser/android/omnibox/tab_context_capture_request.h"
 #include "chrome/browser/autocomplete/aim_eligibility_service_factory.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/contextual_search/contextual_search_service_factory.h"
+#include "chrome/browser/contextual_search/contextual_search_web_contents_helper.h"
+#include "chrome/browser/contextual_tasks/contextual_tasks_service_factory.h"
+#include "chrome/browser/contextual_tasks/contextual_tasks_ui_service.h"
+#include "chrome/browser/contextual_tasks/contextual_tasks_ui_service_factory.h"
+#include "chrome/browser/contextual_tasks/contextual_tasks_utils.h"
 #include "chrome/browser/page_content_annotations/page_content_extraction_service_factory.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
-#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/contextual_search/tab_contextualization_controller.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
-#include "chrome/browser/ui/webui/new_tab_page/composebox/variations/composebox_fieldtrial.h"
 #include "chrome/common/channel_info.h"
 #include "components/contextual_search/contextual_search_service.h"
 #include "components/contextual_search/contextual_search_types.h"
 #include "components/contextual_search/internal/composebox_query_controller.h"
+#include "components/contextual_tasks/public/features.h"
+#include "components/contextual_tasks/public/query_contextualizer.h"
 #include "components/lens/contextual_input.h"
 #include "components/lens/lens_bitmap_processing.h"
+#include "components/lens/lens_features.h"
 #include "components/lens/lens_url_utils.h"
 #include "components/omnibox/browser/aim_eligibility_service.h"
 #include "components/omnibox/browser/omnibox_field_trial.h"
 #include "components/page_content_annotations/content/page_content_extraction_service.h"
 #include "components/page_content_annotations/core/page_content_annotations_features.h"
-#include "components/page_content_annotations/core/page_content_cache.h"
+#include "components/sessions/content/session_tab_helper.h"
+#include "components/sessions/core/session_id.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/web_contents.h"
 #include "mojo/public/cpp/base/big_buffer.h"
 #include "net/base/url_util.h"
+#include "third_party/jni_zero/default_conversions.h"
+#include "third_party/omnibox_proto/chrome_aim_entry_point.pb.h"
+#include "third_party/omnibox_proto/tool_config.pb.h"
 #include "ui/base/unowned_user_data/user_data_factory.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "url/android/gurl_android.h"
 #include "url/gurl.h"
 
+namespace jni_zero {
+template <>
+inline omnibox::InputType FromJniType<omnibox::InputType>(
+    JNIEnv* env,
+    const JavaRef<jobject>& val) {
+  return static_cast<omnibox::InputType>(FromJavaInteger(env, val));
+}
+
+template <>
+inline ScopedJavaLocalRef<jobject> ToJniType<omnibox::InputType>(
+    JNIEnv* env,
+    const omnibox::InputType& val) {
+  return ToJavaInteger(env, std::to_underlying(val));
+}
+}  // namespace jni_zero
+
 // Must come after all headers that specialize FromJniType() / ToJniType().
 #include "chrome/browser/ui/android/omnibox/jni_headers/ComposeboxQueryControllerBridge_jni.h"
+#include "chrome/browser/ui/android/omnibox/jni_headers/SuggestedTabInfo_jni.h"
 #include "components/contextual_search/jni_headers/InputState_jni.h"
 
 namespace {
-void RunJavaCallback(
-    const base::android::ScopedJavaGlobalRef<jobject>& j_callback,
-    GURL url) {
-  JNIEnv* env = base::android::AttachCurrentThread();
-  base::android::RunObjectCallbackAndroid(
-      j_callback, url::GURLAndroid::FromNativeGURL(env, url));
+bool IsFuseboxEligibleForProfileInternal(Profile* profile) {
+  if (!profile) {
+    return false;
+  }
+  if (!contextual_search::ContextualSearchService::IsContextSharingEnabled(
+          profile->GetPrefs())) {
+    return false;
+  }
+  AimEligibilityService* aim_service =
+      AimEligibilityServiceFactory::GetForProfile(profile);
+  return aim_service && aim_service->IsFuseboxEligible();
 }
 }  // namespace
 
 static int64_t JNI_ComposeboxQueryControllerBridge_Init(
-    JNIEnv* env,
+    const base::android::JavaRef<jobject>& java_obj,
     Profile* profile,
-    const base::android::JavaRef<jobject>& java_obj) {
+    content::WebContents* web_contents) {
   auto* aim_service = AimEligibilityServiceFactory::GetForProfile(profile);
   if (!aim_service || !aim_service->IsAimEligible()) {
     return 0L;
@@ -76,14 +114,17 @@ static int64_t JNI_ComposeboxQueryControllerBridge_Init(
   }
 
   ComposeboxQueryControllerBridge* instance =
-      new ComposeboxQueryControllerBridge(profile, java_obj);
+      new ComposeboxQueryControllerBridge(java_obj, profile, web_contents);
   return reinterpret_cast<intptr_t>(instance);
 }
 
 ComposeboxQueryControllerBridge::ComposeboxQueryControllerBridge(
+    const base::android::JavaRef<jobject>& java_obj,
     Profile* profile,
-    const base::android::JavaRef<jobject>& java_obj)
-    : profile_{profile}, java_obj_(java_obj) {
+    content::WebContents* web_contents)
+    : profile_{profile},
+      web_contents_{web_contents ? web_contents->GetWeakPtr() : nullptr},
+      java_obj_{java_obj} {
   auto query_controller_config_params = std::make_unique<
       contextual_search::ContextualSearchContextController::ConfigParams>();
   query_controller_config_params->send_lns_surface = false;
@@ -108,27 +149,20 @@ ComposeboxQueryControllerBridge::ComposeboxQueryControllerBridge(
     return;
   }
 
-  if (OmniboxFieldTrial::kOmniboxShowModelPicker.Get()) {
-    AimEligibilityService* aim_service =
-        AimEligibilityServiceFactory::GetForProfile(profile);
-    const omnibox::SearchboxConfig* config_ptr =
-        aim_service->GetSearchboxConfig();
-    input_state_model_ = std::make_unique<contextual_search::InputStateModel>(
-        *session_handle_,
-        config_ptr ? *config_ptr : omnibox::SearchboxConfig());
-    input_state_subscription_ =
-        input_state_model_->subscribe(base::BindRepeating(
-            &ComposeboxQueryControllerBridge::OnInputStateChanged,
-            weak_ptr_factory_.GetWeakPtr()));
-    input_state_model_->Initialize();
-  }
+  InitializeInputStateModel();
+
+  contextual_tasks::ContextualTasksService* tasks_service =
+      contextual_tasks::ContextualTasksServiceFactory::GetForProfile(profile);
+  query_contextualizer_ =
+      std::make_unique<contextual_tasks::QueryContextualizer>(tasks_service,
+                                                              this);
 
   query_controller()->AddObserver(this);
 }
 
 ComposeboxQueryControllerBridge::~ComposeboxQueryControllerBridge() = default;
 
-void ComposeboxQueryControllerBridge::Destroy(JNIEnv* env) {
+void ComposeboxQueryControllerBridge::Destroy() {
   // Query controller is accessed through a weak ptr, possible that during
   // shutdown it's already gone.
   contextual_search::ContextualSearchContextController* controller =
@@ -141,7 +175,10 @@ void ComposeboxQueryControllerBridge::Destroy(JNIEnv* env) {
 }
 
 size_t ComposeboxQueryControllerBridge::GetAttachmentCount() const {
-  return query_controller()->GetFileInfoList().size();
+  // Uploaded context tokens are updated as soon as
+  // session_handle_->CreateContextToken() is called in the file or tab context
+  // upload flows.
+  return session_handle_->GetUploadedContextTokens().size();
 }
 
 base::WeakPtr<ComposeboxQueryControllerBridge>
@@ -149,35 +186,81 @@ ComposeboxQueryControllerBridge::AsWeakPtr() {
   return weak_ptr_factory_.GetWeakPtr();
 }
 
-void ComposeboxQueryControllerBridge::NotifySessionStarted(JNIEnv* env) {
+GURL ComposeboxQueryControllerBridge::GetTabUrl(
+    contextual_tasks::QueryContextualizer::TabId id) {
+  // No-op.
+  return GURL();
+}
+
+SessionID ComposeboxQueryControllerBridge::GetTabSessionId(
+    contextual_tasks::QueryContextualizer::TabId id) {
+  // No-op.
+  return SessionID::InvalidValue();
+}
+
+void ComposeboxQueryControllerBridge::GetPageContext(
+    contextual_tasks::QueryContextualizer::TabId id,
+    base::OnceCallback<void(std::unique_ptr<lens::ContextualInputData>)>
+        callback) {
+  // No-op.
+  std::move(callback).Run(nullptr);
+}
+
+bool ComposeboxQueryControllerBridge::IsTabValid(
+    contextual_tasks::QueryContextualizer::TabId id) {
+  // No-op.
+  return false;
+}
+
+std::optional<lens::ImageEncodingOptions> ComposeboxQueryControllerBridge::
+    GetTabViewportEncodingOptionsForQueryContextualizer() {
+  // No-op.
+  return std::nullopt;
+}
+
+contextual_search::ContextualSearchSessionHandle*
+ComposeboxQueryControllerBridge::
+    GetOrCreateSessionHandleForQueryContextualizer() {
+  return session_handle_.get();
+}
+
+void ComposeboxQueryControllerBridge::GetRelevantTabsForQuery(
+    const std::string& query_text,
+    const std::vector<GURL>& attached_context_urls,
+    base::OnceCallback<void(
+        std::vector<contextual_tasks::QueryContextualizer::TabId>)> callback) {
+  std::move(callback).Run({});
+}
+
+void ComposeboxQueryControllerBridge::NotifySessionStarted() {
   session_handle_->NotifySessionStarted();
 }
 
-void ComposeboxQueryControllerBridge::NotifySessionAbandoned(JNIEnv* env) {
+void ComposeboxQueryControllerBridge::NotifySessionAbandoned() {
   session_handle_->NotifySessionAbandoned();
 }
 
-base::android::ScopedJavaLocalRef<jobject>
-ComposeboxQueryControllerBridge::AddFile(
+std::string ComposeboxQueryControllerBridge::AddFile(
     JNIEnv* env,
-    std::string& file_name,
-    std::string& file_type,
+    const std::string& file_name,
+    const std::string& file_type,
     const jni_zero::JavaRef<jobject>& file_data) {
   base::UnguessableToken file_token = session_handle_->CreateContextToken();
 
-  std::optional<lens::ImageEncodingOptions> image_options = std::nullopt;
-  if (file_type.find("pdf") != std::string::npos) {
+  std::optional<lens::ImageEncodingOptions> image_options;
+  if (file_type.find("image") != std::string::npos) {
+    image_options = lens::ImageEncodingOptions{
+                                               .max_size = 1500000,
+                                               .max_height = 1600,
+                                               .max_width = 1600,
+                                               .compression_quality = 40};
+  } else if (file_type.find("pdf") != std::string::npos ||
+             lens::features::IsLensSendRawFileMediaTypesEnabled()) {
     AimEligibilityService* aim_service =
         AimEligibilityServiceFactory::GetForProfile(profile_);
     if (!aim_service->IsPdfUploadEligible()) {
       return {};
     }
-  } else if (file_type.find("image") != std::string::npos) {
-    image_options = lens::ImageEncodingOptions{.enable_webp_encoding = false,
-                                               .max_size = 1500000,
-                                               .max_height = 1600,
-                                               .max_width = 1600,
-                                               .compression_quality = 40};
   } else {
     // Unsupported mime type.
     return {};
@@ -189,13 +272,12 @@ ComposeboxQueryControllerBridge::AddFile(
       file_token, file_name, file_type, mojo_base::BigBuffer(file_bytes_span),
       std::move(image_options));
 
-  return base::android::ConvertUTF8ToJavaString(env, file_token.ToString());
+  return file_token.ToString();
 }
 
-base::android::ScopedJavaLocalRef<jobject>
-ComposeboxQueryControllerBridge::AddTabContext(
-    JNIEnv* env,
-    content::WebContents* web_contents) {
+std::string ComposeboxQueryControllerBridge::AddTabContext(
+    content::WebContents* web_contents,
+    bool is_suggested_tab) {
   tabs::TabInterface* const tab =
       tabs::TabInterface::GetFromContents(web_contents);
 
@@ -203,44 +285,45 @@ ComposeboxQueryControllerBridge::AddTabContext(
     return {};
   }
 
-  base::UnguessableToken file_token = session_handle_->CreateContextToken();
   lens::TabContextualizationController* tab_contextualization_controller =
       lens::TabContextualizationController::From(tab);
   if (!tab_contextualization_controller) {
     return {};
   }
 
-  tab_contextualization_controller->GetPageContext(
-      base::BindOnce(&ComposeboxQueryControllerBridge::OnGetTabPageContext,
-                     weak_ptr_factory_.GetWeakPtr(), env, file_token));
+  SessionID tab_session_id = sessions::SessionTabHelper::IdForTab(web_contents);
+  base::UnguessableToken file_token = session_handle_->CreateContextToken();
+  // Leak this pointer it will delete itself when it's done.
+  TabContextCaptureRequest* tab_context_capture = new TabContextCaptureRequest(
+      tab_contextualization_controller, tab,
+      base::BindOnce(
+          &ComposeboxQueryControllerBridge::StartTabContextUploadFlow,
+          weak_ptr_factory_.GetWeakPtr(), file_token, tab_session_id,
+          /*was_cached=*/false, base::TimeTicks::Now()));
+  tab_context_capture->Start();
 
-  return base::android::ConvertUTF8ToJavaString(env, file_token.ToString());
+  return file_token.ToString();
 }
 
-base::android::ScopedJavaLocalRef<jobject>
-ComposeboxQueryControllerBridge::AddTabContextFromCache(JNIEnv* env,
-                                                        long tab_id) {
+std::string ComposeboxQueryControllerBridge::AddTabContextFromCache(
+    int64_t tab_id,
+    bool is_suggested_tab) {
   page_content_annotations::PageContentExtractionService* service =
       page_content_annotations::PageContentExtractionServiceFactory::
           GetForProfile(profile_);
-  if (!service) {
-    return {};
-  }
-
-  page_content_annotations::PageContentCache* cache =
-      service->GetPageContentCache();
-  if (!cache) {
+  if (!service || !service->IsOnDiskCacheEnabled()) {
     return {};
   }
 
   base::UnguessableToken file_token = session_handle_->CreateContextToken();
 
-  cache->GetPageContentForTab(
-      tab_id, base::BindOnce(
-                  &ComposeboxQueryControllerBridge::OnGetPageContentFromCache,
-                  weak_ptr_factory_.GetWeakPtr(), env, file_token));
+  service->GetPageContentFromOnDiskCache(
+      tab_id,
+      base::BindOnce(
+          &ComposeboxQueryControllerBridge::OnGetPageContentFromCache,
+          weak_ptr_factory_.GetWeakPtr(), file_token, base::TimeTicks::Now()));
 
-  return base::android::ConvertUTF8ToJavaString(env, file_token.ToString());
+  return file_token.ToString();
 }
 
 std::unique_ptr<ComposeboxQueryController::CreateSearchUrlRequestInfo>
@@ -252,68 +335,132 @@ ComposeboxQueryControllerBridge::CreateSearchUrlRequestInfoFromUrl(GURL url) {
   search_url_request_info->additional_params =
       lens::GetParametersMapWithoutQuery(url);
   search_url_request_info->query_start_time = base::Time::Now();
-  search_url_request_info->invocation_source =
-      lens::LensOverlayInvocationSource::kOmniboxContextualQuery;
-  // Read the list of tokens from the fileinfo map in the contextual search
-  // controller.
-  // TODO(crbug.com/455952553): Rely on the contextual search session handle
-  // to track uploaded context tokens.
-  for (const contextual_search::FileInfo* file_info :
-       query_controller()->GetFileInfoList()) {
-    search_url_request_info->file_tokens.push_back(file_info->file_token);
-  }
+  search_url_request_info->aim_entry_point =
+      omnibox::ANDROID_CHROME_FUSEBOX_ENTRY_POINT;
   return search_url_request_info;
 }
 
+void ComposeboxQueryControllerBridge::OnSearchUrlCreated(
+    base::OnceCallback<void(GURL)> callback,
+    GURL url) {
+  // Store a copy of the session handle in the central web contents helper with
+  // the tab session IDs. This is required to answer IsTabInContext() correctly
+  // during navigation interception.
+  // TODO(crbug.com/470404040): Deduplicate session handle copying and state
+  // transfer logic with ContextualSearchboxHandler::OpenUrl.
+  if (web_contents_ && session_handle_) {
+    contextual_search::ContextualSearchService* search_service =
+        ContextualSearchServiceFactory::GetForProfile(profile_);
+    if (search_service) {
+      std::unique_ptr<contextual_search::ContextualSearchSessionHandle>
+          handle_copy =
+              search_service->GetSession(session_handle_->session_id(),
+                                         session_handle_->invocation_source());
+      if (handle_copy) {
+        handle_copy->set_submitted_context_tokens(
+            session_handle_->GetSubmittedContextTokens());
+        handle_copy->CheckSearchContentSharingSettings(profile_->GetPrefs());
+
+        auto* helper =
+            ContextualSearchWebContentsHelper::GetOrCreateForWebContents(
+                web_contents_.get());
+        helper->SetTaskSession(std::nullopt, std::move(handle_copy), nullptr);
+      }
+    }
+  }
+
+  std::move(callback).Run(url);
+}
+
+void ComposeboxQueryControllerBridge::ContextualizeAndCreateSearchUrl(
+    std::unique_ptr<ComposeboxQueryController::CreateSearchUrlRequestInfo>
+        search_url_request_info,
+    base::OnceCallback<void(GURL)> callback) {
+  std::string query_text = search_url_request_info->query_text;
+
+  auto search_url_callback = base::BindOnce(
+      &contextual_search::ContextualSearchSessionHandle::CreateSearchUrl,
+      session_handle_->AsWeakPtr(), std::move(search_url_request_info),
+      base::BindOnce(&ComposeboxQueryControllerBridge::OnSearchUrlCreated,
+                     weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
+
+  contextual_tasks::QueryContextualizer::ContextualizeParams params;
+  params.task_id = std::nullopt;
+  params.query_text = query_text;
+  params.on_ineligible_callback = base::DoNothing();
+  params.on_processed_callback = base::DoNothing();
+  params.complete_callback = base::BindOnce(
+      [](base::OnceClosure closure,
+         base::WeakPtr<contextual_search::ContextualSearchSessionHandle>
+             ignored_handle) { std::move(closure).Run(); },
+      std::move(search_url_callback));
+  params.enable_smart_tab_selection = false;
+  query_contextualizer_->Contextualize(std::move(params));
+}
+
 void ComposeboxQueryControllerBridge::GetAimUrl(
-    JNIEnv* env,
     GURL url,
-    const base::android::JavaRef<jobject>& j_callback) {
-  auto search_url_request_info =
-      CreateSearchUrlRequestInfoFromUrl(std::move(url));
-  query_controller()->CreateSearchUrl(
-      std::move(search_url_request_info),
-      base::BindOnce(&RunJavaCallback,
-                     base::android::ScopedJavaGlobalRef<jobject>(j_callback)));
+    base::OnceCallback<void(GURL)> callback) {
+  ContextualizeAndCreateSearchUrl(
+      CreateSearchUrlRequestInfoFromUrl(std::move(url)), std::move(callback));
 }
 
 void ComposeboxQueryControllerBridge::GetImageGenerationUrl(
-    JNIEnv* env,
     GURL url,
-    const base::android::JavaRef<jobject>& j_callback) {
+    base::OnceCallback<void(GURL)> callback) {
   auto search_url_request_info =
       CreateSearchUrlRequestInfoFromUrl(std::move(url));
   search_url_request_info->additional_params["imgn"] = "1";
-  query_controller()->CreateSearchUrl(
-      std::move(search_url_request_info),
-      base::BindOnce(&RunJavaCallback,
-                     base::android::ScopedJavaGlobalRef<jobject>(j_callback)));
+  ContextualizeAndCreateSearchUrl(std::move(search_url_request_info),
+                                  std::move(callback));
+}
+
+void ComposeboxQueryControllerBridge::GetAimUrlFromInputState(
+    GURL url,
+    base::OnceCallback<void(GURL)> callback) {
+  auto search_url_request_info =
+      CreateSearchUrlRequestInfoFromUrl(std::move(url));
+
+  if (input_state_model_) {
+    for (const auto& [key, value] :
+         input_state_model_->GetAdditionalQueryParams()) {
+      search_url_request_info->additional_params[key] = value;
+    }
+  }
+
+  ContextualizeAndCreateSearchUrl(std::move(search_url_request_info),
+                                  std::move(callback));
 }
 
 void ComposeboxQueryControllerBridge::RemoveAttachment(
-    JNIEnv* env,
     const std::string& token) {
   std::optional<base::UnguessableToken> unguessable_token =
       base::UnguessableToken::DeserializeFromString(token);
   if (unguessable_token.has_value()) {
     session_handle_->DeleteFile(unguessable_token.value());
+    if (input_state_model_) {
+      input_state_model_->OnContextChanged();
+    }
   }
 }
 
-bool ComposeboxQueryControllerBridge::IsPdfUploadEligible(JNIEnv* env) {
+bool ComposeboxQueryControllerBridge::IsFuseboxEligible() {
+  return IsFuseboxEligibleForProfileInternal(profile_);
+}
+
+bool ComposeboxQueryControllerBridge::IsPdfUploadEligible() {
   AimEligibilityService* aim_service =
       AimEligibilityServiceFactory::GetForProfile(profile_);
   return aim_service && aim_service->IsPdfUploadEligible();
 }
 
-bool ComposeboxQueryControllerBridge::IsCreateImagesEligible(JNIEnv* env) {
+bool ComposeboxQueryControllerBridge::IsCreateImagesEligible() {
   AimEligibilityService* aim_service =
       AimEligibilityServiceFactory::GetForProfile(profile_);
   return aim_service && aim_service->IsCreateImagesEligible();
 }
 
 void ComposeboxQueryControllerBridge::SetActiveTool(
-    JNIEnv* env,
     omnibox::ToolMode tool_mode) {
   if (input_state_model_) {
     input_state_model_->setActiveTool(tool_mode);
@@ -321,7 +468,6 @@ void ComposeboxQueryControllerBridge::SetActiveTool(
 }
 
 void ComposeboxQueryControllerBridge::SetActiveModel(
-    JNIEnv* env,
     omnibox::ModelMode model_mode) {
   if (input_state_model_) {
     input_state_model_->setActiveModel(model_mode);
@@ -330,65 +476,44 @@ void ComposeboxQueryControllerBridge::SetActiveModel(
 
 std::unique_ptr<lens::proto::LensOverlaySuggestInputs>
 ComposeboxQueryControllerBridge::CreateLensOverlaySuggestInputs() const {
-  auto tokens = std::vector<base::UnguessableToken>();
-  // Read the list of tokens from the fileinfo list in the contextual search
-  // controller.
-  // TODO(crbug.com/455843962): Rely on the contextual search session handle
-  // to track uploaded context tokens.
-  for (const contextual_search::FileInfo* file_info :
-       query_controller()->GetFileInfoList()) {
-    tokens.push_back(file_info->file_token);
+  std::optional<lens::proto::LensOverlaySuggestInputs> suggest_inputs =
+      session_handle_->GetSuggestInputs();
+  if (!suggest_inputs.has_value()) {
+    return std::make_unique<lens::proto::LensOverlaySuggestInputs>();
   }
-  return query_controller()->CreateSuggestInputs(tokens);
+  return std::make_unique<lens::proto::LensOverlaySuggestInputs>(
+      *suggest_inputs);
 }
 
-void ComposeboxQueryControllerBridge::OnFileUploadStatusChanged(
-    const base::UnguessableToken& file_token,
-    lens::MimeType mime_type,
-    contextual_search::FileUploadStatus file_upload_status,
-    const std::optional<contextual_search::FileUploadErrorType>& error_type) {
-  JNIEnv* env = base::android::AttachCurrentThread();
-  Java_ComposeboxQueryControllerBridge_onFileUploadStatusChanged(
-      env, java_obj_,
-      base::android::ConvertUTF8ToJavaString(env, file_token.ToString()),
-      static_cast<int>(file_upload_status));
-}
-
-void ComposeboxQueryControllerBridge::OnGetTabPageContext(
-    JNIEnv* env,
+void ComposeboxQueryControllerBridge::OnContextUploadStatusChanged(
     const base::UnguessableToken& context_token,
-    std::unique_ptr<lens::ContextualInputData> page_content_data) {
-  if (!page_content_data->context_input.has_value() ||
-      page_content_data->context_input->size() <= 0) {
-    OnFileUploadStatusChanged(
-        context_token, lens::MimeType::kUnknown,
-        contextual_search::FileUploadStatus::kValidationFailed,
-        contextual_search::FileUploadErrorType::kBrowserProcessingError);
-    return;
+    lens::MimeType mime_type,
+    contextual_search::ContextUploadStatus context_upload_status,
+    const std::optional<contextual_search::ContextUploadErrorType>&
+        error_type) {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  int native_error_type = static_cast<int>(
+      error_type.value_or(contextual_search::ContextUploadErrorType::kUnknown));
+  Java_ComposeboxQueryControllerBridge_onContextUploadStatusChanged(
+      env, java_obj_, context_token.ToString(),
+      static_cast<int>(context_upload_status), native_error_type);
+
+  if (input_state_model_) {
+    input_state_model_->OnContextChanged();
   }
-
-  std::optional<lens::ImageEncodingOptions> image_options =
-      lens::ImageEncodingOptions{.enable_webp_encoding = false,
-                                 .max_size = 1500000,
-                                 .max_height = 1600,
-                                 .max_width = 1600,
-                                 .compression_quality = 40};
-
-  session_handle_->StartTabContextUploadFlow(
-      context_token, std::move(page_content_data), std::move(image_options));
 }
 
 void ComposeboxQueryControllerBridge::OnGetPageContentFromCache(
-    JNIEnv* env,
     const base::UnguessableToken& context_token,
+    base::TimeTicks start_time,
     std::optional<optimization_guide::proto::PageContext> page_context) {
   // TODO(crbug.com/457869241): Merge this and the code in
   // TabContextualizationController.
   if (!page_context.has_value()) {
-    OnFileUploadStatusChanged(
+    OnContextUploadStatusChanged(
         context_token, lens::MimeType::kUnknown,
-        contextual_search::FileUploadStatus::kValidationFailed,
-        contextual_search::FileUploadErrorType::kBrowserProcessingError);
+        contextual_search::ContextUploadStatus::kValidationFailed,
+        contextual_search::ContextUploadErrorType::kBrowserProcessingError);
     return;
   }
 
@@ -430,22 +555,169 @@ void ComposeboxQueryControllerBridge::OnGetPageContentFromCache(
     }
   }
 
-  OnGetTabPageContext(env, context_token, std::move(input_data));
+  StartTabContextUploadFlow(context_token, /*tab_session_id=*/std::nullopt,
+                            /*was_cached=*/true, start_time,
+                            std::move(input_data));
+}
+
+void ComposeboxQueryControllerBridge::StartTabContextUploadFlow(
+    const base::UnguessableToken& context_token,
+    std::optional<SessionID> tab_session_id,
+    bool was_cached,
+    base::TimeTicks start_time,
+    std::unique_ptr<lens::ContextualInputData> page_content_data) {
+  if (page_content_data && tab_session_id.has_value() &&
+      tab_session_id->is_valid()) {
+    page_content_data->tab_session_id = *tab_session_id;
+  }
+  if (!page_content_data || !page_content_data->context_input.has_value() ||
+      page_content_data->context_input->size() <= 0) {
+    OnContextUploadStatusChanged(
+        context_token, lens::MimeType::kUnknown,
+        contextual_search::ContextUploadStatus::kValidationFailed,
+        contextual_search::ContextUploadErrorType::kBrowserProcessingError);
+    return;
+  }
+  base::UmaHistogramMediumTimes(
+      was_cached
+          ? "Android.ComposeboxQueryController.AddTabContextCachedDuration"
+          : "Android.ComposeboxQueryController.AddTabContextDuration",
+      base::TimeTicks::Now() - start_time);
+
+  std::optional<lens::ImageEncodingOptions> image_options =
+      lens::ImageEncodingOptions{
+                                 .max_size = 1500000,
+                                 .max_height = 1600,
+                                 .max_width = 1600,
+                                 .compression_quality = 40};
+
+  session_handle_->StartTabContextUploadFlow(
+      context_token, std::move(page_content_data), std::move(image_options));
 }
 
 void ComposeboxQueryControllerBridge::OnInputStateChanged(
     const contextual_search::InputState& state) {
   JNIEnv* env = base::android::AttachCurrentThread();
 
+  std::vector<std::vector<uint8_t>> tool_configs;
+  for (const auto& config : state.tool_configs) {
+    std::string serialized;
+    config.SerializeToString(&serialized);
+    tool_configs.emplace_back(
+        std::vector<uint8_t>(serialized.begin(), serialized.end()));
+  }
+
+  std::vector<std::vector<uint8_t>> model_configs;
+  for (const auto& config : state.model_configs) {
+    std::string serialized;
+    config.SerializeToString(&serialized);
+    model_configs.emplace_back(
+        std::vector<uint8_t>(serialized.begin(), serialized.end()));
+  }
+
+  std::vector<std::vector<uint8_t>> input_type_configs;
+  for (const auto& config : state.input_type_configs) {
+    std::string serialized;
+    config.SerializeToString(&serialized);
+    input_type_configs.emplace_back(
+        std::vector<uint8_t>(serialized.begin(), serialized.end()));
+  }
+
+  std::vector<uint8_t> tools_section_config;
+  if (state.tools_section_config.has_value()) {
+    std::string serialized;
+    state.tools_section_config->SerializeToString(&serialized);
+    tools_section_config.assign(serialized.begin(), serialized.end());
+  }
+
+  std::vector<uint8_t> model_section_config;
+  if (state.model_section_config.has_value()) {
+    std::string serialized;
+    state.model_section_config->SerializeToString(&serialized);
+    model_section_config.assign(serialized.begin(), serialized.end());
+  }
+
+  base::TimeTicks start_time = base::TimeTicks::Now();
   base::android::ScopedJavaLocalRef<jobject> j_input_state =
       contextual_search::Java_InputState_Constructor(
-          env, state.allowed_tools, state.allowed_models,
-          state.allowed_input_types, state.active_tool, state.active_model,
-          state.disabled_tools, state.disabled_models,
-          state.disabled_input_types);
+          env, state.hint_text, state.allowed_input_types,
+          state.disabled_input_types, state.max_total_inputs,
+          state.max_inputs_by_type,
+          base::android::ToJavaArrayOfByteArray(env, input_type_configs),
+          state.active_tool, state.allowed_tools, state.disabled_tools,
+          state.image_gen_upload_active,
+          base::android::ToJavaArrayOfByteArray(env, tool_configs),
+          tools_section_config, state.active_model, state.GetDefaultModel(),
+          state.allowed_models, state.disabled_models,
+          base::android::ToJavaArrayOfByteArray(env, model_configs),
+          model_section_config);
 
   Java_ComposeboxQueryControllerBridge_onInputStateChanged(env, java_obj_,
                                                            j_input_state);
+  base::UmaHistogramTimes(
+      "Android.ComposeboxQueryController.OnInputStateChangedDuration",
+      base::TimeTicks::Now() - start_time);
+}
+
+void ComposeboxQueryControllerBridge::ResetInputStateModel() {
+  input_state_model_.reset();
+}
+
+void ComposeboxQueryControllerBridge::UpdateSuggestedTabContext(
+    const contextual_tasks::SuggestedTabInfo* suggested_tab) {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  std::vector<base::android::ScopedJavaLocalRef<jobject>> j_suggested_tabs;
+  if (suggested_tab) {
+    j_suggested_tabs.push_back(
+        contextual_tasks::Java_SuggestedTabInfo_Constructor(
+            env, suggested_tab->tab_id, suggested_tab->title,
+            suggested_tab->url,
+            suggested_tab->last_active.since_origin().InMilliseconds()));
+  }
+
+  Java_ComposeboxQueryControllerBridge_onSuggestedTabsUpdated(env, java_obj_,
+                                                              j_suggested_tabs);
+}
+
+void ComposeboxQueryControllerBridge::OnTaskChanged() {
+  // TODO(crbug.com/493281303): Implement this.
+}
+
+void ComposeboxQueryControllerBridge::InitializeInputStateModel() {
+  if (OmniboxFieldTrial::kOmniboxShowModelPicker.Get()) {
+    AimEligibilityService* aim_service =
+        AimEligibilityServiceFactory::GetForProfile(profile_);
+    auto* ui_service = profile_
+                           ? contextual_tasks::ContextualTasksUiServiceFactory::
+                                 GetForBrowserContext(profile_)
+                           : nullptr;
+    bool is_signed_in =
+        ui_service && ui_service->IsSignedInToBrowserWithValidCredentials();
+    bool browser_identity_matches_aim_identity =
+        is_signed_in && ui_service->IsUrlForPrimaryAccount(GURL());
+    const omnibox::SearchboxConfig* config_ptr =
+        aim_service->GetSearchboxConfig();
+    input_state_model_ = std::make_unique<contextual_search::InputStateModel>(
+        *session_handle_, config_ptr ? *config_ptr : omnibox::SearchboxConfig(),
+        GURL(), profile_ ? profile_->IsOffTheRecord() : false, is_signed_in,
+        browser_identity_matches_aim_identity);
+    input_state_subscription_ =
+        input_state_model_->subscribe(base::BindRepeating(
+            &ComposeboxQueryControllerBridge::OnInputStateChanged,
+            weak_ptr_factory_.GetWeakPtr()));
+    input_state_model_->Initialize();
+  }
+}
+
+void ComposeboxQueryControllerBridge::UpdateStateFromUrl(const GURL& url) {
+  if (input_state_model_) {
+    input_state_model_->UpdateStateFromUrl(url);
+  }
+}
+
+static bool JNI_ComposeboxQueryControllerBridge_IsFuseboxEligibleForProfile(
+    Profile* profile) {
+  return IsFuseboxEligibleForProfileInternal(profile);
 }
 
 DEFINE_JNI(ComposeboxQueryControllerBridge)

@@ -14,8 +14,10 @@
 #include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "chrome/browser/web_applications/os_integration/mac/icon_utils.h"
+#include "chrome/browser/web_applications/os_integration/mac/web_app_shortcut_creator.h"
 #include "chrome/browser/web_applications/os_integration/web_app_file_handler_manager.h"
 #include "chrome/browser/web_applications/os_integration/web_app_protocol_handler_manager.h"
+#include "chrome/browser/web_applications/scheduler/rewrite_diy_icons_result.h"
 #include "chrome/browser/web_applications/test/fake_web_app_provider.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/test/web_app_test.h"
@@ -122,6 +124,10 @@ class RewriteDiyIconsCommandTest : public WebAppTest {
 
 // Test that the actual RewriteDiyIcons command can be scheduled and executed.
 TEST_F(RewriteDiyIconsCommandTest, ScheduleAndExecuteCommand) {
+  if (ShouldUseSystemAppIconMasking()) {
+    GTEST_SKIP() << "macOS 26 applies app icon masking itself.";
+  }
+
   base::HistogramTester histogram_tester;
 
   auto disable_icon_masking = testing::SetDisableIconMaskingForTesting(true);

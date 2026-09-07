@@ -122,13 +122,12 @@ class LoggingTabElement extends LoggingTabElementBase {
     };
   }
 
-  private logList_: LogMessage[];
-  private filteredLogList_: LogMessage[];
-  private feature: string;
-  private currentFilter_: string;
-  private currentSeverity_: Severity;
-  private logLevelList_: SelectOption[];
-  private logProvider_: LogProvider;
+  declare private logList_: LogMessage[];
+  declare private filteredLogList_: LogMessage[];
+  declare private feature: string;
+  declare private currentFilter_: string;
+  declare private currentSeverity_: Severity;
+  declare private logLevelList_: SelectOption[];
 
   /**
    * When the page is initialized, notify the C++ layer and load in the
@@ -137,15 +136,14 @@ class LoggingTabElement extends LoggingTabElementBase {
   override connectedCallback() {
     super.connectedCallback();
 
-    this.logProvider_ = getLogProvider(this.feature);
+    const logProvider = getLogProvider(this.feature);
     this.addWebUiListener(
-        this.logProvider_.messageAddedEventName,
+        logProvider.messageAddedEventName,
         (log: LogMessage) => this.onLogMessageAdded_(log));
     this.addWebUiListener(
-        this.logProvider_.bufferClearedEventName,
+        logProvider.bufferClearedEventName,
         () => this.onWebUiLogBufferCleared_());
-    this.logProvider_.getLogMessages().then(
-        logs => this.onGetLogMessages_(logs));
+    logProvider.getLogMessages().then(logs => this.onGetLogMessages_(logs));
   }
 
   /**
@@ -187,8 +185,8 @@ class LoggingTabElement extends LoggingTabElementBase {
 
     const anchorElement = document.createElement('a');
     anchorElement.href = url;
-    anchorElement.download =
-        this.logProvider_.logFilePrefix + new Date().toJSON() + '.txt';
+    anchorElement.download = getLogProvider(this.feature).logFilePrefix +
+        new Date().toJSON() + '.txt';
     document.body.appendChild(anchorElement);
     anchorElement.click();
 

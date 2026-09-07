@@ -4,7 +4,7 @@
 
 #include "chromeos/constants/chromeos_features.h"
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/system/sys_info.h"
@@ -21,14 +21,10 @@ BASE_FEATURE(kBluetoothWifiQSPodRefresh, base::FEATURE_DISABLED_BY_DEFAULT);
 
 // System location provider will use caching to optimize GCP usage. This flag
 // will be enabled with Finch.
-BASE_FEATURE(kCachedLocationProvider, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kCachedLocationProvider, base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Enables cloud game features.
 BASE_FEATURE(kCloudGamingDevice, base::FEATURE_DISABLED_BY_DEFAULT);
-
-// Enables Chrome to add custom icons into status tray.
-BASE_FEATURE(kSupportCustomIconsInStatusArea,
-             base::FEATURE_DISABLED_BY_DEFAULT);
 
 // Enables MPS to push payload to chrome devices.
 BASE_FEATURE(kAlmanacLauncherPayload, base::FEATURE_DISABLED_BY_DEFAULT);
@@ -43,15 +39,13 @@ BASE_FEATURE(kBlinkExtensionKiosk, base::FEATURE_DISABLED_BY_DEFAULT);
 // cros-jellybean-team@google.com.
 BASE_FEATURE(kCrosComponents, base::FEATURE_DISABLED_BY_DEFAULT);
 
+// Enables the allowlist for the setShape Blink extension for Isolated Web Apps
+// on ChromeOS. This is intended to be used as the kill switch for the feature.
+BASE_FEATURE(kCrosIsolatedWebAppSetShapeAllowlist,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
 // Enables denying file access to dlp protected files in MyFiles.
 BASE_FEATURE(kDataControlsFileAccessDefaultDeny,
-             base::FEATURE_DISABLED_BY_DEFAULT);
-
-// Enables data migration.
-BASE_FEATURE(kDataMigration, base::FEATURE_DISABLED_BY_DEFAULT);
-
-// Disables translation services of the Quick Answers V2.
-BASE_FEATURE(kDisableQuickAnswersV2Translation,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 // Enables Essential Search in Omnibox for both launcher and browser.
@@ -62,9 +56,6 @@ BASE_FEATURE(kExternalDisplayEventTelemetry, base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Feature flag used to gate preinstallation of the Gemini app.
 BASE_FEATURE(kGeminiAppPreinstall, base::FEATURE_ENABLED_BY_DEFAULT);
-
-// Enables Kiosk Heartbeats to be sent via Encrypted Reporting Pipeline
-BASE_FEATURE(kKioskHeartbeatsViaERP, base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Enables the Badge Authentication flow on the lock screen.
 BASE_FEATURE(kLockScreenBadgeAuth, base::FEATURE_ENABLED_BY_DEFAULT);
@@ -86,12 +77,6 @@ BASE_FEATURE(kMahiPanelResizable, base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Controls whether mahi sends url when making request to the server.
 BASE_FEATURE(kMahiSendingUrl, base::FEATURE_ENABLED_BY_DEFAULT);
-
-// Controls enabling / disabling the mahi debugging.
-BASE_FEATURE(kMahiDebugging, base::FEATURE_DISABLED_BY_DEFAULT);
-
-// Controls enabling / disabling the pompano feature.
-BASE_FEATURE(kPompano, base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Controls enabling / disabling the summary of selected text feature.
 BASE_FEATURE(kMahiSummarizeSelected, base::FEATURE_ENABLED_BY_DEFAULT);
@@ -115,12 +100,6 @@ BASE_FEATURE(kOrca, base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Controls enabling / disabling the orca feature for dogfood population.
 BASE_FEATURE(kOrcaDogfood, base::FEATURE_DISABLED_BY_DEFAULT);
-
-// Enables or disables Orca internationalization.
-BASE_FEATURE(kOrcaInternationalize, base::FEATURE_DISABLED_BY_DEFAULT);
-
-// Controls enabling / disabling orca l10n strings.
-BASE_FEATURE(kOrcaUseL10nStrings, base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Feature management flag used to gate preinstallation of the Gemini app. This
 // flag is meant to be enabled by the feature management module.
@@ -277,7 +256,11 @@ BASE_FEATURE(kSystemFeaturesDisableListHidden,
 BASE_FEATURE(kVidsAppPreinstall, base::FEATURE_ENABLED_BY_DEFAULT);
 
 // Controls whether Vids is preinstalled for consumers.
-BASE_FEATURE(kVidsAppConsumerPreinstall, base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kVidsAppConsumerPreinstall, base::FEATURE_ENABLED_BY_DEFAULT);
+
+// Controls whether Vids is preinstalled for existing consumer users.
+BASE_FEATURE(kVidsAppExistingConsumerPreinstall,
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 bool IsBatteryBadgeIconEnabled() {
   return base::FeatureList::IsEnabled(kBatteryBadgeIcon);
@@ -307,12 +290,12 @@ bool IsCrosComponentsEnabled() {
   return base::FeatureList::IsEnabled(kCrosComponents);
 }
 
-bool IsDataControlsFileAccessDefaultDenyEnabled() {
-  return base::FeatureList::IsEnabled(kDataControlsFileAccessDefaultDeny);
+bool IsCrosIsolatedWebAppSetShapeAllowlistEnabled() {
+  return base::FeatureList::IsEnabled(kCrosIsolatedWebAppSetShapeAllowlist);
 }
 
-bool IsDataMigrationEnabled() {
-  return base::FeatureList::IsEnabled(kDataMigration);
+bool IsDataControlsFileAccessDefaultDenyEnabled() {
+  return base::FeatureList::IsEnabled(kDataControlsFileAccessDefaultDeny);
 }
 
 bool IsEssentialSearchEnabled() {
@@ -365,16 +348,8 @@ bool IsMahiSendingUrl() {
   return base::FeatureList::IsEnabled(kMahiSendingUrl);
 }
 
-bool IsMahiDebuggingEnabled() {
-  return base::FeatureList::IsEnabled(kMahiDebugging);
-}
-
 bool IsPlatformKeysChangesWave1Enabled() {
   return base::FeatureList::IsEnabled(kPlatformKeysChangesWave1);
-}
-
-bool IsPompanoEnabled() {
-  return base::FeatureList::IsEnabled(kPompano);
 }
 
 bool IsMahiSummarizeSelectedEnabled() {
@@ -395,15 +370,6 @@ bool IsOrcaEnabled() {
           base::FeatureList::IsEnabled(kFeatureManagementOrca));
 }
 
-bool IsOrcaUseL10nStringsEnabled() {
-  return base::FeatureList::IsEnabled(chromeos::features::kOrcaUseL10nStrings);
-}
-
-bool IsOrcaInternationalizeEnabled() {
-  return base::FeatureList::IsEnabled(
-      chromeos::features::kOrcaInternationalize);
-}
-
 bool ShouldDisableChromeComposeOnChromeOS() {
   return base::FeatureList::IsEnabled(kFeatureManagementDisableChromeCompose) ||
          IsOrcaEnabled();
@@ -411,10 +377,6 @@ bool ShouldDisableChromeComposeOnChromeOS() {
 
 bool IsQuickAnswersMaterialNextUIEnabled() {
   return base::FeatureList::IsEnabled(kQuickAnswersMaterialNextUI);
-}
-
-bool IsQuickAnswersV2TranslationDisabled() {
-  return base::FeatureList::IsEnabled(kDisableQuickAnswersV2Translation);
 }
 
 bool IsQuickAnswersRichCardEnabled() {
@@ -452,8 +414,8 @@ bool IsRoundedWindowsEnabled() {
 }
 
 bool IsSystemBlurEnabled() {
-  constexpr base::ByteCount kMinimumMemoryThreshold = base::GiB(4);  // 4GB
-  return base::SysInfo::AmountOfPhysicalMemory() > kMinimumMemoryThreshold;
+  constexpr base::ByteSize kMinimumMemoryThreshold = base::GiB(4);  // 4GB
+  return base::SysInfo::AmountOfTotalPhysicalMemory() > kMinimumMemoryThreshold;
 }
 
 bool IsFeatureManagementHistoryEmbeddingEnabled() {

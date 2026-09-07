@@ -9,20 +9,31 @@
 #import <utility>
 
 #import "base/functional/bind.h"
+#import "base/memory/raw_ptr.h"
 #import "base/memory/scoped_refptr.h"
+#import "base/rand_util.h"
 #import "base/test/metrics/histogram_tester.h"
+#import "base/test/scoped_feature_list.h"
 #import "base/test/task_environment.h"
 #import "base/test/test_future.h"
 #import "components/affiliations/core/browser/fake_affiliation_service.h"
 #import "components/keyed_service/core/service_access_type.h"
+#import "components/password_manager/core/browser/import/import_results.h"
 #import "components/password_manager/core/browser/password_form.h"
 #import "components/password_manager/core/browser/password_store/test_password_store.h"
 #import "components/password_manager/core/browser/ui/saved_passwords_presenter.h"
+#import "components/webauthn/core/browser/import/imported_passkey_checker.h"
+#import "components/webauthn/core/browser/passkey_model_change.h"
+#import "components/webauthn/core/browser/passkey_model_utils.h"
 #import "components/webauthn/core/browser/test_passkey_model.h"
+#import "crypto/keypair.h"
 #import "ios/chrome/browser/affiliations/model/ios_chrome_affiliation_service_factory.h"
+#import "ios/chrome/browser/credential_exchange/model/credential_exchange_passkey.h"
 #import "ios/chrome/browser/credential_exchange/model/credential_exchange_password.h"
 #import "ios/chrome/browser/credential_exchange/model/credential_import_manager_swift.h"
+#import "ios/chrome/browser/credential_exchange/model/features.h"
 #import "ios/chrome/browser/credential_exchange/model/import_stats.h"
+#import "ios/chrome/browser/data_import/public/passkey_import_item.h"
 #import "ios/chrome/browser/passwords/model/ios_chrome_account_password_store_factory.h"
 #import "ios/chrome/browser/passwords/model/ios_chrome_profile_password_store_factory.h"
 #import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
@@ -38,15 +49,43 @@ namespace {
 using ::password_manager::PasswordForm;
 using ::password_manager::PasswordStoreInterface;
 using ::password_manager::SavedPasswordsPresenter;
+using ::password_manager::StoredCredential;
 using ::password_manager::TestPasswordStore;
 using ::testing::SizeIs;
+
+std::vector<uint8_t> TestTrustedVaultKey() {
+  return std::vector<uint8_t>(32, 0);
+}
+
+NSData* ToNSData(const std::string& str) {
+  return [NSData dataWithBytes:str.data() length:str.length()];
+}
 
 CredentialExchangePassword* CreateTestPassword(NSString* url) {
   return
       [[CredentialExchangePassword alloc] initWithURL:[NSURL URLWithString:url]
                                              username:@"username"
                                              password:@"password"
-                                                 note:@"note"];
+                                                 note:@"note"
+                                         creationDate:nil];
+}
+
+CredentialExchangePasskey* CreateTestPasskey() {
+  std::vector<uint8_t> pkcs8_key =
+      crypto::keypair::PrivateKey::GenerateEcP256().ToPrivateKeyInfo();
+  return [[CredentialExchangePasskey alloc]
+           initWithCredentialId:ToNSData("1234567890123456")
+                           rpId:@"example.com"
+                       userName:@"userName"
+                userDisplayName:@"userDisplayName"
+                         userId:ToNSData("user_id")
+                     privateKey:[NSData dataWithBytes:pkcs8_key.data()
+                                               length:pkcs8_key.size()]
+                   creationDate:nil
+                     hmacSecret:nil
+            hmacSecretAlgorithm:nil
+                      largeBlob:nil
+      largeBlobUncompressedSize:nil];
 }
 
 scoped_refptr<RefcountedKeyedService> BuildPasswordStore(
@@ -54,7 +93,7 @@ scoped_refptr<RefcountedKeyedService> BuildPasswordStore(
     ProfileIOS* profile) {
   auto store = base::MakeRefCounted<password_manager::TestPasswordStore>(
       is_account_store);
-  store->Init(/*affiliated_match_helper=*/nullptr);
+  store->Init();
   return store;
 }
 
@@ -69,11 +108,35 @@ class FakePasswordStoreObserver
 
   void OnLoginsRetained(
       PasswordStoreInterface* store,
-      const std::vector<PasswordForm>& retained_passwords) override {}
+      const std::vector<StoredCredential>& retained_credentials) override {}
 
   bool WaitForLoginsChanged() { return future_.Wait(); }
 
  private:
+  base::test::TestFuture<void> future_;
+};
+
+class FakePasskeyModelObserver : public webauthn::PasskeyModel::Observer {
+ public:
+  explicit FakePasskeyModelObserver(webauthn::PasskeyModel* model)
+      : model_(model) {
+    model_->AddObserver(this);
+  }
+
+  ~FakePasskeyModelObserver() override { model_->RemoveObserver(this); }
+
+  void OnPasskeysChanged(
+      const std::vector<webauthn::PasskeyModelChange>& changes) override {
+    future_.SetValue();
+  }
+
+  void OnPasskeyModelShuttingDown() override {}
+  void OnPasskeyModelIsReady(bool is_ready) override {}
+
+  bool WaitForPasskeysChanged() { return future_.Wait(); }
+
+ private:
+  raw_ptr<webauthn::PasskeyModel> model_;
   base::test::TestFuture<void> future_;
 };
 
@@ -132,7 +195,192 @@ class CredentialImporterTest : public PlatformTest {
   CredentialImporter* importer_;
 };
 
-// TODO(crbug.com/458733320): Add tests for passkeys and invalid credentials.
+TEST_F(CredentialImporterTest, ImportsValidPasskey) {
+  [importer_ onCredentialsTranslatedWithPasswords:@[]
+                                         passkeys:@[ CreateTestPasskey() ]
+                              exporterDisplayName:@""
+                                            stats:[[ImportStats alloc] init]];
+
+  FakePasskeyModelObserver observer(passkey_model_.get());
+
+  [importer_
+      startImportingCredentialsWithTrustedVaultKeys:{TestTrustedVaultKey()}];
+
+  ASSERT_TRUE(observer.WaitForPasskeysChanged());
+  ASSERT_FALSE(passkey_model_->IsEmpty());
+  auto passkeys = passkey_model_->GetPasskeys(
+      webauthn::PasskeyModel::AnyRp(),
+      webauthn::PasskeyModel::ShadowedCredentials::kExclude);
+  ASSERT_THAT(passkeys, SizeIs(1));
+  EXPECT_EQ(passkeys[0].rp_id(), "example.com");
+  EXPECT_EQ(passkeys[0].user_name(), "userName");
+  EXPECT_EQ(passkeys[0].user_display_name(), "userDisplayName");
+}
+
+TEST_F(CredentialImporterTest, ImportsPasskeyWithHmacSecret) {
+  CredentialExchangePasskey* passkey = CreateTestPasskey();
+  passkey.hmacSecret = ToNSData("01234567890123456789012345678901");
+  passkey.hmacSecretAlgorithm = @"sha256";
+
+  [importer_ onCredentialsTranslatedWithPasswords:@[]
+                                         passkeys:@[ passkey ]
+                              exporterDisplayName:@""
+                                            stats:[[ImportStats alloc] init]];
+
+  FakePasskeyModelObserver observer(passkey_model_.get());
+
+  [importer_
+      startImportingCredentialsWithTrustedVaultKeys:{TestTrustedVaultKey()}];
+
+  ASSERT_TRUE(observer.WaitForPasskeysChanged());
+  ASSERT_FALSE(passkey_model_->IsEmpty());
+  auto passkeys = passkey_model_->GetPasskeys(
+      webauthn::PasskeyModel::AnyRp(),
+      webauthn::PasskeyModel::ShadowedCredentials::kExclude);
+  ASSERT_THAT(passkeys, SizeIs(1));
+  sync_pb::WebauthnCredentialSpecifics_Encrypted decrypted;
+  EXPECT_TRUE(
+      webauthn::passkey_model_utils::DecryptWebauthnCredentialSpecificsData(
+          TestTrustedVaultKey(), passkeys[0], &decrypted));
+  EXPECT_EQ(decrypted.hmac_secret(), "01234567890123456789012345678901");
+}
+
+TEST_F(CredentialImporterTest, ImportsPasskeyWithLargeBlob) {
+  CredentialExchangePasskey* passkey = CreateTestPasskey();
+  passkey.largeBlob = ToNSData("large_blob");
+  passkey.largeBlobUncompressedSize = @(100);
+
+  [importer_ onCredentialsTranslatedWithPasswords:@[]
+                                         passkeys:@[ passkey ]
+                              exporterDisplayName:@""
+                                            stats:[[ImportStats alloc] init]];
+
+  FakePasskeyModelObserver observer(passkey_model_.get());
+
+  [importer_
+      startImportingCredentialsWithTrustedVaultKeys:{TestTrustedVaultKey()}];
+
+  ASSERT_TRUE(observer.WaitForPasskeysChanged());
+  ASSERT_FALSE(passkey_model_->IsEmpty());
+  auto passkeys = passkey_model_->GetPasskeys(
+      webauthn::PasskeyModel::AnyRp(),
+      webauthn::PasskeyModel::ShadowedCredentials::kExclude);
+  ASSERT_THAT(passkeys, SizeIs(1));
+  sync_pb::WebauthnCredentialSpecifics_Encrypted decrypted;
+  EXPECT_TRUE(
+      webauthn::passkey_model_utils::DecryptWebauthnCredentialSpecificsData(
+          TestTrustedVaultKey(), passkeys[0], &decrypted));
+  EXPECT_EQ(decrypted.large_blob(), "large_blob");
+  EXPECT_EQ(decrypted.large_blob_uncompressed_size(), 100u);
+}
+
+TEST_F(CredentialImporterTest, ImportsPasskeyWithEmptyLargeBlob) {
+  CredentialExchangePasskey* passkey = CreateTestPasskey();
+  passkey.largeBlob = [NSData data];
+  passkey.largeBlobUncompressedSize = @(0);
+
+  [importer_ onCredentialsTranslatedWithPasswords:@[]
+                                         passkeys:@[ passkey ]
+                              exporterDisplayName:@""
+                                            stats:[[ImportStats alloc] init]];
+
+  FakePasskeyModelObserver observer(passkey_model_.get());
+
+  [importer_
+      startImportingCredentialsWithTrustedVaultKeys:{TestTrustedVaultKey()}];
+
+  ASSERT_TRUE(observer.WaitForPasskeysChanged());
+  ASSERT_FALSE(passkey_model_->IsEmpty());
+  auto passkeys = passkey_model_->GetPasskeys(
+      webauthn::PasskeyModel::AnyRp(),
+      webauthn::PasskeyModel::ShadowedCredentials::kExclude);
+  ASSERT_THAT(passkeys, SizeIs(1));
+  sync_pb::WebauthnCredentialSpecifics_Encrypted decrypted;
+  EXPECT_TRUE(
+      webauthn::passkey_model_utils::DecryptWebauthnCredentialSpecificsData(
+          TestTrustedVaultKey(), passkeys[0], &decrypted));
+  EXPECT_TRUE(decrypted.has_large_blob());
+  EXPECT_EQ(decrypted.large_blob(), "");
+  EXPECT_TRUE(decrypted.has_large_blob_uncompressed_size());
+  EXPECT_EQ(decrypted.large_blob_uncompressed_size(), 0u);
+}
+
+TEST_F(CredentialImporterTest, ConflictPasskeyPassesCreationDateToUI) {
+  // Add an existing passkey to trigger a conflict.
+  sync_pb::WebauthnCredentialSpecifics existing_passkey;
+  existing_passkey.set_sync_id(base::RandBytesAsString(16));
+  existing_passkey.set_credential_id(base::RandBytesAsString(16));
+  existing_passkey.set_rp_id("example.com");
+  existing_passkey.set_user_id("user_id");
+  passkey_model_->AddNewPasskeyForTesting(existing_passkey);
+
+  NSDate* creationDate = [NSDate dateWithTimeIntervalSince1970:1700000000];
+  CredentialExchangePasskey* passkey = CreateTestPasskey();
+  passkey.creationDate = creationDate;
+
+  [importer_ onCredentialsTranslatedWithPasswords:@[]
+                                         passkeys:@[ passkey ]
+                              exporterDisplayName:@""
+                                            stats:[[ImportStats alloc] init]];
+
+  __block base::test::TestFuture<NSArray<PasskeyImportItem*>*> future;
+  OCMExpect([importer_delegate_
+                showConflictResolutionScreenWithPasswords:[OCMArg any]
+                                                 passkeys:[OCMArg any]])
+      .andDo(^(NSInvocation* invocation) {
+        __unsafe_unretained NSArray<PasskeyImportItem*>* items = nil;
+        [invocation getArgument:&items atIndex:3];
+        future.SetValue(items);
+      });
+
+  [importer_
+      startImportingCredentialsWithTrustedVaultKeys:{TestTrustedVaultKey()}];
+
+  NSArray<PasskeyImportItem*>* items = future.Get();
+  ASSERT_EQ(items.count, 1u);
+  EXPECT_TRUE([items.firstObject.creationDate isEqualToDate:creationDate]);
+
+  EXPECT_OCMOCK_VERIFY(importer_delegate_);
+}
+
+TEST_F(CredentialImporterTest, DoesNotImportInvalidPassword) {
+  NSString* tooLongPassword = [@"" stringByPaddingToLength:1001
+                                                withString:@"a"
+                                           startingAtIndex:0];
+  CredentialExchangePassword* invalidPassword =
+      [[CredentialExchangePassword alloc]
+           initWithURL:[NSURL URLWithString:@"https://invalid.com"]
+              username:@"invalid_username"
+              password:tooLongPassword
+                  note:@"invalid_note"
+          creationDate:nil];
+
+  [importer_ onCredentialsTranslatedWithPasswords:@[
+    invalidPassword, CreateTestPassword(@"https://example.com")
+  ]
+                                         passkeys:@[]
+                              exporterDisplayName:@""
+                                            stats:[[ImportStats alloc] init]];
+
+  FakePasswordStoreObserver observer;
+  GetAccountStore().AddObserver(&observer);
+
+  [importer_ startImportingCredentialsWithTrustedVaultKeys:{}];
+
+  ASSERT_TRUE(observer.WaitForLoginsChanged());
+  GetAccountStore().RemoveObserver(&observer);
+
+  EXPECT_TRUE(GetAllLoginsSync(&GetProfileStore()).empty());
+  auto forms_map = GetAllLoginsSync(&GetAccountStore());
+  ASSERT_THAT(forms_map, SizeIs(1));
+  std::vector<PasswordForm> forms = forms_map.begin()->second;
+  EXPECT_EQ(forms[0].url.spec(), "https://example.com/");
+  EXPECT_EQ(forms[0].username_value, u"username");
+  EXPECT_EQ(forms[0].password_value, u"password");
+  EXPECT_EQ(forms[0].GetNoteWithEmptyUniqueDisplayName(), u"note");
+  EXPECT_EQ(forms[0].in_store, PasswordForm::Store::kAccountStore);
+}
+
 TEST_F(CredentialImporterTest, ImportsValidPassword) {
   [importer_ onCredentialsTranslatedWithPasswords:@[ CreateTestPassword(
                                                       @"https://example.com") ]
@@ -148,11 +396,10 @@ TEST_F(CredentialImporterTest, ImportsValidPassword) {
   ASSERT_TRUE(observer.WaitForLoginsChanged());
   GetAccountStore().RemoveObserver(&observer);
 
-  EXPECT_TRUE(GetProfileStore().IsEmpty());
-  ASSERT_THAT(GetAccountStore().stored_passwords(), SizeIs(1));
-  std::vector<PasswordForm> forms =
-      GetAccountStore().stored_passwords().begin()->second;
-  ASSERT_THAT(forms, SizeIs(1));
+  EXPECT_TRUE(GetAllLoginsSync(&GetProfileStore()).empty());
+  auto forms_map = GetAllLoginsSync(&GetAccountStore());
+  ASSERT_THAT(forms_map, SizeIs(1));
+  std::vector<PasswordForm> forms = forms_map.begin()->second;
   EXPECT_EQ(forms[0].url.spec(), "https://example.com/");
   EXPECT_EQ(forms[0].username_value, u"username");
   EXPECT_EQ(forms[0].password_value, u"password");
@@ -175,11 +422,10 @@ TEST_F(CredentialImporterTest, ImportsPasswordWithoutHttpsScheme) {
   ASSERT_TRUE(observer.WaitForLoginsChanged());
   GetAccountStore().RemoveObserver(&observer);
 
-  EXPECT_TRUE(GetProfileStore().IsEmpty());
-  ASSERT_THAT(GetAccountStore().stored_passwords(), SizeIs(1));
-  std::vector<PasswordForm> forms =
-      GetAccountStore().stored_passwords().begin()->second;
-  ASSERT_THAT(forms, SizeIs(1));
+  EXPECT_TRUE(GetAllLoginsSync(&GetProfileStore()).empty());
+  auto forms_map = GetAllLoginsSync(&GetAccountStore());
+  ASSERT_THAT(forms_map, SizeIs(1));
+  std::vector<PasswordForm> forms = forms_map.begin()->second;
   EXPECT_EQ(forms[0].url.spec(), "https://example.com/");
   EXPECT_EQ(forms[0].username_value, u"username");
   EXPECT_EQ(forms[0].password_value, u"password");
@@ -192,7 +438,8 @@ TEST_F(CredentialImporterTest, DoesNotImportPasswordWithoutUrl) {
       [[CredentialExchangePassword alloc] initWithURL:nil
                                              username:@"username"
                                              password:@"password"
-                                                 note:@"note"];
+                                                 note:@"note"
+                                         creationDate:nil];
   [importer_ onCredentialsTranslatedWithPasswords:@[
     passwordWithoutUrl, CreateTestPassword(@"example.com")
   ]
@@ -208,16 +455,23 @@ TEST_F(CredentialImporterTest, DoesNotImportPasswordWithoutUrl) {
   ASSERT_TRUE(observer.WaitForLoginsChanged());
   GetAccountStore().RemoveObserver(&observer);
 
-  EXPECT_TRUE(GetProfileStore().IsEmpty());
-  ASSERT_THAT(GetAccountStore().stored_passwords(), SizeIs(1));
-  std::vector<PasswordForm> forms =
-      GetAccountStore().stored_passwords().begin()->second;
-  ASSERT_THAT(forms, SizeIs(1));
+  EXPECT_TRUE(GetAllLoginsSync(&GetProfileStore()).empty());
+  auto forms_map = GetAllLoginsSync(&GetAccountStore());
+  ASSERT_THAT(forms_map, SizeIs(1));
+  std::vector<PasswordForm> forms = forms_map.begin()->second;
   EXPECT_EQ(forms[0].url.spec(), "https://example.com/");
   EXPECT_EQ(forms[0].username_value, u"username");
   EXPECT_EQ(forms[0].password_value, u"password");
   EXPECT_EQ(forms[0].GetNoteWithEmptyUniqueDisplayName(), u"note");
   EXPECT_EQ(forms[0].in_store, PasswordForm::Store::kAccountStore);
+}
+
+TEST_F(CredentialImporterTest, PropagatesImportError) {
+  [[importer_delegate_ expect] onImportError];
+
+  [importer_ onImportError];
+
+  [importer_delegate_ verify];
 }
 
 TEST_F(CredentialImporterTest, RecordsCredentialsReceivedMetrics) {
@@ -269,6 +523,124 @@ TEST_F(CredentialImporterTest, RecordsCredentialsReceivedMetrics) {
     histogram_tester.ExpectUniqueSample(
         "IOS.CredentialExchange.CredentialsReceivedCount." + suffix, count, 1);
   }
+}
+
+TEST_F(CredentialImporterTest, TestImportPasskeyWithInvalidPrivateKey) {
+  CredentialExchangePasskey* passkey = [[CredentialExchangePasskey alloc]
+           initWithCredentialId:ToNSData("1234567890123456")
+                           rpId:@"example.com"
+                       userName:@"userName"
+                userDisplayName:@"userDisplayName"
+                         userId:ToNSData("user_id")
+                     privateKey:ToNSData("invalid_private_key")
+                   creationDate:nil
+                     hmacSecret:nil
+            hmacSecretAlgorithm:nil
+                      largeBlob:nil
+      largeBlobUncompressedSize:nil];
+
+  [importer_ onCredentialsTranslatedWithPasswords:@[]
+                                         passkeys:@[ passkey ]
+                              exporterDisplayName:@"Exporter"
+                                            stats:[[ImportStats alloc] init]];
+
+  base::RunLoop run_loop;
+  auto quit_closure = run_loop.QuitClosure();
+  OCMExpect([importer_delegate_ onPasskeysImported:0 invalid:[OCMArg any]])
+      .andDo(^(NSInvocation* invocation) {
+        quit_closure.Run();
+      });
+
+  base::HistogramTester histogram_tester;
+  [importer_
+      startImportingCredentialsWithTrustedVaultKeys:{TestTrustedVaultKey()}];
+  run_loop.Run();
+
+  EXPECT_OCMOCK_VERIFY(importer_delegate_);
+  histogram_tester.ExpectUniqueSample(
+      "WebAuthentication.CredentialExchange.PasskeyImportStatus",
+      webauthn::ImportedPasskeyStatus::kPrivateKeyInvalid, 1);
+}
+
+TEST_F(CredentialImporterTest, TestImportPasskeyWithUnsupportedAlgorithm) {
+  std::vector<uint8_t> rsa_key =
+      crypto::keypair::PrivateKey::GenerateRsa2048().ToPrivateKeyInfo();
+  CredentialExchangePasskey* passkey = [[CredentialExchangePasskey alloc]
+           initWithCredentialId:ToNSData("1234567890123456")
+                           rpId:@"example.com"
+                       userName:@"userName"
+                userDisplayName:@"userDisplayName"
+                         userId:ToNSData("user_id")
+                     privateKey:[NSData dataWithBytes:rsa_key.data()
+                                               length:rsa_key.size()]
+                   creationDate:nil
+                     hmacSecret:nil
+            hmacSecretAlgorithm:nil
+                      largeBlob:nil
+      largeBlobUncompressedSize:nil];
+
+  [importer_ onCredentialsTranslatedWithPasswords:@[]
+                                         passkeys:@[ passkey ]
+                              exporterDisplayName:@"Exporter"
+                                            stats:[[ImportStats alloc] init]];
+
+  base::RunLoop run_loop;
+  auto quit_closure = run_loop.QuitClosure();
+  OCMExpect([importer_delegate_ onPasskeysImported:0 invalid:[OCMArg any]])
+      .andDo(^(NSInvocation* invocation) {
+        quit_closure.Run();
+      });
+
+  base::HistogramTester histogram_tester;
+  [importer_
+      startImportingCredentialsWithTrustedVaultKeys:{TestTrustedVaultKey()}];
+  run_loop.Run();
+
+  EXPECT_OCMOCK_VERIFY(importer_delegate_);
+  histogram_tester.ExpectUniqueSample(
+      "WebAuthentication.CredentialExchange.PasskeyImportStatus",
+      webauthn::ImportedPasskeyStatus::kPrivateKeyUnsupportedAlgorithm, 1);
+}
+
+class CredentialImporterFidoExtensionsDisabledTest
+    : public CredentialImporterTest {
+ protected:
+  base::test::ScopedFeatureList feature_list_{
+      {},
+      {kCredentialExchangeFidoExtensions}};
+};
+
+TEST_F(CredentialImporterFidoExtensionsDisabledTest,
+       ImportsPasskeyWithoutFidoExtensions) {
+  CredentialExchangePasskey* passkey = CreateTestPasskey();
+  passkey.hmacSecret = ToNSData("01234567890123456789012345678901");
+  passkey.hmacSecretAlgorithm = @"sha256";
+  passkey.largeBlob = ToNSData("large_blob_data");
+  passkey.largeBlobUncompressedSize = @(100);
+
+  [importer_ onCredentialsTranslatedWithPasswords:@[]
+                                         passkeys:@[ passkey ]
+                              exporterDisplayName:@""
+                                            stats:[[ImportStats alloc] init]];
+
+  FakePasskeyModelObserver observer(passkey_model_.get());
+
+  [importer_
+      startImportingCredentialsWithTrustedVaultKeys:{TestTrustedVaultKey()}];
+
+  ASSERT_TRUE(observer.WaitForPasskeysChanged());
+  ASSERT_FALSE(passkey_model_->IsEmpty());
+  auto passkeys = passkey_model_->GetPasskeys(
+      webauthn::PasskeyModel::AnyRp(),
+      webauthn::PasskeyModel::ShadowedCredentials::kExclude);
+  ASSERT_THAT(passkeys, SizeIs(1));
+  sync_pb::WebauthnCredentialSpecifics_Encrypted decrypted;
+  EXPECT_TRUE(
+      webauthn::passkey_model_utils::DecryptWebauthnCredentialSpecificsData(
+          TestTrustedVaultKey(), passkeys[0], &decrypted));
+  EXPECT_FALSE(decrypted.has_hmac_secret());
+  EXPECT_FALSE(decrypted.has_large_blob());
+  EXPECT_FALSE(decrypted.has_large_blob_uncompressed_size());
 }
 
 }  // namespace

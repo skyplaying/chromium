@@ -28,18 +28,15 @@ import org.mockito.junit.MockitoRule;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Features.DisableFeatures;
-import org.chromium.base.test.util.Features.EnableFeatures;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.magic_stack.HomeModulesConfigManager;
 import org.chromium.chrome.browser.magic_stack.HomeModulesConfigManager.HomeModulesStateListener;
+import org.chromium.chrome.browser.magic_stack.ModuleRegistry;
 import org.chromium.chrome.browser.ntp_customization.BottomSheetDelegate;
 import org.chromium.chrome.browser.ntp_customization.R;
 import org.chromium.chrome.browser.profiles.Profile;
 
 /** Unit tests for {@link NtpCardsCoordinator} */
 @RunWith(BaseRobolectricTestRunner.class)
-@EnableFeatures(ChromeFeatureList.HOME_MODULE_PREF_REFACTOR)
 public class NtpCardsCoordinatorUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -47,7 +44,7 @@ public class NtpCardsCoordinatorUnitTest {
     @Mock private Profile mProfile;
     @Mock private NtpCardsMediator mMediator;
     @Mock private HomeModulesConfigManager mHomeModulesConfigManager;
-
+    @Mock private ModuleRegistry mModuleRegistry;
     @Captor private ArgumentCaptor<HomeModulesStateListener> mListener;
 
     private NtpCardsCoordinator mCoordinator;
@@ -63,7 +60,8 @@ public class NtpCardsCoordinatorUnitTest {
                 new NtpCardsCoordinator(
                         mContext,
                         mBottomSheetDelegate,
-                        ObservableSuppliers.createNonNull(mProfile));
+                        ObservableSuppliers.createNonNull(mProfile),
+                        mModuleRegistry);
     }
 
     @Test
@@ -120,18 +118,7 @@ public class NtpCardsCoordinatorUnitTest {
 
     @Test
     @SmallTest
-    @DisableFeatures(ChromeFeatureList.HOME_MODULE_PREF_REFACTOR)
     public void testToggleVisibility() {
-        // TODO(crbug.com/458409311): Remove this test.
-        View view = mCoordinator.getViewForTesting();
-        assertEquals(View.GONE, view.findViewById(R.id.cards_switch_button).getVisibility());
-        assertEquals(View.GONE, view.findViewById(R.id.cards_section_title).getVisibility());
-    }
-
-    @Test
-    @SmallTest
-    public void testToggleVisibility_FeatureEnabled() {
-        // TODO(crbug.com/458409311): Remove this test.
         View view = mCoordinator.getViewForTesting();
         assertEquals(View.VISIBLE, view.findViewById(R.id.cards_switch_button).getVisibility());
         assertEquals(View.VISIBLE, view.findViewById(R.id.cards_section_title).getVisibility());

@@ -5,7 +5,8 @@
 #import <UIKit/UIKit.h>
 #import <XCTest/XCTest.h>
 
-#import "base/ios/ios_util.h"
+#import "base/functional/bind.h"
+#import "base/memory/ref_counted.h"
 #import "base/strings/sys_string_conversions.h"
 #import "ios/chrome/browser/settings/ui_bundled/content_settings/block_popups_app_interface.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
@@ -14,27 +15,27 @@
 #import "ios/chrome/test/earl_grey/chrome_earl_grey.h"
 #import "ios/chrome/test/earl_grey/chrome_earl_grey_ui.h"
 #import "ios/chrome/test/earl_grey/chrome_matchers.h"
+#import "ios/chrome/test/earl_grey/chrome_test_case.h"
 #import "ios/chrome/test/earl_grey/scoped_block_popups_pref.h"
 #import "ios/chrome/test/earl_grey/scoped_disable_timer_tracking.h"
-#import "ios/chrome/test/earl_grey/web_http_server_chrome_test_case.h"
 #import "ios/chrome/test/scoped_eg_synchronization_disabler.h"
 #import "ios/testing/earl_grey/earl_grey_test.h"
 #import "ios/testing/earl_grey/matchers.h"
-#import "ios/web/public/test/http_server/http_server.h"
-#import "ios/web/public/test/http_server/http_server_util.h"
-#import "ui/base/l10n/l10n_util_mac.h"
+#import "net/test/embedded_test_server/embedded_test_server.h"
+#import "net/test/embedded_test_server/http_request.h"
+#import "net/test/embedded_test_server/http_response.h"
 #import "url/gurl.h"
 
 using chrome_test_util::ContentSettingsButton;
+using chrome_test_util::NavigationBarEditButton;
 using chrome_test_util::SettingsDoneButton;
-using chrome_test_util::TabGridEditButton;
 using testing::NavigationBarBackButton;
 
 namespace {
 
 // URLs used in the tests.
-const char* kBlockPopupsUrl = "http://blockpopups";
-const char* kOpenedWindowUrl = "http://openedwindow";
+const char* kBlockPopupsUrl = "/blockpopups";
+const char* kOpenedWindowUrl = "/openedwindow";
 
 // Page with a button that opens a new window after a short delay.
 NSString* const kBlockPopupsResponseTemplate =
@@ -75,19 +76,66 @@ class ScopedBlockPopupsException {
   // The exception pattern that this object is managing.
   NSString* pattern_;
 };
+struct ServerState {
+  std::string blockPopupsResponse;
+  std::string openedWindowResponse;
+};
+
+std::unique_ptr<net::test_server::HttpResponse> CreateHttpResponse(
+    const std::string& content) {
+  auto response = std::make_unique<net::test_server::BasicHttpResponse>();
+  response->set_code(net::HTTP_OK);
+  response->set_content_type("text/html");
+  response->set_content(content);
+  return response;
+}
+
+std::unique_ptr<net::test_server::HttpResponse> NotFoundResponse() {
+  auto response = std::make_unique<net::test_server::BasicHttpResponse>();
+  response->set_code(net::HTTP_NOT_FOUND);
+  return response;
+}
+
+std::unique_ptr<net::test_server::HttpResponse> HandleBlockPopupsRequest(
+    scoped_refptr<base::RefCountedData<ServerState>> state,
+    const net::test_server::HttpRequest& request) {
+  if (request.relative_url == kBlockPopupsUrl) {
+    return CreateHttpResponse(state->data.blockPopupsResponse);
+  }
+  if (request.relative_url == kOpenedWindowUrl) {
+    return CreateHttpResponse(state->data.openedWindowResponse);
+  }
+  return NotFoundResponse();
+}
+
 }  // namespace
 
 // Block Popups tests for Chrome.
-@interface BlockPopupsTestCase : WebHttpServerChromeTestCase
+@interface BlockPopupsTestCase : ChromeTestCase
 @end
 
 @implementation BlockPopupsTestCase
 
+- (void)setUp {
+  [super setUp];
+
+  auto state = base::MakeRefCounted<base::RefCountedData<ServerState>>();
+  state->data.openedWindowResponse = kOpenedWindowResponse;
+
+  self.testServer->RegisterRequestHandler(
+      base::BindRepeating(&HandleBlockPopupsRequest, state));
+
+  GREYAssertTrue(self.testServer->Start(), @"Test server failed to start.");
+
+  const GURL openedWindowURL = self.testServer->GetURL(kOpenedWindowUrl);
+  NSString* openedWindowURLString =
+      base::SysUTF8ToNSString(openedWindowURL.spec());
+  state->data.blockPopupsResponse = base::SysNSStringToUTF8([NSString
+      stringWithFormat:kBlockPopupsResponseTemplate, openedWindowURLString]);
+}
+
 - (AppLaunchConfiguration)appConfigurationForTestCase {
   AppLaunchConfiguration config;
-  if ([self isRunningTest:@selector(testSettingsPageWithExceptions)]) {
-    config.features_enabled.push_back(kTabSwitcherOverflowMenu);
-  }
 
   return config;
 }
@@ -119,15 +167,7 @@ class ScopedBlockPopupsException {
 
 // Tests that popups are opened in new tabs when the preference is set to ALLOW.
 - (void)testPopupsAllowed {
-  std::map<GURL, std::string> responses;
-  const GURL blockPopupsURL = web::test::HttpServer::MakeUrl(kBlockPopupsUrl);
-  const GURL openedWindowURL = web::test::HttpServer::MakeUrl(kOpenedWindowUrl);
-  NSString* openedWindowURLString =
-      base::SysUTF8ToNSString(openedWindowURL.spec());
-  responses[blockPopupsURL] = base::SysNSStringToUTF8([NSString
-      stringWithFormat:kBlockPopupsResponseTemplate, openedWindowURLString]);
-  responses[openedWindowURL] = kOpenedWindowResponse;
-  web::test::SetUpSimpleHttpServer(responses);
+  const GURL blockPopupsURL = self.testServer->GetURL(kBlockPopupsUrl);
 
   ScopedBlockPopupsPref prefSetter(CONTENT_SETTING_ALLOW);
   [ChromeEarlGrey loadURL:blockPopupsURL];
@@ -148,15 +188,7 @@ class ScopedBlockPopupsException {
 // Tests that popups are prevented from opening and an infobar is displayed when
 // the preference is set to BLOCK.
 - (void)testPopupsBlocked {
-  std::map<GURL, std::string> responses;
-  const GURL blockPopupsURL = web::test::HttpServer::MakeUrl(kBlockPopupsUrl);
-  const GURL openedWindowURL = web::test::HttpServer::MakeUrl(kOpenedWindowUrl);
-  NSString* openedWindowURLString =
-      base::SysUTF8ToNSString(openedWindowURL.spec());
-  responses[blockPopupsURL] = base::SysNSStringToUTF8([NSString
-      stringWithFormat:kBlockPopupsResponseTemplate, openedWindowURLString]);
-  responses[openedWindowURL] = kOpenedWindowResponse;
-  web::test::SetUpSimpleHttpServer(responses);
+  const GURL blockPopupsURL = self.testServer->GetURL(kBlockPopupsUrl);
 
   ScopedBlockPopupsPref prefSetter(CONTENT_SETTING_BLOCK);
   [ChromeEarlGrey loadURL:blockPopupsURL];
@@ -198,9 +230,8 @@ class ScopedBlockPopupsException {
         performAction:grey_tap()];
 
     // Make sure that the "example.com" exception is listed.
-    [[EarlGrey selectElementWithMatcher:grey_text(base::SysUTF8ToNSString(
-                                            allowedPattern))]
-        assertWithMatcher:grey_sufficientlyVisible()];
+    [ChromeEarlGrey waitForSufficientlyVisibleElementWithMatcher:
+                        grey_text(base::SysUTF8ToNSString(allowedPattern))];
 
     // Toggle the switch off via the UI and make sure the exceptions are not
     // visible.
@@ -208,15 +239,10 @@ class ScopedBlockPopupsException {
         selectElementWithMatcher:chrome_test_util::TableViewSwitchCell(
                                      @"blockPopupsContentView_switch", YES)]
         performAction:chrome_test_util::TurnTableViewSwitchOn(NO)];
-    [[EarlGrey selectElementWithMatcher:grey_text(base::SysUTF8ToNSString(
-                                            allowedPattern))]
+    [ChromeEarlGrey waitForNotSufficientlyVisibleElementWithMatcher:
+                        grey_text(base::SysUTF8ToNSString(allowedPattern))];
+    [[EarlGrey selectElementWithMatcher:NavigationBarEditButton()]
         assertWithMatcher:grey_notVisible()];
-    [[EarlGrey selectElementWithMatcher:
-                   grey_allOf(chrome_test_util::ButtonWithAccessibilityLabelId(
-                                  IDS_IOS_NAVIGATION_BAR_EDIT_BUTTON),
-                              grey_not(grey_accessibilityTrait(
-                                  UIAccessibilityTraitNotEnabled)),
-                              nil)] assertWithMatcher:grey_notVisible()];
     [[EarlGrey selectElementWithMatcher:SettingsDoneButton()]
         assertWithMatcher:grey_sufficientlyVisible()];
 
@@ -226,17 +252,10 @@ class ScopedBlockPopupsException {
         selectElementWithMatcher:chrome_test_util::TableViewSwitchCell(
                                      @"blockPopupsContentView_switch", NO)]
         performAction:chrome_test_util::TurnTableViewSwitchOn(YES)];
-    [[EarlGrey selectElementWithMatcher:grey_text(base::SysUTF8ToNSString(
-                                            allowedPattern))]
-        assertWithMatcher:grey_sufficientlyVisible()];
-    [[EarlGrey selectElementWithMatcher:
-                   grey_allOf(chrome_test_util::ButtonWithAccessibilityLabelId(
-                                  IDS_IOS_NAVIGATION_BAR_EDIT_BUTTON),
-                              grey_not(TabGridEditButton()),
-                              grey_not(grey_accessibilityTrait(
-                                  UIAccessibilityTraitNotEnabled)),
-                              nil)]
-        assertWithMatcher:grey_sufficientlyVisible()];
+    [ChromeEarlGrey waitForSufficientlyVisibleElementWithMatcher:
+                        grey_text(base::SysUTF8ToNSString(allowedPattern))];
+    [ChromeEarlGrey
+        waitForSufficientlyVisibleElementWithMatcher:NavigationBarEditButton()];
 
     // Disable EarlGrey synchronization to avoid infinite spinner loop.
     ScopedSynchronizationDisabler synchronizationDisabler;

@@ -9,6 +9,7 @@
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
+#include "base/i18n/language_tag.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "components/language/core/browser/language_model.h"
@@ -285,10 +286,9 @@ class TranslateMessageTest : public ::testing::Test {
             Truly([env, expected_items](
                       const base::android::ScopedJavaLocalRef<jbooleanArray>&
                           actual) {
-              std::vector<bool> actual_vector;
-              base::android::JavaBooleanArrayToBoolVector(env, actual,
-                                                          &actual_vector);
-              return std::ranges::equal(expected_items, actual_vector,
+              jni_zero::JArrayViewCritical<bool> actual_view =
+                  actual.CreateViewCritical(env);
+              return std::ranges::equal(expected_items, actual_view,
                                         std::equal_to<>(),
                                         &SecondaryMenuItem::has_checkmark);
             }),
@@ -782,9 +782,12 @@ TEST_F(TranslateMessageTest, OverflowMenuToggleNeverTranslateSite) {
 TEST_F(TranslateMessageTest, OverflowMenuChangeSourceLanguage) {
   JNIEnv* env = base::android::AttachCurrentThread();
 
-  translate_prefs_->AddToLanguageList("en", true);
-  translate_prefs_->AddToLanguageList("es", true);
-  translate_prefs_->AddToLanguageList("de", true);
+  translate_prefs_->AddToLanguageList(base::i18n::GetKnownLanguageTag("en"),
+                                      true);
+  translate_prefs_->AddToLanguageList(base::i18n::GetKnownLanguageTag("es"),
+                                      true);
+  translate_prefs_->AddToLanguageList(base::i18n::GetKnownLanguageTag("de"),
+                                      true);
 
   EXPECT_CALL(*bridge_, CreateTranslateMessage(
                             env, _, _, kDefaultDismissalDurationSeconds))
@@ -857,9 +860,12 @@ TEST_F(TranslateMessageTest,
        OverflowMenuChangeTargetLanguageWithContentLanguages) {
   JNIEnv* env = base::android::AttachCurrentThread();
 
-  translate_prefs_->AddToLanguageList("en", true);
-  translate_prefs_->AddToLanguageList("es", true);
-  translate_prefs_->AddToLanguageList("de", true);
+  translate_prefs_->AddToLanguageList(base::i18n::GetKnownLanguageTag("en"),
+                                      true);
+  translate_prefs_->AddToLanguageList(base::i18n::GetKnownLanguageTag("es"),
+                                      true);
+  translate_prefs_->AddToLanguageList(base::i18n::GetKnownLanguageTag("de"),
+                                      true);
 
   EXPECT_CALL(*bridge_, CreateTranslateMessage(
                             env, _, _, kDefaultDismissalDurationSeconds))

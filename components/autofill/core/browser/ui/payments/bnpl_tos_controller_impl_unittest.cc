@@ -100,8 +100,7 @@ class BnplTosControllerImplTest : public Test {
         /*instrument_id=*/123, BnplIssuer::IssuerId::kBnplKlarna,
         std::vector<BnplIssuer::EligiblePriceRange>{},
         /*action_required=*/
-        autofill::DenseSet(
-            {autofill::PaymentInstrument::ActionRequired::kAcceptTos}));
+        DenseSet({PaymentInstrument::ActionRequired::kAcceptTos}));
   }
 
   base::test::TaskEnvironment task_environment_;
@@ -248,7 +247,7 @@ TEST_F(BnplTosControllerImplTest, GetLegalMessageLines) {
 TEST_F(BnplTosControllerImplTest, GetAccountInfo) {
   ShowBnplTos();
 
-  EXPECT_EQ(controller_->GetAccountInfo().email, account_info_.email);
+  EXPECT_EQ(controller_->GetAccountInfo().GetEmail(), account_info_.GetEmail());
 }
 
 TEST_F(BnplTosControllerImplTest, GetIssuerId) {

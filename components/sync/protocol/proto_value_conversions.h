@@ -58,8 +58,6 @@ class PasswordSpecifics;
 class PasswordSpecificsData;
 class PaymentInstrument;
 class PaymentsCustomerData;
-class PlusAddressSettingSpecifics;
-class PlusAddressSpecifics;
 class PowerBookmarkSpecifics;
 class PreferenceSpecifics;
 class PrinterPPDReference;
@@ -82,8 +80,9 @@ class SharingMessageSpecifics;
 class SyncCycleCompletedEventInfo;
 class SyncEntity;
 class TabNavigation;
+class ThemeAndroidSpecifics;
+class ThemeIosSpecifics;
 class ThemeSpecifics;
-class ThemeSpecificsIos;
 class TimeRangeDirective;
 class TypedUrlSpecifics;
 class UnencryptedSharingMessage;
@@ -239,12 +238,6 @@ base::Value PaymentInstrumentToValue(
 base::Value PaymentsCustomerDataToValue(
     const sync_pb::PaymentsCustomerData& payments_customer_data);
 
-base::Value PlusAddressSettingSpecificsToValue(
-    const sync_pb::PlusAddressSettingSpecifics& plus_address_setting_specifics);
-
-base::Value PlusAddressSpecificsToValue(
-    const sync_pb::PlusAddressSpecifics& plus_address_specifics);
-
 base::Value PowerBookmarkSpecificsToValue(
     const sync_pb::PowerBookmarkSpecifics& power_bookmark_specifics);
 
@@ -308,11 +301,14 @@ base::Value SyncCycleCompletedEventInfoToValue(
 
 base::Value TabNavigationToValue(const sync_pb::TabNavigation& tab_navigation);
 
+base::Value ThemeAndroidSpecificsToValue(
+    const sync_pb::ThemeAndroidSpecifics& theme_android_specifics);
+
+base::Value ThemeIosSpecificsToValue(
+    const sync_pb::ThemeIosSpecifics& theme_ios_specifics);
+
 base::Value ThemeSpecificsToValue(
     const sync_pb::ThemeSpecifics& theme_specifics);
-
-base::Value ThemeSpecificsIosToValue(
-    const sync_pb::ThemeSpecificsIos& theme_specifics_ios);
 
 base::Value TimeRangeDirectiveToValue(
     const sync_pb::TimeRangeDirective& time_range_directive);

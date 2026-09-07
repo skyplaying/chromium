@@ -23,6 +23,8 @@
 #include "ash/wm/overview/overview_test_util.h"
 #include "ash/wm/overview/overview_utils.h"
 #include "base/run_loop.h"
+#include "base/test/run_until.h"
+#include "cc/base/math_util.h"
 #include "ui/base/mojom/menu_source_type.mojom.h"
 #include "ui/compositor/layer.h"
 #include "ui/events/test/event_generator.h"
@@ -112,6 +114,17 @@ ui::LayerTreeOwner* DesksTestApi::GetMirroredContentsLayerTreeForRootAndDesk(
     }
   }
   return nullptr;
+}
+
+// static
+DesksWindowOcclusionCalculator* DesksTestApi::GetWindowOcclusionCalculator(
+    DeskBarViewBase::Type type,
+    aura::Window* root) {
+  auto& mini_views = GetDeskBarView(type, root)->mini_views();
+  if (mini_views.empty()) {
+    return nullptr;
+  }
+  return mini_views[0]->desk_preview()->window_occlusion_calculator_.get();
 }
 
 // static
@@ -284,7 +297,8 @@ void DesksTestApi::MaybeCloseContextMenuForGrid(OverviewGrid* overview_grid) {
 
     // Closing the menu is asynchronous, so we want to wait until it has
     // actually closed.
-    base::RunLoop().RunUntilIdle();
+    CHECK(base::test::RunUntil(
+        [mini_view]() { return !mini_view->context_menu(); }));
   }
 }
 

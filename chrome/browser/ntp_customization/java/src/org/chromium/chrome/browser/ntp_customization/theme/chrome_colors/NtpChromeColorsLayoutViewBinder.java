@@ -33,6 +33,7 @@ import org.chromium.chrome.browser.ntp_customization.R;
 import org.chromium.components.browser_ui.widget.MaterialSwitchWithText;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel;
+import org.chromium.ui.widget.ButtonCompat;
 
 /** View binder class for the NTP customization Chrome Colors bottom sheet. */
 @NullMarked
@@ -45,7 +46,7 @@ public class NtpChromeColorsLayoutViewBinder {
             View backButton = view.findViewById(R.id.back_button);
             backButton.setOnClickListener(model.get(BACK_BUTTON_CLICK_LISTENER));
         } else if (propertyKey == SAVE_BUTTON_CLICK_LISTENER) {
-            ImageView saveButton = view.findViewById(R.id.save_button);
+            ButtonCompat saveButton = view.findViewById(R.id.save_color_button);
             if (saveButton != null) {
                 saveButton.setOnClickListener(model.get(SAVE_BUTTON_CLICK_LISTENER));
             }
@@ -95,7 +96,8 @@ public class NtpChromeColorsLayoutViewBinder {
             var adapter = model.get(RECYCLER_VIEW_ADAPTER);
             if (adapter != null
                     && adapter instanceof NtpChromeColorsAdapter ntpChromeColorsAdapter) {
-                ntpChromeColorsAdapter.setSelectedPosition(model.get(HIGHLIGHTED_ITEM_INDEX));
+                ntpChromeColorsAdapter.setSelectedPosition(
+                        model.get(HIGHLIGHTED_ITEM_INDEX), /* isFromClick= */ false);
             }
         }
     }

@@ -14,14 +14,14 @@
 #include "components/unexportable_keys/background_task_priority.h"
 #include "components/unexportable_keys/service_error.h"
 #include "components/unexportable_keys/unexportable_key_id.h"
-#include "crypto/signature_verifier.h"
+#include "crypto/sign.h"
 
 namespace unexportable_keys {
 
 class UnexportableKeyService;
 
-// This class facilitates creation of `UnexportableKeyId` and allows scheduling
-// callbacks to be called once a key is loaded.
+// This class facilitates creation of `UnexportableSigningKeyId` and allows
+// scheduling callbacks to be called once a key is loaded.
 //
 // This class is designed for a single use: it allows loading only one key.
 // Create multiple instances of this class to load multiple keys.
@@ -48,8 +48,7 @@ class COMPONENT_EXPORT(UNEXPORTABLE_KEYS) UnexportableKeyLoader {
   // Creates a new loader that will generate a brand new key.
   static std::unique_ptr<UnexportableKeyLoader> CreateWithNewKey(
       UnexportableKeyService& unexportable_key_service,
-      base::span<const crypto::SignatureVerifier::SignatureAlgorithm>
-          acceptable_algorithms,
+      base::span<const crypto::sign::SignatureKind> acceptable_algorithms,
       BackgroundTaskPriority priority);
 
   UnexportableKeyLoader(const UnexportableKeyLoader&) = delete;
@@ -60,11 +59,12 @@ class COMPONENT_EXPORT(UNEXPORTABLE_KEYS) UnexportableKeyLoader {
   // Registers `callback` to be called when a key is loaded. Invokes `callback`
   // immediately if a key has already been loaded.
   void InvokeCallbackAfterKeyLoaded(
-      base::OnceCallback<void(ServiceErrorOr<UnexportableKeyId>)> callback);
+      base::OnceCallback<void(ServiceErrorOr<UnexportableSigningKeyId>)>
+          callback);
 
   // If a key hasn't been loaded yet, returns ServiceError::kKeyNotReady.
   // Otherwise, returns a loaded key ID or a terminal error state.
-  ServiceErrorOr<UnexportableKeyId> GetKeyIdOrError();
+  ServiceErrorOr<UnexportableSigningKeyId> GetKeyIdOrError();
 
   // Returns the current state of the loader.
   // Public for testing.
@@ -79,16 +79,16 @@ class COMPONENT_EXPORT(UNEXPORTABLE_KEYS) UnexportableKeyLoader {
                           BackgroundTaskPriority priority);
   void GenerateNewKey(
       UnexportableKeyService& unexportable_key_service,
-      base::span<const crypto::SignatureVerifier::SignatureAlgorithm>
-          acceptable_algorithms,
+      base::span<const crypto::sign::SignatureKind> acceptable_algorithms,
       BackgroundTaskPriority priority);
 
-  void OnKeyLoaded(ServiceErrorOr<UnexportableKeyId> key_id_or_error);
+  void OnKeyLoaded(ServiceErrorOr<UnexportableSigningKeyId> key_id_or_error);
 
-  ServiceErrorOr<UnexportableKeyId> key_id_or_error_ =
+  ServiceErrorOr<UnexportableSigningKeyId> key_id_or_error_ =
       base::unexpected(ServiceError::kKeyNotReady);
   State state_ = State::kNotStarted;
-  std::vector<base::OnceCallback<void(ServiceErrorOr<UnexportableKeyId>)>>
+  std::vector<
+      base::OnceCallback<void(ServiceErrorOr<UnexportableSigningKeyId>)>>
       on_load_callbacks_;
 
   base::WeakPtrFactory<UnexportableKeyLoader> weak_ptr_factory_{this};

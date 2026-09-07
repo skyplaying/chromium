@@ -28,9 +28,20 @@ class MockContextualTasksPanelController
   MockContextualTasksPanelController();
   ~MockContextualTasksPanelController() override;
 
-  MOCK_METHOD(void, Show, (bool, omnibox::ChromeAimEntryPoint), (override));
+  MOCK_METHOD(void,
+              Show,
+              (bool,
+               omnibox::ChromeAimEntryPoint,
+               bool,
+               std::optional<base::TimeTicks>),
+              (override));
   MOCK_METHOD(void, Close, (), (override));
+  MOCK_METHOD(void, OpenInZeroState, (), (override));
   MOCK_METHOD(bool, IsPanelOpenForContextualTask, (), (const, override));
+  MOCK_METHOD(ContextualTasksPanelController::EntrySource,
+              GetActiveEntrySource,
+              (),
+              (const, override));
   MOCK_METHOD(std::optional<tabs::TabHandle>,
               GetAutoSuggestedTabHandle,
               (),
@@ -40,7 +51,18 @@ class MockContextualTasksPanelController
               (content::WebContents*, base::Uuid),
               (override));
   MOCK_METHOD(void, OnAiInteraction, (), (override));
-  MOCK_METHOD(content::WebContents*, GetActiveWebContents, (), (override));
+  MOCK_METHOD(void,
+              SetPendingTaskForTab,
+              (tabs::TabInterface*, const base::Uuid&),
+              (override));
+  MOCK_METHOD(content::WebContents*,
+              GetActiveWebContents,
+              (),
+              (const override));
+  MOCK_METHOD(content::WebContents*,
+              GetToolbarWebContents,
+              (),
+              (const override));
   MOCK_METHOD(std::vector<content::WebContents*>,
               GetPanelWebContentsList,
               (),
@@ -60,10 +82,20 @@ class MockContextualTasksPanelController
   MOCK_METHOD(std::optional<ContextualTask>, GetCurrentTask, (), (override));
   MOCK_METHOD((std::pair<std::optional<base::Uuid>,
                          contextual_search::ContextualSearchSessionHandle*>),
-              GetSessionHandleForActiveTabOrSidePanel,
+              GetSessionHandleForActiveTabOrPanel,
               (),
               (override));
   MOCK_METHOD(size_t, GetNumberOfActiveTasks, (), (const, override));
+  MOCK_METHOD(void, MoveTaskUiToNewTab, (), (override));
+  MOCK_METHOD(void, NotifyExpandToFullTabStateChanged, (), (override));
+  MOCK_METHOD(bool, CanExpandToFullTab, (), (const, override));
+  MOCK_METHOD(void,
+              ShowPageInfoBubble,
+              (bool is_pointer_interaction),
+              (override));
+  MOCK_METHOD(void, OnLogoPointerDown, (), (override));
+  MOCK_METHOD(void, AddObserver, (Observer*), (override));
+  MOCK_METHOD(void, RemoveObserver, (Observer*), (override));
 };
 
 }  // namespace contextual_tasks

@@ -59,15 +59,16 @@ v8::Local<v8::Value> SendMessageTester::TestSendRequest(
 v8::Local<v8::Value> SendMessageTester::TestSendNativeMessage(
     const std::string& args,
     const std::string& expected_message,
-    const std::string& expected_application_name) {
+    const std::string& expected_application_name,
+    SigningCertificates expected_android_certificates) {
   SCOPED_TRACE(
       base::StringPrintf("Send Native Message Args: `%s`", args.c_str()));
 
   // Note: we don't close the native message ports immediately, See comment in
   // OneTimeMessageSender.
   PortStatus expected_port_status = OPEN;
-  MessageTarget expected_target(
-      MessageTarget::ForNativeApp(expected_application_name));
+  MessageTarget expected_target(MessageTarget::ForNativeApp(
+      expected_application_name, std::move(expected_android_certificates)));
 
   v8::Local<v8::Value> output;
   TestSendMessageOrRequest(
@@ -149,7 +150,7 @@ void SendMessageTester::TestSendMessageOrRequest(
                           mojom::SerializationFormat::kJson);
 
   base::RunLoop run_loop;
-  Message message(expected_message, mojom::SerializationFormat::kJson, false);
+  Message message(expected_message, /*user_gesture=*/false);
   EXPECT_CALL(*ipc_sender_,
               SendOpenMessageChannel(script_context_.get(), expected_port_id,
                                      expected_target, channel_type,

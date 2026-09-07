@@ -18,6 +18,14 @@
   min-height: var(--ntp-logo-height);
 }
 
+/*
+ * In case we use the boxed container for the Doodle, we can borrow 20px from
+ * the bottom margin to make the Doodle logo larger.
+ */
+:host([doodle-boxed_][show-tight-doodle-boxing_]) {
+  --ntp-logo-margin-bottom: 18px;
+}
+
 :host([doodle-boxed_]) {
   justify-content: flex-end;
 }
@@ -26,6 +34,11 @@
   forced-color-adjust: none;
   height: 92px;
   width: 272px;
+}
+
+:host([use-google-logo26_]) #logo {
+  height: 82px;
+  width: 270px;
 }
 
 :host([single-colored]) #logo {
@@ -37,32 +50,37 @@
 
 :host(:not([single-colored])) #logo {
   background-image: url(./icons/google_logo.svg);
+  background-repeat: no-repeat;
+  background-size: 100%;
 }
 
-#imageDoodle {
-  cursor: pointer;
-  outline: none;
-}
-
-#imageDoodle[tabindex='-1'] {
-  cursor: auto;
-}
-
-:host([doodle-boxed_]) #imageDoodle {
+:host([doodle-boxed_]:not([show-tight-doodle-boxing_])) #imageDoodle {
   background-color: var(--ntp-logo-box-color);
   border-radius: 20px;
   padding: 16px 24px;
 }
 
-:host-context(.focus-outline-visible) #imageDoodle:focus {
-  box-shadow: 0 0 0 2px rgba(var(--google-blue-600-rgb), .4);
+:host([doodle-boxed_][show-tight-doodle-boxing_]) #imageDoodle {
+  background-color: var(--ntp-logo-box-color);
+  border-radius: 28px;
+  padding: 16px;
 }
 
 #imageContainer {
+  cursor: pointer;
   display: flex;
   height: fit-content;
+  outline: none;
   position: relative;
   width: fit-content;
+}
+
+#imageContainer[tabindex='-1'] {
+  cursor: auto;
+}
+
+:host-context(.focus-outline-visible) #imageContainer:focus {
+  box-shadow: 0 0 0 2px rgba(var(--google-blue-600-rgb), .4);
 }
 
 #image {
@@ -72,6 +90,14 @@
 
 :host([doodle-boxed_]) #image {
   max-height: 128px;
+}
+
+/*
+ * The max-height of 156px + 32px of vertical padding + 18px of bottom margin
+ * equals the height of the ntp-logo container + bottom margin, which is 206px.
+ */
+:host([doodle-boxed_][show-tight-doodle-boxing_]) #image {
+  max-height: 156px;
 }
 
 #animation {
@@ -109,18 +135,12 @@
   height: 18px;
   margin: 7px;
   vertical-align: bottom;
-  mask-image: url(chrome://new-tab-page/icons/share_unfilled.svg);
+  mask-image: url(chrome://new-tab-page/icons/share_unfilled_old.svg);
   background-color: var(--color-new-tab-page-doodle-share-button-icon, none);
 }
 
-#iframe {
-  border: none;
-  height: var(--height, var(--ntp-logo-height));
-  transition-duration: var(--duration, 100ms);
-  transition-property: height, width;
-  width: var(--width, 100%);
-}
-
-#iframe:not([expanded]) {
-  max-height: var(--ntp-logo-height);
+:host-context([webui-rounded-icons]) #shareButtonIcon {
+  mask-image: url(chrome://new-tab-page/icons/share_unfilled.svg);
+  mask-repeat: no-repeat;
+  mask-size: contain;
 }

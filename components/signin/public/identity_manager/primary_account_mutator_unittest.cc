@@ -36,7 +36,11 @@ constexpr GaiaId::Literal kUnknownAccountId("{unknown account id}");
 #endif
 
 // See RunRevokeConsentTest().
-enum class RevokeConsentAction { kRevokeSyncConsent, kClearPrimaryAccount };
+enum class RevokeConsentAction {
+  kRevokeSyncConsent,
+  kClearPrimaryAccount,
+  kRemovePrimaryAccountButKeepTokens
+};
 enum class AuthExpectation { kAuthNormal, kAuthError };
 enum class RemoveAccountExpectation { kKeepAll, kRemoveAll };
 
@@ -139,7 +143,7 @@ void RunRevokeConsentTest(
       environment.MakeAccountAvailable(kPrimaryAccountEmail);
   signin::PrimaryAccountMutator::PrimaryAccountError setPrimaryAccountResult =
       primary_account_mutator->SetPrimaryAccount(
-          account_info.account_id, signin::ConsentLevel::kSync,
+          account_info.GetAccountId(), signin::ConsentLevel::kSync,
           signin_metrics::AccessPoint::kStartPage);
   EXPECT_EQ(signin::PrimaryAccountMutator::PrimaryAccountError::kNoError,
             setPrimaryAccountResult);
@@ -148,7 +152,7 @@ void RunRevokeConsentTest(
       signin::ConsentLevel::kSync));
 
   EXPECT_EQ(identity_manager->GetPrimaryAccountId(signin::ConsentLevel::kSync),
-            account_info.account_id);
+            account_info.GetAccountId());
   EXPECT_EQ(identity_manager->GetPrimaryAccountInfo(signin::ConsentLevel::kSync)
                 .email,
             kPrimaryAccountEmail);
@@ -157,16 +161,16 @@ void RunRevokeConsentTest(
     // Set primary account to have authentication error.
     SetRefreshTokenForPrimaryAccount(identity_manager);
     signin::UpdatePersistentErrorOfRefreshTokenForAccount(
-        identity_manager, account_info.account_id,
-        GoogleServiceAuthError(
-            GoogleServiceAuthError::State::INVALID_GAIA_CREDENTIALS));
+        identity_manager, account_info.GetAccountId(),
+        GoogleServiceAuthError::FromInvalidGaiaCredentialsReason(
+            GoogleServiceAuthError::InvalidGaiaCredentialsReason::UNKNOWN));
   }
 
   // Additionally, ClearPrimaryAccount_* tests also need a secondary account.
   AccountInfo secondary_account_info =
       environment.MakeAccountAvailable(kAnotherAccountEmail);
   EXPECT_TRUE(identity_manager->HasAccountWithRefreshToken(
-      secondary_account_info.account_id));
+      secondary_account_info.GetAccountId()));
 
   // Grab this before clearing for token checks below.
   auto former_primary_account =
@@ -201,6 +205,10 @@ void RunRevokeConsentTest(
       primary_account_mutator->ClearPrimaryAccount(
           signin_metrics::ProfileSignout::kTest);
       break;
+    case RevokeConsentAction::kRemovePrimaryAccountButKeepTokens:
+      primary_account_mutator->RemovePrimaryAccountButKeepTokens(
+          signin_metrics::ProfileSignout::kTest);
+      break;
   }
   run_loop.Run();
 
@@ -216,18 +224,18 @@ void RunRevokeConsentTest(
       EXPECT_TRUE(identity_manager->HasAccountWithRefreshToken(
           former_primary_account.account_id));
       EXPECT_TRUE(identity_manager->HasAccountWithRefreshToken(
-          secondary_account_info.account_id));
+          secondary_account_info.GetAccountId()));
       EXPECT_TRUE(observed_removals.empty());
       break;
     case RemoveAccountExpectation::kRemoveAll:
       EXPECT_FALSE(identity_manager->HasAccountWithRefreshToken(
           former_primary_account.account_id));
       EXPECT_FALSE(identity_manager->HasAccountWithRefreshToken(
-          secondary_account_info.account_id));
+          secondary_account_info.GetAccountId()));
       EXPECT_TRUE(
           observed_removals.contains(former_primary_account.account_id));
       EXPECT_TRUE(
-          observed_removals.contains(secondary_account_info.account_id));
+          observed_removals.contains(secondary_account_info.GetAccountId()));
       break;
   }
 }
@@ -271,10 +279,11 @@ void RunClearPrimaryAccountTestForSigninOnly() {
       environment.MakeAccountAvailable(kPrimaryAccountEmail);
   AccountInfo secondary_account_info =
       environment.MakeAccountAvailable(kAnotherAccountEmail);
-  EXPECT_EQ(primary_account_mutator->SetPrimaryAccount(
-                primary_account_info.account_id, signin::ConsentLevel::kSignin,
-                signin_metrics::AccessPoint::kStartPage),
-            signin::PrimaryAccountMutator::PrimaryAccountError::kNoError);
+  EXPECT_EQ(
+      primary_account_mutator->SetPrimaryAccount(
+          primary_account_info.GetAccountId(), signin::ConsentLevel::kSignin,
+          signin_metrics::AccessPoint::kStartPage),
+      signin::PrimaryAccountMutator::PrimaryAccountError::kNoError);
 
   base::RunLoop run_loop;
   MockIdentityManagerObserver observer(identity_manager);
@@ -288,10 +297,10 @@ void RunClearPrimaryAccountTestForSigninOnly() {
                   signin::PrimaryAccountChangeEvent::Type::kNone);
         run_loop.Quit();
       });
-  EXPECT_CALL(observer,
-              OnRefreshTokenRemovedForAccount(primary_account_info.account_id));
   EXPECT_CALL(observer, OnRefreshTokenRemovedForAccount(
-                            secondary_account_info.account_id));
+                            primary_account_info.GetAccountId()));
+  EXPECT_CALL(observer, OnRefreshTokenRemovedForAccount(
+                            secondary_account_info.GetAccountId()));
 
   primary_account_mutator->ClearPrimaryAccount(
       signin_metrics::ProfileSignout::kTest);
@@ -303,9 +312,9 @@ void RunClearPrimaryAccountTestForSigninOnly() {
       signin::ConsentLevel::kSignin));
 
   EXPECT_FALSE(identity_manager->HasAccountWithRefreshToken(
-      primary_account_info.account_id));
+      primary_account_info.GetAccountId()));
   EXPECT_FALSE(identity_manager->HasAccountWithRefreshToken(
-      secondary_account_info.account_id));
+      secondary_account_info.GetAccountId()));
 }
 
 #endif  // !BUILDFLAG(IS_CHROMEOS)
@@ -336,7 +345,7 @@ TEST_F(PrimaryAccountMutatorTest, SetPrimaryAccount_Signin) {
       signin::ConsentLevel::kSignin));
   signin::PrimaryAccountMutator::PrimaryAccountError
       set_primary_account_result = primary_account_mutator->SetPrimaryAccount(
-          account_info.account_id, signin::ConsentLevel::kSignin,
+          account_info.GetAccountId(), signin::ConsentLevel::kSignin,
           signin_metrics::AccessPoint::kStartPage);
   EXPECT_EQ(signin::PrimaryAccountMutator::PrimaryAccountError::kNoError,
             set_primary_account_result);
@@ -345,7 +354,7 @@ TEST_F(PrimaryAccountMutatorTest, SetPrimaryAccount_Signin) {
       identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSignin));
   EXPECT_EQ(
       identity_manager->GetPrimaryAccountId(signin::ConsentLevel::kSignin),
-      account_info.account_id);
+      account_info.GetAccountId());
 }
 
 // Checks that setting the primary account works.
@@ -372,14 +381,14 @@ TEST_F(PrimaryAccountMutatorTest, SetPrimaryAccount_Sync) {
       signin::ConsentLevel::kSignin));
   signin::PrimaryAccountMutator::PrimaryAccountError setPrimaryAccountResult =
       primary_account_mutator->SetPrimaryAccount(
-          account_info.account_id, signin::ConsentLevel::kSync,
+          account_info.GetAccountId(), signin::ConsentLevel::kSync,
           signin_metrics::AccessPoint::kStartPage);
   EXPECT_EQ(signin::PrimaryAccountMutator::PrimaryAccountError::kNoError,
             setPrimaryAccountResult);
 
   EXPECT_TRUE(identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSync));
   EXPECT_EQ(identity_manager->GetPrimaryAccountId(signin::ConsentLevel::kSync),
-            account_info.account_id);
+            account_info.GetAccountId());
 }
 
 // Tests that various preconditions of SetPrimaryAccount() not being satisfied
@@ -473,21 +482,21 @@ TEST_F(PrimaryAccountMutatorTest, SetPrimaryAccount_AlreadyHasPrimaryAccount) {
       identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSignin));
   signin::PrimaryAccountMutator::PrimaryAccountError setPrimaryAccountResult =
       primary_account_mutator->SetPrimaryAccount(
-          primary_account_info.account_id, signin::ConsentLevel::kSync,
+          primary_account_info.GetAccountId(), signin::ConsentLevel::kSync,
           signin_metrics::AccessPoint::kStartPage);
   EXPECT_EQ(signin::PrimaryAccountMutator::PrimaryAccountError::kNoError,
             setPrimaryAccountResult);
 
   EXPECT_TRUE(identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSync));
   setPrimaryAccountResult = primary_account_mutator->SetPrimaryAccount(
-      another_account_info.account_id, signin::ConsentLevel::kSync,
+      another_account_info.GetAccountId(), signin::ConsentLevel::kSync,
       signin_metrics::AccessPoint::kStartPage);
   EXPECT_EQ(signin::PrimaryAccountMutator::PrimaryAccountError::
                 kSyncConsentAlreadySet,
             setPrimaryAccountResult);
 
   EXPECT_EQ(identity_manager->GetPrimaryAccountId(signin::ConsentLevel::kSync),
-            primary_account_info.account_id);
+            primary_account_info.GetAccountId());
 }
 
 // Checks that trying to set the primary account works when there is already a
@@ -516,7 +525,7 @@ TEST_F(PrimaryAccountMutatorTest,
       identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSignin));
   signin::PrimaryAccountMutator::PrimaryAccountError setPrimaryAccountResult =
       primary_account_mutator->SetPrimaryAccount(
-          primary_account_info.account_id, signin::ConsentLevel::kSignin,
+          primary_account_info.GetAccountId(), signin::ConsentLevel::kSignin,
           signin_metrics::AccessPoint::kStartPage);
   EXPECT_EQ(signin::PrimaryAccountMutator::PrimaryAccountError::kNoError,
             setPrimaryAccountResult);
@@ -524,14 +533,14 @@ TEST_F(PrimaryAccountMutatorTest,
   EXPECT_TRUE(
       identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSignin));
   setPrimaryAccountResult = primary_account_mutator->SetPrimaryAccount(
-      another_account_info.account_id, signin::ConsentLevel::kSignin,
+      another_account_info.GetAccountId(), signin::ConsentLevel::kSignin,
       signin_metrics::AccessPoint::kStartPage);
   EXPECT_EQ(signin::PrimaryAccountMutator::PrimaryAccountError::kNoError,
             setPrimaryAccountResult);
 
   EXPECT_EQ(
       identity_manager->GetPrimaryAccountId(signin::ConsentLevel::kSignin),
-      another_account_info.account_id);
+      another_account_info.GetAccountId());
 }
 
 // Checks that trying to set the primary account works when there is already a
@@ -562,7 +571,7 @@ TEST_F(PrimaryAccountMutatorTest,
       identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSignin));
   signin::PrimaryAccountMutator::PrimaryAccountError setPrimaryAccountResult =
       primary_account_mutator->SetPrimaryAccount(
-          primary_account_info.account_id, signin::ConsentLevel::kSignin,
+          primary_account_info.GetAccountId(), signin::ConsentLevel::kSignin,
           signin_metrics::AccessPoint::kStartPage);
   EXPECT_EQ(signin::PrimaryAccountMutator::PrimaryAccountError::kNoError,
             setPrimaryAccountResult);
@@ -570,7 +579,7 @@ TEST_F(PrimaryAccountMutatorTest,
   EXPECT_TRUE(
       identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSignin));
   setPrimaryAccountResult = primary_account_mutator->SetPrimaryAccount(
-      another_account_info.account_id, signin::ConsentLevel::kSignin,
+      another_account_info.GetAccountId(), signin::ConsentLevel::kSignin,
       signin_metrics::AccessPoint::kStartPage);
   EXPECT_EQ(signin::PrimaryAccountMutator::PrimaryAccountError::
                 kPrimaryAccountChangeNotAllowed,
@@ -578,7 +587,7 @@ TEST_F(PrimaryAccountMutatorTest,
 
   EXPECT_EQ(
       identity_manager->GetPrimaryAccountId(signin::ConsentLevel::kSignin),
-      primary_account_info.account_id);
+      primary_account_info.GetAccountId());
 }
 
 // Checks that trying to set the primary account fails if setting the primary
@@ -611,7 +620,7 @@ TEST_F(PrimaryAccountMutatorTest,
       identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSignin));
   signin::PrimaryAccountMutator::PrimaryAccountError setPrimaryAccountResult =
       primary_account_mutator->SetPrimaryAccount(
-          primary_account_info.account_id, signin::ConsentLevel::kSignin,
+          primary_account_info.GetAccountId(), signin::ConsentLevel::kSignin,
           signin_metrics::AccessPoint::kStartPage);
   EXPECT_EQ(
       signin::PrimaryAccountMutator::PrimaryAccountError::kSigninNotAllowed,
@@ -661,5 +670,69 @@ TEST_F(PrimaryAccountMutatorTest, RevokeSyncConsent) {
 
 TEST_F(PrimaryAccountMutatorTest, ClearPrimaryAccount_SigninOnly) {
   RunClearPrimaryAccountTestForSigninOnly();
+}
+
+TEST_F(PrimaryAccountMutatorTest,
+       RemovePrimaryAccountButKeepTokens_NotSignedIn) {
+  base::test::TaskEnvironment task_environment;
+  signin::IdentityTestEnvironment environment;
+
+  signin::IdentityManager* identity_manager = environment.identity_manager();
+  signin::PrimaryAccountMutator* primary_account_mutator =
+      identity_manager->GetPrimaryAccountMutator();
+  EXPECT_FALSE(
+      identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSignin));
+  EXPECT_FALSE(primary_account_mutator->RemovePrimaryAccountButKeepTokens(
+      signin_metrics::ProfileSignout::kTest));
+}
+
+TEST_F(PrimaryAccountMutatorTest, RemovePrimaryAccountButKeepTokens) {
+  RunRevokeConsentTest(RevokeConsentAction::kRemovePrimaryAccountButKeepTokens,
+                       RemoveAccountExpectation::kKeepAll,
+                       AuthExpectation::kAuthNormal);
+}
+
+TEST_F(PrimaryAccountMutatorTest,
+       RemovePrimaryAccountButKeepTokens_SigninOnly) {
+  base::test::TaskEnvironment task_environment;
+  signin::IdentityTestEnvironment environment;
+
+  signin::IdentityManager* identity_manager = environment.identity_manager();
+  signin::PrimaryAccountMutator* primary_account_mutator =
+      identity_manager->GetPrimaryAccountMutator();
+
+  AccountInfo primary_account_info =
+      environment.MakeAccountAvailable(kPrimaryAccountEmail);
+  AccountInfo secondary_account_info =
+      environment.MakeAccountAvailable(kAnotherAccountEmail);
+  EXPECT_EQ(
+      primary_account_mutator->SetPrimaryAccount(
+          primary_account_info.GetAccountId(), signin::ConsentLevel::kSignin,
+          signin_metrics::AccessPoint::kStartPage),
+      signin::PrimaryAccountMutator::PrimaryAccountError::kNoError);
+
+  base::RunLoop run_loop;
+  MockIdentityManagerObserver observer(identity_manager);
+  EXPECT_CALL(observer, OnPrimaryAccountChanged)
+      .WillOnce([&](const signin::PrimaryAccountChangeEvent& event) {
+        ASSERT_EQ(event.GetEventTypeFor(signin::ConsentLevel::kSignin),
+                  signin::PrimaryAccountChangeEvent::Type::kCleared);
+        run_loop.Quit();
+      });
+  EXPECT_CALL(observer, OnRefreshTokenRemovedForAccount).Times(0);
+
+  primary_account_mutator->RemovePrimaryAccountButKeepTokens(
+      signin_metrics::ProfileSignout::kTest);
+  run_loop.Run();
+
+  EXPECT_FALSE(
+      identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSignin));
+  EXPECT_FALSE(identity_manager->HasPrimaryAccountWithRefreshToken(
+      signin::ConsentLevel::kSignin));
+
+  EXPECT_TRUE(identity_manager->HasAccountWithRefreshToken(
+      primary_account_info.GetAccountId()));
+  EXPECT_TRUE(identity_manager->HasAccountWithRefreshToken(
+      secondary_account_info.GetAccountId()));
 }
 #endif  // !BUILDFLAG(IS_CHROMEOS)

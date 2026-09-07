@@ -5,11 +5,11 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_INSPECTOR_INSPECTOR_AUDITS_AGENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_INSPECTOR_INSPECTOR_AUDITS_AGENT_H_
 
+#include "base/memory/raw_ptr.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/inspector/inspected_frames.h"
 #include "third_party/blink/renderer/core/inspector/inspector_base_agent.h"
-#include "third_party/blink/renderer/core/inspector/inspector_contrast.h"
 #include "third_party/blink/renderer/core/inspector/protocol/audits.h"
 
 namespace blink {
@@ -39,7 +39,6 @@ class CORE_EXPORT InspectorAuditsAgent final
   // Protocol methods.
   protocol::Response enable() override;
   protocol::Response disable() override;
-  protocol::Response checkContrast(std::optional<bool> report_aaa) override;
   protocol::Response checkFormsIssues(
       std::unique_ptr<protocol::Array<protocol::Audits::GenericIssueDetails>>*
           out_formIssues) override;
@@ -57,13 +56,14 @@ class CORE_EXPORT InspectorAuditsAgent final
 
  private:
   void InnerEnable();
-  void CheckContrastForDocument(Document* document, bool report_aaa);
 
-  InspectorIssueStorage* const inspector_issue_storage_;
+  const raw_ptr<InspectorIssueStorage, UnprotectedInRelease | DanglingUntriaged>
+      inspector_issue_storage_;
   InspectorAgentState::Boolean enabled_;
   Member<InspectorNetworkAgent> network_agent_;
   Member<InspectedFrames> inspected_frames_;
-  WebAutofillClient* const web_autofill_client_ = nullptr;
+  const raw_ptr<WebAutofillClient, UnprotectedInRelease | DanglingUntriaged>
+      web_autofill_client_ = nullptr;
 };
 
 }  // namespace blink

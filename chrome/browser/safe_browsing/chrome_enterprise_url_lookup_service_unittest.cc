@@ -31,6 +31,7 @@
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
+#include "components/sessions/core/session_id.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
 #include "components/sync/test/test_sync_service.h"
@@ -194,7 +195,8 @@ class ChromeEnterpriseRealTimeUrlLookupServiceTest : public PlatformTest {
         }),
         base::BindRepeating([] { return true; }),
         /*is_command_line_switch_supported=*/true,
-        /*intelligent_scan_delegate=*/nullptr);
+        /*intelligent_scan_delegate=*/nullptr,
+        /*network_context_getter=*/base::NullCallback());
 
     test_pref_service_.SetInteger(
         enterprise_connectors::kEnterpriseRealTimeUrlCheckMode,

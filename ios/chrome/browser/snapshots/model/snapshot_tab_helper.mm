@@ -62,7 +62,6 @@ void SnapshotTabHelper::RetrieveColorSnapshot(SnapshotRetrievedBlock callback) {
 
 void SnapshotTabHelper::RetrieveGreySnapshot(SnapshotRetrievedBlock callback) {
   CHECK(snapshot_manager_);
-  CHECK(!base::FeatureList::IsEnabled(kRemoveGreySnapshot));
   [snapshot_manager_
       retrieveSnaphotWithKind:SnapshotKindGreyscale
                    completion:BlockRecordingElapsedTime(
@@ -88,6 +87,12 @@ void SnapshotTabHelper::UpdateSnapshotStorageWithImage(UIImage* image) {
 UIImage* SnapshotTabHelper::GenerateSnapshotWithoutOverlays() {
   CHECK(snapshot_manager_);
   return [snapshot_manager_ generateUIViewSnapshot];
+}
+
+void SnapshotTabHelper::GenerateSnapshotWithoutOverlaysWithCallback(
+    SnapshotRetrievedBlock callback) {
+  CHECK(snapshot_manager_);
+  [snapshot_manager_ generateSnapshotWithoutOverlaysWithCompletion:callback];
 }
 
 void SnapshotTabHelper::IgnoreNextLoad() {

@@ -10,14 +10,14 @@
 #import "ios/chrome/browser/location_bar/badge/ui/location_bar_badge_mutator.h"
 #import "ios/chrome/browser/shared/public/commands/location_bar_badge_commands.h"
 
-@protocol BWGCommands;
 @protocol ContextualPanelEntrypointIPHCommands;
 @protocol ContextualSheetCommands;
+class GeminiBrowserAgent;
+class GeminiService;
 @protocol LocationBarBadgeConsumer;
 @protocol LocationBarBadgeMediatorDelegate;
 class PrefService;
 class WebStateList;
-class BwgService;
 
 namespace feature_engagement {
 class Tracker;
@@ -30,7 +30,8 @@ class Tracker;
 - (instancetype)initWithWebStateList:(WebStateList*)webStateList
                              tracker:(feature_engagement::Tracker*)tracker
                          prefService:(PrefService*)prefService
-                       geminiService:(BwgService*)geminiService
+                       geminiService:(GeminiService*)geminiService
+                  geminiBrowserAgent:(GeminiBrowserAgent*)geminiBrowserAgent
 
     NS_DESIGNATED_INITIALIZER;
 
@@ -40,13 +41,14 @@ class Tracker;
 @property(nonatomic, weak) id<LocationBarBadgeConsumer> consumer;
 // The delegate for this mediator.
 @property(nonatomic, weak) id<LocationBarBadgeMediatorDelegate> delegate;
-// The command handler for Gemini commands.
-@property(nonatomic, weak) id<BWGCommands> BWGCommandHandler;
 // The command handler for entrypoint in-product help commands.
 @property(nonatomic, weak) id<ContextualPanelEntrypointIPHCommands>
     entrypointHelpHandler;
 // The command handler for contextual sheet commands.
 @property(nonatomic, weak) id<ContextualSheetCommands> contextualSheetHandler;
+
+// Whether this location bar is currently active or not.
+@property(nonatomic, assign) BOOL active;
 
 // Cleans up mediator properties and variables.
 - (void)disconnect;

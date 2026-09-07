@@ -4,17 +4,21 @@
 
 #include "components/autofill/core/browser/field_types.h"
 
+#include <ostream>
+#include <string>
 #include <string_view>
 
 #include "base/containers/fixed_flat_map.h"
+#include "base/containers/flat_map.h"
 #include "base/containers/to_vector.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/strings/string_util.h"
 #include "build/build_config.h"
-#include "components/autofill/core/common/autofill_features.h"
+#include "components/autofill/core/common/html_field_types.h"
+#if BUILDFLAG(IS_ANDROID)
 #include "components/autofill/core/common/autofill_payments_features.h"
-#include "components/password_manager/core/browser/features/password_features.h"
+#endif
 
 namespace autofill {
 
@@ -111,8 +115,6 @@ static constexpr auto kTypeNameToFieldType =
          {"ADDRESS_HOME_HOUSE_NUMBER", ADDRESS_HOME_HOUSE_NUMBER},
          {"ADDRESS_HOME_SUBPREMISE", ADDRESS_HOME_SUBPREMISE},
          {"ADDRESS_HOME_OTHER_SUBUNIT", ADDRESS_HOME_OTHER_SUBUNIT},
-         {"NAME_LAST_PREFIX", NAME_LAST_PREFIX},
-         {"NAME_LAST_CORE", NAME_LAST_CORE},
          {"NAME_LAST_FIRST", NAME_LAST_FIRST},
          {"NAME_LAST_CONJUNCTION", NAME_LAST_CONJUNCTION},
          {"NAME_LAST_SECOND", NAME_LAST_SECOND},
@@ -156,6 +158,10 @@ static constexpr auto kTypeNameToFieldType =
          {"PASSPORT_ISSUING_COUNTRY", PASSPORT_ISSUING_COUNTRY},
          {"PASSPORT_EXPIRATION_DATE", PASSPORT_EXPIRATION_DATE},
          {"PASSPORT_ISSUE_DATE", PASSPORT_ISSUE_DATE},
+         {"ORDER_ID", ORDER_ID},
+         {"ORDER_DATE", ORDER_DATE},
+         {"ORDER_MERCHANT_NAME", ORDER_MERCHANT_NAME},
+         {"SHIPMENT_TRACKING_NUMBER", SHIPMENT_TRACKING_NUMBER},
          {"LOYALTY_MEMBERSHIP_PROGRAM", LOYALTY_MEMBERSHIP_PROGRAM},
          {"LOYALTY_MEMBERSHIP_PROVIDER", LOYALTY_MEMBERSHIP_PROVIDER},
          {"LOYALTY_MEMBERSHIP_ID", LOYALTY_MEMBERSHIP_ID},
@@ -195,8 +201,6 @@ bool IsFillableFieldType(FieldType field_type) {
     case NAME_FIRST:
     case NAME_MIDDLE:
     case NAME_LAST:
-    case NAME_LAST_CORE:
-    case NAME_LAST_PREFIX:
     case NAME_LAST_FIRST:
     case NAME_LAST_CONJUNCTION:
     case NAME_LAST_SECOND:
@@ -296,8 +300,7 @@ bool IsFillableFieldType(FieldType field_type) {
 
     case ONE_TIME_CODE:
 #if BUILDFLAG(IS_ANDROID)
-      return base::FeatureList::IsEnabled(
-          password_manager::features::kAndroidSmsOtpFilling);
+      return true;
 #else
       return false;  // Feature is not applicable on other platforms
 #endif
@@ -329,6 +332,10 @@ bool IsFillableFieldType(FieldType field_type) {
     case FLIGHT_RESERVATION_CONFIRMATION_CODE:
     case FLIGHT_RESERVATION_DEPARTURE_AIRPORT:
     case FLIGHT_RESERVATION_ARRIVAL_AIRPORT:
+    case ORDER_ID:
+    case ORDER_DATE:
+    case ORDER_MERCHANT_NAME:
+    case SHIPMENT_TRACKING_NUMBER:
       return true;
 
     // Autofill AI types that are not fillable.
@@ -434,6 +441,10 @@ std::string_view FieldTypeToDeveloperRepresentationString(FieldType type) {
     case FLIGHT_RESERVATION_DEPARTURE_AIRPORT:
     case FLIGHT_RESERVATION_ARRIVAL_AIRPORT:
     case FLIGHT_RESERVATION_DEPARTURE_DATE:
+    case ORDER_ID:
+    case ORDER_DATE:
+    case ORDER_MERCHANT_NAME:
+    case SHIPMENT_TRACKING_NUMBER:
       return "";
     case NUMERIC_QUANTITY:
       return "Numeric quantity";
@@ -469,10 +480,6 @@ std::string_view FieldTypeToDeveloperRepresentationString(FieldType type) {
       return "Middle name";
     case NAME_LAST:
       return "Last name";
-    case NAME_LAST_PREFIX:
-      return "Last name prefix";
-    case NAME_LAST_CORE:
-      return "Last name core";
     case NAME_LAST_FIRST:
       return "First last name";
     case NAME_LAST_CONJUNCTION:

@@ -22,7 +22,8 @@
 #include "components/device_event_log/device_event_log.h"
 #include "device/fido/authenticator_data.h"
 #include "device/fido/authenticator_supported_options.h"
-#include "device/fido/fido_parsing_utils.h"
+#include "device/fido/cbor_util.h"
+#include "device/fido/cmtg_key_response.h"
 #include "device/fido/opaque_attestation_statement.h"
 #include "device/fido/public/features.h"
 #include "device/fido/public/fido_constants.h"
@@ -33,6 +34,25 @@ namespace device {
 namespace {
 
 constexpr size_t kResponseCodeLength = 1;
+
+std::optional<CmtgKeyResponse> ParseCmtgKeyResponse(
+    const cbor::Value& signature_value,
+    const std::optional<cbor::Value>& auth_extensions) {
+  if (!signature_value.is_bytestring()) {
+    return std::nullopt;
+  }
+  if (!auth_extensions || !auth_extensions->is_map()) {
+    return std::nullopt;
+  }
+  const auto& ext_map = auth_extensions->GetMap();
+  const auto public_key_it = ext_map.find(cbor::Value(kExtensionCmtgKey));
+  if (public_key_it == ext_map.end() ||
+      !public_key_it->second.is_bytestring()) {
+    return std::nullopt;
+  }
+  return CmtgKeyResponse(public_key_it->second.GetBytestring(),
+                         signature_value.GetBytestring());
+}
 
 ProtocolVersion ConvertStringToProtocolVersion(std::string_view version) {
   if (version == kCtap2Version || version == kCtap2_1Version ||
@@ -196,6 +216,13 @@ ReadCTAPMakeCredentialResponse(FidoTransportProtocol transport_used,
             response.large_blob_type = LargeBlobSupportType::kExtension;
           }
         }
+      } else if (extension_name == device::kExtensionCmtgKey) {
+        response.cmtg_key = ParseCmtgKeyResponse(
+            map_it.second,
+            response.attestation_object.authenticator_data().extensions());
+        if (!response.cmtg_key) {
+          return std::nullopt;
+        }
       }
     }
   }
@@ -334,6 +361,12 @@ std::optional<AuthenticatorGetAssertionResponse> ReadCTAPGetAssertionResponse(
           // No other pattern of members is allowed.
           return std::nullopt;
         }
+      } else if (extension_name == kExtensionCmtgKey) {
+        response.cmtg_key = ParseCmtgKeyResponse(
+            map_it.second, response.authenticator_data.extensions());
+        if (!response.cmtg_key) {
+          return std::nullopt;
+        }
       }
     }
   }
@@ -455,6 +488,8 @@ std::optional<AuthenticatorGetInfoResponse> ReadCTAPGetInfoResponse(
         options.large_blob_type = LargeBlobSupportType::kExtension;
       } else if (extension_str == kExtensionLargeBlobKey) {
         large_blob_key_extension_seen = true;
+      } else if (extension_str == kExtensionCmtgKey) {
+        options.supports_cmtg_key = true;
       }
       extensions.push_back(extension_str);
     }
@@ -897,9 +932,7 @@ static std::optional<cbor::Value> FixInvalidUTF8Value(
     case cbor::Value::Type::NEGATIVE:
     case cbor::Value::Type::BYTE_STRING:
     case cbor::Value::Type::STRING:
-    case cbor::Value::Type::TAG:
     case cbor::Value::Type::SIMPLE_VALUE:
-    case cbor::Value::Type::FLOAT_VALUE:
     case cbor::Value::Type::NONE:
       return v.Clone();
 
@@ -970,9 +1003,7 @@ static bool ContainsInvalidUTF8(const cbor::Value& v) {
     case cbor::Value::Type::NEGATIVE:
     case cbor::Value::Type::BYTE_STRING:
     case cbor::Value::Type::STRING:
-    case cbor::Value::Type::TAG:
     case cbor::Value::Type::SIMPLE_VALUE:
-    case cbor::Value::Type::FLOAT_VALUE:
     case cbor::Value::Type::NONE:
       return false;
 
@@ -1020,14 +1051,14 @@ std::optional<PINUVAuthProtocol> ToPINUVAuthProtocol(int64_t in) {
 }
 
 cbor::Value RedactCtapGetAssertionResponse(const cbor::Value& cbor) {
-  using fido_parsing_utils::ToCborVector;
+  using fido_cbor_util::Path;
   constexpr int kSignature = 0x03;
   constexpr int kLargeBlobKey = 0x07;
   constexpr int kExtension = 0x08;
-  return fido_parsing_utils::RedactCbor(
-      cbor, std::array{ToCborVector(kSignature), ToCborVector(kLargeBlobKey),
-                       ToCborVector(kExtension, kExtensionPRF, "results"),
-                       ToCborVector(kExtension, kExtensionLargeBlob)});
+  return fido_cbor_util::RedactValueAtPaths(
+      cbor, Path(kSignature), Path(kLargeBlobKey),
+      Path(kExtension, kExtensionPRF, "results"),
+      Path(kExtension, kExtensionLargeBlob));
 }
 
 }  // namespace device

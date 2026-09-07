@@ -65,20 +65,16 @@ class LocalStorageLevelDB : public DomStorageDatabase {
  public:
   // Use `DomStorageDatabaseFactory::Open()` to construct a
   // base::SequenceBound<DomStorageDatabase>.
-  explicit LocalStorageLevelDB(PassKey);
+  LocalStorageLevelDB(PassKey, bool write_exp_tag);
   ~LocalStorageLevelDB() override;
 
   LocalStorageLevelDB(const LocalStorageLevelDB&) = delete;
   LocalStorageLevelDB& operator=(const LocalStorageLevelDB&) = delete;
 
-  // Opens an on-disk or in-memory LevelDB and returns the result. To create an
-  // in-memory database, provide an empty `directory`.
-  DbStatus Open(PassKey,
-                const base::FilePath& directory,
-                const std::optional<base::trace_event::MemoryAllocatorDumpGuid>&
-                    memory_dump_id);
-
   // Implement the `DomStorageDatabase` interface:
+  DbStatus Open(const base::FilePath& directory,
+                const std::optional<base::trace_event::MemoryAllocatorDumpGuid>&
+                    memory_dump_id) override;
   StatusOr<std::map<Key, Value>> ReadMapKeyValues(
       MapLocator map_locator) override;
   DbStatus UpdateMaps(std::vector<MapBatchUpdate> map_updates) override;
@@ -125,7 +121,7 @@ class LocalStorageLevelDB : public DomStorageDatabase {
   DbStatus DeleteSessions(std::vector<std::string> session_ids,
                           std::vector<MapLocator> maps_to_delete) override;
   DbStatus PurgeOrigins(std::set<url::Origin> origins) override;
-  DbStatus RewriteDB() override;
+  DbStatus CleanUpStaleData() override;
 
   // Test-only functions.
   DbStatus PutVersionForTesting(int64_t version) override;
@@ -150,6 +146,7 @@ class LocalStorageLevelDB : public DomStorageDatabase {
                               const blink::StorageKey& map_storage_key);
 
   std::unique_ptr<DomStorageDatabaseLevelDB> leveldb_;
+  bool write_exp_tag_ = false;
 };
 
 }  // namespace storage

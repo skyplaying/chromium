@@ -37,14 +37,21 @@
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/navigation_throttle.h"
 #include "content/public/browser/web_contents.h"
+#include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
 
 namespace supervised_user {
 namespace {
 
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || \
+    BUILDFLAG(IS_ANDROID)
 bool ShouldShowReAuthInterstitial(
     content::NavigationHandle& navigation_handle) {
+#if BUILDFLAG(IS_ANDROID)
+  if (!base::FeatureList::IsEnabled(kSupervisedUserVerificationPageOnAndroid)) {
+    return false;
+  }
+#endif
   Profile* profile = Profile::FromBrowserContext(
       navigation_handle.GetWebContents()->GetBrowserContext());
   ChildAccountService* child_account_service =
@@ -216,17 +223,16 @@ void ClassifyUrlNavigationThrottle::OnInterstitialResult(
     }
     case InterstitialResultCallbackActions::kCancelWithInterstitial: {
       CHECK(navigation_handle());
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || \
+    BUILDFLAG(IS_ANDROID)
       if (ShouldShowReAuthInterstitial(*navigation_handle())) {
         // Show the re-authentication interstitial if the user signed out of
         // the content area, as parent's approval requires authentication.
-        // This interstitial is only available on Linux/Mac/Windows as
-        // ChromeOS and Android have different re-auth mechanisms.
         CancelDeferredNavigation(
             content::NavigationThrottle::ThrottleCheckResult(
                 CANCEL, net::ERR_BLOCKED_BY_CLIENT,
                 CreateReauthenticationInterstitialForBlockedSites(
-                    *navigation_handle(), result.reason)));
+                    *navigation_handle())));
         return;
       }
 #endif
@@ -244,32 +250,17 @@ std::string ClassifyUrlNavigationThrottle::GetInterstitialHTML(
     bool already_sent_request,
     bool is_main_frame) const {
 #if BUILDFLAG(IS_ANDROID)
-  if (base::FeatureList::IsEnabled(kSupervisedUserUseUrlFilteringService)) {
-    switch (result.interstitial_mode) {
-      case InterstitialMode::kLearnMoreInterstitial:
-        return SupervisedUserInterstitial::GetHTMLContentsWithoutApprovals(
-            result.url, g_browser_process->GetApplicationLocale());
-      case InterstitialMode::kParentalReviewInterstitial:
-        return SupervisedUserInterstitial::GetHTMLContentsWithApprovals(
-            supervised_user_service(), result.reason, already_sent_request,
-            is_main_frame, g_browser_process->GetApplicationLocale());
-      default:
-        NOTREACHED();
-    }
-  } else {
-    Profile* profile = Profile::FromBrowserContext(
-        navigation_handle()->GetWebContents()->GetBrowserContext());
-
-    // Family link supervised users should not see local supervision
-    // interstitials. Other users can see these interstitials if they have local
-    // supervision enabled.
-    if (!IsSubjectToParentalControls(*profile->GetPrefs()) &&
-        g_browser_process->device_parental_controls().IsWebFilteringEnabled()) {
+  switch (result.interstitial_mode) {
+    case InterstitialMode::kLearnMoreInterstitial:
       return SupervisedUserInterstitial::GetHTMLContentsWithoutApprovals(
           result.url, g_browser_process->GetApplicationLocale());
-    }
+    case InterstitialMode::kParentalReviewInterstitial:
+      return SupervisedUserInterstitial::GetHTMLContentsWithApprovals(
+          supervised_user_service(), result.reason, already_sent_request,
+          is_main_frame, g_browser_process->GetApplicationLocale());
+    default:
+      NOTREACHED();
   }
-
 #endif
   SCOPED_CRASH_KEY_BOOL(
       "SupervisedUser", "dpc_web_filter_enabled",

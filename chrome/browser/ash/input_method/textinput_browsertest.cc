@@ -8,7 +8,7 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/test/base/chrome_test_utils.h"
+#include "chrome/test/base/chrome_test_path_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/render_view_host.h"
@@ -240,8 +240,7 @@ IN_PROC_BROWSER_TEST_F(TextInput_TextInputStateChangedTest,
   };  // The order should be same as tab order in all_input_node.html.
 
   for (auto& expectation : expectations) {
-    content::SimulateKeyPress(tab, ui::DomKey::TAB, ui::DomCode::TAB,
-                              ui::VKEY_TAB, false, false, false, false);
+    content::SimulateCharTyped(tab, '\t');
 
     helper.WaitForTextInputStateChanged(expectation.type);
     EXPECT_EQ(expectation.type, helper.GetTextInputType());

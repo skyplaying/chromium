@@ -25,10 +25,10 @@ const char kMarkAsHighConfidenceAllowlisted[] =
 // real-time lookups.
 const char kArtificialCachedUrlRealTimeVerdictFlag[] =
     "mark_as_real_time_phishing";
-// Command-line flag for caching an artificial phishing verdict for hash-prefix
-// real-time lookups.
-const char kArtificialCachedHashPrefixRealTimeVerdictFlag[] =
-    "mark_as_hash_prefix_real_time_phishing";
+// Command-line flag for caching an artificial phishing verdict for V5
+// SearchHashes.
+const char kArtificialCachedV5SearchHashesVerdictFlag[] =
+    "mark_as_v5_search_hashes_phishing";
 // Command-line flag for caching an artificial blocked enterprise lookup
 // verdict.
 const char kArtificialCachedEnterpriseBlockedVerdictFlag[] =
@@ -44,6 +44,10 @@ const char kSkipHighConfidenceAllowlist[] =
 // Alternate URL to use for ChromeEnterpriseRealTimeUrlLookupService real-time
 // lookups.
 const char kUrlFilteringEndpointFlag[] = "url-filtering-endpoint";
+// Command-line flag that reduces the initial delay for Safe Browsing database
+// updates for manual testing purposes.
+const char kSbFastInitialListsUpdate[] =
+    "safebrowsing-fast-initial-lists-update";
 
 //
 // Client side detection switches
@@ -76,9 +80,6 @@ const char kMarkAsPasswordProtectionAllowlisted[] =
 // Cloud content scanning switches
 //
 
-// The command line flag to control the max amount of concurrent active
-// requests.
-const char kWpMaxParallelActiveRequests[] = "wp-max-parallel-active-requests";
 const char kWpMaxFileOpeningThreads[] = "wp-max-file-opening-threads";
 const char kCloudBinaryUploadServiceUrlFlag[] = "binary-upload-service-url";
 

@@ -41,6 +41,17 @@ luci.bucket(
             users = [
                 "dawn-automated-expectations@chops-service-accounts.iam.gserviceaccount.com",
                 "findit-for-me@appspot.gserviceaccount.com",
+                # Need to add project-scoped accounts here to trigger builders
+                # in Turbo CI mode. The "projects" field below only applies to
+                # builders triggered fully through LUCI.
+                # NOTE: Please get explicit approval from Chrome resource owners
+                # before adding projects here, as Chromium's machine resources
+                # are primarily for Chromium.
+                # Dawn traffic into Chromium is contained within GPU-specific
+                # pools.
+                "dawn-scoped@luci-project-accounts.iam.gserviceaccount.com",
+                # V8 is mostly grandfathered into triggering Chromium builds.
+                "v8-scoped@luci-project-accounts.iam.gserviceaccount.com",
             ],
             projects = [p for p in [
                 branches.value(branch_selector = branches.selector.MAIN, value = "angle"),
@@ -237,7 +248,6 @@ exec("./try/tryserver.chromium.infra.star")
 exec("./try/tryserver.chromium.linux.star")
 exec("./try/tryserver.chromium.mac.star")
 exec("./try/tryserver.chromium.prompt_eval.star")
-exec("./try/tryserver.chromium.rust.star")
 exec("./try/tryserver.chromium.tricium.star")
 exec("./try/tryserver.chromium.updater.star")
 exec("./try/tryserver.chromium.win.star")

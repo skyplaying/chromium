@@ -70,11 +70,9 @@ import java.lang.ref.WeakReference;
 import java.util.Set;
 import java.util.function.Supplier;
 
-/** Unit tests for {@link BottomBarConfig}. */
+/** Unit tests for {@link GoogleBottomBarActionsHandler}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(
-        manifest = Config.NONE,
-        shadows = {ShadowLog.class})
+@Config(shadows = {ShadowLog.class})
 public class GoogleBottomBarActionsHandlerTest {
     private static final String TEST_URI = "https://www.test.com/";
 
@@ -597,7 +595,7 @@ public class GoogleBottomBarActionsHandlerTest {
         Context context = mActivity;
         mGoogleBottomBarActionsHandler.onSearchboxLensTap(new View(context));
 
-        verify(mLensController, never()).startLens(any(), any());
+        verify(mLensController, never()).startLens(any(WindowAndroid.class), any());
     }
 
     @Test
@@ -610,7 +608,8 @@ public class GoogleBottomBarActionsHandlerTest {
         Context context = mActivity;
         mGoogleBottomBarActionsHandler.onSearchboxLensTap(new View(context));
 
-        verify(mLensController).startLens(any(), mLensIntentParamsArgumentCaptor.capture());
+        verify(mLensController)
+                .startLens(any(WindowAndroid.class), mLensIntentParamsArgumentCaptor.capture());
         LensIntentParams params = mLensIntentParamsArgumentCaptor.getValue();
         assertEquals(LensEntryPoint.GOOGLE_BOTTOM_BAR, params.getLensEntryPoint());
     }

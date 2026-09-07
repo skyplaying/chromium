@@ -10,6 +10,7 @@
 #include "base/location.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
+#include "base/scoped_multi_source_observation.h"
 #include "base/scoped_observation.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/apps/app_shim/app_shim_manager_mac.h"
@@ -69,7 +70,10 @@ class AppShimTerminationManagerImpl : public AppShimTerminationManager,
     browser_session_running_ = !closing;
   }
 
-  base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
+  // TODO(crbug.com/495686112): remove when the AppShimTerminationManagerImpl
+  // is no longer outliving the GlobalBrowserCollection it observes.
+  base::ScopedObservation<GlobalBrowserCollection,
+                          BrowserCollectionObserver>::LeakedDanglingUntriaged
       browser_collection_observation_{this};
   base::CallbackListSubscription closing_all_browsers_subscription_;
   bool browser_session_running_ = false;

@@ -62,24 +62,30 @@ class AutofillKeyboardAccessoryControllerImpl
 
   // AutofillSuggestionController:
   void OnSuggestionsChanged() override;
-  void AcceptSuggestion(int index,
-                        autofill::AutofillMetrics::SuggestionAcceptedMethod
-                            accept_method) override;
-  bool RemoveSuggestion(
+  void AcceptSuggestion(
       int index,
-      AutofillMetrics::SingleEntryRemovalMethod removal_method) override;
+      AutofillMetrics::SuggestionAcceptedMethod accept_method) override;
+  bool RemoveSuggestion(int index) override;
   int GetLineCount() const override;
   const std::vector<Suggestion>& GetSuggestions() const override;
   const Suggestion& GetSuggestionAt(int row) const override;
   FillingProduct GetMainFillingProduct() const override;
+  AutofillSuggestionTriggerSource GetSuggestionTriggerSource() const;
   void Show(UiSessionId ui_session_id,
             std::vector<Suggestion> suggestions,
             AutofillSuggestionTriggerSource trigger_source,
             AutoselectFirstSuggestion autoselect_first_suggestion,
-            AutofillSuggestionsIgnoreFocusLoss ignore_focus_loss) override;
+            AutofillSuggestionsIgnoreFocusLoss ignore_focus_loss,
+            std::u16string search_bar_initial_value) override;
   std::optional<UiSessionId> GetUiSessionId() const override;
   void SetKeepPopupOpenForTesting(bool keep_popup_open_for_testing) override;
   void UpdateDataListValues(base::span<const SelectOption> options) override;
+  bool MayRecycle(
+      base::WeakPtr<AutofillSuggestionDelegate> delegate,
+      content::WebContents* web_contents,
+      AutofillSuggestionTriggerSource trigger_source) const override;
+  void Recycle(PopupControllerCommon controller_common,
+               int32_t form_control_ax_id) override;
 
   // AutofillKeyboardAccessoryController:
   std::vector<std::vector<Suggestion::Text>> GetSuggestionLabelsAt(
@@ -87,6 +93,9 @@ class AutofillKeyboardAccessoryControllerImpl
   bool GetRemovalConfirmationText(
       int index,
       RemovalConfirmationText* removal_text) override;
+  void OpenSettingsForEntityType(int32_t entity_type) override;
+  void SelectSuggestion(int index) override;
+  void UnselectSuggestion() override;
 
   base::WeakPtr<AutofillKeyboardAccessoryControllerImpl> GetWeakPtr() {
     return weak_ptr_factory_.GetWeakPtr();
@@ -103,10 +112,9 @@ class AutofillKeyboardAccessoryControllerImpl
   // of `suggestions_`.
   void OrderSuggestionsAndCreateLabels();
 
-  // Reacts to the result of a deletion dialog by attempting to delete the
-  // suggestion at `index` if the dialog `confirmed` deletion and by emitting
-  // metrics.
-  void OnDeletionDialogClosed(int index, bool confirmed);
+  // Reacts to the result of a deletion dialog by attempting to delete
+  // `suggestion` if the dialog `confirmed` deletion and by emitting metrics.
+  void OnDeletionDialogClosed(const Suggestion& suggestion, bool confirmed);
 
   // Hides the view and asynchronously deletes itself.
   void HideViewAndDie();
@@ -141,7 +149,7 @@ class AutofillKeyboardAccessoryControllerImpl
   // suggestions. It is used to safeguard against accepting suggestions too
   // quickly after a the popup view was shown (see the `show_threshold`
   // parameter of `AcceptSuggestion`).
-  NextIdleBarrier barrier_for_accepting_;
+  std::optional<NextIdleBarrier> barrier_for_accepting_;
 
   // An override to suppress minimum show thresholds. It should only be set
   // during tests that cannot mock time (e.g. the autofill interactive
@@ -153,8 +161,6 @@ class AutofillKeyboardAccessoryControllerImpl
   bool keep_popup_open_for_testing_ = false;
 
   // The `FillingProduct` that matches the suggestions shown in the popup.
-  // The first `IsStandaloneSuggestionType()` is used to define what the
-  // `FillingProduct` is.
   FillingProduct suggestions_filling_product_ = FillingProduct::kNone;
 
   base::WeakPtrFactory<AutofillKeyboardAccessoryControllerImpl>

@@ -9,7 +9,7 @@
 #import "components/application_locale_storage/application_locale_storage.h"
 #import "components/autofill/core/browser/data_manager/test_personal_data_manager.h"
 #import "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
-#import "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#import "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #import "components/autofill/ios/common/features.h"
 #import "components/strings/grit/components_strings.h"
 #import "ios/chrome/browser/autofill/ui_bundled/address_editor/autofill_constants.h"
@@ -172,6 +172,8 @@ class AutofillProfileEditTableViewHelperTest
     return attributedText;
   }
 
+  std::unique_ptr<autofill::AutofillProfile> profile_;
+  std::unique_ptr<autofill::TestPersonalDataManager> personal_data_manager_;
   AutofillProfileEditTableViewHelper*
       autofill_profile_edit_table_view_controller_;
   AutofillProfileEditMediator* autofill_profile_edit_mediator_;
@@ -184,8 +186,6 @@ class AutofillProfileEditTableViewHelperTest
   NSString* country_;
   NSString* phone_home_whole_number_;
   NSString* email_;
-  std::unique_ptr<autofill::AutofillProfile> profile_;
-  std::unique_ptr<autofill::TestPersonalDataManager> personal_data_manager_;
 };
 
 INSTANTIATE_TEST_SUITE_P(

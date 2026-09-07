@@ -28,7 +28,9 @@ enum class AutoDeletionServiceFileRemovalFailures {
   kHashMismatch = 0,
   kFileDoesNotExist = 1,
   kGenericRemovalError = 2,
-  kMaxValue = kGenericRemovalError,
+  kFileReadFailure = 3,
+  kLastModifiedTimestampMismatch = 4,
+  kMaxValue = kLastModifiedTimestampMismatch,
 };
 // LINT.ThenChange(/tools/metrics/histograms/enums.xml)
 

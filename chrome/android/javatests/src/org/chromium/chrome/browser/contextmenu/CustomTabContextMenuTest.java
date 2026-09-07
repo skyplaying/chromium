@@ -27,6 +27,7 @@ import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.Restriction;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.customtabs.CustomTabActivityTestRule;
 import org.chromium.chrome.browser.customtabs.CustomTabsIntentTestUtils;
 import org.chromium.chrome.browser.firstrun.FirstRunStatus;
@@ -34,13 +35,11 @@ import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.chrome.test.util.browser.contextmenu.ContextMenuUtils;
 import org.chromium.content_public.browser.ContentFeatureList;
 import org.chromium.content_public.browser.ContentFeatureMap;
 import org.chromium.net.test.EmbeddedTestServer;
 import org.chromium.ui.base.DeviceFormFactor;
-import org.chromium.ui.base.DeviceInput;
 import org.chromium.ui.listmenu.ListMenuItemProperties;
 import org.chromium.ui.test.util.DeviceRestriction;
 
@@ -203,8 +202,8 @@ public class CustomTabContextMenuTest {
                         () ->
                                 ContentFeatureMap.isEnabled(
                                                 ContentFeatureList.ANDROID_DEV_TOOLS_FRONTEND)
-                                        && DeviceInput.supportsAlphabeticKeyboard()
-                                        && DeviceInput.supportsPrecisionPointer()),
+                                        && DeviceFormFactor.isNonMultiDisplayContextOnTablet(
+                                                mCustomTabActivityTestRule.getActivity())),
                 baseItems,
                 new Integer[] {R.id.contextmenu_inspect_element});
     }

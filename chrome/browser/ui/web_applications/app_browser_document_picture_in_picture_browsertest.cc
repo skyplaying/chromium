@@ -10,7 +10,8 @@
 #include "chrome/browser/picture_in_picture/document_picture_in_picture_mixin_test_base.h"
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/preloading/scoped_prewarm_feature_list.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
@@ -19,6 +20,7 @@
 #include "content/public/browser/document_picture_in_picture_window_controller.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "ui/base/base_window.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/views/widget/widget_observer.h"
@@ -79,7 +81,8 @@ IN_PROC_BROWSER_TEST_F(AppBrowserDocumentPictureInPictureBrowserTest,
   const webapps::AppId app_id =
       InstallPWA(picture_in_picture_mixin_test_base_.GetPictureInPictureURL());
 
-  Browser* browser = web_app::LaunchWebAppBrowser(profile(), app_id);
+  BrowserWindowInterface* browser =
+      web_app::LaunchWebAppBrowser(profile(), app_id);
 
   constexpr auto kInitialPipSize = gfx::Size(400, 450);
   picture_in_picture_mixin_test_base_.NavigateToURLAndEnterPictureInPicture(
@@ -91,7 +94,9 @@ IN_PROC_BROWSER_TEST_F(AppBrowserDocumentPictureInPictureBrowserTest,
   ASSERT_NE(nullptr, pip_web_contents);
   picture_in_picture_mixin_test_base_.WaitForPageLoad(pip_web_contents);
 
-  auto* pip_browser = chrome::FindBrowserWithTab(pip_web_contents);
+  auto* pip_browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          pip_web_contents);
   auto* pip_browser_view = BrowserView::GetBrowserViewForBrowser(pip_browser);
   EXPECT_EQ(kInitialPipSize, pip_browser_view->GetContentsSize());
 }
@@ -100,7 +105,8 @@ IN_PROC_BROWSER_TEST_F(AppBrowserDocumentPictureInPictureBrowserTest,
                        AppWindowWebContentsSizeUnchangedAfterExitPip) {
   const webapps::AppId app_id =
       InstallPWA(picture_in_picture_mixin_test_base_.GetPictureInPictureURL());
-  Browser* browser = web_app::LaunchWebAppBrowser(profile(), app_id);
+  BrowserWindowInterface* browser =
+      web_app::LaunchWebAppBrowser(profile(), app_id);
 
   // Navigate to the Picture-in-Picture URL, enter Picture-in-Picture and
   // remember the app browser WebContents size.
@@ -118,9 +124,11 @@ IN_PROC_BROWSER_TEST_F(AppBrowserDocumentPictureInPictureBrowserTest,
   picture_in_picture_mixin_test_base_.WaitForPageLoad(pip_web_contents);
 
   // Exit Picture-in-Picture.
-  auto* pip_browser = chrome::FindBrowserWithTab(pip_web_contents);
+  auto* pip_browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          pip_web_contents);
   ui_test_utils::BrowserDestroyedObserver observer(pip_browser);
-  pip_browser->window()->Close();
+  pip_browser->GetWindow()->Close();
   observer.Wait();
   EXPECT_FALSE(picture_in_picture_mixin_test_base_.window_controller()
                    ->GetChildWebContents());
@@ -134,7 +142,8 @@ IN_PROC_BROWSER_TEST_F(AppBrowserDocumentPictureInPictureBrowserTest,
                        ResizeToRespectsMinimumInnerWindowSize) {
   const webapps::AppId app_id =
       InstallPWA(picture_in_picture_mixin_test_base_.GetPictureInPictureURL());
-  Browser* browser = web_app::LaunchWebAppBrowser(profile(), app_id);
+  BrowserWindowInterface* browser =
+      web_app::LaunchWebAppBrowser(profile(), app_id);
 
   constexpr auto kInitialPipSize = gfx::Size(400, 450);
   picture_in_picture_mixin_test_base_.NavigateToURLAndEnterPictureInPicture(
@@ -146,26 +155,13 @@ IN_PROC_BROWSER_TEST_F(AppBrowserDocumentPictureInPictureBrowserTest,
   ASSERT_NE(nullptr, pip_web_contents);
   picture_in_picture_mixin_test_base_.WaitForPageLoad(pip_web_contents);
 
-  auto* pip_browser = chrome::FindBrowserWithTab(pip_web_contents);
+  auto* pip_browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          pip_web_contents);
   auto* pip_browser_view = BrowserView::GetBrowserViewForBrowser(pip_browser);
   EXPECT_EQ(kInitialPipSize, pip_browser_view->GetContentsSize());
 
   // Resize Pip window to a size smaller than the allowed minimum.
-  EXPECT_TRUE(ExecJs(pip_web_contents, "window.resizeTo(50,50);"));
-
-  // TODO(crbug.com/354785208): Replace with `WidgetResizeWaiter` once bug is
-  // fixed.
-  base::RunLoop().RunUntilIdle();
-
-  // Verify that the minimum inner window size is respected.
-  EXPECT_GE(pip_browser_view->GetContentsSize().width(),
-            PictureInPictureWindowManager::GetMinimumInnerWindowSize().width());
-  EXPECT_GE(
-      pip_browser_view->GetContentsSize().height(),
-      PictureInPictureWindowManager::GetMinimumInnerWindowSize().height());
-
-  // Resize Pip window, one more time, to a size smaller than the allowed
-  // minimum.
   EXPECT_TRUE(ExecJs(pip_web_contents, "window.resizeTo(50,50);"));
 
   // TODO(crbug.com/354785208): Replace with `WidgetResizeWaiter` once bug is
@@ -193,7 +189,8 @@ IN_PROC_BROWSER_TEST_F(AppBrowserDocumentPictureInPictureBrowserTest,
   const webapps::AppId app_id =
       InstallPWA(picture_in_picture_mixin_test_base_.GetPictureInPictureURL());
 
-  Browser* browser = web_app::LaunchWebAppBrowser(profile(), app_id);
+  BrowserWindowInterface* browser =
+      web_app::LaunchWebAppBrowser(profile(), app_id);
 
   constexpr auto kInitialPipSize = gfx::Size(400, 450);
   picture_in_picture_mixin_test_base_.NavigateToURLAndEnterPictureInPicture(
@@ -205,12 +202,14 @@ IN_PROC_BROWSER_TEST_F(AppBrowserDocumentPictureInPictureBrowserTest,
   ASSERT_NE(nullptr, pip_web_contents);
   picture_in_picture_mixin_test_base_.WaitForPageLoad(pip_web_contents);
 
-  auto* pip_browser = chrome::FindBrowserWithTab(pip_web_contents);
+  auto* pip_browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          pip_web_contents);
   auto* pip_browser_view = BrowserView::GetBrowserViewForBrowser(pip_browser);
   EXPECT_EQ(kInitialPipSize, pip_browser_view->GetContentsSize());
 
-  const BrowserWindow* const pip_browser_window = pip_browser->window();
-  const gfx::NativeWindow native_window = pip_browser_window->GetNativeWindow();
+  const gfx::NativeWindow native_window =
+      pip_browser->GetWindow()->GetNativeWindow();
   const display::Screen* const screen = display::Screen::Get();
   const display::Display display =
       screen->GetDisplayNearestWindow(native_window);

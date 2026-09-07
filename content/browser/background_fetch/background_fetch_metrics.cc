@@ -4,7 +4,6 @@
 
 #include "content/browser/background_fetch/background_fetch_metrics.h"
 
-#include "base/metrics/histogram_macros.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/browser_thread.h"
@@ -27,7 +26,7 @@ void RecordBackgroundFetchUkmEvent(
     blink::mojom::BackgroundFetchUkmDataPtr ukm_data,
     RenderFrameHostImpl* rfh,
     BackgroundFetchPermission permission) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M158);
 
   // Only record UKM data if there's an active RenderFrameHost associated.
   if (!rfh || !rfh->IsActive())

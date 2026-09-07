@@ -4,6 +4,7 @@
 
 #include "chrome/browser/actor/actor_test_util.h"
 #include "chrome/browser/glic/host/glic_actor_interactive_uitest_common.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
 #include "components/optimization_guide/proto/features/actions_data.pb.h"
 #include "content/public/test/browser_test.h"
 #include "ui/gfx/geometry/rect.h"
@@ -41,8 +42,8 @@ GlicActorSelectToolUiTest::MultiStep GlicActorSelectToolUiTest::SelectAction(
         content::RenderFrameHost* frame =
             tab_handle_.Get()->GetContents()->GetPrimaryMainFrame();
 
-        Actions action = actor::MakeSelect(*frame, node_id, option_value);
-        action.set_task_id(task_id_.value());
+        Actions action =
+            actor::MakeSelect(*frame, node_id, option_value, task_id_);
         return EncodeActionProto(action);
       });
   return ExecuteAction(std::move(select_provider), std::move(expected_result));
@@ -89,8 +90,8 @@ GlicActorSelectToolUiTest::CheckElementIsOnscreen(
 // element by both its text content and its 'value' attribute.
 IN_PROC_BROWSER_TEST_F(GlicActorSelectToolUiTest, SelectActionSucceeds) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTestTabId);
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/select_tool.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/select_tool.html");
 
   RunTestSequence(
       // clang-format off
@@ -128,8 +129,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorSelectToolUiTest, SelectActionSucceeds) {
 IN_PROC_BROWSER_TEST_F(GlicActorSelectToolUiTest,
                        SelectActionGroupedOptionSucceeds) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTestTabId);
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/select_tool.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/select_tool.html");
 
   RunTestSequence(
       // clang-format off
@@ -152,8 +153,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorSelectToolUiTest,
 IN_PROC_BROWSER_TEST_F(GlicActorSelectToolUiTest,
                        SelectActionListboxOptionSucceeds) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTestTabId);
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/select_tool.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/select_tool.html");
 
   RunTestSequence(
       // clang-format off
@@ -176,8 +177,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorSelectToolUiTest,
 IN_PROC_BROWSER_TEST_F(GlicActorSelectToolUiTest,
                        SelectActionOffscreenSucceeds) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTestTabId);
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/select_tool.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/select_tool.html");
 
   RunTestSequence(
       // clang-format off
@@ -207,8 +208,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorSelectToolUiTest,
 // Test that the SelectTool correctly fires 'input' and 'change' events.
 IN_PROC_BROWSER_TEST_F(GlicActorSelectToolUiTest, SelectActionFiresEvents) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTestTabId);
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/select_tool.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/select_tool.html");
 
   RunTestSequence(
       // clang-format off
@@ -230,8 +231,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorSelectToolUiTest, SelectActionFiresEvents) {
 IN_PROC_BROWSER_TEST_F(GlicActorSelectToolUiTest,
                        SelectActionValueIsCaseSensitive) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTestTabId);
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/select_tool.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/select_tool.html");
 
   RunTestSequence(
       // clang-format off
@@ -248,8 +249,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorSelectToolUiTest,
 IN_PROC_BROWSER_TEST_F(GlicActorSelectToolUiTest,
                        SelectActionNonExistentValueFails) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTestTabId);
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/select_tool.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/select_tool.html");
 
   RunTestSequence(
       // clang-format off
@@ -270,8 +271,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorSelectToolUiTest,
 IN_PROC_BROWSER_TEST_F(GlicActorSelectToolUiTest,
                        SelectActionDisabledOptionFails) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTestTabId);
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/select_tool.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/select_tool.html");
 
   RunTestSequence(
       // clang-format off
@@ -292,8 +293,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorSelectToolUiTest,
 IN_PROC_BROWSER_TEST_F(GlicActorSelectToolUiTest,
                        SelectActionDisabledSelectFails) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTestTabId);
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/select_tool.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/select_tool.html");
 
   RunTestSequence(
       // clang-format off
@@ -310,8 +311,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorSelectToolUiTest,
 IN_PROC_BROWSER_TEST_F(GlicActorSelectToolUiTest,
                        SelectActionDisabledOptGroupFails) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTestTabId);
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/select_tool.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/select_tool.html");
 
   RunTestSequence(
       // clang-format off
@@ -329,8 +330,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorSelectToolUiTest,
 IN_PROC_BROWSER_TEST_F(GlicActorSelectToolUiTest,
                        SelectActionNonOptionNodeValueFails) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTestTabId);
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/select_tool.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/select_tool.html");
 
   RunTestSequence(
       // clang-format off

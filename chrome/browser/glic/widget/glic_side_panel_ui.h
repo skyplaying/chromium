@@ -10,8 +10,11 @@
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
 #include "chrome/browser/glic/common/local_hotkey_manager.h"
+#include "chrome/browser/glic/common/panel_focus_dependent_hotkey_manager.h"
+#include "chrome/browser/glic/common/panel_visibility_dependent_hotkey_manager.h"
 #include "chrome/browser/glic/host/context/glic_screenshot_capturer.h"
 #include "chrome/browser/glic/host/glic.mojom.h"
+#include "chrome/browser/glic/host/glic_webui.mojom.h"
 #include "chrome/browser/glic/host/host.h"
 #include "chrome/browser/glic/public/glic_side_panel_coordinator.h"
 #include "chrome/browser/glic/service/glic_ui_embedder.h"
@@ -37,6 +40,7 @@ class GlicInstanceMetrics;
 class GlicSidePanelUi
     : public GlicUiEmbedder,
       public Host::EmbedderDelegate,
+      public Host::Observer,
       public LocalHotkeyManager::Panel,
       public web_modal::WebContentsModalDialogManagerDelegate {
  public:
@@ -47,7 +51,6 @@ class GlicSidePanelUi
   ~GlicSidePanelUi() override;
 
   // GlicUiEmbedder:
-  void OnClientReady() override;
   Host::EmbedderDelegate* GetHostEmbedderDelegate() override;
   void Show(const ShowOptions& options) override;
   void Close(const CloseOptions& options) override;
@@ -58,13 +61,8 @@ class GlicSidePanelUi
   std::unique_ptr<GlicUiEmbedder> CreateInactiveEmbedder() const override;
 
   // Host::EmbedderDelegate:
-  void Resize(const gfx::Size& size,
-              base::TimeDelta duration,
-              base::OnceClosure callback) override;
-  void EnableDragResize(bool enabled) override;
   void Attach() override;
   void Detach() override;
-  void SetMinimumWidgetSize(const gfx::Size& size) override;
   void SwitchConversation(
       glic::mojom::ConversationInfoPtr info,
       mojom::WebClientHandler::SwitchConversationCallback callback) override;
@@ -74,8 +72,13 @@ class GlicSidePanelUi
 
   // GlicUiEmbedder and Host::Delegate:
   bool IsShowing() const override;
+  bool IsShowingOrBackgrounded() const override;
   void ClosePanel() override;
   void OnReload() override;
+  void OnMicrophoneStatusChanged(mojom::MicrophoneStatus status) override {}
+
+  // Host::Observer:
+  void ActiveWebContentsChanged(content::WebContents* new_contents) override;
 
   void SidePanelStateChanged(GlicSidePanelCoordinator::State state);
 
@@ -83,8 +86,11 @@ class GlicSidePanelUi
   void FocusIfOpen() override;
   bool HasFocus() override;
   bool ActivateBrowser() override;
-  void ShowTitleBarContextMenuAt(gfx::Point event_loc) override;
+  void Zoom(mojom::ZoomAction zoom_action, ZoomSource source) override;
+  bool HasSelectionOverlay() override;
+  void CloseSelectionOverlay() override;
   base::WeakPtr<views::View> GetView() override;
+  BrowserWindowInterface* GetBrowserWindowInterface() override;
 
   // web_modal::WebContentsModalDialogManagerDelegate:
   web_modal::WebContentsModalDialogHost* GetWebContentsModalDialogHost(
@@ -95,6 +101,8 @@ class GlicSidePanelUi
   void OnBrowserWindowDeactivated(BrowserWindowInterface* bwi);
   // Focuses on embedder's webcontens.
   void SetFocusDelayed();
+  void SetModalDialogDelegate(
+      web_modal::WebContentsModalDialogManagerDelegate* delegate);
 
   GlicSidePanelCoordinator* GetGlicSidePanelCoordinator() const;
   base::CallbackListSubscription panel_visibility_subscription_;
@@ -105,12 +113,16 @@ class GlicSidePanelUi
   raw_ref<GlicUiEmbedder::Delegate> delegate_;
   raw_ref<GlicInstanceMetrics> instance_metrics_;
   base::WeakPtr<GlicView> glic_view_;
-  std::unique_ptr<LocalHotkeyManager> application_hotkey_manager_;
-  std::unique_ptr<LocalHotkeyManager> glic_panel_hotkey_manager_;
+  std::unique_ptr<PanelVisibilityDependentHotkeyManager>
+      panel_visibility_dependent_hotkey_manager_;
+  std::unique_ptr<PanelFocusDependentHotkeyManager>
+      panel_focus_dependent_hotkey_manager_;
   base::CallbackListSubscription activation_subscription_;
   base::CallbackListSubscription deactivation_subscription_;
 
   std::unique_ptr<GlicScreenshotCapturer> screenshot_capturer_;
+
+  base::ScopedObservation<Host, Host::Observer> host_observation_{this};
 
   base::WeakPtrFactory<GlicSidePanelUi> weak_ptr_factory_{this};
 };

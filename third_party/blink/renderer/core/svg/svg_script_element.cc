@@ -99,7 +99,9 @@ void SVGScriptElement::DidNotifySubtreeInsertionsToDocument() {
 
 void SVGScriptElement::ChildrenChanged(const ChildrenChange& change) {
   SVGElement::ChildrenChanged(change);
-  loader_->ChildrenChanged(change);
+  if (!GetDocument().StatePreservingAtomicMoveInProgress()) {
+    loader_->ChildrenChanged(change);
+  }
 
   // We'll record whether the script element children were ever changed by
   // the API (as opposed to the parser).
@@ -180,12 +182,13 @@ const AtomicString& SVGScriptElement::GetNonceForElement() const {
 
 bool SVGScriptElement::AllowInlineScriptForCSP(
     const AtomicString& nonce,
-    const OrdinalNumber& context_line,
+    const TextPosition& context_position,
     const String& script_content) {
   return GetExecutionContext()
       ->GetContentSecurityPolicyForCurrentWorld()
       ->AllowInline(ContentSecurityPolicy::InlineType::kScript, this,
-                    script_content, nonce, GetDocument().Url(), context_line);
+                    script_content, nonce, GetDocument().Url(),
+                    context_position);
 }
 
 Document& SVGScriptElement::GetDocument() const {

@@ -29,8 +29,8 @@
 #import "url/gurl.h"
 
 @interface BookmarksEditorCoordinator () <
-    BookmarksEditorViewControllerDelegate,
     BookmarksEditorMediatorDelegate,
+    BookmarksEditorViewControllerDelegate,
     BookmarksFolderChooserCoordinatorDelegate> {
   // BookmarkNode to edit.
   raw_ptr<const bookmarks::BookmarkNode> _node;
@@ -52,6 +52,9 @@
 
   // The folder chooser coordinator.
   BookmarksFolderChooserCoordinator* _folderChooserCoordinator;
+
+  // Whether this coordinator has been stopped.
+  BOOL _stopped;
 }
 
 // The action sheet coordinator, if one is currently being shown.
@@ -110,11 +113,18 @@
 }
 
 - (void)stop {
+  if (_stopped) {
+    return;
+  }
+  _stopped = YES;
+  _viewController.coordinatorIsStopping = YES;
   [super stop];
   CHECK(_navigationController, base::NotFatalUntil::M150);
+  _mediator.UIDisabled = YES;
   [_mediator disconnect];
   [self dismissActionSheetCoordinator];
   _mediator.consumer = nil;
+  _node = nullptr;
   _mediator.snackbarCommandsHandler = nil;
   _mediator = nil;
   _viewController.delegate = nil;
@@ -123,15 +133,19 @@
   _snackbarCommandsHandler = nil;
   [self stopFolderChooserCoordinator];
 
-  // animatedDismissal should have been explicitly set before calling stop.
-  [_navigationController dismissViewControllerAnimated:self.animatedDismissal
-                                            completion:nil];
+  // If the navigation controller is already being interactively dismissed by
+  // UIKit (e.g. swipe-down gesture), skip programmatic dismissal to avoid
+  // interrupting UIKit's transition animator and causing app hangs.
+  if (!_navigationController.isBeingDismissed) {
+    [_navigationController dismissViewControllerAnimated:self.animatedDismissal
+                                              completion:nil];
+  }
   _navigationController.presentationController.delegate = nil;
   _navigationController = nil;
 }
 
 - (void)dealloc {
-  CHECK(!_navigationController, base::NotFatalUntil::M150);
+  DUMP_WILL_BE_CHECK(!_navigationController);
 }
 
 - (BOOL)canDismiss {
@@ -153,11 +167,12 @@
     return;
   }
 
-  std::set<const bookmarks::BookmarkNode*> hiddenNodes{[_mediator bookmark]};
+  std::set<raw_ptr<const bookmarks::BookmarkNode>> movedNodes{
+      [_mediator bookmark]};
   _folderChooserCoordinator = [[BookmarksFolderChooserCoordinator alloc]
       initWithBaseNavigationController:_navigationController
                                browser:self.browser
-                           hiddenNodes:hiddenNodes];
+                            movedNodes:movedNodes];
   [_folderChooserCoordinator setSelectedFolder:_mediator.folder];
   _folderChooserCoordinator.delegate = self;
   _mediator.UIDisabled = YES;
@@ -189,33 +204,21 @@
       addItemWithTitle:l10n_util::GetNSString(
                            IDS_IOS_VIEW_CONTROLLER_DISMISS_SAVE_CHANGES)
                 action:^{
-                  [weakSelf dismissActionSheetCoordinator];
-                  BookmarksEditorCoordinator* strongSelf = weakSelf;
-                  if (strongSelf != nil) {
-                    [strongSelf->_viewController save];
-                  }
+                  [weakSelf dismissSaveChangeAction];
                 }
                  style:UIAlertActionStyleDefault];
   [self.actionSheetCoordinator
       addItemWithTitle:l10n_util::GetNSString(
                            IDS_IOS_VIEW_CONTROLLER_DISMISS_DISCARD_CHANGES)
                 action:^{
-                  [weakSelf dismissActionSheetCoordinator];
-                  BookmarksEditorCoordinator* strongSelf = weakSelf;
-                  if (strongSelf != nil) {
-                    [strongSelf->_viewController cancel];
-                  }
+                  [weakSelf dismissDiscardAction];
                 }
                  style:UIAlertActionStyleDestructive];
   [self.actionSheetCoordinator
       addItemWithTitle:l10n_util::GetNSString(
                            IDS_IOS_VIEW_CONTROLLER_DISMISS_CANCEL_CHANGES)
                 action:^{
-                  [weakSelf dismissActionSheetCoordinator];
-                  BookmarksEditorCoordinator* strongSelf = weakSelf;
-                  if (strongSelf != nil) {
-                    [strongSelf->_viewController setNavigationItemsEnabled:YES];
-                  }
+                  [weakSelf dismissCancelAction];
                 }
                  style:UIAlertActionStyleCancel];
 
@@ -240,6 +243,23 @@
 - (BOOL)presentationControllerShouldDismiss:
     (UIPresentationController*)presentationController {
   return [self canDismiss];
+}
+
+#pragma mark - UIAdaptivePresentationControllerDelegate helper
+
+- (void)dismissSaveChangeAction {
+  [self dismissActionSheetCoordinator];
+  [_viewController save];
+}
+
+- (void)dismissDiscardAction {
+  [self dismissActionSheetCoordinator];
+  [_viewController cancel];
+}
+
+- (void)dismissCancelAction {
+  [self dismissActionSheetCoordinator];
+  [_viewController setNavigationItemsEnabled:YES];
 }
 
 #pragma mark - BookmarksEditorMediatorDelegate
@@ -275,13 +295,6 @@
     (BookmarksFolderChooserCoordinator*)coordinator {
   CHECK(_folderChooserCoordinator, base::NotFatalUntil::M150);
   [self stopFolderChooserCoordinator];
-  if (!_navigationController.presentingViewController) {
-    // In this case the `_navigationController` itself was dismissed.
-    // TODO(crbug.com/40251259): Remove this if block when dismiss handling
-    // is done in coordinators.
-    [_viewController.view endEditing:YES];
-    [self.delegate bookmarksEditorCoordinatorShouldStop:self];
-  }
 }
 
 #pragma mark - Private

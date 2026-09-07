@@ -4,9 +4,7 @@
 
 #include "chrome/browser/ash/system_web_apps/test_support/system_web_app_browsertest_base.h"
 #include "chrome/browser/ash/system_web_apps/test_support/system_web_app_integration_test.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
@@ -21,16 +19,17 @@ IN_PROC_BROWSER_TEST_P(CameraAppIntegrationTest, MainUrlNavigation) {
   GURL main_camera_app_url("chrome://camera-app/views/main.html");
   content::TestNavigationObserver navigation_observer(main_camera_app_url);
   navigation_observer.StartWatchingNewWebContents();
-  ASSERT_EQ(1u, chrome::GetTotalBrowserCount());
+  ASSERT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
 
   ui_test_utils::SendToOmniboxAndSubmit(browser(), main_camera_app_url.spec());
   navigation_observer.Wait();
 
   // We now have two browsers, one for the chrome window, one for the Camera
   // app.
-  EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
-  EXPECT_EQ(main_camera_app_url, chrome::FindLastActive()
-                                     ->tab_strip_model()
+  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
+  EXPECT_EQ(main_camera_app_url, GlobalBrowserCollection::GetInstance()
+                                     ->GetLastActiveBrowser()
+                                     ->GetTabStripModel()
                                      ->GetActiveWebContents()
                                      ->GetVisibleURL());
 }
@@ -41,15 +40,15 @@ IN_PROC_BROWSER_TEST_P(CameraAppIntegrationTest, OtherPageUrlNavigation) {
   // TODO(crbug.com/172345161): Change it to test page once the corresponding CL
   // is merged.
   GURL other_page_camera_app_url("chrome://camera-app/js/main.js");
-  ASSERT_EQ(1u, chrome::GetTotalBrowserCount());
+  ASSERT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
 
   ui_test_utils::SendToOmniboxAndSubmit(browser(),
                                         other_page_camera_app_url.spec());
 
-  EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
   EXPECT_EQ(
       other_page_camera_app_url,
-      browser()->tab_strip_model()->GetActiveWebContents()->GetVisibleURL());
+      browser()->GetTabStripModel()->GetActiveWebContents()->GetVisibleURL());
 }
 
 // CCAAPI verifies whether the private JavaScript APIs CCA (Chrome camera app)
@@ -66,9 +65,9 @@ IN_PROC_BROWSER_TEST_P(CameraAppIntegrationTest, CCAAPI) {
   // Load the test page.
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), GURL("chrome://camera-app/test/test.html")));
-  EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(web_contents);
 
   // Assert that the window.FileSystemHandle API exists.
@@ -81,8 +80,8 @@ IN_PROC_BROWSER_TEST_P(CameraAppIntegrationTest, CCAAPI) {
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(),
       GURL("chrome://camera-app/views/untrusted_script_loader.html")));
-  EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
-  web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
+  web_contents = browser()->GetTabStripModel()->GetActiveWebContents();
 
   // Assert that the window.launchQueue API exists.
   auto result2 =

@@ -4,11 +4,13 @@
 
 #include "components/sync_sessions/session_sync_service_impl.h"
 
+#include <string>
 #include <utility>
 
 #include "base/functional/bind.h"
 #include "components/sync/base/report_unrecoverable_error.h"
 #include "components/sync/model/client_tag_based_data_type_processor.h"
+#include "components/sync_sessions/features.h"
 #include "components/sync_sessions/session_sync_bridge.h"
 #include "components/sync_sessions/sync_sessions_client.h"
 
@@ -38,6 +40,8 @@ syncer::GlobalIdMapper* SessionSyncServiceImpl::GetGlobalIdMapper() const {
 OpenTabsUIDelegate* SessionSyncServiceImpl::GetOpenTabsUIDelegate() {
   return bridge_->GetOpenTabsUIDelegate();
 }
+
+
 
 base::CallbackListSubscription
 SessionSyncServiceImpl::SubscribeToForeignSessionsChanged(

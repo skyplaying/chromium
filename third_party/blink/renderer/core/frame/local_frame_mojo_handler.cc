@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/core/frame/local_frame_mojo_handler.h"
 
+#include "base/command_line.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/time/time.h"
@@ -18,6 +19,7 @@
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/frame/frame_owner_element_type.h"
 #include "third_party/blink/public/common/page_state/page_state.h"
+#include "third_party/blink/public/common/switches.h"
 #include "third_party/blink/public/mojom/devtools/console_message.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/devtools/inspector_issue.mojom-blink.h"
 #include "third_party/blink/public/mojom/frame/frame_owner_properties.mojom-blink.h"
@@ -71,8 +73,11 @@
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/paint/timing/paint_timing.h"
 #include "third_party/blink/renderer/core/script/classic_script.h"
+#include "third_party/blink/renderer/core/script_tools/model_context.h"
+#include "third_party/blink/renderer/core/script_tools/model_context_supplement.h"
 #include "third_party/blink/renderer/core/timing/dom_window_performance.h"
 #include "third_party/blink/renderer/core/view_transition/page_swap_event.h"
+#include "third_party/blink/renderer/core/view_transition/view_transition_skip_reason.h"
 #include "third_party/blink/renderer/core/view_transition/view_transition_supplement.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_timing_utils.h"
 #include "third_party/blink/renderer/platform/widget/frame_widget.h"
@@ -426,21 +431,17 @@ mojom::blink::DevicePostureType LocalFrameMojoHandler::GetDevicePosture() {
     return current_device_posture_;
   }
 
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          blink::switches::kTopChromeWebUI) &&
+      base::FeatureList::IsEnabled(features::kWebUIBypassMojoConnections)) {
+    return current_device_posture_;
+  }
+
   auto task_runner = frame_->GetTaskRunner(TaskType::kInternalDefault);
   DevicePostureProvider()->AddListenerAndGetCurrentPosture(
       device_posture_receiver_.BindNewPipeAndPassRemote(task_runner),
       BindOnce(&LocalFrameMojoHandler::OnPostureChanged, WrapPersistent(this)));
   return current_device_posture_;
-}
-
-void LocalFrameMojoHandler::OverrideDevicePostureForEmulation(
-    mojom::blink::DevicePostureType device_posture_param) {
-  DevicePostureProvider()->OverrideDevicePostureForEmulation(
-      device_posture_param);
-}
-
-void LocalFrameMojoHandler::DisableDevicePostureOverrideForEmulation() {
-  DevicePostureProvider()->DisableDevicePostureOverrideForEmulation();
 }
 
 Page* LocalFrameMojoHandler::GetPage() const {
@@ -582,7 +583,7 @@ void LocalFrameMojoHandler::NotifyVirtualKeyboardOverlayRect(
                         keyboard_rect.width() / scale_factor,
                         keyboard_rect.height() / scale_factor);
 
-  frame_->NotifyVirtualKeyboardOverlayRectObservers(scaled_rect);
+  frame_->SetVirtualKeyboardOverlayGeometry(scaled_rect);
 }
 
 void LocalFrameMojoHandler::ShowInterestInElement(int nodeID) {
@@ -688,6 +689,7 @@ void LocalFrameMojoHandler::RenderFallbackContent() {
 }
 
 void LocalFrameMojoHandler::BeforeUnload(bool is_reload,
+                                         bool force_to_proceed,
                                          BeforeUnloadCallback callback) {
   base::TimeTicks before_unload_start_time = base::TimeTicks::Now();
   base::TimeTicks before_unload_dialog_opened_time;
@@ -696,9 +698,9 @@ void LocalFrameMojoHandler::BeforeUnload(bool is_reload,
   // local descendant frames, including children of remote frames.  The browser
   // process will send separate IPCs to dispatch beforeunload in any
   // out-of-process child frames.
-  bool proceed =
-      frame_->Loader().ShouldClose(is_reload, before_unload_dialog_opened_time,
-                                   before_unload_dialog_closed_time);
+  bool proceed = frame_->Loader().ShouldClose(is_reload, force_to_proceed,
+                                              before_unload_dialog_opened_time,
+                                              before_unload_dialog_closed_time);
 
   DCHECK(!callback.is_null());
   base::TimeTicks before_unload_end_time = base::TimeTicks::Now();
@@ -754,8 +756,8 @@ void LocalFrameMojoHandler::AdvanceFocusForIME(
     return;
 
   Element* next_element =
-      GetPage()->GetFocusController().NextFocusableElementForImeAndAutofill(
-          element, focus_type);
+      GetPage()->GetFocusController().NextFocusableElementForIme(element,
+                                                                 focus_type);
   if (!next_element)
     return;
 
@@ -798,15 +800,6 @@ void LocalFrameMojoHandler::DidUpdateFramePolicy(
   To<RemoteFrameOwner>(frame_->Owner())->SetFramePolicy(frame_policy);
 }
 
-void LocalFrameMojoHandler::OnFrameVisibilityChanged(
-    mojom::blink::FrameVisibility visibility) {
-  if (frame_->Client() && frame_->Client()->GetWebFrame() &&
-      frame_->Client()->GetWebFrame()->Client()) {
-    frame_->Client()->GetWebFrame()->Client()->OnFrameVisibilityChanged(
-        visibility);
-  }
-}
-
 void LocalFrameMojoHandler::OnPostureChanged(
     mojom::blink::DevicePostureType posture) {
   if (!RuntimeEnabledFeatures::DevicePostureEnabled(
@@ -836,8 +829,7 @@ void LocalFrameMojoHandler::JavaScriptMethodExecuteRequest(
     base::ListValue arguments,
     bool wants_result,
     JavaScriptMethodExecuteRequestCallback callback) {
-  TRACE_EVENT_INSTANT0("test_tracing", "JavaScriptMethodExecuteRequest",
-                       TRACE_EVENT_SCOPE_THREAD);
+  TRACE_EVENT_INSTANT("test_tracing", "JavaScriptMethodExecuteRequest");
 
   std::unique_ptr<WebV8ValueConverter> converter =
       Platform::Current()->CreateWebV8ValueConverter();
@@ -863,8 +855,7 @@ void LocalFrameMojoHandler::JavaScriptExecuteRequest(
     const String& javascript,
     bool wants_result,
     JavaScriptExecuteRequestCallback callback) {
-  TRACE_EVENT_INSTANT0("test_tracing", "JavaScriptExecuteRequest",
-                       TRACE_EVENT_SCOPE_THREAD);
+  TRACE_EVENT_INSTANT("test_tracing", "JavaScriptExecuteRequest");
 
   v8::HandleScope handle_scope(ToIsolate(frame_));
   v8::Local<v8::Value> result =
@@ -893,8 +884,7 @@ void LocalFrameMojoHandler::JavaScriptExecuteRequestForTests(
     bool honor_js_content_settings,
     int32_t world_id,
     JavaScriptExecuteRequestForTestsCallback callback) {
-  TRACE_EVENT_INSTANT0("test_tracing", "JavaScriptExecuteRequestForTests",
-                       TRACE_EVENT_SCOPE_THREAD);
+  TRACE_EVENT_INSTANT("test_tracing", "JavaScriptExecuteRequestForTests");
 
   // A bunch of tests expect to run code in the context of a user gesture, which
   // can grant additional privileges (e.g. the ability to create popups).
@@ -962,9 +952,8 @@ void LocalFrameMojoHandler::JavaScriptExecuteRequestInIsolatedWorld(
     bool wants_result,
     int32_t world_id,
     JavaScriptExecuteRequestInIsolatedWorldCallback callback) {
-  TRACE_EVENT_INSTANT0("test_tracing",
-                       "JavaScriptExecuteRequestInIsolatedWorld",
-                       TRACE_EVENT_SCOPE_THREAD);
+  TRACE_EVENT_INSTANT("test_tracing",
+                      "JavaScriptExecuteRequestInIsolatedWorld");
 
   if (world_id <= DOMWrapperWorld::kMainWorldId ||
       world_id > DOMWrapperWorld::kDOMWrapperWorldEmbedderWorldIdLimit) {
@@ -991,7 +980,36 @@ void LocalFrameMojoHandler::JavaScriptExecuteRequestInIsolatedWorld(
       wants_result
           ? mojom::blink::WantResultOption::kWantResultDateAndRegExpAllowed
           : mojom::blink::WantResultOption::kNoResult,
-      mojom::blink::PromiseResultOption::kDoNotWait);
+      mojom::blink::PromiseResultOption::kDoNotWait,
+      /*script_injector_id=*/String());
+}
+
+void LocalFrameMojoHandler::InvokeScriptToolForInspector(
+    const base::UnguessableToken& invocation_id,
+    const String& tool_name,
+    const String& input_arguments,
+    InvokeScriptToolForInspectorCallback callback) {
+  if (auto* model_context =
+          ModelContextSupplement::GetIfExists(*GetDocument())) {
+    if (model_context->GetScriptToolDeclaration(tool_name)) {
+      frame_->GetTaskRunner(TaskType::kInternalInspector)
+          ->PostTask(
+              FROM_HERE,
+              blink::BindOnce(base::IgnoreResult(&ModelContext::ExecuteTool),
+                              WrapPersistent(model_context), invocation_id,
+                              tool_name, input_arguments, base::DoNothing()));
+      std::move(callback).Run(true);
+      return;
+    }
+  }
+  std::move(callback).Run(false);
+}
+
+void LocalFrameMojoHandler::NotifyInspectorOfCrossDocumentScriptToolResult(
+    const base::UnguessableToken& invocation_id) {
+  auto* model_context = ModelContextSupplement::modelContext(*GetDocument());
+  model_context->GetCrossDocumentScriptToolResult(invocation_id,
+                                                  base::DoNothing());
 }
 
 #if BUILDFLAG(IS_MAC)
@@ -1349,8 +1367,7 @@ void LocalFrameMojoHandler::UpdateBrowserControlsState(
   TRACE_EVENT2("renderer", "LocalFrame::UpdateBrowserControlsState",
                "Constraint", static_cast<int>(constraints), "Current",
                static_cast<int>(current));
-  TRACE_EVENT_INSTANT1("renderer", "is_animated", TRACE_EVENT_SCOPE_THREAD,
-                       "animated", animate);
+  TRACE_EVENT_INSTANT("renderer", "is_animated", "animated", animate);
 
   frame_->GetWidgetForLocalRoot()->UpdateBrowserControlsState(
       constraints, current, animate, offset_tag_modifications);
@@ -1386,6 +1403,14 @@ void LocalFrameMojoHandler::SetV8CompileHints(
   page->GetV8CrowdsourcedCompileHintsConsumer().SetData(memory);
 }
 
+void LocalFrameMojoHandler::NotifyRelatedPagesFinalized(
+    bool has_other_related_pages) {
+  if (Page* page = GetPage()) {
+    page->NotifyRelatedPagesFinalized(has_other_related_pages);
+    frame_->Loader().ProcessPendingCrossDocumentFragment();
+  }
+}
+
 void LocalFrameMojoHandler::SnapshotDocumentForViewTransition(
     const blink::ViewTransitionToken& transition_token,
     mojom::blink::PageSwapEventParamsPtr params,
@@ -1399,7 +1424,8 @@ void LocalFrameMojoHandler::NotifyViewTransitionAbortedToOldDocument() {
   if (auto* transition =
           ViewTransitionUtils::GetOutgoingCrossDocumentTransition(
               *frame_->GetDocument())) {
-    transition->SkipTransition();
+    transition->SkipTransition(ViewTransition::PromiseResponse::kRejectAbort,
+                               ViewTransitionSkipReason::kNavigationAborted);
   }
 }
 
@@ -1417,6 +1443,7 @@ void LocalFrameMojoHandler::AddResourceTimingEntryForFailedSubframeNavigation(
     base::TimeTicks redirect_time,
     base::TimeTicks request_start,
     base::TimeTicks response_start,
+    base::TimeTicks completion_time,
     uint32_t response_code,
     const String& mime_type,
     network::mojom::blink::LoadTimingInfoPtr load_timing_info,
@@ -1425,21 +1452,30 @@ void LocalFrameMojoHandler::AddResourceTimingEntryForFailedSubframeNavigation(
     bool is_secure_transport,
     bool is_validated,
     const String& normalized_server_timing,
-    const network::URLLoaderCompletionStatus& completion_status) {
+    mojom::blink::SubframeResourceLengthsPtr resource_lengths) {
   Frame* subframe = Frame::ResolveFrame(subframe_token);
   if (!subframe || !subframe->Owner()) {
     return;
   }
 
-  ResourceResponse response;
+  ResourceResponse response(initial_url);
   response.SetAlpnNegotiatedProtocol(AtomicString(alpn_negotiated_protocol));
   response.SetConnectionInfo(connection_info);
   response.SetConnectionReused(load_timing_info->socket_reused);
   response.SetTimingAllowPassed(true);
   response.SetIsValidated(is_validated);
-  response.SetDecodedBodyLength(completion_status.decoded_body_length);
-  response.SetEncodedBodyLength(completion_status.encoded_body_length);
-  response.SetEncodedDataLength(completion_status.encoded_data_length);
+  if (resource_lengths) {
+    response.SetDecodedBodyLength(
+        resource_lengths->decoded_body_length.InBytes());
+    response.SetEncodedBodyLength(
+        resource_lengths->encoded_body_length.InBytes());
+    response.SetEncodedDataLength(
+        resource_lengths->encoded_data_length.InBytes());
+  } else {
+    // Use -1 as a code for "no data received", and leave the body length
+    // fields at their default values.
+    response.SetEncodedDataLength(-1);
+  }
   response.SetHttpStatusCode(response_code);
   if (!normalized_server_timing.empty()) {
     response.SetHttpHeaderField(http_names::kServerTiming,
@@ -1448,7 +1484,7 @@ void LocalFrameMojoHandler::AddResourceTimingEntryForFailedSubframeNavigation(
 
   mojom::blink::ResourceTimingInfoPtr info =
       CreateResourceTimingInfo(start_time, initial_url, &response);
-  info->response_end = completion_status.completion_time;
+  info->response_end = completion_time;
   info->last_redirect_end_time = redirect_time;
   info->is_secure_transport = is_secure_transport;
   info->timing = std::move(load_timing_info);
@@ -1504,6 +1540,8 @@ void LocalFrameMojoHandler::UpdatePrerenderURL(
           kPrerenderNoVarySearchActivation,
       /*data=*/nullptr, WebFrameLoadType::kReplaceCurrentItem,
       FirePopstate::kNo,
+      /*should_skip_screenshot=*/true, params->involvement,
+      params->interaction_id,
       /*is_browser_initiated=*/true);
   std::move(callback).Run();
 }

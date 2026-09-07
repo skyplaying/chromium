@@ -14,9 +14,9 @@
 #include "base/compiler_specific.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/memory/singleton.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/no_destructor.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/string_view_util.h"
@@ -29,6 +29,7 @@
 #include "chromeos/ash/experiences/arc/arc_prefs.h"
 #include "chromeos/ash/experiences/arc/arc_util.h"
 #include "chromeos/ash/experiences/arc/metrics/arc_metrics_anr.h"
+#include "chromeos/ash/experiences/arc/metrics/arc_metrics_constants.h"
 #include "chromeos/ash/experiences/arc/metrics/arc_wm_metrics.h"
 #include "chromeos/ash/experiences/arc/metrics/psi_memory_parser.h"
 #include "chromeos/ash/experiences/arc/metrics/stability_metrics_manager.h"
@@ -198,7 +199,8 @@ const char* ArcKeyMintLoggedOperationToString(
 
 // static
 ArcMetricsServiceFactory* ArcMetricsServiceFactory::GetInstance() {
-  return base::Singleton<ArcMetricsServiceFactory>::get();
+  static base::NoDestructor<ArcMetricsServiceFactory> instance;
+  return instance.get();
 }
 
 // static
@@ -243,10 +245,7 @@ ArcMetricsService::ArcMetricsService(content::BrowserContext* context,
   StabilityMetricsManager::Get()->SetArcNativeBridgeType(
       NativeBridgeType::UNKNOWN);
 
-  if (base::FeatureList::IsEnabled(kVmMemoryPSIReports)) {
-    psi_parser_ =
-        std::make_unique<arc::PSIMemoryParser>(kVmMemoryPSIReportsPeriod.Get());
-  }
+  psi_parser_ = std::make_unique<arc::PSIMemoryParser>(kVmMemoryPsiPeriod);
 
   arc_wm_metrics_ = std::make_unique<ArcWmMetrics>();
 }

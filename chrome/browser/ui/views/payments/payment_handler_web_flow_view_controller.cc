@@ -8,65 +8,110 @@
 #include <utility>
 
 #include "base/check_op.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
-#include "base/strings/utf_string_conversions.h"
-#include "chrome/app/vector_icons/vector_icons.h"
+#include "chrome/browser/devtools/devtools_window.h"
+#include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
+#include "chrome/browser/permissions/one_time_permissions_tracker_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/task_manager/web_contents_tags.h"
 #include "chrome/browser/themes/theme_service.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/color/chrome_color_id.h"
+#include "chrome/browser/ui/layout_constants.h"
+#include "chrome/browser/ui/views/chrome_typography.h"
+#include "chrome/browser/ui/views/location_bar/location_icon_view.h"
+#include "chrome/browser/ui/views/page_info/page_info_bubble_specification.h"
+#include "chrome/browser/ui/views/page_info/page_info_bubble_view.h"
+#include "chrome/browser/ui/views/payments/payment_handler_header_view_util.h"
 #include "chrome/browser/ui/views/payments/payment_request_dialog_view.h"
 #include "chrome/browser/ui/views/payments/payment_request_views_util.h"
+#include "chrome/browser/ui/views/permissions/chip/permission_chip_theme.h"
+#include "chrome/browser/ui/views/permissions/chip/permission_chip_view.h"
+#include "chrome/browser/ui/views/permissions/chip/permission_dashboard_view.h"
 #include "chrome/grit/generated_resources.h"
-#include "components/omnibox/browser/location_bar_model_util.h"
-#include "components/payments/content/icon/icon_size.h"
+#include "components/omnibox/browser/location_bar_model_impl.h"
 #include "components/payments/content/payment_handler_navigation_throttle.h"
 #include "components/payments/content/ssl_validity_checker.h"
 #include "components/payments/core/features.h"
 #include "components/payments/core/native_error_strings.h"
-#include "components/payments/core/payments_experimental_features.h"
 #include "components/payments/core/url_util.h"
+#include "components/permissions/permission_request_manager.h"
 #include "components/security_state/core/security_state.h"
 #include "components/strings/grit/components_strings.h"
+#include "components/tabs/public/tab_interface.h"
 #include "components/url_formatter/elide_url.h"
 #include "components/vector_icons/vector_icons.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
+#include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_user_data.h"
+#include "content/public/common/content_constants.h"
+#include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/metadata/metadata_header_macros.h"
-#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/models/image_model.h"
+#include "ui/base/window_open_disposition.h"
+#include "ui/color/color_provider.h"
 #include "ui/gfx/color_palette.h"
-#include "ui/gfx/color_utils.h"
 #include "ui/gfx/image/image_skia.h"
-#include "ui/gfx/paint_vector_icon.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
-#include "ui/views/controls/button/image_button.h"
-#include "ui/views/controls/button/image_button_factory.h"
+#include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/controls/highlight_path_generator.h"
-#include "ui/views/controls/image_view.h"
-#include "ui/views/controls/label.h"
-#include "ui/views/controls/progress_bar.h"
-#include "ui/views/controls/separator.h"
 #include "ui/views/controls/webview/webview.h"
-#include "ui/views/layout/box_layout.h"
+#include "ui/views/layout/box_layout_view.h"
 #include "ui/views/layout/fill_layout.h"
-#include "ui/views/layout/table_layout.h"
 #include "ui/views/view.h"
 #include "ui/views/view_class_properties.h"
 #include "url/origin.h"
 #include "url/url_constants.h"
 
 namespace payments {
+
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(PaymentHandlerWebFlowViewController,
+                                      kAppIconElementId);
+
 namespace {
+
+// WebContentsUserData key for retrieving PaymentHandlerWebFlowViewController
+// from the payment handler's WebContents. Attached in FillContentView.
+class PaymentHandlerWebFlowViewControllerWebContentsWrapper
+    : public content::WebContentsUserData<
+          PaymentHandlerWebFlowViewControllerWebContentsWrapper> {
+ public:
+  PaymentHandlerWebFlowViewController* controller() {
+    return controller_.get();
+  }
+
+ private:
+  friend class content::WebContentsUserData<
+      PaymentHandlerWebFlowViewControllerWebContentsWrapper>;
+
+  PaymentHandlerWebFlowViewControllerWebContentsWrapper(
+      content::WebContents* web_contents,
+      base::WeakPtr<PaymentHandlerWebFlowViewController> controller)
+      : content::WebContentsUserData<
+            PaymentHandlerWebFlowViewControllerWebContentsWrapper>(
+            *web_contents),
+        controller_(std::move(controller)) {}
+
+  base::WeakPtr<PaymentHandlerWebFlowViewController> controller_;
+
+  WEB_CONTENTS_USER_DATA_KEY_DECL();
+};
+
+WEB_CONTENTS_USER_DATA_KEY_IMPL(
+    PaymentHandlerWebFlowViewControllerWebContentsWrapper);
 
 std::u16string GetPaymentHandlerDialogTitle(
     content::WebContents* web_contents) {
@@ -85,142 +130,7 @@ std::u16string GetPaymentHandlerDialogTitle(
              : title;
 }
 
-// Returns a Google color closest to light_mode_color or dark_mode_color based
-// on whether background_color is considered dark mode, with a minimum
-// contrast_ratio between the returned color and the background_color.
-SkColor GetContrastingGoogleColor(SkColor light_mode_color,
-                                  SkColor dark_mode_color,
-                                  SkColor background_color,
-                                  float contrast_ratio) {
-  const SkColor preferred_color = color_utils::IsDark(background_color)
-                                      ? dark_mode_color
-                                      : light_mode_color;
-  return color_utils::PickGoogleColor(preferred_color, background_color,
-                                      contrast_ratio);
-}
-
 }  // namespace
-
-// The progress bar used in the Payment Handler UI.
-class PaymentHandlerProgressBar : public views::ProgressBar {
-  METADATA_HEADER(PaymentHandlerProgressBar, views::ProgressBar)
-
- public:
-  PaymentHandlerProgressBar() { SetPreferredHeight(2); }
-  ~PaymentHandlerProgressBar() override = default;
-
-  // Set the progress bar colors based on the header background color. The
-  // progress bar's background color serves as a separator between the header
-  // and content.
-  void SetColorBasedOnBackground(SkColor background_color) {
-    // Get the closest progress bar color to kColorProgressBar, with a minimum
-    // contrast ratio used for glyphs.
-    const SkColor progress_bar_color = GetContrastingGoogleColor(
-        gfx::kGoogleBlue600, gfx::kGoogleBlue300, background_color,
-        color_utils::kMinimumVisibleContrastRatio);
-
-    // Get the closest separator color to kColorSeparator, with a minimum
-    // contrast ratio of the default light separator contrast on white, which is
-    // less than color_utils::kMinimumVisibleContrastRatio.
-    const SkColor separator_color = GetContrastingGoogleColor(
-        gfx::kGoogleGrey300, gfx::kGoogleGrey800, background_color,
-        color_utils::GetContrastRatio(gfx::kGoogleGrey300, SK_ColorWHITE));
-
-    SetForegroundColor(progress_bar_color);
-    SetBackgroundColor(separator_color);
-  }
-
-  base::WeakPtr<PaymentHandlerProgressBar> GetWeakPtr() {
-    return weak_ptr_factory_.GetWeakPtr();
-  }
-
- private:
-  base::WeakPtrFactory<PaymentHandlerProgressBar> weak_ptr_factory_{this};
-};
-
-BEGIN_METADATA(PaymentHandlerProgressBar)
-END_METADATA
-
-// The origin label used in the header of the Payment Handler UI.
-class PaymentHandlerOriginLabel : public views::Label {
-  METADATA_HEADER(PaymentHandlerOriginLabel, views::Label)
-
- public:
-  PaymentHandlerOriginLabel() {
-    SetElideBehavior(gfx::ELIDE_HEAD);
-    SetID(static_cast<int>(DialogViewID::SHEET_TITLE));
-    SetFocusBehavior(views::View::FocusBehavior::ACCESSIBLE_ONLY);
-  }
-  ~PaymentHandlerOriginLabel() override = default;
-
-  // Set the color based on the background color of the header.
-  void SetColorBasedOnBackground(SkColor background_color) {
-    // Get the closest label color to kColorPrimaryForeground, with a minimum
-    // readable contrast ratio.
-    SkColor foreground = GetContrastingGoogleColor(
-        gfx::kGoogleGrey900, gfx::kGoogleGrey200, background_color,
-        color_utils::kMinimumReadableContrastRatio);
-    SetAutoColorReadabilityEnabled(false);
-    SetEnabledColor(foreground);
-    SetBackgroundColor(background_color);
-  }
-
-  base::WeakPtr<PaymentHandlerOriginLabel> GetWeakPtr() {
-    return weak_ptr_factory_.GetWeakPtr();
-  }
-
- private:
-  base::WeakPtrFactory<PaymentHandlerOriginLabel> weak_ptr_factory_{this};
-};
-
-BEGIN_METADATA(PaymentHandlerOriginLabel)
-END_METADATA
-
-// The close ('X') button used in the header of the Payment Handler UI.
-class PaymentHandlerCloseButton : public views::ImageButton {
-  METADATA_HEADER(PaymentHandlerCloseButton, views::ImageButton)
-
- public:
-  explicit PaymentHandlerCloseButton(
-      views::Button::PressedCallback pressed_callback)
-      : views::ImageButton(std::move(pressed_callback)) {
-    ConfigureVectorImageButton(this);
-    views::InstallCircleHighlightPathGenerator(this);
-    constexpr int kCloseButtonSize = 16;
-    SetSize(gfx::Size(kCloseButtonSize, kCloseButtonSize));
-    SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
-    SetID(static_cast<int>(DialogViewID::CANCEL_BUTTON));
-    GetViewAccessibility().SetName(
-        l10n_util::GetStringUTF16(IDS_PAYMENTS_CLOSE));
-  }
-  ~PaymentHandlerCloseButton() override = default;
-
-  // Set the colors based on the header's background color.
-  void SetColorBasedOnBackground(SkColor background_color) {
-    // Get the closest icon color to kColorIcon, with a minimum contrast ratio
-    // used for glyphs.
-    const SkColor enabled_color = GetContrastingGoogleColor(
-        gfx::kGoogleGrey500, gfx::kGoogleGrey700, background_color,
-        color_utils::kMinimumVisibleContrastRatio);
-    const SkColor disabled_color = color_utils::AlphaBlend(
-        enabled_color, background_color, gfx::kDisabledControlAlpha);
-
-    // This view does not set its color using the browser theme color, as this
-    // may differ from the header color, which is based on the web view theme.
-    views::SetImageFromVectorIconWithColor(this, vector_icons::kCloseIcon,
-                                           {enabled_color, disabled_color});
-  }
-
-  base::WeakPtr<PaymentHandlerCloseButton> GetWeakPtr() {
-    return weak_ptr_factory_.GetWeakPtr();
-  }
-
- private:
-  base::WeakPtrFactory<PaymentHandlerCloseButton> weak_ptr_factory_{this};
-};
-
-BEGIN_METADATA(PaymentHandlerCloseButton)
-END_METADATA
 
 // Ensures that the views::WebView created by this class has its corners
 // properly rounded. This class is a ViewsObserver that waits until the view
@@ -241,7 +151,7 @@ class PaymentHandlerWebFlowViewController::RoundedCornerViewClipper
     CHECK_EQ(web_view_, observed_view);
     // The PaymentHandler dialog has a header above the WebView, so only the
     // bottom corners should be clipped to be rounded.
-    web_view_->holder()->SetCornerRadii(gfx::RoundedCornersF(
+    web_view_->holder()->SetNativeViewCornerRadii(gfx::RoundedCornersF(
         0.f, 0.f, dialog_->GetCornerRadius(), dialog_->GetCornerRadius()));
   }
 
@@ -266,9 +176,11 @@ PaymentHandlerWebFlowViewController::PaymentHandlerWebFlowViewController(
     GURL target,
     PaymentHandlerOpenWindowCallback first_navigation_complete_callback)
     : PaymentRequestSheetController(spec, state, dialog),
-      log_(payment_request_web_contents),
       profile_(profile),
       target_(target),
+      location_bar_model_(
+          std::make_unique<LocationBarModelImpl>(this,
+                                                 content::kMaxURLDisplayChars)),
       first_navigation_complete_callback_(
           std::move(first_navigation_complete_callback)),
       dialog_manager_delegate_(payment_request_web_contents) {}
@@ -281,7 +193,31 @@ PaymentHandlerWebFlowViewController::~PaymentHandlerWebFlowViewController() {
       manager->SetDelegate(nullptr);
     }
   }
-  state()->OnPaymentAppWindowClosed();
+  if (state()) {
+    state()->OnPaymentAppWindowClosed();
+  }
+}
+
+// static
+PaymentHandlerWebFlowViewController*
+PaymentHandlerWebFlowViewController::FromWebContents(
+    content::WebContents* web_contents) {
+  if (!web_contents) {
+    return nullptr;
+  }
+  auto* wrapper =
+      PaymentHandlerWebFlowViewControllerWebContentsWrapper::FromWebContents(
+          web_contents);
+  return wrapper ? wrapper->controller() : nullptr;
+}
+
+views::View* PaymentHandlerWebFlowViewController::GetPageInfoIconView() {
+  if (permission_dashboard_view() &&
+      permission_dashboard_view()->GetVisible() &&
+      permission_dashboard_view()->GetIndicatorChip()->GetVisible()) {
+    return permission_dashboard_view()->GetIndicatorChip();
+  }
+  return location_icon_view();
 }
 
 std::u16string PaymentHandlerWebFlowViewController::GetSheetTitle() {
@@ -316,17 +252,50 @@ void PaymentHandlerWebFlowViewController::FillContentView(
   Observe(web_view->GetWebContents());
   PaymentHandlerNavigationThrottle::MarkPaymentHandlerWebContents(
       web_contents());
+  PaymentHandlerWebFlowViewControllerWebContentsWrapper::CreateForWebContents(
+      web_contents(), weak_ptr_factory_.GetWeakPtr());
   web_contents()->SetDelegate(this);
-  DCHECK_NE(log_.web_contents(), web_contents());
+  content::WebContents* parent_tab_web_contents = state()->GetWebContents();
+
+  DCHECK_NE(parent_tab_web_contents, web_contents());
   content::PaymentAppProvider::GetOrCreateForWebContents(
-      /*payment_request_web_contents=*/log_.web_contents())
+      /*payment_request_web_contents=*/parent_tab_web_contents)
       ->SetOpenedWindow(
           /*payment_handler_web_contents=*/web_contents());
 
-  web_view->LoadInitialURL(target_);
+  if (base::FeatureList::IsEnabled(
+          payments::features::kPaymentHandlerDialogUseInitiatorInUrlLoad)) {
+    content::NavigationController::LoadURLParams params(target_);
+    params.initiator_origin =
+        url::Origin::Create(parent_tab_web_contents->GetLastCommittedURL());
+    web_view->GetWebContents()->GetController().LoadURLWithParams(params);
+  } else {
+    web_view->LoadInitialURL(target_);
+  }
 
   // Make the web view show up in the task manager.
   task_manager::WebContentsTags::CreateForTabContents(web_contents());
+
+  // Install permission helpers so that permission prompts and one-time
+  // permissions function within the Payment Handler window. Security state
+  // is computed on demand by chrome_security_state (see
+  // chrome/browser/ssl/chrome_security_state_util.h) and needs no helper.
+  //
+  // TODO(crbug.com/539998580): Restrict non-camera permission requests in
+  // Payment Handler windows via Permissions-Policy enforcement.
+  if (base::FeatureList::IsEnabled(features::kPaymentHandlerCameraAccessUx)) {
+    indicator_observation_.Reset();
+    if (scoped_refptr<MediaStreamCaptureIndicator> indicator =
+            MediaCaptureDevicesDispatcher::GetInstance()
+                ->GetMediaStreamCaptureIndicator()) {
+      indicator_observation_.Observe(indicator.get());
+    }
+    OneTimePermissionsTrackerHelper::CreateForWebContents(web_contents());
+    permissions::PermissionRequestManager::CreateForWebContents(web_contents());
+  } else if (base::FeatureList::IsEnabled(
+                 features::kPaymentHandlerCameraAccess)) {
+    OneTimePermissionsTrackerHelper::CreateForWebContents(web_contents());
+  }
 
   // Enable modal dialogs for web-based payment handlers.
   dialog_manager_delegate_.SetWebContents(web_contents());
@@ -334,6 +303,17 @@ void PaymentHandlerWebFlowViewController::FillContentView(
       web_contents());
   web_modal::WebContentsModalDialogManager::FromWebContents(web_contents())
       ->SetDelegate(&dialog_manager_delegate_);
+
+  // If the web-contents for the parent tab has devtools open and the "Auto-open
+  // DevTools for pop-ups" setting is enabled, trigger devtools for the Payment
+  // Handler modal. This does not happen by default as Payment Handler is not a
+  // regular pop-up window.
+  DevToolsWindow* window = DevToolsWindow::GetInstanceForInspectedWebContents(
+      parent_tab_web_contents);
+  if (window && window->OpenNewWindowForPopups()) {
+    DevToolsWindow::OpenDevToolsWindow(
+        web_contents(), DevToolsOpenedByAction::kAutomaticForNewTarget);
+  }
 
   // The webview must get an explicitly set height otherwise the layout doesn't
   // make it fill its container. This is likely because it has no content at the
@@ -354,91 +334,48 @@ bool PaymentHandlerWebFlowViewController::ShouldShowSecondaryButton() {
 
 void PaymentHandlerWebFlowViewController::PopulateSheetHeaderView(
     views::View* container) {
-  // The PaymentHandler header consists of the payment app icon (if available),
-  // the current web contents origin, and a close button. The origin is centered
-  // on the dialog, whilst the icon and close are aligned with the LHS and RHS
-  // respectively.
-  //
-  // +-----------------------------------------+
-  // | ICON |          origin          | CLOSE |
-  // +-----------------------------------------+
-
-  container->SetID(static_cast<int>(DialogViewID::PAYMENT_APP_HEADER));
-  constexpr int kVerticalInset = 8;
-  constexpr int kHeaderHorizontalInset = 16;
-  container->SetBorder(views::CreateEmptyBorder(
-      gfx::Insets::TLBR(kVerticalInset, kHeaderHorizontalInset, kVerticalInset,
-                        kHeaderHorizontalInset)));
-
-  views::TableLayout* layout =
-      container->SetLayoutManager(std::make_unique<views::TableLayout>());
-
-  // Icon column.
   const SkBitmap* icon_bitmap = state()->selected_app()->icon_bitmap();
-  const bool has_icon = icon_bitmap && !icon_bitmap->drawsNothing();
-  constexpr int kHeaderIconWidth = 32;
-  if (has_icon) {
-    layout->AddColumn(views::LayoutAlignment::kStart,
-                      views::LayoutAlignment::kCenter,
-                      views::TableLayout::kFixedSize,
-                      views::TableLayout::ColumnSize::kFixed, kHeaderIconWidth,
-                      /*min_width=*/0);
-  } else {
-    layout->AddPaddingColumn(views::TableLayout::kFixedSize, kHeaderIconWidth);
+  std::u16string origin_text = url_formatter::FormatOriginForSecurityDisplay(
+      web_contents()
+          ? web_contents()->GetPrimaryMainFrame()->GetLastCommittedOrigin()
+          : url::Origin::Create(target_),
+      url_formatter::SchemeDisplay::OMIT_CRYPTOGRAPHIC);
+
+  std::unique_ptr<views::BoxLayoutView> icon_view;
+  if (base::FeatureList::IsEnabled(features::kPaymentHandlerCameraAccessUx)) {
+    icon_view = std::make_unique<views::BoxLayoutView>();
+    icon_view->SetOrientation(views::BoxLayout::Orientation::kHorizontal);
+    icon_view->SetMainAxisAlignment(
+        views::BoxLayout::MainAxisAlignment::kCenter);
+    icon_view->SetCrossAxisAlignment(
+        views::BoxLayout::CrossAxisAlignment::kCenter);
+
+    LocationIconView* icon =
+        icon_view->AddChildView(CreatePaymentHandlerLocationIconView(
+            /*icon_label_bubble_delegate=*/this,
+            /*location_icon_delegate=*/this));
+    location_icon_view_tracker_.SetView(icon);
+
+    PermissionDashboardView* dashboard =
+        icon_view->AddChildView(std::make_unique<PermissionDashboardView>());
+    dashboard->GetIndicatorChip()->SetChipIcon(vector_icons::kVideocamIcon);
+    dashboard->GetIndicatorChip()->SetTheme(
+        PermissionChipTheme::kInUseActivityIndicator);
+    dashboard->GetIndicatorChip()->SetTooltipText(
+        l10n_util::GetStringUTF16(IDS_CAMERA_IN_USE));
+    dashboard->GetIndicatorChip()->SetCallback(base::BindRepeating(
+        base::IgnoreResult(
+            &PaymentHandlerWebFlowViewController::ShowPageInfoDialog),
+        weak_ptr_factory_.GetWeakPtr()));
+    permission_dashboard_view_tracker_.SetView(dashboard);
   }
 
-  // Origin column.
-  layout->AddColumn(
-      views::LayoutAlignment::kStretch, views::LayoutAlignment::kStretch,
-      /*horizontal_resize=*/1.0, views::TableLayout::ColumnSize::kUsePreferred,
-      /*fixed_width=*/0,
-      /*min_width=*/0);
-
-  // Close button column.
-  layout->AddColumn(
-      views::LayoutAlignment::kEnd, views::LayoutAlignment::kCenter,
-      views::TableLayout::kFixedSize, views::TableLayout::ColumnSize::kFixed,
-      /*fixed_width=*/32,
-      /*min_width=*/0);
-
-  layout->AddRows(1, views::TableLayout::kFixedSize);
-
-  // Add the icon to the header. As we support non-square icons, resize it to
-  // fit the target header height.
-  //
-  // We should set image size in density independent pixels here, since
-  // views::ImageView objects are rastered at the device scale factor.
-  if (has_icon) {
-    views::ImageView* app_icon_view = container->AddChildView(CreateAppIconView(
-        /*icon_resource_id=*/0, icon_bitmap,
-        /*tooltip_text=*/l10n_util::GetStringUTF16(IDS_PAYMENT_HANDLER_ICON)));
-    app_icon_view->SetID(
-        static_cast<int>(DialogViewID::PAYMENT_APP_HEADER_ICON));
-    // TODO(crbug.com/40259861): If the downloaded app icon was a vector image,
-    // see if we can store and rasterize it here instead of at download time.
-    float adjusted_width =
-        icon_bitmap->width() *
-        (IconSizeCalculator::kPaymentAppDeviceIndependentIdealIconHeight /
-         base::checked_cast<float>(icon_bitmap->height()));
-    app_icon_view->SetImageSize(gfx::Size(
-        adjusted_width,
-        IconSizeCalculator::kPaymentAppDeviceIndependentIdealIconHeight));
-  }
-
-  // Add the origin label.
-  origin_label_ =
-      container->AddChildView(std::make_unique<PaymentHandlerOriginLabel>())
-          ->GetWeakPtr();
-
-  // Finally, add the close button.
-  close_button_ =
-      container
-          ->AddChildView(
-              std::make_unique<PaymentHandlerCloseButton>(base::BindRepeating(
-                  &PaymentRequestSheetController::CloseButtonPressed,
-                  GetWeakPtr())))
-          ->GetWeakPtr();
-
+  PaymentHandlerHeaderViews header_views = PopulatePaymentHandlerHeaderView(
+      container, std::move(icon_view), icon_bitmap, origin_text,
+      base::BindRepeating(&PaymentRequestSheetController::CloseButtonPressed,
+                          GetWeakPtr()));
+  origin_label_ = header_views.origin_label;
+  close_button_ = header_views.close_button;
   SetHeaderColorsAndOriginLabelText();
 }
 
@@ -476,7 +413,26 @@ void PaymentHandlerWebFlowViewController::VisibleSecurityStateChanged(
     AbortPayment();
   } else {
     SetHeaderColorsAndOriginLabelText();
+    if (location_icon_view()) {
+      location_icon_view()->Update(/*suppress_animations=*/false);
+    }
   }
+}
+
+content::WebContents* PaymentHandlerWebFlowViewController::OpenURLFromTab(
+    content::WebContents* source,
+    const content::OpenURLParams& params,
+    base::OnceCallback<void(content::NavigationHandle&)> callback) {
+  // Reject CURRENT_TAB to maintain existing behavior for internal navigations.
+  // OpenURLFromTab is implemented so that external links (e.g. PageInfo "Learn
+  // more") are routed to the parent tab.
+  if (params.disposition == WindowOpenDisposition::CURRENT_TAB) {
+    return nullptr;
+  }
+  if (!state() || !state()->GetWebContents()) {
+    return nullptr;
+  }
+  return state()->GetWebContents()->OpenURL(params, std::move(callback));
 }
 
 content::WebContents* PaymentHandlerWebFlowViewController::AddNewContents(
@@ -489,7 +445,8 @@ content::WebContents* PaymentHandlerWebFlowViewController::AddNewContents(
     bool* was_blocked) {
   // Open new foreground tab or popup triggered by user activation in payment
   // handler window in browser.
-  Browser* browser = chrome::FindLastActiveWithProfile(profile_);
+  BrowserWindowInterface* const browser =
+      ProfileBrowserCollection::GetForProfile(profile_)->GetLastActiveBrowser();
   if (browser && user_gesture &&
       (disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB ||
        disposition == WindowOpenDisposition::NEW_POPUP)) {
@@ -505,6 +462,57 @@ bool PaymentHandlerWebFlowViewController::HandleKeyboardEvent(
   return content_view() && content_view()->GetFocusManager() &&
          unhandled_keyboard_event_handler_.HandleKeyboardEvent(
              event, content_view()->GetFocusManager());
+}
+
+// We explicitly ignore close requests from the WebContents (e.g., via
+// window.close()) to prevent merchant JS or unauthorized scripts from
+// unexpectedly closing the dialog. The payment dialog lifecycle is managed
+// by the browser UI and the Payment Request API.
+void PaymentHandlerWebFlowViewController::CloseContents(
+    content::WebContents* source) {
+  // Do nothing.
+}
+
+void PaymentHandlerWebFlowViewController::RequestMediaAccessPermission(
+    content::WebContents* web_contents,
+    const content::MediaStreamRequest& request,
+    content::MediaResponseCallback callback) {
+  // Currently we allow only video camera access (no audio), behind a
+  // default-disabled flag until we have appropriate UX to inform the user.
+  //
+  // Note that this check assumes that content::MediaStreamRequest will not add
+  // new 'types' in the future, as they will not be blocked by default. That
+  // would be very unlikely, and since this is flag guarded currently anyway
+  // this check suffices.
+  if (request.video_type !=
+          blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE ||
+      request.audio_type != blink::mojom::MediaStreamType::NO_SERVICE ||
+      !(base::FeatureList::IsEnabled(features::kPaymentHandlerCameraAccess) ||
+        base::FeatureList::IsEnabled(
+            features::kPaymentHandlerCameraAccessUx))) {
+    std::move(callback).Run(
+        blink::mojom::StreamDevicesSet(),
+        blink::mojom::MediaStreamRequestResult::NOT_SUPPORTED,
+        /*ui=*/nullptr);
+    return;
+  }
+  MediaCaptureDevicesDispatcher::GetInstance()->ProcessMediaAccessRequest(
+      web_contents, request, std::move(callback), /*extension=*/nullptr);
+}
+
+bool PaymentHandlerWebFlowViewController::CheckMediaAccessPermission(
+    content::RenderFrameHost* render_frame_host,
+    const url::Origin& security_origin,
+    blink::mojom::MediaStreamType type) {
+  if (type != blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE ||
+      !(base::FeatureList::IsEnabled(features::kPaymentHandlerCameraAccess) ||
+        base::FeatureList::IsEnabled(
+            features::kPaymentHandlerCameraAccessUx))) {
+    return false;
+  }
+  return MediaCaptureDevicesDispatcher::GetInstance()
+      ->CheckMediaAccessPermission(render_frame_host, security_origin, type,
+                                   /*extension=*/nullptr);
 }
 
 void PaymentHandlerWebFlowViewController::DidFinishNavigation(
@@ -543,6 +551,9 @@ void PaymentHandlerWebFlowViewController::DidFinishNavigation(
   }
 
   SetHeaderColorsAndOriginLabelText();
+  if (location_icon_view()) {
+    location_icon_view()->Update(/*suppress_animations=*/false);
+  }
 }
 
 void PaymentHandlerWebFlowViewController::LoadProgressChanged(double progress) {
@@ -575,25 +586,19 @@ void PaymentHandlerWebFlowViewController::AbortPayment() {
     web_contents()->Close();
   }
 
-  state()->OnPaymentResponseError(errors::kPaymentHandlerInsecureNavigation);
+  state()->OnPaymentResponseError(
+      mojom::PaymentEventResponseType::PAYMENT_HANDLER_INSECURE_NAVIGATION,
+      errors::kPaymentHandlerInsecureNavigation);
 }
 
 void PaymentHandlerWebFlowViewController::SetHeaderColorsAndOriginLabelText() {
-  // Calculates the header background based on the web contents theme, if any,
-  // otherwise the Chrome theme.
-  header_view()->SetBackground(
-      web_contents() && header_view()->GetWidget()
-          ? views::CreateSolidBackground(color_utils::GetResultingPaintColor(
-                web_contents()->GetThemeColor().value_or(SK_ColorTRANSPARENT),
-                header_view()->GetColorProvider()->GetColor(
-                    ui::kColorDialogBackground)))
-          : views::CreateSolidBackground(ui::kColorDialogBackground));
+  std::optional<SkColor> theme_color;
+  if (web_contents()) {
+    theme_color = web_contents()->GetThemeColor();
+  }
 
-  SkColor background_color =
-      header_view()->GetWidget()
-          ? header_view()->background()->color().ResolveToSkColor(
-                header_view()->GetColorProvider())
-          : gfx::kPlaceholderColor;
+  SetHeaderColors(header_view(), origin_label_.get(), progress_bar_.get(),
+                  close_button_.get(), theme_color);
 
   if (origin_label_) {
     origin_label_->SetText(url_formatter::FormatOriginForSecurityDisplay(
@@ -601,17 +606,153 @@ void PaymentHandlerWebFlowViewController::SetHeaderColorsAndOriginLabelText() {
             ? web_contents()->GetPrimaryMainFrame()->GetLastCommittedOrigin()
             : url::Origin::Create(target_),
         url_formatter::SchemeDisplay::OMIT_CRYPTOGRAPHIC));
-
-    origin_label_->SetColorBasedOnBackground(background_color);
   }
+}
 
-  if (progress_bar_) {
-    progress_bar_->SetColorBasedOnBackground(background_color);
+void PaymentHandlerWebFlowViewController::DidChangeThemeColor() {
+  if (base::FeatureList::IsEnabled(
+          payments::features::kPaymentHandlerHtmlHeadThemeColor)) {
+    SetHeaderColorsAndOriginLabelText();
+    if (web_contents() && web_contents()->GetThemeColor().has_value()) {
+      dialog()->OnPaymentHandlerThemeColorSet();
+    }
   }
+}
 
-  if (close_button_) {
-    close_button_->SetColorBasedOnBackground(background_color);
+content::WebContents*
+PaymentHandlerWebFlowViewController::GetActiveWebContents() const {
+  return web_contents();
+}
+
+SkColor PaymentHandlerWebFlowViewController::
+    GetIconLabelBubbleSurroundingForegroundColor() const {
+  // TODO(crbug.com/549701781): The payment dialog header supports custom HTML
+  // head theme colors, while this icon view currently ignores them in favor of
+  // default Chrome theme colors.
+  return header_view()->GetColorProvider()->GetColor(kColorOmniboxText);
+}
+
+SkColor PaymentHandlerWebFlowViewController::GetIconLabelBubbleBackgroundColor()
+    const {
+  // TODO(crbug.com/549701781): The payment dialog header supports custom HTML
+  // head theme colors, while this icon view currently ignores them in favor of
+  // default Chrome theme colors.
+  return header_view()->GetColorProvider()->GetColor(
+      ui::kColorDialogBackground);
+}
+
+content::WebContents* PaymentHandlerWebFlowViewController::GetWebContents() {
+  return web_contents();
+}
+
+bool PaymentHandlerWebFlowViewController::IsEditingOrEmpty() const {
+  return false;
+}
+
+SkColor PaymentHandlerWebFlowViewController::GetSecurityChipColor(
+    security_state::SecurityLevel security_level) const {
+  ui::ColorId id = kColorOmniboxText;
+  if (security_level == security_state::DANGEROUS) {
+    id = kColorOmniboxSecurityChipDangerous;
   }
+  return header_view()->GetColorProvider()->GetColor(id);
+}
+
+LocationIconView* PaymentHandlerWebFlowViewController::location_icon_view() {
+  return views::AsViewClass<LocationIconView>(
+      location_icon_view_tracker_.view());
+}
+
+PermissionDashboardView*
+PaymentHandlerWebFlowViewController::permission_dashboard_view() {
+  return views::AsViewClass<PermissionDashboardView>(
+      permission_dashboard_view_tracker_.view());
+}
+
+void PaymentHandlerWebFlowViewController::OnIsCapturingVideoChanged(
+    content::WebContents* contents,
+    bool is_capturing_video) {
+  if (contents != web_contents()) {
+    return;
+  }
+  if (location_icon_view()) {
+    location_icon_view()->SetVisible(!is_capturing_video);
+  }
+  if (permission_dashboard_view()) {
+    // PermissionDashboardView initializes its chips as hidden, so both must be
+    // shown.
+    permission_dashboard_view()->SetVisible(is_capturing_video);
+    permission_dashboard_view()->GetIndicatorChip()->SetVisible(
+        is_capturing_video);
+  }
+}
+bool PaymentHandlerWebFlowViewController::ShowPageInfoDialog() {
+  content::WebContents* contents = GetWebContents();
+  if (!contents) {
+    return false;
+  }
+  views::View* const anchor_view = GetPageInfoIconView();
+  CHECK(anchor_view);
+
+  content::WebContents* parent_tab_contents = state()->GetWebContents();
+  std::unique_ptr<PageInfoBubbleSpecification> specification =
+      PageInfoBubbleSpecification::Builder(
+          views::BubbleAnchor(anchor_view),
+          dialog()->GetWidget()->GetNativeWindow(), contents,
+          contents->GetLastCommittedURL())
+          .AddGetBrowserCallback(base::BindRepeating(
+              [](content::WebContents* parent_contents,
+                 content::WebContents*) -> BrowserWindowInterface* {
+                return tabs::TabInterface::GetFromContents(parent_contents)
+                    ->GetBrowserWindowInterface();
+              },
+              parent_tab_contents))
+          .AddPageInfoClosingCallback(base::BindOnce(
+              &PaymentHandlerWebFlowViewController::OnPageInfoBubbleClosed,
+              weak_ptr_factory_.GetWeakPtr()))
+          .HideExtendedSiteInfo()
+          .Build();
+
+  views::BubbleDialogDelegateView* const bubble =
+      PageInfoBubbleView::CreatePageInfoBubble(std::move(specification));
+  bubble->SetHighlightedElement(
+      anchor_view == location_icon_view()
+          ? kAppIconElementId
+          : PermissionChipView::kIndicatorChipElementId);
+  bubble->GetWidget()->Show();
+  return true;
+}
+
+void PaymentHandlerWebFlowViewController::OnPageInfoBubbleClosed(
+    views::Widget::ClosedReason closed_reason,
+    bool reload_prompt) {
+  if (LocationIconView* icon = location_icon_view()) {
+    icon->MaybeAnimateIcon(/*open=*/false);
+  }
+}
+
+const LocationBarModel*
+PaymentHandlerWebFlowViewController::GetLocationBarModel() const {
+  return location_bar_model_.get();
+}
+
+ui::ImageModel PaymentHandlerWebFlowViewController::GetLocationIcon(
+    LocationIconView::Delegate::IconFetchedCallback on_icon_fetched) {
+  return ui::ImageModel::FromVectorIcon(
+      location_bar_model_->GetVectorIcon(),
+      GetSecurityChipColor(location_bar_model_->GetSecurityLevel()),
+      GetLayoutConstant(LayoutConstant::kLocationBarIconSize));
+}
+
+void PaymentHandlerWebFlowViewController::DidGetUserInteraction(
+    const blink::WebInputEvent& event) {
+  if (state()) {
+    state()->set_user_interaction_in_web_payment_app(true);
+  }
+}
+
+void PaymentHandlerWebFlowViewController::DidStopLoading() {
+  dialog()->HideLoadingView();
 }
 
 }  // namespace payments

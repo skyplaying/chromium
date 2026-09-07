@@ -14,9 +14,10 @@
 #include "base/memory/raw_ref.h"
 #include "base/timer/timer.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "components/signin/public/base/signin_buildflags.h"
 #include "components/sync/service/local_data_description.h"
 
-class Browser;
+class BrowserWindowInterface;
 class BatchUploadDelegate;
 
 namespace signin {
@@ -71,7 +72,7 @@ class BatchUploadService : public KeyedService {
   // profile. `dialog_shown_callback` returns whether the dialog was shown or
   // not.
   void OpenBatchUpload(
-      Browser* browser,
+      BrowserWindowInterface* browser,
       EntryPoint entry_point,
       base::OnceCallback<void(bool)> dialog_shown_callback = base::DoNothing(),
       base::OnceCallback<void()> dialog_closed_callback = base::DoNothing());
@@ -109,12 +110,16 @@ class BatchUploadService : public KeyedService {
   // Whether the profile is in the proper sign in state to see the dialog.
   bool IsUserEligibleToOpenDialog() const;
 
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
   // Changes the avatar button text to saving data and starts a timer that will
   // revert the button text on timeout.
-  void TriggerAvatarButtonSavingDataText(Browser* browser);
+  void TriggerAvatarButtonSavingDataText(BrowserWindowInterface* browser);
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
   // Callback to clear the overridden avatar text on timeout.
   void OnAvatarOverrideTextTimeout();
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
   // Resets part of the state related to the dialog lifetime.
   void ResetDialogState();
@@ -132,7 +137,7 @@ class BatchUploadService : public KeyedService {
     // Fields related to the dialog currently showing.
     struct DialogState {
       // Browser that is showing the dialog.
-      raw_ptr<Browser> browser_;
+      raw_ptr<BrowserWindowInterface> browser_;
       // Entry point of the dialog.
       EntryPoint entry_point_ = EntryPoint::kPasswordManagerSettings;
       // Called when the decision about showing the dialog is made.
@@ -145,6 +150,7 @@ class BatchUploadService : public KeyedService {
       ~DialogState();
     };
 
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
     // Fields related to the effect on the browser post accepting the dialog.
     struct SavingBrowserState {
       // Callback that will clear the modified text on the avatar button.
@@ -152,9 +158,12 @@ class BatchUploadService : public KeyedService {
       // Timer to clear the avatar override text.
       base::OneShotTimer avatar_override_timer_;
     };
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
     std::unique_ptr<DialogState> dialog_state_;
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
     std::unique_ptr<SavingBrowserState> saving_browser_state_;
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
     ResettableState();
     ~ResettableState();

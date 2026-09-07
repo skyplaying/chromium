@@ -121,10 +121,12 @@ Node* DOMPatchSupport::PatchNode(Node* node,
   auto* target_element = To<Element>(target_node);
 
   // FIXME: This code should use one of createFragment* in Serialization.h
-  if (IsA<HTMLDocument>(GetDocument()))
-    fragment->ParseHTML(markup, target_element, /*registry*/ nullptr);
-  else
+  if (IsA<HTMLDocument>(GetDocument())) {
+    fragment->ParseHTML(markup, target_element,
+                        node->GetTreeScope().customElementRegistry());
+  } else {
     fragment->ParseXML(markup, target_element, IGNORE_EXCEPTION);
+  }
 
   // Compose the old list.
   ContainerNode* parent_node = node->parentNode();
@@ -134,7 +136,7 @@ Node* DOMPatchSupport::PatchNode(Node* node,
     old_list.push_back(CreateDigest(child, nullptr));
 
   // Compose the new list.
-  String markup_copy = markup.LowerASCII();
+  String markup_copy = markup.ToAsciiLower();
   HeapVector<Member<Digest>> new_list;
   for (Node* child = parent_node->firstChild(); child != node;
        child = child->nextSibling())

@@ -8,6 +8,7 @@
 #include "base/command_line.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
+#include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
@@ -24,6 +25,7 @@
 #include "mojo/public/cpp/system/data_pipe_drainer.h"
 #include "services/tracing/public/cpp/perfetto/shared_memory.h"
 #include "services/tracing/public/cpp/perfetto/trace_packet_tokenizer.h"
+#include "services/tracing/public/cpp/trace_startup_config.h"
 #include "services/tracing/public/cpp/tracing_features.h"
 #include "services/tracing/public/mojom/perfetto_service.mojom.h"
 #include "services/tracing/public/mojom/tracing_service.mojom.h"
@@ -37,6 +39,7 @@
 #include "third_party/perfetto/include/perfetto/ext/tracing/core/trace_writer.h"
 #include "third_party/perfetto/include/perfetto/ext/tracing/core/tracing_service.h"
 #include "third_party/perfetto/include/perfetto/tracing/core/trace_config.h"
+#include "third_party/perfetto/protos/perfetto/common/tracing_service_state.gen.h"
 
 using ShmemMode = perfetto::SharedMemoryArbiter::ShmemMode;
 
@@ -80,19 +83,28 @@ class ProducerEndpoint : public perfetto::ProducerEndpoint,
   // perfetto::ProducerEndpoint implementation:
   void Disconnect() override {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    producer_->OnDisconnect();  // Will delete |this|.
+    OnMojoDisconnect();
+  }
+
+  bool is_connected() const {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    return producer_host_.is_bound();
   }
 
   void RegisterDataSource(
       const perfetto::DataSourceDescriptor& descriptor) override {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    producer_host_->RegisterDataSource(descriptor);
+    if (producer_host_) {
+      producer_host_->RegisterDataSource(descriptor);
+    }
   }
 
   void UpdateDataSource(
       const perfetto::DataSourceDescriptor& descriptor) override {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    producer_host_->UpdateDataSource(descriptor);
+    if (producer_host_) {
+      producer_host_->UpdateDataSource(descriptor);
+    }
   }
 
   void UnregisterDataSource(const std::string& name) override {
@@ -105,17 +117,27 @@ class ProducerEndpoint : public perfetto::ProducerEndpoint,
   void RegisterTraceWriter(uint32_t writer_id,
                            uint32_t target_buffer) override {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    producer_host_->RegisterTraceWriter(writer_id, target_buffer);
+    if (producer_host_) {
+      producer_host_->RegisterTraceWriter(writer_id, target_buffer);
+    }
   }
 
   void UnregisterTraceWriter(uint32_t writer_id) override {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    producer_host_->UnregisterTraceWriter(writer_id);
+    if (producer_host_) {
+      producer_host_->UnregisterTraceWriter(writer_id);
+    }
   }
 
   void CommitData(const perfetto::CommitDataRequest& commit,
                   CommitDataCallback callback = {}) override {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    if (!producer_host_) {
+      if (callback) {
+        callback();
+      }
+      return;
+    }
     auto commit_callback =
         callback
             ? base::BindOnce(
@@ -170,8 +192,10 @@ class ProducerEndpoint : public perfetto::ProducerEndpoint,
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     perfetto::CommitDataRequest commit;
     commit.set_flush_request_id(flush_request_id);
-    producer_host_->CommitData(commit,
-                               mojom::ProducerHost::CommitDataCallback());
+    if (producer_host_) {
+      producer_host_->CommitData(commit,
+                                 mojom::ProducerHost::CommitDataCallback());
+    }
   }
 
   void NotifyDataSourceStarted(
@@ -214,16 +238,24 @@ class ProducerEndpoint : public perfetto::ProducerEndpoint,
     producer_->OnTracingSetup();
   }
 
+  void SetupDataSource(
+      uint64_t id,
+      const perfetto::DataSourceConfig& data_source_config) override {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    ds_configs_[id] = data_source_config;
+    producer_->SetupDataSource(id, data_source_config);
+  }
+
   void StartDataSource(uint64_t id,
-                       const perfetto::DataSourceConfig& data_source_config,
                        StartDataSourceCallback callback) override {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     DCHECK(ds_start_callbacks_.find(id) == ds_start_callbacks_.end());
     ds_start_callbacks_[id] = std::move(callback);
     auto it_and_inserted = ds_instances_.insert(id);
     DCHECK(it_and_inserted.second);
-    producer_->SetupDataSource(id, data_source_config);
-    producer_->StartDataSource(id, data_source_config);
+    auto it = ds_configs_.find(id);
+    DCHECK(it != ds_configs_.end());
+    producer_->StartDataSource(id, it->second);
   }
 
   void StopDataSource(uint64_t id, StopDataSourceCallback callback) override {
@@ -231,6 +263,7 @@ class ProducerEndpoint : public perfetto::ProducerEndpoint,
     DCHECK(ds_stop_callbacks_.find(id) == ds_stop_callbacks_.end());
     ds_stop_callbacks_[id] = std::move(callback);
     ds_instances_.erase(id);
+    ds_configs_.erase(id);
     producer_->StopDataSource(id);
   }
 
@@ -270,11 +303,12 @@ class ProducerEndpoint : public perfetto::ProducerEndpoint,
                                 shmem_page_size_bytes_);
 
     producer_host_.Bind(std::move(host_remote));
+    producer_host_.set_disconnect_handler(base::BindOnce(
+        &ProducerEndpoint::OnMojoDisconnect, base::Unretained(this)));
     receiver_ = std::make_unique<mojo::Receiver<mojom::ProducerClient>>(
         this, std::move(client_receiver));
     receiver_->set_disconnect_handler(base::BindOnce(
-        [](ProducerEndpoint* endpoint) { endpoint->receiver_->reset(); },
-        base::Unretained(this)));
+        &ProducerEndpoint::OnMojoDisconnect, base::Unretained(this)));
 
     // The shared memory arbiter can call producer host methods if it has
     // uncommitted requests at this moment. So bind it to the producer only
@@ -296,14 +330,25 @@ class ProducerEndpoint : public perfetto::ProducerEndpoint,
   }
 
  private:
+  void OnMojoDisconnect() {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    receiver_.reset();
+    producer_host_.reset();
+    if (producer_) {
+      producer_.ExtractAsDangling()->OnDisconnect();
+    }
+  }
+
   SEQUENCE_CHECKER(sequence_checker_);
 
-  const raw_ptr<perfetto::Producer> producer_;
+  raw_ptr<perfetto::Producer> producer_;
 
   base::flat_map<perfetto::DataSourceInstanceID, StartDataSourceCallback>
       ds_start_callbacks_;
   base::flat_map<perfetto::DataSourceInstanceID, StopDataSourceCallback>
       ds_stop_callbacks_;
+  base::flat_map<perfetto::DataSourceInstanceID, perfetto::DataSourceConfig>
+      ds_configs_;
   base::flat_set<perfetto::DataSourceInstanceID> ds_instances_;
 
   std::unique_ptr<mojo::Receiver<mojom::ProducerClient>> receiver_;
@@ -335,7 +380,9 @@ class ConsumerEndpoint : public perfetto::ConsumerEndpoint,
 
   ~ConsumerEndpoint() override {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    consumer_.ExtractAsDangling()->OnDisconnect();  // May delete |consumer_|.
+    if (consumer_) {
+      consumer_.ExtractAsDangling()->OnDisconnect();  // May delete |consumer_|.
+    }
   }
 
   base::WeakPtr<ConsumerEndpoint> GetWeakPtr() {
@@ -417,7 +464,6 @@ class ConsumerEndpoint : public perfetto::ConsumerEndpoint,
         tracing_session_host_->DisableTracingAndEmitJson(
             data_source.config().chrome_config().json_agent_label_filter(),
             std::move(producer_handle),
-            data_source.config().chrome_config().privacy_filtering_enabled(),
             base::BindOnce(&ConsumerEndpoint::OnReadBuffersComplete,
                            base::Unretained(this)));
         return;
@@ -490,10 +536,23 @@ class ConsumerEndpoint : public perfetto::ConsumerEndpoint,
   }
 
   void QueryServiceState(QueryServiceStateArgs,
-                         QueryServiceStateCallback) override {
+                         QueryServiceStateCallback callback) override {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-    // TODO(skyostil): Implement service state querying.
-    NOTREACHED();
+    if (!consumer_host_.is_bound()) {
+      perfetto::TracingServiceState empty_state;
+      callback(false, empty_state);
+      return;
+    }
+    consumer_host_->QueryServiceState(base::BindOnce(
+        [](QueryServiceStateCallback callback, bool success,
+           const std::string& service_state_data) {
+          perfetto::TracingServiceState service_state;
+          if (success) {
+            success = service_state.ParseFromString(service_state_data);
+          }
+          callback(success, service_state);
+        },
+        std::move(callback)));
   }
 
   void QueryCapabilities(QueryCapabilitiesCallback) override {
@@ -519,16 +578,9 @@ class ConsumerEndpoint : public perfetto::ConsumerEndpoint,
       });
     }
 
-    bool privacy_filtering_enabled = false;
-    for (const auto& data_source : trace_config_.data_sources()) {
-      if (data_source.config().chrome_config().privacy_filtering_enabled()) {
-        privacy_filtering_enabled = true;
-      }
-    }
     consumer_host_->CloneSession(
         tracing_session_host_.BindNewPipeAndPassReceiver(),
         tracing_session_client_.BindNewPipeAndPassRemote(), *uuid,
-        privacy_filtering_enabled,
         base::BindOnce(
             [](ConsumerEndpoint* endpoint, bool success,
                const std::string& error, const base::Token& uuid) {
@@ -622,6 +674,13 @@ class ConsumerEndpoint : public perfetto::ConsumerEndpoint,
     tracing_session_client_.reset();
     drainer_.reset();
     tokenizer_.reset();
+
+    if (consumer_) {
+      perfetto::Consumer* consumer = consumer_.ExtractAsDangling();
+      consumer_ = nullptr;
+      consumer->OnDisconnect();
+      return;
+    }
   }
 
   void OnReadBuffersComplete() {
@@ -693,11 +752,12 @@ PerfettoTracingBackend::ConnectProducer(const ConnectProducerArgs& args) {
     shmem_page_size_hint = features::kPerfettoSMBPageSizeBytes.Get();
 
   if (args.use_producer_provided_smb) {
-    auto* command_line = base::CommandLine::ForCurrentProcess();
     base::UnsafeSharedMemoryRegion unsafe_shm;
-    if (command_line->HasSwitch(switches::kTraceBufferHandle)) {
+    const auto& trace_buffer_handle =
+        TraceStartupConfig::GetInstance().GetTraceBufferHandle();
+    if (trace_buffer_handle) {
       auto shmem_region = base::shared_memory::UnsafeSharedMemoryRegionFrom(
-          command_line->GetSwitchValueASCII(switches::kTraceBufferHandle));
+          *trace_buffer_handle);
       if (shmem_region->IsValid()) {
         DCHECK_EQ(shmem_size_hint, shmem_region->GetSize());
         unsafe_shm = std::move(shmem_region.value());
@@ -796,6 +856,13 @@ void PerfettoTracingBackend::BindProducerConnectionIfNecessary() {
 
   if (!producer_endpoint_) {
     return;
+  }
+
+  if (producer_endpoint_->is_connected()) {
+    producer_endpoint_->Disconnect();
+    if (!producer_endpoint_) {
+      return;
+    }
   }
 
   mojo::PendingRemote<mojom::PerfettoService> perfetto_service;

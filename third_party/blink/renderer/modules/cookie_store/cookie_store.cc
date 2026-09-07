@@ -11,6 +11,8 @@
 #include <utility>
 
 #include "net/base/features.h"
+#include "net/cookies/cookie_inclusion_status.h"
+#include "net/cookies/cookie_util.h"
 #include "services/network/public/cpp/is_potentially_trustworthy.h"
 #include "services/network/public/mojom/restricted_cookie_manager.mojom-blink.h"
 #include "third_party/blink/public/common/features_generated.h"
@@ -35,6 +37,7 @@
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
@@ -44,6 +47,17 @@
 namespace blink {
 
 namespace {
+
+bool IsHttpWhitespace(UChar c) {
+  return c == ' ' || c == '\t';
+}
+
+String StripHttpWhitespace(const String& str) {
+  if (!RuntimeEnabledFeatures::CookieStoreAPIWhitespaceStrippingEnabled()) {
+    return str;
+  }
+  return str.StripWhiteSpace(IsHttpWhitespace);
+}
 
 // Returns null if and only if an exception is thrown.
 network::mojom::blink::CookieManagerGetOptionsPtr ToBackendOptions(
@@ -55,7 +69,7 @@ network::mojom::blink::CookieManagerGetOptionsPtr ToBackendOptions(
   backend_options->match_type = network::mojom::blink::CookieMatchType::EQUALS;
 
   if (options->hasName()) {
-    backend_options->name = options->name();
+    backend_options->name = StripHttpWhitespace(options->name());
   } else {
     // No name provided. Use a filter that matches all cookies. This overrides
     // a user-provided matchType.
@@ -73,9 +87,9 @@ network::mojom::blink::RestrictedCanonicalCookieParamsPtr ToCookieParams(
     const CookieInit* options,
     ExceptionState& exception_state,
     ExecutionContext* execution_context) {
-  const String& name = options->name();
-  const String& value = options->value();
-  if (name.empty() && value.Contains('=')) {
+  const String name = StripHttpWhitespace(options->name());
+  const String value = StripHttpWhitespace(options->value());
+  if (name.empty() && value.contains('=')) {
     exception_state.ThrowTypeError(
         "Cookie value cannot contain '=' if the name is empty");
     return nullptr;
@@ -85,7 +99,7 @@ network::mojom::blink::RestrictedCanonicalCookieParamsPtr ToCookieParams(
         "Cookie name and value both cannot be empty");
     return nullptr;
   }
-  if (name.Contains('=')) {
+  if (name.contains('=')) {
     exception_state.ThrowTypeError("Cookie name cannot contain '='");
     return nullptr;
   }
@@ -112,24 +126,21 @@ network::mojom::blink::RestrictedCanonicalCookieParamsPtr ToCookieParams(
         base::Time::FromMillisecondsSinceUnixEpoch(options->expires().value());
   }
 
-  String cookie_url_host = cookie_url.Host().ToString();
   String domain;
   // Trying to set `__http-` prefixed cookie will be rejected further down by
   // CreateSanitizedCookie regardless of the condition below. Its role is to
   // provide a more meaningful exception message than "Cookie was malformed..".
-  const bool is_http_prefix = name.StartsWithIgnoringASCIICase("__http-");
+  const bool is_http_prefix = name.StartsWithIgnoringAsciiCase("__http-");
   const bool is_host_http_prefix =
-      name.StartsWithIgnoringASCIICase("__host-http-");
+      name.StartsWithIgnoringAsciiCase("__host-http-");
   if (is_http_prefix || is_host_http_prefix) {
-    StringBuilder builder;
-    UNSAFE_TODO(builder.AppendFormat(
-        "Cookies with \"%s\" prefix cannot be set using the CookieStore API.",
-        is_http_prefix ? "__Http-" : "__Host-Http-"));
-    exception_state.ThrowTypeError(builder.ToString());
+    exception_state.ThrowTypeError(
+        StrCat({"Cookies with \"", is_http_prefix ? "__Http-" : "__Host-Http-",
+                "\" prefix cannot be set using the CookieStore API."}));
     return nullptr;
   }
   const bool is_host_prefixed_cookie =
-      name.StartsWithIgnoringASCIICase("__host-");
+      name.StartsWithIgnoringAsciiCase("__host-");
   if (!options->domain().IsNull()) {
     if (is_host_prefixed_cookie) {
       exception_state.ThrowTypeError(
@@ -139,14 +150,15 @@ network::mojom::blink::RestrictedCanonicalCookieParamsPtr ToCookieParams(
     // The leading dot (".") from the domain attribute is stripped in the
     // Set-Cookie header, for compatibility. This API doesn't have compatibility
     // constraints, so reject the edge case outright.
-    if (options->domain().StartsWith(".")) {
+    if (options->domain().starts_with('.')) {
       exception_state.ThrowTypeError("Cookie domain cannot start with \".\"");
       return nullptr;
     }
 
-    domain = StrCat({".", options->domain()}).LowerASCII();
-    if (!cookie_url_host.EndsWith(domain) &&
-        cookie_url_host != options->domain().LowerASCII()) {
+    domain = StrCat({".", options->domain()}).ToAsciiLower();
+    net::CookieInclusionStatus status;
+    if (!net::cookie_util::GetCookieDomainWithString(GURL(cookie_url),
+                                                     domain.Utf8(), status)) {
       exception_state.ThrowTypeError(
           "Cookie domain must domain-match current host");
       return nullptr;
@@ -166,11 +178,11 @@ network::mojom::blink::RestrictedCanonicalCookieParamsPtr ToCookieParams(
           "Cookies with \"__Host-\" prefix cannot have a non-\"/\" path");
       return nullptr;
     }
-    if (!path.StartsWith("/")) {
+    if (!path.starts_with('/')) {
       exception_state.ThrowTypeError("Cookie path must start with \"/\"");
       return nullptr;
     }
-    if (!path.EndsWith("/")) {
+    if (!path.ends_with('/')) {
       path = StrCat({path, "/"});
     }
   }
@@ -252,7 +264,7 @@ KURL CookieUrlForRead(const CookieStoreGetOptions* options,
         default_cookie_url.GetString(),
         To<ServiceWorkerGlobalScope>(context)->serviceWorker()->scriptURL());
 
-    if (!cookie_url.GetString().StartsWith(default_cookie_url.GetString())) {
+    if (!cookie_url.GetString().starts_with(default_cookie_url.GetString())) {
       exception_state.ThrowTypeError("URL must be within Service Worker scope");
       return KURL();
     }
@@ -412,9 +424,10 @@ ScriptPromise<IDLUndefined> CookieStore::Delete(
   UseCounter::Count(CurrentExecutionContext(script_state->GetIsolate()),
                     WebFeature::kCookieStoreAPI);
 
+  const String stripped_name = StripHttpWhitespace(name);
   CookieInit* set_options = CookieInit::Create();
-  set_options->setName(name);
-  set_options->setValue(name.empty() ? "deleted" : "");
+  set_options->setName(stripped_name);
+  set_options->setValue(stripped_name.empty() ? "deleted" : "");
   set_options->setExpires(0);
   return DoWrite(script_state, set_options, exception_state);
 }
@@ -423,9 +436,10 @@ ScriptPromise<IDLUndefined> CookieStore::Delete(
     ScriptState* script_state,
     const CookieStoreDeleteOptions* options,
     ExceptionState& exception_state) {
+  const String stripped_name = StripHttpWhitespace(options->name());
   CookieInit* set_options = CookieInit::Create();
-  set_options->setName(options->name());
-  set_options->setValue(options->name().empty() ? "deleted" : "");
+  set_options->setName(stripped_name);
+  set_options->setValue(stripped_name.empty() ? "deleted" : "");
   set_options->setExpires(0);
   set_options->setDomain(options->domain());
   set_options->setPath(options->path());
@@ -595,6 +609,12 @@ ScriptPromise<IDLUndefined> CookieStore::DoWrite(
   bool should_apply_devtools_overrides = false;
   probe::ShouldApplyDevtoolsCookieSettingOverrides(
       GetExecutionContext(), &should_apply_devtools_overrides);
+
+  if (auto* window = DynamicTo<LocalDOMWindow>(context)) {
+    if (Document* document = window->document()) {
+      document->IncrementCookieModificationCount();
+    }
+  }
 
   auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(
       script_state, exception_state.GetContext());

@@ -28,6 +28,11 @@ namespace blink {
 class ImageToBufferCopier;
 struct SharedImageHolder;
 
+struct XRLayerUpdate {
+  device::LayerId layer_id;
+  std::unique_ptr<SharedImageHolder> current_frame_image;
+};
+
 class PLATFORM_EXPORT XRFrameTransport final
     : public GarbageCollected<XRFrameTransport>,
       public device::mojom::blink::XRPresentationClient {
@@ -53,12 +58,12 @@ class PLATFORM_EXPORT XRFrameTransport final
 
   bool FrameSubmit(device::mojom::blink::XRPresentationProvider*,
                    XRFrameTransportDelegate* delegate,
-                   Vector<device::LayerId> layer_ids,
-                   Vector<std::unique_ptr<SharedImageHolder>> image_refs,
+                   Vector<XRLayerUpdate> layers,
+                   gpu::SharedImageExportResult camera_export_result,
                    int16_t vr_frame_id);
 
   void FrameSubmitMissing(device::mojom::blink::XRPresentationProvider*,
-                          XRFrameTransportDelegate* delegate,
+                          gpu::SharedImageExportResult camera_export_result,
                           int16_t vr_frame_id);
 
   using OnSubmitFrameTransferredCallback = base::RepeatingCallback<

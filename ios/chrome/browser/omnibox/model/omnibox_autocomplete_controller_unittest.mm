@@ -16,19 +16,20 @@
 #import "components/omnibox/browser/autocomplete_match_test_util.h"
 #import "components/omnibox/browser/autocomplete_result.h"
 #import "components/omnibox/browser/fake_autocomplete_provider_client.h"
-#import "components/omnibox/browser/omnibox_client.h"
 #import "components/omnibox/browser/omnibox_popup_selection.h"
 #import "components/omnibox/browser/omnibox_pref_names.h"
 #import "components/omnibox/browser/search_provider.h"
-#import "components/omnibox/browser/test_omnibox_client.h"
 #import "components/open_from_clipboard/fake_clipboard_recent_content.h"
 #import "components/prefs/testing_pref_service.h"
+#import "ios/chrome/browser/omnibox/model/fake_omnibox_client.h"
 #import "ios/chrome/browser/omnibox/model/omnibox_autocomplete_controller+Testing.h"
 #import "ios/chrome/browser/omnibox/model/omnibox_autocomplete_controller_delegate.h"
+#import "ios/chrome/browser/omnibox/model/omnibox_client_ios.h"
 #import "ios/chrome/browser/omnibox/model/omnibox_metrics_recorder.h"
 #import "ios/chrome/browser/omnibox/model/omnibox_text_model.h"
 #import "ios/chrome/browser/shared/model/prefs/browser_prefs.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
+#import "ios/chrome/browser/shared/model/profile/test/test_profile_ios.h"
 #import "ios/chrome/test/testing_application_context.h"
 #import "net/base/apple/url_conversions.h"
 #import "testing/gmock/include/gmock/gmock.h"
@@ -81,6 +82,27 @@ class MockAutocompleteController : public AutocompleteController {
   metrics::OmniboxEventProto::OmniboxPosition omnibox_position;
 };
 
+class MockFakeOmniboxClient : public FakeOmniboxClient {
+ public:
+  explicit MockFakeOmniboxClient(ProfileIOS* profile)
+      : FakeOmniboxClient(profile) {}
+
+  MOCK_METHOD(void,
+              OnAutocompleteAccept,
+              (const GURL&,
+               TemplateURLRef::PostContent*,
+               WindowOpenDisposition,
+               ui::PageTransition,
+               AutocompleteMatchType::Type,
+               base::TimeTicks,
+               bool,
+               bool,
+               const std::u16string&,
+               const AutocompleteMatch&,
+               const AutocompleteMatch&),
+              (override));
+};
+
 }  // namespace
 
 @interface TestOmniboxAutocompleteController : OmniboxAutocompleteController
@@ -104,6 +126,8 @@ class MockAutocompleteController : public AutocompleteController {
 class OmniboxAutocompleteControllerTest : public PlatformTest {
  public:
   OmniboxAutocompleteControllerTest() {
+    profile_ = TestProfileIOS::Builder().Build();
+
     auto clipboard = std::make_unique<FakeClipboardRecentContent>();
     clipboard_ = clipboard.get();
     ClipboardRecentContent::SetInstance(std::move(clipboard));
@@ -112,7 +136,7 @@ class OmniboxAutocompleteControllerTest : public PlatformTest {
     RegisterLocalStatePrefs(local_state_->registry());
     TestingApplicationContext::GetGlobal()->SetLocalState(local_state_.get());
 
-    omnibox_client_ = std::make_unique<TestOmniboxClient>();
+    omnibox_client_ = std::make_unique<MockFakeOmniboxClient>(profile_.get());
 
     autocomplete_controller_ = std::make_unique<MockAutocompleteController>();
 
@@ -190,9 +214,10 @@ class OmniboxAutocompleteControllerTest : public PlatformTest {
   base::test::TaskEnvironment environment_;
   // Application pref service.
   std::unique_ptr<TestingPrefServiceSimple> local_state_;
+  std::unique_ptr<TestProfileIOS> profile_;
   TestOmniboxAutocompleteController* controller_;
   std::unique_ptr<MockAutocompleteController> autocomplete_controller_;
-  std::unique_ptr<TestOmniboxClient> omnibox_client_;
+  std::unique_ptr<MockFakeOmniboxClient> omnibox_client_;
   raw_ptr<FakeClipboardRecentContent> clipboard_;
   std::unique_ptr<OmniboxTextModel> omnibox_text_model_;
   OmniboxMetricsRecorder* omnibox_metrics_recorder_;
@@ -478,21 +503,4 @@ TEST_F(OmniboxAutocompleteControllerTest, IPv4AddressPartsCount) {
       histogram_tester.GetAllSamples(kIPv4AddressPartsCountHistogramName),
       testing::ElementsAre(base::Bucket(2, 1), base::Bucket(3, 1),
                            base::Bucket(4, 1)));
-}
-
-// Tests AnswerInSuggest logging.
-TEST_F(OmniboxAutocompleteControllerTest, LogAnswerUsed) {
-  base::HistogramTester histogram_tester;
-  AutocompleteMatch match(autocomplete_controller_->search_provider(), 0, false,
-                          AutocompleteMatchType::SEARCH_WHAT_YOU_TYPED);
-  match.answer_type = omnibox::ANSWER_TYPE_WEATHER;
-  match.destination_url = GURL("https://foo");
-  [controller_ openMatch:match
-               popupSelection:OmniboxPopupSelection(0)
-        windowOpenDisposition:WindowOpenDisposition::CURRENT_TAB
-              alternateNavURL:GURL()
-                   pastedText:u""
-      matchSelectionTimestamp:base::TimeTicks()];
-  histogram_tester.ExpectUniqueSample("Omnibox.SuggestionUsed.AnswerInSuggest",
-                                      8, 1);
 }

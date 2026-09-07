@@ -10,38 +10,26 @@
 
 namespace switches {
 
-#if BUILDFLAG(IS_ANDROID)
-BASE_FEATURE(kRestrictLegacySearchEnginePromoOnFormFactors,
-             base::FEATURE_ENABLED_BY_DEFAULT);
+#if BUILDFLAG(IS_IOS)
+BASE_FEATURE(kTaiyakiAllSurfaces, base::FEATURE_DISABLED_BY_DEFAULT);
 
-BASE_FEATURE(kResolveRegionalCapabilitiesFromDevice,
-             base::FEATURE_ENABLED_BY_DEFAULT);
+BASE_FEATURE(kSearchEngineChoiceScreenSnackbar,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+bool IsSearchEngineChoiceScreenSnackbarEnabled() {
+  return base::FeatureList::IsEnabled(kSearchEngineChoiceScreenSnackbar);
+}
+#endif  // BUILDFLAG(IS_IOS)
+
+#if !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_ANDROID)
+bool IsDynamicProfileCountryEnabled() {
+  return base::FeatureList::IsEnabled(kDynamicProfileCountry);
+}
 #endif
 
-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
-BASE_FEATURE(kTaiyaki, base::FEATURE_ENABLED_BY_DEFAULT);
-
-namespace {
-constexpr base::FeatureParam<RegionalCapabilitiesChoiceScreenSurface>::Option
-    kChoiceScreenSurfaceOptions[] = {
-        {RegionalCapabilitiesChoiceScreenSurface::kAll, "all"},
-        {RegionalCapabilitiesChoiceScreenSurface::kInFreOnly, "fre_only"}};
-}  // namespace
-
-const base::FeatureParam<RegionalCapabilitiesChoiceScreenSurface>
-    kTaiyakiChoiceScreenSurface{
-        &kTaiyaki, "choice_screen_surface",
-        RegionalCapabilitiesChoiceScreenSurface::kInFreOnly,
-        &kChoiceScreenSurfaceOptions};
-#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
-
-BASE_FEATURE(kDynamicProfileCountry,
-#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_ANDROID)
-             base::FEATURE_ENABLED_BY_DEFAULT
-#else
-             base::FEATURE_DISABLED_BY_DEFAULT
-#endif
-);
+#if !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_ANDROID)
+BASE_FEATURE(kDynamicProfileCountry, base::FEATURE_DISABLED_BY_DEFAULT);
+#endif  // !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_ANDROID)
 
 BASE_FEATURE(kCurrentDseHighlightOnChoiceScreenSupport,
              base::FEATURE_ENABLED_BY_DEFAULT);
@@ -50,6 +38,18 @@ BASE_FEATURE(kWaffleRestrictToAssociatedCountries,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kStrictAssociatedCountriesCheck,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kPrepopulatedEnginesMigration, base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kPrepopulatedEnginesShadowVariants,
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+bool ArePrepopulatedEnginesShadowVariantsEnabled() {
+  return base::FeatureList::IsEnabled(kPrepopulatedEnginesShadowVariants);
+}
+
+BASE_FEATURE(kApplySearchEngineTypeMigration,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
 }  // namespace switches

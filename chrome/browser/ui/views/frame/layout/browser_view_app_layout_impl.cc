@@ -7,14 +7,17 @@
 #include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
 #include "build/build_config.h"
+#include "chrome/browser/ui/immersive/immersive_mode_controller.h"
 #include "chrome/browser/ui/layout_constants.h"
-#include "chrome/browser/ui/views/frame/horizontal_tab_strip_region_view.h"
-#include "chrome/browser/ui/views/frame/immersive_mode_controller.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/layout/browser_view_layout_delegate.h"
 #include "chrome/browser/ui/views/frame/layout/browser_view_layout_impl.h"
 #include "chrome/browser/ui/views/frame/layout/browser_view_layout_params.h"
+#include "chrome/browser/ui/views/frame/multi_contents_view.h"
+#include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
 #include "chrome/browser/ui/views/infobars/infobar_container_view.h"
 #include "chrome/browser/ui/views/web_apps/frame_toolbar/web_app_frame_toolbar_view.h"
+#include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/text_constants.h"
 #include "ui/views/controls/label.h"
@@ -78,18 +81,25 @@ gfx::Rect GetBoundsBetweenExclusionZones(const BrowserLayoutParams& params) {
 
 BrowserViewAppLayoutImpl::BrowserViewAppLayoutImpl(
     std::unique_ptr<BrowserViewLayoutDelegate> delegate,
-    Browser* browser,
-    BrowserViewLayoutViews views)
-    : BrowserViewLayoutImpl(std::move(delegate), browser, std::move(views)) {}
+    BrowserViewLayoutViews views,
+    bool is_web_app)
+    : BrowserViewLayoutImpl(std::move(delegate), std::move(views)),
+      is_web_app_(is_web_app) {}
 
 BrowserViewAppLayoutImpl::~BrowserViewAppLayoutImpl() = default;
 
 gfx::Size BrowserViewAppLayoutImpl::GetMinimumSize(
     const views::View* host) const {
-  // The minimum size of a window is unrestricted for a borderless mode app.
-  if (delegate().GetBorderlessModeEnabled()) {
+  // The minimum size of a window is unrestricted for a unframed mode app.
+  if (delegate().GetUnframedModeEnabled()) {
     return gfx::Size(1, 1);
   }
+
+  const auto layout =
+      delegate().GetBrowserLayoutParams(/*use_browser_bounds=*/false);
+  const int exclusion_width =
+      base::ClampCeil(layout.leading_exclusion.ContentWithPadding().width() +
+                      layout.trailing_exclusion.ContentWithPadding().width());
 
   const gfx::Size title_size =
       views().web_app_window_title && views().web_app_window_title->GetVisible()
@@ -107,13 +117,17 @@ gfx::Size BrowserViewAppLayoutImpl::GetMinimumSize(
           : gfx::Size();
   const gfx::Size infobar_container_size =
       views().infobar_container->GetMinimumSize();
-  gfx::Size contents_size = views().contents_container->GetMinimumSize();
-  contents_size.SetToMin(gfx::Size(1, 1));
+  gfx::Size contents_size = views().multi_contents_view->GetMinimumSize();
+
+  // For full PWAs, there is a minimum content width.
+  if (is_web_app_) {
+    contents_size.SetToMax(gfx::Size(kMainBrowserContentsMinimumWidth, 1));
+  }
 
   const int width =
-      std::max({web_app_toolbar_size.width() +
+      std::max({exclusion_width + web_app_toolbar_size.width() +
                     std::max(tabstrip_size.width(), title_size.width()),
-                infobar_container_size.width()});
+                infobar_container_size.width(), contents_size.width()});
   const int height =
       std::max({title_size.height(), web_app_toolbar_size.height(),
                 tabstrip_size.height()}) +
@@ -174,11 +188,11 @@ BrowserViewAppLayoutImpl::CalculateProposedLayout(
   }
 
   // Lay out contents container.
-  CHECK(
-      IsParentedToAndVisible(views().contents_container, views().browser_view));
+  CHECK(IsParentedToAndVisible(views().multi_contents_view,
+                               views().browser_view));
   gfx::Rect contents_bounds = params.visual_client_area;
   contents_bounds.set_height(std::max(contents_bounds.height(), 1));
-  layout.AddChild(views().contents_container, contents_bounds);
+  layout.AddChild(views().multi_contents_view, contents_bounds);
 
   // If certain views were not laid out, make sure they're hidden to avoid
   // visual artifacts.
@@ -240,14 +254,15 @@ void BrowserViewAppLayoutImpl::CalculateTitlebarLayout(
     BrowserLayoutParams& params) const {
   const bool should_draw_toolbar = delegate().ShouldDrawWebAppFrameToolbar();
   gfx::Rect full_titlebar_bounds;
-  if (!delegate().GetBorderlessModeEnabled()) {
+  if (!delegate().GetUnframedModeEnabled()) {
     full_titlebar_bounds =
         should_draw_toolbar
             ? GetBoundsWithExclusion(params, views().web_app_frame_toolbar)
             : GetBoundsBetweenExclusionZones(params);
   }
   const bool tabstrip_enabled =
-      delegate().ShouldLayoutTabStrip() && delegate().ShouldDrawTabStrip();
+      delegate().ShouldLayoutTabStrip() &&
+      delegate().GetTabStripType() == TabStripType::kHorizontal;
   const bool overlay_controls_enabled =
       delegate().IsWindowControlsOverlayEnabled();
   CHECK(!tabstrip_enabled || !overlay_controls_enabled)

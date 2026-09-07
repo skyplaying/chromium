@@ -17,10 +17,8 @@
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_activity_simulator.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
-#include "chrome/test/base/test_browser_window.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/test/web_contents_tester.h"
@@ -101,8 +99,7 @@ TEST_P(GeminiAppTabHelperTest, RecordsPageVisitHistograms) {
   constexpr char kRelativeFilename[] = "./filename";
 
   // Pages.
-  const auto pages =
-      base::EnumSet<Page, Page::kMinValue, Page::kMaxValue>::All();
+  const auto pages = base::EnumSet<Page>::All();
 
   // Create multiple URLs for each page.
   std::map<GURL, Page> page_urls;

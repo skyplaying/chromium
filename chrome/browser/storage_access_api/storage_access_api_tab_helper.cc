@@ -33,8 +33,8 @@ void StorageAccessAPITabHelper::FrameReceivedUserActivation(
   }
 #endif
 
-  if (rfh->GetLastCommittedOrigin().opaque() ||
-      rfh->GetParentOrOuterDocument()->GetLastCommittedOrigin().opaque()) {
+  if (rfh->GetParentOrOuterDocument()->GetLastCommittedOrigin().opaque() ||
+      rfh->IsStorageAccessRestricted()) {
     return;
   }
 

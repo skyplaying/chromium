@@ -23,7 +23,9 @@ static_assert(sizeof(base::stat_wrapper_t::st_size) >= 8);
 
 #include "base/check_op.h"
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/feature_list.h"
+#include "base/files/file_tracing.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
@@ -531,6 +533,7 @@ File::Error File::OSErrorToFileError(int saved_errno) {
     case EISDIR:
     case EROFS:
     case EPERM:
+    case EAGAIN:  // EWOULDBLOCK has the same value on all supported platforms.
       return FILE_ERROR_ACCESS_DENIED;
     case EBUSY:
     case ETXTBSY:
@@ -571,7 +574,7 @@ void File::DoInitialize(const FilePath& path, uint32_t flags) {
 
   if (flags & FLAG_CREATE_ALWAYS) {
     DCHECK(!open_flags);
-    DCHECK(flags & FLAG_WRITE);
+    DCHECK(flags & (FLAG_WRITE | FLAG_APPEND));
     open_flags = O_CREAT | O_TRUNC;
   }
 
@@ -605,6 +608,10 @@ void File::DoInitialize(const FilePath& path, uint32_t flags) {
     open_flags |= O_APPEND | O_RDWR;
   } else if (flags & FLAG_APPEND) {
     open_flags |= O_APPEND | O_WRONLY;
+  }
+
+  if (flags & FLAG_NO_FOLLOW) {
+    open_flags |= O_NOFOLLOW;
   }
 
   static_assert(O_RDONLY == 0, "O_RDONLY must equal zero");

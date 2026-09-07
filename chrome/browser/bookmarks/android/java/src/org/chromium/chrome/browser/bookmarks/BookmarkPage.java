@@ -5,18 +5,19 @@
 package org.chromium.chrome.browser.bookmarks;
 
 import android.app.Activity;
-import android.content.ComponentName;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.back_press.BackPressManager;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
-import org.chromium.chrome.browser.price_tracking.PriceDropNotificationManagerFactory;
+import org.chromium.chrome.browser.price_tracking.PriceDropNotificationManager;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.browser.ui.native_page.BasicNativePage;
 import org.chromium.chrome.browser.ui.native_page.NativePageHost;
+import org.chromium.chrome.browser.ui.signin.SigninAndHistorySyncActivityLauncher;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
+import org.chromium.components.browser_ui.device_lock.DeviceLockActivityLauncher;
 import org.chromium.components.embedder_support.util.UrlConstants;
 import org.chromium.ui.base.ActivityResultTracker;
 import org.chromium.ui.base.WindowAndroid;
@@ -30,6 +31,9 @@ public class BookmarkPage extends BasicNativePage {
     private final BookmarkOpener mBookmarkOpener;
     private final String mTitle;
 
+    // Nullable after destruction of BookmarkPage.
+    private @Nullable BookmarkUiPrefs mBookmarkUiPrefs;
+
     /**
      * Create a new instance of the bookmarks page.
      *
@@ -41,7 +45,12 @@ public class BookmarkPage extends BasicNativePage {
      * @param activityResultTracker Tracker of activity results.
      * @param profile The Profile associated with the bookmark UI.
      * @param host A NativePageHost to load urls.
-     * @param componentName The current activity component, used to open bookmarks.
+     * @param bookmarkOpener Used to open bookmarks.
+     * @param bookmarkManagerOpener Used to open bookmark manager.
+     * @param priceDropNotificationManager Manager for price drop notifications.
+     * @param signinAndHistorySyncActivityLauncher Launcher for signin and history sync activities.
+     * @param deviceLockActivityLauncher Launcher for device lock activities.
+     * @param backPressManager BackPressManager for processing back press events.
      */
     public BookmarkPage(
             WindowAndroid windowAndroid,
@@ -51,18 +60,17 @@ public class BookmarkPage extends BasicNativePage {
             ActivityResultTracker activityResultTracker,
             Profile profile,
             NativePageHost host,
-            @Nullable ComponentName componentName,
+            BookmarkOpener bookmarkOpener,
+            BookmarkManagerOpener bookmarkManagerOpener,
+            PriceDropNotificationManager priceDropNotificationManager,
+            SigninAndHistorySyncActivityLauncher signinAndHistorySyncActivityLauncher,
+            DeviceLockActivityLauncher deviceLockActivityLauncher,
             BackPressManager backPressManager) {
         super(host);
 
         mTitle = host.getContext().getString(R.string.bookmarks);
-
-        mBookmarkOpener =
-                new BookmarkOpenerImpl(
-                        () -> BookmarkModel.getForProfile(profile),
-                        /* context= */ host.getContext(),
-                        componentName);
-
+        mBookmarkOpener = bookmarkOpener;
+        mBookmarkUiPrefs = new BookmarkUiPrefs(ChromeSharedPreferences.getInstance());
         // Provide the BackPressManager to the coordinator so it can manage itself.
         // The logic in the coordinator ensures that there is only one NATIVE_PAGE handler set
         // at a time.
@@ -75,12 +83,14 @@ public class BookmarkPage extends BasicNativePage {
                         bottomSheetControllerSupplier,
                         activityResultTracker,
                         profile,
-                        new BookmarkUiPrefs(ChromeSharedPreferences.getInstance()),
+                        mBookmarkUiPrefs,
                         mBookmarkOpener,
-                        new BookmarkManagerOpenerImpl(),
-                        PriceDropNotificationManagerFactory.create(profile),
+                        bookmarkManagerOpener,
+                        priceDropNotificationManager,
                         host::createEdgeToEdgePadAdjuster,
-                        backPressManager);
+                        backPressManager,
+                        signinAndHistorySyncActivityLauncher,
+                        deviceLockActivityLauncher);
 
         mBookmarkManagerCoordinator.setBasicNativePage(this);
         initWithView(mBookmarkManagerCoordinator.getView());
@@ -113,6 +123,11 @@ public class BookmarkPage extends BasicNativePage {
     public void destroy() {
         super.destroy();
         mBookmarkManagerCoordinator.onDestroyed();
+
+        if (mBookmarkUiPrefs != null) {
+            mBookmarkUiPrefs.destroy();
+            mBookmarkUiPrefs = null;
+        }
     }
 
     public BookmarkManagerCoordinator getManagerForTesting() {

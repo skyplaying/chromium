@@ -70,6 +70,18 @@ struct EndpointOptions {
   // server (i.e. the calling process) will be rejected.
   bool require_same_peer_user = true;
 #endif
+
+#if BUILDFLAG(IS_WIN)
+  // If true, the server will open the caller process and store it in
+  // ConnectionInfo. This is useful for pinning the process identity to avoid
+  // PID-reuse attacks.
+  bool include_peer_process_info = false;
+
+  // Selects the pipe name. Clients must set
+  // `mojo::NamedPlatformChannel::Options::pipe_name_type` to match.
+  mojo::NamedPlatformChannel::PipeNameType pipe_name_type =
+      mojo::NamedPlatformChannel::PipeNameType::kDefault;
+#endif
 };
 
 }  // namespace named_mojo_ipc_server

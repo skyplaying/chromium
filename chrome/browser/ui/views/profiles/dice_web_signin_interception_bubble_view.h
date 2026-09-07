@@ -20,11 +20,10 @@
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 
 namespace views {
-class View;
 class WebView;
 }  // namespace views
 
-class Browser;
+class BrowserWindowInterface;
 class Profile;
 
 // Bubble shown as part of Dice web signin interception. This bubble is
@@ -49,8 +48,8 @@ class DiceWebSigninInterceptionBubbleView
   // should be closed.
   [[nodiscard]] static std::unique_ptr<ScopedWebSigninInterceptionBubbleHandle>
   CreateBubble(
-      Browser* browser,
-      views::View* anchor_view,
+      BrowserWindowInterface* browser,
+      views::BubbleAnchor anchor,
       const WebSigninInterceptor::Delegate::BubbleParameters& bubble_parameters,
       base::OnceCallback<void(SigninInterceptionResult)> callback);
 
@@ -124,8 +123,8 @@ class DiceWebSigninInterceptionBubbleView
   };
 
   DiceWebSigninInterceptionBubbleView(
-      Browser* browser,
-      views::View* anchor_view,
+      BrowserWindowInterface* browser,
+      views::BubbleAnchor anchor,
       const WebSigninInterceptor::Delegate::BubbleParameters& bubble_parameters,
       base::OnceCallback<void(SigninInterceptionResult)> callback);
 
@@ -170,10 +169,10 @@ class DiceWebSigninInterceptionBubbleView
   void ApplyAvatarButtonEffects();
 
   // This bubble can outlive the Browser, in particular on Mac (see
-  // https://crbug.com/1302729). Retain the profile to prevent use-after-free.
+  // https://crbug.com/40217096). Retain the profile to prevent use-after-free.
   ScopedProfileKeepAlive profile_keep_alive_;
 
-  base::WeakPtr<Browser> browser_;
+  base::WeakPtr<BrowserWindowInterface> browser_;
   raw_ptr<Profile> profile_;
   base::ScopedObservation<signin::IdentityManager,
                           signin::IdentityManager::Observer>

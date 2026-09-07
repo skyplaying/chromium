@@ -74,6 +74,7 @@
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/json/json_values.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/text/platform_locale.h"
 #include "third_party/blink/renderer/platform/text/text_break_iterator.h"
 
@@ -175,7 +176,7 @@ const AtomicString& InputType::NormalizeTypeName(
   if (type_name.empty())
     return input_type_names::kText;
 
-  AtomicString type_name_lower = type_name.LowerASCII();
+  AtomicString type_name_lower = type_name.ToAsciiLower();
 
 #define NORMALIZE_INPUT_TYPE(input_type, class_name)   \
   if (type_name_lower == input_type_names::input_type) \
@@ -507,6 +508,13 @@ bool InputType::IsInRange(const String& value) const {
     return true;
 
   StepRange step_range(CreateStepRange(kRejectAny));
+  if (RuntimeEnabledFeatures::CSSInRangeOutOfRangeReversedRangesEnabled() &&
+      step_range.HasReversedRange()) {
+    // With a reversed range, any value outside of the midnight-crossing valid
+    // range is considered underflow and overflow.
+    return numeric_value >= step_range.Minimum() ||
+           numeric_value <= step_range.Maximum();
+  }
   return step_range.HasRangeLimitations() &&
          numeric_value >= step_range.Minimum() &&
          numeric_value <= step_range.Maximum();
@@ -524,6 +532,13 @@ bool InputType::IsOutOfRange(const String& value) const {
     return false;
 
   StepRange step_range(CreateStepRange(kRejectAny));
+  if (RuntimeEnabledFeatures::CSSInRangeOutOfRangeReversedRangesEnabled() &&
+      step_range.HasReversedRange()) {
+    // With a reversed range, any value outside of the midnight-crossing valid
+    // range is considered underflow and overflow.
+    return numeric_value > step_range.Maximum() &&
+           numeric_value < step_range.Minimum();
+  }
   return step_range.HasRangeLimitations() &&
          (numeric_value < step_range.Minimum() ||
           numeric_value > step_range.Maximum());
@@ -785,6 +800,8 @@ bool InputType::ShouldRespectAlignAttribute() {
 
 void InputType::SanitizeValueInResponseToMinOrMaxAttributeChange() {}
 
+void InputType::ColorSpaceOrAlphaAttributeChanged() {}
+
 bool InputType::CanBeSuccessfulSubmitButton() {
   return false;
 }
@@ -869,6 +886,10 @@ String InputType::VisibleValue() const {
   return GetElement().Value();
 }
 
+String InputType::ConvertFromVisibleValue(const String& visible_value) const {
+  return SanitizeValue(visible_value);
+}
+
 String InputType::SanitizeValue(const String& proposed_value) const {
   return proposed_value;
 }
@@ -943,8 +964,9 @@ bool InputType::IsSteppable() const {
   NOTREACHED();
 }
 
-PopoverTriggerSupport InputType::SupportsPopoverTriggering() const {
-  return PopoverTriggerSupport::kNone;
+HTMLFormControlElement::PopoverTriggerSupport
+InputType::SupportsPopoverTriggering() const {
+  return HTMLFormControlElement::PopoverTriggerSupport::kNone;
 }
 
 bool InputType::ShouldRespectHeightAndWidthAttributes() {
@@ -984,6 +1006,10 @@ bool InputType::HasLegalLinkAttribute(const QualifiedName&) const {
 void InputType::CopyNonAttributeProperties(const HTMLInputElement&) {}
 
 void InputType::OnAttachWithLayoutObject() {}
+
+void InputType::OnDetachWithLayoutObject() {}
+
+void InputType::UpdateWheelEventRegistration(bool is_detaching) {}
 
 bool InputType::ShouldAppearIndeterminate() const {
   return false;
@@ -1046,7 +1072,7 @@ void InputType::ApplyStep(const Decimal& current,
   Decimal new_value = current;
   const AtomicString& step_string =
       GetElement().FastGetAttribute(html_names::kStepAttr);
-  if (!EqualIgnoringASCIICase(step_string, "any") &&
+  if (!EqualIgnoringAsciiCase(step_string, "any") &&
       step_range.StepMismatch(current)) {
     // Snap-to-step / clamping steps
     // If the current value is not matched to step value:
@@ -1067,8 +1093,9 @@ void InputType::ApplyStep(const Decimal& current,
   }
   new_value = new_value + step_range.Step() * Decimal::FromDouble(count);
 
-  if (!EqualIgnoringASCIICase(step_string, "any"))
+  if (!EqualIgnoringAsciiCase(step_string, "any")) {
     new_value = step_range.AlignValueForStep(current, new_value);
+  }
 
   // 8. If the element has a minimum, and value is less than that minimum,
   // then set value to the smallest value that, when subtracted from the step
@@ -1309,14 +1336,13 @@ StepRange InputType::CreateStepRange(
                    has_reversed_range, step, step_description);
 }
 
-void InputType::AddWarningToConsole(const char* message_format,
-                                    const String& value) const {
+void InputType::AddWarningToConsole(
+    const FormatString<const StringView&>& format,
+    const StringView& value) const {
   GetElement().GetDocument().AddConsoleMessage(
       MakeGarbageCollected<ConsoleMessage>(
-          mojom::ConsoleMessageSource::kRendering,
-          mojom::ConsoleMessageLevel::kWarning,
-          UNSAFE_TODO(String::Format(
-              message_format, JSONValue::QuoteString(value).Utf8().c_str()))));
+          ConsoleMessage::Source::kRendering, ConsoleMessage::Level::kWarning,
+          Format<const StringView&>(format, JSONValue::QuoteString(value))));
 }
 
 bool InputType::SupportsBaseAppearance(Element::BaseAppearanceValue) const {

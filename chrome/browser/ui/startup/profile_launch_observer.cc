@@ -4,16 +4,16 @@
 
 #include "chrome/browser/ui/startup/profile_launch_observer.h"
 
+#include "base/functional/bind.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/global_features.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
+#include "chrome/browser/ui/waap/initial_web_ui_manager.h"
 #include "content/public/browser/browser_thread.h"
+#include "ui/base/base_window.h"
 
 ProfileLaunchObserver::ProfileLaunchObserver() {
   browser_collection_observation_.Observe(
@@ -81,7 +81,8 @@ void ProfileLaunchObserver::AddLaunchedInternal(Profile* profile) {
     observed_profiles_.AddObservation(profile);
   }
   launched_profiles_.insert(profile);
-  if (chrome::FindBrowserWithProfile(profile)) {
+  if (ProfileBrowserCollection::GetForProfile(profile)
+          ->GetLastActiveBrowser()) {
     // A browser may get opened before we get initialized (e.g., in tests),
     // so we never see the OnBrowserAdded() for it.
     opened_profiles_.insert(profile);
@@ -117,6 +118,15 @@ void ProfileLaunchObserver::MaybeActivateProfile() {
     if (opened_profiles_.find(*i) == opened_profiles_.end()) {
       return;
     }
+    BrowserWindowInterface* browser =
+        ProfileBrowserCollection::GetForProfile(*i)->GetLastActiveBrowser();
+    // Defer the profile activation if the initial WebUI is pending.
+    if (browser && InitialWebUIManager::From(browser) &&
+        InitialWebUIManager::From(browser)->RequestDeferShow(
+            base::BindOnce(&ProfileLaunchObserver::MaybeActivateProfile,
+                           weak_ptr_factory_.GetWeakPtr()))) {
+      return;
+    }
   }
   // Asynchronous post to give a chance to the last window to completely
   // open and activate before trying to activate |profile_to_activate_|.
@@ -124,6 +134,8 @@ void ProfileLaunchObserver::MaybeActivateProfile() {
       FROM_HERE, base::BindOnce(&ProfileLaunchObserver::ActivateProfile,
                                 base::Unretained(this)));
   // Avoid posting more than once before ActivateProfile gets called.
+  launched_profiles_.clear();
+  opened_profiles_.clear();
   observed_profiles_.RemoveAllObservations();
   browser_collection_observation_.Reset();
 }
@@ -131,12 +143,14 @@ void ProfileLaunchObserver::MaybeActivateProfile() {
 void ProfileLaunchObserver::ActivateProfile() {
   // We need to test again, in case the profile got deleted in the mean time.
   if (profile_to_activate_) {
-    Browser* browser = chrome::FindBrowserWithProfile(profile_to_activate_);
+    BrowserWindowInterface* browser =
+        ProfileBrowserCollection::GetForProfile(profile_to_activate_)
+            ->GetLastActiveBrowser();
     // |profile| may never get launched, e.g., if it only had
     // incognito Windows and one of them was used to exit Chrome.
     // So it won't have a browser in that case.
     if (browser) {
-      browser->window()->Activate();
+      browser->GetWindow()->Activate();
     }
     // No need try to activate this profile again.
     profile_to_activate_ = nullptr;

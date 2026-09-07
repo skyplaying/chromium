@@ -13,11 +13,11 @@
 #include "chrome/browser/extensions/api/developer_private/extension_info_generator.h"
 #include "chrome/browser/extensions/pack_extension_job.h"
 #include "chrome/common/extensions/api/developer_private.h"
-#include "chrome/common/extensions/webstore_install_result.h"
 #include "extensions/browser/extension_creator.h"
 #include "extensions/browser/extension_function.h"
 #include "extensions/browser/extension_registry_observer.h"
 #include "extensions/browser/load_error_reporter.h"
+#include "extensions/browser/webstore_install_result.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension.h"
 #include "ui/base/clipboard/file_info.h"
@@ -92,9 +92,6 @@ class DeveloperPrivateAPIFunction : public ExtensionFunction {
   static constexpr char kCannotRepairNonWebstoreExtension[] =
       "Cannot repair an extension that is not installed from the Chrome Web "
       "Store.";
-  static constexpr char kCannotDismissExtensionOnUnsupportedStage[] =
-      "Cannot dismiss the MV2 deprecation notice for extension with ID '*' on "
-      "the unsupported stage.";
   static constexpr char kUserNotSignedIn[] = "User is not signed in.";
   static constexpr char kCannotUploadExtensionToAccount[] =
       "Extension with ID '*' cannot be uploaded to the user's account.";
@@ -134,8 +131,8 @@ class DeveloperPrivateAPIFunction : public ExtensionFunction {
   const Extension* GetEnabledExtensionById(const ExtensionId& id);
 
   // Called when there is no extension that exists for a specified ID in a
-  // function. Logs the function name and returns an error.
-  ResponseValue LogNoSuchExtensionFoundAndReturn();
+  // function. Returns an error specifying the function name.
+  ResponseValue NoSuchExtensionError();
 };
 
 class DeveloperPrivateAutoUpdateFunction : public DeveloperPrivateAPIFunction {
@@ -247,6 +244,17 @@ class DeveloperPrivateUpdateExtensionConfigurationFunction
 
  protected:
   ~DeveloperPrivateUpdateExtensionConfigurationFunction() override;
+  ResponseAction Run() override;
+};
+
+class DeveloperPrivateOpenReviewPageFunction
+    : public DeveloperPrivateAPIFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION("developerPrivate.openReviewPage",
+                             DEVELOPERPRIVATE_OPENREVIEWPAGE)
+
+ protected:
+  ~DeveloperPrivateOpenReviewPageFunction() override;
   ResponseAction Run() override;
 };
 
@@ -819,13 +827,6 @@ DECLARE_UNIMPLEMENTED_EXTENSION_FUNCTION(DeveloperPrivateLoadDirectoryFunction,
                                          "developerPrivate.loadDirectory",
                                          DEVELOPERPRIVATE_LOADUNPACKEDCROS);
 
-// We don't have to port it to desktop android because MV2 is not supported
-// on Android.
-DECLARE_UNIMPLEMENTED_EXTENSION_FUNCTION(
-    DeveloperPrivateDismissMv2DeprecationNoticeForExtensionFunction,
-    "developerPrivate.dismissMv2DeprecationNoticeForExtension",
-    DEVELOPERPRIVATE_DISMISSMV2DEPRECATIONNOTICEFOREXTENSION);
-
 class DeveloperPrivateShowSiteSettingsFunction : public ExtensionFunction {
  public:
   DECLARE_EXTENSION_FUNCTION("developerPrivate.showSiteSettings",
@@ -893,46 +894,6 @@ class DeveloperPrivateLoadDirectoryFunction : public ExtensionFunction {
 
   // Error string if `success_` is false.
   std::string error_;
-};
-
-class DeveloperPrivateDismissMv2DeprecationNoticeForExtensionFunction
-    : public DeveloperPrivateAPIFunction {
- public:
-  DECLARE_EXTENSION_FUNCTION(
-      "developerPrivate.dismissMv2DeprecationNoticeForExtension",
-      DEVELOPERPRIVATE_DISMISSMV2DEPRECATIONNOTICEFOREXTENSION)
-  DeveloperPrivateDismissMv2DeprecationNoticeForExtensionFunction();
-
-  DeveloperPrivateDismissMv2DeprecationNoticeForExtensionFunction(
-      const DeveloperPrivateDismissMv2DeprecationNoticeForExtensionFunction&) =
-      delete;
-  DeveloperPrivateDismissMv2DeprecationNoticeForExtensionFunction& operator=(
-      const DeveloperPrivateDismissMv2DeprecationNoticeForExtensionFunction&) =
-      delete;
-
-  void accept_bubble_for_testing(bool accept_bubble) {
-    accept_bubble_for_testing_ = accept_bubble;
-  }
-
- private:
-  ~DeveloperPrivateDismissMv2DeprecationNoticeForExtensionFunction() override;
-
-  // ExtensionFunction:
-  ResponseAction Run() override;
-
-  void DismissExtensionNotice();
-
-  // Callback to run when the user accepts the keep dialog.
-  void OnDialogAccepted();
-
-  // Callback to run when the user cancels the keep dialog.
-  void OnDialogCancelled();
-
-  // The ID of the extension to be dismissed.
-  ExtensionId extension_id_;
-
-  // If true, immediately accepts the keep dialog by running the callback.
-  std::optional<bool> accept_bubble_for_testing_;
 };
 #endif  // BUILDFLAG(IS_ANDROID)
 

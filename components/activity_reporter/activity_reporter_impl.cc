@@ -36,11 +36,13 @@ class ActivityReporterImpl : public ActivityReporter {
       base::RepeatingCallback<PrefService*()> pref_service_provider,
       scoped_refptr<update_client::NetworkFetcherFactory>
           network_fetcher_factory,
-      base::RepeatingClosure updater_active_callback,
       base::RepeatingCallback<version_info::Channel()> channel_provider,
+      base::RepeatingCallback<std::string()> brand_provider,
+      base::RepeatingClosure updater_active_callback,
       bool per_user_install)
       : updater_active_callback_(updater_active_callback),
-        channel_provider_(channel_provider) {
+        channel_provider_(channel_provider),
+        brand_provider_(brand_provider) {
     scoped_refptr<ActivityReporterConfigurator> configurator =
         base::MakeRefCounted<ActivityReporterConfigurator>(
             pref_service_provider, network_fetcher_factory, channel_provider,
@@ -50,19 +52,19 @@ class ActivityReporterImpl : public ActivityReporter {
                     update_client::kDateUnknown) {
       data->SetDateLastActive(std::string(kChromeActivityId),
                               update_client::kDateFirstTime);
-      data->SetDateLastActive(std::string(kChromeActivityId),
-                              update_client::kDateFirstTime);
     }
     update_client_ = update_client::UpdateClientFactory(configurator);
   }
 
   ActivityReporterImpl(
       scoped_refptr<update_client::UpdateClient> update_client,
-      base::RepeatingClosure updater_active_callback,
-      base::RepeatingCallback<version_info::Channel()> channel_provider)
+      base::RepeatingCallback<version_info::Channel()> channel_provider,
+      base::RepeatingCallback<std::string()> brand_provider,
+      base::RepeatingClosure updater_active_callback)
       : update_client_(update_client),
         updater_active_callback_(updater_active_callback),
-        channel_provider_(channel_provider) {}
+        channel_provider_(channel_provider),
+        brand_provider_(brand_provider) {}
 
   void ReportActive() override {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -84,7 +86,7 @@ class ActivityReporterImpl : public ActivityReporter {
     update_client_->CheckForUpdate(
         std::string{kChromeActivityId},
         base::BindOnce(
-            [](version_info::Channel channel,
+            [](version_info::Channel channel, const std::string& brand,
                const std::vector<std::string>& ids,
                base::OnceCallback<void(const std::vector<std::optional<
                                            update_client::CrxComponent>>&)>
@@ -95,7 +97,7 @@ class ActivityReporterImpl : public ActivityReporter {
                 if (id == kChromeActivityId) {
                   update_client::CrxComponent component;
                   component.app_id = kChromeActivityId;
-                  // TODO(crbug.com/454662418): Set component.brand
+                  component.brand = brand;
                   component.channel = version_info::GetChannelString(channel);
                   component.updates_enabled = false;
                   component.version = version_info::GetVersion();
@@ -106,7 +108,7 @@ class ActivityReporterImpl : public ActivityReporter {
               }
               std::move(callback).Run(components);
             },
-            channel_provider_.Run()),
+            channel_provider_.Run(), brand_provider_.Run()),
         base::DoNothing(), false, base::DoNothing());
   }
 
@@ -116,6 +118,7 @@ class ActivityReporterImpl : public ActivityReporter {
   scoped_refptr<update_client::UpdateClient> update_client_;
   base::RepeatingClosure updater_active_callback_;
   base::RepeatingCallback<version_info::Channel()> channel_provider_;
+  base::RepeatingCallback<std::string()> brand_provider_;
 };
 
 }  // namespace
@@ -125,19 +128,21 @@ std::unique_ptr<ActivityReporter> CreateActivityReporter(
     base::RepeatingCallback<PrefService*()> pref_service_provider,
     scoped_refptr<update_client::NetworkFetcherFactory> network_fetcher_factory,
     base::RepeatingCallback<version_info::Channel()> channel_provider,
+    base::RepeatingCallback<std::string()> brand_provider,
     base::RepeatingClosure updater_active_callback,
     bool per_user_install) {
   return std::make_unique<ActivityReporterImpl>(
-      pref_service_provider, network_fetcher_factory, updater_active_callback,
-      channel_provider, per_user_install);
+      pref_service_provider, network_fetcher_factory, channel_provider,
+      brand_provider, updater_active_callback, per_user_install);
 }
 
 std::unique_ptr<ActivityReporter> CreateActivityReporterForTesting(
     scoped_refptr<update_client::UpdateClient> update_client,
-    base::RepeatingClosure updater_active_callback,
-    base::RepeatingCallback<version_info::Channel()> channel_provider) {
+    base::RepeatingCallback<version_info::Channel()> channel_provider,
+    base::RepeatingCallback<std::string()> brand_provider,
+    base::RepeatingClosure updater_active_callback) {
   return std::make_unique<ActivityReporterImpl>(
-      update_client, updater_active_callback, channel_provider);
+      update_client, channel_provider, brand_provider, updater_active_callback);
 }
 
 }  // namespace activity_reporter

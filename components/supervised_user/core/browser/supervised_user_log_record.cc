@@ -43,17 +43,7 @@ bool IsParentFamilyMemberRole(const PrefService& pref_service) {
 
 std::optional<SupervisedUserLogRecord::Segment> GetSupervisionStatus(
     signin::IdentityManager* identity_manager,
-    const PrefService& pref_service,
-    const DeviceParentalControls& device_parental_controls) {
-  if (!base::FeatureList::IsEnabled(
-          kSupervisedUserUseEmitDeviceLogRecordSeparately) &&
-      !IsSubjectToParentalControls(pref_service) &&
-      device_parental_controls.IsEnabled()) {
-    // This type of supervision is signin-status independent (but only available
-    // to non-incognito profiles).
-    return SupervisedUserLogRecord::Segment::kSupervisionEnabledLocally;
-  }
-
+    const PrefService& pref_service) {
   if (!identity_manager->HasPrimaryAccount(signin::ConsentLevel::kSignin)) {
     // Unsigned users who are not supervised locally are considered
     // unsupervised.
@@ -62,17 +52,19 @@ std::optional<SupervisedUserLogRecord::Segment> GetSupervisionStatus(
 
   AccountInfo account_info = identity_manager->FindExtendedAccountInfo(
       identity_manager->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin));
-  if (!AreParentalSupervisionCapabilitiesKnown(account_info.capabilities)) {
+  if (!AreParentalSupervisionCapabilitiesKnown(
+          account_info.GetAccountCapabilities())) {
     // The user is signed in, but the parental supervision capabilities are
     // not known.
     return std::nullopt;
   }
 
   auto is_subject_to_parental_controls =
-      account_info.capabilities.is_subject_to_parental_controls();
+      account_info.GetAccountCapabilities().is_subject_to_parental_controls();
   if (is_subject_to_parental_controls == signin::Tribool::kTrue) {
     auto is_opted_in_to_parental_supervision =
-        account_info.capabilities.is_opted_in_to_parental_supervision();
+        account_info.GetAccountCapabilities()
+            .is_opted_in_to_parental_supervision();
     if (is_opted_in_to_parental_supervision == signin::Tribool::kTrue) {
       return SupervisedUserLogRecord::Segment::
           kSupervisionEnabledByFamilyLinkUser;
@@ -82,8 +74,8 @@ std::optional<SupervisedUserLogRecord::Segment> GetSupervisionStatus(
       return SupervisedUserLogRecord::Segment::
           kSupervisionEnabledByFamilyLinkPolicy;
     }
-  } else if (account_info.capabilities.can_fetch_family_member_info() ==
-             signin::Tribool::kTrue) {
+  } else if (account_info.GetAccountCapabilities()
+                 .can_fetch_family_member_info() == signin::Tribool::kTrue) {
     if (IsParentFamilyMemberRole(pref_service)) {
       return SupervisedUserLogRecord::Segment::kParent;
     }
@@ -112,12 +104,24 @@ bool IsUnsupervisedStatus(
 // than browser content.
 std::optional<WebFilterType> GetWebFilterType(
     std::optional<SupervisedUserLogRecord::Segment> supervision_status,
-    SupervisedUserUrlFilteringService* url_filtering_service) {
-  if (!url_filtering_service || IsUnsupervisedStatus(supervision_status)) {
+    SupervisedUserUrlFilteringService* url_filtering_service,
+    const DeviceParentalControls& device_parental_controls) {
+  if (!url_filtering_service) {
     return std::nullopt;
   }
 
-  return url_filtering_service->GetWebFilterType();
+  // TODO(crbug.com/424071314): Improve or centralize the logic.
+  // Rethink the logic how device parental controls are affecting the reporting
+  // of the web filter type aspect of the supervision status: should two records
+  // be created, each for the device parental controls and the account
+  // supervision status, or keep the current approach of logging combined value
+  // into one record.
+  if (device_parental_controls.IsEnabled() ||
+      !IsUnsupervisedStatus(supervision_status)) {
+    return url_filtering_service->GetWebFilterType();
+  }
+
+  return std::nullopt;
 }
 
 std::optional<ToggleState> GetPermissionsToggleState(
@@ -145,6 +149,11 @@ std::optional<ToggleState> GetPermissionsToggleState(
   // Note: Do not check that the ProviderType is `kSupervisedProvider`. This
   // is true only when the parent has disabled the "Permissions" FL switch.
 
+  // TODO(crbug.com/494643383): Figure out what to do with this block on desktop
+  // Android. Enabling it via ENABLE_EXTENSIONS_CORE causes the DCHECK to fire
+  // because geolocation is false and the permission is also false. These are
+  // the same values as non-desktop Android, so we can clearly tolerate both
+  // being false, but it's strange that they don't match Win/Mac/Linux.
 #if BUILDFLAG(ENABLE_EXTENSIONS)
   bool block_geolocation = is_geolocation_blocked_by_default;
   bool permissions_allowed_pref = pref_service.GetBoolean(
@@ -159,17 +168,17 @@ std::optional<ToggleState> GetPermissionsToggleState(
 #endif  // BUILDFLAG(IS_IOS)
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 bool SupervisedUserCanSkipExtensionParentApprovals(
     const PrefService& pref_service) {
   return pref_service.GetBoolean(prefs::kSkipParentApprovalToInstallExtensions);
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 std::optional<ToggleState> GetExtensionToggleState(
     std::optional<SupervisedUserLogRecord::Segment> supervision_status,
     const PrefService& pref_service) {
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   if (IsUnsupervisedStatus(supervision_status)) {
     return std::nullopt;
   }
@@ -287,11 +296,11 @@ SupervisedUserLogRecord SupervisedUserLogRecord::Create(
     SupervisedUserUrlFilteringService* url_filtering_service,
     const DeviceParentalControls& device_parental_controls) {
   std::optional<SupervisedUserLogRecord::Segment> supervision_status =
-      GetSupervisionStatus(identity_manager, pref_service,
-                           device_parental_controls);
+      GetSupervisionStatus(identity_manager, pref_service);
   return SupervisedUserLogRecord(
       supervision_status,
-      GetWebFilterType(supervision_status, url_filtering_service),
+      GetWebFilterType(supervision_status, url_filtering_service,
+                       device_parental_controls),
       GetPermissionsToggleState(supervision_status, pref_service,
                                 content_settings_map),
       GetExtensionToggleState(supervision_status, pref_service));
@@ -303,9 +312,7 @@ bool SupervisedUserLogRecord::EmitHistograms(
     const DeviceParentalControls& device_parental_controls) {
   bool did_emit_histogram = false;
 
-  if (base::FeatureList::IsEnabled(
-          kSupervisedUserUseEmitDeviceLogRecordSeparately) &&
-      device_parental_controls.IsEnabled()) {
+  if (device_parental_controls.IsEnabled()) {
     base::UmaHistogramEnumeration(
         kFamilyLinkUserLogSegmentHistogramName,
         SupervisedUserLogRecord::Segment::kSupervisionEnabledLocally);

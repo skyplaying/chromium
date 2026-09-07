@@ -127,29 +127,17 @@ public abstract class PersistedTabData implements UserData {
                 tabDataCreator.onResult(
                         (tabData) -> {
                             if (tab.isDestroyed()) {
-                                PostTask.postTask(
-                                        TaskTraits.UI_DEFAULT,
-                                        () -> {
-                                            callback.onResult(null);
-                                        });
+                                PostTask.postTask(TaskTraits.UI_DEFAULT, callback.bind(null));
                                 return;
                             }
                             updateLastUpdatedMs(tabData);
                             if (tabData != null) {
                                 setUserData(tab, clazz, tabData);
                             }
-                            PostTask.postTask(
-                                    TaskTraits.UI_DEFAULT,
-                                    () -> {
-                                        callback.onResult(tabData);
-                                    });
+                            PostTask.postTask(TaskTraits.UI_DEFAULT, callback.bind(tabData));
                         });
             } else {
-                PostTask.postTask(
-                        TaskTraits.UI_DEFAULT,
-                        () -> {
-                            callback.onResult(persistedTabDataFromTab);
-                        });
+                PostTask.postTask(TaskTraits.UI_DEFAULT, callback.bind(persistedTabDataFromTab));
             }
             return;
         }
@@ -197,11 +185,7 @@ public abstract class PersistedTabData implements UserData {
         T userData = getUserData(tab, clazz);
         // {@link PersistedTabData} already attached to {@link Tab}
         if (userData != null) {
-            PostTask.postTask(
-                    TaskTraits.UI_DEFAULT,
-                    () -> {
-                        callback.onResult(userData);
-                    });
+            PostTask.postTask(TaskTraits.UI_DEFAULT, callback.bind(userData));
             return;
         }
         String key = String.format(Locale.ENGLISH, "%d-%s", tab.getId(), clazz);
@@ -217,7 +201,9 @@ public abstract class PersistedTabData implements UserData {
                         config.getId(),
                         (data) -> {
                             if (tab.isDestroyed()) {
-                                onInvalidTab(callback);
+                                PostTask.postTask(
+                                        TaskTraits.UI_DEFAULT,
+                                        () -> onPersistedTabDataResult(null, tab, clazz, key));
                                 return;
                             }
                             // No stored {@link PersistedTabData} found, return null.
@@ -236,7 +222,11 @@ public abstract class PersistedTabData implements UserData {
                                         TaskTraits.USER_BLOCKING_MAY_BLOCK,
                                         () -> {
                                             if (tab.isDestroyed()) {
-                                                onInvalidTab(callback);
+                                                PostTask.postTask(
+                                                        TaskTraits.UI_DEFAULT,
+                                                        () ->
+                                                                onPersistedTabDataResult(
+                                                                        null, tab, clazz, key));
                                                 return;
                                             }
                                             persistedTabData.deserializeAndLog(data);
@@ -252,12 +242,13 @@ public abstract class PersistedTabData implements UserData {
                         });
     }
 
+    static boolean isCallbackCachedForTesting(Tab tab, Class<? extends PersistedTabData> clazz) {
+        String key = String.format(Locale.ENGLISH, "%d-%s", tab.getId(), clazz);
+        return sCachedCallbacks.containsKey(key);
+    }
+
     private static <T extends PersistedTabData> void onInvalidTab(Callback<@Nullable T> callback) {
-        PostTask.postTask(
-                TaskTraits.UI_DEFAULT,
-                () -> {
-                    callback.onResult(null);
-                });
+        PostTask.postTask(TaskTraits.UI_DEFAULT, callback.bind(null));
     }
 
     private static <T extends PersistedTabData> void onPersistedTabDataRetrieved(
@@ -307,13 +298,17 @@ public abstract class PersistedTabData implements UserData {
 
     private static <T extends PersistedTabData> void onPersistedTabDataResult(
             @Nullable T pPersistedTabData, Tab tab, Class<T> clazz, String key) {
+        ThreadUtils.assertOnUiThread();
         final T persistedTabData = tab.isDestroyed() ? null : pPersistedTabData;
         if (persistedTabData != null) {
             setUserData(tab, clazz, persistedTabData);
         }
-        for (Callback<@Nullable T> cachedCallback : assumeNonNull(sCachedCallbacks.get(key))) {
-            PostTask.postTask(
-                    TaskTraits.UI_DEFAULT, () -> cachedCallback.onResult(persistedTabData));
+        // Callback type varies per key; map stores raw Callback.
+        @SuppressWarnings("unchecked")
+        List<Callback<@Nullable T>> callbacks =
+                (List<Callback<@Nullable T>>) (List<?>) assumeNonNull(sCachedCallbacks.get(key));
+        for (Callback<@Nullable T> cachedCallback : callbacks) {
+            PostTask.postTask(TaskTraits.UI_DEFAULT, cachedCallback.bind(persistedTabData));
         }
         sCachedCallbacks.remove(key);
     }
@@ -373,6 +368,11 @@ public abstract class PersistedTabData implements UserData {
     private static <T extends PersistedTabData> T setUserData(
             Tab tab, Class<T> clazz, T persistedTabData) {
         return tab.getUserDataHost().setUserData(clazz, persistedTabData);
+    }
+
+    /** Returns the associated tab. */
+    public Tab getTab() {
+        return mTab;
     }
 
     /** Save {@link PersistedTabData} to storage */
@@ -576,7 +576,6 @@ public abstract class PersistedTabData implements UserData {
         }
     }
 
-    @VisibleForTesting
     protected static Set<Class<? extends PersistedTabData>>
             getSupportedMaintenanceClassesForTesting() {
         return sSupportedMaintenanceClasses;

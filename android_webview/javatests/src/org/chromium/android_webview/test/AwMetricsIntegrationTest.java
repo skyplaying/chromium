@@ -27,6 +27,8 @@ import org.junit.runners.Parameterized.UseParametersRunnerFactory;
 import org.chromium.android_webview.AwBrowserProcess;
 import org.chromium.android_webview.AwContents;
 import org.chromium.android_webview.AwWindowCoverageTracker;
+import org.chromium.android_webview.common.AwFeatureMap;
+import org.chromium.android_webview.common.AwFeatures;
 import org.chromium.android_webview.common.PlatformServiceBridge;
 import org.chromium.android_webview.metrics.AndroidMetricsLogConsumer;
 import org.chromium.android_webview.metrics.AndroidMetricsLogUploader;
@@ -85,9 +87,6 @@ public class AwMetricsIntegrationTest extends AwParameterizedTest {
 
     @Before
     public void setUp() throws Exception {
-        mContentsClient = new TestAwContentsClient();
-        mTestContainerView = mRule.createAwTestContainerViewOnMainSync(mContentsClient);
-        mAwContents = mTestContainerView.getAwContents();
         // Kick off the metrics consent-fetching process. MetricsTestPlatformServiceBridge mocks out
         // user consent for when we query it with
         // AwBrowserProcess.handleMinidumpsAndSetMetricsConsent(), so metrics consent is guaranteed
@@ -105,8 +104,13 @@ public class AwMetricsIntegrationTest extends AwParameterizedTest {
                                 PlatformServiceBridge.getInstance().logMetrics(data);
                                 return HttpURLConnection.HTTP_OK;
                             };
-                    AndroidMetricsLogUploader.setConsumer(
-                            new MetricsFilteringDecorator(directUploader));
+                    boolean useCppFiltering =
+                            AwFeatureMap.isEnabled(AwFeatures.WEBVIEW_CPP_METRICS_FILTERING);
+                    AndroidMetricsLogConsumer consumer =
+                            useCppFiltering
+                                    ? directUploader
+                                    : new MetricsFilteringDecorator(directUploader);
+                    AndroidMetricsLogUploader.setConsumer(consumer);
 
                     // Need to configure the metrics delay first, because
                     // handleMinidumpsAndSetMetricsConsent() triggers MetricsService initialization.
@@ -132,6 +136,11 @@ public class AwMetricsIntegrationTest extends AwParameterizedTest {
                     AwBrowserProcess.handleMinidumpsAndSetMetricsConsent(
                             /* updateMetricsConsent= */ true);
                 });
+
+        // Creat WebView after initializing metrics consent to ensure startup metrics are captured.
+        mContentsClient = new TestAwContentsClient();
+        mTestContainerView = mRule.createAwTestContainerViewOnMainSync(mContentsClient);
+        mAwContents = mTestContainerView.getAwContents();
     }
 
     @Test
@@ -319,7 +328,6 @@ public class AwMetricsIntegrationTest extends AwParameterizedTest {
     @Test
     @MediumTest
     @Feature({"AndroidWebView"})
-    @CommandLineFlags.Add({"disable-features=CreateSpareRendererOnBrowserContextCreation"})
     public void testMetadata_stability_rendererLaunchCount() throws Throwable {
         EmbeddedTestServer embeddedTestServer =
                 EmbeddedTestServer.createAndStartServer(

@@ -19,7 +19,6 @@ import android.widget.FrameLayout;
 
 import androidx.annotation.ColorInt;
 import androidx.core.content.ContextCompat;
-import androidx.test.ext.junit.rules.ActivityScenarioRule;
 import androidx.test.filters.SmallTest;
 
 import org.junit.After;
@@ -31,11 +30,13 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.shadows.ShadowLooper;
+import org.robolectric.Robolectric;
+import org.robolectric.android.controller.ActivityController;
 
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
 import org.chromium.components.browser_ui.widget.scrim.ScrimManager;
 import org.chromium.components.browser_ui.widget.scrim.ScrimManager.ScrimClient;
@@ -48,12 +49,9 @@ import org.chromium.ui.modelutil.PropertyModel;
 public class HubLayoutScrimControllerUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
-    @Rule
-    public ActivityScenarioRule<TestActivity> mActivityScenarioRule =
-            new ActivityScenarioRule<>(TestActivity.class);
-
     @Captor private ArgumentCaptor<PropertyModel> mPropertyModelArgumentCaptor;
 
+    private ActivityController<TestActivity> mActivityController;
     private Activity mActivity;
     private View mAnchorView;
     private ScrimManager mScrimManager;
@@ -62,7 +60,8 @@ public class HubLayoutScrimControllerUnitTest {
 
     @Before
     public void setUp() {
-        mActivityScenarioRule.getScenario().onActivity(this::onActivity);
+        mActivityController = Robolectric.buildActivity(TestActivity.class).setup();
+        onActivity(mActivityController.get());
     }
 
     private void onActivity(Activity activity) {
@@ -85,6 +84,7 @@ public class HubLayoutScrimControllerUnitTest {
     @After
     public void tearDown() {
         mScrimManager.destroy();
+        mActivityController.close();
     }
 
     @Test
@@ -100,11 +100,11 @@ public class HubLayoutScrimControllerUnitTest {
         assertPropertyModel(mIsIncognitoSupplier.get());
 
         // Finish the animation.
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         mScrimController.startHidingScrim();
         verify(mScrimManager).hideScrim(any(), eq(true), anyInt());
-        ShadowLooper.runUiThreadTasks();
+        RobolectricUtil.runAllBackgroundAndUi();
 
         assertFalse(mScrimManager.isShowingScrim());
 

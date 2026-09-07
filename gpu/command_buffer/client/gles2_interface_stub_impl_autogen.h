@@ -490,7 +490,6 @@ void GLES2InterfaceStub::ShaderSource(GLuint /* shader */,
                                       GLsizei /* count */,
                                       const GLchar* const* /* str */,
                                       const GLint* /* length */) {}
-void GLES2InterfaceStub::ShallowFinishCHROMIUM() {}
 void GLES2InterfaceStub::OrderingBarrierCHROMIUM() {}
 void GLES2InterfaceStub::MultiDrawArraysWEBGL(GLenum /* mode */,
                                               const GLint* /* firsts */,
@@ -870,9 +869,6 @@ GLuint GLES2InterfaceStub::GetMaxValueInBufferCHROMIUM(GLuint /* buffer_id */,
                                                        GLuint /* offset */) {
   return 0;
 }
-GLboolean GLES2InterfaceStub::EnableFeatureCHROMIUM(const char* /* feature */) {
-  return 0;
-}
 void* GLES2InterfaceStub::MapBufferCHROMIUM(GLuint /* target */,
                                             GLenum /* access */) {
   return 0;
@@ -887,18 +883,6 @@ void* GLES2InterfaceStub::MapBufferSubDataCHROMIUM(GLuint /* target */,
   return 0;
 }
 void GLES2InterfaceStub::UnmapBufferSubDataCHROMIUM(const void* /* mem */) {}
-void* GLES2InterfaceStub::MapBufferRange(GLenum /* target */,
-                                         GLintptr /* offset */,
-                                         GLsizeiptr /* size */,
-                                         GLbitfield /* access */) {
-  return 0;
-}
-GLboolean GLES2InterfaceStub::UnmapBuffer(GLenum /* target */) {
-  return 0;
-}
-void GLES2InterfaceStub::FlushMappedBufferRange(GLenum /* target */,
-                                                GLintptr /* offset */,
-                                                GLsizeiptr /* size */) {}
 void* GLES2InterfaceStub::MapTexSubImage2DCHROMIUM(GLenum /* target */,
                                                    GLint /* level */,
                                                    GLint /* xoffset */,
@@ -1008,6 +992,10 @@ GLuint GLES2InterfaceStub::GetLastFlushIdCHROMIUM() {
   return 0;
 }
 void GLES2InterfaceStub::SetActiveURLCHROMIUM(const char* /* url */) {}
+void GLES2InterfaceStub::GetBufferSubDataCHROMIUM(GLenum /* target */,
+                                                  GLintptr /* offset */,
+                                                  GLsizeiptr /* size */,
+                                                  void* /* data */) {}
 void GLES2InterfaceStub::ContextVisibilityHintCHROMIUM(
     GLboolean /* visibility */) {}
 GLenum GLES2InterfaceStub::GetGraphicsResetStatusKHR() {
@@ -1138,12 +1126,14 @@ GLboolean GLES2InterfaceStub::IsEnablediOES(GLenum /* target */,
 void GLES2InterfaceStub::ProvokingVertexANGLE(GLenum /* provokeMode */) {}
 void GLES2InterfaceStub::FramebufferMemorylessPixelLocalStorageANGLE(
     GLint /* plane */,
-    GLenum /* internalformat */) {}
+    GLenum /* internalformat */,
+    GLbitfield /* usage */) {}
 void GLES2InterfaceStub::FramebufferTexturePixelLocalStorageANGLE(
     GLint /* plane */,
     GLuint /* backingtexture */,
     GLint /* level */,
-    GLint /* layer */) {}
+    GLint /* layer */,
+    GLbitfield /* usage */) {}
 void GLES2InterfaceStub::FramebufferPixelLocalClearValuefvANGLE(
     GLint /* plane */,
     const GLfloat* /* value */) {}
@@ -1159,6 +1149,7 @@ void GLES2InterfaceStub::BeginPixelLocalStorageANGLE(
 void GLES2InterfaceStub::EndPixelLocalStorageANGLE(
     GLsizei /* count */,
     const GLenum* /* storeops */) {}
+void GLES2InterfaceStub::EndPixelLocalStorageImplicitANGLE() {}
 void GLES2InterfaceStub::PixelLocalStorageBarrierANGLE() {}
 void GLES2InterfaceStub::FramebufferPixelLocalStorageInterruptANGLE() {}
 void GLES2InterfaceStub::FramebufferPixelLocalStorageRestoreANGLE() {}
@@ -1170,6 +1161,10 @@ void GLES2InterfaceStub::GetFramebufferPixelLocalStorageParameterivANGLE(
     GLint /* plane */,
     GLenum /* pname */,
     GLint* /* params */) {}
+void GLES2InterfaceStub::GetFramebufferPixelLocalStorageParameteruivANGLE(
+    GLint /* plane */,
+    GLenum /* pname */,
+    GLuint* /* params */) {}
 void GLES2InterfaceStub::ClipControlEXT(GLenum /* origin */,
                                         GLenum /* depth */) {}
 void GLES2InterfaceStub::PolygonModeANGLE(GLenum /* face */,

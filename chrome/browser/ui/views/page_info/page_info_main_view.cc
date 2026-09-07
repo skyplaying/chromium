@@ -28,6 +28,7 @@
 #include "chrome/browser/ui/views/page_info/page_info_view_factory.h"
 #include "chrome/browser/ui/views/page_info/permission_toggle_row_view.h"
 #include "chrome/browser/ui/views/page_info/star_rating_view.h"
+#include "chrome/browser/ui/views/sub_apps_permission_explanation.h"
 #include "chrome/browser/vr/vr_tab_helper.h"
 #include "chrome/common/url_constants.h"
 #include "components/page_info/core/about_this_site_service.h"
@@ -48,14 +49,17 @@
 #include "ui/views/background.h"
 #include "ui/views/bubble/bubble_frame_view.h"
 #include "ui/views/controls/button/md_text_button.h"
+#include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/controls/separator.h"
+#include "ui/views/controls/styled_label.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/flex_layout.h"
 #include "ui/views/metadata/view_factory.h"
 #include "ui/views/vector_icons.h"
 #include "ui/views/view_class_properties.h"
+#include "ui/views/widget/widget.h"
 
 #if BUILDFLAG(FULL_SAFE_BROWSING)
 #include "chrome/browser/safe_browsing/chrome_password_protection_service.h"
@@ -72,6 +76,40 @@ int GetSeparatorPadding() {
       DISTANCE_HORIZONTAL_SEPARATOR_PADDING_PAGE_INFO_VIEW);
 }
 
+// Creates a StyledLabel from a localized string containing <link>...</link>
+// tags, configuring the link style and binding it to |link_callback|.
+std::unique_ptr<views::StyledLabel> CreateLearnMoreLabel(
+    const std::u16string& raw_text,
+    base::RepeatingClosure link_callback) {
+  constexpr std::u16string_view kBeginTag = u"<link>";
+  constexpr std::u16string_view kEndTag = u"</link>";
+  const size_t begin_pos = raw_text.find(kBeginTag);
+  const size_t end_pos = raw_text.find(kEndTag);
+
+  std::u16string clean_text = raw_text;
+  gfx::Range link_range;
+  if (begin_pos != std::u16string::npos && end_pos != std::u16string::npos &&
+      end_pos > begin_pos) {
+    const std::u16string link_text =
+        raw_text.substr(begin_pos + kBeginTag.length(),
+                        end_pos - (begin_pos + kBeginTag.length()));
+    clean_text = raw_text.substr(0, begin_pos) + link_text +
+                 raw_text.substr(end_pos + kEndTag.length());
+    link_range = gfx::Range(begin_pos, begin_pos + link_text.length());
+  }
+
+  auto label = std::make_unique<views::StyledLabel>();
+  label->SetText(clean_text);
+  label->SetDefaultTextStyle(views::style::STYLE_BODY_4);
+  label->SetDefaultEnabledColorId(ui::kColorSysOnSurfaceSubtle);
+  if (link_range.IsValid()) {
+    label->AddStyleRange(link_range,
+                         views::StyledLabel::RangeStyleInfo::CreateForLink(
+                             std::move(link_callback)));
+  }
+  return label;
+}
+
 }  // namespace
 
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(PageInfoMainView, kCookieButtonElementId);
@@ -81,6 +119,8 @@ DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(PageInfoMainView, kMainLayoutElementId);
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(PageInfoMainView, kPermissionsElementId);
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(PageInfoMainView,
                                       kMerchantTrustElementId);
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(PageInfoMainView,
+                                      kSeeExtensionsButtonElementId);
 
 PageInfoMainView::ContainerView::ContainerView(bool set_extra_right_margin) {
   auto box_layout = std::make_unique<views::BoxLayout>(
@@ -104,7 +144,8 @@ PageInfoMainView::PageInfoMainView(
     ChromePageInfoUiDelegate* ui_delegate,
     PageInfoNavigationHandler* navigation_handler,
     base::OnceClosure initialized_callback,
-    bool allow_extended_site_info)
+    bool allow_extended_site_info,
+    bool show_extensions_menu)
     : presenter_(presenter),
       ui_delegate_(ui_delegate),
       navigation_handler_(navigation_handler) {
@@ -137,6 +178,28 @@ PageInfoMainView::PageInfoMainView(
   SetProperty(views::kElementIdentifierKey, kMainLayoutElementId);
 
   site_settings_view_ = AddChildView(CreateContainerView());
+
+  if (show_extensions_menu) {
+    see_extensions_button_ =
+        site_settings_view_->AddChildView(std::make_unique<RichHoverButton>(
+            base::BindRepeating(&PageInfoMainView::OnSeeExtensionsClicked,
+                                base::Unretained(this)),
+            PageInfoViewFactory::GetExtensionIcon(),
+            /*title_text=*/
+            l10n_util::GetStringUTF16(IDS_PAGE_INFO_EXTENSIONS),
+            /*subtitle_text=*/std::u16string(),
+            PageInfoViewFactory::GetOpenSubpageIcon()));
+    see_extensions_button_->SetTooltipText(
+        l10n_util::GetStringUTF16(IDS_PAGE_INFO_EXTENSIONS));
+    see_extensions_button_->SetID(
+        PageInfoViewFactory::VIEW_ID_PAGE_INFO_LINK_OR_BUTTON_SEE_EXTENSIONS);
+    see_extensions_button_->SetProperty(views::kElementIdentifierKey,
+                                        kSeeExtensionsButtonElementId);
+    see_extensions_button_->SetTitleTextStyleAndColor(
+        views::style::STYLE_BODY_3_MEDIUM, kColorPageInfoForeground);
+    see_extensions_button_->SetSubtitleTextStyleAndColor(
+        views::style::STYLE_BODY_4, kColorPageInfoSubtitleForeground);
+  }
 
   int link_text_id = 0;
   int tooltip_text_id = 0;
@@ -193,15 +256,18 @@ void PageInfoMainView::SetCookieInfo(const CookiesInfo& cookie_info) {
     return;
   }
 
-  cookie_button_ =
-      site_settings_view_->AddChildView(std::make_unique<RichHoverButton>(
+  cookie_button_ = site_settings_view_->AddChildViewAt(
+      std::make_unique<RichHoverButton>(
           base::BindRepeating(&PageInfoNavigationHandler::OpenCookiesPage,
                               base::Unretained(navigation_handler_)),
           PageInfoViewFactory::GetImageModel(
-              vector_icons::kCookieChromeRefreshIcon),
+              features::IsRoundedIconsEnabled()
+                  ? vector_icons::kCookieIcon
+                  : vector_icons::kCookieChromeRefreshOldIcon),
           l10n_util::GetStringUTF16(IDS_PAGE_INFO_COOKIES_HEADER),
           /*subtitle_text=*/std::u16string(),
-          PageInfoViewFactory::GetOpenSubpageIcon()));
+          PageInfoViewFactory::GetOpenSubpageIcon()),
+      0);
   cookie_button_->SetTooltipText(
       l10n_util::GetStringUTF16(IDS_PAGE_INFO_COOKIES_TOOLTIP));
   cookie_button_->SetID(
@@ -212,6 +278,10 @@ void PageInfoMainView::SetCookieInfo(const CookiesInfo& cookie_info) {
                                             kColorPageInfoForeground);
   cookie_button_->SetSubtitleTextStyleAndColor(
       views::style::STYLE_BODY_4, kColorPageInfoSubtitleForeground);
+}
+
+void PageInfoMainView::OnSeeExtensionsClicked() {
+  // TODO(crbug.com/533073052): Trigger the extensions control menu.
 }
 
 void PageInfoMainView::SetPermissionInfo(
@@ -248,6 +318,9 @@ void PageInfoMainView::SetPermissionInfo(
     UpdateResetButton(permission_info_list);
     return;
   }
+
+  ChromeLayoutProvider* layout_provider = ChromeLayoutProvider::Get();
+
   const int separator_padding = GetSeparatorPadding();
   permissions_view_->AddChildView(
       PageInfoViewFactory::CreateSeparator(GetSeparatorPadding()));
@@ -264,6 +337,31 @@ void PageInfoMainView::SetPermissionInfo(
   content_view->SetID(PageInfoViewFactory::VIEW_ID_PAGE_INFO_PERMISSION_VIEW);
   content_view->SetProperty(views::kElementIdentifierKey,
                             kPermissionsElementId);
+
+  const int controls_spacing = layout_provider->GetDistanceMetric(
+      views::DISTANCE_RELATED_CONTROL_VERTICAL);
+  const int side_button_padding =
+      layout_provider
+          ->GetInsetsMetric(ChromeInsetsMetric::INSETS_PAGE_INFO_HOVER_BUTTON)
+          .left();
+
+  if (std::optional<std::u16string> explanation =
+          GetSubAppsPermissionExplanation(ui_delegate_->GetWebContents())) {
+    auto* label = content_view->AddChildView(std::make_unique<views::Label>(
+        *explanation, views::style::CONTEXT_DIALOG_BODY_TEXT,
+        views::style::STYLE_BODY_4));
+    label->SetMultiLine(true);
+    label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+    label->SetProperty(
+        views::kMarginsKey,
+        gfx::Insets::TLBR(controls_spacing, side_button_padding,
+                          controls_spacing, side_button_padding));
+    label->SetProperty(views::kCrossAxisAlignmentKey,
+                       views::LayoutAlignment::kStretch);
+    label->SetMaximumWidth(layout_provider->GetDistanceMetric(
+                               views::DISTANCE_BUBBLE_PREFERRED_WIDTH) -
+                           side_button_padding * 2);
+  }
 
   // If there is a permission that supports one time grants, offset all other
   // permissions to align toggles.
@@ -297,8 +395,6 @@ void PageInfoMainView::SetPermissionInfo(
         content_view->AddChildView(std::move(object_view)));
   }
 
-  const int controls_spacing = ChromeLayoutProvider::Get()->GetDistanceMetric(
-      views::DISTANCE_RELATED_CONTROL_VERTICAL);
   reset_button_ = content_view->AddChildView(
       std::make_unique<views::MdTextButton>(base::BindRepeating(
           [=](PageInfoMainView* view) {
@@ -316,16 +412,12 @@ void PageInfoMainView::SetPermissionInfo(
           base::Unretained(this))));
   reset_button_->SetProperty(views::kCrossAxisAlignmentKey,
                              views::LayoutAlignment::kStart);
-  ChromeLayoutProvider* layout_provider = ChromeLayoutProvider::Get();
   // Offset the reset button by left button padding, icon size and distance
   // between icon and label to match text in the row above.
-  const int side_offset =
-      layout_provider
-          ->GetInsetsMetric(ChromeInsetsMetric::INSETS_PAGE_INFO_HOVER_BUTTON)
-          .left() +
-      GetLayoutConstant(LayoutConstant::kPageInfoIconSize) +
-      layout_provider->GetDistanceMetric(
-          views::DISTANCE_RELATED_LABEL_HORIZONTAL);
+  const int side_offset = side_button_padding +
+                          GetLayoutConstant(LayoutConstant::kPageInfoIconSize) +
+                          layout_provider->GetDistanceMetric(
+                              views::DISTANCE_RELATED_LABEL_HORIZONTAL);
   reset_button_->SetProperty(
       views::kMarginsKey,
       gfx::Insets::TLBR(controls_spacing, side_offset, controls_spacing, 0));
@@ -376,7 +468,12 @@ void PageInfoMainView::SetIdentityInfo(const IdentityInfo& identity_info) {
 
   security_container_view_->RemoveAllChildViews();
   extended_site_info_section_->SetVisible(false);
-  if (security_description->summary_style == SecuritySummaryColor::GREEN) {
+  if (identity_info.safe_browsing_status ==
+      PageInfo::SAFE_BROWSING_STATUS_WARNABLE_SUSPICIOUS_SITE) {
+    security_container_view_->AddChildView(
+        CreateSuspiciousSiteBannerView(identity_info));
+  } else if (security_description->summary_style ==
+             SecuritySummaryColor::GREEN) {
     // base::Unretained(navigation_handler_) is safe because navigation_handler_
     // is the bubble view which is the owner of this view and therefore will
     // always exist when this view exists.
@@ -443,8 +540,9 @@ void PageInfoMainView::SetPageFeatureInfo(const PageFeatureInfo& info) {
       content_view->SetLayoutManager(std::make_unique<views::FlexLayout>());
 
   auto icon = std::make_unique<NonAccessibleImageView>();
-  icon->SetImage(
-      PageInfoViewFactory::GetImageModel(vector_icons::kVrHeadsetIcon));
+  icon->SetImage(PageInfoViewFactory::GetImageModel(
+      features::IsRoundedIconsEnabled() ? vector_icons::kCardboardFilledIcon
+                                        : vector_icons::kVrHeadsetOldIcon));
   content_view->AddChildView(std::move(icon));
 
   auto label = std::make_unique<views::Label>(
@@ -495,22 +593,6 @@ void PageInfoMainView::SetPageFeatureInfo(const PageFeatureInfo& info) {
 
   PreferredSizeChanged();
 #endif
-}
-
-void PageInfoMainView::SetAdPersonalizationInfo(
-    const AdPersonalizationInfo& info) {
-  ads_personalization_section_ =
-      site_settings_view_->AddChildView(CreateContainerView());
-
-  ads_personalization_section_->RemoveAllChildViews();
-
-  if (info.is_empty()) {
-    return;
-  }
-
-  ads_personalization_section_->AddChildView(CreateAdPersonalizationButton());
-
-  PreferredSizeChanged();
 }
 
 void PageInfoMainView::OnPermissionChanged(
@@ -673,26 +755,6 @@ std::unique_ptr<views::View> PageInfoMainView::CreateAboutThisSiteButton(
   return about_this_site_button;
 }
 
-std::unique_ptr<views::View> PageInfoMainView::CreateAdPersonalizationButton() {
-  auto ads_personalization_button = std::make_unique<RichHoverButton>(
-      base::BindRepeating(&PageInfoNavigationHandler::OpenAdPersonalizationPage,
-                          base::Unretained(navigation_handler_)),
-      PageInfoViewFactory::GetImageModel(vector_icons::kAdsClickIcon),
-      l10n_util::GetStringUTF16(IDS_PAGE_INFO_AD_PRIVACY_HEADER),
-      std::u16string(), PageInfoViewFactory::GetOpenSubpageIcon());
-  ads_personalization_button->SetID(
-      PageInfoViewFactory::VIEW_ID_PAGE_INFO_AD_PERSONALIZATION_BUTTON);
-  ads_personalization_button->SetTooltipText(
-      l10n_util::GetStringUTF16(IDS_PAGE_INFO_AD_PRIVACY_TOOLTIP));
-
-  ads_personalization_button->SetTitleTextStyleAndColor(
-      views::style::STYLE_BODY_3_MEDIUM, kColorPageInfoForeground);
-  ads_personalization_button->SetSubtitleTextStyleAndColor(
-      views::style::STYLE_BODY_4, kColorPageInfoSubtitleForeground);
-
-  return ads_personalization_button;
-}
-
 std::unique_ptr<views::View> PageInfoMainView::CreateMerchantTrustButton(
     page_info::MerchantData value) {
   auto merchant_trust_button =
@@ -721,9 +783,10 @@ PageInfoMainView::CreateMerchantTrustSubpageButton(
     page_info::MerchantData value) {
   auto button = std::make_unique<RichHoverButton>(
       base::BindRepeating(&PageInfoNavigationHandler::OpenMerchantTrustPage,
-                          base::Unretained(navigation_handler_),
-                          page_info::MerchantBubbleOpenReferrer::kPageInfo),
-      PageInfoViewFactory::GetImageModel(vector_icons::kStorefrontIcon),
+                          base::Unretained(navigation_handler_)),
+      PageInfoViewFactory::GetImageModel(
+          features::IsRoundedIconsEnabled() ? vector_icons::kStorefrontIcon
+                                            : vector_icons::kStorefrontOldIcon),
       l10n_util::GetStringUTF16(IDS_PAGE_INFO_MERCHANT_TRUST_HEADER),
       std::u16string(), PageInfoViewFactory::GetOpenSubpageIcon());
 
@@ -735,7 +798,9 @@ PageInfoMainView::CreateMerchantTrustLaunchButton(GURL page_url) {
   auto button = std::make_unique<RichHoverButton>(
       base::BindRepeating(&PageInfoMainView::OpenMerchantTrustSidePanel,
                           weak_factory_.GetWeakPtr(), page_url),
-      PageInfoViewFactory::GetImageModel(vector_icons::kStorefrontIcon),
+      PageInfoViewFactory::GetImageModel(
+          features::IsRoundedIconsEnabled() ? vector_icons::kStorefrontIcon
+                                            : vector_icons::kStorefrontOldIcon),
       l10n_util::GetStringUTF16(IDS_PAGE_INFO_MERCHANT_TRUST_HEADER),
       std::u16string(), PageInfoViewFactory::GetLaunchIcon());
   return button;
@@ -744,6 +809,121 @@ PageInfoMainView::CreateMerchantTrustLaunchButton(GURL page_url) {
 void PageInfoMainView::OpenMerchantTrustSidePanel(const GURL& url) {
   ui_delegate_->OpenMerchantTrustSidePanel(url);
   ui_delegate_->RecordMerchantTrustSidePanelOpened();
+}
+
+std::unique_ptr<views::View> PageInfoMainView::CreateSuspiciousSiteBannerView(
+    const IdentityInfo& identity_info) {
+  constexpr int kBannerCornerRadius = 12;
+  constexpr int kBannerPadding = 12;
+  ChromeLayoutProvider* layout_provider = ChromeLayoutProvider::Get();
+  const int side_margin =
+      layout_provider
+          ->GetInsetsMetric(ChromeInsetsMetric::INSETS_PAGE_INFO_HOVER_BUTTON)
+          .left();
+  const int vertical_spacing = layout_provider->GetDistanceMetric(
+      views::DISTANCE_RELATED_CONTROL_VERTICAL);
+  const int icon_label_spacing = layout_provider->GetDistanceMetric(
+      views::DISTANCE_RELATED_LABEL_HORIZONTAL);
+  const int button_spacing = layout_provider->GetDistanceMetric(
+      views::DISTANCE_RELATED_BUTTON_HORIZONTAL);
+
+  auto banner = std::make_unique<views::View>();
+  auto* layout = banner->SetLayoutManager(std::make_unique<views::BoxLayout>(
+      views::BoxLayout::Orientation::kVertical,
+      gfx::Insets::VH(kBannerPadding, kBannerPadding), vertical_spacing));
+  layout->set_cross_axis_alignment(
+      views::BoxLayout::CrossAxisAlignment::kStretch);
+  banner->SetBackground(views::CreateRoundedRectBackground(
+      ui::kColorSysNeutralContainer, kBannerCornerRadius));
+  banner->SetProperty(
+      views::kMarginsKey,
+      gfx::Insets::TLBR(0, side_margin,
+                        layout_provider->GetDistanceMetric(
+                            DISTANCE_CONTENT_LIST_VERTICAL_MULTI),
+                        side_margin));
+
+  auto* content_row = banner->AddChildView(std::make_unique<views::View>());
+  auto* content_layout =
+      content_row->SetLayoutManager(std::make_unique<views::BoxLayout>(
+          views::BoxLayout::Orientation::kHorizontal, gfx::Insets(),
+          icon_label_spacing));
+  content_layout->set_cross_axis_alignment(
+      views::BoxLayout::CrossAxisAlignment::kStart);
+
+  const int icon_size = GetLayoutConstant(LayoutConstant::kPageInfoIconSize);
+  auto* icon = content_row->AddChildView(std::make_unique<views::ImageView>());
+  icon->SetImage(
+      ui::ImageModel::FromVectorIcon(vector_icons::kShieldQuestionIcon,
+                                     ui::kColorAlertHighSeverity, icon_size));
+
+  auto* text_column =
+      content_row->AddChildView(std::make_unique<views::View>());
+  auto* text_layout =
+      text_column->SetLayoutManager(std::make_unique<views::BoxLayout>(
+          views::BoxLayout::Orientation::kVertical, gfx::Insets(),
+          /*between_child_spacing=*/4));
+  text_layout->set_cross_axis_alignment(
+      views::BoxLayout::CrossAxisAlignment::kStretch);
+
+  auto* title_label = text_column->AddChildView(std::make_unique<views::Label>(
+      l10n_util::GetStringUTF16(IDS_PAGE_INFO_SUSPICIOUS_SITE_SUMMARY),
+      views::style::CONTEXT_DIALOG_TITLE, views::style::STYLE_HEADLINE_5));
+  title_label->SetEnabledColor(ui::kColorAlertHighSeverity);
+  title_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+
+  auto* description_label = text_column->AddChildView(CreateLearnMoreLabel(
+      l10n_util::GetStringUTF16(IDS_PAGE_INFO_SUSPICIOUS_SITE_DETAILS),
+      base::BindRepeating(
+          [](PageInfoMainView* view) {
+            view->presenter_->OpenSafeBrowsingHelpCenterPage(nullptr);
+          },
+          base::Unretained(this))));
+  constexpr int kTargetDescriptionWidth = 300;
+  description_label->SizeToFit(kTargetDescriptionWidth);
+
+  auto* buttons_row = banner->AddChildView(std::make_unique<views::View>());
+  auto* buttons_layout =
+      buttons_row->SetLayoutManager(std::make_unique<views::BoxLayout>(
+          views::BoxLayout::Orientation::kHorizontal, gfx::Insets(),
+          button_spacing));
+  buttons_layout->set_main_axis_alignment(
+      views::BoxLayout::MainAxisAlignment::kEnd);
+
+  auto* mark_as_safe_btn =
+      buttons_row->AddChildView(std::make_unique<views::MdTextButton>(
+          base::BindRepeating(
+              [](PageInfoMainView* view) {
+                view->presenter_->OnSuspiciousSiteMarkAsSafe();
+                if (view->GetWidget()) {
+                  view->GetWidget()->Close();
+                }
+              },
+              base::Unretained(this)),
+          l10n_util::GetStringUTF16(
+              IDS_PAGE_INFO_SUSPICIOUS_SITE_BUTTON_MARK_AS_SAFE)));
+  mark_as_safe_btn->SetStyle(ui::ButtonStyle::kTonal);
+  mark_as_safe_btn->SetID(
+      PageInfoViewFactory::
+          VIEW_ID_PAGE_INFO_SUSPICIOUS_SITE_MARK_AS_SAFE_BUTTON);
+
+  auto* back_to_safety_btn =
+      buttons_row->AddChildView(std::make_unique<views::MdTextButton>(
+          base::BindRepeating(
+              [](PageInfoMainView* view) {
+                view->presenter_->OnSuspiciousSiteBackToSafety();
+                if (view->GetWidget()) {
+                  view->GetWidget()->Close();
+                }
+              },
+              base::Unretained(this)),
+          l10n_util::GetStringUTF16(
+              IDS_PAGE_INFO_SUSPICIOUS_SITE_BUTTON_BACK_TO_SAFETY)));
+  back_to_safety_btn->SetStyle(ui::ButtonStyle::kProminent);
+  back_to_safety_btn->SetID(
+      PageInfoViewFactory::
+          VIEW_ID_PAGE_INFO_SUSPICIOUS_SITE_BACK_TO_SAFETY_BUTTON);
+
+  return banner;
 }
 
 BEGIN_METADATA(PageInfoMainView)

@@ -11,13 +11,15 @@
 #include <vector>
 
 #include "base/test/bind.h"
+#include "base/test/scoped_feature_list.h"
 #include "components/android_autofill/browser/android_autofill_bridge_factory.h"
 #include "components/android_autofill/browser/form_field_data_android.h"
 #include "components/android_autofill/browser/mock_form_data_android_bridge.h"
 #include "components/android_autofill/browser/mock_form_field_data_android_bridge.h"
 #include "components/autofill/core/browser/autofill_type.h"
 #include "components/autofill/core/browser/form_structure.h"
-#include "components/autofill/core/common/autofill_test_utils.h"
+#include "components/autofill/core/common/autofill_features.h"
+#include "components/autofill/core/common/autofill_test_util.h"
 #include "components/autofill/core/common/form_data.h"
 #include "components/autofill/core/common/form_data_test_api.h"
 #include "components/autofill/core/common/form_field_data.h"
@@ -28,10 +30,13 @@
 namespace autofill {
 namespace {
 
+using ::autofill::test::FormDataEq;
 using ::testing::_;
+using ::testing::ElementsAre;
 using ::testing::Eq;
 using ::testing::InSequence;
 using ::testing::MockFunction;
+using ::testing::Not;
 using ::testing::Pointwise;
 using ::testing::SizeIs;
 
@@ -50,7 +55,6 @@ FormFieldData CreateTestField(std::u16string name = u"SomeName") {
   f.set_name_attribute(f.name());
   f.set_id_attribute(u"some_id");
   f.set_form_control_type(FormControlType::kInputText);
-  f.set_check_status(FormFieldData::CheckStatus::kChecked);
   f.set_role(FormFieldData::RoleAttribute::kOther);
   f.set_is_focusable(true);
   f.set_renderer_id(FieldRendererId(renderer_id++));
@@ -122,10 +126,10 @@ TEST_F(FormDataAndroidTest, Form) {
   FormData form = CreateTestForm();
   FormDataAndroid form_android(form, kSampleSessionId);
 
-  EXPECT_EQ(form_android.form(), form);
+  EXPECT_THAT(form_android.form(), FormDataEq(form));
 
   form.set_name(form.name() + u"x");
-  EXPECT_NE(form_android.form(), form);
+  EXPECT_THAT(form_android.form(), Not(FormDataEq(form)));
 }
 
 // Tests that form similarity checks include name, name_attribute, id_attribute,
@@ -194,40 +198,6 @@ TEST_F(FormDataAndroidTest, SimilarFormAs_Fields) {
   f = af.form();
   test_api(f).field(0).set_name(f.fields().front().name() + u"x");
   EXPECT_FALSE(af.SimilarFormAs(f));
-}
-
-TEST_F(FormDataAndroidTest, GetFieldIndex) {
-  FormData f = CreateTestForm();
-  f.set_fields({CreateTestField(u"name1"), CreateTestField(u"name2")});
-  FormDataAndroid af(f, kSampleSessionId);
-
-  size_t index = 100;
-  EXPECT_TRUE(af.GetFieldIndex(f.fields()[1], &index));
-  EXPECT_EQ(index, 1u);
-
-  // As updates in `f` are not propagated to the Android version `af`, the
-  // lookup fails.
-  test_api(f).field(1).set_name(u"name3");
-  EXPECT_FALSE(af.GetFieldIndex(f.fields()[1], &index));
-}
-
-// Tests that `GetSimilarFieldIndex` only checks field similarity.
-TEST_F(FormDataAndroidTest, GetSimilarFieldIndex) {
-  FormData f = CreateTestForm();
-  f.set_fields({CreateTestField(u"name1"), CreateTestField(u"name2")});
-  FormDataAndroid af(f, kSampleSessionId);
-
-  size_t index = 100;
-  // Value is not part of a field similarity check, so this field is similar to
-  // af.form().fields[1].
-  test_api(f).field(1).set_value(u"some value");
-  EXPECT_TRUE(af.GetSimilarFieldIndex(f.fields()[1], &index));
-  EXPECT_EQ(index, 1u);
-
-  // Name is a part of the field similarity check, so there is no field similar
-  // to this one.
-  test_api(f).field(1).set_name(u"name3");
-  EXPECT_FALSE(af.GetSimilarFieldIndex(f.fields()[1], &index));
 }
 
 // Tests that calling `OnFormFieldDidChange` propagates the changes to the
@@ -359,7 +329,28 @@ TEST_F(FormDataAndroidTest, UpdateFieldVisibilities) {
   EXPECT_CALL(*field_bridges()[2], UpdateFocusable).Times(0);
   form_android.UpdateFieldVisibilities(form);
 
-  EXPECT_EQ(form_android.form(), form);
+  EXPECT_THAT(form_android.form(), FormDataEq(form));
+}
+
+// Tests that `UpdateFieldVisibilities` works when the updated form has a
+// different number or order of fields.
+TEST_F(FormDataAndroidTest, UpdateFieldVisibilities_ChangedForm) {
+  base::test::ScopedFeatureList scoped_feature_list{
+      features::kAutofillAndroidUseGlobalIdForFormComparison};
+  FormData form = CreateTestForm();
+  form.set_fields({CreateTestField(), CreateTestField()});
+  test_api(form).field(1).set_is_focusable(false);
+  FormDataAndroid form_android(form, kSampleSessionId);
+
+  FormData updated_form = form;
+  test_api(updated_form).field(1).set_is_focusable(true);
+  updated_form.set_fields(
+      {CreateTestField(), updated_form.fields()[1], CreateTestField()});
+
+  EXPECT_CALL(*field_bridges()[0], UpdateFocusable).Times(0);
+  EXPECT_CALL(*field_bridges()[1], UpdateFocusable(true));
+  EXPECT_THAT(form_android.UpdateFieldVisibilities(updated_form),
+              ElementsAre(1));
 }
 
 // Tests that `GetJavaPeer` passes the correct `FormData`, `SessionId` and

@@ -6,10 +6,8 @@
 
 #include "base/containers/span.h"
 #include "base/notreached.h"
-#include "base/test/scoped_feature_list.h"
 #include "extensions/common/api/messaging/message.h"
 #include "extensions/common/api/messaging/port_id.h"
-#include "extensions/common/extension_features.h"
 #include "extensions/common/mojom/message_port.mojom-shared.h"
 #include "extensions/common/mojom/message_port.mojom.h"
 #include "mojo/public/cpp/test_support/test_utils.h"
@@ -71,8 +69,8 @@ TEST(MessagePortMojomTraitsTest, MessageEmpty) {
 }
 
 TEST(MessagePortMojomTraitsTest, JSONMessageValues) {
-  Message input("some text", mojom::SerializationFormat::kJson,
-                /*user_gesture=*/true, /*from_privileged_context=*/true);
+  Message input("some text", /*user_gesture=*/true,
+                /*from_privileged_context=*/true);
   Message output;
   EXPECT_TRUE(mojo::test::SerializeAndDeserialize<extensions::mojom::Message>(
       input, output));
@@ -91,18 +89,7 @@ TEST(MessagePortMojomTraitsTest, MessageDataJson) {
   EXPECT_EQ(std::get<std::string>(input), std::get<std::string>(output));
 }
 
-class StructuredMessagePortMojomTraitsTest : public testing::Test {
- public:
-  StructuredMessagePortMojomTraitsTest() {
-    scoped_feature_list_.InitAndEnableFeature(
-        extensions_features::kStructuredCloningForMessaging);
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
-TEST_F(StructuredMessagePortMojomTraitsTest, StructuredMessageValues) {
+TEST(MessagePortMojomTraitsTest, StructuredMessageValues) {
   const std::string kData("text");
   StructuredCloneMessageData message_data;
   message_data.owned_encoded_message =
@@ -115,9 +102,8 @@ TEST_F(StructuredMessagePortMojomTraitsTest, StructuredMessageValues) {
   message_data.blobs.push_back(blink::mojom::SerializedBlob::New(
       "uuid", "content_type", /*size=*/10, std::move(blob_remote)));
 
-  Message input(std::move(message_data),
-                mojom::SerializationFormat::kStructuredClone,
-                /*user_gesture=*/true, /*from_privileged_context=*/true);
+  Message input(std::move(message_data), /*user_gesture=*/true,
+                /*from_privileged_context=*/true);
   Message output;
   EXPECT_TRUE(mojo::test::SerializeAndDeserialize<extensions::mojom::Message>(
       input, output));
@@ -126,7 +112,7 @@ TEST_F(StructuredMessagePortMojomTraitsTest, StructuredMessageValues) {
   EXPECT_EQ(input.from_privileged_context(), output.from_privileged_context());
 }
 
-TEST_F(StructuredMessagePortMojomTraitsTest, MessageDataStructured) {
+TEST(MessagePortMojomTraitsTest, MessageDataStructured) {
   const std::string kData("text");
   StructuredCloneMessageData message_data;
   message_data.owned_encoded_message =
@@ -147,12 +133,10 @@ TEST_F(StructuredMessagePortMojomTraitsTest, MessageDataStructured) {
 
   // We can't compare `MessageData` directly, so wrap them in `Message` objects
   // and use `Message::EqualsForTesting()` which handles blob comparison.
-  Message input(std::move(input_data),
-                mojom::SerializationFormat::kStructuredClone,
-                /*user_gesture=*/true, /*from_privileged_context=*/true);
-  Message output(std::move(output_data),
-                 mojom::SerializationFormat::kStructuredClone,
-                 /*user_gesture=*/true, /*from_privileged_context=*/true);
+  Message input(std::move(input_data), /*user_gesture=*/true,
+                /*from_privileged_context=*/true);
+  Message output(std::move(output_data), /*user_gesture=*/true,
+                 /*from_privileged_context=*/true);
 
   EXPECT_TRUE(input.EqualsForTesting(output));
 }

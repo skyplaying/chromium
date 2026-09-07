@@ -32,11 +32,10 @@ import org.chromium.chrome.browser.customtabs.content.TabObserverRegistrar;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.preloading.PreloadingDataBridge;
 import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.RedirectHandlerTabHelper;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabLaunchType;
-import org.chromium.chrome.browser.tab.TabLoadIfNeededCaller;
+import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.chrome.browser.tab.TabSelectionType;
 import org.chromium.components.embedder_support.util.UrlUtilities;
 import org.chromium.content_public.browser.LoadUrlParams;
@@ -109,7 +108,7 @@ public class HiddenTabHolder {
         }
     }
 
-    private class HiddenTabObserver extends EmptyTabObserver {
+    private class HiddenTabObserver implements TabObserver {
         @Override
         public void onCrash(Tab tab) {
             if (mSpeculation == null || mSpeculation.hiddenTab.tab != tab) return;
@@ -258,7 +257,7 @@ public class HiddenTabHolder {
             if (urlsMatch && TextUtils.equals(speculationReferrer, referrer)) {
                 return hiddenTab;
             } else {
-                hiddenTab.tab.destroy();
+                destroyHiddenTabAndObservers(hiddenTab);
                 return null;
             }
         }
@@ -270,8 +269,13 @@ public class HiddenTabHolder {
         if (session != null && !session.equals(mSpeculation.session)) return;
         if (mSpeculation.isEarlyNav) return;
 
-        mSpeculation.hiddenTab.tab.destroy();
+        destroyHiddenTabAndObservers(mSpeculation.hiddenTab);
         mSpeculation = null;
+    }
+
+    private static void destroyHiddenTabAndObservers(HiddenTab hiddenTab) {
+        hiddenTab.tabObserverRegistrar.onDestroy();
+        hiddenTab.tab.destroy();
     }
 
     /** Returns whether there currently is a hidden tab. */
@@ -324,7 +328,7 @@ public class HiddenTabHolder {
         CustomTabActivityTabController.addTabNavigationObservers(
                 registrar, customTabObserver, customTabNavigationEventObserver, tab, token);
 
-        tab.show(TabSelectionType.FROM_NEW, TabLoadIfNeededCaller.REQUEST_TO_SHOW_TAB_THEN_SHOW);
+        tab.show(TabSelectionType.FROM_NEW);
 
         // Unlike a prerender, this isn't a speculative load, so we can record metrics for it
         // unconditionally.

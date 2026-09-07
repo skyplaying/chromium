@@ -71,8 +71,8 @@ class TextureManagerTestBase : public GpuServiceTest {
     DCHECK(context_type == CONTEXT_TYPE_OPENGLES2 ||
            context_type == CONTEXT_TYPE_OPENGLES3);
     GpuDriverBugWorkarounds gpu_driver_bug_workaround;
-    feature_info_ =
-        new FeatureInfo(gpu_driver_bug_workaround, GpuFeatureInfo());
+    feature_info_ = base::MakeRefCounted<FeatureInfo>(gpu_driver_bug_workaround,
+                                                      GpuFeatureInfo());
   }
 
   ~TextureManagerTestBase() override = default;
@@ -295,6 +295,80 @@ TEST_F(TextureManagerES3Test, UseDefaultTexturesFalseES3) {
   manager.Destroy();
 }
 
+TEST_F(TextureManagerES3Test, BaseMaxLevelClampingMutable) {
+  const GLuint kClient1Id = 1;
+  const GLuint kService1Id = 11;
+  manager_->CreateTexture(kClient1Id, kService1Id);
+  TextureRef* texture_ref = manager_->GetTexture(kClient1Id);
+  ASSERT_TRUE(texture_ref != nullptr);
+  Texture* texture = texture_ref->texture();
+  manager_->SetTarget(texture_ref, GL_TEXTURE_2D);
+
+  EXPECT_CALL(*gl_, TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 5))
+      .Times(1)
+      .RetiresOnSaturation();
+  manager_->SetParameteri("", error_state_.get(), texture_ref,
+                          GL_TEXTURE_BASE_LEVEL, 10);
+  EXPECT_EQ(5, texture->base_level());
+  EXPECT_EQ(10, texture->unclamped_base_level());
+
+  EXPECT_CALL(*gl_, TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 5))
+      .Times(1)
+      .RetiresOnSaturation();
+  manager_->SetParameteri("", error_state_.get(), texture_ref,
+                          GL_TEXTURE_MAX_LEVEL, 10);
+  EXPECT_EQ(5, texture->max_level());
+  EXPECT_EQ(10, texture->unclamped_max_level());
+}
+
+TEST_F(TextureManagerES3Test, CompletenessUsesUnclampedBaseLevel) {
+  const GLuint kClient1Id = 1;
+  const GLuint kService1Id = 11;
+  manager_->CreateTexture(kClient1Id, kService1Id);
+  TextureRef* texture_ref = manager_->GetTexture(kClient1Id);
+  ASSERT_TRUE(texture_ref != nullptr);
+  Texture* texture = texture_ref->texture();
+  manager_->SetTarget(texture_ref, GL_TEXTURE_2D);
+
+  manager_->SetLevelInfo(texture_ref, GL_TEXTURE_2D, 0, GL_RGBA, 4, 4, 1, 0,
+                         GL_RGBA, GL_UNSIGNED_BYTE, gfx::Rect(4, 4));
+
+  EXPECT_CALL(*gl_,
+              TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST))
+      .Times(1)
+      .RetiresOnSaturation();
+  manager_->SetParameteri("", error_state_.get(), texture_ref,
+                          GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+
+  // Set MAX_LEVEL to 0 to make it mipmap complete with only level 0 defined.
+  EXPECT_CALL(*gl_, TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0))
+      .Times(1)
+      .RetiresOnSaturation();
+  manager_->SetParameteri("", error_state_.get(), texture_ref,
+                          GL_TEXTURE_MAX_LEVEL, 0);
+
+  EXPECT_TRUE(texture->texture_complete());
+
+  // Set BASE_LEVEL to 10 (out of range). Clamped to 5.
+  EXPECT_CALL(*gl_, TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 5))
+      .Times(1)
+      .RetiresOnSaturation();
+  manager_->SetParameteri("", error_state_.get(), texture_ref,
+                          GL_TEXTURE_BASE_LEVEL, 10);
+
+  EXPECT_EQ(5, texture->base_level());
+  EXPECT_EQ(10, texture->unclamped_base_level());
+
+  // Define level 5. If we only checked base_level_ (5), it would be complete
+  // (since level 5 is defined and MAX_LEVEL is 0 which is clamped to 5, so
+  // levels 5 to 5 are defined).
+  // But unclamped_base_level_ is 10, so it should be incomplete.
+  manager_->SetLevelInfo(texture_ref, GL_TEXTURE_2D, 5, GL_RGBA, 1, 1, 1, 0,
+                         GL_RGBA, GL_UNSIGNED_BYTE, gfx::Rect(1, 1));
+
+  EXPECT_FALSE(texture->texture_complete());
+}
+
 TEST_F(TextureManagerTest, TextureUsageExt) {
   TestHelper::SetupTextureManagerInitExpectations(
       gl_.get(), false, false, {"GL_ANGLE_texture_usage"}, kUseDefaultTextures);
@@ -477,7 +551,7 @@ TEST_F(TextureManagerTest, ValidForTarget) {
 TEST_F(TextureManagerTest, ValidForTargetNPOT) {
   TestHelper::SetupFeatureInfoInitExpectations(
       gl_.get(), "GL_OES_texture_npot");
-  scoped_refptr<FeatureInfo> feature_info(new FeatureInfo());
+  auto feature_info = base::MakeRefCounted<FeatureInfo>();
   feature_info->InitializeForTesting();
   TextureManager manager(nullptr, feature_info.get(), kMaxTextureSize,
                          kMaxCubeMapTextureSize, kMaxRectangleTextureSize,
@@ -508,7 +582,7 @@ class TextureTestBase : public GpuServiceTest {
   static const GLuint kService1Id = 11;
   static const bool kUseDefaultTextures = false;
 
-  TextureTestBase() : feature_info_(new FeatureInfo()) {}
+  TextureTestBase() : feature_info_(base::MakeRefCounted<FeatureInfo>()) {}
   ~TextureTestBase() override { texture_ref_ = nullptr; }
 
  protected:
@@ -659,7 +733,7 @@ TEST_F(TextureTest, ZeroSizeCanNotRenderExternalOES) {
 
 TEST_F(TextureTest, CanRenderTo) {
   TestHelper::SetupFeatureInfoInitExpectations(gl_.get(), "");
-  scoped_refptr<FeatureInfo> feature_info(new FeatureInfo());
+  auto feature_info = base::MakeRefCounted<FeatureInfo>();
   feature_info->InitializeForTesting();
   manager_->SetTarget(texture_ref_.get(), GL_TEXTURE_2D);
   manager_->SetLevelInfo(texture_ref_.get(), GL_TEXTURE_2D, 0, GL_RGB, 1, 1, 1,
@@ -668,11 +742,22 @@ TEST_F(TextureTest, CanRenderTo) {
   manager_->SetLevelInfo(texture_ref_.get(), GL_TEXTURE_2D, 0, GL_RGBA, 0, 0, 1,
                          0, GL_RGBA, GL_UNSIGNED_BYTE, gfx::Rect());
   EXPECT_TRUE(texture_ref_->texture()->CanRenderTo(feature_info.get(), 0));
+
+  // Verify that rendering to a level < base_level is not allowed.
+  EXPECT_CALL(*gl_, TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 1))
+      .Times(1)
+      .RetiresOnSaturation();
+  manager_->SetParameteri("", error_state_.get(), texture_ref_.get(),
+                          GL_TEXTURE_BASE_LEVEL, 1);
+  manager_->SetLevelInfo(texture_ref_.get(), GL_TEXTURE_2D, 1, GL_RGBA, 0, 0, 1,
+                         0, GL_RGBA, GL_UNSIGNED_BYTE, gfx::Rect());
+  EXPECT_FALSE(texture_ref_->texture()->CanRenderTo(feature_info.get(), 0));
+  EXPECT_TRUE(texture_ref_->texture()->CanRenderTo(feature_info.get(), 1));
 }
 
 TEST_F(TextureTest, CanNotRenderTo) {
   TestHelper::SetupFeatureInfoInitExpectations(gl_.get(), "");
-  scoped_refptr<FeatureInfo> feature_info(new FeatureInfo());
+  auto feature_info = base::MakeRefCounted<FeatureInfo>();
   feature_info->InitializeForTesting();
   manager_->SetTarget(texture_ref_.get(), GL_TEXTURE_2D);
   manager_->SetLevelInfo(texture_ref_.get(), GL_TEXTURE_2D, 0, GL_LUMINANCE, 1,
@@ -898,7 +983,7 @@ TEST_F(TextureTest, NPOT2D) {
 TEST_F(TextureTest, NPOT2DNPOTOK) {
   TestHelper::SetupFeatureInfoInitExpectations(
       gl_.get(), "GL_OES_texture_npot");
-  scoped_refptr<FeatureInfo> feature_info(new FeatureInfo());
+  auto feature_info = base::MakeRefCounted<FeatureInfo>();
   feature_info->InitializeForTesting();
   TextureManager manager(nullptr, feature_info.get(), kMaxTextureSize,
                          kMaxCubeMapTextureSize, kMaxRectangleTextureSize,
@@ -1197,7 +1282,7 @@ TEST_F(TextureTest, ValidForTexture) {
 TEST_F(TextureTest, FloatNotLinear) {
   TestHelper::SetupFeatureInfoInitExpectations(
       gl_.get(), "GL_OES_texture_float");
-  scoped_refptr<FeatureInfo> feature_info(new FeatureInfo());
+  auto feature_info = base::MakeRefCounted<FeatureInfo>();
   feature_info->InitializeForTesting();
   TextureManager manager(nullptr, feature_info.get(), kMaxTextureSize,
                          kMaxCubeMapTextureSize, kMaxRectangleTextureSize,
@@ -1227,7 +1312,7 @@ TEST_F(TextureTest, FloatNotLinear) {
 TEST_F(TextureTest, FloatLinear) {
   TestHelper::SetupFeatureInfoInitExpectations(
       gl_.get(), "GL_OES_texture_float GL_OES_texture_float_linear");
-  scoped_refptr<FeatureInfo> feature_info(new FeatureInfo());
+  auto feature_info = base::MakeRefCounted<FeatureInfo>();
   feature_info->InitializeForTesting();
   TextureManager manager(nullptr, feature_info.get(), kMaxTextureSize,
                          kMaxCubeMapTextureSize, kMaxRectangleTextureSize,
@@ -1249,7 +1334,7 @@ TEST_F(TextureTest, FloatLinear) {
 TEST_F(TextureTest, HalfFloatNotLinear) {
   TestHelper::SetupFeatureInfoInitExpectations(
       gl_.get(), "GL_OES_texture_half_float");
-  scoped_refptr<FeatureInfo> feature_info(new FeatureInfo());
+  auto feature_info = base::MakeRefCounted<FeatureInfo>();
   feature_info->InitializeForTesting();
   TextureManager manager(nullptr, feature_info.get(), kMaxTextureSize,
                          kMaxCubeMapTextureSize, kMaxRectangleTextureSize,
@@ -1279,7 +1364,7 @@ TEST_F(TextureTest, HalfFloatNotLinear) {
 TEST_F(TextureTest, HalfFloatLinear) {
   TestHelper::SetupFeatureInfoInitExpectations(
       gl_.get(), "GL_OES_texture_half_float GL_OES_texture_half_float_linear");
-  scoped_refptr<FeatureInfo> feature_info(new FeatureInfo());
+  auto feature_info = base::MakeRefCounted<FeatureInfo>();
   feature_info->InitializeForTesting();
   TextureManager manager(nullptr, feature_info.get(), kMaxTextureSize,
                          kMaxCubeMapTextureSize, kMaxRectangleTextureSize,
@@ -1301,7 +1386,7 @@ TEST_F(TextureTest, HalfFloatLinear) {
 TEST_F(TextureTest, EGLImageExternal) {
   TestHelper::SetupFeatureInfoInitExpectations(
       gl_.get(), "GL_OES_EGL_image_external");
-  scoped_refptr<FeatureInfo> feature_info(new FeatureInfo());
+  auto feature_info = base::MakeRefCounted<FeatureInfo>();
   feature_info->InitializeForTesting();
   TextureManager manager(nullptr, feature_info.get(), kMaxTextureSize,
                          kMaxCubeMapTextureSize, kMaxRectangleTextureSize,
@@ -1321,7 +1406,7 @@ TEST_F(TextureTest, EGLImageExternal) {
 TEST_F(TextureTest, DepthTexture) {
   TestHelper::SetupFeatureInfoInitExpectations(
       gl_.get(), "GL_ANGLE_depth_texture");
-  scoped_refptr<FeatureInfo> feature_info(new FeatureInfo());
+  auto feature_info = base::MakeRefCounted<FeatureInfo>();
   feature_info->InitializeForTesting();
   TextureManager manager(nullptr, feature_info.get(), kMaxTextureSize,
                          kMaxCubeMapTextureSize, kMaxRectangleTextureSize,
@@ -1971,7 +2056,7 @@ class SharedTextureTest : public GpuServiceTest {
   static const bool kUseDefaultTextures = false;
 
   SharedTextureTest()
-      : feature_info_(new FeatureInfo()),
+      : feature_info_(base::MakeRefCounted<FeatureInfo>()),
         memory_tracker1_(base::MakeRefCounted<MemoryTracker>()),
         memory_tracker2_(base::MakeRefCounted<MemoryTracker>()) {}
 

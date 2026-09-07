@@ -25,6 +25,7 @@ import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.ApplicationTestUtils;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.CriteriaHelper;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Restriction;
@@ -41,9 +42,9 @@ import org.chromium.chrome.test.util.ChromeTabUtils;
 import org.chromium.chrome.test.util.browser.webapps.WebApkIntentDataProviderBuilder;
 import org.chromium.components.permissions.PermissionDialogController;
 import org.chromium.net.test.EmbeddedTestServer;
+import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.test.util.DeviceRestriction;
-import org.chromium.webapk.lib.common.WebApkConstants;
 
 import java.util.concurrent.TimeoutException;
 
@@ -52,8 +53,6 @@ import java.util.concurrent.TimeoutException;
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
 public final class WebApkActivityTest {
     private static final String TEST_WEBAPK_PACKAGE_NAME = "org.chromium.webapk.for.testing";
-    private static final String TEST_WEBAPK_ID =
-            WebApkConstants.WEBAPK_ID_PREFIX + TEST_WEBAPK_PACKAGE_NAME;
 
     @Rule public final WebApkActivityTestRule mActivityTestRule = new WebApkActivityTestRule();
 
@@ -106,6 +105,7 @@ public final class WebApkActivityTest {
     @LargeTest
     @Test
     @Restriction(DeviceRestriction.RESTRICTION_TYPE_NON_AUTO) // Flaky, see crbug.com/393561248
+    @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511287766
     public void testActivateWebApkLPlus() throws Exception {
         // Launch WebAPK.
         WebappActivity webApkActivity =

@@ -7,7 +7,6 @@
 
 #include <stdint.h>
 
-#include <optional>
 #include <string>
 
 #include "ui/accessibility/ax_action_data.h"
@@ -36,7 +35,6 @@ struct StructTraits<ax::mojom::AXActionDataDataView, ui::AXActionData> {
     return a.target_role;
   }
   static int32_t request_id(const ui::AXActionData& a) { return a.request_id; }
-  static int32_t flags(const ui::AXActionData& a) { return a.flags; }
   static int32_t anchor_node_id(const ui::AXActionData& a) {
     return a.anchor_node_id;
   }
@@ -73,9 +71,18 @@ struct StructTraits<ax::mojom::AXActionDataDataView, ui::AXActionData> {
   static ax::mojom::ScrollBehavior scroll_behavior(const ui::AXActionData& a) {
     return a.scroll_behavior;
   }
-  static const std::optional<ui::AXTreeID> child_tree_id(
-      const ui::AXActionData& a) {
+  static const ui::AXTreeID& child_tree_id(const ui::AXActionData& a) {
     return a.child_tree_id;
+  }
+  static const base::flat_map<ax::mojom::IntListAttribute,
+                              std::vector<int32_t>>&
+  intlist_attributes(const ui::AXActionData& a) {
+    return a.intlist_attributes.container();
+  }
+  static const base::flat_map<ax::mojom::StringListAttribute,
+                              std::vector<std::string>>&
+  stringlist_attributes(const ui::AXActionData& a) {
+    return a.stringlist_attributes.container();
   }
 
   // Returns false if `data` could not be read into `out`, which may occur if

@@ -13,6 +13,7 @@ import 'chrome://resources/ash/common/cr_elements/cr_icon_button/cr_icon_button.
 import 'chrome://resources/ash/common/cr_elements/cr_link_row/cr_link_row.js';
 import 'chrome://resources/ash/common/cr_elements/policy/cr_policy_pref_indicator.js';
 import '../controls/settings_dropdown_menu.js';
+import '../controls/settings_toggle_button.js';
 import '../os_settings_page/os_settings_animated_pages.js';
 import '../os_settings_page/os_settings_subpage.js';
 import '../os_settings_page/settings_card.js';
@@ -35,9 +36,10 @@ import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bu
 
 import {AppManagementStoreMixin} from '../common/app_management/store_mixin.js';
 import {DeepLinkingMixin} from '../common/deep_linking_mixin.js';
-import {androidAppsVisible, isAppParentalControlsFeatureAvailable, isArcVmEnabled, isPlayStoreAvailable, isPluginVmAvailable} from '../common/load_time_booleans.js';
+import {androidAppsVisible, isAppParentalControlsFeatureAvailable, isArcVmEnabled, isPlayStoreAvailable} from '../common/load_time_booleans.js';
 import {RouteOriginMixin} from '../common/route_origin_mixin.js';
 import type {DropdownMenuOptionList} from '../controls/settings_dropdown_menu.js';
+import type {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
 import type {App as AppWithNotifications, AppNotificationsHandlerInterface} from '../mojom-webui/app_notification_handler.mojom-webui.js';
 import {AppNotificationsObserverReceiver, Readiness} from '../mojom-webui/app_notification_handler.mojom-webui.js';
 import type {AppParentalControlsHandlerInterface} from '../mojom-webui/app_parental_controls_handler.mojom-webui.js';
@@ -131,6 +133,23 @@ export class OsSettingsAppsPageElement extends OsSettingsAppsPageElementBase {
         },
       },
 
+      isolatedWebAppsDescription_: {
+        type: String,
+      },
+
+      syntheticIwaPref_: {
+        type: Object,
+        computed:
+            'computeSyntheticIwaPref_(prefs.ash.isolated_web_apps_enabled, ' +
+            'prefs.profile.isolated_web_app.install.user_install_enabled)',
+      },
+
+      isIwaPolicyDisabled_: {
+        type: Boolean,
+        computed: 'computeIsIwaPolicyDisabled_(' +
+            'prefs.profile.isolated_web_app.install.user_install_enabled)',
+      },
+
       /**
        * Whether the Disable Parental Controls PIN dialog should be shown.
        */
@@ -159,13 +178,6 @@ export class OsSettingsAppsPageElement extends OsSettingsAppsPageElementBase {
       isParentalControlsSetupCompleted_: {
         type: Boolean,
         value: false,
-      },
-
-      isPluginVmAvailable_: {
-        type: Boolean,
-        value: () => {
-          return isPluginVmAvailable();
-        },
       },
 
       isAppParentalControlsFeatureAvailable_: {
@@ -210,41 +222,51 @@ export class OsSettingsAppsPageElement extends OsSettingsAppsPageElementBase {
     };
   }
 
-  androidAppsInfo: AndroidAppsInfo;
-  searchTerm: string;
+  declare androidAppsInfo: AndroidAppsInfo;
+  declare searchTerm: string;
 
   // DeepLinkingMixin override
   override supportedSettingIds = new Set<Setting>([
     Setting.kManageAndroidPreferences,
     Setting.kTurnOnPlayStore,
     Setting.kAppParentalControls,
+    Setting.kEnableIsolatedWebAppsOnOff,
   ]);
 
-  private app_: App;
-  private appNotificationsObserverReceiver_: AppNotificationsObserverReceiver;
-  private appsWithNotifications_: AppWithNotifications[];
-  private readonly isAppParentalControlsFeatureAvailable_: boolean;
-  private isArcVmManageUsbAvailable_: boolean;
-  private isDndEnabled_: boolean;
-  private isPinVerified_: boolean;
-  private readonly isPlayStoreAvailable_: boolean;
-  private isPluginVmAvailable_: boolean;
-  private mojoInterfaceProvider_: AppNotificationsHandlerInterface;
-  private parentalControlsHandler_: AppParentalControlsHandlerInterface;
-  private onStartupOptions_: DropdownMenuOptionList;
-  private section_: Section;
-  private readonly showAndroidApps_: boolean;
-  private showManageIsolatedWebAppsRow_: boolean;
-  private showParentalControlsDisablePinDialog_: boolean;
-  private showParentalControlsSetupPinDialog_: boolean;
-  private showParentalControlsVerifyPinDialog_: boolean;
-  private isParentalControlsSetupCompleted_: boolean;
+  declare private app_: App;
+  private appNotificationsObserverReceiver_ =
+      new AppNotificationsObserverReceiver(this);
+  declare private appsWithNotifications_: AppWithNotifications[];
+  declare private readonly isAppParentalControlsFeatureAvailable_: boolean;
+  declare private isArcVmManageUsbAvailable_: boolean;
+  declare private isDndEnabled_: boolean;
+  declare private isPinVerified_: boolean;
+  declare private readonly isPlayStoreAvailable_: boolean;
+  private mojoInterfaceProvider_: AppNotificationsHandlerInterface =
+      getAppNotificationProvider();
+  private parentalControlsHandler_: AppParentalControlsHandlerInterface =
+      getAppParentalControlsProvider();
+  declare private onStartupOptions_: DropdownMenuOptionList;
+  declare private section_: Section;
+  declare private readonly showAndroidApps_: boolean;
+  declare private showManageIsolatedWebAppsRow_: boolean;
+  declare private showParentalControlsDisablePinDialog_: boolean;
+  declare private showParentalControlsSetupPinDialog_: boolean;
+  declare private showParentalControlsVerifyPinDialog_: boolean;
+  declare private isParentalControlsSetupCompleted_: boolean;
+  declare private isolatedWebAppsDescription_: string;
+  declare private syntheticIwaPref_: chrome.settingsPrivate.PrefObject|undefined;
+  declare private isIwaPolicyDisabled_: boolean;
 
   constructor() {
     super();
+    this.isIwaPolicyDisabled_ = true;
 
     /** RouteOriginMixin override */
     this.route = routes.APPS;
+
+    this.isolatedWebAppsDescription_ = this.getAriaLabelledSubLabel_(
+        this.i18nAdvanced('isolatedWebAppsDescription').toString());
   }
 
   override connectedCallback(): void {
@@ -257,11 +279,6 @@ export class OsSettingsAppsPageElement extends OsSettingsAppsPageElementBase {
       return getSelectedApp(state) || undefined;
     });
 
-    this.mojoInterfaceProvider_ = getAppNotificationProvider();
-
-    this.appNotificationsObserverReceiver_ =
-        new AppNotificationsObserverReceiver(this);
-
     this.mojoInterfaceProvider_.addObserver(
         this.appNotificationsObserverReceiver_.$.bindNewPipeAndPassRemote());
 
@@ -272,7 +289,6 @@ export class OsSettingsAppsPageElement extends OsSettingsAppsPageElementBase {
       this.appsWithNotifications_ = result.apps;
     });
 
-    this.parentalControlsHandler_ = getAppParentalControlsProvider();
     this.getIsParentalControlsSetupCompleted_().then((isCompleted) => {
       this.isParentalControlsSetupCompleted_ = isCompleted;
     });
@@ -283,8 +299,6 @@ export class OsSettingsAppsPageElement extends OsSettingsAppsPageElementBase {
 
     this.addFocusConfig(routes.APP_MANAGEMENT, '#appManagementRow');
     this.addFocusConfig(routes.APP_NOTIFICATIONS, '#appNotificationsRow');
-    this.addFocusConfig(
-        routes.MANAGE_ISOLATED_WEB_APPS, '#manageIsolatedWebAppsRow');
     this.addFocusConfig(
         routes.ANDROID_APPS_DETAILS,
         () => this.shadowRoot!.querySelector<HTMLElement>(
@@ -315,7 +329,7 @@ export class OsSettingsAppsPageElement extends OsSettingsAppsPageElementBase {
     chrome.metricsPrivate.recordEnumerationValue(
         AppManagementEntryPointsHistogramName,
         AppManagementEntryPoint.OS_SETTINGS_MAIN_PAGE,
-        Object.keys(AppManagementEntryPoint).length);
+        AppManagementEntryPoint.COUNT);
     Router.getInstance().navigateTo(routes.APP_MANAGEMENT);
   }
 
@@ -399,8 +413,58 @@ export class OsSettingsAppsPageElement extends OsSettingsAppsPageElementBase {
     }
   }
 
-  private onClickManageIsolatedWebApps_(): void {
-    Router.getInstance().navigateTo(routes.MANAGE_ISOLATED_WEB_APPS);
+  private getAriaLabelledSubLabel_(subLabel: string): string {
+    const link = document.createElement('localized-link');
+    link.setAttribute('localized-string', subLabel);
+    link.setAttribute('hidden', 'true');
+    document.body.appendChild(link);
+    const container = link.shadowRoot!.getElementById('container');
+    assert(container);
+    const innerHTML = container.innerHTML;
+    document.body.removeChild(link);
+    return innerHTML;
+  }
+
+  private computeSyntheticIwaPref_(
+      userPref: chrome.settingsPrivate.PrefObject|undefined,
+      profilePref: chrome.settingsPrivate.PrefObject|
+      undefined): chrome.settingsPrivate.PrefObject|undefined {
+    if (!userPref || !profilePref) {
+      return undefined;
+    }
+
+    const syntheticPref = Object.assign({}, userPref);
+
+    if (!profilePref.value) {
+      syntheticPref.value = false;
+      syntheticPref.enforcement = chrome.settingsPrivate.Enforcement.ENFORCED;
+      syntheticPref.controlledBy = profilePref.controlledBy ||
+          chrome.settingsPrivate.ControlledBy.USER_POLICY;
+    }
+
+    return syntheticPref;
+  }
+
+  private computeIsIwaPolicyDisabled_(
+      policyPref: chrome.settingsPrivate.PrefObject|undefined): boolean {
+    return !policyPref || !policyPref.value;
+  }
+
+  private onIwaToggleChange_(event: Event): void {
+    const target = event.target as unknown as SettingsToggleButtonElement;
+
+    if (!this.getPref<boolean>(
+                 'profile.isolated_web_app.install.user_install_enabled')
+             .value) {
+      target.checked = false;
+      return;
+    }
+
+    this.set('prefs.ash.isolated_web_apps_enabled.value', target.checked);
+  }
+
+  private onIwaLearnMoreClick_(): void {
+    window.open(loadTimeData.getString('isolatedWebAppsLearnMoreUrl'));
   }
 
   private onEnableAndroidAppsClick_(event: Event): void {

@@ -184,7 +184,7 @@ DeclarativeNetRequestGetDynamicRulesFunction::Run() {
 
   auto read_dynamic_rules = base::BindOnce(
       [](const declarative_net_request::FileBackedRulesetSource& source) {
-        return source.ReadJSONRulesUnsafe();
+        return source.ReadJSONRules();
       },
       std::move(source));
 
@@ -208,7 +208,8 @@ void DeclarativeNetRequestGetDynamicRulesFunction::OnDynamicRulesFetched(
   // Unlike errors such as kJSONParseError, which normally denote corruption, a
   // read error is probably a transient error.  Hence raise an error instead of
   // returning an empty list.
-  if (read_json_result.status == Status::kFileReadError) {
+  if (read_json_result.status == Status::kFileReadError ||
+      read_json_result.status == Status::kRulesetFileSizeLimitExceeded) {
     Respond(Error(declarative_net_request::kInternalErrorGettingDynamicRules));
     return;
   }

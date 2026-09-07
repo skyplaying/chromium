@@ -11,6 +11,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 import static org.chromium.chrome.browser.flags.ActivityType.CUSTOM_TAB;
+import static org.chromium.chrome.browser.flags.ActivityType.DEV_TOOLS;
 import static org.chromium.chrome.browser.flags.ActivityType.WEBAPP;
 
 import android.app.AppOpsManager;
@@ -27,7 +28,6 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.SysUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -38,7 +38,6 @@ import org.chromium.chrome.browser.customtabs.features.minimizedcustomtab.Minimi
 
 /** Unit tests for {@link MinimizedFeatureUtils}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class MinimizedFeatureUtilsUnitTest {
     private static final String NAME = "Chrome";
     private static final int UID = 101;
@@ -123,6 +122,16 @@ public class MinimizedFeatureUtilsUnitTest {
         when(mIntent.getIntExtra(eq(IntentHandler.EXTRA_FEDCM_ID), anyInt())).thenReturn(-1);
         when(mIntentDataProvider.getActivityType()).thenReturn(CUSTOM_TAB);
         assertTrue(MinimizedFeatureUtils.shouldEnableMinimizedCustomTabs(mIntentDataProvider));
+
+        // False if has target network
+        when(mIntentDataProvider.hasTargetNetwork()).thenReturn(true);
+        assertFalse(MinimizedFeatureUtils.shouldEnableMinimizedCustomTabs(mIntentDataProvider));
+        when(mIntentDataProvider.hasTargetNetwork()).thenReturn(false);
+
+        // False for DevTools
+        when(mIntentDataProvider.getActivityType()).thenReturn(DEV_TOOLS);
+        assertFalse(MinimizedFeatureUtils.shouldEnableMinimizedCustomTabs(mIntentDataProvider));
+
         // False for Webapps
         when(mIntentDataProvider.getActivityType()).thenReturn(WEBAPP);
         assertFalse(MinimizedFeatureUtils.shouldEnableMinimizedCustomTabs(mIntentDataProvider));

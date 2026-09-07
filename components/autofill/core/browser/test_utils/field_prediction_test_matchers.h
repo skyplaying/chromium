@@ -8,7 +8,7 @@
 #include "build/build_config.h"
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/metrics/log_event.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace autofill::test {
@@ -25,7 +25,7 @@ inline ::testing::Matcher<FieldPrediction> EqualsPrediction(FieldType type) {
   return ::testing::Property("type", &FieldPrediction::type, type);
 }
 
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+#if !BUILDFLAG(IS_ANDROID)
 inline ::testing::Matcher<FieldPrediction> EqualsPrediction(
     FieldType type,
     FieldPrediction::Source source) {

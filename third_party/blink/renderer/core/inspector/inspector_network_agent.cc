@@ -85,6 +85,7 @@
 #include "third_party/blink/renderer/platform/bindings/source_location.h"
 #include "third_party/blink/renderer/platform/blob/blob_data.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/self_keep_alive.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_initiator_info.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_initiator_type_names.h"
 #include "third_party/blink/renderer/platform/loader/fetch/memory_cache.h"
@@ -194,7 +195,7 @@ static std::unique_ptr<protocol::Network::Headers> BuildObjectForHeaders(
   return protocol::Network::Headers::fromValue(headers_object.get(), &errors);
 }
 
-String NetErrorToString(int net_error) {
+String NetErrorToProtocolEnum(int net_error) {
   switch (net_error) {
     case net::ERR_ABORTED:
       return protocol::Network::ErrorReasonEnum::Aborted;
@@ -227,6 +228,8 @@ String NetErrorToString(int net_error) {
   }
 }
 
+}  // namespace
+
 class InspectorFileReaderLoaderClient final
     : public GarbageCollected<InspectorFileReaderLoaderClient>,
       public FileReaderClient {
@@ -239,7 +242,7 @@ class InspectorFileReaderLoaderClient final
         callback_(std::move(callback)),
         loader_(MakeGarbageCollected<FileReaderLoader>(this,
                                                        std::move(task_runner))),
-        keep_alive_(this) {}
+        keep_alive_({}, this) {}
 
   InspectorFileReaderLoaderClient(const InspectorFileReaderLoaderClient&) =
       delete;
@@ -285,6 +288,8 @@ class InspectorFileReaderLoaderClient final
   SegmentedBuffer raw_data_;
   SelfKeepAlive<InspectorFileReaderLoaderClient> keep_alive_;
 };
+
+namespace {
 
 static void ResponseBodyFileReaderLoaderDone(
     const String& mime_type,
@@ -352,11 +357,11 @@ class InspectorPostBodyParser : public RefCounted<InspectorPostBodyParser> {
     // Concatenate all parts into a single buffer.
     Vector<char> combined;
     for (const auto& part : raw_parts_) {
-      combined.AppendRange(part.begin(), part.end());
+      combined.append_range(part);
     }
 
     // Try to decode as UTF-8 first.
-    String text_attempt = String::FromUTF8(base::as_byte_span(combined));
+    String text_attempt = String::FromUtf8(base::as_byte_span(combined));
 
     String result;
     bool base64_encoded = false;
@@ -597,7 +602,7 @@ std::unique_ptr<protocol::Network::CorsErrorStatus> BuildCorsErrorStatus(
     const network::CorsErrorStatus& status) {
   return protocol::Network::CorsErrorStatus::create()
       .setCorsError(BuildCorsError(status.cors_error))
-      .setFailedParameter(String::FromUTF8(status.failed_parameter))
+      .setFailedParameter(String::FromUtf8(status.failed_parameter))
       .build();
 }
 
@@ -693,7 +698,7 @@ std::unique_ptr<protocol::Network::WebSocketFrame> WebSocketMessageToProtocol(
       .setOpcode(op_code)
       .setMask(masked)
       // Only interpret the payload as UTF-8 when it's a text message
-      .setPayloadData(op_code == 1 ? String::FromUTF8WithLatin1Fallback(payload)
+      .setPayloadData(op_code == 1 ? String::FromUtf8WithLatin1Fallback(payload)
                                    : Base64Encode(payload))
       .build();
 }
@@ -739,6 +744,17 @@ std::unique_ptr<protocol::Network::TrustTokenParams> BuildTrustTokenParams(
   return protocol_params;
 }
 
+// According to the Chrome DevTools Protocol, negative throughput values
+// disable throttling. Any non-negative value (>= 0) is considered an active
+// override, with 0 representing full throttling.
+bool IsActiveNetworkStateOverride(bool offline,
+                                  double latency,
+                                  double download_throughput,
+                                  double upload_throughput) {
+  return offline || latency > 0 || download_throughput >= 0 ||
+         upload_throughput >= 0;
+}
+
 void SetNetworkStateOverride(bool offline,
                              double latency,
                              double download_throughput,
@@ -746,12 +762,8 @@ void SetNetworkStateOverride(bool offline,
                              WebConnectionType type) {
   // TODO(dgozman): networkStateNotifier is per-process. It would be nice to
   // have per-frame override instead.
-
-  // According to the Chrome DevTools Protocol, negative throughput values
-  // disable throttling. Any non-negative value (>= 0) is considered an active
-  // override, with 0 representing full throttling.
-  if (offline || latency >= 0 || download_throughput >= 0 ||
-      upload_throughput >= 0) {
+  if (IsActiveNetworkStateOverride(offline, latency, download_throughput,
+                                   upload_throughput)) {
     std::optional<double> download_mbps;
     if (download_throughput >= 0) {
       download_mbps = download_throughput / (1024 * 1024 / 8);
@@ -764,40 +776,12 @@ void SetNetworkStateOverride(bool offline,
 }
 
 String IPAddressToString(const net::IPAddress& address) {
-  String unbracketed = String::FromUTF8(address.ToString());
+  String unbracketed = String::FromUtf8(address.ToString());
   if (!address.IsIPv6()) {
     return unbracketed;
   }
 
   return StrCat({"[", unbracketed, "]"});
-}
-
-namespace ContentEncodingEnum = protocol::Network::ContentEncodingEnum;
-
-String AcceptedEncodingFromProtocol(
-    const protocol::Network::ContentEncoding& encoding) {
-  String result;
-  if (ContentEncodingEnum::Gzip == encoding ||
-      ContentEncodingEnum::Br == encoding ||
-      ContentEncodingEnum::Deflate == encoding ||
-      ContentEncodingEnum::Zstd == encoding) {
-    result = encoding;
-  }
-  return result;
-}
-
-using SourceTypeEnum = net::SourceStreamType;
-SourceTypeEnum SourceTypeFromString(const String& type) {
-  if (type == ContentEncodingEnum::Gzip)
-    return SourceTypeEnum::kGzip;
-  if (type == ContentEncodingEnum::Deflate)
-    return SourceTypeEnum::kDeflate;
-  if (type == ContentEncodingEnum::Br)
-    return SourceTypeEnum::kBrotli;
-  if (type == ContentEncodingEnum::Zstd) {
-    return SourceTypeEnum::kZstd;
-  }
-  NOTREACHED();
 }
 
 String RenderBlockingBehaviorToString(RenderBlockingBehavior behavior) {
@@ -834,9 +818,38 @@ InspectorNetworkAgent::URLPatternMatcher::Create(const String& pattern,
   };
 }
 
+void InspectorNetworkAgent::Init(CoreProbeSink* instrumenting_agents,
+                                 protocol::UberDispatcher* dispatcher,
+                                 InspectorSessionState* session_state,
+                                 V8SessionHolder v8_session) {
+  InspectorBaseAgent::Init(instrumenting_agents, dispatcher, session_state,
+                           v8_session);
+  extra_request_headers_.clear();
+  const auto* reattach_state = session_state->ReattachState();
+  if (reattach_state && reattach_state->browser_originating_session_state) {
+    for (const auto& entry : reattach_state->browser_originating_session_state
+                                 ->extra_request_headers) {
+      extra_request_headers_.Set(entry.key, entry.value);
+    }
+  }
+}
+
 void InspectorNetworkAgent::Restore() {
   if (enabled_.Get()) {
     Enable();
+  }
+  if (IsActiveNetworkStateOverride(network_state_offline_.Get(),
+                                   network_state_latency_.Get(),
+                                   network_state_download_throughput_.Get(),
+                                   network_state_upload_throughput_.Get())) {
+    std::optional<String> connection_type;
+    if (!network_state_connection_type_.Get().empty()) {
+      connection_type = network_state_connection_type_.Get();
+    }
+    overrideNetworkState(
+        network_state_offline_.Get(), network_state_latency_.Get(),
+        network_state_download_throughput_.Get(),
+        network_state_upload_throughput_.Get(), std::move(connection_type));
   }
   if (!blocked_patterns_cbor_.Get().empty()) {
     protocol::Array<protocol::Network::BlockPattern> blocked_patterns;
@@ -915,13 +928,13 @@ static bool FormDataToString(
 
   Vector<char> bytes;
   body->Flatten(bytes);
-  *content = String::FromUTF8WithLatin1Fallback(base::as_byte_span(bytes));
+  *content = String::FromUtf8WithLatin1Fallback(base::as_byte_span(bytes));
   return true;
 }
 
 static String StringFromASCII(const std::string& str) {
   String ret(str);
-  DCHECK(ret.ContainsOnlyASCIIOrEmpty());
+  DCHECK(ret.ContainsOnlyAsciiOrEmpty());
   return ret;
 }
 
@@ -941,9 +954,8 @@ static std::unique_ptr<protocol::Network::SecurityDetails> BuildSecurityDetails(
                 .setStatus(StringFromASCII(net::ct::StatusToString(sct.status)))
                 .setOrigin(
                     StringFromASCII(net::ct::OriginToString(sct.sct->origin)))
-                .setLogDescription(String::FromUTF8(sct.sct->log_description))
-                .setLogId(StringFromASCII(base::HexEncode(
-                    sct.sct->log_id.c_str(), sct.sct->log_id.length())))
+                .setLogDescription(String::FromUtf8(sct.sct->log_description))
+                .setLogId(StringFromASCII(base::HexEncode(sct.sct->log_id)))
                 .setTimestamp(sct.sct->timestamp.InMillisecondsSinceUnixEpoch())
                 .setHashAlgorithm(
                     StringFromASCII(net::ct::HashAlgorithmToString(
@@ -951,9 +963,8 @@ static std::unique_ptr<protocol::Network::SecurityDetails> BuildSecurityDetails(
                 .setSignatureAlgorithm(
                     StringFromASCII(net::ct::SignatureAlgorithmToString(
                         sct.sct->signature.signature_algorithm)))
-                .setSignatureData(StringFromASCII(base::HexEncode(
-                    sct.sct->signature.signature_data.c_str(),
-                    sct.sct->signature.signature_data.length())))
+                .setSignatureData(StringFromASCII(
+                    base::HexEncode(sct.sct->signature.signature_data)))
                 .build();
     signed_certificate_timestamp_list->emplace_back(
         std::move(signed_certificate_timestamp));
@@ -997,9 +1008,9 @@ static std::unique_ptr<protocol::Network::SecurityDetails> BuildSecurityDetails(
           .setKeyExchange(key_exchange)
           .setCipher(cipher)
           .setSubjectName(
-              String::FromUTF8(ssl_info.cert->subject().common_name))
+              String::FromUtf8(ssl_info.cert->subject().common_name))
           .setSanList(std::move(san_list))
-          .setIssuer(String::FromUTF8(ssl_info.cert->issuer().common_name))
+          .setIssuer(String::FromUtf8(ssl_info.cert->issuer().common_name))
           .setValidFrom(ssl_info.cert->valid_start().InSecondsFSinceUnixEpoch())
           .setValidTo(ssl_info.cert->valid_expiry().InSecondsFSinceUnixEpoch())
           .setCertificateId(0)  // Keep this in protocol for compatibility.
@@ -1514,7 +1525,7 @@ void InspectorNetworkAgent::SetDevToolsIds(
   if (initiator_info.name == fetch_initiator_type_names::kInternal) {
     return;
   }
-  request.SetDevToolsToken(devtools_token_);
+  request.SetDevToolsThrottlingToken(devtools_throttling_token_);
 
   // The loader parameter is for generating a browser generated ID for a browser
   // initiated request. We pass it null here because we are reporting a renderer
@@ -1532,15 +1543,16 @@ void InspectorNetworkAgent::PrepareRequest(DocumentLoader* loader,
     return;
   }
 
-  if (!extra_request_headers_.IsEmpty()) {
-    for (const String& key : extra_request_headers_.Keys()) {
-      const String& value = extra_request_headers_.Get(key);
+  if (!extra_request_headers_.empty()) {
+    for (const auto& entry : extra_request_headers_) {
+      const String& key = entry.key;
+      const String& value = entry.value;
       AtomicString header_name = AtomicString(key);
       // When overriding referrer, also override referrer policy
       // for this request to assure the request will be allowed.
       // TODO: Should we store the referrer header somewhere other than
       // |extra_request_headers_|?
-      if (EqualIgnoringASCIICase(header_name, http_names::kReferer)) {
+      if (EqualIgnoringAsciiCase(header_name, http_names::kReferer)) {
         request.SetReferrerString(value);
         request.SetReferrerPolicy(network::mojom::ReferrerPolicy::kAlways);
       } else {
@@ -1577,20 +1589,6 @@ void InspectorNetworkAgent::PrepareRequest(DocumentLoader* loader,
     if (!stack_id.IsNull()) {
       request.SetDevToolsStackId(stack_id);
     }
-  }
-  if (!accepted_encodings_.IsEmpty()) {
-    scoped_refptr<base::RefCountedData<base::flat_set<net::SourceStreamType>>>
-        accepted_stream_types = request.GetDevToolsAcceptedStreamTypes();
-    if (!accepted_stream_types) {
-      accepted_stream_types = base::MakeRefCounted<
-          base::RefCountedData<base::flat_set<net::SourceStreamType>>>();
-    }
-    if (!accepted_encodings_.Get("none")) {
-      for (auto key : accepted_encodings_.Keys()) {
-        accepted_stream_types->data.insert(SourceTypeFromString(key));
-      }
-    }
-    request.SetDevToolsAcceptedStreamTypes(std::move(accepted_stream_types));
   }
 }
 
@@ -1731,7 +1729,8 @@ void InspectorNetworkAgent::DidReceiveData(uint64_t identifier,
   if (auto data_span = data.span(); data_span) {
     NetworkResourcesData::ResourceData const* resource_data =
         resources_data_->Data(request_id);
-    if (resource_data && !resource_data->HasContent() &&
+    if (!is_durable_messages_enabled_.Get() && resource_data &&
+        !resource_data->HasContent() &&
         (!resource_data->CachedResource() ||
          resource_data->CachedResource()->GetDataBufferingPolicy() ==
              kDoNotBufferData ||
@@ -1787,7 +1786,8 @@ void InspectorNetworkAgent::DidFinishLoading(
         pending_encoded_data_length);
   }
 
-  if (resource_data && !resource_data->HasContent() &&
+  if (!is_durable_messages_enabled_.Get() && resource_data &&
+      !resource_data->HasContent() &&
       (!resource_data->CachedResource() ||
        resource_data->CachedResource()->GetDataBufferingPolicy() ==
            kDoNotBufferData ||
@@ -2024,8 +2024,8 @@ String InspectorNetworkAgent::GetProtocolAsString(
 }
 
 void InspectorNetworkAgent::WillCreateP2PSocketUdp(
-    std::optional<base::UnguessableToken>* devtools_token) {
-  *devtools_token = devtools_token_;
+    std::optional<base::UnguessableToken>* devtools_throttling_token) {
+  *devtools_throttling_token = devtools_throttling_token_;
 }
 
 void InspectorNetworkAgent::WillCreateWebSocket(
@@ -2033,8 +2033,8 @@ void InspectorNetworkAgent::WillCreateWebSocket(
     uint64_t identifier,
     const KURL& request_url,
     const String&,
-    std::optional<base::UnguessableToken>* devtools_token) {
-  *devtools_token = devtools_token_;
+    std::optional<base::UnguessableToken>* devtools_throttling_token) {
+  *devtools_throttling_token = devtools_throttling_token_;
   std::unique_ptr<v8_inspector::protocol::Runtime::API::StackTrace>
       current_stack_trace =
           CaptureSourceLocation(execution_context)->BuildInspectorObject();
@@ -2136,7 +2136,7 @@ void InspectorNetworkAgent::DidReceiveWebSocketMessage(
   Vector<uint8_t> flatten;
   flatten.reserve(base::checked_cast<wtf_size_t>(size));
   for (const auto& span : data) {
-    flatten.AppendSpan(span);
+    flatten.append_range(span);
   }
   GetFrontend()->webSocketFrameReceived(
       IdentifiersFactory::SubresourceRequestId(identifier),
@@ -2245,7 +2245,7 @@ void InspectorNetworkAgent::DirectTCPSocketAborted(uint64_t identifier,
                                                    int net_error) {
   GetFrontend()->directTCPSocketAborted(
       IdentifiersFactory::SubresourceRequestId(identifier),
-      NetErrorToString(net_error),
+      NetErrorToProtocolEnum(net_error),
       base::TimeTicks::Now().since_origin().InSecondsF());
 }
 
@@ -2318,7 +2318,7 @@ void InspectorNetworkAgent::DirectUDPSocketAborted(uint64_t identifier,
                                                    int net_error) {
   GetFrontend()->directUDPSocketAborted(
       IdentifiersFactory::SubresourceRequestId(identifier),
-      NetErrorToString(net_error),
+      NetErrorToProtocolEnum(net_error),
       base::TimeTicks::Now().since_origin().InSecondsF());
 }
 
@@ -2405,6 +2405,13 @@ protocol::Response InspectorNetworkAgent::enable(
   return protocol::Response::Success();
 }
 
+protocol::Response InspectorNetworkAgent::configureDurableMessages(
+    std::optional<int> max_total_buffer_size,
+    std::optional<int> max_resource_buffer_size) {
+  is_durable_messages_enabled_.Set(max_total_buffer_size.value_or(0) > 0);
+  return protocol::Response::Success();
+}
+
 void InspectorNetworkAgent::Enable() {
   if (!GetFrontend())
     return;
@@ -2420,15 +2427,15 @@ protocol::Response InspectorNetworkAgent::disable() {
     GetNetworkStateNotifier().ClearOverride();
   instrumenting_agents_->RemoveInspectorNetworkAgent(this);
   agent_state_.ClearAllFields();
+  extra_request_headers_.clear();
   resources_data_->Clear();
   streaming_request_ids_.clear();
-  clearAcceptedEncodingsOverride();
   return protocol::Response::Success();
 }
 
 protocol::Response InspectorNetworkAgent::setExtraHTTPHeaders(
     std::unique_ptr<protocol::Network::Headers> headers) {
-  extra_request_headers_.Clear();
+  extra_request_headers_.clear();
   std::unique_ptr<protocol::DictionaryValue> in = headers->toValue();
   for (size_t i = 0; i < in->size(); ++i) {
     const auto& entry = in->at(i);
@@ -2585,36 +2592,6 @@ protocol::Response InspectorNetworkAgent::canClearBrowserCookies(bool* result) {
   return protocol::Response::Success();
 }
 
-protocol::Response InspectorNetworkAgent::setAcceptedEncodings(
-    std::unique_ptr<protocol::Array<protocol::Network::ContentEncoding>>
-        encodings) {
-  HashSet<String> accepted_encodings;
-  for (const protocol::Network::ContentEncoding& encoding : *encodings) {
-    String value = AcceptedEncodingFromProtocol(encoding);
-    if (value.IsNull()) {
-      return protocol::Response::InvalidParams("Unknown encoding type: " +
-                                               encoding.Utf8());
-    }
-    accepted_encodings.insert(value);
-  }
-  // If invoked with an empty list, it means none of the encodings should be
-  // accepted. See InspectorNetworkAgent::PrepareRequest.
-  if (accepted_encodings.empty())
-    accepted_encodings.insert("none");
-
-  // Set the inspector state.
-  accepted_encodings_.Clear();
-  for (auto encoding : accepted_encodings)
-    accepted_encodings_.Set(encoding, true);
-
-  return protocol::Response::Success();
-}
-
-protocol::Response InspectorNetworkAgent::clearAcceptedEncodingsOverride() {
-  accepted_encodings_.Clear();
-  return protocol::Response::Success();
-}
-
 protocol::Response InspectorNetworkAgent::emulateNetworkConditions(
     bool offline,
     double latency,
@@ -2629,7 +2606,8 @@ protocol::Response InspectorNetworkAgent::emulateNetworkConditions(
 }
 
 protocol::Response InspectorNetworkAgent::emulateNetworkConditionsByRule(
-    bool offline,
+    std::optional<bool> offline,
+    std::optional<bool> emulate_offline_service_worker,
     std::unique_ptr<protocol::Array<protocol::Network::NetworkConditions>>
         matched_network_conditions,
     std::unique_ptr<protocol::Array<String>>* rule_ids_result) {
@@ -2649,6 +2627,12 @@ protocol::Response InspectorNetworkAgent::overrideNetworkState(
     if (type == kWebConnectionTypeUnknown)
       return protocol::Response::ServerError("Unknown connection type");
   }
+
+  network_state_offline_.Set(offline);
+  network_state_latency_.Set(latency);
+  network_state_download_throughput_.Set(download_throughput);
+  network_state_upload_throughput_.Set(upload_throughput);
+  network_state_connection_type_.Set(connection_type.value_or(String()));
 
   if (worker_or_worklet_global_scope_) {
     if (worker_or_worklet_global_scope_->IsServiceWorkerGlobalScope() ||
@@ -2787,7 +2771,7 @@ protocol::Response InspectorNetworkAgent::searchInResponseBody(
   if (!response.IsSuccess())
     return response;
 
-  auto results = v8_session_->searchInTextByLines(
+  auto results = V8Session()->searchInTextByLines(
       ToV8InspectorStringView(content), ToV8InspectorStringView(query),
       case_sensitive.value_or(false), is_regex.value_or(false));
   *matches = std::make_unique<
@@ -2853,15 +2837,13 @@ String InspectorNetworkAgent::NavigationInitiatorInfo(LocalFrame* frame) {
 
 InspectorNetworkAgent::InspectorNetworkAgent(
     InspectedFrames* inspected_frames,
-    WorkerOrWorkletGlobalScope* worker_or_worklet_global_scope,
-    v8_inspector::V8InspectorSession* v8_session)
+    WorkerOrWorkletGlobalScope* worker_or_worklet_global_scope)
     : inspected_frames_(inspected_frames),
       worker_or_worklet_global_scope_(worker_or_worklet_global_scope),
-      v8_session_(v8_session),
       resources_data_(MakeGarbageCollected<NetworkResourcesData>(
           kDefaultTotalBufferSize,
           kDefaultResourceBufferSize)),
-      devtools_token_(
+      devtools_throttling_token_(
           worker_or_worklet_global_scope_
               ? worker_or_worklet_global_scope_->GetParentDevToolsToken()
               : inspected_frames->Root()->GetDevToolsFrameToken()),
@@ -2870,17 +2852,22 @@ InspectorNetworkAgent::InspectorNetworkAgent(
       bypass_service_worker_(&agent_state_, /*default_value=*/false),
       blocked_urls_(&agent_state_, /*default_value=*/false),
       blocked_patterns_cbor_(&agent_state_, /*default_value=*/{}),
-      extra_request_headers_(&agent_state_, /*default_value=*/String()),
       attach_debug_stack_enabled_(&agent_state_, /*default_value=*/false),
       total_buffer_size_(&agent_state_,
                          /*default_value=*/kDefaultTotalBufferSize),
       resource_buffer_size_(&agent_state_,
                             /*default_value=*/kDefaultResourceBufferSize),
       max_post_data_size_(&agent_state_, /*default_value=*/0),
-      accepted_encodings_(&agent_state_,
-                          /*default_value=*/false),
       report_direct_socket_traffic_(&agent_state_,
-                                    /*default_value=*/false) {
+                                    /*default_value=*/false),
+      is_durable_messages_enabled_(&agent_state_,
+                                   /*default_value=*/false),
+      network_state_offline_(&agent_state_, /*default_value=*/false),
+      network_state_latency_(&agent_state_, /*default_value=*/0),
+      network_state_download_throughput_(&agent_state_, /*default_value=*/-1),
+      network_state_upload_throughput_(&agent_state_, /*default_value=*/-1),
+      network_state_connection_type_(&agent_state_,
+                                     /*default_value=*/String()) {
   DCHECK((IsMainThread() &&
           (!worker_or_worklet_global_scope_ ||
            worker_or_worklet_global_scope_->IsWorkletGlobalScope())) ||

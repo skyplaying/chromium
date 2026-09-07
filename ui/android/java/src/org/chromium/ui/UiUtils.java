@@ -7,7 +7,12 @@ package org.chromium.ui;
 import static android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
 import static android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS;
 
+import static org.chromium.build.NullUtil.assertNonNull;
+
+import android.app.Activity;
+import android.content.ComponentCallbacks;
 import android.content.Context;
+import android.content.pm.ActivityInfo;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.content.res.TypedArray;
@@ -19,6 +24,7 @@ import android.graphics.PorterDuff;
 import android.graphics.PorterDuffXfermode;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
+import android.os.Build;
 import android.os.StrictMode;
 import android.text.Spanned;
 import android.text.TextUtils;
@@ -31,6 +37,7 @@ import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
+import android.view.WindowMetrics;
 import android.view.inputmethod.InputMethodInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.view.inputmethod.InputMethodSubtype;
@@ -42,7 +49,6 @@ import androidx.annotation.ColorInt;
 import androidx.annotation.ColorRes;
 import androidx.annotation.DimenRes;
 import androidx.annotation.DrawableRes;
-import androidx.annotation.NonNull;
 import androidx.annotation.StyleableRes;
 import androidx.appcompat.content.res.AppCompatResources;
 import androidx.core.graphics.Insets;
@@ -54,17 +60,18 @@ import org.chromium.base.DeviceInfo;
 import org.chromium.base.Log;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.ui.base.UiAndroidFeatureMap;
+import org.chromium.ui.base.UiAndroidFeatures;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.WeakHashMap;
 
-/**
- * Utility functions for common Android UI tasks.
- * This class is not supposed to be instantiated.
- */
+/** Utility functions for common Android UI tasks. This class is not supposed to be instantiated. */
 @NullMarked
 public class UiUtils {
     private static final String TAG = "UiUtils";
@@ -79,6 +86,14 @@ public class UiUtils {
 
     // Font feature setting to disable ligature rendering.
     private static final String NO_LIGATURES = "\"liga\" 0, \"clig\" 0";
+
+    /**
+     * Cache for window metrics per Activity. Cache this because getMaximumWindowMetrics() triggers
+     * an IPC. The value is cleared when a configuration change happens that affects window sizes.
+     * The WeakHashMap ensures there are no memory leaks when an Activity is destroyed.
+     */
+    private static final WeakHashMap<Activity, GestureNavMetrics> sActivityGestureNavMetrics =
+            new WeakHashMap<>();
 
     /** Guards this class from being instantiated. */
     private UiUtils() {}
@@ -124,7 +139,8 @@ public class UiUtils {
     }
 
     /**
-     * Inserts a {@link View} into a {@link ViewGroup} after directly before a given {@View}.
+     * Inserts a {@link View} into a {@link ViewGroup} after directly before a given {@link View}.
+     *
      * @param container The {@link View} to add newView to.
      * @param newView The new {@link View} to add.
      * @param existingView The {@link View} to insert the newView before.
@@ -135,7 +151,8 @@ public class UiUtils {
     }
 
     /**
-     * Inserts a {@link View} into a {@link ViewGroup} after directly after a given {@View}.
+     * Inserts a {@link View} into a {@link ViewGroup} after directly after a given {@link View}.
+     *
      * @param container The {@link View} to add newView to.
      * @param newView The new {@link View} to add.
      * @param existingView The {@link View} to insert the newView after.
@@ -219,7 +236,7 @@ public class UiUtils {
                 screenshot = bitmap;
             }
         } catch (OutOfMemoryError e) {
-            Log.d(TAG, "Unable to capture screenshot and scale it down." + e.getMessage());
+            Log.d(TAG, "Unable to capture screenshot and scale it down. %s", e.getMessage());
         } finally {
             if (!drawingCacheEnabled) currentView.setDrawingCacheEnabled(false);
             prepareViewHierarchyForScreenshot(currentView, false);
@@ -274,7 +291,7 @@ public class UiUtils {
 
     /**
      * Computes the max width of the widest list item & the total height of all of the items. The
-     * height returned in unbounded and may be larger than the available window space.
+     * height returned is unbounded and may be larger than the available window space.
      *
      * <p>WARNING: do not call this on a ListAdapter with more than a handful of items, the
      * performance will be terrible since it measures every single item.
@@ -286,6 +303,28 @@ public class UiUtils {
      */
     public static int[] computeListAdapterContentDimensions(
             ListAdapter adapter, @Nullable ViewGroup parentView) {
+        return computeListAdapterContentDimensions(adapter, parentView, Collections.emptySet());
+    }
+
+    /**
+     * Computes the max width of the widest list item & the total height of all the items, excluding
+     * specified item types from the width calculation, e.g. the context menu header can be ignored
+     * while computing the width. The height returned is unbounded and may be larger than the
+     * available window space.
+     *
+     * <p>WARNING: do not call this on a ListAdapter with more than a handful of items, the
+     * performance will be terrible since it measures every single item.
+     *
+     * @param adapter The adapter for the list.
+     * @param parentView The parent view for the list.
+     * @param excludedTypesForWidth Set of item view types to exclude from width calculation.
+     * @return int array representing the max width of the menu items stored at index 0 & the total
+     *     height of all items stored at index 1.
+     */
+    public static int[] computeListAdapterContentDimensions(
+            ListAdapter adapter,
+            @Nullable ViewGroup parentView,
+            Set<Integer> excludedTypesForWidth) {
         final int widthMeasureSpec = MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED);
         final int heightMeasureSpec = MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED);
         AbsListView.LayoutParams params =
@@ -309,7 +348,9 @@ public class UiUtils {
 
             itemView.setLayoutParams(params);
             itemView.measure(widthMeasureSpec, heightMeasureSpec);
-            result[0] = Math.max(result[0], itemView.getMeasuredWidth());
+            if (!excludedTypesForWidth.contains(type)) {
+                result[0] = Math.max(result[0], itemView.getMeasuredWidth());
+            }
             result[1] += itemView.getMeasuredHeight();
         }
 
@@ -317,7 +358,33 @@ public class UiUtils {
     }
 
     /**
+     * Calculates the width for a menu bounded by minimum and maximum constraints as well as
+     * available width space.
+     *
+     * @param contentWidth The measured width of the menu content.
+     * @param minWidth The minimum allowable menu width (e.g. 188dp).
+     * @param maxAllowedWidth The maximum allowable menu width (e.g. 800dp for root menus, 300dp for
+     *     flyouts).
+     * @param horizontalMargin The horizontal margin on each side of the available area (e.g. 16dp).
+     * @param availableWidth The available space width (e.g. window width or container width).
+     * @return The bounded menu width.
+     */
+    public static int computeMenuWidth(
+            int contentWidth,
+            int minWidth,
+            int maxAllowedWidth,
+            int horizontalMargin,
+            int availableWidth) {
+        int availableSpaceWidth = availableWidth - 2 * horizontalMargin;
+        int maxWidth = Math.min(maxAllowedWidth, availableSpaceWidth);
+        // Deliberately avoid Math.clamp because maxWidth might be smaller than minWidth in very
+        // narrow windows.
+        return Math.min(Math.max(contentWidth, minWidth), maxWidth);
+    }
+
+    /**
      * Get the index of a child {@link View} in a {@link ViewGroup}.
+     *
      * @param child The child to find the index of.
      * @return The index of the child in its parent. -1 if the child has no parent.
      */
@@ -354,13 +421,13 @@ public class UiUtils {
     /**
      * Gets a drawable from the resources and applies the specified tint to it. Uses Support Library
      * for vector drawables and tinting on older Android versions.
+     *
      * @param drawableId The resource id for the drawable.
      * @param tintColorId The resource id for the color to build ColorStateList with.
      */
     public static Drawable getTintedDrawable(
             Context context, @DrawableRes int drawableId, @ColorRes int tintColorId) {
-        return getTintedDrawable(
-                context, drawableId, AppCompatResources.getColorStateList(context, tintColorId));
+        return getTintedDrawable(context, drawableId, context.getColorStateList(tintColorId));
     }
 
     /**
@@ -386,7 +453,7 @@ public class UiUtils {
      * @param lightNavigationBar Whether the navigation bar has a light appearance with dark icons.
      */
     public static void setNavigationBarIconColor(View rootView, boolean lightNavigationBar) {
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             WindowInsetsController controller = rootView.getWindowInsetsController();
             if (controller != null) {
                 controller.setSystemBarsAppearance(
@@ -430,7 +497,7 @@ public class UiUtils {
      * @param lightStatusBar Whether the status bar has a light appearance with dark icons.
      */
     public static void setStatusBarIconColor(View rootView, boolean lightStatusBar) {
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             WindowInsetsController controller = rootView.getWindowInsetsController();
             if (controller != null) {
                 controller.setSystemBarsAppearance(
@@ -458,15 +525,84 @@ public class UiUtils {
                 != Configuration.KEYBOARD_NOKEYS;
     }
 
+    private static class GestureNavMetrics implements ComponentCallbacks {
+        public @Nullable WindowInsetsCompat windowInsets;
+        private @Nullable Configuration mLastConfig;
+
+        public void updateConfig(Configuration config) {
+            if (mLastConfig == null) {
+                mLastConfig = new Configuration(config);
+            } else {
+                mLastConfig.setTo(config);
+            }
+        }
+
+        @Override
+        public void onConfigurationChanged(Configuration newConfig) {
+            boolean shouldUpdate = true;
+            if (mLastConfig != null) {
+                int diff = mLastConfig.diff(newConfig);
+                int mask =
+                        ActivityInfo.CONFIG_SCREEN_SIZE
+                                | ActivityInfo.CONFIG_ORIENTATION
+                                | ActivityInfo.CONFIG_SCREEN_LAYOUT
+                                | ActivityInfo.CONFIG_SMALLEST_SCREEN_SIZE
+                                | ActivityInfo.CONFIG_DENSITY
+                                | ActivityInfo.CONFIG_UI_MODE;
+                shouldUpdate = (diff & mask) != 0;
+            }
+            if (shouldUpdate) {
+                windowInsets = null;
+            }
+            updateConfig(newConfig);
+        }
+
+        @Override
+        public void onLowMemory() {}
+    }
+
     /**
      * @param window The application window which includes the decor view.
      * @return True if gesture navigation mode is on.
      */
     public static boolean isGestureNavigationMode(Window window) {
-        // https://stackoverflow.com/a/70514883
-        WindowInsetsCompat windowInsets =
-                WindowInsetsCompat.toWindowInsetsCompat(
-                        window.getDecorView().getRootWindowInsets());
+        WindowInsetsCompat windowInsets;
+        boolean isMultiWindow = false;
+        Activity activity = ContextUtils.activityFromContext(window.getContext());
+        if (activity != null) {
+            isMultiWindow = activity.isInMultiWindowMode();
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                && isMultiWindow
+                && UiAndroidFeatureMap.isEnabled(
+                        UiAndroidFeatures.MAXIMUM_WINDOW_FOR_GESTURE_NAV_DETECTION)) {
+            if (UiAndroidFeatureMap.isEnabled(UiAndroidFeatures.CACHED_GESTURE_NAV_METRICS)) {
+                assertNonNull(activity);
+                GestureNavMetrics cached = sActivityGestureNavMetrics.get(activity);
+                if (cached == null) {
+                    cached = new GestureNavMetrics();
+                    activity.registerComponentCallbacks(cached);
+                    sActivityGestureNavMetrics.put(activity, cached);
+                }
+                if (cached.windowInsets == null) {
+                    WindowMetrics maxMetrics = window.getWindowManager().getMaximumWindowMetrics();
+                    cached.windowInsets =
+                            WindowInsetsCompat.toWindowInsetsCompat(maxMetrics.getWindowInsets());
+                    cached.updateConfig(activity.getResources().getConfiguration());
+                }
+                windowInsets = cached.windowInsets;
+            } else {
+                WindowMetrics maxMetrics = window.getWindowManager().getMaximumWindowMetrics();
+                windowInsets =
+                        WindowInsetsCompat.toWindowInsetsCompat(maxMetrics.getWindowInsets());
+            }
+        } else {
+            // This is not reliable in desktop mode.
+            // https://stackoverflow.com/a/70514883
+            windowInsets =
+                    WindowInsetsCompat.toWindowInsetsCompat(
+                            window.getDecorView().getRootWindowInsets());
+        }
         // Use systemGestures rather than tappableElements.
         // In some devices, like Samsung Fold, which has a dock, the bottom inset of
         // tappableElements is non-zero even when gesture mode is on.
@@ -540,7 +676,7 @@ public class UiUtils {
      *
      * @param textView The TextView which might set a link movement method.
      */
-    public static void maybeSetLinkMovementMethod(@NonNull TextView textView) {
+    public static void maybeSetLinkMovementMethod(TextView textView) {
         CharSequence text = textView.getText();
         if (TextUtils.isEmpty(text)) return;
         if (text instanceof Spanned spanned) {

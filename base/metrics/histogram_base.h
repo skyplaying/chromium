@@ -11,11 +11,13 @@
 
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 
 #include "base/atomicops.h"
 #include "base/base_export.h"
+#include "base/functional/callback_forward.h"
 #include "base/strings/durable_string_view.h"
 #include "base/time/time.h"
 #include "base/values.h"
@@ -53,43 +55,6 @@ enum JSONVerbosityLevel {
 
 std::string HistogramTypeToString(HistogramType type);
 
-// This enum is used for reporting how many histograms and of what types and
-// variations are being created. It has to be in the main .h file so it is
-// visible to files that define the various histogram types.
-enum HistogramReport {
-  // Count the number of reports created. The other counts divided by this
-  // number will give the average per run of the program.
-  HISTOGRAM_REPORT_CREATED = 0,
-
-  // Count the total number of histograms created. It is the limit against
-  // which all others are compared.
-  HISTOGRAM_REPORT_HISTOGRAM_CREATED = 1,
-
-  // Count the total number of histograms looked-up. It's better to cache
-  // the result of a single lookup rather than do it repeatedly.
-  HISTOGRAM_REPORT_HISTOGRAM_LOOKUP = 2,
-
-  // These count the individual histogram types. This must follow the order
-  // of HistogramType above.
-  HISTOGRAM_REPORT_TYPE_LOGARITHMIC = 3,
-  HISTOGRAM_REPORT_TYPE_LINEAR = 4,
-  HISTOGRAM_REPORT_TYPE_BOOLEAN = 5,
-  HISTOGRAM_REPORT_TYPE_CUSTOM = 6,
-  HISTOGRAM_REPORT_TYPE_SPARSE = 7,
-
-  // These indicate the individual flags that were set.
-  HISTOGRAM_REPORT_FLAG_UMA_TARGETED = 8,
-  HISTOGRAM_REPORT_FLAG_UMA_STABILITY = 9,
-  HISTOGRAM_REPORT_FLAG_PERSISTENT = 10,
-
-  // This must be last.
-  HISTOGRAM_REPORT_MAX = 11
-};
-
-// Create or find existing histogram that matches the pickled info.
-// Returns NULL if the pickled data has problems.
-BASE_EXPORT HistogramBase* DeserializeHistogramInfo(base::PickleIterator* iter);
-
 ////////////////////////////////////////////////////////////////////////////////
 
 class BASE_EXPORT HistogramBase {
@@ -97,9 +62,27 @@ class BASE_EXPORT HistogramBase {
   using Sample32 = int32_t;              // Used for samples.
   using AtomicCount = subtle::Atomic32;  // Used to count samples.
   using Count32 = int32_t;  // Used to manipulate counts in temporaries.
+  // Used to rename or drop a histogram name when empty is returned.
+  using NameMapper =
+      base::RepeatingCallback<std::string_view(std::string_view)>;
 
   static const Sample32 kSampleType_MAX;  // INT_MAX
 
+  // Flags that control histogram behavior and metadata.
+  //
+  // CRITICAL INVARIANT FOR FLAGS AND DESERIALIZATION:
+  // Histograms can be loaded from persistent memory allocators (PMA) mapped
+  // as OS-level READ_ONLY memory (e.g., `FileMetricsProvider` reading leftover
+  // .pma files during startup).
+  //
+  // Therefore, setting or clearing flags (via `SetFlags` / `ClearFlags`), as
+  // well as any operations executed during flag deserialization in
+  // `PersistentHistogramAllocator::CreateHistogram()`, MUST BE STRICTLY
+  // READ-ONLY with zero side-effect writes to backing persistent memory
+  // storage. Any write operation on a read-only PMA page will cause a SIGSEGV.
+  //
+  // Note: When adding a new flag to `Flags`, add it above `kAllFlags` and OR it
+  // into `kAllFlags`.
   enum Flags : uint16_t {
     kNoFlags = 0x0,
 
@@ -134,6 +117,11 @@ class BASE_EXPORT HistogramBase {
     // Indicates that the histogram should be collected by PUMA, and its type is
     // PUMA for Regional Capabilities.
     kPumaRcTargetedHistogramFlag = 0x80,
+
+    // A combination of all flags used in tests.
+    kAllFlags = kUmaTargetedHistogramFlag | kUmaStabilityHistogramFlag |
+                kIPCSerializationSourceFlag | kCallbackExists | kIsPersistent |
+                kPumaRcTargetedHistogramFlag,
   };
 
   // Histogram data inconsistency types.
@@ -146,6 +134,16 @@ class BASE_EXPORT HistogramBase {
 
     NEVER_EXCEEDED_VALUE = 0x10,
   };
+
+  // Create or find existing histogram that matches the pickled info.
+  // The `mapper` callback is invoked with the original histogram name. It can
+  // return a new name to rename the histogram, the original name to keep it,
+  // or an empty string to drop the histogram entirely. This allows renaming
+  // metrics during deserialization, e.g., adding prefixes based on process
+  // type.
+  // Returns nullptr if the pickled data has problems.
+  static HistogramBase* DeserializeInfo(base::PickleIterator* iter,
+                                        HistogramBase::NameMapper mapper);
 
   // Construct the base histogram. The name is not copied; it's up to the
   // caller to ensure that it lives at least as long as this object.
@@ -170,6 +168,10 @@ class BASE_EXPORT HistogramBase {
 
   // Operations with Flags enum.
   int32_t flags() const { return flags_.load(std::memory_order_relaxed); }
+
+  // Sets flags for this histogram instance.
+  // Must not attempt to mutate backing persistent memory, as the instance
+  // may be backed by a read-only memory segment.
   void SetFlags(int32_t flags);
   void ClearFlags(int32_t flags);
   bool HasFlags(int32_t flags) const;
@@ -192,11 +194,11 @@ class BASE_EXPORT HistogramBase {
   virtual void AddCount(Sample32 value, int count) = 0;
 
   // Convenient functions that call Add(Sample32).
-  void AddTime(const TimeDelta& time) { AddTimeMillisecondsGranularity(time); }
-  void AddTimeMillisecondsGranularity(const TimeDelta& time);
+  void AddTime(TimeDelta time) { AddTimeMillisecondsGranularity(time); }
+  void AddTimeMillisecondsGranularity(TimeDelta time);
   // Note: AddTimeMicrosecondsGranularity() drops the report if this client
   // doesn't have a high-resolution clock.
-  void AddTimeMicrosecondsGranularity(const TimeDelta& time);
+  void AddTimeMicrosecondsGranularity(TimeDelta time);
   void AddBoolean(bool value);
 
   virtual bool AddSamples(const HistogramSamples& samples) = 0;

@@ -14,6 +14,7 @@
 #include "components/signin/public/base/signin_switches.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/sync/base/features.h"
 #include "extensions/browser/ui_util.h"
 #include "extensions/common/extension.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -26,7 +27,10 @@ void ShowUploadExtensionToAccountDialog(Profile* profile,
                                         const Extension& extension,
                                         base::OnceClosure accept_callback,
                                         base::OnceClosure cancel_callback) {
-  CHECK(switches::IsExtensionsExplicitBrowserSigninEnabled());
+#if BUILDFLAG(IS_CHROMEOS)
+  CHECK(
+      base::FeatureList::IsEnabled(syncer::kReplaceSyncPromosWithSignInPromos));
+#endif
   CHECK(AccountExtensionTracker::Get(profile)->CanUploadAsAccountExtension(
       extension));
 
@@ -50,11 +54,12 @@ void ShowUploadExtensionToAccountDialog(Profile* profile,
           .AddParagraph(ui::DialogModelLabel(l10n_util::GetStringFUTF16(
               IDS_EXTENSIONS_MOVE_TO_ACCOUNT_DIALOG_SUBTITLE,
               ui_util::GetFixupExtensionNameForUIDisplay(extension.name()))))
-          .AddMenuItem(
-              ui::ImageModel::FromImage(profiles::GetSizedAvatarIcon(
-                  account_info.account_image, 16, 16, profiles::SHAPE_CIRCLE)),
-              base::UTF8ToUTF16(account_info.email), base::DoNothing(),
-              ui::DialogModelMenuItem::Params().SetIsEnabled(false))
+          .AddMenuItem(ui::ImageModel::FromImage(profiles::GetSizedAvatarIcon(
+                           account_info.GetAvatarImage().value_or(gfx::Image()),
+                           16, 16, profiles::SHAPE_CIRCLE)),
+                       base::UTF8ToUTF16(account_info.GetEmail()),
+                       base::DoNothing(),
+                       ui::DialogModelMenuItem::Params().SetIsEnabled(false))
           .AddOkButton(
               std::move(accept_callback),
               ui::DialogModel::Button::Params().SetLabel(

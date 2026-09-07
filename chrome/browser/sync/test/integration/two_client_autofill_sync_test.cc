@@ -4,6 +4,7 @@
 
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
@@ -16,9 +17,10 @@
 #include "components/autofill/core/browser/data_model/payments/credit_card.h"
 #include "components/autofill/core/browser/data_quality/addresses/profile_token_quality.h"
 #include "components/autofill/core/browser/data_quality/addresses/profile_token_quality_test_api.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
-#include "components/autofill/core/browser/webdata/autofill_table_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
+#include "components/autofill/core/browser/webdata/autofill_table_util.h"
 #include "components/autofill/core/common/autofill_features.h"
+#include "components/sync/base/features.h"
 #include "components/sync/engine/cycle/entity_change_metric_recording.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -40,12 +42,17 @@ using autofill_helper::PROFILE_MARION;
 using autofill_helper::PROFILE_NULL;
 using autofill_helper::ProfilesMatch;
 using autofill_helper::RemoveProfile;
-using autofill_helper::SetCreditCards;
 using autofill_helper::UpdateProfile;
 
 class TwoClientAutofillProfileSyncTest : public SyncTest {
  public:
-  TwoClientAutofillProfileSyncTest() : SyncTest(TWO_CLIENT) {}
+  TwoClientAutofillProfileSyncTest() : SyncTest(TWO_CLIENT) {
+    features_override_.InitWithFeatures(
+        /*enabled_features=*/{},
+        /*disabled_features=*/{
+            syncer::kReplaceSyncPromosWithSignInPromos,
+            syncer::kReplaceSyncPromosWithSigninPromosNewSignin});
+  }
 
   TwoClientAutofillProfileSyncTest(const TwoClientAutofillProfileSyncTest&) =
       delete;
@@ -77,6 +84,9 @@ class TwoClientAutofillProfileSyncTest : public SyncTest {
             identity_manager->GetPrimaryAccountInfo(
                 signin::ConsentLevel::kSignin)));
   }
+
+ private:
+  base::test::ScopedFeatureList features_override_;
 };
 
 IN_PROC_BROWSER_TEST_F(TwoClientAutofillProfileSyncTest,
@@ -466,8 +476,8 @@ IN_PROC_BROWSER_TEST_F(TwoClientAutofillProfileSyncTest, NoCreditCardSync) {
 
   CreditCard card;
   card.SetRawInfo(autofill::CREDIT_CARD_NUMBER, u"6011111111111117");
-  std::vector<CreditCard> credit_cards{card};
-  SetCreditCards(0, &credit_cards);
+  PersonalDataManager* pdm = GetPersonalDataManager(0);
+  pdm->payments_data_manager().AddCreditCard(card);
 
   AddProfile(0, CreateAutofillProfile(PROFILE_HOMER));
 
@@ -477,7 +487,7 @@ IN_PROC_BROWSER_TEST_F(TwoClientAutofillProfileSyncTest, NoCreditCardSync) {
   // because we're expecting it to not sync.
   EXPECT_TRUE(AutofillProfileChecker(0, 1, /*expected_count=*/1U).Wait());
 
-  PersonalDataManager* pdm = GetPersonalDataManager(1);
+  pdm = GetPersonalDataManager(1);
   EXPECT_EQ(0U, pdm->payments_data_manager().GetCreditCards().size());
 }
 

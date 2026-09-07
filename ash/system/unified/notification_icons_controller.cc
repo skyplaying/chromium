@@ -28,6 +28,7 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
 #include "ui/gfx/paint_vector_icon.h"
@@ -94,6 +95,10 @@ NotificationIconTrayItemView::NotificationIconTrayItemView(
 }
 
 NotificationIconTrayItemView::~NotificationIconTrayItemView() = default;
+
+void NotificationIconTrayItemView::ResetController() {
+  controller_ = nullptr;
+}
 
 void NotificationIconTrayItemView::SetNotification(
     message_center::Notification* notification) {
@@ -180,7 +185,9 @@ void NotificationIconTrayItemView::UpdateImageViewColor() {
     image_view()->SetImage(ui::ImageModel::FromImage(masked_small_icon));
   } else {
     image_view()->SetImage(ui::ImageModel::FromVectorIcon(
-        message_center::kProductIcon, color_id, kUnifiedTrayIconSize));
+        ::features::IsRoundedIconsEnabled() ? message_center::kChromeProductIcon
+                                            : message_center::kProductOldIcon,
+        color_id, kUnifiedTrayIconSize));
   }
 }
 
@@ -205,6 +212,14 @@ NotificationIconsController::NotificationIconsController(
 NotificationIconsController::~NotificationIconsController() {
   message_center::MessageCenter::Get()->RemoveObserver(this);
   Shell::Get()->session_controller()->RemoveObserver(this);
+  for (NotificationIconTrayItemView* tray_item : tray_items_) {
+    if (tray_item) {
+      tray_item->ResetController();
+    }
+  }
+  if (notification_counter_view_) {
+    notification_counter_view_->ResetController();
+  }
 }
 
 void NotificationIconsController::AddNotificationTrayItems(

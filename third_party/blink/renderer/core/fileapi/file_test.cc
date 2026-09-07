@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/core/fileapi/file.h"
 
+#include "base/memory/raw_ref.h"
 #include "base/run_loop.h"
 #include "base/task/thread_pool.h"
 #include "base/test/bind.h"
@@ -82,12 +83,11 @@ class MockFileSystemManager : public mojom::blink::FileSystemManager {
   }
 
   ~MockFileSystemManager() override {
-    broker_.SetBinderForTesting(mojom::blink::FileSystemManager::Name_, {});
+    broker_->SetBinderForTesting(mojom::blink::FileSystemManager::Name_, {});
   }
 
   // mojom::blink::FileSystem
-  void Open(const scoped_refptr<const SecurityOrigin>& origin,
-            mojom::blink::FileSystemType file_system_type,
+  void Open(mojom::blink::FileSystemType file_system_type,
             OpenCallback callback) override {}
   void ResolveURL(const KURL& filesystem_url,
                   ResolveURLCallback callback) override {}
@@ -160,7 +160,9 @@ class MockFileSystemManager : public mojom::blink::FileSystemManager {
                              std::move(handle)));
   }
 
-  const BrowserInterfaceBrokerProxy& broker_;
+  const raw_ref<const BrowserInterfaceBrokerProxy,
+                UnprotectedInRelease | DanglingUntriaged>
+      broker_;
   mojo::ReceiverSet<mojom::blink::FileSystemManager> receivers_;
   MockRegisterBlobCallback mock_register_blob_callback_;
 };

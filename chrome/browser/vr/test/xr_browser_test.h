@@ -52,9 +52,6 @@ class XrBrowserTestBase : public PlatformBrowserTest {
       "chrome/test/data/xr/e2e_test_files/html/";
   static constexpr char kSwitchIgnoreRuntimeRequirements[] =
       "ignore-runtime-requirements";
-  static const std::vector<std::string> kRequiredTestSwitches;
-  static const std::vector<std::pair<std::string, std::string>>
-      kRequiredTestSwitchesWithValues;
   enum class TestStatus {
     STATUS_RUNNING = 0,
     STATUS_PASSED = 1,
@@ -150,6 +147,7 @@ class XrBrowserTestBase : public PlatformBrowserTest {
 
   void OpenNewTab(const std::string& url);
   void OpenNewTab(const std::string& url, bool incognito);
+  void CloseTab(content::WebContents* web_contents);
 
   // Convenience function for running RunJavaScriptOrFail with the return value
   // of GetCurrentWebContents.

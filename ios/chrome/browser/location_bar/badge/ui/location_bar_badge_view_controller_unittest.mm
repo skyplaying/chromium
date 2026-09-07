@@ -50,14 +50,12 @@ TEST_F(LocationBarBadgeViewControllerTest,
   // the Proactive Suggestions Framework supports other contextual panel badges.
   base::test::ScopedFeatureList feature_list;
   feature_list.InitWithFeatures(
-      {kProactiveSuggestionsFramework, kPageActionMenu}, {kAskGeminiChip});
+      {kProactiveSuggestionsFramework, kPageActionMenu}, {});
 
   [view_controller_ view];
   ContextualPanelItemConfiguration configuration(
       ContextualPanelItemType::SamplePanelItem);
-  configuration.entrypoint_image_name = "chrome_product";
-  configuration.image_type =
-      ContextualPanelItemConfiguration::EntrypointImageType::Image;
+  configuration.entrypoint_symbol = SymbolChromeProduct;
   [view_controller_ setEntrypointConfig:&configuration];
 
   OCMExpect(

@@ -43,9 +43,7 @@ constexpr SqliteResultCodeMappingEntry kResultCodeMapping[] = {
     {SQLITE_PERM, static_cast<int>(SqliteLoggedResultCode::kPermission)},
     {SQLITE_ABORT, static_cast<int>(SqliteLoggedResultCode::kAbort)},
     {SQLITE_BUSY, static_cast<int>(SqliteLoggedResultCode::kBusy)},
-
-    // Chrome features shouldn't execute conflicting statements concurrently.
-    {SQLITE_LOCKED, static_cast<int>(SqliteLoggedResultCode::kUnusedChrome)},
+    {SQLITE_LOCKED, static_cast<int>(SqliteLoggedResultCode::kLocked)},
 
     // Chrome should crash on OOM.
     {SQLITE_NOMEM, static_cast<int>(SqliteLoggedResultCode::kUnusedChrome)},
@@ -269,21 +267,13 @@ file lock requests"
     {SQLITE_IOERR_CLOSE, static_cast<int>(SqliteLoggedResultCode::kIoClose)},
     {SQLITE_IOERR_DIR_CLOSE,
      static_cast<int>(SqliteLoggedResultCode::kUnusedSqlite)},
-
-    // Chrome will only allow enabling WAL on databases with exclusive locking.
     {SQLITE_IOERR_SHMOPEN,
-     static_cast<int>(SqliteLoggedResultCode::kUnusedChrome)},
-
-    // Chrome will only allow enabling WAL on databases with exclusive locking.
+     static_cast<int>(SqliteLoggedResultCode::kIoShmOpen)},
     {SQLITE_IOERR_SHMSIZE,
-     static_cast<int>(SqliteLoggedResultCode::kUnusedChrome)},
-
+     static_cast<int>(SqliteLoggedResultCode::kIoShmSize)},
     {SQLITE_IOERR_SHMLOCK,
-     static_cast<int>(SqliteLoggedResultCode::kUnusedSqlite)},
-
-    // Chrome will only allow enabling WAL on databases with exclusive locking.
-    {SQLITE_IOERR_SHMMAP,
-     static_cast<int>(SqliteLoggedResultCode::kUnusedChrome)},
+     static_cast<int>(SqliteLoggedResultCode::kIoShmLock)},
+    {SQLITE_IOERR_SHMMAP, static_cast<int>(SqliteLoggedResultCode::kIoShmMap)},
 
     {SQLITE_IOERR_SEEK, static_cast<int>(SqliteLoggedResultCode::kIoSeek)},
     {SQLITE_IOERR_DELETE_NOENT,
@@ -349,7 +339,7 @@ static_assert(std::size(kResultCodeMapping) ==
 // Returns an entry in kResultCodeMapping or kUnknownResultCodeMappingEntry.
 // CHECKs if the `sqlite_result_code` is not in the mapping table.
 SqliteResultCodeMappingEntry FindResultCode(int sqlite_result_code) {
-  const auto* mapping_it = std::ranges::find_if(
+  const SqliteResultCodeMappingEntry* mapping_it = std::ranges::find_if(
       kResultCodeMapping,
       [&sqlite_result_code](SqliteResultCodeMappingEntry rhs) {
         return sqlite_result_code == rhs.result_code;

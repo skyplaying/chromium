@@ -12,7 +12,6 @@
 #include "base/functional/bind.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/types/pass_key.h"
-#include "components/viz/common/color_space_utils.h"
 #include "components/viz/common/features.h"
 #include "components/viz/common/frame_sinks/blit_request.h"
 #include "components/viz/common/frame_sinks/copy_output_request.h"
@@ -165,22 +164,21 @@ void SurfaceSavedFrame::RequestCopyOfOutput(
   // If we're using BlitRequests, then we need to create the result bundle
   // immediately, since it can be imported before the copy output results
   // arrive.
-  for (auto& [index, shared_image] : blit_shared_images_) {
+  for (auto& [index, blit_image] : blit_shared_images_) {
     OutputCopyResult* slot = &frame_result_->shared_results[index].emplace();
 
-    slot->sync_token = shared_image->creation_sync_token();
-    slot->shared_image = shared_image;
+    slot->sync_token = blit_image.shared_image->creation_sync_token();
+    slot->shared_image = blit_image.shared_image;
+    slot->pixel_alignment_offset = blit_image.pixel_alignment_offset;
     slot->release_callback = base::BindOnce(
         [](scoped_refptr<gpu::ClientSharedImage> image,
            const gpu::SyncToken& sync_token,
            bool is_lost) { image->UpdateDestructionSyncToken(sync_token); },
-        std::move(shared_image));
+        std::move(blit_image.shared_image));
   }
 
   // DispatchCopyDoneCallback early if that feature is enabled.
-  if ((features::ShouldAckCOREarlyForViewTransition() &&
-       directive_.delay_layer_tree_view_deletion()) ||
-      copy_request_count_ == 0) {
+  if (directive_.delay_layer_tree_view_deletion() || copy_request_count_ == 0) {
     DispatchCopyDoneCallback();
   }
 
@@ -188,15 +186,13 @@ void SurfaceSavedFrame::RequestCopyOfOutput(
   // captured, as we will never receive a signal back from
   // NotifyCopyOfOutputComplete.
   //
-  // TODO(crbug.com/464502666): Refactor completion signals once
-  // ShouldAckCOREarlyForViewTransition becomes the default.
+  // TODO(crbug.com/464502666): Refactor completion signals.
   //
   // This will remove a benign race between DispatchCopyDoneCallback and
   // DispatchViewTransitionResourcesCaptured, which are sent on separate Mojo
   // pipes.
   //
-  // It will also resolve confusing behavior when
-  // kAckCopyOutputRequestEarlyForViewTransition is enabled, where
+  // It will also resolve confusing behavior, where
   // DispatchCopyDoneCallback is invoked at the start of the request rather than
   // at actual completion.
   if (copy_request_count_ == 0) {
@@ -242,11 +238,15 @@ std::unique_ptr<CopyOutputRequest> SurfaceSavedFrame::CreateCopyRequestIfNeeded(
                      weak_factory_.GetMutableWeakPtr(), shared_pass_index));
   request->set_result_task_runner(
       base::SingleThreadTaskRunner::GetCurrentDefault());
-  scoped_refptr<gpu::ClientSharedImage>& shared_image =
-      blit_shared_images_[shared_pass_index];
+  scoped_refptr<gpu::ClientSharedImage> shared_image;
 
   const auto& display_color_spaces = directive_.display_color_spaces();
   bool has_transparent_background = render_pass.has_transparent_background;
+  if (is_software) {
+    // Match LayerTreeHostImpl::GetTargetColorParams(): software compositing
+    // uses sRGB because it does not reliably color-convert resources.
+    content_color_usage = gfx::ContentColorUsage::kSRGB;
+  }
 
   auto image_format = display_color_spaces.GetOutputFormat(
       content_color_usage, has_transparent_background);
@@ -254,6 +254,7 @@ std::unique_ptr<CopyOutputRequest> SurfaceSavedFrame::CreateCopyRequestIfNeeded(
       display_color_spaces.GetRasterAndCompositeColorSpace(content_color_usage);
 
   if (is_software) {
+    color_space = gfx::ColorSpace::CreateSRGB();
     gpu::SharedImageUsageSet flags = gpu::SHARED_IMAGE_USAGE_CPU_WRITE_ONLY;
     shared_image =
         shared_image_interface_->CreateSharedImageForSoftwareCompositor(
@@ -270,6 +271,12 @@ std::unique_ptr<CopyOutputRequest> SurfaceSavedFrame::CreateCopyRequestIfNeeded(
       BlitRequest(gfx::Point(), LetterboxingBehavior::kDoNotLetterbox,
                   shared_image, shared_image->creation_sync_token(),
                   /*populates_mappable_shared_image=*/false));
+
+  gfx::Vector2dF orig_pixel_alignment_offset =
+      TransitionUtils::ComputePixelAlignmentOffset(
+          render_pass.transform_to_root_target);
+  blit_shared_images_[shared_pass_index] = {shared_image,
+                                            orig_pixel_alignment_offset};
 
   return request;
 }
@@ -303,9 +310,7 @@ void SurfaceSavedFrame::NotifyCopyOfOutputComplete(
   // Even if we early out, we update the count since we are no longer waiting
   // for this result.
   --copy_request_count_;
-  // Callback is run already when ShouldAckCOREarlyForViewTransition is enabled
-  if (!(features::ShouldAckCOREarlyForViewTransition() &&
-        directive_.delay_layer_tree_view_deletion()) &&
+  if (!directive_.delay_layer_tree_view_deletion() &&
       copy_request_count_ == 0) {
     DispatchCopyDoneCallback();
   }
@@ -342,7 +347,8 @@ void SurfaceSavedFrame::CompleteSavedFrameForTesting() {
             {SinglePlaneFormat::kBGRA_8888, kDefaultTextureSizeForTesting,
              gfx::ColorSpace(), gpu::SHARED_IMAGE_USAGE_CPU_WRITE_ONLY,
              "SurfaceSavedFrameForTesting"});
-    result->sync_token = shared_image_interface_->GenVerifiedSyncToken();
+    result->sync_token = result->shared_image->creation_sync_token();
+    shared_image_interface_->VerifySyncToken(result->sync_token);
     result->release_callback =
         base::DoNothingWithBoundArgs(result->shared_image);
   }
@@ -363,6 +369,15 @@ void SurfaceSavedFrame::CompleteSavedFrameForTesting() {
   }();
   weak_factory_.InvalidateWeakPtrs();
   DCHECK(IsValid());
+}
+
+std::unique_ptr<CopyOutputRequest>
+SurfaceSavedFrame::CreateCopyRequestForTesting(  // IN-TEST
+    const CompositorRenderPass& render_pass,
+    bool is_software,
+    gfx::ContentColorUsage content_color_usage) {
+  return CreateCopyRequestIfNeeded(render_pass, is_software,
+                                   content_color_usage);
 }
 
 SurfaceSavedFrame::OutputCopyResult::OutputCopyResult() = default;

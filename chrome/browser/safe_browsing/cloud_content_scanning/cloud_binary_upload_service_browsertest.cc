@@ -13,10 +13,11 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/safe_browsing/cloud_content_scanning/cloud_binary_upload_service_factory.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "content/public/test/browser_test.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 
 namespace safe_browsing {
 namespace {
@@ -70,7 +71,8 @@ class TestSafeBrowsingTokenFetcher : public SafeBrowsingTokenFetcher {
   }
 };
 
-class TestCloudBinaryUploadService : public CloudBinaryUploadService {
+class TestCloudBinaryUploadService
+    : public enterprise_connectors::CloudBinaryUploadServiceBase {
  public:
   TestCloudBinaryUploadService(
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
@@ -78,10 +80,14 @@ class TestCloudBinaryUploadService : public CloudBinaryUploadService {
       enterprise::test::ManagementContext management_context,
       enterprise_connectors::AnalysisConnector connector,
       bool profile_request)
-      : CloudBinaryUploadService(url_loader_factory, profile),
+      : enterprise_connectors::CloudBinaryUploadServiceBase(
+            url_loader_factory,
+            std::make_unique<CloudBinaryUploadService>(profile)),
         management_context_(management_context),
         profile_request_(profile_request) {
-    SetTokenFetcherForTesting(std::make_unique<TestSafeBrowsingTokenFetcher>());
+    static_cast<CloudBinaryUploadService*>(GetDelegateForTesting())
+        ->SetTokenFetcherForTesting(
+            std::make_unique<TestSafeBrowsingTokenFetcher>());
   }
 
   void OnGetRequestData(BinaryUploadRequest::Id request_id,
@@ -158,7 +164,7 @@ class CloudBinaryUploadServiceRequestValidationBrowserTest
 
   void SetUpOnMainThread() override {
     CloudBinaryUploadServiceFactory::GetInstance()->SetTestingFactory(
-        browser()->profile(),
+        browser()->GetProfile(),
         base::BindRepeating(
             &CloudBinaryUploadServiceRequestValidationBrowserTest::
                 CreateCloudBinaryUploadService,
@@ -179,9 +185,10 @@ class CloudBinaryUploadServiceRequestValidationBrowserTest
         profile, management_context(), connector_, profile_request());
   }
 
-  CloudBinaryUploadService* service() {
-    return static_cast<safe_browsing::CloudBinaryUploadService*>(
-        CloudBinaryUploadServiceFactory::GetForProfile(browser()->profile()));
+  enterprise_connectors::CloudBinaryUploadServiceBase* service() {
+    return static_cast<enterprise_connectors::CloudBinaryUploadServiceBase*>(
+        CloudBinaryUploadServiceFactory::GetForProfile(
+            browser()->GetProfile()));
   }
 
   std::string dm_token() {

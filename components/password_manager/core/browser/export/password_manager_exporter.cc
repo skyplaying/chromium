@@ -12,14 +12,13 @@
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/lazy_thread_pool_task_runner.h"
 #include "build/build_config.h"
 #include "components/password_manager/core/browser/export/password_csv_writer.h"
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
 #include "components/password_manager/core/browser/ui/credential_ui_entry.h"
-#include "components/password_manager/core/browser/ui/passwords_provider.h"
+#include "components/password_manager/core/browser/ui/saved_passwords_presenter.h"
 
 namespace password_manager {
 
@@ -63,10 +62,10 @@ bool DefaultDeleteFunction(const base::FilePath& file) {
 }  // namespace
 
 PasswordManagerExporter::PasswordManagerExporter(
-    PasswordsProvider* provider,
+    SavedPasswordsPresenter& presenter,
     ProgressCallback on_progress,
     base::OnceClosure completion_callback)
-    : provider_(provider),
+    : presenter_(presenter),
       on_progress_(std::move(on_progress)),
       last_progress_status_(ExportProgressStatus::kNotStarted),
       write_function_(base::BindRepeating(&DefaultWriteFunction)),
@@ -87,7 +86,8 @@ PasswordManagerExporter::~PasswordManagerExporter() = default;
 void PasswordManagerExporter::PreparePasswordsForExport() {
   DCHECK_EQ(GetProgressStatus(), ExportProgressStatus::kNotStarted);
 
-  std::vector<CredentialUIEntry> credentials = provider_->GetSavedCredentials();
+  std::vector<CredentialUIEntry> credentials =
+      presenter_->GetSavedCredentials();
   // Clear blocked credentials.
   std::erase_if(credentials, [](const auto& credential) {
     return credential.blocked_by_user;

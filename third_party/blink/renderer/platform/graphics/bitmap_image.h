@@ -80,6 +80,7 @@ class PLATFORM_EXPORT BitmapImage final : public Image {
   bool HasColorProfile() const;
 
   void ResetAnimation() override;
+  void ResetAnimationSharedTimelineOnly();
   bool MaybeAnimated() override;
 
   void SetAnimationPolicy(mojom::blink::ImageAnimationPolicy) override;
@@ -94,7 +95,7 @@ class PLATFORM_EXPORT BitmapImage final : public Image {
   bool IsLazyDecoded() override;
   size_t FrameCount() override;
   PaintImage PaintImageForCurrentFrame() override;
-  PaintImage PaintImageForCurrentFrameWithInfo(ImageNodeAnimationInfo*);
+  PaintImage PaintImageForCurrentFrameWithInfo(const ImageNodeAnimationInfo*);
   ImageOrientation Orientation() const override;
 
   PaintImage PaintImageForTesting();
@@ -137,7 +138,12 @@ class PLATFORM_EXPORT BitmapImage final : public Image {
             const gfx::RectF& src_rect,
             const ImageDrawOptions&) override;
 
-  PaintImage CreatePaintImage(ImageNodeAnimationInfo*);
+  PaintImage CreatePaintImage(
+      PaintImage::Id paint_id,
+      PaintImage::Id sync_animation_id,
+      PaintImage::AnimationSyncSequence sync_sequence,
+      PaintImage::AnimationSequenceId reset_animation_sequence_id,
+      int image_animation_repetition_count);
   void UpdateSize() const;
 
   // Called to wipe out the entire frame buffer cache and tell the image
@@ -168,8 +174,6 @@ class PLATFORM_EXPORT BitmapImage final : public Image {
   // data is updated in DataChanged.
   HashMap<DOMNodeId, PaintImage> cached_frames_;
 
-  HashMap<DOMNodeId, ImageAnimationEnum> image_animation_map_;
-
   // Whether or not we can play animation.
   mojom::blink::ImageAnimationPolicy animation_policy_ =
       blink::mojom::ImageAnimationPolicy::kImageAnimationPolicyAllowed;
@@ -191,12 +195,10 @@ class PLATFORM_EXPORT BitmapImage final : public Image {
                           // incapable of animation.
 
   size_t frame_count_;
-  // The paused image will produce the first frame of animated image.
-  // This would possibly change via this issue [1].
-  // [1] https://github.com/webplatformco/project-image-animation/issues/2
-  PaintImage::Id paused_image_paint_image_id_ = -1;
 
-  PaintImage::AnimationSequenceId reset_animation_sequence_id_ = 0;
+  PaintImage::AnimationSequenceId reset_animation_own_timeline_sequence_id_ = 0;
+  PaintImage::AnimationSequenceId reset_animation_shared_timeline_sequence_id_ =
+      0;
 };
 
 template <>

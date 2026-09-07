@@ -6,6 +6,7 @@
 
 #import "base/notreached.h"
 #import "base/strings/utf_string_conversions.h"
+#import "ios/chrome/browser/omnibox/public/omnibox_icon_type.h"
 #import "ios/chrome/browser/omnibox/public/omnibox_ui_features.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
@@ -16,15 +17,38 @@ namespace {
 // The size of symbol images.
 const CGFloat kSymbolLocationBarPointSize = 10;
 
+// Returns the asset with "always template" rendering mode.
+UIImage* GetLocationBarSecurityIcon(LocationBarSecurityIconType iconType) {
+  Symbol symbol = GetLocationBarSecuritySymbol(iconType);
+  if (symbol == SymbolNone) {
+    return nil;
+  }
+  return SymbolTemplateWithPointSize(symbol, kSymbolLocationBarPointSize);
+}
+
+// Converts the `security_level` to an appropriate security icon type.
+LocationBarSecurityIconType GetLocationBarSecurityIconTypeForSecurityState(
+    security_state::SecurityLevel security_level) {
+  switch (security_level) {
+    case security_state::NONE:
+      return LocationBarSecurityIconType::INFO;
+    case security_state::DANGEROUS:
+      return LocationBarSecurityIconType::DANGEROUS;
+    case security_state::WARNING:
+      return LocationBarSecurityIconType::NOT_SECURE_WARNING;
+    case security_state::SECURE:
+      return LocationBarSecurityIconType::NONE;
+    case security_state::SECURITY_LEVEL_COUNT:
+      NOTREACHED();
+  }
+}
+
 }  // namespace
 
 #pragma mark - Suggestion icons.
 
 OmniboxSuggestionIconType GetOmniboxSuggestionIconTypeForAutocompleteMatchType(
     AutocompleteMatchType::Type type) {
-  // TODO(crbug.com/40716245): Handle trending zero-prefix suggestions by
-  // checking the match subtype similar to AutocompleteMatch::GetVectorIcon().
-
   switch (type) {
     case AutocompleteMatchType::BOOKMARK_TITLE:
     case AutocompleteMatchType::CLIPBOARD_URL:
@@ -89,7 +113,7 @@ GetOmniboxSuggestionIconTypeForSuggestTemplateInfoIconType(
     omnibox::SuggestTemplateInfo::IconType type) {
   // Update this assertion and the switch below whenever values are added.
   static_assert(omnibox::SuggestTemplateInfo::IconType_MAX ==
-                omnibox::SuggestTemplateInfo::NOTES_SPARK);
+                omnibox::SuggestTemplateInfo::BOLT);
   switch (type) {
     case omnibox::SuggestTemplateInfo_IconType_HISTORY:
       return OmniboxSuggestionIconType::kSearchHistory;
@@ -108,6 +132,17 @@ GetOmniboxSuggestionIconTypeForSuggestTemplateInfoIconType(
       return OmniboxSuggestionIconType::kSearch;
     case omnibox::SuggestTemplateInfo_IconType_NOTES_SPARK:
       return OmniboxSuggestionIconType::kNotesSpark;
+    case omnibox::SuggestTemplateInfo_IconType_DRAFT_SPARK:
+    case omnibox::SuggestTemplateInfo_IconType_LIGHTBULB:
+    case omnibox::SuggestTemplateInfo_IconType_ATTACH_FILE:
+    case omnibox::SuggestTemplateInfo_IconType_SCHOOL:
+    case omnibox::SuggestTemplateInfo_IconType_INK_PEN:
+    case omnibox::SuggestTemplateInfo_IconType_TAB:
+    case omnibox::SuggestTemplateInfo_IconType_PHOTO_SPARK:
+    case omnibox::SuggestTemplateInfo_IconType_BOLT:
+      // TODO(crbug.com/486698515): Replace with the correct symbol when it's
+      // available.
+      return OmniboxSuggestionIconType::kSearch;
     case omnibox::SuggestTemplateInfo_IconType_FAVICON:
       return OmniboxSuggestionIconType::kDefaultFavicon;
     case omnibox::SuggestTemplateInfo_IconType_ICON_TYPE_UNSPECIFIED:
@@ -126,38 +161,6 @@ UIImage* GetOmniboxSuggestionIconForSuggestTemplateInfoIconType(
 
 #pragma mark - Security icons.
 
-// Returns the asset with "always template" rendering mode.
-UIImage* GetLocationBarSecurityIcon(LocationBarSecurityIconType iconType) {
-  NSString* name = GetLocationBarSecuritySymbolName(iconType);
-  if (!name) {
-    return nil;
-  }
-
-  if (iconType == LocationBarSecurityIconType::DANGEROUS) {
-    return CustomSymbolTemplateWithPointSize(name, kSymbolLocationBarPointSize);
-  } else {
-    return DefaultSymbolTemplateWithPointSize(name,
-                                              kSymbolLocationBarPointSize);
-  }
-}
-
-// Converts the `security_level` to an appropriate security icon type.
-LocationBarSecurityIconType GetLocationBarSecurityIconTypeForSecurityState(
-    security_state::SecurityLevel security_level) {
-  switch (security_level) {
-    case security_state::NONE:
-      return LocationBarSecurityIconType::INFO;
-    case security_state::DANGEROUS:
-      return LocationBarSecurityIconType::DANGEROUS;
-    case security_state::WARNING:
-      return LocationBarSecurityIconType::NOT_SECURE_WARNING;
-    case security_state::SECURE:
-      return LocationBarSecurityIconType::NONE;
-    case security_state::SECURITY_LEVEL_COUNT:
-      NOTREACHED();
-  }
-}
-
 // Converts the `security_level` to an appropriate icon in "always template"
 // rendering mode.
 UIImage* GetLocationBarSecurityIconForSecurityState(
@@ -168,6 +171,6 @@ UIImage* GetLocationBarSecurityIconForSecurityState(
 }
 
 UIImage* GetLocationBarOfflineIcon() {
-  return DefaultSymbolTemplateWithPointSize(kDownloadPromptFillSymbol,
-                                            kSymbolLocationBarPointSize);
+  return SymbolTemplateWithPointSize(SymbolDownloadPromptFill,
+                                     kSymbolLocationBarPointSize);
 }

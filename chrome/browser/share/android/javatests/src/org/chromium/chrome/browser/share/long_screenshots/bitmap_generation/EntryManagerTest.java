@@ -7,6 +7,7 @@ package org.chromium.chrome.browser.share.long_screenshots.bitmap_generation;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyFloat;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
@@ -29,7 +30,6 @@ import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -44,7 +44,6 @@ import org.chromium.url.GURL;
  * unit test.
  */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class EntryManagerTest {
     private static final long FAKE_CAPTURE_ADDR = 123L;
 
@@ -81,12 +80,11 @@ public class EntryManagerTest {
         mEntryManager.addBitmapGeneratorObserver(mObserverMock);
         final ArgumentCaptor<LongScreenshotsTabService.CaptureProcessor> captor =
                 ArgumentCaptor.forClass(LongScreenshotsTabService.CaptureProcessor.class);
-        mInOrder.verify(mTabServiceMock).setCaptureProcessor(captor.capture());
-        mProcessor = captor.getValue();
-        mInOrder.verify(mTabServiceMock)
-                .captureTab(eq(mTabMock), any(), eq(false), anyInt(), anyInt());
+        mInOrder.verify(mTabServiceMock).setCaptureProcessor(any());
+        mInOrder.verify(mTabServiceMock).captureTab(any(), any(), anyBoolean(), anyInt(), anyInt());
         mInOrder.verify(mObserverMock).onStatusChange(eq(EntryStatus.CAPTURE_IN_PROGRESS));
         mGenerator = mEntryManager.getBitmapGeneratorForTesting();
+        mProcessor = mGenerator;
         mGenerator.setCompositorFactoryForTesting(
                 new BitmapGenerator.CompositorFactory() {
                     @Override

@@ -14,6 +14,7 @@
 #include "ash/constants/ash_constants.h"
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
+#include "ash/constants/url_constants.h"
 #include "ash/public/cpp/accessibility_controller_enums.h"
 #include "ash/public/cpp/tablet_mode.h"
 #include "base/command_line.h"
@@ -33,7 +34,6 @@
 #include "chrome/browser/ui/webui/settings/captions_handler.h"
 #include "chrome/browser/ui/webui/settings/font_handler.h"
 #include "chrome/browser/ui/webui/settings/shared_settings_localized_strings_provider.h"
-#include "chrome/common/url_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/live_caption/caption_util.h"
 #include "components/prefs/pref_service.h"
@@ -618,14 +618,6 @@ bool IsAccessibilityMouseKeysEnabled() {
   return ::features::IsAccessibilityMouseKeysEnabled();
 }
 
-bool IsAccessibilityDisableTouchpadEnabled() {
-  return ::features::IsAccessibilityDisableTouchpadEnabled();
-}
-
-bool IsAccessibilityFlashNotificationFeatureEnabled() {
-  return ::features::IsAccessibilityFlashScreenFeatureEnabled();
-}
-
 }  // namespace
 
 AccessibilitySection::AccessibilitySection(
@@ -930,6 +922,7 @@ void AccessibilitySection::AddLoadTimeData(
       {"cursorColorMagenta", IDS_SETTINGS_CURSOR_COLOR_MAGENTA},
       {"cursorColorOptionsLabel", IDS_SETTINGS_CURSOR_COLOR_OPTIONS_LABEL},
       {"cursorColorPink", IDS_SETTINGS_CURSOR_COLOR_PINK},
+      {"cursorColorInverted", IDS_SETTINGS_CURSOR_COLOR_INVERTED},
       {"cursorColorRed", IDS_SETTINGS_CURSOR_COLOR_RED},
       {"cursorColorYellow", IDS_SETTINGS_CURSOR_COLOR_YELLOW},
       {"cursorHighlightLabel",
@@ -1558,10 +1551,10 @@ void AccessibilitySection::AddLoadTimeData(
   html_source->AddLocalizedStrings(kLocalizedStrings);
 
   html_source->AddString("a11yLearnMoreUrl",
-                         chrome::kChromeAccessibilityHelpURL);
+                         ash::external_urls::kAccessibilityHelpURL);
 
   html_source->AddString("selectToSpeakLearnMoreUrl",
-                         chrome::kSelectToSpeakLearnMoreURL);
+                         ash::external_urls::kSelectToSpeakLearnMoreURL);
 
   html_source->AddString(
       "displayAndMagnificationLinkDescription",
@@ -1587,7 +1580,7 @@ void AccessibilitySection::AddLoadTimeData(
                           AreTabletNavigationButtonsAllowed());
 
   html_source->AddString("tabletModeShelfNavigationButtonsLearnMoreUrl",
-                         chrome::kTabletModeGesturesLearnMoreURL);
+                         ash::external_urls::kTabletModeGesturesLearnMoreURL);
 
   html_source->AddBoolean("isAccessibilityReducedAnimationsEnabled",
                           IsAccessibilityReducedAnimationsEnabled());
@@ -1595,16 +1588,15 @@ void AccessibilitySection::AddLoadTimeData(
   html_source->AddBoolean("isAccessibilityMagnifierFollowsChromeVoxEnabled",
                           IsAccessibilityMagnifierFollowsChromeVoxEnabled());
 
-  html_source->AddString("faceGazeLearnMoreUrl", chrome::kFaceGazeLearnMoreURL);
-
-  html_source->AddBoolean("isAccessibilityDisableTouchpadEnabled",
-                          IsAccessibilityDisableTouchpadEnabled());
+  html_source->AddString("faceGazeLearnMoreUrl",
+                         ash::external_urls::kFaceGazeLearnMoreURL);
 
   html_source->AddBoolean("isAccessibilityMouseKeysEnabled",
                           IsAccessibilityMouseKeysEnabled());
 
-  html_source->AddBoolean("isAccessibilityFlashNotificationFeatureEnabled",
-                          IsAccessibilityFlashNotificationFeatureEnabled());
+  html_source->AddBoolean(
+      "isAccessibilityInvertedMouseCursorEnabled",
+      ::features::IsAccessibilityInvertedMouseCursorEnabled());
 
   html_source->AddInteger(
       "defaultBounceKeysDelayMillis",
@@ -2059,9 +2051,7 @@ void AccessibilitySection::UpdateSearchTags() {
   updater.AddSearchTags(GetA11yColorCorrectionSearchConcepts());
   updater.AddSearchTags(GetA11yOverscrollSettingSearchConcepts());
 
-  if (IsAccessibilityFlashNotificationFeatureEnabled()) {
-    updater.AddSearchTags(GetA11yFlashNotificationsSearchConcepts());
-  }
+  updater.AddSearchTags(GetA11yFlashNotificationsSearchConcepts());
 
   updater.AddSearchTags(GetA11yFaceGazeSearchConcepts());
 
@@ -2072,9 +2062,7 @@ void AccessibilitySection::UpdateSearchTags() {
     updater.AddSearchTags(GetA11yMouseKeysSearchConcepts());
   }
 
-  if (IsAccessibilityDisableTouchpadEnabled()) {
-    updater.AddSearchTags(GetA11yDisableTouchpadSearchConcepts());
-  }
+  updater.AddSearchTags(GetA11yDisableTouchpadSearchConcepts());
 
   if (!pref_service_->GetBoolean(prefs::kAccessibilitySwitchAccessEnabled)) {
     return;

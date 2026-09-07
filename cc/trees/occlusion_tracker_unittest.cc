@@ -217,8 +217,12 @@ class OcclusionTrackerTest : public testing::Test {
     // TODO(wangxianzhu): Let EffectTree::UpdateEffects() handle this.
     do {
       effect_node->subtree_has_copy_request = true;
-      effect_node = effect_tree.Node(effect_node->parent_id);
-    } while (effect_node && !effect_node->subtree_has_copy_request);
+      int parent_id = effect_node->parent_id;
+      if (parent_id == kInvalidPropertyNodeId) {
+        break;
+      }
+      effect_node = &effect_tree.MutableNode(parent_id);
+    } while (!effect_node->subtree_has_copy_request);
     return layer;
   }
 
@@ -312,15 +316,15 @@ class OcclusionTrackerTest : public testing::Test {
     }
   }
 
+  base::test::ScopedFeatureList scoped_feature_list_;
   bool opaque_layers_;
-  FakeLayerTreeHostClient client_;
+  FakeLayerTreeHostDelegate client_;
   TestTaskGraphRunner task_graph_runner_;
   std::unique_ptr<LayerTreeFrameSink> layer_tree_frame_sink_;
   std::unique_ptr<AnimationHost> animation_host_;
   std::unique_ptr<FakeLayerTreeHost> host_;
   std::unique_ptr<EffectTreeLayerListIterator> layer_iterator_;
   int next_layer_impl_id_;
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 #define RUN_TEST_IMPL_THREAD_OPAQUE_LAYERS(ClassName)          \

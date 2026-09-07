@@ -11,8 +11,6 @@ import static org.chromium.chrome.browser.password_manager.PasswordManagerSettin
 import android.os.SystemClock;
 import android.text.TextUtils;
 
-import androidx.annotation.VisibleForTesting;
-
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -109,11 +107,11 @@ class PasswordSettingsUpdaterMetricsRecorder {
         @AndroidBackendErrorType
         int error = PasswordManagerAndroidBackendUtil.getBackendError(exception);
         RecordHistogram.recordEnumeratedHistogram(
-                getHistogramName("ErrorCode"), error, AndroidBackendErrorType.MAX_VALUE);
+                getHistogramName("ErrorCode"), error, AndroidBackendErrorType.MAX_VALUE + 1);
         RecordHistogram.recordEnumeratedHistogram(
                 getHistogramName("ErrorCode", mStoreType),
                 error,
-                AndroidBackendErrorType.MAX_VALUE);
+                AndroidBackendErrorType.MAX_VALUE + 1);
         if (error == AndroidBackendErrorType.EXTERNAL_ERROR) {
             int apiErrorCode = PasswordManagerAndroidBackendUtil.getApiErrorCode(exception);
             RecordHistogram.recordSparseHistogram(getHistogramName("APIError1"), apiErrorCode);
@@ -126,7 +124,6 @@ class PasswordSettingsUpdaterMetricsRecorder {
         return mFunctionSuffix;
     }
 
-    @VisibleForTesting
     @PasswordManagerSetting
     int getSettingForTesting() {
         return mSetting;

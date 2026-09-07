@@ -2,35 +2,49 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//components/optimization_guide/features.gni")
-
 source_set("model") {
   sources = [
     "address_normalizer_factory.h",
     "address_normalizer_factory.mm",
     "autocomplete_history_manager_factory.h",
     "autocomplete_history_manager_factory.mm",
+    "autofill_ai_prefetch_failure_infobar_delegate_ios.h",
+    "autofill_ai_prefetch_failure_infobar_delegate_ios.mm",
+    "autofill_ai_save_entity_infobar_delegate_ios.h",
+    "autofill_ai_save_entity_infobar_delegate_ios.mm",
+    "autofill_ai_util.h",
+    "autofill_ai_util.mm",
     "autofill_image_fetcher_factory.h",
     "autofill_image_fetcher_factory.mm",
     "autofill_image_fetcher_impl.h",
     "autofill_image_fetcher_impl.mm",
     "autofill_log_router_factory.cc",
     "autofill_log_router_factory.h",
+    "autofill_policy_service_factory.h",
+    "autofill_policy_service_factory.mm",
     "form_input_suggestions_provider.h",
     "form_suggestion_controller.h",
     "form_suggestion_controller.mm",
     "form_suggestion_tab_helper.h",
     "form_suggestion_tab_helper.mm",
-    "ios_account_setting_service_factory.h",
-    "ios_account_setting_service_factory.mm",
     "ios_autofill_ai_model_cache_factory.h",
     "ios_autofill_ai_model_cache_factory.mm",
     "ios_autofill_ai_model_executor_factory.h",
     "ios_autofill_ai_model_executor_factory.mm",
+    "ios_autofill_ai_personal_context_access_manager_factory.h",
+    "ios_autofill_ai_personal_context_access_manager_factory.mm",
     "ios_autofill_entity_data_manager_factory.h",
     "ios_autofill_entity_data_manager_factory.mm",
     "ios_autofill_entity_data_manager_observer_bridge.h",
     "ios_autofill_entity_data_manager_observer_bridge.mm",
+    "ios_autofill_entity_suppression_manager_factory.h",
+    "ios_autofill_entity_suppression_manager_factory.mm",
+    "ios_autofill_field_classification_model_handler_factory.h",
+    "ios_autofill_field_classification_model_handler_factory.mm",
+    "ios_wallet_pass_access_manager_factory.h",
+    "ios_wallet_pass_access_manager_factory.mm",
+    "manual_fill_virtual_card_cache.h",
+    "manual_fill_virtual_card_cache.mm",
     "personal_data_manager_factory.h",
     "personal_data_manager_factory.mm",
     "strike_database_factory.h",
@@ -38,18 +52,12 @@ source_set("model") {
     "validation_rules_storage_factory.cc",
     "validation_rules_storage_factory.h",
   ]
-
-  if (build_with_tflite_lib) {
-    sources += [
-      "ios_autofill_field_classification_model_handler_factory.h",
-      "ios_autofill_field_classification_model_handler_factory.mm",
-    ]
-  }
   deps = [
     ":features",
     ":model_shared",
     "//base",
     "//base:i18n",
+    "//components/account_settings",
     "//components/application_locale_storage",
     "//components/autofill/core/browser",
     "//components/autofill/ios/browser",
@@ -59,13 +67,25 @@ source_set("model") {
     "//components/image_fetcher/ios",
     "//components/leveldb_proto",
     "//components/optimization_guide/core:model_execution",
-    "//components/plus_addresses/core/common:features",
+    "//components/personal_context/core",
+    "//components/personal_context/first_run",
     "//components/prefs",
+    "//components/strings:components_strings__strings_grit",
+    "//components/subscription_eligibility",
     "//components/sync/service",
     "//components/variations/service",
+    "//components/wallet/core/browser",
+    "//ios/chrome/app/strings",
+    "//ios/chrome/browser/account_settings/model",
+    "//ios/chrome/browser/autofill/atmemory/public",
+    "//ios/chrome/browser/autofill/autofill_ai/public",
     "//ios/chrome/browser/autofill/resources",
     "//ios/chrome/browser/history/model",
+    "//ios/chrome/browser/intelligence/bwg/utils:constants",
+    "//ios/chrome/browser/intelligence/bwg/utils:prefs",
+    "//ios/chrome/browser/metrics/model:google_groups_updater",
     "//ios/chrome/browser/optimization_guide/model",
+    "//ios/chrome/browser/personal_context/model",
     "//ios/chrome/browser/shared/model/application_context",
     "//ios/chrome/browser/shared/model/paths",
     "//ios/chrome/browser/shared/model/prefs:pref_names",
@@ -75,8 +95,10 @@ source_set("model") {
     "//ios/chrome/browser/shared/ui/util:util_swift",
     "//ios/chrome/browser/shared/ui/util/image",
     "//ios/chrome/browser/signin/model",
+    "//ios/chrome/browser/subscription_eligibility/model",
     "//ios/chrome/browser/sync/model",
     "//ios/chrome/browser/sync/model:data_type_store_service_factory",
+    "//ios/chrome/browser/sync/model:device_info_sync_service_factory",
     "//ios/chrome/browser/webdata_services/model",
     "//ios/chrome/common/ui/colors",
     "//ios/web/common",
@@ -89,11 +111,10 @@ source_set("model") {
     "//ui/base",
     "//url",
   ]
-
-  if (build_with_tflite_lib) {
-    deps += [ "//ios/chrome/browser/optimization_guide/model" ]
-  }
-  public_deps = [ ":constants" ]
+  public_deps = [
+    ":constants",
+    "//components/keyed_service/ios",
+  ]
   frameworks = [ "QuartzCore.framework" ]
 }
 
@@ -105,6 +126,7 @@ source_set("autofill_agent_delegate") {
   deps = [
     "//base",
     "//components/autofill/ios/browser",
+    "//ios/chrome/browser/autofill/atmemory/public",
     "//ios/chrome/browser/shared/public/commands",
   ]
 }
@@ -192,6 +214,7 @@ source_set("unit_tests") {
   testonly = true
 
   sources = [
+    "autofill_ai_save_entity_infobar_delegate_ios_unittest.mm",
     "autofill_controller_js_unittest.mm",
     "autofill_controller_unittest.mm",
     "autofill_image_fetcher_impl_unittest.mm",
@@ -200,6 +223,8 @@ source_set("unit_tests") {
     "form_input_accessory_view_handler_unittest.mm",
     "form_structure_browsertest.mm",
     "form_suggestion_controller_unittest.mm",
+    "ios_autofill_ai_personal_context_access_manager_factory_unittest.mm",
+    "manual_fill_virtual_card_cache_unittest.mm",
     "suggestion_controller_java_script_feature_unittest.mm",
   ]
   deps = [
@@ -231,12 +256,19 @@ source_set("unit_tests") {
     "//components/infobars/core",
     "//components/password_manager/core/browser:test_support",
     "//components/password_manager/ios",
-    "//components/plus_addresses/core/common:features",
+    "//components/personal_context/core:features",
+    "//components/prefs:test_support",
     "//components/security_state/ios",
+    "//components/strings:components_strings__strings_grit",
     "//components/sync_user_events:test_support",
     "//ios/chrome/app/application_delegate:app_state",
+    "//ios/chrome/app/strings",
+    "//ios/chrome/browser/autofill/autofill_ai/public",
+    "//ios/chrome/browser/autofill/bnpl:unit_tests",
     "//ios/chrome/browser/autofill/form_input_accessory/coordinator",
     "//ios/chrome/browser/autofill/form_input_accessory/ui",
+    "//ios/chrome/browser/autofill/manual_fill/coordinator",
+    "//ios/chrome/browser/autofill/manual_fill/model",
     "//ios/chrome/browser/autofill/model/bottom_sheet",
     "//ios/chrome/browser/autofill/model/bottom_sheet:save_card_bottom_sheet_model",
     "//ios/chrome/browser/autofill/ui_bundled:coordinator",
@@ -247,6 +279,8 @@ source_set("unit_tests") {
     "//ios/chrome/browser/shared/model/application_context",
     "//ios/chrome/browser/shared/model/paths",
     "//ios/chrome/browser/shared/model/profile/test",
+    "//ios/chrome/browser/shared/model/web_state_list",
+    "//ios/chrome/browser/shared/model/web_state_list/test:test_support",
     "//ios/chrome/browser/shared/public/commands",
     "//ios/chrome/browser/ssl/model",
     "//ios/chrome/browser/sync/model",
@@ -258,10 +292,12 @@ source_set("unit_tests") {
     "//ios/web/public/js_messaging",
     "//ios/web/public/test",
     "//ios/web/public/test:javascript_test",
+    "//net:test_support",
     "//testing/data_driven_testing",
     "//testing/gtest",
     "//third_party/leveldatabase",
     "//third_party/ocmock",
+    "//ui/base",
     "//ui/base:test_support",
     "//ui/gfx:test_support",
   ]

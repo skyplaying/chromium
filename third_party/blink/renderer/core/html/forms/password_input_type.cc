@@ -36,6 +36,7 @@
 #include "third_party/blink/renderer/core/dom/dom_token_list.h"
 #include "third_party/blink/renderer/core/dom/shadow_root.h"
 #include "third_party/blink/renderer/core/editing/frame_selection.h"
+#include "third_party/blink/renderer/core/events/before_text_inserted_event.h"
 #include "third_party/blink/renderer/core/events/keyboard_event.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
@@ -206,21 +207,27 @@ void PasswordInputType::HandleBlurEvent() {
 
 void PasswordInputType::HandleBeforeTextInsertedEvent(
     BeforeTextInsertedEvent& event) {
+  DCHECK(!RuntimeEnabledFeatures::CleanUpActivationBehaviorEnabled());
+  event.SetText(FilterBeforeTextInserted(event.GetText()));
+}
+
+String PasswordInputType::FilterBeforeTextInserted(const String& text) {
   if (RuntimeEnabledFeatures::PasswordRevealEnabled()) {
     // This is the only scenario we go from no reveal button to showing the
     // reveal button: the password is empty and we have some user input.
-    if (GetElement().Value().empty())
+    if (GetElement().Value().empty()) {
       should_show_reveal_button_ = true;
+    }
   }
 
-  TextFieldInputType::HandleBeforeTextInsertedEvent(event);
+  return TextFieldInputType::FilterBeforeTextInserted(text);
 }
 
 void PasswordInputType::HandleKeydownEvent(KeyboardEvent& event) {
   if (RuntimeEnabledFeatures::PasswordRevealEnabled()) {
     if (should_show_reveal_button_) {
       // Alt-F8 to reveal/obscure password
-      if (event.getModifierState("Alt") && event.key() == "F8") {
+      if (event.altKey() && event.key() == "F8") {
         GetElement().SetShouldRevealPassword(
             !GetElement().ShouldRevealPassword());
         UpdatePasswordRevealButton();

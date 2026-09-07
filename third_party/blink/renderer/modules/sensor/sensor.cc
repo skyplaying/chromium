@@ -20,6 +20,7 @@
 #include "third_party/blink/renderer/modules/sensor/sensor_provider_proxy.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/web_test_support.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
@@ -66,8 +67,8 @@ Sensor::Sensor(ExecutionContext* execution_context,
         device::GetSensorMaxAllowedFrequency(type_);
     if (frequency_ > max_allowed_frequency) {
       frequency_ = max_allowed_frequency;
-      String message = String::Format(
-          "Maximum allowed frequency value for this sensor type is %.0f Hz.",
+      String message = Format(
+          "Maximum allowed frequency value for this sensor type is {:.0f} Hz.",
           max_allowed_frequency);
       auto* console_message = MakeGarbageCollected<ConsoleMessage>(
           mojom::ConsoleMessageSource::kJavaScript,
@@ -271,10 +272,13 @@ void Sensor::Activate() {
   InitSensorProxyIfNeeded();
   DCHECK(sensor_proxy_);
 
-  if (sensor_proxy_->IsInitialized())
+  if (sensor_proxy_->IsInitialized()) {
     RequestAddConfiguration();
-  else
-    sensor_proxy_->Initialize();
+  } else {
+    auto* window = To<LocalDOMWindow>(GetExecutionContext());
+    sensor_proxy_->Initialize(
+        LocalFrame::HasTransientUserActivation(window->GetFrame()));
+  }
 
   sensor_proxy_->AddObserver(this);
 }

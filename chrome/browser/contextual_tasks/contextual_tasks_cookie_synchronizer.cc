@@ -22,6 +22,11 @@
 #include "google_apis/gaia/gaia_auth_fetcher.h"
 #include "services/network/public/mojom/cookie_manager.mojom.h"
 
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+#include "base/feature_list.h"
+#include "components/signin/public/base/signin_switches.h"
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
+
 namespace contextual_tasks {
 
 namespace {
@@ -44,7 +49,10 @@ ContextualTasksCookieSynchronizer::ContextualTasksCookieSynchronizer(
     signin::IdentityManager* identity_manager)
     : context_(context), identity_manager_(identity_manager) {
   CHECK(context_);
-  observation_.Observe(identity_manager);
+  // `identity_manager` can be nullptr in tests.
+  if (identity_manager_) {
+    observation_.Observe(identity_manager_);
+  }
 }
 
 ContextualTasksCookieSynchronizer::~ContextualTasksCookieSynchronizer() =
@@ -64,16 +72,35 @@ ContextualTasksCookieSynchronizer::GetCookieManagerForPartition() {
   return GetStoragePartition()->GetCookieManagerForBrowserProcess();
 }
 
+signin::PartitionSuffix ContextualTasksCookieSynchronizer::GetPartitionSuffix()
+    const {
+  return signin::PartitionSuffix::kContextualTasks;
+}
+
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
 network::mojom::DeviceBoundSessionManager*
 ContextualTasksCookieSynchronizer::GetDeviceBoundSessionManagerForPartition() {
-  return nullptr;
+  if (!base::FeatureList::IsEnabled(
+          switches::
+              kEnableOAuthMultiloginStandardCookiesBindingForSecondaryPartitions)) {
+    return nullptr;
+  }
+  return GetStoragePartition()->GetDeviceBoundSessionManager();
 }
 #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
-void ContextualTasksCookieSynchronizer::CopyCookiesToWebviewStoragePartition() {
+void ContextualTasksCookieSynchronizer::CopyCookiesToWebviewStoragePartition(
+    base::OnceClosure callback) {
+  CHECK(!callback.is_null());
+  pending_cookie_sync_completion_callbacks_.push_back(std::move(callback));
+
   if (cookie_loader_) {
     // A request is in progress already.
+    return;
+  }
+
+  if (!identity_manager_) {
+    CompleteAuth(/*is_success=*/false);
     return;
   }
 
@@ -83,7 +110,7 @@ void ContextualTasksCookieSynchronizer::CopyCookiesToWebviewStoragePartition() {
                                 base::Unretained(this)));
 
   if (!GetStoragePartition()) {
-    CompleteAuth(false);
+    CompleteAuth(/*is_success=*/false);
     return;
   }
 
@@ -97,11 +124,12 @@ void ContextualTasksCookieSynchronizer::OnIdentityManagerShutdown(
 }
 
 void ContextualTasksCookieSynchronizer::BeginCookieSync() {
+  CHECK(identity_manager_);
   // We only need primary account authentication in the webview.
   CoreAccountId primary_account_id =
       identity_manager_->GetPrimaryAccountId(signin::ConsentLevel::kSignin);
   if (primary_account_id.empty()) {
-    CompleteAuth(false);
+    CompleteAuth(/*is_success=*/false);
     return;
   }
   signin::MultiloginParameters parameters = {
@@ -142,6 +170,10 @@ void ContextualTasksCookieSynchronizer::OnTimeout() {
 void ContextualTasksCookieSynchronizer::CompleteAuth(bool is_success) {
   timeout_.Stop();
   cookie_loader_.reset();
+  auto callbacks = std::move(pending_cookie_sync_completion_callbacks_);
+  for (auto& callback : callbacks) {
+    std::move(callback).Run();
+  }
 }
 
 content::StoragePartition*

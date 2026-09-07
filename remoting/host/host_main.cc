@@ -20,8 +20,21 @@
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "mojo/core/embedder/embedder.h"
+#include "remoting/base/buildflags.h"
 #include "remoting/base/crash/crash_reporting_crashpad.h"
 #include "remoting/base/logging.h"
+
+#if BUILDFLAG(IS_LINUX)
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include "base/files/file_util.h"
+#include "base/posix/eintr_wrapper.h"
+#include "base/strings/string_number_conversions.h"
+#include "remoting/base/file_path_util_linux.h"
+#endif  // BUILDFLAG(IS_LINUX)
+
+#include "base/memory_coordinator/dummy_memory_consumer_registry.h"
 #include "remoting/host/base/host_exit_codes.h"
 #include "remoting/host/base/switches.h"
 #include "remoting/host/evaluate_capability.h"
@@ -46,21 +59,51 @@ namespace remoting {
 
 // Known entry points.
 int SingleProcessHostProcessMain();
+#if BUILDFLAG(REMOTING_MULTI_PROCESS)
 int NetworkProcessMain();
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
 int DaemonProcessMain();
 int DesktopProcessMain();
+int PeerConnectionProcessMain();
 #endif
 #if BUILDFLAG(IS_WIN)
 int FileChooserMain();
 int RdpDesktopSessionMain();
 int UrlForwarderConfiguratorMain();
 #endif  // BUILDFLAG(IS_WIN)
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX)
 int XSessionChooserMain();
-#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#endif  // BUILDFLAG(IS_LINUX)
 
 namespace {
+
+#if BUILDFLAG(IS_LINUX)
+void EnsureVarLibDirectory() {
+  if (getuid() != 0) {
+    // Only do this in the daemon process, which is always run as root.
+    return;
+  }
+
+  base::FilePath var_lib_dir = GetVarLibDir();
+  if (base::PathExists(var_lib_dir) && !base::DirectoryExists(var_lib_dir)) {
+    if (!base::DeletePathRecursively(var_lib_dir)) {
+      PLOG(FATAL) << "Failed to delete non-directory " << var_lib_dir;
+    }
+  }
+  base::File::Error error;
+  if (!base::CreateDirectoryAndGetError(var_lib_dir, &error)) {
+    LOG(FATAL) << "Failed to create " << var_lib_dir << ": "
+               << base::File::ErrorToString(error);
+  }
+  // Allow other users to list and read files and directories, but not write to
+  // it.
+  if (HANDLE_EINTR(chmod(var_lib_dir.value().c_str(), 0755)) != 0) {
+    PLOG(ERROR) << "Failed to chmod " << var_lib_dir;
+    if (!base::DeletePathRecursively(var_lib_dir)) {
+      PLOG(FATAL) << "Failed to delete " << var_lib_dir;
+    }
+  }
+}
+#endif  // BUILDFLAG(IS_LINUX)
 
 typedef int (*MainRoutineFn)();
 
@@ -148,13 +191,15 @@ MainRoutineFn SelectMainRoutine(const std::string& process_type) {
 
   if (process_type == kProcessTypeSingleProcessHost) {
     main_routine = &SingleProcessHostProcessMain;
+#if BUILDFLAG(REMOTING_MULTI_PROCESS)
   } else if (process_type == kProcessTypeNetwork) {
     main_routine = &NetworkProcessMain;
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
   } else if (process_type == kProcessTypeDaemon) {
     main_routine = &DaemonProcessMain;
   } else if (process_type == kProcessTypeDesktop) {
     main_routine = &DesktopProcessMain;
+  } else if (process_type == kProcessTypePeerConnection) {
+    main_routine = &PeerConnectionProcessMain;
 #endif
 #if BUILDFLAG(IS_WIN)
   } else if (process_type == kProcessTypeFileChooser) {
@@ -164,10 +209,10 @@ MainRoutineFn SelectMainRoutine(const std::string& process_type) {
   } else if (process_type == kProcessTypeUrlForwarderConfigurator) {
     main_routine = &UrlForwarderConfiguratorMain;
 #endif  // BUILDFLAG(IS_WIN)
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX)
   } else if (process_type == kProcessTypeXSessionChooser) {
     main_routine = &XSessionChooserMain;
-#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#endif  // BUILDFLAG(IS_LINUX)
   }
 
   return main_routine;
@@ -176,6 +221,9 @@ MainRoutineFn SelectMainRoutine(const std::string& process_type) {
 }  // namespace
 
 int HostMain(int argc, char** argv) {
+  base::ScopedMemoryConsumerRegistry<base::DummyMemoryConsumerRegistry>
+      memory_consumer_registry;
+
 #if BUILDFLAG(IS_APPLE)
   // Needed so we don't leak objects when threads are created.
   base::apple::ScopedNSAutoreleasePool pool;
@@ -225,6 +273,10 @@ int HostMain(int argc, char** argv) {
   // Enable debug logs.
   InitHostLogging();
 
+#if BUILDFLAG(IS_LINUX)
+  EnsureVarLibDirectory();
+#endif  // BUILDFLAG(IS_LINUX)
+
 #if defined(REMOTING_ENABLE_CRASH_REPORTING)
   // Initialize crash reporting as early as possible. On Mac the command-line
   // needs to be initialized first, so that the preference for crash-reporting
@@ -233,7 +285,29 @@ int HostMain(int argc, char** argv) {
   // the crash reports uploaded.
   if (IsUsageStatsAllowed()) {
 #if BUILDFLAG(IS_LINUX)
-    InitializeCrashpadReporting();
+    if (command_line->HasSwitch(kCrashpadHandlerSocketFd)) {
+      std::string fd_str =
+          command_line->GetSwitchValueASCII(kCrashpadHandlerSocketFd);
+      int fd = -1;
+      if (base::StringToInt(fd_str, &fd) && fd >= 0) {
+        pid_t pid = -1;
+        if (command_line->HasSwitch(kCrashpadHandlerPid)) {
+          std::string pid_str =
+              command_line->GetSwitchValueASCII(kCrashpadHandlerPid);
+          int pid_int = -1;
+          if (base::StringToInt(pid_str, &pid_int)) {
+            pid = static_cast<pid_t>(pid_int);
+          }
+        }
+        if (!InitializeCrashpadClient(base::ScopedFD(fd), pid)) {
+          LOG(ERROR) << "Failed to initialize Crashpad client.";
+        }
+      } else {
+        LOG(ERROR) << "Invalid Crashpad handler socket switch values.";
+      }
+    } else {
+      InitializeCrashpadReporting();
+    }
 #elif BUILDFLAG(IS_WIN)
     // TODO: joedow - Enable crash reporting for the RDP process.
     if (process_type == kProcessTypeDaemon) {
@@ -276,7 +350,7 @@ int HostMain(int argc, char** argv) {
   // Mac, where the broker process is the agent process broker.
   is_broker_process |= main_routine == &SingleProcessHostProcessMain;
 #endif
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(REMOTING_MULTI_PROCESS)
   // For multi-process hosts, the daemon process acts as the broker.
   is_broker_process |= main_routine == &DaemonProcessMain;
 #endif

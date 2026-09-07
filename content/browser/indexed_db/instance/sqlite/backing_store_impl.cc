@@ -4,6 +4,12 @@
 
 #include "content/browser/indexed_db/instance/sqlite/backing_store_impl.h"
 
+#include <inttypes.h>
+
+#include <algorithm>
+#include <atomic>
+#include <limits>
+#include <memory>
 #include <vector>
 
 #include "base/check.h"
@@ -16,15 +22,22 @@
 #include "base/location.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notimplemented.h"
+#include "base/numerics/checked_math.h"
 #include "base/run_loop.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
+#include "base/trace_event/memory_allocator_dump.h"
+#include "base/trace_event/memory_dump_request_args.h"
+#include "base/trace_event/process_memory_dump.h"
 #include "base/types/expected_macros.h"
 #include "content/browser/indexed_db/file_path_util.h"
+#include "content/browser/indexed_db/indexed_db_reporting.h"
 #include "content/browser/indexed_db/instance/backing_store_util.h"
 #include "content/browser/indexed_db/instance/sqlite/backing_store_database_impl.h"
 #include "content/browser/indexed_db/instance/sqlite/database_connection.h"
 #include "content/browser/indexed_db/status.h"
+#include "sql/database.h"
+#include "third_party/abseil-cpp/absl/strings/str_format.h"
 
 namespace content::indexed_db::sqlite {
 
@@ -32,10 +45,15 @@ BackingStoreImpl::BackingStoreImpl(
     base::FilePath directory,
     storage::mojom::BlobStorageContext& blob_storage_context,
     base::RepeatingCallback<
-        std::vector<PartitionedLock>(const std::u16string& name)> lock_database)
+        std::vector<PartitionedLock>(const std::u16string& name)> lock_database,
+    base::RepeatingCallback<void(std::optional<net::Error>)> on_blob_activity,
+    base::RepeatingClosure on_can_close)
     : directory_(std::move(directory)),
       blob_storage_context_(blob_storage_context),
-      lock_database_(std::move(lock_database)) {}
+      lock_database_(std::move(lock_database)),
+      on_blob_activity_(std::move(on_blob_activity)),
+      on_can_close_(std::move(on_can_close)),
+      is_force_closing_(std::make_unique<std::atomic_bool>(false)) {}
 
 BackingStoreImpl::~BackingStoreImpl() = default;
 
@@ -52,6 +70,14 @@ uint64_t BackingStoreImpl::SumSizesOfDatabaseFiles(
   return total_size;
 }
 
+void BackingStoreImpl::RunIdleTasks(bool long_idle) {
+  for (auto& [_, connection] : open_connections_) {
+    // TODO(crbug.com/436880909): Should we limit "long idle" maintenance to a
+    // handful of databases?
+    connection->PerformIdleMaintenance(long_idle);
+  }
+}
+
 bool BackingStoreImpl::CanOpportunisticallyClose() const {
   // There's not much of a point in deleting `this` since it doesn't use many
   // resources (just a tiny amount of memory). But for now, match the logic of
@@ -62,13 +88,13 @@ bool BackingStoreImpl::CanOpportunisticallyClose() const {
 }
 
 void BackingStoreImpl::OnForceClosing() {
-  is_force_closing_ = true;
+  is_force_closing_->store(true, std::memory_order_relaxed);
 }
 
 void BackingStoreImpl::SignalWhenDestructionComplete(
     base::WaitableEvent* signal_on_destruction) && {
   for (auto& [_, db] : open_connections_) {
-    std::move(*db).DestroySoon(/*force_closing=*/true).Run();
+    std::move(*db).GetCleanupTask().Run(/*force_closing=*/true);
   }
   open_connections_.clear();
 
@@ -80,8 +106,11 @@ void BackingStoreImpl::SignalWhenDestructionComplete(
   // Signal when the last cleanup task completes. `signal_on_destruction` is
   // guaranteed to outlive `this`.
   cleanup_task_runner_->PostTask(
-      FROM_HERE, base::BindOnce(&base::WaitableEvent::Signal,
-                                base::Unretained(signal_on_destruction)));
+      FROM_HERE,
+      base::OnceClosure(
+          base::DoNothingWithBoundArgs(std::move(is_force_closing_)))
+          .Then(base::BindOnce(&base::WaitableEvent::Signal,
+                               base::Unretained(signal_on_destruction))));
 }
 
 void BackingStoreImpl::StartPreCloseTasks(base::OnceClosure on_done) {
@@ -177,17 +206,20 @@ BackingStoreImpl::GetDatabaseNamesAndVersions() {
         return;
       }
       std::ignore =
-          DatabaseConnection::Open(/*name=*/{}, path, *this)
+          LOG_RESULT(DatabaseConnection::Open(/*name=*/{}, path, *this),
+                     "IndexedDB.SQLite.OpenToReadMetadataResult",
+                     in_memory() ? ".InMemory" : ".OnDisk")
               .transform([&](std::unique_ptr<DatabaseConnection> connection) {
                 const std::u16string& name = connection->metadata().name;
                 int64_t version = connection->metadata().version;
+                CHECK_NE(version, blink::IndexedDBDatabaseMetadata::NO_VERSION);
                 names_and_versions.emplace(name, version);
                 cached_versions_.emplace(name, version);
                 // Though not really force closing, skip "optional" cleanup
-                // tasks since we're actively serving a frontend request.
+                // steps since we're actively serving a frontend request.
                 std::move(*connection)
-                    .DestroySoon(/*force_closing=*/true)
-                    .Run();
+                    .GetCleanupTask()
+                    .Run(/*force_closing=*/true);
               });
     });
   }
@@ -219,8 +251,23 @@ BackingStoreImpl::CreateOrOpenDatabase(const std::u16string& name) {
 }
 
 uintptr_t BackingStoreImpl::GetIdentifierForMemoryDump() {
-  NOTIMPLEMENTED();
-  return 0;
+  return reinterpret_cast<uintptr_t>(this);
+}
+
+bool BackingStoreImpl::ReportMemoryUsage(
+    base::trace_event::ProcessMemoryDump* pmd,
+    const std::string& dump_name) {
+  // Create the dump as an organizational container.
+  pmd->CreateAllocatorDump(dump_name);
+  return std::all_of(
+      open_connections_.begin(), open_connections_.end(),
+      [&pmd, &dump_name](const auto& entry) {
+        const auto& [_, connection] = entry;
+        return connection->ReportMemoryUsage(
+            pmd,
+            absl::StrFormat("%s/sqlite_db_0x%" PRIXPTR, dump_name,
+                            reinterpret_cast<uintptr_t>(connection.get())));
+      });
 }
 
 void BackingStoreImpl::FlushForTesting() {
@@ -235,12 +282,10 @@ void BackingStoreImpl::DestroyConnection(const std::u16string& name,
                                          std::vector<PartitionedLock> locks) {
   std::unique_ptr<DatabaseConnection> connection =
       std::move(open_connections_.extract(name).mapped());
-  base::OnceClosure cleanup_task =
-      std::move(*connection).DestroySoon(is_force_closing_);
 
-  if (is_force_closing_) {
+  if (is_force_closing_->load(std::memory_order_relaxed)) {
     // Run the cleanup task synchronously.
-    std::move(cleanup_task).Run();
+    std::move(*connection).GetCleanupTask().Run(/*force_closing=*/true);
     return;
   }
 
@@ -262,9 +307,21 @@ void BackingStoreImpl::DestroyConnection(const std::u16string& name,
 
   cached_versions_[name] = connection->GetCommittedVersion();
   cleanup_task_runner_->PostTaskAndReply(
-      FROM_HERE, std::move(cleanup_task),
+      FROM_HERE,
+      // `Unretained` is safe here because `is_force_closing_` is moved to
+      // `cleanup_task_runner_` before `this` is destroyed.
+      base::BindOnce(
+          [](const std::atomic_bool* flag) {
+            return flag->load(std::memory_order_relaxed);
+          },
+          base::Unretained(is_force_closing_.get()))
+          .Then(std::move(*connection).GetCleanupTask()),
       base::BindOnce(&BackingStoreImpl::OnCleanupComplete,
                      weak_factory_.GetWeakPtr(), name, std::move(locks)));
+
+  if (CanOpportunisticallyClose()) {
+    on_can_close_.Run();
+  }
 }
 
 void BackingStoreImpl::OnCleanupComplete(const std::u16string& name,
@@ -282,9 +339,17 @@ void BackingStoreImpl::OnCleanupComplete(const std::u16string& name,
   }
 }
 
-Status BackingStoreImpl::MigrateFrom(BackingStore& source) {
+Status BackingStoreImpl::MigrateFrom(BackingStore& source, bool verify) {
   CHECK(!in_memory());
-  DCHECK(GetDatabaseNamesAndVersions()->empty());
+
+  bool clean_start = true;
+  EnumerateDatabasesInDirectory(
+      directory_, [&clean_start](const base::FilePath& path) {
+        clean_start = sql::Database::Delete(path) && clean_start;
+      });
+  if (!clean_start) {
+    return Status::IOError("Unable to delete existing SQLite databases");
+  }
 
   ASSIGN_OR_RETURN(
       std::vector<blink::mojom::IDBNameAndVersionPtr> names_and_versions,
@@ -295,10 +360,10 @@ Status BackingStoreImpl::MigrateFrom(BackingStore& source) {
       legacy_blob_files_to_move;
 
   for (const auto& name_and_version : names_and_versions) {
-    std::unique_ptr<BackingStore::Database> source_db =
-        source.CreateOrOpenDatabase(name_and_version->name).value();
-    std::unique_ptr<BackingStore::Database> target_db =
-        CreateOrOpenDatabase(name_and_version->name).value();
+    ASSIGN_OR_RETURN(std::unique_ptr<BackingStore::Database> source_db,
+                     source.CreateOrOpenDatabase(name_and_version->name));
+    ASSIGN_OR_RETURN(std::unique_ptr<BackingStore::Database> target_db,
+                     CreateOrOpenDatabase(name_and_version->name));
 
     auto connection_it = open_connections_.find(name_and_version->name);
     CHECK(connection_it != open_connections_.end());
@@ -306,6 +371,14 @@ Status BackingStoreImpl::MigrateFrom(BackingStore& source) {
     CHECK(target_connection->IsZygotic());
 
     IDB_RETURN_IF_ERROR(MigrateDatabase(*source_db, *target_db));
+
+    if (verify) {
+      StatusOr<base::DictValue> before = SnapshotDatabase(*source_db);
+      CHECK(before.has_value());
+      StatusOr<base::DictValue> after = SnapshotDatabase(*target_db);
+      CHECK(after.has_value());
+      CHECK_EQ(before.value(), after.value());
+    }
 
     auto& files_to_move = target_connection->legacy_blob_files_to_move();
     if (!files_to_move.empty() &&

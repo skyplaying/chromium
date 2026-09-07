@@ -14,7 +14,6 @@
 #include "base/strings/stringprintf.h"
 #include "build/build_config.h"
 #include "chrome/browser/certificate_viewer.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webui/certificate_viewer/certificate_viewer_webui.h"
@@ -84,7 +83,7 @@ class CertificateViewerUITest : public WebUIMochaBrowserTest {
       std::optional<
           chrome_browser_server_certificate_database::CertificateMetadata>
           cert_metadata) {
-    if (!browser() || !browser()->window()) {
+    if (!browser() || !browser()->GetWindow()) {
       return nullptr;
     }
 
@@ -94,11 +93,11 @@ class CertificateViewerUITest : public WebUIMochaBrowserTest {
           std::move(cert), std::move(*cert_metadata),
           GetModificationsCallback(),
           browser()->tab_strip_model()->GetActiveWebContents(),
-          browser()->window()->GetNativeWindow());
+          browser()->GetWindow()->GetNativeWindow());
     } else {
       dialog = CertificateViewerDialog::ShowConstrained(
           std::move(cert), browser()->tab_strip_model()->GetActiveWebContents(),
-          browser()->window()->GetNativeWindow());
+          browser()->GetWindow()->GetNativeWindow());
     }
 
     content::WebContents* webui_webcontents =

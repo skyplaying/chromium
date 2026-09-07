@@ -11,7 +11,6 @@
 
 #include "base/byte_size.h"
 #include "base/check.h"
-#include "base/containers/enum_set.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -33,6 +32,7 @@
 #include "components/performance_manager/public/resource_attribution/origin_in_browsing_instance_context.h"
 #include "components/performance_manager/public/resource_attribution/resource_contexts.h"
 #include "components/performance_manager/public/resource_attribution/resource_types.h"
+#include "content/public/common/url_constants.h"
 #include "services/metrics/public/cpp/metrics_utils.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
@@ -123,12 +123,15 @@ struct FreezingPolicy::PageFreezingState
   //                     12 ->         [20, 22]
   //                     13 ->         [20, 22]
   //         etc.
-  std::pair<base::TimeTicks, base::TimeTicks>
-  GetCurrentOrNextUnfreezePeriodStart(base::TimeTicks now) const {
-    const base::TimeTicks next_unfreeze_time = now.SnappedToNextTick(
+  //
+  // Time is measured using LiveTicks so that time spent suspended isn't
+  // counted, to avoid a thundering herd of tabs being unfrozen on resume.
+  std::pair<base::LiveTicks, base::LiveTicks>
+  GetCurrentOrNextUnfreezePeriodStart(base::LiveTicks now) const {
+    const base::LiveTicks next_unfreeze_time = now.SnappedToNextTick(
         *periodic_unfreeze_phase,
         features::kInfiniteTabsFreezing_UnfreezeInterval.Get());
-    const base::TimeTicks previous_unfreeze_time =
+    const base::LiveTicks previous_unfreeze_time =
         next_unfreeze_time -
         features::kInfiniteTabsFreezing_UnfreezeInterval.Get();
     CHECK_LT(previous_unfreeze_time, now);
@@ -146,7 +149,7 @@ struct FreezingPolicy::PageFreezingState
   }
 
   // Returns true if `now` is within a periodic unfreeze period for this page.
-  bool IsInUnfreezePeriod(base::TimeTicks now) const {
+  bool IsInUnfreezePeriod(base::LiveTicks now) const {
     return GetCurrentOrNextUnfreezePeriodStart(now).first <= now;
   }
 
@@ -155,7 +158,7 @@ struct FreezingPolicy::PageFreezingState
   // there is a state change at time `now`, this returns the time of the next
   // state change).
   base::TimeDelta GetDelayUntilNextUnfreezeStateChange(
-      base::TimeTicks now) const {
+      base::LiveTicks now) const {
     auto [start_incl, end_excl] = GetCurrentOrNextUnfreezePeriodStart(now);
     if (start_incl > now) {
       return start_incl - now;
@@ -173,7 +176,7 @@ struct FreezingPolicy::PageFreezingState
   // Phase for periodic unfreezing. Use a random value so that different tabs
   // are unfrozen at different tabs as much as possible, but also cannot learn
   // anything about other unrelated tabs.
-  std::optional<base::TimeTicks> periodic_unfreeze_phase;
+  std::optional<base::LiveTicks> periodic_unfreeze_phase;
 
   // Reasons not to freeze the page.
   CannotFreezeReasonSet cannot_freeze_reasons;
@@ -270,11 +273,31 @@ FreezingPolicy::FreezingPolicy(
 
 FreezingPolicy::~FreezingPolicy() = default;
 
+bool FreezingPolicy::IsPeriodicUnfreezeTimerRunningForTesting(
+    const PageNode* page_node) const {
+  return GetFreezingState(page_node).periodic_unfreeze_timer.IsRunning();
+}
+
+void FreezingPolicy::SetIsUnderMemoryPressureForTesting(
+    bool is_under_memory_pressure) {
+  OnMemoryPressureStateChanged(is_under_memory_pressure);
+}
+
 void FreezingPolicy::ToggleFreezingOnBatterySaverMode(bool is_enabled) {
   is_battery_saver_active_ = is_enabled;
   // Update frozen state for all connected sets of pages (toggling the state of
   // battery saver mode can affect the frozen state of any connected set).
-  UpdateAllPagesFrozenState();
+  UpdateAllPagesFrozenState(base::LiveTicks::Now());
+}
+
+void FreezingPolicy::SetFreezingEnabledByUser(bool enabled) {
+  if (is_freezing_enabled_by_user_ == enabled) {
+    return;
+  }
+  is_freezing_enabled_by_user_ = enabled;
+  const base::LiveTicks now = base::LiveTicks::Now();
+  UpdateAllPeriodicUnfreezeTimers(now);
+  UpdateAllPagesFrozenState(now);
 }
 
 void FreezingPolicy::AddFreezeVote(PageNode* page_node) {
@@ -372,7 +395,8 @@ base::flat_set<raw_ptr<const PageNode>> FreezingPolicy::GetConnectedPages(
       auto it = browsing_instance_states_.find(browsing_instance_id);
       CHECK(it != browsing_instance_states_.end());
       const BrowsingInstanceState& browsing_instance_state = it->second;
-      for (auto* browsing_instance_page : browsing_instance_state.pages) {
+      for (const performance_manager::PageNode* browsing_instance_page :
+           browsing_instance_state.pages) {
         if (!connected_pages.contains(browsing_instance_page)) {
           pages_to_visit.insert(browsing_instance_page);
         }
@@ -403,11 +427,11 @@ FreezingPolicy::PageFreezingState& FreezingPolicy::GetFreezingState(
 }
 
 void FreezingPolicy::UpdateFrozenState(
-    const PageNode* page,
-    base::TimeTicks now,
+    const PageNode* page_node,
+    base::LiveTicks now,
     base::flat_set<raw_ptr<const PageNode>>* connected_pages_out) {
   const base::flat_set<raw_ptr<const PageNode>> connected_pages =
-      GetConnectedPages(page);
+      GetConnectedPages(page_node);
 
   // Determine whether:
   // - Any connected page has a `CannotFreezeReason`.
@@ -458,12 +482,14 @@ void FreezingPolicy::UpdateFrozenState(
              can_freeze_per_type_tracker.CanFreeze(
                  FreezingType::kBatterySaver)) {
     should_be_frozen = true;
-  } else if (can_freeze_per_type_tracker.CanFreeze(
+  } else if (is_freezing_enabled_by_user_ &&
+             can_freeze_per_type_tracker.CanFreeze(
                  FreezingType::kInfiniteTabs) &&
              !is_in_periodic_unfreeze &&
              base::FeatureList::IsEnabled(features::kInfiniteTabsFreezing)) {
     should_be_frozen = true;
-  } else if (can_freeze_per_type_tracker.CanFreeze(
+  } else if (is_freezing_enabled_by_user_ &&
+             can_freeze_per_type_tracker.CanFreeze(
                  FreezingType::kInfiniteTabs) &&
              !is_in_periodic_unfreeze && is_under_memory_pressure_ &&
              base::FeatureList::IsEnabled(
@@ -518,20 +544,11 @@ void FreezingPolicy::OnCannotFreezeReasonChange(const PageNode* page_node,
   CanFreezePerTypeTracker after_tracker;
   after_tracker.PopulateWithPageFreezingState(state);
 
-  const base::TimeTicks now = base::TimeTicks::Now();
-
-  if (!after_tracker.CanFreeze(FreezingType::kInfiniteTabs)) {
-    // No need to run the periodic unfreeze timer when the tab isn't eligible
-    // for infinite tabs freezing.
-    state.periodic_unfreeze_timer.Stop();
-  } else if (!state.periodic_unfreeze_timer.IsRunning()) {
-    // Start a timer which fires when entering or exiting a periodic unfreeze
-    // period.
-    StartPeriodicUnfreezeTimer(page_node, now);
-  }
+  const base::LiveTicks now = base::LiveTicks::Now();
+  UpdatePeriodicUnfreezeTimer(page_node, now);
 
   if (before_tracker != after_tracker) {
-    UpdateFrozenState(page_node);
+    UpdateFrozenState(page_node, now);
   }
 }
 
@@ -562,6 +579,7 @@ void FreezingPolicy::OnTakenFromGraph(Graph* graph) {
 }
 
 void FreezingPolicy::OnPageNodeAdded(const PageNode* page_node) {
+  CHECK_EQ(page_node->GetType(), PageType::kUnknown);
   auto& page_freezing_state = GetFreezingState(page_node);
 
   PageLiveStateDecorator::Data::GetOrCreateForPageNode(page_node)->AddObserver(
@@ -726,8 +744,13 @@ void FreezingPolicy::OnPageLifecycleStateChanged(const PageNode* page_node) {
   if (page_node->GetLifecycleState() != PageNode::LifecycleState::kFrozen) {
     for (content::BrowsingInstanceId id : GetBrowsingInstances(page_node)) {
       auto it = browsing_instance_states_.find(id);
-      CHECK(it != browsing_instance_states_.end());
-      it->second.per_origin_pmf_after_freezing.clear();
+      // OnPageLifecycleStateChanged may run before a newly-added node triggers
+      // OnFrameNodeAdded or after a destroyed node triggers
+      // OnBeforeFrameNodeRemoved. If it's the only node in the BrowsingInstance
+      // there will be no state to clear.
+      if (it != browsing_instance_states_.end()) {
+        it->second.per_origin_pmf_after_freezing.clear();
+      }
     }
   }
 }
@@ -768,7 +791,8 @@ void FreezingPolicy::OnPageIsHoldingWebLockChanged(const PageNode* page_node) {
                              CannotFreezeReason::kHoldingWebLock);
 }
 
-void FreezingPolicy::OnMainFrameUrlChanged(const PageNode* page_node) {
+void FreezingPolicy::OnMainFrameUrlChanged(const PageNode* page_node,
+                                           const GURL& previous_url) {
   const bool was_opted_out =
       GetFreezingState(page_node).cannot_freeze_reasons.Has(
           CannotFreezeReason::kOptedOut);
@@ -779,6 +803,16 @@ void FreezingPolicy::OnMainFrameUrlChanged(const PageNode* page_node) {
   if (was_opted_out != is_opted_out) {
     OnCannotFreezeReasonChange(page_node, /*add=*/is_opted_out,
                                CannotFreezeReason::kOptedOut);
+  }
+
+  const bool was_webui = GetFreezingState(page_node).cannot_freeze_reasons.Has(
+      CannotFreezeReason::kWebUI);
+  const GURL& url = page_node->GetMainFrameUrl();
+  const bool is_webui = url.SchemeIs(content::kChromeUIScheme) ||
+                        url.SchemeIs(content::kChromeUIUntrustedScheme);
+  if (was_webui != is_webui) {
+    OnCannotFreezeReasonChange(page_node, /*add=*/is_webui,
+                               CannotFreezeReason::kWebUI);
   }
 }
 
@@ -1033,7 +1067,7 @@ void FreezingPolicy::DiscardFrozenPagesWithGrowingMemoryOnMemoryMeasurement(
   }
 
   const base::ByteSize growth_threshold =
-      base::KiBU(base::checked_cast<uint64_t>(
+      base::KiB(base::checked_cast<uint64_t>(
           features::kFreezingMemoryGrowthThresholdToDiscardKb.Get()));
 
   // Traverse memory measurements to find pages to discard.
@@ -1174,7 +1208,7 @@ void FreezingPolicy::UpdateFrozenStateOnCPUMeasurement(
 }
 
 void FreezingPolicy::OnOptOutPolicyChanged(
-    std::string_view browser_context_id) {
+    const base::UnguessableToken& browser_context_id) {
   CHECK(opt_out_checker_);
   // Check all pages  with the given `browser_context_id` to see if they're
   // opted out of freezing by the new policy.
@@ -1231,8 +1265,40 @@ void FreezingPolicy::CheckMostRecentlyUsedListSize() {
       base::NotFatalUntil::M140);
 }
 
+bool FreezingPolicy::IsPeriodicUnfreezingActive() const {
+  return is_freezing_enabled_by_user_ &&
+         (base::FeatureList::IsEnabled(features::kInfiniteTabsFreezing) ||
+          (base::FeatureList::IsEnabled(
+               features::kInfiniteTabsFreezingOnMemoryPressure) &&
+           is_under_memory_pressure_));
+}
+
+void FreezingPolicy::UpdatePeriodicUnfreezeTimer(const PageNode* page_node,
+                                                 base::LiveTicks now) {
+  auto& state = GetFreezingState(page_node);
+  if (!IsPeriodicUnfreezingActive() ||
+      HasCannotFreezeReasonForType(state.cannot_freeze_reasons,
+                                   FreezingType::kInfiniteTabs)) {
+    state.periodic_unfreeze_timer.Stop();
+    return;
+  }
+
+  if (!state.periodic_unfreeze_timer.IsRunning()) {
+    StartPeriodicUnfreezeTimer(page_node, now);
+  }
+}
+
+void FreezingPolicy::UpdateAllPeriodicUnfreezeTimers(base::LiveTicks now) {
+  for (const PageNode* page_node : GetOwningGraph()->GetAllPageNodes()) {
+    UpdatePeriodicUnfreezeTimer(page_node, now);
+  }
+}
+
 void FreezingPolicy::StartPeriodicUnfreezeTimer(const PageNode* page_node,
-                                                base::TimeTicks now) {
+                                                base::LiveTicks now) {
+  if (!IsPeriodicUnfreezingActive()) {
+    return;
+  }
   auto& state = GetFreezingState(page_node);
   CHECK(!state.periodic_unfreeze_timer.IsRunning(), base::NotFatalUntil::M141);
   state.periodic_unfreeze_timer.Start(
@@ -1242,9 +1308,9 @@ void FreezingPolicy::StartPeriodicUnfreezeTimer(const PageNode* page_node,
 }
 
 void FreezingPolicy::OnPeriodicUnfreezeTimer(const PageNode* page_node) {
-  const base::TimeTicks now = base::TimeTicks::Now();
+  const base::LiveTicks now = base::LiveTicks::Now();
   UpdateFrozenState(page_node, now);
-  StartPeriodicUnfreezeTimer(page_node, now);
+  UpdatePeriodicUnfreezeTimer(page_node, now);
 }
 
 void FreezingPolicy::RecordFreezingEligibilityUKM() {
@@ -1257,7 +1323,7 @@ void FreezingPolicy::RecordFreezingEligibilityUKM() {
   // will start subsampling those UKM events. Thus, it's better to subsample the
   // event emission code itself to increase the proportion of emitted events
   // that are actually recorded.
-  if (!metrics_subsampler_.ShouldSample(0.01)) {
+  if (!base::ShouldRecordSubsampledMetric(0.01)) {
     return;
   }
 
@@ -1392,8 +1458,8 @@ void FreezingPolicy::RecordFreezingEligibilityUKMForPageStatic(
   ukm.Record(ukm::UkmRecorder::Get());
 }
 
-base::TimeTicks FreezingPolicy::GenerateRandomPeriodicUnfreezePhase() const {
-  return base::TimeTicks() +
+base::LiveTicks FreezingPolicy::GenerateRandomPeriodicUnfreezePhase() const {
+  return base::LiveTicks() +
          base::Milliseconds(base::RandIntInclusive(
              0, features::kInfiniteTabsFreezing_UnfreezeInterval.Get()
                     .InMilliseconds()));
@@ -1425,21 +1491,28 @@ void FreezingPolicy::CheckMemoryPressureForFreezing() {
 
   bool is_now_under_pressure = available_percent < kPressureThresholdPercent;
 
-  // If the pressure state hasn't changed, there's nothing to do.
-  if (is_now_under_pressure == is_under_memory_pressure_) {
-    return;
-  }
-
-  // The state has changed. Update the flag and re-evaluate all pages.
-  is_under_memory_pressure_ = is_now_under_pressure;
-  UpdateAllPagesFrozenState();
+  OnMemoryPressureStateChanged(is_now_under_pressure);
 
 #endif  // BUILDFLAG(IS_WIN)
 }
 
-void FreezingPolicy::UpdateAllPagesFrozenState() {
-  const base::TimeTicks now = base::TimeTicks::Now();
+void FreezingPolicy::OnMemoryPressureStateChanged(
+    bool is_under_memory_pressure) {
+  // If the pressure state hasn't changed, no transition work is needed.
+  if (is_under_memory_pressure == is_under_memory_pressure_) {
+    return;
+  }
 
+  const bool was_periodic_unfreezing_active = IsPeriodicUnfreezingActive();
+  const base::LiveTicks now = base::LiveTicks::Now();
+  is_under_memory_pressure_ = is_under_memory_pressure;
+  if (was_periodic_unfreezing_active != IsPeriodicUnfreezingActive()) {
+    UpdateAllPeriodicUnfreezeTimers(now);
+  }
+  UpdateAllPagesFrozenState(now);
+}
+
+void FreezingPolicy::UpdateAllPagesFrozenState(base::LiveTicks now) {
   base::flat_set<raw_ptr<const PageNode>> visited_pages;
   for (auto& [id, state] : browsing_instance_states_) {
     if (!visited_pages.contains(*state.pages.begin())) {

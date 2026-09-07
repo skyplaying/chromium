@@ -20,7 +20,6 @@ import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -35,10 +34,10 @@ import org.chromium.components.commerce.PriceTracking.ProductPrice;
 import org.chromium.components.optimization_guide.proto.CommonTypesProto.Any;
 import org.chromium.components.payments.ui.CurrencyFormatter;
 import org.chromium.components.payments.ui.CurrencyFormatterJni;
+import org.chromium.ui.test.util.MockitoHelper;
 
-/** Unit test for {@link PriceDropNotifier}. */
+/** Unit test for {@link PriceTrackingNotificationBridge}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class PriceTrackingNotificationBridgeUnitTest {
     private static final String TITLE = "title";
     private static final String TEXT = "text";
@@ -84,7 +83,7 @@ public class PriceTrackingNotificationBridgeUnitTest {
                             return null;
                         })
                 .when(mPriceDropNotificationManager)
-                .canPostNotification(Mockito.any(Callback.class));
+                .canPostNotification(MockitoHelper.anyCallback());
     }
 
     // Creates a ChromeNotification.Builder that sets a valid ChromeNotification proto.

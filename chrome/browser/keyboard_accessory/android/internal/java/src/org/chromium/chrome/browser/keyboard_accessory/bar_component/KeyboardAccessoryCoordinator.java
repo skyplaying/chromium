@@ -15,7 +15,6 @@ import android.graphics.drawable.Drawable;
 import android.view.View;
 
 import androidx.annotation.VisibleForTesting;
-import androidx.viewpager.widget.ViewPager;
 
 import org.chromium.base.Callback;
 import org.chromium.base.TraceEvent;
@@ -49,6 +48,7 @@ import org.chromium.ui.AsyncViewStub;
 import org.chromium.ui.ViewProvider;
 import org.chromium.ui.edge_to_edge.EdgeToEdgeSupplier;
 import org.chromium.ui.insets.InsetObserver;
+import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modelutil.LazyConstructionPropertyMcp;
 import org.chromium.ui.modelutil.ListModel;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -89,14 +89,6 @@ public class KeyboardAccessoryCoordinator implements KeyboardAccessoryVisualStat
      */
     public interface TabSwitchingDelegate {
         /**
-         * The {@link KeyboardAccessoryData.Tab} passed into this function will be completely
-         * removed from the tab layout.
-         *
-         * @param tab The tab to be removed.
-         */
-        void removeTab(KeyboardAccessoryData.Tab tab);
-
-        /**
          * Clears all currently known tabs and adds the given tabs as replacement.
          *
          * @param tabs An array of {@link KeyboardAccessoryData.Tab}s.
@@ -129,11 +121,29 @@ public class KeyboardAccessoryCoordinator implements KeyboardAccessoryVisualStat
         boolean hasTabs();
     }
 
+    /** Interface for callbacks related to the At Memory feature. */
+    public interface AtMemoryDelegate {
+        /**
+         * Set the At Memory enablement.
+         *
+         * @param enabled True if At Memory should be enabled, false otherwise.
+         */
+        void setAtMemoryEnabled(boolean enabled);
+
+        /**
+         * Set the At Memory callback.
+         *
+         * @param callback The callback to be invoked when the At Memory button is clicked.
+         */
+        void setAtMemoryCallback(Runnable callback);
+    }
+
     /**
      * Initializes the component as soon as the native library is loaded by e.g. starting to listen
      * to keyboard visibility events.
      *
      * @param profile The {@link Profile} associated with the data.
+     * @param modalDialogManager The {@link ModalDialogManager} used to display modal dialogs.
      * @param barVisibilityDelegate A {@link BarVisibilityDelegate} for delegating the bar
      *     visibility changes.
      * @param sheetVisibilityDelegate A {@link AccessorySheetCoordinator.SheetVisibilityDelegate}
@@ -141,29 +151,27 @@ public class KeyboardAccessoryCoordinator implements KeyboardAccessoryVisualStat
      * @param edgeToEdgeControllerSupplier A {@link Supplier<EdgeToEdgeController>}.
      * @param insetObserver An {@link InsetObserver}.
      * @param barStub A {@link AsyncViewStub} for the accessory bar layout.
-     * @param isLargeFormFactorSupplier A {@link Supplier} that checks whether the device is in
-     *     Large Form Factor mode.
      * @param dismissRunnable A {@link Runnable} used to dismiss the Keyboard Accessory bar.
      */
     public KeyboardAccessoryCoordinator(
             Profile profile,
+            ModalDialogManager modalDialogManager,
             BarVisibilityDelegate barVisibilityDelegate,
             AccessorySheetCoordinator.SheetVisibilityDelegate sheetVisibilityDelegate,
             MonotonicObservableSupplier<EdgeToEdgeController> edgeToEdgeControllerSupplier,
             InsetObserver insetObserver,
             AsyncViewStub barStub,
-            Supplier<Boolean> isLargeFormFactorSupplier,
             Runnable dismissRunnable) {
         this(
                 barStub.getContext(),
                 profile,
+                modalDialogManager,
                 new KeyboardAccessoryButtonGroupCoordinator(),
                 barVisibilityDelegate,
                 sheetVisibilityDelegate,
                 edgeToEdgeControllerSupplier,
                 insetObserver,
                 AsyncViewProvider.of(barStub, R.id.keyboard_accessory),
-                isLargeFormFactorSupplier,
                 dismissRunnable);
     }
 
@@ -172,24 +180,23 @@ public class KeyboardAccessoryCoordinator implements KeyboardAccessoryVisualStat
      *
      * @param context The {@link Context} associated with the current UI context.
      * @param profile The {@link Profile} associated with the data.
+     * @param modalDialogManager The {@link ModalDialogManager} used to display modal dialogs.
      * @param viewProvider A provider for the accessory.
      * @param edgeToEdgeControllerSupplier A {@link Supplier<EdgeToEdgeController>}.
      * @param insetObserver An {@link InsetObserver}.
-     * @param isLargeFormFactorSupplier A {@link Supplier} that checks whether the device is in
-     *     Large Form Factor mode.
      * @param dismissRunnable A {@link Runnable} used to dismiss the Keyboard Accessory bar.
      */
     @VisibleForTesting
     public KeyboardAccessoryCoordinator(
             Context context,
             Profile profile,
+            ModalDialogManager modalDialogManager,
             KeyboardAccessoryButtonGroupCoordinator buttonGroup,
             BarVisibilityDelegate barVisibilityDelegate,
             AccessorySheetCoordinator.SheetVisibilityDelegate sheetVisibilityDelegate,
             MonotonicObservableSupplier<EdgeToEdgeController> edgeToEdgeControllerSupplier,
             InsetObserver insetObserver,
             ViewProvider<KeyboardAccessoryView> viewProvider,
-            Supplier<Boolean> isLargeFormFactorSupplier,
             Runnable dismissRunnable) {
         mButtonGroup = buttonGroup;
         mModel = KeyboardAccessoryProperties.defaultModelBuilder().build();
@@ -197,14 +204,15 @@ public class KeyboardAccessoryCoordinator implements KeyboardAccessoryVisualStat
 
         mMediator =
                 new KeyboardAccessoryMediator(
+                        context,
                         mModel,
                         profile,
+                        modalDialogManager,
                         barVisibilityDelegate,
                         sheetVisibilityDelegate,
                         mButtonGroup.getTabSwitchingDelegate(),
                         mButtonGroup.getSheetOpenerCallbacks(),
                         () -> SemanticColorUtils.getDefaultBgColor(context),
-                        isLargeFormFactorSupplier,
                         dismissRunnable);
         viewProvider.whenLoaded(
                 view -> {
@@ -312,8 +320,21 @@ public class KeyboardAccessoryCoordinator implements KeyboardAccessoryVisualStat
         mButtonGroup.getTabSwitchingDelegate().setTabs(tabs);
     }
 
+    public void setAtMemoryCallback(Runnable callback) {
+        mButtonGroup.getAtMemoryDelegate().setAtMemoryCallback(callback);
+    }
+
+    public void setAtMemoryEnabled(boolean enabled) {
+        mButtonGroup.getAtMemoryDelegate().setAtMemoryEnabled(enabled);
+    }
+
     public void setActiveTab(@AccessoryTabType int tabType) {
         mButtonGroup.getTabSwitchingDelegate().setActiveTab(tabType);
+    }
+
+    @VisibleForTesting
+    public boolean hasTabs() {
+        return mButtonGroup.getTabSwitchingDelegate().hasTabs();
     }
 
     /**
@@ -423,10 +444,6 @@ public class KeyboardAccessoryCoordinator implements KeyboardAccessoryVisualStat
         return mMediator.hasActiveTab();
     }
 
-    public ViewPager.OnPageChangeListener getOnPageChangeListener() {
-        return mButtonGroup.getStablePageChangeListener();
-    }
-
     public KeyboardAccessoryMediator getMediatorForTesting() {
         return mMediator;
     }
@@ -525,5 +542,29 @@ public class KeyboardAccessoryCoordinator implements KeyboardAccessoryVisualStat
                         mEdgeToEdgeController.isPageOptedIntoEdgeToEdge());
             }
         }
+    }
+
+    /**
+     * Sets the selected suggestion in the accessory bar by its original backend index.
+     *
+     * <p>This is an absolute visual selection setter used to synchronize the UI with an external
+     * selection state (e.g., when hover or selection is driven externally by pointer/mouse, or
+     * cleared with {@code null}). It updates the visual hover/selected state of the matching
+     * accessory bar item without notifying the {@link AutofillDelegate}, preventing duplicate or
+     * cyclical callbacks back to the backend.
+     *
+     * @param suggestionIndex The original index of the suggestion in the backend list, or {@code
+     *     null} to clear the selection.
+     */
+    public void setSelectedSuggestion(@Nullable Integer suggestionIndex) {
+        mMediator.setSelectedSuggestion(suggestionIndex);
+    }
+
+    /**
+     * Returns the original backend index of the currently selected suggestion, or {@code null} if
+     * no suggestion is selected.
+     */
+    @Nullable Integer getSelectedSuggestionForTesting() {
+        return mModel.get(KeyboardAccessoryProperties.SELECTED_SUGGESTION_INDEX);
     }
 }

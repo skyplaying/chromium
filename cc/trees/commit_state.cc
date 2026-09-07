@@ -18,12 +18,12 @@ CommitState::CommitState(const CommitState& prev)
       is_viewport_mobile_optimized(prev.is_viewport_mobile_optimized),
       may_throttle_if_undrawn_frames(prev.may_throttle_if_undrawn_frames),
       prefers_reduced_motion(prev.prefers_reduced_motion),
-      prefer_efficient_scheduling(prev.prefer_efficient_scheduling),
       browser_controls_params(prev.browser_controls_params),
       event_listener_properties(prev.event_listener_properties),
       bottom_controls_shown_ratio(prev.bottom_controls_shown_ratio),
       device_scale_factor(prev.device_scale_factor),
       external_page_scale_factor(prev.external_page_scale_factor),
+      page_scale_factor_limits_set(prev.page_scale_factor_limits_set),
       max_page_scale_factor(prev.max_page_scale_factor),
       min_page_scale_factor(prev.min_page_scale_factor),
       page_scale_factor(prev.page_scale_factor),
@@ -60,10 +60,8 @@ EventListenerProperties CommitState::GetEventListenerProperties(
   return event_listener_properties[static_cast<size_t>(listener_class)];
 }
 
-ThreadUnsafeCommitState::ThreadUnsafeCommitState(
-    MutatorHost* mh,
-    const ProtectedSequenceSynchronizer& synchronizer)
-    : mutator_host(mh), property_trees(synchronizer) {}
+ThreadUnsafeCommitState::ThreadUnsafeCommitState(MutatorHost* mh)
+    : mutator_host(mh) {}
 
 ThreadUnsafeCommitState::~ThreadUnsafeCommitState() = default;
 

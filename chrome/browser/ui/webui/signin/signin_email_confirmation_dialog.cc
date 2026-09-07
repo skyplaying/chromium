@@ -22,6 +22,7 @@
 #include "chrome/browser/ui/webui/signin/signin_email_confirmation_ui.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/host_zoom_map.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_ui.h"
@@ -186,7 +187,7 @@ void SigninEmailConfirmationDialog::OnDialogClosed(
     }
   } else {
     // If the dialog is dismissed without any return value, then simply close
-    // the dialog. (see http://crbug.com/667690)
+    // the dialog. (see http://crbug.com/41287540)
     action = CLOSE;
   }
 

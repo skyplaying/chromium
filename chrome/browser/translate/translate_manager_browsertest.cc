@@ -7,10 +7,14 @@
 #include <memory>
 
 #include "base/functional/bind.h"
+#include "base/i18n/language_tag.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/scoped_logging_settings.h"
+#include "base/timer/timer.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/language/accept_languages_service_factory.h"
@@ -20,15 +24,27 @@
 #include "chrome/browser/translate/chrome_translate_client.h"
 #include "chrome/browser/translate/translate_test_utils.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/read_anything/read_anything_controller.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
+#include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/toasts/api/toast_id.h"
+#include "chrome/browser/ui/toasts/toast_controller.h"
+#include "chrome/browser/ui/toasts/toast_features.h"
+#include "chrome/browser/ui/toasts/toast_view.h"
+#include "chrome/browser/ui/ui_features.h"
+#include "chrome/browser/ui/views/translate/translate_bubble_controller.h"
 #include "chrome/common/chrome_isolated_world_ids.h"
-#include "chrome/test/base/chrome_test_utils.h"
+#include "chrome/test/base/chrome_test_path_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/search_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/translate/core/browser/translate_browser_metrics.h"
 #include "components/translate/core/browser/translate_error_details.h"
+#include "components/translate/core/browser/translate_prefs.h"
 #include "components/translate/core/common/language_detection_details.h"
+#include "components/translate/core/common/translate_features.h"
 #include "components/translate/core/common/translate_switches.h"
 #include "components/translate/core/common/translate_util.h"
 #include "content/public/common/content_features.h"
@@ -37,9 +53,15 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/prerender_test_util.h"
+#include "content/public/test/test_navigation_observer.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
+#include "ui/accessibility/accessibility_features.h"
+#include "ui/events/base_event_utils.h"
+#include "ui/views/controls/button/label_button.h"
+#include "ui/views/controls/button/md_text_button.h"
+#include "ui/views/test/button_test_api.h"
 #include "url/gurl.h"
 
 namespace translate {
@@ -220,8 +242,9 @@ class TranslateManagerBrowserTest : public InProcessBrowserTest {
 
   void WaitUntilLanguageDetermined(
       ChromeTranslateClient* chrome_translate_client) {
-    if (chrome_translate_client->GetLanguageState().source_language().empty())
+    if (chrome_translate_client->GetLanguageState().source_language().empty()) {
       language_determined_waiter_->Wait();
+    }
   }
 
   void WaitUntilPageTranslated() {
@@ -260,6 +283,36 @@ class TranslateManagerBrowserTest : public InProcessBrowserTest {
   ChromeTranslateClient* GetChromeTranslateClient() {
     return ChromeTranslateClient::FromWebContents(
         browser()->tab_strip_model()->GetActiveWebContents());
+  }
+
+  ToastController* GetToastController() {
+    return ToastController::From(browser());
+  }
+
+  bool IsToastShown(ToastId id) {
+    ToastController* controller = GetToastController();
+    return controller && controller->IsShowingToast() &&
+           controller->GetCurrentToastId() == id;
+  }
+
+  bool IsTranslateBubbleShown() {
+    return TranslateBubbleController::From(browser())->GetTranslateBubble() !=
+           nullptr;
+  }
+
+  void ClickToastActionButton() {
+    ToastController* controller = GetToastController();
+    ASSERT_TRUE(controller);
+    toasts::ToastView* view = controller->GetToastViewForTesting();
+    ASSERT_TRUE(view);
+    views::MdTextButton* button = view->action_button_for_testing();
+    ASSERT_TRUE(button);
+
+    // Simulate click
+    ui::MouseEvent event(ui::EventType::kMousePressed, gfx::Point(),
+                         gfx::Point(), ui::EventTimeForNow(),
+                         ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON);
+    views::test::ButtonTestApi(button).NotifyClick(event);
   }
 
   void ClickFrenchHrefTranslateLinkOnGooglePage() {
@@ -324,6 +377,8 @@ class TranslateManagerBrowserTest : public InProcessBrowserTest {
   void SetUpCommandLine(base::CommandLine* command_line) override {
     ASSERT_TRUE(embedded_test_server()->InitializeAndListen());
 
+    InitFeatures();
+
     // Enable Experimental web platform features for HrefTranslate tests
     command_line->AppendSwitch(
         ::switches::kEnableExperimentalWebPlatformFeatures);
@@ -347,6 +402,15 @@ class TranslateManagerBrowserTest : public InProcessBrowserTest {
   }
 
   void SetTranslateScript(const std::string& script) { script_ = script; }
+
+  virtual void InitFeatures() {
+    scoped_feature_list_.InitWithFeatures(
+        {toast_features::kTranslateToast, features::kReadAnythingImprovedUi},
+        {});
+  }
+
+ protected:
+  base::test::ScopedFeatureList scoped_feature_list_;
 
  private:
   TranslateErrors error_type_;
@@ -425,7 +489,14 @@ IN_PROC_BROWSER_TEST_F(TranslateManagerBrowserTest,
 }
 
 // Test that the translation was successful.
-IN_PROC_BROWSER_TEST_F(TranslateManagerBrowserTest, PageTranslationSuccess) {
+// TODO(crbug.com/518688037): Flaky on Windows.
+#if BUILDFLAG(IS_WIN)
+#define MAYBE_PageTranslationSuccess DISABLED_PageTranslationSuccess
+#else
+#define MAYBE_PageTranslationSuccess PageTranslationSuccess
+#endif
+IN_PROC_BROWSER_TEST_F(TranslateManagerBrowserTest,
+                       MAYBE_PageTranslationSuccess) {
   SetTranslateScript(kTestValidScript);
 
   ChromeTranslateClient* chrome_translate_client = GetChromeTranslateClient();
@@ -470,7 +541,7 @@ IN_PROC_BROWSER_TEST_F(TranslateManagerBrowserTest, PageTranslationSuccess) {
 
 // Test that the translation was successful in an about:blank page.
 // This is a regression test for https://crbug.com/41447825.
-// Disabled due to flakiness: https://crbug.com/1202065.
+// Disabled due to flakiness: https://crbug.com/40762691.
 IN_PROC_BROWSER_TEST_F(TranslateManagerBrowserTest,
                        DISABLED_PageTranslationAboutBlank) {
   ASSERT_TRUE(AddTabAtIndex(
@@ -519,9 +590,9 @@ IN_PROC_BROWSER_TEST_F(TranslateManagerBrowserTest, HrefTranslateSuccess) {
             GetChromeTranslateClient()->GetLanguageState().current_language());
 
   // The target shouldn't be added to accept languages.
-  EXPECT_FALSE(
-      AcceptLanguagesServiceFactory::GetForBrowserContext(browser()->profile())
-          ->IsAcceptLanguage("ja"));
+  EXPECT_FALSE(AcceptLanguagesServiceFactory::GetForBrowserContext(
+                   browser()->GetProfile())
+                   ->IsAcceptLanguage("ja"));
 
   histograms.ExpectUniqueSample(
       kTranslateHrefHintStatusHistogram,
@@ -760,8 +831,8 @@ IN_PROC_BROWSER_TEST_F(TranslateManagerBrowserTest,
   GetChromeTranslateClient()
       ->GetTranslateManager()
       ->SetIgnoreMissingKeyForTesting(true);
-  GetChromeTranslateClient()->GetTranslatePrefs()->AddToLanguageList("fr",
-                                                                     true);
+  GetChromeTranslateClient()->GetTranslatePrefs()->AddToLanguageList(
+      base::i18n::GetKnownLanguageTag("fr"), true);
 
   ClickFrenchHrefTranslateLinkOnGooglePage();
 
@@ -771,9 +842,9 @@ IN_PROC_BROWSER_TEST_F(TranslateManagerBrowserTest,
             GetChromeTranslateClient()->GetLanguageState().current_language());
 
   // The target shouldn't be added to accept languages.
-  EXPECT_FALSE(
-      AcceptLanguagesServiceFactory::GetForBrowserContext(browser()->profile())
-          ->IsAcceptLanguage("ja"));
+  EXPECT_FALSE(AcceptLanguagesServiceFactory::GetForBrowserContext(
+                   browser()->GetProfile())
+                   ->IsAcceptLanguage("ja"));
 
   histograms.ExpectUniqueSample(
       kTranslateHrefHintStatusHistogram,
@@ -810,8 +881,8 @@ IN_PROC_BROWSER_TEST_F(TranslateManagerBrowserTest,
   GetChromeTranslateClient()
       ->GetTranslateManager()
       ->SetIgnoreMissingKeyForTesting(true);
-  GetChromeTranslateClient()->GetTranslatePrefs()->AddToLanguageList("fr",
-                                                                     true);
+  GetChromeTranslateClient()->GetTranslatePrefs()->AddToLanguageList(
+      base::i18n::GetKnownLanguageTag("fr"), true);
   GetChromeTranslateClient()->GetTranslatePrefs()->AddSiteToNeverPromptList(
       "www.google.com");
 
@@ -1037,7 +1108,7 @@ IN_PROC_BROWSER_TEST_F(TranslateManagerBrowserTest,
 IN_PROC_BROWSER_TEST_F(TranslateManagerBrowserTest,
                        PRE_TranslateSessionRestore) {
   SessionStartupPref pref(SessionStartupPref::LAST);
-  SessionStartupPref::SetStartupPref(browser()->profile(), pref);
+  SessionStartupPref::SetStartupPref(browser()->GetProfile(), pref);
 
   ChromeTranslateClient* chrome_translate_client = GetChromeTranslateClient();
 
@@ -1052,7 +1123,14 @@ IN_PROC_BROWSER_TEST_F(TranslateManagerBrowserTest,
             chrome_translate_client->GetLanguageState().source_language());
 }
 
-IN_PROC_BROWSER_TEST_F(TranslateManagerBrowserTest, TranslateSessionRestore) {
+// TODO(crbug.com/518213587): Flaky on Windows
+#if BUILDFLAG(IS_WIN)
+#define MAYBE_TranslateSessionRestore DISABLED_TranslateSessionRestore
+#else
+#define MAYBE_TranslateSessionRestore TranslateSessionRestore
+#endif
+IN_PROC_BROWSER_TEST_F(TranslateManagerBrowserTest,
+                       MAYBE_TranslateSessionRestore) {
   // Make restored tab active to (on some platforms) initiate language
   // detection.
   browser()->tab_strip_model()->ActivateTabAt(
@@ -1077,7 +1155,7 @@ IN_PROC_BROWSER_TEST_F(TranslateManagerBrowserTest,
   manager->SetIgnoreMissingKeyForTesting(true);
 
   // Set target language manually
-  manager->SetPredefinedTargetLanguage("ru");
+  manager->SetPredefinedTargetLanguage(base::i18n::GetKnownLanguageTag("ru"));
   EXPECT_EQ("ru", chrome_translate_client->GetLanguageState()
                       .GetPredefinedTargetLanguage());
 
@@ -1123,16 +1201,27 @@ class TranslateManagerPrerenderBrowserTest
             &TranslateManagerPrerenderBrowserTest::web_contents,
             base::Unretained(this))) {}
 
+  void InitFeatures() override {
+    scoped_feature_list_.InitAndEnableFeature(toast_features::kTranslateToast);
+  }
+
   content::WebContents* web_contents() {
     return browser()->tab_strip_model()->GetActiveWebContents();
   }
 
  protected:
   content::test::PrerenderTestHelper prerender_helper_;
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
+// TODO(crbug.com/520628534): Flaky.
+#if BUILDFLAG(IS_WIN)
+#define MAYBE_SkipPrerenderPage DISABLED_SkipPrerenderPage
+#else
+#define MAYBE_SkipPrerenderPage SkipPrerenderPage
+#endif
 IN_PROC_BROWSER_TEST_F(TranslateManagerPrerenderBrowserTest,
-                       SkipPrerenderPage) {
+                       MAYBE_SkipPrerenderPage) {
   SetTranslateScript(kTestValidScript);
 
   ChromeTranslateClient* chrome_translate_client = GetChromeTranslateClient();
@@ -1198,10 +1287,7 @@ class TranslateManagerBackForwardCacheBrowserTest
     TranslateManagerBrowserTest::SetUpOnMainThread();
   }
 
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    SetupFeaturesAndParameters();
-    TranslateManagerBrowserTest::SetUpCommandLine(command_line);
-  }
+  void InitFeatures() override { SetupFeaturesAndParameters(); }
 
   content::WebContents* web_contents() const {
     return browser()->tab_strip_model()->GetActiveWebContents();
@@ -1217,7 +1303,8 @@ class TranslateManagerBackForwardCacheBrowserTest
 
   void SetupFeaturesAndParameters() {
     scoped_feature_list_.InitWithFeaturesAndParameters(
-        content::GetDefaultEnabledBackForwardCacheFeaturesForTesting(),
+        content::GetDefaultEnabledBackForwardCacheFeaturesForTesting(
+            {{toast_features::kTranslateToast, {}}}),
         content::GetDefaultDisabledBackForwardCacheFeaturesForTesting(
             {// Entry to the cache can be slow during testing and cause
              // flakiness.
@@ -1227,12 +1314,19 @@ class TranslateManagerBackForwardCacheBrowserTest
   }
 
  private:
-  base::test::ScopedFeatureList scoped_feature_list_;
   logging::ScopedVmoduleSwitches vmodule_switches_;
 };
 
+// TODO(crbug.com/520500034): Re-enable once consistent failures are fixed.
+#if BUILDFLAG(IS_WIN)
+#define MAYBE_RestorePageTranslatorAfterBackForwardCache \
+  DISABLED_RestorePageTranslatorAfterBackForwardCache
+#else
+#define MAYBE_RestorePageTranslatorAfterBackForwardCache \
+  RestorePageTranslatorAfterBackForwardCache
+#endif
 IN_PROC_BROWSER_TEST_F(TranslateManagerBackForwardCacheBrowserTest,
-                       RestorePageTranslatorAfterBackForwardCache) {
+                       MAYBE_RestorePageTranslatorAfterBackForwardCache) {
   SetTranslateScript(kTestValidScript);
 
   EXPECT_TRUE(content::NavigateToURL(web_contents(), GetURL("a.com")));
@@ -1336,6 +1430,130 @@ IN_PROC_BROWSER_TEST_F(TranslateManagerBackForwardCacheBrowserTest,
                                  ISOLATED_WORLD_ID_TRANSLATE));
   }
 }
+
+IN_PROC_BROWSER_TEST_F(TranslateManagerBrowserTest, AutoTranslateToastFlow) {
+  TranslateManager::SetIgnoreMissingKeyForTesting(true);
+  ChromeTranslateClient* chrome_translate_client = GetChromeTranslateClient();
+
+  // Enable auto-translate for fr/en.
+  chrome_translate_client->GetTranslatePrefs()
+      ->AddLanguagePairToAlwaysTranslateList("fr", "en");
+
+  SetTranslateScript(kTestValidScript);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL("/french_page.html")));
+
+  WaitUntilPageTranslated();
+
+  // Verify the Toast is shown when auto-translate is enabled and the Bubble is
+  // NOT shown
+  EXPECT_TRUE(IsToastShown(ToastId::kTranslate));
+  EXPECT_FALSE(IsTranslateBubbleShown());
+
+  // Click Undo button on Toast which should revert the translation and show the
+  // Bubble.
+  ClickToastActionButton();
+
+  EXPECT_TRUE(IsTranslateBubbleShown());
+  EXPECT_EQ(true, content::EvalJs(
+                      browser()->tab_strip_model()->GetActiveWebContents(),
+                      "window.isTranslationRestored",
+                      content::EXECUTE_SCRIPT_DEFAULT_OPTIONS,
+                      ISOLATED_WORLD_ID_TRANSLATE));
+
+  // Navigate to another page, Toast should show again since we clicked Undo.
+  content::TestNavigationObserver nav_observer(
+      browser()->tab_strip_model()->GetActiveWebContents());
+  ASSERT_TRUE(
+      content::ExecJs(browser()->tab_strip_model()->GetActiveWebContents(),
+                      "window.location.href = 'french_page.html?2';"));
+  nav_observer.Wait();
+
+  WaitUntilPageTranslated();
+
+  EXPECT_TRUE(IsToastShown(ToastId::kTranslate));
+  EXPECT_FALSE(IsTranslateBubbleShown());
+
+  // Attempt to dismiss the Toast.
+  if (GetToastController()->GetToastCloseTimerForTesting()->IsRunning()) {
+    GetToastController()->GetToastCloseTimerForTesting()->FireNow();
+  }
+
+  // Navigate to yet another page, Toast should NOT show this time because we
+  // didn't undo the previous one.
+  content::TestNavigationObserver nav_observer2(
+      browser()->tab_strip_model()->GetActiveWebContents());
+  ASSERT_TRUE(
+      content::ExecJs(browser()->tab_strip_model()->GetActiveWebContents(),
+                      "window.location.href = 'french_page.html?3';"));
+  nav_observer2.Wait();
+
+  WaitUntilPageTranslated();
+
+  EXPECT_FALSE(IsToastShown(ToastId::kTranslate));
+  EXPECT_FALSE(IsTranslateBubbleShown());
+}
+
+IN_PROC_BROWSER_TEST_F(TranslateManagerBrowserTest, NoAutoTranslateNoToast) {
+  TranslateManager::SetIgnoreMissingKeyForTesting(true);
+  SetTranslateScript(kTestValidScript);
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL("/french_page.html")));
+
+  ChromeTranslateClient* chrome_translate_client = GetChromeTranslateClient();
+  WaitUntilLanguageDetermined(chrome_translate_client);
+
+  EXPECT_FALSE(IsToastShown(ToastId::kTranslate));
+  EXPECT_TRUE(IsTranslateBubbleShown());
+}
+
+#if !BUILDFLAG(IS_ANDROID)
+IN_PROC_BROWSER_TEST_F(TranslateManagerBrowserTest, IsReadingModeOpen) {
+  ChromeTranslateClient* chrome_translate_client = GetChromeTranslateClient();
+  EXPECT_FALSE(chrome_translate_client->IsReadingModeOpen());
+
+  // 1. Test Side Panel Mode
+  // Show reading mode side panel
+  SidePanelUI* side_panel_ui = SidePanelUI::From(browser());
+  ASSERT_TRUE(side_panel_ui);
+  side_panel_ui->Show(SidePanelEntryId::kReadAnything);
+  EXPECT_TRUE(base::test::RunUntil(
+      [&]() { return chrome_translate_client->IsReadingModeOpen(); }));
+
+  // Hide it
+  side_panel_ui->Close();
+  EXPECT_TRUE(base::test::RunUntil(
+      [&]() { return !chrome_translate_client->IsReadingModeOpen(); }));
+
+  // 2. Test Immersive Mode
+  tabs::TabInterface* tab = browser()->tab_strip_model()->GetActiveTab();
+  ASSERT_TRUE(tab);
+  auto* controller = ReadAnythingController::From(tab);
+  ASSERT_TRUE(controller);
+
+  // Show immersive Reading Mode UI
+  controller->ShowImmersiveUI(
+      ReadAnythingController::ReadAnythingOpenTrigger::kOmniboxChip);
+  EXPECT_TRUE(base::test::RunUntil(
+      [&]() { return chrome_translate_client->IsReadingModeOpen(); }));
+
+  // Close immersive Reading Mode UI
+  controller->CloseImmersiveUI(ReadAnythingCloseReason::kClosedByUser);
+  EXPECT_TRUE(base::test::RunUntil(
+      [&]() { return !chrome_translate_client->IsReadingModeOpen(); }));
+}
+
+IN_PROC_BROWSER_TEST_F(TranslateManagerBrowserTest,
+                       TriggerPdfTranslationOpensSidePanel) {
+  ChromeTranslateClient* chrome_translate_client = GetChromeTranslateClient();
+  EXPECT_FALSE(chrome_translate_client->IsReadingModeOpen());
+
+  chrome_translate_client->TriggerPdfTranslation();
+  EXPECT_TRUE(base::test::RunUntil(
+      [&]() { return chrome_translate_client->IsReadingModeOpen(); }));
+}
+#endif
 
 }  // namespace
 }  // namespace translate

@@ -53,9 +53,9 @@ struct FormActivityParams;
 - (instancetype)initWithBaseViewController:(UIViewController*)viewController
                                    browser:(Browser*)browser NS_UNAVAILABLE;
 
-// Handler for Browser Coordinator Commands.
-@property(nonatomic, weak) id<BrowserCoordinatorCommands>
-    browserCoordinatorCommandsHandler;
+// Returns YES if the bottom sheet is currently displaying the given request.
+- (BOOL)hasPendingRequest:
+    (const webauthn::IOSPasskeyClient::RequestInfo&)requestInfo;
 
 @end
 

@@ -27,6 +27,8 @@ import org.chromium.components.browser_ui.desktop_windowing.DesktopWindowStateMa
 import org.chromium.content_public.browser.RenderFrameHost;
 import org.chromium.content_public.browser.WebContents;
 
+import java.util.List;
+
 /**
  * Exclusive Access Manager class and the Exclusive Access Context interface are used for
  * synchronization of Pointer Lock, Keyboard Lock and Fullscreen features. The main responsibilities
@@ -83,6 +85,19 @@ public class ExclusiveAccessManager
                                 .onTabClosing(
                                         mExclusiveAccessManagerAndroidNativePointer,
                                         tab.getWebContents());
+                    }
+
+                    @Override
+                    public void willCloseTabs(
+                            List<Tab> tabs, boolean isAllTabs, boolean allowUndo) {
+                        if (mExclusiveAccessManagerAndroidNativePointer == 0) return;
+                        mLatestFullscreenOptions = null;
+                        for (Tab tab : tabs) {
+                            ExclusiveAccessManagerJni.get()
+                                    .onTabClosing(
+                                            mExclusiveAccessManagerAndroidNativePointer,
+                                            tab.getWebContents());
+                        }
                     }
                 };
         // Exclusive Access Manager always follows the fullscreen state. We subscribe to the FS
@@ -165,6 +180,19 @@ public class ExclusiveAccessManager
         ExclusiveAccessManagerJni.get()
                 .onTabDetachedFromView(
                         mExclusiveAccessManagerAndroidNativePointer, tab.getWebContents());
+    }
+
+    /**
+     * EAM frontend to check if a frame can enter fullscreen.
+     *
+     * @param renderFrameHost the render frame host asking for fullscreen
+     * @return true if the frame can enter fullscreen
+     */
+    public boolean canEnterFullscreenModeForTab(RenderFrameHost renderFrameHost) {
+        if (mExclusiveAccessManagerAndroidNativePointer == 0) return false;
+        return ExclusiveAccessManagerJni.get()
+                .canEnterFullscreenModeForTab(
+                        mExclusiveAccessManagerAndroidNativePointer, renderFrameHost);
     }
 
     /**
@@ -387,6 +415,9 @@ public class ExclusiveAccessManager
                 Context context,
                 FullscreenManager fullscreenManager,
                 ActivityTabProvider activityTabProvider);
+
+        boolean canEnterFullscreenModeForTab(
+                long nativeExclusiveAccessManagerAndroid, RenderFrameHost renderFrameHost);
 
         void enterFullscreenModeForTab(
                 long nativeExclusiveAccessManagerAndroid,

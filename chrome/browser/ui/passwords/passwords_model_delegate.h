@@ -10,9 +10,9 @@
 
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
-#include "build/branding_buildflags.h"
 #include "chrome/browser/ui/passwords/passwords_leak_dialog_delegate.h"
 #include "components/password_manager/core/browser/manage_passwords_referrer.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/password_manager/core/browser/ui/password_check_referrer.h"
 #include "components/password_manager/core/common/credential_manager_types.h"
 #include "components/password_manager/core/common/password_manager_ui.h"
@@ -129,8 +129,9 @@ class PasswordsModelDelegate {
   // Called from the model when the user chooses to save a password. The
   // username and password seen on the ui is sent as a parameter, and
   // handled accordingly if user had edited them.
-  virtual void SavePassword(const std::u16string& username,
-                            const std::u16string& password) = 0;
+  virtual void SavePassword(
+      const std::u16string& username,
+      const password_manager::PasswordString& password) = 0;
 
   // Called from the dialog controller when a user confirms moving the recently
   // used or selected credential to their account store.
@@ -215,6 +216,18 @@ class PasswordsModelDelegate {
 
   // Called when the mouse exits the bubble view.
   virtual void OnMouseExited() = 0;
+
+  // Model observes the changes of the password manager's error state. By
+  // calling this method we instruct the model to save the password after the
+  // trusted vault error state is fixed.
+  virtual void SavePasswordAfterTrustedVaultErrorResolution() = 0;
+
+  // Starts the UI flow for fixing the trusted vault error.
+  virtual void StartTrustedVaultErrorResolutionFlow() = 0;
+
+  // Returns true if only a trusted vault error prevents from saving the
+  // password.
+  virtual bool IsSavingBlockedByTrustedVaultError() const = 0;
 
  protected:
   virtual ~PasswordsModelDelegate() = default;

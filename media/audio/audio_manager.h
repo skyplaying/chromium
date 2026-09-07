@@ -6,8 +6,10 @@
 #define MEDIA_AUDIO_AUDIO_MANAGER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
+#include "base/callback_list.h"
 #include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
 #include "base/observer_list_types.h"
@@ -162,6 +164,19 @@ class MEDIA_EXPORT AudioManager {
   virtual void RemoveOutputDeviceChangeListener(
       AudioDeviceListener* listener) = 0;
 
+  // Registers a callback for system microphone mute state changes. Must be
+  // called on AudioManager's thread (`GetTaskRunner()`), where the callback
+  // also runs. The callback is not invoked during registration. Returns
+  // `std::nullopt` when change notifications are not supported by the platform.
+  [[nodiscard]] virtual std::optional<base::CallbackListSubscription>
+  AddInputMuteStateChangeCallback(base::RepeatingCallback<void(bool)> callback);
+
+  // Returns the device name if it is currently cached in the enumeration
+  // snapshot. Returns an empty string if the ID is not found or the cache is
+  // empty.
+  virtual std::string GetDeviceNameFromCache(const std::string& device_id,
+                                             bool is_input) = 0;
+
   // Create a new AudioLog object for tracking the behavior for one or more
   // instances of the given component.  See AudioLogFactory for more details.
   virtual std::unique_ptr<AudioLog> CreateAudioLog(
@@ -179,6 +194,10 @@ class MEDIA_EXPORT AudioManager {
 
   // Gets the name of the audio manager (e.g., Windows, Mac, PulseAudio).
   virtual const std::string_view GetName() = 0;
+
+  // Logs a message indicating that the AudioManager was created.
+  // This is used to track process restarts.
+  virtual void LogAudioManagerStartup() = 0;
 
   // Starts or stops tracing when a peak in Audio signal amplitude is detected.
   // Does nothing if a call to stop tracing is made without first starting the

@@ -72,7 +72,8 @@ class BrowsingHistoryService : public HistoryServiceObserver,
                  int visit_count,
                  int typed_count,
                  bool is_actor_visit,
-                 std::optional<std::string> app_id);
+                 std::optional<std::string> app_id,
+                 history::VisitID visit_id);
     HistoryEntry();
     HistoryEntry(const HistoryEntry& other);
     virtual ~HistoryEntry();
@@ -123,6 +124,10 @@ class BrowsingHistoryService : public HistoryServiceObserver,
     // ID of the app this entry was generated for. Set to a non-null value
     // on Android only.
     std::optional<std::string> app_id;
+
+    // All visit IDs in the local database represented by this entry (including
+    // synced visits).
+    std::vector<history::VisitID> all_visit_ids;
   };
 
   // Contains information about a completed history query.
@@ -194,6 +199,17 @@ class BrowsingHistoryService : public HistoryServiceObserver,
   // Used to hold and track query state between asynchronous calls.
   struct QueryHistoryState;
 
+  // Used for grouping/merging similar history entries.
+  // Depending on the algorithm, some fields might be unused and left empty.
+  struct GroupingKey {
+    GURL url;
+    std::string host;
+    std::u16string title;
+    std::optional<std::string> app_id;
+
+    auto operator<=>(const GroupingKey& other) const = default;
+  };
+
   static bool ShouldQueryRemote(const QueryHistoryState& state);
 
   // Moves results from `state` into `results`, merging both remote and local
@@ -250,8 +266,11 @@ class BrowsingHistoryService : public HistoryServiceObserver,
   // BrowsingHistoryDriver.
   void ReturnResultsToDriver(scoped_refptr<QueryHistoryState> state);
 
-  void RecordResultsMetrics(const std::vector<HistoryEntry>& results,
-                            bool has_remote_results);
+  void RecordResultsMetrics(const std::vector<HistoryEntry>& results);
+
+  // Records the number of duplicate visits removed from a history query.
+  static void RecordDuplicateVisitsCount(
+      const std::vector<HistoryEntry>& results);
 
   // Callback from `web_history_timer_` when a response from web history has
   // not been received in time.

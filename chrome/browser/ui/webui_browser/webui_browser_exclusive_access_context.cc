@@ -7,15 +7,15 @@
 #include "base/notimplemented.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/platform_util.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
+#include "chrome/browser/ui/fullscreen/browser_window_fullscreen_controller.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/views/exclusive_access_bubble_views.h"
+#include "chrome/browser/ui/views/exclusive_access/exclusive_access_bubble_views.h"
 #include "chrome/browser/ui/webui_browser/webui_browser_window.h"
 #include "content/public/browser/web_contents.h"
+#include "ui/display/types/display_constants.h"
 #include "ui/views/widget/widget.h"
 
 // TODO(webium): We support both browser and tab fullscreen by passing an enum
@@ -25,6 +25,14 @@
 
 // TODO(webium): Support immersive mode on Mac and honor platform preferences
 // like "Always show toolbar in fullscreen" on macOS and other platforms.
+
+DEFINE_USER_DATA(WebUIBrowserExclusiveAccessContext);
+
+// static
+WebUIBrowserExclusiveAccessContext* WebUIBrowserExclusiveAccessContext::From(
+    BrowserWindowInterface* browser) {
+  return Get(browser->GetUnownedUserDataHost());
+}
 
 WebUIBrowserExclusiveAccessContext::WebUIBrowserExclusiveAccessContext(
     Profile* profile,
@@ -36,7 +44,8 @@ WebUIBrowserExclusiveAccessContext::WebUIBrowserExclusiveAccessContext(
       browser_(browser),
       tab_strip_model_(tab_strip_model),
       widget_(widget),
-      accelerator_provider_(accelerator_provider) {}
+      accelerator_provider_(accelerator_provider),
+      scoped_unowned_user_data_(browser->GetUnownedUserDataHost(), *this) {}
 
 WebUIBrowserExclusiveAccessContext::~WebUIBrowserExclusiveAccessContext() =
     default;
@@ -58,7 +67,7 @@ void WebUIBrowserExclusiveAccessContext::EnterFullscreen(
 }
 
 void WebUIBrowserExclusiveAccessContext::ExitFullscreen() {
-  if (browser_->GetBrowserForMigrationOnly()->window()->IsForceFullscreen()) {
+  if (BrowserWindowFullscreenController::From(browser_)->IsForceFullscreen()) {
     return;
   }
 
@@ -72,12 +81,12 @@ void WebUIBrowserExclusiveAccessContext::ExitFullscreen() {
 void WebUIBrowserExclusiveAccessContext::UpdateExclusiveAccessBubble(
     const ExclusiveAccessBubbleParams& params,
     ExclusiveAccessBubbleHideCallback first_hide_callback) {
-  // Trusted pinned mode does not allow to escape. So do not show the bubble.
-  const bool is_trusted_pinned = platform_util::IsBrowserLockedFullscreen(
-      browser_->GetBrowserForMigrationOnly());
-
   // Whether we should remove the bubble if it exists, or not show the bubble.
-  bool should_close_bubble = is_trusted_pinned;
+  bool should_close_bubble = false;
+#if BUILDFLAG(IS_CHROMEOS)
+  // Trusted pinned mode does not allow to escape. So do not show the bubble.
+  should_close_bubble = platform_util::IsBrowserLockedFullscreen(browser_);
+#endif
   if (!params.has_download) {
     // ...TYPE_NONE indicates deleting the bubble, except when used with
     // download.
@@ -105,7 +114,7 @@ void WebUIBrowserExclusiveAccessContext::UpdateExclusiveAccessBubble(
 
     // Perform the destroy async. State updates in the exclusive access bubble
     // view may call back into this method. This otherwise results in
-    // premature deletion of the bubble view and UAFs. See crbug.com/1426521.
+    // premature deletion of the bubble view and UAFs. See crbug.com/40063714.
     exclusive_access_bubble_destruction_task_id_ =
         exclusive_access_bubble_cancelable_task_tracker_.PostTask(
             base::SingleThreadTaskRunner::GetCurrentDefault().get(), FROM_HERE,
@@ -153,8 +162,11 @@ bool WebUIBrowserExclusiveAccessContext::CanUserEnterFullscreen() const {
 }
 
 bool WebUIBrowserExclusiveAccessContext::CanUserExitFullscreen() const {
-  return !platform_util::IsBrowserLockedFullscreen(
-      browser_->GetBrowserForMigrationOnly());
+#if BUILDFLAG(IS_CHROMEOS)
+  return !platform_util::IsBrowserLockedFullscreen(browser_);
+#else
+  return true;
+#endif
 }
 
 bool WebUIBrowserExclusiveAccessContext::IsFullscreen() const {
@@ -165,7 +177,7 @@ ExclusiveAccessManager*
 WebUIBrowserExclusiveAccessContext::GetExclusiveAccessManager() {
   // The exclusive_access_manager is created in InitPostWindowConstruction,
   // so it might not be available during early initialization.
-  auto* manager = browser_->GetFeatures().exclusive_access_manager();
+  auto* manager = ExclusiveAccessManager::From(browser_);
   DCHECK(manager) << "ExclusiveAccessManager should be initialized before use";
   return manager;
 }

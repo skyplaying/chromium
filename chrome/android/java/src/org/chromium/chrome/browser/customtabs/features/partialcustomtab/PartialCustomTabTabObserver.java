@@ -4,22 +4,23 @@
 
 package org.chromium.chrome.browser.customtabs.features.partialcustomtab;
 
+import static org.chromium.build.NullUtil.assertNonNull;
 
 import org.chromium.base.Callback;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.content_public.browser.ImeAdapter;
 import org.chromium.content_public.browser.WebContents;
 
 /**
- * {@link TabObserver} monitoring {@link WebContents} updates to set
- * {@link PartialCustomTabInputMethodManagerWrapper}. This lets the tab detect the event of
- * soft keyboard showing up.
+ * {@link TabObserver} monitoring {@link WebContents} updates to set {@link
+ * PartialCustomTabInputMethodManagerWrapper}. This lets the tab detect the event of soft keyboard
+ * showing up.
  */
 @NullMarked
-public class PartialCustomTabTabObserver extends EmptyTabObserver {
+public class PartialCustomTabTabObserver implements TabObserver {
     private final Callback<Runnable> mShowSoftInputCallback;
     private @Nullable PartialCustomTabInputMethodWrapper mImmWrapper;
     private @Nullable Tab mCurrentTab;
@@ -52,8 +53,14 @@ public class PartialCustomTabTabObserver extends EmptyTabObserver {
     @SuppressWarnings("NullAway")
     private void updateImmWrapper(Tab tab) {
         WebContents webContents = tab.getWebContents();
-        assert webContents != null;
-        ImeAdapter imeAdapter = ImeAdapter.fromWebContents(webContents);
+        // WebContents can be null or already destroyed when this is invoked.
+        if (webContents == null || webContents.isDestroyed()) return;
+
+        ImeAdapter imeAdapter = assertNonNull(ImeAdapter.fromWebContents(webContents));
+
+        // Gracefully handle a null adapter in non-debug builds.
+        if (imeAdapter == null) return;
+
         imeAdapter.setInputMethodManagerWrapper(mImmWrapper);
     }
 }

@@ -9,9 +9,9 @@
 #include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/common/actor.mojom-forward.h"
-#include "chrome/common/actor/task_id.h"
 #include "chrome/common/chrome_render_frame.mojom.h"
 #include "chrome/renderer/actor/tool_base.h"
+#include "components/actor/core/task_id.h"
 
 namespace content {
 class RenderFrame;
@@ -34,7 +34,8 @@ class ToolExecutor {
   ToolExecutor(const ToolExecutor&) = delete;
   ToolExecutor& operator=(const ToolExecutor&) = delete;
 
-  mojom::ActionResultPtr InitializeTool(mojom::ToolInvocationPtr request);
+  mojom::InitializeToolResultPtr InitializeTool(
+      mojom::ToolInvocationPtr request);
 
   void ExecuteTool(const actor::TaskId& task_id, ToolExecutorCallback callback);
 
@@ -44,9 +45,21 @@ class ToolExecutor {
   void CancelTool(const actor::TaskId& task_id);
 
  private:
+  mojom::InitializeToolResultPtr InitializeToolImpl(
+      mojom::ToolInvocationPtr request);
   void ToolFinished(mojom::ActionResultPtr result);
 
+  // Tracks the execution phase of the ToolExecutor.
+  enum class ExecutionPhase {
+    kStart,
+    kInitialized,
+    kExecuting,
+  };
+
+  ExecutionPhase phase_ = ExecutionPhase::kStart;
+
   bool performed_scroll_into_view_ = false;
+  bool is_split_execution_ = false;
 
   // Raw ref since the executor is owned by the RenderFrameObserver which has
   // the same lifetime as RenderFrame.

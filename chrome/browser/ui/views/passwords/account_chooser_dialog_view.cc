@@ -8,7 +8,6 @@
 #include <memory>
 #include <utility>
 
-#include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/passwords/credential_manager_dialog_controller.h"
 #include "chrome/browser/ui/passwords/ui_utils.h"
@@ -20,30 +19,26 @@
 #include "components/constrained_window/constrained_window_views.h"
 #include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/browser/password_form.h"
-#include "components/web_modal/web_contents_modal_dialog_manager.h"
-#include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
-#include "ui/base/resource/resource_bundle.h"
+#include "ui/events/event.h"
 #include "ui/gfx/geometry/insets.h"
-#include "ui/strings/grit/ui_strings.h"
 #include "ui/views/border.h"
-#include "ui/views/bubble/bubble_border.h"
-#include "ui/views/bubble/bubble_frame_view.h"
+#include "ui/views/controls/label.h"
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/layout/layout_provider.h"
 #include "ui/views/style/typography.h"
 #include "ui/views/widget/widget.h"
+#include "ui/views/window/dialog_client_view.h"
 
 AccountChooserDialogView::AccountChooserDialogView(
     CredentialManagerDialogController* controller,
     content::WebContents* web_contents)
-    : controller_(controller), web_contents_(web_contents) {
+    : controller_(controller), web_contents_(web_contents->GetWeakPtr()) {
   DCHECK(controller);
   DCHECK(web_contents);
   SetButtons(static_cast<int>(ui::mojom::DialogButton::kCancel));
@@ -63,6 +58,8 @@ AccountChooserDialogView::AccountChooserDialogView(
       views::LayoutProvider::Get()->GetDialogInsetsForContentType(
           views::DialogContentType::kText, views::DialogContentType::kText);
   set_margins(gfx::Insets::TLBR(insets.top(), 0, insets.bottom(), 0));
+  set_footnote_margins(ChromeLayoutProvider::Get()->GetInsetsMetric(
+      views::INSETS_DIALOG_FOOTNOTE));
 }
 
 AccountChooserDialogView::~AccountChooserDialogView() = default;
@@ -80,7 +77,7 @@ void AccountChooserDialogView::ShowAccountChooser() {
   DCHECK(!widget_);
   SetOwnershipOfNewWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
   widget_ = base::WrapUnique(
-      constrained_window::ShowWebModalDialogViews(this, web_contents_));
+      constrained_window::ShowWebModalDialogViews(this, web_contents_.get()));
 }
 
 void AccountChooserDialogView::ControllerGone() {
@@ -100,7 +97,10 @@ bool AccountChooserDialogView::ShouldShowCloseButton() const {
 
 void AccountChooserDialogView::WindowClosing() {
   if (controller_) {
-    controller_->OnCloseDialog();
+    // Clear the controller pointer before calling OnCloseDialog() to prevent
+    // re-entrancy issues during widget destruction. The controller tries
+    // deleting `this`.
+    controller_.ExtractAsDangling()->OnCloseDialog();
   }
 }
 
@@ -108,6 +108,11 @@ bool AccountChooserDialogView::Accept() {
   DCHECK(controller_);
   controller_->OnSignInClicked();
   // The dialog is closed by the controller.
+  return false;
+}
+
+bool AccountChooserDialogView::ShouldAllowKeyEventsDuringInputProtection()
+    const {
   return false;
 }
 
@@ -129,7 +134,7 @@ void AccountChooserDialogView::InitWindow() {
                 &AccountChooserDialogView::CredentialsItemPressed,
                 base::Unretained(this), base::Unretained(form.get())),
             titles.first, titles.second, form.get(),
-            GetURLLoaderForMainFrame(web_contents_).get(),
+            GetURLLoaderForMainFrame(web_contents_.get()).get(),
             web_contents_->GetPrimaryMainFrame()->GetLastCommittedOrigin()));
     ChromeLayoutProvider* layout_provider = ChromeLayoutProvider::Get();
     gfx::Insets insets =
@@ -146,7 +151,14 @@ void AccountChooserDialogView::InitWindow() {
 }
 
 void AccountChooserDialogView::CredentialsItemPressed(
-    const password_manager::PasswordForm* form) {
+    const password_manager::PasswordForm* form,
+    const ui::Event& event) {
+  if (GetDialogClientView() &&
+      GetDialogClientView()->IsPossiblyUnintendedInteraction(
+          event, /*allow_key_events=*/
+          ShouldAllowKeyEventsDuringInputProtection())) {
+    return;
+  }
   // On Mac the button click event may be dispatched after the dialog was
   // hidden. Thus, the controller can be null.
   if (controller_) {

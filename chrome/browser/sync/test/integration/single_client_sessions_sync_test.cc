@@ -8,8 +8,8 @@
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
@@ -25,8 +25,8 @@
 #include "chrome/browser/sync/test/integration/sync_service_impl_harness.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "chrome/browser/sync/test/integration/updated_progress_marker_checker.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/common/webui_url_constants.h"
 #include "components/favicon/core/favicon_service.h"
 #include "components/favicon/core/large_icon_service_impl.h"
@@ -73,6 +73,7 @@ using sessions_helper::NavigateTabBack;
 using sessions_helper::NavigateTabForward;
 using sessions_helper::OpenTab;
 using sessions_helper::OpenTabAtIndex;
+using sessions_helper::OpenTabInWindow;
 using sessions_helper::ScopedWindowMap;
 using sessions_helper::SessionEntitiesChecker;
 using sessions_helper::SyncedSessionVector;
@@ -120,7 +121,7 @@ class IsIconURLSyncedChecker : public SingleClientStatusChangeChecker {
 
   // StatusChangeChecker implementation.
   bool IsExitConditionSatisfied(std::ostream* os) override {
-    *os << "Waiting for URLs to be commited to the server";
+    *os << "Waiting for URLs to be committed to the server";
     std::vector<sync_pb::SyncEntity> sessions =
         fake_server_->GetSyncEntitiesByDataType(syncer::SESSIONS);
     for (const sync_pb::SyncEntity& entity : sessions) {
@@ -232,6 +233,10 @@ class SingleClientSessionsSyncTest
     return GetParam();
   }
 
+  GURL GetInitialURL() const override {
+    return chrome::ChromeUINewTabURLAsGURL();
+  }
+
   void ExpectNavigationChain(const std::vector<GURL>& urls) {
     ScopedWindowMap windows;
     ASSERT_TRUE(GetLocalWindows(0, &windows));
@@ -324,7 +329,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientSessionsSyncTest, Sanity) {
   // Add a new session to client 0 and wait for it to sync.
   ScopedWindowMap old_windows;
   GURL url = embedded_test_server()->GetURL("/sync/simple.html");
-  ASSERT_TRUE(OpenTab(0, url));
+  NavigateTab(0, url);
   EXPECT_TRUE(GetLocalWindows(0, &old_windows));
   EXPECT_TRUE(UpdatedProgressMarkerChecker(GetSyncService(0)).Wait());
 
@@ -350,7 +355,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientSessionsSyncTest, PRE_SessionStartTime) {
   // Add a tab and wait for it to sync.
   GURL url =
       embedded_test_server()->GetURL("www.host1.com", "/sync/simple.html");
-  ASSERT_TRUE(OpenTab(0, url));
+  NavigateTab(0, url);
   EXPECT_TRUE(UpdatedProgressMarkerChecker(GetSyncService(0)).Wait());
 
   WaitForURLOnServer(url);
@@ -371,6 +376,10 @@ IN_PROC_BROWSER_TEST_P(SingleClientSessionsSyncTest, PRE_SessionStartTime) {
     }
   }
   EXPECT_TRUE(found_header);
+
+  // Opened browser is carried over into the following test, so close it
+  // explicitly just before the completion of the preparation.
+  CloseTab(/*browser_index=*/0, /*tab_index=*/0);
 }
 
 IN_PROC_BROWSER_TEST_P(SingleClientSessionsSyncTest, SessionStartTime) {
@@ -381,7 +390,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientSessionsSyncTest, SessionStartTime) {
   // to date.
   GURL url =
       embedded_test_server()->GetURL("www.host2.com", "/sync/simple.html");
-  ASSERT_TRUE(OpenTab(0, url));
+  NavigateTab(0, url);
   EXPECT_TRUE(UpdatedProgressMarkerChecker(GetSyncService(0)).Wait());
 
   WaitForURLOnServer(url);
@@ -457,7 +466,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientSessionsSyncTest, NavigateInTab) {
   GURL url2 =
       embedded_test_server()->GetURL("www.host2.com", "/sync/simple.html");
 
-  ASSERT_TRUE(OpenTab(0, url1));
+  NavigateTab(0, url1);
   WaitForHierarchyOnServer(SessionsHierarchy({{url1.spec()}}));
 
   NavigateTab(0, url2);
@@ -479,7 +488,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientSessionsSyncTest,
   GURL url2 =
       embedded_test_server()->GetURL("www.host2.com", "/sync/simple.html");
 
-  ASSERT_TRUE(OpenTab(0, url1));
+  NavigateTab(0, url1);
   WaitForHierarchyOnServer(SessionsHierarchy({{url1.spec()}}));
 
   NavigateTab(0, url2);
@@ -500,7 +509,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientSessionsSyncTest, TimestampMatchesHistory) {
   GURL url = embedded_test_server()->GetURL("/sync/simple.html");
 
   ScopedWindowMap windows;
-  ASSERT_TRUE(OpenTab(0, url));
+  NavigateTab(0, url);
   ASSERT_TRUE(GetLocalWindows(0, &windows));
 
   int found_navigations = 0;
@@ -532,7 +541,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientSessionsSyncTest, ResponseCodeIsPreserved) {
   GURL url = embedded_test_server()->GetURL("/sync/simple.html");
 
   ScopedWindowMap windows;
-  ASSERT_TRUE(OpenTab(0, url));
+  NavigateTab(0, url);
   ASSERT_TRUE(GetLocalWindows(0, &windows));
 
   int found_navigations = 0;
@@ -554,7 +563,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientSessionsSyncTest, FragmentURLNavigation) {
   ASSERT_TRUE(CheckInitialState(0));
 
   const GURL url(kBaseFragmentURL);
-  ASSERT_TRUE(OpenTab(0, url));
+  NavigateTab(0, url);
   WaitForURLOnServer(url);
 
   const GURL fragment_url(kSpecifiedFragmentURL);
@@ -569,7 +578,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientSessionsSyncTest,
 
   GURL first_url =
       embedded_test_server()->GetURL("www.host1.com", "/sync/simple.html");
-  ASSERT_TRUE(OpenTab(0, first_url));
+  NavigateTab(0, first_url);
   WaitForURLOnServer(first_url);
 
   GURL second_url =
@@ -595,7 +604,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientSessionsSyncTest,
 
   GURL base_url =
       embedded_test_server()->GetURL("www.base.com", "/sync/simple.html");
-  ASSERT_TRUE(OpenTab(0, base_url));
+  NavigateTab(0, base_url);
   WaitForURLOnServer(base_url);
 
   GURL first_url =
@@ -647,14 +656,14 @@ IN_PROC_BROWSER_TEST_P(SingleClientSessionsSyncTest, OpenNewWindow) {
 
   GURL base_url =
       embedded_test_server()->GetURL("www.host1.com", "/sync/simple.html");
-  ASSERT_TRUE(OpenTab(0, base_url));
+  NavigateTab(0, base_url);
 
   WaitForURLOnServer(base_url);
 
   GURL new_window_url =
       embedded_test_server()->GetURL("www.host2.com", "/sync/simple.html");
   AddBrowser(0);
-  ASSERT_TRUE(OpenTab(1, new_window_url));
+  ASSERT_TRUE(OpenTabInWindow(0, /*window_index=*/1, new_window_url));
 
   WaitForHierarchyOnServer(
       SessionsHierarchy({{base_url.spec()}, {new_window_url.spec()}}));
@@ -814,19 +823,20 @@ IN_PROC_BROWSER_TEST_P(SingleClientSessionsSyncTest, TabMovedToOtherWindow) {
   GURL moved_tab_url =
       embedded_test_server()->GetURL("www.host1.com", "/sync/simple.html");
 
-  ASSERT_TRUE(OpenTab(0, base_url));
+  NavigateTab(0, base_url);
   ASSERT_TRUE(OpenTabAtIndex(0, 1, moved_tab_url));
 
   GURL new_window_url =
       embedded_test_server()->GetURL("www.host2.com", "/sync/simple.html");
   AddBrowser(0);
-  ASSERT_TRUE(OpenTab(1, new_window_url));
+  ASSERT_TRUE(OpenTabInWindow(0, /*window_index=*/1, new_window_url));
 
   WaitForHierarchyOnServer(SessionsHierarchy(
       {{base_url.spec(), moved_tab_url.spec()}, {new_window_url.spec()}}));
 
-  // Move tab 1 in browser 0 to browser 1.
-  MoveTab(0, 1, 1);
+  // Move tab 1 in window 0 to window 1.
+  MoveTab(/*profile_index=*/0, /*from_window_index=*/0, /*to_window_index=*/1,
+          /*tab_index=*/1);
 
   WaitForHierarchyOnServer(SessionsHierarchy(
       {{base_url.spec()}, {new_window_url.spec(), moved_tab_url.spec()}}));
@@ -844,7 +854,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientSessionsSyncTest, CookieJarMismatch) {
   // Add a new session to client 0 and wait for it to sync.
   GURL url1 =
       embedded_test_server()->GetURL("www.host1.com", "/sync/simple.html");
-  ASSERT_TRUE(OpenTab(0, url1));
+  NavigateTab(0, url1);
   WaitForURLOnServer(url1);
 
   // Verify the cookie jar mismatch bool is set to true.
@@ -893,7 +903,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientSessionsSyncTest,
       "href=" +
       icon_url + " /></html>";
 
-  ASSERT_TRUE(OpenTab(0, GURL(page_url)));
+  NavigateTab(0, GURL(page_url));
 
   IsIconURLSyncedChecker checker(page_url, icon_url, GetFakeServer(),
                                  GetSyncService(0));
@@ -1017,7 +1027,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientSessionsWithoutDestroyProfileSyncTest,
   GURL url2 =
       embedded_test_server()->GetURL("www.host2.com", "/sync/simple.html");
 
-  ASSERT_TRUE(OpenTab(0, url1));
+  NavigateTab(0, url1);
   ASSERT_TRUE(OpenTab(0, url2));
   WaitForHierarchyOnServer(SessionsHierarchy({{url1.spec(), url2.spec()}}));
 
@@ -1054,7 +1064,7 @@ IN_PROC_BROWSER_TEST_P(SingleClientSessionsWithDestroyProfileSyncTest,
   GURL url2 =
       embedded_test_server()->GetURL("www.host2.com", "/sync/simple.html");
 
-  ASSERT_TRUE(OpenTab(0, url1));
+  NavigateTab(0, url1);
   ASSERT_TRUE(OpenTab(0, url2));
   WaitForHierarchyOnServer(SessionsHierarchy({{url1.spec(), url2.spec()}}));
 

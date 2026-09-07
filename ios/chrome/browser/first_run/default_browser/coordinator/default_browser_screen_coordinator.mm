@@ -179,7 +179,7 @@
 #pragma mark - TOSCoordinatorDelegate
 
 - (void)TOSCoordinatorWantsToBeStopped:(TOSCoordinator*)coordinator {
-  CHECK_EQ(_TOSCoordinator, coordinator, base::NotFatalUntil::M144);
+  CHECK_EQ(_TOSCoordinator, coordinator);
   [self stopTOSCoordinator];
 }
 
@@ -244,7 +244,7 @@
 
 - (void)finishPresenting {
   [_mediator finishPresenting];
-  [_delegate screenWillFinishPresenting];
+  [_delegate firstRunScreenCoordinatorWantsToBeStopped:self];
 }
 
 // Shows the UMA dialog so the user can manage metric reporting.

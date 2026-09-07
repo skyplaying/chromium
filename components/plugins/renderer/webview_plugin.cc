@@ -13,7 +13,6 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "gin/converter.h"
@@ -292,7 +291,7 @@ WebViewPlugin::WebViewHelper::WebViewHelper(
 
   WebLocalFrame* web_frame = WebLocalFrame::CreateMainFrame(
       web_view_, this, nullptr, mojo::NullRemote(), blink::LocalFrameToken(),
-      blink::DocumentToken(), nullptr);
+      blink::DocumentToken(), blink::InitiatorStateToken(), nullptr);
   blink::WebFrameWidget* frame_widget = web_frame->InitializeFrameWidget(
       blink::CrossVariantMojoAssociatedRemote<
           blink::mojom::FrameWidgetHostInterfaceBase>(),
@@ -338,7 +337,7 @@ void WebViewPlugin::WebViewHelper::UpdateTooltip(
     const std::u16string& tooltip_text) {
   if (plugin_->container_) {
     plugin_->container_->GetElement().SetAttribute(
-        "title", WebString::FromUTF16(tooltip_text));
+        "title", WebString::FromUtf16(tooltip_text));
   }
 }
 
@@ -430,6 +429,8 @@ void WebViewPlugin::LoadHTML(const std::string& html_data, const GURL& url) {
   params->policy_container->policies.sandbox_flags =
       static_cast<WebSandboxFlags>(
           ~static_cast<int>(WebSandboxFlags::kScripts));
+  params->origin_to_commit = blink::WebSecurityOrigin(url::Origin());
+
   blink::WebNavigationParams::FillStaticResponse(params.get(), "text/html",
                                                  "UTF-8", html_data);
   web_view_helper_.main_frame()->CommitNavigation(std::move(params),

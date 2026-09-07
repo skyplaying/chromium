@@ -2,9 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/extensions/user_script_listener.h"
-#include "chrome/browser/ui/browser.h"
+
+#include "chrome/browser/extensions/extension_browsertest.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/navigation_handle.h"
@@ -12,6 +13,7 @@
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "extensions/browser/extensions_browser_client.h"
+#include "ui/base/window_open_disposition.h"
 
 namespace extensions {
 

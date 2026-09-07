@@ -7,7 +7,9 @@ package org.chromium.chrome.browser.webapps;
 import android.app.Activity;
 import android.app.ActivityOptions;
 import android.app.PendingIntent;
+import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.res.Resources;
 import android.graphics.Bitmap;
@@ -25,6 +27,7 @@ import org.chromium.base.ApiCompatibilityUtils;
 import org.chromium.base.Callback;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.Log;
+import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.task.TaskTraits;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -36,12 +39,17 @@ import org.chromium.chrome.browser.browserservices.permissiondelegation.Permissi
 import org.chromium.chrome.browser.notifications.NotificationBuilderBase;
 import org.chromium.chrome.browser.notifications.NotificationUmaTracker;
 import org.chromium.chrome.browser.notifications.channels.ChromeChannelDefinitions;
+import org.chromium.chrome.browser.notifications.channels.SiteChannelsManager.ChannelMigrationResult;
 import org.chromium.components.browser_ui.notifications.NotificationMetadata;
+import org.chromium.components.browser_ui.notifications.NotificationWrapper;
 import org.chromium.components.content_settings.ContentSetting;
 import org.chromium.components.content_settings.ContentSettingsType;
 import org.chromium.components.embedder_support.util.Origin;
+import org.chromium.components.webapk.lib.common.WebApkMetaDataKeys;
 import org.chromium.webapk.lib.client.WebApkServiceConnectionManager;
 import org.chromium.webapk.lib.runtime_library.IWebApkApi;
+
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Provides APIs for browsers to communicate with WebAPK services. Each WebAPK has its own "WebAPK
@@ -115,9 +123,11 @@ public class WebApkServiceClient {
     }
 
     private static Handler createPermissionHandler(Callback<Integer> permissionCallback) {
+        final AtomicBoolean called = new AtomicBoolean(false);
         return new Handler(
                 Looper.getMainLooper(),
                 message -> {
+                    if (called.getAndSet(true)) return true;
                     @ContentSetting
                     int settingValue =
                             toContentSettingValue(
@@ -147,9 +157,9 @@ public class WebApkServiceClient {
                             ContextUtils.getApplicationContext()
                                     .getString(R.string.webapk_notification_channel_name);
 
+                    String webApkChannelId = resolveChannelIdAndRecordMigration(webApkPackage);
                     PendingIntent permissionRequestIntent =
-                            api.requestNotificationPermission(
-                                    channelName, ChromeChannelDefinitions.CHANNEL_ID_WEBAPKS);
+                            api.requestNotificationPermission(channelName, webApkChannelId);
                     if (permissionRequestIntent == null) {
                         permissionCallback.onResult(ContentSetting.ASK);
                         return;
@@ -196,7 +206,7 @@ public class WebApkServiceClient {
                     @ContentSetting
                     int settingValue = toContentSettingValue(api.checkNotificationPermission());
 
-                    // See http://crbug.com/1340854. Temporary fallback in case the shell has not
+                    // See http://crbug.com/40850667. Temporary fallback in case the shell has not
                     // yet been updated to support checkNotificationPermission(). Delete this
                     // after shell v154 has been fully launched.
                     if (settingValue != ContentSetting.ALLOW
@@ -223,7 +233,8 @@ public class WebApkServiceClient {
                         return;
                     }
 
-                    notificationBuilder.setChannelId(ChromeChannelDefinitions.CHANNEL_ID_WEBAPKS);
+                    String webApkChannelId = resolveChannelIdAndRecordMigration(webApkPackage);
+                    notificationBuilder.setChannelId(webApkChannelId);
                     String channelName =
                             ContextUtils.getApplicationContext()
                                     .getString(R.string.webapk_notification_channel_name);
@@ -233,11 +244,11 @@ public class WebApkServiceClient {
                                     NotificationUmaTracker.SystemNotificationType.WEBAPK,
                                     platformTag,
                                     platformID);
-
+                    NotificationWrapper notificationWrapper = notificationBuilder.build(metadata);
                     api.notifyNotificationWithChannel(
                             platformTag,
                             platformID,
-                            notificationBuilder.build(metadata).getNotification(),
+                            notificationWrapper.getNotification(),
                             channelName);
                 });
     }
@@ -315,5 +326,71 @@ public class WebApkServiceClient {
         }
 
         return ContentSetting.BLOCK;
+    }
+
+    private static int retrieveShellApkVersion(String webApkPackage) {
+        Context context = ContextUtils.getApplicationContext();
+        try {
+            ApplicationInfo ai =
+                    context.getPackageManager()
+                            .getApplicationInfo(webApkPackage, PackageManager.GET_META_DATA);
+            if (ai != null && ai.metaData != null) {
+                return ai.metaData.getInt(WebApkMetaDataKeys.SHELL_APK_VERSION, 0);
+            }
+        } catch (PackageManager.NameNotFoundException e) {
+            // WebAPK package is not installed.
+        }
+        return -1;
+    }
+
+    private static boolean supportsHighPrioritySiteNotifications(String webApkPackage) {
+        return retrieveShellApkVersion(webApkPackage) >= 192
+                && ChromeChannelDefinitions.isHighPrioritySiteNotificationsEnabled();
+    }
+
+    /**
+     * Resolves the notification channel ID to use for the given WebAPK and records the migration
+     * result to the Notifications.Webapk.ChannelMigration.Result histogram.
+     */
+    static String resolveChannelIdAndRecordMigration(String webApkPackage) {
+        boolean useHighPriority = supportsHighPrioritySiteNotifications(webApkPackage);
+        String targetChannelId =
+                useHighPriority
+                        ? ChromeChannelDefinitions.CHANNEL_ID_WEBAPKS_HIGH_PRIORITY
+                        : ChromeChannelDefinitions.CHANNEL_ID_WEBAPKS;
+
+        WebappDataStorage storage =
+                WebappRegistry.getInstance().getWebappDataStorageForPackage(webApkPackage);
+        if (storage != null) {
+            String previousChannelId = storage.getNotificationChannelId();
+            if (previousChannelId == null) {
+                previousChannelId = ChromeChannelDefinitions.CHANNEL_ID_WEBAPKS;
+            }
+
+            if (ChromeChannelDefinitions.CHANNEL_ID_WEBAPKS.equals(previousChannelId)
+                    && ChromeChannelDefinitions.CHANNEL_ID_WEBAPKS_HIGH_PRIORITY.equals(
+                            targetChannelId)) {
+                RecordHistogram.recordEnumeratedHistogram(
+                        "Notifications.Webapk.ChannelMigration.Result",
+                        ChannelMigrationResult.MIGRATED_TO_HIGH_PRIORITY,
+                        ChannelMigrationResult.NUM_ENTRIES);
+            } else if (ChromeChannelDefinitions.CHANNEL_ID_WEBAPKS_HIGH_PRIORITY.equals(
+                            previousChannelId)
+                    && ChromeChannelDefinitions.CHANNEL_ID_WEBAPKS.equals(targetChannelId)) {
+                RecordHistogram.recordEnumeratedHistogram(
+                        "Notifications.Webapk.ChannelMigration.Result",
+                        ChannelMigrationResult.MIGRATED_TO_DEFAULT_PRIORITY,
+                        ChannelMigrationResult.NUM_ENTRIES);
+            } else {
+                RecordHistogram.recordEnumeratedHistogram(
+                        "Notifications.Webapk.ChannelMigration.Result",
+                        ChannelMigrationResult.NO_MIGRATION_NEEDED,
+                        ChannelMigrationResult.NUM_ENTRIES);
+            }
+
+            storage.updateNotificationChannelId(targetChannelId);
+        }
+
+        return targetChannelId;
     }
 }

@@ -14,7 +14,6 @@
 const non_isolated_policies = [
   'accelerometer',
   'aria-notify',
-  'attribution-reporting',
   'autoplay',
   'browsing-topics',
   'camera',
@@ -60,9 +59,9 @@ const non_isolated_policies = [
   'identity-credentials-get',
   'idle-detection',
   'interest-cohort',
-  'join-ad-interest-group',
   'keyboard-map',
   'language-detector',
+  'language-model',
   'local-fonts',
   'local-network',
   'local-network-access',
@@ -74,16 +73,12 @@ const non_isolated_policies = [
   'otp-credentials',
   'payment',
   'picture-in-picture',
-  'private-aggregation',
   'private-state-token-issuance',
   'private-state-token-redemption',
   'publickey-credentials-create',
   'publickey-credentials-get',
-  'run-ad-auction',
   'screen-wake-lock',
   'serial',
-  'shared-storage',
-  'shared-storage-select-url',
   'storage-access',
   'summarizer',
   'sync-xhr',
@@ -97,9 +92,9 @@ const non_isolated_policies = [
 const isolated_policies = [
   'controlled-frame',
   'direct-sockets',
-  'direct-sockets-private',
   'direct-sockets-multicast',
   'usb-unrestricted',
+  'sub-apps',
 ]
 
 promise_test(async t => {

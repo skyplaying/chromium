@@ -4,10 +4,22 @@
 
 #include "components/autofill/core/browser/form_qualifiers.h"
 
+#include <stddef.h>
+
+#include <algorithm>
+#include <concepts>
+#include <functional>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/autofill/core/browser/autofill_field.h"
+#include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/logging/log_manager.h"
+#include "components/autofill/core/common/autofill_constants.h"
 #include "components/autofill/core/common/autofill_internals/log_message.h"
 #include "components/autofill/core/common/autofill_internals/logging_scope.h"
 #include "components/autofill/core/common/autofill_regex_constants.h"
@@ -15,7 +27,10 @@
 #include "components/autofill/core/common/autofill_util.h"
 #include "components/autofill/core/common/form_data.h"
 #include "components/autofill/core/common/form_field_data.h"
+#include "components/autofill/core/common/html_field_types.h"
+#include "components/autofill/core/common/logging/log_macros.h"
 #include "third_party/abseil-cpp/absl/functional/overload.h"
+#include "url/gurl.h"
 
 namespace autofill {
 
@@ -53,17 +68,6 @@ const std::vector<std::unique_ptr<AutofillField>>& fields(
     const FormStructure& form) {
   return form.fields();
 }
-
-// A field is active if it contributes to the form signature and it is are
-// included in queries to the Autofill server.
-auto is_active = absl::Overload{
-    [](const FormFieldData& field) {
-      return !IsCheckable(field.check_status());
-    },
-    [](const std::unique_ptr<AutofillField>& field) {
-      return !IsCheckable(field->check_status());
-    },
-};
 
 auto has_autocomplete = absl::Overload{
     [](const FormFieldData& field) {
@@ -126,16 +130,14 @@ bool ShouldBeParsed(const T& form,
     return false;
   }
 
-  if (!AtLeastNumFieldsSatisfy(form, params.min_required_fields, is_active) &&
-      (!AtLeastNumFieldsSatisfy(
-           form, params.required_fields_for_forms_with_only_password_fields,
-           is_active) ||
+  if (fields(form).size() < params.min_required_fields &&
+      (fields(form).size() <
+           params.required_fields_for_forms_with_only_password_fields ||
        !std::ranges::all_of(fields(form), is_password_field)) &&
       std::ranges::none_of(fields(form), has_autocomplete)) {
     LOG_AF(log_manager) << LoggingScope::kAbortParsing
                         << LogMessage::kAbortParsingNotEnoughFields
-                        << std::ranges::count_if(fields(form), is_active)
-                        << form;
+                        << fields(form).size() << form;
     return false;
   }
 
@@ -161,8 +163,7 @@ template <typename T>
   requires IsForm<T>
 bool ShouldRunHeuristics(const T& form, bool ignore_small_forms) {
   if (ignore_small_forms &&
-      !AtLeastNumFieldsSatisfy(form, kMinRequiredFieldsForHeuristics,
-                               is_active)) {
+      fields(form).size() < kMinRequiredFieldsForHeuristics) {
     return false;
   }
   return HasAllowedScheme(url(form));
@@ -171,22 +172,19 @@ bool ShouldRunHeuristics(const T& form, bool ignore_small_forms) {
 template <typename T>
   requires IsForm<T>
 bool ShouldRunHeuristicsForSingleFields(const T& form) {
-  return AtLeastNumFieldsSatisfy(form, 1, is_active) &&
-         HasAllowedScheme(url(form));
+  return fields(form).size() >= 1 && HasAllowedScheme(url(form));
 }
 
 template <typename T>
   requires IsForm<T>
 bool ShouldBeQueried(const T& form) {
-  return (AtLeastNumFieldsSatisfy(form, kMinRequiredFieldsForQuery,
-                                  is_active) ||
+  return (fields(form).size() >= kMinRequiredFieldsForQuery ||
           std::ranges::any_of(fields(form), is_password_field)) &&
          ShouldBeParsed(form, {}, nullptr);
 }
 
 bool ShouldBeUploaded(const FormStructure& form) {
-  return AtLeastNumFieldsSatisfy(form, kMinRequiredFieldsForUpload,
-                                 is_active) &&
+  return fields(form).size() >= kMinRequiredFieldsForUpload &&
          ShouldBeParsed(form, {}, nullptr);
 }
 

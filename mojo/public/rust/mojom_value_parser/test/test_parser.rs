@@ -2,37 +2,53 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-//! Tests parsing and deparsing of values.
+//! This module validates the parsing/deparsing steps which translate between
+//! `MojomValue` and `[u8]`.
 //!
-//! FOR_RELEASE: Fill this out.
+//! The tests in this file operate by manually specifying the expected binary
+//! encoding for a given `MojomValue`. For convenience, the bytes are specified
+//! using a textual format designed for this purpose. For details, see
+//! `mojo/public/cpp/bindings/tests/validation_test_input_parser.h`.
 //!
-//! Note that this only focuses on testing the parsing/deparsing stage. We rely
-//! on test_mojomparse.rs to verify that the translations to/from rust types
-//! are accurate.
+//! For each test case, we specify a Rust value and the encoded binary it should
+//! correspond to, then we convert each of them to the other and make sure we
+//! get the expected value.
 //!
-//! The types in this file correspond to those defined in
+//! Note that although the tests in this file are converting between Rust types
+//! and `[u8]`, we have separate tests for the Rust <-> `MojomValue` step of the
+//! conversion in `test_mojomparse.rs`. This this file can be seen as only
+//! testing `MojomValue` <-> `[u8]` step.
+//!
+//! The types in this file are defined in
 //! //mojo/public/rust/test_mojom/parser_unittests.mojom
-
 chromium::import! {
     "//mojo/public/rust/mojom_value_parser:mojom_value_parser_core";
     "//mojo/public/rust/mojom_value_parser:parser_unittests_rust";
     "//mojo/public/rust/mojom_value_parser:validation_parser";
+    "//mojo/public/rust/bindings";
 }
 
-use std::iter;
+use bindings::for_testing::DummyRegistrarForTesting;
+use bindings::receiver::{PendingAssociatedReceiver, PendingReceiver};
+use bindings::remote::{PendingAssociatedRemote, PendingRemote};
 
 use mojom_value_parser_core::*;
 use ordered_float::OrderedFloat;
 use parser_unittests_rust::parser_unittests::*;
 use rust_gtest_interop::prelude::*;
 
+use crate::helpers::*;
+
 // Verify that `value` serializes to the binary data represented by `data`,
 // which is a string in the mojom validation text format, as defined in
 // //mojo/public/cpp/bindings/tests/validation_test_input_parser.h
 fn validate_parsing<T>(value: T, data: &str) -> anyhow::Result<()>
 where
-    T: MojomParse + PartialEq + std::fmt::Debug + Clone,
+    T: MojomParse<()> + PartialEq + std::fmt::Debug,
 {
+    // We have to compute this eagerly since `value ` will get consumed by the test
+    let err_str = format!("\nRust value: {value:?}\nWire Data: {data}");
+
     // Helper function so we can use the question mark operator, but also
     // append context to it regardless of where we return.
     let validate_parsing_internal = || -> anyhow::Result<()> {
@@ -41,36 +57,128 @@ where
             // We currently don't do anything with handles, so only look at the data field
             .data;
 
-        // FOR_RELEASE: It would be nice to use the `verify_` macros from googletest
-        // that return a result, if we get access to them.
-        // FOR_RELEASE: We shouldn't need to clone here
-        // Doing deparse tests first is helpful when writing tests because it
-        // helps check that we wrote the wire data string correctly.
+        // TODO(crbug.com/456214728):: It would be nice to use the `verify_` macros from
+        // googletest that return a result, if we get access to them.
         expect_eq!(
-            wire_data.as_ref(),
-            deparse_single_value_for_testing(&value.clone().into(), T::wire_type())?
+            &value,
+            &try_from_mojom_value(parse_single_value_for_testing(
+                wire_data.as_ref(),
+                &mut [],
+                T::wire_type()
+            )?)?
         );
         expect_eq!(
-            value,
-            parse_single_value_for_testing(wire_data.as_ref(), T::wire_type())?.try_into()?
+            wire_data.as_ref(),
+            *deparse_single_value_for_testing(into_mojom_value(value), T::wire_type())?
         );
         Ok(())
     };
 
     // We could also use anyhow's Context trait, but that overwrites the old context
     // since we can't control the printing format gtest uses.
-    validate_parsing_internal()
-        .map_err(|err| anyhow::anyhow!("{}\nRust value: {:?}\nWire Data: {}", err, value, data))
+    validate_parsing_internal().map_err(|err| anyhow::anyhow!("{err}{err_str}"))
+}
+
+// Similar to `validate_parsing`, but for types with handles. It takes the
+// number of handles the type should contain, and creates that many dummy
+// handles for the deparsing process. It also does a slightly more relaxed check
+// after parsing (comparing the parsed `MojomValue` instead of the parsed `T`).
+fn validate_parsing_with_handles<T>(value: T, data: &str, num_handles: usize) -> anyhow::Result<()>
+where
+    T: MojomParse<()> + PartialEq + std::fmt::Debug,
+{
+    // We have to compute this eagerly since `value ` will get consumed by the test
+    let err_str = format!("\nRust value: {value:?}\nWire Data: {data}");
+
+    // Helper function so we can use the question mark operator, but also
+    // append context to it regardless of where we return.
+    let validate_parsing_internal = || -> anyhow::Result<()> {
+        let wire_data = validation_parser::parse(data)
+            .map_err(anyhow::Error::msg)?
+            // We currently don't do anything with handles, so only look at the data field
+            .data;
+
+        let mojom_value = into_mojom_value(value);
+        let mut handles = (0..num_handles).map(|_| Some(dummy_handle())).collect::<Vec<_>>();
+
+        // TODO(crbug.com/456214728): It would be nice to use the `verify_` macros from
+        // googletest that return a result, if we get access to them.
+        expect_true!(equivalent_value(
+            &mojom_value,
+            &parse_single_value_for_testing(wire_data.as_ref(), &mut handles, T::wire_type())?
+        ));
+        // All the handles in `handles` should have been consumed during parsing
+        expect_true!(handles.into_iter().all(|opt| opt.is_none()));
+        expect_eq!(
+            wire_data.as_ref(),
+            *deparse_single_value_for_testing(mojom_value, T::wire_type())?
+        );
+        Ok(())
+    };
+
+    // We could also use anyhow's Context trait, but that overwrites the old context
+    // since we can't control the printing format gtest uses.
+    validate_parsing_internal().map_err(|err| anyhow::anyhow!("{err}{err_str}"))
 }
 
 /// Check that we correctly fail to parse mismatching data.
 fn validate_parsing_failure<T>(data: &str) -> anyhow::Result<()>
 where
-    T: MojomParse + PartialEq + std::fmt::Debug + Clone,
+    T: MojomParse<()> + PartialEq + std::fmt::Debug,
+{
+    validate_parsing_failure_with_handles::<T>(data, 0)
+}
+
+/// Check that we correctly fail to parse mismatching data...with handles!
+fn validate_parsing_failure_with_handles<T>(data: &str, num_handles: usize) -> anyhow::Result<()>
+where
+    T: MojomParse<()> + PartialEq + std::fmt::Debug,
 {
     let wire_data = validation_parser::parse(data).map_err(anyhow::Error::msg)?.data;
-    expect_true!(parse_single_value_for_testing(wire_data.as_ref(), T::wire_type()).is_err());
+    let mut handles = (0..num_handles).map(|_| Some(dummy_handle())).collect::<Vec<_>>();
+    expect_true!(
+        parse_single_value_for_testing(wire_data.as_ref(), &mut handles, T::wire_type()).is_err()
+    );
     Ok(())
+}
+
+/// Similar to `validate_parsing`, but for types with associated endpoints.
+/// It takes a closure to check if the parsed value is correct.
+fn validate_parsing_with_associated<T>(
+    value: T,
+    has_expected_value: impl Fn(&T) -> bool,
+    data: &str,
+) -> anyhow::Result<()>
+where
+    T: MojomParse<DummyRegistrarForTesting> + PartialEq + std::fmt::Debug,
+{
+    let err_str = format!("\nRust value: {value:?}\nWire Data: {data}");
+
+    let validate_parsing_internal = || -> anyhow::Result<()> {
+        let wire_data = validation_parser::parse(data).map_err(anyhow::Error::msg)?.data;
+
+        let parsing_registrar = DummyRegistrarForTesting::new(false);
+        let deparsing_registrar = DummyRegistrarForTesting::new(false);
+
+        let (deparsed_bytes, _deparsed_handles, interface_ids_ptr) =
+            deparse_top_level_value(value.into_mojom_value(&deparsing_registrar), T::wire_type())?;
+
+        // Make sure deparsing output the right bytes.
+        // This also checks that out `interface_ids_ptr` is correct before we
+        // hand it to the parsing function.
+        expect_eq!(wire_data.as_ref(), deparsed_bytes.as_slice());
+
+        let (_remaining_bytes, parsed_mojom_value) =
+            parse_top_level_value(wire_data.as_ref(), &mut [], interface_ids_ptr, T::wire_type())?;
+        let parsed_rust_value = T::try_from_mojom_value(parsed_mojom_value, &parsing_registrar)?;
+
+        // Make sure parsing gave us the right Rust value.
+        expect_true!(has_expected_value(&parsed_rust_value));
+
+        Ok(())
+    };
+
+    validate_parsing_internal().map_err(|err| anyhow::anyhow!("{err}{err_str}"))
 }
 
 #[gtest(RustTestMojomParsing, TestPrimitiveParsing)]
@@ -349,6 +457,12 @@ fn test_enums() -> anyhow::Result<()> {
     validate_parsing_failure::<SomeEnums>("[u4]24 [u4]0 [u4]5 [u4]42 [u8]98765")?;
     validate_parsing_failure::<SomeEnums>("[u4]24 [u4]0 [u4]7 [u4]99 [u8]98765")?;
 
+    validate_parsing(TestEnumWithNegativeDiscriminants::NegVal, "[s4]-1")?;
+
+    validate_parsing(TestEnumWithNegativeDiscriminants::ZeroVal, "[u4]0")?;
+
+    validate_parsing(TestEnumWithNegativeDiscriminants::PosVal, "[u4]1")?;
+
     Ok(())
 }
 
@@ -371,7 +485,7 @@ fn test_unions() -> anyhow::Result<()> {
             "[anchr]f1_ptr [u4]24 [u4]0 [s1]5 [u1]0 [s2]6 [s4]7 [s8]8", // FourInts
         ),
     )?;
-    validate_parsing(BaseUnion::fl(3.14f32), "[u4]16 [u4]7 [f]3.14 [u4]0")?;
+    validate_parsing(BaseUnion::fl(OrderedFloat(3.14f32)), "[u4]16 [u4]7 [f]3.14 [u4]0")?;
 
     validate_parsing_failure::<BaseUnion>("[u4]16 [u4]99 [u8]0")?;
     validate_parsing_failure::<BaseUnion>("[u4]16 [u4]6 [u8]0")?;
@@ -459,7 +573,7 @@ fn test_unions() -> anyhow::Result<()> {
             u1: NestedUnion::n(50),
             i1: 11,
             u2: NestederUnion::b(false),
-            d1: 3.14159,
+            d1: OrderedFloat(3.14159),
             u3: BaseUnion::n1(55),
             u4: NestederUnion::n(12),
             i2: 33,
@@ -483,7 +597,7 @@ fn test_unions() -> anyhow::Result<()> {
             u1: NestedUnion::u(BaseUnion::b1(true)),
             i1: -1,
             u2: NestederUnion::u(NestedUnion::u(BaseUnion::e1(TestEnum::Seven))),
-            d1: 2.71828,
+            d1: OrderedFloat(2.71828),
             u3: BaseUnion::b2(false),
             u4: NestederUnion::w(WithNestedUnion {
                 n1: 2000,
@@ -835,7 +949,7 @@ fn str_wire_format(str: &str) -> String {
     let padding = (8 - (str.len() % 8)) % 8;
     let body: String =
         str.as_bytes().iter().fold("".to_string(), |acc, b| format!("{acc} [u1]{b}"));
-    let padding: String = iter::repeat_n("[u1]0 ", padding).collect();
+    let padding: String = std::iter::repeat_n("[u1]0 ", padding).collect();
     format!("[u4]{size} [u4]{num_chars} {body} {padding}")
 }
 
@@ -852,11 +966,11 @@ fn test_string_parsing() -> anyhow::Result<()> {
             "[u4]32 [u4]3 ",
             "[dist8]life_ptr [dist8]universe_ptr [dist8]everything_ptr",
             "[anchr]life_ptr",
-            &str_wire_format("life"),
+            str_wire_format("life"),
             "[anchr]universe_ptr",
-            &str_wire_format("universe"),
+            str_wire_format("universe"),
             "[anchr]everything_ptr",
-            &str_wire_format("everything"),
+            str_wire_format("everything"),
         ),
     )?;
 
@@ -870,23 +984,23 @@ fn test_string_parsing() -> anyhow::Result<()> {
             "[anchr]values_ptr ",
             "[u4]24 [u4]2 [dist8]ten_ptr [dist8]twenty_ptr ",
             "[anchr]ten_ptr ",
-            &str_wire_format("ten"),
+            str_wire_format("ten"),
             "[anchr]twenty_ptr ",
-            &str_wire_format("twenty"),
+            str_wire_format("twenty"),
         ),
     )?;
 
     validate_parsing::<HashMap<String, i16>>(
-        [("three".to_string().into(), 3), ("four".to_string().into(), 4)].into(),
+        [("three".to_string(), 3), ("four".to_string(), 4)].into(),
         &format!(
             "{} {} {} {} {} {} {} {} {}",
             "[u4]24 [u4]0 [dist8]keys_ptr [dist8]values_ptr ",
             "[anchr]keys_ptr ",
             "[u4]24 [u4]2 [dist8]four_ptr [dist8]three_ptr ",
             "[anchr]four_ptr ",
-            &str_wire_format("four"),
+            str_wire_format("four"),
             "[anchr]three_ptr ",
-            &str_wire_format("three"),
+            str_wire_format("three"),
             "[anchr]values_ptr ",
             "[u4]12 [u4]2 [s2]4 [s2]3 [u4]0 ",
         ),
@@ -908,7 +1022,7 @@ fn test_complex_union_parsing() -> anyhow::Result<()> {
         HoldsComplexTypes::str("union_string".to_string()),
         &format!(
             "[u4]16 [u4]0 [dist8]union_str_ptr [anchr]union_str_ptr {}",
-            &str_wire_format("union_string")
+            str_wire_format("union_string")
         ),
     )?;
 
@@ -916,7 +1030,7 @@ fn test_complex_union_parsing() -> anyhow::Result<()> {
         ComplexUnionHolder { u: HoldsComplexTypes::str("union_string".to_string()) },
         &format!(
             "[u4]24 [u4]0 [u4]16 [u4]0 [dist8]union_str_ptr [anchr]union_str_ptr {}",
-            &str_wire_format("union_string")
+            str_wire_format("union_string")
         ),
     )?;
 
@@ -967,7 +1081,7 @@ fn test_nullable_parsing() -> anyhow::Result<()> {
             e: None,
             fourints: Some(FourInts { a: 1, b: 2, c: 3, d: 4 }),
             f1: None,
-            f2: Some(2.71828),
+            f2: Some(OrderedFloat(2.71828)),
         },
         concat!(
             "[u4]48 [u4]0 [b]01001011 [u1]12 [u2]0 [u4]0 [u8]0 [dist8]fourints_ptr [f]0 [u4]0 [d]2.71828 ",
@@ -983,7 +1097,7 @@ fn test_nullable_parsing() -> anyhow::Result<()> {
             empty: Some(Empty {}),
             e: Some(TestEnum::Four),
             fourints: None,
-            f1: Some(3.14),
+            f1: Some(OrderedFloat(3.14)),
             f2: None,
         },
         concat!(
@@ -1000,8 +1114,8 @@ fn test_nullable_parsing() -> anyhow::Result<()> {
             empty: Some(Empty {}),
             e: Some(TestEnum::Zero),
             fourints: Some(FourInts { a: 1, b: 2, c: 3, d: 4 }),
-            f1: Some(1.23),
-            f2: Some(4.56),
+            f1: Some(OrderedFloat(1.23)),
+            f2: Some(OrderedFloat(4.56)),
         },
         concat!(
             "[u4]48 [u4]0 [b]01111101 [u1]22 [u2]44 [u4]0 [dist8]empty_ptr [dist8]fourints_ptr [f]1.23 [u4]0 [d]4.56 ",
@@ -1073,7 +1187,7 @@ fn test_nullable_parsing() -> anyhow::Result<()> {
         UnionWithNullables::str(Some("union_string".to_string())),
         &format!(
             "[u4]16 [u4]1 [dist8]union_str_ptr [anchr]union_str_ptr {}",
-            &str_wire_format("union_string")
+            str_wire_format("union_string")
         ),
     )?;
     validate_parsing::<UnionWithNullables>(
@@ -1095,7 +1209,7 @@ fn test_nullable_parsing() -> anyhow::Result<()> {
             "{} {} {}",
             "[u4]40 [u4]0 [u4]16 [u4]2 [u8]0 [u8]0 [dist8]str_ptr ",
             "[anchr]str_ptr ",
-            &str_wire_format("holla")
+            str_wire_format("holla")
         ),
     )?;
     validate_parsing::<NullableOthers>(
@@ -1129,7 +1243,186 @@ fn test_nullable_parsing() -> anyhow::Result<()> {
             "[anchr]keys_ptr [u4]10 [u4]2 [u1]1 [u1]3 [u2]0 [u4]0 ",
             "[anchr]values_ptr [u4]10 [u4]2 [u1]2 [u1]4 [u2]0 [u4]0 ",
             "[anchr]str_ptr ",
-            &str_wire_format("hello")
+            str_wire_format("hello")
+        ),
+    )?;
+
+    Ok(())
+}
+
+#[gtest(RustTestMojomParsing, TestHandleParsing)]
+fn test_handle_parsing() -> anyhow::Result<()> {
+    // Note: [s4]-1 is 0xffffffff, the indicator for a `None` handle
+    validate_parsing_with_handles(
+        Handles { h1: dummy_handle(), h2: None, h3: dummy_handle().into(), h4: None },
+        "[u4]24 [u4]0 [u4]0 [s4]-1 [u4]1 [s4]-1",
+        2,
+    )?;
+    // Can't parse if we don't give enough handles
+    validate_parsing_failure_with_handles::<Handles>("[u4]24 [u4]0 [u4]0 [s4]-1 [u4]1 [s4]-1", 1)?;
+
+    validate_parsing_with_handles(
+        Handles {
+            h1: dummy_handle(),
+            h2: Some(dummy_handle()),
+            h3: dummy_handle().into(),
+            h4: None,
+        },
+        "[u4]24 [u4]0 [u4]0 [u4]1 [u4]2 [s4]-1",
+        3,
+    )?;
+
+    validate_parsing_with_handles(
+        Handles {
+            h1: dummy_handle(),
+            h2: None,
+            h3: dummy_handle().into(),
+            h4: Some(dummy_handle().into()),
+        },
+        "[u4]24 [u4]0 [u4]0 [s4]-1 [u4]1 [u4]2",
+        3,
+    )?;
+
+    validate_parsing_with_handles(
+        Handles {
+            h1: dummy_handle(),
+            h2: Some(dummy_handle()),
+            h3: dummy_handle().into(),
+            h4: Some(dummy_handle().into()),
+        },
+        "[u4]24 [u4]0 [u4]0 [u4]1 [u4]2 [u4]3",
+        4,
+    )?;
+
+    validate_parsing_with_handles(WithHandles::h1(None), "[u4]16 [u4]0 [s4]-1 [u4]0", 0)?;
+    validate_parsing_with_handles(
+        WithHandles::h1(Some(dummy_handle())),
+        "[u4]16 [u4]0 [u4]0 [u4]0",
+        1,
+    )?;
+    validate_parsing_with_handles(
+        WithHandles::h2(dummy_handle().into()),
+        "[u4]16 [u4]1 [u4]0 [u4]0",
+        1,
+    )?;
+    validate_parsing(WithHandles::n(42), "[u4]16 [u4]2 [u4]42 [u4]0")?;
+
+    validate_parsing_with_handles(
+        NestedHandles {
+            h1: dummy_handle(),
+            arr: vec![Some(dummy_handle()), None, Some(dummy_handle()), None],
+            h2: dummy_handle(),
+            wh: WithHandles::h2(dummy_handle().into()),
+            h3: dummy_handle(),
+        },
+        concat!(
+            "[u4]48 [u4]0 [u4]0 [u4]1 [dist8]arr_ptr ",
+            "[u4]16 [u4]1 [u4]2 [u4]0 ", // wh
+            "[u4]3 [u4]0 ",
+            "[anchr]arr_ptr [u4]24 [u4]4 [u4]4 [s4]-1 [u4]5 [s4]-1" // arr
+        ),
+        6,
+    )?;
+
+    validate_parsing_with_handles(
+        WithPendingTypes {
+            rec: PendingReceiver::new(dummy_handle().into()),
+            rem: PendingRemote::new(dummy_handle().into()),
+            rec2: PendingReceiver::new(dummy_handle().into()),
+            rem2: PendingRemote::new(dummy_handle().into()),
+        },
+        "[u4]32 [u4]0 [u4]0 [u4]1 [u4]0 [u4]2 [u4]3 [u4]0",
+        4,
+    )?;
+
+    validate_parsing_failure_with_handles::<WithPendingTypes>(
+        "[u4]32 [u4]0 [u4]0 [u4]1 [u4]0 [u4]2 [u4]3 [u4]0",
+        3,
+    )?;
+
+    // Fails because remote needs 8 bytes but we only provide 4 after the receiver
+    validate_parsing_failure_with_handles::<WithPendingTypes>("[u4]20 [u4]0 [u4]0 [u4]1", 2)?;
+
+    Ok(())
+}
+
+#[gtest(RustTestMojomParsing, TestNestedEnumParsing)]
+fn test_nested_enums() -> anyhow::Result<()> {
+    validate_parsing(
+        StructWithNestedEnum { even_or_odd: StructWithNestedEnum_Type::ODD },
+        "[u4]16 [u4]0 [u4]1 [u4]0",
+    )?;
+
+    validate_parsing(
+        StructWithNestedEnum { even_or_odd: StructWithNestedEnum_Type::EVEN },
+        "[u4]16 [u4]0 [u4]2 [u4]0",
+    )?;
+
+    validate_parsing_failure::<StructWithNestedEnum>("[u4]16 [u4]0 [u4]3 [u4]0")?;
+
+    Ok(())
+}
+
+#[gtest(RustTestMojomParsing, TestAssociatedParsing)]
+fn test_associated_parsing() -> anyhow::Result<()> {
+    let (rem_a, rec_a) = PendingAssociatedRemote::new_pair();
+    let (rem_b, rec_b) = PendingAssociatedReceiver::new_pair();
+    let (rem_c, rec_c) = PendingAssociatedRemote::new_pair();
+    let (rem_d, rec_d) = PendingAssociatedReceiver::new_pair();
+
+    let has_expected_value = |parsed: &WithPendingAssociatedTypes| {
+        parsed.rec.as_ref().unwrap().same_interface_for_testing(&rem_a)
+            && parsed.rem.as_ref().unwrap().same_interface_for_testing(&rec_b)
+            && parsed.rec2.as_ref().unwrap().same_interface_for_testing(&rem_c)
+            && parsed.rem2.as_ref().unwrap().same_interface_for_testing(&rec_d)
+    };
+
+    validate_parsing_with_associated(
+        WithPendingAssociatedTypes {
+            rec: Some(rec_a),
+            rem: Some(rem_b),
+            rec2: Some(rec_c),
+            rem2: Some(rem_d),
+        },
+        has_expected_value,
+        concat!(
+            "[u4]32 [u4]0 ",                                   // Struct header
+            "[u4]0    [u4]1 [u4]0     [u4]2     [u4]3 [u4]0 ", // Struct body
+            "[u4]24 [u4]4 [u4]1 [u4]2 [u4]3 [u4]4",            // Interface ID Array
+        ),
+    )?;
+
+    validate_parsing_with_associated(
+        WithPendingAssociatedTypes { rec: None, rem: None, rec2: None, rem2: None },
+        |parsed| {
+            parsed.rec.is_none()
+                && parsed.rem.is_none()
+                && parsed.rec2.is_none()
+                && parsed.rem2.is_none()
+        },
+        concat!(
+            "[u4]32 [u4]0 ",
+            // The second half of remote values is unspecified if they are null
+            // Our implementation writes -1 there.
+            "[s4]-1    [s4]-1 [s4]-1     [s4]-1     [s4]-1 [s4]-1 ",
+            "",
+        ),
+    )?;
+
+    let (rem_e, rec_e) = PendingAssociatedRemote::new_pair();
+    let (rem_f, rec_f) = PendingAssociatedReceiver::new_pair();
+    validate_parsing_with_associated(
+        WithPendingAssociatedTypes { rec: Some(rec_e), rem: None, rec2: None, rem2: Some(rem_f) },
+        |parsed| {
+            parsed.rec.as_ref().unwrap().same_interface_for_testing(&rem_e)
+                && parsed.rem.is_none()
+                && parsed.rec2.is_none()
+                && parsed.rem2.as_ref().unwrap().same_interface_for_testing(&rec_f)
+        },
+        concat!(
+            "[u4]32 [u4]0 ",                                      // Struct header
+            "[u4]0    [s4]-1 [s4]-1     [s4]-1     [u4]1 [u4]0 ", // Struct body
+            "[u4]16 [u4]2 [u4]1 [u4]2",                           // Interface ID Array
         ),
     )?;
 

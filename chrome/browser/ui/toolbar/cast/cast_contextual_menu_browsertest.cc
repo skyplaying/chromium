@@ -12,7 +12,7 @@
 #include "build/branding_buildflags.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/actions/chrome_action_id.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model.h"
 #include "chrome/browser/ui/views/toolbar/pinned_action_toolbar_button_menu_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -31,7 +31,7 @@ class CastContextualMenuBrowserTest : public InProcessBrowserTest {
 
   void SetUpOnMainThread() override {
     // Pin the Cast icon to the toolbar.
-    PinnedToolbarActionsModel::Get(browser()->profile())
+    PinnedToolbarActionsModel::Get(browser()->GetProfile())
         ->UpdatePinnedState(kActionRouteMedia, true);
   }
 
@@ -89,7 +89,8 @@ IN_PROC_BROWSER_TEST_F(CastContextualMenuBrowserTest,
   EXPECT_TRUE(std::ranges::contains(model_actions,
                                     kActionMediaToolbarContextReportCastIssue));
 
-  Browser* incognito_browser = CreateIncognitoBrowser(browser()->profile());
+  BrowserWindowInterface* incognito_browser =
+      CreateIncognitoBrowser(browser()->GetProfile());
 
   PinnedActionToolbarButtonMenuModel incognito_menu(incognito_browser,
                                                     kActionRouteMedia);
@@ -113,7 +114,7 @@ IN_PROC_BROWSER_TEST_F(CastContextualMenuBrowserTest, ToggleMediaRemotingItem) {
   }
   EXPECT_NE(remoting_index, -1);
 
-  PrefService* pref_service = browser()->profile()->GetPrefs();
+  PrefService* pref_service = browser()->GetProfile()->GetPrefs();
   pref_service->SetBoolean(
       media_router::prefs::kMediaRouterMediaRemotingEnabled, false);
   EXPECT_FALSE(model.IsItemCheckedAt(remoting_index));
@@ -131,7 +132,7 @@ IN_PROC_BROWSER_TEST_F(CastContextualMenuBrowserTest, ToggleMediaRemotingItem) {
 
 IN_PROC_BROWSER_TEST_F(CastContextualMenuBrowserTest,
                        PinUnpinItemRespectsPolicyPref) {
-  PinnedToolbarActionsModel::Get(browser()->profile())
+  PinnedToolbarActionsModel::Get(browser()->GetProfile())
       ->UpdatePinnedState(kActionRouteMedia, false);
   // Set cast to be pinned based on policy.
   policy::PolicyMap policy_map;

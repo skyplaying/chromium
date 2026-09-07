@@ -34,7 +34,6 @@
 namespace blink {
 
 class HTMLAreaElement;
-class HTMLMapElement;
 
 // LayoutImage is used to display any image type.
 //
@@ -70,7 +69,6 @@ class CORE_EXPORT LayoutImage : public LayoutReplaced {
     return image_resource_ ? image_resource_->CachedImage() : nullptr;
   }
 
-  HTMLMapElement* ImageMap() const;
   void AreaElementFocusChanged(HTMLAreaElement*);
 
   void SetIsGeneratedContent(bool generated = true) {
@@ -139,10 +137,11 @@ class CORE_EXPORT LayoutImage : public LayoutReplaced {
     return true;
   }
 
-  void WillBeDestroyed() override;
+  void WillBeDestroyed(const ComputedStyle*) override;
 
   void StyleDidChange(StyleDifference,
                       const ComputedStyle* old_style,
+                      const ComputedStyle& new_style,
                       const StyleChangeContext&) override;
 
   void InsertedIntoTree() override;
@@ -152,14 +151,14 @@ class CORE_EXPORT LayoutImage : public LayoutReplaced {
     return true;
   }
 
+  void PaintReplaced(const PaintInfo&,
+                     const PhysicalOffset& paint_offset) const override;
+
  private:
   bool IsImage() const override {
     NOT_DESTROYED();
     return true;
   }
-
-  void PaintReplaced(const PaintInfo&,
-                     const PhysicalOffset& paint_offset) const override;
 
   bool ForegroundIsKnownToBeOpaqueInRect(
       const PhysicalRect& local_rect,

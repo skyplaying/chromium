@@ -14,16 +14,15 @@
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/files/important_file_writer.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
-#include "base/hash/hash.h"
 #include "base/json/json_file_value_serializer.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/memory/ref_counted.h"
 #include "base/metrics/histogram.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/observer_list.h"
 #include "base/strings/string_number_conversions.h"
@@ -54,14 +53,6 @@ namespace {
 
 // Some extensions we'll tack on to copies of the Preferences files.
 const base::FilePath::CharType kBadExtension[] = FILE_PATH_LITERAL("bad");
-
-// Report a key that triggers a write into the Preferences files.
-void ReportKeyChangedToUMA(std::string_view key) {
-  // Truncate the sign bit. Even if the type is unsigned, UMA displays 32-bit
-  // negative numbers.
-  const uint32_t hash = base::PersistentHash(key) & 0x7FFFFFFF;
-  UMA_HISTOGRAM_SPARSE("Prefs.JSonStore.SetValueKey", hash);
-}
 
 bool BackupPrefsFile(const base::FilePath& path) {
   const base::FilePath bad = path.ReplaceExtension(kBadExtension);
@@ -107,21 +98,6 @@ PersistentPrefStore::PrefReadError HandleReadErrors(
   return PersistentPrefStore::PREF_READ_ERROR_NONE;
 }
 
-std::unique_ptr<JsonPrefStore::ReadResult> ReadPrefsFromDisk(
-    const base::FilePath& path) {
-  int error_code;
-  std::string error_msg;
-  auto read_result = std::make_unique<JsonPrefStore::ReadResult>();
-  JSONFileValueDeserializer deserializer(path);
-  read_result->value = deserializer.Deserialize(&error_code, &error_msg);
-  read_result->error =
-      HandleReadErrors(read_result->value.get(), path, error_code, error_msg);
-  read_result->no_dir = !base::PathExists(path.DirName());
-  read_result->num_bytes_read = deserializer.get_last_read_size();
-
-  return read_result;
-}
-
 // Returns the a histogram suffix for a few allowlisted JsonPref files.
 const char* GetHistogramSuffix(const base::FilePath& path) {
   std::string spaceless_basename;
@@ -133,6 +109,24 @@ const char* GetHistogramSuffix(const base::FilePath& path) {
       "Secure_Preferences", "Preferences", "Local_State", "AccountPreferences"};
   auto it = std::ranges::find(kAllowList, spaceless_basename);
   return it != kAllowList.end() ? *it : "";
+}
+
+std::unique_ptr<JsonPrefStore::ReadResult> ReadPrefsFromDisk(
+    const base::FilePath& path) {
+  base::ImportantFileWriter::RestoreMissingFileIfNeeded(
+      path, GetHistogramSuffix(path));
+
+  int error_code;
+  std::string error_msg;
+  auto read_result = std::make_unique<JsonPrefStore::ReadResult>();
+  JSONFileValueDeserializer deserializer(path);
+  read_result->value = deserializer.Deserialize(&error_code, &error_msg);
+  read_result->error =
+      HandleReadErrors(read_result->value.get(), path, error_code, error_msg);
+  read_result->no_dir = !base::PathExists(path.DirName());
+  read_result->num_bytes_read = deserializer.get_last_read_size();
+
+  return read_result;
 }
 
 std::optional<std::string> DoSerialize(base::ValueView value,
@@ -233,7 +227,6 @@ void JsonPrefStore::SetValue(std::string_view key,
   if (!old_value || value != *old_value) {
     prefs_.SetByDottedPath(key, std::move(value));
     ReportValueChanged(key, flags);
-    ReportKeyChangedToUMA(key);
   }
 }
 
@@ -246,7 +239,6 @@ void JsonPrefStore::SetValueSilently(std::string_view key,
   if (!old_value || value != *old_value) {
     prefs_.SetByDottedPath(key, std::move(value));
     ScheduleWrite(flags);
-    ReportKeyChangedToUMA(key);
   }
 }
 
@@ -342,8 +334,8 @@ void JsonPrefStore::ReportValueChanged(std::string_view key, uint32_t flags) {
   if (pref_filter_)
     pref_filter_->FilterUpdate(key);
 
-  for (PrefStore::Observer& observer : observers_)
-    observer.OnPrefValueChanged(key);
+  observers_.NotifyAllowReentrancy(&PrefStore::Observer::OnPrefValueChanged,
+                                   key);
 
   ScheduleWrite(flags);
 }

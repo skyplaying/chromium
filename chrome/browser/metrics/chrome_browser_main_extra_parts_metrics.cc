@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "base/allocator/partition_alloc_support.h"
+#include "base/base_switches.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/containers/fixed_flat_map.h"
@@ -49,8 +50,8 @@
 #include "chrome/browser/ui/performance_controls/performance_controls_metrics.h"
 #include "chrome/browser/web_applications/sampling_metrics_provider.h"
 #include "chrome/common/chrome_switches.h"
-#include "components/metrics/android_metrics_helper.h"
-#include "components/performance_manager/public/performance_manager.h"
+#include "components/metrics/metrics_reporting_choice_service.h"
+#include "components/metrics/metrics_service.h"
 #include "components/policy/core/common/management/management_service.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
@@ -66,19 +67,19 @@
 #include "ui/base/ui_base_switches.h"
 #include "ui/display/screen.h"
 
-#if !BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/apk_info.h"
+#include "components/metrics/android_metrics_helper.h"
+#include "components/metrics/android_unconditional_persistent_histograms_field_trial.h"
+#if defined(__arm__)
+#include <cpu-features.h>
+#endif  // defined(__arm__)
+#else
 #include "base/power_monitor/battery_state_sampler.h"
 #include "chrome/browser/metrics/first_web_contents_profiler.h"
 #include "chrome/browser/metrics/power/battery_discharge_reporter.h"
 #include "chrome/browser/metrics/power/power_metrics_reporter.h"
 #include "chrome/browser/metrics/power/process_monitor.h"
-#endif  // !BUILDFLAG(IS_ANDROID)
-
-#if BUILDFLAG(IS_ANDROID)
-#include "base/android/apk_info.h"
-#if defined(__arm__)
-#include <cpu-features.h>
-#endif
 #endif  // BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(IS_LINUX)
@@ -86,9 +87,11 @@
 #include <gnu/libc-version.h>
 #endif  // defined(__GLIBC__)
 
+#include "base/files/file_util.h"
 #include "base/linux_util.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
+#include "chrome/browser/metrics/pressure/pressure_metrics_reporter.h"
 #endif  // BUILDFLAG(IS_LINUX)
 
 #if BUILDFLAG(IS_WIN)
@@ -106,11 +109,9 @@
 #include "chrome/installer/util/taskbar_util.h"
 #endif  // BUILDFLAG(IS_WIN)
 
-#if BUILDFLAG(IS_LINUX)
-#include "chrome/browser/metrics/pressure/pressure_metrics_reporter.h"
-#endif  // BUILDFLAG(IS_LINUX)
-
 #if BUILDFLAG(IS_CHROMEOS)
+#include "base/files/file_util.h"
+#include "base/strings/string_util.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "components/user_manager/user_manager.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
@@ -161,8 +162,6 @@ void RecordMemoryMetrics() {
   scoped_refptr<ProcessMemoryMetricsEmitter> emitter(
       new ProcessMemoryMetricsEmitter);
   emitter->FetchAndEmitProcessMemoryMetrics();
-
-  performance_manager::PerformanceManager::RecordMemoryMetrics();
 
   RecordMemoryMetricsAfterDelay();
 }
@@ -379,6 +378,37 @@ void RecordMicroArchitectureStats() {
                                 base::CPU::MAX_INTEL_MICRO_ARCHITECTURE);
 #endif  // defined(ARCH_CPU_X86_FAMILY)
 }
+
+#if defined(ARCH_CPU_X86_FAMILY) && \
+    (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS))
+// Reads the microcode version from the kernel via sysfs.
+// This function returns -1 on failure.
+int GetMicrocodeVersion() {
+  constexpr base::FilePath::CharType kMicrocodeVersionPath[] =
+      FILE_PATH_LITERAL("/sys/bus/cpu/devices/cpu0/microcode/version");
+  std::string version_string;
+  if (!base::ReadFileToString(base::FilePath(kMicrocodeVersionPath),
+                              &version_string)) {
+    return -1;
+  }
+
+  base::TrimWhitespaceASCII(version_string, base::TRIM_ALL, &version_string);
+  uint32_t version = 0;
+  if (!base::HexStringToUInt(version_string, &version)) {
+    return -1;
+  }
+  return static_cast<int>(version);
+}
+// As of 2026, microcode updates are typically only implemented on x86 CPUs.
+// However, this is not guaranteed to be the case in the future, so we abstract
+// the CPU-specific details away and record the results in a CPU-agnostic
+// histogram.
+// This function is called on a background thread, with low priority to avoid
+// slowing down the startup by accessing the filesystem.
+void RecordMicrocodeVersionStats() {
+  base::UmaHistogramSparse("Platform.MicrocodeVersion", GetMicrocodeVersion());
+}
+#endif
 
 #if BUILDFLAG(IS_LINUX)
 void RecordLinuxDistroSpecific(const std::string& version_string,
@@ -787,17 +817,17 @@ void RecordAppCompatMetrics() {
 
 void RecordWin11HardwareRequirementsMetrics(
     const base::win::HardwareEvaluationResult& result) {
-  base::UmaHistogramBoolean("Windows.Win11UpgradeEligible",
+  base::UmaHistogramBoolean("Windows.Win11UpgradeEligible2",
                             result.IsEligible());
-  base::UmaHistogramBoolean("Windows.Win11HardwareRequirements.CPUCheck",
+  base::UmaHistogramBoolean("Windows.Win11HardwareRequirements2.CPUCheck",
                             result.cpu);
-  base::UmaHistogramBoolean("Windows.Win11HardwareRequirements.MemoryCheck",
+  base::UmaHistogramBoolean("Windows.Win11HardwareRequirements2.MemoryCheck",
                             result.memory);
-  base::UmaHistogramBoolean("Windows.Win11HardwareRequirements.DiskCheck",
+  base::UmaHistogramBoolean("Windows.Win11HardwareRequirements2.DiskCheck",
                             result.disk);
-  base::UmaHistogramBoolean("Windows.Win11HardwareRequirements.FirmwareCheck",
+  base::UmaHistogramBoolean("Windows.Win11HardwareRequirements2.FirmwareCheck",
                             result.firmware);
-  base::UmaHistogramBoolean("Windows.Win11HardwareRequirements.TPMCheck",
+  base::UmaHistogramBoolean("Windows.Win11HardwareRequirements2.TPMCheck",
                             result.tpm);
 }
 
@@ -903,7 +933,7 @@ void RecordStartupMetrics() {
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 
   // Record whether Chrome is the default browser or not.
-  // Disabled on Linux due to hanging browser tests, see crbug.com/1216328.
+  // Disabled on Linux due to hanging browser tests, see crbug.com/40770414.
 #if !BUILDFLAG(IS_LINUX)
   shell_integration::DefaultWebClientState default_state =
       shell_integration::GetDefaultBrowser();
@@ -1041,6 +1071,19 @@ void ChromeBrowserMainExtraPartsMetrics::PreBrowserStart() {
     ChromeMetricsServiceAccessor::RegisterSyntheticFieldTrial(trial_name,
                                                               group_name);
   }
+
+#if BUILDFLAG(IS_ANDROID)
+  std::string_view unconditional_histograms_group =
+      metrics::android_unconditional_persistent_histograms_field_trial::
+          GetSyntheticTrialGroup();
+  if (!unconditional_histograms_group.empty()) {
+    ChromeMetricsServiceAccessor::RegisterSyntheticFieldTrial(
+        metrics::android_unconditional_persistent_histograms_field_trial::
+            kTrialName,
+        unconditional_histograms_group,
+        variations::SyntheticTrialAnnotationMode::kCurrentLog);
+  }
+#endif  // BUILDFLAG(IS_ANDROID)
 }
 
 void ChromeBrowserMainExtraPartsMetrics::PostBrowserStart() {
@@ -1082,6 +1125,12 @@ void ChromeBrowserMainExtraPartsMetrics::PostBrowserStart() {
         base::Seconds(45));
   }
 #endif  // BUILDFLAG(IS_WIN)
+
+#if defined(ARCH_CPU_X86_FAMILY) && \
+    (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS))
+  base::ThreadPool::PostTask(FROM_HERE, kBestEffortTaskTraits,
+                             base::BindOnce(&RecordMicrocodeVersionStats));
+#endif
 
   auto* screen = display::Screen::Get();
   display_count_ = screen->GetNumDisplays();
@@ -1195,8 +1244,7 @@ void ChromeBrowserMainExtraPartsMetrics::HandleEnableBenchmarkingCountdown(
   // The implicit assumption here is that chrome://flags are stored in
   // flags_ui::PrefServiceFlagsStorage and the multi-value switch has format
   // enable-benchmarking@<n>.
-  std::string prefix =
-      base::StrCat({variations::switches::kEnableBenchmarking, "@"});
+  std::string prefix = base::StrCat({::switches::kEnableBenchmarking, "@"});
   auto it = std::find_if(
       flags.begin(), flags.end(),
       [&prefix](std::string flag) { return base::StartsWith(flag, prefix); });

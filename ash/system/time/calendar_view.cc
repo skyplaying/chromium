@@ -66,17 +66,13 @@
 #include "ui/views/view.h"
 #include "ui/views/view_class_properties.h"
 #include "ui/views/view_utils.h"
-
-// TODO(http://b/361693496): Remove this after the original issue fixed.
-#include "components/crash/core/common/crash_key.h"
+#include "ui/base/ui_base_features.h"
 
 namespace ash {
 
 using BoundsType = CalendarView::CalendarSlidingSurfaceBoundsType;
 
 namespace {
-
-using AnimatingCrashKey = crash_reporter::CrashKeyString<8>;
 
 // The paddings in each view.
 constexpr int kContentVerticalPadding = 20;
@@ -268,10 +264,6 @@ void StopViewLayerAnimation(views::View* view) {
   view->layer()->GetAnimator()->StopAnimating();
 }
 
-void UpdateCachedAnimatingState(AnimatingCrashKey& key, bool running) {
-  key.Set(running ? "True" : "False");
-}
-
 // The overridden `Label` view used in `CalendarView`.
 class CalendarLabel : public views::Label {
  public:
@@ -290,51 +282,43 @@ class CalendarLabel : public views::Label {
   }
 };
 
-// The month view header which contains the title of each week day.
-class MonthHeaderView : public views::View {
-  METADATA_HEADER(MonthHeaderView, views::View)
-
- public:
-  MonthHeaderView() {
-    views::TableLayout* layout =
-        SetLayoutManager(std::make_unique<views::TableLayout>());
-    calendar_utils::SetUpWeekColumns(layout);
-    layout->AddRows(1, views::TableLayout::kFixedSize);
-
-    for (const std::u16string& week_day :
-         DateHelper::GetInstance()->week_titles()) {
-      auto label =
-          views::Builder<views::Label>(
-              bubble_utils::CreateLabel(TypographyToken::kCrosButton1, week_day,
-                                        cros_tokens::kCrosSysOnSurface))
-              .Build();
-      label->SetHorizontalAlignment(gfx::HorizontalAlignment::ALIGN_CENTER);
-      label->SetBorder((views::CreateEmptyBorder(
-          features::AreAnyGlanceablesTimeManagementViewsEnabled()
-              ? kMonthHeaderBorder
-              : gfx::Insets::VH(calendar_utils::kDateVerticalPadding, 0))));
-      label->SetElideBehavior(gfx::NO_ELIDE);
-      label->SetSubpixelRenderingEnabled(false);
-
-      AddChildView(std::move(label));
-    }
-  }
-
-  MonthHeaderView(const MonthHeaderView& other) = delete;
-  MonthHeaderView& operator=(const MonthHeaderView& other) = delete;
-  ~MonthHeaderView() override = default;
-};
-
 // Resets the `view`'s opacity and position.
 void ResetLayer(views::View* view) {
   view->layer()->SetOpacity(1.0f);
   view->layer()->SetTransform(gfx::Transform());
 }
 
+}  // namespace
+
+MonthHeaderView::MonthHeaderView() {
+  views::TableLayout* layout =
+      SetLayoutManager(std::make_unique<views::TableLayout>());
+  calendar_utils::SetUpWeekColumns(layout);
+  layout->AddRows(1, views::TableLayout::kFixedSize);
+
+  for (const std::u16string& week_day :
+       DateHelper::GetInstance()->week_titles()) {
+    auto label =
+        views::Builder<views::Label>(
+            bubble_utils::CreateLabel(TypographyToken::kCrosButton1, week_day,
+                                      cros_tokens::kCrosSysOnSurface))
+            .Build();
+    label->SetHorizontalAlignment(gfx::HorizontalAlignment::ALIGN_CENTER);
+    label->SetBorder((views::CreateEmptyBorder(
+        features::AreAnyGlanceablesTimeManagementViewsEnabled()
+            ? kMonthHeaderBorder
+            : gfx::Insets::VH(calendar_utils::kDateVerticalPadding, 0))));
+    label->SetElideBehavior(gfx::NO_ELIDE);
+    label->SetSubpixelRenderingEnabled(false);
+
+    AddChildView(std::move(label));
+  }
+}
+
+MonthHeaderView::~MonthHeaderView() = default;
+
 BEGIN_METADATA(MonthHeaderView)
 END_METADATA
-
-}  // namespace
 
 // The label for each month that's within the scroll view.
 class CalendarView::MonthHeaderLabelView : public views::View {
@@ -731,7 +715,10 @@ void CalendarView::CreateCalendarTitleRow() {
           model->ShowSetTimeDialog();
         }
       }),
-      IconButton::Type::kMedium, &vector_icons::kSettingsOutlineIcon,
+      IconButton::Type::kMedium,
+      &(::features::IsRoundedIconsEnabled()
+            ? vector_icons::kSettingsIcon
+            : vector_icons::kSettingsOutlineOldIcon),
       IDS_ASH_CALENDAR_SETTINGS);
   if (!TrayPopupUtils::CanOpenWebUISettings()) {
     settings_button_->SetEnabled(false);
@@ -779,13 +766,18 @@ views::View* CalendarView::CreateButtonContainer() {
   up_button_ = button_container->AddChildView(std::make_unique<IconButton>(
       base::BindRepeating(&CalendarView::OnMonthArrowButtonActivated,
                           base::Unretained(this), /*up=*/true),
-      IconButton::Type::kMediumFloating, &vector_icons::kCaretUpIcon,
+      IconButton::Type::kMediumFloating,
+      &(::features::IsRoundedIconsEnabled() ? vector_icons::kKeyboardArrowUpIcon
+                                            : vector_icons::kCaretUpOldIcon),
       IDS_ASH_CALENDAR_UP_BUTTON_ACCESSIBLE_DESCRIPTION));
 
   down_button_ = button_container->AddChildView(std::make_unique<IconButton>(
       base::BindRepeating(&CalendarView::OnMonthArrowButtonActivated,
                           base::Unretained(this), /*up=*/false),
-      IconButton::Type::kMediumFloating, &vector_icons::kCaretDownIcon,
+      IconButton::Type::kMediumFloating,
+      &(::features::IsRoundedIconsEnabled()
+            ? vector_icons::kKeyboardArrowDownIcon
+            : vector_icons::kCaretDownOldIcon),
       IDS_ASH_CALENDAR_DOWN_BUTTON_ACCESSIBLE_DESCRIPTION));
 
   return button_container;
@@ -1659,8 +1651,6 @@ void CalendarView::ScrollOneMonthWithAnimation(bool scroll_up) {
   auto label_reporter = calendar_metrics::CreateAnimationReporter(
       current_label_, kLabelViewScrollOneMonthAnimationHistogram);
 
-  UpdateAnimationCrashKeys();
-
   // Stop animating the views that will be involved in the month scroll
   // animation. It handles the edge case that the calendar view's children get
   // recreated by the abortion callback of the existing animation interrupted by
@@ -2450,39 +2440,6 @@ void CalendarView::StopUpNextTimer() {
 
 bool CalendarView::IsUpNextViewVisible() const {
   return up_next_view_ && up_next_view_->GetVisible();
-}
-
-void CalendarView::UpdateAnimationCrashKeys() {
-  static AnimatingCrashKey event_list_close_animation_key("event_list_close");
-  UpdateCachedAnimatingState(event_list_close_animation_key,
-                             is_event_list_close_animation_running_);
-
-  static AnimatingCrashKey event_list_open_animation_key("event_list_open");
-  UpdateCachedAnimatingState(event_list_open_animation_key,
-                             is_event_list_open_animation_running_);
-
-  static AnimatingCrashKey fade_in_up_next_view_animation_key(
-      "fade_in_up_next_view");
-  UpdateCachedAnimatingState(fade_in_up_next_view_animation_key,
-                             is_fade_in_up_next_view_animation_running_);
-
-  static AnimatingCrashKey fade_out_up_next_view_animation_key(
-      "fade_out_up_next_view");
-  UpdateCachedAnimatingState(fade_out_up_next_view_animation_key,
-                             is_fade_out_up_next_view_animation_running_);
-
-  static AnimatingCrashKey header_animation_key("header");
-  UpdateCachedAnimatingState(header_animation_key,
-                             is_header_animation_running_);
-
-  static AnimatingCrashKey reset_to_today_animation_key("reset_to_today");
-  UpdateCachedAnimatingState(reset_to_today_animation_key,
-                             is_reset_to_today_animation_running_);
-
-  static AnimatingCrashKey reset_to_today_fade_in_animation_key(
-      "reset_to_today_fade_in");
-  UpdateCachedAnimatingState(reset_to_today_fade_in_animation_key,
-                             is_reset_to_today_fade_in_animation_running_);
 }
 
 BEGIN_METADATA(CalendarView)

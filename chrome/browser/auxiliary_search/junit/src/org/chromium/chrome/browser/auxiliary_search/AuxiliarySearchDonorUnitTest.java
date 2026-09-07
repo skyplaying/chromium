@@ -19,7 +19,6 @@ import static org.mockito.Mockito.when;
 import android.graphics.Bitmap;
 import android.graphics.Bitmap.Config;
 
-import androidx.annotation.NonNull;
 import androidx.appsearch.app.AppSearchSession;
 import androidx.appsearch.app.SearchResult;
 import androidx.appsearch.app.SearchResults;
@@ -43,6 +42,7 @@ import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.Callback;
 import org.chromium.base.FakeTimeTestRule;
+import org.chromium.base.ServiceLoaderUtil;
 import org.chromium.base.TimeUtils;
 import org.chromium.base.shared_preferences.SharedPreferencesManager;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -52,6 +52,7 @@ import org.chromium.chrome.browser.auxiliary_search.AuxiliarySearchGroupProto.Au
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.ui.test.util.MockitoHelper;
 import org.chromium.url.GURL;
 import org.chromium.url.JUnitTestGURLs;
 
@@ -82,7 +83,7 @@ public class AuxiliarySearchDonorUnitTest {
     public void setUp() {
         when(mHooks.isEnabled()).thenReturn(true);
         when(mHooks.isSettingDefaultEnabledByOs()).thenReturn(true);
-        AuxiliarySearchControllerFactory.getInstance().setHooksForTesting(mHooks);
+        ServiceLoaderUtil.setInstanceForTesting(AuxiliarySearchHooks.class, mHooks);
         assertTrue(AuxiliarySearchControllerFactory.getInstance().isSettingDefaultEnabledByOs());
         assertTrue(AuxiliarySearchUtils.isShareTabsWithOsEnabled());
 
@@ -440,7 +441,7 @@ public class AuxiliarySearchDonorUnitTest {
 
     @Test
     public void testOnConfigChanged() {
-        Callback<Boolean> callback = Mockito.mock(Callback.class);
+        Callback<Boolean> callback = MockitoHelper.mockCallback();
         assertTrue(mAuxiliarySearchDonor.getSharedTabsWithOsStateForTesting());
         assertTrue(AuxiliarySearchUtils.isShareTabsWithOsEnabled());
 
@@ -460,6 +461,7 @@ public class AuxiliarySearchDonorUnitTest {
         assertFalse(mAuxiliarySearchDonor.canDonate());
 
         mAuxiliarySearchDonor.setSharedTabsWithOsStateForTesting(/* sharedTabsWithOsState= */ true);
+        assertTrue(mAuxiliarySearchDonor.canDonate());
         mAuxiliarySearchDonor.onConsumerSchemaSearchedImpl(/* success= */ false);
         assertFalse(mAuxiliarySearchDonor.canDonate());
 
@@ -472,7 +474,7 @@ public class AuxiliarySearchDonorUnitTest {
         ChromeSharedPreferences.getInstance()
                 .writeBoolean(ChromePreferenceKeys.AUXILIARY_SEARCH_IS_SCHEMA_SET, true);
         AuxiliarySearchUtils.setSchemaVersion(AuxiliarySearchUtils.CURRENT_SCHEMA_VERSION);
-        Callback<Boolean> callback = Mockito.mock(Callback.class);
+        Callback<Boolean> callback = MockitoHelper.mockCallback();
         mAuxiliarySearchDonor.setPendingCallbackForTesting(callback);
 
         // Verifies that closeSession() which calls the pending callback is executed when device
@@ -575,7 +577,7 @@ public class AuxiliarySearchDonorUnitTest {
         assertTrue(mAuxiliarySearchDonor.isShareTabsWithOsEnabledKeyExist());
     }
 
-    private SearchResult createSearchResult(int applicationType, @NonNull String schemaType) {
+    private SearchResult createSearchResult(int applicationType, String schemaType) {
         GlobalSearchApplicationInfo appInfo =
                 new GlobalSearchApplicationInfo.Builder("namespace", "id", applicationType)
                         .setSchemaTypes(Arrays.asList(schemaType))

@@ -24,7 +24,7 @@ import org.chromium.chrome.browser.omnibox.UrlBarCoordinator;
 import org.chromium.chrome.browser.omnibox.status.StatusCoordinator;
 import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
 import org.chromium.chrome.browser.omnibox.suggestions.AutocompleteCoordinator;
-import org.chromium.chrome.browser.omnibox.voice.VoiceRecognitionHandler;
+import org.chromium.chrome.browser.omnibox.voice.VoiceRecognitionIntentHandler;
 import org.chromium.chrome.browser.toolbar.top.ToolbarPhone;
 import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityExtras.IntentOrigin;
 import org.chromium.chrome.browser.ui.searchactivityutils.SearchActivityExtras.SearchType;
@@ -38,7 +38,6 @@ public class SearchActivityLocationBarLayout extends LocationBarLayout {
     private boolean mPendingSearchPromoDecision;
     private boolean mPendingBeginQuery;
     private boolean mInteractionFromWidget;
-    private boolean mIsIncognito;
 
     public SearchActivityLocationBarLayout(Context context, AttributeSet attrs) {
         super(context, attrs, R.layout.location_bar);
@@ -57,7 +56,6 @@ public class SearchActivityLocationBarLayout extends LocationBarLayout {
                 statusCoordinator,
                 locationBarDataProvider,
                 windowAndroid);
-        mIsIncognito = locationBarDataProvider.isIncognitoBranded();
         mPendingSearchPromoDecision = LocaleManager.getInstance().needToCheckForSearchEnginePromo();
         mAutocompleteCoordinator.setShouldPreventOmniboxAutocomplete(mPendingSearchPromoDecision);
 
@@ -100,7 +98,7 @@ public class SearchActivityLocationBarLayout extends LocationBarLayout {
         mAutocompleteCoordinator.setShouldPreventOmniboxAutocomplete(mPendingSearchPromoDecision);
         // Do not prefetch suggestions here; instead, we're asking the server for ZPS directly.
         // Issuing multiple requests would result with only the final one being executed.
-        mAutocompleteCoordinator.onTextChanged(mUrlCoordinator.getTextWithoutAutocomplete());
+        mAutocompleteCoordinator.onInputChanged();
 
         if (mPendingBeginQuery) {
             beginQueryInternal(searchType, windowAndroid);
@@ -126,9 +124,10 @@ public class SearchActivityLocationBarLayout extends LocationBarLayout {
         if (origin == IntentOrigin.CUSTOM_TAB) {
             mUrlBar.setHint(R.string.omnibox_on_cct_empty_hint);
         } else if (origin == IntentOrigin.HUB) {
+            boolean isIncognito = mLocationBarDataProvider.isIncognitoBranded();
             @StringRes
             int hintTextRes =
-                    mIsIncognito
+                    isIncognito
                             ? R.string.hub_search_empty_hint_incognito
                             : R.string.hub_search_empty_hint;
             mUrlBar.setHint(hintTextRes);
@@ -198,14 +197,9 @@ public class SearchActivityLocationBarLayout extends LocationBarLayout {
     }
 
     @Override
-    public boolean shouldClearTextOnFocus() {
-        return false;
-    }
-
-    @Override
     public int getVoiceRecognitionSource() {
         return mInteractionFromWidget
-                ? VoiceRecognitionHandler.VoiceInteractionSource.SEARCH_WIDGET
+                ? VoiceRecognitionIntentHandler.VoiceInteractionSource.SEARCH_WIDGET
                 : super.getVoiceRecognitionSource();
     }
 

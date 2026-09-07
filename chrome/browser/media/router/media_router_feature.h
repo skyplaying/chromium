@@ -10,6 +10,7 @@
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "extensions/buildflags/buildflags.h"
+#include "media/media_buildflags.h"
 
 class PrefRegistrySimple;
 class PrefService;
@@ -43,10 +44,6 @@ BASE_DECLARE_FEATURE(kCastAllowAllIPsFeature);
 // Presentation API. If disabled, only the allowlisted sites can do so.
 BASE_DECLARE_FEATURE(kAllowAllSitesToInitiateMirroring);
 
-// If enabled, The browser allows discovery of the DIAL support cast device.
-// It sends a discovery SSDP message every 120 seconds.
-BASE_DECLARE_FEATURE(kDialMediaRouteProvider);
-
 // If enabled, the browser delays background discovery of Cast and DIAL devices
 // until explicit user interaction with the Cast feature.
 BASE_DECLARE_FEATURE(kDelayMediaSinkDiscovery);
@@ -65,6 +62,11 @@ BASE_DECLARE_FEATURE(kFallbackToAudioTabMirroring);
 // can be frequent and contain sensitive information, so disabled by default.
 BASE_DECLARE_FEATURE(kCastMessageLogging);
 
+#if BUILDFLAG(ENABLE_MEDIA_REMOTING_REDIRECTION)
+// If enabled, the redirection (MMR) Media Route Provider is registered.
+BASE_DECLARE_FEATURE(kRedirectionMediaRouteProvider);
+#endif  // BUILDFLAG(ENABLE_MEDIA_REMOTING_REDIRECTION)
+
 extern const base::FeatureParam<int> kCastMirroringPlayoutDelayMs;
 
 // Registers |kMediaRouterCastAllowAllIPs| with local state pref |registry|.
@@ -82,9 +84,9 @@ bool GetCastAllowAllIPsPref(PrefService* pref_service);
 // randomly generated string and stored in |pref_service|.
 std::string GetReceiverIdHashToken(PrefService* pref_service);
 
-// Returns true if support for DIAL devices is enabled.  Disabling DIAL support
-// also disables SSDP-based discovery for Cast devices.
-bool DialMediaRouteProviderEnabled();
+// Returns true if the redirection (MMR) Media Route Provider should be
+// initialized.
+bool RedirectionMediaRouteProviderEnabled();
 
 // Returns the optional value to use for mirroring playout delay from the
 // relevant command line flag or feature, if any are set.

@@ -33,6 +33,7 @@
 #include "third_party/blink/renderer/core/html/media/media_controls.h"
 #include "third_party/blink/renderer/modules/media_controls/elements/media_control_track_selector_list_element.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/timer.h"
 
 namespace blink {
@@ -265,8 +266,10 @@ class MODULES_EXPORT MediaControlsImpl final : public HTMLDivElement,
   void MakeTransparent();
   bool IsVisible() const;
 
-  // If the overlay play button is present then make sure it is displayed.
+  // If the overlay play/cast buttons are present then make
+  // sure they are displayed.
   void MaybeShowOverlayPlayButton();
+  void MaybeShowOverlayCastButton();
 
   void UpdatePlayState();
 
@@ -342,6 +345,11 @@ class MODULES_EXPORT MediaControlsImpl final : public HTMLDivElement,
   bool IsOnLeftSide(Event*);
   void TapTimerFired(TimerBase*);
 
+  // Hides or shows the container depending on whether the native controls
+  // or the overlay cast button need to be shown, to prevent shadow DOM paint
+  // layers from interfering with hit-test ordering.
+  void UpdateContainerDisplay();
+
   // Internal cast related methods.
   void RemotePlaybackStateChanged();
   void RefreshCastButtonVisibility();
@@ -365,7 +373,12 @@ class MODULES_EXPORT MediaControlsImpl final : public HTMLDivElement,
   void OnExitedFullscreen();
   void OnPictureInPictureChanged();
   void OnPanelKeypress();
-  void OnMediaKeyboardEvent(Event* event) { DefaultEventHandler(*event); }
+  void OnMediaKeyboardEvent(Event* event) {
+    DCHECK(!RuntimeEnabledFeatures::CleanUpActivationBehaviorEnabled());
+    DefaultEventHandler(*event);
+  }
+  void HandlePointerEventFromMediaElement(Event*);
+  void HandleKeyboardEventFromMediaElement(Event*);
   void OnWaiting();
   void OnLoadingProgress();
   void OnLoadedData();

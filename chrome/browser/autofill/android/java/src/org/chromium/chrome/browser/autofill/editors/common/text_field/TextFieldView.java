@@ -8,6 +8,7 @@ import static org.chromium.chrome.browser.autofill.editors.common.field.FieldPro
 import static org.chromium.chrome.browser.autofill.editors.common.field.FieldProperties.FOCUSED;
 import static org.chromium.chrome.browser.autofill.editors.common.field.FieldProperties.IS_REQUIRED;
 import static org.chromium.chrome.browser.autofill.editors.common.field.FieldProperties.VALUE;
+import static org.chromium.chrome.browser.autofill.editors.common.field.FieldProperties.VALUE_CHANGED_CALLBACK;
 
 import android.content.Context;
 import android.text.Editable;
@@ -24,9 +25,6 @@ import android.widget.AutoCompleteTextView;
 import android.widget.FrameLayout;
 import android.widget.TextView.OnEditorActionListener;
 
-import androidx.core.view.ViewCompat;
-import androidx.core.view.accessibility.AccessibilityNodeInfoCompat;
-
 import com.google.android.material.textfield.TextInputLayout;
 
 import org.chromium.base.ResettersForTesting;
@@ -36,6 +34,7 @@ import org.chromium.chrome.browser.autofill.R;
 import org.chromium.chrome.browser.autofill.editors.common.EditorObserverForTest;
 import org.chromium.chrome.browser.autofill.editors.common.field.EditorFieldValidator;
 import org.chromium.chrome.browser.autofill.editors.common.field.FieldView;
+import org.chromium.ui.accessibility.AccessibilityState;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.text.EmptyTextWatcher;
 
@@ -50,7 +49,7 @@ public class TextFieldView extends FrameLayout implements FieldView {
 
     private @Nullable Runnable mDoneRunnable;
 
-    @SuppressWarnings("WrongConstant") // https://crbug.com/1038784
+    @SuppressWarnings("WrongConstant") // https://crbug.com/40666488
     private final OnEditorActionListener mEditorActionListener =
             (view, actionId, event) -> {
                 if (actionId == EditorInfo.IME_ACTION_DONE && mDoneRunnable != null) {
@@ -70,12 +69,12 @@ public class TextFieldView extends FrameLayout implements FieldView {
     private final PropertyModel mEditorFieldModel;
     private final TextInputLayout mInputLayout;
     private final AutoCompleteTextView mInput;
-    private final View mIconsLayer;
     private @Nullable EditorFieldValidator mValidator;
     private @Nullable TextWatcher mTextFormatter;
     private boolean mInFocusChange;
     private boolean mInValueChange;
 
+    // <p> TODO: crbug.com/489405975 - Remove PropertyModel references.
     public TextFieldView(Context context, final PropertyModel fieldModel) {
         super(context);
         mEditorFieldModel = fieldModel;
@@ -101,43 +100,17 @@ public class TextFieldView extends FrameLayout implements FieldView {
                     return true;
                 });
 
-        mIconsLayer = findViewById(R.id.icons_layer);
-        mIconsLayer.addOnLayoutChangeListener(
-                new View.OnLayoutChangeListener() {
-                    @Override
-                    public void onLayoutChange(
-                            View v,
-                            int left,
-                            int top,
-                            int right,
-                            int bottom,
-                            int oldLeft,
-                            int oldTop,
-                            int oldRight,
-                            int oldBottom) {
-                        // Padding at the end of mInput to preserve space for mIconsLayer.
-                        mInput.setPaddingRelative(
-                                ViewCompat.getPaddingStart(mInput),
-                                mInput.getPaddingTop(),
-                                mIconsLayer.getWidth(),
-                                mInput.getPaddingBottom());
-                    }
-                });
-
         mInput.setOnFocusChangeListener(
-                new OnFocusChangeListener() {
-                    @Override
-                    public void onFocusChange(View v, boolean hasFocus) {
-                        mInFocusChange = true;
-                        mEditorFieldModel.set(FOCUSED, hasFocus);
-                        mInFocusChange = false;
+                (View _, boolean hasFocus) -> {
+                    mInFocusChange = true;
+                    mEditorFieldModel.set(FOCUSED, hasFocus);
+                    mInFocusChange = false;
 
-                        if (!hasFocus && mValidator != null) {
-                            // Validate the field when the user de-focuses it.
-                            // We do not validate the form initially when all of the fields are
-                            // empty to avoid showing error messages in all of the fields.
-                            mValidator.validate(mEditorFieldModel);
-                        }
+                    if (!hasFocus && mValidator != null) {
+                        // Validate the field when the user de-focuses it.
+                        // We do not validate the form initially when all of the fields are
+                        // empty to avoid showing error messages in all of the fields.
+                        mValidator.validate(mEditorFieldModel);
                     }
                 });
 
@@ -147,6 +120,9 @@ public class TextFieldView extends FrameLayout implements FieldView {
                     @Override
                     public void afterTextChanged(Editable s) {
                         fieldModel.set(VALUE, s.toString());
+                        if (fieldModel.get(VALUE_CHANGED_CALLBACK) != null) {
+                            fieldModel.get(VALUE_CHANGED_CALLBACK).onResult(s.toString());
+                        }
                         if (sObserverForTest != null) {
                             sObserverForTest.onEditorTextUpdate();
                         }
@@ -170,23 +146,14 @@ public class TextFieldView extends FrameLayout implements FieldView {
     public void setLabel(String label, boolean isRequired) {
         // Build up the label. Required fields are indicated by appending a '*'.
         if (isRequired) {
-            // TODO(crbug.com/417413188): Fix a bug where label is announced too many times.
-            // Build the accessibility description manually by combining "required" string with  the
-            // label, because '*' are not announced by the screen reader and it is more informative.
-            final int requiredFieldContentDescriptionId =
-                    R.string.autofill_address_edit_dialog_required_field_content_description;
-            final String labelForAccessibility =
-                    getContext().getString(requiredFieldContentDescriptionId, label);
-            mInputLayout.setTextInputAccessibilityDelegate(
-                    new TextInputLayout.AccessibilityDelegate(mInputLayout) {
-                        @Override
-                        public void onInitializeAccessibilityNodeInfo(
-                                View host, AccessibilityNodeInfoCompat info) {
-                            super.onInitializeAccessibilityNodeInfo(host, info);
-                            info.setText(labelForAccessibility);
-                        }
-                    });
-            label += FieldView.REQUIRED_FIELD_INDICATOR;
+            if (AccessibilityState.isTouchExplorationEnabled()
+                    || AccessibilityState.isPerformGesturesEnabled()) {
+                final int requiredFieldContentDescriptionId =
+                        R.string.autofill_address_edit_dialog_required_field_content_description;
+                label = getContext().getString(requiredFieldContentDescriptionId, label);
+            } else {
+                label += FieldView.REQUIRED_FIELD_INDICATOR;
+            }
         }
         mInputLayout.setHint(label);
     }
@@ -244,29 +211,6 @@ public class TextFieldView extends FrameLayout implements FieldView {
 
     public void setDoneRunnable(@Nullable Runnable doneRunnable) {
         mDoneRunnable = doneRunnable;
-    }
-
-    @Override
-    public void onLayout(boolean changed, int left, int top, int right, int bottom) {
-        super.onLayout(changed, left, top, right, bottom);
-
-        if (changed) {
-            // Align the bottom of mIconsLayer to the bottom of mInput (mIconsLayer overlaps
-            // mInput).
-            // Note one:   mIconsLayer can not be put inside mInputLayout to display on top of
-            // mInput since mInputLayout is LinearLayout in essential.
-            // Note two:   mIconsLayer and mInput can not be put in ViewGroup to display over each
-            // other inside mInputLayout since mInputLayout must contain an instance of EditText
-            // child view.
-            // Note three: mInputLayout's bottom changes when displaying error.
-            float offset =
-                    mInputLayout.getY()
-                            + mInput.getY()
-                            + (float) mInput.getHeight()
-                            - (float) mIconsLayer.getHeight()
-                            - mIconsLayer.getTop();
-            mIconsLayer.setTranslationY(offset);
-        }
     }
 
     /**

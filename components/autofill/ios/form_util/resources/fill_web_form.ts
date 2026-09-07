@@ -112,11 +112,7 @@ export function webFormElementToFormData(
   const controlElements =
       getFormControlElements(formElement) as FormControlElement[];
 
-  let iframeElements = extractChildFrames &&
-          autofillFormFeaturesApi.getFunction(
-              'isAutofillAcrossIframesEnabled')() ?
-      getIframeElements(formElement) :
-      [];
+  let iframeElements = extractChildFrames ? getIframeElements(formElement) : [];
 
   // To avoid performance bottlenecks, do not keep child frames if their
   // quantity exceeds the allowed threshold.
@@ -180,6 +176,10 @@ export function webFormControlElementToFormField(
   }
 
   field.pattern_attribute = element.getAttribute('pattern') ?? '';
+  const challenge = element.getAttribute('challenge');
+  if (challenge !== null) {
+    field.challenge = challenge;
+  }
 
   field.placeholder_attribute = element.getAttribute('placeholder') || '';
   if (field.placeholder_attribute != null &&
@@ -201,24 +201,22 @@ export function webFormControlElementToFormField(
       inferenceUtil.isTextAreaElement(element) ||
       inferenceUtil.isSelectElement(element)) {
     field.is_autofilled = (element as any).isAutofilled;
-    field.is_user_edited = fieldWasEditedByUser(element);
     field.should_autocomplete = fillUtil.shouldAutocomplete(element);
     field.is_focusable = !element.disabled && !(element as any).readOnly &&
         element.tabIndex >= 0 && fillUtil.isVisibleNode(element);
   }
 
-  if (inferenceUtil.isAutofillableInputElement(element)) {
-    if (isTextField(element)) {
-      field.max_length = (element as HTMLInputElement).maxLength;
-      if (field.max_length === -1) {
-        // Take default value as defined by W3C.
-        field.max_length = 524288;
-      }
+  if (isTextField(element) || inferenceUtil.isTextAreaElement(element)) {
+    const maxLength =
+        (element as (HTMLInputElement | HTMLTextAreaElement)).maxLength;
+    if (maxLength !== -1) {
+      field.max_length = maxLength;
     }
-    field.is_checkable = inferenceUtil.isCheckableElement(element);
-  } else if (inferenceUtil.isTextAreaElement(element)) {
-    // Nothing more to do in this case.
   } else {
+    field.max_length = 0;
+  }
+
+  if (inferenceUtil.isSelectElement(element)) {
     fillUtil.getOptionStringsFromElement(element as HTMLSelectElement, field);
   }
 
@@ -726,9 +724,7 @@ export function autofillSubmissionData(form: HTMLFormElement):
  * makes an edited field unedited.
  */
 export function fieldWasEditedByUser(element: Element) {
-  return !autofillFormFeaturesApi.getFunction(
-             'isAutofillCorrectUserEditedBitInParsedField')() ||
-      (wasEditedByUser.get(element) ?? false);
+  return (wasEditedByUser.get(element) ?? false);
 }
 
 /**

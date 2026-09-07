@@ -7,6 +7,7 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "components/permissions/android/permission_prompt/permission_prompt_android.h"
 #include "components/permissions/embedded_permission_prompt_flow_model.h"
 
@@ -36,7 +37,6 @@ class EmbeddedPermissionPromptAndroid : public PermissionPromptAndroid {
 
   // PermissionPrompt:
   PermissionPromptDisposition GetPromptDisposition() const override;
-  bool ShouldFinalizeRequestAfterDecided() const override;
   std::optional<gfx::Rect> GetViewBoundsInScreen() const override;
   bool IsAskPrompt() const override;
 
@@ -56,34 +56,23 @@ class EmbeddedPermissionPromptAndroid : public PermissionPromptAndroid {
       const override;
   PermissionRequest::AnnotatedMessageText GetAnnotatedMessageText()
       const override;
-  base::android::ScopedJavaLocalRef<jstring> GetPositiveButtonText(
-      JNIEnv* env,
-      bool is_one_time) const override;
-  base::android::ScopedJavaLocalRef<jstring> GetNegativeButtonText(
-      JNIEnv* env,
-      bool is_one_time) const override;
-  base::android::ScopedJavaLocalRef<jstring> GetPositiveEphemeralButtonText(
-      JNIEnv* env,
+  std::u16string GetPositiveButtonText(bool is_one_time) const override;
+  std::u16string GetNegativeButtonText(bool is_one_time) const override;
+  std::u16string GetPositiveEphemeralButtonText(
       bool is_one_time) const override;
 
   bool ShouldUseRequestingOriginFavicon() const override;
   std::vector<permissions::ElementAnchoredBubbleVariant> GetPromptVariants()
       const override;
-  const std::vector<base::WeakPtr<permissions::PermissionRequest>>& Requests()
-      const override;
   int GetIconId() const override;
 
  private:
-  // Decide to destroy the current dialog or update the dialog with new screen
-  // variant.
-  void MaybeUpdateDialogWithNewScreenVariant();
-
   PermissionRequest::AnnotatedMessageText
   GetDialogAnnotatedMessageTextWithOrigin(int message_id) const;
 
   std::u16string GetPermissionNameTextFragment() const;
 
-  std::unique_ptr<EmbeddedPermissionPromptFlowModel> prompt_model_;
+  raw_ptr<EmbeddedPermissionPromptFlowModel> prompt_model_;
 };
 
 }  // namespace permissions

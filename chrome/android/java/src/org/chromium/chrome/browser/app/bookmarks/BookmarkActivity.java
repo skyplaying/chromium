@@ -29,9 +29,12 @@ import org.chromium.chrome.browser.bookmarks.BookmarkOpener;
 import org.chromium.chrome.browser.bookmarks.BookmarkOpenerImpl;
 import org.chromium.chrome.browser.bookmarks.BookmarkPage;
 import org.chromium.chrome.browser.bookmarks.BookmarkUiPrefs;
+import org.chromium.chrome.browser.device_lock.DeviceLockActivityLauncherImpl;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 import org.chromium.chrome.browser.price_tracking.PriceDropNotificationManagerFactory;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.signin.SigninAndHistorySyncActivityLauncherImpl;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeControllerFactory;
 import org.chromium.chrome.browser.ui.system.StatusBarColorController;
@@ -44,8 +47,6 @@ import org.chromium.components.browser_ui.modaldialog.AppModalPresenter;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
 import org.chromium.components.browser_ui.widget.scrim.ScrimManager;
 import org.chromium.components.browser_ui.widget.scrim.ScrimManager.ScrimClient;
-import org.chromium.ui.base.ActivityWindowAndroid;
-import org.chromium.ui.base.IntentRequestTracker;
 import org.chromium.ui.edge_to_edge.EdgeToEdgeSystemBarColorHelper;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modaldialog.ModalDialogManager.ModalDialogType;
@@ -65,7 +66,8 @@ public class BookmarkActivity extends SnackbarActivity {
     private @Nullable BookmarkManagerCoordinator mBookmarkManagerCoordinator;
     private @Nullable BookmarkOpener mBookmarkOpener;
     private @Nullable OnKeyDownHandler mOnKeyDownHandler;
-    private @Nullable ActivityWindowAndroid mWindowAndroid;
+    // Nullable after activity destruction.
+    private @Nullable BookmarkUiPrefs mBookmarkUiPrefs;
 
     @Override
     protected void onProfileAvailable(Profile profile) {
@@ -79,14 +81,8 @@ public class BookmarkActivity extends SnackbarActivity {
                 new BookmarkOpenerImpl(
                         () -> BookmarkModel.getForProfile(profile),
                         /* context= */ this,
-                        /* componentName= */ parentComponent);
-        mWindowAndroid =
-                new ActivityWindowAndroid(
-                        this,
-                        /* listenToActivityState= */ true,
-                        IntentRequestTracker.createFromActivity(this),
-                        getInsetObserver(),
-                        /* trackOcclusion= */ true);
+                        /* componentName= */ parentComponent,
+                        /* multiInstanceManager= */ null);
 
         ScrimManager scrimManager =
                 new ScrimManager(this, getContentView(), ScrimClient.BOOKMARK_ACTIVITY);
@@ -98,30 +94,36 @@ public class BookmarkActivity extends SnackbarActivity {
         BottomSheetController bottomSheetController =
                 BottomSheetControllerFactory.createBottomSheetController(
                         () -> scrimManager,
-                        (sheet) -> {},
                         getWindow(),
-                        mWindowAndroid.getKeyboardDelegate(),
+                        getWindowAndroid().getKeyboardDelegate(),
                         () -> sheetContainer,
-                        () -> getEdgeToEdgeInset(),
-                        /* desktopWindowStateManager= */ null);
+                        this::getEdgeToEdgeInset,
+                        /* desktopWindowStateManager= */ null,
+                        getWindowAndroid().getInsetObserver(),
+                        /* enableLargeFormFactorUi= */ ChromeFeatureList
+                                .sBottomSheetOnDesktopWindowing
+                                .isEnabled());
 
+        mBookmarkUiPrefs = new BookmarkUiPrefs(ChromeSharedPreferences.getInstance());
         mBookmarkManagerCoordinator =
                 new BookmarkManagerCoordinator(
-                        mWindowAndroid,
+                        getWindowAndroid(),
                         this,
                         true,
                         getSnackbarManager(),
                         () -> bottomSheetController,
                         getActivityResultTracker(),
                         profile,
-                        new BookmarkUiPrefs(ChromeSharedPreferences.getInstance()),
+                        mBookmarkUiPrefs,
                         mBookmarkOpener,
                         new BookmarkManagerOpenerImpl(),
                         PriceDropNotificationManagerFactory.create(profile),
                         /* edgeToEdgePadAdjusterGenerator= */ view ->
                                 EdgeToEdgeControllerFactory.createForViewAndObserveSupplier(
                                         view, getEdgeToEdgeSupplier()),
-                        /* backPressManager= */ null);
+                        /* backPressManager= */ null,
+                        SigninAndHistorySyncActivityLauncherImpl.get(),
+                        DeviceLockActivityLauncherImpl.get());
         String url = getIntent().getDataString();
         UrlConstantResolver resolver = UrlConstantResolverFactory.getForProfile(profile);
         if (TextUtils.isEmpty(url)) url = resolver.getBookmarksPageUrl();
@@ -156,15 +158,16 @@ public class BookmarkActivity extends SnackbarActivity {
             mBookmarkOpener = null;
         }
 
-        if (mWindowAndroid != null) {
-            mWindowAndroid.destroy();
-            mWindowAndroid = null;
+        if (mBookmarkUiPrefs != null) {
+            mBookmarkUiPrefs.destroy();
+            mBookmarkUiPrefs = null;
         }
     }
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+
         if (requestCode == EDIT_BOOKMARK_REQUEST_CODE && resultCode == RESULT_OK) {
             assumeNonNull(data);
             BookmarkId bookmarkId =

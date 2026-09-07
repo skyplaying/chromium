@@ -7,9 +7,12 @@ package org.chromium.chrome.browser.ui.signin;
 import android.os.Bundle;
 
 import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.ui.signin.account_picker.AccountPickerBottomSheetStrings;
 import org.chromium.google_apis.gaia.CoreAccountId;
 import org.chromium.google_apis.gaia.GaiaId;
+
+import java.util.function.Function;
 
 /**
  * Helper to serialize/deserialize (@link FullscreenSigninAndHistorySyncConfig} and {@link
@@ -26,6 +29,9 @@ public final class SigninAndHistorySyncBundleHelper {
     private static final String SIGNIN_CONFIG_DISMISS_TEXT = "Signin.SigninConfig.DismissText";
     private static final String SIGNIN_CONFIG_LOGO_ID = "Signin.SigninConfig.LogoId";
     private static final String SIGNIN_CONFIG_DISABLE_SIGNIN = "Signin.SigninConfig.DisableSignin";
+    private static final String SIGNIN_CONFIG_SELECTED_ACCOUNT_EMAIL =
+            "Signin.SigninConfig.SelectedAccountEmail";
+    private static final String SIGNIN_CONFIG_FLOW = "Signin.SigninConfig.Flow";
 
     // Fields of {@link HistorySyncConfig}.
     private static final String HISTORY_SYNC_CONFIG_TITLE = "Signin.HistorySyncConfig.Title";
@@ -52,6 +58,7 @@ public final class SigninAndHistorySyncBundleHelper {
     private static final String BOTTOM_SHEET_SHOW_SIGNIN_SNACKBAR =
             "Signin.BottomSheetShouldShowSigninSnackbar";
     private static final String BOTTOM_SHEET_SURVEY_CONFIG = "Signin.BottomSheetSigninSurveyConfig";
+    private static final String BOTTOM_SHEET_DELEGATE_CONTEXT = "Signin.BottomSheetDelegateContext";
 
     public static Bundle getBundle(FullscreenSigninAndHistorySyncConfig config) {
         Bundle bundle = new Bundle();
@@ -63,13 +70,15 @@ public final class SigninAndHistorySyncBundleHelper {
         bundle.putString(HISTORY_SYNC_CONFIG_TITLE, config.historySyncConfig.title);
         bundle.putString(HISTORY_SYNC_CONFIG_SUBTITLE, config.historySyncConfig.subtitle);
         bundle.putInt(HISTORY_OPT_IN_MODE, config.historyOptInMode);
+        bundle.putString(
+                SIGNIN_CONFIG_SELECTED_ACCOUNT_EMAIL, config.signinConfig.selectedAccountEmail);
+        bundle.putInt(SIGNIN_CONFIG_FLOW, config.signinConfig.signinFlow);
         return bundle;
     }
 
     public static FullscreenSigninAndHistorySyncConfig getFullscreenConfig(Bundle bundle) {
-
         FullscreenSigninAndHistorySyncConfig.Builder builder =
-                new FullscreenSigninAndHistorySyncConfig.Builder(
+                FullscreenSigninAndHistorySyncConfig.builder(
                         bundle.getString(SIGNIN_CONFIG_TITLE, ""),
                         bundle.getString(SIGNIN_CONFIG_SUBTITLE, ""),
                         bundle.getString(SIGNIN_CONFIG_DISMISS_TEXT, ""),
@@ -78,10 +87,21 @@ public final class SigninAndHistorySyncBundleHelper {
         builder.signinLogoId(bundle.getInt(SIGNIN_CONFIG_LOGO_ID, 0));
         builder.shouldDisableSignin(bundle.getBoolean(SIGNIN_CONFIG_DISABLE_SIGNIN, false));
         builder.historyOptInMode(bundle.getInt(HISTORY_OPT_IN_MODE, 0));
+        builder.selectedAccountEmail(bundle.getString(SIGNIN_CONFIG_SELECTED_ACCOUNT_EMAIL));
+        builder.signinFlow(
+                bundle.getInt(
+                        SIGNIN_CONFIG_FLOW,
+                        SigninAndHistorySyncCoordinator.SigninFlow.DEFAULT_SIGNIN));
         return builder.build();
     }
 
     public static Bundle getBundle(BottomSheetSigninAndHistorySyncConfig config) {
+        return getBundle(config, /* delegateContext= */ null);
+    }
+
+    public static Bundle getBundle(
+            BottomSheetSigninAndHistorySyncConfig config,
+            @Nullable DelegateContext delegateContext) {
         Bundle bundle = new Bundle();
         bundle.putString(BOTTOM_SHEET_STRINGS_TITLE, config.bottomSheetStrings.titleString);
         bundle.putString(BOTTOM_SHEET_STRINGS_SUBTITLE, config.bottomSheetStrings.subtitleString);
@@ -102,6 +122,9 @@ public final class SigninAndHistorySyncBundleHelper {
         bundle.putBoolean(BOTTOM_SHEET_SHOW_SIGNIN_SNACKBAR, config.shouldShowSigninSnackbar);
         if (config.signinSurveyType != null) {
             bundle.putInt(BOTTOM_SHEET_SURVEY_CONFIG, config.signinSurveyType);
+        }
+        if (delegateContext != null) {
+            bundle.putBundle(BOTTOM_SHEET_DELEGATE_CONTEXT, delegateContext.toBundle());
         }
         return bundle;
     }
@@ -130,5 +153,14 @@ public final class SigninAndHistorySyncBundleHelper {
             builder.signinSurveyType(surveyType);
         }
         return builder.build();
+    }
+
+    public static @Nullable DelegateContext getDelegateContext(
+            Bundle bundle, @Nullable Function<Bundle, DelegateContext> factory) {
+        Bundle delegateBundle = bundle.getBundle(BOTTOM_SHEET_DELEGATE_CONTEXT);
+        if (delegateBundle != null && factory != null) {
+            return factory.apply(delegateBundle);
+        }
+        return null;
     }
 }

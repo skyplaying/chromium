@@ -13,7 +13,6 @@
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/ui/autofill/payments/offer_notification_bubble_controller_impl.h"
 #include "chrome/browser/ui/views/autofill/payments/offer_notification_bubble_views.h"
-#include "chrome/browser/ui/views/autofill/payments/offer_notification_icon_view.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/autofill/content/browser/content_autofill_driver.h"
 #include "components/autofill/content/browser/test_autofill_manager_injector.h"
@@ -22,12 +21,16 @@
 #include "components/autofill/core/browser/foundations/browser_autofill_manager.h"
 #include "components/autofill/core/browser/foundations/test_autofill_manager_waiter.h"
 #include "components/autofill/core/browser/payments/autofill_offer_manager.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/browser/test_utils/test_event_waiter.h"
 #include "content/public/test/content_mock_cert_verifier.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
+
+namespace page_actions {
+class PageActionViewInterface;
+}  // namespace page_actions
 
 namespace autofill {
 
@@ -98,7 +101,7 @@ class OfferNotificationBubbleViewsTestBase
 
   OfferNotificationBubbleViews* GetOfferNotificationBubbleViews();
 
-  IconLabelBubbleView* GetOfferNotificationPageActionView();
+  page_actions::PageActionViewInterface* GetOfferNotificationPageActionView();
 
   bool IsIconVisible();
 
@@ -140,7 +143,7 @@ class OfferNotificationBubbleViewsTestBase
   test::AutofillBrowserTestEnvironment autofill_test_environment_;
   TestAutofillManagerInjector<TestAutofillManager> autofill_manager_injector_;
   raw_ptr<PersonalDataManager> personal_data_ = nullptr;
-  std::unique_ptr<autofill::EventWaiter<DialogEvent>> event_waiter_;
+  std::unique_ptr<EventWaiter<DialogEvent>> event_waiter_;
   net::EmbeddedTestServer https_server_;
   content::ContentMockCertVerifier cert_verifier_;
 };

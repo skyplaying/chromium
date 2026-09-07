@@ -58,6 +58,7 @@ class FakeLaunchedVideoCaptureDevice
                                    std::move(callback));
   }
   void RequestRefreshFrame() override { device_->RequestRefreshFrame(); }
+  void InvalidateBuffers() override { device_->InvalidateBuffers(); }
   void SetDesktopCaptureWindowIdAsync(gfx::NativeViewId window_id,
                                       base::OnceClosure done_cb) override {
     // Do nothing.
@@ -77,7 +78,7 @@ namespace content {
 FakeVideoCaptureDeviceLauncher::FakeVideoCaptureDeviceLauncher(
     media::VideoCaptureSystem* system)
     : system_(system) {
-  DCHECK(system_);
+  CHECK(system_, base::NotFatalUntil::M158);
 }
 
 FakeVideoCaptureDeviceLauncher::~FakeVideoCaptureDeviceLauncher() = default;
@@ -90,7 +91,15 @@ void FakeVideoCaptureDeviceLauncher::LaunchDeviceAsync(
     base::OnceClosure connection_lost_cb,
     Callbacks* callbacks,
     base::OnceClosure done_cb) {
-  auto device = system_->CreateDevice(device_id).ReleaseDevice();
+  media::VideoCaptureErrorOrDevice device_or_error =
+      system_->CreateDevice(device_id);
+  if (!device_or_error.ok()) {
+    callbacks->OnDeviceLaunchFailed(device_or_error.error());
+    std::move(done_cb).Run();
+    return;
+  }
+  std::unique_ptr<media::VideoCaptureDevice> device =
+      device_or_error.ReleaseDevice();
 #if BUILDFLAG(IS_WIN)
   auto buffer_pool = base::MakeRefCounted<media::VideoCaptureBufferPoolImpl>(
       params.buffer_type, 10,

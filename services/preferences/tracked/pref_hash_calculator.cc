@@ -12,6 +12,7 @@
 
 #include "base/base64.h"
 #include "base/enterprise_util.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "base/notreached.h"
@@ -21,9 +22,11 @@
 #include "base/strings/string_view_util.h"
 #include "base/values.h"
 #include "build/build_config.h"
+#include "components/os_crypt/async/common/encryptor.h"
 #include "crypto/hash.h"
 #include "crypto/hmac.h"
 #include "crypto/secure_util.h"
+#include "services/preferences/tracked/features.h"
 
 namespace {
 
@@ -113,31 +116,32 @@ PrefHashCalculator::PrefHashCalculator(const std::string& seed,
 
 PrefHashCalculator::~PrefHashCalculator() {}
 
-std::string PrefHashCalculator::Calculate(const std::string& path,
-                                          const base::Value* value) const {
+std::string PrefHashCalculator::CalculateHmac(const std::string& path,
+                                              const base::Value* value) const {
   return HmacSign(path, ValueAsString(value));
 }
 
-std::string PrefHashCalculator::Calculate(const std::string& path,
-                                          const base::DictValue* dict) const {
+std::string PrefHashCalculator::CalculateHmac(
+    const std::string& path,
+    const base::DictValue* dict) const {
   return HmacSign(path, ValueAsString(dict));
 }
 
-PrefHashCalculator::ValidationResult PrefHashCalculator::Validate(
+PrefHashCalculator::ValidationResult PrefHashCalculator::ValidateHmac(
     const std::string& path,
     const base::Value* value,
     const std::string& digest_string) const {
-  return Validate(path, ValueAsString(value), digest_string);
+  return ValidateHmac(path, ValueAsString(value), digest_string);
 }
 
-PrefHashCalculator::ValidationResult PrefHashCalculator::Validate(
+PrefHashCalculator::ValidationResult PrefHashCalculator::ValidateHmac(
     const std::string& path,
     const base::DictValue* dict,
     const std::string& digest_string) const {
-  return Validate(path, ValueAsString(dict), digest_string);
+  return ValidateHmac(path, ValueAsString(dict), digest_string);
 }
 
-PrefHashCalculator::ValidationResult PrefHashCalculator::Validate(
+PrefHashCalculator::ValidationResult PrefHashCalculator::ValidateHmac(
     const std::string& path,
     const std::string& value_as_string,
     const std::string& digest_string) const {
@@ -147,10 +151,11 @@ PrefHashCalculator::ValidationResult PrefHashCalculator::Validate(
   // upon roaming. Preference integrity on these devices is maintained by the
   // encrypted hash.
   if (base::IsEnterpriseDevice()) {
-    return VALID;
+    return VALID_HMAC;
   }
 #endif
-  return HmacVerify(path, value_as_string, digest_string) ? VALID : INVALID;
+  return HmacVerify(path, value_as_string, digest_string) ? VALID_HMAC
+                                                          : INVALID_HMAC;
 }
 
 std::optional<std::string> PrefHashCalculator::CalculateEncryptedHash(
@@ -185,7 +190,7 @@ std::optional<std::string> PrefHashCalculator::CalculateEncryptedHash(
   return base::Base64Encode(*encrypted_bytes);
 }
 
-PrefHashCalculator::ValidationResult PrefHashCalculator::ValidateEncrypted(
+PrefHashCalculator::ValidationResult PrefHashCalculator::ValidateEncryptedHash(
     const std::string& path,
     const base::Value* value,
     const std::string& stored_encrypted_hash_base64,
@@ -198,12 +203,26 @@ PrefHashCalculator::ValidationResult PrefHashCalculator::ValidateEncrypted(
     return INVALID_ENCRYPTED;
   }
 
+  os_crypt_async::Encryptor::DecryptFlags flags;
   std::optional<std::string> decrypted_hash =
-      encryptor->DecryptData(*encrypted_hash);
+      encryptor->DecryptData(*encrypted_hash, &flags);
   if (!decrypted_hash) {
     return INVALID_ENCRYPTED;
   }
-
+#if BUILDFLAG(IS_WIN)
+  if (base::FeatureList::IsEnabled(tracked::kRejectWeakCiphertext) &&
+      flags.should_reencrypt) {
+    // This must be true, since if decryption succeeded the data must contain
+    // header + nonce which is at least 15 bytes.
+    CHECK_GE(encrypted_hash->size(), 2u);
+    // Check for v10 encrypted data - if encrypted with v10 but a better cipher
+    // is available, it's considered invalid. This should never happen as v20
+    // has always been available since before this encryption was added.
+    if (encrypted_hash->at(1) == '1') {
+      return WEAK_HASH_ENCRYPTED;
+    }
+  }
+#endif  // BUILDFLAG(IS_WIN)
   std::string expected_hash = Hash(path, ValueAsString(value));
   return crypto::SecureMemEqual(base::as_byte_span(*decrypted_hash),
                                 base::as_byte_span(expected_hash))

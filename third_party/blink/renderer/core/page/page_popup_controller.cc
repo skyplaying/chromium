@@ -31,6 +31,7 @@
 #include "third_party/blink/renderer/core/page/page_popup_controller.h"
 
 #include "third_party/blink/public/platform/platform.h"
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/geometry/dom_rect.h"
 #include "third_party/blink/renderer/core/page/page.h"
@@ -117,7 +118,11 @@ void PagePopupController::ClearPagePopupClient() {
 }
 
 void PagePopupController::setWindowRect(int x, int y, int width, int height) {
-  popup_.SetWindowRect(gfx::Rect(x, y, width, height));
+  if (!popup_client_) {
+    return;
+  }
+
+  popup_->SetWindowRect(gfx::Rect(x, y, width, height));
 
   popup_origin_ = gfx::Point(x, y);
   popup_client_->SetMenuListOptionsBoundsInAXTree(options_bounds_,
@@ -127,6 +132,7 @@ void PagePopupController::setWindowRect(int x, int y, int width, int height) {
 void PagePopupController::Trace(Visitor* visitor) const {
   ScriptWrappable::Trace(visitor);
   Supplement<Page>::Trace(visitor);
+  visitor->Trace(popup_client_);
 }
 
 void PagePopupController::setMenuListOptionsBoundsInAXTree(

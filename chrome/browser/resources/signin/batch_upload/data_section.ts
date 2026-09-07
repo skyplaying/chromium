@@ -212,13 +212,13 @@ export class DataSectionElement extends DataSectionElementBase {
   }
 
   // Needs to react to both property change (through a reset) and user action.
-  protected onExpandChanged_(e: CustomEvent<{value: boolean}>) {
+  protected onExpandedChanged_(e: CustomEvent<{value: boolean}>) {
     this.expanded_ = e.detail.value;
   }
 
   // Needs to react to both property change (through a reset caused from all
   // checkboxes being unselected) and user action.
-  protected onToggleChanged_(e: CustomEvent<{value: boolean}>) {
+  protected onToggleCheckedChanged_(e: CustomEvent<{value: boolean}>) {
     this.resetWithState_(/*disabled=*/ !e.detail.value);
 
     // Notify the parent with the new toggle value.
@@ -226,12 +226,9 @@ export class DataSectionElement extends DataSectionElementBase {
   }
 
   protected getToggleAriaLabel_(): string {
-    const selectedStr = this.disabled_ ? this.i18n('selectAllScreenReader') :
-                                         this.i18n('selectNoneScreenReader');
-
     return [
       this.titleWithoutCount_,
-      selectedStr,
+      this.i18n('selectAllScreenReader'),
     ].join('. ');
   }
 
@@ -239,7 +236,7 @@ export class DataSectionElement extends DataSectionElementBase {
     return this.dataSelected.has(itemId);
   }
 
-  protected onCheckedChanged_(e: CustomEvent<boolean>) {
+  protected onCheckboxChange_(e: CustomEvent<boolean>) {
     const currentTarget = e.currentTarget as HTMLElement;
     const itemId = Number(currentTarget.dataset['id']);
 
@@ -264,7 +261,7 @@ export class DataSectionElement extends DataSectionElementBase {
         'itemCountSelectedScreenReader', this.dataSelectedCount_));
   }
 
-  protected onCheckboxFocused_(e: Event) {
+  protected onCheckboxFocus_(e: Event) {
     const currentTarget = e.currentTarget as HTMLElement;
     const itemId = Number(currentTarget.dataset['id']);
 

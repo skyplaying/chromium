@@ -10,7 +10,6 @@ import androidx.annotation.VisibleForTesting;
 
 import org.chromium.base.MathUtils;
 import org.chromium.build.annotations.NullMarked;
-import org.chromium.chrome.browser.compositor.layouts.phone.stack.StackScroller;
 import org.chromium.chrome.browser.compositor.overlays.strip.reorder.TabStripDragHandler;
 import org.chromium.ui.base.LocalizationUtils;
 
@@ -199,11 +198,13 @@ public class ScrollDelegate {
             if (view.isDraggedOffStrip()) continue;
 
             if (view instanceof final StripLayoutTab tab) {
-                if (tab.isClosed()) continue;
-
                 totalViewWidth += (tab.getWidth() - tabOverlapWidth);
             } else if (view instanceof StripLayoutGroupTitle groupTitle) {
-                totalViewWidth += (groupTitle.getWidth() - groupTitleOverlapWidth);
+                float overlapWidth = groupTitleOverlapWidth;
+                if (groupTitle.isCollapsed()) {
+                    overlapWidth -= StripLayoutGroupTitle.COLLAPSED_MARGIN_ADJUSTMENT_DP;
+                }
+                totalViewWidth += (groupTitle.getWidth() - overlapWidth);
             }
         }
 

@@ -6,7 +6,6 @@
 #include "build/build_config.h"
 #include "chrome/browser/glic/test_support/glic_test_environment.h"
 #include "chrome/browser/ui/ui_features.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/web_ui_mocha_browser_test.h"
 #include "components/history_clusters/core/features.h"
@@ -33,4 +32,32 @@ IN_PROC_BROWSER_TEST_F(GlicWebUIBrowserTest, UnitTestObservable) {
 
 IN_PROC_BROWSER_TEST_F(GlicWebUIBrowserTest, UnitTestGlicApiHost) {
   RunTest("glic/unit_tests/glic_api_host_test.js", "mocha.run()");
+}
+
+IN_PROC_BROWSER_TEST_F(GlicWebUIBrowserTest, UnitTestGlicApiClient) {
+  RunTest("glic/unit_tests/glic_api_client_test.js", "mocha.run()");
+}
+
+IN_PROC_BROWSER_TEST_F(GlicWebUIBrowserTest, UnitTestMojoLogging) {
+  RunTest("glic/unit_tests/mojo_logging_test.js", "mocha.run()");
+}
+
+IN_PROC_BROWSER_TEST_F(GlicWebUIBrowserTest, UnitTestPostMessageTransport) {
+  RunTest("glic/unit_tests/post_message_transport_test.js", "mocha.run()");
+}
+
+class GlicOverlayWebUIBrowserTest : public WebUIMochaBrowserTest {
+ protected:
+  GlicOverlayWebUIBrowserTest() {
+    set_test_loader_host(std::string(chrome::kChromeUIGlicHost) + "/overlay");
+  }
+
+  void SetUp() override { WebUIMochaBrowserTest::SetUp(); }
+
+ private:
+  glic::GlicTestEnvironment glic_test_env_;
+};
+
+IN_PROC_BROWSER_TEST_F(GlicOverlayWebUIBrowserTest, UnitTestOverlay) {
+  RunTestWithoutTestLoader("glic/unit_tests/overlay_test.js", "mocha.run()");
 }

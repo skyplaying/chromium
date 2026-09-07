@@ -90,13 +90,6 @@ bool AllowLocalHistoryZeroSuggestSuggestions(AutocompleteProviderClient* client,
     return result_type != ZeroSuggestProvider::ResultType::kNone;
   }
 
-  // Don't offer suggestions if suggest is not enabled, except for the Lens
-  // searchboxes. See also: BaseSearchProvider::CanSendSuggestRequest().
-  if (!client->SearchSuggestEnabled() &&
-      !omnibox::IsLensSearchbox(input.current_page_classification())) {
-    return false;
-  }
-
   // No local history searches if we don't have a default search provider:
   // likely disabled by policy; anything we serve may be incorrect.
   if (!client->GetTemplateURLService()->GetDefaultSearchProvider()) {
@@ -104,10 +97,12 @@ bool AllowLocalHistoryZeroSuggestSuggestions(AutocompleteProviderClient* client,
   }
 
   // Allow local history query suggestions only when the omnibox is empty and is
-  // focused from the NTP.
+  // focused from the NTP or Omnibox Everywhere.
   return input.focus_type() == metrics::OmniboxFocusType::INTERACTION_FOCUS &&
          input.type() == OmniboxInputType::EMPTY &&
-         omnibox::IsNTPPage(input.current_page_classification());
+         (omnibox::IsNTPPage(input.current_page_classification()) ||
+          input.current_page_classification() ==
+              metrics::OmniboxEventProto::OMNIBOX_EVERYWHERE);
 }
 
 }  // namespace

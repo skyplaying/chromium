@@ -6,6 +6,7 @@ package org.chromium.chrome.browser.omnibox;
 
 import android.content.Context;
 import android.content.res.ColorStateList;
+import android.content.res.Resources;
 import android.graphics.drawable.Drawable;
 import android.os.Parcelable;
 import android.util.AttributeSet;
@@ -15,8 +16,11 @@ import android.view.View;
 import android.widget.ImageButton;
 
 import androidx.annotation.CallSuper;
+import androidx.annotation.ColorInt;
 import androidx.annotation.DrawableRes;
+import androidx.annotation.Px;
 import androidx.annotation.VisibleForTesting;
+import androidx.appcompat.widget.TooltipCompat;
 import androidx.constraintlayout.widget.ConstraintLayout;
 import androidx.core.widget.ImageViewCompat;
 
@@ -25,29 +29,40 @@ import org.chromium.base.MathUtils;
 import org.chromium.build.annotations.Initializer;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.lens.LensEntryPoint;
+import org.chromium.chrome.browser.omnibox.fusebox.FuseboxCoordinator.FuseboxLayoutMode;
 import org.chromium.chrome.browser.omnibox.fusebox.FuseboxCoordinator.FuseboxState;
 import org.chromium.chrome.browser.omnibox.status.StatusCoordinator;
 import org.chromium.chrome.browser.omnibox.status.StatusView;
 import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
 import org.chromium.chrome.browser.omnibox.suggestions.AutocompleteCoordinator;
-import org.chromium.chrome.browser.omnibox.voice.VoiceRecognitionHandler;
+import org.chromium.chrome.browser.omnibox.voice.VoiceRecognitionIntentHandler;
+import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
+import org.chromium.chrome.browser.util.BrowserUiUtils;
 import org.chromium.components.browser_ui.widget.CompositeTouchDelegate;
-import org.chromium.components.embedder_support.util.UrlUtilities;
+import org.chromium.components.browser_ui.widget.chips.ChipView;
 import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.base.WindowAndroid;
 
 /** This class represents the location bar where the user types in URLs and search terms. */
 @NullMarked
 public class LocationBarLayout extends ConstraintLayout {
+    private static final int[][] HOVER_STATES =
+            new int[][] {
+                new int[] {android.R.attr.state_hovered}, new int[] {} // Default, must be last
+            };
+
     protected ImageButton mDeleteButton;
     protected ImageButton mMicButton;
     protected ImageButton mLensButton;
     protected ImageButton mZoomButton;
     protected ImageButton mInstallButton;
-    protected ImageButton mComposeplateButton;
-    private final @Nullable View mNavigateButton;
+    protected final View mNavigateButton;
+    protected final ChipView mActivationChip;
     protected UrlBar mUrlBar;
+    protected final View mLocationBarStatusView;
+    protected final View mFocusThief;
 
     protected UrlBarCoordinator mUrlCoordinator;
     protected AutocompleteCoordinator mAutocompleteCoordinator;
@@ -58,16 +73,16 @@ public class LocationBarLayout extends ConstraintLayout {
 
     protected boolean mNativeInitialized;
     private final View mMarginSpacer;
+    private final int mLocationBarIconStartingPadding;
 
     protected @Nullable CompositeTouchDelegate mCompositeTouchDelegate;
-    protected @Nullable SearchEngineUtils mSearchEngineUtils;
-    private boolean mUrlBarLaidOutAtFocusedWidth;
-    private final int mStatusIconAndUrlBarOffset;
+    protected @Nullable SearchEngineService mSearchEngineService;
+    protected boolean mUrlBarLaidOutAtFocusedWidth;
+    protected boolean mIsCenteringApplied;
     private int mUrlActionContainerEndMargin;
 
     private boolean mHidingActionContainerForNarrowWindow;
     private boolean mShowUrlButtons = true;
-    private boolean mShowComposeplateButton;
     private boolean mShowInstallButton;
     private boolean mShowZoomButton;
     private boolean mShowMicButton;
@@ -91,18 +106,21 @@ public class LocationBarLayout extends ConstraintLayout {
 
         mDeleteButton = findViewById(R.id.delete_button);
         mUrlBar = findViewById(R.id.url_bar);
+        mLocationBarStatusView = findViewById(R.id.location_bar_status);
         mMicButton = findViewById(R.id.mic_button);
         mLensButton = findViewById(R.id.lens_camera_button);
         mZoomButton = findViewById(R.id.zoom_button);
         mInstallButton = findViewById(R.id.install_button);
-        mComposeplateButton = findViewById(R.id.composeplate_button);
         mNavigateButton = findViewById(R.id.navigate_button);
+        mActivationChip = findViewById(R.id.fusebox_activation_chip);
         mMarginSpacer = findViewById(R.id.margin_spacer);
-        mStatusIconAndUrlBarOffset =
-                OmniboxResourceProvider.getToolbarSidePaddingForNtp(context)
-                        - OmniboxResourceProvider.getToolbarSidePadding(context);
+        mFocusThief = findViewById(R.id.focus_thief);
+
+        Resources res = getResources();
         mUrlActionContainerEndMargin =
-                getResources().getDimensionPixelOffset(R.dimen.location_bar_url_action_offset);
+                res.getDimensionPixelOffset(R.dimen.location_bar_url_action_offset);
+        mLocationBarIconStartingPadding =
+                res.getDimensionPixelSize(R.dimen.location_bar_icon_starting_padding);
     }
 
     /** Called when activity is being destroyed. */
@@ -124,6 +142,12 @@ public class LocationBarLayout extends ConstraintLayout {
 
         StatusView statusView = findViewById(R.id.location_bar_status);
         statusView.setCompositeTouchDelegate(mCompositeTouchDelegate);
+        statusView
+                .getIsVisibleSupplier()
+                .addSyncObserverAndCallIfNonNull(
+                        (visible) -> {
+                            updateStartPadding();
+                        });
     }
 
     @Override
@@ -131,6 +155,12 @@ public class LocationBarLayout extends ConstraintLayout {
         super.onMeasure(widthMeasureSpec, heightMeasureSpec);
         checkUrlContainerWidth();
     }
+
+    /**
+     * Hook for subclasses to update the centering state of the URL and status view. Called during
+     * focus changes to ensure correct layout constraints are applied.
+     */
+    protected void updateCenteringUrlAndStatusState() {}
 
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
@@ -184,10 +214,6 @@ public class LocationBarLayout extends ConstraintLayout {
         mMicButton.setImageDrawable(drawable);
     }
 
-    /* package */ void setComposeplateButtonDrawable(Drawable drawable) {
-        mComposeplateButton.setImageDrawable(drawable);
-    }
-
     /* package */ void setMicButtonTint(ColorStateList colorStateList) {
         ImageViewCompat.setImageTintList(mMicButton, colorStateList);
     }
@@ -200,12 +226,34 @@ public class LocationBarLayout extends ConstraintLayout {
         mDeleteButton.setBackgroundResource(resourceId);
     }
 
-    /* package */ void setLensButtonTint(ColorStateList colorStateList) {
-        ImageViewCompat.setImageTintList(mLensButton, colorStateList);
+    /* package */ void updateVisualsForState(@BrandedColorScheme int brandedColorScheme) {
+        updateActivationChipVisuals(brandedColorScheme);
     }
 
-    /* package */ void setComposeplateButtonTint(ColorStateList colorStateList) {
-        ImageViewCompat.setImageTintList(mComposeplateButton, colorStateList);
+    private void updateActivationChipVisuals(@BrandedColorScheme int brandedColorScheme) {
+        Context context = getContext();
+        @ColorInt
+        int buttonColor =
+                OmniboxResourceProvider.getColorSurfaceContainerHigh(context, brandedColorScheme);
+        @ColorInt
+        int buttonColorHovered =
+                OmniboxResourceProvider.getColorSurfaceContainerHighest(
+                        context, brandedColorScheme);
+        int[] backgroundColors = new int[] {buttonColorHovered, buttonColor};
+
+        mActivationChip.setBackgroundTintList(new ColorStateList(HOVER_STATES, backgroundColors));
+
+        @ColorInt
+        int colorOnSurface = OmniboxResourceProvider.getColorOnSurface(context, brandedColorScheme);
+        mActivationChip.setIconTint(ColorStateList.valueOf(colorOnSurface));
+        @ColorInt
+        int focusRingColor = OmniboxResourceProvider.getColorPrimary(context, brandedColorScheme);
+        mActivationChip.setForegroundTintList(ColorStateList.valueOf(focusRingColor));
+        mActivationChip.setTextColor(colorOnSurface);
+    }
+
+    /* package */ void setLensButtonTint(ColorStateList colorStateList) {
+        ImageViewCompat.setImageTintList(mLensButton, colorStateList);
     }
 
     /* package */ void setInstallButtonTint(ColorStateList colorStateList) {
@@ -225,10 +273,6 @@ public class LocationBarLayout extends ConstraintLayout {
 
     protected void onNtpStartedLoading() {}
 
-    public View getSecurityIconView() {
-        return mStatusCoordinator.getSecurityIconView();
-    }
-
     /**
      * Apply the X translation to the LocationBar buttons to match the NTP fakebox -> omnibox
      * transition.
@@ -241,7 +285,6 @@ public class LocationBarLayout extends ConstraintLayout {
         mDeleteButton.setTranslationX(translationX);
         mZoomButton.setTranslationX(translationX);
         mInstallButton.setTranslationX(translationX);
-        mComposeplateButton.setTranslationX(translationX);
     }
 
     /**
@@ -269,6 +312,29 @@ public class LocationBarLayout extends ConstraintLayout {
     /* package */ void setDeleteButtonVisibility(boolean shouldShow) {
         mShowDeleteButton = shouldShow;
         setButtonVisibility(mDeleteButton, shouldShow);
+    }
+
+    /** Sets the tooltip text of the delete URL content button. */
+    /* package */ void setDeleteButtonTooltip(@Nullable String tooltipText) {
+        if (mDeleteButton == null) return;
+        TooltipCompat.setTooltipText(mDeleteButton, tooltipText);
+    }
+
+    protected boolean isBackButtonVisible() {
+        return false;
+    }
+
+    /* package */ void setBackButtonVisibility(boolean shouldShow) {}
+
+    /* package */ void setBackButtonEnabled(boolean enabled) {}
+
+    /* package */ void setBackButtonTint(ColorStateList colorStateList) {}
+
+    /* package */ void updateStartPadding() {
+        View statusView = findViewById(R.id.location_bar_status);
+        boolean statusVisible = statusView != null && statusView.getVisibility() == VISIBLE;
+        setLocationBarStartPadding(
+                (statusVisible || isBackButtonVisible()) ? 0 : mLocationBarIconStartingPadding);
     }
 
     /** Sets the visibility of the Navigate. */
@@ -301,12 +367,6 @@ public class LocationBarLayout extends ConstraintLayout {
         setButtonVisibility(mInstallButton, shouldShow);
     }
 
-    /** Sets the visibility of the composeplate button. */
-    /* package */ void setComposeplateButtonVisibility(boolean shouldShow) {
-        mShowComposeplateButton = shouldShow;
-        setButtonVisibility(mComposeplateButton, shouldShow);
-    }
-
     protected void setUnfocusedWidth(int unfocusedWidth) {
         mStatusCoordinator.setUnfocusedLocationBarWidth(unfocusedWidth);
     }
@@ -326,22 +386,12 @@ public class LocationBarLayout extends ConstraintLayout {
     /* package */ void setUrlActionContainerVisibility(boolean shouldShow) {
         mShowUrlButtons = shouldShow;
 
-        setComposeplateButtonVisibility(mShowComposeplateButton);
         setInstallButtonVisibility(mShowInstallButton);
         setZoomButtonVisibility(mShowZoomButton);
         setMicButtonVisibility(mShowMicButton);
         setLensButtonVisibility(mShowLensButton);
         setDeleteButtonVisibility(mShowDeleteButton);
         setNavigateButtonVisibility(mShowNavigateButton);
-    }
-
-    /** Returns the increase in StatusView end padding, when the Url bar is focused. */
-    public int getEndPaddingPixelSizeOnFocusDelta() {
-        return getResources()
-                .getDimensionPixelSize(
-                        mLocationBarDataProvider.isIncognitoBranded()
-                                ? R.dimen.location_bar_icon_end_padding_focused_incognito
-                                : R.dimen.location_bar_icon_end_padding_focused);
     }
 
     /**
@@ -360,49 +410,11 @@ public class LocationBarLayout extends ConstraintLayout {
             boolean isUrlFocusChangeInProgress) {
         float urlFocusPercentage = Math.max(ntpSearchBoxScrollFraction, urlFocusChangeFraction);
         mUrlBarLaidOutAtFocusedWidth = urlFocusPercentage > 0.0f || mUrlBar.hasFocus();
+        // Update centering state immediately to avoid race conditions in animations.
+        updateCenteringUrlAndStatusState();
 
-        setStatusViewLeftMarginPercent(
-                ntpSearchBoxScrollFraction, urlFocusChangeFraction, isUrlFocusChangeInProgress);
         setStatusViewRightMarginPercent(
                 ntpSearchBoxScrollFraction, urlFocusChangeFraction, isUrlFocusChangeInProgress);
-
-        int urlBarStartMargin =
-                mUrlBarLaidOutAtFocusedWidth ? getFocusedStatusViewSpacingDelta() : 0;
-        MarginLayoutParams layoutParams = (MarginLayoutParams) mUrlBar.getLayoutParams();
-        if (layoutParams.getMarginStart() != urlBarStartMargin) {
-            layoutParams.setMarginStart(urlBarStartMargin);
-            mUrlBar.setLayoutParams(layoutParams);
-        }
-    }
-
-    /**
-     * Set the "left margin width" based on current animation progress percent. This uses
-     * translation to avoid triggering a relayout.
-     *
-     * @param ntpSearchBoxScrollFraction The degree to which the omnibox has expanded to full width
-     *     in NTP due to the NTP search box is being scrolled up.
-     * @param urlFocusChangeFraction The degree to which the omnibox has expanded due to it is
-     *     getting focused.
-     * @param isUrlFocusChangeInProgress True if the url focus change is in progress.
-     */
-    protected void setStatusViewLeftMarginPercent(
-            float ntpSearchBoxScrollFraction,
-            float urlFocusChangeFraction,
-            boolean isUrlFocusChangeInProgress) {
-        float maxPercent = Math.max(ntpSearchBoxScrollFraction, urlFocusChangeFraction);
-        boolean isOnTablet = DeviceFormFactor.isNonMultiDisplayContextOnTablet(getContext());
-        float translationX;
-        if (!isOnTablet && isUrlFocusChangeInProgress && ntpSearchBoxScrollFraction == 1) {
-            translationX =
-                    OmniboxResourceProvider.getFocusedStatusViewLeftSpacing(getContext())
-                            + mStatusIconAndUrlBarOffset * (1 - urlFocusChangeFraction);
-        } else {
-            translationX =
-                    OmniboxResourceProvider.getFocusedStatusViewLeftSpacing(getContext())
-                            * maxPercent;
-        }
-        mStatusCoordinator.setTranslationX(
-                MathUtils.flipSignIf(translationX, getLayoutDirection() == LAYOUT_DIRECTION_RTL));
     }
 
     /**
@@ -419,7 +431,8 @@ public class LocationBarLayout extends ConstraintLayout {
             float ntpSearchBoxScrollFraction,
             float urlFocusChangeFraction,
             boolean isUrlFocusChangeInProgress) {
-        float translationX;
+        if (mIsCenteringApplied) return;
+        float translationX = 0;
         if (mUrlBarLaidOutAtFocusedWidth) {
             translationX =
                     getUrlBarTranslationXForFocusAndScrollAnimationOnNtp(
@@ -427,13 +440,14 @@ public class LocationBarLayout extends ConstraintLayout {
                             urlFocusChangeFraction,
                             isUrlFocusChangeInProgress,
                             DeviceFormFactor.isNonMultiDisplayContextOnTablet(getContext()));
-        } else {
-            // No compensation is needed at 0% because the margin is reset to normal.
-            translationX = 0.0f;
         }
 
-        mUrlBar.setTranslationX(
-                MathUtils.flipSignIf(translationX, getLayoutDirection() == LAYOUT_DIRECTION_RTL));
+        // TODO(crbug.com/488840224): Possibly dead code.
+        if (mUrlBar.getTranslationX() != translationX) {
+            mUrlBar.setTranslationX(
+                    MathUtils.flipSignIf(
+                            translationX, getLayoutDirection() == LAYOUT_DIRECTION_RTL));
+        }
     }
 
     /**
@@ -445,24 +459,18 @@ public class LocationBarLayout extends ConstraintLayout {
      *     getting focused.
      * @param isUrlFocusChangeInProgress True if the url focus change is in progress.
      * @param isOnTablet True if the current page is on the tablet.
+     * @return Calculated horizontal translationX offset for the URL bar.
      */
     float getUrlBarTranslationXForFocusAndScrollAnimationOnNtp(
             float ntpSearchBoxScrollFraction,
             float urlFocusChangeFraction,
             boolean isUrlFocusChangeInProgress,
             boolean isOnTablet) {
-
-        if (!isOnTablet && isUrlFocusChangeInProgress && ntpSearchBoxScrollFraction == 1) {
-            // For the focus and un-focus animation when the real search box is visible
-            // on NTP.
-            return mStatusIconAndUrlBarOffset * (1 - urlFocusChangeFraction);
-        }
-
-        float translationX = -getFocusedStatusViewSpacingDelta();
+        float translationX = 0;
 
         boolean isNtpOnPhone =
                 mStatusCoordinator.isSearchEngineStatusIconVisible()
-                        && UrlUtilities.isNtpUrl(mLocationBarDataProvider.getCurrentGurl())
+                        && OmniboxUrlUtils.isNtpUrl(mLocationBarDataProvider.getCurrentGurl())
                         && !isOnTablet;
         boolean isScrollingOnNtpOnPhone = !mUrlBar.hasFocus() && isNtpOnPhone;
 
@@ -476,11 +484,17 @@ public class LocationBarLayout extends ConstraintLayout {
 
         boolean isInSingleUrlBarMode =
                 isNtpOnPhone
-                        && mSearchEngineUtils != null
-                        && mSearchEngineUtils.doesDefaultSearchEngineHaveLogo();
+                        && mSearchEngineService != null
+                        && mSearchEngineService.doesDefaultSearchEngineHaveLogo();
         if (isInSingleUrlBarMode) {
+            int fakeSearchBoxStartPadding =
+                    getResources()
+                            .getDimensionPixelSize(
+                                    ChromeFeatureList.sNtpAurora.isEnabled()
+                                            ? R.dimen.fake_search_box_start_padding
+                                            : R.dimen.fake_search_box_start_padding_legacy);
             translationX +=
-                    (getResources().getDimensionPixelSize(R.dimen.fake_search_box_start_padding)
+                    (fakeSearchBoxStartPadding
                             - getResources()
                                     .getDimensionPixelSize(
                                             R.dimen.location_bar_status_icon_holding_space_size));
@@ -493,37 +507,19 @@ public class LocationBarLayout extends ConstraintLayout {
         return translationX * (1.0f - percent);
     }
 
-    /**
-     * The delta between the total status view spacing (left + right) when unfocused vs focused. The
-     * status view has additional spacing applied when focused to visually align it and the UrlBar
-     * with omnibox suggestions. See below diagram; the additional spacing is denoted with _
-     * Unfocused: [ (i) www.example.com] Focused: [ _(G)_ Search or type web address] [ 🔍 Foobar ↖
-     * ] [ 🔍 Barbaz ↖ ]
-     */
-    @VisibleForTesting
-    int getFocusedStatusViewSpacingDelta() {
-        return getEndPaddingPixelSizeOnFocusDelta()
-                + OmniboxResourceProvider.getFocusedStatusViewLeftSpacing(getContext());
-    }
-
-    /** Applies the new SearchEngineUtils. */
-    void setSearchEngineUtils(SearchEngineUtils searchEngineUtils) {
-        mSearchEngineUtils = searchEngineUtils;
+    /** Applies the new SearchEngineService. */
+    void setSearchEngineService(SearchEngineService searchEngineService) {
+        mSearchEngineService = searchEngineService;
     }
 
     /** Returns the source of Voice Recognition interactions. */
     public int getVoiceRecognitionSource() {
-        return VoiceRecognitionHandler.VoiceInteractionSource.OMNIBOX;
+        return VoiceRecognitionIntentHandler.VoiceInteractionSource.OMNIBOX;
     }
 
     /** Returns the entrypoint used to launch Lens. */
     public int getLensEntryPoint() {
         return LensEntryPoint.OMNIBOX;
-    }
-
-    /** Returns whether the Omnibox text should be cleared on focus. */
-    public boolean shouldClearTextOnFocus() {
-        return true;
     }
 
     /**
@@ -560,10 +556,131 @@ public class LocationBarLayout extends ConstraintLayout {
      */
     /* package */ void onFuseboxStateChanged(@FuseboxState int state) {}
 
+    /** Notify the layout that it has been reparented to a popover container. */
+    /* package */ void setReparentedToPopover(boolean isReparented) {}
+
+    /**
+     * Returns the view to which the omnibox suggestions list should be aligned to horizontally and
+     * vertically.
+     */
+    /* package */ View getAlignmentView() {
+        return this;
+    }
+
+    /**
+     * Returns the target width (in px) that the dropdown embedder should use to align the
+     * suggestions window, defaulting to the alignment view's measured width. Subclasses (such as
+     * {@link LocationBarTablet}) may override this to publish an explicit popover alignment width.
+     */
+    /* package */ int getAlignmentViewTargetWidth() {
+        return getAlignmentView().getMeasuredWidth();
+    }
+
+    /**
+     * Returns the horizontal offset to apply to the alignment view's position when positioning the
+     * suggestions dropdown window.
+     */
+    /* package */ int getAlignmentViewLeftOffset() {
+        return 0;
+    }
+
     /**
      * This should be called when the autocomplete request type for the active omnibox session
      * changes to/from specialized (e.g. aim)/conventional (e.g. plain old search). It is not
      * assumed that this will be called when the session ends.
      */
-    public void onSpecializedFuseboxModeActivatedC(boolean isSpecializedRequestType) {}
+    public void onSpecializedFuseboxModeActivated(boolean isSpecializedRequestType) {}
+
+    /**
+     * Signal that the list of suggestions shown in the associated omnibox suggestions list has
+     * changed.
+     *
+     * @param hasSuggestions Number of suggestions being presented.
+     */
+    void onSuggestionsChanged(boolean hasSuggestions) {}
+
+    private void setLocationBarStartPadding(int padding) {
+        if (!isPageInfoMovedToAppMenu()) {
+            return;
+        }
+        setPaddingRelative(padding, getPaddingTop(), getPaddingEnd(), getPaddingBottom());
+    }
+
+    private boolean isPageInfoMovedToAppMenu() {
+        return BrowserUiUtils.isPageInfoMovedToAppMenu(getContext());
+    }
+
+    /**
+     * Signal that the associated omnibox suggestions list has changed scroll offset.
+     *
+     * @param verticalScrollOffset The current vertical scroll offset.
+     */
+    void onSuggestionsListScrollOffsetChanged(int verticalScrollOffset) {}
+
+    /**
+     * Set the fusebox layout mode, which describes how the fusebox should lay itself out w.r.t. the
+     * suggestions list. See {@link FuseboxLayoutMode}.
+     */
+    void setFuseboxLayoutMode(@FuseboxLayoutMode int layoutMode) {}
+
+    /** Sets the visibility of the UrlBar and StatusView group. */
+    /* package */ void setUrlAndStatusGroupVisibility(boolean visible) {
+        int visibility = visible ? View.VISIBLE : View.INVISIBLE;
+        mUrlBar.setVisibility(visibility);
+        mLocationBarStatusView.setVisibility(visibility);
+    }
+
+    /** Informs the location bar whether the focus ring should be shown. */
+    void setShowFocusRing(boolean showFocusRing) {}
+
+    View getUrlBar() {
+        return mUrlBar;
+    }
+
+    View getMicButton() {
+        return mMicButton;
+    }
+
+    View getNavigateButton() {
+        return mNavigateButton;
+    }
+
+    /* package */ void setActivationChipVisibility(boolean shouldShow) {
+        setButtonVisibility(mActivationChip, shouldShow);
+    }
+
+    /* package */ void setActivationChipCompact(boolean isCompact) {
+        mActivationChip.setIsCompact(isCompact);
+    }
+
+    ChipView getActivationChip() {
+        return mActivationChip;
+    }
+
+    View getDeleteButton() {
+        return mDeleteButton;
+    }
+
+    View getFocusThief() {
+        return mFocusThief;
+    }
+
+    /* package */ @Px
+    int getUrlBarTextWidth() {
+        return mUrlBar.getTextWidth();
+    }
+
+    /* package */ @Px
+    int getUrlBarWidth() {
+        return mUrlBar.getWidthWithoutCompoundPadding();
+    }
+
+    /* package */ @Px
+    int getActivationChipCompactWidthDelta() {
+        return mActivationChip.getCompactWidthDelta();
+    }
+
+    /* package */ boolean isActivationChipCompact() {
+        return mActivationChip.isCompact();
+    }
 }

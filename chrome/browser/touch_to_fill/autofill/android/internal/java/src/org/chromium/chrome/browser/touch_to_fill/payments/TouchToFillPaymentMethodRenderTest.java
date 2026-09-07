@@ -8,6 +8,8 @@ import static androidx.test.espresso.Espresso.onView;
 import static androidx.test.espresso.action.ViewActions.click;
 import static androidx.test.espresso.matcher.ViewMatchers.withId;
 
+import static org.mockito.Mockito.when;
+
 import static org.chromium.base.ThreadUtils.runOnUiThreadBlocking;
 import static org.chromium.base.test.util.ApplicationTestUtils.finishActivity;
 import static org.chromium.chrome.browser.autofill.AutofillTestHelper.createCreditCard;
@@ -38,20 +40,27 @@ import org.chromium.base.test.params.ParameterizedRunner;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Feature;
+import org.chromium.base.test.util.Features.DisableFeatures;
+import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.RequiresRestart;
 import org.chromium.chrome.browser.autofill.AutofillTestHelper;
 import org.chromium.chrome.browser.autofill.AutofillUiUtils;
+import org.chromium.chrome.browser.autofill.PersonalDataManager;
 import org.chromium.chrome.browser.autofill.PersonalDataManager.CreditCard;
 import org.chromium.chrome.browser.autofill.PersonalDataManager.Iban;
+import org.chromium.chrome.browser.autofill.PersonalDataManagerFactory;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.night_mode.ChromeNightModeTestUtils;
 import org.chromium.chrome.browser.profiles.ProfileManager;
+import org.chromium.chrome.browser.touch_to_fill.R;
 import org.chromium.chrome.browser.touch_to_fill.common.BottomSheetFocusHelper;
 import org.chromium.chrome.test.ChromeJUnit4RunnerDelegate;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.chrome.test.util.ChromeRenderTestRule;
+import org.chromium.components.autofill.AutofillFeatures;
 import org.chromium.components.autofill.AutofillSuggestion;
 import org.chromium.components.autofill.LoyaltyCard;
 import org.chromium.components.autofill.SuggestionType;
@@ -101,6 +110,7 @@ public class TouchToFillPaymentMethodRenderTest {
 
     @Mock private TouchToFillPaymentMethodComponent.Delegate mDelegateMock;
     @Mock private BottomSheetFocusHelper mBottomSheetFocusHelper;
+    @Mock private PersonalDataManager mPersonalDataManager;
 
     private static final CreditCard VISA =
             createCreditCard(
@@ -460,6 +470,7 @@ public class TouchToFillPaymentMethodRenderTest {
     public void setUp() throws InterruptedException {
         mPage = mActivityTestRule.startOnBlankPage();
         mActivityTestRule.waitForActivityCompletelyLoaded();
+        PersonalDataManagerFactory.setInstanceForTesting(mPersonalDataManager);
         mBottomSheetController =
                 mActivityTestRule
                         .getActivity()
@@ -467,19 +478,21 @@ public class TouchToFillPaymentMethodRenderTest {
                         .getBottomSheetController();
         runOnUiThreadBlocking(
                 () -> {
-                    mCoordinator = new TouchToFillPaymentMethodCoordinator();
-                    mCoordinator.initialize(
-                            mActivityTestRule.getActivity(),
-                            ProfileManager.getLastUsedRegularProfile(),
-                            AutofillTestHelper.getAutofillImageFetcherForLastUsedProfile(),
-                            mBottomSheetController,
-                            mDelegateMock,
-                            mBottomSheetFocusHelper);
+                    mCoordinator =
+                            new TouchToFillPaymentMethodCoordinator(
+                                    mActivityTestRule.getActivity(),
+                                    ProfileManager.getLastUsedRegularProfile(),
+                                    AutofillTestHelper.getAutofillImageFetcherForLastUsedProfile(),
+                                    mBottomSheetController,
+                                    mDelegateMock,
+                                    mBottomSheetFocusHelper);
+                    mCoordinator.getViewForTesting().applyRtlLayoutForTesting();
                 });
     }
 
     @After
     public void tearDown() {
+        runOnUiThreadBlocking(() -> mCoordinator.hideSheet());
         setRtlForTesting(false);
         try {
             finishActivity(mActivityTestRule.getActivity());
@@ -728,6 +741,7 @@ public class TouchToFillPaymentMethodRenderTest {
     @Test
     @MediumTest
     @Feature({"RenderTest"})
+    @DisableFeatures({ChromeFeatureList.AUTOFILL_ENABLE_PAY_NOW_PAY_LATER_TABS})
     public void testShowsBnplSuggestion() throws IOException {
         runOnUiThreadBlocking(
                 () -> {
@@ -746,6 +760,7 @@ public class TouchToFillPaymentMethodRenderTest {
     @Test
     @MediumTest
     @Feature({"RenderTest"})
+    @DisableFeatures({ChromeFeatureList.AUTOFILL_ENABLE_PAY_NOW_PAY_LATER_TABS})
     public void testShowsDeactivatedBnplSuggestion() throws IOException {
         runOnUiThreadBlocking(
                 () -> {
@@ -765,6 +780,7 @@ public class TouchToFillPaymentMethodRenderTest {
     @Test
     @MediumTest
     @Feature({"RenderTest"})
+    @DisableFeatures({AutofillFeatures.AUTOFILL_ENABLE_AI_BASED_AMOUNT_EXTRACTION})
     public void testShowsBnplProgressScreen() throws IOException {
         runOnUiThreadBlocking(
                 () -> {
@@ -779,6 +795,22 @@ public class TouchToFillPaymentMethodRenderTest {
     @Test
     @MediumTest
     @Feature({"RenderTest"})
+    @EnableFeatures({AutofillFeatures.AUTOFILL_ENABLE_AI_BASED_AMOUNT_EXTRACTION})
+    public void testShowsBnplProgressScreenWithAiTerms() throws IOException {
+        runOnUiThreadBlocking(
+                () -> {
+                    mCoordinator.showProgressScreen();
+                });
+        BottomSheetTestSupport.waitForOpen(mBottomSheetController);
+
+        View bottomSheetView = mActivityTestRule.getActivity().findViewById(R.id.bottom_sheet);
+        mRenderTestRule.render(bottomSheetView, "touch_to_fill_bnpl_progress_screen_with_ai_terms");
+    }
+
+    @Test
+    @MediumTest
+    @Feature({"RenderTest"})
+    @DisableFeatures({AutofillFeatures.AUTOFILL_ENABLE_AI_BASED_AMOUNT_EXTRACTION})
     public void testShowsBnplIssuerSelectionScreenWithLinkedIssuers() throws IOException {
         runOnUiThreadBlocking(
                 () -> {
@@ -798,6 +830,7 @@ public class TouchToFillPaymentMethodRenderTest {
     @Test
     @MediumTest
     @Feature({"RenderTest"})
+    @DisableFeatures({AutofillFeatures.AUTOFILL_ENABLE_AI_BASED_AMOUNT_EXTRACTION})
     public void testShowsBnplIssuerSelectionScreenWithUnlinkedIssuers() throws IOException {
         runOnUiThreadBlocking(
                 () -> {
@@ -813,6 +846,44 @@ public class TouchToFillPaymentMethodRenderTest {
         mRenderTestRule.render(
                 bottomSheetView,
                 "touch_to_fill_bnpl_issuer_selection_screen_with_unlinked_issuers");
+    }
+
+    @Test
+    @MediumTest
+    @Feature({"RenderTest"})
+    @EnableFeatures({AutofillFeatures.AUTOFILL_ENABLE_AI_BASED_AMOUNT_EXTRACTION})
+    public void testShowsBnplIssuerSelectionScreenWithAiTerms() throws IOException {
+        when(mPersonalDataManager.isAutofillAmountExtractionAiTermsSeenPrefEnabled())
+                .thenReturn(true);
+
+        runOnUiThreadBlocking(
+                () -> {
+                    mCoordinator.showBnplIssuers(List.of(BNPL_ISSUER_CONTEXT_AFFIRM_UNLINKED));
+                });
+        BottomSheetTestSupport.waitForOpen(mBottomSheetController);
+
+        View bottomSheetView = mActivityTestRule.getActivity().findViewById(R.id.bottom_sheet);
+        mRenderTestRule.render(
+                bottomSheetView, "touch_to_fill_bnpl_issuer_selection_screen_with_ai_terms");
+    }
+
+    @Test
+    @MediumTest
+    @Feature({"RenderTest"})
+    @EnableFeatures({AutofillFeatures.AUTOFILL_ENABLE_AI_BASED_AMOUNT_EXTRACTION})
+    public void testShowsBnplIssuerSelectionScreenWithBoldedAiTerms() throws IOException {
+        when(mPersonalDataManager.isAutofillAmountExtractionAiTermsSeenPrefEnabled())
+                .thenReturn(false);
+
+        runOnUiThreadBlocking(
+                () -> {
+                    mCoordinator.showBnplIssuers(List.of(BNPL_ISSUER_CONTEXT_AFFIRM_UNLINKED));
+                });
+        BottomSheetTestSupport.waitForOpen(mBottomSheetController);
+
+        View bottomSheetView = mActivityTestRule.getActivity().findViewById(R.id.bottom_sheet);
+        mRenderTestRule.render(
+                bottomSheetView, "touch_to_fill_bnpl_issuer_selection_screen_with_bolded_ai_terms");
     }
 
     @Test
@@ -861,6 +932,23 @@ public class TouchToFillPaymentMethodRenderTest {
         View bottomSheetView = mActivityTestRule.getActivity().findViewById(R.id.bottom_sheet);
         mRenderTestRule.render(
                 bottomSheetView, "touch_to_fill_credit_card_sheet_scan_credit_card_hidden");
+    }
+
+    @Test
+    @MediumTest
+    @Feature({"RenderTest"})
+    @EnableFeatures({ChromeFeatureList.AUTOFILL_ENABLE_PAY_NOW_PAY_LATER_TABS})
+    public void testRenderTabbedHomeScreen() throws IOException {
+        runOnUiThreadBlocking(
+                () -> {
+                    mCoordinator.showPaymentMethods(
+                            List.of(VISA_SUGGESTION, BNPL_SUGGESTION),
+                            new TouchToFillDisplayOptions());
+                });
+        BottomSheetTestSupport.waitForOpen(mBottomSheetController);
+
+        View bottomSheetView = mActivityTestRule.getActivity().findViewById(R.id.bottom_sheet);
+        mRenderTestRule.render(bottomSheetView, "touch_to_fill_payment_method_tabbed_home_screen");
     }
 
     @Test
@@ -943,6 +1031,27 @@ public class TouchToFillPaymentMethodRenderTest {
                         mActivityTestRule.getActivity().findViewById(R.id.bottom_sheet).getParent();
         mRenderTestRule.render(
                 bottomSheetParentView, "touch_to_fill_loyalty_card_sheet_one_loyalty_card");
+    }
+
+    @Test
+    @MediumTest
+    @Feature({"RenderTest"})
+    public void testShowsOneLoyaltyCardWithFirstTimeUse() throws IOException {
+        runOnUiThreadBlocking(
+                () -> {
+                    mCoordinator.showAffiliatedLoyaltyCards(
+                            List.of(CVS_LOYALTY_CARD),
+                            List.of(CVS_LOYALTY_CARD, DB_LOYALTY_CARD),
+                            /* firstTimeUsage= */ true);
+                });
+        BottomSheetTestSupport.waitForOpen(mBottomSheetController);
+
+        ViewGroup bottomSheetParentView =
+                (ViewGroup)
+                        mActivityTestRule.getActivity().findViewById(R.id.bottom_sheet).getParent();
+        mRenderTestRule.render(
+                bottomSheetParentView,
+                "touch_to_fill_loyalty_card_sheet_one_loyalty_card_first_time_use");
     }
 
     @Test

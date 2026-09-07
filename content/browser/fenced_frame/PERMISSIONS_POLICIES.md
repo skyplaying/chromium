@@ -40,9 +40,9 @@ Please feel free to reach out to
 `third_party/blink/renderer/core/html/fenced_frame/OWNERS` with any questions
 you have.
 
-## Permissions for fenced frames created with Protected Audience
+## Permissions for fenced frames
 
-Protected Audience-created fenced frames have the privacy
+Fenced frames have the privacy
 guarantee that no information can flow from the embedder into the fenced frame.
 Permissions-backed features pose a risk for 2 reasons:
 
@@ -54,51 +54,19 @@ Permissions-backed features pose a risk for 2 reasons:
    fingerprinting vectors, circumventing existing protections we have in place
    for fenced frames.
 
-To mitigate these risks, we only allow Protected Audience fenced frames to load
-with specific features enabled. These features ***must*** be enabled for the
-fenced frame's origin. If any of the required features are disabled, the fenced
-frame will not load.
-
-See: `network::kFencedFrameFledgeDefaultRequiredFeatures` in
-`services/network/public/cpp/permissions_policy/fenced_frame_permissions_policies.h`.
-
-## Permissions for Fenced frames created with selectURL()
-
-selectURL-created fenced frames can contain information from the embedder by
-having the embedder add arbitrary data to the URLs that the frame is navigated
-to. Because of this, it is acceptable to have information flow in from the
-embedder to the fenced frame via permission backed features.
-
-However, stopping data outflow from the fenced frame to the embedder is still
-part of the privacy story. Many permissions-backed APIs can be used to
-exfiltrate data out of a fenced frame, so they cannot be enabled. To be safe, we
-are currently only allowing a few permissions-backed features to be enabled that
-are required for functionality purposes.
-
-See: `network::kFencedFrameSharedStorageDefaultRequiredFeatures` in
-`services/network/public/cpp/permissions_policy/fenced_frame_permissions_policies.h`.
-
-## Permissions for fenced frames with unpartitioned data access
-
-Third-party cookie deprecation breaks useful website features like personalized
-payment buttons. Fenced frames offer a potential solution by allowing controlled
-access to cross-site user data stored in Shared Storage. To protect privacy,
-fenced frames must disable external communications (specifically, anything that
-can send data out of a fenced frame) before accessing this sensitive data.
-Otherwise, the sensitive information can be exfiltrated, creating a data leak.
-
-When these fenced frames are constructed using a URL provided by the embedder
-and can contain information from the embedder in the URL, it is acceptable to
-have information flow in from the embedder to the fenced frame via permission
-backed features. However, Permissions-backed APIs pose the challenge of data
-outflow, since many of them can allow for the exact kind of data exfiltration
-that must be prevented to keep the unpartitioned data safe. To mitigate that
-risk, we are currently allowing a small subset of permissions-backed features to
-be enabled. This can be expanded in the future if more use cases are found that
-require other features.
+To mitigate these risks, only a limited set of permissions policies are allowed to
+be enabled or inherited in fenced frames. All other permissions policies will be
+turned off.
 
 See: `network::kFencedFrameAllowedFeatures` in
 `services/network/public/cpp/permissions_policy/fenced_frame_permissions_policies.h`.
+
+## Permissions for Fenced frames created with selectURL() (Deprecated)
+
+selectURL-created fenced frames could contain information from the embedder by
+having the embedder add arbitrary data to the URLs that the frame is navigated
+to. Because of this, it was acceptable to have information flow in from the
+embedder to the fenced frame via permission backed features.
 
 ## Permissions policy-based features audit
 
@@ -216,8 +184,7 @@ vector](https://github.com/WICG/web-smart-card/blob/main/README.md#fingerprintin
 While arbitrary data can be put into the [details parameter of a
 PaymentRequest()
 constructor](https://developer.mozilla.org/en-US/docs/Web/API/PaymentRequest/PaymentRequest),
-the payment request won’t be allowed once
-`window.fence.disableUntrustedNetwork()` is resolved. However, the main use case
+the payment request won’t be allowed. However, the main use case
 for this API in a subframe requires direct communication between the embedder
 and the subframe. Because fenced frames explicitly disallow this kind of
 communication, the Payment Request API will be broken inside of fenced frames if
@@ -228,8 +195,7 @@ we enable them. Therefore, it should not be allowed.
 
 This feature determines if a synchronous XML request can be made. Without
 network cutoff, this allows information to freely flow between the fenced frame
-and arbitrary servers. Once `window.fence.disableUntrustedNetwork()` is
-resolved, these requests should not succeed.
+and arbitrary servers.
 
 There are no API methods that can be used for fingerprinting.
 
@@ -374,22 +340,6 @@ this also lets the fenced frame learn about its embedder by trying
 `document.hasPrivateToken()` on known issuers and seeing which ones work and
 which ones error out, creating a fingerprint of its context.
 
-### 🔺✅ Attribution Reporting: partial exfiltration risk
-*Feature: kAttributionReporting*
-
-While data can be exfiltrated through reporting, as long as the reporting is
-aggregate-level and not per-event, the report cannot be used to accurately
-exfiltrate information or be traced back to any one frame. This API can both
-send data in aggregate as well as per-event. The aggregate data is safe to send,
-but the per-event data must be blocked after network revocation. The API cannot
-be used to infiltrate data into the fenced frame, and no fingerprinting
-identifiers are revealed by enabling this API.
-
-Registering sources and triggers requires network connectivity. After network
-revocation, the requests to the servers that establishes the sources/triggers
-will not go through, so no new reports can be registered, and no sensitive
-information guarded by network revocation can be added to reports.
-
 ### ✅ Cross-origin Isolated: no risk
 *Feature: kCrossOriginIsolated*
 
@@ -465,10 +415,10 @@ submitted across fenced frame boundaries that include matching autofill data.
 *Feature: kDirectSockets*
 
 This directly involves sending TCP/UDP data into and out of a fenced frame, This
-is fine before network cutoff, but shouldn’t be allowed once
-`window.fence.disableUntrustedNetwork()` is resolved. However, there are a few
-factors at play that make disabling network for direct sockets more complicated
-than other types of network access:
+is fine when fenced frames have network. Historically this was disabled for fenced
+frames due to the following considerations around network revocation (obsoleted).
+There are a few factors at play that make disabling network for direct sockets more
+complicated than other types of network access:
 
 * It looks like direct sockets are only intended to be enabled in Isolated Web
   Apps, although other user agents could break this if they wanted to (see intro
@@ -512,22 +462,6 @@ Its
 [`layoutchange`](https://github.com/WICG/keyboard-map/blob/main/explainer.md#layoutchange-event)
 event originates from if the system changes its keyboard layout.
 
-### 🔻🔺🖐️ Ad Auctions: infiltration/exfiltration/fingerprinting risk
-*Feature: kJoinAdInterestGroup, kRunAdAuction*
-
-Arbitrary data can be exfiltrated from a fenced frame via
-`joinAdInterestGroup()` to a group-by-origin interest group. This information
-can then be used in other ad auctions.
-
-If information is leaked from elsewhere to a group-by-origin interest group
-(using the above method), a fenced frame can gain access to that information by
-running multiple ad auctions that are influenced by that interest group. For
-each auction, the worklet will either have an auction winner or not have an
-auction winner based on one of the bits stored in the interest group. Because
-the fenced frame is made aware of the result of the ad auction, it can simply
-store each success or failure as a bit, building up *n* bits of information by
-running *n* ad auctions.
-
 ### ✅ Browsing Topics: no risk
 *Feature: kBrowsingTopics, kBrowsingTopicsBackwardCompatible*
 
@@ -565,14 +499,15 @@ resulting frame and the URL that was picked can be leaked via network requests
 from the result rendering fenced frame. This is an ongoing privacy consideration
 for fenced frames.
 
-### ✅ Shared Storage get(): no risk
-*Feature: TBD unpartitioned access feature*
+### 🔺🖐️ Shared Storage get(): no risk
+*Feature: Deprecated unpartitioned access feature*
 
-This must be allowed in fenced frames. This is the way that unpartitioned data
-will be read by a fenced frame after network revocation. There is an [output
+This was earlier allowed in fenced frames as this was the way that unpartitioned data
+was read by a fenced frame after revoking network. There was an [output
 gate](https://github.com/WICG/shared-storage/blob/main/README.md#output-gates-and-privacy)
 specifically for access from within a fenced frame, so this data will not be
 able to be exfiltrated to first-party contexts outside of the fenced frame.
+It is no longer allowed as that feature is now removed.
 
 ### 🔻🖐️❌ Unload: infiltration/fingerprinting risk, usability issues
 *Feature: kUnload*
@@ -617,3 +552,19 @@ server.
 A site can make arbitrary local network requests, scanning for HTTP hosts and
 building a fingerprint of how the network (or device if checking for localhost
 connections) is set up.
+
+### 🔺 Web Haptics: theoretical exfiltration risk only, no infiltration/fingerprinting risk
+*Feature: kHaptics*
+
+[`navigator.playHaptics()`](https://github.com/WICG/web-haptics/blob/main/readme.md)
+is a write-only API with a fixed effect vocabulary and no return value. It
+exposes no device capabilities or device enumeration to the renderer, so it
+provides no fingerprinting surface, and there is no observable state an embedder
+could modify to pass information into a fenced frame (no infiltration risk).
+
+The only theoretical concern is exfiltration: a fenced frame could drive the
+actuator in a pattern that some other context observes through a physical sensor
+(e.g. a microphone picking up the vibration). As with Gamepad
+[`pulse()`](https://developer.mozilla.org/en-US/docs/Web/API/GamepadHapticActuator/pulse),
+the resulting signal is far too noisy to be a practical channel. The
+feature is disabled in fenced frames.

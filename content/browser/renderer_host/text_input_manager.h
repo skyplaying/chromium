@@ -276,6 +276,11 @@ class CONTENT_EXPORT TextInputManager {
   // should be reset to none.
   void Unregister(RenderWidgetHostViewBase* view);
 
+  // Called when |view|'s document enters the back-forward cache. If |view| is
+  // the currently active view, the active view is cleared while the view
+  // remains registered, so its cached state can be reused on restore.
+  void DidEnterBackForwardCache(RenderWidgetHostViewBase* view);
+
   // Returns true if |view| is already registered.
   bool IsRegistered(RenderWidgetHostViewBase* view) const;
 
@@ -324,10 +329,7 @@ class CONTENT_EXPORT TextInputManager {
 
   // TextInputManager::Observer reentrantly issues further notifications upon
   // `OnUpdateTextInputStateCalled()` (e.g. `SelectionBoundsChange()`).
-  base::ObserverList<Observer,
-                     /*allow_empty=*/false,
-                     base::ObserverListReentrancyPolicy::kAllowReentrancy>::
-      Unchecked observer_list_;
+  base::ReentrantObserverList<Observer>::Unchecked observer_list_;
 };
 }
 

@@ -30,6 +30,18 @@ namespace web_app {
 
 namespace {
 
+constexpr size_t kMaxDisplayNameLength = 256;
+
+bool IsValidDisplayName(std::string_view display_name) {
+  if (display_name.empty() || !base::IsStringUTF8(display_name)) {
+    return false;
+  }
+  if (display_name.length() > kMaxDisplayNameLength) {
+    return false;
+  }
+  return true;
+}
+
 base::expected<std::vector<UpdateManifest::VersionEntry>,
                UpdateManifest::JsonFormatError>
 ParseVersions(const base::ListValue& version_entries_value,
@@ -81,8 +93,18 @@ ParseChannels(const base::DictValue& channels) {
     if (!channel.has_value()) {
       continue;
     }
-    std::optional<std::string> display_name = base::OptionalFromPtr(
-        channel_dict->FindString(kUpdateManifestChannelNameKey));
+    std::optional<std::string> display_name;
+    if (const base::Value* display_name_value =
+            channel_dict->Find(kUpdateManifestChannelNameKey)) {
+      if (!display_name_value->is_string()) {
+        continue;
+      }
+      std::string display_name_str = display_name_value->GetString();
+      if (!IsValidDisplayName(display_name_str)) {
+        continue;
+      }
+      display_name = std::move(display_name_str);
+    }
     channels_metadata.emplace(
         *channel, UpdateManifest::ChannelMetadata(*channel, display_name));
   }
@@ -160,6 +182,22 @@ ParseAndValidateChannels(base::optional_ref<const base::Value> channels_value) {
 }
 
 }  // namespace
+
+// static
+std::string_view UpdateManifest::ErrorToString(JsonFormatError error) {
+  switch (error) {
+    case JsonFormatError::kRootNotADictionary:
+      return "Root is not a dictionary";
+    case JsonFormatError::kChannelsNotADictionary:
+      return "'channels' field is not a dictionary";
+    case JsonFormatError::kChannelNotADictionary:
+      return "Channel entry is not a dictionary";
+    case JsonFormatError::kVersionsNotAnArray:
+      return "'versions' field is not an array";
+    case JsonFormatError::kVersionEntryNotADictionary:
+      return "Version entry is not a dictionary";
+  }
+}
 
 // static
 base::expected<UpdateManifest, UpdateManifest::JsonFormatError>

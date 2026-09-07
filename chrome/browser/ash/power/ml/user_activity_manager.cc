@@ -17,11 +17,11 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/trace_event/trace_event.h"
-#include "chrome/browser/ash/browser_delegate/browser_controller.h"
-#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/tab_contents/form_interaction_tab_helper.h"
+#include "chromeos/ash/components/browser_delegate/browser_controller.h"
+#include "chromeos/ash/components/browser_delegate/browser_delegate.h"
 #include "chromeos/ash/components/dbus/dbus_thread_manager.h"
 #include "chromeos/ash/components/install_attributes/install_attributes.h"
 #include "chromeos/constants/devicetype.h"
@@ -30,6 +30,7 @@
 #include "chromeos/ui/base/window_properties.h"
 #include "components/prefs/pref_service.h"
 #include "components/site_engagement/content/site_engagement_service.h"
+#include "components/tabs/public/tab_interface.h"
 #include "ui/aura/client/aura_constants.h"
 
 namespace ash {
@@ -500,8 +501,10 @@ TabProperty UserActivityManager::UpdateOpenTabURL() {
   property.domain = contents->GetLastCommittedURL().GetHost();
   // Engagement score could be -1 if engagement service is disabled.
   property.engagement_score = GetRoundedOrInvalidEngagementScore(contents);
-  property.has_form_entry = FormInteractionTabHelper::FromWebContents(contents)
-                                ->had_form_interaction();
+  tabs::TabInterface* tab = tabs::TabInterface::MaybeGetFromContents(contents);
+  FormInteractionTabHelper* helper =
+      tab ? FormInteractionTabHelper::From(tab) : nullptr;
+  property.has_form_entry = helper && helper->had_form_interaction();
   return property;
 }
 
@@ -509,8 +512,9 @@ void UserActivityManager::MaybeLogEvent(
     UserActivityEvent::Event::Type type,
     UserActivityEvent::Event::Reason reason) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!waiting_for_final_action_)
+  if (!waiting_for_final_action_) {
     return;
+  }
 
   if (waiting_for_model_decision_) {
     CancelDimDecisionRequest();

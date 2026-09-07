@@ -5,13 +5,14 @@
 #include "chrome/browser/ssl/connection_help_tab_helper.h"
 
 #include "base/feature_list.h"
-#include "base/metrics/histogram_macros.h"
 #include "components/security_interstitials/content/urls.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/referrer.h"
 #include "net/base/net_errors.h"
+#include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
 
 namespace {
@@ -48,15 +49,23 @@ void ConnectionHelpTabHelper::SetHelpCenterUrlForTesting(const GURL& url) {
   testing_url_ = url;
 }
 
+DEFINE_USER_DATA(ConnectionHelpTabHelper);
+
 ConnectionHelpTabHelper::ConnectionHelpTabHelper(
+    tabs::TabInterface& tab,
     content::WebContents* web_contents)
     : content::WebContentsObserver(web_contents),
-      content::WebContentsUserData<ConnectionHelpTabHelper>(*web_contents) {}
+      scoped_unowned_user_data_(tab.GetUnownedUserDataHost(), *this) {}
 
-GURL ConnectionHelpTabHelper::GetHelpCenterURL() {
-  if (testing_url_.is_valid())
-    return testing_url_;
-  return GURL(kHelpCenterConnectionHelpUrl);
+// static
+ConnectionHelpTabHelper* ConnectionHelpTabHelper::From(
+    tabs::TabInterface* tab) {
+  return Get(tab->GetUnownedUserDataHost());
 }
 
-WEB_CONTENTS_USER_DATA_KEY_IMPL(ConnectionHelpTabHelper);
+GURL ConnectionHelpTabHelper::GetHelpCenterURL() {
+  if (testing_url_.is_valid()) {
+    return testing_url_;
+  }
+  return GURL(kHelpCenterConnectionHelpUrl);
+}

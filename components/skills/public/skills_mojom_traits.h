@@ -5,11 +5,15 @@
 #ifndef COMPONENTS_SKILLS_PUBLIC_SKILLS_MOJOM_TRAITS_H_
 #define COMPONENTS_SKILLS_PUBLIC_SKILLS_MOJOM_TRAITS_H_
 
+#include <optional>
+
 #include "base/notreached.h"
+#include "components/skills/proto/skill.pb.h"
 #include "components/skills/public/skill.h"
 #include "components/skills/public/skill.mojom-shared.h"
 #include "components/sync/protocol/skill_specifics.pb.h"
 #include "mojo/public/cpp/bindings/struct_traits.h"
+#include "url/gurl.h"
 
 namespace mojo {
 
@@ -25,25 +29,28 @@ struct EnumTraits<skills::mojom::SkillSource, sync_pb::SkillSource> {
         return skills::mojom::SkillSource::kUserCreated;
       case sync_pb::SkillSource::SKILL_SOURCE_DERIVED_FROM_FIRST_PARTY:
         return skills::mojom::SkillSource::kDerivedFromFirstParty;
+      case sync_pb::SkillSource::SKILL_SOURCE_ENTERPRISE:
+        return skills::mojom::SkillSource::kEnterprise;
+      case sync_pb::SkillSource::SKILL_SOURCE_DERIVED_FROM_ENTERPRISE:
+        return skills::mojom::SkillSource::kDerivedFromEnterprise;
     }
     NOTREACHED();
   }
 
-  static bool FromMojom(skills::mojom::SkillSource input,
-                        sync_pb::SkillSource* out) {
+  static sync_pb::SkillSource FromMojom(skills::mojom::SkillSource input) {
     switch (input) {
       case skills::mojom::SkillSource::kUnknown:
-        *out = sync_pb::SkillSource::SKILL_SOURCE_UNKNOWN;
-        return true;
+        return sync_pb::SkillSource::SKILL_SOURCE_UNKNOWN;
       case skills::mojom::SkillSource::kFirstParty:
-        *out = sync_pb::SkillSource::SKILL_SOURCE_FIRST_PARTY;
-        return true;
+        return sync_pb::SkillSource::SKILL_SOURCE_FIRST_PARTY;
       case skills::mojom::SkillSource::kUserCreated:
-        *out = sync_pb::SkillSource::SKILL_SOURCE_USER_CREATED;
-        return true;
+        return sync_pb::SkillSource::SKILL_SOURCE_USER_CREATED;
       case skills::mojom::SkillSource::kDerivedFromFirstParty:
-        *out = sync_pb::SkillSource::SKILL_SOURCE_DERIVED_FROM_FIRST_PARTY;
-        return true;
+        return sync_pb::SkillSource::SKILL_SOURCE_DERIVED_FROM_FIRST_PARTY;
+      case skills::mojom::SkillSource::kEnterprise:
+        return sync_pb::SkillSource::SKILL_SOURCE_ENTERPRISE;
+      case skills::mojom::SkillSource::kDerivedFromEnterprise:
+        return sync_pb::SkillSource::SKILL_SOURCE_DERIVED_FROM_ENTERPRISE;
     }
     NOTREACHED();
   }
@@ -70,6 +77,24 @@ struct StructTraits<skills::mojom::SkillDataView, skills::Skill> {
   static const std::string& description(const skills::Skill& skill) {
     return skill.description;
   }
+  static std::optional<std::string> curated_by(const skills::Skill& skill) {
+    if (skill.curated_by.empty()) {
+      return std::nullopt;
+    }
+    return skill.curated_by;
+  }
+  static std::optional<GURL> image_url(const skills::Skill& skill) {
+    if (skill.image_url.is_empty()) {
+      return std::nullopt;
+    }
+    return skill.image_url;
+  }
+  static std::optional<std::string> category(const skills::Skill& skill) {
+    if (skill.category.empty()) {
+      return std::nullopt;
+    }
+    return skill.category;
+  }
   static base::Time creation_time(const skills::Skill& skill) {
     return skill.creation_time;
   }
@@ -78,6 +103,22 @@ struct StructTraits<skills::mojom::SkillDataView, skills::Skill> {
   }
 
   static bool Read(skills::mojom::SkillDataView data, skills::Skill* out);
+};
+
+template <>
+struct StructTraits<skills::mojom::TopicInfoDataView,
+                    skills::proto::TopicInfo> {
+  static const std::string& category_name(
+      const skills::proto::TopicInfo& topic) {
+    return topic.category_name();
+  }
+  static const std::string& display_name(
+      const skills::proto::TopicInfo& topic) {
+    return topic.display_name();
+  }
+
+  static bool Read(skills::mojom::TopicInfoDataView data,
+                   skills::proto::TopicInfo* out);
 };
 
 }  // namespace mojo

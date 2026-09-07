@@ -12,9 +12,11 @@
 
 #include "base/functional/callback.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/types/id_type.h"
 #include "base/values.h"
 #include "chrome/browser/actor/actor_task.h"
 #include "chrome/browser/glic/test_support/interactive_glic_test.h"
+#include "components/actor/public/mojom/actor_types.mojom-forward.h"
 #include "components/optimization_guide/proto/features/actions_data.pb.h"
 #include "components/tabs/public/tab_interface.h"
 #include "ui/base/interaction/element_identifier.h"
@@ -28,6 +30,10 @@ namespace glic::test {
 // that changes in Chrome aren't breaking Glic (though this relies on manual
 // intervention anytime Glic changes and so is not a replacement for full
 // end-to-end tests).
+// =============================================================================
+// DEPRECATED: Do not use this test fixture for new code.
+// Please use `chrome/browser/glic/test_support/glic_browser_test.h` instead.
+// =============================================================================
 class GlicActorUiTest : public test::InteractiveGlicTest {
  public:
   using InteractiveTestApi::MultiStep;
@@ -39,6 +45,9 @@ class GlicActorUiTest : public test::InteractiveGlicTest {
       std::variant<std::monostate, actor::mojom::ActionResultCode, bool>;
   using ExpectedCreateTaskResult =
       std::variant<std::monostate, mojom::CreateTaskErrorReason>;
+
+  using PerformActionsResultHandle =
+      base::IdType32<class PerformActionsResultHandleTag>;
 
   static constexpr int32_t kNonExistentContentNodeId =
       std::numeric_limits<int32_t>::max();
@@ -76,6 +85,18 @@ class GlicActorUiTest : public test::InteractiveGlicTest {
   // NavigateAction, etc.
   MultiStep ExecuteAction(ActionProtoProvider proto_provider,
                           ExpectedErrorResult expected_result = {});
+
+  // Initiates a BrowserAction without waiting for it to complete. The promise
+  // result is stored in `out_result`.
+  MultiStep SendExecuteActions(
+      std::optional<PerformActionsResultHandle>& out_result,
+      ActionProtoProvider proto_provider);
+
+  // Waits for a BrowserAction initiated by SendExecuteActions to complete and
+  // verifies the result.
+  MultiStep CheckExecuteActionsResultHandle(
+      std::optional<PerformActionsResultHandle>& promise_result,
+      ExpectedErrorResult expected_result = {});
 
   MultiStep ExecuteInGlic(
       base::OnceCallback<void(content::WebContents*)> callback);
@@ -252,6 +273,12 @@ class GlicActorUiTest : public test::InteractiveGlicTest {
   actor::ActorKeyedService* actor_service() {
     return actor::ActorKeyedService::Get(browser()->GetProfile());
   }
+
+  // Checks a previously retrieved execute actions result `result_buffer`
+  // against the `expected_result`.
+  MultiStep CheckExecuteActionsResult(
+      std::unique_ptr<std::optional<content::EvalJsResult>> result_buffer,
+      ExpectedErrorResult expected_result);
 
   void EnableScreenshotsInContext() { include_screenshot_ = true; }
 

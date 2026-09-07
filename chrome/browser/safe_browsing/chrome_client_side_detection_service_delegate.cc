@@ -6,7 +6,6 @@
 
 #include "base/containers/fixed_flat_set.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
 #include "chrome/browser/profiles/profile.h"
@@ -15,6 +14,7 @@
 #include "components/prefs/pref_service.h"
 #include "components/safe_browsing/content/browser/client_side_detection_service.h"
 #include "components/safe_browsing/core/common/utils.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 
 namespace safe_browsing {
 
@@ -31,14 +31,6 @@ PrefService* ChromeClientSideDetectionServiceDelegate::GetPrefs() {
   }
   return nullptr;
 }
-scoped_refptr<network::SharedURLLoaderFactory>
-ChromeClientSideDetectionServiceDelegate::GetURLLoaderFactory() {
-  if (profile_) {
-    return profile_->GetURLLoaderFactory();
-  }
-  return nullptr;
-}
-
 scoped_refptr<network::SharedURLLoaderFactory>
 ChromeClientSideDetectionServiceDelegate::GetSafeBrowsingURLLoaderFactory() {
   if (g_browser_process->safe_browsing_service()) {

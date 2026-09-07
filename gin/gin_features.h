@@ -30,7 +30,6 @@ GIN_EXPORT BASE_DECLARE_FEATURE(kV8CodeMemoryWriteProtection);
 GIN_EXPORT BASE_DECLARE_FEATURE(kV8ConcurrentSparkplugHighPriorityThreads);
 GIN_EXPORT BASE_DECLARE_FEATURE(kV8ConcurrentMarkingHighPriorityThreads);
 GIN_EXPORT BASE_DECLARE_FEATURE(kV8ExperimentalRegexpEngine);
-GIN_EXPORT BASE_DECLARE_FEATURE(kV8ExternalMemoryAccountedInGlobalLimit);
 GIN_EXPORT extern const base::FeatureParam<int> kV8FlushBytecodeOldAge;
 GIN_EXPORT BASE_DECLARE_FEATURE(kV8FlushBaselineCode);
 GIN_EXPORT BASE_DECLARE_FEATURE(kV8FlushBytecode);
@@ -46,6 +45,7 @@ GIN_EXPORT BASE_DECLARE_FEATURE(kV8IgnitionElideRedundantTdzChecks);
 GIN_EXPORT BASE_DECLARE_FEATURE(kV8LazyFeedbackAllocation);
 GIN_EXPORT BASE_DECLARE_FEATURE(kV8Maglev);
 GIN_EXPORT BASE_DECLARE_FEATURE(kV8ConcurrentMaglevHighPriorityThreads);
+GIN_EXPORT BASE_DECLARE_FEATURE(kV8MaxValidPolymorphicMapCount);
 GIN_EXPORT BASE_DECLARE_FEATURE(kV8MemoryReducer);
 GIN_EXPORT extern const base::FeatureParam<int> kV8MemoryReducerGCCount;
 GIN_EXPORT BASE_DECLARE_FEATURE(kV8PreconfigureOldGen);
@@ -69,7 +69,6 @@ GIN_EXPORT BASE_DECLARE_FEATURE(
     kV8SingleThreadedGCInBackgroundNoIncrementalMarking);
 GIN_EXPORT BASE_DECLARE_FEATURE(kV8SlowHistograms);
 GIN_EXPORT BASE_DECLARE_FEATURE(kV8SlowHistogramsCodeMemoryWriteProtection);
-GIN_EXPORT BASE_DECLARE_FEATURE(kV8SlowHistogramsNoTurbofan);
 GIN_EXPORT BASE_DECLARE_FEATURE(kV8SlowHistogramsSparkplug);
 GIN_EXPORT BASE_DECLARE_FEATURE(kV8SlowHistogramsSparkplugAndroid);
 GIN_EXPORT BASE_DECLARE_FEATURE(kV8Sparkplug);
@@ -78,14 +77,10 @@ GIN_EXPORT BASE_DECLARE_FEATURE(kV8Turbofan);
 GIN_EXPORT BASE_DECLARE_FEATURE(kV8Turboshaft);
 GIN_EXPORT BASE_DECLARE_FEATURE(kV8TurboshaftInstructionSelection);
 GIN_EXPORT BASE_DECLARE_FEATURE(kV8TurboFastApiCalls);
-GIN_EXPORT BASE_DECLARE_FEATURE(kV8UseLibmTrigFunctions);
 GIN_EXPORT BASE_DECLARE_FEATURE(kV8UseOriginalMessageForStackTrace);
 GIN_EXPORT extern const base::FeatureParam<base::TimeDelta>
     kV8MemoryReducerStartDelay;
-GIN_EXPORT BASE_DECLARE_FEATURE(kJavaScriptRegExpModifiers);
 GIN_EXPORT BASE_DECLARE_FEATURE(kJavaScriptImportAttributes);
-GIN_EXPORT BASE_DECLARE_FEATURE(kJavaScriptRegExpDuplicateNamedGroups);
-GIN_EXPORT BASE_DECLARE_FEATURE(kJavaScriptPromiseTry);
 
 }  // namespace features
 

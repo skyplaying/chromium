@@ -10,24 +10,17 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/strings/string_util.h"
-#include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/passwords/password_generation_popup_controller.h"
 #include "chrome/browser/ui/passwords/ui_utils.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
-#include "chrome/browser/ui/views/chrome_typography.h"
 #include "chrome/browser/ui/views/passwords/views_utils.h"
-#include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
-#include "components/vector_icons/vector_icons.h"
 #include "ui/accessibility/ax_enums.mojom.h"
-#include "ui/accessibility/ax_node_data.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/base/resource/resource_bundle.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/canvas.h"
-#include "ui/gfx/color_palette.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/native_theme/native_theme.h"
 #include "ui/views/accessibility/view_accessibility.h"
@@ -40,7 +33,7 @@
 #include "ui/views/controls/separator.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/metadata/view_factory.h"
-#include "ui/views/vector_icons.h"
+#include "ui/views/view_tracker.h"
 #include "ui/views/widget/widget.h"
 
 namespace {
@@ -133,6 +126,12 @@ class NudgePasswordButtons : public views::View {
         ax::mojom::Role::kListBoxOption);
     accept_button->GetViewAccessibility().SetName(
         base::JoinString({accept_button_label, controller_->password()}, u" "));
+    accept_button->GetViewAccessibility().SetDescription(
+        l10n_util::GetStringFUTF16(
+            IDS_PASSWORD_GENERATION_PROMPT_GOOGLE_PASSWORD_MANAGER,
+            l10n_util::GetStringUTF16(
+                IDS_PASSWORD_BUBBLES_PASSWORD_MANAGER_LINK_TEXT_SYNCED_TO_ACCOUNT),
+            controller_->GetPrimaryAccountEmail()));
     accept_button->GetViewAccessibility().SetIsSelected(
         accept_button_has_focus_);
     accept_button_ = AddChildView(std::move(accept_button));
@@ -161,8 +160,28 @@ class NudgePasswordButtons : public views::View {
         accept_button_has_focus_);
     cancel_button_->GetViewAccessibility().SetIsSelected(
         cancel_button_has_focus_);
-    views::FocusRing::Get(accept_button_)->SchedulePaint();
-    views::FocusRing::Get(cancel_button_)->SchedulePaint();
+    views::FocusRing::Get(accept_button_)->Refresh();
+    views::FocusRing::Get(cancel_button_)->Refresh();
+  }
+
+  void UpdateGeneratedPassword() {
+    if (!controller_) {
+      return;
+    }
+    const std::u16string accept_button_label = controller_->SuggestedText();
+    accept_button_->GetViewAccessibility().SetName(
+        base::JoinString({accept_button_label, controller_->password()}, u" "));
+  }
+
+  void reset_controller() {
+    controller_ = nullptr;
+    if (accept_button_) {
+      accept_button_->GetViewAccessibility().RemoveName();
+      accept_button_->GetViewAccessibility().RemoveDescription();
+    }
+    if (cancel_button_) {
+      cancel_button_->GetViewAccessibility().RemoveName();
+    }
   }
 
   views::View* GetAcceptButton() { return accept_button_; }
@@ -268,7 +287,7 @@ void PasswordGenerationPopupViewViews::GeneratedPasswordBox::Init(
   // Make sure we only receive enter/exit events when the mouse enters the whole
   // view, even if it is entering/exiting a child view. This is needed to
   // prevent the background highlight of the password box disappearing when
-  // entering the key icon view (see crbug.com/1393991).
+  // entering the key icon view (see crbug.com/40248414).
   SetNotifyEnterExitOnChild(true);
 
   controller_ = controller;
@@ -340,6 +359,10 @@ void PasswordGenerationPopupViewViews::Hide() {
   if (password_view_) {
     password_view_->reset_controller();
   }
+  if (nudge_password_buttons_view_) {
+    static_cast<NudgePasswordButtons*>(nudge_password_buttons_view_)
+        ->reset_controller();
+  }
 
   DoHide();
 }
@@ -355,6 +378,10 @@ void PasswordGenerationPopupViewViews::UpdateGeneratedPasswordValue() {
   if (password_view_) {
     password_view_->UpdateGeneratedPassword(controller_->password());
   }
+  if (nudge_password_buttons_view_) {
+    static_cast<NudgePasswordButtons*>(nudge_password_buttons_view_)
+        ->UpdateGeneratedPassword();
+  }
   DeprecatedLayoutImmediately();
 }
 
@@ -369,11 +396,19 @@ void PasswordGenerationPopupViewViews::ButtonSelectionUpdated() {
 
   auto* nudge_password_buttons =
       static_cast<NudgePasswordButtons*>(nudge_password_buttons_view_);
+  views::ViewTracker nudge_buttons_tracker(nudge_password_buttons);
+
   if (controller_->accept_button_selected()) {
     NotifyAXSelection(*nudge_password_buttons->GetAcceptButton());
   } else if (controller_->cancel_button_selected()) {
     NotifyAXSelection(*nudge_password_buttons->GetCancelButton());
   }
+
+  // Ensure the buttons were not destroyed during the NotifyAXSelection call.
+  if (!nudge_buttons_tracker.view()) {
+    return;
+  }
+
   nudge_password_buttons->UpdateFocus(controller_->accept_button_selected());
 }
 

@@ -12,6 +12,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/memory_coordinator/memory_consumer.h"
+#include "base/memory_coordinator/memory_limit.h"
 #include "base/memory_coordinator/traits.h"
 #include "base/sequence_checker.h"
 
@@ -24,21 +25,18 @@ class SingleThreadTaskRunner;
 class BASE_EXPORT AsyncMemoryConsumerRegistration {
  public:
   using CheckUnregister = MemoryConsumerRegistration::CheckUnregister;
-  using CheckRegistryExists = MemoryConsumerRegistration::CheckRegistryExists;
 
   AsyncMemoryConsumerRegistration(
-      std::string_view consumer_id,
+      std::string_view consumer_name,
       MemoryConsumerTraits traits,
       MemoryConsumer* consumer,
-      CheckUnregister check_unregister = CheckUnregister::kEnabled,
-      CheckRegistryExists check_registry_exists =
-          CheckRegistryExists::kEnabled);
+      CheckUnregister check_unregister = CheckUnregister::kEnabled);
   ~AsyncMemoryConsumerRegistration();
 
  private:
   class MainThread;
 
-  void NotifyUpdateMemoryLimit(int percentage);
+  void NotifyUpdateMemoryLimit(MemoryLimit memory_limit);
   void NotifyReleaseMemory();
 
   // A pointer to the actual consumer. Must outlive `this`.

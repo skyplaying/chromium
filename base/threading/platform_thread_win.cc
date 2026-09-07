@@ -16,7 +16,6 @@
 #include "base/feature_list.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/process/memory.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
@@ -86,7 +85,7 @@ DWORD __stdcall ThreadFunc(void* params) {
   }
 
   if (thread_params->thread_type != ThreadType::kDefault) {
-    PlatformThread::SetCurrentThreadType(thread_params->thread_type);
+    PlatformThread::SetDefaultThreadType(thread_params->thread_type);
   }
 
   // Retrieve a copy of the thread handle to use as the key in the
@@ -125,7 +124,7 @@ DWORD __stdcall ThreadFunc(void* params) {
   // performing TLS destruction which causes hangs if performed at background
   // priority (priority inversion) (see: http://crbug.com/1096203).
   if (::GetThreadPriority(::GetCurrentThread()) < THREAD_PRIORITY_NORMAL) {
-    PlatformThread::SetCurrentThreadType(ThreadType::kDefault);
+    PlatformThread::SetDefaultThreadType(ThreadType::kDefault);
   }
 
   return 0;

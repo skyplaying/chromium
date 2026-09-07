@@ -176,14 +176,14 @@
           "--passthrough",
           "-v",
           "--stable-jobs",
-          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc",
+          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --force-online-connection-state-for-indicator",
           "--enforce-browser-version",
           "--git-revision=${got_revision}",
+          "--jobs=1",
+          "--initial-find-device-attempts=3",
           "--dont-restore-color-profile-after-test",
           "--test-machine-name",
-          "${buildername}",
-          "--jobs=1",
-          "--initial-find-device-attempts=3"
+          "${buildername}"
         ],
         "merge": {
           "script": "//testing/merge_scripts/standard_isolated_script_merge.py"
@@ -225,7 +225,7 @@
           "--passthrough",
           "-v",
           "--stable-jobs",
-          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-cmd-decoder=passthrough --use-gl=angle --disable-features=SkiaGraphite",
+          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-cmd-decoder=passthrough --use-gl=angle --disable-skia-graphite",
           "--enforce-browser-version",
           "--jobs=1",
           "--initial-find-device-attempts=3"
@@ -305,7 +305,7 @@
           "--passthrough",
           "-v",
           "--stable-jobs",
-          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-cmd-decoder=passthrough --use-gl=angle --disable-features=SkiaGraphite --force-online-connection-state-for-indicator --disable-wcg-for-test",
+          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-cmd-decoder=passthrough --use-gl=angle --disable-skia-graphite --force-online-connection-state-for-indicator --disable-wcg-for-test",
           "--enforce-browser-version",
           "--git-revision=${got_revision}",
           "--dont-restore-color-profile-after-test",
@@ -527,7 +527,7 @@
           "--passthrough",
           "-v",
           "--stable-jobs",
-          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-cmd-decoder=passthrough --use-gl=angle --disable-features=SkiaGraphite --force-online-connection-state-for-indicator --disable-wcg-for-test",
+          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-cmd-decoder=passthrough --use-gl=angle --disable-skia-graphite --force-online-connection-state-for-indicator --disable-wcg-for-test",
           "--enforce-browser-version",
           "--git-revision=${got_revision}",
           "--dont-restore-color-profile-after-test",
@@ -625,7 +625,7 @@
           "--passthrough",
           "-v",
           "--stable-jobs",
-          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-cmd-decoder=passthrough --use-gl=angle --disable-features=SkiaGraphite --force-online-connection-state-for-indicator --disable-wcg-for-test",
+          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-cmd-decoder=passthrough --use-gl=angle --disable-skia-graphite --force-online-connection-state-for-indicator --disable-wcg-for-test",
           "--enforce-browser-version",
           "--dont-restore-color-profile-after-test",
           "--jobs=1",
@@ -747,7 +747,7 @@
           "--passthrough",
           "-v",
           "--stable-jobs",
-          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-cmd-decoder=validating --disable-features=SkiaGraphite",
+          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-cmd-decoder=validating --disable-skia-graphite",
           "--enforce-browser-version",
           "--jobs=1",
           "--initial-find-device-attempts=3"
@@ -757,7 +757,7 @@
         },
         "module_name": "//chrome/test:telemetry_gpu_integration_test_android_chrome",
         "module_scheme": "flat",
-        "name": "webcodecs_tests",
+        "name": "webcodecs_validating_ganesh_tests",
         "resultdb": {
           "enable": true,
           "has_native_resultdb_integration": true
@@ -873,7 +873,7 @@
           "--passthrough",
           "-v",
           "--stable-jobs",
-          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-angle=gles --use-cmd-decoder=passthrough --use-gl=angle --disable-features=SkiaGraphite --force_high_performance_gpu",
+          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-angle=gles --use-cmd-decoder=passthrough --use-gl=angle --disable-skia-graphite --force_high_performance_gpu",
           "--enforce-browser-version",
           "--read-abbreviated-json-results-from=../../content/test/data/gpu/webgl1_conformance_android_runtimes.json",
           "--jobs=1",
@@ -915,7 +915,7 @@
           "--passthrough",
           "-v",
           "--stable-jobs",
-          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-cmd-decoder=validating --disable-features=SkiaGraphite --force_high_performance_gpu",
+          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-cmd-decoder=validating --disable-skia-graphite --force_high_performance_gpu",
           "--enforce-browser-version",
           "--read-abbreviated-json-results-from=../../content/test/data/gpu/webgl1_conformance_android_runtimes.json",
           "--jobs=1",
@@ -957,7 +957,7 @@
           "--passthrough",
           "-v",
           "--stable-jobs",
-          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-cmd-decoder=validating --disable-features=SkiaGraphite",
+          "--extra-browser-args=--enable-logging=stderr --js-flags=--expose-gc --use-cmd-decoder=validating --disable-skia-graphite",
           "--enforce-browser-version",
           "--jobs=1",
           "--initial-find-device-attempts=3"
@@ -967,7 +967,7 @@
         },
         "module_name": "//chrome/test:telemetry_gpu_integration_test_android_chrome",
         "module_scheme": "flat",
-        "name": "webrtc_tests",
+        "name": "webrtc_validating_ganesh_tests",
         "resultdb": {
           "enable": true,
           "has_native_resultdb_integration": true

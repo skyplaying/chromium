@@ -15,13 +15,23 @@
 #include "components/keyed_service/core/keyed_service.h"
 #include "content/public/browser/preconnect_manager.h"
 #include "mojo/public/cpp/bindings/receiver.h"
+#include "net/base/reconnect_notifier.h"
+#include "net/net_buildflags.h"
 #include "services/network/public/mojom/connection_change_observer_client.mojom.h"
 #include "url/origin.h"
+
+#if BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
+#include "chrome/browser/net/device_bound_session_prewarmer.h"
+#endif
 
 namespace content {
 class BrowserContext;
 class WebContents;
 }  // namespace content
+
+#if BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
+class DeviceBoundSessionPrewarmer;
+#endif
 
 namespace features {
 BASE_DECLARE_FEATURE(kPreconnectFromKeyedService);
@@ -45,6 +55,7 @@ BASE_DECLARE_FEATURE_PARAM(base::TimeDelta, kPreconnectBackoffBaseTime);
 BASE_DECLARE_FEATURE_PARAM(double, kPreconnectBackoffMultiplier);
 BASE_DECLARE_FEATURE_PARAM(base::TimeDelta, kPreconnectNetworkChangeInterval);
 BASE_DECLARE_FEATURE_PARAM(base::TimeDelta, kPreconnectInitialRetryInterval);
+BASE_DECLARE_FEATURE(kResetConnectionFailureOnSessionUsed);
 }  // namespace features
 
 // Class to keep track of the current visibility. It is used to determine if the
@@ -117,7 +128,10 @@ class SearchEnginePreconnector
   bool IsPreconnectEnabled() override;
 
   // network::mojom::ConnectionChangeObserverClient
-  void OnSessionClosed() override;
+  void OnConnectionEstablished(
+      const net::ConnectionChangeNotifier::EstablishedConnectionInfo& info)
+      override;
+  void OnSessionClosed(bool was_ever_used_to_create_streams) override;
   void OnNetworkEvent(net::NetworkChangeEvent event) override;
   void OnConnectionFailed() override;
 
@@ -146,6 +160,12 @@ class SearchEnginePreconnector
   void SetIsShortSessionForTesting(bool is_short_session) {
     is_short_session_for_testing_ = is_short_session;
   }
+
+#if BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
+  bool HasDeviceBoundSessionPrewarmerForTesting() const {
+    return !!device_bound_session_prewarmer_;
+  }
+#endif
 
  private:
   FRIEND_TEST_ALL_PREFIXES(
@@ -181,7 +201,7 @@ class SearchEnginePreconnector
 
   // Preconnects to the default search engine synchronously. Preconnects in
   // uncredentialed mode.
-  void PreconnectDSE();
+  void PreconnectDSE(bool is_startup);
 
   // Runs `PreconnectDSE` after the `delay`.
   void StartPreconnectWithDelay(base::TimeDelta delay,
@@ -239,7 +259,11 @@ class SearchEnginePreconnector
   base::ClampedNumeric<int32_t> consecutive_connection_failure_ = 0;
 
   // Used for testing. Override the short session value.
-  std::optional<bool> is_short_session_for_testing_ = std::nullopt;
+  std::optional<bool> is_short_session_for_testing_;
+
+#if BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
+  std::unique_ptr<DeviceBoundSessionPrewarmer> device_bound_session_prewarmer_;
+#endif
 
   base::WeakPtrFactory<SearchEnginePreconnector> weak_factory_{this};
 };

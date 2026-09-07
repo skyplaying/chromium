@@ -15,7 +15,7 @@ ${isGlicVersion() ? html`
 ` : ''}
 <div class="flex-container">
   <div class="title-container">
-    <img id="picker-logo" @click="${this.onProductLogoClick_}"
+    <img id="pickerLogo" @click="${this.onProductLogoClick_}"
         src="picker_logo.svg" role="presentation">
     <h1 class="title" .innerHTML="${this.getTitle_()}"></h1>
     <div class="subtitle" .innerHTML="${this.getSubtitle_()}"></div>
@@ -25,8 +25,8 @@ ${isGlicVersion() ? html`
       ${this.profilesList_.map((item, index) => html`
         <profile-card class="profile-item" data-index="${index}"
             .profileState="${item}" .disabled="${this.pickerButtonsDisabled_}"
-            @toggle-drag="${this.toggleDrag_}"
-            @disable-all-picker-buttons="${this.disableAllPickerButtons_}">
+            @toggle-drag="${this.onToggleDrag_}"
+            @disable-all-picker-buttons="${this.onDisableAllPickerButtons_}">
         </profile-card>
       `)}
       <cr-button id="addProfile" class="profile-item"
@@ -38,39 +38,45 @@ ${isGlicVersion() ? html`
             class="profile-card-info prominent-text">
           $i18n{addSpaceButton}
         </div>
-        <cr-icon icon="profiles:add"></cr-icon>
+        <cr-icon icon="profiles:add-custom"></cr-icon>
       </cr-button>
     </div>
   </div>
-<if expr="enable_glic">
   <div id="footer-text" class="subtitle"
       ?hidden="${this.shouldHideFooterText_()}">
     $i18nRaw{glicAddProfileHelper}
   </div>
-</if>
 </div>
 <div class="footer">
-  <div class="footer-buttons-container">
-    <cr-button id="browseAsGuestButton"
-        @click="${this.onLaunchGuestProfileClick_}"
-        ?hidden="${!this.guestModeEnabled_}"
-        ?disabled="${this.pickerButtonsDisabled_}">
-      <cr-icon icon="profiles:account-box" slot="prefix-icon"></cr-icon>
-      $i18n{browseAsGuestButton}
-    </cr-button>
-    <cr-button id="openAllProfilesButton"
-        class="action-button"
-        @click="${this.onOpenAllProfilesClick_}"
-        ?hidden="${!this.shouldShowOpenAllProfilesButton_}"
-        ?disabled="${this.pickerButtonsDisabled_}">
-      $i18n{openAllProfilesButtonText}
-    </cr-button>
-  </div>
-  <cr-checkbox id="askOnStartup" ?checked="${this.askOnStartup_}"
-      @checked-changed="${this.onAskOnStartupChangedByUser_}"
-      ?hidden="${this.hideAskOnStartup_}">
-    $i18n{askOnStartupCheckboxText}
-  </cr-checkbox>
+  <cr-button id="browseAsGuestButton"
+      @click="${this.onLaunchGuestProfileClick_}"
+      ?hidden="${!this.guestModeEnabled_}"
+      ?disabled="${this.pickerButtonsDisabled_}">
+    <cr-icon
+        icon="${this.webuiRoundedIconsEnabled_
+            ? 'profiles:account-box'
+            : 'profiles:account-box-old'}" slot="prefix-icon"></cr-icon>
+    $i18n{browseAsGuestButton}
+  </cr-button>
+
+  ${this.isRefreshedUI_ ? html`
+    <div id="ask-on-startup-container" ?hidden="${this.hideAskOnStartup_}">
+      <span id="ask-on-startup-label" aria-hidden="true">
+        $i18n{askOnStartupText}
+      </span>
+      <cr-toggle id="askOnStartup"
+          aria-labelledby="ask-on-startup-label"
+          ?checked="${this.askOnStartup_}"
+          @checked-changed="${this.onAskOnStartupCheckedChanged_}">
+      </cr-toggle>
+    </div>
+  ` : html`
+    <cr-checkbox id="askOnStartup" ?checked="${this.askOnStartup_}"
+        @checked-changed="${this.onAskOnStartupCheckedChanged_}"
+        ?hidden="${this.hideAskOnStartup_}">
+      $i18n{askOnStartupText}
+    </cr-checkbox>
+  `}
 </div>
 
 <signin-error-dialog id="signinErrorDialog">

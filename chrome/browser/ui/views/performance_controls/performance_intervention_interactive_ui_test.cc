@@ -23,8 +23,12 @@
 #include "chrome/browser/resource_coordinator/tab_lifecycle_unit_source.h"
 #include "chrome/browser/resource_coordinator/utils.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/performance_controls/performance_controls_metrics.h"
 #include "chrome/browser/ui/performance_controls/performance_intervention_button_controller.h"
+#include "chrome/browser/ui/tabs/tab_enums.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/performance_controls/performance_intervention_bubble.h"
 #include "chrome/browser/ui/views/performance_controls/performance_intervention_button.h"
@@ -32,11 +36,8 @@
 #include "chrome/browser/ui/views/performance_controls/tab_list_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/grit/branded_strings.h"
-#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
-#include "chrome/test/interaction/interaction_test_util_browser.h"
-#include "chrome/test/interaction/interactive_browser_test.h"
 #include "chrome/test/user_education/interactive_feature_promo_test.h"
 #include "components/feature_engagement/public/feature_constants.h"
 #include "components/performance_manager/public/features.h"
@@ -46,17 +47,19 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "net/dns/mock_host_resolver.h"
-#include "ui/base/interaction/interaction_test_util.h"
 #include "ui/base/interaction/state_observer.h"
 #include "ui/base/ozone_buildflags.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/events/base_event_utils.h"
-#include "ui/events/event_constants.h"
-#include "ui/gfx/animation/animation_test_api.h"
 #include "ui/views/bubble/bubble_dialog_model_host.h"
 #include "ui/views/interaction/interaction_test_util_views.h"
 #include "ui/views/test/button_test_api.h"
 #include "ui/views/test/widget_test.h"
 #include "ui/views/view.h"
+
+#if BUILDFLAG(IS_OZONE)
+#include "ui/ozone/public/ozone_platform.h"
+#endif
 
 namespace {
 using ::performance_manager::testing::ScopedSetAllPagesDiscardableForTesting;
@@ -155,9 +158,9 @@ class PerformanceInterventionInteractiveTest
 
   std::vector<resource_attribution::PageContext> GetPageContextForTabs(
       const std::vector<int>& tab_indices,
-      Browser* browser) {
+      BrowserWindowInterface* browser) {
     std::vector<resource_attribution::PageContext> page_contexts;
-    TabStripModel* const tab_strip_model = browser->tab_strip_model();
+    TabStripModel* const tab_strip_model = browser->GetTabStripModel();
     for (int index : tab_indices) {
       content::WebContents* const web_contents =
           tab_strip_model->GetWebContentsAt(index);
@@ -171,7 +174,7 @@ class PerformanceInterventionInteractiveTest
   }
 
   void NotifyActionableTabListChange(const std::vector<int>& tab_indices,
-                                     Browser* browser) {
+                                     BrowserWindowInterface* browser) {
     performance_manager::user_tuning::PerformanceDetectionManager::GetInstance()
         ->NotifyActionableTabObserversForTesting(
             PerformanceDetectionManager::ResourceType::kCpu,
@@ -184,14 +187,14 @@ class PerformanceInterventionInteractiveTest
 
   auto CloseTab(int index) {
     return Do(base::BindLambdaForTesting([=, this]() {
-      browser()->tab_strip_model()->CloseWebContentsAt(
+      browser()->GetTabStripModel()->CloseWebContentsAt(
           index, TabCloseTypes::CLOSE_NONE);
     }));
   }
 
   auto CheckTabDiscardStatus(int index, bool discarded) {
     return Check([=, this]() {
-      TabStripModel* const tab_strip_model = browser()->tab_strip_model();
+      TabStripModel* const tab_strip_model = browser()->GetTabStripModel();
       return tab_strip_model->GetWebContentsAt(index)->WasDiscarded() ==
              discarded;
     });
@@ -521,22 +524,29 @@ IN_PROC_BROWSER_TEST_F(PerformanceInterventionInteractiveTest,
       WaitForShow(kToolbarPerformanceInterventionButtonElementId));
 }
 
-#if !(BUILDFLAG(IS_LINUX) && BUILDFLAG(SUPPORTS_OZONE_WAYLAND))
-// TODO(crbug.com/40863331): Linux Wayland doesn't support window activation
 IN_PROC_BROWSER_TEST_F(PerformanceInterventionInteractiveTest,
                        UiShowsOnlyOnActiveWindow) {
+#if BUILDFLAG(IS_OZONE)
+  // TODO(crbug.com/40863331): Linux Wayland doesn't support window activation
+  if (::ui::OzonePlatform::RunningOnWaylandForTest()) {
+    GTEST_SKIP() << "Linux Wayland doesn't support window activation";
+  }
+#endif
   // Create two browser windows with tabs and ensure the second browser window
   // is active
-  Browser* const first_browser = browser();
+  BrowserWindowInterface* const first_browser = browser();
   ASSERT_TRUE(AddTabAtIndexToBrowser(first_browser, 0, GetURL("a.com"),
                                      ui::PageTransition::PAGE_TRANSITION_LINK));
   ASSERT_TRUE(AddTabAtIndexToBrowser(first_browser, 1, GetURL("b.com"),
                                      ui::PageTransition::PAGE_TRANSITION_LINK));
-  Browser* const second_browser = CreateBrowser(first_browser->profile());
+  BrowserWindowInterface* const second_browser =
+      CreateBrowser(first_browser->GetProfile());
   ASSERT_TRUE(AddTabAtIndexToBrowser(second_browser, 0, GetURL("c.com"),
                                      ui::PageTransition::PAGE_TRANSITION_LINK));
-  BrowserWindow* const first_browser_window = first_browser->window();
-  BrowserWindow* const second_browser_window = second_browser->window();
+  BrowserWindow* const first_browser_window =
+      BrowserWindow::FromBrowser(first_browser);
+  BrowserWindow* const second_browser_window =
+      BrowserWindow::FromBrowser(second_browser);
   second_browser_window->Activate();
   ASSERT_TRUE(second_browser_window->IsActive());
   ASSERT_FALSE(first_browser_window->IsActive());
@@ -576,16 +586,25 @@ IN_PROC_BROWSER_TEST_F(PerformanceInterventionInteractiveTest,
 // shown on a non-active window.
 IN_PROC_BROWSER_TEST_F(PerformanceInterventionInteractiveTest,
                        NonactiveInterventionButtonHides) {
-  Browser* const first_browser = browser();
+#if BUILDFLAG(IS_OZONE)
+  // TODO(crbug.com/40863331): Linux Wayland doesn't support window activation
+  if (::ui::OzonePlatform::RunningOnWaylandForTest()) {
+    GTEST_SKIP() << "Linux Wayland doesn't support window activation";
+  }
+#endif
+  BrowserWindowInterface* const first_browser = browser();
   ASSERT_TRUE(AddTabAtIndexToBrowser(first_browser, 0, GetURL("a.com"),
                                      ui::PageTransition::PAGE_TRANSITION_LINK));
   ASSERT_TRUE(AddTabAtIndexToBrowser(first_browser, 1, GetURL("b.com"),
                                      ui::PageTransition::PAGE_TRANSITION_LINK));
-  Browser* const second_browser = CreateBrowser(first_browser->profile());
+  BrowserWindowInterface* const second_browser =
+      CreateBrowser(first_browser->GetProfile());
   ASSERT_TRUE(AddTabAtIndexToBrowser(second_browser, 0, GetURL("c.com"),
                                      ui::PageTransition::PAGE_TRANSITION_LINK));
-  BrowserWindow* const first_browser_window = first_browser->window();
-  BrowserWindow* const second_browser_window = second_browser->window();
+  BrowserWindow* const first_browser_window =
+      BrowserWindow::FromBrowser(first_browser);
+  BrowserWindow* const second_browser_window =
+      BrowserWindow::FromBrowser(second_browser);
   second_browser_window->Activate();
   ASSERT_TRUE(second_browser_window->IsActive());
 
@@ -628,7 +647,6 @@ IN_PROC_BROWSER_TEST_F(PerformanceInterventionInteractiveTest,
   NotifyActionableTabListChange({}, first_browser);
   EXPECT_FALSE(intervention_button->GetVisible());
 }
-#endif
 
 // We can only have one non-off record profile open at a time on ChromeOS so
 // users will not encounter this case.
@@ -637,17 +655,20 @@ IN_PROC_BROWSER_TEST_F(PerformanceInterventionInteractiveTest,
                        SuggestTabsOnlyForLastActiveProfile) {
   // Create two browser windows with tabs and ensure the second browser window
   // is active
-  Browser* const first_browser = browser();
+  BrowserWindowInterface* const first_browser = browser();
   ASSERT_TRUE(AddTabAtIndexToBrowser(first_browser, 0, GetURL("a.com"),
                                      ui::PageTransition::PAGE_TRANSITION_LINK));
   ASSERT_TRUE(AddTabAtIndexToBrowser(first_browser, 1, GetURL("b.com"),
                                      ui::PageTransition::PAGE_TRANSITION_LINK));
 
-  Browser* const second_browser = CreateBrowser(CreateTestProfile());
+  BrowserWindowInterface* const second_browser =
+      CreateBrowser(CreateTestProfile());
   ASSERT_TRUE(AddTabAtIndexToBrowser(second_browser, 0, GetURL("c.com"),
                                      ui::PageTransition::PAGE_TRANSITION_LINK));
-  BrowserWindow* const first_browser_window = first_browser->window();
-  BrowserWindow* const second_browser_window = second_browser->window();
+  BrowserWindow* const first_browser_window =
+      BrowserWindow::FromBrowser(first_browser);
+  BrowserWindow* const second_browser_window =
+      BrowserWindow::FromBrowser(second_browser);
   second_browser_window->Activate();
   ASSERT_TRUE(second_browser_window->IsActive());
   ASSERT_FALSE(first_browser_window->IsActive());

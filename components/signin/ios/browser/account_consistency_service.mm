@@ -16,10 +16,13 @@
 #import "base/strings/string_util.h"
 #import "base/strings/sys_string_conversions.h"
 #import "components/google/core/common/google_util.h"
+#import "components/policy/core/common/policy_pref_names.h"
+#import "components/prefs/pref_service.h"
 #import "components/signin/core/browser/account_reconcilor.h"
 #import "components/signin/core/browser/chrome_connected_header_helper.h"
 #import "components/signin/core/browser/signin_header_helper.h"
 #import "components/signin/ios/browser/features.h"
+#import "components/signin/public/base/signin_switches.h"
 #import "components/signin/public/identity_manager/accounts_cookie_mutator.h"
 #import "components/signin/public/identity_manager/accounts_in_cookie_jar_info.h"
 #import "google_apis/gaia/gaia_constants.h"
@@ -223,6 +226,13 @@ void AccountConsistencyService::AccountConsistencyHandler::ShouldAllowResponse(
     return;
   }
 
+  if (!response_info.for_main_frame &&
+      base::FeatureList::IsEnabled(
+          switches::kIgnoreChromeManageAccountsInSubframes)) {
+    std::move(callback).Run(PolicyDecision::Allow());
+    return;
+  }
+
   GURL url = net::GURLWithNSURL(http_response.URL);
   // User is showing intent to navigate to a Google-owned domain. Set GAIA and
   // CHROME_CONNECTED cookies if the user is signed in (this is filtered in
@@ -266,7 +276,7 @@ void AccountConsistencyService::AccountConsistencyHandler::ShouldAllowResponse(
   switch (params.service_type) {
     case signin::GAIA_SERVICE_TYPE_INCOGNITO: {
       if (delegate_) {
-        delegate_->OnGoIncognito(continue_url);
+        delegate_->OnGoIncognito(continue_url, web_state_);
       }
       break;
     }
@@ -286,13 +296,13 @@ void AccountConsistencyService::AccountConsistencyHandler::ShouldAllowResponse(
         }
       }
       if (delegate_) {
-        delegate_->OnAddAccount(continue_url, params.email);
+        delegate_->OnAddAccount(continue_url, params.email, web_state_);
       }
       break;
     case signin::GAIA_SERVICE_TYPE_SIGNOUT:
     case signin::GAIA_SERVICE_TYPE_DEFAULT:
       if (delegate_) {
-        delegate_->OnManageAccounts(continue_url);
+        delegate_->OnManageAccounts(continue_url, web_state_);
       }
       break;
     case signin::GAIA_SERVICE_TYPE_NONE:
@@ -318,7 +328,7 @@ void AccountConsistencyService::AccountConsistencyHandler::
     // is not in an inconsistent state (where the identities on the device
     // are different than those on the web). Fallback to asking the user to
     // add an account.
-    delegate_->OnAddAccount(url, email);
+    delegate_->OnAddAccount(url, email, web_state_);
     return;
   }
   web_state_->OpenURL(web::WebState::OpenURLParams(
@@ -364,10 +374,12 @@ void AccountConsistencyService::AccountConsistencyHandler::WebStateDestroyed() {
 AccountConsistencyService::AccountConsistencyService(
     CookieManagerCallback cookie_manager_cb,
     AccountReconcilor* account_reconcilor,
-    signin::IdentityManager* identity_manager)
+    signin::IdentityManager* identity_manager,
+    PrefService* prefs)
     : cookie_manager_cb_(std::move(cookie_manager_cb)),
       account_reconcilor_(account_reconcilor),
       identity_manager_(identity_manager),
+      prefs_(prefs),
       active_cookie_manager_requests_for_testing_(0) {
   DCHECK(!cookie_manager_cb_.is_null());
   identity_manager_->AddObserver(this);
@@ -392,7 +404,7 @@ BOOL AccountConsistencyService::RestoreGaiaCookies(
     cookie_manager->GetCookieList(
         GaiaUrls::GetInstance()->secure_google_url(),
         net::CookieOptions::MakeAllInclusive(),
-        net::CookiePartitionKeyCollection::Todo(),
+        net::CookiePartitionKeyCollection(),
         base::BindOnce(
             &AccountConsistencyService::TriggerGaiaCookieChangeIfDeleted,
             base::Unretained(this), std::move(cookies_restored_callback)));
@@ -505,6 +517,13 @@ void AccountConsistencyService::Shutdown() {
 void AccountConsistencyService::SetChromeConnectedCookieWithUrl(
     const GURL& url) {
   const std::string domain = GetDomainFromUrl(url);
+
+  int profile_mode_mask = signin::PROFILE_MODE_DEFAULT;
+  if (prefs_->GetInteger(policy::policy_prefs::kIncognitoModeAvailability) ==
+      static_cast<int>(policy::IncognitoModeAvailability::kDisabled)) {
+    profile_mode_mask |= signin::PROFILE_MODE_INCOGNITO_DISABLED;
+  }
+
   std::string cookie_value = signin::BuildMirrorRequestCookieIfPossible(
       url,
       identity_manager_->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin)
@@ -512,7 +531,7 @@ void AccountConsistencyService::SetChromeConnectedCookieWithUrl(
       signin::AccountConsistencyMethod::kMirror,
       // We pass in `nullptr` for CookieSettings as iOS users cannot set any
       // prefs or content settings related to cookies.
-      /*cookie_settings=*/nullptr, signin::PROFILE_MODE_DEFAULT);
+      /*cookie_settings=*/nullptr, profile_mode_mask);
   if (cookie_value.empty()) {
     return;
   }

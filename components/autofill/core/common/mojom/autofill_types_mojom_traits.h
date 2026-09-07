@@ -128,6 +128,11 @@ struct StructTraits<autofill::mojom::AutocompleteParsingResultDataView,
     return r.webidentity;
   }
 
+  static bool email_verification_token(
+      const autofill::AutocompleteParsingResult& r) {
+    return r.email_verification_token;
+  }
+
   static bool Read(autofill::mojom::AutocompleteParsingResultDataView data,
                    autofill::AutocompleteParsingResult* out);
 };
@@ -156,6 +161,11 @@ struct StructTraits<autofill::mojom::FormFieldDataDataView,
     return r.value();
   }
 
+  static const std::optional<std::u16string>& selected_option_text(
+      const autofill::FormFieldData& r) {
+    return r.selected_option_text();
+  }
+
   static const std::u16string& selected_text(const autofill::FormFieldData& r) {
     return r.selected_text();
   }
@@ -181,6 +191,11 @@ struct StructTraits<autofill::mojom::FormFieldDataDataView,
 
   static const std::u16string& placeholder(const autofill::FormFieldData& r) {
     return r.placeholder();
+  }
+
+  static const std::u16string& placeholder_attribute(
+      const autofill::FormFieldData& r) {
+    return r.placeholder_attribute();
   }
 
   static const std::u16string& css_classes(const autofill::FormFieldData& r) {
@@ -222,17 +237,10 @@ struct StructTraits<autofill::mojom::FormFieldDataDataView,
     return r.max_length();
   }
 
-  static bool is_user_edited(const autofill::FormFieldData& r) {
-    return r.is_user_edited();
-  }
 
-  static bool is_autofilled(const autofill::FormFieldData& r) {
-    return r.is_autofilled();
-  }
-
-  static autofill::FormFieldData::CheckStatus check_status(
+  static bool is_autofilled_according_to_renderer(
       const autofill::FormFieldData& r) {
-    return r.check_status();
+    return r.is_autofilled_according_to_renderer();
   }
 
   static bool is_focusable(const autofill::FormFieldData& r) {
@@ -306,6 +314,11 @@ struct StructTraits<autofill::mojom::FormFieldData_FillDataDataView,
   static const std::u16string& value(
       const autofill::FormFieldData::FillData& r) {
     return r.value;
+  }
+
+  static const std::optional<std::u16string>& selected_option_text(
+      const autofill::FormFieldData::FillData& r) {
+    return r.selected_option_text;
   }
 
   static autofill::FieldRendererId renderer_id(
@@ -461,11 +474,6 @@ struct StructTraits<autofill::mojom::FormFieldDataPredictionsDataView,
     return r.parseable_name;
   }
 
-  static const std::string& parseable_label(
-      const autofill::FormFieldDataPredictions& r) {
-    return r.parseable_label;
-  }
-
   static const std::string& section(
       const autofill::FormFieldDataPredictions& r) {
     return r.section;
@@ -487,6 +495,11 @@ struct StructTraits<autofill::mojom::FormFieldDataPredictionsDataView,
   static size_t rank_in_host_form_signature_group(
       const autofill::FormFieldDataPredictions& r) {
     return r.rank_in_host_form_signature_group;
+  }
+
+  static bool did_trigger_javascript_autofill(
+      const autofill::FormFieldDataPredictions& r) {
+    return r.did_trigger_javascript_autofill;
   }
 
   static bool Read(autofill::mojom::FormFieldDataPredictionsDataView data,
@@ -588,7 +601,7 @@ struct StructTraits<autofill::mojom::PasswordFormFillDataDataView,
     return r.wait_for_username;
   }
 
-  static std::vector<autofill::FieldRendererId> suggestion_banned_fields(
+  static const std::vector<autofill::FieldRendererId>& suggestion_banned_fields(
       const autofill::PasswordFormFillData& r) {
     return r.suggestion_banned_fields;
   }
@@ -667,7 +680,7 @@ struct StructTraits<autofill::mojom::TriggeringFieldDataView,
                     autofill::TriggeringField> {
   static autofill::FieldRendererId element_id(
       const autofill::TriggeringField& r) {
-    return r.element_id;
+    return r.element_id.renderer_id;
   }
 
   static autofill::AutofillSuggestionTriggerSource trigger_source(
@@ -714,14 +727,14 @@ struct StructTraits<autofill::mojom::PasswordSuggestionRequestDataView,
     return r.form_data;
   }
 
-  static uint64_t username_field_index(
+  static autofill::FieldRendererId username_field_id(
       const autofill::PasswordSuggestionRequest& r) {
-    return r.username_field_index;
+    return r.username_field_id.renderer_id;
   }
 
-  static uint64_t password_field_index(
+  static autofill::FieldRendererId password_field_id(
       const autofill::PasswordSuggestionRequest& r) {
-    return r.password_field_index;
+    return r.password_field_id.renderer_id;
   }
 
   static bool Read(autofill::mojom::PasswordSuggestionRequestDataView data,

@@ -5,6 +5,7 @@
 package org.chromium.chrome.browser.tabbed_mode;
 
 import android.view.View;
+import android.widget.ImageView;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.R;
@@ -15,7 +16,6 @@ import org.chromium.components.browser_ui.widget.highlight.ViewHighlighter.Highl
 import org.chromium.components.browser_ui.widget.text.TextViewWithCompoundDrawables;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel;
-import org.chromium.ui.widget.ChromeImageView;
 
 /** A custom binder used to bind the incognito menu item. */
 @NullMarked
@@ -24,10 +24,15 @@ class IncognitoMenuItemViewBinder {
     public static void bind(PropertyModel model, View view, PropertyKey key) {
         if (key == AppMenuItemProperties.MENU_ITEM_ID) {
             int id = model.get(AppMenuItemProperties.MENU_ITEM_ID);
-            assert id == R.id.new_incognito_tab_menu_id || id == R.id.new_incognito_window_menu_id;
+            // Non-incognito menu items can be present if incognito is policy-forced.
+            // This is for visibility so the user knows the options are disabled intentionally.
+            assert id == R.id.new_incognito_tab_menu_id
+                    || id == R.id.new_incognito_window_menu_id
+                    || id == R.id.new_tab_menu_id
+                    || id == R.id.new_window_menu_id;
             view.setId(id);
         } else if (key == AppMenuItemProperties.MANAGED) {
-            ChromeImageView image = view.findViewById(R.id.trailing_icon);
+            ImageView image = view.findViewById(R.id.trailing_icon);
             if (model.get(AppMenuItemProperties.MANAGED)) {
                 image.setImageResource(R.drawable.ic_domain);
                 image.setVisibility(View.VISIBLE);

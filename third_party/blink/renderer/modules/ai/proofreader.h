@@ -47,7 +47,8 @@ class Proofreader final : public ScriptWrappable,
   Proofreader(ScriptState* script_state,
               scoped_refptr<base::SequencedTaskRunner> task_runner,
               mojo::PendingRemote<mojom::blink::AIProofreader> pending_remote,
-              ProofreaderCreateOptions* options);
+              ProofreaderCreateOptions* options,
+              uint64_t context_window);
 
   void Trace(Visitor* visitor) const override;
 
@@ -113,27 +114,22 @@ class Proofreader final : public ScriptWrappable,
                         AbortSignal* signal,
                         ScriptState* script_state);
 
-  // Recursively fetch correction type labels for all corrections.
-  // `correction_index` is the next correction to fetch the label for.
-  // `raw_corrections` is passed to help annotate the error and correction from
-  // the original input and the corrected input.
-  void GetCorrectionTypes(ScriptPromiseResolver<ProofreadResult>* resolver,
-                          ScriptState* script_state,
-                          AbortSignal* signal,
-                          ProofreadResult* proofread_result,
-                          Vector<Correction> raw_corrections,
-                          const String& input,
-                          uint32_t correction_index);
+  // Fetch correction type labels for all corrections.
+  void GetCorrectionsTypes(ScriptPromiseResolver<ProofreadResult>* resolver,
+                           ScriptState* script_state,
+                           AbortSignal* signal,
+                           ProofreadResult* proofread_result,
+                           Vector<Correction> corrections,
+                           const String& input);
 
-  void OnLabelComplete(ScriptPromiseResolver<ProofreadResult>* resolver,
-                       ScriptState* script_state,
-                       AbortSignal* signal,
-                       ProofreadResult* result,
-                       Vector<Correction> raw_corrections,
-                       const String& input,
-                       uint32_t correction_index,
-                       const String& label,
-                       mojom::blink::ModelExecutionContextInfoPtr context_info);
+  void OnLabelsComplete(
+      ScriptPromiseResolver<ProofreadResult>* resolver,
+      ScriptState* script_state,
+      AbortSignal* signal,
+      ProofreadResult* result,
+      Vector<Correction> corrections,
+      const String& labels,
+      mojom::blink::ModelExecutionContextInfoPtr context_info);
 
   HeapMojoRemote<mojom::blink::AIProofreader> remote_;
   Member<ProofreaderCreateOptions> options_;

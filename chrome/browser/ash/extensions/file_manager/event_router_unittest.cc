@@ -6,6 +6,8 @@
 
 #include <memory>
 
+#include "ash/constants/ash_features.h"
+#include "ash/constants/ash_pref_names.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
@@ -19,8 +21,6 @@
 #include "chrome/browser/ash/file_manager/path_util.h"
 #include "chrome/browser/ash/file_manager/volume_manager_factory.h"
 #include "chrome/browser/ash/fileapi/file_system_backend.h"
-#include "chrome/common/chrome_features.h"
-#include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/disks/fake_disk_mount_manager.h"
@@ -90,6 +90,7 @@ using ::base::test::RunClosure;
 using ::testing::_;
 using ::testing::AllOf;
 using ::testing::Field;
+using ::testing::Property;
 
 // Observes the `BroadcastEvent` operation that is emitted by the event router.
 // The mock methods are used to assert expectations on the return results.
@@ -136,6 +137,7 @@ class FileManagerEventRouterTest : public testing::Test {
         profile_.get(),
         base::BindLambdaForTesting([this](content::BrowserContext* context) {
           return std::unique_ptr<KeyedService>(std::make_unique<VolumeManager>(
+              TestingBrowserProcess::GetGlobal()->local_state(),
               Profile::FromBrowserContext(context), nullptr, nullptr,
               &disk_mount_manager_, nullptr,
               VolumeManager::GetMtpStorageInfoCallback()));
@@ -292,7 +294,8 @@ TEST_F(FileManagerEventRouterTest, OnIOTaskStatusForTrash) {
   extensions::TestEventRouter* test_event_router =
       extensions::CreateAndUseTestEventRouter(profile_.get());
   TestEventRouterObserver observer(test_event_router);
-  auto event_router = std::make_unique<EventRouter>(profile_.get());
+  auto event_router = std::make_unique<EventRouter>(
+      TestingBrowserProcess::GetGlobal()->local_state(), profile_.get());
   event_router->ForceBroadcastingForTesting(true);
 
   io_task::EntryStatus source_entry =
@@ -315,8 +318,8 @@ TEST_F(FileManagerEventRouterTest, OnIOTaskStatusForTrash) {
   base::RunLoop run_loop;
   EXPECT_CALL(
       observer,
-      OnBroadcastEvent(Field(
-          &extensions::Event::event_args,
+      OnBroadcastEvent(Property(
+          &extensions::Event::args,
           AllOf(ExpectEventArgString(0u, "fileFullPath", "/bar.txt"),
                 ExpectEventArgString(0u, "fileSystemName", "Downloads"),
                 ExpectEventArgString(
@@ -333,7 +336,8 @@ TEST_F(FileManagerEventRouterTest, OnIOTaskStatusForCopyPause) {
   extensions::TestEventRouter* test_event_router =
       extensions::CreateAndUseTestEventRouter(profile_.get());
   TestEventRouterObserver observer(test_event_router);
-  auto event_router = std::make_unique<EventRouter>(profile_.get());
+  auto event_router = std::make_unique<EventRouter>(
+      TestingBrowserProcess::GetGlobal()->local_state(), profile_.get());
   event_router->ForceBroadcastingForTesting(true);
 
   io_task::EntryStatus source_entry =
@@ -354,9 +358,9 @@ TEST_F(FileManagerEventRouterTest, OnIOTaskStatusForCopyPause) {
   // Expect the event to have dlp as policy pause params.
   base::RunLoop run_loop;
   EXPECT_CALL(observer,
-              OnBroadcastEvent(Field(&extensions::Event::event_args,
-                                     AllOf(ExpectEventArgPauseParams(
-                                         "dlp", 2, "foo.txt", false)))))
+              OnBroadcastEvent(Property(&extensions::Event::args,
+                                        AllOf(ExpectEventArgPauseParams(
+                                            "dlp", 2, "foo.txt", false)))))
       .WillOnce(RunClosure(run_loop.QuitClosure()));
 
   event_router->OnIOTaskStatus(status);
@@ -368,7 +372,8 @@ TEST_F(FileManagerEventRouterTest, OnIOTaskStatusForPolicyError) {
   extensions::TestEventRouter* test_event_router =
       extensions::CreateAndUseTestEventRouter(profile_.get());
   TestEventRouterObserver observer(test_event_router);
-  auto event_router = std::make_unique<EventRouter>(profile_.get());
+  auto event_router = std::make_unique<EventRouter>(
+      TestingBrowserProcess::GetGlobal()->local_state(), profile_.get());
   event_router->ForceBroadcastingForTesting(true);
 
   io_task::EntryStatus source_entry =
@@ -389,8 +394,8 @@ TEST_F(FileManagerEventRouterTest, OnIOTaskStatusForPolicyError) {
   // Expect the event to have dlp as policy error.
   base::RunLoop run_loop;
   EXPECT_CALL(observer,
-              OnBroadcastEvent(Field(
-                  &extensions::Event::event_args,
+              OnBroadcastEvent(Property(
+                  &extensions::Event::args,
                   AllOf(ExpectEventArgPolicyError("dlp", 1, "foo.txt", true)))))
       .WillOnce(RunClosure(run_loop.QuitClosure()));
 
@@ -401,13 +406,13 @@ TEST_F(FileManagerEventRouterTest, OnIOTaskStatusForPolicyError) {
 class FileManagerEventRouterLocalFilesTest : public FileManagerEventRouterTest {
  public:
   FileManagerEventRouterLocalFilesTest() {
-    scoped_feature_list_.InitAndEnableFeature(features::kSkyVault);
+    scoped_feature_list_.InitAndEnableFeature(ash::features::kSkyVault);
   }
   ~FileManagerEventRouterLocalFilesTest() override = default;
 
   void SetLocalUserFilesPolicy(bool allowed) {
     TestingBrowserProcess::GetGlobal()->local_state()->SetBoolean(
-        prefs::kLocalUserFilesAllowed, allowed);
+        ash::prefs::kLocalUserFilesAllowed, allowed);
   }
 
  private:
@@ -419,15 +424,16 @@ TEST_F(FileManagerEventRouterLocalFilesTest, OnLocalUserFilesPolicyChanged) {
   extensions::TestEventRouter* test_event_router =
       extensions::CreateAndUseTestEventRouter(profile_.get());
   TestEventRouterObserver observer(test_event_router);
-  auto event_router = std::make_unique<EventRouter>(profile_.get());
+  auto event_router = std::make_unique<EventRouter>(
+      TestingBrowserProcess::GetGlobal()->local_state(), profile_.get());
   event_router->ForceBroadcastingForTesting(true);
 
   // Expect the preferences changed event.
   base::ListValue event_args =
       extensions::api::file_manager_private::OnPreferencesChanged::Create();
   base::RunLoop run_loop;
-  EXPECT_CALL(observer, OnBroadcastEvent(Field(&extensions::Event::event_args,
-                                               AllOf(ExpectNoArgs()))))
+  EXPECT_CALL(observer, OnBroadcastEvent(Property(&extensions::Event::args,
+                                                  AllOf(ExpectNoArgs()))))
       .WillOnce(RunClosure(run_loop.QuitClosure()));
   SetLocalUserFilesPolicy(/*allowed=*/false);
   run_loop.Run();

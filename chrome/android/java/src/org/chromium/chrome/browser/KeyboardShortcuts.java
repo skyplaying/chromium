@@ -14,6 +14,7 @@ import android.content.res.Resources;
 import android.view.KeyEvent;
 import android.view.KeyboardShortcutGroup;
 import android.view.KeyboardShortcutInfo;
+import android.view.View;
 
 import androidx.annotation.IntDef;
 import androidx.annotation.StringRes;
@@ -23,11 +24,12 @@ import org.jni_zero.CalledByNative;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.ui.KeyboardUtils;
 import org.chromium.build.annotations.NullMarked;
-import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.bookmarks.bar.BookmarkBarUtils;
+import org.chromium.chrome.browser.feedback.FeedbackPolicyManager;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.fullscreen.FullscreenManager;
+import org.chromium.chrome.browser.homepage.HomepageManager;
 import org.chromium.chrome.browser.incognito.IncognitoUtils;
 import org.chromium.chrome.browser.multiwindow.MultiWindowUtils;
 import org.chromium.chrome.browser.tab.Tab;
@@ -37,14 +39,17 @@ import org.chromium.chrome.browser.tabmodel.TabClosureParams;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.tabmodel.TabModelUtils;
+import org.chromium.chrome.browser.task_manager.TaskManager;
 import org.chromium.chrome.browser.toolbar.ToolbarManager;
 import org.chromium.components.browser_ui.widget.MenuOrKeyboardActionController;
 import org.chromium.content_public.browser.BrowserContextHandle;
 import org.chromium.content_public.browser.ContentFeatureList;
 import org.chromium.content_public.browser.ContentFeatureMap;
+import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.device.gamepad.GamepadList;
 import org.chromium.ui.accessibility.AccessibilityState;
+import org.chromium.ui.base.PageTransition;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -80,11 +85,12 @@ public class KeyboardShortcuts {
         KeyboardShortcutsSemanticMeaning.MOVE_TO_TAB_RIGHT,
         KeyboardShortcutsSemanticMeaning.MOVE_TO_SPECIFIC_TAB,
         KeyboardShortcutsSemanticMeaning.MOVE_TO_LAST_TAB,
-        KeyboardShortcutsSemanticMeaning.NOT_IMPLEMENTED_TAB_SEARCH,
+        KeyboardShortcutsSemanticMeaning.TAB_SEARCH,
+        KeyboardShortcutsSemanticMeaning.TAB_SEARCH_SIDE_UI,
         KeyboardShortcutsSemanticMeaning.NOT_IMPLEMENTED_TOGGLE_MULTITASK_MENU,
         KeyboardShortcutsSemanticMeaning.CLOSE_TAB,
         KeyboardShortcutsSemanticMeaning.CLOSE_WINDOW,
-        KeyboardShortcutsSemanticMeaning.NOT_IMPLEMENTED_QUIT_CHROME,
+        KeyboardShortcutsSemanticMeaning.QUIT_CHROME,
         KeyboardShortcutsSemanticMeaning.JUMP_TO_OMNIBOX,
         KeyboardShortcutsSemanticMeaning.JUMP_TO_SEARCH,
         KeyboardShortcutsSemanticMeaning.NOT_IMPLEMENTED_FOCUS_WEB_CONTENTS_PANE,
@@ -93,6 +99,7 @@ public class KeyboardShortcuts {
         KeyboardShortcutsSemanticMeaning.KEYBOARD_FOCUS_TOOLBAR,
         KeyboardShortcutsSemanticMeaning.KEYBOARD_FOCUS_BOOKMARKS,
         KeyboardShortcutsSemanticMeaning.KEYBOARD_FOCUS_SWITCH_ROW_OF_TOP_ELEMENTS,
+        KeyboardShortcutsSemanticMeaning.KEYBOARD_FOCUS_SWITCH_ROW_OF_TOP_ELEMENTS_REVERSE,
         KeyboardShortcutsSemanticMeaning.FOCUSED_TAB_STRIP_ITEM_OPEN_CONTEXT_MENU,
         KeyboardShortcutsSemanticMeaning.FOCUSED_TAB_STRIP_ITEM_REORDER_LEFT,
         KeyboardShortcutsSemanticMeaning.FOCUSED_TAB_STRIP_ITEM_REORDER_RIGHT,
@@ -102,7 +109,7 @@ public class KeyboardShortcuts {
         KeyboardShortcutsSemanticMeaning.NOT_IMPLEMENTED_FOCUS_ON_INACTIVE_DIALOGS,
         KeyboardShortcutsSemanticMeaning.OPEN_BOOKMARKS,
         KeyboardShortcutsSemanticMeaning.BOOKMARK_PAGE,
-        KeyboardShortcutsSemanticMeaning.NOT_IMPLEMENTED_BOOKMARK_ALL_TABS,
+        KeyboardShortcutsSemanticMeaning.BOOKMARK_ALL_TABS,
         KeyboardShortcutsSemanticMeaning.TOGGLE_BOOKMARK_BAR,
         KeyboardShortcutsSemanticMeaning.NOT_IMPLEMENTED_TOGGLE_IMMERSIVE,
         KeyboardShortcutsSemanticMeaning.NOT_IMPLEMENTED_EXIT_IMMERSIVE,
@@ -126,13 +133,15 @@ public class KeyboardShortcuts {
         KeyboardShortcutsSemanticMeaning.NOT_IMPLEMENTED_AVATAR_MENU,
         KeyboardShortcutsSemanticMeaning.FEEDBACK_FORM,
         KeyboardShortcutsSemanticMeaning.FIND_IN_PAGE,
-        KeyboardShortcutsSemanticMeaning.NOT_IMPLEMENTED_HOME,
+        KeyboardShortcutsSemanticMeaning.OPEN_HOME_PAGE,
         KeyboardShortcutsSemanticMeaning.OPEN_HELP,
         KeyboardShortcutsSemanticMeaning.OPEN_MENU,
         KeyboardShortcutsSemanticMeaning.CUSTOM_EXTENSION_SHORTCUT,
         KeyboardShortcutsSemanticMeaning.TOGGLE_MULTISELECT,
-        KeyboardShortcutsSemanticMeaning.ZOOM_IN_LEGACY,
-        KeyboardShortcutsSemanticMeaning.ZOOM_OUT_LEGACY,
+        // KeyboardShortcutsSemanticMeaning.ZOOM_IN_LEGACY,
+        // KeyboardShortcutsSemanticMeaning.ZOOM_OUT_LEGACY,
+        KeyboardShortcutsSemanticMeaning.FOCUS_APP_MENU_BUTTON,
+        KeyboardShortcutsSemanticMeaning.OPEN_FILE,
         KeyboardShortcutsSemanticMeaning.MAX_VALUE
     })
     @Retention(RetentionPolicy.SOURCE)
@@ -155,13 +164,13 @@ public class KeyboardShortcuts {
         int MOVE_TO_TAB_RIGHT = 9;
         int MOVE_TO_SPECIFIC_TAB = 10;
         int MOVE_TO_LAST_TAB = 11;
-        int NOT_IMPLEMENTED_TAB_SEARCH = 12;
+        int TAB_SEARCH = 12;
         int NOT_IMPLEMENTED_TOGGLE_MULTITASK_MENU = 13;
 
         // Closing.
         int CLOSE_TAB = 14;
         int CLOSE_WINDOW = 15;
-        int NOT_IMPLEMENTED_QUIT_CHROME = 16;
+        int QUIT_CHROME = 16;
 
         // Navigation controls.
         int JUMP_TO_OMNIBOX = 17;
@@ -187,7 +196,7 @@ public class KeyboardShortcuts {
         // Bookmarks.
         int OPEN_BOOKMARKS = 32;
         int BOOKMARK_PAGE = 33;
-        int NOT_IMPLEMENTED_BOOKMARK_ALL_TABS = 34;
+        int BOOKMARK_ALL_TABS = 34;
         int TOGGLE_BOOKMARK_BAR = 35;
 
         // Fullscreen.
@@ -225,7 +234,7 @@ public class KeyboardShortcuts {
         int NOT_IMPLEMENTED_AVATAR_MENU = 55;
         int FEEDBACK_FORM = 56;
         int FIND_IN_PAGE = 57;
-        int NOT_IMPLEMENTED_HOME = 58;
+        int OPEN_HOME_PAGE = 58;
         int OPEN_HELP = 59;
         int OPEN_MENU = 60;
 
@@ -237,11 +246,23 @@ public class KeyboardShortcuts {
         int TOGGLE_MULTISELECT = 62;
 
         // Visual (Legacy) zoom controls.
-        int ZOOM_IN_LEGACY = 63;
-        int ZOOM_OUT_LEGACY = 64;
+        // int ZOOM_IN_LEGACY = 63;
+        // int ZOOM_OUT_LEGACY = 64;
+
+        // App menu button keyboard shortcut.
+        int FOCUS_APP_MENU_BUTTON = 65;
+
+        // Tab search start anchored side UI.
+        int TAB_SEARCH_SIDE_UI = 66;
+
+        // Top controls switch row reverse.
+        int KEYBOARD_FOCUS_SWITCH_ROW_OF_TOP_ELEMENTS_REVERSE = 67;
+
+        // Open file shortcut.
+        int OPEN_FILE = 68;
 
         // Max value.
-        int MAX_VALUE = 65;
+        int MAX_VALUE = 68;
     }
 
     // LINT.ThenChange(//tools/metrics/histograms/metadata/accessibility/enums.xml:KeyboardShortcutsSemanticMeaning, //tools/metrics/histograms/metadata/accessibility/histograms.xml:KeyboardShortcutsSemanticMeaning)
@@ -405,6 +426,11 @@ public class KeyboardShortcuts {
                 R.string.keyboard_shortcut_close_window,
                 R.string.keyboard_shortcut_tab_group_header,
                 new KeyCombo[] {new KeyCombo(KeyEvent.KEYCODE_F4, KeyEvent.META_ALT_ON)});
+        new KeyboardShortcutDefinition(
+                KeyboardShortcutsSemanticMeaning.QUIT_CHROME,
+                new KeyCombo(KeyEvent.KEYCODE_Q, KeyEvent.META_CTRL_ON),
+                R.string.keyboard_shortcut_quit_chrome,
+                R.string.keyboard_shortcut_tab_group_header);
 
         new KeyboardShortcutDefinition(
                 KeyboardShortcutsSemanticMeaning.OPEN_NEW_TAB,
@@ -464,6 +490,20 @@ public class KeyboardShortcuts {
                     new KeyCombo(KeyEvent.KEYCODE_F4, KeyEvent.META_CTRL_ON),
                     new KeyCombo(KeyEvent.KEYCODE_BUTTON_B, NO_MODIFIER),
                 });
+
+        // Tab search in Hub UI is opened with Ctrl+Shift+A.
+        new KeyboardShortcutDefinition(
+                KeyboardShortcutsSemanticMeaning.TAB_SEARCH,
+                new KeyCombo(KeyEvent.KEYCODE_A, (KeyEvent.META_CTRL_ON | KeyEvent.META_SHIFT_ON)),
+                R.string.keyboard_shortcut_tab_search,
+                R.string.keyboard_shortcut_tab_group_header);
+
+        // Tab search start anchored side UI is opened with Alt+Shift+A.
+        new KeyboardShortcutDefinition(
+                KeyboardShortcutsSemanticMeaning.TAB_SEARCH_SIDE_UI,
+                new KeyCombo(KeyEvent.KEYCODE_A, (KeyEvent.META_ALT_ON | KeyEvent.META_SHIFT_ON)),
+                R.string.keyboard_shortcut_tab_search,
+                R.string.keyboard_shortcut_tab_group_header);
 
         // Navigation shortcuts (keyboard_shortcut_tab_navigation_group_header).
         new KeyboardShortcutDefinition(
@@ -573,14 +613,11 @@ public class KeyboardShortcuts {
                 R.string.keyboard_shortcut_chrome_feature_group_header,
                 new KeyCombo[] {
                     new KeyCombo(KeyEvent.KEYCODE_F, KeyEvent.META_ALT_ON),
-                    new KeyCombo(KeyEvent.KEYCODE_F10, NO_MODIFIER),
                     new KeyCombo(KeyEvent.KEYCODE_BUTTON_Y, NO_MODIFIER)
                 });
         new KeyboardShortcutDefinition(
                 KeyboardShortcutsSemanticMeaning.FEEDBACK_FORM,
-                new KeyCombo(KeyEvent.KEYCODE_I, KeyEvent.META_ALT_ON | KeyEvent.META_SHIFT_ON),
-                R.string.keyboard_shortcut_send_feedback,
-                R.string.keyboard_shortcut_chrome_feature_group_header);
+                new KeyCombo(KeyEvent.KEYCODE_I, KeyEvent.META_ALT_ON | KeyEvent.META_SHIFT_ON));
         new KeyboardShortcutDefinition(
                 KeyboardShortcutsSemanticMeaning.SHOW_DOWNLOADS,
                 new KeyCombo(KeyEvent.KEYCODE_J, KeyEvent.META_CTRL_ON),
@@ -630,6 +667,9 @@ public class KeyboardShortcuts {
                 KeyboardShortcutsSemanticMeaning.KEYBOARD_FOCUS_SWITCH_ROW_OF_TOP_ELEMENTS,
                 new KeyCombo(KeyEvent.KEYCODE_F6, NO_MODIFIER));
         new KeyboardShortcutDefinition(
+                KeyboardShortcutsSemanticMeaning.KEYBOARD_FOCUS_SWITCH_ROW_OF_TOP_ELEMENTS_REVERSE,
+                new KeyCombo(KeyEvent.KEYCODE_F6, KeyEvent.META_SHIFT_ON));
+        new KeyboardShortcutDefinition(
                 KeyboardShortcutsSemanticMeaning.FOCUSED_TAB_STRIP_ITEM_OPEN_CONTEXT_MENU,
                 new KeyCombo(KeyEvent.KEYCODE_F10, KeyEvent.META_SHIFT_ON));
         new KeyboardShortcutDefinition(
@@ -638,6 +678,9 @@ public class KeyboardShortcuts {
         new KeyboardShortcutDefinition(
                 KeyboardShortcutsSemanticMeaning.FOCUSED_TAB_STRIP_ITEM_REORDER_RIGHT,
                 new KeyCombo(KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.META_CTRL_ON));
+        new KeyboardShortcutDefinition(
+                KeyboardShortcutsSemanticMeaning.FOCUS_APP_MENU_BUTTON,
+                new KeyCombo(KeyEvent.KEYCODE_F10, NO_MODIFIER));
 
         // Bookmark shortcuts.
         new KeyboardShortcutDefinition(
@@ -692,31 +735,21 @@ public class KeyboardShortcuts {
                             (KeyEvent.META_CTRL_ON | KeyEvent.META_SHIFT_ON)),
                     new KeyCombo(
                             KeyEvent.KEYCODE_EQUALS,
-                            (KeyEvent.META_CTRL_ON | KeyEvent.META_SHIFT_ON))
+                            (KeyEvent.META_CTRL_ON | KeyEvent.META_SHIFT_ON)),
+                    new KeyCombo(KeyEvent.KEYCODE_NUMPAD_ADD, KeyEvent.META_CTRL_ON)
                 });
         new KeyboardShortcutDefinition(
                 KeyboardShortcutsSemanticMeaning.ZOOM_OUT,
                 new KeyCombo(KeyEvent.KEYCODE_MINUS, KeyEvent.META_CTRL_ON),
                 R.string.keyboard_shortcut_zoom_out,
                 R.string.keyboard_shortcut_webpage_group_header,
-                new KeyCombo[] {new KeyCombo(KeyEvent.KEYCODE_ZOOM_OUT, NO_MODIFIER)});
-        new KeyboardShortcutDefinition(
-                KeyboardShortcutsSemanticMeaning.ZOOM_IN_LEGACY,
-                new KeyCombo(
-                        KeyEvent.KEYCODE_PLUS, (KeyEvent.META_CTRL_ON | KeyEvent.META_SHIFT_ON)),
-                R.string.keyboard_shortcut_zoom_in,
-                R.string.keyboard_shortcut_webpage_group_header,
                 new KeyCombo[] {
+                    new KeyCombo(KeyEvent.KEYCODE_ZOOM_OUT, NO_MODIFIER),
                     new KeyCombo(
-                            KeyEvent.KEYCODE_EQUALS,
-                            (KeyEvent.META_CTRL_ON | KeyEvent.META_SHIFT_ON))
+                            KeyEvent.KEYCODE_MINUS,
+                            (KeyEvent.META_CTRL_ON | KeyEvent.META_SHIFT_ON)),
+                    new KeyCombo(KeyEvent.KEYCODE_NUMPAD_SUBTRACT, KeyEvent.META_CTRL_ON)
                 });
-        new KeyboardShortcutDefinition(
-                KeyboardShortcutsSemanticMeaning.ZOOM_OUT_LEGACY,
-                new KeyCombo(
-                        KeyEvent.KEYCODE_MINUS, (KeyEvent.META_CTRL_ON | KeyEvent.META_SHIFT_ON)),
-                R.string.keyboard_shortcut_zoom_out,
-                R.string.keyboard_shortcut_webpage_group_header);
         new KeyboardShortcutDefinition(
                 KeyboardShortcutsSemanticMeaning.ZOOM_RESET,
                 new KeyCombo(KeyEvent.KEYCODE_0, KeyEvent.META_CTRL_ON),
@@ -742,9 +775,6 @@ public class KeyboardShortcuts {
         // Unimplemented shortcuts.
         // TODO(crbug.com/402775002): Figure out what shortcut does TOGGLE_MULTITASK_MENU.
         new KeyboardShortcutDefinition(
-                KeyboardShortcutsSemanticMeaning.NOT_IMPLEMENTED_TAB_SEARCH,
-                new KeyCombo(KeyEvent.KEYCODE_A, (KeyEvent.META_CTRL_ON | KeyEvent.META_SHIFT_ON)));
-        new KeyboardShortcutDefinition(
                 KeyboardShortcutsSemanticMeaning.NOT_IMPLEMENTED_FOCUS_WEB_CONTENTS_PANE,
                 new KeyCombo(KeyEvent.KEYCODE_F6, KeyEvent.META_CTRL_ON));
         new KeyboardShortcutDefinition(
@@ -765,10 +795,7 @@ public class KeyboardShortcuts {
                         KeyEvent.KEYCODE_PAGE_DOWN,
                         KeyEvent.META_CTRL_ON | KeyEvent.META_SHIFT_ON));
         new KeyboardShortcutDefinition(
-                KeyboardShortcutsSemanticMeaning.NOT_IMPLEMENTED_FOCUS_ON_INACTIVE_DIALOGS,
-                new KeyCombo(KeyEvent.KEYCODE_A, KeyEvent.META_ALT_ON | KeyEvent.META_SHIFT_ON));
-        new KeyboardShortcutDefinition(
-                KeyboardShortcutsSemanticMeaning.NOT_IMPLEMENTED_BOOKMARK_ALL_TABS,
+                KeyboardShortcutsSemanticMeaning.BOOKMARK_ALL_TABS,
                 new KeyCombo(KeyEvent.KEYCODE_D, KeyEvent.META_CTRL_ON | KeyEvent.META_SHIFT_ON));
         // TODO(crbug.com/402775002): Allow long press on Esc.
         new KeyboardShortcutDefinition(
@@ -790,8 +817,11 @@ public class KeyboardShortcuts {
                 KeyboardShortcutsSemanticMeaning.NOT_IMPLEMENTED_AVATAR_MENU,
                 new KeyCombo(KeyEvent.KEYCODE_M, KeyEvent.META_CTRL_ON | KeyEvent.META_SHIFT_ON));
         new KeyboardShortcutDefinition(
-                KeyboardShortcutsSemanticMeaning.NOT_IMPLEMENTED_HOME,
+                KeyboardShortcutsSemanticMeaning.OPEN_HOME_PAGE,
                 new KeyCombo(KeyEvent.KEYCODE_HOME, KeyEvent.META_ALT_ON));
+        new KeyboardShortcutDefinition(
+                KeyboardShortcutsSemanticMeaning.OPEN_FILE,
+                new KeyCombo(KeyEvent.KEYCODE_O, KeyEvent.META_CTRL_ON));
     }
 
     /**
@@ -860,6 +890,50 @@ public class KeyboardShortcuts {
                     }
                 }
                 break;
+            case KeyEvent.KEYCODE_F6:
+                if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+                    int actionId =
+                            event.isShiftPressed()
+                                    ? R.id.switch_keyboard_focus_row_reverse
+                                    : R.id.switch_keyboard_focus_row;
+                    if (menuOrKeyboardActionController.onMenuOrKeyboardAction(actionId, false)) {
+                        return true;
+                    }
+                }
+                return true;
+            case KeyEvent.KEYCODE_F7:
+                if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+                    if (menuOrKeyboardActionController.onMenuOrKeyboardAction(
+                            R.id.toggle_caret_browsing, false)) {
+                        return true;
+                    }
+                }
+                return true;
+            case KeyEvent.KEYCODE_TAB:
+            case KeyEvent.KEYCODE_PAGE_DOWN:
+            case KeyEvent.KEYCODE_PAGE_UP:
+            case KeyEvent.KEYCODE_BUTTON_R1:
+            case KeyEvent.KEYCODE_BUTTON_L1:
+                @KeyboardShortcutsSemanticMeaning int meaning = getKeyboardSemanticMeaning(event);
+
+                if (meaning != KeyboardShortcutsSemanticMeaning.MOVE_TO_TAB_RIGHT
+                        && meaning != KeyboardShortcutsSemanticMeaning.MOVE_TO_TAB_LEFT) {
+                    break;
+                }
+
+                if (event.getAction() != KeyEvent.ACTION_DOWN || event.getRepeatCount() != 0) {
+                    return true;
+                }
+
+                if (meaning == KeyboardShortcutsSemanticMeaning.MOVE_TO_TAB_RIGHT) {
+                    menuOrKeyboardActionController.onMenuOrKeyboardAction(
+                            R.id.select_next_tab, false);
+                } else {
+                    menuOrKeyboardActionController.onMenuOrKeyboardAction(
+                            R.id.select_previous_tab, false);
+                }
+
+                return true;
             case KeyEvent.KEYCODE_TV:
             case KeyEvent.KEYCODE_GUIDE:
             case KeyEvent.KEYCODE_DVR:
@@ -907,6 +981,24 @@ public class KeyboardShortcuts {
                     shortcutDefinition.mPrimaryShortcut.mModifier);
         }
 
+        // The scroll to top and scroll to bottom shortcuts are handled via
+        // Blink in
+        // third_party/blink/renderer/core/input/keyboard_event_manager.cc.
+        addShortcut(
+                context,
+                shortcutGroupsById,
+                R.string.keyboard_shortcut_chrome_feature_group_header,
+                R.string.keyboard_shortcut_scroll_to_top,
+                KeyEvent.KEYCODE_DPAD_UP,
+                (KeyEvent.META_CTRL_ON | KeyEvent.META_ALT_ON));
+        addShortcut(
+                context,
+                shortcutGroupsById,
+                R.string.keyboard_shortcut_chrome_feature_group_header,
+                R.string.keyboard_shortcut_scroll_to_bottom,
+                KeyEvent.KEYCODE_DPAD_DOWN,
+                (KeyEvent.META_CTRL_ON | KeyEvent.META_ALT_ON));
+
         if (BookmarkBarUtils.isDeviceBookmarkBarCompatible(context)) {
             addShortcut(
                     context,
@@ -915,6 +1007,15 @@ public class KeyboardShortcuts {
                     R.string.keyboard_shortcut_toggle_bookmark_bar,
                     KeyEvent.KEYCODE_B,
                     (KeyEvent.META_CTRL_ON | KeyEvent.META_SHIFT_ON));
+        }
+        if (FeedbackPolicyManager.getInstance().isUserFeedbackAllowed()) {
+            addShortcut(
+                    context,
+                    shortcutGroupsById,
+                    R.string.keyboard_shortcut_chrome_feature_group_header,
+                    R.string.keyboard_shortcut_send_feedback,
+                    KeyEvent.KEYCODE_I,
+                    KeyEvent.META_ALT_ON | KeyEvent.META_SHIFT_ON);
         }
         if (ContentFeatureMap.isEnabled(ContentFeatureList.ANDROID_DEV_TOOLS_FRONTEND)) {
             addShortcut(
@@ -932,7 +1033,7 @@ public class KeyboardShortcuts {
                     KeyEvent.KEYCODE_I,
                     (KeyEvent.META_CTRL_ON | KeyEvent.META_SHIFT_ON));
         }
-        if (ChromeFeatureList.isEnabled(ChromeFeatureList.TASK_MANAGER_CLANK)) {
+        if (TaskManager.isEnabled()) {
             addShortcut(
                     context,
                     shortcutGroupsById,
@@ -1003,6 +1104,7 @@ public class KeyboardShortcuts {
             }
         } else if (!event.isCtrlPressed()
                 && !event.isAltPressed()
+                && keyCode != KeyEvent.KEYCODE_F1
                 && keyCode != KeyEvent.KEYCODE_F3
                 && keyCode != KeyEvent.KEYCODE_F5
                 && keyCode != KeyEvent.KEYCODE_F6
@@ -1025,10 +1127,10 @@ public class KeyboardShortcuts {
 
         RecordHistogram.recordEnumeratedHistogram(
                 AccessibilityState.isKnownScreenReaderEnabled()
-                        ? "Accessibility.Android.KeyboardShortcut.ScreenReaderRunning5"
-                        : "Accessibility.Android.KeyboardShortcut.NoScreenReader5",
+                        ? "Accessibility.Android.KeyboardShortcut.ScreenReaderRunning8"
+                        : "Accessibility.Android.KeyboardShortcut.NoScreenReader8",
                 semanticMeaning,
-                KeyboardShortcuts.KeyboardShortcutsSemanticMeaning.MAX_VALUE);
+                KeyboardShortcuts.KeyboardShortcutsSemanticMeaning.MAX_VALUE + 1);
 
         switch (semanticMeaning) {
             case KeyboardShortcutsSemanticMeaning.OPEN_RECENTLY_CLOSED_TAB:
@@ -1036,16 +1138,25 @@ public class KeyboardShortcuts {
                         R.id.open_recently_closed_tab, false);
                 return true;
             case KeyboardShortcutsSemanticMeaning.OPEN_NEW_TAB:
-                menuOrKeyboardActionController.onMenuOrKeyboardAction(
-                        currentTabModel.isIncognito()
-                                ? R.id.new_incognito_tab_menu_id
-                                : R.id.new_tab_menu_id,
-                        false);
-                return true;
+                {
+                    boolean forced =
+                            IncognitoUtils.isIncognitoModeForced(
+                                    tabModelSelector.getCurrentModel().getProfile());
+                    menuOrKeyboardActionController.onMenuOrKeyboardAction(
+                            (forced || currentTabModel.isIncognito())
+                                    ? R.id.new_incognito_tab_menu_id
+                                    : R.id.new_tab_menu_id,
+                            false);
+                    return true;
+                }
             case KeyboardShortcutsSemanticMeaning.OPEN_NEW_WINDOW:
                 if (MultiWindowUtils.isMultiInstanceApi31Enabled()) {
+                    boolean forced =
+                            IncognitoUtils.isIncognitoModeForced(
+                                    tabModelSelector.getCurrentModel().getProfile());
                     menuOrKeyboardActionController.onMenuOrKeyboardAction(
-                            R.id.new_window_menu_id, false);
+                            forced ? R.id.new_incognito_window_menu_id : R.id.new_window_menu_id,
+                            false);
                     return true;
                 } else {
                     break;
@@ -1077,7 +1188,10 @@ public class KeyboardShortcuts {
                 menuOrKeyboardActionController.onMenuOrKeyboardAction(R.id.show_menu, false);
                 return true;
             case KeyboardShortcutsSemanticMeaning.FEEDBACK_FORM:
-                menuOrKeyboardActionController.onMenuOrKeyboardAction(R.id.feedback_form, false);
+                if (FeedbackPolicyManager.getInstance().isUserFeedbackAllowed()) {
+                    menuOrKeyboardActionController.onMenuOrKeyboardAction(
+                            R.id.feedback_form, false);
+                }
                 return true;
             case KeyboardShortcutsSemanticMeaning.TOGGLE_BOOKMARK_BAR:
                 return menuOrKeyboardActionController.onMenuOrKeyboardAction(
@@ -1085,10 +1199,33 @@ public class KeyboardShortcuts {
             case KeyboardShortcutsSemanticMeaning.CLOSE_WINDOW:
                 return menuOrKeyboardActionController.onMenuOrKeyboardAction(
                         R.id.close_window, /* fromMenu= */ false);
+            case KeyboardShortcutsSemanticMeaning.QUIT_CHROME:
+                return menuOrKeyboardActionController.onMenuOrKeyboardAction(
+                        R.id.quit_chrome, /* fromMenu= */ false);
         }
 
         if (isCurrentTabVisible) {
             switch (semanticMeaning) {
+                case KeyboardShortcutsSemanticMeaning.OPEN_HOME_PAGE:
+                    if (currentTab != null) {
+                        String homePageUrl =
+                                HomepageManager.getInstance()
+                                        .getHomepageGurl(currentTab.isIncognito())
+                                        .getSpec();
+                        currentTab.loadUrl(
+                                new LoadUrlParams(homePageUrl, PageTransition.HOME_PAGE));
+                    }
+                    return true;
+                case KeyboardShortcutsSemanticMeaning.TAB_SEARCH:
+                    menuOrKeyboardActionController.onMenuOrKeyboardAction(R.id.tab_search, false);
+                    return true;
+                case KeyboardShortcutsSemanticMeaning.TAB_SEARCH_SIDE_UI:
+                    int actionId =
+                            ChromeFeatureList.sTabSearchForDesktop.isEnabled()
+                                    ? R.id.tab_search_side_ui
+                                    : R.id.tab_search;
+                    menuOrKeyboardActionController.onMenuOrKeyboardAction(actionId, false);
+                    return true;
                 case KeyboardShortcutsSemanticMeaning.MOVE_TO_SPECIFIC_TAB:
                     if (tabSwitchingEnabled) {
                         int numCode =
@@ -1109,41 +1246,15 @@ public class KeyboardShortcuts {
                         TabModelUtils.setIndex(currentTabModel, tabCount - 1);
                     }
                     return true;
-                case KeyboardShortcutsSemanticMeaning.MOVE_TO_TAB_RIGHT:
-                    if (tabSwitchingEnabled && tabCount > 1) {
-                        TabModelUtils.setIndex(
-                                currentTabModel, (currentTabModel.index() + 1) % tabCount);
-                    }
-                    return true;
-                case KeyboardShortcutsSemanticMeaning.MOVE_TO_TAB_LEFT:
-                    if (tabSwitchingEnabled && tabCount > 1) {
-                        TabModelUtils.setIndex(
-                                currentTabModel,
-                                (currentTabModel.index() + tabCount - 1) % tabCount);
-                    }
-                    return true;
                 case KeyboardShortcutsSemanticMeaning.CLOSE_TAB:
-                    List<Tab> selectedTabs = new ArrayList<>();
-                    for (int i = 0; i < currentTabModel.getCount(); i++) {
-                        @Nullable Tab tab = currentTabModel.getTabAt(i);
-                        if (tab == null) continue;
-                        if (!currentTabModel.isTabMultiSelected(tab.getId())) continue;
-                        selectedTabs.add(tab);
-                    }
-                    List<Tab> tabsToClose =
-                            selectedTabs.isEmpty()
-                                    ? List.of(TabModelUtils.getCurrentTab(currentTabModel))
-                                    : selectedTabs;
+                    List<Tab> tabsToClose = currentTabModel.getOrderedMultiSelectedTabs();
                     Tab tab = TabModelUtils.getCurrentTab(currentTabModel);
                     if (tab != null) {
                         // Pinned tabs require a second Ctrl+W to confirm closure unless part of a
                         // bulk selection or already confirmed by the manager.
                         boolean canClose =
                                 PinnedTabClosureManagerFactory.getInstance()
-                                        .shouldCloseTab(
-                                                tabModelSelector,
-                                                tab,
-                                                /* isBulkClose= */ tabsToClose.size() > 1);
+                                        .shouldCloseTab(tabModelSelector, tab, tabsToClose);
                         if (canClose) {
                             currentTabModel
                                     .getTabRemover()
@@ -1177,6 +1288,10 @@ public class KeyboardShortcuts {
                     menuOrKeyboardActionController.onMenuOrKeyboardAction(
                             R.id.bookmark_this_page_id, false);
                     return true;
+                case KeyboardShortcutsSemanticMeaning.BOOKMARK_ALL_TABS:
+                    menuOrKeyboardActionController.onMenuOrKeyboardAction(
+                            R.id.bookmark_all_tabs, false);
+                    return true;
                 case KeyboardShortcutsSemanticMeaning.OPEN_HISTORY:
                     menuOrKeyboardActionController.onMenuOrKeyboardAction(
                             R.id.open_history_menu_id, false);
@@ -1193,19 +1308,13 @@ public class KeyboardShortcuts {
                     menuOrKeyboardActionController.onMenuOrKeyboardAction(R.id.print_id, false);
                     return true;
                 case KeyboardShortcutsSemanticMeaning.ZOOM_IN:
-                    ZoomController.zoomIn(currentWebContents);
+                    ZoomController.zoomInPage(currentTab);
                     return true;
                 case KeyboardShortcutsSemanticMeaning.ZOOM_OUT:
-                    ZoomController.zoomOut(currentWebContents);
-                    return true;
-                case KeyboardShortcutsSemanticMeaning.ZOOM_IN_LEGACY:
-                    ZoomController.zoomInVisual(currentWebContents);
-                    return true;
-                case KeyboardShortcutsSemanticMeaning.ZOOM_OUT_LEGACY:
-                    ZoomController.zoomOutVisual(currentWebContents);
+                    ZoomController.zoomOutPage(currentTab);
                     return true;
                 case KeyboardShortcutsSemanticMeaning.ZOOM_RESET:
-                    ZoomController.zoomReset(currentWebContents, browserContextHandle);
+                    ZoomController.zoomResetPage(currentTab, browserContextHandle);
                     return true;
                 case KeyboardShortcutsSemanticMeaning.RELOAD_TAB:
                     if (currentTab != null) {
@@ -1229,22 +1338,25 @@ public class KeyboardShortcuts {
                         currentTab.goForward();
                     }
                     return true;
-                case KeyboardShortcutsSemanticMeaning.TOGGLE_CARET_BROWSING:
-                    if (ContentFeatureList.sAndroidCaretBrowsing.isEnabled()) {
-                        menuOrKeyboardActionController.onMenuOrKeyboardAction(
-                                R.id.toggle_caret_browsing, false);
-                        return true;
-                    }
-                    return false;
+
                 case KeyboardShortcutsSemanticMeaning.OPEN_HELP:
                     menuOrKeyboardActionController.onMenuOrKeyboardAction(R.id.help_id, false);
                     return true;
-                case KeyboardShortcutsSemanticMeaning.KEYBOARD_FOCUS_SWITCH_ROW_OF_TOP_ELEMENTS:
-                    // TODO(crbug.com/360423850): Don't allow F6 to be overridden by websites.
-                    return menuOrKeyboardActionController.onMenuOrKeyboardAction(
-                            R.id.switch_keyboard_focus_row, /* fromMenu= */ false);
-                case KeyboardShortcutsSemanticMeaning
-                        .FOCUSED_TAB_STRIP_ITEM_OPEN_CONTEXT_MENU:
+                case KeyboardShortcutsSemanticMeaning.OPEN_FILE:
+                    if (ChromeFeatureList.sAndroidKeyboardShortcutOpenFile.isEnabled()) {
+                        menuOrKeyboardActionController.onMenuOrKeyboardAction(
+                                R.id.open_file_id, false);
+                        return true;
+                    }
+                    return false;
+                case KeyboardShortcutsSemanticMeaning.FOCUS_APP_MENU_BUTTON:
+                    View menuButtonView = toolbarManager.getMenuButtonView();
+                    if (menuButtonView != null) {
+                        menuButtonView.requestFocus();
+                        return true;
+                    }
+                    return false;
+                case KeyboardShortcutsSemanticMeaning.FOCUSED_TAB_STRIP_ITEM_OPEN_CONTEXT_MENU:
                     return menuOrKeyboardActionController.onMenuOrKeyboardAction(
                             R.id.open_tab_strip_context_menu, /* fromMenu= */ false);
                 case KeyboardShortcutsSemanticMeaning.FOCUSED_TAB_STRIP_ITEM_REORDER_LEFT:

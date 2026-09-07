@@ -35,13 +35,11 @@ import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Feature;
-import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutGroupTitle;
 import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutTab;
 import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutUtils;
 import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutView;
 import org.chromium.chrome.browser.compositor.overlays.strip.reorder.ReorderDelegate.ReorderType;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.tab.Tab;
 
 /** Tests for {@link TabReorderStrategy}. */
@@ -105,7 +103,6 @@ public class TabReorderStrategyTest extends ReorderStrategyTestBase {
                         mAnimationHost,
                         mScrollDelegate,
                         mModel,
-                        mTabGroupModelFilter,
                         mContainerView,
                         mGroupIdToHideSupplier,
                         mTabWidthSupplier,
@@ -245,7 +242,6 @@ public class TabReorderStrategyTest extends ReorderStrategyTestBase {
     }
 
     @Test
-    @EnableFeatures(ChromeFeatureList.ANDROID_PINNED_TABS_TABLET_TAB_STRIP)
     public void testUpdateReorder_fail_pinnedTabs() {
         //                    -------->
         // [CollapsedGroup]  [PinnedTab]  [Tab]  [ExpandedGroup]  [Tab]
@@ -479,19 +475,19 @@ public class TabReorderStrategyTest extends ReorderStrategyTestBase {
     private void verifyMoved() {
         verify(mModel).moveTab(anyInt(), anyInt());
         verify(mTabUnGrouper, never()).ungroupTabs(anyList(), anyBoolean(), anyBoolean(), any());
-        verify(mTabGroupModelFilter, never()).mergeTabsToGroup(anyInt(), anyInt(), anyBoolean());
+        verify(mModel, never()).mergeTabsToGroup(anyInt(), anyInt(), anyBoolean());
     }
 
     private void verifyUnGrouped() {
         verify(mModel, never()).moveTab(anyInt(), anyInt());
         verify(mTabUnGrouper).ungroupTabs(anyList(), anyBoolean(), anyBoolean(), any());
-        verify(mTabGroupModelFilter, never()).mergeTabsToGroup(anyInt(), anyInt(), anyBoolean());
+        verify(mModel, never()).mergeTabsToGroup(anyInt(), anyInt(), anyBoolean());
     }
 
     private void verifyMergedToGroup() {
         verify(mModel, never()).moveTab(anyInt(), anyInt());
         verify(mTabUnGrouper, never()).ungroupTabs(anyList(), anyBoolean(), anyBoolean(), any());
-        verify(mTabGroupModelFilter).mergeListOfTabsToGroup(any(), any(), any(), anyInt());
+        verify(mModel).mergeListOfTabsToGroup(any(), any(), any(), anyInt());
     }
 
     private void verifySuccessfulDrag(float expectedOffset) {
@@ -502,7 +498,7 @@ public class TabReorderStrategyTest extends ReorderStrategyTestBase {
     private void verifyFailedDrag(float expectedOffset) {
         verify(mModel, never()).moveTab(anyInt(), anyInt());
         verify(mTabUnGrouper, never()).ungroupTabs(anyList(), anyBoolean(), anyBoolean(), any());
-        verify(mTabGroupModelFilter, never()).mergeListOfTabsToGroup(any(), any(), any(), anyInt());
+        verify(mModel, never()).mergeListOfTabsToGroup(any(), any(), any(), anyInt());
         verify(mAnimationHost, times(1)).startAnimations(anyList(), isNull());
         assertEquals("Unexpected offset.", expectedOffset, mInteractingTab.getOffsetX(), DELTA);
     }
@@ -531,12 +527,11 @@ public class TabReorderStrategyTest extends ReorderStrategyTestBase {
                             Tab tab = mModel.getTabById(mTabCaptor.getValue().getId());
                             assertThat(tab).isNotNull();
                             Token tabGroupId = tab.getTabGroupId();
-                            int count = mTabGroupModelFilter.getTabCountForGroup(tabGroupId);
-                            when(mTabGroupModelFilter.getTabCountForGroup(tabGroupId))
-                                    .thenReturn(count + 1);
+                            int count = mModel.getTabCountForGroup(tabGroupId);
+                            when(mModel.getTabCountForGroup(tabGroupId)).thenReturn(count + 1);
                             return null;
                         })
-                .when(mTabGroupModelFilter)
+                .when(mModel)
                 .mergeListOfTabsToGroup(any(), mTabCaptor.capture(), any(), anyInt());
     }
 
@@ -546,9 +541,8 @@ public class TabReorderStrategyTest extends ReorderStrategyTestBase {
                         invocation -> {
                             Tab tab = mTabListCaptor.getValue().get(0);
                             Token tabGroupId = tab.getTabGroupId();
-                            int count = mTabGroupModelFilter.getTabCountForGroup(tabGroupId);
-                            when(mTabGroupModelFilter.getTabCountForGroup(tabGroupId))
-                                    .thenReturn(count - 1);
+                            int count = mModel.getTabCountForGroup(tabGroupId);
+                            when(mModel.getTabCountForGroup(tabGroupId)).thenReturn(count - 1);
                             return null;
                         })
                 .when(mTabUnGrouper)

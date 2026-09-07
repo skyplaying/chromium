@@ -4,6 +4,11 @@
 
 #include "third_party/blink/renderer/core/inspector/inspector_emulation_agent.h"
 
+#include <cmath>
+
+#include "base/feature_list.h"
+#include "third_party/blink/public/common/buildflags.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/input/web_touch_event.h"
 #include "third_party/blink/public/common/loader/network_utils.h"
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
@@ -87,6 +92,55 @@ void ApplySafeAreaInsetOverride(
   }
 }
 
+constexpr double kMaxVirtualKeyboardGeometryValue = 10'000'000;
+
+protocol::Response ParseVirtualKeyboardRect(protocol::DOM::Rect* keyboard_rect,
+                                            gfx::Rect* parsed_rect) {
+  if (!keyboard_rect) {
+    *parsed_rect = gfx::Rect();
+    return protocol::Response::Success();
+  }
+
+  const double x = keyboard_rect->getX();
+  const double y = keyboard_rect->getY();
+  const double width = keyboard_rect->getWidth();
+  const double height = keyboard_rect->getHeight();
+  if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(width) ||
+      !std::isfinite(height) || x < 0 || y < 0 || width < 0 || height < 0 ||
+      x + width > kMaxVirtualKeyboardGeometryValue ||
+      y + height > kMaxVirtualKeyboardGeometryValue) {
+    return protocol::Response::InvalidParams(
+        "Virtual keyboard geometry must contain finite, non-negative values "
+        "within 10000000 CSS pixels");
+  }
+
+  *parsed_rect = gfx::Rect(static_cast<int>(std::lround(x)),
+                           static_cast<int>(std::lround(y)),
+                           static_cast<int>(std::lround(width)),
+                           static_cast<int>(std::lround(height)));
+  return protocol::Response::Success();
+}
+
+void ApplyVirtualKeyboardGeometryOverride(LocalFrame* frame,
+                                          const gfx::Rect& rect) {
+  if (!frame) {
+    return;
+  }
+
+  // Setting the geometry invalidates styles that use keyboard-inset-*.
+  // Do not force a lifecycle update here because a protocol command can arrive
+  // while the inspector frame overlay is painting.
+  frame->SetVirtualKeyboardOverlayGeometry(rect);
+  if (LocalFrameView* view = frame->LocalFrameRoot().View()) {
+    view->ScheduleAnimation();
+  }
+}
+
+perfetto::NamedTrack GetTracingTrack(InspectorEmulationAgent* ptr) {
+  return perfetto::NamedTrack::FromPointer("blink::InspectorEmulationAgent",
+                                           ptr);
+}
+
 }  // namespace
 
 InspectorEmulationAgent::InspectorEmulationAgent(
@@ -110,6 +164,8 @@ InspectorEmulationAgent::InspectorEmulationAgent(
       navigator_platform_override_(&agent_state_,
                                    /*default_value=*/String()),
       hardware_concurrency_override_(&agent_state_, /*default_value=*/0),
+      cpu_performance_override_(&agent_state_,
+                                /*default_value=*/String()),
       data_saver_override_(&agent_state_,
                            /*default_value=*/DataSaverOverride::Unset),
       user_agent_override_(&agent_state_, /*default_value=*/String()),
@@ -132,6 +188,9 @@ InspectorEmulationAgent::InspectorEmulationAgent(
       automation_override_(&agent_state_, /*default_value=*/false),
       safe_area_insets_override_(&agent_state_,
                                  /*default_value=*/std::vector<uint8_t>()),
+      virtual_keyboard_geometry_override_(
+          &agent_state_,
+          /*default_value=*/std::vector<uint8_t>()),
       small_viewport_height_difference_override_(&agent_state_,
                                                  /*default_value=*/0.0) {}
 
@@ -154,10 +213,16 @@ void InspectorEmulationAgent::Restore() {
       reinterpret_cast<char*>(save_serialized_ua_metadata_override.data()),
       save_serialized_ua_metadata_override.size()));
   serialized_ua_metadata_override_.Set(save_serialized_ua_metadata_override);
-  setCPUThrottlingRate(cpu_throttling_rate_.Get());
+  if (cpu_throttling_rate_.Get() != 1.0) {
+    setCPUThrottlingRate(cpu_throttling_rate_.Get());
+  }
 
   if (int concurrency = hardware_concurrency_override_.Get())
     setHardwareConcurrencyOverride(concurrency);
+
+  if (!cpu_performance_override_.Get().IsNull()) {
+    setCPUPerformanceOverride(cpu_performance_override_.Get());
+  }
 
   if (!locale_override_.Get().empty())
     setLocaleOverride(locale_override_.Get());
@@ -207,6 +272,17 @@ void InspectorEmulationAgent::Restore() {
   if (status_or_insets.ok()) {
     setSafeAreaInsetsOverride(std::move(status_or_insets).value());
   }
+  auto status_or_keyboard_rect =
+      protocol::DOM::Rect::ReadFrom(virtual_keyboard_geometry_override_.Get());
+  if (status_or_keyboard_rect.ok()) {
+    gfx::Rect keyboard_rect;
+    if (ParseVirtualKeyboardRect(status_or_keyboard_rect.value().get(),
+                                 &keyboard_rect)
+            .IsSuccess()) {
+      ApplyVirtualKeyboardGeometryOverride(web_local_frame_->GetFrame(),
+                                           keyboard_rect);
+    }
+  }
   if (double difference = small_viewport_height_difference_override_.Get()) {
     web_local_frame_->FrameWidgetImpl()->SetBrowserControlsTopHeightOverride(
         difference);
@@ -244,6 +320,7 @@ protocol::Response InspectorEmulationAgent::disable() {
   }
 
   hardware_concurrency_override_.Clear();
+  cpu_performance_override_.Clear();
   setUserAgentOverride(String(), std::nullopt, std::nullopt, nullptr);
   if (!locale_override_.Get().empty())
     setLocaleOverride(String());
@@ -267,7 +344,9 @@ protocol::Response InspectorEmulationAgent::disable() {
   if (!emulated_vision_deficiency_.Get().IsNull())
     setEmulatedVisionDeficiency(String("none"));
   setEmulatedOSTextScale(std::nullopt);
-  setCPUThrottlingRate(1);
+  if (cpu_throttling_rate_.Get() != 1.0) {
+    setCPUThrottlingRate(1.0);
+  }
   if (emulate_focus_.Get()) {
     setFocusEmulationEnabled(false);
   }
@@ -276,6 +355,9 @@ protocol::Response InspectorEmulationAgent::disable() {
   }
   timezone_override_.reset();
   setDefaultBackgroundColorOverride(nullptr);
+  if (!virtual_keyboard_geometry_override_.Get().empty()) {
+    setVirtualKeyboardGeometryOverride(nullptr);
+  }
   disabled_image_types_.Clear();
   return protocol::Response::Success();
 }
@@ -285,6 +367,18 @@ void InspectorEmulationAgent::DidCommitLoadForLocalFrame(LocalFrame* frame) {
       safe_area_insets_override_.Get());
   if (status_or_insets.ok()) {
     ApplySafeAreaInsetOverride(frame, *std::move(status_or_insets).value());
+  }
+  if (frame == web_local_frame_->GetFrame()) {
+    auto status_or_keyboard_rect = protocol::DOM::Rect::ReadFrom(
+        virtual_keyboard_geometry_override_.Get());
+    if (status_or_keyboard_rect.ok()) {
+      gfx::Rect keyboard_rect;
+      if (ParseVirtualKeyboardRect(status_or_keyboard_rect.value().get(),
+                                   &keyboard_rect)
+              .IsSuccess()) {
+        ApplyVirtualKeyboardGeometryOverride(frame, keyboard_rect);
+      }
+    }
   }
 }
 
@@ -576,25 +670,32 @@ protocol::Response InspectorEmulationAgent::setVirtualTimePolicy(
           ? base::Time::FromSecondsSinceUnixEpoch(initial_virtual_time.value())
           : base::Time();
   virtual_time_base_ticks_ =
-      virtual_time_controller_.EnableVirtualTime(initial_time);
-  virtual_time_controller_.SetVirtualTimePolicy(scheduler_policy);
+      virtual_time_controller_->EnableVirtualTime(initial_time);
+  virtual_time_controller_->SetVirtualTimePolicy(scheduler_policy);
   if (virtual_time_budget_ms.value_or(0) > 0) {
     TRACE_EVENT_BEGIN("renderer.scheduler", "VirtualTimeBudget",
-                      perfetto::Track::FromPointer(this), "budget",
+                      GetTracingTrack(this), "budget",
                       virtual_time_budget_ms.value());
     const base::TimeDelta budget_amount =
         base::Milliseconds(virtual_time_budget_ms.value());
-    virtual_time_controller_.GrantVirtualTimeBudget(
+    virtual_time_controller_->GrantVirtualTimeBudget(
         budget_amount,
         BindOnce(&InspectorEmulationAgent::VirtualTimeBudgetExpired,
                  WrapWeakPersistent(this)));
-    for (DocumentLoader* loader : pending_document_loaders_)
+    // SetDefersLoading() can synchronously run author script (virtual time
+    // forces kForceSynchronousParsing) which may spin a nested message loop
+    // and re-enter WillCommitLoad(), mutating |pending_document_loaders_|.
+    // Move to a local snapshot first so the live iterators cannot be
+    // invalidated.
+    HeapVector<Member<DocumentLoader>> loaders =
+        std::move(pending_document_loaders_);
+    for (DocumentLoader* loader : loaders) {
       loader->SetDefersLoading(LoaderFreezeMode::kNone);
-    pending_document_loaders_.clear();
+    }
   }
 
   if (max_virtual_time_task_starvation_count.value_or(0)) {
-    virtual_time_controller_.SetMaxVirtualTimeTaskStarvationCount(
+    virtual_time_controller_->SetMaxVirtualTimeTaskStarvationCount(
         max_virtual_time_task_starvation_count.value());
   }
 
@@ -663,13 +764,13 @@ protocol::Response InspectorEmulationAgent::setNavigatorOverrides(
 }
 
 void InspectorEmulationAgent::VirtualTimeBudgetExpired() {
-  TRACE_EVENT_END("renderer.scheduler", perfetto::Track::FromPointer(this));
+  TRACE_EVENT_END("renderer.scheduler", GetTracingTrack(this));
   // Disregard the event if the agent is disabled. Another agent may take care
   // of pausing the time in case of an in-process frame swap.
   if (!enabled_) {
     return;
   }
-  virtual_time_controller_.SetVirtualTimePolicy(
+  virtual_time_controller_->SetVirtualTimePolicy(
       VirtualTimeController::VirtualTimePolicy::kPause);
   virtual_time_policy_.Set(protocol::Emulation::VirtualTimePolicyEnum::Pause);
   // We could have been detached while VT was still running.
@@ -726,6 +827,38 @@ protocol::Response InspectorEmulationAgent::setSafeAreaInsetsOverride(
   return protocol::Response::Success();
 }
 
+protocol::Response InspectorEmulationAgent::setVirtualKeyboardGeometryOverride(
+    std::unique_ptr<protocol::DOM::Rect> keyboard_rect) {
+  protocol::Response response = AssertPage();
+  if (!response.IsSuccess()) {
+    return response;
+  }
+
+  gfx::Rect parsed_rect;
+  response = ParseVirtualKeyboardRect(keyboard_rect.get(), &parsed_rect);
+  if (!response.IsSuccess()) {
+    return response;
+  }
+
+  if (keyboard_rect) {
+    InnerEnable();
+    std::vector<uint8_t> serialized_rect = keyboard_rect->Serialize();
+    if (virtual_keyboard_geometry_override_.Get() == serialized_rect) {
+      return protocol::Response::Success();
+    }
+    virtual_keyboard_geometry_override_.Set(std::move(serialized_rect));
+  } else {
+    if (virtual_keyboard_geometry_override_.Get().empty()) {
+      return protocol::Response::Success();
+    }
+    virtual_keyboard_geometry_override_.Clear();
+  }
+
+  ApplyVirtualKeyboardGeometryOverride(web_local_frame_->GetFrame(),
+                                       parsed_rect);
+  return protocol::Response::Success();
+}
+
 protocol::Response InspectorEmulationAgent::setDeviceMetricsOverride(
     int width,
     int height,
@@ -740,7 +873,10 @@ protocol::Response InspectorEmulationAgent::setDeviceMetricsOverride(
     std::unique_ptr<protocol::Emulation::ScreenOrientation>,
     std::unique_ptr<protocol::Page::Viewport>,
     std::unique_ptr<protocol::Emulation::DisplayFeature>,
-    std::unique_ptr<protocol::Emulation::DevicePosture>) {
+    std::unique_ptr<protocol::Emulation::DevicePosture>,
+    std::optional<String> scrollbar_type,
+    std::optional<bool> screen_orientation_lock_emulation,
+    std::optional<String> viewport_meta) {
   // We don't have to do anything other than reply to the client, as the
   // emulation parameters should have already been updated by the handling of
   // blink::mojom::FrameWidget::EnableDeviceEmulation.
@@ -775,6 +911,28 @@ protocol::Response InspectorEmulationAgent::setHardwareConcurrencyOverride(
   InnerEnable();
   hardware_concurrency_override_.Set(hardware_concurrency);
 
+  return protocol::Response::Success();
+}
+
+protocol::Response InspectorEmulationAgent::setCPUPerformanceOverride(
+    std::optional<String> performance_tier) {
+  if (performance_tier.has_value()) {
+    namespace PerformanceTierEnum =
+        protocol::Emulation::SetCPUPerformanceOverride::PerformanceTierEnum;
+    const String& tier_str = performance_tier.value();
+    if (tier_str != PerformanceTierEnum::Unknown &&
+        tier_str != PerformanceTierEnum::Low &&
+        tier_str != PerformanceTierEnum::Mid &&
+        tier_str != PerformanceTierEnum::High &&
+        tier_str != PerformanceTierEnum::Ultra) {
+      return protocol::Response::InvalidParams(
+          "Invalid performanceTier enum value");
+    }
+    InnerEnable();
+    cpu_performance_override_.Set(tier_str);
+  } else {
+    cpu_performance_override_.Clear();
+  }
   return protocol::Response::Success();
 }
 
@@ -976,6 +1134,26 @@ void InspectorEmulationAgent::ApplyHardwareConcurrencyOverride(
     hardware_concurrency = concurrency;
 }
 
+void InspectorEmulationAgent::ApplyCPUPerformanceOverride(
+    mojom::blink::PerformanceTier& tier) {
+  if (!cpu_performance_override_.Get().IsNull()) {
+    const String& tier_str = cpu_performance_override_.Get();
+    namespace PerformanceTierEnum =
+        protocol::Emulation::SetCPUPerformanceOverride::PerformanceTierEnum;
+    if (tier_str == PerformanceTierEnum::Low) {
+      tier = mojom::blink::PerformanceTier::kLow;
+    } else if (tier_str == PerformanceTierEnum::Mid) {
+      tier = mojom::blink::PerformanceTier::kMid;
+    } else if (tier_str == PerformanceTierEnum::High) {
+      tier = mojom::blink::PerformanceTier::kHigh;
+    } else if (tier_str == PerformanceTierEnum::Ultra) {
+      tier = mojom::blink::PerformanceTier::kUltra;
+    } else if (tier_str == PerformanceTierEnum::Unknown) {
+      tier = mojom::blink::PerformanceTier::kUnknown;
+    }
+  }
+}
+
 void InspectorEmulationAgent::ApplyUserAgentOverride(String* user_agent) {
   if (!user_agent_override_.Get().empty())
     *user_agent = user_agent_override_.Get();
@@ -1026,6 +1204,16 @@ protocol::Response InspectorEmulationAgent::setDisabledImageTypes(
       disabled_image_types_.Set(StrCat({prefix, type}), true);
       continue;
     }
+#if BUILDFLAG(ENABLE_JXL_DECODER)
+    // Keep the compile-time guard in addition to the runtime feature check:
+    // some downstream builds have custom JXL integration tied to
+    // ENABLE_JXL_DECODER.
+    if (DisabledImageTypeEnum::Jxl == type &&
+        base::FeatureList::IsEnabled(features::kJXLImageFormat)) {
+      disabled_image_types_.Set(StrCat({prefix, type}), true);
+      continue;
+    }
+#endif
     disabled_image_types_.Clear();
     return protocol::Response::InvalidParams("Invalid image type");
   }

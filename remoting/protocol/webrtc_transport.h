@@ -33,6 +33,7 @@
 #include "remoting/protocol/webrtc_event_log_data.h"
 #include "remoting/signaling/signal_strategy.h"
 #include "third_party/webrtc/api/peer_connection_interface.h"
+#include "third_party/webrtc/api/scoped_refptr.h"
 #include "third_party/webrtc/api/video_codecs/video_encoder_factory.h"
 
 namespace base {
@@ -118,7 +119,7 @@ class WebrtcTransport : public Transport,
   void ApplyNetworkSettings(const NetworkSettings& network_settings);
 
   // Transport implementations.
-  void Start(Authenticator* authenticator,
+  void Start(const std::string& auth_key,
              SendTransportInfoCallback send_transport_info_callback) override;
   bool ProcessTransportInfo(const JingleTransportInfo& transport_info) override;
 

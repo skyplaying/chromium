@@ -9,6 +9,8 @@
 #include <utility>
 
 #include "base/functional/bind.h"
+#include "base/json/json_reader.h"
+#include "base/json/json_writer.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/metrics_hashes.h"
 #include "base/strings/string_number_conversions.h"
@@ -33,13 +35,6 @@ namespace captions {
 
 // Request constants.
 const size_t kMaxMessageSize = 1024 * 1024;  // 1MB
-constexpr char kTranslateBodyRequestTemplate[] =
-    "{"
-    "\"q\":\"%s\","
-    "\"source\":\"%s\","
-    "\"target\":\"%s\","
-    "\"format\":\"text\""
-    "}";
 constexpr char kTranslateUrl[] =
     "https://translation.googleapis.com/language/translate/v2?key=%s";
 constexpr char kUploadContentType[] = "application/json";
@@ -94,9 +89,9 @@ GoogleApiTranslationDispatcher::GoogleApiTranslationDispatcher(
 GoogleApiTranslationDispatcher::~GoogleApiTranslationDispatcher() = default;
 
 void GoogleApiTranslationDispatcher::GetTranslation(
-    absl::string_view result,
-    absl::string_view source_language,
-    absl::string_view target_language,
+    std::string_view result,
+    std::string_view source_language,
+    std::string_view target_language,
     TranslateEventCallback callback) {
   if (!url_loader_factory_.is_bound() || !url_loader_factory_.is_connected()) {
     ResetURLLoaderFactory();
@@ -148,10 +143,17 @@ void GoogleApiTranslationDispatcher::GetTranslation(
         })");
   url_loader_ = network::SimpleURLLoader::Create(std::move(resource_request),
                                                  traffic_annotation);
-  url_loader_->AttachStringForUpload(
-      base::StringPrintf(kTranslateBodyRequestTemplate, result.data(),
-                         source_language.data(), target_language.data()),
-      kUploadContentType);
+
+  base::DictValue request_body;
+  request_body.Set("q", result);
+  request_body.Set("source", source_language);
+  request_body.Set("target", target_language);
+  request_body.Set("format", "text");
+
+  std::optional<std::string> request_body_str = base::WriteJson(request_body);
+
+  url_loader_->AttachStringForUpload(request_body_str.value_or(""),
+                                     kUploadContentType);
 
   // Unretained is safe because |this| owns |url_loader_|.
   url_loader_->DownloadToString(
@@ -169,7 +171,7 @@ void GoogleApiTranslationDispatcher::GetTranslation(
 void GoogleApiTranslationDispatcher::ResetURLLoaderFactory() {
   network::mojom::URLLoaderFactoryParamsPtr params =
       network::mojom::URLLoaderFactoryParams::New();
-  params->process_id = network::OriginatingProcess::browser();
+  params->process_id = network::OriginatingProcessId::browser();
   params->is_trusted = false;
   params->automatically_assign_isolation_info = true;
   network::mojom::NetworkContext* network_context =
@@ -220,45 +222,18 @@ void GoogleApiTranslationDispatcher::OnURLLoadComplete(
 
   base::UmaHistogramEnumeration(kTranslationDispatcherLoadResultHistogram,
                                 TranslationDispatcherLoadResult::kSuccess);
-  // Parse the response in a utility process.
-  data_decoder_.ParseJson(
-      *response_body,
-      base::BindOnce(&GoogleApiTranslationDispatcher::OnResponseJsonParsed,
-                     weak_factory_.GetWeakPtr(), std::move(callback)));
-}
 
-void GoogleApiTranslationDispatcher::EmitError(
-    TranslateEventCallback callback,
-    const std::string& message) const {
-  std::move(callback).Run(base::unexpected<std::string>(message));
-}
-
-void GoogleApiTranslationDispatcher::SetURLLoaderFactoryForTest(  // IN-TEST
-    mojo::Remote<network::mojom::URLLoaderFactory> url_loader_factory) {
-  url_loader_factory_ = std::move(url_loader_factory);
-}
-
-void GoogleApiTranslationDispatcher::OnResponseJsonParsed(
-    TranslateEventCallback callback,
-    data_decoder::DataDecoder::ValueOrError result) {
-  if (!result.has_value()) {
+  std::optional<base::DictValue> result =
+      base::JSONReader::ReadDict(*response_body, base::JSON_PARSE_RFC);
+  if (!result) {
     base::UmaHistogramEnumeration(
         kTranslationDispatcherParseResultHistogram,
         TranslationDispatcherParseResult::kJsonParseError);
     EmitError(std::move(callback), "Error parsing response: value null");
     return;
   }
-  if (!result.value().is_dict()) {
-    base::UmaHistogramEnumeration(
-        kTranslationDispatcherParseResultHistogram,
-        TranslationDispatcherParseResult::kValueNotDict);
-    EmitError(std::move(callback),
-              "Error parsing response: result value is not a dictionary");
-    return;
-  }
 
-  const base::DictValue* data_dict =
-      result.value().GetDict().FindDict(kDataKey);
+  const base::DictValue* data_dict = result->FindDict(kDataKey);
   if (!data_dict) {
     base::UmaHistogramEnumeration(
         kTranslationDispatcherParseResultHistogram,
@@ -302,6 +277,17 @@ void GoogleApiTranslationDispatcher::OnResponseJsonParsed(
   base::UmaHistogramEnumeration(kTranslationDispatcherParseResultHistogram,
                                 TranslationDispatcherParseResult::kSuccess);
   std::move(callback).Run(TranslateEvent(*value));
+}
+
+void GoogleApiTranslationDispatcher::EmitError(
+    TranslateEventCallback callback,
+    const std::string& message) const {
+  std::move(callback).Run(base::unexpected<std::string>(message));
+}
+
+void GoogleApiTranslationDispatcher::SetURLLoaderFactoryForTest(  // IN-TEST
+    mojo::Remote<network::mojom::URLLoaderFactory> url_loader_factory) {
+  url_loader_factory_ = std::move(url_loader_factory);
 }
 
 }  // namespace captions

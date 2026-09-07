@@ -8,6 +8,8 @@
 #include <optional>
 #include <string>
 
+#include "base/functional/callback_forward.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
@@ -23,6 +25,10 @@
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 class Profile;
+
+namespace infobars {
+class BrowserInfoBarManager;
+}
 
 namespace base {
 class OneShotTimer;
@@ -121,12 +127,17 @@ class WebAuthFlow : public content::WebContentsObserver,
   // Prevents further calls to the delegate and deletes the flow.
   void DetachDelegateAndDelete();
 
+  // Registers the InfoBarSpec for EXTENSIONS_WEB_AUTH_FLOW_INFOBAR_DELEGATE.
+  static void RegisterInfoBar(infobars::BrowserInfoBarManager& infobar_manager);
+
   // This call will make the interactive mode, that opens up a browser tab for
   // auth, display an Infobar that shows the extension name.
   void SetShouldShowInfoBar(const std::string& extension_display_name);
 
-  // Returns nullptr if the InfoBar is not displayed.
-  base::WeakPtr<WebAuthFlowInfoBarDelegate> GetInfoBarDelegateForTesting();
+#if BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
+  void OnBrowserWindowInterfaceInitialized(BrowserWindowInterface* browser);
+  void SetPopupDisplayedCallbackForTesting(base::OnceClosure callback);
+#endif
 
  private:
   // WebContentsObserver implementation.
@@ -148,10 +159,6 @@ class WebAuthFlow : public content::WebContentsObserver,
 
   void MaybeStartTimeout();
   void OnTimeout();
-
-#if BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
-  void OnBrowserWindowInterfaceInitialized(BrowserWindowInterface* browser);
-#endif
 
   // Displays the auth page in a popup window if that is possible.
   //
@@ -196,6 +203,7 @@ class WebAuthFlow : public content::WebContentsObserver,
   bool initial_url_loaded_ = false;
   base::ScopedObservation<Profile, ProfileObserver> profile_observation_{this};
 #if BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
+  base::OnceClosure popup_displayed_callback_for_testing_;
   base::WeakPtrFactory<WebAuthFlow> weak_factory_{this};
 #endif
 };

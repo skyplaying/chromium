@@ -200,9 +200,7 @@ const CGFloat kGradientSpacingAboveInstructions = 150;
   UIView* logoView = searchEngineLogoMediator.view;
   logoView.translatesAutoresizingMaskIntoConstraints = NO;
 
-  searchEngineLogoMediator.usesMonochromeLogo = YES;
-  // Real logo is always white, even in dark mode.
-  logoView.tintColor = UIColor.whiteColor;
+  [searchEngineLogoMediator setLogoTintColor:UIColor.whiteColor];
   [topSection addArrangedSubview:logoView];
 
   [NSLayoutConstraint activateConstraints:@[
@@ -344,7 +342,7 @@ const CGFloat kGradientSpacingAboveInstructions = 150;
   [self.view addSubview:_pinchInstructionsView];
 
   // Pinch icon.
-  UIImage* pinchIcon = DefaultSymbolWithPointSize(kCropSymbol, kPinchIconSize);
+  UIImage* pinchIcon = SymbolWithPointSize(SymbolCrop, kPinchIconSize);
   UIImageView* pinchIconView = [[UIImageView alloc] initWithImage:pinchIcon];
   pinchIconView.tintColor = UIColor.whiteColor;
   pinchIconView.contentMode = UIViewContentModeScaleAspectFit;
@@ -401,9 +399,8 @@ const CGFloat kGradientSpacingAboveInstructions = 150;
   gradientView.translatesAutoresizingMaskIntoConstraints = NO;
 
   [self.view insertSubview:gradientView aboveSubview:_scrollView];
-  AddSameConstraintsToSides(
-      gradientView, self.view,
-      LayoutSides::kLeading | LayoutSides::kTrailing | LayoutSides::kBottom);
+  AddSameConstraintsToSides(gradientView, self.view,
+                            LayoutSides::kBottom | LayoutSides::kHorizontal);
   [_pinchInstructionsView.topAnchor
       constraintEqualToAnchor:gradientView.topAnchor
                      constant:kGradientSpacingAboveInstructions]
@@ -543,8 +540,10 @@ const CGFloat kGradientSpacingAboveInstructions = 150;
                           std::fmax(0, _originalImage.size.height -
                                            visibleRectInOriginal.size.height));
 
-  return [[HomeCustomizationFramingCoordinates alloc]
-      initWithVisibleRect:visibleRectInOriginal];
+  HomeCustomizationFramingCoordinates* coordinates =
+      [[HomeCustomizationFramingCoordinates alloc]
+          initWithVisibleRect:visibleRectInOriginal];
+  return coordinates;
 }
 
 @end

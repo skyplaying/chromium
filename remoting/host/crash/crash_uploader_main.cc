@@ -8,6 +8,7 @@
 #include "base/command_line.h"
 #include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/memory_coordinator/dummy_memory_consumer_registry.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
@@ -26,6 +27,9 @@ constexpr char kTimeoutSwitchName[] = "timeout";
 }
 
 int CrashUploaderMain(int argc, char** argv) {
+  base::ScopedMemoryConsumerRegistry<base::DummyMemoryConsumerRegistry>
+      memory_consumer_registry;
+
   base::AtExitManager exit_manager;
 
   base::SingleThreadTaskExecutor task_executor(base::MessagePumpType::IO);

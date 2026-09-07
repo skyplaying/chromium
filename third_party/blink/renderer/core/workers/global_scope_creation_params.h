@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 
+#include "base/memory/raw_ptr.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/unguessable_token.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -15,6 +16,7 @@
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "services/network/public/cpp/permissions_policy/permissions_policy.h"
 #include "services/network/public/mojom/referrer_policy.mojom-blink-forward.h"
+#include "third_party/blink/public/common/permissions_policy/document_policy.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
 #include "third_party/blink/public/mojom/blob/blob_url_store.mojom-blink-forward.h"
@@ -58,6 +60,7 @@ struct CORE_EXPORT GlobalScopeCreationParams final {
       Vector<network::mojom::blink::ContentSecurityPolicyPtr>
           response_content_security_policies,
       network::mojom::ReferrerPolicy referrer_policy,
+      DocumentPolicy::DocumentPolicyBundle document_policy,
       const SecurityOrigin*,
       bool starter_secure_context,
       HttpsState starter_https_state,
@@ -82,6 +85,7 @@ struct CORE_EXPORT GlobalScopeCreationParams final {
           std::nullopt,
       bool cross_origin_isolated_capability = false,
       bool parent_is_isolated_context = false,
+      bool direct_sockets_force_enabled_in_parent = false,
       InterfaceRegistry* interface_registry = nullptr,
       scoped_refptr<base::SingleThreadTaskRunner>
           agent_group_scheduler_compositor_task_runner = nullptr,
@@ -99,6 +103,16 @@ struct CORE_EXPORT GlobalScopeCreationParams final {
       delete;
 
   ~GlobalScopeCreationParams() = default;
+
+  static std::unique_ptr<GlobalScopeCreationParams> CreateForWorkerForTesting(
+      const SecurityOrigin* starter_origin,
+      const KURL& script_url,
+      const std::optional<ExecutionContextToken>& parent_context_token,
+      std::unique_ptr<WorkerSettings> worker_settings);
+
+  static std::unique_ptr<GlobalScopeCreationParams> CreateForWorkerForTesting(
+      const SecurityOrigin* starter_origin,
+      const KURL& script_url);
 
   // The URL to be used as the worker global scope's URL.
   // According to the spec, this should be response URL of the top-level
@@ -125,6 +139,11 @@ struct CORE_EXPORT GlobalScopeCreationParams final {
   Vector<network::mojom::blink::ContentSecurityPolicyPtr>
       outside_content_security_policies;
 
+  // The creator's document policy. This is populated only for dedicated
+  // workers, which inherit it for local schemes (about:, blob:, data:,
+  // filesystem:). Other worker and worklet types leave it empty.
+  DocumentPolicy::DocumentPolicyBundle creator_document_policy;
+
   // This is used only for classic dedicated workers with off-the-main-thread
   // fetch disabled.
   //
@@ -134,6 +153,8 @@ struct CORE_EXPORT GlobalScopeCreationParams final {
       response_content_security_policies;
 
   network::mojom::ReferrerPolicy referrer_policy;
+
+  DocumentPolicy::DocumentPolicyBundle document_policy;
 
   // Origin trial features to be inherited by worker/worklet from the document
   // loading it.
@@ -221,13 +242,17 @@ struct CORE_EXPORT GlobalScopeCreationParams final {
   // Whether the execution context has access to cross-origin isolated APIs.
   const bool cross_origin_isolated_capability;
 
-  // Governs whether Direct Sockets are available in a worker context, false
-  // when no parent exists.
-  //
-  // TODO(crbug.com/1206150): We need a specification for this capability.
+  // Governs whether Isolated Context APIs are available in a worker context,
+  // false when no parent exists.
+  // https://wicg.github.io/isolated-web-apps/isolated-contexts.html
   const bool parent_is_isolated_context;
 
-  InterfaceRegistry* const interface_registry;
+  // Direct Sockets might be enabled outside of Isolated Context in selected
+  // scenarios.
+  const bool direct_sockets_force_enabled_in_parent;
+
+  const raw_ptr<InterfaceRegistry, UnprotectedInRelease | DanglingUntriaged>
+      interface_registry;
 
   // The compositor task runner associated with the |AgentGroupScheduler| this
   // worker belongs to.

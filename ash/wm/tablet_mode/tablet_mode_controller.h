@@ -48,6 +48,7 @@ class Vector3dF;
 
 namespace ui {
 class LayerAnimationSequence;
+class LayerWithExternalTexture;
 }
 
 namespace views {
@@ -330,7 +331,7 @@ class ASH_EXPORT TabletModeController
   // specifies on which root window the screen shot is taken.
   void OnLayerCopyed(base::OnceClosure on_screenshot_taken,
                      aura::Window* root_window,
-                     std::unique_ptr<ui::Layer> copy_layer);
+                     std::unique_ptr<ui::LayerWithExternalTexture> copy_layer);
 
   // Calculates whether the device is currently in a physical tablet state,
   // using the most recent seen device events such as lid angle changes.
@@ -505,7 +506,8 @@ class ASH_EXPORT TabletModeController
   // Tracks and record transition smoothness.
   std::optional<ui::ThroughputTracker> transition_tracker_;
 
-  base::CancelableOnceCallback<void(std::unique_ptr<ui::Layer>)>
+  base::CancelableOnceCallback<void(
+      std::unique_ptr<ui::LayerWithExternalTexture>)>
       screenshot_taken_callback_;
   base::CancelableOnceClosure screenshot_set_callback_;
 
@@ -516,7 +518,12 @@ class ASH_EXPORT TabletModeController
   // animating window for the duration of the animation.
   std::unique_ptr<ui::Layer> screenshot_layer_;
 
-  base::ObserverList<TabletModeObserver>::Unchecked tablet_mode_observers_;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      TabletModeObserver,
+      /*check_empty=*/false,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>
+      tablet_mode_observers_;
 
   TabletModeBehavior tablet_mode_behavior_;
 

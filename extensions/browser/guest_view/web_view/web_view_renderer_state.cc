@@ -4,6 +4,7 @@
 
 #include "extensions/browser/guest_view/web_view/web_view_renderer_state.h"
 
+#include "base/memory/singleton.h"
 #include "content/public/browser/browser_thread.h"
 
 using content::BrowserThread;
@@ -123,6 +124,24 @@ bool WebViewRendererState::GetPartitionID(int guest_process_id,
     return true;
   }
   return false;
+}
+
+std::optional<std::set<std::string>>
+WebViewRendererState::GetContentScriptIDsForProcess(
+    content::ChildProcessId guest_process_id) const {
+  base::AutoLock auto_lock(web_view_info_map_lock_);
+
+  std::optional<std::set<std::string>> script_ids;
+  for (const auto& info : web_view_info_map_) {
+    if (info.first.child_id == guest_process_id) {
+      if (!script_ids) {
+        script_ids.emplace();
+      }
+      script_ids->insert(info.second.content_script_ids.begin(),
+                         info.second.content_script_ids.end());
+    }
+  }
+  return script_ids;
 }
 
 void WebViewRendererState::AddContentScriptIDs(

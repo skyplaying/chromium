@@ -4,8 +4,12 @@
 
 #include "third_party/blink/renderer/core/html/forms/html_selected_content_element.h"
 
+#include "third_party/blink/renderer/core/dom/events/event_dispatch_forbidden_scope.h"
+#include "third_party/blink/renderer/core/execution_context/agent.h"
 #include "third_party/blink/renderer/core/html/forms/html_option_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_select_element.h"
+#include "third_party/blink/renderer/core/html/html_collection.h"
+#include "third_party/blink/renderer/platform/bindings/script_forbidden_scope.h"
 
 namespace blink {
 
@@ -14,6 +18,39 @@ HTMLSelectedContentElement::HTMLSelectedContentElement(Document& document)
 
 void HTMLSelectedContentElement::CloneContentsFromOptionElement(
     const HTMLOptionElement* option) {
+  if (disabled_) {
+    return;
+  }
+
+  if (RuntimeEnabledFeatures::SelectedcontentSpecEnabled()) {
+    CHECK(!GetDocument().StatePreservingAtomicMoveInProgress());
+    DCHECK(!ScriptForbiddenScope::IsScriptForbidden());
+#if DCHECK_IS_ON()
+    DCHECK(!EventDispatchForbiddenScope::IsEventDispatchForbidden());
+#endif
+  }
+
+  VectorOf<Node> nodes;
+  if (option) {
+    // The owner select may be null if the option was removed from its select
+    // after the caller resolved it.
+    HTMLSelectElement* owner_select = option->OwnerSelectElement();
+    CHECK(!owner_select || !owner_select->IsMultiple());
+    for (Node& child : NodeTraversal::ChildrenOf(*option)) {
+      nodes.push_back(child.cloneNode(/*deep=*/true));
+    }
+  }
+
+  // `ASSERT_NO_EXCEPTION` is safe here because `ReplaceChildren()` only
+  // throws exceptions when encountering DOM hierarchy errors, which
+  // shouldn't happen here.
+  ReplaceChildren(nodes, ASSERT_NO_EXCEPTION);
+}
+
+void HTMLSelectedContentElement::CloneMultipleOptionsFromSelectElement(
+    HTMLSelectElement& select) {
+  CHECK(RuntimeEnabledFeatures::SelectedcontentMultipleEnabled());
+  CHECK(select.IsMultiple());
   // TODO(crbug.com/458113204): This disabled check does not exist in the spec.
   // It should be added to the spec or removed.
   if (disabled_) {
@@ -21,11 +58,16 @@ void HTMLSelectedContentElement::CloneContentsFromOptionElement(
   }
 
   VectorOf<Node> nodes;
-  if (option) {
+
+  for (Element* option : *select.selectedOptions()) {
+    HTMLDivElement* container =
+        MakeGarbageCollected<HTMLDivElement>(GetDocument());
     for (Node& child : NodeTraversal::ChildrenOf(*option)) {
-      nodes.push_back(child.cloneNode(/*deep=*/true));
+      container->appendChild(child.cloneNode(/*deep=*/true));
     }
+    nodes.push_back(container);
   }
+
   // `ASSERT_NO_EXCEPTION` is safe here because `ReplaceChildren()` only
   // throws exceptions when encountering DOM hierarchy errors, which
   // shouldn't happen here.
@@ -35,18 +77,21 @@ void HTMLSelectedContentElement::CloneContentsFromOptionElement(
 Node::InsertionNotificationRequest HTMLSelectedContentElement::InsertedInto(
     ContainerNode& insertion_point) {
   HTMLElement::InsertedInto(insertion_point);
-  return Node::InsertionNotificationRequest::
-      kInsertionShouldCallDidNotifySubtreeInsertions;
-}
 
-void HTMLSelectedContentElement::DidNotifySubtreeInsertionsToDocument() {
-  // Call SelectedContentElementInserted on the first ancestor <select> if we
-  // just got inserted into a <select> and there are no other <select>s in
-  // between.
-  // TODO(crbug.com/40236878): Use a flat tree traversal here.
   if (RuntimeEnabledFeatures::SelectedcontentSpecEnabled()) {
+    // We need to call SelectedContentElementInserted in InsertedInto instead of
+    // DidNotifySubtreeInsertionsToDocument because
+    // DidNotifySubtreeInsertionsToDocument calls other methods which iterate
+    // through all descendant selectedcontent elements within the nearest
+    // ancestor select element, which we optimize with a TreeOrderedList which
+    // gets updated in SelectedContentElementInserted.
+    //
+    // The disabled state is also calculated here instead of the post-connection
+    // steps to avoid having time in between insertion and post-insertion where
+    // the element isn't considered disabled yet.
+
     disabled_ = false;
-    nearest_ancestor_select_ = nullptr;
+    HTMLSelectElement* first_ancestor_select = nullptr;
     for (auto* ancestor = parentNode(); ancestor;
          ancestor = ancestor->parentNode()) {
       if (IsA<HTMLOptionElement>(ancestor) ||
@@ -54,33 +99,36 @@ void HTMLSelectedContentElement::DidNotifySubtreeInsertionsToDocument() {
         // Putting a <selectedcontent> inside an <option> or another
         // <selectedcontent> can lead to infinite loops.
         disabled_ = true;
-        // The HTML spec has a "break" here, but we continue instead because we
-        // need to call select->SelectedContentElementInserted to keep track of
-        // all descendant selectedcontent elements for each select, which the
-        // spec also doesn't do. This is not web observable because we account
-        // for it by gating later code in this method on disabled_.
       }
       if (auto* select = DynamicTo<HTMLSelectElement>(ancestor)) {
-        if (nearest_ancestor_select_) {
+        if (first_ancestor_select) {
           // If there are multiple ancestor selects, then cloning can lead to
           // infinite loops, so disable this element.
           disabled_ = true;
           break;
         }
-        nearest_ancestor_select_ = select;
-        // TODO(crbug.com/458113204): This method may be called multiple times
-        // for the same select element, and we shouldn't call
-        // SelectedContentElementInserted on the same select multiple times.
-        // This should be moved to InsertedInto.
-        select->SelectedContentElementInserted(this);
+        first_ancestor_select = select;
       }
     }
 
-    if (!disabled_ && nearest_ancestor_select_ &&
-        !nearest_ancestor_select_->IsMultiple()) {
-      nearest_ancestor_select_->UpdateDescendantSelectedcontentsForInsertion(
-          this);
+    if (nearest_ancestor_select_ != first_ancestor_select) {
+      CHECK(!nearest_ancestor_select_);
+      nearest_ancestor_select_ = first_ancestor_select;
+      nearest_ancestor_select_->SelectedContentElementInserted(this);
     }
+  }
+
+  return Node::InsertionNotificationRequest::
+      kInsertionShouldCallDidNotifySubtreeInsertions;
+}
+
+void HTMLSelectedContentElement::DidNotifySubtreeInsertionsToDocument() {
+  // Clone from the nearest ancestor select element if this element isn't
+  // disabled.
+  // TODO(crbug.com/40236878): Use a flat tree traversal here.
+  if (RuntimeEnabledFeatures::SelectedcontentSpecEnabled()) {
+    DCHECK_EQ(nearest_ancestor_select_, Traversal<HTMLSelectElement>::FirstAncestor(*this));
+    UpdateFromAncestorSelect();
   } else {
     disabled_ = false;
     HTMLSelectElement* first_ancestor_select = nullptr;
@@ -108,22 +156,16 @@ void HTMLSelectedContentElement::DidNotifySubtreeInsertionsToDocument() {
 void HTMLSelectedContentElement::RemovedFrom(ContainerNode& removed_from) {
   HTMLElement::RemovedFrom(removed_from);
   if (RuntimeEnabledFeatures::SelectedcontentSpecEnabled()) {
-    // TODO(crbug.com/458113204): Remove this disabled_ check after removing the
-    // code to trigger cloning during removal in order to make sure that
-    // nearest_ancestor_select_ stays up to date.
-    if (disabled_) {
+    auto* new_nearest_ancestor_select =
+        Traversal<HTMLSelectElement>::FirstAncestor(*this);
+    if (new_nearest_ancestor_select == nearest_ancestor_select_) {
       return;
     }
-    if (auto* new_nearest_ancestor_select =
-            Traversal<HTMLSelectElement>::FirstAncestor(*this)) {
-      nearest_ancestor_select_ = new_nearest_ancestor_select;
-      return;
-    }
-    if (auto* previous_ancestor_select =
-            Traversal<HTMLSelectElement>::FirstAncestorOrSelf(removed_from)) {
-      nearest_ancestor_select_ = nullptr;
-      previous_ancestor_select->SelectedContentElementRemoved(this);
-    }
+    CHECK(nearest_ancestor_select_);
+    CHECK(!new_nearest_ancestor_select);
+    nearest_ancestor_select_->SelectedContentElementRemoved(this);
+    nearest_ancestor_select_ = new_nearest_ancestor_select;
+    disabled_ = false;
   } else {
     if (!Traversal<HTMLSelectElement>::FirstAncestor(*this)) {
       if (auto* select =
@@ -132,6 +174,20 @@ void HTMLSelectedContentElement::RemovedFrom(ContainerNode& removed_from) {
       }
     }
     disabled_ = false;
+  }
+}
+
+void HTMLSelectedContentElement::MovedFrom(ContainerNode& old_parent) {
+  if (RuntimeEnabledFeatures::SelectedcontentSpecEnabled()) {
+    GetDocument().GetAgent().event_loop()->EnqueueMicrotask(
+        BindOnce(&HTMLSelectedContentElement::UpdateFromAncestorSelect,
+                 WrapWeakPersistent(this)));
+  }
+}
+
+void HTMLSelectedContentElement::UpdateFromAncestorSelect() {
+  if (!disabled_ && nearest_ancestor_select_) {
+    nearest_ancestor_select_->UpdateIndividualSelectedcontent(*this);
   }
 }
 

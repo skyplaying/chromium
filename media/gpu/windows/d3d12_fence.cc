@@ -44,11 +44,13 @@ uint64_t D3D12Fence::GetCompletedValue() const {
 
 D3D11Status::Or<uint64_t> D3D12Fence::Signal(
     ID3D12CommandQueue& command_queue) {
-  HRESULT hr = command_queue.Signal(fence_.Get(), ++fence_value_);
+  uint64_t next_value = fence_value_ + 1;
+  HRESULT hr = command_queue.Signal(fence_.Get(), next_value);
   if (FAILED(hr)) {
     return D3D11Status{D3D11StatusCode::kFenceSignalFailed,
                        "ID3D12CommandQueue failed to signal fence", hr};
   }
+  fence_value_ = next_value;
   return fence_value_;
 }
 
@@ -89,7 +91,7 @@ D3D11Status D3D12Fence::WaitGPU(ID3D11DeviceContext& device_context,
     Microsoft::WRL::ComPtr<ID3D11Device> device;
     device_context.GetDevice(&device);
     Microsoft::WRL::ComPtr<ID3D11Device5> device5;
-    // We have checked that D3D11Fence is supported in d3d11_video_decoder.cc
+    // We have checked that D3D11Fence is supported in d3d_video_decoder.cc
     CHECK_EQ(device.As(&device5), S_OK);
 
     hr = device5->OpenSharedFence(scoped_handle.get(),
@@ -103,7 +105,7 @@ D3D11Status D3D12Fence::WaitGPU(ID3D11DeviceContext& device_context,
   CHECK(d3d11_fence_);
 
   Microsoft::WRL::ComPtr<ID3D11DeviceContext4> device_context4;
-  // We have checked that D3D11Fence is supported in d3d11_video_decoder.cc
+  // We have checked that D3D11Fence is supported in d3d_video_decoder.cc
   CHECK_EQ(device_context.QueryInterface(IID_PPV_ARGS(&device_context4)), S_OK);
   hr = device_context4->Wait(d3d11_fence_.Get(), fence_value);
   if (FAILED(hr)) {

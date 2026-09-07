@@ -6,6 +6,7 @@
 
 #include "base/memory/scoped_refptr.h"
 #include "services/network/public/cpp/resource_request.h"
+#include "third_party/blink/public/mojom/loader/code_cache.mojom-blink.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/web_url.h"
 #include "third_party/blink/renderer/platform/loader/fetch/code_cache_host.h"
@@ -16,14 +17,6 @@
 namespace blink {
 
 namespace {
-
-// Returns true if the code cache for `request` should be serviced from the
-// webui bundled code cache.
-bool ShouldFetchWebUIBundledCodeCache(const network::ResourceRequest& request) {
-  return SchemeRegistry::SchemeSupportsWebUIBundledBytecode(
-             String(request.url.GetScheme())) &&
-         Platform::Current()->GetWebUIBundledCodeCacheResourceId(request.url);
-}
 
 bool ShouldFetchCodeCache(const network::ResourceRequest& request) {
   // Since code cache requests use a per-frame interface, don't fetch cached
@@ -45,15 +38,12 @@ bool ShouldFetchCodeCache(const network::ResourceRequest& request) {
     return false;
   }
 
-  // Supports script resource requests and shared storage worklet module
-  // requests.
+  // Supports script resource requests.
   // TODO(crbug.com/964467): Currently Chrome doesn't support code cache for
   // dedicated worker, shared worker, audio worklet and paint worklet. For
   // the service worker scripts, Blink receives the code cache via
   // URLLoaderClient::OnReceiveResponse() IPC.
-  if (request.destination == network::mojom::RequestDestination::kScript ||
-      request.destination ==
-          network::mojom::RequestDestination::kSharedStorageWorklet) {
+  if (request.destination == network::mojom::RequestDestination::kScript) {
     return true;
   }
 
@@ -92,6 +82,14 @@ mojom::blink::CodeCacheType GetCodeCacheType(
 }
 
 }  // namespace
+
+// static
+bool CodeCacheFetcher::ShouldFetchWebUIBundledCodeCache(
+    const network::ResourceRequest& request) {
+  return SchemeRegistry::SchemeSupportsWebUIBundledBytecode(
+             String(request.url.GetScheme())) &&
+         Platform::Current()->GetWebUIBundledCodeCacheResourceId(request.url);
+}
 
 // static
 scoped_refptr<CodeCacheFetcher> CodeCacheFetcher::TryCreateAndStart(

@@ -6,9 +6,12 @@
 
 #import "base/apple/foundation_util.h"
 #import "base/metrics/field_trial_params.h"
+#import "ios/chrome/browser/intelligence/bwg/utils/gemini_constants.h"
+#import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/gemini_commands.h"
 #import "ios/chrome/browser/shared/public/commands/snackbar_commands.h"
 #import "ios/chrome/browser/shared/public/snackbar/snackbar_message.h"
 #import "ios/chrome/browser/shared/public/snackbar/snackbar_message_action.h"
@@ -17,13 +20,18 @@
 #import "ios/chrome/browser/snackbar/ui_bundled/ui/snackbar_view.h"
 #import "ios/chrome/browser/snackbar/ui_bundled/ui/snackbar_view_delegate.h"
 
-@interface SnackbarCoordinator () <SnackbarViewDelegate>
+// TODO(crbug.com/512521102): Remove the GeminiActorSnackbarCommands protocol
+// when the agent prototype is cleaned up.
+@interface SnackbarCoordinator () <GeminiActorSnackbarCommands,
+                                   SnackbarCommands,
+                                   SnackbarViewDelegate>
 @end
 
 @implementation SnackbarCoordinator {
   __weak id<SnackbarCoordinatorDelegate> _delegate;
   SnackbarView* _snackbarView;
   ChromeOverlayWindow* _overlay_window;
+  __weak id<GeminiCommands> _geminiHandler;
 }
 
 - (instancetype)initWithBaseViewController:(UIViewController*)baseViewController
@@ -35,6 +43,10 @@
   self = [super initWithBaseViewController:baseViewController browser:browser];
   if (self) {
     _delegate = delegate;
+    if (IsPageActionMenuEnabled()) {
+      _geminiHandler = HandlerForProtocol(self.browser->GetCommandDispatcher(),
+                                          GeminiCommands);
+    }
   }
   return self;
 }
@@ -50,6 +62,12 @@
   CommandDispatcher* dispatcher = self.browser->GetCommandDispatcher();
   [dispatcher startDispatchingToTarget:self
                            forProtocol:@protocol(SnackbarCommands)];
+  // TODO(crbug.com/512521102): Remove when the agent prototype is cleaned up.
+  if (IsActorEnabled() && IsGeminiActorEnabled()) {
+    [dispatcher
+        startDispatchingToTarget:self
+                     forProtocol:@protocol(GeminiActorSnackbarCommands)];
+  }
 }
 
 - (void)stop {
@@ -57,6 +75,7 @@
   CommandDispatcher* dispatcher = self.browser->GetCommandDispatcher();
   [dispatcher stopDispatchingToTarget:self];
   [self dismissAllSnackbars];
+  _geminiHandler = nil;
 }
 
 #pragma mark - SnackbarCommands
@@ -130,6 +149,13 @@
   [self showSnackbarMessage:message];
 }
 
+- (void)dismissSnackbarWithMessage:(NSString*)messageText
+                          animated:(BOOL)animated {
+  if ([_snackbarView.message.title isEqualToString:messageText]) {
+    [self dismissSnackbar:_snackbarView animated:animated];
+  }
+}
+
 - (void)dismissAllSnackbars {
   [self dismissSnackbar:_snackbarView animated:NO];
 }
@@ -143,10 +169,27 @@
     _snackbarView.message.completionHandler(NO);
   }
 
-  [_snackbarView dismissAnimated:animated completion:nil];
-  [_overlay_window deactivateOverlay:_snackbarView];
+  __weak __typeof(self) weakSelf = self;
+  [_snackbarView dismissAnimated:animated
+                      completion:^() {
+                        [weakSelf didCompleteDismissalForSnackbar:snackbarView];
+                      }];
   _snackbarView.delegate = nil;
   _snackbarView = nil;
+}
+
+#pragma mark - GeminiActorSnackbarCommands
+
+// TODO(crbug.com/512521102): Remove when the agent prototype is cleaned up.
+- (void)showGeminiActorSnackbarMessage:(SnackbarMessage*)message
+                additionalBottomOffset:(CGFloat)offset {
+  CHECK(IsActorEnabled() && IsGeminiActorEnabled());
+  CGFloat baseOffset =
+      [_delegate snackbarCoordinatorBottomOffsetForCurrentlyPresentedView:self
+                                                      forceBrowserToolbar:NO];
+  [self presentSnackbar:message
+       withBottomOffset:baseOffset + offset
+             hideFloaty:NO];
 }
 
 #pragma mark - SnackbarViewDelegate
@@ -163,11 +206,39 @@
 
 #pragma mark - Private
 
+// Called when a snackbar finishes its dismiss animation.
+- (void)didCompleteDismissalForSnackbar:(SnackbarView*)snackbarView {
+  [_overlay_window deactivateOverlay:snackbarView];
+  if ([_geminiHandler
+          respondsToSelector:@selector(updateFloatyVisibilityIfEligibleAnimated:
+                                       fromSource:)]) {
+    [_geminiHandler
+        updateFloatyVisibilityIfEligibleAnimated:NO
+                                      fromSource:gemini::FloatyUpdateSource::
+                                                     Snackbar];
+  }
+}
+
 // Dismisses any currently visible snackbar, then creates, configures and
-// presents a new `SnackbarView`.
+// presents a new `SnackbarView`, hiding the Gemini floaty by default.
 - (void)presentSnackbar:(SnackbarMessage*)message
        withBottomOffset:(CGFloat)offset {
-  CHECK(message, base::NotFatalUntil::M147);
+  [self presentSnackbar:message withBottomOffset:offset hideFloaty:YES];
+}
+
+// Dismisses any currently visible snackbar, then creates, configures and
+// presents a new `SnackbarView` with a custom bottom offset.
+// If `hideFloaty` is YES, the Gemini floaty will be hidden while the snackbar
+// is presented. If NO, the floaty will remain visible.
+// TODO(crbug.com/512521102): The Gemini floaty capability is temporary for the
+// agent prototype and will be cleaned up.
+- (void)presentSnackbar:(SnackbarMessage*)message
+       withBottomOffset:(CGFloat)offset
+             hideFloaty:(BOOL)hideFloaty {
+  CHECK(message);
+  // TODO(crbug.com/512521102): Temporary check. Keeping the floaty visible is
+  // strictly for the agent prototype and will be cleaned up.
+  CHECK(hideFloaty || (IsActorEnabled() && IsGeminiActorEnabled()));
   // If a snackbar is already showing, dismiss it before showing the new one.
   if (_snackbarView) {
     [self dismissAllSnackbars];
@@ -179,6 +250,11 @@
   _snackbarView.bottomOffset = offset;
 
   // Add the snackbar to the window and present it.
+  if (hideFloaty && IsPageActionMenuEnabled()) {
+    [_geminiHandler
+        hideFloatyIfInvokedAnimated:NO
+                         fromSource:gemini::FloatyUpdateSource::Snackbar];
+  }
   [_overlay_window activateOverlay:_snackbarView withLevel:UIWindowLevelNormal];
   [_snackbarView
       presentAnimated:YES

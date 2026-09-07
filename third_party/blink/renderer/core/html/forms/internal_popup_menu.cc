@@ -37,6 +37,7 @@
 #include "third_party/blink/renderer/core/layout/custom_scrollbar.h"
 #include "third_party/blink/renderer/core/layout/layout_box.h"
 #include "third_party/blink/renderer/core/layout/layout_theme.h"
+#include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/page/chrome_client.h"
 #include "third_party/blink/renderer/core/page/page_popup.h"
 #include "third_party/blink/renderer/core/scroll/scrollable_area.h"
@@ -44,6 +45,7 @@
 #include "third_party/blink/renderer/platform/fonts/font_selector_client.h"
 #include "third_party/blink/renderer/platform/text/platform_locale.h"
 #include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
 #include "ui/base/ui_base_features.h"
@@ -62,21 +64,53 @@ const char* FontStyleToString(FontSelectionValue slope) {
   return "normal";
 }
 
-StringView TextTransformToString(ETextTransform transform) {
-  return GetCSSValueNameAs<StringView>(PlatformEnumToCSSValueID(transform));
+String TextTransformToString(ETextTransform transform) {
+  if (transform == ETextTransform::kNone) {
+    return "none";
+  }
+  if (transform == ETextTransform::kMathAuto) {
+    return "math-auto";
+  }
+
+  StringBuilder result;
+  if (EnumHasFlags(transform, ETextTransform::kCapitalize)) {
+    result.Append("capitalize");
+  } else if (EnumHasFlags(transform, ETextTransform::kUppercase)) {
+    result.Append("uppercase");
+  } else if (EnumHasFlags(transform, ETextTransform::kLowercase)) {
+    result.Append("lowercase");
+  }
+
+  if (EnumHasFlags(transform, ETextTransform::kFullWidth)) {
+    if (!result.empty()) {
+      result.Append(' ');
+    }
+    result.Append("full-width");
+  }
+  if (EnumHasFlags(transform, ETextTransform::kFullSizeKana)) {
+    if (!result.empty()) {
+      result.Append(' ');
+    }
+    result.Append("full-size-kana");
+  }
+
+  return result.ReleaseString();
 }
 
 StringView TextAlignToString(ETextAlign align) {
   return GetCSSValueNameAs<StringView>(PlatformEnumToCSSValueID(align));
 }
 
-const String SerializeComputedStyleForProperty(const ComputedStyle& style,
-                                               CSSPropertyID id) {
+void AppendComputedStyleForProperty(const ComputedStyle& style,
+                                    CSSPropertyID id,
+                                    StringBuilder& builder) {
   const CSSProperty& property = CSSProperty::Get(id);
   const CSSValue* value = property.CSSValueFromComputedStyle(
       style, nullptr, false, CSSValuePhase::kResolvedValue);
-  return UNSAFE_TODO(String::Format("%s : %s;\n", property.GetPropertyName(),
-                                    value->CssText().Utf8().c_str()));
+  builder.Append(property.GetPropertyNameAtomicString());
+  builder.Append(" : ");
+  builder.Append(value->CssText());
+  builder.Append(";\n");
 }
 
 const String SerializeColorScheme(const ComputedStyle& style) {
@@ -188,7 +222,7 @@ class InternalPopupMenu::ItemIterationContext {
 
   void SerializeBaseStyle() {
     DCHECK(!is_in_group_);
-    PagePopupClient::AddString("baseStyle: {", buffer_);
+    PagePopupClient::AddLiteral("baseStyle: {", buffer_);
     if (!BaseStyle().ColorSchemeForced()) {
       AddProperty("backgroundColor", background_color_.SerializeAsCSSColor(),
                   buffer_);
@@ -216,7 +250,7 @@ class InternalPopupMenu::ItemIterationContext {
         ComputedStyleUtils::ValueForFontFamily(BaseFont().Family())->CssText(),
         buffer_);
 
-    PagePopupClient::AddString("},\n", buffer_);
+    PagePopupClient::AddLiteral("},\n", buffer_);
   }
 
   Color BackgroundColor() const {
@@ -245,14 +279,14 @@ class InternalPopupMenu::ItemIterationContext {
   }
   void StartGroupChildren(const ComputedStyle* group_style) {
     DCHECK(!is_in_group_);
-    PagePopupClient::AddString("children: [", buffer_);
+    PagePopupClient::AddLiteral("children: [", buffer_);
     is_in_group_ = true;
     group_style_ = group_style;
   }
   void FinishGroupIfNecessary() {
     if (!is_in_group_)
       return;
-    PagePopupClient::AddString("],},\n", buffer_);
+    PagePopupClient::AddLiteral("],},\n", buffer_);
     is_in_group_ = false;
     group_style_ = nullptr;
   }
@@ -283,6 +317,7 @@ void InternalPopupMenu::Trace(Visitor* visitor) const {
   visitor->Trace(chrome_client_);
   visitor->Trace(owner_element_);
   PopupMenu::Trace(visitor);
+  PagePopupClient::Trace(visitor);
 }
 
 void InternalPopupMenu::WriteDocument(SegmentedBuffer& data) {
@@ -304,10 +339,10 @@ void InternalPopupMenu::WriteDocument(SegmentedBuffer& data) {
 
   // Add the color-scheme of the <select> element to the popup as a color-scheme
   // meta.
-  PagePopupClient::AddString("<meta name='color-scheme' content='only ", data);
-  PagePopupClient::AddString(owner_style.DarkColorScheme() ? "dark" : "light",
-                             data);
-  PagePopupClient::AddString("'><style>\n", data);
+  PagePopupClient::AddLiteral("<meta name='color-scheme' content='only ", data);
+  PagePopupClient::AddLiteral(owner_style.DarkColorScheme() ? "dark" : "light",
+                              data);
+  PagePopupClient::AddLiteral("'><style>\n", data);
 
   LayoutObject* owner_layout = owner_element.GetLayoutObject();
 
@@ -349,53 +384,62 @@ void InternalPopupMenu::WriteDocument(SegmentedBuffer& data) {
   data.Append(ChooserResourceLoader::GetListPickerStyleSheet());
   int padding = static_cast<int>(roundf(4 * scale_factor));
   int min_height = static_cast<int>(roundf(24 * scale_factor));
-  PagePopupClient::AddString(String::Format("option, optgroup {"
-                                            "padding-top: %dpx;"
-                                            "}\n"
-                                            "option {"
-                                            "padding-bottom: %dpx;"
-                                            "min-block-size: %dpx;"
-                                            "display: flex;"
-                                            "align-items: center;"
-                                            "}\n",
-                                            padding, padding, min_height),
+  PagePopupClient::AddString(Format("option, optgroup {{"
+                                    "padding-top: {}px;"
+                                    "}}\n"
+                                    "option {{"
+                                    "padding-bottom: {}px;"
+                                    "min-block-size: {}px;"
+                                    "display: flex;"
+                                    "align-items: center;"
+                                    "}}\n",
+                                    padding, padding, min_height),
                              data);
   // Sets the min target size of <option> to 24x24 CSS pixels to meet
   // Accessibility standards.
-  PagePopupClient::AddString(
-      String::Format("option {"
-                     "display: block;"
-                     "align-content: center;"
-                     "min-inline-size: %dpx;"
-                     "min-block-size: %dpx;"
-                     "box-sizing: border-box;"
-                     "}\n",
-                     min_height, std::max(24, min_height)),
-      data);
+  PagePopupClient::AddString(Format("option {{"
+                                    "display: block;"
+                                    "align-content: center;"
+                                    "min-inline-size: {}px;"
+                                    "min-block-size: {}px;"
+                                    "box-sizing: border-box;"
+                                    "}}\n",
+                                    min_height, std::max(24, min_height)),
+                             data);
 
-  PagePopupClient::AddString(
+  PagePopupClient::AddLiteral(
       "</style></head><body><div id=main>Loading...</div><script>\n"
       "window.dialogArguments = {\n",
       data);
   AddProperty("selectedIndex", owner_element.SelectedListIndex(), data);
   ItemIterationContext context(owner_style, data);
   context.SerializeBaseStyle();
-  PagePopupClient::AddString("children: [\n", data);
+  PagePopupClient::AddLiteral("children: [\n", data);
   const HeapVector<Member<HTMLElement>>& items = owner_element.GetListItems();
   for (; context.list_index_ < items.size(); ++context.list_index_) {
     Element& child = *items[context.list_index_];
-    // TODO this shouldn't just look at parentNode right??
-    if (!IsA<HTMLOptGroupElement>(child.parentNode()))
-      context.FinishGroupIfNecessary();
-    if (auto* option = DynamicTo<HTMLOptionElement>(child))
+    if (auto* option = DynamicTo<HTMLOptionElement>(child)) {
+      if (!option->NearestAncestorOptgroup()) {
+        context.FinishGroupIfNecessary();
+      }
       AddOption(context, *option);
-    else if (auto* optgroup = DynamicTo<HTMLOptGroupElement>(child))
+    } else if (auto* optgroup = DynamicTo<HTMLOptGroupElement>(child)) {
+      // Nested optgroups are not supported, so we can always end any existing
+      // optgroup before starting the next one.
+      context.FinishGroupIfNecessary();
       AddOptGroup(context, *optgroup);
-    else if (auto* hr = DynamicTo<HTMLHRElement>(child))
+    } else if (auto* hr = DynamicTo<HTMLHRElement>(child)) {
+      // The parser doesn't allow <hr> inside <optgroup>, but the popup seems to
+      // support rendering it, so only close the active optgroup if there is an
+      // optgroup ancestor.
+      if (!hr->NearestAncestorOptgroup()) {
+        context.FinishGroupIfNecessary();
+      }
       AddSeparator(context, *hr);
+    }
   }
   context.FinishGroupIfNecessary();
-  PagePopupClient::AddString("],\n", data);
+  PagePopupClient::AddLiteral("],\n", data);
 
   AddProperty("anchorRectInScreen", anchor_rect_in_screen, data);
   AddProperty("zoomFactor", 1, data);
@@ -406,11 +450,11 @@ void InternalPopupMenu::WriteDocument(SegmentedBuffer& data) {
               is_rtl ? owner_element.ClientPaddingRight().ToDouble()
                      : owner_element.ClientPaddingLeft().ToDouble(),
               data);
-  PagePopupClient::AddString("};\n", data);
+  PagePopupClient::AddLiteral("};\n", data);
   data.Append(ChooserResourceLoader::GetPickerCommonJS());
   data.Append(ChooserResourceLoader::GetListPickerJS());
 
-  PagePopupClient::AddString("</script></body>\n", data);
+  PagePopupClient::AddLiteral("</script></body>\n", data);
 }
 
 void InternalPopupMenu::AddElementStyle(ItemIterationContext& context,
@@ -419,7 +463,7 @@ void InternalPopupMenu::AddElementStyle(ItemIterationContext& context,
   SegmentedBuffer& data = context.buffer_;
   // TODO(tkent): We generate unnecessary "style: {\n},\n" even if no
   // additional style.
-  PagePopupClient::AddString("style: {\n", data);
+  PagePopupClient::AddLiteral("style: {\n", data);
 
   if (context.ShouldAddDisplayNone(style)) {
     AddProperty("display", String("none"), data);
@@ -500,13 +544,13 @@ void InternalPopupMenu::AddElementStyle(ItemIterationContext& context,
     }
   }
 
-  PagePopupClient::AddString("},\n", data);
+  PagePopupClient::AddLiteral("},\n", data);
 }
 
 void InternalPopupMenu::AddOption(ItemIterationContext& context,
                                   HTMLOptionElement& element) {
   SegmentedBuffer& data = context.buffer_;
-  PagePopupClient::AddString("{", data);
+  PagePopupClient::AddLiteral("{", data);
   AddProperty("label", element.DisplayLabel(), data);
   AddProperty("value", context.list_index_, data);
   if (!element.title().empty())
@@ -518,14 +562,14 @@ void InternalPopupMenu::AddOption(ItemIterationContext& context,
   if (element.IsDisabledFormControl())
     AddProperty("disabled", true, data);
   AddElementStyle(context, element);
-  PagePopupClient::AddString("},", data);
+  PagePopupClient::AddLiteral("},", data);
 }
 
 void InternalPopupMenu::AddOptGroup(ItemIterationContext& context,
                                     HTMLOptGroupElement& element) {
   SegmentedBuffer& data = context.buffer_;
-  PagePopupClient::AddString("{\n", data);
-  PagePopupClient::AddString("type: \"optgroup\",\n", data);
+  PagePopupClient::AddLiteral("{\n", data);
+  PagePopupClient::AddLiteral("type: \"optgroup\",\n", data);
   AddProperty("label", element.GroupLabelText(), data);
   AddProperty("title", element.title(), data);
   AddProperty("ariaLabel", element.FastGetAttribute(html_names::kAriaLabelAttr),
@@ -539,22 +583,20 @@ void InternalPopupMenu::AddOptGroup(ItemIterationContext& context,
 void InternalPopupMenu::AddSeparator(ItemIterationContext& context,
                                      HTMLHRElement& element) {
   SegmentedBuffer& data = context.buffer_;
-  PagePopupClient::AddString("{\n", data);
-  PagePopupClient::AddString("type: \"separator\",\n", data);
+  PagePopupClient::AddLiteral("{\n", data);
+  PagePopupClient::AddLiteral("type: \"separator\",\n", data);
   AddProperty("title", element.title(), data);
   AddProperty("ariaLabel", element.FastGetAttribute(html_names::kAriaLabelAttr),
               data);
   AddProperty("disabled", element.IsDisabledFormControl(), data);
   AddElementStyle(context, element);
-  PagePopupClient::AddString("},\n", data);
+  PagePopupClient::AddLiteral("},\n", data);
 }
 
 void InternalPopupMenu::AppendOwnerElementPseudoStyles(
     const String& target,
     SegmentedBuffer& data,
     const ComputedStyle& style) {
-  PagePopupClient::AddString(StrCat({target, "{ \n"}), data);
-
   const CSSPropertyID serialize_targets[] = {
       CSSPropertyID::kDisplay,        CSSPropertyID::kBackgroundColor,
       CSSPropertyID::kWidth,          CSSPropertyID::kBorderBottom,
@@ -562,12 +604,15 @@ void InternalPopupMenu::AppendOwnerElementPseudoStyles(
       CSSPropertyID::kBorderTop,      CSSPropertyID::kBorderRadius,
       CSSPropertyID::kBackgroundClip, CSSPropertyID::kBoxShadow};
 
+  StringBuilder builder;
+  builder.Append(target);
+  builder.Append("{ \n");
   for (CSSPropertyID id : serialize_targets) {
-    PagePopupClient::AddString(SerializeComputedStyleForProperty(style, id),
-                               data);
+    AppendComputedStyleForProperty(style, id, builder);
   }
+  builder.Append("}\n");
 
-  PagePopupClient::AddString("}\n", data);
+  PagePopupClient::AddString(builder, data);
 }
 
 CSSFontSelector* InternalPopupMenu::CreateCSSFontSelector(
@@ -583,7 +628,7 @@ void InternalPopupMenu::SetValueAndClosePopup(int num_value,
   DCHECK(popup_);
   DCHECK(owner_element_);
   if (!string_value.empty()) {
-    auto result = StringToInt(string_value);
+    auto result = StringToIntLoose(string_value);
     int list_index = result.value_or(0);
     DCHECK(result.has_value());
 
@@ -626,7 +671,7 @@ void InternalPopupMenu::SetValueAndClosePopup(int num_value,
 
 void InternalPopupMenu::SetValue(const String& value) {
   DCHECK(owner_element_);
-  auto result = StringToInt(value);
+  auto result = StringToIntLoose(value);
   int list_index = result.value_or(0);
   DCHECK(result.has_value());
   owner_element_->ProvisionalSelectionChanged(list_index);
@@ -695,11 +740,11 @@ void InternalPopupMenu::Update(bool force_update) {
   }
 
   SegmentedBuffer data;
-  PagePopupClient::AddString("window.updateData = {\n", data);
-  PagePopupClient::AddString("type: \"update\",\n", data);
+  PagePopupClient::AddLiteral("window.updateData = {\n", data);
+  PagePopupClient::AddLiteral("type: \"update\",\n", data);
   ItemIterationContext context(*owner_element_->GetComputedStyle(), data);
   context.SerializeBaseStyle();
-  PagePopupClient::AddString("children: [", data);
+  PagePopupClient::AddLiteral("children: [", data);
   const HeapVector<Member<HTMLElement>>& items = owner_element_->GetListItems();
   for (; context.list_index_ < items.size(); ++context.list_index_) {
     Element& child = *items[context.list_index_];
@@ -713,15 +758,15 @@ void InternalPopupMenu::Update(bool force_update) {
       AddSeparator(context, *hr);
   }
   context.FinishGroupIfNecessary();
-  PagePopupClient::AddString("],\n", data);
+  PagePopupClient::AddLiteral("],\n", data);
   gfx::Rect anchor_rect_in_screen = chrome_client_->LocalRootToScreenDIPs(
       owner_element_->VisibleBoundsInLocalRoot(),
       OwnerElement().GetDocument().View());
   AddProperty("anchorRectInScreen", anchor_rect_in_screen, data);
-  PagePopupClient::AddString("}\n", data);
+  PagePopupClient::AddLiteral("}\n", data);
   Vector<char> flatten_data = std::move(data).CopyAs<Vector<char>>();
   popup_->PostMessageToPopup(
-      String::FromUTF8(base::as_string_view(flatten_data)));
+      String::FromUtf8(base::as_string_view(flatten_data)));
 }
 
 void InternalPopupMenu::DisconnectClient() {
@@ -746,18 +791,31 @@ void InternalPopupMenu::SetMenuListOptionsBoundsInAXTree(
   popup_origin.Offset(-widget_view_rect.x(), -widget_view_rect.y());
   popup_origin = widget->DIPsToRoundedBlinkSpace(popup_origin);
 
-  // Factor in the scroll offset of the select's window.
-  LocalDOMWindow* window = owner_element_->GetDocument().domWindow();
-  const float page_zoom_factor =
-      owner_element_->GetDocument().GetFrame()->LayoutZoomFactor();
-  popup_origin.Offset(window->scrollX() * page_zoom_factor,
-                      window->scrollY() * page_zoom_factor);
+  if (RuntimeEnabledFeatures::AvoidEmbeddedContentViewLocationEnabled()) {
+    if (const auto* layout_view =
+            owner_element_->GetDocument().GetLayoutView()) {
+      popup_origin = ToRoundedPoint(layout_view->AbsoluteToLocalPoint(
+          gfx::PointF(popup_origin),
+          {MapCoordinatesMode::kTraverseDocumentBoundaries,
+           MapCoordinatesMode::kApplyRemoteViewportTransform}));
+      popup_origin = layout_view->GetFrameView()->FrameToDocument(popup_origin);
+    }
+  } else {
+    // Factor in the scroll offset of the select's window.
+    LocalDOMWindow* window = owner_element_->GetDocument().domWindow();
+    const float page_zoom_factor =
+        owner_element_->GetDocument().GetFrame()->LayoutZoomFactor();
+    popup_origin.Offset(window->scrollX() * page_zoom_factor,
+                        window->scrollY() * page_zoom_factor);
 
-  // We need to make sure we take into account any iframes. Since OOPIF and
-  // srcdoc iframes aren't allowed to access the root viewport, we need to
-  // iterate through the frame owner's parent nodes and accumulate the offsets.
-  owner_element_->GetDocument().GetFrame()->AdjustOffsetByAncestorFrames(
-      &popup_origin);
+    // We need to make sure we take into account any iframes. Since OOPIF and
+    // srcdoc iframes aren't allowed to access the root viewport, we need to
+    // iterate through the frame owner's parent nodes and accumulate the
+    // offsets.
+    owner_element_->GetDocument()
+        .GetFrame()
+        ->DeprecatedAdjustOffsetByAncestorFrames(&popup_origin);
+  }
 
   for (auto& option_bounds : options_bounds) {
     option_bounds.Offset(popup_origin.x(), popup_origin.y());

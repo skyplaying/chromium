@@ -2,11 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <string>
-#include <vector>
+#include "chrome/browser/renderer_context_menu/render_view_context_menu_test_util.h"
 
 #include "chrome/app/chrome_command_ids.h"
-#include "chrome/browser/renderer_context_menu/render_view_context_menu_test_util.h"
+#include "chrome/browser/indigo/indigo_image_replacement.h"
+#include "chrome/browser/indigo/indigo_image_replacement_manager.h"
+#include "chrome/browser/renderer_context_menu/context_menu_test_util.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/models/menu_model.h"
 
@@ -18,12 +19,13 @@
 #include "chrome/browser/compose/chrome_compose_client.h"
 #endif
 
-using ui::MenuModel;
-
 TestRenderViewContextMenu::TestRenderViewContextMenu(
     content::RenderFrameHost& render_frame_host,
     content::ContextMenuParams params)
-    : RenderViewContextMenu(render_frame_host, params) {}
+    : RenderViewContextMenu(render_frame_host,
+                            params,
+                            /*is_paste_enabled=*/false,
+                            /*is_paste_and_match_style_enabled=*/false) {}
 
 TestRenderViewContextMenu::~TestRenderViewContextMenu() = default;
 
@@ -82,29 +84,10 @@ bool TestRenderViewContextMenu::IsItemInRangePresent(
   return false;
 }
 
-bool TestRenderViewContextMenu::GetMenuModelAndItemIndex(
-    int command_id,
-    raw_ptr<MenuModel>* found_model,
-    size_t* found_index) {
-  std::vector<MenuModel*> models_to_search;
-  models_to_search.push_back(&menu_model_);
-
-  while (!models_to_search.empty()) {
-    MenuModel* model = models_to_search.back();
-    models_to_search.pop_back();
-    for (size_t i = 0; i < model->GetItemCount(); i++) {
-      if (model->GetCommandIdAt(i) == command_id) {
-        *found_model = model;
-        *found_index = i;
-        return true;
-      }
-      if (model->GetTypeAt(i) == MenuModel::TYPE_SUBMENU) {
-        models_to_search.push_back(model->GetSubmenuModelAt(i));
-      }
-    }
-  }
-
-  return false;
+std::optional<std::pair<ui::MenuModel*, size_t>>
+TestRenderViewContextMenu::GetMenuModelAndItemIndex(int command_id) {
+  return context_menu_test_util::GetMenuModelAndItemIndex(&menu_model_,
+                                                          command_id);
 }
 
 int TestRenderViewContextMenu::GetCommandIDByProfilePath(
@@ -117,13 +100,14 @@ int TestRenderViewContextMenu::GetCommandIDByProfilePath(
   return -1;
 }
 
-void TestRenderViewContextMenu::SetBrowser(Browser* browser) {
+void TestRenderViewContextMenu::SetBrowser(BrowserWindowInterface* browser) {
   browser_ = browser;
 }
 
-Browser* TestRenderViewContextMenu::GetBrowser() const {
-  if (browser_)
+BrowserWindowInterface* TestRenderViewContextMenu::GetBrowser() const {
+  if (browser_) {
     return browser_;
+  }
   return RenderViewContextMenu::GetBrowser();
 }
 
@@ -152,3 +136,42 @@ void TestRenderViewContextMenu::SetChromeComposeClient(
   compose_client_ = compose_client;
 }
 #endif  // BUILDFLAG(ENABLE_COMPOSE)
+
+GURL TestRenderViewContextMenu::GetIndigoReplacementImageURL() const {
+  GURL url = RenderViewContextMenu::GetIndigoReplacementImageURL();
+  if (!url.is_empty()) {
+    return url;
+  }
+  // In tests, `params_.image_replacement_frame_token` may be populated directly
+  // from a child RenderFrameHost's LocalFrameToken across process boundaries
+  // rather than from a placeholder RemoteFrameToken in the parent process.
+  if (!params_.image_replacement_frame_token.has_value() ||
+      !params_.image_replacement_frame_token->Is<blink::LocalFrameToken>()) {
+    return GURL();
+  }
+  content::RenderFrameHost* frame_host = GetRenderFrameHost();
+  if (!frame_host) {
+    return GURL();
+  }
+  content::RenderFrameHost* subframe_host = nullptr;
+  if (content::WebContents* web_contents =
+          content::WebContents::FromRenderFrameHost(frame_host)) {
+    web_contents->ForEachRenderFrameHost([&](content::RenderFrameHost* rfh) {
+      if (rfh->GetFrameToken() == params_.image_replacement_frame_token
+                                      ->GetAs<blink::LocalFrameToken>()) {
+        subframe_host = rfh;
+      }
+    });
+  }
+  if (!subframe_host || &subframe_host->GetPage() != &frame_host->GetPage() ||
+      subframe_host->GetParent() != frame_host) {
+    return GURL();
+  }
+  auto* manager =
+      indigo::IndigoImageReplacementManager::GetForPage(frame_host->GetPage());
+  if (!manager) {
+    return GURL();
+  }
+  auto* replacement = manager->GetImageReplacementForFrame(*subframe_host);
+  return replacement ? replacement->GetReplacementImageURL() : GURL();
+}

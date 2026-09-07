@@ -14,13 +14,11 @@
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "build/branding_buildflags.h"
-#include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "components/autofill/core/common/autofill_features.h"
-#include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/accessibility/ax_enums.mojom-forward.h"
-#include "ui/base/l10n/l10n_util.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/text_elider.h"
@@ -29,6 +27,7 @@
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout_view.h"
 #include "ui/views/metadata/view_factory.h"
+#include "ui/views/view_class_properties.h"
 
 namespace autofill {
 
@@ -234,16 +233,22 @@ ui::ImageModel CreateWalletIcon() {
 
 #else
   // This is a placeholder icon on non-branded builds.
-  return ui::ImageModel::FromVectorIcon(vector_icons::kGlobeIcon,
+  return ui::ImageModel::FromVectorIcon(::features::IsRoundedIconsEnabled()
+                                            ? vector_icons::kGlobeIcon
+                                            : vector_icons::kGlobeOldIcon,
                                         ui::kColorIcon, kWalletIconSize);
 #endif
 }
 
 std::unique_ptr<views::View> CreateWalletBubbleTitleView(std::u16string title) {
+  const bool is_branding_2026 =
+      base::FeatureList::IsEnabled(features::kAutofillAiWalletPassBranding2026);
   auto title_view =
       views::Builder<views::BoxLayoutView>()
           .SetOrientation(views::BoxLayout::Orientation::kHorizontal)
-          .SetCrossAxisAlignment(views::BoxLayout::CrossAxisAlignment::kCenter)
+          .SetCrossAxisAlignment(
+              is_branding_2026 ? views::BoxLayout::CrossAxisAlignment::kStart
+                               : views::BoxLayout::CrossAxisAlignment::kCenter)
           .Build();
 
   auto* label = title_view->AddChildView(
@@ -255,8 +260,19 @@ std::unique_ptr<views::View> CreateWalletBubbleTitleView(std::u16string title) {
           .SetHorizontalAlignment(gfx::HorizontalAlignment::ALIGN_LEFT)
           .Build());
 
-  title_view->AddChildView(
+  auto* icon_view = title_view->AddChildView(
       views::Builder<views::ImageView>().SetImage(CreateWalletIcon()).Build());
+
+  if (is_branding_2026) {
+    // Vertically center the icon against the first line of the title label.
+    const int top_margin =
+        (label->GetLineHeight() - icon_view->GetPreferredSize().height()) / 2;
+    if (top_margin > 0) {
+      icon_view->SetProperty(views::kMarginsKey,
+                             gfx::Insets::TLBR(top_margin, 0, 0, 0));
+    }
+  }
+
   title_view->SetFlexForView(label, 1);
   return title_view;
 }

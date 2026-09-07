@@ -10,11 +10,11 @@
 #import "components/ntp_tiles/pref_names.h"
 #import "components/omnibox/browser/omnibox_pref_names.h"
 #import "components/password_manager/core/common/password_manager_pref_names.h"
+#import "components/personal_context/core/personal_context_prefs.h"
 #import "components/policy/core/common/policy_pref_names.h"
 #import "components/safety_check/safety_check_pref_names.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "components/sync_preferences/testing_pref_service_syncable.h"
-#import "ios/chrome/browser/content_suggestions/safety_check/model/safety_check_prefs.h"
 #import "ios/chrome/browser/ntp_tiles/model/tab_resumption/tab_resumption_prefs.h"
 #import "ios/chrome/browser/safety_check/model/ios_chrome_safety_check_manager_constants.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
@@ -210,77 +210,19 @@ TEST_F(BrowserPrefsTest, RenameMostVisitedModuleEnabledProfilePref) {
             test_value);
 }
 
-// [2] `NSUserDefaults` migrations (triggered by
-// `MigrateObsoleteProfilePrefs()`).
-
-TEST_F(BrowserPrefsTest, MigrateSyncDisabledAlertShownFromUserDefaults) {
-  NSString* kSyncDisabledAlertShownKey = @"SyncDisabledAlertShown";
-
-  NSUserDefaults* defaults = [NSUserDefaults standardUserDefaults];
-  [defaults setBool:YES forKey:kSyncDisabledAlertShownKey];
-
-  ASSERT_TRUE([defaults boolForKey:kSyncDisabledAlertShownKey]);
-  const PrefService::Preference* sync_disabled_alert_shown_pref =
-      profile_prefs()->FindPreference(
-          policy::policy_prefs::kSyncDisabledAlertShown);
-  ASSERT_TRUE(sync_disabled_alert_shown_pref);
-  ASSERT_TRUE(sync_disabled_alert_shown_pref->IsDefaultValue());
-
-  MigrateObsoleteProfilePrefs(profile_prefs());
-
-  EXPECT_TRUE(profile_prefs()->GetBoolean(
-      policy::policy_prefs::kSyncDisabledAlertShown));
-  EXPECT_FALSE(sync_disabled_alert_shown_pref->IsDefaultValue());
-  EXPECT_EQ([defaults objectForKey:kSyncDisabledAlertShownKey], nil);
-
-  MigrateObsoleteProfilePrefs(profile_prefs());
-
-  EXPECT_TRUE(profile_prefs()->GetBoolean(
-      policy::policy_prefs::kSyncDisabledAlertShown));
-  EXPECT_EQ([defaults objectForKey:kSyncDisabledAlertShownKey], nil);
-}
-
-// [3] Local-state pref migrations and cleanup (triggered by
+// [2] Local-state pref migrations and cleanup (triggered by
 // `MigrateObsoleteLocalStatePrefs()`).
-
-TEST_F(BrowserPrefsTest, RenameBottomOmniboxLocalStatePref) {
-  const bool test_value = true;  // Default is false
-
-  local_state()->SetBoolean(prefs::kBottomOmnibox, test_value);
-
-  ASSERT_EQ(local_state()->GetBoolean(prefs::kBottomOmnibox), test_value);
-  ASSERT_TRUE(local_state()
-                  ->FindPreference(omnibox::kIsOmniboxInBottomPosition)
-                  ->IsDefaultValue());
-
-  MigrateObsoleteLocalStatePrefs(local_state());
-
-  EXPECT_TRUE(
-      local_state()->FindPreference(prefs::kBottomOmnibox)->IsDefaultValue());
-  EXPECT_EQ(local_state()->GetBoolean(omnibox::kIsOmniboxInBottomPosition),
-            test_value);
-}
 
 TEST_F(BrowserPrefsTest, CleanupObsoleteLocalStatePrefs) {
   local_state()->SetInteger(
       prefs::kIosMagicStackSegmentationParcelTrackingImpressionsSinceFreshness,
       4);
-  local_state()->SetInteger(prefs::kNTPLensEntryPointNewBadgeShownCount, 3);
-  local_state()->SetInteger(prefs::kNTPHomeCustomizationNewBadgeImpressionCount,
-                            99);
 
   ASSERT_FALSE(
       local_state()
           ->FindPreference(
               prefs::
                   kIosMagicStackSegmentationParcelTrackingImpressionsSinceFreshness)
-          ->IsDefaultValue());
-  ASSERT_FALSE(local_state()
-                   ->FindPreference(prefs::kNTPLensEntryPointNewBadgeShownCount)
-                   ->IsDefaultValue());
-  ASSERT_FALSE(
-      local_state()
-          ->FindPreference(prefs::kNTPHomeCustomizationNewBadgeImpressionCount)
           ->IsDefaultValue());
 
   MigrateObsoleteLocalStatePrefs(local_state());
@@ -291,11 +233,15 @@ TEST_F(BrowserPrefsTest, CleanupObsoleteLocalStatePrefs) {
               prefs::
                   kIosMagicStackSegmentationParcelTrackingImpressionsSinceFreshness)
           ->IsDefaultValue());
-  EXPECT_TRUE(local_state()
-                  ->FindPreference(prefs::kNTPLensEntryPointNewBadgeShownCount)
-                  ->IsDefaultValue());
-  EXPECT_TRUE(
-      local_state()
-          ->FindPreference(prefs::kNTPHomeCustomizationNewBadgeImpressionCount)
-          ->IsDefaultValue());
+}
+
+TEST_F(BrowserPrefsTest, RegisterPersonalContextPrefs) {
+  EXPECT_NE(profile_prefs()->FindPreference(
+                personal_context::prefs::
+                    kPersonalContextAmbientAutofillNoticeShouldBeShown),
+            nullptr);
+  EXPECT_NE(profile_prefs()->FindPreference(
+                personal_context::prefs::
+                    kPersonalContextInAutofillSettingsToggleStatus),
+            nullptr);
 }

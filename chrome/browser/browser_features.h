@@ -33,7 +33,6 @@ namespace features {
 BASE_DECLARE_FEATURE(kAllowUnmutedAutoplayForTWA);
 #endif  // BUILDFLAG(IS_ANDROID)
 BASE_DECLARE_FEATURE(kAutocompleteActionPredictorConfidenceCutoff);
-BASE_DECLARE_FEATURE(kBookmarksTreeView);
 BASE_DECLARE_FEATURE(kBookmarkTriggerForPrerender2KillSwitch);
 BASE_DECLARE_FEATURE(kBookmarkTriggerForPreconnect);
 BASE_DECLARE_FEATURE(kBookmarkTriggerForPrefetch);
@@ -48,7 +47,6 @@ BASE_DECLARE_FEATURE(kDbusSecretPortal);
 BASE_DECLARE_FEATURE(kDestroyProfileOnBrowserClose);
 
 BASE_DECLARE_FEATURE(kFlexOrgManagementDisclosure);
-BASE_DECLARE_FEATURE(kIncomingCallNotifications);
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 // Controls whether to load the initial sideloaded external extensions or not.
@@ -96,16 +94,14 @@ BASE_DECLARE_FEATURE(kWebUsbDeviceDetection);
 
 #if BUILDFLAG(IS_WIN)
 BASE_DECLARE_FEATURE(kBrowserDynamicCodeDisabled);
+BASE_DECLARE_FEATURE(kIsolatedProcess);
 
 BASE_DECLARE_FEATURE(kNoPreReadMainDll);
-BASE_DECLARE_FEATURE(kNoPreReadMainDllIfSsd);
 BASE_DECLARE_FEATURE(kNoPreReadMainDllStartup);
 extern const base::FeatureParam<base::TimeDelta>
     kNoPreReadMainDllStartup_StartupDuration;
 BASE_DECLARE_FEATURE(kAutoDeElevate);
 #endif
-
-BASE_DECLARE_FEATURE(kReportPakFileIntegrity);
 
 BASE_DECLARE_FEATURE(kRemovalOfIWAsFromTabCapture);
 

@@ -51,6 +51,10 @@ namespace base {
 class FilePath;
 }
 
+namespace base::i18n {
+class LanguageTag;
+}
+
 namespace prefs {
 class ScopedDictionaryPrefUpdate;
 }
@@ -237,6 +241,7 @@ class COMPONENTS_PREFS_EXPORT PrefService {
   double GetDouble(std::string_view path) const;
   const std::string& GetString(std::string_view path) const;
   base::FilePath GetFilePath(std::string_view path) const;
+  base::i18n::LanguageTag GetLanguageTag(std::string_view path) const;
 
   // Returns the branch if it exists, or the registered default value otherwise.
   // `path` must point to a registered preference (DCHECK).
@@ -273,6 +278,8 @@ class COMPONENTS_PREFS_EXPORT PrefService {
   void SetDict(std::string_view path, base::DictValue dict);
   void SetList(std::string_view path, base::ListValue list);
   void SetFilePath(std::string_view path, const base::FilePath& value);
+  void SetLanguageTag(std::string_view path,
+                      const base::i18n::LanguageTag& value);
 
   // Int64 helper methods that actually store the given value as a string.
   // Note that if obtaining the named value via GetDictionary or GetList, the
@@ -345,11 +352,12 @@ class COMPONENTS_PREFS_EXPORT PrefService {
 
   // Tell our PrefValueStore to update itself to |command_line_store|.
   // Takes ownership of the store.
-  virtual void UpdateCommandLinePrefStore(PrefStore* command_line_store);
+  virtual void UpdateCommandLinePrefStore(
+      scoped_refptr<PrefStore> command_line_store);
 
   // Tells the PrefValueStore to update itself with `extension_store`.
   // Takes ownership of the store.
-  void UpdateExtensionPrefStore(PrefStore* extension_store);
+  void UpdateExtensionPrefStore(scoped_refptr<PrefStore> extension_store);
 
   // We run the callback once, when initialization completes. The bool
   // parameter will be set to true for successful initialization,

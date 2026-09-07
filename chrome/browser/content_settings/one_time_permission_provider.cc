@@ -9,6 +9,7 @@
 #include <set>
 
 #include "base/power_monitor/power_monitor.h"
+#include "base/scoped_observation.h"
 #include "base/time/default_clock.h"
 #include "base/time/time.h"
 #include "chrome/browser/browser_process.h"
@@ -29,12 +30,55 @@
 #include "components/permissions/permission_util.h"
 #include "url/gurl.h"
 
+class OneTimePermissionProvider::TrackerObserver
+    : public OneTimePermissionsTrackerObserver {
+ public:
+  TrackerObserver(OneTimePermissionProvider* provider,
+                  OneTimePermissionsTracker* tracker)
+      : provider_(provider) {
+    observation_.Observe(tracker);
+  }
+  ~TrackerObserver() override = default;
+
+  // OneTimePermissionsTrackerObserver:
+  void OnLastPageFromOriginClosed(const url::Origin& origin) override {
+    provider_->OnLastPageFromOriginClosed(origin);
+  }
+
+  void OnAllTabsInBackgroundTimerExpired(
+      const url::Origin& origin,
+      const BackgroundExpiryType& expiry_type) override {
+    provider_->OnAllTabsInBackgroundTimerExpired(
+        origin, expiry_type == BackgroundExpiryType::kLongTimeout);
+  }
+
+  void OnCapturingVideoExpired(const url::Origin& origin) override {
+    provider_->OnCapturingVideoExpired(origin);
+  }
+
+  void OnCapturingAudioExpired(const url::Origin& origin) override {
+    provider_->OnCapturingAudioExpired(origin);
+  }
+
+  void OnShutdown() override {
+    observation_.Reset();
+    provider_->OnShutdown();
+  }
+
+ private:
+  raw_ptr<OneTimePermissionProvider> provider_;
+  base::ScopedObservation<OneTimePermissionsTracker,
+                          OneTimePermissionsTrackerObserver>
+      observation_{this};
+};
+
 OneTimePermissionProvider::OneTimePermissionProvider(
     OneTimePermissionsTracker* one_time_permissions_tracker)
     : one_time_permissions_tracker_(one_time_permissions_tracker),
+      tracker_observer_(
+          std::make_unique<TrackerObserver>(this,
+                                            one_time_permissions_tracker_)),
       clock_(base::DefaultClock::GetInstance()) {
-  one_time_permissions_tracker_->AddObserver(this);
-
   // The PowerMonitor is initialized in content_main_runner_impl.cc before the
   // main function for the browser process is run (which initializes the HCSM).
   // For this reason, the PowerMonitor is always initialized before the observer
@@ -74,7 +118,7 @@ bool OneTimePermissionProvider::SetWebsiteSetting(
     const ContentSettingsPattern& primary_pattern,
     const ContentSettingsPattern& secondary_pattern,
     ContentSettingsType content_settings_type,
-    base::Value&& value,
+    const base::Value& value,
     const content_settings::ContentSettingConstraints& constraints) {
   if (!permissions::PermissionUtil::DoesStoreTemporaryGrantsInHcsm(
           content_settings_type)) {
@@ -121,16 +165,18 @@ bool OneTimePermissionProvider::SetWebsiteSetting(
 
   if (constraints.session_model() !=
       content_settings::mojom::SessionModel::ONE_TIME) {
-    if (setting && info->delegate().IsAnyPermissionAllowed(*setting)) {
-      // Transition from Allow once to Allow. Delete setting and let the pref
-      // provider handle it.
-      base::AutoLock lock(value_map_.GetLock());
-      value_map_.DeleteValue(primary_pattern, secondary_pattern,
-                             content_settings_type);
-    }
+    // Changes to the durable permission should reset the corresponding one-time
+    // grant. This is triggered for example by a transition from Allow once to
+    // Allow.
+    base::AutoLock lock(value_map_.GetLock());
+    value_map_.DeleteValue(primary_pattern, secondary_pattern,
+                           content_settings_type);
 
     return false;
   }
+
+  CHECK(info->delegate().IsAnyPermissionAllowed(*setting))
+      << "One time permission grants should allow something.";
 
   base::Time now = clock_->Now();
   content_settings::RuleMetaData metadata;
@@ -149,17 +195,13 @@ bool OneTimePermissionProvider::SetWebsiteSetting(
   {
     base::AutoLock lock(value_map_.GetLock());
     value_map_.SetValue(primary_pattern, secondary_pattern,
-                        content_settings_type, std::move(value),
+                        content_settings_type, value.Clone(),
                         std::move(metadata));
   }
 
   NotifyObservers(primary_pattern, secondary_pattern, content_settings_type);
 
-  // We need to handle transitions from Allow to Allow Once gracefully.
-  // In that case we add the Allow Once setting in this provider, but also
-  // have to clear the Allow setting in the pref provider. By returning false
-  // here, we let the control flow trickle down to the pref provider.
-  value = base::Value();
+  // Changes to one-time grants might need updates in the pref provider.
   return false;
 }
 
@@ -172,11 +214,11 @@ bool OneTimePermissionProvider::UpdateLastUsedTime(
   return false;
 }
 
-bool OneTimePermissionProvider::ResetLastVisitTime(
+bool OneTimePermissionProvider::SetAutorevocationBypassedByUser(
     const ContentSettingsPattern& primary_pattern,
     const ContentSettingsPattern& secondary_pattern,
     ContentSettingsType content_type) {
-  // LastVisit time is not currently tracked for one-time permissions.
+  // Autorevocation does not include one-time permissions.
   return false;
 }
 
@@ -199,7 +241,7 @@ std::optional<base::TimeDelta> OneTimePermissionProvider::RenewContentSetting(
 
 void OneTimePermissionProvider::ClearAllContentSettingsRules(
     ContentSettingsType content_type) {
-  if (permissions::PermissionUtil::DoesStoreTemporaryGrantsInHcsm(
+  if (!permissions::PermissionUtil::DoesStoreTemporaryGrantsInHcsm(
           content_type)) {
     return;
   }
@@ -281,17 +323,13 @@ void OneTimePermissionProvider::OnLastPageFromOriginClosed(
 // the origin.
 void OneTimePermissionProvider::OnAllTabsInBackgroundTimerExpired(
     const url::Origin& origin,
-    const OneTimePermissionsTrackerObserver::BackgroundExpiryType&
-        expiry_type) {
-  switch (expiry_type) {
-    case BackgroundExpiryType::kTimeout:
-      DeleteEntriesMatchingGURL(
-          permissions::PermissionUtil::GetGeolocationType(), origin.GetURL(),
-          permissions::OneTimePermissionEvent::EXPIRED_IN_BACKGROUND);
-      return;
-    case BackgroundExpiryType::kLongTimeout:
-      return;
+    bool is_long_timeout) {
+  if (is_long_timeout) {
+    return;
   }
+  DeleteEntriesMatchingGURL(
+      permissions::PermissionUtil::GetGeolocationType(), origin.GetURL(),
+      permissions::OneTimePermissionEvent::EXPIRED_IN_BACKGROUND);
 }
 
 // All tabs to the origin have not shown a tab indicator for video for a
@@ -330,8 +368,10 @@ void OneTimePermissionProvider::DeleteEntriesAndNotify(
       // prevent it from triggering observers for an already deleted content
       // setting, we need to inform it about the deletion here (and only
       // here).
-      one_time_permissions_tracker_->CleanupStateForExpiredContentSetting(
-          pattern.type, pattern.primary_pattern, pattern.secondary_pattern);
+      if (one_time_permissions_tracker_) {
+        one_time_permissions_tracker_->CleanupStateForExpiredContentSetting(
+            pattern.type, pattern.primary_pattern, pattern.secondary_pattern);
+      }
     }
   }
 
@@ -366,8 +406,5 @@ void OneTimePermissionProvider::DeleteEntriesMatchingGURL(
 }
 
 void OneTimePermissionProvider::OnShutdown() {
-  if (one_time_permissions_tracker_) {
-    one_time_permissions_tracker_->RemoveObserver(this);
-    one_time_permissions_tracker_ = nullptr;
-  }
+  one_time_permissions_tracker_ = nullptr;
 }

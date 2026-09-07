@@ -2,9 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <memory>
+
+#include "chrome/browser/default_browser/default_browser_features.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webui/default_browser/default_browser_modal_dialog_delegate.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
@@ -16,19 +19,41 @@
 namespace default_browser {
 
 // Baseline Gerrit CL number of the most recent CL that modified the UI.
-constexpr char kScreenshotBaselineCL[] = "7511657";
+constexpr char kScreenshotBaselineCL[] = "7705256";
 
 class DefaultBrowserModalPixelTest : public InteractiveBrowserTest {
- public:
+ protected:
   DefaultBrowserModalPixelTest() = default;
   ~DefaultBrowserModalPixelTest() override = default;
 
-  void ShowUi(bool use_settings_illustration) {
-    DefaultBrowserModalDialog::Show(
-        browser()->profile(),
-        browser()->tab_strip_model()->GetActiveWebContents()->GetNativeView(),
-        use_settings_illustration);
+  void SetUp() override {
+    feature_list_.InitAndEnableFeatureWithParameters(
+        default_browser::kDefaultBrowserPromptSurfaces,
+        {{"prompt_surface", "modal_dialog_without_settings_illustration"}});
+
+    InteractiveBrowserTest::SetUp();
   }
+
+  void TearDownOnMainThread() override {
+    dialog_widget_.reset();
+    InteractiveBrowserTest::TearDownOnMainThread();
+  }
+
+  void ShowUi(bool use_settings_illustration, bool can_pin_to_taskbar = false) {
+    dialog_widget_ =
+        ::default_browser::Show(browser()->GetProfile(),
+                                browser()
+                                    ->GetTabStripModel()
+                                    ->GetActiveWebContents()
+                                    ->GetTopLevelNativeWindow(),
+                                use_settings_illustration, can_pin_to_taskbar,
+                                /*activate_on_show=*/true);
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+
+  std::unique_ptr<views::Widget> dialog_widget_;
 };
 
 IN_PROC_BROWSER_TEST_F(DefaultBrowserModalPixelTest,
@@ -38,10 +63,9 @@ IN_PROC_BROWSER_TEST_F(DefaultBrowserModalPixelTest,
           OnIncompatibleAction::kIgnoreAndContinue,
           "Screenshots not supported in all testing environments."),
       Do([this]() { ShowUi(/*use_settings_illustration=*/false); }),
-      InAnyContext(
-          WaitForShow(DefaultBrowserModalDialog::kDefaultBrowserModalDialogId)),
+      InAnyContext(WaitForShow(kDefaultBrowserModalDialogId)),
       InSameContext(ScreenshotSurface(
-          DefaultBrowserModalDialog::kDefaultBrowserModalDialogId,
+          kDefaultBrowserModalDialogId,
           /*screenshot_name=*/"DefaultBrowserModalWithoutSettingsIllustration",
           kScreenshotBaselineCL)));
 }
@@ -53,10 +77,9 @@ IN_PROC_BROWSER_TEST_F(DefaultBrowserModalPixelTest,
           OnIncompatibleAction::kIgnoreAndContinue,
           "Screenshots not supported in all testing environments."),
       Do([this]() { ShowUi(/*use_settings_illustration=*/true); }),
-      InAnyContext(
-          WaitForShow(DefaultBrowserModalDialog::kDefaultBrowserModalDialogId)),
+      InAnyContext(WaitForShow(kDefaultBrowserModalDialogId)),
       InSameContext(ScreenshotSurface(
-          DefaultBrowserModalDialog::kDefaultBrowserModalDialogId,
+          kDefaultBrowserModalDialogId,
           /*screenshot_name=*/"DefaultBrowserModalWithSettingsIllustration",
           kScreenshotBaselineCL)));
 }

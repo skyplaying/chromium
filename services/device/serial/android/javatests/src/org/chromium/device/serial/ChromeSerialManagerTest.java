@@ -22,11 +22,11 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.serial.SerialManager;
 import org.chromium.base.serial.SerialPort;
@@ -37,13 +37,15 @@ import java.util.List;
 
 /** Unit tests for ChromeSerialManager. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class ChromeSerialManagerTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Mock private SerialManager mSerialManager;
 
     @Mock private ChromeSerialManager.Natives mNativeMock;
+
+    @Captor
+    private ArgumentCaptor<OutcomeReceiver<SerialPortResponse, Exception>> mOutcomeReceiverCaptor;
 
     private InOrder mInOrder;
 
@@ -148,12 +150,15 @@ public class ChromeSerialManagerTest {
         SerialPort port = createMockSerialPort("ttyS0");
         when(mSerialManager.getPorts()).thenReturn(List.of(port));
         mChromeSerialManager.registerListenerAndEnumeratePorts();
-        ArgumentCaptor<OutcomeReceiver<SerialPortResponse, Exception>> captor =
-                ArgumentCaptor.forClass(OutcomeReceiver.class);
 
         mChromeSerialManager.openPort("ttyS0");
-        verify(port).requestOpen(anyInt(), /* exclusive= */ eq(true), any(), captor.capture());
-        OutcomeReceiver<SerialPortResponse, Exception> receiver = captor.getValue();
+        verify(port)
+                .requestOpen(
+                        anyInt(),
+                        /* exclusive= */ eq(true),
+                        any(),
+                        mOutcomeReceiverCaptor.capture());
+        OutcomeReceiver<SerialPortResponse, Exception> receiver = mOutcomeReceiverCaptor.getValue();
         receiver.onResult(createSerialPortResponse(port, 1234));
 
         verify(mNativeMock).openPathCallbackViaJni(eq(NATIVE_POINTER), eq("ttyS0"), eq(1234));
@@ -164,12 +169,15 @@ public class ChromeSerialManagerTest {
         SerialPort port = createMockSerialPort("ttyS0");
         when(mSerialManager.getPorts()).thenReturn(List.of(port));
         mChromeSerialManager.registerListenerAndEnumeratePorts();
-        ArgumentCaptor<OutcomeReceiver<SerialPortResponse, Exception>> captor =
-                ArgumentCaptor.forClass(OutcomeReceiver.class);
 
         mChromeSerialManager.openPort("ttyS0");
-        verify(port).requestOpen(anyInt(), /* exclusive= */ eq(true), any(), captor.capture());
-        OutcomeReceiver<SerialPortResponse, Exception> receiver = captor.getValue();
+        verify(port)
+                .requestOpen(
+                        anyInt(),
+                        /* exclusive= */ eq(true),
+                        any(),
+                        mOutcomeReceiverCaptor.capture());
+        OutcomeReceiver<SerialPortResponse, Exception> receiver = mOutcomeReceiverCaptor.getValue();
         receiver.onError(new Exception("test"));
 
         verify(mNativeMock).errorCallbackViaJni(eq(NATIVE_POINTER), eq("ttyS0"), any(), any());

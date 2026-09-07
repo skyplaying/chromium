@@ -9,14 +9,13 @@
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/devtools/devtools_window.h"
 #include "chrome/browser/extensions/extension_view_host.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/extensions/security_dialog_tracker.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "components/javascript_dialogs/app_modal_dialog_queue.h"
 #include "components/web_modal/web_modal_utils.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/devtools_agent_host.h"
-#include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
@@ -28,6 +27,7 @@
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/style/platform_style.h"
 #include "ui/views/widget/widget.h"
+#include "ui/views/window/dialog_client_view.h"
 
 #if defined(USE_AURA)
 #include "ui/aura/window.h"
@@ -81,7 +81,7 @@ ExtensionPopup* ExtensionPopup::last_popup_for_testing() {
 
 // static
 void ExtensionPopup::ShowPopup(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     std::unique_ptr<extensions::ExtensionViewHost> host,
     views::BubbleAnchor anchor,
     views::BubbleBorder::Arrow arrow,
@@ -128,15 +128,27 @@ gfx::Size ExtensionPopup::CalculatePreferredSize(
 void ExtensionPopup::AddedToWidget() {
   BubbleDialogDelegateView::AddedToWidget();
 
+  // Remove the Escape accelerator from DialogClientView so that key events for
+  // Escape are passed to the contained WebContents / ExtensionViewHost rather
+  // than being intercepted by views::FocusManager.
+  if (auto* client_view = GetDialogClientView()) {
+    client_view->RemoveAccelerator(
+        ui::Accelerator(ui::VKEY_ESCAPE, ui::EF_NONE));
+  }
+
   const gfx::RoundedCornersF& radii = GetBubbleFrameView()->GetRoundedCorners();
   CHECK_EQ(radii.upper_left(), radii.upper_right());
   CHECK_EQ(radii.lower_left(), radii.lower_right());
 
   const bool contents_has_rounded_corners =
-      extension_view_->holder()->SetCornerRadii(radii);
+      extension_view_->holder()->SetNativeViewCornerRadii(radii);
   SetBorder(views::CreateEmptyBorder(gfx::Insets::TLBR(
       contents_has_rounded_corners ? 0 : radii.upper_left(), 0,
       contents_has_rounded_corners ? 0 : radii.lower_left(), 0)));
+}
+
+views::View* ExtensionPopup::GetInitiallyFocusedView() {
+  return extension_view_;
 }
 
 void ExtensionPopup::OnWidgetDestroying(views::Widget* widget) {
@@ -204,7 +216,7 @@ void ExtensionPopup::OnExtensionUnloaded(
   if (extension->id() == host_->extension_id()) {
     // To ensure |extension_view_| cannot receive any messages that cause it to
     // try to access the host during Widget closure, destroy it immediately.
-    RemoveChildViewT(extension_view_.get());
+    RemoveChildViewT(extension_view_.ExtractAsDangling());
 
     // Note: it's important that we unregister the devtools observation *before*
     // we destroy `host_`. Otherwise, destroying `host_` can synchronously cause
@@ -241,7 +253,7 @@ void ExtensionPopup::DevToolsAgentHostAttached(
     content::DevToolsAgentHost* agent_host) {
   DCHECK(host_);
   if (host_->host_contents() == agent_host->GetWebContents()) {
-    show_action_ = PopupShowAction::kShowAndInspect;
+    inspected_ = true;
   }
 }
 
@@ -249,12 +261,12 @@ void ExtensionPopup::DevToolsAgentHostDetached(
     content::DevToolsAgentHost* agent_host) {
   DCHECK(host_);
   if (host_->host_contents() == agent_host->GetWebContents()) {
-    show_action_ = PopupShowAction::kShow;
+    inspected_ = false;
   }
 }
 
 ExtensionPopup::ExtensionPopup(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     std::unique_ptr<extensions::ExtensionViewHost> host,
     views::BubbleAnchor anchor,
     views::BubbleBorder::Arrow arrow,
@@ -280,8 +292,8 @@ ExtensionPopup::ExtensionPopup(
   // the correct value while calculating max bounds.
   set_adjust_if_offscreen(views::PlatformStyle::kAdjustBubbleIfOffscreen);
 
-  extension_view_ = AddChildView(
-      std::make_unique<ExtensionViewViews>(browser_->profile(), host_.get()));
+  extension_view_ = AddChildView(std::make_unique<ExtensionViewViews>(
+      browser_->GetProfile(), host_.get()));
   extension_view_->SetContainer(this);
   extension_view_->Init();
 
@@ -290,7 +302,7 @@ ExtensionPopup::ExtensionPopup(
 
   scoped_devtools_observation_ =
       std::make_unique<ScopedDevToolsAgentHostObservation>(this);
-  browser_->tab_strip_model()->AddObserver(this);
+  browser_->GetTabStripModel()->AddObserver(this);
 
   CHECK(anchor_widget());
   anchor_widget_observation_.Observe(anchor_widget()->GetPrimaryWindowWidget());
@@ -341,7 +353,7 @@ void ExtensionPopup::ShowBubble() {
 
 void ExtensionPopup::CloseUnlessBlockedByInspectionOrJSDialog() {
   // Don't close if the extension page is under inspection.
-  if (show_action_ == PopupShowAction::kShowAndInspect) {
+  if (inspected_) {
     return;
   }
 

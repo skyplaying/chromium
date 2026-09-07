@@ -13,12 +13,12 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
 #include "build/build_config.h"
-#include "chrome/browser/autofill/account_setting_service_factory.h"
+#include "chrome/browser/account_settings/account_setting_service_factory.h"
+#include "chrome/browser/autocomplete/aim_eligibility_service_factory.h"
 #include "chrome/browser/autofill/personal_data_manager_factory.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/collaboration/collaboration_service_factory.h"
-#include "chrome/browser/commerce/product_specifications/product_specifications_service_factory.h"
 #include "chrome/browser/consent_auditor/consent_auditor_factory.h"
 #include "chrome/browser/data_sharing/data_sharing_service_factory.h"
 #include "chrome/browser/data_sharing/personal_collaboration_data/personal_collaboration_data_service_factory.h"
@@ -26,11 +26,11 @@
 #include "chrome/browser/gcm/gcm_profile_service_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/metrics/variations/google_groups_manager_factory.h"
-#include "chrome/browser/password_manager/account_password_store_factory.h"
+#include "chrome/browser/notebooks/notebooks_service_factory.h"
+#include "chrome/browser/password_manager/factories/account_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/password_receiver_service_factory.h"
 #include "chrome/browser/password_manager/factories/password_sender_service_factory.h"
-#include "chrome/browser/password_manager/password_receiver_service_factory.h"
-#include "chrome/browser/password_manager/profile_password_store_factory.h"
-#include "chrome/browser/plus_addresses/plus_address_setting_service_factory.h"
+#include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
 #include "chrome/browser/prefs/pref_service_syncable_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_key.h"
@@ -48,6 +48,7 @@
 #include "chrome/browser/sync/account_bookmark_sync_service_factory.h"
 #include "chrome/browser/sync/chrome_sync_client.h"
 #include "chrome/browser/sync/chrome_sync_controller_builder.h"
+#include "chrome/browser/sync/cross_device_theme_tracker_factory.h"
 #include "chrome/browser/sync/data_type_store_service_factory.h"
 #include "chrome/browser/sync/device_info_sync_service_factory.h"
 #include "chrome/browser/sync/glue/extensions_activity_monitor.h"
@@ -55,6 +56,7 @@
 #include "chrome/browser/sync/send_tab_to_self_sync_service_factory.h"
 #include "chrome/browser/sync/session_sync_service_factory.h"
 #include "chrome/browser/sync/sync_invalidations_service_factory.h"
+#include "chrome/browser/sync/tab_context_sync_service_factory.h"
 #include "chrome/browser/sync/user_event_service_factory.h"
 #include "chrome/browser/tab_group_sync/feature_utils.h"
 #include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
@@ -71,8 +73,8 @@
 #include "components/autofill/core/browser/webdata/autofill_webdata_service.h"
 #include "components/browser_sync/common_controller_builder.h"
 #include "components/collaboration/public/collaboration_service.h"
+#include "components/omnibox/common/omnibox_features.h"
 #include "components/password_manager/core/browser/sharing/password_receiver_service.h"
-#include "components/plus_addresses/core/browser/webdata/plus_address_webdata_service.h"
 #include "components/saved_tab_groups/public/features.h"
 #include "components/saved_tab_groups/public/tab_group_sync_service.h"
 #include "components/send_tab_to_self/send_tab_to_self_sync_service.h"
@@ -120,6 +122,8 @@
 #include "base/android/scoped_java_ref.h"
 #include "chrome/browser/android/webapk/webapk_sync_service.h"
 #include "chrome/browser/android/webapk/webapk_sync_service_factory.h"
+#include "chrome/browser/ntp_customization/ntp_android_custom_background_service_factory.h"
+#include "ui/base/device_form_factor.h"
 
 // Must come after other includes, because FromJniType() uses Profile.
 #include "chrome/browser/sync/android/jni_headers/SyncServiceFactory_jni.h"
@@ -158,6 +162,22 @@ tab_groups::TabGroupSyncService* GetTabGroupSyncService(Profile* profile) {
         // BUILDFLAG(IS_WIN)
 }
 
+// Returns TemplateURLService or nullptr if the feature is disabled. Currently,
+// only on Android we have a separate feature flag for template url sync, and
+// it's only enabled for LFF.
+TemplateURLService* GetTemplateURLService(Profile* profile) {
+  CHECK(profile);
+#if BUILDFLAG(IS_ANDROID)
+  if (base::FeatureList::IsEnabled(syncer::kSyncSearchEnginesAndroidLFF) &&
+      base::FeatureList::IsEnabled(omnibox::kOmniboxSiteSearch)) {
+    return TemplateURLServiceFactory::GetForProfile(profile);
+  }
+  return nullptr;
+#else
+  return TemplateURLServiceFactory::GetForProfile(profile);
+#endif  // BUILDFLAG(IS_ANDROID)
+}
+
 autofill::AddressDataManager* GetAddressDataManager(Profile* profile) {
   auto* pdm =
       autofill::PersonalDataManagerFactory::GetForBrowserContext(profile);
@@ -190,7 +210,7 @@ syncer::DataTypeController::TypeVector CreateCommonControllers(
 
   browser_sync::CommonControllerBuilder builder;
   builder.SetAccountSettingService(
-      autofill::AccountSettingServiceFactory::GetForBrowserContext(profile));
+      AccountSettingServiceFactory::GetForBrowserContext(profile));
   // A callback is needed here because `autofill::PersonalDataManagerFactory`
   // already depends on `SyncServiceFactory`.
   builder.SetAddressDataManagerGetter(
@@ -206,6 +226,8 @@ syncer::DataTypeController::TypeVector CreateCommonControllers(
   builder.SetCollaborationService(
       collaboration::CollaborationServiceFactory::GetForProfile(profile));
 #if !BUILDFLAG(IS_ANDROID)
+  builder.SetAimEligibilityService(
+      AimEligibilityServiceFactory::GetForProfile(profile));
   builder.SetContextualTasksService(
       contextual_tasks::ContextualTasksServiceFactory::GetForProfile(profile));
 #endif
@@ -238,27 +260,16 @@ syncer::DataTypeController::TypeVector CreateCommonControllers(
                                profile, ServiceAccessType::IMPLICIT_ACCESS),
                            AccountPasswordStoreFactory::GetForProfile(
                                profile, ServiceAccessType::IMPLICIT_ACCESS));
-  builder.SetPlusAddressServices(
-      PlusAddressSettingServiceFactory::GetForBrowserContext(profile),
-      WebDataServiceFactory::GetPlusAddressWebDataForProfile(
-          profile, ServiceAccessType::IMPLICIT_ACCESS));
   builder.SetPrefService(profile->GetPrefs());
   builder.SetPrefServiceSyncable(PrefServiceSyncableFromProfile(profile));
-  builder.SetProductSpecificationsService(
-      commerce::ProductSpecificationsServiceFactory::GetForBrowserContext(
-          profile));
   builder.SetTabGroupSyncService(GetTabGroupSyncService(profile));
-  builder.SetTemplateURLService(
-#if BUILDFLAG(IS_ANDROID)
-      nullptr
-#else   // BUILDFLAG(IS_ANDROID)
-      TemplateURLServiceFactory::GetForProfile(profile)
-#endif  // BUILDFLAG(IS_ANDROID)
-  );
+  builder.SetTemplateURLService(GetTemplateURLService(profile));
   builder.SetSendTabToSelfSyncService(
       SendTabToSelfSyncServiceFactory::GetForProfile(profile));
   builder.SetSessionSyncService(
       SessionSyncServiceFactory::GetForProfile(profile));
+  builder.SetTabContextSyncService(
+      TabContextSyncServiceFactory::GetForProfile(profile));
   builder.SetSharingMessageBridge(
       SharingMessageBridgeFactory::GetForBrowserContext(profile));
 #if BUILDFLAG(ENABLE_SUPERVISED_USERS)
@@ -275,6 +286,8 @@ syncer::DataTypeController::TypeVector CreateCommonControllers(
       skills::SkillsServiceFactory::GetForProfile(profile)
 #endif  // BUILDFLAG(IS_ANDROID)
   );
+  builder.SetNotebooksService(
+      notebooks::NotebooksServiceFactory::GetForProfile(profile));
 
   return builder.Build(/*disabled_types=*/{}, sync_service,
                        chrome::GetChannel());
@@ -311,6 +324,10 @@ syncer::DataTypeController::TypeVector CreateChromeControllers(
 #endif  // BUILDFLAG(ENABLE_SPELLCHECK)
 
 #if BUILDFLAG(IS_ANDROID)
+  builder.SetNtpAndroidCustomBackgroundService(
+      base::FeatureList::IsEnabled(syncer::kNewTabPageCustomizationThemeSync)
+          ? NtpAndroidCustomBackgroundServiceFactory::GetForProfile(profile)
+          : nullptr);
   builder.SetWebApkSyncService(
       base::FeatureList::IsEnabled(syncer::kWebApkBackupAndRestoreBackend)
           ? webapk::WebApkSyncServiceFactory::GetForProfile(profile)
@@ -346,6 +363,9 @@ syncer::DataTypeController::TypeVector CreateChromeControllers(
                                                                /*create=*/true)
           : nullptr);
 #endif  // BUILDFLAG(IS_CHROMEOS)
+
+  builder.SetCrossDeviceThemeTracker(
+      CrossDeviceThemeTrackerFactory::GetForProfile(profile));
 
   return builder.Build(sync_service);
 }
@@ -524,9 +544,10 @@ SyncServiceFactory::SyncServiceFactory()
   // destruction order. Note that some of the dependencies are listed here but
   // actually plumbed in ChromeSyncClient, which this factory constructs.
   DependsOn(AboutSigninInternalsFactory::GetInstance());
-  DependsOn(autofill::AccountSettingServiceFactory::GetInstance());
+  DependsOn(AccountSettingServiceFactory::GetInstance());
   DependsOn(AccountBookmarkSyncServiceFactory::GetInstance());
   DependsOn(AccountPasswordStoreFactory::GetInstance());
+  DependsOn(AimEligibilityServiceFactory::GetInstance());
   DependsOn(BookmarkModelFactory::GetInstance());
   DependsOn(BookmarkUndoServiceFactory::GetInstance());
   DependsOn(browser_sync::UserEventServiceFactory::GetInstance());
@@ -535,6 +556,7 @@ SyncServiceFactory::SyncServiceFactory()
 #if !BUILDFLAG(IS_ANDROID)
   DependsOn(contextual_tasks::ContextualTasksServiceFactory::GetInstance());
 #endif  // !BUILDFLAG(IS_ANDROID)
+  DependsOn(CrossDeviceThemeTrackerFactory::GetInstance());
   DependsOn(DataTypeStoreServiceFactory::GetInstance());
   DependsOn(DeviceInfoSyncServiceFactory::GetInstance());
   DependsOn(data_sharing::DataSharingServiceFactory::GetInstance());
@@ -546,13 +568,12 @@ SyncServiceFactory::SyncServiceFactory()
   DependsOn(HistoryServiceFactory::GetInstance());
   DependsOn(IdentityManagerFactory::GetInstance());
   DependsOn(LocalOrSyncableBookmarkSyncServiceFactory::GetInstance());
+  DependsOn(notebooks::NotebooksServiceFactory::GetInstance());
 #if !BUILDFLAG(IS_ANDROID)
   DependsOn(PasskeyModelFactory::GetInstance());
 #endif  // !BUILDFLAG(IS_ANDROID)
   DependsOn(PasswordReceiverServiceFactory::GetInstance());
   DependsOn(PasswordSenderServiceFactory::GetInstance());
-  DependsOn(PlusAddressSettingServiceFactory::GetInstance());
-  DependsOn(commerce::ProductSpecificationsServiceFactory::GetInstance());
   DependsOn(ProfilePasswordStoreFactory::GetInstance());
 
   DependsOn(SecurityEventRecorderFactory::GetInstance());
@@ -565,12 +586,14 @@ SyncServiceFactory::SyncServiceFactory()
   DependsOn(SyncInvalidationsServiceFactory::GetInstance());
   DependsOn(supervised_user::FamilyLinkSettingsServiceFactory::GetInstance());
   DependsOn(SessionSyncServiceFactory::GetInstance());
+  DependsOn(TabContextSyncServiceFactory::GetInstance());
   DependsOn(TemplateURLServiceFactory::GetInstance());
 #if !BUILDFLAG(IS_ANDROID)
   DependsOn(ThemeServiceFactory::GetInstance());
 #endif  // !BUILDFLAG(IS_ANDROID)
   DependsOn(TrustedVaultServiceFactory::GetInstance());
 #if BUILDFLAG(IS_ANDROID)
+  DependsOn(NtpAndroidCustomBackgroundServiceFactory::GetInstance());
   if (base::FeatureList::IsEnabled(syncer::kWebApkBackupAndRestoreBackend)) {
     DependsOn(webapk::WebApkSyncServiceFactory::GetInstance());
   }
@@ -622,17 +645,10 @@ bool SyncServiceFactory::HasSyncService(Profile* profile) {
 bool SyncServiceFactory::IsSyncAllowed(Profile* profile) {
   DCHECK(profile);
 
-  if (HasSyncService(profile)) {
-    syncer::SyncService* sync_service = GetForProfile(profile);
-    return !sync_service->HasDisableReason(
-        syncer::SyncService::DISABLE_REASON_ENTERPRISE_POLICY);
-  }
-
-  // No SyncServiceImpl created yet - we don't want to create one, so just
-  // infer the accessible state by looking at prefs/command line flags.
-  syncer::SyncPrefs prefs(profile->GetPrefs());
-  return syncer::IsSyncAllowedByFlag() &&
-         (!prefs.IsSyncClientDisabledByPolicy() || prefs.IsLocalSyncEnabled());
+  syncer::SyncService* sync_service = GetForProfile(profile);
+  return sync_service &&
+         !sync_service->HasDisableReason(
+             syncer::SyncService::DISABLE_REASON_ENTERPRISE_POLICY);
 }
 
 // static

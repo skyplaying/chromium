@@ -25,6 +25,7 @@ class FadeTransitionHandler {
 
     private int mTabStripTransitionThreshold;
     private int mTabStripWidth;
+    private boolean mTabStripSuppressed;
 
     FadeTransitionHandler(
             OneshotSupplier<TabStripTransitionDelegate> tabStripTransitionDelegateSupplier,
@@ -33,20 +34,46 @@ class FadeTransitionHandler {
         mCallbackController = callbackController;
     }
 
-    void updateTabStripTransitionThreshold(DisplayMetrics displayMetrics) {
+    void updateTabStripTransitionThreshold(
+            DisplayMetrics displayMetrics, int tabStripWidth, boolean isInDesktopWindow) {
         var delegate = mTabStripTransitionDelegateSupplier.get();
         // Skip while the delegate is null before native init; this method will be invoked by the
         // observer callback once the delegate supplier is injected.
         if (delegate == null) return;
         mTabStripTransitionThreshold =
                 ViewUtils.dpToPx(displayMetrics, delegate.getFadeTransitionThresholdDp());
+        mTabStripWidth = tabStripWidth;
+
+        // Fade transition should update strip visibility when the threshold changes in desktop
+        // windowing mode, after re-evaluating the current tab strip width. In the exceptional
+        // scenario where the strip needs to be made forcefully visible via a fade transition,
+        // we expect a tab strip size change to trigger the transition.
+        if (isInDesktopWindow) {
+            requestTransition(/* forceFadeInStrip= */ false);
+        }
     }
 
     void onTabStripSizeChanged(
-            int width, boolean forceFadeInStrip, boolean desktopWindowingModeChanged) {
-        if (width == mTabStripWidth && !desktopWindowingModeChanged) return;
-        mTabStripWidth = width;
+            int tabStripWidth, boolean forceFadeInStrip, boolean desktopWindowingModeChanged) {
+        // We bypass the width early-return check when forceFadeInStrip is true. This ensures
+        // that if the width was already updated by a prior non-transition call (such as
+        // updateTabStripTransitionThreshold() or suppressTabStrip()), we do not accidentally
+        // drop or skip executing the forceful transition.
+        if (tabStripWidth == mTabStripWidth && !desktopWindowingModeChanged && !forceFadeInStrip) {
+            return;
+        }
+        mTabStripWidth = tabStripWidth;
         requestTransition(forceFadeInStrip);
+    }
+
+    void suppressTabStrip(boolean suppress, int tabStripWidth, boolean isInDesktopWindow) {
+        if (mTabStripSuppressed == suppress) return;
+        mTabStripSuppressed = suppress;
+        mTabStripWidth = tabStripWidth;
+
+        if (isInDesktopWindow) {
+            requestTransition(/* forceFadeInStrip= */ false);
+        }
     }
 
     private void requestTransition(boolean forceFadeInStrip) {
@@ -58,7 +85,9 @@ class FadeTransitionHandler {
     private void maybeUpdateTabStripVisibility(boolean forceFadeInStrip) {
         if (mTabStripWidth <= 0) return;
 
-        boolean showTabStrip = mTabStripWidth >= mTabStripTransitionThreshold || forceFadeInStrip;
+        boolean showTabStrip =
+                (mTabStripWidth >= mTabStripTransitionThreshold || forceFadeInStrip)
+                        && !mTabStripSuppressed;
         var newOpacity = showTabStrip ? 0f : 1f;
 
         var delegate = mTabStripTransitionDelegateSupplier.get();

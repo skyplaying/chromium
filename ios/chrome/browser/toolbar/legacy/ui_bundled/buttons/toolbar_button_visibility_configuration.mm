@@ -4,7 +4,6 @@
 
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/toolbar_button_visibility_configuration.h"
 
-#import "ios/chrome/browser/shared/public/features/features.h"
 
 @implementation ToolbarButtonVisibilityConfiguration
 
@@ -57,9 +56,6 @@
 }
 
 - (ToolbarComponentVisibility)shareButtonVisibility {
-  if (base::FeatureList::IsEnabled(kDisableShareButton)) {
-    return ToolbarComponentVisibilityNone;
-  }
   switch (self.type) {
     case ToolbarType::kPrimary:
       return ToolbarComponentVisibilityAlways &

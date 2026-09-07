@@ -112,7 +112,7 @@ class BrowsingDataQuotaHelperTest : public testing::Test {
   int64_t quota() { return quota_; }
 
  private:
-  void FetchCompleted(const QuotaInfoArray& quota_info) {
+  void FetchCompleted(QuotaInfoArray quota_info) {
     quota_info_ = quota_info;
     fetching_completed_ = true;
   }
@@ -167,7 +167,7 @@ TEST_F(BrowsingDataQuotaHelperTest, IgnoreExtensionsAndDevTools) {
       {"http://example.com/", 1},
       {"https://example.com/", 10},
       {"http://example2.com/", 1000},
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
       {"chrome-extension://abcdefghijklmnopqrstuvwxyz/", 10000},
 #endif
       {"devtools://abcdefghijklmnopqrstuvwxyz/", 10000},

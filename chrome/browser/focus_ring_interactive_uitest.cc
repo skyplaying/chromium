@@ -4,9 +4,10 @@
 
 #include "base/files/file_util.h"
 #include "base/path_service.h"
+#include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
 #include "cc/test/pixel_comparator.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
@@ -50,7 +51,7 @@ const auto mac_loose_comparator = cc::FuzzyPixelComparator()
 // some configuration on the bot. In addition, this bot does not get run on CQ+1
 // so having a separate golden file to rebaseline is not good enough. This fuzzy
 // comparator accounts for this and still make sure that the output is sane.
-// TODO(http://crbug.com/1443584): Remove this fuzzy matcher when
+// TODO(http://crbug.com/40064433): Remove this fuzzy matcher when
 // ChromeRefresh2023 is enabled by default, and replace it with a standard
 // cc::AlphaDiscardingExactPixelComparator.
 const auto fuzzy_comparator = cc::FuzzyPixelComparator()

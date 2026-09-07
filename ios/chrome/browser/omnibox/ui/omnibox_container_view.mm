@@ -64,12 +64,8 @@ const CGFloat kClearButtonSize = 28.0f;
 
 /// Whether the omnibox is using the text view instead of the text field.
 bool UseTextView(OmniboxPresentationContext presentation_context) {
-  if (presentation_context == OmniboxPresentationContext::kLocationBar) {
-    return IsMultilineBrowserOmniboxEnabled();
-  } else if (presentation_context == OmniboxPresentationContext::kComposebox) {
-    return YES;
-  }
-  return NO;
+  return presentation_context == OmniboxPresentationContext::kComposebox ||
+         presentation_context == OmniboxPresentationContext::kCobrowse;
 }
 
 /// The maxium number of lines for the multiline omnibox before it starts
@@ -136,7 +132,7 @@ UIButton* CreateClearButton(OmniboxPresentationContext presentationContext) {
       presentationContext == OmniboxPresentationContext::kComposebox
           ? kComposeboxClearButtonImageSize
           : kClearButtonImageSize;
-  conf.image = DefaultSymbolWithPointSize(kXMarkCircleFillSymbol, imageSize);
+  conf.image = SymbolWithPointSize(SymbolXMarkCircleFill, imageSize);
   conf.contentInsets =
       NSDirectionalEdgeInsetsMake(kClearButtonInset, kClearButtonInset,
                                   kClearButtonInset, kClearButtonInset);

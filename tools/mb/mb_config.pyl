@@ -26,16 +26,6 @@
   # (where each config name is a key in the 'configs' dict, below). MB uses
   # this dict to look up which config to use for a given bot.
   'builder_groups': {
-    'chrome': {
-      # Don't include unwind tables for linux-/mac-/win-/win64-chrome builders.
-      # They monitor binary size growth, which may be affected by the tables.
-      'linux-chrome': 'official_remoteexec',
-      'mac-chrome': 'official_remoteexec_mac_x64',
-      'win-branded-rel': 'chrome_branded_remoteexec_minimal_symbols',
-      'win-chrome': 'official_remoteexec_x86',
-      'win64-chrome': 'official_remoteexec_x64',
-    },
-
     'chrome.gpu.fyi': {
       'ChromeOS FYI Release Skylab (jacuzzi)': 'gpu_tests_chromeos_jacuzzi_release_trybot_dcheck_off_no_symbols_remoteexec_skylab',
     },
@@ -53,6 +43,7 @@
       'linux-pgo': 'official_linux_pgo',
       'mac-arm-pgo': 'official_mac_arm_pgo_with_symbols',
       'mac-pgo': 'official_mac_pgo_with_symbols',
+      'webview-arm64-pgo': 'official_webview_arm64_pgo',
       'win-arm64-pgo': 'official_win_arm64_pgo',
       'win32-pgo': 'official_x86_pgo',
       'win64-pgo': 'official_x64_pgo',
@@ -88,9 +79,11 @@
       'android_arm64-builder-perf-pgo': 'official_remoteexec_minimal_symbols_android_arm64_pgo',
       'android_arm64_high_end-builder-perf': 'official_remoteexec_minimal_symbols_android_arm64_high_end',
       'android_arm64_high_end-builder-perf-pgo': 'official_remoteexec_minimal_symbols_android_arm64_high_end_pgo',
+      'android_arm64_high_end-builder-perf-pgo-heapdump': 'official_remoteexec_minimal_symbols_android_arm64_high_end_pgo_heapdump',
       'chromecast-linux-builder-perf': 'cast_binary_size_remoteexec',
+      'linux-arm-builder-perf': 'official_linux_perf_arm64',
       'linux-builder-perf': 'official_linux_perf',
-      'linux-builder-perf-pgo': 'official_remoteexec_linux_perf_pgo',
+      'linux-builder-perf-pgo': 'official_remoteexec_perf_pgo',
       'linux-builder-perf-rel': 'official_linux_perf',
       'mac-arm-builder-perf': 'official_remoteexec_mac_arm_perf',
       'mac-arm-builder-perf-pgo': 'official_remoteexec_mac_arm_perf_pgo',
@@ -122,9 +115,11 @@
       'android_arm64-builder-perf-pgo': 'official_remoteexec_minimal_symbols_android_arm64_pgo',
       'android_arm64_high_end-builder-perf': 'official_remoteexec_minimal_symbols_android_arm64_high_end',
       'android_arm64_high_end-builder-perf-pgo': 'official_remoteexec_minimal_symbols_android_arm64_high_end_pgo',
+      'android_arm64_high_end-builder-perf-pgo-heapdump': 'official_remoteexec_minimal_symbols_android_arm64_high_end_pgo_heapdump',
       'chromecast-linux-builder-perf': 'cast_binary_size_remoteexec',
+      'linux-arm-builder-perf': 'official_linux_perf_arm64',
       'linux-builder-perf': 'official_linux_perf',
-      'linux-builder-perf-pgo': 'official_remoteexec_linux_perf_pgo',
+      'linux-builder-perf-pgo': 'official_remoteexec_perf_pgo',
       'linux-builder-perf-rel': 'official_linux_perf',
       'mac-arm-builder-perf': 'official_remoteexec_mac_arm_perf',
       'mac-arm-builder-perf-pgo': 'official_remoteexec_mac_arm_perf_pgo',
@@ -137,7 +132,6 @@
 
     'client.devtools-frontend.integration': {
       'DevTools Linux': 'release_trybot_blink_do_typecheck_siso',
-      'DevTools Linux Fastbuild': 'release_trybot_blink_siso',
     },
 
     'client.openscreen.chromium': {
@@ -179,8 +173,6 @@
     'internal.optimization_guide': {
       # Linux and win64 CI bots use official builds to catch official-specific ODML bugs. These
       # take significantly longer to compile, and thus are only for these two builders.
-      'ai_wpt-mac-arm64': 'optimization_guide_mac_arm64_rel',
-      'ai_wpt-mac-x64': 'optimization_guide_rel',
       'model_validation-linux': 'optimization_guide_rel',
       'model_validation-mac-arm64': 'optimization_guide_mac_arm64_rel',
       'model_validation-mac-x64': 'optimization_guide_rel',
@@ -213,15 +205,10 @@
     },
 
     'tryserver.chrome': {
-      'linux-chrome': 'official_remoteexec',
       'linux-finch-smoke-chrome': 'official_remoteexec',
       'mac-arm64-finch-smoke-chrome': 'official_remoteexec_mac_arm',
-      'mac-chrome': 'official_remoteexec_mac_x64',
-      'win-branded-compile-rel': 'chrome_branded_remoteexec_minimal_symbols',
       'win-celab-try-rel': 'official_celab_release_bot',
-      'win-chrome': 'official_remoteexec_x86',
       'win-finch-smoke-chrome': 'official_remoteexec',
-      'win64-chrome': 'official_remoteexec_x64',
     },
 
     'tryserver.chrome.gpu': {
@@ -241,6 +228,7 @@
       'linux-pgo': 'official_linux_pgo_with_symbols',
       'mac-arm-pgo': 'official_mac_arm_pgo_with_symbols',
       'mac-pgo': 'official_mac_pgo_with_symbols',
+      'webview-arm64-pgo': 'official_webview_arm64_pgo',
       'win-arm64-pgo': 'official_win_arm64_pgo_with_symbols',
       'win32-pgo': 'official_x86_pgo_with_symbols',
       'win64-pgo': 'official_x64_pgo_with_symbols',
@@ -254,7 +242,6 @@
     'tryserver.devtools-frontend': {
       # Align devtools blink builders with chromium linux-rel
       'devtools_frontend_linux_blink_light_rel': 'release_trybot_blink_do_typecheck_siso',
-      'devtools_frontend_linux_blink_light_rel_fastbuild': 'release_trybot_blink_siso',
       'devtools_frontend_linux_blink_rel': 'release_trybot_blink_do_typecheck_siso',
     },
 
@@ -266,8 +253,6 @@
     },
 
     'tryserver.internal.optimization_guide': {
-      'ai_wpt-mac-arm64': 'optimization_guide_mac_arm64_rel',
-      'ai_wpt-mac-x64': 'optimization_guide_rel',
       'model_validation-linux': 'optimization_guide_rel',
       'model_validation-mac-arm64': 'optimization_guide_mac_arm64_rel',
       'model_validation-mac-x64': 'optimization_guide_rel',
@@ -335,10 +320,6 @@
 
     'cast_binary_size_remoteexec': [
       'cast_receiver', 'cast_os', 'minimal_symbols', 'release_bot_remoteexec',
-    ],
-
-    'chrome_branded_remoteexec_minimal_symbols': [
-      'chrome_branded', 'minimal_symbols', 'release_bot_remoteexec',
     ],
 
     'chromeos_kevin_include_unwind_tables_official_remoteexec': [
@@ -483,7 +464,11 @@
     ],
 
     'official_linux_perf': [
-      'official', 'remoteexec', 'no_gnome_keyring', 'minimal_symbols', 'pgo_phase_0',
+      'official', 'remoteexec', 'minimal_symbols', 'pgo_phase_0',
+    ],
+
+    'official_linux_perf_arm64': [
+      'official', 'remoteexec', 'arm64', 'minimal_symbols', 'pgo_phase_0',
     ],
 
     'official_linux_pgo': [
@@ -495,11 +480,11 @@
     ],
 
     'official_mac_arm_pgo_with_symbols': [
-      'official', 'remoteexec', 'no_widevine_cdm_host_verification', 'arm64', 'disable_widevine_signing', 'minimal_symbols', 'pgo_phase_1', 'release', 'disable_stripping'
+      'official', 'remoteexec', 'no_widevine_cdm_host_verification', 'arm64', 'minimal_symbols', 'pgo_phase_1', 'release', 'disable_stripping'
     ],
 
     'official_mac_pgo_with_symbols': [
-      'official', 'remoteexec', 'no_widevine_cdm_host_verification', 'x64', 'disable_widevine_signing', 'minimal_symbols', 'pgo_phase_1', 'release', 'disable_stripping'
+      'official', 'remoteexec', 'no_widevine_cdm_host_verification', 'x64', 'minimal_symbols', 'pgo_phase_1', 'release', 'disable_stripping'
     ],
 
     'official_minimal_symbols_android_arm64': [
@@ -514,36 +499,29 @@
       'cast_receiver_perf_optimized_internal', 'official', 'remoteexec', 'minimal_symbols', 'fuchsia', 'fuchsia_include_sd_images', 'arm64', 'ffmpeg_branding_chrome', 'proprietary_codecs', 'release', 'test_isolate_no_emulator',
     ],
 
-    'official_remoteexec_linux_perf_pgo': [
-      'official', 'remoteexec', 'no_gnome_keyring', 'minimal_symbols',
-    ],
 
     'official_remoteexec_mac_arm': [
       'official', 'remoteexec', 'no_widevine_cdm_host_verification', 'arm64',
     ],
 
     'official_remoteexec_mac_arm_no_brp_perf': [
-      'official', 'remoteexec', 'no_keystone_registration_framework', 'no_widevine_cdm_host_verification', 'minimal_symbols', 'arm64', 'pgo_phase_0', 'no_brp',
+      'official', 'remoteexec', 'no_widevine_cdm_host_verification', 'minimal_symbols', 'arm64', 'pgo_phase_0', 'no_brp',
     ],
 
     'official_remoteexec_mac_arm_perf': [
-      'official', 'remoteexec', 'no_keystone_registration_framework', 'no_widevine_cdm_host_verification', 'minimal_symbols', 'arm64', 'pgo_phase_0',
+      'official', 'remoteexec', 'no_widevine_cdm_host_verification', 'minimal_symbols', 'arm64', 'pgo_phase_0',
     ],
 
     'official_remoteexec_mac_arm_perf_pgo': [
-      'official', 'remoteexec', 'no_keystone_registration_framework', 'no_widevine_cdm_host_verification', 'minimal_symbols', 'arm64',
+      'official', 'remoteexec', 'no_widevine_cdm_host_verification', 'minimal_symbols', 'arm64',
     ],
 
     'official_remoteexec_mac_perf': [
-      'official', 'remoteexec', 'no_keystone_registration_framework', 'no_widevine_cdm_host_verification', 'minimal_symbols', 'pgo_phase_0',
+      'official', 'remoteexec', 'no_widevine_cdm_host_verification', 'minimal_symbols', 'pgo_phase_0',
     ],
 
     'official_remoteexec_mac_perf_pgo': [
-      'official', 'remoteexec', 'no_keystone_registration_framework', 'no_widevine_cdm_host_verification', 'minimal_symbols',
-    ],
-
-    'official_remoteexec_mac_x64': [
-      'official', 'remoteexec', 'x64', 'no_widevine_cdm_host_verification',
+      'official', 'remoteexec', 'no_widevine_cdm_host_verification', 'minimal_symbols',
     ],
 
     'official_remoteexec_min_symbol_webview_android_desktop_arm64': [
@@ -564,6 +542,10 @@
 
     'official_remoteexec_minimal_symbols_android_arm64_high_end_pgo': [
       'official', 'remoteexec', 'minimal_symbols', 'android', 'arm64', 'no_default_afdo',
+    ],
+
+    'official_remoteexec_minimal_symbols_android_arm64_high_end_pgo_heapdump': [
+      'official', 'remoteexec', 'minimal_symbols', 'android', 'arm64', 'no_default_afdo', 'no_partition_alloc_as_malloc',
     ],
 
     'official_remoteexec_minimal_symbols_android_arm64_pgo': [
@@ -594,20 +576,16 @@
       'official', 'remoteexec_win_cross', 'arm64', 'minimal_symbols', 'pgo_phase_0',
     ],
 
-    'official_remoteexec_x64': [
-      'official', 'remoteexec', 'x64', 'minimal_symbols',
-    ],
-
-    'official_remoteexec_x86': [
-      'official', 'remoteexec', 'x86', 'minimal_symbols',
-    ],
-
     'official_webview_arm32_orderfile': [
       'official', 'remoteexec', 'android', 'arm', 'minimal_symbols', 'orderfile_common',
     ],
 
     'official_webview_arm64_orderfile': [
       'official', 'remoteexec', 'android', 'arm64', 'minimal_symbols', 'orderfile_common',
+    ],
+
+    'official_webview_arm64_pgo': [
+      'official', 'remoteexec', 'android', 'arm64', 'minimal_symbols', 'no_default_afdo', 'pgo_phase_1', 'stable_version_code',
     ],
 
     'official_win_arm64_pgo': [
@@ -886,10 +864,6 @@
       'gn_args': 'enable_stripping=false',
     },
 
-    'disable_widevine_signing': {
-      'gn_args': 'enable_widevine_cdm_host_verification = false'
-    },
-
     'ffmpeg_branding_chrome': {
       'gn_args': 'ffmpeg_branding="Chrome"',
     },
@@ -979,12 +953,9 @@
       'gn_args': 'clang_use_default_sample_profile=false',
     },
 
-    'no_gnome_keyring': {
-      'gn_args': 'use_gnome_keyring=false',
-    },
-
-    'no_keystone_registration_framework': {
-      'gn_args': 'enable_keystone_registration_framework=false',
+    'no_partition_alloc_as_malloc': {
+      'mixins': ['no_brp'],
+      'gn_args': 'use_partition_alloc_as_malloc=false',
     },
 
     'no_proguard_obfuscation': {
@@ -1029,7 +1000,6 @@
     },
 
     'pgo_phase_1': {
-      'mixins': ['v8_release_branch'],
       'gn_args': 'chrome_pgo_phase=1'
     },
 
@@ -1141,11 +1111,6 @@
       # TODO(machenbach): Temporarily toggle pointer-compression off while it
       # is on by default.
       'gn_args': 'v8_enable_pointer_compression=false',
-    },
-
-    'v8_release_branch': {
-      # V8 flag that disables v8_enable_runtime_call_stats on release branches.
-      'gn_args': 'v8_is_on_release_branch=true',
     },
 
     'webview': {

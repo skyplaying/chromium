@@ -12,18 +12,19 @@
 #include "base/test/run_until.h"
 #include "chrome/browser/autofill/automated_tests/cache_replayer.h"
 #include "chrome/browser/autofill/captured_sites_test_utils.h"
-#include "chrome/browser/password_manager/account_password_store_factory.h"
 #include "chrome/browser/password_manager/chrome_password_change_service.h"
 #include "chrome/browser/password_manager/chrome_password_manager_client.h"
+#include "chrome/browser/password_manager/factories/account_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
 #include "chrome/browser/password_manager/password_change_delegate.h"
 #include "chrome/browser/password_manager/password_change_service_factory.h"
 #include "chrome/browser/password_manager/password_manager_test_base.h"
 #include "chrome/browser/password_manager/password_manager_test_util.h"
 #include "chrome/browser/password_manager/password_manager_uitest_util.h"
-#include "chrome/browser/password_manager/profile_password_store_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/ui/passwords/manage_passwords_ui_controller.h"
 #include "chrome/browser/ui/tab_dialogs.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "components/autofill/core/common/autofill_debug_features.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_switches.h"
@@ -32,7 +33,9 @@
 #include "components/password_manager/core/browser/password_manager_switches.h"
 #include "components/password_manager/core/browser/password_manager_test_utils.h"
 #include "components/password_manager/core/browser/password_store/fake_password_store_backend.h"
+#include "components/password_manager/core/browser/password_store/password_form_converters.h"
 #include "components/password_manager/core/browser/password_store/test_password_store.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/password_manager/core/common/password_manager_features.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "components/sync/test/test_sync_service.h"
@@ -77,12 +80,12 @@ std::unique_ptr<KeyedService> BuildTestSyncService(
 password_manager::PasswordForm CreatePasswordForm(
     const GURL& url,
     const std::u16string& username,
-    const std::u16string& password) {
+    std::u16string password) {
   password_manager::PasswordForm form;
   form.url = GURL(url);
   form.signon_realm = url.GetWithEmptyPath().spec();
   form.username_value = username;
-  form.password_value = password;
+  form.password_value = password_manager::PasswordString(std::move(password));
   return form;
 }
 
@@ -129,13 +132,14 @@ class CapturedSitesPasswordManagerBrowserTest
                      const std::string& username,
                      const std::string& password) override {
     scoped_refptr<password_manager::TestPasswordStore> password_store =
-        GetDefaultPasswordStore(browser()->profile());
+        GetDefaultPasswordStore(browser()->GetProfile());
     password_manager::PasswordForm signin_form;
     signin_form.url = GURL(origin);
     signin_form.signon_realm = origin;
-    signin_form.password_value = base::ASCIIToUTF16(password);
+    signin_form.password_value =
+        password_manager::PasswordString(base::ASCIIToUTF16(password));
     signin_form.username_value = base::ASCIIToUTF16(username);
-    password_store->AddLogin(signin_form);
+    password_store->AddLogin(password_manager::FromPasswordForm(signin_form));
     return true;
   }
 
@@ -196,13 +200,10 @@ class CapturedSitesPasswordManagerBrowserTest
                                  const std::string& username,
                                  const std::string& password) override {
     scoped_refptr<password_manager::TestPasswordStore> password_store =
-        GetDefaultPasswordStore(browser()->profile());
-    password_manager::FakePasswordStoreBackend* fake_backend =
-        static_cast<password_manager::FakePasswordStoreBackend*>(
-            password_store->GetBackendForTesting());
-
-    auto found = fake_backend->stored_passwords().find(origin);
-    if (fake_backend->stored_passwords().end() == found) {
+        GetDefaultPasswordStore(browser()->GetProfile());
+    auto passwords_map = GetAllLoginsSync(password_store.get());
+    auto found = passwords_map.find(origin);
+    if (passwords_map.end() == found) {
       return false;
     }
 
@@ -266,8 +267,8 @@ class CapturedSitesPasswordManagerBrowserTest
         ChromePasswordManagerClient::FromWebContents(WebContents());
     client->SetTestObserver(&observer_);
 
-    browser()->profile()->GetPrefs()->SetBoolean(::prefs::kSafeBrowsingEnabled,
-                                                 false);
+    browser()->GetProfile()->GetPrefs()->SetBoolean(
+        ::prefs::kSafeBrowsingEnabled, false);
 
     // Disable the caret blinking to not generate any compositor frames from
     // just a blinking cursor.
@@ -346,7 +347,7 @@ IN_PROC_BROWSER_TEST_P(CapturedSitesPasswordManagerBrowserTest, Recipe) {
 
 // This test is called with a dynamic list and may be empty during the Autofill
 // run instance, so adding GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST a la
-// crbug/1192206
+// crbug.com/40174793
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(
     CapturedSitesPasswordManagerBrowserTest);
 INSTANTIATE_TEST_SUITE_P(All,
@@ -366,7 +367,7 @@ class CapturedSitesAutomatedPasswordChangeBrowserTest
                                     url.spec());
 
     auto* password_change_service =
-        PasswordChangeServiceFactory::GetForProfile(browser()->profile());
+        PasswordChangeServiceFactory::GetForProfile(browser()->GetProfile());
     password_change_service->OfferPasswordChangeUi(
         CreatePasswordForm(WebContents()->GetLastCommittedURL(), u"test",
                            u"pa$$word"),
@@ -380,7 +381,7 @@ class CapturedSitesAutomatedPasswordChangeBrowserTest
 
   bool WaitForPasswordChangeState(int state) override {
     ChromePasswordChangeService* password_change_service =
-        PasswordChangeServiceFactory::GetForProfile(browser()->profile());
+        PasswordChangeServiceFactory::GetForProfile(browser()->GetProfile());
     PasswordChangeDelegate* delegate =
         password_change_service->GetPasswordChangeDelegate(WebContents());
 
@@ -473,7 +474,7 @@ IN_PROC_BROWSER_TEST_P(CapturedSitesAutomatedPasswordChangeBrowserTest,
 
 // This test is instantiated with a dynamic list and will be empty during the
 // Password run instance, so adding
-// GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST a la crbug.com/1192206
+// GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST a la crbug.com/40174793
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(
     CapturedSitesAutomatedPasswordChangeBrowserTest);
 INSTANTIATE_TEST_SUITE_P(All,

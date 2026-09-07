@@ -17,6 +17,7 @@
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/traced_value.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
@@ -116,7 +117,7 @@ void RuntimeCallStats::Dump(TracedValue& value) const {
 }
 
 namespace {
-const char row_format[] = "%-55s  %8" PRIu64 "  %9.3f\n";
+constexpr char kRowFormat[] = "{:55}  {:8}  {:9.3f}\n";
 }
 
 String RuntimeCallStats::ToString() const {
@@ -126,9 +127,8 @@ String RuntimeCallStats::ToString() const {
       "Name                                                    Count     Time "
       "(ms)\n\n");
   for (const auto& counter : counters_) {
-    UNSAFE_TODO(builder.AppendFormat(row_format, counter.GetName(),
-                                     counter.GetCount(),
-                                     counter.GetTime().InMillisecondsF()));
+    FormatTo(builder, kRowFormat, counter.GetName(), counter.GetCount(),
+             counter.GetTime().InMillisecondsF());
   }
 
 #if BUILDFLAG(RCS_COUNT_EVERYTHING)
@@ -182,11 +182,10 @@ Vector<RuntimeCallCounter*> RuntimeCallStats::CounterMapToSortedArray() const {
 
 void RuntimeCallStats::AddCounterMapStatsToBuilder(
     StringBuilder& builder) const {
-  builder.AppendFormat("\nNumber of counters in map: %u\n\n",
-                       counter_map_.size());
+  FormatTo(builder, "\nNumber of counters in map: {}\n\n", counter_map_.size());
   for (RuntimeCallCounter* counter : CounterMapToSortedArray()) {
-    builder.AppendFormat(row_format, counter->GetName(), counter->GetCount(),
-                         counter->GetTime().InMillisecondsF());
+    FormatTo(builder, kRowFormat, counter->GetName(), counter->GetCount(),
+             counter->GetTime().InMillisecondsF());
   }
 }
 #endif
@@ -208,15 +207,14 @@ void RuntimeCallStatsScopedTracer::AddBeginTraceEventIfEnabled(
   stats_ = stats;
   stats_->Reset();
   stats_->SetInUse(true);
-  TRACE_EVENT_BEGIN0(s_category_group_, s_name_);
+  TRACE_EVENT_BEGIN(s_category_group_, perfetto::StaticString(s_name_));
 }
 
 void RuntimeCallStatsScopedTracer::AddEndTraceEvent() {
   auto value = std::make_unique<TracedValue>();
   stats_->Dump(*value);
   stats_->SetInUse(false);
-  TRACE_EVENT_END1(s_category_group_, s_name_, "runtime-call-stats",
-                   std::move(value));
+  TRACE_EVENT_END(s_category_group_, "runtime-call-stats", std::move(value));
 }
 
 }  // namespace blink

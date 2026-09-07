@@ -13,7 +13,7 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_solid_color.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/gfx/image/image_skia_operations.h"
@@ -157,9 +157,10 @@ void WindowMiniViewHeaderView::ResetRoundedCorners() {
 void WindowMiniViewHeaderView::OnThemeChanged() {
   View::OnThemeChanged();
   CHECK(GetColorProvider());
-  layer()->SetColor(GetColorProvider()->GetColor(cros_tokens::kCrosSysHeader));
-  separator_->layer()->SetColor(
-      GetColorProvider()->GetColor(kColorAshWindowHeaderStrokeColor));
+  layer()->AsSolidColor()->SetColor(SkColor4f::FromColor(
+      GetColorProvider()->GetColor(cros_tokens::kCrosSysHeader)));
+  separator_->layer()->AsSolidColor()->SetColor(SkColor4f::FromColor(
+      GetColorProvider()->GetColor(kColorAshWindowHeaderStrokeColor)));
 }
 
 BEGIN_METADATA(WindowMiniViewHeaderView)

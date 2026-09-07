@@ -48,6 +48,8 @@ const char* const kWebViewCrashKeyAllowList[] = {
     "gr-context-type",
     "oop_read_failure",
     "gpu-gl-error-message",
+    "skia-compile-error",
+    "skia-error-shader",
 
     // components/viz
     "viz_deserialization",
@@ -162,6 +164,9 @@ const char* const kWebViewCrashKeyAllowList[] = {
     "num-experiments",
     "variations-seed-version",
 
+    // crash keys about check failures
+    "Logging-FATAL_MILESTONE",
+
     // CRX components
     "crx-components",
     "crx-components-cohort-hashes",
@@ -216,10 +221,18 @@ const char* const kWebViewCrashKeyAllowList[] = {
     "SIFactory-Size",
 
     // crbug.com/453113611
+    "SubprocessMetricsProvider-merge_result",
     "SubprocessMetricsProvider-histogram",
 
     // crbug.com/456871291
     "BadHistogramArgs-name",
+    "BadHistogramArgs-validity",
+
+    // crbug.com/542413274
+    "MismatchedHistogramArgs-name",
+
+    // crbug.com/40260662
+    "PersistentSampleMap-corrupted",
 
     nullptr};
 // clang-format on

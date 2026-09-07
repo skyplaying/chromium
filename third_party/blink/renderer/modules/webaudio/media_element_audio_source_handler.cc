@@ -8,6 +8,7 @@
 
 #include "base/synchronization/lock.h"
 #include "media/base/audio_bus.h"
+#include "media/base/sinc_resampler.h"
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_media_element_audio_source_options.h"
 #include "third_party/blink/renderer/core/frame/deprecation/deprecation.h"
@@ -133,9 +134,12 @@ void MediaElementAudioSourceHandler::SetFormat(uint32_t number_of_channels,
 
     if (source_sample_rate != Context()->sampleRate()) {
       double scale_factor = source_sample_rate / Context()->sampleRate();
+      const size_t resampler_request_frames =
+          audio_utilities::RoundUpToMultiple(
+              media::SincResampler::kMinRequestSize,
+              GetDeferredTaskHandler().RenderQuantumFrames());
       multi_channel_resampler_ = std::make_unique<MediaMultiChannelResampler>(
-          number_of_channels, scale_factor,
-          GetDeferredTaskHandler().RenderQuantumFrames(),
+          number_of_channels, scale_factor, resampler_request_frames,
           CrossThreadBindRepeating(
               &MediaElementAudioSourceHandler::ProvideResamplerInput,
               CrossThreadUnretained(this)));
@@ -146,7 +150,8 @@ void MediaElementAudioSourceHandler::SetFormat(uint32_t number_of_channels,
 
     {
       // The context must be locked when changing the number of output channels.
-      DeferredTaskHandler::GraphAutoLocker context_locker(Context());
+      DeferredTaskHandler::GraphAutoLocker context_locker(
+          Context()->GetDeferredTaskHandler());
 
       // Do any necesssary re-configuration to the output's number of channels.
       Output(0).SetNumberOfChannels(number_of_channels);
@@ -207,7 +212,7 @@ void MediaElementAudioSourceHandler::Process(uint32_t number_of_frames) {
     // Grab data from the provider so that the element continues to make
     // progress, even if we're going to output silence anyway.
     const int frames_int = base::checked_cast<int>(number_of_frames);
-    if (multi_channel_resampler_.get()) {
+    if (multi_channel_resampler_) {
       DCHECK_NE(source_sample_rate_, Context()->sampleRate());
       multi_channel_resampler_->Resample(frames_int, output_bus);
     } else {

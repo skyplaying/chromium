@@ -7,9 +7,10 @@
 #include "base/functional/callback_helpers.h"
 #include "base/strings/to_string.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_model.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webui/favicon_source.h"
 #include "chrome/browser/ui/webui/plural_string_handler.h"
 #include "chrome/browser/ui/webui/signin/batch_upload_handler.h"
@@ -21,6 +22,7 @@
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/sync/base/data_type.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "ui/webui/webui_util.h"
 
@@ -50,10 +52,10 @@ GetSampleData() {
 // Sample/debugging implementation that closes the browser tab regardless of the
 // item map.
 void CloseBrowserTabOnCompletionSample(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     const std::map<syncer::DataType,
                    std::vector<syncer::LocalDataItemModel::DataId>>& items) {
-  browser->GetTabStripModel()->GetActiveTab()->Close();
+  browser->GetActiveTabInterface()->Close();
 }
 
 }  // namespace
@@ -78,7 +80,6 @@ BatchUploadUI::BatchUploadUI(content::WebUI* web_ui)
       {"itemCountSelectedScreenReader",
        IDS_BATCH_UPLOAD_SCREEN_READER_ITEM_COUNT_SELECTED},
       {"selectAllScreenReader", IDS_BATCH_UPLOAD_SCREEN_READER_SELECT_ALL},
-      {"selectNoneScreenReader", IDS_BATCH_UPLOAD_SCREEN_READER_SELECT_NONE},
   };
   source->AddLocalizedStrings(kLocalizedStrings);
 
@@ -117,7 +118,7 @@ WEB_UI_CONTROLLER_TYPE_IMPL(BatchUploadUI)
 
 void BatchUploadUI::Initialize(
     const AccountInfo& account_info,
-    Browser* browser,
+    BrowserWindowInterface* browser,
     std::vector<syncer::LocalDataDescription> local_data_description_list,
     base::RepeatingCallback<void(int)> update_view_height_callback,
     base::RepeatingCallback<void(bool)> allow_web_view_input_callback,
@@ -147,7 +148,9 @@ void BatchUploadUI::CreateBatchUploadHandler(
   // Chrome for debugging purposes - fill it with sample data.
   if (!initialize_handler_callback_) {
     auto [account_info, descriptions] = GetSampleData();
-    Browser* browser = chrome::FindLastActive();
+    BrowserWindowInterface* browser =
+        GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
+    CHECK(browser);
     BatchUploadSelectedDataTypeItemsCallback sample_completion_callback =
         base::BindOnce(&CloseBrowserTabOnCompletionSample, browser);
     Initialize(account_info, browser, std::move(descriptions),
@@ -162,7 +165,7 @@ void BatchUploadUI::CreateBatchUploadHandler(
 
 void BatchUploadUI::OnMojoHandlersReady(
     const AccountInfo& account_info,
-    Browser* browser,
+    BrowserWindowInterface* browser,
     std::vector<syncer::LocalDataDescription> local_data_description_list,
     base::RepeatingCallback<void(int)> update_view_height_callback,
     base::RepeatingCallback<void(bool)> allow_web_view_input_callback,

@@ -64,6 +64,21 @@ void ExtensionsRendererClient::Set(ExtensionsRendererClient* client) {
   g_client = client;
 }
 
+bool ExtensionsRendererClient::IsActivityLoggingEnabled() const {
+  return dispatcher_ && dispatcher_->activity_logging_enabled();
+}
+
+bool ExtensionsRendererClient::IsPolicyActivityLoggingEnabled() const {
+  return false;
+}
+
+void ExtensionsRendererClient::SetPolicyActivityLoggingEnabled(bool enabled) {}
+
+PolicyActivityLogFilter*
+ExtensionsRendererClient::GetPolicyActivityLogFilter() {
+  return nullptr;
+}
+
 void ExtensionsRendererClient::OnExtensionLoaded(const Extension& extension) {
   resource_request_policy_->OnExtensionLoaded(extension);
 }
@@ -87,7 +102,6 @@ void ExtensionsRendererClient::RenderThreadStarted() {
     dispatcher_ = std::make_unique<Dispatcher>(std::move(api_providers_));
   }
   content::RenderThread* thread = content::RenderThread::Get();
-  dispatcher()->OnRenderThreadStarted(thread);
   thread->AddObserver(dispatcher());
 
   resource_request_policy_ = std::make_unique<ResourceRequestPolicy>(
@@ -146,11 +160,13 @@ bool ExtensionsRendererClient::AllowPopup() {
     case mojom::ContextType::kUserScript:
       return false;
     case mojom::ContextType::kPrivilegedExtension:
-      return !current_context->IsForServiceWorker();
+      return !current_context->IsForServiceWorker() &&
+             current_context->extension()->is_extension();
     case mojom::ContextType::kContentScript:
       return true;
     case mojom::ContextType::kPrivilegedWebPage:
-      return current_context->web_frame()->IsOutermostMainFrame();
+      return current_context->web_frame()->IsOutermostMainFrame() &&
+             current_context->extension()->is_hosted_app();
   }
 }
 

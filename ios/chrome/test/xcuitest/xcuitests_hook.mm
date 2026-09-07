@@ -19,6 +19,10 @@ bool DisableGeminiEligibilityCheck() {
   return false;
 }
 
+bool EnablePassageEmbedderGpuExecution() {
+  return false;
+}
+
 bool DisableAppGroupAccess() {
   return true;
 }
@@ -121,11 +125,6 @@ GetOverriddenBulkLeakCheckService() {
   return nullptr;
 }
 
-std::unique_ptr<plus_addresses::PlusAddressService>
-GetOverriddenPlusAddressService() {
-  return nullptr;
-}
-
 std::unique_ptr<password_manager::RecipientsFetcher>
 GetOverriddenRecipientsFetcher() {
   return nullptr;
@@ -185,6 +184,14 @@ std::unique_ptr<AimEligibilityService> CreateAimEligibilityService(
 std::unique_ptr<contextual_search::ContextualSearchService>
 CreateContextualSearchService(ProfileIOS* profile) {
   return nullptr;
+}
+
+void InjectFakeTabsInBrowser(Browser* browser) {
+  // No-op for XCUITest.
+}
+
+id<ReauthenticationProtocol> GetFakeReauthenticationModule() {
+  return nil;
 }
 
 }  // namespace tests_hook

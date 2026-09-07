@@ -36,9 +36,7 @@ import org.mockito.Mockito;
 import org.mockito.Spy;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
-import org.chromium.base.FeatureOverrides;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features.DisableFeatures;
@@ -55,11 +53,11 @@ import org.chromium.components.segmentation_platform.ClassificationResult;
 import org.chromium.components.segmentation_platform.InputContext;
 import org.chromium.components.segmentation_platform.PredictionOptions;
 import org.chromium.components.segmentation_platform.ProcessedValue;
+import org.chromium.components.segmentation_platform.prediction_status.PredictionStatus;
 import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 import org.chromium.ui.modelutil.PropertyModel;
 
-import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -67,7 +65,6 @@ import java.util.Set;
 
 /** Unit tests for {@link HomeModulesMediator}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class HomeModulesMediatorUnitTest {
 
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
@@ -78,7 +75,6 @@ public class HomeModulesMediatorUnitTest {
     @Mock private ModuleDelegate mModuleDelegate;
     @Mock private ModuleRegistry mModuleRegistry;
     @Mock private ModuleDelegateHost mModuleDelegateHost;
-    @Mock private ModuleConfigChecker mModuleConfigChecker;
     @Mock private HomeModulesRankingHelper.Natives mHomeModulesRankingHelperJniMock;
     @Spy private ModelList mModel;
 
@@ -101,9 +97,8 @@ public class HomeModulesMediatorUnitTest {
         registerModule(1, ModuleType.PRICE_CHANGE);
         registerModule(2, ModuleType.SAFETY_HUB);
 
-        FeatureOverrides.newBuilder().disable(ChromeFeatureList.HOME_MODULE_PREF_REFACTOR).apply();
-        mHomeModulesConfigManager = HomeModulesConfigManager.getInstance();
-        assertEquals(0, mHomeModulesConfigManager.getEnabledModuleSet().size());
+        mHomeModulesConfigManager = new HomeModulesConfigManager();
+        HomeModulesConfigManager.setInstanceForTesting(mHomeModulesConfigManager);
         mMediator =
                 new HomeModulesMediator(
                         ObservableSuppliers.createNonNull(mProfile),
@@ -111,7 +106,6 @@ public class HomeModulesMediatorUnitTest {
                         mModuleRegistry,
                         mModuleDelegateHost,
                         mHomeModulesConfigManager);
-        when(mModuleConfigChecker.isEligible()).thenReturn(true);
         HomeModulesRankingHelperJni.setInstanceForTesting(mHomeModulesRankingHelperJniMock);
     }
 
@@ -121,7 +115,6 @@ public class HomeModulesMediatorUnitTest {
             HomeModulesUtils.resetFreshnessCountAsFresh(i);
             HomeModulesUtils.resetFreshnessTimeStampForTesting(i);
         }
-        mHomeModulesConfigManager.cleanupForTesting();
     }
 
     @Test
@@ -563,8 +556,7 @@ public class HomeModulesMediatorUnitTest {
     @SmallTest
     public void testGetFilteredEnabledModuleSet() {
         when(mModuleDelegateHost.isHomeSurface()).thenReturn(true);
-        mHomeModulesConfigManager.registerModuleEligibilityChecker(
-                ModuleType.SINGLE_TAB, mModuleConfigChecker);
+        when(mModuleRegistry.getEnabledModuleSet()).thenReturn(Set.of(ModuleType.SINGLE_TAB));
 
         assertTrue(mMediator.getFilteredEnabledModuleSet().contains(ModuleType.SINGLE_TAB));
     }
@@ -572,12 +564,8 @@ public class HomeModulesMediatorUnitTest {
     @Test
     @SmallTest
     public void testGetFilteredEnabledModuleSet_AllModules() {
-        ChromeFeatureList.sMagicStackAndroidShowAllModules.setForTesting(true);
         Set<Integer> activeModules = HomeModulesMetricsUtils.getAllActiveModulesForTesting();
-        for (@ModuleType int moduleType : activeModules) {
-            mHomeModulesConfigManager.registerModuleEligibilityChecker(
-                    moduleType, mModuleConfigChecker);
-        }
+        when(mModuleRegistry.getEnabledModuleSet()).thenReturn(activeModules);
 
         when(mModuleDelegateHost.isHomeSurface()).thenReturn(true);
         Set<Integer> expectedModuleSet =
@@ -591,13 +579,14 @@ public class HomeModulesMediatorUnitTest {
                         ModuleType.TAB_GROUP_SYNC_PROMO,
                         ModuleType.QUICK_DELETE_PROMO,
                         ModuleType.HISTORY_SYNC_PROMO,
-                        ModuleType.TIPS_NOTIFICATIONS_PROMO,
                         ModuleType.ENHANCED_SAFE_BROWSING_PROMO,
                         ModuleType.ADDRESS_BAR_PLACEMENT_PROMO,
                         ModuleType.SETUP_LIST_TWO_CELL_CONTAINER,
                         ModuleType.SIGN_IN_PROMO,
                         ModuleType.SAVE_PASSWORDS_PROMO,
-                        ModuleType.PASSWORD_CHECKUP_PROMO);
+                        ModuleType.PASSWORD_CHECKUP_PROMO,
+                        ModuleType.SETUP_LIST_CELEBRATORY_PROMO,
+                        ModuleType.NTP_THEME_PROMO);
         assertEquals(expectedModuleSet, mMediator.getFilteredEnabledModuleSet());
 
         // Verifies that the single tab module isn't shown if it isn't the home surface even with
@@ -613,13 +602,14 @@ public class HomeModulesMediatorUnitTest {
                         ModuleType.TAB_GROUP_SYNC_PROMO,
                         ModuleType.QUICK_DELETE_PROMO,
                         ModuleType.HISTORY_SYNC_PROMO,
-                        ModuleType.TIPS_NOTIFICATIONS_PROMO,
                         ModuleType.ENHANCED_SAFE_BROWSING_PROMO,
                         ModuleType.ADDRESS_BAR_PLACEMENT_PROMO,
                         ModuleType.SETUP_LIST_TWO_CELL_CONTAINER,
                         ModuleType.SIGN_IN_PROMO,
                         ModuleType.SAVE_PASSWORDS_PROMO,
-                        ModuleType.PASSWORD_CHECKUP_PROMO);
+                        ModuleType.PASSWORD_CHECKUP_PROMO,
+                        ModuleType.SETUP_LIST_CELEBRATORY_PROMO,
+                        ModuleType.NTP_THEME_PROMO);
         assertEquals(expectedModuleSet, mMediator.getFilteredEnabledModuleSet());
     }
 
@@ -664,8 +654,7 @@ public class HomeModulesMediatorUnitTest {
     public void testFilterEnabledModuleList() {
         ClassificationResult classificationResult =
                 new ClassificationResult(
-                        org.chromium.components.segmentation_platform.prediction_status
-                                .PredictionStatus.SUCCEEDED,
+                        PredictionStatus.SUCCEEDED,
                         new String[] {"SafetyHub", "SingleTab", "PriceChange"},
                         /* requestId= */ 0);
         Set<Integer> filteredEnabledModuleSet = new HashSet<>();
@@ -697,8 +686,7 @@ public class HomeModulesMediatorUnitTest {
     public void testFilterEnabledModuleList_withInvalidType() {
         ClassificationResult classificationResult =
                 new ClassificationResult(
-                        org.chromium.components.segmentation_platform.prediction_status
-                                .PredictionStatus.SUCCEEDED,
+                        PredictionStatus.SUCCEEDED,
                         new String[] {"TabResumption"},
                         /* requestId= */ 0);
         Set<Integer> filteredEnabledModuleSet = new HashSet<>();
@@ -774,21 +762,30 @@ public class HomeModulesMediatorUnitTest {
         assertEquals(ModuleType.ADDRESS_BAR_PLACEMENT_PROMO, (int) manuallyRankedModules.get(2));
         assertFalse(manuallyRankedModules.contains(ModuleType.SINGLE_TAB));
 
-        // Case 2: Tracking a tab, manual ranking should be skipped (returns empty list).
+        // Case 2: Tracking a tab, manual ranking should NO LONGER be skipped.
         Tab tab = mock(Tab.class);
         when(mModuleDelegateHost.getTrackingTab()).thenReturn(tab);
-        manuallyRankedModules = mMediator.getSortedManuallyRankedModules(enabledSet);
-        assertEquals(0, manuallyRankedModules.size());
 
-        // Case 3: Filtering. If ESB is not in the enabled set, it should be excluded.
-        when(mModuleDelegateHost.getTrackingTab()).thenReturn(null);
-        Set<Integer> filteredEnabledSet =
+        // Give single tab a rank of 0.
+        when(singleTabBuilder.getManualRank()).thenReturn(0);
+        // Shift other manual ranks.
+        when(twoCellBuilder.getManualRank()).thenReturn(1);
+        when(esbBuilder.getManualRank()).thenReturn(2);
+        when(addressBarBuilder.getManualRank()).thenReturn(3);
+
+        enabledSet =
                 Set.of(
+                        ModuleType.SINGLE_TAB,
+                        ModuleType.ENHANCED_SAFE_BROWSING_PROMO,
                         ModuleType.SETUP_LIST_TWO_CELL_CONTAINER,
                         ModuleType.ADDRESS_BAR_PLACEMENT_PROMO);
-        manuallyRankedModules = mMediator.getSortedManuallyRankedModules(filteredEnabledSet);
-        assertEquals(2, manuallyRankedModules.size());
-        assertFalse(manuallyRankedModules.contains(ModuleType.ENHANCED_SAFE_BROWSING_PROMO));
+
+        manuallyRankedModules = mMediator.getSortedManuallyRankedModules(enabledSet);
+        assertEquals(4, manuallyRankedModules.size());
+        assertEquals(ModuleType.SINGLE_TAB, (int) manuallyRankedModules.get(0));
+        assertEquals(ModuleType.SETUP_LIST_TWO_CELL_CONTAINER, (int) manuallyRankedModules.get(1));
+        assertEquals(ModuleType.ENHANCED_SAFE_BROWSING_PROMO, (int) manuallyRankedModules.get(2));
+        assertEquals(ModuleType.ADDRESS_BAR_PLACEMENT_PROMO, (int) manuallyRankedModules.get(3));
     }
 
     @Test
@@ -844,7 +841,7 @@ public class HomeModulesMediatorUnitTest {
                         ModuleType.ENHANCED_SAFE_BROWSING_PROMO,
                         ModuleType.SETUP_LIST_TWO_CELL_CONTAINER);
 
-        InputContext resultContext = mMediator.createInputContextForSegmentation(enabledSet);
+        InputContext resultContext = mMediator.createInputContextForSegmentation();
 
         // Assertions: Only signals from non-manual modules are present.
         assertEquals(
@@ -910,8 +907,7 @@ public class HomeModulesMediatorUnitTest {
 
     @Test
     @SmallTest
-    public void testGetFilteredEnabledModuleSet_withRefactorEnabled() {
-        FeatureOverrides.newBuilder().enable(ChromeFeatureList.HOME_MODULE_PREF_REFACTOR).apply();
+    public void testGetFilteredEnabledModuleSet_allCardsDisabled() {
         ChromeSharedPreferences.getInstance()
                 .writeBoolean(ChromePreferenceKeys.HOME_MODULE_CARDS_ENABLED, false);
 
@@ -924,15 +920,13 @@ public class HomeModulesMediatorUnitTest {
         when(mModuleDelegateHost.isHomeSurface()).thenReturn(true);
 
         // Register mock checkers for the modules we are testing.
-        ModuleConfigChecker checker = mock(ModuleConfigChecker.class);
-        when(checker.isEligible()).thenReturn(true);
-        mHomeModulesConfigManager.registerModuleEligibilityChecker(ModuleType.SINGLE_TAB, checker);
-        mHomeModulesConfigManager.registerModuleEligibilityChecker(
-                ModuleType.PRICE_CHANGE, checker);
-        mHomeModulesConfigManager.registerModuleEligibilityChecker(
-                ModuleType.ENHANCED_SAFE_BROWSING_PROMO, checker);
-        mHomeModulesConfigManager.registerModuleEligibilityChecker(
-                ModuleType.ADDRESS_BAR_PLACEMENT_PROMO, checker);
+        when(mModuleRegistry.getEnabledModuleSet())
+                .thenReturn(
+                        Set.of(
+                                ModuleType.SINGLE_TAB,
+                                ModuleType.PRICE_CHANGE,
+                                ModuleType.ENHANCED_SAFE_BROWSING_PROMO,
+                                ModuleType.ADDRESS_BAR_PLACEMENT_PROMO));
 
         // Segmentation-ranked modules.
         List<String> orderedLabels = List.of("PriceChange", "SingleTab");
@@ -964,58 +958,32 @@ public class HomeModulesMediatorUnitTest {
 
     @Test
     @SmallTest
-    public void testUpdateModuleRanking_MovesItemToCorrectManualPosition() {
-        int manual1 = ModuleType.ENHANCED_SAFE_BROWSING_PROMO;
-        int manual2 = ModuleType.ADDRESS_BAR_PLACEMENT_PROMO;
-        int segmentation1 = ModuleType.SINGLE_TAB;
+    public void testGetCombinedRankedModules_FiltersDuplicates() {
+        when(mModuleDelegateHost.isHomeSurface()).thenReturn(true);
 
-        // Mock Builders needed for the re-insertion loop in updateModuleRanking.
-        ModuleProviderBuilder manualBuilder = mock(ModuleProviderBuilder.class);
-        when(manualBuilder.getManualRank()).thenReturn(0); // Any non-null value
-        when(mModuleRegistry.getModuleProviderBuilder(manual1)).thenReturn(manualBuilder);
-        when(mModuleRegistry.getModuleProviderBuilder(manual2)).thenReturn(manualBuilder);
+        // Define enabled set
+        Set<Integer> enabledSet = Set.of(ModuleType.SINGLE_TAB, ModuleType.PRICE_CHANGE);
 
-        ModuleProviderBuilder segmentationBuilder = mock(ModuleProviderBuilder.class);
-        when(segmentationBuilder.getManualRank()).thenReturn(null);
-        when(mModuleRegistry.getModuleProviderBuilder(segmentation1))
-                .thenReturn(segmentationBuilder);
+        // SINGLE_TAB is manually ranked (e.g. Rank 0).
+        List<Integer> manuallyRankedModules = List.of(ModuleType.SINGLE_TAB);
 
-        Set<Integer> enabledSet = Set.of(manual1, manual2, segmentation1);
+        // Segmentation also (redundantly) returns SINGLE_TAB and PRICE_CHANGE.
+        List<String> orderedLabels = List.of("SingleTab", "PriceChange");
 
-        // Spy on mediator to mock the result of manual sorting.
-        mMediator = Mockito.spy(mMediator);
-        doReturn(List.of(manual2, manual1))
-                .when(mMediator)
-                .getSortedManuallyRankedModules(eq(enabledSet));
+        List<Integer> result =
+                mMediator.getCombinedRankedModules(
+                        orderedLabels, manuallyRankedModules, enabledSet);
 
-        // Initialize state manually.
-        mMediator.setModuleListToShowForTesting(
-                new ArrayList<>(List.of(manual1, manual2, segmentation1)));
-        mModel.add(new ListItem(manual1, mock(PropertyModel.class)));
-        mModel.add(new ListItem(manual2, mock(PropertyModel.class)));
-        mModel.add(new ListItem(segmentation1, mock(PropertyModel.class)));
-
-        // Act: Trigger reordering.
-        mMediator.updateModuleRanking(manual1);
-
-        // Assert: manual1 should now be at the absolute end.
-        assertEquals(3, mModel.size());
-        assertEquals(manual2, mModel.get(0).type);
-        assertEquals(segmentation1, mModel.get(1).type);
-        assertEquals(manual1, mModel.get(2).type);
+        // Assertions: SINGLE_TAB should only appear ONCE, and it should be at the start.
+        assertEquals(2, result.size());
+        assertEquals(ModuleType.SINGLE_TAB, (int) result.get(0));
+        assertEquals(ModuleType.PRICE_CHANGE, (int) result.get(1));
     }
 
     @Test
     @SmallTest
     public void testGetCombinedRankedModules_CornerCases() {
         when(mModuleDelegateHost.isHomeSurface()).thenReturn(true);
-
-        // Register mock checkers for the modules we are testing.
-        ModuleConfigChecker checker = mock(ModuleConfigChecker.class);
-        when(checker.isEligible()).thenReturn(true);
-        mHomeModulesConfigManager.registerModuleEligibilityChecker(ModuleType.SINGLE_TAB, checker);
-        mHomeModulesConfigManager.registerModuleEligibilityChecker(
-                ModuleType.ENHANCED_SAFE_BROWSING_PROMO, checker);
 
         Set<Integer> enabledSet =
                 Set.of(ModuleType.SINGLE_TAB, ModuleType.ENHANCED_SAFE_BROWSING_PROMO);

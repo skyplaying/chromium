@@ -21,6 +21,7 @@ import org.chromium.chrome.browser.setup_list.SetupListManager;
 import org.chromium.chrome.browser.setup_list.SetupListModuleUtils;
 import org.chromium.chrome.browser.ui.default_browser_promo.DefaultBrowserPromoUtils;
 import org.chromium.chrome.browser.ui.default_browser_promo.DefaultBrowserPromoUtils.DefaultBrowserPromoTriggerStateListener;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetObserver;
 import org.chromium.components.feature_engagement.FeatureConstants;
 import org.chromium.components.feature_engagement.Tracker;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -36,6 +37,7 @@ public class EducationalTipModuleMediator {
     private final ModuleDelegate mModuleDelegate;
     private final CallbackController mCallbackController;
     private final Handler mHandler = new Handler(Looper.getMainLooper());
+    private final BottomSheetObserver mBottomSheetObserver;
 
     private @Nullable EducationalTipCardProvider mEducationalTipCardProvider;
     private final DefaultBrowserPromoTriggerStateListener mDefaultBrowserPromoTriggerStateListener;
@@ -54,6 +56,11 @@ public class EducationalTipModuleMediator {
         mTracker = TrackerFactory.getTrackerForProfile(profile);
         mDefaultBrowserPromoTriggerStateListener = this::removeModule;
 
+        mBottomSheetObserver =
+                EducationalTipModuleUtils.createBottomSheetObserver(
+                        () -> mModuleType == ModuleType.DEFAULT_BROWSER_PROMO, this::updateModule);
+        mActionDelegate.getBottomSheetController().addObserver(mBottomSheetObserver);
+
         mCallbackController = new CallbackController();
     }
 
@@ -63,6 +70,12 @@ public class EducationalTipModuleMediator {
             DefaultBrowserPromoUtils.getInstance()
                     .addListener(mDefaultBrowserPromoTriggerStateListener);
         }
+        Runnable removeModuleCallback = () -> mModuleDelegate.removeModule(mModuleType);
+
+        if (mModuleType == ModuleType.HISTORY_SYNC_PROMO
+                && SetupListModuleUtils.isSetupListModule(ModuleType.HISTORY_SYNC_PROMO)) {
+            removeModuleCallback = this::updateModule;
+        }
 
         mEducationalTipCardProvider =
                 EducationalTipCardProviderFactory.createInstance(
@@ -70,9 +83,7 @@ public class EducationalTipModuleMediator {
                         this::onCardClicked,
                         mCallbackController,
                         mActionDelegate,
-                        () -> {
-                            mModuleDelegate.removeModule(mModuleType);
-                        });
+                        removeModuleCallback);
         assumeNonNull(mEducationalTipCardProvider);
 
         mModel.set(
@@ -102,35 +113,50 @@ public class EducationalTipModuleMediator {
         }
         mModel.set(
                 EducationalTipModuleProperties.MODULE_BUTTON_ON_CLICK_LISTENER,
-                v -> assumeNonNull(mEducationalTipCardProvider).onCardClicked());
+                _ -> {
+                    if (mEducationalTipCardProvider == null) return;
+                    mEducationalTipCardProvider.onCardClicked();
+                });
+        mModel.set(
+                EducationalTipModuleProperties.USE_TRANSPARENT_ICON_BACKGROUND,
+                mEducationalTipCardProvider.useTransparentIconBackground());
 
         mModuleDelegate.onDataReady(mModuleType, mModel);
     }
 
     /** Called when the educational tip module is visible to users on the magic stack. */
     void onViewCreated() {
+        if (mEducationalTipCardProvider != null) {
+            mEducationalTipCardProvider.onViewCreated();
+        }
+
         if (mModuleType == ModuleType.DEFAULT_BROWSER_PROMO) {
             // For the Setup List version, we notify the system immediately to ensure mutual
             // exclusion with other surfaces (banners on Messages/Settings pages).
             if (SetupListModuleUtils.isSetupListModule(getModuleType())) {
                 notifyDefaultBrowserPromoVisible();
-                return;
-            }
-
-            if (mTracker.isInitialized()) {
-                boolean shouldDisplay =
-                        mTracker.shouldTriggerHelpUi(
-                                FeatureConstants.DEFAULT_BROWSER_PROMO_MAGIC_STACK);
-                if (shouldDisplay) {
-                    notifyDefaultBrowserPromoVisible();
-                }
             } else {
-                notifyDefaultBrowserPromoVisible();
-                mTracker.addOnInitializedCallback(
-                        (T) ->
-                                mTracker.shouldTriggerHelpUi(
-                                        FeatureConstants.DEFAULT_BROWSER_PROMO_MAGIC_STACK));
+                if (mTracker.isInitialized()) {
+                    boolean shouldDisplay =
+                            mTracker.shouldTriggerHelpUi(
+                                    FeatureConstants.DEFAULT_BROWSER_PROMO_MAGIC_STACK);
+                    if (shouldDisplay) {
+                        notifyDefaultBrowserPromoVisible();
+                    }
+                } else {
+                    notifyDefaultBrowserPromoVisible();
+                    mTracker.addOnInitializedCallback(
+                            _ ->
+                                    mTracker.shouldTriggerHelpUi(
+                                            FeatureConstants.DEFAULT_BROWSER_PROMO_MAGIC_STACK));
+                }
             }
+        }
+
+        if (SetupListModuleUtils.isSetupListModule(mModuleType)) {
+            SetupListModuleUtils.recordSetupListImpression();
+            SetupListModuleUtils.recordSetupListItemImpression(
+                    mModuleType, SetupListModuleUtils.isModuleCompleted(mModuleType));
         }
     }
 
@@ -154,21 +180,22 @@ public class EducationalTipModuleMediator {
         mModel.set(EducationalTipModuleProperties.MARK_COMPLETED, true);
         if (mEducationalTipCardProvider instanceof SetupListCompletable completable) {
             mModel.set(
-                    EducationalTipModuleProperties.MODULE_CONTENT_IMAGE,
+                    EducationalTipModuleProperties.MODULE_CONTENT_COMPLETED_IMAGE,
                     completable.getCardImageCompletedResId());
         }
 
-        // Wait for transition and delay, then move the module to the end of the Magic Stack.
+        // Wait for transition and delay, then refresh the Magic Stack.
         mHandler.postDelayed(
                 mCallbackController.makeCancelable(
                         () -> {
                             SetupListModuleUtils.finishCompletionAnimation(mModuleType);
-                            mModuleDelegate.updateModuleRanking(mModuleType);
+                            mModuleDelegate.refreshModules();
                         }),
                 SetupListManager.STRIKETHROUGH_DURATION_MS + SetupListManager.HIDE_DURATION_MS);
     }
 
     void destroy() {
+        mActionDelegate.getBottomSheetController().removeObserver(mBottomSheetObserver);
         removeDefaultBrowserPromoTriggerStateListener();
         if (mEducationalTipCardProvider != null) {
             mEducationalTipCardProvider.destroy();
@@ -182,7 +209,9 @@ public class EducationalTipModuleMediator {
      * the educational tip module from the magic stack.
      */
     private void removeModule() {
-        mModuleDelegate.removeModule(mModuleType);
+        if (!SetupListModuleUtils.isSetupListModule(mModuleType)) {
+            mModuleDelegate.removeModule(mModuleType);
+        }
         removeDefaultBrowserPromoTriggerStateListener();
     }
 
@@ -201,7 +230,10 @@ public class EducationalTipModuleMediator {
 
         if (SetupListModuleUtils.isSetupListModule(mModuleType)) {
             // Considered complete if the user clicks on the promo
-            SetupListModuleUtils.setModuleCompleted(mModuleType);
+            SetupListModuleUtils.setModuleCompleted(mModuleType, /* silent= */ false);
+
+            SetupListModuleUtils.recordSetupListClick();
+            SetupListModuleUtils.recordSetupListItemClick(mModuleType);
         }
     }
 
@@ -214,6 +246,10 @@ public class EducationalTipModuleMediator {
 
     DefaultBrowserPromoTriggerStateListener getDefaultBrowserPromoTriggerStateListenerForTesting() {
         return mDefaultBrowserPromoTriggerStateListener;
+    }
+
+    @Nullable EducationalTipCardProvider getCardProviderForTesting() {
+        return mEducationalTipCardProvider;
     }
 
     void setModuleTypeForTesting(@ModuleType int moduleType) {

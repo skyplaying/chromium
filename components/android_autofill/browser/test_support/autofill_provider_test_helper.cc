@@ -16,7 +16,7 @@
 #include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/foundations/autofill_manager.h"
 #include "components/autofill/core/browser/foundations/autofill_manager_test_api.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "content/public/browser/web_contents.h"
 
 // Must come after all headers that specialize FromJniType() / ToJniType().
@@ -55,13 +55,11 @@ static bool
 JNI_AutofillProviderTestHelper_SimulateMainFrameAutofillServerResponseForTesting(
     JNIEnv* env,
     const base::android::JavaRef<jobject>& jweb_contents,
-    const base::android::JavaRef<jobjectArray>& jfield_ids,
-    const base::android::JavaRef<jintArray>& jfield_types) {
-  std::vector<std::u16string> field_ids;
-  base::android::AppendJavaStringArrayToStringVector(env, jfield_ids,
-                                                     &field_ids);
-  std::vector<int> raw_field_types;
-  base::android::JavaIntArrayToIntVector(env, jfield_types, &raw_field_types);
+    const base::android::JavaRef<JArray<jstring>>& jfield_ids,
+    const base::android::JavaRef<JArray<int32_t>>& jfield_types) {
+  std::vector<FieldType> field_types = base::ToVector(
+      jfield_types.CreateViewCritical(env),
+      [](int32_t type) -> FieldType { return static_cast<FieldType>(type); });
 
   AutofillManager* autofill_manager = ToMainFrameAutofillManager(jweb_contents);
   std::vector<const FormStructure*> form_structures =
@@ -78,25 +76,24 @@ JNI_AutofillProviderTestHelper_SimulateMainFrameAutofillServerResponseForTesting
   std::vector<FormData> forms;
   for (const FormStructure* form_structure : form_structures) {
     FormData form_data = form_structure->ToFormData();
-    for (size_t i = 0; i < field_ids.size(); ++i) {
+    for (size_t i = 0; i < field_types.size(); ++i) {
       for (auto form_field_data : form_data.fields()) {
-        if (form_field_data.id_attribute() == field_ids[i]) {
-          autofill::test::AddFieldPredictionToForm(
-              form_field_data,
-              static_cast<autofill::FieldType>(raw_field_types[i]),
-              form_suggestion);
+        if (form_field_data.id_attribute() ==
+            jfield_ids.GetAs<std::u16string>(env, static_cast<int32_t>(i))) {
+          test::AddFieldPredictionToForm(form_field_data, field_types[i],
+                                         form_suggestion);
           found_fields_count++;
           break;
         }
       }
     }
     if (found_fields_count > 0) {
-      signatures = autofill::test::GetEncodedSignatures(*form_structure);
+      signatures = test::GetEncodedSignatures(*form_structure);
       forms.push_back(std::move(form_data));
       break;
     }
   }
-  CHECK(found_fields_count == field_ids.size());
+  CHECK(found_fields_count == field_types.size());
 
   std::string response_string;
   CHECK(response.SerializeToString(&response_string));
@@ -110,15 +107,9 @@ static bool
 JNI_AutofillProviderTestHelper_SimulateMainFramePredictionsAutofillServerResponseForTesting(
     JNIEnv* env,
     const base::android::JavaRef<jobject>& jweb_contents,
-    const base::android::JavaRef<jobjectArray>& jfield_ids,
-    const base::android::JavaRef<jobjectArray>& jfield_types) {
-  std::vector<std::u16string> field_ids;
-  base::android::AppendJavaStringArrayToStringVector(env, jfield_ids,
-                                                     &field_ids);
-  std::vector<std::vector<int>> raw_field_types;
-  base::android::JavaArrayOfIntArrayToIntVector(env, jfield_types,
-                                                &raw_field_types);
-
+    const base::android::JavaRef<JArray<jstring>>& jfield_ids,
+    const base::android::JavaRef<JArray<JArray<int32_t>>>& jfield_types) {
+  int32_t field_ids_length = jfield_ids.GetLength(env);
   AutofillManager* autofill_manager = ToMainFrameAutofillManager(jweb_contents);
   std::vector<const FormStructure*> form_structures =
       test_api(*autofill_manager).form_structures();
@@ -134,22 +125,25 @@ JNI_AutofillProviderTestHelper_SimulateMainFramePredictionsAutofillServerRespons
   std::vector<FormData> forms;
   for (const FormStructure* form_structure : form_structures) {
     FormData form_data = form_structure->ToFormData();
-    for (size_t i = 0; i < field_ids.size(); ++i) {
+    for (int32_t i = 0; i < field_ids_length; ++i) {
       for (auto form_field_data : form_data.fields()) {
-        if (form_field_data.id_attribute() == field_ids[i]) {
+        if (form_field_data.id_attribute() ==
+            jfield_ids.GetAs<std::u16string>(env, i)) {
+          base::android::ScopedJavaLocalRef<JArray<int32_t>>
+              field_types_jarray = jfield_types.Get(env, i);
           std::vector<FieldType> field_types = base::ToVector(
-              raw_field_types[i],
-              [](int type) -> FieldType { return FieldType(type); });
-          autofill::test::AddFieldPredictionsToForm(
-              form_field_data, field_types, form_suggestion);
+              field_types_jarray.CreateViewCritical(env),
+              [](int32_t type) -> FieldType { return FieldType(type); });
+          test::AddFieldPredictionsToForm(form_field_data, field_types,
+                                          form_suggestion);
           found_fields_count++;
           break;
         }
       }
     }
     if (found_fields_count > 0) {
-      signatures = autofill::test::GetEncodedSignatures(*form_structure);
-      CHECK(found_fields_count == field_ids.size());
+      signatures = test::GetEncodedSignatures(*form_structure);
+      CHECK(found_fields_count == static_cast<size_t>(field_ids_length));
       forms = {std::move(form_data)};
     }
   }

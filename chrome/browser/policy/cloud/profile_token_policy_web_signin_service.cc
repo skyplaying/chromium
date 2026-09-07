@@ -18,6 +18,7 @@
 #include "components/policy/core/common/cloud/profile_cloud_policy_manager.h"
 #include "components/policy/core/common/policy_logger.h"
 #include "content/public/browser/storage_partition.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 
 namespace policy {
 
@@ -151,9 +152,9 @@ void ProfileTokenPolicyWebSigninService::InitializeCloudPolicyManager(
   DCHECK(manager->core()->service());
 
   // Observe the client to detect errors fetching policy.
-  manager->core()->client()->AddObserver(this);
+  cloud_policy_client_observation_.Observe(manager->core()->client());
   // Observe the service to determine when it's initialized.
-  manager->core()->service()->AddObserver(this);
+  cloud_policy_service_observation_.Observe(manager->core()->service());
 }
 
 bool ProfileTokenPolicyWebSigninService::CanApplyPolicies(

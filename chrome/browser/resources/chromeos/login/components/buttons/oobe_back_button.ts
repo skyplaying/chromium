@@ -26,7 +26,7 @@
  *
  *  Attributes:
  *     'disabled' - button is disabled when the attribute is set.
- *     (See crbug.com/900640)
+ *     (See crbug.com/41423700)
  *     'text-key' - ID of localized string to be used as button text.
  *     'label-for-aria' - accessibility label, override usual behavior
  *                        (string specified by text-key is used as aria-label).
@@ -67,8 +67,6 @@ export class OobeBackButton extends OobeBaseButton {
       },
     };
   }
-
-  override textKey: string;
 }
 
 declare global {

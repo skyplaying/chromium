@@ -14,20 +14,23 @@
 #include "chrome/browser/vr/test/multi_class_browser_test.h"
 #include "chrome/browser/vr/test/ui_utils.h"
 #include "chrome/browser/vr/test/webxr_vr_browser_test.h"
+#include "third_party/skia/include/core/SkColor.h"
 
 namespace vr {
 
 class MyXRMock : public MockXRDeviceHookBase {
  public:
   void ProcessSubmittedFrameUnlocked(
-      const std::vector<device::ViewData>& views) final;
+      const std::vector<device::ViewData>& views,
+      const std::vector<device::LayerData>& layers) final;
 
   base::Lock color_lock;
-  device::Color last_submitted_color_ GUARDED_BY(color_lock);
+  SkColor last_submitted_color_ GUARDED_BY(color_lock);
 };
 
 void MyXRMock::ProcessSubmittedFrameUnlocked(
-    const std::vector<device::ViewData>& views) {
+    const std::vector<device::ViewData>& views,
+    const std::vector<device::LayerData>& layers) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(mock_device_sequence_);
   base::AutoLock lock(color_lock);
   // Since we clear the entire context to a single color (see onXRFrame() in
@@ -59,15 +62,7 @@ void TestPresentationPixelsImpl(WebXrVrBrowserTestBase* t,
   my_mock.WaitForTotalFrameCount(1);
 
   base::AutoLock lock(my_mock.color_lock);
-  device::Color expected(0, 0, 255, 255);
-  EXPECT_EQ(expected.r, my_mock.last_submitted_color_.r)
-      << "Red channel of submitted color does not match expectation";
-  EXPECT_EQ(expected.g, my_mock.last_submitted_color_.g)
-      << "Green channel of submitted color does not match expectation";
-  EXPECT_EQ(expected.b, my_mock.last_submitted_color_.b)
-      << "Blue channel of submitted color does not match expectation";
-  EXPECT_EQ(expected.a, my_mock.last_submitted_color_.a)
-      << "Alpha channel of submitted color does not match expectation";
+  EXPECT_EQ(SK_ColorBLUE, my_mock.last_submitted_color_);
 }
 
 WEBXR_VR_ALL_RUNTIMES_BROWSER_TEST_F(TestPresentationPixels) {

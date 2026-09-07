@@ -16,9 +16,11 @@
 #include "base/check_deref.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_string_value_serializer.h"
 #include "base/logging.h"
+#include "base/notreached.h"
 #include "base/path_service.h"
 #include "base/process/launch.h"
 #include "base/strings/strcat.h"
@@ -30,6 +32,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/test/bind.h"
+#include "base/test/test_future.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "base/time/time_override.h"
@@ -38,6 +41,8 @@
 #include "build/build_config.h"
 #include "chrome/browser/autofill/autofill_uitest_util.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -45,7 +50,7 @@
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card.h"
 #include "components/autofill/core/browser/field_types.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/browser/test_utils/test_autofill_clock.h"
 #include "components/autofill/core/common/autofill_clock.h"
 #include "components/javascript_dialogs/app_modal_dialog_controller.h"
@@ -65,11 +70,14 @@
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/test_utils.h"
 #include "net/base/address_list.h"
+#include "net/base/network_handle.h"
 #include "net/socket/tcp_client_socket.h"
 #include "third_party/zlib/google/compression_utils.h"
 #include "ui/events/keycodes/dom/dom_key.h"
 #include "ui/events/keycodes/keyboard_code_conversion.h"
 #include "ui/events/keycodes/keyboard_codes.h"
+#include "url/gurl.h"
+#include "url/scheme_host_port.h"
 
 using base::JSONParserOptions;
 using base::JSONReader;
@@ -554,127 +562,95 @@ Further instructions will be printed then.
   VLOG(1) << base::StringPrintf(msg, test_file_name, kCommandFileFlag);
 }
 
-// FrameObserver --------------------------------------------------------------
-IFrameWaiter::IFrameWaiter(content::WebContents* web_contents)
-    : content::WebContentsObserver(web_contents),
-      query_type_(URL),
-      target_frame_(nullptr) {}
-
-IFrameWaiter::~IFrameWaiter() = default;
-
-content::RenderFrameHost* IFrameWaiter::WaitForFrameMatchingName(
+content::RenderFrameHost* WaitForFrameMatchingName(
+    content::WebContents& web_contents,
     const std::string& name,
-    const base::TimeDelta timeout) {
-  content::RenderFrameHost* frame = FrameMatchingPredicateOrNullptr(
-      web_contents()->GetPrimaryPage(),
-      base::BindRepeating(&content::FrameMatchesName, name));
-  if (frame) {
+    base::TimeDelta timeout) {
+  return WaitForFrame(web_contents,
+                      base::BindRepeating(&content::FrameMatchesName, name),
+                      timeout);
+}
+
+content::RenderFrameHost* WaitForFrameMatchingOrigin(
+    content::WebContents& web_contents,
+    const url::SchemeHostPort& origin,
+    base::TimeDelta timeout) {
+  return WaitForFrame(
+      web_contents,
+      base::BindRepeating(
+          [](const url::SchemeHostPort& origin,
+             content::RenderFrameHost* frame) {
+            return url::SchemeHostPort(frame->GetLastCommittedURL()) == origin;
+          },
+          origin),
+      timeout);
+}
+
+content::RenderFrameHost* WaitForFrameMatchingUrl(
+    content::WebContents& web_contents,
+    const GURL& url,
+    base::TimeDelta timeout) {
+  return WaitForFrame(web_contents,
+                      base::BindRepeating(&content::FrameHasSourceUrl, url),
+                      timeout);
+}
+
+content::RenderFrameHost* WaitForFrame(
+    content::WebContents& web_contents,
+    base::RepeatingCallback<bool(content::RenderFrameHost*)> predicate,
+    base::TimeDelta timeout) {
+  class IframeWaiter : public content::WebContentsObserver {
+   public:
+    IframeWaiter(
+        content::WebContents* web_contents,
+        base::RepeatingCallback<bool(content::RenderFrameHost*)> predicate)
+        : content::WebContentsObserver(web_contents),
+          predicate_(std::move(predicate)) {}
+    IframeWaiter(const IframeWaiter&) = delete;
+    IframeWaiter& operator=(const IframeWaiter&) = delete;
+    ~IframeWaiter() override = default;
+
+    content::GlobalRenderFrameHostId Get() { return future_.Get(); }
+
+    // content::WebContentsObserver
+    void RenderFrameCreated(
+        content::RenderFrameHost* render_frame_host) override {
+      if (!future_.IsReady() && predicate_.Run(render_frame_host)) {
+        future_.SetValue(render_frame_host->GetGlobalId());
+      }
+    }
+
+    void DidFinishLoad(content::RenderFrameHost* render_frame_host,
+                       const GURL& validated_url) override {
+      if (!future_.IsReady() && predicate_.Run(render_frame_host)) {
+        future_.SetValue(render_frame_host->GetGlobalId());
+      }
+    }
+
+    void FrameNameChanged(content::RenderFrameHost* render_frame_host,
+                          const std::string& name) override {
+      if (!future_.IsReady() && predicate_.Run(render_frame_host)) {
+        future_.SetValue(render_frame_host->GetGlobalId());
+      }
+    }
+
+   private:
+    // When we detect that a frame satisfies the `predicate_`, we store its ID
+    // in `future_` and return it.
+    base::RepeatingCallback<bool(content::RenderFrameHost*)> predicate_;
+    base::test::TestFuture<content::GlobalRenderFrameHostId> future_;
+  };
+
+  if (content::RenderFrameHost* frame = FrameMatchingPredicateOrNullptr(
+          web_contents.GetPrimaryPage(), predicate)) {
     return frame;
-  } else {
-    query_type_ = NAME;
-    frame_name_ = name;
-    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-        FROM_HERE, run_loop_.QuitClosure(), timeout);
-    run_loop_.Run();
-    return target_frame_;
   }
-}
-
-content::RenderFrameHost* IFrameWaiter::WaitForFrameMatchingOrigin(
-    const GURL origin,
-    const base::TimeDelta timeout) {
-  content::RenderFrameHost* frame = FrameMatchingPredicateOrNullptr(
-      web_contents()->GetPrimaryPage(),
-      base::BindRepeating(&FrameHasOrigin, origin));
-  if (frame) {
-    return frame;
-  } else {
-    query_type_ = ORIGIN;
-    origin_ = origin;
-    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-        FROM_HERE, run_loop_.QuitClosure(), timeout);
-    run_loop_.Run();
-    return target_frame_;
-  }
-}
-
-content::RenderFrameHost* IFrameWaiter::WaitForFrameMatchingUrl(
-    const GURL url,
-    const base::TimeDelta timeout) {
-  content::RenderFrameHost* frame = FrameMatchingPredicateOrNullptr(
-      web_contents()->GetPrimaryPage(),
-      base::BindRepeating(&content::FrameHasSourceUrl, url));
-  if (frame) {
-    return frame;
-  } else {
-    query_type_ = URL;
-    url_ = url;
-    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-        FROM_HERE, run_loop_.QuitClosure(), timeout);
-    run_loop_.Run();
-    return target_frame_;
-  }
-}
-
-void IFrameWaiter::RenderFrameCreated(
-    content::RenderFrameHost* render_frame_host) {
-  if (!run_loop_.running())
-    return;
-  switch (query_type_) {
-    case NAME:
-      if (FrameMatchesName(frame_name_, render_frame_host))
-        run_loop_.Quit();
-      break;
-    case ORIGIN:
-      if (render_frame_host->GetLastCommittedURL().DeprecatedGetOriginAsURL() ==
-          origin_)
-        run_loop_.Quit();
-      break;
-    case URL:
-      if (FrameHasSourceUrl(url_, render_frame_host))
-        run_loop_.Quit();
-      break;
-    default:
-      break;
-  }
-}
-
-void IFrameWaiter::DidFinishLoad(content::RenderFrameHost* render_frame_host,
-                                 const GURL& validated_url) {
-  if (!run_loop_.running())
-    return;
-  switch (query_type_) {
-    case ORIGIN:
-      if (validated_url.DeprecatedGetOriginAsURL() == origin_)
-        run_loop_.Quit();
-      break;
-    case URL:
-      if (FrameHasSourceUrl(validated_url, render_frame_host))
-        run_loop_.Quit();
-      break;
-    default:
-      break;
-  }
-}
-
-void IFrameWaiter::FrameNameChanged(content::RenderFrameHost* render_frame_host,
-                                    const std::string& name) {
-  if (!run_loop_.running())
-    return;
-  switch (query_type_) {
-    case NAME:
-      if (FrameMatchesName(name, render_frame_host))
-        run_loop_.Quit();
-      break;
-    default:
-      break;
-  }
-}
-
-bool IFrameWaiter::FrameHasOrigin(const GURL& origin,
-                                  content::RenderFrameHost* frame) {
-  GURL url = frame->GetLastCommittedURL();
-  return (url.DeprecatedGetOriginAsURL() == origin.DeprecatedGetOriginAsURL());
+  IframeWaiter waiter(&web_contents, std::move(predicate));
+  base::test::ScopedRunLoopTimeout scoped_timeout(
+      FROM_HERE, timeout, base::BindRepeating([]() -> std::string {
+        return "IframeWaiter timed out waiting for iframe.";
+      }));
+  return content::RenderFrameHost::FromID(waiter.Get());
 }
 
 // WebPageReplayServerWrapper -------------------------------------------------
@@ -741,7 +717,10 @@ bool WebPageReplayServerWrapper::Start(
         net::IPEndPoint(net::IPAddress(127, 0, 0, 1), host_http_port_));
     ++connect_attempts;
     client_socket = std::make_unique<net::TCPClientSocket>(
-        addr, nullptr, nullptr, nullptr, net::NetLogSource());
+        addr, nullptr, nullptr, nullptr, net::NetLogSource(),
+        // No need to use a target network here. This is an external tool not
+        // used in production.
+        net::handles::kInvalidNetworkHandle);
     int connect_result = client_socket->Connect(on_connect_complete);
     // On ERR_IO_PENDING, `on_connect_complete` will be invoked
     // asynchronously, so need to let the message loop spin until that
@@ -844,37 +823,19 @@ bool WebPageReplayServerWrapper::RunWebPageReplayCmd(
   }
 
   base::FilePath web_page_replay_binary_dir = exe_dir.AppendASCII("third_party")
-                                                  .AppendASCII("catapult")
-                                                  .AppendASCII("telemetry")
-                                                  .AppendASCII("telemetry")
-                                                  .AppendASCII("bin");
+                                                  .AppendASCII("webpagereplay")
+                                                  .AppendASCII("scripts");
   options.current_directory = web_page_replay_binary_dir;
-
+  base::FilePath wpr_executable_binary =
+      base::FilePath(FILE_PATH_LITERAL("run_wpr.py"));
+  base::CommandLine full_command(base::FilePath(FILE_PATH_LITERAL(
 #if BUILDFLAG(IS_WIN)
-  base::FilePath wpr_executable_binary =
-      base::FilePath(FILE_PATH_LITERAL("win"))
-          .AppendASCII("AMD64")
-          .AppendASCII("wpr.exe");
-#elif BUILDFLAG(IS_MAC)
-  base::FilePath wpr_executable_binary =
-      base::FilePath(FILE_PATH_LITERAL("mac"))
-#if defined(ARCH_CPU_ARM64)
-          .AppendASCII("arm64")
-#elif defined(ARCH_CPU_X86_64)
-          .AppendASCII("x86_64")
+      "vpython3.bat"
 #else
-#error Mac CPU arch is not supported.
+      "vpython3"
 #endif
-          .AppendASCII("wpr");
-#elif BUILDFLAG(IS_POSIX)
-  base::FilePath wpr_executable_binary =
-      base::FilePath(FILE_PATH_LITERAL("linux"))
-          .AppendASCII("x86_64")
-          .AppendASCII("wpr");
-#else
-#error Platform is not supported.
-#endif
-  base::CommandLine full_command(
+      )));
+  full_command.AppendArgPath(
       web_page_replay_binary_dir.Append(wpr_executable_binary));
   full_command.AppendArg(cmd_name());
 
@@ -931,9 +892,7 @@ bool WebPageReplayServerWrapper::RunWebPageReplayCmd(
 ProfileDataController::ProfileDataController()
     : profile_(autofill::test::GetIncompleteProfile2()),
       card_(autofill::CreditCard(
-          base::Uuid::GenerateRandomV4().AsLowercaseString(),
-          "http://www.example.com")) {
-
+          base::Uuid::GenerateRandomV4().AsLowercaseString())) {
   // Initialize the credit card with default values, in case the test recipe
   // file does not contain pre-saved credit card info.
   autofill::test::SetCreditCardInfo(&card_, "Buddy Holly", "5187654321098765",
@@ -976,7 +935,7 @@ bool ProfileDataController::AddAutofillProfileInfo(
 
 // TestRecipeReplayer ---------------------------------------------------------
 TestRecipeReplayer::TestRecipeReplayer(
-    Browser* browser,
+    BrowserWindowInterface* browser,
     TestRecipeReplayChromeFeatureActionExecutor* feature_action_executor)
     : browser_(browser), feature_action_executor_(feature_action_executor) {
   CleanupSiteData();
@@ -1089,7 +1048,7 @@ TestRecipeReplayer::feature_action_executor() {
   return feature_action_executor_;
 }
 
-Browser* TestRecipeReplayer::browser() {
+BrowserWindowInterface* TestRecipeReplayer::browser() {
   return browser_;
 }
 
@@ -1215,7 +1174,7 @@ void TestRecipeReplayer::CleanupSiteData() {
   ASSERT_TRUE(
       ui_test_utils::NavigateToURL(browser_, GURL(url::kAboutBlankURL)));
   content::BrowsingDataRemover* remover =
-      browser_->profile()->GetBrowsingDataRemover();
+      browser_->GetProfile()->GetBrowsingDataRemover();
   content::BrowsingDataRemoverCompletionObserver completion_observer(remover);
   remover->RemoveAndReply(
       base::Time(), base::Time::Max(),
@@ -2023,8 +1982,6 @@ bool TestRecipeReplayer::GetTargetFrameFromAction(
       iframe_container->GetDict().FindByDottedPath("browserTest.origin");
   const base::Value* frame_url_container =
       iframe_container->GetDict().FindByDottedPath("browserTest.url");
-  IFrameWaiter iframe_waiter(GetWebContents());
-
   if (frame_name_container != nullptr && !frame_name_container->is_string()) {
     ADD_FAILURE() << "Iframe name is not a string!";
     return false;
@@ -2043,13 +2000,14 @@ bool TestRecipeReplayer::GetTargetFrameFromAction(
 
   if (frame_name_container != nullptr) {
     std::string frame_name = frame_name_container->GetString();
-    *frame = iframe_waiter.WaitForFrameMatchingName(frame_name);
+    *frame = WaitForFrameMatchingName(*GetWebContents(), frame_name);
   } else if (frame_origin_container != nullptr) {
     std::string frame_origin = frame_origin_container->GetString();
-    *frame = iframe_waiter.WaitForFrameMatchingOrigin(GURL(frame_origin));
+    *frame = WaitForFrameMatchingOrigin(
+        *GetWebContents(), url::SchemeHostPort(GURL(frame_origin)));
   } else if (frame_url_container != nullptr) {
     std::string frame_url = frame_url_container->GetString();
-    *frame = iframe_waiter.WaitForFrameMatchingUrl(GURL(frame_url));
+    *frame = WaitForFrameMatchingUrl(*GetWebContents(), GURL(frame_url));
   } else {
     ADD_FAILURE() << "The recipe does not specify a way to find the iframe!";
   }
@@ -2219,7 +2177,8 @@ bool TestRecipeReplayer::AllAssertionsPassed(
   if (frame.render_frame_host()->GetLifecycleState() !=
       content::RenderFrameHost::LifecycleState::kActive) {
     VLOG(1) << "Frame not active, not testing assertions. "
-            << (int)frame.render_frame_host()->GetLifecycleState();
+            << std::to_underlying(
+                   frame.render_frame_host()->GetLifecycleState());
     return false;
   }
   for (const std::string& assertion : assertions) {
@@ -2252,6 +2211,9 @@ bool TestRecipeReplayer::ExecuteJavaScriptOnElementByXpath(
     const std::string& element_xpath,
     const std::string& execute_function_body,
     const base::TimeDelta& time_to_wait_for_element) {
+  if (!frame.render_frame_host() || !frame.render_frame_host()->IsActive()) {
+    return false;
+  }
   std::string js(base::StringPrintf(
       "try {"
       "  var element = automation_helper.getElementByXpath(`%s`);"
@@ -2319,6 +2281,9 @@ bool TestRecipeReplayer::ExpectElementPropertyEqualsAnyOf(
 bool TestRecipeReplayer::ScrollElementIntoView(
     const std::string& element_xpath,
     content::RenderFrameHost* frame) {
+  if (!frame || !frame->IsActive()) {
+    return false;
+  }
   const std::string scroll_target_js(base::StringPrintf(
       "try {"
       "  const element = automation_helper.getElementByXpath(`%s`);"
@@ -2330,13 +2295,20 @@ bool TestRecipeReplayer::ScrollElementIntoView(
       "}",
       element_xpath.c_str()));
 
-  return EvalJs(frame, scroll_target_js).ExtractBool();
+  content::EvalJsResult result = EvalJs(frame, scroll_target_js);
+  if (result.is_bool()) {
+    return result.ExtractBool();
+  }
+  return false;
 }
 
 bool TestRecipeReplayer::PlaceFocusOnElement(
     const std::string& element_xpath,
     const std::vector<std::string>& iframe_path,
     content::RenderFrameHost* frame) {
+  if (!frame || !frame->IsActive()) {
+    return false;
+  }
   if (!ScrollElementIntoView(element_xpath, frame))
     return false;
 
@@ -2351,29 +2323,33 @@ bool TestRecipeReplayer::PlaceFocusOnElement(
 
   content::EvalJsResult result =
       content::EvalJs(frame, focus_on_target_field_js);
-  if (result.is_ok() && result.is_bool() && result.ExtractBool()) {
+  if (result.is_bool() && result.ExtractBool()) {
     return true;
-  } else {
-    VLOG(1) << "Failed to focus element through script:"
-            << (result.is_ok()
-                    ? (result.is_bool() ? "Returned false" : "Not a valid bool")
-                    : result.ExtractError());
-
-    // Failing focusing on an element through script, use the less preferred
-    // method of left mouse clicking the element.
-    gfx::Rect rect;
-    if (!GetBoundingRectOfTargetElement(element_xpath, iframe_path, frame,
-                                        &rect))
-      return false;
-
-    return SimulateLeftMouseClickAt(rect.CenterPoint(), frame);
   }
+
+  VLOG(1) << "Failed to focus element through script:"
+          << (result.is_ok()
+                  ? (result.is_bool() ? "Returned false" : "Not a valid bool")
+                  : result.ExtractError());
+
+  // Failing focusing on an element through script, use the less preferred
+  // method of left mouse clicking the element.
+  gfx::Rect rect;
+  if (!GetBoundingRectOfTargetElement(element_xpath, iframe_path, frame,
+                                      &rect)) {
+    return false;
+  }
+
+  return SimulateLeftMouseClickAt(rect.CenterPoint(), frame);
 }
 
 bool TestRecipeReplayer::GetBoundingRectOfTargetElement(
     const std::string& target_element_xpath,
     content::RenderFrameHost* frame,
     gfx::Rect* output_rect) {
+  if (!frame || !frame->IsActive()) {
+    return false;
+  }
   const std::string get_element_bounding_rect_js(base::StringPrintf(
       "(function() {"
       "   try {"
@@ -2388,11 +2364,18 @@ bool TestRecipeReplayer::GetBoundingRectOfTargetElement(
       "})();",
       target_element_xpath.c_str()));
 
-  std::string rect_str =
-      content::EvalJs(frame, get_element_bounding_rect_js).ExtractString();
+  content::EvalJsResult result =
+      content::EvalJs(frame, get_element_bounding_rect_js);
+  if (!result.is_string()) {
+    return false;
+  }
+
+  std::string rect_str = result.ExtractString();
 
   if (rect_str.empty()) {
-    ADD_FAILURE() << "Failed to extract target element's bounding rect!";
+    if (frame->IsActive()) {
+      ADD_FAILURE() << "Failed to extract target element's bounding rect!";
+    }
     return false;
   }
 
@@ -2407,25 +2390,25 @@ bool TestRecipeReplayer::GetBoundingRectOfTargetElement(
   int x = 0;
   if (!base::StringToInt(rect_components[0], &x)) {
     ADD_FAILURE() << "Failed to extract target element's x coordinate from "
-                  << "the string `" << rect_str[0] << "`!";
+                  << "the string `" << rect_components[0] << "`!";
     return false;
   }
   int y = 0;
   if (!base::StringToInt(rect_components[1], &y)) {
     ADD_FAILURE() << "Failed to extract target element's y coordinate from "
-                  << "the string `" << rect_str[1] << "`!";
+                  << "the string `" << rect_components[1] << "`!";
     return false;
   }
   int width = 0;
   if (!base::StringToInt(rect_components[2], &width)) {
     ADD_FAILURE() << "Failed to extract target element's width from "
-                  << "the string `" << rect_str[2] << "`!";
+                  << "the string `" << rect_components[2] << "`!";
     return false;
   }
   int height = 0;
   if (!base::StringToInt(rect_components[3], &height)) {
     ADD_FAILURE() << "Failed to extract target element's height from "
-                  << "the string `" << rect_str[3] << "`!";
+                  << "the string `" << rect_components[3] << "`!";
     return false;
   }
 
@@ -2442,6 +2425,9 @@ bool TestRecipeReplayer::GetBoundingRectOfTargetElement(
     const std::vector<std::string>& iframe_path,
     content::RenderFrameHost* frame,
     gfx::Rect* output_rect) {
+  if (!frame || !frame->IsActive()) {
+    return false;
+  }
   gfx::Vector2d offset;
   if (!GetIFrameOffsetFromIFramePath(iframe_path, frame, &offset))
     return false;
@@ -2455,9 +2441,31 @@ bool TestRecipeReplayer::GetBoundingRectOfTargetElement(
 bool TestRecipeReplayer::SimulateLeftMouseClickAt(
     const gfx::Point& point,
     content::RenderFrameHost* render_frame_host) {
-  content::RenderWidgetHostView* view = render_frame_host->GetView();
-  if (!SimulateMouseHoverAt(render_frame_host, point))
+  if (!render_frame_host || !render_frame_host->IsActive()) {
     return false;
+  }
+
+  content::RenderFrameHostWrapper rfh_wrapper(render_frame_host);
+  if (!SimulateMouseHoverAt(render_frame_host, point)) {
+    return false;
+  }
+
+  if (rfh_wrapper.IsDestroyed() || !rfh_wrapper.get()->IsActive()) {
+    return false;
+  }
+
+  render_frame_host = rfh_wrapper.get();
+  content::RenderWidgetHostView* view = render_frame_host->GetView();
+  content::WebContents* web_contents =
+      content::WebContents::FromRenderFrameHost(render_frame_host);
+  if (!view || !web_contents) {
+    return false;
+  }
+
+  content::RenderWidgetHost* widget = view->GetRenderWidgetHost();
+  if (!widget) {
+    return false;
+  }
 
   blink::WebMouseEvent mouse_event(
       blink::WebInputEvent::Type::kMouseDown,
@@ -2465,15 +2473,13 @@ bool TestRecipeReplayer::SimulateLeftMouseClickAt(
       blink::WebInputEvent::GetStaticTimeStampForTests());
   mouse_event.button = blink::WebMouseEvent::Button::kLeft;
   mouse_event.SetPositionInWidget(point.x(), point.y());
+  mouse_event.SetTimeStamp(base::TimeTicks::Now());
 
   // Mac needs positionInScreen for events to plugins.
-  gfx::Rect offset =
-      content::WebContents::FromRenderFrameHost(render_frame_host)
-          ->GetContainerBounds();
+  gfx::Rect offset = web_contents->GetContainerBounds();
   mouse_event.SetPositionInScreen(point.x() + offset.x(),
                                   point.y() + offset.y());
   mouse_event.click_count = 1;
-  content::RenderWidgetHost* widget = view->GetRenderWidgetHost();
 
   widget->ForwardMouseEvent(mouse_event);
   mouse_event.SetType(blink::WebInputEvent::Type::kMouseUp);
@@ -2484,9 +2490,15 @@ bool TestRecipeReplayer::SimulateLeftMouseClickAt(
 bool TestRecipeReplayer::SimulateMouseHoverAt(
     content::RenderFrameHost* render_frame_host,
     const gfx::Point& point) {
-  gfx::Rect offset =
-      content::WebContents::FromRenderFrameHost(render_frame_host)
-          ->GetContainerBounds();
+  if (!render_frame_host || !render_frame_host->IsActive()) {
+    return false;
+  }
+  content::WebContents* web_contents =
+      content::WebContents::FromRenderFrameHost(render_frame_host);
+  if (!web_contents) {
+    return false;
+  }
+  gfx::Rect offset = web_contents->GetContainerBounds();
   gfx::Point reset_mouse =
       gfx::Point(offset.x() + point.x(), offset.y() + point.y());
   if (!ui_test_utils::SendMouseMoveSync(reset_mouse)) {

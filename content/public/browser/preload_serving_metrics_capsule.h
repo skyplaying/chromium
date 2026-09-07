@@ -7,35 +7,45 @@
 
 #include <memory>
 
-#include "base/time/time.h"
 #include "content/common/content_export.h"
 
 namespace content {
 
 class NavigationHandle;
 
+// Instant load technology used for the navigation.
+enum class UsedInstantLoad {
+  kNoInstantLoad,
+  kPrefetchWithoutPrePrefetch,
+  kPrefetchWithPrePrefetch,
+  kPrerender,
+  kBFCache,
+};
+
 // Allows `PageLoadMetricsObserver` to get/hold/record `PreloadServingMetrics`.
 class CONTENT_EXPORT PreloadServingMetricsCapsule {
  public:
-  // Used to control entering paths of `PreloadServingMetrics`, which records
-  // serving metrics of preloads.
-  static bool IsFeatureEnabled();
-
   // Takes `PreloadServingMetrics` from `PreloadServingMetricsHolder` of
   // `NavigationHandle`.
   static std::unique_ptr<PreloadServingMetricsCapsule> TakeFromNavigationHandle(
       NavigationHandle& navigation_handle);
 
+  PreloadServingMetricsCapsule() = default;
   virtual ~PreloadServingMetricsCapsule();
+
+  // Not movable nor copyable.
+  PreloadServingMetricsCapsule(PreloadServingMetricsCapsule&&) = delete;
+  PreloadServingMetricsCapsule& operator=(PreloadServingMetricsCapsule&&) =
+      delete;
+  PreloadServingMetricsCapsule(const PreloadServingMetricsCapsule&) = delete;
+  PreloadServingMetricsCapsule& operator=(const PreloadServingMetricsCapsule&) =
+      delete;
 
   virtual void RecordMetricsForNonPrerenderNavigationCommitted() const = 0;
 
-  // Records FirstContentfulPaint
-  //
-  // The parameter `corrected_first_contentful_paint` is the return value of
-  // `page_load_metrics::CorrectEventAsNavigationOrActivationOrigined()`.
-  virtual void RecordFirstContentfulPaint(
-      base::TimeDelta corrected_first_contentful_paint) const = 0;
+  virtual UsedInstantLoad GetUsedInstantLoad(
+      bool nav_used_bfcache,
+      bool is_served_by_legacy_search_prefetch) const = 0;
 };
 
 }  // namespace content

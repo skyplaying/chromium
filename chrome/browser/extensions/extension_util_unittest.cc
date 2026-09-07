@@ -7,7 +7,10 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/strings/strcat.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/gtest_util.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/extensions/chrome_test_extension_loader.h"
 #include "chrome/browser/extensions/extension_service.h"
@@ -15,7 +18,6 @@
 #include "chrome/browser/extensions/external_provider_impl.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_constants.h"
-#include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
@@ -32,9 +34,12 @@
 #include "extensions/browser/ui_util.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_builder.h"
+#include "extensions/common/extension_features.h"
+#include "extensions/common/extension_urls.h"
 #include "extensions/common/mojom/manifest.mojom-shared.h"
 #include "extensions/common/permissions/permissions_data.h"
 #include "extensions/test/test_extension_dir.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "url/gurl.h"
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
@@ -166,7 +171,7 @@ TEST_F(ExtensionUtilUnittest, SetAllowFileAccessWhileDisabled) {
 
   // Disabling the extension and then removing the file access should reload it
   // again back to not having file access. Regression test for
-  // crbug.com/1385343.
+  // crbug.com/40061772.
   registrar()->DisableExtension(extension_id,
                                 {disable_reason::DISABLE_USER_ACTION});
   {
@@ -210,23 +215,52 @@ TEST_F(ExtensionUtilUnittest, FixupLongExtensionName) {
   EXPECT_EQ(fixup_extension_name, expected_fixup_extension_name);
 }
 
+using ExtensionUtilDeathTest = testing::Test;
+
+TEST_F(ExtensionUtilDeathTest, GetCWSWritingReviewUrl_InvalidId) {
+  const ExtensionId kInvalidId = "invalid_id_format";
+
+  for (const char* invalid_id : {kInvalidId.c_str(), "", "../../etc/passwd"}) {
+    EXPECT_CHECK_DEATH(util::GetCWSWritingReviewUrl(
+        invalid_id, util::CWSReviewSource::kExtensionsMenu));
+  }
+}
+
+TEST_F(ExtensionUtilUnittest, GetCWSWritingReviewUrl) {
+  using util::CWSReviewSource;
+  const ExtensionId kValidId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const std::string kExpectedBaseUrl =
+      base::StrCat({"https://chromewebstore.google.com/detail/", kValidId,
+                    "/reviews/my-review?utm_source="});
+
+  EXPECT_EQ(
+      util::GetCWSWritingReviewUrl(kValidId, CWSReviewSource::kExtensionsMenu)
+          .spec(),
+      kExpectedBaseUrl + "ext_review_extensions_menu");
+  EXPECT_EQ(
+      util::GetCWSWritingReviewUrl(kValidId, CWSReviewSource::kExtensionsPage)
+          .spec(),
+      kExpectedBaseUrl + "ext_review_extensions_page");
+  EXPECT_EQ(
+      util::GetCWSWritingReviewUrl(kValidId, CWSReviewSource::kContextMenu)
+          .spec(),
+      kExpectedBaseUrl + "ext_review_context_menu");
+}
 #if BUILDFLAG(IS_CHROMEOS)
 class ExtensionUtilWithSigninProfileUnittest : public ExtensionUtilUnittest {
  public:
   void SetUp() override {
     ExtensionUtilUnittest::SetUp();
 
-    testing_profile_manager_ = std::make_unique<TestingProfileManager>(
-        TestingBrowserProcess::GetGlobal());
-    ASSERT_TRUE(testing_profile_manager_->SetUp());
     auto policy_service = std::make_unique<policy::PolicyServiceImpl>(
         std::vector<
             raw_ptr<policy::ConfigurationPolicyProvider, VectorExperimental>>{
             policy_provider()});
-    signin_profile_ = testing_profile_manager_->CreateTestingProfile(
+    signin_profile_ = testing_profile_manager()->CreateTestingProfile(
         chrome::kInitialProfile, /*prefs=*/nullptr,
-        base::UTF8ToUTF16(chrome::kInitialProfile), 0,
-        TestingProfile::TestingFactories(),
+        base::UTF8ToUTF16(
+            base::FilePath::StringViewType(chrome::kInitialProfile)),
+        0, TestingProfile::TestingFactories(),
         /*is_supervised_profile=*/false, /*is_new_profile=*/std::nullopt,
         std::move(policy_service));
     signin_profile_prefs_ = signin_profile_->GetTestingPrefService();
@@ -235,7 +269,6 @@ class ExtensionUtilWithSigninProfileUnittest : public ExtensionUtilUnittest {
   void TearDown() override {
     signin_profile_ = nullptr;
     signin_profile_prefs_ = nullptr;
-    testing_profile_manager_->DeleteAllTestingProfiles();
     ExtensionUtilUnittest::TearDown();
   }
 
@@ -260,7 +293,6 @@ class ExtensionUtilWithSigninProfileUnittest : public ExtensionUtilUnittest {
   raw_ptr<TestingProfile> signin_profile_;
 
  private:
-  std::unique_ptr<TestingProfileManager> testing_profile_manager_;
   raw_ptr<sync_preferences::TestingPrefServiceSyncable> signin_profile_prefs_;
 };
 

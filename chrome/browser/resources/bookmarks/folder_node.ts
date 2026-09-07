@@ -223,8 +223,8 @@ export class BookmarksFolderNodeElement extends BookmarksFolderNodeElementBase {
         this.dispatch(changeFolderOpen(this.item_!.id, false));
       } else {
         const parentFolderNode = this.getParentFolderNode();
-        if (parentFolderNode!.itemId !== ROOT_NODE_ID) {
-          parentFolderNode!.getFocusTarget().focus();
+        if (parentFolderNode && parentFolderNode.itemId !== ROOT_NODE_ID) {
+          parentFolderNode.getFocusTarget().focus();
         }
       }
     }
@@ -256,9 +256,9 @@ export class BookmarksFolderNodeElement extends BookmarksFolderNodeElementBase {
 
     // If there is no newly focused node, allow the parent to handle the change.
     if (!newFocusFolderNode) {
-      if (this.itemId !== ROOT_NODE_ID) {
-        this.getParentFolderNode()!.changeKeyboardSelection_(
-            0, yDirection, this);
+      const parentFolderNode = this.getParentFolderNode();
+      if (parentFolderNode && this.itemId !== ROOT_NODE_ID) {
+        parentFolderNode.changeKeyboardSelection_(0, yDirection, this);
       }
 
       return;
@@ -316,13 +316,17 @@ export class BookmarksFolderNodeElement extends BookmarksFolderNodeElementBase {
     return children.pop()!.getLastVisibleDescendant();
   }
 
-  protected selectFolder_() {
+  protected onFolderClick_() {
+    this.selectFolder_();
+  }
+
+  private selectFolder_() {
     if (!this.isSelectedFolder_) {
       this.dispatch(selectFolder(this.itemId, this.getState().nodes));
     }
   }
 
-  protected onContextMenu_(e: MouseEvent) {
+  protected onContextmenu_(e: MouseEvent) {
     e.preventDefault();
     this.selectFolder_();
     // Disable the context menu for root nodes.
@@ -341,12 +345,20 @@ export class BookmarksFolderNodeElement extends BookmarksFolderNodeElementBase {
   /**
    * Toggles whether the folder is open.
    */
-  protected toggleFolder_(e: Event) {
+  private toggleFolder_(e: Event) {
     this.dispatch(changeFolderOpen(this.itemId, !this.isOpen));
     e.stopPropagation();
   }
 
-  protected preventDefault_(e: Event) {
+  protected onFolderDblclick_(e: Event) {
+    this.toggleFolder_(e);
+  }
+
+  protected onArrowClick_(e: Event) {
+    this.toggleFolder_(e);
+  }
+
+  protected onArrowMousedown_(e: Event) {
     e.preventDefault();
   }
 
@@ -361,7 +373,9 @@ export class BookmarksFolderNodeElement extends BookmarksFolderNodeElementBase {
       return [];
     }
     return children.filter(itemId => {
-      return !nodes[itemId]?.url;  // safely access .url only if node exists
+      const node = nodes[itemId];
+      // Exclude url nodes.
+      return !node?.url;
     });
   }
 

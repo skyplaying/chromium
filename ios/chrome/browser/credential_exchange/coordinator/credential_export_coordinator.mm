@@ -11,8 +11,10 @@
 #import "base/memory/raw_ptr.h"
 #import "base/strings/sys_string_conversions.h"
 #import "components/metrics/metrics_pref_names.h"
+#import "components/metrics/metrics_reporting_choice_service.h"
 #import "components/password_manager/core/browser/ui/affiliated_group.h"
 #import "components/prefs/pref_service.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/identity_manager/account_info.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "components/strings/grit/components_strings.h"
@@ -20,12 +22,18 @@
 #import "ios/chrome/browser/credential_exchange/coordinator/credential_export_mediator.h"
 #import "ios/chrome/browser/credential_exchange/ui/credential_export_view_controller.h"
 #import "ios/chrome/browser/credential_exchange/ui/credential_export_view_controller_presentation_delegate.h"
+#import "ios/chrome/browser/device_reauth/model/reauthentication_service.h"
+#import "ios/chrome/browser/device_reauth/model/reauthentication_service_factory.h"
 #import "ios/chrome/browser/favicon/model/ios_chrome_favicon_loader_factory.h"
-#import "ios/chrome/browser/passwords/coordinator/password_export_handler.h"
-#import "ios/chrome/browser/passwords/coordinator/password_utils.h"
+#import "ios/chrome/browser/passwords/password_exporter/coordinator/password_export_handler.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/create_password_manager_title_view.h"
+#import "ios/chrome/browser/settings/ui_bundled/password/password_utils.h"
 #import "ios/chrome/browser/shared/coordinator/alert/alert_coordinator.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
+#import "ios/chrome/browser/shared/model/browser/browser.h"
+#import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
+#import "ios/chrome/browser/shared/public/commands/open_new_tab_command.h"
+#import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
 #import "ios/chrome/browser/webauthn/coordinator/passkey_welcome_screen_coordinator.h"
@@ -93,7 +101,8 @@
   ProfileIOS* profile = self.profile;
   FaviconLoader* faviconLoader =
       IOSChromeFaviconLoaderFactory::GetForProfile(profile);
-  _reauthModule = password_manager::BuildReauthenticationModule();
+  _reauthModule = ReauthenticationServiceFactory::GetForProfile(self.profile)
+                      ->GetReauthModule();
   _mediator = [[CredentialExportMediator alloc]
               initWithWindow:_baseNavigationController.view.window
             affiliatedGroups:std::move(_affiliatedGroups)
@@ -114,9 +123,24 @@
 
 #pragma mark - PasskeyKeychainProviderBridgeDelegate
 
-- (void)performUserVerificationIfNeeded:(ProceduralBlock)completion {
-  // TODO(crbug.com/449701042): Perform user verification.
-  completion();
+- (void)performUserVerificationIfNeeded:
+    (UserVerificationCompletionBlock)completion {
+  if (![_reauthModule canAttemptReauth]) {
+    // This should not happen, as credential export is accessible from password
+    // manager, which requires to have a passcode / biometrics set up.
+    completion(NO);
+    [self showErrorAlert];
+    return;
+  }
+
+  [_reauthModule
+      attemptReauthWithLocalizedReason:
+          l10n_util::GetNSString(IDS_IOS_EXPORT_PASSWORDS_AND_PASSKEYS)
+                  canReusePreviousAuth:YES
+                               handler:^(ReauthenticationResult result) {
+                                 completion(result !=
+                                            ReauthenticationResult::kFailure);
+                               }];
 }
 
 - (void)showWelcomeScreenWithPurpose:
@@ -149,8 +173,8 @@
     (void (^)(webauthn::SharedKeyList))completion {
   CHECK(completion);
   bool metricsReportingEnabled =
-      GetApplicationContext()->GetLocalState()->GetBoolean(
-          metrics::prefs::kMetricsReportingEnabled);
+      metrics::MetricsReportingChoiceService::IsBasicMetricsReportingEnabled(
+          GetApplicationContext()->GetLocalState());
   _passkeyKeychainProviderBridge = [[PasskeyKeychainProviderBridge alloc]
         initWithEnableLogging:metricsReportingEnabled
       navigationItemTitleView:password_manager::CreatePasswordManagerTitleView(
@@ -176,6 +200,10 @@
                         credential:nil
                            purpose:webauthn::ReauthenticatePurpose::kDecrypt
                         completion:completion_block];
+}
+
+- (void)showGenericError {
+  [self showErrorAlert];
 }
 
 #pragma mark - PasswordExportHandler
@@ -210,28 +238,84 @@
 }
 
 - (void)showExportErrorAlertWithLocalizedReason:(NSString*)localizedReason {
-  // TODO(crbug.com/470440092): Implement alerts to be displayed when exporting
-  // selected passwords to csv.
+  UIAlertController* alertController = [UIAlertController
+      alertControllerWithTitle:l10n_util::GetNSString(
+                                   IDS_IOS_EXPORT_PASSWORDS_FAILED_ALERT_TITLE)
+                       message:localizedReason
+                preferredStyle:UIAlertControllerStyleAlert];
+  UIAlertAction* okAction =
+      [UIAlertAction actionWithTitle:l10n_util::GetNSString(IDS_OK)
+                               style:UIAlertActionStyleDefault
+                             handler:nil];
+  [alertController addAction:okAction];
+  [self presentViewControllerForExportFlow:alertController];
 }
 
 - (void)showPreparingPasswordsAlert {
-  // TODO(crbug.com/470440092): Implement alerts to be displayed when exporting
-  // selected passwords to csv.
+  _preparingPasswordsAlert = [UIAlertController
+      alertControllerWithTitle:
+          l10n_util::GetNSString(IDS_IOS_EXPORT_PASSWORDS_PREPARING_ALERT_TITLE)
+                       message:nil
+                preferredStyle:UIAlertControllerStyleAlert];
+  __weak __typeof(self) weakSelf = self;
+  UIAlertAction* cancelAction =
+      [UIAlertAction actionWithTitle:l10n_util::GetNSString(
+                                         IDS_IOS_EXPORT_PASSWORDS_CANCEL_BUTTON)
+                               style:UIAlertActionStyleCancel
+                             handler:^(UIAlertAction*) {
+                               [weakSelf onExportFlowCancelled];
+                             }];
+  [_preparingPasswordsAlert addAction:cancelAction];
+  [self presentViewControllerForExportFlow:_preparingPasswordsAlert];
 }
 
 - (void)showSetPasscodeForPasswordExportDialog {
-  // TODO(crbug.com/470440092): Implement alerts to be displayed when exporting
-  // selected passwords to csv.
+  __weak __typeof(self) weakSelf = self;
+  UIAlertController* alert = password_manager::CreateSetUpScreenLockAlert(
+      l10n_util::GetNSString(
+          IDS_IOS_SETTINGS_EXPORT_PASSWORDS_SET_UP_SCREENLOCK_CONTENT),
+      ^{
+        [weakSelf showPasscodeHelp];
+      });
+  [self presentViewControllerForExportFlow:alert];
 }
 
 #pragma mark - Private
 
 - (void)presentViewControllerForExportFlow:(UIViewController*)viewController {
-  // TODO(crbug.com/470440092): Once showPreparingPasswordsAlert is implemented,
-  // check here if _preparingPasswordsAlert needs dismissal.
-  [_viewController presentViewController:viewController
-                                animated:YES
-                              completion:nil];
+  if (_preparingPasswordsAlert.presentingViewController) {
+    __weak __typeof(self) weakSelf = self;
+    [_preparingPasswordsAlert
+        dismissViewControllerAnimated:YES
+                           completion:^{
+                             [weakSelf handlePreparingPasswordsAlertDismissal:
+                                           viewController];
+                           }];
+  } else {
+    [_viewController presentViewController:viewController
+                                  animated:YES
+                                completion:nil];
+  }
+}
+
+// Clears `_preparingPasswordsAlert` and presents the `viewController`.
+- (void)handlePreparingPasswordsAlertDismissal:
+    (UIViewController*)viewController {
+  _preparingPasswordsAlert = nil;
+  [self presentViewControllerForExportFlow:viewController];
+}
+
+- (void)onExportFlowCancelled {
+  [_mediator exportFlowCancelled];
+}
+
+// Closes the settings and load the passcode help article in a new tab.
+- (void)showPasscodeHelp {
+  GURL URL = GURL(kPasscodeArticleURL);
+  OpenNewTabCommand* command = [OpenNewTabCommand commandWithURLFromChrome:URL];
+  id<SceneCommands> handler =
+      HandlerForProtocol(self.browser->GetCommandDispatcher(), SceneCommands);
+  [handler closePresentedViewsAndOpenURL:command];
 }
 
 // Called when fetching trusted vault keys for passkeys finishes. If there are

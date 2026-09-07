@@ -9,10 +9,12 @@
 #include "base/no_destructor.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/browser_features.h"
+#include "chrome/browser/enterprise/browser_management/management_identity.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_window.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/dialogs/browser_dialogs.h"
 #include "chrome/browser/ui/managed_ui.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
@@ -22,7 +24,7 @@
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
-#include "ui/views/controls/label.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/views/widget/widget.h"
 
 #if !BUILDFLAG(IS_CHROMEOS)
@@ -39,7 +41,9 @@ std::unique_ptr<ConsentRequester>* GetTestInstanceStorage() {
 
 ui::ImageModel GetIcon() {
   return ui::ImageModel::FromVectorIcon(
-      vector_icons::kBusinessIcon, ui::kColorIcon,
+      features::IsRoundedIconsEnabled() ? vector_icons::kDomainIcon
+                                        : vector_icons::kBusinessOldIcon,
+      ui::kColorIcon,
       ChromeLayoutProvider::Get()->GetDistanceMetric(
           views::DISTANCE_BUBBLE_HEADER_VECTOR_ICON_SIZE));
 }
@@ -85,7 +89,12 @@ std::unique_ptr<ConsentRequester> ConsentRequester::CreateConsentRequester(
   if (!profile) {
     return nullptr;
   }
-  Browser* browser = chrome::FindLastActiveWithProfile(profile);
+  ProfileBrowserCollection* const collection =
+      ProfileBrowserCollection::GetForProfile(profile);
+  if (!collection) {
+    return nullptr;
+  }
+  BrowserWindowInterface* const browser = collection->GetLastActiveBrowser();
   if (!browser) {
     return nullptr;
   }
@@ -99,8 +108,9 @@ void ConsentRequester::SetConsentRequesterForTest(
   *GetTestInstanceStorage() = std::move(consent_requester);
 }
 
-ConsentDialogCoordinator::ConsentDialogCoordinator(Browser* browser,
-                                                   Profile* profile)
+ConsentDialogCoordinator::ConsentDialogCoordinator(
+    BrowserWindowInterface* browser,
+    Profile* profile)
     : browser_(browser), profile_(profile) {}
 
 ConsentDialogCoordinator::~ConsentDialogCoordinator() {
@@ -141,8 +151,13 @@ void ConsentDialogCoordinator::Show() {
     return;
   }
   base::RecordAction(base::UserMetricsAction("DeviceSignalsConsent_Shown"));
-  dialog_widget_ = chrome::ShowBrowserModal(
+
+  auto weak_this = weak_ptr_factory_.GetWeakPtr();
+  views::Widget* widget = chrome::ShowBrowserModal(
       browser_, CreateDeviceSignalsConsentDialogModel());
+  if (weak_this) {
+    dialog_widget_ = widget;
+  }
 }
 
 void ConsentDialogCoordinator::OnConsentDialogAccept() {

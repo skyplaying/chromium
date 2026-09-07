@@ -39,6 +39,7 @@
 #include "net/base/address_map_linux.h"
 #include "net/base/ip_address.h"
 #include "net/base/network_change_notifier.h"
+#include "net/base/network_handle.h"
 #include "net/cert/ev_root_ca_metadata.h"
 #include "net/cert/mock_cert_verifier.h"
 #include "net/disk_cache/disk_cache.h"
@@ -59,6 +60,8 @@
 #include "services/network/network_service.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/network_service_buildflags.h"
+#include "services/network/public/cpp/originating_process_id.h"
+#include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/mojom/network_change_manager.mojom.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 #include "services/network/public/mojom/network_service_test.mojom.h"
@@ -91,8 +94,9 @@ STATIC_ASSERT_ENUM(
 
 void CrashResolveHost(const std::string& host_to_crash,
                       const std::string& host) {
-  if (host_to_crash == host)
+  if (host_to_crash == host) {
     base::Process::TerminateCurrentProcessImmediately(1);
+  }
 }
 
 class SimpleCacheEntry : public network::mojom::SimpleCacheEntry {
@@ -802,6 +806,32 @@ class NetworkServiceTestHelper::NetworkServiceTestImpl
                              ->host_resolver_manager()
                              ->IsHappyEyeballsV3Enabled();
     std::move(callback).Run(enabled);
+  }
+
+#if BUILDFLAG(IS_MAC)
+  void SetUseMockURLSessionURLLoaderForTesting(
+      bool use_mock_url_session_url_loader) override {
+    network::NetworkService::GetNetworkServiceForTesting()
+        ->SetUseMockURLSessionURLLoaderForTesting(
+            use_mock_url_session_url_loader);
+  }
+#endif
+
+  void HasRawHeadersAccess(uint32_t process_id,
+                           const GURL& url,
+                           HasRawHeadersAccessCallback callback) override {
+    std::move(callback).Run(
+        network::NetworkService::GetNetworkServiceForTesting()
+            ->HasRawHeadersAccess(
+                network::OriginatingProcessId::FromUnsafeValue(process_id),
+                url));
+  }
+
+  void SetEmulateNetworkBindingForTesting(
+      bool enabled,
+      SetEmulateNetworkBindingForTestingCallback callback) override {
+    net::handles::SetEmulateNetworkBindingForTesting(enabled);
+    std::move(callback).Run();
   }
 
  private:

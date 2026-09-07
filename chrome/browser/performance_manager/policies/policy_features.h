@@ -31,6 +31,11 @@ BASE_DECLARE_FEATURE(kTrimArcOnMemoryPressure);
 // If enabled we will try to trim ARCVM's crosvm under memory pressure.
 BASE_DECLARE_FEATURE(kTrimArcVmOnMemoryPressure);
 
+// If enabled, we will try to trim renderer processes that only have
+// imperceptible frames.
+// TODO(crbug.com/505599086): Remove after the flag is enabled.
+BASE_DECLARE_FEATURE(kTrimImperceptibleProcess);
+
 // The trim on freeze feature will trim the working set of a process when all
 // frames are frozen.
 BASE_DECLARE_FEATURE(kTrimOnFreeze);
@@ -146,12 +151,6 @@ struct TrimOnMemoryPressureParams {
 };
 
 #endif  // BUILDFLAG(IS_CHROMEOS)
-
-#if BUILDFLAG(IS_WIN)
-// Activates the `TerminationTargetPolicy`, which provides the handle of a
-// process to terminate on commit failure to partition_alloc.
-BASE_DECLARE_FEATURE(kTerminationTargetPolicy);
-#endif  // BUILDFLAG(IS_WIN)
 
 BASE_DECLARE_FEATURE(kSustainedPMUrgentDiscarding);
 

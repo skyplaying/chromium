@@ -11,7 +11,7 @@
 #include <string>
 #include <utility>
 
-#include "base/metrics/histogram_macros.h"
+#include "base/metrics/histogram_base.h"
 #include "base/metrics/histogram_samples.h"
 #include "base/metrics/sample_map.h"
 #include "base/metrics/statistics_recorder.h"
@@ -22,6 +22,7 @@
 #include "base/test/test_simple_task_runner.h"
 #include "base/time/time.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "components/invalidation/test_support/fake_invalidation_listener.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/cloud_policy_core.h"
@@ -145,13 +146,10 @@ class ExtensionInstallPolicyInvalidatorTestBase : public testing::Test {
   const base::Time start_time{task_environment_.GetMockClock()->Now()};
 
   // Objects the invalidator depends on.
-  testing::NiceMock<MockCloudPolicyStore> store_{
-      dm_protocol::GetChromeUserPolicyType()};
   testing::NiceMock<MockCloudPolicyStore> extension_install_store_{
       dm_protocol::kChromeMachineLevelExtensionCloudPolicyType};
   CloudPolicyCore core_{dm_protocol::GetChromeUserPolicyType(),
                         std::string(),
-                        &store_,
                         &extension_install_store_,
                         task_environment_.GetMainThreadTaskRunner(),
                         network::TestNetworkConnectionTracker::CreateGetter()};
@@ -215,10 +213,13 @@ void ExtensionInstallPolicyInvalidatorTestBase::StorePolicy(
   extension_install_store_.invalidation_version_ = invalidation_version;
   extension_install_store_.set_policy_data_for_testing(std::move(data));
   base::DictValue policies;
+  // MaxInvalidationFetchDelay policy is not supported on Android.
+#if !BUILDFLAG(IS_ANDROID)
   policies.Set(
       key::kMaxInvalidationFetchDelay,
       static_cast<int>(ExtensionInstallPolicyInvalidator::kMaxFetchDelayMin
                            .InMilliseconds()));
+#endif  // !BUILDFLAG(IS_ANDROID)
   extension_install_store_.policy_map_.LoadFrom(
       policies, POLICY_LEVEL_MANDATORY, POLICY_SCOPE_MACHINE,
       POLICY_SOURCE_CLOUD);
@@ -286,12 +287,18 @@ void ExtensionInstallPolicyInvalidatorTestBase::FastForwardBy(
 
 void ExtensionInstallPolicyInvalidatorTestBase::
     FastForwardByInvalidationDelay() {
+  // MaxInvalidationFetchDelay policy is not supported on Android.
+#if !BUILDFLAG(IS_ANDROID)
   const auto* delay_policy_value =
       extension_install_store_.policy_map().GetValue(
           key::kMaxInvalidationFetchDelay, base::Value::Type::INTEGER);
   const base::TimeDelta max_delay =
       delay_policy_value ? base::Milliseconds(delay_policy_value->GetInt())
                          : ExtensionInstallPolicyInvalidator::kMaxFetchDelayMax;
+#else
+  const base::TimeDelta max_delay =
+      ExtensionInstallPolicyInvalidator::kMaxFetchDelayDefault;
+#endif  // !BUILDFLAG(IS_ANDROID)
   FastForwardBy(max_delay);
 }
 
@@ -316,11 +323,11 @@ std::string
 ExtensionInstallPolicyInvalidatorTestBase::GetPolicyInvalidationType() const {
   switch (GetPolicyInvalidationScope()) {
     case PolicyInvalidationScope::kUser:
-      return "EXTENSION_INSTALL_POLICY_FETCH";
+      return "EXTENSION_INSTALL_CLOUD_POLICY_FETCH";
     case PolicyInvalidationScope::kDevice:
-      return "EXTENSION_INSTALL_POLICY_FETCH";
+      return "EXTENSION_INSTALL_CLOUD_POLICY_FETCH";
     case PolicyInvalidationScope::kCBCM:
-      return "EXTENSION_INSTALL_POLICY_FETCH";
+      return "EXTENSION_INSTALL_CLOUD_POLICY_FETCH";
     case PolicyInvalidationScope::kDeviceLocalAccount:
       NOTREACHED();
   }
@@ -592,21 +599,21 @@ TEST_F(ExtensionInstallPolicyInvalidatorOwnerNameTest, GetTypeForUserScope) {
   scope_ = PolicyInvalidationScope::kUser;
   StartInvalidator();
   ASSERT_TRUE(invalidator());
-  EXPECT_EQ("EXTENSION_INSTALL_POLICY_FETCH", invalidator()->GetType());
+  EXPECT_EQ("EXTENSION_INSTALL_CLOUD_POLICY_FETCH", invalidator()->GetType());
 }
 
 TEST_F(ExtensionInstallPolicyInvalidatorOwnerNameTest, GetTypeForDeviceScope) {
   scope_ = PolicyInvalidationScope::kDevice;
   StartInvalidator();
   ASSERT_TRUE(invalidator());
-  EXPECT_EQ("EXTENSION_INSTALL_POLICY_FETCH", invalidator()->GetType());
+  EXPECT_EQ("EXTENSION_INSTALL_CLOUD_POLICY_FETCH", invalidator()->GetType());
 }
 
 TEST_F(ExtensionInstallPolicyInvalidatorOwnerNameTest, GetTypeForCbcmScope) {
   scope_ = PolicyInvalidationScope::kCBCM;
   StartInvalidator();
   ASSERT_TRUE(invalidator());
-  EXPECT_EQ("EXTENSION_INSTALL_POLICY_FETCH", invalidator()->GetType());
+  EXPECT_EQ("EXTENSION_INSTALL_CLOUD_POLICY_FETCH", invalidator()->GetType());
 }
 
 class ExtensionInstallPolicyInvalidatorUserTypedTest

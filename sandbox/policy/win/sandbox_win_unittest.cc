@@ -65,13 +65,15 @@ class TestTargetConfig : public TargetConfig {
   JobLevel GetJobLevel() const override { return sandbox::JobLevel{}; }
   void SetJobMemoryLimit(size_t memory_limit) override {}
   ResultCode AllowFileAccess(FileSemantics semantics,
-                             const wchar_t* pattern) override {
+                             std::wstring_view pattern) override {
     return SBOX_ALL_OK;
   }
-  ResultCode AllowExtraDll(const wchar_t* path) override { return SBOX_ALL_OK; }
+  ResultCode AllowExtraDll(std::wstring_view path) override {
+    return SBOX_ALL_OK;
+  }
   ResultCode SetFakeGdiInit() override { return SBOX_ALL_OK; }
-  void AddDllToUnload(const wchar_t* dll_name) override {
-    blocklisted_dlls_.push_back(dll_name);
+  void AddDllToUnload(std::wstring_view dll_name) override {
+    blocklisted_dlls_.emplace_back(dll_name);
   }
   const std::vector<std::wstring>& blocklisted_dlls() const {
     return blocklisted_dlls_;
@@ -81,7 +83,7 @@ class TestTargetConfig : public TargetConfig {
   }
   IntegrityLevel GetIntegrityLevel() const override { return IntegrityLevel{}; }
   void SetDelayedIntegrityLevel(IntegrityLevel level) override {}
-  ResultCode SetLowBox(const wchar_t* sid) override { return SBOX_ALL_OK; }
+  ResultCode SetLowBox(base::wcstring_view sid) override { return SBOX_ALL_OK; }
   ResultCode SetProcessMitigations(MitigationFlags flags) override {
     return SBOX_ALL_OK;
   }
@@ -97,7 +99,7 @@ class TestTargetConfig : public TargetConfig {
   void AddKernelObjectToClose(HandleToClose handle_info) override {}
   void SetDisconnectCsrss() override {}
 
-  ResultCode AddAppContainerProfile(const wchar_t* package_name) override {
+  ResultCode AddAppContainerProfile(base::wcstring_view package_name) override {
     app_container_ = AppContainerBase::Open(package_name);
     if (!app_container_) {
       return SBOX_ERROR_CREATE_APPCONTAINER;
@@ -452,63 +454,86 @@ TEST_F(SandboxWinTest, GeneratedPolicyTestNoSandbox) {
   ASSERT_EQ(ResultCode::SBOX_ERROR_UNSANDBOXED_PROCESS, result);
 }
 
-TEST_F(SandboxWinTest, GetJobMemoryLimit) {
+class SandboxWinJobMemoryLimitTest : public ::testing::TestWithParam<bool> {};
+
+TEST_P(SandboxWinJobMemoryLimitTest, GetJobMemoryLimit) {
 #if defined(ARCH_CPU_64_BITS)
+  const bool feature_enabled = GetParam();
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatureState(features::kWinSboxHighGPUJobMemoryLimits,
+                                    feature_enabled);
+
   // Test GPU with physical memory > 64GB.
   {
     base::test::ScopedAmountOfPhysicalMemoryOverride memory_override(
-        base::GiBU(65));
+        base::GiB(65));
     std::optional<size_t> memory_limit =
         SandboxWin::GetJobMemoryLimit(sandbox::mojom::Sandbox::kGpu);
-    EXPECT_THAT(memory_limit, ::testing::Optional(base::GiBU(64).InBytes()));
+    EXPECT_THAT(memory_limit,
+                ::testing::Optional(feature_enabled ? base::TiB(1).InBytes()
+                                                    : base::GiB(64).InBytes()));
   }
 
   // Test GPU with physical memory > 32GB
   {
     base::test::ScopedAmountOfPhysicalMemoryOverride memory_override(
-        base::GiBU(33));
+        base::GiB(33));
     std::optional<size_t> memory_limit =
         SandboxWin::GetJobMemoryLimit(sandbox::mojom::Sandbox::kGpu);
-    EXPECT_THAT(memory_limit, ::testing::Optional(base::GiBU(32).InBytes()));
+    EXPECT_THAT(memory_limit,
+                ::testing::Optional(feature_enabled ? base::TiB(1).InBytes()
+                                                    : base::GiB(32).InBytes()));
   }
 
   // Test GPU with physical memory > 16GB
   {
     base::test::ScopedAmountOfPhysicalMemoryOverride memory_override(
-        base::GiBU(17));
+        base::GiB(17));
     std::optional<size_t> memory_limit =
         SandboxWin::GetJobMemoryLimit(sandbox::mojom::Sandbox::kGpu);
-    EXPECT_THAT(memory_limit, ::testing::Optional(base::GiBU(16).InBytes()));
+    EXPECT_THAT(memory_limit,
+                ::testing::Optional(feature_enabled ? base::TiB(1).InBytes()
+                                                    : base::GiB(16).InBytes()));
   }
 
   // Test GPU with physical memory < 16GB
   {
     base::test::ScopedAmountOfPhysicalMemoryOverride memory_override(
-        base::GiBU(8));
+        base::GiB(8));
     std::optional<size_t> memory_limit =
         SandboxWin::GetJobMemoryLimit(sandbox::mojom::Sandbox::kGpu);
-    EXPECT_THAT(memory_limit, ::testing::Optional(base::GiBU(8).InBytes()));
+    EXPECT_THAT(memory_limit,
+                ::testing::Optional(feature_enabled ? base::TiB(1).InBytes()
+                                                    : base::GiB(8).InBytes()));
   }
 
   // Test that Renderer has high (1TB) memory limit.
   {
     base::test::ScopedAmountOfPhysicalMemoryOverride memory_override(
-        base::GiBU(8));
+        base::GiB(8));
     std::optional<size_t> memory_limit =
         SandboxWin::GetJobMemoryLimit(sandbox::mojom::Sandbox::kRenderer);
-    EXPECT_THAT(memory_limit, ::testing::Optional(base::TiBU(1).InBytes()));
+    EXPECT_THAT(memory_limit, ::testing::Optional(base::TiB(1).InBytes()));
   }
 #else
   // Test 32-bit processes don't get a limit.
   {
     base::test::ScopedAmountOfPhysicalMemoryOverride memory_override(
-        base::GiBU(8));
+        base::GiB(8));
     std::optional<size_t> memory_limit =
         SandboxWin::GetJobMemoryLimit(sandbox::mojom::Sandbox::kRenderer);
     EXPECT_FALSE(memory_limit.has_value());
   }
 #endif  // defined(ARCH_CPU_64_BITS)
 }
+
+INSTANTIATE_TEST_SUITE_P(,
+                         SandboxWinJobMemoryLimitTest,
+                         ::testing::Bool(),
+                         [](const auto& info) {
+                           return info.param ? "HighGPULimitsEnabled"
+                                             : "HighGPULimitsDisabled";
+                         });
 
 }  // namespace policy
 }  // namespace sandbox

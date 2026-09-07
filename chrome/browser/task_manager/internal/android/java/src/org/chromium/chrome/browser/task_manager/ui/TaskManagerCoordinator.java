@@ -6,6 +6,10 @@ package org.chromium.chrome.browser.task_manager.ui;
 
 import android.graphics.Bitmap;
 import android.graphics.Typeface;
+import android.graphics.drawable.BitmapDrawable;
+import android.text.Editable;
+import android.text.TextUtils;
+import android.text.TextWatcher;
 import android.view.ContextMenu;
 import android.view.ContextMenu.ContextMenuInfo;
 import android.view.LayoutInflater;
@@ -13,6 +17,9 @@ import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 import android.view.View.OnCreateContextMenuListener;
+import android.view.ViewStub;
+import android.view.inputmethod.EditorInfo;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -23,8 +30,12 @@ import androidx.annotation.VisibleForTesting;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.task_manager.ui.TaskManagerProperties.Category;
 import org.chromium.chrome.browser.task_manager.ui.TaskManagerProperties.SortDescriptor;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+import org.chromium.components.browser_ui.widget.chips.ChipView;
+import org.chromium.ui.KeyboardVisibilityDelegate;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel;
@@ -38,6 +49,10 @@ import java.util.Set;
 
 /** Binds the model and the view of task manager. */
 class TaskManagerCoordinator implements OnCreateContextMenuListener {
+    private static final @Category int[] CATEGORIES = {
+        Category.TABS_AND_EXTENSIONS, Category.BROWSER, Category.ALL_TASKS,
+    };
+
     private final PropertyModel mHeaderModel;
 
     private final TaskManagerMediator mMediator;
@@ -64,7 +79,7 @@ class TaskManagerCoordinator implements OnCreateContextMenuListener {
                             for (PropertyKey columnKey : TaskManagerProperties.ALL_COLUMN_KEYS) {
                                 view.findViewById(getTaskItemViewId(columnKey))
                                         .setOnClickListener(
-                                                (unused) -> mMediator.cycleSortOrder(columnKey));
+                                                _ -> mMediator.cycleSortOrder(columnKey));
                             }
                             bindHeader(model, view, key);
                         }));
@@ -89,7 +104,7 @@ class TaskManagerCoordinator implements OnCreateContextMenuListener {
                                     view,
                                     TaskManagerCoordinator::bindHeaderModelAndTaskView));
 
-                    view.setOnClickListener((unused) -> mMediator.toggleSelection(model));
+                    view.setOnClickListener(_ -> mMediator.toggleSelection(model));
                     bindTask(model, view, key);
                 });
 
@@ -101,6 +116,10 @@ class TaskManagerCoordinator implements OnCreateContextMenuListener {
                 (hasSelectedTask) -> killButton.setEnabled(hasSelectedTask));
 
         taskManagerView.setOnCreateContextMenuListener(this);
+
+        if (ChromeFeatureList.isEnabled(ChromeFeatureList.TASK_MANAGER_TOOLBAR)) {
+            initToolbar(taskManagerView, headerModel);
+        }
 
         mMediator.startObserving();
     }
@@ -128,7 +147,7 @@ class TaskManagerCoordinator implements OnCreateContextMenuListener {
             item.setChecked(selectedColumns.contains(columnKey));
 
             item.setOnMenuItemClickListener(
-                    (unused) -> {
+                    _ -> {
                         if (mMediator.toggleColumnFiltering(columnKey)) {
                             // Handle the visual update as it is being dismissed.
                             item.setChecked(!item.isChecked());
@@ -182,11 +201,7 @@ class TaskManagerCoordinator implements OnCreateContextMenuListener {
                 int size = view.getResources().getDimensionPixelSize(R.dimen.default_favicon_size);
                 Bitmap scaledBitmap = Bitmap.createScaledBitmap(bitmap, size, size, true);
                 textView.setCompoundDrawablesRelativeWithIntrinsicBounds(
-                        new android.graphics.drawable.BitmapDrawable(
-                                view.getResources(), scaledBitmap),
-                        null,
-                        null,
-                        null);
+                        new BitmapDrawable(view.getResources(), scaledBitmap), null, null, null);
                 textView.setCompoundDrawablePadding(20);
             } else {
                 textView.setCompoundDrawablesRelativeWithIntrinsicBounds(null, null, null, null);
@@ -280,5 +295,98 @@ class TaskManagerCoordinator implements OnCreateContextMenuListener {
         } else {
             throw new IllegalArgumentException("column key " + columnKey + " not supported");
         }
+    }
+
+    /** Converts the given category to the resource id of the corresponding ChipView. */
+    static @IdRes int getCategoryChipId(@Category int category) {
+        switch (category) {
+            case Category.TABS_AND_EXTENSIONS:
+                return R.id.category_chip_tabs;
+            case Category.BROWSER:
+                return R.id.category_chip_browser;
+            case Category.ALL_TASKS:
+                return R.id.category_chip_all;
+            default:
+                throw new IllegalArgumentException("category " + category + " not supported");
+        }
+    }
+
+    private void initToolbar(View taskManagerView, PropertyModel headerModel) {
+        ViewStub toolbarStub = taskManagerView.findViewById(R.id.task_manager_toolbar_stub);
+        if (toolbarStub == null) return;
+        View toolbarView = toolbarStub.inflate();
+        initCategoryChips(toolbarView, headerModel);
+        initSearchBox(toolbarView);
+    }
+
+    private void initCategoryChips(View toolbar, PropertyModel headerModel) {
+        View chipsContainer = toolbar.findViewById(R.id.category_chips_container);
+        if (chipsContainer == null) return;
+
+        for (@Category int category : CATEGORIES) {
+            ChipView chip = toolbar.findViewById(getCategoryChipId(category));
+            if (chip != null) {
+                // Update the chip data
+                chip.setOnClickListener(v -> mMediator.setSelectedCategory(category));
+            }
+        }
+
+        // Update the chip view
+        mModelChangeProcessors.add(
+                PropertyModelChangeProcessor.create(
+                        headerModel,
+                        chipsContainer,
+                        (model, view, key) -> {
+                            if (key == TaskManagerProperties.SELECTED_CATEGORY) {
+                                updateCategoryChipsView(view, model);
+                            }
+                        }));
+    }
+
+    private static void updateCategoryChipsView(View container, PropertyModel model) {
+        @Category int selected = model.get(TaskManagerProperties.SELECTED_CATEGORY);
+        for (@Category int category : CATEGORIES) {
+            ChipView chip = container.findViewById(getCategoryChipId(category));
+            if (chip != null) {
+                chip.setSelected(selected == category);
+            }
+        }
+    }
+
+    private void initSearchBox(View toolbar) {
+        EditText searchInput = toolbar.findViewById(R.id.search_input);
+        View clearSearchButton = toolbar.findViewById(R.id.clear_search_button);
+        if (searchInput == null || clearSearchButton == null) return;
+
+        searchInput.addTextChangedListener(
+                new TextWatcher() {
+                    @Override
+                    public void beforeTextChanged(
+                            CharSequence s, int start, int count, int after) {}
+
+                    @Override
+                    public void onTextChanged(CharSequence s, int start, int before, int count) {
+                        boolean isEmpty = TextUtils.isEmpty(s);
+                        clearSearchButton.setVisibility(isEmpty ? View.GONE : View.VISIBLE);
+                        mMediator.setSearchQuery(s != null ? s.toString() : "");
+                    }
+
+                    @Override
+                    public void afterTextChanged(Editable s) {}
+                });
+
+        searchInput.setOnEditorActionListener(
+                (v, actionId, event) -> {
+                    if (actionId == EditorInfo.IME_ACTION_SEARCH) {
+                        KeyboardVisibilityDelegate.getInstance().hideKeyboard(v);
+                        return true;
+                    }
+                    return false;
+                });
+
+        clearSearchButton.setOnClickListener(
+                v -> {
+                    searchInput.setText("");
+                });
     }
 }

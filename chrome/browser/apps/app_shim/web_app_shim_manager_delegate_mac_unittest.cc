@@ -20,6 +20,7 @@
 #include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
 
 namespace web_app {
@@ -471,16 +472,19 @@ TEST_F(WebAppShimManagerDelegateTest, GetAppShortcutsMenuItemInfos) {
         web_app::mojom::UserDisplayMode::kStandalone;
 
     shortcut_info1.name = u"shortcut_info1";
-    shortcut_info1.url = GURL(".");
+    shortcut_info1.url = GURL("https://mytestpwa.com/");
     web_app_info->shortcuts_menu_item_infos.push_back(shortcut_info1);
+    web_app_info->shortcuts_menu_icon_bitmaps.emplace_back();
 
     shortcut_info2.name = u"shortcut_info2";
-    shortcut_info2.url = GURL("/settings");
+    shortcut_info2.url = GURL("https://mytestpwa.com/settings");
     web_app_info->shortcuts_menu_item_infos.push_back(shortcut_info2);
+    web_app_info->shortcuts_menu_icon_bitmaps.emplace_back();
 
     shortcut_info3.name = u"shortcut_info3";
-    shortcut_info3.url = GURL("https://anothersite.com");
+    shortcut_info3.url = GURL("https://mytestpwa.com/shortcut3");
     web_app_info->shortcuts_menu_item_infos.push_back(shortcut_info3);
+    web_app_info->shortcuts_menu_icon_bitmaps.emplace_back();
 
     webapps::AppId shortcut_app_id =
         web_app::test::InstallWebApp(profile(), std::move(web_app_info));

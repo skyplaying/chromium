@@ -12,7 +12,7 @@
 #include "components/collaboration/public/messaging/message.h"
 #include "components/collaboration/public/messaging/messaging_backend_service.h"
 
-class Browser;
+class BrowserWindowInterface;
 
 namespace tab_groups {
 
@@ -79,7 +79,7 @@ class InstantMessageQueueProcessor {
   // as the browser is in a state sufficient to show the given message.
   void MaybeShowInstantMessage();
 
-  // Responsible for resetting the |is_showing_instant_message_| state.
+  // Responsible for resetting the `is_showing_instant_message_` state.
   // Called following a timeout after a message has been successfully shown.
   void ProcessQueueAfterMessageShown();
 
@@ -87,13 +87,13 @@ class InstantMessageQueueProcessor {
   // for the new message queue head.
   void ProceedToNextQueueMessage();
 
-  // Finds the toast controller needed to show a message for the group
+  // Finds the browser window needed to show a message for the group
   // contained in this message.
-  Browser* GetBrowser(const InstantMessage& message);
+  BrowserWindowInterface* GetBrowser(const InstantMessage& message);
 
   // Finds the toast controller needed to show a message for the group
   // contained in this message. Virtual for testing purposes only.
-  virtual bool MaybeShowToastInBrowser(Browser* browser,
+  virtual bool MaybeShowToastInBrowser(BrowserWindowInterface* browser,
                                        std::optional<ToastParams> params);
 
   // Returns the toast params populated for this message. Returns
@@ -103,7 +103,7 @@ class InstantMessageQueueProcessor {
       const QueuedInstantMessage& queued_message);
 
   // Fetches the avatar image for the given message and calls the
-  // |success_callback| with the result. The avatar must be loaded before
+  // `success_callback` with the result. The avatar must be loaded before
   // triggering the toast.
   void FetchAvatar(InstantMessage message,
                    FetchAvatarSuccessCallback success_callback);

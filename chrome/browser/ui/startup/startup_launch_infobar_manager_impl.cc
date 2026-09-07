@@ -10,14 +10,13 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
 #include "base/metrics/user_metrics_action.h"
 #include "base/strings/strcat.h"
+#include "base/time/time.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/infobars/confirm_infobar_creator.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tab_strip_tracker.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
@@ -205,8 +204,7 @@ void StartupLaunchInfoBarManagerImpl::OnAccept() {
       GlobalBrowserCollection::GetInstance()->ForEach(
           [this](BrowserWindowInterface* browser) {
             if (ShouldTrackBrowser(browser)) {
-              chrome::ShowSettingsSubPage(browser->GetBrowserForMigrationOnly(),
-                                          chrome::kOnStartupSubPage);
+              chrome::ShowSettingsSubPage(browser, chrome::kOnStartupSubPage);
               return false;
             }
             return true;

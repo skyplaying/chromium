@@ -4,10 +4,9 @@
 
 #include <optional>
 
-#include "base/test/scoped_feature_list.h"
 #include "base/win/scoped_variant.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/accessibility/uia_accessibility_event_waiter.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -17,7 +16,7 @@
 #include "components/autofill/content/browser/test_autofill_manager_injector.h"
 #include "components/autofill/core/browser/foundations/browser_autofill_manager.h"
 #include "components/autofill/core/browser/foundations/test_autofill_manager_waiter.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/test/accessibility_notification_waiter.h"
 #include "content/public/test/browser_test.h"
@@ -28,7 +27,6 @@
 #include "net/test/embedded_test_server/request_handler_util.h"
 #include "testing/gmock/include/gmock/gmock-matchers.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/accessibility/accessibility_features.h"
 #include "ui/accessibility/ax_tree.h"
 #include "ui/accessibility/ax_tree_id.h"
 #include "ui/accessibility/ax_tree_manager_map.h"
@@ -75,12 +73,12 @@ class AutofillAccessibilityWinBrowserTest : public InProcessBrowserTest {
   void TearDownOnMainThread() override { scoped_accessibility_mode_.reset(); }
 
   content::WebContents* GetWebContents() const {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
   HWND GetWebPageHwnd() const {
     return browser()
-        ->window()
+        ->GetWindow()
         ->GetNativeWindow()
         ->GetHost()
         ->GetAcceleratedWidget();
@@ -110,14 +108,13 @@ class AutofillAccessibilityWinBrowserTest : public InProcessBrowserTest {
   }
 
  private:
-  base::test::ScopedFeatureList scoped_feature_list_{::features::kUiaProvider};
   test::AutofillBrowserTestEnvironment autofill_test_environment_;
   TestAutofillManagerInjector<TestAutofillManager> autofill_manager_injector_;
   std::optional<content::ScopedAccessibilityModeOverride>
       scoped_accessibility_mode_;
 };
 
-// The test is flaky on Windows. See https://crbug.com/1221273
+// The test is flaky on Windows. See https://crbug.com/40773399
 #if BUILDFLAG(IS_WIN)
 #define MAYBE_AutofillPopupControllerFor DISABLED_AutofillPopupControllerFor
 #else

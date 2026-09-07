@@ -31,6 +31,7 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "base/notreached.h"
 #include "base/time/time.h"
 #include "cc/paint/paint_canvas.h"
@@ -38,7 +39,6 @@
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
-#include "third_party/blink/public/common/input/web_menu_source_type.h"
 #include "third_party/blink/public/common/scheduler/task_attribution_id.h"
 #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
 #include "third_party/blink/public/mojom/blob/blob_url_store.mojom-forward.h"
@@ -100,6 +100,8 @@ class CORE_EXPORT EmptyChromeClient : public ChromeClient {
   WebViewImpl* GetWebView() const override { return nullptr; }
   void ChromeDestroyed() override {}
   void SetWindowRect(const gfx::Rect&, LocalFrame&) override {}
+  void MoveWindowTo(const gfx::Point&, LocalFrame&) override {}
+  void ResizeWindowTo(const gfx::Size&, LocalFrame&) override {}
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
   void Minimize(LocalFrame&, WindowingControlsChangeCallback) override {}
   void Maximize(LocalFrame&, WindowingControlsChangeCallback) override {}
@@ -110,6 +112,9 @@ class CORE_EXPORT EmptyChromeClient : public ChromeClient {
 #endif
   gfx::Rect RootWindowRect(LocalFrame&) override { return gfx::Rect(); }
   void DidAccessInitialMainDocument() override {}
+  void DidChangeThemeColor(std::optional<SkColor> theme_color) override {}
+  void DidChangeBackgroundColor(SkColor4f background_color,
+                                bool color_adjust) override {}
   void FocusPage() override {}
   void DidFocusPage() override {}
   bool CanTakeFocus(mojom::blink::FocusType) override { return false; }
@@ -128,9 +133,7 @@ class CORE_EXPORT EmptyChromeClient : public ChromeClient {
   bool StartDeferringCommits(LocalFrame& main_frame,
                              base::TimeDelta timeout,
                              cc::PaintHoldingReason reason) override;
-  void StopDeferringCommits(LocalFrame& main_frame,
-                            cc::PaintHoldingCommitTrigger) override {}
-  void SetShouldThrottleFrameRate(bool flag, LocalFrame& main_frame) override {}
+  void StopDeferringCommits(LocalFrame& main_frame) override {}
   void RequestMainFrameOnCompositorAnimation(
       LocalFrame&,
       cc::PropertyChangeForcesCommitCriteria criteria,
@@ -191,6 +194,7 @@ class CORE_EXPORT EmptyChromeClient : public ChromeClient {
 
   void InvalidateContainer() override {}
   void ScheduleAnimation(const LocalFrameView*,
+                         cc::BeginMainFrameReason reason,
                          base::TimeDelta delay,
                          bool urgent) override {}
   gfx::Rect LocalRootToScreenDIPs(const gfx::Rect& r,
@@ -256,7 +260,6 @@ class CORE_EXPORT EmptyChromeClient : public ChromeClient {
       LocalFrame*,
       HTMLElement*,
       WebFormRelatedChangeType) override {}
-  String AcceptLanguages() override;
   void RegisterPopupOpeningObserver(PopupOpeningObserver*) override {}
   void UnregisterPopupOpeningObserver(PopupOpeningObserver*) override {}
   void NotifyPopupOpeningObservers() const override {}
@@ -271,6 +274,9 @@ class CORE_EXPORT EmptyChromeClient : public ChromeClient {
 
 class EmptyWebWorkerFetchContext : public WebWorkerFetchContext {
  public:
+  explicit EmptyWebWorkerFetchContext()
+      : WebWorkerFetchContext(RendererPreferences()) {}
+
   void SetTerminateSyncLoadEvent(base::WaitableEvent*) override {}
   void InitializeOnWorkerThread(AcceptLanguagesWatcher*) override {}
   URLLoaderFactory* GetURLLoaderFactory() override { return nullptr; }
@@ -361,14 +367,16 @@ class CORE_EXPORT EmptyLocalFrameClient : public LocalFrameClient {
       base::TimeTicks,
       base::TimeTicks,
       const String&,
-      const std::optional<Impression>&,
       const LocalFrameToken* initiator_frame_token,
+      const InitiatorStateToken& initiator_state_token,
+      const DocumentToken& initiator_document_token,
       SourceLocation*,
       mojo::PendingRemote<mojom::blink::NavigationStateKeepAliveHandle>,
       bool is_container_initiated,
       bool has_rel_opener,
       mojo::PendingReceiver<
-          mojom::blink::NavigationResumeDeferredCommitListener>) override;
+          mojom::blink::NavigationResumeDeferredCommitListener>,
+      std::optional<base::UnguessableToken> script_tool_invocation_id) override;
 
   void DispatchWillSendSubmitEvent(HTMLFormElement*) override;
 
@@ -416,9 +424,7 @@ class CORE_EXPORT EmptyLocalFrameClient : public LocalFrameClient {
   RemotePlaybackClient* CreateRemotePlaybackClient(HTMLMediaElement&) override;
 
   void DidCommitDocumentReplacementNavigation(DocumentLoader*) override {}
-  void DispatchDidClearWindowObjectInMainWorld(
-      v8::Isolate* isolate,
-      v8::MicrotaskQueue* microtask_queue) override {}
+  void DispatchDidClearWindowObjectInMainWorld(LocalDOMWindow*) override {}
   void DocumentElementAvailable() override {}
   void RunScriptsAtDocumentElementAvailable() override {}
   void RunScriptsAtDocumentReady(bool) override {}
@@ -428,7 +434,6 @@ class CORE_EXPORT EmptyLocalFrameClient : public LocalFrameClient {
                               int32_t world_id) override {}
   void WillReleaseScriptContext(v8::Local<v8::Context>,
                                 int32_t world_id) override {}
-  bool AllowScriptExtensions() override { return false; }
 
   AssociatedInterfaceProvider* GetRemoteNavigationAssociatedInterfaces()
       override;
@@ -491,7 +496,8 @@ class CORE_EXPORT EmptyLocalFrameClient : public LocalFrameClient {
 
  protected:
   // Not owned
-  WebTextCheckClient* text_check_client_;
+  raw_ptr<WebTextCheckClient, UnprotectedInRelease | DanglingUntriaged>
+      text_check_client_;
 
   std::unique_ptr<AssociatedInterfaceProvider> associated_interface_provider_;
 };

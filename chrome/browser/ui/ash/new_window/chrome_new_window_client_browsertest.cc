@@ -6,18 +6,17 @@
 
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/prefs/incognito_mode_prefs.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_test_util.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "components/account_id/account_id.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/session_manager/core/session_manager.h"
@@ -27,6 +26,7 @@
 #include "content/public/test/browser_test.h"
 #include "google_apis/gaia/gaia_id.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/base_window.h"
 #include "url/gurl.h"
 
 namespace {
@@ -37,7 +37,6 @@ constexpr char kTestUserName2[] = "test2@test.com";
 constexpr GaiaId::Literal kTestUser2GaiaId("2222222222");
 
 void CreateAndStartUserSession(const AccountId& account_id) {
-  using ::ash::ProfileHelper;
   using session_manager::SessionManager;
 
   user_manager::KnownUser known_user(g_browser_process->local_state());
@@ -50,13 +49,14 @@ void CreateAndStartUserSession(const AccountId& account_id) {
                                        /*has_active_session=*/false);
   profiles::testing::CreateProfileSync(
       g_browser_process->profile_manager(),
-      ProfileHelper::GetProfilePathByUserIdHash(user_id_hash));
+      ash::BrowserContextHelper::Get()->GetBrowserContextPathByUserIdHash(
+          user_id_hash));
   SessionManager::Get()->SessionStarted();
 }
 
 // Give the underlying function a clearer name.
-Browser* GetLastActiveBrowser() {
-  return chrome::FindLastActive();
+BrowserWindowInterface* GetLastActiveBrowser() {
+  return GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
 }
 
 }  // namespace
@@ -67,18 +67,18 @@ using ChromeNewWindowClientBrowserTest = InProcessBrowserTest;
 // current active window's profile to determine on which profile's desktop we
 // should open a new window.
 //
-// Test is flaky. See https://crbug.com/884118
+// Test is flaky. See https://crbug.com/41413832
 IN_PROC_BROWSER_TEST_F(ChromeNewWindowClientBrowserTest,
                        DISABLED_NewWindowForActiveWindowProfileTest) {
   CreateAndStartUserSession(
       AccountId::FromUserEmailGaiaId(kTestUserName1, kTestUser1GaiaId));
   Profile* profile1 = ProfileManager::GetActiveUserProfile();
-  Browser* browser1 = CreateBrowser(profile1);
+  BrowserWindowInterface* browser1 = CreateBrowser(profile1);
   // The newly created window should be created for the current active profile.
   ChromeNewWindowClient::Get()->NewWindow(
       /*incognito=*/false,
       /*should_trigger_session_restore=*/true);
-  EXPECT_EQ(GetLastActiveBrowser()->profile(), profile1);
+  EXPECT_EQ(GetLastActiveBrowser()->GetProfile(), profile1);
 
   // Login another user and make sure the current active user changes.
   CreateAndStartUserSession(
@@ -86,56 +86,58 @@ IN_PROC_BROWSER_TEST_F(ChromeNewWindowClientBrowserTest,
   Profile* profile2 = ProfileManager::GetActiveUserProfile();
   EXPECT_NE(profile1, profile2);
 
-  Browser* browser2 = CreateBrowser(profile2);
+  BrowserWindowInterface* browser2 = CreateBrowser(profile2);
   // The newly created window should be created for the current active window's
   // profile, which is |profile2|.
   ChromeNewWindowClient::Get()->NewWindow(
       /*incognito=*/false,
       /*should_trigger_session_restore=*/true);
-  EXPECT_EQ(GetLastActiveBrowser()->profile(), profile2);
+  EXPECT_EQ(GetLastActiveBrowser()->GetProfile(), profile2);
 
   // After activating |browser1|, the newly created window should be created
   // against |browser1|'s profile.
-  browser1->window()->Show();
+  browser1->GetWindow()->Show();
   ChromeNewWindowClient::Get()->NewWindow(
       /*incognito=*/false,
       /*should_trigger_session_restore=*/true);
-  EXPECT_EQ(GetLastActiveBrowser()->profile(), profile1);
+  EXPECT_EQ(GetLastActiveBrowser()->GetProfile(), profile1);
 
   // Test for incognito windows.
   // The newly created incognito window should be created against the current
   // active |browser1|'s profile.
-  browser1->window()->Show();
+  browser1->GetWindow()->Show();
   ChromeNewWindowClient::Get()->NewWindow(
       /*incognito=*/true, /*should_trigger_session_restore=*/true);
-  EXPECT_EQ(GetLastActiveBrowser()->profile()->GetOriginalProfile(), profile1);
+  EXPECT_EQ(GetLastActiveBrowser()->GetProfile()->GetOriginalProfile(),
+            profile1);
 
   // The newly created incognito window should be created against the current
   // active |browser2|'s profile.
-  browser2->window()->Show();
+  browser2->GetWindow()->Show();
   ChromeNewWindowClient::Get()->NewWindow(
       /*incognito=*/true, /*should_trigger_session_restore=*/true);
-  EXPECT_EQ(GetLastActiveBrowser()->profile()->GetOriginalProfile(), profile2);
+  EXPECT_EQ(GetLastActiveBrowser()->GetProfile()->GetOriginalProfile(),
+            profile2);
 }
 
 IN_PROC_BROWSER_TEST_F(ChromeNewWindowClientBrowserTest, IncognitoDisabled) {
   Profile* profile = ProfileManager::GetActiveUserProfile();
-  EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
 
   // Disabling incognito mode disables creation of new incognito windows.
   IncognitoModePrefs::SetAvailability(
       profile->GetPrefs(), policy::IncognitoModeAvailability::kDisabled);
   ChromeNewWindowClient::Get()->NewWindow(
       /*incognito=*/true, /*should_trigger_session_restore=*/true);
-  EXPECT_EQ(1u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1u, GlobalBrowserCollection::GetInstance()->GetSize());
 
   // Enabling incognito mode enables creation of new incognito windows.
   IncognitoModePrefs::SetAvailability(
       profile->GetPrefs(), policy::IncognitoModeAvailability::kEnabled);
   ChromeNewWindowClient::Get()->NewWindow(
       /*incognito=*/true, /*should_trigger_session_restore=*/true);
-  EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
-  EXPECT_TRUE(GetLastActiveBrowser()->profile()->IsIncognitoProfile());
+  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
+  EXPECT_TRUE(GetLastActiveBrowser()->GetProfile()->IsIncognitoProfile());
 }
 
 IN_PROC_BROWSER_TEST_F(ChromeNewWindowClientBrowserTest, IncognitoForced) {
@@ -146,20 +148,20 @@ IN_PROC_BROWSER_TEST_F(ChromeNewWindowClientBrowserTest, IncognitoForced) {
       profile->GetPrefs(), policy::IncognitoModeAvailability::kForced);
 
   // Deactivating the current normal profile browser
-  Browser* regular_browser = GetLastActiveBrowser();
-  regular_browser->window()->Deactivate();
+  BrowserWindowInterface* regular_browser = GetLastActiveBrowser();
+  regular_browser->GetWindow()->Deactivate();
 
   // NewTab should open a new browser window in Incognito
   ChromeNewWindowClient::Get()->NewTab();
-  EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
 
-  Browser* incognito_browser = GetLastActiveBrowser();
-  EXPECT_TRUE(incognito_browser->profile()->IsIncognitoProfile());
+  BrowserWindowInterface* incognito_browser = GetLastActiveBrowser();
+  EXPECT_TRUE(incognito_browser->GetProfile()->IsIncognitoProfile());
 
   // After deactivating browsers, NewTab should open a new Incognito Tab only
-  incognito_browser->window()->Deactivate();
-  regular_browser->window()->Deactivate();
+  incognito_browser->GetWindow()->Deactivate();
+  regular_browser->GetWindow()->Deactivate();
   ChromeNewWindowClient::Get()->NewTab();
-  EXPECT_EQ(2u, chrome::GetTotalBrowserCount());
-  EXPECT_EQ(2, incognito_browser->tab_strip_model()->count());
+  EXPECT_EQ(2u, GlobalBrowserCollection::GetInstance()->GetSize());
+  EXPECT_EQ(2, incognito_browser->GetTabStripModel()->count());
 }

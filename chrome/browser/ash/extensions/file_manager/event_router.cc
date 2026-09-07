@@ -8,15 +8,18 @@
 
 #include <cmath>
 #include <memory>
+#include <ranges>
 #include <set>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
+#include "ash/constants/ash_extension_constants.h"
+#include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
+#include "ash/constants/chrome_switches.h"
 #include "ash/webui/file_manager/file_manager_ui.h"
 #include "base/command_line.h"
-#include "base/containers/adapters.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -50,8 +53,7 @@
 #include "chrome/browser/ash/guest_os/guest_os_share_path_factory.h"
 #include "chrome/browser/ash/guest_os/public/guest_os_service.h"
 #include "chrome/browser/ash/guest_os/public/guest_os_service_factory.h"
-#include "chrome/browser/ash/login/lock/screen_locker.h"
-#include "chrome/browser/ash/plugin_vm/plugin_vm_util.h"
+#include "chrome/browser/ash/login/lock/screen_locker_controller.h"
 #include "chrome/browser/ash/policy/dlp/dialogs/files_policy_dialog.h"
 #include "chrome/browser/extensions/api/file_system/chrome_file_system_delegate_ash.h"
 #include "chrome/browser/extensions/extension_service.h"
@@ -59,11 +61,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/ash/login/login_display_host.h"
-#include "chrome/common/chrome_features.h"
-#include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/api/file_manager_private.h"
-#include "chrome/common/extensions/extension_constants.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/disks/disk.h"
 #include "chromeos/ash/components/drivefs/drivefs_host.h"
 #include "chromeos/ash/components/login/login_state/login_state.h"
@@ -289,7 +287,7 @@ bool ShouldShowNotificationForVolume(
   // the screen is locked or running in kiosk app mode and make sure the file
   // manager is opened only for the active user.
   if (ash::LoginDisplayHost::default_host() ||
-      ash::ScreenLocker::default_screen_locker() ||
+      ash::ScreenLockerController::Get().screen_locker() ||
       IsRunningInForcedAppMode() ||
       profile != ProfileManager::GetActiveUserProfile()) {
     return false;
@@ -303,7 +301,7 @@ bool ShouldShowNotificationForVolume(
   // If the disable-default-apps flag is on, the Files app is not opened
   // automatically on device mount not to obstruct the manual test.
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kDisableDefaultApps)) {
+          ash::chrome_switches::kDisableDefaultApps)) {
     return false;
   }
 
@@ -593,8 +591,9 @@ fmp::MountError MountErrorToMountCompletedStatus(ash::MountError error) {
   }
 }
 
-EventRouter::EventRouter(Profile* profile)
-    : pref_change_registrar_(std::make_unique<PrefChangeRegistrar>()),
+EventRouter::EventRouter(PrefService* local_state, Profile* profile)
+    : LocalUserFilesPolicyObserver(local_state),
+      pref_change_registrar_(std::make_unique<PrefChangeRegistrar>()),
       profile_(profile),
       notification_manager_(
           std::make_unique<SystemNotificationManager>(profile)),
@@ -646,7 +645,7 @@ void EventRouter::Shutdown() {
   extensions::ExtensionRegistry::Get(profile_)->RemoveObserver(this);
 
   drivefs_event_router_->Reset();
-  DriveIntegrationService::Observer::Reset();
+  drive_observation_.Reset();
 
   if (VolumeManager* const manager = VolumeManager::Get(profile_)) {
     manager->RemoveObserver(this);
@@ -711,7 +710,10 @@ void EventRouter::ObserveEvents() {
 
   if (DriveIntegrationService* const service =
           DriveIntegrationServiceFactory::FindForProfile(profile_)) {
-    DriveIntegrationService::Observer::Observe(service);
+    if (service != drive_observation_.GetSource()) {
+      drive_observation_.Reset();
+      drive_observation_.Observe(service);
+    }
     drivefs_event_router_->Observe(service);
   }
 
@@ -727,20 +729,19 @@ void EventRouter::ObserveEvents() {
     pref_change_registrar_->Add(drive::prefs::kDisableDriveOverCellular, cb);
     pref_change_registrar_->Add(drive::prefs::kDisableDrive, cb);
     pref_change_registrar_->Add(ash::prefs::kFilesAppTrashEnabled, cb);
-    pref_change_registrar_->Add(prefs::kSearchSuggestEnabled, cb);
-    pref_change_registrar_->Add(prefs::kUse24HourClock, cb);
+    pref_change_registrar_->Add(ash::prefs::kUse24HourClock, cb);
     pref_change_registrar_->Add(arc::prefs::kArcEnabled, cb);
     pref_change_registrar_->Add(arc::prefs::kArcHasAccessToRemovableMedia, cb);
     pref_change_registrar_->Add(ash::prefs::kFilesAppFolderShortcuts, cb);
-    pref_change_registrar_->Add(prefs::kOfficeFileMovedToOneDrive, cb);
-    pref_change_registrar_->Add(prefs::kOfficeFileMovedToGoogleDrive, cb);
+    pref_change_registrar_->Add(ash::prefs::kOfficeFileMovedToOneDrive, cb);
+    pref_change_registrar_->Add(ash::prefs::kOfficeFileMovedToGoogleDrive, cb);
   }
 
   {
     const base::RepeatingClosure cb = base::BindRepeating(
         &EventRouter::BroadcastOnAppsUpdatedEvent, weak_factory_.GetWeakPtr());
-    pref_change_registrar_->Add(prefs::kDefaultTasksByMimeType, cb);
-    pref_change_registrar_->Add(prefs::kDefaultTasksBySuffix, cb);
+    pref_change_registrar_->Add(ash::prefs::kDefaultTasksByMimeType, cb);
+    pref_change_registrar_->Add(ash::prefs::kDefaultTasksBySuffix, cb);
   }
 
   ash::system::TimezoneSettings::GetInstance()->AddObserver(this);
@@ -1052,6 +1053,10 @@ void EventRouter::OnDriveConnectionStatusChanged(
   NotifyDriveConnectionStatusChanged();
 }
 
+void EventRouter::OnDriveIntegrationServiceDestroyed() {
+  drive_observation_.Reset();
+}
+
 // Send crostini share, unshare event.
 void EventRouter::SendCrostiniEvent(fmp::CrostiniEventType event_type,
                                     const std::string& vm_name,
@@ -1178,17 +1183,6 @@ void EventRouter::NotifyDriveConnectionStatusChanged() {
                      FILE_MANAGER_PRIVATE_ON_DRIVE_CONNECTION_STATUS_CHANGED,
                  fmp::OnDriveConnectionStatusChanged::kEventName,
                  fmp::OnDriveConnectionStatusChanged::Create());
-}
-
-void EventRouter::DropFailedPluginVmDirectoryNotShared() {
-  fmp::CrostiniEvent event;
-  event.vm_name = plugin_vm::kPluginVmName;
-  event.event_type =
-      fmp::CrostiniEventType::kDropFailedPluginVmDirectoryNotShared;
-  BroadcastEvent(profile_,
-                 extensions::events::FILE_MANAGER_PRIVATE_ON_CROSTINI_CHANGED,
-                 fmp::OnCrostiniChanged::kEventName,
-                 fmp::OnCrostiniChanged::Create(event));
 }
 
 void EventRouter::OnDriveDialogResult(drivefs::mojom::DialogResult result) {
@@ -1321,7 +1315,8 @@ void EventRouter::OnIOTaskStatus(const io_task::ProgressStatus& status) {
   event_status.item_count = status.sources.size();
 
   // Get the last error occurrence in the `sources`.
-  for (const io_task::EntryStatus& source : base::Reversed(status.sources)) {
+  for (const io_task::EntryStatus& source :
+       std::views::reverse(status.sources)) {
     if (source.error && source.error.value() != base::File::FILE_OK) {
       event_status.error_name = FileErrorToErrorName(source.error.value());
     }
@@ -1329,7 +1324,8 @@ void EventRouter::OnIOTaskStatus(const io_task::ProgressStatus& status) {
   // If we have no error on 'sources', check if an error came from 'outputs'.
   if (status.state == io_task::State::kError &&
       event_status.error_name.empty()) {
-    for (const io_task::EntryStatus& dest : base::Reversed(status.outputs)) {
+    for (const io_task::EntryStatus& dest :
+         std::views::reverse(status.outputs)) {
       if (dest.error && dest.error.value() != base::File::FILE_OK) {
         event_status.error_name = FileErrorToErrorName(dest.error.value());
       }
@@ -1527,7 +1523,7 @@ void EventRouter::BroadcastOnAppsUpdatedEvent() {
 }
 
 void EventRouter::OnMountableGuestsChanged() {
-  auto guests = util::CreateMountableGuestList(profile_);
+  auto guests = util::CreateMountableGuestList(local_state_.get(), profile_);
   BroadcastEvent(
       profile_,
       extensions::events::FILE_MANAGER_PRIVATE_ON_IO_TASK_PROGRESS_STATUS,
@@ -1571,7 +1567,7 @@ void EventRouter::OnConnectionChanged(
 }
 
 void EventRouter::OnLocalUserFilesPolicyChanged() {
-  if (!base::FeatureList::IsEnabled(features::kSkyVault)) {
+  if (!base::FeatureList::IsEnabled(ash::features::kSkyVault)) {
     return;
   }
   OnFileManagerPrefsChanged();

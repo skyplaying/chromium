@@ -11,9 +11,10 @@
 
 #include "base/gtest_prod_util.h"
 #include "base/memory/raw_ptr.h"
+#include "chrome/browser/ui/tabs/tab_data.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
-#include "chrome/browser/ui/tabs/tab_renderer_data.h"
-#include "chrome/browser/ui/views/tabs/hover_card_anchor_target.h"
+#include "chrome/browser/ui/views/tabs/hovercard/hover_card_anchor_target.h"
+#include "chrome/browser/ui/views/tabs/shared/tab_strip_types.h"
 #include "chrome/browser/ui/views/tabs/tab/alert_indicator_button.h"
 #include "chrome/browser/ui/views/tabs/tab_slot_view.h"
 #include "chrome/browser/ui/views/tabs/tab_style_views.h"
@@ -32,29 +33,31 @@
 #include "ui/views/masked_targeter_delegate.h"
 #include "ui/views/view_observer.h"
 
+enum class TabChangeType;
 class TabCloseButton;
 class TabSlotController;
 class TabIcon;
 struct TabSizeInfo;
+class TabTitle;
+class TabStyleViewDelegate;
 
 namespace gfx {
 class Animation;
 class LinearAnimation;
 }  // namespace gfx
 namespace views {
-class Label;
 class View;
 }  // namespace views
 
 namespace tabs {
 enum class TabAlert;
+class TabDataObserver;
+struct TabData;
 }
 
-#if BUILDFLAG(ENABLE_GLIC)
 namespace glic {
 class TabUnderlineView;
 }  // namespace glic
-#endif
 
 ///////////////////////////////////////////////////////////////////////////////
 //
@@ -84,6 +87,8 @@ class Tab : public gfx::AnimationDelegate,
   Tab(const Tab&) = delete;
   Tab& operator=(const Tab&) = delete;
   ~Tab() override;
+
+  bool IsActive() const;
 
   // gfx::AnimationDelegate:
   void AnimationEnded(const gfx::Animation* animation) override;
@@ -123,6 +128,7 @@ class Tab : public gfx::AnimationDelegate,
                        const std::optional<std::string>& name);
 
   TabSlotController* controller() const { return controller_; }
+  const tabs::TabHandle& tab_handle() const { return tab_handle_; }
 
   // Used to set/check whether this Tab is being animated closed.
   void SetClosing(bool closing);
@@ -131,10 +137,12 @@ class Tab : public gfx::AnimationDelegate,
   // Returns the color for the tab's group, if any.
   std::optional<SkColor> GetGroupColor() const;
 
+  const tabs::TabData& data() const { return data_; }
+
   // HoverCardAnchorTarget:
-  bool IsActive() const override;
-  bool IsValid() const override;
-  const TabRendererData& data() const override;
+  bool NeedsToShowThumbnail() const override;
+  bool IsValidHoverCardTarget() const override;
+  views::BubbleAnchor GetAnchor() override;
   views::BubbleBorder::Arrow GetAnchorPosition() const override;
 
   // Notifies the AlertIndicatorButton that the active state of this tab has
@@ -161,21 +169,38 @@ class Tab : public gfx::AnimationDelegate,
 
   // Sets the data this tabs displays. Should only be called after Tab is added
   // to widget hierarchy.
-  void SetData(TabRendererData data);
+  void SetDataForTesting(tabs::TabData data);
 
   // Redraws the loading animation if one is visible. Otherwise, no-op. The
   // `elapsed_time` parameter is shared between tabs and used to keep the
   // throbbers in sync.
   void StepLoadingAnimation(const base::TimeDelta& elapsed_time);
 
-  void CreateFreezingVote(content::WebContents* contents);
-  void ReleaseFreezingVote();
-  bool HasFreezingVote() const { return freezing_vote_.has_value(); }
+  void CreateFreezingVote(FreezingVoteReason reason,
+                          content::WebContents* contents);
+  void ReleaseFreezingVote(FreezingVoteReason reason);
+  bool HasFreezingVote(FreezingVoteReason reason) const;
+  bool HasFreezingVote() const;
 
   bool mouse_hovered() const { return mouse_hovered_; }
 
   void ShowHover(TabStyle::ShowHoverStyle style);
   void HideHover(TabStyle::HideHoverStyle style);
+
+  // Returns the progress (0 to 1) of the hover animation.
+  double GetHoverAnimationValue() const;
+  float GetHoverOpacity() const;
+  bool IsHoverAnimationActive() const;
+  bool IsHovering() const;
+
+  // Returns the z-value of the tab, which should be used to paint them in
+  // ascending order. Return values are in the range (0,
+  // TabStyle::GetMaximumZValue()).
+  float GetZValue() const;
+
+  GlowHoverController* GetHoverControllerForTesting() {
+    return hover_controller_.get();
+  }
 
   // Returns the TabStyle associated with this tab.
   TabStyleViews* tab_style_views() { return tab_style_views_.get(); }
@@ -183,6 +208,9 @@ class Tab : public gfx::AnimationDelegate,
     return tab_style_views_.get();
   }
   const TabStyle* tab_style() const { return tab_style_views_->tab_style(); }
+  bool should_fill_background_tab_color() const {
+    return should_fill_background_tab_color_;
+  }
 
   // Returns the text to show in a tab's tooltip: The contents `title`, followed
   // by a break, followed by a localized string describing the `alert_state`.
@@ -209,11 +237,9 @@ class Tab : public gfx::AnimationDelegate,
 
   void UpdateInsets();
 
-#if BUILDFLAG(ENABLE_GLIC)
   glic::TabUnderlineView* glic_underline() const {
     return glic_tab_underline_view_;
   }
-#endif
 
  private:
   class TabCloseButtonObserver;
@@ -264,28 +290,34 @@ class Tab : public gfx::AnimationDelegate,
 
   void CloseButtonPressed(const ui::Event& event);
 
+  void OnTabDataChanged(TabChangeType tab_change_type,
+                        const tabs::TabData& tab_data);
+
+  static std::unique_ptr<TabStyleViewDelegate> CreateStyleDelegate(
+      const Tab* tab);
+
   // The tab handle associated with the view.
   const tabs::TabHandle tab_handle_;
 
   // The controller, never nullptr.
   const raw_ptr<TabSlotController> controller_;
 
-  TabRendererData data_;
+  tabs::TabData data_;
 
   std::unique_ptr<TabStyleViews> tab_style_views_;
+
+  std::unique_ptr<GlowHoverController> hover_controller_;
 
   // True if the tab is being animated closed.
   bool closing_ = false;
 
-#if BUILDFLAG(ENABLE_GLIC)
   raw_ptr<glic::TabUnderlineView> glic_tab_underline_view_ = nullptr;
-#endif
 
   raw_ptr<TabIcon> icon_ = nullptr;
   raw_ptr<AlertIndicatorButton> alert_indicator_button_ = nullptr;
   raw_ptr<TabCloseButton> close_button_ = nullptr;
 
-  raw_ptr<views::Label> title_;
+  raw_ptr<TabTitle> title_;
   // The title's bounds are animated when switching between showing and hiding
   // the tab's favicon/throbber.
   gfx::Rect start_title_bounds_;
@@ -324,15 +356,27 @@ class Tab : public gfx::AnimationDelegate,
   // Whether the shift key was pressed at the start of the click. Used on mouse
   // up.
   bool shift_pressed_on_mouse_down_ = false;
+  bool should_fill_background_tab_color_ = false;
 
   std::unique_ptr<TabCloseButtonObserver> tab_close_button_observer_;
 
-  // Freezing vote held while the tab is collapsed.
-  std::optional<performance_manager::freezing::FreezingVote> freezing_vote_;
+  std::unique_ptr<tabs::TabDataObserver> tab_data_observer_;
+
+  std::optional<performance_manager::freezing::FreezingVote>& GetFreezingVote(
+      FreezingVoteReason reason);
+
+  // Freezing vote held while the tab's group is collapsed.
+  std::optional<performance_manager::freezing::FreezingVote>
+      collapsed_freezing_vote_;
+  // Freezing vote held while another group is focused in focus mode.
+  std::optional<performance_manager::freezing::FreezingVote>
+      focus_mode_freezing_vote_;
 
   base::CallbackListSubscription paint_as_active_subscription_;
 
   base::CallbackListSubscription root_name_changed_subscription_;
+
+  base::CallbackListSubscription tab_data_change_subscription_;
 
   base::WeakPtrFactory<Tab> weak_ptr_factory_{this};
 };

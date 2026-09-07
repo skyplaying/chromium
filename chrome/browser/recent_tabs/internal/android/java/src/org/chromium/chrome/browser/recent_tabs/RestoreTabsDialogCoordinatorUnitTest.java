@@ -30,7 +30,6 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.profiles.Profile;
@@ -41,11 +40,9 @@ import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modelutil.PropertyModel;
 
 import java.util.ArrayList;
-import java.util.function.Supplier;
 
 /** Unit tests for RestoreTabsDialogCoordinator. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class RestoreTabsDialogCoordinatorUnitTest {
 
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
@@ -68,14 +65,9 @@ public class RestoreTabsDialogCoordinatorUnitTest {
         when(mFaviconHelperJniMock.init()).thenReturn(1L);
         mActivity = Robolectric.buildActivity(Activity.class).setup().get();
 
-        Supplier<ModalDialogManager> modalDialogManagerSupplier = () -> mModalDialogManager;
         mCoordinator =
                 new RestoreTabsDialogCoordinator(
-                        mActivity,
-                        mProfile,
-                        mMediator,
-                        mTabCreatorManager,
-                        modalDialogManagerSupplier);
+                        mActivity, mProfile, mMediator, mTabCreatorManager, mModalDialogManager);
         mModel = mCoordinator.getPropertyModelForTesting();
         mViewFlipperView = mCoordinator.getViewFlipperForTesting();
     }

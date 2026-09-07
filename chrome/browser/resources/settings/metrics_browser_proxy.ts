@@ -41,8 +41,8 @@ export enum PrivacyElementInteractions {
   BLOCK_ALL_THIRD_PARTY_COOKIES = 23,
   // IP_PROTECTION = 24,
   // FINGERPRINTING_PROTECTION = 25,
-  // Max value should be updated whenever new entries are added.
-  MAX_VALUE = 26,
+  // COUNT should be updated whenever new entries are added.
+  COUNT = 26,
 }
 // LINT.ThenChange(/tools/metrics/histograms/metadata/settings/enums.xml:SettingsPrivacyElementInteractions)
 
@@ -55,14 +55,19 @@ export enum PrivacyElementInteractions {
  * Must be kept in sync with SafetyHubCardState in
  * histograms/enums.xml and CardState in safety_hub/safety_hub_browser_proxy.ts.
  */
+// LINT.IfChange(SafetyHubCardState)
 export enum SafetyHubCardState {
   WARNING = 0,
   WEAK = 1,
   INFO = 2,
   SAFE = 3,
-  // Max value should be updated whenever new entries are added.
-  MAX_VALUE = 4,
+  // COUNT should be updated whenever new entries are added.
+  COUNT = 4,
 }
+// LINT.ThenChange(
+//   //chrome/browser/resources/settings/safety_hub/safety_hub_browser_proxy.ts:CardState,
+//   //tools/metrics/histograms/metadata/settings/enums.xml:SafetyHubCardState
+// )
 
 /**
  * Contains all safety check notifications module interactions.
@@ -73,6 +78,7 @@ export enum SafetyHubCardState {
  * Must be kept in sync with the SafetyCheckNotificationsModuleInteractions enum
  * in histograms/enums.xml
  */
+// LINT.IfChange(SafetyCheckNotificationsModuleInteractions)
 export enum SafetyCheckNotificationsModuleInteractions {
   BLOCK = 0,
   BLOCK_ALL = 1,
@@ -85,9 +91,10 @@ export enum SafetyCheckNotificationsModuleInteractions {
   OPEN_REVIEW_UI = 8,
   UNDO_BLOCK_ALL = 9,
   GO_TO_SETTINGS = 10,
-  // Max value should be updated whenever new entries are added.
-  MAX_VALUE = 11,
+  // COUNT should be updated whenever new entries are added.
+  COUNT = 11,
 }
+// LINT.ThenChange(//tools/metrics/histograms/metadata/settings/enums.xml:SafetyCheckNotificationsModuleInteractions)
 
 /**
  * Contains all safety check unused site permissions module interactions.
@@ -99,6 +106,7 @@ export enum SafetyCheckNotificationsModuleInteractions {
  * SafetyCheckUnusedSitePermissionsModuleInteractions enum in
  * histograms/enums.xml
  */
+// LINT.IfChange(SafetyCheckUnusedSitePermissionsModuleInteractions)
 export enum SafetyCheckUnusedSitePermissionsModuleInteractions {
   OPEN_REVIEW_UI = 0,
   ALLOW_AGAIN = 1,
@@ -107,9 +115,10 @@ export enum SafetyCheckUnusedSitePermissionsModuleInteractions {
   UNDO_ACKNOWLEDGE_ALL = 4,
   MINIMIZE = 5,
   GO_TO_SETTINGS = 6,
-  // Max value should be updated whenever new entries are added.
-  MAX_VALUE = 7,
+  // COUNT should be updated whenever new entries are added.
+  COUNT = 7,
 }
+// LINT.ThenChange(//tools/metrics/histograms/metadata/settings/enums.xml:SafetyCheckUnusedSitePermissionsModuleInteractions)
 
 /**
  * Contains all entry points for Safety Hub page.
@@ -120,15 +129,20 @@ export enum SafetyCheckUnusedSitePermissionsModuleInteractions {
  * Must be kept in sync with the SafetyHubEntryPoint enum in
  * histograms/enums.xml and safety_hub/safety_hub_constants.h.
  */
+// LINT.IfChange(SafetyHubEntryPoint)
 export enum SafetyHubEntryPoint {
   PRIVACY_SAFE = 0,
   PRIVACY_WARNING = 1,
   SITE_SETTINGS = 2,
   THREE_DOT_MENU = 3,
   NOTIFICATIONS = 4,
-  // Max value should be updated whenever new entries are added.
-  MAX_VALUE = 5,
+  // COUNT should be updated whenever new entries are added.
+  COUNT = 5,
 }
+// LINT.ThenChange(
+//   //tools/metrics/histograms/metadata/settings/enums.xml:SafetyHubEntryPoint,
+//   //chrome/browser/ui/safety_hub/safety_hub_constants.h:SafetyHubEntryPoint
+// )
 
 /**
  * Contains all Safety Hub modules.
@@ -139,6 +153,7 @@ export enum SafetyHubEntryPoint {
  * Must be kept in sync with the SafetyHubModuleType enum in
  * histograms/enums.xml and safety_hub/safety_hub_constants.h.
  */
+// LINT.IfChange(SafetyHubModuleType)
 export enum SafetyHubModuleType {
   PERMISSIONS = 0,
   NOTIFICATIONS = 1,
@@ -146,9 +161,13 @@ export enum SafetyHubModuleType {
   EXTENSIONS = 3,
   PASSWORDS = 4,
   VERSION = 5,
-  // Max value should be updated whenever new entries are added.
-  MAX_VALUE = 6,
+  // COUNT should be updated whenever new entries are added.
+  COUNT = 6,
 }
+// LINT.ThenChange(
+//   //tools/metrics/histograms/metadata/settings/enums.xml:SafetyHubModuleType,
+//   //chrome/browser/ui/safety_hub/safety_hub_constants.h:SafetyHubModuleType
+// )
 
 /**
  * Contains all safe browsing interactions.
@@ -158,6 +177,7 @@ export enum SafetyHubModuleType {
  *
  * Must be kept in sync with the UserAction in safe_browsing_settings_metrics.h.
  */
+// LINT.IfChange(SafeBrowsingInteractions)
 export enum SafeBrowsingInteractions {
   SAFE_BROWSING_SHOWED = 0,
   SAFE_BROWSING_ENHANCED_PROTECTION_CLICKED = 1,
@@ -167,9 +187,10 @@ export enum SafeBrowsingInteractions {
   SAFE_BROWSING_STANDARD_PROTECTION_EXPAND_ARROW_CLICKED = 5,
   SAFE_BROWSING_DISABLE_SAFE_BROWSING_DIALOG_CONFIRMED = 6,
   SAFE_BROWSING_DISABLE_SAFE_BROWSING_DIALOG_DENIED = 7,
-  // Max value should be updated whenever new entries are added.
-  MAX_VALUE = 8,
+  // COUNT should be updated whenever new entries are added.
+  COUNT = 8,
 }
+// LINT.ThenChange(//components/safe_browsing/core/common/safe_browsing_settings_metrics.h:UserAction)
 
 /**
  * All Privacy guide interactions with metrics.
@@ -180,6 +201,7 @@ export enum SafeBrowsingInteractions {
  * Must be kept in sync with SettingsPrivacyGuideInteractions in emus.xml and
  * PrivacyGuideInteractions in privacy_guide/privacy_guide.h.
  */
+// LINT.IfChange(PrivacyGuideInteractions)
 export enum PrivacyGuideInteractions {
   WELCOME_NEXT_BUTTON = 0,
   MSBB_NEXT_BUTTON = 1,
@@ -193,11 +215,15 @@ export enum PrivacyGuideInteractions {
   PRIVACY_SANDBOX_COMPLETION_LINK = 9,
   SEARCH_SUGGESTIONS_NEXT_BUTTON = 10,
   // TRACKING_PROTECTION_COMPLETION_LINK = 11, // OBSOLETE
-  AD_TOPICS_NEXT_BUTTON = 12,
+  // AD_TOPICS_NEXT_BUTTON = 12, // OBSOLETE
   AI_SETTINGS_COMPLETION_LINK = 13,
-  // Max value should be updated whenever new entries are added.
-  MAX_VALUE = 14,
+  // COUNT should be updated whenever new entries are added.
+  COUNT = 14,
 }
+// LINT.ThenChange(
+//   //chrome/browser/privacy_guide/privacy_guide.h:PrivacyGuideInteractions,
+//   //tools/metrics/histograms/metadata/settings/enums.xml:SettingsPrivacyGuideInteractions
+// )
 
 /**
  * This enum covers all possible combinations of the start and end
@@ -211,6 +237,7 @@ export enum PrivacyGuideInteractions {
  * Must be kept in sync with SettingsPrivacyGuideSettingsStates in enums.xml and
  * PrivacyGuideSettingsStates in privacy_guide/privacy_guide.h.
  */
+// LINT.IfChange(PrivacyGuideSettingsStates)
 export enum PrivacyGuideSettingsStates {
   MSBB_ON_TO_ON = 0,
   MSBB_ON_TO_OFF = 1,
@@ -232,13 +259,17 @@ export enum PrivacyGuideSettingsStates {
   SEARCH_SUGGESTIONS_ON_TO_OFF = 17,
   SEARCH_SUGGESTIONS_OFF_TO_ON = 18,
   SEARCH_SUGGESTIONS_OFF_TO_OFF = 19,
-  AD_TOPICS_ON_TO_ON = 20,
-  AD_TOPICS_ON_TO_OFF = 21,
-  AD_TOPICS_OFF_TO_ON = 22,
-  AD_TOPICS_OFF_TO_OFF = 23,
-  // Max value should be updated whenever new entries are added.
-  MAX_VALUE = 24,
+  // AD_TOPICS_ON_TO_ON = 20, // OBSOLETE
+  // AD_TOPICS_ON_TO_OFF = 21, // OBSOLETE
+  // AD_TOPICS_OFF_TO_ON = 22, // OBSOLETE
+  // AD_TOPICS_OFF_TO_OFF = 23, // OBSOLETE
+  // COUNT should be updated whenever new entries are added.
+  COUNT = 24,
 }
+// LINT.ThenChange(
+//   //chrome/browser/privacy_guide/privacy_guide.h:PrivacyGuideSettingsStates,
+//   //tools/metrics/histograms/metadata/settings/enums.xml:SettingsPrivacyGuideSettingsStates
+// )
 
 /**
  * This enum is used with metrics to record when a step in the privacy guide is
@@ -251,6 +282,7 @@ export enum PrivacyGuideSettingsStates {
  * enums.xml and PrivacyGuideStepsEligibleAndReached in
  * privacy_guide/privacy_guide.h.
  */
+// LINT.IfChange(PrivacyGuideStepsEligibleAndReached)
 export enum PrivacyGuideStepsEligibleAndReached {
   MSBB_ELIGIBLE = 0,
   MSBB_REACHED = 1,
@@ -264,17 +296,22 @@ export enum PrivacyGuideStepsEligibleAndReached {
   COMPLETION_REACHED = 9,
   SEARCH_SUGGESTIONS_ELIGIBLE = 10,
   SEARCH_SUGGESTIONS_REACHED = 11,
-  AD_TOPICS_ELIGIBLE = 12,
-  AD_TOPICS_REACHED = 13,
+  // AD_TOPICS_ELIGIBLE = 12, // OBSOLETE
+  // AD_TOPICS_REACHED = 13, // OBSOLETE
   // Leave this at the end.
   COUNT = 14,
 }
+// LINT.ThenChange(
+//   //chrome/browser/privacy_guide/privacy_guide.h:PrivacyGuideStepsEligibleAndReached,
+//   //tools/metrics/histograms/metadata/settings/enums.xml:SettingsPrivacyGuideStepsEligibleAndReached
+// )
 
 /**
  * Contains the possible delete browsing data action types.
  * This should be kept in sync with the `DeleteBrowsingDataAction` enum in
  * components/browsing_data/core/browsing_data_utils.h
  */
+// LINT.IfChange(DeleteBrowsingDataAction)
 export enum DeleteBrowsingDataAction {
   CLEAR_BROWSING_DATA_DIALOG = 0,
   CLEAR_BROWSING_DATA_ON_EXIT = 1,
@@ -284,8 +321,13 @@ export enum DeleteBrowsingDataAction {
   HISTORY_PAGE_ENTRIES = 5,
   QUICK_DELETE = 6,
   PAGE_INFO_RESET_PERMISSIONS = 7,
-  MAX_VALUE = 8,
+  RWS_DELETE_ALL_DATA = 8,
+  COUNT = 9,
 }
+// LINT.ThenChange(
+//   //components/browsing_data/core/browsing_data_utils.h:DeleteBrowsingDataAction,
+//   //tools/metrics/histograms/metadata/privacy/enums.xml:DeleteBrowsingDataAction
+// )
 
 /**
  * This enum contains the different surfaces of Safety Hub that users can
@@ -295,11 +337,16 @@ export enum DeleteBrowsingDataAction {
  * chrome/browser/ui/safety_hub/safety_hub_constants.h and `SafetyHubSurfaces`
  * in enums.xml
  */
+// LINT.IfChange(SafetyHubSurfaces)
 export enum SafetyHubSurfaces {
   THREE_DOT_MENU = 0,
   SAFETY_HUB_PAGE = 1,
-  MAX_VALUE = 2,
+  COUNT = 2,
 }
+// LINT.ThenChange(
+//   //tools/metrics/histograms/metadata/settings/enums.xml:SafetyHubSurfaces,
+//   //chrome/browser/ui/safety_hub/safety_hub_constants.h:SafetyHubSurfaces
+// )
 
 /**
  * This enum contains the possible user actions for the bulk CVC deletion
@@ -333,11 +380,16 @@ export enum AiPageInteractions {
   HISTORY_SEARCH_CLICK = 0,
   // COMPARE_CLICK = 1, // DEPRECATED
   COMPOSE_CLICK = 2,
-  TAB_ORGANIZATION_CLICK = 3,
+  // TAB_ORGANIZATION_CLICK = 3, // DEPRECATED
   // WALLPAPER_SEARCH_CLICK = 4, // DEPRECATED
   AUTOFILL_AI_CLICK = 5,
   PASSWORD_CHANGE_CLICK = 6,
-  MAX_VALUE = 7,
+  AI_SUGGESTIONS_CLICK = 7,
+  SKILLS_CLICK = 8,
+  INDIGO_CLICK = 9,
+  GOOGLE_SEARCH_AI_MODE_WORKSPACE_CLICK = 10,
+  INLINE_CUE_MENU_CLICK = 11,
+  COUNT = 12,
 }
 // LINT.ThenChange(/tools/metrics/histograms/metadata/settings/enums.xml:SettingsAiPageInteractions)
 
@@ -356,7 +408,7 @@ export enum AiPageHistorySearchInteractions {
   HISTORY_SEARCH_DISABLED = 1,
   FEATURE_LINK_CLICKED = 2,
   LEARN_MORE_LINK_CLICKED = 3,
-  MAX_VALUE = 4,
+  COUNT = 4,
 }
 // LINT.ThenChange(/tools/metrics/histograms/metadata/settings/enums.xml:SettingsAiPageHistorySearchInteractions)
 
@@ -374,25 +426,28 @@ export enum AiPageComposeInteractions {
   LEARN_MORE_LINK_CLICKED = 0,
   COMPOSE_PROACTIVE_NUDGE_ENABLED = 1,
   COMPOSE_PROACTIVE_NUDGE_DISABLED = 2,
-  MAX_VALUE = 3,
+  COUNT = 3,
 }
 // LINT.ThenChange(/tools/metrics/histograms/metadata/settings/enums.xml:SettingsAiPageComposeInteractions)
 
 /**
- * Contains all recorded interactions in the AI Tab Organization settings page.
+ * Contains all recorded interactions in the AI Suggestions settings page.
  *
  * These values are persisted to logs. Entries should not be renumbered and
  * numeric values should never be reused.
  *
- * Must be kept in sync with the SettingsAiPageTabOrganizationInteractions enum
- * in histograms/metadata/settings/enums.xml
+ * Must be kept in sync with the SettingsAiPageSuggestionsInteractions enum in
+ * histograms/metadata/settings/enums.xml
  */
-// LINT.IfChange(AiPageTabOrganizationInteractions)
-export enum AiPageTabOrganizationInteractions {
-  LEARN_MORE_LINK_CLICKED = 0,
-  MAX_VALUE = 1,
+// LINT.IfChange(AiPageSuggestionsInteractions)
+export enum AiPageSuggestionsInteractions {
+  SUGGESTIONS_ENABLED = 0,
+  SUGGESTIONS_DISABLED = 1,
+  LEARN_MORE_LINK_CLICKED = 2,
+  SYNC_SETTINGS_LINK_CLICKED = 3,
+  COUNT = 4,
 }
-// LINT.ThenChange(/tools/metrics/histograms/metadata/settings/enums.xml:SettingsAiPageTabOrganizationInteractions)
+// LINT.ThenChange(/tools/metrics/histograms/metadata/settings/enums.xml:SettingsAiPageAiSuggestionsInteractions)
 
 /**
  * These values are persisted to logs. Entries should not be renumbered and
@@ -407,7 +462,8 @@ export enum AutofillSettingsReferrer {
   SETTINGS_MENU = 1,
   AUTOFILL_AND_PASSWORDS_PAGE = 2,
   // FILLING_FLOW_DROPDOWN = 3,
-  MAX_VALUE = 4,
+  // SETTINGS_SEARCH = 4,
+  COUNT = 5,
 }
 // LINT.ThenChange(/tools/metrics/histograms/metadata/autofill/enums.xml:AutofillSettingsReferrer)
 
@@ -425,7 +481,8 @@ export enum YourSavedInfoDataCategory {
   CONTACT_INFO = 2,
   IDENTITY_DOCS = 3,
   TRAVEL = 4,
-  MAX_VALUE = 5,
+  SHOPPING = 5,
+  COUNT = 6,
 }
 // LINT.ThenChange(/tools/metrics/histograms/metadata/autofill/enums.xml:YourSavedInfoDataCategory)
 
@@ -453,7 +510,9 @@ export enum YourSavedInfoDataChip {
   FLIGHT_RESERVATIONS = 10,
   TRAVEL_INFO = 11,
   VEHICLES = 12,
-  MAX_VALUE = 13,
+  SHIPMENTS = 13,
+  ORDERS = 14,
+  COUNT = 15,
 }
 // LINT.ThenChange(/tools/metrics/histograms/metadata/autofill/enums.xml:YourSavedInfoDataChip)
 
@@ -469,9 +528,28 @@ export enum YourSavedInfoRelatedService {
   GOOGLE_PASSWORD_MANAGER = 0,
   GOOGLE_WALLET = 1,
   GOOGLE_ACCOUNT = 2,
-  MAX_VALUE = 3,
+  COUNT = 3,
 }
 // LINT.ThenChange(/tools/metrics/histograms/metadata/autofill/enums.xml:YourSavedInfoRelatedService)
+
+// LINT.IfChange(SuggestionsFromGeminiEntryPoint)
+export enum SuggestionsFromGeminiEntryPoint {
+  YOUR_SAVED_INFO = 0,
+  TRAVEL = 1,
+  SHOPPING = 2,
+  IDENTITY_DOCS = 3,
+  COUNT = 4,
+}
+// LINT.ThenChange(/tools/metrics/histograms/metadata/autofill/enums.xml:SuggestionsFromGeminiEntryPoint)
+
+// LINT.IfChange(SuggestionsFromGeminiAction)
+export enum SuggestionsFromGeminiAction {
+  MANAGE_CONNECTED_APPS_CLICK = 0,
+  TOGGLE_ON = 1,
+  TOGGLE_OFF = 2,
+  COUNT = 3,
+}
+// LINT.ThenChange(/tools/metrics/histograms/metadata/autofill/enums.xml:SuggestionsFromGeminiAction)
 
 export interface MetricsBrowserProxy {
   /**
@@ -566,6 +644,19 @@ export interface MetricsBrowserProxy {
       void;
 
   /**
+   * Records a click on the Suggestions from Gemini link across Your saved info
+   * and category subpages with a corresponding metric and user action.
+   */
+  recordSuggestionsFromGeminiEntryPointClick(
+      entryPoint: SuggestionsFromGeminiEntryPoint): void;
+
+  /**
+   * Records an action triggered inside the Suggestions from Gemini subpage
+   * with a corresponding metric and user action.
+   */
+  recordSuggestionsFromGeminiAction(action: SuggestionsFromGeminiAction): void;
+
+  /**
    * Helper function that calls recordHistogram for the
    * Settings.PrivacyGuide.NextNavigation histogram
    */
@@ -649,10 +740,10 @@ export interface MetricsBrowserProxy {
 
   /**
    * Helper function that calls recordHistogram for the
-   * Settings.AiPage.TabOrganization.Interactions histogram
+   * Settings.AiPage.Suggestions.Interactions histogram
    */
-  recordAiPageTabOrganizationInteractions(
-      interaction: AiPageTabOrganizationInteractions): void;
+  recordAiPageSuggestionsInteractions(
+      interaction: AiPageSuggestionsInteractions): void;
 
   /**
    * Records a referrer to one of Autofill settings pages.
@@ -680,6 +771,8 @@ export interface MetricsBrowserProxy {
       void;
 }
 
+export const SAFETY_HUB_SUGGESTIONS_MAX_VALUE = 98;
+
 export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
   recordAction(action: string) {
     chrome.send('metricsHandler:recordAction', [action]);
@@ -696,14 +789,14 @@ export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
       histogramName: string, state: SafetyHubCardState) {
     chrome.send(
         'metricsHandler:recordInHistogram',
-        [histogramName, state, SafetyHubCardState.MAX_VALUE]);
+        [histogramName, state, SafetyHubCardState.COUNT]);
   }
 
   recordSafetyHubEntryPointShown(page: SafetyHubEntryPoint) {
     chrome.send('metricsHandler:recordInHistogram', [
       'Settings.SafetyHub.EntryPointImpression',
       page,
-      SafetyHubEntryPoint.MAX_VALUE,
+      SafetyHubEntryPoint.COUNT,
     ]);
   }
 
@@ -711,7 +804,7 @@ export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
     chrome.send('metricsHandler:recordInHistogram', [
       'Settings.SafetyHub.EntryPointInteraction',
       page,
-      SafetyHubEntryPoint.MAX_VALUE,
+      SafetyHubEntryPoint.COUNT,
     ]);
   }
 
@@ -719,7 +812,7 @@ export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
     chrome.send('metricsHandler:recordInHistogram', [
       'Settings.SafetyHub.DashboardWarning',
       module,
-      SafetyHubModuleType.MAX_VALUE,
+      SafetyHubModuleType.COUNT,
     ]);
   }
 
@@ -735,7 +828,7 @@ export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
     chrome.send('metricsHandler:recordInHistogram', [
       'Settings.SafetyHub.NotificationPermissionsModule.Interactions',
       interaction,
-      SafetyCheckNotificationsModuleInteractions.MAX_VALUE,
+      SafetyCheckNotificationsModuleInteractions.COUNT,
     ]);
   }
 
@@ -743,8 +836,8 @@ export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
       suggestions: number) {
     chrome.send('metricsHandler:recordInHistogram', [
       'Settings.SafetyHub.NotificationPermissionsModule.ListCount',
-      suggestions,
-      99 /*max value for Notification Permissions suggestions*/,
+      Math.min(suggestions, SAFETY_HUB_SUGGESTIONS_MAX_VALUE),
+      SAFETY_HUB_SUGGESTIONS_MAX_VALUE + 1,
     ]);
   }
 
@@ -753,7 +846,7 @@ export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
     chrome.send('metricsHandler:recordInHistogram', [
       'Settings.SafetyHub.UnusedSitePermissionsModule.Interactions',
       interaction,
-      SafetyCheckUnusedSitePermissionsModuleInteractions.MAX_VALUE,
+      SafetyCheckUnusedSitePermissionsModuleInteractions.COUNT,
     ]);
   }
 
@@ -762,7 +855,7 @@ export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
     chrome.send('metricsHandler:recordInHistogram', [
       'Settings.SafetyHub.AbusiveNotificationPermissionRevocation.Interactions',
       interaction,
-      SafetyCheckUnusedSitePermissionsModuleInteractions.MAX_VALUE,
+      SafetyCheckUnusedSitePermissionsModuleInteractions.COUNT,
     ]);
   }
 
@@ -770,8 +863,8 @@ export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
       suggestions: number) {
     chrome.send('metricsHandler:recordInHistogram', [
       'Settings.SafetyHub.UnusedSitePermissionsModule.ListCount',
-      suggestions,
-      99 /*max value for Unused Site Permissions suggestions*/,
+      Math.min(suggestions, SAFETY_HUB_SUGGESTIONS_MAX_VALUE),
+      SAFETY_HUB_SUGGESTIONS_MAX_VALUE + 1,
     ]);
   }
 
@@ -779,7 +872,7 @@ export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
     chrome.send('metricsHandler:recordInHistogram', [
       'Settings.PrivacyElementInteractions',
       interaction,
-      PrivacyElementInteractions.MAX_VALUE,
+      PrivacyElementInteractions.COUNT,
     ]);
   }
 
@@ -790,7 +883,7 @@ export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
     chrome.send('metricsHandler:recordInHistogram', [
       'SafeBrowsing.Settings.UserAction.Default',
       interaction,
-      SafeBrowsingInteractions.MAX_VALUE,
+      SafeBrowsingInteractions.COUNT,
     ]);
   }
 
@@ -799,7 +892,7 @@ export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
     chrome.send('metricsHandler:recordInHistogram', [
       'Settings.PrivacyGuide.NextNavigation',
       interaction,
-      PrivacyGuideInteractions.MAX_VALUE,
+      PrivacyGuideInteractions.COUNT,
     ]);
   }
 
@@ -807,7 +900,7 @@ export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
     chrome.send('metricsHandler:recordInHistogram', [
       'Settings.PrivacyGuide.EntryExit',
       interaction,
-      PrivacyGuideInteractions.MAX_VALUE,
+      PrivacyGuideInteractions.COUNT,
     ]);
   }
 
@@ -815,13 +908,14 @@ export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
     chrome.send('metricsHandler:recordInHistogram', [
       'Settings.PrivacyGuide.SettingsStates',
       state,
-      PrivacyGuideSettingsStates.MAX_VALUE,
+      PrivacyGuideSettingsStates.COUNT,
     ]);
   }
 
   recordPrivacyGuideFlowLengthHistogram(steps: number) {
     chrome.send('metricsHandler:recordInHistogram', [
-      'Settings.PrivacyGuide.FlowLength', steps,
+      'Settings.PrivacyGuide.FlowLength',
+      steps,
       5, /*max number of the settings related steps in privacy guide is 4*/
     ]);
   }
@@ -839,7 +933,7 @@ export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
     chrome.send('metricsHandler:recordInHistogram', [
       'Privacy.DeleteBrowsingData.Action',
       action,
-      DeleteBrowsingDataAction.MAX_VALUE,
+      DeleteBrowsingDataAction.COUNT,
     ]);
   }
 
@@ -847,7 +941,7 @@ export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
     chrome.send('metricsHandler:recordInHistogram', [
       'Settings.SafetyHub.Impression',
       surface,
-      SafetyHubSurfaces.MAX_VALUE,
+      SafetyHubSurfaces.COUNT,
     ]);
   }
 
@@ -855,7 +949,7 @@ export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
     chrome.send('metricsHandler:recordInHistogram', [
       'Settings.SafetyHub.Interaction',
       surface,
-      SafetyHubSurfaces.MAX_VALUE,
+      SafetyHubSurfaces.COUNT,
     ]);
   }
 
@@ -870,7 +964,7 @@ export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
     chrome.send('metricsHandler:recordInHistogram', [
       'Settings.AiPage.Interactions',
       interaction,
-      AiPageInteractions.MAX_VALUE,
+      AiPageInteractions.COUNT,
     ]);
   }
 
@@ -879,7 +973,7 @@ export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
     chrome.send('metricsHandler:recordInHistogram', [
       'Settings.AiPage.HistorySearch.Interactions',
       interaction,
-      AiPageHistorySearchInteractions.MAX_VALUE,
+      AiPageHistorySearchInteractions.COUNT,
     ]);
   }
 
@@ -888,16 +982,16 @@ export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
     chrome.send('metricsHandler:recordInHistogram', [
       'Settings.AiPage.Compose.Interactions',
       interaction,
-      AiPageComposeInteractions.MAX_VALUE,
+      AiPageComposeInteractions.COUNT,
     ]);
   }
 
-  recordAiPageTabOrganizationInteractions(
-      interaction: AiPageTabOrganizationInteractions): void {
+  recordAiPageSuggestionsInteractions(
+      interaction: AiPageSuggestionsInteractions): void {
     chrome.send('metricsHandler:recordInHistogram', [
-      'Settings.AiPage.TabOrganization.Interactions',
+      'Settings.AiPage.Suggestions.Interactions',
       interaction,
-      AiPageTabOrganizationInteractions.MAX_VALUE,
+      AiPageSuggestionsInteractions.COUNT,
     ]);
   }
 
@@ -905,16 +999,16 @@ export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
       histogramName: string, referrer: AutofillSettingsReferrer) {
     chrome.send(
         'metricsHandler:recordInHistogram',
-        [histogramName, referrer, AutofillSettingsReferrer.MAX_VALUE]);
+        [histogramName, referrer, AutofillSettingsReferrer.COUNT]);
   }
 
   recordYourSavedInfoCategoryClick(category: YourSavedInfoDataCategory) {
     chrome.send('metricsHandler:recordInHistogram', [
       'Autofill.YourSavedInfoSettingsPage.CategoryLinkClick',
       category,
-      YourSavedInfoDataCategory.MAX_VALUE,
+      YourSavedInfoDataCategory.COUNT,
     ]);
-    if (category !== YourSavedInfoDataCategory.MAX_VALUE) {
+    if (category !== YourSavedInfoDataCategory.COUNT) {
       this.recordAction(`Settings.YourSavedInfo.CategoryClick.${
           YourSavedInfoDataCategory[category]}`);
     }
@@ -924,9 +1018,9 @@ export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
     chrome.send('metricsHandler:recordInHistogram', [
       'Autofill.YourSavedInfoSettingsPage.DataChipClick',
       chip,
-      YourSavedInfoDataChip.MAX_VALUE,
+      YourSavedInfoDataChip.COUNT,
     ]);
-    if (chip !== YourSavedInfoDataChip.MAX_VALUE) {
+    if (chip !== YourSavedInfoDataChip.COUNT) {
       this.recordAction(
           `Settings.YourSavedInfo.ChipClick.${YourSavedInfoDataChip[chip]}`);
     }
@@ -936,11 +1030,52 @@ export class MetricsBrowserProxyImpl implements MetricsBrowserProxy {
     chrome.send('metricsHandler:recordInHistogram', [
       'Autofill.YourSavedInfoSettingsPage.RelatedServiceLinkClick',
       service,
-      YourSavedInfoRelatedService.MAX_VALUE,
+      YourSavedInfoRelatedService.COUNT,
     ]);
-    if (service !== YourSavedInfoRelatedService.MAX_VALUE) {
+    if (service !== YourSavedInfoRelatedService.COUNT) {
       this.recordAction(`Settings.YourSavedInfo.RelatedServiceClick.${
           YourSavedInfoRelatedService[service]}`);
+    }
+  }
+
+  recordSuggestionsFromGeminiEntryPointClick(
+      entryPoint: SuggestionsFromGeminiEntryPoint) {
+    chrome.send('metricsHandler:recordInHistogram', [
+      'Autofill.YourSavedInfoSettingsPage.SuggestionsFromGeminiLinkClick',
+      entryPoint,
+      SuggestionsFromGeminiEntryPoint.COUNT,
+    ]);
+    if (entryPoint !== SuggestionsFromGeminiEntryPoint.COUNT) {
+      const actionMap = {
+        [SuggestionsFromGeminiEntryPoint.YOUR_SAVED_INFO]:
+            'PersonalContext.Settings.EntryPoint.AutofillAndPasswordsSettings',
+        [SuggestionsFromGeminiEntryPoint.TRAVEL]:
+            'PersonalContext.Settings.EntryPoint.TravelSettings',
+        [SuggestionsFromGeminiEntryPoint.SHOPPING]:
+            'PersonalContext.Settings.EntryPoint.ShoppingSettings',
+        [SuggestionsFromGeminiEntryPoint.IDENTITY_DOCS]:
+            'PersonalContext.Settings.EntryPoint.IdentityDocsSettings',
+      };
+      this.recordAction(actionMap[entryPoint]);
+    }
+  }
+
+  recordSuggestionsFromGeminiAction(action: SuggestionsFromGeminiAction) {
+    chrome.send('metricsHandler:recordInHistogram', [
+      'Autofill.YourSavedInfoSettingsPage.SuggestionsFromGeminiAction',
+      action,
+      SuggestionsFromGeminiAction.COUNT,
+    ]);
+    if (action !== SuggestionsFromGeminiAction.COUNT) {
+      const actionMap = {
+        [SuggestionsFromGeminiAction.MANAGE_CONNECTED_APPS_CLICK]:
+            'PersonalContext.Settings.ManageConnectedAppsClick',
+        [SuggestionsFromGeminiAction.TOGGLE_ON]:
+            'PersonalContext.Settings.ToggledOn',
+        [SuggestionsFromGeminiAction.TOGGLE_OFF]:
+            'PersonalContext.Settings.ToggledOff',
+      };
+      this.recordAction(actionMap[action]);
     }
   }
 

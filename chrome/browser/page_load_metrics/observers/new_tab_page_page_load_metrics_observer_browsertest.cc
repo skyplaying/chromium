@@ -5,7 +5,7 @@
 #include "chrome/browser/page_load_metrics/observers/new_tab_page_page_load_metrics_observer.h"
 
 #include "base/test/metrics/histogram_tester.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/chrome_test_utils.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -41,14 +41,14 @@ IN_PROC_BROWSER_TEST_F(NewTabPagePageLoadMetricsBrowserTest,
 
   // Navigate to New Tab Page.
   ASSERT_TRUE(content::NavigateToURL(GetActiveWebContents(),
-                                     GURL(chrome::kChromeUINewTabPageURL)));
+                                     chrome::ChromeUINewTabPageURLAsGURL()));
   metrics_waiter.Wait();
 
   // LCP is only collected at the end of page lifecycle. Navigate to flush.
   ASSERT_TRUE(content::NavigateToURL(GetActiveWebContents(),
                                      GURL(url::kAboutBlankURL)));
 
-  histogram_tester.ExpectTotalCount("NewTabPage.LoadTime.FirstContentfulPaint",
+  histogram_tester.ExpectTotalCount("NewTabPage.LoadTime.FirstContentfulPaint2",
                                     1);
   histogram_tester.ExpectTotalCount(
       "NewTabPage.LoadTime.LargestContentfulPaint", 1);

@@ -99,4 +99,27 @@ void VariationsServiceClient::ExitWithMessage(const std::string& message) {
   exit(1);
 }
 
+std::optional<base::flat_set<std::string>>
+VariationsServiceClient::GetAllProfilesKeys(PrefService* local_state) {
+  return std::nullopt;
+}
+
+bool VariationsServiceClient::IsChromeEnterpriseCoreSupported() {
+  return false;
+}
+
+bool VariationsServiceClient::EnableSignatureVerificationOnLoad() {
+  // Skip the signature verification on load on Android and iOS,
+  // because mobile operating systems have very strong per-app disk space
+  // isolation, not allowing unprivileged apps into app-private space.
+  // Since the variations seed is stored in this private per-app storage, we do
+  // not need to perform signature verification once on every startup.
+  // Android WebView overrides this method to return true.
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+  return false;
+#else
+  return true;
+#endif
+}
+
 }  // namespace variations

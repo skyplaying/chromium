@@ -8,13 +8,15 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
+import android.view.InputDevice;
 import android.view.MotionEvent;
 
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.MockitoAnnotations;
-import org.robolectric.annotation.Config;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.MathUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -25,13 +27,14 @@ import java.util.List;
 
 /** Unit tests for the {@link BottomSheetSwipeDetector} class. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public final class BottomSheetSwipeDetectorTest {
     /** The minimum height of the bottom sheet. */
     private static final float MIN_SHEET_OFFSET = 100;
 
     /** An arbitrary screen height. */
     private static final float SCREEN_HEIGHT = 1000;
+
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     /** An instance of the mock swipable sheet. */
     private MockSwipeableBottomSheet mSwipeableBottomSheet;
@@ -52,6 +55,9 @@ public final class BottomSheetSwipeDetectorTest {
 
         /** Whether the sheet should currently be animating. */
         public boolean shouldBeAnimating;
+
+        /** Whether the ui is LFF. */
+        public boolean isLargeFormFactor;
 
         /** The current offset of the bottom sheet. */
         private float mCurrentSheetOffset;
@@ -104,11 +110,15 @@ public final class BottomSheetSwipeDetectorTest {
             mCurrentSheetOffset = offset;
             shouldBeAnimating = shouldAnimate;
         }
+
+        @Override
+        public boolean isLargeFormFactorUiEnabled() {
+            return isLargeFormFactor;
+        }
     }
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
 
         mSwipeableBottomSheet = new MockSwipeableBottomSheet(MIN_SHEET_OFFSET, SCREEN_HEIGHT);
         mSwipeDetector = new BottomSheetSwipeDetector(null, mSwipeableBottomSheet);
@@ -370,5 +380,43 @@ public final class BottomSheetSwipeDetectorTest {
                 MIN_SHEET_OFFSET,
                 mSwipeableBottomSheet.getCurrentOffsetPx(),
                 MathUtils.EPSILON);
+    }
+
+    @Test
+    public void testResizeSheet_MouseDragging_LargeFormFactor_Ignored() {
+        mSwipeableBottomSheet.isLargeFormFactor = true;
+        assertEquals(
+                "The sheet should be at the minimum state.",
+                MIN_SHEET_OFFSET,
+                mSwipeableBottomSheet.getCurrentOffsetPx(),
+                MathUtils.EPSILON);
+        final float halfScreenHeight = SCREEN_HEIGHT / 2f;
+
+        // Simulate pushing down on the swipe handle and dragging mouse to resize sheet
+        float x1 = 0;
+        float y1 = SCREEN_HEIGHT;
+        float x2 = 0;
+        float y2 = halfScreenHeight;
+
+        MotionEvent down = MotionEvent.obtain(0, 0, MotionEvent.ACTION_DOWN, x1, y1, 0);
+        down.setSource(InputDevice.SOURCE_MOUSE);
+        mSwipeDetector.onTouchEvent(down);
+
+        MotionEvent move = MotionEvent.obtain(0, 0, MotionEvent.ACTION_MOVE, x2, y2, 0);
+        move.setSource(InputDevice.SOURCE_MOUSE);
+        mSwipeDetector.onTouchEvent(move);
+
+        MotionEvent up = MotionEvent.obtain(0, 0, MotionEvent.ACTION_UP, x2, y2, 0);
+        up.setSource(InputDevice.SOURCE_MOUSE);
+        mSwipeDetector.onTouchEvent(up);
+
+        assertEquals(
+                "The sheet should still be at minimum height since mouse events are ignored on"
+                        + " large form factor.",
+                MIN_SHEET_OFFSET,
+                mSwipeableBottomSheet.getCurrentOffsetPx(),
+                MathUtils.EPSILON);
+        assertFalse(
+                "The sheet should not be set to animate.", mSwipeableBottomSheet.shouldBeAnimating);
     }
 }

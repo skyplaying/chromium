@@ -30,9 +30,9 @@ TEST(WeakResultTest, BasicOperations) {
 }
 
 TEST(WeakResultTest, UTF8) {
-  AtomicString foo = AtomicString::FromUTF8("foo");
-  AtomicString foo_latin1 = AtomicString::FromUTF8("foó");
-  AtomicString foo_unicode = AtomicString::FromUTF8("foo😀");
+  AtomicString foo = AtomicString::FromUtf8("foo");
+  AtomicString foo_latin1 = AtomicString::FromUtf8("foó");
+  AtomicString foo_unicode = AtomicString::FromUtf8("foo😀");
 
   EXPECT_EQ(foo.length(), 3u);
   EXPECT_EQ(foo_latin1.length(), 3u);
@@ -61,26 +61,26 @@ TEST(WeakResultTest, UTF8) {
 
   AtomicStringTable::WeakResult result_latin1 =
       AtomicStringTable::Instance().WeakFindLowercase(
-          AtomicString::FromUTF8("Foó"));
+          AtomicString::FromUtf8("Foó"));
   EXPECT_FALSE(result_latin1.IsNull());
 
   // Only ASCII is lowercased.
   result_latin1 = AtomicStringTable::Instance().WeakFindLowercase(
-      AtomicString::FromUTF8("FoÓ"));
+      AtomicString::FromUtf8("FoÓ"));
   EXPECT_TRUE(result_latin1.IsNull());
 
   AtomicStringTable::WeakResult result_unicode =
       AtomicStringTable::Instance().WeakFindLowercase(
-          AtomicString::FromUTF8("foO😀"));
+          AtomicString::FromUtf8("foO😀"));
   EXPECT_FALSE(result_unicode.IsNull());
 
   result_unicode = AtomicStringTable::Instance().WeakFindLowercase(
-      AtomicString::FromUTF8("Goo😀"));
+      AtomicString::FromUtf8("Goo😀"));
   EXPECT_TRUE(result_unicode.IsNull());
 }
 
 TEST(AtomicStringTableTest, SmallStringCacheKeepAlive) {
-  // Small strings (length <= 7) are kept alive by the SmallStringCache.
+  // Small strings (length <= 16) are kept alive by the SmallStringCache.
   // The cache holds a reference to the string, preventing it from being
   // removed from the table even when all external references are dropped.
   const char* kSmallString = "smcache";
@@ -98,8 +98,8 @@ TEST(AtomicStringTableTest, SmallStringCacheKeepAlive) {
   EXPECT_FALSE(
       AtomicStringTable::Instance().WeakFindForTesting(kSmallString).IsNull());
 
-  // Large strings (length > 7) are NOT kept alive by the SmallStringCache.
-  const char* kLargeString = "largenotcached";
+  // Large strings (length > 16) are NOT kept alive by the SmallStringCache.
+  const char* kLargeString = "largenotcachedstring17";
   {
     EXPECT_TRUE(AtomicStringTable::Instance()
                     .WeakFindForTesting(kLargeString)
@@ -108,7 +108,7 @@ TEST(AtomicStringTableTest, SmallStringCacheKeepAlive) {
     EXPECT_FALSE(AtomicStringTable::Instance()
                      .WeakFindForTesting(kLargeString)
                      .IsNull());
-    EXPECT_GT(large.length(), 7u);
+    EXPECT_GT(large.length(), 16u);
   }
   // After destroying 'large', it should be removed from the table.
   EXPECT_TRUE(
@@ -116,7 +116,7 @@ TEST(AtomicStringTableTest, SmallStringCacheKeepAlive) {
 }
 
 TEST(AtomicStringTableTest, EmbeddedNulls) {
-  // Small strings (<= 7 chars) are stored in the SmallStringCache.
+  // Small strings (<= 16 chars) are stored in the SmallStringCache.
   // They must correctly handle embedded nulls and not confuse them with
   // shorter strings or other strings that might hash similarly.
 

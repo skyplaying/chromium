@@ -15,31 +15,29 @@ include_rules = [
   # individually. Other dependencies within //chrome are listed on a per-
   # directory basis. See //tools/chromeos/gen_deps.sh for details.
   "+chrome/browser/ash/extensions/file_manager",
-  "+chrome/browser/ash/fileapi",
   "+chrome/browser/ash/file_manager",
+  "+chrome/browser/ash/fileapi",
   "+chrome/browser/ash/login/users",
   "+chrome/browser/ash/profiles",
   "+chrome/browser/chromeos/drivefs",
   "+chrome/browser/download",
   "+chrome/browser/net",
   "+chrome/browser/notifications",
-  "+chrome/browser/policy",
   "+chrome/browser/profiles",
-  "+chrome/browser/signin",
-  "+chrome/browser/ui/browser.h",
   "+chrome/common/chrome_constants.h",
   "+chrome/common/chrome_paths.h",
   "+chrome/common/chrome_paths_internal.h",
-  "+chrome/common/pref_names.h",
   "+chrome/test/base",
 ]
 
 specific_include_rules = {
   "drive_integration_service_factory\\.cc": [
     "+chrome/browser/browser_process.h",
+    "+chrome/browser/signin/identity_manager_factory.h",
   ],
 
   "drive_integration_service_browser_test_base\\.cc": [
     "+chrome/browser/browser_process.h",
+    "+chrome/browser/signin/identity_manager_factory.h",
   ],
 }

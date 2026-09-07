@@ -274,6 +274,15 @@
   <message name="IDS_EXTENSIONS_ITEM_DETAILS" desc="The text on the button to show more details for a given extension.">
     Details
   </message>
+  <message name="IDS_EXTENSIONS_ITEM_RATE_IT" desc="The text on the link allowing the user to rate an extension on the Chrome Web Store.">
+    Rate it
+  </message>
+  <message name="IDS_EXTENSIONS_ITEM_DISABLED_BY_EXTENSION" desc="The text to indicate that an extension was disabled by another, known extension.">
+    Extension disabled by <ph name="EXTENSION_NAME">$1<ex>AdBlock</ex></ph>
+  </message>
+  <message name="IDS_EXTENSIONS_ITEM_DISABLED_BY_EXTENSION_GENERIC" desc="The text to indicate that an extension was disabled by another extension, but that specific extension is not known.">
+    Extension disabled by another extension
+  </message>
   <message name="IDS_EXTENSIONS_DETAILS_BACK_BUTTON_ARIA_LABEL" desc="Text read by screen readers when focusing on the back button on details page. If the back button is activated, it will navigate to the previous page. This text will only be announced by screen readers and will not be visible in the UI." is_accessibility_with_no_ui="true">
     <ph name="SUBPAGE_TITLE">$1<ex>Google Docs</ex></ph> details page back button
   </message>
@@ -511,6 +520,12 @@
   <message name="IDS_EXTENSIONS_SHORTCUT_SCOPE_GLOBAL" desc="The label to indicate that a shortcut will be triggerable globally (including outside of the Chrome application).">
     Global
   </message>
+  <message name="IDS_EXTENSIONS_SHORTCUT_INPUT_LABEL" desc="The visual text label above the shortcut input field.">
+    Type a shortcut
+  </message>
+  <message name="IDS_EXTENSIONS_SHORTCUT_SCOPE" desc="The visual text label above the shortcut scope dropdown.">
+    Scope
+  </message>
   <message name="IDS_EXTENSIONS_APPS_TITLE" desc="The text displayed in the sidebar to go to the apps section of the page.">
     Chrome Apps
   </message>
@@ -535,8 +550,8 @@
   <message name="IDS_EXTENSIONS_SIDEBAR_DISCOVER_MORE" desc="The text displayed in the sidebar of the chrome://extensions page to open the Chrome Web Store to get more extensions.">
     Discover more extensions and themes on the <ph name="BEGIN_LINK">&lt;a target="_blank" href="$1"&gt;</ph>Chrome Web Store<ph name="END_LINK">&lt;/a&gt; <ex>&lt;/a&gt;</ex> </ph>
   </message>
-  <message name="IDS_EXTENSIONS_WHATS_NEW_SIDEBAR_PROMO" desc="The text displayed in the sidebar of the chrome://extensions page to promote the extension documenation, for when the user is in developer mode.">
-    Developing extensions? Stay up to date on <ph name="BEGIN_LINK">&lt;a target="_blank" href="$1"&gt;</ph>What's New<ph name="END_LINK">&lt;/a&gt;</ph> with Chrome Extension developer documentation.
+  <message name="IDS_EXTENSIONS_MODERN_WEB_GUIDANCE_PROMO" desc="The promotional text displayed in the sidebar of the chrome://extensions page when Developer Mode is enabled. It encourages developers to download the Chrome Extensions and Chrome Web Store skill for their AI coding agents to get latest API updates and best practices.">
+    Using AI coding agents to build extensions? Install the <ph name="BEGIN_LINK">&lt;a target="_blank" href="$1"&gt;</ph><ph name="CHROME_EXTENSIONS">Chrome Extensions<ex>Chrome Extensions</ex></ph> and <ph name="WEB_STORE_SKILL">Chrome Web Store skill<ex>Chrome Web Store skill</ex></ph><ph name="END_LINK">&lt;/a&gt;</ph> to teach your coding agent the latest API updates and best practices.
   </message>
   <message name="IDS_EXTENSIONS_SIDEBAR_KEYBOARD_SHORTCUTS" desc="The text for the link to manage keyboard shortcuts for extensions.">
     Keyboard shortcuts
@@ -567,6 +582,9 @@
   </message>
   <message name="IDS_EXTENSIONS_SECTION_HEADER" desc="The label for the extensions section in chrome://extensions.">
     All Extensions
+  </message>
+  <message name="IDS_EXTENSIONS_PIN_NEW_EXTENSIONS" desc="The label for the toggle to pin new extensions in chrome://extensions.">
+    Pin new extensions to Toolbar
   </message>
   <!-- Extension Safety Check Review Panel strings -->
   <message name="IDS_EXTENSIONS_SAFETY_HUB_HEADER" desc="Name of a section in chrome://extensions that gives users an overview over their safety status and where users can take action to improve their safety.">
@@ -658,9 +676,6 @@
   </message>
   <message name="IDS_EXTENSIONS_MV2_DEPRECATION_PANEL_FIND_ALTERNATIVE_BUTTON" desc="The label for a button to find an alternative extension in the manifest v2 deprecation panel">
     Find alternative
-  </message>
-  <message name="IDS_EXTENSIONS_MV2_DEPRECATION_PANEL_KEEP_FOR_NOW_BUTTON" desc="The label for a button to dismiss the deprecation warning for a given extension, keeping it installed for the time being.">
-    Keep for now
   </message>
   <message name="IDS_EXTENSIONS_MV2_DEPRECATION_PANEL_ACTION_MENU_BUTTON_LABEL" desc="The (accessible) label for the button whichs opens an extension's action menu.">
     More options for <ph name="EXTENSION_NAME">$1<ex>Google Translate</ex></ph>

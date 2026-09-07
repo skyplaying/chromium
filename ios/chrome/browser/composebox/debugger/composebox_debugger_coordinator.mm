@@ -40,10 +40,67 @@ const CGSize kOptionsButtonSize = {80.0f, 40.0f};
 
 - (void)stop {
   [self dismissAimDebuggerWithAnimation:NO];
+  [_optionsButton removeFromSuperview];
+  _optionsButton = nil;
 }
 
 - (void)logEvent:(ComposeboxDebuggerEvent*)event {
   [_events addObject:event];
+}
+
+#pragma mark - TabPickerLogger
+
+- (void)logTabPickerShown {
+  ComposeboxDebuggerEvent* event = [ComposeboxDebuggerEvent
+      composeboxGeneralEvent:composebox_debugger::event::Composebox::
+                                 kTabPickerShown];
+  [self logEvent:event];
+}
+
+- (void)logTabPickerHidden {
+  ComposeboxDebuggerEvent* event = [ComposeboxDebuggerEvent
+      composeboxGeneralEvent:composebox_debugger::event::Composebox::
+                                 kTabPickerHidden];
+  [self logEvent:event];
+}
+
+- (void)logWillLoadTabWithTitle:(NSString*)title tabID:(web::WebStateID)tabID {
+  ComposeboxDebuggerEvent* event = [ComposeboxDebuggerEvent
+       tabEvent:composebox_debugger::event::Tabs::kWillLoadTab
+      withTitle:title
+          tabID:tabID.identifier()];
+  [self logEvent:event];
+}
+
+- (void)logDidLoadTabWithSuccess:(BOOL)success
+                           title:(NSString*)title
+                           tabID:(web::WebStateID)tabID {
+  composebox_debugger::event::Tabs tabEvent =
+      success ? composebox_debugger::event::Tabs::kDidLoadTab
+              : composebox_debugger::event::Tabs::kFailedToLoadTab;
+  ComposeboxDebuggerEvent* event =
+      [ComposeboxDebuggerEvent tabEvent:tabEvent
+                              withTitle:title
+                                  tabID:tabID.identifier()];
+  [self logEvent:event];
+}
+
+- (void)logWillRealizeTabWithTitle:(NSString*)title
+                             tabID:(web::WebStateID)tabID {
+  ComposeboxDebuggerEvent* event = [ComposeboxDebuggerEvent
+       tabEvent:composebox_debugger::event::Tabs::kWillRealizeTab
+      withTitle:title
+          tabID:tabID.identifier()];
+  [self logEvent:event];
+}
+
+- (void)logDidRealizeTabWithTitle:(NSString*)title
+                            tabID:(web::WebStateID)tabID {
+  ComposeboxDebuggerEvent* event = [ComposeboxDebuggerEvent
+       tabEvent:composebox_debugger::event::Tabs::kDidRealizeTab
+      withTitle:title
+          tabID:tabID.identifier()];
+  [self logEvent:event];
 }
 
 #pragma mark - private
@@ -57,7 +114,7 @@ const CGSize kOptionsButtonSize = {80.0f, 40.0f};
       configurationWithPointSize:20
                           weight:UIImageSymbolWeightMedium];
   UIImage* icon =
-      DefaultSymbolWithConfiguration(@"wrench.and.screwdriver", symbolConfig);
+      SymbolWithConfiguration(SymbolWrenchAndScrewdriver, symbolConfig);
 
   config.image = icon;
   config.baseForegroundColor = [UIColor whiteColor];
@@ -78,16 +135,16 @@ const CGSize kOptionsButtonSize = {80.0f, 40.0f};
 
 - (void)setupOptionsMenu {
   __weak __typeof(self) weakSelf = self;
-  UIAction* breadcrumbsAction = [UIAction
-      actionWithTitle:@"Composebox logs"
-                image:DefaultSymbolWithPointSize(@"binoculars.circle", 16)
-           identifier:nil
-              handler:^(UIAction* action) {
-                [weakSelf showBreadcrumbsLogs];
-              }];
+  UIAction* breadcrumbsAction =
+      [UIAction actionWithTitle:@"Composebox logs"
+                          image:SymbolWithPointSize(SymbolBinocularsCircle, 16)
+                     identifier:nil
+                        handler:^(UIAction* action) {
+                          [weakSelf showBreadcrumbsLogs];
+                        }];
   UIAction* aimEligibilityDebuggerAction = [UIAction
       actionWithTitle:@"AIM Eligibility"
-                image:CustomSymbolWithPointSize(kMagnifyingglassSparkSymbol, 16)
+                image:SymbolWithPointSize(SymbolMagnifyingglassSpark, 16)
            identifier:nil
               handler:^(UIAction* action) {
                 [weakSelf startAIMDebugger];
@@ -95,7 +152,7 @@ const CGSize kOptionsButtonSize = {80.0f, 40.0f};
 
   UIAction* omniboxDebuggerAction = [UIAction
       actionWithTitle:@"Omnibox debugger"
-                image:DefaultSymbolWithPointSize(@"ladybug.circle.fill", 16)
+                image:SymbolWithPointSize(SymbolLadybugCircleFill, 16)
            identifier:nil
               handler:^(UIAction* action) {
                 [weakSelf

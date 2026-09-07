@@ -24,8 +24,6 @@
 #include "chrome/browser/signin/chrome_signin_client_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/signin_util.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -86,7 +84,9 @@ class AccountsPolicyManager::DeleteProfileDialogManager
         ProfileBrowserCollection::GetForProfile(profile);
     browser_collection_observation_.Observe(browser_collection);
     // Find the last active browser window for the profile.
-    Browser* active_browser = chrome::FindLastActiveWithProfile(profile);
+    BrowserWindowInterface* const active_browser =
+        ProfileBrowserCollection::GetForProfile(profile)
+            ->GetLastActiveBrowser();
     if (active_browser) {
       OnBrowserActivated(active_browser);
     }
@@ -270,6 +270,14 @@ void AccountsPolicyManager::EnsurePrimaryAccountAllowedForProfile(
     return;
   }
 
+  if (signin_ui_error.type() == SigninUIError::Type::kSigninCookiesDisallowed) {
+    // Ignore cookie errors for profile deletion. Deleting the profile because
+    // cookies are blocked would be very surprising for the user, and is not
+    // absolutely required. Even though new sign-ins are disallowed, existing
+    // sessions can remain.
+    return;
+  }
+
   if (ChromeSigninClientFactory::GetForProfile(profile)
           ->IsClearPrimaryAccountAllowed()) {
     // Force clear the primary account if it is no longer allowed and if sign
@@ -379,10 +387,10 @@ void AccountsPolicyManager::RemoveUnallowedAccounts() {
   auto* accounts_mutator = identity_manager->GetAccountsMutator();
   for (const auto& account : accounts) {
     if (!signin_util::IsAccountExemptedFromEnterpriseProfileSeparation(
-            profile_, account.email) &&
-        account.account_id != primary_account_id) {
+            profile_, account.GetEmail()) &&
+        account.GetAccountId() != primary_account_id) {
       accounts_mutator->RemoveAccount(
-          account.account_id,
+          account.GetAccountId(),
           signin_metrics::SourceForRefreshTokenOperation::
               kEnterprisePolicy_AccountNotAllowedInContentArea);
     }

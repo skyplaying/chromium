@@ -10,11 +10,14 @@
 #import "base/test/task_environment.h"
 #import "base/time/time.h"
 #import "base/values.h"
+#import "components/desktop_to_mobile_promos/features.h"
 #import "components/ntp_tiles/pref_names.h"
 #import "components/omnibox/browser/omnibox_pref_names.h"
+#import "components/sync/test/test_sync_service.h"
 #import "components/sync_device_info/device_info.h"
 #import "components/sync_device_info/device_info_util.h"
 #import "components/sync_device_info/fake_device_info_sync_service.h"
+#import "components/sync_device_info/test_device_info_builder.h"
 #import "components/sync_preferences/cross_device_pref_tracker/cross_device_pref_tracker.h"
 #import "components/sync_preferences/cross_device_pref_tracker/prefs/cross_device_pref_names.h"
 #import "ios/chrome/app/app_startup_parameters.h"
@@ -37,6 +40,8 @@
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity_manager.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
+#import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/browser/synced_set_up/coordinator/synced_set_up_mediator_delegate.h"
 #import "ios/chrome/browser/synced_set_up/ui/synced_set_up_consumer.h"
 #import "ios/chrome/grit/ios_strings.h"
@@ -119,10 +124,12 @@ class SyncedSetUpMediatorTest : public PlatformTest {
     TestProfileIOS::Builder builder;
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
+        AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
             std::make_unique<FakeAuthenticationServiceDelegate>()));
+    builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
+                              base::BindRepeating(&CreateTestSyncService));
     profile_ = profile_manager_.AddProfileWithBuilder(std::move(builder));
-    scene_state_ = [[SceneState alloc] initWithAppState:nil];
+    scene_state_ = [[SceneState alloc] init];
     browser_ = std::make_unique<TestBrowser>(profile_.get(), scene_state_);
     web_state_list_ = browser_.get()->GetWebStateList();
     web_state_ = std::make_unique<web::FakeWebState>();
@@ -130,6 +137,9 @@ class SyncedSetUpMediatorTest : public PlatformTest {
 
   void TearDown() override {
     [mediator_ disconnect];
+    consumer_mock_ = nil;
+    delegate_mock_ = nil;
+    snackbar_handler_mock_ = nil;
     PlatformTest::TearDown();
   }
 
@@ -165,22 +175,22 @@ class SyncedSetUpMediatorTest : public PlatformTest {
     snackbar_handler_mock_ = OCMStrictProtocolMock(@protocol(SnackbarCommands));
 
     mediator_ = [[SyncedSetUpMediator alloc]
-            initWithPrefTracker:&pref_tracker_
-          authenticationService:authentication_service_
-          accountManagerService:account_manager_service_
-          deviceInfoSyncService:&device_info_sync_service_
-             profilePrefService:profile_->GetPrefs()
-                identityManager:identity_manager_
-                   webStateList:web_state_list_
-              startupParameters:startup_params_
-        snackbarCommandsHandler:snackbar_handler_mock_];
-
+          initWithPrefTracker:&pref_tracker_
+        authenticationService:authentication_service_
+        accountManagerService:account_manager_service_
+        deviceInfoSyncService:&device_info_sync_service_
+           profilePrefService:profile_->GetPrefs()
+              identityManager:identity_manager_
+                 webStateList:web_state_list_
+            startupParameters:startup_params_
+              snackbarHandler:snackbar_handler_mock_];
     consumer_mock_ = OCMStrictProtocolMock(@protocol(SyncedSetUpConsumer));
     delegate_mock_ =
         OCMStrictProtocolMock(@protocol(SyncedSetUpMediatorDelegate));
+    mediator_.delegate = delegate_mock_;
   }
 
-  // Configures `web_state_list_` with a an active WebState, given whether the
+  // Configures `web_state_list_` with an active WebState, given whether the
   // visible page should be the NTP.
   void ConfigureWebStateList(bool on_ntp = false) {
     web_state_->SetIsRealized(false);
@@ -196,55 +206,11 @@ class SyncedSetUpMediatorTest : public PlatformTest {
     web_state_list_->ActivateWebStateAt(index);
   }
 
-  // Creates a DeviceInfo object.
-  std::unique_ptr<syncer::DeviceInfo> CreateDeviceInfoForTesting(
-      std::string guid,
-      syncer::DeviceInfo::FormFactor form_factor,
-      syncer::DeviceInfo::OsType os_type,
-      base::Time last_updated_timestamp = base::Time::Now()) {
-    return CreateFakeDeviceInfo(guid, "Device Name", std::nullopt,
-                                sync_pb::SyncEnums::TYPE_UNSET, os_type,
-                                form_factor, "manufacturer", "model",
-                                std::string(), last_updated_timestamp);
-  }
-
-  // Helper for creating a DeviceInfo object.
-  std::unique_ptr<syncer::DeviceInfo> CreateFakeDeviceInfo(
-      const std::string& guid,
-      const std::string& name = "name",
-      const std::optional<syncer::DeviceInfo::SharingInfo>& sharing_info =
-          std::nullopt,
-      sync_pb::SyncEnums_DeviceType device_type =
-          sync_pb::SyncEnums_DeviceType_TYPE_UNSET,
-      syncer::DeviceInfo::OsType os_type = syncer::DeviceInfo::OsType::kUnknown,
-      syncer::DeviceInfo::FormFactor form_factor =
-          syncer::DeviceInfo::FormFactor::kUnknown,
-      const std::string& manufacturer_name = "manufacturer",
-      const std::string& model_name = "model",
-      const std::string& full_hardware_class = std::string(),
-      base::Time last_updated_timestamp = base::Time::Now()) {
-    return std::make_unique<syncer::DeviceInfo>(
-        guid, name, "chrome_version", "user_agent", device_type, os_type,
-        form_factor, "device_id", manufacturer_name, model_name,
-        full_hardware_class, last_updated_timestamp,
-        syncer::DeviceInfoUtil::GetPulseInterval(),
-        /*send_tab_to_self_receiving_enabled=*/
-        false,
-        sync_pb::
-            SyncEnums_SendTabReceivingType_SEND_TAB_RECEIVING_TYPE_CHROME_OR_UNSPECIFIED,
-        sharing_info,
-        /*paask_info=*/std::nullopt,
-        /*fcm_registration_token=*/std::string(),
-        /*interested_data_types=*/syncer::DataTypeSet(),
-        /*auto_sign_out_last_signin_timestamp=*/std::nullopt,
-        /*desktop_to_ios_promo_receiving_enabled=*/false);
-  }
-
   // Helper for configuring a TimestampedPrefValue.
   void ConfigureTimestampedPrefValue(
       sync_preferences::TimestampedPrefValue& timestamped_value,
       base::Value value,
-      std::string device_sync_cache_guid,
+      const std::string& device_sync_cache_guid,
       base::Time last_observed_change_time = base::Time::Now()) {
     timestamped_value.value = value.Clone();
     timestamped_value.last_observed_change_time = last_observed_change_time;
@@ -292,9 +258,9 @@ TEST_F(SyncedSetUpMediatorTest, TestDelegateInformedOfFirstRunOnNTP) {
 
   // Add the remote device to the Device Info Tracker.
   device_info_sync_service_.GetDeviceInfoTracker()->Add(
-      CreateDeviceInfoForTesting(remote_guid,
-                                 syncer::DeviceInfo::FormFactor::kPhone,
-                                 syncer::DeviceInfo::OsType::kIOS));
+      syncer::TestDeviceInfoBuilder(syncer::DeviceInfo::OsType::kIOS)
+          .WithGuid(remote_guid)
+          .Build());
 
   // Set corresponding pref on the local device.
   SetProfilePref(ntp_tiles::prefs::kMagicStackHomeModuleEnabled,
@@ -304,8 +270,9 @@ TEST_F(SyncedSetUpMediatorTest, TestDelegateInformedOfFirstRunOnNTP) {
   bool on_ntp = true;
   InitializeMediator(on_ntp);
 
-  OCMExpect([delegate_mock_ mediatorWillStartPostFirstRunFlow:[OCMArg any]]);
-  mediator_.delegate = delegate_mock_;
+  OCMExpect([delegate_mock_
+      syncedSetUpMediatorWillStartPostFirstRunFlow:[OCMArg any]]);
+  [mediator_ startSyncedSetUpFlow];
   EXPECT_OCMOCK_VERIFY(delegate_mock_);
 }
 
@@ -327,9 +294,9 @@ TEST_F(SyncedSetUpMediatorTest, TestDelegateInformedOfFirstRunOnURLPage) {
 
   // Add the remote device to the Device Info Tracker.
   device_info_sync_service_.GetDeviceInfoTracker()->Add(
-      CreateDeviceInfoForTesting(remote_guid,
-                                 syncer::DeviceInfo::FormFactor::kPhone,
-                                 syncer::DeviceInfo::OsType::kIOS));
+      syncer::TestDeviceInfoBuilder(syncer::DeviceInfo::OsType::kIOS)
+          .WithGuid(remote_guid)
+          .Build());
 
   // Set corresponding pref on the local device.
   SetProfilePref(ntp_tiles::prefs::kMagicStackHomeModuleEnabled,
@@ -339,8 +306,9 @@ TEST_F(SyncedSetUpMediatorTest, TestDelegateInformedOfFirstRunOnURLPage) {
   bool on_ntp = false;
   InitializeMediator(on_ntp);
 
-  OCMExpect([delegate_mock_ mediatorWillStartPostFirstRunFlow:[OCMArg any]]);
-  mediator_.delegate = delegate_mock_;
+  OCMExpect([delegate_mock_
+      syncedSetUpMediatorWillStartPostFirstRunFlow:[OCMArg any]]);
+  [mediator_ startSyncedSetUpFlow];
   EXPECT_OCMOCK_VERIFY(delegate_mock_);
 }
 
@@ -362,9 +330,9 @@ TEST_F(SyncedSetUpMediatorTest,
 
   // Add the remote device to the Device Info Tracker.
   device_info_sync_service_.GetDeviceInfoTracker()->Add(
-      CreateDeviceInfoForTesting(remote_guid,
-                                 syncer::DeviceInfo::FormFactor::kPhone,
-                                 syncer::DeviceInfo::OsType::kIOS));
+      syncer::TestDeviceInfoBuilder(syncer::DeviceInfo::OsType::kIOS)
+          .WithGuid(remote_guid)
+          .Build());
 
   // Set corresponding pref on the local device.
   SetLocalStatePref(omnibox::kIsOmniboxInBottomPosition, base::Value(false));
@@ -373,9 +341,11 @@ TEST_F(SyncedSetUpMediatorTest,
   bool on_ntp = false;
   InitializeMediator(on_ntp);
 
-  OCMReject([delegate_mock_ mediatorWillStartPostFirstRunFlow:[OCMArg any]]);
-  OCMExpect([delegate_mock_ mediatorWillStartFromUrlPage:[OCMArg any]]);
-  mediator_.delegate = delegate_mock_;
+  OCMReject([delegate_mock_
+      syncedSetUpMediatorWillStartPostFirstRunFlow:[OCMArg any]]);
+  OCMExpect(
+      [delegate_mock_ syncedSetUpMediatorWillStartFromURLPage:[OCMArg any]]);
+  [mediator_ startSyncedSetUpFlow];
   EXPECT_OCMOCK_VERIFY(delegate_mock_);
 
   // A Snackbar will dismiss naturally after 4 seconds, then the mediator will
@@ -383,7 +353,7 @@ TEST_F(SyncedSetUpMediatorTest,
   // presentation of another Snackbar, the mediator should not inform the
   // delegate that it is finished.
   OCMExpect([snackbar_handler_mock_ showSnackbarMessage:[OCMArg any]]);
-  OCMExpect([delegate_mock_ recordSyncedSetUpShown:[OCMArg any]]);
+  OCMExpect([delegate_mock_ syncedSetUpMediatorDidShow:[OCMArg any]]);
   [mediator_ applyPrefs];
   EXPECT_OCMOCK_VERIFY(snackbar_handler_mock_);
   EXPECT_OCMOCK_VERIFY(delegate_mock_);
@@ -391,7 +361,7 @@ TEST_F(SyncedSetUpMediatorTest,
   task_environment_.FastForwardBy(base::Seconds(3));
 
   OCMExpect([snackbar_handler_mock_ showSnackbarMessage:[OCMArg any]]);
-  OCMExpect([delegate_mock_ recordSyncedSetUpShown:[OCMArg any]]);
+  OCMExpect([delegate_mock_ syncedSetUpMediatorDidShow:[OCMArg any]]);
   [mediator_ applyPrefs];
   EXPECT_OCMOCK_VERIFY(snackbar_handler_mock_);
   EXPECT_OCMOCK_VERIFY(delegate_mock_);
@@ -409,7 +379,7 @@ TEST_F(SyncedSetUpMediatorTest, TestMediatorFinishesWhenNoRemotePrefsToApply) {
   InitializeMediator();
 
   OCMExpect([delegate_mock_ syncedSetUpMediatorDidComplete:[OCMArg any]]);
-  mediator_.delegate = delegate_mock_;
+  [mediator_ startSyncedSetUpFlow];
   EXPECT_OCMOCK_VERIFY(delegate_mock_);
 }
 
@@ -467,9 +437,9 @@ TEST_F(SyncedSetUpMediatorTest, TestPrefsChangeOnApply) {
 
   // Add the remote device to the Device Info Tracker.
   device_info_sync_service_.GetDeviceInfoTracker()->Add(
-      CreateDeviceInfoForTesting(remote_guid,
-                                 syncer::DeviceInfo::FormFactor::kPhone,
-                                 syncer::DeviceInfo::OsType::kIOS));
+      syncer::TestDeviceInfoBuilder(syncer::DeviceInfo::OsType::kIOS)
+          .WithGuid(remote_guid)
+          .Build());
 
   // Set corresponding pref on the local device.
   SetProfilePref(ntp_tiles::prefs::kMagicStackHomeModuleEnabled,
@@ -483,8 +453,9 @@ TEST_F(SyncedSetUpMediatorTest, TestPrefsChangeOnApply) {
   bool on_ntp = true;
   InitializeMediator(on_ntp);
 
-  OCMExpect([delegate_mock_ mediatorWillStartPostFirstRunFlow:[OCMArg any]]);
-  mediator_.delegate = delegate_mock_;
+  OCMExpect([delegate_mock_
+      syncedSetUpMediatorWillStartPostFirstRunFlow:[OCMArg any]]);
+  [mediator_ startSyncedSetUpFlow];
   EXPECT_OCMOCK_VERIFY(delegate_mock_);
 
   // Expect that the pref is changed.

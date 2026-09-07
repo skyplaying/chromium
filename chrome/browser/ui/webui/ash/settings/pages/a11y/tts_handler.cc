@@ -4,8 +4,11 @@
 
 #include "chrome/browser/ui/webui/ash/settings/pages/a11y/tts_handler.h"
 
+#include "ash/constants/ash_extension_constants.h"
 #include "ash/webui/settings/public/constants/routes.mojom.h"
+#include "ash/webui/settings/public/constants/routes_util.h"
 #include "base/functional/bind.h"
+#include "base/i18n/legacy_language_tag_helpers.h"
 #include "base/i18n/rtl.h"
 #include "base/json/json_reader.h"
 #include "base/values.h"
@@ -14,8 +17,6 @@
 #include "chrome/browser/speech/extension_api/tts_engine_extension_api.h"
 #include "chrome/browser/speech/extension_api/tts_engine_extension_observer_chromeos.h"
 #include "chrome/browser/speech/extension_api/tts_engine_extension_observer_chromeos_factory.h"
-#include "chrome/browser/ui/chrome_pages.h"
-#include "chrome/common/extensions/extension_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "content/public/browser/tts_controller.h"
 #include "content/public/browser/web_ui.h"
@@ -110,7 +111,7 @@ void TtsHandler::OnVoicesChanged() {
           "displayLanguage",
           l10n_util::GetStringUTF8(IDS_TEXT_TO_SPEECH_SETTINGS_NO_LANGUAGE));
     } else {
-      language_code = l10n_util::GetLanguage(voice.lang);
+      language_code = base::i18n::GetLanguageSubtagUsingLanguageTag(voice.lang);
       response.Set(
           "displayLanguage",
           l10n_util::GetDisplayNameForLocale(
@@ -163,8 +164,8 @@ int TtsHandler::GetVoiceLangMatchScore(const content::VoiceData* voice,
   if (voice->lang == app_locale) {
     return 2;
   }
-  return l10n_util::GetLanguage(voice->lang) ==
-                 l10n_util::GetLanguage(app_locale)
+  return base::i18n::GetLanguageSubtagUsingLanguageTag(voice->lang) ==
+                 base::i18n::GetLanguageSubtagUsingLanguageTag(app_locale)
              ? 1
              : 0;
 }
@@ -183,7 +184,7 @@ void TtsHandler::OnTtsEngineAwake(bool success) {
 }
 
 GURL TtsHandler::GetSourceURL() const {
-  return GURL(chrome::GetOSSettingsUrl(
+  return GURL(chromeos::settings::GetOSSettingsUrl(
       chromeos::settings::mojom::kTextToSpeechSubpagePath));
 }
 

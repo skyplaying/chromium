@@ -11,10 +11,10 @@
 #include "base/format_macros.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "net/base/completion_repeating_callback.h"
 #include "net/base/host_port_pair.h"
@@ -106,7 +106,6 @@ int PacFileDecider::Start(const ProxyConfigWithAnnotation& config,
                           CompletionOnceCallback callback) {
   DCHECK_EQ(STATE_NONE, next_state_);
   DCHECK(!callback.is_null());
-  DCHECK(config.value().HasAutomaticSettings());
 
   net_log_.BeginEvent(NetLogEventType::PAC_FILE_DECIDER);
 
@@ -122,7 +121,10 @@ int PacFileDecider::Start(const ProxyConfigWithAnnotation& config,
   proxy_override_rules_ = config.value().proxy_override_rules();
 
   pac_sources_ = BuildPacSourcesFallbackList(config.value());
-  DCHECK(!pac_sources_.empty());
+  if (pac_sources_.empty()) {
+    DidComplete();
+    return ERR_PAC_SCRIPT_FAILED;
+  }
 
   traffic_annotation_ =
       net::MutableNetworkTrafficAnnotationTag(config.traffic_annotation());
@@ -282,8 +284,10 @@ int PacFileDecider::DoQuickCheck() {
       pac_file_fetcher_->GetRequestContext()->host_resolver();
   resolve_request_ = host_resolver->CreateRequest(
       HostPortPair(std::move(host), 80),
-      pac_file_fetcher_->isolation_info().network_anonymization_key(), net_log_,
-      parameters);
+      pac_file_fetcher_->isolation_info().network_anonymization_key(),
+      // TODO(crbug.com/516746450): Support targeting a network when fetching
+      // PAC files.
+      handles::kInvalidNetworkHandle, net_log_, parameters);
 
   CompletionRepeatingCallback callback = base::BindRepeating(
       &PacFileDecider::OnIOCompletion, base::Unretained(this));

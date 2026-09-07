@@ -9,6 +9,7 @@
 #include <string>
 
 #include "ash/accessibility/accessibility_controller.h"
+#include "ash/constants/ash_pref_names.h"
 #include "base/check.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
@@ -25,7 +26,6 @@
 #include "chrome/browser/ash/app_mode/metrics/periodic_metrics_service.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/chromeos/app_mode/kiosk_browser_window_handler.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/install_attributes/install_attributes.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
@@ -51,17 +51,14 @@ KioskSystemSession::KioskSystemSession(
     PrefService& local_state,
     Profile* profile,
     const KioskAppId& kiosk_app_id,
-    const std::optional<std::string>& app_name)
+    const std::optional<webapps::AppId>& app_id)
     : local_state_(local_state),
       profile_(profile),
-      browser_session_(profile),
+      browser_session_(&local_state, profile),
       kiosk_app_id_(kiosk_app_id),
       network_metrics_service_(
           std::make_unique<NetworkConnectivityMetricsService>(local_state)),
       periodic_metrics_service_(std::make_unique<PeriodicMetricsService>()),
-      device_weekly_scheduled_suspend_controller_(
-          std::make_unique<DeviceWeeklyScheduledSuspendController>(
-              &local_state)),
       low_disk_metrics_service_(local_state),
       network_state_observer_(profile->GetPrefs()) {
   switch (kiosk_app_id_.type) {
@@ -69,10 +66,12 @@ KioskSystemSession::KioskSystemSession(
       InitForChromeAppKiosk();
       break;
     case KioskAppType::kWebApp:
-      InitForWebKiosk(app_name);
+      CHECK(app_id.has_value());
+      InitForWebKiosk(*app_id);
       break;
     case KioskAppType::kIsolatedWebApp:
-      InitForIwaKiosk(app_name);
+      CHECK(app_id.has_value());
+      InitForIwaKiosk(*app_id);
       break;
     case KioskAppType::kArcvmApp:
       // TODO(crbug.com/418950414): Implement kiosk system session for ARCVM
@@ -91,15 +90,13 @@ void KioskSystemSession::InitForChromeAppKiosk() {
   InitCommon();
 }
 
-void KioskSystemSession::InitForWebKiosk(
-    const std::optional<std::string>& app_name) {
-  browser_session_.InitForWebKiosk(app_name);
+void KioskSystemSession::InitForWebKiosk(const webapps::AppId& app_id) {
+  browser_session_.InitForWebKiosk(app_id);
   InitCommon();
 }
 
-void KioskSystemSession::InitForIwaKiosk(
-    const std::optional<std::string>& app_name) {
-  browser_session_.InitForIwaKiosk(app_name);
+void KioskSystemSession::InitForIwaKiosk(const webapps::AppId& app_id) {
+  browser_session_.InitForIwaKiosk(app_id);
   InitCommon();
 }
 
@@ -126,7 +123,7 @@ void KioskSystemSession::InitKioskAppUpdateService(const std::string& app_id) {
 
 void KioskSystemSession::SetRebootAfterUpdateIfNecessary() {
   if (!ash::InstallAttributes::Get()->IsEnterpriseManaged()) {
-    local_state_->SetBoolean(::prefs::kRebootAfterUpdate, true);
+    local_state_->SetBoolean(ash::prefs::kRebootAfterUpdate, true);
     KioskModeIdleAppNameNotification::Initialize();
   }
 }
@@ -139,7 +136,7 @@ void KioskSystemSession::OnGuestAdded(
 void KioskSystemSession::RegisterProfilePrefs(
     user_prefs::PrefRegistrySyncable* registry) {
   registry->RegisterBooleanPref(
-      prefs::kKioskActiveWiFiCredentialsScopeChangeEnabled, false);
+      ash::prefs::kKioskActiveWiFiCredentialsScopeChangeEnabled, false);
 }
 
 Profile* KioskSystemSession::profile() const {
@@ -151,7 +148,7 @@ bool KioskSystemSession::is_shutting_down() const {
   return browser_session_.is_shutting_down();
 }
 
-Browser* KioskSystemSession::GetSettingsBrowserForTesting() {
+BrowserDelegate* KioskSystemSession::GetSettingsBrowserForTesting() {
   return browser_session_.GetSettingsBrowserForTesting();  // IN-TEST
 }
 

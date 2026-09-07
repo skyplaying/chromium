@@ -15,13 +15,11 @@
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/numerics/ostream_operators.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/memory_dump_manager.h"
 #include "cc/base/devtools_instrumentation.h"
-#include "cc/base/histograms.h"
 #include "cc/raster/tile_task.h"
 #include "cc/tiles/mipmap_util.h"
 #include "ui/gfx/geometry/skia_conversions.h"
@@ -104,13 +102,6 @@ class SoftwareImageDecodeTaskImpl : public TileTask {
   }
   void OnTaskCompleted() override {
     cache_->OnImageDecodeTaskCompleted(image_key_, task_type_);
-  }
-
-  // Overridden from TileTask:
-  bool TaskContainsLCPCandidateImages() const override {
-    if (!HasCompleted() && paint_image_.may_be_lcp_candidate())
-      return true;
-    return TileTask::TaskContainsLCPCandidateImages();
   }
 
  protected:
@@ -503,11 +494,14 @@ SoftwareImageDecodeCache::FindCachedCandidate(const CacheKey& key) {
   CHECK(image_keys_it != frame_key_to_image_keys_.end());
 
   auto& available_keys = image_keys_it->second;
+
+  // Sort by width first, then height to maintain strict weak ordering.
   std::sort(available_keys.begin(), available_keys.end(),
             [](const CacheKey& one, const CacheKey& two) {
-              // Return true if |one| scale is less than |two| scale.
-              return one.target_size().width() < two.target_size().width() &&
-                     one.target_size().height() < two.target_size().height();
+              if (one.target_size().width() != two.target_size().width()) {
+                return one.target_size().width() < two.target_size().width();
+              }
+              return one.target_size().height() < two.target_size().height();
             });
 
   for (auto& available_key : available_keys) {
@@ -599,11 +593,10 @@ DecodedDrawImage SoftwareImageDecodeCache::GetDecodedImageForDrawInternal(
   if (!decoded_image)
     return DecodedDrawImage();
 
-  auto decoded_draw_image =
-      DecodedDrawImage(std::move(decoded_image), cache_entry->gainmap_image(),
-                       cache_entry->hdr_metadata(), nullptr,
-                       cache_entry->src_rect_offset(), GetScaleAdjustment(key),
-                       GetDecodedFilterQuality(key), cache_entry->is_budgeted);
+  auto decoded_draw_image = DecodedDrawImage(
+      std::move(decoded_image), cache_entry->gainmap_image(), nullptr,
+      cache_entry->src_rect_offset(), GetScaleAdjustment(key),
+      GetDecodedFilterQuality(key), cache_entry->is_budgeted);
   return decoded_draw_image;
 }
 
@@ -663,8 +656,6 @@ void SoftwareImageDecodeCache::OnImageDecodeTaskCompleted(const CacheKey& key,
   auto image_it = decoded_images_.Peek(key);
   CHECK(image_it != decoded_images_.end());
   CacheEntry* cache_entry = image_it->second.get();
-  UMA_HISTOGRAM_BOOLEAN("Compositing.DecodeLCPCandidateImage.Software",
-                        key.may_be_lcp_candidate());
   auto& task = task_type == TaskType::kInRaster
                    ? cache_entry->in_raster_task
                    : cache_entry->out_of_raster_task;

@@ -26,6 +26,7 @@
 #include "ash/system/time/calendar_unittest_utils.h"
 #include "ash/system/time/calendar_utils.h"
 #include "ash/system/time/calendar_view_controller.h"
+#include "ash/system/time/date_helper.h"
 #include "ash/system/tray/tray_constants.h"
 #include "ash/system/unified/unified_system_tray.h"
 #include "ash/system/unified/unified_system_tray_bubble.h"
@@ -54,6 +55,7 @@
 #include "ui/views/focus/focus_manager.h"
 #include "ui/views/test/ax_event_counter.h"
 #include "ui/views/view.h"
+#include "ui/views/view_utils.h"
 
 namespace ash {
 
@@ -76,8 +78,7 @@ bool kCalendarPrimary1 = true;
 class CalendarViewControllerTestObserver
     : public CalendarViewController::Observer {
  public:
-  explicit CalendarViewControllerTestObserver(
-      base::OnceCallback<void(void)> callback)
+  explicit CalendarViewControllerTestObserver(base::OnceClosure callback)
       : callback_(std::move(callback)) {}
 
   CalendarViewControllerTestObserver(
@@ -90,7 +91,7 @@ class CalendarViewControllerTestObserver
   void OnCalendarLoaded() override { std::move(callback_).Run(); }
 
  private:
-  base::OnceCallback<void(void)> callback_;
+  base::OnceClosure callback_;
 };
 
 class CalendarViewTest : public AshTestBase {
@@ -132,8 +133,8 @@ class CalendarViewTest : public AshTestBase {
                                         std::u16string day) {
     const views::LabelButton* date_cell = nullptr;
     for (const views::View* child_view : month->children()) {
-      auto* current_date_cell =
-          static_cast<const views::LabelButton*>(child_view);
+      const auto* current_date_cell =
+          views::AsViewClass<views::LabelButton>(child_view);
       if (day != current_date_cell->GetText()) {
         continue;
       }
@@ -216,18 +217,19 @@ class CalendarViewTest : public AshTestBase {
   }
 
   std::u16string_view GetPreviousLabelText() {
-    return static_cast<views::Label*>(previous_label()->children()[0])
+    return views::AsViewClass<views::Label>(previous_label()->children()[0])
         ->GetText();
   }
   std::u16string_view GetCurrentLabelText() {
-    return static_cast<views::Label*>(current_label()->children()[0])
+    return views::AsViewClass<views::Label>(current_label()->children()[0])
         ->GetText();
   }
   std::u16string_view GetNextLabelText() {
-    return static_cast<views::Label*>(next_label()->children()[0])->GetText();
+    return views::AsViewClass<views::Label>(next_label()->children()[0])
+        ->GetText();
   }
   std::u16string_view GetNextNextLabelText() {
-    return static_cast<views::Label*>(next_next_label()->children()[0])
+    return views::AsViewClass<views::Label>(next_next_label()->children()[0])
         ->GetText();
   }
   CalendarMonthView* previous_month() {
@@ -344,6 +346,15 @@ class CalendarViewTest : public AshTestBase {
     calendar_view_->calendar_view_controller_->RemoveObserver(observer);
   }
 
+  views::View* GetMonthHeaderView() {
+    for (views::View* child : calendar_view()->children()) {
+      if (child->GetClassName() == MonthHeaderView::kViewClassName) {
+        return child;
+      }
+    }
+    return nullptr;
+  }
+
   static base::Time FakeTimeNow() { return fake_time_; }
   static void SetFakeNow(base::Time fake_now) { fake_time_ = fake_now; }
 
@@ -379,18 +390,18 @@ TEST_F(CalendarViewTest, Init) {
   EXPECT_EQ(u"August", month_header()->GetText());
   EXPECT_EQ(u"2021", header_year()->GetText());
 
-  EXPECT_EQ(u"27",
-            static_cast<views::LabelButton*>(previous_month()->children()[0])
+  EXPECT_EQ(u"27", views::AsViewClass<views::LabelButton>(
+                       previous_month()->children()[0])
+                       ->GetText());
+  EXPECT_EQ(u"1", views::AsViewClass<views::LabelButton>(
+                      current_month()->children()[0])
+                      ->GetText());
+  EXPECT_EQ(u"29",
+            views::AsViewClass<views::LabelButton>(next_month()->children()[0])
                 ->GetText());
-  EXPECT_EQ(u"1",
-            static_cast<views::LabelButton*>(current_month()->children()[0])
-                ->GetText());
-  EXPECT_EQ(
-      u"29",
-      static_cast<views::LabelButton*>(next_month()->children()[0])->GetText());
-  EXPECT_EQ(u"26",
-            static_cast<views::LabelButton*>(next_next_month()->children()[0])
-                ->GetText());
+  EXPECT_EQ(u"26", views::AsViewClass<views::LabelButton>(
+                       next_next_month()->children()[0])
+                       ->GetText());
 }
 
 // Test the init view of the `CalendarView` starting with December.
@@ -413,15 +424,207 @@ TEST_F(CalendarViewTest, InitDec) {
   EXPECT_EQ(u"December", month_header()->GetText());
   EXPECT_EQ(u"2021", header_year()->GetText());
 
-  EXPECT_EQ(u"31",
-            static_cast<views::LabelButton*>(previous_month()->children()[0])
-                ->GetText());
-  EXPECT_EQ(u"28",
-            static_cast<views::LabelButton*>(current_month()->children()[0])
-                ->GetText());
-  EXPECT_EQ(u"30",
-            static_cast<views::LabelButton*>(next_next_month()->children()[0])
-                ->GetText());
+  EXPECT_EQ(u"31", views::AsViewClass<views::LabelButton>(
+                       previous_month()->children()[0])
+                       ->GetText());
+  EXPECT_EQ(u"28", views::AsViewClass<views::LabelButton>(
+                       current_month()->children()[0])
+                       ->GetText());
+  EXPECT_EQ(u"30", views::AsViewClass<views::LabelButton>(
+                       next_next_month()->children()[0])
+                       ->GetText());
+}
+
+// Tests that the week header labels for English/US locale (first day of week is
+// Sunday) are correct.
+TEST_F(CalendarViewTest, WeekHeaderLabelsEnUs) {
+  base::Time date;
+  ASSERT_TRUE(base::Time::FromString("24 Aug 2021 10:00 GMT", &date));
+
+  // Set time override.
+  SetFakeNow(date);
+  base::subtle::ScopedTimeClockOverrides time_override(
+      &CalendarViewTest::FakeTimeNow, /*time_ticks_override=*/nullptr,
+      /*thread_ticks_override=*/nullptr);
+
+  base::i18n::SetICUDefaultLocale("en_US");
+  DateHelper::GetInstance()->ResetForTesting();
+  CreateCalendarView();
+
+  views::View* month_header = GetMonthHeaderView();
+  ASSERT_NE(month_header, nullptr);
+
+  // Verify the week header labels (S, M, T, W, T, F, S).
+  ASSERT_EQ(month_header->children().size(), 7U);
+  EXPECT_EQ(
+      views::AsViewClass<views::Label>(month_header->children()[0])->GetText(),
+      u"S");
+  EXPECT_EQ(
+      views::AsViewClass<views::Label>(month_header->children()[1])->GetText(),
+      u"M");
+  EXPECT_EQ(
+      views::AsViewClass<views::Label>(month_header->children()[2])->GetText(),
+      u"T");
+  EXPECT_EQ(
+      views::AsViewClass<views::Label>(month_header->children()[3])->GetText(),
+      u"W");
+  EXPECT_EQ(
+      views::AsViewClass<views::Label>(month_header->children()[4])->GetText(),
+      u"T");
+  EXPECT_EQ(
+      views::AsViewClass<views::Label>(month_header->children()[5])->GetText(),
+      u"F");
+  EXPECT_EQ(
+      views::AsViewClass<views::Label>(month_header->children()[6])->GetText(),
+      u"S");
+
+  // Reset default locale for subsequent tests.
+  base::i18n::SetICUDefaultLocale("en_US");
+  DateHelper::GetInstance()->ResetForTesting();
+}
+
+// Tests that the week header labels for German locale (first day of week is
+// Monday) are correct.
+TEST_F(CalendarViewTest, WeekHeaderLabelsDe) {
+  base::Time date;
+  ASSERT_TRUE(base::Time::FromString("24 Aug 2021 10:00 GMT", &date));
+
+  // Set time override.
+  SetFakeNow(date);
+  base::subtle::ScopedTimeClockOverrides time_override(
+      &CalendarViewTest::FakeTimeNow, /*time_ticks_override=*/nullptr,
+      /*thread_ticks_override=*/nullptr);
+
+  base::i18n::SetICUDefaultLocale("de");
+  DateHelper::GetInstance()->ResetForTesting();
+  CreateCalendarView();
+
+  views::View* month_header = GetMonthHeaderView();
+  ASSERT_NE(month_header, nullptr);
+
+  // Verify the week header labels for German (M, D, M, D, F, S, S).
+  ASSERT_EQ(month_header->children().size(), 7U);
+  EXPECT_EQ(
+      views::AsViewClass<views::Label>(month_header->children()[0])->GetText(),
+      u"M");
+  EXPECT_EQ(
+      views::AsViewClass<views::Label>(month_header->children()[1])->GetText(),
+      u"D");
+  EXPECT_EQ(
+      views::AsViewClass<views::Label>(month_header->children()[2])->GetText(),
+      u"M");
+  EXPECT_EQ(
+      views::AsViewClass<views::Label>(month_header->children()[3])->GetText(),
+      u"D");
+  EXPECT_EQ(
+      views::AsViewClass<views::Label>(month_header->children()[4])->GetText(),
+      u"F");
+  EXPECT_EQ(
+      views::AsViewClass<views::Label>(month_header->children()[5])->GetText(),
+      u"S");
+  EXPECT_EQ(
+      views::AsViewClass<views::Label>(month_header->children()[6])->GetText(),
+      u"S");
+
+  // Reset default locale for subsequent tests.
+  base::i18n::SetICUDefaultLocale("en_US");
+  DateHelper::GetInstance()->ResetForTesting();
+}
+
+// Tests that the week header labels for Spanish locale (first day of week is
+// Monday) are correct.
+TEST_F(CalendarViewTest, WeekHeaderLabelsEs) {
+  base::Time date;
+  ASSERT_TRUE(base::Time::FromString("24 Aug 2021 10:00 GMT", &date));
+
+  // Set time override.
+  SetFakeNow(date);
+  base::subtle::ScopedTimeClockOverrides time_override(
+      &CalendarViewTest::FakeTimeNow, /*time_ticks_override=*/nullptr,
+      /*thread_ticks_override=*/nullptr);
+
+  base::i18n::SetICUDefaultLocale("es");
+  DateHelper::GetInstance()->ResetForTesting();
+  CreateCalendarView();
+
+  views::View* month_header = GetMonthHeaderView();
+  ASSERT_NE(month_header, nullptr);
+
+  // Verify the week header labels for Spanish (L, M, X, J, V, S, D).
+  ASSERT_EQ(month_header->children().size(), 7U);
+  EXPECT_EQ(
+      views::AsViewClass<views::Label>(month_header->children()[0])->GetText(),
+      u"L");
+  EXPECT_EQ(
+      views::AsViewClass<views::Label>(month_header->children()[1])->GetText(),
+      u"M");
+  EXPECT_EQ(
+      views::AsViewClass<views::Label>(month_header->children()[2])->GetText(),
+      u"X");
+  EXPECT_EQ(
+      views::AsViewClass<views::Label>(month_header->children()[3])->GetText(),
+      u"J");
+  EXPECT_EQ(
+      views::AsViewClass<views::Label>(month_header->children()[4])->GetText(),
+      u"V");
+  EXPECT_EQ(
+      views::AsViewClass<views::Label>(month_header->children()[5])->GetText(),
+      u"S");
+  EXPECT_EQ(
+      views::AsViewClass<views::Label>(month_header->children()[6])->GetText(),
+      u"D");
+
+  // Reset default locale for subsequent tests.
+  base::i18n::SetICUDefaultLocale("en_US");
+  DateHelper::GetInstance()->ResetForTesting();
+}
+
+// Tests that the week header labels for Farsi locale (first day of week is
+// Saturday) are correct.
+TEST_F(CalendarViewTest, WeekHeaderLabelsFa) {
+  base::Time date;
+  ASSERT_TRUE(base::Time::FromString("24 Aug 2021 10:00 GMT", &date));
+
+  // Set time override.
+  SetFakeNow(date);
+  base::subtle::ScopedTimeClockOverrides time_override(
+      &CalendarViewTest::FakeTimeNow, /*time_ticks_override=*/nullptr,
+      /*thread_ticks_override=*/nullptr);
+
+  base::i18n::SetICUDefaultLocale("fa");
+  DateHelper::GetInstance()->ResetForTesting();
+  CreateCalendarView();
+
+  views::View* month_header = GetMonthHeaderView();
+  ASSERT_NE(month_header, nullptr);
+
+  // Verify the week header labels for Farsi (ش, ی, د, س, چ, پ, ج).
+  ASSERT_EQ(month_header->children().size(), 7U);
+  EXPECT_EQ(
+      views::AsViewClass<views::Label>(month_header->children()[0])->GetText(),
+      u"ش");
+  EXPECT_EQ(
+      views::AsViewClass<views::Label>(month_header->children()[1])->GetText(),
+      u"ی");
+  EXPECT_EQ(
+      views::AsViewClass<views::Label>(month_header->children()[2])->GetText(),
+      u"د");
+  EXPECT_EQ(
+      views::AsViewClass<views::Label>(month_header->children()[3])->GetText(),
+      u"س");
+  EXPECT_EQ(
+      views::AsViewClass<views::Label>(month_header->children()[4])->GetText(),
+      u"چ");
+  EXPECT_EQ(
+      views::AsViewClass<views::Label>(month_header->children()[5])->GetText(),
+      u"پ");
+  EXPECT_EQ(
+      views::AsViewClass<views::Label>(month_header->children()[6])->GetText(),
+      u"ج");
+
+  // Reset default locale for subsequent tests.
+  base::i18n::SetICUDefaultLocale("en_US");
+  DateHelper::GetInstance()->ResetForTesting();
 }
 
 // TODO(b/285280977): Remove when CalendarView is out of TrayDetailedView.
@@ -605,7 +808,7 @@ TEST_F(CalendarViewTest, HeaderFocusing) {
   EXPECT_EQ(focus_manager->GetFocusedView()->GetClassName(),
             "CalendarDateCellView");
   EXPECT_EQ(
-      static_cast<const views::LabelButton*>(focus_manager->GetFocusedView())
+      views::AsViewClass<views::LabelButton>(focus_manager->GetFocusedView())
           ->GetText(),
       u"7");
 
@@ -627,9 +830,9 @@ TEST_F(CalendarViewTest, HeaderFocusing) {
 
   // Moves to today's cell.
   PressTab();
-  EXPECT_EQ(u"7",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  EXPECT_EQ(u"7", views::AsViewClass<views::LabelButton>(
+                      focus_manager->GetFocusedView())
+                      ->GetText());
 
   // Moves to down button.
   PressShiftTab();
@@ -666,9 +869,9 @@ TEST_F(CalendarViewTest, FocusingToDateCell) {
   auto* focus_manager = calendar_view()->GetFocusManager();
 
   // Focus should start on todays CalendarDateCellView.
-  EXPECT_EQ(u"7",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  EXPECT_EQ(u"7", views::AsViewClass<views::LabelButton>(
+                      focus_manager->GetFocusedView())
+                      ->GetText());
 
   PressTab();  // Moves to Today's button.
   EXPECT_EQ(reset_to_today_button(), focus_manager->GetFocusedView());
@@ -679,9 +882,9 @@ TEST_F(CalendarViewTest, FocusingToDateCell) {
 
   // Moves to the the 7th date cell, which is the date of "today".
   PressTab();
-  EXPECT_EQ(u"7",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  EXPECT_EQ(u"7", views::AsViewClass<views::LabelButton>(
+                      focus_manager->GetFocusedView())
+                      ->GetText());
 }
 
 // Tests the Ash.Calendar.MaxDistanceBrowsed metric only records once in
@@ -798,7 +1001,7 @@ class DateCellFocusChangeListener : public views::FocusChangeListener {
     }
 
     steps_taken_++;
-    found_ = static_cast<const views::LabelButton*>(focused_now)->GetText() ==
+    found_ = views::AsViewClass<views::LabelButton>(focused_now)->GetText() ==
              looking_for_;
     DCHECK_LE(steps_taken_, steps_to_find_);
   }
@@ -836,9 +1039,9 @@ TEST_F(CalendarViewTest, MixedInput) {
   auto* focus_manager = calendar_view()->GetFocusManager();
 
   // Focus starts on todays CalendarDateCellView.
-  ASSERT_EQ(u"7",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  ASSERT_EQ(u"7", views::AsViewClass<views::LabelButton>(
+                      focus_manager->GetFocusedView())
+                      ->GetText());
 
   const auto* non_focused_date_cell_view =
       GetDateCell(/*month=*/current_month(), /*day=*/u"9");
@@ -869,9 +1072,9 @@ TEST_F(CalendarViewTest, FocusAfterClosingEventListView) {
   auto* focus_manager = calendar_view()->GetFocusManager();
 
   // Should start with focus on today's cell.
-  ASSERT_EQ(u"7",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  ASSERT_EQ(u"7", views::AsViewClass<views::LabelButton>(
+                      focus_manager->GetFocusedView())
+                      ->GetText());
   ASSERT_FALSE(event_list_view());
 
   PressEnter();
@@ -901,11 +1104,11 @@ TEST_F(CalendarViewTest, FocusReturnsToTodaysDate) {
 
   auto* focus_manager = calendar_view()->GetFocusManager();
   // Todays DateCellView should be focused on open.
-  ASSERT_EQ(u"7",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  ASSERT_EQ(u"7", views::AsViewClass<views::LabelButton>(
+                      focus_manager->GetFocusedView())
+                      ->GetText());
   const auto* todays_date_cell_view = focus_manager->GetFocusedView();
-  ClickDateCell(static_cast<const views::LabelButton*>(todays_date_cell_view));
+  ClickDateCell(views::AsViewClass<views::LabelButton>(todays_date_cell_view));
 
   ASSERT_TRUE(event_list_view());
 
@@ -924,7 +1127,7 @@ TEST_F(CalendarViewTest, OpenListAndCloseListFireAccessibilityEvents) {
 
   // Clicking on the date cell will open the event list. There should be one
   // text-changed accessibility event fired on the scroll view.
-  ClickDateCell(static_cast<const views::LabelButton*>(todays_date_cell_view));
+  ClickDateCell(views::AsViewClass<views::LabelButton>(todays_date_cell_view));
   EXPECT_EQ(1, counter.GetCount(ax::mojom::Event::kTextChanged, scroll_view()));
 
   counter.ResetAllCounts();
@@ -951,9 +1154,9 @@ TEST_F(CalendarViewTest, CloseButtonFocusing) {
 
   auto* focus_manager = calendar_view()->GetFocusManager();
   // Todays DateCellView should be focused on open.
-  ASSERT_EQ(u"7",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  ASSERT_EQ(u"7", views::AsViewClass<views::LabelButton>(
+                      focus_manager->GetFocusedView())
+                      ->GetText());
   ASSERT_FALSE(event_list_view());
 
   PressEnter();
@@ -963,9 +1166,9 @@ TEST_F(CalendarViewTest, CloseButtonFocusing) {
 
   // Focus moves back to the date cell.
   PressShiftTab();
-  EXPECT_EQ(u"7",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  EXPECT_EQ(u"7", views::AsViewClass<views::LabelButton>(
+                      focus_manager->GetFocusedView())
+                      ->GetText());
 
   // Manually moves the focus to the close button.
   RequestFocusForEventListCloseButton();
@@ -989,9 +1192,9 @@ TEST_F(CalendarViewTest, FocusingToCloseButtonWithEventListOpened) {
 
   auto* focus_manager = calendar_view()->GetFocusManager();
   // Todays DateCellView should be focused on open.
-  ASSERT_EQ(u"7",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  ASSERT_EQ(u"7", views::AsViewClass<views::LabelButton>(
+                      focus_manager->GetFocusedView())
+                      ->GetText());
   ASSERT_FALSE(event_list_view());
 
   PressEnter();
@@ -1001,16 +1204,16 @@ TEST_F(CalendarViewTest, FocusingToCloseButtonWithEventListOpened) {
 
   // Focus moves back to today's date cell.
   PressShiftTab();
-  EXPECT_EQ(u"7",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  EXPECT_EQ(u"7", views::AsViewClass<views::LabelButton>(
+                      focus_manager->GetFocusedView())
+                      ->GetText());
 
   // Navigates to another date cell and focuses on it. The focusing ring should
   // go to the close button automatically.
   PressUp();
-  EXPECT_EQ(u"31",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  EXPECT_EQ(u"31", views::AsViewClass<views::LabelButton>(
+                       focus_manager->GetFocusedView())
+                       ->GetText());
   PressEnter();
   EXPECT_TRUE(event_list_view());
   EXPECT_EQ(focus_manager->GetFocusedView(), close_button());
@@ -1018,9 +1221,9 @@ TEST_F(CalendarViewTest, FocusingToCloseButtonWithEventListOpened) {
   // Tests different date cells and expects the same focusing behavior.
   PressShiftTab();
   PressLeft();
-  EXPECT_EQ(u"29",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  EXPECT_EQ(u"29", views::AsViewClass<views::LabelButton>(
+                       focus_manager->GetFocusedView())
+                       ->GetText());
   PressEnter();
   EXPECT_TRUE(event_list_view());
   EXPECT_EQ(focus_manager->GetFocusedView(), close_button());
@@ -1028,18 +1231,18 @@ TEST_F(CalendarViewTest, FocusingToCloseButtonWithEventListOpened) {
   PressShiftTab();
   PressRight();
   PressRight();
-  EXPECT_EQ(u"25",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  EXPECT_EQ(u"25", views::AsViewClass<views::LabelButton>(
+                       focus_manager->GetFocusedView())
+                       ->GetText());
   PressEnter();
   EXPECT_TRUE(event_list_view());
   EXPECT_EQ(focus_manager->GetFocusedView(), close_button());
 
   PressShiftTab();
   PressDown();
-  EXPECT_EQ(u"30",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  EXPECT_EQ(u"30", views::AsViewClass<views::LabelButton>(
+                       focus_manager->GetFocusedView())
+                       ->GetText());
   PressEnter();
   EXPECT_TRUE(event_list_view());
   EXPECT_EQ(focus_manager->GetFocusedView(), close_button());
@@ -1060,50 +1263,50 @@ TEST_F(CalendarViewTest, MonthViewFocusing) {
 
   auto* focus_manager = calendar_view()->GetFocusManager();
   // Todays DateCellView should be focused on open.
-  EXPECT_EQ(u"7",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  EXPECT_EQ(u"7", views::AsViewClass<views::LabelButton>(
+                      focus_manager->GetFocusedView())
+                      ->GetText());
 
   // Tapping on arrow keys should start navigating inside the month view.
   PressUp();
-  EXPECT_EQ(u"31",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  EXPECT_EQ(u"31", views::AsViewClass<views::LabelButton>(
+                       focus_manager->GetFocusedView())
+                       ->GetText());
 
   PressDown();
-  EXPECT_EQ(u"7",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  EXPECT_EQ(u"7", views::AsViewClass<views::LabelButton>(
+                      focus_manager->GetFocusedView())
+                      ->GetText());
 
   PressLeft();
-  EXPECT_EQ(u"6",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  EXPECT_EQ(u"6", views::AsViewClass<views::LabelButton>(
+                      focus_manager->GetFocusedView())
+                      ->GetText());
 
   PressLeft();
-  EXPECT_EQ(u"5",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  EXPECT_EQ(u"5", views::AsViewClass<views::LabelButton>(
+                      focus_manager->GetFocusedView())
+                      ->GetText());
 
   PressDown();
-  EXPECT_EQ(u"12",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  EXPECT_EQ(u"12", views::AsViewClass<views::LabelButton>(
+                       focus_manager->GetFocusedView())
+                       ->GetText());
 
   PressRight();
-  EXPECT_EQ(u"13",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  EXPECT_EQ(u"13", views::AsViewClass<views::LabelButton>(
+                       focus_manager->GetFocusedView())
+                       ->GetText());
 
   PressRight();
-  EXPECT_EQ(u"14",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  EXPECT_EQ(u"14", views::AsViewClass<views::LabelButton>(
+                       focus_manager->GetFocusedView())
+                       ->GetText());
 
   PressRight();
-  EXPECT_EQ(u"15",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  EXPECT_EQ(u"15", views::AsViewClass<views::LabelButton>(
+                       focus_manager->GetFocusedView())
+                       ->GetText());
 }
 
 // Should be able to use the arrow keys to navigate to the previous months or
@@ -1123,43 +1326,43 @@ TEST_F(CalendarViewTest, FocusingToNavigate) {
 
   auto* focus_manager = calendar_view()->GetFocusManager();
   // Focus starts on todays CalendarDateCellView.
-  EXPECT_EQ(u"7",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  EXPECT_EQ(u"7", views::AsViewClass<views::LabelButton>(
+                      focus_manager->GetFocusedView())
+                      ->GetText());
   EXPECT_EQ(u"June", GetCurrentLabelText());
 
   // Tapping on arrow keys should start navigating inside the month view.
   PressUp();
-  EXPECT_EQ(u"31",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  EXPECT_EQ(u"31", views::AsViewClass<views::LabelButton>(
+                       focus_manager->GetFocusedView())
+                       ->GetText());
   EXPECT_EQ(u"May", GetCurrentLabelText());
 
   PressUp();
-  EXPECT_EQ(u"24",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  EXPECT_EQ(u"24", views::AsViewClass<views::LabelButton>(
+                       focus_manager->GetFocusedView())
+                       ->GetText());
 
   PressUp();
-  EXPECT_EQ(u"17",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  EXPECT_EQ(u"17", views::AsViewClass<views::LabelButton>(
+                       focus_manager->GetFocusedView())
+                       ->GetText());
 
   PressUp();
-  EXPECT_EQ(u"10",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  EXPECT_EQ(u"10", views::AsViewClass<views::LabelButton>(
+                       focus_manager->GetFocusedView())
+                       ->GetText());
 
   PressUp();
-  EXPECT_EQ(u"3",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  EXPECT_EQ(u"3", views::AsViewClass<views::LabelButton>(
+                      focus_manager->GetFocusedView())
+                      ->GetText());
   EXPECT_EQ(u"May", GetCurrentLabelText());
 
   PressUp();
-  EXPECT_EQ(u"26",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  EXPECT_EQ(u"26", views::AsViewClass<views::LabelButton>(
+                       focus_manager->GetFocusedView())
+                       ->GetText());
   EXPECT_EQ(u"April", GetCurrentLabelText());
 }
 
@@ -1181,9 +1384,9 @@ TEST_F(CalendarViewTest, ExpandableViewFocusing) {
 
   auto* focus_manager = calendar_view()->GetFocusManager();
   // Focus starts on todays CalendarDateCellView.
-  EXPECT_EQ(u"7",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  EXPECT_EQ(u"7", views::AsViewClass<views::LabelButton>(
+                      focus_manager->GetFocusedView())
+                      ->GetText());
   EXPECT_EQ(u"June", GetCurrentLabelText());
 
   // Opens the event list.
@@ -1195,17 +1398,17 @@ TEST_F(CalendarViewTest, ExpandableViewFocusing) {
 
   // Focus moves back to the date cell.
   PressShiftTab();
-  EXPECT_EQ(u"7",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  EXPECT_EQ(u"7", views::AsViewClass<views::LabelButton>(
+                      focus_manager->GetFocusedView())
+                      ->GetText());
   EXPECT_EQ(u"June", GetCurrentLabelText());
 
   // Tapping on up arrow keys should go to the previous month, which mens the
   // scroll bar is enabled during the key pressed.
   PressUp();
-  EXPECT_EQ(u"31",
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  EXPECT_EQ(u"31", views::AsViewClass<views::LabelButton>(
+                       focus_manager->GetFocusedView())
+                       ->GetText());
   EXPECT_EQ(u"May", GetCurrentLabelText());
   EXPECT_EQ(views::ScrollView::ScrollBarMode::kDisabled, GetScrollBarMode());
 
@@ -1215,9 +1418,10 @@ TEST_F(CalendarViewTest, ExpandableViewFocusing) {
 
   // Goes to empty list view.
   PressTab();
-  EXPECT_EQ(l10n_util::GetStringUTF16(IDS_ASH_CALENDAR_NO_EVENTS),
-            static_cast<views::LabelButton*>(focus_manager->GetFocusedView())
-                ->GetText());
+  EXPECT_EQ(
+      l10n_util::GetStringUTF16(IDS_ASH_CALENDAR_NO_EVENTS),
+      views::AsViewClass<views::LabelButton>(focus_manager->GetFocusedView())
+          ->GetText());
 
   // Moves to the next focusable view. Today's button.
   PressTab();
@@ -1262,25 +1466,25 @@ TEST_F(CalendarViewTest, OnSessionBlocked) {
 
   // The 17th child cell in the month, which is the non-grayed out 15th date
   // cell.
-  EXPECT_EQ(u"15",
-            static_cast<views::LabelButton*>(current_month()->children()[16])
-                ->GetText());
+  EXPECT_EQ(u"15", views::AsViewClass<views::LabelButton>(
+                       current_month()->children()[16])
+                       ->GetText());
 
   // The calendar view will show today's row as the first row, so only dates
   // that are below today's row are in the visible rect.
   GestureTapOn(
-      static_cast<views::LabelButton*>(current_month()->children()[16]));
+      views::AsViewClass<views::LabelButton>(current_month()->children()[16]));
   bool is_showing_event_list_view = event_list_view();
   EXPECT_FALSE(is_showing_event_list_view);
 
   GetSessionControllerClient()->SetSessionState(
       session_manager::SessionState::ACTIVE);
-  EXPECT_EQ(u"15",
-            static_cast<views::LabelButton*>(current_month()->children()[16])
-                ->GetText());
+  EXPECT_EQ(u"15", views::AsViewClass<views::LabelButton>(
+                       current_month()->children()[16])
+                       ->GetText());
 
   GestureTapOn(
-      static_cast<views::LabelButton*>(current_month()->children()[16]));
+      views::AsViewClass<views::LabelButton>(current_month()->children()[16]));
 
   is_showing_event_list_view = event_list_view();
   EXPECT_TRUE(is_showing_event_list_view);
@@ -1343,11 +1547,11 @@ TEST_F(CalendarViewTest, EventListBoundsTest) {
       /*thread_ticks_override=*/nullptr);
 
   CreateCalendarView();
-  ASSERT_EQ(u"15",
-            static_cast<views::LabelButton*>(current_month()->children()[16])
-                ->GetText());
+  ASSERT_EQ(u"15", views::AsViewClass<views::LabelButton>(
+                       current_month()->children()[16])
+                       ->GetText());
   GestureTapOn(
-      static_cast<views::LabelButton*>(current_month()->children()[16]));
+      views::AsViewClass<views::LabelButton>(current_month()->children()[16]));
   ASSERT_TRUE(event_list_view());
   ASSERT_FALSE(current_month()->layer()->GetAnimator()->is_animating());
 
@@ -1498,8 +1702,8 @@ class CalendarViewAnimationTest
                                         std::u16string day) {
     const views::LabelButton* date_cell = nullptr;
     for (const views::View* child_view : month->children()) {
-      auto* current_date_cell =
-          static_cast<const views::LabelButton*>(child_view);
+      const auto* current_date_cell =
+          views::AsViewClass<views::LabelButton>(child_view);
       if (day != current_date_cell->GetText()) {
         continue;
       }
@@ -2466,7 +2670,7 @@ TEST_F(CalendarViewWithUpNextViewTest,
   CreateCalendarView();
   // Open the event list view for any day.
   GestureTapOn(
-      static_cast<views::LabelButton*>(current_month()->children()[25]));
+      views::AsViewClass<views::LabelButton>(current_month()->children()[25]));
   ASSERT_TRUE(event_list_view());
   // Mock events that start in ten mins coming in.
   MockEventsFetched(calendar_utils::GetStartOfMonthUTC(date),
@@ -2496,7 +2700,7 @@ TEST_F(
   CreateCalendarView();
   // Open the event list view for today.
   GestureTapOn(
-      static_cast<views::LabelButton*>(current_month()->children()[18]));
+      views::AsViewClass<views::LabelButton>(current_month()->children()[18]));
   ASSERT_TRUE(event_list_view());
   // Mock events that start in ten mins coming in.
   MockEventsFetched(calendar_utils::GetStartOfMonthUTC(date),
@@ -2526,7 +2730,7 @@ TEST_F(
   CreateCalendarView();
   // Open the event list view for a day that's not on the same row with today.
   GestureTapOn(
-      static_cast<views::LabelButton*>(current_month()->children()[25]));
+      views::AsViewClass<views::LabelButton>(current_month()->children()[25]));
   ASSERT_TRUE(event_list_view());
   // Mock events that start in ten mins coming in.
   MockEventsFetched(calendar_utils::GetStartOfMonthUTC(date),
@@ -2679,11 +2883,11 @@ TEST_F(
   EXPECT_TRUE(up_next_view());
 
   // Open the event list view for today.
-  ASSERT_EQ(u"18",
-            static_cast<views::LabelButton*>(current_month()->children()[18])
-                ->GetText());
+  ASSERT_EQ(u"18", views::AsViewClass<views::LabelButton>(
+                       current_month()->children()[18])
+                       ->GetText());
   GestureTapOn(
-      static_cast<views::LabelButton*>(current_month()->children()[18]));
+      views::AsViewClass<views::LabelButton>(current_month()->children()[18]));
   ASSERT_TRUE(event_list_view());
 
   // Close the event list view.
@@ -2716,11 +2920,11 @@ TEST_F(CalendarViewWithUpNextViewTest,
   EXPECT_TRUE(up_next_view());
 
   // Open the event list view for today.
-  ASSERT_EQ(u"18",
-            static_cast<views::LabelButton*>(current_month()->children()[18])
-                ->GetText());
+  ASSERT_EQ(u"18", views::AsViewClass<views::LabelButton>(
+                       current_month()->children()[18])
+                       ->GetText());
   GestureTapOn(
-      static_cast<views::LabelButton*>(current_month()->children()[18]));
+      views::AsViewClass<views::LabelButton>(current_month()->children()[18]));
   ASSERT_TRUE(event_list_view());
 
   // Mock upcoming events coming in.
@@ -2859,11 +3063,11 @@ TEST_F(CalendarViewWithUpNextViewTest,
   EXPECT_TRUE(up_next_view());
 
   // Open the event list view.
-  ASSERT_EQ(u"25",
-            static_cast<views::LabelButton*>(current_month()->children()[25])
-                ->GetText());
+  ASSERT_EQ(u"25", views::AsViewClass<views::LabelButton>(
+                       current_month()->children()[25])
+                       ->GetText());
   GestureTapOn(
-      static_cast<views::LabelButton*>(current_month()->children()[25]));
+      views::AsViewClass<views::LabelButton>(current_month()->children()[25]));
   ASSERT_TRUE(event_list_view());
 
   // Scroll down one row with the event list open.
@@ -2908,11 +3112,11 @@ TEST_F(CalendarViewWithUpNextViewTest,
   EXPECT_TRUE(up_next_view());
 
   // Open the event list view for today.
-  ASSERT_EQ(u"18",
-            static_cast<views::LabelButton*>(current_month()->children()[18])
-                ->GetText());
+  ASSERT_EQ(u"18", views::AsViewClass<views::LabelButton>(
+                       current_month()->children()[18])
+                       ->GetText());
   GestureTapOn(
-      static_cast<views::LabelButton*>(current_month()->children()[18]));
+      views::AsViewClass<views::LabelButton>(current_month()->children()[18]));
   ASSERT_TRUE(event_list_view());
 
   // Close the event list view.
@@ -3398,11 +3602,11 @@ TEST_P(CalendarViewWithUpNextViewAnimationTest,
   EXPECT_FALSE(calendar_view()->up_next_view());
 
   // Open the event list view for today.
-  ASSERT_EQ(u"30",
-            static_cast<views::LabelButton*>(current_month()->children()[32])
-                ->GetText());
+  ASSERT_EQ(u"30", views::AsViewClass<views::LabelButton>(
+                       current_month()->children()[32])
+                       ->GetText());
   GestureTapOn(
-      static_cast<views::LabelButton*>(current_month()->children()[32]));
+      views::AsViewClass<views::LabelButton>(current_month()->children()[32]));
 
   animation_waiter.Wait(calendar_sliding_surface_view()->layer());
   animation_waiter.Wait(current_label()->layer());

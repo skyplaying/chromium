@@ -5,13 +5,17 @@
 #include "base/debug/stack_trace.h"
 
 #include <android/log.h>
+#include <dlfcn.h>
 #include <stddef.h>
 #include <unwind.h>
 
 #include <algorithm>
 #include <ostream>
+#include <string_view>
 
 #include "base/compiler_specific.h"
+#include "base/debug/debugging_buildflags.h"
+#include "base/debug/elf_reader.h"
 #include "base/debug/proc_maps_linux.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/strcat.h"
@@ -24,8 +28,16 @@
 #define FMT_ADDR "0x%08x"
 #endif
 
+#if BUILDFLAG(EXCLUDE_UNWIND_TABLES) && \
+    BUILDFLAG(CAN_UNWIND_WITH_FRAME_POINTERS)
+#define UNWIND_WITH_FRAME_POINTERS 1
+#else
+#define UNWIND_WITH_FRAME_POINTERS 0
+#endif
+
 namespace {
 
+#if !UNWIND_WITH_FRAME_POINTERS
 struct StackCrawlState {
   StackCrawlState(uintptr_t* frames, size_t max_depth)
       : frames(frames),
@@ -55,11 +67,7 @@ _Unwind_Reason_Code TraceStackFrame(_Unwind_Context* context, void* arg) {
   }
   return _URC_NO_REASON;
 }
-
-bool EndsWith(const std::string& s, const std::string& suffix) {
-  return s.size() >= suffix.size() &&
-         s.substr(s.size() - suffix.size(), suffix.size()) == suffix;
-}
+#endif  // !UNWIND_WITH_FRAME_POINTERS
 
 }  // namespace
 
@@ -78,10 +86,15 @@ bool EnableInProcessStackDumping() {
 }
 
 size_t CollectStackTrace(span<const void*> trace) {
+#if UNWIND_WITH_FRAME_POINTERS
+  return TraceStackFramePointers(trace, 0);
+#else
   StackCrawlState state(reinterpret_cast<uintptr_t*>(trace.data()),
                         trace.size());
   _Unwind_Backtrace(&TraceStackFrame, &state);
   return state.frame_count;
+#endif
+#undef UNWIND_WITH_FRAME_POINTERS
 }
 
 // static
@@ -138,6 +151,11 @@ void StackTrace::OutputToStreamWithPrefixImpl(
 
     *os << prefix_string;
 
+    Dl_info dl_info;
+    const bool dl_info_found =
+        dladdr(reinterpret_cast<const void*>(address), &dl_info) &&
+        dl_info.dli_fbase;
+
     // Adjust absolute address to be an offset within the mapped region, to
     // match the format dumped by Android's crash output.
     if (iter != regions.end()) {
@@ -150,11 +168,20 @@ void StackTrace::OutputToStreamWithPrefixImpl(
 
     if (iter != regions.end()) {
       *os << base::StringPrintf("%s", iter->path.c_str());
-      if (EndsWith(iter->path, ".apk")) {
+      if (iter->path.ends_with(".apk")) {
         *os << base::StringPrintf(" (offset 0x%llx)", iter->offset);
       }
     } else {
       *os << "<unknown>";
+    }
+
+    if (dl_info_found) {
+      ElfBuildIdBuffer build_id;
+      size_t build_id_len =
+          ReadElfBuildId(dl_info.dli_fbase, /*uppercase=*/false, build_id);
+      if (build_id_len > 0) {
+        *os << " (BuildId: " << std::string_view(build_id, build_id_len) << ")";
+      }
     }
 
     *os << "\n";

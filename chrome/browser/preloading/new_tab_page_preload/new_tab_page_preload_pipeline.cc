@@ -7,6 +7,7 @@
 #include "base/debug/dump_without_crashing.h"
 #include "base/metrics/histogram_functions.h"
 #include "chrome/browser/browser_features.h"
+#include "chrome/browser/page_load_metrics/chrome_initiator_location.h"
 #include "chrome/browser/preloading/chrome_preloading.h"
 #include "chrome/browser/preloading/preloading_utils.h"
 #include "chrome/browser/preloading/prerender/prerender_manager.h"
@@ -21,6 +22,7 @@
 #include "content/public/browser/preloading_trigger_type.h"
 #include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/mojom/loader/referrer.mojom.h"
+#include "ui/base/page_transition_types.h"
 
 namespace {
 
@@ -81,7 +83,8 @@ void NewTabPagePreloadPipeline::StartPrefetch(
       /*no_vary_search_hint=*/std::nullopt, /*priority=*/std::nullopt,
       pipeline_info_, attempt->GetWeakPtr(),
       /*holdback_status_override=*/
-      content::PreloadingHoldbackStatus::kUnspecified, /*ttl=*/std::nullopt);
+      content::PreloadingHoldbackStatus::kUnspecified, /*ttl=*/std::nullopt,
+      /*should_ignore_saver_modes=*/false);
 }
 
 void NewTabPagePreloadPipeline::StartPrerender(
@@ -129,7 +132,6 @@ void NewTabPagePreloadPipeline::StartPrerender(
       content::PreloadingHoldbackStatus::kUnspecified, pipeline_info_,
       preloading_attempt,
       /*url_match_predicate=*/{},
-      base::BindRepeating(&page_load_metrics::NavigationHandleUserData::
-                              AttachNewTabPageNavigationHandleUserData),
+      base::BindRepeating(&AttachNewTabPageNavigationHandleUserData),
       /*allow_reuse=*/false);
 }

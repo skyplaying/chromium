@@ -12,6 +12,8 @@
 #import "components/ukm/ios/ukm_url_recorder.h"
 #import "ios/chrome/browser/find_in_page/model/find_in_page_model.h"
 #import "ios/chrome/browser/find_in_page/model/find_in_page_response_delegate.h"
+#import "ios/chrome/browser/find_in_page/model/find_tab_helper.h"
+#import "ios/chrome/browser/fullscreen/public/fullscreen_metrics.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_controller.h"
 #import "ios/chrome/browser/ntp/model/new_tab_page_util.h"
 #import "ios/chrome/browser/shared/model/browser/browser_list_factory.h"
@@ -88,13 +90,12 @@ NSString* gSearchTerm;
 }
 
 - (void)disableFindInPage {
-  CHECK(self.fullscreenController);
   _findInPageManager->StopFinding();
 
   // When pulling to refresh the webpage during FIP,
   // `userDismissedFindNavigatorForManager` will not be called. We need to
   // handle the fullscreen exit here in this case.
-  self.fullscreenController->ExitForceFullscreenMode();
+  [self exitFullscreen];
 }
 
 - (BOOL)canFindInPage {
@@ -124,6 +125,15 @@ NSString* gSearchTerm;
   }
 }
 
+// Exits forced fullscreen mode.
+- (void)exitFullscreen {
+  if (!IsFullscreenRefactoringEnabled()) {
+    CHECK(self.fullscreenController);
+    self.fullscreenController->ExitForceFullscreenMode(
+        FullscreenModeTransitionTrigger::kForcedByCode);
+  }
+}
+
 #pragma mark - CRWFindInPageManagerDelegate
 
 - (void)findInPageManager:(web::FindInPageManager*)manager
@@ -150,10 +160,16 @@ NSString* gSearchTerm;
 }
 
 - (void)userDismissedFindNavigatorForManager:(web::FindInPageManager*)manager {
-  CHECK(self.fullscreenController);
   // User dismissed the Find panel so mark the Find UI as inactive.
-  self.findInPageModel.enabled = NO;
-  self.fullscreenController->ExitForceFullscreenMode();
+  if (IsFullscreenRefactoringEnabled()) {
+    FindTabHelper* helper = FindTabHelper::FromWebState(_webState);
+    if (helper) {
+      helper->SetFindUIActive(false);
+    }
+  } else {
+    self.findInPageModel.enabled = NO;
+    [self exitFullscreen];
+  }
 }
 
 - (void)detachFromWebState {

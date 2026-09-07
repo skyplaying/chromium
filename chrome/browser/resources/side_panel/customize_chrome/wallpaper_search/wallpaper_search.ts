@@ -121,7 +121,7 @@ function getRandomDescriptorA(groups: Group[]): string {
 function recordStatusChange(status: WallpaperSearchStatus) {
   chrome.metricsPrivate.recordEnumerationValue(
       'NewTabPage.WallpaperSearch.Status', status,
-      WallpaperSearchStatus.MAX_VALUE);
+      WallpaperSearchStatus.MAX_VALUE + 1);
 }
 
 function getEventTargetIndex(e: Event): number {
@@ -157,7 +157,7 @@ export class WallpaperSearchElement extends WallpaperSearchElementBase {
       inspirationToggleIcon_: {type: String},
       openInspirations_: {type: Boolean},
       resultsDescriptors_: {type: Object},
-      results_: {type: Object},
+      results_: {type: Array},
       selectedFeedbackOption_: {type: Number},
       selectedDescriptorA_: {type: String},
       selectedDescriptorB_: {type: String},
@@ -193,9 +193,9 @@ export class WallpaperSearchElement extends WallpaperSearchElementBase {
   private accessor resultsDescriptors_: ResultDescriptors|null = null;
   private resultsPromises_: Array<Promise<WallpaperSearchResponse>> = [];
   private selectedDefaultColor_: string|undefined;
-  protected accessor selectedDescriptorA_: string|null = null;
-  protected accessor selectedDescriptorB_: string|null = null;
-  protected accessor selectedDescriptorC_: string|null = null;
+  protected accessor selectedDescriptorA_: string|undefined;
+  protected accessor selectedDescriptorB_: string|undefined;
+  protected accessor selectedDescriptorC_: string|undefined;
   private accessor selectedDescriptorD_: DescriptorDValue|null = null;
   protected accessor selectedFeedbackOption_: CrFeedbackOption =
       CrFeedbackOption.UNSPECIFIED;
@@ -227,13 +227,13 @@ export class WallpaperSearchElement extends WallpaperSearchElementBase {
   override connectedCallback() {
     super.connectedCallback();
     this.setThemeListenerId_ =
-        this.apiProxy_.callbackRouter.setTheme.addListener((theme: Theme) => {
+        this.apiProxy_.callbackRouter.setTheme.addListener(theme => {
           this.theme_ = theme;
         });
     this.apiProxy_.handler.updateTheme();
     this.setHistoryListenerId_ =
         this.wallpaperSearchProxy_.callbackRouter.setHistory.addListener(
-            (history: WallpaperSearchResult[]) => {
+            history => {
               this.history_ = history;
               this.openInspirations_ = !this.computeShouldShowHistory_();
             });
@@ -448,12 +448,9 @@ export class WallpaperSearchElement extends WallpaperSearchElementBase {
     const groupDescriptorColor = groupDescriptors.color?.name !== undefined ?
         descriptorDNameToHex(groupDescriptors.color.name) :
         undefined;
-    return (groupDescriptors.subject?.key || null) ===
-                this.selectedDescriptorA_ &&
-            (groupDescriptors.style?.key || null) ===
-                this.selectedDescriptorB_ &&
-            (groupDescriptors.mood?.key || null) ===
-                this.selectedDescriptorC_ &&
+    return (groupDescriptors.subject?.key) === this.selectedDescriptorA_ &&
+            (groupDescriptors.style?.key) === this.selectedDescriptorB_ &&
+            (groupDescriptors.mood?.key) === this.selectedDescriptorC_ &&
             groupDescriptorColor === this.selectedDefaultColor_ ?
         'true' :
         'false';
@@ -540,7 +537,7 @@ export class WallpaperSearchElement extends WallpaperSearchElementBase {
     return option.key === this.selectedDescriptorB_;
   }
 
-  protected onBackClick_() {
+  protected onBackButtonClick_() {
     this.dispatchEvent(new Event('back-click'));
   }
 
@@ -588,7 +585,7 @@ export class WallpaperSearchElement extends WallpaperSearchElementBase {
         CustomizeChromeAction.WALLPAPER_SEARCH_COLOR_DESCRIPTOR_UPDATED);
   }
 
-  protected onMoodDescriptorChange_(e: CustomEvent<{value: string}>) {
+  protected onMoodDescriptorValueChanged_(e: CustomEvent<{value: string}>) {
     if (this.selectedDescriptorC_ !== e.detail.value) {
       recordCustomizeChromeAction(
           CustomizeChromeAction.WALLPAPER_SEARCH_MOOD_DESCRIPTOR_UPDATED);
@@ -596,7 +593,7 @@ export class WallpaperSearchElement extends WallpaperSearchElementBase {
     this.selectedDescriptorC_ = e.detail.value;
   }
 
-  protected onStyleDescriptorChange_(e: CustomEvent<{value: string}>) {
+  protected onStyleDescriptorValueChanged_(e: CustomEvent<{value: string}>) {
     if (this.selectedDescriptorB_ !== e.detail.value) {
       recordCustomizeChromeAction(
           CustomizeChromeAction.WALLPAPER_SEARCH_STYLE_DESCRIPTOR_UPDATED);
@@ -604,7 +601,7 @@ export class WallpaperSearchElement extends WallpaperSearchElementBase {
     this.selectedDescriptorB_ = e.detail.value;
   }
 
-  protected onSubjectDescriptorChange_(e: CustomEvent<{value: string}>) {
+  protected onSubjectDescriptorValueChanged_(e: CustomEvent<{value: string}>) {
     if (this.selectedDescriptorA_ !== e.detail.value) {
       recordCustomizeChromeAction(
           CustomizeChromeAction.WALLPAPER_SEARCH_SUBJECT_DESCRIPTOR_UPDATED);
@@ -685,7 +682,7 @@ export class WallpaperSearchElement extends WallpaperSearchElementBase {
         CustomizeChromeAction.WALLPAPER_SEARCH_COLOR_DESCRIPTOR_UPDATED);
   }
 
-  protected onSelectedHueDelete_() {
+  protected onSelectedHueDeleteClick_() {
     this.selectedHue_ = null;
     this.selectedDescriptorD_ = null;
     this.$.hueSlider.hide();
@@ -778,9 +775,9 @@ export class WallpaperSearchElement extends WallpaperSearchElementBase {
   private selectDescriptorsFromInspirationGroup_(group: InspirationGroup) {
     const announcer = getAnnouncerInstance();
     const groupDescriptors = group.descriptors;
-    this.selectedDescriptorA_ = groupDescriptors.subject?.key || null;
-    this.selectedDescriptorB_ = groupDescriptors.style?.key || null;
-    this.selectedDescriptorC_ = groupDescriptors.mood?.key || null;
+    this.selectedDescriptorA_ = groupDescriptors.subject?.key;
+    this.selectedDescriptorB_ = groupDescriptors.style?.key;
+    this.selectedDescriptorC_ = groupDescriptors.mood?.key;
 
     if (groupDescriptors.color?.name !== undefined) {
       const hex = descriptorDNameToHex(groupDescriptors.color.name);

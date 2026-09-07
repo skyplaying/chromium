@@ -10,7 +10,6 @@ import static org.chromium.components.browser_ui.settings.SearchUtils.handleSear
 import static org.chromium.components.browser_ui.styles.SemanticColorUtils.getDefaultTextColorLink;
 
 import android.content.Context;
-import android.content.DialogInterface;
 import android.content.res.Resources;
 import android.os.Bundle;
 import android.text.SpannableString;
@@ -27,6 +26,7 @@ import android.widget.Button;
 import android.widget.TextView;
 
 import androidx.appcompat.app.AlertDialog;
+import androidx.appcompat.widget.SearchView;
 import androidx.preference.Preference;
 import androidx.preference.PreferenceManager;
 import androidx.recyclerview.widget.RecyclerView;
@@ -52,6 +52,7 @@ import org.chromium.components.browser_ui.util.TraceEventVectorDrawableCompat;
 import org.chromium.components.embedder_support.util.UrlUtilities;
 import org.chromium.content_public.browser.BrowserContextHandle;
 import org.chromium.content_public.browser.HostZoomMap;
+import org.chromium.content_public.browser.SiteZoomInfo;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modaldialog.ModalDialogManager.ModalDialogType;
 import org.chromium.ui.modaldialog.ModalDialogProperties;
@@ -110,9 +111,13 @@ public class AllSiteSettings extends BaseSiteSettingsFragment
 
     private @Nullable Set<String> mSelectedDomains;
 
+    private static final long NO_ZOOM_OBSERVER_REGISTERED = 0;
+
     private final SettableMonotonicObservableSupplier<String> mPageTitle =
             ObservableSuppliers.createMonotonic();
     private @MonotonicNonNull SearchViewProvider.Observer mSearchViewObserver;
+    private long mZoomObserverSubscriptionKey = NO_ZOOM_OBSERVER_REGISTERED;
+    private boolean mIsBulkClearingZooms;
 
     private class ResultsPopulator implements WebsitePermissionsFetcher.WebsitePermissionsCallback {
         @Override
@@ -126,9 +131,12 @@ public class AllSiteSettings extends BaseSiteSettingsFragment
 
             boolean hasEntries = addWebsites(sites);
 
-            if (mEmptyView == null) return;
-
-            mEmptyView.setVisibility(hasEntries ? View.GONE : View.VISIBLE);
+            if (mEmptyView != null) {
+                mEmptyView.setVisibility(hasEntries ? View.GONE : View.VISIBLE);
+            }
+            // Always update containment even when mEmptyView is null. In ALL_SITES mode,
+            // mEmptyView is not inflated, but the newly populated website rows still
+            // require containment styles, margins, and card backgrounds to be calculated.
             updateContainment();
         }
     }
@@ -186,6 +194,16 @@ public class AllSiteSettings extends BaseSiteSettingsFragment
             mEmptyView = view.findViewById(R.id.site_settings_zoom_empty_zoom_levels_message_text);
             mClearButton = view.findViewById(R.id.site_settings_zoom_clear_all_zoom_levels_button);
             mClearButton.setOnClickListener(this::handleZoomClearAll);
+            if (mZoomObserverSubscriptionKey == NO_ZOOM_OBSERVER_REGISTERED) {
+                mZoomObserverSubscriptionKey =
+                        HostZoomMap.addZoomLevelObserver(
+                                browserContextHandle,
+                                (SiteZoomInfo siteZoomInfo) -> {
+                                    if (!mIsBulkClearingZooms) {
+                                        getInfoForOrigins();
+                                    }
+                                });
+            }
         }
 
         mListView = getListView();
@@ -233,12 +251,17 @@ public class AllSiteSettings extends BaseSiteSettingsFragment
                 getSiteSettingsDelegate().getBrowserContextHandle();
         double defaultZoomFactor =
                 PageZoomUtils.getDefaultZoomLevelAsZoomFactor(browserContextHandle);
-        for (WebsitePreference preference : mWebsites) {
-            // Propagate the change through HostZoomMap.
-            HostZoomMap.setZoomLevelForHost(
-                    browserContextHandle,
-                    assumeNonNull(preference.site().getAddress().getHost()),
-                    defaultZoomFactor);
+        mIsBulkClearingZooms = true;
+        try {
+            for (WebsitePreference preference : mWebsites) {
+                // Propagate the change through HostZoomMap.
+                HostZoomMap.setZoomLevelForHost(
+                        browserContextHandle,
+                        assumeNonNull(preference.site().getAddress().getHost()),
+                        defaultZoomFactor);
+            }
+        } finally {
+            mIsBulkClearingZooms = false;
         }
         // Refresh this fragment to trigger UI change.
         getInfoForOrigins();
@@ -339,12 +362,7 @@ public class AllSiteSettings extends BaseSiteSettingsFragment
         builder.setView(dialogView);
         builder.setPositiveButton(
                 R.string.storage_delete_dialog_clear_storage_option,
-                new DialogInterface.OnClickListener() {
-                    @Override
-                    public void onClick(DialogInterface dialog, int id) {
-                        clearStorage();
-                    }
-                });
+                (dialog, id) -> clearStorage());
         builder.setNegativeButton(R.string.cancel, null);
         builder.setTitle(R.string.storage_delete_site_storage_title);
         builder.create().show();
@@ -352,6 +370,9 @@ public class AllSiteSettings extends BaseSiteSettingsFragment
 
     @Override
     public void onCreatePreferences(@Nullable Bundle savedInstanceState, @Nullable String rootKey) {
+        String title = getArguments().getString(EXTRA_TITLE);
+        if (title != null) mPageTitle.set(title);
+
         // Handled in onActivityCreated. Moving the addPreferencesFromResource call up to here
         // causes animation jank (crbug.com/985734).
     }
@@ -359,9 +380,6 @@ public class AllSiteSettings extends BaseSiteSettingsFragment
     @Override
     public void onActivityCreated(@Nullable Bundle savedInstanceState) {
         addPreferencesFromXml();
-
-        String title = getArguments().getString(EXTRA_TITLE);
-        if (title != null) mPageTitle.set(title);
 
         mSelectedDomains =
                 getArguments().containsKey(EXTRA_SELECTED_DOMAINS)
@@ -383,6 +401,23 @@ public class AllSiteSettings extends BaseSiteSettingsFragment
         mSearchViewObserver = observer;
     }
 
+    private void onSearchQueryChanged(String query) {
+        boolean queryHasChanged =
+                mSearch == null ? query != null && !query.isEmpty() : !mSearch.equals(query);
+        mSearch = query;
+        if (queryHasChanged) getInfoForOrigins();
+    }
+
+    @Override
+    public void initSearchView(SearchView searchView) {
+        SearchUtils.initializeSearchView(
+                searchView,
+                mSearch,
+                getActivity(),
+                mSearchViewObserver,
+                this::onSearchQueryChanged);
+    }
+
     @Override
     public void onCreateOptionsMenu(Menu menu, MenuInflater inflater) {
         menu.clear();
@@ -394,14 +429,7 @@ public class AllSiteSettings extends BaseSiteSettingsFragment
                 mSearch,
                 getActivity(),
                 assumeNonNull(mSearchViewObserver),
-                (query) -> {
-                    boolean queryHasChanged =
-                            mSearch == null
-                                    ? query != null && !query.isEmpty()
-                                    : !mSearch.equals(query);
-                    mSearch = query;
-                    if (queryHasChanged) getInfoForOrigins();
-                });
+                this::onSearchQueryChanged);
 
         if (getSiteSettingsDelegate().isHelpAndFeedbackEnabled()) {
             MenuItem help =
@@ -409,7 +437,7 @@ public class AllSiteSettings extends BaseSiteSettingsFragment
                             Menu.NONE,
                             R.id.menu_id_site_settings_help,
                             Menu.NONE,
-                            R.string.menu_help);
+                            getSiteSettingsDelegate().getHelpMenuStringRes());
             help.setIcon(
                     TraceEventVectorDrawableCompat.create(
                             getResources(), R.drawable.ic_help_24dp, getContext().getTheme()));
@@ -453,8 +481,7 @@ public class AllSiteSettings extends BaseSiteSettingsFragment
     @Override
     public void onStart() {
         super.onStart();
-
-        if (mSearch == null && mSearchItem != null) {
+        if (mSearch != null && mSearchItem != null) {
             SearchUtils.clearSearch(mSearchItem, getActivity());
             mSearch = null;
         }
@@ -497,6 +524,9 @@ public class AllSiteSettings extends BaseSiteSettingsFragment
             clearBrowsingDataLink.setSummary(spannableString);
             clearBrowsingDataLink.setOnPreferenceClickListener(
                     pref -> {
+                        if (mSearchItem != null) {
+                            SearchUtils.clearSearch(mSearchItem, getActivity());
+                        }
                         getSiteSettingsDelegate().launchClearBrowsingDataDialog(getActivity());
                         return true;
                     });
@@ -540,7 +570,6 @@ public class AllSiteSettings extends BaseSiteSettingsFragment
                     WebsitePreference preference =
                             new WebsitePreference(
                                     getStyledContext(), getSiteSettingsDelegate(), site, mCategory);
-                    preference.setRefreshZoomsListFunction(this::getInfoForOrigins);
                     websites.add(preference);
                 }
             }
@@ -573,6 +602,21 @@ public class AllSiteSettings extends BaseSiteSettingsFragment
     @Override
     public @AnimationType int getAnimationType() {
         return AnimationType.PROPERTY;
+    }
+
+    private void removeZoomObserver() {
+        if (mZoomObserverSubscriptionKey != NO_ZOOM_OBSERVER_REGISTERED) {
+            HostZoomMap.removeZoomLevelObserver(
+                    getSiteSettingsDelegate().getBrowserContextHandle(),
+                    mZoomObserverSubscriptionKey);
+            mZoomObserverSubscriptionKey = NO_ZOOM_OBSERVER_REGISTERED;
+        }
+    }
+
+    @Override
+    public void onDestroyView() {
+        removeZoomObserver();
+        super.onDestroyView();
     }
 
     @Override

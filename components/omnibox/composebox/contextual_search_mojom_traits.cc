@@ -4,6 +4,7 @@
 
 #include "components/omnibox/composebox/contextual_search_mojom_traits.h"
 
+#include "base/logging.h"
 #include "base/notreached.h"
 #include "components/omnibox/composebox/composebox_query.mojom-shared.h"
 
@@ -21,14 +22,22 @@ using UsedInputTypeConfigDataView =
 using UsedSectionConfigDataView =
     composebox_query::mojom::SectionConfigDataView;
 using UsedInputStateDataView = composebox_query::mojom::InputStateDataView;
-using UsedFileUploadStatus = composebox_query::mojom::FileUploadStatus;
-using UsedFileUploadErrorType = composebox_query::mojom::FileUploadErrorType;
+using UsedContextUploadStatus = composebox_query::mojom::ContextUploadStatus;
+using UsedContextUploadErrorType =
+    composebox_query::mojom::ContextUploadErrorType;
 
 }  // namespace
 
 // static
 UsedToolMode EnumTraits<UsedToolMode, omnibox::ToolMode>::ToMojom(
     omnibox::ToolMode input) {
+  // Guard against new, unknown values from the server cleanly.
+  // This handles extensible enums securely while allowing us to omit a
+  // 'default' case, preserving the compiler's -Wswitch exhaustiveness check
+  // for known values.
+  if (!omnibox::ToolMode_IsValid(static_cast<int>(input))) {
+    return UsedToolMode::kUnspecified;
+  }
   switch (input) {
     case omnibox::ToolMode::TOOL_MODE_UNSPECIFIED:
       return UsedToolMode::kUnspecified;
@@ -48,6 +57,8 @@ UsedToolMode EnumTraits<UsedToolMode, omnibox::ToolMode>::ToMojom(
       return UsedToolMode::kAim;
     case omnibox::ToolMode::TOOL_MODE_AIM_GEN_PROMPT:
       return UsedToolMode::kAimGenPrompt;
+    case omnibox::ToolMode::TOOL_MODE_AGENT_TASK:
+      return UsedToolMode::kAgentTask;
     case omnibox::ToolMode::TOOL_MODE_DISABLE_SUGGEST:
       return UsedToolMode::kDisableSuggest;
     case omnibox::ToolMode::TOOL_MODE_GEMINI_PRO:
@@ -59,47 +70,38 @@ UsedToolMode EnumTraits<UsedToolMode, omnibox::ToolMode>::ToMojom(
     case omnibox::ToolMode::ToolMode_INT_MAX_SENTINEL_DO_NOT_USE_:
       break;
   }
-  NOTREACHED();
+  DUMP_WILL_BE_NOTREACHED();
+  return UsedToolMode::kUnspecified;
 }
 
 // static
-bool EnumTraits<UsedToolMode, omnibox::ToolMode>::FromMojom(
-    UsedToolMode input,
-    omnibox::ToolMode* output) {
+omnibox::ToolMode EnumTraits<UsedToolMode, omnibox::ToolMode>::FromMojom(
+    UsedToolMode input) {
   switch (input) {
     case UsedToolMode::kUnspecified:
-      *output = omnibox::ToolMode::TOOL_MODE_UNSPECIFIED;
-      return true;
+      return omnibox::ToolMode::TOOL_MODE_UNSPECIFIED;
     case UsedToolMode::kDeepSearch:
-      *output = omnibox::ToolMode::TOOL_MODE_DEEP_SEARCH;
-      return true;
+      return omnibox::ToolMode::TOOL_MODE_DEEP_SEARCH;
     case UsedToolMode::kCanvas:
-      *output = omnibox::ToolMode::TOOL_MODE_CANVAS;
-      return true;
+      return omnibox::ToolMode::TOOL_MODE_CANVAS;
     case UsedToolMode::kImageGen:
-      *output = omnibox::ToolMode::TOOL_MODE_IMAGE_GEN;
-      return true;
+      return omnibox::ToolMode::TOOL_MODE_IMAGE_GEN;
     case UsedToolMode::kDeepBrowse:
-      *output = omnibox::ToolMode::TOOL_MODE_DEEP_BROWSE;
-      return true;
+      return omnibox::ToolMode::TOOL_MODE_DEEP_BROWSE;
     case UsedToolMode::kAim:
-      *output = omnibox::ToolMode::TOOL_MODE_AIM;
-      return true;
+      return omnibox::ToolMode::TOOL_MODE_AIM;
     case UsedToolMode::kAimGenPrompt:
-      *output = omnibox::ToolMode::TOOL_MODE_AIM_GEN_PROMPT;
-      return true;
+      return omnibox::ToolMode::TOOL_MODE_AIM_GEN_PROMPT;
+    case UsedToolMode::kAgentTask:
+      return omnibox::ToolMode::TOOL_MODE_AGENT_TASK;
     case UsedToolMode::kDisableSuggest:
-      *output = omnibox::ToolMode::TOOL_MODE_DISABLE_SUGGEST;
-      return true;
+      return omnibox::ToolMode::TOOL_MODE_DISABLE_SUGGEST;
     case UsedToolMode::kGeminiPro:
-      *output = omnibox::ToolMode::TOOL_MODE_GEMINI_PRO;
-      return true;
+      return omnibox::ToolMode::TOOL_MODE_GEMINI_PRO;
     case UsedToolMode::kImageGenUpload:
-      *output = omnibox::ToolMode::TOOL_MODE_IMAGE_GEN_UPLOAD;
-      return true;
+      return omnibox::ToolMode::TOOL_MODE_IMAGE_GEN_UPLOAD;
     case UsedToolMode::kImageGenSelfie:
-      *output = omnibox::ToolMode::TOOL_MODE_IMAGE_GEN_SELFIE;
-      return true;
+      return omnibox::ToolMode::TOOL_MODE_IMAGE_GEN_SELFIE;
   }
   NOTREACHED();
 }
@@ -107,6 +109,13 @@ bool EnumTraits<UsedToolMode, omnibox::ToolMode>::FromMojom(
 // static
 UsedModelMode EnumTraits<UsedModelMode, omnibox::ModelMode>::ToMojom(
     omnibox::ModelMode input) {
+  // Guard against new, unknown values from the server cleanly.
+  // This handles extensible enums securely while allowing us to omit a
+  // 'default' case, preserving the compiler's -Wswitch exhaustiveness check
+  // for known values.
+  if (!omnibox::ModelMode_IsValid(static_cast<int>(input))) {
+    return UsedModelMode::kUnspecified;
+  }
   switch (input) {
     case omnibox::ModelMode::MODEL_MODE_UNSPECIFIED:
       return UsedModelMode::kUnspecified;
@@ -118,6 +127,12 @@ UsedModelMode EnumTraits<UsedModelMode, omnibox::ModelMode>::ToMojom(
       return UsedModelMode::kGeminiProAutoroute;
     case omnibox::ModelMode::MODEL_MODE_GEMINI_PRO_NO_GEN_UI:
       return UsedModelMode::kGeminiProNoGenUi;
+    case omnibox::ModelMode::MODEL_MODE_GEMINI_FLASH_LATEST:
+      return UsedModelMode::kGeminiFlashLatest;
+    case omnibox::ModelMode::MODEL_MODE_GEMINI_PRO_LATEST:
+      return UsedModelMode::kGeminiProLatest;
+    case omnibox::ModelMode::MODEL_MODE_GEMINI_PREVIEW:
+      return UsedModelMode::kGeminiPreview;
     // The proto compiler generates these sentinel values. We must handle them
     // to satisfy the compiler's exhaustiveness check (since we don't have a
     // default case), but they should never be encountered in practice.
@@ -125,29 +140,30 @@ UsedModelMode EnumTraits<UsedModelMode, omnibox::ModelMode>::ToMojom(
     case omnibox::ModelMode::ModelMode_INT_MAX_SENTINEL_DO_NOT_USE_:
       break;
   }
-  NOTREACHED();
+  DUMP_WILL_BE_NOTREACHED();
+  return UsedModelMode::kUnspecified;
 }
 
 // static
-bool EnumTraits<UsedModelMode, omnibox::ModelMode>::FromMojom(
-    UsedModelMode input,
-    omnibox::ModelMode* output) {
+omnibox::ModelMode EnumTraits<UsedModelMode, omnibox::ModelMode>::FromMojom(
+    UsedModelMode input) {
   switch (input) {
     case UsedModelMode::kUnspecified:
-      *output = omnibox::ModelMode::MODEL_MODE_UNSPECIFIED;
-      return true;
+      return omnibox::ModelMode::MODEL_MODE_UNSPECIFIED;
     case UsedModelMode::kGeminiRegular:
-      *output = omnibox::ModelMode::MODEL_MODE_GEMINI_REGULAR;
-      return true;
+      return omnibox::ModelMode::MODEL_MODE_GEMINI_REGULAR;
     case UsedModelMode::kGeminiPro:
-      *output = omnibox::ModelMode::MODEL_MODE_GEMINI_PRO;
-      return true;
+      return omnibox::ModelMode::MODEL_MODE_GEMINI_PRO;
     case UsedModelMode::kGeminiProAutoroute:
-      *output = omnibox::ModelMode::MODEL_MODE_GEMINI_PRO_AUTOROUTE;
-      return true;
+      return omnibox::ModelMode::MODEL_MODE_GEMINI_PRO_AUTOROUTE;
     case UsedModelMode::kGeminiProNoGenUi:
-      *output = omnibox::ModelMode::MODEL_MODE_GEMINI_PRO_NO_GEN_UI;
-      return true;
+      return omnibox::ModelMode::MODEL_MODE_GEMINI_PRO_NO_GEN_UI;
+    case UsedModelMode::kGeminiFlashLatest:
+      return omnibox::ModelMode::MODEL_MODE_GEMINI_FLASH_LATEST;
+    case UsedModelMode::kGeminiProLatest:
+      return omnibox::ModelMode::MODEL_MODE_GEMINI_PRO_LATEST;
+    case UsedModelMode::kGeminiPreview:
+      return omnibox::ModelMode::MODEL_MODE_GEMINI_PREVIEW;
   }
   NOTREACHED();
 }
@@ -155,6 +171,13 @@ bool EnumTraits<UsedModelMode, omnibox::ModelMode>::FromMojom(
 // static
 UsedInputType EnumTraits<UsedInputType, omnibox::InputType>::ToMojom(
     omnibox::InputType input) {
+  // Guard against new, unknown values from the server cleanly.
+  // This handles extensible enums securely while allowing us to omit a
+  // 'default' case, preserving the compiler's -Wswitch exhaustiveness check
+  // for known values.
+  if (!omnibox::InputType_IsValid(static_cast<int>(input))) {
+    return UsedInputType::kUnspecified;
+  }
   switch (input) {
     case omnibox::InputType::INPUT_TYPE_UNSPECIFIED:
       return UsedInputType::kUnspecified;
@@ -164,6 +187,8 @@ UsedInputType EnumTraits<UsedInputType, omnibox::InputType>::ToMojom(
       return UsedInputType::kLensFile;
     case omnibox::InputType::INPUT_TYPE_BROWSER_TAB:
       return UsedInputType::kBrowserTab;
+    case omnibox::InputType::INPUT_TYPE_DRIVE:
+      return UsedInputType::kDrive;
     // The proto compiler generates these sentinel values. We must handle them
     // to satisfy the compiler's exhaustiveness check (since we don't have a
     // default case), but they should never be encountered in practice.
@@ -171,145 +196,177 @@ UsedInputType EnumTraits<UsedInputType, omnibox::InputType>::ToMojom(
     case omnibox::InputType::InputType_INT_MAX_SENTINEL_DO_NOT_USE_:
       break;
   }
-  NOTREACHED();
+  DLOG(ERROR) << "Unexpected InputType in ToMojom: " << static_cast<int>(input);
+  return UsedInputType::kUnspecified;
 }
 
 // static
-bool EnumTraits<UsedInputType, omnibox::InputType>::FromMojom(
-    UsedInputType input,
-    omnibox::InputType* output) {
+omnibox::InputType EnumTraits<UsedInputType, omnibox::InputType>::FromMojom(
+    UsedInputType input) {
   switch (input) {
     case UsedInputType::kUnspecified:
-      *output = omnibox::InputType::INPUT_TYPE_UNSPECIFIED;
-      return true;
+      return omnibox::InputType::INPUT_TYPE_UNSPECIFIED;
     case UsedInputType::kLensImage:
-      *output = omnibox::InputType::INPUT_TYPE_LENS_IMAGE;
-      return true;
+      return omnibox::InputType::INPUT_TYPE_LENS_IMAGE;
     case UsedInputType::kLensFile:
-      *output = omnibox::InputType::INPUT_TYPE_LENS_FILE;
-      return true;
+      return omnibox::InputType::INPUT_TYPE_LENS_FILE;
     case UsedInputType::kBrowserTab:
-      *output = omnibox::InputType::INPUT_TYPE_BROWSER_TAB;
-      return true;
+      return omnibox::InputType::INPUT_TYPE_BROWSER_TAB;
+    case UsedInputType::kDrive:
+      return omnibox::InputType::INPUT_TYPE_DRIVE;
+  }
+  DLOG(ERROR) << "Unexpected InputType in FromMojom: "
+              << static_cast<int>(input);
+  return omnibox::InputType::INPUT_TYPE_UNSPECIFIED;
+}
+
+// static
+UsedContextUploadStatus
+EnumTraits<UsedContextUploadStatus, contextual_search::ContextUploadStatus>::
+    ToMojom(contextual_search::ContextUploadStatus input) {
+  switch (input) {
+    case contextual_search::ContextUploadStatus::kNotUploaded:
+      return UsedContextUploadStatus::kNotUploaded;
+    case contextual_search::ContextUploadStatus::kProcessing:
+      return UsedContextUploadStatus::kProcessing;
+    case contextual_search::ContextUploadStatus::kValidationFailed:
+      return UsedContextUploadStatus::kValidationFailed;
+    case contextual_search::ContextUploadStatus::kUploadStarted:
+      return UsedContextUploadStatus::kUploadStarted;
+    case contextual_search::ContextUploadStatus::kUploadSuccessful:
+      return UsedContextUploadStatus::kUploadSuccessful;
+    case contextual_search::ContextUploadStatus::kUploadFailed:
+      return UsedContextUploadStatus::kUploadFailed;
+    case contextual_search::ContextUploadStatus::kUploadExpired:
+      return UsedContextUploadStatus::kUploadExpired;
+    case contextual_search::ContextUploadStatus::kProcessingSuggestSignalsReady:
+      return UsedContextUploadStatus::kProcessingSuggestSignalsReady;
+    case contextual_search::ContextUploadStatus::kUploadReplaced:
+      return UsedContextUploadStatus::kUploadReplaced;
+  }
+  return UsedContextUploadStatus::kNotUploaded;
+}
+
+// static
+contextual_search::ContextUploadStatus
+EnumTraits<UsedContextUploadStatus, contextual_search::ContextUploadStatus>::
+    FromMojom(UsedContextUploadStatus input) {
+  switch (input) {
+    case UsedContextUploadStatus::kNotUploaded:
+      return contextual_search::ContextUploadStatus::kNotUploaded;
+    case UsedContextUploadStatus::kProcessing:
+      return contextual_search::ContextUploadStatus::kProcessing;
+    case UsedContextUploadStatus::kValidationFailed:
+      return contextual_search::ContextUploadStatus::kValidationFailed;
+    case UsedContextUploadStatus::kUploadStarted:
+      return contextual_search::ContextUploadStatus::kUploadStarted;
+    case UsedContextUploadStatus::kUploadSuccessful:
+      return contextual_search::ContextUploadStatus::kUploadSuccessful;
+    case UsedContextUploadStatus::kUploadFailed:
+      return contextual_search::ContextUploadStatus::kUploadFailed;
+    case UsedContextUploadStatus::kUploadExpired:
+      return contextual_search::ContextUploadStatus::kUploadExpired;
+    case UsedContextUploadStatus::kProcessingSuggestSignalsReady:
+      return contextual_search::ContextUploadStatus::
+          kProcessingSuggestSignalsReady;
+    case UsedContextUploadStatus::kUploadReplaced:
+      return contextual_search::ContextUploadStatus::kUploadReplaced;
   }
   NOTREACHED();
 }
 
 // static
-UsedFileUploadStatus
-EnumTraits<UsedFileUploadStatus, contextual_search::FileUploadStatus>::ToMojom(
-    contextual_search::FileUploadStatus input) {
+UsedContextUploadErrorType
+EnumTraits<UsedContextUploadErrorType,
+           contextual_search::ContextUploadErrorType>::
+    ToMojom(contextual_search::ContextUploadErrorType input) {
   switch (input) {
-    case contextual_search::FileUploadStatus::kNotUploaded:
-      return UsedFileUploadStatus::kNotUploaded;
-    case contextual_search::FileUploadStatus::kProcessing:
-      return UsedFileUploadStatus::kProcessing;
-    case contextual_search::FileUploadStatus::kValidationFailed:
-      return UsedFileUploadStatus::kValidationFailed;
-    case contextual_search::FileUploadStatus::kUploadStarted:
-      return UsedFileUploadStatus::kUploadStarted;
-    case contextual_search::FileUploadStatus::kUploadSuccessful:
-      return UsedFileUploadStatus::kUploadSuccessful;
-    case contextual_search::FileUploadStatus::kUploadFailed:
-      return UsedFileUploadStatus::kUploadFailed;
-    case contextual_search::FileUploadStatus::kUploadExpired:
-      return UsedFileUploadStatus::kUploadExpired;
-    case contextual_search::FileUploadStatus::kProcessingSuggestSignalsReady:
-      return UsedFileUploadStatus::kProcessingSuggestSignalsReady;
-    case contextual_search::FileUploadStatus::kUploadReplaced:
-      return UsedFileUploadStatus::kUploadReplaced;
+    case contextual_search::ContextUploadErrorType::kUnknown:
+      return UsedContextUploadErrorType::kUnknown;
+    case contextual_search::ContextUploadErrorType::kBrowserProcessingError:
+      return UsedContextUploadErrorType::kBrowserProcessingError;
+    case contextual_search::ContextUploadErrorType::kNetworkError:
+      return UsedContextUploadErrorType::kNetworkError;
+    case contextual_search::ContextUploadErrorType::kServerError:
+      return UsedContextUploadErrorType::kServerError;
+    case contextual_search::ContextUploadErrorType::kServerSizeLimitExceeded:
+      return UsedContextUploadErrorType::kServerSizeLimitExceeded;
+    case contextual_search::ContextUploadErrorType::kAborted:
+      return UsedContextUploadErrorType::kAborted;
+    case contextual_search::ContextUploadErrorType::kImageProcessingError:
+      return UsedContextUploadErrorType::kImageProcessingError;
+    case contextual_search::ContextUploadErrorType::
+        kBrowserProcessingFileTooLargeError:
+      return UsedContextUploadErrorType::kBrowserProcessingFileTooLargeError;
+    case contextual_search::ContextUploadErrorType::
+        kBrowserProcessingFileEmptyError:
+      return UsedContextUploadErrorType::kBrowserProcessingFileEmptyError;
+    case contextual_search::ContextUploadErrorType::
+        kBrowserProcessingMaxFilesExceededError:
+      return UsedContextUploadErrorType::
+          kBrowserProcessingMaxFilesExceededError;
+    case contextual_search::ContextUploadErrorType::
+        kBrowserProcessingUnsupportedFileTypeError:
+      return UsedContextUploadErrorType::
+          kBrowserProcessingUnsupportedFileTypeError;
+    case contextual_search::ContextUploadErrorType::
+        kBrowserProcessingFileUploadNotAllowedError:
+      return UsedContextUploadErrorType::
+          kBrowserProcessingFileUploadNotAllowedError;
+    case contextual_search::ContextUploadErrorType::
+        kBrowserProcessingMaxImagesExceededError:
+      return UsedContextUploadErrorType::
+          kBrowserProcessingMaxImagesExceededError;
+    case contextual_search::ContextUploadErrorType::
+        kBrowserProcessingMaxPdfsExceededError:
+      return UsedContextUploadErrorType::kBrowserProcessingMaxPdfsExceededError;
   }
-  NOTREACHED();
+  return UsedContextUploadErrorType::kUnknown;
 }
 
 // static
-bool EnumTraits<UsedFileUploadStatus, contextual_search::FileUploadStatus>::
-    FromMojom(UsedFileUploadStatus input,
-              contextual_search::FileUploadStatus* output) {
+contextual_search::ContextUploadErrorType
+EnumTraits<UsedContextUploadErrorType,
+           contextual_search::ContextUploadErrorType>::
+    FromMojom(UsedContextUploadErrorType input) {
   switch (input) {
-    case UsedFileUploadStatus::kNotUploaded:
-      *output = contextual_search::FileUploadStatus::kNotUploaded;
-      return true;
-    case UsedFileUploadStatus::kProcessing:
-      *output = contextual_search::FileUploadStatus::kProcessing;
-      return true;
-    case UsedFileUploadStatus::kValidationFailed:
-      *output = contextual_search::FileUploadStatus::kValidationFailed;
-      return true;
-    case UsedFileUploadStatus::kUploadStarted:
-      *output = contextual_search::FileUploadStatus::kUploadStarted;
-      return true;
-    case UsedFileUploadStatus::kUploadSuccessful:
-      *output = contextual_search::FileUploadStatus::kUploadSuccessful;
-      return true;
-    case UsedFileUploadStatus::kUploadFailed:
-      *output = contextual_search::FileUploadStatus::kUploadFailed;
-      return true;
-    case UsedFileUploadStatus::kUploadExpired:
-      *output = contextual_search::FileUploadStatus::kUploadExpired;
-      return true;
-    case UsedFileUploadStatus::kProcessingSuggestSignalsReady:
-      *output =
-          contextual_search::FileUploadStatus::kProcessingSuggestSignalsReady;
-      return true;
-    case UsedFileUploadStatus::kUploadReplaced:
-      *output = contextual_search::FileUploadStatus::kUploadReplaced;
-      return true;
-  }
-  NOTREACHED();
-}
-
-// static
-UsedFileUploadErrorType
-EnumTraits<UsedFileUploadErrorType, contextual_search::FileUploadErrorType>::
-    ToMojom(contextual_search::FileUploadErrorType input) {
-  switch (input) {
-    case contextual_search::FileUploadErrorType::kUnknown:
-      return UsedFileUploadErrorType::kUnknown;
-    case contextual_search::FileUploadErrorType::kBrowserProcessingError:
-      return UsedFileUploadErrorType::kBrowserProcessingError;
-    case contextual_search::FileUploadErrorType::kNetworkError:
-      return UsedFileUploadErrorType::kNetworkError;
-    case contextual_search::FileUploadErrorType::kServerError:
-      return UsedFileUploadErrorType::kServerError;
-    case contextual_search::FileUploadErrorType::kServerSizeLimitExceeded:
-      return UsedFileUploadErrorType::kServerSizeLimitExceeded;
-    case contextual_search::FileUploadErrorType::kAborted:
-      return UsedFileUploadErrorType::kAborted;
-    case contextual_search::FileUploadErrorType::kImageProcessingError:
-      return UsedFileUploadErrorType::kImageProcessingError;
-  }
-  NOTREACHED();
-}
-
-// static
-bool EnumTraits<UsedFileUploadErrorType,
-                contextual_search::FileUploadErrorType>::
-    FromMojom(UsedFileUploadErrorType input,
-              contextual_search::FileUploadErrorType* output) {
-  switch (input) {
-    case UsedFileUploadErrorType::kUnknown:
-      *output = contextual_search::FileUploadErrorType::kUnknown;
-      return true;
-    case UsedFileUploadErrorType::kBrowserProcessingError:
-      *output = contextual_search::FileUploadErrorType::kBrowserProcessingError;
-      return true;
-    case UsedFileUploadErrorType::kNetworkError:
-      *output = contextual_search::FileUploadErrorType::kNetworkError;
-      return true;
-    case UsedFileUploadErrorType::kServerError:
-      *output = contextual_search::FileUploadErrorType::kServerError;
-      return true;
-    case UsedFileUploadErrorType::kServerSizeLimitExceeded:
-      *output =
-          contextual_search::FileUploadErrorType::kServerSizeLimitExceeded;
-      return true;
-    case UsedFileUploadErrorType::kAborted:
-      *output = contextual_search::FileUploadErrorType::kAborted;
-      return true;
-    case UsedFileUploadErrorType::kImageProcessingError:
-      *output = contextual_search::FileUploadErrorType::kImageProcessingError;
-      return true;
+    case UsedContextUploadErrorType::kUnknown:
+      return contextual_search::ContextUploadErrorType::kUnknown;
+    case UsedContextUploadErrorType::kBrowserProcessingError:
+      return contextual_search::ContextUploadErrorType::kBrowserProcessingError;
+    case UsedContextUploadErrorType::kNetworkError:
+      return contextual_search::ContextUploadErrorType::kNetworkError;
+    case UsedContextUploadErrorType::kServerError:
+      return contextual_search::ContextUploadErrorType::kServerError;
+    case UsedContextUploadErrorType::kServerSizeLimitExceeded:
+      return contextual_search::ContextUploadErrorType::
+          kServerSizeLimitExceeded;
+    case UsedContextUploadErrorType::kAborted:
+      return contextual_search::ContextUploadErrorType::kAborted;
+    case UsedContextUploadErrorType::kImageProcessingError:
+      return contextual_search::ContextUploadErrorType::kImageProcessingError;
+    case UsedContextUploadErrorType::kBrowserProcessingFileTooLargeError:
+      return contextual_search::ContextUploadErrorType::
+          kBrowserProcessingFileTooLargeError;
+    case UsedContextUploadErrorType::kBrowserProcessingFileEmptyError:
+      return contextual_search::ContextUploadErrorType::
+          kBrowserProcessingFileEmptyError;
+    case UsedContextUploadErrorType::kBrowserProcessingMaxFilesExceededError:
+      return contextual_search::ContextUploadErrorType::
+          kBrowserProcessingMaxFilesExceededError;
+    case UsedContextUploadErrorType::kBrowserProcessingUnsupportedFileTypeError:
+      return contextual_search::ContextUploadErrorType::
+          kBrowserProcessingUnsupportedFileTypeError;
+    case UsedContextUploadErrorType::
+        kBrowserProcessingFileUploadNotAllowedError:
+      return contextual_search::ContextUploadErrorType::
+          kBrowserProcessingFileUploadNotAllowedError;
+    case UsedContextUploadErrorType::kBrowserProcessingMaxImagesExceededError:
+      return contextual_search::ContextUploadErrorType::
+          kBrowserProcessingMaxImagesExceededError;
+    case UsedContextUploadErrorType::kBrowserProcessingMaxPdfsExceededError:
+      return contextual_search::ContextUploadErrorType::
+          kBrowserProcessingMaxPdfsExceededError;
   }
   NOTREACHED();
 }
@@ -385,6 +442,25 @@ StructTraits<UsedToolConfigDataView, omnibox::ToolConfig>::aim_url_params(
 }
 
 // static
+const std::string&
+StructTraits<UsedToolConfigDataView, omnibox::ToolConfig>::menu_tooltip(
+    const omnibox::ToolConfig& config) {
+  return config.menu_tooltip();
+}
+
+// static
+int32_t StructTraits<UsedToolConfigDataView, omnibox::ToolConfig>::icon(
+    const omnibox::ToolConfig& config) {
+  if (config.has_icon() && config.icon().has_icon_id()) {
+    int icon_id = static_cast<int>(config.icon().icon_id());
+    if (omnibox::IconResourceIds_IsValid(icon_id)) {
+      return icon_id;
+    }
+  }
+  return static_cast<int32_t>(omnibox::IconResourceIds::PLACE_WHITE);
+}
+
+// static
 bool StructTraits<UsedToolConfigDataView, omnibox::ToolConfig>::Read(
     UsedToolConfigDataView data,
     omnibox::ToolConfig* output) {
@@ -425,6 +501,19 @@ bool StructTraits<UsedToolConfigDataView, omnibox::ToolConfig>::Read(
     *output->add_aim_url_params() = param;
   }
 
+  std::string menu_tooltip;
+  if (!data.ReadMenuTooltip(&menu_tooltip)) {
+    return false;
+  }
+  output->set_menu_tooltip(menu_tooltip);
+
+  int32_t icon_id = data.icon();
+  if (omnibox::IconResourceIds_IsValid(icon_id) &&
+      icon_id != static_cast<int32_t>(omnibox::IconResourceIds::PLACE_WHITE)) {
+    output->mutable_icon()->set_icon_id(
+        static_cast<omnibox::IconResourceIds>(icon_id));
+  }
+
   return true;
 }
 
@@ -458,6 +547,25 @@ StructTraits<UsedModelConfigDataView, omnibox::ModelConfig>::aim_url_params(
 }
 
 // static
+const std::string&
+StructTraits<UsedModelConfigDataView, omnibox::ModelConfig>::menu_tooltip(
+    const omnibox::ModelConfig& config) {
+  return config.menu_tooltip();
+}
+
+// static
+int32_t StructTraits<UsedModelConfigDataView, omnibox::ModelConfig>::icon(
+    const omnibox::ModelConfig& config) {
+  if (config.has_icon() && config.icon().has_icon_id()) {
+    int icon_id = static_cast<int>(config.icon().icon_id());
+    if (omnibox::IconResourceIds_IsValid(icon_id)) {
+      return icon_id;
+    }
+  }
+  return static_cast<int32_t>(omnibox::IconResourceIds::PLACE_WHITE);
+}
+
+// static
 bool StructTraits<UsedModelConfigDataView, omnibox::ModelConfig>::Read(
     UsedModelConfigDataView data,
     omnibox::ModelConfig* output) {
@@ -487,6 +595,19 @@ bool StructTraits<UsedModelConfigDataView, omnibox::ModelConfig>::Read(
   output->mutable_aim_url_params()->Clear();
   for (const auto& param : params) {
     *output->add_aim_url_params() = param;
+  }
+
+  std::string menu_tooltip;
+  if (!data.ReadMenuTooltip(&menu_tooltip)) {
+    return false;
+  }
+  output->set_menu_tooltip(menu_tooltip);
+
+  int32_t icon_id = data.icon();
+  if (omnibox::IconResourceIds_IsValid(icon_id) &&
+      icon_id != static_cast<int32_t>(omnibox::IconResourceIds::PLACE_WHITE)) {
+    output->mutable_icon()->set_icon_id(
+        static_cast<omnibox::IconResourceIds>(icon_id));
   }
 
   return true;
@@ -645,9 +766,9 @@ StructTraits<UsedInputStateDataView, omnibox::InputState>::hint_text(
 
 // static
 const std::map<omnibox::InputType, int>&
-StructTraits<UsedInputStateDataView, omnibox::InputState>::max_instances(
+StructTraits<UsedInputStateDataView, omnibox::InputState>::max_inputs_by_type(
     const omnibox::InputState& input) {
-  return input.max_instances;
+  return input.max_inputs_by_type;
 }
 
 // static
@@ -658,10 +779,17 @@ StructTraits<UsedInputStateDataView, omnibox::InputState>::max_total_inputs(
 }
 
 // static
+bool StructTraits<UsedInputStateDataView, omnibox::InputState>::
+    is_canvas_query_submitted(const omnibox::InputState& input) {
+  return input.is_canvas_query_submitted;
+}
+
+// static
 bool StructTraits<UsedInputStateDataView, omnibox::InputState>::Read(
     UsedInputStateDataView data,
     omnibox::InputState* output) {
   output->max_total_inputs = data.max_total_inputs();
+  output->is_canvas_query_submitted = data.is_canvas_query_submitted();
   return data.ReadAllowedModels(&output->allowed_models) &&
          data.ReadAllowedTools(&output->allowed_tools) &&
          data.ReadAllowedInputTypes(&output->allowed_input_types) &&
@@ -676,7 +804,7 @@ bool StructTraits<UsedInputStateDataView, omnibox::InputState>::Read(
          data.ReadToolsSectionConfig(&output->tools_section_config) &&
          data.ReadModelSectionConfig(&output->model_section_config) &&
          data.ReadHintText(&output->hint_text) &&
-         data.ReadMaxInstances(&output->max_instances);
+         data.ReadMaxInputsByType(&output->max_inputs_by_type);
 }
 
 }  // namespace mojo

@@ -29,6 +29,7 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_process_host_observer.h"
+#include "content/public/browser/security_principal.h"
 #include "content/public/browser/service_worker_context.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -40,6 +41,7 @@
 #include "extensions/browser/extension_function_registry.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
+#include "extensions/browser/extension_user_activation_service.h"
 #include "extensions/browser/extension_util.h"
 #include "extensions/browser/extensions_browser_client.h"
 #include "extensions/browser/process_manager.h"
@@ -50,7 +52,6 @@
 #include "extensions/browser/service_worker/worker_id.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension_api.h"
-#include "extensions/common/extension_features.h"
 #include "extensions/common/extension_set.h"
 #include "extensions/common/extension_urls.h"
 #include "extensions/common/mojom/context_type.mojom.h"
@@ -159,8 +160,7 @@ ExtensionFunctionDispatcher::ExtensionFunctionDispatcher(
     content::BrowserContext* browser_context)
     : browser_context_(browser_context), delegate_(nullptr) {}
 
-ExtensionFunctionDispatcher::~ExtensionFunctionDispatcher() {
-}
+ExtensionFunctionDispatcher::~ExtensionFunctionDispatcher() = default;
 
 void ExtensionFunctionDispatcher::Dispatch(
     mojom::RequestParamsPtr params,
@@ -173,9 +173,11 @@ void ExtensionFunctionDispatcher::Dispatch(
               ExtensionIdForTracing(params->extension_id));
 
   ScopedRequestParamsCrashKeys request_params_crash_keys(*params);
-  SCOPED_CRASH_KEY_STRING256(
-      "extensions", "frame.GetSiteInstance()",
-      frame.GetSiteInstance()->GetSiteURL().possibly_invalid_spec());
+  SCOPED_CRASH_KEY_STRING256("extensions", "frame.GetSiteInstance()",
+                             frame.GetSiteInstance()
+                                 ->GetSecurityPrincipal()
+                                 .GetDeprecatedSiteURL()
+                                 .possibly_invalid_spec());
 
   if (auto bad_message_code = ValidateRequest(*params, &frame, process)) {
     // Kill the renderer if it's an invalid request.
@@ -278,6 +280,20 @@ void ExtensionFunctionDispatcher::DispatchWithCallbackInternal(
 
   const GURL* render_frame_host_url = nullptr;
   if (render_frame_host) {
+    // Error pages commit with the target URL and in their parents' process, but
+    // aren't actually on the page indicated by the committed URL.
+    // Bail out in this case. Error pages don't use extension APIs.
+    // If we had perfect timing and no race conditions, this could be a sign of
+    // a bad message; however, it's possible a page commits to an error page
+    // after a legitimate message is sent.
+    if (render_frame_host->IsErrorDocument()) {
+      constexpr char kCannotUseExtensionAPIsInErrorPages[] =
+          "Cannot call extension APIs from error pages.";
+      ResponseCallbackOnError(std::move(callback),
+                              ExtensionFunction::ResponseType::kFailed,
+                              kCannotUseExtensionAPIsInErrorPages);
+      return;
+    }
     render_frame_host_url = &render_frame_host->GetLastCommittedURL();
     DCHECK_EQ(render_process_id,
               render_frame_host->GetProcess()->GetDeprecatedID());
@@ -327,16 +343,8 @@ void ExtensionFunctionDispatcher::DispatchWithCallbackInternal(
 
   const bool is_worker_request = IsRequestFromServiceWorker(*params);
 
-  base::ListValue arguments;
-  if (base::FeatureList::IsEnabled(
-          extensions_features::kAvoidCloneArgsOnExtensionFunctionDispatch)) {
-    arguments = std::move(params->arguments);
-  } else {
-    arguments = params->arguments.Clone();
-  }
-
   scoped_refptr<ExtensionFunction> function = CreateExtensionFunction(
-      *params, std::move(arguments), extension, render_process_id,
+      *params, std::move(params->arguments), extension, render_process_id,
       is_worker_request, render_frame_host_url, params->context_type,
       ExtensionAPI::GetSharedInstance(), std::move(callback),
       render_frame_host);
@@ -344,9 +352,8 @@ void ExtensionFunctionDispatcher::DispatchWithCallbackInternal(
     return;
   }
 
-  if (extension &&
-      ExtensionsBrowserClient::Get()->CanExtensionCrossIncognito(
-          extension, browser_context_)) {
+  if (extension && ExtensionsBrowserClient::Get()->CanExtensionCrossIncognito(
+                       extension, browser_context_)) {
     function->set_include_incognito_information(true);
   }
 
@@ -373,22 +380,11 @@ void ExtensionFunctionDispatcher::DispatchWithCallbackInternal(
   // Fetch the ProcessManager before |this| is possibly invalidated.
   ProcessManager* process_manager = ProcessManager::Get(browser_context_);
 
-  // TODO(crbug.com/424432184): When the
-  // `kAvoidCloneArgsOnExtensionFunctionDispatch` feature is cleaned up, this
-  // lambda can be removed and references to it can be replaced with
-  // `function->GetOriginalArgs()`.
-  auto original_args = [&]() -> const base::ListValue& {
-    if (base::FeatureList::IsEnabled(
-            extensions_features::kAvoidCloneArgsOnExtensionFunctionDispatch)) {
-      return function->GetOriginalArgs();
-    }
-    return params->arguments;
-  };
-
   ExtensionSystem* extension_system = ExtensionSystem::Get(browser_context_);
   QuotaService* quota = extension_system->quota_service();
-  std::string violation_error = quota->Assess(
-      extension->id(), function.get(), original_args(), base::TimeTicks::Now());
+  std::string violation_error =
+      quota->Assess(extension->id(), function.get(),
+                    function->GetOriginalArgs(), base::TimeTicks::Now());
 
   function->set_request_uuid(base::Uuid::GenerateRandomV4());
 
@@ -415,8 +411,8 @@ void ExtensionFunctionDispatcher::DispatchWithCallbackInternal(
   if (violation_error.empty()) {
     // See crbug.com/39178.
     ExtensionsBrowserClient::Get()->PermitExternalProtocolHandler();
-    NotifyApiFunctionCalled(extension->id(), params->name, original_args(),
-                            browser_context_);
+    NotifyApiFunctionCalled(extension->id(), params->name,
+                            function->GetOriginalArgs(), browser_context_);
 
     // Since sandboxed frames listed in the manifest don't get access to the
     // extension APIs, this will only be true in an extension frame in an iframe
@@ -572,6 +568,12 @@ ExtensionFunctionDispatcher::CreateExtensionFunction(
   } else {
     DCHECK(render_frame_host_url);
     function->set_source_url(*render_frame_host_url);
+  }
+
+  if (params_without_args.user_gesture &&
+      !params_without_args.extension_id.empty()) {
+    ExtensionUserActivationService::Get(browser_context_)
+        ->NotifyUserActivation(params_without_args.extension_id);
   }
 
   function->set_has_callback(params_without_args.has_callback);

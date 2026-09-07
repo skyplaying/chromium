@@ -12,23 +12,26 @@
 #include "ash/system/brightness_control_delegate.h"
 #include "ash/system/keyboard_brightness_control_delegate.h"
 #include "ash/webui/settings/public/constants/routes.mojom-forward.h"
+#include "ash/webui/settings/public/constants/routes_util.h"
+#include "base/check.h"
+#include "base/check_deref.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/scoped_feature_list.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
-#include "chrome/browser/ui/chrome_pages.h"
-#include "chrome/browser/ui/settings_window_manager_chromeos.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/ash/interactive/interactive_ash_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "chromeos/ash/experiences/settings_ui/settings_app_manager.h"
 #include "chromeos/dbus/power/fake_power_manager_client.h"
 #include "chromeos/dbus/power/power_manager_client.h"
+#include "components/session_manager/core/session.h"
+#include "components/session_manager/core/session_manager.h"
+#include "components/user_manager/user_manager.h"
 #include "device/udev_linux/fake_udev_loader.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/state_observer.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/events/ash/keyboard_capability.h"
 #include "ui/events/devices/device_data_manager_test_api.h"
 #include "ui/events/devices/input_device.h"
@@ -117,9 +120,7 @@ class DeviceSettingsInteractiveUiTest : public InteractiveAshTest {
     DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kOsSettingsWebContentsId);
     webcontents_id_ = kOsSettingsWebContentsId;
 
-    feature_list_.InitWithFeatures({features::kAltClickAndSixPackCustomization,
-                                    features::kPeripheralCustomization,
-                                    ::features::kSupportF11AndF12KeyShortcuts},
+    feature_list_.InitWithFeatures({features::kAltClickAndSixPackCustomization},
                                    {});
   }
 
@@ -222,15 +223,21 @@ class DeviceSettingsInteractiveUiTest : public InteractiveAshTest {
     return Steps(
         Log(base::StringPrintf("Open OS Settings to %s", subpage.c_str())),
         InstrumentNextTab(element_id, AnyBrowser()), Do([&]() {
-          chrome::SettingsWindowManager::GetInstance()->ShowOSSettings(
-              GetActiveUserProfile(), subpage);
+          auto* session =
+              session_manager::SessionManager::Get()->GetActiveSession();
+          CHECK(session);
+          ash::SettingsAppManager::Get()->Open(
+              CHECK_DEREF(user_manager::UserManager::Get()->FindUser(
+                  session->account_id())),
+              {.sub_page = subpage});
         }),
         WaitForShow(element_id),
         Log(base::StringPrintf("Waiting for OS Settings %s page to load",
                                subpage.c_str())),
 
         Log("Waiting for OS settings audio settings page to load"),
-        WaitForWebContentsReady(element_id, chrome::GetOSSettingsUrl(subpage)));
+        WaitForWebContentsReady(element_id,
+                                chromeos::settings::GetOSSettingsUrl(subpage)));
   }
 
   // Enters lower-case text into the focused html input element.
@@ -495,70 +502,6 @@ IN_PROC_BROWSER_TEST_F(DeviceSettingsInteractiveUiTest, TrackpointEnabled) {
                                  "Built-in TrackPoint"));
 }
 
-class DeviceSettingsSwapPrimaryMouseButtonInteractiveUiTest
-    : public DeviceSettingsInteractiveUiTest {
- public:
-  DeviceSettingsSwapPrimaryMouseButtonInteractiveUiTest() {
-    feature_list_.Reset();
-    feature_list_.InitWithFeatures({}, {features::kPeripheralCustomization});
-  }
-  // Query to pierce through Shadow DOM to find the mouse row.
-  const DeepQuery kMouseRowQuery{
-      "os-settings-ui",       "os-settings-main",   "main-page-container",
-      "settings-device-page", "#perDeviceMouseRow",
-  };
-
-  const DeepQuery kMouseSwapButtonDropdownQuery{
-      "os-settings-ui",
-      "os-settings-main",
-      "main-page-container",
-      "settings-device-page",
-      "settings-per-device-mouse",
-      "settings-per-device-mouse-subsection",
-      "#mouseSwapButtonDropdown",
-      "#dropdownMenu",
-  };
-
-  const DeepQuery kCursorAcceleratorToggleQuery{
-      "os-settings-ui",
-      "os-settings-main",
-      "main-page-container",
-      "settings-device-page",
-      "settings-per-device-mouse",
-      "settings-per-device-mouse-subsection",
-      "#mouseAcceleration",
-      "#control",
-  };
-};
-
-IN_PROC_BROWSER_TEST_F(DeviceSettingsSwapPrimaryMouseButtonInteractiveUiTest,
-                       SwapPrimaryMouseButton) {
-  DEFINE_LOCAL_CUSTOM_ELEMENT_EVENT_TYPE(kCursorAccelerationToggleEnabledEvent);
-  SetMouseDevices({kMouse});
-  StateChange cursor_acceleration_toggle_enabled;
-  cursor_acceleration_toggle_enabled.type =
-      StateChange::Type::kExistsAndConditionTrue;
-  cursor_acceleration_toggle_enabled.event =
-      kCursorAccelerationToggleEnabledEvent;
-  cursor_acceleration_toggle_enabled.where = kCursorAcceleratorToggleQuery;
-  cursor_acceleration_toggle_enabled.test_function = "el => !el.disabled";
-
-  RunTestSequence(
-      LaunchSettingsApp(webcontents_id_,
-                        chromeos::settings::mojom::kDeviceSectionPath),
-      Log("Waiting for per device mouse row to be visible"),
-      WaitForElementExists(webcontents_id_, kMouseRowQuery),
-      ClickElement(webcontents_id_, kMouseRowQuery),
-      Log("Selecting 'Right button' from the dropdown menu"),
-      SelectDropdownElementOption(
-          webcontents_id_, kMouseSwapButtonDropdownQuery,
-          l10n_util::GetStringUTF8(
-              IDS_SETTINGS_PRIMARY_MOUSE_BUTTON_RIGHT_LABEL)),
-      Log("Verifying that right clicking behavior has changed"),
-      MoveMouseTo(webcontents_id_, kCursorAcceleratorToggleQuery),
-      ClickMouse(ui_controls::RIGHT),
-      WaitForStateChange(webcontents_id_, cursor_acceleration_toggle_enabled));
-}
 
 IN_PROC_BROWSER_TEST_F(DeviceSettingsInteractiveUiTest, AddNewTouchpad) {
   // Query to pierce through Shadow DOM to find the touchpad row.
@@ -1042,9 +985,7 @@ class DeviceSettingsBrightnessInteractiveUiTest
   DeviceSettingsBrightnessInteractiveUiTest() {
     feature_list_.Reset();
     feature_list_.InitWithFeatures(
-        {features::kPeripheralCustomization,
-         features::kEnableBrightnessControlInSettings},
-        {});
+        {features::kEnableBrightnessControlInSettings}, {});
   }
 };
 

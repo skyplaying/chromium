@@ -25,7 +25,8 @@
 #include "chrome/browser/devtools/devtools_window.h"
 #include "chrome/browser/devtools/features.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/singleton_tabs.h"
 #include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/common/chrome_paths.h"
@@ -47,7 +48,9 @@
 #include "content/public/browser/web_ui_data_source.h"
 #include "content/public/browser/web_ui_message_handler.h"
 #include "net/base/ip_endpoint.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/base/ui_base_features.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/views/widget/widget.h"
 
 using content::DevToolsAgentHost;
@@ -665,6 +668,9 @@ void InspectUI::Open(const std::string& source_id,
 void InspectUI::Pause(const std::string& source_id,
                       const std::string& target_id) {
   scoped_refptr<DevToolsAgentHost> target = FindTarget(source_id, target_id);
+  if (!target) {
+    return;
+  }
   content::WebContents* web_contents = target->GetWebContents();
   if (web_contents) {
     DevToolsWindow::OpenDevToolsWindow(web_contents,
@@ -741,7 +747,7 @@ void InspectUI::InspectBrowserWithCustomFrontend(const std::string& source_id,
   bindings_enabler->GetBindings()->AttachTo(agent_host);
 }
 
-void InspectUI::InspectDevices(Browser* browser) {
+void InspectUI::InspectDevices(BrowserWindowInterface* browser) {
   base::RecordAction(base::UserMetricsAction("InspectDevices"));
   ShowSingletonTabOverwritingNTP(browser, GURL(chrome::kChromeUIInspectURL),
                                  NavigateParams::IGNORE_AND_NAVIGATE);
@@ -803,6 +809,18 @@ void InspectUI::StartListeningNotifications() {
       prefs::kDevToolsTCPDiscoveryConfig,
       base::BindRepeating(&InspectUI::UpdateTCPDiscoveryConfig,
                           base::Unretained(this)));
+
+  if (g_browser_process && g_browser_process->local_state()) {
+    local_state_pref_change_registrar_.Init(g_browser_process->local_state());
+    local_state_pref_change_registrar_.Add(
+        prefs::kDevToolsRemoteDebuggingAllowed,
+        base::BindRepeating(&InspectUI::UpdateRemoteDebuggingEnabled,
+                            base::Unretained(this)));
+    local_state_pref_change_registrar_.Add(
+        prefs::kDevToolsRemoteDebuggingEnabled,
+        base::BindRepeating(&InspectUI::UpdateRemoteDebuggingEnabled,
+                            base::Unretained(this)));
+  }
 }
 
 void InspectUI::StopListeningNotifications() {
@@ -815,6 +833,7 @@ void InspectUI::StopListeningNotifications() {
   port_status_serializer_.reset();
 
   pref_change_registrar_.RemoveAll();
+  local_state_pref_change_registrar_.RemoveAll();
 }
 
 void InspectUI::UpdateDiscoverUsbDevicesEnabled() {

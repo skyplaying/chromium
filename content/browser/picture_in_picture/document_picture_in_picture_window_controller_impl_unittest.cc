@@ -20,6 +20,10 @@ class MockPipScreenCaptureCoordinator : public PipScreenCaptureCoordinator {
   ~MockPipScreenCaptureCoordinator() override = default;
 
   MOCK_METHOD(void,
+              OnPipInitiated,
+              (const GlobalRenderFrameHostId&),
+              (override));
+  MOCK_METHOD(void,
               OnPipShown,
               (WebContents&, const GlobalRenderFrameHostId&),
               (override));
@@ -31,6 +35,23 @@ class MockPipScreenCaptureCoordinator : public PipScreenCaptureCoordinator {
   MOCK_METHOD(std::optional<DesktopMediaID::Id>,
               GetPipWindowToExcludeFromScreenCapture,
               (DesktopMediaID::Id),
+              (override));
+  MOCK_METHOD(void,
+              AddExclusionObserver,
+              (desktop_capture::PipScreenCaptureExclusionObserver*),
+              (override));
+  MOCK_METHOD(void,
+              RemoveExclusionObserver,
+              (desktop_capture::PipScreenCaptureExclusionObserver*),
+              (override));
+  MOCK_METHOD(bool, IsExcludedFromScreenCapture, (), (const, override));
+  MOCK_METHOD(base::UnguessableToken,
+              RegisterMediaPickerAsCapture,
+              (const GlobalRenderFrameHostId&),
+              (override));
+  MOCK_METHOD(void,
+              UnregisterMediaPickerAsCapture,
+              (const base::UnguessableToken&),
               (override));
 };
 
@@ -68,6 +89,17 @@ class DocumentPictureInPictureWindowControllerImplTest
       mock_pip_screen_capture_coordinator_;
   raw_ptr<DocumentPictureInPictureWindowControllerImpl> controller_;
 };
+
+TEST_F(DocumentPictureInPictureWindowControllerImplTest,
+       SetChildWebContentsNotifiesPipScreenCaptureCoordinatorOnPipInitiated) {
+  std::unique_ptr<TestWebContents> child_web_contents =
+      TestWebContents::Create(browser_context(), nullptr);
+
+  EXPECT_CALL(
+      *mock_pip_screen_capture_coordinator_,
+      OnPipInitiated(web_contents()->GetPrimaryMainFrame()->GetGlobalId()));
+  controller_->SetChildWebContents(child_web_contents.get());
+}
 
 TEST_F(DocumentPictureInPictureWindowControllerImplTest,
        OnVisibilityChangedNotifiesPipScreenCaptureCoordinator) {

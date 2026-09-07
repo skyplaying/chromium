@@ -2,12 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/containers/span.h"
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/390223051): spanify to fix the errors.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "media/gpu/v4l2/v4l2_video_encode_accelerator.h"
 
 #include <fcntl.h>
@@ -25,6 +19,8 @@
 
 #include "base/bits.h"
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
@@ -43,6 +39,7 @@
 #include "media/base/bitstream_buffer.h"
 #include "media/base/color_plane_layout.h"
 #include "media/base/encoder_status.h"
+#include "media/base/format_utils.h"
 #include "media/base/media_log.h"
 #include "media/base/media_switches.h"
 #include "media/base/media_util.h"
@@ -85,15 +82,17 @@ static void CopyNALUPrependingStartCode(const uint8_t* src,
     return;
   }
 
-  memcpy(*dst, kH264StartCode, kH264StartCodeSize);
-  memcpy(*dst + kH264StartCodeSize, src, src_size);
+  UNSAFE_TODO(memcpy(*dst, kH264StartCode, kH264StartCodeSize));
+  UNSAFE_TODO(memcpy(*dst + kH264StartCodeSize, src, src_size));
 
-  *dst += size_to_copy;
+  UNSAFE_TODO(*dst += size_to_copy);
   *dst_size -= size_to_copy;
 }
 }  // namespace
 
 namespace media {
+
+BASE_FEATURE(kV4L2VEAUseCorrectColorSpace, base::FEATURE_ENABLED_BY_DEFAULT);
 
 namespace {
 // Convert VideoFrameLayout to ImageProcessor::PortConfig.
@@ -287,15 +286,13 @@ EncoderStatus V4L2VideoEncodeAccelerator::Initialize(
   }
 
   // Ask if V4L2_ENC_CMD_STOP (Flush) is supported.
-  struct v4l2_encoder_cmd cmd;
-  memset(&cmd, 0, sizeof(cmd));
+  struct v4l2_encoder_cmd cmd = {};
   cmd.cmd = V4L2_ENC_CMD_STOP;
   is_flush_supported_ = (device_->Ioctl(VIDIOC_TRY_ENCODER_CMD, &cmd) == 0);
   if (!is_flush_supported_)
     VLOGF(2) << "V4L2_ENC_CMD_STOP is not supported.";
 
-  struct v4l2_capability caps;
-  memset(&caps, 0, sizeof(caps));
+  struct v4l2_capability caps = {};
   const __u32 kCapsRequired = V4L2_CAP_VIDEO_M2M_MPLANE | V4L2_CAP_STREAMING;
   if (device_->Ioctl(VIDIOC_QUERYCAP, &caps) != 0) {
     MEDIA_LOG(ERROR, media_log.get())
@@ -585,16 +582,26 @@ bool V4L2VideoEncodeAccelerator::AllocateImageProcessorOutputBuffers(
       image_processor_->output_config();
   for (size_t i = 0; i < count; i++) {
     switch (output_config.storage_type) {
-      case VideoFrame::STORAGE_MAPPABLE_SHARED_IMAGE:
+      case VideoFrame::STORAGE_MAPPABLE_SHARED_IMAGE: {
         CHECK(sii_);
+        const VideoPixelFormat output_format =
+            output_config.fourcc.ToVideoPixelFormat();
+        // TODO(crbug.com/425634684): Set default color space for output frames
+        // and remove set_color_space from
+        // LibYUVImageProcessorBackend::Process.
+        gfx::ColorSpace color_space =
+            base::FeatureList::IsEnabled(kV4L2VEAUseCorrectColorSpace)
+                ? input_color_space_
+                : gfx::ColorSpace();
         image_processor_output_buffers_[i] =
             CreateMappableSharedImageVideoFrame(
-                output_config.fourcc.ToVideoPixelFormat(), output_config.size,
+                output_format, color_space, output_config.size,
                 output_config.visible_rect, output_config.visible_rect.size(),
                 base::TimeDelta(),
                 gfx::BufferUsage::VEA_READ_CAMERA_AND_CPU_READ_WRITE,
                 sii_.get());
         break;
+      }
       default:
         LOG(ERROR) << "Unsupported output storage type of image processor: "
                    << output_config.storage_type;
@@ -697,6 +704,10 @@ void V4L2VideoEncodeAccelerator::Destroy() {
 
   // We're destroying; cancel all callbacks.
   client_ptr_factory_.reset();
+
+  // Invalidates |child_weak_this_factory_| so that no callback to |this| is
+  // invoked hereafter.
+  child_weak_this_factory_.InvalidateWeakPtrs();
 
   encoder_task_runner_->PostTask(
       FROM_HERE, base::BindOnce(&V4L2VideoEncodeAccelerator::DestroyTask,
@@ -864,7 +875,7 @@ size_t V4L2VideoEncodeAccelerator::CopyIntoOutputBuffer(
 
   if (!inject_sps_and_pps_) {
     if (bitstream_size <= remaining_dst_size) {
-      memcpy(dst_ptr, bitstream_data, bitstream_size);
+      UNSAFE_TODO(memcpy(dst_ptr, bitstream_data, bitstream_size));
       return bitstream_size;
     } else {
       SetErrorState({EncoderStatus::Codes::kEncoderFailedEncode,
@@ -967,6 +978,19 @@ void V4L2VideoEncodeAccelerator::EncodeTask(scoped_refptr<VideoFrame> frame,
                                        frame->storage_type())})});
       return;
     }
+    constexpr VideoPixelFormat kExpectedFormats[] = {
+        PIXEL_FORMAT_I420,
+        PIXEL_FORMAT_NV12,
+    };
+    const bool is_expected_format =
+        std::ranges::contains(kExpectedFormats, frame->format());
+    if (!is_expected_format) {
+      SetErrorState(
+          {EncoderStatus::Codes::kInvalidInputFrame,
+           base::StrCat({"Unexpected format: ",
+                         VideoPixelFormatToString(frame->format())})});
+      return;
+    }
 
     if (!ReconfigureFormatIfNeeded(*frame)) {
       SetErrorState({EncoderStatus::Codes::kUnsupportedFrameFormat,
@@ -1009,15 +1033,30 @@ bool V4L2VideoEncodeAccelerator::ReconfigureFormatIfNeeded(
     input_natural_size_ = frame.natural_size();
   }
 
+  bool color_space_changed = false;
+  if (base::FeatureList::IsEnabled(kV4L2VEAUseCorrectColorSpace)) {
+    if (image_processor_ && (input_buffer_map_.empty() ||
+                             frame.ColorSpace() != input_color_space_)) {
+      color_space_changed = true;
+    }
+  }
+
   if (!native_input_mode_) {
     // frame.coded_size() must be the size specified in
     // RequireBitstreamBuffers() in non native-input mode.
-    return frame.coded_size() == input_frame_size_;
+    if (frame.coded_size() != input_frame_size_) {
+      return false;
+    }
+    // For color space changes, we need to recreate the output buffers
+    // (SharedImage) with the correct color space.
+    if (!color_space_changed) {
+      return true;
+    }
   }
 
   if (!input_buffer_map_.empty()) {
     // ReconfigureFormatIfNeeded() has been called with the first VideoFrame.
-    // We checks here we need to (re)create ImageProcessor because the visible
+    // We check here if we need to (re)create ImageProcessor because the visible
     // rectangle of |frame| differs from the first VideoFrame.
     // |frame.natural_size()| must be unchanged during encoding in the same
     // VideoEncodeAccelerator  instance. When it is changed, a client has to
@@ -1028,7 +1067,7 @@ bool V4L2VideoEncodeAccelerator::ReconfigureFormatIfNeeded(
                  << ", input_natural_size_=" << input_natural_size_.ToString();
       return false;
     }
-    if (frame.coded_size() == input_frame_size_) {
+    if (frame.coded_size() == input_frame_size_ && !color_space_changed) {
       return true;
     }
 
@@ -1061,16 +1100,30 @@ bool V4L2VideoEncodeAccelerator::ReconfigureFormatIfNeeded(
     if (image_processor_->input_config().size.height() ==
             buffer_size.height() &&
         image_processor_->input_config().planes[0].stride ==
-            static_cast<size_t>(buffer_size.width())) {
+            static_cast<size_t>(buffer_size.width()) &&
+        !color_space_changed) {
       return true;
     }
   }
 
-  // The |frame| dimension is different from the resolution configured to
-  // V4L2VEA. This is the case that V4L2VEA needs to create ImageProcessor for
-  // cropping and scaling. Update |input_frame_size_| to check if succeeding
-  // frames' dimensions are not different from the current one.
+  // The |frame| dimension or the color space is different from the resolution
+  // configured to V4L2VEA. This is the case that V4L2VEA needs to (re)create
+  // ImageProcessor for cropping, scaling or fixing color space metadata.
+  // Recreating ImageProcessor for color space changes is not efficient as
+  // V4L2's usage of SharedImage buffers does not strictly depend on ColorSpace
+  // metadata being correct. But this should happen infrequently so the
+  // efficiency loss is not a problem. Update |input_frame_size_| to check if
+  // succeeding frames' dimensions are not different from the current one.
   input_frame_size_ = frame.coded_size();
+
+  // Store the color space of the input frame used later for allocating output
+  // buffers.
+  if (base::FeatureList::IsEnabled(kV4L2VEAUseCorrectColorSpace)) {
+    // TODO(crbug.com/425634684): Default to BT.709 if frame ColorSpace is
+    // invalid, as SharedImages should always have a valid ColorSpace on
+    // creation.
+    input_color_space_ = frame.ColorSpace();
+  }
   if (!CreateImageProcessor(frame.layout(), device_input_layout_->format(),
                             device_input_layout_->coded_size(),
                             frame.visible_rect(),
@@ -1286,8 +1339,7 @@ void V4L2VideoEncodeAccelerator::Enqueue() {
             FROM_HERE, base::BindOnce(std::move(flush_callback_), true));
         return;
       }
-      struct v4l2_encoder_cmd cmd;
-      memset(&cmd, 0, sizeof(cmd));
+      struct v4l2_encoder_cmd cmd = {};
       cmd.cmd = V4L2_ENC_CMD_STOP;
       if (device_->Ioctl(VIDIOC_ENCODER_CMD, &cmd) != 0) {
         SetErrorState(
@@ -1464,9 +1516,9 @@ void V4L2VideoEncodeAccelerator::PumpBitstreamBuffers() {
       auto buffer_id = buffer_ref->id;
       bitstream_buffer_pool_.pop_back();
 
-      const uint8_t* output_buffer =
+      const uint8_t* output_buffer = UNSAFE_TODO(
           static_cast<const uint8_t*>(output_buf->GetPlaneMapping(0)) +
-          output_buf->GetPlaneDataOffset(0);
+          output_buf->GetPlaneDataOffset(0));
 
       size_t output_data_size = CopyIntoOutputBuffer(
           output_buffer, bitstream_size, std::move(buffer_ref));
@@ -1495,8 +1547,7 @@ void V4L2VideoEncodeAccelerator::PumpBitstreamBuffers() {
       child_task_runner_->PostTask(
           FROM_HERE, base::BindOnce(std::move(flush_callback_), true));
       // Start the encoder again.
-      struct v4l2_encoder_cmd cmd;
-      memset(&cmd, 0, sizeof(cmd));
+      struct v4l2_encoder_cmd cmd = {};
       cmd.cmd = V4L2_ENC_CMD_START;
       if (device_->Ioctl(VIDIOC_ENCODER_CMD, &cmd) != 0) {
         SetErrorState(
@@ -1536,7 +1587,7 @@ bool V4L2VideoEncodeAccelerator::EnqueueInputRecord(
   }
 
   scoped_refptr<VideoFrame> frame = frame_info.frame;
-
+  CHECK(frame);
   size_t buffer_id = input_buf.BufferId();
 
   struct timeval timestamp;
@@ -1546,7 +1597,16 @@ bool V4L2VideoEncodeAccelerator::EnqueueInputRecord(
       frame->timestamp().InSeconds() * base::Time::kMicrosecondsPerSecond;
   input_buf.SetTimeStamp(timestamp);
 
-  DCHECK_EQ(device_input_layout_->format(), frame->format());
+  if (frame->format() != device_input_layout_->format()) {
+    SetErrorState(
+        {EncoderStatus::Codes::kUnsupportedFrameFormat,
+         base::StrCat(
+             {"Unexpected format: ", VideoPixelFormatToString(frame->format()),
+              ", expected: ",
+              VideoPixelFormatToString(device_input_layout_->format())})});
+    return false;
+  }
+
   size_t num_planes = GetNumPlanesOfV4L2PixFmt(
       Fourcc::FromVideoPixelFormat(device_input_layout_->format(),
                                    !device_input_layout_->is_multi_planar())
@@ -1616,11 +1676,31 @@ bool V4L2VideoEncodeAccelerator::EnqueueInputRecord(
                        "VideoFrame doesn't have shared memory"});
         return false;
       }
-
+      const size_t shm_size =
+          frame->shm_region() ? frame->shm_region()->GetSize() : 0u;
       // The frame data is readable only and the driver doesn't actually write
       // the buffer. But USRPTR buffer needs void*. So const_cast<> is required.
       std::vector<void*> user_ptrs(num_planes);
       for (size_t i = 0; i < num_planes; ++i) {
+        const size_t plane_offset = frame->layout().planes()[i].offset;
+        const size_t plane_size = device_input_layout_->planes()[i].size;
+        base::CheckedNumeric<size_t> plane_end = plane_offset;
+        plane_end += plane_size;
+        if (!plane_end.IsValid()) {
+          LOG(ERROR) << "Too large plane_end value";
+          SetErrorState({EncoderStatus::Codes::kInvalidInputFrame,
+                         "Too large plane_end value"});
+          return false;
+        }
+        if (plane_end.ValueOrDie() > shm_size) {
+          LOG(ERROR)
+              << "Input shmem smaller than device requirements for plane " << i
+              << ": offset=" << plane_offset << ", size=" << plane_size
+              << ", shm_size=" << shm_size;
+          SetErrorState({EncoderStatus::Codes::kInvalidInputFrame,
+                         "Input shmem smaller than device sizeimage"});
+          return false;
+        }
         user_ptrs[i] = const_cast<uint8_t*>(frame->data(i));
       }
       if (!std::move(input_buf).QueueUserPtr(std::move(user_ptrs))) {
@@ -1858,8 +1938,7 @@ void V4L2VideoEncodeAccelerator::RequestEncodingParametersChangeTask(
   }
 
   if (current_framerate_ != framerate) {
-    struct v4l2_streamparm parms;
-    memset(&parms, 0, sizeof(parms));
+    struct v4l2_streamparm parms = {};
     parms.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
     // Note that we are provided "frames per second" but V4L2 expects "time per
     // frame"; hence we provide the reciprocal of the framerate here.
@@ -1970,8 +2049,7 @@ bool V4L2VideoEncodeAccelerator::ApplyCrop() {
   visible_rect.width = encoder_input_visible_rect_.width();
   visible_rect.height = encoder_input_visible_rect_.height();
 
-  struct v4l2_selection selection_arg;
-  memset(&selection_arg, 0, sizeof(selection_arg));
+  struct v4l2_selection selection_arg = {};
   selection_arg.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
   selection_arg.target = V4L2_SEL_TGT_CROP;
   selection_arg.r = visible_rect;
@@ -1983,8 +2061,7 @@ bool V4L2VideoEncodeAccelerator::ApplyCrop() {
     visible_rect = selection_arg.r;
   } else {
     DVLOGF(3) << "Fallback to VIDIOC_S/G_CROP";
-    struct v4l2_crop crop;
-    memset(&crop, 0, sizeof(crop));
+    struct v4l2_crop crop = {};
     crop.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
     crop.c = visible_rect;
     if (device_->Ioctl(VIDIOC_S_CROP, &crop) != 0) {

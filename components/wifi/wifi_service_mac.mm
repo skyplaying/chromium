@@ -17,6 +17,7 @@
 #include "base/apple/scoped_cftyperef.h"
 #include "base/compiler_specific.h"
 #include "base/functional/bind.h"
+#include "base/memory/weak_ptr.h"
 #include "base/strings/string_view_util.h"
 #include "base/strings/sys_string_conversions.h"
 #import "base/task/sequenced_task_runner.h"
@@ -129,6 +130,10 @@ class WiFiServiceMac : public WiFiService {
   // |networks_|.
   NetworkList::iterator FindNetwork(const std::string& network_guid);
 
+  // Refreshes live properties for the connected network from CWInterface
+  // without triggering a scan.
+  void RefreshConnectedNetworkProperties(NetworkList::iterator it);
+
   // Handles notification from |wlan_observer_|.
   void OnWlanObserverNotification();
 
@@ -160,6 +165,8 @@ class WiFiServiceMac : public WiFiService {
   std::string connected_network_guid_;
   // Temporary storage of network properties indexed by |network_guid|.
   base::DictValue network_properties_;
+
+  base::WeakPtrFactory<WiFiServiceMac> weak_factory_{this};
 };
 
 WiFiServiceMac::WiFiServiceMac() = default;
@@ -196,6 +203,9 @@ void WiFiServiceMac::GetProperties(const std::string& network_guid,
   }
 
   it->connection_state = GetNetworkConnectionState(network_guid);
+  if (it->connection_state != onc::connection_state::kNotConnected) {
+    RefreshConnectedNetworkProperties(it);
+  }
   *properties = it->ToValue(/*network_list=*/false);
   DVLOG(1) << *properties;
 }
@@ -382,12 +392,18 @@ void WiFiServiceMac::SetEventObservers(
 
   // Subscribe to OS notifications.
   if (!networks_changed_observer_.is_null()) {
+    // CoreWLAN delivers SSID-change notifications on its own dispatch queue,
+    // so the block must not reference `this` directly. Capture the task runner
+    // by value and bind a weak pointer so any task that lands after this
+    // object has been destroyed on the worker sequence is dropped.
+    scoped_refptr<base::SequencedTaskRunner> worker_task_runner = task_runner_;
+    base::WeakPtr<WiFiServiceMac> weak_this = weak_factory_.GetWeakPtr();
     void (^ns_observer)(NSNotification* notification) = ^(
         NSNotification* notification) {
       DVLOG(1) << "Received CoreWLAN notification that the SSID changed";
-      task_runner_->PostTask(
+      worker_task_runner->PostTask(
           FROM_HERE, base::BindOnce(&WiFiServiceMac::OnWlanObserverNotification,
-                                    base::Unretained(this)));
+                                    weak_this));
     };
 
     // A notification with the symbol kCWSSIDDidChangeNotification started being
@@ -567,6 +583,22 @@ NetworkList::iterator WiFiServiceMac::FindNetwork(
       return it;
   }
   return networks_.end();
+}
+
+void WiFiServiceMac::RefreshConnectedNetworkProperties(
+    NetworkList::iterator it) {
+  NSString* ns_bssid = [interface_ bssid];
+  NSInteger rssi = [interface_ rssiValue];
+  CWChannel* channel = [interface_ wlanChannel];
+
+  if (!ns_bssid || rssi == 0 || !channel) {
+    return;  // Disconnected or XPC failure, keep cached values.
+  }
+
+  it->signal_strength = static_cast<uint32_t>(rssi);
+  it->frequency = FrequencyFromCWChannelBand([channel channelBand]);
+  it->frequency_set = {it->frequency};
+  it->bssid = base::SysNSStringToUTF8(ns_bssid);
 }
 
 void WiFiServiceMac::OnWlanObserverNotification() {

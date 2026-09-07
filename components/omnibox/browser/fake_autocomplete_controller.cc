@@ -37,7 +37,7 @@ void FakeAutocompleteControllerObserver::OnAutocompleteStopTimerTriggered(
 }
 
 FakeAutocompleteController::FakeAutocompleteController(
-    raw_ptr<base::test::SingleThreadTaskEnvironment> task_environment)
+    raw_ptr<base::test::TaskEnvironment> task_environment)
     : AutocompleteController(std::make_unique<FakeAutocompleteProviderClient>(),
                              AutocompleteControllerConfig{}),
       task_environment_(task_environment) {
@@ -68,7 +68,11 @@ FakeAutocompleteController::FakeAutocompleteController(
   AddObserver(observer_.get());
 }
 
-FakeAutocompleteController::~FakeAutocompleteController() = default;
+FakeAutocompleteController::~FakeAutocompleteController() {
+  if (observer_) {
+    RemoveObserver(observer_.get());
+  }
+}
 
 // static
 AutocompleteInput FakeAutocompleteController::CreateInput(

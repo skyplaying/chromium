@@ -8,6 +8,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -29,12 +30,9 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
-import org.robolectric.annotation.Config;
-import org.robolectric.annotation.LooperMode;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.chrome.browser.feed.webfeed.WebFeedBridge;
-import org.chromium.chrome.browser.feed.webfeed.WebFeedBridgeJni;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.browser.share.ShareDelegate;
@@ -54,8 +52,6 @@ import java.util.function.Supplier;
 
 /** Unit tests for {@link FeedStream} Ctrl+Click behavior. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
-@LooperMode(LooperMode.Mode.LEGACY)
 public class FeedStreamCtrlClickTest {
     private static final String TEST_URL = JUnitTestGURLs.EXAMPLE_URL.getSpec();
 
@@ -70,8 +66,6 @@ public class FeedStreamCtrlClickTest {
     @Mock private FeedSurfaceRendererBridge mFeedSurfaceRendererBridgeMock;
     @Mock private FeedServiceBridge.Natives mFeedServiceBridgeJniMock;
     @Mock private FeedReliabilityLoggingBridge.Natives mFeedReliabilityLoggingBridgeJniMock;
-    @Mock private WebFeedBridge.Natives mWebFeedBridgeJni;
-
     @Mock private SnackbarManager mSnackbarManager;
     @Mock private WindowAndroid mWindowAndroid;
     @Mock private ModalDialogManager mModalDialogManager;
@@ -80,10 +74,9 @@ public class FeedStreamCtrlClickTest {
     @Mock private HybridListRenderer mRenderer;
     @Mock private ListLayoutHelper mListLayoutHelper;
     @Mock private FeedSurfaceScope mSurfaceScope;
-    @Mock private RecyclerView.Adapter mAdapter;
+    @Mock private RecyclerView.Adapter<?> mAdapter;
     @Mock private FeedReliabilityLogger mReliabilityLogger;
     @Mock private FeedActionDelegate mActionDelegate;
-    @Mock private FeedContentFirstLoadWatcher mFeedContentFirstLoadWatcher;
     @Mock private Stream.StreamsMediator mStreamsMediator;
 
     private FeedSurfaceRendererBridge.Renderer mBridgeRenderer;
@@ -94,8 +87,7 @@ public class FeedStreamCtrlClickTest {
                 Profile profile,
                 FeedSurfaceRendererBridge.Renderer renderer,
                 FeedReliabilityLoggingBridge reliabilityLoggingBridge,
-                @StreamKind int streamKind,
-                SingleWebFeedParameters webFeedParameters) {
+                @StreamKind int streamKind) {
             mBridgeRenderer = renderer;
             return mFeedSurfaceRendererBridgeMock;
         }
@@ -107,11 +99,10 @@ public class FeedStreamCtrlClickTest {
 
         FeedServiceBridgeJni.setInstanceForTesting(mFeedServiceBridgeJniMock);
         FeedReliabilityLoggingBridgeJni.setInstanceForTesting(mFeedReliabilityLoggingBridgeJniMock);
-        WebFeedBridgeJni.setInstanceForTesting(mWebFeedBridgeJni);
         ProfileManager.setLastUsedProfileForTesting(mProfileMock);
 
         when(mWindowAndroid.getModalDialogManager()).thenReturn(mModalDialogManager);
-        when(mRenderer.getAdapter()).thenReturn(mAdapter);
+        doReturn(mAdapter).when(mRenderer).getAdapter();
         when(mRenderer.getListLayoutHelper()).thenReturn(mListLayoutHelper);
 
         mFeedStream =
@@ -124,9 +115,7 @@ public class FeedStreamCtrlClickTest {
                         mShareDelegateSupplier,
                         StreamKind.FOR_YOU,
                         mActionDelegate,
-                        mFeedContentFirstLoadWatcher,
                         mStreamsMediator,
-                        null,
                         new FeedSurfaceRendererBridgeFactory());
 
         mContentManager = new FeedListContentManager();
@@ -174,6 +163,7 @@ public class FeedStreamCtrlClickTest {
                         mContentManager.getContextValues(0).get(SurfaceActionsHandler.KEY);
 
         handler.openUrl(OpenMode.SAME_TAB, TEST_URL, createOpenUrlOptions());
+        RobolectricUtil.runAllBackgroundAndUi();
 
         verify(mActionDelegate)
                 .openSuggestionUrl(
@@ -182,7 +172,7 @@ public class FeedStreamCtrlClickTest {
                         anyBoolean(),
                         anyInt(),
                         eq(handler),
-                        any());
+                        anyInt());
     }
 
     @Test
@@ -204,6 +194,7 @@ public class FeedStreamCtrlClickTest {
                         mContentManager.getContextValues(0).get(SurfaceActionsHandler.KEY);
 
         handler.openUrl(OpenMode.SAME_TAB, TEST_URL, createOpenUrlOptions());
+        RobolectricUtil.runAllBackgroundAndUi();
 
         verify(mActionDelegate)
                 .openSuggestionUrl(
@@ -212,7 +203,7 @@ public class FeedStreamCtrlClickTest {
                         anyBoolean(),
                         anyInt(),
                         eq(handler),
-                        any());
+                        anyInt());
     }
 
     @Test
@@ -234,6 +225,7 @@ public class FeedStreamCtrlClickTest {
                         mContentManager.getContextValues(0).get(SurfaceActionsHandler.KEY);
 
         handler.openUrl(OpenMode.SAME_TAB, TEST_URL, createOpenUrlOptions());
+        RobolectricUtil.runAllBackgroundAndUi();
 
         verify(mActionDelegate)
                 .openSuggestionUrl(
@@ -242,7 +234,7 @@ public class FeedStreamCtrlClickTest {
                         anyBoolean(),
                         anyInt(),
                         eq(handler),
-                        any());
+                        anyInt());
     }
 
     @Test
@@ -264,6 +256,7 @@ public class FeedStreamCtrlClickTest {
                         mContentManager.getContextValues(0).get(SurfaceActionsHandler.KEY);
 
         handler.openUrl(OpenMode.SAME_TAB, TEST_URL, createOpenUrlOptions());
+        RobolectricUtil.runAllBackgroundAndUi();
 
         verify(mActionDelegate)
                 .openSuggestionUrl(
@@ -272,6 +265,6 @@ public class FeedStreamCtrlClickTest {
                         anyBoolean(),
                         anyInt(),
                         eq(handler),
-                        any());
+                        anyInt());
     }
 }

@@ -5,7 +5,6 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/accessibility/uia_accessibility_event_waiter.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -18,7 +17,6 @@
 #include "content/public/test/scoped_accessibility_mode_override.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "third_party/blink/public/common/features.h"
-#include "ui/accessibility/accessibility_features.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_tree_host.h"
 
@@ -30,12 +28,9 @@ namespace {
 class AriaNotifyUIABrowserTest : public InProcessBrowserTest {
  public:
   AriaNotifyUIABrowserTest() {
-    // Enable both AriaNotify (for the web API) and UiaProvider (so that
-    // UIA notification events are fired instead of using the IA2 fallback).
+    // Enable AriaNotify for the web API so UIA notification events are fired.
     scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{blink::features::kAriaNotify,
-                              ::features::kUiaProvider},
-        {});
+        /*enabled_features=*/{blink::features::kAriaNotify}, {});
   }
 
   AriaNotifyUIABrowserTest(const AriaNotifyUIABrowserTest&) = delete;
@@ -58,7 +53,7 @@ class AriaNotifyUIABrowserTest : public InProcessBrowserTest {
 
   HWND GetWebPageHwnd() const {
     return browser()
-        ->window()
+        ->GetWindow()
         ->GetNativeWindow()
         ->GetHost()
         ->GetAcceleratedWidget();

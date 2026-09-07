@@ -14,6 +14,7 @@
 #include "content/public/browser/preconnect_manager.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/browser/storage_partition.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "net/base/isolation_info.h"
 
@@ -51,7 +52,7 @@ void NetworkHintsHandlerImpl::PrefetchDNS(
     return;
 
   content::RenderFrameHost* render_frame_host =
-      content::RenderFrameHost::FromID(render_process_id_, render_frame_id_);
+      content::RenderFrameHost::FromID(render_frame_host_id_);
   if (!render_frame_host)
     return;
 
@@ -59,11 +60,13 @@ void NetworkHintsHandlerImpl::PrefetchDNS(
   for (const auto& url : urls) {
     gurls.emplace_back(url.GetURL());
   }
-  std::optional<base::UnguessableToken> network_restrictions_id =
+  base::UnguessableToken network_restrictions_id =
       render_frame_host->GetNetworkRestrictionsID();
+  const content::StoragePartitionConfig& storage_partition_config =
+      render_frame_host->GetStoragePartition()->GetConfig();
   preconnect_manager_->StartPreresolveHosts(
       gurls, GetPendingNetworkAnonymizationKey(render_frame_host),
-      kNetworkHintsTrafficAnnotation, /*storage_partition_config=*/nullptr,
+      kNetworkHintsTrafficAnnotation, &storage_partition_config,
       network_restrictions_id);
 }
 
@@ -80,21 +83,25 @@ void NetworkHintsHandlerImpl::Preconnect(const url::SchemeHostPort& url,
   // will result in at least some cross-site information leakage.
 
   content::RenderFrameHost* render_frame_host =
-      content::RenderFrameHost::FromID(render_process_id_, render_frame_id_);
+      content::RenderFrameHost::FromID(render_frame_host_id_);
   if (!render_frame_host)
     return;
 
+  base::UnguessableToken network_restrictions_id =
+      render_frame_host->GetNetworkRestrictionsID();
+  const content::StoragePartitionConfig& storage_partition_config =
+      render_frame_host->GetStoragePartition()->GetConfig();
   preconnect_manager_->StartPreconnectUrl(
       url.GetURL(), allow_credentials,
       GetPendingNetworkAnonymizationKey(render_frame_host),
-      kNetworkHintsTrafficAnnotation, /*storage_partition_config=*/nullptr,
+      kNetworkHintsTrafficAnnotation, &storage_partition_config,
+      network_restrictions_id,
       /*keepalive_config=*/std::nullopt, mojo::NullRemote());
 }
 
 NetworkHintsHandlerImpl::NetworkHintsHandlerImpl(
     content::RenderFrameHost* frame_host)
-    : render_process_id_(frame_host->GetProcess()->GetDeprecatedID()),
-      render_frame_id_(frame_host->GetRoutingID()) {
+    : render_frame_host_id_(frame_host->GetGlobalId()) {
   // Get the PreconnectManager for this process.
   auto* render_process_host = frame_host->GetProcess();
   auto* profile =

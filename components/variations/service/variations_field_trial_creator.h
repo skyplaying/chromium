@@ -18,6 +18,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
+#include "base/types/pass_key.h"
 #include "base/version_info/channel.h"
 #include "build/build_config.h"
 #include "components/variations/client_filterable_state.h"
@@ -38,6 +39,34 @@ class MetricsStateManager;
 namespace variations {
 
 class EntropyProviders;
+class VariationsService;
+
+// The source from which variations were applied.
+enum class VariationsSourceType {
+  kUnknown,
+  // No variations applied, Chrome is using client-side defaults.
+  // TODO(crbug.com/418007751): think about exposing the seed type as a separate
+  // VariationsSource enum type as well.
+  kDefaultSeed,
+  // Variations were applied from the field trial testing config (usually
+  // enabled via --enable-field-trial-config).
+  kFieldTrialConfig,
+  // A regular or safe variations seed was successfully applied.
+  kVariationsServer,
+  // Variations were applied from a manual configuration file
+  // enabled via --variations-test-seed-json-path.
+  kManualConfigFile,
+  // Variations were forced via command line flags (e.g. --force-fieldtrials).
+  kCommandLineOrAboutFlags,
+};
+
+// Information about the source of variations applied in this session.
+struct VariationsSource {
+  VariationsSourceType type = VariationsSourceType::kUnknown;
+  // Whether variations were forced or overridden via command line flags
+  // additionally to the general variations source.
+  bool forced_via_command_line_or_about_flags = false;
+};
 
 // A testing feature that forces a crash during field trial creation
 // on developer and test builds.
@@ -128,6 +157,10 @@ class VariationsFieldTrialCreator {
   // empty if it is not available.
   std::string GetLatestCountry() const;
 
+  // Returns what variations will consider to be the latest administrative
+  // area code. Returns empty if it is not available.
+  std::string GetLatestGeoLevel1() const;
+
   VariationsSeedStore* seed_store() { return seed_store_.get(); }
 
   // Sets up field trials based on stored variations seed data. Returns whether
@@ -150,18 +183,18 @@ class VariationsFieldTrialCreator {
   // |safe_seed_manager| should be notified of the combined server and client
   // state that was activated to create the field trials (only when the return
   // value is true). Must not be null.
-  // |add_entropy_source_to_variations_ids| controls if variations ID for the
-  // low entropy source should be added to FIRST_PARTY variation headers.
+  // |add_entropy_source_to_variations_ids| controls if an offset variations ID
+  // for the low entropy source is added to variations headers.
   // |entropy_providers| Used to provide entropy to field trials.
-  // TODO(b/263797385): eliminate this argument if we can always add the ID.
   //
   // NOTE: The ordering of the FeatureList method calls is such that the
   // explicit --disable-features and --enable-features from the command line
   // take precedence over |extra_overrides|, which takes precedence over the
   // field trials.
+  //
+  // TODO(crbug.com/424154785): Remove add_entropy_source_to_variations_ids.
   bool SetUpFieldTrials(
       const std::vector<std::string>& variation_ids,
-      const std::string& command_line_variation_ids,
       const std::vector<base::FeatureList::FeatureOverrideInfo>&
           extra_overrides,
       std::unique_ptr<base::FeatureList> feature_list,
@@ -217,6 +250,15 @@ class VariationsFieldTrialCreator {
 
   SeedType seed_type() const { return seed_type_; }
 
+  // Returns the source of variations applied in this session.
+  VariationsSource variations_source() const { return variations_source_; }
+
+  // Returns the sticky activation manager.
+  StickyActivationManager& sticky_activation_manager(
+      base::PassKey<VariationsService>) {
+    return sticky_activation_manager_;
+  }
+
  protected:
   // Get the platform we're running on, respecting OverrideVariationsPlatform().
   // Protected for testing.
@@ -235,6 +277,10 @@ class VariationsFieldTrialCreator {
   // Read the google group memberships from local-state prefs.
   // Protected for testing.
   base::flat_set<uint64_t> GetGoogleGroupsFromPrefs();
+
+  // Read the enterprise group memberships from local-state prefs.
+  // Protected for testing.
+  base::flat_set<std::string> GetEnterpriseGroupsFromPrefs();
 
  private:
   // Returns true if the loaded VariationsSeed has expired. An expired seed is
@@ -281,6 +327,12 @@ class VariationsFieldTrialCreator {
   // Returns the seed store. Virtual for testing.
   virtual VariationsSeedStore* GetSeedStore();
 
+  // Removes entries from the dictionary specified by |pref_name| in Local State
+  // for any keys that are not present in client_->GetAllProfilesKeys(). This
+  // is used to clean up variations prefs for deleted profiles on platforms
+  // that support multiple profiles.
+  void RemovePrefsForDeletedProfiles(std::string_view pref_name);
+
   PrefService* local_state() { return seed_store_->local_state(); }
   const PrefService* local_state() const { return seed_store_->local_state(); }
 
@@ -290,6 +342,9 @@ class VariationsFieldTrialCreator {
 
   // Seed type used for variations.
   SeedType seed_type_ = SeedType::kNullSeed;
+
+  // The source of variations applied in this session.
+  VariationsSource variations_source_;
 
   // Tracks whether |CreateTrialsFromSeed| has been called, to ensure that it is
   // called at most once.

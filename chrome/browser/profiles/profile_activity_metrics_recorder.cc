@@ -15,7 +15,6 @@
 #include "chrome/browser/profiles/profile_attributes_entry.h"
 #include "chrome/browser/profiles/profile_attributes_storage.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 
@@ -107,21 +106,6 @@ void RecordProfilesState() {
       .RecordProfilesState();
 }
 
-void RecordAccountMetrics(const Profile* profile) {
-  DCHECK(profile);
-
-  ProfileAttributesEntry* entry =
-      g_browser_process->profile_manager()
-          ->GetProfileAttributesStorage()
-          .GetProfileAttributesWithPath(profile->GetPath());
-  if (!entry) {
-    // This can happen if the profile is deleted / for guest profile.
-    return;
-  }
-
-  entry->RecordAccountNamesMetric();
-}
-
 }  // namespace
 
 // static
@@ -142,7 +126,6 @@ void ProfileActivityMetricsRecorder::OnBrowserActivated(
   Profile* active_profile = browser->GetProfile()->GetOriginalProfile();
 
   RecordBrowserActivation(active_profile);
-  RecordAccountMetrics(active_profile);
 
   if (running_session_profile_ != active_profile) {
     // No-op, if starting a new session (|running_session_profile_| is nullptr).

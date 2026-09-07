@@ -40,7 +40,6 @@ import org.chromium.chrome.browser.bookmarks.TabBookmarker;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabId;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelObserver;
 import org.chromium.chrome.browser.tasks.tab_management.TabActionButtonData;
@@ -58,6 +57,8 @@ import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.styles.ChromeColors;
 import org.chromium.components.browser_ui.util.motion.MotionEventInfo;
 import org.chromium.ui.modaldialog.ModalDialogManager;
+import org.chromium.ui.modelutil.ListObservable;
+import org.chromium.ui.modelutil.ListObservable.ListObserver;
 import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.widget.ViewRectProvider;
@@ -81,9 +82,10 @@ public class PinnedTabStripMediator {
     private final GridLayoutManager mTabGridListLayoutManager;
     private final PropertyModel mStripPropertyModel;
     private final TabListItemSizeChangedObserver mTabListItemSizeChangedObserver;
+    private final ListObserver<Void> mTabGridListObserver;
     private final TabModelObserver mTabModelObserver;
     private final Supplier<@Nullable TabBookmarker> mTabBookmarkerSupplier;
-    private final MonotonicObservableSupplier<TabGroupModelFilter> mTabGroupModelFilterSupplier;
+    private final MonotonicObservableSupplier<TabModel> mTabModelSupplier;
     private @Nullable PinnedTabStripItemContextMenuCoordinator mContextMenuCoordinator;
     private final BottomSheetController mBottomSheetController;
     private @Nullable TabGroupListBottomSheetCoordinator mTabGroupListBottomSheetCoordinator;
@@ -92,8 +94,8 @@ public class PinnedTabStripMediator {
     private final @Px int mPinnedTabListItemHeight;
     private final @Px int mPinnedTabsStripRowCoverageHeightPx;
 
-    private final Callback<TabGroupModelFilter> mOnTabGroupModelFilterChanged =
-            new ValueChangedCallback<>(this::onTabGroupModelFilterChanged);
+    private final Callback<TabModel> mOnTabModelChanged =
+            new ValueChangedCallback<>(this::onTabModelChanged);
     private final TabActionListener mContextClickTabItemEventListener =
             new TabActionListener() {
                 @Override
@@ -123,7 +125,7 @@ public class PinnedTabStripMediator {
      * @param tabGridListModel The model for the main tab grid.
      * @param pinnedTabsModelList The model for the pinned tabs strip.
      * @param stripPropertyModel The property model for the pinned tabs strip.
-     * @param tabGroupModelFilterSupplier The supplier of the current {@link TabGroupModelFilter}.
+     * @param tabModelSupplier The supplier of the current {@link TabModel}.
      */
     public PinnedTabStripMediator(
             Activity activity,
@@ -132,7 +134,7 @@ public class PinnedTabStripMediator {
             TabListModel tabGridListModel,
             TabListModel pinnedTabsModelList,
             PropertyModel stripPropertyModel,
-            MonotonicObservableSupplier<TabGroupModelFilter> tabGroupModelFilterSupplier,
+            MonotonicObservableSupplier<TabModel> tabModelSupplier,
             Supplier<@Nullable TabBookmarker> tabBookmarkerSupplier,
             BottomSheetController bottomSheetController,
             ModalDialogManager modalDialogManager,
@@ -148,12 +150,36 @@ public class PinnedTabStripMediator {
         mModalDialogManager = modalDialogManager;
         mOnTabGroupCreation = onTabGroupCreation;
         mTabLisCoordinator.addTabListItemSizeChangedObserver(mTabListItemSizeChangedObserver);
-        mTabGroupModelFilterSupplier = tabGroupModelFilterSupplier;
+        mTabModelSupplier = tabModelSupplier;
         mTabBookmarkerSupplier = tabBookmarkerSupplier;
         Resources res = mActivity.getResources();
         mPinnedTabListItemHeight = res.getDimensionPixelSize(R.dimen.pinned_tab_strip_item_height);
         mPinnedTabsStripRowCoverageHeightPx =
                 res.getDimensionPixelSize(R.dimen.pinned_tabs_strip_row_coverage_height);
+        mTabGridListObserver =
+                new ListObserver<>() {
+                    @Override
+                    public void onItemRangeInserted(ListObservable source, int index, int count) {
+                        updatePinnedTabsBar();
+                    }
+
+                    @Override
+                    public void onItemRangeRemoved(ListObservable source, int index, int count) {
+                        updatePinnedTabsBar();
+                    }
+
+                    @Override
+                    public void onItemRangeChanged(
+                            ListObservable source, int index, int count, @Nullable Void payload) {
+                        updatePinnedTabsBar();
+                    }
+
+                    @Override
+                    public void onItemMoved(ListObservable source, int curIndex, int newIndex) {
+                        updatePinnedTabsBar();
+                    }
+                };
+        mTabGridListModel.addObserver(mTabGridListObserver);
         mTabModelObserver =
                 new TabModelObserver() {
                     @Override
@@ -192,7 +218,7 @@ public class PinnedTabStripMediator {
                         updatePinnedTabsBar();
                     }
                 };
-        mTabGroupModelFilterSupplier.addSyncObserverAndCallIfNonNull(mOnTabGroupModelFilterChanged);
+        mTabModelSupplier.addSyncObserverAndCallIfNonNull(mOnTabModelChanged);
     }
 
     /**
@@ -256,6 +282,8 @@ public class PinnedTabStripMediator {
 
         List<ListItem> newPinnedTabs = new ArrayList<>();
 
+        TabModel tabModel = mTabModelSupplier.get();
+
         // Find pinned tabs that are scrolled off-screen (above the current viewport) or are in a
         // partially visible row covered by the pinned tabs strip.
         for (int i = 0; i < lastItemToConsiderForPinning; i++) {
@@ -268,6 +296,13 @@ public class PinnedTabStripMediator {
             }
 
             if (model.get(IS_PINNED)) {
+                int tabId = model.get(TAB_ID);
+                if (tabModel != null) {
+                    Tab tab = tabModel.getTabById(tabId);
+                    if (tab != null && tab.isClosing()) {
+                        continue;
+                    }
+                }
                 newPinnedTabs.add(createPinnedTabListItem(model));
             }
         }
@@ -431,21 +466,19 @@ public class PinnedTabStripMediator {
         mStripPropertyModel.set(PinnedTabStripProperties.IS_VISIBLE, shouldBeVisible);
     }
 
-    private void onTabGroupModelFilterChanged(
-            TabGroupModelFilter newFilter, @Nullable TabGroupModelFilter oldFilter) {
+    private void onTabModelChanged(TabModel newTabModel, @Nullable TabModel oldTabModel) {
         if (mTabGroupListBottomSheetCoordinator != null) {
             mTabGroupListBottomSheetCoordinator.destroy();
         }
 
-        if (oldFilter != null) {
-            oldFilter.removeObserver(mTabModelObserver);
+        if (oldTabModel != null) {
+            oldTabModel.removeObserver(mTabModelObserver);
         }
-        if (newFilter != null) {
-            newFilter.addObserver(mTabModelObserver);
-            Profile profile =
-                    assumeNonNull(mTabGroupModelFilterSupplier.get()).getTabModel().getProfile();
+        if (newTabModel != null) {
+            newTabModel.addObserver(mTabModelObserver);
+            Profile profile = assumeNonNull(mTabModelSupplier.get()).getProfile();
             if (profile == null) return;
-            boolean isIncognito = newFilter.getTabModel().isIncognitoBranded();
+            boolean isIncognito = newTabModel.isIncognitoBranded();
 
             TabGroupCreationDialogManager tabGroupCreationDialogManager =
                     new TabGroupCreationDialogManager(
@@ -455,17 +488,19 @@ public class PinnedTabStripMediator {
                             mActivity,
                             profile,
                             tabGroupId ->
-                                    tabGroupCreationDialogManager.showDialog(tabGroupId, newFilter),
+                                    tabGroupCreationDialogManager.showDialog(
+                                            tabGroupId, newTabModel),
                             /* tabMovedCallback= */ null,
-                            newFilter,
+                            newTabModel,
                             mBottomSheetController,
                             /* supportsShowNewGroup= */ true,
-                            /* destroyOnHide= */ false);
+                            /* destroyOnHide= */ false,
+                            /* windowAndroid= */ null);
             mContextMenuCoordinator =
                     PinnedTabStripItemContextMenuCoordinator.createContextMenuCoordinator(
                             mActivity,
                             mTabBookmarkerSupplier,
-                            newFilter,
+                            newTabModel,
                             mTabGroupListBottomSheetCoordinator,
                             tabGroupCreationDialogManager);
 
@@ -479,8 +514,15 @@ public class PinnedTabStripMediator {
     }
 
     void destroy() {
+        mTabGridListModel.removeObserver(mTabGridListObserver);
         mTabLisCoordinator.removeTabListItemSizeChangedObserver(mTabListItemSizeChangedObserver);
-        mTabGroupModelFilterSupplier.removeObserver(mOnTabGroupModelFilterChanged);
+        mTabModelSupplier.removeObserver(mOnTabModelChanged);
+        // Remove the observer onTabModelChanged() added; removeObserver above won't. Mirrors
+        // TabSwitcherPaneCoordinator.destroy().
+        TabModel currentTabModel = mTabModelSupplier.get();
+        if (currentTabModel != null) {
+            currentTabModel.removeObserver(mTabModelObserver);
+        }
         if (mTabGroupListBottomSheetCoordinator != null) {
             mTabGroupListBottomSheetCoordinator.destroy();
             mTabGroupListBottomSheetCoordinator = null;

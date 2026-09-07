@@ -12,19 +12,21 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/unguessable_token.h"
 #include "chrome/browser/feature_engagement/tracker_factory.h"
+#include "chrome/browser/glic/host/guest_util.h"
 #include "chrome/browser/media/router/media_router_feature.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/global_media_controls/cast_device_list_host.h"
 #include "chrome/browser/ui/global_media_controls/media_notification_device_provider_impl.h"
 #include "chrome/browser/ui/global_media_controls/presentation_request_notification_producer.h"
 #include "chrome/browser/ui/media_router/cast_dialog_controller.h"
 #include "chrome/browser/ui/media_router/media_router_ui.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/user_education/browser_user_education_interface.h"
 #include "chrome/common/buildflags.h"
+#include "components/feature_engagement/public/feature_constants.h"
 #include "components/feature_engagement/public/tracker.h"
 #include "components/global_media_controls/public/media_dialog_delegate.h"
 #include "components/global_media_controls/public/media_item_manager.h"
@@ -37,6 +39,7 @@
 #include "content/public/browser/audio_service.h"
 #include "content/public/browser/media_session.h"
 #include "content/public/browser/media_session_service.h"
+#include "content/public/browser/render_frame_host.h"
 #include "media/base/media_switches.h"
 #include "media/remoting/device_capability_checker.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -56,12 +59,6 @@
 #include "ash/system/unified/unified_system_tray_controller.h"
 #endif
 
-#if BUILDFLAG(ENABLE_GLIC)
-#include "chrome/browser/glic/host/host.h"
-#include "chrome/browser/glic/public/glic_keyed_service.h"
-#include "chrome/browser/glic/widget/glic_window_controller.h"
-#endif
-
 namespace mojom {
 using global_media_controls::mojom::DeviceListClient;
 using global_media_controls::mojom::DeviceListHost;
@@ -71,6 +68,13 @@ namespace {
 
 // The maximum number of actions we will record to UKM for a specific source.
 constexpr int kMaxActionsRecordedToUKM = 100;
+
+// The minimum video duration required to show the Save Video Frame IPH.
+constexpr base::TimeDelta kSaveVideoFrameIphMinDuration = base::Minutes(5);
+
+// The minimum continuous playback time before the Save Video Frame IPH can be
+// shown.
+constexpr base::TimeDelta kSaveVideoFrameIphPlaybackTime = base::Seconds(10);
 
 void CancelRequest(
     std::unique_ptr<media_router::StartPresentationContext> context,
@@ -87,7 +91,8 @@ void CancelRequest(
 // focused.
 bool IsWebContentsFocused(content::WebContents* web_contents) {
   DCHECK(web_contents);
-  Browser* browser = chrome::FindBrowserWithTab(web_contents);
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents);
   if (!browser) {
     return false;
   }
@@ -97,7 +102,7 @@ bool IsWebContentsFocused(content::WebContents* web_contents) {
   if (GetLastActiveBrowserWindowInterfaceWithAnyProfile() != browser) {
     return false;
   }
-  return browser->tab_strip_model()->GetActiveWebContents() == web_contents;
+  return browser->GetTabStripModel()->GetActiveWebContents() == web_contents;
 }
 
 bool ShouldInitializeWithRemotePlaybackSource(
@@ -338,7 +343,7 @@ void MediaNotificationService::OnSinksDiscovered(const std::string& item_id) {
       content::MediaSession::GetWebContentsFromRequestId(item_id);
 
   if (web_contents) {
-    should_show_cast_local_media_iph_ =
+    iph_state_.should_show_cast_local_media =
         web_contents->GetLastCommittedURL().SchemeIsFile();
   }
 }
@@ -363,6 +368,92 @@ void MediaNotificationService::OnMediaSessionActionButtonPressed(
   ukm::builders::Media_GlobalMediaControls_ActionButtonPressed(source_id)
       .SetMediaSessionAction(static_cast<int64_t>(action))
       .Record(recorder);
+}
+
+void MediaNotificationService::OnMediaSessionInfoChanged(
+    const std::string& id,
+    const media_session::mojom::MediaSessionInfoPtr& session_info) {
+  iph_state_.is_playing =
+      session_info && session_info->playback_state ==
+                          media_session::mojom::MediaPlaybackState::kPlaying;
+  EvaluateSaveVideoFrameIphConditions(id);
+}
+
+void MediaNotificationService::OnMediaSessionActionsChanged(
+    const std::string& id,
+    const std::vector<media_session::mojom::MediaSessionAction>& actions) {
+  iph_state_.is_video_frame_available =
+      std::ranges::find(
+          actions, media_session::mojom::MediaSessionAction::kSaveVideoFrame) !=
+      actions.end();
+  iph_state_.is_ad =
+      std::ranges::find(actions,
+                        media_session::mojom::MediaSessionAction::kSkipAd) !=
+      actions.end();
+  EvaluateSaveVideoFrameIphConditions(id);
+}
+
+void MediaNotificationService::OnMediaSessionPositionChanged(
+    const std::string& id,
+    const std::optional<media_session::MediaPosition>& position) {
+  iph_state_.is_duration_sufficient =
+      position && position->duration() >= kSaveVideoFrameIphMinDuration;
+  EvaluateSaveVideoFrameIphConditions(id);
+}
+
+void MediaNotificationService::EvaluateSaveVideoFrameIphConditions(
+    const std::string& id) {
+  auto* web_contents = content::MediaSession::GetWebContentsFromRequestId(id);
+  iph_state_.is_fullscreen = web_contents && web_contents->IsFullscreen();
+
+  bool valid_video_state =
+      iph_state_.is_video_frame_available && !iph_state_.is_ad &&
+      iph_state_.is_duration_sufficient && !iph_state_.is_fullscreen;
+
+  if (!valid_video_state) {
+    iph_state_.has_played_sufficient_time = false;
+    save_video_frame_iph_timer_.Stop();
+    return;
+  }
+
+  if (iph_state_.is_playing) {
+    if (!iph_state_.has_played_sufficient_time &&
+        !save_video_frame_iph_timer_.IsRunning()) {
+      save_video_frame_iph_timer_.Start(
+          FROM_HERE, kSaveVideoFrameIphPlaybackTime,
+          base::BindOnce(
+              &MediaNotificationService::OnSaveVideoFrameIphTimerFired,
+              weak_ptr_factory_.GetWeakPtr(), id));
+    }
+  } else {
+    save_video_frame_iph_timer_.Stop();
+    if (iph_state_.has_played_sufficient_time) {
+      iph_state_.has_played_sufficient_time = false;
+      MaybeShowSaveVideoFrameIph(id);
+    }
+  }
+}
+
+void MediaNotificationService::OnSaveVideoFrameIphTimerFired(
+    const std::string& id) {
+  iph_state_.has_played_sufficient_time = true;
+}
+
+void MediaNotificationService::MaybeShowSaveVideoFrameIph(
+    const std::string& id) {
+  auto* web_contents = content::MediaSession::GetWebContentsFromRequestId(id);
+  if (!web_contents) {
+    return;
+  }
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents);
+  if (!browser) {
+    return;
+  }
+  if (auto* user_ed = BrowserUserEducationInterface::From(browser)) {
+    user_ed->MaybeShowFeaturePromo(
+        feature_engagement::kIPHGMCSaveVideoFrameFeature);
+  }
 }
 
 void MediaNotificationService::SetDialogDelegateForWebContents(
@@ -451,6 +542,8 @@ void MediaNotificationService::OnStartPresentationContextCreated(
       return;
     }
 
+    ResetPresentationContext();
+
     // If there exists a media session notification associated with
     // |web_contents|, hold onto the context for later use.
     context_ = std::move(context);
@@ -460,8 +553,15 @@ void MediaNotificationService::OnStartPresentationContextCreated(
     // the top frame.
     std::string item_id =
         GetActiveControllableSessionForWebContents(web_contents);
+    context_item_id_ = item_id;
     media_session_item_producer_->UpdateMediaItemSourceOrigin(
         item_id, context_->presentation_request().frame_origin);
+#if BUILDFLAG(IS_CHROMEOS)
+    if (auto* provider = ash::MediaNotificationProvider::Get(); provider) {
+      provider->UpdateMediaItemSourceOrigin(
+          item_id, context_->presentation_request().frame_origin);
+    }
+#endif
   } else if (presentation_request_notification_producer_) {
     // If there do not exist active notifications, pass |context| to
     // |presentation_request_notification_producer_| to create a dummy
@@ -481,11 +581,11 @@ void MediaNotificationService::GetDeviceListHostForSession(
   // `remoting_session_id` is used to construct the MediaRemotingCallback for
   // CastDeviceListHost to request Media Remoting for a MediaSession. This is
   // used for Media Remoting sessions started from the GMC dialog. However, when
-  // the dialog is opened for RemotePlayback#prompt() (when `context_` is not
-  // nullptr), the Remote Playback API on the blink side handles sending Media
-  // Remoting request and there's no need for requesting Media Remoting from
-  // MNS.
-  if (context_ == nullptr) {
+  // the dialog is opened for RemotePlayback#prompt() (when there is a matching
+  // presentation context), the Remote Playback API on the blink side handles
+  // sending the Media Remoting request and there's no need for requesting Media
+  // Remoting from MNS.
+  if (!HasPresentationContextForSession(session_id)) {
     remoting_session_id = session_id;
   }
   CreateCastDeviceListHost(CreateCastDialogControllerForSession(session_id),
@@ -516,9 +616,12 @@ MediaNotificationService::CreateCastDialogControllerForSession(
     return nullptr;
   }
 
-  if (context_) {
-    return media_router::MediaRouterUI::CreateWithStartPresentationContext(
-        web_contents, std::move(context_));
+  if (HasPresentationContextForSession(id)) {
+    auto dialog_controller =
+        media_router::MediaRouterUI::CreateWithStartPresentationContext(
+            web_contents, std::move(context_));
+    ResetPresentationContext();
+    return dialog_controller;
   }
 
   auto remote_playback_metadata =
@@ -590,6 +693,37 @@ void MediaNotificationService::CreateCastDeviceListHost(
       base::BindOnce(&MediaNotificationService::RemoveDeviceListHost,
                      weak_ptr_factory_.GetWeakPtr(), host_id));
   host_receivers_.emplace(host_id, std::move(host_receiver));
+}
+
+bool MediaNotificationService::HasPresentationContextForSession(
+    const std::string& session_id) {
+  if (!context_) {
+    return false;
+  }
+  auto* initiator_rfh = content::RenderFrameHost::FromID(
+      context_->presentation_request().render_frame_host_id);
+  if (!initiator_rfh || !initiator_rfh->IsActive()) {
+    ResetPresentationContext();
+    return false;
+  }
+  auto* web_contents =
+      content::MediaSession::GetWebContentsFromRequestId(session_id);
+  return web_contents && content::WebContents::FromRenderFrameHost(
+                             initiator_rfh) == web_contents;
+}
+
+void MediaNotificationService::ResetPresentationContext() {
+  context_.reset();
+  if (!context_item_id_.empty()) {
+    media_session_item_producer_->UpdateMediaItemSourceOrigin(context_item_id_,
+                                                              std::nullopt);
+#if BUILDFLAG(IS_CHROMEOS)
+    if (auto* provider = ash::MediaNotificationProvider::Get(); provider) {
+      provider->UpdateMediaItemSourceOrigin(context_item_id_, std::nullopt);
+    }
+#endif
+    context_item_id_.clear();
+  }
 }
 
 void MediaNotificationService::set_device_provider_for_testing(
@@ -664,29 +798,7 @@ void MediaNotificationService::RemoveDeviceListHost(int host_id) {
 
 bool MediaNotificationService::IsIdBlocked(
     const std::string& request_id) const {
-#if BUILDFLAG(ENABLE_GLIC)
-  auto* glic_keyed_service = glic::GlicKeyedService::Get(profile_);
-  if (!glic_keyed_service) {
-    return false;
-  }
-
-  // Block if the request came from any glic instance.
-  for (glic::GlicInstance* instance :
-       glic_keyed_service->window_controller().GetInstances()) {
-    if (!instance->host().webui_contents()) {
-      continue;
-    }
-
-    std::vector<content::WebContents*> inner_contents =
-        instance->host().webui_contents()->GetInnerWebContents();
-    if (inner_contents.size() == 1ul &&
-        content::MediaSession::GetRequestIdFromWebContents(inner_contents[0])
-                .ToString() == request_id) {
-      return true;
-    }
-  }
-#endif
-  return false;
+  return glic::IsMediaRequestFromGlic(profile_, request_id);
 }
 
 global_media_controls::MediaItemManager* MediaNotificationService::

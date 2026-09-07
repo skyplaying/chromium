@@ -63,6 +63,7 @@
 #include "chromeos/ash/components/dbus/vm_concierge/concierge_service.pb.h"
 #include "chromeos/ash/experiences/arc/arc_features.h"
 #include "chromeos/ash/experiences/arc/arc_util.h"
+#include "chromeos/ash/experiences/arc/metrics/arc_metrics_constants.h"
 #include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
 #include "chromeos/ash/experiences/arc/session/arc_client_adapter.h"
 #include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
@@ -151,8 +152,7 @@ std::vector<std::string> GenerateUpgradeProps(
     const std::string& serial_number,
     const std::string& prefix) {
   std::vector<std::string> result = {
-      base::StringPrintf("%s.disable_boot_completed=%d", prefix.c_str(),
-                         upgrade_params.skip_boot_completed_broadcast),
+      base::StringPrintf("%s.disable_boot_completed=0", prefix.c_str()),
       base::StringPrintf("%s.enable_adb_sideloading=%d", prefix.c_str(),
                          upgrade_params.is_adb_sideloading_enabled),
       base::StringPrintf("%s.copy_packages_cache=%d", prefix.c_str(),
@@ -385,14 +385,8 @@ vm_tools::concierge::StartArcVmRequest CreateStartArcVmRequest(
   // Add ignore_dev_conf setting for dev mode.
   request.set_ignore_dev_conf(IsArcVmDevConfIgnored());
 
-  // Add enable_rt_vcpu.
-  request.set_enable_rt_vcpu(IsArcVmRtVcpuEnabled(cpus));
-
   // Add hugepages.
   request.set_use_hugepages(IsArcVmUseHugePages());
-
-  // Request guest memory locking, if configured.
-  request.set_lock_guest_memory(base::FeatureList::IsEnabled(kLockGuestMemory));
 
   // Controls whether WebView Zygote is lazily initialized in ARC.
   request.set_enable_web_view_zygote_lazy_init(false);
@@ -476,11 +470,7 @@ vm_tools::concierge::StartArcVmRequest CreateStartArcVmRequest(
   request.set_mglru_reclaim_interval(kArcMglruReclaimIntervalMs);
   request.set_mglru_reclaim_swappiness(kArcMglruReclaimSwappiness);
 
-  if (base::FeatureList::IsEnabled(kVmMemoryPSIReports)) {
-    request.set_vm_memory_psi_period(kVmMemoryPSIReportsPeriod.Get());
-  } else {
-    request.set_vm_memory_psi_period(-1);
-  }
+  request.set_vm_memory_psi_period(kVmMemoryPsiPeriod.InSeconds());
 
   request.set_enable_vmm_swap(
       base::FeatureList::IsEnabled(kVmmSwapPolicy) ||
@@ -547,10 +537,9 @@ vm_tools::concierge::StartArcVmRequest CreateStartArcVmRequest(
 }
 
 const sockaddr_un* GetArcVmBootNotificationServerAddress() {
-  static struct sockaddr_un address {
-    .sun_family = AF_UNIX,
-    .sun_path = "/run/arcvm_boot_notification_server/host.socket"
-  };
+  static struct sockaddr_un address{
+      .sun_family = AF_UNIX,
+      .sun_path = "/run/arcvm_boot_notification_server/host.socket"};
   return &address;
 }
 

@@ -5,13 +5,16 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_LOCATION_BAR_ZOOM_BUBBLE_COORDINATOR_H_
 #define CHROME_BROWSER_UI_VIEWS_LOCATION_BAR_ZOOM_BUBBLE_COORDINATOR_H_
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
+#include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
-#include "chrome/browser/ui/views/frame/immersive_mode_controller.h"
+#include "chrome/browser/ui/immersive/immersive_mode_controller.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_bubble_delegate_view.h"
 #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 #include "ui/views/widget/widget_observer.h"
 
+class ZoomBubbleManager;
 class ZoomBubbleView;
 class BrowserWindowInterface;
 
@@ -27,12 +30,13 @@ class ZoomBubbleCoordinator : public views::WidgetObserver,
  public:
   DECLARE_USER_DATA(ZoomBubbleCoordinator);
 
-  explicit ZoomBubbleCoordinator(BrowserView& browser_view);
+  ZoomBubbleCoordinator(BrowserWindowInterface& browser,
+                        ZoomBubbleManager* manager);
   ZoomBubbleCoordinator(const ZoomBubbleCoordinator&) = delete;
   ZoomBubbleCoordinator& operator=(const ZoomBubbleCoordinator&) = delete;
   ~ZoomBubbleCoordinator() override;
 
-  // Retrieves from the a browser window interface, or null if none.
+  // Retrieves the instance from a browser window interface, or null if none.
   // Note: May return null in unit_tests, even for a valid `browser`.
   static ZoomBubbleCoordinator* From(BrowserWindowInterface* browser);
 
@@ -45,9 +49,12 @@ class ZoomBubbleCoordinator : public views::WidgetObserver,
   void Show(content::WebContents* contents,
             LocationBarBubbleDelegateView::DisplayReason reason);
 
-  // Hides the currently showing zoom bubble, if one exists.
-  // NOTE: This is async, as a result, the hide is not immediate. Callers should
-  // ensure to wait to widget destruction.
+  // Closes the current zoom bubble, if one exists. This also closes a bubble
+  // whose widget is hidden but not yet closed (e.g. because its parent window
+  // was hidden by the OS), so that a subsequent Show() never finds a stale,
+  // unclosed widget.
+  // NOTE: This is async so the hide is not immediate. Callers should ensure to
+  // wait for widget destruction.
   void Hide();
 
   // Refreshes the existing bubble if it's already showing for `contents`.
@@ -57,7 +64,8 @@ class ZoomBubbleCoordinator : public views::WidgetObserver,
   // Returns true if a zoom bubble is currently being shown.
   [[nodiscard]] bool IsShowing() const {
     return widget_observation_.IsObserving() &&
-           !widget_observation_.GetSource()->IsClosed();
+           !widget_observation_.GetSource()->IsClosed() &&
+           widget_observation_.GetSource()->IsVisible();
   }
 
   // Returns a pointer to the currently showing bubble, or nullptr if none.
@@ -78,8 +86,9 @@ class ZoomBubbleCoordinator : public views::WidgetObserver,
 
   ui::ScopedUnownedUserData<ZoomBubbleCoordinator> scoped_unowned_user_data_;
 
-  // Unowned reference to the  browser view that whole this coordinator.
-  const raw_ref<BrowserView> browser_view_;
+  const raw_ref<BrowserWindowInterface> browser_;
+
+  raw_ptr<ZoomBubbleManager> manager_ = nullptr;
 
   // Observes the widget of the zoom bubble to be notified of its destruction.
   base::ScopedObservation<views::Widget, views::WidgetObserver>
@@ -90,6 +99,8 @@ class ZoomBubbleCoordinator : public views::WidgetObserver,
   base::ScopedObservation<ImmersiveModeController,
                           ImmersiveModeController::Observer>
       immersive_mode_observation_{this};
+
+  base::WeakPtrFactory<ZoomBubbleCoordinator> weak_ptr_factory_{this};
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_LOCATION_BAR_ZOOM_BUBBLE_COORDINATOR_H_

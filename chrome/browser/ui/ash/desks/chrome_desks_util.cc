@@ -4,37 +4,25 @@
 
 #include "chrome/browser/ui/ash/desks/chrome_desks_util.h"
 
-#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
-#include "chrome/browser/ui/tabs/tab_group_model.h"
-#include "components/tab_groups/tab_group_id.h"
+#include "base/logging.h"
+#include "chromeos/ash/components/browser_delegate/browser_delegate.h"
 #include "components/tab_groups/tab_group_info.h"
-#include "components/tab_groups/tab_group_visual_data.h"
-#include "components/tabs/public/tab_group.h"
 
 namespace chrome_desks_util {
-
-std::vector<tab_groups::TabGroupInfo> ConvertTabGroupsToTabGroupInfos(
-    const TabGroupModel* group_model) {
-  DCHECK(group_model);
-  const std::vector<tab_groups::TabGroupId>& listed_group_ids =
-      group_model->ListTabGroups();
-
-  std::vector<tab_groups::TabGroupInfo> tab_groups;
-  for (const tab_groups::TabGroupId& group_id : listed_group_ids) {
-    const TabGroup* tab_group = group_model->GetTabGroup(group_id);
-    tab_groups.emplace_back(
-        gfx::Range(tab_group->ListTabs()),
-        tab_groups::TabGroupVisualData(*(tab_group->visual_data())));
-  }
-
-  return tab_groups;
-}
 
 void AttachTabGroupsToBrowserInstance(
     const std::vector<tab_groups::TabGroupInfo>& tab_groups,
     ash::BrowserDelegate* browser) {
+  const size_t tab_count = browser->GetWebContentsCount();
   for (const tab_groups::TabGroupInfo& tab_group : tab_groups) {
-    browser->CreateTabGroup(tab_group);
+    if (tab_group.tab_range.IsValid() && !tab_group.tab_range.is_empty() &&
+        !tab_group.tab_range.is_reversed() &&
+        tab_group.tab_range.end() <= tab_count) {
+      browser->CreateTabGroup(tab_group);
+    } else {
+      LOG(WARNING) << "Skipping tab group restoration: invalid range "
+                   << tab_group.tab_range.ToString();
+    }
   }
 }
 

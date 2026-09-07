@@ -39,13 +39,14 @@ bool AwVariationsServiceClient::IsEnterprise() {
   return false;
 }
 
-// WebView doesn't support Profiles (or user signin / sync) and therefore there
-// is nothing to do here.
-void AwVariationsServiceClient::RemoveGoogleGroupsFromPrefsForDeletedProfiles(
-    PrefService* local_state) {}
-
 Channel AwVariationsServiceClient::GetChannel() {
   return version_info::android::GetChannel();
+}
+
+bool AwVariationsServiceClient::EnableSignatureVerificationOnLoad() {
+  // TODO(549757421): Investigate whether we can skip signature verification
+  // on WebView to improve WebView's startup performance.
+  return true;
 }
 
 }  // namespace android_webview

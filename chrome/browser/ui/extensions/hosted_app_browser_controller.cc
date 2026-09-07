@@ -10,15 +10,15 @@
 #include "chrome/browser/extensions/app_tab_helper.h"
 #include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/web_app_launch_utils.h"
+#include "chrome/browser/ui/window_metadata/window_metadata_controller.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/common/extensions/api/url_handlers/url_handlers_parser.h"
 #include "chrome/common/extensions/manifest_handlers/app_launch_info.h"
-#include "components/security_state/content/security_state_tab_helper.h"
 #include "components/security_state/core/security_state.h"
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "content/public/browser/browser_context.h"
@@ -54,10 +54,10 @@ bool IsSameHostAndPort(const GURL& app_url, const GURL& page_url) {
 
 }  // namespace
 
-HostedAppBrowserController::HostedAppBrowserController(Browser* browser)
-    : AppBrowserController(
-          browser,
-          web_app::GetAppIdFromApplicationName(browser->app_name())) {}
+HostedAppBrowserController::HostedAppBrowserController(
+    BrowserWindowInterface* browser,
+    webapps::AppId app_id)
+    : AppBrowserController(browser, std::move(app_id)) {}
 
 HostedAppBrowserController::~HostedAppBrowserController() = default;
 
@@ -70,14 +70,14 @@ ui::ImageModel HostedAppBrowserController::GetWindowAppIcon() const {
   // extensions tab helper to make icon load more immediate.
 #if BUILDFLAG(IS_CHROMEOS)
   if (apps::AppServiceProxyFactory::IsAppServiceAvailableForProfile(
-          browser()->profile())) {
+          browser()->GetProfile())) {
     if (!app_icon_.isNull()) {
       return ui::ImageModel::FromImageSkia(app_icon_);
     }
 
     const Extension* extension = GetExtension();
     if (extension &&
-        apps::AppServiceProxyFactory::GetForProfile(browser()->profile())
+        apps::AppServiceProxyFactory::GetForProfile(browser()->GetProfile())
                 ->AppRegistryCache()
                 .GetAppType(extension->id()) != apps::AppType::kUnknown) {
       LoadAppIcon(true /* allow_placeholder_icon */);
@@ -87,7 +87,7 @@ ui::ImageModel HostedAppBrowserController::GetWindowAppIcon() const {
 #endif
 
   content::WebContents* contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   if (!contents) {
     return GetFallbackAppIcon();
   }
@@ -112,7 +112,8 @@ ui::ImageModel HostedAppBrowserController::GetWindowIcon() const {
     return GetWindowAppIcon();
   }
 
-  return ui::ImageModel::FromImage(browser()->GetCurrentPageIcon());
+  return ui::ImageModel::FromImage(
+      WindowMetadataController::From(browser())->GetCurrentPageIcon());
 }
 
 std::u16string HostedAppBrowserController::GetTitle() const {
@@ -146,7 +147,7 @@ bool HostedAppBrowserController::IsUrlInAppScope(const GURL& url) const {
 }
 
 const Extension* HostedAppBrowserController::GetExtension() const {
-  return ExtensionRegistry::Get(browser()->profile())
+  return ExtensionRegistry::Get(browser()->GetProfile())
       ->GetExtensionById(app_id(), ExtensionRegistry::EVERYTHING);
 }
 
@@ -172,7 +173,7 @@ bool HostedAppBrowserController::CanUserUninstall() const {
     return false;
   }
 
-  return extensions::ExtensionSystem::Get(browser()->profile())
+  return extensions::ExtensionSystem::Get(browser()->GetProfile())
       ->management_policy()
       ->UserMayModifySettings(extension, nullptr);
 }
@@ -186,9 +187,9 @@ void HostedAppBrowserController::Uninstall(
 
   DCHECK(!uninstall_dialog_);
   uninstall_dialog_ = ExtensionUninstallDialog::Create(
-      browser()->profile(),
-      browser()->window() ? browser()->window()->GetNativeWindow()
-                          : gfx::NativeWindow(),
+      browser()->GetProfile(),
+      browser()->GetWindow() ? browser()->GetWindow()->GetNativeWindow()
+                             : gfx::NativeWindow(),
       this);
 
   // The dialog can be closed by UI system whenever it likes, but
@@ -224,7 +225,7 @@ void HostedAppBrowserController::OnTabRemoved(content::WebContents* contents) {
 
 void HostedAppBrowserController::LoadAppIcon(
     bool allow_placeholder_icon) const {
-  apps::AppServiceProxyFactory::GetForProfile(browser()->profile())
+  apps::AppServiceProxyFactory::GetForProfile(browser()->GetProfile())
       ->LoadIcon(GetExtension()->id(), apps::IconType::kStandard,
                  extension_misc::EXTENSION_ICON_SMALL, allow_placeholder_icon,
                  base::BindOnce(&HostedAppBrowserController::OnLoadIcon,

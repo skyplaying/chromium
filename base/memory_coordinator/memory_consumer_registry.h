@@ -12,6 +12,8 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory_coordinator/memory_consumer.h"
 #include "base/memory_coordinator/memory_consumer_registry_destruction_observer.h"
+#include "base/memory_coordinator/memory_limit.h"
+#include "base/memory_coordinator/traits.h"
 #include "base/observer_list.h"
 #include "base/sequence_checker.h"
 #include "base/types/pass_key.h"
@@ -19,25 +21,6 @@
 namespace base {
 
 class MemoryConsumerRegistration;
-
-// Provides an interface to safely notify MemoryConsumers of their memory limit.
-class BASE_EXPORT RegisteredMemoryConsumer {
- public:
-  void UpdateMemoryLimit(int percentage);
-  void ReleaseMemory();
-
-  friend bool operator==(const RegisteredMemoryConsumer& lhs,
-                         const RegisteredMemoryConsumer& rhs) = default;
-
-  int memory_limit() const { return memory_consumer_->memory_limit(); }
-
- private:
-  friend class MemoryConsumerRegistry;
-
-  explicit RegisteredMemoryConsumer(MemoryConsumer* memory_consumer);
-
-  raw_ptr<MemoryConsumer> memory_consumer_;
-};
 
 // A base class for registering a MemoryConsumer with the global registry for
 // the current process.
@@ -52,11 +35,11 @@ class BASE_EXPORT MemoryConsumerRegistry {
   virtual ~MemoryConsumerRegistry();
 
   // Adds/Removes an instance of MemoryConsumer with a specific
-  // `consumer_id` and `traits`.
-  void AddMemoryConsumer(std::string_view consumer_id,
+  // `consumer_name` and `traits`.
+  void AddMemoryConsumer(std::string_view consumer_name,
                          MemoryConsumerTraits traits,
                          MemoryConsumer* consumer);
-  void RemoveMemoryConsumer(std::string_view consumer_id,
+  void RemoveMemoryConsumer(std::string_view consumer_name,
                             MemoryConsumer* consumer);
 
   void AddDestructionObserver(
@@ -67,21 +50,24 @@ class BASE_EXPORT MemoryConsumerRegistry {
       MemoryConsumerRegistryDestructionObserver* observer);
 
  protected:
-  RegisteredMemoryConsumer CreateRegisteredMemoryConsumer(
-      MemoryConsumer* memory_consumer) {
-    return RegisteredMemoryConsumer(memory_consumer);
-  }
+  // Helpers to notify consumers of memory events.
+  static void NotifyReleaseMemory(MemoryConsumer* consumer);
+  static void NotifyUpdateMemoryLimit(MemoryConsumer* consumer,
+                                      MemoryLimit memory_limit);
+  static void NotifyUpdateMemoryLimitNoNotification(MemoryConsumer* consumer,
+                                                    MemoryLimit memory_limit);
 
   // Implementations must call this at the beginning of their destructors.
   // Notifies all registered MemoryConsumerRegistryDestructionObservers.
   void NotifyDestruction();
 
- private:
-  virtual void OnMemoryConsumerAdded(std::string_view consumer_id,
+ protected:
+  virtual void OnMemoryConsumerAdded(uint32_t consumer_id,
+                                     std::string_view consumer_name,
                                      MemoryConsumerTraits traits,
-                                     RegisteredMemoryConsumer consumer) = 0;
-  virtual void OnMemoryConsumerRemoved(std::string_view consumer_id,
-                                       RegisteredMemoryConsumer consumer) = 0;
+                                     MemoryConsumer* consumer) = 0;
+  virtual void OnMemoryConsumerRemoved(uint32_t consumer_id,
+                                       MemoryConsumer* consumer) = 0;
 
   SEQUENCE_CHECKER(sequence_checker_);
 

@@ -6,6 +6,7 @@
 #define IOS_WEB_JS_MESSAGING_WEB_FRAME_IMPL_H_
 
 #import <map>
+#import <optional>
 #import <string>
 
 #import "base/cancelable_callback.h"
@@ -20,11 +21,37 @@
 #import "url/gurl.h"
 #import "url/origin.h"
 
+@class NSError;
+@class NSString;
 @class WKFrameInfo;
 
 namespace web {
 
 class JavaScriptContentWorld;
+class WebFrameImpl;
+
+// A structure to represent a JavaScript execution and its error, if any.
+struct ScriptContext {
+  ScriptContext(base::WeakPtr<web::WebState> web_state,
+                base::WeakPtr<web::WebFrameImpl> web_frame,
+                url::Origin security_origin,
+                bool is_main_frame,
+                NSString* script = nil,
+                std::optional<std::string> api = std::nullopt);
+  ScriptContext(const ScriptContext&);
+  ScriptContext(ScriptContext&&);
+  ScriptContext& operator=(const ScriptContext&);
+  ScriptContext& operator=(ScriptContext&&);
+  ~ScriptContext();
+
+  base::WeakPtr<web::WebState> web_state;
+  base::WeakPtr<web::WebFrameImpl> web_frame;
+  url::Origin security_origin;
+  bool is_main_frame;
+  NSString* script = nil;
+  std::optional<std::string> api = std::nullopt;
+  NSError* error = nil;
+};
 
 class WebFrameImpl final : public WebFrame,
                            public WebFrameInternal,
@@ -45,6 +72,13 @@ class WebFrameImpl final : public WebFrame,
 
   // The associated web state.
   WebState* GetWebState();
+
+  // Caches a JavaScript execution error for later logging if webframe is
+  // confirmed to still exist. Used to ensure errors are not reported if they
+  // were caused by a frame disappearing due to navigation.
+  void CacheError(ScriptContext error);
+  // Processes and clears all cached JavaScript execution errors.
+  void ProcessCachedErrors();
 
   // WebFrame:
   WebFrameInternal* GetWebFrameInternal() override;
@@ -68,6 +102,14 @@ class WebFrameImpl final : public WebFrame,
       base::OnceCallback<void(const base::Value*)> callback) override;
   bool ExecuteJavaScript(const std::u16string& script,
                          ExecuteJavaScriptCallbackWithError callback) override;
+  bool ExecuteAsyncJavaScript(
+      const std::u16string& script,
+      const base::DictValue& parameters,
+      ExecuteJavaScriptCallbackWithError callback) override;
+  bool CallAsyncJavaScriptFunction(
+      const std::string& name,
+      const base::DictValue& parameters,
+      ExecuteJavaScriptCallbackWithError callback) override;
   base::WeakPtr<WebFrame> AsWeakPtr() override;
 
   // WebFrameContentWorldAPI:
@@ -83,6 +125,16 @@ class WebFrameImpl final : public WebFrame,
       base::TimeDelta timeout) override;
   bool ExecuteJavaScriptInContentWorld(
       const std::u16string& script,
+      JavaScriptContentWorld* content_world,
+      ExecuteJavaScriptCallbackWithError callback) override;
+  bool ExecuteAsyncJavaScriptInContentWorld(
+      const std::u16string& script,
+      const base::DictValue& parameters,
+      JavaScriptContentWorld* content_world,
+      ExecuteJavaScriptCallbackWithError callback) override;
+  bool CallAsyncJavaScriptFunctionInContentWorld(
+      const std::string& name,
+      const base::DictValue& parameters,
       JavaScriptContentWorld* content_world,
       ExecuteJavaScriptCallbackWithError callback) override;
 
@@ -171,6 +223,9 @@ class WebFrameImpl final : public WebFrame,
   raw_ptr<web::WebState> web_state_ = nullptr;
   // The frame's content world.
   ContentWorld content_world_;
+
+  // The list of cached JavaScript execution errors.
+  std::vector<ScriptContext> cached_errors_;
 
   base::WeakPtrFactory<WebFrameImpl> weak_ptr_factory_{this};
 };

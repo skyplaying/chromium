@@ -80,6 +80,10 @@ void AddUiColorMixer(ColorProvider* provider, const ColorProviderKey& key) {
   mixer[kColorFrameActive] = {kColorFrameActiveUnthemed};
   mixer[kColorFrameActiveUnthemed] = {
       dark_mode ? gfx::kGoogleGrey900 : SkColorSetRGB(0xDE, 0xE1, 0xE6)};
+  mixer[kColorFrameCaptionForegroundActive] =
+      GetColorWithMaxContrast(kColorFrameActive);
+  mixer[kColorFrameCaptionForegroundInactive] =
+      AlphaBlend(kColorFrameCaptionForegroundActive, kColorFrameInactive, 0x80);
   mixer[kColorFrameInactive] = {dark_mode ? gfx::kGoogleGrey800
                                           : gfx::kGoogleGrey200};
   mixer[kColorHelpIconActive] = {kColorPrimaryForeground};
@@ -127,6 +131,8 @@ void AddUiColorMixer(ColorProvider* provider, const ColorProviderKey& key) {
   mixer[kColorLiveCaptionBubbleCheckbox] = PickGoogleColor(
       kColorAccent, kColorLiveCaptionBubbleBackgroundDefault, 6.0f);
   mixer[kColorLiveCaptionBubbleLink] = {kColorLiveCaptionBubbleCheckbox};
+  mixer[kColorLiveCaptionDialogBackground] = {kColorPrimaryBackground};
+  mixer[kColorLiveCaptionDialogForeground] = {kColorPrimaryForeground};
   mixer[kColorMenuBackground] = {kColorPrimaryBackground};
   mixer[kColorMenuBorder] = {kColorMidground};
   mixer[kColorMenuButtonBackground] = {kColorMenuBackground};

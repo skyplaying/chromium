@@ -6,6 +6,8 @@
 
 #include "third_party/blink/renderer/core/css/parser/css_tokenizer.h"
 #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
+
 namespace blink {
 
 namespace {
@@ -148,7 +150,7 @@ void StyleEnvironmentVariables::SetVariable(const AtomicString& name,
   data_.Set(name,
             CSSVariableData::Create(value, false /* is_animation_tainted */,
                                     false /* is_attr_tainted */,
-                                    false /* needs_variable_resolution */));
+                                    CSSVariableData::HasReferences(false)));
   InvalidateVariable(name);
 }
 
@@ -170,7 +172,7 @@ void StyleEnvironmentVariables::SetVariable(const AtomicString& name,
 
   CSSVariableData* variable_data = CSSVariableData::Create(
       value, false /* is_animation_tainted */, false /* is_attr_tainted */,
-      false /* needs_variable_resolution */);
+      CSSVariableData::HasReferences(false));
 
   TwoDimensionVariableValues* values_to_set = nullptr;
   auto it = two_dimension_data_.find(name);
@@ -274,11 +276,11 @@ void StyleEnvironmentVariables::DetachFromParent() {
 }
 
 String StyleEnvironmentVariables::FormatFloatPx(float value) {
-  return String::Format("%gpx", value);
+  return Format("{:g}px", value);
 }
 
 String StyleEnvironmentVariables::FormatPx(int value) {
-  return String::Format("%dpx", value);
+  return Format("{}px", value);
 }
 
 const FeatureContext* StyleEnvironmentVariables::GetFeatureContext() const {

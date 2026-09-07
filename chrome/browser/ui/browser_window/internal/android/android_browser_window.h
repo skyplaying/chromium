@@ -8,6 +8,7 @@
 #include <jni.h>
 
 #include "base/android/scoped_java_ref.h"
+#include "base/callback_list.h"
 #include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -15,9 +16,11 @@
 #include "extensions/buildflags/buildflags.h"
 #include "ui/base/unowned_user_data/unowned_user_data_host.h"
 
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 namespace extensions {
 class ExtensionBrowserWindowHelper;
 }  // namespace extensions
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 // Android implementation of |BrowserWindowInterface|.
 class AndroidBrowserWindow final : public BrowserWindowInterface {
@@ -46,6 +49,8 @@ class AndroidBrowserWindow final : public BrowserWindowInterface {
   const Profile* GetProfile() const override;
   const SessionID& GetSessionID() const override;
   bool IsDeleteScheduled() const override;
+  base::CallbackListSubscription RegisterBrowserDidClose(
+      BrowserDidCloseCallback callback) override;
   Type GetType() const override;
   base::WeakPtr<BrowserWindowInterface> GetWeakPtr() override;
 
@@ -67,6 +72,10 @@ class AndroidBrowserWindow final : public BrowserWindowInterface {
   const BrowserWindowInterface::Type type_;
   const raw_ref<Profile> profile_;
   const SessionID session_id_;
+
+  using BrowserDidCloseCallbackList =
+      base::RepeatingCallbackList<void(BrowserWindowInterface*)>;
+  BrowserDidCloseCallbackList browser_did_close_callback_list_;
 
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   // Android doesn't have BrowserWindowFeatures, so this lives here.

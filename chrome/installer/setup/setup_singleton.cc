@@ -63,7 +63,7 @@ std::unique_ptr<SetupSingleton> SetupSingleton::Acquire(
     }
 
     ScopedHoldMutex scoped_hold_exit_event_mutex;
-    if (!scoped_hold_exit_event_mutex.Acquire(exit_event_mutex.Get())) {
+    if (!scoped_hold_exit_event_mutex.Acquire(exit_event_mutex.get())) {
       // UMA data indicates that this happens < 0.01 % of the time.
       return nullptr;
     }
@@ -75,7 +75,7 @@ std::unique_ptr<SetupSingleton> SetupSingleton::Acquire(
 
     // Acquire |setup_mutex_|.
     if (!setup_singleton->scoped_hold_setup_mutex_.Acquire(
-            setup_singleton->setup_mutex_.Get())) {
+            setup_singleton->setup_mutex_.get())) {
       // UMA data indicates that this happens 0.84 % of the time.
       return nullptr;
     }
@@ -93,7 +93,7 @@ std::unique_ptr<SetupSingleton> SetupSingleton::Acquire(
 
 SetupSingleton::~SetupSingleton() = default;
 
-bool SetupSingleton::WaitForInterrupt(const base::TimeDelta& max_time) const {
+bool SetupSingleton::WaitForInterrupt(base::TimeDelta max_time) const {
   const bool exit_event_signaled = exit_event_.TimedWait(max_time);
   return exit_event_signaled;
 }

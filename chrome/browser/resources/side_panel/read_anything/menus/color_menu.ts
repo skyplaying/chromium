@@ -8,6 +8,8 @@ import {WebUiListenerMixinLit} from '//resources/cr_elements/web_ui_listener_mix
 import {loadTimeData} from '//resources/js/load_time_data.js';
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 
+import type {VisualBrowserProxy} from '../app/visual_browser_proxy.js';
+import {VisualBrowserProxyImpl} from '../app/visual_browser_proxy.js';
 import {DEFAULT_SETTINGS, ToolbarEvent} from '../content/read_anything_types.js';
 import type {SettingsPrefs, ShowAtConfigPrefs} from '../content/read_anything_types.js';
 import {ReadAnythingSettingsChange} from '../shared/metrics_browser_proxy.js';
@@ -41,57 +43,56 @@ export class ColorMenuElement extends ColorMenuElementBase implements
     return {
       settingsPrefs: {type: Object},
       nonModal: {type: Boolean},
+      options_: {type: Array},
     };
   }
 
   accessor settingsPrefs: SettingsPrefs = DEFAULT_SETTINGS;
   accessor nonModal: boolean = false;
 
-  protected options_: Array<MenuStateItem<number>> = [
+  private visualBrowserProxy_: VisualBrowserProxy =
+      VisualBrowserProxyImpl.getInstance();
+
+  protected accessor options_: Array<MenuStateItem<number>> = [
     {
       title: loadTimeData.getString('defaultColorTitle'),
-      icon: 'read-anything-20:default-theme',
-      data: chrome.readingMode.defaultTheme,
+      icon: 'read-anything-20:default-theme-custom',
+      data: this.visualBrowserProxy_.getDefaultTheme(),
     },
     {
       title: loadTimeData.getString('lightColorTitle'),
-      icon: 'read-anything-20:light-theme',
-      data: chrome.readingMode.lightTheme,
+      icon: 'read-anything-20:light-theme-custom',
+      data: this.visualBrowserProxy_.getLightTheme(),
     },
     {
       title: loadTimeData.getString('darkColorTitle'),
-      icon: 'read-anything-20:dark-theme',
-      data: chrome.readingMode.darkTheme,
+      icon: 'read-anything-20:dark-theme-custom',
+      data: this.visualBrowserProxy_.getDarkTheme(),
     },
     {
       title: loadTimeData.getString('yellowColorTitle'),
-      icon: 'read-anything-20:yellow-theme',
-      data: chrome.readingMode.yellowTheme,
+      icon: 'read-anything-20:yellow-theme-custom',
+      data: this.visualBrowserProxy_.getYellowTheme(),
     },
     {
       title: loadTimeData.getString('blueColorTitle'),
-      icon: 'read-anything-20:blue-theme',
-      data: chrome.readingMode.blueTheme,
+      icon: 'read-anything-20:blue-theme-custom',
+      data: this.visualBrowserProxy_.getBlueTheme(),
     },
     {
       title: loadTimeData.getString('highContrastColorTitle'),
-      icon: 'read-anything-20:high-contrast-theme',
-      data: chrome.readingMode.highContrastTheme,
+      icon: 'read-anything-20:high-contrast-theme-custom',
+      data: this.visualBrowserProxy_.getHighContrastTheme(),
     },
     {
-      title: loadTimeData.getString('lowContrastColorTitle'),
-      icon: 'read-anything-20:low-contrast-theme',
-      data: chrome.readingMode.lowContrastTheme,
+      title: loadTimeData.getString('lowContrastLightColorTitle'),
+      icon: 'read-anything-20:low-contrast-light-theme-custom',
+      data: this.visualBrowserProxy_.getLowContrastLightTheme(),
     },
     {
-      title: loadTimeData.getString('sepiaLightColorTitle'),
-      icon: 'read-anything-20:sepia-light-theme',
-      data: chrome.readingMode.sepiaLightTheme,
-    },
-    {
-      title: loadTimeData.getString('sepiaDarkColorTitle'),
-      icon: 'read-anything-20:sepia-dark-theme',
-      data: chrome.readingMode.sepiaDarkTheme,
+      title: loadTimeData.getString('lowContrastDarkColorTitle'),
+      icon: 'read-anything-20:low-contrast-dark-theme-custom',
+      data: this.visualBrowserProxy_.getLowContrastDarkTheme(),
     },
   ];
   private logger_: ReadAnythingLogger = ReadAnythingLogger.getInstance();
@@ -109,7 +110,7 @@ export class ColorMenuElement extends ColorMenuElementBase implements
   }
 
   protected onThemeChange_(event: CustomEvent<{data: number}>) {
-    chrome.readingMode.onThemeChange(event.detail.data);
+    this.visualBrowserProxy_.onThemeChange(event.detail.data);
     this.logger_.logTextSettingsChange(ReadAnythingSettingsChange.THEME_CHANGE);
     this.fire(ToolbarEvent.CLOSE_ALL_MENUS);
   }

@@ -13,6 +13,7 @@
 #include "base/location.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/rand_util.h"
+#include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
@@ -27,7 +28,6 @@
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/safe_browsing/safe_browsing_metrics_collector_factory.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/download/public/common/download_interrupt_reasons.h"
@@ -49,10 +49,12 @@
 #include "net/http/http_content_disposition.h"
 #include "third_party/blink/public/common/mime_util/mime_util.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/shell_dialogs/selected_file_info.h"
 #include "url/origin.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
-#include "chrome/browser/extensions/webstore_installer.h"
+#include "extensions/browser/webstore_installer.h"
 #include "extensions/common/feature_switch.h"
 #endif
 
@@ -76,6 +78,7 @@
 #endif
 
 #if BUILDFLAG(IS_ANDROID)
+#include "base/android/content_uri_utils.h"
 #include "components/download/public/common/download_file.h"
 #include "components/safe_browsing/android/safe_browsing_api_handler_bridge.h"
 #endif
@@ -121,6 +124,52 @@ void GenerateSafeFileName(base::FilePath* new_path,
   }
 }
 
+#if BUILDFLAG(IS_WIN)
+// Iteratively sanitizes a download filename for Windows by removing environment
+// variables and trimming trailing dots and spaces. This mimics the behavior of
+// the Windows "Save As" dialog to ensure extension checks are accurate.
+// See crbug.com/41486690 and crbug.com/486079015 for more context.
+std::wstring SanitizeDownloadFileName(std::wstring_view initial_name) {
+  std::wstring current_name(initial_name);
+
+  const auto trim_trailing_dots_and_whitespace = [](std::wstring_view s) {
+    while (!s.empty() &&
+           (s.back() == L'.' || base::IsUnicodeWhitespace(s.back()))) {
+      s.remove_suffix(1);
+    }
+    return s;
+  };
+
+  while (true) {
+    std::wstring next_name =
+        ui::RemoveEnvVarFromFileName<wchar_t>(current_name, L"%");
+
+    const base::FilePath next_path(next_name);
+    const std::wstring extension = next_path.Extension();
+
+    std::wstring_view current_basename = next_path.value();
+    CHECK_LE(extension.length(), current_basename.length());
+    current_basename.remove_suffix(extension.length());
+
+    // Iteratively trim trailing dots and spaces from the basename since
+    // the Windows Save As dialog natively strips trailing spaces and dots
+    // from the basename before saving. We must simulate this to check the
+    // true final extension.
+    current_basename = trim_trailing_dots_and_whitespace(current_basename);
+
+    next_name = std::wstring(current_basename) + extension;
+
+    // Then, trim trailing dots and whitespace from the entire filename again.
+    next_name.resize(trim_trailing_dots_and_whitespace(next_name).length());
+
+    if (next_name.length() == current_name.length()) {
+      return current_name;
+    }
+    current_name = std::move(next_name);
+  }
+}
+#endif  // BUILDFLAG(IS_WIN)
+
 }  // namespace
 
 DownloadTargetDeterminerDelegate::~DownloadTargetDeterminerDelegate() = default;
@@ -140,6 +189,7 @@ DownloadTargetDeterminer::DownloadTargetDeterminer(
       danger_type_(download->GetDangerType()),
       danger_level_(DownloadFileType::NOT_DANGEROUS),
       virtual_path_(initial_virtual_path),
+      containment_directory_(download_prefs->DownloadPath()),
       is_filetype_handled_safely_(false),
 #if BUILDFLAG(IS_ANDROID)
       is_checking_dialog_confirmed_path_(false),
@@ -267,6 +317,7 @@ DownloadTargetDeterminer::Result
     conflict_action_ = DownloadPathReservationTracker::OVERWRITE;
     RecordDownloadPathGeneration(
         DownloadPathGenerationEvent::USE_EXISTING_VIRTUAL_PATH, false);
+    containment_directory_ = virtual_path_.DirName();
   } else if (!is_forced_path) {
     // If we don't have a forced path, we should construct a path for the
     // download. Forced paths are only specified for programmatic downloads
@@ -291,6 +342,7 @@ DownloadTargetDeterminer::Result
     }
     should_notify_extensions_ = true;
     virtual_path_ = target_directory.Append(generated_filename);
+    containment_directory_ = target_directory;
     DCHECK(virtual_path_.IsAbsolute());
   } else {
     conflict_action_ = DownloadPathReservationTracker::OVERWRITE;
@@ -302,6 +354,7 @@ DownloadTargetDeterminer::Result
     // supplied to a programmatic download is invalid, then the caller needs to
     // intervene.
     DCHECK(virtual_path_.IsAbsolute());
+    containment_directory_ = virtual_path_.DirName();
   }
   DVLOG(20) << "Generated virtual path: " << virtual_path_.AsUTF8Unsafe();
 
@@ -450,6 +503,7 @@ void DownloadTargetDeterminer::NotifyExtensionsDone(
 
     virtual_path_ = new_path;
     create_target_directory_ = true;
+    containment_directory_ = download_prefs_->DownloadPath();
   }
   // An extension may set conflictAction without setting filename.
   if (conflict_action != DownloadPathReservationTracker::UNIQUIFY)
@@ -469,6 +523,7 @@ DownloadTargetDeterminer::Result
 
   delegate_->ReserveVirtualPath(
       download_, virtual_path_, create_target_directory_, conflict_action_,
+      containment_directory_,
       base::BindOnce(&DownloadTargetDeterminer::ReserveVirtualPathDone,
                      weak_ptr_factory_.GetWeakPtr()));
   return QUIT_DOLOOP;
@@ -598,15 +653,9 @@ DownloadTargetDeterminer::DoRequestConfirmation() {
       // Windows prompt dialog will resolve all env variables in the file name,
       // which may generate unexpected results. Remove env variables from the
       // file name first.
-      std::wstring sanitized_name = ui::RemoveEnvVarFromFileName<wchar_t>(
-          virtual_path_.BaseName().value(), L"%");
-      // remove leading "." to avoid resorting to potential extension
-      // bug: 41486690
-      while (!sanitized_name.empty() && sanitized_name.back() == L'.') {
-          sanitized_name.pop_back();
-      }
-      // trim trailing whitespace (space, tab, NBSP) to prevent stale extensions
-      base::TrimWhitespace(sanitized_name, base::TrimPositions::TRIM_TRAILING, &sanitized_name);
+      std::wstring sanitized_name =
+          SanitizeDownloadFileName(virtual_path_.BaseName().value());
+
       if (sanitized_name.empty()) {
         sanitized_name = base::UTF8ToWide(
             l10n_util::GetStringUTF8(IDS_DEFAULT_DOWNLOAD_FILENAME));
@@ -632,9 +681,11 @@ DownloadTargetDeterminer::DoRequestConfirmation() {
           Profile::FromBrowserContext(browser_context)->IsOffTheRecord();
       if (isOffTheRecord && (!download_->IsTransient() ||
                              !download_->AllowAutoOpenAfterCompletion())) {
-        delegate_->RequestIncognitoWarningConfirmation(base::BindOnce(
-            &DownloadTargetDeterminer::RequestIncognitoWarningConfirmationDone,
-            weak_ptr_factory_.GetWeakPtr()));
+        delegate_->RequestIncognitoWarningConfirmation(
+            content::DownloadItemUtils::GetWebContents(download_),
+            base::BindOnce(&DownloadTargetDeterminer::
+                               RequestIncognitoWarningConfirmationDone,
+                           weak_ptr_factory_.GetWeakPtr()));
         return QUIT_DOLOOP;
       }
 #endif
@@ -677,6 +728,17 @@ void DownloadTargetDeterminer::RequestConfirmationDone(
 #endif
 
 #if BUILDFLAG(IS_ANDROID)
+  if (!selected_file_info.display_name.empty()) {
+    display_name_ =
+        base::FilePath::FromUTF8Unsafe(selected_file_info.display_name)
+            .BaseName();
+  } else if (virtual_path_.IsContentUri()) {
+    std::u16string display_name_u16;
+    if (base::MaybeGetFileDisplayName(virtual_path_, &display_name_u16)) {
+      display_name_ =
+          base::FilePath::FromUTF16Unsafe(display_name_u16).BaseName();
+    }
+  }
   if (result == DownloadConfirmationResult::CONFIRMED_WITH_DIALOG) {
     // Double check the user-selected path is valid by looping back.
     is_checking_dialog_confirmed_path_ = true;
@@ -687,7 +749,13 @@ void DownloadTargetDeterminer::RequestConfirmationDone(
   }
 #endif
 
+#if BUILDFLAG(IS_ANDROID)
+  if (!virtual_path_.IsContentUri()) {
+    download_prefs_->SetSaveFilePath(virtual_path_.DirName());
+  }
+#else
   download_prefs_->SetSaveFilePath(virtual_path_.DirName());
+#endif
   DoLoop();
 }
 
@@ -929,10 +997,10 @@ void DownloadTargetDeterminer::CheckVisitedReferrerBeforeDone(
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DCHECK_EQ(STATE_DETERMINE_INTERMEDIATE_PATH, next_state_);
 #if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+  base::FilePath file_display_name = GetFileDisplayName();
   safe_browsing::RecordDownloadFileTypeAttributes(
       safe_browsing::FileTypePolicies::GetInstance()->GetFileDangerLevel(
-          virtual_path_.BaseName(), download_->GetURL(),
-          GetProfile()->GetPrefs()),
+          file_display_name, download_->GetURL(), GetProfile()->GetPrefs()),
       download_->HasUserGesture(), visited_referrer_before,
       GetLastDownloadBypassTimestamp());
 #endif
@@ -1046,8 +1114,8 @@ void DownloadTargetDeterminer::ScheduleCallbackAndDeleteSelf(
   target_info.intermediate_path = intermediate_path_;
 #if BUILDFLAG(IS_ANDROID)
   // If |virtual_path_| is content URI, there is no need to prompt the user.
-  if (local_path_.IsContentUri() && !virtual_path_.IsContentUri()) {
-    target_info.display_name = virtual_path_.BaseName();
+  if (local_path_.IsContentUri()) {
+    target_info.display_name = GetFileDisplayName();
   } else if (download_->GetDownloadFile() &&
              download_->GetDownloadFile()->IsMemoryFile()) {
     // Memory file doesn't have a proper display name. Generate one here.
@@ -1143,7 +1211,7 @@ DownloadConfirmationReason DownloadTargetDeterminer::NeedsConfirmation(
   // For everything else, prompting is controlled by the PromptForDownload pref.
   // The user may still be prompted even if this pref is disabled due to, for
   // example, there being an unresolvable filename conflict or the target path
-  // is not writeable, or if the path is blocked by DLP.
+  // is not writable, or if the path is blocked by DLP.
   if (download_prefs_->PromptForDownload()) {
     return DownloadConfirmationReason::PREFERENCE;
   } else {
@@ -1170,7 +1238,8 @@ bool DownloadTargetDeterminer::IsDownloadDlpBlocked(
   if (!files_controller)
     return false;
   const GURL authority_url = download::BaseFile::GetEffectiveAuthorityURL(
-      download_->GetURL(), download_->GetReferrerUrl());
+      download_->GetURL(), download_->GetReferrerUrl(),
+      download_->GetRequestInitiator());
   if (!authority_url.is_valid()) {
     return true;
   }
@@ -1198,10 +1267,10 @@ DownloadFileType::DangerLevel DownloadTargetDeterminer::GetDangerLevel(
   }
 
 #if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+  base::FilePath file_display_name = GetFileDisplayName();
   DownloadFileType::DangerLevel danger_level =
       safe_browsing::FileTypePolicies::GetInstance()->GetFileDangerLevel(
-          virtual_path_.BaseName(), download_->GetURL(),
-          GetProfile()->GetPrefs());
+          file_display_name, download_->GetURL(), GetProfile()->GetPrefs());
   policy::DownloadRestriction download_restriction =
       static_cast<policy::DownloadRestriction>(
           GetProfile()->GetPrefs()->GetInteger(
@@ -1213,7 +1282,7 @@ DownloadFileType::DangerLevel DownloadTargetDeterminer::GetDangerLevel(
   bool user_approved_path =
       !download_->GetForcedFilePath().empty() &&
       // Drag and drop download paths are not approved by the user. See
-      // https://crbug.com/1513639
+      // https://crbug.com/41486208
       download_->GetDownloadSource() != download::DownloadSource::DRAG_AND_DROP;
   if (HasPromptedForPath() ||
       confirmation_reason_ != DownloadConfirmationReason::NONE ||
@@ -1235,9 +1304,11 @@ DownloadFileType::DangerLevel DownloadTargetDeterminer::GetDangerLevel(
   }
 
   // Anything the user has marked auto-open is OK if it's user-initiated.
-  if (download_prefs_->IsAutoOpenEnabled(download_->GetURL(), virtual_path_) &&
-      download_->HasUserGesture())
+  if (download_prefs_->IsAutoOpenEnabled(download_->GetURL(),
+                                         file_display_name) &&
+      download_->HasUserGesture()) {
     return DownloadFileType::NOT_DANGEROUS;
+  }
 
   // A danger level of ALLOW_ON_USER_GESTURE is used to label potentially
   // dangerous file types that have a high frequency of legitimate use. We would
@@ -1261,6 +1332,23 @@ DownloadFileType::DangerLevel DownloadTargetDeterminer::GetDangerLevel(
 #else
   return DownloadFileType::NOT_DANGEROUS;
 #endif
+}
+
+base::FilePath DownloadTargetDeterminer::GetFileDisplayName() const {
+  base::FilePath file_name = virtual_path_.BaseName();
+#if BUILDFLAG(IS_ANDROID)
+  if (virtual_path_.IsContentUri()) {
+    if (!display_name_.empty()) {
+      return display_name_;
+    }
+    std::u16string display_name_u16;
+    if (base::MaybeGetFileDisplayName(virtual_path_, &display_name_u16)) {
+      return base::FilePath::FromUTF16Unsafe(display_name_u16).BaseName();
+    }
+    return GenerateFileName();
+  }
+#endif
+  return file_name;
 }
 
 std::optional<base::Time>

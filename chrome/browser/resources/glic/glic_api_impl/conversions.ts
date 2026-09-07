@@ -2,25 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import type * as actorWebUiMojom from '../actor_webui.mojom-webui.js';
 import type * as mojom from '../glic.mojom-webui.js';
 import type * as api from '../glic_api/glic_api.js';
+import type * as mojomEnums from '../glic_enums.mojom-webui.js';
 
 import type * as requestTypes from './request_types.js';
-
-
-/* eslint-disable-next-line @typescript-eslint/naming-convention */
-function assertNever<_T extends never>() {}
+import {assertNever} from './transport/messaging.js';
 
 // Helper function to shallow-copy an object and replace some properties.
 // Useful to convert from these private types to public types. This will fail to
 // compile if a property is missed.
 export function replaceProperties<O, R>(
     original: O, replacements: R): Omit<O, keyof R>&R {
-  return Object.assign(Object.assign({}, original) as any, replacements);
+  return Object.assign({}, original, replacements);
 }
-
-
 
 //
 // This code checks that mojom enums are equivalent to their counterparts in
@@ -58,7 +53,7 @@ type AnnotateError<T, M> = T extends never ? never : [M, T];
 
 // Checks that both enums share the same keys.
 // Returns never on success, or an error message otherwise.
-type CheckEnumCompatibility<MojoEnum, TsEnum> = AnnotateError<
+export type CheckEnumCompatibility<MojoEnum, TsEnum> = AnnotateError<
     Exclude<AllMojomEnumKeysAsUppercase<MojoEnum>, AllEnumKeys<TsEnum>>,
     'typescript enum missing value'>|
     AnnotateError<
@@ -72,19 +67,12 @@ type CheckEnumCompatibility<MojoEnum, TsEnum> = AnnotateError<
 
 // Ignore FLOATING and DOCKED in the api, as they're just deprecated aliases.
 assertNever<CheckEnumCompatibility<
-    typeof mojom.PanelStateKind,
+    typeof mojomEnums.PanelStateKind,
     Omit<typeof api.PanelStateKind, 'FLOATING'|'DOCKED'>>>();
-// kUnknown isn't in the public API because this is a closed enum, and will not
-// be expanded.
+// kUnknown isn't in the public API because this is a closed enum, and will
+// not be expanded.
 assertNever<CheckEnumCompatibility<
     Omit<typeof mojom.WebClientMode, 'kUnknown'>, typeof api.WebClientMode>>();
-assertNever<CheckEnumCompatibility<
-    typeof mojom.CaptureScreenshotErrorReason,
-    typeof api.CaptureScreenshotErrorReason>>();
-assertNever<CheckEnumCompatibility<
-    typeof mojom.ScrollToErrorReason, typeof api.ScrollToErrorReason>>();
-assertNever<CheckEnumCompatibility<
-    typeof mojom.InvocationSource, typeof api.InvocationSource>>();
 assertNever<CheckEnumCompatibility<
     Omit<typeof mojom.SettingsPageField, 'kNone'>,
     typeof api.SettingsPageField>>();
@@ -97,14 +85,8 @@ assertNever<CheckEnumCompatibility<
 assertNever<CheckEnumCompatibility<
     typeof mojom.ActorTaskStopReason, typeof api.ActorTaskStopReason>>();
 assertNever<CheckEnumCompatibility<
-    typeof actorWebUiMojom.UserGrantedPermissionDuration,
-    typeof api.UserGrantedPermissionDuration>>();
-assertNever<CheckEnumCompatibility<
-    typeof actorWebUiMojom.SelectCredentialDialogErrorReason,
-    typeof requestTypes.SelectCredentialDialogErrorReason>>();
-assertNever<CheckEnumCompatibility<
-    typeof actorWebUiMojom.ConfirmationRequestErrorReason,
-    typeof requestTypes.ConfirmationRequestErrorReason>>();
-assertNever<CheckEnumCompatibility<
     typeof mojom.MetricUserInputReactionType,
     typeof api.MetricUserInputReactionType>>();
+assertNever<CheckEnumCompatibility<
+    typeof mojom.SubscriberObservationType,
+    typeof requestTypes.SubscriberObservationType>>();

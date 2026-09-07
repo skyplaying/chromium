@@ -11,7 +11,10 @@
 #include "chrome/browser/ui/read_anything/read_anything_immersive_web_view.h"
 #include "chrome/browser/ui/view_ids.h"
 #include "chrome/browser/ui/views/frame/contents_web_view.h"
+#include "chrome/browser/ui/webui/top_chrome/webui_contents_wrapper.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/tabs/public/tab_interface.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/layout/fill_layout.h"
@@ -49,13 +52,7 @@ void ReadAnythingImmersiveOverlayView::OnWebContentsAttached(
 
 void ReadAnythingImmersiveOverlayView::SubscribeToController(
     views::WebView* web_view) {
-  content::WebContents* web_contents = web_view->GetWebContents();
-  if (!web_contents) {
-    return;
-  }
-
-  tabs::TabInterface* tab =
-      tabs::TabInterface::MaybeGetFromContents(web_contents);
+  tabs::TabInterface* tab = GetTabInterface(web_view);
   if (!tab) {
     return;
   }
@@ -95,10 +92,11 @@ void ReadAnythingImmersiveOverlayView::OnShowImmersive(
 }
 
 void ReadAnythingImmersiveOverlayView::OnCloseImmersive() {
-  std::unique_ptr<WebUIContentsWrapperT<ReadAnythingUntrustedUI>> wrapper =
-      CloseUI();
+  ReadAnythingContentsWrapper wrapper = CloseUI();
   if (wrapper && controller_) {
-    controller_->TransferWebUiOwnership(std::move(wrapper));
+    controller_->TransferWebUiOwnership(
+        std::move(wrapper),
+        ReadAnythingController::PresentationState::kInImmersiveOverlay);
   }
 }
 
@@ -107,48 +105,84 @@ void ReadAnythingImmersiveOverlayView::OnDestroyed() {
 }
 
 void ReadAnythingImmersiveOverlayView::ShowUI(
-    std::unique_ptr<WebUIContentsWrapperT<ReadAnythingUntrustedUI>>
-        contents_wrapper,
+    ReadAnythingContentsWrapper contents_wrapper,
     ReadAnythingOpenTrigger trigger) {
   CHECK(!immersive_web_view_);
+  // Record has_shown_ui() before constructing ReadAnythingImmersiveWebView,
+  // because attaching the WebContents inside the constructor will trigger
+  // OnVisibilityChanged and set has_shown_ui() to true even on first open.
+  const bool has_shown_ui_before_attaching =
+      controller_ && controller_->has_shown_ui();
+
   auto immersive_web_view = std::make_unique<ReadAnythingImmersiveWebView>(
       base::BindOnce(&ReadAnythingImmersiveOverlayView::OnShowUI,
                      base::Unretained(this)),
-      std::move(contents_wrapper), trigger);
+      std::move(contents_wrapper).release(), trigger);
   immersive_web_view_ = AddChildView(std::move(immersive_web_view));
   immersive_view_focus_subscription_ =
       immersive_web_view_->AddWebContentsFocusedCallback(base::BindRepeating(
           &ReadAnythingImmersiveOverlayView::OnImmersiveWebViewFocused,
           base::Unretained(this)));
+
+  // Calling immersive_web_view_->ShowUI() is not necessary if it has
+  // not been shown yet - the WebUI will call ShowUI() when it is ready. If the
+  // UI has been shown once (e.g. from the Side Panel), the reused WebUI is
+  // already available but won't send a new "showUI" message.
+  // We manually call ShowUI() synchronously now that immersive_web_view_ is
+  // attached to the view hierarchy so that RequestFocus() executes within the
+  // active user gesture. This synchronous focus transition is required by
+  // macOS.
+  if (has_shown_ui_before_attaching) {
+    immersive_web_view_->ShowUI();
+  }
 }
 
 void ReadAnythingImmersiveOverlayView::OnShowUI() {
   SetVisible(true);
 
-  // When IRM is being shown, we tell the renderer that the main webpage needs
-  // to be treated as visible even though it's occluded, so it can generate
-  // accessibility events we need for RM to function. We also set the underlying
-  // web contents to be not accessible while IRM is open, so that it won't
-  // receive screen reader focus or be navigable by keyboard.
-  contents_web_view_->GetViewAccessibility().SetIsIgnored(true);
-  contents_web_view_->SetFocusBehavior(views::View::FocusBehavior::NEVER);
+  // We set the underlying web contents to be not accessible while IRM is open,
+  // so that it won't receive screen reader focus or be navigable by keyboard.
+  scoped_accessibility_disconnecter_ =
+      contents_web_view_->DisconnectWebContentsAccessibility();
+
+  tabs::TabInterface* tab = GetTabInterface();
+  if (tab && tab->CanShowModalUI()) {
+    scoped_tab_modal_ui_ = tab->ShowModalUI();
+  }
+
+  GetViewAccessibility().AnnouncePolitely(l10n_util::GetStringUTF16(
+      IDS_IMMERSIVE_READING_MODE_OPENED_ANNOUNCEMENT));
+
+  DUMP_WILL_BE_CHECK(immersive_web_view_);
+  // Only request focus if the tab is active so that an inactive tab in Split
+  // View does not steal focus when its immersive overlay is shown.
+  if (immersive_web_view_ && (!tab || tab->IsActivated())) {
+    immersive_web_view_->RequestFocus();
+  }
 }
 
-std::unique_ptr<WebUIContentsWrapperT<ReadAnythingUntrustedUI>>
-ReadAnythingImmersiveOverlayView::CloseUI() {
+ReadAnythingContentsWrapper ReadAnythingImmersiveOverlayView::CloseUI() {
   immersive_view_focus_subscription_ = {};
   SetVisible(false);
 
   // We want the main web contents to be accessible again if IRM is closed and
   // the main webpage is now visible.
-  contents_web_view_->GetViewAccessibility().SetIsIgnored(false);
-  contents_web_view_->SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
+  scoped_accessibility_disconnecter_.reset();
+
+  scoped_tab_modal_ui_.reset();
 
   CHECK(immersive_web_view_);
   std::unique_ptr<ReadAnythingImmersiveWebView> web_view =
       RemoveChildViewT(immersive_web_view_);
   immersive_web_view_ = nullptr;
-  return web_view->CloseAndTakeContentsWrapper();
+
+  // Focus on the underlying web view so that the focus is not lost entirely
+  // when the immersive view is closed.
+  if (contents_web_view_) {
+    contents_web_view_->RequestFocus();
+  }
+
+  return ReadAnythingContentsWrapper(web_view->CloseAndTakeContentsWrapper());
 }
 
 base::CallbackListSubscription
@@ -160,6 +194,16 @@ ReadAnythingImmersiveOverlayView::AddWebViewFocusedCallback(
 void ReadAnythingImmersiveOverlayView::OnImmersiveWebViewFocused(
     views::WebView* web_view) {
   focus_callback_list_.Notify(web_view);
+}
+
+tabs::TabInterface* ReadAnythingImmersiveOverlayView::GetTabInterface(
+    views::WebView* web_view) {
+  views::WebView* view_to_use = web_view ? web_view : contents_web_view_.get();
+  if (!view_to_use || !view_to_use->web_contents()) {
+    return nullptr;
+  }
+  return tabs::TabInterface::MaybeGetFromContents(
+      view_to_use->web_contents());
 }
 
 BEGIN_METADATA(ReadAnythingImmersiveOverlayView)

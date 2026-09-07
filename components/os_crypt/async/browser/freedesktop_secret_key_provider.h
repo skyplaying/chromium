@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -16,7 +17,6 @@
 #include "base/memory/ref_counted_memory.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
-#include "base/types/expected.h"
 #include "build/branding_buildflags.h"
 #include "components/dbus/utils/call_method.h"
 #include "components/dbus/utils/check_for_service_and_start.h"
@@ -62,25 +62,6 @@ class FreedesktopSecretKeyProvider : public KeyProvider {
     kMaxValue = kKWalletWriteFailed,
   };
 
-  // Supplements InitStatus in case of errors.
-  enum class ErrorDetail {
-    // These values are persisted to logs. Do not renumber or reuse.
-    kNone = 0,
-    kDestructedBeforeComplete = 1,
-    kEmptyObjectPaths = 2,
-    kInvalidReplyFormat = 3,
-    kInvalidSignalFormat = 4,
-    kInvalidVariantFormat = 5,
-    kNoResponse = 6,
-    kPromptDismissed = 7,
-    kPromptFailedSignalConnection = 8,
-    kKWalletApiReturnedError = 9,
-    kKWalletApiReturnedFalse = 10,
-    kErrorResponse = 11,
-    kExtraDataInResponse = 12,
-    kMaxValue = kExtraDataInResponse,
-  };
-
   FreedesktopSecretKeyProvider(const std::string& password_store,
                                const std::string& product_name,
                                scoped_refptr<dbus::Bus> bus);
@@ -89,7 +70,6 @@ class FreedesktopSecretKeyProvider : public KeyProvider {
   // KeyProvider:
   void GetKey(KeyCallback callback) override;
   bool UseForEncryption() override;
-  bool IsCompatibleWithOsCryptSync() override;
 
  private:
   FRIEND_TEST_ALL_PREFIXES(FreedesktopSecretKeyProviderTest, BasicHappyPath);
@@ -98,6 +78,8 @@ class FreedesktopSecretKeyProvider : public KeyProvider {
   FRIEND_TEST_ALL_PREFIXES(FreedesktopSecretKeyProviderTest, KWallet);
   FRIEND_TEST_ALL_PREFIXES(FreedesktopSecretKeyProviderTest,
                            KWalletCreateFolderAndPassword);
+  FRIEND_TEST_ALL_PREFIXES(FreedesktopSecretKeyProviderTest,
+                           SearchItemsWithItemUnlockPrompt);
   friend class FreedesktopSecretKeyProviderCompatTest;
 
   template <typename T>
@@ -109,7 +91,6 @@ class FreedesktopSecretKeyProvider : public KeyProvider {
       "org.freedesktop.Secret.Service";
   static constexpr char kSecretCollectionInterface[] =
       "org.freedesktop.Secret.Collection";
-  static constexpr char kSecretItemInterface[] = "org.freedesktop.Secret.Item";
   static constexpr char kSecretSessionInterface[] =
       "org.freedesktop.Secret.Session";
   static constexpr char kSecretPromptInterface[] =
@@ -117,7 +98,7 @@ class FreedesktopSecretKeyProvider : public KeyProvider {
 
   static constexpr char kMethodReadAlias[] = "ReadAlias";
   static constexpr char kMethodCreateCollection[] = "CreateCollection";
-  static constexpr char kMethodGetSecret[] = "GetSecret";
+  static constexpr char kMethodGetSecrets[] = "GetSecrets";
   static constexpr char kMethodOpenSession[] = "OpenSession";
   static constexpr char kMethodCreateItem[] = "CreateItem";
   static constexpr char kMethodUnlock[] = "Unlock";
@@ -188,12 +169,17 @@ class FreedesktopSecretKeyProvider : public KeyProvider {
   void OnGetCollectionLabelResponse(
       dbus_utils::CallMethodResultSig<"v"> variant);
   void OnCreateCollection(
-      base::expected<dbus::ObjectPath, ErrorDetail> create_collection_reply);
-  void OnUnlock(base::expected<std::vector<dbus::ObjectPath>, ErrorDetail>
-                    unlocked_collection);
+      std::optional<dbus::ObjectPath> create_collection_reply);
+  void OnUnlock(
+      std::optional<std::vector<dbus::ObjectPath>> unlocked_collection);
+  void OnUnlockItems(
+      const dbus::ObjectPath& item_path,
+      std::optional<std::vector<dbus::ObjectPath>> unlocked_items);
   void OnOpenSession(dbus_utils::CallMethodResultSig<"vo"> session_reply);
   void OnSearchItems(dbus_utils::CallMethodResultSig<"ao"> results);
-  void OnGetSecret(dbus_utils::CallMethodResultSig<"(oayays)"> secret_reply);
+  void OnGetSecrets(
+      dbus::ObjectPath expected_item_path,
+      dbus_utils::CallMethodResultSig<"a{o(oayays)}"> secrets_reply);
 
   // KWallet password storage
   void InitializeKWallet(const char* kwallet_service, const char* kwallet_path);
@@ -220,11 +206,10 @@ class FreedesktopSecretKeyProvider : public KeyProvider {
   void OpenSession();
   void CreateItem(scoped_refptr<base::RefCountedMemory> secret);
   void OnCreateItem(scoped_refptr<base::RefCountedMemory> secret,
-                    base::expected<dbus::ObjectPath, ErrorDetail> created_item);
+                    std::optional<dbus::ObjectPath> created_item);
   void DeriveKeyFromSecret(base::span<const uint8_t> secret);
   void FinalizeSuccess(Encryptor::Key key);
-  void FinalizeFailure(InitStatus status, ErrorDetail detail);
-  void RecordInitStatus(InitStatus status, ErrorDetail detail);
+  void FinalizeFailure(InitStatus status);
   void CloseSession();
 
   raw_ptr<dbus::ObjectProxy> default_collection_proxy_ = nullptr;

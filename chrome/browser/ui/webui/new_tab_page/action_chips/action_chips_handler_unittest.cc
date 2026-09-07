@@ -17,6 +17,7 @@
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
+#include "base/test/gmock_callback_support.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/time/time.h"
 #include "chrome/browser/browser_process.h"
@@ -24,6 +25,7 @@
 #include "chrome/browser/ui/browser_window/test/mock_browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "chrome/browser/ui/tabs/test_tab_strip_model_delegate.h"
 #include "chrome/browser/ui/webui/new_tab_page/action_chips/action_chips.mojom.h"
 #include "chrome/browser/ui/webui/new_tab_page/action_chips/action_chips_generator.h"
@@ -33,6 +35,8 @@
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/contextual_search/pref_names.h"
+#include "components/omnibox/browser/fusebox_action.mojom.h"
+#include "components/omnibox/browser/searchbox.mojom.h"
 #include "components/search/ntp_features.h"
 #include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_service.h"
@@ -40,6 +44,7 @@
 #include "components/sessions/core/session_id.h"
 #include "components/variations/scoped_variations_ids_provider.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_delegate.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/public/test/test_web_ui.h"
@@ -47,12 +52,19 @@
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
 
 namespace {
 using ::action_chips::mojom::ActionChip;
 using ::action_chips::mojom::ActionChipPtr;
-using ::action_chips::mojom::ChipType;
+using ::action_chips::mojom::CreateFormattedString;
+using ::action_chips::mojom::FormattedString;
+using ::action_chips::mojom::FormattedStringPtr;
+using ::action_chips::mojom::IconType;
+using ::action_chips::mojom::Page;
+using ::action_chips::mojom::SuggestTemplateInfo;
 using ::action_chips::mojom::TabInfo;
 using ::action_chips::mojom::TabInfoPtr;
 using ::base::Bucket;
@@ -67,21 +79,42 @@ using ::testing::Pointee;
 using ::testing::Return;
 using ::testing::ReturnRef;
 
-class MockPage : public action_chips::mojom::Page {
+class MockPage : public Page {
  public:
   MockPage() = default;
   ~MockPage() override = default;
 
-  mojo::PendingRemote<action_chips::mojom::Page> BindAndGetRemote() {
+  mojo::PendingRemote<Page> BindAndGetRemote() {
     return receiver_.BindNewPipeAndPassRemote();
   }
+
+  void FlushForTesting() { receiver_.FlushForTesting(); }
 
   MOCK_METHOD(void,
               OnActionChipsChanged,
               (std::vector<ActionChipPtr> action_chips),
               (override));
 
-  mojo::Receiver<action_chips::mojom::Page> receiver_{this};
+  mojo::Receiver<Page> receiver_{this};
+};
+
+class TestWebContentsDelegate : public content::WebContentsDelegate {
+ public:
+  content::WebContents* OpenURLFromTab(
+      content::WebContents* source,
+      const content::OpenURLParams& params,
+      base::OnceCallback<void(content::NavigationHandle&)>
+      /*navigation_handle_callback*/) override {
+    last_open_url_params_ = std::make_unique<content::OpenURLParams>(params);
+    return source;
+  }
+
+  const content::OpenURLParams* last_open_url_params() const {
+    return last_open_url_params_.get();
+  }
+
+ private:
+  std::unique_ptr<content::OpenURLParams> last_open_url_params_;
 };
 
 class MockActionChipsGenerator : public ActionChipsGenerator {
@@ -101,7 +134,7 @@ class FakeActionChipsHandler : public ActionChipsHandler {
   FakeActionChipsHandler(
       mojo::PendingReceiver<action_chips::mojom::ActionChipsHandler>
           pending_receiver,
-      mojo::PendingRemote<action_chips::mojom::Page> pending_page,
+      mojo::PendingRemote<Page> pending_page,
       Profile* profile,
       content::WebUI* web_ui,
       std::unique_ptr<ActionChipsGenerator> action_chips_generator)
@@ -109,7 +142,8 @@ class FakeActionChipsHandler : public ActionChipsHandler {
                            std::move(pending_page),
                            profile,
                            web_ui,
-                           std::move(action_chips_generator)) {}
+                           std::move(action_chips_generator),
+                           base::NullCallback()) {}
 };
 
 struct TabInfoFields {
@@ -120,10 +154,10 @@ struct TabInfoFields {
 };
 
 struct ActionChipFields {
-  std::string title;
-  std::string subtitle;
   std::string suggestion;
-  ChipType type = ChipType::kRecentTab;
+  IconType icon_type = IconType::kIconTypeUnspecified;
+  std::string primary_text;
+  std::string secondary_text;
   std::optional<TabInfoFields> tab;
 };
 
@@ -139,36 +173,39 @@ ActionChipPtr MakeActionChip(const ActionChipFields& fields) {
     tab = TabInfo::New(tab_fields.tab_id, tab_fields.title, tab_fields.url,
                        tab_fields.last_active_time);
   }
-  return ActionChip::New(fields.title, fields.subtitle, fields.suggestion,
-                         fields.type, std::move(tab));
+  return ActionChip::New(
+      fields.suggestion,
+      SuggestTemplateInfo::New(
+          fields.icon_type, CreateFormattedString(fields.primary_text),
+          CreateFormattedString(fields.secondary_text), nullptr),
+      std::move(tab));
 }
 
 ActionChipFields CreateStaticRecentTabChip(const TabInfoFields tab) {
-  return {.title = tab.title,
-          .subtitle = "Ask about this tab",
-          .suggestion = "",
-          .type = ChipType::kRecentTab,
+  return {.suggestion = "",
+          .icon_type = IconType::kFavicon,
+          .primary_text = tab.title,
+          .secondary_text = "Ask about this tab",
           .tab = std::move(tab)};
 }
 
 ActionChipFields CreateStaticDeepSearchChip() {
-  return {.title = "Research a topic",
-          .subtitle = "Dive deep into something new",
-          .suggestion = "",
-          .type = ChipType::kDeepSearch};
+  return {.suggestion = "",
+          .icon_type = IconType::kGlobeWithSearchLoop,
+          .primary_text = "Research a topic",
+          .secondary_text = "Dive deep into something new"};
 }
 
 ActionChipFields CreateStaticImageGenerationChip() {
-  return {.title = "Create image",
-          .subtitle = "Add an image and reimagine it",
-          .suggestion = "",
-          .type = ChipType::kImage};
+  return {.suggestion = "",
+          .icon_type = IconType::kBanana,
+          .primary_text = "Create image",
+          .secondary_text = "Add an image and reimagine it"};
 }
 
 void CallWithStaticChips(
     base::optional_ref<const tabs::TabInterface> tab,
-    base::OnceCallback<void(std::vector<action_chips::mojom::ActionChipPtr>)>
-        callback) {
+    base::OnceCallback<void(std::vector<ActionChipPtr>)> callback) {
   std::vector<ActionChipPtr> chips;
   if (tab.has_value()) {
     content::WebContents& contents = *tab->GetContents();
@@ -217,11 +254,11 @@ class TabStripModelFixture {
     return ptr;
   }
 
-  std::unique_ptr<content::WebContents> DiscardWebContentsAt(
-      int index,
+  std::unique_ptr<content::WebContents> DiscardWebContents(
+      content::WebContents* contents,
       std::unique_ptr<content::WebContents> new_contents) {
-    return tab_strip_model_->DiscardWebContentsAt(index,
-                                                  std::move(new_contents));
+    return tab_strip_model_->DiscardWebContents(contents,
+                                                std::move(new_contents));
   }
 
   void Activate(int index) { tab_strip_model_->ActivateTabAt(index); }
@@ -413,7 +450,7 @@ TEST_P(ActionChipsHandlerTabSelectionTest,
   // Arrange
   std::vector<ActionChipPtr> actual_chips;
   base::RunLoop run_loop;
-  std::unordered_map<ChipType, int32_t> expected_chip_counts;
+  std::unordered_map<IconType, int32_t> expected_chip_counts;
   const size_t expected_call_count = GetParam().expected_call_count;
 
   size_t total_call_count = 0;
@@ -423,7 +460,7 @@ TEST_P(ActionChipsHandlerTabSelectionTest,
           [expected_call_count, &total_call_count, &actual_chips, &run_loop,
            &expected_chip_counts](std::vector<ActionChipPtr> action_chips) {
             for (const ActionChipPtr& chip : action_chips) {
-              expected_chip_counts[chip->type]++;
+              expected_chip_counts[chip->suggest_template_info->type_icon]++;
             }
             total_call_count += 1;
             if (total_call_count == expected_call_count) {
@@ -460,7 +497,7 @@ TEST_P(ActionChipsHandlerTabSelectionTest,
   }
 
   EXPECT_THAT(actual_chips, ElementsAreArray(matchers));
-  EXPECT_THAT(histogram_tester_.GetAllSamples("NewTabPage.ActionChips.Shown"),
+  EXPECT_THAT(histogram_tester_.GetAllSamples("NewTabPage.ActionChips.Shown2"),
               BucketsAreArray(expected_buckets));
   histogram_tester_.ExpectTotalCount(
       "NewTabPage.ActionChips.Handler.ActionChipsRetrievalLatency",
@@ -479,21 +516,20 @@ TEST_F(
             actual_chips = std::move(action_chips);
             run_loop.Quit();
           });
-  std::vector<action_chips::mojom::ActionChipPtr> chips;
-  chips.push_back(action_chips::mojom::ActionChip::New(
-      "title1", "subtitle1", "suggention1",
-      action_chips::mojom::ChipType::kDeepSearch, nullptr));
-  chips.push_back(action_chips::mojom::ActionChip::New(
-      "title2", "subtitle2", "suggention2",
-      action_chips::mojom::ChipType::kDeepSearch, nullptr));
   EXPECT_CALL(*mock_action_chips_generator_, GenerateActionChips(_, _))
-      .WillOnce(
-          [&chips](
-              base::optional_ref<const tabs::TabInterface>,
-              base::OnceCallback<void(
-                  std::vector<action_chips::mojom::ActionChipPtr>)> callback) {
-            std::move(callback).Run(std::move(chips));
-          });
+      .WillOnce(base::test::RunOnceCallback<1>(MakeActionChipsVector(
+          ActionChip::New("suggention1",
+                          SuggestTemplateInfo::New(
+                              IconType::kIconTypeUnspecified,
+                              CreateFormattedString("title1"),
+                              CreateFormattedString("subtitle1"), nullptr),
+                          nullptr),
+          ActionChip::New("suggention2",
+                          SuggestTemplateInfo::New(
+                              IconType::kIconTypeUnspecified,
+                              CreateFormattedString("title2"),
+                              CreateFormattedString("subtitle2"), nullptr),
+                          nullptr))));
 
   // Act
   handler().StartActionChipsRetrieval();
@@ -516,13 +552,7 @@ TEST_F(ActionChipsHandlerTest,
             run_loop.Quit();
           });
   EXPECT_CALL(*mock_action_chips_generator_, GenerateActionChips(_, _))
-      .WillOnce(
-          [](base::optional_ref<const tabs::TabInterface>,
-             base::OnceCallback<void(
-                 std::vector<action_chips::mojom::ActionChipPtr>)> callback) {
-            // Return no chip
-            std::move(callback).Run(std::vector<ActionChipPtr>());
-          });
+      .WillOnce(base::test::RunOnceCallback<1>(std::vector<ActionChipPtr>()));
 
   // Act
   handler().StartActionChipsRetrieval();
@@ -530,6 +560,67 @@ TEST_F(ActionChipsHandlerTest,
 
   // Assert
   histogram_tester_.ExpectUniqueSample("NewTabPage.ActionChips.AnyShown", false,
+                                       1);
+}
+
+TEST_F(ActionChipsHandlerTest,
+       StartActionChipsRetrievalRecordsAnyShownMetricOnlyOnce) {
+  auto create_chips = []() {
+    return MakeActionChipsVector(
+        ActionChip::New(
+            "suggestion1",
+            SuggestTemplateInfo::New(
+                IconType::kIconTypeUnspecified, CreateFormattedString("title1"),
+                CreateFormattedString("subtitle1"), nullptr),
+            nullptr),
+        ActionChip::New(
+            "suggestion2",
+            SuggestTemplateInfo::New(
+                IconType::kIconTypeUnspecified, CreateFormattedString("title2"),
+                CreateFormattedString("subtitle2"), nullptr),
+            nullptr));
+  };
+
+  // 1. First retrieval.
+  {
+    base::RunLoop run_loop;
+    EXPECT_CALL(page_, OnActionChipsChanged(_))
+        .WillOnce([&run_loop](std::vector<ActionChipPtr> action_chips) {
+          run_loop.Quit();
+        });
+    EXPECT_CALL(*mock_action_chips_generator_, GenerateActionChips(_, _))
+        .WillOnce(base::test::RunOnceCallback<1>(create_chips()));
+
+    handler().StartActionChipsRetrieval();
+    run_loop.Run();
+  }
+
+  // Verify it is recorded.
+  histogram_tester_.ExpectUniqueSample("NewTabPage.ActionChips.AnyShown", true,
+                                       1);
+  testing::Mock::VerifyAndClearExpectations(&page_);
+  testing::Mock::VerifyAndClearExpectations(mock_action_chips_generator_);
+
+  // 2. Simulate tab update.
+  {
+    base::RunLoop run_loop;
+    EXPECT_CALL(page_, OnActionChipsChanged(_))
+        .WillOnce([&run_loop](std::vector<ActionChipPtr> action_chips) {
+          run_loop.Quit();
+        });
+
+    // Trigger a change to bypass the URL throttling.
+    AddTab(GURL("https://www.example.com"), u"Example Tab");
+
+    EXPECT_CALL(*mock_action_chips_generator_, GenerateActionChips(_, _))
+        .WillOnce(base::test::RunOnceCallback<1>(create_chips()));
+
+    handler().StartActionChipsRetrieval();
+    run_loop.Run();
+  }
+
+  // Verify that the total count is still 1.
+  histogram_tester_.ExpectUniqueSample("NewTabPage.ActionChips.AnyShown", true,
                                        1);
 }
 
@@ -544,45 +635,11 @@ TEST_F(ActionChipsHandlerTest,
             run_loop.Quit();
           });
   EXPECT_CALL(*mock_action_chips_generator_, GenerateActionChips(_, _))
-      .WillOnce(
-          [](base::optional_ref<const tabs::TabInterface>,
-             base::OnceCallback<void(
-                 std::vector<action_chips::mojom::ActionChipPtr>)> callback) {
-            std::vector<ActionChipPtr> chips;
-            chips.push_back(MakeActionChip(CreateStaticDeepSearchChip()));
-            std::move(callback).Run(std::move(chips));
-          });
+      .WillOnce(base::test::RunOnceCallback<1>(
+          MakeActionChipsVector(MakeActionChip(CreateStaticDeepSearchChip()))));
   handler().StartActionChipsRetrieval();
   run_loop.Run();
   EXPECT_THAT(actual_chips, IsEmpty());
-}
-
-TEST_F(ActionChipsHandlerTest,
-       StartActionChipsRetrievalAllowsOneChipsForRowUI) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeatureWithParameters(
-      ntp_features::kNtpNextFeatures,
-      {{ntp_features::kNtpNextShowSimplificationUIParam.name, "true"}});
-  std::vector<ActionChipPtr> actual_chips;
-  base::RunLoop run_loop;
-  EXPECT_CALL(page_, OnActionChipsChanged(_))
-      .WillOnce(
-          [&actual_chips, &run_loop](std::vector<ActionChipPtr> action_chips) {
-            actual_chips = std::move(action_chips);
-            run_loop.Quit();
-          });
-  EXPECT_CALL(*mock_action_chips_generator_, GenerateActionChips(_, _))
-      .WillOnce(
-          [](base::optional_ref<const tabs::TabInterface>,
-             base::OnceCallback<void(
-                 std::vector<action_chips::mojom::ActionChipPtr>)> callback) {
-            std::vector<ActionChipPtr> chips;
-            chips.push_back(MakeActionChip(CreateStaticDeepSearchChip()));
-            std::move(callback).Run(std::move(chips));
-          });
-  handler().StartActionChipsRetrieval();
-  run_loop.Run();
-  EXPECT_FALSE(actual_chips.empty());
 }
 
 TEST_F(ActionChipsHandlerTest, DiscardWebContentsDoesNotCrash) {
@@ -591,9 +648,10 @@ TEST_F(ActionChipsHandlerTest, DiscardWebContentsDoesNotCrash) {
   // handled correctly, because the old_contents (which is the one handler is
   // watching) loses its UserData during discard.
   EXPECT_THAT(tab_strip_model_fixture_
-                  ->DiscardWebContentsAt(
-                      0, content::WebContentsTester::CreateTestWebContents(
-                             profile_.get(), nullptr))
+                  ->DiscardWebContents(
+                      web_ui_->GetWebContents(),
+                      content::WebContentsTester::CreateTestWebContents(
+                          profile_.get(), nullptr))
                   .get(),
               Eq(web_ui_->GetWebContents()));
 }
@@ -658,9 +716,9 @@ TEST_F(ActionChipsHandlerTest, ContextSharingDisabled) {
 
   // Assert
   // Expect only the tool chips, no recent tab chip.
-  std::vector<ActionChipPtr> expected;
-  expected.push_back(MakeActionChip(CreateStaticDeepSearchChip()));
-  expected.push_back(MakeActionChip(CreateStaticImageGenerationChip()));
+  auto expected =
+      MakeActionChipsVector(MakeActionChip(CreateStaticDeepSearchChip()),
+                            MakeActionChip(CreateStaticImageGenerationChip()));
 
   std::vector<Matcher<ActionChipPtr>> matchers;
   std::transform(expected.begin(), expected.end(), std::back_inserter(matchers),
@@ -670,12 +728,131 @@ TEST_F(ActionChipsHandlerTest, ContextSharingDisabled) {
 }
 
 TEST_F(ActionChipsHandlerTest, ActionChipVisbilityChanged) {
-  // Set visibility to false.
-  profile_->GetPrefs()->SetBoolean(prefs::kNtpToolChipsVisible, false);
+  // Set visibility to false, and this causes no call to OnActionChipsChanged.
   EXPECT_CALL(page_, OnActionChipsChanged(_)).Times(0);
+  profile_->GetPrefs()->SetBoolean(prefs::kNtpToolChipsVisible, false);
+  page_.FlushForTesting();
+  testing::Mock::VerifyAndClearExpectations(&page_);
 
   // Ensure `OnActionChipsChanged` is called when visibility changes to true.
-  profile_->GetPrefs()->SetBoolean(prefs::kNtpToolChipsVisible, true);
   EXPECT_CALL(page_, OnActionChipsChanged(_)).Times(1);
+  profile_->GetPrefs()->SetBoolean(prefs::kNtpToolChipsVisible, true);
+  page_.FlushForTesting();
+  testing::Mock::VerifyAndClearExpectations(&page_);
 }
+
+TEST_F(ActionChipsHandlerTest, SetActionChipsVisibility) {
+  EXPECT_TRUE(profile_->GetPrefs()->GetBoolean(prefs::kNtpToolChipsVisible));
+  handler().SetActionChipsVisibility(false);
+  EXPECT_FALSE(profile_->GetPrefs()->GetBoolean(prefs::kNtpToolChipsVisible));
+  handler().SetActionChipsVisibility(true);
+  EXPECT_TRUE(profile_->GetPrefs()->GetBoolean(prefs::kNtpToolChipsVisible));
+}
+
+TEST_F(ActionChipsHandlerTest, NullBrowserWindowInterface) {
+  // Replace the real browser_window_interface with a null one.
+  webui::SetBrowserWindowInterface(web_contents(), nullptr);
+
+  auto mock_action_chips_generator =
+      std::make_unique<MockActionChipsGenerator>();
+  // Re-create the handler this time with no browser_window_interface.
+  // This should not crash.
+  auto handler_without_bwi = std::make_unique<FakeActionChipsHandler>(
+      mojo::PendingReceiver<action_chips::mojom::ActionChipsHandler>(),
+      mojo::PendingRemote<Page>(), profile_.get(), web_ui_.get(),
+      std::move(mock_action_chips_generator));
+}
+
+TEST_F(ActionChipsHandlerTest,
+       SwitchBrowserWindowInterfaceTriggersRetrievalWithoutTab) {
+  TabStripModelFixture second_tab_strip_fixture(profile_.get());
+
+  EXPECT_CALL(*mock_action_chips_generator_, GenerateActionChips(_, _))
+      .WillOnce(
+          [](base::optional_ref<const tabs::TabInterface> tab,
+             base::OnceCallback<void(std::vector<ActionChipPtr>)> callback) {
+            EXPECT_FALSE(tab.has_value());
+            std::move(callback).Run({});
+          });
+
+  webui::SetBrowserWindowInterface(
+      web_contents(), second_tab_strip_fixture.browser_window_interface());
+
+  EXPECT_EQ(1, TabStripModelObserver::CountObservedModels(&handler()));
+  testing::Mock::VerifyAndClearExpectations(mock_action_chips_generator_);
+
+  EXPECT_CALL(*mock_action_chips_generator_, GenerateActionChips(_, _))
+      .WillOnce(
+          [](base::optional_ref<const tabs::TabInterface> tab,
+             base::OnceCallback<void(std::vector<ActionChipPtr>)> callback) {
+            ASSERT_TRUE(tab.has_value());
+            EXPECT_EQ(GURL("https://www.example.com"),
+                      tab->GetContents()->GetLastCommittedURL());
+            std::move(callback).Run({});
+          });
+  second_tab_strip_fixture.AddTab(GURL("https://www.example.com"), u"Example");
+  testing::Mock::VerifyAndClearExpectations(mock_action_chips_generator_);
+
+  webui::SetBrowserWindowInterface(web_contents(), nullptr);
+}
+
+TEST_F(ActionChipsHandlerTest, NavigateToAimOpensCorrectUrl) {
+  TestWebContentsDelegate delegate;
+  web_contents()->SetDelegate(&delegate);
+
+  TemplateURLService* template_url_service =
+      TemplateURLServiceFactory::GetForProfile(profile_.get());
+  TemplateURLData data;
+  data.SetShortName(u"google");
+  data.SetKeyword(u"google");
+  data.SetURL("https://www.google.com/search?q={searchTerms}");
+  TemplateURL* turl =
+      template_url_service->Add(std::make_unique<TemplateURL>(data));
+  template_url_service->SetUserSelectedDefaultSearchProvider(turl);
+
+  handler().NavigateToAim("test query", 0,
+                          searchbox::mojom::ActionModifiers::New());
+
+  ASSERT_TRUE(delegate.last_open_url_params());
+  EXPECT_EQ(WindowOpenDisposition::CURRENT_TAB,
+            delegate.last_open_url_params()->disposition);
+  EXPECT_TRUE(
+      ui::PageTransitionCoreTypeIs(delegate.last_open_url_params()->transition,
+                                   ui::PAGE_TRANSITION_GENERATED));
+
+  const GURL& opened_url = delegate.last_open_url_params()->url;
+  EXPECT_TRUE(opened_url.is_valid());
+  EXPECT_THAT(opened_url.query(),
+              testing::HasSubstr("source=chrome.crn.ntpac"));
+  EXPECT_THAT(opened_url.query(), testing::HasSubstr("test+query"));
+  EXPECT_THAT(opened_url.query(), testing::HasSubstr("aep=198"));
+
+  web_contents()->SetDelegate(nullptr);
+}
+
+TEST_F(ActionChipsHandlerTest, NavigateToAimWithDisposition) {
+  TestWebContentsDelegate delegate;
+  web_contents()->SetDelegate(&delegate);
+
+  TemplateURLService* template_url_service =
+      TemplateURLServiceFactory::GetForProfile(profile_.get());
+  TemplateURLData data;
+  data.SetShortName(u"foo.com");
+  data.SetURL("http://foo.com/url?bar={searchTerms}");
+  TemplateURL* turl =
+      template_url_service->Add(std::make_unique<TemplateURL>(data));
+  template_url_service->SetUserSelectedDefaultSearchProvider(turl);
+
+  // Simulate a middle click.
+  handler().NavigateToAim("test query", 1,
+                          searchbox::mojom::ActionModifiers::New());
+
+  ASSERT_TRUE(delegate.last_open_url_params());
+  // A middle click without modifiers maps to NEW_BACKGROUND_TAB.
+  EXPECT_EQ(WindowOpenDisposition::NEW_BACKGROUND_TAB,
+            delegate.last_open_url_params()->disposition);
+
+  web_contents()->SetDelegate(nullptr);
+}
+
 }  // namespace

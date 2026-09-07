@@ -25,27 +25,26 @@ from __future__ import print_function
 __author__ = 'evanm (Evan Martin)'
 
 import ast
-import copy
+from html import parser
 import logging
 import os
 import re
 import sys
+from typing import Callable, Dict, List, Optional
 from xml.dom import minidom
-from typing import Dict, List, Optional
 
-if sys.version_info.major == 2:
-  from HTMLParser import HTMLParser
-else:
-  from html.parser import HTMLParser
-
-import setup_modules
+import setup_modules  # pylint: disable=unused-import
 
 import chromium_src.tools.metrics.actions.action_utils as action_utils
 import chromium_src.tools.metrics.actions.actions_model as actions_model
 import chromium_src.tools.metrics.common.presubmit_util as presubmit_util
+from chromium_src.tools.metrics.common.path_util import CHROMIUM_SRC_PATH
+
+_CHROMIUM_SRC_PATH_STR = str(CHROMIUM_SRC_PATH)
+
 
 USER_METRICS_ACTION_RE = re.compile(
-    r"""
+  r"""
   [^a-zA-Z]                   # Preceded by a non-alphabetical character.
   (?:                         # Begin non-capturing group.
   UserMetricsAction           # C++ / Objective C function name.
@@ -57,10 +56,10 @@ USER_METRICS_ACTION_RE = re.compile(
   (.+?)                       # A sequence of characters for the param.
   \)                          # Closing parenthesis.
   """,
-    re.VERBOSE | re.DOTALL  # Verbose syntax and makes . also match new lines.
+  re.VERBOSE | re.DOTALL,  # Verbose syntax and makes . also match new lines.
 )
 USER_METRICS_ACTION_RE_JS = re.compile(
-    r"""
+  r"""
   chrome\.send                # Start of function call.
   \(                          # Opening parenthesis.
   \s*                         # Any amount of whitespace, including new lines.
@@ -76,10 +75,10 @@ USER_METRICS_ACTION_RE_JS = re.compile(
   \s*                         # Any amount of whitespace, including new lines.
   \)                          # Closing parenthesis.
   """,
-    re.VERBOSE | re.DOTALL  # Verbose syntax and makes . also match new lines.
+  re.VERBOSE | re.DOTALL,  # Verbose syntax and makes . also match new lines.
 )
 USER_METRICS_ACTION_RE_DEVTOOLS = re.compile(
-    r"""
+  r"""
   InspectorFrontendHost\.recordUserMetricsAction     # Start of function call.
   \(                          # Opening parenthesis.
   \s*                         # Any amount of whitespace, including new lines.
@@ -87,7 +86,7 @@ USER_METRICS_ACTION_RE_DEVTOOLS = re.compile(
   \s*                         # Any amount of whitespace, including new lines.
   \)                          # Closing parenthesis.
   """,
-    re.VERBOSE | re.DOTALL  # Verbose syntax and makes . also match new lines.
+  re.VERBOSE | re.DOTALL,  # Verbose syntax and makes . also match new lines.
 )
 COMPUTED_ACTION_RE = re.compile(r'RecordComputedAction')
 
@@ -96,69 +95,70 @@ COMPUTED_ACTION_RE = re.compile(r'RecordComputedAction')
 # To add a new file, add it to this list and add the appropriate logic to
 # generate the known actions to AddComputedActions() below.
 KNOWN_COMPUTED_USERS = (
-    'back_forward_menu_model.cc',
-    'user_metrics.cc',  # method definition
-    'external_metrics.cc',  # see AddChromeOSActions()
-    'render_thread_impl.cc',  # impl of RenderThread::RecordComputedAction()
-    # browser side impl for RenderThread::RecordComputedAction()
-    'render_process_host_impl.cc',
-    'mock_render_thread.cc',  # mock of RenderThread::RecordComputedAction()
-    'pdf_view_web_plugin_client.cc',  # see AddPDFPluginActions()
-    'blink_platform_impl.cc',  # see WebKit/public/platform/Platform.h
-    'devtools_ui_bindings.cc',  # see AddDevToolsActions()
-    'sharing_hub_bubble_controller.cc',  # share targets
-    'sharing_hub_sub_menu_model.cc',  # share targets
-    'sharing_hub_bubble_controller_desktop_impl.cc',
-    'bookmark_metrics.cc',  # see AddBookmarkUsageActions()
-    'accelerator_tracker.cc',
-    'child_thread_impl.cc',
-    'customize_toolbar_handler.cc',
-    'feature_promo_controller.cc',
-    'feature_promo_lifecycle.cc',
-    'metrics_handler.cc',
-    'performance_controls_metrics.cc',
-    'pinned_action_toolbar_button.cc',
-    'pinned_action_toolbar_button_menu_model.cc',
-    'pinned_toolbar_actions_model.cc',
-    'side_panel_util.cc',
-    'stats.cc',
-    'toast_metrics.cc',
-    'whats_new_handler.cc',
+  'back_forward_menu_model.cc',
+  'user_metrics.cc',  # method definition
+  'external_metrics.cc',  # see AddChromeOSActions()
+  'render_thread_impl.cc',  # impl of RenderThread::RecordComputedAction()
+  # browser side impl for RenderThread::RecordComputedAction()
+  'render_process_host_impl.cc',
+  'mock_render_thread.cc',  # mock of RenderThread::RecordComputedAction()
+  'pdf_view_web_plugin_client.cc',  # see AddPDFPluginActions()
+  'blink_platform_impl.cc',  # see WebKit/public/platform/Platform.h
+  'devtools_ui_bindings.cc',  # see AddDevToolsActions()
+  'sharing_hub_bubble_controller.cc',  # share targets
+  'sharing_hub_sub_menu_model.cc',  # share targets
+  'sharing_hub_bubble_controller_desktop_impl.cc',
+  'bookmark_metrics.cc',  # see AddBookmarkUsageActions()
+  'accelerator_tracker.cc',
+  'child_thread_impl.cc',
+  'customize_toolbar_handler.cc',
+  'feature_promo_controller.cc',
+  'feature_promo_lifecycle.cc',
+  'metrics_handler.cc',
+  'performance_controls_metrics.cc',
+  'pinned_action_toolbar_button.cc',
+  'pinned_action_toolbar_button_menu_model.cc',
+  'pinned_toolbar_actions_model.cc',
+  'side_panel_util.cc',
+  'stats.cc',
+  'toast_metrics.cc',
+  'whats_new_handler.cc',
 )
-
-# The path to the root of the repository.
-REPOSITORY_ROOT = os.path.join(os.path.dirname(__file__), '..', '..', '..')
 
 number_of_files_total = 0
 
 # Tags that need to be inserted to each 'action' tag and their default content.
 TAGS = {
-    'description': 'Please enter the description of the metric.',
-    'owner': ('Please list the metric\'s owners. Add more owner tags as '
-              'needed.')
+  'description': 'Please enter the description of the metric.',
+  'owner': ("Please list the metric's owners. Add more owner tags as needed."),
 }
 
 SHARE_TARGETS = {
-    'CopyURLSelected', 'QRCodeSelected', 'ScreenshotSelected',
-    'SendTabToSelfSelected', 'CastSelected', 'SavePageSelected',
-    'ThirdPartyAppSelected', 'FollowSelected', 'UnfollowSelected'
+  'CopyURLSelected',
+  'QRCodeSelected',
+  'ScreenshotSelected',
+  'SendTabToSelfSelected',
+  'CastSelected',
+  'SavePageSelected',
+  'ThirdPartyAppSelected',
+  'FollowSelected',
+  'UnfollowSelected',
 }
 
 
-def AddComputedActions(actions):
+def AddComputedActions(actions: set[str]) -> None:
   """Add computed actions to the actions list.
 
   Arguments:
     actions: set of actions to add to.
   """
-
   # Actions for back_forward_menu_model.cc.
-  for dir in ('BackMenu_', 'ForwardMenu_'):
-    actions.add(dir + 'ShowFullHistory')
-    actions.add(dir + 'Popup')
+  for direction in ('BackMenu_', 'ForwardMenu_'):
+    actions.add(direction + 'ShowFullHistory')
+    actions.add(direction + 'Popup')
     for i in range(1, 20):
-      actions.add(dir + 'HistoryClick' + str(i))
-      actions.add(dir + 'ChapterClick' + str(i))
+      actions.add(direction + 'HistoryClick' + str(i))
+      actions.add(direction + 'ChapterClick' + str(i))
 
   # Actions for sharing_hub_bubble_controller.cc and
   # sharing_hub_sub_menu_model.cc.
@@ -166,7 +166,7 @@ def AddComputedActions(actions):
     actions.add('SharingHubDesktop.%s' % share_target)
 
 
-def AddPDFPluginActions(actions):
+def AddPDFPluginActions(actions: set[str]) -> None:
   """Add actions that are sent by the PDF plugin.
 
   Arguments
@@ -191,7 +191,7 @@ def AddPDFPluginActions(actions):
   actions.add('PDF_Unsupported_XFA')
 
 
-def AddBookmarkManagerActions(actions):
+def AddBookmarkManagerActions(actions: set[str]) -> None:
   """Add actions that are used by BookmarkManager.
 
   Arguments
@@ -224,7 +224,7 @@ def AddBookmarkManagerActions(actions):
   actions.add('BookmarkManager_NavigateTo_SubFolder')
 
 
-def AddBookmarkUsageActions(actions):
+def AddBookmarkUsageActions(actions: set[str]) -> None:
   """Add actions related to bookmarks usage.
 
   Arguments
@@ -244,13 +244,13 @@ def AddBookmarkUsageActions(actions):
   actions.add('Bookmarks.Opened.LocalStorageSyncing')
 
 
-def AddChromeOSActions(actions):
-  """Add actions reported by non-Chrome processes in Chrome OS.
+def AddChromeOSActions(actions: set[str]) -> None:
+  """Add actions reported by non-Chrome processes in ChromeOS.
 
   Arguments:
     actions: set of actions to add to.
   """
-  # Actions sent by Chrome OS update engine.
+  # Actions sent by ChromeOS update engine.
   actions.add('Updater.ServerCertificateChanged')
   actions.add('Updater.ServerCertificateFailed')
 
@@ -261,17 +261,13 @@ def AddExtensionActions(actions):
   Arguments:
     actions: set of actions to add to.
   """
-  # Actions sent by Chrome OS File Browser.
+  # Actions sent by ChromeOS File Browser.
   actions.add('FileBrowser.CreateNewFolder')
   actions.add('FileBrowser.PhotoEditor.Edit')
   actions.add('FileBrowser.PhotoEditor.View')
   actions.add('FileBrowser.SuggestApps.ShowDialog')
 
-  # Actions sent by Google Now client.
-  actions.add('GoogleNow.MessageClicked')
-  actions.add('GoogleNow.ButtonClicked0')
-  actions.add('GoogleNow.ButtonClicked1')
-  actions.add('GoogleNow.Dismissed')
+
 
   # Actions sent by Chrome Connectivity Diagnostics.
   actions.add('ConnectivityDiagnostics.LaunchSource.OfflineChromeOS')
@@ -371,11 +367,13 @@ def GrepForActions(path, actions):
     if COMPUTED_ACTION_RE.search(line):
       # Warn if this file shouldn't be calling RecordComputedAction.
       if os.path.basename(path) not in KNOWN_COMPUTED_USERS:
-        logging.warning('%s has RecordComputedAction statement on line %d' %
-                        (path, line_number))
+        logging.warning(
+          '%s has RecordComputedAction statement on line %d'
+          % (path, line_number)
+        )
 
 
-class WebUIActionsParser(HTMLParser):
+class WebUIActionsParser(parser.HTMLParser):
   """Parses an HTML file, looking for all tags with a 'metric' attribute.
   Adds user actions corresponding to any metrics found.
 
@@ -384,7 +382,7 @@ class WebUIActionsParser(HTMLParser):
   """
 
   def __init__(self, actions):
-    HTMLParser.__init__(self)
+    parser.HTMLParser.__init__(self)
     self.actions = actions
 
   def handle_starttag(self, tag, attrs):
@@ -396,14 +394,14 @@ class WebUIActionsParser(HTMLParser):
     # Boolean metrics have two corresponding actions.  All other metrics have
     # just one corresponding action.  By default, we check the 'dataType'
     # attribute.
-    is_boolean = ('dataType' in attrs and attrs['dataType'] == 'boolean')
+    is_boolean = 'dataType' in attrs and attrs['dataType'] == 'boolean'
     if 'type' in attrs and attrs['type'] in ('checkbox', 'radio'):
       if attrs['type'] == 'checkbox':
         is_boolean = True
       else:
         # Radio buttons are boolean if and only if their values are 'true' or
         # 'false'.
-        assert (attrs['type'] == 'radio')
+        assert attrs['type'] == 'radio'
         if 'value' in attrs and attrs['value'] in ['true', 'false']:
           is_boolean = True
 
@@ -414,7 +412,7 @@ class WebUIActionsParser(HTMLParser):
       self.actions.add(attrs['metric'])
 
 
-def GrepForWebUIActions(path, actions):
+def GrepForWebUIActions(path: str, actions: set[str]) -> None:
   """Grep a WebUI source file for elements with associated metrics.
 
   Arguments:
@@ -422,23 +420,24 @@ def GrepForWebUIActions(path, actions):
     actions: set of actions to add to
   """
   close_called = False
+  action_parser = None
   try:
-    parser = WebUIActionsParser(actions)
+    action_parser = WebUIActionsParser(actions)
     with open(path, encoding='utf-8') as file:
-      parser.feed(file.read())
+      action_parser.feed(file.read())
     # An exception can be thrown by parser.close(), so do it in the try to
     # ensure the path of the file being parsed gets printed if that happens.
     close_called = True
-    parser.close()
+    action_parser.close()
   except Exception as e:
-    print("Error encountered for path %s" % path)
+    print('Error encountered for path %s' % path)
     raise e
   finally:
-    if not close_called:
-      parser.close()
+    if action_parser and not close_called:
+      action_parser.close()
 
 
-def GrepForDevToolsActions(path, actions):
+def GrepForDevToolsActions(path: str, actions: set[str]) -> None:
   """Grep a DevTools source file for calls to UserMetrics functions.
 
   Arguments:
@@ -453,8 +452,9 @@ def GrepForDevToolsActions(path, actions):
     return
 
   with open(path, encoding='utf-8') as file:
-    finder = ActionNameFinder(path, file.read(),
-                              USER_METRICS_ACTION_RE_DEVTOOLS)
+    finder = ActionNameFinder(
+      path, file.read(), USER_METRICS_ACTION_RE_DEVTOOLS
+    )
   while True:
     try:
       action_name = finder.FindNextAction()
@@ -465,39 +465,34 @@ def GrepForDevToolsActions(path, actions):
       logging.warning(str(e))
 
 
-def WalkDirectory(root_path, actions, extensions, callback):
+def WalkDirectory(
+  root_path: str,
+  actions: set[str],
+  extensions: tuple[str, ...] | str,
+  callback: Callable[[str, set[str]], None],
+):
   """Walk directory chooses which files to process based on a set
-   of extensions, and runs the callback function on them.
+  of extensions, and runs the callback function on them.
 
-    It's important to know that `extensions` should be a tuple,
-    and if it's not, it will be converted into one. This is to correct
-    for Python automatically converting ('foo') to 'foo'.
+   It's important to know that `extensions` should be a tuple,
+   and if it's not, it will be converted into one. This is to correct
+   for Python automatically converting ('foo') to 'foo'.
 
-    Note: Files starting with a `.` will be ignored by default. See
-    comments in implementation.
+   Note: Files starting with a `.` will be ignored by default. See
+   comments in implementation.
   """
-
-  # Convert `extensions` to tuple if it is not one already
-  if type(extensions) != tuple:
-    extensions = (extensions, )
-
+  if isinstance(extensions, str):
+    extensions = (extensions,)
   for path, dirs, files in os.walk(root_path):
-    if 'third_party' in dirs:
-      dirs.remove('third_party')
-    if '.svn' in dirs:
-      dirs.remove('.svn')
-    if '.git' in dirs:
-      dirs.remove('.git')
+    dirs[:] = [d for d in dirs if not d.startswith('.') and d != 'third_party']
     for file in files:
-      """splitext() returns an empty extension |ext| for files
-      starting with `.`, as a result, files starting with a `.` will
-      be ignored (unless the |extensions| tuple includes an empty
-      element). Beware of allowing the callback() to run on all files
-      that start with a `.`: the callback needs to be resilient to
-      different file formats (binary, ASCII, etc.) and may also end
-      up processing many files that don't need to be processed, wasting
-      time.
-      """
+      # splitext() returns an empty extension |ext| for files starting with `.`,
+      # as a result, files starting with a `.` will be ignored (unless the
+      # |extensions| tuple includes an empty element). Beware of allowing the
+      # callback() to run on all files that start with a `.`: the callback needs
+      # to be resilient to different file formats (binary, ASCII, etc.) and may
+      # also end up processing many files that don't need to be processed,
+      # wasting time.
       filename, ext = os.path.splitext(file)
       if ext in extensions and not filename.endswith('test'):
         callback(os.path.join(path, file), actions)
@@ -512,26 +507,32 @@ def AddLiteralActions(actions):
   EXTENSIONS = ('.cc', '.cpp', '.mm', '.c', '.m', '.java', '.swift')
 
   # Walk the source tree to process all files.
-  ash_root = os.path.normpath(os.path.join(REPOSITORY_ROOT, 'ash'))
+  ash_root = os.path.normpath(os.path.join(_CHROMIUM_SRC_PATH_STR, 'ash'))
   WalkDirectory(ash_root, actions, EXTENSIONS, GrepForActions)
-  chrome_root = os.path.normpath(os.path.join(REPOSITORY_ROOT, 'chrome'))
+  chrome_root = os.path.normpath(os.path.join(_CHROMIUM_SRC_PATH_STR, 'chrome'))
   WalkDirectory(chrome_root, actions, EXTENSIONS, GrepForActions)
-  content_root = os.path.normpath(os.path.join(REPOSITORY_ROOT, 'content'))
+  content_root = os.path.normpath(
+    os.path.join(_CHROMIUM_SRC_PATH_STR, 'content')
+  )
   WalkDirectory(content_root, actions, EXTENSIONS, GrepForActions)
-  components_root = os.path.normpath(os.path.join(REPOSITORY_ROOT,
-                                                  'components'))
+  components_root = os.path.normpath(
+    os.path.join(_CHROMIUM_SRC_PATH_STR, 'components')
+  )
   WalkDirectory(components_root, actions, EXTENSIONS, GrepForActions)
-  net_root = os.path.normpath(os.path.join(REPOSITORY_ROOT, 'net'))
+  net_root = os.path.normpath(os.path.join(_CHROMIUM_SRC_PATH_STR, 'net'))
   WalkDirectory(net_root, actions, EXTENSIONS, GrepForActions)
-  webkit_root = os.path.normpath(os.path.join(REPOSITORY_ROOT, 'webkit'))
-  WalkDirectory(os.path.join(webkit_root, 'glue'), actions, EXTENSIONS,
-                GrepForActions)
-  WalkDirectory(os.path.join(webkit_root, 'port'), actions, EXTENSIONS,
-                GrepForActions)
+  webkit_root = os.path.normpath(os.path.join(_CHROMIUM_SRC_PATH_STR, 'webkit'))
+  WalkDirectory(
+    os.path.join(webkit_root, 'glue'), actions, EXTENSIONS, GrepForActions
+  )
+  WalkDirectory(
+    os.path.join(webkit_root, 'port'), actions, EXTENSIONS, GrepForActions
+  )
   webkit_core_root = os.path.normpath(
-      os.path.join(REPOSITORY_ROOT, 'third_party/blink/renderer/core'))
+    os.path.join(_CHROMIUM_SRC_PATH_STR, 'third_party/blink/renderer/core')
+  )
   WalkDirectory(webkit_core_root, actions, EXTENSIONS, GrepForActions)
-  ios_root = os.path.normpath(os.path.join(REPOSITORY_ROOT, 'ios'))
+  ios_root = os.path.normpath(os.path.join(_CHROMIUM_SRC_PATH_STR, 'ios'))
   WalkDirectory(ios_root, actions, EXTENSIONS, GrepForActions)
 
 
@@ -541,10 +542,11 @@ def AddWebUIActions(actions):
   Arguments:
     actions: set of actions to add to.
   """
-  resources_root = os.path.join(REPOSITORY_ROOT, 'chrome', 'browser',
-                                'resources')
-  WalkDirectory(resources_root, actions, ('.html'), GrepForWebUIActions)
-  WalkDirectory(resources_root, actions, ('.js'), GrepForActions)
+  resources_root = os.path.join(
+    _CHROMIUM_SRC_PATH_STR, 'chrome', 'browser', 'resources'
+  )
+  WalkDirectory(resources_root, actions, ('.html',), GrepForWebUIActions)
+  WalkDirectory(resources_root, actions, ('.js',), GrepForActions)
 
 
 def AddDevToolsActions(actions):
@@ -553,8 +555,14 @@ def AddDevToolsActions(actions):
   Arguments:
     actions: set of actions to add to.
   """
-  resources_root = os.path.join(REPOSITORY_ROOT, 'third_party', 'blink',
-                                'renderer', 'devtools', 'front_end')
+  resources_root = os.path.join(
+    _CHROMIUM_SRC_PATH_STR,
+    'third_party',
+    'blink',
+    'renderer',
+    'devtools',
+    'front_end',
+  )
   WalkDirectory(resources_root, actions, ('.js'), GrepForDevToolsActions)
 
 
@@ -606,13 +614,13 @@ class Error(Exception):
   pass
 
 
-def _CreateActionTag(doc: minidom.Document,
-                     action: action_utils.Action) -> Optional[minidom.Element]:
+def _CreateActionTag(
+  doc: minidom.Document, action: action_utils.Action
+) -> Optional[minidom.Element]:
   """Create a new action tag.
 
   Format of an action tag:
   <action name="name.{tokenName}" not_user_triggered="true">
-    <obsolete>Deprecated.</obsolete>
     <owner>Owner</owner>
     <description>Description.</description>
     <token key="tokenName">
@@ -625,9 +633,6 @@ def _CreateActionTag(doc: minidom.Document,
   belonging action is not a user action. A user action is an action that
   is logged exactly once right after a user has made an action.
 
-  <obsolete> is an optional tag. It's added to actions that are no longer used
-  any more.
-
   If action_name is in actions_dict, the values to be inserted are based on the
   corresponding Action object. If action_name is not in actions_dict, the
   default value from TAGS is used.
@@ -639,7 +644,6 @@ def _CreateActionTag(doc: minidom.Document,
   Returns:
     An action tag Element with proper children elements.
   """
-
   action_dom = doc.createElement('action')
   action_dom.setAttribute('name', action.name)
 
@@ -647,11 +651,6 @@ def _CreateActionTag(doc: minidom.Document,
   if action.not_user_triggered:
     action_dom.setAttribute('not_user_triggered', 'true')
 
-  # Create obsolete tag.
-  if action.obsolete:
-    obsolete_dom = doc.createElement('obsolete')
-    action_dom.appendChild(obsolete_dom)
-    obsolete_dom.appendChild(doc.createTextNode(action.obsolete))
 
   # Create owner tag.
   if action.owners:
@@ -695,9 +694,11 @@ def _CreateActionTag(doc: minidom.Document,
   return action_dom
 
 
-def PrettyPrint(actions_dict: Dict[str, action_utils.Action],
-                comment_nodes: List[minidom.Node],
-                variants_dict: Dict[str, List[action_utils.Variant]]) -> str:
+def PrettyPrint(
+  actions_dict: Dict[str, action_utils.Action],
+  comment_nodes: List[minidom.Comment],
+  variants_dict: Dict[str, List[action_utils.Variant]],
+) -> str:
   """Given a list of actions, create a well-printed minidom document.
 
   Args:
@@ -739,7 +740,7 @@ def PrettyPrint(actions_dict: Dict[str, action_utils.Action],
 
 def _GeneratedActions() -> set[str]:
   """Returns list of name of the actions that are generated programmatically"""
-  actions = set()
+  actions: set[str] = set()
   AddComputedActions(actions)
   AddWebUIActions(actions)
   AddDevToolsActions(actions)
@@ -755,11 +756,10 @@ def _GeneratedActions() -> set[str]:
   return actions
 
 
-def UpdateXml(
-    original_xml: str, generated_actions_names: set[str] = _GeneratedActions()
-) -> str:
+def UpdateXml(original_xml: str, generated_actions_names: set[str]) -> str:
   actions_dict, comment_nodes, variants_dict = action_utils.ParseActionFile(
-      original_xml)
+    original_xml
+  )
 
   expanded_actions_dict = action_utils.CreateActionsFromVariants(actions_dict)
 
@@ -772,13 +772,15 @@ def UpdateXml(
 
   return PrettyPrint(actions_dict, comment_nodes, variants_dict)
 
-def main(argv):
-  presubmit_util.DoPresubmitMain(argv,
-                                 'actions.xml',
-                                 'actions.old.xml',
-                                 UpdateXml,
-                                 script_name='extract_actions.py')
+
+def main():
+  presubmit_util.DoPresubmitMain(
+    'actions.xml',
+    'actions.old.xml',
+    lambda file_content: UpdateXml(file_content, _GeneratedActions()),
+    script_name='extract_actions.py',
+  )
 
 
 if '__main__' == __name__:
-  sys.exit(main(sys.argv))
+  main()

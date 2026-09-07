@@ -27,8 +27,8 @@
 #error VS 2017 Update 3.2 or higher is required
 #endif
 
-#if !defined(NTDDI_WIN11_GE)
-#error Windows 10.0.26100.0 SDK or higher required.
+#if !defined(NTDDI_WIN11_BR)
+#error Windows 10.0.28000.0 SDK or higher required.
 #endif
 
 namespace base {
@@ -169,7 +169,7 @@ OSInfo::OSInfo(const _OSVERSIONINFOEXW& version_info,
   std::tie(version_number_.patch, release_id_) = GetVersionData();
   version_ = MajorMinorBuildToVersion(
       version_number_.major, version_number_.minor, version_number_.build);
-  InitializeWowStatusValuesForProcess(GetCurrentProcess());
+  InitializeWowStatusValuesForProcess(::GetCurrentProcess());
 
   processors_ = static_cast<int>(system_info.dwNumberOfProcessors);
   allocation_granularity_ = system_info.dwAllocationGranularity;

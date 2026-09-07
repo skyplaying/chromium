@@ -4,16 +4,16 @@
 
 #include "chrome/browser/ui/webui/ash/skyvault/local_files_migration_dialog.h"
 
+#include "ash/constants/ash_features.h"
+#include "ash/constants/webui_url_constants.h"
 #include "base/test/gmock_callback_support.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #include "base/test/run_until.h"
 #include "base/time/time.h"
 #include "chrome/browser/ash/policy/skyvault/policy_utils.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/common/chrome_features.h"
-#include "chrome/common/webui_url_constants.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/test/browser_test.h"
@@ -30,7 +30,7 @@ namespace {
 content::WebContents* GetDialogWebContents() {
   ash::SystemWebDialogDelegate* dialog =
       ash::SystemWebDialogDelegate::FindInstance(
-          chrome::kChromeUILocalFilesMigrationURL);
+          ash::kChromeUILocalFilesMigrationURL);
   EXPECT_TRUE(dialog);
   content::WebUI* webui = dialog->GetWebUIForTest();
   EXPECT_TRUE(webui);
@@ -48,7 +48,8 @@ class LocalFilesMigrationDialogTest : public InProcessBrowserTest {
  public:
   LocalFilesMigrationDialogTest() {
     scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{features::kSkyVault, features::kSkyVaultV2},
+        /*enabled_features=*/{ash::features::kSkyVault,
+                              ash::features::kSkyVaultV2},
         /*disabled_features=*/{});
   }
   LocalFilesMigrationDialogTest(const LocalFilesMigrationDialogTest&) = delete;
@@ -67,10 +68,10 @@ class LocalFilesMigrationDialogTest : public InProcessBrowserTest {
 // the migration.
 IN_PROC_BROWSER_TEST_F(LocalFilesMigrationDialogTest, ShowDialog_Dismiss) {
   EXPECT_FALSE(ash::SystemWebDialogDelegate::HasInstance(
-      GURL(chrome::kChromeUILocalFilesMigrationURL)));
+      GURL(ash::kChromeUILocalFilesMigrationURL)));
 
   content::TestNavigationObserver navigation_observer_dialog(
-      (GURL(chrome::kChromeUILocalFilesMigrationURL)));
+      (GURL(ash::kChromeUILocalFilesMigrationURL)));
   navigation_observer_dialog.StartWatchingNewWebContents();
 
   base::MockCallback<StartMigrationCallback> mock_cb;
@@ -97,12 +98,12 @@ IN_PROC_BROWSER_TEST_F(LocalFilesMigrationDialogTest, ShowDialog_Dismiss) {
   // Open a new tab, which stacks up over the dialog.
   ASSERT_TRUE(
       ui_test_utils::NavigateToURL(browser(), GURL("https://example.com")));
-  gfx::NativeWindow window = browser()->window()->GetNativeWindow();
+  gfx::NativeWindow window = browser()->GetWindow()->GetNativeWindow();
   views::Widget* widget = views::Widget::GetWidgetForNativeWindow(window);
   ASSERT_TRUE(widget->IsStackedAbove(dialog->GetDialogWindowForTesting()));
 
   content::TestNavigationObserver navigation_observer_dialog_2(
-      (GURL(chrome::kChromeUILocalFilesMigrationURL)));
+      (GURL(ash::kChromeUILocalFilesMigrationURL)));
   navigation_observer_dialog_2.StartWatchingNewWebContents();
 
   // Show dialog again - should be shown on top.
@@ -145,10 +146,10 @@ IN_PROC_BROWSER_TEST_F(LocalFilesMigrationDialogTest, ShowDialog_Dismiss) {
 // callback.
 IN_PROC_BROWSER_TEST_F(LocalFilesMigrationDialogTest, ShowDialog_UploadNow) {
   EXPECT_FALSE(ash::SystemWebDialogDelegate::HasInstance(
-      GURL(chrome::kChromeUILocalFilesMigrationURL)));
+      GURL(ash::kChromeUILocalFilesMigrationURL)));
 
   content::TestNavigationObserver navigation_observer_dialog(
-      (GURL(chrome::kChromeUILocalFilesMigrationURL)));
+      (GURL(ash::kChromeUILocalFilesMigrationURL)));
   navigation_observer_dialog.StartWatchingNewWebContents();
 
   base::MockCallback<StartMigrationCallback> mock_cb;

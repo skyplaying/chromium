@@ -40,7 +40,7 @@ public final class InstantMessageDelegateFactory {
         }
 
         if (sProfileMap == null) {
-            sProfileMap = new ProfileKeyedMap<>(ProfileKeyedMap.NO_REQUIRED_CLEANUP_ACTION);
+            sProfileMap = new ProfileKeyedMap<>(ProfileKeyedMap.noRequiredCleanupAction());
         }
 
         return sProfileMap.getForProfile(profile, InstantMessageDelegateFactory::buildForProfile);
@@ -58,7 +58,7 @@ public final class InstantMessageDelegateFactory {
     }
 
     /**
-     * @param testService The {@InstantMessageDelegateImpl} to use for testing.
+     * @param testService The {@link InstantMessageDelegateImpl} to use for testing.
      */
     public static void setForTesting(@Nullable InstantMessageDelegateImpl testService) {
         sInstantMessageDelegateImplForTesting = testService;

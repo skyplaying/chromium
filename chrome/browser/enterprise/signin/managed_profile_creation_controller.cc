@@ -22,11 +22,14 @@
 #include "chrome/browser/signin/signin_util.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/themes/theme_service_factory.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 #include "chrome/browser/ui/profiles/profile_colors_util.h"
 #include "chrome/browser/ui/signin/signin_view_controller.h"
+#include "chrome/browser/ui/webui/signin/signin_ui_error.h"
+#include "chrome/browser/ui/webui/signin/signin_utils_desktop.h"
+#include "chrome/browser/ui/window_feature_controller/window_feature_controller.h"
 #include "chrome/common/channel_info.h"
 #include "components/policy/core/browser/signin/profile_separation_policies.h"
 #include "components/policy/core/browser/signin/user_cloud_signin_restriction_policy_fetcher.h"
@@ -35,6 +38,7 @@
 #include "components/signin/public/base/signin_pref_names.h"
 #include "components/signin/public/identity_manager/accounts_mutator.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 
 namespace {
 
@@ -56,7 +60,7 @@ const ProfileAttributesEntry* GetExistingProfileEntryOtherThanSourceProfile(
       attributes.begin(), attributes.end(),
       [&account_info, &profile_path](const ProfileAttributesEntry* entry) {
         return entry->GetPath() != profile_path &&
-               account_info.gaia == entry->GetGAIAId();
+               account_info.GetGaiaId() == entry->GetGAIAId();
       });
   return it == attributes.end() ? nullptr : *it;
 }
@@ -172,7 +176,7 @@ void ManagedProfileCreationController::FetchProfileSeparationPolicies() {
               ->GetSharedURLLoaderFactory());
   account_level_signin_restriction_policy_fetcher_
       ->GetManagedAccountsSigninRestriction(
-          GetIdentityManager(), account_info_.account_id,
+          GetIdentityManager(), account_info_.GetAccountId(),
           std::move(policy_fetch_callback),
           policy::utils::IsPolicyTestingEnabled(source_profile_->GetPrefs(),
                                                 chrome::GetChannel())
@@ -211,7 +215,11 @@ void ManagedProfileCreationController::OnProfileSeparationPoliciesReceived(
   account_level_signin_restriction_policy_fetcher_.reset();
 
   // If the user is not allowed to sign in, we should not show the disclaimer.
-  if (!source_profile_->GetPrefs()->GetBoolean(prefs::kSigninAllowed)) {
+  SigninUIError can_offer_error = CanOfferSignin(
+      source_profile_, account_info_.GetGaiaId(), account_info_.GetEmail(),
+      /*allow_account_from_other_profile=*/true,
+      /*ignore_reauth_error=*/true);
+  if (!can_offer_error.IsOk()) {
     // If the profile creation is required by policy, we should sign the user
     // out since they cannot sign in to Chrome.
     if (profile_creation_required_by_policy_) {
@@ -228,10 +236,12 @@ void ManagedProfileCreationController::OnProfileSeparationPoliciesReceived(
 void ManagedProfileCreationController::ShowManagementDisclaimer() {
   CHECK(policies_received_);
   CHECK(source_profile_);
-  Browser* browser = chrome::FindLastActiveWithProfile(source_profile_);
+  BrowserWindowInterface* const browser =
+      ProfileBrowserCollection::GetForProfile(source_profile_)
+          ->GetLastActiveBrowser();
   bool has_browser_with_tab =
-      browser &&
-      browser->SupportsWindowFeature(Browser::WindowFeature::kFeatureTabStrip);
+      browser && WindowFeatureController::From(browser)->SupportsWindowFeature(
+                     WindowFeatureController::WindowFeature::kFeatureTabStrip);
 
   if (user_choice_for_testing_.has_value()) {
     CHECK_IS_TEST();
@@ -255,6 +265,18 @@ void ManagedProfileCreationController::ShowManagementDisclaimer() {
     return;
   }
 
+  if (browser && !browser->GetActiveTabInterface()) {
+    // The tabs have not been initialized yet.
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(
+            std::move(callback_),
+            base::unexpected(
+                ManagedProfileCreationFailureReason::kNoActiveBrowser),
+            profile_creation_required_by_policy_));
+    return;
+  }
+
   auto* switch_to_entry = GetExistingProfileEntryOtherThanSourceProfile(
       source_profile_, account_info_);
   bool managed_profile_already_exists =
@@ -262,7 +284,7 @@ void ManagedProfileCreationController::ShowManagementDisclaimer() {
 
   bool user_already_signed_in =
       GetIdentityManager()->GetPrimaryAccountId(
-          signin::ConsentLevel::kSignin) == account_info_.account_id;
+          signin::ConsentLevel::kSignin) == account_info_.GetAccountId();
 
   auto dialog_params =
       std::make_unique<signin::EnterpriseProfileCreationDialogParams>(
@@ -278,12 +300,10 @@ void ManagedProfileCreationController::ShowManagementDisclaimer() {
               &ManagedProfileCreationController::OnManagementDisclaimerResult,
               weak_ptr_factory_.GetWeakPtr()),
           /*done_callback=*/
-          base::BindOnce(
-              &SigninViewController::CloseModalSignin,
-              browser->GetFeatures().signin_view_controller()->AsWeakPtr()));
-  browser->GetFeatures()
-      .signin_view_controller()
-      ->ShowModalManagedUserNoticeDialog(std::move(dialog_params));
+          base::BindOnce(&SigninViewController::CloseModalSignin,
+                         SigninViewController::From(browser)->AsWeakPtr()));
+  SigninViewController::From(browser)->ShowModalManagedUserNoticeDialog(
+      std::move(dialog_params));
 }
 
 void ManagedProfileCreationController::OnManagementDisclaimerResult(
@@ -317,13 +337,14 @@ void ManagedProfileCreationController::
   auto existing_primary_account_id =
       GetIdentityManager()->GetPrimaryAccountId(signin::ConsentLevel::kSignin);
   CHECK(existing_primary_account_id.empty() ||
-        existing_primary_account_id == account_info_.account_id);
+        existing_primary_account_id == account_info_.GetAccountId());
 
   if (existing_primary_account_id.empty()) {
     auto* primary_account_mutator =
         GetIdentityManager()->GetPrimaryAccountMutator();
-    primary_account_mutator->SetPrimaryAccount(
-        account_info_.account_id, signin::ConsentLevel::kSignin, access_point_);
+    primary_account_mutator->SetPrimaryAccount(account_info_.GetAccountId(),
+                                               signin::ConsentLevel::kSignin,
+                                               access_point_);
   }
   std::move(callback_).Run(base::ok(source_profile_),
                            profile_creation_required_by_policy_);
@@ -333,8 +354,8 @@ void ManagedProfileCreationController::Signout() {
   CHECK(source_profile_);
   auto* primary_account_mutator =
       GetIdentityManager()->GetPrimaryAccountMutator();
-  if (account_info_.account_id == GetIdentityManager()->GetPrimaryAccountId(
-                                      signin::ConsentLevel::kSignin)) {
+  if (account_info_.GetAccountId() == GetIdentityManager()->GetPrimaryAccountId(
+                                          signin::ConsentLevel::kSignin)) {
     primary_account_mutator->RemovePrimaryAccountButKeepTokens(
         signin_metrics::ProfileSignout::
             kUserDeclinedEnterpriseManagementDisclaimer);
@@ -342,7 +363,7 @@ void ManagedProfileCreationController::Signout() {
   if (profile_creation_required_by_policy_) {
     auto* accounts_mutator = GetIdentityManager()->GetAccountsMutator();
     accounts_mutator->RemoveAccount(
-        account_info_.account_id,
+        account_info_.GetAccountId(),
         signin_metrics::SourceForRefreshTokenOperation::
             kEnterpriseForcedProfileCreation_UserDecline);
   }
@@ -363,7 +384,8 @@ void ManagedProfileCreationController::MoveAccountIntoNewProfile() {
   CHECK(!profile_creator_);
   if (managed_profile_already_exists) {
     profile_creator_ = std::make_unique<DiceSignedInProfileCreator>(
-        source_profile_, account_info_.account_id, switch_to_entry->GetPath(),
+        source_profile_, account_info_.GetAccountId(),
+        std::vector<CoreAccountId>{}, switch_to_entry->GetPath(),
         base::BindOnce(
             &ManagedProfileCreationController::OnNewSignedInProfileCreated,
             weak_ptr_factory_.GetWeakPtr(),
@@ -372,7 +394,8 @@ void ManagedProfileCreationController::MoveAccountIntoNewProfile() {
     return;
   }
   profile_creator_ = std::make_unique<DiceSignedInProfileCreator>(
-      source_profile_, account_info_.account_id, profile_name,
+      source_profile_, account_info_.GetAccountId(),
+      std::vector<CoreAccountId>{}, profile_name,
       profiles::GetPlaceholderAvatarIndex(),
       base::BindOnce(
           &ManagedProfileCreationController::OnNewSignedInProfileCreated,
@@ -414,7 +437,7 @@ void ManagedProfileCreationController::OnNewSignedInProfileCreated(
     return;
   }
 
-  CHECK_EQ(new_profile_primary_account_id, account_info_.account_id);
+  CHECK_EQ(new_profile_primary_account_id, account_info_.GetAccountId());
 
   final_profile_ = new_profile;
   final_profile_observation_.Observe(final_profile_);
@@ -450,7 +473,7 @@ void ManagedProfileCreationController::OnNewSignedInProfileCreated(
   }
 
   startup_helper_ = std::make_unique<DiceInterceptedSessionStartupHelper>(
-      new_profile, is_new_profile, account_info_.account_id, nullptr);
+      new_profile, is_new_profile, account_info_.GetAccountId(), nullptr);
   startup_helper_->Startup(
       base::BindOnce(&ManagedProfileCreationController::OnNewBrowserCreated,
                      weak_ptr_factory_.GetWeakPtr()));

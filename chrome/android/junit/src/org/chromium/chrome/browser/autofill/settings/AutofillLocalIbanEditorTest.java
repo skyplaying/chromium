@@ -41,13 +41,14 @@ import org.mockito.invocation.InvocationOnMock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.mockito.stubbing.Answer;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.actor.ActorKeyedService;
+import org.chromium.chrome.browser.actor.ActorKeyedServiceFactory;
 import org.chromium.chrome.browser.autofill.PersonalDataManager;
 import org.chromium.chrome.browser.autofill.PersonalDataManager.Iban;
 import org.chromium.chrome.browser.autofill.PersonalDataManagerFactory;
@@ -67,7 +68,6 @@ import java.util.List;
 
 /** Unit tests for {@link AutofillLocalIbanEditor}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 @DisableFeatures(ChromeFeatureList.SETTINGS_MULTI_COLUMN)
 public class AutofillLocalIbanEditorTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
@@ -76,6 +76,7 @@ public class AutofillLocalIbanEditorTest {
     @Mock private ChromeBrowserInitializer mMockInitializer;
     @Mock private PersonalDataManager mMockPersonalDataManager;
     @Mock private ProfileManagerUtilsJni mMockProfileManagerUtilsJni;
+    @Mock private ActorKeyedService mMockActorKeyedService;
 
     private ActivityScenario<SettingsActivity> mActivityScenario;
     private SettingsActivity mSettingsActivity;
@@ -99,6 +100,7 @@ public class AutofillLocalIbanEditorTest {
         ChromeBrowserInitializer.setForTesting(mMockInitializer);
         ProfileManagerUtilsJni.setInstanceForTesting(mMockProfileManagerUtilsJni);
         ProfileManager.setLastUsedProfileForTesting(mMockProfile);
+        ActorKeyedServiceFactory.setForTesting(mMockActorKeyedService);
 
         // Mock successful IBAN creation.
         when(mMockPersonalDataManager.addOrUpdateLocalIban(any())).thenReturn("123");

@@ -7,47 +7,65 @@
 
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/scoped_refptr.h"
+#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 #include "ui/gfx/native_ui_types.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
 
-class GURL;
 class Profile;
+class TabStripModel;
 
 namespace content {
-class WebContents;
+class PageNavigator;
 }
+
+namespace ui {
+class BaseWindow;
+}
+
+class BrowserWindowInterface;
 
 class BrowserSelectFileDialogController
     : public ui::SelectFileDialog::Listener {
  public:
-  using FileSelectedCallback = base::OnceCallback<void(const GURL&)>;
+  DECLARE_USER_DATA(BrowserSelectFileDialogController);
 
-  explicit BrowserSelectFileDialogController(Profile* profile);
+  BrowserSelectFileDialogController(Profile* profile,
+                                    TabStripModel* tab_strip_model,
+                                    ui::BaseWindow* base_window,
+                                    content::PageNavigator* page_navigator,
+                                    ui::UnownedUserDataHost& host);
+
+  // Returns the controller for `browser`, or null if it does not have one.
+  static BrowserSelectFileDialogController* From(
+      BrowserWindowInterface* browser);
+
   BrowserSelectFileDialogController(const BrowserSelectFileDialogController&) =
       delete;
   BrowserSelectFileDialogController& operator=(
       const BrowserSelectFileDialogController&) = delete;
   ~BrowserSelectFileDialogController() override;
 
-  // Opens a file selection dialog. Passes the selected file URL to |callback|
-  // if successful.
-  void OpenFile(content::WebContents* web_contents,
-                gfx::NativeWindow parent_window,
-                FileSelectedCallback callback);
+  // Opens a file selection dialog for the browser's currently active tab.
+  void OpenFile();
 
  private:
+  ui::ScopedUnownedUserData<BrowserSelectFileDialogController>
+      scoped_unowned_user_data_;
+
   // SelectFileDialog::Listener:
   void FileSelected(const ui::SelectedFileInfo& file_info, int index) override;
   void FileSelectionCanceled() override;
-
-  FileSelectedCallback file_selected_callback_;
 
   // The current file selection dialog. This is a ref-counted object that
   // maintains its own lifetime, but we hold a reference to manage interaction.
   scoped_refptr<ui::SelectFileDialog> select_file_dialog_;
 
   const raw_ref<Profile> profile_;
+  const raw_ref<TabStripModel> tab_strip_model_;
+  const raw_ref<ui::BaseWindow> base_window_;
+  const raw_ref<content::PageNavigator> page_navigator_;
 };
 
 #endif  // CHROME_BROWSER_UI_BROWSER_SELECT_FILE_DIALOG_CONTROLLER_H_

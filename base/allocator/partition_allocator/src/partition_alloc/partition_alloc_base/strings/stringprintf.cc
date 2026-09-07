@@ -2,16 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
-#pragma allow_unsafe_buffers
-#endif
-
 #include "partition_alloc/partition_alloc_base/strings/stringprintf.h"
 
 #include <cstdarg>
 #include <cstdio>
 
+#include "partition_alloc/buildflags.h"
 #include "partition_alloc/partition_alloc_base/compiler_specific.h"
 #include "partition_alloc/partition_alloc_base/scoped_clear_last_error.h"
 
@@ -24,10 +20,11 @@ std::string TruncatingStringPrintf(const char* format, ...) {
   va_list arguments;
   va_start(arguments, format);
 #if PA_BUILDFLAG(IS_WIN)
-  int result = vsnprintf_s(stack_buf, std::size(stack_buf), _TRUNCATE, format,
-                           arguments);
+  int result = PA_UNSAFE_TODO(vsnprintf_s(stack_buf, std::size(stack_buf),
+                                          _TRUNCATE, format, arguments));
 #else
-  int result = vsnprintf(stack_buf, std::size(stack_buf), format, arguments);
+  int result = PA_UNSAFE_TODO(
+      vsnprintf(stack_buf, std::size(stack_buf), format, arguments));
 #endif
   va_end(arguments);
 #if PA_BUILDFLAG(IS_WIN)

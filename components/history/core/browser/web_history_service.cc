@@ -165,8 +165,7 @@ class RequestImpl : public WebHistoryService::Request {
     // TODO(crbug.com/40066882): Simplify this once
     // kReplaceSyncPromosWithSignInPromos has rolled out on all platforms.
     signin::ConsentLevel consent_level = signin::ConsentLevel::kSync;
-    if (base::FeatureList::IsEnabled(
-            syncer::kReplaceSyncPromosWithSignInPromos)) {
+    if (syncer::IsReplaceSyncPromosWithSignInPromosEnabled()) {
       consent_level = signin::ConsentLevel::kSignin;
     }
 
@@ -387,6 +386,13 @@ std::string BuildQueryPostData(const std::u16string& text_query,
   if (!text_query.empty()) {
     lookup.Set("query", text_query);
   }
+  if (!options.client_ids.empty()) {
+    base::ListValue client_ids_list;
+    for (const std::string& client_id : options.client_ids) {
+      client_ids_list.Append(client_id);
+    }
+    lookup.Set("client_id", std::move(client_ids_list));
+  }
   lookup_list.Append(std::move(lookup));
 
   request.Set("lookup", std::move(lookup_list));
@@ -401,7 +407,7 @@ std::string BuildGetFacsPostData(std::string_view version_info) {
 
   request.Set("header", BuildPostDataHeader(version_info));
 
-  request.Set("setting", /*WEB_AND_APP_ACTIVITY*/ 1);
+  request.Set("setting", /*SUPPLEMENTAL_WEB_AND_APP_ACTIVITY*/ 3);
 
   return base::WriteJson(request).value_or("");
 }

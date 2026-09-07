@@ -8,6 +8,7 @@
 #include <iosfwd>
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include "base/containers/enum_set.h"
 #include "base/values.h"
@@ -148,20 +149,11 @@ enum DataType {
   // the client.
   COLLABORATION_GROUP,
 
-  // Origin-specific email addresses forwarded from the user's account.
-  // Read-only on the client.
-  PLUS_ADDRESS,
-
   // Product comparison groups.
   PRODUCT_COMPARISON,
 
   // Browser cookies, ChromeOS only.
   COOKIES,
-
-  // Settings for PLUS_ADDRESS forwarded from the user's account. Since the
-  // settings originate from the user's account, this is not reusing any of the
-  // standard syncable prefs.
-  PLUS_ADDRESS_SETTING,
 
   // Valuables stored in the Google Wallet.
   // Read-only on the client.
@@ -197,7 +189,25 @@ enum DataType {
   // A theme object specifically for iOS devices.
   THEMES_IOS,
 
-  LAST_USER_DATA_TYPE = THEMES_IOS,
+  // A theme object specifically for Android devices.
+  THEMES_ANDROID,
+
+  // Encrypted tab context container.
+  ENCRYPTED_TAB_CONTEXT_CONTAINER,
+
+  // Encrypted tab context item.
+  ENCRYPTED_TAB_CONTEXT_ITEM,
+
+  // Information about a notebook.
+  NOTEBOOK,
+
+  // Information about a history journey.
+  JOURNEY,
+
+  // User entity suppression records for Autofill AI.
+  AUTOFILL_ENTITY_SUPPRESSION,
+
+  LAST_USER_DATA_TYPE = AUTOFILL_ENTITY_SUPPRESSION,
 
   // ---- Control Types ----
   // An object representing a set of Nigori keys.
@@ -291,10 +301,10 @@ enum class DataTypeForHistograms {
   kWebApks = 62,
   kSharedTabGroupData = 63,
   kCollaborationGroup = 64,
-  kPlusAddresses = 65,
+  // kDeprecatedPlusAddresses = 65,
   kProductComparison = 66,
   kCookies = 67,
-  kPlusAddressSettings = 68,
+  // kDeprecatedPlusAddressSettings = 68,
   kAutofillValuable = 69,
   kSharedTabGroupAccountData = 70,
   kSharedComment = 71,
@@ -305,7 +315,14 @@ enum class DataTypeForHistograms {
   kSkill = 76,
   kGeminiThread = 77,
   kThemesIos = 78,
-  kMaxValue = kThemesIos,
+  // kDeprecatedAccessibilityAnnotation = 79,
+  kThemesAndroid = 80,
+  kEncryptedTabContextContainer = 81,
+  kEncryptedTabContextItem = 82,
+  kNotebook = 83,
+  kJourney = 84,
+  kAutofillEntitySuppression = 85,
+  kMaxValue = kAutofillEntitySuppression,
 };
 // LINT.ThenChange(/tools/metrics/histograms/metadata/sync/enums.xml:SyncDataTypes)
 
@@ -319,77 +336,47 @@ DataType GetDataTypeFromSpecifics(const sync_pb::EntitySpecifics& specifics);
 // Protocol types are those types that have actual protocol buffer
 // representations. This is the same as the "real" data types, i.e. all types
 // except UNSPECIFIED.
-constexpr DataTypeSet ProtocolTypes() {
-  // Note that DataTypeSet only covers the real types, not UNSPECIFIED.
-  static_assert(!DataTypeSet::All().Has(DataType::UNSPECIFIED));
-  return DataTypeSet::All();
-}
+DataTypeSet ProtocolTypes();
 
 // These are the normal user-controlled types. This is to distinguish from
 // ControlTypes which are always enabled.  Note that some of these share a
 // preference flag, so not all of them are individually user-selectable.
-constexpr DataTypeSet UserTypes() {
-  return DataTypeSet::FromRange(FIRST_USER_DATA_TYPE, LAST_USER_DATA_TYPE);
-}
+DataTypeSet UserTypes();
 
 // User types which are not user-controlled.
-DataTypeSet AlwaysPreferredUserTypes();
+inline constexpr DataTypeSet AlwaysPreferredUserTypes() {
+  // TODO(crbug.com/477624427): add SKILL to a corresponding UserSelectableType
+  // or another toggle.
+  return {ACCOUNT_SETTING,
+          DEVICE_INFO,
+          USER_CONSENTS,
+          PRIORITY_PREFERENCES,
+          SECURITY_EVENTS,
+          SEND_TAB_TO_SELF,
+          SUPERVISED_USER_SETTINGS,
+          SHARING_MESSAGE,
+          SKILL,
+          AI_THREAD,
+          GEMINI_THREAD,
+          AUTOFILL_ENTITY_SUPPRESSION};
+}
 
 // User types which are always encrypted.
-constexpr DataTypeSet AlwaysEncryptedUserTypes() {
-  // If you add a new data type here that is conceptually different from a
-  // password, make sure you audit UI code that refers to these types as
-  // passwords, e.g. consumers of IsEncryptEverythingEnabled().
-  return {AUTOFILL_WALLET_CREDENTIAL, PASSWORDS, WIFI_CONFIGURATIONS, COOKIES};
-}
+DataTypeSet AlwaysEncryptedUserTypes();
 
 // This is the subset of UserTypes() that have priority over other types. These
 // types are synced before other user types (both for get_updates and commits).
 // This mostly matters during initial sync, since priority types can become
 // active before all the data for non-prio types has been downloaded (which may
 // be a lot of data).
-constexpr DataTypeSet HighPriorityUserTypes() {
-  return {
-      // The "Send to Your Devices" feature needs fast updating of the list of
-      // your devices and also fast sending of the actual messages.
-      DEVICE_INFO, SHARING_MESSAGE,
-      // For supervised users, it is important to quickly deliver changes in
-      // settings and in allowed sites to the supervised user.
-      SUPERVISED_USER_SETTINGS,
-      // These are by definition preferences for which it is important that the
-      // client picks them up quickly (also because these can get changed
-      // server-side). For example, such a pref could control whether a
-      // non-priority type gets enabled (Wallet has such a pref).
-      PRIORITY_PREFERENCES, OS_PRIORITY_PREFERENCES,
-      // Speed matters for the user experience when sync gets enabled directly
-      // in the creation flow for a new profile. If the user has no theme in
-      // their sync data, the browser offers a theme customization bubble which
-      // should appear soon after opening the browser.
-      THEMES,
-      // This guarantees that sync will process updates for collaboration groups
-      // before other data types during initial sync download and during
-      // uploads, which is critical for remote clients to correctly detect the
-      // start of a passive migration.
-      COLLABORATION_GROUP};
-}
+DataTypeSet HighPriorityUserTypes();
 
 // This is the subset of UserTypes() that have a *lower* priority than other
 // types. These types are synced only after all other user types (both for
 // get_updates and commits). This mostly matters during initial sync, since
 // high-priority and regular types can become active before all the data for
 // low-priority types has been downloaded (which may be a lot of data).
-constexpr DataTypeSet LowPriorityUserTypes() {
-  return {
-      // Downloading History may take a while, but should not block the download
-      // of other data types.
-      HISTORY,
-      // User Events should not block or delay commits for other data types.
-      USER_EVENTS,
-      // Incoming password sharing invitations must be processed after
-      // Passwords data type to prevent storing incoming passwords locally first
-      // and overwriting the remote password during conflict resolution.
-      INCOMING_PASSWORD_SHARING_INVITATION};
-}
+DataTypeSet LowPriorityUserTypes();
 
 // Returns a list of all control types.
 //
@@ -401,51 +388,35 @@ constexpr DataTypeSet LowPriorityUserTypes() {
 // - Their contents are not encrypted automatically.
 // - They support custom update application and conflict resolution logic.
 // - All change processing occurs on the sync thread.
-constexpr DataTypeSet ControlTypes() {
-  return {NIGORI};
-}
+DataTypeSet ControlTypes();
 
 // Types that may commit data, but should never be included in a GetUpdates.
 // These are never encrypted.
-constexpr DataTypeSet CommitOnlyTypes() {
-  return {USER_EVENTS, USER_CONSENTS, SECURITY_EVENTS, SHARING_MESSAGE,
-          OUTGOING_PASSWORD_SHARING_INVITATION};
-}
+DataTypeSet CommitOnlyTypes();
 
 // Types for which downloaded updates are applied immediately, before all
 // updates are downloaded and the Sync cycle finishes.
 // For these types, DataTypeSyncBridge::MergeFullSyncData() will never be
 // called (since without downloading all the data, no initial merge is
 // possible).
-constexpr DataTypeSet ApplyUpdatesImmediatelyTypes() {
-  return {HISTORY};
-}
+DataTypeSet ApplyUpdatesImmediatelyTypes();
 
 // Types for which `collaboration_id` field in SyncEntity should be provided.
 // These types also support `gc_directive` for collaborations to track active
 // collaboratons.
-constexpr DataTypeSet SharedTypes() {
-  return {SHARED_TAB_GROUP_DATA};
-}
+DataTypeSet SharedTypes();
 
 // Types triggering a warning when the user signs out and the types have
 // unsynced data. The warning offers the user to proceed with sign-out deleting
 // any pending account data or abort, depending on the platform.
-constexpr DataTypeSet TypesRequiringUnsyncedDataCheckOnSignout() {
-  static_assert(
-      62 == GetNumDataTypes(),
-      "Add new types to `TypesRequiringUnsyncedDataCheckOnSignout()` if there "
-      "should be a warning when the user signs out and the types have unsynced "
-      "data. The warning offers the user to either proceed with sign-out "
-      "deleting any pending account data or abort, depending on the platform");
-  return {syncer::BOOKMARKS,    syncer::CONTACT_INFO,    syncer::PASSWORDS,
-          syncer::READING_LIST, syncer::SAVED_TAB_GROUP, syncer::THEMES,
-          syncer::EXTENSIONS};
-}
+DataTypeSet TypesRequiringUnsyncedDataCheckOnSignout();
 
 // User types that can be encrypted, which is a subset of UserTypes() and a
 // superset of AlwaysEncryptedUserTypes();
 DataTypeSet EncryptableUserTypes();
+
+// Returns the set of data types that support local sync.
+DataTypeSet LocalSyncSupportedTypes();
 
 // Determine a data type from the field number of its associated
 // EntitySpecifics field.  Returns UNSPECIFIED if the field number is
@@ -477,11 +448,11 @@ int GetSpecificsFieldNumberFromDataType(DataType data_type);
 
 // Returns a string with application lifetime that represents the name of
 // `data_type`.
-const char* DataTypeToDebugString(DataType data_type);
+std::string_view DataTypeToDebugString(DataType data_type);
 
 // Returns a string with application lifetime that is used as the histogram
 // suffix for `data_type`.
-const char* DataTypeToHistogramSuffix(DataType data_type);
+std::string_view DataTypeToHistogramSuffix(DataType data_type);
 
 // Some histograms take an integer parameter that represents a data type.
 // The mapping from DataType to integer is defined here. It defines a
@@ -493,9 +464,14 @@ DataTypeForHistograms DataTypeHistogramValue(DataType data_type);
 // time and thus can be used when persisting data.
 int DataTypeToStableIdentifier(DataType data_type);
 
+// Returns the DataType corresponding to `stable_identifier` (produced by
+// DataTypeToStableIdentifier()). Returns UNSPECIFIED if `stable_identifier`
+// does not match any known DataType.
+DataType GetDataTypeFromStableIdentifier(int stable_identifier);
+
 // This returns a string that is stable over time and thus can be used for local
 // persistence. It is guaranteed to be lowercase.
-const char* DataTypeToStableLowerCaseString(DataType data_type);
+std::string_view DataTypeToStableLowerCaseString(DataType data_type);
 
 // Returns the comma-separated string representation of `data_types`.
 std::string DataTypeSetToDebugString(DataTypeSet data_types);

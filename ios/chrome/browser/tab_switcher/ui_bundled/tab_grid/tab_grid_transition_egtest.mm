@@ -91,6 +91,13 @@ void ExpectIdleHistogramBucketCount(const char* histogram,
 // to fail.
 @implementation TabSwitcherTransitionTestCase
 
+- (AppLaunchConfiguration)appConfigurationForTestCase {
+  AppLaunchConfiguration config = [super appConfigurationForTestCase];
+  config.features_enabled.push_back(kChromeNextIa);
+  config.features_enabled.push_back(kFullscreenRefactoring);
+  return config;
+}
+
 - (void)setUp {
   [super setUp];
 
@@ -108,6 +115,7 @@ void ExpectIdleHistogramBucketCount(const char* histogram,
   // Release the histogram tester.
   chrome_test_util::GREYAssertErrorNil(
       [MetricsAppInterface releaseHistogramTester]);
+  [ChromeEarlGrey removeUserDefaultsObjectForKey:@"InactiveTabsTestMode"];
   [super tearDownHelper];
 }
 
@@ -686,6 +694,8 @@ void ExpectIdleHistogramBucketCount(const char* histogram,
   ExpectIdleHistogramCount(kUMATabSwitcherIdleRegularTabGridPageHistogram, 1);
   ExpectIdleHistogramBucketCount(kUMATabSwitcherIdleRegularTabGridPageHistogram,
                                  1, NO);
+  [ChromeEarlGrey
+      removeUserDefaultsObjectForKey:kInactiveTabsUserEducationShownOnceKey];
 }
 
 // Tests switching back and forth between the normal and incognito BVCs.

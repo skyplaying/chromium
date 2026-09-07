@@ -12,7 +12,10 @@ if (is_android) {
 
 source_set("pref_names") {
   sources = [ "pref_names.h" ]
-  public_deps = [ "//build:branding_buildflags" ]
+  public_deps = [
+    "//build:android_buildflags",
+    "//build:branding_buildflags",
+  ]
 }
 
 static_library("ntp_tiles") {
@@ -144,6 +147,7 @@ source_set("unit_tests") {
     "//components/image_fetcher/core:test_support",
     "//components/pref_registry",
     "//components/prefs",
+    "//components/search",
     "//components/supervised_user/core/common:buildflags",
     "//components/sync_preferences:test_support",
     "//components/webapps/common",

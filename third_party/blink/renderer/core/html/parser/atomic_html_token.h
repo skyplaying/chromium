@@ -38,7 +38,6 @@
 #include "third_party/blink/renderer/core/html_element_attribute_name_lookup_trie.h"
 #include "third_party/blink/renderer/core/html_element_lookup_trie.h"
 #include "third_party/blink/renderer/core/html_names.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
 #include "third_party/blink/renderer/platform/wtf/text/atomic_string.h"
@@ -202,39 +201,21 @@ class CORE_EXPORT AtomicHTMLToken {
     return doctype_data_->system_identifier_;
   }
 
-  DOMPartTokenType DOMPartType() const {
-    DCHECK(RuntimeEnabledFeatures::DOMPartsAPIEnabled());
-    DCHECK_EQ(type_, HTMLToken::kDOMPart);
-    return dom_part_data_->type_;
-  }
-
-  Vector<String> DOMPartMetadata() const {
-    DCHECK(RuntimeEnabledFeatures::DOMPartsAPIEnabled());
-    DCHECK_EQ(type_, HTMLToken::kDOMPart);
-    return dom_part_data_->metadata_;
-  }
-
-  DOMPartsNeeded GetDOMPartsNeeded() {
-    DCHECK_EQ(type_, HTMLToken::kStartTag);
-    return dom_parts_needed_;
-  }
+  bool HasEntity() const { return has_entity_; }
 
   explicit AtomicHTMLToken(HTMLToken& token)
-      : type_(token.GetType()), name_(HTMLTokenNameFromToken(token)) {
+      : type_(token.GetType()),
+        name_(HTMLTokenNameFromToken(token)),
+        has_entity_(token.HasEntity()) {
     switch (type_) {
       case HTMLToken::kUninitialized:
         NOTREACHED();
       case HTMLToken::DOCTYPE:
         doctype_data_ = token.ReleaseDoctypeData();
         break;
-      case HTMLToken::kDOMPart:
-        DCHECK(RuntimeEnabledFeatures::DOMPartsAPIEnabled());
-        dom_part_data_ = token.ReleaseDOMPartData();
-        break;
       case HTMLToken::kEndOfFile:
         break;
       case HTMLToken::kStartTag:
-        dom_parts_needed_ = token.GetDOMPartsNeeded();
         [[fallthrough]];
       case HTMLToken::kEndTag: {
         self_closing_ = token.SelfClosing();
@@ -347,6 +328,9 @@ class CORE_EXPORT AtomicHTMLToken {
   bool self_closing_ = false;
 
   bool duplicate_attribute_ = false;
+
+  // True if this token contains an entity reference.
+  bool has_entity_ = false;
 
   Vector<Attribute, kAttributePrealloc> attributes_;
 };

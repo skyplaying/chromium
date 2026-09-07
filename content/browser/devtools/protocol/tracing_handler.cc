@@ -51,6 +51,7 @@
 #include "services/resource_coordinator/public/cpp/memory_instrumentation/memory_instrumentation.h"
 #include "services/resource_coordinator/public/mojom/memory_instrumentation/memory_instrumentation.mojom-shared.h"
 #include "services/tracing/public/cpp/perfetto/perfetto_config.h"
+#include "services/tracing/public/cpp/perfetto/perfetto_data_source_names.h"
 #include "services/tracing/public/cpp/perfetto/perfetto_session.h"
 #include "services/tracing/public/cpp/perfetto/trace_packet_tokenizer.h"
 #include "services/tracing/public/cpp/trace_startup_config.h"
@@ -59,6 +60,10 @@
 #include "third_party/abseil-cpp/absl/strings/ascii.h"
 #include "third_party/inspector_protocol/crdtp/json.h"
 
+#if BUILDFLAG(IS_WIN)
+#include "components/tracing/common/etw_stack_sampling_win.h"
+#endif
+
 #if BUILDFLAG(IS_ANDROID)
 #include "content/browser/renderer_host/compositor_impl_android.h"
 #endif
@@ -66,6 +71,8 @@
 namespace content::protocol {
 
 namespace {
+
+bool g_did_adopt_startup_session = false;
 
 const double kMinimumReportingInterval = 250.0;
 
@@ -77,8 +84,24 @@ const char kTrackEventDataSourceName[] = "track_event";
 // Frames need to be at least 1x1, otherwise nothing would be captured.
 constexpr gfx::Size kMinFrameSize = gfx::Size(1, 1);
 
-// Frames do not need to be greater than 500x500 for tracing.
-constexpr gfx::Size kMaxFrameSize = gfx::Size(500, 500);
+// Default maximum width and height (in pixels) of each captured screenshot.
+// Callers can override this via the `screenshotMaxSize` parameter on
+// `Tracing.start` (subject to clamping in ResolveScreenshotParams).
+constexpr gfx::Size kDefaultMaxFrameSize = gfx::Size(500, 500);
+
+// Upper sanity bound on each screenshot dimension to reject pathological
+// values from the protocol surface.
+constexpr int kMaxScreenshotDimension = 4096;
+
+// Upper sanity bound on the total number of screenshots per session.
+constexpr int kMaxScreenshotCount = 100000;
+
+// Per-session memory budget for screenshot capture, in bytes. Matches the
+// pre-existing implicit budget of `500 * 500 * 4 * 450` = ~450 MB.
+constexpr int64_t kScreenshotMemoryBudgetBytes =
+    static_cast<int64_t>(kDefaultMaxFrameSize.width()) *
+    kDefaultMaxFrameSize.height() * 4 *
+    DevToolsTraceableScreenshot::kDefaultMaximumNumberOfScreenshots;
 
 // Convert from camel case to separator + lowercase.
 std::string ConvertFromCamelCase(const std::string& in_str, char separator) {
@@ -176,19 +199,14 @@ class DevToolsStreamEndpoint : public TracingController::TraceDataEndpoint {
   base::WeakPtr<TracingHandler> tracing_handler_;
 };
 
-std::string GetProcessHostHex(RenderProcessHost* host) {
-  return base::StringPrintf("0x%" PRIxPTR, reinterpret_cast<uintptr_t>(host));
-}
 
 void SendProcessReadyInBrowserEvent(const base::UnguessableToken& frame_token,
                                     RenderProcessHost* host) {
   auto data = std::make_unique<base::trace_event::TracedValue>();
   data->SetString("frame", frame_token.ToString());
-  data->SetString("processPseudoId", GetProcessHostHex(host));
   data->SetInteger("processId", static_cast<int>(host->GetProcess().Pid()));
-  TRACE_EVENT_INSTANT1(TRACE_DISABLED_BY_DEFAULT("devtools.timeline"),
-                       "ProcessReadyInBrowser", TRACE_EVENT_SCOPE_THREAD,
-                       "data", std::move(data));
+  TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("devtools.timeline"),
+                      "ProcessReadyInBrowser", "data", std::move(data));
 }
 
 void FillFrameData(base::trace_event::TracedValue* data,
@@ -215,7 +233,6 @@ void FillFrameData(base::trace_event::TracedValue* data,
   RenderProcessHost* process_host = frame_host->GetProcess();
   const base::Process& process_handle = process_host->GetProcess();
   if (!process_handle.IsValid()) {
-    data->SetString("processPseudoId", GetProcessHostHex(process_host));
     frame_host->GetProcess()->PostTaskWhenProcessIsReady(
         base::BindOnce(&SendProcessReadyInBrowserEvent,
                        frame_host->devtools_frame_token(), process_host));
@@ -234,23 +251,6 @@ StringToMemoryDumpLevelOfDetail(const std::string& str) {
   if (str == Tracing::MemoryDumpLevelOfDetailEnum::Light)
     return {base::trace_event::MemoryDumpLevelOfDetail::kLight};
   return {};
-}
-
-void AddPidsToProcessFilter(
-    const std::unordered_set<base::ProcessId>& included_process_ids,
-    perfetto::TraceConfig& trace_config) {
-  const std::string kDataSourceName = kTrackEventDataSourceName;
-  for (auto& data_source : *(trace_config.mutable_data_sources())) {
-    auto* source_config = data_source.mutable_config();
-    if (source_config->name() == kDataSourceName) {
-      for (auto& enabled_pid : included_process_ids) {
-        *data_source.add_producer_name_filter() = base::StrCat(
-            {tracing::mojom::kPerfettoProducerNamePrefix,
-             base::NumberToString(static_cast<uint32_t>(enabled_pid))});
-      }
-      break;
-    }
-  }
 }
 
 bool IsChromeDataSource(const std::string& data_source_name) {
@@ -289,8 +289,7 @@ void ConvertToTrackEventConfigIfNeeded(perfetto::TraceConfig& trace_config) {
     }
   }
   for (auto& data_source : *trace_config.mutable_data_sources()) {
-    if (data_source.config().name() ==
-            tracing::mojom::kTraceEventDataSourceName &&
+    if (data_source.config().name() == tracing::kTraceEventDataSourceName &&
         data_source.config().has_chrome_config()) {
       data_source.mutable_config()->set_name(kTrackEventDataSourceName);
       base::trace_event::TraceConfig base_config(
@@ -559,11 +558,13 @@ class TracingHandler::PerfettoTracingSession {
 
 TracingHandler::TracingHandler(DevToolsAgentHostImpl* host,
                                DevToolsIOContext* io_context,
-                               DevToolsSession* root_session)
+                               DevToolsSession* root_session,
+                               bool is_trusted)
     : DevToolsDomainHandler(Tracing::Metainfo::domainName),
       io_context_(io_context),
       host_(host),
       session_for_process_filter_(root_session),
+      is_trusted_(is_trusted),
       did_initiate_recording_(false),
       return_as_stream_(false),
       gzip_compression_(false),
@@ -725,6 +726,8 @@ void TracingHandler::Start(
     std::unique_ptr<Tracing::TraceConfig> config,
     std::optional<Binary> perfetto_config,
     std::optional<std::string> tracing_backend,
+    std::optional<int> screenshot_max_size,
+    std::optional<int> screenshot_max_count,
     std::unique_ptr<StartCallback> callback) {
   bool return_as_stream = transfer_mode.value_or("") ==
                           Tracing::Start::TransferModeEnum::ReturnAsStream;
@@ -761,6 +764,13 @@ void TracingHandler::Start(
     }
 
     ConvertToTrackEventConfigIfNeeded(trace_config);
+#if BUILDFLAG(IS_WIN)
+    // TODO(jessemckenna): replace this with
+    // `tracing::AdaptPerfettoConfigForChrome()`, to make sure all
+    // Chrome-specific config adaptations are applied.
+    tracing::AddEtwStackSamplingDebugIds(trace_config);
+#endif
+
   } else {
     base::trace_event::TraceConfig browser_config =
         base::trace_event::TraceConfig();
@@ -784,6 +794,22 @@ void TracingHandler::Start(
   if (!backend) {
     callback->sendFailure(Response::InvalidParams(
         "Unsupported value for tracing_backend parameter."));
+    return;
+  }
+
+  if (*backend == perfetto::BackendType::kSystemBackend && !is_trusted_) {
+    callback->sendFailure(Response::ServerError(
+        "System backend is not allowed for the current client"));
+    return;
+  }
+
+  gfx::Size resolved_screenshot_max_frame_size;
+  int resolved_screenshot_max_count = 0;
+  Response screenshot_params_response = ResolveScreenshotParams(
+      screenshot_max_size, screenshot_max_count,
+      &resolved_screenshot_max_frame_size, &resolved_screenshot_max_count);
+  if (!screenshot_params_response.IsSuccess()) {
+    callback->sendFailure(std::move(screenshot_params_response));
     return;
   }
 
@@ -825,6 +851,8 @@ void TracingHandler::Start(
       buffer_usage_reporting_interval.value_or(0);
   did_initiate_recording_ = true;
   trace_config_ = std::move(trace_config);
+  screenshot_max_frame_size_ = resolved_screenshot_max_frame_size;
+  screenshot_max_count_ = resolved_screenshot_max_count;
 
   if (session_for_process_filter_) {
     process_set_monitor_ = TracingProcessSetMonitor::Start(
@@ -883,11 +911,15 @@ void TracingHandler::AttemptAdoptStartupSession(
   if (session_for_process_filter_) {
     return;
   }
-  auto& startup_config = tracing::TraceStartupConfig::GetInstance();
-  if (!startup_config.AttemptAdoptBySessionOwner(
+  if (g_did_adopt_startup_session) {
+    return;
+  }
+  const auto& startup_config = tracing::TraceStartupConfig::GetInstance();
+  if (!startup_config.ShouldAdoptBySessionOwner(
           tracing::TraceStartupConfig::SessionOwner::kDevToolsTracingHandler)) {
     return;
   }
+  g_did_adopt_startup_session = true;
 
   return_as_stream_ = return_as_stream;
   gzip_compression_ = gzip_compression;
@@ -939,10 +971,14 @@ void TracingHandler::GetCategories(
                      weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
-Response TracingHandler::GetTrackEventDescriptor(Binary* out_descriptor) {
-  *out_descriptor = Binary::fromVector(
-      TracingController::GetInstance()->GetTrackEventDescriptor());
-  return Response::Success();
+void TracingHandler::GetTrackEventDescriptor(
+    std::unique_ptr<GetTrackEventDescriptorCallback> callback) {
+  TracingController::GetInstance()->GetTrackEventDescriptor(base::BindOnce(
+      [](std::unique_ptr<GetTrackEventDescriptorCallback> callback,
+         std::vector<uint8_t> descriptor) {
+        callback->sendSuccess(Binary::fromVector(std::move(descriptor)));
+      },
+      std::move(callback)));
 }
 
 void TracingHandler::OnRecordingEnabled(std::unique_ptr<StartCallback> callback,
@@ -975,7 +1011,8 @@ void TracingHandler::OnRecordingEnabled(std::unique_ptr<StartCallback> callback,
       video_consumer_->SetFrameSinkId(
           frame_host->GetRenderWidgetHost()->GetFrameSinkId());
     }
-    video_consumer_->SetMinAndMaxFrameSize(kMinFrameSize, kMaxFrameSize);
+    video_consumer_->SetMinAndMaxFrameSize(kMinFrameSize,
+                                           screenshot_max_frame_size_);
     video_consumer_->StartCapture();
   }
 }
@@ -1066,8 +1103,7 @@ void TracingHandler::OnFrameFromVideoConsumer(
 
   ++number_of_screenshots_from_video_consumer_;
   DCHECK(video_consumer_);
-  if (number_of_screenshots_from_video_consumer_ >=
-      DevToolsTraceableScreenshot::kMaximumNumberOfScreenshots) {
+  if (number_of_screenshots_from_video_consumer_ >= screenshot_max_count_) {
     video_consumer_->StopCapture();
   }
 }
@@ -1138,9 +1174,8 @@ void TracingHandler::EmitFrameTree() {
     });
     data->EndArray();
   }
-  TRACE_EVENT_INSTANT1(TRACE_DISABLED_BY_DEFAULT("devtools.timeline"),
-                       "TracingStartedInBrowser", TRACE_EVENT_SCOPE_THREAD,
-                       "data", std::move(data));
+  TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("devtools.timeline"),
+                      "TracingStartedInBrowser", "data", std::move(data));
 }
 
 void TracingHandler::WillInitiatePrerender(FrameTreeNode* frame_tree_node) {
@@ -1150,9 +1185,8 @@ void TracingHandler::WillInitiatePrerender(FrameTreeNode* frame_tree_node) {
   auto data = std::make_unique<base::trace_event::TracedValue>();
   FillFrameData(data.get(), frame_tree_node->current_frame_host(),
                 frame_tree_node->current_url());
-  TRACE_EVENT_INSTANT1(TRACE_DISABLED_BY_DEFAULT("devtools.timeline"),
-                       "FrameCommittedInBrowser", TRACE_EVENT_SCOPE_THREAD,
-                       "data", std::move(data));
+  TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("devtools.timeline"),
+                      "FrameCommittedInBrowser", "data", std::move(data));
 }
 
 void TracingHandler::ReadyToCommitNavigation(
@@ -1162,9 +1196,8 @@ void TracingHandler::ReadyToCommitNavigation(
   auto data = std::make_unique<base::trace_event::TracedValue>();
   RenderFrameHostImpl* frame_host = navigation_request->GetRenderFrameHost();
   FillFrameData(data.get(), frame_host, navigation_request->GetURL());
-  TRACE_EVENT_INSTANT1(TRACE_DISABLED_BY_DEFAULT("devtools.timeline"),
-                       "FrameCommittedInBrowser", TRACE_EVENT_SCOPE_THREAD,
-                       "data", std::move(data));
+  TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("devtools.timeline"),
+                      "FrameCommittedInBrowser", "data", std::move(data));
   if (frame_host->IsOutermostMainFrame()) {
     video_consumer_->SetFrameSinkId(navigation_request->GetRenderFrameHost()
                                         ->GetRenderWidgetHost()
@@ -1185,14 +1218,73 @@ void TracingHandler::FrameDeleted(FrameTreeNodeId frame_tree_node_id) {
   auto data = std::make_unique<base::trace_event::TracedValue>();
   data->SetString(
       "frame", node->current_frame_host()->devtools_frame_token().ToString());
-  TRACE_EVENT_INSTANT1(TRACE_DISABLED_BY_DEFAULT("devtools.timeline"),
-                       "FrameDeletedInBrowser", TRACE_EVENT_SCOPE_THREAD,
-                       "data", std::move(data));
+  TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("devtools.timeline"),
+                      "FrameDeletedInBrowser", "data", std::move(data));
+}
+
+// static
+void TracingHandler::AddPidsToProcessFilter(
+    const std::unordered_set<base::ProcessId>& included_process_ids,
+    perfetto::TraceConfig& trace_config) {
+  for (auto& data_source : *(trace_config.mutable_data_sources())) {
+    auto* source_config = data_source.mutable_config();
+    if (IsChromeDataSource(source_config->name())) {
+      if (data_source.producer_name_regex_filter_size() > 0) {
+        data_source.clear_producer_name_regex_filter();
+        data_source.clear_producer_name_filter();
+      }
+      std::unordered_set<std::string> existing_filters(
+          data_source.producer_name_filter().begin(),
+          data_source.producer_name_filter().end());
+      for (auto& enabled_pid : included_process_ids) {
+        std::string new_filter = base::StrCat(
+            {tracing::kPerfettoProducerNamePrefix,
+             base::NumberToString(static_cast<uint32_t>(enabled_pid))});
+        if (existing_filters.find(new_filter) == existing_filters.end()) {
+          *data_source.add_producer_name_filter() = std::move(new_filter);
+        }
+      }
+    }
+  }
 }
 
 // static
 bool TracingHandler::IsStartupTracingActive() {
   return ::tracing::TraceStartupConfig::GetInstance().IsEnabled();
+}
+
+// static
+Response TracingHandler::ResolveScreenshotParams(
+    std::optional<int> requested_max_size,
+    std::optional<int> requested_max_count,
+    gfx::Size* resolved_max_frame_size,
+    int* resolved_max_count) {
+  const int max_size =
+      requested_max_size.value_or(kDefaultMaxFrameSize.width());
+  const int max_count = requested_max_count.value_or(
+      DevToolsTraceableScreenshot::kDefaultMaximumNumberOfScreenshots);
+
+  if (max_size <= 0 || max_size > kMaxScreenshotDimension) {
+    return Response::InvalidParams(base::StringPrintf(
+        "screenshotMaxSize must be in [1, %d].", kMaxScreenshotDimension));
+  }
+  if (max_count <= 0 || max_count > kMaxScreenshotCount) {
+    return Response::InvalidParams(base::StringPrintf(
+        "screenshotMaxCount must be in [1, %d].", kMaxScreenshotCount));
+  }
+
+  const int64_t budget =
+      static_cast<int64_t>(max_size) * max_size * 4 * max_count;
+  if (budget > kScreenshotMemoryBudgetBytes) {
+    return Response::InvalidParams(base::StringPrintf(
+        "screenshotMaxSize^2 * 4 * screenshotMaxCount (%" PRId64
+        ") exceeds the per-session screenshot memory budget (%" PRId64 ").",
+        budget, kScreenshotMemoryBudgetBytes));
+  }
+
+  *resolved_max_frame_size = gfx::Size(max_size, max_size);
+  *resolved_max_count = max_count;
+  return Response::Success();
 }
 
 // static

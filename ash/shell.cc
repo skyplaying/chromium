@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <iterator>
 #include <memory>
+#include <ranges>
 #include <string>
 #include <utility>
 
@@ -91,7 +92,6 @@
 #include "ash/frame_throttler/frame_throttling_controller.h"
 #include "ash/game_dashboard/game_dashboard_controller.h"
 #include "ash/glanceables/glanceables_controller.h"
-#include "ash/glanceables/post_login_glanceables_metrics_recorder.h"
 #include "ash/host/ash_window_tree_host_init_params.h"
 #include "ash/hud_display/hud_display.h"
 #include "ash/ime/ime_controller_impl.h"
@@ -215,7 +215,6 @@
 #include "ash/wm/event_client_impl.h"
 #include "ash/wm/float/float_controller.h"
 #include "ash/wm/gestures/back_gesture/back_gesture_event_handler.h"
-#include "ash/wm/immersive_context_ash.h"
 #include "ash/wm/lock_state_controller.h"
 #include "ash/wm/mru_window_tracker.h"
 #include "ash/wm/multi_display/multi_display_metrics_controller.h"
@@ -240,14 +239,13 @@
 #include "ash/wm/window_properties.h"
 #include "ash/wm/window_restore/informed_restore_controller.h"
 #include "ash/wm/window_restore/window_restore_controller.h"
+#include "ash/wm/window_state.h"
 #include "ash/wm/window_util.h"
 #include "ash/wm/wm_shadow_controller_delegate.h"
 #include "ash/wm/workspace_controller.h"
-#include "ash/wm_mode/wm_mode_controller.h"
 #include "base/check.h"
 #include "base/check_is_test.h"
 #include "base/command_line.h"
-#include "base/containers/adapters.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_forward.h"
@@ -267,6 +265,7 @@
 #include "chromeos/dbus/power/power_policy_controller.h"
 #include "chromeos/ui/clipboard_history/clipboard_history_types.h"
 #include "chromeos/ui/clipboard_history/clipboard_history_util.h"
+#include "chromeos/ui/frame/immersive/immersive_fullscreen_controller.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/viz/host/host_frame_sink_manager.h"
@@ -578,6 +577,11 @@ void Shell::SetCursorColor(SkColor cursor_color) {
   cursor_manager_->SetCursorColor(cursor_color);
 }
 
+void Shell::SetCursorInverted(bool inverted) {
+  window_tree_host_manager_->cursor_window_controller()->SetCursorInverted(
+      inverted);
+}
+
 void Shell::UpdateCursorCompositingEnabled() {
   SetCursorCompositingEnabled(
       window_tree_host_manager_->cursor_window_controller()
@@ -644,31 +648,50 @@ void Shell::UpdateAfterLoginStatusChange(LoginStatus status) {
 
 void Shell::NotifyFullscreenStateChanged(bool is_fullscreen,
                                          aura::Window* container) {
-  for (auto& observer : shell_observers_) {
-    observer.OnFullscreenStateChanged(is_fullscreen, container);
+  if (shutting_down_) {
+    return;
   }
+  // A fullscreen state change may trigger another fullscreen state change.
+  // TODO(crbug.com/484371187): Investigate if we can remove the reentrancy.
+  shell_observers_.NotifyAllowReentrancyUntriaged(
+      &ShellObserver::OnFullscreenStateChanged, is_fullscreen, container);
 }
 
 void Shell::NotifyPinnedStateChanged(aura::Window* pinned_window) {
+  if (shutting_down_) {
+    return;
+  }
   for (auto& observer : shell_observers_) {
     observer.OnPinnedStateChanged(pinned_window);
   }
 }
 
 void Shell::NotifyUserWorkAreaInsetsChanged(aura::Window* root_window) {
-  for (auto& observer : shell_observers_) {
-    observer.OnUserWorkAreaInsetsChanged(root_window);
+  if (shutting_down_) {
+    return;
   }
+  // Allow reentrancy here. A fullscreen state change in
+  // `NotifyFullscreenStateChanged` could move the accessibility panel which
+  // triggers this call to update shelf components' layout.
+  // See crbug.com/525739020 for details.
+  shell_observers_.NotifyAllowReentrancy(
+      &ShellObserver::OnUserWorkAreaInsetsChanged, root_window);
 }
 
 void Shell::NotifyShelfAlignmentChanged(aura::Window* root_window,
                                         ShelfAlignment old_alignment) {
+  if (shutting_down_) {
+    return;
+  }
   for (auto& observer : shell_observers_) {
     observer.OnShelfAlignmentChanged(root_window, old_alignment);
   }
 }
 
 void Shell::NotifyDisplayForNewWindowsChanged() {
+  if (shutting_down_) {
+    return;
+  }
   for (auto& observer : shell_observers_) {
     observer.OnDisplayForNewWindowsChanged();
   }
@@ -694,11 +717,6 @@ void Shell::RemoveAccessibilityEventHandler(ui::EventHandler* handler) {
 bool Shell::AddStatusTrayIcon(const TrayIconConfiguration& configuration,
                               int64_t display_id,
                               base::RepeatingClosure callback) {
-  if (!base::FeatureList::IsEnabled(
-          chromeos::features::kSupportCustomIconsInStatusArea)) {
-    return false;
-  }
-
   aura::Window* root_window = GetRootWindowForDisplayId(display_id);
   auto* status_area = StatusAreaWidget::ForWindow(root_window);
   return status_area->AddTrayIcon(configuration, std::move(callback));
@@ -706,11 +724,6 @@ bool Shell::AddStatusTrayIcon(const TrayIconConfiguration& configuration,
 
 bool Shell::UpdateStatusTrayIcon(const TrayIconConfiguration& configuration,
                                  int64_t display_id) {
-  if (!base::FeatureList::IsEnabled(
-          chromeos::features::kSupportCustomIconsInStatusArea)) {
-    return false;
-  }
-
   aura::Window* root_window = GetRootWindowForDisplayId(display_id);
   auto* status_area = StatusAreaWidget::ForWindow(root_window);
   return status_area->UpdateTrayIcon(configuration);
@@ -718,11 +731,6 @@ bool Shell::UpdateStatusTrayIcon(const TrayIconConfiguration& configuration,
 
 bool Shell::RemoveStatusTrayIcon(const TrayIconConfiguration& configuration,
                                  int64_t display_id) {
-  if (!base::FeatureList::IsEnabled(
-          chromeos::features::kSupportCustomIconsInStatusArea)) {
-    return false;
-  }
-
   aura::Window* root_window = GetRootWindowForDisplayId(display_id);
   auto* status_area = StatusAreaWidget::ForWindow(root_window);
   return status_area->RemoveTrayIcon(configuration);
@@ -744,7 +752,6 @@ WebAuthNDialogController* Shell::webauthn_dialog_controller() {
 Shell::Shell(std::unique_ptr<ShellDelegate> shell_delegate)
     : focus_cycler_(std::make_unique<FocusCycler>()),
       ime_controller_(std::make_unique<ImeControllerImpl>()),
-      immersive_context_(std::make_unique<ImmersiveContextAsh>()),
       webauthn_dialog_controller_(
           std::make_unique<WebAuthNDialogControllerImpl>()),
       in_session_auth_dialog_controller_(
@@ -785,6 +792,8 @@ Shell::Shell(std::unique_ptr<ShellDelegate> shell_delegate)
 
 Shell::~Shell() {
   TRACE_EVENT0("shutdown", "ash::Shell::Destructor");
+  shutting_down_ = true;
+
 #if DCHECK_IS_ON()
   // All WindowEventDispatchers should be shutdown before the Shell is
   // destroyed.
@@ -792,6 +801,7 @@ Shell::~Shell() {
     DCHECK(rwc->GetHost()->dispatcher()->in_shutdown());
   }
 #endif
+
   booting_animation_controller_.reset();
   unlock_throughput_recorder_.reset();
   login_unlock_throughput_recorder_.reset();
@@ -852,9 +862,7 @@ Shell::~Shell() {
   }
   RemovePreTargetHandler(system_gesture_filter_.get());
   RemoveAccessibilityEventHandler(mouse_cursor_filter_.get());
-  if (features::IsPeripheralCustomizationEnabled()) {
-    RemovePreTargetHandler(shortcut_input_handler_.get());
-  }
+  RemovePreTargetHandler(shortcut_input_handler_.get());
   RemovePreTargetHandler(modality_filter_.get());
   if (::features::IsAccessibilityMouseKeysEnabled()) {
     RemovePreTargetHandler(mouse_keys_controller_.get());
@@ -874,8 +882,6 @@ Shell::~Shell() {
   // Close and destroy all application windows here, so that the window manager
   // related objects, which app windows relies on, can be sefely deleted.
   CloseAllAppWindows();
-
-  wm_mode_controller_.reset();
 
   // `shortcut_input_handler_` must be cleaned up before
   // `event_rewriter_controller_`.
@@ -1009,9 +1015,6 @@ Shell::~Shell() {
   // need to access those windows and it will be a UAF.
   // https://crbug.com/1350711.
   capture_mode_controller_.reset();
-
-  // Relies on `overview_controller`.
-  post_login_glanceables_metrics_reporter_.reset();
 
   // Has to happen before `~OverviewController` since it's an observer.
   informed_restore_controller_.reset();
@@ -1275,6 +1278,7 @@ Shell::~Shell() {
     observer.OnShellDestroyed();
   }
 
+  native_cursor_manager_ = nullptr;
   DCHECK(instance_ == this);
   instance_ = nullptr;
 }
@@ -1710,10 +1714,8 @@ void Shell::Init(
   modality_filter_ = std::make_unique<SystemModalContainerEventFilter>(this);
   AddPreTargetHandler(modality_filter_.get());
 
-  if (features::IsPeripheralCustomizationEnabled()) {
-    shortcut_input_handler_ = std::make_unique<ShortcutInputHandler>();
-    AddPreTargetHandler(shortcut_input_handler_.get());
-  }
+  shortcut_input_handler_ = std::make_unique<ShortcutInputHandler>();
+  AddPreTargetHandler(shortcut_input_handler_.get());
 
   event_client_ = std::make_unique<EventClientImpl>();
 
@@ -1775,13 +1777,6 @@ void Shell::Init(
       std::make_unique<DetachableBaseNotificationController>(
           detachable_base_handler_.get());
 
-  // WmModeController should be created before initializing the window tree
-  // hosts, since the latter will initialize the shelf on each display, which
-  // hosts the WM mode tray button.
-  if (features::IsWmModeEnabled()) {
-    wm_mode_controller_ = std::make_unique<WmModeController>();
-  }
-
   hotspot_icon_animation_ = std::make_unique<HotspotIconAnimation>();
   hotspot_info_cache_ = std::make_unique<HotspotInfoCache>();
 
@@ -1826,7 +1821,7 @@ void Shell::Init(
   screen_orientation_controller_ =
       std::make_unique<ScreenOrientationController>();
 
-  cros_display_config_ = std::make_unique<CrosDisplayConfig>();
+  cros_display_config_ = std::make_unique<CrosDisplayConfigImpl>();
 
   screen_layout_observer_ = std::make_unique<ScreenLayoutObserver>();
   sms_observer_ = std::make_unique<SmsObserver>();
@@ -1851,8 +1846,6 @@ void Shell::Init(
   if (features::AreAnyGlanceablesTimeManagementViewsEnabled()) {
     glanceables_controller_ = std::make_unique<GlanceablesController>();
   }
-  post_login_glanceables_metrics_reporter_ =
-      std::make_unique<PostLoginGlanceablesMetricsRecorder>();
 
   projector_controller_ = std::make_unique<ProjectorControllerImpl>();
   annotator_controller_ = std::make_unique<AnnotatorController>();
@@ -2022,7 +2015,7 @@ void Shell::CloseAllAppWindows() {
     tracker.Add(window.get());
   }
   // Delete from the bottom of mru list so that it won't affect activation.
-  for (auto window : base::Reversed(list)) {
+  for (auto window : std::views::reverse(list)) {
     // Make sure that the window in the `list` is still alive.
     if (tracker.Contains(window)) {
       delete window;

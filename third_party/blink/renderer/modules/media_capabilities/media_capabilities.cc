@@ -11,6 +11,7 @@
 
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/task/single_thread_task_runner.h"
@@ -238,12 +239,13 @@ bool IsValidMimeType(const String& content_type,
   if (!parsed_content_type.IsValid())
     return false;
 
+  String mime_type = parsed_content_type.MimeType();
   // Valid ParsedContentType implies we have a mime type.
-  DCHECK(parsed_content_type.MimeType());
-  if (!parsed_content_type.MimeType().StartsWith(prefix) &&
-      (is_webrtc ||
-       !parsed_content_type.MimeType().StartsWith(kApplicationMimeTypePrefix)))
+  DCHECK(mime_type);
+  if (!mime_type.starts_with(prefix) &&
+      (is_webrtc || !mime_type.starts_with(kApplicationMimeTypePrefix))) {
     return false;
+  }
 
   // No requirement on parameters for RTP MIME types.
   if (is_webrtc)
@@ -257,7 +259,7 @@ bool IsValidMimeType(const String& content_type,
   if (parameters.ParameterCount() == 0)
     return true;
 
-  return EqualIgnoringASCIICase(parameters.begin()->name, kCodecsMimeTypeParam);
+  return EqualIgnoringAsciiCase(parameters.begin()->name, kCodecsMimeTypeParam);
 }
 
 bool IsValidMediaConfiguration(const MediaConfiguration* configuration) {
@@ -386,7 +388,7 @@ WebAudioConfiguration ToWebAudioConfiguration(
   DCHECK(parsed_content_type.IsValid());
   DCHECK(!parsed_content_type.GetParameters().HasDuplicatedNames());
 
-  web_configuration.mime_type = parsed_content_type.MimeType().LowerASCII();
+  web_configuration.mime_type = parsed_content_type.MimeType().ToAsciiLower();
   web_configuration.codec =
       parsed_content_type.ParameterValueForName(kCodecsMimeTypeParam);
 
@@ -413,7 +415,7 @@ WebVideoConfiguration ToWebVideoConfiguration(
   ParsedContentType parsed_content_type(configuration->contentType());
   DCHECK(parsed_content_type.IsValid());
   DCHECK(!parsed_content_type.GetParameters().HasDuplicatedNames());
-  web_configuration.mime_type = parsed_content_type.MimeType().LowerASCII();
+  web_configuration.mime_type = parsed_content_type.MimeType().ToAsciiLower();
   web_configuration.codec =
       parsed_content_type.ParameterValueForName(kCodecsMimeTypeParam);
 
@@ -543,17 +545,19 @@ void ParseDynamicRangeConfigurations(
     *hdr_metadata = gfx::HdrMetadataType::kNone;
   }
 
+  auto primaries = color_space->primaries();
+  auto transfer = color_space->transfer();
+
   if (video_config->hasColorGamut()) {
     switch (video_config->colorGamut().AsEnum()) {
       case V8ColorGamut::Enum::kSRGB:
-        color_space->primaries = media::VideoColorSpace::PrimaryID::BT709;
+        primaries = media::VideoColorSpace::PrimaryID::BT709;
         break;
       case V8ColorGamut::Enum::kP3:
-        color_space->primaries =
-            media::VideoColorSpace::PrimaryID::SMPTEST431_2;
+        primaries = media::VideoColorSpace::PrimaryID::SMPTEST431_2;
         break;
       case V8ColorGamut::Enum::kRec2020:
-        color_space->primaries = media::VideoColorSpace::PrimaryID::BT2020;
+        primaries = media::VideoColorSpace::PrimaryID::BT2020;
         break;
     }
   }
@@ -561,17 +565,19 @@ void ParseDynamicRangeConfigurations(
   if (video_config->hasTransferFunction()) {
     switch (video_config->transferFunction().AsEnum()) {
       case V8TransferFunction::Enum::kSRGB:
-        color_space->transfer = media::VideoColorSpace::TransferID::BT709;
+        transfer = media::VideoColorSpace::TransferID::BT709;
         break;
       case V8TransferFunction::Enum::kPq:
-        color_space->transfer = media::VideoColorSpace::TransferID::SMPTEST2084;
+        transfer = media::VideoColorSpace::TransferID::SMPTEST2084;
         break;
       case V8TransferFunction::Enum::kHlg:
-        color_space->transfer =
-            media::VideoColorSpace::TransferID::ARIB_STD_B67;
+        transfer = media::VideoColorSpace::TransferID::ARIB_STD_B67;
         break;
     }
   }
+
+  *color_space = media::VideoColorSpace(
+      primaries, transfer, color_space->matrix(), color_space->range());
 }
 
 // Returns whether the audio codec associated with the audio configuration is
@@ -675,8 +681,8 @@ bool IsVideoConfigurationSupported(const String& mime_type,
   if (video_color_space.IsSpecified() &&
       codec_string_has_non_default_color_space) {
     // Per spec, report unsupported if color space information is mismatched.
-    if (video_color_space.transfer != result->color_space.transfer ||
-        video_color_space.primaries != result->color_space.primaries) {
+    if (video_color_space.transfer() != result->color_space.transfer() ||
+        video_color_space.primaries() != result->color_space.primaries()) {
       DLOG(ERROR) << "Mismatched color spaces between config and codec string.";
       return false;
     }
@@ -722,17 +728,34 @@ bool ParseContentType(const String& content_type,
     return false;
   }
 
-  *mime_type = parsed_content_type.MimeType().LowerASCII();
+  *mime_type = parsed_content_type.MimeType().ToAsciiLower();
   *codec = parsed_content_type.ParameterValueForName(kCodecsMimeTypeParam);
   return true;
 }
 
 #if BUILDFLAG(ENABLE_PLATFORM_ENCRYPTED_DOLBY_VISION)
 bool IsDolbyVisionVideoCodec(const String& video_codec_str) {
-  return video_codec_str.StartsWith("dvh1.", kTextCaseSensitive) ||
-         video_codec_str.StartsWith("dvhe.", kTextCaseSensitive);
+  return video_codec_str.starts_with("dvh1.") ||
+         video_codec_str.starts_with("dvhe.");
 }
 #endif  // BUILDFLAG(ENABLE_PLATFORM_ENCRYPTED_DOLBY_VISION)
+
+void RecordTimedOut(MediaCapabilities::QueryType query_type, bool timed_out) {
+  switch (query_type) {
+    case MediaCapabilities::QueryType::kDecoding:
+      base::UmaHistogramBoolean("Media.Capabilities.TimedOut.Decoding",
+                                timed_out);
+      break;
+    case MediaCapabilities::QueryType::kWebrtcDecoding:
+      base::UmaHistogramBoolean("Media.Capabilities.TimedOut.WebrtcDecoding",
+                                timed_out);
+      break;
+    case MediaCapabilities::QueryType::kWebrtcEncoding:
+      base::UmaHistogramBoolean("Media.Capabilities.TimedOut.WebrtcEncoding",
+                                timed_out);
+      break;
+  }
+}
 
 }  // anonymous namespace
 
@@ -772,10 +795,12 @@ void MediaCapabilities::Trace(blink::Visitor* visitor) const {
 MediaCapabilities::PendingCallbackState::PendingCallbackState(
     ScriptPromiseResolverBase* resolver,
     MediaKeySystemAccess* access,
-    const base::TimeTicks& request_time)
+    const base::TimeTicks& request_time,
+    QueryType query_type)
     : resolver(resolver),
       key_system_access(access),
-      request_time(request_time) {}
+      request_time(request_time),
+      query_type(query_type) {}
 
 void MediaCapabilities::PendingCallbackState::Trace(
     blink::Visitor* visitor) const {
@@ -820,11 +845,8 @@ ScriptPromise<MediaCapabilitiesDecodingInfo> MediaCapabilities::decodingInfo(
     if (auto* handler = webrtc_decoding_info_handler_for_test_
                             ? webrtc_decoding_info_handler_for_test_.get()
                             : WebrtcDecodingInfoHandler::Instance()) {
-      const int callback_id = CreateCallbackId();
-      pending_cb_map_.insert(
-          callback_id,
-          MakeGarbageCollected<MediaCapabilities::PendingCallbackState>(
-              resolver, nullptr, request_time));
+      const int callback_id = InsertCallbackAndScheduleTimeout(
+          resolver, nullptr, request_time, QueryType::kWebrtcDecoding);
 
       std::optional<webrtc::SdpAudioFormat> sdp_audio_format =
           config->hasAudio()
@@ -837,6 +859,7 @@ ScriptPromise<MediaCapabilitiesDecodingInfo> MediaCapabilities::decodingInfo(
           media::VIDEO_CODEC_PROFILE_UNKNOWN;
       int video_pixels = 0;
       int frames_per_second = 0;
+      std::optional<gfx::Size> video_resolution;
       if (config->hasVideo()) {
         sdp_video_format =
             std::make_optional(ToSdpVideoFormat(config->video()));
@@ -847,8 +870,14 @@ ScriptPromise<MediaCapabilitiesDecodingInfo> MediaCapabilities::decodingInfo(
         // Additional information needed for lookup in WebrtcVideoPerfHistory.
         codec_profile =
             WebRtcVideoFormatToMediaVideoCodecProfile(*sdp_video_format);
-        video_pixels = config->video()->width() * config->video()->height();
         frames_per_second = base::ClampRound(config->video()->framerate());
+        video_resolution =
+            gfx::Size(config->video()->width(), config->video()->height());
+        video_pixels = video_resolution->GetCheckedArea().ValueOrDefault(0);
+
+        pending_cb_map_.at(callback_id)->is_builtin_video_codec =
+            handler->IsSoftwareDecoderSupported(
+                *sdp_video_format, spatial_scalability, video_resolution);
       }
       media::mojom::blink::WebrtcPredictionFeaturesPtr features =
           media::mojom::blink::WebrtcPredictionFeatures::New(
@@ -857,9 +886,10 @@ ScriptPromise<MediaCapabilitiesDecodingInfo> MediaCapabilities::decodingInfo(
 
       handler->DecodingInfo(
           sdp_audio_format, sdp_video_format, spatial_scalability,
+          video_resolution,
           BindOnce(&MediaCapabilities::OnWebrtcSupportInfo,
                    WrapPersistent(this), callback_id, std::move(features),
-                   frames_per_second, OperationType::kDecoding));
+                   frames_per_second, QueryType::kWebrtcDecoding));
 
       return promise;
     }
@@ -933,9 +963,11 @@ ScriptPromise<MediaCapabilitiesDecodingInfo> MediaCapabilities::decodingInfo(
   // Fill in values for range, matrix since `VideoConfiguration` doesn't have
   // such concepts; these aren't used, but ensure VideoColorSpace.IsSpecified()
   // works as expected downstream.
-  media::VideoColorSpace video_color_space;
-  video_color_space.range = gfx::ColorSpace::RangeID::DERIVED;
-  video_color_space.matrix = media::VideoColorSpace::MatrixID::BT709;
+  media::VideoColorSpace video_color_space(
+      media::VideoColorSpace::PrimaryID::UNSPECIFIED,
+      media::VideoColorSpace::TransferID::UNSPECIFIED,
+      media::VideoColorSpace::MatrixID::BT709,
+      gfx::ColorSpace::RangeID::DERIVED);
 
   gfx::HdrMetadataType hdr_metadata_type = gfx::HdrMetadataType::kNone;
   if (config->hasVideo()) {
@@ -1050,11 +1082,8 @@ ScriptPromise<MediaCapabilitiesInfo> MediaCapabilities::encodingInfo(
     if (auto* handler = webrtc_encoding_info_handler_for_test_
                             ? webrtc_encoding_info_handler_for_test_.get()
                             : WebrtcEncodingInfoHandler::Instance()) {
-      const int callback_id = CreateCallbackId();
-      pending_cb_map_.insert(
-          callback_id,
-          MakeGarbageCollected<MediaCapabilities::PendingCallbackState>(
-              resolver, nullptr, request_time));
+      const int callback_id = InsertCallbackAndScheduleTimeout(
+          resolver, nullptr, request_time, QueryType::kWebrtcEncoding);
 
       std::optional<webrtc::SdpAudioFormat> sdp_audio_format =
           config->hasAudio()
@@ -1067,6 +1096,7 @@ ScriptPromise<MediaCapabilitiesInfo> MediaCapabilities::encodingInfo(
           media::VIDEO_CODEC_PROFILE_UNKNOWN;
       int video_pixels = 0;
       int frames_per_second = 0;
+      std::optional<gfx::Size> video_resolution;
       if (config->hasVideo()) {
         sdp_video_format =
             std::make_optional(ToSdpVideoFormat(config->video()));
@@ -1079,6 +1109,12 @@ ScriptPromise<MediaCapabilitiesInfo> MediaCapabilities::encodingInfo(
             WebRtcVideoFormatToMediaVideoCodecProfile(*sdp_video_format);
         video_pixels = config->video()->width() * config->video()->height();
         frames_per_second = base::ClampRound(config->video()->framerate());
+        video_resolution =
+            gfx::Size(config->video()->width(), config->video()->height());
+
+        pending_cb_map_.at(callback_id)->is_builtin_video_codec =
+            handler->IsSoftwareEncoderSupported(
+                *sdp_video_format, scalability_mode, video_resolution);
       }
       media::mojom::blink::WebrtcPredictionFeaturesPtr features =
           media::mojom::blink::WebrtcPredictionFeatures::New(
@@ -1087,9 +1123,10 @@ ScriptPromise<MediaCapabilitiesInfo> MediaCapabilities::encodingInfo(
 
       handler->EncodingInfo(
           sdp_audio_format, sdp_video_format, scalability_mode,
+          video_resolution,
           BindOnce(&MediaCapabilities::OnWebrtcSupportInfo,
                    WrapPersistent(this), callback_id, std::move(features),
-                   frames_per_second, OperationType::kEncoding));
+                   frames_per_second, QueryType::kWebrtcEncoding));
 
       return promise;
     }
@@ -1139,6 +1176,9 @@ bool MediaCapabilities::EnsurePerfHistoryService(
 
   execution_context->GetBrowserInterfaceBroker().GetInterface(
       decode_history_service_.BindNewPipeAndPassReceiver(task_runner));
+  decode_history_service_.set_disconnect_handler(
+      BindOnce(&MediaCapabilities::OnServiceDisconnected,
+               WrapWeakPersistent(this), /*is_webrtc=*/false));
   return true;
 }
 
@@ -1155,6 +1195,9 @@ bool MediaCapabilities::EnsureWebrtcPerfHistoryService(
 
   execution_context->GetBrowserInterfaceBroker().GetInterface(
       webrtc_history_service_.BindNewPipeAndPassReceiver(task_runner));
+  webrtc_history_service_.set_disconnect_handler(
+      BindOnce(&MediaCapabilities::OnServiceDisconnected,
+               WrapWeakPersistent(this), /*is_webrtc=*/true));
   return true;
 }
 
@@ -1257,9 +1300,15 @@ ScriptPromise<MediaCapabilitiesDecodingInfo> MediaCapabilities::GetEmeSupport(
     audio_capability->setContentType(configuration->audio()->contentType());
     // If config.keySystemConfiguration.audio is present, set the robustness
     // attribute to config.keySystemConfiguration.audio.robustness.
-    if (key_system_config->hasAudio())
+    if (key_system_config->hasAudio()) {
       audio_capability->setRobustness(key_system_config->audio()->robustness());
-
+      if (RuntimeEnabledFeatures::
+              KeySystemTrackConfigurationEncryptionSchemeEnabled() &&
+          key_system_config->audio()->hasEncryptionScheme()) {
+        audio_capability->setEncryptionScheme(
+            key_system_config->audio()->encryptionScheme());
+      }
+    }
     eme_config->setAudioCapabilities(
         HeapVector<Member<MediaKeySystemMediaCapability>>(1, audio_capability));
   }
@@ -1274,9 +1323,15 @@ ScriptPromise<MediaCapabilitiesDecodingInfo> MediaCapabilities::GetEmeSupport(
     video_capability->setContentType(configuration->video()->contentType());
     // If config.keySystemConfiguration.video is present, set the robustness
     // attribute to config.keySystemConfiguration.video.robustness.
-    if (key_system_config->hasVideo())
+    if (key_system_config->hasVideo()) {
       video_capability->setRobustness(key_system_config->video()->robustness());
-
+      if (RuntimeEnabledFeatures::
+              KeySystemTrackConfigurationEncryptionSchemeEnabled() &&
+          key_system_config->video()->hasEncryptionScheme()) {
+        video_capability->setEncryptionScheme(
+            key_system_config->video()->encryptionScheme());
+      }
+    }
     eme_config->setVideoCapabilities(
         HeapVector<Member<MediaKeySystemMediaCapability>>(1, video_capability));
   }
@@ -1343,11 +1398,8 @@ void MediaCapabilities::GetPerfInfo(
     return;
   }
 
-  const int callback_id = CreateCallbackId();
-  pending_cb_map_.insert(
-      callback_id,
-      MakeGarbageCollected<MediaCapabilities::PendingCallbackState>(
-          resolver, access, request_time));
+  const int callback_id = InsertCallbackAndScheduleTimeout(
+      resolver, access, request_time, QueryType::kDecoding);
 
   media::mojom::blink::PredictionFeaturesPtr features =
       media::mojom::blink::PredictionFeatures::New(
@@ -1372,12 +1424,14 @@ void MediaCapabilities::GetGpuFactoriesSupport(
     media::VideoColorSpace video_color_space,
     const MediaDecodingConfiguration* decoding_config) {
   DCHECK(decoding_config->hasVideo());
-  DCHECK(pending_cb_map_.Contains(callback_id));
-
-  PendingCallbackState* pending_cb = pending_cb_map_.at(callback_id);
-  if (!pending_cb) {
-    // TODO(crbug.com/1125956): Determine how this can happen and prevent it.
+  if (!pending_cb_map_.Contains(callback_id)) {
+    // The query already completed or timed out via OnCallbackTimeout().
     return;
+  }
+  PendingCallbackState* pending_cb = pending_cb_map_.at(callback_id);
+  if (!pending_cb->is_builtin_video_codec.has_value()) {
+    pending_cb->is_builtin_video_codec =
+        media::IsDecoderBuiltInVideoCodec(video_codec);
   }
 
   ExecutionContext* execution_context =
@@ -1437,10 +1491,12 @@ void MediaCapabilities::GetGpuFactoriesSupport(
 }
 
 void MediaCapabilities::ResolveCallbackIfReady(int callback_id) {
-  DCHECK(pending_cb_map_.Contains(callback_id));
+  if (!pending_cb_map_.Contains(callback_id)) {
+    return;
+  }
   PendingCallbackState* pending_cb = pending_cb_map_.at(callback_id);
   ExecutionContext* execution_context =
-      pending_cb_map_.at(callback_id)->resolver->GetExecutionContext();
+      pending_cb->resolver->GetExecutionContext();
 
   if (!pending_cb->db_is_power_efficient.has_value())
     return;
@@ -1498,6 +1554,8 @@ void MediaCapabilities::ResolveCallbackIfReady(int callback_id) {
                         process_time);
   }
 
+  RecordTimedOut(pending_cb->query_type, false);
+
   pending_cb->resolver->DowncastTo<MediaCapabilitiesDecodingInfo>()->Resolve(
       std::move(info));
   pending_cb_map_.erase(callback_id);
@@ -1506,7 +1564,9 @@ void MediaCapabilities::ResolveCallbackIfReady(int callback_id) {
 void MediaCapabilities::OnPerfHistoryInfo(int callback_id,
                                           bool is_smooth,
                                           bool is_power_efficient) {
-  DCHECK(pending_cb_map_.Contains(callback_id));
+  if (!pending_cb_map_.Contains(callback_id)) {
+    return;
+  }
   PendingCallbackState* pending_cb = pending_cb_map_.at(callback_id);
 
   pending_cb->db_is_smooth = is_smooth;
@@ -1520,13 +1580,12 @@ void MediaCapabilities::OnGpuFactoriesSupport(int callback_id,
                                               media::VideoCodec video_codec) {
   DVLOG(2) << __func__ << " video_codec:" << video_codec
            << ", is_supported:" << is_supported;
-  DCHECK(pending_cb_map_.Contains(callback_id));
+  if (!pending_cb_map_.Contains(callback_id)) {
+    return;
+  }
   PendingCallbackState* pending_cb = pending_cb_map_.at(callback_id);
 
   pending_cb->is_gpu_factories_supported = is_supported;
-  pending_cb->is_builtin_video_codec =
-      media::IsDecoderBuiltInVideoCodec(video_codec);
-
   ResolveCallbackIfReady(callback_id);
 }
 
@@ -1534,10 +1593,12 @@ void MediaCapabilities::OnWebrtcSupportInfo(
     int callback_id,
     media::mojom::blink::WebrtcPredictionFeaturesPtr features,
     float frames_per_second,
-    OperationType type,
+    QueryType type,
     bool is_supported,
     bool is_power_efficient) {
-  DCHECK(pending_cb_map_.Contains(callback_id));
+  if (!pending_cb_map_.Contains(callback_id)) {
+    return;
+  }
   PendingCallbackState* pending_cb = pending_cb_map_.at(callback_id);
 
   // Special treatment if the config is not supported, or if only audio was
@@ -1552,18 +1613,9 @@ void MediaCapabilities::OnWebrtcSupportInfo(
        WebrtcDecodeForceSmoothIfPowerEfficient()) ||
       (is_power_efficient && !features->is_decode_stats &&
        WebrtcEncodeForceSmoothIfPowerEfficient())) {
-    MediaCapabilitiesDecodingInfo* info =
-        MediaCapabilitiesDecodingInfo::Create();
-    info->setSupported(is_supported);
-    info->setSmooth(is_supported);
-    info->setPowerEfficient(is_power_efficient);
-    if (type == OperationType::kEncoding) {
-      pending_cb->resolver->DowncastTo<MediaCapabilitiesInfo>()->Resolve(info);
-    } else {
-      pending_cb->resolver->DowncastTo<MediaCapabilitiesDecodingInfo>()
-          ->Resolve(info);
-    }
-    pending_cb_map_.erase(callback_id);
+    RecordTimedOut(type, false);
+    ResolveWebrtcCallback(callback_id, is_supported, is_power_efficient,
+                          is_supported);
     return;
   }
 
@@ -1579,40 +1631,151 @@ void MediaCapabilities::OnWebrtcSupportInfo(
 }
 
 void MediaCapabilities::OnWebrtcPerfHistoryInfo(int callback_id,
-                                                OperationType type,
+                                                QueryType type,
                                                 bool is_smooth) {
-  DCHECK(pending_cb_map_.Contains(callback_id));
+  if (!pending_cb_map_.Contains(callback_id)) {
+    return;
+  }
   PendingCallbackState* pending_cb = pending_cb_map_.at(callback_id);
 
   // supported and gpu factories supported are set simultaneously.
   DCHECK(pending_cb->is_supported.has_value());
   DCHECK(pending_cb->is_gpu_factories_supported.has_value());
 
-  if (!pending_cb->resolver->GetExecutionContext() ||
-      pending_cb->resolver->GetExecutionContext()->IsContextDestroyed()) {
-    // We're too late! Now that all the callbacks have provided state, its safe
-    // to erase the entry in the map.
-    pending_cb_map_.erase(callback_id);
-    return;
-  }
-
-  auto* info = MediaCapabilitiesDecodingInfo::Create();
-  info->setSupported(*pending_cb->is_supported);
-  info->setPowerEfficient(*pending_cb->is_gpu_factories_supported);
-  info->setSmooth(is_smooth);
-
   const base::TimeDelta process_time =
       base::TimeTicks::Now() - pending_cb->request_time;
   UMA_HISTOGRAM_TIMES("Media.Capabilities.DecodingInfo.Time.Webrtc",
                       process_time);
 
-  if (type == OperationType::kEncoding) {
+  RecordTimedOut(type, false);
+  ResolveWebrtcCallback(callback_id, *pending_cb->is_supported,
+                        *pending_cb->is_gpu_factories_supported, is_smooth);
+}
+
+void MediaCapabilities::ResolveWebrtcCallback(int callback_id,
+                                              bool is_supported,
+                                              bool is_power_efficient,
+                                              bool is_smooth) {
+  if (!pending_cb_map_.Contains(callback_id)) {
+    return;
+  }
+  PendingCallbackState* pending_cb = pending_cb_map_.at(callback_id);
+
+  if (!pending_cb->resolver->GetExecutionContext() ||
+      pending_cb->resolver->GetExecutionContext()->IsContextDestroyed()) {
+    pending_cb_map_.erase(callback_id);
+    return;
+  }
+
+  if (pending_cb->query_type == QueryType::kWebrtcEncoding) {
+    auto* info = MediaCapabilitiesInfo::Create();
+    info->setSupported(is_supported);
+    info->setPowerEfficient(is_power_efficient);
+    info->setSmooth(is_smooth);
     pending_cb->resolver->DowncastTo<MediaCapabilitiesInfo>()->Resolve(info);
   } else {
+    CHECK_EQ(pending_cb->query_type, QueryType::kWebrtcDecoding);
+    auto* info = MediaCapabilitiesDecodingInfo::Create();
+    info->setSupported(is_supported);
+    info->setPowerEfficient(is_power_efficient);
+    info->setSmooth(is_smooth);
     pending_cb->resolver->DowncastTo<MediaCapabilitiesDecodingInfo>()->Resolve(
         info);
   }
   pending_cb_map_.erase(callback_id);
+}
+
+void MediaCapabilities::OnCallbackTimeout(int callback_id) {
+  if (!pending_cb_map_.Contains(callback_id)) {
+    return;
+  }
+
+  PendingCallbackState* pending_cb = pending_cb_map_.at(callback_id);
+  ExecutionContext* execution_context =
+      pending_cb->resolver->GetExecutionContext();
+
+  if (!execution_context || execution_context->IsContextDestroyed()) {
+    pending_cb_map_.erase(callback_id);
+    return;
+  }
+
+  RecordTimedOut(pending_cb->query_type, true);
+
+  DVLOG(1) << __func__
+           << " MediaCapabilities query timed out (id: " << callback_id
+           << "). Resolving with fallback capabilities.";
+
+  if (pending_cb->IsWebrtc()) {
+    const bool supported = pending_cb->is_supported.value_or(
+        pending_cb->is_builtin_video_codec.value_or(false));
+    ResolveWebrtcCallback(
+        callback_id, supported,
+        pending_cb->is_gpu_factories_supported.value_or(false),
+        /*is_smooth=*/false);
+    return;
+  }
+
+  CHECK_EQ(pending_cb->query_type, QueryType::kDecoding);
+  auto* info = MediaCapabilitiesDecodingInfo::Create();
+  info->setKeySystemAccess(pending_cb->key_system_access);
+
+  // If GPU factory support is unknown/hung, determine supported based on
+  // whether the codec is builtin or if we already received a DB response.
+  bool supported = true;
+  if (UseGpuFactoriesForPowerEfficient(execution_context,
+                                       pending_cb->key_system_access)) {
+    const bool is_power_efficient =
+        pending_cb->is_gpu_factories_supported.value_or(false);
+    supported = is_power_efficient ||
+                pending_cb->is_builtin_video_codec.value_or(false);
+    info->setPowerEfficient(is_power_efficient);
+  } else {
+    info->setPowerEfficient(pending_cb->db_is_power_efficient.value_or(false));
+  }
+
+  info->setSupported(supported);
+  info->setSmooth(pending_cb->db_is_smooth.value_or(false));
+
+  pending_cb->resolver->DowncastTo<MediaCapabilitiesDecodingInfo>()->Resolve(
+      info);
+
+  pending_cb_map_.erase(callback_id);
+}
+
+void MediaCapabilities::OnServiceDisconnected(bool is_webrtc) {
+  // Collect all callback IDs waiting on the disconnected perf history DB
+  // service and time them out immediately.
+  Vector<int> callback_ids;
+  for (const auto& pair : pending_cb_map_) {
+    if (pair.value->IsWebrtc() == is_webrtc) {
+      callback_ids.push_back(pair.key);
+    }
+  }
+  for (int id : callback_ids) {
+    OnCallbackTimeout(id);
+  }
+}
+
+int MediaCapabilities::InsertCallbackAndScheduleTimeout(
+    ScriptPromiseResolverBase* resolver,
+    MediaKeySystemAccess* access,
+    const base::TimeTicks& request_time,
+    QueryType query_type) {
+  const int callback_id = CreateCallbackId();
+  pending_cb_map_.insert(
+      callback_id,
+      MakeGarbageCollected<MediaCapabilities::PendingCallbackState>(
+          resolver, access, request_time, query_type));
+
+  if (ExecutionContext* execution_context = resolver->GetExecutionContext()) {
+    execution_context->GetTaskRunner(TaskType::kMediaElementEvent)
+        ->PostDelayedTask(FROM_HERE,
+                          BindOnce(&MediaCapabilities::OnCallbackTimeout,
+                                   WrapWeakPersistent(this), callback_id),
+                          kMediaCapabilitiesQueryTimeout);
+  }
+
+  return callback_id;
 }
 
 int MediaCapabilities::CreateCallbackId() {

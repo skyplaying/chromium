@@ -187,9 +187,14 @@ source_set("gles2_interface") {
     "gles2_interface_stub_impl_autogen.h",
   ]
   public_configs = [ "//third_party/khronos:khronos_headers" ]
+  public_deps = [
+    "//gpu/command_buffer/common",
+    "//skia",
+  ]
   deps = [
     ":interface_base",
     "//base",
+    "//components/viz/common/resources:shared_image_format",
   ]
 }
 
@@ -312,6 +317,8 @@ source_set("webgpu_sources") {
       "dawn_client_memory_transfer_service.h",
       "dawn_client_serializer.cc",
       "dawn_client_serializer.h",
+      "dawn_wire_client.cc",
+      "dawn_wire_client.h",
     ]
   }
 }

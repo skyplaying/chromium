@@ -23,10 +23,13 @@ enum WrappablePointerTag : uint16_t {
   // LINT.IfChange(LastGeneratedScriptWrappableTag)
   kFirstPointerTag = 2101,
   // LINT.ThenChange(third_party/blink/renderer/platform/bindings/wrapper_type_info.h)
+  // keep-sorted start case=no
   kAccessibilityControllerBindings,  // content::AccessibilityControllerBindings
   kAPIBindingBridge,                 // extensions::APIBindingBridge
   kAPIBindingJSUtil,                 // extensions::APIBindingJSUtil
   kAutomationPosition,               // ui::AutomationPosition
+  kBenchmarkingBindings,             // BenchmarkingBindings
+  kCallbackHolderBase,               // gin::internal::CallbackHolderBase
   kChromePluginPlaceholder,          // ChromePluginPlaceholder
   kChromeSetting,                    // extensions::ChromeSetting
   kContentSetting,                   // extensions::ContentSetting
@@ -37,13 +40,17 @@ enum WrappablePointerTag : uint16_t {
   kGamepadControllerBindings,        // content::GameControllerBindings
   kGCController,                     // content::GCController
   kGinJavaBridgeObject,              // content::GinJavaBridgeObject
+  kGinPerContextData,                // gin::PerContextData
   kGinPort,                          // extensions::GinPort
   kGpuBenchmarking,                  // content::GpuBenchmarking
+  kIndigoContext,                    // indigo::IndigoContext
+  kIndigoOnboarding,                 // indigo::OnboardingContext
   kJsBinding,                        // js_injection::JsBinding
+  kJSHookInterface,                  // extensions::JSHookInterface
   kJsMessageEvent,                   // android_webview::JsMessageEvent
   kJsSandboxMessagePort,             // android_webview::JsSandboxMessagePort
-  kJSHookInterface,                  // extensions::JSHookInterface
   kLastErrorObject,                  // extensions::LastErrorObject
+  kLoadTimesBindings,                // LoadTimesBindings
   kLocalStorageArea,                 // extensions::LocalStorageArea
   kManagedStorageArea,               // extensions::ManagedStorageArea
   kMojo,                             // ax::Mojo
@@ -58,10 +65,10 @@ enum WrappablePointerTag : uint16_t {
   kPostMessageScriptableObject,  // extensions::(anonymous)::ScriptableObject
   kReadAnythingAppController,    // ReadAnythingAppController
   kRemoteObject,                 // blink::RemoteObject
+  kScriptState,                  // blink::ScriptState
   kSearchBoxBindings,            // SearchBoxBindings
   kSecurityInterstitialPageController,  // SecurityInterstitialPageController
   kSessionStorageArea,                  // extensions::SessionStorageArea
-  kSharedStorageMethod,                 // auction_worklet::SharedStorageMethod
   kSkiaBenchmarking,                    // content::SkiaBenchmarking
   kStatsCollectionController,           // content::StatsCollectionController
   kSupervisedUserErrorPageController,   // SupervisedUserErrorPageController
@@ -76,13 +83,23 @@ enum WrappablePointerTag : uint16_t {
   kTextInputControllerBindings,  // content::TextInputControllerBindings
   kWebAXObjectProxy,             // content::WebAXObjectProxy
   kWrappedExceptionHandler,      // extensions::WrappedExceptionHandler
-  kLastPointerTag = kWrappedExceptionHandler,
+  kWrappedHandlerFunction,       // extensions::WrappedHandlerFunction
+  // keep-sorted end
+  kLastPointerTag,
 };
 
 static_assert(kLastPointerTag <
                   static_cast<uint16_t>(v8::CppHeapPointerTag::kZappedEntryTag),
               "The defined type tags exceed the range of allowed tags. Adjust "
               "the start value of this enum such that all values fit.");
+
+constexpr v8::CppHeapPointerTagRange kGinWrappableTagRange(
+    static_cast<v8::CppHeapPointerTag>(kFirstPointerTag),
+    static_cast<v8::CppHeapPointerTag>(kLastPointerTag));
+
+static_assert(
+    v8::kObjectWrappableTagRange.Contains(kGinWrappableTagRange),
+    "gin::Wrappable tag range must be within kObjectWrappableTagRange");
 
 }  // namespace gin
 

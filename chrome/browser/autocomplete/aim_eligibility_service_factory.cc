@@ -9,15 +9,53 @@
 #include "base/check_deref.h"
 #include "base/check_is_test.h"
 #include "base/no_destructor.h"
+#include "base/strings/strcat.h"
 #include "chrome/browser/autocomplete/chrome_aim_eligibility_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_selections.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
+#include "components/contextual_tasks/public/features.h"
+#include "components/embedder_support/user_agent_utils.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/storage_partition.h"
+#include "extensions/buildflags/buildflags.h"
+#include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "extensions/common/extension_features.h"
+#endif
 
 namespace {
+
+AimEligibilityService::Configuration CreateConfiguration(
+    bool is_off_the_record) {
+  AimEligibilityService::Configuration config;
+  config.is_off_the_record = is_off_the_record;
+  config.full_version_list =
+      embedder_support::GetUserAgentMetadata().SerializeBrandFullVersionList();
+  if (!contextual_tasks::IsContextualTasksUIEnabled()) {
+    return config;
+  }
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  if (contextual_tasks::IsContextualTasksRearchitectureEnabled() &&
+      base::FeatureList::IsEnabled(
+          extensions_features::kApiContextualTasksPrivate)) {
+    config.search_capabilities_version =
+        contextual_tasks::GetContextualTasksSearchCapabilitiesVersion();
+  } else {
+    config.user_agent_with_cobrowse_suffix =
+        base::StrCat({embedder_support::GetUserAgent(), " ",
+                      contextual_tasks::GetContextualTasksUserAgentSuffix()});
+  }
+#else
+  config.user_agent_with_cobrowse_suffix =
+      base::StrCat({embedder_support::GetUserAgent(), " ",
+                    contextual_tasks::GetContextualTasksUserAgentSuffix()});
+#endif
+  return config;
+}
 
 std::unique_ptr<KeyedService> BuildServiceInstance(
     content::BrowserContext* context) {
@@ -28,7 +66,7 @@ std::unique_ptr<KeyedService> BuildServiceInstance(
       profile->GetDefaultStoragePartition()
           ->GetURLLoaderFactoryForBrowserProcess(),
       IdentityManagerFactory::GetForProfile(profile),
-      profile->IsOffTheRecord());
+      CreateConfiguration(profile->IsOffTheRecord()));
 }
 
 }  // namespace

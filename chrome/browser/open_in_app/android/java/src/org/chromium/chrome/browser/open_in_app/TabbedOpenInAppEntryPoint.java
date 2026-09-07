@@ -9,6 +9,7 @@ import static org.chromium.build.NullUtil.assertNonNull;
 import android.content.Context;
 import android.graphics.drawable.Drawable;
 
+import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.supplier.NullableObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -19,7 +20,6 @@ import org.chromium.chrome.browser.tab.Tab;
 @NullMarked
 public class TabbedOpenInAppEntryPoint extends OpenInAppEntryPoint {
     private final OmniboxChipManager mOmniboxChipManager;
-    private boolean mShowingChip;
 
     /**
      * Constructor for this class.
@@ -38,10 +38,8 @@ public class TabbedOpenInAppEntryPoint extends OpenInAppEntryPoint {
     }
 
     @Override
-    public void onOpenInAppInfoChanged(OpenInAppDelegate.@Nullable OpenInAppInfo openInAppInfo) {
-        super.onOpenInAppInfoChanged(openInAppInfo);
-
-        if (openInAppInfo == null && mOmniboxChipManager.isChipShown()) {
+    protected void onOpenInAppInfoChanged(OpenInAppDelegate.@Nullable OpenInAppInfo openInAppInfo) {
+        if (openInAppInfo == null && mOmniboxChipManager.isChipPlaced()) {
             mOmniboxChipManager.dismissChip();
         } else if (openInAppInfo != null) {
             Drawable icon = openInAppInfo.appIcon;
@@ -49,30 +47,20 @@ public class TabbedOpenInAppEntryPoint extends OpenInAppEntryPoint {
                 icon = assertNonNull(mContext.getDrawable(R.drawable.ic_open_in_new_20dp));
             }
 
-            mOmniboxChipManager.showChip(
-                    mContext.getString(R.string.open_in_app),
-                    icon,
-                    // TODO(crbug.com/450253146): Add a real content description.
-                    mContext.getString(R.string.open_in_app),
-                    openInAppInfo.action,
-                    new OmniboxChipManager.ChipCallback() {
-                        @Override
-                        public void onChipHidden() {
-                            mShowingChip = false;
-                        }
+            String text = mContext.getString(R.string.open_in_app);
+            String desc =
+                    openInAppInfo.appName != null
+                            ? mContext.getString(R.string.open_in_app_desc, openInAppInfo.appName)
+                            : text;
 
-                        @Override
-                        public void onChipShown() {
-                            mShowingChip = true;
-                        }
-                    });
+            Runnable chipAction =
+                    () -> {
+                        RecordHistogram.recordBooleanHistogram(
+                                "Android.OpenInApp.Clicked.OmniboxChip", true);
+                        openInAppInfo.action.run();
+                    };
+
+            mOmniboxChipManager.placeChip(text, icon, desc, chipAction);
         }
-    }
-
-    @Override
-    public OpenInAppDelegate.@Nullable OpenInAppInfo getOpenInAppInfoForMenuItem() {
-        if (mShowingChip) return null;
-
-        return super.getOpenInAppInfoForMenuItem();
     }
 }

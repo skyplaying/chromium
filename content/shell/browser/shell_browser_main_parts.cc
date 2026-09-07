@@ -37,7 +37,7 @@
 #include "content/shell/common/shell_switches.h"
 #include "device/bluetooth/bluetooth_adapter_factory.h"
 #include "net/base/filename_util.h"
-#include "net/base/net_module.h"
+#include "net/base/module/net_module.h"
 #include "net/grit/net_resources.h"
 #include "ui/base/buildflags.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -174,10 +174,11 @@ int ShellBrowserMainParts::PreCreateThreads() {
   return 0;
 }
 
-void ShellBrowserMainParts::PostCreateThreads() {
+int ShellBrowserMainParts::PostCreateThreads() {
   performance_manager_lifetime_ =
       std::make_unique<performance_manager::PerformanceManagerLifetime>(
           performance_manager::GraphFeatures::WithMinimal(), base::DoNothing());
+  return RESULT_CODE_NORMAL_EXIT;
 }
 
 int ShellBrowserMainParts::PreMainMessageLoopRun() {

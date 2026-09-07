@@ -2,35 +2,51 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "mojo/public/cpp/bindings/receiver_set.h"
+#include "third_party/blink/public/mojom/file/file_utilities.mojom-blink.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
+#include "third_party/blink/public/platform/file_path_conversion.h"
 #include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/dom/dom_node_ids.h"
 #include "third_party/blink/renderer/core/fileapi/file_list.h"
+#include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/html/forms/html_form_control_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_form_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_input_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_option_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_select_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_text_area_element.h"
+#include "third_party/blink/renderer/core/html/html_head_element.h"
 #include "third_party/blink/renderer/core/html_names.h"
+#include "third_party/blink/renderer/core/inspector/inspector_issue_storage.h"
+#include "third_party/blink/renderer/core/inspector/protocol/audits.h"
+#include "third_party/blink/renderer/core/page/page.h"
+#include "third_party/blink/renderer/core/script/classic_script.h"
+#include "third_party/blink/renderer/core/script_tools/script_tool_types.h"
 #include "third_party/blink/renderer/core/testing/page_test_base.h"
 #include "third_party/blink/renderer/platform/json/json_parser.h"
 #include "third_party/blink/renderer/platform/json/json_values.h"
 #include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
+#include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 
 namespace blink {
 
 class HTMLFormMcpToolTest : public PageTestBase {
  public:
   HTMLInputElement* GetInputElement(const char* id) {
+    test::RunPendingTasks();
     return DynamicTo<HTMLInputElement>(
         GetDocument().getElementById(AtomicString(id)));
   }
 
   HTMLFormElement* GetFormElement(const char* id) {
+    test::RunPendingTasks();
     return DynamicTo<HTMLFormElement>(
         GetDocument().getElementById(AtomicString(id)));
   }
 
   HTMLTextAreaElement* GetTextAreaElement(const char* id) {
+    test::RunPendingTasks();
     return DynamicTo<HTMLTextAreaElement>(
         GetDocument().getElementById(AtomicString(id)));
   }
@@ -38,7 +54,8 @@ class HTMLFormMcpToolTest : public PageTestBase {
   // Private functions exposed via class friendship:
 
   static bool IsValidWebMCPForm(HTMLFormElement& form_element) {
-    return form_element.IsValidWebMCPForm();
+    test::RunPendingTasks();
+    return form_element.active_webmcp_tool_;
   }
 
   static bool FillFormControls(HTMLFormElement& form_element,
@@ -47,7 +64,7 @@ class HTMLFormMcpToolTest : public PageTestBase {
     CHECK(form_element.active_webmcp_tool_);
     bool require_submit_button = false;
     HTMLFormControlElement* submit_button;
-    std::optional<WebDocument::ScriptToolError> error =
+    std::optional<ScriptToolError> error =
         form_element.active_webmcp_tool_->FillFormControls(
             input_arguments, require_submit_button, &submit_button);
     return !error.has_value();
@@ -61,6 +78,7 @@ class HTMLFormMcpToolTest : public PageTestBase {
 
  private:
   ScopedWebMCPForTest scoped_feature{true};
+  ScopedWebMCPDeclarativeFileInputForTest scoped_file_feature{true};
 };
 
 // Note that both toolname *and* tooldescription must be present
@@ -438,7 +456,6 @@ TEST_F(HTMLFormMcpToolTest, ParameterSchema_Disabled) {
     <form id="form" toolname="mytool" tooldescription="perform task">
       <input name="text1" type="text">
       <input name="text2" type="text" disabled>
-      <input name="text3" type="text" disabled toolparamtitle="TITLE">
       <textarea name="area1" disabled>
     </form>
   )HTML");
@@ -468,7 +485,6 @@ TEST_F(HTMLFormMcpToolTest, ParameterSchema_Readonly) {
     <form id="form" toolname="mytool" tooldescription="perform task">
       <input name="text1" type="text">
       <input name="text2" type="text" readonly>
-      <input name="text3" type="text" readonly toolparamtitle="TITLE">
       <textarea name="area1" readonly>
     </form>
   )HTML");
@@ -544,34 +560,6 @@ TEST_F(HTMLFormMcpToolTest, ParameterSchema_TextInput_Required) {
          }
       },
       "required": ["text2"]
-    }
-  )JSON");
-  ASSERT_TRUE(expected_json);
-  EXPECT_EQ(expected_json->ToJSONString(), actual);
-}
-
-TEST_F(HTMLFormMcpToolTest, ParameterSchema_TextInput_Title) {
-  SetBodyInnerHTML(
-      R"HTML(
-    <form id="form" toolname="mytool" tooldescription="perform task">
-      <input name="text1" type="text" toolparamtitle="Surname">
-    </form>
-  )HTML");
-
-  HTMLFormElement* form_element = GetFormElement("form");
-  ASSERT_TRUE(form_element);
-  ASSERT_TRUE(IsValidWebMCPForm(*form_element));
-  String actual = ComputeInputSchema(*form_element);
-  std::unique_ptr<JSONValue> expected_json = ParseJSON(R"JSON(
-    {
-      "type": "object",
-      "properties": {
-         "text1": {
-           "type": "string",
-           "title": "Surname"
-         }
-      },
-      "required": []
     }
   )JSON");
   ASSERT_TRUE(expected_json);
@@ -813,10 +801,10 @@ TEST_F(HTMLFormMcpToolTest, ParameterSchema_ImplicitLabelText) {
       "properties": {
          "select": {
            "type": "string",
-           "oneOf": [
-             { "const": "Option 1", "title": "This is option 1" },
-             { "const": "Option 2", "title": "This is option 2" },
-             { "const": "Option 3", "title": "This is option 3" }
+           "anyOf": [
+             { "type": "string", "const": "Option 1", "title": "This is option 1" },
+             { "type": "string", "const": "Option 2", "title": "This is option 2" },
+             { "type": "string", "const": "Option 3", "title": "This is option 3" }
            ],
            "enum": ["Option 1", "Option 2", "Option 3"],
            "description": "LABEL"
@@ -851,49 +839,15 @@ TEST_F(HTMLFormMcpToolTest, ParameterSchema_Select) {
       "properties": {
          "select": {
            "type": "string",
-           "oneOf": [
-             { "const": "Option 1", "title": "This is option 1" },
-             { "const": "Option 2", "title": "This is option 2" },
-             { "const": "Option 3", "title": "This is option 3" }
+           "anyOf": [
+             { "type": "string", "const": "Option 1", "title": "This is option 1" },
+             { "type": "string", "const": "Option 2", "title": "This is option 2" },
+             { "type": "string", "const": "Option 3", "title": "This is option 3" }
            ],
            "enum": ["Option 1", "Option 2", "Option 3"]
          }
       },
       "required": ["select"]
-    }
-  )JSON");
-  ASSERT_TRUE(expected_json);
-  EXPECT_EQ(expected_json->ToJSONString(), actual);
-}
-
-TEST_F(HTMLFormMcpToolTest, ParameterSchema_Select_Title) {
-  SetBodyInnerHTML(
-      R"HTML(
-    <form id="form" toolname="mytool" tooldescription="perform task">
-      <select name="select" toolparamtitle="Possible Options">
-        <option value="Option 1">This is option 1</option>
-      </select>
-    </form>
-  )HTML");
-
-  HTMLFormElement* form_element = GetFormElement("form");
-  ASSERT_TRUE(form_element);
-  ASSERT_TRUE(IsValidWebMCPForm(*form_element));
-  String actual = ComputeInputSchema(*form_element);
-  std::unique_ptr<JSONValue> expected_json = ParseJSON(R"JSON(
-    {
-      "type": "object",
-      "properties": {
-         "select": {
-           "type": "string",
-           "oneOf": [
-             { "const": "Option 1", "title": "This is option 1" }
-           ],
-           "enum": ["Option 1"],
-           "title": "Possible Options"
-         }
-      },
-      "required": []
     }
   )JSON");
   ASSERT_TRUE(expected_json);
@@ -924,10 +878,10 @@ TEST_F(HTMLFormMcpToolTest, ParameterSchema_Select_Multiple) {
            "type": "array",
            "items": {
              "type": "string",
-             "oneOf": [
-               { "const": "Option 1", "title": "This is option 1" },
-               { "const": "Option 2", "title": "This is option 2" },
-               { "const": "Option 3", "title": "This is option 3" }
+             "anyOf": [
+               { "type": "string", "const": "Option 1", "title": "This is option 1" },
+               { "type": "string", "const": "Option 2", "title": "This is option 2" },
+               { "type": "string", "const": "Option 3", "title": "This is option 3" }
              ],
              "enum": ["Option 1", "Option 2", "Option 3"]
            },
@@ -1048,6 +1002,7 @@ TEST_F(HTMLFormMcpToolTest, ParameterSchema_NumberInput) {
       <input name="num4" type="number" step="13">
       <input name="num5" type="number" step="0.1">
       <input name="num6" type="number" min="0.15" step="0.1">
+      <input name="num7" type="number" pattern="[1-4]{3}">
     </form>
   )HTML");
 
@@ -1086,6 +1041,11 @@ TEST_F(HTMLFormMcpToolTest, ParameterSchema_NumberInput) {
          "num6": {
            "type": "number",
            "minimum": 0.15
+         },
+         "num7": {
+           "type": "number",
+           "multipleOf": 1,
+           "pattern": "[1-4]{3}"
          }
       },
       "required": []
@@ -1239,28 +1199,19 @@ TEST_F(HTMLFormMcpToolTest, ParameterSchema_Checkbox_Multiple) {
     {
       "type": "object",
       "properties": {
-         "fruit": {
-           "type": "array",
-           "items": {
-             "type": "string",
-             "oneOf": [
-               {
-                 "const": "apple",
-                 "title": "Apple"
-               },
-               {
-                 "const": "melon",
-                 "title": "Melon"
-               },
-               {
-                 "const": "grape",
-                 "title": "Grape"
-               }
+        "fruit": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "anyOf": [
+              { "type": "string", "const": "apple", "title": "Apple" },
+              { "type": "string", "const": "melon", "title": "Melon" },
+              { "type": "string", "const": "grape", "title": "Grape" }
              ],
              "enum": ["apple", "melon", "grape"]
-           },
-           "uniqueItems": true
-         }
+          },
+          "uniqueItems": true
+        }
       },
       "required": []
     }
@@ -1269,7 +1220,10 @@ TEST_F(HTMLFormMcpToolTest, ParameterSchema_Checkbox_Multiple) {
   EXPECT_EQ(expected_json->ToJSONString(), actual);
 }
 
-TEST_F(HTMLFormMcpToolTest, ParameterSchema_Checkbox_ToolParamAttributes) {
+// For parameters backed by multiple elements, the `toolparamdescription`
+// has no effect when specified on those elements.
+TEST_F(HTMLFormMcpToolTest,
+       ParameterSchema_Checkbox_IgnoreToolParamAttributes) {
   SetBodyInnerHTML(
       R"HTML(
     <form id=form toolname="mytool" tooldescription="pick fruits you like">
@@ -1278,16 +1232,14 @@ TEST_F(HTMLFormMcpToolTest, ParameterSchema_Checkbox_ToolParamAttributes) {
         name="fruit"
         type="checkbox"
         value="apple"
-        toolparamtitle="TITLE"
-        toolparamdescription="DESC"
+        toolparamdescription="ERR1"
         >
       <input
         id="melon"
         name="fruit"
         type="checkbox"
         value="melon"
-        toolparamtitle="ERR"
-        toolparamdescription="ERR"
+        toolparamdescription="ERR2"
         >
       <input id="grape" name="fruit" type="checkbox" value="grape">
     </form>
@@ -1301,27 +1253,19 @@ TEST_F(HTMLFormMcpToolTest, ParameterSchema_Checkbox_ToolParamAttributes) {
     {
       "type": "object",
       "properties": {
-         "fruit": {
-           "type": "array",
-           "items": {
-             "type": "string",
-             "oneOf": [
-               {
-                 "const": "apple"
-               },
-               {
-                 "const": "melon"
-               },
-               {
-                 "const": "grape"
-               }
+        "fruit": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "anyOf": [
+              { "type": "string", "const": "apple" },
+              { "type": "string", "const": "melon" },
+              { "type": "string", "const": "grape" }
              ],
              "enum": ["apple", "melon", "grape"]
-           },
-           "uniqueItems": true,
-           "title": "TITLE",
-           "description": "DESC"
-         }
+          },
+          "uniqueItems": true
+        }
       },
       "required": []
     }
@@ -1697,6 +1641,8 @@ TEST_F(HTMLFormMcpToolTest, ParameterSchema_DatetimeLocalInput) {
       R"HTML(
     <form id="form" toolname="mytool" tooldescription="perform task">
       <input name="datetime1" type="datetime-local">
+      <input name="datetime2" type="datetime-local" step="1">
+      <input name="datetime3" type="datetime-local" step="0.001">
     </form>
   )HTML");
 
@@ -1711,6 +1657,14 @@ TEST_F(HTMLFormMcpToolTest, ParameterSchema_DatetimeLocalInput) {
          "datetime1": {
            "type": "string",
            "format": "^[0-9]{4}-(0[1-9]|1[0-2])-[0-9]{2}T([01][0-9]|2[0-3]):[0-5][0-9]$"
+         },
+         "datetime2": {
+           "type": "string",
+           "format": "^[0-9]{4}-(0[1-9]|1[0-2])-[0-9]{2}T([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$"
+         },
+         "datetime3": {
+           "type": "string",
+           "format": "^[0-9]{4}-(0[1-9]|1[0-2])-[0-9]{2}T([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9](\\.[0-9]{1,3})?)?$"
          }
       },
       "required": []
@@ -2034,8 +1988,7 @@ TEST_F(HTMLFormMcpToolTest, ParameterSchema_BaseTextInput) {
       <input name="tel1" type="tel">
       <input name="url1" type="url">
       <input name="hidden1" type="hidden">
-      <input name="hidden2" type="hidden" toolparamtitle="TITLE">
-      <input name="hidden3" type="hidden" toolparamdescription="DESC">
+      <input name="hidden2" type="hidden" toolparamdescription="DESC">
     </form>
   )HTML");
 
@@ -2061,11 +2014,62 @@ TEST_F(HTMLFormMcpToolTest, ParameterSchema_BaseTextInput) {
          },
          "hidden2": {
            "type": "string",
-           "title": "TITLE"
-         },
-         "hidden3": {
-           "type": "string",
            "description": "DESC"
+         }
+      },
+      "required": []
+    }
+  )JSON");
+  ASSERT_TRUE(expected_json);
+  EXPECT_EQ(expected_json->ToJSONString(), actual);
+}
+
+TEST_F(HTMLFormMcpToolTest, ParameterSchema_BaseTextInputPatternAttribute) {
+  SetBodyInnerHTML(
+      R"HTML(
+    <form id="form" toolname="mytool" tooldescription="perform task">
+      <input name="email1" type="email" pattern="[A-Z]{10}">
+      <input name="search1" type="search" pattern="[A-Z]{10}">
+      <input name="tel1" type="tel" pattern="[A-Z]{10}">
+      <input name="url1" type="url" pattern="[A-Z]{10}">
+      <input name="hidden1" type="hidden" pattern="[A-Z]{10}">
+      <input name="hidden2" type="hidden" toolparamdescription="DESC" pattern="[A-Z]{10}">
+      <input name="invalid_pattern" type="text" toolparamdescription="invalid pattern input" pattern="[)]">
+    </form>
+  )HTML");
+
+  HTMLFormElement* form_element = GetFormElement("form");
+  ASSERT_TRUE(form_element);
+  ASSERT_TRUE(IsValidWebMCPForm(*form_element));
+  String actual = ComputeInputSchema(*form_element);
+  std::unique_ptr<JSONValue> expected_json = ParseJSON(R"JSON(
+    {
+      "type": "object",
+      "properties": {
+         "email1": {
+           "type": "string",
+           "pattern": "[A-Z]{10}"
+         },
+         "search1": {
+           "type": "string",
+           "pattern": "[A-Z]{10}"
+         },
+         "tel1": {
+           "type": "string",
+           "pattern": "[A-Z]{10}"
+         },
+         "url1": {
+           "type": "string",
+           "pattern": "[A-Z]{10}"
+         },
+         "hidden2": {
+           "type": "string",
+           "pattern": "[A-Z]{10}",
+           "description": "DESC"
+         },
+         "invalid_pattern": {
+           "type": "string",
+           "description": "invalid pattern input"
          }
       },
       "required": []
@@ -2207,32 +2211,6 @@ TEST_F(HTMLFormMcpToolTest, FillFormControls_HiddenInput) {
   EXPECT_EQ("initial1", hidden1->Value());
 }
 
-TEST_F(HTMLFormMcpToolTest, FillFormControls_HiddenInput_Title) {
-  SetBodyInnerHTML(
-      R"HTML(
-    <form id=form toolname="mytool" tooldescription="perform task">
-      <input id=hidden1 name=hidden1 type=hidden value="initial1" toolparamtitle="TITLE">
-    </form>
-  )HTML");
-
-  HTMLFormElement* form_element = GetFormElement("form");
-  ASSERT_TRUE(form_element);
-  ASSERT_TRUE(IsValidWebMCPForm(*form_element));
-
-  String json_string =
-      R"JSON(
-        {
-          "hidden1": "1234"
-        }
-      )JSON";
-
-  EXPECT_TRUE(FillFormControls(*form_element, json_string));
-
-  HTMLInputElement* hidden1 = GetInputElement("hidden1");
-  ASSERT_TRUE(hidden1);
-  EXPECT_EQ("1234", hidden1->Value());
-}
-
 TEST_F(HTMLFormMcpToolTest, FillFormControls_HiddenInput_Description) {
   SetBodyInnerHTML(
       R"HTML(
@@ -2351,16 +2329,19 @@ TEST_F(HTMLFormMcpToolTest, ParameterSchema_Radio) {
       "properties": {
          "size": {
            "type": "string",
-           "oneOf": [
+           "anyOf": [
              {
+               "type": "string",
                "const": "s",
                "title": "Small"
              },
              {
+               "type": "string",
                "const": "m",
                "title": "Medium"
              },
              {
+               "type": "string",
                "const": "l",
                "title": "Large"
              }
@@ -2398,14 +2379,17 @@ TEST_F(HTMLFormMcpToolTest, ParameterSchema_Radio_Multiple) {
       "properties": {
          "size": {
            "type": "string",
-           "oneOf": [
+           "anyOf": [
              {
+               "type": "string",
                "const": "s"
              },
              {
+               "type": "string",
                "const": "m"
              },
              {
+               "type": "string",
                "const": "l"
              }
            ],
@@ -2413,14 +2397,17 @@ TEST_F(HTMLFormMcpToolTest, ParameterSchema_Radio_Multiple) {
          },
          "item": {
            "type": "string",
-           "oneOf": [
+           "anyOf": [
              {
+               "type": "string",
                "const": "hoodie"
              },
              {
+               "type": "string",
                "const": "shirt"
              },
              {
+               "type": "string",
                "const": "hat"
              }
            ],
@@ -2489,14 +2476,17 @@ TEST_F(HTMLFormMcpToolTest, ParameterSchema_Radio_Required) {
       "properties": {
          "size": {
            "type": "string",
-           "oneOf": [
+           "anyOf": [
              {
+               "type": "string",
                "const": "s"
              },
              {
+               "type": "string",
                "const": "m"
              },
              {
+               "type": "string",
                "const": "l"
              }
            ],
@@ -2510,15 +2500,15 @@ TEST_F(HTMLFormMcpToolTest, ParameterSchema_Radio_Required) {
   EXPECT_EQ(expected_json->ToJSONString(), actual);
 }
 
-// The toolparamdescription for the parameter (as a whole) is
-// sources from the first <input type=radio> in the group.
-TEST_F(HTMLFormMcpToolTest, ParameterSchema_Radio_ToolParamDescription) {
+// For parameters backed by multiple elements, the `toolparamdescription`
+// has no effect when specified on those elements.
+TEST_F(HTMLFormMcpToolTest, ParameterSchema_Radio_IgnoreToolParamDescription) {
   SetBodyInnerHTML(
       R"HTML(
     <form id="form" toolname="mytool" tooldescription="perform task">
-      <input type=radio name=size value=s toolparamdescription="DESC">
-      <input type=radio name=size value=m toolparamdescription="ERR1">
-      <input type=radio name=size value=l toolparamdescription="ERR2">
+      <input type=radio name=size value=s toolparamdescription="ERR1">
+      <input type=radio name=size value=m toolparamdescription="ERR2">
+      <input type=radio name=size value=l toolparamdescription="ERR3">
     </form>
   )HTML");
 
@@ -2532,63 +2522,21 @@ TEST_F(HTMLFormMcpToolTest, ParameterSchema_Radio_ToolParamDescription) {
       "properties": {
          "size": {
            "type": "string",
-           "oneOf": [
+           "anyOf": [
              {
+               "type": "string",
                "const": "s"
              },
              {
+               "type": "string",
                "const": "m"
              },
              {
+               "type": "string",
                "const": "l"
              }
            ],
-           "enum": ["s", "m", "l"],
-           "description": "DESC"
-         }
-      },
-      "required": []
-    }
-  )JSON");
-  ASSERT_TRUE(expected_json);
-  EXPECT_EQ(expected_json->ToJSONString(), actual);
-}
-
-// The toolparamtitle for the parameter (as a whole) is
-// sources from the first <input type=radio> in the group.
-TEST_F(HTMLFormMcpToolTest, ParameterSchema_Radio_ToolParamTitle) {
-  SetBodyInnerHTML(
-      R"HTML(
-    <form id="form" toolname="mytool" tooldescription="perform task">
-      <input type=radio name=size value=s toolparamtitle="TITLE">
-      <input type=radio name=size value=m toolparamtitle="ERR1">
-      <input type=radio name=size value=l toolparamtitle="ERR2">
-    </form>
-  )HTML");
-
-  HTMLFormElement* form_element = GetFormElement("form");
-  ASSERT_TRUE(form_element);
-  ASSERT_TRUE(IsValidWebMCPForm(*form_element));
-  String actual = ComputeInputSchema(*form_element);
-  std::unique_ptr<JSONValue> expected_json = ParseJSON(R"JSON(
-    {
-      "type": "object",
-      "properties": {
-         "size": {
-           "type": "string",
-           "oneOf": [
-             {
-               "const": "s"
-             },
-             {
-               "const": "m"
-             },
-             {
-               "const": "l"
-             }
-           ],
-           "enum": ["s", "m", "l"],
-           "title": "TITLE"
+           "enum": ["s", "m", "l"]
          }
       },
       "required": []
@@ -2698,6 +2646,957 @@ TEST_F(HTMLFormMcpToolTest, FillFormControls_FillRadio_Invalid) {
   EXPECT_FALSE(s->Checked());
   EXPECT_FALSE(m->Checked());
   EXPECT_FALSE(l->Checked());
+}
+
+TEST_F(HTMLFormMcpToolTest, ParameterSchema_FormAssociatedCustom) {
+  GetDocument().GetSettings()->SetScriptEnabled(true);
+  ClassicScript::CreateUnspecifiedScript(R"JS(
+      class MyInput extends HTMLElement {
+        static formAssociated = true;
+        constructor() {
+          super();
+          this._internals = this.attachInternals();
+          this._internals.setToolParamSchema(`{ "type":"string" }`);
+        }
+      }
+      customElements.define('my-input', MyInput);
+
+      document.body.innerHTML = `
+        <form id="form" toolname="mytool" tooldescription="perform task">
+          <input type=text name=text1>
+          <my-input
+            id=my-input
+            name=custom-input
+            toolparamdescription="Just some custom text"
+          ></my-input>
+        </form>
+      `;
+   )JS")
+      ->RunScript(GetDocument().domWindow());
+
+  UpdateAllLifecyclePhasesForTest();
+
+  HTMLFormElement* form_element = GetFormElement("form");
+  ASSERT_TRUE(form_element);
+
+  auto* my_input = DynamicTo<HTMLElement>(
+      GetDocument().getElementById(AtomicString("my-input")));
+  ASSERT_TRUE(my_input);
+  EXPECT_EQ(CustomElementState::kCustom, my_input->GetCustomElementState());
+  ASSERT_TRUE(my_input->GetCustomElementDefinition());
+  ASSERT_TRUE(my_input->IsFormAssociatedCustomElement());
+
+  ASSERT_TRUE(IsValidWebMCPForm(*form_element));
+  String actual = ComputeInputSchema(*form_element);
+  std::unique_ptr<JSONValue> expected_json = ParseJSON(R"JSON(
+    {
+      "type": "object",
+      "properties": {
+         "text1": {
+            "type": "string"
+         },
+         "custom-input": {
+            "type": "string",
+            "description": "Just some custom text"
+         }
+      },
+      "required": []
+    }
+  )JSON");
+  ASSERT_TRUE(expected_json);
+  EXPECT_EQ(expected_json->ToJSONString(), actual);
+}
+
+namespace {
+
+class MockFileUtilitiesHost : public mojom::blink::FileUtilitiesHost {
+ public:
+  explicit MockFileUtilitiesHost() = default;
+
+  void Bind(mojo::ScopedMessagePipeHandle pipe) {
+    receivers_.Add(this, mojo::PendingReceiver<mojom::blink::FileUtilitiesHost>(
+                             std::move(pipe)));
+  }
+
+  // Synchronous version
+  bool GetFileInfo(const base::FilePath& path,
+                   std::optional<base::File::Info>* out_result) override {
+    if (granted_paths_.Contains(FilePathToString(path))) {
+      base::File::Info info;
+      info.size = 123;
+      info.is_directory = false;
+      info.last_modified = base::Time::Now();
+      *out_result = info;
+    } else {
+      *out_result = std::nullopt;
+    }
+    return true;
+  }
+
+  // Asynchronous version
+  void GetFileInfo(const base::FilePath& path,
+                   GetFileInfoCallback callback) override {
+    std::optional<base::File::Info> result;
+    GetFileInfo(path, &result);
+    std::move(callback).Run(result);
+  }
+
+  void grant_path(const String& path) { granted_paths_.insert(path); }
+
+ private:
+  mojo::ReceiverSet<mojom::blink::FileUtilitiesHost> receivers_;
+  HashSet<String> granted_paths_;
+};
+
+class HTMLFormMcpToolFileInputTest : public HTMLFormMcpToolTest {
+ public:
+  void SetUp() override {
+    HTMLFormMcpToolTest::SetUp();
+    GetDocument()
+        .GetExecutionContext()
+        ->GetBrowserInterfaceBroker()
+        .SetBinderForTesting(
+            mojom::blink::FileUtilitiesHost::Name_,
+            base::BindRepeating(&MockFileUtilitiesHost::Bind,
+                                base::Unretained(&mock_file_host_)));
+  }
+
+  void TearDown() override {
+    GetDocument()
+        .GetExecutionContext()
+        ->GetBrowserInterfaceBroker()
+        .SetBinderForTesting(mojom::blink::FileUtilitiesHost::Name_,
+                             base::NullCallback());
+    HTMLFormMcpToolTest::TearDown();
+  }
+
+ protected:
+  MockFileUtilitiesHost mock_file_host_;
+};
+
+}  // namespace
+
+TEST_F(HTMLFormMcpToolTest, ParameterSchema_FileInput) {
+  SetBodyInnerHTML(
+      R"HTML(
+    <form id="form" toolname="mytool" tooldescription="perform task">
+      <input name="file1" type="file">
+      <input name="file2" type="file" multiple>
+    </form>
+  )HTML");
+
+  HTMLFormElement* form_element = GetFormElement("form");
+  ASSERT_TRUE(form_element);
+  ASSERT_TRUE(IsValidWebMCPForm(*form_element));
+  String actual = ComputeInputSchema(*form_element);
+  std::unique_ptr<JSONValue> expected_json = ParseJSON(R"JSON(
+    {
+      "type": "object",
+      "properties": {
+         "file1": {
+           "type": "string"
+         },
+         "file2": {
+           "type": "array",
+           "items": {
+             "type": "string"
+           }
+         }
+      },
+      "required": []
+    }
+  )JSON");
+  ASSERT_TRUE(expected_json);
+  EXPECT_EQ(expected_json->ToJSONString(), actual);
+}
+
+TEST_F(HTMLFormMcpToolFileInputTest, FillFormControls_FileInput) {
+  SetBodyInnerHTML(
+      R"HTML(
+    <form id=form toolname="mytool" tooldescription="perform task">
+      <input id=file1 name=file1 type=file>
+    </form>
+  )HTML");
+
+  HTMLFormElement* form_element = GetFormElement("form");
+  ASSERT_TRUE(form_element);
+  ASSERT_TRUE(IsValidWebMCPForm(*form_element));
+
+#if defined(FILE_PATH_USES_DRIVE_LETTERS)
+  String path = "C:\\Users\\johndoe\\avatar.png";
+#else
+  String path = "/home/johndoe/avatar.png";
+#endif
+
+  mock_file_host_.grant_path(path);
+
+  auto json_obj = std::make_unique<JSONObject>();
+  json_obj->SetString("file1", path);
+  String json_string = json_obj->ToJSONString();
+
+  EXPECT_TRUE(FillFormControls(*form_element, json_string));
+
+  HTMLInputElement* file1 = GetInputElement("file1");
+  ASSERT_TRUE(file1);
+  FileList* file_list = file1->files();
+  ASSERT_TRUE(file_list);
+  ASSERT_EQ(file_list->length(), 1);
+  EXPECT_EQ(file_list->item(0)->GetPath(), path);
+}
+
+TEST_F(HTMLFormMcpToolFileInputTest, FillFormControls_FileInput_Multiple) {
+  SetBodyInnerHTML(
+      R"HTML(
+    <form id=form toolname="mytool" tooldescription="perform task">
+      <input id=file1 name=file1 type=file multiple>
+    </form>
+  )HTML");
+
+  HTMLFormElement* form_element = GetFormElement("form");
+  ASSERT_TRUE(form_element);
+  ASSERT_TRUE(IsValidWebMCPForm(*form_element));
+
+#if defined(FILE_PATH_USES_DRIVE_LETTERS)
+  String path1 = "C:\\Users\\johndoe\\avatar.png";
+  String path2 = "C:\\Users\\johndoe\\avatar_old.png";
+#else
+  String path1 = "/home/johndoe/avatar.png";
+  String path2 = "/home/johndoe/avatar_old.png";
+#endif
+
+  mock_file_host_.grant_path(path1);
+  mock_file_host_.grant_path(path2);
+
+  auto json_obj = std::make_unique<JSONObject>();
+  auto array = std::make_unique<JSONArray>();
+  array->PushString(path1);
+  array->PushString(path2);
+  json_obj->SetArray("file1", std::move(array));
+  String json_string = json_obj->ToJSONString();
+
+  EXPECT_TRUE(FillFormControls(*form_element, json_string));
+
+  HTMLInputElement* file1 = GetInputElement("file1");
+  ASSERT_TRUE(file1);
+  FileList* file_list = file1->files();
+  ASSERT_TRUE(file_list);
+  ASSERT_EQ(file_list->length(), 2);
+  EXPECT_EQ(file_list->item(0)->GetPath(), path1);
+  EXPECT_EQ(file_list->item(1)->GetPath(), path2);
+}
+
+TEST_F(HTMLFormMcpToolFileInputTest, FillFormControls_FileInput_Invalid) {
+  SetBodyInnerHTML(
+      R"HTML(
+    <form id=form toolname="mytool" tooldescription="perform task">
+      <input id=file1 name=file1 type=file>
+    </form>
+  )HTML");
+
+  HTMLFormElement* form_element = GetFormElement("form");
+  ASSERT_TRUE(form_element);
+  ASSERT_TRUE(IsValidWebMCPForm(*form_element));
+
+  String json_string =
+      R"JSON(
+        {
+          "file1": "avatar.png"
+        }
+      )JSON";
+
+  // A relative path is not allowed
+  EXPECT_FALSE(FillFormControls(*form_element, json_string));
+}
+
+TEST_F(HTMLFormMcpToolFileInputTest, FillFormControls_FileInput_NotGranted) {
+  SetBodyInnerHTML(
+      R"HTML(
+    <form id=form toolname="mytool" tooldescription="perform task">
+      <input id=file1 name=file1 type=file>
+    </form>
+  )HTML");
+
+  HTMLFormElement* form_element = GetFormElement("form");
+  ASSERT_TRUE(form_element);
+  ASSERT_TRUE(IsValidWebMCPForm(*form_element));
+
+#if defined(FILE_PATH_USES_DRIVE_LETTERS)
+  String path = "C:\\Users\\johndoe\\avatar.png";
+#else
+  String path = "/home/johndoe/avatar.png";
+#endif
+
+  // valid absolute path, but not granted.
+  auto json_obj = std::make_unique<JSONObject>();
+  json_obj->SetString("file1", path);
+  String json_string = json_obj->ToJSONString();
+
+  EXPECT_FALSE(FillFormControls(*form_element, json_string));
+}
+
+TEST_F(HTMLFormMcpToolTest, GenericIssue_MissingTitleAndDescription) {
+  SetBodyInnerHTML(
+      R"HTML(
+    <form id="form" toolname="mytool" tooldescription="perform task">
+      <input id="text1" name="text1" type="text">
+    </form>
+  )HTML");
+
+  HTMLFormElement* form_element = GetFormElement("form");
+  ASSERT_TRUE(form_element);
+  ASSERT_TRUE(IsValidWebMCPForm(*form_element));
+
+  InspectorIssueStorage& storage =
+      GetDocument().GetPage()->GetInspectorIssueStorage();
+  storage.Clear();
+  EXPECT_EQ(0u, storage.size());
+
+  // Triggers the check.
+  ComputeInputSchema(*form_element);
+
+  EXPECT_EQ(1u, storage.size());
+  protocol::Audits::InspectorIssue* issue = storage.at(0);
+  EXPECT_EQ(protocol::Audits::InspectorIssueCodeEnum::GenericIssue,
+            issue->getCode());
+  EXPECT_TRUE(issue->getDetails()->hasGenericIssueDetails());
+  EXPECT_EQ(protocol::Audits::GenericIssueErrorTypeEnum::
+                FormModelContextParameterMissingTitleAndDescription,
+            issue->getDetails()->getGenericIssueDetails()->getErrorType());
+  EXPECT_TRUE(
+      issue->getDetails()->getGenericIssueDetails()->hasViolatingNodeId());
+  HTMLInputElement* text1 = GetInputElement("text1");
+  ASSERT_TRUE(text1);
+  EXPECT_EQ(
+      static_cast<int>(DOMNodeIds::IdForNode(text1)),
+      issue->getDetails()->getGenericIssueDetails()->getViolatingNodeId(0));
+}
+
+TEST_F(HTMLFormMcpToolTest, GenericIssue_NotMissingDescription) {
+  SetBodyInnerHTML(
+      R"HTML(
+    <form id="form" toolname="mytool" tooldescription="perform task">
+      <input name="text1" type="text" toolparamdescription="DESC1">
+      <label for="text2">Label</label>
+      <input id="text2" name="text2" type="text">
+    </form>
+  )HTML");
+
+  HTMLFormElement* form_element = GetFormElement("form");
+  ASSERT_TRUE(form_element);
+  ASSERT_TRUE(IsValidWebMCPForm(*form_element));
+
+  InspectorIssueStorage& storage =
+      GetDocument().GetPage()->GetInspectorIssueStorage();
+  storage.Clear();
+  EXPECT_EQ(0u, storage.size());
+
+  ComputeInputSchema(*form_element);
+
+  EXPECT_EQ(0u, storage.size());
+}
+
+TEST_F(HTMLFormMcpToolTest, FieldsetDescription_Radio_Basic) {
+  SetBodyInnerHTML(
+      R"HTML(
+    <form id="form" toolname="mytool" tooldescription="perform task">
+      <fieldset toolparamdescription="FIELDSET_DESC">
+        <input type=radio name=size value=s>
+        <input type=radio name=size value=m>
+        <input type=radio name=size value=l>
+      </fieldset>
+    </form>
+  )HTML");
+
+  HTMLFormElement* form_element = GetFormElement("form");
+  ASSERT_TRUE(form_element);
+  ASSERT_TRUE(IsValidWebMCPForm(*form_element));
+  String actual = ComputeInputSchema(*form_element);
+
+  std::unique_ptr<JSONValue> expected_json = ParseJSON(R"JSON(
+    {
+      "type": "object",
+      "properties": {
+         "size": {
+           "type": "string",
+           "anyOf": [
+             { "type": "string", "const": "s" },
+             { "type": "string", "const": "m" },
+             { "type": "string", "const": "l" }
+           ],
+           "enum": ["s", "m", "l"],
+           "description": "FIELDSET_DESC"
+         }
+      },
+      "required": []
+    }
+  )JSON");
+  ASSERT_TRUE(expected_json);
+  EXPECT_EQ(expected_json->ToJSONString(), actual);
+}
+
+TEST_F(HTMLFormMcpToolTest, FieldsetDescription_Radio_Nested) {
+  SetBodyInnerHTML(
+      R"HTML(
+    <form id="form" toolname="mytool" tooldescription="perform task">
+      <fieldset toolparamdescription="OUTER_DESC">
+        <fieldset toolparamdescription="INNER_DESC">
+          <input type=radio name=size value=s>
+          <input type=radio name=size value=m>
+        </fieldset>
+      </fieldset>
+    </form>
+  )HTML");
+
+  HTMLFormElement* form_element = GetFormElement("form");
+  ASSERT_TRUE(form_element);
+  ASSERT_TRUE(IsValidWebMCPForm(*form_element));
+  String actual = ComputeInputSchema(*form_element);
+
+  std::unique_ptr<JSONValue> expected_json = ParseJSON(R"JSON(
+    {
+      "type": "object",
+      "properties": {
+         "size": {
+           "type": "string",
+           "anyOf": [
+             { "type": "string", "const": "s" },
+             { "type": "string", "const": "m" }
+           ],
+           "enum": ["s", "m"],
+           "description": "INNER_DESC"
+         }
+      },
+      "required": []
+    }
+  )JSON");
+  ASSERT_TRUE(expected_json);
+  EXPECT_EQ(expected_json->ToJSONString(), actual);
+}
+
+TEST_F(HTMLFormMcpToolTest, FieldsetDescription_Radio_NoAttrOnNearest) {
+  SetBodyInnerHTML(
+      R"HTML(
+    <form id="form" toolname="mytool" tooldescription="perform task">
+      <fieldset toolparamdescription="OUTER_DESC">
+        <fieldset>
+          <input type=radio name=size value=s>
+          <input type=radio name=size value=m>
+        </fieldset>
+      </fieldset>
+    </form>
+  )HTML");
+
+  HTMLFormElement* form_element = GetFormElement("form");
+  ASSERT_TRUE(form_element);
+  ASSERT_TRUE(IsValidWebMCPForm(*form_element));
+  String actual = ComputeInputSchema(*form_element);
+
+  std::unique_ptr<JSONValue> expected_json = ParseJSON(R"JSON(
+    {
+      "type": "object",
+      "properties": {
+         "size": {
+           "type": "string",
+           "anyOf": [
+             { "type": "string", "const": "s" },
+             { "type": "string", "const": "m" }
+           ],
+           "enum": ["s", "m"]
+         }
+      },
+      "required": []
+    }
+  )JSON");
+  ASSERT_TRUE(expected_json);
+  EXPECT_EQ(expected_json->ToJSONString(), actual);
+}
+
+TEST_F(HTMLFormMcpToolTest, FieldsetDescription_Radio_CommonOutside) {
+  SetBodyInnerHTML(
+      R"HTML(
+    <form id="form" toolname="mytool" tooldescription="perform task">
+      <fieldset toolparamdescription="FIELDSET_DESC">
+        <div id=d1>
+          <input type=radio name=size value=s>
+        </div>
+        <div id=d2>
+          <input type=radio name=size value=m>
+        </div>
+      </fieldset>
+    </form>
+  )HTML");
+
+  HTMLFormElement* form_element = GetFormElement("form");
+  ASSERT_TRUE(form_element);
+  ASSERT_TRUE(IsValidWebMCPForm(*form_element));
+  String actual = ComputeInputSchema(*form_element);
+
+  std::unique_ptr<JSONValue> expected_json = ParseJSON(R"JSON(
+    {
+      "type": "object",
+      "properties": {
+         "size": {
+           "type": "string",
+           "anyOf": [
+             { "type": "string", "const": "s" },
+             { "type": "string", "const": "m" }
+           ],
+           "enum": ["s", "m"],
+           "description": "FIELDSET_DESC"
+         }
+      },
+      "required": []
+    }
+  )JSON");
+  ASSERT_TRUE(expected_json);
+  EXPECT_EQ(expected_json->ToJSONString(), actual);
+}
+
+TEST_F(HTMLFormMcpToolTest, FieldsetDescription_Radio_NoCommonFieldset) {
+  SetBodyInnerHTML(
+      R"HTML(
+    <form id="form" toolname="mytool" tooldescription="perform task">
+      <fieldset toolparamdescription="FIELDSET1">
+        <input type=radio name=size value=s>
+      </fieldset>
+      <fieldset toolparamdescription="FIELDSET2">
+        <input type=radio name=size value=m>
+      </fieldset>
+    </form>
+  )HTML");
+
+  HTMLFormElement* form_element = GetFormElement("form");
+  ASSERT_TRUE(form_element);
+  ASSERT_TRUE(IsValidWebMCPForm(*form_element));
+  String actual = ComputeInputSchema(*form_element);
+
+  std::unique_ptr<JSONValue> expected_json = ParseJSON(R"JSON(
+    {
+      "type": "object",
+      "properties": {
+         "size": {
+           "type": "string",
+           "anyOf": [
+             { "type": "string", "const": "s" },
+             { "type": "string", "const": "m" }
+           ],
+           "enum": ["s", "m"]
+         }
+      },
+      "required": []
+    }
+  )JSON");
+  ASSERT_TRUE(expected_json);
+  EXPECT_EQ(expected_json->ToJSONString(), actual);
+}
+
+TEST_F(HTMLFormMcpToolTest, FieldsetDescription_Single_Text) {
+  SetBodyInnerHTML(
+      R"HTML(
+    <form id="form" toolname="mytool" tooldescription="perform task">
+      <fieldset toolparamdescription="FIELDSET_DESC">
+        <input type=text name=text1>
+      </fieldset>
+    </form>
+  )HTML");
+
+  HTMLFormElement* form_element = GetFormElement("form");
+  ASSERT_TRUE(form_element);
+  ASSERT_TRUE(IsValidWebMCPForm(*form_element));
+  String actual = ComputeInputSchema(*form_element);
+
+  std::unique_ptr<JSONValue> expected_json = ParseJSON(R"JSON(
+    {
+      "type": "object",
+      "properties": {
+         "text1": {
+           "type": "string"
+         }
+      },
+      "required": []
+    }
+  )JSON");
+  ASSERT_TRUE(expected_json);
+  EXPECT_EQ(expected_json->ToJSONString(), actual);
+}
+
+TEST_F(HTMLFormMcpToolTest, FieldsetDescription_Single_Text_Describes_Self) {
+  SetBodyInnerHTML(
+      R"HTML(
+    <form id="form" toolname="mytool" tooldescription="perform task">
+      <fieldset toolparamdescription="FIELDSET_DESC">
+        <input type=text name=text1 toolparamdescription="INPUT_DESC">
+      </fieldset>
+    </form>
+  )HTML");
+
+  HTMLFormElement* form_element = GetFormElement("form");
+  ASSERT_TRUE(form_element);
+  ASSERT_TRUE(IsValidWebMCPForm(*form_element));
+  String actual = ComputeInputSchema(*form_element);
+
+  std::unique_ptr<JSONValue> expected_json = ParseJSON(R"JSON(
+    {
+      "type": "object",
+      "properties": {
+         "text1": {
+           "type": "string",
+           "description": "INPUT_DESC"
+         }
+      },
+      "required": []
+    }
+  )JSON");
+  ASSERT_TRUE(expected_json);
+  EXPECT_EQ(expected_json->ToJSONString(), actual);
+}
+
+TEST_F(HTMLFormMcpToolTest, FieldsetDescription_LimitToForm) {
+  SetBodyInnerHTML(
+      R"HTML(
+    <fieldset toolparamdescription="OUTSIDE">
+      <form id="form" toolname="mytool" tooldescription="perform task">
+        <input type=radio name=size value=s>
+        <input type=radio name=size value=m>
+      </form>
+    </fieldset>
+  )HTML");
+
+  HTMLFormElement* form_element = GetFormElement("form");
+  ASSERT_TRUE(form_element);
+  ASSERT_TRUE(IsValidWebMCPForm(*form_element));
+  String actual = ComputeInputSchema(*form_element);
+
+  std::unique_ptr<JSONValue> expected_json = ParseJSON(R"JSON(
+    {
+      "type": "object",
+      "properties": {
+         "size": {
+           "type": "string",
+           "anyOf": [
+             { "type": "string", "const": "s" },
+             { "type": "string", "const": "m" }
+           ],
+           "enum": ["s", "m"]
+         }
+      },
+      "required": []
+    }
+  )JSON");
+  ASSERT_TRUE(expected_json);
+  EXPECT_EQ(expected_json->ToJSONString(), actual);
+}
+
+TEST_F(HTMLFormMcpToolTest, FieldsetDescription_Checkbox_Multiple_Basic) {
+  SetBodyInnerHTML(
+      R"HTML(
+    <form id="form" toolname="mytool" tooldescription="perform task">
+      <fieldset toolparamdescription="CHECKBOX_DESC">
+        <input type=checkbox name=colors value=red>
+        <input type=checkbox name=colors value=green>
+        <input type=checkbox name=colors value=blue>
+      </fieldset>
+    </form>
+  )HTML");
+
+  HTMLFormElement* form_element = GetFormElement("form");
+  ASSERT_TRUE(form_element);
+  ASSERT_TRUE(IsValidWebMCPForm(*form_element));
+  String actual = ComputeInputSchema(*form_element);
+
+  std::unique_ptr<JSONValue> expected_json = ParseJSON(R"JSON(
+    {
+      "type": "object",
+      "properties": {
+         "colors": {
+           "type": "array",
+           "items": {
+             "type": "string",
+             "anyOf": [
+               { "type": "string", "const": "red" },
+               { "type": "string", "const": "green" },
+               { "type": "string", "const": "blue" }
+             ],
+             "enum": ["red", "green", "blue"]
+           },
+           "uniqueItems": true,
+           "description": "CHECKBOX_DESC"
+         }
+      },
+      "required": []
+    }
+  )JSON");
+  ASSERT_TRUE(expected_json);
+  EXPECT_EQ(expected_json->ToJSONString(), actual);
+}
+
+TEST_F(HTMLFormMcpToolTest, GenericIssue_MissingName) {
+  InspectorIssueStorage& storage =
+      GetDocument().GetPage()->GetInspectorIssueStorage();
+  storage.Clear();
+  EXPECT_EQ(0u, storage.size());
+
+  SetBodyInnerHTML(
+      R"HTML(
+    <form id="form" tooldescription="perform task">
+      <input name="text1" type="text">
+    </form>
+  )HTML");
+
+  EXPECT_EQ(1u, storage.size());
+  protocol::Audits::InspectorIssue* issue = storage.at(0);
+  EXPECT_EQ(protocol::Audits::InspectorIssueCodeEnum::GenericIssue,
+            issue->getCode());
+  EXPECT_TRUE(issue->getDetails()->hasGenericIssueDetails());
+  EXPECT_EQ(protocol::Audits::GenericIssueErrorTypeEnum::
+                FormModelContextMissingToolName,
+            issue->getDetails()->getGenericIssueDetails()->getErrorType());
+}
+
+TEST_F(HTMLFormMcpToolTest, GenericIssue_MissingDescription) {
+  InspectorIssueStorage& storage =
+      GetDocument().GetPage()->GetInspectorIssueStorage();
+  storage.Clear();
+  EXPECT_EQ(0u, storage.size());
+
+  SetBodyInnerHTML(
+      R"HTML(
+    <form id="form" toolname="mytool">
+      <input name="text1" type="text">
+    </form>
+  )HTML");
+  test::RunPendingTasks();
+
+  EXPECT_EQ(1u, storage.size());
+  protocol::Audits::InspectorIssue* issue = storage.at(0);
+  EXPECT_EQ(protocol::Audits::InspectorIssueCodeEnum::GenericIssue,
+            issue->getCode());
+  EXPECT_TRUE(issue->getDetails()->hasGenericIssueDetails());
+  EXPECT_EQ(protocol::Audits::GenericIssueErrorTypeEnum::
+                FormModelContextMissingToolDescription,
+            issue->getDetails()->getGenericIssueDetails()->getErrorType());
+}
+
+TEST_F(HTMLFormMcpToolTest, GenericIssue_MissingDescriptionTwice) {
+  InspectorIssueStorage& storage =
+      GetDocument().GetPage()->GetInspectorIssueStorage();
+  storage.Clear();
+  EXPECT_EQ(0u, storage.size());
+
+  SetBodyInnerHTML(
+      R"HTML(
+    <form id="form" toolname="mytool">
+      <input name="text1" type="text">
+    </form>
+  )HTML");
+  test::RunPendingTasks();
+
+  EXPECT_EQ(1u, storage.size());
+  SetBodyInnerHTML(
+      R"HTML(
+    <form id="form" toolname="mytool">
+      <input name="text1" type="text">
+    </form>
+  )HTML");
+  test::RunPendingTasks();
+  EXPECT_EQ(2u, storage.size());
+  EXPECT_EQ(
+      storage.at(0)->getDetails()->getGenericIssueDetails()->getErrorType(),
+      storage.at(1)->getDetails()->getGenericIssueDetails()->getErrorType());
+}
+
+TEST_F(HTMLFormMcpToolTest, GenericIssue_RegularFormNoIssues) {
+  InspectorIssueStorage& storage =
+      GetDocument().GetPage()->GetInspectorIssueStorage();
+  storage.Clear();
+  EXPECT_EQ(0u, storage.size());
+
+  SetBodyInnerHTML(
+      R"HTML(
+    <form id="form">
+      <input name="text1" type="text">
+    </form>
+  )HTML");
+  test::RunPendingTasks();
+
+  EXPECT_EQ(0u, storage.size());
+}
+
+TEST_F(HTMLFormMcpToolTest, GenericIssue_NotConnectedNoIssues) {
+  UpdateAllLifecyclePhasesForTest();
+
+  InspectorIssueStorage& storage =
+      GetDocument().GetPage()->GetInspectorIssueStorage();
+  storage.Clear();
+  EXPECT_EQ(0u, storage.size());
+
+  HTMLFormElement* form_element =
+      MakeGarbageCollected<HTMLFormElement>(GetDocument());
+  form_element->setAttribute(html_names::kToolnameAttr, AtomicString("mytool"));
+  form_element->setAttribute(html_names::kTooldescriptionAttr,
+                             AtomicString("description"));
+  EXPECT_FALSE(IsValidWebMCPForm(*form_element));  // Not connected.
+  test::RunPendingTasks();
+
+  // Should not report issues because it's not connected.
+  EXPECT_EQ(0u, storage.size());
+}
+
+TEST_F(HTMLFormMcpToolTest, GenericIssue_ParameterMissingName) {
+  SetBodyInnerHTML(R"HTML(
+    <form id="form" toolname="my_tool" tooldescription="My tool description">
+      <input id="text_missing_name" type="text" toolparamdescription="Some nice text">
+      <select id="select_missing_name" toolparamdescription="Some nice text">
+    </form>
+  )HTML");
+  test::RunPendingTasks();
+  HTMLFormElement* form_element = GetFormElement("form");
+  ASSERT_TRUE(form_element);
+  ASSERT_TRUE(IsValidWebMCPForm(*form_element));
+
+  InspectorIssueStorage& storage =
+      GetDocument().GetPage()->GetInspectorIssueStorage();
+  storage.Clear();
+  EXPECT_EQ(0u, storage.size());
+
+  ComputeInputSchema(*form_element);
+
+  EXPECT_EQ(2u, storage.size());
+
+  protocol::Audits::InspectorIssue* issue0 = storage.at(0);
+  EXPECT_EQ(protocol::Audits::InspectorIssueCodeEnum::GenericIssue,
+            issue0->getCode());
+  EXPECT_EQ(protocol::Audits::GenericIssueErrorTypeEnum::
+                FormModelContextParameterMissingName,
+            issue0->getDetails()->getGenericIssueDetails()->getErrorType());
+
+  protocol::Audits::InspectorIssue* issue1 = storage.at(1);
+  EXPECT_EQ(protocol::Audits::InspectorIssueCodeEnum::GenericIssue,
+            issue1->getCode());
+  EXPECT_EQ(protocol::Audits::GenericIssueErrorTypeEnum::
+                FormModelContextParameterMissingName,
+            issue1->getDetails()->getGenericIssueDetails()->getErrorType());
+  EXPECT_TRUE(
+      issue0->getDetails()->getGenericIssueDetails()->hasViolatingNodeId());
+  HTMLInputElement* text = GetInputElement("text_missing_name");
+  ASSERT_TRUE(text);
+  EXPECT_EQ(
+      static_cast<int>(DOMNodeIds::IdForNode(text)),
+      issue0->getDetails()->getGenericIssueDetails()->getViolatingNodeId(0));
+
+  EXPECT_TRUE(
+      issue1->getDetails()->getGenericIssueDetails()->hasViolatingNodeId());
+  Element* select = GetElementById("select_missing_name");
+  ASSERT_TRUE(select);
+  EXPECT_EQ(
+      static_cast<int>(DOMNodeIds::IdForNode(select)),
+      issue1->getDetails()->getGenericIssueDetails()->getViolatingNodeId(0));
+}
+
+TEST_F(HTMLFormMcpToolTest,
+       GenericIssue_UnsupportedParameterExcludedFromMissingName) {
+  SetBodyInnerHTML(R"HTML(
+    <form id="form" toolname="my_tool" tooldescription="My tool description">
+      <input type="text" name="text" toolparamdescription="Text field">
+      <input type="submit" id="submit_btn">
+    </form>
+  )HTML");
+  test::RunPendingTasks();
+  HTMLFormElement* form_element = GetFormElement("form");
+  ASSERT_TRUE(form_element);
+  ASSERT_TRUE(IsValidWebMCPForm(*form_element));
+
+  InspectorIssueStorage& storage =
+      GetDocument().GetPage()->GetInspectorIssueStorage();
+  storage.Clear();
+  EXPECT_EQ(0u, storage.size());
+
+  ComputeInputSchema(*form_element);
+
+  EXPECT_EQ(0u, storage.size());
+}
+
+TEST_F(HTMLFormMcpToolTest, GenericIssue_RequiredParameterMissingName) {
+  SetBodyInnerHTML(R"HTML(
+    <form id="form" toolname="my_tool" tooldescription="My tool description">
+      <input id="text_req_missing_name" type="text" required toolparamdescription="Some nice text">
+    </form>
+  )HTML");
+  test::RunPendingTasks();
+  HTMLFormElement* form_element = GetFormElement("form");
+  ASSERT_TRUE(form_element);
+  ASSERT_TRUE(IsValidWebMCPForm(*form_element));
+
+  InspectorIssueStorage& storage =
+      GetDocument().GetPage()->GetInspectorIssueStorage();
+  storage.Clear();
+  EXPECT_EQ(0u, storage.size());
+
+  ComputeInputSchema(*form_element);
+
+  EXPECT_EQ(1u, storage.size());
+
+  protocol::Audits::InspectorIssue* issue = storage.at(0);
+  EXPECT_EQ(protocol::Audits::InspectorIssueCodeEnum::GenericIssue,
+            issue->getCode());
+  EXPECT_EQ(protocol::Audits::GenericIssueErrorTypeEnum::
+                FormModelContextRequiredParameterMissingName,
+            issue->getDetails()->getGenericIssueDetails()->getErrorType());
+  EXPECT_TRUE(
+      issue->getDetails()->getGenericIssueDetails()->hasViolatingNodeId());
+  HTMLInputElement* text = GetInputElement("text_req_missing_name");
+  ASSERT_TRUE(text);
+  EXPECT_EQ(
+      static_cast<int>(DOMNodeIds::IdForNode(text)),
+      issue->getDetails()->getGenericIssueDetails()->getViolatingNodeId(0));
+}
+
+TEST_F(HTMLFormMcpToolTest,
+       GenericIssue_RequiredParameterMissingNameAndTitleDescription) {
+  SetBodyInnerHTML(R"HTML(
+    <form id="form" toolname="my_tool" tooldescription="My tool description">
+      <input id="text_both_missing" type="text" required>
+    </form>
+  )HTML");
+  HTMLFormElement* form_element = GetFormElement("form");
+  ASSERT_TRUE(form_element);
+  ASSERT_TRUE(IsValidWebMCPForm(*form_element));
+
+  InspectorIssueStorage& storage =
+      GetDocument().GetPage()->GetInspectorIssueStorage();
+  storage.Clear();
+  EXPECT_EQ(0u, storage.size());
+
+  ComputeInputSchema(*form_element);
+
+  EXPECT_EQ(2u, storage.size());
+
+  protocol::Audits::InspectorIssue* issue1 = storage.at(0);
+  EXPECT_EQ(protocol::Audits::InspectorIssueCodeEnum::GenericIssue,
+            issue1->getCode());
+  EXPECT_EQ(protocol::Audits::GenericIssueErrorTypeEnum::
+                FormModelContextRequiredParameterMissingName,
+            issue1->getDetails()->getGenericIssueDetails()->getErrorType());
+  EXPECT_TRUE(
+      issue1->getDetails()->getGenericIssueDetails()->hasViolatingNodeId());
+  HTMLInputElement* text = GetInputElement("text_both_missing");
+  ASSERT_TRUE(text);
+  EXPECT_EQ(
+      static_cast<int>(DOMNodeIds::IdForNode(text)),
+      issue1->getDetails()->getGenericIssueDetails()->getViolatingNodeId(0));
+
+  protocol::Audits::InspectorIssue* issue2 = storage.at(1);
+  EXPECT_EQ(protocol::Audits::InspectorIssueCodeEnum::GenericIssue,
+            issue2->getCode());
+  EXPECT_TRUE(issue2->getDetails()->hasGenericIssueDetails());
+  EXPECT_EQ(protocol::Audits::GenericIssueErrorTypeEnum::
+                FormModelContextParameterMissingTitleAndDescription,
+            issue2->getDetails()->getGenericIssueDetails()->getErrorType());
+  EXPECT_TRUE(
+      issue2->getDetails()->getGenericIssueDetails()->hasViolatingNodeId());
+  EXPECT_EQ(
+      static_cast<int>(DOMNodeIds::IdForNode(text)),
+      issue2->getDetails()->getGenericIssueDetails()->getViolatingNodeId(0));
 }
 
 }  // namespace blink

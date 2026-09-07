@@ -13,7 +13,6 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.MemoryPressureLevel;
@@ -25,7 +24,6 @@ import java.util.function.Supplier;
 
 /** Test for MemoryPressureMonitor. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class MemoryPressureMonitorTest {
     private MemoryPressureMonitor mMonitor;
 
@@ -84,7 +82,6 @@ public class MemoryPressureMonitorTest {
         ThreadUtils.setUiThread(Looper.getMainLooper());
 
         // Pause main thread to get control over when tasks are run (see runUiThreadFor()).
-        ShadowLooper.pauseMainLooper();
 
         mMonitor = new MemoryPressureMonitor(THROTTLING_INTERVAL_MS);
         mMonitor.setCurrentPressureSupplierForTesting(null);
@@ -228,7 +225,7 @@ public class MemoryPressureMonitorTest {
                 new TestPressureSupplier(MemoryPressureLevel.MODERATE);
         mMonitor.setCurrentPressureSupplierForTesting(pressureSupplier);
 
-        mMonitor.enablePolling(false);
+        mMonitor.enablePolling();
 
         // When polling is enabled, current pressure should be retrieved and reported.
         pressureSupplier.assertCalled();
@@ -244,7 +241,7 @@ public class MemoryPressureMonitorTest {
         TestPressureSupplier pressureSupplier = new TestPressureSupplier(null);
         mMonitor.setCurrentPressureSupplierForTesting(pressureSupplier);
 
-        mMonitor.enablePolling(false);
+        mMonitor.enablePolling();
 
         // The pressure supplier should be called, but its null result should be ignored.
         pressureSupplier.assertCalled();
@@ -262,7 +259,7 @@ public class MemoryPressureMonitorTest {
 
         // The notification above started a throttling interval, so we shouldn't ask for the
         // current pressure when polling is enabled.
-        mMonitor.enablePolling(false);
+        mMonitor.enablePolling();
 
         pressureSupplier.assertNotCalled();
     }
@@ -280,7 +277,7 @@ public class MemoryPressureMonitorTest {
         mMonitor.notifyPressure(MemoryPressureLevel.CRITICAL);
         callback.reset();
 
-        mMonitor.enablePolling(false);
+        mMonitor.enablePolling();
 
         runUiThreadFor(THROTTLING_INTERVAL_MS - 1);
 
@@ -303,7 +300,7 @@ public class MemoryPressureMonitorTest {
 
         mMonitor.notifyPressure(MemoryPressureLevel.MODERATE);
 
-        mMonitor.enablePolling(false);
+        mMonitor.enablePolling();
 
         runUiThreadFor(THROTTLING_INTERVAL_MS);
 
@@ -321,7 +318,7 @@ public class MemoryPressureMonitorTest {
         mMonitor.notifyPressure(MemoryPressureLevel.MODERATE);
         mMonitor.notifyPressure(MemoryPressureLevel.CRITICAL);
 
-        mMonitor.enablePolling(false);
+        mMonitor.enablePolling();
 
         runUiThreadFor(THROTTLING_INTERVAL_MS);
 
@@ -338,7 +335,7 @@ public class MemoryPressureMonitorTest {
 
         mMonitor.notifyPressure(MemoryPressureLevel.CRITICAL);
 
-        mMonitor.enablePolling(false);
+        mMonitor.enablePolling();
 
         runUiThreadFor(THROTTLING_INTERVAL_MS - 1);
 

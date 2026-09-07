@@ -53,13 +53,19 @@
   padding-bottom: 12px;
 }
 
+.aria-hidden-container {
+  /* Ignore container for visual layout. */
+  display: contents;
+}
+
 :host([has-action]) .container {
   height: 38px;
   padding-top: 3px;
   padding-bottom: 3px;
 }
 
-:host([is-top-chrome-searchbox_]:is([has-action],[has-keyword])) .container {
+:host([is-top-chrome-searchbox_]:is([has-action],[has-keyword-chip]))
+    .container {
   height: 40px;
   padding-top: 0;
   padding-bottom: 0;
@@ -132,7 +138,7 @@
   position: relative;
 }
 
-#focus-indicator {
+#focusIndicator {
   --searchbox-match-focus-indicator-width_: 7px;
   background-color: var(--color-searchbox-results-focus-indicator);
   border-radius: 3px;
@@ -144,7 +150,7 @@
 }
 
 /* Focus indicator only shown for vertically rendered matches. */
-:host-context(.vertical):host(:is(:focus-visible, [selected]:not(:focus-within))) #focus-indicator:not(.selected-within) {
+:host-context(.vertical):host(:is(:focus-visible, [selected]:not(:focus-within))) #focusIndicator:not(.selected-within) {
   display: block;
 }
 
@@ -203,27 +209,45 @@
   white-space: normal;
 }
 
+:host([is-lens-searchbox_]) #suggestion {
+  /* The above "display: -webkit-box" doesn't get inherited properly, so
+     force to display inline to ensure the text clamps correctly. */
+  display: inline;
+}
+
 :host([has-action]) #text-container {
   padding-inline-end: 4px;
 }
 
-:host([is-rich-suggestion]) #text-container {
+:host([is-two-row-suggestion]) #text-container {
   align-items: flex-start;
   flex-direction: column;
 }
 
-:host([is-rich-suggestion]) #separator {
+:host([is-two-row-suggestion]) #separator {
   display: none;
 }
 
-:host([is-rich-suggestion]) #contents,
-:host([is-rich-suggestion]) #description {
+:host([is-two-row-suggestion]) #contents,
+:host([is-two-row-suggestion]) #description {
   width: 100%;
 }
 
-/* Deemphasizes description for rich suggestions. */
-:host([is-rich-suggestion]) #description {
+/* Deemphasizes description for two-row suggestions. */
+:host([is-two-row-suggestion]) #description {
   font-size: .875em;
+}
+
+:host([is-contextual-suggestion_]:not([show-contextual-description])) #description,
+:host([is-contextual-suggestion_]:not([show-contextual-description])) #separator {
+  display: none;
+}
+
+:host([is-contextual-suggestion_]) .container:not(.actions):hover #description,
+:host([is-contextual-suggestion_]) .container:not(.actions):hover #separator,
+:host-context(cr-searchbox-match:-webkit-any(:focus-within, [selected])):host([is-contextual-suggestion_]) #description,
+:host-context(cr-searchbox-match:-webkit-any(:focus-within, [selected])):host([is-contextual-suggestion_]) #separator {
+  display: inline;
 }
 
 .match {
@@ -280,8 +304,10 @@
       var(--color-searchbox-results-button-selected-hover);
 }
 
-:host-context(.vertical) .container:hover #remove,
-:host-context(cr-searchbox-match:-webkit-any(:focus-within, [selected])):host-context(.vertical) #remove {
+:host-context(.vertical) .container:hover #remove:not([hidden]),
+:host-context(cr-searchbox-match[selected]):host-context(.vertical) #remove:not([hidden]),
+#remove:focus-visible:not([hidden]),
+#remove.selected:not([hidden]) {
   display: inline-flex;
 }
 

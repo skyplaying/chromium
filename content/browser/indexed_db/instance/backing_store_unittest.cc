@@ -18,6 +18,7 @@
 #include "content/browser/indexed_db/instance/backing_store_test_base.h"
 #include "content/browser/indexed_db/instance/backing_store_util.h"
 #include "content/browser/indexed_db/instance/bucket_context.h"
+#include "content/browser/indexed_db/instance/sqlite/backing_store_impl.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/indexeddb/indexeddb_key.h"
 #include "third_party/blink/public/common/indexeddb/indexeddb_key_path.h"
@@ -78,7 +79,7 @@ TEST_P(BackingStoreTest, PutGetConsistency) {
 
     transaction1->Begin(CreateDummyLock());
     EXPECT_TRUE(transaction1->PutRecord(1, key, value.Clone()).has_value());
-    CommitTransactionAndVerify(*transaction1);
+    CommitTransactionAndVerify(std::move(transaction1));
   }
 
   {
@@ -89,7 +90,7 @@ TEST_P(BackingStoreTest, PutGetConsistency) {
     transaction2->Begin(CreateDummyLock());
     auto result = transaction2->GetRecord(1, key);
     EXPECT_TRUE(result.has_value());
-    CommitTransactionAndVerify(*transaction2);
+    CommitTransactionAndVerify(std::move(transaction2));
     EXPECT_EQ(base::span(value.bits), base::span(result->bits));
   }
 }
@@ -186,7 +187,7 @@ TEST_P(BackingStoreTest, Snapshots) {
                       .has_value());
     }
     total_record_count += num_records;
-    CommitTransactionAndVerify(*transaction);
+    CommitTransactionAndVerify(std::move(transaction));
   };
   add_records(100);
 
@@ -208,7 +209,7 @@ TEST_P(BackingStoreTest, Snapshots) {
     IndexedDBKey key(15, blink::mojom::IDBKeyType::Number);
     EXPECT_TRUE(transaction->PutRecord(kObjectStoreId1, key, value2_.Clone())
                     .has_value());
-    CommitTransactionAndVerify(*transaction);
+    CommitTransactionAndVerify(std::move(transaction));
   };
 
   ASSERT_OK_AND_ASSIGN(base::DictValue snapshot3, SnapshotDatabase(db));
@@ -226,7 +227,7 @@ TEST_P(BackingStoreTest, Snapshots) {
     IndexedDBKey key(15, blink::mojom::IDBKeyType::Number);
     EXPECT_TRUE(transaction->PutRecord(kObjectStoreId1, key, value1_.Clone())
                     .has_value());
-    CommitTransactionAndVerify(*transaction);
+    CommitTransactionAndVerify(std::move(transaction));
   };
   ASSERT_OK_AND_ASSIGN(base::DictValue snapshot4, SnapshotDatabase(db));
   EXPECT_EQ(snapshot2, snapshot4);
@@ -257,7 +258,7 @@ TEST_P(BackingStoreTest, Snapshots) {
     EXPECT_TRUE(
         transaction->DeleteRange(kObjectStoreId1, blink::IndexedDBKeyRange())
             .ok());
-    CommitTransactionAndVerify(*transaction);
+    CommitTransactionAndVerify(std::move(transaction));
   };
   ASSERT_OK_AND_ASSIGN(base::DictValue no_record_snapshot,
                        SnapshotDatabase(db));
@@ -293,7 +294,7 @@ TEST_P(BackingStoreTest, CreateAndDeleteIndex) {
                                                /*multi_entry=*/true))
             .ok());
 
-    CommitTransactionAndVerify(*transaction);
+    CommitTransactionAndVerify(std::move(transaction));
   }
 
   EXPECT_EQ(db->GetMetadata().object_stores.size(), 1U);
@@ -329,7 +330,7 @@ TEST_P(BackingStoreTest, CreateAndDeleteIndex) {
       EXPECT_FALSE(pk->IsValid());
     }
 
-    CommitTransactionAndVerify(*transaction);
+    CommitTransactionAndVerify(std::move(transaction));
   }
 
   EXPECT_EQ(object_store.indexes.end(), object_store.indexes.find(index_id));
@@ -378,7 +379,7 @@ TEST_P(BackingStoreTest, CreateDatabase) {
     const IndexedDBIndexMetadata& index =
         object_store.indexes.find(index_id)->second;
     EXPECT_EQ(index.id, index_id);
-    CommitTransactionAndVerify(*transaction);
+    CommitTransactionAndVerify(std::move(transaction));
   }
 
   // Wait for the database to be unlocked before reopening it.
@@ -510,7 +511,7 @@ TEST_P(BackingStoreTestWithExternalObjects, PutGetConsistency) {
 
     transaction1->Begin(CreateDummyLock());
     EXPECT_TRUE(transaction1->PutRecord(1, key3_, value3_.Clone()).has_value());
-    CommitTransactionAndVerify(*transaction1);
+    CommitTransactionAndVerify(std::move(transaction1));
   }
 
   // Initiate transaction2, reading blobs.
@@ -523,7 +524,7 @@ TEST_P(BackingStoreTestWithExternalObjects, PutGetConsistency) {
     EXPECT_TRUE(result.has_value());
     IndexedDBValue result_value = std::move(result.value());
 
-    CommitTransactionAndVerify(*transaction2);
+    CommitTransactionAndVerify(std::move(transaction2));
     EXPECT_EQ(base::span(value3_.bits), base::span(result_value.bits));
 
     EXPECT_TRUE(CheckBlobInfoMatches(result_value.external_objects));
@@ -542,7 +543,7 @@ TEST_P(BackingStoreTestWithExternalObjects, PutGetConsistency) {
                                                /*lower_open=*/false,
                                                /*upper_open=*/false))
             .ok());
-    CommitTransactionAndVerify(*transaction3);
+    CommitTransactionAndVerify(std::move(transaction3));
   }
 
   // Verify deletes
@@ -556,7 +557,7 @@ TEST_P(BackingStoreTestWithExternalObjects, PutGetConsistency) {
     EXPECT_TRUE(result.has_value());
     IndexedDBValue result_value = std::move(result.value());
 
-    CommitTransactionAndVerify(*transaction4);
+    CommitTransactionAndVerify(std::move(transaction4));
     EXPECT_TRUE(result_value.empty());
   }
 }
@@ -620,7 +621,7 @@ TEST_P(BackingStoreTestWithExternalObjects, DeleteRange) {
       }
 
       // Start committing transaction1.
-      CommitTransactionAndVerify(*transaction1);
+      CommitTransactionAndVerify(std::move(transaction1));
     }
 
     {
@@ -632,7 +633,7 @@ TEST_P(BackingStoreTestWithExternalObjects, DeleteRange) {
       EXPECT_TRUE(transaction2->DeleteRange(object_store_id, range).ok());
 
       // Start committing transaction2.
-      CommitTransactionAndVerify(*transaction2);
+      CommitTransactionAndVerify(std::move(transaction2));
     }
 
     // Verify deletes
@@ -646,7 +647,7 @@ TEST_P(BackingStoreTestWithExternalObjects, DeleteRange) {
         EXPECT_TRUE(result.has_value());
         IndexedDBValue result_value = std::move(result.value());
 
-        CommitTransactionAndVerify(*transaction);
+        CommitTransactionAndVerify(std::move(transaction));
 
         if (j == 1 || j == 2) {
           EXPECT_TRUE(result_value.empty());
@@ -717,7 +718,7 @@ TEST_P(BackingStoreTestWithExternalObjects, DeleteRangeEmptyRange) {
                 .has_value());
       }
       // Start committing transaction1.
-      CommitTransactionAndVerify(*transaction1);
+      CommitTransactionAndVerify(std::move(transaction1));
     }
 
     // Initiate transaction 2 - delete range.
@@ -728,7 +729,7 @@ TEST_P(BackingStoreTestWithExternalObjects, DeleteRangeEmptyRange) {
       transaction2->Begin(CreateDummyLock());
       EXPECT_TRUE(transaction2->DeleteRange(object_store_id, range).ok());
 
-      CommitTransactionAndVerify(*transaction2);
+      CommitTransactionAndVerify(std::move(transaction2));
     }
 
     // Verify that no records were deleted.
@@ -742,7 +743,7 @@ TEST_P(BackingStoreTestWithExternalObjects, DeleteRangeEmptyRange) {
         EXPECT_TRUE(result.has_value());
         IndexedDBValue result_value = std::move(result.value());
 
-        CommitTransactionAndVerify(*transaction3);
+        CommitTransactionAndVerify(std::move(transaction3));
 
         // No records should have been deleted.
         EXPECT_FALSE(result_value.empty());
@@ -798,7 +799,7 @@ TEST_P(BackingStoreTestWithExternalObjects, ClearObjectStoreObjects) {
                 .has_value());
       }
 
-      CommitTransactionAndVerify(*transaction1);
+      CommitTransactionAndVerify(std::move(transaction1));
     }
   }
 
@@ -812,7 +813,7 @@ TEST_P(BackingStoreTestWithExternalObjects, ClearObjectStoreObjects) {
     EXPECT_TRUE(transaction2->ClearObjectStore(object_store_id).ok());
 
     // Start committing transaction2.
-    CommitTransactionAndVerify(*transaction2);
+    CommitTransactionAndVerify(std::move(transaction2));
   }
 
   // Verify that all blobs were removed.
@@ -826,7 +827,7 @@ TEST_P(BackingStoreTestWithExternalObjects, ClearObjectStoreObjects) {
       EXPECT_TRUE(result.has_value());
       IndexedDBValue result_value = std::move(result.value());
 
-      CommitTransactionAndVerify(*transaction3);
+      CommitTransactionAndVerify(std::move(transaction3));
       EXPECT_TRUE(result_value.empty());
     }
   }
@@ -862,7 +863,7 @@ TEST_F(BackingStoreMigrationTest, Migrate) {
                     .has_value());
     EXPECT_TRUE(transaction->PutRecord(kObjectStoreId1, key3_, value3_.Clone())
                     .has_value());
-    CommitTransactionAndVerify(*transaction);
+    CommitTransactionAndVerify(std::move(transaction));
   }
   db.reset();
 
@@ -882,6 +883,43 @@ TEST_F(BackingStoreMigrationTest, Migrate) {
                 "IndexedDB.SqliteMigration.RenameBlobResult",
                 -base::File::FILE_ERROR_NOT_FOUND),
             1);
+}
+
+// Make a backing store in a directory that already contains SQLite files,
+// then tell it to migrate from another backing store. The pre-existing SQLite
+// files should be deleted at the start of migration.
+TEST_F(BackingStoreMigrationTest, MigrateOverExistingSqliteDatabase) {
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<BackingStore::Database> db,
+                       backing_store()->CreateOrOpenDatabase(u"test_db"));
+  CreateObjectStore(*db);
+  db.reset();
+
+  base::ScopedTempDir other_dir;
+  ASSERT_TRUE(other_dir.CreateUniqueTempDir());
+  std::unique_ptr<BucketContext> other_bucket_context =
+      CreateBucketContext(/*use_sqlite=*/true, other_dir.GetPath());
+  ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<BackingStore::Database> existing_db,
+      other_bucket_context->backing_store()->CreateOrOpenDatabase(
+          u"existing_db"));
+  CreateObjectStore(*existing_db);
+  existing_db.reset();
+  other_bucket_context.reset();
+
+  other_bucket_context =
+      CreateBucketContext(/*use_sqlite=*/true, other_dir.GetPath());
+  sqlite::BackingStoreImpl* sqlite_backing_store =
+      static_cast<sqlite::BackingStoreImpl*>(
+          other_bucket_context->backing_store());
+  ASSERT_TRUE(sqlite_backing_store->MigrateFrom(*backing_store()).ok());
+
+  ASSERT_OK_AND_ASSIGN(bool existing_database_exists,
+                       sqlite_backing_store->DatabaseExists(u"existing_db"));
+  EXPECT_FALSE(existing_database_exists);
+  ASSERT_OK_AND_ASSIGN(std::unique_ptr<BackingStore::Database> migrated_db,
+                       sqlite_backing_store->CreateOrOpenDatabase(u"test_db"));
+  EXPECT_TRUE(
+      migrated_db->GetMetadata().object_stores.contains(kObjectStoreId1));
 }
 
 }  // namespace content::indexed_db

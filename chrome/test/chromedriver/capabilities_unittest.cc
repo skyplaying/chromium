@@ -225,6 +225,21 @@ TEST(Switches, Unparsed) {
   ASSERT_EQ("---e=--1=1 --a --b --c=1 --d=1", switches.ToString());
 }
 
+TEST(Switches, UnparsedInvalidName) {
+  Switches switches;
+  switches.SetUnparsedSwitch("--a b");
+  switches.SetUnparsedSwitch("c\"d");
+  switches.SetUnparsedSwitch("e\'f");
+  switches.SetUnparsedSwitch("g\th");
+  switches.SetUnparsedSwitch("i\nj");
+  switches.SetUnparsedSwitch("k\rl");
+  switches.SetUnparsedSwitch("m=1");
+  switches.SetUnparsedSwitch("--n o=1");
+  switches.SetUnparsedSwitch("/c echo NOT_CHROME > capture.txt");
+
+  ASSERT_EQ("--m=1", switches.ToString());
+}
+
 TEST(ParseCapabilities, UnknownCapabilityLegacy) {
   // In legacy mode, unknown capabilities are ignored.
   Capabilities capabilities;
@@ -246,11 +261,11 @@ TEST(ParseCapabilities, UnknownCapabilityW3c) {
 TEST(ParseCapabilities, WithAndroidPackage) {
   Capabilities capabilities;
   base::DictValue caps;
-  caps.SetByDottedPath("goog:chromeOptions.androidPackage", "abc");
+  caps.SetByDottedPath("goog:chromeOptions.androidPackage", "com.example.app");
   Status status = capabilities.Parse(caps);
   ASSERT_TRUE(status.IsOk());
   ASSERT_TRUE(capabilities.IsAndroid());
-  ASSERT_EQ("abc", capabilities.android_package);
+  ASSERT_EQ("com.example.app", capabilities.android_package);
 }
 
 TEST(ParseCapabilities, EmptyAndroidPackage) {
@@ -261,12 +276,180 @@ TEST(ParseCapabilities, EmptyAndroidPackage) {
   ASSERT_FALSE(status.IsOk());
 }
 
-TEST(ParseCapabilities, IllegalAndroidPackage) {
+TEST(ParseCapabilities, IllegalAndroidPackageType) {
   Capabilities capabilities;
   base::DictValue caps;
   caps.SetByDottedPath("goog:chromeOptions.androidPackage", 123);
   Status status = capabilities.Parse(caps);
   ASSERT_FALSE(status.IsOk());
+}
+
+TEST(ParseCapabilities, InvalidAndroidPackageName) {
+  Capabilities capabilities;
+  base::DictValue caps;
+
+  // Single segment
+  caps.SetByDottedPath("goog:chromeOptions.androidPackage", "abc");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+
+  // Ends with dot
+  caps.SetByDottedPath("goog:chromeOptions.androidPackage", "com.example.");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+
+  // Starts with dot
+  caps.SetByDottedPath("goog:chromeOptions.androidPackage", ".com.example");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+
+  // Contains invalid characters (command injection attempt)
+  caps.SetByDottedPath("goog:chromeOptions.androidPackage", "com.example;rm");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+
+  caps.SetByDottedPath("goog:chromeOptions.androidPackage", "com.example|sh");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+
+  caps.SetByDottedPath("goog:chromeOptions.androidPackage",
+                       "com.example space");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+}
+
+TEST(ParseCapabilities, AndroidActivity) {
+  Capabilities capabilities;
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.androidPackage", "com.example.app");
+
+  // Valid relative activity
+  caps.SetByDottedPath("goog:chromeOptions.androidActivity", ".MainActivity");
+  ASSERT_TRUE(capabilities.Parse(caps).IsOk());
+  ASSERT_EQ(".MainActivity", capabilities.android_activity);
+
+  // Valid fully qualified activity
+  caps.SetByDottedPath("goog:chromeOptions.androidActivity",
+                       "com.example.app.MainActivity");
+  ASSERT_TRUE(capabilities.Parse(caps).IsOk());
+  ASSERT_EQ("com.example.app.MainActivity", capabilities.android_activity);
+
+  // Valid with colon
+  caps.SetByDottedPath("goog:chromeOptions.androidActivity", ":MainActivity");
+  ASSERT_TRUE(capabilities.Parse(caps).IsOk());
+
+  // Invalid characters (command injection attempt)
+  caps.SetByDottedPath("goog:chromeOptions.androidActivity",
+                       ".MainActivity;rm");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+
+  caps.SetByDottedPath("goog:chromeOptions.androidActivity",
+                       ".MainActivity|sh");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+}
+
+TEST(ParseCapabilities, AndroidProcess) {
+  Capabilities capabilities;
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.androidPackage", "com.example.app");
+
+  // Valid process name
+  caps.SetByDottedPath("goog:chromeOptions.androidProcess",
+                       "com.example.app:remote");
+  ASSERT_TRUE(capabilities.Parse(caps).IsOk());
+  ASSERT_EQ("com.example.app:remote", capabilities.android_process);
+
+  // Invalid process name (injection attempt)
+  caps.SetByDottedPath("goog:chromeOptions.androidProcess",
+                       "com.example.app;rm");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+}
+
+TEST(ParseCapabilities, AndroidDeviceSocket) {
+  Capabilities capabilities;
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.androidPackage", "com.example.app");
+
+  // Valid socket name
+  caps.SetByDottedPath("goog:chromeOptions.androidDeviceSocket",
+                       "@webview_devtools_remote_123");
+  ASSERT_TRUE(capabilities.Parse(caps).IsOk());
+  ASSERT_EQ("@webview_devtools_remote_123", capabilities.android_device_socket);
+
+  // Invalid socket name (injection attempt)
+  caps.SetByDottedPath("goog:chromeOptions.androidDeviceSocket", "webview;rm");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+}
+
+TEST(ParseCapabilities, AndroidDeviceSerial) {
+  Capabilities capabilities;
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.androidPackage", "com.example.app");
+
+  // Valid device serials
+  caps.SetByDottedPath("goog:chromeOptions.androidDeviceSerial",
+                       "192.168.1.100:5555");
+  ASSERT_TRUE(capabilities.Parse(caps).IsOk());
+  ASSERT_EQ("192.168.1.100:5555", capabilities.android_device_serial);
+
+  caps.SetByDottedPath("goog:chromeOptions.androidDeviceSerial",
+                       "HT4CTSK00123");
+  ASSERT_TRUE(capabilities.Parse(caps).IsOk());
+  ASSERT_EQ("HT4CTSK00123", capabilities.android_device_serial);
+
+  // Invalid device serial (injection attempt)
+  caps.SetByDottedPath("goog:chromeOptions.androidDeviceSerial", "serial;rm");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+
+  caps.SetByDottedPath("goog:chromeOptions.androidDeviceSerial", "serial|sh");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+}
+
+TEST(ParseCapabilities, AndroidExecName) {
+  Capabilities capabilities;
+  base::DictValue caps;
+  caps.SetByDottedPath("goog:chromeOptions.androidPackage", "com.example.app");
+
+  // Valid executable names (alphanumeric, /, ., _, -)
+  caps.SetByDottedPath("goog:chromeOptions.androidExecName", "chrome");
+  ASSERT_TRUE(capabilities.Parse(caps).IsOk());
+  ASSERT_EQ("chrome", capabilities.android_exec_name);
+
+  caps.SetByDottedPath("goog:chromeOptions.androidExecName", "chrome123");
+  ASSERT_TRUE(capabilities.Parse(caps).IsOk());
+  ASSERT_EQ("chrome123", capabilities.android_exec_name);
+
+  caps.SetByDottedPath("goog:chromeOptions.androidExecName", "content_shell");
+  ASSERT_TRUE(capabilities.Parse(caps).IsOk());
+  ASSERT_EQ("content_shell", capabilities.android_exec_name);
+
+  caps.SetByDottedPath("goog:chromeOptions.androidExecName", "chrome-shell");
+  ASSERT_TRUE(capabilities.Parse(caps).IsOk());
+  ASSERT_EQ("chrome-shell", capabilities.android_exec_name);
+
+  caps.SetByDottedPath("goog:chromeOptions.androidExecName", "chrome.bin");
+  ASSERT_TRUE(capabilities.Parse(caps).IsOk());
+  ASSERT_EQ("chrome.bin", capabilities.android_exec_name);
+
+  caps.SetByDottedPath("goog:chromeOptions.androidExecName",
+                       "/system/bin/chrome");
+  ASSERT_TRUE(capabilities.Parse(caps).IsOk());
+  ASSERT_EQ("/system/bin/chrome", capabilities.android_exec_name);
+
+  caps.SetByDottedPath("goog:chromeOptions.androidExecName",
+                       "./chrome_shell-123.bin");
+  ASSERT_TRUE(capabilities.Parse(caps).IsOk());
+  ASSERT_EQ("./chrome_shell-123.bin", capabilities.android_exec_name);
+
+  // Invalid executable names (shell injection attempts and metadata)
+  caps.SetByDottedPath("goog:chromeOptions.androidExecName", "chrome;rm");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+
+  caps.SetByDottedPath("goog:chromeOptions.androidExecName", "chrome|sh");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+
+  caps.SetByDottedPath("goog:chromeOptions.androidExecName", "chrome&sh");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+
+  caps.SetByDottedPath("goog:chromeOptions.androidExecName", "chrome$(rm)");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
+
+  caps.SetByDottedPath("goog:chromeOptions.androidExecName", "chrome `rm`");
+  ASSERT_FALSE(capabilities.Parse(caps).IsOk());
 }
 
 TEST(ParseCapabilities, LogPath) {
@@ -717,7 +900,7 @@ TEST(ParseCapabilities, MobileEmulationDeviceMetrics) {
 TEST(ParseCapabilities, MobileEmulationDeviceName) {
   Capabilities capabilities;
   base::DictValue mobile_emulation;
-  mobile_emulation.Set("deviceName", "Nexus 5");
+  mobile_emulation.Set("deviceName", "Pixel 10");
   base::DictValue caps;
   caps.SetByDottedPath("goog:chromeOptions.mobileEmulation",
                        std::move(mobile_emulation));
@@ -727,13 +910,12 @@ TEST(ParseCapabilities, MobileEmulationDeviceName) {
   ASSERT_TRUE(capabilities.mobile_device->user_agent.has_value());
   ASSERT_TRUE(base::MatchPattern(
       capabilities.mobile_device->user_agent.value(),
-      "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) "
-      "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/%s Mobile "
-      "Safari/537.36"));
+      "Mozilla/5.0 (Linux; Android 16; Pixel 10) AppleWebKit/537.36 (KHTML, "
+      "like Gecko) Chrome/%s Mobile Safari/537.36"));
 
-  ASSERT_EQ(360, capabilities.mobile_device->device_metrics->width);
-  ASSERT_EQ(640, capabilities.mobile_device->device_metrics->height);
-  ASSERT_EQ(3.0,
+  ASSERT_EQ(412, capabilities.mobile_device->device_metrics->width);
+  ASSERT_EQ(924, capabilities.mobile_device->device_metrics->height);
+  ASSERT_EQ(2.625,
             capabilities.mobile_device->device_metrics->device_scale_factor);
 }
 
@@ -814,6 +996,23 @@ TEST(ParseCapabilities, VirtualAuthenticatorsLargeBlobNotBool) {
   Capabilities capabilities;
   base::DictValue caps;
   caps.Set("webauthn:extension:largeBlob", "not a bool");
+  EXPECT_FALSE(capabilities.Parse(caps).IsOk());
+}
+
+TEST(ParseCapabilities, VirtualAuthenticatorsCmtgKeyBool) {
+  Capabilities capabilities;
+  base::DictValue caps;
+  caps.Set("webauthn:extension:cmtgKey", true);
+  EXPECT_TRUE(capabilities.Parse(caps).IsOk());
+
+  caps.Set("webauthn:extension:cmtgKey", false);
+  EXPECT_TRUE(capabilities.Parse(caps).IsOk());
+}
+
+TEST(ParseCapabilities, VirtualAuthenticatorsCmtgKeyNotBool) {
+  Capabilities capabilities;
+  base::DictValue caps;
+  caps.Set("webauthn:extension:cmtgKey", "not a bool");
   EXPECT_FALSE(capabilities.Parse(caps).IsOk());
 }
 

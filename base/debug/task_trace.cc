@@ -89,7 +89,7 @@ void TaskTrace::OutputToStream(std::ostream* os) const {
 std::string TaskTrace::ToString() const {
   std::stringstream stream;
   OutputToStream(&stream);
-  return stream.str();
+  return std::move(stream).str();
 }
 
 size_t TaskTrace::GetAddresses(span<const void*> addresses) const {
@@ -98,10 +98,8 @@ size_t TaskTrace::GetAddresses(span<const void*> addresses) const {
     return count;
   }
   span<const void* const> current_addresses = stack_trace_->addresses();
-  std::ranges::copy_n(current_addresses.begin(),
-                      static_cast<ptrdiff_t>(
-                          std::min(current_addresses.size(), addresses.size())),
-                      addresses.begin());
+  const size_t copy_size = std::min(current_addresses.size(), addresses.size());
+  addresses.first(copy_size).copy_from(current_addresses.first(copy_size));
   return current_addresses.size();
 }
 

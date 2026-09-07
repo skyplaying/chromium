@@ -49,11 +49,15 @@ blink_modules_sources("ml") {
   ]
 
   deps = [
+    "//gpu/command_buffer/client:webgpu_interface",
     "//services/webnn/public/cpp",
     "//services/webnn/public/cpp:buildflags",
+    "//services/webnn/public/cpp:in_process_context_provider",
     "//services/webnn/public/mojom:mojom_blink",
     "//third_party/blink/public/mojom/webnn:webnn_blink",
     "//third_party/blink/renderer/modules/webgpu",
+    "//third_party/dawn/include/dawn:headers",
+    "//third_party/dawn/src/dawn/wire:headers",
   ]
 
   if (webnn_enable_graph_dump) {
@@ -80,11 +84,13 @@ source_set("unit_tests") {
     "webnn/ml_graph_builder_test_utils.cc",
     "webnn/ml_graph_builder_test_utils.h",
     "webnn/ml_graph_test.cc",
+    "webnn/webnn_introspection_impl_test.cc",
   ]
 
   deps = [
     "//services/webnn/public/cpp:buildflags",
     "//services/webnn/public/mojom:mojom_blink",
+    "//testing/gmock",
     "//testing/gtest",
     "//third_party/blink/public:test_headers",
     "//third_party/blink/renderer/controller:blink_bindings_test_sources",

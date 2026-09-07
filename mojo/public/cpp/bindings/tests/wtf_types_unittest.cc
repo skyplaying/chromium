@@ -16,6 +16,7 @@
 #include "mojo/public/interfaces/bindings/tests/test_wtf_types.test-mojom-blink.h"
 #include "mojo/public/interfaces/bindings/tests/test_wtf_types.test-mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/abseil-cpp/absl/container/flat_hash_map.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_hash.h"
 
 namespace mojo {
@@ -46,7 +47,8 @@ class TestWTFImpl : public TestWTF {
 
   void EchoStringMap(
       const std::optional<
-          base::flat_map<std::string, std::optional<std::string>>>& str_map,
+          absl::flat_hash_map<std::string, std::optional<std::string>>>&
+          str_map,
       EchoStringMapCallback callback) override {
     std::move(callback).Run(std::move(str_map));
   }
@@ -69,7 +71,7 @@ class WTFTypesTest : public testing::Test {
   // strs[1] is empty.
   strs[1] = "";
   strs[2] = kHelloWorld;
-  strs[3] = ::blink::String::FromUTF8(kUTF8HelloWorld);
+  strs[3] = ::blink::String::FromUtf8(kUTF8HelloWorld);
 
   return strs;
 }
@@ -79,7 +81,7 @@ class WTFTypesTest : public testing::Test {
   // A null string as value.
   str_map.insert("0", ::blink::String());
   str_map.insert("1", kHelloWorld);
-  str_map.insert("2", ::blink::String::FromUTF8(kUTF8HelloWorld));
+  str_map.insert("2", ::blink::String::FromUtf8(kUTF8HelloWorld));
 
   return str_map;
 }
@@ -140,7 +142,7 @@ TEST_F(WTFTypesTest, Serialization_WTFVectorInlineCapacity) {
   // strs[1] is empty.
   strs[1] = "";
   strs[2] = kHelloWorld;
-  strs[3] = ::blink::String::FromUTF8(kUTF8HelloWorld);
+  strs[3] = ::blink::String::FromUtf8(kUTF8HelloWorld);
   auto cloned_strs = strs;
 
   mojo::Message message(0, 0, 0, 0, nullptr);
@@ -261,7 +263,7 @@ TEST_F(WTFTypesTest, SendStringMap) {
     // is unchanged after the following conversion:
     //   - serialized;
     //   - deserialized as std::optional<
-    //         base::flat_map<std::string, std::optional<std::string>>>;
+    //         absl::flat_hash_map<std::string, std::optional<std::string>>>;
     //   - serialized;
     //   - deserialized as std::optional<blink::HashMap<blink::String,
     //     blink::String>>.

@@ -28,6 +28,7 @@
 #include "components/history/core/browser/history_types.h"
 #include "components/password_manager/core/browser/password_manager_test_utils.h"
 #include "components/password_manager/core/browser/password_store/test_password_store.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/password_manager/core/common/password_manager_pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/query_parser/query_parser.h"
@@ -41,6 +42,7 @@ using bookmarks::BookmarkModel;
 using bookmarks::TitledUrlMatch;
 using bookmarks::UrlAndTitle;
 using password_manager::PasswordForm;
+using password_manager::PasswordString;
 using password_manager::TestPasswordStore;
 
 PasswordForm MakePasswordForm() {
@@ -48,7 +50,7 @@ PasswordForm MakePasswordForm() {
   form.url = GURL("https://example.com/");
   form.signon_realm = form.url.DeprecatedGetOriginAsURL().spec();
   form.username_value = u"user@gmail.com";
-  form.password_value = u"s3cre3t";
+  form.password_value = PasswordString(u"s3cre3t");
   form.in_store = PasswordForm::Store::kProfileStore;
   return form;
 }
@@ -175,7 +177,8 @@ class ProfileWriterTest : public testing::Test {
   }
 
   content::BrowserTaskEnvironment task_environment_;
-
+  base::test::ScopedFeatureList scoped_feature_list_{
+      switches::kSyncEnableBookmarksInTransportMode};
   std::unique_ptr<TestingProfile> profile_;
   std::unique_ptr<TestingProfile> second_profile_;
 };
@@ -225,9 +228,6 @@ TEST_F(ProfileWriterTest, CheckBookmarksAfterWritingDataTwice) {
 }
 
 TEST_F(ProfileWriterTest, CheckBookmarksWrittenToAccountStorageIfPresent) {
-  base::test::ScopedFeatureList scoped_feature_list{
-      switches::kSyncEnableBookmarksInTransportMode};
-
   CreateImportedBookmarksEntries();
   BookmarkModel* bookmark_model =
       BookmarkModelFactory::GetForBrowserContext(profile());
@@ -309,7 +309,7 @@ TEST_F(ProfileWriterTest, AddPassword) {
   profile_writer->AddPasswordForm(form);
 
   base::RunLoop().RunUntilIdle();
-  EXPECT_THAT(store->stored_passwords().at(form.signon_realm),
+  EXPECT_THAT(GetAllLoginsSync(store.get()).at(form.signon_realm),
               testing::ElementsAre(form));
 }
 
@@ -324,5 +324,5 @@ TEST_F(ProfileWriterTest, AddPasswordDisabled) {
   profile_writer->AddPasswordForm(form);
 
   base::RunLoop().RunUntilIdle();
-  EXPECT_THAT(store->stored_passwords(), testing::IsEmpty());
+  EXPECT_THAT(GetAllLoginsSync(store.get()), testing::IsEmpty());
 }

@@ -7,8 +7,9 @@
 #include <algorithm>
 #include <utility>
 
-#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
+#include "base/numerics/safe_conversions.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
 
@@ -31,6 +32,10 @@ BufferingFileStreamWriter::~BufferingFileStreamWriter() {
 int BufferingFileStreamWriter::Write(net::IOBuffer* buffer,
                                      int buffer_length,
                                      net::CompletionOnceCallback callback) {
+  if (!buffer || (buffer_length < 0)) {
+    return net::ERR_INVALID_ARGUMENT;
+  }
+
   // If |buffer_length| is larger than the intermediate buffer, then call the
   // inner file stream writer directly. Note, that the intermediate buffer
   // (used for buffering) must be flushed first.
@@ -91,9 +96,15 @@ void BufferingFileStreamWriter::CopyToIntermediateBuffer(
     scoped_refptr<net::IOBuffer> buffer,
     int buffer_offset,
     int buffer_length) {
+  const size_t buffer_offset_size = base::checked_cast<size_t>(buffer_offset);
+  const size_t buffer_length_size = base::checked_cast<size_t>(buffer_length);
+  DCHECK_LE(buffer_length_size, buffer->span().size());
   DCHECK_GE(intermediate_buffer_length_, buffer_length + buffered_bytes_);
-  UNSAFE_TODO(memcpy(intermediate_buffer_->data() + buffered_bytes_,
-                     buffer->data() + buffer_offset, buffer_length));
+  intermediate_buffer_->span()
+      .subspan(base::checked_cast<size_t>(buffered_bytes_))
+      .first(buffer_length_size)
+      .copy_prefix_from(
+          buffer->span().subspan(buffer_offset_size, buffer_length_size));
   buffered_bytes_ += buffer_length;
 }
 

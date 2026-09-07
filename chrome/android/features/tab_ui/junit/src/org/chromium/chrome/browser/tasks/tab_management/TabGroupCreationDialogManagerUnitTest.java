@@ -21,12 +21,10 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Robolectric;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Token;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chrome.browser.profiles.Profile;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.ui.modaldialog.DialogDismissalCause;
 import org.chromium.ui.modaldialog.ModalDialogManager;
@@ -34,7 +32,6 @@ import org.chromium.ui.modaldialog.ModalDialogProperties;
 
 /** Tests for {@link TabGroupCreationDialogManager}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class TabGroupCreationDialogManagerUnitTest {
     private static final Token TAB_GROUP_ID = new Token(378L, 48739L);
 
@@ -43,7 +40,6 @@ public class TabGroupCreationDialogManagerUnitTest {
     @Mock private ModalDialogManager mModalDialogManager;
     @Mock private Profile mProfile;
     @Mock private TabModel mTabModel;
-    @Mock private TabGroupModelFilter mTabGroupModelFilter;
     @Mock private TabGroupVisualDataDialogManager mTabGroupVisualDataDialogManager;
     @Mock private Runnable mOnTabGroupCreation;
 
@@ -56,34 +52,32 @@ public class TabGroupCreationDialogManagerUnitTest {
                 new TabGroupCreationDialogManager(
                         activity, mModalDialogManager, mOnTabGroupCreation);
 
-        when(mTabGroupModelFilter.getTabModel()).thenReturn(mTabModel);
         when(mTabModel.getProfile()).thenReturn(mProfile);
-        when(mTabGroupModelFilter.tabGroupExists(TAB_GROUP_ID)).thenReturn(true);
+        when(mTabModel.tabGroupExists(TAB_GROUP_ID)).thenReturn(true);
     }
 
     @Test
     public void testShowOnWillMergingCreateNewGroup() {
         mTabGroupCreationDialogManager.setDialogManagerForTesting(mTabGroupVisualDataDialogManager);
 
-        mTabGroupCreationDialogManager.showDialog(TAB_GROUP_ID, mTabGroupModelFilter);
+        mTabGroupCreationDialogManager.showDialog(TAB_GROUP_ID, mTabModel);
         ModalDialogProperties.Controller controller =
                 mTabGroupCreationDialogManager.getDialogControllerForTesting();
-        verify(mTabGroupVisualDataDialogManager)
-                .showDialog(TAB_GROUP_ID, mTabGroupModelFilter, controller);
+        verify(mTabGroupVisualDataDialogManager).showDialog(TAB_GROUP_ID, mTabModel, controller);
     }
 
     @Test
     public void testOnDismiss() {
         mTabGroupCreationDialogManager.setDialogManagerForTesting(mTabGroupVisualDataDialogManager);
 
-        mTabGroupCreationDialogManager.showDialog(TAB_GROUP_ID, mTabGroupModelFilter);
+        mTabGroupCreationDialogManager.showDialog(TAB_GROUP_ID, mTabModel);
         when(mTabGroupVisualDataDialogManager.getCurrentGroupTitle()).thenReturn("abcd");
         ModalDialogProperties.Controller controller =
                 mTabGroupCreationDialogManager.getDialogControllerForTesting();
 
         controller.onDismiss(null, DialogDismissalCause.UNKNOWN);
-        verify(mTabGroupModelFilter).setTabGroupColor(eq(TAB_GROUP_ID), anyInt());
-        verify(mTabGroupModelFilter).setTabGroupTitle(eq(TAB_GROUP_ID), any());
+        verify(mTabModel).setTabGroupColor(eq(TAB_GROUP_ID), anyInt());
+        verify(mTabModel).setTabGroupTitle(eq(TAB_GROUP_ID), any());
         verify(mOnTabGroupCreation).run();
     }
 
@@ -91,16 +85,16 @@ public class TabGroupCreationDialogManagerUnitTest {
     public void testOnDismiss_deletedGroup() {
         mTabGroupCreationDialogManager.setDialogManagerForTesting(mTabGroupVisualDataDialogManager);
 
-        mTabGroupCreationDialogManager.showDialog(TAB_GROUP_ID, mTabGroupModelFilter);
+        mTabGroupCreationDialogManager.showDialog(TAB_GROUP_ID, mTabModel);
         when(mTabGroupVisualDataDialogManager.getCurrentGroupTitle()).thenReturn("abcd");
         ModalDialogProperties.Controller controller =
                 mTabGroupCreationDialogManager.getDialogControllerForTesting();
 
-        when(mTabGroupModelFilter.tabGroupExists(TAB_GROUP_ID)).thenReturn(false);
+        when(mTabModel.tabGroupExists(TAB_GROUP_ID)).thenReturn(false);
         controller.onDismiss(null, DialogDismissalCause.UNKNOWN);
 
-        verify(mTabGroupModelFilter, never()).setTabGroupColor(any(), anyInt());
-        verify(mTabGroupModelFilter, never()).setTabGroupTitle(any(), any());
+        verify(mTabModel, never()).setTabGroupColor(any(), anyInt());
+        verify(mTabModel, never()).setTabGroupTitle(any(), any());
         verify(mOnTabGroupCreation).run();
     }
 }

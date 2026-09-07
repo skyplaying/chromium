@@ -9,6 +9,7 @@
 #include "media/capture/capture_export.h"
 #include "media/capture/mojom/video_capture_buffer.mojom.h"
 #include "media/capture/mojom/video_capture_types.mojom.h"
+#include "media/capture/video/video_capture_buffer_pool_constants.h"
 #include "media/capture/video/video_capture_device.h"
 #include "media/capture/video_capture_types.h"
 #include "mojo/public/cpp/system/buffer.h"
@@ -44,7 +45,7 @@ class CAPTURE_EXPORT VideoCaptureBufferPool
  public:
   REQUIRE_ADOPTION_FOR_REFCOUNTED_TYPE();
 
-  static constexpr int kInvalidId = -1;
+  static constexpr int kInvalidId = VideoCaptureBufferPoolConstants::kInvalidId;
 
   // Provides a duplicate region referring to the buffer. Destruction of this
   // duplicate does not result in releasing the shared memory held by the
@@ -127,6 +128,9 @@ class CAPTURE_EXPORT VideoCaptureBufferPool
   // effectively is the opposite of HoldForConsumers(). Once the consumers are
   // done, a buffer is returned to the pool for reuse.
   virtual void RelinquishConsumerHold(int buffer_id, int num_clients) = 0;
+
+  // Drop all buffers currently in the pool.
+  virtual void InvalidateBuffers() = 0;
 
  protected:
   friend class base::RefCountedThreadSafe<VideoCaptureBufferPool>;

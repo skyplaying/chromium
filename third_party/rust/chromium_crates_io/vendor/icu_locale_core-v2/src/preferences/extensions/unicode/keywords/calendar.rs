@@ -4,10 +4,10 @@
 
 #![allow(non_snake_case)]
 
-use crate::extensions::unicode::{value, Value};
+use crate::extensions::unicode::{Value, value};
 use crate::preferences::extensions::unicode::enum_keyword;
 use crate::preferences::extensions::unicode::errors::PreferencesParseError;
-use crate::subtags::{subtag, Subtag};
+use crate::subtags::{Subtag, subtag};
 
 enum_keyword!(
     /// Hijri Calendar sub-type
@@ -24,7 +24,7 @@ enum_keyword!(
         Rgsa
 });
 
-/// Handles aliases present in `v`. If found, returns a CalendarAlgorithm, else returns None
+/// Handles aliases present in `v`. If found, returns a [`CalendarAlgorithm`], else returns None
 fn handle_aliases(v: &Value) -> Option<CalendarAlgorithm> {
     if *v == value!("islamicc") {
         return Some(CalendarAlgorithm::Hijri(Some(
@@ -90,7 +90,6 @@ fn test_calendar_aliases() {
 
     test("ethiopic-amete-alem", CalendarAlgorithm::Ethioaa);
     test("ethiopic", CalendarAlgorithm::Ethiopic);
-    test("ethiopic-foobar", CalendarAlgorithm::Ethiopic);
     test("ethioaa", CalendarAlgorithm::Ethioaa);
     test(
         "islamicc",

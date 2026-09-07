@@ -65,6 +65,7 @@ base::TimeDelta GetDefaultLocalChangeNudgeDelay(DataType data_type) {
       // coalescing.
       return kBigLocalChangeNudgeDelay;
     case OUTGOING_PASSWORD_SHARING_INVITATION:
+    case SEND_TAB_TO_SELF:
     case SHARING_MESSAGE:
       // Sharing messages are time-sensitive, so use a small nudge delay.
       return kMinLocalChangeNudgeDelay;
@@ -79,6 +80,8 @@ base::TimeDelta GetDefaultLocalChangeNudgeDelay(DataType data_type) {
     case CONTACT_INFO:
     case THEMES:
     case THEMES_IOS:
+    case ENCRYPTED_TAB_CONTEXT_CONTAINER:
+    case ENCRYPTED_TAB_CONTEXT_ITEM:
     case EXTENSIONS:
     case SEARCH_ENGINES:
     case APPS:
@@ -96,7 +99,6 @@ base::TimeDelta GetDefaultLocalChangeNudgeDelay(DataType data_type) {
     case PRINTERS_AUTHORIZATION_SERVERS:
     case READING_LIST:
     case USER_CONSENTS:
-    case SEND_TAB_TO_SELF:
     case SECURITY_EVENTS:
     case SHARED_TAB_GROUP_DATA:
     case WIFI_CONFIGURATIONS:
@@ -107,8 +109,6 @@ base::TimeDelta GetDefaultLocalChangeNudgeDelay(DataType data_type) {
     case WORKSPACE_DESK:
     case NIGORI:
     case WEBAUTHN_CREDENTIAL:
-    case PLUS_ADDRESS:
-    case PLUS_ADDRESS_SETTING:
     case AUTOFILL_VALUABLE:
     case AUTOFILL_VALUABLE_METADATA:
     case ACCOUNT_SETTING:
@@ -118,6 +118,10 @@ base::TimeDelta GetDefaultLocalChangeNudgeDelay(DataType data_type) {
     case CONTEXTUAL_TASK:
     case SKILL:
     case GEMINI_THREAD:
+    case THEMES_ANDROID:
+    case NOTEBOOK:
+    case JOURNEY:
+    case AUTOFILL_ENTITY_SUPPRESSION:
       return kMediumLocalChangeNudgeDelay;
     case UNSPECIFIED:
       NOTREACHED();
@@ -154,6 +158,8 @@ bool CanGetCommitsFromExtensions(DataType data_type) {
     case AUTOFILL_WALLET_USAGE:
     case THEMES:
     case THEMES_IOS:
+    case ENCRYPTED_TAB_CONTEXT_CONTAINER:
+    case ENCRYPTED_TAB_CONTEXT_ITEM:
     case EXTENSIONS:
     case SEARCH_ENGINES:
     case APPS:
@@ -182,8 +188,6 @@ bool CanGetCommitsFromExtensions(DataType data_type) {
     case OUTGOING_PASSWORD_SHARING_INVITATION:
     case SHARED_TAB_GROUP_DATA:
     case COLLABORATION_GROUP:
-    case PLUS_ADDRESS:
-    case PLUS_ADDRESS_SETTING:
     case PRODUCT_COMPARISON:
     case COOKIES:
     case AUTOFILL_VALUABLE:
@@ -195,6 +199,10 @@ bool CanGetCommitsFromExtensions(DataType data_type) {
     case CONTEXTUAL_TASK:
     case SKILL:
     case GEMINI_THREAD:
+    case THEMES_ANDROID:
+    case NOTEBOOK:
+    case JOURNEY:
+    case AUTOFILL_ENTITY_SUPPRESSION:
       return false;
     case UNSPECIFIED:
       NOTREACHED();
@@ -360,7 +368,8 @@ void DataTypeTracker::ThrottleType(base::TimeDelta duration,
 void DataTypeTracker::BackOffType(base::TimeDelta duration,
                                   base::TimeTicks now) {
   unblock_time_ = std::max(unblock_time_, now + duration);
-  wait_interval_.emplace(WaitInterval::BlockingMode::kExponentialBackoff, duration);
+  wait_interval_.emplace(WaitInterval::BlockingMode::kExponentialBackoff,
+                         duration);
 }
 
 void DataTypeTracker::UpdateThrottleOrBackoffState() {

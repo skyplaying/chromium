@@ -38,6 +38,9 @@ class ActiveTaskContextProvider {
     // Called when the set of tabs that are part of the active context changes.
     virtual void OnContextTabsChanged(
         const std::set<tabs::TabHandle>& context_tabs) = 0;
+
+    // Called when the provider is being destroyed.
+    virtual void OnActiveTaskContextProviderDestroyed() {}
   };
 
   static ActiveTaskContextProvider* From(BrowserWindowInterface* window);
@@ -50,6 +53,14 @@ class ActiveTaskContextProvider {
   // info.
   virtual void SetContextualTasksPanelController(
       ContextualTasksPanelController* contextual_tasks_panel_controller) = 0;
+
+  virtual void AddLocalTabUnderline(tabs::TabHandle tab_handle) = 0;
+  virtual void RemoveLocalTabUnderline(tabs::TabHandle tab_handle) = 0;
+  // Clears all local client side tab underlines, not tabs highlighted by
+  // backend server state. If this is called, since this is the owner of all
+  // local tab underlines, it will clear all local tab underlines across sources
+  // (NTP, cobrowse, etc.).
+  virtual void ClearAllLocalTabUnderlines() = 0;
 
   // Central method called to recompute tab underlines based on the active task.
   // Called by various external callers (e.g. composebox, panel controller

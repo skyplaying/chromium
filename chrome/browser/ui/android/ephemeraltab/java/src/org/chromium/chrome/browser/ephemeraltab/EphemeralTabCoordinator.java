@@ -12,11 +12,13 @@ import android.view.View;
 
 import org.chromium.base.Callback;
 import org.chromium.base.SysUtils;
+import org.chromium.base.ThreadUtils;
 import org.chromium.base.version_info.VersionInfo;
 import org.chromium.build.annotations.EnsuresNonNull;
 import org.chromium.build.annotations.MonotonicNonNull;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.actor.ui.ActorUiTabController;
 import org.chromium.chrome.browser.content.ContentUtils;
 import org.chromium.chrome.browser.content.WebContentsFactory;
 import org.chromium.chrome.browser.desktop_site.DesktopSiteUtils;
@@ -31,18 +33,20 @@ import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.SheetState;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.StateChangeReason;
-import org.chromium.components.browser_ui.bottomsheet.EmptyBottomSheetObserver;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetObserver;
+import org.chromium.components.embedder_support.contextmenu.ContextMenuPopulatorFactory;
 import org.chromium.components.embedder_support.view.ContentView;
 import org.chromium.components.feature_engagement.EventConstants;
 import org.chromium.components.feature_engagement.Tracker;
+import org.chromium.content_public.browser.AdditionalNavigationParams;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.UiUtils;
 import org.chromium.ui.base.ActivityWindowAndroid;
 import org.chromium.ui.base.IntentRequestTracker;
-import org.chromium.ui.base.PageTransition;
 import org.chromium.ui.base.ViewAndroidDelegate;
 import org.chromium.url.GURL;
+import org.chromium.url.Origin;
 
 import java.util.function.Supplier;
 
@@ -55,16 +59,17 @@ public class EphemeralTabCoordinator implements View.OnLayoutChangeListener {
     private final Context mContext;
     private final ActivityWindowAndroid mWindow;
     private final View mLayoutView;
-    private final Supplier<Tab> mTabProvider;
+    private final Supplier<@Nullable Tab> mTabProvider;
     private final Supplier<TabCreator> mTabCreator;
     private final BottomSheetController mBottomSheetController;
     private final EphemeralTabMediator mMediator;
+    private final ContextMenuPopulatorFactory mContextMenuPopulatorFactory;
     private boolean mCanPromoteToNewTab;
 
     private @Nullable WebContents mWebContents;
     private @Nullable ContentView mContentView;
     private @Nullable EphemeralTabSheetContent mSheetContent;
-    private @Nullable EmptyBottomSheetObserver mSheetObserver;
+    private @Nullable BottomSheetObserver mSheetObserver;
 
     private @MonotonicNonNull GURL mUrl;
     private @Nullable GURL mFullPageUrl;
@@ -81,20 +86,23 @@ public class EphemeralTabCoordinator implements View.OnLayoutChangeListener {
      * @param tabProvider Provider of the current activity tab.
      * @param tabCreator Supplier for {@link TabCreator} handling a new tab creation.
      * @param bottomSheetController {@link BottomSheetController} as the container of the tab.
+     * @param contextMenuPopulatorFactory The factory used to create the context menu populator.
      */
     public EphemeralTabCoordinator(
             Context context,
             ActivityWindowAndroid window,
             View layoutView,
-            Supplier<Tab> tabProvider,
+            Supplier<@Nullable Tab> tabProvider,
             Supplier<TabCreator> tabCreator,
-            BottomSheetController bottomSheetController) {
+            BottomSheetController bottomSheetController,
+            ContextMenuPopulatorFactory contextMenuPopulatorFactory) {
         mContext = context;
         mWindow = window;
         mLayoutView = layoutView;
         mTabProvider = tabProvider;
         mTabCreator = tabCreator;
         mBottomSheetController = bottomSheetController;
+        mContextMenuPopulatorFactory = contextMenuPopulatorFactory;
 
         float topControlsHeight =
                 mContext.getResources().getDimensionPixelSize(R.dimen.toolbar_height_no_shadow)
@@ -130,22 +138,72 @@ public class EphemeralTabCoordinator implements View.OnLayoutChangeListener {
     }
 
     /**
-     * Entry point for the ephemeral tab flow. This will create an ephemeral tab and show it in the
-     * bottom sheet. When the tab is opened in a fullPage, an alternative URL is opened.
+     * Entry point for ephemeral tab flow. Populates the sheet with the ephemeral tab web content.
      *
-     * @param url The URL to be shown in the bottomsheet.
-     * @param fullPageUrl The URL that will be opened when the bottomsheet is transformed to a full
+     * @param url The URL to be opened.
+     * @param fullPageUrl The URL to be opened when the user clicks the "Open in new tab" button.
+     *     When null, url will be used instead. This is useful for opening desktop versions of a
      *     page.
      * @param title The title to be shown.
      * @param profile Profile associated with the ephemeral tab.
      * @param canPromoteToNewTab Whether the tab can be promoted to a normal tab.
+     * @param shouldHaveContextMenu Whether the tab should have a context menu.
+     * @param initiatorOrigin The Origin that initiated the navigation.
+     * @param additionalNavigationParams Additional information that needs to be passed to the
+     *     navigation request.
+     * @param requestDeniedCallback Callback invoked if the request is denied.
      */
     public void requestOpenSheet(
             GURL url,
             @Nullable GURL fullPageUrl,
             String title,
             Profile profile,
-            boolean canPromoteToNewTab) {
+            boolean canPromoteToNewTab,
+            boolean shouldHaveContextMenu,
+            @Nullable Origin initiatorOrigin,
+            @Nullable AdditionalNavigationParams additionalNavigationParams,
+            Runnable requestDeniedCallback) {
+        Runnable openSheetRunnable =
+                () ->
+                        requestOpenSheetInternal(
+                                url,
+                                fullPageUrl,
+                                title,
+                                profile,
+                                canPromoteToNewTab,
+                                shouldHaveContextMenu,
+                                initiatorOrigin,
+                                additionalNavigationParams);
+
+        Tab activeTab = mTabProvider.get();
+        if (activeTab != null) {
+            ActorUiTabController controller = ActorUiTabController.from(activeTab);
+            if (controller != null && controller.isActorActive()) {
+                // Intercept, show abort confirmation dialog, and stop task if confirmed.
+                controller.showTaskAbortConfirmationDialog(
+                        (confirmed) -> {
+                            if (!confirmed) {
+                                requestDeniedCallback.run();
+                                return;
+                            }
+                            openSheetRunnable.run();
+                        });
+                return;
+            }
+        }
+
+        openSheetRunnable.run();
+    }
+
+    private void requestOpenSheetInternal(
+            GURL url,
+            @Nullable GURL fullPageUrl,
+            String title,
+            Profile profile,
+            boolean canPromoteToNewTab,
+            boolean shouldHaveContextMenu,
+            @Nullable Origin initiatorOrigin,
+            @Nullable AdditionalNavigationParams additionalNavigationParams) {
         assert !isOpened() : "Avoid making new requests when an ephemeral tab is showing.";
         mUrl = url;
         mFullPageUrl = fullPageUrl;
@@ -154,7 +212,7 @@ public class EphemeralTabCoordinator implements View.OnLayoutChangeListener {
             assert mSheetContent == null;
             createWebContents(profile);
             mSheetObserver =
-                    new EmptyBottomSheetObserver() {
+                    new BottomSheetObserver() {
                         @Override
                         public void onSheetContentChanged(@Nullable BottomSheetContent newContent) {
                             if (newContent != mSheetContent) {
@@ -199,14 +257,15 @@ public class EphemeralTabCoordinator implements View.OnLayoutChangeListener {
                             this::close,
                             getMaxViewHeight(),
                             intentRequestTracker,
-                            (toolbarView) -> mMediator.onToolbarCreated(toolbarView));
+                            (toolbarView) -> mMediator.onToolbarCreated(toolbarView),
+                            shouldHaveContextMenu ? mContextMenuPopulatorFactory : null);
             mMediator.init(mWebContents, mContentView, mSheetContent, profile);
             mLayoutView.addOnLayoutChangeListener(this);
         }
 
         mPeeked = false;
         mFullyOpened = false;
-        mMediator.requestShowContent(url, title);
+        mMediator.requestShowContent(url, title, initiatorOrigin, additionalNavigationParams);
 
         Tracker tracker = TrackerFactory.getTrackerForProfile(profile);
         if (tracker.isInitialized()) tracker.notifyEvent(EventConstants.EPHEMERAL_TAB_USED);
@@ -249,7 +308,8 @@ public class EphemeralTabCoordinator implements View.OnLayoutChangeListener {
         mFullyOpened = false;
 
         if (mWebContents != null) {
-            mWebContents.destroy();
+            final WebContents webContentsToDestroy = mWebContents;
+            ThreadUtils.postOnUiThread(() -> webContentsToDestroy.destroy());
             mWebContents = null;
             mContentView = null;
         }
@@ -265,13 +325,11 @@ public class EphemeralTabCoordinator implements View.OnLayoutChangeListener {
             assumeNonNull(mSheetContent);
             mBottomSheetController.hideContent(
                     mSheetContent, /* animate= */ true, StateChangeReason.PROMOTE_TAB);
-            GURL url = mFullPageUrl != null ? mFullPageUrl : mUrl;
-            mTabCreator
-                    .get()
-                    .createNewTab(
-                            new LoadUrlParams(url.getSpec(), PageTransition.LINK),
-                            TabLaunchType.FROM_LINK,
-                            mTabProvider.get());
+            if (mFullPageUrl == null) {
+                mFullPageUrl = assumeNonNull(mWebContents).getLastCommittedUrl();
+            }
+            var params = new LoadUrlParams(mFullPageUrl);
+            mTabCreator.get().createNewTab(params, TabLaunchType.FROM_LINK, mTabProvider.get());
         }
     }
 
@@ -378,7 +436,8 @@ public class EphemeralTabCoordinator implements View.OnLayoutChangeListener {
                         callback.onResult(drawable);
                     };
 
-            mFaviconHelper.getLocalFaviconImageForURL(profile, url, mFaviconSize, imageCallback);
+            mFaviconHelper.getLocalFaviconImageForURL(
+                    profile, url, mFaviconSize, /* fallbackToHost= */ true, imageCallback);
         }
     }
 }

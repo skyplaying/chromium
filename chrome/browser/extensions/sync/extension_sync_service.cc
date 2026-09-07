@@ -14,6 +14,7 @@
 #include "base/one_shot_event.h"
 #include "base/stl_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/extensions/extension_management.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_util.h"
@@ -22,7 +23,6 @@
 #include "chrome/browser/extensions/sync/extension_sync_data.h"
 #include "chrome/browser/extensions/sync/extension_sync_service_factory.h"
 #include "chrome/browser/extensions/sync/extension_sync_util.h"
-#include "chrome/browser/extensions/sync/features.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/glue/sync_start_util.h"
 #include "chrome/common/extensions/extension_constants.h"
@@ -43,6 +43,7 @@
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_set.h"
 #include "extensions/common/permissions/permission_message_provider.h"
+#include "extensions/common/permissions/permission_set.h"
 #include "extensions/common/permissions/permissions_data.h"
 
 #if !BUILDFLAG(IS_ANDROID)
@@ -127,7 +128,7 @@ std::vector<ExtensionSyncData> ToExtensionSyncDataList(
 // reasons.
 base::flat_set<int> GetSyncableDisableReasons(
     const base::flat_set<int>& disable_reasons) {
-  static_assert(extensions::disable_reason::DISABLE_REASON_LAST == (1LL << 27),
+  static_assert(extensions::disable_reason::DISABLE_REASON_LAST == (1LL << 28),
                 "Please consider whether your new disable reason should be"
                 " syncable, and if so update the list below accordingly!");
   const base::flat_set<int> kKnownSyncableDisableReasons = {
@@ -202,7 +203,7 @@ void ExtensionSyncService::SyncExtensionChangeIfNeeded(
   if (bundle->IsSyncing()) {
     bundle->PushSyncAddOrUpdate(extension.id(),
                                 CreateSyncData(extension).GetSyncData());
-    DCHECK(!ExtensionPrefs::Get(profile_)->NeedsSync(extension.id()));
+    ExtensionPrefs::Get(profile_)->SetNeedsSync(extension.id(), false);
   } else {
     ExtensionPrefs::Get(profile_)->SetNeedsSync(extension.id(), true);
     if (system_->is_ready() && !flare_.is_null()) {
@@ -308,11 +309,8 @@ std::string ExtensionSyncService::GetClientTag(
 }
 
 void ExtensionSyncService::OnExtensionManagementSettingsChanged() {
-  if (base::FeatureList::IsEnabled(
-          extensions::kReinstallSyncedExtensionsOnPolicyChange)) {
-    ReloadSyncData(syncer::EXTENSIONS);
-    ReloadSyncData(syncer::APPS);
-  }
+  ReloadSyncData(syncer::EXTENSIONS);
+  ReloadSyncData(syncer::APPS);
 }
 
 ExtensionSyncData ExtensionSyncService::CreateSyncData(
@@ -572,11 +570,17 @@ void ExtensionSyncService::ApplySyncData(
       // Only enable if the extension has all required permissions.
       // (Even if the version doesn't match - if the new version needs more
       // permissions, it'll get disabled after the update.)
+      std::unique_ptr<const extensions::PermissionSet> granted =
+          extension_prefs->GetGrantedPermissions(id);
+      // Use an empty PermissionSet when granted permissions are missing; this
+      // is safe as it conservatively treats nothing as granted.
+      if (!granted) {
+        granted = std::make_unique<extensions::PermissionSet>();
+      }
       bool has_all_permissions =
           grant_permissions ||
           !extensions::PermissionMessageProvider::Get()->IsPrivilegeIncrease(
-              *extension_prefs->GetGrantedPermissions(id),
-              extension->permissions_data()->active_permissions(),
+              *granted, extension->permissions_data()->active_permissions(),
               extension->GetType());
       if (has_all_permissions) {
         extension_registrar->EnableExtension(id);
@@ -592,7 +596,7 @@ void ExtensionSyncService::ApplySyncData(
   } else if (!should_be_enabled) {
     // Note that |disable_reasons| includes any pre-existing reasons that
     // weren't explicitly removed above.
-    if (extension_registrar->IsExtensionEnabled(id)) {
+    if (extension && extension_registrar->IsExtensionEnabled(id)) {
       extension_registrar->DisableExtensionWithRawReasons(passkey, id,
                                                           disable_reasons);
     } else {
@@ -687,11 +691,34 @@ void ExtensionSyncService::DeleteThemeDoNotUse(const Extension& theme) {
       ->PushSyncDeletion(theme.id(), CreateSyncData(theme).GetSyncData());
 }
 
+bool ExtensionSyncService::IsPendingSyncInstall(
+    const std::string& extension_id) const {
+  return app_sync_bundle_.HasPendingExtensionData(extension_id) ||
+         extension_sync_bundle_.HasPendingExtensionData(extension_id) ||
+         sync_installs_in_progress_.contains(extension_id);
+}
+
 void ExtensionSyncService::OnExtensionInstalled(
     content::BrowserContext* browser_context,
     const Extension* extension,
     bool is_update) {
   DCHECK_EQ(profile_, browser_context);
+
+  if (!is_update && IsPendingSyncInstall(extension->id())) {
+    sync_installs_in_progress_.insert(extension->id());
+    // Defer removal to a posted task so that it runs after all
+    // OnExtensionInstalled observers (e.g., ToolbarActionsModel) have finished.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(
+                       [](base::WeakPtr<ExtensionSyncService> self,
+                          const std::string& id) {
+                         if (self) {
+                           self->sync_installs_in_progress_.erase(id);
+                         }
+                       },
+                       weak_ptr_factory_.GetWeakPtr(), extension->id()));
+  }
+
   // Clear pending version if the installed one has caught up.
   auto it = pending_updates_.find(extension->id());
   if (it != pending_updates_.end()) {
@@ -719,6 +746,17 @@ void ExtensionSyncService::OnExtensionInstalled(
   }
 
   SyncExtensionChangeIfNeeded(*extension);
+}
+
+void ExtensionSyncService::OnExtensionLoaded(
+    content::BrowserContext* browser_context,
+    const Extension* extension) {
+  ExtensionPrefs* extension_prefs = ExtensionPrefs::Get(profile_);
+  if (extension_prefs->NeedsSync(extension->id())) {
+    SyncExtensionChangeIfNeeded(*extension);
+    // Note: ExtensionPrefs::NeedsSync() *could* still be true if sync hasn't
+    // started up yet.
+  }
 }
 
 void ExtensionSyncService::OnExtensionUninstalled(
@@ -762,9 +800,18 @@ void ExtensionSyncService::OnExtensionDisableReasonsChanged(
   const Extension* extension = registry->GetInstalledExtension(extension_id);
   // We can get pref change notifications for extensions that aren't installed
   // (yet). In that case, we'll pick up the change later via ExtensionRegistry
-  // observation (in OnExtensionInstalled).
+  // observation (in OnExtensionInstalled)... Except that disable reasons can
+  // change for existing extensions, in which case OnExtensionInstalled will
+  // never fire, which means any disable reason changes that happen before the
+  // extension is fully loaded will get overwritten by whatever's in sync (see
+  // https://crbug.com/524951740) when the first flare comes in. To fix this...
   if (extension) {
     SyncExtensionChangeIfNeeded(*extension);
+  } else if (!ignore_updates_) {
+    // ... We mark the extension as needing to be sync'd so that we'll ignore
+    // the first update coming in, or once the extension is loaded in
+    // OnExtensionLoaded().
+    ExtensionPrefs::Get(profile_)->SetNeedsSync(extension_id, true);
   }
 }
 

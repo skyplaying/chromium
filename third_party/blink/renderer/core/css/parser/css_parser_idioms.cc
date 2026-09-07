@@ -28,12 +28,12 @@ UChar32 ConsumeEscape(CSSTokenizerInputStream& input) {
   UChar cc = input.NextInputChar();
   input.Advance();
   DCHECK(!IsCSSNewLine(cc));
-  if (IsASCIIHexDigit(cc)) {
+  if (IsAsciiHexDigit(cc)) {
     unsigned consumed_hex_digits = 1;
     StringBuilder hex_chars;
     hex_chars.Append(cc);
     while (consumed_hex_digits < 6 &&
-           IsASCIIHexDigit(input.PeekWithoutReplacement(0))) {
+           IsAsciiHexDigit(input.PeekWithoutReplacement(0))) {
       cc = input.NextInputChar();
       input.Advance();
       hex_chars.Append(cc);
@@ -60,23 +60,21 @@ String ConsumeName(CSSTokenizerInputStream& input) {
   StringBuilder result;
   while (true) {
     UChar cc = input.NextInputChar();
-    input.Advance();
     if (IsNameCodePoint(cc)) {
+      input.Advance();
       result.Append(cc);
-      continue;
-    }
-    if (TwoCharsAreValidEscape(cc, input.PeekWithoutReplacement(0))) {
+    } else if (TwoCharsAreValidEscape(cc, input.PeekWithoutReplacement(1))) {
+      input.Advance();
       result.Append(ConsumeEscape(input));
-      continue;
+    } else {
+      return result.ReleaseString();
     }
-    input.PushBack(cc);
-    return result.ReleaseString();
   }
 }
 
 // https://drafts.csswg.org/css-syntax/#would-start-an-identifier
 bool NextCharsAreIdentifier(UChar first, const CSSTokenizerInputStream& input) {
-  UChar second = input.PeekWithoutReplacement(0);
+  UChar second = input.NextInputChar();
   if (IsNameStartCodePoint(first) || TwoCharsAreValidEscape(first, second)) {
     return true;
   }

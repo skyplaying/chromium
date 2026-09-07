@@ -20,11 +20,12 @@ import android.media.AudioManager;
 import android.os.Build;
 
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
-import org.robolectric.annotation.Config;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -33,7 +34,6 @@ import org.chromium.base.test.util.MinAndroidSdkLevel;
 
 /** Tests for CommunicationDeviceListener. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class CommunicationDeviceListenerTest {
     @Mock Context mContext;
     @Mock CommunicationDeviceSelector.Devices mDevices;
@@ -41,9 +41,10 @@ public class CommunicationDeviceListenerTest {
     @Mock UsbInterface mUsbInterface;
     private CommunicationDeviceListener mListener;
 
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
+
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
         mListener = new CommunicationDeviceListener(mDevices);
         mListener.init(/* hasBluetoothPermission= */ true);
 

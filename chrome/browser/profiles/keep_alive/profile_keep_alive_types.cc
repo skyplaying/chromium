@@ -87,6 +87,12 @@ std::ostream& operator<<(std::ostream& out,
       return out << "kWaitingForBookmarksImportOnFirstRun";
     case ProfileKeepAliveOrigin::kSkillsDialog:
       return out << "kSkillsDialog";
+    case ProfileKeepAliveOrigin::kWebAppDatabaseCorruptionRecovery:
+      return out << "kWebAppDatabaseCorruptionRecovery";
+    case ProfileKeepAliveOrigin::kFetchKeepAlive:
+      return out << "kFetchKeepAlive";
+    case ProfileKeepAliveOrigin::kOmniboxEverywhere:
+      return out << "kOmniboxEverywhere";
   }
   NOTREACHED();
 }

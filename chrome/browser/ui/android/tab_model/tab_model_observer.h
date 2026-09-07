@@ -31,6 +31,11 @@ class TabModelObserver {
   // Called when a |tab| is selected.
   virtual void DidSelectTab(TabAndroid* tab, TabModel::TabSelectionType type);
 
+  // Called before tabs are removed from the TabModel for closure.
+  virtual void WillCloseTabs(const std::vector<TabAndroid*>& tabs,
+                             bool is_all_tabs,
+                             bool allow_undo);
+
   // Called when a |tab| starts closing.
   virtual void WillCloseTab(TabAndroid* tab);
 
@@ -46,6 +51,12 @@ class TabModelObserver {
   virtual void OnFinishingMultipleTabClosure(
       const std::vector<TabAndroid*>& tabs,
       bool canRestore);
+
+  // Called right before tabs closure is committed permanently and cannot be undone.
+  virtual void OnTabCloseCommitted(const std::vector<TabAndroid*>& tabs,
+                                   bool is_all_tabs,
+                                   bool can_restore,
+                                   TabModel::TabClosingSource source);
 
   // Called before a |tab| is added to the TabModel.
   virtual void WillAddTab(TabAndroid* tab, TabModel::TabLaunchType type);
@@ -65,6 +76,9 @@ class TabModelObserver {
 
   // Called when all |tabs| closure is undone.
   virtual void OnTabCloseUndone(const std::vector<TabAndroid*>& tabs);
+
+  // Called when the set of multi-selected tabs has changed.
+  virtual void OnTabsSelectionsChanged();
 
   // Called when a |tab| closure is undone.
   virtual void TabClosureUndone(TabAndroid* tab);
@@ -94,6 +108,29 @@ class TabModelObserver {
 
   // Called after a tab group's visual data has been changed.
   virtual void OnTabGroupVisualsChanged(tab_groups::TabGroupId group_id);
+
+  // Called before the TabModel becomes active or inactive.
+  // At this point, the current model in the TabModelSelector has not yet
+  // changed.
+  //
+  // The `tab_model` parameter is the TabModel observed by this observer.
+  //
+  // Note that there can be multiple active TabModels globally since each native
+  // `AndroidBrowserWindow` has one `TabModel`.
+  virtual void OnWillActiveStateChange(TabModel& tab_model, bool active);
+
+  // Called after the TabModel becomes active or inactive.
+  // At this point, the current model in the TabModelSelector has already
+  // changed.
+  //
+  // The `tab_model` parameter is the TabModel observed by this observer.
+  //
+  // Note that there can be multiple active TabModels globally since each native
+  // `AndroidBrowserWindow` has one `TabModel`.
+  virtual void OnDidActiveStateChange(TabModel& tab_model, bool active);
+
+  // Called when the TabModel is destroyed.
+  virtual void OnTabModelDestroyed(TabModel& tab_model);
 };
 
 #endif  // CHROME_BROWSER_UI_ANDROID_TAB_MODEL_TAB_MODEL_OBSERVER_H_

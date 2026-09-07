@@ -15,6 +15,7 @@
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/buildflags.h"
+#include "chrome/browser/component_updater/ai_embeddings_component_installer.h"
 #include "chrome/browser/component_updater/app_provisioning_component_installer.h"
 #include "chrome/browser/component_updater/captcha_provider_component_installer.h"
 #include "chrome/browser/component_updater/chrome_origin_trials_component_installer.h"
@@ -23,9 +24,12 @@
 #include "chrome/browser/component_updater/crowd_deny_component_installer.h"
 #include "chrome/browser/component_updater/first_party_sets_component_installer.h"
 #include "chrome/browser/component_updater/hyphenation_component_installer.h"
+#include "chrome/browser/component_updater/indigo_component_installer.h"
 #include "chrome/browser/component_updater/mei_preload_component_installer.h"
 #include "chrome/browser/component_updater/pki_metadata_component_installer.h"
+#include "chrome/browser/component_updater/platform_runtime_component_installer.h"
 #include "chrome/browser/component_updater/privacy_sandbox_attestations_component_installer.h"
+#include "chrome/browser/component_updater/private_verification_tokens_installer.h"
 #include "chrome/browser/component_updater/ssl_error_assistant_component_installer.h"
 #include "chrome/browser/component_updater/subresource_filter_component_installer.h"
 #include "chrome/browser/component_updater/trust_token_key_commitments_component_installer.h"
@@ -33,18 +37,27 @@
 #include "chrome/common/buildflags.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths.h"
+#include "chrome/common/pref_names.h"
 #include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/component_updater/component_updater_service.h"
+#include "components/component_updater/installer_policies/actor_safety_lists_component_installer.h"
 #include "components/component_updater/installer_policies/history_search_strings_component_installer.h"
 #include "components/component_updater/installer_policies/on_device_head_suggest_component_installer.h"
 #include "components/component_updater/installer_policies/optimization_hints_component_installer.h"
-#include "components/component_updater/installer_policies/plus_address_blocklist_component_installer.h"
 #include "components/component_updater/installer_policies/safety_tips_component_installer.h"
 #include "components/on_device_translation/buildflags/buildflags.h"
+#include "components/optimization_guide/core/model_execution/model_execution_prefs.h"
+#include "components/optimization_guide/core/model_execution/model_execution_util.h"
+#include "components/prefs/pref_service.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "device/vr/buildflags/buildflags.h"
+#include "extensions/buildflags/buildflags.h"
 #include "third_party/widevine/cdm/buildflags.h"
 #include "ui/accessibility/accessibility_features.h"
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "chrome/browser/component_updater/aim_eligibility_component_installer.h"
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 #include "chrome/browser/component_updater/recovery_improved_component_installer.h"
@@ -57,7 +70,7 @@
 #endif  // BUILDFLAG(IS_ANDROID)
 
 #if !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/component_updater/actor_safety_lists_component_installer.h"
+#include "chrome/browser/component_updater/dictation_connector_component_installer.h"
 #include "chrome/browser/component_updater/iwa_key_distribution_component_installer.h"
 #include "chrome/browser/component_updater/zxcvbn_data_component_installer.h"
 #include "chrome/browser/resource_coordinator/tab_manager.h"
@@ -69,10 +82,6 @@
 #include "chrome/browser/apps/app_service/chrome_app_deprecation/chrome_app_deprecation.h"
 #include "chrome/browser/component_updater/smart_dim_component_installer.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
-
-#if BUILDFLAG(ENABLE_MEDIA_FOUNDATION_WIDEVINE_CDM)
-#include "chrome/browser/component_updater/media_foundation_widevine_cdm_component_installer.h"
-#endif
 
 #if BUILDFLAG(ENABLE_ON_DEVICE_TRANSLATION)
 #include "chrome/browser/component_updater/translate_kit_component_installer.h"
@@ -108,16 +117,16 @@ namespace {
 // Runs in the thread pool, may block.
 void DeleteOldComponents(const base::FilePath& user_data_dir) {
   for (const base::FilePath::StringType& dir : {
-           FILE_PATH_LITERAL("MaskedDomainListPreloaded"),  // Remove in M146+
-           FILE_PATH_LITERAL("DesktopSharingHub"),          // Remove in M146+
-           FILE_PATH_LITERAL("CookieReadinessList"),        // Remove in M146+
-           FILE_PATH_LITERAL("OpenCookieDatabase"),         // Remove in M146+
-           FILE_PATH_LITERAL("TpcdMetadata"),               // Remove in M147+
+           FILE_PATH_LITERAL("DesktopSharingHub"),    // Remove in M146+
+           FILE_PATH_LITERAL("CookieReadinessList"),  // Remove in M146+
+           FILE_PATH_LITERAL("OpenCookieDatabase"),   // Remove in M146+
+           FILE_PATH_LITERAL("TpcdMetadata"),         // Remove in M147+
            FILE_PATH_LITERAL(
                "ProbabilisticRevealTokenRegistry"),  // Remove in M148+
            FILE_PATH_LITERAL("AutofillStates"),      // Remove in M153+
            FILE_PATH_LITERAL(
-               "Fingerprinting Protection Filter"),  // Remove in M156+
+               "Fingerprinting Protection Filter"),    // Remove in M156+
+           FILE_PATH_LITERAL("PlusAddressBlocklist"),  // Remove in M158+
 #if BUILDFLAG(IS_CHROMEOS)
            // TODO(crbug.com/380780352): Remove these after the stepping stone.
            FILE_PATH_LITERAL("lacros-dogfood-canary"),
@@ -139,10 +148,6 @@ void RegisterComponentsForUpdate() {
   RegisterRecoveryImprovedComponent(cus, g_browser_process->local_state());
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 
-#if BUILDFLAG(ENABLE_MEDIA_FOUNDATION_WIDEVINE_CDM)
-  RegisterMediaFoundationWidevineCdmComponent(cus);
-#endif
-
 #if BUILDFLAG(ENABLE_WIDEVINE_CDM_COMPONENT)
   RegisterWidevineCdmComponent(cus);
 #endif  // BUILDFLAG(ENABLE_WIDEVINE_CDM_COMPONENT)
@@ -152,12 +157,16 @@ void RegisterComponentsForUpdate() {
       cus, g_browser_process->GetApplicationLocale());
   RegisterOptimizationHintsComponent(cus);
   RegisterTrustTokenKeyCommitmentsComponentIfTrustTokensEnabled(cus);
+  RegisterPrivateVerificationTokensComponentIfEnabled(cus);
   RegisterFirstPartySetsComponent(cus);
   RegisterPrivacySandboxAttestationsComponent(cus);
+  RegisterActorSafetyListsComponent(cus, base::OnceClosure());
   if (history_embeddings::IsHistoryEmbeddingsFeatureEnabled()) {
     RegisterHistorySearchStringsComponent(cus);
   }
   RegisterSSLErrorAssistantComponent(cus);
+
+  RegisterIndigoComponent(cus);
 
 #if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
   RegisterFileTypePoliciesComponent(cus);
@@ -189,9 +198,9 @@ void RegisterComponentsForUpdate() {
 #endif
 
 #if !BUILDFLAG(IS_ANDROID)
+  RegisterDictationConnectorComponent(cus);
   RegisterIwaKeyDistributionComponent(cus);
   RegisterZxcvbnDataComponent(cus);
-  RegisterActorSafetyListsComponent(cus, base::OnceClosure());
 #endif  // !BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(IS_ANDROID)
@@ -203,8 +212,6 @@ void RegisterComponentsForUpdate() {
 #endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
 
   RegisterCommerceHeuristicsComponent(cus);
-
-  RegisterPlusAddressBlocklistComponent(cus);
 
 #if BUILDFLAG(ENABLE_ON_DEVICE_TRANSLATION)
   // TODO(crbug.com/364795294): Support other platforms.
@@ -230,11 +237,19 @@ void RegisterComponentsForUpdate() {
 
   RegisterCaptchaProviderComponent(cus);
 
+  MaybeRegisterPlatformRuntimeComponent(cus);
+
   base::FilePath path;
   if (base::PathService::Get(chrome::DIR_USER_DATA, &path)) {
+    ManageAIEmbeddingsComponentRegistration(cus,
+                                            g_browser_process->local_state());
+
     if (!history_embeddings::IsHistoryEmbeddingsFeatureEnabled()) {
       DeleteHistorySearchStringsComponent(path);
     }
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+    ManageAimEligibilityComponentRegistration(cus);
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
     base::ThreadPool::PostTask(
         FROM_HERE, {base::TaskPriority::BEST_EFFORT, base::MayBlock()},
         base::BindOnce(&DeleteOldComponents, path));

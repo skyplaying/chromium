@@ -20,14 +20,17 @@
 #include "ash/display/screen_orientation_controller_test_api.h"
 #include "ash/public/cpp/login_screen_test_api.h"
 #include "ash/shell.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "ash/system/session/logout_confirmation_controller.h"
 #include "ash/system/session/logout_confirmation_dialog.h"
+#include "base/check_deref.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/i18n/legacy_language_tag_helpers.h"
 #include "base/json/json_writer.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
@@ -76,17 +79,14 @@
 #include "chrome/browser/ash/policy/external_data/cloud_external_data_manager_base_test_util.h"
 #include "chrome/browser/ash/policy/test_support/embedded_policy_test_server_mixin.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/ash/system/timezone_util.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/chromeos/extensions/external_loader/device_local_account_external_policy_loader.h"
-#include "chrome/browser/extensions/crx_installer.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/scoped_test_mv2_enabler.h"
 #include "chrome/browser/extensions/updater/chromeos_extension_cache_delegate.h"
 #include "chrome/browser/extensions/updater/extension_cache_impl.h"
 #include "chrome/browser/extensions/updater/local_extension_cache.h"
-#include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/metrics/chrome_metrics_service_accessor.h"
 #include "chrome/browser/net/profile_network_context_service.h"
 #include "chrome/browser/net/profile_network_context_service_test_utils.h"
@@ -100,26 +100,23 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webui/ash/login/oobe_ui.h"
 #include "chrome/browser/ui/webui/ash/login/terms_of_service_screen_handler.h"
 #include "chrome/browser/unified_consent/unified_consent_service_factory.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/common/chrome_paths.h"
-#include "chrome/common/extensions/extension_constants.h"
-#include "chrome/common/pref_names.h"
-#include "chrome/grit/branded_strings.h"
-#include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chromeos/ash/components/dbus/session_manager/fake_session_manager_client.h"
 #include "chromeos/ash/components/login/auth/public/user_context.h"
 #include "chromeos/ash/components/network/policy_certificate_provider.h"
 #include "chromeos/ash/components/policy/device_local_account/device_local_account_type.h"
 #include "chromeos/ash/components/settings/timezone_settings.h"
+#include "chromeos/ash/components/timezone/timezone_util.h"
 #include "chromeos/components/mgs/managed_guest_session_utils.h"
 #include "components/crx_file/crx_verifier.h"
 #include "components/metrics_services_manager/metrics_services_manager.h"
@@ -151,6 +148,7 @@
 #include "extensions/browser/app_window/app_window.h"
 #include "extensions/browser/app_window/app_window_registry.h"
 #include "extensions/browser/app_window/native_app_window.h"
+#include "extensions/browser/crx_installer.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/management_policy.h"
@@ -401,7 +399,8 @@ DeviceLocalAccountPolicyBroker* GetDeviceLocalAccountPolicyBroker(
 
 bool IsFullManagementDisclosureNeeded(AccountId account) {
   auto* broker = GetDeviceLocalAccountPolicyBroker(account);
-  return ash::login::IsFullManagementDisclosureNeeded(broker);
+  return ash::login::IsFullManagementDisclosureNeeded(
+      CHECK_DEREF(g_browser_process->local_state()), broker);
 }
 
 ukm::UkmService* GetUkmService() {
@@ -474,7 +473,8 @@ class DeviceLocalAccountTest : public DevicePolicyCrosBrowserTest,
     DevicePolicyCrosBrowserTest::SetUpOnMainThread();
 
     initial_locale_ = g_browser_process->GetApplicationLocale();
-    initial_language_ = l10n_util::GetLanguage(initial_locale_);
+    initial_language_ =
+        base::i18n::GetLanguageSubtagUsingLanguageTag(initial_locale_);
 
     ash::LoginOrLockScreenVisibleWaiter().Wait();
 
@@ -612,7 +612,7 @@ class DeviceLocalAccountTest : public DevicePolicyCrosBrowserTest,
     proto.mutable_system_timezone()->set_timezone_detection_type(policy);
     RefreshDevicePolicy();
 
-    LocalStateValueWaiter(prefs::kSystemTimezoneAutomaticDetectionPolicy,
+    LocalStateValueWaiter(ash::prefs::kSystemTimezoneAutomaticDetectionPolicy,
                           base::Value(policy))
         .Wait();
     policy_test_server_mixin_.UpdateDevicePolicy(proto);
@@ -750,7 +750,7 @@ class DeviceLocalAccountTest : public DevicePolicyCrosBrowserTest,
     WaitForSessionStart();
 
     EXPECT_EQ(locales[0], g_browser_process->GetApplicationLocale());
-    EXPECT_EQ(l10n_util::GetLanguage(locales[0]),
+    EXPECT_EQ(base::i18n::GetLanguageSubtagUsingLanguageTag(locales[0]),
               icu::Locale::getDefault().getLanguage());
     VerifyKeyboardLayoutMatchesLocale();
   }
@@ -902,7 +902,7 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, PRE_DataIsRemoved) {
 }
 
 // Disabled on ASan and LSAn builds due to a consistent failure. See
-// crbug.com/1004228
+// crbug.com/40647624
 #if defined(ADDRESS_SANITIZER) || defined(LEAK_SANITIZER)
 #define MAYBE_DataIsRemoved DISABLED_DataIsRemoved
 #else
@@ -1037,9 +1037,8 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, StartSession) {
       SessionStartupPref::kPrefValueURLs);
   em::StringListPolicyProto* startup_urls_proto =
       device_local_account_policy_.payload().mutable_restoreonstartupurls();
-  for (size_t i = 0; i < std::size(kStartupURLs); ++i) {
-    startup_urls_proto->mutable_value()->add_entries(
-        UNSAFE_TODO(kStartupURLs[i]));
+  for (const char* url : kStartupURLs) {
+    startup_urls_proto->mutable_value()->add_entries(url);
   }
   UploadAndInstallDeviceLocalAccountPolicy();
   AddPublicSessionToDevicePolicy(kAccountId1);
@@ -1050,7 +1049,7 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, StartSession) {
   WaitForSessionStart();
 
   // Check that the startup pages specified in policy were opened.
-  EXPECT_EQ(1U, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1U, GlobalBrowserCollection::GetInstance()->GetSize());
   BrowserWindowInterface* const browser =
       GetLastActiveBrowserWindowInterfaceWithAnyProfile();
   ASSERT_TRUE(browser);
@@ -1082,7 +1081,7 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, FullscreenAllowed) {
   ASSERT_NO_FATAL_FAILURE(StartLogin(std::string(), std::string()));
   WaitForSessionStart();
 
-  EXPECT_EQ(1U, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1U, GlobalBrowserCollection::GetInstance()->GetSize());
   BrowserWindowInterface* const browser =
       GetLastActiveBrowserWindowInterfaceWithAnyProfile();
   ASSERT_TRUE(browser);
@@ -1601,7 +1600,7 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, LastWindowClosedLogoutReminder) {
   EXPECT_EQ(1U, app_window_registry->app_windows().size());
 
   // Close the only open browser window.
-  EXPECT_EQ(1U, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1U, GlobalBrowserCollection::GetInstance()->GetSize());
   BrowserWindowInterface* browser =
       GetLastActiveBrowserWindowInterfaceWithAnyProfile();
   ASSERT_TRUE(browser);
@@ -1615,7 +1614,7 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, LastWindowClosedLogoutReminder) {
 
   // Open a browser window.
   BrowserWindowInterface* first_browser = CreateBrowser(profile);
-  EXPECT_EQ(1U, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1U, GlobalBrowserCollection::GetInstance()->GetSize());
 
   // Close the app window.
   run_loop_ = std::make_unique<base::RunLoop>();
@@ -1630,12 +1629,12 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, LastWindowClosedLogoutReminder) {
 
   // Open a second browser window.
   BrowserWindowInterface* second_browser = CreateBrowser(profile);
-  EXPECT_EQ(2U, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(2U, GlobalBrowserCollection::GetInstance()->GetSize());
 
   // Close the first browser window.
   CloseBrowserAndVerifyDestruction(first_browser);
   first_browser = nullptr;
-  EXPECT_EQ(1U, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1U, GlobalBrowserCollection::GetInstance()->GetSize());
 
   // Verify that the logout confirmation dialog is not showing because a browser
   // window is still open.
@@ -1657,7 +1656,7 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, LastWindowClosedLogoutReminder) {
 
   // Open a browser window.
   browser = CreateBrowser(profile);
-  EXPECT_EQ(1U, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1U, GlobalBrowserCollection::GetInstance()->GetSize());
 
   // Close the browser window.
   CloseBrowserAndVerifyDestruction(browser);
@@ -1720,7 +1719,7 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, NoRecommendedLocaleSwitch) {
 
   // Verify that the locale and keyboard layout have been applied.
   EXPECT_EQ(kPublicSessionLocale, g_browser_process->GetApplicationLocale());
-  EXPECT_EQ(l10n_util::GetLanguage(kPublicSessionLocale),
+  EXPECT_EQ(base::i18n::GetLanguageSubtagUsingLanguageTag(kPublicSessionLocale),
             icu::Locale::getDefault().getLanguage());
   EXPECT_EQ(public_session_input_method_id_,
             ash::input_method::InputMethodManager::Get()
@@ -1733,6 +1732,9 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, NoRecommendedLocaleSwitch) {
 // timezone, which should be possible iff the timezone automatic detection
 // policy is set to either DISABLED or USERS_DECIDE.
 IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, ManagedSessionTimezoneChange) {
+  const PrefService& local_state =
+      CHECK_DEREF(g_browser_process->local_state());
+
   UploadAndInstallDeviceLocalAccountPolicy();
   AddPublicSessionToDevicePolicy(kAccountId1);
   EnableAutoLogin();
@@ -1757,30 +1759,30 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, ManagedSessionTimezoneChange) {
 
   timezone_settings->SetTimezoneFromID(timezone_id1);
   SetSystemTimezoneAutomaticDetectionPolicy(em::SystemTimezoneProto::DISABLED);
-  ash::system::SetSystemTimezone(user, timezone_id2);
+  ash::system::SetSystemTimezone(local_state, user, timezone_id2);
   EXPECT_EQ(timezone_settings->GetCurrentTimezoneID(), timezone_id2_utf16);
 
   timezone_settings->SetTimezoneFromID(timezone_id1);
   SetSystemTimezoneAutomaticDetectionPolicy(
       em::SystemTimezoneProto::USERS_DECIDE);
-  ash::system::SetSystemTimezone(user, timezone_id2);
+  ash::system::SetSystemTimezone(local_state, user, timezone_id2);
   EXPECT_EQ(timezone_settings->GetCurrentTimezoneID(), timezone_id2_utf16);
 
   timezone_settings->SetTimezoneFromID(timezone_id1);
   SetSystemTimezoneAutomaticDetectionPolicy(em::SystemTimezoneProto::IP_ONLY);
-  ash::system::SetSystemTimezone(user, timezone_id2);
+  ash::system::SetSystemTimezone(local_state, user, timezone_id2);
   EXPECT_NE(timezone_settings->GetCurrentTimezoneID(), timezone_id2_utf16);
 
   timezone_settings->SetTimezoneFromID(timezone_id1);
   SetSystemTimezoneAutomaticDetectionPolicy(
       em::SystemTimezoneProto::SEND_WIFI_ACCESS_POINTS);
-  ash::system::SetSystemTimezone(user, timezone_id2);
+  ash::system::SetSystemTimezone(local_state, user, timezone_id2);
   EXPECT_NE(timezone_settings->GetCurrentTimezoneID(), timezone_id2_utf16);
 
   timezone_settings->SetTimezoneFromID(timezone_id1);
   SetSystemTimezoneAutomaticDetectionPolicy(
       em::SystemTimezoneProto::SEND_ALL_LOCATION_INFO);
-  ash::system::SetSystemTimezone(user, timezone_id2);
+  ash::system::SetSystemTimezone(local_state, user, timezone_id2);
   EXPECT_NE(timezone_settings->GetCurrentTimezoneID(), timezone_id2_utf16);
 }
 
@@ -1806,7 +1808,8 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, OneRecommendedLocale) {
   // layout applicable to the locale was chosen.
   EXPECT_EQ(kSingleRecommendedLocale[0],
             g_browser_process->GetApplicationLocale());
-  EXPECT_EQ(l10n_util::GetLanguage(kSingleRecommendedLocale[0]),
+  EXPECT_EQ(base::i18n::GetLanguageSubtagUsingLanguageTag(
+                kSingleRecommendedLocale[0]),
             icu::Locale::getDefault().getLanguage());
   VerifyKeyboardLayoutMatchesLocale();
 }
@@ -1836,8 +1839,8 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, MultipleRecommendedLocales) {
   // Verify that the recommended locales do not appear again in the remainder of
   // the list.
   std::set<std::string> recommended_locales;
-  for (size_t i = 0; i < std::size(kRecommendedLocales1); ++i) {
-    recommended_locales.insert(UNSAFE_TODO(kRecommendedLocales1[i]));
+  for (const char* locale : kRecommendedLocales1) {
+    recommended_locales.insert(locale);
   }
   for (size_t i = std::size(kRecommendedLocales1); i < locales.size(); ++i) {
     const std::string& locale = locales[i].language_code;
@@ -1929,7 +1932,7 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, MultipleRecommendedLocales) {
 
   // Verify that the locale and keyboard layout have been applied.
   EXPECT_EQ(kPublicSessionLocale, g_browser_process->GetApplicationLocale());
-  EXPECT_EQ(l10n_util::GetLanguage(kPublicSessionLocale),
+  EXPECT_EQ(base::i18n::GetLanguageSubtagUsingLanguageTag(kPublicSessionLocale),
             icu::Locale::getDefault().getLanguage());
   EXPECT_EQ(public_session_input_method_id_,
             ash::input_method::InputMethodManager::Get()
@@ -1957,7 +1960,7 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, InvalidRecommendedLocale) {
   // Verify that since the recommended locale was invalid, the locale has not
   // changed and the first keyboard layout applicable to the locale was chosen.
   EXPECT_EQ(initial_locale_, g_browser_process->GetApplicationLocale());
-  EXPECT_EQ(l10n_util::GetLanguage(initial_locale_),
+  EXPECT_EQ(base::i18n::GetLanguageSubtagUsingLanguageTag(initial_locale_),
             icu::Locale::getDefault().getLanguage());
   VerifyKeyboardLayoutMatchesLocale();
 }
@@ -2017,8 +2020,9 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest,
   // Verify that the first recommended locale has been applied and the first
   // keyboard layout applicable to the locale was chosen.
   EXPECT_EQ(kRecommendedLocales1[0], g_browser_process->GetApplicationLocale());
-  EXPECT_EQ(l10n_util::GetLanguage(kRecommendedLocales1[0]),
-            icu::Locale::getDefault().getLanguage());
+  EXPECT_EQ(
+      base::i18n::GetLanguageSubtagUsingLanguageTag(kRecommendedLocales1[0]),
+      icu::Locale::getDefault().getLanguage());
   VerifyKeyboardLayoutMatchesLocale();
 }
 
@@ -2067,7 +2071,7 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest,
 
   // Verify that the locale and keyboard layout have been applied.
   EXPECT_EQ(kPublicSessionLocale, g_browser_process->GetApplicationLocale());
-  EXPECT_EQ(l10n_util::GetLanguage(kPublicSessionLocale),
+  EXPECT_EQ(base::i18n::GetLanguageSubtagUsingLanguageTag(kPublicSessionLocale),
             icu::Locale::getDefault().getLanguage());
   EXPECT_EQ(public_session_input_method_id_,
             ash::input_method::InputMethodManager::Get()
@@ -2087,7 +2091,7 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest,
 
   // Verify that the locale and keyboard layout are still in force.
   EXPECT_EQ(kPublicSessionLocale, g_browser_process->GetApplicationLocale());
-  EXPECT_EQ(l10n_util::GetLanguage(kPublicSessionLocale),
+  EXPECT_EQ(base::i18n::GetLanguageSubtagUsingLanguageTag(kPublicSessionLocale),
             icu::Locale::getDefault().getLanguage());
   EXPECT_EQ(public_session_input_method_id_,
             ash::input_method::InputMethodManager::Get()
@@ -2114,7 +2118,7 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, PublicSessionWithLocaleSwitch) {
 
   // Verify that the locale.
   EXPECT_EQ(kPublicSessionLocale, g_browser_process->GetApplicationLocale());
-  EXPECT_EQ(l10n_util::GetLanguage(kPublicSessionLocale),
+  EXPECT_EQ(base::i18n::GetLanguageSubtagUsingLanguageTag(kPublicSessionLocale),
             icu::Locale::getDefault().getLanguage());
 }
 
@@ -2160,7 +2164,7 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, SessionLengthLimit) {
                             ->SetClockForTesting(&clock);
 
   // Ensure the SessionLengthLimit is updated.
-  LocalStateValueWaiter(prefs::kSessionLengthLimit,
+  LocalStateValueWaiter(ash::prefs::kSessionLengthLimit,
                         base::Value(kThreeHoursInMs))
       .Wait();
 
@@ -2184,7 +2188,8 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountTest, SessionLengthLimit) {
     broker->core()->client()->FetchPolicy(PolicyFetchReason::kTest);
   }
   // Ensure the SessionLengthLimit is updated.
-  LocalStateValueWaiter(prefs::kSessionLengthLimit, base::Value(kTwoHoursInMs))
+  LocalStateValueWaiter(ash::prefs::kSessionLengthLimit,
+                        base::Value(kTwoHoursInMs))
       .Wait();
 
   // The session is terminated.
@@ -2898,7 +2903,7 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountUkmTest, PRE_ReportUkmOnShutdown) {
   EXPECT_TRUE(ukm_test_helper.IsRecordingEnabled());
 
   // A browser is opened by default in MGS.
-  EXPECT_EQ(1U, chrome::GetTotalBrowserCount());
+  EXPECT_EQ(1U, GlobalBrowserCollection::GetInstance()->GetSize());
 
   // Delete all UKM to check metrics reported during the shutdown.
   ukm_test_helper.PurgeData();
@@ -2916,6 +2921,44 @@ IN_PROC_BROWSER_TEST_F(DeviceLocalAccountUkmTest, ReportUkmOnShutdown) {
   EXPECT_EQ(ukm::SourceType::APP_ID, report->sources().Get(0).type());
 }
 
+IN_PROC_BROWSER_TEST_F(
+    DeviceLocalAccountTest,
+    ManagedGuestSession_AllowedInputMethods_PreservesActive) {
+  em::StringListPolicyProto* allowed_input_methods =
+      device_local_account_policy_.payload().mutable_allowedinputmethods();
+  allowed_input_methods->mutable_value()->add_entries("xkb:fr::fra");
+  allowed_input_methods->mutable_value()->add_entries("xkb:us::eng");
+
+  UploadAndInstallDeviceLocalAccountPolicy();
+  AddPublicSessionToDevicePolicy(kAccountId1);
+
+  WaitForPolicy();
+
+  ash::input_method::InputMethodManager::Get()
+      ->GetActiveIMEState()
+      ->EnableInputMethod(
+          ash::extension_ime_util::GetInputMethodIDByEngineID("xkb:fr::fra"));
+  ash::input_method::InputMethodManager::Get()
+      ->GetActiveIMEState()
+      ->ChangeInputMethod(
+          ash::extension_ime_util::GetInputMethodIDByEngineID("xkb:fr::fra"),
+          false /* show_message */);
+
+  ASSERT_NO_FATAL_FAILURE(StartLogin(
+      std::string(),
+      ash::extension_ime_util::GetInputMethodIDByEngineID("xkb:us::eng")));
+  WaitForSessionStart();
+
+  Profile* profile = GetProfileForTest();
+  ASSERT_TRUE(profile);
+  PrefService* prefs = profile->GetPrefs();
+
+  EXPECT_EQ(ash::extension_ime_util::GetInputMethodIDByEngineID("xkb:us::eng"),
+            prefs->GetString(ash::prefs::kLanguageCurrentInputMethod));
+  EXPECT_EQ(ash::extension_ime_util::GetInputMethodIDByEngineID("xkb:fr::fra"),
+            prefs->GetString(ash::prefs::kLanguagePreviousInputMethod));
+}
+
 class AmbientAuthenticationManagedGuestSessionTest
     : public DeviceLocalAccountTest,
       public testing::WithParamInterface<net::AmbientAuthAllowedProfileTypes> {
@@ -2931,7 +2974,7 @@ class AmbientAuthenticationManagedGuestSessionTest
     int policy_value = device_local_account_policy_.payload()
                            .ambientauthenticationinprivatemodesenabled()
                            .value();
-    EXPECT_EQ(1U, chrome::GetTotalBrowserCount());
+    EXPECT_EQ(1U, GlobalBrowserCollection::GetInstance()->GetSize());
     Profile* const regular_profile =
         GetLastActiveBrowserWindowInterfaceWithAnyProfile()->GetProfile();
     Profile* const incognito_profile =

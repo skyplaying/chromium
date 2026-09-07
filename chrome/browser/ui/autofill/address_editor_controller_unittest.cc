@@ -9,9 +9,8 @@
 
 #include "base/callback_list.h"
 #include "base/test/mock_callback.h"
-#include "chrome/test/base/browser_with_test_window_test.h"
 #include "components/autofill/core/browser/data_manager/test_personal_data_manager.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/browser/ui/country_combobox_model.h"
 #include "components/autofill/core/common/autofill_prefs.h"
 #include "components/prefs/pref_registry_simple.h"
@@ -65,30 +64,28 @@ TEST_F(AddressEditorControllerTest, SmokeTest) {
 
 TEST_F(AddressEditorControllerTest, FieldValidation) {
   CreateController(/*is_validatable=*/true);
-  EXPECT_TRUE(controller_->IsValid({autofill::PHONE_HOME_WHOLE_NUMBER, u"",
-                                    EditorField::LengthHint::HINT_SHORT, false,
-                                    EditorField::ControlType::TEXTFIELD_NUMBER},
-                                   u""))
+  EXPECT_TRUE(controller_->IsValid(
+      {PHONE_HOME_WHOLE_NUMBER, u"", EditorField::LengthHint::HINT_SHORT, false,
+       EditorField::ControlType::TEXTFIELD_NUMBER},
+      u""))
       << "Non-validatable field should always be valid.";
 
-  EXPECT_FALSE(
-      controller_->IsValid({autofill::PHONE_HOME_WHOLE_NUMBER, u"",
-                            EditorField::LengthHint::HINT_SHORT, true,
-                            EditorField::ControlType::TEXTFIELD_NUMBER},
-                           u""))
+  EXPECT_FALSE(controller_->IsValid(
+      {PHONE_HOME_WHOLE_NUMBER, u"", EditorField::LengthHint::HINT_SHORT, true,
+       EditorField::ControlType::TEXTFIELD_NUMBER},
+      u""))
       << "Empty value for validatable field is considered invalid.";
 
-  EXPECT_FALSE(
-      controller_->IsValid({autofill::PHONE_HOME_WHOLE_NUMBER, u"  ",
-                            EditorField::LengthHint::HINT_SHORT, true,
-                            EditorField::ControlType::TEXTFIELD_NUMBER},
-                           u""))
+  EXPECT_FALSE(controller_->IsValid(
+      {PHONE_HOME_WHOLE_NUMBER, u"  ", EditorField::LengthHint::HINT_SHORT,
+       true, EditorField::ControlType::TEXTFIELD_NUMBER},
+      u""))
       << "Whitespaces should be trimmed and the field is considered invalid.";
 
-  EXPECT_TRUE(controller_->IsValid({autofill::PHONE_HOME_WHOLE_NUMBER, u"",
-                                    EditorField::LengthHint::HINT_SHORT, true,
-                                    EditorField::ControlType::TEXTFIELD_NUMBER},
-                                   u"abc"))
+  EXPECT_TRUE(controller_->IsValid(
+      {PHONE_HOME_WHOLE_NUMBER, u"", EditorField::LengthHint::HINT_SHORT, true,
+       EditorField::ControlType::TEXTFIELD_NUMBER},
+      u"abc"))
       << "Non-empty string is considered valid";
 }
 
@@ -145,7 +142,7 @@ TEST_F(AddressEditorControllerTest, SetProfileInfo) {
     EXPECT_EQ(controller_->GetProfileInfo(type_value_pair.first),
               type_value_pair.second);
   }
-  // First and last names must be reset, see crbug.com/1496322.
+  // First and last names must be reset, see crbug.com/40286758.
   EXPECT_EQ(controller_->GetProfileInfo(NAME_FIRST), u"");
   EXPECT_EQ(controller_->GetProfileInfo(NAME_LAST), u"");
 }

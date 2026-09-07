@@ -16,7 +16,8 @@
 
 #include "base/component_export.h"
 #include "base/feature_list.h"
-#include "base/functional/callback_forward.h"
+#include "base/functional/callback.h"
+#include "base/unguessable_token.h"
 #include "services/network/public/cpp/url_loader_completion_status.h"
 #include "services/network/public/mojom/url_loader.mojom-forward.h"
 #include "services/network/public/mojom/url_loader_factory.mojom-forward.h"
@@ -77,6 +78,22 @@ class SimpleURLLoaderStreamConsumer;
 // 503 + Retry-After.
 class COMPONENT_EXPORT(NETWORK_CPP) SimpleURLLoader {
  public:
+  // Callbacks used to notify the embedder when a local file is being
+  // uploaded. These callbacks delegate file access registration and
+  // revocation to the embedder.
+  struct FileUploadEventCallbacks {
+    // Called when a file is attached to a request, giving the embedder a chance
+    // to register it for security validation. `owner_token` is an identifier
+    // that will be used to revoke access when the loader is destroyed.
+    base::RepeatingCallback<void(const base::UnguessableToken& /*owner_token*/,
+                                 const base::FilePath&)>
+        register_callback;
+
+    // Called when the loader is destroyed, notifying the embedder to revoke
+    // the file access previously registered with `owner_token`.
+    base::RepeatingCallback<void(const base::UnguessableToken& /*owner_token*/)>
+        revoke_callback;
+  };
   // When a failed request should automatically be retried. These are intended
   // to be ORed together.
   enum RetryMode {
@@ -191,6 +208,12 @@ class COMPONENT_EXPORT(NETWORK_CPP) SimpleURLLoader {
   static void SetTimeoutTickClockForTest(
       const base::TickClock* timeout_tick_clock);
 
+  // Configures the global callbacks used by all SimpleURLLoader instances to
+  // report embedder-initiated file uploads. This should be called once during
+  // startup.
+  static void SetFileUploadEventCallbacks(
+      const FileUploadEventCallbacks& callbacks);
+
   SimpleURLLoader(const SimpleURLLoader&) = delete;
   SimpleURLLoader& operator=(const SimpleURLLoader&) = delete;
 
@@ -277,6 +300,22 @@ class COMPONENT_EXPORT(NETWORK_CPP) SimpleURLLoader {
   virtual void DownloadAsStream(
       mojom::URLLoaderFactory* url_loader_factory,
       SimpleURLLoaderStreamConsumer* stream_consumer) = 0;
+
+  // Pauses reading the response body from the network service. Only has an
+  // effect for DownloadToFile and DownloadToTempFile requests; it is a no-op
+  // for the other download methods: DownloadToString and DownloadHeadersOnly
+  // buffer the whole body, and DownloadAsStream consumers already control the
+  // flow themselves by delaying the resume callback of OnDataReceived().
+  // While paused, no more data is read from the body pipe, so the request
+  // applies backpressure to the network connection. The connection stays open;
+  // a server or proxy may end a request that stays paused for a long time,
+  // which is then reported as a normal failure. May be called before the
+  // response starts. Calling it while already paused is a no-op.
+  virtual void PauseReadingBody() {}
+
+  // Resumes reading the response body after PauseReadingBody(). A no-op if the
+  // request is not paused.
+  virtual void ResumeReadingBody() {}
 
   // Sets callback to be invoked during redirects. Callback may delete the
   // SimpleURLLoader.

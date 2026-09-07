@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 
+#include "base/functional/callback_forward.h"
 #include "build/build_config.h"
 #include "components/language/core/browser/accept_languages_service.h"
 #include "components/translate/core/browser/translate_prefs.h"
@@ -69,6 +70,12 @@ class TranslateClient {
 
   // Returns true if the URL can be translated.
   virtual bool IsTranslatableURL(const GURL& url) = 0;
+
+  // Triggers PDF translation.
+  virtual void TriggerPdfTranslation() {}
+
+  // Returns true if Reading Mode is open.
+  virtual bool IsReadingModeOpen() const = 0;
 };
 
 }  // namespace translate

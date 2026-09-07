@@ -26,6 +26,7 @@ import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Criteria;
 import org.chromium.base.test.util.CriteriaHelper;
 import org.chromium.base.test.util.CriteriaNotSatisfiedException;
+import org.chromium.base.test.util.DisableIf;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
@@ -36,11 +37,11 @@ import org.chromium.chrome.browser.webid.IdentityCredentialsDelegate;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
-import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.content_public.browser.ContentFeatureList;
 import org.chromium.content_public.browser.test.util.DOMUtils;
 import org.chromium.content_public.browser.test.util.JavaScriptUtils;
 import org.chromium.net.test.EmbeddedTestServer;
+import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modaldialog.ModalDialogManager.ModalDialogManagerObserver;
@@ -55,6 +56,7 @@ import java.util.concurrent.TimeoutException;
 @RunWith(ChromeJUnit4ClassRunner.class)
 @Batch(Batch.PER_CLASS)
 @CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
+@DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511289029
 public class DigitalIdentitySafetyInterstitialIntegrationTest {
     /**
      * Observes shown modal dialogs.
@@ -87,7 +89,7 @@ public class DigitalIdentitySafetyInterstitialIntegrationTest {
             mWasAnyDialogShown = true;
 
             CharSequence paragraph1 = model.get(ModalDialogProperties.MESSAGE_PARAGRAPHS).get(0);
-            if (paragraph1 != null && mSearchParagraph1.equals(paragraph1.toString())) {
+            if (paragraph1 != null && paragraph1.toString().equals(mSearchParagraph1)) {
                 mWasDialogShown = true;
                 mDialogPropertyModel = model;
                 if (mPressButtonOnShow) {
@@ -117,7 +119,6 @@ public class DigitalIdentitySafetyInterstitialIntegrationTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
 
     private EmbeddedTestServer mTestServer;
-    private WebPageStation mPage;
 
     private ModalDialogButtonPresser mModalDialogObserver;
 

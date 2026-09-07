@@ -4,13 +4,21 @@
 
 #include "components/autofill/core/browser/autofill_feedback_data.h"
 
+#include <string>
+#include <string_view>
+#include <utility>
 #include <variant>
 
 #include "base/strings/string_number_conversions.h"
+#include "base/time/time.h"
+#include "base/values.h"
 #include "components/autofill/core/browser/autofill_field.h"
+#include "components/autofill/core/browser/field_types.h"
 #include "components/autofill/core/browser/foundations/browser_autofill_manager.h"
 #include "components/autofill/core/browser/metrics/log_event.h"
 #include "components/autofill/core/common/autofill_clock.h"
+#include "components/autofill/core/common/html_field_types.h"
+#include "url/origin.h"
 
 namespace autofill::data_logs {
 
@@ -19,7 +27,7 @@ namespace {
 // feedback report.
 constexpr base::TimeDelta kAutofillEventTimeLimit = base::Minutes(3);
 
-std::string FillDataTypeToStr(FillDataType type) {
+std::string_view FillDataTypeToStr(FillDataType type) {
   switch (type) {
     case FillDataType::kUndefined:
       return "Undefined";
@@ -63,8 +71,9 @@ base::DictValue BuildFieldDataLogs(AutofillField* field) {
   field_data.Set("heuristicType",
                  FieldTypeToStringView(field->heuristic_type()));
   field_data.Set("serverType", FieldTypeToStringView(field->server_type()));
-  field_data.Set("serverTypeIsOverride",
-                 field->server_type_prediction_is_override());
+  field_data.Set(
+      "serverTypeIsOverride",
+      field->PredictionSource() == AutofillPredictionSource::kServerOverride);
   field_data.Set("htmlType", FieldTypeToStringView(field->html_type()));
   field_data.Set("section", field->section().ToString());
   field_data.Set("rank", base::NumberToString(field->rank()));

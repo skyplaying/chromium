@@ -23,13 +23,17 @@ class PageInfoViewFactory {
   PageInfoViewFactory(PageInfo* presenter,
                       ChromePageInfoUiDelegate* ui_delegate,
                       PageInfoNavigationHandler* navigation_handler,
-                      bool allow_extended_site_info);
+                      bool allow_extended_site_info,
+                      bool show_extensions_menu = false);
 
   // Bubble width constraints.
   static constexpr int kMinBubbleWidth = 320;
   static constexpr int kMaxBubbleWidth = 1000;
 
+  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kBackButtonElementId);
+
   enum PageInfoViewID {
+
     VIEW_ID_PAGE_INFO_NONE = 0,
     VIEW_ID_PAGE_INFO_BUTTON_CHANGE_PASSWORD,
     VIEW_ID_PAGE_INFO_BUTTON_ALLOWLIST_PASSWORD_REUSE,
@@ -44,6 +48,7 @@ class PageInfoViewFactory {
     VIEW_ID_PAGE_INFO_LINK_OR_BUTTON_RWS_SETTINGS,
     VIEW_ID_PAGE_INFO_COOKIES_BUTTONS_CONTAINER,
     VIEW_ID_PAGE_INFO_LINK_OR_BUTTON_SITE_SETTINGS,
+    VIEW_ID_PAGE_INFO_LINK_OR_BUTTON_SEE_EXTENSIONS,
     VIEW_ID_PAGE_INFO_LINK_OR_BUTTON_SITE_SETTINGS_FILE_SYSTEM,
     VIEW_ID_PAGE_INFO_PERMISSION_SUBPAGE_FILE_SYSTEM_SCROLL_PANEL,
     VIEW_ID_PAGE_INFO_PERMISSION_SUBPAGE_MANAGE_BUTTON,
@@ -57,13 +62,11 @@ class PageInfoViewFactory {
     VIEW_ID_PAGE_INFO_PERMISSION_VIEW,
     VIEW_ID_PAGE_INFO_SECURITY_SUMMARY_LABEL,
     VIEW_ID_PAGE_INFO_SECURITY_DETAILS_LABEL,
-    VIEW_ID_PAGE_INFO_AD_PERSONALIZATION_LABEL,
     VIEW_ID_PAGE_INFO_BACK_BUTTON,
     VIEW_ID_PAGE_INFO_CLOSE_BUTTON,
     VIEW_ID_PAGE_INFO_CURRENT_VIEW,
     VIEW_ID_PAGE_INFO_RESET_PERMISSIONS_BUTTON,
     VIEW_ID_PAGE_INFO_ABOUT_THIS_SITE_BUTTON,
-    VIEW_ID_PAGE_INFO_AD_PERSONALIZATION_BUTTON,
     VIEW_ID_PAGE_INFO_MORE_ABOUT_THIS_PAGE_BUTTON,
     VIEW_ID_PERMISSION_TOGGLE_ROW_TOGGLE_BUTTON,
     VIEW_ID_PAGE_INFO_RESET_DECISIONS_LABEL,
@@ -72,6 +75,9 @@ class PageInfoViewFactory {
     VIEW_ID_PAGE_INFO_THIRD_PARTY_COOKIES_TOGGLE,
     VIEW_ID_PAGE_INFO_EXTENDED_SITE_INFO_SECTION,
     VIEW_ID_PAGE_INFO_COOKIES_SYNC,
+    VIEW_ID_PAGE_INFO_PERMISSION_SUBTITLE_LABEL,
+    VIEW_ID_PAGE_INFO_SUSPICIOUS_SITE_MARK_AS_SAFE_BUTTON,
+    VIEW_ID_PAGE_INFO_SUSPICIOUS_SITE_BACK_TO_SAFETY_BUTTON,
   };
 
   // Creates a separator view with padding on top and bottom. Use with flex
@@ -103,6 +109,9 @@ class PageInfoViewFactory {
   // Returns the icon for the button / link to Site settings.
   static const ui::ImageModel GetSiteSettingsIcon();
 
+  // Returns the icon for the button / link to Extensions.
+  static const ui::ImageModel GetExtensionIcon();
+
   // Returns the icon for a button which opens an external dialog or page (ex.
   // cookies dialog or site settings page).
   static const ui::ImageModel GetLaunchIcon();
@@ -128,7 +137,6 @@ class PageInfoViewFactory {
   [[nodiscard]] std::unique_ptr<views::View> CreatePermissionPageView(
       ContentSettingsType type,
       content::WebContents* web_contents);
-  [[nodiscard]] std::unique_ptr<views::View> CreateAdPersonalizationPageView();
   [[nodiscard]] std::unique_ptr<views::View> CreateCookiesPageView();
   [[nodiscard]] std::unique_ptr<views::View> CreateMerchantTrustPageView();
 
@@ -150,6 +158,7 @@ class PageInfoViewFactory {
   raw_ptr<ChromePageInfoUiDelegate, DanglingUntriaged> ui_delegate_;
   raw_ptr<PageInfoNavigationHandler> navigation_handler_;
   const bool allow_extended_site_info_;
+  const bool show_extensions_menu_;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_PAGE_INFO_PAGE_INFO_VIEW_FACTORY_H_

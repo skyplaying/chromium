@@ -12,10 +12,11 @@ import org.chromium.base.UserData;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.components.dom_distiller.content.DistillablePageUtils;
 import org.chromium.components.dom_distiller.content.DistillablePageUtils.PageDistillableDelegate;
+import org.chromium.components.dom_distiller.core.DomDistillerUrlUtils;
 import org.chromium.content_public.browser.NavigationHandle;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.ui.base.WindowAndroid;
@@ -26,8 +27,7 @@ import java.lang.annotation.RetentionPolicy;
 
 /** A mechanism for clients interested in the distillability of a page to receive updates. */
 @NullMarked
-public class TabDistillabilityProvider extends EmptyTabObserver
-        implements PageDistillableDelegate, UserData {
+public class TabDistillabilityProvider implements TabObserver, PageDistillableDelegate, UserData {
     public static final Class<TabDistillabilityProvider> USER_DATA_KEY =
             TabDistillabilityProvider.class;
 
@@ -43,7 +43,7 @@ public class TabDistillabilityProvider extends EmptyTabObserver
         int OTHER = 0;
         int LONG_ARTICLE = 1;
         int COUNT = 2;
-    };
+    }
 
     /** An observer of the distillable state of a tab and its active web content. */
     public interface DistillabilityObserver {
@@ -81,14 +81,27 @@ public class TabDistillabilityProvider extends EmptyTabObserver
     private boolean mIsLongArticle;
     private boolean mIsMobileOptimized;
 
-    /** Creates a TabDistillabilityProvider for the given tab. */
-    public static void createForTab(Tab tab) {
-        assert get(tab) == null;
-        tab.getUserDataHost().setUserData(USER_DATA_KEY, new TabDistillabilityProvider(tab));
+    /**
+     * Retrieves the {@link TabDistillabilityProvider} for the given {@link Tab}, creating it if it
+     * doesn't already exist.
+     *
+     * @param tab The Tab to get the helper for.
+     * @return The {@link TabDistillabilityProvider}, or null if UserDataHost is null.
+     */
+    public static @Nullable TabDistillabilityProvider from(Tab tab) {
+        if (tab.getUserDataHost() == null || tab.getWebContents() == null) return null;
+        TabDistillabilityProvider provider = get(tab);
+        if (provider == null) {
+            provider =
+                    tab.getUserDataHost()
+                            .setUserData(USER_DATA_KEY, new TabDistillabilityProvider(tab));
+        }
+        return provider;
     }
 
     /** Returns the TabDistillabilityProvider for the given tab if it exists. */
     public static @Nullable TabDistillabilityProvider get(Tab tab) {
+        if (tab.getUserDataHost() == null) return null;
         return tab.getUserDataHost().getUserData(USER_DATA_KEY);
     }
 
@@ -142,6 +155,7 @@ public class TabDistillabilityProvider extends EmptyTabObserver
     /**
      * Reset any of the cached values from native distiller and reattach the delegate if necessary.
      */
+    @SuppressWarnings("NullAway")
     private void resetState() {
         mDistillabilityDetermined = false;
         mDistillationResultUrl = null;
@@ -150,10 +164,18 @@ public class TabDistillabilityProvider extends EmptyTabObserver
         mIsLongArticle = false;
         mIsMobileOptimized = false;
 
-        if (mTab != null
-                && mTab.getWebContents() != null
-                && mTab.getWebContents() != mWebContents) {
-            mWebContents = mTab.getWebContents();
+        if (mTab == null) return;
+        WebContents webContents = mTab.getWebContents();
+        if (webContents == null) {
+            if (mWebContents != null) {
+                DistillablePageUtils.setDelegate(mWebContents, null);
+                mWebContents = null;
+            }
+        } else if (webContents != mWebContents) {
+            if (mWebContents != null) {
+                DistillablePageUtils.setDelegate(mWebContents, null);
+            }
+            mWebContents = webContents;
             DistillablePageUtils.setDelegate(mWebContents, this);
         }
     }
@@ -218,18 +240,30 @@ public class TabDistillabilityProvider extends EmptyTabObserver
     @SuppressWarnings("NullAway")
     public void destroy() {
         mObserverList.clear();
-        mTab.removeObserver(this);
+        if (mTab != null) {
+            mTab.removeObserver(this);
+        }
+        if (mWebContents != null) {
+            DistillablePageUtils.setDelegate(mWebContents, null);
+            mWebContents = null;
+        }
         mTab = null;
-        mWebContents = null;
         resetState();
     }
 
     private void resetStateIfUrlHasChanged(Tab tab) {
-        // If the current URL matches the distillation result URL, then the result is still fresh.
-        // TODO(crbug.com/428169696): Use more relaxed matching to avoid #fragments resetting this.
-        if (mDistillationResultUrl != null
-                && mDistillationResultUrl.equalsIgnoringRef(tab.getUrl())) {
-            return;
+        // The distillation result remains fresh if navigating within the same article or entering
+        // its reader mode view.
+        if (mDistillationResultUrl != null) {
+            if (mDistillationResultUrl.equalsIgnoringRef(tab.getUrl())) {
+                return;
+            } else if (DomDistillerUrlUtils.isDistilledPage(tab.getUrl())) {
+                GURL originalUrl =
+                        DomDistillerUrlUtils.getOriginalUrlFromDistillerUrl(tab.getUrl());
+                if (originalUrl != null && mDistillationResultUrl.equalsIgnoringRef(originalUrl)) {
+                    return;
+                }
+            }
         }
         resetState();
     }

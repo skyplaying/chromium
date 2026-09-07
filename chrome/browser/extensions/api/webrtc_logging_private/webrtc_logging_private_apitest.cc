@@ -16,6 +16,7 @@
 #include "base/strings/string_split.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/scoped_command_line.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/api/webrtc_logging_private/webrtc_logging_private_api.h"
@@ -25,7 +26,6 @@
 #include "chrome/browser/media/webrtc/webrtc_event_log_manager_common.h"
 #include "chrome/browser/media/webrtc/webrtc_log_uploader.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_switches.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
@@ -41,6 +41,7 @@
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
 #include "third_party/zlib/google/compression_utils.h"
+#include "url/origin.h"
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
@@ -103,6 +104,11 @@ void InitializeTestMetaData(base::ListValue& parameters) {
 }
 
 class WebrtcLoggingPrivateApiTest : public extensions::ExtensionApiTest {
+ public:
+  WebrtcLoggingPrivateApiTest() {
+    scoped_feature_list_.InitAndEnableFeature(kWebRtcLogUploaderExcludesGuid);
+  }
+
  protected:
   void SetUpOnMainThread() override {
     ExtensionApiTest::SetUpOnMainThread();
@@ -404,11 +410,13 @@ class WebrtcLoggingPrivateApiTest : public extensions::ExtensionApiTest {
                                    /*rtc_configuration=*/std::string());
 
     if (!session_id.empty()) {
-      manager->OnPeerConnectionSessionIdSet(frame_id, lid, session_id);
+      manager->OnPeerConnectionSessionIdSet(frame_id, lid, session_id,
+                                            base::DoNothing());
     }
     return true;
   }
 
+  base::test::ScopedFeatureList scoped_feature_list_;
   base::test::ScopedCommandLine scoped_command_line_;
   scoped_refptr<const Extension> extension_;
 
@@ -424,6 +432,30 @@ IN_PROC_BROWSER_TEST_F(WebrtcLoggingPrivateApiTest, TestStartStopDiscard) {
   EXPECT_TRUE(DiscardLog());
 }
 
+// A function dispatched in the on-the-record profile without incognito access
+// must not resolve a tab that lives in the incognito profile.
+IN_PROC_BROWSER_TEST_F(WebrtcLoggingPrivateApiTest,
+                       CannotResolveIncognitoTabWithoutIncognitoAccess) {
+  content::WebContents* incognito_contents =
+      PlatformOpenURLOffTheRecord(profile(), GURL("chrome://version"));
+  ASSERT_TRUE(incognito_contents);
+
+  base::ListValue parameters;
+  base::DictValue request_info;
+  request_info.Set("tabId",
+                   extensions::ExtensionTabUtil::GetTabId(incognito_contents));
+  parameters.Append(std::move(request_info));
+  parameters.Append(
+      url::Origin::Create(incognito_contents->GetLastCommittedURL())
+          .GetURL()
+          .spec());
+
+  // RunFunctionAndExpectError() uses GetProfile() which returns the
+  // on-the-record profile. So the incognito tab must not be found.
+  RunFunctionAndExpectError<WebrtcLoggingPrivateStartFunction>(
+      parameters, "No tab with id: *.");
+}
+
 // Tests WebRTC diagnostic logging. Sets up the browser to save the multipart
 // contents to a buffer instead of uploading it, then verifies it after a calls.
 // Example of multipart contents:
@@ -435,10 +467,6 @@ IN_PROC_BROWSER_TEST_F(WebrtcLoggingPrivateApiTest, TestStartStopDiscard) {
 // Content-Disposition: form-data; name="ver"
 //
 // 30.0.1554.0
-// ------**--yradnuoBgoLtrapitluMklaTelgooG--**----
-// Content-Disposition: form-data; name="guid"
-//
-// 0
 // ------**--yradnuoBgoLtrapitluMklaTelgooG--**----
 // Content-Disposition: form-data; name="type"
 //
@@ -508,7 +536,7 @@ IN_PROC_BROWSER_TEST_F(WebrtcLoggingPrivateApiTest, TestStartStopUpload) {
   std::vector<std::string> multipart_lines =
       base::SplitStringUsingSubstr(upload_request_content_, "\r\n",
                                    base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
-  ASSERT_EQ(31u, multipart_lines.size());
+  ASSERT_EQ(27u, multipart_lines.size());
 
   EXPECT_STREQ(&boundary[0], multipart_lines[0].c_str());
   EXPECT_STREQ("Content-Disposition: form-data; name=\"prod\"",
@@ -524,41 +552,35 @@ IN_PROC_BROWSER_TEST_F(WebrtcLoggingPrivateApiTest, TestStartStopUpload) {
   EXPECT_NE(std::string::npos, multipart_lines[7].find('.'));
 
   EXPECT_STREQ(&boundary[0], multipart_lines[8].c_str());
-  EXPECT_STREQ("Content-Disposition: form-data; name=\"guid\"",
+  EXPECT_STREQ("Content-Disposition: form-data; name=\"type\"",
                multipart_lines[9].c_str());
   EXPECT_TRUE(multipart_lines[10].empty());
-  EXPECT_STREQ("0", multipart_lines[11].c_str());
+  EXPECT_STREQ("webrtc_log", multipart_lines[11].c_str());
 
   EXPECT_STREQ(&boundary[0], multipart_lines[12].c_str());
-  EXPECT_STREQ("Content-Disposition: form-data; name=\"type\"",
+  EXPECT_STREQ("Content-Disposition: form-data; name=\"app_session_id\"",
                multipart_lines[13].c_str());
   EXPECT_TRUE(multipart_lines[14].empty());
-  EXPECT_STREQ("webrtc_log", multipart_lines[15].c_str());
+  EXPECT_STREQ(kTestLoggingSessionIdValue, multipart_lines[15].c_str());
 
   EXPECT_STREQ(&boundary[0], multipart_lines[16].c_str());
-  EXPECT_STREQ("Content-Disposition: form-data; name=\"app_session_id\"",
+  EXPECT_STREQ("Content-Disposition: form-data; name=\"url\"",
                multipart_lines[17].c_str());
   EXPECT_TRUE(multipart_lines[18].empty());
-  EXPECT_STREQ(kTestLoggingSessionIdValue, multipart_lines[19].c_str());
+  EXPECT_STREQ(kTestLoggingUrl, multipart_lines[19].c_str());
 
   EXPECT_STREQ(&boundary[0], multipart_lines[20].c_str());
-  EXPECT_STREQ("Content-Disposition: form-data; name=\"url\"",
-               multipart_lines[21].c_str());
-  EXPECT_TRUE(multipart_lines[22].empty());
-  EXPECT_STREQ(kTestLoggingUrl, multipart_lines[23].c_str());
-
-  EXPECT_STREQ(&boundary[0], multipart_lines[24].c_str());
-  EXPECT_STREQ("Content-Disposition: form-data; name=\"webrtc_log\";"
-               " filename=\"webrtc_log.gz\"",
-               multipart_lines[25].c_str());
-  EXPECT_STREQ("Content-Type: application/gzip",
-               multipart_lines[26].c_str());
-  EXPECT_TRUE(multipart_lines[27].empty());
-  EXPECT_TRUE(multipart_lines[28].empty());  // The removed zip part.
+  EXPECT_STREQ(
+      "Content-Disposition: form-data; name=\"webrtc_log\";"
+      " filename=\"webrtc_log.gz\"",
+      multipart_lines[21].c_str());
+  EXPECT_STREQ("Content-Type: application/gzip", multipart_lines[22].c_str());
+  EXPECT_TRUE(multipart_lines[23].empty());
+  EXPECT_TRUE(multipart_lines[24].empty());  // The removed zip part.
   std::string final_delimiter = boundary;
   final_delimiter += "--";
-  EXPECT_STREQ(final_delimiter.c_str(), multipart_lines[29].c_str());
-  EXPECT_TRUE(multipart_lines[30].empty());
+  EXPECT_STREQ(final_delimiter.c_str(), multipart_lines[25].c_str());
+  EXPECT_TRUE(multipart_lines[26].empty());
 }
 
 IN_PROC_BROWSER_TEST_F(WebrtcLoggingPrivateApiTest, TestStartStopRtpDump) {

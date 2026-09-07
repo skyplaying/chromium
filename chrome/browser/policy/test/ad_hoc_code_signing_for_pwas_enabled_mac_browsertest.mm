@@ -5,7 +5,6 @@
 #include "base/apple/foundation_util.h"
 #include "base/values.h"
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/web_applications/test/os_integration_test_override_impl.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/common/chrome_features.h"
@@ -73,7 +72,7 @@ class AdHocCodeSigningForPWAsEnabledTest
 
 IN_PROC_BROWSER_TEST_P(AdHocCodeSigningForPWAsEnabledTest, IsRespected) {
   webapps::AppId app_id = web_app::test::InstallDummyWebApp(
-      browser()->profile(), "Example", GURL("https://www.example.com"));
+      browser()->GetProfile(), "Example", GURL("https://www.example.com"));
 
   base::FilePath info_plist_path = destination_dir_.Append("Example.app")
                                        .Append("Contents")

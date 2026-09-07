@@ -37,7 +37,7 @@
 - (void)omniboxWillResignFirstResponder;
 
 // Indicates that the omnibox stopped being the first responder to the keyboard.
-- (void)omniboxDidResignFirstResponder;
+- (void)omniboxDidEndEditing;
 
 // Restores a given scroll position if applicable.
 - (void)restoreScrollPosition:(CGFloat)scrollPosition;
@@ -67,6 +67,12 @@
 
 // Whether AIM is allowed.
 - (void)setAIMAllowed:(BOOL)allowed;
+
+// Sets whether the omnibox is in the bottom position.
+- (void)setOmniboxInBottomPosition:(BOOL)isBottomOmnibox;
+
+// Sets the bottom inset for the feed to avoid overlap with bottom toolbars.
+- (void)setFeedBottomInset:(CGFloat)bottomInset;
 
 @end
 

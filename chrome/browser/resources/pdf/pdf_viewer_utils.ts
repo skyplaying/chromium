@@ -79,6 +79,23 @@ export function hasCtrlModifierOnly(e: KeyboardEvent): boolean {
   return hasCtrlModifier(e) && !e.shiftKey && !e.altKey && !metaModifier;
 }
 
+// <if expr="enable_pdf_ink2">
+/**
+ * Determines if the event matches the platform shortcut for strikethrough.
+ * Alt+Shift+5 on non-Mac, and Cmd+Shift+X on Mac.
+ */
+export function isStrikethroughShortcut(e: KeyboardEvent): boolean {
+  // <if expr="is_macosx">
+  return e.metaKey && e.shiftKey && !e.ctrlKey && !e.altKey &&
+      e.key.toLowerCase() === 'x';
+  // </if>
+  // <if expr="not is_macosx">
+  return e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey &&
+      (e.key === '5' || e.key === '%' || e.code === 'Digit5');
+  // </if>
+}
+// </if>
+
 /**
  * Whether keydown events should currently be ignored. Events are ignored when
  * an editable element has focus, to allow for proper editing controls.
@@ -128,6 +145,14 @@ export function hexToColor(hex: string): Color {
     g: Number.parseInt(hex.substring(3, 5), 16),
     b: Number.parseInt(hex.substring(5, 7), 16),
   };
+}
+
+/**
+ * @returns Whether `color1` and `color2` have the same RGB values or not.
+ */
+export function colorsEqual(color1: Color, color2: Color): boolean {
+  return color1.r === color2.r && color1.g === color2.g &&
+      color1.b === color2.b;
 }
 // </if>
 

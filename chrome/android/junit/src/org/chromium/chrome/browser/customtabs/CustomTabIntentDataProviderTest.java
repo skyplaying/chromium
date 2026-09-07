@@ -25,9 +25,11 @@ import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
 
+import static org.chromium.chrome.browser.app.tab_activity_glue.PopupCreatorImpl.EXTRA_REQUESTED_WINDOW_FEATURES;
 import static org.chromium.chrome.browser.customtabs.CustomTabIntentDataProvider.ACTIVITY_SIDE_SHEET_SLIDE_IN_FROM_SIDE;
 
 import android.app.Activity;
@@ -56,6 +58,7 @@ import androidx.browser.trusted.LaunchHandlerClientMode;
 import androidx.browser.trusted.ScreenOrientation;
 import androidx.browser.trusted.TrustedWebActivityDisplayMode;
 import androidx.browser.trusted.TrustedWebActivityIntentBuilder;
+import androidx.browser.trusted.sharing.ShareData;
 import androidx.test.core.app.ApplicationProvider;
 
 import org.junit.Assert;
@@ -68,14 +71,13 @@ import org.robolectric.annotation.Config;
 
 import org.chromium.base.DeviceInfo;
 import org.chromium.base.IntentUtils;
+import org.chromium.base.supplier.SupplierUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.blink.mojom.DisplayMode;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.IntentHandler;
-import org.chromium.chrome.browser.app.tab_activity_glue.PopupCreator;
 import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
 import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider.CustomTabsUiType;
 import org.chromium.chrome.browser.browserservices.intents.ColorProvider;
@@ -85,6 +87,7 @@ import org.chromium.chrome.browser.customtabs.CustomTabIntentDataProvider.Backgr
 import org.chromium.chrome.browser.document.ChromeLauncherActivity;
 import org.chromium.chrome.browser.firstrun.FirstRunStatus;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.ui.google_bottom_bar.proto.IntentParams.GoogleBottomBarIntentParams;
 import org.chromium.chrome.browser.ui.google_bottom_bar.proto.IntentParams.GoogleBottomBarIntentParams.VariantLayoutType;
 import org.chromium.chrome.browser.util.WindowFeatures;
@@ -94,11 +97,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.function.Supplier;
 
 /** Tests for {@link CustomTabIntentDataProvider}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Batch(Batch.UNIT_TESTS)
-@Config(manifest = Config.NONE)
 @DisableFeatures({ChromeFeatureList.CCT_ADAPTIVE_BUTTON})
 public class CustomTabIntentDataProviderTest {
 
@@ -159,14 +161,14 @@ public class CustomTabIntentDataProviderTest {
      */
     @Test
     public void defaultOrientationIsSet() {
-        CustomTabsSession mSession =
+        CustomTabsSession session =
                 CustomTabsSession.createMockSessionForTesting(
                         new ComponentName(mContext, ChromeLauncherActivity.class));
 
         TrustedWebActivityIntentBuilder twaBuilder =
                 new TrustedWebActivityIntentBuilder(getLaunchingUrl())
                         .setScreenOrientation(ScreenOrientation.LANDSCAPE);
-        Intent intent = twaBuilder.build(mSession).getIntent();
+        Intent intent = twaBuilder.build(session).getIntent();
         CustomTabIntentDataProvider customTabIntentDataProvider =
                 new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
         assertEquals(
@@ -176,7 +178,7 @@ public class CustomTabIntentDataProviderTest {
         twaBuilder =
                 new TrustedWebActivityIntentBuilder(getLaunchingUrl())
                         .setScreenOrientation(ScreenOrientation.PORTRAIT);
-        intent = twaBuilder.build(mSession).getIntent();
+        intent = twaBuilder.build(session).getIntent();
         customTabIntentDataProvider =
                 new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
         assertEquals(
@@ -974,6 +976,47 @@ public class CustomTabIntentDataProviderTest {
     }
 
     @Test
+    public void testConfigureIntentForResizableCustomTab_regularCCT_transparentTheme() {
+        Intent intent = Mockito.mock(Intent.class);
+
+        // Regular CCT won't get the transparent activity theme.
+        CustomTabIntentDataProvider.configureIntentForResizableCustomTab(mContext, intent);
+        Mockito.verify(intent, never())
+                .setClassName(eq(mContext), eq(TranslucentCustomTabActivity.class.getName()));
+        Mockito.clearInvocations(intent);
+
+        // Regular CCT with translucency extra gets the transparent activity theme.
+        when(intent.hasExtra(eq(CustomTabIntentDataProvider.EXTRA_TRANSLUCENT_BACKGROUND)))
+                .thenReturn(true);
+        CustomTabIntentDataProvider.configureIntentForResizableCustomTab(mContext, intent);
+        Mockito.verify(intent)
+                .setClassName(eq(mContext), eq(TranslucentCustomTabActivity.class.getName()));
+    }
+
+    @Test
+    public void testConfigureIntentForResizableCustomTab_partialCCT_transparentTheme() {
+        CustomTabsConnection connection = Mockito.mock(CustomTabsConnection.class);
+        when(connection.getClientPackageNameForSession(any())).thenReturn(null);
+        when(connection.isFirstParty(eq("com.foo.bar"))).thenReturn(true);
+        CustomTabsConnection.setInstanceForTesting(connection);
+        Intent intent = Mockito.mock(Intent.class);
+
+        // Partial CCT gets the transparent activity theme.
+        when(intent.getStringExtra(eq(IntentHandler.EXTRA_CALLING_ACTIVITY_PACKAGE)))
+                .thenReturn("com.foo.bar");
+        when(intent.getIntExtra(eq(CustomTabsIntent.EXTRA_INITIAL_ACTIVITY_HEIGHT_PX), eq(0)))
+                .thenReturn(50);
+
+        // Partial CCT with translucency extra also gets the transparent activity theme.
+        when(intent.hasExtra(eq(CustomTabIntentDataProvider.EXTRA_TRANSLUCENT_BACKGROUND)))
+                .thenReturn(true);
+        CustomTabIntentDataProvider.configureIntentForResizableCustomTab(mContext, intent);
+        Mockito.verify(intent)
+                .setClassName(eq(mContext), eq(TranslucentCustomTabActivity.class.getName()));
+        Mockito.clearInvocations(intent);
+    }
+
+    @Test
     @DisableFeatures(ChromeFeatureList.CCT_AUTO_TRANSLATE)
     public void getTranslateLanguage_autoTranslateFeatureDisabled() {
         CustomTabsConnection connection = Mockito.mock(CustomTabsConnection.class);
@@ -1609,16 +1652,15 @@ public class CustomTabIntentDataProviderTest {
         CustomTabsConnection connection = Mockito.mock(CustomTabsConnection.class);
         CustomTabsConnection.setInstanceForTesting(connection);
         Network network = Mockito.mock(Network.class);
+        when(connection.extractTargetNetwork(any(), any())).thenReturn(network);
 
         Intent intent = new CustomTabsIntent.Builder().build().intent;
+        intent.putExtra(CustomTabsIntent.EXTRA_NETWORK, network);
         intent.putExtra(
-                CustomTabsIntent.EXTRA_NETWORK,
-                network);
-        intent.putExtra(
-                CustomTabIntentDataProvider.EXTRA_UI_TYPE,
-                CustomTabsUiType.NETWORK_BOUND_TAB);
+                CustomTabIntentDataProvider.EXTRA_UI_TYPE, CustomTabsUiType.NETWORK_BOUND_TAB);
 
         var dataProvider = new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
+        assertTrue(dataProvider.hasTargetNetwork());
         assertEquals(CustomTabsUiType.NETWORK_BOUND_TAB, dataProvider.getUiType());
     }
 
@@ -1634,6 +1676,37 @@ public class CustomTabIntentDataProviderTest {
 
         var dataProvider = new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
         assertEquals(CustomTabsUiType.DEFAULT, dataProvider.getUiType());
+    }
+
+    @Test
+    public void targetNetwork_strippedWhenCallerLacksPermission() {
+        CustomTabsConnection connection = Mockito.mock(CustomTabsConnection.class);
+        CustomTabsConnection.setInstanceForTesting(connection);
+        when(connection.extractTargetNetwork(any(), any())).thenReturn(null);
+
+        Network network = Mockito.mock(Network.class);
+        Intent intent = new CustomTabsIntent.Builder().build().intent;
+        intent.putExtra(CustomTabsIntent.EXTRA_NETWORK, network);
+        intent.putExtra(
+                CustomTabIntentDataProvider.EXTRA_UI_TYPE, CustomTabsUiType.NETWORK_BOUND_TAB);
+
+        var dataProvider = new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
+        assertFalse(dataProvider.hasTargetNetwork());
+        assertEquals(CustomTabsUiType.DEFAULT, dataProvider.getUiType());
+    }
+
+    @Test
+    public void targetNetwork_strippedWhenNoSession() {
+        CustomTabsConnection connection = Mockito.mock(CustomTabsConnection.class);
+        CustomTabsConnection.setInstanceForTesting(connection);
+        when(connection.extractTargetNetwork(any(), any())).thenReturn(null);
+
+        Network network = Mockito.mock(Network.class);
+        Intent intent = new CustomTabsIntent.Builder().build().intent;
+        intent.putExtra(CustomTabsIntent.EXTRA_NETWORK, network);
+
+        var dataProvider = new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
+        assertFalse(dataProvider.hasTargetNetwork());
     }
 
     @Test
@@ -1782,14 +1855,14 @@ public class CustomTabIntentDataProviderTest {
     }
 
     @Test
-    @Config(sdk = {Build.VERSION_CODES.VANILLA_ICE_CREAM, 36})
+    @Config(sdk = {BaseRobolectricTestRunner.MAX_SDK})
     public void testTwaBrowserModeWithEnabledMinUI_ResolveToMinimalUi() {
         checkResolvedDisplayMode(
                 new TrustedWebActivityDisplayMode.BrowserMode(), null, DisplayMode.MINIMAL_UI);
     }
 
     @Test
-    @Config(sdk = {Build.VERSION_CODES.VANILLA_ICE_CREAM, 36})
+    @Config(sdk = {BaseRobolectricTestRunner.MAX_SDK})
     public void testTwaBrowserModeWithEnabledMinUI_ResolveDisplayOverrideToMinimalUi() {
         checkResolvedDisplayMode(
                 null,
@@ -1798,7 +1871,7 @@ public class CustomTabIntentDataProviderTest {
     }
 
     // Pinned to SDK 29 and 34 because it tests behavior specific to < SDK 35.
-    @Config(sdk = {29, 34})
+    @Config(sdk = {BaseRobolectricTestRunner.MIN_SDK, 34})
     @Test
     public void testTwaBrowserModeWithEnabledMinUiPreSdk35_ResolveToMinimalUi() {
         checkResolvedDisplayMode(
@@ -1806,20 +1879,8 @@ public class CustomTabIntentDataProviderTest {
     }
 
     @Test
-    @Config(sdk = {Build.VERSION_CODES.VANILLA_ICE_CREAM, 36})
-    @DisableFeatures({ChromeFeatureList.ANDROID_WINDOW_CONTROLS_OVERLAY})
-    public void testTwaBrowserModeWithDisabledWindowControlsOverlay_ResolveToStandalone() {
-        checkResolvedDisplayMode(
-                null,
-                Collections.singletonList(
-                        new TrustedWebActivityDisplayMode.WindowControlsOverlayMode()),
-                DisplayMode.STANDALONE);
-    }
-
-    @Test
-    @Config(sdk = {Build.VERSION_CODES.VANILLA_ICE_CREAM, 36})
-    @EnableFeatures({ChromeFeatureList.ANDROID_WINDOW_CONTROLS_OVERLAY})
-    public void testTwaBrowserModeWithEnableWindowControlsOverlay_ResolveToWindowControlsOverlay() {
+    @Config(sdk = {BaseRobolectricTestRunner.MAX_SDK})
+    public void testTwaBrowserMode_ResolveToWindowControlsOverlay() {
         checkResolvedDisplayMode(
                 null,
                 Collections.singletonList(
@@ -1828,10 +1889,8 @@ public class CustomTabIntentDataProviderTest {
     }
 
     @Test
-    @Config(sdk = {Build.VERSION_CODES.VANILLA_ICE_CREAM, 36})
-    @EnableFeatures({ChromeFeatureList.ANDROID_WINDOW_CONTROLS_OVERLAY})
-    public void
-            testTwaBrowserModeWithEnableWindowControlsOverlay_IgnoreWindowControlsOverlayNotInDisplayOverride() {
+    @Config(sdk = {BaseRobolectricTestRunner.MAX_SDK})
+    public void testTwaBrowserMode_IgnoreWindowControlsOverlayNotInDisplayOverride() {
         checkResolvedDisplayMode(
                 new TrustedWebActivityDisplayMode.WindowControlsOverlayMode(),
                 null,
@@ -1937,7 +1996,7 @@ public class CustomTabIntentDataProviderTest {
     }
 
     @Test
-    @Config(sdk = {Build.VERSION_CODES.VANILLA_ICE_CREAM, 36})
+    @Config(sdk = {BaseRobolectricTestRunner.MAX_SDK})
     public void uiTypeTwa_withExperimentFlag_returnsWebAppMenu() {
         CustomTabsSession session =
                 CustomTabsSession.createMockSessionForTesting(
@@ -2099,11 +2158,11 @@ public class CustomTabIntentDataProviderTest {
     @Test
     @EnableFeatures(ChromeFeatureList.CCT_ADAPTIVE_BUTTON)
     public void testIsOptionalButtonSupported_trustedWebActivity() {
-        CustomTabsSession mSession =
+        CustomTabsSession session =
                 CustomTabsSession.createMockSessionForTesting(
                         new ComponentName(mContext, ChromeLauncherActivity.class));
         var twaBuilder = new TrustedWebActivityIntentBuilder(getLaunchingUrl());
-        Intent intent = twaBuilder.build(mSession).getIntent();
+        Intent intent = twaBuilder.build(session).getIntent();
         var dataProvider = new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
         assertTrue("IntentDataProvider should be for TWA", dataProvider.isTrustedWebActivity());
         assertFalse(
@@ -2398,9 +2457,7 @@ public class CustomTabIntentDataProviderTest {
         final WindowFeatures windowFeatures = new WindowFeatures(12, 34, 56, null);
         Intent intent =
                 new Intent()
-                        .putExtra(
-                                PopupCreator.EXTRA_REQUESTED_WINDOW_FEATURES,
-                                windowFeatures.toBundle())
+                        .putExtra(EXTRA_REQUESTED_WINDOW_FEATURES, windowFeatures.toBundle())
                         .putExtra(
                                 CustomTabIntentDataProvider.EXTRA_UI_TYPE, CustomTabsUiType.POPUP);
         IntentUtils.setForceIsTrustedIntentForTesting(true);
@@ -2421,9 +2478,7 @@ public class CustomTabIntentDataProviderTest {
         final WindowFeatures windowFeatures = new WindowFeatures(12, 34, 56, null);
         final Intent intent =
                 new Intent()
-                        .putExtra(
-                                PopupCreator.EXTRA_REQUESTED_WINDOW_FEATURES,
-                                windowFeatures.toBundle())
+                        .putExtra(EXTRA_REQUESTED_WINDOW_FEATURES, windowFeatures.toBundle())
                         .putExtra(
                                 CustomTabIntentDataProvider.EXTRA_UI_TYPE, CustomTabsUiType.POPUP);
         IntentUtils.setForceIsTrustedIntentForTesting(true);
@@ -2482,9 +2537,7 @@ public class CustomTabIntentDataProviderTest {
         final WindowFeatures windowFeatures = new WindowFeatures(12, 34, 56, null);
         Intent intent =
                 new Intent()
-                        .putExtra(
-                                PopupCreator.EXTRA_REQUESTED_WINDOW_FEATURES,
-                                windowFeatures.toBundle())
+                        .putExtra(EXTRA_REQUESTED_WINDOW_FEATURES, windowFeatures.toBundle())
                         .putExtra(
                                 CustomTabIntentDataProvider.EXTRA_UI_TYPE,
                                 CustomTabsUiType.DEFAULT);
@@ -2506,9 +2559,7 @@ public class CustomTabIntentDataProviderTest {
         final WindowFeatures windowFeatures = new WindowFeatures(12, 34, 56, null);
         final Intent intent =
                 new Intent()
-                        .putExtra(
-                                PopupCreator.EXTRA_REQUESTED_WINDOW_FEATURES,
-                                windowFeatures.toBundle())
+                        .putExtra(EXTRA_REQUESTED_WINDOW_FEATURES, windowFeatures.toBundle())
                         .putExtra(
                                 CustomTabIntentDataProvider.EXTRA_UI_TYPE,
                                 CustomTabsUiType.DEFAULT);
@@ -2557,7 +2608,6 @@ public class CustomTabIntentDataProviderTest {
         assertEquals(stateOff, getOibStateForType(CustomTabsUiType.AUTH_TAB));
         assertEquals(stateOff, getOibStateForType(CustomTabsUiType.MEDIA_VIEWER));
         assertEquals(stateOff, getOibStateForType(CustomTabsUiType.POPUP));
-        assertEquals(stateOff, getOibStateForType(CustomTabsUiType.READER_MODE));
         assertEquals(stateOff, getOibStateForType(CustomTabsUiType.OFFLINE_PAGE));
     }
 
@@ -2574,6 +2624,139 @@ public class CustomTabIntentDataProviderTest {
     public void uiTypes_openInBrowserButtonState_twa() {
         final int stateOff = CustomTabsIntent.OPEN_IN_BROWSER_STATE_OFF;
         assertEquals(stateOff, getOibStateForType(CustomTabsUiType.TRUSTED_WEB_ACTIVITY));
+    }
+
+    @Test
+    public void testMaybeAddAdditionalContentExtrasToOutboundIntent() {
+        CustomTabsConnection connection = Mockito.mock(CustomTabsConnection.class);
+        CustomTabsConnection.setInstanceForTesting(connection);
+
+        Intent intent = new CustomTabsIntent.Builder().build().intent;
+        CustomTabIntentDataProvider dataProvider =
+                new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
+
+        Intent outboundIntent = new Intent();
+        Supplier<Tab> tabProvider = SupplierUtils.ofNull();
+        int viewId = 123;
+
+        dataProvider.maybeAddAdditionalContentExtrasToOutboundIntent(
+                tabProvider, outboundIntent, viewId);
+
+        Mockito.verify(connection)
+                .maybeAddAdditionalContentExtrasToOutboundIntent(
+                        eq(tabProvider), eq(dataProvider), eq(outboundIntent), eq(viewId));
+    }
+
+    @Test
+    @DisableFeatures({
+        ChromeFeatureList.CCT_TAB_SWITCHER_ENABLED_FOR_CHROME_EXPERIMENT,
+        ChromeFeatureList.CCT_TAB_SWITCHER_ENABLED_FOR_EMBEDDER_EXPERIMENT
+    })
+    public void isCctTabSwitcherEnabled_bothFlagsDisabled_returnsFalse() {
+        Intent intent = new Intent();
+        intent.putExtra(
+                CustomTabIntentDataProvider.EXTRA_CCT_TAB_SWITCHER_ENABLED_FOR_CHROME_EXPERIMENT,
+                true);
+        intent.putExtra(
+                CustomTabIntentDataProvider.EXTRA_CCT_TAB_SWITCHER_ENABLED_FOR_EMBEDDER_EXPERIMENT,
+                true);
+        CustomTabIntentDataProvider provider =
+                new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
+        assertFalse(provider.isCctTabSwitcherEnabled());
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.CCT_TAB_SWITCHER_ENABLED_FOR_EMBEDDER_EXPERIMENT)
+    @DisableFeatures(ChromeFeatureList.CCT_TAB_SWITCHER_ENABLED_FOR_CHROME_EXPERIMENT)
+    public void isCctTabSwitcherEnabled_embedderFlagEnabled_intentExtraEnabled_returnsTrue() {
+        Intent intent = new Intent();
+        intent.putExtra(
+                CustomTabIntentDataProvider.EXTRA_CCT_TAB_SWITCHER_ENABLED_FOR_EMBEDDER_EXPERIMENT,
+                true);
+        CustomTabIntentDataProvider provider =
+                new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
+        assertTrue(provider.isCctTabSwitcherEnabled());
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.CCT_TAB_SWITCHER_ENABLED_FOR_EMBEDDER_EXPERIMENT)
+    @DisableFeatures(ChromeFeatureList.CCT_TAB_SWITCHER_ENABLED_FOR_CHROME_EXPERIMENT)
+    public void isCctTabSwitcherEnabled_embedderFlagEnabled_intentExtraDisabled_returnsFalse() {
+        Intent intent = new Intent();
+        intent.putExtra(
+                CustomTabIntentDataProvider.EXTRA_CCT_TAB_SWITCHER_ENABLED_FOR_CHROME_EXPERIMENT,
+                true);
+        intent.putExtra(
+                CustomTabIntentDataProvider.EXTRA_CCT_TAB_SWITCHER_ENABLED_FOR_EMBEDDER_EXPERIMENT,
+                false);
+        CustomTabIntentDataProvider provider =
+                new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
+        assertFalse(provider.isCctTabSwitcherEnabled());
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.CCT_TAB_SWITCHER_ENABLED_FOR_CHROME_EXPERIMENT)
+    @DisableFeatures(ChromeFeatureList.CCT_TAB_SWITCHER_ENABLED_FOR_EMBEDDER_EXPERIMENT)
+    public void isCctTabSwitcherEnabled_chromeFlagEnabled_intentExtraEnabled_returnsTrue() {
+        Intent intent = new Intent();
+        intent.putExtra(
+                CustomTabIntentDataProvider.EXTRA_CCT_TAB_SWITCHER_ENABLED_FOR_CHROME_EXPERIMENT,
+                true);
+        CustomTabIntentDataProvider provider =
+                new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
+        assertTrue(provider.isCctTabSwitcherEnabled());
+    }
+
+    @Test
+    @EnableFeatures(ChromeFeatureList.CCT_TAB_SWITCHER_ENABLED_FOR_CHROME_EXPERIMENT)
+    @DisableFeatures(ChromeFeatureList.CCT_TAB_SWITCHER_ENABLED_FOR_EMBEDDER_EXPERIMENT)
+    public void isCctTabSwitcherEnabled_chromeFlagEnabled_intentExtraDisabled_returnsFalse() {
+        Intent intent = new Intent();
+        intent.putExtra(
+                CustomTabIntentDataProvider.EXTRA_CCT_TAB_SWITCHER_ENABLED_FOR_CHROME_EXPERIMENT,
+                false);
+        intent.putExtra(
+                CustomTabIntentDataProvider.EXTRA_CCT_TAB_SWITCHER_ENABLED_FOR_EMBEDDER_EXPERIMENT,
+                true);
+        CustomTabIntentDataProvider provider =
+                new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
+        assertFalse(provider.isCctTabSwitcherEnabled());
+    }
+
+    @Test
+    @EnableFeatures({
+        ChromeFeatureList.CCT_TAB_SWITCHER_ENABLED_FOR_CHROME_EXPERIMENT,
+        ChromeFeatureList.CCT_TAB_SWITCHER_ENABLED_FOR_EMBEDDER_EXPERIMENT
+    })
+    public void isCctTabSwitcherEnabled_bothFlagsEnabled_eitherExtraEnabled_returnsTrue() {
+        Intent intent = new Intent();
+        intent.putExtra(
+                CustomTabIntentDataProvider.EXTRA_CCT_TAB_SWITCHER_ENABLED_FOR_CHROME_EXPERIMENT,
+                false);
+        intent.putExtra(
+                CustomTabIntentDataProvider.EXTRA_CCT_TAB_SWITCHER_ENABLED_FOR_EMBEDDER_EXPERIMENT,
+                true);
+        CustomTabIntentDataProvider provider =
+                new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
+        assertTrue(provider.isCctTabSwitcherEnabled());
+    }
+
+    @Test
+    @EnableFeatures({
+        ChromeFeatureList.CCT_TAB_SWITCHER_ENABLED_FOR_CHROME_EXPERIMENT,
+        ChromeFeatureList.CCT_TAB_SWITCHER_ENABLED_FOR_EMBEDDER_EXPERIMENT
+    })
+    public void isCctTabSwitcherEnabled_bothFlagsEnabled_bothExtrasDisabled_returnsFalse() {
+        Intent intent = new Intent();
+        intent.putExtra(
+                CustomTabIntentDataProvider.EXTRA_CCT_TAB_SWITCHER_ENABLED_FOR_CHROME_EXPERIMENT,
+                false);
+        intent.putExtra(
+                CustomTabIntentDataProvider.EXTRA_CCT_TAB_SWITCHER_ENABLED_FOR_EMBEDDER_EXPERIMENT,
+                false);
+        CustomTabIntentDataProvider provider =
+                new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
+        assertFalse(provider.isCctTabSwitcherEnabled());
     }
 
     private int getOibStateForType(int type) {
@@ -2607,5 +2790,21 @@ public class CustomTabIntentDataProviderTest {
         when(connection.isFirstParty(eq(PACKAGE))).thenReturn(true);
         CustomTabsConnection.setInstanceForTesting(connection);
         intent.putExtra(IntentHandler.EXTRA_CALLING_ACTIVITY_PACKAGE, PACKAGE);
+    }
+
+    @Test
+    public void testGetShareData() {
+        Intent intent = new Intent();
+        Uri fileUri = Uri.parse("content://com.example/file.jpg");
+        ShareData rawData = new ShareData("title", "text", Arrays.asList(fileUri));
+        intent.putExtra(TrustedWebActivityIntentBuilder.EXTRA_SHARE_DATA, rawData.toBundle());
+
+        CustomTabIntentDataProvider dataProvider =
+                new CustomTabIntentDataProvider(intent, mContext, COLOR_SCHEME_LIGHT);
+
+        ShareData result = dataProvider.getShareData();
+        assertNotNull(result);
+        assertEquals("title", result.title);
+        assertEquals(fileUri, result.uris.get(0));
     }
 }

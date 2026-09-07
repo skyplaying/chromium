@@ -23,6 +23,8 @@ import org.chromium.chrome.browser.educational_tip.R;
 import org.chromium.chrome.browser.magic_stack.ModuleDelegate.ModuleType;
 import org.chromium.chrome.browser.setup_list.SetupListCompletable;
 import org.chromium.chrome.browser.setup_list.SetupListModuleUtils;
+import org.chromium.chrome.browser.ui.default_browser_promo.DefaultBrowserPromoMetrics;
+import org.chromium.chrome.browser.ui.default_browser_promo.DefaultBrowserPromoMetrics.DefaultBrowserPromoSourceType;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.StateChangeReason;
 import org.chromium.ui.widget.ButtonCompat;
@@ -51,9 +53,7 @@ public class DefaultBrowserPromoCoordinator
     // EducationalTipCardProvider implementation.
     @Override
     public String getCardTitle() {
-        return mActionDelegate
-                .getContext()
-                .getString(R.string.educational_tip_default_browser_title);
+        return mActionDelegate.getContext().getString(R.string.use_chrome_by_default);
     }
 
     @Override
@@ -65,6 +65,11 @@ public class DefaultBrowserPromoCoordinator
 
     @Override
     public String getCardButtonText() {
+        if (SetupListModuleUtils.isSetupListModule(ModuleType.DEFAULT_BROWSER_PROMO)) {
+            return mActionDelegate
+                    .getContext()
+                    .getString(R.string.setup_list_default_browser_promo_button);
+        }
         return mActionDelegate.getContext().getString(R.string.educational_tip_module_button);
     }
 
@@ -78,8 +83,18 @@ public class DefaultBrowserPromoCoordinator
 
     @Override
     public void onCardClicked() {
-        // TODO(crbug.com/469425754): Display role manager setting if available. The bottom sheet
-        // will be used as a fallback
+        if (SetupListModuleUtils.isSetupListModule(ModuleType.DEFAULT_BROWSER_PROMO)) {
+            SetupListModuleUtils.setModuleCompleted(
+                    ModuleType.DEFAULT_BROWSER_PROMO, /* silent= */ false);
+            if (mActionDelegate.maybeShowDefaultBrowserPromoWithRoleManager()) {
+                mOnModuleClickedCallback.run();
+                return;
+            }
+        } else {
+            DefaultBrowserPromoMetrics.recordPromoClick(
+                    DefaultBrowserPromoSourceType.EDUCATIONAL_TIP_PROMO);
+        }
+
         Context context = mActionDelegate.getContext();
         View defaultBrowserBottomSheetView =
                 LayoutInflater.from(context)
@@ -92,7 +107,7 @@ public class DefaultBrowserPromoCoordinator
         bottomSheetController.requestShowContent(mDefaultBrowserBottomSheetContent, true);
         ButtonCompat bottomSheetButton = defaultBrowserBottomSheetView.findViewById(R.id.button);
         bottomSheetButton.setOnClickListener(
-                (v) -> {
+                _ -> {
                     IntentUtils.safeStartActivity(context, createBottomSheetOnClickIntent());
                     bottomSheetController.hideContent(
                             assumeNonNull(mDefaultBrowserBottomSheetContent),

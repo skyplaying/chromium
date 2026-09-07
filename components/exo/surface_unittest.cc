@@ -16,6 +16,7 @@
 #include "base/test/scoped_chromeos_version_info.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
+#include "cc/base/math_util.h"
 #include "components/exo/buffer.h"
 #include "components/exo/shell_surface.h"
 #include "components/exo/sub_surface.h"
@@ -33,7 +34,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/khronos/GLES2/gl2.h"
 #include "ui/aura/test/window_occlusion_tracker_test_api.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_surface.h"
 #include "ui/compositor/layer_tree_owner.h"
 #include "ui/display/display.h"
 #include "ui/display/display_switches.h"
@@ -95,6 +96,45 @@ std::string TransformToString(Transform transform) {
   return prefix + name;
 }
 
+class DestroyingSurfaceOcclusionObserver : public SurfaceObserver {
+ public:
+  explicit DestroyingSurfaceOcclusionObserver(Surface* surface)
+      : surface_(surface) {
+    surface_->AddSurfaceObserver(this);
+  }
+  DestroyingSurfaceOcclusionObserver(
+      const DestroyingSurfaceOcclusionObserver&) = delete;
+  DestroyingSurfaceOcclusionObserver& operator=(
+      const DestroyingSurfaceOcclusionObserver&) = delete;
+  ~DestroyingSurfaceOcclusionObserver() override {
+    if (surface_) {
+      surface_->RemoveSurfaceObserver(this);
+    }
+  }
+
+  // SurfaceObserver:
+  void OnSurfaceDestroying(Surface* surface) override {
+    EXPECT_TRUE(surface->is_destroying());
+    // Attempt to trigger occlusion observer notification during
+    // OnSurfaceDestroying.
+    surface->OnWindowOcclusionChanged(aura::Window::OcclusionState::VISIBLE,
+                                      aura::Window::OcclusionState::HIDDEN);
+
+    surface_->RemoveSurfaceObserver(this);
+    surface_ = nullptr;
+  }
+
+  void OnWindowOcclusionChanged(Surface* surface) override {
+    called_occlusion_ = true;
+  }
+
+  bool called_occlusion() const { return called_occlusion_; }
+
+ private:
+  raw_ptr<Surface> surface_;
+  bool called_occlusion_ = false;
+};
+
 class SurfaceTest : public test::ExoTestBase,
                     public ::testing::WithParamInterface<float> {
  public:
@@ -148,7 +188,7 @@ class SurfaceTest : public test::ExoTestBase,
 
   const viz::CompositorFrame& GetFrameFromSurface(ShellSurface* shell_surface) {
     viz::SurfaceId surface_id =
-        *shell_surface->host_window()->layer()->GetSurfaceId();
+        *shell_surface->host_window()->layer()->AsSurface()->GetSurfaceId();
     const viz::CompositorFrame& frame =
         GetSurfaceManager()->GetSurfaceForId(surface_id)->GetActiveFrame();
     return frame;
@@ -822,8 +862,8 @@ TEST_P(SurfaceTest, MirrorLayers) {
   EXPECT_EQ(buffer_size, surface->window()->bounds().size());
   EXPECT_EQ(buffer_size, surface->window()->layer()->bounds().size());
   EXPECT_EQ(buffer_size, old_layer_owner->root()->bounds().size());
-  EXPECT_TRUE(shell_surface->host_window()->layer()->has_external_content());
-  EXPECT_TRUE(old_layer_owner->root()->has_external_content());
+  EXPECT_TRUE(shell_surface->host_window()->layer()->AsSurface());
+  EXPECT_TRUE(old_layer_owner->root()->AsSurface());
 }
 
 TEST_P(SurfaceTest, SetViewport) {
@@ -1202,7 +1242,7 @@ TEST_P(SurfaceTest, DisableNonYUVOverlays) {
     viz::DrawQuad* draw_quad = frame.render_pass_list.back()->quad_list.back();
     EXPECT_EQ(viz::DrawQuad::Material::kTextureContent, draw_quad->material);
     EXPECT_EQ(
-        viz::OverlayPriority::kLow,
+        viz::OverlayPriority::kNone,
         viz::TextureDrawQuad::MaterialCast(draw_quad)->overlay_priority_hint);
   }
 }
@@ -1381,21 +1421,6 @@ TEST_P(SurfaceTest, DestroyWithAttachedBufferReleasesBuffer) {
   ASSERT_EQ(1, release_buffer_call_count);
 }
 
-TEST_P(SurfaceTest, AcquireFence) {
-  auto buffer = test::ExoTestHelper::CreateBuffer(gfx::Size(1, 1));
-  auto surface = std::make_unique<Surface>();
-
-  // We can only commit an acquire fence if a buffer is attached.
-  surface->Attach(buffer.get());
-
-  EXPECT_FALSE(surface->HasPendingAcquireFence());
-  surface->SetAcquireFence(
-      std::make_unique<gfx::GpuFence>(gfx::GpuFenceHandle()));
-  EXPECT_TRUE(surface->HasPendingAcquireFence());
-  surface->Commit();
-  EXPECT_FALSE(surface->HasPendingAcquireFence());
-}
-
 TEST_P(SurfaceTest, UpdatesOcclusionOnDestroyingSubsurface) {
   gfx::Size buffer_size(256, 512);
   auto buffer = test::ExoTestHelper::CreateBuffer(buffer_size);
@@ -1424,6 +1449,82 @@ TEST_P(SurfaceTest, UpdatesOcclusionOnDestroyingSubsurface) {
   EXPECT_EQ(1, observer.num_occlusion_changes());
   EXPECT_EQ(aura::Window::OcclusionState::HIDDEN,
             child_surface->window()->GetOcclusionState());
+}
+
+// Regression test for b/511718825. Destroying a surface with subsurface will
+// first destroy the sub surface's window, which will change the occlusion state
+// of the parent surface. That was causing unnecessary reentrant calls to the
+// SurfaceObserver.
+TEST_P(SurfaceTest, NoOcclusionUpdateOnDestroyingSurface) {
+  gfx::Size buffer_size(256, 512);
+  auto buffer = test::ExoTestHelper::CreateBuffer(buffer_size);
+  auto surface = std::make_unique<Surface>();
+  auto shell_surface = std::make_unique<ShellSurface>(surface.get());
+  surface->Attach(buffer.get());
+  surface->Commit();
+
+  gfx::Size child_buffer_size(64, 128);
+  auto child_buffer = test::ExoTestHelper::CreateBuffer(child_buffer_size);
+  auto child_surface = std::make_unique<Surface>();
+  auto sub_surface =
+      std::make_unique<SubSurface>(child_surface.get(), surface.get());
+  child_surface->Attach(child_buffer.get());
+  // Turn on occlusion tracking.
+  child_surface->SetOcclusionTracking(true);
+  child_surface->Commit();
+  surface->Commit();
+
+  SurfaceObserverForTest observer(
+      child_surface.get()->window()->GetOcclusionState());
+  ScopedSurface scoped_child_surface(child_surface.get(), &observer);
+
+  class DestroyingOcclusionObserver : public SurfaceObserver {
+   public:
+    explicit DestroyingOcclusionObserver(Surface* surface) : surface_(surface) {
+      surface_->AddSurfaceObserver(this);
+    }
+    DestroyingOcclusionObserver(const DestroyingOcclusionObserver&) = delete;
+    DestroyingOcclusionObserver& operator=(const DestroyingOcclusionObserver&) =
+        delete;
+    ~DestroyingOcclusionObserver() override {
+      if (surface_) {
+        surface_->RemoveSurfaceObserver(this);
+      }
+    }
+
+    // SurfaceObserver:
+    void OnSurfaceDestroying(Surface* surface) override {
+      surface->RemoveSurfaceObserver(this);
+      surface_ = nullptr;
+    }
+
+    void OnWindowOcclusionChanged(Surface* surface) override {
+      num_occlusion_changes_++;
+    }
+
+    int num_occlusion_changes() const { return num_occlusion_changes_; }
+
+   private:
+    raw_ptr<Surface> surface_;
+    int num_occlusion_changes_ = 0;
+  };
+
+  DestroyingOcclusionObserver parent_observer(surface.get());
+
+  surface.reset();
+  EXPECT_EQ(0, parent_observer.num_occlusion_changes());
+}
+
+TEST_P(SurfaceTest, ObserversNotCalledWhenDestroying) {
+  auto surface = std::make_unique<Surface>();
+  surface->SetOcclusionTracking(true);
+  surface->Commit();
+
+  EXPECT_FALSE(surface->is_destroying());
+  DestroyingSurfaceOcclusionObserver observer(surface.get());
+
+  surface.reset();
+  EXPECT_FALSE(observer.called_occlusion());
 }
 
 TEST_P(SurfaceTest, OcclusionNotRecomputedOnWidgetCommit) {

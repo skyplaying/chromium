@@ -4,6 +4,7 @@
 
 #include "chrome/browser/safe_browsing/download_protection/download_protection_util.h"
 
+#include "base/feature_list.h"
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
@@ -21,7 +22,9 @@
 #include "components/safe_browsing/core/browser/referrer_chain_provider.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
+#include "components/safe_browsing/core/common/utils.h"
 #include "components/sessions/content/session_tab_helper.h"
+#include "components/sessions/core/session_id.h"
 #include "content/public/browser/download_item_utils.h"
 #include "url/gurl.h"
 
@@ -31,6 +34,10 @@
 
 #if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/safe_browsing/download_protection/deep_scanning_request.h"
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+#include "components/enterprise/connectors/core/features.h"
 #endif
 
 namespace safe_browsing {
@@ -115,15 +122,16 @@ void AddEventUrlToReferrerChain(const download::DownloadItem& item,
                                 content::RenderFrameHost* render_frame_host,
                                 ReferrerChain* out_referrer_chain) {
   ReferrerChainEntry* event_url_entry = out_referrer_chain->Add();
-  event_url_entry->set_url(item.GetURL().spec());
+  event_url_entry->set_url(safe_browsing::ShortURLForReporting(item.GetURL()));
   event_url_entry->set_type(ReferrerChainEntry::EVENT_URL);
-  event_url_entry->set_referrer_url(
-      render_frame_host->GetLastCommittedURL().spec());
+  event_url_entry->set_referrer_url(safe_browsing::ShortURLForReporting(
+      render_frame_host->GetLastCommittedURL()));
   event_url_entry->set_is_retargeting(false);
   event_url_entry->set_navigation_time_msec(
       base::Time::Now().InMillisecondsSinceUnixEpoch());
   for (const GURL& url : item.GetUrlChain()) {
-    event_url_entry->add_server_redirect_chain()->set_url(url.spec());
+    event_url_entry->add_server_redirect_chain()->set_url(
+        safe_browsing::ShortURLForReporting(url));
   }
 }
 
@@ -453,16 +461,25 @@ bool ShouldSendDangerousDownloadReport(
 }
 #endif
 
+bool IsDeepScanningEnabled() {
+#if BUILDFLAG(IS_ANDROID)
+  // On Android, only Enterprise scan may be enabled. Consumer deep scan is not
+  // (yet) supported.
+  return base::FeatureList::IsEnabled(
+      enterprise_connectors::kEnableDownloadEnterpriseScanOnClank);
+#else
+  return true;
+#endif
+}
+
 std::optional<enterprise_connectors::AnalysisSettings>
 ShouldUploadBinaryForDeepScanning(download::DownloadItem* item) {
-#if BUILDFLAG(IS_ANDROID)
-  // Deep scanning is not supported on Android.
-  return std::nullopt;
-#else
+  if (!IsDeepScanningEnabled()) {
+    return std::nullopt;
+  }
   // Create temporary metadata wrapper on the stack.
   DownloadItemMetadata metadata(item);
   return DeepScanningRequest::ShouldUploadBinary(metadata);
-#endif
 }
 
 bool IsFiletypeSupportedForFullDownloadProtection(

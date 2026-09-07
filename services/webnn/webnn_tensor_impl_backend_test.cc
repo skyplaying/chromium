@@ -11,6 +11,7 @@
 #include "base/test/test_future.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
+#include "gpu/config/gpu_finch_features.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/system/functions.h"
@@ -123,9 +124,8 @@ class WebNNTensorImplBackendTest : public testing::Test {
 #endif  // BUILDFLAG(WEBNN_USE_TFLITE) || BUILDFLAG(WEBNN_USE_LITERT)
 
 void WebNNTensorImplBackendTest::TearDown() {
-  base::RunLoop().RunUntilIdle();
   // Give WebNNContext a chance to disconnect.
-  webnn_provider_remote_.reset();
+  webnn_test_environment_.RunUntilIdle();
 }
 
 base::expected<CreateContextSuccess, webnn::mojom::Error::Code>
@@ -154,7 +154,6 @@ CreateWebNNTensor(mojo::Remote<mojom::WebNNContext>& webnn_context_remote,
                   mojom::TensorInfoPtr tensor_info) {
   base::test::TestFuture<mojom::CreateTensorResultPtr> create_tensor_future;
   webnn_context_remote->CreateTensor(std::move(tensor_info),
-                                     mojo_base::BigBuffer(0),
                                      create_tensor_future.GetCallback());
   mojom::CreateTensorResultPtr create_tensor_result =
       create_tensor_future.Take();
@@ -236,15 +235,16 @@ TEST_F(WebNNTensorImplBackendTest, CreateTensorImplManyTest) {
 
 // Test creating a WebNNTensor larger than tensor byte length limit.
 TEST_F(WebNNTensorImplBackendTest, CreateTooLargeTensorTest) {
+// Use a large shape that the element count is within int32_t, and
+// byte size within size_t but exceed tensor byte length limits.
 #if defined(ARCH_CPU_64_BITS)
-  const std::array<uint32_t, 3> large_shape{std::numeric_limits<int32_t>::max(),
-                                            2, 2};
+  const std::array<uint32_t, 1> large_shape{
+      std::numeric_limits<uint32_t>::max() / 4 + 1};
 #else
-  // Use a smaller shape for 32-bit architecture to avoid exceeding maximum
-  // element count which is based on a size_t.
-  const std::array<uint32_t, 3> large_shape{
-      std::numeric_limits<int32_t>::max() / 4, 2, 2};
+  const std::array<uint32_t, 1> large_shape{
+      static_cast<uint32_t>(std::numeric_limits<int32_t>::max()) / 4 + 1};
 #endif
+  const OperandDataType data_type = OperandDataType::kInt32;
 
   BadMessageTestHelper bad_message_helper;
 
@@ -263,10 +263,10 @@ TEST_F(WebNNTensorImplBackendTest, CreateTooLargeTensorTest) {
   mojom::WebNNContext::CreateTensorCallback create_tensor_callback =
       base::BindOnce([](mojom::CreateTensorResultPtr create_tensor_result) {});
   webnn_context_remote->CreateTensor(
-      mojom::TensorInfo::New(OperandDescriptor::UnsafeCreateForTesting(
-                                 OperandDataType::kUint8, large_shape),
-                             MLTensorUsage{MLTensorUsageFlags::kWrite}),
-      mojo_base::BigBuffer(0), std::move(create_tensor_callback));
+      mojom::TensorInfo::New(
+          OperandDescriptor::UnsafeCreateForTesting(data_type, large_shape),
+          MLTensorUsage{MLTensorUsageFlags::kWrite}),
+      std::move(create_tensor_callback));
 
   webnn_context_remote.FlushForTesting();
   EXPECT_EQ(bad_message_helper.GetLastBadMessage(), kBadMessageInvalidTensor);
@@ -388,10 +388,17 @@ TEST_F(WebNNTensorImplBackendTest, CreateContextImplManyTest) {
   EXPECT_FALSE(bad_message_helper.GetLastBadMessage().has_value());
 }
 
-TEST_F(WebNNTensorImplBackendTest, ContextImplSyncToken) {
+// Test that ExportTensor() is rejected when SyncPointGraphValidation is
+// disabled.
+TEST_F(WebNNTensorImplBackendTest,
+       ExportTensorAsyncRejectedWhenSyncPointGraphValidationDisabled) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      features::kSyncPointGraphValidation);
+  ASSERT_FALSE(features::IsSyncPointGraphValidationEnabled());
+
   BadMessageTestHelper bad_message_helper;
 
-  blink::WebNNContextToken webnn_context_handle;
   mojo::Remote<mojom::WebNNContext> webnn_context_remote;
   base::expected<CreateContextSuccess, webnn::mojom::Error::Code>
       context_result = CreateWebNNContext();
@@ -401,29 +408,30 @@ TEST_F(WebNNTensorImplBackendTest, ContextImplSyncToken) {
   } else {
     webnn_context_remote =
         std::move(context_result.value().webnn_context_remote);
-    webnn_context_handle =
-        std::move(context_result.value().webnn_context_handle);
   }
 
-  base::optional_ref<WebNNContextImpl> context_impl =
-      webnn_test_environment_.context_provider()->GetWebNNContextImplForTesting(
-          webnn_context_handle);
+  mojo::AssociatedRemote<mojom::WebNNTensor> webnn_tensor_remote;
+  base::expected<CreateTensorSuccess, webnn::mojom::Error::Code> tensor_result =
+      CreateWebNNTensor(
+          webnn_context_remote,
+          mojom::TensorInfo::New(
+              OperandDescriptor::UnsafeCreateForTesting(
+                  OperandDataType::kUint8, std::array<uint32_t, 2>{2, 2}),
+              MLTensorUsage{MLTensorUsageFlags::kWebGpuInterop}));
+  if (tensor_result.has_value()) {
+    webnn_tensor_remote = std::move(tensor_result.value().webnn_tensor_remote);
+  }
 
-  gpu::SyncToken last_sync_token_fence = context_impl->GenVerifiedSyncToken();
-  EXPECT_EQ(last_sync_token_fence.release_count(), 1u);
+  ASSERT_TRUE(webnn_tensor_remote.is_bound());
 
-  // Tell WebNN IPC to flush itself by waiting on its own SyncToken it had
-  // previously generated.
-  context_impl->WaitSyncToken(last_sync_token_fence);
+  // Simulate a compromised renderer calling the async entrypoint directly. With
+  // the feature disabled, the service must report a bad message and drop the
+  // call rather than scheduling the export.
+  webnn_tensor_remote->ExportTensor(/*flow_id=*/0u, /*release_count=*/1u);
 
-  last_sync_token_fence = context_impl->GenVerifiedSyncToken();
-  EXPECT_EQ(last_sync_token_fence.release_count(), 2u);
-
-  // Waiting on the same SyncToken should nop.
-  context_impl->WaitSyncToken(last_sync_token_fence);
-  context_impl->WaitSyncToken(last_sync_token_fence);
-
-  EXPECT_FALSE(bad_message_helper.GetLastBadMessage().has_value());
+  webnn_context_remote.FlushForTesting();
+  EXPECT_EQ(bad_message_helper.GetLastBadMessage(),
+            kBadMessageAsyncExportNotSupported);
 }
 
 }  // namespace

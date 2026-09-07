@@ -89,6 +89,9 @@
 #pragma mark - InfobarBannerPositioner
 
 - (CGFloat)bannerYPosition {
+  if (!self.started || !self.browser) {
+    return 0;
+  }
   LayoutGuideCenter* layoutGuideCenter =
       LayoutGuideCenterForBrowser(self.browser);
 
@@ -176,6 +179,9 @@
   // Mark started as NO before calling dismissal callback to prevent dup
   // stopAnimated: executions.
   self.started = NO;
+  // Disconnect the mediator synchronously so it stops referencing command
+  // handlers before asynchronous view controller dismissal finishes.
+  [self.mediator disconnect];
   __weak InfobarBannerOverlayCoordinator* weakSelf = self;
   [self.baseViewController dismissViewControllerAnimated:animated
                                               completion:^{
@@ -212,7 +218,7 @@
   // is necessary to synchronize OverlayPresenter scheduling logic with the UI
   // layer.
   if (self.delegate) {
-    self.delegate->OverlayUIDidFinishDismissal(self.request);
+    self.delegate->OverlayUIDidFinishDismissal(self.requestId);
   }
   UpdateBannerAccessibilityForDismissal(self.baseViewController);
 }

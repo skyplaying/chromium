@@ -36,10 +36,12 @@ import org.mockito.junit.MockitoRule;
 import org.chromium.base.DeviceInfo;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.supplier.ObservableSuppliers;
+import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.supplier.SettableNullableObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.UserActionTester;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.enterprise.util.DataProtectionBridge;
 import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.share.ChromeShareExtras.DetailedContentType;
@@ -52,7 +54,9 @@ import org.chromium.chrome.browser.share.send_tab_to_self.SendTabToSelfAndroidBr
 import org.chromium.chrome.browser.share.share_sheet.ShareSheetLinkToggleCoordinator.LinkToggleState;
 import org.chromium.chrome.browser.share.share_sheet.ShareSheetLinkToggleMetricsHelper.LinkToggleMetricsDetails;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.browser.ui.native_page.NativePage;
+import org.chromium.chrome.browser.ui.signin.SigninAndHistorySyncActivityLauncher;
 import org.chromium.chrome.test.OverrideContextWrapperTestRule;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.device_lock.DeviceLockActivityLauncher;
@@ -62,8 +66,10 @@ import org.chromium.components.prefs.PrefService;
 import org.chromium.components.user_prefs.UserPrefs;
 import org.chromium.components.user_prefs.UserPrefsJni;
 import org.chromium.content_public.browser.WebContents;
+import org.chromium.ui.base.ActivityResultTracker;
 import org.chromium.ui.base.TestActivity;
 import org.chromium.ui.base.WindowAndroid;
+import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.url.GURL;
 import org.chromium.url.JUnitTestGURLs;
@@ -97,12 +103,19 @@ public class ChromeProvidedSharingOptionsProviderTest {
     @Mock private ShareParams.TargetChosenCallback mTargetChosenCallback;
     @Mock private WindowAndroid mWindowAndroid;
     @Mock private DeviceLockActivityLauncher mDeviceLockActivityLauncher;
+    @Mock private SigninAndHistorySyncActivityLauncher mSigninAndHistorySyncActivityLauncher;
+    @Mock private ActivityResultTracker mActivityResultTracker;
+    @Mock private ModalDialogManager mModalDialogManager;
+    @Mock private SnackbarManager mSnackbarManager;
+    @Mock private DataProtectionBridge.Natives mDataProtectionBridgeNatives;
 
     private TestActivity mActivity;
     private ChromeProvidedSharingOptionsProvider mChromeProvidedSharingOptionsProvider;
     private UserActionTester mActionTester;
     private final SettableNullableObservableSupplier<Tab> mTabProvider =
             ObservableSuppliers.createNullable();
+    private final SettableMonotonicObservableSupplier<ModalDialogManager>
+            mModalDialogManagerSupplier = ObservableSuppliers.createMonotonic(mModalDialogManager);
 
     @Before
     public void setUp() {
@@ -110,6 +123,8 @@ public class ChromeProvidedSharingOptionsProviderTest {
 
         UserPrefsJni.setInstanceForTesting(mUserPrefsNatives);
         SendTabToSelfAndroidBridgeJni.setInstanceForTesting(mSendTabToSelfAndroidBridgeNatives);
+        DataProtectionBridge.setInstanceForTesting(mDataProtectionBridgeNatives);
+        when(mDataProtectionBridgeNatives.isScreenshotAllowed(any())).thenReturn(true);
         when(mUserPrefsNatives.get(mProfile)).thenReturn(mPrefService);
         when(mSendTabToSelfAndroidBridgeNatives.getEntryPointDisplayReason(any(), anyString()))
                 .thenReturn(null);
@@ -130,7 +145,25 @@ public class ChromeProvidedSharingOptionsProviderTest {
     public void getPropertyModels_longScreenshotEnabledNoTab_excludesLongScreenshot() {
         mTabProvider.set(null);
         setUpChromeProvidedSharingOptionsProviderTest(
-                /* isIncognito= */ false, /* printingEnabled= */ true, LinkGeneration.MAX);
+                /* isIncognito= */ false, /* printingEnabled= */ true, LinkGeneration.COUNT);
+        List<PropertyModel> propertyModels =
+                mChromeProvidedSharingOptionsProvider.getPropertyModels(
+                        ShareContentTypeHelper.ALL_CONTENT_TYPES_FOR_TEST,
+                        DetailedContentType.NOT_SPECIFIED,
+                        /* isMultiWindow= */ false);
+
+        assertFalse(
+                "Property models should not contain long screenshots.",
+                propertyModelsContain(propertyModels, R.string.sharing_long_screenshot));
+    }
+
+    @Test
+    public void getPropertyModels_longScreenshotEnabledScreenshotBlocked_excludesLongScreenshot() {
+        setUpChromeProvidedSharingOptionsProviderTest(
+                /* isIncognito= */ false,
+                /* printingEnabled= */ true,
+                LinkGeneration.COUNT,
+                /* isScreenshotProtected= */ true);
         List<PropertyModel> propertyModels =
                 mChromeProvidedSharingOptionsProvider.getPropertyModels(
                         ShareContentTypeHelper.ALL_CONTENT_TYPES_FOR_TEST,
@@ -148,7 +181,7 @@ public class ChromeProvidedSharingOptionsProviderTest {
         when(mTab.getNativePage()).thenReturn(mNativePage);
         when(mNativePage.isPdf()).thenReturn(true);
         setUpChromeProvidedSharingOptionsProviderTest(
-                /* isIncognito= */ false, /* printingEnabled= */ true, LinkGeneration.MAX);
+                /* isIncognito= */ false, /* printingEnabled= */ true, LinkGeneration.COUNT);
         List<PropertyModel> propertyModels =
                 mChromeProvidedSharingOptionsProvider.getPropertyModels(
                         ShareContentTypeHelper.ALL_CONTENT_TYPES_FOR_TEST,
@@ -164,7 +197,7 @@ public class ChromeProvidedSharingOptionsProviderTest {
     public void getPropertyModels_printingEnabledNoTab_excludesPrinting() {
         mTabProvider.set(null);
         setUpChromeProvidedSharingOptionsProviderTest(
-                /* isIncognito= */ false, /* printingEnabled= */ true, LinkGeneration.MAX);
+                /* isIncognito= */ false, /* printingEnabled= */ true, LinkGeneration.COUNT);
         List<PropertyModel> propertyModels =
                 mChromeProvidedSharingOptionsProvider.getPropertyModels(
                         ShareContentTypeHelper.ALL_CONTENT_TYPES_FOR_TEST,
@@ -182,7 +215,7 @@ public class ChromeProvidedSharingOptionsProviderTest {
         when(mTab.getNativePage()).thenReturn(mNativePage);
         when(mNativePage.isPdf()).thenReturn(true);
         setUpChromeProvidedSharingOptionsProviderTest(
-                /* isIncognito= */ false, /* printingEnabled= */ true, LinkGeneration.MAX);
+                /* isIncognito= */ false, /* printingEnabled= */ true, LinkGeneration.COUNT);
         List<PropertyModel> propertyModels =
                 mChromeProvidedSharingOptionsProvider.getPropertyModels(
                         ShareContentTypeHelper.ALL_CONTENT_TYPES_FOR_TEST,
@@ -203,7 +236,7 @@ public class ChromeProvidedSharingOptionsProviderTest {
     @Test
     public void getPropertyModels_printingEnabled_includesPrintingIfNotDesktop() {
         setUpChromeProvidedSharingOptionsProviderTest(
-                /* isIncognito= */ false, /* printingEnabled= */ true, LinkGeneration.MAX);
+                /* isIncognito= */ false, /* printingEnabled= */ true, LinkGeneration.COUNT);
         List<PropertyModel> propertyModels =
                 mChromeProvidedSharingOptionsProvider.getPropertyModels(
                         ShareContentTypeHelper.ALL_CONTENT_TYPES_FOR_TEST,
@@ -224,7 +257,7 @@ public class ChromeProvidedSharingOptionsProviderTest {
     @Test
     public void getPropertyModels_isIncognito_doesNotIncludeQrCode() {
         setUpChromeProvidedSharingOptionsProviderTest(
-                /* isIncognito= */ true, /* printingEnabled= */ false, LinkGeneration.MAX);
+                /* isIncognito= */ true, /* printingEnabled= */ false, LinkGeneration.COUNT);
 
         List<PropertyModel> propertyModels =
                 mChromeProvidedSharingOptionsProvider.getPropertyModels(
@@ -240,7 +273,7 @@ public class ChromeProvidedSharingOptionsProviderTest {
     @Test
     public void getPropertyModels_filtersByContentType() {
         setUpChromeProvidedSharingOptionsProviderTest(
-                /* isIncognito= */ false, /* printingEnabled= */ true, LinkGeneration.MAX);
+                /* isIncognito= */ false, /* printingEnabled= */ true, LinkGeneration.COUNT);
         List<PropertyModel> propertyModels =
                 mChromeProvidedSharingOptionsProvider.getPropertyModels(
                         ImmutableSet.of(ContentType.LINK_PAGE_NOT_VISIBLE),
@@ -257,7 +290,7 @@ public class ChromeProvidedSharingOptionsProviderTest {
     @Test
     public void getPropertyModels_multipleTypes_filtersByContentType() {
         setUpChromeProvidedSharingOptionsProviderTest(
-                /* isIncognito= */ false, /* printingEnabled= */ true, LinkGeneration.MAX);
+                /* isIncognito= */ false, /* printingEnabled= */ true, LinkGeneration.COUNT);
         List<PropertyModel> propertyModels =
                 mChromeProvidedSharingOptionsProvider.getPropertyModels(
                         ImmutableSet.of(ContentType.LINK_PAGE_NOT_VISIBLE, ContentType.IMAGE),
@@ -278,7 +311,7 @@ public class ChromeProvidedSharingOptionsProviderTest {
     @Test
     public void getPropertyModels_doesNotFilterByDetailedContentType() {
         setUpChromeProvidedSharingOptionsProviderTest(
-                /* isIncognito= */ false, /* printingEnabled= */ true, LinkGeneration.MAX);
+                /* isIncognito= */ false, /* printingEnabled= */ true, LinkGeneration.COUNT);
         List<PropertyModel> propertyModels =
                 mChromeProvidedSharingOptionsProvider.getPropertyModels(
                         ImmutableSet.of(ContentType.IMAGE),
@@ -318,7 +351,7 @@ public class ChromeProvidedSharingOptionsProviderTest {
     public void getPropertyModels_linksForAutomotive() {
         mAutoTestRule.setIsAutomotive(true);
         setUpChromeProvidedSharingOptionsProviderTest(
-                /* isIncognito= */ false, /* printingEnabled= */ false, LinkGeneration.MAX);
+                /* isIncognito= */ false, /* printingEnabled= */ false, LinkGeneration.COUNT);
 
         List<PropertyModel> propertyModels =
                 mChromeProvidedSharingOptionsProvider.getPropertyModels(
@@ -354,7 +387,7 @@ public class ChromeProvidedSharingOptionsProviderTest {
     public void getPropertyModels_textAndLinksIncognito() {
         mAutoTestRule.setIsAutomotive(true);
         setUpChromeProvidedSharingOptionsProviderTest(
-                /* isIncognito= */ true, /* printingEnabled= */ false, LinkGeneration.MAX);
+                /* isIncognito= */ true, /* printingEnabled= */ false, LinkGeneration.COUNT);
 
         List<PropertyModel> propertyModels =
                 mChromeProvidedSharingOptionsProvider.getPropertyModels(
@@ -387,7 +420,7 @@ public class ChromeProvidedSharingOptionsProviderTest {
     @Test
     public void getPropertyModels_linkAndTextShare() {
         setUpChromeProvidedSharingOptionsProviderTest(
-                /* isIncognito= */ false, /* printingEnabled= */ false, LinkGeneration.MAX);
+                /* isIncognito= */ false, /* printingEnabled= */ false, LinkGeneration.COUNT);
 
         List<PropertyModel> propertyModels =
                 mChromeProvidedSharingOptionsProvider.getPropertyModels(
@@ -408,7 +441,7 @@ public class ChromeProvidedSharingOptionsProviderTest {
     @Test
     public void getPropertyModels_linkShare() {
         setUpChromeProvidedSharingOptionsProviderTest(
-                /* isIncognito= */ false, /* printingEnabled= */ false, LinkGeneration.MAX);
+                /* isIncognito= */ false, /* printingEnabled= */ false, LinkGeneration.COUNT);
 
         List<PropertyModel> propertyModels =
                 mChromeProvidedSharingOptionsProvider.getPropertyModels(
@@ -429,7 +462,7 @@ public class ChromeProvidedSharingOptionsProviderTest {
                 .thenReturn(EntryPointDisplayReason.OFFER_FEATURE);
 
         setUpChromeProvidedSharingOptionsProviderTest(
-                /* isIncognito= */ false, /* printingEnabled= */ false, LinkGeneration.MAX);
+                /* isIncognito= */ false, /* printingEnabled= */ false, LinkGeneration.COUNT);
 
         List<PropertyModel> propertyModels =
                 mChromeProvidedSharingOptionsProvider.getPropertyModels(
@@ -439,13 +472,13 @@ public class ChromeProvidedSharingOptionsProviderTest {
 
         assertTrue(
                 "Property models should contain send-tab-to-self.",
-                propertyModelsContain(propertyModels, R.string.sharing_send_tab_to_self));
+                propertyModelsContain(propertyModels, R.string.send_tab_to_self));
     }
 
     @Test
     public void getPropertyModels_textShare() {
         setUpChromeProvidedSharingOptionsProviderTest(
-                /* isIncognito= */ false, /* printingEnabled= */ false, LinkGeneration.MAX);
+                /* isIncognito= */ false, /* printingEnabled= */ false, LinkGeneration.COUNT);
 
         List<PropertyModel> propertyModels =
                 mChromeProvidedSharingOptionsProvider.getPropertyModels(
@@ -477,8 +510,19 @@ public class ChromeProvidedSharingOptionsProviderTest {
             boolean isIncognito,
             boolean printingEnabled,
             @LinkGeneration int linkGenerationStatus) {
+        setUpChromeProvidedSharingOptionsProviderTest(
+                isIncognito, printingEnabled, linkGenerationStatus, false);
+    }
+
+    private void setUpChromeProvidedSharingOptionsProviderTest(
+            boolean isIncognito,
+            boolean printingEnabled,
+            @LinkGeneration int linkGenerationStatus,
+            boolean isScreenshotProtected) {
         when(mPrefService.getBoolean(anyString())).thenReturn(printingEnabled);
         when(mTab.isIncognito()).thenReturn(isIncognito);
+        when(mDataProtectionBridgeNatives.isScreenshotAllowed(mTab))
+                .thenReturn(!isScreenshotProtected);
 
         ShareParams shareParams =
                 new ShareParams.Builder(null, /* title= */ "", /* url= */ "")
@@ -509,7 +553,11 @@ public class ChromeProvidedSharingOptionsProviderTest {
                         new LinkToggleMetricsDetails(
                                 LinkToggleState.COUNT, DetailedContentType.NOT_SPECIFIED),
                         mProfile,
-                        mDeviceLockActivityLauncher);
+                        mDeviceLockActivityLauncher,
+                        mSigninAndHistorySyncActivityLauncher,
+                        mActivityResultTracker,
+                        mModalDialogManagerSupplier,
+                        mSnackbarManager);
     }
 
     private boolean propertyModelsContain(List<PropertyModel> propertyModels, int labelId) {

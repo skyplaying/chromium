@@ -9,48 +9,74 @@ import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
 
 import org.chromium.base.Callback;
+import org.chromium.base.ResettersForTesting;
 import org.chromium.base.supplier.MonotonicObservableSupplier;
+import org.chromium.base.supplier.NonNullObservableSupplier;
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
+import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.components.contextual_search.FileUploadStatus;
+import org.chromium.components.contextual_search.ContextUploadErrorType;
+import org.chromium.components.contextual_search.ContextUploadStatus;
 import org.chromium.components.contextual_search.InputState;
+import org.chromium.components.omnibox.OmniboxFeatures;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.url.GURL;
 
 import java.nio.ByteBuffer;
+import java.util.List;
+import java.util.Optional;
 
 /**
  * Bridge for native Composebox query controller functionality, allowing for management of a
- * Composebox session
+ * Composebox session.
  */
 @SuppressWarnings("unused")
 @NullMarked
 public class ComposeboxQueryControllerBridge {
+    /** Instance to be used for testing - null value permitted to signify no controller. */
+    @SuppressWarnings("NullableOptional")
+    private static @Nullable Optional<ComposeboxQueryControllerBridge> sInstanceForTesting;
 
-    /** Observer for file upload status changes. */
-    interface FileUploadObserver {
+    /** Observer for context upload status changes. */
+    interface ContextUploadObserver {
         /**
-         * @param token Unique string identifier for the file.
-         * @param status The status of the file's upload.
+         * @param token Unique string identifier for the context.
+         * @param status The status of the context's upload.
+         * @param errorType The error type if the upload failed.
          */
-        void onFileUploadStatusChanged(String token, @FileUploadStatus int status);
+        void onContextUploadStatusChanged(
+                String token,
+                @ContextUploadStatus int status,
+                @ContextUploadErrorType int errorType);
     }
 
     private long mNativeInstance;
-    private @Nullable FileUploadObserver mFileUploadObserver;
+    private @Nullable ContextUploadObserver mContextUploadObserver;
     private final SettableMonotonicObservableSupplier<InputState> mInputStateSupplier =
             ObservableSuppliers.createMonotonic();
+    private final SettableNonNullObservableSupplier<List<SuggestedTabInfo>> mSuggestedTabsSupplier =
+            ObservableSuppliers.createNonNull(List.of());
 
     private ComposeboxQueryControllerBridge() {}
 
-    /** Create a new ComposeboxQueryControllerBridge using the given profile. */
-    public static @Nullable ComposeboxQueryControllerBridge createForProfile(Profile profile) {
+    /**
+     * Create a new ComposeboxQueryControllerBridge using the given profile and WebUI WebContents.
+     *
+     * @param profile The profile for the session.
+     * @param webContents The WebContents hosting the WebUI that needs to be communicated with.
+     * @return New controller instance, or null if initialization fails.
+     */
+    public static @Nullable ComposeboxQueryControllerBridge create(
+            Profile profile, @Nullable WebContents webContents) {
+        if (sInstanceForTesting != null) return sInstanceForTesting.orElse(null);
+
         ComposeboxQueryControllerBridge javaInstance = new ComposeboxQueryControllerBridge();
-        long nativeInstance = ComposeboxQueryControllerBridgeJni.get().init(profile, javaInstance);
+        long nativeInstance =
+                ComposeboxQueryControllerBridgeJni.get().init(javaInstance, profile, webContents);
         if (nativeInstance == 0L) return null;
         javaInstance.mNativeInstance = nativeInstance;
         return javaInstance;
@@ -59,7 +85,7 @@ public class ComposeboxQueryControllerBridge {
     public void destroy() {
         ComposeboxQueryControllerBridgeJni.get().destroy(mNativeInstance);
         mNativeInstance = 0;
-        mFileUploadObserver = null;
+        mContextUploadObserver = null;
     }
 
     public long getNativeInstance() {
@@ -67,13 +93,24 @@ public class ComposeboxQueryControllerBridge {
     }
 
     /**
-     * Set the current file upload observer. If non-null, the observer will be notified of file
-     * upload status changes for all files, identified by token. Note that there are intermediate
-     * statuses (neither success nor failure), there is no guarantee of ordering between files, but
-     * a file upload will either succeed/fail at most once.
+     * Set the current context upload observer. If non-null, the observer will be notified of
+     * context upload status changes for all contexts, identified by token. Note that there are
+     * intermediate statuses (neither success nor failure), there is no guarantee of ordering
+     * between contexts, but a context upload will either succeed/fail at most once.
      */
-    void setFileUploadObserver(@Nullable FileUploadObserver observer) {
-        mFileUploadObserver = observer;
+    void setContextUploadObserver(@Nullable ContextUploadObserver observer) {
+        mContextUploadObserver = observer;
+    }
+
+    @CalledByNative
+    void onContextUploadStatusChanged(
+            @JniType("std::string") String token,
+            @ContextUploadStatus int contextUploadStatus,
+            @ContextUploadErrorType int errorType) {
+        if (mContextUploadObserver != null) {
+            mContextUploadObserver.onContextUploadStatusChanged(
+                    token, contextUploadStatus, errorType);
+        }
     }
 
     /** Start a new Composebox session. An active session is required to upload files. */
@@ -91,6 +128,9 @@ public class ComposeboxQueryControllerBridge {
     /**
      * Add the given file to the current session.
      *
+     * @param fileName Name of the file being added.
+     * @param fileType MIME type or extension of the file.
+     * @param fileData Binary content of the file.
      * @return unique token representig the file, used to manipulate added files.
      */
     @Nullable String addFile(String fileName, String fileType, byte[] fileData) {
@@ -104,33 +144,55 @@ public class ComposeboxQueryControllerBridge {
      * Uploads the given tab, adding it to the current session. If the upload can't be performed,
      * null is returned.
      */
-    @Nullable String addTabContext(Tab tab) {
+    @Nullable String addTabContext(Tab tab, boolean isSuggestedTab) {
         if (tab.getWebContents() == null) return null;
         return ComposeboxQueryControllerBridgeJni.get()
-                .addTabContext(mNativeInstance, tab.getWebContents());
+                .addTabContext(mNativeInstance, tab.getWebContents(), isSuggestedTab);
     }
 
     /**
      * Uploads the given tab, adding it to the current session. If the upload can't be performed,
      * null is returned.
      */
-    @Nullable String addTabContextFromCache(long tabId) {
+    @Nullable String addTabContextFromCache(long tabId, boolean isSuggestedTab) {
         return ComposeboxQueryControllerBridgeJni.get()
-                .addTabContextFromCache(mNativeInstance, tabId);
+                .addTabContextFromCache(mNativeInstance, tabId, isSuggestedTab);
     }
 
-    void getAimUrl(GURL url, Callback<GURL> callback) {
+    public void getAimUrl(GURL url, Callback<GURL> callback) {
         ComposeboxQueryControllerBridgeJni.get().getAimUrl(mNativeInstance, url, callback);
     }
 
-    void getImageGenerationUrl(GURL url, Callback<GURL> callback) {
+    public void getImageGenerationUrl(GURL url, Callback<GURL> callback) {
         ComposeboxQueryControllerBridgeJni.get()
                 .getImageGenerationUrl(mNativeInstance, url, callback);
+    }
+
+    public void getAimUrlFromInputState(GURL url, Callback<GURL> callback) {
+        assert OmniboxFeatures.sShowModelPicker.getValue();
+        ComposeboxQueryControllerBridgeJni.get()
+                .getAimUrlFromInputState(mNativeInstance, url, callback);
     }
 
     /** Remove the given file from the current session. */
     void removeAttachment(String token) {
         ComposeboxQueryControllerBridgeJni.get().removeAttachment(mNativeInstance, token);
+    }
+
+    /** Returns whether client is Fusebox eligible. */
+    public boolean isFuseboxEligible() {
+        return ComposeboxQueryControllerBridgeJni.get().isFuseboxEligible(mNativeInstance);
+    }
+
+    /**
+     * Returns whether the client is eligible for Fusebox for the given profile.
+     *
+     * <p>This is a static stateless helper to allow components in unfocused contexts (like the NTP
+     * fakebox or the unfocused omnibox status view) to check eligibility without having to
+     * instantiate a heavyweight native controller and session.
+     */
+    public static boolean isFuseboxEligibleForProfile(Profile profile) {
+        return ComposeboxQueryControllerBridgeJni.get().isFuseboxEligibleForProfile(profile);
     }
 
     /** Returns whether the user is eligible for PDF uploads. */
@@ -146,43 +208,59 @@ public class ComposeboxQueryControllerBridge {
     /**
      * @param toolMode The active tool to set.
      */
-    void setActiveTool(int toolMode) {
+    public void setActiveTool(int toolMode) {
         ComposeboxQueryControllerBridgeJni.get().setActiveTool(mNativeInstance, toolMode);
     }
 
     /**
      * @param modelMode The active model to set.
      */
-    void setActiveModel(int modelMode) {
+    public void setActiveModel(int modelMode) {
         ComposeboxQueryControllerBridgeJni.get().setActiveModel(mNativeInstance, modelMode);
     }
 
     /**
-     * Returns an observable supplier for the current input state. This object contains the allowed
-     * and disabled tools, models, and inputs. Updates are tied to the underlying C++
+     * /** Returns an observable supplier for the current input state. This object contains the
+     * allowed and disabled tools, models, and inputs. Updates are tied to the underlying C++
      * ContextualSearchSessionHandle, and may not be during other types of sessions. Callers should
      * be careful that updates may occur outside of when they expect.
      */
-    MonotonicObservableSupplier<InputState> getInputStateSupplier() {
+    public MonotonicObservableSupplier<InputState> getInputStateSupplier() {
         return mInputStateSupplier;
     }
 
-    @CalledByNative
-    void onFileUploadStatusChanged(String token, @FileUploadStatus int fileUploadStatus) {
-        if (mFileUploadObserver != null) {
-            mFileUploadObserver.onFileUploadStatusChanged(token, fileUploadStatus);
-        }
+    /** Returns an observable supplier for the suggested tab info from the backend. */
+    public NonNullObservableSupplier<List<SuggestedTabInfo>> getSuggestedTabsSupplier() {
+        return mSuggestedTabsSupplier;
     }
+
+    public static void setInstanceForTesting(@Nullable ComposeboxQueryControllerBridge instance) {
+        sInstanceForTesting = Optional.ofNullable(instance);
+        ResettersForTesting.register(ComposeboxQueryControllerBridge::resetInstanceForTesting);
+    }
+
+    public static void resetInstanceForTesting() {
+        sInstanceForTesting = null;
+    }
+
 
     @CalledByNative
     private void onInputStateChanged(InputState inputState) {
         mInputStateSupplier.set(inputState);
     }
 
+    @CalledByNative
+    private void onSuggestedTabsUpdated(
+            @JniType("std::vector") List<SuggestedTabInfo> suggestedTabs) {
+        mSuggestedTabsSupplier.set(suggestedTabs);
+    }
+
     @NativeMethods
     public interface Natives {
         long init(
-                @JniType("Profile*") Profile profile, ComposeboxQueryControllerBridge javaInstance);
+                ComposeboxQueryControllerBridge javaInstance,
+                @JniType("Profile*") Profile profile,
+                @JniType("content::WebContents*") @Nullable WebContents webContents);
 
         void destroy(long nativeComposeboxQueryControllerBridge);
 
@@ -190,31 +268,44 @@ public class ComposeboxQueryControllerBridge {
 
         void notifySessionAbandoned(long nativeComposeboxQueryControllerBridge);
 
+        @JniType("std::string")
         @Nullable String addFile(
                 long nativeComposeboxQueryControllerBridge,
                 @JniType("std::string") String fileName,
                 @JniType("std::string") String fileType,
                 ByteBuffer fileData);
 
+        @JniType("std::string")
         @Nullable String addTabContext(
                 long nativeComposeboxQueryControllerBridge,
-                @JniType("content::WebContents*") WebContents webContents);
+                @JniType("content::WebContents*") WebContents webContents,
+                boolean isSuggestedTab);
 
+        @JniType("std::string")
         @Nullable String addTabContextFromCache(
-                long nativeComposeboxQueryControllerBridge, long tabId);
+                long nativeComposeboxQueryControllerBridge, long tabId, boolean isSuggestedTab);
 
         void getAimUrl(
                 long nativeComposeboxQueryControllerBridge,
                 @JniType("GURL") GURL url,
-                Callback<@JniType("GURL") GURL> callback);
+                @JniType("base::OnceCallback<void(GURL)>&&") Callback<GURL> callback);
 
         void getImageGenerationUrl(
                 long nativeComposeboxQueryControllerBridge,
                 @JniType("GURL") GURL url,
-                Callback<@JniType("GURL") GURL> callback);
+                @JniType("base::OnceCallback<void(GURL)>&&") Callback<GURL> callback);
+
+        void getAimUrlFromInputState(
+                long nativeComposeboxQueryControllerBridge,
+                @JniType("GURL") GURL url,
+                @JniType("base::OnceCallback<void(GURL)>&&") Callback<GURL> callback);
 
         void removeAttachment(
                 long nativeComposeboxQueryControllerBridge, @JniType("std::string") String token);
+
+        boolean isFuseboxEligible(long nativeComposeboxQueryControllerBridge);
+
+        boolean isFuseboxEligibleForProfile(@JniType("Profile*") Profile profile);
 
         boolean isPdfUploadEligible(long nativeComposeboxQueryControllerBridge);
 

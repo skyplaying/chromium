@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "base/containers/span.h"
+#include "base/containers/to_vector.h"
 #include "base/i18n/icu_string_conversions.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/memory/scoped_refptr.h"
@@ -24,10 +25,6 @@
 #include "build/build_config.h"
 #include "ui/base/clipboard/clipboard_constants.h"
 #include "ui/gfx/x/atom_cache.h"
-
-#if BUILDFLAG(IS_LINUX)
-#include "components/dbus/xdg/file_transfer_portal.h"
-#endif
 
 namespace ui {
 
@@ -43,12 +40,6 @@ std::vector<x11::Atom> GetURLAtomsFrom() {
 }
 
 std::vector<x11::Atom> GetURIListAtomsFrom() {
-#if BUILDFLAG(IS_LINUX)
-  if (dbus_xdg::FileTransferPortal::IsAvailableSync()) {
-    return {x11::GetAtom(kMimeTypePortalFileTransfer),
-            x11::GetAtom(kMimeTypePortalFiles), x11::GetAtom(kMimeTypeUriList)};
-  }
-#endif
   return {x11::GetAtom(kMimeTypeUriList)};
 }
 
@@ -221,6 +212,12 @@ void SelectionData::AssignTo(std::string* result) const {
 
 void SelectionData::AssignTo(std::u16string* result) const {
   *result = RefCountedMemoryToString16(memory_);
+}
+
+void SelectionData::AssignTo(std::vector<uint8_t>* result) const {
+  CHECK(memory_.get());
+
+  *result = base::ToVector(*memory_);
 }
 
 scoped_refptr<base::RefCountedBytes> SelectionData::TakeBytes() {

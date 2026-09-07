@@ -11,11 +11,13 @@ import android.view.View;
 import androidx.activity.OnBackPressedCallback;
 import androidx.annotation.IntDef;
 
+import org.chromium.base.CallbackUtils;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.ui.listmenu.ListMenuDelegate;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModel.ReadableBooleanPropertyKey;
+import org.chromium.ui.modelutil.PropertyModel.ReadableIntDefPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.ReadableIntPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.ReadableObjectPropertyKey;
 import org.chromium.ui.modelutil.PropertyModel.WritableBooleanPropertyKey;
@@ -156,7 +158,7 @@ public class ModalDialogProperties {
         private final Runnable mCallback;
 
         public ModalDialogMenuItem(Drawable icon, String text) {
-            this(icon, text, () -> {});
+            this(icon, text, CallbackUtils.emptyRunnable());
         }
 
         public ModalDialogMenuItem(Drawable icon, String text, Runnable callback) {
@@ -190,7 +192,8 @@ public class ModalDialogProperties {
             new ReadableObjectPropertyKey<>();
 
     /** The title of the dialog. */
-    public static final WritableObjectPropertyKey<String> TITLE = new WritableObjectPropertyKey<>();
+    public static final WritableObjectPropertyKey<CharSequence> TITLE =
+            new WritableObjectPropertyKey<>();
 
     /** The maximum number of lines that the title can take. */
     public static final WritableIntPropertyKey TITLE_MAX_LINES = new WritableIntPropertyKey();
@@ -202,6 +205,13 @@ public class ModalDialogProperties {
     /** The dialog icon displayed at the end of the title. */
     public static final WritableObjectPropertyKey<Drawable> TITLE_END_ICON =
             new WritableObjectPropertyKey<>();
+
+    /**
+     * The {@link android.view.Gravity} of the dialog icon displayed at the end of the title.
+     * Default is {@link android.view.Gravity#CENTER_VERTICAL}.
+     */
+    public static final WritableIntPropertyKey TITLE_END_ICON_GRAVITY =
+            new WritableIntPropertyKey();
 
     /** Deprecated for MESSAGE_PARAGRAPHS. The only paragraph of the dialog. */
     public static final WritableObjectPropertyKey<CharSequence> MESSAGE_PARAGRAPH_1 =
@@ -312,6 +322,14 @@ public class ModalDialogProperties {
     public static final WritableBooleanPropertyKey TITLE_BACK_BUTTON_VISIBLE =
             new WritableBooleanPropertyKey();
 
+    /** The click listener for the 'close' button in the title. */
+    public static final WritableObjectPropertyKey<View.OnClickListener>
+            TITLE_CLOSE_BUTTON_CLICK_LISTENER = new WritableObjectPropertyKey<>();
+
+    /** Whether the 'close' button in the title is visible. */
+    public static final WritableBooleanPropertyKey TITLE_CLOSE_BUTTON_VISIBLE =
+            new WritableBooleanPropertyKey();
+
     /**
      * Whether the custom view should be wrapped in a ScrollView. The custom view must not be a
      * ScrollView itself if this is set.
@@ -320,20 +338,19 @@ public class ModalDialogProperties {
             new WritableBooleanPropertyKey();
 
     /** Whether the primary (positive) or negative button should be a filled button */
-    public static final ReadableIntPropertyKey BUTTON_STYLES = new ReadableIntPropertyKey();
+    public static final ReadableIntDefPropertyKey<ButtonStyles> BUTTON_STYLES =
+            new ReadableIntDefPropertyKey<>(ButtonStyles.PRIMARY_OUTLINE_NEGATIVE_OUTLINE);
 
     /** Whether the dialog should follow {@link DialogStyles}. */
-    public static final ReadableIntPropertyKey DIALOG_STYLES = new ReadableIntPropertyKey();
-
-    /** Whether the dialog should be focused for accessibility. */
-    public static final WritableBooleanPropertyKey FOCUS_DIALOG = new WritableBooleanPropertyKey();
+    public static final ReadableIntDefPropertyKey<DialogStyles> DIALOG_STYLES =
+            new ReadableIntDefPropertyKey<>(DialogStyles.NORMAL);
 
     /**
-     * The handler for back presses done on a {@ModalDialogType.APP}. By default, a back press
+     * The handler for back presses done on a {@link ModalDialogType.APP}. By default, a back press
      * dismisses the dialog.
      */
     public static final WritableObjectPropertyKey<OnBackPressedCallback>
-            APP_MODAL_DIALOG_BACK_PRESS_HANDLER = new WritableObjectPropertyKey();
+            APP_MODAL_DIALOG_BACK_PRESS_HANDLER = new WritableObjectPropertyKey<>();
 
     /**
      * Duration of initial tap protection period after dialog is displayed to user. During this
@@ -366,7 +383,7 @@ public class ModalDialogProperties {
     public static final WritableIntPropertyKey MAX_HEIGHT = new WritableIntPropertyKey();
 
     /** The padding used by the dialog content view. */
-    public static final WritableObjectPropertyKey<Rect> PADDING = new WritableObjectPropertyKey();
+    public static final WritableObjectPropertyKey<Rect> PADDING = new WritableObjectPropertyKey<>();
 
     /**
      * Block all inputs on the rest of the dialog view. Note that this does not override any
@@ -386,6 +403,7 @@ public class ModalDialogProperties {
                 TITLE_MAX_LINES,
                 TITLE_ICON,
                 TITLE_END_ICON,
+                TITLE_END_ICON_GRAVITY,
                 MESSAGE_PARAGRAPH_1,
                 MESSAGE_PARAGRAPHS,
                 MENU_ITEMS,
@@ -411,9 +429,10 @@ public class ModalDialogProperties {
                 TITLE_MORE_BUTTON_VISIBLE,
                 TITLE_BACK_BUTTON_CLICK_LISTENER,
                 TITLE_BACK_BUTTON_VISIBLE,
+                TITLE_CLOSE_BUTTON_CLICK_LISTENER,
+                TITLE_CLOSE_BUTTON_VISIBLE,
                 BUTTON_STYLES,
                 DIALOG_STYLES,
-                FOCUS_DIALOG,
                 APP_MODAL_DIALOG_BACK_PRESS_HANDLER,
                 BUTTON_TAP_PROTECTION_PERIOD_MS,
                 TAB_MODAL_DIALOG_CANCEL_ON_ESCAPE,

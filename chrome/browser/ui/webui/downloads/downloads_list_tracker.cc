@@ -61,11 +61,11 @@ using DownloadVector = DownloadManager::DownloadVector;
 namespace {
 
 // Character limit for URL/origin strings displayed in the downloads page, to
-// avoid surpassing mojo data limit (c.f. crbug.com/1070451). If it's really
+// avoid surpassing mojo data limit (c.f. crbug.com/40684561). If it's really
 // this long, the user won't be able to see the whole thing anyway.
 // Use a much smaller limit than url::kMaxURLChars (2M) since this is for
 // display only, and long URLs will affect page load speed and may cause
-// JavaScript errors (https://crbug.com/1522764).
+// JavaScript errors (https://crbug.com/41495722).
 const size_t kMaxDisplayURLChars = 16 * 1024;
 
 // Returns an enum value to be used as the |danger_type| value in
@@ -213,7 +213,7 @@ void DownloadsListTracker::Reset() {
 bool DownloadsListTracker::SetSearchTerms(
     const std::vector<std::string>& search_terms) {
   std::vector<std::u16string> new_terms;
-  new_terms.resize(search_terms.size());
+  new_terms.reserve(search_terms.size());
 
   for (const auto& t : search_terms) {
     new_terms.push_back(base::UTF8ToUTF16(t));
@@ -381,9 +381,10 @@ downloads::mojom::DataPtr DownloadsListTracker::CreateDownloadData(
   file_name = base::i18n::GetDisplayStringInLTRDirectionality(file_name);
 
   file_value->file_name = base::UTF16ToUTF8(file_name);
-  // Include URL unless it is too long.
+  // Include URL unless it is too long or has been truncated.
   if (download_item->GetURL().is_valid() &&
-      download_item->GetURL().spec().length() <= url::kMaxURLChars) {
+      download_item->GetURL().spec().length() <= url::kMaxURLChars &&
+      !download_item->IsUrlTruncated()) {
     file_value->url = std::make_optional<GURL>(download_item->GetURL());
   }
   file_value->display_initiator_origin =
@@ -400,7 +401,7 @@ downloads::mojom::DataPtr DownloadsListTracker::CreateDownloadData(
   std::u16string progress_status_text;
   bool retry = false;
   // This will always be populated, but we set a null value to start with.
-  std::optional<downloads::mojom::State> state = std::nullopt;
+  std::optional<downloads::mojom::State> state;
 
   switch (download_item->GetState()) {
     case download::DownloadItem::IN_PROGRESS: {
@@ -443,14 +444,14 @@ downloads::mojom::DataPtr DownloadsListTracker::CreateDownloadData(
       last_reason_text = download_model.GetHistoryPageStatusText();
       if (download::DOWNLOAD_INTERRUPT_REASON_CRASH ==
               download_item->GetLastReason() &&
-          !download_item->CanResume()) {
+          !download_item->CanResume() && !download_item->IsUrlTruncated()) {
         retry = true;
       }
       break;
 
     case download::DownloadItem::CANCELLED:
       state = downloads::mojom::State::kCancelled;
-      retry = true;
+      retry = !download_item->IsUrlTruncated();
       break;
 
     case download::DownloadItem::COMPLETE:
@@ -498,7 +499,9 @@ downloads::mojom::DataPtr DownloadsListTracker::CreateDownloadData(
   file_value->has_safe_browsing_verdict =
       WasSafeBrowsingVerdictObtained(download_item);
 
-  MaybeRecordDangerousDownloadWarningShown(download_model);
+  if (download_model.IsDangerous()) {
+    MaybeRecordDangerousDownloadWarningShown(download_model);
+  }
 
   if (download_item->IsDangerous()) {
     // It's likely that SHOWN has already been logged from the download bubble,

@@ -31,8 +31,11 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_TRACK_VTT_VTT_CUE_H_
 
 #include "third_party/blink/renderer/bindings/core/v8/v8_align_setting.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_line_align_setting.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_position_align_setting.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/html/track/text_track_cue.h"
+#include "third_party/blink/renderer/platform/bindings/union_base.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
@@ -42,7 +45,6 @@ namespace blink {
 
 class Document;
 class ExecutionContext;
-class HTMLMediaElement;
 class V8UnionAutoKeywordOrDouble;
 class VTTCueBox;
 class VTTRegion;
@@ -50,6 +52,8 @@ class VTTScanner;
 class V8DirectionSetting;
 
 using AlignSetting = V8AlignSetting::Enum;
+using LineAlignSetting = V8LineAlignSetting::Enum;
+using PositionAlignSetting = V8PositionAlignSetting::Enum;
 using VTTRegionMap = HeapHashMap<String, Member<VTTRegion>>;
 
 struct VTTDisplayParameters {
@@ -102,6 +106,16 @@ class CORE_EXPORT VTTCue final : public TextTrackCue {
     return MakeGarbageCollected<VTTCue>(document, start_time, end_time, text);
   }
 
+  // For use by the IDL binding (constructor with RaisesException): validates
+  // endTime (NaN and -Infinity are rejected; +Infinity is allowed for
+  // unbounded/open-ended cues per
+  // https://w3c.github.io/webvtt/#dom-vttcue-vttcue).
+  static VTTCue* Create(Document& document,
+                        double start_time,
+                        double end_time,
+                        const String& text,
+                        ExceptionState& exception_state);
+
   VTTCue(Document&, double start_time, double end_time, const String& text);
   ~VTTCue() override;
 
@@ -114,12 +128,19 @@ class CORE_EXPORT VTTCue final : public TextTrackCue {
   bool snapToLines() const { return snap_to_lines_; }
   void setSnapToLines(bool);
 
-  V8UnionAutoKeywordOrDouble* line() const;
-  void setLine(const V8UnionAutoKeywordOrDouble* position);
+  bindings::OptimizedReturnProxy<V8UnionAutoKeywordOrDouble> line(
+      ScriptState*) const;
+  void setLine(const V8UnionAutoKeywordOrDouble*);
 
-  V8UnionAutoKeywordOrDouble* position() const;
-  void setPosition(const V8UnionAutoKeywordOrDouble* position,
-                   ExceptionState& exception_state);
+  V8LineAlignSetting lineAlign() const;
+  void setLineAlign(const V8LineAlignSetting&);
+
+  bindings::OptimizedReturnProxy<V8UnionAutoKeywordOrDouble> position(
+      ScriptState*) const;
+  void setPosition(const V8UnionAutoKeywordOrDouble*, ExceptionState&);
+
+  V8PositionAlignSetting positionAlign() const;
+  void setPositionAlign(const V8PositionAlignSetting&);
 
   double size() const { return cue_size_; }
   void setSize(double, ExceptionState&);
@@ -137,12 +158,6 @@ class CORE_EXPORT VTTCue final : public TextTrackCue {
 
   DocumentFragment* getCueAsHTML();
 
-  // Handles the entrance and exit of cues for description-tagged tracks.
-  // OnEnter begins speaking the cue. OnExit pauses the video to let the
-  // description finish, if the cue is still being spoken at the specified end
-  // time.
-  void OnEnter(HTMLMediaElement& video) override;
-  void OnExit(HTMLMediaElement& video) override;
 
   void UpdateDisplay(HTMLDivElement& container) override;
 
@@ -187,6 +202,8 @@ class CORE_EXPORT VTTCue final : public TextTrackCue {
   VTTDisplayParameters CalculateDisplayParameters() const;
   double CalculateComputedTextPosition() const;
   AlignSetting CalculateComputedCueAlignment() const;
+  PositionAlignSetting CalculateComputedPositionAlignment(
+      CSSValueID base_direction) const;
 
   enum class CueSetting {
     kNone,
@@ -205,6 +222,8 @@ class CORE_EXPORT VTTCue final : public TextTrackCue {
   double cue_size_;
   WritingDirection writing_direction_;
   AlignSetting cue_alignment_ = AlignSetting::kCenter;
+  LineAlignSetting line_align_ = LineAlignSetting::kStart;
+  PositionAlignSetting position_align_ = PositionAlignSetting::kAuto;
 
   Member<VTTRegion> region_;
   Member<DocumentFragment> vtt_node_tree_;

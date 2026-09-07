@@ -6,12 +6,16 @@
 
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
+#include "base/metrics/statistics_recorder.h"
 #include "base/path_service.h"
+#include "base/run_loop.h"
+#include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/timer/elapsed_timer.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_features.h"
+#include "chrome/browser/page_load_metrics/chrome_initiator_location.h"
 #include "chrome/browser/preloading/chrome_preloading.h"
 #include "chrome/browser/preloading/new_tab_page_preload/new_tab_page_preload_pipeline_manager.h"
 #include "chrome/browser/preloading/preloading_prefs.h"
@@ -24,6 +28,7 @@
 #include "chrome/test/base/platform_browser_test.h"
 #include "components/page_load_metrics/browser/navigation_handle_user_data.h"
 #include "components/prefs/pref_service.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
@@ -34,10 +39,12 @@
 #include "net/base/url_util.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/http/http_status_code.h"
-#include "net/test/embedded_test_server/controllable_http_response.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+#include "net/test/embedded_test_server/expectation_handler.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/android_info.h"
@@ -100,8 +107,7 @@ class NewTabPagePreloadBrowserTest : public PlatformBrowserTest {
 
   NewTabPagePreloadPipelineManager* GetNewTabPagePreloadPipelineManager() {
     return browser()
-        ->tab_strip_model()
-        ->GetActiveTab()
+        ->GetActiveTabInterface()
         ->GetTabFeatures()
         ->new_tab_page_preload_pipeline_manager();
   }
@@ -112,8 +118,7 @@ class NewTabPagePreloadBrowserTest : public PlatformBrowserTest {
             url, content::Referrer(), WindowOpenDisposition::CURRENT_TAB,
             ui::PageTransitionFromInt(ui::PAGE_TRANSITION_AUTO_BOOKMARK),
             /*is_renderer_initiated=*/false),
-        base::BindRepeating(&page_load_metrics::NavigationHandleUserData::
-                                AttachNewTabPageNavigationHandleUserData));
+        base::BindRepeating(&AttachNewTabPageNavigationHandleUserData));
   }
 
  private:
@@ -157,8 +162,9 @@ IN_PROC_BROWSER_TEST_F(NewTabPagePreloadBrowserTest,
 IN_PROC_BROWSER_TEST_F(NewTabPagePreloadBrowserTest,
                        PrefetchResponseFailureAndPrerenderFailure) {
   base::HistogramTester histogram_tester;
-  net::test_server::ControllableHttpResponse prefetch_response(
-      &embedded_https_test_server(), "/simple.html");
+  net::test_server::ExpectationHandler handler(&embedded_https_test_server());
+  handler.OnRequest("/simple.html")
+      .RespondWith(net::HTTP_INTERNAL_SERVER_ERROR, "text/html", "");
 
   StartServer();
   // Navigate to an initial page.
@@ -167,9 +173,6 @@ IN_PROC_BROWSER_TEST_F(NewTabPagePreloadBrowserTest,
       content::NavigateToURL(GetActiveWebContents(), GetUrl("/empty.html")));
 
   GetNewTabPagePreloadPipelineManager()->StartPrefetch(preload_url);
-  prefetch_response.WaitForRequest();
-  prefetch_response.Send(net::HTTP_INTERNAL_SERVER_ERROR);
-  prefetch_response.Done();
 
   GetNewTabPagePreloadPipelineManager()->StartPrerender(
       preload_url, chrome_preloading_predictor::kPointerDownOnNewTabPage);
@@ -203,13 +206,18 @@ IN_PROC_BROWSER_TEST_F(NewTabPagePreloadBrowserTest,
              base::EscapeQueryParamValue(
                  "https://www.google.co.jp/search?q=123", /*use_plus=*/true));
   {
-    content::test::TestPrefetchWatcher test_prefetch_watcher;
+    // Wait for the prefetch's terminal status (recorded exactly once): the
+    // redirect response arrives over the network, so RunUntilIdle() could
+    // return while the prefetch is still in flight and the navigation below
+    // would cancel it instead of letting it fail on the invalid redirect.
+    base::RunLoop run_loop;
+    base::StatisticsRecorder::ScopedHistogramSampleObserver observer(
+        "Preloading.Prefetch.PrefetchStatus",
+        base::BindLambdaForTesting(
+            [&run_loop](std::string_view, uint64_t,
+                        base::HistogramBase::Sample32) { run_loop.Quit(); }));
     GetNewTabPagePreloadPipelineManager()->StartPrefetch(preload_url);
-    // TODO(crbug.com/421941586): There is no existing method to be notified of
-    // event completeness at the moment as mentioned in
-    // https://chromium-review.googlesource.com/c/chromium/src/+/7408336/comment/3da2c289_ff73b245/
-    // Consider plumbing event completeness notification to avoid RunUntilIdle
-    base::RunLoop().RunUntilIdle();
+    run_loop.Run();
   }
 
   // Simulate the navigation and flush the metrics.

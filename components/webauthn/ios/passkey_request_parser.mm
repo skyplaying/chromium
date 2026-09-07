@@ -5,6 +5,9 @@
 #import "components/webauthn/ios/passkey_request_parser.h"
 
 #import "base/base64url.h"
+#import "components/autofill/core/common/unique_ids.h"
+#import "components/autofill/ios/browser/autofill_util.h"
+#import "components/webauthn/core/browser/webauthn_security_utils.h"
 #import "device/fido/fido_user_verification_requirement.h"
 #import "device/fido/public/fido_constants.h"
 
@@ -16,23 +19,32 @@ namespace {
 constexpr char kEvent[] = "event";
 
 // Message event types.
+constexpr char kCancelRequest[] = "cancelRequest";
 constexpr char kHandleGetRequest[] = "handleGetRequest";
 constexpr char kHandleCreateRequest[] = "handleCreateRequest";
 constexpr char kLogGetRequest[] = "logGetRequest";
 constexpr char kLogCreateRequest[] = "logCreateRequest";
 constexpr char kLogGetResolved[] = "logGetResolved";
 constexpr char kLogCreateResolved[] = "logCreateResolved";
+constexpr char kSignalUnknownCredential[] = "signalUnknownCredential";
+constexpr char kSignalCurrentUserDetails[] = "signalCurrentUserDetails";
+constexpr char kSignalAllAcceptedCredentials[] = "signalAllAcceptedCredentials";
 
 // Parameters for logging events.
 constexpr char kCredentialId[] = "credentialId";
 constexpr char kRpId[] = "rpId";
 constexpr char kIsGpm[] = "isGpm";
+constexpr char kUserId[] = "userId";
+constexpr char kAllAcceptedCredentialIds[] = "allAcceptedCredentialIds";
 
 // Request ID associated with deferred promises.
 constexpr char kRequestId[] = "requestId";
 
 // Frame ID for handle* events.
 constexpr char kFrameId[] = "frameId";
+
+// Remote frame ID (token) for handle* events.
+constexpr char kRemoteFrameId[] = "remoteFrameId";
 
 // Common parameters of "handleGetRequest" and "handleCreateRequest" events.
 constexpr char kRequest[] = "request";
@@ -430,7 +442,17 @@ BuildRequestInfo(const base::DictValue& dict) {
     return base::unexpected(request_id.error());
   }
 
-  return IOSPasskeyClient::RequestInfo(*frame_id, *request_id);
+  const std::string* remote_frame_id = dict.FindString(kRemoteFrameId);
+  std::optional<autofill::RemoteFrameToken> remote_frame_token;
+  if (remote_frame_id && !remote_frame_id->empty()) {
+    if (std::optional<base::UnguessableToken> unguessable_token =
+            autofill::DeserializeJavaScriptFrameId(*remote_frame_id)) {
+      remote_frame_token = autofill::RemoteFrameToken(*unguessable_token);
+    }
+  }
+
+  return IOSPasskeyClient::RequestInfo(*frame_id, *request_id,
+                                       remote_frame_token);
 }
 
 base::expected<AssertionRequestParams, PasskeysParsingError>
@@ -522,14 +544,84 @@ base::DictValue ToAuthenticationExtensionsClientOutputsJSON(
   return extensions_dict;
 }
 
+std::optional<SignalUnknownCredentialParams> BuildSignalUnknownCredentialParams(
+    const base::DictValue& dict) {
+  const std::string* rp_id = dict.FindString(kRpId);
+  const std::string* credential_id_base64 = dict.FindString(kCredentialId);
+  if (!rp_id || rp_id->empty() || !credential_id_base64 ||
+      credential_id_base64->empty()) {
+    return std::nullopt;
+  }
+  std::optional<std::vector<uint8_t>> credential_id =
+      Base64UrlDecode(*credential_id_base64);
+  if (!credential_id.has_value()) {
+    return std::nullopt;
+  }
+  return SignalUnknownCredentialParams{*rp_id, *std::move(credential_id)};
+}
+
+std::optional<SignalCurrentUserDetailsParams>
+BuildSignalCurrentUserDetailsParams(const base::DictValue& dict) {
+  const std::string* rp_id = dict.FindString(kRpId);
+  const std::string* user_id_base64 = dict.FindString(kUserId);
+  const std::string* name = dict.FindString(kName);
+  const std::string* display_name = dict.FindString(kDisplayName);
+  if (!rp_id || rp_id->empty() || !user_id_base64 || user_id_base64->empty() ||
+      !name || !display_name) {
+    return std::nullopt;
+  }
+  std::optional<std::vector<uint8_t>> user_id =
+      Base64UrlDecode(*user_id_base64);
+  if (!user_id.has_value()) {
+    return std::nullopt;
+  }
+  return SignalCurrentUserDetailsParams{*rp_id, *std::move(user_id), *name,
+                                        *display_name};
+}
+
+std::optional<SignalAllAcceptedCredentialsParams>
+BuildSignalAllAcceptedCredentialsParams(const base::DictValue& dict) {
+  const std::string* rp_id = dict.FindString(kRpId);
+  const std::string* user_id_base64 = dict.FindString(kUserId);
+  const base::ListValue* credential_ids_list =
+      dict.FindList(kAllAcceptedCredentialIds);
+  if (!rp_id || rp_id->empty() || !user_id_base64 || user_id_base64->empty() ||
+      !credential_ids_list) {
+    return std::nullopt;
+  }
+  std::optional<std::vector<uint8_t>> user_id =
+      Base64UrlDecode(*user_id_base64);
+  if (!user_id.has_value()) {
+    return std::nullopt;
+  }
+  std::vector<std::vector<uint8_t>> all_accepted_credential_ids;
+  for (const base::Value& credential_id_value : *credential_ids_list) {
+    if (!credential_id_value.is_string()) {
+      return std::nullopt;
+    }
+    std::optional<std::vector<uint8_t>> credential_id =
+        Base64UrlDecode(credential_id_value.GetString());
+    if (!credential_id.has_value()) {
+      return std::nullopt;
+    }
+    all_accepted_credential_ids.push_back(*std::move(credential_id));
+  }
+  return SignalAllAcceptedCredentialsParams{
+      *rp_id, *std::move(user_id), std::move(all_accepted_credential_ids)};
+}
+
 std::optional<PasskeyScriptEvent> ParsePasskeyScriptEvent(
     const base::DictValue& dict,
+    const url::Origin& caller_origin,
     IsGpmPasskeyFunc is_gpm_passkey_func) {
   const std::string* event_string = dict.FindString(kEvent);
   if (!event_string || event_string->empty()) {
     return std::nullopt;
   }
 
+  if (*event_string == kCancelRequest) {
+    return PasskeyScriptEvent::kCancelRequest;
+  }
   if (*event_string == kHandleGetRequest) {
     return PasskeyScriptEvent::kHandleGetRequest;
   }
@@ -542,27 +634,52 @@ std::optional<PasskeyScriptEvent> ParsePasskeyScriptEvent(
   if (*event_string == kLogCreateRequest) {
     return PasskeyScriptEvent::kLogCreateRequest;
   }
-
-  if (*event_string == kLogGetResolved) {
-    const std::string* credential_id = dict.FindString(kCredentialId);
-    const std::string* rp_id = dict.FindString(kRpId);
-    if (!credential_id || credential_id->empty() || !rp_id || rp_id->empty()) {
-      return std::nullopt;
-    }
-    // Checks whether a passkey matching the provided rp ID and credential ID is
-    // present in the currently logged in user's GPM passkeys.
-    bool is_gpm = is_gpm_passkey_func(*rp_id, *credential_id);
-    return is_gpm ? PasskeyScriptEvent::kLogGetResolvedGpm
-                  : PasskeyScriptEvent::kLogGetResolvedNonGpm;
+  if (*event_string == kSignalUnknownCredential) {
+    return PasskeyScriptEvent::kSignalUnknownCredential;
+  }
+  if (*event_string == kSignalCurrentUserDetails) {
+    return PasskeyScriptEvent::kSignalCurrentUserDetails;
+  }
+  if (*event_string == kSignalAllAcceptedCredentials) {
+    return PasskeyScriptEvent::kSignalAllAcceptedCredentials;
   }
 
-  if (*event_string == kLogCreateResolved) {
-    std::optional<bool> is_gpm = dict.FindBool(kIsGpm);
-    if (!is_gpm.has_value()) {
+  bool is_log_get_resolved = (*event_string == kLogGetResolved);
+  bool is_log_create_resolved = (*event_string == kLogCreateResolved);
+  if (is_log_get_resolved || is_log_create_resolved) {
+    const std::string* rp_id = dict.FindString(kRpId);
+    if (!rp_id || rp_id->empty() ||
+        !OriginIsAllowedToClaimRelyingPartyId(*rp_id, caller_origin)) {
       return std::nullopt;
     }
-    return *is_gpm ? PasskeyScriptEvent::kLogCreateResolvedGpm
-                   : PasskeyScriptEvent::kLogCreateResolvedNonGpm;
+
+    if (is_log_get_resolved) {
+      const std::string* credential_id = dict.FindString(kCredentialId);
+      if (!credential_id || credential_id->empty()) {
+        return std::nullopt;
+      }
+      std::optional<std::vector<uint8_t>> decoded_credential_id =
+          Base64UrlDecode(*credential_id);
+      if (!decoded_credential_id.has_value()) {
+        return std::nullopt;
+      }
+      std::string credential_id_str(decoded_credential_id->begin(),
+                                    decoded_credential_id->end());
+      // Checks whether a passkey matching the provided rp ID and credential ID
+      // is present in the currently logged in user's GPM passkeys.
+      bool is_gpm = is_gpm_passkey_func(*rp_id, credential_id_str);
+      return is_gpm ? PasskeyScriptEvent::kLogGetResolvedGpm
+                    : PasskeyScriptEvent::kLogGetResolvedNonGpm;
+    }
+
+    if (is_log_create_resolved) {
+      std::optional<bool> is_gpm = dict.FindBool(kIsGpm);
+      if (!is_gpm.has_value()) {
+        return std::nullopt;
+      }
+      return *is_gpm ? PasskeyScriptEvent::kLogCreateResolvedGpm
+                     : PasskeyScriptEvent::kLogCreateResolvedNonGpm;
+    }
   }
 
   return std::nullopt;

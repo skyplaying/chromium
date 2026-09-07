@@ -103,8 +103,12 @@ NSString* const kNotificationCenter = @"notification_center";
 NSString* const kBanners = @"banners";
 
 // Returns the width and height of a single pixel in point.
-CGFloat GetPixelLength() {
-  return 1.0 / [UIScreen mainScreen].scale;
+CGFloat GetPixelLength(UITraitCollection* traitCollection) {
+  CGFloat scale = traitCollection.displayScale;
+  if (scale == 0) {
+    scale = 2.0;
+  }
+  return 1.0 / scale;
 }
 
 // Returns the width of the alert.
@@ -158,15 +162,15 @@ void AddSeparatorToStackView(UIStackView* stackView) {
   separator.translatesAutoresizingMaskIntoConstraints = NO;
   [stackView addArrangedSubview:separator];
   if (stackView.axis == UILayoutConstraintAxisHorizontal) {
-    [separator.widthAnchor constraintEqualToConstant:GetPixelLength()].active =
-        YES;
-    AddSameConstraintsToSides(stackView, separator,
-                              LayoutSides::kTop | LayoutSides::kBottom);
+    [separator.widthAnchor
+        constraintEqualToConstant:GetPixelLength(stackView.traitCollection)]
+        .active = YES;
+    AddSameConstraintsToSides(stackView, separator, LayoutSides::kVertical);
   } else {
-    [separator.heightAnchor constraintEqualToConstant:GetPixelLength()].active =
-        YES;
-    AddSameConstraintsToSides(stackView, separator,
-                              LayoutSides::kTrailing | LayoutSides::kLeading);
+    [separator.heightAnchor
+        constraintEqualToConstant:GetPixelLength(stackView.traitCollection)]
+        .active = YES;
+    AddSameConstraintsToSides(stackView, separator, LayoutSides::kHorizontal);
   }
 }
 
@@ -320,8 +324,8 @@ UIButton* GetButtonForAction(AlertAction* action) {
 
 }  // namespace
 
-@interface AlertViewController () <UITextFieldDelegate,
-                                   UIGestureRecognizerDelegate>
+@interface AlertViewController () <UIGestureRecognizerDelegate,
+                                   UITextFieldDelegate>
 
 // The actions for to this alert. `copy` for safety against mutable objects.
 @property(nonatomic, copy) NSArray<NSArray<AlertAction*>*>* actions;
@@ -389,6 +393,10 @@ UIButton* GetButtonForAction(AlertAction* action) {
   UIImageView* _checkmark;
 
   UIView* _progressIndicatorContainerView;
+
+  // Width constraint for the content view. Updated when the preferred content
+  // size category changes.
+  NSLayoutConstraint* _contentViewWidthConstraint;
 }
 
 #pragma mark - Public
@@ -413,18 +421,14 @@ UIButton* GetButtonForAction(AlertAction* action) {
   self.swipeRecognizer.enabled = NO;
   [self.contentView addGestureRecognizer:self.swipeRecognizer];
 
-  NSLayoutConstraint* widthConstraint =
+  _contentViewWidthConstraint =
       [self.contentView.widthAnchor constraintEqualToConstant:GetAlertWidth()];
-  widthConstraint.priority = UILayoutPriorityRequired - 1;
+  _contentViewWidthConstraint.priority = UILayoutPriorityRequired - 1;
 
-  [[NSNotificationCenter defaultCenter]
-      addObserverForName:UIContentSizeCategoryDidChangeNotification
-                  object:nil
-                   queue:[NSOperationQueue mainQueue]
-              usingBlock:^(NSNotification* _Nonnull note) {
-                widthConstraint.constant = GetAlertWidth();
-              }];
-  widthConstraint.active = YES;
+  [self
+      registerForTraitChanges:@[ UITraitPreferredContentSizeCategory.class ]
+                   withAction:@selector(preferredContentSizeCategoryDidChange)];
+  _contentViewWidthConstraint.active = YES;
   PositionContentViewInParentView(self.contentView, self.view);
 
   UIScrollView* scrollView = [[UIScrollView alloc] init];
@@ -491,9 +495,8 @@ UIButton* GetButtonForAction(AlertAction* action) {
                                                 kTitleHorizontalInset);
     }
 
-    AddSameConstraintsToSidesWithInsets(
-        titleLabel, self.contentView,
-        LayoutSides::kTrailing | LayoutSides::kLeading, titleInsets);
+    AddSameConstraintsToSidesWithInsets(titleLabel, self.contentView,
+                                        LayoutSides::kHorizontal, titleInsets);
   }
 
   if (self.shouldShowActivityIndicator) {
@@ -506,8 +509,8 @@ UIButton* GetButtonForAction(AlertAction* action) {
     _spinner.translatesAutoresizingMaskIntoConstraints = NO;
 
     _checkmark = [[UIImageView alloc] init];
-    _checkmark.image = DefaultSymbolWithPointSize(kCheckmarkCircleFillSymbol,
-                                                  kConfirmationSymbolPointSize);
+    _checkmark.image = SymbolWithPointSize(SymbolCheckmarkCircleFill,
+                                           kConfirmationSymbolPointSize);
     _checkmark.tintColor = [UIColor systemGreenColor];
     _checkmark.translatesAutoresizingMaskIntoConstraints = NO;
 
@@ -565,9 +568,9 @@ UIButton* GetButtonForAction(AlertAction* action) {
                                                   kMessageHorizontalInset);
     }
 
-    AddSameConstraintsToSidesWithInsets(
-        messageLabel, self.contentView,
-        LayoutSides::kTrailing | LayoutSides::kLeading, messageInsets);
+    AddSameConstraintsToSidesWithInsets(messageLabel, self.contentView,
+                                        LayoutSides::kHorizontal,
+                                        messageInsets);
   }
 
   if (self.imageLottieName) {
@@ -603,8 +606,7 @@ UIButton* GetButtonForAction(AlertAction* action) {
         NSDirectionalEdgeInsetsMake(0, kTextfieldStackInsetLeading, 0,
                                     kTextfieldStackInsetTrailing);
     AddSameConstraintsToSidesWithInsets(
-        self.textFieldStackHolder, self.contentView,
-        LayoutSides::kTrailing | LayoutSides::kLeading,
+        self.textFieldStackHolder, self.contentView, LayoutSides::kHorizontal,
         stackHolderContentInsets);
   }
 
@@ -627,10 +629,9 @@ UIButton* GetButtonForAction(AlertAction* action) {
           0, kButtonHorizontalInset, 0, kButtonHorizontalInset);
     }
 
-    AddSameConstraintsToSidesWithInsets(
-        buttonStackView, self.contentView,
-        LayoutSides::kLeading | LayoutSides::kTrailing,
-        buttonStackHorizontalInsets);
+    AddSameConstraintsToSidesWithInsets(buttonStackView, self.contentView,
+                                        LayoutSides::kHorizontal,
+                                        buttonStackHorizontalInsets);
   }
 
   [[NSNotificationCenter defaultCenter]
@@ -657,8 +658,7 @@ UIButton* GetButtonForAction(AlertAction* action) {
   };
   [self registerForTraitChanges:traits withHandler:handler];
 
-  traits = TraitCollectionSetForTraits(@[ UITraitUserInterfaceStyle.class ]);
-  [self registerForTraitChanges:traits
+  [self registerForTraitChanges:@[ UITraitUserInterfaceStyle.class ]
                      withAction:@selector(selectImageForCurrentStyle)];
 }
 
@@ -715,7 +715,8 @@ UIButton* GetButtonForAction(AlertAction* action) {
       _textFieldStackHolder.layer.borderColor =
           [UIColor colorNamed:kSeparatorColor].CGColor;
     }];
-    _textFieldStackHolder.layer.borderWidth = GetPixelLength();
+    _textFieldStackHolder.layer.borderWidth =
+        GetPixelLength(self.traitCollection);
     _textFieldStackHolder.clipsToBounds = YES;
     _textFieldStackHolder.backgroundColor =
         [UIColor colorNamed:kSecondaryBackgroundColor];
@@ -740,8 +741,7 @@ UIButton* GetButtonForAction(AlertAction* action) {
       NSDirectionalEdgeInsets fieldInsets = NSDirectionalEdgeInsetsMake(
           0.0, kTextfieldInset, 0.0, kTextfieldInset);
       AddSameConstraintsToSidesWithInsets(
-          textField, fieldStack, LayoutSides::kTrailing | LayoutSides::kLeading,
-          fieldInsets);
+          textField, fieldStack, LayoutSides::kHorizontal, fieldInsets);
     }
   }
   return _textFieldStackHolder;
@@ -823,7 +823,7 @@ UIButton* GetButtonForAction(AlertAction* action) {
     newButtonStackContainer.tag = kButtonStackViewTag;
     [mainContentStackView addArrangedSubview:newButtonStackContainer];
     AddSameConstraintsToSides(newButtonStackContainer, self.contentView,
-                              (LayoutSides::kTrailing | LayoutSides::kLeading));
+                              LayoutSides::kHorizontal);
   }
 }
 
@@ -879,6 +879,11 @@ UIButton* GetButtonForAction(AlertAction* action) {
 }
 
 #pragma mark - Private
+
+// Called when the preferred content size category changes.
+- (void)preferredContentSizeCategoryDidChange {
+  _contentViewWidthConstraint.constant = GetAlertWidth();
+}
 
 // Configures the image.
 - (void)configureAnimationViewWrapper {
@@ -1032,16 +1037,15 @@ UIButton* GetButtonForAction(AlertAction* action) {
         [button.widthAnchor constraintEqualToAnchor:firstButton.widthAnchor]
             .active = YES;
         AddSameConstraintsToSides(button, buttonsStackView,
-                                  (LayoutSides::kTop | LayoutSides::kBottom));
+                                  LayoutSides::kVertical);
       } else {
-        AddSameConstraintsToSides(
-            button, buttonsStackView,
-            (LayoutSides::kTrailing | LayoutSides::kLeading));
+        AddSameConstraintsToSides(button, buttonsStackView,
+                                  LayoutSides::kHorizontal);
       }
     }
     [verticalStackView addArrangedSubview:buttonsStackView];
     AddSameConstraintsToSides(buttonsStackView, verticalStackView,
-                              (LayoutSides::kTrailing | LayoutSides::kLeading));
+                              LayoutSides::kHorizontal);
   }
   return verticalStackView;
 }

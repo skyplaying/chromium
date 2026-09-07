@@ -14,20 +14,21 @@
 
 #include "base/callback_list.h"
 #include "base/functional/callback.h"
-#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/timer/timer.h"
-#include "base/uuid.h"
-#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "chrome/browser/ui/views/tabs/dragging/drag_session_data.h"
 #include "chrome/browser/ui/views/tabs/dragging/dragging_tabs_session.h"
 #include "chrome/browser/ui/views/tabs/dragging/tab_drag_context.h"
 #include "chrome/browser/ui/views/tabs/dragging/tab_drag_target.h"
-#include "chrome/browser/ui/views/tabs/tab_strip_types.h"
+#include "chrome/browser/ui/views/tabs/shared/tab_strip_types.h"
 #include "components/saved_tab_groups/public/tab_group_sync_service.h"
-#include "components/tab_groups/tab_group_visual_data.h"
+// Not used directly in this header, but required: without it, some other
+// //chrome/browser/ui:ui translation unit that never itself includes this
+// header (see split_tabs_button_interactive_ui_test.cc) fails to compile.
+// Verified via a real, from-scratch build -- do not remove based on grep or
+// IWYU alone.
 #include "components/tabs/public/split_tab_data.h"
 #include "components/webapps/common/web_app_id.h"
 #include "content/public/browser/render_widget_host_view.h"
@@ -56,7 +57,7 @@ class ViewTracker;
 namespace tabs {
 class TabModel;
 }
-class Browser;
+class BrowserWindowInterface;
 class EventTracker;
 class Tab;
 class TabDragControllerTest;
@@ -180,6 +181,9 @@ class TabDragController : public views::WidgetObserver,
     return drag_data_.group_header_id();
   }
 
+  // Used to track if tab group header was collapsed from dragging the header.
+  void SetGroupHeaderWasCollapsedFromDrag(bool was_collapsed_from_drag);
+
   bool IsMovingLastTab() const { return is_moving_last_tab_; }
 
   // Call when a tab was just added to the attached tabstrip. May end the drag.
@@ -260,7 +264,11 @@ class TabDragController : public views::WidgetObserver,
     // `can_release_capture_` is true.
     kWaitingToDragTabs,
     // The drag session has completed or been canceled.
-    kStopped
+    kStopped,
+    // The session is dragging a window, but must wait for the detached window
+    // to be shown (which may be deferred by InitialWebUI) before starting the
+    // nested move loop.
+    kWaitingForWindowToShow,
   };
 
   // Enumeration of the ways a drag session can end.
@@ -296,6 +304,17 @@ class TabDragController : public views::WidgetObserver,
     kMaxValue = kAbandoned
   };
   // LINT.ThenChange(//tools/metrics/histograms/metadata/tab/enums.xml:TabDraggingDestination)
+
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  // LINT.IfChange(TabDragPinnedness)
+  enum class TabDragPinnedness {
+    kAllUnpinned = 0,
+    kAllPinned = 1,
+    kMixed = 2,
+    kMaxValue = kMixed
+  };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/tab/enums.xml:TabDragPinnedness)
 
   // Overridden from views::WidgetObserver:
   void OnWidgetBoundsChanged(views::Widget* widget,
@@ -490,10 +509,12 @@ class TabDragController : public views::WidgetObserver,
   // If the user is dragging a single tab that is controlled by one web app,
   // and features::kTearOffWebAppTabOpensWebAppWindow is enabled,
   // returns the app id of that web app, nullopt otherwise.
-  std::optional<webapps::AppId> GetControllingAppForDrag(Browser* browser);
+  std::optional<webapps::AppId> GetControllingAppForDrag(
+      BrowserWindowInterface* browser);
 
-  // Creates and returns a new Browser to handle the drag.
-  Browser* CreateBrowserForDrag(TabDragContext* source, gfx::Size initial_size);
+  // Creates and returns a new BrowserWindowInterface to handle the drag.
+  BrowserWindowInterface* CreateBrowserForDrag(TabDragContext* source,
+                                               gfx::Size initial_size);
 
   // Returns the location of the cursor. This is either the location of the
   // mouse or the location of the current touch point.
@@ -584,6 +605,10 @@ class TabDragController : public views::WidgetObserver,
   // DraggedTabView is constructed.
   gfx::Point start_point_in_screen_;
 
+  // The restored bounds size of the source window at the start of the drag
+  // session. Used to calculate the dragged window size.
+  gfx::Size initial_window_size_;
+
   // Used to track the view that had focus in the window containing
   // `source_view_`. This is saved so that focus can be restored properly when
   // a drag begins and ends within this same window.
@@ -616,6 +641,11 @@ class TabDragController : public views::WidgetObserver,
 
   // Last location used in screen coordinates.
   gfx::Point last_point_in_screen_ = gfx::Point();
+
+#if BUILDFLAG(IS_MAC)
+  // The ID of the display the window was last sized for during a drag.
+  int64_t last_sized_display_id_ = display::kInvalidDisplayId;
+#endif
 
   // The following are needed when detaching into a browser
   // (`detach_into_browser_` is true).

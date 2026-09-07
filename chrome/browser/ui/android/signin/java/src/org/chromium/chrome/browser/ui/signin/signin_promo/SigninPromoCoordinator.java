@@ -4,6 +4,7 @@
 
 package org.chromium.chrome.browser.ui.signin.signin_promo;
 
+import static org.chromium.build.NullUtil.assertNonNull;
 import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.app.Activity;
@@ -14,11 +15,14 @@ import android.view.ViewGroup;
 
 import org.chromium.base.ResettersForTesting;
 import org.chromium.base.supplier.OneshotSupplierImpl;
+import org.chromium.base.supplier.SupplierUtils;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.profiles.Profile;
+import org.chromium.chrome.browser.signin.services.AccountPreviewDataService;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
 import org.chromium.chrome.browser.signin.services.ProfileDataCache;
+import org.chromium.chrome.browser.signin.services.SigninManager;
 import org.chromium.chrome.browser.sync.SyncServiceFactory;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.browser.ui.signin.BottomSheetSigninAndHistorySyncConfig;
@@ -30,7 +34,6 @@ import org.chromium.chrome.browser.ui.signin.SigninAndHistorySyncCoordinator;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.device_lock.DeviceLockActivityLauncher;
 import org.chromium.components.browser_ui.widget.impression.ImpressionTracker;
-import org.chromium.components.signin.AccountManagerFacadeProvider;
 import org.chromium.components.signin.SigninFeatureMap;
 import org.chromium.components.signin.SigninFeatures;
 import org.chromium.components.signin.identitymanager.IdentityManager;
@@ -79,16 +82,19 @@ public class SigninPromoCoordinator
         mDelegate = delegate;
         IdentityManager identityManager =
                 IdentityServicesProvider.get().getIdentityManager(profile);
-        assumeNonNull(identityManager);
         ProfileDataCache profileDataCache =
-                ProfileDataCache.createWithDefaultImageSizeAndNoBadge(mContext, identityManager);
+                ProfileDataCache.createWithDefaultImageSizeAndNoBadge(
+                        mContext, assertNonNull(identityManager));
         SyncService syncService = SyncServiceFactory.getForProfile(profile);
-        assumeNonNull(syncService);
+        SigninManager signinManager = IdentityServicesProvider.get().getSigninManager(profile);
+        AccountPreviewDataService accountPreviewDataService =
+                IdentityServicesProvider.get().getAccountPreviewDataService(profile);
         mMediator =
                 new SigninPromoMediator(
                         identityManager,
+                        assertNonNull(signinManager),
+                        accountPreviewDataService,
                         syncService,
-                        AccountManagerFacadeProvider.getInstance(),
                         profileDataCache,
                         delegate,
                         this);
@@ -104,7 +110,7 @@ public class SigninPromoCoordinator
      * @param activityResultTracker Tracker of activity results.
      * @param launcher Launcher of the sign-in flow.
      * @param bottomSheetController Used to interact with the bottom sheet.
-     * @param modalDialogManagerSupplier Supplies the {@link ModalDialogManager}.
+     * @param modalDialogManager The {@link ModalDialogManager}.
      * @param snackbarManager Manages snackbars shown in the app.
      * @param deviceLockActivityLauncher Launcher of the Device Lock Activity.
      * @param delegate A {@link SigninPromoDelegate} to customize the view.
@@ -116,7 +122,7 @@ public class SigninPromoCoordinator
             ActivityResultTracker activityResultTracker,
             SigninAndHistorySyncActivityLauncher launcher,
             Supplier<BottomSheetController> bottomSheetController,
-            Supplier<@Nullable ModalDialogManager> modalDialogManagerSupplier,
+            ModalDialogManager modalDialogManager,
             SnackbarManager snackbarManager,
             DeviceLockActivityLauncher deviceLockActivityLauncher,
             SigninPromoDelegate delegate) {
@@ -137,8 +143,8 @@ public class SigninPromoCoordinator
                         deviceLockActivityLauncher,
                         profileSupplier,
                         bottomSheetController,
-                        modalDialogManagerSupplier,
-                        snackbarManager,
+                        SupplierUtils.of(modalDialogManager),
+                        SupplierUtils.of(snackbarManager),
                         mDelegate.getAccessPoint());
     }
 
@@ -223,7 +229,8 @@ public class SigninPromoCoordinator
             case SigninAccessPoint.NTP_FEED_TOP_PROMO ->
                     R.layout.sync_promo_view_content_suggestions;
             case SigninAccessPoint.RECENT_TABS -> R.layout.sync_promo_view_recent_tabs;
-            default -> throw new IllegalArgumentException("Invalid sign-in promo access point");
+            default -> throw new IllegalArgumentException(
+                    "Invalid sign-in promo access point: " + accessPoint);
         };
     }
 }

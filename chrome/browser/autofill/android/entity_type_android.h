@@ -26,7 +26,10 @@ struct EntityTypeAndroid {
       JNIEnv* env,
       const jni_zero::JavaRef<jobject>& j_entity_type);
 
-  explicit EntityTypeAndroid(const EntityType& entity_type);
+  explicit EntityTypeAndroid(const EntityType& entity_type,
+                             bool is_enabled,
+                             bool is_eligible_for_wallet_storage,
+                             bool is_masked_storage_supported);
   EntityTypeAndroid(const EntityTypeAndroid&);
   EntityTypeAndroid& operator=(const EntityTypeAndroid&);
   EntityTypeAndroid(EntityTypeAndroid&&);
@@ -37,11 +40,18 @@ struct EntityTypeAndroid {
 
   EntityTypeName type_name;
   bool is_read_only;
+  bool is_enabled;
+  bool is_eligible_for_wallet_storage;
+  // TODO(crbug.com/501037715): Rename to `is_wallet_private_pass`.
+  bool is_masked_storage_supported;
   std::u16string type_name_as_string;
+  std::string type_name_as_metrics_string;
+  std::string type_name_section_title_string;
   std::string add_entity_type_string;
   std::string edit_entity_type_string;
   std::string delete_entity_type_string;
   std::vector<AttributeTypeAndroid> attribute_types;
+  std::vector<AttributeTypeAndroid> required_types;
 };
 
 }  // namespace autofill

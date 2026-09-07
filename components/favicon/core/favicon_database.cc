@@ -239,7 +239,6 @@ bool FaviconDatabase::IconMappingEnumerator::GetNextIconMapping(
 
 FaviconDatabase::FaviconDatabase()
     : db_(sql::DatabaseOptions()
-              .set_preload(true)
               // Favicons db only stores favicons, so we don't need that big a
               // page size or cache.
               .set_page_size(2048)
@@ -296,13 +295,9 @@ void FaviconDatabase::RollbackTransaction() {
 }
 
 void FaviconDatabase::Vacuum() {
-  DCHECK(db_.transaction_nesting() == 0)
+  DCHECK(!db_.HasActiveTransactions())
       << "Can not have a transaction when vacuuming.";
-  std::ignore = db_.Execute("VACUUM");
-}
-
-void FaviconDatabase::TrimMemory() {
-  db_.TrimMemory();
+  std::ignore = db_.Vacuum();
 }
 
 std::map<favicon_base::FaviconID, IconMappingsForExpiry>
@@ -1096,13 +1091,6 @@ sql::InitStatus FaviconDatabase::InitImpl(const base::FilePath& db_name) {
                         kCompatibleVersionNumber) ||
       !InitTables(&db_) || !InitIndices(&db_)) {
     return sql::INIT_FAILURE;
-  }
-
-  // Version check. We should not encounter a database too old for us to handle
-  // in the wild, so we try to continue in that case.
-  if (meta_table_.GetCompatibleVersionNumber() > kCurrentVersionNumber) {
-    LOG(WARNING) << "Favicon database is too new.";
-    return sql::INIT_TOO_NEW;
   }
 
   int cur_version = meta_table_.GetVersionNumber();

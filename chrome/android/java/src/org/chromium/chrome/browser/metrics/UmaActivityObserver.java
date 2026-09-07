@@ -10,6 +10,7 @@ import android.content.Context;
 import org.chromium.base.ActivityState;
 import org.chromium.base.ApplicationState;
 import org.chromium.base.ApplicationStatus;
+import org.chromium.base.ApplicationStatus.ActivityStateListener;
 import org.chromium.build.annotations.Initializer;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -38,8 +39,6 @@ public class UmaActivityObserver implements DestroyObserver {
     /** Activities that implement this interface manage their own UMA Session starting/ending. */
     public interface UmaSessionAwareActivity {}
 
-    private static ApplicationStatus.@Nullable ActivityStateListener sAppActivityListener;
-
     static {
         doStaticInit();
     }
@@ -47,24 +46,20 @@ public class UmaActivityObserver implements DestroyObserver {
     private static void doStaticInit() {
         // Handles the case where we open a non-UMA aware activity like Bookmarks over CTA, and then
         // the user hides the Bookmarks Activity (which should end the session).
-        sAppActivityListener =
-                new ApplicationStatus.ActivityStateListener() {
-                    @Override
-                    public void onActivityStateChange(Activity activity, int newState) {
-                        if (activity instanceof UmaSessionAwareActivity) return;
-                        if (newState != ActivityState.STOPPED
-                                && newState != ActivityState.DESTROYED) {
-                            return;
-                        }
-                        if (sActiveObserver == null) return;
-                        if (ApplicationStatus.getStateForApplication()
-                                == ApplicationState.HAS_RUNNING_ACTIVITIES) {
-                            return;
-                        }
-                        sActiveObserver.endUmaSessionInternal(false, true);
+        @Nullable ActivityStateListener appActivityListener =
+                (activity, newState) -> {
+                    if (activity instanceof UmaSessionAwareActivity) return;
+                    if (newState != ActivityState.STOPPED && newState != ActivityState.DESTROYED) {
+                        return;
                     }
+                    if (sActiveObserver == null) return;
+                    if (ApplicationStatus.getStateForApplication()
+                            == ApplicationState.HAS_RUNNING_ACTIVITIES) {
+                        return;
+                    }
+                    sActiveObserver.endUmaSessionInternal(false, true);
                 };
-        ApplicationStatus.registerStateListenerForAllActivities(sAppActivityListener);
+        ApplicationStatus.registerStateListenerForAllActivities(appActivityListener);
     }
 
     public UmaActivityObserver(
@@ -137,14 +132,6 @@ public class UmaActivityObserver implements DestroyObserver {
             UmaSessionStats.updateMetricsServiceState();
             mUmaSessionStats.startNewSession(mActivityType, tabModelSelector, permissionDelegate);
         }
-    }
-
-    /**
-     * Should be called whenever an Activity is paused, in case the Activity is killed before the
-     * Activity is stopped and the session is ended.
-     */
-    public void flushUmaSession() {
-        mUmaSessionStats.flushSession();
     }
 
     /**

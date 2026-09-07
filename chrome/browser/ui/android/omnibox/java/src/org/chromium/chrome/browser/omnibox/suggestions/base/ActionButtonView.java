@@ -13,7 +13,6 @@ import androidx.appcompat.widget.AppCompatImageView;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.omnibox.R;
-import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
 
 /**
  * A View that is displayed as an action button.
@@ -32,9 +31,7 @@ public class ActionButtonView extends AppCompatImageView {
         setClickable(true);
         setFocusable(true);
         setScaleType(ImageView.ScaleType.CENTER);
-        setForeground(
-                OmniboxResourceProvider.getDrawable(
-                        context, R.drawable.action_button_foreground_selector));
+        setForeground(context.getDrawable(R.drawable.action_button_foreground_selector));
     }
 
     /**
@@ -44,7 +41,11 @@ public class ActionButtonView extends AppCompatImageView {
      */
     public void enableShowOnlyOnFocus(boolean showOnlyOnFocus) {
         mShowOnlyOnFocus = showOnlyOnFocus;
-        setVisibility(mShowOnlyOnFocus ? View.GONE : View.VISIBLE);
+        if (mShowOnlyOnFocus) {
+            updateVisibility();
+        } else {
+            setVisibility(View.VISIBLE);
+        }
     }
 
     /**
@@ -74,7 +75,7 @@ public class ActionButtonView extends AppCompatImageView {
         setVisibility(
                 mParentHovered || mParentSelected || isHovered() || isPressed()
                         ? View.VISIBLE
-                        : View.GONE);
+                        : View.INVISIBLE);
     }
 
     @Override

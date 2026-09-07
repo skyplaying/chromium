@@ -22,16 +22,17 @@ import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.annotation.Config;
-import org.robolectric.shadows.ShadowLooper;
 import org.robolectric.shadows.ShadowSystemClock;
 
 import org.chromium.base.CallbackUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.PayloadCallbackHelper;
 import org.chromium.components.password_manager.core.browser.proto.ListPasswordsResult;
 import org.chromium.components.password_manager.core.browser.proto.PasswordWithLocalData;
 import org.chromium.components.signin.AccountUtils;
+import org.chromium.components.sync.protocol.DeletionOrigin;
 import org.chromium.components.sync.protocol.PasswordSpecificsData;
 
 import java.util.List;
@@ -41,9 +42,7 @@ import java.util.concurrent.TimeoutException;
 
 /** Tests for {@link FakePasswordStoreAndroidBackend}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(
-        manifest = Config.NONE,
-        shadows = {ShadowSystemClock.class})
+@Config(shadows = {ShadowSystemClock.class})
 public class FakePasswordStoreAndroidBackendTest {
     private FakePasswordStoreAndroidBackend mBackend;
 
@@ -104,7 +103,7 @@ public class FakePasswordStoreAndroidBackendTest {
                 successCallback::notifyCalled,
                 unexpected -> fail());
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         Map<Account, List<PasswordWithLocalData>> allPasswords = mBackend.getAllSavedPasswords();
         assertThat(successCallback.getCallCount(), is(1));
         assertThat(allPasswords.get(sTestAccount.get()), hasSize(1));
@@ -118,7 +117,7 @@ public class FakePasswordStoreAndroidBackendTest {
         PayloadCallbackHelper<byte[]> successCallback = new PayloadCallbackHelper<>();
         mBackend.getAllLogins(sTestAccount, successCallback::notifyCalled, unexpected -> fail());
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         ListPasswordsResult actualPasswords =
                 parseListPasswordResultOrFail(successCallback.getOnlyPayloadBlocking());
         ListPasswordsResult expectedPasswords =
@@ -138,7 +137,7 @@ public class FakePasswordStoreAndroidBackendTest {
         mBackend.getAutofillableLogins(
                 sTestAccount, successCallback::notifyCalled, unexpected -> fail());
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         ListPasswordsResult actualPasswords =
                 parseListPasswordResultOrFail(successCallback.getOnlyPayloadBlocking());
         ListPasswordsResult expectedPasswords =
@@ -160,7 +159,7 @@ public class FakePasswordStoreAndroidBackendTest {
                 successCallback::notifyCalled,
                 unexpected -> fail());
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         ListPasswordsResult actualPasswords =
                 parseListPasswordResultOrFail(successCallback.getOnlyPayloadBlocking());
         ListPasswordsResult expectedPasswords =
@@ -195,7 +194,7 @@ public class FakePasswordStoreAndroidBackendTest {
                 successCallback::notifyCalled,
                 unexpected -> fail());
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         Map<Account, List<PasswordWithLocalData>> allPasswords = mBackend.getAllSavedPasswords();
         assertThat(successCallback.getCallCount(), is(1));
         assertThat(allPasswords.get(sTestAccount.get()), hasSize(3));
@@ -227,7 +226,7 @@ public class FakePasswordStoreAndroidBackendTest {
                 successCallback::notifyCalled,
                 unexpected -> fail());
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         Map<Account, List<PasswordWithLocalData>> allPasswords = mBackend.getAllSavedPasswords();
         assertThat(successCallback.getCallCount(), is(1));
         assertThat(allPasswords.get(sTestAccount.get()), hasSize(4));
@@ -254,7 +253,36 @@ public class FakePasswordStoreAndroidBackendTest {
                 successCallback::notifyCalled,
                 unexpected -> fail());
 
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
+        Map<Account, List<PasswordWithLocalData>> allPasswords = mBackend.getAllSavedPasswords();
+        assertThat(successCallback.getCallCount(), is(1));
+        assertThat(allPasswords.get(sTestAccount.get()), hasSize(2));
+        assertThat(allPasswords, hasEntry(is(sTestAccount.get()), not(hasItem(sPwdWithLocalData))));
+    }
+
+    @Test
+    public void testRemoveLoginWithDeletionOrigin() throws TimeoutException {
+        fillPasswordStore();
+
+        CallbackHelper successCallback = new CallbackHelper();
+        PasswordSpecificsData removedLogin =
+                PasswordSpecificsData.newBuilder()
+                        .setUsernameValue(sPasswordData.getUsernameValue())
+                        .setUsernameElement(sPasswordData.getUsernameElement())
+                        .setPasswordElement(sPasswordData.getPasswordElement())
+                        .setOrigin(sPasswordData.getOrigin())
+                        .setSignonRealm(sPasswordData.getSignonRealm())
+                        .build();
+        DeletionOrigin deletionOrigin =
+                DeletionOrigin.newBuilder().setChromiumVersion("123.0.0.0").build();
+        mBackend.removeLogin(
+                removedLogin.toByteArray(),
+                deletionOrigin.toByteArray(),
+                sTestAccount,
+                successCallback::notifyCalled,
+                unexpected -> fail());
+
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
         Map<Account, List<PasswordWithLocalData>> allPasswords = mBackend.getAllSavedPasswords();
         assertThat(successCallback.getCallCount(), is(1));
         assertThat(allPasswords.get(sTestAccount.get()), hasSize(2));
@@ -277,7 +305,7 @@ public class FakePasswordStoreAndroidBackendTest {
                 sTestAccount,
                 CallbackUtils.emptyRunnable(),
                 unexpected -> fail());
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
     }
 
     private static @Nullable ListPasswordsResult parseListPasswordResultOrFail(

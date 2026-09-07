@@ -33,10 +33,12 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_EXPORTED_WEB_PLUGIN_CONTAINER_IMPL_H_
 
 #include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
 #include "third_party/blink/public/common/input/web_coalesced_input_event.h"
 #include "third_party/blink/public/common/input/web_touch_event.h"
 #include "third_party/blink/public/mojom/input/focus_type.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/input/pointer_lock_result.mojom-blink-forward.h"
+#include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-blink-forward.h"
 #include "third_party/blink/public/web/web_plugin_container.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
@@ -54,6 +56,7 @@ namespace blink {
 
 class Event;
 class GestureEvent;
+class GraphicsContext;
 class HTMLFrameOwnerElement;
 class HTMLPlugInElement;
 class KeyboardEvent;
@@ -89,8 +92,7 @@ class CORE_EXPORT WebPluginContainerImpl final
   void DetachFromLayout() override;
   // |paint_offset| is used to to paint the contents at the correct location.
   // It should be issued as a transform operation before painting the contents.
-  void Paint(GraphicsContext&,
-             PaintFlags,
+  void Paint(const PaintInfo&,
              const CullRect&,
              const gfx::Vector2d& paint_offset) const override;
   void UpdateGeometry() override;
@@ -104,6 +106,9 @@ class CORE_EXPORT WebPluginContainerImpl final
   bool CanProcessDrag() const;
   bool WantsWheelEvents() const;
   void UpdateAllLifecyclePhases();
+  void UpdateRenderThrottlingStatus(bool is_throttled,
+                                    bool subtree_throttled,
+                                    bool display_locked);
   void SetFocused(bool, mojom::blink::FocusType);
   void HandleEvent(Event&);
   bool IsErrorplaceholder();
@@ -120,7 +125,7 @@ class CORE_EXPORT WebPluginContainerImpl final
   void EnqueueMessageEvent(const WebDOMMessageEvent&) override;
   void Invalidate() override;
   void ScheduleAnimation() override;
-  void ReportGeometry() override;
+  void ReportGeometry() override { PropagateFrameRects(); }
   v8::Local<v8::Object> V8ObjectForElement() override;
   void LoadFrameRequest(const WebURLRequest&, const WebString& target) override;
   bool IsRectTopmost(const gfx::Rect&) override;
@@ -184,12 +189,14 @@ class CORE_EXPORT WebPluginContainerImpl final
   // method. Here we call Dispose() which does the correct virtual dispatch.
   void PreFinalize() { Dispose(); }
   void Dispose() override;
-  void SetFrameRect(const gfx::Rect&) override;
-  void PropagateFrameRects() override { ReportGeometry(); }
+  void SetFrameRect(const gfx::Rect& frame_rect) override;
 
   void MaybeLostMouseLock();
 
+  mojom::blink::WebFeature SvgFilterPaintedCounter() const override;
+
  protected:
+  void PropagateFrameRectsInternal() override;
   void ParentVisibleChanged() override;
 
  private:
@@ -218,6 +225,13 @@ class CORE_EXPORT WebPluginContainerImpl final
 
   void HandleLockMouseResult(mojom::blink::PointerLockResult result);
 
+  // Forwards the combined render-throttling state to |web_plugin_|. The
+  // effective display-locked bit is the OR of the containing frame's own
+  // display-lock (pushed via UpdateRenderThrottlingStatus) and any display lock
+  // on the plugin element or one of its same-document ancestors (recomputed in
+  // UpdateAllLifecyclePhases).
+  void SendThrottlingStatus();
+
   void SynthesizeMouseEventIfPossible(TouchEvent&);
 
   void FocusPlugin();
@@ -231,10 +245,20 @@ class CORE_EXPORT WebPluginContainerImpl final
 
   Member<HTMLPlugInElement> element_;
   Member<MouseLockLostListener> mouse_lock_lost_listener_;
-  WebPlugin* web_plugin_;
-  cc::Layer* layer_ = nullptr;
+  raw_ptr<WebPlugin, UnprotectedInRelease | DanglingUntriaged> web_plugin_;
+  raw_ptr<cc::Layer, UnprotectedInRelease | DanglingUntriaged> layer_ = nullptr;
   TouchEventRequestType touch_event_request_type_ = kTouchEventRequestTypeNone;
   bool wants_wheel_events_ = false;
+
+  // Cached render-throttling state. The first three values are updated when
+  // LocalFrameView propagates its throttling state through
+  // UpdateRenderThrottlingStatus(). |element_display_locked_| is recomputed
+  // during lifecycle updates. Keeping the display-lock sources separate
+  // prevents either update path from overwriting the other.
+  bool is_throttled_ = false;
+  bool subtree_throttled_ = false;
+  bool frame_display_locked_ = false;
+  bool element_display_locked_ = false;
 };
 
 template <>

@@ -78,7 +78,11 @@ void FacilitatedPaymentsDriver::OnTextCopiedToClipboard(
     const std::optional<GURL>& iframe_url,
     const url::Origin& main_frame_origin,
     const std::u16string& copied_text,
-    ukm::SourceId ukm_source_id) {
+    ukm::SourceId ukm_source_id,
+    bool is_same_origin) {
+  if (!IsSecureForPaymentHandling()) {
+    return;
+  }
   std::string copied_text_utf8 = base::UTF16ToUTF8(copied_text);
   // Even if the feature is not enabled, always run the Rust validator to log
   // metrics about whether or not the results agree.
@@ -99,14 +103,32 @@ void FacilitatedPaymentsDriver::OnTextCopiedToClipboard(
   } else if (!PixCodeValidator::ContainsPixIdentifier(copied_text_utf8)) {
     return;
   }
+  if (iframe_url.has_value()) {
+    if (iframe_url->is_empty()) {
+      LogPixIframeUrlType(PixIframeUrlType::kEmpty);
+    } else if (iframe_url->IsAboutBlank()) {
+      LogPixIframeUrlType(PixIframeUrlType::kAboutBlank);
+    } else if (iframe_url->IsAboutSrcdoc()) {
+      LogPixIframeUrlType(PixIframeUrlType::kAboutSrcDoc);
+    } else if (is_same_origin) {
+      LogPixIframeUrlType(PixIframeUrlType::kNonEmptyAndSameOriginAsMainFrame);
+    } else {
+      LogPixIframeUrlType(PixIframeUrlType::kOtherNonEmptyUrl);
+    }
+
+    if (iframe_url->is_empty() || iframe_url->IsAboutBlank() ||
+        iframe_url->IsAboutSrcdoc()) {
+      LogPixIframeIsSameOriginAsMainFrame(is_same_origin);
+    }
+  }
   if (!pix_manager_) {
     pix_manager_ = std::make_unique<PixManager>(
         &facilitated_payments_client_.get(), api_client_creator_,
         facilitated_payments_client_->GetOptimizationGuideDecider());
   }
   pix_manager_->OnPixCodeCopiedToClipboard(
-      main_frame_url, iframe_url, main_frame_origin, rust_validation_result,
-      std::move(copied_text_utf8), ukm_source_id);
+      main_frame_url, iframe_url, main_frame_origin, is_same_origin,
+      rust_validation_result, std::move(copied_text_utf8), ukm_source_id);
 }
 
 void FacilitatedPaymentsDriver::TriggerPaymentLinkPushPayment(

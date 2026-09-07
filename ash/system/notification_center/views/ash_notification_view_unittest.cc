@@ -71,6 +71,8 @@
 #include "ui/views/layout/layout_types.h"
 #include "ui/views/test/button_test_api.h"
 #include "ui/views/test/views_test_utils.h"
+#include "ui/views/view_tracker.h"
+#include "ui/views/view_utils.h"
 
 namespace ash {
 
@@ -210,6 +212,22 @@ class MockAshNotificationDragDropDelegate
 
   base::WeakPtrFactory<MockAshNotificationDragDropDelegate> weak_ptr_factory_{
       this};
+};
+
+class DeleteOnExpandDelegate : public message_center::NotificationDelegate {
+ public:
+  explicit DeleteOnExpandDelegate(base::RepeatingClosure delete_closure)
+      : delete_closure_(delete_closure) {}
+
+  void ExpandStateChanged(bool expanded) override {
+    if (delete_closure_) {
+      delete_closure_.Run();
+    }
+  }
+
+ private:
+  ~DeleteOnExpandDelegate() override = default;
+  base::RepeatingClosure delete_closure_;
 };
 
 }  // namespace
@@ -464,6 +482,11 @@ class AshNotificationViewTestBase : public AshTestBase,
   }
   IconButton* GetSnoozeButton(AshNotificationView* view) {
     return view->snooze_button_;
+  }
+
+  void AnimateResizeAfterRemoval(AshNotificationView* view,
+                                 views::View* to_be_removed) {
+    view->AnimateResizeAfterRemoval(to_be_removed);
   }
 
   scoped_refptr<NotificationTestDelegate> delegate() { return delegate_; }
@@ -1183,41 +1206,6 @@ TEST_F(AshNotificationViewTest, InlineSettingsAnimationsRecordSmoothness) {
       /*data_point_count=*/2);
 }
 
-TEST_F(AshNotificationViewTest,
-       GroupNotificationSlideOutAnimationRecordSmoothness) {
-  base::HistogramTester histograms;
-
-  message_center::MessageCenter::Get()->RemoveAllNotifications(
-      /*by_user=*/true, message_center::MessageCenter::RemoveType::ALL);
-
-  auto notification = CreateTestNotification();
-
-  notification_center_test_api()->ToggleBubble();
-  auto* notification_view =
-      GetNotificationViewFromMessageCenter(notification->id());
-  MakeNotificationGroupParent(
-      notification_view,
-      2 * message_center_style::kMaxGroupedNotificationsInCollapsedState);
-
-  notification_view->ToggleExpand();
-  EXPECT_TRUE(notification_view->IsExpanded());
-
-  // Enable animations.
-  gfx::ScopedAnimationDurationScaleMode duration(
-      gfx::ScopedAnimationDurationScaleMode::FAST_DURATION);
-
-  auto* child_view = GetFirstGroupedChildNotificationView(notification_view);
-  notification_view->RemoveGroupNotification(child_view->notification_id());
-
-  base::HistogramTester histogram;
-
-  // The child view should slide out before being deleted and the smoothness
-  // should be recorded.
-  CheckSmoothnessRecorded(
-      histograms, child_view,
-      "Ash.Notification.GroupNotification.SlideOut.AnimationSmoothness");
-}
-
 TEST_F(AshNotificationViewTest, RecordExpandButtonClickAction) {
   base::HistogramTester histograms;
   auto notification = CreateTestNotification();
@@ -1321,6 +1309,46 @@ TEST_F(AshNotificationViewTest, DuplicateGroupChildRemovalWithAnimation) {
   auto* child_view = GetFirstGroupedChildNotificationView(notification_view);
   notification_view->RemoveGroupNotification(child_view->notification_id());
   notification_view->RemoveGroupNotification(child_view->notification_id());
+}
+
+TEST_F(AshNotificationViewTest,
+       RemoveGroupNotificationDuringWindowDestruction) {
+  // Test when window is null.
+  auto notification = CreateTestNotification();
+  auto standalone_view = std::make_unique<AshNotificationView>(
+      *notification, /*shown_in_popup=*/false);
+  MakeNotificationGroupParent(standalone_view.get(), 2);
+  auto* child = GetFirstGroupedChildNotificationView(standalone_view.get());
+  // Calling AnimateResizeAfterRemoval when window is null should not crash and
+  // should remove the child view.
+  AnimateResizeAfterRemoval(standalone_view.get(), child);
+  EXPECT_EQ(GetChildNotifications(standalone_view.get()).size(), 0u);
+
+  // Test when window is being destroyed.
+  notification_center_test_api()->ToggleBubble();
+  auto notification2 = CreateTestNotification();
+  auto* notification_view =
+      GetNotificationViewFromMessageCenter(notification2->id());
+  MakeNotificationGroupParent(
+      notification_view,
+      2 * message_center_style::kMaxGroupedNotificationsInCollapsedState);
+
+  notification_view->ToggleExpand();
+  EXPECT_TRUE(notification_view->IsExpanded());
+
+  auto* child_view = GetFirstGroupedChildNotificationView(notification_view);
+  std::string child_id = child_view->notification_id();
+
+  // Enable animations so that SlideOutView starts an animation.
+  gfx::ScopedAnimationDurationScaleMode duration(
+      gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
+
+  notification_view->RemoveGroupNotification(child_id);
+
+  // Close the widget immediately. This destroys the native window, completing
+  // all layer animations and triggering AnimateResizeAfterRemoval while the
+  // window is being destroyed. This should not crash.
+  notification_view->GetWidget()->CloseNow();
 }
 
 // Regression test for b/253668543. Ensures toggling the expand state for a
@@ -1871,19 +1899,8 @@ TEST_P(AshNotificationViewDragTest, Basics) {
       EXPECT_CALL(drag_drop_delegate(), HandleHtmlData);
     }
   }
-  base::HistogramTester tester;
   DragAndDropNotification(*GetViewForNotificationId(notification->id()),
                           DroppedToWidget());
-
-  // Check the notification catalog name.
-  tester.ExpectBucketCount("Ash.NotificationView.ImageDrag.Start",
-                           NotificationCatalogName::kNone, 1);
-  tester.ExpectBucketCount(
-      "Ash.NotificationView.ImageDrag.EndState",
-      DroppedToWidget()
-          ? AshNotificationDragController::DragEndState::kCompletedWithDrop
-          : AshNotificationDragController::DragEndState::kCompletedWithoutDrop,
-      1);
 
   // The the message center bubble is closed and the popup notification is
   // dismissed when drag ends.
@@ -2224,14 +2241,9 @@ TEST_P(ScreenCaptureNotificationViewDragTest, Basics) {
   // Drag to the center of `widget` then release. Verify that the screenshot
   // image carried by the drag data is handled.
   EXPECT_CALL(drag_drop_delegate(), HandleFilePathData(image_file_path));
-  base::HistogramTester tester;
   DragAndDropNotification(
       *GetViewForNotificationId(kScreenCaptureNotificationId),
       /*drag_to_widget=*/true);
-
-  // Check the notification catalog name.
-  tester.ExpectBucketCount("Ash.NotificationView.ImageDrag.Start",
-                           NotificationCatalogName::kScreenCapture, 1);
 }
 
 class DragAfterNotificationRemovalTest
@@ -2272,6 +2284,140 @@ TEST_F(DragAfterNotificationRemovalTest, Basics) {
 
   // Drag should NOT start.
   EXPECT_FALSE(notification_view->GetWidget()->dragged_view());
+}
+
+TEST_F(AshNotificationViewTest, TestDeleteOnToggleInlineSettings) {
+  auto* test_api = notification_center_test_api();
+  base::RepeatingClosure delete_closure = base::BindRepeating(
+      [](NotificationCenterTestApi* test_api, const std::string& id) {
+        auto* view = views::AsViewClass<AshNotificationView>(
+            test_api->GetNotificationViewForId(id));
+        if (view && view->GetWidget()) {
+          view->GetWidget()->CloseNow();
+        }
+      },
+      base::Unretained(test_api), "id");
+
+  scoped_refptr<DeleteOnExpandDelegate> delegate =
+      base::MakeRefCounted<DeleteOnExpandDelegate>(delete_closure);
+
+  message_center::RichNotificationData data;
+  data.settings_button_handler = message_center::SettingsButtonHandler::INLINE;
+  std::unique_ptr<Notification> notification = std::make_unique<Notification>(
+      message_center::NOTIFICATION_TYPE_SIMPLE, "id", u"title", u"message",
+      ui::ImageModel(), u"display source", GURL(),
+      message_center::NotifierId(message_center::NotifierType::APPLICATION,
+                                 "extension_id"),
+      data, delegate);
+
+  message_center::MessageCenter::Get()->AddNotification(
+      std::move(notification));
+
+  notification_center_test_api()->ToggleBubble();
+  auto* view = views::AsViewClass<AshNotificationView>(
+      notification_center_test_api()->GetNotificationViewForId("id"));
+  ASSERT_TRUE(view);
+
+  views::ViewTracker tracker(view);
+
+  // Toggle inline settings. This calls SetExpanded, which triggers
+  // ExpandStateChanged in the delegate, deleting the view.
+  // Without the weak ptr check, this will crash/UAF.
+  view->ToggleInlineSettings(ui::test::TestEvent());
+
+  EXPECT_EQ(tracker.view(), nullptr);
+
+  message_center::MessageCenter::Get()->RemoveNotification("id",
+                                                           /*by_user=*/false);
+}
+
+TEST_F(AshNotificationViewTest, TestDeleteOnToggleSnoozeSettings) {
+  auto* test_api = notification_center_test_api();
+  base::RepeatingClosure delete_closure = base::BindRepeating(
+      [](NotificationCenterTestApi* test_api, const std::string& id) {
+        auto* view = views::AsViewClass<AshNotificationView>(
+            test_api->GetNotificationViewForId(id));
+        if (view && view->GetWidget()) {
+          view->GetWidget()->CloseNow();
+        }
+      },
+      base::Unretained(test_api), "id");
+
+  scoped_refptr<DeleteOnExpandDelegate> delegate =
+      base::MakeRefCounted<DeleteOnExpandDelegate>(delete_closure);
+
+  message_center::RichNotificationData data;
+  data.should_show_snooze_button = true;
+  std::unique_ptr<Notification> notification = std::make_unique<Notification>(
+      message_center::NOTIFICATION_TYPE_SIMPLE, "id", u"title", u"message",
+      ui::ImageModel(), u"display source", GURL(),
+      message_center::NotifierId(message_center::NotifierType::APPLICATION,
+                                 "extension_id"),
+      data, delegate);
+
+  message_center::MessageCenter::Get()->AddNotification(
+      std::move(notification));
+
+  notification_center_test_api()->ToggleBubble();
+  auto* view = views::AsViewClass<AshNotificationView>(
+      notification_center_test_api()->GetNotificationViewForId("id"));
+  ASSERT_TRUE(view);
+  view->set_snooze_settings_enabled(true);
+
+  views::ViewTracker tracker(view);
+
+  // Toggle snooze settings. This calls SetExpanded, which triggers
+  // ExpandStateChanged in the delegate, deleting the view.
+  // Without the weak ptr check, this will crash/UAF.
+  view->ToggleSnoozeSettings(ui::test::TestEvent());
+
+  EXPECT_EQ(tracker.view(), nullptr);
+
+  message_center::MessageCenter::Get()->RemoveNotification("id",
+                                                           /*by_user=*/false);
+}
+
+TEST_F(AshNotificationViewTest, TestDeleteOnToggleExpand) {
+  auto* test_api = notification_center_test_api();
+  base::RepeatingClosure delete_closure = base::BindRepeating(
+      [](NotificationCenterTestApi* test_api, const std::string& id) {
+        auto* view = views::AsViewClass<AshNotificationView>(
+            test_api->GetNotificationViewForId(id));
+        if (view && view->GetWidget()) {
+          view->GetWidget()->CloseNow();
+        }
+      },
+      base::Unretained(test_api), "id");
+
+  scoped_refptr<DeleteOnExpandDelegate> delegate =
+      base::MakeRefCounted<DeleteOnExpandDelegate>(delete_closure);
+
+  std::unique_ptr<Notification> notification = std::make_unique<Notification>(
+      message_center::NOTIFICATION_TYPE_SIMPLE, "id", u"title", u"message",
+      ui::ImageModel(), u"display source", GURL(),
+      message_center::NotifierId(message_center::NotifierType::APPLICATION,
+                                 "extension_id"),
+      message_center::RichNotificationData(), delegate);
+
+  message_center::MessageCenter::Get()->AddNotification(
+      std::move(notification));
+
+  notification_center_test_api()->ToggleBubble();
+  auto* view = views::AsViewClass<AshNotificationView>(
+      notification_center_test_api()->GetNotificationViewForId("id"));
+  ASSERT_TRUE(view);
+
+  views::ViewTracker tracker(view);
+
+  // Toggle expand. This calls SetExpanded, which triggers
+  // ExpandStateChanged in the delegate, deleting the view.
+  // Without the weak ptr check, this will crash/UAF.
+  view->ToggleExpand();
+
+  EXPECT_EQ(tracker.view(), nullptr);
+
+  message_center::MessageCenter::Get()->RemoveNotification("id",
+                                                           /*by_user=*/false);
 }
 
 }  // namespace ash

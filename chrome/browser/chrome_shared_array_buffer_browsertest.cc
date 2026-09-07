@@ -6,7 +6,8 @@
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/policy/core/common/policy_map.h"
@@ -42,7 +43,7 @@ class ChromeSharedArrayBufferBrowserTest : public PolicyTest {
 
   void SetPolicyAndRestartBrowser() {
     // The preference is false by default.
-    EXPECT_FALSE(browser()->profile()->GetPrefs()->GetBoolean(
+    EXPECT_FALSE(browser()->GetProfile()->GetPrefs()->GetBoolean(
         prefs::kSharedArrayBufferUnrestrictedAccessAllowed));
 
     PolicyMap policies;
@@ -52,7 +53,7 @@ class ChromeSharedArrayBufferBrowserTest : public PolicyTest {
     UpdateProviderPolicy(policies);
 
     // Now the preference should be true.
-    EXPECT_TRUE(browser()->profile()->GetPrefs()->GetBoolean(
+    EXPECT_TRUE(browser()->GetProfile()->GetPrefs()->GetBoolean(
         prefs::kSharedArrayBufferUnrestrictedAccessAllowed));
 
     // The old browser has already created the ContentBrowserClient which reads
@@ -60,7 +61,7 @@ class ChromeSharedArrayBufferBrowserTest : public PolicyTest {
     // Create a new browser that will pick up the preference and enable SABs for
     // new renderer processes.
     BrowserWindowInterface* const new_browser =
-        CreateBrowser(browser()->profile());
+        CreateBrowser(browser()->GetProfile());
     CloseBrowserSynchronously(browser());
     SetBrowser(new_browser);
     ASSERT_EQ(browser(), new_browser);

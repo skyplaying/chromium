@@ -8,6 +8,7 @@
 #include "components/history/core/browser/features.h"
 #include "components/history/core/browser/history_types.h"
 #include "components/search_engines/template_url_service.h"
+#include "ui/base/page_transition_types.h"
 
 ChromeTemplateURLServiceClient::ChromeTemplateURLServiceClient(
     history::HistoryService* history_service)
@@ -75,16 +76,14 @@ void ChromeTemplateURLServiceClient::OnURLVisited(
     return;
   }
 
-#if !BUILDFLAG(IS_ANDROID)
   // Filter out `SOURCE_ACTOR` visits to prevent them from informing search
   // recommendations and impacting user journeys.
   // TODO(crbug.com/464331451): Add tests to check that `SOURCE ACTOR` visits
   // are dropped.
-  if (history::IsBrowsingHistoryActorIntegrationM2Enabled() &&
-      visited_url_info.visit_row.source == history::SOURCE_ACTOR) {
+  CHECK(visited_url_info.visit_row.source.has_value());
+  if (visited_url_info.visit_row.source.value() == history::SOURCE_ACTOR) {
     return;
   }
-#endif  // !BUILDFLAG(IS_ANDROID)
 
   TemplateURLService::URLVisitedDetails visited_details;
   visited_details.url = visited_url_info.url_row.url();

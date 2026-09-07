@@ -8,6 +8,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include "base/synchronization/lock.h"
 #include "base/threading/thread_checker.h"
@@ -164,7 +165,7 @@ class PermissionsData {
   // "runtime" or "browserAction".
   // TODO(mpcomplete): drop the "API" from these names, it's confusing.
   bool HasAPIPermission(mojom::APIPermissionID permission) const;
-  bool HasAPIPermission(const std::string& permission_name) const;
+  bool HasAPIPermission(std::string_view permission_name) const;
   bool HasAPIPermissionForTab(int tab_id,
                               mojom::APIPermissionID permission) const;
   bool CheckAPIPermissionWithParam(
@@ -207,6 +208,11 @@ class PermissionsData {
   PageAccess GetPageAccess(const GURL& document_url,
                            int tab_id,
                            std::string* error) const;
+
+  // Returns true if there's a user host restriction that blocks `document_url`,
+  // unless there is one that explicitly allows it. Returns false if feature
+  // kExtensionsMenuAccessControl is not enabled.
+  bool IsUrlBlockedByUser(const GURL& document_url) const;
 
   // Returns true if the associated extension has permission to inject a
   // content script on the page.

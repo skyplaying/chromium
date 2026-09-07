@@ -8,7 +8,7 @@
 #include <string>
 #include <tuple>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -22,7 +22,8 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/subresource_filter/subresource_filter_browser_test_harness.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
@@ -43,6 +44,7 @@
 #include "components/subresource_filter/core/mojom/subresource_filter.mojom.h"
 #include "components/ukm/test_ukm_recorder.h"
 #include "content/public/browser/back_forward_cache.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/common/content_features.h"
@@ -51,12 +53,14 @@
 #include "content/public/common/url_constants.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "content/public/test/test_devtools_protocol_client.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "media/base/media_switches.h"
 #include "net/base/net_errors.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/controllable_http_response.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+#include "net/test/embedded_test_server/expectation_handler.h"
 #include "net/test/embedded_test_server/request_handler_util.h"
 #include "pdf/buildflags.h"
 #include "services/metrics/public/cpp/metrics_utils.h"
@@ -66,6 +70,8 @@
 #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-shared.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/views/test/widget_activation_waiter.h"
 #include "url/gurl.h"
@@ -123,18 +129,14 @@ class AdsPageLoadMetricsObserverBrowserTest
   std::unique_ptr<page_load_metrics::PageLoadMetricsTestWaiter>
   CreatePageLoadMetricsTestWaiter() {
     content::WebContents* web_contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
     return std::make_unique<page_load_metrics::PageLoadMetricsTestWaiter>(
         web_contents);
   }
 
-  void SetUp() override {
-    std::vector<base::test::FeatureRef> enabled = {
-        subresource_filter::kAdTagging};
-    std::vector<base::test::FeatureRef> disabled = {};
-
-    scoped_feature_list_.InitWithFeatures(enabled, disabled);
-    subresource_filter::SubresourceFilterBrowserTest::SetUp();
+  base::flat_set<base::test::FeatureRef> GetSubresourceFilterEnabledFeatures()
+      const override {
+    return {subresource_filter::kAdTagging};
   }
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
@@ -154,9 +156,6 @@ class AdsPageLoadMetricsObserverBrowserTest
     // Ensure browser is active so that the expected dimensions are correct.
     ui_test_utils::BrowserActivationWaiter(browser()).WaitForActivation();
   }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 // Test that an embedded ad is same origin.
@@ -264,7 +263,7 @@ IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverBrowserTest,
   waiter->Wait();
 
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
 
   int scrollbar_width =
       EvalJs(web_contents,
@@ -342,7 +341,7 @@ IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverBrowserTest,
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
 
   page_load_metrics::AddTextAndWaitForFirstContentfulPaint(web_contents,
                                                            waiter.get());
@@ -401,7 +400,7 @@ IN_PROC_BROWSER_TEST_F(
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
 
   page_load_metrics::AddTextAndWaitForFirstContentfulPaint(web_contents,
                                                            waiter.get());
@@ -469,7 +468,7 @@ IN_PROC_BROWSER_TEST_F(
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
 
   page_load_metrics::AddTextAndWaitForFirstContentfulPaint(web_contents,
                                                            waiter.get());
@@ -554,12 +553,12 @@ IN_PROC_BROWSER_TEST_F(
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
 
   page_load_metrics::AddTextAndWaitForFirstContentfulPaint(web_contents,
                                                            waiter.get());
 
-  int original_tab_index = browser()->tab_strip_model()->active_index();
+  int original_tab_index = browser()->GetTabStripModel()->active_index();
 
   // Open a new tab, which backgrounds the original web_contents.
   ui_test_utils::NavigateToURLWithDisposition(
@@ -591,7 +590,7 @@ IN_PROC_BROWSER_TEST_F(
   // Switch back to the original tab. This should trigger the renderer to detect
   // the ad and report its geometry.
   waiter->SetMainFrameAdRectsExpectation();
-  browser()->tab_strip_model()->ActivateTabAt(original_tab_index);
+  browser()->GetTabStripModel()->ActivateTabAt(original_tab_index);
   waiter->Wait();
 
   // Wait for 0.5 seconds to allow time for ad density to accumulate now that
@@ -636,7 +635,7 @@ IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverBrowserTest,
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
 
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
 
   page_load_metrics::AddTextAndWaitForFirstContentfulPaint(web_contents,
                                                            waiter.get());
@@ -670,7 +669,7 @@ IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverBrowserTest,
   EXPECT_TRUE(ExecJs(web_contents, create_image_script));
   waiter->Wait();
 
-  int original_tab_index = browser()->tab_strip_model()->active_index();
+  int original_tab_index = browser()->GetTabStripModel()->active_index();
 
   // Open a new tab, which backgrounds the original web_contents.
   ui_test_utils::NavigateToURLWithDisposition(
@@ -707,7 +706,7 @@ IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverBrowserTest,
   // Switch back to the original tab, and wait for the removal event (a new,
   // empty rectangle).
   waiter->SetMainFrameAdRectsExpectation();
-  browser()->tab_strip_model()->ActivateTabAt(original_tab_index);
+  browser()->GetTabStripModel()->ActivateTabAt(original_tab_index);
   waiter->Wait();
   EXPECT_TRUE(waiter->DidObserveMainFrameAdRect(gfx::Rect(0, 0, 0, 0)));
 
@@ -761,7 +760,7 @@ IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverBrowserTest,
   ukm::TestAutoSetUkmRecorder ukm_recorder;
   auto waiter = CreatePageLoadMetricsTestWaiter();
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
 
   // Evaluate the height and width of the page as the browser_test can
   // vary the dimensions.
@@ -772,7 +771,7 @@ IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverBrowserTest,
 
   // Expectation is before NavigateToUrl for this test as the expectation can be
   // met after NavigateToUrl and before the Wait.
-  waiter->AddMainFrameIntersectionExpectation(
+  waiter->AddMainFrameRectExpectation(
       gfx::Rect(0, 0, document_width,
                 document_height));  // Initial main frame rect.
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
@@ -780,7 +779,7 @@ IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverBrowserTest,
       embedded_test_server()->GetURL(
           "a.com", "/ads_observer/blank_with_adiframe_writer.html")));
   waiter->Wait();
-  web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+  web_contents = browser()->GetTabStripModel()->GetActiveWebContents();
 
   page_load_metrics::AddTextAndWaitForFirstContentfulPaint(web_contents,
                                                            waiter.get());
@@ -864,7 +863,7 @@ IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverBrowserTest,
   ukm::TestAutoSetUkmRecorder ukm_recorder;
   auto waiter = CreatePageLoadMetricsTestWaiter();
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
 
   int document_height =
       EvalJs(web_contents, "document.body.scrollHeight").ExtractInt();
@@ -873,7 +872,7 @@ IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverBrowserTest,
 
   // Expectation is before NavigateToUrl for this test as the expectation can be
   // met after NavigateToUrl and before the Wait.
-  waiter->AddMainFrameIntersectionExpectation(
+  waiter->AddMainFrameRectExpectation(
       gfx::Rect(0, 0, document_width,
                 document_height));  // Initial main frame rect.
 
@@ -882,7 +881,7 @@ IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverBrowserTest,
       embedded_test_server()->GetURL(
           "a.com", "/ads_observer/blank_with_adiframe_writer.html")));
   waiter->Wait();
-  web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+  web_contents = browser()->GetTabStripModel()->GetActiveWebContents();
 
   page_load_metrics::AddTextAndWaitForFirstContentfulPaint(web_contents,
                                                            waiter.get());
@@ -1185,7 +1184,7 @@ IN_PROC_BROWSER_TEST_F(CreativeOriginAdsPageLoadMetricsObserverBrowserTest,
                            OriginStatusWithThrottling::kUnknownAndUnthrottled);
 }
 
-// Flakily fails (crbug.com/1099758)
+// Flakily fails (crbug.com/40702619)
 // Test that a throttled ad with a different origin as the main page is
 // marked as throttled, with indeterminate creative origin status.
 IN_PROC_BROWSER_TEST_F(CreativeOriginAdsPageLoadMetricsObserverBrowserTest,
@@ -1197,7 +1196,7 @@ IN_PROC_BROWSER_TEST_F(CreativeOriginAdsPageLoadMetricsObserverBrowserTest,
       OriginStatus::kUnknown, OriginStatusWithThrottling::kUnknownAndThrottled);
 }
 
-// Disabled due to flakiness https://crbug.com/1229601
+// Disabled due to flakiness https://crbug.com/40778479
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN) || \
     BUILDFLAG(IS_MAC)
 #define MAYBE_CreativeOriginStatusWithThrottlingNestedThrottled \
@@ -1222,7 +1221,7 @@ IN_PROC_BROWSER_TEST_F(
       OriginStatus::kUnknown, OriginStatusWithThrottling::kUnknownAndThrottled);
 }
 
-// Flakily fails. https://crbug.com/1099545
+// Flakily fails. https://crbug.com/40137551
 // Test that an ad creative with a different origin as the main page,
 // but nested in a same-origin root ad frame, such that its root ad frame
 // is outside the main frame but not throttled (because the root is
@@ -1251,7 +1250,7 @@ IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverBrowserTest,
       browser(), embedded_test_server()->GetURL(
                      "foo.com", "/ad_tagging/frame_factory.html")));
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
 
   // Create a second frame that will not receive activation.
   EXPECT_TRUE(content::ExecJs(web_contents,
@@ -1294,7 +1293,7 @@ IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverBrowserTest,
                   ukm::builders::AdFrameLoad::kStatus_UserActivationName));
 }
 
-// See https://crbug.com/1193885.
+// See https://crbug.com/40758137.
 // TODO(crbug.com/402536429): Fix flakiness and re-enable.
 IN_PROC_BROWSER_TEST_F(
     AdsPageLoadMetricsObserverBrowserTest,
@@ -1306,7 +1305,7 @@ IN_PROC_BROWSER_TEST_F(
       browser(), embedded_test_server()->GetURL(
                      "foo.com", "/ad_tagging/frame_factory.html")));
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
 
   // Create two same-origin ad frames.
   EXPECT_TRUE(content::ExecJs(web_contents,
@@ -1358,14 +1357,14 @@ IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverBrowserTest,
   // that the histogram will be recorded when the previous page is unloaded.
   // TODO(https://crbug.com/40189815): Investigate if this needs further fix.
   browser()
-      ->tab_strip_model()
+      ->GetTabStripModel()
       ->GetActiveWebContents()
       ->GetController()
       .GetBackForwardCache()
       .DisableForTesting(content::BackForwardCache::TEST_REQUIRES_NO_CACHING);
 
   content::DOMMessageQueue msg_queue(
-      browser()->tab_strip_model()->GetActiveWebContents());
+      browser()->GetTabStripModel()->GetActiveWebContents());
 
   ukm::TestAutoSetUkmRecorder ukm_recorder;
   auto waiter = CreatePageLoadMetricsTestWaiter();
@@ -1393,8 +1392,13 @@ IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverBrowserTest,
 }
 
 // Test that a blank ad subframe that is docwritten correctly reports metrics.
+#if BUILDFLAG(IS_MAC)
+#define MAYBE_DocWriteAboutBlankAdframe DISABLED_DocWriteAboutBlankAdframe
+#else
+#define MAYBE_DocWriteAboutBlankAdframe DocWriteAboutBlankAdframe
+#endif
 IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverBrowserTest,
-                       DocWriteAboutBlankAdframe) {
+                       MAYBE_DocWriteAboutBlankAdframe) {
   base::HistogramTester histogram_tester;
   ukm::TestAutoSetUkmRecorder ukm_recorder;
   auto waiter = CreatePageLoadMetricsTestWaiter();
@@ -1576,7 +1580,7 @@ IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverBrowserTest, FramePixelSize) {
       browser(), embedded_test_server()->GetURL(
                      "/ads_observer/blank_with_adiframe_writer.html")));
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   std::map<std::pair<int, int>, int> expected_dimension_counts;
   std::map<std::pair<int, int>, int> expected_bucketed_dimension_counts;
   expected_dimension_counts[std::make_pair(100, 100)] = 1;
@@ -1635,7 +1639,7 @@ IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverBrowserTest,
       browser(), embedded_test_server()->GetURL(
                      "/ads_observer/blank_with_adiframe_writer.html")));
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
 
   // Create a 4x4 iframe. The threshold for visibility is an area of 25 pixels
   // or more.
@@ -1694,7 +1698,7 @@ IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverBrowserTest,
       browser(),
       embedded_test_server()->GetURL("/ad_tagging/frame_factory.html")));
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
 
   // Create a second frame that will not receive activation.
   EXPECT_TRUE(content::ExecJs(
@@ -1730,7 +1734,7 @@ IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverBrowserTest,
                        SameDomainFrameCreatedByAdScript_NotRecorddedAsAd) {
   base::HistogramTester histogram_tester;
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
 
   auto waiter = CreatePageLoadMetricsTestWaiter();
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
@@ -1778,9 +1782,17 @@ IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverBrowserTest,
       "PageLoad.Clients.Ads.FrameCounts.AdFrames.Total", 1, 1);
 }
 
+// TODO(crbug.com/402536429): Re-enable once the test is fixed.
+#if BUILDFLAG(IS_MAC) && defined(ARCH_CPU_X86_64)
+#define MAYBE_FrameCreatedByAdScriptNavigatedToAllowListRule_NotRecorddedAsAd \
+  DISABLED_FrameCreatedByAdScriptNavigatedToAllowListRule_NotRecorddedAsAd
+#else
+#define MAYBE_FrameCreatedByAdScriptNavigatedToAllowListRule_NotRecorddedAsAd \
+  FrameCreatedByAdScriptNavigatedToAllowListRule_NotRecorddedAsAd
+#endif
 IN_PROC_BROWSER_TEST_F(
     AdsPageLoadMetricsObserverBrowserTest,
-    FrameCreatedByAdScriptNavigatedToAllowListRule_NotRecorddedAsAd) {
+    MAYBE_FrameCreatedByAdScriptNavigatedToAllowListRule_NotRecorddedAsAd) {
   // Subdocument resources should always check allowlist rules, even if
   // there is not matching blocklist rule.
   SetRulesetWithRules(
@@ -1788,7 +1800,7 @@ IN_PROC_BROWSER_TEST_F(
        subresource_filter::testing::CreateAllowlistSuffixRule("xel.png")});
   base::HistogramTester histogram_tester;
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
 
   auto waiter = CreatePageLoadMetricsTestWaiter();
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
@@ -1817,15 +1829,10 @@ IN_PROC_BROWSER_TEST_F(
 
 // This test harness does not start the test server and allows
 // ControllableHttpResponses to be declared.
-class AdsPageLoadMetricsObserverResourceBrowserTestBase
+class AdsPageLoadMetricsObserverResourceBrowserTest
     : public subresource_filter::SubresourceFilterBrowserTest {
  public:
-  static std::string DescribeParams(const testing::TestParamInfo<bool>& info) {
-    return info.param ? "ReduceTransferSizeUpdatedIPCEnabled"
-                      : "ReduceTransferSizeUpdatedIPCDisabled";
-  }
-
-  ~AdsPageLoadMetricsObserverResourceBrowserTestBase() override = default;
+  ~AdsPageLoadMetricsObserverResourceBrowserTest() override = default;
 
   void SetUpOnMainThread() override {
     host_resolver()->AddRule("*", "127.0.0.1");
@@ -1850,7 +1857,18 @@ class AdsPageLoadMetricsObserverResourceBrowserTestBase
         switches::kEnableExperimentalWebPlatformFeatures);
   }
 
-  virtual bool IsReduceTransferSizeUpdatedIPCEnabled() const { return false; }
+  void TearDown() override {
+    scoped_feature_list_.Reset();
+    subresource_filter::SubresourceFilterBrowserTest::TearDown();
+  }
+
+  void CloseAllTabs() {
+    TabStripModel* tab_strip_model = browser()->GetTabStripModel();
+    content::WebContentsDestroyedWatcher destroyed_watcher(
+        tab_strip_model->GetActiveWebContents());
+    tab_strip_model->CloseAllTabs();
+    destroyed_watcher.Wait();
+  }
 
   virtual std::vector<base::test::FeatureRefAndParams> GetEnabledFeatures()
       const {
@@ -1863,18 +1881,11 @@ class AdsPageLoadMetricsObserverResourceBrowserTestBase
          {}},
         {heavy_ad_intervention::features::kHeavyAdPrivacyMitigations,
          {{"host-threshold", "3"}}}};
-    if (IsReduceTransferSizeUpdatedIPCEnabled()) {
-      enabled.push_back({network::features::kReduceTransferSizeUpdatedIPC, {}});
-    }
     return enabled;
   }
 
   virtual std::vector<base::test::FeatureRef> GetDisabledFeatures() const {
-    std::vector<base::test::FeatureRef> disabled;
-    if (!IsReduceTransferSizeUpdatedIPCEnabled()) {
-      disabled.push_back(network::features::kReduceTransferSizeUpdatedIPC);
-    }
-    return disabled;
+    return {};
   }
 
   // This function loads a |large_resource| and if |will_block| is set, then
@@ -1886,7 +1897,7 @@ class AdsPageLoadMetricsObserverResourceBrowserTestBase
       bool will_block) {
     // Create a frame for the large resource.
     content::WebContents* web_contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
     EXPECT_TRUE(ExecJs(web_contents,
                        "createAdFrame('/ads_observer/"
                        "ad_with_incomplete_resource.html', '');"));
@@ -1902,7 +1913,7 @@ class AdsPageLoadMetricsObserverResourceBrowserTestBase
       EXPECT_FALSE(error_observer.last_navigation_succeeded());
     } else {
       // Otherwise load the resource, ensuring enough bytes were loaded.
-      base::ByteCount current_network_bytes = waiter->current_network_bytes();
+      base::ByteSize current_network_bytes = waiter->current_network_bytes();
       page_load_metrics::LoadLargeResource(
           large_resource, page_load_metrics::kMaxHeavyAdNetworkSize);
       waiter->AddMinimumNetworkBytesExpectation(
@@ -1914,7 +1925,7 @@ class AdsPageLoadMetricsObserverResourceBrowserTestBase
   std::unique_ptr<page_load_metrics::AdsPageLoadMetricsTestWaiter>
   CreateAdsPageLoadMetricsTestWaiter() {
     content::WebContents* web_contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
     return std::make_unique<page_load_metrics::AdsPageLoadMetricsTestWaiter>(
         web_contents);
   }
@@ -1923,22 +1934,7 @@ class AdsPageLoadMetricsObserverResourceBrowserTestBase
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-class AdsPageLoadMetricsObserverResourceBrowserTest
-    : public AdsPageLoadMetricsObserverResourceBrowserTestBase,
-      public ::testing::WithParamInterface<bool> {
- public:
-  bool IsReduceTransferSizeUpdatedIPCEnabled() const override {
-    return GetParam();
-  }
-};
-
-INSTANTIATE_TEST_SUITE_P(
-    All,
-    AdsPageLoadMetricsObserverResourceBrowserTest,
-    testing::Bool(),
-    &AdsPageLoadMetricsObserverResourceBrowserTest::DescribeParams);
-
-IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverResourceBrowserTest,
+IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverResourceBrowserTest,
                        ReceivedAdResources) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
@@ -1952,14 +1948,14 @@ IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverResourceBrowserTest,
 }
 
 // Main resources for adframes are counted as ad resources.
-IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverResourceBrowserTest,
+IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverResourceBrowserTest,
                        ReceivedMainResourceAds) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
   auto waiter = CreateAdsPageLoadMetricsTestWaiter();
 
   content::WebContents* contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), embedded_test_server()->GetURL(
                      "foo.com", "/ad_tagging/frame_factory.html")));
@@ -1973,14 +1969,14 @@ IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverResourceBrowserTest,
 }
 
 // Subframe navigations report ad resources correctly.
-IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverResourceBrowserTest,
+IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverResourceBrowserTest,
                        ReceivedSubframeNavigationAds) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
   auto waiter = CreateAdsPageLoadMetricsTestWaiter();
 
   content::WebContents* contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
       browser(), embedded_test_server()->GetURL(
                      "foo.com", "/ad_tagging/frame_factory.html")));
@@ -2000,21 +1996,32 @@ IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverResourceBrowserTest,
 
 // Verify that privacy sensitive permissions policy use counters are recorded
 // correctly when ad script is in the stack.
-IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverResourceBrowserTest,
+IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverResourceBrowserTest,
                        ReceivedPrivacyPermissionsUseCounters) {
   SetRulesetWithRules(
       {subresource_filter::testing::CreateSuffixRule("ad_script.js")});
   base::HistogramTester histogram_tester;
   ukm::TestAutoSetUkmRecorder ukm_recorder;
 
-  auto main_html_response =
-      std::make_unique<net::test_server::ControllableHttpResponse>(
-          embedded_test_server(), "/mock_page.html",
-          true /*relative_url_is_prefix*/);
-  auto ad_script_response =
-      std::make_unique<net::test_server::ControllableHttpResponse>(
-          embedded_test_server(), "/ad_script.js",
-          true /*relative_url_is_prefix*/);
+  const std::string main_html_body =
+      std::string(
+          "<html><body></body><script src=\"ad_script.js\"></script></html>") +
+      std::string(1024, ' ');
+  const std::string ad_script_body = std::string(R"(
+        navigator.bluetooth.requestDevice().catch(e => {});
+        navigator.geolocation.getCurrentPosition(() => {});
+        navigator.mediaDevices.getUserMedia({video: true});
+        navigator.mediaDevices.getDisplayMedia().catch(() => {});
+        navigator.mediaDevices.getUserMedia({audio: true});
+        navigator.serial.requestPort().catch(() => {});
+        navigator.usb.requestDevice({ filters: [] }).catch(() => {});
+  )") + std::string(5000, ' ');
+
+  net::test_server::ExpectationHandler handler(embedded_test_server());
+  handler.OnRequest("/mock_page.html", /*is_prefix=*/true)
+      .RespondWith("text/html; charset=utf-8", main_html_body);
+  handler.OnRequest("/ad_script.js", /*is_prefix=*/true)
+      .RespondWith("text/html; charset=utf-8", ad_script_body);
 
   ASSERT_TRUE(embedded_test_server()->Start());
 
@@ -2027,29 +2034,7 @@ IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverResourceBrowserTest,
                              ui::PAGE_TRANSITION_TYPED, false),
       /*navigation_handle_callback=*/{});
 
-  main_html_response->WaitForRequest();
-  main_html_response->Send(page_load_metrics::kHttpOkResponseHeader);
-  main_html_response->Send(
-      "<html><body></body><script src=\"ad_script.js\"></script></html>");
-  main_html_response->Send(std::string(1024, ' '));
-  main_html_response->Done();
-
-  ad_script_response->WaitForRequest();
-  ad_script_response->Send(page_load_metrics::kHttpOkResponseHeader);
-  // Get ad script to use a bunch of privacy sensitive features.
-  ad_script_response->Send(R"(
-        navigator.bluetooth.requestDevice().catch(e => {});
-        navigator.geolocation.getCurrentPosition(() => {});
-        navigator.mediaDevices.getUserMedia({video: true});
-        navigator.mediaDevices.getDisplayMedia().catch(() => {});
-        navigator.mediaDevices.getUserMedia({audio: true});
-        navigator.serial.requestPort().catch(() => {});
-        navigator.usb.requestDevice({ filters: [] }).catch(() => {});
-  )");
-  ad_script_response->Send(std::string(5000, ' '));
-  ad_script_response->Done();
-
-  waiter->AddMinimumNetworkBytesExpectation(base::ByteCount(5000));
+  waiter->AddMinimumNetworkBytesExpectation(base::ByteSize(5000));
 
   std::vector<network::mojom::PermissionsPolicyFeature> features = {
       network::mojom::PermissionsPolicyFeature::kBluetooth,
@@ -2071,7 +2056,7 @@ IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverResourceBrowserTest,
   // Close all tabs instead of navigating as the embedded_test_server will
   // hang waiting for loads to finish when we have an unfinished
   // ControllableHttpResponse.
-  browser()->tab_strip_model()->CloseAllTabs();
+  CloseAllTabs();
 
   histogram_tester.ExpectTotalCount(
       "Blink.UseCounter.PermissionsPolicy.PrivacySensitive.Enabled", features.size());
@@ -2082,7 +2067,7 @@ IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverResourceBrowserTest,
 }
 
 // Verify that per-resource metrics are recorded correctly.
-IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverResourceBrowserTest,
+IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverResourceBrowserTest,
                        ReceivedAdResourceMetrics) {
   SetRulesetWithRules(
       {subresource_filter::testing::CreateSuffixRule("ad.html"),
@@ -2142,13 +2127,13 @@ IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverResourceBrowserTest,
   vanilla_script_response->WaitForRequest();
   vanilla_script_response->Send(page_load_metrics::kHttpOkResponseHeader);
   vanilla_script_response->Send(std::string(1024, ' '));
-  waiter->AddMinimumNetworkBytesExpectation(base::ByteCount(5000));
+  waiter->AddMinimumNetworkBytesExpectation(base::ByteSize(5000));
   waiter->Wait();
 
   // Close all tabs instead of navigating as the embedded_test_server will
   // hang waiting for loads to finish when we have an unfinished
   // ControllableHttpResponse.
-  browser()->tab_strip_model()->CloseAllTabs();
+  CloseAllTabs();
 
   // We have received 4 KB of ads, including 1 KB of mainframe ads, plus 1 KB of
   // mainframe content.
@@ -2164,7 +2149,7 @@ IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverResourceBrowserTest,
       "PageLoad.Clients.Ads.Bytes.MainFrame.Total2", 2, 1);
 }
 
-IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverResourceBrowserTest,
+IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverResourceBrowserTest,
                        IncompleteResourcesRecordedToFrameMetrics) {
   base::HistogramTester histogram_tester;
   ukm::TestAutoSetUkmRecorder ukm_recorder;
@@ -2186,11 +2171,11 @@ IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverResourceBrowserTest,
 
   waiter->AddMinimumCompleteResourcesExpectation(3);
   waiter->Wait();
-  base::ByteCount initial_page_bytes = waiter->current_network_bytes();
+  base::ByteSize initial_page_bytes = waiter->current_network_bytes();
 
   // Make the response large enough so that normal editing to the resource files
   // won't interfere with the test expectations.
-  const base::ByteCount response_size = base::KiB(64);
+  const base::ByteSize response_size = base::KiB(64);
 
   // Ad resource will not finish loading but should be reported to metrics.
   incomplete_resource_response->WaitForRequest();
@@ -2205,9 +2190,9 @@ IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverResourceBrowserTest,
   // Close all tabs instead of navigating as the embedded_test_server will
   // hang waiting for loads to finish when we have an unfinished
   // ControllableHttpResponse.
-  browser()->tab_strip_model()->CloseAllTabs();
+  CloseAllTabs();
 
-  base::ByteCount expected_page_size = initial_page_bytes + response_size;
+  base::ByteSize expected_page_size = initial_page_bytes + response_size;
 
   histogram_tester.ExpectBucketCount(
       "PageLoad.Clients.Ads.Bytes.FullPage.Network", expected_page_size.InKiB(),
@@ -2236,7 +2221,7 @@ IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverResourceBrowserTest,
 
 // Verifies that the ad unloaded by the heavy ad intervention receives an
 // intervention report prior to being unloaded.
-IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverResourceBrowserTest,
+IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverResourceBrowserTest,
                        HeavyAdInterventionFired_ReportSent) {
   base::HistogramTester histogram_tester;
   auto incomplete_resource_response =
@@ -2248,7 +2233,7 @@ IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverResourceBrowserTest,
   // Create a navigation observer that will watch for the intervention to
   // navigate the frame.
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
 
   auto waiter = CreateAdsPageLoadMetricsTestWaiter();
   GURL url = embedded_test_server()->GetURL(
@@ -2298,7 +2283,7 @@ IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverResourceBrowserTest,
   EXPECT_TRUE(got_report);
 }
 
-IN_PROC_BROWSER_TEST_P(
+IN_PROC_BROWSER_TEST_F(
     AdsPageLoadMetricsObserverResourceBrowserTest,
     HeavyAdInterventionFired_ReportSentToEmbedderOfSameOriginIframe) {
   base::HistogramTester histogram_tester;
@@ -2313,7 +2298,7 @@ IN_PROC_BROWSER_TEST_P(
           "a.com", "/ads_observer/ad_with_incomplete_resource.html")));
 
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
 
   content::DOMMessageQueue message_queue(web_contents);
 
@@ -2352,7 +2337,7 @@ IN_PROC_BROWSER_TEST_P(
   EXPECT_THAT(report_message, testing::HasSubstr("(id=;url=)"));
 }
 
-IN_PROC_BROWSER_TEST_P(
+IN_PROC_BROWSER_TEST_F(
     AdsPageLoadMetricsObserverResourceBrowserTest,
     HeavyAdInterventionFired_ReportSentToEmbedderOfCrossOriginIframe) {
   base::HistogramTester histogram_tester;
@@ -2367,7 +2352,7 @@ IN_PROC_BROWSER_TEST_P(
           "a.com", "/ads_observer/blank_with_adiframe_writer.html")));
 
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
 
   GURL redirect_to_url = embedded_test_server()->GetURL(
       "c.com", "/ads_observer/doc_with_incomplete_resource.html");
@@ -2434,7 +2419,7 @@ IN_PROC_BROWSER_TEST_P(
 }
 
 // Verifies that reports are sent to all children.
-// crbug.com/1189635: flaky on win and linux.
+// crbug.com/40755559: flaky on win and linux.
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 #define MAYBE_HeavyAdInterventionFired_ReportsToAllChildren \
   DISABLED_HeavyAdInterventionFired_ReportsToAllChildren
@@ -2442,7 +2427,7 @@ IN_PROC_BROWSER_TEST_P(
 #define MAYBE_HeavyAdInterventionFired_ReportsToAllChildren \
   HeavyAdInterventionFired_ReportsToAllChildren
 #endif
-IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverResourceBrowserTest,
+IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverResourceBrowserTest,
                        MAYBE_HeavyAdInterventionFired_ReportsToAllChildren) {
   SetRulesetWithRules(
       {subresource_filter::testing::CreateSuffixRule("frame_factory.html")});
@@ -2456,7 +2441,7 @@ IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverResourceBrowserTest,
   // Create a navigation observer that will watch for the intervention to
   // navigate the frame.
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   content::TestNavigationObserver child_observer(web_contents, 2);
   content::TestNavigationObserver error_observer(web_contents,
                                                  net::ERR_BLOCKED_BY_CLIENT);
@@ -2501,7 +2486,7 @@ IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverResourceBrowserTest,
 
 // Verifies that the frame is navigated to the intervention page when a
 // heavy ad intervention triggers.
-IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverResourceBrowserTest,
+IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverResourceBrowserTest,
                        HeavyAdInterventionEnabled_ErrorPageLoaded) {
   base::HistogramTester histogram_tester;
   auto incomplete_resource_response =
@@ -2513,7 +2498,7 @@ IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverResourceBrowserTest,
   // Create a navigation observer that will watch for the intervention to
   // navigate the frame.
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   content::TestNavigationObserver error_observer(web_contents,
                                                  net::ERR_BLOCKED_BY_CLIENT);
 
@@ -2561,15 +2546,9 @@ class AdsPageLoadMetricsObserverResourceBrowserTestWithoutHeavyAdIntervention
   }
 };
 
-INSTANTIATE_TEST_SUITE_P(
-    All,
-    AdsPageLoadMetricsObserverResourceBrowserTestWithoutHeavyAdIntervention,
-    testing::Bool(),
-    AdsPageLoadMetricsObserverResourceBrowserTest::DescribeParams);
-
 // Check that when the heavy ad feature is disabled we don't navigate
 // the frame.
-IN_PROC_BROWSER_TEST_P(
+IN_PROC_BROWSER_TEST_F(
     AdsPageLoadMetricsObserverResourceBrowserTestWithoutHeavyAdIntervention,
     ErrorPageNotLoaded) {
   base::HistogramTester histogram_tester;
@@ -2606,7 +2585,7 @@ IN_PROC_BROWSER_TEST_P(
 
 // Check that we don't activate a HeavyAdIntervention field trial if we don't
 // have a heavy ad.
-IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverResourceBrowserTest,
+IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverResourceBrowserTest,
                        HeavyAdInterventionNoHeavyAd_FieldTrialNotActive) {
   base::HistogramTester histogram_tester;
 
@@ -2645,7 +2624,7 @@ IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverResourceBrowserTest,
 // Framework takes over for future navigations.
 
 // TODO(crbug.com/361671258): Flaky on multiple platforms
-IN_PROC_BROWSER_TEST_P(
+IN_PROC_BROWSER_TEST_F(
     AdsPageLoadMetricsObserverResourceBrowserTest,
     DISABLED_HeavyAdInterventionBlocklistFull_InterventionBlocked) {
   std::vector<std::unique_ptr<net::test_server::ControllableHttpResponse>>
@@ -2744,7 +2723,7 @@ IN_PROC_BROWSER_TEST_P(
 
 // Verifies that the blocklist is setup correctly and the intervention triggers
 // in incognito mode.
-IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverResourceBrowserTest,
+IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverResourceBrowserTest,
                        HeavyAdInterventionIncognitoMode_InterventionFired) {
   base::HistogramTester histogram_tester;
   auto incomplete_resource_response =
@@ -2753,9 +2732,9 @@ IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverResourceBrowserTest,
           true /*relative_url_is_prefix*/);
   ASSERT_TRUE(embedded_test_server()->Start());
 
-  Browser* incognito_browser = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito_browser = CreateIncognitoBrowser();
   content::WebContents* web_contents =
-      incognito_browser->tab_strip_model()->GetActiveWebContents();
+      incognito_browser->GetTabStripModel()->GetActiveWebContents();
 
   // Create a navigation observer that will watch for the intervention to
   // navigate the frame.
@@ -2784,29 +2763,19 @@ IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverResourceBrowserTest,
 #if BUILDFLAG(ENABLE_PDF)
 
 class AdsPageLoadMetricsObserverRecordedUKMMetricsTest
-    : public AdsPageLoadMetricsObserverResourceBrowserTestBase,
-      public ::testing::WithParamInterface<std::tuple<bool, bool>> {
+    : public AdsPageLoadMetricsObserverResourceBrowserTest,
+      public ::testing::WithParamInterface<bool> {
  public:
-  static std::string DescribeParams(
-      const testing::TestParamInfo<ParamType>& info) {
-    std::string reduce_ipc_description =
-        std::get<0>(info.param) ? "ReduceTransferSizeUpdatedIPCEnabled"
-                                : "ReduceTransferSizeUpdatedIPCDisabled";
-    std::string oopif_pdf_description =
-        std::get<1>(info.param) ? "_OopifPdf" : "_GuestViewPdf";
-    return base::StrCat({reduce_ipc_description, "_", oopif_pdf_description});
+  static std::string DescribeParams(const testing::TestParamInfo<bool>& info) {
+    return info.param ? "OopifPdf" : "GuestViewPdf";
   }
 
-  bool IsReduceTransferSizeUpdatedIPCEnabled() const override {
-    return std::get<0>(GetParam());
-  }
-
-  bool UseOopif() const { return std::get<1>(GetParam()); }
+  bool UseOopif() const { return GetParam(); }
 
   std::vector<base::test::FeatureRefAndParams> GetEnabledFeatures()
       const override {
     auto enabled =
-        AdsPageLoadMetricsObserverResourceBrowserTestBase::GetEnabledFeatures();
+        AdsPageLoadMetricsObserverResourceBrowserTest::GetEnabledFeatures();
     if (UseOopif()) {
       enabled.push_back({chrome_pdf::features::kPdfOopif, {}});
     }
@@ -2814,8 +2783,8 @@ class AdsPageLoadMetricsObserverRecordedUKMMetricsTest
   }
 
   std::vector<base::test::FeatureRef> GetDisabledFeatures() const override {
-    auto disabled = AdsPageLoadMetricsObserverResourceBrowserTestBase::
-        GetDisabledFeatures();
+    auto disabled =
+        AdsPageLoadMetricsObserverResourceBrowserTest::GetDisabledFeatures();
     if (!UseOopif()) {
       disabled.push_back(chrome_pdf::features::kPdfOopif);
     }
@@ -2833,7 +2802,7 @@ IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverRecordedUKMMetricsTest,
   auto waiter = CreateAdsPageLoadMetricsTestWaiter();
 
   content::WebContents* contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   GURL url = embedded_test_server()->GetURL("foo.com",
                                             "/ad_tagging/frame_factory.html");
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), url));
@@ -2845,7 +2814,7 @@ IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverRecordedUKMMetricsTest,
   waiter->Wait();
 
   // Close all tabs to report metrics.
-  browser()->tab_strip_model()->CloseAllTabs();
+  CloseAllTabs();
 
   // Verify UKM Metrics recorded.
   auto entries =
@@ -2873,7 +2842,7 @@ IN_PROC_BROWSER_TEST_P(AdsPageLoadMetricsObserverRecordedUKMMetricsTest,
 INSTANTIATE_TEST_SUITE_P(
     All,
     AdsPageLoadMetricsObserverRecordedUKMMetricsTest,
-    testing::Combine(testing::Bool(), testing::Bool()),
+    testing::Bool(),
     &AdsPageLoadMetricsObserverRecordedUKMMetricsTest::DescribeParams);
 
 #endif  // BUILDFLAG(ENABLE_PDF)
@@ -3109,27 +3078,18 @@ IN_PROC_BROWSER_TEST_F(AdsPageLoadMetricsObserverBrowserTest,
 class AdsPageLoadMetricsObserverPrerenderingBrowserTest
     : public AdsPageLoadMetricsObserverBrowserTest {
  public:
-  AdsPageLoadMetricsObserverPrerenderingBrowserTest() = default;
+  AdsPageLoadMetricsObserverPrerenderingBrowserTest()
+      : prerender_helper_(base::BindRepeating(
+            &AdsPageLoadMetricsObserverPrerenderingBrowserTest::web_contents,
+            base::Unretained(this))) {}
   ~AdsPageLoadMetricsObserverPrerenderingBrowserTest() override = default;
 
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    AdsPageLoadMetricsObserverBrowserTest::SetUpCommandLine(command_line);
-
-    // |prerender_helper_| has a ScopedFeatureList so we needed to delay its
-    // creation until now because AdsPageLoadMetricsObserverBrowserTest also
-    // uses a ScopedFeatureList and initialization order matters.
-    prerender_helper_ = std::make_unique<content::test::PrerenderTestHelper>(
-        base::BindRepeating(
-            &AdsPageLoadMetricsObserverPrerenderingBrowserTest::web_contents,
-            base::Unretained(this)));
-  }
-
   content::test::PrerenderTestHelper& prerender_helper() {
-    return *prerender_helper_;
+    return prerender_helper_;
   }
 
  private:
-  std::unique_ptr<content::test::PrerenderTestHelper> prerender_helper_;
+  content::test::PrerenderTestHelper prerender_helper_;
 };
 
 // Test that prerendering doesn't have metrics by AdsPageLoadMetricsObserver.
@@ -3182,10 +3142,8 @@ struct SurfaceTestCase {
 };
 
 class AdsPageLoadMetricsObserverSurfaceBrowserTest
-    : public AdsPageLoadMetricsObserverResourceBrowserTestBase,
+    : public AdsPageLoadMetricsObserverResourceBrowserTest,
       public ::testing::WithParamInterface<std::tuple<SurfaceTestCase, bool>> {
- public:
-  bool IsReduceTransferSizeUpdatedIPCEnabled() const override { return false; }
 };
 
 // The ad script requests an image via various methods. We
@@ -3330,3 +3288,410 @@ INSTANTIATE_TEST_SUITE_P(
       return base::StrCat({std::get<0>(info.param).name,
                            std::get<1>(info.param) ? "_lambda" : "_func"});
     });
+
+class DevToolsAdsTest : public AdsPageLoadMetricsObserverBrowserTest,
+                        public content::TestDevToolsProtocolClient {
+ public:
+  void TearDownOnMainThread() override {
+    DetachProtocolClient();
+    AdsPageLoadMetricsObserverBrowserTest::TearDownOnMainThread();
+  }
+
+  // Polls for ad metrics and waits until they meet expectations. Initial
+  // requests may return incomplete metrics due to reporting delays.
+  void PollForAdMetrics(int64_t expected_min_network_bytes,
+                        int expected_viewport_ad_count,
+                        int expected_density) {
+    while (true) {
+      const base::DictValue* result = SendCommandSync("Ads.getAdMetrics");
+      ASSERT_TRUE(result);
+
+      double network_bytes =
+          result->FindDoubleByDottedPath("metrics.totalAdNetworkBytes")
+              .value_or(0);
+      int viewport_ad_count =
+          result->FindIntByDottedPath("metrics.viewportAdCount").value_or(0);
+      double cpu_time = result->FindDoubleByDottedPath("metrics.totalAdCpuTime")
+                            .value_or(0.0);
+      int viewport_ad_density_by_area =
+          result->FindIntByDottedPath("metrics.viewportAdDensityByArea")
+              .value_or(0);
+      double average_viewport_ad_count =
+          result->FindDoubleByDottedPath("metrics.averageViewportAdCount")
+              .value_or(0.0);
+      double average_viewport_ad_density_by_area =
+          result
+              ->FindDoubleByDottedPath("metrics.averageViewportAdDensityByArea")
+              .value_or(0.0);
+
+      // Exact CPU time and average values depend on the execution environment.
+      // Wait until a positive value (> 0) is recorded for these metrics.
+      if (network_bytes >= expected_min_network_bytes &&
+          viewport_ad_count == expected_viewport_ad_count && cpu_time > 0.0 &&
+          viewport_ad_density_by_area == expected_density &&
+          average_viewport_ad_count > 0.0 &&
+          average_viewport_ad_density_by_area > 0.0) {
+        break;
+      }
+      base::RunLoop run_loop;
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+          FROM_HERE, run_loop.QuitClosure(), base::Milliseconds(50));
+      run_loop.Run();
+    }
+  }
+};
+
+// Tests that when ad frames are added to a page, the ad metrics are properly
+// calculated and returned via the Ads.getAdMetrics command.
+IN_PROC_BROWSER_TEST_F(DevToolsAdsTest, GetAdMetrics) {
+  browser()->GetWindow()->SetBounds(gfx::Rect(0, 0, 800, 600));
+
+  SetRulesetWithRules(
+      {subresource_filter::testing::CreateSuffixRule(
+           "expensive_animation_frame.html*"),
+       subresource_filter::testing::CreateSuffixRule("pixel.png")});
+
+  auto waiter = CreatePageLoadMetricsTestWaiter();
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL(
+                     "/ads_observer/blank_with_adiframe_writer.html")));
+
+  page_load_metrics::AddTextAndWaitForFirstContentfulPaint(web_contents(),
+                                                           waiter.get());
+
+  AttachToWebContents(web_contents());
+
+  content::DOMMessageQueue message_queue(web_contents());
+
+  // Add an ad frame. The unique 'id' query parameter ensures that subsequent
+  // requests bypass the browser cache, allowing network bytes to be reliably
+  // recorded.
+  EXPECT_TRUE(ExecJs(
+      web_contents(),
+      content::JsReplace(
+          "let frame1 = createAdIframeAtRect(0, 0, 100, 100); "
+          "frame1.id = 'test1'; "
+          "frame1.name = 'test1'; "
+          "frame1.src = $1;",
+          embedded_test_server()->GetURL(
+              "a.com",
+              "/ads_observer/expensive_animation_frame.html?delay=200&id=1"))));
+  WaitForRAF(&message_queue);
+
+  int inner_width = EvalJs(web_contents(), "window.innerWidth").ExtractInt();
+  int inner_height = EvalJs(web_contents(), "window.innerHeight").ExtractInt();
+
+  // Viewport density calculation: one 100x100 ad frame = 10,000 area.
+  int expected_density_1 = 10000 * 100 / (inner_width * inner_height);
+
+  // Assert against a lower bound to account for variable HTTP header sizes.
+  // The base payload (`expensive_animation_frame.html`) is 579 bytes.
+  const int64_t kExpectedMinNetworkBytes_1 = 579;
+
+  PollForAdMetrics(
+      /*expected_min_network_bytes=*/kExpectedMinNetworkBytes_1,
+      /*expected_viewport_ad_count=*/1,
+      /*expected_density=*/expected_density_1);
+
+  // Add second frame.
+  EXPECT_TRUE(ExecJs(
+      web_contents(),
+      content::JsReplace(
+          "let frame2 = createAdIframeAtRect(100, 100, 100, 100); "
+          "frame2.id = 'test2'; "
+          "frame2.name = 'test2'; "
+          "frame2.src = $1;",
+          embedded_test_server()->GetURL(
+              "a.com",
+              "/ads_observer/expensive_animation_frame.html?delay=200&id=2"))));
+  WaitForRAF(&message_queue);
+
+  // Viewport density calculation: two 100x100 ad frames = 20,000 area.
+  int expected_density_2 = 20000 * 100 / (inner_width * inner_height);
+
+  // Expected minimum payload: 2 * 579 = 1158 bytes.
+  const int64_t kExpectedMinNetworkBytes_2 = 1158;
+
+  PollForAdMetrics(
+      /*expected_min_network_bytes=*/kExpectedMinNetworkBytes_2,
+      /*expected_viewport_ad_count=*/2,
+      /*expected_density=*/expected_density_2);
+}
+
+// Tests that ad metrics are correctly reset and reported for the new page when
+// navigating away from an existing page. Validates that we are checking the new
+// APLMO.
+IN_PROC_BROWSER_TEST_F(DevToolsAdsTest, GetAdMetrics_PageNavigated) {
+  browser()->GetWindow()->SetBounds(gfx::Rect(0, 0, 800, 600));
+
+  SetRulesetWithRules(
+      {subresource_filter::testing::CreateSuffixRule(
+           "expensive_animation_frame.html*"),
+       subresource_filter::testing::CreateSuffixRule("pixel.png")});
+
+  auto waiter = CreatePageLoadMetricsTestWaiter();
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL(
+                     "/ads_observer/blank_with_adiframe_writer.html")));
+
+  page_load_metrics::AddTextAndWaitForFirstContentfulPaint(web_contents(),
+                                                           waiter.get());
+
+  AttachToWebContents(web_contents());
+
+  content::DOMMessageQueue message_queue(web_contents());
+
+  // Add an ad frame. The unique 'id' query parameter ensures that subsequent
+  // requests bypass the browser cache, allowing network bytes to be reliably
+  // recorded.
+  EXPECT_TRUE(ExecJs(
+      web_contents(),
+      content::JsReplace(
+          "let frame1 = createAdIframeAtRect(0, 0, 100, 100); "
+          "frame1.id = 'test1'; "
+          "frame1.name = 'test1'; "
+          "frame1.src = $1;",
+          embedded_test_server()->GetURL(
+              "a.com",
+              "/ads_observer/expensive_animation_frame.html?delay=200&id=1"))));
+  WaitForRAF(&message_queue);
+
+  int inner_width = EvalJs(web_contents(), "window.innerWidth").ExtractInt();
+  int inner_height = EvalJs(web_contents(), "window.innerHeight").ExtractInt();
+
+  // Viewport density calculation: one 100x100 ad frame = 10,000 area.
+  int expected_density_1 = 10000 * 100 / (inner_width * inner_height);
+
+  // Assert against a lower bound to account for variable HTTP header sizes.
+  // The base payload (`expensive_animation_frame.html`) is 579 bytes.
+  const int64_t kExpectedMinNetworkBytes_1 = 579;
+
+  PollForAdMetrics(
+      /*expected_min_network_bytes=*/kExpectedMinNetworkBytes_1,
+      /*expected_viewport_ad_count=*/1,
+      /*expected_density=*/expected_density_1);
+
+  // Navigate away
+  auto waiter2 = CreatePageLoadMetricsTestWaiter();
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(),
+      embedded_test_server()->GetURL(
+          "/ads_observer/blank_with_adiframe_writer.html?navigated")));
+
+  page_load_metrics::AddTextAndWaitForFirstContentfulPaint(web_contents(),
+                                                           waiter2.get());
+
+  content::DOMMessageQueue message_queue2(web_contents());
+
+  // Add an ad frame (different size) in the new page.
+  EXPECT_TRUE(ExecJs(
+      web_contents(),
+      content::JsReplace(
+          "let frame2 = createAdIframeAtRect(0, 0, 200, 200); "
+          "frame2.id = 'test2'; "
+          "frame2.name = 'test2'; "
+          "frame2.src = $1;",
+          embedded_test_server()->GetURL(
+              "a.com",
+              "/ads_observer/expensive_animation_frame.html?delay=200&id=2"))));
+  WaitForRAF(&message_queue2);
+
+  // Viewport density calculation: one 200x200 ad frame = 40,000 area.
+  int expected_density_2 = 40000 * 100 / (inner_width * inner_height);
+  const int64_t kExpectedMinNetworkBytes_2 = 579;
+
+  PollForAdMetrics(
+      /*expected_min_network_bytes=*/kExpectedMinNetworkBytes_2,
+      /*expected_viewport_ad_count=*/1,
+      /*expected_density=*/expected_density_2);
+}
+
+// Tests that per-frame ad metrics (updateAdFrames and removeAdFrames) are
+// correctly reported, and that only deltas are sent in subsequent requests.
+IN_PROC_BROWSER_TEST_F(DevToolsAdsTest, GetAdMetrics_AdFrames) {
+  browser()->GetWindow()->SetBounds(gfx::Rect(0, 0, 800, 600));
+
+  SetRulesetWithRules(
+      {subresource_filter::testing::CreateSuffixRule(
+           "expensive_animation_frame.html*"),
+       subresource_filter::testing::CreateSuffixRule("pixel.png"),
+       subresource_filter::testing::CreateSuffixRule("iframe_blank.html*")});
+
+  auto waiter = CreatePageLoadMetricsTestWaiter();
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), embedded_test_server()->GetURL(
+                     "/ads_observer/blank_with_adiframe_writer.html")));
+
+  page_load_metrics::AddTextAndWaitForFirstContentfulPaint(web_contents(),
+                                                           waiter.get());
+
+  AttachToWebContents(web_contents());
+
+  std::string expected_origin_a =
+      url::Origin::Create(embedded_test_server()->GetURL("a.com", "/"))
+          .Serialize();
+
+  // 1. Add an ad frame.
+  content::DOMMessageQueue message_queue(web_contents());
+  EXPECT_TRUE(ExecJs(
+      web_contents(),
+      content::JsReplace(
+          "let frame1 = createAdIframeAtRect(0, 0, 100, 100); "
+          "frame1.id = 'test1'; "
+          "frame1.name = 'test1'; "
+          "frame1.src = $1;",
+          embedded_test_server()->GetURL(
+              "a.com",
+              "/ads_observer/expensive_animation_frame.html?delay=200&id=1"))));
+  WaitForRAF(&message_queue);
+
+  std::string frame_id;
+  std::string initial_origin;
+  double cpu_time = 0.0;
+  double network_bytes = 0.0;
+
+  // Assert against a lower bound to account for variable HTTP header sizes.
+  // The base payload (`expensive_animation_frame.html`) is 579 bytes.
+  const double kExpectedMinNetworkBytes = 579.0;
+
+  // Wait until we receive the update containing the new frame.
+  while (frame_id.empty() || initial_origin.empty() || cpu_time == 0.0 ||
+         network_bytes < kExpectedMinNetworkBytes) {
+    const base::DictValue* result = SendCommandSync("Ads.getAdMetrics");
+    ASSERT_TRUE(result);
+    const base::ListValue* update_ad_frames =
+        result->FindListByDottedPath("metrics.updateAdFrames");
+    if (update_ad_frames) {
+      for (const auto& frame_val : *update_ad_frames) {
+        if (const base::DictValue* frame = frame_val.GetIfDict()) {
+          const std::string* id_ptr = frame->FindString("frameId");
+          if (id_ptr) {
+            frame_id = *id_ptr;
+            const std::string* origin_ptr = frame->FindString("initialOrigin");
+            if (origin_ptr) {
+              initial_origin = *origin_ptr;
+            }
+            double cpu = frame->FindDouble("cpuTime").value_or(0.0);
+            if (cpu > 0.0) {
+              cpu_time = cpu;
+            }
+            double network = frame->FindDouble("networkBytes").value_or(0.0);
+            if (network > 0.0) {
+              network_bytes = network;
+            }
+          }
+        }
+      }
+    }
+    if (!frame_id.empty() && !initial_origin.empty() && cpu_time > 0.0 &&
+        network_bytes >= kExpectedMinNetworkBytes) {
+      break;
+    }
+    base::RunLoop run_loop;
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE, run_loop.QuitClosure(), base::Milliseconds(50));
+    run_loop.Run();
+  }
+
+  EXPECT_FALSE(frame_id.empty());
+  EXPECT_EQ(expected_origin_a, initial_origin);
+  EXPECT_GT(cpu_time, 0.0);
+  EXPECT_GE(network_bytes, kExpectedMinNetworkBytes);
+
+  // 2. Verify that subsequent requests return only deltas. Since the frame is
+  // stable and not consuming new resources in this basic test, we expect to
+  // eventually see a response with no updates.
+  bool has_empty_update = false;
+  while (!has_empty_update) {
+    const base::DictValue* result = SendCommandSync("Ads.getAdMetrics");
+    ASSERT_TRUE(result);
+    const base::ListValue* update_ad_frames =
+        result->FindListByDottedPath("metrics.updateAdFrames");
+    const base::ListValue* remove_ad_frames =
+        result->FindListByDottedPath("metrics.removeAdFrames");
+    if (update_ad_frames && update_ad_frames->empty() && remove_ad_frames &&
+        remove_ad_frames->empty()) {
+      has_empty_update = true;
+      break;
+    }
+    base::RunLoop run_loop;
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE, run_loop.QuitClosure(), base::Milliseconds(50));
+    run_loop.Run();
+  }
+  EXPECT_TRUE(has_empty_update);
+
+  // 3. Navigate the iframe cross-origin.
+  EXPECT_TRUE(ExecJs(
+      web_contents(),
+      content::JsReplace(
+          "document.getElementById('test1').src = $1;",
+          embedded_test_server()->GetURL("b.com", "/iframe_blank.html?id=2"))));
+
+  // Wait for a few iterations and verify that we do not receive any
+  // updateAdFrames with an 'initialOrigin' field, as the initial origin should
+  // remain a.com.
+  bool origin_updated = false;
+  int iter = 0;
+  while (!origin_updated) {
+    // We only poll 5 times to ensure we don't indefinitely wait for an event
+    // that shouldn't happen.
+    if (++iter > 5) {
+      break;
+    }
+    const base::DictValue* result = SendCommandSync("Ads.getAdMetrics");
+    ASSERT_TRUE(result);
+    const base::ListValue* update_ad_frames =
+        result->FindListByDottedPath("metrics.updateAdFrames");
+    if (update_ad_frames) {
+      for (const auto& frame_val : *update_ad_frames) {
+        if (const base::DictValue* frame = frame_val.GetIfDict()) {
+          const std::string* id_ptr = frame->FindString("frameId");
+          if (id_ptr && *id_ptr == frame_id) {
+            if (frame->FindString("initialOrigin")) {
+              origin_updated = true;
+            }
+          }
+        }
+      }
+    }
+    base::RunLoop run_loop;
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE, run_loop.QuitClosure(), base::Milliseconds(50));
+    run_loop.Run();
+  }
+  EXPECT_FALSE(origin_updated);
+
+  // 4. Remove the iframe.
+  EXPECT_TRUE(
+      ExecJs(web_contents(), "document.getElementById('test1').remove();"));
+
+  // Wait for the removeAdFrames list to contain the frame_id.
+  bool removed = false;
+  while (!removed) {
+    const base::DictValue* result = SendCommandSync("Ads.getAdMetrics");
+    ASSERT_TRUE(result);
+    const base::ListValue* remove_ad_frames =
+        result->FindListByDottedPath("metrics.removeAdFrames");
+    if (remove_ad_frames) {
+      for (const auto& val : *remove_ad_frames) {
+        if (val.is_string() && val.GetString() == frame_id) {
+          removed = true;
+          break;
+        }
+      }
+    }
+    if (removed) {
+      break;
+    }
+    base::RunLoop run_loop;
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE, run_loop.QuitClosure(), base::Milliseconds(50));
+    run_loop.Run();
+  }
+
+  EXPECT_TRUE(removed);
+}

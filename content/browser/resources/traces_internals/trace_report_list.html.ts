@@ -36,7 +36,7 @@ export function getHtml(this: TraceReportListElement) {
   <div class="report-list-container">
     ${!this.hasTraces_() ? html`
       <div class="empty-message">
-        <cr-icon icon="cr:warning"></cr-icon>
+        <cr-icon icon="cr:warning-filled"></cr-icon>
         <h1>Could not find any traces saved locally.</h1>
       </div>
     ` : html`
@@ -44,8 +44,8 @@ export function getHtml(this: TraceReportListElement) {
       ${this.traces_.map((traceReport: ClientTraceReport) => html`
         <trace-report
             .trace="${traceReport}"
-            @show-toast="${this.showToastHandler_}"
-            @refresh-traces-request="${this.onRefreshTracesClick_}">
+            @show-toast="${this.onShowToast_}"
+            @refresh-traces-request="${this.onRefreshTracesRequest_}">
         </trace-report>
       `)}
     `}

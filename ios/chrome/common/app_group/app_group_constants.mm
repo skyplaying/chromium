@@ -17,6 +17,10 @@ extern NSString* const kChromeCapabilitiesPreference = @"Chrome.Capabilities";
 
 extern NSString* const kChromeShowDefaultBrowserPromoCapability =
     @"ShowDefaultBrowserPromo";
+extern NSString* const kChromeSupportsAISummarizationCapability =
+    @"SupportsAISummarization";
+extern NSString* const kChromeUserIsEligibleForGeminiCapability =
+    @"UserIsEligibleForGemini";
 extern NSString* const kChromeSupportOpenLinksParametersFromCapability =
     @"SupportOpenLinksParametersFrom";
 extern NSString* const kChromeSupportShareDefaultBrowserStatusCapability =
@@ -78,10 +82,6 @@ NSString* const kOpenCommandSourceShareExtension = @"ChromeShareExtension";
 NSString* const kOpenCommandSourceCredentialsExtension =
     @"ChromeCredentialsExtension";
 NSString* const kOpenCommandSourceOpenExtension = @"ChromeOpenExtension";
-
-NSString* const kSuggestedItems = @"SuggestedItems";
-NSString* const kSuggestedItemsLastModificationDate =
-    @"SuggestedItemsLastModificationDate";
 
 NSString* const kSuggestedItemsForMultiprofile = @"SuggestedItemsForMIM";
 NSString* const kSuggestedItemsLastModificationDateForMultiprofile =

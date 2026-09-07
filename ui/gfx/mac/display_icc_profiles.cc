@@ -4,9 +4,10 @@
 
 #include "ui/gfx/mac/display_icc_profiles.h"
 
+#include "base/apple/foundation_util.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
-#include "ui/gfx/icc_profile.h"
+#include "skia/ext/color_profile.h"
 
 namespace gfx {
 
@@ -17,6 +18,7 @@ DisplayICCProfiles* DisplayICCProfiles::GetInstance() {
 
 base::apple::ScopedCFTypeRef<CFDataRef>
 DisplayICCProfiles::GetDataForColorSpace(const ColorSpace& color_space) {
+  base::AutoLock lock(lock_);
   UpdateIfNeeded();
   base::apple::ScopedCFTypeRef<CFDataRef> result;
   auto found = map_.find(color_space);
@@ -41,8 +43,12 @@ void DisplayICCProfiles::UpdateIfNeeded() {
   map_.clear();
 
   // Always add Apple's sRGB profile.
+  base::apple::ScopedCFTypeRef<CGColorSpaceRef> srgb_colorspace(
+      CGColorSpaceCreateWithName(kCGColorSpaceSRGB));
+  CHECK(srgb_colorspace);
   base::apple::ScopedCFTypeRef<CFDataRef> srgb_icc(
-      CGColorSpaceCopyICCData(CGColorSpaceCreateWithName(kCGColorSpaceSRGB)));
+      CGColorSpaceCopyICCData(srgb_colorspace.get()));
+  CHECK(srgb_icc);
   map_[ColorSpace::CreateSRGB()] = srgb_icc;
 
   // Add the profiles for all active displays.
@@ -69,15 +75,16 @@ void DisplayICCProfiles::UpdateIfNeeded() {
         CGColorSpaceCopyICCData(cg_color_space.get()));
     if (!icc_data)
       continue;
-    ICCProfile icc_profile = ICCProfile::FromData(
-        CFDataGetBytePtr(icc_data.get()), CFDataGetLength(icc_data.get()));
-    ColorSpace color_space = icc_profile.GetColorSpace();
+    auto icc_profile =
+        skia::ColorProfile::Make(base::apple::CFDataToSpan(icc_data.get()));
     // If the ICC profile isn't accurately parametrically approximated, then
     // don't store its data (we will assign the best parametric fit to
     // IOSurfaces, and rely on the system compositor to do conversion to the
     // display profile).
-    if (color_space.IsValid() && icc_profile.IsColorSpaceAccurate())
-      map_[color_space] = icc_data;
+    if (!icc_profile || !icc_profile->IsSkColorSpaceExact())
+      continue;
+    ColorSpace color_space(icc_profile->GetSkColorSpace().get());
+    map_[color_space] = icc_data;
   }
 }
 
@@ -88,6 +95,7 @@ void DisplayICCProfiles::DisplayReconfigurationCallBack(
     void* user_info) {
   DisplayICCProfiles* profiles =
       reinterpret_cast<DisplayICCProfiles*>(user_info);
+  base::AutoLock lock(profiles->lock_);
   profiles->needs_update_ = true;
 }
 

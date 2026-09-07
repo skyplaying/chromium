@@ -6,20 +6,18 @@
 
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
+#include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/metrics/metrics_service.h"
 #include "components/pref_registry/pref_registry_syncable.h"
+#include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
 
 namespace {
 
 const char kOomInterventionDecider[] = "oom_intervention.decider";
 
-// Deprecated: Replaced with `kBlocklist`.
-// TODO(crbug.com/40744119): Remove this after M92 once existing
-// clients have migrated to the new pref.
-const char kBlacklist[] = "oom_intervention.blacklist";
 // Pref path for blocklist. If a hostname is in the blocklist we never trigger
 // intervention on the host.
 const char kBlocklist[] = "oom_intervention.blocklist";
@@ -29,6 +27,12 @@ const char kDeclinedHostList[] = "oom_intervention.declined_host_list";
 // Pref path for OOM detected host list. When an OOM crash is observed on
 // a host the hostname is added to the list.
 const char kOomDetectedHostList[] = "oom_intervention.oom_detected_host_list";
+
+void InitializeIncognitoPrefs(PrefService* prefs) {
+  prefs->SetList(kBlocklist, base::ListValue());
+  prefs->SetList(kDeclinedHostList, base::ListValue());
+  prefs->SetList(kOomDetectedHostList, base::ListValue());
+}
 
 class DelegateImpl : public OomInterventionDecider::Delegate {
  public:
@@ -50,22 +54,16 @@ void OomInterventionDecider::RegisterProfilePrefs(
   registry->RegisterListPref(kBlocklist);
   registry->RegisterListPref(kDeclinedHostList);
   registry->RegisterListPref(kOomDetectedHostList);
-
-  // Continue to register the old preference to migrate its value.
-  registry->RegisterListPref(kBlacklist);
 }
 
 // static
 OomInterventionDecider* OomInterventionDecider::GetForBrowserContext(
     content::BrowserContext* context) {
-  // The OomIntervetnionDecider is disabled in incognito mode because it is
-  // written in such a way that hostnames would be persisted in preferences on
-  // disk which is not acceptable for incognito mode.
-  if (context->IsOffTheRecord())
-    return nullptr;
-
   if (!context->GetUserData(kOomInterventionDecider)) {
     PrefService* prefs = Profile::FromBrowserContext(context)->GetPrefs();
+    if (context->IsOffTheRecord()) {
+      InitializeIncognitoPrefs(prefs);
+    }
     context->SetUserData(kOomInterventionDecider,
                          base::WrapUnique(new OomInterventionDecider(
                              std::make_unique<DelegateImpl>(), prefs)));
@@ -135,13 +133,6 @@ void OomInterventionDecider::ClearData() {
 void OomInterventionDecider::OnPrefInitialized(bool success) {
   if (!success)
     return;
-
-  // Migrate `kBlacklist` to `kBlocklist`.
-  const base::ListValue& old_pref_value = prefs_->GetList(kBlacklist);
-  if (!old_pref_value.empty()) {
-    prefs_->SetList(kBlocklist, old_pref_value.Clone());
-    prefs_->SetList(kBlacklist, base::ListValue());
-  }
 
   if (delegate_->WasLastShutdownClean())
     return;

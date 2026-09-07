@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "base/auto_reset.h"
+#include "base/check.h"
 #include "base/check_op.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
@@ -213,6 +214,13 @@ void MenuHost::ShowMenuHost(bool do_capture) {
   // Doing a capture may make us get capture lost. Ignore it while we're in the
   // process of showing.
   base::AutoReset<bool> reseter(&ignore_capture_lost_, true);
+#if defined(USE_AURA)
+  std::unique_ptr<aura::Window::ScopedDeleteBlocker> delete_blocker;
+  if (GetNativeWindow()) {
+    delete_blocker =
+        std::make_unique<aura::Window::ScopedDeleteBlocker>(GetNativeWindow());
+  }
+#endif
   ShowInactive();
 
   // ShowInactive() can trigger events that cause the menu to be destroyed
@@ -248,8 +256,11 @@ void MenuHost::ShowMenuHost(bool do_capture) {
 }
 
 void MenuHost::HideMenuHost() {
+  if (destroying_ && !IsVisible()) {
+    return;
+  }
   MenuController* menu_controller =
-      submenu_->GetMenuItem()->GetMenuController();
+      submenu_ ? submenu_->GetMenuItem()->GetMenuController() : nullptr;
   if (GetOwner() && menu_controller &&
       menu_controller->send_gesture_events_to_owner()) {
     gfx::NativeView target_view = native_view_for_gestures_
@@ -265,14 +276,28 @@ void MenuHost::HideMenuHost() {
 }
 
 void MenuHost::DestroyMenuHost() {
-  HideMenuHost();
+  if (destroying_) {
+    DUMP_WILL_BE_CHECK(false);
+    return;
+  }
   destroying_ = true;
+  MenuController* menu_controller =
+      submenu_ ? submenu_->GetMenuItem()->GetMenuController() : nullptr;
+
+  bool defer_destruction = menu_controller && menu_controller->IsStackActive();
+  if (defer_destruction) {
+    menu_controller->DeferWidgetDestruction(GetWeakPtr());
+  }
+
+  HideMenuHost();
   submenu_ = nullptr;
 #if defined(USE_AURA)
   pre_dispatch_handler_.reset();
 #endif
   static_cast<MenuHostRootView*>(GetRootView())->ClearSubmenu();
-  Close();
+  if (!defer_destruction) {
+    Close();
+  }
 }
 
 void MenuHost::SetMenuHostBounds(const gfx::Rect& bounds) {
@@ -339,14 +364,13 @@ void MenuHost::OnOwnerClosing() {
   }
 }
 
-void MenuHost::OnDragWillStart() {
+void MenuHost::OnDragDropWillStart() {
   MenuController* menu_controller =
       submenu_->GetMenuItem()->GetMenuController();
   DCHECK(menu_controller);
-  menu_controller->OnDragWillStart();
+  menu_controller->OnDragDropWillStart();
 }
-
-void MenuHost::OnDragComplete() {
+void MenuHost::OnDragDropCompleted() {
   // If we are being destroyed there is no guarantee that the menu items are
   // available.
   if (destroying_) {
@@ -361,10 +385,10 @@ void MenuHost::OnDragComplete() {
   bool should_close =
       menu_controller->exit_type() != MenuController::ExitType::kNone;
   if (auto* const delegate = submenu_->GetMenuItem()->GetDelegate()) {
-    should_close |= delegate->ShouldCloseOnDragComplete();
+    should_close |= delegate->ShouldCloseOnDragDropCompleted();
   }
 
-  menu_controller->OnDragComplete(should_close);
+  menu_controller->OnDragDropCompleted(should_close);
 }
 
 Widget* MenuHost::GetPrimaryWindowWidget() {

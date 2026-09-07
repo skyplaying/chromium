@@ -9,6 +9,7 @@
 
 #include "base/metrics/field_trial.h"
 #include "base/metrics/field_trial_params.h"
+#include "base/notreached.h"
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
@@ -72,14 +73,18 @@ class TestClient : public SafeBrowsingDatabaseManager::Client {
   ~TestClient() override { db_->CancelCheck(this); }
 
   void OnCheckBrowseUrlResult(const GURL& url,
-                              SBThreatType threat_type,
-                              const ThreatMetadata& metadata) override {
+                              SBThreatType threat_type) override {
     EXPECT_EQ(expected_url_, url);
     EXPECT_EQ(expected_threat_type_, threat_type);
     is_callback_called_ = true;
   }
 
   bool IsCallbackCalled() { return is_callback_called_; }
+
+  base::WeakPtr<V5GetHashProtocolManager> GetV5GetHashProtocolManager()
+      override {
+    NOTREACHED();
+  }
 
  private:
   scoped_refptr<RemoteSafeBrowsingDatabaseManager> db_;

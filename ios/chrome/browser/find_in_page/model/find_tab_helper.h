@@ -5,6 +5,8 @@
 #ifndef IOS_CHROME_BROWSER_FIND_IN_PAGE_MODEL_FIND_TAB_HELPER_H_
 #define IOS_CHROME_BROWSER_FIND_IN_PAGE_MODEL_FIND_TAB_HELPER_H_
 
+#import <memory>
+
 #import "base/scoped_observation.h"
 #import "ios/chrome/browser/find_in_page/model/find_in_page_response_delegate.h"
 #import "ios/web/public/web_state_observer.h"
@@ -12,6 +14,8 @@
 
 @class FindInPageController;
 class FullscreenController;
+@protocol FullscreenCommands;
+class ScopedForceFullscreen;
 
 // Adds support for the Native Find in Page feature. Instantiates a
 // FindInPageController when the web state is realized which itself attaches and
@@ -34,6 +38,10 @@ class FindTabHelper final : public web::WebStateObserver,
   // Sets the full screen controller that will passed to the
   // `FindInPageController`.
   void SetFullscreenController(FullscreenController* fullscreen_controller);
+
+  // Sets the fullscreen handler that will be passed to the
+  // `FindInPageController` (refactored).
+  void SetFullscreenHandler(id<FullscreenCommands> fullscreen_handler);
 
   void SetResponseDelegate(id<FindInPageResponseDelegate> response_delegate);
   void StartFinding(NSString* search_string);
@@ -61,6 +69,12 @@ class FindTabHelper final : public web::WebStateObserver,
 
   // The ObjC find in page controller (nil if the WebState is not realized).
   FindInPageController* controller_ = nil;
+
+  // Fullscreen commands handler for forcing fullscreen.
+  __weak id<FullscreenCommands> fullscreen_handler_ = nil;
+
+  // Scoped object that forces fullscreen mode while Find UI is active.
+  std::unique_ptr<ScopedForceFullscreen> scoped_force_fullscreen_;
 
   // The delegate to register with JavaScriptFindInPageController when it is
   // created.

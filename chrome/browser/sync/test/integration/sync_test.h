@@ -34,6 +34,7 @@
 #include "net/http/http_status_code.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "services/network/test/test_url_loader_factory.h"
+#include "url/gurl.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/app_list/app_list_syncable_service.h"
@@ -61,6 +62,7 @@
 #define E2E_ONLY(test_name) MACRO_CONCAT(DISABLED_E2ETest, test_name)
 #define E2E_ENABLED(test_name) MACRO_CONCAT(test_name, E2ETest)
 
+class BrowserWindowInterface;
 class FakeSyncGCMDriver;
 class KeyedService;
 class ProfileManager;
@@ -152,6 +154,7 @@ class SyncTest : public PlatformBrowserTest,
   void TearDown() override;
   void PostRunTestOnMainThread() override;
   void CreatedBrowserMainParts(content::BrowserMainParts* parts) override;
+  void SetUpLocalStatePrefService(PrefService* local_state) override;
 
   // Sets up command line flags required for sync tests.
   void SetUpCommandLine(base::CommandLine* cl) override;
@@ -163,8 +166,8 @@ class SyncTest : public PlatformBrowserTest,
   // and manages its lifetime.
   Profile* GetProfile(int index) const;
 
-  // Returns a list of all profiles including the verifier if available. Callee
-  // owns the objects and manages its lifetime.
+  // Returns a list of all profiles. Callee owns the objects and manages
+  // their lifetime.
   std::vector<raw_ptr<Profile, VectorExperimental>> GetAllProfiles();
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -174,17 +177,14 @@ class SyncTest : public PlatformBrowserTest,
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if !BUILDFLAG(IS_ANDROID)
-  // Returns a pointer to a particular browser. Callee owns the object
-  // and manages its lifetime. The called browser must not be closed before.
-  Browser* GetBrowser(int index);
+  // Returns a pointer to the browser at `window_index` for profile
+  // `profile_index`. Callee owns the object and manages its lifetime.
+  BrowserWindowInterface* GetBrowser(int profile_index,
+                                     int window_index = 0) const;
 
-  // Adds a new browser belonging to the profile at |profile_index|, and appends
-  // it to the list of browsers. Creates a copy of the Profile pointer in
-  // position |profile_index| and appends it to the list of profiles. This is
-  // done so that the profile associated with the new browser can be found at
-  // the same index as it. Tests typically use browser indexes and profile
-  // indexes interchangeably; this allows them to do so freely.
-  Browser* AddBrowser(int profile_index);
+  // Adds a new browser belonging to profile `profile_index`, and appends
+  // it to that client's list of browsers.
+  BrowserWindowInterface* AddBrowser(int profile_index);
 #endif
 
   // Returns a pointer to a particular sync client. Callee owns the object
@@ -211,17 +211,9 @@ class SyncTest : public PlatformBrowserTest,
   // in conjunction with test parameterization.
   virtual SetupSyncMode GetSetupSyncMode() const;
 
-  // Returns a pointer to the sync profile that is used to verify changes to
-  // individual sync profiles. Callee owns the object and manages its lifetime.
-  Profile* verifier();
-
-  // Used to determine whether the verifier profile should be updated or not.
-  // Default is to return false. Test should override this if they require
-  // different behavior.
-  // Warning: do not use verifier in new tests.
-  // TODO(crbug.com/40152770): remove verifier profile logic completely, once
-  // all tests are rewritten in a way to not use verifier.
-  virtual bool UseVerifier();
+  // Returns the URL to be opened in the initial tab of each profile's browser
+  // window.
+  virtual GURL GetInitialURL() const;
 
   // Initializes sync clients and profiles but does not sync any of them.
   [[nodiscard]] virtual bool SetupClients();
@@ -233,8 +225,18 @@ class SyncTest : public PlatformBrowserTest,
   [[nodiscard]] bool SetupSync(
       SyncTestAccount account,
       SyncWaitCondition wait_condition = WAIT_FOR_COMMITS_TO_COMPLETE);
-  // Should only be used if SetupSync() doesn't work, i.e. `setup_mode` needs to
-  // be changed during the test.
+
+  // Signs in to a primary and enables sync transport, without enabling
+  // sync-the-feature.
+  [[nodiscard]] bool SignIn(
+      SyncTestAccount account = SyncTestAccount::kDefaultAccount);
+
+  // Should only be used if SetupSync() and SignIn() aren't sufficient, i.e.
+  // `setup_mode` is only known during runtime (usually parameterized tests).
+  //
+  // Note that, for kSyncTransportOnly, history sync
+  // is enabled, to make the behavior more similar to the SyncTheFeature case,
+  // for convenience of parameterized tests.
   [[nodiscard]] bool SetupSyncWithMode(
       SetupSyncMode setup_mode,
       SyncWaitCondition wait_condition = WAIT_FOR_COMMITS_TO_COMPLETE,
@@ -302,9 +304,6 @@ class SyncTest : public PlatformBrowserTest,
   void OnProfileManagerDestroying() override;
   void OnProfileCreationStarted(Profile* profile) override;
 
-  // Invoked immediately before creating profile |index| under |profile_path|.
-  virtual void BeforeSetupClient(int index, const base::FilePath& profile_path);
-
   // The name for a directory under chrome::DIR_USER_DATA.
   virtual base::FilePath GetProfileBaseName(int index);
 
@@ -345,7 +344,7 @@ class SyncTest : public PlatformBrowserTest,
   // |browser| in the |browsers_| list as nullptr to keep indexes in |browsers_|
   // and |profiles_| in sync. It is used when the |browser| is removed within a
   // test (e.g. when the last tab is closed for the |browser|).
-  void OnBrowserRemoved(Browser* browser);
+  void OnBrowserRemoved(BrowserWindowInterface* browser);
 #endif
 
   // Helper to block the current thread while the data models sync depends on
@@ -366,9 +365,11 @@ class SyncTest : public PlatformBrowserTest,
   void InitializeProfile(int index, Profile* profile);
 
   // Internal routine for setting up sync.
-  [[nodiscard]] bool SetupSyncInternal(SetupSyncMode setup_mode,
-                                       SyncWaitCondition wait_condition,
-                                       SyncTestAccount account);
+  [[nodiscard]] bool SetupSyncInternal(
+      SetupSyncMode setup_mode,
+      SyncWaitCondition wait_condition,
+      SyncTestAccount account,
+      bool enable_history_sync_in_transport_mode);
 
   // Used to determine whether ARC_PACKAGE data type needs to be enabled. This
   // is applicable on ChromeOS-Ash platform only.
@@ -397,51 +398,50 @@ class SyncTest : public PlatformBrowserTest,
   const int num_clients_;
 
   // Used to catch any timeout within RunLoop and cause test error.
-  base::test::ScopedRunLoopTimeout sync_run_loop_timeout;
+  base::test::ScopedRunLoopTimeout sync_run_loop_timeout_;
 
   // The default profile, created before our actual testing |profiles_|. This is
   // needed in a workaround for https://crbug.com/41364511, see comments in the
   // .cc file.
   raw_ptr<Profile, AcrossTasksDanglingUntriaged> previous_profile_ = nullptr;
 
-  // Collection of sync profiles used by a test. A sync profile maintains sync
-  // data contained within its own subdirectory under the chrome user data
-  // directory. Profiles are owned by the ProfileManager.
-  // TODO(crbug.com/40855871): store |profiles_|, |browsers_| and |clients_| in
-  // one structure.
-  std::vector<raw_ptr<Profile, AcrossTasksDanglingUntriaged>> profiles_;
+  // Stores the state of a sync client, including its profile, sync service
+  // harness, and associated browser windows.
+  struct SyncClientState {
+    SyncClientState();
+    ~SyncClientState();
+    SyncClientState(SyncClientState&&);
+    SyncClientState& operator=(SyncClientState&&);
+
+    // The profile for this sync client. Owned by ProfileManager. Can be null if
+    // destroyed earlier (e.g. in OnProfileWillBeDestroyed).
+    raw_ptr<Profile, AcrossTasksDanglingUntriaged> profile = nullptr;
+    std::unique_ptr<SyncServiceImplHarness> harness;
+#if !BUILDFLAG(IS_ANDROID)
+    std::vector<raw_ptr<BrowserWindowInterface, AcrossTasksDanglingUntriaged>>
+        browsers;
+#endif
+  };
 
   // List of temporary directories that need to be deleted when the test is
   // completed, used for two-client tests with external server.
   std::vector<std::unique_ptr<base::ScopedTempDir>> scoped_temp_dirs_;
 
 #if !BUILDFLAG(IS_ANDROID)
-  // Collection of pointers to the browser objects used by a test. One browser
-  // instance is created for each sync profile. Browser object lifetime is
-  // managed by BrowserList, so we don't use a std::vector<std::unique_ptr<>>
-  // here.
-  std::vector<raw_ptr<Browser, AcrossTasksDanglingUntriaged>> browsers_;
-
   class ClosedBrowserObserver;
   std::unique_ptr<ClosedBrowserObserver> browser_list_observer_;
 #endif
 
-  // Collection of sync clients used by a test. A sync client is associated
-  // with a sync profile, and implements methods that sync the contents of the
-  // profile with the server.
-  std::vector<std::unique_ptr<SyncServiceImplHarness>> clients_;
+  // Collection of sync clients used by a test, storing each client's profile,
+  // sync harness, and browser windows.
+  std::vector<SyncClientState> clients_;
 
   // Used to deliver invalidations to different profiles within
   // FakeSyncServerInvalidationSender.
+  // TODO(crbug.com/40855871): Move this into SyncClientState.
   std::map<raw_ptr<Profile, AcrossTasksDanglingUntriaged>,
            raw_ptr<FakeSyncGCMDriver, AcrossTasksDanglingUntriaged>>
       profile_to_fake_gcm_driver_;
-
-  // Sync profile against which changes to individual profiles are verified.
-  // We don't need a corresponding verifier sync client because the contents
-  // of the verifier profile are strictly local, and are not meant to be
-  // synced.
-  raw_ptr<Profile, AcrossTasksDanglingUntriaged> verifier_ = nullptr;
 
   syncer::DataTypeSet excluded_types_from_check_for_data_type_failures_;
 
@@ -475,14 +475,13 @@ class SyncTest : public PlatformBrowserTest,
 };
 
 inline auto GetSyncTestModes() {
-#if BUILDFLAG(IS_CHROMEOS)
-  return testing::Values(SyncTest::SetupSyncMode::kSyncTheFeature);
-#elif BUILDFLAG(IS_LINUX) && !defined(ADDRESS_SANITIZER) && \
-    !defined(THREAD_SANITIZER) && !defined(MEMORY_SANITIZER)
+#if (BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)) &&           \
+    !defined(ADDRESS_SANITIZER) && !defined(THREAD_SANITIZER) && \
+    !defined(MEMORY_SANITIZER)
   return testing::Values(SyncTest::SetupSyncMode::kSyncTransportOnly,
                          SyncTest::SetupSyncMode::kSyncTheFeature);
-// On non-Linux, and on expensive (ASan etc) bots, run only the single most
-// important configuration, for capacity reasons.
+// On non-Linux, non-ChromeOS, and on expensive (ASan etc) bots, run only the
+// single most important configuration, for capacity reasons.
 #else
   return testing::Values(SyncTest::SetupSyncMode::kSyncTransportOnly);
 #endif

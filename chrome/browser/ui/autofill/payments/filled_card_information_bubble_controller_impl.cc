@@ -8,9 +8,10 @@
 #include "chrome/browser/ui/actions/chrome_action_id.h"
 #include "chrome/browser/ui/autofill/autofill_bubble_base.h"
 #include "chrome/browser/ui/autofill/autofill_bubble_handler.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "components/autofill/core/browser/data_model/payments/bnpl_issuer.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics.h"
 #include "components/autofill/core/browser/payments/bnpl_manager.h"
@@ -417,8 +418,10 @@ void FilledCardInformationBubbleControllerImpl::DoShowBubble() {
   // clicks the icon during the delay.
   weak_ptr_factory_.InvalidateWeakPtrs();
 
-  Browser* browser = chrome::FindBrowserWithTab(web_contents());
-  SetBubbleView(*browser->window()
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          web_contents());
+  SetBubbleView(*BrowserWindow::FromBrowser(browser)
                      ->GetAutofillBubbleHandler()
                      ->ShowFilledCardInformationBubble(web_contents(), this,
                                                        is_user_gesture_));
@@ -433,12 +436,13 @@ void FilledCardInformationBubbleControllerImpl::DoShowBubble() {
 }
 
 bool FilledCardInformationBubbleControllerImpl::IsWebContentsActive() {
-  Browser* active_browser = chrome::FindBrowserWithActiveWindow();
+  BrowserWindowInterface* active_browser =
+      GlobalBrowserCollection::GetInstance()->GetActiveBrowser();
   if (!active_browser) {
     return false;
   }
 
-  return active_browser->tab_strip_model()->GetActiveWebContents() ==
+  return active_browser->GetTabStripModel()->GetActiveWebContents() ==
          web_contents();
 }
 
@@ -448,10 +452,9 @@ void FilledCardInformationBubbleControllerImpl::SetEventObserverForTesting(
 }
 
 GURL FilledCardInformationBubbleControllerImpl::GetLearnMoreUrl() const {
-  return IsBnplFlow()
-             ? autofill::payments::GetBnplTermsUrl(
-                   ConvertToBnplIssuerIdEnum(options_.filled_card.issuer_id()))
-             : autofill::payments::GetVirtualCardEnrollmentSupportUrl();
+  return IsBnplFlow() ? payments::GetBnplTermsUrl(ConvertToBnplIssuerIdEnum(
+                            options_.filled_card.issuer_id()))
+                      : payments::GetVirtualCardEnrollmentSupportUrl();
 }
 
 bool FilledCardInformationBubbleControllerImpl::IsBnplFlow() const {

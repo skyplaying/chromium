@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "base/auto_reset.h"
+#include "base/logging.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/autofill/personal_data_manager_factory.h"
@@ -24,9 +25,8 @@
 #include "chrome/browser/ui/autofill/autofill_bubble_handler.h"
 #include "chrome/browser/ui/autofill/payments/save_card_bubble_controller.h"
 #include "chrome/browser/ui/autofill/payments/save_card_ui.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/hats/trust_safety_sentiment_service.h"
 #include "chrome/browser/ui/hats/trust_safety_sentiment_service_factory.h"
@@ -52,6 +52,7 @@
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/sync/service/sync_service.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/visibility.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -294,7 +295,10 @@ std::u16string SaveCardBubbleControllerImpl::GetWindowTitle() const {
     case PaymentsBubbleType::kUploadSave:
     case PaymentsBubbleType::kUploadInProgress:
       return l10n_util::GetStringUTF16(
-          IDS_AUTOFILL_SAVE_CARD_PROMPT_TITLE_TO_CLOUD_SECURITY);
+          base::FeatureList::IsEnabled(
+              features::kAutofillEnableWalletBrandingV2)
+              ? IDS_AUTOFILL_SAVE_CARD_IN_GOOGLE_WALLET_PROMPT_TITLE
+              : IDS_AUTOFILL_SAVE_CARD_PROMPT_TITLE_TO_CLOUD_SECURITY);
     case PaymentsBubbleType::kUploadCvcSave:
       return l10n_util::GetStringUTF16(
           IDS_AUTOFILL_SAVE_CVC_PROMPT_TITLE_TO_CLOUD);
@@ -311,9 +315,7 @@ std::u16string SaveCardBubbleControllerImpl::GetWindowTitle() const {
 }
 
 std::u16string SaveCardBubbleControllerImpl::GetExplanatoryMessage() const {
-  if (current_bubble_type_ == PaymentsBubbleType::kLocalSave &&
-      base::FeatureList::IsEnabled(
-          features::kAutofillEnableCvcStorageAndFilling)) {
+  if (current_bubble_type_ == PaymentsBubbleType::kLocalSave) {
     CHECK_NE(options_.card_save_type,
              payments::PaymentsAutofillClient::CardSaveType::kCvcSaveOnly);
     return l10n_util::GetStringUTF16(
@@ -342,7 +344,10 @@ std::u16string SaveCardBubbleControllerImpl::GetExplanatoryMessage() const {
 
   return l10n_util::GetStringUTF16(
       base::FeatureList::IsEnabled(features::kAutofillEnableWalletBranding)
-          ? IDS_AUTOFILL_SAVE_CARD_PROMPT_UPLOAD_TO_WALLET_EXPLANATION_SECURITY
+          ? (base::FeatureList::IsEnabled(
+                 features::kAutofillEnableWalletBrandingV2)
+                 ? IDS_AUTOFILL_SAVE_CARD_PROMPT_UPLOAD_TO_WALLET_V2_EXPLANATION
+                 : IDS_AUTOFILL_SAVE_CARD_PROMPT_UPLOAD_TO_WALLET_EXPLANATION_SECURITY)
           : IDS_AUTOFILL_SAVE_CARD_PROMPT_UPLOAD_EXPLANATION_SECURITY);
 }
 
@@ -542,7 +547,10 @@ void SaveCardBubbleControllerImpl::OnManageCardsClicked() {
 }
 
 void SaveCardBubbleControllerImpl::ShowPaymentsSettingsPage() {
-  chrome::ShowSettingsSubPage(chrome::FindBrowserWithTab(web_contents()),
+  tabs::TabInterface* tab = tabs::TabInterface::GetFromContents(web_contents());
+  CHECK(tab);
+  CHECK(tab->GetBrowserWindowInterface());
+  chrome::ShowSettingsSubPage(tab->GetBrowserWindowInterface(),
                               chrome::kPaymentsSubPage);
 }
 
@@ -810,22 +818,27 @@ SaveCardBubbleControllerImpl::GetPageActionTooltipText() {
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
+AutofillBubbleHandler*
+SaveCardBubbleControllerImpl::GetAutofillBubbleHandler() {
+  tabs::TabInterface* tab = tabs::TabInterface::GetFromContents(web_contents());
+  CHECK(tab);
+  BrowserWindowInterface* browser = tab->GetBrowserWindowInterface();
+  CHECK(browser);
+  return AutofillBubbleHandler::Get(browser->GetUnownedUserDataHost());
+}
+
 void SaveCardBubbleControllerImpl::DoShowBubble() {
   if (!IsWebContentsActive()) {
     return;
   }
 
-  Browser* browser = chrome::FindBrowserWithTab(web_contents());
+  AutofillBubbleHandler* autofill_bubble_handler = GetAutofillBubbleHandler();
   if (current_bubble_type_ == PaymentsBubbleType::kUploadComplete) {
-    SetBubbleView(*browser->window()
-                       ->GetAutofillBubbleHandler()
-                       ->ShowSaveCardConfirmationBubble(web_contents(), this));
+    SetBubbleView(*autofill_bubble_handler->ShowSaveCardConfirmationBubble(
+        web_contents(), this));
   } else {
-    SetBubbleView(
-        *browser->window()
-             ->GetAutofillBubbleHandler()
-             ->ShowSaveCreditCardBubble(web_contents(), this,
-                                        is_triggered_by_user_gesture_));
+    SetBubbleView(*autofill_bubble_handler->ShowSaveCreditCardBubble(
+        web_contents(), this, is_triggered_by_user_gesture_));
   }
   CHECK(bubble_view());
 
@@ -927,18 +940,24 @@ void SaveCardBubbleControllerImpl::ShowIconOnly() {
     case PaymentsBubbleType::kLocalSave:
       if (!is_reshow_) {
         autofill_metrics::LogSaveCreditCardPromptOfferMetricDesktop(
-            autofill_metrics::SaveCardPromptOffer::kNotShownMaxStrikesReached,
+            options_.save_card_prompt_offer_decision.value_or(
+                autofill_metrics::SaveCardPromptOffer::
+                    kNotShownMaxStrikesReached),
             is_upload_save_, /*save_credit_card_options=*/options_);
       }
       autofill_metrics::LogSaveCardPromptOfferMetric(
-          autofill_metrics::SaveCardPromptOffer::kNotShownMaxStrikesReached,
+          options_.save_card_prompt_offer_decision.value_or(
+              autofill_metrics::SaveCardPromptOffer::
+                  kNotShownMaxStrikesReached),
           is_upload_save_, is_reshow_, options_,
           payments_data_manager_->GetPaymentsSigninStateForMetrics());
       break;
     case PaymentsBubbleType::kUploadCvcSave:
     case PaymentsBubbleType::kLocalCvcSave:
       autofill_metrics::LogSaveCvcPromptOfferMetric(
-          autofill_metrics::SaveCardPromptOffer::kNotShownMaxStrikesReached,
+          options_.save_card_prompt_offer_decision.value_or(
+              autofill_metrics::SaveCardPromptOffer::
+                  kNotShownMaxStrikesReached),
           is_upload_save_, is_reshow_);
       break;
     case PaymentsBubbleType::kUploadInProgress:

@@ -4,14 +4,23 @@
 
 #include "third_party/blink/renderer/modules/ai/language_model_prompt_builder.h"
 
+#include <variant>
+
+#include "base/feature_list.h"
+#include "base/values.h"
 #include "media/base/audio_bus.h"
 #include "third_party/abseil-cpp/absl/functional/overload.h"
 #include "third_party/blink/public/mojom/ai/ai_language_model.mojom-blink-forward.h"
+#include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/bindings/core/v8/idl_types.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_throw_dom_exception.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_language_model_create_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_language_model_message.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_language_model_message_content.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_language_model_tool_error.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_language_model_tool_result_content.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_language_model_tool_success.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_union_blob_htmlcanvaselement_htmlimageelement_htmlvideoelement_imagebitmap_imagedata_offscreencanvas_svgimageelement_videoframe.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_union_language_model_message_value.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_union_language_model_prompt.h"
@@ -24,15 +33,21 @@
 #include "third_party/blink/renderer/core/fileapi/file_reader_client.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/imagebitmap/image_bitmap.h"
+#include "third_party/blink/renderer/core/inspector/console_message.h"
 #include "third_party/blink/renderer/core/offscreencanvas/offscreen_canvas.h"
 #include "third_party/blink/renderer/core/streams/readable_stream.h"
+#include "third_party/blink/renderer/modules/ai/ai_utils.h"
 #include "third_party/blink/renderer/modules/ai/language_model.h"
+#include "third_party/blink/renderer/modules/ai/language_model_tool_call.h"
+#include "third_party/blink/renderer/modules/ai/language_model_tool_error.h"
+#include "third_party/blink/renderer/modules/ai/language_model_tool_success.h"
 #include "third_party/blink/renderer/modules/canvas/imagebitmap/image_bitmap_factories.h"
 #include "third_party/blink/renderer/modules/canvas/imagebitmap/image_bitmap_source_util.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_buffer.h"
 #include "third_party/blink/renderer/platform/audio/audio_bus.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_remote.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 
 namespace blink {
@@ -56,13 +71,18 @@ LanguageModelMessageContent* MakeMessageTextContent(const String& value) {
 
 // Normalizes a prompt message into a list of canonical
 // LanguageModelMessageContent. Shorthand styles are converted into canonical
-// formats.
-HeapVector<Member<LanguageModelMessageContent>> NormalizePromptContent(
+// formats. Adds an empty text content in place of empty sequences.
+HeapVector<Member<LanguageModelMessageContent>> NormalizePrompt(
     const LanguageModelMessage* message) {
   V8UnionLanguageModelMessageContentSequenceOrString* content =
       message->content();
+  CHECK(content);
   if (content->IsLanguageModelMessageContentSequence()) {
-    return content->GetAsLanguageModelMessageContentSequence();
+    auto content_list = content->GetAsLanguageModelMessageContentSequence();
+    if (content_list.empty()) {
+      content_list.push_back(MakeMessageTextContent(g_empty_string));
+    }
+    return content_list;
   }
   CHECK(content->IsString());
   HeapVector<Member<LanguageModelMessageContent>> content_list;
@@ -71,16 +91,28 @@ HeapVector<Member<LanguageModelMessageContent>> NormalizePromptContent(
 }
 
 // Normalizes a prompt into a list of canonical LanguageModelMessage. Shorthand
-// styles are converted into canonical formats.
+// styles are converted into canonical formats. Yields empty user-role text
+// content for empty message sequences.
 HeapVector<Member<LanguageModelMessage>> NormalizePrompt(
     const V8LanguageModelPrompt* prompt) {
+  CHECK(prompt);
   if (prompt->IsLanguageModelMessageSequence()) {
-    for (const auto& message : prompt->GetAsLanguageModelMessageSequence()) {
+    auto messages = prompt->GetAsLanguageModelMessageSequence();
+    if (messages.empty()) {
+      auto* message = MakeGarbageCollected<LanguageModelMessage>();
+      message->setRole(
+          V8LanguageModelMessageRole(V8LanguageModelMessageRole::Enum::kUser));
       message->setContent(MakeGarbageCollected<
                           V8UnionLanguageModelMessageContentSequenceOrString>(
-          NormalizePromptContent(message)));
+          g_empty_string));
+      messages.push_back(std::move(message));
     }
-    return prompt->GetAsLanguageModelMessageSequence();
+    for (const auto& message : messages) {
+      message->setContent(MakeGarbageCollected<
+                          V8UnionLanguageModelMessageContentSequenceOrString>(
+          NormalizePrompt(message)));
+    }
+    return messages;
   }
   CHECK(prompt->IsString());
   HeapVector<Member<LanguageModelMessageContent>> content_list;
@@ -96,6 +128,105 @@ HeapVector<Member<LanguageModelMessage>> NormalizePrompt(
   messages.push_back(std::move(message));
   return messages;
 }
+
+// Converts a LanguageModelToolSuccess to DictValue for mojo transport.
+// Format: {"callID":"...","name":"...","result":[...]}
+// Returns std::nullopt on error.
+std::optional<base::DictValue> ConvertToolSuccessToDictValue(
+    ScriptState* script_state,
+    const LanguageModelToolSuccess* tool_success) {
+  base::DictValue dict;
+  dict.Set("callID", tool_success->callID().Utf8());
+  dict.Set("name", tool_success->name().Utf8());
+
+  // Convert the result array to base::Value.
+  base::ListValue result_list;
+  const auto& result_items = tool_success->result();
+
+  // Create V8 value converter for direct V8 to base::Value conversion.
+  std::unique_ptr<WebV8ValueConverter> converter =
+      Platform::Current()->CreateWebV8ValueConverter();
+
+  ScriptState::Scope scope(script_state);
+  v8::Local<v8::Context> context = script_state->GetContext();
+
+  for (const auto& result_item : result_items) {
+    // Each result item can be text, image, audio, or object.
+    // TODO(crbug.com/422803232): Properly handle image/audio result types.
+    v8::Local<v8::Value> value_v8 = result_item->value().V8Value();
+
+    // Detect if a DOM object (API wrapper) is being passed with wrong type.
+    // API wrappers like ImageBitmap/AudioBuffer get converted to empty dict {}.
+    bool is_api_wrapper =
+        value_v8->IsObject() && value_v8.As<v8::Object>()->IsApiWrapper();
+    if (is_api_wrapper &&
+        result_item->type() == V8LanguageModelToolResultType::Enum::kObject) {
+      return std::nullopt;
+    }
+
+    std::unique_ptr<base::Value> converted_value =
+        converter->FromV8Value(value_v8, context);
+    // V8ValueConverter returns nullptr for unsupported types, or a valid
+    // base::Value that may contain Type::NONE for circular references or
+    // unsupported types nested within the structure.
+    if (!converted_value || ContainsNoneType(*converted_value)) {
+      return std::nullopt;
+    }
+
+    result_list.Append(std::move(*converted_value));
+  }
+
+  dict.Set("result", std::move(result_list));
+  return dict;
+}
+
+// Converts a LanguageModelToolError to DictValue for mojo transport.
+// Format: {"callID":"...","name":"...","errorMessage":"..."}
+base::DictValue ConvertToolErrorToDictValue(
+    const LanguageModelToolError* tool_error) {
+  base::DictValue dict;
+  dict.Set("callID", tool_error->callID().Utf8());
+  dict.Set("name", tool_error->name().Utf8());
+  dict.Set("errorMessage", tool_error->errorMessage().Utf8());
+
+  return dict;
+}
+
+// Converts a LanguageModelToolCall to DictValue for mojo transport.
+// Format: {"callID":"...","name":"...","arguments":{...}}
+// Returns std::nullopt on error.
+std::optional<base::DictValue> ConvertToolCallToDictValue(
+    ScriptState* script_state,
+    const LanguageModelToolCall* tool_call) {
+  base::DictValue dict;
+  dict.Set("callID", tool_call->callID().Utf8());
+  dict.Set("name", tool_call->name().Utf8());
+
+  ScriptState::Scope scope(script_state);
+  v8::Local<v8::Value> arguments = tool_call->arguments(script_state);
+  if (arguments->IsNullOrUndefined()) {
+    dict.Set("arguments", base::DictValue());
+    return dict;
+  }
+  // Arguments must be a dictionary. Reject API wrappers because the converter
+  // may otherwise represent DOM objects as an empty dictionary.
+  if (!arguments->IsObject() || arguments.As<v8::Object>()->IsApiWrapper()) {
+    return std::nullopt;
+  }
+
+  std::unique_ptr<WebV8ValueConverter> converter =
+      Platform::Current()->CreateWebV8ValueConverter();
+  std::unique_ptr<base::Value> converted_arguments =
+      converter->FromV8Value(arguments, script_state->GetContext());
+  if (!converted_arguments || !converted_arguments->is_dict() ||
+      ContainsNoneType(*converted_arguments)) {
+    return std::nullopt;
+  }
+  dict.Set("arguments", std::move(*converted_arguments).TakeDict());
+  return dict;
+}
+
+}  // namespace
 
 // Helper class for converting types and managing async processing.
 class LanguageModelPromptBuilder
@@ -118,15 +249,15 @@ class LanguageModelPromptBuilder
   struct PendingEntry : public GarbageCollected<PendingEntry> {
     PendingEntry() = delete;
     explicit PendingEntry(LanguageModelMessageContent* content,
-                          size_t message_index,
-                          size_t content_index)
+                          wtf_size_t message_index,
+                          wtf_size_t content_index)
         : content(content),
           message_index(message_index),
           content_index(content_index) {}
     void Trace(Visitor* visitor) const { visitor->Trace(content); }
     Member<LanguageModelMessageContent> content;
-    size_t message_index = 0;
-    size_t content_index = 0;
+    wtf_size_t message_index = 0;
+    wtf_size_t content_index = 0;
   };
   void Build(const V8LanguageModelPrompt* input);
   // Called to reject the promise and return an error to the callback.
@@ -153,12 +284,19 @@ class LanguageModelPromptBuilder
   void BitmapToMojo(std::variant<DOMDataView*, V8ImageBitmapSource*> source,
                     PendingEntry* entry);
 
+  // Processes tool calls and responses and calls OnPromptContentProcessed()
+  // when finished, or Reject() on failure.
+  void ProcessToolCall(V8LanguageModelMessageValue* content_value,
+                       PendingEntry* entry);
+  void ProcessToolResponse(V8LanguageModelMessageValue* content_value,
+                           PendingEntry* entry);
+
   // Called when an ImageBitmap is finished decoding.
   void OnBitmapLoaded(PendingEntry* entry,
                       ScriptState* script_state,
                       ImageBitmap* bitmap);
 
-  SelfKeepAlive<LanguageModelPromptBuilder> keep_alive_{this};
+  SelfKeepAlive<LanguageModelPromptBuilder> keep_alive_{{}, this};
   Vector<mojom::blink::AILanguageModelPromptPtr> processed_prompts_;
 
   int processed_remaining_ = 0;
@@ -259,10 +397,8 @@ void LanguageModelPromptBuilder::OnPromptContentProcessed(
 void LanguageModelPromptBuilder::Build(const V8LanguageModelPrompt* input) {
   CHECK_EQ(processed_remaining_, 0);  // Prevent parallel Build() calls.
   HeapVector<Member<LanguageModelMessage>> messages = NormalizePrompt(input);
-  if (messages.empty()) {
-    Resolve();
-    return;
-  }
+  // NormalizePrompt ensures that the messages list is never empty.
+  CHECK(!messages.empty());
   scoped_refptr<base::SequencedTaskRunner> task_runner =
       ExecutionContext::From(script_state_)
           ->GetTaskRunner(TaskType::kInternalDefault);
@@ -275,6 +411,8 @@ void LanguageModelPromptBuilder::Build(const V8LanguageModelPrompt* input) {
 
     HeapVector<Member<LanguageModelMessageContent>> content_sequence =
         message->content()->GetAsLanguageModelMessageContentSequence();
+    // Normalization ensures every message has at least one content entry.
+    CHECK(!content_sequence.empty());
     processed_remaining_ += content_sequence.size();
     // Pre-allocate the mojo struct and content array.
     processed_prompts_.push_back(mojom::blink::AILanguageModelPrompt::New(
@@ -283,9 +421,27 @@ void LanguageModelPromptBuilder::Build(const V8LanguageModelPrompt* input) {
             content_sequence.size()),
         message->prefix()));
 
-    bool is_multimodal = false;  // True if any content is not text.
+    bool is_multimodal = false;
     for (const auto& content : content_sequence) {
-      if (content->type().AsEnum() != V8LanguageModelMessageType::Enum::kText) {
+      V8LanguageModelMessageType::Enum content_type = content->type().AsEnum();
+      if (content_type == V8LanguageModelMessageType::Enum::kToolCall &&
+          message->role() != V8LanguageModelMessageRole::Enum::kAssistant) {
+        v8::Isolate* isolate = script_state_->GetIsolate();
+        Reject(ScriptValue(
+            isolate, V8ThrowException::CreateTypeError(
+                         isolate, "Tool calls must use the assistant role.")));
+        return;
+      }
+      if (content_type == V8LanguageModelMessageType::Enum::kToolResponse &&
+          message->role() != V8LanguageModelMessageRole::Enum::kUser) {
+        v8::Isolate* isolate = script_state_->GetIsolate();
+        Reject(ScriptValue(
+            isolate, V8ThrowException::CreateTypeError(
+                         isolate, "Tool responses must use the user role.")));
+        return;
+      }
+      if (content_type == V8LanguageModelMessageType::Enum::kImage ||
+          content_type == V8LanguageModelMessageType::Enum::kAudio) {
         is_multimodal = true;
         break;
       }
@@ -328,11 +484,14 @@ void LanguageModelPromptBuilder::Build(const V8LanguageModelPrompt* input) {
     }
   }
 
-  size_t message_index = 0;
+  wtf_size_t message_index = 0;
   for (const auto& message : messages) {
-    size_t content_index = 0;
-    for (const auto& content :
-         message->content()->GetAsLanguageModelMessageContentSequence()) {
+    auto content_sequence =
+        message->content()->GetAsLanguageModelMessageContentSequence();
+    CHECK(!content_sequence.empty());
+    wtf_size_t content_index = 0;
+    for (const auto& content : content_sequence) {
+      CHECK(content);
       // Track the pre-allocated message and content slot that the resulting
       // content will be written to.
       PendingEntry* pending_entry = MakeGarbageCollected<PendingEntry>(
@@ -344,6 +503,9 @@ void LanguageModelPromptBuilder::Build(const V8LanguageModelPrompt* input) {
     }
     message_index++;
   }
+  // As every message is guaranteed to have at least one content entry,
+  // processed_remaining_ will always be greater than 0 here.
+  CHECK_GT(processed_remaining_, 0);
 }
 
 void LanguageModelPromptBuilder::Trace(Visitor* visitor) const {
@@ -446,33 +608,119 @@ void LanguageModelPromptBuilder::ProcessEntry(PendingEntry* pending_entry) {
           return;
       }
     }
-    case V8LanguageModelMessageType::Enum::kToolCall:
-      if (!content_value->IsLanguageModelToolCall()) {
+    case V8LanguageModelMessageType::Enum::kToolCall: {
+      if (!info_->input_types ||
+          !info_->input_types->Contains(
+              mojom::blink::AILanguageModelPromptType::kToolCall)) {
         Reject(DOMException::Create(
-            "The value must be a LanguageModelToolCall for type:'tool-call'",
-            DOMException::GetErrorName(DOMExceptionCode::kSyntaxError)));
+            "Tool calls not supported. Session is not initialized with tool "
+            "support.",
+            DOMException::GetErrorName(DOMExceptionCode::kNotSupportedError)));
         return;
       }
-      // TODO(crbug.com/422803232): Implement tool call handling.
-      Reject(DOMException::Create(
-          "Tool calls are not yet implemented",
-          DOMException::GetErrorName(DOMExceptionCode::kNotSupportedError)));
+      ProcessToolCall(content_value, pending_entry);
       return;
-    case V8LanguageModelMessageType::Enum::kToolResponse:
-      // LanguageModelToolResponse is a union of ToolSuccess and ToolError.
-      if (!content_value->IsLanguageModelToolSuccess() &&
-          !content_value->IsLanguageModelToolError()) {
+    }
+    case V8LanguageModelMessageType::Enum::kToolResponse: {
+      if (!info_->input_types ||
+          !info_->input_types->Contains(
+              mojom::blink::AILanguageModelPromptType::kToolResponse)) {
         Reject(DOMException::Create(
-            "The value must be a LanguageModelToolSuccess or "
-            "LanguageModelToolError for type:'tool-response'",
-            DOMException::GetErrorName(DOMExceptionCode::kSyntaxError)));
+            "Tool responses not supported. Session is not initialized with "
+            "tool support.",
+            DOMException::GetErrorName(DOMExceptionCode::kNotSupportedError)));
         return;
       }
-      // TODO(crbug.com/422803232): Implement tool response handling.
-      Reject(DOMException::Create(
-          "Tool responses are not yet implemented",
-          DOMException::GetErrorName(DOMExceptionCode::kNotSupportedError)));
+      ProcessToolResponse(content_value, pending_entry);
       return;
+    }
+  }
+}
+
+void LanguageModelPromptBuilder::ProcessToolCall(
+    V8LanguageModelMessageValue* content_value,
+    PendingEntry* entry) {
+  if (!content_value->IsLanguageModelToolCall()) {
+    Reject(DOMException::Create(
+        "The value must be a LanguageModelToolCall for type:'tool-call'",
+        DOMException::GetErrorName(DOMExceptionCode::kSyntaxError)));
+    return;
+  }
+
+  std::optional<base::DictValue> converted_value = ConvertToolCallToDictValue(
+      script_state_, content_value->GetAsLanguageModelToolCall());
+  if (!converted_value.has_value()) {
+    Reject(DOMException::Create(
+        "Failed to serialize tool arguments. Arguments must be a dictionary "
+        "without circular references or non-serializable values.",
+        DOMException::GetErrorName(DOMExceptionCode::kDataError)));
+    return;
+  }
+
+  OnPromptContentProcessed(
+      mojom::blink::AILanguageModelPromptContent::NewToolCall(
+          std::move(*converted_value)),
+      entry);
+}
+
+void LanguageModelPromptBuilder::ProcessToolResponse(
+    V8LanguageModelMessageValue* content_value,
+    PendingEntry* entry) {
+  LanguageModelToolSuccess* tool_success = nullptr;
+  LanguageModelToolError* tool_error = nullptr;
+
+  if (content_value->IsLanguageModelToolSuccess()) {
+    tool_success = content_value->GetAsLanguageModelToolSuccess();
+  } else if (content_value->IsLanguageModelToolError()) {
+    tool_error = content_value->GetAsLanguageModelToolError();
+  } else {
+    // Neither ToolSuccess nor ToolError.
+    Reject(DOMException::Create(
+        "The value must be a LanguageModelToolSuccess or "
+        "LanguageModelToolError for type:'tool-response'",
+        DOMException::GetErrorName(DOMExceptionCode::kSyntaxError)));
+    return;
+  }
+
+  // JavaScript manually sends tool execution results back.
+  if (tool_success) {
+    // TODO(crbug.com/422803232): Properly handle image/audio result types.
+    for (const auto& result_item : tool_success->result()) {
+      V8LanguageModelToolResultType result_type = result_item->type();
+      if (result_type == V8LanguageModelToolResultType::Enum::kImage ||
+          result_type == V8LanguageModelToolResultType::Enum::kAudio) {
+        Reject(DOMException::Create(
+            "Tool responses currently only support 'text' and 'object' "
+            "types. Image and audio types in tool responses are not yet "
+            "supported.",
+            DOMException::GetErrorName(DOMExceptionCode::kNotSupportedError)));
+        return;
+      }
+    }
+
+    // Convert to base::DictValue for mojo transport.
+    std::optional<base::DictValue> converted_value =
+        ConvertToolSuccessToDictValue(script_state_, tool_success);
+    if (!converted_value.has_value()) {
+      Reject(DOMException::Create(
+          "Failed to serialize tool result. Value may contain circular "
+          "references, non-serializable types (functions, BigInt), or DOM "
+          "objects (ImageBitmap, AudioBuffer) incorrectly labeled as "
+          "'object' type.",
+          DOMException::GetErrorName(DOMExceptionCode::kDataError)));
+      return;
+    }
+
+    OnPromptContentProcessed(
+        mojom::blink::AILanguageModelPromptContent::NewToolResponse(
+            std::move(*converted_value)),
+        entry);
+  } else {
+    base::DictValue converted_value = ConvertToolErrorToDictValue(tool_error);
+    OnPromptContentProcessed(
+        mojom::blink::AILanguageModelPromptContent::NewToolResponse(
+            std::move(converted_value)),
+        entry);
   }
 }
 
@@ -496,26 +744,51 @@ void LanguageModelPromptBuilder::ToMojo(AudioBuffer* audio_buffer,
           DOMException::GetErrorName(DOMExceptionCode::kNotSupportedError)));
       return;
     }
-    bus->SetChannelMemory(i, audio_buffer->getChannelData(i)->Data(),
-                          audio_buffer->getChannelData(i)->length());
+    bus->SetChannelMemory(i, audio_buffer->getChannelData(i)->AsSpan());
   }
 
   auto audio_data = on_device_model::mojom::blink::AudioData::New();
-  audio_data->sample_rate = info_->audio_sample_rate_hz.value_or(48000);
+  // TODO(crbug.com/476192657) Remove hardcoded values after we initiate ODMS
+  // session earlier.
+  audio_data->sample_rate = info_->audio_sample_rate_hz.value_or(16000);
   audio_data->channel_count = info_->audio_channel_count.value_or(1);
   CHECK_EQ(audio_data->channel_count, 1) << "Multi-channel audio not supported";
+
+  // TODO(crbug.com/513591452): Get multimodal format info from model configs
+  if (audio_data->sample_rate != audio_buffer->sampleRate() &&
+      audio_data->sample_rate > 0) {
+    double sample_rate_ratio = static_cast<double>(audio_buffer->sampleRate()) /
+                               audio_data->sample_rate;
+    if (sample_rate_ratio > 2.0 || sample_rate_ratio < 0.5) {
+      if (ExecutionContext* execution_context =
+              ExecutionContext::From(script_state_)) {
+        execution_context->AddConsoleMessage(
+            mojom::blink::ConsoleMessageSource::kJavaScript,
+            mojom::blink::ConsoleMessageLevel::kWarning,
+            Format("Audio input will be resampled from {}Hz to {}Hz. This may "
+                   "adversely affect AI model comprehension.",
+                   static_cast<int>(audio_buffer->sampleRate()),
+                   audio_data->sample_rate));
+      }
+    }
+  }
+
   const bool mix_to_mono = audio_buffer->numberOfChannels() > 1u;
   if (audio_data->sample_rate != audio_buffer->sampleRate() || mix_to_mono) {
-    bus = AudioBus::CreateBySampleRateConverting(bus.get(), mix_to_mono,
-                                                 audio_data->sample_rate);
+    bus = AudioBus::TryCreateBySampleRateConverting(bus.get(), mix_to_mono,
+                                                    audio_data->sample_rate);
+    if (!bus) {
+      Reject(DOMException::Create(
+          "Failed to convert audio data (not enough memory).",
+          DOMException::GetErrorName(DOMExceptionCode::kNotSupportedError)));
+      return;
+    }
     VLOG(1) << "Converted to " << bus->NumberOfChannels() << " channels, "
             << bus->SampleRate() << "Hz, len:" << bus->length();
   }
   // TODO(crbug.com/382180351): Avoid a copy.
   audio_data->frame_count = bus->length();
-  audio_data->data = Vector<float>(bus->length());
-  std::copy_n(bus->Channel(0)->Data(), bus->Channel(0)->length(),
-              audio_data->data.begin());
+  audio_data->data.append_range(bus->Channel(0)->Span());
   OnPromptContentProcessed(mojom::blink::AILanguageModelPromptContent::NewAudio(
                                std::move(audio_data)),
                            entry);
@@ -524,7 +797,9 @@ void LanguageModelPromptBuilder::ToMojo(AudioBuffer* audio_buffer,
 void LanguageModelPromptBuilder::AudioToMojo(base::span<uint8_t> bytes,
                                              PendingEntry* entry) {
   auto audio_data = on_device_model::mojom::blink::AudioData::New();
-  audio_data->sample_rate = info_->audio_sample_rate_hz.value_or(48000);
+  // TODO(crbug.com/476192657) Remove hardcoded values after we initiate ODMS
+  // session earlier.
+  audio_data->sample_rate = info_->audio_sample_rate_hz.value_or(16000);
   audio_data->channel_count = info_->audio_channel_count.value_or(1);
   CHECK_EQ(audio_data->channel_count, 1) << "Multi-channel audio not supported";
   scoped_refptr<AudioBus> bus = AudioBus::CreateBusFromInMemoryAudioFile(
@@ -542,9 +817,7 @@ void LanguageModelPromptBuilder::AudioToMojo(base::span<uint8_t> bytes,
           << bus->SampleRate() << "Hz, len:" << bus->length();
   // TODO(crbug.com/382180351): Avoid a copy.
   audio_data->frame_count = bus->length();
-  audio_data->data = Vector<float>(bus->length());
-  std::copy_n(bus->Channel(0)->Data(), bus->Channel(0)->length(),
-              audio_data->data.begin());
+  audio_data->data.append_range(bus->Channel(0)->Span());
   OnPromptContentProcessed(mojom::blink::AILanguageModelPromptContent::NewAudio(
                                std::move(audio_data)),
                            entry);
@@ -592,27 +865,39 @@ class ThenCallback : public ThenCallable<Type, ThenCallback<Type, ReactType>> {
 void LanguageModelPromptBuilder::BitmapToMojo(
     std::variant<DOMDataView*, V8ImageBitmapSource*> source,
     PendingEntry* entry) {
+  ScriptPromise<ImageBitmap> promise;
   v8::Isolate* isolate = script_state_->GetIsolate();
   v8::TryCatch try_catch(isolate);
-  ExceptionState exception_state(isolate);
 
-  // Note: GetBitmapFromV8ImageBitmapSource doesn't support async which is
-  // required for blobs so async ImageBitmapFactories::CreateImageBitmap is
-  // preferred.
-  // TODO(crbug.com/419321438): Change CreateImageBitmap to not use JS promises.
-  ScriptPromise<ImageBitmap> promise = std::visit(
-      absl::Overload{
-          [&](const DOMDataView* data_view) {
-            return ImageBitmapFactories::CreateImageBitmap(
-                script_state_, data_view,
-                MakeGarbageCollected<ImageBitmapOptions>(), exception_state);
-          },
-          [&](const V8ImageBitmapSource* bitmap_source) {
-            return ImageBitmapFactories::CreateImageBitmap(
-                script_state_, bitmap_source,
-                MakeGarbageCollected<ImageBitmapOptions>(), exception_state);
-          }},
-      source);
+  {
+    ExceptionState exception_state(isolate);
+
+    // Note: GetBitmapFromV8ImageBitmapSource doesn't support async which is
+    // required for blobs so async ImageBitmapFactories::CreateImageBitmap is
+    // preferred.
+    // TODO(crbug.com/419321438): Use CreateImageBitmap without JS promises.
+    promise = std::visit(
+        absl::Overload{
+            [&](const DOMDataView* data_view) {
+              return ImageBitmapFactories::CreateImageBitmap(
+                  script_state_, data_view,
+                  MakeGarbageCollected<ImageBitmapOptions>(), exception_state);
+            },
+            [&](const V8ImageBitmapSource* bitmap_source) {
+              return ImageBitmapFactories::CreateImageBitmap(
+                  script_state_, bitmap_source,
+                  MakeGarbageCollected<ImageBitmapOptions>(), exception_state);
+            }},
+        source);
+    CHECK_EQ(exception_state.HadException(), try_catch.HasCaught());
+  }
+
+  if (try_catch.HasCaught()) {
+    v8::Local<v8::Value> exception = try_catch.Exception();
+    try_catch.Reset();
+    Reject(ScriptValue(isolate, exception));
+    return;
+  }
 
   promise.Then(
       script_state_,
@@ -623,38 +908,74 @@ void LanguageModelPromptBuilder::BitmapToMojo(
           [](LanguageModelPromptBuilder* builder, ScriptState* script_state,
              ScriptValue value) { builder->Reject(std::move(value)); },
           WrapPersistent(this))));
-  if (exception_state.HadException()) {
-    CHECK(try_catch.HasCaught());
-    this->Reject(ScriptValue(isolate, try_catch.Exception()));
-  }
 }
 
 void LanguageModelPromptBuilder::OnBitmapLoaded(PendingEntry* entry,
                                                 ScriptState* script_state,
                                                 ImageBitmap* bitmap) {
-  v8::Isolate* isolate = script_state->GetIsolate();
-  v8::TryCatch try_catch(isolate);
-  ExceptionState exception_state(isolate);
   if (!bitmap) {
     Reject(DOMException::Create(
         "Invalid image bitmap.",
         DOMException::GetErrorName(DOMExceptionCode::kDataError)));
     return;
   }
-  std::optional<SkBitmap> skia_bitmap =
-      GetBitmapFromCanvasImageSource(*bitmap, exception_state);
-  if (!skia_bitmap) {
-    CHECK(exception_state.HadException() && try_catch.HasCaught());
-    Reject(ScriptValue(isolate, try_catch.Exception()));
+
+  const unsigned original_width = bitmap->width();
+  const unsigned original_height = bitmap->height();
+
+  ExecutionContext* execution_context = ExecutionContext::From(script_state);
+  if (execution_context) {
+    // TODO(crbug.com/513591452): Get multimodal format info from model configs
+    // 1. Drastic resize warning (e.g., width or height > 1536px, meaning >2x
+    //    downscaling to the model's native 768px resolution)
+    if (original_width > 1536 || original_height > 1536) {
+      execution_context->AddConsoleMessage(
+          mojom::blink::ConsoleMessageSource::kJavaScript,
+          mojom::blink::ConsoleMessageLevel::kWarning,
+          Format("Image input ({}x{}) will be downscaled to 768x768. Dense "
+                 "spatial details like small text may be lost. This may "
+                 "adversely affect AI model comprehension.",
+                 original_width, original_height));
+    }
+
+    // 2. Aspect ratio skew warning
+    if (original_height > 0) {
+      double aspect_ratio =
+          static_cast<double>(original_width) / original_height;
+      if (aspect_ratio > 3.0 || aspect_ratio < 0.33) {
+        execution_context->AddConsoleMessage(
+            mojom::blink::ConsoleMessageSource::kJavaScript,
+            mojom::blink::ConsoleMessageLevel::kWarning,
+            Format("Image input will be stretched from {:.2f}:1 to a square "
+                   "aspect ratio. This may adversely affect AI model "
+                   "comprehension.",
+                   aspect_ratio));
+      }
+    }
+  }
+
+  std::optional<SkBitmap> skia_bitmap;
+  v8::Isolate* isolate = script_state->GetIsolate();
+  v8::TryCatch try_catch(isolate);
+  {
+    ExceptionState exception_state(isolate);
+    skia_bitmap = GetBitmapFromCanvasImageSource(*bitmap, exception_state);
+    CHECK_EQ(skia_bitmap.has_value(), !exception_state.HadException());
+    CHECK_EQ(skia_bitmap.has_value(), !try_catch.HasCaught());
+  }
+
+  if (try_catch.HasCaught()) {
+    v8::Local<v8::Value> exception = try_catch.Exception();
+    try_catch.Reset();
+    Reject(ScriptValue(isolate, exception));
     return;
   }
+
   OnPromptContentProcessed(
       mojom::blink::AILanguageModelPromptContent::NewBitmap(
           skia_bitmap.value()),
       entry);
 }
-
-}  // namespace
 
 void ConvertPromptInputsToMojo(
     ScriptState* script_state,

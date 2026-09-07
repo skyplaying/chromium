@@ -120,6 +120,8 @@ AppLaunchConfiguration SharedTabGroupAppLaunchConfiguration(
 
 - (void)tearDownHelper {
   [super tearDownHelper];
+  [ChromeEarlGrey
+      removeUserDefaultsObjectForKey:kSharedTabGroupUserEducationShownOnceKey];
   // Delete all groups.
   [TabGroupAppInterface cleanup];
 }
@@ -247,7 +249,10 @@ AppLaunchConfiguration SharedTabGroupAppLaunchConfiguration(
 }
 
 // Checks joining a group without being signed in.
-- (void)testJoinGroupNotSignedIn {
+//
+// TODO(crbug.com/485878685): This tests has been failing for the past 2 weeks.
+// Re-enable it once fixed.
+- (void)DISABLED_testJoinGroupNotSignedIn {
   FakeSystemIdentity* fakeIdentity = [FakeSystemIdentity fakeIdentity1];
   [SigninEarlGrey addFakeIdentity:fakeIdentity];
 

@@ -22,12 +22,16 @@ source_set("coordinator") {
     "root_drive_file_picker_coordinator.mm",
   ]
   deps = [
+    ":metrics_constants",
     "//base",
     "//components/image_fetcher/core",
     "//components/signin/public/identity_manager/objc",
+    "//components/strings:components_strings_grit",
     "//ios/chrome/app/strings:ios_strings_grit",
     "//ios/chrome/browser/authentication/ui_bundled/signin:constants",
     "//ios/chrome/browser/authentication/ui_bundled/signin:signin_headers",
+    "//ios/chrome/browser/composebox/shared/coordinator",
+    "//ios/chrome/browser/composebox/shared/ui",
     "//ios/chrome/browser/drive/model:drive_file_downloader",
     "//ios/chrome/browser/drive/model:drive_list",
     "//ios/chrome/browser/drive/model:drive_service",
@@ -42,6 +46,7 @@ source_set("coordinator") {
     "//ios/chrome/browser/shared/model/browser",
     "//ios/chrome/browser/shared/model/profile",
     "//ios/chrome/browser/shared/public/commands",
+    "//ios/chrome/browser/shared/public/features",
     "//ios/chrome/browser/shared/ui/symbols",
     "//ios/chrome/browser/shared/ui/util",
     "//ios/chrome/browser/signin/model",
@@ -54,6 +59,10 @@ source_set("coordinator") {
     "//ios/web/public",
     "//ios/web/public/js_image_transcoder",
   ]
+}
+
+source_set("metrics_constants") {
+  sources = [ "drive_file_picker_metrics_constants.h" ]
 }
 
 source_set("unit_tests") {
@@ -69,6 +78,7 @@ source_set("unit_tests") {
     "//base/test:test_support",
     "//components/image_fetcher/core",
     "//components/signin/public/identity_manager:test_support",
+    "//components/sync:test_support",
     "//ios/chrome/browser/drive/model:drive_list",
     "//ios/chrome/browser/drive/model:drive_service_factory",
     "//ios/chrome/browser/drive/model:test_support",
@@ -79,7 +89,6 @@ source_set("unit_tests") {
     "//ios/chrome/browser/shared/model/prefs:pref_names",
     "//ios/chrome/browser/shared/model/profile/test",
     "//ios/chrome/browser/shared/public/commands",
-    "//ios/chrome/browser/shared/public/features",
     "//ios/chrome/browser/signin/model",
     "//ios/chrome/browser/signin/model:authentication_service",
     "//ios/chrome/browser/signin/model:authentication_service_factory",
@@ -87,12 +96,14 @@ source_set("unit_tests") {
     "//ios/chrome/browser/signin/model:fake_system_identity_manager",
     "//ios/chrome/browser/signin/model:test_support",
     "//ios/chrome/browser/sync/model",
+    "//ios/chrome/browser/sync/model:test_support",
     "//ios/chrome/browser/web/model/choose_file",
     "//ios/chrome/browser/web/model/choose_file:test_support",
     "//ios/chrome/test:test_support",
     "//ios/web/public/test",
     "//ios/web/public/test/fakes",
     "//services/network:test_support",
+    "//testing/gmock",
     "//testing/gtest",
   ]
 }

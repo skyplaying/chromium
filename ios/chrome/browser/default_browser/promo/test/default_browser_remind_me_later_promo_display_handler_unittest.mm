@@ -24,6 +24,9 @@
 - (void)showPromo {
 }
 
+- (void)dismissCurrentPromo {
+}
+
 - (void)showAppStoreReviewPrompt {
 }
 
@@ -56,6 +59,10 @@
 }
 
 - (void)showDockingPromo {
+}
+
+- (void)showCredentialProviderPromoWithTrigger:
+    (CredentialProviderPromoTrigger)trigger {
 }
 
 @end

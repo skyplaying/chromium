@@ -11,12 +11,13 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 import org.robolectric.RuntimeEnvironment;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Feature;
@@ -28,17 +29,15 @@ import java.util.concurrent.TimeUnit;
 
 /** Unit tests for {@link BackgroundTaskScheduler}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class BackgroundTaskSchedulerImplTest {
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Mock private BackgroundTaskSchedulerDelegate mDelegate;
     @Mock private BackgroundTaskSchedulerUma mBackgroundTaskSchedulerUma;
 
     private TaskInfo mTask;
-    private TaskInfo mExpirationTask;
 
     @Before
     public void setUp() {
-        MockitoAnnotations.initMocks(this);
         BackgroundTaskSchedulerFactoryInternal.setSchedulerForTesting(
                 new BackgroundTaskSchedulerImpl(mDelegate));
         BackgroundTaskSchedulerUma.setInstanceForTesting(mBackgroundTaskSchedulerUma);
@@ -46,12 +45,6 @@ public class BackgroundTaskSchedulerImplTest {
         TaskInfo.TimingInfo timingInfo =
                 TaskInfo.OneOffInfo.create().setWindowEndTimeMs(TimeUnit.DAYS.toMillis(1)).build();
         mTask = TaskInfo.createTask(TaskIds.TEST, timingInfo).build();
-        TaskInfo.TimingInfo expirationTimingInfo =
-                TaskInfo.OneOffInfo.create()
-                        .setWindowEndTimeMs(TimeUnit.DAYS.toMillis(1))
-                        .setExpiresAfterWindowEndTime(true)
-                        .build();
-        mExpirationTask = TaskInfo.createTask(TaskIds.TEST, expirationTimingInfo).build();
 
         BackgroundTaskSchedulerFactoryInternal.setBackgroundTaskFactory(
                 new TestBackgroundTaskFactory());
@@ -66,20 +59,6 @@ public class BackgroundTaskSchedulerImplTest {
         verify(mDelegate, times(1)).schedule(eq(RuntimeEnvironment.application), eq(mTask));
         verify(mBackgroundTaskSchedulerUma, times(1))
                 .reportTaskScheduled(eq(TaskIds.TEST), eq(true));
-        verify(mBackgroundTaskSchedulerUma, times(1))
-                .reportTaskCreatedAndExpirationState(eq(TaskIds.TEST), eq(false));
-    }
-
-    @Test
-    @Feature({"BackgroundTaskScheduler"})
-    public void testScheduleTaskWithExpirationSuccessful() {
-        doReturn(true)
-                .when(mDelegate)
-                .schedule(eq(RuntimeEnvironment.application), eq(mExpirationTask));
-        BackgroundTaskSchedulerFactoryInternal.getScheduler()
-                .schedule(RuntimeEnvironment.application, mExpirationTask);
-        verify(mBackgroundTaskSchedulerUma, times(1))
-                .reportTaskCreatedAndExpirationState(eq(TaskIds.TEST), eq(true));
     }
 
     @Test

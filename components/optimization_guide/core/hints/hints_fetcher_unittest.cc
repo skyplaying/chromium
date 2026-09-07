@@ -20,11 +20,9 @@
 #include "base/test/task_environment.h"
 #include "components/optimization_guide/core/hints/hints_processing_util.h"
 #include "components/optimization_guide/core/hints/store_update_data.h"
-#include "components/optimization_guide/core/optimization_guide_constants.h"
 #include "components/optimization_guide/core/optimization_guide_enums.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/core/optimization_guide_prefs.h"
-#include "components/optimization_guide/core/optimization_guide_switches.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/prefs/testing_pref_service.h"
@@ -745,7 +743,7 @@ TEST_P(HintsFetcherTest, NoHostsOrURLsToFetch) {
 
 TEST_P(HintsFetcherTest, HintsLanguageOverrideHeader) {
   base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
-      switches::kOptimizationGuideLanguageOverride, "en-CA");
+      kOptimizationGuideLanguageOverrideSwitch, "en-CA");
   EXPECT_TRUE(FetchHints({"foo.com"}, /*urls=*/{}));
   VerifyHasPendingFetchRequests();
   ResetHintsFetcher();

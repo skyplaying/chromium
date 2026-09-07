@@ -2,7 +2,7 @@
 # Copyright 2024 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-""" Converts crossbench result into histogram format.
+"""Converts crossbench result into histogram format.
 
 See example inputs in testdata/crossbench_output folder.
 """
@@ -14,8 +14,9 @@ import pathlib
 import sys
 from typing import List, Optional
 
-tracing_dir = (pathlib.Path(__file__).absolute().parents[2] /
-               'third_party/catapult/tracing')
+tracing_dir = (
+  pathlib.Path(__file__).absolute().parents[2] / 'third_party/catapult/tracing'
+)
 sys.path.append(str(tracing_dir))
 from tracing.value import histogram, histogram_set
 from tracing.value.diagnostics import generic_set
@@ -35,12 +36,14 @@ def _get_crossbench_json_paths(out_dir: pathlib.Path) -> List[pathlib.Path]:
 
   if not out_dir.exists():
     raise FileNotFoundError(
-        f'Crossbench output directory does not exist: {out_dir}')
+      f'Crossbench output directory does not exist: {out_dir}'
+    )
 
   cb_results_json_path = out_dir / 'cb.results.json'
   if not cb_results_json_path.exists():
     raise FileNotFoundError(
-        f'Missing crossbench results file: {cb_results_json_path}')
+      f'Missing crossbench results file: {cb_results_json_path}'
+    )
 
   debug_info = ''
   with cb_results_json_path.open() as f:
@@ -50,8 +53,9 @@ def _get_crossbench_json_paths(out_dir: pathlib.Path) -> List[pathlib.Path]:
   browsers = results_info.get('browsers', {})
   if len(browsers) != 1:
     raise ValueError(
-        f'Expected to have one "browsers" in {cb_results_json_path}, '
-        f'debug_info={debug_info}')
+      f'Expected to have one "browsers" in {cb_results_json_path}, '
+      f'debug_info={debug_info}'
+    )
   browser_info = list(browsers.values())[0]
   debug_info += f'browser_info={browser_info}\n'
 
@@ -63,26 +67,36 @@ def _get_crossbench_json_paths(out_dir: pathlib.Path) -> List[pathlib.Path]:
       if probe.startswith('cb.') or not probe_data:
         continue
       candidates = probe_data.get('json', [])
-      if len(candidates) > 1:
-        raise ValueError(f'Probe {probe} generated multiple json files, '
-                         f'debug_info={debug_info}')
-      if len(candidates) == 1:
-        probe_json_paths.append(pathlib.Path(candidates[0]))
+      if probe == 'trace_processor':
+        for candidate in candidates:
+          probe_json_paths.append(pathlib.Path(candidate))
+      else:
+        if len(candidates) > 1:
+          raise ValueError(
+            f'Probe {probe} generated multiple json files, '
+            f'debug_info={debug_info}'
+          )
+        if len(candidates) == 1:
+          probe_json_paths.append(pathlib.Path(candidates[0]))
   except AttributeError as e:
     raise AttributeError(f'debug_info={debug_info}') from e
 
   if not probe_json_paths:
-    raise ValueError(f'No output json file found in {cb_results_json_path}, '
-                     f'debug_info={debug_info}')
+    raise ValueError(
+      f'No output json file found in {cb_results_json_path}, '
+      f'debug_info={debug_info}'
+    )
 
   return probe_json_paths
 
 
-def convert(crossbench_out_dir: pathlib.Path,
-            out_filename: pathlib.Path,
-            benchmark: Optional[str] = None,
-            story: Optional[str] = None,
-            results_label: Optional[str] = None) -> None:
+def convert(
+  crossbench_out_dir: pathlib.Path,
+  out_filename: pathlib.Path,
+  benchmark: Optional[str] = None,
+  story: Optional[str] = None,
+  results_label: Optional[str] = None,
+) -> None:
   """Do the conversion of crossbench output into histogram format.
 
   Args: See the help strings passed to argparse.ArgumentParser.
@@ -107,8 +121,10 @@ def convert(crossbench_out_dir: pathlib.Path,
       if lower_key.startswith('iteration') or lower_key == 'geomean':
         continue
       metric = key
-      if lower_key == 'score':
+      if 'score' in lower_key:
         unit = 'unitless_biggerIsBetter'
+      elif lower_key.endswith('_bytes'):
+        unit = 'sizeInBytes_smallerIsBetter'
       else:
         unit = 'ms_smallerIsBetter'
     elif len(key_parts) == 2:
@@ -121,18 +137,20 @@ def convert(crossbench_out_dir: pathlib.Path,
         unit = 'unitless_biggerIsBetter'
 
     if metric:
+      story_name = value.get('cb_story') or story or 'Default'
       data_point = histogram.Histogram.Create(metric, unit, value['values'])
+      data_point.diagnostics[reserved_infos.STORIES.name] = (
+          generic_set.GenericSet([story_name]))
       results.AddHistogram(data_point)
 
   if benchmark:
     results.AddSharedDiagnosticToAllHistograms(
-        reserved_infos.BENCHMARKS.name, generic_set.GenericSet([benchmark]))
-  if story:
-    results.AddSharedDiagnosticToAllHistograms(
-        reserved_infos.STORIES.name, generic_set.GenericSet([story]))
+      reserved_infos.BENCHMARKS.name, generic_set.GenericSet([benchmark])
+    )
   if results_label:
     results.AddSharedDiagnosticToAllHistograms(
-        reserved_infos.LABELS.name, generic_set.GenericSet([results_label]))
+      reserved_infos.LABELS.name, generic_set.GenericSet([results_label])
+    )
 
   with out_filename.open('w') as f:
     json.dump(results.AsDicts(), f)
@@ -141,7 +159,8 @@ def convert(crossbench_out_dir: pathlib.Path,
 def _loadline1_results(loadline_csv: pathlib.Path):
   if not loadline_csv.exists():
     raise FileNotFoundError(
-        f'Missing loadline CSV results file: {loadline_csv}')
+      f'Missing loadline CSV results file: {loadline_csv}'
+    )
   with loadline_csv.open() as f:
     loadline_result = next(csv.DictReader(f))
 
@@ -150,10 +169,13 @@ def _loadline1_results(loadline_csv: pathlib.Path):
     data_point = None
     if key == 'browser':
       results.AddSharedDiagnosticToAllHistograms(
-          key, generic_set.GenericSet([value]))
+        key, generic_set.GenericSet([value])
+      )
     else:
-      data_point = histogram.Histogram.Create(key, 'unitless_biggerIsBetter',
-                                              float(value))
+      value_float = float(value.split()[0])
+      data_point = histogram.Histogram.Create(
+        key, 'unitless_biggerIsBetter', value_float
+      )
     if data_point:
       results.AddHistogram(data_point)
 
@@ -163,7 +185,8 @@ def _loadline1_results(loadline_csv: pathlib.Path):
 def _loadline2_results(loadline_csv: pathlib.Path):
   if not loadline_csv.exists():
     raise FileNotFoundError(
-        f'Missing loadline CSV results file: {loadline_csv}')
+      f'Missing loadline CSV results file: {loadline_csv}'
+    )
 
   results = histogram_set.HistogramSet()
   with loadline_csv.open() as f:
@@ -171,46 +194,58 @@ def _loadline2_results(loadline_csv: pathlib.Path):
     metric_key = csv_reader.fieldnames[0]
     value_key = csv_reader.fieldnames[1]
     for line in csv_reader:
-      data_point = histogram.Histogram.Create(line[metric_key],
-                                              'unitless_biggerIsBetter',
-                                              float(line[value_key]))
+      value_str = line[value_key]
+      if not value_str:
+        continue
+      value_float = float(value_str.split()[0])
+      data_point = histogram.Histogram.Create(
+        line[metric_key], 'unitless_biggerIsBetter', value_float
+      )
       if data_point:
         results.AddHistogram(data_point)
     results.AddSharedDiagnosticToAllHistograms(
-        'browser', generic_set.GenericSet([value_key]))
+      'browser', generic_set.GenericSet([value_key])
+    )
 
   return results
 
 
-def _loadline(crossbench_out_dir: pathlib.Path,
-              out_filename: pathlib.Path,
-              benchmark: Optional[str] = None,
-              results_label: Optional[str] = None) -> None:
+def _loadline(
+  crossbench_out_dir: pathlib.Path,
+  out_filename: pathlib.Path,
+  benchmark: Optional[str] = None,
+  results_label: Optional[str] = None,
+) -> None:
   """Converts `loadline-*` benchmarks."""
 
   crossbench_json_filename = crossbench_out_dir / 'cb.results.json'
   if not crossbench_json_filename.exists():
     raise FileNotFoundError(
-        f'Missing crossbench results file: {crossbench_json_filename}')
+      f'Missing crossbench results file: {crossbench_json_filename}'
+    )
 
   with crossbench_json_filename.open() as f:
     crossbench_result = json.load(f)
 
   if "loadline_probe" in crossbench_result["probes"]:
     results = _loadline1_results(
-        pathlib.Path(crossbench_result["probes"]["loadline_probe"]["csv"][0]))
+      pathlib.Path(crossbench_result["probes"]["loadline_probe"]["csv"][0])
+    )
   elif "loadline2_probe" in crossbench_result["probes"]:
     results = _loadline2_results(
-        pathlib.Path(crossbench_result["probes"]["loadline2_probe"]["csv"][0]))
+      pathlib.Path(crossbench_result["probes"]["loadline2_probe"]["csv"][0])
+    )
   else:
     raise ValueError("Missing LoadLine probe results")
 
   if benchmark:
     results.AddSharedDiagnosticToAllHistograms(
-        reserved_infos.BENCHMARKS.name, generic_set.GenericSet([benchmark]))
+      reserved_infos.BENCHMARKS.name, generic_set.GenericSet([benchmark])
+    )
   if results_label:
     results.AddSharedDiagnosticToAllHistograms(
-        reserved_infos.LABELS.name, generic_set.GenericSet([results_label]))
+      reserved_infos.LABELS.name, generic_set.GenericSet([results_label])
+    )
 
   with out_filename.open('w') as f:
     json.dump(results.AsDicts(), f)
@@ -218,21 +253,27 @@ def _loadline(crossbench_out_dir: pathlib.Path,
 
 def main():
   parser = argparse.ArgumentParser()
-  parser.add_argument('crossbench_out_dir',
-                      type=pathlib.Path,
-                      help='value of --out-dir passed to crossbench')
-  parser.add_argument('out_filename',
-                      type=pathlib.Path,
-                      help='name of output histogram file to generate')
+  parser.add_argument(
+    'crossbench_out_dir',
+    type=pathlib.Path,
+    help='value of --out-dir passed to crossbench',
+  )
+  parser.add_argument(
+    'out_filename',
+    type=pathlib.Path,
+    help='name of output histogram file to generate',
+  )
   parser.add_argument('--benchmark', help='name of the benchmark')
   parser.add_argument('--story', help='name of the story')
 
   args = parser.parse_args()
 
-  convert(args.crossbench_out_dir,
-          args.out_filename,
-          benchmark=args.benchmark,
-          story=args.story)
+  convert(
+    args.crossbench_out_dir,
+    args.out_filename,
+    benchmark=args.benchmark,
+    story=args.story,
+  )
 
 
 if __name__ == '__main__':

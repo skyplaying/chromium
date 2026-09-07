@@ -73,7 +73,11 @@ template <typename T>
 using HeapDeque = BasicHeapDeque<internal::HeapCollectionType::kDisallowNew, T>;
 
 static_assert(IsDisallowNew<HeapDeque<int>>);
+#if DCHECK_IS_ON() ||                                     \
+    BUILDFLAG(ENABLE_HEAP_VECTOR_MODIFICATION_CHECKS) == \
+        BUILDFLAG(ENABLE_VECTOR_MODIFICATION_CHECKS)
 ASSERT_SIZE(Deque<int>, HeapDeque<int>);
+#endif
 
 // GCed version of blink::Deque for referring to GarbageCollected or
 // DISALLOW_NEW() objects with Trace() methods.
@@ -81,7 +85,11 @@ template <typename T>
 using GCedHeapDeque = BasicHeapDeque<internal::HeapCollectionType::kGCed, T>;
 
 static_assert(!IsDisallowNew<GCedHeapDeque<int>>);
+#if DCHECK_IS_ON() ||                                     \
+    BUILDFLAG(ENABLE_HEAP_VECTOR_MODIFICATION_CHECKS) == \
+        BUILDFLAG(ENABLE_VECTOR_MODIFICATION_CHECKS)
 ASSERT_SIZE(Deque<int>, GCedHeapDeque<int>);
+#endif
 
 template <typename T>
 struct VectorTraits<HeapDeque<T>> : VectorTraitsBase<HeapDeque<T>> {

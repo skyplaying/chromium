@@ -16,6 +16,7 @@
 #include "content/public/browser/web_contents_observer.h"
 #include "extensions/browser/permissions_manager.h"
 #include "extensions/buildflags/buildflags.h"
+#include "ui/gfx/vector_icon_types.h"
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
@@ -39,13 +40,10 @@ class ExtensionsToolbarViewModel
         const ToolbarActionsModel::ActionId& action_id,
         ExtensionsContainer* extensions_container) = 0;
     // Hides any actively showing popups.
-    // TODO(crbug.com/473701535): Determine whether this method belongs in the
-    // delegate or the observer.
     virtual void HideActivePopup() = 0;
 
-    // Closes the overflow menu, if it was open. Returns whether or not the
-    // overflow menu was closed.
-    virtual bool CloseOverflowMenuIfOpen() = 0;
+    // Closes the extensions menu, if it was open.
+    virtual void CloseExtensionsMenuIfOpen() = 0;
 
     // Returns whether a popup can be shown.
     virtual bool CanShowToolbarActionPopupForAPICall(
@@ -56,6 +54,12 @@ class ExtensionsToolbarViewModel
     // TODO(crbug.com/473701535): Determine whether this method belongs in the
     // delegate or the observer.
     virtual void ToggleExtensionsMenu() = 0;
+
+    // Triggers the manage extensions IPH.
+    virtual void ShowManageExtensionsIPH() {}
+
+    // Triggers the pinned by default IPH.
+    virtual void ShowPinnedByDefaultIPH(const std::string& extension_id) {}
 
    protected:
     virtual ~Delegate() = default;
@@ -83,8 +87,11 @@ class ExtensionsToolbarViewModel
     virtual void OnPinnedActionsChanged() = 0;
 
     // Called when the active WebContents is changed (e.g. tab change or page
-    // navigation).
-    virtual void OnActiveWebContentsChanged() = 0;
+    // navigation). `is_same_document` is true if the change was due to a
+    // same-document navigation.
+    virtual void OnActiveWebContentsChanged(
+        bool is_same_document,
+        content::WebContents* web_contents) = 0;
 
     // Called when the extensions that should be displayed in the request
     // access button to be recomputed.
@@ -129,6 +136,9 @@ class ExtensionsToolbarViewModel
   ToolbarActionViewModel* GetActionModelForId(
       const ToolbarActionsModel::ActionId& action_id) const;
 
+  // Returns whether a drag can be started on an action.
+  bool IsActionDraggable(const ToolbarActionsModel::ActionId& action_id) const;
+
   // Move the pinned action `action_id` to `target_index`.
   void MovePinnedAction(const ToolbarActionsModel::ActionId& action_id,
                         size_t target_index);
@@ -145,6 +155,28 @@ class ExtensionsToolbarViewModel
   // Returns whether the actions are initialized.
   bool AreActionsInitialized();
 
+  // Returns the icon for the toolbar button for the given state.
+  static const gfx::VectorIcon& GetToolbarButtonIcon(
+      ExtensionsToolbarButtonState state);
+
+  // Returns the accessible text for the toolbar button for the given state.
+  static std::u16string GetToolbarButtonAccessibleText(
+      ExtensionsToolbarButtonState state);
+
+  // Returns the tooltip text for the toolbar button for the given state.
+  static std::u16string GetToolbarButtonTooltipText(
+      ExtensionsToolbarButtonState state);
+
+  // Returns the state of the extensions toolbar button based on 'web_contents'
+  // given the provided extensions state.
+  static ExtensionsToolbarButtonState GetButtonState(
+      BrowserWindowInterface* browser,
+      content::WebContents& web_contents,
+      const ToolbarActionsModel* actions_model,
+      // Callback that returns whether any of extensions have access to the
+      // WebContents.
+      base::OnceCallback<bool(content::WebContents&)> has_access_callback);
+
   // Returns the state of the extensions toolbar button based on 'web_contents'.
   ExtensionsToolbarButtonState GetButtonState(
       content::WebContents& web_contents) const;
@@ -154,6 +186,11 @@ class ExtensionsToolbarViewModel
   void ExecuteUserAction(const ToolbarActionsModel::ActionId& action_id,
                          ToolbarActionViewModel::InvocationSource source);
 
+  // Grants site access to the given `extension_ids` for the `web_contents`.
+  void GrantSiteAccess(
+      content::WebContents* web_contents,
+      const std::vector<extensions::ExtensionId>& extension_ids);
+
   // Returns RequestAccessButtonParams which contain information to be used in
   // the button's tooltip.
   RequestAccessButtonParams GetRequestAccessButtonParams(
@@ -162,10 +199,12 @@ class ExtensionsToolbarViewModel
   // ExtensionsContainer:
   ToolbarActionViewModel* GetActionForId(const std::string& action_id) override;
   void HideActivePopup() override;
-  bool CloseOverflowMenuIfOpen() override;
+  void CloseExtensionsMenuIfOpen() override;
   bool ShowToolbarActionPopupForAPICall(const std::string& action_id,
                                         ShowPopupCallback callback) override;
   void ToggleExtensionsMenu() override;
+  void ShowManageExtensionsIPH() override;
+  void ShowPinnedByDefaultIPH(const std::string& extension_id) override;
   bool HasAnyExtensions() const override;
 
   // ToolbarActionsModel::Observer:
@@ -177,12 +216,18 @@ class ExtensionsToolbarViewModel
   void OnToolbarActionUpdated(
       const ToolbarActionsModel::ActionId& action_id) override;
   void OnToolbarPinnedActionsChanged() override;
+  void OnToolbarActionsModelShutdown() override;
 
   // content::WebContentsObserver:
   void DidFinishNavigation(content::NavigationHandle* handle) override;
 
   // TabListInterfaceObserver:
-  void OnActiveTabChanged(tabs::TabInterface* tab) override;
+  void OnActiveTabChanged(TabListInterface& tab_list,
+                          tabs::TabInterface* tab) override;
+  void OnWebContentsReplaced(TabListInterface& tab_list,
+                             tabs::TabInterface* tab,
+                             content::WebContents* old_contents,
+                             content::WebContents* new_contents) override;
   void OnTabListDestroyed(TabListInterface& tab_list) override;
 
   // extensions::PermissionsManager::Observer:
@@ -201,6 +246,7 @@ class ExtensionsToolbarViewModel
   void OnShowAccessRequestsInToolbarChanged(
       const extensions::ExtensionId& extension_id,
       bool can_show_requests) override;
+  void OnPermissionsManagerShutdown() override;
 
  private:
   // Returns whether any of `actions` given have access to the `web_contents`.
@@ -218,7 +264,7 @@ class ExtensionsToolbarViewModel
   // The delegate to retrieve platform-specific information.
   const raw_ptr<Delegate> delegate_;
 
-  const raw_ptr<ToolbarActionsModel> actions_model_;
+  raw_ptr<ToolbarActionsModel> actions_model_;
   base::ScopedObservation<ToolbarActionsModel, ToolbarActionsModel::Observer>
       actions_model_observation_{this};
 

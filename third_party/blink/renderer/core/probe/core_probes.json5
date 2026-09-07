@@ -5,6 +5,7 @@
     include_path: "third_party/blink/renderer/core/inspector",
     includes: [
       "base/containers/span_or_size.h",
+      "third_party/blink/public/mojom/cpu_performance.mojom-blink.h",
       "third_party/blink/public/mojom/loader/same_document_navigation_type.mojom-shared.h",
       "third_party/blink/public/web/web_media_inspector.h",
       "third_party/blink/renderer/core/animation/animation.h",
@@ -21,8 +22,8 @@
     ],
   },
   observers: {
-    AdTracker: {
-      include_path: "third_party/blink/renderer/core/frame",
+    ScriptInitiationMonitor: {
+      include_path: "third_party/blink/renderer/core/ad_tracker",
       probes: [
         "CallFunction",
         "ExecuteScript",
@@ -73,6 +74,7 @@
       probes: [
         "ActiveStyleSheetsUpdated",
         "DidMutateStyleSheet",
+        "DidInvalidateStyleAttr",
         "GetTextPosition",
         "DocumentDetached",
         "FontsUpdated",
@@ -103,11 +105,13 @@
         "FrameOwnerContentUpdated",
         "NodeCreated",
         "UpdateScrollableFlag",
+        "UpdateAdRelatedState",
         "UpdateAffectedByStartingStylesFlag",
         "PseudoElementCreated",
         "TopLayerElementsChanged",
         "PseudoElementDestroyed",
         "WillHidePopover",
+        "WillLoseInterest",
         "WillModifyDOMAttr",
         "WillPopShadowRoot",
         "WillRemoveDOMNode",
@@ -152,6 +156,7 @@
     InspectorEmulationAgent: {
       probes: [
         "ApplyAcceptLanguageOverride",
+        "ApplyCPUPerformanceOverride",
         "ApplyDataSaverOverride",
         "ApplyHardwareConcurrencyOverride",
         "ApplyUserAgentOverride",
@@ -310,6 +315,15 @@
         "DidAddSpeculationRuleSet",
         "DidRemoveSpeculationRuleSet",
         "SpeculationCandidatesUpdated",
+      ]
+    },
+    InspectorWebMCPAgent: {
+      probes: [
+        "WebMCPToolAdded",
+        "WebMCPToolRemoved",
+        "WebMCPToolExecuted",
+        "WebMCPToolResponded",
+        "WebMCPToolFailed",
       ]
     },
     InspectorTraceEvents: {

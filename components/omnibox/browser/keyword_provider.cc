@@ -339,7 +339,7 @@ KeywordProvider::~KeywordProvider() = default;
 int KeywordProvider::CalculateRelevance(metrics::OmniboxInputType type,
                                         bool complete,
                                         bool supports_replacement,
-                                        bool prefer_keyword,
+                                        bool in_keyword_mode,
                                         bool allow_exact_keyword_match) {
   if (!complete) {
     return (type == metrics::OmniboxInputType::URL) ? 700 : 450;
@@ -347,7 +347,7 @@ int KeywordProvider::CalculateRelevance(metrics::OmniboxInputType type,
   if (!supports_replacement)
     return 1500;
   return SearchProvider::CalculateRelevanceForKeywordVerbatim(
-      type, allow_exact_keyword_match, prefer_keyword);
+      type, allow_exact_keyword_match, in_keyword_mode);
 }
 
 AutocompleteMatch KeywordProvider::CreateAutocompleteMatch(
@@ -373,7 +373,7 @@ AutocompleteMatch KeywordProvider::CreateAutocompleteMatch(
                            // When the user wants keyword matches to take
                            // preference, score them highly regardless of
                            // whether the input provides query text.
-                           supports_replacement, input.prefer_keyword(),
+                           supports_replacement, input.in_keyword_mode(),
                            input.allow_exact_keyword_match());
   }
 
@@ -395,7 +395,7 @@ AutocompleteMatch KeywordProvider::CreateAutocompleteMatch(
 
   // Create destination URL and popup entry content by substituting user input
   // into keyword templates.
-  FillInUrlAndContents(remaining_input, template_url, &match);
+  FillInUrlAndContents(input, remaining_input, template_url, &match);
 
   // TODO(manukh) Consider not showing HISTORY_KEYWORD suggestions; i.e. not
   //   showing keyword matches for keywords that don't support replacement; they
@@ -410,6 +410,7 @@ AutocompleteMatch KeywordProvider::CreateAutocompleteMatch(
 }
 
 void KeywordProvider::FillInUrlAndContents(
+    const AutocompleteInput& input,
     const std::u16string& remaining_input,
     const TemplateURL* turl,
     AutocompleteMatch* match) const {
@@ -446,11 +447,12 @@ void KeywordProvider::FillInUrlAndContents(
     DCHECK(turl_ref.SupportsReplacement(
         GetTemplateURLService()->search_terms_data()));
     TemplateURLRef::SearchTermsArgs search_terms_args(remaining_input);
+    search_terms_args.page_classification = input.current_page_classification();
     search_terms_args.append_extra_query_params_from_command_line =
         turl == GetTemplateURLService()->GetDefaultSearchProvider();
     match->destination_url = GURL(turl_ref.ReplaceSearchTerms(
         search_terms_args, GetTemplateURLService()->search_terms_data()));
-    match->contents = remaining_input;
+    match->contents = AutocompleteMatch::SanitizeString(remaining_input);
     match->contents_class.emplace_back(0, ACMatchClassification::NONE);
   }
 }

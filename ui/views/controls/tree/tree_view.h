@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/models/tree_node_model.h"
 #include "ui/base/mojom/menu_source_type.mojom-forward.h"
@@ -489,10 +490,6 @@ class VIEWS_EXPORT TreeView : public View,
   // Preferred size of |editor_| with no content.
   gfx::Size empty_editor_size_;
 
-  // If non-NULL we've attached a listener to this focus manager. Used to know
-  // when focus is changing to another view so that we can cancel the edit.
-  raw_ptr<FocusManager> focus_manager_ = nullptr;
-
   // Whether to automatically expand children when a parent node is expanded.
   bool auto_expand_children_ = false;
 
@@ -522,6 +519,12 @@ class VIEWS_EXPORT TreeView : public View,
 
   // The current drawing provider for this TreeView.
   std::unique_ptr<TreeViewDrawingProvider> drawing_provider_;
+
+  base::ScopedObservation<ui::TreeModel, ui::TreeModelObserver>
+      tree_model_observation_{this};
+
+  base::ScopedObservation<FocusManager, FocusChangeListener>
+      focus_manager_observation_{this};
 };
 
 }  // namespace views

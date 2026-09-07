@@ -10,10 +10,8 @@ import org.jni_zero.CalledByNative;
 import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
 
-import org.chromium.base.CollectionUtil;
 import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.build.annotations.NullMarked;
-import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.tab.TabLaunchType;
@@ -43,7 +41,7 @@ public class ForeignSessionHelper {
          * It's a good place to call {@link ForeignSessionHelper#getForeignSessions()} to get the
          * updated information.
          */
-        @CalledByNative("ForeignSessionCallback")
+        @CalledByNative
         void onUpdated();
     }
 
@@ -122,8 +120,8 @@ public class ForeignSessionHelper {
     @CalledByNative
     private static ForeignSession pushSession(
             List<ForeignSession> sessions,
-            String tag,
-            String name,
+            @JniType("std::string") String tag,
+            @JniType("std::string") String name,
             long modifiedTime,
             @FormFactor int formFactor) {
         ForeignSession session = new ForeignSession(tag, name, modifiedTime, formFactor);
@@ -142,8 +140,8 @@ public class ForeignSessionHelper {
     @CalledByNative
     private static void pushTab(
             ForeignSessionWindow window,
-            GURL url,
-            String title,
+            @JniType("GURL") GURL url,
+            @JniType("std::u16string") String title,
             long timestamp,
             long lastActiveTime,
             int sessionId) {
@@ -230,6 +228,7 @@ public class ForeignSessionHelper {
 
     /**
      * Opens the given foreign tab in a new tab.
+     *
      * @param tab Tab to load the session into.
      * @param session Session that the target tab belongs to.
      * @param foreignTab Target tab to open.
@@ -241,20 +240,31 @@ public class ForeignSessionHelper {
             ForeignSession session,
             ForeignSessionTab foreignTab,
             int windowOpenDisposition) {
+        return openForeignSessionTab(tab, session.tag, foreignTab.id, windowOpenDisposition);
+    }
+
+    /**
+     * Opens the given foreign tab in a new tab.
+     *
+     * @param tab Tab to load the session into.
+     * @param sessionTag Tag of the session that the target tab belongs to.
+     * @param tabId ID of the target tab to open.
+     * @param windowOpenDisposition The WindowOpenDisposition flag.
+     * @return {@code True} iff the tab is successfully opened.
+     */
+    public boolean openForeignSessionTab(
+            Tab tab, String sessionTag, int tabId, int windowOpenDisposition) {
         return ForeignSessionHelperJni.get()
                 .openForeignSessionTab(
-                        mNativeForeignSessionHelper,
-                        tab,
-                        session.tag,
-                        foreignTab.id,
-                        windowOpenDisposition);
+                        mNativeForeignSessionHelper, tab, sessionTag, tabId, windowOpenDisposition);
     }
 
     /**
      * Remove Foreign session to display. Note that it will be reappear on the next sync.
      *
-     * This is mainly for when user wants to delete very old session that won't be used or syned in
-     * the future.
+     * <p>This is mainly for when user wants to delete very old session that won't be used or synced
+     * in the future.
+     *
      * @param session Session to be deleted.
      */
     public void deleteForeignSession(ForeignSession session) {
@@ -279,29 +289,28 @@ public class ForeignSessionHelper {
             List<ForeignSessionTab> sessionTabs,
             ForeignSession session,
             TabCreatorManager tabCreatorManager) {
-        List<Integer> tabIds = new ArrayList<>();
+        if (sessionTabs.isEmpty()) {
+            return 0;
+        }
+        int[] tabIds = new int[sessionTabs.size()];
         Tab newForegroundTab =
                 tabCreatorManager
-                        .getTabCreator(false)
+                        .getTabCreator(/* incognito= */ false)
                         .createNewTab(
                                 new LoadUrlParams(ContentUrlConstants.ABOUT_BLANK_URL),
                                 TabLaunchType.FROM_RESTORE_TABS_UI,
-                                null);
+                                /* parent= */ null);
+        if (newForegroundTab == null) return 0;
 
-        for (ForeignSessionTab tab : sessionTabs) {
-            tabIds.add(tab.id);
+        for (int i = 0; i < sessionTabs.size(); i++) {
+            ForeignSessionTab tab = sessionTabs.get(i);
+            tabIds[i] = tab.id;
             RecordUserAction.record("MobileCrossDeviceTabJourney");
-        }
-        if (tabIds.size() == 0) {
-            return 0;
         }
 
         return ForeignSessionHelperJni.get()
                 .openForeignSessionTabsAsBackgroundTabs(
-                        mNativeForeignSessionHelper,
-                        newForegroundTab,
-                        CollectionUtil.integerCollectionToIntArray(tabIds),
-                        session.tag);
+                        mNativeForeignSessionHelper, newForegroundTab, tabIds, session.tag);
     }
 
     @NativeMethods
@@ -325,19 +334,20 @@ public class ForeignSessionHelper {
 
         boolean openForeignSessionTab(
                 long nativeForeignSessionHelper,
-                Tab tab,
-                String sessionTag,
+                @JniType("TabAndroid*") Tab tab,
+                @JniType("std::string") String sessionTag,
                 int tabId,
                 int disposition);
 
-        void deleteForeignSession(long nativeForeignSessionHelper, String sessionTag);
+        void deleteForeignSession(
+                long nativeForeignSessionHelper, @JniType("std::string") String sessionTag);
 
         void setInvalidationsForSessionsEnabled(long nativeForeignSessionHelper, boolean enabled);
 
         int openForeignSessionTabsAsBackgroundTabs(
                 long nativeForeignSessionHelper,
-                @Nullable Tab tab,
-                int[] tabIds,
-                String sessionTag);
+                @JniType("TabAndroid*") Tab tab,
+                @JniType("std::vector<int32_t>") int[] tabIds,
+                @JniType("std::string") String sessionTag);
     }
 }

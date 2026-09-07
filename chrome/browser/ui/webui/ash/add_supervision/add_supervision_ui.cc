@@ -7,25 +7,29 @@
 #include <memory>
 #include <utility>
 
+#include "ash/constants/webui_url_constants.h"
+#include "base/check_deref.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/system/sys_info.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/views/chrome_web_dialog_view.h"
 #include "chrome/browser/ui/webui/ash/add_supervision/add_supervision.mojom.h"
 #include "chrome/browser/ui/webui/ash/add_supervision/add_supervision_handler_utils.h"
 #include "chrome/browser/ui/webui/ash/add_supervision/add_supervision_metrics_recorder.h"
 #include "chrome/browser/ui/webui/ash/add_supervision/confirm_signout_dialog.h"
-#include "chrome/common/webui_url_constants.h"
+#include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/grit/add_supervision_resources.h"
 #include "chrome/grit/add_supervision_resources_map.h"
-#include "chrome/grit/browser_resources.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/supervision_resources.h"
 #include "chrome/grit/supervision_resources_map.h"
+#include "chromeos/ash/components/browser_context_helper/annotated_account_id.h"
+#include "chromeos/ash/components/signin/identity_manager_provider.h"
 #include "components/google/core/common/google_util.h"
+#include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -90,8 +94,7 @@ void AddSupervisionDialog::Show() {
 // static
 AddSupervisionDialog* AddSupervisionDialog::GetInstance() {
   return static_cast<AddSupervisionDialog*>(
-      SystemWebDialogDelegate::FindInstance(
-          chrome::kChromeUIAddSupervisionURL));
+      SystemWebDialogDelegate::FindInstance(ash::kChromeUIAddSupervisionURL));
 }
 
 // static
@@ -147,7 +150,7 @@ bool AddSupervisionDialog::ShouldShowDialogTitle() const {
 
 AddSupervisionDialog::AddSupervisionDialog()
     : SystemWebDialogDelegate(
-          GURL(chrome::kChromeUIAddSupervisionURL),
+          GURL(ash::kChromeUIAddSupervisionURL),
           l10n_util::GetStringUTF16(IDS_ADD_SUPERVISION_PAGE_TITLE)) {}
 
 AddSupervisionDialog::~AddSupervisionDialog() = default;
@@ -193,15 +196,18 @@ void AddSupervisionUI::BindInterface(
   signin::IdentityManager* identity_manager =
       test_identity_manager_
           ? test_identity_manager_
-          : IdentityManagerFactory::GetForProfile(Profile::FromWebUI(web_ui()));
+          : IdentityManagerProvider::Get().Find(CHECK_DEREF(
+                AnnotatedAccountId::Get(Profile::FromWebUI(web_ui()))));
 
   mojo_api_handler_ = std::make_unique<AddSupervisionHandler>(
       std::move(receiver), web_ui(), identity_manager, this);
 }
 
 void AddSupervisionUI::SetUpResources() {
+  Profile* profile = Profile::FromWebUI(web_ui());
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
-      Profile::FromWebUI(web_ui()), chrome::kChromeUIAddSupervisionHost);
+      profile, ash::kChromeUIAddSupervisionHost);
+  content::URLDataSource::Add(profile, std::make_unique<ThemeSource>(profile));
   webui::EnableTrustedTypesCSP(source);
 
   // Initialize supervision URL from the command-line arguments (if provided).

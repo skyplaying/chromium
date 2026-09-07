@@ -14,10 +14,7 @@ static_library("multi_user") {
     "multi_user_window_manager_browser_adaptor.h",
   ]
 
-  public_deps = [
-    "//chrome/browser:browser_public_dependencies",
-    "//chrome/browser/ui:browser_list",
-  ]
+  public_deps = [ "//chrome/browser:browser_public_dependencies" ]
 
   deps = [
     "//ash",
@@ -36,9 +33,9 @@ static_library("multi_user") {
     "//chrome/browser/ash/profiles",
     "//chrome/browser/ash/system_web_apps/apps",
     "//chrome/browser/profiles:profile",
+    "//chrome/browser/profiles:profile_manager",
     "//chrome/browser/ui/browser_window",
     "//chrome/browser/ui/dialogs:browser_dialogs",
-    "//chrome/common",
     "//chromeos/ash/components/browser_context_helper",
     "//components/account_id",
     "//components/prefs",
@@ -49,7 +46,6 @@ static_library("multi_user") {
   allow_circular_includes_from = [
     "//chrome/browser/ash/accessibility",
     "//chrome/browser/ash/arc",
-    "//chrome/browser/ash/arc/auth",
     "//chrome/browser/ash/arc/boot_phase_monitor",
     "//chrome/browser/ash/arc/notification",
     "//chrome/browser/ash/arc/session",

@@ -6,18 +6,11 @@
 
 #include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/color/chrome_color_provider_utils.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_mixer.h"
 #include "ui/color/color_provider.h"
 #include "ui/color/color_recipe.h"
-
-namespace {
-/* 70% opacity */
-constexpr SkAlpha kWebUiTabStripScrollbarThumbAlpha = 0.7 * 255;
-
-/* 16% opacity */
-constexpr SkAlpha kWebUiTabStripTabSeparatorAlpha = 0.16 * 255;
-}  // namespace
 
 void AddMaterialTabStripColorMixer(ui::ColorProvider* provider,
                                    const ui::ColorProviderKey& key) {
@@ -25,9 +18,14 @@ void AddMaterialTabStripColorMixer(ui::ColorProvider* provider,
     return;
   }
 
+  const bool dark_mode =
+      key.color_mode == ui::ColorProviderKey::ColorMode::kDark;
+
   // TODO(crbug.com/40883407): Validate final mappings for ChromeRefresh23
   // color.
   ui::ColorMixer& mixer = provider->AddMixer();
+  mixer[kColorDetachedTabBackgroundActiveFrameActive] = {
+      dark_mode ? ui::kColorSysSurfaceVariant : ui::kColorSysBase};
   mixer[kColorTabBackgroundActiveFrameActive] = {ui::kColorSysBase};
   mixer[kColorTabBackgroundActiveFrameInactive] = {
       kColorTabBackgroundActiveFrameActive};
@@ -46,11 +44,24 @@ void AddMaterialTabStripColorMixer(ui::ColorProvider* provider,
   mixer[kColorTabBackgroundInactiveHoverFrameInactive] = {
       ui::kColorSysStateHeaderHoverInactive};
 
-  mixer[kColorTabBackgroundSelectedFrameActive] = {ui::GetResultingPaintColor(
-      ui::kColorSysStateHeaderSelect, kColorTabBackgroundInactiveFrameActive)};
-  mixer[kColorTabBackgroundSelectedFrameInactive] = {
-      ui::GetResultingPaintColor(ui::kColorSysStateHeaderSelect,
-                                 kColorTabBackgroundInactiveFrameInactive)};
+  if (key.frame_style == ui::ColorProviderKey::FrameStyle::kGlass) {
+    constexpr SkAlpha kSelectedTabOpacity = 0.80 * SK_AlphaOPAQUE;
+    mixer[kColorTabBackgroundSelectedFrameActive] = {
+        ui::SetAlpha(ui::GetResultingPaintColor(ui::kColorSysStateHeaderSelect,
+                                                ui::kColorSysHeader),
+                     kSelectedTabOpacity)};
+    mixer[kColorTabBackgroundSelectedFrameInactive] = {
+        ui::SetAlpha(ui::GetResultingPaintColor(ui::kColorSysStateHeaderSelect,
+                                                ui::kColorSysHeaderInactive),
+                     kSelectedTabOpacity)};
+  } else {
+    mixer[kColorTabBackgroundSelectedFrameActive] = {
+        ui::GetResultingPaintColor(ui::kColorSysStateHeaderSelect,
+                                   kColorTabBackgroundInactiveFrameActive)};
+    mixer[kColorTabBackgroundSelectedFrameInactive] = {
+        ui::GetResultingPaintColor(ui::kColorSysStateHeaderSelect,
+                                   kColorTabBackgroundInactiveFrameInactive)};
+  }
   mixer[kColorTabBackgroundSelectedHoverFrameActive] = {
       ui::GetResultingPaintColor(ui::kColorSysStateHoverDimBlendProtection,
                                  kColorTabBackgroundSelectedFrameActive)};
@@ -70,19 +81,6 @@ void AddMaterialTabStripColorMixer(ui::ColorProvider* provider,
   mixer[kColorTabForegroundInactiveFrameInactive] =
       ui::BlendForMinContrast({kColorTabForegroundInactiveFrameActive},
                               {kColorTabBackgroundInactiveFrameInactive});
-
-  /* WebUI Tab Strip colors. */
-  mixer[kColorWebUiTabStripBackground] = {ui::kColorSysHeader};
-  mixer[kColorWebUiTabStripFocusOutline] = {ui::kColorSysPrimary};
-  mixer[kColorWebUiTabStripScrollbarThumb] =
-      ui::SetAlpha(ui::GetColorWithMaxContrast(ui::kColorSysHeader),
-                   kWebUiTabStripScrollbarThumbAlpha);
-  mixer[kColorWebUiTabStripTabActiveTitleBackground] = {ui::kColorSysPrimary};
-  mixer[kColorWebUiTabStripTabActiveTitleContent] = {ui::kColorSysOnPrimary};
-  mixer[kColorWebUiTabStripTabBackground] = {ui::kColorSysSurface};
-  mixer[kColorWebUiTabStripTabSeparator] =
-      ui::SetAlpha(ui::kColorSysOnSurface, kWebUiTabStripTabSeparatorAlpha);
-  mixer[kColorWebUiTabStripTabText] = {ui::kColorSysOnSurface};
 
   // TabDivider colors.
   mixer[kColorTabDividerFrameActive] = {ui::kColorSysOnHeaderDivider};

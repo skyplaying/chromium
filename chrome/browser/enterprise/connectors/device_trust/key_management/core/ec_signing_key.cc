@@ -9,13 +9,10 @@
 
 #include "base/check.h"
 #include "base/check_op.h"
+#include "base/notreached.h"
 #include "build/build_config.h"
 #include "crypto/keypair.h"
 #include "crypto/sign.h"
-
-#if BUILDFLAG(IS_MAC)
-#include "base/notreached.h"
-#endif  // BUILDFLAG(IS_MAC)
 
 namespace enterprise_connectors {
 
@@ -30,7 +27,7 @@ class ECSigningKey : public crypto::UnexportableSigningKey {
   ~ECSigningKey() override;
 
   // crypto::UnexportableSigningKey:
-  crypto::SignatureVerifier::SignatureAlgorithm Algorithm() const override;
+  crypto::sign::SignatureKind Algorithm() const override;
   std::vector<uint8_t> GetSubjectPublicKeyInfo() const override;
   std::vector<uint8_t> GetWrappedKey() const override;
   std::optional<std::vector<uint8_t>> SignSlowly(
@@ -40,10 +37,8 @@ class ECSigningKey : public crypto::UnexportableSigningKey {
   SecKeyRef GetSecKeyRef() const override;
 #elif BUILDFLAG(IS_WIN)
   bool SupportsTls13() override { return true; }
-#endif  // BUILDFLAG(IS_MAC)
-
-  crypto::StatefulUnexportableSigningKey* AsStatefulUnexportableSigningKey()
-      override;
+  NCRYPT_KEY_HANDLE GetNCryptKeyHandle() const override { NOTREACHED(); }
+#endif  // BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 
  private:
   crypto::keypair::PrivateKey key_;
@@ -55,8 +50,8 @@ ECSigningKey::ECSigningKey(crypto::keypair::PrivateKey&& key) : key_(key) {}
 
 ECSigningKey::~ECSigningKey() = default;
 
-crypto::SignatureVerifier::SignatureAlgorithm ECSigningKey::Algorithm() const {
-  return crypto::SignatureVerifier::ECDSA_SHA256;
+crypto::sign::SignatureKind ECSigningKey::Algorithm() const {
+  return crypto::sign::ECDSA_SHA256;
 }
 
 std::vector<uint8_t> ECSigningKey::GetSubjectPublicKeyInfo() const {
@@ -69,8 +64,7 @@ std::vector<uint8_t> ECSigningKey::GetWrappedKey() const {
 
 std::optional<std::vector<uint8_t>> ECSigningKey::SignSlowly(
     base::span<const uint8_t> data) {
-  return crypto::sign::Sign(crypto::sign::SignatureKind::ECDSA_SHA256, key_,
-                            data);
+  return crypto::sign::Sign(crypto::sign::ECDSA_SHA256, key_, data);
 }
 
 #if BUILDFLAG(IS_MAC)
@@ -79,23 +73,17 @@ SecKeyRef ECSigningKey::GetSecKeyRef() const {
 }
 #endif  // BUILDFLAG(IS_MAC)
 
-crypto::StatefulUnexportableSigningKey*
-ECSigningKey::AsStatefulUnexportableSigningKey() {
-  return nullptr;
-}
-
 }  // namespace
 
 ECSigningKeyProvider::ECSigningKeyProvider() = default;
 ECSigningKeyProvider::~ECSigningKeyProvider() = default;
 
-std::optional<crypto::SignatureVerifier::SignatureAlgorithm>
+std::optional<crypto::sign::SignatureKind>
 ECSigningKeyProvider::SelectAlgorithm(
-    base::span<const crypto::SignatureVerifier::SignatureAlgorithm>
-        acceptable_algorithms) {
+    base::span<const crypto::sign::SignatureKind> acceptable_algorithms) {
   for (auto algo : acceptable_algorithms) {
-    if (algo == crypto::SignatureVerifier::ECDSA_SHA256) {
-      return crypto::SignatureVerifier::ECDSA_SHA256;
+    if (algo == crypto::sign::ECDSA_SHA256) {
+      return crypto::sign::ECDSA_SHA256;
     }
   }
 
@@ -104,14 +92,13 @@ ECSigningKeyProvider::SelectAlgorithm(
 
 std::unique_ptr<crypto::UnexportableSigningKey>
 ECSigningKeyProvider::GenerateSigningKeySlowly(
-    base::span<const crypto::SignatureVerifier::SignatureAlgorithm>
-        acceptable_algorithms) {
+    base::span<const crypto::sign::SignatureKind> acceptable_algorithms) {
   auto algo = SelectAlgorithm(acceptable_algorithms);
   if (!algo) {
     return nullptr;
   }
 
-  CHECK_EQ(crypto::SignatureVerifier::ECDSA_SHA256, *algo);
+  CHECK_EQ(crypto::sign::ECDSA_SHA256, *algo);
   return std::make_unique<ECSigningKey>();
 }
 

@@ -12,13 +12,15 @@
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
+#include "chrome/browser/ui/tabs/tab_enums.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/test_browser_ui.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
 #include "chrome/browser/ui/views/interaction/browser_elements_views.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_view_views.h"
+#include "chrome/browser/ui/views/tabs/common/tab_strip_view.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
-#include "chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_view.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/interaction/tracked_element_webcontents.h"
 #include "chrome/test/interaction/webcontents_interaction_test_util.h"
@@ -34,9 +36,10 @@
 #include "ui/views/controls/webview/webview.h"
 #include "ui/views/interaction/element_tracker_views.h"
 #include "ui/views/interaction/interaction_test_util_views.h"
-#include "ui/views/test/widget_test.h"
 #include "ui/views/view.h"
 #include "ui/views/view_utils.h"
+#include "ui/webui/tracked_element/interaction_test_util_web_ui.h"
+#include "ui/webui/tracked_element/tracked_element_web_ui.h"
 
 #if BUILDFLAG(IS_MAC)
 #include "ui/base/interaction/interaction_test_util_mac.h"
@@ -114,7 +117,7 @@ TabStripRegionView* GetTargetTabStripRegionView(
   // region.
   if (browser_region_view->Contains(view)) {
     if (views::IsViewClass<TabStrip>(view) ||
-        views::IsViewClass<VerticalTabStripView>(view)) {
+        views::IsViewClass<TabStripView>(view)) {
       return browser_region_view;
     }
   }
@@ -127,6 +130,8 @@ views::View* GetScreenshotTargetView(ui::TrackedElement* element) {
     return view_el->view();
   } else if (auto* const page_el = element->AsA<TrackedElementWebContents>()) {
     return page_el->owner()->GetWebView();
+  } else if (auto* const webui_el = element->AsA<ui::TrackedElementWebUI>()) {
+    return webui_el->GetWebView();
   }
   return nullptr;
 }
@@ -248,6 +253,9 @@ class InteractionTestUtilSimulatorBrowser
         LOG(ERROR) << "WebContents not associated with any UI element.";
         return ui::test::ActionResult::kFailed;
       }
+    } else if (auto* const web_el = el->AsA<ui::TrackedElementWebUI>()) {
+      is_web_contents = true;
+      view = web_el->GetWebView();
     }
     if (!view) {
       return ui::test::ActionResult::kNotAttempted;
@@ -362,7 +370,8 @@ class InteractionTestUtilSimulatorBrowser
 
     // Tabs can be selected using a default action; no special input logic is
     // needed.
-    views::View* const tab = tab_strip_region->GetTabAnchorViewAt(index);
+    views::View* const tab = tab_strip_region->GetTabAnchorView(
+        tab_strip_model->GetTabAtIndex(index)->GetHandle());
     views::test::InteractionTestUtilSimulatorViews::DoDefaultAction(tab,
                                                                     input_type);
 
@@ -401,6 +410,8 @@ void InteractionTestUtilBrowser::PopulateSimulators(
     ui::test::InteractionTestUtil& test_util) {
   test_util.AddSimulator(
       std::make_unique<InteractionTestUtilSimulatorBrowser>());
+  test_util.AddSimulator(
+      std::make_unique<ui::InteractionTestUtilSimulatorWebUI>());
 }
 
 // static
@@ -424,11 +435,21 @@ ui::test::ActionResult InteractionTestUtilBrowser::CompareScreenshot(
     ui::TrackedElement* element,
     const std::string& screenshot_name,
     const std::string& baseline_cl,
-    const ScreenshotOptions& options) {
+    ScreenshotOptions options) {
   views::View* const view = GetScreenshotTargetView(element);
   if (!view) {
     return ui::test::ActionResult::kNotAttempted;
   }
+
+  if (auto* const webui_el = element->AsA<ui::TrackedElementWebUI>()) {
+    if (!options.region.has_value()) {
+      options.region = webui_el->GetBoundsInWebContents();
+    } else {
+      options.region->Offset(
+          webui_el->GetBoundsInWebContents().OffsetFromOrigin());
+    }
+  }
+
   return CompareScreenshotCommon(view, options, screenshot_name, baseline_cl);
 }
 

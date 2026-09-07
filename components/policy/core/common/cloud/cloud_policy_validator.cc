@@ -331,9 +331,9 @@ CloudPolicyValidatorBase::GetCurrentPolicyVerificationKey() {
 }
 
 // static
-void CloudPolicyValidatorBase::PostValidationTask(
+void CloudPolicyValidatorBase::StartValidation(
     std::unique_ptr<CloudPolicyValidatorBase> validator,
-    base::OnceClosure completion_callback) {
+    CompletionCallback completion_callback) {
   const auto task_runner = validator->background_task_runner_;
   task_runner->PostTask(
       FROM_HERE,
@@ -347,7 +347,7 @@ void CloudPolicyValidatorBase::PostValidationTask(
 void CloudPolicyValidatorBase::PerformValidation(
     std::unique_ptr<CloudPolicyValidatorBase> self,
     scoped_refptr<base::SingleThreadTaskRunner> task_runner,
-    base::OnceClosure completion_callback) {
+    CompletionCallback completion_callback) {
   // Run the validation activities on this thread.
   self->RunValidation();
 
@@ -361,8 +361,8 @@ void CloudPolicyValidatorBase::PerformValidation(
 // static
 void CloudPolicyValidatorBase::ReportCompletion(
     std::unique_ptr<CloudPolicyValidatorBase> self,
-    base::OnceClosure completion_callback) {
-  std::move(completion_callback).Run();
+    CompletionCallback completion_callback) {
+  std::move(completion_callback).Run(self.get());
 }
 
 void CloudPolicyValidatorBase::RunValidation() {
@@ -454,8 +454,9 @@ bool CloudPolicyValidatorBase::CheckNewPublicKeyVerificationSignature() {
                       verification_key_.value(),
                       policy_->new_public_key_verification_data_signature(),
                       em::PolicyFetchRequest::SHA256_RSA) &&
-      CheckDomainInPublicKeyVerificationData(
-          policy_->new_public_key_verification_data())) {
+      CheckPublicKeyVerificationData(
+          policy_->new_public_key_verification_data(),
+          policy_->new_public_key())) {
     UMA_HISTOGRAM_ENUMERATION(kMetricKeySignatureVerification,
                               MetricKeySignatureVerification::kSuccess);
     // Signature verification succeeded - return success to the caller.
@@ -542,13 +543,20 @@ std::string CloudPolicyValidatorBase::ExtractDomainFromPolicy() {
   return domain;
 }
 
-bool CloudPolicyValidatorBase::CheckDomainInPublicKeyVerificationData(
-    const std::string& new_public_key_verification_data) {
+bool CloudPolicyValidatorBase::CheckPublicKeyVerificationData(
+    const std::string& new_public_key_verification_data,
+    const std::string& expected_public_key) {
   em::PublicKeyVerificationData public_key_data;
   if (!public_key_data.ParseFromString(new_public_key_verification_data)) {
     LOG_POLICY(ERROR, POLICY_FETCHING)
         << PolicyTypeLogPrefix(policy_type_, settings_entity_id_)
         << "Failed to deserialize new public key.";
+    return false;
+  }
+  if (public_key_data.new_public_key() != expected_public_key) {
+    LOG_POLICY(ERROR, POLICY_FETCHING)
+        << PolicyTypeLogPrefix(policy_type_, settings_entity_id_)
+        << "Key mismatch in new public key verification data.";
     return false;
   }
   if (public_key_data.domain() != ExtractDomainFromPolicy()) {
@@ -570,12 +578,6 @@ void CloudPolicyValidatorBase::set_owning_domain(
 CloudPolicyValidatorBase::Status CloudPolicyValidatorBase::CheckSignature() {
   const std::string* signature_key = &key_;
   if (policy_->has_new_public_key() && allow_key_rotation_) {
-  // TODO(crbug.com/483099777): Reenable signature verification once a good
-  // solution is found. This is temporarily disabled to avoid breaking existing
-  // enterprise policy fetches.
-    if (IsExtensionInstallPolicyType(policy_type_)) {
-      return VALIDATION_OK;
-    }
     signature_key = &policy_->new_public_key();
     if (!policy_->has_new_public_key_signature() ||
         !VerifySignature(policy_->new_public_key(), key_,
@@ -608,12 +610,6 @@ CloudPolicyValidatorBase::Status CloudPolicyValidatorBase::CheckSignature() {
 }
 
 CloudPolicyValidatorBase::Status CloudPolicyValidatorBase::CheckInitialKey() {
-  // TODO(crbug.com/483099777): Reenable signature verification once a good
-  // solution is found. This is temporarily disabled to avoid breaking existing
-  // enterprise policy fetches.
-  if (IsExtensionInstallPolicyType(policy_type_)) {
-    return VALIDATION_OK;
-  }
   if (!policy_->has_new_public_key() || !policy_->has_policy_data_signature() ||
       !VerifySignature(policy_->policy_data(), policy_->new_public_key(),
                        policy_->policy_data_signature(), GetSignatureType())) {
@@ -633,12 +629,6 @@ CloudPolicyValidatorBase::Status CloudPolicyValidatorBase::CheckInitialKey() {
 }
 
 CloudPolicyValidatorBase::Status CloudPolicyValidatorBase::CheckCachedKey() {
-  // TODO(crbug.com/483099777): Reenable signature verification once a good
-  // solution is found. This is temporarily disabled to avoid breaking existing
-  // enterprise policy fetches.
-  if (IsExtensionInstallPolicyType(policy_type_)) {
-    return VALIDATION_OK;
-  }
 #if BUILDFLAG(IS_CHROMEOS)
   // Skip verification if the key is empty (disabled via command line).
   if (!verification_key_) {
@@ -649,7 +639,7 @@ CloudPolicyValidatorBase::Status CloudPolicyValidatorBase::CheckCachedKey() {
   if (VerifySignature(new_cached_key_, verification_key_.value(),
                       new_cached_key_signature_,
                       em::PolicyFetchRequest::SHA256_RSA) &&
-      CheckDomainInPublicKeyVerificationData(new_cached_key_)) {
+      CheckPublicKeyVerificationData(new_cached_key_, cached_key_)) {
     UMA_HISTOGRAM_ENUMERATION(kMetricKeySignatureVerification,
                               MetricKeySignatureVerification::kSuccess);
     // Signature verification succeeded - return success to the caller.
@@ -847,7 +837,7 @@ CloudPolicyValidatorBase::GetSignatureType() {
 
 template class CloudPolicyValidator<em::CloudPolicySettings>;
 
-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+#if (!BUILDFLAG(IS_ANDROID) || BUILDFLAG(ENABLE_EXTENSIONS_CORE)) && !BUILDFLAG(IS_IOS)
 template class CloudPolicyValidator<em::ExternalPolicyData>;
 #endif
 

@@ -29,6 +29,7 @@
 #import "ios/web/web_state/web_state_impl.h"
 #import "net/base/apple/url_conversions.h"
 #import "net/base/url_util.h"
+#import "url/origin.h"
 
 using web::wk_navigation_util::kReferrerHeaderName;
 using web::wk_navigation_util::URLNeedsUserAgentType;
@@ -69,8 +70,10 @@ using web::wk_navigation_util::URLNeedsUserAgentType;
       web::GetWebClient()->IsAppSpecificURL(currentURL);
   // If it's a chrome URL, but not a native one, create the WebUI instance.
   if (isCurrentURLAppSpecific) {
-    if (!(item->GetTransitionType() & ui::PAGE_TRANSITION_TYPED ||
-          item->GetTransitionType() & ui::PAGE_TRANSITION_AUTO_BOOKMARK) &&
+    ui::PageTransition transition = item->GetTransitionType();
+    if (!(ui::PageTransitionCoreTypeIs(transition, ui::PAGE_TRANSITION_TYPED) ||
+          ui::PageTransitionCoreTypeIs(transition,
+                                       ui::PAGE_TRANSITION_AUTO_BOOKMARK)) &&
         self.hasOpener) {
       // WebUI URLs can not be opened by DOM to prevent cross-site scripting as
       // they have increased power. WebUI URLs may only be opened when the user
@@ -267,8 +270,8 @@ using web::wk_navigation_util::URLNeedsUserAgentType;
     // pending navigation item.
     // Do not do it for localhost address as this is needed to have
     // pre-rendering in tests.
-    if (item->GetURL().DeprecatedGetOriginAsURL() ==
-            requestURL.DeprecatedGetOriginAsURL() &&
+    if (item->GetURL().SchemeIs(requestURL.scheme()) &&
+        url::IsSameOriginWith(item->GetURL(), requestURL) &&
         !net::IsLocalhost(requestURL)) {
       self.navigationManagerImpl->UpdatePendingItemUrl(requestURL);
     }

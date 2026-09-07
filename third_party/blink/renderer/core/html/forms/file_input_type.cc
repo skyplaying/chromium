@@ -65,8 +65,8 @@ Vector<String> CollectAcceptTypes(const HTMLInputElement& input) {
 
   Vector<String> accept_types;
   accept_types.reserve(mime_types.size() + extensions.size());
-  accept_types.AppendVector(mime_types);
-  accept_types.AppendVector(extensions);
+  accept_types.append_range(mime_types);
+  accept_types.append_range(extensions);
   return accept_types;
 }
 
@@ -120,9 +120,12 @@ Vector<String> FileInputType::FilesFromFormControlState(
 }
 
 FormControlState FileInputType::SaveFormControlState() const {
-  if (file_list_->IsEmpty() ||
-      GetElement().GetDocument().GetFormController().DropReferencedFilePaths())
+  if (file_list_->IsEmpty() || GetElement()
+                                   .GetDocument()
+                                   .EnsureFormController()
+                                   .DropReferencedFilePaths()) {
     return FormControlState();
+  }
   FormControlState state;
   unsigned num_files = file_list_->length();
   for (unsigned i = 0; i < num_files; ++i)
@@ -182,6 +185,9 @@ void FileInputType::HandleDOMActivateEvent(Event& event) {
         mojom::ConsoleMessageSource::kJavaScript,
         mojom::ConsoleMessageLevel::kWarning, message));
     return;
+  }
+  if (RuntimeEnabledFeatures::FileColorPickerConsumeActivationEnabled()) {
+    LocalFrame::ConsumeTransientUserActivation(document.GetFrame());
   }
 
   OpenPopupView();
@@ -304,7 +310,7 @@ FileList* FileInputType::CreateFileList(ExecutionContext& context,
   // |base_dir|.
   if (size && !base_dir.empty()) {
     base::FilePath root_path = base_dir.DirName();
-    int root_length = FilePathToString(root_path).length();
+    wtf_size_t root_length = FilePathToString(root_path).length();
     DCHECK(root_length);
     if (!root_path.EndsWithSeparator())
       root_length += 1;
@@ -337,10 +343,10 @@ FileList* FileInputType::CreateFileList(ExecutionContext& context,
 #endif
       if (relative_path.empty()) {
         DCHECK(
-            string_path.StartsWithIgnoringASCIICase(FilePathToString(base_dir)))
+            string_path.StartsWithIgnoringAsciiCase(FilePathToString(base_dir)))
             << "A path in a FileChooserFileInfo " << string_path
             << " should start with " << FilePathToString(base_dir);
-        relative_path = string_path.Substring(root_length).Replace('\\', '/');
+        relative_path = string_path.substr(root_length).Replace('\\', '/');
       }
       file_list->Append(File::CreateWithRelativePath(
           &context, string_path, display_name, relative_path));
@@ -415,7 +421,7 @@ Node* FileInputType::FileStatusElement() const {
   return GetElement().EnsureShadowSubtree()->lastChild();
 }
 
-void FileInputType::DisabledAttributeChanged() {
+void FileInputType::DisabledAttributeChanged(DisabledChangedReason reason) {
   if (Element* button = UploadButton()) {
     button->SetBooleanAttribute(html_names::kDisabledAttr,
                                 GetElement().IsDisabledFormControl());
@@ -457,7 +463,10 @@ bool FileInputType::SetFiles(FileList* files) {
 }
 
 void FileInputType::SetFilesAndDispatchEvents(FileList* files) {
-  if (SetFiles(files)) {
+  bool force = force_change_event_;
+  force_change_event_ = false;
+
+  if (SetFiles(files) || force) {
     // This call may cause destruction of this instance.
     // input instance is safe since it is ref-counted.
     GetElement().DispatchInputEvent();
@@ -484,12 +493,27 @@ void FileInputType::FilesChosen(FileChooserFileInfoList files,
     }
     ++i;
   }
+  if (RuntimeEnabledFeatures::FilePickerEventsFixEnabled() &&
+      HasConnectedFileChooser()) {
+    force_change_event_ = true;
+  }
   if (!will_be_destroyed_) {
     SetFilesAndDispatchEvents(
         CreateFileList(*GetElement().GetExecutionContext(), files, base_dir));
   }
   if (HasConnectedFileChooser())
     DisconnectFileChooser();
+
+  GetElement().PseudoStateChanged(CSSSelector::kPseudoOpen);
+}
+
+void FileInputType::FileChooserCanceled() {
+  if (!will_be_destroyed_) {
+    GetElement().DispatchCancelEvent();
+  }
+  if (HasConnectedFileChooser()) {
+    DisconnectFileChooser();
+  }
 
   GetElement().PseudoStateChanged(CSSSelector::kPseudoOpen);
 }

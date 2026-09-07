@@ -10,6 +10,7 @@
 #include "base/time/time.h"
 #include "url/gurl.h"
 
+@class MostVisitedTilesCollectionView;
 @class NewTabPageColorPalette;
 class TemplateURLService;
 
@@ -22,7 +23,7 @@ bool ShouldShowTopOfFeedSyncPromo();
 // Retrieves the URL for the AIM web page. `query_start_time` is the time that
 // the user clicked the submit button.
 GURL GetUrlForAim(TemplateURLService* turl_service,
-                  const base::Time& query_start_time);
+                  base::Time query_start_time);
 
 /// Generates a `UIButtonConfigurationUpdateHandler` that will color its button
 /// correctly for the current NTP theming status.
@@ -38,5 +39,17 @@ UIButtonConfigurationUpdateHandler CreateThemedButtonConfigurationUpdateHandler(
     PaletteColorProvider paletteBackgroundColorProvider,
     UIBlurEffectStyle imageBlurEffectStyleOverride =
         UIBlurEffectStyleSystemMaterial);
+
+/// Creates and returns a container view wrapping `collectionView` with standard
+/// NTP card background styling, corner radius, and bottom padding. Returns nil
+/// if `collectionView` is nil.
+UIView* CreateMostVisitedContainerView(
+    MostVisitedTilesCollectionView* collectionView,
+    BOOL hasBackground);
+
+/// Calculates the layout height of Most Visited Tiles given its container
+/// or inner collection view (using system layout fitting when bounds are zero).
+CGFloat MostVisitedContainerHeight(UIView* containerView,
+                                   UIView* mostVisitedView);
 
 #endif  // IOS_CHROME_BROWSER_NTP_UI_BUNDLED_NEW_TAB_PAGE_UTILS_H_

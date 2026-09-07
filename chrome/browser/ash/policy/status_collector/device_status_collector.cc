@@ -24,7 +24,11 @@
 #include <vector>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_policy_pref_names.h"
+#include "ash/constants/ash_pref_names.h"
+#include "base/byte_size.h"
 #include "base/check.h"
+#include "base/check_deref.h"
 #include "base/check_op.h"
 #include "base/compiler_specific.h"
 #include "base/containers/circular_deque.h"
@@ -65,7 +69,6 @@
 #include "chrome/browser/crash_upload_list/crash_upload_list.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
 #include "chrome/browser/ui/webui/ash/settings/pages/storage/device_storage_util.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/audio/cras_audio_handler.h"
 #include "chromeos/ash/components/channel/channel_info.h"
 #include "chromeos/ash/components/dbus/attestation/attestation_client.h"
@@ -192,18 +195,16 @@ std::vector<em::VolumeInfo> GetVolumeInfo(
       continue;
     }
 
-    std::optional<int64_t> free_size =
-        base::SysInfo::AmountOfFreeDiskSpace(mount_path);
-    std::optional<int64_t> total_size =
-        base::SysInfo::AmountOfTotalDiskSpace(mount_path);
-    if (!free_size.has_value() || !total_size.has_value()) {
+    std::optional<base::SysInfo::DiskSpaceInfo> disk_space =
+        base::SysInfo::AmountOfDiskSpace(mount_path);
+    if (!disk_space) {
       LOG(ERROR) << "Unable to get volume status for " << mount_point;
       continue;
     }
     em::VolumeInfo info;
     info.set_volume_id(mount_point);
-    info.set_storage_total(*total_size);
-    info.set_storage_free(*free_size);
+    info.set_storage_total(disk_space->total.InBytes());
+    info.set_storage_free(disk_space->available.InBytes());
     result.push_back(info);
   }
   return result;
@@ -373,24 +374,15 @@ em::DiskLifetimeEstimation ReadDiskLifeTimeEstimation() {
 // Read stateful partition info for user data.
 em::StatefulPartitionInfo ReadStatefulPartitionInfo() {
   em::StatefulPartitionInfo spi;
-  const base::FilePath statefulPartitionPath(kStatefulPartitionPath);
-  const auto available_space =
-      base::SysInfo::AmountOfFreeDiskSpace(statefulPartitionPath);
-  const auto total_space =
-      base::SysInfo::AmountOfTotalDiskSpace(statefulPartitionPath);
-
-  if (!available_space) {
-    LOG(ERROR) << "ReadStatefulPartitionInfo failed fetching available space.";
+  const std::optional<base::SysInfo::DiskSpaceInfo> disk_space =
+      base::SysInfo::AmountOfDiskSpace(base::FilePath(kStatefulPartitionPath));
+  if (!disk_space) {
+    LOG(ERROR) << "ReadStatefulPartitionInfo failed fetching disk space.";
     return spi;
   }
 
-  if (!total_space) {
-    LOG(ERROR) << "ReadStatefulPartitionInfo failed fetching total space.";
-    return spi;
-  }
-
-  spi.set_available_space(*available_space);
-  spi.set_total_space(*total_space);
+  spi.set_available_space(disk_space->available.InBytes());
+  spi.set_total_space(disk_space->total.InBytes());
   return spi;
 }
 
@@ -1599,7 +1591,7 @@ SampledData::SampledData() = default;
 SampledData::~SampledData() = default;
 
 DeviceStatusCollector::DeviceStatusCollector(
-    PrefService* pref_service,
+    PrefService* local_state,
     ReportingUserTracker* reporting_user_tracker,
     ash::system::StatisticsProvider* provider,
     ManagedSessionService* managed_session_service,
@@ -1614,7 +1606,7 @@ DeviceStatusCollector::DeviceStatusCollector(
     const CrashReportInfoFetcher& crash_report_info_fetcher,
     base::Clock* clock)
     : StatusCollector(provider, ash::CrosSettings::Get(), clock),
-      pref_service_(pref_service),
+      local_state_(CHECK_DEREF(local_state)),
       reporting_user_tracker_(reporting_user_tracker),
       firmware_fetch_error_(kFirmwareNotInitialized),
       volume_info_fetcher_(volume_info_fetcher),
@@ -1768,25 +1760,25 @@ DeviceStatusCollector::DeviceStatusCollector(
                      weak_factory_.GetWeakPtr()));
 
   pref_change_registrar_ = std::make_unique<PrefChangeRegistrar>();
-  pref_change_registrar_->Init(pref_service_);
+  pref_change_registrar_->Init(&local_state_.get());
   pref_change_registrar_->Add(
-      prefs::kReportingUsers,
+      ash::prefs::kReportingUsers,
       base::BindRepeating(&DeviceStatusCollector::ReportingUsersChanged,
                           weak_factory_.GetWeakPtr()));
 
-  DCHECK(pref_service_->GetInitializationStatus() !=
+  DCHECK(local_state_->GetInitializationStatus() !=
          PrefService::INITIALIZATION_STATUS_WAITING);
   activity_storage_ = std::make_unique<EnterpriseActivityStorage>(
-      pref_service_, prefs::kDeviceActivityTimes);
+      &local_state_.get(), ash::prefs::kDeviceActivityTimes);
 }
 
 DeviceStatusCollector::DeviceStatusCollector(
-    PrefService* pref_service,
+    PrefService* local_state,
     ReportingUserTracker* reporting_user_tracker,
     ash::system::StatisticsProvider* provider,
     ManagedSessionService* managed_session_service)
     : DeviceStatusCollector(
-          pref_service,
+          local_state,
           reporting_user_tracker,
           provider,
           managed_session_service,
@@ -1807,7 +1799,7 @@ constexpr base::TimeDelta DeviceStatusCollector::kIdlePollInterval;
 
 // static
 void DeviceStatusCollector::RegisterPrefs(PrefRegistrySimple* registry) {
-  registry->RegisterDictionaryPref(prefs::kDeviceActivityTimes);
+  registry->RegisterDictionaryPref(ash::prefs::kDeviceActivityTimes);
 }
 
 void DeviceStatusCollector::CheckIdleState() {
@@ -2013,9 +2005,8 @@ void DeviceStatusCollector::SampleMemoryUsage() {
     return;
   }
 
-  MemoryUsage usage = {
-      base::SysInfo::AmountOfAvailablePhysicalMemory().AsDeprecatedByteCount(),
-      base::Time::Now()};
+  MemoryUsage usage = {base::SysInfo::AmountOfAvailablePhysicalMemory(),
+                       base::Time::Now()};
   memory_usage_.push_back(usage);
 
   if (memory_usage_.size() > kMaxResourceUsageSamples) {
@@ -2248,7 +2239,7 @@ void DeviceStatusCollector::OnProbeDataFetched(
 
 void DeviceStatusCollector::ReportingUsersChanged() {
   std::vector<std::string> reporting_users;
-  for (auto& value : pref_service_->GetList(prefs::kReportingUsers)) {
+  for (auto& value : local_state_->GetList(ash::prefs::kReportingUsers)) {
     if (value.is_string()) {
       reporting_users.push_back(value.GetString());
     }
@@ -2511,11 +2502,9 @@ bool DeviceStatusCollector::GetNetworkStatus(
     em::NetworkState::ConnectionState connection_state_enum =
         em::NetworkState::UNKNOWN;
     const std::string connection_state_string(state->connection_state());
-    for (size_t i = 0; i < std::size(kConnectionStateMap); ++i) {
-      if (connection_state_string ==
-          UNSAFE_TODO(kConnectionStateMap[i]).state_string) {
-        connection_state_enum =
-            UNSAFE_TODO(kConnectionStateMap[i]).state_constant;
+    for (const auto& entry : kConnectionStateMap) {
+      if (connection_state_string == entry.state_string) {
+        connection_state_enum = entry.state_constant;
         break;
       }
     }
@@ -2583,7 +2572,7 @@ bool DeviceStatusCollector::GetMemoryInfo(
     em::DeviceStatusReportRequest* status) {
   status->clear_system_ram_free_infos();
   status->set_system_ram_total(
-      base::SysInfo::AmountOfPhysicalMemory().InBytes());
+      base::SysInfo::AmountOfTotalPhysicalMemory().InBytes());
 
   for (const MemoryUsage& usage : memory_usage_) {
     em::SystemFreeRamInfo* system_ram_free_info =
@@ -2773,7 +2762,7 @@ bool DeviceStatusCollector::GetDemoModeDimensions(
   bool anything_reported = ash::demo_mode::IsDeviceInDemoMode();
   if (anything_reported) {
     *status->mutable_demo_mode_dimensions() =
-        ash::demo_mode::GetDemoModeDimensions();
+        ash::demo_mode::GetDemoModeDimensions(local_state_.get());
   }
   return anything_reported;
 }
@@ -2956,7 +2945,7 @@ bool DeviceStatusCollector::GetSessionStatusForUser(
   bool anything_reported_user = false;
 
   const bool report_android_status =
-      profile->GetPrefs()->GetBoolean(prefs::kReportArcStatusEnabled);
+      profile->GetPrefs()->GetBoolean(ash::prefs::kReportArcStatusEnabled);
   if (report_android_status) {
     anything_reported_user |= GetAndroidStatus(status, state);
   }

@@ -4,16 +4,10 @@
 
 #include "chrome/browser/ui/views/passwords/password_change/successful_password_change_view.h"
 
-#include <memory>
 #include <string>
 
-#include "base/strings/utf_string_conversions.h"
 #include "base/test/gmock_callback_support.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/passwords/bubble_controllers/password_change/successful_password_change_bubble_controller.h"
-#include "chrome/browser/ui/views/passwords/manage_passwords_view_ids.h"
 #include "chrome/browser/ui/views/passwords/password_bubble_view_test_base.h"
-#include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -21,7 +15,6 @@
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/styled_label.h"
 #include "ui/views/test/button_test_api.h"
-#include "url/gurl.h"
 
 namespace {
 
@@ -47,20 +40,24 @@ class SuccessfulPasswordChangeViewTest : public PasswordBubbleViewTestBase {
   }
 
   void TearDown() override {
-    view_->GetWidget()->CloseWithReason(
-        views::Widget::ClosedReason::kUnspecified);
-    view_ = nullptr;
+    if (view_) {
+      view_->GetWidget()->CloseWithReason(
+          views::Widget::ClosedReason::kUnspecified);
+      view_ = nullptr;
+    }
     PasswordBubbleViewTestBase::TearDown();
   }
 
   void CreateAndShowView() {
     CreateAnchorViewAndShow();
 
-    view_ = new SuccessfulPasswordChangeView(web_contents(), anchor_view());
+    view_ = new SuccessfulPasswordChangeView(
+        web_contents(), views::BubbleAnchor(anchor_view()));
     views::BubbleDialogDelegateView::CreateBubble(view_)->Show();
   }
 
   SuccessfulPasswordChangeView* view() { return view_; }
+  void reset_view() { view_ = nullptr; }
 
   views::Label* GetLabelById(int id) {
     return static_cast<views::Label*>(view()->GetViewByID(id));
@@ -133,4 +130,31 @@ TEST_F(SuccessfulPasswordChangeViewTest, EyeButtonClick) {
   // Verify password is hidden.
   EXPECT_TRUE(GetLabelById(SuccessfulPasswordChangeView::kPasswordLabelId)
                   ->GetObscured());
+}
+
+TEST_F(SuccessfulPasswordChangeViewTest, AuthCallbackAfterViewDestruction) {
+  CreateAndShowView();
+
+  base::OnceCallback<void(bool)> captured_auth_callback;
+  EXPECT_CALL(*model_delegate_mock(), AuthenticateUserWithMessage)
+      .WillOnce(
+          testing::WithArg<1>([&](base::OnceCallback<void(bool)> callback) {
+            captured_auth_callback = std::move(callback);
+          }));
+
+  views::Button* eye_icon = static_cast<views::Button*>(
+      view()->GetViewByID(SuccessfulPasswordChangeView::kEyeIconButtonId));
+  EXPECT_TRUE(eye_icon);
+
+  views::test::ButtonTestApi(eye_icon).NotifyClick(ui::test::TestEvent());
+  EXPECT_TRUE(captured_auth_callback);
+
+  // Destroy the widget and view before the async auth callback runs.
+  views::Widget* widget = view()->GetWidget();
+  reset_view();
+  widget->CloseNow();
+
+  // Executing the callback when the view is destroyed must not crash or trigger
+  // UAF.
+  std::move(captured_auth_callback).Run(true);
 }

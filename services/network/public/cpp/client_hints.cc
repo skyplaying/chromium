@@ -122,11 +122,11 @@ ParseClientHintsHeader(const std::string& header) {
   // Standard validation rules: we want a list of tokens, so this better
   // only have tokens (but params are OK!)
   for (const auto& list_item : maybe_list.value()) {
+    const auto item_and_params = list_item.GetWithParamsIfItem();
     // Make sure not a nested list.
-    if (list_item.member.size() != 1u)
+    if (!item_and_params.has_value() || !item_and_params->first.is_token()) {
       return std::nullopt;
-    if (!list_item.member[0].item.is_token())
-      return std::nullopt;
+    }
   }
 
   std::vector<network::mojom::WebClientHintsType> result;
@@ -134,7 +134,8 @@ ParseClientHintsHeader(const std::string& header) {
   // Now convert those to actual hint enums.
   const DecodeMap& decode_map = GetDecodeMap();
   for (const auto& list_item : maybe_list.value()) {
-    const std::string& token_value = list_item.member[0].item.GetString();
+    const std::string& token_value =
+        list_item.GetWithParamsIfItem()->first.GetToken();
     auto iter = decode_map.find(token_value);
     if (iter != decode_map.end())
       result.push_back(iter->second);

@@ -91,7 +91,7 @@ std::string VideoFrame::StorageTypeToString(
       return "DMABUFS";
 #endif
     case VideoFrame::STORAGE_MAPPABLE_SHARED_IMAGE:
-      return "GPU_MEMORY_BUFFER";
+      return "MAPPABLE_SHARED_IMAGE";
   }
 
   NOTREACHED() << "Invalid StorageType provided: " << storage_type;
@@ -184,6 +184,16 @@ static bool AreValidPixelFormatsForWrap(VideoPixelFormat source_format,
   return source_format == target_format ||
          (source_format == PIXEL_FORMAT_I420A &&
           target_format == PIXEL_FORMAT_I420) ||
+         (source_format == PIXEL_FORMAT_I422A &&
+          target_format == PIXEL_FORMAT_I422) ||
+         (source_format == PIXEL_FORMAT_I444A &&
+          target_format == PIXEL_FORMAT_I444) ||
+         (source_format == PIXEL_FORMAT_YUV420AP10 &&
+          target_format == PIXEL_FORMAT_YUV420P10) ||
+         (source_format == PIXEL_FORMAT_YUV422AP10 &&
+          target_format == PIXEL_FORMAT_YUV422P10) ||
+         (source_format == PIXEL_FORMAT_YUV444AP10 &&
+          target_format == PIXEL_FORMAT_YUV444P10) ||
          (source_format == PIXEL_FORMAT_ARGB &&
           target_format == PIXEL_FORMAT_XRGB) ||
          (source_format == PIXEL_FORMAT_ABGR &&
@@ -197,16 +207,70 @@ static std::optional<VideoFrameLayout> GetDefaultLayout(
   std::vector<ColorPlaneLayout> planes;
 
   switch (format) {
-    case PIXEL_FORMAT_I420: {
+    case PIXEL_FORMAT_I420:
+    case PIXEL_FORMAT_I420A:
+    case PIXEL_FORMAT_YUV420P10:
+    case PIXEL_FORMAT_YUV420P12:
+    case PIXEL_FORMAT_YUV420AP10: {
+      int sample_bytes =
+          VideoFrame::BytesPerElement(format, VideoFrame::Plane::kY);
+      int y_stride = coded_size.width() * sample_bytes;
+      int y_size = y_stride * coded_size.height();
       int uv_width = (coded_size.width() + 1) / 2;
       int uv_height = (coded_size.height() + 1) / 2;
-      int uv_stride = uv_width;
+      int uv_stride = uv_width * sample_bytes;
       int uv_size = uv_stride * uv_height;
       planes = std::vector<ColorPlaneLayout>{
-          ColorPlaneLayout(coded_size.width(), 0, coded_size.GetArea()),
-          ColorPlaneLayout(uv_stride, coded_size.GetArea(), uv_size),
-          ColorPlaneLayout(uv_stride, coded_size.GetArea() + uv_size, uv_size),
+          ColorPlaneLayout(y_stride, 0, y_size),
+          ColorPlaneLayout(uv_stride, y_size, uv_size),
+          ColorPlaneLayout(uv_stride, y_size + uv_size, uv_size),
       };
+      if (format == PIXEL_FORMAT_I420A || format == PIXEL_FORMAT_YUV420AP10) {
+        planes.emplace_back(y_stride, y_size + uv_size * 2, y_size);
+      }
+      break;
+    }
+
+    case PIXEL_FORMAT_I422:
+    case PIXEL_FORMAT_I422A:
+    case PIXEL_FORMAT_YUV422P10:
+    case PIXEL_FORMAT_YUV422P12:
+    case PIXEL_FORMAT_YUV422AP10: {
+      int sample_bytes =
+          VideoFrame::BytesPerElement(format, VideoFrame::Plane::kY);
+      int y_stride = coded_size.width() * sample_bytes;
+      int y_size = y_stride * coded_size.height();
+      int uv_width = (coded_size.width() + 1) / 2;
+      int uv_stride = uv_width * sample_bytes;
+      int uv_size = uv_stride * coded_size.height();
+      planes = std::vector<ColorPlaneLayout>{
+          ColorPlaneLayout(y_stride, 0, y_size),
+          ColorPlaneLayout(uv_stride, y_size, uv_size),
+          ColorPlaneLayout(uv_stride, y_size + uv_size, uv_size),
+      };
+      if (format == PIXEL_FORMAT_I422A || format == PIXEL_FORMAT_YUV422AP10) {
+        planes.emplace_back(y_stride, y_size + uv_size * 2, y_size);
+      }
+      break;
+    }
+
+    case PIXEL_FORMAT_I444:
+    case PIXEL_FORMAT_I444A:
+    case PIXEL_FORMAT_YUV444P10:
+    case PIXEL_FORMAT_YUV444P12:
+    case PIXEL_FORMAT_YUV444AP10: {
+      int sample_bytes =
+          VideoFrame::BytesPerElement(format, VideoFrame::Plane::kY);
+      int stride = coded_size.width() * sample_bytes;
+      int plane_size = stride * coded_size.height();
+      planes = std::vector<ColorPlaneLayout>{
+          ColorPlaneLayout(stride, 0, plane_size),
+          ColorPlaneLayout(stride, plane_size, plane_size),
+          ColorPlaneLayout(stride, plane_size * 2, plane_size),
+      };
+      if (format == PIXEL_FORMAT_I444A || format == PIXEL_FORMAT_YUV444AP10) {
+        planes.emplace_back(stride, plane_size * 3, plane_size);
+      }
       break;
     }
 
@@ -223,28 +287,34 @@ static std::optional<VideoFrameLayout> GetDefaultLayout(
           coded_size.width() * 4, 0, coded_size.GetArea() * 4)};
       break;
 
-    case PIXEL_FORMAT_NV12: {
-      int uv_width = (coded_size.width() + 1) / 2;
-      int uv_height = (coded_size.height() + 1) / 2;
-      int uv_stride = uv_width * 2;
+    case PIXEL_FORMAT_NV12:
+    case PIXEL_FORMAT_NV12A:
+    case PIXEL_FORMAT_NV16:
+    case PIXEL_FORMAT_NV24:
+    case PIXEL_FORMAT_P010LE:
+    case PIXEL_FORMAT_P210LE:
+    case PIXEL_FORMAT_P410LE: {
+      const bool is_420 = format == PIXEL_FORMAT_NV12 ||
+                          format == PIXEL_FORMAT_NV12A ||
+                          format == PIXEL_FORMAT_P010LE;
+      const bool is_444 =
+          format == PIXEL_FORMAT_NV24 || format == PIXEL_FORMAT_P410LE;
+      int sample_bytes =
+          VideoFrame::BytesPerElement(format, VideoFrame::Plane::kY);
+      int y_stride = coded_size.width() * sample_bytes;
+      int y_size = y_stride * coded_size.height();
+      int uv_width = is_444 ? coded_size.width() : (coded_size.width() + 1) / 2;
+      int uv_height =
+          is_420 ? (coded_size.height() + 1) / 2 : coded_size.height();
+      int uv_stride = uv_width * sample_bytes * 2;
       int uv_size = uv_stride * uv_height;
       planes = std::vector<ColorPlaneLayout>{
-          ColorPlaneLayout(coded_size.width(), 0, coded_size.GetArea()),
-          ColorPlaneLayout(uv_stride, coded_size.GetArea(), uv_size),
+          ColorPlaneLayout(y_stride, 0, y_size),
+          ColorPlaneLayout(uv_stride, y_size, uv_size),
       };
-      break;
-    }
-
-    case PIXEL_FORMAT_NV12A: {
-      int uv_width = (coded_size.width() + 1) / 2;
-      int uv_height = (coded_size.height() + 1) / 2;
-      int uv_stride = uv_width * 2;
-      int uv_size = uv_stride * uv_height;
-      planes = std::vector<ColorPlaneLayout>{
-          ColorPlaneLayout(coded_size.width(), 0, coded_size.GetArea()),
-          ColorPlaneLayout(uv_stride, coded_size.GetArea(), uv_size),
-          ColorPlaneLayout(coded_size.width(), 0, coded_size.GetArea()),
-      };
+      if (format == PIXEL_FORMAT_NV12A) {
+        planes.emplace_back(y_stride, y_size + uv_size, y_size);
+      }
       break;
     }
 
@@ -299,6 +369,10 @@ scoped_refptr<VideoFrame> VideoFrame::WrapTrackingToken(
   auto layout = VideoFrameLayout::Create(format, coded_size);
   if (!layout) {
     DLOG(ERROR) << "Invalid layout.";
+    return nullptr;
+  }
+  if (!IsValidConfig(format, StorageType::STORAGE_OPAQUE, coded_size,
+                     visible_rect, natural_size)) {
     return nullptr;
   }
   auto frame = base::MakeRefCounted<VideoFrame>(
@@ -366,28 +440,36 @@ scoped_refptr<VideoFrame> VideoFrame::WrapSharedImage(
     scoped_refptr<gpu::ClientSharedImage> shared_image,
     gpu::SyncToken sync_token,
     ReleaseMailboxCB shared_image_release_cb,
-    const gfx::Size& coded_size,
     const gfx::Rect& visible_rect,
     const gfx::Size& natural_size,
     base::TimeDelta timestamp) {
+  CHECK(shared_image);
+  auto pixel_si_format = VideoPixelFormatToSharedImageFormat(format);
+  if (!pixel_si_format.has_value() ||
+      pixel_si_format != shared_image->format()) {
+    SCOPED_CRASH_KEY_STRING256("video_frame", "format",
+                               VideoPixelFormatToString(format));
+    SCOPED_CRASH_KEY_STRING256("video_frame", "si_format",
+                               shared_image->format().ToString());
+    SCOPED_CRASH_KEY_STRING256("video_frame", "si_label",
+                               shared_image->debug_label());
+    // DUMP_WILL_BE_CHECK(false)
+    //     << "VideoFrame format (" << VideoPixelFormatToString(format)
+    //     << ") does not match SharedImage format ("
+    //     << shared_image->format().ToString() << ")";
+  }
   scoped_refptr<VideoFrame> frame = CreateFrameForNativeTexturesInternal(
-      format, coded_size, visible_rect, natural_size, timestamp);
+      format, shared_image->size(), visible_rect, natural_size, timestamp);
   if (!frame) {
     return nullptr;
   }
 
-  if (shared_image) {
-    frame->acquire_sync_token_ = sync_token;
-    frame->shared_image_ = shared_image->MakeUnowned();
-    CHECK_EQ(coded_size, shared_image->size())
-        << "coded_size (" << coded_size.ToString()
-        << ") does not match shared_image size ("
-        << shared_image->size().ToString() << ")";
+  frame->acquire_sync_token_ = sync_token;
+  frame->set_color_space(shared_image->color_space());
+  frame->shared_image_ = shared_image->MakeUnowned();
+  if (shared_image_release_cb) {
+    frame->SetReleaseMailboxCB(std::move(shared_image_release_cb));
   }
-  frame->shared_image_release_cb_ = std::move(shared_image_release_cb);
-
-  DCHECK(frame->HasSharedImage());
-
   return frame;
 }
 
@@ -426,8 +508,8 @@ scoped_refptr<VideoFrame> VideoFrame::WrapMappableSharedImage(
   }
   uint64_t modifier = gfx::NativePixmapHandle::kNoModifier;
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-  bool is_native_buffer = !shared_image->IsSharedMemoryForVideoFrame();
-  if (is_native_buffer) {
+  if (shared_image->GetGpuMemoryBufferType() ==
+      gfx::GpuMemoryBufferType::NATIVE_PIXMAP) {
     const auto gmb_handle = shared_image->CloneGpuMemoryBufferHandle();
     if (gmb_handle.is_null() ||
         gmb_handle.native_pixmap_handle().planes.empty()) {
@@ -467,24 +549,15 @@ scoped_refptr<VideoFrame> VideoFrame::WrapMappableSharedImage(
     DLOG(ERROR) << __func__ << " Couldn't create VideoFrame instance";
     return nullptr;
   }
-  frame->shared_image_release_cb_ = std::move(shared_image_release_cb);
+  if (shared_image_release_cb) {
+    frame->SetReleaseMailboxCB(std::move(shared_image_release_cb));
+  }
   frame->acquire_sync_token_ = sync_token;
 
-  // Note that we can not use |shared_image|->MakeUnOwned() here since that
-  // will not work for MappableSI due to it owning a GMB internally and we can
-  // not create an unowned reference to it. Additionally
-  // removing the use of ClientSharedImage::MakeUnOwned() everywhere is
-  // currently work in progress as a part of Automatic shared image management
-  // for ClientSharedImage project, so we don't want to use it here as well. The
-  // downside right now with below code is that while destroying the
-  // ClientSharedImage when MappableSI is enabled, there will be more than one
-  // reference of it and we will hit CHECKs in
-  // ClientSharedImageInterface::DestroySharedImage(). To avoid this CHECKs, we
-  // will need to replace the ClientSharedImageInterface::DestroySharedImage()
-  // call sites with ClientSharedImage::UpdateDestructionSyncToken() for every
-  // VideoFrame MappableSI client. This works well since it is also eventual
-  // goal of ClientSharedImage for rest of the chrome. crbug.com/40286368 for
-  // more details on the work.
+  // Note that we cannot use |shared_image|->MakeUnowned() here since MappableSI
+  // owns a MappableBuffer internally, which we cannot create an unowned
+  // reference to.
+  frame->set_color_space(shared_image->color_space());
   frame->shared_image_ = std::move(shared_image);
   return frame;
 }
@@ -731,7 +804,7 @@ scoped_refptr<VideoFrame> VideoFrame::WrapExternalDmabufs(
     return nullptr;
   }
 
-  frame->shared_image_release_cb_ = ReleaseMailboxCB();
+  frame->shared_image_release_cb_ = ReleaseMailboxCBWithLostResource();
   frame->dmabuf_fds_ = std::move(dmabuf_fds);
   DCHECK(frame->HasDmaBufs());
 
@@ -1224,6 +1297,21 @@ gfx::ColorSpace VideoFrame::ColorSpace() const {
   return color_space_;
 }
 
+void VideoFrame::set_color_space(const gfx::ColorSpace& color_space) {
+  // Check color spaces are same for video frames created from shared image.
+  if (HasSharedImage()) {
+    SCOPED_CRASH_KEY_STRING256("video_frame", "si_color_space",
+                               shared_image()->color_space().ToString());
+    SCOPED_CRASH_KEY_STRING256("video_frame", "color_space",
+                               color_space.ToString());
+    SCOPED_CRASH_KEY_STRING256("video_frame", "si_label",
+                               shared_image()->debug_label());
+    CHECK_EQ(color_space, shared_image()->color_space(),
+             base::NotFatalUntil::M154);
+  }
+  color_space_ = color_space;
+}
+
 gfx::ColorSpace VideoFrame::CompatRGBColorSpace() const {
   const auto rgb_color_space = ColorSpace().GetAsFullRangeRGB();
   if (!rgb_color_space.IsValid()) {
@@ -1265,6 +1353,10 @@ int VideoFrame::rows(size_t plane) const {
   return Rows(plane, format(), coded_size().height());
 }
 
+int VideoFrame::columns(size_t plane) const {
+  return Columns(plane, format(), coded_size().width());
+}
+
 int VideoFrame::GetVisibleRowBytes(size_t plane) const {
   return RowBytes(plane, format(), visible_rect().width());
 }
@@ -1273,8 +1365,8 @@ int VideoFrame::GetVisibleRows(size_t plane) const {
   return Rows(plane, format(), visible_rect().height());
 }
 
-int VideoFrame::columns(size_t plane) const {
-  return Columns(plane, format(), coded_size().width());
+int VideoFrame::GetVisibleColumns(size_t plane) const {
+  return Columns(plane, format(), visible_rect().width());
 }
 
 template <typename T>
@@ -1293,19 +1385,35 @@ base::span<T> VideoFrame::GetVisibleDataInternal(base::span<T> data,
                           base::bits::AlignDownDeprecatedDoNotUse(
                               visible_rect_.y(), alignment.height()));
 
-  const int plane_stride = stride(plane);
+  const size_t plane_stride = stride(plane);
   const gfx::Size subsample = SampleSize(format(), plane);
   DCHECK(offset.x() % subsample.width() == 0);
   DCHECK(offset.y() % subsample.height() == 0);
-  const auto visible_plane_offset = base::checked_cast<size_t>(
-      // Row offset.
-      plane_stride * (offset.y() / subsample.height()) +
-      // Column offset.
+
+  // Use CheckedNumeric for offset calculation to prevent overflow.
+  // Row offset.
+  base::CheckedNumeric<size_t> checked_offset = plane_stride;
+  checked_offset *= base::checked_cast<size_t>(offset.y() / subsample.height());
+  // Column offset.
+  checked_offset += base::checked_cast<size_t>(
       BytesPerElement(format(), plane) * (offset.x() / subsample.width()));
+  const size_t visible_plane_offset = checked_offset.ValueOrDie();
+
+  const size_t visible_rows = base::checked_cast<size_t>(GetVisibleRows(plane));
+  const size_t visible_row_bytes =
+      base::checked_cast<size_t>(GetVisibleRowBytes(plane));
+
+  // Use CheckedNumeric for size calculation to prevent overflow.
   // In the last row, bytes between visible width and the full stride are not
   // the part of the visible plane.
-  size_t visible_plane_size =
-      plane_stride * (GetVisibleRows(plane) - 1) + GetVisibleRowBytes(plane);
+  base::CheckedNumeric<size_t> checked_visible_plane_size = 0;
+  if (visible_rows > 0) {
+    checked_visible_plane_size = plane_stride;
+    checked_visible_plane_size *= (visible_rows - 1);
+    checked_visible_plane_size += visible_row_bytes;
+  }
+  const size_t visible_plane_size = checked_visible_plane_size.ValueOrDie();
+
   return data.subspan(visible_plane_offset, visible_plane_size);
 }
 
@@ -1358,6 +1466,7 @@ SkYUVAInfo VideoFrame::GetVisibleSkYUVAInfo() const {
 
 std::vector<SkPixmap> VideoFrame::GetVisiblePlanesSkPixmaps() const {
   const auto yuva_info = GetVisibleSkYUVAInfo();
+  const auto color_space = ColorSpace().GetAsFullRangeRGB().ToSkColorSpace();
   std::array<SkISize, kMaxPlanes> plane_dimensions = {
       SkISize::Make(visible_rect_.width(), visible_rect_.height()),
   };
@@ -1377,8 +1486,8 @@ std::vector<SkPixmap> VideoFrame::GetVisiblePlanesSkPixmaps() const {
     const auto alpha_type = SkColorTypeIsAlwaysOpaque(color_type)
                                 ? kOpaque_SkAlphaType
                                 : kUnpremul_SkAlphaType;
-    const SkImageInfo plane_info =
-        SkImageInfo::Make(plane_dimensions[p], color_type, alpha_type);
+    const SkImageInfo plane_info = SkImageInfo::Make(
+        plane_dimensions[p], color_type, alpha_type, color_space);
     planes[p] = SkPixmap(plane_info, visible_data(p), stride(p));
   }
   return planes;
@@ -1424,12 +1533,37 @@ void VideoFrame::SetReleaseMailboxCB(ReleaseMailboxCB release_mailbox_cb) {
   // is not thread safe.  This method should only be called by the owner of
   // |wrapped_frame_| directly.
   DCHECK(!wrapped_frame_);
+  // Binds `release_mailbox_cb` and runs it with SyncToken ignoring the bool.
+  // Returns a OnceCallback<void (const gpu::SyncToken &, bool)> which is then
+  // stored.
+  SetReleaseMailboxCB(
+      base::BindOnce([](ReleaseMailboxCB cb, const gpu::SyncToken& sync_token,
+                        bool lost_resource) { std::move(cb).Run(sync_token); },
+                     std::move(release_mailbox_cb)));
+}
+
+void VideoFrame::SetReleaseMailboxCB(
+    ReleaseMailboxCBWithLostResource release_mailbox_cb) {
+  DCHECK(release_mailbox_cb);
+  DCHECK(!shared_image_release_cb_);
+  // We don't relay SetReleaseMailboxCB to |wrapped_frame_| because the method
+  // is not thread safe.  This method should only be called by the owner of
+  // |wrapped_frame_| directly.
+  DCHECK(!wrapped_frame_);
   shared_image_release_cb_ = std::move(release_mailbox_cb);
 }
 
 bool VideoFrame::HasReleaseMailboxCB() const {
   return wrapped_frame_ ? wrapped_frame_->HasReleaseMailboxCB()
                         : !!shared_image_release_cb_;
+}
+
+void VideoFrame::SetLostSharedImageResource() {
+  if (wrapped_frame_) {
+    wrapped_frame_->SetLostSharedImageResource();
+    return;
+  }
+  lost_shared_image_resource_ = true;
 }
 
 void VideoFrame::AddDestructionObserver(base::OnceClosure callback) {
@@ -1515,9 +1649,9 @@ VideoFrame::~VideoFrame() {
       base::AutoLock locker(release_sync_token_lock_);
       release_sync_token = release_sync_token_;
     }
-    std::move(shared_image_release_cb_).Run(release_sync_token);
+    std::move(shared_image_release_cb_)
+        .Run(release_sync_token, lost_shared_image_resource_);
   }
-
   // Prevents dangling raw ptr, see https://docs.google.com/document/d/156O7kBZqIhe1dUcqTMcN5T-6YEAcg0yNnj5QlnZu9xU/edit?usp=sharing.
   shm_region_ = nullptr;
 

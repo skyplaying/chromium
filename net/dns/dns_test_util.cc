@@ -28,15 +28,18 @@
 #include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "base/types/optional_util.h"
+#include "net/base/features.h"
 #include "net/base/io_buffer.h"
 #include "net/base/ip_address.h"
 #include "net/base/ip_endpoint.h"
+#include "net/base/load_timing_internal_info.h"
 #include "net/base/net_errors.h"
 #include "net/dns/address_sorter.h"
 #include "net/dns/dns_hosts.h"
 #include "net/dns/dns_names_util.h"
 #include "net/dns/dns_query.h"
 #include "net/dns/dns_session.h"
+#include "net/dns/filtering_details_url_generator.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/dns/public/dns_over_https_server_config.h"
 #include "net/dns/resolve_context.h"
@@ -45,6 +48,9 @@
 #include "url/scheme_host_port.h"
 
 namespace net {
+
+class NetworkAnonymizationKey;
+
 namespace {
 
 constexpr auto kMalformedResponseHeader = std::to_array<uint8_t>({
@@ -84,7 +90,11 @@ class MockAddressSorter : public AddressSorter {
  public:
   ~MockAddressSorter() override = default;
   void Sort(const std::vector<IPEndPoint>& endpoints,
+            const NetworkAnonymizationKey& anonymization_key,
+            handles::NetworkHandle target_network,
             CallbackType callback) const override {
+    // This is used only for testing in scenarios that do not involve multiple
+    // networks. With that in mind, it's safe to ignore `target_network`.
     // Do nothing.
     std::move(callback).Run(true, endpoints);
   }
@@ -99,8 +109,24 @@ DnsConfig CreateValidDnsConfig() {
   config.doh_config =
       *DnsOverHttpsConfig::FromString("https://dns.example.com/");
   config.secure_dns_mode = SecureDnsMode::kOff;
-  EXPECT_TRUE(config.IsValid());
   return config;
+}
+
+ScopedSetFilteringDetailsUrlGeneratorForTesting::
+    ScopedSetFilteringDetailsUrlGeneratorForTesting()
+    : generator_(FilteringDetailsUrlGenerator::CreateForTesting(
+          FilteringDetailsUrlGenerator::FilteringDetailsRegistry{
+              {"example",
+               FilteringDetailsUrlGenerator::RegistryEntry{
+                   .url_template =
+                       "https://resolver.example.com/filtering-incidents/{id}",
+                   .feature = nullptr}}})) {
+  FilteringDetailsUrlGenerator::SetInstanceForTesting(&generator_);
+}
+
+ScopedSetFilteringDetailsUrlGeneratorForTesting::
+    ~ScopedSetFilteringDetailsUrlGeneratorForTesting() {
+  FilteringDetailsUrlGenerator::SetInstanceForTesting(nullptr);
 }
 
 DnsResourceRecord BuildTestDnsRecord(std::string name,
@@ -285,6 +311,22 @@ DnsResourceRecord BuildTestHttpsServiceRecord(
                             ttl);
 }
 
+DnsResourceRecord BuildTestOptRecord(uint16_t udp_payload_size,
+                                     uint32_t extended_rcode_and_flags,
+                                     base::span<const uint8_t> rdata) {
+  DnsResourceRecord record;
+  record.name = "";  // Root domain
+  record.type = dns_protocol::kTypeOPT;
+  record.klass = udp_payload_size;
+  record.ttl = extended_rcode_and_flags;
+
+  if (!rdata.empty()) {
+    record.SetOwnedRdata(rdata);
+  }
+
+  return record;
+}
+
 DnsResponse BuildTestDnsResponse(
     std::string name,
     uint16_t type,
@@ -415,10 +457,15 @@ DnsResponse BuildTestDnsServiceResponse(
   return BuildTestDnsResponse(std::move(name), dns_protocol::kTypeSRV, answers);
 }
 
-MockDnsClientRule::Result::Result(ResultType type,
-                                  std::optional<DnsResponse> response,
-                                  std::optional<int> net_error)
-    : type(type), response(std::move(response)), net_error(net_error) {}
+MockDnsClientRule::Result::Result(
+    ResultType type,
+    std::optional<DnsResponse> response,
+    std::optional<int> net_error,
+    std::optional<DohResolutionDetails> doh_details)
+    : type(type),
+      response(std::move(response)),
+      net_error(net_error),
+      doh_details(std::move(doh_details)) {}
 
 MockDnsClientRule::Result::Result(DnsResponse response)
     : type(ResultType::kOk),
@@ -462,13 +509,12 @@ class MockDnsTransactionFactory::MockTransaction final : public DnsTransaction {
     bool secure = false;
     switch (attempt_mode) {
       case AttemptMode::kClassic:
+      case AttemptMode::kPlatform:
         secure = false;
         break;
       case AttemptMode::kHttp:
         secure = true;
         break;
-      default:
-        NOTREACHED();
     }
     // Do not allow matching any rules if transaction is secure and no DoH
     // servers are available.
@@ -488,6 +534,7 @@ class MockDnsTransactionFactory::MockTransaction final : public DnsTransaction {
           const MockDnsClientRule::Result* result = &rule.result;
           result_ = MockDnsClientRule::Result(result->type);
           result_.net_error = result->net_error;
+          result_.doh_details = result->doh_details;
           delayed_ = rule.delay;
 
           // Generate a DnsResponse when not provided with the rule.
@@ -553,6 +600,10 @@ class MockDnsTransactionFactory::MockTransaction final : public DnsTransaction {
   const std::string& GetHostname() const override { return hostname_; }
 
   uint16_t GetType() const override { return qtype_; }
+
+  std::optional<DohResolutionDetails> GetDohResolutionDetails() const override {
+    return result_.doh_details;
+  }
 
   void Start(ResponseCallback callback) override {
     CHECK(!callback.is_null());
@@ -689,6 +740,7 @@ std::unique_ptr<DnsTransaction> MockDnsTransactionFactory::CreateTransaction(
     const NetLogWithSource&,
     AttemptMode attempt_mode,
     SecureDnsMode secure_dns_mode,
+    handles::NetworkHandle target_network,
     ResolveContext* resolve_context,
     bool fast_timeout) {
   std::unique_ptr<MockTransaction> transaction =
@@ -703,6 +755,9 @@ std::unique_ptr<DnsTransaction> MockDnsTransactionFactory::CreateTransaction(
 
 std::unique_ptr<DnsProbeRunner> MockDnsTransactionFactory::CreateDohProbeRunner(
     ResolveContext* resolve_context) {
+  if (next_probe_runner_) {
+    return std::move(next_probe_runner_);
+  }
   return std::make_unique<MockDohProbeRunner>(weak_ptr_factory_.GetWeakPtr());
 }
 
@@ -742,25 +797,45 @@ MockDnsClient::MockDnsClient(DnsConfig config, MockDnsClientRuleList rules)
 MockDnsClient::~MockDnsClient() = default;
 
 bool MockDnsClient::CanUseSecureDnsTransactions() const {
-  const DnsConfig* config = GetEffectiveConfig();
-  return config && config->IsValid() && !config->doh_config.servers().empty();
+  return !GetEffectiveConfig().doh_config.servers().empty();
 }
 
-bool MockDnsClient::CanUseInsecureDnsTransactions() const {
-  const DnsConfig* config = GetEffectiveConfig();
-  return config && config->IsValid() && insecure_enabled_ &&
-         !config->dns_over_tls_active;
+bool MockDnsClient::CanUseInsecureDnsTransactions(
+    std::optional<EchMode> ech_mode) const {
+  switch (GetInsecureDnsMode(ech_mode)) {
+    case InsecureDnsMode::kDisabled:
+      return false;
+    case InsecureDnsMode::kEnabledPlatform:
+    case InsecureDnsMode::kEnabledPlatformNoSystem:
+      return true;
+    case InsecureDnsMode::kEnabledBuiltIn: {
+      const DnsConfig& config = GetEffectiveConfig();
+      return !config.nameservers.empty() && !config.dns_over_tls_active;
+    }
+  }
 }
 
-bool MockDnsClient::CanQueryAdditionalTypesViaInsecureDns() const {
-  DCHECK(CanUseInsecureDnsTransactions());
+bool MockDnsClient::CanQueryAdditionalTypesViaInsecureDns(
+    std::optional<EchMode> ech_mode) const {
+  DCHECK(CanUseInsecureDnsTransactions(ech_mode));
+  if (DnsClient::UseDnsPlatformDueToEchMode(ech_mode)) {
+    return true;
+  }
   return additional_types_enabled_;
 }
 
-void MockDnsClient::SetInsecureEnabled(bool enabled,
+void MockDnsClient::SetInsecureEnabled(InsecureDnsMode mode,
                                        bool additional_types_enabled) {
-  insecure_enabled_ = enabled;
+  insecure_dns_mode_ = mode;
   additional_types_enabled_ = additional_types_enabled;
+}
+
+InsecureDnsMode MockDnsClient::GetInsecureDnsMode(
+    std::optional<EchMode> ech_mode) const {
+  if (DnsClient::UseDnsPlatformDueToEchMode(ech_mode)) {
+    return InsecureDnsMode::kEnabledPlatformNoSystem;
+  }
+  return insecure_dns_mode_;
 }
 
 bool MockDnsClient::FallbackFromSecureTransactionPreferred(
@@ -771,8 +846,12 @@ bool MockDnsClient::FallbackFromSecureTransactionPreferred(
   return !CanUseSecureDnsTransactions() || !doh_server_available;
 }
 
-bool MockDnsClient::FallbackFromInsecureTransactionPreferred() const {
-  return !CanUseInsecureDnsTransactions() ||
+bool MockDnsClient::FallbackFromInsecureTransactionPreferred(
+    std::optional<EchMode> ech_mode) const {
+  if (DnsClient::UseDnsPlatformDueToEchMode(ech_mode)) {
+    return false;
+  }
+  return !CanUseInsecureDnsTransactions(ech_mode) ||
          fallback_failures_ >= max_fallback_failures_;
 }
 
@@ -780,7 +859,7 @@ bool MockDnsClient::SetSystemConfig(std::optional<DnsConfig> system_config) {
   if (ignore_system_config_changes_)
     return false;
 
-  std::optional<DnsConfig> before = effective_config_;
+  DnsConfig before = effective_config_;
   config_ = std::move(system_config);
   effective_config_ = BuildEffectiveConfig();
   session_ = BuildSession();
@@ -788,7 +867,7 @@ bool MockDnsClient::SetSystemConfig(std::optional<DnsConfig> system_config) {
 }
 
 bool MockDnsClient::SetConfigOverrides(DnsConfigOverrides config_overrides) {
-  std::optional<DnsConfig> before = effective_config_;
+  DnsConfig before = effective_config_;
   overrides_ = std::move(config_overrides);
   effective_config_ = BuildEffectiveConfig();
   session_ = BuildSession();
@@ -796,7 +875,6 @@ bool MockDnsClient::SetConfigOverrides(DnsConfigOverrides config_overrides) {
 }
 
 void MockDnsClient::ReplaceCurrentSession() {
-  // Noop if no current effective config.
   session_ = BuildSession();
 }
 
@@ -804,8 +882,8 @@ DnsSession* MockDnsClient::GetCurrentSession() {
   return session_.get();
 }
 
-const DnsConfig* MockDnsClient::GetEffectiveConfig() const {
-  return effective_config_.has_value() ? &effective_config_.value() : nullptr;
+const DnsConfig& MockDnsClient::GetEffectiveConfig() const {
+  return effective_config_;
 }
 
 base::DictValue MockDnsClient::GetDnsConfigAsValueForNetLog() const {
@@ -814,19 +892,15 @@ base::DictValue MockDnsClient::GetDnsConfigAsValueForNetLog() const {
 }
 
 const DnsHosts* MockDnsClient::GetHosts() const {
-  const DnsConfig* config = GetEffectiveConfig();
-  if (!config)
-    return nullptr;
-
-  return &config->hosts;
+  return &effective_config_.hosts;
 }
 
 DnsTransactionFactory* MockDnsClient::GetTransactionFactory() {
-  return GetEffectiveConfig() ? factory_.get() : nullptr;
+  return factory_.get();
 }
 
 AddressSorter* MockDnsClient::GetAddressSorter() {
-  return GetEffectiveConfig() ? address_sorter_.get() : nullptr;
+  return address_sorter_.get();
 }
 
 void MockDnsClient::IncrementInsecureFallbackFailures() {
@@ -874,26 +948,20 @@ void MockDnsClient::SetForceDohServerAvailable(bool available) {
   factory_->set_force_doh_server_available(available);
 }
 
-std::optional<DnsConfig> MockDnsClient::BuildEffectiveConfig() {
+DnsConfig MockDnsClient::BuildEffectiveConfig() {
   if (overrides_.OverridesEverything())
     return overrides_.ApplyOverrides(DnsConfig());
-  if (!config_ || !config_.value().IsValid())
-    return std::nullopt;
-
-  return overrides_.ApplyOverrides(config_.value());
+  return overrides_.ApplyOverrides(config_.value_or(DnsConfig()));
 }
 
 scoped_refptr<DnsSession> MockDnsClient::BuildSession() {
-  if (!effective_config_)
-    return nullptr;
-
   // Session not expected to be used for anything that will actually require
   // random numbers.
   auto null_random_callback =
       base::BindRepeating([](int, int) -> int { base::ImmediateCrash(); });
 
   return base::MakeRefCounted<DnsSession>(
-      effective_config_.value(), null_random_callback, nullptr /* net_log */);
+      effective_config_, null_random_callback, nullptr /* net_log */);
 }
 
 MockHostResolverProc::MockHostResolverProc()
@@ -999,6 +1067,19 @@ int MockHostResolverProc::Resolve(const std::string& hostname,
   }
   *addrlist = rules_[key];
   return OK;
+}
+
+int MockHostResolverProc::Resolve(const std::string& hostname,
+                                  AddressFamily address_family,
+                                  HostResolverFlags host_resolver_flags,
+                                  AddressList* addrlist,
+                                  int* os_error,
+                                  handles::NetworkHandle network) {
+  // TODO(crbug.com/517817412): Stop ignoring `network` once
+  // MockHostResolverProc supports it. It is currently okay to ignore because
+  // no test requires specific behavior based on the target network yet.
+  return Resolve(hostname, address_family, host_resolver_flags, addrlist,
+                 os_error);
 }
 
 MockHostResolverProc::CaptureList MockHostResolverProc::GetCaptureList() const {

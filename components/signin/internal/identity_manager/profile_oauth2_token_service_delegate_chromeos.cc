@@ -44,7 +44,7 @@ std::vector<CoreAccountId> GetOAuthAccountIdsFromAccountKeys(
     CoreAccountId account_id =
         account_tracker_service
             ->FindAccountInfoByGaiaId(GaiaId(account_key.id()))
-            .account_id;
+            .GetAccountId();
     DCHECK(!account_id.empty());
     accounts.emplace_back(account_id);
   }
@@ -276,7 +276,7 @@ void ProfileOAuth2TokenServiceDelegateChromeOS::LoadCredentialsInternal(
 void ProfileOAuth2TokenServiceDelegateChromeOS::UpdateCredentialsInternal(
     const CoreAccountId& account_id,
     const std::string& refresh_token,
-    const std::vector<uint8_t>& wrapped_binding_key) {
+    const signin::TokenBindingInfo& token_binding_info) {
   // UpdateCredentials should not be called on Chrome OS. Credentials should be
   // updated through Chrome OS Account Manager.
   NOTREACHED();
@@ -446,7 +446,7 @@ void ProfileOAuth2TokenServiceDelegateChromeOS::OnAccountRemoved(
   CoreAccountId account_id =
       account_tracker_service_
           ->FindAccountInfoByGaiaId(GaiaId(account.key.id()))
-          .account_id;
+          .GetAccountId();
   DCHECK(!account_id.empty());
   ClearAuthError(account_id);
 
@@ -464,7 +464,7 @@ void ProfileOAuth2TokenServiceDelegateChromeOS::OnAuthErrorChanged(
   }
   CoreAccountId account_id =
       account_tracker_service_->FindAccountInfoByGaiaId(GaiaId(account.id()))
-          .account_id;
+          .GetAccountId();
 
   if (error == GetAuthError(account_id)) {
     // Nothing to do if the error is already known.
@@ -497,8 +497,7 @@ void ProfileOAuth2TokenServiceDelegateChromeOS::UpdateAuthError(
                                                      fire_auth_error_changed);
   if (!RefreshTokenIsAvailable(account_id)) {
     // Account has been removed.
-    DCHECK_EQ(error, GoogleServiceAuthError(
-                         GoogleServiceAuthError::ACCOUNT_NOT_FOUND));
+    DCHECK_EQ(error, GoogleServiceAuthError::CreateAccountNotFound());
     return;
   }
 
@@ -506,7 +505,7 @@ void ProfileOAuth2TokenServiceDelegateChromeOS::UpdateAuthError(
       account_tracker_service_->GetAccountInfo(account_id);
   DCHECK(!account_info.IsEmpty());
   account_manager_facade_->ReportAuthError(
-      account_manager::AccountKey::FromGaiaId(account_info.gaia), error);
+      account_manager::AccountKey::FromGaiaId(account_info.GetGaiaId()), error);
 }
 
 void ProfileOAuth2TokenServiceDelegateChromeOS::OnConnectionChanged(

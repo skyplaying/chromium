@@ -26,6 +26,7 @@
 
 #include "base/compiler_specific.h"
 #include "third_party/blink/renderer/core/dom/document.h"
+#include "third_party/blink/renderer/core/dom/node_traversal.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/svg/animation/element_smil_animations.h"
 #include "third_party/blink/renderer/core/svg/animation/smil_animation_effect_parameters.h"
@@ -47,6 +48,7 @@ SVGAnimationElement::SVGAnimationElement(const QualifiedName& tag_name,
                                          Document& document)
     : SVGSMILElement(tag_name, document),
       animation_valid_(AnimationValidity::kUnknown),
+      always_revalidate_animation_value_(false),
       registered_animation_(false),
       calc_mode_(kCalcModeLinear),
       animation_mode_(kNoAnimation) {
@@ -310,11 +312,11 @@ AnimationMode SVGAnimationElement::CalculateAnimationMode() {
   if (hasAttribute(svg_names::kValuesAttr)) {
     return kValuesAnimation;
   }
-  if (!ToValue().empty()) {
-    return FromValue().empty() ? kToAnimation : kFromToAnimation;
+  if (!ToValue().IsNull()) {
+    return FromValue().IsNull() ? kToAnimation : kFromToAnimation;
   }
-  if (!ByValue().empty()) {
-    return FromValue().empty() ? kByAnimation : kFromByAnimation;
+  if (!ByValue().IsNull()) {
+    return FromValue().IsNull() ? kByAnimation : kFromByAnimation;
   }
   return kNoAnimation;
 }
@@ -553,6 +555,55 @@ float SVGAnimationElement::CurrentValuesForValuesAnimation(
   return effective_percent;
 }
 
+float SVGAnimationElement::CurrentValuesForPathAnimation(
+    float percent,
+    Keyframe& keyframe) const {
+  DCHECK_EQ(animation_valid_, AnimationValidity::kValid);
+
+  if (!key_points_.empty()) {
+    return CalculatePercentFromKeyPoints(percent);
+  }
+
+  CalcMode calc_mode = GetCalcMode();
+  if (RuntimeEnabledFeatures::SvgAnimateMotionDiscreteCalcModeEnabled() &&
+      calc_mode == kCalcModeDiscrete) {
+    wtf_size_t keyframe_count = DiscretePathKeyframeCount();
+    if (percent == 1 || keyframe_count == 1) {
+      keyframe = {keyframe_count - 1, keyframe_count - 1};
+      return percent;
+    }
+    wtf_size_t key_times_count = KeyTimes().size();
+    unsigned index = CalculateKeyTimesIndex(percent);
+    if (!key_times_count) {
+      index = static_cast<unsigned>(percent * keyframe_count);
+    }
+    keyframe = {index, index};
+    return percent;
+  }
+
+  if (calc_mode == kCalcModeSpline && KeyTimes().size() > 1) {
+    return CalculatePercentForSpline(percent, CalculateKeyTimesIndex(percent));
+  }
+
+  return percent;
+}
+
+bool SVGAnimationElement::IsValid() const {
+  if (!SvgTestsIsValid()) {
+    return false;
+  }
+  // Also check ancestors. If any ancestor SVG element fails conditional
+  // processing (e.g. a <g> with unmatched systemLanguage), this animation
+  // should not run.
+  for (const Node& ancestor : NodeTraversal::AncestorsOf(*this)) {
+    auto* svg_ancestor = DynamicTo<SVGElement>(ancestor);
+    if (svg_ancestor && !svg_ancestor->IsValid()) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool SVGAnimationElement::UpdateAnimationMode() {
   if (!IsValid() || !HasValidTarget()) {
     return false;
@@ -617,6 +668,17 @@ bool SVGAnimationElement::CheckAnimationParameters() const {
       return false;
     }
   }
+  if (RuntimeEnabledFeatures::SvgAnimateMotionDiscreteCalcModeEnabled() &&
+      animation_mode_ == kPathAnimation && GetCalcMode() == kCalcModeDiscrete &&
+      !has_key_points) {
+    const wtf_size_t path_keyframe_count = DiscretePathKeyframeCount();
+    if (path_keyframe_count == 0) {
+      return false;
+    }
+    if (has_key_times && KeyTimes().size() != path_keyframe_count) {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -650,7 +712,7 @@ bool SVGAnimationElement::UpdateAnimationValues() {
       return true;
     }
     case kPathAnimation:
-      break;
+      return CalculatePathValues();
     case kNoAnimation:
       NOTREACHED();
   }
@@ -670,6 +732,10 @@ SMILAnimationEffectParameters SVGAnimationElement::ComputeEffectParameters()
 }
 
 void SVGAnimationElement::ApplyAnimation(SMILAnimationValue& animation_value) {
+  if (always_revalidate_animation_value_) {
+    animation_valid_ = AnimationValidity::kUnknown;
+  }
+
   if (animation_valid_ == AnimationValidity::kUnknown) {
     if (UpdateAnimationMode() && UpdateAnimationValues() &&
         CheckAnimationParameters()) {
@@ -698,6 +764,15 @@ void SVGAnimationElement::ApplyAnimation(SMILAnimationValue& animation_value) {
   if (animation_mode == kValuesAnimation) {
     Keyframe keyframe;
     effective_percent = CurrentValuesForValuesAnimation(percent, keyframe);
+    if (keyframe != last_keyframe_) {
+      UpdateKeyframeValues(keyframe);
+      last_keyframe_ = keyframe;
+    }
+  } else if (RuntimeEnabledFeatures::
+                 SvgAnimateMotionDiscreteCalcModeEnabled() &&
+             animation_mode == kPathAnimation) {
+    Keyframe keyframe;
+    effective_percent = CurrentValuesForPathAnimation(percent, keyframe);
     if (keyframe != last_keyframe_) {
       UpdateKeyframeValues(keyframe);
       last_keyframe_ = keyframe;

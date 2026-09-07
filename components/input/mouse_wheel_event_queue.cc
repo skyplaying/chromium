@@ -27,8 +27,9 @@ class QueuedWebMouseWheelEvent : public MouseWheelEventWithLatencyInfo {
                            DispatchToRendererCallback callback)
       : MouseWheelEventWithLatencyInfo(original_event),
         dispatch_callback(std::move(callback)) {
-    TRACE_EVENT_BEGIN("input", "MouseWheelEventQueue::QueueEvent",
-                      perfetto::Track::FromPointer(this));
+    TRACE_EVENT_BEGIN(
+        "input", "MouseWheelEventQueue::QueueEvent",
+        perfetto::NamedTrack::FromPointer("MouseWheelEventQueue", this));
   }
 
   QueuedWebMouseWheelEvent(const QueuedWebMouseWheelEvent&) = delete;
@@ -36,9 +37,8 @@ class QueuedWebMouseWheelEvent : public MouseWheelEventWithLatencyInfo {
 
   ~QueuedWebMouseWheelEvent() {
     TRACE_EVENT_END(
-        "input",
-        /* MouseWheelEventQueue::QueueEvent */ perfetto::Track::FromPointer(
-            this));
+        "input", /* MouseWheelEventQueue::QueueEvent */
+        perfetto::NamedTrack::FromPointer("MouseWheelEventQueue", this));
   }
 
   DispatchToRendererCallback dispatch_callback;
@@ -73,10 +73,9 @@ void MouseWheelEventQueue::QueueEvent(
       last_event->event.event_action =
           WebMouseWheelEvent::GetPlatformSpecificDefaultEventAction(
               last_event->event);
-      TRACE_EVENT_INSTANT2("input", "MouseWheelEventQueue::CoalescedWheelEvent",
-                           TRACE_EVENT_SCOPE_THREAD, "total_dx",
-                           last_event->event.delta_x, "total_dy",
-                           last_event->event.delta_y);
+      TRACE_EVENT_INSTANT("input", "MouseWheelEventQueue::CoalescedWheelEvent",
+                          "total_dx", last_event->event.delta_x, "total_dy",
+                          last_event->event.delta_y);
       return;
     }
   }
@@ -96,23 +95,20 @@ void MouseWheelEventQueue::QueueEvent(
 bool MouseWheelEventQueue::CanGenerateGestureScroll(
     blink::mojom::InputEventResultState ack_result) const {
   if (ack_result == blink::mojom::InputEventResultState::kConsumed) {
-    TRACE_EVENT_INSTANT0("input", "Wheel Event Consumed",
-                         TRACE_EVENT_SCOPE_THREAD);
+    TRACE_EVENT_INSTANT("input", "Wheel Event Consumed");
     return false;
   }
 
   if (event_sent_for_gesture_ack_->event.event_action ==
       blink::WebMouseWheelEvent::EventAction::kPageZoom) {
-    TRACE_EVENT_INSTANT0("input", "Wheel Event Cannot Cause Scroll",
-                         TRACE_EVENT_SCOPE_THREAD);
+    TRACE_EVENT_INSTANT("input", "Wheel Event Cannot Cause Scroll");
     return false;
   }
 
   if (scrolling_device_ != blink::WebGestureDevice::kUninitialized &&
       scrolling_device_ != blink::WebGestureDevice::kTouchpad) {
-    TRACE_EVENT_INSTANT0("input",
-                         "Autoscroll or Touchscreen Scroll In Progress",
-                         TRACE_EVENT_SCOPE_THREAD);
+    TRACE_EVENT_INSTANT("input",
+                        "Autoscroll or Touchscreen Scroll In Progress");
     return false;
   }
 
@@ -120,8 +116,7 @@ bool MouseWheelEventQueue::CanGenerateGestureScroll(
   // arrived yet, We should still ignore wheel scrolling even though no GSB with
   // autoscroll source has been sent yet.
   if (client_->IsAutoscrollInProgress()) {
-    TRACE_EVENT_INSTANT0("input", "In Autoscrolling mode",
-                         TRACE_EVENT_SCOPE_THREAD);
+    TRACE_EVENT_INSTANT("input", "In Autoscrolling mode");
     return false;
   }
 
@@ -137,8 +132,12 @@ void MouseWheelEventQueue::ProcessMouseWheelAck(
     return;
 
   event_sent_for_gesture_ack_->latency.AddNewLatencyFrom(ack_event.latency);
+  auto weak_this = weak_ptr_factory_.GetWeakPtr();
   client_->OnMouseWheelEventAck(*event_sent_for_gesture_ack_, ack_source,
                                 ack_result);
+  if (!weak_this) {
+    return;
+  }
 
   // If event wasn't consumed then generate a gesture scroll for it.
   if (CanGenerateGestureScroll(ack_result)) {
@@ -200,7 +199,16 @@ void MouseWheelEventQueue::ProcessMouseWheelAck(
       if (scroll_update.data.scroll_update.delta_y)
         scroll_update.data.scroll_update.delta_y =
             scroll_update.data.scroll_update.delta_y > 0 ? 1 : -1;
-    } else {
+    }
+
+    scroll_update.data.scroll_update.delta_x_unconstrained =
+        scroll_update.data.scroll_update.delta_x;
+    scroll_update.data.scroll_update.delta_y_unconstrained =
+        scroll_update.data.scroll_update.delta_y;
+
+    // Apply railing (axis locking) only for non-page scrolls.
+    if (event_sent_for_gesture_ack_->event.delta_units !=
+        ui::ScrollGranularity::kScrollByPage) {
       if (event_sent_for_gesture_ack_->event.rails_mode ==
           WebInputEvent::RailsMode::kRailsModeVertical)
         scroll_update.data.scroll_update.delta_x = 0;
@@ -229,8 +237,9 @@ void MouseWheelEventQueue::ProcessMouseWheelAck(
       current_phase_ended = scroll_phase_ended || momentum_phase_ended;
     }
 
-    bool needs_update = scroll_update.data.scroll_update.delta_x != 0 ||
-                        scroll_update.data.scroll_update.delta_y != 0;
+    bool needs_update =
+        scroll_update.data.scroll_update.delta_x_unconstrained != 0 ||
+        scroll_update.data.scroll_update.delta_y_unconstrained != 0;
 
     bool synthetic = event_sent_for_gesture_ack_->event.has_synthetic_phase;
 
@@ -306,7 +315,7 @@ void MouseWheelEventQueue::TryForwardNextEventToRenderer() {
   client_->SendMouseWheelEventImmediately(
       *event_sent_for_gesture_ack_,
       base::BindOnce(&MouseWheelEventQueue::ProcessMouseWheelAck,
-                     base::Unretained(this)),
+                     weak_ptr_factory_.GetWeakPtr()),
       event_sent_for_gesture_ack_->dispatch_callback);
 }
 

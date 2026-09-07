@@ -15,6 +15,7 @@
 #import "base/time/time.h"
 #import "components/bookmarks/browser/bookmark_model.h"
 #import "components/bookmarks/browser/bookmark_node.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/sync/base/user_selectable_type.h"
 #import "components/sync/test/test_sync_service.h"
 #import "ios/chrome/browser/bookmarks/model/bookmark_ios_unit_test_support.h"
@@ -248,7 +249,7 @@ TEST_F(BookmarkIOSUtilsUnitTest, TestVisibleNonDescendantNodes) {
   obstructions.insert(gaga);
   obstructions.insert(lindsey);
 
-  NodeVector result = VisibleNonDescendantNodes(
+  auto result = VisibleNonDescendantNodes(
       obstructions, bookmark_model_, BookmarkStorageType::kLocalOrSyncable);
   ASSERT_EQ(13u, result.size());
 
@@ -283,7 +284,7 @@ TEST_F(BookmarkIOSUtilsUnitTest, TestVisibleNonDescendantNodesSearch) {
   AddFolder(metal, u"F12");
   AddFolder(metal, u"f31");
 
-  NodeVector result = VisibleNonDescendantNodes(
+  auto result = VisibleNonDescendantNodes(
       {}, bookmark_model_, BookmarkStorageType::kLocalOrSyncable, {u"op"});
   ASSERT_EQ(2u, result.size());
 
@@ -296,128 +297,6 @@ TEST_F(BookmarkIOSUtilsUnitTest, TestVisibleNonDescendantNodesSearch) {
   ASSERT_EQ(1u, result.size());
 
   EXPECT_EQ(result[0]->GetTitle(), u"gaga folder 1");
-}
-
-TEST_F(BookmarkIOSUtilsUnitTest, TestIsSubvectorOfNodes) {
-  // Empty vectors: [] - [].
-  NodeVector vector1;
-  NodeVector vector2;
-  EXPECT_TRUE(IsSubvectorOfNodes(vector1, vector2));
-  EXPECT_TRUE(IsSubvectorOfNodes(vector2, vector1));
-
-  // Empty vs vector with one element: [] - [1].
-  const BookmarkNode* mobileNode = bookmark_model_->mobile_node();
-  const BookmarkNode* bookmark1 = AddBookmark(mobileNode, u"1");
-  vector2.push_back(bookmark1);
-  EXPECT_TRUE(IsSubvectorOfNodes(vector1, vector2));
-  EXPECT_FALSE(IsSubvectorOfNodes(vector2, vector1));
-
-  // The same element in each: [1] - [1].
-  vector1.push_back(bookmark1);
-  EXPECT_TRUE(IsSubvectorOfNodes(vector1, vector2));
-  EXPECT_TRUE(IsSubvectorOfNodes(vector2, vector1));
-
-  // One different element in each: [2] - [1].
-  vector1.pop_back();
-  const BookmarkNode* bookmark2 = AddBookmark(mobileNode, u"2");
-  vector1.push_back(bookmark2);
-  EXPECT_FALSE(IsSubvectorOfNodes(vector1, vector2));
-  EXPECT_FALSE(IsSubvectorOfNodes(vector2, vector1));
-
-  // [2] - [1, 2].
-  vector2.push_back(bookmark2);
-  EXPECT_TRUE(IsSubvectorOfNodes(vector1, vector2));
-  EXPECT_FALSE(IsSubvectorOfNodes(vector2, vector1));
-
-  // [3] - [1, 2].
-  vector1.pop_back();
-  const BookmarkNode* bookmark3 = AddBookmark(mobileNode, u"3");
-  vector1.push_back(bookmark3);
-  EXPECT_FALSE(IsSubvectorOfNodes(vector1, vector2));
-  EXPECT_FALSE(IsSubvectorOfNodes(vector2, vector1));
-
-  // [2, 3] - [1, 2, 3].
-  vector1.insert(vector1.begin(), bookmark2);
-  vector2.push_back(bookmark3);
-  EXPECT_TRUE(IsSubvectorOfNodes(vector1, vector2));
-  EXPECT_FALSE(IsSubvectorOfNodes(vector2, vector1));
-
-  // [2, 3, 1] - [1, 2, 3].
-  vector1.push_back(bookmark2);
-  EXPECT_FALSE(IsSubvectorOfNodes(vector1, vector2));
-  EXPECT_FALSE(IsSubvectorOfNodes(vector2, vector1));
-
-  // [1, 3] - [1, 2, 3].
-  vector1.clear();
-  vector1.push_back(bookmark1);
-  vector1.push_back(bookmark2);
-  EXPECT_TRUE(IsSubvectorOfNodes(vector1, vector2));
-  EXPECT_FALSE(IsSubvectorOfNodes(vector2, vector1));
-
-  // [1, 1] - [1, 2, 3].
-  vector1.pop_back();
-  vector1.push_back(bookmark1);
-  EXPECT_FALSE(IsSubvectorOfNodes(vector1, vector2));
-  EXPECT_FALSE(IsSubvectorOfNodes(vector2, vector1));
-
-  // [1, 1] - [1, 1, 2, 3].
-  vector2.insert(vector2.begin(), bookmark1);
-  EXPECT_TRUE(IsSubvectorOfNodes(vector1, vector2));
-  EXPECT_FALSE(IsSubvectorOfNodes(vector2, vector1));
-}
-
-TEST_F(BookmarkIOSUtilsUnitTest, TestMissingNodes) {
-  // [] - [].
-  NodeVector vector1;
-  NodeVector vector2;
-  EXPECT_EQ(0u, MissingNodesIndices(vector1, vector2).size());
-
-  // [] - [1].
-  const BookmarkNode* mobileNode = bookmark_model_->mobile_node();
-  const BookmarkNode* bookmark1 = AddBookmark(mobileNode, u"1");
-  vector2.push_back(bookmark1);
-  std::vector<NodeVector::size_type> missingNodesIndices =
-      MissingNodesIndices(vector1, vector2);
-  EXPECT_EQ(1u, missingNodesIndices.size());
-  EXPECT_EQ(0u, missingNodesIndices[0]);
-
-  // [1] - [1].
-  vector1.push_back(bookmark1);
-  EXPECT_EQ(0u, MissingNodesIndices(vector1, vector2).size());
-
-  // [2] - [1, 2].
-  vector1.pop_back();
-  const BookmarkNode* bookmark2 = AddBookmark(mobileNode, u"2");
-  vector1.push_back(bookmark2);
-  vector2.push_back(bookmark2);
-  missingNodesIndices = MissingNodesIndices(vector1, vector2);
-  EXPECT_EQ(1u, missingNodesIndices.size());
-  EXPECT_EQ(0u, missingNodesIndices[0]);
-
-  // [2, 3] - [1, 2, 3].
-  const BookmarkNode* bookmark3 = AddBookmark(mobileNode, u"3");
-  vector1.push_back(bookmark3);
-  vector2.push_back(bookmark3);
-  missingNodesIndices = MissingNodesIndices(vector1, vector2);
-  EXPECT_EQ(1u, missingNodesIndices.size());
-  EXPECT_EQ(0u, missingNodesIndices[0]);
-
-  // [1, 3] - [1, 2, 3].
-  vector1.clear();
-  vector1.push_back(bookmark1);
-  vector1.push_back(bookmark3);
-  missingNodesIndices = MissingNodesIndices(vector1, vector2);
-  EXPECT_EQ(1u, missingNodesIndices.size());
-  EXPECT_EQ(1u, missingNodesIndices[0]);
-
-  // [1, 1] - [1, 1, 2, 3].
-  vector1.pop_back();
-  vector1.push_back(bookmark1);
-  vector2.insert(vector2.begin(), bookmark1);
-  missingNodesIndices = MissingNodesIndices(vector1, vector2);
-  EXPECT_EQ(2u, missingNodesIndices.size());
-  EXPECT_EQ(2u, missingNodesIndices[0]);
-  EXPECT_EQ(3u, missingNodesIndices[1]);
 }
 
 // Tests returned values from `IsAccountBookmarkStorageOptedIn()`.

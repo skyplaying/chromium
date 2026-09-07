@@ -7,7 +7,6 @@
 #include "base/strings/stringprintf.h"
 #include "base/test/bind.h"
 #include "build/build_config.h"
-#include "chrome/browser/extensions/api/scripting/scripting_api.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/extensions/extension_util.h"
@@ -20,17 +19,23 @@
 #include "content/public/test/prerender_test_util.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/test_utils.h"
+#include "extensions/browser/api/scripting/scripting_api.h"
 #include "extensions/browser/api_test_utils.h"
 #include "extensions/browser/background_script_executor.h"
 #include "extensions/browser/disable_reason.h"
 #include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
+#include "extensions/browser/extension_system.h"
+#include "extensions/browser/extension_user_script_loader.h"
 #include "extensions/browser/script_executor.h"
+#include "extensions/browser/test_extension_registry_observer.h"
+#include "extensions/browser/user_script_manager.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/common/features/feature_channel.h"
 #include "extensions/common/utils/content_script_utils.h"
 #include "extensions/test/extension_test_message_listener.h"
 #include "extensions/test/result_catcher.h"
+#include "extensions/test/test_content_script_load_waiter.h"
 #include "extensions/test/test_extension_dir.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/controllable_http_response.h"
@@ -39,7 +44,7 @@
 #include "url/gurl.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/ui_test_utils.h"
 #endif
@@ -57,14 +62,13 @@ namespace {
 
 constexpr const char kSimulatedResourcePath[] = "/simulated-resource.html";
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
 // Returns the IDs of all divs in a page; used for testing script injections.
 constexpr char kGetDivIds[] =
     R"(let childIds = [];
-       for (const child of document.body.children)
+       for (const child of document.body.children) {
          childIds.push(child.id);
+       }
        JSON.stringify(childIds.sort());)";
-#endif
 
 }  // namespace
 
@@ -227,7 +231,7 @@ IN_PROC_BROWSER_TEST_F(ScriptingAPITest, DynamicContentScriptsMainWorld) {
 
 // Unregisters a pending script and verifies that the script is unregistered
 // and doesn't inject.
-// Regression test for https://crbug.com/1496907.
+// Regression test for https://crbug.com/40286917.
 IN_PROC_BROWSER_TEST_F(ScriptingAPITest,
                        RapidDynamicContentScriptRegistrationAndUnregistration) {
   static constexpr char kManifest[] =
@@ -298,7 +302,7 @@ IN_PROC_BROWSER_TEST_F(ScriptingAPITest,
   ASSERT_TRUE(result_catcher.GetNextResult()) << result_catcher.message();
 
   // Verify that only the second script injects (i.e., that the first script
-  // really was unregistered). Regression test for https://crbug.com/1496907.
+  // really was unregistered). Regression test for https://crbug.com/40286917.
   auto* web_contents = GetActiveWebContents();
   const GURL url =
       embedded_test_server()->GetURL("example.com", "/simple.html");
@@ -315,7 +319,7 @@ IN_PROC_BROWSER_TEST_F(ScriptingAPITest,
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 // Test that if an extension with persistent scripts is quickly unloaded while
 // these scripts are being fetched, requests that wait on that extension's
-// script load will be unblocked. Regression for crbug.com/1250575
+// script load will be unblocked. Regression for crbug.com/40198053
 IN_PROC_BROWSER_TEST_F(ScriptingAPITest, RapidLoadUnload) {
   ResultCatcher result_catcher;
   const Extension* extension = LoadExtension(
@@ -375,7 +379,7 @@ IN_PROC_BROWSER_TEST_F(ScriptingAPITest, ExecuteScriptSpecialCharacters) {
 }
 
 // Tests that calling scripting.executeScript works on a newly created tab
-// before the initial commit has happened. Regression for crbug.com/1191971.
+// before the initial commit has happened. Regression for crbug.com/40756964.
 // TODO(crbug.com/391921606): Port to desktop Android when we have test
 // navigation utilities that support "wait for tab".
 IN_PROC_BROWSER_TEST_F(ScriptingAPITest, ExecuteScriptBeforeInitialCommit) {
@@ -418,7 +422,7 @@ IN_PROC_BROWSER_TEST_F(ScriptingAPITest, ExecuteScriptBeforeInitialCommit) {
         browser(), target_url, WindowOpenDisposition::NEW_FOREGROUND_TAB,
         ui_test_utils::BROWSER_TEST_WAIT_FOR_TAB);
     content::WebContents* web_contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
     ASSERT_TRUE(web_contents);
     EXPECT_TRUE(web_contents->GetLastCommittedURL().is_empty());
     EXPECT_EQ(target_url, web_contents->GetVisibleURL());
@@ -469,7 +473,7 @@ IN_PROC_BROWSER_TEST_F(ScriptingAPITest, ExecuteScriptBeforeInitialCommit) {
         browser(), target_url, WindowOpenDisposition::NEW_FOREGROUND_TAB,
         ui_test_utils::BROWSER_TEST_WAIT_FOR_TAB);
     content::WebContents* web_contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
     ASSERT_TRUE(web_contents);
     EXPECT_TRUE(web_contents->GetLastCommittedURL().is_empty());
     EXPECT_EQ(target_url, web_contents->GetVisibleURL());
@@ -536,7 +540,7 @@ IN_PROC_BROWSER_TEST_F(ScriptingAPITest, InjectImmediately) {
   controllable_http_response().WaitForRequest();
 
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   EXPECT_TRUE(web_contents->IsLoading());
   const int tab_id = ExtensionTabUtil::GetTabId(web_contents);
 
@@ -635,10 +639,8 @@ IN_PROC_BROWSER_TEST_F(ScriptingAPITest, InjectImmediately) {
 }
 #endif
 
-#if !BUILDFLAG(IS_ANDROID)
 // Verifies dynamic scripts are properly injected in incognito.
-// Regression test for https://crbug.com/1495191.
-// TODO(crbug.com/40200835): Flaky on Android.
+// Regression test for https://crbug.com/40286428.
 IN_PROC_BROWSER_TEST_F(ScriptingAPITest,
                        PRE_DynamicContentScriptsInjectInIncognito) {
   // TODO(crbug.com/40937027): Convert test to use HTTPS and then remove.
@@ -694,6 +696,38 @@ IN_PROC_BROWSER_TEST_F(ScriptingAPITest,
   ScopedAllowHttpForHostnamesForTesting allow_http({"example.com"},
                                                    profile()->GetPrefs());
 
+  // Wait for the extensions loaded in the PRE_ test to be restored and their
+  // dynamic content scripts to finish loading before navigating.
+  auto wait_for_extension_and_scripts = [this](const base::FilePath& path) {
+    const Extension* extension =
+        GetExtensionByPath(extension_registry()->enabled_extensions(), path);
+    while (!extension) {
+      SCOPED_TRACE(base::StringPrintf("Waiting for extension to load: %s",
+                                      path.AsUTF8Unsafe().c_str()));
+      TestExtensionRegistryObserver observer(extension_registry());
+      observer.WaitForExtensionLoaded();
+      extension =
+          GetExtensionByPath(extension_registry()->enabled_extensions(), path);
+    }
+
+    ExtensionUserScriptLoader* user_script_loader =
+        ExtensionSystem::Get(profile())
+            ->user_script_manager()
+            ->GetUserScriptLoaderForExtension(extension->id());
+    if (!user_script_loader->HasLoadedScripts()) {
+      SCOPED_TRACE(
+          base::StringPrintf("Waiting for dynamic content scripts to load: %s",
+                             path.AsUTF8Unsafe().c_str()));
+      ContentScriptLoadWaiter waiter(user_script_loader);
+      waiter.Wait();
+    }
+  };
+
+  wait_for_extension_and_scripts(
+      test_data_dir_.AppendASCII("scripting/incognito_allowed"));
+  wait_for_extension_and_scripts(
+      test_data_dir_.AppendASCII("scripting/incognito_disallowed"));
+
   // Repeat the steps of navigating to an on-the-record and off-the-record page
   // to validate injection after a restart. This verifies the incognito bit
   // is properly set when restoring scripts after a restart.
@@ -712,7 +746,6 @@ IN_PROC_BROWSER_TEST_F(ScriptingAPITest,
   EXPECT_EQ(R"(["incognito-allowed"])",
             content::EvalJs(incognito_web_contents, kGetDivIds));
 }
-#endif  // BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 // Base test fixture for tests spanning multiple sessions where a custom arg is

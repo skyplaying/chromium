@@ -129,6 +129,9 @@ class AccountHoverButton : public HoverButton {
 
   // Used for testing.
   void SetCallbackForTesting(AccountSelectionCallback callback);
+  base::WeakPtr<AccountHoverButton> GetWeakPtrForTesting() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
 
  private:
   AccountSelectionCallback callback_;
@@ -139,6 +142,8 @@ class AccountHoverButton : public HoverButton {
   bool has_spinner_{false};
   bool is_appear_disabled_{false};
   bool has_been_clicked_{false};
+
+  base::WeakPtrFactory<AccountHoverButton> weak_ptr_factory_{this};
 };
 
 class AccountHoverButtonSecondaryView : public views::View {
@@ -223,7 +228,7 @@ class AccountSelectionViewBase {
       const IdentityRequestAccountPtr& account,
       std::optional<int> clickable_position,
       bool should_include_idp,
-      bool is_modal_dialog = false,
+      bool is_modal_dialog,
       int additional_vertical_padding = 0,
       std::optional<std::u16string> used_string = std::nullopt);
 
@@ -256,6 +261,9 @@ class AccountSelectionViewBase {
 
   // The device's scale factor.
   float device_scale_factor_;
+
+  // Whether this dialog is for a multi-IDP request.
+  bool is_multi_idp_{false};
 
   // Used to ensure that callbacks are not run if the AccountSelectionViewBase
   // is destroyed.

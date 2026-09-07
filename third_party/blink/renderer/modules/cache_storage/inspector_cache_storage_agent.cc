@@ -43,6 +43,8 @@
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/blink/renderer/platform/wtf/ref_counted.h"
 #include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_utf8_adaptor.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
@@ -77,7 +79,7 @@ namespace {
 String BuildCacheId(const String& storage_key,
                     const std::optional<String>& storage_bucket_name,
                     const String& cache_name) {
-  DCHECK(storage_key.find('|') == kNotFound);
+  DCHECK(!storage_key.contains('|'));
   StringBuilder id;
   id.Append(storage_key);
   if (storage_bucket_name.has_value()) {
@@ -289,8 +291,6 @@ class ResponsesAccumulator : public RefCounted<ResponsesAccumulator> {
           request->fetch_window_id, request->keepalive, request->is_reload,
           request->is_history_navigation, request->devtools_stack_id,
           request->trust_token_params.Clone(), request->target_address_space,
-          request->attribution_reporting_eligibility,
-          request->attribution_reporting_support,
           /*service_worker_race_network_request_token=*/std::nullopt);
       cache_remote_->Match(
           std::move(request), mojom::blink::CacheQueryOptions::New(),
@@ -377,10 +377,8 @@ class ResponsesAccumulator : public RefCounted<ResponsesAccumulator> {
 
   void SendFailure(const mojom::blink::CacheStorageError& error) {
     callback_wrapper_->SendFailure(ProtocolResponse::ServerError(
-        UNSAFE_TODO(
-            String::Format("Error requesting responses for cache %s : %s",
-                           params_.cache_name.Latin1().c_str(),
-                           CacheStorageErrorString(error)))
+        StrCat({"Error requesting responses for cache ", params_.cache_name,
+                " : ", CacheStorageErrorString(error)})
             .Utf8()));
   }
 
@@ -436,11 +434,9 @@ class GetCacheKeysForRequestData {
               if (!result.has_value()) {
                 self->callback_wrapper_->SendFailure(
                     ProtocolResponse::ServerError(
-                        UNSAFE_TODO(
-                            String::Format(
-                                "Error requesting requests for cache %s: %s",
-                                params.cache_name.Latin1().c_str(),
-                                CacheStorageErrorString(result.error())))
+                        StrCat({"Error requesting requests for cache ",
+                                params.cache_name, ": ",
+                                CacheStorageErrorString(result.error())})
                             .Utf8()));
               } else {
                 if (result.value().empty()) {
@@ -464,6 +460,8 @@ class GetCacheKeysForRequestData {
   scoped_refptr<RequestCallbackWrapper<RequestEntriesCallback>>
       callback_wrapper_;
 };
+
+}  // namespace
 
 class CachedResponseFileReaderLoaderClient final
     : public GarbageCollected<CachedResponseFileReaderLoaderClient>,
@@ -499,8 +497,8 @@ class CachedResponseFileReaderLoaderClient final
 
   void DidFail(FileErrorCode error) override {
     callback_wrapper_->SendFailure(ProtocolResponse::ServerError(
-        String::Format("Unable to read the cached response, error code: %d",
-                       static_cast<int>(error))
+        Format("Unable to read the cached response, error code: {}",
+               static_cast<int>(error))
             .Utf8()));
     dispose();
   }
@@ -523,7 +521,7 @@ class CachedResponseFileReaderLoaderClient final
       : loader_(MakeGarbageCollected<FileReaderLoader>(this,
                                                        std::move(task_runner))),
         callback_wrapper_(callback_wrapper),
-        keep_alive_(this) {
+        keep_alive_({}, this) {
     loader_->Start(std::move(blob));
   }
 
@@ -541,8 +539,6 @@ class CachedResponseFileReaderLoaderClient final
   SegmentedBuffer data_;
   SelfKeepAlive<CachedResponseFileReaderLoaderClient> keep_alive_;
 };
-
-}  // namespace
 
 InspectorCacheStorageAgent::InspectorCacheStorageAgent(InspectedFrames* frames)
     : frames_(frames) {}
@@ -760,10 +756,8 @@ void InspectorCacheStorageAgent::requestEntries(
              mojom::blink::CacheStorage::OpenResult result) {
             if (!result.has_value()) {
               callback_wrapper->SendFailure(ProtocolResponse::ServerError(
-                  UNSAFE_TODO(
-                      String::Format("Error requesting cache %s: %s",
-                                     params.cache_name.Latin1().c_str(),
-                                     CacheStorageErrorString(result.error())))
+                  StrCat({"Error requesting cache ", params.cache_name, ": ",
+                          CacheStorageErrorString(result.error())})
                       .Utf8()));
             } else {
               auto request = std::make_unique<GetCacheKeysForRequestData>(
@@ -803,8 +797,8 @@ void InspectorCacheStorageAgent::deleteCache(
               callback_wrapper->SendSuccess();
             } else {
               callback_wrapper->SendFailure(ProtocolResponse::ServerError(
-                  UNSAFE_TODO(String::Format("Error requesting cache names: %s",
-                                             CacheStorageErrorString(error)))
+                  StrCat({"Error requesting cache names: ",
+                          CacheStorageErrorString(error)})
                       .Utf8()));
             }
           },
@@ -838,10 +832,8 @@ void InspectorCacheStorageAgent::deleteEntry(
              String cache_name, mojom::blink::CacheStorage::OpenResult result) {
             if (!result.has_value()) {
               callback_wrapper->SendFailure(ProtocolResponse::ServerError(
-                  UNSAFE_TODO(
-                      String::Format("Error requesting cache %s: %s",
-                                     cache_name.Latin1().c_str(),
-                                     CacheStorageErrorString(result.error())))
+                  StrCat({"Error requesting cache ", cache_name, ": ",
+                          CacheStorageErrorString(result.error())})
                       .Utf8()));
             } else {
               Vector<mojom::blink::BatchOperationPtr> batch_operations;
@@ -868,11 +860,9 @@ void InspectorCacheStorageAgent::deleteEntry(
                             mojom::blink::CacheStorageError::kSuccess) {
                           callback_wrapper->SendFailure(
                               ProtocolResponse::ServerError(
-                                  UNSAFE_TODO(
-                                      String::Format(
-                                          "Error deleting cache entry: %s",
-                                          CacheStorageErrorString(
-                                              error->value)))
+                                  StrCat(
+                                      {"Error deleting cache entry: ",
+                                       CacheStorageErrorString(error->value)})
                                       .Utf8()));
                         } else {
                           callback_wrapper->SendSuccess();
@@ -931,9 +921,8 @@ void InspectorCacheStorageAgent::requestCachedResponse(
              mojom::blink::CacheStorage::MatchResult result) {
             if (!result.has_value()) {
               callback_wrapper->SendFailure(ProtocolResponse::ServerError(
-                  UNSAFE_TODO(
-                      String::Format("Unable to read cached response: %s",
-                                     CacheStorageErrorString(result.error())))
+                  StrCat({"Unable to read cached response: ",
+                          CacheStorageErrorString(result.error())})
                       .Utf8()));
             } else {
               std::unique_ptr<protocol::DictionaryValue> headers =

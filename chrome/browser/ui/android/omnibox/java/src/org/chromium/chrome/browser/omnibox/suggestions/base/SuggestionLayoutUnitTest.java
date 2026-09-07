@@ -8,26 +8,29 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 import android.content.Context;
 import android.view.View;
 import android.view.View.MeasureSpec;
 
+import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
+import org.mockito.quality.Strictness;
 import org.robolectric.annotation.Config;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.chrome.browser.omnibox.R;
 import org.chromium.chrome.browser.omnibox.styles.OmniboxResourceProvider;
 import org.chromium.chrome.browser.omnibox.suggestions.base.SuggestionLayout.LayoutParams.SuggestionViewType;
-import org.chromium.chrome.browser.omnibox.test.R;
+import org.chromium.chrome.browser.ui.theme.BrandedColorScheme;
 
 /**
  * Tests for {@link SuggestionLayout}.
@@ -38,13 +41,24 @@ import org.chromium.chrome.browser.omnibox.test.R;
 @RunWith(BaseRobolectricTestRunner.class)
 public class SuggestionLayoutUnitTest {
 
-    public @Rule MockitoRule mMockitoRule = MockitoJUnit.rule();
+    @Rule
+    public final MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
 
     private final Context mContext = ContextUtils.getApplicationContext();
     private final View mDecorationView = new View(mContext);
-    private final View mActionButtonView = new View(mContext);
     private final View mContentView = new View(mContext);
     private SuggestionLayout mLayout = new SuggestionLayout(mContext);
+    private OmniboxResourceProvider mResourceProvider;
+
+    @Before
+    public void setUp() {
+        mResourceProvider = new OmniboxResourceProvider(mContext, BrandedColorScheme.APP_DEFAULT);
+        mLayout.setSuggestionDimensions(
+                mResourceProvider.getSuggestionDecorationIconSizeWidth(),
+                mResourceProvider.getSuggestionContentHeight(),
+                mResourceProvider.getSuggestionCompactContentHeight(),
+                mResourceProvider.getSuggestionContentVerticalPadding());
+    }
 
     @Test
     public void setRoundingEdges_redrawViewOnChange() {
@@ -60,7 +74,7 @@ public class SuggestionLayoutUnitTest {
                 "Unexpected default value of the bottom edge rounding",
                 spy.mOutlineProvider.isBottomEdgeRounded());
 
-        spy.setRoundingEdges(false, false);
+        spy.setRoundingEdges(/* roundTopEdge= */ false, /* roundBottomEdge= */ false);
         assertFalse(
                 "Top edge rounding does not reflect the requested state: false",
                 spy.mOutlineProvider.isTopEdgeRounded());
@@ -68,38 +82,38 @@ public class SuggestionLayoutUnitTest {
                 "Bottom edge rounding does not reflect the requested state: false",
                 spy.mOutlineProvider.isBottomEdgeRounded());
         // No invalidate calls, because nothing has changed.
-        verify(spy, times(0)).invalidateOutline();
+        verify(spy, never()).invalidateOutline();
 
         // Enable rounding of bottom corners only. Observe redraw.
-        spy.setRoundingEdges(false, true);
+        spy.setRoundingEdges(/* roundTopEdge= */ false, /* roundBottomEdge= */ true);
         assertFalse(
                 "Top edge rounding does not reflect the requested state: false",
                 spy.mOutlineProvider.isTopEdgeRounded());
         assertTrue(
                 "Bottom edge rounding does not reflect the requested state: true",
                 spy.mOutlineProvider.isBottomEdgeRounded());
-        verify(spy, times(1)).invalidateOutline();
+        verify(spy).invalidateOutline();
         clearInvocations(spy);
 
         // Apply the same configuration as previously. Observe no redraw.
-        spy.setRoundingEdges(false, true);
+        spy.setRoundingEdges(/* roundTopEdge= */ false, /* roundBottomEdge= */ true);
         assertFalse(
                 "Top edge rounding does not reflect the requested state: false",
                 spy.mOutlineProvider.isTopEdgeRounded());
         assertTrue(
                 "Bottom edge rounding does not reflect the requested state: true",
                 spy.mOutlineProvider.isBottomEdgeRounded());
-        verify(spy, times(0)).invalidateOutline();
+        verify(spy, never()).invalidateOutline();
 
         // Enable rounding of all corners. Observe redraw.
-        spy.setRoundingEdges(true, true);
+        spy.setRoundingEdges(/* roundTopEdge= */ true, /* roundBottomEdge= */ true);
         assertTrue(
                 "Top edge rounding does not reflect the requested state: true",
                 spy.mOutlineProvider.isTopEdgeRounded());
         assertTrue(
                 "Bottom edge rounding does not reflect the requested state: true",
                 spy.mOutlineProvider.isBottomEdgeRounded());
-        verify(spy, times(1)).invalidateOutline();
+        verify(spy).invalidateOutline();
     }
 
     @Test
@@ -116,21 +130,21 @@ public class SuggestionLayoutUnitTest {
                 mLayout.getClipToOutline());
 
         // When any of the edges are rounded, we should also enable clipping.
-        mLayout.setRoundingEdges(true, false);
+        mLayout.setRoundingEdges(/* roundTopEdge= */ true, /* roundBottomEdge= */ false);
         assertTrue(
                 "Clipping should be enabled when rounding only top edge corners",
                 mLayout.getClipToOutline());
-        mLayout.setRoundingEdges(false, true);
+        mLayout.setRoundingEdges(/* roundTopEdge= */ false, /* roundBottomEdge= */ true);
         assertTrue(
                 "Clipping should be enabled when rounding only bottom edge corners",
                 mLayout.getClipToOutline());
-        mLayout.setRoundingEdges(true, true);
+        mLayout.setRoundingEdges(/* roundTopEdge= */ true, /* roundBottomEdge= */ true);
         assertTrue(
                 "Clipping should be enabled when rounding both top and bottom edge corners",
                 mLayout.getClipToOutline());
 
         // Revert back to no rounding. Observe that we're not clipping any longer.
-        mLayout.setRoundingEdges(false, false);
+        mLayout.setRoundingEdges(/* roundTopEdge= */ false, /* roundBottomEdge= */ false);
         assertFalse(
                 "Clipping should be disabled when rounding is not in use",
                 mLayout.getClipToOutline());
@@ -186,8 +200,7 @@ public class SuggestionLayoutUnitTest {
         mLayout.layout(0, 0, 200, 48);
 
         assertEquals(
-                OmniboxResourceProvider.getSuggestionDecorationIconSizeWidth(mContext),
-                mContentView.getLeft());
+                mResourceProvider.getSuggestionDecorationIconSizeWidth(), mContentView.getLeft());
 
         mDecorationView.setVisibility(View.GONE);
 

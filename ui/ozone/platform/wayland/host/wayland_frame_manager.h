@@ -24,6 +24,7 @@
 
 namespace ui {
 
+class BeginFrameSourceWayland;
 class WaylandBufferHandle;
 class WaylandConnection;
 class WaylandWindow;
@@ -144,8 +145,17 @@ class WaylandFrameManager {
 
   static base::TimeDelta GetPresentationFlushTimerDurationForTesting();
 
+  // Requests a bare wl_frame_callback with no buffer commit to maintain
+  // pacing. Returns false if no frame callback can be obtained.
+  [[nodiscard]] bool RequestFrameCallback();
+
+  // Root surface identifier, used for tracing in the begin frame source.
+  uint32_t GetRootSurfaceId() const;
+
  private:
   friend class WaylandFrameManagerTest;
+
+  void CreateBeginFrameSource();
 
   void PlayBackFrame(std::unique_ptr<WaylandFrame> frame);
   void DiscardFrame(std::unique_ptr<WaylandFrame> frame);
@@ -273,7 +283,7 @@ class WaylandFrameManager {
   // This is set when that is detected and a fallback rendering can be used
   // during tab capture without relying on frame callbacks. See
   // |should_skip_frame_callbacks_| below.
-  int frame_callback_freeze_detected_ = false;
+  bool frame_callback_freeze_detected_ = false;
 
   // Indicates if fallback rendering should be used by not relying on frame
   // callbacks to drive playback when |frame_callback_freeze_detected_| is true
@@ -289,6 +299,18 @@ class WaylandFrameManager {
   // suspended state which may be sent a few seconds after the window gets
   // occluded, as is the case in mutter.
   bool should_ack_swap_without_commit_ = false;
+
+  // Frame callback without a buffer commit, used to maintain frame pacing
+  // for the begin frame source when viz has no damage.
+  //
+  // TODO(crbug.com/537421794): Unify with submitted_frames_ so there is a
+  // single source of truth for real and synthetic frame callbacks, and so the
+  // begin frame source can request the next callback unconditionally
+  // after processing the previous frame. (NB: playback should never
+  // be gated on synthetic callbacks.)
+  wl::Object<wl_callback> no_damage_frame_callback_;
+
+  std::unique_ptr<BeginFrameSourceWayland> begin_frame_source_;
 
   base::WeakPtrFactory<WaylandFrameManager> weak_factory_;
 };

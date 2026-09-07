@@ -12,6 +12,7 @@
 
 #include "base/scoped_observation_traits.h"
 #include "build/android_buildflags.h"
+#include "components/split_tabs/split_tab_id.h"
 #include "components/tab_groups/tab_group_id.h"
 #include "components/tabs/public/tab_interface.h"
 #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
@@ -73,7 +74,9 @@ class TabListInterface {
 
   // Opens a new tab to the given `url`, inserting it at `index` in the tab
   // strip. `index` may be ignored by the implementation if necessary.
-  virtual tabs::TabInterface* OpenTab(const GURL& url, int index) = 0;
+  virtual tabs::TabInterface* OpenTab(const GURL& url,
+                                      int index,
+                                      bool foreground = true) = 0;
 
   // Sets the opener for the `target` tab to be the `opener` tab.
   virtual void SetOpenerForTab(tabs::TabHandle target,
@@ -81,6 +84,18 @@ class TabListInterface {
 
   // Get the `opener` tab from `target` tab.
   virtual tabs::TabInterface* GetOpenerForTab(tabs::TabHandle target) = 0;
+
+  // Insert `web_contents` into a TabListInterface at target `index`.
+  // If `should_pin` is true, the tab will be pinned. On desktop, this
+  // corresponds to the `ADD_PINNED` flag. Other actions on insertion (like
+  // making the tab active) are not supported by this method.
+  // The tab can optionally be added to a `group`.
+  // Returns the interface for the newly inserted tab.
+  virtual tabs::TabInterface* InsertWebContentsAt(
+      int index,
+      std::unique_ptr<content::WebContents> web_contents,
+      bool should_pin,
+      std::optional<tab_groups::TabGroupId> group) = 0;
 
   // Attempts to discard the renderer for the `tab` from memory and return the
   // discarded WebContents if successful.
@@ -98,7 +113,7 @@ class TabListInterface {
   virtual tabs::TabInterface* GetTab(int index) = 0;
 
   // Returns the index of the given `tab`, if it exists in the tab strip.
-  // Otherwise, returns -1.
+  // Otherwise, returns tab_list::kNoTabIndex (-1).
   virtual int GetIndexOfTab(tabs::TabHandle tab) = 0;
 
   // Highlights a set of tabs. This will clear any initially-selected tabs and
@@ -112,6 +127,12 @@ class TabListInterface {
 
   // Closes the `tab`.
   virtual void CloseTab(tabs::TabHandle tab) = 0;
+
+  // Detaches the `tab` from the tab list and returns its WebContents.
+  // Ownership of the WebContents is transferred to the caller.
+  // This will NOT destroy the tab or its WebContents.
+  virtual std::unique_ptr<content::WebContents> DetachWebContents(
+      tabs::TabHandle tab) = 0;
 
   // Returns an in-order list of all tabs in the tab strip.
   virtual std::vector<tabs::TabInterface*> GetAllTabs() = 0;
@@ -131,6 +152,9 @@ class TabListInterface {
   // support tab groups (e.g. legacy apps) returns an empty vector.
   virtual std::vector<tab_groups::TabGroupId> ListTabGroups() = 0;
 
+  // Returns a list of tab splits in this tab strip.
+  virtual std::set<split_tabs::SplitTabId> ListSplits() = 0;
+
   // Returns the visual data for a tab group, or nullopt on error.
   virtual std::optional<tab_groups::TabGroupVisualData> GetTabGroupVisualData(
       tab_groups::TabGroupId group_id) = 0;
@@ -143,6 +167,11 @@ class TabListInterface {
   // Creates a tab group from a list of tabs and returns the group ID. Returns
   // nullopt on error (for example, if the tab list is empty).
   virtual std::optional<tab_groups::TabGroupId> CreateTabGroup(
+      const std::vector<tabs::TabHandle>& tabs) = 0;
+
+  // Creates a new split view with the given `tabs` and returns the split ID.
+  // Returns nullopt on error.
+  virtual std::optional<split_tabs::SplitTabId> CreateSplit(
       const std::vector<tabs::TabHandle>& tabs) = 0;
 
   // Sets the visual data for a tab group. Implementations may choose to notify
@@ -165,6 +194,9 @@ class TabListInterface {
   // they were in.
   virtual void Ungroup(const std::set<tabs::TabHandle>& tabs) = 0;
 
+  // Unsplits all the tabs that are part of the split with `split_id`.
+  virtual void Unsplit(split_tabs::SplitTabId split_id) = 0;
+
   // Moves the tab group to `index`. The nearest valid index will be used.
   // The index assumes the group has already been removed from the tab strip.
   virtual void MoveGroupTo(tab_groups::TabGroupId group_id, int index) = 0;
@@ -183,8 +215,8 @@ class TabListInterface {
   // will be inserted with the first tab at `index` in the destination tab list.
   // This will no-op if the tab group is not present in this TabListInterface or
   // the destination window does not exist. `index` may be adjusted as necessary
-  // to ensure the tab group is in a valid position.
-  virtual void MoveTabGroupToWindow(tab_groups::TabGroupId group_id,
+  // to ensure the tab group is in a valid position. Returns true on success.
+  virtual bool MoveTabGroupToWindow(tab_groups::TabGroupId group_id,
                                     SessionID destination_window_id,
                                     int destination_index) = 0;
 

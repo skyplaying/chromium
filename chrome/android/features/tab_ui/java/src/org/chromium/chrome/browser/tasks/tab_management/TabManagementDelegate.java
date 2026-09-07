@@ -34,7 +34,7 @@ import org.chromium.chrome.browser.tab_ui.TabContentManager;
 import org.chromium.chrome.browser.tab_ui.TabModelDotInfo;
 import org.chromium.chrome.browser.tab_ui.TabSwitcher;
 import org.chromium.chrome.browser.tabmodel.TabCreatorManager;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
+import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.tasks.tab_management.archived_tabs_auto_delete_promo.ArchivedTabsAutoDeletePromoManager;
 import org.chromium.chrome.browser.theme.ThemeColorProvider;
@@ -66,7 +66,7 @@ public interface TabManagementDelegate {
      * @param bottomSheetController The {@link BottomSheetController} for the current activity.
      * @param dataSharingTabManager The {@link} DataSharingTabManager managing communication between
      *     UI and DataSharing services.
-     * @param tabModelSelector Gives access to the current set of {@TabModel}.
+     * @param tabModelSelector Gives access to the current set of {@link TabModel}.
      * @param tabContentManager Gives access to the tab content.
      * @param tabCreatorManager Manages creation of tabs.
      * @param layoutStateProviderSupplier Supplies the {@link LayoutStateProvider}.
@@ -197,7 +197,7 @@ public interface TabManagementDelegate {
             DoubleConsumer onToolbarAlphaChange,
             OneshotSupplier<ProfileProvider> profileProviderSupplier,
             LazyOneshotSupplier<HubManager> hubManagerSupplier,
-            Supplier<@Nullable TabGroupUiActionHandler> tabGroupUiActionHandlerSupplier,
+            Supplier<TabGroupUiActionHandler> tabGroupUiActionHandlerSupplier,
             Supplier<@Nullable ModalDialogManager> modalDialogManagerSupplier,
             MonotonicObservableSupplier<EdgeToEdgeController> edgeToEdgeSupplier,
             DataSharingTabManager dataSharingTabManager);
@@ -208,11 +208,11 @@ public interface TabManagementDelegate {
      * @param context The {@link Context} for this UI flow.
      * @param modalDialogManager The modal dialog manager for the activity.
      * @param hubManagerSupplier Supplier ultimately used to get the pane manager to switch panes.
-     * @param tabGroupModelFilterSupplier Supplies the current tab group model filter.
+     * @param tabModelSupplier Supplies the current tab model.
      */
     TabGroupCreationUiDelegate createTabGroupCreationUiFlow(
             Context context,
             ModalDialogManager modalDialogManager,
             OneshotSupplier<HubManager> hubManagerSupplier,
-            Supplier<@Nullable TabGroupModelFilter> tabGroupModelFilterSupplier);
+            Supplier<@Nullable TabModel> tabModelSupplier);
 }

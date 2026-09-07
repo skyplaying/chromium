@@ -13,6 +13,7 @@ export class TestDefaultBrowserPageHandler extends TestBrowserProxy implements
     super([
       'cancel',
       'confirm',
+      'showUi',
     ]);
   }
 
@@ -22,6 +23,11 @@ export class TestDefaultBrowserPageHandler extends TestBrowserProxy implements
 
   confirm() {
     this.methodCalled('confirm');
+  }
+
+  // eslint-disable-next-line @typescript-eslint/naming-convention
+  showUI() {
+    this.methodCalled('showUi');
   }
 }
 

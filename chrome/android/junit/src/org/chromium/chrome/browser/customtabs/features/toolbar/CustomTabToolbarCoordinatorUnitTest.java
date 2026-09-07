@@ -19,7 +19,6 @@ import android.app.Activity;
 import android.app.PendingIntent;
 import android.content.Intent;
 import android.graphics.Rect;
-import android.os.Build;
 
 import org.junit.Before;
 import org.junit.Rule;
@@ -46,7 +45,6 @@ import org.chromium.chrome.browser.customtabs.content.CustomTabActivityContentTe
 import org.chromium.chrome.browser.customtabs.content.CustomTabActivityTabController;
 import org.chromium.chrome.browser.customtabs.content.CustomTabActivityTabProvider;
 import org.chromium.chrome.browser.flags.ActivityType;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.share.ShareDelegate;
 import org.chromium.chrome.browser.share.ShareDelegateSupplier;
 import org.chromium.chrome.browser.tab.Tab;
@@ -69,6 +67,7 @@ public class CustomTabToolbarCoordinatorUnitTest {
     private static final Rect WINDOW_RECT = new Rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
     private static final Rect WIDEST_UNOCCLUDED_RECT =
             new Rect(LEFT_INSET, 0, SCREEN_WIDTH - RIGHT_INSET, SYS_APP_HEADER_HEIGHT);
+    private static final int CUSTOM_BUTTON_ID = 100;
 
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -117,6 +116,7 @@ public class CustomTabToolbarCoordinatorUnitTest {
         when(mTabProvider.getTab()).thenReturn(mTab);
         when(mTab.getOriginalUrl()).thenReturn(GURL.emptyGURL());
         when(mTab.getTitle()).thenReturn("");
+        when(mCustomButtonParams.getId()).thenReturn(CUSTOM_BUTTON_ID);
         when(mCustomButtonParams.getDescription()).thenReturn("");
         when(mCustomButtonParams.getPendingIntent()).thenReturn(mPendingIntent);
     }
@@ -142,6 +142,9 @@ public class CustomTabToolbarCoordinatorUnitTest {
             verify(mShareDelegate, never()).share(any(Tab.class), eq(false), anyInt());
             verify(mPendingIntent)
                     .send(any(), eq(0), any(Intent.class), any(), isNull(), isNull(), any());
+            verify(env.intentDataProvider)
+                    .maybeAddAdditionalContentExtrasToOutboundIntent(
+                            eq(mTabProvider), any(Intent.class), eq(CUSTOM_BUTTON_ID));
         } catch (PendingIntent.CanceledException e) {
             throw new AssertionError();
         }
@@ -187,11 +190,7 @@ public class CustomTabToolbarCoordinatorUnitTest {
         when(env.intentDataProvider.isCloseButtonEnabled()).thenReturn(true);
 
         mCoordinator.onToolbarInitialized(mToolbarManager, mToolbarButtonsCoordinator);
-        if (ChromeFeatureList.sCctToolbarRefactor.isEnabled()) {
-            verify(mToolbarButtonsCoordinator).setCloseButtonClickHandler(any());
-        } else {
-            verify(mCloseButtonVisibilityManager).setVisibility(true);
-        }
+        verify(mToolbarButtonsCoordinator).setCloseButtonClickHandler(any());
     }
 
     @Test
@@ -199,15 +198,11 @@ public class CustomTabToolbarCoordinatorUnitTest {
         when(env.intentDataProvider.isCloseButtonEnabled()).thenReturn(false);
 
         mCoordinator.onToolbarInitialized(mToolbarManager, mToolbarButtonsCoordinator);
-        if (ChromeFeatureList.sCctToolbarRefactor.isEnabled()) {
-            verify(mToolbarButtonsCoordinator).setCloseButtonClickHandler(any());
-        } else {
-            verify(mCloseButtonVisibilityManager).setVisibility(false);
-        }
+        verify(mToolbarButtonsCoordinator).setCloseButtonClickHandler(any());
     }
 
     @Test
-    @Config(sdk = Build.VERSION_CODES.VANILLA_ICE_CREAM)
+    @Config(sdk = BaseRobolectricTestRunner.MAX_SDK)
     public void testWebAppEnterDW_HideMenuButton() {
         // Setup web app in fullscreen mode.
         when(env.intentDataProvider.getActivityType())
@@ -221,11 +216,7 @@ public class CustomTabToolbarCoordinatorUnitTest {
         mCoordinator.onToolbarInitialized(mToolbarManager, mToolbarButtonsCoordinator);
         verify(mToolbarManager).releaseHideMenuButtonToken(TokenHolder.INVALID_TOKEN);
 
-        if (ChromeFeatureList.sCctToolbarRefactor.isEnabled()) {
-            verify(mToolbarButtonsCoordinator).setCustomActionButtonsVisible(true);
-        } else {
-            verify(mToolbarManager).setCustomActionsVisibility(true);
-        }
+        verify(mToolbarButtonsCoordinator).setCustomActionButtonsVisible(true);
 
         // Enter desktop windowing.
         when(mToolbarManager.hideMenuButtonPersistently(TokenHolder.INVALID_TOKEN)).thenReturn(0);
@@ -239,15 +230,11 @@ public class CustomTabToolbarCoordinatorUnitTest {
         // Verify menu button and custom actions are hidden.
         observer.onDesktopWindowingModeChanged(true);
         verify(mToolbarManager).hideMenuButtonPersistently(TokenHolder.INVALID_TOKEN);
-        if (ChromeFeatureList.sCctToolbarRefactor.isEnabled()) {
-            verify(mToolbarButtonsCoordinator).setCustomActionButtonsVisible(false);
-        } else {
-            verify(mToolbarManager).setCustomActionsVisibility(false);
-        }
+        verify(mToolbarButtonsCoordinator).setCustomActionButtonsVisible(false);
     }
 
     @Test
-    @Config(sdk = Build.VERSION_CODES.VANILLA_ICE_CREAM)
+    @Config(sdk = BaseRobolectricTestRunner.MAX_SDK)
     public void testWebAppExitDW_ShowMenuButton() {
         // Setup web app in desktop windowing mode.
         when(env.intentDataProvider.getActivityType())
@@ -261,11 +248,7 @@ public class CustomTabToolbarCoordinatorUnitTest {
         // Verify menu button and custom actions are hidden.
         mCoordinator.onToolbarInitialized(mToolbarManager, mToolbarButtonsCoordinator);
         verify(mToolbarManager).hideMenuButtonPersistently(TokenHolder.INVALID_TOKEN);
-        if (ChromeFeatureList.sCctToolbarRefactor.isEnabled()) {
-            verify(mToolbarButtonsCoordinator).setCustomActionButtonsVisible(false);
-        } else {
-            verify(mToolbarManager).setCustomActionsVisibility(false);
-        }
+        verify(mToolbarButtonsCoordinator).setCustomActionButtonsVisible(false);
 
         // Exit desktop windowing.
         appHeaderState = new AppHeaderState(WINDOW_RECT, WIDEST_UNOCCLUDED_RECT, false);
@@ -277,10 +260,6 @@ public class CustomTabToolbarCoordinatorUnitTest {
 
         observer.onDesktopWindowingModeChanged(false);
         verify(mToolbarManager).releaseHideMenuButtonToken(0);
-        if (ChromeFeatureList.sCctToolbarRefactor.isEnabled()) {
-            verify(mToolbarButtonsCoordinator).setCustomActionButtonsVisible(true);
-        } else {
-            verify(mToolbarManager).setCustomActionsVisibility(true);
-        }
+        verify(mToolbarButtonsCoordinator).setCustomActionButtonsVisible(true);
     }
 }

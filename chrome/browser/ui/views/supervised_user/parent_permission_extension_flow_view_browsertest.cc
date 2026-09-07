@@ -21,11 +21,12 @@
 #include "chrome/browser/supervised_user/supervised_user_extensions_metrics_recorder.h"
 #include "chrome/browser/supervised_user/supervised_user_service_factory.h"
 #include "chrome/browser/supervised_user/supervised_user_test_util.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/extensions/extension_enable_flow.h"
 #include "chrome/browser/ui/extensions/extension_enable_flow_test_delegate.h"
 #include "chrome/browser/ui/supervised_user/parent_permission_dialog.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/supervised_user/parent_permission_dialog_view.h"
 #include "chrome/common/chrome_paths.h"
@@ -113,10 +114,10 @@ class ExtensionEnableFlowTestSupervised
 
     supervised_user_test_util::
         SetSupervisedUserExtensionsMayRequestPermissionsPref(
-            browser()->profile(), true);
+            browser()->GetProfile(), true);
     supervised_user_extensions_delegate_ =
         std::make_unique<extensions::SupervisedUserExtensionsDelegateImpl>(
-            browser()->profile());
+            browser()->GetProfile());
 
     test_extension_ = extensions::ExtensionBuilder("test extension").Build();
     extension_registrar()->AddExtension(test_extension_);
@@ -145,11 +146,11 @@ class ExtensionEnableFlowTestSupervised
   }
 
   extensions::ExtensionRegistrar* extension_registrar() {
-    return extensions::ExtensionRegistrar::Get(browser()->profile());
+    return extensions::ExtensionRegistrar::Get(browser()->GetProfile());
   }
 
   extensions::ExtensionRegistry* extension_registry() {
-    return extensions::ExtensionRegistry::Get(browser()->profile());
+    return extensions::ExtensionRegistry::Get(browser()->GetProfile());
   }
 
   std::unique_ptr<extensions::SupervisedUserExtensionsDelegate>
@@ -190,7 +191,7 @@ class ExtensionEnableFlowTestSupervised
 IN_PROC_BROWSER_TEST_P(ExtensionEnableFlowTestSupervised,
                        ParentPermissionDialogAccept) {
   base::HistogramTester histogram_tester;
-  ASSERT_TRUE(browser()->profile()->IsChild());
+  ASSERT_TRUE(browser()->GetProfile()->IsChild());
 
   EXPECT_TRUE(extension_registry()->disabled_extensions().Contains(
       test_extension()->id()));
@@ -199,11 +200,11 @@ IN_PROC_BROWSER_TEST_P(ExtensionEnableFlowTestSupervised,
   set_next_dialog_action(NextDialogAction::kAccept);
 
   ExtensionEnableFlowTestDelegate delegate;
-  ExtensionEnableFlow enable_flow(browser()->profile(), test_extension()->id(),
-                                  &delegate);
+  ExtensionEnableFlow enable_flow(browser()->GetProfile(),
+                                  test_extension()->id(), &delegate);
 
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   enable_flow.StartForWebContents(web_contents);
   delegate.Wait();
 
@@ -239,7 +240,7 @@ INSTANTIATE_FEATURE_OVERRIDE_TEST_SUITE(ExtensionEnableFlowTestSupervised);
 IN_PROC_BROWSER_TEST_P(ExtensionEnableFlowTestSupervised,
                        ParentPermissionDialogCancel) {
   base::HistogramTester histogram_tester;
-  ASSERT_TRUE(browser()->profile()->IsChild());
+  ASSERT_TRUE(browser()->GetProfile()->IsChild());
 
   EXPECT_TRUE(extension_registry()->disabled_extensions().Contains(
       test_extension()->id()));
@@ -247,10 +248,10 @@ IN_PROC_BROWSER_TEST_P(ExtensionEnableFlowTestSupervised,
   set_next_dialog_action(NextDialogAction::kCancel);
 
   ExtensionEnableFlowTestDelegate delegate;
-  ExtensionEnableFlow enable_flow(browser()->profile(), test_extension()->id(),
-                                  &delegate);
+  ExtensionEnableFlow enable_flow(browser()->GetProfile(),
+                                  test_extension()->id(), &delegate);
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   enable_flow.StartForWebContents(web_contents);
   delegate.Wait();
 
@@ -318,7 +319,7 @@ class ExtensionManagementApiTestSupervised
     base::PathService::Get(chrome::DIR_TEST_DATA, &test_data_dir);
     test_data_dir = test_data_dir.AppendASCII("extensions");
     test_data_dir = test_data_dir.AppendASCII("api_test");
-    extensions::ChromeTestExtensionLoader loader(browser()->profile());
+    extensions::ChromeTestExtensionLoader loader(browser()->GetProfile());
     base::FilePath basedir = test_data_dir.AppendASCII("management");
     scoped_refptr<const extensions::Extension> extension =
         loader.LoadExtension(basedir.AppendASCII(name));
@@ -353,7 +354,7 @@ class ExtensionManagementApiTestSupervised
 
 IN_PROC_BROWSER_TEST_P(ExtensionManagementApiTestSupervised,
                        PRE_ParentPermissionGrantedForEnable) {
-  ASSERT_FALSE(browser()->profile()->IsChild());
+  ASSERT_FALSE(browser()->GetProfile()->IsChild());
 }
 
 // Tests launching the Parent Permission Dialog from the management api when the
@@ -361,7 +362,7 @@ IN_PROC_BROWSER_TEST_P(ExtensionManagementApiTestSupervised,
 IN_PROC_BROWSER_TEST_P(ExtensionManagementApiTestSupervised,
                        ParentPermissionGrantedForEnable) {
   base::HistogramTester histogram_tester;
-  ASSERT_TRUE(browser()->profile()->IsChild());
+  ASSERT_TRUE(browser()->GetProfile()->IsChild());
 
   set_next_reauth_status(GaiaAuthConsumer::ReAuthProofTokenStatus::kSuccess);
   set_next_dialog_action(NextDialogAction::kAccept);
@@ -396,7 +397,7 @@ IN_PROC_BROWSER_TEST_P(ExtensionManagementApiTestSupervised,
 
 IN_PROC_BROWSER_TEST_P(ExtensionManagementApiTestSupervised,
                        PRE_ParentPermissionNotGrantedForEnable) {
-  ASSERT_FALSE(browser()->profile()->IsChild());
+  ASSERT_FALSE(browser()->GetProfile()->IsChild());
 }
 
 // Tests that extensions are not enabled after the parent permission dialog is
@@ -404,7 +405,7 @@ IN_PROC_BROWSER_TEST_P(ExtensionManagementApiTestSupervised,
 IN_PROC_BROWSER_TEST_P(ExtensionManagementApiTestSupervised,
                        ParentPermissionNotGrantedForEnable) {
   base::HistogramTester histogram_tester;
-  ASSERT_TRUE(browser()->profile()->IsChild());
+  ASSERT_TRUE(browser()->GetProfile()->IsChild());
 
   set_next_dialog_action(NextDialogAction::kCancel);
 

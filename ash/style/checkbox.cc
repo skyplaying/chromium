@@ -10,6 +10,7 @@
 #include "ui/accessibility/ax_enums.mojom-shared.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/views/accessibility/view_accessibility.h"
@@ -29,7 +30,8 @@ Checkbox::Checkbox(int button_width,
                        std::move(callback),
                        label,
                        insets,
-                       image_label_spacing) {
+                       image_label_spacing,
+                       ClickBehavior::kToggle) {
   GetViewAccessibility().SetRole(ax::mojom::Role::kCheckBox);
 }
 
@@ -40,7 +42,12 @@ gfx::ImageSkia Checkbox::GetImage(ButtonState for_state) const {
 }
 
 const gfx::VectorIcon& Checkbox::GetVectorIcon() const {
-  return selected() ? views::kCheckboxActiveIcon : views::kCheckboxNormalIcon;
+  return selected() ? ::features::IsRoundedIconsEnabled()
+                          ? views::kCheckBoxFilledIcon
+                          : views::kCheckboxActiveOldIcon
+         : ::features::IsRoundedIconsEnabled()
+             ? views::kCheckBoxOutlineBlankIcon
+             : views::kCheckboxNormalOldIcon;
 }
 
 bool Checkbox::IsIconOnTheLeftSide() {

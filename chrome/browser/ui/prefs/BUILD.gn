@@ -43,12 +43,14 @@ source_set("impl") {
     "//chrome/app/resources:platform_locale_settings",
     "//chrome/browser:browser_process",
     "//chrome/browser:font_pref",
+    "//chrome/browser:renderer_preferences_util",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/ui/zoom",
     "//components/language/core/browser",
     "//components/live_caption:constants",
     "//components/pref_registry",
     "//components/proxy_config",
+    "//components/universal_optout",
   ]
 
   if (is_android) {

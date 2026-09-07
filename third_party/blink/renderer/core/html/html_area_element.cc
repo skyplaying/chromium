@@ -59,13 +59,13 @@ void HTMLAreaElement::ParseAttribute(
     const AttributeModificationParams& params) {
   const AtomicString& value = params.new_value;
   if (params.name == html_names::kShapeAttr) {
-    if (EqualIgnoringASCIICase(value, "default")) {
+    if (EqualIgnoringAsciiCase(value, "default")) {
       shape_ = kDefault;
-    } else if (EqualIgnoringASCIICase(value, "circle") ||
-               EqualIgnoringASCIICase(value, "circ")) {
+    } else if (EqualIgnoringAsciiCase(value, "circle") ||
+               EqualIgnoringAsciiCase(value, "circ")) {
       shape_ = kCircle;
-    } else if (EqualIgnoringASCIICase(value, "polygon") ||
-               EqualIgnoringASCIICase(value, "poly")) {
+    } else if (EqualIgnoringAsciiCase(value, "polygon") ||
+               EqualIgnoringAsciiCase(value, "poly")) {
       shape_ = kPoly;
     } else {
       // The missing (and implicitly invalid) value default for the
@@ -100,7 +100,7 @@ PhysicalRect HTMLAreaElement::ComputeAbsoluteRect(
 
   // FIXME: This doesn't work correctly with transforms.
   PhysicalOffset abs_pos = container_object->LocalToAbsolutePoint(
-      PhysicalOffset(), kIgnoreTransforms);
+      PhysicalOffset(), {MapCoordinatesMode::kIgnoreTransforms});
 
   const Path path = PathBuilder(GetPath(container_object))
                         .Translate(gfx::Vector2dF(abs_pos))
@@ -226,11 +226,13 @@ bool HTMLAreaElement::IsFocusableStyle(UpdateBehavior update_behavior) const {
 }
 
 void HTMLAreaElement::SetFocused(bool should_be_focused,
-                                 mojom::blink::FocusType focus_type) {
+                                 mojom::blink::FocusType focus_type,
+                                 BlurEventBehavior blur_event_behavior) {
   if (IsFocused() == should_be_focused)
     return;
 
-  HTMLAnchorElementBase::SetFocused(should_be_focused, focus_type);
+  HTMLAnchorElementBase::SetFocused(should_be_focused, focus_type,
+                                    blur_event_behavior);
 
   HTMLImageElement* image_element = ImageElement();
   if (!image_element)

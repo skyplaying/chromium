@@ -4,7 +4,6 @@
 
 #include <vector>
 
-#include "base/cfi_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/browser/sync/test/integration/apps_helper.h"
 #include "chrome/browser/sync/test/integration/fake_server_match_status_checker.h"
@@ -21,6 +20,7 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_utils.h"
 #include "extensions/common/constants.h"
+#include "extensions/common/extension_features.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -52,7 +52,9 @@ class FakeServerAppChecker : public fake_server::FakeServerMatchStatusChecker {
   // Depending on the platform some apps are auto-installed and synced, so they
   // are implicitly added to the expected set of ids.
   explicit FakeServerAppChecker(std::vector<std::string> expected_app_ids) {
-    expected_app_ids.push_back(extensions::kWebStoreAppId);
+    if (base::FeatureList::IsEnabled(extensions_features::kWebstoreHostedApp)) {
+      expected_app_ids.push_back(extensions::kWebStoreAppId);
+    }
 #if BUILDFLAG(IS_CHROMEOS)
     expected_app_ids.push_back(app_constants::kChromeAppId);
 #endif
@@ -146,15 +148,8 @@ IN_PROC_BROWSER_TEST_F(SingleClientExtensionAppsSyncTest,
   ASSERT_TRUE(FakeServerAppChecker({id0, id1}).Wait());
 }
 
-// TODO(crbug.com/480145614): Frequently flaky in Linux dbg, MSAN, and CFI bots.
-#if BUILDFLAG(IS_LINUX) && (defined(MEMORY_SANITIZER) || !defined(NDEBUG) || \
-                            BUILDFLAG(CFI_ICALL_CHECK))
-#define MAYBE_InstallSomePlatformApps DISABLED_InstallSomePlatformApps
-#else
-#define MAYBE_InstallSomePlatformApps InstallSomePlatformApps
-#endif
 IN_PROC_BROWSER_TEST_F(SingleClientExtensionAppsSyncTest,
-                       MAYBE_InstallSomePlatformApps) {
+                       InstallSomePlatformApps) {
   ASSERT_TRUE(SetupSync());
 
   const std::string id0 = InstallPlatformApp(GetProfile(0), 0);

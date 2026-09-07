@@ -4,10 +4,12 @@
 
 import '//bookmarks-side-panel.top-chrome/shared/sp_list_item_badge.js';
 import '//resources/cr_elements/cr_checkbox/cr_checkbox.js';
+import '//resources/cr_elements/cr_expand_button/cr_expand_button.js';
 import '//resources/cr_elements/cr_icon/cr_icon.js';
 import '//resources/cr_elements/cr_icon_button/cr_icon_button.js';
 import '//resources/cr_elements/cr_input/cr_input.js';
 import '//resources/cr_elements/cr_url_list_item/cr_url_list_item.js';
+import '//resources/cr_elements/icons.html.js';
 import './icons.html.js';
 
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
@@ -66,10 +68,15 @@ export class PowerBookmarkRowItemElement extends CrLitElement {
       shoppingCollectionFolderId: {type: String},
       trailingIconTooltip: {type: String},
       listItemSize: {type: String},
-      isSelected: {type: Boolean},
       selectedBookmarks: {type: Array},
       renamingId: {type: String},
       hasActiveDrag: {type: Boolean},
+      isExpandable: {type: Boolean},
+      expanded: {
+        type: Boolean,
+        notify: true,
+      },
+      webuiRoundedIconsEnabled_: {type: Boolean},
     };
   }
 
@@ -95,11 +102,14 @@ export class PowerBookmarkRowItemElement extends CrLitElement {
   accessor shoppingCollectionFolderId: string = '';
   accessor trailingIconTooltip: string = '';
   accessor listItemSize: CrUrlListItemSize = CrUrlListItemSize.COMPACT;
-  accessor isSelected: boolean = false;
   accessor selectedBookmarks: BookmarksTreeNode[] = [];
   accessor renamingId: string = '';
   accessor hasActiveDrag: boolean = false;
+  accessor isExpandable: boolean = false;
+  accessor expanded: boolean = false;
 
+  protected accessor webuiRoundedIconsEnabled_: boolean =
+      loadTimeData.getBoolean('webuiRoundedIconsEnabled');
   private bookmarksService_: PowerBookmarksService =
       PowerBookmarksService.getInstance();
 
@@ -130,7 +140,7 @@ export class PowerBookmarkRowItemElement extends CrLitElement {
   }
 
   protected isRenamingItem_(): boolean {
-    return this.bookmark.id === this.renamingId;
+    return !!this.renamingId && this.bookmark.id === this.renamingId;
   }
 
   protected isCheckboxChecked_(): boolean {
@@ -143,6 +153,14 @@ export class PowerBookmarkRowItemElement extends CrLitElement {
 
   protected showTrailingIcon_(): boolean {
     return !this.isRenamingItem_() && !this.hasCheckbox;
+  }
+
+  protected onClick_(event: MouseEvent) {
+    this.onRowClicked_(event);
+  }
+
+  protected onAuxclick_(event: MouseEvent) {
+    this.onRowClicked_(event);
   }
 
   protected onRowClicked_(event: MouseEvent) {
@@ -161,19 +179,19 @@ export class PowerBookmarkRowItemElement extends CrLitElement {
     this.fire('row-clicked', {bookmark: this.bookmark, event: event});
   }
 
-  protected onContextMenu_(event: MouseEvent) {
+  protected onContextmenu_(event: MouseEvent) {
     event.preventDefault();
     event.stopPropagation();
     this.fire('context-menu', {bookmark: this.bookmark, event: event});
   }
 
-  protected onTrailingIconClicked_(event: MouseEvent) {
+  protected onTrailingIconClick_(event: MouseEvent) {
     event.preventDefault();
     event.stopPropagation();
     this.fire('trailing-icon-clicked', {bookmark: this.bookmark, event: event});
   }
 
-  protected onCheckboxChange_(event: Event) {
+  protected onCheckboxCheckedChanged_(event: Event) {
     event.preventDefault();
     event.stopPropagation();
     this.fire('checkbox-change', {
@@ -182,7 +200,11 @@ export class PowerBookmarkRowItemElement extends CrLitElement {
     });
   }
 
-  protected onInputKeyDown_(event: KeyboardEvent) {
+  protected onExpandedChanged_(e: CustomEvent<{ value: boolean }>) {
+    this.expanded = e.detail.value;
+  }
+
+  protected onInputKeydown_(event: KeyboardEvent) {
     if (event.key === 'Enter') {
       event.stopPropagation();
       this.onInputChange_(event);

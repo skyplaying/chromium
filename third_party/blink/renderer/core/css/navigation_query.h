@@ -6,6 +6,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_NAVIGATION_QUERY_H_
 
 #include "third_party/blink/renderer/core/css/conditional_exp_node.h"
+#include "third_party/blink/renderer/core/route_matching/navigation_phase.h"
 #include "third_party/blink/renderer/core/route_matching/navigation_preposition.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/heap/member.h"
@@ -15,7 +16,7 @@
 namespace blink {
 
 class Document;
-class Route;
+class Element;
 class URLPattern;
 
 // <navigation-location>
@@ -23,45 +24,33 @@ class URLPattern;
 // https://drafts.csswg.org/css-navigation-1/#typedef-navigation-location
 class NavigationLocation : public GarbageCollected<NavigationLocation> {
  public:
-  explicit NavigationLocation(const AtomicString& navigation_name)
-      : string_(navigation_name) {}
-  NavigationLocation(URLPattern* url_pattern,
-                     const AtomicString& original_url_pattern_string)
-      : url_pattern_(url_pattern), string_(original_url_pattern_string) {}
+  enum Type {
+    kLocationName,
+    kUrlPattern,
+    kUrl,
+  };
 
-  void Trace(Visitor*) const;
+  NavigationLocation(Type type, const AtomicString& value)
+      : type_(type), value_(value) {}
 
-  URLPattern* GetURLPattern() const { return url_pattern_; }
+  void Trace(Visitor*) const {}
 
-  const AtomicString& OriginalURLPatternString() const {
-    if (url_pattern_) {
-      return string_;
-    }
-    return g_null_atom;
-  }
+  Type GetType() const { return type_; }
+  const AtomicString& GetValue() const { return value_; }
 
-  const AtomicString& GetRouteName() const {
-    if (url_pattern_) {
-      return g_null_atom;
-    }
-    return string_;
-  }
+  // Look for a URLPattern entry in the route map. Additionally, if this
+  // <navigation-location> is a URLPattern (and not a named location), an entry
+  // will be inserted if it's missing.
+  const URLPattern* FindOrCreateURLPattern(Document&) const;
 
-  // Look for a `Route` entry in the route map. Additionally, if this
-  // <route-location> is a URLPattern, an entry will be inserted if it's
-  // missing.
-  const Route* FindOrCreateRoute(Document&) const;
-
+  bool CheckSelectorMatch(
+      const Element&,
+      std::optional<NavigationPreposition> = std::nullopt) const;
   void SerializeTo(StringBuilder&) const;
 
  private:
-  Member<URLPattern> url_pattern_;
-
-  // Route name, or, if `url_pattern_` is set, the original URLPattern
-  // string. The reason for storing the original string is for
-  // serialization. The URLPattern API deliberately doesn't support
-  // serialization.
-  AtomicString string_;
+  Type type_;
+  AtomicString value_;
 };
 
 // <navigation-test>
@@ -98,6 +87,8 @@ class NavigationLocationTestExpression : public NavigationTestExpression {
   bool Matches(Document&) const override;
   void SerializeTo(StringBuilder&) const override;
 
+  static void SerializePrepositionTo(NavigationPreposition, StringBuilder&);
+
  private:
   Member<NavigationLocation> navigation_location_;
   NavigationPreposition preposition_;
@@ -111,13 +102,47 @@ struct DowncastTraits<NavigationLocationTestExpression> {
   }
 };
 
+// <navigation-location-between-test>
+//
+// https://drafts.csswg.org/css-navigation-1/#typedef-navigation-location-between-test
+class NavigationLocationBetweenTestExpression
+    : public NavigationTestExpression {
+ public:
+  NavigationLocationBetweenTestExpression(NavigationLocation& location1,
+                                          NavigationLocation& location2)
+      : navigation_location1_(&location1), navigation_location2_(location2) {}
+
+  void Trace(Visitor* visitor) const override;
+
+  bool Matches(Document&) const override;
+  void SerializeTo(StringBuilder&) const override;
+
+ private:
+  Member<NavigationLocation> navigation_location1_;
+  Member<NavigationLocation> navigation_location2_;
+};
+
+// <navigation-phase-test>
+//
+// https://drafts.csswg.org/css-navigation-1/#typedef-navigation-phase-test
+class NavigationPhaseTestExpression : public NavigationTestExpression {
+ public:
+  explicit NavigationPhaseTestExpression(NavigationPhase phase)
+      : phase_(phase) {}
+
+  bool Matches(Document&) const override;
+  void SerializeTo(StringBuilder&) const override;
+
+ private:
+  NavigationPhase phase_;
+};
+
 // <navigation-type-test>
 //
 // https://drafts.csswg.org/css-navigation-1/#typedef-navigation-type-test
 class NavigationTypeTestExpression : public NavigationTestExpression {
  public:
-  // TODO(crbug.com/436805487): Support "reload".
-  enum Type { kTraverse, kBack, kForward };
+  enum Type { kTraverse, kBack, kForward, kReload };
 
   explicit NavigationTypeTestExpression(Type type) : type_(type) {}
 
@@ -126,6 +151,14 @@ class NavigationTypeTestExpression : public NavigationTestExpression {
 
  private:
   Type type_;
+};
+
+class NavigationPreviewTestExpression : public NavigationTestExpression {
+ public:
+  NavigationPreviewTestExpression() = default;
+
+  bool Matches(Document&) const override;
+  void SerializeTo(StringBuilder&) const override;
 };
 
 class NavigationExpNode : public ConditionalExpNode {

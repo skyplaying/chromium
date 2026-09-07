@@ -4,6 +4,8 @@
 
 package org.chromium.chrome.browser.notifications.tips;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.content.ComponentCallbacks;
 import android.content.Context;
 import android.content.Intent;
@@ -29,32 +31,43 @@ import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.layouts.LayoutManager;
 import org.chromium.chrome.browser.lens.LensController;
 import org.chromium.chrome.browser.lens.LensEntryPoint;
 import org.chromium.chrome.browser.lens.LensIntentParams;
 import org.chromium.chrome.browser.lens.LensMetrics;
-import org.chromium.chrome.browser.notifications.scheduler.TipsNotificationsFeatureType;
 import org.chromium.chrome.browser.notifications.tips.TipsPromoProperties.FeatureTipPromoData;
 import org.chromium.chrome.browser.notifications.tips.TipsPromoProperties.ScreenType;
+import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.quick_delete.QuickDeleteController;
 import org.chromium.chrome.browser.safe_browsing.metrics.SettingsAccessPoint;
 import org.chromium.chrome.browser.safe_browsing.settings.SafeBrowsingSettingsFragment;
 import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
+import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
+import org.chromium.chrome.browser.tab.TabLaunchType;
+import org.chromium.chrome.browser.tab_ui.TabSwitcherUtils;
+import org.chromium.chrome.browser.tabmodel.ChromeTabCreator;
+import org.chromium.chrome.browser.tips.TipsNotificationsFeatureType;
 import org.chromium.chrome.browser.toolbar.settings.AddressBarSettingsFragment;
 import org.chromium.chrome.browser.toolbar.settings.AddressBarSettingsFragment.HighlightedOption;
+import org.chromium.chrome.browser.ui.signin.BottomSheetSigninAndHistorySyncCoordinator;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetContent;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.StateChangeReason;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetObserver;
-import org.chromium.components.browser_ui.bottomsheet.EmptyBottomSheetObserver;
+import org.chromium.components.embedder_support.util.UrlConstants;
+import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.ui.base.LocalizationUtils;
+import org.chromium.ui.base.PageTransition;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
+import org.chromium.ui.widget.ButtonCompat;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.util.List;
+import java.util.function.Supplier;
 
 /** Coordinator to manage the promo for the Tips Notifications feature. */
 @NullMarked
@@ -100,15 +113,19 @@ public class TipsPromoCoordinator {
 
     private final Context mContext;
     private final BottomSheetController mBottomSheetController;
-    private final QuickDeleteController mQuickDeleteController;
+    private final Supplier<QuickDeleteController> mQuickDeleteControllerCreator;
+    private final BottomSheetSigninAndHistorySyncCoordinator mSigninCoordinator;
+    private final ChromeTabCreator mRegularTabCreator;
     private final WindowAndroid mWindowAndroid;
     private final boolean mIsIncognito;
+    private final Supplier<LayoutManager> mLayoutManagerSupplier;
     private final TipsPromoSheetContent mSheetContent;
     private final PropertyModel mPropertyModel;
     private final PropertyModelChangeProcessor mChangeProcessor;
     private final ViewFlipper mViewFlipperView;
     private final View mContentView;
     private final @TipsNotificationsFeatureType int mFeatureType;
+    private final boolean mIsUserSignedIn;
     private LensController mLensController;
 
     /**
@@ -116,23 +133,34 @@ public class TipsPromoCoordinator {
      *
      * @param context The Android {@link Context}.
      * @param bottomSheetController The system {@link BottomSheetController}.
-     * @param quickDeleteController The controller to for the quick delete dialog.
+     * @param quickDeleteControllerCreator The creator for the quick delete controller.
+     * @param signinCoordinator The coordinator for the sign-in promo bottom sheet.
+     * @param regularTabCreator The {@link ChromeTabCreator} to open new tabs when necessary.
      * @param windowAndroid The current WindowAndroid.
      * @param isIncognito Whether the current context is incognito.
+     * @param profile The current profile.
+     * @param layoutManager The layout manager to use for navigation to other pages.
      * @param featureType The {@link TipsNotificationsFeatureType} to show.
      */
     public TipsPromoCoordinator(
             Context context,
             BottomSheetController bottomSheetController,
-            QuickDeleteController quickDeleteController,
+            Supplier<QuickDeleteController> quickDeleteControllerCreator,
+            BottomSheetSigninAndHistorySyncCoordinator signinCoordinator,
+            ChromeTabCreator regularTabCreator,
             WindowAndroid windowAndroid,
             boolean isIncognito,
+            Profile profile,
+            Supplier<LayoutManager> layoutManagerSupplier,
             @TipsNotificationsFeatureType int featureType) {
         mContext = context;
         mBottomSheetController = bottomSheetController;
-        mQuickDeleteController = quickDeleteController;
+        mQuickDeleteControllerCreator = quickDeleteControllerCreator;
+        mSigninCoordinator = signinCoordinator;
+        mRegularTabCreator = regularTabCreator;
         mWindowAndroid = windowAndroid;
         mIsIncognito = isIncognito;
+        mLayoutManagerSupplier = layoutManagerSupplier;
         mPropertyModel = TipsPromoProperties.createDefaultModel();
         mLensController = LensController.getInstance();
         mFeatureType = featureType;
@@ -148,15 +176,18 @@ public class TipsPromoCoordinator {
                 PropertyModelChangeProcessor.create(
                         mPropertyModel, mContentView, TipsPromoViewBinder::bind);
 
-        mViewFlipperView =
-                (ViewFlipper) mContentView.findViewById(R.id.tips_promo_bottom_sheet_view_flipper);
+        mViewFlipperView = mContentView.findViewById(R.id.tips_promo_bottom_sheet_view_flipper);
         mPropertyModel.addObserver(
-                (source, propertyKey) -> {
+                (_, propertyKey) -> {
                     if (TipsPromoProperties.CURRENT_SCREEN == propertyKey) {
                         mViewFlipperView.setDisplayedChild(
                                 mPropertyModel.get(TipsPromoProperties.CURRENT_SCREEN));
                     }
                 });
+
+        mIsUserSignedIn =
+                assumeNonNull(IdentityServicesProvider.get().getIdentityManager(profile))
+                        .hasPrimaryAccount();
 
         // Fire an event for the original setup.
         mComponentCallbacks.onConfigurationChanged(mContext.getResources().getConfiguration());
@@ -171,7 +202,8 @@ public class TipsPromoCoordinator {
 
     /** Shows the promo. The caller is responsible for all eligibility checks. */
     public void showBottomSheet() {
-        FeatureTipPromoData data = TipsUtils.getFeatureTipPromoDataForType(mContext, mFeatureType);
+        FeatureTipPromoData data =
+                TipsUtils.getFeatureTipPromoDataForType(mContext, mFeatureType, mIsUserSignedIn);
         mPropertyModel.set(TipsPromoProperties.FEATURE_TIP_PROMO_DATA, data);
         mPropertyModel.set(TipsPromoProperties.CURRENT_SCREEN, ScreenType.MAIN_SCREEN);
         setupButtonClickHandlers(mFeatureType);
@@ -187,14 +219,14 @@ public class TipsPromoCoordinator {
         // MAIN_SCREEN from the DETAIL_SCREEN as the only final destination.
         mPropertyModel.set(
                 TipsPromoProperties.BACK_BUTTON_CLICK_LISTENER,
-                (view) -> {
+                _ -> {
                     mPropertyModel.set(TipsPromoProperties.CURRENT_SCREEN, ScreenType.MAIN_SCREEN);
                     recordFeatureTipPromoEventType(
                             featureType, FeatureTipPromoEventType.DETAIL_PAGE_BACK_BUTTON);
                 });
         mPropertyModel.set(
                 TipsPromoProperties.DETAILS_BUTTON_CLICK_LISTENER,
-                (view) -> {
+                _ -> {
                     mPropertyModel.set(
                             TipsPromoProperties.CURRENT_SCREEN, ScreenType.DETAIL_SCREEN);
                     recordFeatureTipPromoEventType(
@@ -202,7 +234,7 @@ public class TipsPromoCoordinator {
                 });
         mPropertyModel.set(
                 TipsPromoProperties.SETTINGS_BUTTON_CLICK_LISTENER,
-                (view) -> {
+                _ -> {
                     mBottomSheetController.hideContent(mSheetContent, /* animate= */ true);
                     performFeatureAction(featureType);
                     recordFeatureTipPromoEventType(featureType, FeatureTipPromoEventType.ACCEPTED);
@@ -210,8 +242,7 @@ public class TipsPromoCoordinator {
     }
 
     private void setupDetailPageSteps(List<String> steps) {
-        LinearLayout stepsContainer =
-                (LinearLayout) mContentView.findViewById(R.id.steps_container);
+        LinearLayout stepsContainer = mContentView.findViewById(R.id.steps_container);
         stepsContainer.removeAllViews();
         for (int i = 0; i < steps.size(); i++) {
             View stepView =
@@ -222,9 +253,9 @@ public class TipsPromoCoordinator {
                                     /* attachToRoot= */ false);
             stepView.setBackgroundResource(TipsUtils.getDetailStepBackground(i, steps.size()));
             // TODO(crbug.com/454724965): Translate the step number set for all languages.
-            TextView stepNumber = (TextView) stepView.findViewById(R.id.step_number);
+            TextView stepNumber = stepView.findViewById(R.id.step_number);
             stepNumber.setText(String.valueOf(i + 1));
-            TextView stepContent = (TextView) stepView.findViewById(R.id.step_content);
+            TextView stepContent = stepView.findViewById(R.id.step_content);
             stepContent.setText(steps.get(i));
             stepsContainer.addView(stepView);
         }
@@ -249,7 +280,7 @@ public class TipsPromoCoordinator {
                 mContext.startActivity(intent);
                 break;
             case TipsNotificationsFeatureType.QUICK_DELETE:
-                mQuickDeleteController.showDialog();
+                mQuickDeleteControllerCreator.get().showDialog();
                 break;
             case TipsNotificationsFeatureType.GOOGLE_LENS:
                 LensMetrics.recordClicked(LensEntryPoint.TIPS_NOTIFICATIONS);
@@ -269,6 +300,29 @@ public class TipsPromoCoordinator {
                 break;
             case TipsNotificationsFeatureType.PASSWORD_AUTOFILL:
                 // No-op since there is no page to travel to.
+                break;
+            case TipsNotificationsFeatureType.SIGNIN:
+                // The user must be signed out in order to see this flow.
+                if (!mIsUserSignedIn) {
+                    mSigninCoordinator.startSigninFlow(
+                            TipsUtils.getAccountPickerBottomSheetConfig(mContext));
+                }
+                break;
+            case TipsNotificationsFeatureType.CREATE_TAB_GROUPS:
+                TabSwitcherUtils.navigateToTabSwitcher(
+                        mLayoutManagerSupplier.get(),
+                        /* animate= */ true,
+                        /* onNavigationFinished= */ null);
+                break;
+            case TipsNotificationsFeatureType.CUSTOMIZE_MVT:
+                // No-op since there is no page to travel to.
+                break;
+            case TipsNotificationsFeatureType.RECENT_TABS:
+                LoadUrlParams params =
+                        new LoadUrlParams(
+                                UrlConstants.RECENT_TABS_URL, PageTransition.AUTO_BOOKMARK);
+                mRegularTabCreator.createNewTab(
+                        params, TabLaunchType.FROM_CHROME_UI, /* parent= */ null);
                 break;
             default:
                 assert false : "Invalid feature type: " + featureType;
@@ -298,6 +352,36 @@ public class TipsPromoCoordinator {
             case TipsNotificationsFeatureType.PASSWORD_AUTOFILL:
                 logoView.setImageResource(logoViewRes);
                 break;
+            case TipsNotificationsFeatureType.SIGNIN:
+                // If the user is already signed in, alter the main page.
+                if (mIsUserSignedIn) {
+                    ButtonCompat settingsButton =
+                            mContentView.findViewById(R.id.tips_promo_details_button);
+                    settingsButton.setVisibility(View.GONE);
+
+                    TextView descriptionText =
+                            mContentView.findViewById(R.id.main_page_description_text);
+                    descriptionText.setVisibility(View.GONE);
+                }
+
+                logoView.setImageResource(logoViewRes);
+                break;
+            case TipsNotificationsFeatureType.CREATE_TAB_GROUPS:
+                logoView.setImageResource(logoViewRes);
+                break;
+            case TipsNotificationsFeatureType.CUSTOMIZE_MVT:
+                logoView.setImageResource(logoViewRes);
+                break;
+            case TipsNotificationsFeatureType.RECENT_TABS:
+                // Due to constraints with the image, provide top padding to center it.
+                int topPadding =
+                        mContext.getResources()
+                                .getDimensionPixelSize(
+                                        R.dimen.tips_notifications_bottom_sheet_vertical_margin);
+                logoView.setPadding(0, topPadding, 0, 0);
+
+                logoView.setImageResource(logoViewRes);
+                break;
             default:
                 assert false : "Invalid feature type: " + featureType;
         }
@@ -315,6 +399,14 @@ public class TipsPromoCoordinator {
                 return ".BottomOmnibox";
             case TipsNotificationsFeatureType.PASSWORD_AUTOFILL:
                 return ".PasswordAutofill";
+            case TipsNotificationsFeatureType.SIGNIN:
+                return ".Signin";
+            case TipsNotificationsFeatureType.CREATE_TAB_GROUPS:
+                return ".CreateTabGroups";
+            case TipsNotificationsFeatureType.CUSTOMIZE_MVT:
+                return ".CustomizeMVT";
+            case TipsNotificationsFeatureType.RECENT_TABS:
+                return ".RecentTabs";
             default:
                 assert false : "Invalid feature type: " + featureType;
                 return "";
@@ -356,16 +448,14 @@ public class TipsPromoCoordinator {
             mScrollView = mContentView.findViewById(R.id.main_page_scrollview);
 
             mBottomSheetOpenedObserver =
-                    new EmptyBottomSheetObserver() {
+                    new BottomSheetObserver() {
                         @Override
                         public void onSheetOpened(@StateChangeReason int reason) {
-                            super.onSheetOpened(reason);
                             mBackPressStateChangedSupplier.set(true);
                         }
 
                         @Override
                         public void onSheetClosed(@StateChangeReason int reason) {
-                            super.onSheetClosed(reason);
                             mBackPressStateChangedSupplier.set(false);
                             mBottomSheetController.removeObserver(mBottomSheetOpenedObserver);
 

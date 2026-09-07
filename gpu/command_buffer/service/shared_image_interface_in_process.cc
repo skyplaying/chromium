@@ -64,7 +64,7 @@ struct SharedImageInterfaceInProcess::SetUpOnGpuParams {
 
 scoped_refptr<SharedImageInterfaceInProcess>
 SharedImageInterfaceInProcess::Create(
-    SingleTaskSequence* task_sequence,
+    std::unique_ptr<SingleTaskSequence> task_sequence,
     const GpuPreferences& gpu_preferences,
     const GpuDriverBugWorkarounds& gpu_workarounds,
     const GpuFeatureInfo& gpu_feature_info,
@@ -75,7 +75,8 @@ SharedImageInterfaceInProcess::Create(
     bool always_create_native_gmb_handles /*=false*/) {
   // ensure Initialize() is called before pointer returned to caller
   auto sii = base::WrapRefCounted(new SharedImageInterfaceInProcess{
-      task_sequence, shared_image_manager, std::move(gpu_task_runner)});
+      std::move(task_sequence), shared_image_manager,
+      std::move(gpu_task_runner)});
   sii->Initialize(std::make_unique<SetUpOnGpuParams>(
       gpu_preferences, gpu_workarounds, gpu_feature_info, context_state,
       shared_image_manager, is_for_display_compositor));
@@ -92,16 +93,18 @@ SharedImageInterfaceInProcess::Create(
 }
 
 SharedImageInterfaceInProcess::SharedImageInterfaceInProcess(
-    SingleTaskSequence* task_sequence,
+    std::unique_ptr<SingleTaskSequence> task_sequence,
     SharedImageManager* shared_image_manager,
     scoped_refptr<base::SingleThreadTaskRunner> gpu_task_runner)
     : SharedImageInterfaceInProcessBase(
           CommandBufferNamespace::IN_PROCESS,
           DisplayCompositorMemoryAndTaskControllerOnGpu::NextCommandBufferId(),
           /*verify_creation_sync_token=*/false),
-      task_sequence_(task_sequence),
+      task_sequence_(std::move(task_sequence)),
       gpu_task_runner_(std::move(gpu_task_runner)),
-      shared_image_manager_(shared_image_manager) {}
+      shared_image_manager_(shared_image_manager) {
+  CHECK(task_sequence_);
+}
 
 void SharedImageInterfaceInProcess::Initialize(
     std::unique_ptr<SetUpOnGpuParams> params) {
@@ -183,7 +186,7 @@ SharedImageInterfaceInProcess::CreateSharedImage(
     SurfaceHandle surface_handle,
     gfx::BufferUsage buffer_usage,
     std::optional<SharedImagePoolId> pool_id) {
-  DCHECK(gpu::IsValidClientUsage(si_info.meta.usage));
+  DCHECK(gpu::IsValidClientUsage(si_info.usage));
 
   if (always_create_native_gmb_handles_) {
 #if BUILDFLAG(IS_ANDROID)
@@ -203,7 +206,7 @@ SharedImageInterfaceInProcess::CreateSharedImage(
       return nullptr;
     }
     auto gmb_handle = shared_image_factory_->CreateNativeGpuMemoryBufferHandle(
-        si_info.meta.size, si_info.meta.format, buffer_usage);
+        si_info.size, si_info.format, buffer_usage);
     if (gmb_handle.is_null()) {
       return nullptr;
     }
@@ -256,7 +259,9 @@ bool SharedImageInterfaceInProcess::MakeContextCurrentOnGpuThread(
 
 void SharedImageInterfaceInProcess::MarkContextLostOnGpuThread() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(gpu_sequence_checker_);
-  context_state_->MarkContextLost();
+  if (context_state_) {
+    context_state_->MarkContextLost();
+  }
 }
 
 void SharedImageInterfaceInProcess::ScheduleGpuTask(

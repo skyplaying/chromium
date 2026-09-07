@@ -37,6 +37,10 @@ IN_PROC_BROWSER_TEST_F(PrintPreviewTest, DuplexSettings) {
   RunTest("chromeos/print_preview/duplex_settings_test.js", "mocha.run()");
 }
 
+IN_PROC_BROWSER_TEST_F(PrintPreviewTest, InputMixin) {
+  RunTest("chromeos/print_preview/input_mixin_test.js", "mocha.run()");
+}
+
 IN_PROC_BROWSER_TEST_F(PrintPreviewTest, InvalidSettings) {
   RunTest("chromeos/print_preview/invalid_settings_test.js", "mocha.run()");
 }
@@ -732,13 +736,13 @@ IN_PROC_BROWSER_TEST_F(PrintPreviewDestinationDialogCrosTest,
 }
 
 IN_PROC_BROWSER_TEST_F(PrintPreviewDestinationDialogCrosTest,
-                       DiaglogShowsThrobberWhileSearching) {
-  RunTestCase("DiaglogShowsThrobberWhileSearching");
+                       DialogShowsThrobberWhileSearching) {
+  RunTestCase("DialogShowsThrobberWhileSearching");
 }
 
 IN_PROC_BROWSER_TEST_F(PrintPreviewDestinationDialogCrosTest,
-                       DiaglogShowsDestinationsWhileSearching) {
-  RunTestCase("DiaglogShowsDestinationsWhileSearching");
+                       DialogShowsDestinationsWhileSearching) {
+  RunTestCase("DialogShowsDestinationsWhileSearching");
 }
 
 IN_PROC_BROWSER_TEST_F(PrintPreviewDestinationDialogCrosTest,

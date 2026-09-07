@@ -15,6 +15,7 @@
 #include "gpu/command_buffer/service/service_utils.h"
 #include "gpu/command_buffer/service/shared_image/copy_image_plane.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_representation.h"
+#include "gpu/config/gpu_finch_features.h"
 #include "third_party/skia/include/core/SkImage.h"
 #include "third_party/skia/include/gpu/ganesh/GrBackendSemaphore.h"
 #include "third_party/skia/include/gpu/ganesh/SkImageGanesh.h"
@@ -31,17 +32,13 @@
 #endif
 
 #if BUILDFLAG(ENABLE_VULKAN)
-#include "components/viz/common/gpu/vulkan_in_process_context_provider.h"
+#include "gpu/command_buffer/service/vulkan_in_process_context_provider.h"
 #include "gpu/vulkan/init/vulkan_factory.h"
 #include "gpu/vulkan/vulkan_implementation.h"
 #endif
 
 #if BUILDFLAG(SKIA_USE_DAWN)
 #include "gpu/command_buffer/service/dawn_context_provider.h"
-#endif
-
-#if BUILDFLAG(SKIA_USE_METAL)
-#include "gpu/command_buffer/service/metal_context_provider.h"
 #endif
 
 #if BUILDFLAG(SKIA_USE_DAWN) || BUILDFLAG(USE_DAWN)
@@ -133,6 +130,8 @@ SharedImageTestBase::~SharedImageTestBase() {
   if (context_state_) {
     // |context_state_| must be destroyed while current.
     context_state_->MakeCurrent(gl_surface_.get(), /*needs_gl=*/true);
+    // Clear the thread-local pointer when the test context is destroyed.
+    SharedContextState::ClearForCurrentThread();
   }
 }
 
@@ -168,6 +167,7 @@ void SharedImageTestBase::InitializeContext(GrContextType context_type) {
 
   if (context_type == GrContextType::kGraphiteDawn) {
 #if BUILDFLAG(SKIA_USE_DAWN)
+    features::InitSkiaGraphiteDefaultParamsForTesting();
     dawn_context_provider_ = DawnContextProvider::CreateWithBackend(
         GetDawnBackendType(), DawnForceFallbackAdapter(), gpu_preferences_,
         GpuFeatureInfo());
@@ -175,20 +175,13 @@ void SharedImageTestBase::InitializeContext(GrContextType context_type) {
 #else
     FAIL() << "Graphite-Dawn not available";
 #endif  // BUILDFLAG(SKIA_USE_DAWN)
-  } else if (context_type == GrContextType::kGraphiteMetal) {
-#if BUILDFLAG(SKIA_USE_METAL)
-    metal_context_provider_ = viz::MetalContextProvider::Create();
-    ASSERT_TRUE(metal_context_provider_);
-#else
-    FAIL() << "Graphite-Metal not available";
-#endif  // BUILDFLAG(SKIA_USE_METAL)
   } else if (context_type == GrContextType::kVulkan) {
 #if BUILDFLAG(ENABLE_VULKAN)
     vulkan_implementation_ = gpu::CreateVulkanImplementation();
     ASSERT_TRUE(vulkan_implementation_);
     ASSERT_TRUE(vulkan_implementation_->InitializeVulkanInstance());
-    vulkan_context_provider_ = viz::VulkanInProcessContextProvider::Create(
-        vulkan_implementation_.get());
+    vulkan_context_provider_ =
+        VulkanInProcessContextProvider::Create(vulkan_implementation_.get());
     ASSERT_TRUE(vulkan_context_provider_);
 #else
     FAIL() << "Vulkan not available";
@@ -217,21 +210,23 @@ void SharedImageTestBase::InitializeContext(GrContextType context_type) {
 #endif  // BUILDFLAG(ENABLE_VULKAN)
 #if BUILDFLAG(SKIA_USE_DAWN)
           ,
-      /*metal_context_provider=*/nullptr, dawn_context_provider_.get()
-#elif BUILDFLAG(SKIA_USE_METAL)
+      dawn_context_provider_.get()
+#else
       ,
-      metal_context_provider_.get()
+      /*dawn_context_provider=*/nullptr
 #endif  // BUILDFLAG(SKIA_USE_DAWN)
   );
 
   bool initialize_gl = context_state_->InitializeGL(
-      gpu_preferences_, base::MakeRefCounted<gles2::FeatureInfo>(
-                            gpu_workarounds_, GpuFeatureInfo()));
+      gpu_preferences_, gpu_workarounds_, GpuFeatureInfo());
   ASSERT_TRUE(initialize_gl);
 
   bool initialize_skia =
       context_state_->InitializeSkia(gpu_preferences_, gpu_workarounds_);
   ASSERT_TRUE(initialize_skia);
+  // Register as the active SharedContextState on the test thread so fallback
+  // copy strategies and representations can access it.
+  SharedContextState::SetForCurrentThread(context_state_.get());
 }
 
 void SharedImageTestBase::VerifyPixelsWithReadback(

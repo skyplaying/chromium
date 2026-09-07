@@ -329,18 +329,25 @@ export class SettingsPerDeviceKeyboardRemapKeysElement extends
         readOnly: true,
       },
 
-      areF11andF12KeyShortcutsEnabled: {
-        type: Boolean,
-        value() {
-          return loadTimeData.getBoolean('enableF11AndF12KeyShortcuts');
-        },
-        readOnly: true,
-      },
-
       keyboardPolicies: {
         type: Object,
       },
     };
+  }
+
+  constructor() {
+    super();
+    this.defaultRemappings = {
+        [ModifierKey.kMeta]: ModifierKey.kMeta,
+        [ModifierKey.kControl]: ModifierKey.kControl,
+        [ModifierKey.kAlt]: ModifierKey.kAlt,
+        [ModifierKey.kEscape]: ModifierKey.kEscape,
+        [ModifierKey.kBackspace]: ModifierKey.kBackspace,
+        [ModifierKey.kAssistant]: ModifierKey.kAssistant,
+        [ModifierKey.kCapsLock]: ModifierKey.kCapsLock,
+        [ModifierKey.kQuickInsert]: ModifierKey.kQuickInsert,
+        [ModifierKey.kFunction]: ModifierKey.kFunction,
+      };
   }
 
   static get observers(): string[] {
@@ -371,48 +378,37 @@ export class SettingsPerDeviceKeyboardRemapKeysElement extends
     return ModifierKey;
   }
 
-  keyboard: Keyboard;
-  protected keyboardPolicies: KeyboardPolicies;
-  isAltClickAndSixPackCustomizationEnabled: boolean;
-  areF11andF12KeyShortcutsEnabled: boolean;
-  private keyboards: Keyboard[];
-  protected keyboardId: number;
-  protected defaultRemappings: {[key: number]: ModifierKey} = {
-    [ModifierKey.kMeta]: ModifierKey.kMeta,
-    [ModifierKey.kControl]: ModifierKey.kControl,
-    [ModifierKey.kAlt]: ModifierKey.kAlt,
-    [ModifierKey.kEscape]: ModifierKey.kEscape,
-    [ModifierKey.kBackspace]: ModifierKey.kBackspace,
-    [ModifierKey.kAssistant]: ModifierKey.kAssistant,
-    [ModifierKey.kCapsLock]: ModifierKey.kCapsLock,
-    [ModifierKey.kQuickInsert]: ModifierKey.kQuickInsert,
-    [ModifierKey.kFunction]: ModifierKey.kFunction,
-  };
+  declare keyboard: Keyboard;
+  declare protected keyboardPolicies: KeyboardPolicies;
+  declare isAltClickAndSixPackCustomizationEnabled: boolean;
+  declare private keyboards: Keyboard[];
+  declare protected keyboardId: number;
+  declare protected defaultRemappings: {[key: number]: ModifierKey};
   private inputDeviceSettingsProvider: InputDeviceSettingsProviderInterface =
       getInputDeviceSettingsProvider();
-  private fakeAltPref: chrome.settingsPrivate.PrefObject;
-  private fakeAssistantPref: chrome.settingsPrivate.PrefObject;
-  private fakeBackspacePref: chrome.settingsPrivate.PrefObject;
-  private fakeCtrlPref: chrome.settingsPrivate.PrefObject;
-  private fakeCapsLockPref: chrome.settingsPrivate.PrefObject;
-  private fakeEscPref: chrome.settingsPrivate.PrefObject;
-  private fakeQuickInsertPref: chrome.settingsPrivate.PrefObject;
-  private fakeFunctionPref: chrome.settingsPrivate.PrefObject;
-  private fakeMetaPref: chrome.settingsPrivate.PrefObject;
-  private insertPref: chrome.settingsPrivate.PrefObject;
-  private pageUpPref: chrome.settingsPrivate.PrefObject;
-  private pageDownPref: chrome.settingsPrivate.PrefObject;
-  private endPref: chrome.settingsPrivate.PrefObject;
-  private deletePref: chrome.settingsPrivate.PrefObject;
-  private homePref: chrome.settingsPrivate.PrefObject;
-  private f11KeyPref: chrome.settingsPrivate.PrefObject;
-  private f12KeyPref: chrome.settingsPrivate.PrefObject;
-  private hasAssistantKey: boolean;
-  private hasCapsLockKey: boolean;
-  private hasQuickInsertKey: boolean;
-  private hasFunctionKey: boolean;
-  private metaKeyLabel: string;
-  private isInitialized: boolean;
+  declare private fakeAltPref: chrome.settingsPrivate.PrefObject;
+  declare private fakeAssistantPref: chrome.settingsPrivate.PrefObject;
+  declare private fakeBackspacePref: chrome.settingsPrivate.PrefObject;
+  declare private fakeCtrlPref: chrome.settingsPrivate.PrefObject;
+  declare private fakeCapsLockPref: chrome.settingsPrivate.PrefObject;
+  declare private fakeEscPref: chrome.settingsPrivate.PrefObject;
+  declare private fakeQuickInsertPref: chrome.settingsPrivate.PrefObject;
+  declare private fakeFunctionPref: chrome.settingsPrivate.PrefObject;
+  declare private fakeMetaPref: chrome.settingsPrivate.PrefObject;
+  declare private insertPref: chrome.settingsPrivate.PrefObject;
+  declare private pageUpPref: chrome.settingsPrivate.PrefObject;
+  declare private pageDownPref: chrome.settingsPrivate.PrefObject;
+  declare private endPref: chrome.settingsPrivate.PrefObject;
+  declare private deletePref: chrome.settingsPrivate.PrefObject;
+  declare private homePref: chrome.settingsPrivate.PrefObject;
+  declare private f11KeyPref: chrome.settingsPrivate.PrefObject;
+  declare private f12KeyPref: chrome.settingsPrivate.PrefObject;
+  declare private hasAssistantKey: boolean;
+  declare private hasCapsLockKey: boolean;
+  declare private hasQuickInsertKey: boolean;
+  declare private hasFunctionKey: boolean;
+  declare private metaKeyLabel: string;
+  declare private isInitialized: boolean;
 
   override currentRouteChanged(route: Route): void {
     // Does not apply to this page.
@@ -553,9 +549,7 @@ export class SettingsPerDeviceKeyboardRemapKeysElement extends
     this.set('fakeCapsLockPref.value', ModifierKey.kCapsLock);
     this.set('fakeEscPref.value', ModifierKey.kEscape);
     this.set('fakeMetaPref.value', ModifierKey.kMeta);
-    if (loadTimeData.getBoolean('enableModifierSplit')) {
-      this.set('fakeQuickInsertPref.value', ModifierKey.kQuickInsert);
-    }
+    this.set('fakeQuickInsertPref.value', ModifierKey.kQuickInsert);
     if (this.hasFunctionKey) {
       this.set('fakeFunctionPref.value', ModifierKey.kFunction);
     }
@@ -670,11 +664,9 @@ export class SettingsPerDeviceKeyboardRemapKeysElement extends
       updatedRemappings[ModifierKey.kMeta] = this.fakeMetaPref.value;
     }
 
-    if (loadTimeData.getBoolean('enableModifierSplit')) {
-      if (ModifierKey.kQuickInsert !== this.fakeQuickInsertPref.value) {
-        updatedRemappings[ModifierKey.kQuickInsert] =
-            this.fakeQuickInsertPref.value;
-      }
+    if (ModifierKey.kQuickInsert !== this.fakeQuickInsertPref.value) {
+      updatedRemappings[ModifierKey.kQuickInsert] =
+          this.fakeQuickInsertPref.value;
     }
 
     if (this.hasFunctionKey) {
@@ -765,10 +757,8 @@ export class SettingsPerDeviceKeyboardRemapKeysElement extends
   }
 
   protected shouldShowFkeys(): boolean {
-    return this.areF11andF12KeyShortcutsEnabled &&
-        (this.keyboard?.settings?.f11 != null &&
-         this.keyboard?.settings?.f12 != null) &&
-        !this.hasFunctionKey;
+    return this.keyboard?.settings?.f11 != null &&
+        this.keyboard?.settings?.f12 != null && !this.hasFunctionKey;
   }
 
   private getShortcutRowLabel(name: string): string {

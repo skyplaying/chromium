@@ -10,7 +10,6 @@
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "components/tabs/public/tab_interface.h"
 #include "extensions/browser/extension_api_frame_id_map.h"
 #include "extensions/browser/view_type_utils.h"
@@ -26,6 +25,7 @@
 #else
 #include "chrome/browser/ui/browser_tab_strip_tracker.h"
 #include "chrome/browser/ui/browser_tab_strip_tracker_delegate.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #endif
 
@@ -115,9 +115,12 @@ class WebNavigationEventRouter::TabHelper : public TabModelListObserver,
   // Returns true if we should track tabs in this model (window).
   bool ShouldTrackModel(TabModel* model) const {
     // Only track tabs in the profile we're observing. Only observe standard
-    // tab models, which should always have tabs with WebContents.
+    // tab models, which should always have tabs with WebContents. Ignore empty
+    // regular tab models for ephemeral or incognito CCTs as they will never
+    // navigate other than loading about:blank.
     return profile_->IsSameOrParent(model->GetProfile()) &&
-           model->GetTabModelType() == TabModel::TabModelType::kStandard;
+           model->GetTabModelType() == TabModel::TabModelType::kStandard &&
+           !model->IsEmptyRegularModelForEphemeralOrIncognitoCct();
   }
 
   raw_ptr<WebNavigationEventRouter> router_;

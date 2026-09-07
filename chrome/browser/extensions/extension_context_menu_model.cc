@@ -18,6 +18,7 @@
 #include "chrome/browser/extensions/context_menu_matcher.h"
 #include "chrome/browser/extensions/extension_management.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
+#include "chrome/browser/extensions/extension_ui_util.h"
 #include "chrome/browser/extensions/extension_uninstall_dialog.h"
 #include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/extensions/menu_manager.h"
@@ -55,8 +56,8 @@
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_features.h"
 #include "extensions/common/extension_usage.h"
+#include "extensions/common/manifest_handlers/manifest_url_handlers.h"
 #include "extensions/common/manifest_handlers/options_page_info.h"
-#include "extensions/common/manifest_url_handlers.h"
 #include "extensions/common/permissions/api_permission.h"
 #include "extensions/common/permissions/permissions_data.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
@@ -65,18 +66,25 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/models/menu_separator_types.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/ui_base_features.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/color/color_id.h"
 
-#if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/extensions/api/side_panel/side_panel_service.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/extensions/extension_side_panel_utils.h"
-#include "chrome/browser/ui/extensions/extensions_container.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry_id.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry_key.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_ui.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry_id.h"   // nogncheck
+#include "chrome/browser/ui/side_panel/side_panel_entry_key.h"  // nogncheck
+#include "chrome/browser/ui/side_panel/side_panel_ui.h"         // nogncheck
 #include "chrome/common/extensions/api/side_panel.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/extensions/extensions_container.h"
+#include "chrome/browser/ui/interaction/browser_elements.h"
+#include "ui/base/interaction/element_identifier.h"
+#include "ui/base/interaction/element_tracker.h"
 #endif
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
@@ -121,17 +129,25 @@ bool IsExtensionForcePinned(const Extension& extension, Profile* profile) {
 // Returns true if the given |extension| is allowed to be inspected based on
 // the Developer Tools Availability in the policy.
 bool IsExtensionInspectionAllowed(const Extension& extension,
-                                  Profile* profile,
-                                  content::WebContents* web_contents) {
+                                  Profile* profile) {
   policy::DeveloperToolsPolicyChecker* checker =
       policy::DeveloperToolsPolicyCheckerFactory::GetForBrowserContext(profile);
   if (checker) {
-    if (auto url_check =
-            checker->CheckDevToolsAvailabilityForUrl(extension.url())) {
-      return *url_check;
+    auto url_availability =
+        checker->GetDevToolsAvailabilityForUrl(extension.url());
+    switch (url_availability) {
+      case policy::DeveloperToolsPolicyChecker::DevToolsAvailability::kAllowed:
+        return true;
+      case policy::DeveloperToolsPolicyChecker::DevToolsAvailability::
+          kDisallowed:
+        return false;
+      case policy::DeveloperToolsPolicyChecker::DevToolsAvailability::kNotSet:
+        // The URL is not covered by the URL-based policies, so we fall back to
+        // the general enum-based policy.
+        break;
     }
   }
-  using Availability = policy::DeveloperToolsPolicyHandler::Availability;
+  using Availability = policy::DeveloperToolsAvailability;
   Availability availability =
       policy::DeveloperToolsPolicyHandler::GetEffectiveAvailability(profile);
 
@@ -218,6 +234,8 @@ ExtensionContextMenuModel::ContextMenuAction CommandIdToContextMenuAction(
       return ContextMenuAction::kViewWebPermissions;
     case ExtensionContextMenuModel::POLICY_INSTALLED:
       return ContextMenuAction::kPolicyInstalled;
+    case ExtensionContextMenuModel::RATE_EXTENSION:
+      return ContextMenuAction::kRateExtension;
     default:
       break;
   }
@@ -387,6 +405,10 @@ bool ExtensionContextMenuModel::IsCommandIdChecked(int command_id) const {
       command_id == PAGE_ACCESS_RUN_ON_SITE ||
       command_id == PAGE_ACCESS_RUN_ON_ALL_SITES) {
     auto* permissions = PermissionsManager::Get(profile_);
+    if (extension->permissions_data()->IsRestrictedUrl(origin_.GetURL(),
+                                                       nullptr)) {
+      return false;
+    }
     PermissionsManager::UserSiteAccess current_access =
         permissions->GetUserSiteAccess(*extension, origin_.GetURL());
     return current_access == CommandIdToSiteAccess(command_id);
@@ -433,7 +455,7 @@ bool ExtensionContextMenuModel::IsCommandIdEnabled(int command_id) const {
       return web_contents && extension_action_ &&
              extension_action_->HasPopup(
                  sessions::SessionTabHelper::IdForTab(web_contents).id()) &&
-             IsExtensionInspectionAllowed(*extension, profile_, web_contents);
+             IsExtensionInspectionAllowed(*extension, profile_);
     }
     case UNINSTALL:
       // Uninstall is always enabled since it will only be visible when the
@@ -442,6 +464,10 @@ bool ExtensionContextMenuModel::IsCommandIdEnabled(int command_id) const {
     case TOGGLE_SIDE_PANEL_VISIBILITY:
       // This option is always enabled since it will only be visible when the
       // extension provides a side panel.
+      return true;
+    case RATE_EXTENSION:
+      // Rate extension is always enabled since it will only be visible if the
+      // eligibility checks for rating are met.
       return true;
     case POLICY_INSTALLED:
       // This option is always disabled since user cannot remove a policy
@@ -520,6 +546,19 @@ void ExtensionContextMenuModel::ExecuteCommand(int command_id,
       RecordUkmForExtension(extension->url(),
                             visible ? ExtensionUsageAction::kPinned
                                     : ExtensionUsageAction::kUnpinned);
+#if !BUILDFLAG(IS_ANDROID)
+      if (visible) {
+        ui::ElementContext context =
+            BrowserElements::From(browser_)->GetContext();
+        ui::TrackedElement* const browser_element =
+            ui::ElementTracker::GetElementTracker()->GetUniqueElement(
+                kBrowserViewElementId, context);
+        if (browser_element) {
+          ui::ElementTracker::GetFrameworkDelegate()->NotifyCustomEvent(
+              browser_element, kExtensionsMenuPinExtensionsEventId);
+        }
+      }
+#endif
       break;
     }
     case UNINSTALL: {
@@ -528,7 +567,6 @@ void ExtensionContextMenuModel::ExecuteCommand(int command_id,
       break;
     }
     case TOGGLE_SIDE_PANEL_VISIBILITY: {
-#if !BUILDFLAG(IS_ANDROID)
       // Do nothing if the web contents have navigated to a different origin.
       auto* web_contents = GetActiveWebContents();
       if (!web_contents ||
@@ -537,7 +575,11 @@ void ExtensionContextMenuModel::ExecuteCommand(int command_id,
       }
 
       SidePanelService* const side_panel_service = GetSidePanelService();
-      CHECK(side_panel_service);
+      // side_panel_service can be nullptr in unit tests and is unsupported in
+      // system/guest profiles.
+      if (!side_panel_service) {
+        return;
+      }
 
       // The state of the tab could have changed since we opened the context
       // menu. This check ensures that the extension has a valid side panel it
@@ -547,13 +589,11 @@ void ExtensionContextMenuModel::ExecuteCommand(int command_id,
                                                                   tab_id)) {
         side_panel_util::ToggleExtensionSidePanel(browser_, extension->id());
       }
-#endif  // !BUILDFLAG(IS_ANDROID)
       break;
     }
     case MANAGE_EXTENSIONS: {
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-      chrome::ShowExtensions(browser_->GetBrowserForMigrationOnly(),
-                             extension->id());
+      chrome::ShowExtensions(browser_, extension->id());
 #else
       const std::string& extension_to_highlight = extension->id();
       GURL url(chrome::kChromeUIExtensionsURL);
@@ -570,8 +610,7 @@ void ExtensionContextMenuModel::ExecuteCommand(int command_id,
     }
     case VIEW_WEB_PERMISSIONS:
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-      chrome::ShowSiteSettings(browser_->GetBrowserForMigrationOnly(),
-                               extension->url());
+      chrome::ShowSiteSettings(browser_, extension->url());
 #else
       // TODO(crbug.com/441744719): Show site settings page on Desktop Android.
       NOTIMPLEMENTED();
@@ -579,6 +618,18 @@ void ExtensionContextMenuModel::ExecuteCommand(int command_id,
       break;
     case INSPECT_POPUP: {
       delegate_->InspectPopup();
+      break;
+    }
+    case RATE_EXTENSION: {
+      util::CWSReviewSource review_source =
+          (source_ == ContextMenuSource::kMenuItem)
+              ? util::CWSReviewSource::kExtensionsMenu
+              : util::CWSReviewSource::kContextMenu;
+
+      const GURL review_url =
+          util::GetCWSWritingReviewUrl(extension->id(), review_source);
+      CHECK(review_url.is_valid());
+      OpenUrl(GetActiveWebContents(), review_url);
       break;
     }
     case POLICY_INSTALLED:
@@ -599,7 +650,7 @@ void ExtensionContextMenuModel::ExecuteCommand(int command_id,
       // Do nothing if the extension cannot have its site permissions updated.
       // Page access option should only be enabled when the extension site
       // permissions can be changed. However, sometimes the command still gets
-      // invoked (crbug.com/1468151). Thus, we exit early to prevent any
+      // invoked (crbug.com/40068180). Thus, we exit early to prevent any
       // crashes.
       if (!PermissionsManager::Get(profile_)->CanAffectExtension(*extension)) {
         return;
@@ -607,7 +658,7 @@ void ExtensionContextMenuModel::ExecuteCommand(int command_id,
 
       SitePermissionsHelper permissions(profile_);
       permissions.UpdateSiteAccess(*extension, web_contents,
-                                   CommandIdToSiteAccess(command_id));
+                                   CommandIdToSiteAccess(command_id), origin_);
       break;
     }
     case PAGE_ACCESS_PERMISSIONS_PAGE:
@@ -650,8 +701,8 @@ void ExtensionContextMenuModel::MenuClosed(ui::SimpleMenuModel* menu) {
 #if !BUILDFLAG(IS_ANDROID)
     if (source_ == ContextMenuSource::kMenuItem &&
         was_side_panel_action_taken) {
-      ExtensionsContainer::From(*browser_)->CloseOverflowMenuIfOpen();
-      // WARNING: The overflow menu was the parent for this menu, so it's
+      ExtensionsContainer::From(*browser_)->CloseExtensionsMenuIfOpen();
+      // WARNING: The extensions menu was the parent for this menu, so it's
       // possible `this` is now deleted.
     }
 #endif
@@ -757,7 +808,9 @@ void ExtensionContextMenuModel::InitMenuWithFeature(
         page_access_submenu_->AddSeparator(ui::NORMAL_SEPARATOR);
         page_access_submenu_->AddItemWithStringIdAndIcon(
             POLICY_INSTALLED, IDS_EXTENSIONS_INSTALLED_BY_ADMIN,
-            ui::ImageModel::FromVectorIcon(vector_icons::kBusinessIcon,
+            ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                               ? vector_icons::kDomainIcon
+                                               : vector_icons::kBusinessOldIcon,
                                            ui::kColorIcon, 16));
         policy_entry_in_subpage = true;
       }
@@ -797,7 +850,9 @@ void ExtensionContextMenuModel::InitMenuWithFeature(
     // TODO (kylixrd): Investigate the usage of the hard-coded color.
     AddItemWithStringIdAndIcon(
         POLICY_INSTALLED, IDS_EXTENSIONS_INSTALLED_BY_ADMIN,
-        ui::ImageModel::FromVectorIcon(vector_icons::kBusinessIcon,
+        ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                           ? vector_icons::kDomainIcon
+                                           : vector_icons::kBusinessOldIcon,
                                        ui::kColorIcon, 16));
   }
 
@@ -812,7 +867,9 @@ void ExtensionContextMenuModel::InitMenuWithFeature(
     if (IsExtensionForcePinned(*extension, profile_)) {
       AddItemWithStringIdAndIcon(
           TOGGLE_VISIBILITY, IDS_EXTENSIONS_PINNED_BY_ADMIN,
-          ui::ImageModel::FromVectorIcon(vector_icons::kBusinessIcon,
+          ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                             ? vector_icons::kDomainIcon
+                                             : vector_icons::kBusinessOldIcon,
                                          ui::kColorIcon, 16));
     } else {
       int message_id = is_pinned_
@@ -824,6 +881,12 @@ void ExtensionContextMenuModel::InitMenuWithFeature(
                            kToggleVisibilityMenuItem);
   }
 
+  if (ui_util::ShouldShowReviewPrompt(*extension, *profile_)) {
+    // Ellipsis is used because further user action is needed after clicking
+    // the item to complete the rating flow on the Chrome Web Store.
+    AddItemWithStringId(RATE_EXTENSION, IDS_EXTENSIONS_CONTEXT_MENU_RATE_IT);
+  }
+
   if (has_options_page) {
     AddItemWithStringId(OPTIONS, IDS_EXTENSIONS_OPTIONS_MENU_ITEM);
   }
@@ -832,9 +895,7 @@ void ExtensionContextMenuModel::InitMenuWithFeature(
     AddItemWithStringId(UNINSTALL, IDS_EXTENSIONS_UNINSTALL);
   }
 
-#if !BUILDFLAG(IS_ANDROID)
   AddSidePanelEntryIfPresent(*extension);
-#endif
 
   // Settings section.
   if (!is_component_) {
@@ -848,13 +909,14 @@ void ExtensionContextMenuModel::InitMenuWithFeature(
   if (delegate_ && !is_component_ && action_info && !action_info->synthesized &&
       profile_->GetPrefs()->GetBoolean(prefs::kExtensionsUIDeveloperMode)) {
     AddSeparator(ui::NORMAL_SEPARATOR);
-    if (IsExtensionInspectionAllowed(*extension, profile_,
-                                     GetActiveWebContents())) {
+    if (IsExtensionInspectionAllowed(*extension, profile_)) {
       AddItemWithStringId(INSPECT_POPUP, IDS_EXTENSION_ACTION_INSPECT_POPUP);
     } else {
       AddItemWithStringIdAndIcon(
           INSPECT_POPUP, IDS_EXTENSION_ACTION_INSPECT_POPUP,
-          ui::ImageModel::FromVectorIcon(vector_icons::kBusinessIcon,
+          ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                             ? vector_icons::kDomainIcon
+                                             : vector_icons::kBusinessOldIcon,
                                          ui::kColorIcon, 16));
     }
   }
@@ -893,6 +955,12 @@ void ExtensionContextMenuModel::InitMenu(const Extension* extension,
     AddSeparator(ui::NORMAL_SEPARATOR);
   }
 
+  if (ui_util::ShouldShowReviewPrompt(*extension, *profile_)) {
+    // Ellipsis is used because further user action is needed after clicking
+    // the item to complete the rating flow on the Chrome Web Store.
+    AddItemWithStringId(RATE_EXTENSION, IDS_EXTENSIONS_CONTEXT_MENU_RATE_IT);
+  }
+
   if (OptionsPageInfo::HasOptionsPage(extension))
     AddItemWithStringId(OPTIONS, IDS_EXTENSIONS_OPTIONS_MENU_ITEM);
 
@@ -901,7 +969,9 @@ void ExtensionContextMenuModel::InitMenu(const Extension* extension,
       // TODO (kylixrd): Investigate the usage of the hard-coded color.
       AddItemWithStringIdAndIcon(
           POLICY_INSTALLED, IDS_EXTENSIONS_INSTALLED_BY_ADMIN,
-          ui::ImageModel::FromVectorIcon(vector_icons::kBusinessIcon,
+          ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                             ? vector_icons::kDomainIcon
+                                             : vector_icons::kBusinessOldIcon,
                                          ui::kColorIcon, 16));
 
     } else {
@@ -918,15 +988,15 @@ void ExtensionContextMenuModel::InitMenu(const Extension* extension,
     if (IsExtensionForcePinned(*extension, profile_)) {
       size_t toggle_visibility_index =
           GetIndexOfCommandId(TOGGLE_VISIBILITY).value();
-      SetIcon(toggle_visibility_index,
-              ui::ImageModel::FromVectorIcon(vector_icons::kBusinessIcon,
-                                             ui::kColorIcon, 16));
+      SetIcon(toggle_visibility_index, ui::ImageModel::FromVectorIcon(
+                                           features::IsRoundedIconsEnabled()
+                                               ? vector_icons::kDomainIcon
+                                               : vector_icons::kBusinessOldIcon,
+                                           ui::kColorIcon, 16));
     }
   }
 
-#if !BUILDFLAG(IS_ANDROID)
   AddSidePanelEntryIfPresent(*extension);
-#endif
 
   if (!is_component_) {
     AddSeparator(ui::NORMAL_SEPARATOR);
@@ -942,7 +1012,6 @@ void ExtensionContextMenuModel::InitMenu(const Extension* extension,
   }
 }
 
-#if !BUILDFLAG(IS_ANDROID)
 void ExtensionContextMenuModel::AddSidePanelEntryIfPresent(
     const Extension& extension) {
   if (!extension.permissions_data()->HasAPIPermission(
@@ -951,7 +1020,11 @@ void ExtensionContextMenuModel::AddSidePanelEntryIfPresent(
   }
 
   SidePanelService* const side_panel_service = GetSidePanelService();
-  CHECK(side_panel_service);
+  // side_panel_service can be nullptr in unit tests and is unsupported in
+  // system/guest profiles.
+  if (!side_panel_service) {
+    return;
+  }
 
   int tab_id = ExtensionTabUtil::GetTabId(GetActiveWebContents());
   if (!side_panel_service->HasSidePanelContextMenuActionForTab(extension,
@@ -959,9 +1032,14 @@ void ExtensionContextMenuModel::AddSidePanelEntryIfPresent(
     return;
   }
 
+  SidePanelUI* const side_panel_ui = SidePanelUI::From(browser_);
+  // side_panel_ui can be nullptr in unit tests, app popups, custom windows,
+  // and during teardown.
+  if (!side_panel_ui) {
+    return;
+  }
+
   AddSeparator(ui::NORMAL_SEPARATOR);
-  SidePanelUI* const side_panel_ui = browser_->GetFeatures().side_panel_ui();
-  CHECK(side_panel_ui);
   bool is_side_panel_open = side_panel_ui->IsSidePanelEntryShowing(
       SidePanelEntryKey(SidePanelEntryId::kExtension, extension.id()));
   AddItemWithStringId(TOGGLE_SIDE_PANEL_VISIBILITY,
@@ -969,7 +1047,6 @@ void ExtensionContextMenuModel::AddSidePanelEntryIfPresent(
                           ? IDS_EXTENSIONS_SUBMENU_CLOSE_SIDE_PANEL_ITEM
                           : IDS_EXTENSIONS_SUBMENU_OPEN_SIDE_PANEL_ITEM);
 }
-#endif  // !BUILDFLAG(IS_ANDROID)
 
 const Extension* ExtensionContextMenuModel::GetExtension() const {
   return ExtensionRegistry::Get(profile_)->enabled_extensions().GetByID(
@@ -1038,13 +1115,13 @@ void ExtensionContextMenuModel::CreatePageAccessItems(
 }
 
 content::WebContents* ExtensionContextMenuModel::GetActiveWebContents() const {
-  return TabListInterface::From(browser_)->GetActiveTab()->GetContents();
+  tabs::TabInterface* active_tab =
+      TabListInterface::From(browser_)->GetActiveTab();
+  return active_tab ? active_tab->GetContents() : nullptr;
 }
 
-#if !BUILDFLAG(IS_ANDROID)
 SidePanelService* ExtensionContextMenuModel::GetSidePanelService() const {
   return SidePanelService::Get(profile_);
 }
-#endif
 
 }  // namespace extensions

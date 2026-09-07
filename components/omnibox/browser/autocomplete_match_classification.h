@@ -8,6 +8,11 @@
 #include "components/omnibox/browser/autocomplete_match.h"
 #include "components/omnibox/browser/in_memory_url_index_types.h"
 
+// Translates a FormattedString into ACMatchClassifications based on the
+// fragments' bolding status.
+ACMatchClassifications ClassifyFormattedString(
+    const omnibox::FormattedString& formatted_string);
+
 // Finds the matches for |find_text| in |text|, classifies those matches,
 // merges those classifications with |original_class|, and returns the merged
 // classifications.

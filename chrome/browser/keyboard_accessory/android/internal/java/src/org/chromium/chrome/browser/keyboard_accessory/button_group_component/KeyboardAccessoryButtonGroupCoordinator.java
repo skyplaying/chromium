@@ -5,14 +5,10 @@
 package org.chromium.chrome.browser.keyboard_accessory.button_group_component;
 
 import static org.chromium.chrome.browser.keyboard_accessory.button_group_component.KeyboardAccessoryButtonGroupProperties.ACTIVE_TAB;
-import static org.chromium.chrome.browser.keyboard_accessory.button_group_component.KeyboardAccessoryButtonGroupProperties.BUTTON_SELECTION_CALLBACKS;
 import static org.chromium.chrome.browser.keyboard_accessory.button_group_component.KeyboardAccessoryButtonGroupProperties.TABS;
 
 import android.view.View;
 
-import androidx.viewpager.widget.ViewPager;
-
-import org.chromium.build.annotations.MonotonicNonNull;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.keyboard_accessory.bar_component.KeyboardAccessoryCoordinator;
 import org.chromium.ui.modelutil.ListModel;
@@ -29,7 +25,7 @@ import java.util.HashMap;
 @NullMarked
 public class KeyboardAccessoryButtonGroupCoordinator {
     private final PropertyModel mModel =
-            new PropertyModel.Builder(TABS, ACTIVE_TAB, BUTTON_SELECTION_CALLBACKS)
+            new PropertyModel.Builder(KeyboardAccessoryButtonGroupProperties.ALL_KEYS)
                     .with(TABS, new ListModel<>())
                     .with(ACTIVE_TAB, null)
                     .build();
@@ -85,7 +81,6 @@ public class KeyboardAccessoryButtonGroupCoordinator {
 
     private class TemporarySheetOpenerBindings {
         private final PropertyModelChangeProcessor mMcp;
-        private @MonotonicNonNull ViewPager.OnPageChangeListener mOnPageChangeListener;
 
         TemporarySheetOpenerBindings(View view) {
             mMcp =
@@ -93,15 +88,10 @@ public class KeyboardAccessoryButtonGroupCoordinator {
                             mModel,
                             (KeyboardAccessoryButtonGroupView) view,
                             KeyboardAccessoryButtonGroupViewBinder::bind);
-            mOnPageChangeListener = new ViewPager.SimpleOnPageChangeListener();
-            mMediator.addPageChangeListener(mOnPageChangeListener);
         }
 
-        @SuppressWarnings("NullAway")
         void destroy() {
-            mMediator.removePageChangeListener(mOnPageChangeListener);
             mMcp.destroy();
-            mOnPageChangeListener = null;
         }
     }
 
@@ -144,23 +134,21 @@ public class KeyboardAccessoryButtonGroupCoordinator {
     }
 
     /**
+     * Returns a delegate that executes on several AtMemory-related actions.
+     *
+     * @return A {@link KeyboardAccessoryCoordinator.AtMemoryDelegate}.
+     */
+    public KeyboardAccessoryCoordinator.AtMemoryDelegate getAtMemoryDelegate() {
+        return mMediator;
+    }
+
+    /**
      * Adds a {@link AccessoryTabObserver} that is notified about events emitted when a tab changes.
      *
      * @param accessoryTabObserver The component to be notified of tab changes.
      */
     public void setTabObserver(AccessoryTabObserver accessoryTabObserver) {
         mMediator.setTabObserver(accessoryTabObserver);
-    }
-
-    /**
-     * Returns an OnPageChangeListener that remains the same even if the assigned views changes.
-     * This is useful if multiple views are bound to this component or if the view may temporarily
-     * be destroyed (like in a RecyclerView).
-     *
-     * @return A stable {@link ViewPager.OnPageChangeListener}.
-     */
-    public ViewPager.OnPageChangeListener getStablePageChangeListener() {
-        return mMediator.getStableOnPageChangeListener();
     }
 
     PropertyModel getModelForTesting() {

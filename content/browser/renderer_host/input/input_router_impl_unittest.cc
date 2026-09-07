@@ -2237,13 +2237,8 @@ class InputRouterImplPaintHoldingStateTest : public InputRouterImplTestBase {
 
   // testing::Test
   void SetUp() override {
-    scoped_feature_list_.InitAndEnableFeature(
-        blink::features::kDropInputEventsWhilePaintHolding);
     SetUpWithInputRouterActiveState(false);
   }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 }  // namespace
@@ -2940,6 +2935,68 @@ TEST_F(InputRouterImplScaleGestureEventTest, GestureTwoFingerTap) {
   SendGestureSequence({WebInputEvent::Type::kGestureTapDown,
                        WebInputEvent::Type::kGestureTapCancel,
                        WebInputEvent::Type::kGestureTwoFingerTap});
+}
+
+TEST_F(InputRouterImplTest, SynchronousDestructionDuringAck) {
+  blink::SyntheticWebTouchEvent touch;
+  touch.PressPoint(1, 1);
+
+  // Set the disposition handler to destroy the input router during ACK.
+  disposition_handler_->set_on_touch_event_ack_closure(base::BindOnce(
+      [](std::unique_ptr<input::InputRouterImpl>* router) { router->reset(); },
+      &input_router_));
+
+  // Trigger an ACK.
+  input::TouchEventWithLatencyInfo touch_event(touch);
+  // OnTouchEventAck is private in InputRouterImpl but public in the interface.
+  static_cast<input::PassthroughTouchEventQueueClient*>(input_router_.get())
+      ->OnTouchEventAck(touch_event,
+                        blink::mojom::InputEventResultSource::kMainThread,
+                        blink::mojom::InputEventResultState::kConsumed);
+
+  EXPECT_EQ(nullptr, input_router_);
+}
+
+TEST_F(InputRouterImplTest, SynchronousDestructionDuringGestureAck) {
+  blink::WebGestureEvent gesture =
+      blink::SyntheticWebGestureEventBuilder::Build(
+          WebInputEvent::Type::kGestureTapDown,
+          blink::WebGestureDevice::kTouchscreen);
+
+  // Set the disposition handler to destroy the input router during ACK.
+  disposition_handler_->set_on_gesture_event_ack_closure(base::BindOnce(
+      [](std::unique_ptr<input::InputRouterImpl>* router) { router->reset(); },
+      &input_router_));
+
+  // Trigger an ACK.
+  input::GestureEventWithLatencyInfo gesture_event(gesture);
+  static_cast<input::GestureEventQueueClient*>(input_router_.get())
+      ->OnGestureEventAck(gesture_event,
+                          blink::mojom::InputEventResultSource::kMainThread,
+                          blink::mojom::InputEventResultState::kConsumed);
+
+  EXPECT_EQ(nullptr, input_router_);
+}
+
+TEST_F(InputRouterImplTest, SynchronousDestructionDuringWheelAck) {
+  blink::WebMouseWheelEvent wheel =
+      blink::SyntheticWebMouseWheelEventBuilder::Build(
+          10, 10, 50, 50, 1, 1, 0,
+          ui::ScrollGranularity::kScrollByPrecisePixel);
+
+  // Set the disposition handler to destroy the input router during ACK.
+  disposition_handler_->set_on_wheel_event_ack_closure(base::BindOnce(
+      [](std::unique_ptr<input::InputRouterImpl>* router) { router->reset(); },
+      &input_router_));
+
+  // Trigger an ACK.
+  input::MouseWheelEventWithLatencyInfo wheel_event(wheel);
+  static_cast<input::MouseWheelEventQueueClient*>(input_router_.get())
+      ->OnMouseWheelEventAck(wheel_event,
+                             blink::mojom::InputEventResultSource::kMainThread,
+                             blink::mojom::InputEventResultState::kConsumed);
+
+  EXPECT_EQ(nullptr, input_router_);
 }
 
 }  // namespace content

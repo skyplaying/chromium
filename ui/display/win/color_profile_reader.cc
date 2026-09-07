@@ -13,8 +13,8 @@
 #include "base/functional/bind.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/scoped_thread_priority.h"
+#include "skia/ext/color_profile.h"
 #include "ui/display/win/display_info.h"
-#include "ui/gfx/icc_profile.h"
 
 namespace display {
 namespace win {
@@ -25,8 +25,7 @@ BOOL CALLBACK EnumMonitorForProfilePathCallback(HMONITOR monitor,
                                                 LPRECT rect,
                                                 LPARAM data) {
   std::wstring device_name;
-  MONITORINFOEX monitor_info;
-  UNSAFE_TODO(::ZeroMemory(&monitor_info, sizeof(monitor_info)));
+  MONITORINFOEX monitor_info{};
   monitor_info.cbSize = sizeof(monitor_info);
   ::GetMonitorInfo(monitor, &monitor_info);
   device_name = std::wstring(monitor_info.szDevice);
@@ -86,8 +85,8 @@ ColorProfileReader::DisplayIdToPathMap
 ColorProfileReader::BuildDisplayIdToPathMapOnBackgroundThread() {
   SCOPED_MAY_LOAD_LIBRARY_AT_BACKGROUND_PRIORITY();
   DisplayIdToPathMap display_id_to_path_map;
-  EnumDisplayMonitors(nullptr, nullptr, EnumMonitorForProfilePathCallback,
-                      reinterpret_cast<LPARAM>(&display_id_to_path_map));
+  ::EnumDisplayMonitors(nullptr, nullptr, EnumMonitorForProfilePathCallback,
+                        reinterpret_cast<LPARAM>(&display_id_to_path_map));
   return display_id_to_path_map;
 }
 
@@ -121,7 +120,7 @@ ColorProfileReader::ReadProfilesOnBackgroundThread(
     base::ReadFileToString(base::FilePath(profile_path), &profile_data);
     if (!profile_data.empty()) {
       new_display_id_to_profile_map[display_id] =
-          gfx::ICCProfile::FromData(profile_data.data(), profile_data.size());
+          skia::ColorProfile::Make(base::as_byte_span(profile_data));
     }
   }
   return new_display_id_to_profile_map;
@@ -137,12 +136,12 @@ void ColorProfileReader::ReadProfilesCompleted(
 
 gfx::ColorSpace ColorProfileReader::GetDisplayColorSpace(
     int64_t display_id) const {
-  gfx::ICCProfile icc_profile;
   auto found = display_id_to_profile_map_.find(display_id);
-  if (found != display_id_to_profile_map_.end())
-    icc_profile = found->second;
-  return icc_profile.IsValid() ? icc_profile.GetPrimariesOnlyColorSpace()
-                               : gfx::ColorSpace::CreateSRGB();
+  if (found != display_id_to_profile_map_.end() && found->second) {
+    return gfx::ColorSpace(
+        found->second->GetSkColorSpace()->makeSRGBGamma().get());
+  }
+  return gfx::ColorSpace::CreateSRGB();
 }
 
 }  // namespace win

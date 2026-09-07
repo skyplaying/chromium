@@ -4,19 +4,18 @@
 
 #include "content/browser/blob_storage/file_backed_blob_factory_base.h"
 
+#include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
-#include "base/process/process_handle.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
+#include "components/file_access/scoped_file_access.h"
 #include "content/browser/blob_storage/chrome_blob_storage_context.h"
-#include "content/browser/child_process_security_policy_impl.h"
-#include "content/public/browser/browser_context.h"
+#include "content/browser/security/cpsp/child_process_security_policy_impl.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/browser/render_process_host.h"
-#include "content/public/common/child_process_id.h"
 #include "storage/browser/blob/blob_data_builder.h"
 #include "storage/browser/blob/blob_impl.h"
 #include "storage/browser/blob/blob_registry_impl.h"
+#include "storage/browser/blob/blob_storage_context.h"
 #include "third_party/blink/public/mojom/blob/data_element.mojom.h"
 #include "url/gurl.h"
 
@@ -26,9 +25,20 @@ namespace {
 
 file_access::ScopedFileAccessDelegate::RequestFilesAccessIOCallback
 GetAccessCallback(const GURL& url_for_file_access_checks) {
-  if (!file_access::ScopedFileAccessDelegate::HasInstance() ||
-      !url_for_file_access_checks.is_valid()) {
+  if (!file_access::ScopedFileAccessDelegate::HasInstance()) {
     return base::NullCallback();
+  }
+
+  // When a delegate is installed, per-destination access checks are required.
+  // If the destination URL cannot be determined or is invalid, explicitly
+  // deny access rather than returning a null callback which would fall back
+  // to default access handling.
+  if (!url_for_file_access_checks.is_valid()) {
+    return base::BindRepeating(
+        [](const std::vector<base::FilePath>&,
+           base::OnceCallback<void(file_access::ScopedFileAccess)> callback) {
+          std::move(callback).Run(file_access::ScopedFileAccess::Denied());
+        });
   }
 
   file_access::ScopedFileAccessDelegate* file_access =
@@ -50,7 +60,7 @@ void ContinueRegisterBlob(
     scoped_refptr<ChromeBlobStorageContext> blob_storage_context,
     blink::mojom::FileBackedBlobFactory::RegisterBlobSyncCallback
         finish_callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+  CHECK_CURRENTLY_ON(BrowserThread::IO, base::NotFatalUntil::M159);
   base::ScopedClosureRunner scoped_finish_callback(std::move(finish_callback));
 
   if (blob_storage_context->context()->registry().HasEntry(uuid) ||
@@ -87,7 +97,7 @@ void ContinueRegisterBlob(
 
 }  // namespace
 
-FileBackedBlobFactoryBase::FileBackedBlobFactoryBase(int process_id)
+FileBackedBlobFactoryBase::FileBackedBlobFactoryBase(ChildProcessId process_id)
     : process_id_(process_id) {}
 
 FileBackedBlobFactoryBase::~FileBackedBlobFactoryBase() = default;
@@ -113,14 +123,13 @@ void FileBackedBlobFactoryBase::RegisterBlobSync(
     const std::string& content_type,
     blink::mojom::DataElementFilePtr file,
     RegisterBlobSyncCallback finish_callback) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 
-  // TODO(crbug.com/379869738) Remove FromUnsafeValue.
-  bool security_check_success =
-      ChildProcessSecurityPolicyImpl::GetInstance()->CanReadFile(
-          ChildProcessId::FromUnsafeValue(process_id_), file->path);
+  const bool security_check_success =
+      ChildProcessSecurityPolicyImpl::GetInstance()->CanReadFile(process_id_,
+                                                                 file->path);
 
-  GURL url_for_file_access_checks = GetCurrentUrl();
+  const GURL url_for_file_access_checks = GetCurrentUrl();
 
   if (finish_callback) {
     finish_callback =

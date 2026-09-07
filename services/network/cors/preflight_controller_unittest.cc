@@ -281,7 +281,6 @@ TEST(PreflightControllerOptionsTest, CheckOptions) {
       NonWildcardRequestHeadersSupport(false),
       /*tainted=*/false, TRAFFIC_ANNOTATION_FOR_TESTS, &url_loader_factory,
       net::IsolationInfo(),
-      /*client_security_state=*/nullptr,
       /*devtools_observer=*/
       base::WeakPtr<mojo::Remote<mojom::DevToolsObserver>>(), net_log, true,
       mojo::PendingRemote<mojom::URLLoaderNetworkServiceObserver>());
@@ -292,7 +291,6 @@ TEST(PreflightControllerOptionsTest, CheckOptions) {
       NonWildcardRequestHeadersSupport(false),
       /*tainted=*/false, TRAFFIC_ANNOTATION_FOR_TESTS, &url_loader_factory,
       net::IsolationInfo(),
-      /*client_security_state=*/nullptr,
       /*devtools_observer=*/
       base::WeakPtr<mojo::Remote<mojom::DevToolsObserver>>(), net_log, true,
       mojo::PendingRemote<mojom::URLLoaderNetworkServiceObserver>());
@@ -479,7 +477,7 @@ class PreflightControllerTest : public testing::Test {
 
     network::mojom::URLLoaderFactoryParamsPtr params =
         network::mojom::URLLoaderFactoryParams::New();
-    params->process_id = OriginatingProcess::browser();
+    params->process_id = OriginatingProcessId::browser();
     // We use network::CorsURLLoaderFactory for "internal" URLLoaderFactory
     // used by the PreflightController. Hence here we disable CORS as otherwise
     // the URLLoader would create a CORS-preflight for the preflight request.
@@ -515,8 +513,7 @@ class PreflightControllerTest : public testing::Test {
   void PerformPreflightCheck(
       const ResourceRequest& request,
       bool tainted = false,
-      net::IsolationInfo isolation_info = net::IsolationInfo(),
-      mojom::ClientSecurityStatePtr client_security_state = nullptr) {
+      net::IsolationInfo isolation_info = net::IsolationInfo()) {
     DCHECK(preflight_controller_);
     run_loop_ = std::make_unique<base::RunLoop>();
 
@@ -530,8 +527,7 @@ class PreflightControllerTest : public testing::Test {
         0, request, WithTrustedHeaderClient(false),
         non_wildcard_request_headers_support_, tainted,
         TRAFFIC_ANNOTATION_FOR_TESTS, url_loader_factory_remote_.get(),
-        isolation_info, std::move(client_security_state),
-        weak_devtools_observer_factory.GetWeakPtr(),
+        isolation_info, weak_devtools_observer_factory.GetWeakPtr(),
         net::NetLogWithSource::Make(net::NetLog::Get(),
                                     net::NetLogSourceType::URL_REQUEST),
         true, mojo::PendingRemote<mojom::URLLoaderNetworkServiceObserver>());
@@ -755,6 +751,105 @@ TEST_F(PreflightControllerTest, CheckTaintedRequest) {
   EXPECT_EQ(net::OK, net_error());
   ASSERT_FALSE(status());
   EXPECT_EQ(1u, access_count());
+}
+
+TEST_F(PreflightControllerTest,
+       TaintedPreflightDoesNotSatisfyUntaintedRequest) {
+  ResourceRequest request;
+  request.mode = mojom::RequestMode::kCors;
+  request.credentials_mode = mojom::CredentialsMode::kOmit;
+  request.url = GetURL("/tainted");
+  request.request_initiator = test_initiator_origin();
+
+  // Tainted preflight check succeeds because the test server returns
+  // Access-Control-Allow-Origin: null for "/tainted".
+  PerformPreflightCheck(request, /*tainted=*/true);
+  EXPECT_EQ(net::OK, net_error());
+  ASSERT_FALSE(status());
+  EXPECT_EQ(1u, access_count());
+
+  // Untainted preflight check must not hit the cache from the tainted request.
+  // A new preflight is sent, and fails because the server returns "null" which
+  // does not match test_initiator_origin().
+  PerformPreflightCheck(request, /*tainted=*/false);
+  EXPECT_EQ(net::ERR_FAILED, net_error());
+  ASSERT_TRUE(status());
+  EXPECT_EQ(mojom::CorsError::kPreflightAllowOriginMismatch,
+            status()->cors_error);
+  EXPECT_EQ(2u, access_count());
+}
+
+TEST_F(PreflightControllerTest,
+       TaintedPreflightDoesNotSatisfyUntaintedRequest_FeatureDisabled) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
+      features::kCorsPreflightCacheKeyTaintedOrigin);
+
+  ResourceRequest request;
+  request.mode = mojom::RequestMode::kCors;
+  request.credentials_mode = mojom::CredentialsMode::kOmit;
+  request.url = GetURL("/tainted");
+  request.request_initiator = test_initiator_origin();
+
+  // Tainted preflight check succeeds.
+  PerformPreflightCheck(request, /*tainted=*/true);
+  EXPECT_EQ(net::OK, net_error());
+  ASSERT_FALSE(status());
+  EXPECT_EQ(1u, access_count());
+
+  // With the feature disabled, the tainted preflight is incorrectly cached
+  // under request_initiator, allowing the untainted request to skip preflight.
+  PerformPreflightCheck(request, /*tainted=*/false);
+  EXPECT_EQ(net::OK, net_error());
+  ASSERT_FALSE(status());
+  EXPECT_EQ(1u, access_count());
+}
+
+TEST_F(PreflightControllerTest,
+       UntaintedPreflightDoesNotSatisfyTaintedRequest) {
+  ResourceRequest request;
+  request.mode = mojom::RequestMode::kCors;
+  request.credentials_mode = mojom::CredentialsMode::kOmit;
+  request.url = GetURL("/allow");
+  request.request_initiator = test_initiator_origin();
+
+  // Untainted preflight check succeeds (Access-Control-Allow-Origin:
+  // test_initiator_origin()).
+  PerformPreflightCheck(request, /*tainted=*/false);
+  EXPECT_EQ(net::OK, net_error());
+  ASSERT_FALSE(status());
+  EXPECT_EQ(1u, access_count());
+
+  // Tainted preflight check must not hit the cache from the untainted
+  // request. A new preflight is sent with Origin: null, and fails because the
+  // server returns Access-Control-Allow-Origin: test_initiator_origin().
+  PerformPreflightCheck(request, /*tainted=*/true);
+  EXPECT_EQ(net::ERR_FAILED, net_error());
+  ASSERT_TRUE(status());
+  EXPECT_EQ(mojom::CorsError::kPreflightAllowOriginMismatch,
+            status()->cors_error);
+  EXPECT_EQ(2u, access_count());
+}
+
+TEST_F(PreflightControllerTest, TaintedPreflightsAreNotCached) {
+  ResourceRequest request;
+  request.mode = mojom::RequestMode::kCors;
+  request.credentials_mode = mojom::CredentialsMode::kOmit;
+  request.url = GetURL("/tainted");
+  request.request_initiator = test_initiator_origin();
+
+  // First tainted preflight check.
+  PerformPreflightCheck(request, /*tainted=*/true);
+  EXPECT_EQ(net::OK, net_error());
+  ASSERT_FALSE(status());
+  EXPECT_EQ(1u, access_count());
+
+  // Second tainted preflight check: tainted results are not cached, so a new
+  // preflight request is performed.
+  PerformPreflightCheck(request, /*tainted=*/true);
+  EXPECT_EQ(net::OK, net_error());
+  ASSERT_FALSE(status());
+  EXPECT_EQ(2u, access_count());
 }
 
 TEST_F(PreflightControllerTest, CheckResponseWithNullHeaders) {

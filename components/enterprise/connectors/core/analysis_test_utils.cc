@@ -4,8 +4,12 @@
 
 #include "components/enterprise/connectors/core/analysis_test_utils.h"
 
+#include "base/json/json_reader.h"
 #include "base/no_destructor.h"
 #include "components/enterprise/connectors/core/common.h"
+#include "components/enterprise/data_controls/core/browser/prefs.h"
+#include "components/policy/core/common/policy_types.h"
+#include "components/prefs/scoped_user_pref_update.h"
 
 namespace enterprise_connectors::test {
 
@@ -273,6 +277,30 @@ AnalysisSettings* NormalSettingsDlpRequiresBypassJustification() {
 
 AnalysisSettings* NoSettings() {
   return nullptr;
+}
+
+void SetAnalysisConnectorsPrefs(PrefService* prefs,
+                                AnalysisConnector connector,
+                                std::vector<std::string> rules,
+                                bool machine_scope) {
+  ScopedListPrefUpdate list(prefs, AnalysisConnectorPref(connector));
+  if (!list->empty()) {
+    list->clear();
+  }
+
+  for (const std::string& rule : rules) {
+    list->Append(
+        *base::JSONReader::Read(rule, base::JSON_PARSE_CHROMIUM_EXTENSIONS));
+  }
+
+  prefs->SetInteger(
+      AnalysisConnectorScopePref(connector),
+      machine_scope ? policy::POLICY_SCOPE_MACHINE : policy::POLICY_SCOPE_USER);
+}
+
+void ClearAnalysisConnectorsPrefs(PrefService* prefs,
+                                  AnalysisConnector connector) {
+  prefs->ClearPref(AnalysisConnectorPref(connector));
 }
 
 }  // namespace enterprise_connectors::test

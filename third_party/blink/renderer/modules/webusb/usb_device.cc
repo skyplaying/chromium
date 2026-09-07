@@ -29,6 +29,7 @@
 #include "third_party/blink/renderer/modules/webusb/usb_out_transfer_result.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 using device::mojom::blink::UsbClaimInterfaceResult;
 using device::mojom::blink::UsbControlTransferParamsPtr;
@@ -142,9 +143,8 @@ bool ShouldRejectUsbTransferLength(size_t length,
   }
   exception_state.ThrowDOMException(
       DOMExceptionCode::kDataError,
-      String::Format(
-          "The data buffer exceeded supported maximum size of %d bytes",
-          kUsbTransferLengthLimit));
+      Format("The data buffer exceeded supported maximum size of {} bytes",
+             kUsbTransferLengthLimit));
   return true;
 }
 
@@ -669,6 +669,7 @@ ScriptPromise<IDLUndefined> USBDevice::reset(ScriptState* script_state,
   auto promise = resolver->Promise();
 
   device_requests_.insert(resolver);
+  device_state_change_in_progress_ = true;
   device_->Reset(BindOnce(&USBDevice::AsyncReset, WrapPersistent(this),
                           WrapPersistent(resolver)));
   return promise;
@@ -1165,6 +1166,7 @@ void USBDevice::AsyncIsochronousTransferOut(
 void USBDevice::AsyncReset(ScriptPromiseResolver<IDLUndefined>* resolver,
                            bool success) {
   MarkRequestComplete(resolver);
+  device_state_change_in_progress_ = false;
 
   if (success) {
     resolver->Resolve();

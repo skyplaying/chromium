@@ -14,10 +14,7 @@
 #include "chrome/browser/lifetime/termination_notification.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/tabs/tab_group_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -25,6 +22,7 @@
 #include "components/keep_alive_registry/keep_alive_registry.h"
 #include "components/keep_alive_registry/keep_alive_types.h"
 #include "components/search_engines/template_url_service.h"
+#include "components/tab_groups/tab_group_id.h"
 #include "components/tab_groups/tab_group_visual_data.h"
 #include "components/tabs/public/tab_group.h"
 #include "content/public/browser/navigation_details.h"
@@ -191,8 +189,8 @@ UMABrowsingActivityObserver::TabHelper::~TabHelper() = default;
 void UMABrowsingActivityObserver::TabHelper::NavigationEntryCommitted(
     const content::LoadCommittedDetails& load_details) {
   // This is null in unit tests. Crash reports suggest it's possible for it to
-  // be null in production. See https://crbug.com/1510023 and
-  // https://crbug.com/1523758
+  // be null in production. See https://crbug.com/41482621 and
+  // https://crbug.com/41496706
   if (!g_uma_browsing_activity_observer_instance) {
     return;
   }

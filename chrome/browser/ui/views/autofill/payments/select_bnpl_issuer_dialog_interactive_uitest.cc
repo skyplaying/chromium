@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/views/autofill/payments/select_bnpl_issuer_dialog.h"
+
 #include <string>
 
 #include "base/logging.h"
@@ -9,8 +11,8 @@
 #include "base/test/mock_callback.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/autofill/payments/payments_view_factory.h"
+#include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/views/autofill/payments/select_bnpl_issuer_dialog.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
 #include "components/autofill/content/browser/test_autofill_client_injector.h"
 #include "components/autofill/content/browser/test_content_autofill_client.h"
@@ -20,7 +22,7 @@
 #include "components/autofill/core/browser/metrics/payments/bnpl_metrics.h"
 #include "components/autofill/core/browser/payments/bnpl_util.h"
 #include "components/autofill/core/browser/payments/constants.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/browser/ui/payments/select_bnpl_issuer_dialog_controller_impl.h"
 #include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/prefs/pref_service.h"
@@ -79,7 +81,7 @@ class SelectBnplIssuerDialogInteractiveUiTest : public InteractiveBrowserTest {
   }
 
   content::WebContents* web_contents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
   base::MockRepeatingCallback<void(BnplIssuer)> accept_callback_;
@@ -172,14 +174,19 @@ IN_PROC_BROWSER_TEST_F(SelectBnplIssuerDialogInteractiveUiTest,
             ContentAutofillClient::FromWebContents(web_contents())
                 ->GetPaymentsAutofillClient()
                 ->GetBnplUiDelegate()
-                ->UpdateBnplIssuerDialogUi(
+                ->UpdateBnplIssuerUi(
                     {GetTestBnplIssuerContext(
                          IssuerId::kBnplAffirm,
                          BnplIssuerEligibilityForPage::kIsEligible),
                      GetTestBnplIssuerContext(
                          IssuerId::kBnplZip,
                          BnplIssuerEligibilityForPage::
-                             kNotEligibleIssuerDoesNotSupportMerchant)});
+                             kNotEligibleIssuerDoesNotSupportMerchant)},
+                    /*extracted_amount=*/100,
+                    /*is_amount_supported_by_any_issuer=*/true,
+                    /*app_locale=*/"en-US",
+                    /*selected_issuer_callback=*/base::DoNothing(),
+                    /*cancel_callback=*/base::DoNothing());
           }),
           // Verify the throbber is now hidden.
           WaitForHide(SelectBnplIssuerDialog::kThrobberId),
@@ -489,8 +496,8 @@ IN_PROC_BROWSER_TEST_F(SelectBnplIssuerDialogInteractiveUiTest,
 
       // Close the active tab.
       Do([this]() {
-        browser()->tab_strip_model()->CloseWebContentsAt(
-            browser()->tab_strip_model()->active_index(),
+        browser()->GetTabStripModel()->CloseWebContentsAt(
+            browser()->GetTabStripModel()->active_index(),
             TabCloseTypes::CLOSE_USER_GESTURE);
       }),
 

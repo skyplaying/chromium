@@ -5,11 +5,11 @@
 #include "chrome/browser/metrics/desktop_session_duration/audible_contents_tracker.h"
 
 #include "chrome/browser/metrics/desktop_session_duration/desktop_session_duration_tracker.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/recently_audible_helper.h"
+#include "chrome/browser/ui/tabs/tab_change_type.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 
 namespace metrics {
@@ -39,7 +39,7 @@ void AudibleContentsTracker::OnTabStripModelChanged(
     const TabStripSelectionChange& selection) {
   if (change.type() == TabStripModelChange::kRemoved) {
     for (const auto& contents : change.GetRemove()->contents) {
-      if (contents.remove_reason == TabRemovedReason::kDeleted) {
+      if (TabRemoveReasonUtils::WillDeleteTab(contents.remove_reason)) {
         RemoveAudibleWebContents(contents.contents);
       }
     }
@@ -57,7 +57,6 @@ void AudibleContentsTracker::OnTabStripModelChanged(
 }
 
 void AudibleContentsTracker::OnTabChangedAt(tabs::TabInterface* tab,
-                                            int index,
                                             TabChangeType change_type) {
   // Ignore 'loading' and 'title' changes.
   if (change_type != TabChangeType::kAll)

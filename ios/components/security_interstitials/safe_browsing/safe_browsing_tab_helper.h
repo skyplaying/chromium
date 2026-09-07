@@ -8,10 +8,12 @@
 #include <list>
 #include <map>
 #include <optional>
+#include <vector>
 
 #include "base/containers/unique_ptr_adapters.h"
 #import "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
+#include "components/prefs/pref_change_registrar.h"
 #include "components/safe_browsing/core/browser/db/database_manager.h"
 #include "components/safe_browsing/core/browser/db/v4_protocol_manager_util.h"
 #include "components/safe_browsing/core/browser/safe_browsing_url_checker_impl.h"
@@ -20,6 +22,10 @@
 #include "ios/web/public/web_state_observer.h"
 #import "ios/web/public/web_state_user_data.h"
 #include "url/gurl.h"
+
+namespace safe_browsing {
+class ClientSideDetectionHostBase;
+}
 
 class SafeBrowsingClient;
 @protocol SafeBrowsingTabHelperDelegate;
@@ -62,6 +68,21 @@ class SafeBrowsingTabHelper
   // Tells delegate to show enhanced safe browsing promo.
   void ShowEnhancedSafeBrowsingInfobar();
 
+  // Reports a security interstitial shown event to the enterprise reporting
+  // service.
+  static void ReportSecurityInterstitialShown(
+      web::WebState* web_state,
+      const security_interstitials::UnsafeResource& resource);
+
+  // Returns the redirect chain for the committed navigation, or an empty
+  // vector if there is none.
+  std::vector<GURL> GetRedirectChain() const;
+
+  // Returns the client side detection host, or nullptr if disabled.
+  safe_browsing::ClientSideDetectionHostBase* client_side_detection_host() {
+    return csd_host_.get();
+  }
+
  private:
   friend class web::WebStateUserData<SafeBrowsingTabHelper>;
 
@@ -92,6 +113,9 @@ class SafeBrowsingTabHelper
     // Clears and moves `to_be_committed_redirect_chain_` to
     // `committed_redirect_chain_`.
     void SetCommittedRedirectChain();
+
+    // Returns the redirect chain for the committed navigation.
+    std::vector<GURL> GetRedirectChain() const;
 
     // Reloads the page. Used when a reload is necessary for triggering an error
     // page.
@@ -126,18 +150,22 @@ class SafeBrowsingTabHelper
     // a server redirect of the previous main frame query.
     void UpdateForMainFrameServerRedirect();
 
+    SafeBrowsingClient* client() const { return client_; }
+
    private:
     // Represents a single Safe Browsing query URL, along with the corresponding
     // decision once it's received, the callback to invoke once the decision
     // is known, and tracks if the async or sync check for the respective query
     // is complete.
     struct MainFrameUrlQuery {
-      explicit MainFrameUrlQuery(const GURL& url);
+      explicit MainFrameUrlQuery(const GURL& url,
+                                 const std::string& http_method);
       MainFrameUrlQuery(MainFrameUrlQuery&& query);
       MainFrameUrlQuery& operator=(MainFrameUrlQuery&& other);
       ~MainFrameUrlQuery();
 
       GURL url;
+      std::string http_method;
       std::optional<web::WebStatePolicyDecider::PolicyDecision> decision;
       web::WebStatePolicyDecider::PolicyDecisionCallback response_callback;
       bool sync_check_complete = false;
@@ -334,6 +362,15 @@ class SafeBrowsingTabHelper
     base::ScopedObservation<web::WebState, web::WebStateObserver>
         scoped_observation_{this};
   };
+
+  // Updates the ClientSideDetectionHost based on current Safe Browsing
+  // settings.
+  void UpdateClientSideDetectionHost();
+
+  raw_ptr<web::WebState> web_state_ = nullptr;
+  raw_ptr<SafeBrowsingClient> client_ = nullptr;
+  PrefChangeRegistrar pref_change_registrar_;
+  std::unique_ptr<safe_browsing::ClientSideDetectionHostBase> csd_host_;
 
   PolicyDecider policy_decider_;
   QueryObserver query_observer_;

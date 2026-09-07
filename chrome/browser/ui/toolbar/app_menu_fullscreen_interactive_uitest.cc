@@ -7,10 +7,9 @@
 #include "base/test/gtest_util.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu.h"
 #include "chrome/browser/ui/accelerator_utils.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 #include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"
 #include "chrome/browser/ui/toolbar/app_menu_model.h"
@@ -20,6 +19,7 @@
 #include "chrome/test/interaction/webcontents_interaction_test_util.h"
 #include "content/public/test/browser_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/base_window.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/element_tracker.h"
 #include "ui/base/interaction/expect_call_in_scope.h"
@@ -85,7 +85,7 @@ class AppMenuFullscreenInteractiveTest : public InteractiveBrowserTest {
       bool is_fullscreen) {
     return Do(base::BindOnce(
         [](std::unique_ptr<ui_test_utils::FullscreenWaiter>& out,
-           bool is_fullscreen, Browser* browser) {
+           bool is_fullscreen, BrowserWindowInterface* browser) {
           out = std::make_unique<ui_test_utils::FullscreenWaiter>(
               browser, ui_test_utils::FullscreenWaiter::Expectation{
                            .browser_fullscreen = is_fullscreen});
@@ -100,11 +100,11 @@ class AppMenuFullscreenInteractiveTest : public InteractiveBrowserTest {
         kBrowserViewElementId,
         base::BindOnce(
             [](std::unique_ptr<ui_test_utils::FullscreenWaiter>& waiter,
-               bool is_fullscreen, Browser* browser,
+               bool is_fullscreen, BrowserWindowInterface* browser,
                views::View* browser_view) {
-              auto* fullscreen_controller = browser->GetFeatures()
-                                                .exclusive_access_manager()
-                                                ->fullscreen_controller();
+              auto* fullscreen_controller =
+                  ExclusiveAccessManager::From(browser)
+                      ->fullscreen_controller();
 
               // Wait for fullscreen transition complete.
               // Fullscreen transition is an async process on Mac, which
@@ -129,10 +129,10 @@ class AppMenuFullscreenInteractiveTest : public InteractiveBrowserTest {
                 do {
                   auto display =
                       display::Screen::Get()->GetDisplayNearestWindow(
-                          browser->window()->GetNativeWindow());
+                          browser->GetWindow()->GetNativeWindow());
                   auto display_size = display.bounds().size();
                   auto workarea_size = display.work_area().size();
-                  auto window_size = browser->window()->GetBounds().size();
+                  auto window_size = browser->GetWindow()->GetBounds().size();
                   DLOG(INFO) << "display_size = " << display_size.ToString()
                              << " workspace_size = " << workarea_size.ToString()
                              << " window_size = " << window_size.ToString();
@@ -204,12 +204,11 @@ IN_PROC_BROWSER_TEST_F(AppMenuFullscreenInteractiveTest, ContextMenu) {
       // chooses the center of the browser window, which is fine.
       CreateFullscreenWaiter(waiter2, false),
       MoveMouseTo(kBrowserViewElementId),
-      MayInvolveNativeContextMenu(
-          // 5. Make sure context menu is displayed correctly at the expected
-          // location when chrome is in full screen mode.
-          ClickMouse(ui_controls::RIGHT),
-          InAnyContext(
-              SelectMenuItem(RenderViewContextMenu::kExitFullscreenMenuItem))),
+      // 5. Make sure context menu is displayed correctly at the expected
+      // location when chrome is in full screen mode.
+      ClickMouse(ui_controls::RIGHT),
+      InAnyContext(
+          SelectMenuItem(RenderViewContextMenu::kExitFullscreenMenuItem)),
       CheckFullscreenForBrowser(waiter2, false));
 }
 

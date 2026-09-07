@@ -8,11 +8,11 @@
 #include <limits>
 #include <utility>
 
+#include "base/containers/to_array.h"
 #include "base/numerics/safe_conversions.h"
 #include "components/cbor/values.h"
 #include "crypto/hash.h"
 #include "device/fido/device_response_converter.h"
-#include "device/fido/fido_parsing_utils.h"
 #include "device/fido/public/fido_constants.h"
 
 namespace device {
@@ -88,7 +88,7 @@ std::optional<CtapMakeCredentialRequest> CtapMakeCredentialRequest::Parse(
   CtapMakeCredentialRequest request(
       /*client_data_json=*/std::string(), std::move(*rp_entity),
       std::move(*user_entity), std::move(*credential_params));
-  request.client_data_hash = fido_parsing_utils::Materialize(client_data_hash);
+  request.client_data_hash = base::ToArray(client_data_hash);
 
   const auto exclude_list_it = request_map.find(cbor::Value(5));
   if (exclude_list_it != request_map.end()) {
@@ -177,6 +177,11 @@ std::optional<CtapMakeCredentialRequest> CtapMakeCredentialRequest::Parse(
         if (!request.hmac_secret_mc) {
           return std::nullopt;
         }
+      } else if (extension_name == kExtensionCmtgKey) {
+        if (!extension.second.is_bool()) {
+          return std::nullopt;
+        }
+        request.cmtg_key = extension.second.GetBool();
       } else if (extension_name == kExtensionPRF) {
         if (!extension.second.is_map()) {
           return std::nullopt;
@@ -355,6 +360,10 @@ AsCTAPRequestValuePair(const CtapMakeCredentialRequest& request) {
 
   if (request.large_blob_key) {
     extensions[cbor::Value(kExtensionLargeBlobKey)] = cbor::Value(true);
+  }
+
+  if (request.cmtg_key) {
+    extensions[cbor::Value(kExtensionCmtgKey)] = cbor::Value(true);
   }
 
   if (request.cred_protect) {

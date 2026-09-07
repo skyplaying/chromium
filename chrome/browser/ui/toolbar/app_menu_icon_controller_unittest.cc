@@ -14,7 +14,6 @@
 #include "chrome/browser/ui/global_error/global_error_service_factory.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/upgrade_detector/upgrade_detector.h"
-#include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -77,10 +76,10 @@ class FakeMenuGlobalError : public GlobalError {
   bool HasMenuItem() override { return true; }
   int MenuItemCommandID() override { return 1; }
   std::u16string MenuItemLabel() override { return u"fake"; }
-  void ExecuteMenuItem(Browser* /*browser*/) override {}
+  void ExecuteMenuItem(BrowserWindowInterface* /*browser*/) override {}
   bool HasShownBubbleView() override { return false; }
   bool HasBubbleView() override { return false; }
-  void ShowBubbleView(Browser* browser) override {}
+  void ShowBubbleView(BrowserWindowInterface* /*browser*/) override {}
   GlobalErrorBubbleViewBase* GetBubbleView() override { return nullptr; }
 
  private:
@@ -89,10 +88,6 @@ class FakeMenuGlobalError : public GlobalError {
 
 }  // namespace
 
-bool operator==(const AppMenuIconController::TypeAndSeverity& a,
-                const AppMenuIconController::TypeAndSeverity& b) {
-  return a.type == b.type && a.severity == b.severity;
-}
 
 // A test parameterized on an install mode index. For Google Chrome builds on
 // Windows, this allows the test to run for each of the supported side-by-side
@@ -126,7 +121,7 @@ class AppMenuIconControllerTest : public ::testing::TestWithParam<int> {
     return GetParam() >= install_static::DEV_INDEX;
 #else
     // Non-Windows platforms don't have a way to specify the channel; see
-    // https://crbug.com/903798.
+    // https://crbug.com/40601741.
     return false;
 #endif
   }

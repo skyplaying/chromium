@@ -207,7 +207,7 @@ void GinJavaMethodInvocationHelper::InvokeMethod(jobject object,
                                                  const JavaType& return_type,
                                                  jmethodID id,
                                                  jvalue* parameters) {
-  DCHECK(object || clazz);
+  CHECK(object || clazz, base::NotFatalUntil::M159);
   JNIEnv* env = AttachCurrentThread();
   base::ListValue result_wrapper;
   switch (return_type.type) {
@@ -292,8 +292,7 @@ void GinJavaMethodInvocationHelper::InvokeMethod(jobject object,
             mojom::GinJavaBridgeError::kGinJavaBridgeJavaExceptionRaised);
         return;
       }
-      auto scoped_java_string =
-          ScopedJavaLocalRef<jstring>::Adopt(env, java_string);
+      auto scoped_java_string = jni_zero::AdoptRef(env, java_string);
       if (!scoped_java_string.obj()) {
         // LIVECONNECT_COMPLIANCE: Existing behavior is to return undefined.
         // Spec requires returning a null string.
@@ -317,8 +316,7 @@ void GinJavaMethodInvocationHelper::InvokeMethod(jobject object,
             mojom::GinJavaBridgeError::kGinJavaBridgeJavaExceptionRaised);
         return;
       }
-      auto scoped_java_object =
-          ScopedJavaLocalRef<jobject>::Adopt(env, java_object);
+      auto scoped_java_object = jni_zero::AdoptRef(env, java_object);
       if (!scoped_java_object.obj()) {
         result_wrapper.Append(base::Value());
         break;

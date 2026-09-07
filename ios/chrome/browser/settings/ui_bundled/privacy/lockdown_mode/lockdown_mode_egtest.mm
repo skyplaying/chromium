@@ -5,7 +5,6 @@
 #import "base/test/ios/wait_util.h"
 #import "ios/chrome/browser/settings/ui_bundled/privacy/privacy_constants.h"
 #import "ios/chrome/browser/shared/model/prefs/pref_names.h"
-#import "ios/chrome/browser/web/model/features.h"
 #import "ios/chrome/grit/ios_branded_strings.h"
 #import "ios/chrome/grit/ios_strings.h"
 #import "ios/chrome/test/earl_grey/chrome_actions.h"
@@ -75,9 +74,10 @@ NSString* const kLockdownModeCellId = @"kLockdownModeCellId";
   [self openLockdownModeSettings];
 
   // Check that lockdown mode row shows an "off" text label.
-  [[EarlGrey
-      selectElementWithMatcher:TableViewSwitchCell(kLockdownModeCellId, NO)]
-      assertWithMatcher:grey_notNil()];
+  [ChromeEarlGrey
+      waitForSufficientlyVisibleElementWithMatcher:TableViewSwitchCell(
+                                                       kLockdownModeCellId,
+                                                       NO)];
 
   [self tapLockdownModeToggleButton:NO withNewValue:YES];
   [[EarlGrey

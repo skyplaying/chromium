@@ -7,7 +7,6 @@
 
 #include <memory>
 
-#include "chrome/common/webui_url_constants.h"
 #include "chromeos/ash/experiences/system_web_apps/types/system_web_app_delegate.h"
 #include "ui/gfx/geometry/rect.h"
 
@@ -28,11 +27,11 @@ class TerminalSystemAppDelegate : public ash::SystemWebAppDelegate {
   bool IsAppEnabled() const override;
   bool ShouldHaveTabStrip() const override;
   gfx::Rect GetDefaultBounds(ash::BrowserDelegate* browser) const override;
-  bool HasCustomTabMenuModel() const override;
-  std::unique_ptr<ui::SimpleMenuModel> GetTabMenuModel(
-      ui::SimpleMenuModel::Delegate* delegate) const override;
-  bool ShouldShowTabContextMenuShortcut(Profile* profile,
-                                        int command_id) const override;
+  std::optional<base::flat_set<tabs::TabContextMenuCommand>>
+  GetAllowedTabMenuCommands() const override;
+  bool ShouldShowTabContextMenuShortcut(
+      Profile* profile,
+      tabs::TabContextMenuCommand command) const override;
   // TODO(crbug.com/1308961): Migrate to use PWA pinned home tab when ready.
   bool ShouldPinTab(GURL url) const override;
   bool UseSystemThemeColor() const override;

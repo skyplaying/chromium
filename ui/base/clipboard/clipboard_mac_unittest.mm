@@ -2,11 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifdef UNSAFE_BUFFERS_BUILD
-// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
-#pragma allow_unsafe_buffers
-#endif
-
 #import "ui/base/clipboard/clipboard_mac.h"
 
 #import <AppKit/AppKit.h>
@@ -15,11 +10,11 @@
 #include <vector>
 
 #include "base/apple/scoped_cftyperef.h"
+#include "base/compiler_specific.h"
 #include "base/mac/mac_util.h"
 #include "base/memory/free_deleter.h"
 #include "base/memory/ref_counted.h"
 #include "base/test/run_until.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "testing/platform_test.h"
@@ -29,7 +24,6 @@
 #include "ui/base/clipboard/clipboard_observer.h"
 #include "ui/base/clipboard/clipboard_util_mac.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
-#include "ui/base/ui_base_features.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/skia_util.h"
 
@@ -110,8 +104,10 @@ class ClipboardMacTest : public PlatformTest {
   std::optional<DataTransferEndpoint> GetSource(
       const ClipboardMac* clipboard_mac,
       NSPasteboard* pasteboard) {
-    return clipboard_mac->GetSourceInternal(ClipboardBuffer::kCopyPaste,
-                                            pasteboard);
+    base::test::TestFuture<std::optional<DataTransferEndpoint>> future;
+    clipboard_mac->GetSourceInternal(ClipboardBuffer::kCopyPaste, pasteboard,
+                                     future.GetCallback());
+    return future.Get();
   }
 
   void Clear(ClipboardMac* clipboard_mac, NSPasteboard* pasteboard) {
@@ -226,7 +222,8 @@ TEST_F(ClipboardMacTest, WriteBitmapAddsPNGToClipboard) {
   NSData* data = [pasteboard->get() dataForType:NSPasteboardTypePNG];
   ASSERT_TRUE(data);
   const uint8_t* bytes = static_cast<const uint8_t*>(data.bytes);
-  std::vector<uint8_t> png_data(bytes, bytes + data.length);
+  std::vector<uint8_t> png_data =
+      UNSAFE_TODO(std::vector<uint8_t>(bytes, bytes + data.length));
 
   SkBitmap result_bitmap = gfx::PNGCodec::Decode(png_data);
   ASSERT_FALSE(result_bitmap.isNull());
@@ -267,10 +264,6 @@ TEST_F(ClipboardMacTest, SourceTracking) {
 }
 
 TEST_F(ClipboardMacTest, ClipboardChangeAPI_BrowserTriggered) {
-  base::test::ScopedFeatureList scoped_feature_list_;
-  scoped_feature_list_.InitAndEnableFeature(
-      features::kPlatformClipboardMonitor);
-
   TestClipboardObserver observer;
 
   // Note that general pasteboard is used since the clipboard monitoring
@@ -293,10 +286,6 @@ TEST_F(ClipboardMacTest, ClipboardChangeAPI_BrowserTriggered) {
 }
 
 TEST_F(ClipboardMacTest, ClipboardChangeAPI_ExternallyTriggered) {
-  base::test::ScopedFeatureList scoped_feature_list_;
-  scoped_feature_list_.InitAndEnableFeature(
-      features::kPlatformClipboardMonitor);
-
   TestClipboardObserver observer;
 
   Clipboard* clipboard = Clipboard::GetForCurrentThread();

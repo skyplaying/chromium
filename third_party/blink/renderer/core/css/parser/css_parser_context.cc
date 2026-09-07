@@ -71,7 +71,7 @@ CSSParserContext::CSSParserContext(const CSSParserContext* other,
 CSSParserContext::CSSParserContext(CSSParserMode mode,
                                    SecureContextMode secure_context_mode,
                                    const Document* use_counter_document)
-    : CSSParserContext(KURL(),
+    : CSSParserContext(NullUrl(),
                        true /* origin_clean */,
                        TextEncoding(),
                        mode,
@@ -166,6 +166,7 @@ bool CSSParserContext::operator==(const CSSParserContext& other) const {
          is_ad_related_ == other.is_ad_related_ &&
          is_html_document_ == other.is_html_document_ &&
          secure_context_mode_ == other.secure_context_mode_ &&
+         world_ == other.world_ && referrer_ == other.referrer_ &&
          resource_fetch_restriction_ == other.resource_fetch_restriction_;
 }
 
@@ -229,13 +230,13 @@ void CSSParserContext::Count(WebDXFeature feature) const {
 }
 
 void CSSParserContext::CountDeprecation(WebFeature feature) const {
-  if (IsUseCounterRecordingEnabled() && document_) {
+  if (IsUseCounterRecordingEnabled()) {
     Deprecation::CountDeprecation(document_->GetExecutionContext(), feature);
   }
 }
 
-void CSSParserContext::Count(CSSParserMode mode, CSSPropertyID property) const {
-  if (IsUseCounterRecordingEnabled() && IsUseCounterEnabledForMode(mode)) {
+void CSSParserContext::Count(CSSPropertyID property) const {
+  if (IsUseCounterRecordingEnabled()) {
     document_->CountProperty(property);
   }
 }
@@ -263,6 +264,7 @@ bool CSSParserContext::InElementContext() const {
     case kCSSFontFaceRuleMode:
     case kCSSPropertyRuleMode:
     case kCSSFontPaletteValuesRuleMode:
+    case kCSSCounterStyleRuleMode:
       return false;
     case kHTMLStandardMode:
     case kHTMLQuirksMode:

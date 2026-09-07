@@ -10,13 +10,16 @@
 #include "base/test/bind.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_key.h"
+#include "chrome/browser/supervised_user/family_link_settings_service_factory.h"
 #include "chrome/browser/supervised_user/supervised_user_service_factory.h"
 #include "chrome/browser/supervised_user/supervised_user_url_filtering_service_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/test_accounts.h"
+#include "components/supervised_user/core/browser/family_link_settings_service.h"
 #include "components/supervised_user/core/browser/family_link_user_capabilities.h"
 #include "components/supervised_user/core/browser/supervised_user_service.h"
 #include "components/supervised_user/test_support/account_repository.h"
@@ -33,7 +36,7 @@ BrowserUser::BrowserUser(
     test_accounts::FamilyMember credentials,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     signin::IdentityManager& identity_manager,
-    Browser& browser,
+    BrowserWindowInterface& browser,
     Profile& profile,
     const base::RepeatingCallback<bool(int, const GURL&, ui::PageTransition)>
         add_tab_function)
@@ -42,9 +45,10 @@ BrowserUser::BrowserUser(
       identity_manager_(identity_manager),
       browser_(browser),
       profile_(profile),
-      sign_in_functions_(base::BindLambdaForTesting(
-                             [&browser]() -> Browser* { return &browser; }),
-                         add_tab_function) {}
+      sign_in_functions_(
+          base::BindLambdaForTesting(
+              [&browser]() -> BrowserWindowInterface* { return &browser; }),
+          add_tab_function) {}
 BrowserUser::~BrowserUser() = default;
 
 void BrowserUser::SignInToBrowser() {
@@ -69,6 +73,7 @@ FamilyLinkSettingsState::Services BrowserUser::GetServices() const {
       *SupervisedUserUrlFilteringServiceFactory::GetForProfile(&profile_.get()),
       *profile_->GetPrefs(),
       *HostContentSettingsMapFactory::GetForProfile(&profile_.get()),
+      *FamilyLinkSettingsServiceFactory::GetForKey(profile_->GetProfileKey()),
   };
 }
 

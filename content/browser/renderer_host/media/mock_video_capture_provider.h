@@ -24,19 +24,31 @@ class MockVideoCaptureProvider : public VideoCaptureProvider {
               CreateDeviceLauncher,
               (),
               (override));
-  MOCK_METHOD(void,
-              OpenNativeScreenCapturePicker,
-              (DesktopMediaID::Type type,
-               base::OnceCallback<void(DesktopMediaID::Id)> created_callback,
-               base::OnceCallback<void(webrtc::DesktopCapturer::Source)>
-                   picker_callback,
-               base::OnceCallback<void()> cancel_callback,
-               base::OnceCallback<void()> error_callback),
-              (override));
+  MOCK_METHOD(
+      void,
+      OpenNativeScreenCapturePicker,
+      (DesktopMediaID::Type type,
+       base::OnceCallback<void(DesktopMediaID::Id)> created_callback,
+       base::OnceCallback<void(webrtc::DesktopCapturer::Source)>
+           picker_callback,
+       base::OnceCallback<void()> cancel_callback,
+       base::OnceCallback<void()> error_callback,
+       base::OnceCallback<void(DesktopMediaID::Id)> stop_audio_callback),
+      (override));
   MOCK_METHOD(void,
               CloseNativeScreenCapturePicker,
               (DesktopMediaID device_id),
               (override));
+#if BUILDFLAG(IS_MAC)
+  MOCK_METHOD(
+      void,
+      GetApplicationAudioCaptureId,
+      (DesktopMediaID::Id session_id,
+       base::OnceCallback<void(
+           const std::optional<desktop_capture::ApplicationAudioCaptureId>&)>
+           callback),
+      (override));
+#endif
 };
 
 class MockVideoCaptureDeviceLauncher : public VideoCaptureDeviceLauncher {
@@ -82,6 +94,7 @@ class MockLaunchedVideoCaptureDevice : public LaunchedVideoCaptureDevice {
           uint32_t sub_capture_target_version,
           base::OnceCallback<void(media::mojom::ApplySubCaptureTargetResult)>));
   MOCK_METHOD0(RequestRefreshFrame, void());
+  MOCK_METHOD0(InvalidateBuffers, void());
   MOCK_METHOD2(DoSetDesktopCaptureWindowId,
                void(gfx::NativeViewId window_id, base::OnceClosure* done_cb));
   MOCK_METHOD1(OnUtilizationReport, void(media::VideoCaptureFeedback));

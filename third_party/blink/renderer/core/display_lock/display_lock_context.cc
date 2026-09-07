@@ -21,8 +21,10 @@
 #include "third_party/blink/renderer/core/editing/frame_selection.h"
 #include "third_party/blink/renderer/core/editing/selection_template.h"
 #include "third_party/blink/renderer/core/execution_context/agent.h"
+#include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
+#include "third_party/blink/renderer/core/highlight/highlight_registry.h"
 #include "third_party/blink/renderer/core/html/canvas/html_canvas_element.h"
 #include "third_party/blink/renderer/core/html/html_image_element.h"
 #include "third_party/blink/renderer/core/html/html_object_element.h"
@@ -262,8 +264,8 @@ void DisplayLockContext::Lock() {
   }
 
   // If there are any pending updates, we cancel them, as the fast updates
-  // can't detect a locked display.
-  // See: ../paint/README.md#Transform-update-optimization for more information
+  // can't detect a locked display. See:
+  // ../paint/README.md#Property-tree-update-optimization
   document_->View()->RemoveAllPendingUpdates();
 
   // There are two ways we can get locked:
@@ -496,7 +498,7 @@ void DisplayLockContext::UpgradeForcedScope(ForcedPhase old_phase,
     }
     if (!old_forced_info.is_forced(ForcedPhase::kPrePaint) &&
         forced_info_.is_forced(ForcedPhase::kPrePaint)) {
-      MarkAncestorsForPrePaintIfNeeded();
+      MarkForPrePaintIfNeeded();
     }
 
     if (emit_warnings && document_ &&
@@ -511,8 +513,7 @@ void DisplayLockContext::UpgradeForcedScope(ForcedPhase old_phase,
 }
 
 void DisplayLockContext::ScheduleStateChangeEventIfNeeded() {
-  if (state_ == EContentVisibility::kAuto &&
-      !state_change_task_pending_) {
+  if (state_ == EContentVisibility::kAuto && !state_change_task_pending_) {
     document_->GetExecutionContext()
         ->GetTaskRunner(TaskType::kMiscPlatformAPI)
         ->PostTask(
@@ -545,8 +546,8 @@ void DisplayLockContext::NotifyForcedUpdateScopeEnded(ForcedPhase phase) {
   // Since we do perform updates in a locked display if we're in a forced
   // update scope, when ending a forced update scope in a locked display, we
   // remove all pending updates, to prevent them from being executed in a
-  // locked display.
-  // See: ../paint/README.md#Transform-update-optimization for more information
+  // locked display. See:
+  // ../paint/README.md#Property-tree-update-optimization
   if (is_locked_) {
     document_->View()->RemoveAllPendingUpdates();
   }
@@ -607,9 +608,23 @@ void DisplayLockContext::Unlock() {
   // Now that we know we have a layout object, we should ensure that we can
   // reach the rest of the phases as well.
   MarkForLayoutIfNeeded();
-  MarkAncestorsForPrePaintIfNeeded();
+  MarkForPrePaintIfNeeded();
   MarkNeedsRepaintAndPaintArtifactCompositorUpdate();
   MarkNeedsCullRectUpdate();
+
+  // Custom highlight markers are produced by walking ranges with
+  // TextIterator, which silently skips text inside display-locked subtrees.
+  // The HighlightRegistry validation cache is keyed on DOM and style
+  // versions only, so it does not know that ranges intersecting this subtree
+  // need to be revisited now that the subtree is visible. Force a fresh
+  // validation pass on the next lifecycle update.
+  if (LocalDOMWindow* window = document_->domWindow()) {
+    if (auto* registry =
+            Supplement<LocalDOMWindow>::From<HighlightRegistry>(*window);
+        registry && registry->size()) {
+      registry->ScheduleRepaint();
+    }
+  }
 }
 
 bool DisplayLockContext::CanDirtyStyle() const {
@@ -701,7 +716,7 @@ bool DisplayLockContext::MarkForLayoutIfNeeded() {
   return false;
 }
 
-bool DisplayLockContext::MarkAncestorsForPrePaintIfNeeded() {
+bool DisplayLockContext::MarkForPrePaintIfNeeded() {
   // TODO(vmpstr): We should add a compositing phase for proper bookkeeping.
   bool compositing_dirtied = MarkForCompositingUpdatesIfNeeded();
   bool visual_overflow_dirtied = MarkForVisualOverflowRecalcIfNeeded();
@@ -715,26 +730,15 @@ bool DisplayLockContext::MarkAncestorsForPrePaintIfNeeded() {
     // update, then ensure to mark self as needing the update. This sets up the
     // correct flags for PrePaint to recompute the necessary values and
     // propagate the information into the subtree.
-    if (needs_effective_allowed_touch_action_update_ ||
-        layout_object->EffectiveAllowedTouchActionChanged() ||
-        layout_object->DescendantEffectiveAllowedTouchActionChanged()) {
-      // Note that although the object itself should have up to date value, in
-      // order to force recalc of the whole subtree, we mark it as needing an
-      // update.
-      layout_object->MarkEffectiveAllowedTouchActionChanged();
+    PrePaintSubtreeWalkReasons reasons = pre_paint_subtree_walk_reasons_;
+    reasons.PutAll(layout_object->GetPrePaintSubtreeWalkReasons());
+    reasons.PutAll(layout_object->GetDescendantPrePaintSubtreeWalkReasons());
+    if (!reasons.empty()) {
+      layout_object->SetNeedsPrePaintSubtreeWalk(reasons);
     }
-    if (needs_blocking_wheel_event_handler_update_ ||
-        layout_object->BlockingWheelEventHandlerChanged() ||
-        layout_object->DescendantBlockingWheelEventHandlerChanged()) {
-      // Note that although the object itself should have up to date value, in
-      // order to force recalc of the whole subtree, we mark it as needing an
-      // update.
-      layout_object->MarkBlockingWheelEventHandlerChanged();
-    }
-    if (needs_soft_navigation_context_update_ ||
-        layout_object->SoftNavigationContextChanged() ||
-        layout_object->DescendantSoftNavigationContextChanged()) {
-      layout_object->MarkSoftNavigationContextChanged();
+    if (RuntimeEnabledFeatures::ClearDisplayLockPrePaintFlagsEnabled()) {
+      needs_pre_paint_subtree_walk_ = false;
+      pre_paint_subtree_walk_reasons_.Clear();
     }
     return true;
   }
@@ -827,12 +831,14 @@ bool DisplayLockContext::IsElementDirtyForPrePaint() const {
   if (auto* layout_object = element_->GetLayoutObject()) {
     return PrePaintTreeWalk::ObjectRequiresPrePaint(*layout_object) ||
            PrePaintTreeWalk::ObjectRequiresTreeBuilderContext(*layout_object) ||
-           needs_prepaint_subtree_walk_ ||
-           needs_effective_allowed_touch_action_update_ ||
-           needs_blocking_wheel_event_handler_update_ ||
-           needs_soft_navigation_context_update_;
+           IsContextDirtyForPrePaint();
   }
   return false;
+}
+
+bool DisplayLockContext::IsContextDirtyForPrePaint() const {
+  return needs_pre_paint_subtree_walk_ ||
+         !pre_paint_subtree_walk_reasons_.empty();
 }
 
 void DisplayLockContext::DidMoveToNewDocument(Document& old_document) {
@@ -1070,7 +1076,7 @@ const char* DisplayLockContext::ShouldForceUnlock() const {
   if ((style->IsDisplayTableType() &&
        style->Display() != EDisplay::kTableCell) ||
       style->Display() == EDisplay::kRubyText ||
-      (style->IsDisplayInlineType() && !style->IsDisplayReplacedType())) {
+      style->IsNonAtomicInlineDisplayType()) {
     return rejection_names::kContainmentNotSatisfied;
   }
   return nullptr;
@@ -1142,12 +1148,12 @@ void DisplayLockContext::DetermineIfSubtreeHasTopLayerElement() {
   // have nested display locks that walk is more optimal.
   for (auto top_layer_element : document_->TopLayerElements()) {
     auto* ancestor = top_layer_element.Get();
-    while ((ancestor = FlatTreeTraversal::ParentElement(*ancestor))) {
+    do {
       if (ancestor == element_) {
         NotifyHasTopLayerElement();
         return;
       }
-    }
+    } while ((ancestor = FlatTreeTraversal::ParentElement(*ancestor)));
   }
 }
 
@@ -1235,7 +1241,7 @@ void DisplayLockContext::DetermineIfSubtreeHasSelection() {
 
   auto range = ToEphemeralRangeInFlatTree(document_->GetFrame()
                                               ->Selection()
-                                              .GetSelectionInDOMTree()
+                                              .GetSelectionInDomTree()
                                               .ComputeRange());
   bool subtree_has_selection = false;
   for (auto& node : range.Nodes()) {
@@ -1347,7 +1353,7 @@ bool DisplayLockContext::DescendantIsAnchorTargetFromOutsideDisplayLock() {
 void DisplayLockContext::Trace(Visitor* visitor) const {
   visitor->Trace(element_);
   visitor->Trace(document_);
-  ElementRareDataField::Trace(visitor);
+  NodeRareDataField::Trace(visitor);
 }
 
 void DisplayLockContext::SetShouldUnlockAutoForPrint(bool flag) {

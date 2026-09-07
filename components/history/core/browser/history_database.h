@@ -6,12 +6,17 @@
 #define COMPONENTS_HISTORY_CORE_BROWSER_HISTORY_DATABASE_H_
 
 #include <memory>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include "base/compiler_specific.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "components/history/core/browser/download_database.h"
 #include "components/history/core/browser/history_types.h"
+#include "components/history/core/browser/journeys/journeys_database.h"
+#include "components/history/core/browser/journeys/journeys_sync_metadata_database.h"
 #include "components/history/core/browser/sync/history_sync_metadata_database.h"
 #include "components/history/core/browser/url_database.h"
 #include "components/history/core/browser/visit_annotations_database.h"
@@ -21,6 +26,7 @@
 #include "sql/database.h"
 #include "sql/init_status.h"
 #include "sql/meta_table.h"
+#include "sql/statement.h"
 
 namespace base {
 class FilePath;
@@ -46,7 +52,8 @@ class HistoryDatabase : public DownloadDatabase,
                         public VisitDatabase,
                         public VisitAnnotationsDatabase,
                         public VisitedLinkDatabase,
-                        public VisitSegmentDatabase {
+                        public VisitSegmentDatabase,
+                        public journeys::JourneysDatabase {
  public:
   // Reasons for initialization to fail. These are logged to UMA. It corresponds
   // to the HistoryInitStep enum in enums.xml.
@@ -117,6 +124,10 @@ class HistoryDatabase : public DownloadDatabase,
   // Returns the current version that we will generate history databases with.
   static int GetCurrentVersion();
 
+  // Returns the version number stored in the database's meta table.
+  // Must be called after Init().
+  int GetDatabaseVersionForTesting();
+
   // Creates a new inactive transaction for the history database. Caller is
   // responsible for calling `sql::Transaction::Begin()` and checking the return
   // value. Only call this after `Init()`.
@@ -127,9 +138,8 @@ class HistoryDatabase : public DownloadDatabase,
   // this, NOT any `HistoryDBTask`, which has a non-owning pointer to this.
   std::unique_ptr<sql::Transaction> CreateTransaction();
 
-  // We DO NOT support transaction nesting. It's considered a "misfeature", and
-  // so the return value of this should always be 0 or 1 during runtime.
-  int transaction_nesting() const { return db_.transaction_nesting(); }
+  // Returns true if at least one `Transaction` is active on the database.
+  bool HasActiveTransactions() const { return db_.HasActiveTransactions(); }
 
   // Drops all tables except the URL, and download tables, and recreates them
   // from scratch. This is done to rapidly clean up stuff when deleting all
@@ -153,9 +163,6 @@ class HistoryDatabase : public DownloadDatabase,
   // Vacuums the database. This will cause sqlite to defragment and collect
   // unused space in the file. It can be VERY SLOW.
   void Vacuum();
-
-  // Release all non-essential memory associated with this database connection.
-  void TrimMemory();
 
   // Razes the database. Returns true if successful.
   bool Raze();
@@ -199,18 +206,70 @@ class HistoryDatabase : public DownloadDatabase,
   bool KnownToSyncVisitsExist();
   void SetKnownToSyncVisitsExist(bool exist);
 
+  // Visited link with URL enumeration -----------------------------------------
+
+  // Enumerator that returns visited link rows joined with their link URL from
+  // the urls table, avoiding N+1 queries during startup iteration.
+  class VisitedLinkWithUrlEnumerator {
+   public:
+    VisitedLinkWithUrlEnumerator();
+
+    VisitedLinkWithUrlEnumerator(const VisitedLinkWithUrlEnumerator&) = delete;
+    VisitedLinkWithUrlEnumerator& operator=(
+        const VisitedLinkWithUrlEnumerator&) = delete;
+
+    ~VisitedLinkWithUrlEnumerator();
+
+    // Retrieves the next visited link and its associated link URL. Returns
+    // false if no more rows are available.
+    bool GetNextVisitedLink(VisitedLinkRow& row, GURL& link_url);
+
+   private:
+    friend class HistoryDatabase;
+
+    bool initialized_ = false;
+    sql::Statement statement_;
+  };
+
+  // Initializes the given enumerator to enumerate all visited links joined with
+  // their URLs from the urls table. This is more efficient than separately
+  // querying the urls table for each visited link row.
+  bool InitVisitedLinkWithUrlEnumeratorForEverything(
+      VisitedLinkWithUrlEnumerator& enumerator);
+
+  // Batch recent visits -------------------------------------------------------
+
+  // A map from URLID to a vector of (visit_time, transition) pairs, sorted by
+  // visit_time descending. Used to batch-fetch recent visits for multiple URLs
+  // in a single query during startup rebuild, instead of issuing N separate
+  // GetMostRecentVisitsForURL queries.
+  using RecentVisitsMap = std::unordered_map<
+      URLID,
+      std::vector<std::pair<base::Time, ui::PageTransition>>>;
+
+  // Fetches the most recent visits (up to |max_visits_per_url|) for all URLs
+  // that match the "significant" criteria. Returns a map from URLID to visit
+  // info. This replaces the per-URL GetMostRecentVisitsForURL pattern during
+  // RebuildFromHistory, converting N+1 SQL queries into a single query.
+  RecentVisitsMap GetBatchRecentVisitsForSignificantURLs(
+      int max_visits_per_url);
+
   // Sync metadata storage ----------------------------------------------------
 
   // Returns the sub-database used for storing Sync metadata for History.
   HistorySyncMetadataDatabase* GetHistoryMetadataDB();
+
+  // Returns the sub-database used for storing Sync metadata for Journeys.
+  journeys::JourneysSyncMetadataDatabase* GetJourneysMetadataDB();
 
   sql::Database& GetDBForTesting();
 
  private:
   friend class ::InMemoryURLIndexTest;
 
-  // Overridden from URLDatabase, DownloadDatabase, VisitDatabase, and
-  // VisitSegmentDatabase.
+  // Overridden from URLDatabase, DownloadDatabase, VisitDatabase,
+  // VisitAnnotationsDatabase, VisitedLinkDatabase, VisitSegmentDatabase, and
+  // JourneysDatabase.
   sql::Database& GetDB() override;
 
   // Migration -----------------------------------------------------------------
@@ -250,8 +309,9 @@ class HistoryDatabase : public DownloadDatabase,
   // Most of the sub-DBs (URLDatabase etc.) are integrated into HistoryDatabase
   // via inheritance. However, that can lead to "diamond inheritance" issues
   // when multiple of these base classes define the same methods. Therefore the
-  // Sync metadata DB is integrated via composition instead.
+  // Sync metadata DBs are integrated via composition instead.
   HistorySyncMetadataDatabase history_metadata_db_;
+  journeys::JourneysSyncMetadataDatabase journeys_metadata_db_;
 
   base::Time cached_early_expiration_threshold_;
 };

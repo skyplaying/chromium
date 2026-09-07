@@ -52,14 +52,11 @@ enum class SetAccountsInCookieResult;
 
 }  // namespace signin
 
-// Merges a Google account known to Chrome into the cookie jar.  When merging
-// multiple accounts, one instance of the helper is better than multiple
-// instances if there is the possibility that they run concurrently, since
-// changes to the cookie must be serialized.
+// Manages Google authentication cookies (the Gaia cookie jar) and keeps the
+// list of signed-in Gaia accounts synchronized with Chrome's identity state.
 //
-// Also checks the External CC result to ensure no services that consume the
-// GAIA cookie are blocked (such as youtube). This is executed once for the
-// lifetime of this object, when the first call is made to SetAccountsInCookie.
+// See docs/gaia_cookie_manager_service.md for architectural details, server
+// endpoints, serialized request queue management, and cookie change detection.
 class GaiaCookieManagerService
     : public GaiaAuthConsumer,
       public signin::AccountsCookieMutator::PartitionDelegate,
@@ -228,6 +225,9 @@ class GaiaCookieManagerService
   // will be called.
   signin::AccountsInCookieJarInfo ListAccounts();
 
+  // Returns the cached list of accounts.
+  signin::AccountsInCookieJarInfo GetCachedListAccounts();
+
   // Triggers a ListAccounts fetch. This is public so that callers that know
   // that a check which GAIA should be done can force it.
   void TriggerListAccounts();
@@ -299,6 +299,9 @@ class GaiaCookieManagerService
   FRIEND_TEST_ALL_PREFIXES(GaiaCookieManagerServiceCookieTest, CookieChange);
   scoped_refptr<network::SharedURLLoaderFactory> GetURLLoaderFactory();
 
+  // Calls ListAccounts() and ignores the result. Used for posting async tasks.
+  void TriggerListAccountsIfStale();
+
   // Calls the LogOutFromCookie completion callback.
   void SignalLogOutComplete(const GoogleServiceAuthError& error);
 
@@ -323,6 +326,7 @@ class GaiaCookieManagerService
       GaiaAuthConsumer* consumer,
       const gaia::GaiaSource& source) override;
   network::mojom::CookieManager* GetCookieManagerForPartition() override;
+  signin::PartitionSuffix GetPartitionSuffix() const override;
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
   std::unique_ptr<signin::BoundSessionOAuthMultiLoginDelegate>
   CreateBoundSessionOAuthMultiLoginDelegateForPartition() override;

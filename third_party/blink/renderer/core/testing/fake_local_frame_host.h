@@ -50,9 +50,6 @@ class FakeLocalFrameHost : public mojom::blink::LocalFrameHost {
   void SetVirtualKeyboardMode(
       ui::mojom::blink::VirtualKeyboardMode mode) override;
   void VisibilityChanged(mojom::blink::FrameVisibility visibility) override;
-  void DidChangeThemeColor(std::optional<::SkColor> theme_color) override;
-  void DidChangeBackgroundColor(const SkColor4f& background_color,
-                                bool color_adjust) override;
   void DidFailLoadWithError(const ::blink::KURL& url,
                             int32_t error_code) override;
   void DidFocusFrame() override;
@@ -113,12 +110,15 @@ class FakeLocalFrameHost : public mojom::blink::LocalFrameHost {
   void RunBeforeUnloadConfirm(bool is_reload,
                               RunBeforeUnloadConfirmCallback callback) override;
   void UpdateFaviconURL(
-      Vector<blink::mojom::blink::FaviconURLPtr> favicon_urls) override;
+      Vector<blink::mojom::blink::FaviconURLPtr> favicon_urls,
+      blink::mojom::blink::FaviconUpdateReason reason) override;
   void DownloadURL(mojom::blink::DownloadURLParamsPtr params) override;
+  void ShowCaptionSettings() override;
   void FocusedElementChanged(bool is_editable_element,
                              bool is_richly_editable_element,
                              const gfx::Rect& bounds_in_frame_widget,
-                             blink::mojom::FocusType focus_type) override;
+                             blink::mojom::FocusType focus_type,
+                             mojom::blink::DOMNodeIdPtr dom_node_id) override;
   void TextSelectionChanged(const String& text,
                             uint32_t offset,
                             const gfx::Range& range) override;
@@ -189,24 +189,16 @@ class FakeLocalFrameHost : public mojom::blink::LocalFrameHost {
       const Vector<blink::FencedFrame::ReportingDestination>& destinations,
       bool once,
       bool cross_origin_exposed) override;
-  void DisableUntrustedNetworkInFencedFrame(
-      DisableUntrustedNetworkInFencedFrameCallback callback) override;
-  void ExemptUrlFromNetworkRevocationForTesting(
-      const blink::KURL& exempted_url,
-      ExemptUrlFromNetworkRevocationForTestingCallback callback) override;
   void SendLegacyTechEvent(
       const String& type,
       mojom::blink::LegacyTechEventCodeLocationPtr code_location) override;
-  void SendPrivateAggregationRequestsForFencedFrameEvent(
-      const String& event_type) override;
+
   void CreateFencedFrame(
       mojo::PendingAssociatedReceiver<mojom::blink::FencedFrameOwnerHost>,
       mojom::blink::RemoteFrameInterfacesFromRendererPtr
           remote_frame_interfaces,
       const RemoteFrameToken& frame_token,
       const base::UnguessableToken& devtools_frame_token) override;
-  void ForwardFencedFrameEventAndUserActivationToEmbedder(
-      const String& event_type) override;
   void OnViewTransitionOptInChanged(
       mojom::blink::ViewTransitionSameOriginOptIn) override {}
   void StartDragging(const blink::WebDragData& drag_data,
@@ -217,7 +209,8 @@ class FakeLocalFrameHost : public mojom::blink::LocalFrameHost {
                      mojom::blink::DragEventSourceInfoPtr event_info) override;
   void IssueKeepAliveHandle(
       mojo::PendingReceiver<mojom::blink::NavigationStateKeepAliveHandle>
-          receiver) override;
+          receiver,
+      const blink::InitiatorStateToken& initiator_state_token) override;
   void NotifyStorageAccessed(blink::mojom::StorageTypeAccessed storageType,
                              bool blocked) override;
   void RecordWindowProxyUsageMetrics(
@@ -226,8 +219,12 @@ class FakeLocalFrameHost : public mojom::blink::LocalFrameHost {
   void InitializeCrashReportContext(
       uint64_t length,
       InitializeCrashReportContextCallback callback) override;
+  void RequestUnboundedSurface(
+      mojo::PendingAssociatedReceiver<mojom::blink::UnboundedSurfaceHost> host,
+      mojo::PendingAssociatedRemote<mojom::blink::UnboundedSurfaceClient>
+          client,
+      const gfx::Rect& bounds) override {}
   void NotifyDocumentInteractive() override;
-  void SetStorageAccessApiStatus(net::StorageAccessApiStatus status) override;
 
  private:
   void BindFrameHostReceiver(mojo::ScopedInterfaceEndpointHandle handle);

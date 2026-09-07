@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -220,12 +221,12 @@ scoped_refptr<X509Certificate> X509Certificate::CreateFromPickleUnsafeOptions(
     return nullptr;
 
   std::vector<std::string_view> cert_chain;
-  const char* data = nullptr;
-  size_t data_length = 0;
   for (size_t i = 0; i < chain_length; ++i) {
-    if (!pickle_iter->ReadData(&data, &data_length))
+    std::string_view data;
+    if (!pickle_iter->ReadStringPiece(&data)) {
       return nullptr;
-    cert_chain.emplace_back(data, data_length);
+    }
+    cert_chain.emplace_back(data);
   }
   return CreateFromDERCertChainUnsafeOptions(cert_chain, options);
 }
@@ -503,14 +504,14 @@ bool X509Certificate::VerifyHostname(
     // is not registry controlled, this ensures that all reference domains
     // contain at least three domain components when using wildcards.
     size_t registry_length =
-        registry_controlled_domains::GetCanonicalHostRegistryLength(
+        registry_controlled_domains::GetCanonicalHostRegistry(
             reference_name,
             registry_controlled_domains::INCLUDE_UNKNOWN_REGISTRIES,
-            registry_controlled_domains::EXCLUDE_PRIVATE_REGISTRIES);
-
-    // Because |reference_name| was already canonicalized, the following
-    // should never happen.
-    CHECK_NE(std::string::npos, registry_length);
+            registry_controlled_domains::EXCLUDE_PRIVATE_REGISTRIES)
+            .transform(&std::string_view::size)
+            // Because `reference_name` was already canonicalized, `.value()` is
+            // safe.
+            .value();
 
     // Account for the leading dot in |reference_domain|.
     bool is_registry_controlled =

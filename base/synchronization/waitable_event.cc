@@ -6,6 +6,7 @@
 
 #include "base/check.h"
 #include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "base/threading/thread_restrictions.h"
@@ -23,9 +24,8 @@ WaitableEvent::~WaitableEvent() {
   if (!only_used_while_idle_) {
     // Check the tracing state to avoid an unnecessary syscall on destruction
     // (which can be performance sensitive, crbug.com/40275035).
-    static const uint8_t* flow_enabled =
-        TRACE_EVENT_API_GET_CATEGORY_GROUP_ENABLED("wakeup.flow,toplevel.flow");
-    if (*flow_enabled && IsSignaled()) {
+    if (TRACE_EVENT_CATEGORY_ENABLED("wakeup.flow,toplevel.flow") &&
+        IsSignaled()) {
       TRACE_EVENT_INSTANT("wakeup.flow,toplevel.flow",
                           "~WaitableEvent while Signaled",
                           perfetto::TerminatingFlow::FromPointer(this));
@@ -53,21 +53,18 @@ bool WaitableEvent::TimedWait(TimeDelta wait_delta, const Location& location) {
     return IsSignaled();
   }
 
-  // Consider this thread blocked for scheduling purposes. Ignore this for
-  // non-blocking WaitableEvents.
+  // Consider this thread blocked unless the event is already signaled. Ignore
+  // this for non-blocking WaitableEvents.
   std::optional<internal::ScopedBlockingCallWithBaseSyncPrimitives>
       scoped_blocking_call;
 
   if (!only_used_while_idle_) {
-    // Assert before checking if the event is signaled.
+    // Always verify thread restrictions to avoid fortuitous allowance if it's
+    // already signaled.
     internal::AssertBaseSyncPrimitivesAllowed();
-    if (IsSignaled()) {
-      // If it is signaled already, there is no need to actually instantiate the
-      // scoped blocking call and wait.
+    if (IsDefinitelySignaled()) {
       return true;
     }
-    // Since we know the event is not signaled, we use WILL_BLOCK instead of
-    // MAY_BLOCK.
     scoped_blocking_call.emplace(location, BlockingType::WILL_BLOCK);
   }
 
@@ -84,8 +81,15 @@ bool WaitableEvent::TimedWait(TimeDelta wait_delta, const Location& location) {
 
 size_t WaitableEvent::WaitMany(base::span<WaitableEvent*> events) {
   DCHECK(!events.empty()) << "Cannot wait on no events";
+
+  for (size_t i = 0; i < events.size(); ++i) {
+    if (events[i]->IsDefinitelySignaled()) {
+      return i;
+    }
+  }
+
   internal::ScopedBlockingCallWithBaseSyncPrimitives scoped_blocking_call(
-      FROM_HERE, BlockingType::MAY_BLOCK);
+      FROM_HERE, BlockingType::WILL_BLOCK);
 
   const size_t signaled_id = WaitManyImpl(events);
   WaitableEvent* const signaled_event = events[signaled_id];

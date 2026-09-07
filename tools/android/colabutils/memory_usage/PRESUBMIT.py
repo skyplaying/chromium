@@ -13,8 +13,14 @@ USE_PYTHON3 = True
 
 def CheckChange(input_api, output_api):
     """Runs python unittests in this directory."""
+
+    # colabutils is not supported on Windows
+    if input_api.is_windows:
+        return []
+
     return input_api.canned_checks.RunUnitTestsInDirectory(
         input_api,
         output_api,
         input_api.PresubmitLocalPath(),
-        files_to_check=[r'.+_unittest\.py$'])
+        files_to_check=[r'.+_unittest\.py$'],
+    )

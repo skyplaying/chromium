@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/functional/callback.h"
 #include "pdf/buildflags.h"
 #include "services/screen_ai/buildflags/buildflags.h"
@@ -138,8 +139,7 @@ class PDFiumEngineClient {
 
   // Submit the data using HTTP POST.
   virtual void SubmitForm(const std::string& url,
-                          const void* data,
-                          int length) {}
+                          base::span<const uint8_t> data) {}
 
   // Creates and returns new URL loader for partial document requests.
   virtual std::unique_ptr<UrlLoader> CreateUrlLoader() = 0;
@@ -160,6 +160,16 @@ class PDFiumEngineClient {
 
   // Notifies the client that the document has finished loading.
   virtual void DocumentLoadComplete() {}
+
+  // Notifies the client that the engine has finished rasterizing document
+  // content for the first time, i.e. that the first PDF pixels the user can
+  // actually read are ready. Fired at most once per engine.
+  //
+  // This is deliberately narrower than "the plugin painted something": the
+  // plugin's own first paint fills the buffer with the background color, and a
+  // page whose data has not arrived yet is painted as a blank placeholder.
+  // Neither shows document content, so neither fires this.
+  virtual void OnFirstContentPainted() {}
 
   // Notifies the client that the document has failed to load.
   virtual void DocumentLoadFailed() {}

@@ -5,17 +5,22 @@
 #ifndef CHROME_BROWSER_UI_READ_ANYTHING_READ_ANYTHING_OMNIBOX_CONTROLLER_H_
 #define CHROME_BROWSER_UI_READ_ANYTHING_READ_ANYTHING_OMNIBOX_CONTROLLER_H_
 
+#include <optional>
+
 #include "base/timer/timer.h"
+#include "chrome/browser/ui/page_action/page_action_observer.h"
 #include "chrome/browser/ui/read_anything/read_anything_enums.h"
 #include "chrome/browser/ui/read_anything/read_anything_lifecycle_observer.h"
-#include "chrome/browser/ui/views/page_action/page_action_observer.h"
+#include "chrome/browser/ui/tabs/contents_observing_tab_feature.h"
 #include "components/tabs/public/tab_interface.h"
 #include "components/user_education/common/feature_promo/feature_promo_result.h"
-#include "content/public/browser/web_contents_observer.h"
+#include "services/metrics/public/cpp/ukm_source_id.h"
+
+using read_anything::mojom::ReadAnythingOpenTrigger;
 
 // A per-tab class that handles the logic for showing or hiding the omnibox
 // entry point for Reading mode.
-class ReadAnythingOmniboxController : public content::WebContentsObserver,
+class ReadAnythingOmniboxController : public tabs::ContentsObservingTabFeature,
                                       public page_actions::PageActionObserver,
                                       public ReadAnythingLifecycleObserver {
  public:
@@ -31,13 +36,26 @@ class ReadAnythingOmniboxController : public content::WebContentsObserver,
   void DidStopLoading() override;
 
   // ReadAnythingLifecycleObserver:
-  void Activate(bool active,
-                std::optional<ReadAnythingOpenTrigger> open_trigger) override;
+  void Activate(
+      bool active,
+      ReadAnythingOpenTrigger open_trigger,
+      std::optional<base::TimeDelta> completed_session_duration) override;
   void OnDestroyed() override;
+  void OnReadingModePresenterChanged() override;
+  void OnWillClose(ReadAnythingCloseReason reason) override;
 
   void SetDwellTimeForTesting(base::TimeTicks test_time) {
     candidate_check_triggered_time_ms_ = test_time;
   }
+
+  // tabs::ContentsObservingTabFeature:
+  void OnDiscardContents(tabs::TabInterface* tab,
+                         content::WebContents* old_contents,
+                         content::WebContents* new_contents) override;
+
+  // page_actions::PageActionObserver:
+  void OnPageActionIconShown(
+      const page_actions::PageActionState& page_action) override;
 
  protected:
   // Runs a heuristic to check if the current tab's contents are a good
@@ -86,11 +104,35 @@ class ReadAnythingOmniboxController : public content::WebContentsObserver,
   // Stops any running timers.
   void StopTimers();
 
+  // If the omnibox chip is irrelevant now. e.g. because the tab is no longer
+  // active or RM is already open.
+  bool IsIrrelevant();
+
+  // Logs the UKM metrics for the omnibox entry point.
+  void LogUkm();
+
   // The time when CheckIfShouldSuggestReadingMode was triggered.
   base::TimeTicks candidate_check_triggered_time_ms_;
 
   // The cached result of CheckIfShouldSuggestReadingMode.
   bool was_last_checked_page_distillable_ = false;
+
+  // Whether the current page has been already been checked for suggesting RM.
+  bool was_page_checked_ = false;
+
+  // Whether Omnibox was triggered to open reading mode on the current page.
+  bool was_triggered_ = false;
+
+  // Whether the entry point was actually shown to the user.
+  bool was_shown_ = false;
+
+  // The current ukm source.
+  ukm::SourceId ukm_source_id_ = ukm::kInvalidSourceId;
+
+  // The last reason Immersive RM was closed. Used to determine whether to show
+  // the omnibox entrypoint after RM is closed. This needs to be stored because
+  // the ReadingModePresenterChanged callback happens asynchronously.
+  std::optional<ReadAnythingCloseReason> last_close_reason_;
 
   // A timer for logging whether the user opened RM after seeing the IPH.
   std::unique_ptr<base::OneShotTimer> iph_response_timer_;

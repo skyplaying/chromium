@@ -9,15 +9,16 @@
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/not_fatal_until.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_window.h"
-#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/views/profiles/profile_management_step_controller.h"
 #include "chrome/browser/ui/views/profiles/profile_management_types.h"
+#include "chrome/browser/ui/views/profiles/profile_picker_toolbar.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_web_contents_host.h"
+#include "components/web_modal/web_contents_modal_dialog_manager.h"
 
 namespace {
 
@@ -45,6 +46,14 @@ std::string_view GetStepHistogramSuffix(
       return ".SearchEngineChoice";
     case ProfileManagementFlowController::Step::kFinishFlow:
       return ".FinishFlow";
+    case ProfileManagementFlowController::Step::kFeatureShowcase:
+      return ".FeatureShowcase";
+    case ProfileManagementFlowController::Step::kFinishOrContinue:
+      return ".FinishOrContinue";
+    case ProfileManagementFlowController::Step::kDeviceSignalsDisclaimer:
+      return ".DeviceSignalsDisclaimer";
+    case ProfileManagementFlowController::Step::kWelcome:
+      return ".Welcome";
   }
 }
 // LINT.ThenChange(//tools/metrics/histograms/metadata/profile/histograms.xml:StepName)
@@ -99,6 +108,14 @@ void ProfileManagementFlowController::SwitchToStep(
   }
 }
 
+bool ProfileManagementFlowController::CanNavigateBack() const {
+  auto it = initialized_steps_.find(flow_tracker_.tracked_step());
+  if (it == initialized_steps_.end()) {
+    return false;
+  }
+  return it->second->CanNavigateBack();
+}
+
 void ProfileManagementFlowController::OnNavigateBackRequested() {
   DCHECK(initialized_steps_.contains(flow_tracker_.tracked_step()));
   initialized_steps_.at(flow_tracker_.tracked_step())
@@ -108,6 +125,13 @@ void ProfileManagementFlowController::OnNavigateBackRequested() {
 void ProfileManagementFlowController::OnReloadRequested() {
   DCHECK(initialized_steps_.contains(flow_tracker_.tracked_step()));
   initialized_steps_.at(flow_tracker_.tracked_step())->OnReloadRequested();
+}
+
+ProfilePickerToolbar::Builder
+ProfileManagementFlowController::CreateToolbarBuilder() {
+  return ProfilePickerToolbar::Builder(base::BindRepeating(
+      &ProfileManagementFlowController::OnNavigateBackRequested,
+      weak_factory_.GetWeakPtr()));
 }
 
 std::u16string
@@ -149,6 +173,16 @@ ProfileManagementFlowController::current_step() const {
   return flow_tracker_.tracked_step();
 }
 
+ProfileManagementStepController*
+ProfileManagementFlowController::GetCurrentStepController() const {
+  if (current_step() == Step::kUnknown) {
+    return nullptr;
+  }
+  auto it = initialized_steps_.find(current_step());
+  CHECK(it != initialized_steps_.end());
+  return it->second.get();
+}
+
 void ProfileManagementFlowController::FinishFlowAndRunInBrowser(
     Profile* profile,
     PostHostClearedCallback post_host_cleared_callback) {
@@ -158,16 +192,17 @@ void ProfileManagementFlowController::FinishFlowAndRunInBrowser(
   // if it is already going to be opened.
   PreFinishWithBrowser();
 
-  base::OnceCallback<void(Browser*)> post_browser_open_callback;
+  base::OnceCallback<void(BrowserWindowInterface*)> post_browser_open_callback;
   // `clear_host_callback_` and `post_host_cleared_callback` may be run after
   // the `ProfileManagementFlowController` is deleted.
   if (post_host_cleared_callback->is_null()) {
-    post_browser_open_callback =
-        base::IgnoreArgs<Browser*>(std::move(clear_host_callback_.value()));
+    post_browser_open_callback = base::IgnoreArgs<BrowserWindowInterface*>(
+        std::move(clear_host_callback_.value()));
   } else {
     post_browser_open_callback =
         base::BindOnce(
-            [](base::OnceClosure clear_host_closure, Browser* browser) {
+            [](base::OnceClosure clear_host_closure,
+               BrowserWindowInterface* browser) -> BrowserWindowInterface* {
               std::move(clear_host_closure).Run();
               return browser;
             },
@@ -205,11 +240,22 @@ void ProfileManagementFlowController::CreateSignedOutFlowWebContents(
     Profile* profile) {
   signed_out_flow_web_contents_ =
       content::WebContents::Create(content::WebContents::CreateParams(profile));
+  web_modal::WebContentsModalDialogManager::CreateForWebContents(
+      signed_out_flow_web_contents_.get());
+  web_modal::WebContentsModalDialogManager::FromWebContents(
+      signed_out_flow_web_contents_.get())
+      ->SetDelegate(this);
 }
 
 content::WebContents*
 ProfileManagementFlowController::GetSignedOutFlowWebContents() const {
   return signed_out_flow_web_contents_.get();
+}
+
+web_modal::WebContentsModalDialogHost*
+ProfileManagementFlowController::GetWebContentsModalDialogHost(
+    content::WebContents* web_contents) {
+  return host_->GetWebContentsModalDialogHost();
 }
 
 void ProfileManagementFlowController::Reset(

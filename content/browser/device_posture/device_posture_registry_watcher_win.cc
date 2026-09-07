@@ -5,8 +5,10 @@
 
 #include <optional>
 
+#include "base/check.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/json/json_reader.h"
+#include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/utf_string_conversions.h"
@@ -54,9 +56,9 @@ void DevicePostureRegistryWatcherWin::AddObserver(
     return;
   }
 
-  DCHECK(!observers_.HasObserver(observer));
+  CHECK(!observers_.HasObserver(observer), base::NotFatalUntil::M159);
   if (observers_.empty()) {
-    DCHECK(!registry_key_);
+    CHECK(!registry_key_, base::NotFatalUntil::M159);
     registry_key_.emplace(HKEY_CURRENT_USER, kFoledRegKeyPath,
                           KEY_NOTIFY | KEY_QUERY_VALUE);
     if (registry_key_->Valid()) {

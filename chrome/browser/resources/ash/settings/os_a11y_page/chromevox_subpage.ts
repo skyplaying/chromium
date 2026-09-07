@@ -15,6 +15,8 @@ import './ax_annotations_section.js';
 import './bluetooth_braille_display_ui.js';
 
 import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
+import type {BrailleTable} from 'chrome://resources/ash/common/accessibility/braille_table.js';
+import {JP_BRAILLE_TENJI_TABLE} from 'chrome://resources/ash/common/accessibility/braille_table.js';
 import type {CrInputElement} from 'chrome://resources/ash/common/cr_elements/cr_input/cr_input.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {WebUiListenerMixin} from 'chrome://resources/ash/common/cr_elements/web_ui_listener_mixin.js';
@@ -30,7 +32,6 @@ import type {Route} from '../router.js';
 import {Router, routes} from '../router.js';
 
 import {getTemplate} from './chromevox_subpage.html.js';
-import type {ChromeVoxSubpageBrowserProxy} from './chromevox_subpage_browser_proxy.js';
 import {ChromeVoxSubpageBrowserProxyImpl} from './chromevox_subpage_browser_proxy.js';
 
 export {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
@@ -74,20 +75,6 @@ interface TtsHandlerVoice {
   displayName: string;
   remote: boolean;
   extensionId: string;
-}
-
-/**
- * Represents a braille table from liblouis.
- */
-interface BrailleTable {
-  locale: string;
-  dots: string;
-  id: string;
-  grade?: string;
-  variant?: string;
-  fileNames: string;
-  enDisplayName?: string;
-  alwaysUseEnDisplayName: boolean;
 }
 
 export interface SettingsChromeVoxSubpageElement {
@@ -338,6 +325,12 @@ export class SettingsChromeVoxSubpageElement extends
         value: loadTimeData.getBoolean('mainNodeAnnotationsEnabled'),
         readOnly: true,
       },
+
+      japaneseBrailleEnabled_: {
+        type: String,
+        value: loadTimeData.getBoolean('japaneseBrailleEnabled'),
+        readOnly: true,
+      },
     };
   }
 
@@ -352,19 +345,21 @@ export class SettingsChromeVoxSubpageElement extends
     ];
   }
 
-  private capitalStrategyOptions_: DropdownMenuOptionList;
-  private numberReadingStyleOptions_: DropdownMenuOptionList;
-  private punctuationEchoOptions_: DropdownMenuOptionList;
-  private audioStrategyOptions_: DropdownMenuOptionList;
-  private brailleTableTypeOptions_: DropdownMenuOptionList;
-  private brailleTableOptions_: DropdownMenuOptionList;
-  private voiceOptions_: DropdownMenuOptionList;
-  private virtualBrailleDisplayStyleOptions_: DropdownMenuOptionList;
-  private chromeVoxBrowserProxy_: ChromeVoxSubpageBrowserProxy;
-  private brailleTables_: BrailleTable[];
-  private developerOptionsExpanded_: boolean;
-  private readonly eventStreamFilters_: string[];
-  private readonly mainNodeAnnotationsFeatureEnabled_: boolean;
+  declare private capitalStrategyOptions_: DropdownMenuOptionList;
+  declare private numberReadingStyleOptions_: DropdownMenuOptionList;
+  declare private punctuationEchoOptions_: DropdownMenuOptionList;
+  declare private audioStrategyOptions_: DropdownMenuOptionList;
+  declare private brailleTableTypeOptions_: DropdownMenuOptionList;
+  declare private brailleTableOptions_: DropdownMenuOptionList;
+  declare private voiceOptions_: DropdownMenuOptionList;
+  declare private virtualBrailleDisplayStyleOptions_: DropdownMenuOptionList;
+  private chromeVoxBrowserProxy_ =
+      ChromeVoxSubpageBrowserProxyImpl.getInstance();
+  private brailleTables_: BrailleTable[] = [];
+  declare private developerOptionsExpanded_: boolean;
+  declare private readonly eventStreamFilters_: string[];
+  declare private readonly mainNodeAnnotationsFeatureEnabled_: boolean;
+  declare private readonly japaneseBrailleEnabled_: boolean;
 
   // Regular expressions that will match against a voice name if it contains a
   // speaker ID in it.
@@ -374,16 +369,10 @@ export class SettingsChromeVoxSubpageElement extends
   private localSpeakerNameReplacement_ = '-x-local';
   private networkSpeakerNameReplacement_ = '-x-network';
 
+  // RouteOriginMixin override
+  override route = routes.A11Y_CHROMEVOX;
+
   // TODO(270619855): Add tests to verify these controls change their prefs.
-  constructor() {
-    super();
-
-    this.chromeVoxBrowserProxy_ =
-        ChromeVoxSubpageBrowserProxyImpl.getInstance();
-
-    /** RouteOriginMixin override */
-    this.route = routes.A11Y_CHROMEVOX;
-  }
 
   override ready(): void {
     super.ready();
@@ -530,7 +519,12 @@ export class SettingsChromeVoxSubpageElement extends
     xhr.open('GET', 'static/liblouis/tables.json', true);
     xhr.onreadystatechange = () => {
       if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
-        const tables: BrailleTable[] = JSON.parse(xhr.responseText);
+        let tables: BrailleTable[] = JSON.parse(xhr.responseText);
+        if (this.japaneseBrailleEnabled_) {
+          tables = tables.filter(
+              (table: BrailleTable) => table.id !== 'ja-kantenji');
+          tables.push(JP_BRAILLE_TENJI_TABLE);
+        }
         this.set('brailleTables_', preprocess(tables));
       }
     };

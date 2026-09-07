@@ -6,6 +6,10 @@ use std::{
 
 pub type TokenId = u32;
 
+/// A compact bit vector representing a set of allowed [`crate::TokenId`]s.
+///
+/// Used as the output of constrained-decoding mask computation: bit *i* is
+/// set when token *i* is permitted by the current grammar state.
 #[derive(Clone)]
 pub struct SimpleVob {
     data: Vec<u32>,
@@ -223,7 +227,7 @@ impl SimpleVob {
 
     pub fn write_to(&self, buf: &mut [u8]) {
         assert!(buf.len() <= self.data.len() * (BITS / 8));
-        buf.copy_from_slice(&bytemuck::cast_slice(&self.data)[..buf.len()]);
+        crate::bytes::write_u32s_as_le_bytes(&self.data, buf);
     }
 
     #[inline(always)]

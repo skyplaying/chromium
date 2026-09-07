@@ -81,7 +81,7 @@ class FeatureInfoTest
     GpuServiceTest::SetUpWithGLVersion(version, extensions);
     TestHelper::SetupFeatureInfoInitExpectationsWithGLVersion(
         gl_.get(), extensions, renderer, version, GetContextType());
-    info_ = new FeatureInfo();
+    info_ = base::MakeRefCounted<FeatureInfo>();
     info_->Initialize(GetContextType(), false, DisallowedFeatures());
   }
 
@@ -93,13 +93,13 @@ class FeatureInfoTest
     GpuServiceTest::SetUpWithGLVersion(version, extensions);
     TestHelper::SetupFeatureInfoInitExpectationsWithGLVersion(
         gl_.get(), extensions, renderer, version, GetContextType());
-    info_ = new FeatureInfo();
+    info_ = base::MakeRefCounted<FeatureInfo>();
     info_->Initialize(GetContextType(), false, disallowed_features);
   }
 
   void SetupWithWorkarounds(const gpu::GpuDriverBugWorkarounds& workarounds) {
     GpuServiceTest::SetUp();
-    info_ = new FeatureInfo(workarounds, GpuFeatureInfo());
+    info_ = base::MakeRefCounted<FeatureInfo>(workarounds, GpuFeatureInfo());
   }
 
   void SetupInitExpectationsWithWorkarounds(
@@ -108,13 +108,13 @@ class FeatureInfoTest
     GpuServiceTest::SetUpWithGLVersion("OpenGL ES 3.0", extensions);
     TestHelper::SetupFeatureInfoInitExpectationsWithGLVersion(
         gl_.get(), extensions, "ANGLE", "OpenGL ES 3.0", GetContextType());
-    info_ = new FeatureInfo(workarounds, GpuFeatureInfo());
+    info_ = base::MakeRefCounted<FeatureInfo>(workarounds, GpuFeatureInfo());
     info_->Initialize(GetContextType(), false, DisallowedFeatures());
   }
 
   void SetupWithoutInit() {
     GpuServiceTest::SetUp();
-    info_ = new FeatureInfo();
+    info_ = base::MakeRefCounted<FeatureInfo>();
   }
 
  protected:
@@ -153,9 +153,7 @@ TEST_P(FeatureInfoTest, Basic) {
   EXPECT_FALSE(info_->feature_flags().oes_egl_image_external);
   EXPECT_FALSE(info_->feature_flags().nv_egl_stream_consumer_external);
   EXPECT_FALSE(info_->feature_flags().oes_depth24);
-  EXPECT_FALSE(info_->feature_flags().packed_depth24_stencil8);
   EXPECT_FALSE(info_->feature_flags().angle_translated_shader_source);
-  EXPECT_FALSE(info_->feature_flags().angle_pack_reverse_row_order);
   EXPECT_FALSE(info_->feature_flags().arb_texture_rectangle);
   EXPECT_FALSE(info_->feature_flags().angle_instanced_arrays);
   EXPECT_FALSE(info_->feature_flags().occlusion_query_boolean);
@@ -166,7 +164,6 @@ TEST_P(FeatureInfoTest, Basic) {
   EXPECT_FALSE(info_->feature_flags().nv_draw_buffers);
   EXPECT_FALSE(info_->feature_flags().ext_discard_framebuffer);
   EXPECT_FALSE(info_->feature_flags().angle_depth_texture);
-  EXPECT_FALSE(info_->feature_flags().ext_read_format_bgra);
 
 #define GPU_OP(type, name) EXPECT_FALSE(info_->workarounds().name);
   GPU_DRIVER_BUG_WORKAROUNDS(GPU_OP)
@@ -442,7 +439,6 @@ TEST_P(FeatureInfoTest, InitializeEXT_texture_format_BGRA8888GLES2) {
       GL_BGRA8_EXT));
   EXPECT_FALSE(info_->feature_flags().ext_render_buffer_format_bgra8888);
   EXPECT_FALSE(info_->validators()->read_pixel_format.IsValid(GL_BGRA8_EXT));
-  EXPECT_FALSE(info_->feature_flags().ext_read_format_bgra);
 }
 
 TEST_P(FeatureInfoTest, InitializeEXT_texture_format_BGRA8888Apple) {
@@ -461,7 +457,6 @@ TEST_P(FeatureInfoTest, InitializeEXT_texture_format_BGRA8888Apple) {
       GL_BGRA8_EXT));
   EXPECT_FALSE(info_->feature_flags().ext_render_buffer_format_bgra8888);
   EXPECT_FALSE(info_->validators()->read_pixel_format.IsValid(GL_BGRA8_EXT));
-  EXPECT_FALSE(info_->feature_flags().ext_read_format_bgra);
 }
 
 TEST_P(FeatureInfoTest, InitializeGLES_no_EXT_texture_format_BGRA8888GL) {
@@ -478,7 +473,6 @@ TEST_P(FeatureInfoTest, InitializeGLES2EXT_read_format_bgra) {
       "GL_EXT_read_format_bgra", "", "OpenGL ES 2.0");
   EXPECT_TRUE(
       gfx::HasExtension(info_->extensions(), "GL_EXT_read_format_bgra"));
-  EXPECT_TRUE(info_->feature_flags().ext_read_format_bgra);
   EXPECT_TRUE(info_->validators()->read_pixel_format.IsValid(
       GL_BGRA_EXT));
 
@@ -496,7 +490,6 @@ TEST_P(FeatureInfoTest, InitializeGLES_no_EXT_read_format_bgra) {
   SetupInitExpectationsWithGLVersion("", "", "OpenGL ES 2.0");
   EXPECT_FALSE(
       gfx::HasExtension(info_->extensions(), "GL_EXT_read_format_bgra"));
-  EXPECT_FALSE(info_->feature_flags().ext_read_format_bgra);
   EXPECT_FALSE(info_->validators()->read_pixel_format.IsValid(GL_BGRA_EXT));
 }
 
@@ -1209,7 +1202,6 @@ TEST_P(FeatureInfoTest, InitializeWithES3) {
   EXPECT_FALSE(info_->validators()->pixel_type.IsValid(GL_UNSIGNED_SHORT));
   EXPECT_FALSE(info_->validators()->pixel_type.IsValid(GL_UNSIGNED_INT));
   EXPECT_FALSE(info_->validators()->pixel_type.IsValid(GL_UNSIGNED_INT_24_8));
-  EXPECT_TRUE(info_->feature_flags().packed_depth24_stencil8);
   EXPECT_TRUE(gfx::HasExtension(info_->extensions(), "GL_OES_depth24"));
   EXPECT_TRUE(
       info_->validators()->render_buffer_format.IsValid(GL_DEPTH_COMPONENT24));
@@ -1245,7 +1237,6 @@ TEST_P(FeatureInfoTest, InitializeWithES3AndDepthTexture) {
   EXPECT_TRUE(info_->validators()->pixel_type.IsValid(GL_UNSIGNED_SHORT));
   EXPECT_TRUE(info_->validators()->pixel_type.IsValid(GL_UNSIGNED_INT));
   EXPECT_TRUE(info_->validators()->pixel_type.IsValid(GL_UNSIGNED_INT_24_8));
-  EXPECT_TRUE(info_->feature_flags().packed_depth24_stencil8);
   EXPECT_TRUE(
       info_->validators()->texture_internal_format.IsValid(GL_DEPTH_STENCIL));
   EXPECT_TRUE(info_->validators()->texture_format.IsValid(GL_DEPTH_STENCIL));
@@ -1302,7 +1293,6 @@ TEST_P(FeatureInfoTest, BlendEquationAdvancedDisabled) {
       "GL_KHR_blend_equation_advanced_coherent GL_KHR_blend_equation_advanced",
       workarounds);
   EXPECT_FALSE(info_->feature_flags().blend_equation_advanced);
-  EXPECT_FALSE(info_->feature_flags().blend_equation_advanced_coherent);
 }
 
 TEST_P(FeatureInfoTest, InitializeNoKHR_blend_equation_advanced) {
@@ -1328,7 +1318,6 @@ TEST_P(FeatureInfoTest, InitializeNV_blend_equations_advanced) {
 
 TEST_P(FeatureInfoTest, InitializeNoKHR_blend_equation_advanced_coherent) {
   SetupInitExpectationsWithGLVersion("", "ANGLE", "OpenGL ES 3.0");
-  EXPECT_FALSE(info_->feature_flags().blend_equation_advanced_coherent);
   EXPECT_FALSE(gfx::HasExtension(info_->extensions(),
                                  "GL_KHR_blend_equation_advanced_coherent"));
 }
@@ -1338,7 +1327,6 @@ TEST_P(FeatureInfoTest, InitializeKHR_blend_equations_advanced_coherent) {
   EXPECT_TRUE(gfx::HasExtension(info_->extensions(),
                                 "GL_KHR_blend_equation_advanced_coherent"));
   EXPECT_TRUE(info_->feature_flags().blend_equation_advanced);
-  EXPECT_TRUE(info_->feature_flags().blend_equation_advanced_coherent);
 }
 
 TEST_P(FeatureInfoTest, InitializeEXT_texture_rgWithFloat) {
@@ -1395,6 +1383,176 @@ TEST_P(FeatureInfoTest, InitializeEXT_texture_norm16) {
 TEST_P(FeatureInfoTest, InitializeMESAFramebufferFlipYExtensionTrue) {
   SetupInitExpectations("GL_MESA_framebuffer_flip_y");
   EXPECT_TRUE(info_->feature_flags().mesa_framebuffer_flip_y);
+}
+
+class WebGLDrawBuffersTest : public GpuServiceTest {
+ public:
+  WebGLDrawBuffersTest() = default;
+  ~WebGLDrawBuffersTest() override = default;
+
+  void SetUp() override {
+    SetUpWithGLVersion("OpenGL ES 3.0", "GL_EXT_draw_buffers");
+  }
+};
+
+TEST_F(WebGLDrawBuffersTest, RestoresFramebufferBindings) {
+  const char* extensions = "GL_EXT_draw_buffers";
+  const char* version = "OpenGL ES 3.0";
+
+  InSequence sequence;
+  EXPECT_CALL(*gl_, GetString(GL_EXTENSIONS))
+      .WillOnce(Return(reinterpret_cast<const uint8_t*>(extensions)))
+      .RetiresOnSaturation();
+  EXPECT_CALL(*gl_, GetString(GL_VERSION))
+      .WillOnce(Return(reinterpret_cast<const uint8_t*>(version)))
+      .RetiresOnSaturation();
+  EXPECT_CALL(*gl_, GetString(GL_RENDERER))
+      .WillOnce(Return(reinterpret_cast<const uint8_t*>("")))
+      .RetiresOnSaturation();
+
+  EXPECT_CALL(*gl_, GetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, _))
+      .WillOnce(SetArgPointee<1>(0))
+      .RetiresOnSaturation();
+
+  // IsWebGLDrawBuffersSupported probing expectations:
+  EXPECT_CALL(*gl_, GetIntegerv(GL_MAX_DRAW_BUFFERS, _))
+      .WillOnce(SetArgPointee<1>(8))
+      .RetiresOnSaturation();
+  EXPECT_CALL(*gl_, GetIntegerv(GL_MAX_COLOR_ATTACHMENTS, _))
+      .WillOnce(SetArgPointee<1>(8))
+      .RetiresOnSaturation();
+
+  // ScopedFramebufferOverride queries both draw and read bindings on ES3:
+  const GLuint kDrawFBO = 10;
+  const GLuint kReadFBO = 20;
+  EXPECT_CALL(*gl_, GetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, _))
+      .WillOnce(SetArgPointee<1>(kDrawFBO))
+      .RetiresOnSaturation();
+  EXPECT_CALL(*gl_, GetIntegerv(GL_READ_FRAMEBUFFER_BINDING, _))
+      .WillOnce(SetArgPointee<1>(kReadFBO))
+      .RetiresOnSaturation();
+
+  EXPECT_CALL(*gl_, GetIntegerv(GL_TEXTURE_BINDING_2D, _))
+      .WillOnce(SetArgPointee<1>(0))
+      .RetiresOnSaturation();
+  EXPECT_CALL(*gl_, GenFramebuffersEXT(1, _))
+      .WillOnce(SetArgPointee<1>(100))
+      .RetiresOnSaturation();
+  EXPECT_CALL(*gl_, BindFramebufferEXT(GL_FRAMEBUFFER, 100))
+      .Times(1)
+      .RetiresOnSaturation();
+
+  static const auto color_ids = std::to_array<GLuint>({1, 2, 3, 4, 5, 6, 7, 8});
+  EXPECT_CALL(*gl_, GenTextures(8, _))
+      .WillOnce(SetArrayArgument<1>(base::span<const GLuint>(color_ids).begin(),
+                                    base::span<const GLuint>(color_ids).end()))
+      .RetiresOnSaturation();
+  for (int i = 0; i < 8; ++i) {
+    EXPECT_CALL(*gl_, BindTexture(GL_TEXTURE_2D, color_ids[i]))
+        .Times(1)
+        .RetiresOnSaturation();
+    EXPECT_CALL(*gl_, TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA,
+                                 GL_UNSIGNED_BYTE, nullptr))
+        .Times(1)
+        .RetiresOnSaturation();
+    EXPECT_CALL(
+        *gl_, FramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + i,
+                                      GL_TEXTURE_2D, color_ids[i], 0))
+        .Times(1)
+        .RetiresOnSaturation();
+    EXPECT_CALL(*gl_, CheckFramebufferStatusEXT(GL_FRAMEBUFFER))
+        .WillOnce(Return(GL_FRAMEBUFFER_COMPLETE))
+        .RetiresOnSaturation();
+  }
+
+  EXPECT_CALL(*gl_, DeleteFramebuffersEXT(1, _)).Times(1).RetiresOnSaturation();
+  EXPECT_CALL(*gl_, BindTexture(GL_TEXTURE_2D, 0))
+      .Times(1)
+      .RetiresOnSaturation();
+  EXPECT_CALL(*gl_, DeleteTextures(1, _)).Times(2).RetiresOnSaturation();
+  EXPECT_CALL(*gl_, DeleteTextures(8, _)).Times(1).RetiresOnSaturation();
+#if DCHECK_IS_ON()
+  EXPECT_CALL(*gl_, GetError())
+      .WillOnce(Return(GL_NO_ERROR))
+      .RetiresOnSaturation();
+#endif
+
+  // On destruction, ScopedFramebufferOverride restores both bindings.
+  // See https://crbug.com/507351786
+  EXPECT_CALL(*gl_, BindFramebufferEXT(GL_DRAW_FRAMEBUFFER, kDrawFBO))
+      .Times(1)
+      .RetiresOnSaturation();
+  EXPECT_CALL(*gl_, BindFramebufferEXT(GL_READ_FRAMEBUFFER, kReadFBO))
+      .Times(1)
+      .RetiresOnSaturation();
+
+  EXPECT_CALL(*gl_, GetIntegerv(GL_MAX_COLOR_ATTACHMENTS_EXT, _))
+      .WillOnce(SetArgPointee<1>(8))
+      .RetiresOnSaturation();
+  EXPECT_CALL(*gl_, GetIntegerv(GL_MAX_DRAW_BUFFERS, _))
+      .WillOnce(SetArgPointee<1>(8))
+      .RetiresOnSaturation();
+
+#if !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_ANDROID)
+#if DCHECK_IS_ON()
+  EXPECT_CALL(*gl_, GetError())
+      .WillOnce(Return(GL_NO_ERROR))
+      .RetiresOnSaturation();
+#endif
+  static const auto red_tx_ids = std::to_array<GLuint>({101, 102});
+  static const auto red_fb_ids = std::to_array<GLuint>({103, 104});
+  EXPECT_CALL(*gl_, GetIntegerv(GL_FRAMEBUFFER_BINDING, _))
+      .WillOnce(SetArgPointee<1>(red_fb_ids[0]))
+      .RetiresOnSaturation();
+  EXPECT_CALL(*gl_, GetIntegerv(GL_TEXTURE_BINDING_2D, _))
+      .WillOnce(SetArgPointee<1>(red_tx_ids[0]))
+      .RetiresOnSaturation();
+  EXPECT_CALL(*gl_, GenTextures(1, _))
+      .WillOnce(SetArrayArgument<1>(
+          base::span<const GLuint>(red_tx_ids).subspan(1u).data(),
+          base::span<const GLuint>(red_tx_ids).subspan(2u).data()))
+      .RetiresOnSaturation();
+  EXPECT_CALL(*gl_, BindTexture(GL_TEXTURE_2D, red_tx_ids[1]))
+      .Times(1)
+      .RetiresOnSaturation();
+  EXPECT_CALL(*gl_, TexImage2D(GL_TEXTURE_2D, 0, _, 8, 8, 0, GL_RED_EXT,
+                               GL_UNSIGNED_BYTE, _))
+      .Times(1)
+      .RetiresOnSaturation();
+  EXPECT_CALL(*gl_, GenFramebuffersEXT(1, _))
+      .WillOnce(SetArrayArgument<1>(
+          base::span<const GLuint>(red_fb_ids).subspan(1u).data(),
+          base::span<const GLuint>(red_fb_ids).subspan(2u).data()))
+      .RetiresOnSaturation();
+  EXPECT_CALL(*gl_, BindFramebufferEXT(GL_FRAMEBUFFER, red_fb_ids[1]))
+      .Times(1)
+      .RetiresOnSaturation();
+  EXPECT_CALL(*gl_,
+              FramebufferTexture2DEXT(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                      GL_TEXTURE_2D, red_tx_ids[1], 0))
+      .Times(1)
+      .RetiresOnSaturation();
+  EXPECT_CALL(*gl_, CheckFramebufferStatusEXT(GL_FRAMEBUFFER))
+      .WillOnce(Return(GL_FRAMEBUFFER_COMPLETE))
+      .RetiresOnSaturation();
+  EXPECT_CALL(*gl_, DeleteFramebuffersEXT(1, _)).Times(1).RetiresOnSaturation();
+  EXPECT_CALL(*gl_, DeleteTextures(1, _)).Times(1).RetiresOnSaturation();
+  EXPECT_CALL(*gl_, BindFramebufferEXT(GL_FRAMEBUFFER, red_fb_ids[0]))
+      .Times(1)
+      .RetiresOnSaturation();
+  EXPECT_CALL(*gl_, BindTexture(GL_TEXTURE_2D, red_tx_ids[0]))
+      .Times(1)
+      .RetiresOnSaturation();
+#if DCHECK_IS_ON()
+  EXPECT_CALL(*gl_, GetError())
+      .WillOnce(Return(GL_NO_ERROR))
+      .RetiresOnSaturation();
+#endif
+#endif  // !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_ANDROID)
+
+  auto info = base::MakeRefCounted<FeatureInfo>();
+  info->Initialize(CONTEXT_TYPE_WEBGL1, false, DisallowedFeatures());
+  EXPECT_TRUE(info->feature_flags().ext_draw_buffers);
 }
 
 }  // namespace gles2

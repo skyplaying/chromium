@@ -5,6 +5,7 @@
 #import "ios/chrome/browser/default_browser/promo/public/features.h"
 
 #import "base/metrics/field_trial_params.h"
+#import "ios/chrome/browser/shared/public/features/features.h"
 
 const char kDefaultBrowserPictureInPictureParam[] =
     "DefaultBrowserPictureInPictureParam";
@@ -15,21 +16,31 @@ const char kDefaultBrowserPictureInPictureParamEnabledDefaultApps[] =
     "EnabledDefaultApps";
 
 BASE_FEATURE(kDefaultBrowserPromoIpadInstructions,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
-BASE_FEATURE(kDefaultBrowserPictureInPicture,
-             base::FEATURE_DISABLED_BY_DEFAULT);
+BASE_FEATURE(kDefaultBrowserPictureInPicture, base::FEATURE_ENABLED_BY_DEFAULT);
 
 bool IsDefaultBrowserPromoIpadInstructions() {
   return base::FeatureList::IsEnabled(kDefaultBrowserPromoIpadInstructions);
 }
 
 bool IsDefaultBrowserPictureInPictureEnabled() {
-  return base::FeatureList::IsEnabled(kDefaultBrowserPictureInPicture);
+  return IsDefaultAppsDestinationAvailable() &&
+         base::FeatureList::IsEnabled(kDefaultBrowserPictureInPicture);
 }
 
 std::string DefaultBrowserPictureInPictureParam() {
   return base::GetFieldTrialParamByFeatureAsString(
       kDefaultBrowserPictureInPicture, kDefaultBrowserPictureInPictureParam,
-      kDefaultBrowserPictureInPictureParamEnabled);
+      kDefaultBrowserPictureInPictureParamEnabledDefaultApps);
+}
+
+bool IsDefaultAppsPictureInPictureVariant() {
+  if (!IsDefaultAppsDestinationAvailable()) {
+    return false;
+  }
+
+  const std::string pipParam = DefaultBrowserPictureInPictureParam();
+  return pipParam == kDefaultBrowserPictureInPictureParamEnabledDefaultApps ||
+         pipParam == kDefaultBrowserPictureInPictureParamDisabledDefaultApps;
 }

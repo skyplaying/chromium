@@ -14,7 +14,7 @@
 #include "content/public/browser/webid/identity_request_account.h"
 #include "content/public/browser/webid/identity_request_dialog_controller.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
-#include "third_party/blink/public/mojom/webid/federated_auth_request.mojom.h"
+#include "third_party/blink/public/mojom/webid/federated_request.mojom.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/md_text_button.h"
@@ -194,6 +194,8 @@ class AccountSelectionModalView : public views::BoxLayoutView,
 
   // Helper method to show the given accounts.
   void ShowAccounts(const std::vector<IdentityRequestAccountPtr>& accounts,
+                    const std::vector<IdentityProviderDataPtr>& idp_list,
+                    const gfx::Image& rp_icon,
                     bool is_single_account_chooser);
 
   // The following are raw_ptrs for views in the header. These do not need to be

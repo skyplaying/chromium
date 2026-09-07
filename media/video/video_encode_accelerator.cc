@@ -8,12 +8,14 @@
 
 #include <algorithm>
 
+#include "base/feature_list.h"
 #include "base/functional/callback.h"
 #include "base/notimplemented.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
+#include "media/base/media_switches.h"
 #include "media/base/video_frame.h"
 
 namespace media {
@@ -253,6 +255,9 @@ bool VideoEncodeAccelerator::IsGpuFrameResizeSupported() {
   // TODO(crbug.com/40164413) Add proper method overrides in
   // MojoVideoEncodeAccelerator and other subclasses that might return true.
   return true;
+#elif BUILDFLAG(IS_APPLE)
+  return base::FeatureList::IsEnabled(
+      kVTVideoEncodeAcceleratorOpaqueSharedImageEncode);
 #else
   return false;
 #endif
@@ -279,13 +284,13 @@ void VideoEncodeAccelerator::RequestEncodingParametersChange(
 size_t VideoEncodeAccelerator::EstimateBitstreamBufferSize(
     const Bitrate& bitrate,
     uint32_t framerate,
+    VideoPixelFormat input_format,
     const gfx::Size& coded_size) {
   // Calculate how much data the frame takes without encoding.
   // Adding 2KB just in case the frame is really small, we don't want to
   // end up with no space for a video codec's headers.
-  // This is about 1.3Mb for 1280x720 frames.
-  size_t raw_frame_size =
-      VideoFrame::AllocationSize(PIXEL_FORMAT_I420, coded_size) + 2048;
+  const size_t raw_frame_size =
+      VideoFrame::AllocationSize(input_format, coded_size) + 2048;
 
   // Estimate the expected size of an encoded chunk based on bitrate and
   // framerate. This is capped at 30Mb, i.e. 50 Mbps at 1fps.
@@ -304,7 +309,8 @@ size_t VideoEncodeAccelerator::EstimateBitstreamBufferSize(
   const size_t kMaxAverageBitrate = 50000000;
   expected_bitrate =
       std::min(expected_bitrate, kMaxAverageBitrate) * kOvershootAllowance;
-  size_t expected_chunk_size = expected_bitrate / framerate / CHAR_BIT;
+  size_t expected_chunk_size =
+      expected_bitrate / std::max<uint32_t>(framerate, 1u) / CHAR_BIT;
 
   // Let's be conservative and take the maximum of both methods.
   return std::max(expected_chunk_size, raw_frame_size);
@@ -318,7 +324,8 @@ bool operator==(const VideoEncodeAccelerator::SupportedProfile& l,
          l.max_framerate_denominator == r.max_framerate_denominator &&
          l.rate_control_modes == r.rate_control_modes &&
          l.scalability_modes == r.scalability_modes &&
-         l.is_software_codec == r.is_software_codec;
+         l.is_software_codec == r.is_software_codec &&
+         l.chroma_sampling == r.chroma_sampling && l.bit_depth == r.bit_depth;
 }
 
 bool operator==(const H264Metadata& l, const H264Metadata& r) {
@@ -348,12 +355,16 @@ bool operator==(const SVCGenericMetadata& l, const SVCGenericMetadata& r) {
          l.refresh_flags == r.refresh_flags;
 }
 
+bool operator==(const YuvPsnr& l, const YuvPsnr& r) {
+  return l.y == r.y && l.u == r.u && l.v == r.v;
+}
+
 bool operator==(const BitstreamBufferMetadata& l,
                 const BitstreamBufferMetadata& r) {
   return l.payload_size_bytes == r.payload_size_bytes &&
          l.key_frame == r.key_frame && l.timestamp == r.timestamp &&
          l.vp8 == r.vp8 && l.vp9 == r.vp9 && l.h264 == r.h264 &&
-         l.svc_generic == r.svc_generic;
+         l.svc_generic == r.svc_generic && l.yuv_psnr == r.yuv_psnr;
 }
 
 bool operator==(const VideoEncodeAccelerator::Config::SpatialLayer& l,

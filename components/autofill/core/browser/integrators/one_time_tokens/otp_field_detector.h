@@ -7,6 +7,7 @@
 
 #include "base/callback_list.h"
 #include "base/containers/flat_set.h"
+#include "base/containers/span.h"
 #include "base/functional/callback_forward.h"
 #include "components/autofill/core/browser/foundations/autofill_manager.h"
 #include "components/autofill/core/browser/foundations/scoped_autofill_managers_observation.h"
@@ -15,6 +16,7 @@
 namespace autofill {
 
 class AutofillClient;
+class FormStructure;
 
 // Utility class to observe if a WebContents (with all of its frames)
 // - moves from having 0 OTP fields to >0 OTP fields (only focusable fields are
@@ -55,6 +57,13 @@ class OtpFieldDetector : public AutofillManager::Observer {
   // one OTP field.
   bool IsOtpFieldPresent() const;
 
+  // Returns true if the `form` contains at least one focusable `ONE_TIME_CODE`
+  // field that is not a password input. If
+  // `kAutofillRestrictOtpToSameTldPlusOne` is enabled, also requires that all
+  // focusable `ONE_TIME_CODE` fields in the `form` are same-site with the main
+  // frame's origin.
+  [[nodiscard]] static bool IsOtpForm(const FormStructure& form);
+
   // AutofillManager::Observer:
 
   // `OnFieldTypesDetermined` informs us incrementally about the discovery of
@@ -86,8 +95,8 @@ class OtpFieldDetector : public AutofillManager::Observer {
   // navigations without this event.
   void OnAutofillManagerStateChanged(
       AutofillManager& manager,
-      AutofillDriver::LifecycleState previous,
-      AutofillDriver::LifecycleState current) override;
+      AutofillDriver::LifecycleState old_state,
+      AutofillDriver::LifecycleState new_state) override;
 
  protected:
   // Protected to ensure that only derived classes can be instantiated.

@@ -77,7 +77,7 @@ void InternalAuthenticatorAndroid::SetPaymentOptions(
 
   std::vector<uint8_t> byte_vector =
       blink::mojom::PaymentOptions::Serialize(&payment);
-  auto byte_buffer = ScopedJavaLocalRef<jobject>::Adopt(
+  auto byte_buffer = jni_zero::AdoptRef(
       env, env->NewDirectByteBuffer(byte_vector.data(), byte_vector.size()));
   base::android::CheckException(env);
 
@@ -95,7 +95,7 @@ void InternalAuthenticatorAndroid::MakeCredential(
 
   std::vector<uint8_t> byte_vector =
       blink::mojom::PublicKeyCredentialCreationOptions::Serialize(&options);
-  auto byte_buffer = ScopedJavaLocalRef<jobject>::Adopt(
+  auto byte_buffer = jni_zero::AdoptRef(
       env, env->NewDirectByteBuffer(byte_vector.data(), byte_vector.size()));
   base::android::CheckException(env);
 
@@ -113,7 +113,7 @@ void InternalAuthenticatorAndroid::GetAssertion(
 
   std::vector<uint8_t> byte_vector =
       blink::mojom::PublicKeyCredentialRequestOptions::Serialize(&options);
-  auto byte_buffer = ScopedJavaLocalRef<jobject>::Adopt(
+  auto byte_buffer = jni_zero::AdoptRef(
       env, env->NewDirectByteBuffer(byte_vector.data(), byte_vector.size()));
   base::android::CheckException(env);
 
@@ -143,8 +143,8 @@ bool InternalAuthenticatorAndroid::IsGetMatchingCredentialIdsSupported() {
 }
 
 void InternalAuthenticatorAndroid::GetMatchingCredentialIds(
-    const std::string& relying_party_id,
-    const std::vector<std::vector<uint8_t>>& credential_ids,
+    std::string_view relying_party_id,
+    base::span<const std::vector<uint8_t>> credential_ids,
     bool require_third_party_payment_bit,
     webauthn::GetMatchingCredentialIdsCallback callback) {
   JNIEnv* env = AttachCurrentThread();
@@ -154,7 +154,7 @@ void InternalAuthenticatorAndroid::GetMatchingCredentialIds(
   get_matching_credential_ids_callback_ = std::move(callback);
   Java_InternalAuthenticator_getMatchingCredentialIds(
       env, obj, ConvertUTF8ToJavaString(env, relying_party_id),
-      ToJavaArrayOfByteArray(env, std::move(credential_ids)),
+      ToJavaArrayOfByteArray(env, credential_ids),
       require_third_party_payment_bit);
 }
 

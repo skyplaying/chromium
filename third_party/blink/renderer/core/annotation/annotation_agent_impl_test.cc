@@ -41,7 +41,9 @@
 #include "third_party/blink/renderer/core/paint/paint_layer_scrollable_area.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_request.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_test.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
@@ -182,7 +184,7 @@ class AnnotationAgentImplTest : public SimTest {
         GetDocument().View()->GetPage()->GetVisualViewport();
     gfx::Rect rect_in_visual_viewport = viewport.RootFrameToViewport(
         node.GetLayoutObject()->AbsoluteBoundingBoxRect(
-            kTraverseDocumentBoundaries));
+            {MapCoordinatesMode::kTraverseDocumentBoundaries}));
     gfx::Rect viewport_rect(viewport.Size());
 
     bool is_contained = viewport_rect.Contains(rect_in_visual_viewport);
@@ -201,7 +203,7 @@ class AnnotationAgentImplTest : public SimTest {
         GetDocument().View()->GetPage()->GetVisualViewport();
     gfx::Rect rect_in_visual_viewport = viewport.RootFrameToViewport(
         node.GetLayoutObject()->AbsoluteBoundingBoxRect(
-            kTraverseDocumentBoundaries));
+            {MapCoordinatesMode::kTraverseDocumentBoundaries}));
     gfx::Rect viewport_rect(viewport.Size());
 
     bool is_contained = viewport_rect.Contains(rect_in_visual_viewport);
@@ -241,7 +243,7 @@ class AnnotationAgentImplTest : public SimTest {
     return GetDocument().Markers().Markers();
   }
 
-  float GetAlphaForGlicMarkerAt(size_t index) {
+  float GetAlphaForGlicMarkerAt(wtf_size_t index) {
     const auto& markers = GetAllMarkers();
     EXPECT_GE(markers.size(), index + 1);
     DocumentMarker* marker = markers[index];
@@ -283,18 +285,12 @@ TEST_F(AnnotationAgentImplTest, AgentType) {
       mojom::blink::AnnotationType::kSharedHighlight,
       *MakeGarbageCollected<MockAnnotationSelector>());
 
-  auto* user_note_agent = container->CreateUnboundAgent(
-      mojom::blink::AnnotationType::kUserNote,
-      *MakeGarbageCollected<MockAnnotationSelector>());
-
   auto* glic_highlight_agent = container->CreateUnboundAgent(
       mojom::blink::AnnotationType::kGlic,
       *MakeGarbageCollected<MockAnnotationSelector>());
 
   EXPECT_EQ(GetAgentType(shared_highlight_agent),
             mojom::blink::AnnotationType::kSharedHighlight);
-  EXPECT_EQ(GetAgentType(user_note_agent),
-            mojom::blink::AnnotationType::kUserNote);
   EXPECT_EQ(GetAgentType(glic_highlight_agent),
             mojom::blink::AnnotationType::kGlic);
 }
@@ -2230,6 +2226,7 @@ TEST_F(AnnotationAgentImplTest, GlicHighlight_ResetStateOnNewTextNodes) {
 
 TEST_F(AnnotationAgentImplTest,
        GlicHighlight_HighLightStartsAfterScrollFinishes) {
+  ScopedEventTimingMatchingHTMLForTest feature_enabler(true);
   SimRequest request("https://example.com/test.html", "text/html");
   LoadURL("https://example.com/test.html");
   request.Complete(R"HTML(
@@ -2276,6 +2273,7 @@ TEST_F(AnnotationAgentImplTest,
   // Smooth scrolling is guaranteed to finish within 1500ms.
   task_environment().FastForwardBy(base::Seconds(2));
   Compositor().BeginFrame(1.0);
+  Compositor().BeginFrame();
   EXPECT_TRUE(ExpectInViewport(*element_foo));
   // Since the text node is in the viewport, we must have queued the first
   // RequestAnimationFrame.
@@ -2350,6 +2348,7 @@ TEST_F(AnnotationAgentImplTest, GlicHighlight_InstantStartForInstantScroll) {
 // Test that the highlight doesn't restart after subsequent scrollEnd events.
 TEST_F(AnnotationAgentImplTest,
        GlicHighlight_AnimationDoesNotRestartAfterSubsequentScroll) {
+  ScopedEventTimingMatchingHTMLForTest feature_enabler(true);
   SimRequest request("https://example.com/test.html", "text/html");
   LoadURL("https://example.com/test.html");
   request.Complete(R"HTML(
@@ -2400,6 +2399,7 @@ TEST_F(AnnotationAgentImplTest,
   // Max smooth scrolling is capped at 1500ms.
   task_environment().FastForwardBy(base::Seconds(2));
   Compositor().BeginFrame(1.0);
+  Compositor().BeginFrame();
   EXPECT_TRUE(ExpectInViewport(*element_foo));
   // Since the text node is in the viewport, we must have queued the first
   // RequestAnimationFrame.
@@ -2474,21 +2474,21 @@ TEST_P(AnnotationAgentImplTestWithScrollingBehavior,
   GlicScrollBehaviorConfig config = GetParam();
   SimRequest request("https://example.com/test.html", "text/html");
   LoadURL("https://example.com/test.html");
-  request.Complete(String::Format(R"HTML(
+  request.Complete(Format(R"HTML(
       <!DOCTYPE html>
       <style>
-        #foo {
+        #foo {{
           position: absolute;
-          top: %dpx;
-        }
-        body {
-          height: %dpx;
+          top: {}px;
+        }}
+        body {{
+          height: {}px;
           margin: 0;
-        }
+        }}
       </style>
       <p id='foo'>FOO<p>
-    )HTML", config.element_top, config.body_height)
-  );
+    )HTML",
+                          config.element_top, config.body_height));
 
   Compositor().BeginFrame();
 

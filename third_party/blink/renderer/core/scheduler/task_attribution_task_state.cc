@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/core/scheduler/task_attribution_task_state.h"
 
+#include "third_party/blink/renderer/platform/bindings/cpp_heap_external_tag.h"
 #include "third_party/blink/renderer/platform/bindings/script_forbidden_scope.h"
 #include "third_party/blink/renderer/platform/bindings/wrapper_type_info.h"
 #include "v8/include/v8-cpp-heap-external.h"
@@ -28,8 +29,7 @@ TaskAttributionTaskState* TaskAttributionTaskState::GetCurrent(
     return nullptr;
   }
   v8::HandleScope handle_scope(isolate);
-  v8::Local<v8::Data> v8_data =
-      isolate->GetContinuationPreservedEmbedderDataV2();
+  v8::Local<v8::Data> v8_data = isolate->GetContinuationPreservedEmbedderData();
   if (v8_data->IsValue()) {
     DCHECK(v8::Value::Cast(*v8_data)->IsNullOrUndefined());
     return nullptr;
@@ -47,17 +47,21 @@ void TaskAttributionTaskState::SetCurrent(
   if (isolate->IsExecutionTerminating()) {
     return;
   }
-  CHECK(!ScriptForbiddenScope::IsScriptForbidden());
+  if (ScriptForbiddenScope::IsScriptForbidden()) {
+    // The callback for this task state would be canceled, so there is no need
+    // to set this task state. See crbug.com/516377556.
+    return;
+  }
   // `task_state` will be null when leaving the top-level task scope, at which
   // point we want to clear the isolate's CPED and reference to the related
   // context. We don't need to distinguish between null and undefined values,
   // and V8 has a fast path if the CPED is undefined, so treat null `task_state`
   // as undefined.
   if (!task_state) {
-    isolate->SetContinuationPreservedEmbedderDataV2(v8::Undefined(isolate));
+    isolate->SetContinuationPreservedEmbedderData(v8::Undefined(isolate));
   } else {
     v8::HandleScope handle_scope(isolate);
-    isolate->SetContinuationPreservedEmbedderDataV2(
+    isolate->SetContinuationPreservedEmbedderData(
         v8::CppHeapExternal::New<TaskAttributionTaskState>(
             isolate, task_state, kTaskAttributionTaskStateTag));
   }

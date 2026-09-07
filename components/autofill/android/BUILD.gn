@@ -42,12 +42,16 @@ source_set("unit_tests") {
 
 java_strings_grd("autofill_strings_grd") {
   grd_file = "java/strings/autofill_strings.grd"
+  inputs = process_file_template(
+          xtb_locales,
+          [ "java/strings/translations/autofill_strings_{{source_name_part}}.xtb" ])
 }
 
 android_resources("autofill_payments_java_resources") {
   sources = [
     "payments/java/res/drawable-hdpi/amex_card.png",
     "payments/java/res/drawable-hdpi/amex_metadata_card.png",
+    "payments/java/res/drawable-hdpi/amex_metadata_card_new.png",
     "payments/java/res/drawable-hdpi/capitalone_metadata_card.png",
     "payments/java/res/drawable-hdpi/diners_card.png",
     "payments/java/res/drawable-hdpi/diners_metadata_card.png",
@@ -68,6 +72,7 @@ android_resources("autofill_payments_java_resources") {
     "payments/java/res/drawable-hdpi/visa_metadata_card.png",
     "payments/java/res/drawable-mdpi/amex_card.png",
     "payments/java/res/drawable-mdpi/amex_metadata_card.png",
+    "payments/java/res/drawable-mdpi/amex_metadata_card_new.png",
     "payments/java/res/drawable-mdpi/capitalone_metadata_card.png",
     "payments/java/res/drawable-mdpi/diners_card.png",
     "payments/java/res/drawable-mdpi/diners_metadata_card.png",
@@ -88,6 +93,7 @@ android_resources("autofill_payments_java_resources") {
     "payments/java/res/drawable-mdpi/visa_metadata_card.png",
     "payments/java/res/drawable-xhdpi/amex_card.png",
     "payments/java/res/drawable-xhdpi/amex_metadata_card.png",
+    "payments/java/res/drawable-xhdpi/amex_metadata_card_new.png",
     "payments/java/res/drawable-xhdpi/capitalone_metadata_card.png",
     "payments/java/res/drawable-xhdpi/diners_card.png",
     "payments/java/res/drawable-xhdpi/diners_metadata_card.png",
@@ -108,6 +114,7 @@ android_resources("autofill_payments_java_resources") {
     "payments/java/res/drawable-xhdpi/visa_metadata_card.png",
     "payments/java/res/drawable-xxhdpi/amex_card.png",
     "payments/java/res/drawable-xxhdpi/amex_metadata_card.png",
+    "payments/java/res/drawable-xxhdpi/amex_metadata_card_new.png",
     "payments/java/res/drawable-xxhdpi/capitalone_metadata_card.png",
     "payments/java/res/drawable-xxhdpi/diners_card.png",
     "payments/java/res/drawable-xxhdpi/diners_metadata_card.png",
@@ -128,6 +135,7 @@ android_resources("autofill_payments_java_resources") {
     "payments/java/res/drawable-xxhdpi/visa_metadata_card.png",
     "payments/java/res/drawable-xxxhdpi/amex_card.png",
     "payments/java/res/drawable-xxxhdpi/amex_metadata_card.png",
+    "payments/java/res/drawable-xxxhdpi/amex_metadata_card_new.png",
     "payments/java/res/drawable-xxxhdpi/capitalone_metadata_card.png",
     "payments/java/res/drawable-xxxhdpi/diners_card.png",
     "payments/java/res/drawable-xxxhdpi/diners_metadata_card.png",
@@ -168,7 +176,6 @@ android_resources("autofill_payments_java_resources") {
 android_resources("autofill_java_resources") {
   sources = [
     "java/res/layout/autofill_dropdown_item.xml",
-    "java/res/values/colors.xml",
     "java/res/values/dimens.xml",
   ]
   deps = [
@@ -182,7 +189,8 @@ android_resources("autofill_java_resources") {
 # //clank/components/autofill:java_resources target defines branded icons with
 # the same file names.
 android_resources("autofill_unbranded_browser_resources") {
-  sources = [ "browser/internal/java/res/drawable/google_wallet_24dp.xml" ]
+  sources = [ "browser/internal/java/res/values/google_wallet_drawables.xml" ]
+  deps = [ "//components/payments/content/android:minimal_java_resources" ]
 }
 
 # This target is only used by the Chrome browser and not included into the
@@ -190,12 +198,30 @@ android_resources("autofill_unbranded_browser_resources") {
 android_resources("autofill_browser_resources") {
   sources = [
     "browser/java/res/drawable/autofill_external_link.xml",
+    "browser/java/res/drawable/autofill_sad_tab.xml",
+    "browser/java/res/drawable/car_spark.xml",
+    "browser/java/res/drawable/card_generic_spark.xml",
+    "browser/java/res/drawable/card_generic_vector.xml",
+    "browser/java/res/drawable/chrome_product.xml",
     "browser/java/res/drawable/directions_car.xml",
     "browser/java/res/drawable/flight.xml",
+    "browser/java/res/drawable/flight_spark.xml",
     "browser/java/res/drawable/id_card.xml",
+    "browser/java/res/drawable/id_card_2.xml",
+    "browser/java/res/drawable/id_card_2_spark.xml",
+    "browser/java/res/drawable/id_card_spark.xml",
+    "browser/java/res/drawable/local_shipping.xml",
+    "browser/java/res/drawable/local_shipping_spark.xml",
+    "browser/java/res/drawable/location.xml",
+    "browser/java/res/drawable/location_spark.xml",
     "browser/java/res/drawable/passport.xml",
+    "browser/java/res/drawable/passport_spark.xml",
     "browser/java/res/drawable/person_check.xml",
+    "browser/java/res/drawable/shopping_bag.xml",
+    "browser/java/res/drawable/shopping_bag_spark.xml",
+    "browser/java/res/drawable/spark.xml",
     "browser/java/res/drawable/travel_luggage_and_bags.xml",
+    "browser/java/res/drawable/travel_trip.xml",
     "browser/java/res/drawable/work_logo.xml",
   ]
 }
@@ -204,10 +230,11 @@ java_cpp_enum("autofill_core_browser_java_enums") {
   sources = [
     "../core/browser/data_model/addresses/autofill_profile.h",
     "../core/browser/data_model/addresses/autofill_structured_address_component.h",
-    "../core/browser/data_model/payments/credit_card.h",
     "../core/browser/data_model/payments/iban.h",
     "../core/browser/field_types.h",
     "../core/browser/filling/filling_product.h",
+    "../core/browser/foundations/autofill_client.h",
+    "../core/browser/metrics/autofill_metrics.h",
     "../core/browser/metrics/payments/iban_metrics.h",
     "../core/browser/metrics/payments/mandatory_reauth_metrics.h",
     "../core/browser/metrics/payments/virtual_card_enrollment_metrics.h",
@@ -223,6 +250,7 @@ java_cpp_enum("payments_autofill_core_browser_java_enums") {
   sources = [
     "../core/browser/data_model/payments/bank_account.h",
     "../core/browser/data_model/payments/payment_instrument.h",
+    "../core/browser/metrics/payments/wallet_reminder_notice_metrics.h",
   ]
 }
 
@@ -248,6 +276,7 @@ android_library("main_autofill_java") {
     ":autofill_java_resources",
     ":payments_autofill_java",
     "//base:base_java",
+    "//components/autofill/core/browser/data_model/payments:mojo_bindings_java",
     "//content/public/android:content_java",
     "//third_party/androidx:androidx_annotation_annotation_java",
     "//third_party/androidx:androidx_appcompat_appcompat_resources_java",
@@ -258,8 +287,10 @@ android_library("main_autofill_java") {
   ]
   sources = [
     "java/src/org/chromium/components/autofill/AddressNormalizer.java",
+    "java/src/org/chromium/components/autofill/AtMemoryPayload.java",
     "java/src/org/chromium/components/autofill/AutofillAddressEditorUiInfo.java",
     "java/src/org/chromium/components/autofill/AutofillAddressUiComponent.java",
+    "java/src/org/chromium/components/autofill/AutofillAiPayload.java",
     "java/src/org/chromium/components/autofill/AutofillDelegate.java",
     "java/src/org/chromium/components/autofill/AutofillDropdownAdapter.java",
     "java/src/org/chromium/components/autofill/AutofillPopup.java",
@@ -289,8 +320,10 @@ android_library("main_autofill_java") {
 generate_jni("main_autofill_jni_headers") {
   sources = [
     "java/src/org/chromium/components/autofill/AddressNormalizer.java",
+    "java/src/org/chromium/components/autofill/AtMemoryPayload.java",
     "java/src/org/chromium/components/autofill/AutofillAddressEditorUiInfo.java",
     "java/src/org/chromium/components/autofill/AutofillAddressUiComponent.java",
+    "java/src/org/chromium/components/autofill/AutofillAiPayload.java",
     "java/src/org/chromium/components/autofill/AutofillProfile.java",
     "java/src/org/chromium/components/autofill/AutofillProfilePayload.java",
     "java/src/org/chromium/components/autofill/DropdownKeyValue.java",
@@ -337,12 +370,14 @@ android_library("payments_autofill_java") {
     "java/src/org/chromium/components/autofill/payments/BnplIssuerTosDetail.java",
     "java/src/org/chromium/components/autofill/payments/CardDetail.java",
     "java/src/org/chromium/components/autofill/payments/Ewallet.java",
+    "java/src/org/chromium/components/autofill/payments/LegalMessage.java",
     "java/src/org/chromium/components/autofill/payments/LegalMessageLine.java",
     "java/src/org/chromium/components/autofill/payments/PaymentInstrument.java",
     "java/src/org/chromium/components/autofill/payments/TouchToFillDisplayOptions.java",
   ]
   deps = [
     ":payments_interfaces_java",
+    "//components/autofill/core/browser/data_model/payments:mojo_bindings_java",
     "//third_party/android_deps:guava_android_java",
     "//third_party/androidx:androidx_annotation_annotation_java",
     "//third_party/jni_zero:jni_zero_java",
@@ -355,7 +390,7 @@ android_library("payments_autofill_java") {
 }
 
 robolectric_library("payments_autofill_junit_tests") {
-  resources_package = "org.chromium.components.autofill"
+  resources_package = "org.chromium.components.autofill.payments"
 
   sources = [
     "junit/src/org/chromium/components/autofill/payments/AutofillSaveCardUiInfoTest.java",
@@ -367,6 +402,7 @@ robolectric_library("payments_autofill_junit_tests") {
     "junit/src/org/chromium/components/autofill/payments/CardDetailTest.java",
     "junit/src/org/chromium/components/autofill/payments/EwalletTest.java",
     "junit/src/org/chromium/components/autofill/payments/LegalMessageLineTest.java",
+    "junit/src/org/chromium/components/autofill/payments/LegalMessageTest.java",
     "junit/src/org/chromium/components/autofill/payments/PaymentInstrumentTest.java",
   ]
   deps = [
@@ -424,6 +460,15 @@ static_library("payments_autofill_cc") {
     ":payments_jni_headers",
     "//base",
     "//components/autofill/core/browser:legal_message_line",
+  ]
+}
+
+android_library("autofill_ai_test_utils_java") {
+  testonly = true
+  sources = [ "java/src/org/chromium/components/autofill/autofill_ai/utils/TestUtils.java" ]
+  deps = [
+    ":main_autofill_java",
+    "//third_party/androidx:androidx_annotation_annotation_java",
   ]
 }
 

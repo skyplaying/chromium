@@ -51,7 +51,7 @@ export class NavMenuElement extends CrLitElement {
   protected accessor menuItems_:
       Array<{icon: string, name: string, path: string}> = [
         {
-          icon: 'cr:person',
+          icon: 'cr:person-filled',
           name: 'Menu item 1',
           path: '/path-1',
         },
@@ -61,7 +61,7 @@ export class NavMenuElement extends CrLitElement {
           path: '/path-2',
         },
         {
-          icon: 'cr:star',
+          icon: 'cr:star-filled',
           name: 'Menu item 3',
           path: '/path-3',
         },
@@ -74,7 +74,7 @@ export class NavMenuElement extends CrLitElement {
     e.preventDefault();
   }
 
-  protected onSelectedIndexChanged_(e: CustomEvent<{value: number}>) {
+  protected onSelectedIndexSelectedChanged_(e: CustomEvent<{value: number}>) {
     this.selectedIndex = e.detail.value;
   }
 }

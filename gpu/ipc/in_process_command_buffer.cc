@@ -210,9 +210,8 @@ gpu::ContextResult InProcessCommandBuffer::Initialize(
       base::BindOnce(&InProcessCommandBuffer::InitializeOnGpuThread,
                      base::Unretained(this), std::move(params));
 
-  task_scheduler_holder_ =
-      std::make_unique<gpu::GpuTaskSchedulerHelper>(task_executor_);
-  task_sequence_ = task_scheduler_holder_->GetTaskSequence();
+  auto task_sequence = task_executor_->CreateSequence();
+  task_sequence_ = task_sequence.get();
 
   // Here we block by using a WaitableEvent to make sure InitializeOnGpuThread
   // is finished as part of Initialize function. This also makes sure we won't
@@ -230,11 +229,13 @@ gpu::ContextResult InProcessCommandBuffer::Initialize(
     capabilities_ = capabilities;
     gl_capabilities_ = gl_capabilities;
     shared_image_interface_ = SharedImageInterfaceInProcess::Create(
-        task_sequence_, task_executor_->gpu_preferences(),
+        std::move(task_sequence), task_executor_->gpu_preferences(),
         context_group_->feature_info()->workarounds(),
         task_executor_->gpu_feature_info(), context_state_.get(),
         task_executor_->shared_image_manager(),
         /*is_for_display_compositor=*/false, task_executor_->GetTaskRunner());
+  } else {
+    task_sequence_ = nullptr;
   }
 
   return result;
@@ -249,22 +250,18 @@ gpu::ContextResult InProcessCommandBuffer::InitializeOnGpuThread(
   GpuDriverBugWorkarounds workarounds(
       task_executor_->gpu_feature_info().enabled_gpu_driver_bug_workarounds);
 
-  scoped_refptr<MemoryTracker> memory_tracker;
-  // Android WebView won't have a memory tracker.
-  if (task_executor_->ShouldCreateMemoryTracker()) {
-    const uint64_t client_tracing_id =
-        base::trace_event::MemoryDumpManager::GetInstance()
-            ->GetTracingProcessId();
-    memory_tracker = base::MakeRefCounted<MemoryTracker>(
-        GetCommandBufferID(), client_tracing_id,
-        /*peak_memory_monitor=*/nullptr,
-        GpuPeakMemoryAllocationSource::COMMAND_BUFFER);
-  }
+  const uint64_t client_tracing_id =
+      base::trace_event::MemoryDumpManager::GetInstance()
+          ->GetTracingProcessId();
+  auto memory_tracker = base::MakeRefCounted<MemoryTracker>(
+      GetCommandBufferID(), client_tracing_id,
+      /*peak_memory_monitor=*/nullptr,
+      GpuPeakMemoryAllocationSource::COMMAND_BUFFER);
 
   auto feature_info = base::MakeRefCounted<gles2::FeatureInfo>(
       workarounds, task_executor_->gpu_feature_info());
   context_group_ = base::MakeRefCounted<gles2::ContextGroup>(
-      task_executor_->gpu_preferences(), std::move(memory_tracker),
+      task_executor_->gpu_preferences(), memory_tracker,
       task_executor_->shader_translator_cache(),
       task_executor_->framebuffer_completeness_cache(), feature_info,
       /*progress_reporter=*/nullptr, task_executor_->gpu_feature_info(),
@@ -289,8 +286,8 @@ gpu::ContextResult InProcessCommandBuffer::InitializeOnGpuThread(
     use_virtualized_gl_context_ = false;
   }
 
-  command_buffer_ = std::make_unique<CommandBufferService>(
-      this, context_group_->memory_tracker());
+  command_buffer_ =
+      std::make_unique<CommandBufferService>(this, memory_tracker);
 
   context_state_ = task_executor_->GetSharedContextState();
 
@@ -331,9 +328,9 @@ gpu::ContextResult InProcessCommandBuffer::InitializeOnGpuThread(
       std::unique_ptr<webgpu::WebGPUDecoder> webgpu_decoder =
           webgpu::WebGPUDecoder::Create(
               this, command_buffer_.get(),
-              task_executor_->shared_image_manager(),
-              context_group_->memory_tracker(), task_executor_->outputter(),
-              task_executor_->gpu_preferences(), context_state_);
+              task_executor_->shared_image_manager(), memory_tracker,
+              task_executor_->outputter(), task_executor_->gpu_preferences(),
+              context_state_);
       gpu::ContextResult result =
           webgpu_decoder->Initialize(task_executor_->gpu_feature_info());
       if (result != gpu::ContextResult::kSuccess) {
@@ -362,14 +359,12 @@ gpu::ContextResult InProcessCommandBuffer::InitializeOnGpuThread(
           raster::RasterDecoder::Create(
               this, command_buffer_.get(), task_executor_->outputter(),
               task_executor_->gpu_feature_info(),
-              task_executor_->gpu_preferences(),
-              context_group_->memory_tracker(),
+              task_executor_->gpu_preferences(), memory_tracker,
               task_executor_->shared_image_manager(), context_state_,
               /*is_privileged=*/true);
 
-      const auto& attribs = params.attribs->get_raster();
       auto result =
-          raster_decoder->Initialize(attribs->lose_context_when_out_of_memory);
+          raster_decoder->Initialize(/*lose_context_when_out_of_memory=*/true);
       if (result != gpu::ContextResult::kSuccess) {
         DestroyOnGpuThread();
         DLOG(ERROR) << "Failed to initialize decoder.";
@@ -456,7 +451,7 @@ gpu::ContextResult InProcessCommandBuffer::InitializeOnGpuThread(
       }
       auto result = gles2_decoder->Initialize(
           surface, context_, /*offscreen=*/true, attribs->context_type,
-          attribs->lose_context_when_out_of_memory);
+          /*lose_context_when_out_of_memory=*/true);
       if (result != gpu::ContextResult::kSuccess) {
         DestroyOnGpuThread();
         DLOG(ERROR) << "Failed to initialize decoder.";
@@ -504,7 +499,6 @@ void InProcessCommandBuffer::Destroy() {
 
   client_thread_weak_ptr_factory_.InvalidateWeakPtrs();
   gpu_control_client_ = nullptr;
-  shared_image_interface_ = nullptr;
   // Here we block by using a WaitableEvent to make sure DestroyOnGpuThread is
   // finished as part of Destroy.
   base::WaitableEvent completion(
@@ -519,6 +513,7 @@ void InProcessCommandBuffer::Destroy() {
 
   completion.Wait();
   task_sequence_ = nullptr;
+  shared_image_interface_ = nullptr;
 }
 
 bool InProcessCommandBuffer::DestroyOnGpuThread() {
@@ -900,10 +895,6 @@ void InProcessCommandBuffer::HandleReturnData(base::span<const uint8_t> data) {
   PostOrRunClientCallback(
       base::BindOnce(&InProcessCommandBuffer::HandleReturnDataOnOriginThread,
                      client_thread_weak_ptr_, std::move(vec)));
-}
-
-bool InProcessCommandBuffer::ShouldYield() {
-  return task_sequence_->ShouldYield();
 }
 
 void InProcessCommandBuffer::PostOrRunClientCallback(

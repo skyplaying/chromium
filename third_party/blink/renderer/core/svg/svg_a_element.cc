@@ -30,11 +30,11 @@
 #include "third_party/blink/renderer/core/editing/editing_utilities.h"
 #include "third_party/blink/renderer/core/events/keyboard_event.h"
 #include "third_party/blink/renderer/core/events/mouse_event.h"
+#include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/html/anchor_element_utils.h"
 #include "third_party/blink/renderer/core/html/forms/html_form_element.h"
-#include "third_party/blink/renderer/core/html/html_anchor_element.h"
 #include "third_party/blink/renderer/core/html/parser/html_parser_idioms.h"
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_inline.h"
 #include "third_party/blink/renderer/core/layout/svg/layout_svg_transformable_container.h"
@@ -48,6 +48,7 @@
 #include "third_party/blink/renderer/core/svg_names.h"
 #include "third_party/blink/renderer/core/xlink_names.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_request.h"
 #include "third_party/blink/renderer/platform/weborigin/security_policy.h"
 
@@ -92,15 +93,7 @@ void SVGAElement::SvgAttributeChanged(const SvgAttributeChangedParams& params) {
   // SVGURIReference changes as none of the other properties changes the linking
   // behaviour for our <a> element.
   if (SVGURIReference::IsKnownAttribute(params.name)) {
-    bool was_link = IsLink();
-    SetIsLink(!HrefString().IsNull());
-
-    if (was_link || IsLink()) {
-      PseudoStateChanged(CSSSelector::kPseudoLink);
-      PseudoStateChanged(CSSSelector::kPseudoVisited);
-      PseudoStateChanged(CSSSelector::kPseudoWebkitAnyLink);
-      PseudoStateChanged(CSSSelector::kPseudoAnyLink);
-    }
+    AnchorElementUtils::UpdateHref(*this, AtomicString(HrefString()));
     return;
   }
 
@@ -117,13 +110,27 @@ LayoutObject* SVGAElement::CreateLayoutObject(const ComputedStyle&) {
 
 void SVGAElement::DefaultEventHandler(Event& event) {
   if (IsLink()) {
-    if (IsFocused() && IsEnterKeyKeydownEvent(event)) {
+    if (IsFocused() && KeyboardEvent::IsEnterKeyKeydownEvent(event)) {
       event.SetDefaultHandled();
       DispatchSimulatedClick(&event);
       return;
     }
 
-    if (IsLinkClick(event)) {
+    if (AnchorElementUtils::IsLinkClick(event)) {
+      // It's unclear whether synthesized middle-button "click" events should be
+      // allowed to be dispatched and create a navigation. Measure how common
+      // this is to see if we can disallow it. Per Pointer Events: "The click
+      // event should only be fired for the primary pointer button (i.e., when
+      // button value is 0, buttons value is 1). Secondary buttons (like the
+      // middle or right button on a standard mouse) MUST NOT fire click
+      // events." (https://w3c.github.io/pointerevents/#dfn-click)
+      if (event.type() == event_type_names::kClick && !event.isTrusted() &&
+          To<MouseEvent>(event).button() ==
+              static_cast<int16_t>(WebPointerProperties::Button::kMiddle)) {
+        UseCounter::Count(GetDocument(),
+                          WebFeature::kSynthesizedMiddleClickSVGAnchor);
+      }
+
       StringView url = StripLeadingAndTrailingHtmlSpaces(HrefString());
 
       if (url.starts_with('#')) {
@@ -143,31 +150,22 @@ void SVGAElement::DefaultEventHandler(Event& event) {
       }
 
       NavigationPolicy navigation_policy = NavigationPolicyFromEvent(&event);
-      if (navigation_policy == kNavigationPolicyLinkPreview) {
-        // TODO(b:302649777): Support LinkPreview for SVG <a> element.
-        return;
-      }
 
       const KURL& resolved_url = GetDocument().CompleteURL(url);
       ResourceRequest request(resolved_url);
 
-      if (RuntimeEnabledFeatures::SvgAnchorElementAttributesEnabled()) {
-        // Schedule the ping before the frame load. Prerender in Chrome may kill
-        // the renderer as soon as the navigation is sent out.
-        AnchorElementUtils::SendPings(resolved_url, GetDocument(),
-                                      FastGetAttribute(svg_names::kPingAttr));
+      // Schedule the ping before the frame load. Prerender in Chrome may kill
+      // the renderer as soon as the navigation is sent out.
+      AnchorElementUtils::SendPings(resolved_url, GetDocument(),
+                                    FastGetAttribute(svg_names::kPingAttr));
 
-        AnchorElementUtils::HandleReferrerPolicyAttribute(
-            request, FastGetAttribute(svg_names::kReferrerpolicyAttr),
-            link_relations_, GetDocument());
-      }
-
-      request.SetHasUserGesture(LocalFrame::HasTransientUserActivation(frame));
+      AnchorElementUtils::HandleReferrerPolicyAttribute(
+          request, FastGetAttribute(svg_names::kReferrerpolicyAttr),
+          link_relations_, GetDocument());
 
       // Respect the download attribute only if we can read the content, and the
       // event is not an alt-click or similar.
-      if (RuntimeEnabledFeatures::SvgAnchorElementDownloadAttributeEnabled() &&
-          FastHasAttribute(svg_names::kDownloadAttr) &&
+      if (FastHasAttribute(svg_names::kDownloadAttr) &&
           navigation_policy != kNavigationPolicyDownload &&
           GetDocument().domWindow()->GetSecurityOrigin()->CanReadContent(
               resolved_url)) {
@@ -197,6 +195,9 @@ void SVGAElement::DefaultEventHandler(Event& event) {
           frame_request, frame->GetSettings(), GetExecutionContext(), target,
           link_relations_);
 
+      AnchorElementUtils::EnforceBlobUrlNoopenerIfNeeded(
+          frame_request, resolved_url, *GetDocument().domWindow());
+
       frame_request.SetTriggeringEventInfo(
           event.isTrusted()
               ? mojom::blink::TriggeringEventInfo::kFromTrustedEvent
@@ -218,10 +219,14 @@ void SVGAElement::DefaultEventHandler(Event& event) {
 }
 
 bool SVGAElement::IsValidInterestInvoker(Element& target) const {
-  DCHECK(RuntimeEnabledFeatures::HTMLInterestForAttributeEnabled());
   // Anchor elements that don't have the `href` attribute are not interactive,
   // so they can't support `interestfor`.
   return IsLink();
+}
+
+KURL SVGAElement::Url() const {
+  return GetDocument().CompleteURL(
+      StripLeadingAndTrailingHtmlSpaces(HrefString()));
 }
 
 bool SVGAElement::HasActivationBehavior() const {

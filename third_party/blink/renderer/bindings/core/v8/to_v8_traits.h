@@ -12,6 +12,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/idl_types.h"
 #include "third_party/blink/renderer/bindings/core/v8/native_value_traits_impl.h"
 #include "third_party/blink/renderer/core/typed_arrays/array_buffer_view_helpers.h"
+#include "third_party/blink/renderer/platform/bindings/union_base.h"
 #include "third_party/blink/renderer/platform/bindings/v8_binding.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_deque.h"
 #include "third_party/blink/renderer/platform/wtf/type_traits.h"
@@ -31,6 +32,33 @@ namespace bindings {
 class DictionaryBase;
 class EnumerationBase;
 class UnionBase;
+
+namespace internal {
+
+template <typename T>
+struct NullTraits {};
+
+template <typename T>
+  requires std::is_pointer_v<T>
+struct NullTraits<T> {
+  static bool IsNull(T t) { return t == nullptr; }
+};
+
+template <>
+struct NullTraits<nullptr_t> {
+  static constexpr bool IsNull(nullptr_t) { return true; }
+};
+
+template <typename T>
+concept HasIsNull = requires(const T& x) { x.IsNull(); };
+
+template <typename T>
+  requires HasIsNull<T>
+struct NullTraits<T> {
+  static bool IsNull(const T& obj) { return obj.IsNull(); }
+};
+
+}  // namespace internal
 
 }  // namespace bindings
 
@@ -79,15 +107,6 @@ struct ToV8Traits<IDLBoolean> {
   [[nodiscard]] static v8::Local<v8::Value> ToV8(ScriptState* script_state,
                                                  bool value) {
     return v8::Boolean::New(script_state->GetIsolate(), value);
-  }
-};
-
-// Bigint
-template <>
-struct ToV8Traits<IDLBigint> {
-  [[nodiscard]] static v8::Local<v8::Value> ToV8(ScriptState* script_state,
-                                                 const BigInt& bigint) {
-    return bigint.ToV8(script_state->GetContext());
   }
 };
 
@@ -414,13 +433,6 @@ struct ToV8Traits<IDLSequence<T>> {
     return bindings::ToV8HelperSequenceWithMemberUpcast<
         bindings::DictionaryBase>(script_state, value);
   }
-
-  // TODO(crbug.com/1185046): Remove this overload.
-  [[nodiscard]] static v8::Local<v8::Object> ToV8(
-      ScriptState* script_state,
-      const v8::LocalVector<v8::Value>& value) {
-    return bindings::ToV8HelperSequence<IDLAny>(script_state, value);
-  }
 };
 
 template <typename T>
@@ -559,19 +571,6 @@ struct ToV8Traits<IDLNullable<IDLIntegerTypeBase<T, mode>>> {
     if (!value)
       return v8::Null(script_state->GetIsolate());
     return ToV8Traits<IDLIntegerTypeBase<T, mode>>::ToV8(script_state, *value);
-  }
-};
-
-// Nullable Bigints
-template <>
-struct ToV8Traits<IDLNullable<IDLBigint>> {
-  [[nodiscard]] static v8::Local<v8::Value> ToV8(
-      ScriptState* script_state,
-      const std::optional<BigInt>& value) {
-    if (!value) {
-      return v8::Null(script_state->GetIsolate());
-    }
-    return ToV8Traits<IDLBigint>::ToV8(script_state, *value);
   }
 };
 
@@ -792,6 +791,18 @@ struct ToV8Traits<T> {
     DCHECK(value);
     return value->ToV8(script_state);
   }
+  [[nodiscard]] static v8::Local<v8::Value> ToV8(
+      ScriptState* script_state,
+      bindings::OptimizedReturnProxy<T> value) {
+    return value.ToV8();
+  }
+  template <typename ArgType>
+    requires(!std::is_same_v<T*, std::remove_cvref_t<ArgType>> &&
+             std::is_constructible_v<T, ArgType>)
+  [[nodiscard]] static v8::Local<v8::Value> ToV8(ScriptState* script_state,
+                                                 ArgType&& value) {
+    return T::DirectToV8(script_state, std::forward<ArgType>(value));
+  }
 };
 
 template <typename T>
@@ -802,6 +813,25 @@ struct ToV8Traits<IDLNullable<T>> {
     if (!value)
       return v8::Null(script_state->GetIsolate());
     return ToV8Traits<T>::ToV8(script_state, value);
+  }
+  [[nodiscard]] static v8::Local<v8::Value> ToV8(
+      ScriptState* script_state,
+      bindings::OptimizedReturnProxy<T> value) {
+    if (!value) {
+      return v8::Null(script_state->GetIsolate());
+    }
+    return value.ToV8();
+  }
+  template <typename ArgType>
+    requires(!std::is_same_v<T*, std::remove_cvref_t<ArgType>> &&
+             std::is_constructible_v<T, ArgType>)
+  [[nodiscard]] static v8::Local<v8::Value> ToV8(ScriptState* script_state,
+                                                 ArgType&& value) {
+    if (bindings::internal::NullTraits<std::remove_cvref_t<ArgType>>::IsNull(
+            value)) {
+      return v8::Null(script_state->GetIsolate());
+    }
+    return T::DirectToV8(script_state, std::forward<ArgType>(value));
   }
 };
 

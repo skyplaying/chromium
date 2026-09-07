@@ -25,19 +25,18 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.RuntimeEnvironment;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.MockTab;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.browser.tasks.tab_management.TabListEditorAction.ActionDelegate;
 import org.chromium.chrome.browser.tasks.tab_management.TabListEditorAction.ActionObserver;
 import org.chromium.chrome.browser.tasks.tab_management.TabListEditorAction.ButtonType;
 import org.chromium.chrome.browser.tasks.tab_management.TabListEditorAction.IconPosition;
 import org.chromium.chrome.browser.tasks.tab_management.TabListEditorAction.ShowMode;
+import org.chromium.chrome.browser.tasks.tab_management.TabListMediator.TabListLayoutType;
 import org.chromium.chrome.test.util.browser.tabmodel.MockTabModel;
 import org.chromium.components.browser_ui.share.ShareParams;
 import org.chromium.components.browser_ui.widget.selectable_list.SelectionDelegate;
@@ -54,12 +53,10 @@ import java.util.Set;
 
 /** Unit tests for {@link TabListEditorShareAction}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class TabListEditorShareActionUnitTest {
 
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
-    @Mock private TabGroupModelFilter mTabGroupModelFilter;
     @Mock private SelectionDelegate<TabListEditorItemSelectionId> mSelectionDelegate;
     @Mock private ActionDelegate mDelegate;
     @Mock private DomDistillerUrlUtilsJni mDomDistillerUrlUtilsJni;
@@ -103,20 +100,19 @@ public class TabListEditorShareActionUnitTest {
                                     }
                                 }));
         when(mIncognitoProfile.isOffTheRecord()).thenReturn(true);
-        when(mTabGroupModelFilter.getTabModel()).thenReturn(mTabModel);
         doAnswer(
                         invocation -> {
                             return Collections.singletonList(
                                     mTabModel.getTabById(invocation.getArgument(0)));
                         })
-                .when(mTabGroupModelFilter)
+                .when(mTabModel)
                 .getRelatedTabList(anyInt());
         DomDistillerUrlUtilsJni.setInstanceForTesting(mDomDistillerUrlUtilsJni);
     }
 
     @Test
     public void testInherentActionProperties() {
-        mAction.configure(() -> mTabGroupModelFilter, mSelectionDelegate, mDelegate, false);
+        mAction.configure(() -> mTabModel, mSelectionDelegate, mDelegate, TabListLayoutType.FLAT);
 
         Drawable drawable =
                 AppCompatResources.getDrawable(mContext, R.drawable.tab_list_editor_share_icon);
@@ -143,7 +139,7 @@ public class TabListEditorShareActionUnitTest {
 
     @Test
     public void testShareActionNoTabs() {
-        mAction.configure(() -> mTabGroupModelFilter, mSelectionDelegate, mDelegate, false);
+        mAction.configure(() -> mTabModel, mSelectionDelegate, mDelegate, TabListLayoutType.FLAT);
 
         mAction.onSelectionStateChange(new ArrayList<>());
         Assert.assertEquals(
@@ -154,7 +150,7 @@ public class TabListEditorShareActionUnitTest {
 
     @Test
     public void testShareActionWithOneTab() throws Exception {
-        mAction.configure(() -> mTabGroupModelFilter, mSelectionDelegate, mDelegate, false);
+        mAction.configure(() -> mTabModel, mSelectionDelegate, mDelegate, TabListLayoutType.FLAT);
 
         mAction.setSkipUrlCheckForTesting(true);
         List<Integer> tabIds = new ArrayList<>();
@@ -220,7 +216,7 @@ public class TabListEditorShareActionUnitTest {
 
     @Test
     public void testShareActionWithMultipleTabs() throws Exception {
-        mAction.configure(() -> mTabGroupModelFilter, mSelectionDelegate, mDelegate, false);
+        mAction.configure(() -> mTabModel, mSelectionDelegate, mDelegate, TabListLayoutType.FLAT);
 
         mAction.setSkipUrlCheckForTesting(true);
         List<Integer> tabIds = new ArrayList<>();
@@ -286,8 +282,8 @@ public class TabListEditorShareActionUnitTest {
     }
 
     @Test
-    public void testShareActionWithAllFilterableTabs_actionsOnTabs() throws Exception {
-        mAction.configure(() -> mTabGroupModelFilter, mSelectionDelegate, mDelegate, false);
+    public void testShareActionWithAllFilterableTabs_flatLayout() throws Exception {
+        mAction.configure(() -> mTabModel, mSelectionDelegate, mDelegate, TabListLayoutType.FLAT);
 
         List<Integer> tabIds = new ArrayList<>();
         tabIds.add(4);
@@ -310,9 +306,9 @@ public class TabListEditorShareActionUnitTest {
     }
 
     @Test
-    public void testShareActionWithAllFilterableTabs_actionsOnTabsAndRelatedTabs()
-            throws Exception {
-        mAction.configure(() -> mTabGroupModelFilter, mSelectionDelegate, mDelegate, true);
+    public void testShareActionWithAllFilterableTabs_groupedLayout() throws Exception {
+        mAction.configure(
+                () -> mTabModel, mSelectionDelegate, mDelegate, TabListLayoutType.GROUPED);
 
         List<Integer> tabIds = new ArrayList<>();
         tabIds.add(4);

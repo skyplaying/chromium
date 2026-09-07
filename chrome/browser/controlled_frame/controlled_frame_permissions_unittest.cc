@@ -6,6 +6,7 @@
 #include "extensions/browser/guest_view/web_view/web_view_permission_types.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/permissions/permission_utils.h"
+#include "ui/base/window_open_disposition.h"
 
 namespace controlled_frame {
 
@@ -175,8 +176,6 @@ TEST_F(ControlledFramePermissionsTest, Verify) {
       case ContentSettingsType::HTTPS_ENFORCED:
       case ContentSettingsType::ALL_SCREEN_CAPTURE:
       case ContentSettingsType::COOKIE_CONTROLS_METADATA:
-      case ContentSettingsType::TPCD_HEURISTICS_GRANTS:
-      case ContentSettingsType::TPCD_METADATA_GRANTS:
       case ContentSettingsType::AUTO_PICTURE_IN_PICTURE:
       case ContentSettingsType::FILE_SYSTEM_ACCESS_EXTENDED_PERMISSION:
       case ContentSettingsType::FILE_SYSTEM_ACCESS_RESTORE_PERMISSION:
@@ -202,6 +201,9 @@ TEST_F(ControlledFramePermissionsTest, Verify) {
       case ContentSettingsType::DEVICE_ATTRIBUTES:
       case ContentSettingsType::PERMISSION_ACTIONS_HISTORY:
       case ContentSettingsType::SUSPICIOUS_NOTIFICATION_SHOW_ORIGINAL:
+      case ContentSettingsType::SUB_APPS_WITHOUT_PROMPTS:
+      case ContentSettingsType::INLINE_CUE_MENU:
+      case ContentSettingsType::SUSPICIOUS_SITE_WARNING_DATA:
         break;
 
       default:

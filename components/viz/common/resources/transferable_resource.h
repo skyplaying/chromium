@@ -44,7 +44,6 @@ struct VIZ_COMMON_EXPORT TransferableResource {
   struct VIZ_COMMON_EXPORT MetadataOverride {
     std::optional<bool> is_overlay_candidate;
     std::optional<gfx::ColorSpace> color_space;
-    std::optional<GrSurfaceOrigin> origin;
     std::optional<SkAlphaType> alpha_type;
   };
 
@@ -194,9 +193,8 @@ struct VIZ_COMMON_EXPORT TransferableResource {
 
   // Origin of the underlying resource.
   GrSurfaceOrigin GetOrigin() const {
-    return metadata_override_.origin.value_or(
-        shared_image_ ? shared_image_->surface_origin()
-                      : kTopLeft_GrSurfaceOrigin);
+    return shared_image_ ? shared_image_->surface_origin()
+                         : kTopLeft_GrSurfaceOrigin;
   }
 
   SkAlphaType GetAlphaType() const {
@@ -235,9 +233,6 @@ struct VIZ_COMMON_EXPORT TransferableResource {
   ResourceId id = kInvalidResourceId;
 
   gfx::HDRMetadata hdr_metadata;
-
-  // Indicates if the resource uses low latency rendering.
-  bool is_low_latency_rendering = false;
 
   // This defines when the display compositor returns resources. Clients may use
   // different synchronization types based on their needs.

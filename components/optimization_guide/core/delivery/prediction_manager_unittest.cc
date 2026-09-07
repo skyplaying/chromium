@@ -32,13 +32,14 @@
 #include "components/optimization_guide/core/delivery/model_util.h"
 #include "components/optimization_guide/core/delivery/optimization_target_model_observer.h"
 #include "components/optimization_guide/core/delivery/prediction_model_download_manager.h"
+#include "components/optimization_guide/core/delivery/prediction_model_override.h"
 #include "components/optimization_guide/core/delivery/prediction_model_fetcher.h"
 #include "components/optimization_guide/core/delivery/prediction_model_fetcher_impl.h"
 #include "components/optimization_guide/core/delivery/prediction_model_store.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/core/optimization_guide_logger.h"
+#include "components/optimization_guide/core/optimization_guide_permissions_util.h"
 #include "components/optimization_guide/core/optimization_guide_prefs.h"
-#include "components/optimization_guide/core/optimization_guide_switches.h"
 #include "components/optimization_guide/core/optimization_guide_util.h"
 #include "components/optimization_guide/proto/hint_cache.pb.h"
 #include "components/optimization_guide/proto/models.pb.h"
@@ -373,7 +374,7 @@ class PredictionManagerTestBase : public testing::Test {
 
   void SetUp() override {
     base::CommandLine::ForCurrentProcess()->AppendSwitch(
-        switches::kGoogleApiKeyConfigurationCheckOverride);
+        kGoogleApiKeyConfigurationCheckOverrideSwitch);
 
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     local_state_prefs_ = std::make_unique<TestingPrefServiceSimple>();
@@ -386,7 +387,7 @@ class PredictionManagerTestBase : public testing::Test {
         base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
             &test_url_loader_factory_);
     base::CommandLine::ForCurrentProcess()->AppendSwitch(
-        switches::kGoogleApiKeyConfigurationCheckOverride);
+        kGoogleApiKeyConfigurationCheckOverrideSwitch);
 
     test_download_service_tracker_ =
         std::make_unique<TestProfileDownloadServiceTracker>();
@@ -613,10 +614,6 @@ TEST_F(PredictionManagerTest, AddObserverForOptimizationTargetModel) {
   prediction_model_fetcher()->SetExpectedModelMetadataForOptimizationTarget(
       proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD, model_metadata);
   histogram_tester.ExpectTotalCount(
-      "OptimizationGuide.PredictionManager.RegistrationTimeSinceServiceInit."
-      "PainfulPageLoad",
-      0);
-  histogram_tester.ExpectTotalCount(
       "OptimizationGuide.PredictionManager.FirstModelFetchSinceServiceInit", 0);
 
   FakeOptimizationTargetModelObserver observer;
@@ -630,10 +627,6 @@ TEST_F(PredictionManagerTest, AddObserverForOptimizationTargetModel) {
       "OptimizationGuide.PredictionManager.ModelAvailableAtRegistration."
       "PainfulPageLoad",
       false, 1);
-  histogram_tester.ExpectTotalCount(
-      "OptimizationGuide.PredictionManager.RegistrationTimeSinceServiceInit."
-      "PainfulPageLoad",
-      1);
 
   EXPECT_TRUE(prediction_model_fetcher()->models_fetched());
   // Make sure the test histogram is recorded. We don't check for value here
@@ -672,9 +665,9 @@ TEST_F(PredictionManagerTest, AddObserverForOptimizationTargetModel) {
     std::optional<ModelInfo> received_model =
         observer.last_received_model_for_target(
             proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD);
-    EXPECT_EQ(received_model->GetModelMetadata()->type_url(), "sometypeurl");
+    EXPECT_EQ(received_model->model_metadata->type_url(), "sometypeurl");
     EXPECT_EQ(base_model_dir.Append(GetBaseFileNameForModels()),
-              received_model->GetModelFilePath());
+              received_model->model_file_path);
     auto additional_file = received_model->GetAdditionalFileWithBaseName(
         base::FilePath::StringType(FILE_PATH_LITERAL("additional_file.txt")));
     ASSERT_TRUE(additional_file);
@@ -752,7 +745,7 @@ TEST_F(PredictionManagerTest,
             observer1
                 .last_received_model_for_target(
                     proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD)
-                ->GetModelFilePath());
+                ->model_file_path);
 
   // Now, register a new observer. It should get the model.
   FakeOptimizationTargetModelObserver observer2;
@@ -764,7 +757,7 @@ TEST_F(PredictionManagerTest,
             observer2
                 .last_received_model_for_target(
                     proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD)
-                ->GetModelFilePath());
+                ->model_file_path);
 
   // Now send a new model and make sure both get it.
   auto base_model_dir2 =
@@ -783,12 +776,12 @@ TEST_F(PredictionManagerTest,
             observer1
                 .last_received_model_for_target(
                     proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD)
-                ->GetModelFilePath());
+                ->model_file_path);
   EXPECT_EQ(base_model_dir2.Append(GetBaseFileNameForModels()),
             observer2
                 .last_received_model_for_target(
                     proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD)
-                ->GetModelFilePath());
+                ->model_file_path);
 }
 
 // See crbug/1227996.
@@ -807,9 +800,9 @@ TEST_F(PredictionManagerTest,
   metadata.SerializeToString(&encoded_metadata);
   encoded_metadata = base::Base64Encode(encoded_metadata);
   base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
-      switches::kModelOverride,
+      kModelOverrideSwitch,
       base::StringPrintf("OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD:%s:%s",
-                         fake_path.AsUTF8Unsafe(), encoded_metadata.c_str()));
+                         fake_path.AsUTF8Unsafe(), encoded_metadata));
 
   CreatePredictionManager();
 
@@ -843,14 +836,13 @@ TEST_F(PredictionManagerTest,
       observer
           .last_received_model_for_target(
               proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD)
-          ->GetModelMetadata()
-          ->type_url(),
+          ->model_metadata->type_url(),
       "type.googleapis.com/"
       "google.internal.chrome.optimizationguide.v1.PageTopicsModelMetadata");
   EXPECT_EQ(observer
                 .last_received_model_for_target(
                     proto::OPTIMIZATION_TARGET_PAINFUL_PAGE_LOAD)
-                ->GetModelFilePath(),
+                ->model_file_path,
             fake_path);
 
   // Now reset observer. New model downloads should not update the observer.

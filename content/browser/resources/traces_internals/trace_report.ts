@@ -121,7 +121,7 @@ export class TraceReportElement extends CrLitElement {
     const windowsEpoch = Date.UTC(1601, 0, 1, 0, 0, 0, 0);
     const unixEpoch = Date.UTC(1970, 0, 1, 0, 0, 0, 0);
     // |epochDeltaInMs| equals to
-    // base::Time::kTimeTToMicrosecondsOffset.
+    // base::Time::kMicrosecondsFromWindowsToUnixEpoch.
     const epochDeltaInMs = unixEpoch - windowsEpoch;
     const timeInMs = Number(mojoTime.internalValue) / 1000;
 
@@ -206,11 +206,7 @@ export class TraceReportElement extends CrLitElement {
   }
 
   private dispatchToast_(message: string): void {
-    this.dispatchEvent(new CustomEvent('show-toast', {
-      bubbles: true,
-      composed: true,
-      detail: new Notification(NotificationType.ERROR, message),
-    }));
+    this.fire('show-toast', new Notification(NotificationType.ERROR, message));
   }
 
   protected isDownloadDisabled_(trace: ClientTraceReport): boolean {

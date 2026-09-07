@@ -35,9 +35,15 @@
   },
   "cavalcantii@chromium.org": {
     affiliations: [
+      { start: "2026-01-12", domain: "microsoft.com" },
       { start: "2022-05-03", domain: "intel.com" },
       { start: "2016-08-15", domain: "arm.com" },
       { start: "2014-10-08", domain: "adenilson.org" },
+    ]
+  },
+  "cbiesinger@chromium.org": {
+    affiliations: [
+      { start: "2026-08-17", domain: "igalia.com" },
     ]
   },
   "daniec@chromium.org": {
@@ -79,6 +85,11 @@
   "kzar@chromium.org": {
     affiliations: [
       { start: "2021-11-29", domain: "kzar.co.uk" },
+    ]
+  },
+  "lloydhuang@chromium.org": {
+    affiliations: [
+      { start: "2022-07-05", domain: "tencent.com" },
     ]
   },
   "lpardosixtos@chromium.org": {

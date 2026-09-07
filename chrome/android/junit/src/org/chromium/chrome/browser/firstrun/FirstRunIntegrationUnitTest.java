@@ -31,9 +31,10 @@ import org.robolectric.Robolectric;
 import org.robolectric.android.controller.ActivityController;
 import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowApplication;
-import org.robolectric.shadows.ShadowLooper;
 
+import org.chromium.base.FeatureOverrides;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.base.test.util.Features;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
@@ -46,6 +47,7 @@ import org.chromium.chrome.browser.webapps.WebappActivity;
 import org.chromium.chrome.browser.webapps.WebappLauncherActivity;
 import org.chromium.components.webapk.lib.client.WebApkValidator;
 import org.chromium.components.webapk.lib.common.WebApkMetaDataKeys;
+import org.chromium.ui.base.UiAndroidFeatures;
 import org.chromium.webapk.lib.common.WebApkConstants;
 import org.chromium.webapk.test.WebApkTestHelper;
 
@@ -54,7 +56,6 @@ import java.util.List;
 
 /** JUnit tests for first run triggering code. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public final class FirstRunIntegrationUnitTest {
 
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
@@ -72,6 +73,10 @@ public final class FirstRunIntegrationUnitTest {
         mShadowApplication = shadowOf((Application) ApplicationProvider.getApplicationContext());
 
         ChromeBrowserInitializer.setForTesting(mChromeBrowserInitializer);
+
+        FeatureOverrides.newBuilder()
+                .enable(UiAndroidFeatures.ANDROID_UPDATE_DISPLAY_FOR_CONTEXT)
+                .apply();
 
         FirstRunStatus.setFirstRunFlowComplete(false);
         WebApkValidator.setDisableValidationForTesting(true);
@@ -133,7 +138,7 @@ public final class FirstRunIntegrationUnitTest {
         activityController.create();
         T activity = activityController.get();
         mActivityControllerList.add(activityController);
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
         return activity;
     }
 
@@ -264,8 +269,11 @@ public final class FirstRunIntegrationUnitTest {
     /**
      * Test that {@link WebappLauncherActivity} shows the regular full first run experience when it
      * is launched with an intent which both:
+     *
+     * <pre>
      * - Has a WebAPK package extra which meets the lightweight first run activity requirements
      * - Refers to an invalid WebAPK
+     * </pre>
      */
     @Test
     public void testFullFreIfWebApkInvalid() {
@@ -304,5 +312,68 @@ public final class FirstRunIntegrationUnitTest {
     public void testFirstRunActivityScreenLayoutLarge() {
         Activity firstRunActivity = createActivity(FirstRunActivity.class, new Intent());
         Assert.assertEquals(Color.BLACK, firstRunActivity.getWindow().getStatusBarColor());
+    }
+
+    @Test
+    @Features.EnableFeatures(ChromeFeatureList.DEFAULT_BROWSER_PROMO_FRE)
+    public void testDefaultBrowserPromoStatePersistence() {
+        FeatureOverrides.newBuilder().enable(ChromeFeatureList.DEFAULT_BROWSER_PROMO_FRE).apply();
+
+        FirstRunActivity activity =
+                (FirstRunActivity) createActivity(FirstRunActivity.class, new Intent());
+
+        // Initialize mPager.
+        activity.setContentView(activity.createContentView());
+
+        activity.setPromoRoleManagerDialogTriggered(true);
+
+        Assert.assertTrue(
+                "Getter failed for RMD shown", activity.getPromoRoleManagerDialogTriggered());
+
+        Bundle outState = new Bundle();
+        activity.onSaveInstanceState(outState);
+
+        Assert.assertTrue(
+                "onSaveInstanceState failed to save RMD state",
+                outState.getBoolean("DEFAULT_BROWSER_ROLE_MANAGER_DIALOG_TRIGGERED"));
+
+        Assert.assertEquals(
+                "Pager index should be saved", 0, outState.getInt("LAST_PAGER_INDEX", -1));
+    }
+
+    @Test
+    @Features.EnableFeatures(ChromeFeatureList.DEFAULT_BROWSER_PROMO_FRE)
+    public void testHistorySyncStepPersistence() {
+        FeatureOverrides.newBuilder().enable(ChromeFeatureList.DEFAULT_BROWSER_PROMO_FRE).apply();
+
+        FirstRunActivity activity =
+                (FirstRunActivity) createActivity(FirstRunActivity.class, new Intent());
+
+        // Initialize mPager by inflating the content view.
+        activity.setContentView(activity.createContentView());
+
+        Assert.assertFalse(
+                "History sync step should not be completed initially",
+                activity.getHistorySyncStepCompleted());
+
+        // Simulate the user completing the history sync step.
+        activity.setHistorySyncStepCompleted(true);
+        Assert.assertTrue(
+                "Getter failed for History Sync step completed",
+                activity.getHistorySyncStepCompleted());
+
+        // Trigger onSaveInstanceState to simulate activity destruction & recreation.
+        Bundle outState = new Bundle();
+        activity.onSaveInstanceState(outState);
+
+        // Verify the state was saved into the Bundle with the correct key.
+        Assert.assertTrue(
+                "onSaveInstanceState failed to save History Sync step state",
+                outState.getBoolean("HISTORY_SYNC_STEP_COMPLETED"));
+
+        // Verify the key actually exists in the bundle.
+        Assert.assertTrue(
+                "Bundle should contain the completion key",
+                outState.containsKey("HISTORY_SYNC_STEP_COMPLETED"));
     }
 }

@@ -11,6 +11,7 @@
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/external_protocol/external_protocol_handler.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/web_apps/protocol_handler_picker_dialog.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
@@ -56,11 +57,10 @@ class ProtocolHandlerPickerUITest
 
   auto LaunchProtocolLink(bool in_new_tab) {
     return Do([&, in_new_tab] {
-      ASSERT_THAT(
-          content::EvalJs(browser()->tab_strip_model()->GetActiveWebContents(),
+      ASSERT_TRUE(
+          content::ExecJs(browser()->GetTabStripModel()->GetActiveWebContents(),
                           base::StringPrintf("window.open('meow://link', '%s')",
-                                             in_new_tab ? "_blank" : "_self")),
-          content::EvalJsResult::IsOk());
+                                             in_new_tab ? "_blank" : "_self")));
     });
   }
 
@@ -157,7 +157,7 @@ class ProtocolHandlerPickerUITest
                                         kTabCountState);
     return Steps(
         PollState(kTabCountState,
-                  [&]() { return browser()->tab_strip_model()->count(); }),
+                  [&]() { return browser()->GetTabStripModel()->count(); }),
         WaitForState(kTabCountState, count),
         StopObservingState(kTabCountState));
   }

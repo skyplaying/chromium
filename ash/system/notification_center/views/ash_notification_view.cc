@@ -44,6 +44,7 @@
 #include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
+#include "ui/aura/window.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -54,6 +55,7 @@
 #include "ui/compositor/compositor.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animator.h"
+#include "ui/compositor_extra/decoration_util.h"
 #include "ui/gfx/animation/tween.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/color_utils.h"
@@ -67,7 +69,6 @@
 #include "ui/gfx/image/image_skia_operations.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/gfx/scoped_animation_duration_scale_mode.h"
-#include "ui/gfx/shadow_util.h"
 #include "ui/gfx/text_constants.h"
 #include "ui/gfx/text_elider.h"
 #include "ui/message_center/message_center.h"
@@ -851,7 +852,11 @@ void AshNotificationView::ToggleExpand() {
         "Ash.NotificationView.InlineReply.FadeOut.AnimationSmoothness");
   }
 
+  auto weak_ptr = weak_factory_.GetWeakPtr();
   SetExpanded(target_expanded_state);
+  if (!weak_ptr) {
+    return;
+  }
 
   PerformExpandCollapseAnimation();
 
@@ -1009,8 +1014,7 @@ void AshNotificationView::RemoveGroupNotification(
         std::move(on_animation_aborted),
         /*delay_in_ms=*/0,
         /*duration_in_ms=*/kSlideOutGroupedNotificationAnimationDurationMs,
-        gfx::Tween::LINEAR,
-        "Ash.Notification.GroupNotification.SlideOut.AnimationSmoothness");
+        gfx::Tween::LINEAR);
   } else {
     std::move(on_notification_slid_out).Run();
   }
@@ -1313,8 +1317,8 @@ void AshNotificationView::CreateOrUpdateProgressViews(
   CreateOrUpdateProgressStatusView(notification);
   CreateOrUpdateProgressBarView(notification);
   if (progress_bar_view()) {
-    progress_bar_view()->SetForegroundColorId(cros_tokens::kCrosSysPrimary);
-    progress_bar_view()->SetBackgroundColorId(
+    progress_bar_view()->SetForegroundColor(cros_tokens::kCrosSysPrimary);
+    progress_bar_view()->SetBackgroundColor(
         cros_tokens::kCrosSysHighlightShape);
   }
 
@@ -1381,12 +1385,10 @@ void AshNotificationView::OnThemeChanged() {
       message_center::MessageCenter::Get()->FindVisibleNotificationById(
           notification_id()));
 
-  // For unittests, `GetColorProvider()` could be nullptr.
-  if (inline_reply() && GetColorProvider()) {
-    inline_reply()->textfield()->SetTextColor(
-        GetColorProvider()->GetColor(cros_tokens::kCrosSysOnSurface));
-    inline_reply()->textfield()->set_placeholder_text_color(
-        GetColorProvider()->GetColor(cros_tokens::kCrosSysOnSurfaceVariant));
+  if (inline_reply()) {
+    inline_reply()->textfield()->SetTextColorId(cros_tokens::kCrosSysOnSurface);
+    inline_reply()->textfield()->SetPlaceholderTextColorId(
+        cros_tokens::kCrosSysOnSurfaceVariant);
   }
 
   if (icon_view() &&
@@ -1439,7 +1441,11 @@ void AshNotificationView::ToggleInlineSettings(const ui::Event& event) {
   bool should_show_inline_settings = !inline_settings_row()->GetVisible();
   PerformToggleInlineSettingsAnimation(should_show_inline_settings);
 
+  auto weak_ptr = weak_factory_.GetWeakPtr();
   NotificationViewBase::ToggleInlineSettings(event);
+  if (!weak_ptr) {
+    return;
+  }
 
   if (is_grouped_parent_view_) {
     if (shown_in_popup_) {
@@ -1468,7 +1474,11 @@ void AshNotificationView::ToggleSnoozeSettings(const ui::Event& event) {
 
   bool should_show_snooze_settings = !snooze_settings_row()->GetVisible();
 
+  auto weak_ptr = weak_factory_.GetWeakPtr();
   NotificationViewBase::ToggleSnoozeSettings(event);
+  if (!weak_ptr) {
+    return;
+  }
 
   left_content()->SetVisible(!should_show_snooze_settings);
   right_content()->SetVisible(!should_show_snooze_settings);
@@ -1672,6 +1682,19 @@ void AshNotificationView::UpdateIconAndButtonsColor(
 
 void AshNotificationView::AnimateResizeAfterRemoval(
     views::View* to_be_removed) {
+  size_t removed_index =
+      grouped_notifications_container_->GetIndexOf(to_be_removed).value();
+
+  grouped_notifications_container_->RemoveChildViewT(to_be_removed).reset();
+
+  aura::Window* window = GetWidget() ? GetWidget()->GetNativeWindow() : nullptr;
+  if (!window || window->is_destroying()) {
+    return;
+  }
+
+  int group_container_previous_height =
+      grouped_notifications_container_->height();
+
   auto on_resize_complete = base::BindOnce(
       [](base::WeakPtr<AshNotificationView> self) {
         if (!self) {
@@ -1686,13 +1709,6 @@ void AshNotificationView::AnimateResizeAfterRemoval(
         }
       },
       weak_factory_.GetWeakPtr());
-
-  int group_container_previous_height =
-      grouped_notifications_container_->height();
-  size_t removed_index =
-      grouped_notifications_container_->GetIndexOf(to_be_removed).value();
-
-  grouped_notifications_container_->RemoveChildViewT(to_be_removed).reset();
 
   auto* notification_view_controller = message_center_utils::
       GetActiveNotificationViewControllerForNotificationView(this);

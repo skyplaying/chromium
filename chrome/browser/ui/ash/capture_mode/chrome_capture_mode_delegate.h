@@ -23,12 +23,11 @@
 #include "chrome/browser/lens/core/mojom/text.mojom.h"
 #include "chrome/browser/screen_ai/public/optical_character_recognizer.h"
 #include "chromeos/ash/components/drivefs/mojom/drivefs.mojom-forward.h"
+#include "components/account_id/account_id.h"
 #include "components/drive/file_errors.h"
 #include "components/lens/proto/server/lens_overlay_response.pb.h"
 #include "components/signin/public/identity_manager/primary_account_access_token_fetcher.h"
-#include "services/data_decoder/public/cpp/data_decoder.h"
 #include "services/screen_ai/public/mojom/screen_ai_service.mojom-forward.h"
-#include "third_party/lens_server_proto/lens_overlay_service_deps.pb.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
 class ApplicationLocaleStorage;
@@ -115,14 +114,14 @@ class ChromeCaptureModeDelegate : public ash::CaptureModeDelegate {
   bool IsCameraDisabledByPolicy() const override;
   bool IsAudioCaptureDisabledByPolicy() const override;
   void RegisterVideoConferenceManagerClient(
-      crosapi::mojom::VideoConferenceManagerClient* client,
+      ash::VideoConferenceManagerClient* client,
       const base::UnguessableToken& client_id) override;
   void UnregisterVideoConferenceManagerClient(
       const base::UnguessableToken& client_id) override;
   void UpdateVideoConferenceManager(
-      crosapi::mojom::VideoConferenceMediaUsageStatusPtr status) override;
+      ash::VideoConferenceMediaUsageStatus status) override;
   void NotifyDeviceUsedWhileDisabled(
-      crosapi::mojom::VideoConferenceMediaDevice device) override;
+      ash::VideoConferenceMediaDevice device) override;
   void FinalizeSavedFile(
       base::OnceCallback<void(bool, const base::FilePath&)> callback,
       const base::FilePath& path,
@@ -182,9 +181,10 @@ class ChromeCaptureModeDelegate : public ash::CaptureModeDelegate {
   // Releases the OCR handle and resets pending OCR requests.
   void ResetOcr();
 
-  // Gets the OAuth2 access token for the active user's primary account, used
+  // Gets the OAuth2 access token for `account_id`'s primary account, used
   // for making a Lens Web API POST request.
   void GetPrimaryAccountAccessToken(
+      const AccountId& account_id,
       base::RepeatingCallback<void(const std::string& access_token)> callback,
       AccessTokenPurpose purpose);
   void PrimaryAccountAccessTokenAvailable(
@@ -214,10 +214,6 @@ class ChromeCaptureModeDelegate : public ash::CaptureModeDelegate {
       const std::string& access_token,
       const int request_id,
       std::optional<std::string> response_body);
-
-  // Called after the response to a /qfmetadata GET request (for text detection)
-  // is received and the response body has been decoded.
-  void OnJsonParsed(data_decoder::DataDecoder::ValueOrError result);
 
   const raw_ref<PrefService> local_state_;
   const raw_ref<ApplicationLocaleStorage> application_locale_storage_;
@@ -250,6 +246,11 @@ class ChromeCaptureModeDelegate : public ash::CaptureModeDelegate {
 
   // The current Lens request ID, used to validate the most recent request.
   int lens_request_id_ = 0;
+
+  // The account the current Lens request was made for, captured once at the
+  // start of the request in SendLensWebRegionSearch() and reused for any
+  // follow-up access token requests within the same flow.
+  AccountId lens_request_account_id_;
 
   // Temporary directory to which files will be redirected before being uploaded
   // to OneDrive cloud. Created and destructed asynchronously.

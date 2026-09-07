@@ -5,9 +5,15 @@
 #include "extensions/browser/renderer_startup_helper.h"
 
 #include "base/memory/raw_ptr.h"
+#include "base/test/run_until.h"
+#include "base/test/scoped_feature_list.h"
+#include "base/types/pass_key.h"
 #include "components/crx_file/id_util.h"
+#include "components/user_prefs/user_prefs.h"
 #include "content/public/test/mock_render_process_host.h"
 #include "content/public/test/test_browser_context.h"
+#include "extensions/browser/extension_mojo_binder_registry.h"
+#include "extensions/browser/extension_mojo_binder_registry_factory.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_registry_factory.h"
@@ -20,6 +26,7 @@
 #include "extensions/common/mojom/renderer.mojom.h"
 #include "extensions/common/permissions/permissions_data.h"
 #include "mojo/public/cpp/bindings/associated_receiver_set.h"
+#include "third_party/blink/public/common/features.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chromeos/constants/chromeos_features.h"
@@ -49,13 +56,23 @@ class RendererStartupHelperInterceptor : public RendererStartupHelper,
     return num_loaded_extensions_in_incognito_;
   }
 
+  struct LoadedExtensionInfo {
+    ExtensionId id;
+    bool is_mojo_js_enabled_for_service_worker;
+  };
+
   size_t num_unloaded_extensions() { return unloaded_extensions_.size(); }
+
+  const std::vector<LoadedExtensionInfo>& loaded_params() const {
+    return loaded_params_;
+  }
 
   void clear_extensions() {
     activated_extensions_.clear();
     num_loaded_extensions_ = 0;
     num_loaded_extensions_in_incognito_ = 0;
     unloaded_extensions_.clear();
+    loaded_params_.clear();
   }
 
   const URLPatternSet& default_policy_blocked_hosts() const {
@@ -80,10 +97,13 @@ class RendererStartupHelperInterceptor : public RendererStartupHelper,
     activated_extensions_.push_back(extension_id);
   }
   void SetActivityLoggingEnabled(bool enabled) override {}
+  void SetPolicyActivityLoggingEnabled(bool enabled) override {}
 
   void LoadExtensions(
       std::vector<mojom::ExtensionLoadedParamsPtr> loaded_extensions) override {
     for (const auto& param : loaded_extensions) {
+      loaded_params_.push_back(
+          {param->id, param->is_mojo_js_enabled_for_service_worker});
       const std::set<raw_ptr<content::RenderProcessHost, SetExperimental>>&
           process_set = extension_process_map_[param->id];
       for (content::RenderProcessHost* process : process_set) {
@@ -180,6 +200,7 @@ class RendererStartupHelperInterceptor : public RendererStartupHelper,
   size_t num_loaded_extensions_;
   size_t num_loaded_extensions_in_incognito_;
   std::vector<ExtensionId> unloaded_extensions_;
+  std::vector<LoadedExtensionInfo> loaded_params_;
   raw_ptr<content::BrowserContext> browser_context_;
   mojo::AssociatedReceiverSet<mojom::Renderer> receivers_;
 };
@@ -194,6 +215,10 @@ class RendererStartupHelperTest : public ExtensionsTest {
 
   ~RendererStartupHelperTest() override {}
 
+  base::PassKey<RendererStartupHelperTest> CreatePassKey() const {
+    return base::PassKey<RendererStartupHelperTest>();
+  }
+
   void SetUp() override {
     ExtensionsTest::SetUp();
     helper_ =
@@ -205,6 +230,8 @@ class RendererStartupHelperTest : public ExtensionsTest {
     incognito_render_process_host_ =
         std::make_unique<content::MockRenderProcessHost>(incognito_context());
     extension_ = CreateExtension("ext_1");
+    user_prefs::UserPrefs::Set(browser_context(), pref_service());
+    user_prefs::UserPrefs::Set(incognito_context(), pref_service());
   }
 
   void TearDown() override {
@@ -526,7 +553,7 @@ TEST_F(RendererStartupHelperTest, PlatformAppInIncognitoRenderer) {
   ASSERT_EQ(1u, helper_->num_loaded_extensions_in_incognito());
 }
 
-#if BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS)
 // Tests the process re-registration workflow when OnRenderProcessLaunched() is
 // called after the process has exited. This simulates:
 // 1. OnRenderProcessHostCreated() initializes process
@@ -572,7 +599,7 @@ TEST_F(RendererStartupHelperTest, ProcessReregistrationAfterExit) {
   // and does NOT re-load extensions (to avoid duplicate loading).
   ASSERT_EQ(0u, helper_->num_loaded_extensions());
 }
-#endif  // BUILDFLAG(IS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(IS_CHROMEOS)
 class RendererStartupHelperTestCaptivePortalPopupWindow
@@ -595,8 +622,6 @@ TEST_F(RendererStartupHelperTestCaptivePortalPopupWindow,
   // Set prefs::kCaptivePortalSignin to true in the shared PerfService instance.
   ASSERT_TRUE(pref_service());
   pref_service()->SetBoolean(chromeos::prefs::kCaptivePortalSignin, true);
-  extensions_browser_client()->set_pref_service_for_context(incognito_context(),
-                                                            pref_service());
 
   // Initialize the incognito renderer.
   EXPECT_FALSE(IsProcessInitialized(incognito_render_process_host_.get()));
@@ -612,5 +637,86 @@ TEST_F(RendererStartupHelperTestCaptivePortalPopupWindow,
   EXPECT_TRUE(IsExtensionLoaded(*extension_));
 }
 #endif
+
+TEST_F(RendererStartupHelperTest, InitializeProcessIdempotency) {
+  // 1. First call should initialize the process.
+  // render_process_host_ is already created in SetUp().
+  helper_->InitializeProcess(render_process_host_.get());
+  EXPECT_TRUE(IsProcessInitialized(render_process_host_.get()));
+
+  // 2. Second call should return early without creating duplicate state.
+  // This is now safe because of your "contains" check in InitializeProcess.
+  helper_->InitializeProcess(render_process_host_.get());
+  EXPECT_TRUE(IsProcessInitialized(render_process_host_.get()));
+}
+
+#if !BUILDFLAG(IS_ANDROID)
+TEST_F(RendererStartupHelperTest, SkipInitializationOnLaunchWithFeature) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndEnableFeature(
+      blink::features::kInitialWebUIWithoutExtensions);
+
+  // Use a new mock process to simulate a fresh launch.
+  auto new_process =
+      std::make_unique<content::MockRenderProcessHost>(browser_context());
+
+  new_process->SetIsForTopChromeWebUI(true);
+
+  // 1. Simulate process launch.
+  helper_->OnRenderProcessLaunched(new_process.get());
+
+  // VERIFY: The process should NOT be initialized yet.
+  EXPECT_FALSE(IsProcessInitialized(new_process.get()));
+
+  // 2. Manually calling InitializeProcess (as ReadyToCommitNavigation would)
+  // should still work.
+  helper_->InitializeProcess(new_process.get());
+  EXPECT_TRUE(IsProcessInitialized(new_process.get()));
+}
+#endif  // !BUILDFLAG(IS_ANDROID)
+
+TEST_F(RendererStartupHelperTest,
+       ExtensionLoadedParams_ServiceWorkerMojoEnabled) {
+  SimulateRenderProcessCreated(render_process_host_.get());
+
+  scoped_refptr<const Extension> standard_extension =
+      ExtensionBuilder("Standard Extension")
+          .SetLocation(mojom::ManifestLocation::kComponent)
+          .Build();
+  scoped_refptr<const Extension> sw_mojo_extension =
+      ExtensionBuilder("SW Mojo Extension")
+          .SetLocation(mojom::ManifestLocation::kComponent)
+          .Build();
+
+  class TestProvider : public ExtensionMojoBinderProvider {
+   public:
+    explicit TestProvider(ExtensionId id)
+        : ExtensionMojoBinderProvider(std::move(id)) {}
+    bool IsMojoJsEnabledForServiceWorker() const override { return true; }
+  };
+
+  ExtensionMojoBinderRegistryFactory::GetOrCreateForBrowserContext(
+      browser_context())
+      ->RegisterProvider(CreatePassKey(), std::make_unique<TestProvider>(
+                                              sw_mojo_extension->id()));
+
+  helper_->OnExtensionLoaded(*standard_extension);
+  EXPECT_TRUE(base::test::RunUntil(
+      [&]() { return helper_->loaded_params().size() == 1u; }));
+
+  ASSERT_EQ(1u, helper_->loaded_params().size());
+  EXPECT_EQ(standard_extension->id(), helper_->loaded_params().back().id);
+  EXPECT_FALSE(
+      helper_->loaded_params().back().is_mojo_js_enabled_for_service_worker);
+
+  helper_->OnExtensionLoaded(*sw_mojo_extension);
+  EXPECT_TRUE(base::test::RunUntil(
+      [&]() { return helper_->loaded_params().size() == 2u; }));
+
+  ASSERT_EQ(2u, helper_->loaded_params().size());
+  EXPECT_EQ(sw_mojo_extension->id(), helper_->loaded_params().back().id);
+  EXPECT_TRUE(
+      helper_->loaded_params().back().is_mojo_js_enabled_for_service_worker);
+}
 
 }  // namespace extensions

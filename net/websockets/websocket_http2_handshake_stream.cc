@@ -51,10 +51,10 @@ WebSocketHttp2HandshakeStream::WebSocketHttp2HandshakeStream(
     std::vector<std::string> requested_extensions,
     WebSocketStreamRequestAPI* request,
     std::set<std::string> dns_aliases)
-    : session_(session),
+    : session_(std::move(session)),
       connect_delegate_(connect_delegate),
-      requested_sub_protocols_(requested_sub_protocols),
-      requested_extensions_(requested_extensions),
+      requested_sub_protocols_(std::move(requested_sub_protocols)),
+      requested_extensions_(std::move(requested_extensions)),
       stream_request_(request),
       dns_aliases_(std::move(dns_aliases)) {
   DCHECK(connect_delegate);
@@ -138,8 +138,8 @@ int WebSocketHttp2HandshakeStream::SendRequest(
 
   callback_ = std::move(callback);
   spdy_stream_request_ = std::make_unique<SpdyStreamRequest>();
-  // The initial request for the WebSocket is a CONNECT, so there is no need to
-  // call ConfirmHandshake().
+  // Handshake confirmation was already performed in InitializeStream(), so pass
+  // `can_send_early = true` to avoid calling ConfirmHandshake() again.
   int rv = spdy_stream_request_->StartRequest(
       SPDY_BIDIRECTIONAL_STREAM, session_, request_info_->url, true, priority_,
       request_info_->socket_tag, net_log_,
@@ -198,12 +198,12 @@ bool WebSocketHttp2HandshakeStream::CanReuseConnection() const {
   return false;
 }
 
-int64_t WebSocketHttp2HandshakeStream::GetTotalReceivedBytes() const {
-  return stream_ ? stream_->raw_received_bytes() : 0;
+base::ByteSize WebSocketHttp2HandshakeStream::GetTotalReceivedBytes() const {
+  return stream_ ? stream_->raw_received_bytes() : base::ByteSize(0);
 }
 
-int64_t WebSocketHttp2HandshakeStream::GetTotalSentBytes() const {
-  return stream_ ? stream_->raw_sent_bytes() : 0;
+base::ByteSize WebSocketHttp2HandshakeStream::GetTotalSentBytes() const {
+  return stream_ ? stream_->raw_sent_bytes() : base::ByteSize(0);
 }
 
 bool WebSocketHttp2HandshakeStream::GetAlternativeService(
@@ -417,5 +417,8 @@ void WebSocketHttp2HandshakeStream::OnFailure(
     std::optional<int> response_code) {
   stream_request_->OnFailure(message, net_error, response_code);
 }
+
+void WebSocketHttp2HandshakeStream::PopulateLoadTimingInternalInfo(
+    LoadTimingInternalInfo* load_timing_internal_info) const {}
 
 }  // namespace net

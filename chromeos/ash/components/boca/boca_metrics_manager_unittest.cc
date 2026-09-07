@@ -9,7 +9,6 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/metrics/user_action_tester.h"
 #include "base/test/task_environment.h"
-#include "chromeos/ash/components/boca/boca_app_client.h"
 #include "chromeos/ash/components/boca/boca_metrics_util.h"
 #include "chromeos/ash/components/boca/proto/bundle.pb.h"
 #include "chromeos/ash/components/boca/proto/roster.pb.h"
@@ -30,49 +29,33 @@ constexpr char kTestEmail1[] = "test1@gmail.com";
 constexpr char kTestEmail2[] = "test2@gmail.com";
 constexpr char kTestEmail3[] = "test3@gmail.com";
 
-class MockBocaAppClient : public BocaAppClient {
- public:
-  MOCK_METHOD(BocaSessionManager*, GetSessionManager, (), (override));
-  MOCK_METHOD(void, AddSessionManager, (BocaSessionManager*), (override));
-  MOCK_METHOD(signin::IdentityManager*, GetIdentityManager, (), (override));
-  MOCK_METHOD(scoped_refptr<network::SharedURLLoaderFactory>,
-              GetURLLoaderFactory,
-              (),
-              (override));
-};
-
 class MockSessionManager : public BocaSessionManager {
  public:
   MockSessionManager()
       : BocaSessionManager(/*session_client_impl=*/nullptr,
                            /*pref_service=*/nullptr,
                            AccountId::FromUserEmail(kTestEmail1),
+                           /*identity_manager=*/nullptr,
                            /*is_producer=*/true) {}
   ~MockSessionManager() override = default;
   MOCK_METHOD(::boca::Session*, GetPreviousSession, (), (override));
+  MOCK_METHOD(::boca::Session*, GetCurrentSession, (), (override));
 };
 
 class BocaMetricsManagerTest : public testing::Test {
  protected:
-  void SetUp() override {
-    ON_CALL(boca_app_client_, GetIdentityManager())
-        .WillByDefault(Return(nullptr));
-    ON_CALL(boca_app_client_, GetSessionManager())
-        .WillByDefault(Return(&session_manager_));
-  }
-
   const base::TimeDelta fast_forward_timeskip =
       base::Seconds(60) + base::Seconds(1);
   base::test::SingleThreadTaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
   signin::IdentityTestEnvironment identity_test_env_;
-  NiceMock<MockBocaAppClient> boca_app_client_;
   NiceMock<MockSessionManager> session_manager_;
 };
 
 class BocaMetricsManagerProducerTest : public BocaMetricsManagerTest {
  protected:
-  BocaMetricsManager metrics_manager_{/*is_producer*/ true};
+  BocaMetricsManager metrics_manager_{&session_manager_,
+                                      /*is_producer*/ true};
 };
 
 TEST_F(BocaMetricsManagerProducerTest,
@@ -210,7 +193,8 @@ TEST_F(BocaMetricsManagerProducerTest,
 
 class BocaMetricsManagerConsumerTest : public BocaMetricsManagerTest {
  protected:
-  BocaMetricsManager metrics_manager_{/*is_producer*/ false};
+  BocaMetricsManager metrics_manager_{&session_manager_,
+                                      /*is_producer*/ false};
 };
 
 TEST_F(BocaMetricsManagerConsumerTest,
@@ -304,4 +288,52 @@ TEST_F(BocaMetricsManagerConsumerTest,
   EXPECT_EQ(actions.GetActionCount(kBocaActionOfStudentJoinedSession),
             expected_number_of_students);
 }
+
+struct StudentGeminiStatusTestParam {
+  std::string test_name;
+  ::boca::GeminiEnablementState state;
+  int expected_uma_value;
+};
+
+class BocaMetricsManagerConsumerGeminiStatusTest
+    : public BocaMetricsManagerConsumerTest,
+      public testing::WithParamInterface<StudentGeminiStatusTestParam> {};
+
+TEST_P(BocaMetricsManagerConsumerGeminiStatusTest,
+       RecordStudentGeminiStatusWhenSessionStarted) {
+  const StudentGeminiStatusTestParam& param = GetParam();
+  base::HistogramTester histograms;
+
+  ::boca::Session session;
+  session.set_session_id("test_session_id");
+  session.set_session_state(::boca::Session::ACTIVE);
+  ::boca::StudentStatus status;
+  status.set_gemini_enablement_state(param.state);
+  session.mutable_student_statuses()->emplace("test_gaia_id",
+                                              std::move(status));
+  EXPECT_CALL(session_manager_, GetCurrentSession()).WillOnce(Return(&session));
+
+  metrics_manager_.OnSessionStarted("test_session_id", ::boca::UserIdentity());
+
+  histograms.ExpectTotalCount("Ash.Boca.StudentGeminiStatus.Enabled", 1);
+  histograms.ExpectBucketCount("Ash.Boca.StudentGeminiStatus.Enabled",
+                               param.expected_uma_value, 1);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    BocaMetricsManagerConsumerGeminiStatusTests,
+    BocaMetricsManagerConsumerGeminiStatusTest,
+    testing::Values(
+        StudentGeminiStatusTestParam{
+            "GeminiEnabled",
+            ::boca::GeminiEnablementState::GEMINI_ENABLEMENT_STATE_ENABLED, 1},
+        StudentGeminiStatusTestParam{
+            "GeminiDisabled",
+            ::boca::GeminiEnablementState::GEMINI_ENABLEMENT_STATE_DISABLED,
+            0}),
+    [](const testing::TestParamInfo<
+        BocaMetricsManagerConsumerGeminiStatusTest::ParamType>& info) {
+      return info.param.test_name;
+    });
+
 }  // namespace ash::boca

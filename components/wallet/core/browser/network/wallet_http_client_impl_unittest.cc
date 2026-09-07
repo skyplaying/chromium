@@ -11,6 +11,7 @@
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "base/time/time.h"
+#include "components/consent_auditor/consent_auditor.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
 #include "components/version_info/version_info.h"
 #include "components/wallet/core/browser/metrics/wallet_metrics.h"
@@ -29,6 +30,9 @@
 
 namespace wallet {
 namespace {
+
+using testing::Eq;
+using testing::Optional;
 
 constexpr char kAccessToken[] = "test access token";
 constexpr base::TimeDelta kLatency = base::Milliseconds(250);
@@ -93,10 +97,31 @@ class WalletHttpClientImplTest : public testing::Test {
   std::unique_ptr<WalletHttpClientImpl> client_;
 };
 
+// Tests that the http client sets the proper Content-Type header.
+TEST_F(WalletHttpClientImplTest, ContentType) {
+  Pass pass;
+  UpsertPublicPassCallback upsert_pass_callback;
+  client()->UpsertPublicPass(pass, upsert_pass_callback.GetCallback());
+
+  // Access token is fetched successfully.
+  identity_test_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
+      kAccessToken, base::Time::Max());
+
+  network::TestURLLoaderFactory::PendingRequest* pending_request =
+      test_url_loader_factory()->GetPendingRequest(0);
+  ASSERT_TRUE(pending_request);
+
+  std::optional<std::string> content_type =
+      pending_request->request.headers.GetHeader(
+          net::HttpRequestHeaders::kContentType);
+  EXPECT_THAT(content_type, Optional(Eq("application/x-protobuf")));
+}
+
 // Tests that UpsertPublicPass successfully triggers a network request and
 // invokes the callback with a success result when the server responds with
 // success.
 TEST_F(WalletHttpClientImplTest, UpsertPublicPass_Success) {
+  base::HistogramTester histogram_tester;
   Pass pass;
   UpsertPublicPassCallback upsert_pass_callback;
   client()->UpsertPublicPass(pass, upsert_pass_callback.GetCallback());
@@ -123,11 +148,14 @@ TEST_F(WalletHttpClientImplTest, UpsertPublicPass_Success) {
   ASSERT_TRUE(upsert_pass_callback.Wait());
   EXPECT_TRUE(upsert_pass_callback.Get().has_value());
   EXPECT_EQ(upsert_pass_callback.Get().value(), "pass-id");
+  histogram_tester.ExpectUniqueSample("Wallet.NetworkRequest.OauthError",
+                                      GoogleServiceAuthError::NONE, 1);
 }
 
 // Tests that UpsertPublicPass correctly handles server errors by invoking the
 // callback with a failure result.
 TEST_F(WalletHttpClientImplTest, UpsertPublicPass_TokenFetchError) {
+  base::HistogramTester histogram_tester;
   Pass pass;
   Pass_LoyaltyCard* loyalty_card = pass.mutable_loyalty_card();
   loyalty_card->set_program_name("Program Name");
@@ -139,11 +167,14 @@ TEST_F(WalletHttpClientImplTest, UpsertPublicPass_TokenFetchError) {
 
   // Access token fetch fails.
   identity_test_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithError(
-      GoogleServiceAuthError(GoogleServiceAuthError::CONNECTION_FAILED));
+      GoogleServiceAuthError::FromConnectionError(net::ERR_FAILED));
 
   ASSERT_TRUE(upsert_pass_callback.Wait());
   EXPECT_EQ(upsert_pass_callback.Get().error(),
             WalletHttpClient::WalletRequestError::kAccessTokenFetchFailed);
+  histogram_tester.ExpectUniqueSample("Wallet.NetworkRequest.OauthError",
+                                      GoogleServiceAuthError::CONNECTION_FAILED,
+                                      1);
 }
 
 TEST_F(WalletHttpClientImplTest, UpsertPublicPass_Failure) {
@@ -164,6 +195,55 @@ TEST_F(WalletHttpClientImplTest, UpsertPublicPass_Failure) {
   ASSERT_TRUE(upsert_pass_callback.Wait());
   EXPECT_EQ(upsert_pass_callback.Get().error(),
             WalletHttpClient::WalletRequestError::kGenericError);
+}
+
+TEST_F(WalletHttpClientImplTest, UpsertPublicPass_NetErrorCode) {
+  base::HistogramTester histogram_tester;
+  Pass pass;
+  UpsertPublicPassCallback upsert_pass_callback;
+  client()->UpsertPublicPass(pass, upsert_pass_callback.GetCallback());
+
+  // Access token is fetched successfully.
+  identity_test_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
+      kAccessToken, base::Time::Max());
+
+  GURL expected_url = GetUpsertPassUrl();
+  EXPECT_TRUE(test_url_loader_factory()->IsPending(expected_url.spec()));
+  test_url_loader_factory()->AddResponse(
+      expected_url, network::mojom::URLResponseHead::New(), "",
+      network::URLLoaderCompletionStatus(net::ERR_TIMED_OUT));
+
+  ASSERT_TRUE(upsert_pass_callback.Wait());
+  ASSERT_FALSE(upsert_pass_callback.Get().has_value());
+  EXPECT_EQ(upsert_pass_callback.Get().error(),
+            WalletHttpClient::WalletRequestError::kGenericError);
+  histogram_tester.ExpectUniqueSample(
+      "Wallet.NetworkRequest.UpsertPass.HttpResponseOrErrorCode",
+      net::ERR_TIMED_OUT, 1);
+}
+
+TEST_F(WalletHttpClientImplTest, UpsertPublicPass_HttpError) {
+  base::HistogramTester histogram_tester;
+  Pass pass;
+  UpsertPublicPassCallback upsert_pass_callback;
+  client()->UpsertPublicPass(pass, upsert_pass_callback.GetCallback());
+
+  // Access token is fetched successfully.
+  identity_test_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
+      kAccessToken, base::Time::Max());
+
+  GURL expected_url = GetUpsertPassUrl();
+  EXPECT_TRUE(test_url_loader_factory()->IsPending(expected_url.spec()));
+  test_url_loader_factory()->AddResponse(expected_url.spec(), "",
+                                         net::HTTP_INTERNAL_SERVER_ERROR);
+
+  ASSERT_TRUE(upsert_pass_callback.Wait());
+  ASSERT_FALSE(upsert_pass_callback.Get().has_value());
+  EXPECT_EQ(upsert_pass_callback.Get().error(),
+            WalletHttpClient::WalletRequestError::kGenericError);
+  histogram_tester.ExpectUniqueSample(
+      "Wallet.NetworkRequest.UpsertPass.HttpResponseOrErrorCode",
+      net::HTTP_INTERNAL_SERVER_ERROR, 1);
 }
 
 // Tests that multiple UpsertPublicPass requests can be in-flight simultaneously
@@ -243,6 +323,31 @@ TEST_F(WalletHttpClientImplTest,
             version_info::GetVersionNumber());
 }
 
+TEST_F(WalletHttpClientImplTest, UpsertPrivatePass_RequestHeaders) {
+  PrivatePass pass;
+  pass.mutable_passport();
+  base::test::TestFuture<
+      const base::expected<PrivatePass, WalletHttpClient::WalletRequestError>&>
+      callback;
+  client()->UpsertPrivatePass(
+      pass, consent_auditor::ConsentAuditor::GenerateSessionId(),
+      callback.GetCallback());
+
+  identity_test_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
+      kAccessToken, base::Time::Max());
+
+  GURL expected_url = GetUpsertPrivatePassUrl();
+  network::TestURLLoaderFactory::PendingRequest* pending_request =
+      test_url_loader_factory()->GetPendingRequest(0);
+  ASSERT_TRUE(pending_request);
+
+  EXPECT_EQ(pending_request->request.headers.GetHeader("EES-S7E-Mode"),
+            "proto");
+  EXPECT_EQ(
+      pending_request->request.headers.GetHeader("EES-Proto-Tokenization"),
+      "1.3.2;574");
+}
+
 TEST_F(WalletHttpClientImplTest, UpsertPass_Latency) {
   base::HistogramTester histogram_tester;
   UpsertPublicPassCallback callback;
@@ -260,12 +365,34 @@ TEST_F(WalletHttpClientImplTest, UpsertPass_Latency) {
       "Wallet.NetworkRequest.UpsertPass.Latency", kLatency, 1);
 }
 
+TEST_F(WalletHttpClientImplTest, UpsertPass_ResponseSize) {
+  base::HistogramTester histogram_tester;
+  UpsertPublicPassCallback callback;
+  client()->UpsertPublicPass(Pass(), callback.GetCallback());
+  identity_test_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
+      kAccessToken, base::Time::Max());
+
+  api::UpsertPassResponse response;
+  response.set_pass_id("pass-id");
+  std::string response_string = response.SerializeAsString();
+  test_url_loader_factory()->SimulateResponseForPendingRequest(
+      GetUpsertPassUrl().spec(), response_string);
+
+  histogram_tester.ExpectUniqueSample(
+      "Wallet.NetworkRequest.UpsertPass.ResponseByteSize",
+      response_string.size(), 1);
+}
+
 TEST_F(WalletHttpClientImplTest, UpsertPrivatePass_Latency) {
   base::HistogramTester histogram_tester;
   base::test::TestFuture<
       const base::expected<PrivatePass, WalletHttpClient::WalletRequestError>&>
       callback;
-  client()->UpsertPrivatePass(PrivatePass(), callback.GetCallback());
+  PrivatePass pass;
+  pass.mutable_passport();
+  client()->UpsertPrivatePass(
+      pass, consent_auditor::ConsentAuditor::GenerateSessionId(),
+      callback.GetCallback());
   identity_test_env()->WaitForAccessTokenRequestIfNecessaryAndRespondWithToken(
       kAccessToken, base::Time::Max());
 

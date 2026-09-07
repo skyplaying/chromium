@@ -6,6 +6,8 @@
 
 #import <algorithm>
 #import <map>
+#import <ranges>
+#import <variant>
 
 #import "base/feature_list.h"
 #import "base/functional/bind.h"
@@ -13,11 +15,16 @@
 #import "base/metrics/histogram_functions.h"
 #import "base/strings/string_util.h"
 #import "base/time/time.h"
+#import "components/autofill/core/browser/data_manager/autofill_ai/entity_data_manager.h"
 #import "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
 #import "components/autofill/core/browser/data_manager/personal_data_manager.h"
+#import "components/autofill/core/browser/data_model/autofill_ai/entity_instance.h"
 #import "components/autofill/core/browser/form_structure.h"
+#import "components/autofill/core/browser/foundations/autofill_client.h"
+#import "components/autofill/core/browser/integrators/autofill_ai/autofill_ai_manager.h"
 #import "components/autofill/core/browser/payments/card_unmask_challenge_option.h"
 #import "components/autofill/core/browser/suggestions/payments/payments_suggestion_generator_util.h"
+#import "components/autofill/core/browser/suggestions/suggestion.h"
 #import "components/autofill/core/browser/suggestions/suggestion_type.h"
 #import "components/autofill/core/browser/ui/payments/card_unmask_authentication_selection_dialog_controller_impl.h"
 #import "components/autofill/core/browser/ui/payments/virtual_card_enroll_ui_model.h"
@@ -29,7 +36,7 @@
 #import "components/password_manager/core/browser/features/password_features.h"
 #import "components/password_manager/core/common/password_manager_features.h"
 #import "components/password_manager/ios/password_manager_java_script_feature.h"
-#import "components/plus_addresses/core/browser/plus_address_types.h"
+#import "components/personal_context/first_run/personal_context_first_run_service.h"
 #import "components/prefs/pref_service.h"
 #import "ios/chrome/browser/autofill/model/bottom_sheet/autofill_bottom_sheet_java_script_feature.h"
 #import "ios/chrome/browser/autofill/model/bottom_sheet/autofill_bottom_sheet_observer.h"
@@ -44,6 +51,7 @@
 #import "ios/web/public/js_messaging/web_frame.h"
 #import "ios/web/public/js_messaging/web_frames_manager.h"
 #import "ios/web/public/navigation/navigation_context.h"
+#import "ios/web/public/ui/crw_web_view_proxy.h"
 
 namespace {
 
@@ -58,11 +66,9 @@ bool IsPaymentsBottomSheetTriggeringField(autofill::FieldType type) {
     case autofill::CREDIT_CARD_EXP_4_DIGIT_YEAR:
     case autofill::CREDIT_CARD_EXP_DATE_2_DIGIT_YEAR:
     case autofill::CREDIT_CARD_EXP_DATE_4_DIGIT_YEAR:
-      return true;
     case autofill::CREDIT_CARD_VERIFICATION_CODE:
     case autofill::CREDIT_CARD_STANDALONE_VERIFICATION_CODE:
-      return base::FeatureList::IsEnabled(
-          autofill::features::kAutofillEnableCvcStorageAndFilling);
+      return true;
     default:
       return false;
   }
@@ -79,31 +85,86 @@ bool HasAnyCreditCardSuggestion(NSArray<FormSuggestion*>* suggestions) {
   return false;
 }
 
-// Returns true if `suggestions` consists of only the save-and-fill suggestion.
+// Returns true if the first suggestion is the save-and-fill suggestion.
 bool HasScanCardSaveAndFillSuggestion(NSArray<FormSuggestion*>* suggestions) {
-  return [suggestions count] == 1 &&
+  // AtMemory appends an additional suggestion whenever other suggestions exist.
+  return [suggestions count] >= 1 &&
          suggestions[0].type ==
              autofill::SuggestionType::kSaveAndFillCreditCardEntry;
 }
 
 // Records the histograms related to the outcome of triggering the
-// Payments Bottom Sheet V3 (triggered or didn't trigger).
-void RecordPaymentsBottomSheetTriggerOutcome(bool did_trigger,
-                                             base::TimeDelta trigger_walltime) {
+// Payments Bottom Sheet V3 or the Scan Card and Autofill Bottom Sheet
+// (triggered or didn't trigger).
+void RecordPaymentsOrScanCardBottomSheetTriggerOutcome(
+    bool is_scan_card_flow,
+    bool did_trigger,
+    base::TimeDelta trigger_walltime) {
   if (did_trigger) {
-    base::UmaHistogramTimes("IOS.PaymentsBottomSheet.TimeToTrigger.Triggered",
-                            trigger_walltime);
+    base::UmaHistogramTimes(
+        is_scan_card_flow ? "IOS.ScanCardBottomSheet.TimeToTrigger.Triggered"
+                          : "IOS.PaymentsBottomSheetV3.TimeToTrigger.Triggered",
+        trigger_walltime);
   } else {
     base::UmaHistogramTimes(
-        "IOS.PaymentsBottomSheet.TimeToTrigger.NotTriggered", trigger_walltime);
+        is_scan_card_flow
+            ? "IOS.ScanCardBottomSheet.TimeToTrigger.NotTriggered"
+            : "IOS.PaymentsBottomSheetV3.TimeToTrigger.NotTriggered",
+        trigger_walltime);
   }
-  base::UmaHistogramBoolean("IOS.PaymentsBottomSheetV3.Triggered",
+  base::UmaHistogramBoolean(is_scan_card_flow
+                                ? "IOS.ScanCardBottomSheet.Triggered"
+                                : "IOS.PaymentsBottomSheetV3.Triggered",
                             /*sample=*/did_trigger);
 }
 
 bool UseV3() {
   return base::FeatureList::IsEnabled(kStatelessFormSuggestionController) &&
          base::FeatureList::IsEnabled(kAutofillPaymentsSheetV3Ios);
+}
+
+bool UseListenersInvalidation() {
+  return base::FeatureList::IsEnabled(kStatelessFormSuggestionController) &&
+         base::FeatureList::IsEnabled(
+             kAutofillPaymentsSheetDetachInvalidatedListenersIos);
+}
+
+// Returns true if the `renderer_id` is registered in `map` for `frame_id`.
+bool IsRendererIdRegistered(
+    const std::map<std::string, std::set<autofill::FieldRendererId>>& map,
+    const std::string& frame_id,
+    autofill::FieldRendererId renderer_id) {
+  auto it = map.find(frame_id);
+  return it != map.end() && it->second.contains(renderer_id);
+}
+
+// Returns true if `field` has any personal context suggestions.
+bool FieldHasPersonalContextSuggestions(
+    autofill::AutofillAiManager& ai_manager,
+    autofill::EntityDataManager& entity_manager,
+    const autofill::FormStructure& form,
+    const autofill::AutofillField& field) {
+  const std::vector<autofill::Suggestion> suggestions =
+      ai_manager.GetSuggestions(form, field);
+  auto is_personal_context_suggestion =
+      [&entity_manager](const autofill::Suggestion& suggestion) {
+        const auto* payload =
+            std::get_if<autofill::Suggestion::AutofillAiPayload>(
+                &suggestion.payload);
+
+        if (!payload) {
+          return false;
+        }
+
+        base::optional_ref<const autofill::EntityInstance> entity =
+            entity_manager.GetEntityInstance(payload->guid);
+
+        return entity.has_value() &&
+               entity->record_type() ==
+                   autofill::EntityInstance::RecordType::kPersonalContext;
+      };
+
+  return std::ranges::any_of(suggestions, is_personal_context_suggestion);
 }
 
 }  // namespace
@@ -128,12 +189,6 @@ void AutofillBottomSheetTabHelper::ShowCardUnmaskAuthenticationSelection(
   card_unmask_authentication_selection_controller_ =
       std::move(model_controller);
   [commands_handler_ showCardUnmaskAuthentication];
-}
-
-void AutofillBottomSheetTabHelper::ShowPlusAddressesBottomSheet(
-    plus_addresses::PlusAddressCallback callback) {
-  pending_plus_address_callback_ = std::move(callback);
-  [commands_handler_ showPlusAddressesBottomSheet];
 }
 
 void AutofillBottomSheetTabHelper::ShowSaveCardBottomSheet(
@@ -189,13 +244,14 @@ void AutofillBottomSheetTabHelper::OnFormMessageReceived(
 
   const autofill::FieldRendererId renderer_id = params.field_renderer_id;
   std::string& frame_id = params.frame_id;
-  bool is_password_related =
-      registered_password_renderer_ids_[frame_id].contains(renderer_id);
-  bool is_payments_related =
-      registered_payments_renderer_ids_[frame_id].contains(renderer_id);
-  bool is_password_generation_related =
-      registered_password_generation_renderer_ids_[frame_id].contains(
-          renderer_id);
+  bool is_password_related = IsRendererIdRegistered(
+      registered_password_renderer_ids_, frame_id, renderer_id);
+  bool is_payments_related = IsRendererIdRegistered(
+      registered_payments_renderer_ids_, frame_id, renderer_id);
+  bool is_password_generation_related = IsRendererIdRegistered(
+      registered_password_generation_renderer_ids_, frame_id, renderer_id);
+  bool is_ambient_related = IsRendererIdRegistered(
+      registered_ambient_renderer_ids_, frame_id, renderer_id);
 
   if (is_password_related) {
     ShowCredentialBottomSheet(params);
@@ -203,6 +259,12 @@ void AutofillBottomSheetTabHelper::OnFormMessageReceived(
     MaybeShowPaymentsBottomSheet(params);
   } else if (is_password_generation_related) {
     ShowProactivePasswordGenerationBottomSheet(params);
+  }
+  // TODO(crbug.com/533502803): Confirm the behavior of prioritising
+  // password/payments sheets over the ambient notice. Update this
+  // prioritization logic if needed.
+  else if (is_ambient_related) {
+    ShowAmbientAutofillNotice(params);
   }
 }
 
@@ -225,20 +287,30 @@ void AutofillBottomSheetTabHelper::ShowCredentialBottomSheet(
   DetachPasswordListenersForAllFrames(/*refocus=*/false);
 }
 
+void AutofillBottomSheetTabHelper::ShowAmbientAutofillNotice(
+    const autofill::FormActivityParams& params) {
+  [commands_handler_ showAmbientAutofillNotice:params];
+
+  // Detach listeners immediately to prevent active listeners from hanging
+  // around in the JS layer. We keep the field IDs in our tracking set so
+  // we don't accidentally re-attach listeners if the page forms get rescanned.
+  DetachAmbientAutofillNoticeListenersForAllFrames(/*refocus=*/false);
+}
+
 void AutofillBottomSheetTabHelper::MaybeShowPaymentsBottomSheet(
     autofill::FormActivityParams params) {
   if (!UseV3()) {
     // Use the status quo logic for triggering the payments bottom sheet if
     // V3 isn't enabled.
-    ShowPaymentsBottomSheet(params, /*detach=*/true);
+    ShowPaymentsBottomSheet(std::move(params), /*detach=*/true);
     return;
   }
 
-  // In V3, First try to retrieve credit card suggestions before considering
-  // triggering the payments bottom sheet. Credit card suggestions are a good
-  // proxy for knowing that the type of the field is "settled" since we known
-  // that the PWM was tested for suggestions (including the server predictions)
-  // before getting the credit card suggestions.
+  // In V3, first try to retrieve credit card suggestions before
+  // considering triggering the payments bottom sheet. Credit card suggestions
+  // are a good proxy for knowing that the type of the field is "settled" since
+  // we known that the PWM was tested for suggestions (including the server
+  // predictions) before getting the credit card suggestions.
 
   if (!web_state_) {
     return;
@@ -275,13 +347,18 @@ void AutofillBottomSheetTabHelper::OnSuggestionsRetrievedForPaymentsBottomSheet(
     NSArray<FormSuggestion*>* suggestions,
     id<FormInputSuggestionsProvider> provider) {
   auto trigger_walltime = base::TimeTicks::Now() - start_timestamp;
+
+  bool is_scan_card_flow = HasScanCardSaveAndFillSuggestion(suggestions);
   bool has_cc_suggestions = HasAnyCreditCardSuggestion(suggestions);
-  RecordPaymentsBottomSheetTriggerOutcome(/*did_trigger=*/has_cc_suggestions,
-                                          trigger_walltime);
-  if (has_cc_suggestions) {
-    ShowPaymentsBottomSheet(params, /*detach=*/false);
-  } else if (HasScanCardSaveAndFillSuggestion(suggestions)) {
+
+  RecordPaymentsOrScanCardBottomSheetTriggerOutcome(
+      is_scan_card_flow, is_scan_card_flow || has_cc_suggestions,
+      trigger_walltime);
+
+  if (is_scan_card_flow) {
     ShowScanCardSaveAndFillBottomSheet(params);
+  } else if (has_cc_suggestions) {
+    ShowPaymentsBottomSheet(params, /*detach=*/false);
   } else {
     // Give back the preempted focus to the keyboard if the sheet cannot be
     // triggered.
@@ -342,12 +419,7 @@ void AutofillBottomSheetTabHelper::ShowProactivePasswordGenerationBottomSheet(
 void AutofillBottomSheetTabHelper::AttachPasswordListeners(
     const std::vector<autofill::FieldRendererId>& renderer_ids,
     const std::string& frame_id) {
-  bool silenced = HasReachedCredentialBottomSheetDismissLimit();
-
-  base::UmaHistogramBoolean("IOS.PasswordBottomSheet.Activated",
-                            /*sample=*/!silenced);
-
-  if (silenced) {
+  if (HasReachedCredentialBottomSheetDismissLimit()) {
     // Do not allow displaying the sheet if silenced.
     return;
   }
@@ -486,6 +558,14 @@ void AutofillBottomSheetTabHelper::DetachPaymentsListenersForAllFrames(
   }
 }
 
+void AutofillBottomSheetTabHelper::
+    DetachAmbientAutofillNoticeListenersForAllFrames(bool refocus) {
+  for (auto& registered_renderer_ids : registered_ambient_renderer_ids_) {
+    DetachListenersForFrame(registered_renderer_ids.first,
+                            registered_renderer_ids.second, refocus);
+  }
+}
+
 void AutofillBottomSheetTabHelper::DetachListenersForFrame(
     const std::string& frame_id,
     const std::set<autofill::FieldRendererId>& renderer_ids,
@@ -512,12 +592,29 @@ void AutofillBottomSheetTabHelper::RefocusElementIfNeeded(
       AutofillBottomSheetJavaScriptFeature::GetInstance()->GetWebFramesManager(
           web_state_);
   web::WebFrame* frame = webFramesManager->GetFrameWithId(frame_id);
+  // Fall back to the main frame if the target frame has detached or navigated.
+  if (!frame) {
+    frame = webFramesManager->GetMainWebFrame();
+  }
   if (!frame) {
     return;
   }
 
+  // On iOS 27+, WebKit defers `ElementDidFocus` IPC messages to the next
+  // frame/rendering update in WebProcess. Calling `becomeFirstResponder` on
+  // `WebViewProxy` synchronously before JavaScript finishes `element.focus()`
+  // executes while `WKWebView` still believes no input element is focused.
+  // By passing a completion callback to `RefocusElementIfNeeded`, native code
+  // waits for JavaScript to set DOM focus and WebKit to flush `ElementDidFocus`
+  // IPC to the UIProcess before making `WebViewProxy` the first responder.
   AutofillBottomSheetJavaScriptFeature::GetInstance()->RefocusElementIfNeeded(
-      frame);
+      frame, base::BindOnce(
+                 [](base::WeakPtr<web::WebState> weak_web_state) {
+                   if (weak_web_state && weak_web_state->GetWebViewProxy()) {
+                     [weak_web_state->GetWebViewProxy() becomeFirstResponder];
+                   }
+                 },
+                 web_state_->GetWeakPtr()));
 }
 
 // WebStateObserver
@@ -533,6 +630,7 @@ void AutofillBottomSheetTabHelper::DidFinishNavigation(
   registered_password_renderer_ids_.clear();
   registered_payments_renderer_ids_.clear();
   registered_password_generation_renderer_ids_.clear();
+  registered_ambient_renderer_ids_.clear();
 }
 
 void AutofillBottomSheetTabHelper::WebStateDestroyed(web::WebState* web_state) {
@@ -571,64 +669,126 @@ void AutofillBottomSheetTabHelper::OnAutofillManagerStateChanged(
   }
 }
 
-void AutofillBottomSheetTabHelper::AttachListenersForPaymentsForm(
+void AutofillBottomSheetTabHelper::UpdateListenersForPaymentsForm(
     autofill::AutofillManager& manager,
     autofill::FormGlobalId form_id,
     bool only_new) {
   const autofill::FormStructure* form_structure =
       manager.FindCachedFormById(form_id);
-  if (!form_structure ||
-      !form_structure->IsCompleteCreditCardForm(
-          autofill::FormStructure::CreditCardFormCompleteness::
-              kCompleteCreditCardForm)) {
-    return;
-  }
-  if (autofill::GetCreditCardsToSuggest(
-          manager.client().GetPersonalDataManager().payments_data_manager())
-          .empty()) {
+  if (!form_structure) {
     return;
   }
 
-  if (base::FeatureList::IsEnabled(
-          autofill::features::kAutofillAcrossIframesIos)) {
-    // Partition the fields by their frames to attach the listeners.
-    std::map<autofill::LocalFrameToken, std::vector<autofill::FieldRendererId>>
-        fields_by_frame;
-    for (const auto& field : form_structure->fields()) {
-      if (IsPaymentsBottomSheetTriggeringField(
-              field->Type().GetCreditCardType())) {
-        autofill::FieldGlobalId field_id = field->global_id();
-        fields_by_frame[field_id.frame_token].push_back(field_id.renderer_id);
-      }
+  bool is_cc_form = form_structure->IsCompleteCreditCardForm(
+      autofill::FormStructure::CreditCardFormCompleteness::
+          kCompleteCreditCardForm);
+  bool has_cc_cards =
+      !autofill::GetCreditCardsToSuggest(
+           manager.client().GetPersonalDataManager().payments_data_manager())
+           .empty();
+
+  bool should_attach_listeners =
+      is_cc_form &&
+      (has_cc_cards ||
+       base::FeatureList::IsEnabled(
+           autofill::features::kAutofillEnableBottomSheetScanCardAndFill));
+
+  if (!should_attach_listeners && !UseListenersInvalidation()) {
+    // Do not detach listeners if they can't be invalidated.
+    return;
+  }
+
+  // Partition the fields by their frames to attach the listeners.
+  std::map<autofill::LocalFrameToken, std::vector<autofill::FieldRendererId>>
+      fields_to_attach_by_frame;
+  std::map<autofill::LocalFrameToken, std::vector<autofill::FieldRendererId>>
+      fields_to_detach_by_frame;
+
+  for (const auto& field : form_structure->fields()) {
+    autofill::FieldGlobalId field_id = field->global_id();
+    if (should_attach_listeners && IsPaymentsBottomSheetTriggeringField(
+                                       field->Type().GetCreditCardType())) {
+      fields_to_attach_by_frame[field_id.frame_token].push_back(
+          field_id.renderer_id);
+    } else if (UseListenersInvalidation()) {
+      fields_to_detach_by_frame[field_id.frame_token].push_back(
+          field_id.renderer_id);
     }
-    for (const auto& [frame, renderer_ids] : fields_by_frame) {
+  }
+
+  if (UseListenersInvalidation()) {
+    for (const auto& [frame, renderer_ids] : fields_to_detach_by_frame) {
       std::string renderer_form_frame_id = base::ToLowerASCII(frame.ToString());
-      AttachListeners(renderer_ids,
-                      registered_payments_renderer_ids_[renderer_form_frame_id],
-                      renderer_form_frame_id,
-                      /*allow_autofocus=*/false, only_new);
-    }
-  } else {
-    std::vector<autofill::FieldRendererId> renderer_ids;
-    for (const auto& field : form_structure->fields()) {
-      if (IsPaymentsBottomSheetTriggeringField(
-              field->Type().GetCreditCardType())) {
-        renderer_ids.push_back(field->renderer_id());
+      auto& registered_ids =
+          registered_payments_renderer_ids_[renderer_form_frame_id];
+      std::set<autofill::FieldRendererId> ids_to_detach;
+      for (auto id : renderer_ids) {
+        if (registered_ids.contains(id)) {
+          ids_to_detach.insert(id);
+          registered_ids.erase(id);
+        }
+      }
+      if (!ids_to_detach.empty()) {
+        DetachListenersForFrame(renderer_form_frame_id, ids_to_detach,
+                                /*refocus=*/false);
       }
     }
-    if (renderer_ids.empty()) {
-      return;
+  }
+
+  for (const auto& [frame, renderer_ids] : fields_to_attach_by_frame) {
+    std::string renderer_form_frame_id = base::ToLowerASCII(frame.ToString());
+    AttachListeners(renderer_ids,
+                    registered_payments_renderer_ids_[renderer_form_frame_id],
+                    renderer_form_frame_id,
+                    /*allow_autofocus=*/false, only_new);
+  }
+}
+
+void AutofillBottomSheetTabHelper::UpdateListenersForAmbientAutofillForm(
+    autofill::AutofillManager& manager,
+    autofill::FormGlobalId form_id,
+    bool only_new) {
+  if (!web_state_) {
+    return;
+  }
+  const autofill::FormStructure* form_structure =
+      manager.FindCachedFormById(form_id);
+  if (!form_structure) {
+    return;
+  }
+  personal_context::PersonalContextFirstRunService* service =
+      manager.client().GetPersonalContextFirstRunService();
+  if (!service || !service->ShouldShowPersonalContextAmbientAutofillNotice()) {
+    return;
+  }
+
+  autofill::AutofillAiManager* ai_manager =
+      manager.client().GetAutofillAiManager();
+  autofill::EntityDataManager* entity_manager =
+      manager.client().GetEntityDataManager();
+  if (!ai_manager || !entity_manager) {
+    return;
+  }
+
+  // Partition the fields by their local frame token to attach listeners per
+  // iframe.
+  std::map<autofill::LocalFrameToken, std::vector<autofill::FieldRendererId>>
+      fields_to_attach_by_frame;
+  for (const auto& field : form_structure->fields()) {
+    if (!field->Type().GetAutofillAiTypes().empty() &&
+        FieldHasPersonalContextSuggestions(*ai_manager, *entity_manager,
+                                           *form_structure, *field)) {
+      autofill::FieldGlobalId field_id = field->global_id();
+      fields_to_attach_by_frame[field_id.frame_token].push_back(
+          field->renderer_id());
     }
-    // TODO(crbug.com/40266699): Remove `frame` once `renderer_ids` are
-    // FieldGlobalIds.
-    web::WebFrame* frame =
-        static_cast<autofill::AutofillDriverIOS&>(manager.driver()).web_frame();
-    if (!frame) {
-      return;
-    }
-    std::string frame_id = frame->GetFrameId();
-    AttachListeners(renderer_ids, registered_payments_renderer_ids_[frame_id],
-                    frame_id, /*allow_autofocus=*/false, only_new);
+  }
+
+  for (const auto& [frame, renderer_ids] : fields_to_attach_by_frame) {
+    std::string renderer_form_frame_id = base::ToLowerASCII(frame.ToString());
+    AttachListeners(
+        renderer_ids, registered_ambient_renderer_ids_[renderer_form_frame_id],
+        renderer_form_frame_id, /*allow_autofocus=*/false, only_new);
   }
 }
 
@@ -637,18 +797,14 @@ void AutofillBottomSheetTabHelper::OnFieldTypesDetermined(
     autofill::FormGlobalId form_id,
     FieldTypeSource source,
     bool small_forms_were_parsed) {
-  AttachListenersForPaymentsForm(manager, form_id, /*only_new=*/true);
+  UpdateListenersForPaymentsForm(manager, form_id, /*only_new=*/true);
+  UpdateListenersForAmbientAutofillForm(manager, form_id, /*only_new=*/true);
 }
 
 std::unique_ptr<autofill::CardUnmaskAuthenticationSelectionDialogControllerImpl>
 AutofillBottomSheetTabHelper::
     GetCardUnmaskAuthenticationSelectionDialogController() {
   return std::move(card_unmask_authentication_selection_controller_);
-}
-
-plus_addresses::PlusAddressCallback
-AutofillBottomSheetTabHelper::GetPendingPlusAddressFillCallback() {
-  return std::move(pending_plus_address_callback_);
 }
 
 std::unique_ptr<autofill::SaveCardBottomSheetModel>

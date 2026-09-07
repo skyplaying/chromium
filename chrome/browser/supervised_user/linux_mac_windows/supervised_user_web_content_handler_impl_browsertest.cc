@@ -17,15 +17,18 @@
 #include "base/test/run_until.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_key.h"
+#include "chrome/browser/supervised_user/family_link_settings_service_factory.h"
 #include "chrome/browser/supervised_user/linux_mac_windows/parent_access_dialog_result_observer.h"
 #include "chrome/browser/supervised_user/linux_mac_windows/parent_access_view.h"
 #include "chrome/browser/supervised_user/supervised_user_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
 #include "chrome/test/supervised_user/supervision_mixin.h"
+#include "components/supervised_user/core/browser/family_link_settings_service.h"
 #include "components/supervised_user/core/browser/family_link_url_filter.h"
 #include "components/supervised_user/core/browser/proto/parent_access_callback.pb.h"
 #include "components/supervised_user/core/browser/supervised_user_service.h"
@@ -35,6 +38,7 @@
 #include "components/supervised_user/test_support/parent_access_test_utils.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/frame_tree_node_id.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_navigation_observer.h"
@@ -45,12 +49,14 @@
 #include "net/http/http_status_code.h"
 #include "net/url_request/url_request.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/views/controls/webview/webview.h"
 #include "ui/views/widget/widget.h"
 #include "url/gurl.h"
 
 namespace {
 constexpr char kPacpHost[] = "families.google.com";
+constexpr char kMockPacpTargetUrl[] = "https://families.google/families/";
 
 enum class ResponseBehaviour : int {
   kHttpOk = 0,
@@ -67,22 +73,21 @@ class SupervisedUserWebContentHandlerImplTest
   }
 
   content::WebContents* contents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
   supervised_user::SupervisionMixin& supervision_mixin() {
     return supervision_mixin_;
   }
 
-  supervised_user::FamilyLinkUrlFilter* GetUrlFilter() {
+  supervised_user::FamilyLinkSettingsService& GetSettingsService() {
     Profile* profile =
         Profile::FromBrowserContext(contents()->GetBrowserContext());
-    supervised_user::SupervisedUserService* supervised_user_service =
-        SupervisedUserServiceFactory::GetForProfile(profile);
-    supervised_user::FamilyLinkUrlFilter* url_filter =
-        supervised_user_service->GetURLFilter();
-    CHECK(url_filter);
-    return url_filter;
+    supervised_user::FamilyLinkSettingsService* settings_service =
+        supervised_user::FamilyLinkSettingsServiceFactory::GetForKey(
+            profile->GetProfileKey());
+    CHECK(settings_service);
+    return *settings_service;
   }
 
   void OverrideResponseBehaviour(ResponseBehaviour behaviour) {
@@ -141,8 +146,7 @@ class SupervisedUserWebContentHandlerImplTest
       case ResponseBehaviour::kHttpRedirection:
         //  Mimics the last url in a seriers of PACP re-directions.
         response->set_code(net::HTTP_MOVED_PERMANENTLY);
-        response->AddCustomHeader("Location",
-                                  supervised_user::kFamilyManagementUrl);
+        response->AddCustomHeader("Location", kMockPacpTargetUrl);
         break;
       case ResponseBehaviour::kHttpOk:
         response->set_code(net::HTTP_OK);
@@ -176,7 +180,7 @@ IN_PROC_BROWSER_TEST_F(SupervisedUserWebContentHandlerImplTest,
       .url = blocked_url,
       .behavior = supervised_user::FilteringBehavior::kBlock,
       .reason = supervised_user::FilteringBehaviorReason::DEFAULT};
-  GURL target_url = GetUrlFilter()->GetEffectiveUrlToUnblock(result);
+  GURL target_url = GetSettingsService().GetEffectiveUrlToUnblock(result);
 
   // Makes a local approval request and checks that the PACP dialog is created.
   handler->RequestLocalApproval(target_url, result, u"child_display_name",
@@ -190,7 +194,7 @@ IN_PROC_BROWSER_TEST_F(SupervisedUserWebContentHandlerImplTest,
   // that contains the PACP response.
   // The request handler `HandleRedirection` mocks the re-direction to the
   // `pacp_end_url` reached by PACP, in order to complete the approval flow.
-  GURL pacp_end_url = GURL(supervised_user::kFamilyManagementUrl);
+  GURL pacp_end_url = GURL(kMockPacpTargetUrl);
   auto observer =
       std::make_unique<content::TestNavigationObserver>(pacp_end_url);
 
@@ -235,7 +239,7 @@ IN_PROC_BROWSER_TEST_F(SupervisedUserWebContentHandlerImplTest,
       .url = blocked_url,
       .behavior = supervised_user::FilteringBehavior::kBlock,
       .reason = supervised_user::FilteringBehaviorReason::DEFAULT};
-  GURL target_url = GetUrlFilter()->GetEffectiveUrlToUnblock(result);
+  GURL target_url = GetSettingsService().GetEffectiveUrlToUnblock(result);
 
   // Makes a local approval request and checks that the PACP dialog is created.
   handler->RequestLocalApproval(target_url, result, u"child_display_name",
@@ -249,7 +253,7 @@ IN_PROC_BROWSER_TEST_F(SupervisedUserWebContentHandlerImplTest,
   // that contains the PACP response.
   // The request handler `HandleRedirection` mocks the re-direction to the
   // `pacp_end_url` reached by PACP, in order to complete the approval flow.
-  GURL pacp_end_url = GURL(supervised_user::kFamilyManagementUrl);
+  GURL pacp_end_url = GURL(kMockPacpTargetUrl);
   auto observer =
       std::make_unique<content::TestNavigationObserver>(pacp_end_url);
 
@@ -277,22 +281,14 @@ IN_PROC_BROWSER_TEST_F(SupervisedUserWebContentHandlerImplTest,
   histogram_tester.ExpectTotalCount(
       supervised_user::kLocalWebApprovalErrorTypeHistogramName, 1);
 
-  if (base::FeatureList::IsEnabled(
-          supervised_user::kEnableLocalWebApprovalErrorDialog)) {
-    // Check that the dialog content was replaced with the error message
-    // content.
-    EXPECT_TRUE(base::test::RunUntil([&]() {
-      return handler->GetWeakParentAccessViewForTesting()
-                     ->GetErrorViewForTesting() != nullptr &&
-             handler->GetWeakParentAccessViewForTesting()
-                     ->GetWebViewForTesting() == nullptr;
-    }));
-  } else {
-    // Check that the PACP dialog is destructed.
-    ASSERT_TRUE(base::test::RunUntil([&]() {
-      return handler->GetWeakParentAccessViewForTesting() == nullptr;
-    }));
-  }
+  // Check that the dialog content was replaced with the error message
+  // content.
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    return handler->GetWeakParentAccessViewForTesting()
+                   ->GetErrorViewForTesting() != nullptr &&
+           handler->GetWeakParentAccessViewForTesting()
+                   ->GetWebViewForTesting() == nullptr;
+  }));
 }
 
 IN_PROC_BROWSER_TEST_F(SupervisedUserWebContentHandlerImplTest,
@@ -308,7 +304,7 @@ IN_PROC_BROWSER_TEST_F(SupervisedUserWebContentHandlerImplTest,
       .url = GURL(),  // invalid url
       .behavior = supervised_user::FilteringBehavior::kBlock,
       .reason = supervised_user::FilteringBehaviorReason::DEFAULT};
-  GURL target_url = GetUrlFilter()->GetEffectiveUrlToUnblock(result);
+  GURL target_url = GetSettingsService().GetEffectiveUrlToUnblock(result);
 
   // Makes a local approval request and checks that the PACP dialog is created.
   handler->RequestLocalApproval(target_url, result, u"child_display_name",
@@ -341,7 +337,7 @@ IN_PROC_BROWSER_TEST_F(SupervisedUserWebContentHandlerImplTest,
       .url = blocked_url,
       .behavior = supervised_user::FilteringBehavior::kBlock,
       .reason = supervised_user::FilteringBehaviorReason::DEFAULT};
-  GURL target_url = GetUrlFilter()->GetEffectiveUrlToUnblock(result);
+  GURL target_url = GetSettingsService().GetEffectiveUrlToUnblock(result);
 
   bool approval_initiated;
   auto approval_initiated_lambda = [](bool& result,
@@ -397,7 +393,7 @@ IN_PROC_BROWSER_TEST_F(SupervisedUserWebContentHandlerImplTest,
       .url = blocked_url,
       .behavior = supervised_user::FilteringBehavior::kBlock,
       .reason = supervised_user::FilteringBehaviorReason::DEFAULT};
-  GURL target_url = GetUrlFilter()->GetEffectiveUrlToUnblock(result);
+  GURL target_url = GetSettingsService().GetEffectiveUrlToUnblock(result);
 
   // Makes a local approval request and checks that the PACP dialog is created.
   handler->RequestLocalApproval(target_url, result, u"child_display_name",
@@ -439,7 +435,7 @@ IN_PROC_BROWSER_TEST_F(SupervisedUserWebContentHandlerImplTest,
       .url = blocked_url,
       .behavior = supervised_user::FilteringBehavior::kBlock,
       .reason = supervised_user::FilteringBehaviorReason::MANUAL};
-  GURL target_url = GetUrlFilter()->GetEffectiveUrlToUnblock(result);
+  GURL target_url = GetSettingsService().GetEffectiveUrlToUnblock(result);
 
   // Makes a local approval request and checks that the PACP dialog is created.
   handler->RequestLocalApproval(target_url, result, u"child_display_name",
@@ -478,7 +474,7 @@ IN_PROC_BROWSER_TEST_F(SupervisedUserWebContentHandlerImplTest,
       .url = blocked_url,
       .behavior = supervised_user::FilteringBehavior::kBlock,
       .reason = supervised_user::FilteringBehaviorReason::DEFAULT};
-  GURL target_url = GetUrlFilter()->GetEffectiveUrlToUnblock(result);
+  GURL target_url = GetSettingsService().GetEffectiveUrlToUnblock(result);
 
   // Makes a local approval request and checks that the PACP dialog is created.
   handler->RequestLocalApproval(target_url, result, u"child_display_name",
@@ -492,25 +488,14 @@ IN_PROC_BROWSER_TEST_F(SupervisedUserWebContentHandlerImplTest,
                 ->GetVisible();
   }));
 
-  if (base::FeatureList::IsEnabled(
-          supervised_user::kEnableLocalWebApprovalErrorDialog)) {
-    // Check that the PACP dialog content is replaced by the error message
-    // content.
-    ASSERT_TRUE(base::test::RunUntil([&]() {
-      return handler->GetWeakParentAccessViewForTesting()
-                     ->GetWebViewForTesting() == nullptr &&
-             (base::FeatureList::IsEnabled(
-                  supervised_user::kEnableLocalWebApprovalErrorDialog)
-                  ? handler->GetWeakParentAccessViewForTesting()
-                            ->GetErrorViewForTesting() != nullptr
-                  : true);
-    }));
-  } else {
-    // Check that the PACP dialog is destructed.
-    ASSERT_TRUE(base::test::RunUntil([&]() {
-      return handler->GetWeakParentAccessViewForTesting() == nullptr;
-    }));
-  }
+  // Check that the PACP dialog content is replaced by the error message
+  // content.
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return handler->GetWeakParentAccessViewForTesting()
+                   ->GetWebViewForTesting() == nullptr &&
+           handler->GetWeakParentAccessViewForTesting()
+                   ->GetErrorViewForTesting() != nullptr;
+  }));
 
   histogram_tester.ExpectBucketCount(
       supervised_user::kLocalWebApprovalResultHistogramName,
@@ -534,8 +519,7 @@ class SupervisedUserParentAccessViewErrorScreenUiTest
     // Override PACP timeout to 0 ms.
     int timeout_ms = 0;
     scoped_feature_list_.InitWithFeaturesAndParameters(
-        {{supervised_user::kEnableLocalWebApprovalErrorDialog, {}},
-         {supervised_user::kLocalWebApprovals,
+        {{supervised_user::kLocalWebApprovals,
           {{supervised_user::kLocalWebApprovalBottomSheetLoadTimeoutMs.name,
             base::NumberToString(timeout_ms)}}}},
         {});
@@ -556,7 +540,7 @@ IN_PROC_BROWSER_TEST_F(SupervisedUserParentAccessViewErrorScreenUiTest,
       .url = blocked_url,
       .behavior = supervised_user::FilteringBehavior::kBlock,
       .reason = supervised_user::FilteringBehaviorReason::DEFAULT};
-  GURL target_url = GetUrlFilter()->GetEffectiveUrlToUnblock(result);
+  GURL target_url = GetSettingsService().GetEffectiveUrlToUnblock(result);
 
   // Makes a local approval request that times out immediately
   // and checks that the error dialog is shown and can be dismissed by the

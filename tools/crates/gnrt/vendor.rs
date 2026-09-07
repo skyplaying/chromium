@@ -16,7 +16,8 @@ use crate::unsafe_code_detector;
 use crate::util::{
     create_dirs_if_needed, get_guppy_package_graph, init_handlebars,
     init_handlebars_with_template_paths, remove_checksums_from_lock, render_handlebars,
-    render_handlebars_named_template, run_command, without_cargo_config_toml,
+    render_handlebars_named_template, run_command, run_command_and_suppress_output,
+    without_cargo_config_toml,
 };
 use crate::VendorCommandArgs;
 
@@ -116,6 +117,7 @@ fn download_crates(args: &VendorCommandArgs, paths: &paths::ChromiumPaths) -> Re
         // Keep directories corresponding to packages from the dependency tree.
         dirs_to_remove.remove(crate_path.as_os_str());
 
+        let is_forced = args.force.as_ref().is_some_and(|glob| glob.matches(p.name()));
         let is_already_right_version =
             get_package_id_from_vendored_dir(&crate_path).is_some_and(|vendored| {
                 let expected_name = p.name();
@@ -127,7 +129,7 @@ fn download_crates(args: &VendorCommandArgs, paths: &paths::ChromiumPaths) -> Re
             let vendored_is_placeholder = is_placeholder_crate(&crate_path);
             expecting_placeholder == vendored_is_placeholder
         };
-        if is_already_right_version && is_already_right_placeholder_status {
+        if !is_forced && is_already_right_version && is_already_right_placeholder_status {
             if !is_removed(p.id()) {
                 remove_vendored_files(p.name(), p.version(), &config, paths)?;
             }
@@ -329,11 +331,21 @@ fn fill_allow_unsafe_settings(
     let new_table_fn = || Item::from(Table::new());
     let new_inline_table_fn = || Item::from(InlineTable::new());
     let top_table = get_or_insert_table(&mut doc as &mut Table, "crate", new_table_fn);
+
+    let crates_with_per_epoch_key: HashSet<_> = top_table
+        .iter()
+        .filter_map(|(key, _)| {
+            let (crate_name, epoch) = config::parse_crate_key(key).ok()?;
+            epoch.is_some().then(|| crate_name.to_owned())
+        })
+        .collect();
+
     for package in deps.into_iter() {
-        // TODO(https://crbug.com/419104870): In the future an epoch-based `crate_key`
-        // may need to be consulted (in addition-to, or instead-of the `crate_key`
-        // below).
-        let crate_key = &package.package_name;
+        let crate_key = if crates_with_per_epoch_key.contains(&package.package_name) {
+            &config::make_epoch_key(&package.package_name, Epoch::from_version(&package.version))
+        } else {
+            &package.package_name
+        };
         let crate_table = get_or_insert_table(top_table, crate_key, new_table_fn);
         let extra_kv_table = get_or_insert_table(crate_table, "extra_kv", new_inline_table_fn);
 
@@ -516,6 +528,17 @@ fn apply_patches(
         patches_contents.push((path, contents));
     }
 
+    fn cleanup_and_fail(crate_vendor_dir: &Path, err: anyhow::Error) -> Result<()> {
+        log::error!(
+            "Applying patches failed - cleaning up: Removing the {} directory.",
+            crate_vendor_dir.display(),
+        );
+        if let Err(rm_err) = std::fs::remove_dir_all(crate_vendor_dir) {
+            Err(rm_err).context(err)
+        } else {
+            Err(err)
+        }
+    }
     for (path, contents) in patches_contents {
         let args = vec![
             "apply".to_string(),
@@ -527,7 +550,37 @@ fn apply_patches(
         c.args(args.clone());
 
         println!("Applying patch {}", path.to_string_lossy());
-        if let Err(e) = run_command(c, "patch", Some(&contents)) {
+        if let Err(e) = run_command_and_suppress_output(c, "patch", Some(&contents)) {
+            let e = e.context(format!("Failed to apply patch {}", path.display()));
+
+            // Check if the patch is obsolete (already applied upstream).
+            let mut check_reverse_cmd = std::process::Command::new("git");
+            let mut check_reverse_args = args.clone();
+            check_reverse_args.push("--check".to_string());
+            check_reverse_args.push("--reverse".to_string());
+            check_reverse_cmd.args(check_reverse_args);
+
+            let is_obsolete = run_command_and_suppress_output(
+                check_reverse_cmd,
+                "patch reverse check",
+                Some(&contents),
+            )
+            .is_ok();
+            if is_obsolete {
+                println!(
+                    "Patch {} is obsolete (already applied upstream). Deleting it.",
+                    path.display()
+                );
+                if let Err(rm_err) = std::fs::remove_file(&path) {
+                    let rm_err = anyhow::Error::new(rm_err).context(format!(
+                        "Failed to delete obsolete patch file {}",
+                        path.display()
+                    ));
+                    return cleanup_and_fail(&crate_vendor_dir, rm_err);
+                }
+                continue;
+            }
+
             log::error!(
                 "Applying patches failed - retrying with verbose output to help diagnose..."
             );
@@ -536,15 +589,7 @@ fn apply_patches(
             c.arg("-v");
             let _ignoring_error = run_command(c, "patch", Some(&contents));
 
-            log::error!(
-                "Applying patches failed - cleaning up: Removing the {} directory.",
-                crate_vendor_dir.display(),
-            );
-            if let Err(rm_err) = std::fs::remove_dir_all(&crate_vendor_dir) {
-                Err(rm_err).context(e)?
-            } else {
-                Err(e)?
-            }
+            return cleanup_and_fail(&crate_vendor_dir, e);
         }
     }
 

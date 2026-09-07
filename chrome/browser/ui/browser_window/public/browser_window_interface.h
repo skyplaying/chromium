@@ -18,23 +18,16 @@
 // This is the public interface for a browser window. Most features in
 // //chrome/browser depend on this interface, and thus to prevent circular
 // dependencies this interface should not depend on anything else in //chrome.
-// Ping erikchen for assistance if this class does not have the functionality
-// your feature needs. This comment will be deleted after there are 10+ features
-// in BrowserWindowFeatures.
 //
 // This interface is shared between desktop platforms and the experimental
 // desktop android platform. As such, the features exposed directly on this
 // class should only be those that apply to all these platforms, and should only
 // be features that are core to the concept of a browser window. Classes related
-// to specific features should likely instead be stored either as an entry in
-// the UnownedUserData (via BrowserWindowInterface::GetUnownedUserDataHost())
-// or on DesktopBrowserWindowCapabilities.
+// to specific features should instead be stored either as an entry in
+// the UnownedUserData via BrowserWindowInterface::GetUnownedUserDataHost().
+// Desktop-only functions should live in DesktopBrowserWindowCapabilities.
 
 #if !BUILDFLAG(IS_ANDROID)
-namespace base {
-class CallbackListSubscription;
-}  // namespace base
-
 namespace tabs {
 class TabInterface;
 }  // namespace tabs
@@ -43,14 +36,15 @@ namespace web_modal {
 class WebContentsModalDialogHost;
 }  // namespace web_modal
 
-class Browser;
-class BrowserActions;
 class BrowserWindowFeatures;
 class DesktopBrowserWindowCapabilities;
-class ExclusiveAccessManager;
 class GURL;
 class TabStripModel;
 #endif  // BUILDFLAG(IS_ANDROID)
+
+namespace base {
+class CallbackListSubscription;
+}  // namespace base
 
 namespace ui {
 class BaseWindow;
@@ -60,16 +54,9 @@ class UnownedUserDataHost;
 class Profile;
 class SessionID;
 
-#if !BUILDFLAG(IS_ANDROID)
-// A feature which wants to show window level call to action UI  should call
-// BrowserWindowInterface::ShowCallToAction and keep alive the instance of
-// ScopedWindowCallToAction for the duration of the window-modal UI.
-class ScopedWindowCallToAction {
- public:
-  ScopedWindowCallToAction() = default;
-  virtual ~ScopedWindowCallToAction() = default;
-};
-#endif  // !BUILDFLAG(IS_ANDROID)
+namespace internal {
+class ScopedBrowserShower;
+}
 
 class BrowserWindowInterface : public content::PageNavigator {
  public:
@@ -117,6 +104,13 @@ class BrowserWindowInterface : public content::PageNavigator {
   // have ran.
   virtual bool IsDeleteScheduled() const = 0;
 
+  // Register callbacks invoked when browser has successfully processed its
+  // close request and has been scheduled for deletion.
+  using BrowserDidCloseCallback =
+      base::RepeatingCallback<void(BrowserWindowInterface*)>;
+  virtual base::CallbackListSubscription RegisterBrowserDidClose(
+      BrowserDidCloseCallback callback) = 0;
+
   // SessionService::WindowType mirrors these values.  If you add to this
   // enum, look at SessionService::WindowType to see if it needs to be
   // updated.
@@ -156,6 +150,11 @@ class BrowserWindowInterface : public content::PageNavigator {
     // TYPE_POPUP, except that it floats above other windows.  It also has some
     // additional restrictions, like it cannot navigated, to prevent misuse.
     TYPE_PICTURE_IN_PICTURE,
+#endif
+#if BUILDFLAG(IS_ANDROID)
+    // TODO(https://crbug.com/493668475): Revisit if this type is needed.
+    // Android Custom Tab browser.
+    TYPE_CUSTOM_TAB,
 #endif
     // If you add a new type, consider updating the test
     // BrowserTest.StartMaximized.
@@ -229,23 +228,31 @@ class BrowserWindowInterface : public content::PageNavigator {
   virtual void OpenGURL(const GURL& gurl,
                         WindowOpenDisposition disposition) = 0;
 
+  // Never nullptr.
+  //
+  // When the last tab is removed, the browser attempts to close, see
+  // TabStripEmpty(). TODO(crbug.com/331031753): Several existing Browser::Types
+  // never show a tab strip, yet are forced to work with the tab strip API to
+  // deal with the previous condition. This creates confusing control flow both
+  // for the tab strip and this class. One or both of the following should
+  // happen:
+  //  (1) tab_strip_model_ should become an optional member.
+  //  (2) Variations of Browser::Type that never show a tab strip should not use
+  //      this class.
   virtual TabStripModel* GetTabStripModel() = 0;
   virtual const TabStripModel* GetTabStripModel() const = 0;
+
+  // WARNING: Do not use these accessors, please use the `GetTabStripModel()`
+  // accessors above.
+  // TODO(crbug.com/532254684): Migrate remaining clients of `tab_strip_model()`
+  // to `GetTabStripModel()` and remove these.
+  TabStripModel* tab_strip_model() { return GetTabStripModel(); }
+  const TabStripModel* tab_strip_model() const { return GetTabStripModel(); }
 
   // Returns true if the tab strip is currently visible for this browser window.
   // Will return false on browser initialization before the tab strip is
   // initialized.
   virtual bool IsTabStripVisible() = 0;
-
-  // Returns true if the browser controls are hidden due to being in fullscreen.
-  virtual bool ShouldHideUIForFullscreen() const = 0;
-
-  // Register callbacks invoked when browser has successfully processed its
-  // close request and has been scheduled for deletion.
-  using BrowserDidCloseCallback =
-      base::RepeatingCallback<void(BrowserWindowInterface*)>;
-  virtual base::CallbackListSubscription RegisterBrowserDidClose(
-      BrowserDidCloseCallback callback) = 0;
 
   // Register callbacks invoked when browser attempted to close but the close
   // operation was cancelled.
@@ -308,33 +315,18 @@ class BrowserWindowInterface : public content::PageNavigator {
   virtual base::CallbackListSubscription RegisterDidBecomeInactive(
       DidBecomeInactiveCallback callback) = 0;
 
-  // This class is responsible for controlling fullscreen and pointer lock.
-  virtual ExclusiveAccessManager* GetExclusiveAccessManager() = 0;
-
-  // This class manages actions that a user can take that are scoped to a
-  // browser window (e.g. most of the 3-dot menu actions).
-  virtual BrowserActions* GetActions() = 0;
-
   // This is used by features that need to operate on most or all tabs in the
   // browser window. Do not use this method to find a specific tab.
   virtual std::vector<tabs::TabInterface*> GetAllTabInterfaces() = 0;
 
-  // Downcasts to a Browser*. The only valid use for this method is when
-  // migrating a large chunk of code to BrowserWindowInterface, to allow
-  // incremental migration.
-  virtual Browser* GetBrowserForMigrationOnly() = 0;
-  virtual const Browser* GetBrowserForMigrationOnly() const = 0;
-
   // Checks if the browser popup is tab modal dialog.
-  virtual bool IsTabModalPopupDeprecated() const = 0;
+  virtual bool IsTabModalPopup() const = 0;
+  virtual void SetIsTabModalPopup(
+      bool is_tab_modal_popup,
+      base::PassKey<internal::ScopedBrowserShower>) = 0;
 
-  // Features that want to show a window level call to action UI can be mutually
-  // exclusive. Before gating on call to action UI first check
-  // `CanShowModCanShowCallToActionalUI`. Then call ShowCallToAction() and keep
-  // `ScopedWindowCallToAction` alive to prevent other features from showing
-  // window level call to action Uis.
-  virtual bool CanShowCallToAction() const = 0;
-  virtual std::unique_ptr<ScopedWindowCallToAction> ShowCallToAction() = 0;
+  // Checks if the browser was created by session restore.
+  virtual bool CreatedBySessionRestore() const = 0;
 
   virtual DesktopBrowserWindowCapabilities* capabilities() = 0;
   virtual const DesktopBrowserWindowCapabilities* capabilities() const = 0;

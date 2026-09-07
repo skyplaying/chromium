@@ -64,6 +64,7 @@
 #include "third_party/blink/renderer/core/animation/css_translate_interpolation_type.h"
 #include "third_party/blink/renderer/core/animation/css_var_cycle_interpolation_type.h"
 #include "third_party/blink/renderer/core/animation/css_visibility_interpolation_type.h"
+#include "third_party/blink/renderer/core/animation/css_zoom_interpolation_type.h"
 #include "third_party/blink/renderer/core/css/css_property_names.h"
 #include "third_party/blink/renderer/core/css/css_syntax_definition.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser_context.h"
@@ -135,17 +136,18 @@ const InterpolationTypes* InterpolationTypesMap::Get(
       case CSSPropertyID::kBorderRightWidth:
       case CSSPropertyID::kBorderTopWidth:
       case CSSPropertyID::kBottom:
-      case CSSPropertyID::kColumnRuleEdgeInsetEnd:
-      case CSSPropertyID::kRowRuleEdgeInsetEnd:
-      case CSSPropertyID::kColumnRuleEdgeInsetStart:
-      case CSSPropertyID::kRowRuleEdgeInsetStart:
-      case CSSPropertyID::kColumnRuleInteriorInsetEnd:
-      case CSSPropertyID::kRowRuleInteriorInsetEnd:
-      case CSSPropertyID::kColumnRuleInteriorInsetStart:
-      case CSSPropertyID::kRowRuleInteriorInsetStart:
+      case CSSPropertyID::kColumnRuleInsetCapEnd:
+      case CSSPropertyID::kRowRuleInsetCapEnd:
+      case CSSPropertyID::kColumnRuleInsetCapStart:
+      case CSSPropertyID::kRowRuleInsetCapStart:
+      case CSSPropertyID::kColumnRuleInsetJunctionEnd:
+      case CSSPropertyID::kRowRuleInsetJunctionEnd:
+      case CSSPropertyID::kColumnRuleInsetJunctionStart:
+      case CSSPropertyID::kRowRuleInsetJunctionStart:
       case CSSPropertyID::kCx:
       case CSSPropertyID::kCy:
       case CSSPropertyID::kFlexBasis:
+      case CSSPropertyID::kFlowTolerance:
       case CSSPropertyID::kHeight:
       case CSSPropertyID::kLeft:
       case CSSPropertyID::kLetterSpacing:
@@ -164,6 +166,7 @@ const InterpolationTypes* InterpolationTypesMap::Get(
       case CSSPropertyID::kPaddingLeft:
       case CSSPropertyID::kPaddingRight:
       case CSSPropertyID::kPaddingTop:
+      case CSSPropertyID::kPathLength:
       case CSSPropertyID::kPerspective:
       case CSSPropertyID::kR:
       case CSSPropertyID::kRight:
@@ -206,24 +209,13 @@ const InterpolationTypes* InterpolationTypesMap::Get(
         break;
       case CSSPropertyID::kColumnRuleColor:
       case CSSPropertyID::kRowRuleColor:
-        if (RuntimeEnabledFeatures::CSSGapDecorationEnabled()) {
-          applicable_types->push_back(
-              MakeGarbageCollected<CSSGapColorListInterpolationType>(property));
-          break;
-        }
         applicable_types->push_back(
-            MakeGarbageCollected<CSSColorInterpolationType>(property));
+            MakeGarbageCollected<CSSGapColorListInterpolationType>(property));
         break;
       case CSSPropertyID::kColumnRuleWidth:
       case CSSPropertyID::kRowRuleWidth:
-        if (RuntimeEnabledFeatures::CSSGapDecorationEnabled()) {
-          applicable_types->push_back(
-              MakeGarbageCollected<CSSGapLengthListInterpolationType>(
-                  property));
-        } else {
-          applicable_types->push_back(
-              MakeGarbageCollected<CSSLengthInterpolationType>(property));
-        }
+        applicable_types->push_back(
+            MakeGarbageCollected<CSSGapLengthListInterpolationType>(property));
         break;
       case CSSPropertyID::kContainIntrinsicWidth:
       case CSSPropertyID::kContainIntrinsicHeight:
@@ -256,6 +248,12 @@ const InterpolationTypes* InterpolationTypesMap::Get(
       case CSSPropertyID::kZIndex:
         applicable_types->push_back(
             MakeGarbageCollected<CSSNumberInterpolationType>(property));
+        break;
+      case CSSPropertyID::kZoom:
+        if (RuntimeEnabledFeatures::CSSZoomAnimationEnabled()) {
+          applicable_types->push_back(
+              MakeGarbageCollected<CSSZoomInterpolationType>(property));
+        }
         break;
       case CSSPropertyID::kCornerTopLeftShape:
       case CSSPropertyID::kCornerTopRightShape:
@@ -294,6 +292,7 @@ const InterpolationTypes* InterpolationTypesMap::Get(
       case CSSPropertyID::kStopColor:
       case CSSPropertyID::kTextDecorationColor:
       case CSSPropertyID::kTextEmphasisColor:
+      case CSSPropertyID::kWebkitTextFillColor:
       case CSSPropertyID::kWebkitTextStrokeColor:
         applicable_types->push_back(
             MakeGarbageCollected<CSSColorInterpolationType>(property));
@@ -439,16 +438,13 @@ const InterpolationTypes* InterpolationTypesMap::Get(
             MakeGarbageCollected<CSSBorderShapeInterpolationType>(property));
         break;
       case CSSPropertyID::kClipPath:
+      case CSSPropertyID::kShapeOutside:
         applicable_types->push_back(
             MakeGarbageCollected<CSSBasicShapeInterpolationType>(property));
         applicable_types->push_back(
             MakeGarbageCollected<CSSPathInterpolationType>(property));
         applicable_types->push_back(
             MakeGarbageCollected<CSSShapeInterpolationType>(property));
-        break;
-      case CSSPropertyID::kShapeOutside:
-        applicable_types->push_back(
-            MakeGarbageCollected<CSSBasicShapeInterpolationType>(property));
         break;
       case CSSPropertyID::kRotate:
         applicable_types->push_back(

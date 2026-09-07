@@ -12,6 +12,7 @@
 #include <string>
 #include <utility>
 
+#include "base/metrics/histogram_functions.h"
 #include "base/strings/string_util.h"
 #include "base/trace_event/trace_event.h"
 #include "base/trace_event/typed_macros.h"
@@ -74,10 +75,6 @@ ui::ImageModel OmniboxView::GetIcon(int dip_size,
                                     SkColor color_vectors_with_background,
                                     IconFetchedCallback on_icon_fetched,
                                     bool dark_mode) const {
-  if (controller()->edit_model()->ShouldShowAddContextButton()) {
-    return controller()->edit_model()->GetAddContextIcon(dip_size);
-  }
-
   if (controller()->edit_model()->ShouldShowCurrentPageIcon()) {
     return ui::ImageModel::FromVectorIcon(
         controller()->client()->GetVectorIcon(), color_current_page_icon,
@@ -360,4 +357,44 @@ void OmniboxView::UpdateTextStyle(
       scheme_range.IsValid()) {
     UpdateSchemeStyle(scheme_range);
   }
+}
+
+std::u16string OmniboxView::ComputeFriendlySuggestionTextForAccessibility(
+    const std::u16string& display_text,
+    const AutocompleteMatch& match,
+    int& suggestion_text_prefix_length) {
+  std::u16string friendly_suggestion_text;
+  suggestion_text_prefix_length = 0;
+
+  if (controller()->edit_model()->GetPopupSelection().state ==
+      OmniboxPopupSelection::LineState::FOCUSED_BUTTON_AIM) {
+    friendly_suggestion_text =
+        controller()->edit_model()->GetPopupAccessibilityLabelForAimButton();
+  } else if (controller()->edit_model()->GetPopupSelection().line ==
+             OmniboxPopupSelection::kNoMatch) {
+    // If nothing is selected in the popup, we are in the no-default-match edge
+    // case, and |match| is a synthetically generated match. In that case,
+    // bypass OmniboxPopupModel and get the label from our synthetic |match|.
+    friendly_suggestion_text = AutocompleteMatchType::ToAccessibilityLabel(
+        match, /*header_text=*/u"", display_text,
+        OmniboxPopupSelection::kNoMatch,
+        controller()->autocomplete_controller()->result().size(),
+        std::u16string(), &suggestion_text_prefix_length);
+  } else {
+    friendly_suggestion_text =
+        controller()
+            ->edit_model()
+            ->GetPopupAccessibilityLabelForCurrentSelection(
+                display_text, /*include_positional_info=*/true,
+                &suggestion_text_prefix_length);
+
+    // If the line immediately after the current selection is the
+    // informational IPH row, append its accessibility label at the end of
+    // this selection's accessibility label.
+    friendly_suggestion_text +=
+        controller()
+            ->edit_model()
+            ->MaybeGetPopupAccessibilityLabelForIPHSuggestion();
+  }
+  return friendly_suggestion_text;
 }

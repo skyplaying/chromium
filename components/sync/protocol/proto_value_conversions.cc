@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "base/base64.h"
+#include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
@@ -39,8 +40,6 @@
 #include "components/sync/protocol/os_priority_preference_specifics.pb.h"
 #include "components/sync/protocol/password_sharing_invitation_specifics.pb.h"
 #include "components/sync/protocol/password_specifics.pb.h"
-#include "components/sync/protocol/plus_address_setting_specifics.pb.h"
-#include "components/sync/protocol/plus_address_specifics.pb.h"
 #include "components/sync/protocol/preference_specifics.pb.h"
 #include "components/sync/protocol/printer_specifics.pb.h"
 #include "components/sync/protocol/printers_authorization_server_specifics.pb.h"
@@ -56,8 +55,9 @@
 #include "components/sync/protocol/sharing_message_specifics.pb.h"
 #include "components/sync/protocol/sync.pb.h"
 #include "components/sync/protocol/sync_entity.pb.h"
+#include "components/sync/protocol/theme_android_specifics.pb.h"
+#include "components/sync/protocol/theme_ios_specifics.pb.h"
 #include "components/sync/protocol/theme_specifics.pb.h"
-#include "components/sync/protocol/theme_specifics_ios.pb.h"
 #include "components/sync/protocol/typed_url_specifics.pb.h"
 #include "components/sync/protocol/user_consent_specifics.pb.h"
 #include "components/sync/protocol/user_event_specifics.pb.h"
@@ -276,6 +276,10 @@ class ToValueVisitor {
     if (proto.type() != sync_pb::AutofillWalletSpecifics::PAYMENT_INSTRUMENT) {
       dict.Remove("payment_instrument");
     }
+    if (proto.type() !=
+        sync_pb::AutofillWalletSpecifics::PAYMENT_INSTRUMENT_CREATION_OPTION) {
+      dict.Remove("payment_instrument_creation_option");
+    }
     return base::Value(std::move(dict));
   }
 
@@ -387,8 +391,6 @@ IMPLEMENT_PROTO_TO_VALUE(PasswordSpecificsData_Notes)
 IMPLEMENT_PROTO_TO_VALUE(PasswordSpecificsData_Notes_Note)
 IMPLEMENT_PROTO_TO_VALUE(PaymentInstrument)
 IMPLEMENT_PROTO_TO_VALUE(PaymentsCustomerData)
-IMPLEMENT_PROTO_TO_VALUE(PlusAddressSettingSpecifics)
-IMPLEMENT_PROTO_TO_VALUE(PlusAddressSpecifics)
 IMPLEMENT_PROTO_TO_VALUE(PowerBookmarkSpecifics)
 IMPLEMENT_PROTO_TO_VALUE(PreferenceSpecifics)
 IMPLEMENT_PROTO_TO_VALUE(PrinterPPDReference)
@@ -411,8 +413,9 @@ IMPLEMENT_PROTO_TO_VALUE(SharedCommentSpecifics)
 IMPLEMENT_PROTO_TO_VALUE(SharingMessageSpecifics)
 IMPLEMENT_PROTO_TO_VALUE(SyncCycleCompletedEventInfo)
 IMPLEMENT_PROTO_TO_VALUE(TabNavigation)
+IMPLEMENT_PROTO_TO_VALUE(ThemeAndroidSpecifics)
+IMPLEMENT_PROTO_TO_VALUE(ThemeIosSpecifics)
 IMPLEMENT_PROTO_TO_VALUE(ThemeSpecifics)
-IMPLEMENT_PROTO_TO_VALUE(ThemeSpecificsIos)
 IMPLEMENT_PROTO_TO_VALUE(TimeRangeDirective)
 IMPLEMENT_PROTO_TO_VALUE(TypedUrlSpecifics)
 IMPLEMENT_PROTO_TO_VALUE(UnencryptedSharingMessage)

@@ -21,6 +21,7 @@
 #include "third_party/blink/renderer/core/css/properties/css_parsing_utils.h"
 #include "third_party/blink/renderer/core/css/properties/css_property.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 
 namespace blink {
 
@@ -84,14 +85,16 @@ CSSValueList* ConsumeFontFaceUnicodeRange(CSSParserTokenStream& stream) {
 bool IsSupportedFontFormat(String font_format) {
   return css_parsing_utils::IsSupportedKeywordFormat(
              css_parsing_utils::FontFormatToId(font_format)) ||
-         EqualIgnoringASCIICase(font_format, "woff-variations") ||
-         EqualIgnoringASCIICase(font_format, "truetype-variations") ||
-         EqualIgnoringASCIICase(font_format, "opentype-variations") ||
-         EqualIgnoringASCIICase(font_format, "woff2-variations");
+         EqualIgnoringAsciiCase(font_format, "woff-variations") ||
+         EqualIgnoringAsciiCase(font_format, "truetype-variations") ||
+         EqualIgnoringAsciiCase(font_format, "opentype-variations") ||
+         EqualIgnoringAsciiCase(font_format, "woff2-variations");
 }
 
 CSSFontFaceSrcValue::FontTechnology ValueIDToTechnology(CSSValueID valueID) {
   switch (valueID) {
+    case CSSValueID::kAvar2:
+      return CSSFontFaceSrcValue::FontTechnology::kTechnologyAvar2;
     case CSSValueID::kFeaturesAat:
       return CSSFontFaceSrcValue::FontTechnology::kTechnologyFeaturesAAT;
     case CSSValueID::kFeaturesOpentype:
@@ -108,6 +111,8 @@ CSSFontFaceSrcValue::FontTechnology ValueIDToTechnology(CSSValueID valueID) {
       return CSSFontFaceSrcValue::FontTechnology::kTechnologyCDBT;
     case CSSValueID::kColorSbix:
       return CSSFontFaceSrcValue::FontTechnology::kTechnologySBIX;
+    case CSSValueID::kIncremental:
+      return CSSFontFaceSrcValue::FontTechnology::kTechnologyIncremental;
     default:
       NOTREACHED();
   }
@@ -293,8 +298,8 @@ CSSValue* ConsumeDescriptor(StyleRule::RuleType rule_type,
     case StyleRule::kMixin:
       return Parser::ParseAtFunctionOrMixinDescriptor(rule_type, id, stream,
                                                       context);
-    case StyleRule::kRoute:
-      return Parser::ParseAtRouteDescriptor(id, stream, context);
+    case StyleRule::kLocation:
+      return Parser::ParseAtLocationDescriptor(id, stream, context);
     case StyleRule::kCharset:
     case StyleRule::kContainer:
     case StyleRule::kStyle:
@@ -316,6 +321,7 @@ CSSValue* ConsumeDescriptor(StyleRule::RuleType rule_type,
     case StyleRule::kSupports:
     case StyleRule::kStartingStyle:
     case StyleRule::kResult:
+    case StyleRule::kPrivate:
     case StyleRule::kApplyMixin:
     case StyleRule::kContents:
     case StyleRule::kPositionTry:
@@ -511,15 +517,32 @@ CSSValue* AtRuleDescriptorParser::ParseAtViewTransitionDescriptor(
   switch (id) {
     case AtRuleDescriptorID::Navigation:
       stream.ConsumeWhitespace();
-      parsed_value =
-          css_parsing_utils::ConsumeIdent<CSSValueID::kAuto, CSSValueID::kNone>(
-              stream);
+      if (RuntimeEnabledFeatures::TwoPhaseViewTransitionEnabled()) {
+        parsed_value = css_parsing_utils::ConsumeIdent<
+            CSSValueID::kAuto, CSSValueID::kNone, CSSValueID::kPreview>(stream);
+      } else {
+        parsed_value =
+            css_parsing_utils::ConsumeIdent<CSSValueID::kAuto,
+                                            CSSValueID::kNone>(stream);
+      }
       break;
     case AtRuleDescriptorID::Types: {
+      stream.ConsumeWhitespace();
+      if (CSSIdentifierValue* none =
+              css_parsing_utils::ConsumeIdent<CSSValueID::kNone>(stream)) {
+        parsed_value = none;
+        break;
+      }
+
       CSSValueList* types = CSSValueList::CreateSpaceSeparated();
-      parsed_value = types;
       while (!stream.AtEnd()) {
         stream.ConsumeWhitespace();
+        if (stream.AtEnd()) {
+          break;
+        }
+        if (stream.Peek().GetType() != kIdentToken) {
+          return nullptr;
+        }
         if (stream.Peek().Id() == CSSValueID::kNone) {
           return nullptr;
         }
@@ -527,11 +550,17 @@ CSSValue* AtRuleDescriptorParser::ParseAtViewTransitionDescriptor(
             CSSParserLocalContext::CreateWithoutPropertyForAtRules();
         CSSCustomIdentValue* ident = css_parsing_utils::ConsumeCustomIdent(
             stream, context, local_context);
-        if (!ident || ident->Value().StartsWith("-ua-")) {
+        if (!ident || ident->Value().starts_with("-ua-")) {
           return nullptr;
         }
         types->Append(*ident);
       }
+
+      if (!types->length()) {
+        return nullptr;
+      }
+
+      parsed_value = types;
       break;
     }
     default:
@@ -571,7 +600,7 @@ CSSValue* AtRuleDescriptorParser::ParseAtFunctionOrMixinDescriptor(
                                                            &context);
 }
 
-CSSValue* AtRuleDescriptorParser::ParseAtRouteDescriptor(
+CSSValue* AtRuleDescriptorParser::ParseAtLocationDescriptor(
     AtRuleDescriptorID id,
     CSSParserTokenStream& stream,
     const CSSParserContext& context) {
@@ -619,7 +648,7 @@ bool AtRuleDescriptorParser::ParseDescriptorValue(
                              ? CSSPropertyName(variable_name)
                              : CSSPropertyName(equivalent_property_id);
   parsed_descriptors.push_back(CSSPropertyValue(name, *result));
-  context.Count(context.Mode(), equivalent_property_id);
+  context.Count(equivalent_property_id);
   return true;
 }
 

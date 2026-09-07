@@ -66,6 +66,7 @@ TabMetadata::TabOrigin GetTabOriginFromLaunchType(int type) {
     case TabModel::TabLaunchType::FROM_SPECULATIVE_BACKGROUND_CREATION:
     case TabModel::TabLaunchType::FROM_BROWSER_ACTIONS:
     case TabModel::TabLaunchType::FROM_STARTUP:
+    case TabModel::TabLaunchType::FROM_SESSION_STARTUP_WITH_URLS_PREF:
     case TabModel::TabLaunchType::FROM_START_SURFACE:
     case TabModel::TabLaunchType::FROM_RESTORE_TABS_UI:
     case TabModel::TabLaunchType::UNSET:
@@ -73,6 +74,7 @@ TabMetadata::TabOrigin GetTabOriginFromLaunchType(int type) {
     case TabModel::TabLaunchType::FROM_COLLABORATION_BACKGROUND_IN_GROUP:
     case TabModel::TabLaunchType::FROM_REPARENTING_BACKGROUND:
     case TabModel::TabLaunchType::FROM_TAB_LIST_INTERFACE:
+    case TabModel::TabLaunchType::FROM_TAB_LIST_INTERFACE_BACKGROUND:
       return TabMetadata::TabOrigin::kOpenedWithoutUserAction;
 
     case TabModel::TabLaunchType::SIZE:
@@ -101,10 +103,8 @@ URLVisitAggregate::Tab MakeAggregateTab(
       GetTabOriginFromLaunchType(tab.tab_metadata.tab_android_launch_type);
   tab.tab_metadata.parent_tab_id = tab_android->GetParentId();
   std::optional<tab_groups::TabGroupId> tab_group_id = tab_android->GetGroup();
-  // Use optional::transform once C++23 is allowed.
-  tab.tab_metadata.local_tab_group_id =
-      tab_group_id.has_value() ? std::make_optional(tab_group_id->token())
-                               : std::nullopt;
+  tab.tab_metadata.local_tab_group_id = tab_group_id.transform(
+      [](const tab_groups::TabGroupId& id) { return id.token(); });
   auto* web_contents = tab_android->GetContents();
   if (!web_contents || !web_contents->GetPrimaryMainFrame()) {
     tab.tab_metadata.ukm_source_id = ukm::kInvalidSourceId;
@@ -150,7 +150,8 @@ void AndroidTabModelURLVisitDataFetcher::FetchURLVisitData(
     for (int i = 0; i < count; ++i) {
       auto* tab_android = model->GetTabAt(i);
       GURL url = tab_android->GetURL();
-      if (!url.is_valid() || url.spec() == chrome::kChromeUINativeNewTabURL) {
+      if (!url.is_valid() || url.spec() == chrome::kChromeUINativeNewTabURL ||
+          !url.SchemeIsHTTPOrHTTPS()) {
         continue;
       }
 

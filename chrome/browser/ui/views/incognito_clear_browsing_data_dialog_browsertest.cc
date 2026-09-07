@@ -6,15 +6,14 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
 #include "chrome/browser/ui/views/incognito_clear_browsing_data_dialog_coordinator.h"
-#include "chrome/browser/ui/views/profiles/avatar_toolbar_button.h"
+#include "chrome/browser/ui/views/toolbar/avatar_toolbar_button_interface.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/test/browser_test.h"
@@ -34,13 +33,14 @@ class IncognitoClearBrowsingDataDialogTest : public InProcessBrowserTest {
     auto* coordinator = GetCoordinator();
     BrowserView* browser_view =
         BrowserView::GetBrowserViewForBrowser(incognito_browser_);
-    views::View* anchor_view =
-        browser_view->toolbar_button_provider()->GetAvatarToolbarButton();
-    coordinator->Show(type, anchor_view);
+    views::BubbleAnchor anchor = browser_view->toolbar_button_provider()
+                                     ->GetAvatarToolbarButtonInterface()
+                                     ->GetBubbleAnchor(*incognito_browser_);
+    coordinator->Show(type, anchor);
     EXPECT_TRUE(coordinator->IsShowing());
   }
 
-  Browser* GetIncognitoBrowser() { return incognito_browser_; }
+  BrowserWindowInterface* GetIncognitoBrowser() { return incognito_browser_; }
 
   IncognitoClearBrowsingDataDialog* GetDialogView() {
     return GetCoordinator()->GetIncognitoClearBrowsingDataDialogForTesting();
@@ -52,12 +52,13 @@ class IncognitoClearBrowsingDataDialogTest : public InProcessBrowserTest {
   }
 
   IncognitoClearBrowsingDataDialogCoordinator* GetCoordinator() {
-    return incognito_browser_->GetFeatures()
-        .incognito_clear_browsing_data_dialog_coordinator();
+    return IncognitoClearBrowsingDataDialogCoordinator::From(
+        incognito_browser_);
   }
 
  private:
-  raw_ptr<Browser, AcrossTasksDanglingUntriaged> incognito_browser_ = nullptr;
+  raw_ptr<BrowserWindowInterface, AcrossTasksDanglingUntriaged>
+      incognito_browser_ = nullptr;
 };
 
 // Used to test that the bubble widget is destroyed before the host browser.
@@ -122,7 +123,8 @@ IN_PROC_BROWSER_TEST_F(IncognitoClearBrowsingDataDialogTest,
       "Incognito.ClearBrowsingDataDialog.ActionType",
       IncognitoClearBrowsingDataDialog::DialogActionType::kCloseIncognito, 1);
   observer.Wait();
-  ASSERT_EQ(0u, chrome::GetIncognitoBrowserCount());
+  ASSERT_EQ(0u,
+            GlobalBrowserCollection::GetInstance()->GetIncognitoBrowserCount());
 }
 
 IN_PROC_BROWSER_TEST_F(IncognitoClearBrowsingDataDialogTest, TestCancelButton) {
@@ -149,19 +151,20 @@ IN_PROC_BROWSER_TEST_F(IncognitoClearBrowsingDataDialogTest,
 
   CloseBrowserSynchronously(GetIncognitoBrowser());
 
-  ASSERT_EQ(0u, chrome::GetIncognitoBrowserCount());
+  ASSERT_EQ(0u,
+            GlobalBrowserCollection::GetInstance()->GetIncognitoBrowserCount());
 }
 
 IN_PROC_BROWSER_TEST_F(IncognitoClearBrowsingDataDialogTest,
                        ClearBrowsingDataNavigationInIncognito) {
-  Browser* incognito_browser = CreateIncognitoBrowser();
+  BrowserWindowInterface* incognito_browser = CreateIncognitoBrowser();
   ui_test_utils::SendToOmniboxAndSubmit(incognito_browser,
                                         "chrome://settings/clearBrowserData");
   std::u16string current_tab_title;
   ui_test_utils::GetCurrentTabTitle(incognito_browser, &current_tab_title);
   EXPECT_EQ(u"about:blank", current_tab_title);
-  auto* coordinator = incognito_browser->GetFeatures()
-                          .incognito_clear_browsing_data_dialog_coordinator();
+  auto* coordinator =
+      IncognitoClearBrowsingDataDialogCoordinator::From(incognito_browser);
   ASSERT_TRUE(coordinator->IsShowing());
 }
 
@@ -189,7 +192,8 @@ IN_PROC_BROWSER_TEST_F(IncognitoClearBrowsingDataDialogTest,
   ui_test_utils::BrowserDestroyedObserver observer(GetIncognitoBrowser());
   GetDialogView()->CancelDialog();
   observer.Wait();
-  ASSERT_EQ(0u, chrome::GetIncognitoBrowserCount());
+  ASSERT_EQ(0u,
+            GlobalBrowserCollection::GetInstance()->GetIncognitoBrowserCount());
 }
 
 IN_PROC_BROWSER_TEST_F(IncognitoClearBrowsingDataDialogTest, TestGotItButton) {

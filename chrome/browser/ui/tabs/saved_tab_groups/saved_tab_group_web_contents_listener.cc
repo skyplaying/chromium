@@ -29,12 +29,14 @@
 #include "components/saved_tab_groups/public/saved_tab_group_tab.h"
 #include "components/saved_tab_groups/public/tab_group_sync_service.h"
 #include "components/saved_tab_groups/public/utils.h"
+#include "components/tab_groups/tab_group_id.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/page_transition_types.h"
+#include "url/gurl.h"
 
 namespace tab_groups {
 namespace {
@@ -62,7 +64,8 @@ bool IsUserTriggeredMainFrameNavigation(
       return false;
     }
 
-    if (navigation_handle->GetPageTransition() & ui::PAGE_TRANSITION_RELOAD) {
+    if (ui::PageTransitionCoreTypeIs(navigation_handle->GetPageTransition(),
+                                     ui::PAGE_TRANSITION_RELOAD)) {
       return false;
     }
   }
@@ -182,8 +185,8 @@ void SavedTabGroupWebContentsListener::NavigateToUrlInternal(const GURL& url) {
     return;
   }
 
-  // Dont navigate to the new URL if its not valid for sync.
-  if (!IsURLValidForSavedTabGroups(url)) {
+  // Dont navigate to the new URL if its not valid for local tabs.
+  if (!IsURLValidForLocalTab(url)) {
     return;
   }
 
@@ -287,9 +290,8 @@ void SavedTabGroupWebContentsListener::DidFinishNavigation(
     // Note: this does not overlap with the conditions checked in
     // IsUserTriggeredMainFrameNavigation.
     if (MostRecentSharedTabUpdateStore* most_recent_shared_tab_update_store =
-            local_tab_->GetBrowserWindowInterface()
-                ->GetFeatures()
-                .most_recent_shared_tab_update_store()) {
+            MostRecentSharedTabUpdateStore::From(
+                local_tab_->GetBrowserWindowInterface())) {
       most_recent_shared_tab_update_store->SetLastUpdatedTab(
           group->local_group_id().value(), local_tab_id());
     }

@@ -14,12 +14,14 @@
 
 #include "base/check_op.h"
 #include "base/dcheck_is_on.h"
+#include "base/feature_list.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/strings/string_util.h"
 #include "base/trace_event/memory_usage_estimator.h"
 #include "base/trace_event/trace_event.h"
 #include "url/url_canon_stdstring.h"
+#include "url/url_features.h"
 #include "url/url_util.h"
 
 GURL::GURL() : is_valid_(false) {}
@@ -27,6 +29,7 @@ GURL::GURL() : is_valid_(false) {}
 GURL::GURL(const GURL& other)
     : spec_(other.spec_),
       is_valid_(other.is_valid_),
+      is_http_or_https_(other.is_http_or_https_),
       parsed_(other.parsed_) {
   if (other.inner_url_)
     inner_url_ = std::make_unique<GURL>(*other.inner_url_);
@@ -37,9 +40,11 @@ GURL::GURL(const GURL& other)
 GURL::GURL(GURL&& other) noexcept
     : spec_(std::move(other.spec_)),
       is_valid_(other.is_valid_),
+      is_http_or_https_(other.is_http_or_https_),
       parsed_(other.parsed_),
       inner_url_(std::move(other.inner_url_)) {
   other.is_valid_ = false;
+  other.is_http_or_https_ = false;
   other.parsed_ = url::Parsed();
 }
 
@@ -78,6 +83,7 @@ void GURL::InitCanonical(T input_spec, bool trim_path_end) {
     inner_url_ =
         std::make_unique<GURL>(ParsedSpecView(), *parsed_.inner_parsed(), true);
   }
+  is_http_or_https_ = SchemeIsHTTPOrHTTPSInternal();
   // Valid URLs always have non-empty specs.
   DCHECK(!is_valid_ || !spec_.empty());
 }
@@ -87,6 +93,7 @@ void GURL::InitializeFromCanonicalSpec() {
     inner_url_ =
         std::make_unique<GURL>(ParsedSpecView(), *parsed_.inner_parsed(), true);
   }
+  is_http_or_https_ = SchemeIsHTTPOrHTTPSInternal();
 
 #if DCHECK_IS_ON()
   // For testing purposes, check that the parsed canonical URL is identical to
@@ -127,6 +134,7 @@ GURL::~GURL() = default;
 GURL& GURL::operator=(const GURL& other) {
   spec_ = other.spec_;
   is_valid_ = other.is_valid_;
+  is_http_or_https_ = other.is_http_or_https_;
   parsed_ = other.parsed_;
 
   if (!other.inner_url_)
@@ -142,10 +150,12 @@ GURL& GURL::operator=(const GURL& other) {
 GURL& GURL::operator=(GURL&& other) noexcept {
   spec_ = std::move(other.spec_);
   is_valid_ = other.is_valid_;
+  is_http_or_https_ = other.is_http_or_https_;
   parsed_ = other.parsed_;
   inner_url_ = std::move(other.inner_url_);
 
   other.is_valid_ = false;
+  other.is_http_or_https_ = false;
   other.parsed_ = url::Parsed();
   return *this;
 }
@@ -180,6 +190,7 @@ GURL GURL::Resolve(std::string_view relative) const {
     result.inner_url_ = std::make_unique<GURL>(
         result.ParsedSpecView(), *result.parsed_.inner_parsed(), true);
   }
+  result.is_http_or_https_ = result.SchemeIsHTTPOrHTTPSInternal();
   return result;
 }
 
@@ -203,6 +214,7 @@ GURL GURL::Resolve(std::u16string_view relative) const {
     result.inner_url_ = std::make_unique<GURL>(
         result.ParsedSpecView(), *result.parsed_.inner_parsed(), true);
   }
+  result.is_http_or_https_ = result.SchemeIsHTTPOrHTTPSInternal();
   return result;
 }
 
@@ -221,6 +233,7 @@ GURL GURL::ReplaceComponents(const Replacements& replacements) const {
   output.Complete();
 
   result.ProcessFileSystemURLAfterReplaceComponents();
+  result.is_http_or_https_ = result.SchemeIsHTTPOrHTTPSInternal();
   return result;
 }
 
@@ -239,7 +252,7 @@ GURL GURL::ReplaceComponents(const ReplacementsW& replacements) const {
   output.Complete();
 
   result.ProcessFileSystemURLAfterReplaceComponents();
-
+  result.is_http_or_https_ = result.SchemeIsHTTPOrHTTPSInternal();
   return result;
 }
 
@@ -342,7 +355,29 @@ bool GURL::SchemeIs(std::string_view lower_ascii_scheme) const {
   return scheme() == lower_ascii_scheme;
 }
 
+// Implemented out-of-line in gurl.cc during the Finch experiment
+// (kCacheGurlSchemeIsHttpOrHttpsResult) to avoid including
+// "base/feature_list.h" in url/gurl.h. Because url/gurl.h is transitively
+// included across virtually every translation unit in Chromium, including
+// base/feature_list.h causes a ~635 MiB compiler input size regression
+// on the compile-size trybot. Implementing out-of-line during Finch also
+// guarantees an identical function-call overhead between control and
+// treatment arms.
+//
+// Once the Finch experiment completes, remove this implementation,
+// SchemeIsHTTPOrHTTPSInternal(), and the feature flag, and inline the method
+// directly in url/gurl.h as:
+//   bool SchemeIsHTTPOrHTTPS() const { return is_http_or_https_; }
+// See TODO(crbug.com/515625270).
 bool GURL::SchemeIsHTTPOrHTTPS() const {
+  if (base::FeatureList::GetInstance() &&
+      base::FeatureList::IsEnabled(url::kCacheGurlSchemeIsHttpOrHttpsResult)) {
+    return is_http_or_https_;
+  }
+  return SchemeIsHTTPOrHTTPSInternal();
+}
+
+bool GURL::SchemeIsHTTPOrHTTPSInternal() const {
   return SchemeIs(url::kHttpsScheme) || SchemeIs(url::kHttpScheme);
 }
 
@@ -467,6 +502,7 @@ bool GURL::EqualsIgnoringRef(const GURL& other) const {
 void GURL::Swap(GURL* other) {
   spec_.swap(other->spec_);
   std::swap(is_valid_, other->is_valid_);
+  std::swap(is_http_or_https_, other->is_http_or_https_);
   std::swap(parsed_, other->parsed_);
   inner_url_.swap(other->inner_url_);
 }

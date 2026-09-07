@@ -9,6 +9,7 @@
 #include "base/check_deref.h"
 #include "base/test/bind.h"
 #include "components/metrics/metrics_pref_names.h"
+#include "components/metrics/profile_metrics_service.h"
 #include "components/policy/core/common/management/management_service.h"
 #include "components/regional_capabilities/regional_capabilities_service.h"
 #include "components/regional_capabilities/regional_capabilities_test_utils.h"
@@ -41,6 +42,8 @@ SearchEnginesTestEnvironment::ServiceFactories CreateDefaultFactories(
             environment.pref_service(),
             environment.search_engine_choice_service(),
             environment.prepopulate_data_resolver(),
+            environment.regional_capabilities_service(),
+            environment.profile_metrics_service(),
             deps.template_url_service_initializer);
       });
 
@@ -74,7 +77,8 @@ SearchEnginesTestEnvironment::GetSearchEngineChoiceServiceFactory(
             environment.regional_capabilities_service(),
             environment.prepopulate_data_resolver(),
             CHECK_DEREF(environment.identity_test_env().identity_manager()),
-            environment.management_service());
+            environment.management_service(),
+            environment.profile_metrics_service());
         if (!skip_init) {
           service->Init();
         }
@@ -159,6 +163,15 @@ policy::ManagementService& SearchEnginesTestEnvironment::management_service() {
             std::unique_ptr<policy::ManagementStatusProvider>>{});
   }
   return *management_service_;
+}
+
+metrics::ProfileMetricsService&
+SearchEnginesTestEnvironment::profile_metrics_service() {
+  if (!profile_metrics_service_) {
+    profile_metrics_service_ = std::make_unique<metrics::ProfileMetricsService>(
+        metrics::ProfileMetricsContext(1));
+  }
+  return *profile_metrics_service_;
 }
 
 SearchEngineChoiceService&

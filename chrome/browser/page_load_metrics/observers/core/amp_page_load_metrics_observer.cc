@@ -189,7 +189,7 @@ void AMPPageLoadMetricsObserver::OnDidFinishSubFrameNavigation(
   if (!navigation_handle->HasCommitted())
     return;
 
-  // Ignore same document navigations; see crbug.com/1104365
+  // Ignore same document navigations; see crbug.com/40705062
   if (navigation_handle->IsSameDocument())
     return;
 
@@ -262,7 +262,7 @@ void AMPPageLoadMetricsObserver::OnEventTimingUpdate(
     return;
 
   it->second.interaction_to_next_paint_calculator.AddNewEventTimings(
-      *subframe_rfh, event_timings);
+      subframe_rfh->GetGlobalFrameToken(), event_timings);
 }
 
 void AMPPageLoadMetricsObserver::OnSubFrameRenderDataUpdate(

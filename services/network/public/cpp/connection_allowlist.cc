@@ -4,6 +4,8 @@
 
 #include "services/network/public/cpp/connection_allowlist.h"
 
+#include <algorithm>
+
 #include "components/url_pattern/simple_url_pattern_matcher.h"
 #include "url/gurl.h"
 
@@ -26,6 +28,10 @@ bool ConnectionAllowlist::operator==(const ConnectionAllowlist& other) const =
 bool ConnectionAllowlistMatchesUrl(
     const ConnectionAllowlist& connection_allowlist,
     const GURL& url) {
+  // Local schemes don't touch the network, so they bypass the allowlist.
+  if (url.SchemeIsLocal()) {
+    return true;
+  }
   for (const auto& url_string : connection_allowlist.allowlist) {
     auto matcher = url_pattern::SimpleUrlPatternMatcher::Create(
         url_string, /*base_url=*/nullptr);
@@ -42,6 +48,35 @@ bool ConnectionAllowlistMatchesUrl(
   }
 
   return false;
+}
+
+bool ConnectionAllowlistSubsumes(const ConnectionAllowlist& required,
+                                 const ConnectionAllowlist& candidate) {
+  // Every endpoint the candidate would permit must also be permitted by the
+  // required allowlist. An empty candidate allowlist permits no network
+  // endpoints and is therefore trivially subsumed (it is maximally strict).
+  for (const auto& entry : candidate.allowlist) {
+    if (!std::ranges::contains(required.allowlist, entry)) {
+      return false;
+    }
+  }
+
+  // `candidate` must also be at least as strict as `required` for redirects and
+  // WebRTC. kBlock is stricter than kAllow, so the only disallowed combination
+  // is `required` blocking while `candidate` would allow.
+  if (required.redirect_behavior ==
+          ConnectionAllowlist::RedirectBehavior::kBlock &&
+      candidate.redirect_behavior ==
+          ConnectionAllowlist::RedirectBehavior::kAllow) {
+    return false;
+  }
+  if (required.webrtc_behavior == ConnectionAllowlist::WebRtcBehavior::kBlock &&
+      candidate.webrtc_behavior ==
+          ConnectionAllowlist::WebRtcBehavior::kAllow) {
+    return false;
+  }
+
+  return true;
 }
 
 ConnectionAllowlists::ConnectionAllowlists() = default;

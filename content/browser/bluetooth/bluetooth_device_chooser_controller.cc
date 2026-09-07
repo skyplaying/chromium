@@ -11,10 +11,10 @@
 #include "base/containers/flat_set.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "base/types/optional_util.h"
 #include "content/browser/bluetooth/bluetooth_blocklist.h"
 #include "content/browser/bluetooth/bluetooth_metrics.h"
@@ -314,11 +314,23 @@ void BluetoothDeviceChooserController::GetDevice(
       &BluetoothDeviceChooserController::OnBluetoothChooserEvent,
       base::Unretained(this));
 
+  // The delegate's chooser implementation may spin a nested message loop (e.g.
+  // to drop fullscreen), during which the frame may be detached and the
+  // controller destroyed. Check that the controller is still alive before
+  // accessing member variables.
+  base::WeakPtr<BluetoothDeviceChooserController> weak_this =
+      weak_ptr_factory_.GetWeakPtr();
+  std::unique_ptr<BluetoothChooser> chooser;
   if (auto* delegate = GetContentClient()->browser()->GetBluetoothDelegate()) {
-    chooser_ = delegate->RunBluetoothChooser(&*render_frame_host_,
-                                             std::move(chooser_event_handler));
+    chooser = delegate->RunBluetoothChooser(&*render_frame_host_,
+                                            std::move(chooser_event_handler));
   }
 
+  if (!weak_this) {
+    return;
+  }
+
+  chooser_ = std::move(chooser);
   if (!chooser_) {
     PostErrorCallback(WebBluetoothResult::WEB_BLUETOOTH_NOT_SUPPORTED);
     return;

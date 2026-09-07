@@ -31,6 +31,7 @@ class MockAutofillAgent : public mojom::AutofillAgent {
               TriggerFormExtractionWithResponse,
               (base::OnceCallback<void(bool)>),
               (override));
+  MOCK_METHOD(void, ClearFormCache, (), (override));
   MOCK_METHOD(
       void,
       ExtractFormWithField,
@@ -58,10 +59,6 @@ class MockAutofillAgent : public mojom::AutofillAgent {
               (override));
   MOCK_METHOD(void, ExposeDomNodeIds, (), (override));
   MOCK_METHOD(void, ClearPreviewedForm, (), (override));
-  MOCK_METHOD(void,
-              FindPotentialSiwgButtons,
-              (FindPotentialSiwgButtonsCallback),
-              (override));
   MOCK_METHOD(void,
               TriggerSuggestions,
               (FieldRendererId field_id,
@@ -96,9 +93,11 @@ class MockAutofillAgent : public mojom::AutofillAgent {
                uint32_t number_of_ancestor_levels_to_search,
                base::OnceCallback<void(const std::string&)>),
               (override));
+  MOCK_METHOD(void, ScrollFieldIntoView, (FieldRendererId), (override));
   MOCK_METHOD(void,
-              DispatchEmailVerifiedEvent,
-              (::autofill::FieldRendererId, const std::string&),
+              ObserveFieldVisibility,
+              (FieldRendererId,
+               mojo::PendingRemote<mojom::AutofillVisibilityObserver>),
               (override));
 
  private:

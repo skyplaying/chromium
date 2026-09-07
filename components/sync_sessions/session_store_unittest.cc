@@ -13,14 +13,18 @@
 #include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
 #include "base/test/mock_callback.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
+#include "base/test/test_future.h"
 #include "components/prefs/testing_pref_service.h"
+#include "components/sync/base/time.h"
 #include "components/sync/protocol/entity_data.h"
 #include "components/sync/protocol/entity_metadata.pb.h"
 #include "components/sync/protocol/session_specifics.pb.h"
 #include "components/sync/test/data_type_store_test_util.h"
 #include "components/sync/test/test_matchers.h"
 #include "components/sync_device_info/local_device_info_util.h"
+#include "components/sync_sessions/features.h"
 #include "components/sync_sessions/mock_sync_sessions_client.h"
 #include "components/sync_sessions/session_sync_prefs.h"
 #include "components/sync_sessions/test_matchers.h"
@@ -41,11 +45,13 @@ using syncer::MetadataBatch;
 using syncer::MetadataBatchContains;
 using syncer::NoModelError;
 using testing::_;
+using testing::Contains;
 using testing::ElementsAre;
 using testing::Eq;
 using testing::IsEmpty;
 using testing::Matcher;
 using testing::NiceMock;
+using testing::Not;
 using testing::NotNull;
 using testing::Pair;
 using testing::Return;
@@ -255,8 +261,8 @@ TEST_F(SessionStoreTest, ShouldRecreateEmptyStore) {
   ASSERT_THAT(ReadAllPersistedDataFrom(underlying_store_.get()),
               Not(IsEmpty()));
 
-  auto recreate_store_callback =
-      SessionStore::DeleteAllDataAndMetadata(TakeSessionStore());
+  auto recreate_store_callback = SessionStore::DeleteAllDataAndMetadata(
+      /*metadata_change_list=*/nullptr, TakeSessionStore());
 
   // Re-create the store with a new cache GUID / session tag.
   const std::string kNewLocalCacheGuid = "new_cache_guid";
@@ -714,7 +720,7 @@ TEST_F(SessionStoreTest, ShouldDeleteForeignData) {
         session_store()->CreateWriteBatch(/*error_handler=*/base::DoNothing());
 
     EXPECT_THAT(batch->DeleteForeignEntityAndUpdateTracker(header_storage_key),
-                ElementsAre(header_storage_key, tab_storage_key2));
+                UnorderedElementsAre(header_storage_key, tab_storage_key2));
 
     SessionStore::WriteBatch::Commit(std::move(batch));
   }

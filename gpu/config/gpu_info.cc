@@ -62,6 +62,12 @@ void EnumerateVideoEncodeAcceleratorSupportedProfile(
   enumerator->AddInt("maxFramerateNumerator", profile.max_framerate_numerator);
   enumerator->AddInt("maxFramerateDenominator",
                      profile.max_framerate_denominator);
+  if (profile.chroma_sampling.has_value()) {
+    enumerator->AddInt("chromaSampling", profile.chroma_sampling.value());
+  }
+  if (profile.bit_depth.has_value()) {
+    enumerator->AddInt("bitDepth", profile.bit_depth.value());
+  }
   enumerator->EndVideoEncodeAcceleratorSupportedProfile();
 }
 
@@ -113,24 +119,6 @@ VideoDecodeAcceleratorCapabilities::VideoDecodeAcceleratorCapabilities(
 
 VideoDecodeAcceleratorCapabilities::~VideoDecodeAcceleratorCapabilities() =
     default;
-
-ImageDecodeAcceleratorSupportedProfile::ImageDecodeAcceleratorSupportedProfile()
-    : image_type(ImageDecodeAcceleratorType::kUnknown) {}
-
-ImageDecodeAcceleratorSupportedProfile::ImageDecodeAcceleratorSupportedProfile(
-    const ImageDecodeAcceleratorSupportedProfile& other) = default;
-
-ImageDecodeAcceleratorSupportedProfile::ImageDecodeAcceleratorSupportedProfile(
-    ImageDecodeAcceleratorSupportedProfile&& other) = default;
-
-ImageDecodeAcceleratorSupportedProfile::
-    ~ImageDecodeAcceleratorSupportedProfile() = default;
-
-ImageDecodeAcceleratorSupportedProfile& ImageDecodeAcceleratorSupportedProfile::
-operator=(const ImageDecodeAcceleratorSupportedProfile& other) = default;
-
-ImageDecodeAcceleratorSupportedProfile& ImageDecodeAcceleratorSupportedProfile::
-operator=(ImageDecodeAcceleratorSupportedProfile&& other) = default;
 
 GPUInfo::GPUDevice::GPUDevice() = default;
 

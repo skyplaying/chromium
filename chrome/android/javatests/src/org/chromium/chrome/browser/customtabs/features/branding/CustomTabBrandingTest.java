@@ -25,6 +25,7 @@ import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.IntentHandler;
 import org.chromium.chrome.browser.customtabs.CustomTabsIntentTestUtils;
 import org.chromium.chrome.browser.customtabs.IncognitoCustomTabActivityTestRule;
@@ -32,7 +33,6 @@ import org.chromium.chrome.browser.customtabs.features.toolbar.CustomTabToolbar;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.components.embedder_support.util.UrlConstants;
 import org.chromium.net.test.EmbeddedTestServerRule;
 import org.chromium.ui.test.util.RenderTestRule;
@@ -45,8 +45,6 @@ import java.io.IOException;
 @Batch(Batch.PER_CLASS)
 public class CustomTabBrandingTest {
     private static final String TEST_PAGE = "/chrome/test/data/android/google.html";
-    // Keep consistent with the key in SharedPreferencesBrandingTimeStorage.
-    private static final String BRANDING_SHARED_PREF_KEY = "pref_cct_brand_show_time";
     private static final String TOOLBAR_BRANDING_RENDER_IMAGE_ID = "cct_branding_toolbar";
 
     @Rule

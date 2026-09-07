@@ -17,12 +17,13 @@ export function getHtml(this: ComposeboxMatchElement) {
     </div>
   </div>
   <div id="textContainer" part="match-text-container">
-    ${this.computeContents_()}
+    ${this.match.contents}
   </div>
   <cr-icon-button id="remove" class="action-icon icon-clear"
-    aria-label="${this.computeRemoveButtonAriaLabel_()}"
+    part="match-remove-button"
+    aria-label="${this.match.removeButtonA11yLabel}"
     @click="${this.onRemoveButtonClick_}"
-    @mousedown="${this.onRemoveButtonMouseDown_}"
+    @mousedown="${this.onRemoveButtonMousedown_}"
     title="${this.removeButtonTitle_}"
     ?hidden="${!this.match.supportsDeletion}"
     tabindex="2">

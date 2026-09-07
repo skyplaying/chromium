@@ -12,7 +12,6 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/observer_list.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
@@ -22,10 +21,12 @@
 #include "content/browser/devtools/network_service_devtools_observer.h"
 #include "content/browser/devtools/service_worker_devtools_agent_host.h"
 #include "content/browser/devtools/service_worker_devtools_manager.h"
+#include "content/browser/hid/hid_service.h"
 #include "content/browser/loader/url_loader_factory_utils.h"
 #include "content/browser/network/cross_origin_embedder_policy_reporter.h"
 #include "content/browser/process_lock.h"
 #include "content/browser/renderer_host/render_process_host_impl.h"
+#include "content/browser/renderer_preferences_util.h"
 #include "content/browser/security/dip/document_isolation_policy_reporter.h"
 #include "content/browser/service_worker/service_worker_consts.h"
 #include "content/browser/service_worker/service_worker_content_settings_proxy_impl.h"
@@ -43,10 +44,8 @@
 #include "content/public/browser/child_process_host.h"
 #include "content/public/browser/hid_delegate.h"
 #include "content/public/browser/usb_delegate.h"
-#include "content/public/browser/web_ui_url_loader_factory.h"
 #include "content/public/common/child_process_id_util.h"
 #include "content/public/common/content_client.h"
-#include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/url_constants.h"
 #include "ipc/constants.mojom.h"
@@ -62,10 +61,6 @@
 #include "third_party/blink/public/mojom/renderer_preference_watcher.mojom.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_object.mojom.h"
 #include "url/gurl.h"
-
-#if !BUILDFLAG(IS_ANDROID)
-#include "content/browser/hid/hid_service.h"
-#endif
 
 // TODO(crbug.com/40568315): Much of this file, which dealt with thread hops
 // between UI and IO, can likely be simplified when the service worker core
@@ -101,8 +96,8 @@ bool HasSentStartWorker(EmbeddedWorkerInstance::StartingPhase phase) {
   return false;
 }
 
-void NotifyForegroundServiceWorker(bool added, int process_id) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+void NotifyForegroundServiceWorker(bool added, ChildProcessId process_id) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 
   RenderProcessHost* rph = RenderProcessHost::FromID(process_id);
   if (!rph)
@@ -125,7 +120,7 @@ void NotifyForegroundServiceWorker(bool added, int process_id) {
 // ServiceWorkerOnUI.
 class EmbeddedWorkerInstance::DevToolsProxy {
  public:
-  DevToolsProxy(int process_id,
+  DevToolsProxy(ChildProcessId process_id,
                 int agent_route_id,
                 const base::UnguessableToken& devtools_id)
       : process_id_(process_id),
@@ -136,7 +131,7 @@ class EmbeddedWorkerInstance::DevToolsProxy {
   DevToolsProxy& operator=(const DevToolsProxy&) = delete;
 
   ~DevToolsProxy() {
-    DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
     ServiceWorkerDevToolsManager::GetInstance()->WorkerStopped(process_id_,
                                                                agent_route_id_);
   }
@@ -144,14 +139,14 @@ class EmbeddedWorkerInstance::DevToolsProxy {
   void NotifyWorkerReadyForInspection(
       mojo::PendingRemote<blink::mojom::DevToolsAgent> agent_remote,
       mojo::PendingReceiver<blink::mojom::DevToolsAgentHost> host_receiver) {
-    DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
     ServiceWorkerDevToolsManager::GetInstance()->WorkerReadyForInspection(
         process_id_, agent_route_id_, std::move(agent_remote),
         std::move(host_receiver));
   }
 
   void NotifyWorkerVersionInstalled() {
-    DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
     ServiceWorkerDevToolsManager::GetInstance()->WorkerVersionInstalled(
         process_id_, agent_route_id_);
   }
@@ -167,7 +162,7 @@ class EmbeddedWorkerInstance::DevToolsProxy {
   const base::UnguessableToken& devtools_id() const { return devtools_id_; }
 
  private:
-  const int process_id_;
+  const ChildProcessId process_id_;
   const int agent_route_id_;
   const base::UnguessableToken devtools_id_;
   bool worker_stop_ignored_notified_ = false;
@@ -182,29 +177,29 @@ class EmbeddedWorkerInstance::WorkerProcessHandle {
   WorkerProcessHandle(
       const base::WeakPtr<ServiceWorkerProcessManager>& process_manager,
       int embedded_worker_id,
-      int process_id)
+      ChildProcessId process_id)
       : process_manager_(process_manager),
         embedded_worker_id_(embedded_worker_id),
         process_id_(process_id) {
-    DCHECK_CURRENTLY_ON(BrowserThread::UI);
-    DCHECK_NE(ChildProcessHost::kInvalidUniqueID, process_id_);
+    CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+    CHECK(process_id_, base::NotFatalUntil::M159);
   }
 
   WorkerProcessHandle(const WorkerProcessHandle&) = delete;
   WorkerProcessHandle& operator=(const WorkerProcessHandle&) = delete;
 
   ~WorkerProcessHandle() {
-    DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
     process_manager_->ReleaseWorkerProcess(embedded_worker_id_);
   }
 
-  int process_id() const { return process_id_; }
+  ChildProcessId process_id() const { return process_id_; }
 
  private:
   base::WeakPtr<ServiceWorkerProcessManager> process_manager_;
 
   const int embedded_worker_id_;
-  const int process_id_;
+  const ChildProcessId process_id_;
 };
 
 // Info that is recorded as UMA on OnStarted().
@@ -225,7 +220,7 @@ struct EmbeddedWorkerInstance::StartInfo {
 };
 
 EmbeddedWorkerInstance::~EmbeddedWorkerInstance() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   in_dtor_ = true;
   ReleaseProcess();
 }
@@ -236,13 +231,14 @@ void EmbeddedWorkerInstance::Start(
   TRACE_EVENT1("ServiceWorker", "EmbeddedWorkerInstance::Start", "script_url",
                params->script_url.spec());
 
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(context_);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+  CHECK(context_, base::NotFatalUntil::M159);
   restart_count_++;
-  DCHECK_EQ(blink::EmbeddedWorkerStatus::kStopped, status_);
+  CHECK_EQ(blink::EmbeddedWorkerStatus::kStopped, status_,
+           base::NotFatalUntil::M159);
 
-  DCHECK_NE(blink::mojom::kInvalidServiceWorkerVersionId,
-            params->service_worker_version_id);
+  CHECK_NE(blink::mojom::kInvalidServiceWorkerVersionId,
+           params->service_worker_version_id, base::NotFatalUntil::M159);
 
   auto start_time = base::TimeTicks::Now();
   status_ = blink::EmbeddedWorkerStatus::kStarting;
@@ -293,7 +289,7 @@ void EmbeddedWorkerInstance::Start(
     OnSetupFailed(std::move(callback), status);
     return;
   }
-  const int process_id = process_info->process_id;
+  const ChildProcessId process_id = process_info->process_id;
   RenderProcessHost* rph = RenderProcessHost::FromID(process_id);
   // TODO(falken): This CHECK should no longer fail, so turn to a DCHECK it if
   // crash reports agree. Consider also checking for
@@ -304,8 +300,9 @@ void EmbeddedWorkerInstance::Start(
   // the worker's URL. This is needed so that the worker process can access data
   // belonging to that origin.
   const url::Origin origin = url::Origin::Create(params->script_url);
-  ChildProcessSecurityPolicyImpl::GetInstance()->AddCommittedOrigin(process_id,
-                                                                    origin);
+  // TODO(crbug.com/379869738) Remove GetUnsafeValue.
+  ChildProcessSecurityPolicyImpl::GetInstance()->AddCommittedOrigin(
+      process_id.GetUnsafeValue(), origin);
 
   // Pass the cross-origin isolated capability of the worker.
   params->cross_origin_isolated =
@@ -375,12 +372,18 @@ void EmbeddedWorkerInstance::Start(
     // needed for non-installed workers. It's OK to not support reconnection to
     // the network service because it can only used until the service worker
     // reaches the 'installed' state.
+    //
+    // While the initial fetch of the main script (before the worker starts)
+    // might use the creator_network_restrictions_id, once the
+    // EmbeddedWorkerInstance is involved in starting the worker, it
+    // transitions to using the worker's own identity and restrictions.
     if (!params->is_installed) {
       factory_bundle_for_new_scripts = CreateFactoryBundle(
           rph, routing_id, owner_version_->key(), client_security_state.Clone(),
           std::move(coep_reporter_for_scripts), std::move(dip_reporter),
           ContentBrowserClient::URLLoaderFactoryType::kServiceWorkerScript,
-          params->devtools_worker_token.ToString());
+          params->devtools_worker_token.ToString(),
+          owner_version_->network_restrictions_id());
     }
 
     // The bundle for the renderer is passed to the service worker, and
@@ -393,31 +396,16 @@ void EmbeddedWorkerInstance::Start(
         std::move(client_security_state),
         std::move(coep_reporter_for_subresources), std::move(dip_reporter),
         ContentBrowserClient::URLLoaderFactoryType::kServiceWorkerSubResource,
-        params->devtools_worker_token.ToString());
+        params->devtools_worker_token.ToString(),
+        owner_version_->network_restrictions_id());
   }
-
-  // To enable runtime features, the render process must be locked to the site.
-  // These features are highly privileged, so the renderer process with such
-  // features enabled shouldn't be used for other sites.
-  //
-  // WebUI schemes are process isolated already. To isolate other sites, the
-  // embedder can override ContentBrowserClient::ShouldLockProcessToSite().
-  if (rph->GetProcessLock().IsLockedToSite()) {
-    GetContentClient()
-        ->browser()
-        ->UpdateEnabledBlinkRuntimeFeaturesInIsolatedWorker(
-            context_->wrapper()->browser_context(), params->script_url,
-            params->forced_enabled_runtime_features);
-  }
-  CHECK(params->forced_enabled_runtime_features.empty() ||
-        rph->GetProcessLock().IsLockedToSite());
 
   // TODO(crbug.com/40584626): Support changes to blink::RendererPreferences
   // while the worker is running.
-  DCHECK(context_->wrapper()->browser_context() ||
-         process_manager->IsShutdown());
+  CHECK(context_->wrapper()->browser_context() || process_manager->IsShutdown(),
+        base::NotFatalUntil::M159);
   params->renderer_preferences = blink::RendererPreferences();
-  GetContentClient()->browser()->UpdateRendererPreferencesForWorker(
+  UpdateRendererPreferencesForWorkerHelper(
       context_->wrapper()->browser_context(), &params->renderer_preferences);
 
   {
@@ -448,12 +436,13 @@ void EmbeddedWorkerInstance::Start(
 
   // Send the factory bundle for subresource loading from the service worker
   // (i.e. fetch()).
-  DCHECK(factory_bundle_for_renderer);
+  CHECK(factory_bundle_for_renderer, base::NotFatalUntil::M159);
   params->subresource_loader_factories = std::move(factory_bundle_for_renderer);
 
   // Build the URLLoaderFactory for loading new scripts, it's only needed if
   // this is a non-installed service worker.
-  DCHECK(factory_bundle_for_new_scripts || params->is_installed);
+  CHECK(factory_bundle_for_new_scripts || params->is_installed,
+        base::NotFatalUntil::M159);
   if (factory_bundle_for_new_scripts) {
     params->provider_info->script_loader_factory_remote =
         MakeScriptLoaderFactoryRemote(
@@ -546,16 +535,17 @@ EmbeddedWorkerInstance::EmbeddedWorkerInstance(
       devtools_attached_(false),
       network_accessed_for_script_(false),
       foreground_notified_(false) {
-  DCHECK(owner_version_);
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(context_);
+  CHECK(owner_version_, base::NotFatalUntil::M159);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+  CHECK(context_, base::NotFatalUntil::M159);
 }
 
 void EmbeddedWorkerInstance::OnProcessAllocated(
     std::unique_ptr<WorkerProcessHandle> handle,
     ServiceWorkerMetrics::StartSituation start_situation) {
-  DCHECK_EQ(blink::EmbeddedWorkerStatus::kStarting, status_);
-  DCHECK(!process_handle_);
+  CHECK_EQ(blink::EmbeddedWorkerStatus::kStarting, status_,
+           base::NotFatalUntil::M159);
+  CHECK(!process_handle_, base::NotFatalUntil::M159);
 
   process_handle_ = std::move(handle);
 
@@ -569,7 +559,7 @@ void EmbeddedWorkerInstance::OnProcessAllocated(
 void EmbeddedWorkerInstance::OnRegisteredToDevToolsManager(
     std::unique_ptr<DevToolsProxy> devtools_proxy) {
   if (devtools_proxy) {
-    DCHECK(!devtools_proxy_);
+    CHECK(!devtools_proxy_, base::NotFatalUntil::M159);
     devtools_proxy_ = std::move(devtools_proxy);
   }
   for (auto& observer : listener_list_)
@@ -578,10 +568,10 @@ void EmbeddedWorkerInstance::OnRegisteredToDevToolsManager(
 
 void EmbeddedWorkerInstance::SendStartWorker(
     blink::mojom::EmbeddedWorkerStartParamsPtr params) {
-  DCHECK(context_);
-  DCHECK(params->service_worker_receiver.is_valid());
-  DCHECK(params->controller_receiver.is_valid());
-  DCHECK(!instance_host_receiver_.is_bound());
+  CHECK(context_, base::NotFatalUntil::M159);
+  CHECK(params->service_worker_receiver.is_valid(), base::NotFatalUntil::M159);
+  CHECK(params->controller_receiver.is_valid(), base::NotFatalUntil::M159);
+  CHECK(!instance_host_receiver_.is_bound(), base::NotFatalUntil::M159);
 
   instance_host_receiver_.Bind(
       params->instance_host.InitWithNewEndpointAndPassReceiver());
@@ -606,7 +596,12 @@ void EmbeddedWorkerInstance::SendStartWorker(
   if (!params->outside_fetch_client_settings_object) {
     params->outside_fetch_client_settings_object =
         blink::mojom::FetchClientSettingsObject::New(
-            network::mojom::ReferrerPolicy::kDefault,
+            []() {
+              auto policies = blink::mojom::PolicyContainerPolicies::New();
+              policies->referrer_policy =
+                  network::mojom::ReferrerPolicy::kDefault;
+              return policies;
+            }(),
             /*outgoing_referrer=*/params->script_url,
             blink::mojom::InsecureRequestsPolicy::kDoNotUpgrade);
   }
@@ -619,6 +614,7 @@ void EmbeddedWorkerInstance::SendStartWorker(
 }
 
 void EmbeddedWorkerInstance::RequestTermination(
+    uint64_t observed_keepalive_sequence_number,
     RequestTerminationCallback callback) {
   if (status() != blink::EmbeddedWorkerStatus::kRunning &&
       status() != blink::EmbeddedWorkerStatus::kStopping) {
@@ -628,7 +624,8 @@ void EmbeddedWorkerInstance::RequestTermination(
     std::move(callback).Run(true /* will_be_terminated */);
     return;
   }
-  const bool will_be_terminated = owner_version_->OnRequestTermination();
+  const bool will_be_terminated =
+      owner_version_->OnRequestTermination(observed_keepalive_sequence_number);
   TRACE_EVENT1("ServiceWorker", "EmbeddedWorkerInstance::RequestTermination",
                "will_be_terminated", will_be_terminated);
 
@@ -723,11 +720,20 @@ void EmbeddedWorkerInstance::OnStarted(
     ServiceWorkerMetrics::RecordStartWorkerTiming(times, start_situation_);
   }
 
-  DCHECK_EQ(blink::EmbeddedWorkerStatus::kStarting, status_);
+  CHECK_EQ(blink::EmbeddedWorkerStatus::kStarting, status_,
+           base::NotFatalUntil::M159);
   status_ = blink::EmbeddedWorkerStatus::kRunning;
   pause_initializing_global_scope_ = false;
   thread_id_ = thread_id;
   inflight_start_info_.reset();
+
+  // The worker finished starting; re-evaluate whether its process still needs
+  // foreground priority. In particular this drops the startup foreground boost
+  // given to extension service workers in
+  // ServiceWorkerVersion::ShouldRequireForegroundPriority(), unless the worker
+  // still requires foreground priority for another reason.
+  UpdateForegroundPriority();
+
   for (auto& observer : listener_list_) {
     observer.OnStarted(start_status, fetch_handler_type, has_hid_event_handlers,
                        has_usb_event_handlers);
@@ -737,7 +743,7 @@ void EmbeddedWorkerInstance::OnStarted(
 }
 
 void EmbeddedWorkerInstance::OnStopped() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   blink::EmbeddedWorkerStatus old_status = status_;
   base::WeakPtr<EmbeddedWorkerInstance> weak_this = weak_factory_.GetWeakPtr();
   ReleaseProcess();
@@ -749,7 +755,7 @@ void EmbeddedWorkerInstance::OnStopped() {
 }
 
 void EmbeddedWorkerInstance::Detach() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   if (status() == blink::EmbeddedWorkerStatus::kStopped) {
     return;
   }
@@ -765,11 +771,12 @@ void EmbeddedWorkerInstance::Detach() {
 }
 
 void EmbeddedWorkerInstance::UpdateForegroundPriority() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   if (status() == blink::EmbeddedWorkerStatus::kStopping) {
     return;
   }
 
+  // TODO(crbug.com/379869738) Remove GetUnsafeValue.
   if (process_handle_ &&
       owner_version_->ShouldRequireForegroundPriority(process_id())) {
     NotifyForegroundServiceWorkerAdded();
@@ -781,8 +788,8 @@ void EmbeddedWorkerInstance::UpdateForegroundPriority() {
 void EmbeddedWorkerInstance::UpdateLoaderFactories(
     std::unique_ptr<blink::PendingURLLoaderFactoryBundle> script_bundle,
     std::unique_ptr<blink::PendingURLLoaderFactoryBundle> subresource_bundle) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  DCHECK(subresource_loader_updater_.is_bound());
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
+  CHECK(subresource_loader_updater_.is_bound(), base::NotFatalUntil::M159);
 
   // It's set to nullptr when the caller wants to update script bundle only.
   if (subresource_bundle) {
@@ -801,17 +808,16 @@ void EmbeddedWorkerInstance::UpdateLoaderFactories(
 void EmbeddedWorkerInstance::BindCacheStorage(
     mojo::PendingReceiver<blink::mojom::CacheStorage> receiver,
     const storage::BucketLocator& bucket_locator) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   pending_cache_storage_requests_.emplace_back(std::move(receiver),
                                                bucket_locator);
   BindCacheStorageInternal();
 }
 
-#if !BUILDFLAG(IS_ANDROID)
 void EmbeddedWorkerInstance::BindHidService(
     const url::Origin& origin,
     mojo::PendingReceiver<blink::mojom::HidService> receiver) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   HidDelegate* hid_delegate = GetContentClient()->browser()->GetHidDelegate();
   if (!hid_delegate) {
     return;
@@ -821,12 +827,11 @@ void EmbeddedWorkerInstance::BindHidService(
                        std::move(receiver));
   }
 }
-#endif  // !BUILDFLAG(IS_ANDROID)
 
 void EmbeddedWorkerInstance::BindUsbService(
     const url::Origin& origin,
     mojo::PendingReceiver<blink::mojom::WebUsbService> receiver) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   UsbDelegate* usb_delegate = GetContentClient()->browser()->GetUsbDelegate();
   if (!usb_delegate) {
     return;
@@ -857,8 +862,9 @@ EmbeddedWorkerInstance::CreateFactoryBundle(
     mojo::PendingRemote<network::mojom::DocumentIsolationPolicyReporter>
         dip_reporter,
     ContentBrowserClient::URLLoaderFactoryType factory_type,
-    const std::string& devtools_worker_token) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    const std::string& devtools_worker_token,
+    const base::UnguessableToken& network_restrictions_id) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   auto factory_bundle =
       std::make_unique<blink::PendingURLLoaderFactoryBundle>();
   mojo::PendingReceiver<network::mojom::URLLoaderFactory>
@@ -875,10 +881,11 @@ EmbeddedWorkerInstance::CreateFactoryBundle(
   const net::IsolationInfo& isolation_info =
       storage_key.ToPartialNetIsolationInfo();
 
-  DCHECK(factory_type ==
-             ContentBrowserClient::URLLoaderFactoryType::kServiceWorkerScript ||
-         factory_type == ContentBrowserClient::URLLoaderFactoryType::
-                             kServiceWorkerSubResource);
+  CHECK(factory_type == ContentBrowserClient::URLLoaderFactoryType::
+                            kServiceWorkerScript ||
+            factory_type == ContentBrowserClient::URLLoaderFactoryType::
+                                kServiceWorkerSubResource,
+        base::NotFatalUntil::M159);
 
   network::mojom::URLLoaderFactoryParamsPtr factory_params =
       URLLoaderFactoryParamsHelper::CreateForWorker(
@@ -886,9 +893,9 @@ EmbeddedWorkerInstance::CreateFactoryBundle(
           std::move(dip_reporter),
           static_cast<StoragePartitionImpl*>(rph->GetStoragePartition())
               ->CreateURLLoaderNetworkObserverForServiceOrSharedWorker(
-                  ToOriginatingProcess(rph->GetID()), origin),
+                  ToOriginatingProcessId(rph->GetID()), origin, storage_key),
           NetworkServiceDevToolsObserver::MakeSelfOwned(devtools_worker_token),
-          std::move(client_security_state),
+          std::move(client_security_state), network_restrictions_id,
           "EmbeddedWorkerInstance::CreateFactoryBundle",
           /*require_cross_site_request_for_cookies=*/false,
           /*is_for_service_worker=*/true);
@@ -913,25 +920,6 @@ EmbeddedWorkerInstance::CreateFactoryBundle(
 
   ContentBrowserClient::NonNetworkURLLoaderFactoryMap non_network_factories;
   non_network_factories[url::kDataScheme] = DataURLLoaderFactory::Create();
-  // Allow service workers for chrome:// or chrome-untrusted:// based on flags.
-  if (base::FeatureList::IsEnabled(
-          features::kEnableServiceWorkersForChromeScheme) &&
-      origin.scheme() == content::kChromeUIScheme) {
-    non_network_factories.emplace(
-        content::kChromeUIScheme,
-        CreateWebUIServiceWorkerLoaderFactory(rph->GetBrowserContext(),
-                                              content::kChromeUIScheme,
-                                              base::flat_set<std::string>()));
-  } else if (base::FeatureList::IsEnabled(
-                 features::kEnableServiceWorkersForChromeUntrusted) &&
-             origin.scheme() == content::kChromeUIUntrustedScheme) {
-    non_network_factories.emplace(
-        content::kChromeUIUntrustedScheme,
-        CreateWebUIServiceWorkerLoaderFactory(rph->GetBrowserContext(),
-                                              content::kChromeUIUntrustedScheme,
-                                              base::flat_set<std::string>()));
-  }
-
   GetContentClient()
       ->browser()
       ->RegisterNonNetworkSubresourceURLLoaderFactories(
@@ -1002,10 +990,10 @@ void EmbeddedWorkerInstance::OnReportConsoleMessage(
   }
 }
 
-int EmbeddedWorkerInstance::process_id() const {
+ChildProcessId EmbeddedWorkerInstance::process_id() const {
   if (process_handle_)
     return process_handle_->process_id();
-  return ChildProcessHost::kInvalidUniqueID;
+  return ChildProcessId();
 }
 
 int EmbeddedWorkerInstance::worker_devtools_agent_route_id() const {
@@ -1069,7 +1057,7 @@ void EmbeddedWorkerInstance::ReleaseProcess() {
   starting_phase_ = NOT_STARTING;
   thread_id_ = ServiceWorkerConsts::kInvalidEmbeddedWorkerThreadId;
 
-  DCHECK(!foreground_notified_);
+  CHECK(!foreground_notified_, base::NotFatalUntil::M159);
 }
 
 void EmbeddedWorkerInstance::OnSetupFailed(
@@ -1125,7 +1113,7 @@ std::string EmbeddedWorkerInstance::StartingPhaseToString(StartingPhase phase) {
 }
 
 void EmbeddedWorkerInstance::NotifyForegroundServiceWorkerAdded() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 
   if (!process_handle_ || foreground_notified_)
     return;
@@ -1135,7 +1123,7 @@ void EmbeddedWorkerInstance::NotifyForegroundServiceWorkerAdded() {
 }
 
 void EmbeddedWorkerInstance::NotifyForegroundServiceWorkerRemoved() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
 
   if (!process_handle_ || !foreground_notified_)
     return;
@@ -1164,7 +1152,7 @@ EmbeddedWorkerInstance::MakeScriptLoaderFactoryRemote(
 }
 
 void EmbeddedWorkerInstance::BindCacheStorageInternal() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
   const network::CrossOriginEmbedderPolicy* coep =
       owner_version_->cross_origin_embedder_policy();
   const network::DocumentIsolationPolicy* dip =
@@ -1180,30 +1168,34 @@ void EmbeddedWorkerInstance::BindCacheStorageInternal() {
     return;
   }
 
-  for (auto& request : pending_cache_storage_requests_) {
-    mojo::PendingRemote<network::mojom::CrossOriginEmbedderPolicyReporter>
-        coep_reporter_remote;
-    if (coep_reporter_) {
-      coep_reporter_->Clone(
-          coep_reporter_remote.InitWithNewPipeAndPassReceiver());
+  while (!pending_cache_storage_requests_.empty()) {
+    std::vector<CacheStorageRequest> requests;
+    requests.swap(pending_cache_storage_requests_);
+    for (auto& request : requests) {
+      mojo::PendingRemote<network::mojom::CrossOriginEmbedderPolicyReporter>
+          coep_reporter_remote;
+      if (coep_reporter_) {
+        coep_reporter_->Clone(
+            coep_reporter_remote.InitWithNewPipeAndPassReceiver());
+      }
+
+      mojo::PendingRemote<network::mojom::DocumentIsolationPolicyReporter>
+          dip_reporter_remote;
+      if (dip_reporter_) {
+        dip_reporter_->Clone(
+            dip_reporter_remote.InitWithNewPipeAndPassReceiver());
+      }
+
+      auto* rph = RenderProcessHost::FromID(process_id());
+      if (!rph) {
+        return;
+      }
+
+      rph->BindCacheStorage(*coep, std::move(coep_reporter_remote), *dip,
+                            std::move(dip_reporter_remote), request.bucket,
+                            std::move(request.receiver));
     }
-
-    mojo::PendingRemote<network::mojom::DocumentIsolationPolicyReporter>
-        dip_reporter_remote;
-    if (dip_reporter_) {
-      dip_reporter_->Clone(
-          dip_reporter_remote.InitWithNewPipeAndPassReceiver());
-    }
-
-    auto* rph = RenderProcessHost::FromID(process_id());
-    if (!rph)
-      return;
-
-    rph->BindCacheStorage(*coep, std::move(coep_reporter_remote), *dip,
-                          std::move(dip_reporter_remote), request.bucket,
-                          std::move(request.receiver));
   }
-  pending_cache_storage_requests_.clear();
 }
 
 mojo::PendingRemote<network::mojom::CrossOriginEmbedderPolicyReporter>

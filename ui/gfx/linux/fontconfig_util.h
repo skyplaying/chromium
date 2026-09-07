@@ -8,13 +8,8 @@
 #include <fontconfig/fontconfig.h>
 
 #include "base/component_export.h"
-#include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "ui/gfx/font_render_params.h"
-
-namespace features {
-BASE_DECLARE_FEATURE(kFontConfigFontationsIndexing);
-}
 
 namespace gfx {
 
@@ -22,13 +17,6 @@ struct FcPatternDeleter {
   void operator()(FcPattern* ptr) const { FcPatternDestroy(ptr); }
 };
 using ScopedFcPattern = std::unique_ptr<FcPattern, FcPatternDeleter>;
-
-// Initializes FontConfig on a worker thread if a thread pool instance is
-// available, otherwise initializes FontConfig in a blocking fashion on the
-// calling thread.  If this function is not called, the first call to
-// GetGlobalFontConfig() will implicitly initialize FontConfig.  Can be called
-// on any thread.
-COMPONENT_EXPORT(GFX) void InitializeGlobalFontConfigAsync();
 
 // Retrieve the global font config. Must be called on the main thread.
 COMPONENT_EXPORT(GFX) FcConfig* GetGlobalFontConfig();

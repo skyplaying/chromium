@@ -7,30 +7,34 @@
 #include "base/i18n/message_formatter.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/api/passwords_private/passwords_private_delegate.h"
 #include "chrome/browser/extensions/api/passwords_private/passwords_private_delegate_factory.h"
 #include "chrome/browser/password_manager/chrome_password_change_service.h"
+#include "chrome/browser/password_manager/password_change/features.h"
 #include "chrome/browser/password_manager/password_change_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/webui/extension_control_handler.h"
 #include "chrome/browser/ui/webui/favicon_source.h"
 #include "chrome/browser/ui/webui/managed_ui_handler.h"
 #include "chrome/browser/ui/webui/page_not_available_for_guest/page_not_available_for_guest_ui.h"
-#include "chrome/browser/ui/webui/password_manager/promo_card.h"
-#include "chrome/browser/ui/webui/password_manager/promo_cards_handler.h"
+#include "chrome/browser/ui/webui/password_manager/notification_card.h"
+#include "chrome/browser/ui/webui/password_manager/notification_cards_handler.h"
+#include "chrome/browser/ui/webui/password_manager/password_manager_ui_handler.h"
 #include "chrome/browser/ui/webui/password_manager/sync_handler.h"
 #include "chrome/browser/ui/webui/plural_string_handler.h"
 #include "chrome/browser/ui/webui/policy_indicator_localized_strings_provider.h"
-#include "chrome/browser/ui/webui/sanitized_image_source.h"
+#include "chrome/browser/ui/webui/sanitized_image/sanitized_image_source.h"
 #include "chrome/browser/ui/webui/settings/safety_hub_handler.h"
+#include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/grit/branded_strings.h"
-#include "chrome/grit/browser_resources.h"
 #include "chrome/grit/chrome_unscaled_resources.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/grit/password_manager_resources.h"
@@ -42,16 +46,17 @@
 #include "components/password_manager/core/browser/leak_detection_dialog_utils.h"
 #include "components/password_manager/core/common/password_manager_constants.h"
 #include "components/password_manager/core/common/password_manager_features.h"
-#include "components/signin/public/base/signin_switches.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui_data_source.h"
+#include "content/public/common/content_features.h"
 #include "device/fido/public/features.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/webui/web_ui_util.h"
+#include "ui/webui/tracked_element/tracked_element_handler_document_singleton.h"
 #include "ui/webui/webui_util.h"
 
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
@@ -84,9 +89,7 @@ namespace {
 
 std::u16string InsertBrandedPasswordManager(int message_id) {
   return l10n_util::GetStringFUTF16(
-      message_id,
-      l10n_util::GetStringUTF16(
-          IDS_PASSWORD_BUBBLES_PASSWORD_MANAGER_LINK_TEXT_SAVING_ON_DEVICE));
+      message_id, l10n_util::GetStringUTF16(IDS_PASSWORD_MANAGER_BRAND_NAME));
 }
 
 content::WebUIDataSource* CreateAndAddPasswordsUIHTMLSource(
@@ -95,18 +98,14 @@ content::WebUIDataSource* CreateAndAddPasswordsUIHTMLSource(
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
       profile, password_manager::kChromeUIPasswordManagerHost);
 
-  webui::SetupWebUIDataSource(source, base::span(kPasswordManagerResources),
+  webui::SetupWebUIDataSource(source, kPasswordManagerResources,
                               IDR_PASSWORD_MANAGER_PASSWORD_MANAGER_HTML);
 
 #if !BUILDFLAG(OPTIMIZE_WEBUI)
-  source->AddResourcePaths(base::span(kSettingsSharedResources));
+  source->AddResourcePaths(kSettingsSharedResources);
 #endif
 
   static const webui::LocalizedString kStrings[] = {
-      {"accountStorageToggleLabel",
-       IDS_PASSWORD_MANAGER_UI_ACCOUNT_STORAGE_WITH_PASSKEYS_TOGGLE_LABEL},
-      {"accountStorageToggleSubLabel",
-       IDS_PASSWORD_MANAGER_UI_ACCOUNT_STORAGE_TOGGLE_SUB_LABEL},
       {"addPassword", IDS_PASSWORD_MANAGER_UI_ADD_PASSWORD_BUTTON},
       {"addPasswordFooter", IDS_PASSWORD_MANAGER_UI_ADD_PASSWORD_FOOTNOTE},
       {"addPasswordStoreOptionAccount",
@@ -131,10 +130,22 @@ content::WebUIDataSource* CreateAndAddPasswordsUIHTMLSource(
        IDS_PASSWORD_MANAGER_UI_ALREADY_CHANGED_PASSWORD},
       {"appsLabel", IDS_PASSWORD_MANAGER_UI_APPS_LABEL},
       {"authTimedOut", IDS_PASSWORD_MANAGER_UI_AUTH_TIMED_OUT},
+      {"automatedPasswordChangeCheckupButton",
+       IDS_PASSWORD_MANAGER_UI_PASSWORD_CHANGE_CHECKUP_BUTTON},
+      {"automatedPasswordChangeCheckupButtonAriaDescription",
+       IDS_PASSWORD_MANAGER_UI_PASSWORD_CHANGE_CHECKUP_BUTTON_ARIA_DESCRIPTION},
+      {"automatedPasswordChangeAttemptingSignIn",
+       IDS_PASSWORD_MANAGER_UI_PASSWORD_CHANGE_ATTEMPTING_SIGN_IN},
+      {"automatedPasswordChangeChangingPassword",
+       IDS_PASSWORD_MANAGER_UI_PASSWORD_CHANGE_CHANGING_PASSWORD},
+      {"automatedPasswordChangeConfirmingChangedPassword",
+       IDS_PASSWORD_MANAGER_UI_PASSWORD_CHANGE_CONFIRMING_CHANGED_PASSWORD},
+      {"automatedPasswordChangeChangedSuccessfully",
+       IDS_PASSWORD_MANAGER_UI_PASSWORD_CHANGE_CHANGED_SUCCESSFULLY},
+      {"automatedPasswordChangeError",
+       IDS_PASSWORD_MANAGER_UI_PASSWORD_CHANGE_ERROR},
       {"automatedPasswordChangeTitle",
        IDS_PASSWORD_MANAGER_UI_PASSWORD_CHANGE_SETTINGS_TITLE},
-      {"automatedPasswordChangeDescription",
-       IDS_PASSWORD_MANAGER_UI_PASSWORD_CHANGE_SETTINGS_DESCRIPTION},
       {"autosigninLabel", IDS_PASSWORD_MANAGER_UI_AUTOSIGNIN_TOGGLE_LABEL},
       {"backToCheckup",
        IDS_PASSWORD_MANAGER_UI_BACK_TO_CHECKUP_ARIA_DESCRIPTION},
@@ -156,6 +167,8 @@ content::WebUIDataSource* CreateAndAddPasswordsUIHTMLSource(
        IDS_PASSWORD_MANAGER_UI_CHANGE_PASSWORD_MANAGER_PIN},
       {"checkup", IDS_PASSWORD_MANAGER_UI_CHECKUP},
       {"checkupCanceled", IDS_PASSWORD_MANAGER_UI_CHECKUP_CANCELED},
+      {"checkupEmptyStateTrustedVaultKeyNeeded",
+       IDS_PASSWORD_MANAGER_UI_CHECKUP_EMPTY_STATE_TRUSTED_VAULT_KEY_NEEDED},
       {"checkupErrorGeneric", IDS_PASSWORD_MANAGER_UI_CHECKUP_OTHER_ERROR},
       {"checkupErrorNoPasswords", IDS_PASSWORD_MANAGER_UI_CHECKUP_NO_PASSWORDS},
       {"checkupErrorOffline", IDS_PASSWORD_MANAGER_UI_CHECKUP_OFFLINE},
@@ -169,10 +182,11 @@ content::WebUIDataSource* CreateAndAddPasswordsUIHTMLSource(
       {"checkupTitle", IDS_PASSWORD_MANAGER_UI_CHECKUP_TITLE},
       {"clearSearch", IDS_CLEAR_SEARCH},
       {"close", IDS_CLOSE},
-      {"closePromoCardButtonAriaLabel",
+      {"closeNotificationCardButtonAriaLabel",
        IDS_PASSWORD_MANAGER_UI_CLOSE_PROMO_CARD_BUTTON_ARIA_LABEL},
       {"columnHeadingConsider", IDS_SETTINGS_COLUMN_HEADING_CONSIDER},
       {"columnHeadingWhenUsed", IDS_SETTINGS_COLUMN_HEADING_WHEN_USED},
+      {"columnHeadingWhenOn", IDS_SETTINGS_COLUMN_HEADING_WHEN_ON},
       {"compromisedPasswordsDescription",
        IDS_PASSWORD_MANAGER_UI_COMPROMISED_PASSWORDS_DESCRIPTION},
       {"compromisedPasswordsEmpty",
@@ -184,8 +198,8 @@ content::WebUIDataSource* CreateAndAddPasswordsUIHTMLSource(
       {"copyDisplayName", IDS_PASSWORD_MANAGER_UI_COPY_DISPLAY_NAME_LABEL},
       {"copyPassword", IDS_PASSWORD_MANAGER_UI_COPY_PASSWORD},
       {"copyUsername", IDS_PASSWORD_MANAGER_UI_COPY_USERNAME},
-      {"delete", IDS_DELETE},
-      {"deletePassword", IDS_DELETE},
+      {"delete", IDS_SETTINGS_DELETE},
+      {"deletePassword", IDS_SETTINGS_DELETE},
       {"deletePasskeyConfirmationDescription",
        IDS_PASSWORD_MANAGER_UI_DELETE_PASSKEY_CONFIRMATION_DESCRIPTION},
       {"deletePasskeyConfirmationTitle",
@@ -201,6 +215,8 @@ content::WebUIDataSource* CreateAndAddPasswordsUIHTMLSource(
        IDS_PASSWORD_MANAGER_UI_DELETE_DIALOG_FROM_ACCOUNT_CHECKBOX_LABEL},
       {"deletePasswordDialogTitle",
        IDS_PASSWORD_MANAGER_UI_DELETE_DIALOG_TITLE},
+      {"detailsCardCompromiseWarning",
+       IDS_PASSWORD_MANAGER_UI_DETAILS_CARD_COMPROMISE_WARNING},
       {"done", IDS_DONE},
       {"disable", IDS_DISABLE},
       {"disconnectCloudAuthenticatorButton",
@@ -306,8 +322,7 @@ content::WebUIDataSource* CreateAndAddPasswordsUIHTMLSource(
        IDS_PASSWORD_MANAGER_UI_STORE_PICKER_OPTION_ACCOUNT},
       {"justNow", IDS_PASSWORD_MANAGER_UI_JUST_NOW},
       {"leakedPassword", IDS_PASSWORD_MANAGER_UI_PASSWORD_LEAKED},
-      {"localPasswordManager",
-       IDS_PASSWORD_BUBBLES_PASSWORD_MANAGER_LINK_TEXT_SAVING_ON_DEVICE},
+      {"localPasswordManager", IDS_PASSWORD_MANAGER_BRAND_NAME},
       {"manage", IDS_SETTINGS_MANAGE},
 #if BUILDFLAG(IS_WIN)
       {"managePasskeysLabel", IDS_PASSWORD_MANAGER_UI_MANAGE_PASSKEYS_LABEL},
@@ -322,12 +337,6 @@ content::WebUIDataSource* CreateAndAddPasswordsUIHTMLSource(
       {"moreActionsAriaDescription",
        IDS_PASSWORD_MANAGER_UI_MORE_ACTIONS_ARIA_DESCRIPTION},
       {"movePasswordsButton", IDS_PASSWORD_MANAGER_UI_MOVE_PASSWORDS_BUTTON},
-      {"moveSinglePassword",
-       IDS_PASSWORD_MANAGER_UI_MOVE_SINGLE_PASSWORD_TO_ACCOUNT},
-      {"moveSinglePasswordTitle",
-       IDS_PASSWORD_MANAGER_UI_MOVE_SINGLE_PASSWORD_TITLE},
-      {"moveSinglePasswordDescription",
-       IDS_PASSWORD_MANAGER_UI_MOVE_SINGLE_PASSWORD_DESCRIPTION},
       {"moveSinglePasswordButton",
        IDS_PASSWORD_MANAGER_UI_MOVE_SINGLE_PASSWORD_ACTION_BUTTON},
       {"movePasswordsDescription",
@@ -370,7 +379,8 @@ content::WebUIDataSource* CreateAndAddPasswordsUIHTMLSource(
        IDS_SETTINGS_PASSWORD_CHANGE_WHERE_SAVED},
       {"passwordChangeSettingExperimental",
        IDS_SETTINGS_PASSWORD_CHANGE_EXPERIMENTAL},
-      {"passwordChangeSettingContent", IDS_SETTINGS_PASSWORD_CHANGE_CONTENT},
+      {"passwordChangeSettingPrivateInference",
+       IDS_PASSWORD_MANAGER_UI_PASSWORD_CHANGE_SETTINGS_PRIVATE_INFERENCE},
       {"passwordChangeSettingEncryption",
        IDS_SETTINGS_PASSWORD_CHANGE_ENCRYPTION},
       {"passwordCopiedToClipboard",
@@ -386,6 +396,10 @@ content::WebUIDataSource* CreateAndAddPasswordsUIHTMLSource(
        IDS_PASSWORD_MANAGER_UI_PASSWORD_DETAILS_CARD_DELETE_BUTTON_ARIA_LABEL},
       {"passwordDetailsCardDeleteButtonNoUsernameAriaLabel",
        IDS_PASSWORD_MANAGER_UI_PASSWORD_DETAILS_CARD_DELETE_BUTTON_NO_USERNAME_ARIA_LABEL},
+      {"passwordDetailsCardShareButtonAriaLabel",
+       IDS_PASSWORD_MANAGER_UI_PASSWORD_DETAILS_CARD_SHARE_BUTTON_ARIA_LABEL},
+      {"passwordDetailsCardShareButtonNoUsernameAriaLabel",
+       IDS_PASSWORD_MANAGER_UI_PASSWORD_DETAILS_CARD_SHARE_BUTTON_NO_USERNAME_ARIA_LABEL},
       {"passwordDetailsCardBackupPasswordNote",
        IDS_PASSWORD_MANAGER_UI_BACKUP_PASSWORD_SETTINGS_DESCRIPTION},
       {"passwordDetailsCardBackupPasswordNoteDetails",
@@ -399,8 +413,7 @@ content::WebUIDataSource* CreateAndAddPasswordsUIHTMLSource(
       {"passwordManagerString", IDS_PASSWORD_MANAGER_UI_TITLE},
       // Page title, branded. "Google Password Manager" or "Password Manager"
       // depending on the build.
-      {"passwordManagerTitle",
-       IDS_PASSWORD_BUBBLES_PASSWORD_MANAGER_LINK_TEXT_SAVING_ON_DEVICE},
+      {"passwordManagerTitle", IDS_PASSWORD_MANAGER_BRAND_NAME},
       {"passwordNoteCharacterCount",
        IDS_PASSWORD_MANAGER_UI_NOTE_CHARACTER_COUNT},
       {"passwordNoteCharacterCountWarning",
@@ -411,7 +424,8 @@ content::WebUIDataSource* CreateAndAddPasswordsUIHTMLSource(
       {"phishedAndLeakedPassword",
        IDS_PASSWORD_MANAGER_UI_PASSWORD_PHISHED_AND_LEAKED},
       {"phishedPassword", IDS_PASSWORD_MANAGER_UI_PASSWORD_PHISHED},
-      {"promoCardAriaLabel", IDS_PASSWORD_MANAGER_UI_PROMO_CARD_ARIA_LABEL},
+      {"notificationCardAriaLabel",
+       IDS_PASSWORD_MANAGER_UI_PROMO_CARD_ARIA_LABEL},
       {"removeBlockedAriaDescription",
        IDS_PASSWORD_MANAGER_UI_REMOVE_BLOCKED_SITE_ARIA_DESCRIPTION},
       {"reload", IDS_RELOAD},
@@ -473,6 +487,14 @@ content::WebUIDataSource* CreateAndAddPasswordsUIHTMLSource(
        IDS_PASSWORD_MANAGER_UI_TRUSTED_VAULT_OPTED_IN_TITLE},
       {"trustedVaultBannerSubLabelOptedIn",
        IDS_PASSWORD_MANAGER_UI_TRUSTED_VAULT_OPTED_IN_DESCRIPTION},
+      {"trustedVaultErrorDialogContinue",
+       IDS_PASSWORD_MANAGER_UI_TRUSTED_VAULT_ERROR_DIALOG_CONTINUE},
+      {"trustedVaultErrorDialogDescription",
+       IDS_PASSWORD_MANAGER_UI_TRUSTED_VAULT_ERROR_DIALOG_DESCRIPTION},
+      {"trustedVaultErrorDialogNotNow",
+       IDS_PASSWORD_MANAGER_UI_TRUSTED_VAULT_ERROR_DIALOG_NOT_NOW},
+      {"trustedVaultErrorDialogTitle",
+       IDS_PASSWORD_MANAGER_UI_TRUSTED_VAULT_ERROR_DIALOG_TITLE},
       {"tryAgain", IDS_PASSWORD_MANAGER_UI_CHECK_PASSWORDS_AFTER_ERROR},
       {"undoRemovePassword", IDS_PASSWORD_MANAGER_UI_UNDO},
       {"unmuteCompromisedPassword", IDS_PASSWORD_MANAGER_UI_UNMUTE_ISSUE},
@@ -498,8 +520,6 @@ content::WebUIDataSource* CreateAndAddPasswordsUIHTMLSource(
        IDS_PASSWORD_MANAGER_SAVE_IN_ACCOUNT_BUBBLE_TITLE},
       {"movePasswordsDialogSaveButton",
        IDS_PASSWORD_MANAGER_SAVE_IN_ACCOUNT_BUBBLE_SAVE_BUTTON},
-      {"movePasswordToAccountIconTooltip",
-       IDS_PASSWORD_MANAGER_UI_MOVE_TO_ACCOUNT_ICON_TOOLTIP},
       {"movePasswordsToAccountDetailsCardSubtitle",
        IDS_PASSWORD_MANAGER_SAVE_IN_ACCOUNT_BUBBLE_DESCRIPTION},
 #if BUILDFLAG(IS_MAC)
@@ -581,8 +601,7 @@ content::WebUIDataSource* CreateAndAddPasswordsUIHTMLSource(
       base::i18n::MessageFormatter::FormatWithNumberedArgs(
           l10n_util::GetStringUTF16(
               IDS_PASSWORD_MANAGER_UI_AUTH_TIMED_OUT_DESCRIPTION),
-          l10n_util::GetStringUTF16(
-              IDS_PASSWORD_BUBBLES_PASSWORD_MANAGER_LINK_TEXT_SAVING_ON_DEVICE),
+          l10n_util::GetStringUTF16(IDS_PASSWORD_MANAGER_BRAND_NAME),
           password_manager::constants::kPasswordManagerAuthValidity
               .InMinutes()));
 
@@ -635,6 +654,9 @@ content::WebUIDataSource* CreateAndAddPasswordsUIHTMLSource(
   source->AddString("emptyStateImportDevice",
                     InsertBrandedPasswordManager(
                         IDS_PASSWORD_MANAGER_UI_EMPTY_STATE_SIGNEDOUT_USERS));
+  webui::AddLocalizedString(
+      source, "emptyStateTrustedVaultKeyNeeded",
+      IDS_PASSWORD_MANAGER_UI_EMPTY_STATE_TRUSTED_VAULT_KEY_NEEDED);
 
   source->AddString(
       "importPasswordsGenericDescription",
@@ -667,25 +689,70 @@ content::WebUIDataSource* CreateAndAddPasswordsUIHTMLSource(
       "enableActorLoginPermissions",
       base::FeatureList::IsEnabled(password_manager::features::kActorLogin));
 
-  source->AddBoolean("passwordChangeAvailable",
-                     PasswordChangeServiceFactory::GetForProfile(profile)
-                         ->UserIsActivePasswordChangeUser());
+  source->AddBoolean(
+      "fedCmEmbedderInitiatedLoginEnabled",
+      base::FeatureList::IsEnabled(features::kFedCmEmbedderInitiatedLogin));
+
+  const bool is_password_change_with_private_inference_login_check_enabled =
+      base::FeatureList::IsEnabled(
+          password_change::features::
+              kPasswordChangeWithPrivateInferenceLoginCheck);
+  source->AddBoolean(
+      "isPasswordChangeWithPrivateInferenceLoginCheckEnabled",
+      is_password_change_with_private_inference_login_check_enabled);
+
+  ChromePasswordChangeService* password_change_service =
+      PasswordChangeServiceFactory::GetForProfile(profile);
+  source->AddBoolean(
+      "passwordChangeAvailable",
+      is_password_change_with_private_inference_login_check_enabled ||
+          (password_change_service &&
+           password_change_service->UserIsActivePasswordChangeUser()));
+
+  webui::AddLocalizedString(
+      source, "automatedPasswordChangeDescription",
+      is_password_change_with_private_inference_login_check_enabled
+          ? IDS_PASSWORD_MANAGER_UI_PASSWORD_CHANGE_SETTINGS_WITH_PRIVATE_INFERENCE_DESCRIPTION
+          : IDS_PASSWORD_MANAGER_UI_PASSWORD_CHANGE_SETTINGS_DESCRIPTION);
+  webui::AddLocalizedString(
+      source, "passwordChangeSettingToggleLabel",
+      is_password_change_with_private_inference_login_check_enabled
+          ? IDS_PASSWORD_MANAGER_UI_PASSWORD_CHANGE_SETTINGS_WITH_PRIVATE_INFERENCE_TOGGLE_LABEL
+          : IDS_PASSWORD_MANAGER_UI_PASSWORD_CHANGE_SETTINGS_TOGGLE_LABEL);
+  webui::AddLocalizedString(
+      source, "passwordChangeSettingContent",
+      is_password_change_with_private_inference_login_check_enabled
+          ? IDS_PASSWORD_MANAGER_UI_PASSWORD_CHANGE_SETTINGS_CONTENT
+          : IDS_SETTINGS_PASSWORD_CHANGE_CONTENT);
 
   source->AddBoolean(
       "enablePasswordManagerMojoApi",
       base::FeatureList::IsEnabled(
           password_manager::features::kEnablePasswordManagerMojoApi));
 
-  bool passwordUploadUiUpdateEnabled = false;
-#if !BUILDFLAG(IS_CHROMEOS)
-  passwordUploadUiUpdateEnabled =
-      base::FeatureList::IsEnabled(switches::kPasswordUploadUiUpdate);
-#endif  // !BUILDFLAG(IS_CHROMEOS)
-  source->AddBoolean("passwordUploadUiUpdate", passwordUploadUiUpdateEnabled);
+  source->AddBoolean(
+      "enablePasswordManagerMojoApiPhase2",
+      base::FeatureList::IsEnabled(
+          password_manager::features::kEnablePasswordManagerMojoApiPhase2));
+
+  source->AddBoolean(
+      "enableTrustedVaultUnlock",
+      base::FeatureList::IsEnabled(
+          password_manager::features::kTrustedVaultDesktopUnlock));
+
+  source->AddBoolean(
+      "showCompromiseWarningInDetailsCard",
+      base::FeatureList::IsEnabled(
+          password_manager::features::kPasswordCompromiseWarningInDetailsCard));
+
+  source->AddString("webuiRefresh2026", features::IsWebuiRefresh2026Enabled()
+                                            ? "webui-refresh-2026"
+                                            : "");
 
   content::URLDataSource::Add(
       profile, std::make_unique<FaviconSource>(
                    profile, chrome::FaviconUrlFormat::kFavicon2));
+  content::URLDataSource::Add(profile, std::make_unique<ThemeSource>(profile));
 
   return source;
 }
@@ -740,6 +807,9 @@ void AddPluralStrings(content::WebUI* web_ui) {
   plural_string_handler->AddLocalizedString(
       "searchResults", IDS_PASSWORD_MANAGER_UI_SEARCH_RESULT);
   plural_string_handler->AddLocalizedString(
+      "movePasswordToAccountIconTooltip",
+      IDS_PASSWORD_MANAGER_UI_MOVE_TO_ACCOUNT_ICON_TOOLTIP);
+  plural_string_handler->AddLocalizedString(
       "movePasswords", IDS_PASSWORD_MANAGER_UI_MOVE_PASSWORDS_TO_ACCOUNT);
   plural_string_handler->AddLocalizedString(
       "movePasswordsDialogDescription",
@@ -765,8 +835,6 @@ DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(PasswordManagerUI,
                                       kOverflowMenuElementId);
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(PasswordManagerUI,
                                       kSharePasswordElementId);
-DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(PasswordManagerUI,
-                                      kAccountStoreToggleElementId);
 DEFINE_CLASS_CUSTOM_ELEMENT_EVENT_TYPE(PasswordManagerUI,
                                        kAddShortcutCustomEventId);
 
@@ -782,7 +850,7 @@ PasswordManagerUI::PasswordManagerUI(content::WebUI* web_ui)
   web_ui->AddMessageHandler(std::make_unique<ExtensionControlHandler>());
   web_ui->AddMessageHandler(std::make_unique<SafetyHubHandler>(profile));
   web_ui->AddMessageHandler(
-      std::make_unique<password_manager::PromoCardsHandler>(profile));
+      std::make_unique<password_manager::NotificationCardsHandler>(profile));
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
   web_ui->AddMessageHandler(std::make_unique<settings::PasskeysHandler>());
 #endif
@@ -792,16 +860,23 @@ PasswordManagerUI::PasswordManagerUI(content::WebUI* web_ui)
   ManagedUIHandler::Initialize(web_ui, source);
   content::URLDataSource::Add(profile,
                               std::make_unique<SanitizedImageSource>(profile));
+
+  ui::TrackedElementHandlerDocumentSingleton::Register(
+      this, std::vector<ui::ElementIdentifier>{
+                PasswordManagerUI::kSettingsMenuItemElementId,
+                PasswordManagerUI::kAddShortcutElementId,
+                PasswordManagerUI::kSharePasswordElementId,
+                PasswordManagerUI::kOverflowMenuElementId});
 }
 
 PasswordManagerUI::~PasswordManagerUI() = default;
 
 // static
-base::RefCountedMemory* PasswordManagerUI::GetFaviconResourceBytes(
+scoped_refptr<base::RefCountedMemory>
+PasswordManagerUI::GetFaviconResourceBytes(
     ui::ResourceScaleFactor scale_factor) {
-  return static_cast<base::RefCountedMemory*>(
-      ui::ResourceBundle::GetSharedInstance().LoadDataResourceBytesForScale(
-          IDR_PASSWORD_MANAGER_FAVICON, scale_factor));
+  return ui::ResourceBundle::GetSharedInstance().LoadDataResourceBytesForScale(
+      IDR_PASSWORD_MANAGER_FAVICON, scale_factor);
 }
 
 WEB_UI_CONTROLLER_TYPE_IMPL(PasswordManagerUI)
@@ -819,13 +894,9 @@ void PasswordManagerUI::CreateHelpBubbleHandler(
     mojo::PendingRemote<help_bubble::mojom::HelpBubbleClient> client,
     mojo::PendingReceiver<help_bubble::mojom::HelpBubbleHandler> handler) {
   help_bubble_handler_ = std::make_unique<user_education::HelpBubbleHandler>(
-      std::move(handler), std::move(client), this,
-      std::vector<ui::ElementIdentifier>{
-          PasswordManagerUI::kSettingsMenuItemElementId,
-          PasswordManagerUI::kAddShortcutElementId,
-          PasswordManagerUI::kSharePasswordElementId,
-          PasswordManagerUI::kAccountStoreToggleElementId,
-          PasswordManagerUI::kOverflowMenuElementId});
+      std::move(handler), std::move(client),
+      ui::TrackedElementHandlerDocumentSingleton::GetOrCreate(
+          web_ui()->GetRenderFrameHost()));
 }
 
 void PasswordManagerUI::BindInterface(

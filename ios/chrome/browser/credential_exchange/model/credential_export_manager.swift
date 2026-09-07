@@ -6,6 +6,12 @@ import AuthenticationServices
 import Foundation
 import UIKit
 
+/// Delegate for CredentialExportManager.
+@objc public protocol CredentialExportManagerDelegate {
+  /// Called when the export failed with an error.
+  @objc func onExportError()
+}
+
 /// Handles exporting user credentials through ASCredentialExportManager.
 @MainActor
 @objc public class CredentialExportManager: NSObject {
@@ -15,6 +21,7 @@ import UIKit
     let password: String
     let host: String
     let note: String?
+    let creationDate: Date
 
     init?(_ cred: CredentialExchangePassword) {
       guard let url = cred.url,
@@ -29,6 +36,7 @@ import UIKit
       self.password = password
       self.host = host
       self.note = cred.note
+      self.creationDate = cred.creationDate ?? Date()
     }
   }
 
@@ -39,6 +47,10 @@ import UIKit
     let userDisplayName: String?
     let userId: Data
     let privateKey: Data
+    let creationDate: Date
+    let hmacSecret: Data?
+    let largeBlob: Data?
+    let largeBlobUncompressedSize: NSNumber?
 
     init?(_ key: CredentialExchangePasskey) {
       self.credentialId = key.credentialId
@@ -47,8 +59,15 @@ import UIKit
       self.userDisplayName = key.userDisplayName
       self.userId = key.userId
       self.privateKey = key.privateKey
+      self.creationDate = key.creationDate ?? Date()
+      self.hmacSecret = key.hmacSecret
+      self.largeBlob = key.largeBlob
+      self.largeBlobUncompressedSize = key.largeBlobUncompressedSize
     }
   }
+
+  /// Delegate for this class.
+  @objc weak public var delegate: CredentialExportManagerDelegate?
 
   /// Converts credential data into the `ASExportedCredentialData` format.
   @available(iOS 26, *)
@@ -79,9 +98,8 @@ import UIKit
       }
       let scope = ASImportableCredentialScope(urls: [password.url])
       let item = ASImportableItem(
-        // TODO(crbug.com/447142330): Replace placeholder data: created, lastModified.
         id: UUID().uuidString.data(using: .utf8)!,
-        created: Date(),
+        created: password.creationDate,
         lastModified: Date(),
         title: password.host,
         subtitle: nil,
@@ -94,7 +112,7 @@ import UIKit
     }
 
     for passkey in passkeys {
-      let passkeyCredential = ASImportableCredential.Passkey(
+      var passkeyCredential = ASImportableCredential.Passkey(
         credentialID: passkey.credentialId,
         relyingPartyIdentifier: passkey.rpId,
         userName: passkey.userName,
@@ -102,10 +120,16 @@ import UIKit
         userHandle: passkey.userId,
         key: passkey.privateKey
       )
+      #if compiler(>=6.3)
+        if #available(iOS 26.4, *) {
+          passkeyCredential.fido2Extensions =
+            CredentialExportManager.buildFIDO2Extensions(from: passkey)
+        }
+      #endif
 
       let item = ASImportableItem(
         id: UUID().uuidString.data(using: .utf8)!,
-        created: Date(),
+        created: passkey.creationDate,
         lastModified: Date(),
         title: passkey.rpId,
         subtitle: nil,
@@ -135,6 +159,42 @@ import UIKit
     return exportedData
   }
 
+  #if compiler(>=6.3)
+    @available(iOS 26.4, *)
+    private static func buildFIDO2Extensions(from passkey: ExportablePasskey)
+      -> ASImportableFIDO2Extensions?
+    {
+      var hmacCredentials: ASImportableFIDO2HMACCredential?
+      if let hmacSecret = passkey.hmacSecret, !hmacSecret.isEmpty {
+        hmacCredentials = ASImportableFIDO2HMACCredential(
+          algorithm: .sha256,
+          credentialWithUV: hmacSecret,
+          credentialWithoutUV: hmacSecret
+        )
+      }
+
+      var largeBlob: ASImportableFIDO2LargeBlob?
+      if let data = passkey.largeBlob,
+        let uncompressedSize = passkey.largeBlobUncompressedSize?.intValue,
+        !data.isEmpty
+      {
+        largeBlob = ASImportableFIDO2LargeBlob(
+          uncompressedSize: uncompressedSize,
+          data: data
+        )
+      }
+
+      guard hmacCredentials != nil || largeBlob != nil else {
+        return nil
+      }
+
+      return ASImportableFIDO2Extensions(
+        hmacCredentials: hmacCredentials,
+        largeBlob: largeBlob
+      )
+    }
+  #endif
+
   /// Begins the credential exchange process by requesting the export options, which triggers the
   /// system UI allowing the user to pick the import credential manager.
   @available(iOS 26, *)
@@ -158,7 +218,7 @@ import UIKit
 
         try await exportManager.exportCredentials(exportedData)
       } catch {
-        // TODO(crbug.com/444149683): Handle errors.
+        delegate?.onExportError()
       }
     }
   }

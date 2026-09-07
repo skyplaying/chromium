@@ -23,7 +23,6 @@
 #include "cc/test/pixel_comparator.h"
 #include "cc/test/pixel_test_utils.h"
 #include "chrome/browser/apps/app_service/app_icon/app_icon_test_util.h"
-#include "chrome/browser/apps/icon_standardizer.h"
 #include "chrome/browser/extensions/chrome_app_icon.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/services/app_service/public/cpp/icon_types.h"
@@ -32,6 +31,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/codec/png_codec.h"
+#include "ui/gfx/image/icon_standardizer.h"
 #include "ui/gfx/image/image_skia_operations.h"
 #include "ui/gfx/image/image_skia_rep.h"
 #include "ui/gfx/image/image_unittest_util.h"
@@ -45,14 +45,12 @@
 #include "chrome/browser/ash/app_list/md_icon_normalizer.h"
 #include "chrome/browser/ash/arc/icon_decode_request.h"
 #include "chrome/browser/ash/crostini/crostini_test_helper.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/grit/chrome_unscaled_resources.h"
 #include "chrome/grit/component_extension_resources.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/dbus/cicerone/cicerone_client.h"
 #include "chromeos/ash/experiences/arc/app/arc_app_constants.h"
 #include "chromeos/ash/experiences/arc/mojom/intent_helper.mojom.h"
-#include "components/services/app_service/public/cpp/features.h"
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace apps {
@@ -122,7 +120,7 @@ class AppIconFactoryTest : public testing::Test {
         gfx::PNGCodec::Decode(base::as_byte_span(compressed_icon));
     ASSERT_FALSE(decoded.isNull());
 
-    output_image_skia = apps::CreateStandardIconImage(
+    output_image_skia = gfx::CreateStandardAppIconImage(
         gfx::ImageSkia::CreateFromBitmap(decoded, scale));
     EnsureRepresentationsLoaded(output_image_skia);
   }

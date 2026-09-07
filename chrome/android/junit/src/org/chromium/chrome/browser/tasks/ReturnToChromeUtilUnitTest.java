@@ -22,7 +22,7 @@ import static org.chromium.chrome.browser.tasks.ReturnToChromeUtil.FAIL_TO_SHOW_
 import static org.chromium.chrome.browser.tasks.ReturnToChromeUtil.HOME_SURFACE_SHOWN_AT_STARTUP_UMA;
 import static org.chromium.chrome.browser.tasks.ReturnToChromeUtil.HOME_SURFACE_SHOWN_UMA;
 import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNativeNtpUrl;
-import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNonNativeNtpGurl;
+import static org.chromium.chrome.browser.url_constants.UrlConstantResolver.getOriginalNtpGurl;
 
 import android.content.Context;
 import android.content.Intent;
@@ -45,9 +45,9 @@ import org.mockito.Mockito;
 import org.mockito.Spy;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.BaseSwitches;
+import org.chromium.base.DeviceInfo;
 import org.chromium.base.IntentUtils;
 import org.chromium.base.SysUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -60,7 +60,6 @@ import org.chromium.chrome.browser.app.ChromeActivity;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.homepage.HomepageManager;
 import org.chromium.chrome.browser.homepage.HomepagePolicyManager;
-import org.chromium.chrome.browser.magic_stack.HomeModulesMetricsUtils;
 import org.chromium.chrome.browser.ntp.NewTabPage;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
@@ -75,7 +74,8 @@ import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 import org.chromium.chrome.browser.tabmodel.TabModelUtils;
 import org.chromium.chrome.browser.tasks.ReturnToChromeUtil.FailToShowHomeSurfaceReason;
 import org.chromium.chrome.browser.ui.native_page.FrozenNativePage;
-import org.chromium.chrome.browser.util.ChromeAccessibilityUtil;
+import org.chromium.ui.R;
+import org.chromium.ui.accessibility.AccessibilityStateTestHelper;
 import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.url.JUnitTestGURLs;
 
@@ -84,10 +84,8 @@ import java.util.List;
 
 /** Unit tests for {@link ReturnToChromeUtil} class. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 @CommandLineFlags.Add({BaseSwitches.DISABLE_LOW_END_DEVICE_MODE})
 public class ReturnToChromeUtilUnitTest {
-    private static final int ON_RETURN_THRESHOLD_SECOND = 1000;
     private static final int DELTA_MS = 100;
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Mock private Context mContext;
@@ -112,7 +110,7 @@ public class ReturnToChromeUtilUnitTest {
         // HomepageManager:
         HomepageManager.setInstanceForTesting(mHomepageManager);
         doReturn(true).when(mHomepageManager).isHomepageEnabled();
-        doReturn(getOriginalNonNativeNtpGurl())
+        doReturn(getOriginalNtpGurl())
                 .when(mHomepageManager)
                 .getHomepageGurl(/* isIncognito= */ false);
 
@@ -125,13 +123,13 @@ public class ReturnToChromeUtilUnitTest {
         Assert.assertFalse(SysUtils.isLowEndDevice());
 
         // Sets accessibility:
-        ChromeAccessibilityUtil.get().setAccessibilityEnabledForTesting(false);
+        AccessibilityStateTestHelper.setAccessibilityEnabledForTesting(false);
 
         // Sets for phones, i.e., !DeviceFormFactor.isNonMultiDisplayContextOnTablet():
         doReturn(mResources).when(mContext).getResources();
         doReturn(DeviceFormFactor.SCREEN_BUCKET_TABLET - 1)
                 .when(mResources)
-                .getInteger(org.chromium.ui.R.integer.min_screen_width_bucket);
+                .getInteger(R.integer.min_screen_width_bucket);
         Assert.assertFalse(DeviceFormFactor.isNonMultiDisplayContextOnTablet(mContext));
     }
 
@@ -182,6 +180,13 @@ public class ReturnToChromeUtilUnitTest {
         assertTrue(
                 ReturnToChromeUtil.shouldShowNtpAsHomeSurfaceAtStartup(
                         intent, null, /* persistableBundle= */ null, mInactivityTracker));
+
+        // Tests the case when the device is an Android desktop.
+        DeviceInfo.setIsDesktopForTesting(true);
+        assertFalse(
+                ReturnToChromeUtil.shouldShowNtpAsHomeSurfaceAtStartup(
+                        intent, null, /* persistableBundle= */ null, mInactivityTracker));
+        DeviceInfo.setIsDesktopForTesting(false);
     }
 
     @Test
@@ -215,7 +220,7 @@ public class ReturnToChromeUtilUnitTest {
                 mHomeSurfaceTracker);
         verify(mTabCreater, never()).createNewTab(any(), eq(TabLaunchType.FROM_STARTUP), eq(null));
         verify(mCurrentTabModel, never()).setIndex(anyInt(), eq(TabSelectionType.FROM_USER));
-        verify(mNewTabPage, never()).showMagicStack(any());
+        verify(mNewTabPage, never()).showHomeSurfaceUiOnNtp(any());
         verify(mHomeSurfaceTracker).updateHomeSurfaceAndTrackingTabs(eq(mNtpTab), eq(null));
         histogram.assertExpected();
 
@@ -254,7 +259,7 @@ public class ReturnToChromeUtilUnitTest {
                 mHomeSurfaceTracker);
         verify(mTabCreater, never()).createNewTab(any(), eq(TabLaunchType.FROM_STARTUP), eq(null));
         verify(mCurrentTabModel).setIndex(eq(1), eq(TabSelectionType.FROM_USER));
-        verify(mNewTabPage).showMagicStack(eq(mTab1));
+        verify(mNewTabPage).showHomeSurfaceUiOnNtp(eq(mTab1));
         verify(mHomeSurfaceTracker).updateHomeSurfaceAndTrackingTabs(eq(mNtpTab), eq(mTab1));
         histogram.assertExpected();
     }
@@ -298,7 +303,7 @@ public class ReturnToChromeUtilUnitTest {
                 mTabCreater,
                 mHomeSurfaceTracker);
         verify(mTabCreater, times(1)).createNewTab(any(), eq(TabLaunchType.FROM_STARTUP), eq(null));
-        verify(mNewTabPage).showMagicStack(eq(mTab1));
+        verify(mNewTabPage).showHomeSurfaceUiOnNtp(eq(mTab1));
         verify(mHomeSurfaceTracker).updateHomeSurfaceAndTrackingTabs(eq(mNtpTab), eq(mTab1));
         histogram.assertExpected();
     }
@@ -346,7 +351,7 @@ public class ReturnToChromeUtilUnitTest {
                 mHomeSurfaceTracker);
         histogram.assertExpected();
         verify(mHomeSurfaceTracker, never()).updateHomeSurfaceAndTrackingTabs(eq(mNtpTab), any());
-        verify(mNewTabPage, never()).showMagicStack(any());
+        verify(mNewTabPage, never()).showHomeSurfaceUiOnNtp(any());
 
         // Set the last active NTP doesn't have a tracking Tab.
         doReturn(false).when(mHomeSurfaceTracker).canShowHomeSurface(activeNtpTab);
@@ -365,7 +370,7 @@ public class ReturnToChromeUtilUnitTest {
                 mHomeSurfaceTracker);
         histogram.assertExpected();
         verify(mHomeSurfaceTracker, never()).updateHomeSurfaceAndTrackingTabs(eq(mNtpTab), any());
-        verify(mNewTabPage, never()).showMagicStack(any());
+        verify(mNewTabPage, never()).showHomeSurfaceUiOnNtp(any());
     }
 
     @Test
@@ -387,10 +392,7 @@ public class ReturnToChromeUtilUnitTest {
 
     @Test
     @SmallTest
-    @EnableFeatures({ChromeFeatureList.MAGIC_STACK_ANDROID})
     public void testColdStartupWithOnlyLastActiveTabUrl_MagicStack() {
-        assertTrue(HomeModulesMetricsUtils.useMagicStack());
-
         when(mTab1.getUrl()).thenReturn(JUnitTestGURLs.URL_1);
         when(mNtpTab.isNativePage()).thenReturn(true);
         when(mNtpTab.getNativePage()).thenReturn(mNewTabPage);
@@ -411,7 +413,7 @@ public class ReturnToChromeUtilUnitTest {
 
         // Verifies if the added Tab matches the tracking URL, call showHomeSurfaceUi().
         mTabModelObserverCaptor.getValue().willAddTab(mTab1, TabLaunchType.FROM_RESTORE);
-        verify(mNewTabPage).showMagicStack(eq(mTab1));
+        verify(mNewTabPage).showHomeSurfaceUiOnNtp(eq(mTab1));
         verify(mHomeSurfaceTracker).updateHomeSurfaceAndTrackingTabs(eq(mNtpTab), eq(mTab1));
     }
 

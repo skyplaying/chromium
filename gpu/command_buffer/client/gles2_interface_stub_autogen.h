@@ -370,7 +370,6 @@ void ShaderSource(GLuint shader,
                   GLsizei count,
                   const GLchar* const* str,
                   const GLint* length) override;
-void ShallowFinishCHROMIUM() override;
 void OrderingBarrierCHROMIUM() override;
 void MultiDrawArraysWEBGL(GLenum mode,
                           const GLint* firsts,
@@ -641,7 +640,6 @@ GLuint GetMaxValueInBufferCHROMIUM(GLuint buffer_id,
                                    GLsizei count,
                                    GLenum type,
                                    GLuint offset) override;
-GLboolean EnableFeatureCHROMIUM(const char* feature) override;
 void* MapBufferCHROMIUM(GLuint target, GLenum access) override;
 GLboolean UnmapBufferCHROMIUM(GLuint target) override;
 void* MapBufferSubDataCHROMIUM(GLuint target,
@@ -649,14 +647,6 @@ void* MapBufferSubDataCHROMIUM(GLuint target,
                                GLsizeiptr size,
                                GLenum access) override;
 void UnmapBufferSubDataCHROMIUM(const void* mem) override;
-void* MapBufferRange(GLenum target,
-                     GLintptr offset,
-                     GLsizeiptr size,
-                     GLbitfield access) override;
-GLboolean UnmapBuffer(GLenum target) override;
-void FlushMappedBufferRange(GLenum target,
-                            GLintptr offset,
-                            GLsizeiptr size) override;
 void* MapTexSubImage2DCHROMIUM(GLenum target,
                                GLint level,
                                GLint xoffset,
@@ -751,6 +741,10 @@ void DrawBuffersEXT(GLsizei count, const GLenum* bufs) override;
 void FlushDriverCachesCHROMIUM() override;
 GLuint GetLastFlushIdCHROMIUM() override;
 void SetActiveURLCHROMIUM(const char* url) override;
+void GetBufferSubDataCHROMIUM(GLenum target,
+                              GLintptr offset,
+                              GLsizeiptr size,
+                              void* data) override;
 void ContextVisibilityHintCHROMIUM(GLboolean visibility) override;
 GLenum GetGraphicsResetStatusKHR() override;
 void BlendBarrierKHR() override;
@@ -845,13 +839,14 @@ void ColorMaskiOES(GLuint buf,
                    GLboolean a) override;
 GLboolean IsEnablediOES(GLenum target, GLuint index) override;
 void ProvokingVertexANGLE(GLenum provokeMode) override;
-void FramebufferMemorylessPixelLocalStorageANGLE(
-    GLint plane,
-    GLenum internalformat) override;
+void FramebufferMemorylessPixelLocalStorageANGLE(GLint plane,
+                                                 GLenum internalformat,
+                                                 GLbitfield usage) override;
 void FramebufferTexturePixelLocalStorageANGLE(GLint plane,
                                               GLuint backingtexture,
                                               GLint level,
-                                              GLint layer) override;
+                                              GLint layer,
+                                              GLbitfield usage) override;
 void FramebufferPixelLocalClearValuefvANGLE(GLint plane,
                                             const GLfloat* value) override;
 void FramebufferPixelLocalClearValueivANGLE(GLint plane,
@@ -860,6 +855,7 @@ void FramebufferPixelLocalClearValueuivANGLE(GLint plane,
                                              const GLuint* value) override;
 void BeginPixelLocalStorageANGLE(GLsizei count, const GLenum* loadops) override;
 void EndPixelLocalStorageANGLE(GLsizei count, const GLenum* storeops) override;
+void EndPixelLocalStorageImplicitANGLE() override;
 void PixelLocalStorageBarrierANGLE() override;
 void FramebufferPixelLocalStorageInterruptANGLE() override;
 void FramebufferPixelLocalStorageRestoreANGLE() override;
@@ -869,6 +865,9 @@ void GetFramebufferPixelLocalStorageParameterfvANGLE(GLint plane,
 void GetFramebufferPixelLocalStorageParameterivANGLE(GLint plane,
                                                      GLenum pname,
                                                      GLint* params) override;
+void GetFramebufferPixelLocalStorageParameteruivANGLE(GLint plane,
+                                                      GLenum pname,
+                                                      GLuint* params) override;
 void ClipControlEXT(GLenum origin, GLenum depth) override;
 void PolygonModeANGLE(GLenum face, GLenum mode) override;
 void PolygonOffsetClampEXT(GLfloat factor,

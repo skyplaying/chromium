@@ -6,6 +6,7 @@ package org.chromium.content.browser.framehost;
 
 import android.graphics.Bitmap;
 import android.os.SystemClock;
+import android.util.LongSparseArray;
 
 import androidx.annotation.VisibleForTesting;
 
@@ -13,7 +14,6 @@ import org.jni_zero.CalledByNative;
 import org.jni_zero.JNINamespace;
 import org.jni_zero.NativeMethods;
 
-import org.chromium.base.Log;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
@@ -27,9 +27,6 @@ import org.chromium.content_public.common.ResourceRequestBody;
 import org.chromium.url.GURL;
 import org.chromium.url.Origin;
 
-import java.util.HashMap;
-import java.util.Map;
-
 /**
  * The NavigationControllerImpl Java wrapper to allow communicating with the native
  * NavigationControllerImpl object.
@@ -39,14 +36,12 @@ import java.util.Map;
 //                package whose visibility will be enforced via DEPS.
 @NullMarked
 /* package */ class NavigationControllerImpl implements NavigationController {
-    private static final String TAG = "NavigationController";
-
     // Using ScopedJavaGlobalRef in the owning C++ object to keep the Java object alive consumes an
     // entry per instance in the finite global ref table. This scales poorly with a large number of
     // WebContents. As a workaround, the C++ owner uses a JavaObjectWeakGlobalRef and an entry is
     // kept in the a static map of the native pointer to Java objects to prevent garbage collection.
-    private static final Map<Long, NavigationControllerImpl> sNavigationControllerImpls =
-            new HashMap<>();
+    private static final LongSparseArray<NavigationControllerImpl> sNavigationControllerImpls =
+            new LongSparseArray<>();
 
     private long mNativeNavigationControllerAndroid;
 
@@ -63,7 +58,8 @@ import java.util.Map;
     @CalledByNative
     private void destroy() {
         assert mNativeNavigationControllerAndroid != 0;
-        var removedValue = sNavigationControllerImpls.remove(mNativeNavigationControllerAndroid);
+        var removedValue = sNavigationControllerImpls.get(mNativeNavigationControllerAndroid);
+        sNavigationControllerImpls.remove(mNativeNavigationControllerAndroid);
         assert removedValue != null;
         mNativeNavigationControllerAndroid = 0;
     }
@@ -238,9 +234,10 @@ import java.util.Map;
                                     inputStart,
                                     params.getNavigationUIDataSupplier() == null
                                             ? 0
-                                            : params.getNavigationUIDataSupplier().get(),
+                                            : params.getNavigationUIDataSupplier().getAsLong(),
                                     params.getIsPdf(),
-                                    params.getRemoveExtraHeadersOnCrossOriginRedirect());
+                                    params.getRemoveExtraHeadersOnCrossOriginRedirect(),
+                                    params.getInternalScrollToTextFragment());
             // Use the navigation handle object to store user data passed in.
             if (navigationHandle != null) {
                 navigationHandle.setUserDataHost(params.takeNavigationHandleUserData());
@@ -298,14 +295,6 @@ import java.util.Map;
     public void setUseDesktopUserAgent(
             boolean override, boolean reloadOnChange, boolean skipOnInitialNavigation) {
         if (mNativeNavigationControllerAndroid != 0) {
-            Log.i(
-                    TAG,
-                    "Thread dump for debugging, override: "
-                            + override
-                            + " reloadOnChange: "
-                            + reloadOnChange);
-            Thread.dumpStack();
-
             NavigationControllerImplJni.get()
                     .setUseDesktopUserAgent(
                             mNativeNavigationControllerAndroid,
@@ -487,7 +476,8 @@ import java.util.Map;
                 long inputStart,
                 long navigationUIDataPtr,
                 boolean isPdf,
-                boolean removeExtraHeadersOnCrossOriginRedirect);
+                boolean removeExtraHeadersOnCrossOriginRedirect,
+                @Nullable String internalScrollToTextFragment);
 
         void clearHistory(long nativeNavigationControllerAndroid);
 

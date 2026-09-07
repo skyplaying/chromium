@@ -2,16 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef CHROME_BROWSER_WEB_APPLICATIONS_SYSTEM_MEDIA_CONTROLS_BRIDGE_BROWSERTEST_H_
-#define CHROME_BROWSER_WEB_APPLICATIONS_SYSTEM_MEDIA_CONTROLS_BRIDGE_BROWSERTEST_H_
-
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/apps/app_shim/app_shim_host_mac.h"
 #include "chrome/browser/apps/app_shim/app_shim_manager_mac.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
@@ -19,7 +16,6 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/system_media_controls/system_media_controls.h"
 #include "components/webapps/common/web_app_id.h"
-#include "content/public/common/content_features.h"
 #include "content/public/common/isolated_world_ids.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -35,9 +31,7 @@ namespace testing {
 class SystemMediaControlsBridgeBrowsertest
     : public web_app::WebAppBrowserTestBase {
  public:
-  SystemMediaControlsBridgeBrowsertest() {
-    feature_list_.InitWithFeatures({features::kWebAppSystemMediaControls}, {});
-  }
+  SystemMediaControlsBridgeBrowsertest() = default;
 
   SystemMediaControlsBridgeBrowsertest(
       const SystemMediaControlsBridgeBrowsertest&) = delete;
@@ -47,11 +41,11 @@ class SystemMediaControlsBridgeBrowsertest
   ~SystemMediaControlsBridgeBrowsertest() override = default;
 
   void SetUpOnMainThread() override {
-    InProcessBrowserTest::SetUpOnMainThread();
+    // Serve the test media session pages from the test server.
+    embedded_https_test_server().ServeFilesFromSourceDirectory(
+        "content/test/data");
 
-    // Start the test server so we can use the test media session pages.
-    https_server()->ServeFilesFromSourceDirectory("content/test/data");
-    ASSERT_TRUE(https_server()->Start());
+    web_app::WebAppBrowserTestBase::SetUpOnMainThread();
 
     wait_for_bridge_creation_run_loop_.emplace();
   }
@@ -76,7 +70,7 @@ class SystemMediaControlsBridgeBrowsertest
         SetVisibilityChangedCallbackForTesting(nullptr);
   }
 
-  void StartPlaybackAndWaitForStart(Browser* browser,
+  void StartPlaybackAndWaitForStart(BrowserWindowInterface* browser,
                                     const std::string& media_id) {
     content::WebContents* web_contents =
         browser->tab_strip_model()->GetActiveWebContents();
@@ -92,7 +86,7 @@ class SystemMediaControlsBridgeBrowsertest
     observer.Wait();
   }
 
-  void WaitForStop(Browser* browser, const std::string& id) {
+  void WaitForStop(BrowserWindowInterface* browser, const std::string& id) {
     if (!IsPlaying(browser, id)) {
       return;
     }
@@ -104,7 +98,7 @@ class SystemMediaControlsBridgeBrowsertest
     observer.Wait();
   }
 
-  bool IsPlaying(Browser* browser, const std::string& id) {
+  bool IsPlaying(BrowserWindowInterface* browser, const std::string& id) {
     content::WebContents* web_contents =
         browser->tab_strip_model()->GetActiveWebContents();
     return EvalJs(web_contents, content::JsReplace(
@@ -129,22 +123,20 @@ class SystemMediaControlsBridgeBrowsertest
  protected:
   std::optional<base::RunLoop> wait_for_bridge_creation_run_loop_;
   int num_bridges_created_ = 0;
-
- private:
-  base::test::ScopedFeatureList feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_F(SystemMediaControlsBridgeBrowsertest, TwoApps) {
   // Install and launch a test media session PWA.
-  webapps::AppId app_id1 =
-      InstallPWA(https_server()->GetURL("/media/session/media-session.html"));
-  Browser* web_app_browser1 = LaunchWebAppBrowserAndWait(app_id1);
+  webapps::AppId app_id1 = InstallPWA(
+      embedded_https_test_server().GetURL("/media/session/media-session.html"));
+  BrowserWindowInterface* web_app_browser1 =
+      LaunchWebAppBrowserAndWait(app_id1);
   EXPECT_TRUE(web_app_browser1);
 
   // Wait for the app shim to connect.
   apps::AppShimManager* app_shim_manager = apps::AppShimManager::Get();
   AppShimHost* app_shim_host =
-      app_shim_manager->FindHost(web_app_browser1->profile(), app_id1);
+      app_shim_manager->FindHost(web_app_browser1->GetProfile(), app_id1);
   MaybeWaitForAppShimConnection(app_shim_host);
 
   // At this point, WebAppSystemMediaControlsManager exists,
@@ -163,14 +155,15 @@ IN_PROC_BROWSER_TEST_F(SystemMediaControlsBridgeBrowsertest, TwoApps) {
   wait_for_bridge_creation_run_loop_.emplace();  // Reset run loop for reuse.
 
   // Install and launch a different test media session PWA.
-  webapps::AppId app_id2 = InstallPWA(https_server()->GetURL(
+  webapps::AppId app_id2 = InstallPWA(embedded_https_test_server().GetURL(
       "/media/session/media_controls/media-session2.html"));
-  Browser* web_app_browser2 = LaunchWebAppBrowserAndWait(app_id2);
+  BrowserWindowInterface* web_app_browser2 =
+      LaunchWebAppBrowserAndWait(app_id2);
   EXPECT_TRUE(web_app_browser2);
 
   // Wait for 2nd app shim to connect.
   AppShimHost* app_shim_host2 =
-      app_shim_manager->FindHost(web_app_browser2->profile(), app_id2);
+      app_shim_manager->FindHost(web_app_browser2->GetProfile(), app_id2);
   MaybeWaitForAppShimConnection(app_shim_host2);
 
   // Start playing the audio.
@@ -188,7 +181,8 @@ IN_PROC_BROWSER_TEST_F(SystemMediaControlsBridgeBrowsertest, OneBrowser) {
 
   // Navigate the browser to the test media page.
   NavigateParams params(
-      browser(), https_server()->GetURL("/media/session/media-session.html"),
+      browser(),
+      embedded_https_test_server().GetURL("/media/session/media-session.html"),
       ui::PAGE_TRANSITION_LINK);
   ui_test_utils::NavigateToURL(&params);
 
@@ -206,7 +200,8 @@ IN_PROC_BROWSER_TEST_F(SystemMediaControlsBridgeBrowsertest, OneBrowserOneApp) {
 
   // Navigate the browser to the test media page.
   NavigateParams params(
-      browser(), https_server()->GetURL("/media/session/media-session.html"),
+      browser(),
+      embedded_https_test_server().GetURL("/media/session/media-session.html"),
       ui::PAGE_TRANSITION_LINK);
   ui_test_utils::NavigateToURL(&params);
 
@@ -219,15 +214,16 @@ IN_PROC_BROWSER_TEST_F(SystemMediaControlsBridgeBrowsertest, OneBrowserOneApp) {
   wait_for_bridge_creation_run_loop_.emplace();
 
   // Install and launch a test media session PWA.
-  webapps::AppId app_id1 =
-      InstallPWA(https_server()->GetURL("/media/session/media-session.html"));
-  Browser* web_app_browser1 = LaunchWebAppBrowserAndWait(app_id1);
+  webapps::AppId app_id1 = InstallPWA(
+      embedded_https_test_server().GetURL("/media/session/media-session.html"));
+  BrowserWindowInterface* web_app_browser1 =
+      LaunchWebAppBrowserAndWait(app_id1);
   EXPECT_TRUE(web_app_browser1);
 
   // Wait for the app shim to connect.
   apps::AppShimManager* app_shim_manager = apps::AppShimManager::Get();
   AppShimHost* app_shim_host =
-      app_shim_manager->FindHost(web_app_browser1->profile(), app_id1);
+      app_shim_manager->FindHost(web_app_browser1->GetProfile(), app_id1);
   MaybeWaitForAppShimConnection(app_shim_host);
 
   // At this point, WebAppSystemMediaControlsManager exists,
@@ -247,15 +243,16 @@ IN_PROC_BROWSER_TEST_F(SystemMediaControlsBridgeBrowsertest, OneBrowserOneApp) {
 
 IN_PROC_BROWSER_TEST_F(SystemMediaControlsBridgeBrowsertest, DuplicateApp) {
   // Install and launch a test media session PWA.
-  webapps::AppId app_id1 =
-      InstallPWA(https_server()->GetURL("/media/session/media-session.html"));
-  Browser* web_app_browser1 = LaunchWebAppBrowserAndWait(app_id1);
+  webapps::AppId app_id1 = InstallPWA(
+      embedded_https_test_server().GetURL("/media/session/media-session.html"));
+  BrowserWindowInterface* web_app_browser1 =
+      LaunchWebAppBrowserAndWait(app_id1);
   EXPECT_TRUE(web_app_browser1);
 
   // Wait for the app shim to connect.
   apps::AppShimManager* app_shim_manager = apps::AppShimManager::Get();
   AppShimHost* app_shim_host =
-      app_shim_manager->FindHost(web_app_browser1->profile(), app_id1);
+      app_shim_manager->FindHost(web_app_browser1->GetProfile(), app_id1);
   MaybeWaitForAppShimConnection(app_shim_host);
 
   // At this point, WebAppSystemMediaControlsManager exists,
@@ -275,7 +272,8 @@ IN_PROC_BROWSER_TEST_F(SystemMediaControlsBridgeBrowsertest, DuplicateApp) {
   wait_for_bridge_creation_run_loop_.emplace();  // Reset run loop for reuse.
 
   // Launch THE SAME test media session PWA.
-  Browser* web_app_browser2 = LaunchWebAppBrowserAndWait(app_id1);
+  BrowserWindowInterface* web_app_browser2 =
+      LaunchWebAppBrowserAndWait(app_id1);
   EXPECT_TRUE(web_app_browser2);
 
   // We don't need to wait for the app shim connection here because duplicate
@@ -292,15 +290,16 @@ IN_PROC_BROWSER_TEST_F(SystemMediaControlsBridgeBrowsertest, DuplicateApp) {
 IN_PROC_BROWSER_TEST_F(SystemMediaControlsBridgeBrowsertest,
                        CommandQuitOneApp) {
   // Install and launch a test media session PWA.
-  webapps::AppId app_id1 =
-      InstallPWA(https_server()->GetURL("/media/session/media-session.html"));
-  Browser* web_app_browser1 = LaunchWebAppBrowserAndWait(app_id1);
+  webapps::AppId app_id1 = InstallPWA(
+      embedded_https_test_server().GetURL("/media/session/media-session.html"));
+  BrowserWindowInterface* web_app_browser1 =
+      LaunchWebAppBrowserAndWait(app_id1);
   EXPECT_TRUE(web_app_browser1);
 
   // Wait for the app shim to connect.
   apps::AppShimManager* app_shim_manager = apps::AppShimManager::Get();
   AppShimHost* app_shim_host =
-      app_shim_manager->FindHost(web_app_browser1->profile(), app_id1);
+      app_shim_manager->FindHost(web_app_browser1->GetProfile(), app_id1);
   MaybeWaitForAppShimConnection(app_shim_host);
 
   // Start playing the audio.
@@ -316,15 +315,16 @@ IN_PROC_BROWSER_TEST_F(SystemMediaControlsBridgeBrowsertest,
 IN_PROC_BROWSER_TEST_F(SystemMediaControlsBridgeBrowsertest,
                        NowPlayingInfoHiddenOnNavigationAway) {
   // Install and launch a test media session PWA.
-  webapps::AppId app_id1 =
-      InstallPWA(https_server()->GetURL("/media/session/media-session.html"));
-  Browser* web_app_browser1 = LaunchWebAppBrowserAndWait(app_id1);
+  webapps::AppId app_id1 = InstallPWA(
+      embedded_https_test_server().GetURL("/media/session/media-session.html"));
+  BrowserWindowInterface* web_app_browser1 =
+      LaunchWebAppBrowserAndWait(app_id1);
   EXPECT_TRUE(web_app_browser1);
 
   // Wait for the app shim to connect.
   apps::AppShimManager* app_shim_manager = apps::AppShimManager::Get();
   AppShimHost* app_shim_host =
-      app_shim_manager->FindHost(web_app_browser1->profile(), app_id1);
+      app_shim_manager->FindHost(web_app_browser1->GetProfile(), app_id1);
   MaybeWaitForAppShimConnection(app_shim_host);
 
   // Register for a callback when the bridge is made. We don't really care about
@@ -352,7 +352,8 @@ IN_PROC_BROWSER_TEST_F(SystemMediaControlsBridgeBrowsertest,
 
   // Check the pwa is still playing, and navigate away to a different url.
   EXPECT_TRUE(IsPlaying(web_app_browser1, "long-video-loop"));
-  GURL http_url2(https_server()->GetURL("/media/session/title1.html"));
+  GURL http_url2(
+      embedded_https_test_server().GetURL("/media/session/title1.html"));
   NavigateParams params(web_app_browser1, http_url2, ui::PAGE_TRANSITION_LINK);
   ui_test_utils::NavigateToURL(&params);
 
@@ -367,15 +368,16 @@ IN_PROC_BROWSER_TEST_F(SystemMediaControlsBridgeBrowsertest,
                        NowPlayingInfoHiddenOnAudioEnd) {
   // Set up a media session in 1 PWA.
   // Install and launch a test media session PWA.
-  webapps::AppId app_id1 =
-      InstallPWA(https_server()->GetURL("/media/session/media-session.html"));
-  Browser* web_app_browser1 = LaunchWebAppBrowserAndWait(app_id1);
+  webapps::AppId app_id1 = InstallPWA(
+      embedded_https_test_server().GetURL("/media/session/media-session.html"));
+  BrowserWindowInterface* web_app_browser1 =
+      LaunchWebAppBrowserAndWait(app_id1);
   EXPECT_TRUE(web_app_browser1);
 
   // Wait for the app shim to connect.
   apps::AppShimManager* app_shim_manager = apps::AppShimManager::Get();
   AppShimHost* app_shim_host =
-      app_shim_manager->FindHost(web_app_browser1->profile(), app_id1);
+      app_shim_manager->FindHost(web_app_browser1->GetProfile(), app_id1);
   MaybeWaitForAppShimConnection(app_shim_host);
 
   // Register for a callback when the bridge is made. We don't really care about
@@ -414,5 +416,3 @@ IN_PROC_BROWSER_TEST_F(SystemMediaControlsBridgeBrowsertest,
 
 }  // namespace testing
 }  // namespace system_media_controls
-
-#endif  // CHROME_BROWSER_WEB_APPLICATIONS_SYSTEM_MEDIA_CONTROLS_BRIDGE_MAC_BROWSERTEST_H_

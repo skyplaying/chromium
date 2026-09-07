@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <sys/system_properties.h>
 
+#include "base/android/android_info.h"
 #include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
@@ -60,10 +61,44 @@ void GetOsVersionStringAndNumbers(std::string* version_string,
                                          *minor_version, *bugfix_version);
 }
 
-std::string HardwareManufacturerName() {
-  char device_model_str[PROP_VALUE_MAX];
-  __system_property_get("ro.product.manufacturer", device_model_str);
-  return std::string(device_model_str);
+// Reads an Android system property of arbitrary length.
+// This is preferred over `__system_property_get` because the legacy API is
+// limited to `PROP_VALUE_MAX` (92 bytes) and will fail to return the value
+// (returning a warning message instead) if the property is longer.
+std::string ReadArbitrarilyLongSystemProperty(const char* name) {
+  // `__system_property_read_callback` was introduced in Android API level 26.
+  // When available, use it because it allows reading properties of arbitrary
+  // length without being truncated or limited by `PROP_VALUE_MAX`.
+  if (__builtin_available(android 26, *)) {
+    const prop_info* pi = __system_property_find(name);
+    if (!pi) {
+      return std::string();
+    }
+    std::string value;
+    __system_property_read_callback(
+        pi,
+        [](void* cookie, const char* /*name*/, const char* value,
+           uint32_t /*serial*/) {
+          // This static_cast is safe because:
+          // 1. The cookie is passed as `&value` where `value` is a
+          // `std::string`
+          //    local variable in `ReadArbitrarilyLongSystemProperty`.
+          // 2. `__system_property_read_callback` executes the callback
+          //    synchronously on the same thread before returning.
+          // 3. Therefore, the `value` object is guaranteed to be alive on the
+          //    stack during the callback execution.
+          std::string* out = static_cast<std::string*>(cookie);
+          *out = value;
+        },
+        &value);
+    return value;
+  }
+
+  // Fallback for devices running pre-API 26 or targets compiled with a
+  // minimum deployment target lower than Android 26.
+  char value_str[PROP_VALUE_MAX] = "";
+  __system_property_get(name, value_str);
+  return std::string(value_str);
 }
 
 }  // anonymous namespace
@@ -132,13 +167,40 @@ std::string SysInfo::GetAndroidHardwareClass() {
 }
 
 // static
+std::string SysInfo::HardwareManufacturer() {
+  char device_model_str[PROP_VALUE_MAX];
+  __system_property_get("ro.product.manufacturer", device_model_str);
+  return std::string(device_model_str);
+}
+
+// static
+bool SysInfo::HasLargeProcessCountSupport() {
+  // Safesetid is only guaranteed to be enabled for 6.18 kernel on Android 17
+  // and therefore the process limit can only be increased for devices with a
+  // new enough kernel that are also running Android 17.
+  //
+  // TODO(crbug.com/422903297): Expand coverage as noted in the bug, as it's
+  // stricter than it needs to be, on ARM64 in particular.
+  static const bool has_support = [] {
+    return android::android_info::sdk_int() >=
+               android::android_info::SDK_VERSION_CINNAMON_BUN &&
+           KernelVersionNumber::Current() >= KernelVersionNumber{6, 18, 0};
+  }();
+  return has_support;
+}
+
+// static
 SysInfo::HardwareInfo SysInfo::GetHardwareInfoSync() {
   HardwareInfo info;
-  info.manufacturer = HardwareManufacturerName();
+  info.manufacturer = HardwareManufacturer();
   info.model = HardwareModelName();
   DCHECK(IsStringUTF8(info.manufacturer));
   DCHECK(IsStringUTF8(info.model));
   return info;
+}
+
+std::string SysInfo::GetAndroidBuildFingerprint() {
+  return ReadArbitrarilyLongSystemProperty("ro.build.fingerprint");
 }
 
 }  // namespace base

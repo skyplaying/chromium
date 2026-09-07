@@ -12,7 +12,6 @@
 #include "chrome/browser/screen_ai/screen_ai_install_state.h"
 #include "chrome/browser/screen_ai/screen_ai_service_router.h"
 #include "chrome/browser/screen_ai/screen_ai_service_router_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
@@ -54,6 +53,8 @@ class AXMainNodeAnnotatorControllerBrowserTest : public InProcessBrowserTest {
   // InProcessBrowserTest overrides:
   void SetUpOnMainThread() override {
     InProcessBrowserTest::SetUpOnMainThread();
+    content::BrowserAccessibilityState::GetInstance()
+        ->SetActivationFromPlatformEnabled(true);
 
 #if BUILDFLAG(ENABLE_SCREEN_AI_BROWSERTESTS)
     screen_ai::ScreenAIInstallState::GetInstance()->SetComponentFolder(
@@ -72,7 +73,7 @@ class AXMainNodeAnnotatorControllerBrowserTest : public InProcessBrowserTest {
 #if BUILDFLAG(ENABLE_SCREEN_AI_BROWSERTESTS)
     base::test::TestFuture<bool> future;
     screen_ai::ScreenAIServiceRouterFactory::GetForBrowserContext(
-        browser()->profile())
+        browser()->GetProfile())
         ->GetServiceStateAsync(
             screen_ai::ScreenAIServiceRouter::Service::kMainContentExtraction,
             future.GetCallback());
@@ -80,14 +81,14 @@ class AXMainNodeAnnotatorControllerBrowserTest : public InProcessBrowserTest {
     ASSERT_TRUE(future.Get<bool>()) << "Service initialization failed.";
 #else
     screen_ai::AXMainNodeAnnotatorControllerFactory::GetForProfile(
-        browser()->profile())
+        browser()->GetProfile())
         ->set_service_ready_for_testing();
 #endif
   }
 
   void CompleteServiceInitialization() {
     screen_ai::AXMainNodeAnnotatorControllerFactory::GetForProfile(
-        browser()->profile())
+        browser()->GetProfile())
         ->complete_service_intialization_for_testing();
   }
 
@@ -138,16 +139,16 @@ IN_PROC_BROWSER_TEST_F(AXMainNodeAnnotatorControllerBrowserTest,
       content::BrowserAccessibilityState::GetInstance()->GetAccessibilityMode();
   EXPECT_FALSE(ax_mode.has_mode(ui::AXMode::kAnnotateMainNode));
 
-  chrome::NewTab(browser());
+  chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
   content::WebContents* web_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
   ax_mode = web_contents->GetAccessibilityMode();
   EXPECT_FALSE(ax_mode.has_mode(ui::AXMode::kAnnotateMainNode));
 
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       prefs::kAccessibilityMainNodeAnnotationsEnabled, true);
 
-  chrome::NewTab(browser());
+  chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
   web_contents = browser()->tab_strip_model()->GetActiveWebContents();
   // Wait for ChromeVox to attach to the new tab if needed.
   if (!web_contents->GetAccessibilityMode().has_mode(
@@ -158,10 +159,10 @@ IN_PROC_BROWSER_TEST_F(AXMainNodeAnnotatorControllerBrowserTest,
   ax_mode = web_contents->GetAccessibilityMode();
   EXPECT_TRUE(ax_mode.has_mode(ui::AXMode::kAnnotateMainNode));
 
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       prefs::kAccessibilityMainNodeAnnotationsEnabled, false);
 
-  chrome::NewTab(browser());
+  chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
   web_contents = browser()->tab_strip_model()->GetActiveWebContents();
   ax_mode = web_contents->GetAccessibilityMode();
   EXPECT_FALSE(ax_mode.has_mode(ui::AXMode::kAnnotateMainNode));
@@ -178,13 +179,13 @@ IN_PROC_BROWSER_TEST_F(AXMainNodeAnnotatorControllerBrowserTest,
   ui::AXMode ax_mode = web_contents->GetAccessibilityMode();
   EXPECT_FALSE(ax_mode.has_mode(ui::AXMode::kAnnotateMainNode));
 
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       prefs::kAccessibilityMainNodeAnnotationsEnabled, true);
 
   ax_mode = web_contents->GetAccessibilityMode();
   EXPECT_TRUE(ax_mode.has_mode(ui::AXMode::kAnnotateMainNode));
 
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       prefs::kAccessibilityMainNodeAnnotationsEnabled, false);
 
   ax_mode = web_contents->GetAccessibilityMode();
@@ -200,14 +201,14 @@ IN_PROC_BROWSER_TEST_F(AXMainNodeAnnotatorControllerBrowserTest,
   ui::AXMode ax_mode = web_contents->GetAccessibilityMode();
   EXPECT_FALSE(ax_mode.has_mode(ui::AXMode::kAnnotateMainNode));
 
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       prefs::kAccessibilityMainNodeAnnotationsEnabled, true);
 
   ax_mode = web_contents->GetAccessibilityMode();
   EXPECT_FALSE(ax_mode.has_mode(ui::AXMode::kAnnotateMainNode));
 
   // Reset state.
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       prefs::kAccessibilityMainNodeAnnotationsEnabled, false);
 }
 
@@ -224,7 +225,7 @@ IN_PROC_BROWSER_TEST_F(AXMainNodeAnnotatorControllerBrowserTest,
   EXPECT_FALSE(web_contents->GetAccessibilityMode().has_mode(
       ui::AXMode::kAnnotateMainNode));
 
-  browser()->profile()->GetPrefs()->SetBoolean(
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
       prefs::kAccessibilityMainNodeAnnotationsEnabled, true);
 
   // Now the feature is on.
@@ -246,7 +247,7 @@ IN_PROC_BROWSER_TEST_F(AXMainNodeAnnotatorControllerBrowserTest,
   }
 
   // The preference was set for the profile by PRE_EnabledByPreference.
-  ASSERT_TRUE(browser()->profile()->GetPrefs()->GetBoolean(
+  ASSERT_TRUE(browser()->GetProfile()->GetPrefs()->GetBoolean(
       prefs::kAccessibilityMainNodeAnnotationsEnabled));
 
   auto* const web_contents =

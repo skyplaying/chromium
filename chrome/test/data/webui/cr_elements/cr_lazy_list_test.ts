@@ -111,6 +111,7 @@ class TestDocumentTargetAppElement extends CrLitElement {
   }
 
   accessor listItems: Array<{name: string}> = [];
+  accessor scrollOffset: number = 0;
 }
 
 customElements.define(
@@ -149,7 +150,7 @@ class TestListPaddingAppElement extends CrLitElement {
 customElements.define(TestListPaddingAppElement.is, TestListPaddingAppElement);
 
 suite('CrLazyListTest', () => {
-  let lazyList: CrLazyListElement;
+  let lazyList: CrLazyListElement<{name: string}>;
   let testApp: TestAppElement;
 
   async function setupTest(
@@ -163,7 +164,9 @@ suite('CrLazyListTest', () => {
     testApp.style.overflowY = 'auto';
     testApp.style.overflowX = 'hidden';
     document.body.appendChild(testApp);
-    lazyList = testApp.shadowRoot.querySelector('cr-lazy-list')!;
+    lazyList =
+        testApp.shadowRoot.querySelector<CrLazyListElement<{name: string}>>(
+            'cr-lazy-list')!;
     assertTrue(!!lazyList);
     const listFilled = eventToPromise('viewport-filled', lazyList);
     testApp.chunkSize = chunkSize;
@@ -342,7 +345,9 @@ suite('CrLazyListTest', () => {
     document.body.appendChild(testDocumentTargetApp);
     testDocumentTargetApp.listItems = getTestItems(3);
 
-    lazyList = testDocumentTargetApp.shadowRoot.querySelector('cr-lazy-list')!;
+    lazyList =
+        testDocumentTargetApp.shadowRoot
+            .querySelector<CrLazyListElement<{name: string}>>('cr-lazy-list')!;
     assertTrue(!!lazyList);
     await eventToPromise('viewport-filled', lazyList);
     await microtasksFinished();
@@ -510,7 +515,9 @@ suite('CrLazyListTest', () => {
     const testListPaddingApp = setUpListPaddingApp();
     testListPaddingApp.listItems = getTestItems(12);
 
-    lazyList = testListPaddingApp.shadowRoot.querySelector('cr-lazy-list')!;
+    lazyList =
+        testListPaddingApp.shadowRoot
+            .querySelector<CrLazyListElement<{name: string}>>('cr-lazy-list')!;
     assertTrue(!!lazyList);
     await eventToPromise('viewport-filled', lazyList);
     await microtasksFinished();
@@ -522,7 +529,9 @@ suite('CrLazyListTest', () => {
     const testListPaddingApp = setUpListPaddingApp(3);
     testListPaddingApp.listItems = getTestItems(12);
 
-    lazyList = testListPaddingApp.shadowRoot.querySelector('cr-lazy-list')!;
+    lazyList =
+        testListPaddingApp.shadowRoot
+            .querySelector<CrLazyListElement<{name: string}>>('cr-lazy-list')!;
     assertTrue(!!lazyList);
     await eventToPromise('viewport-filled', lazyList);
     await microtasksFinished();

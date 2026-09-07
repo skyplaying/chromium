@@ -6,7 +6,6 @@
 #include "chrome/browser/extensions/api/chrome_extensions_api_client.h"
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/policy/core/common/policy_map.h"
@@ -39,10 +38,10 @@ IN_PROC_BROWSER_TEST_F(PolicyTest, NativeMessagingBlocklistSelective) {
   UpdateProviderPolicy(policies);
 
   EXPECT_EQ(extensions::MessagingDelegate::PolicyPermission::DISALLOW,
-            IsNativeMessagingHostAllowed(browser()->profile(), "host.name"));
+            IsNativeMessagingHostAllowed(browser()->GetProfile(), "host.name"));
   EXPECT_EQ(
       extensions::MessagingDelegate::PolicyPermission::ALLOW_ALL,
-      IsNativeMessagingHostAllowed(browser()->profile(), "other.host.name"));
+      IsNativeMessagingHostAllowed(browser()->GetProfile(), "other.host.name"));
 }
 
 IN_PROC_BROWSER_TEST_F(PolicyTest, NativeMessagingBlocklistWildcard) {
@@ -55,10 +54,10 @@ IN_PROC_BROWSER_TEST_F(PolicyTest, NativeMessagingBlocklistWildcard) {
   UpdateProviderPolicy(policies);
 
   EXPECT_EQ(extensions::MessagingDelegate::PolicyPermission::DISALLOW,
-            IsNativeMessagingHostAllowed(browser()->profile(), "host.name"));
+            IsNativeMessagingHostAllowed(browser()->GetProfile(), "host.name"));
   EXPECT_EQ(
       extensions::MessagingDelegate::PolicyPermission::DISALLOW,
-      IsNativeMessagingHostAllowed(browser()->profile(), "other.host.name"));
+      IsNativeMessagingHostAllowed(browser()->GetProfile(), "other.host.name"));
 }
 
 IN_PROC_BROWSER_TEST_F(PolicyTest, NativeMessagingAllowlist) {
@@ -76,10 +75,10 @@ IN_PROC_BROWSER_TEST_F(PolicyTest, NativeMessagingAllowlist) {
   UpdateProviderPolicy(policies);
 
   EXPECT_EQ(extensions::MessagingDelegate::PolicyPermission::ALLOW_ALL,
-            IsNativeMessagingHostAllowed(browser()->profile(), "host.name"));
+            IsNativeMessagingHostAllowed(browser()->GetProfile(), "host.name"));
   EXPECT_EQ(
       extensions::MessagingDelegate::PolicyPermission::DISALLOW,
-      IsNativeMessagingHostAllowed(browser()->profile(), "other.host.name"));
+      IsNativeMessagingHostAllowed(browser()->GetProfile(), "other.host.name"));
 }
 
 }  // namespace policy

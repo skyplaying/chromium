@@ -5,14 +5,16 @@
 #include "chrome/browser/ui/webui/ash/settings/pages/storage/device_storage_handler.h"
 
 #include <memory>
+#include <ranges>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/chrome_webui_url_constants.h"
+#include "ash/constants/webui_url_constants.h"
 #include "ash/public/cpp/test/test_new_window_delegate.h"
-#include "base/byte_count.h"
-#include "base/containers/adapters.h"
+#include "base/byte_size.h"
 #include "base/files/file.h"
 #include "base/files/file_util.h"
 #include "base/memory/raw_ptr.h"
@@ -21,18 +23,16 @@
 #include "base/system/sys_info.h"
 #include "base/test/gmock_callback_support.h"
 #include "base/test/scoped_running_on_chromeos.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/values.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
 #include "chrome/browser/ash/arc/test/test_arc_session_manager.h"
 #include "chrome/browser/ash/borealis/borealis_prefs.h"
 #include "chrome/browser/ash/borealis/testing/features.h"
 #include "chrome/browser/ash/file_manager/path_util.h"
-#include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/ui/webui/ash/settings/calculator/size_calculator_test_api.h"
 #include "chrome/browser/ui/webui/ash/settings/pages/storage/device_storage_util.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths.h"
-#include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "chromeos/ash/components/dbus/concierge/concierge_client.h"
@@ -47,11 +47,14 @@
 #include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
 #include "chromeos/ash/experiences/arc/test/fake_arc_session.h"
 #include "components/account_id/account_id.h"
+#include "components/prefs/pref_service.h"
+#include "components/session_manager/test/test_user_session_manager.h"
 #include "components/user_manager/scoped_user_manager.h"
 #include "components/user_manager/user_names.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_web_ui.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "storage/browser/file_system/external_mount_points.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -125,12 +128,19 @@ class StorageHandlerTest : public testing::Test {
     profile_manager_ = std::make_unique<TestingProfileManager>(
         TestingBrowserProcess::GetGlobal());
     ASSERT_TRUE(profile_manager_->SetUp());
+    test_user_session_manager_ =
+        std::make_unique<ash::test::TestUserSessionManager>(
+            TestingBrowserProcess::GetGlobal()->local_state());
+    const AccountId account_id =
+        AccountId::FromUserEmailGaiaId(kEmail, GaiaId("1234567890"));
+    ASSERT_TRUE(test_user_session_manager_->AddRegularUser(account_id));
+    test_user_session_manager_->LogIn(account_id);
     profile_ = profile_manager_->CreateTestingProfile(kEmail);
 
     // Initialize storage handler.
     content::WebUIDataSource* html_source =
         content::WebUIDataSource::CreateAndAdd(profile_,
-                                               chrome::kChromeUIOSSettingsHost);
+                                               ash::kChromeUIOSSettingsHost);
     auto handler = std::make_unique<StorageHandler>(profile_, html_source);
     handler_ = handler.get();
     web_ui_ = std::make_unique<content::TestWebUI>();
@@ -177,6 +187,7 @@ class StorageHandlerTest : public testing::Test {
     drive_offline_size_test_api_.reset();
     crostini_size_test_api_.reset();
     other_users_size_test_api_.reset();
+    test_user_session_manager_.reset();
     arc_session_manager_.reset();
     arc_dlc_installer_.reset();
     arc_service_manager_.reset();
@@ -220,7 +231,7 @@ class StorageHandlerTest : public testing::Test {
   // data.
   const base::Value* GetWebUICallbackMessage(const std::string& event_name) {
     for (const std::unique_ptr<content::TestWebUI::CallData>& data :
-         base::Reversed(web_ui_->call_data())) {
+         std::views::reverse(web_ui_->call_data())) {
       const std::string* name = data->arg1()->GetIfString();
       if (data->function_name() != "cr.webUIListenerCallback" || !name) {
         continue;
@@ -234,7 +245,7 @@ class StorageHandlerTest : public testing::Test {
 
   const base::Value* GetWebUIResponseMessage(const std::string& event_name) {
     for (const std::unique_ptr<content::TestWebUI::CallData>& data :
-         base::Reversed(web_ui_->call_data())) {
+         std::views::reverse(web_ui_->call_data())) {
       const std::string* name = data->arg1()->GetIfString();
       if (data->function_name() != "cr.webUIResponse" || !name ||
           *name != event_name) {
@@ -242,7 +253,7 @@ class StorageHandlerTest : public testing::Test {
       }
 
       // Assume that the data is stored in the last valid arg.
-      for (const auto& arg : base::Reversed(data->args())) {
+      for (const auto& arg : std::views::reverse(data->args())) {
         if (&arg != data->arg1()) {
           return &arg;
         }
@@ -300,6 +311,7 @@ class StorageHandlerTest : public testing::Test {
   std::unique_ptr<CrostiniSizeTestAPI> crostini_size_test_api_;
   std::unique_ptr<OtherUsersSizeTestAPI> other_users_size_test_api_;
   MockUserDataAuthClient userdataauth_;
+  std::unique_ptr<ash::test::TestUserSessionManager> test_user_session_manager_;
 
  private:
   std::unique_ptr<arc::ArcServiceManager> arc_service_manager_;
@@ -561,11 +573,10 @@ TEST_F(StorageHandlerTest, CrostiniSize) {
   ASSERT_FALSE(GetWebUICallbackMessage("storage-system-size-changed"));
 
   // Enable Borealis.
-  auto user_manager = std::make_unique<ash::FakeChromeUserManager>();
-  borealis::AllowBorealis(profile_, &features_,
-                          static_cast<ash::FakeChromeUserManager*>(
-                              user_manager::UserManager::Get()),
-                          /*also_enable=*/true);
+  features_.InitWithFeatures(
+      {::ash::features::kBorealis, ash::features::kBorealisPermitted}, {});
+  profile_->GetPrefs()->SetBoolean(borealis::prefs::kBorealisInstalledOnDevice,
+                                   /*also_enable=*/true);
 
   // Simulate crostini size callback which should now exclude the borealis VM.
   crostini_size_test_api_->SimulateOnGetCrostiniSize(true, listvm_response);
@@ -588,11 +599,10 @@ TEST_F(StorageHandlerTest, SystemSize) {
   const int64_t TB = 1024 * GB;
 
   // Enable Borealis.
-  auto user_manager = std::make_unique<ash::FakeChromeUserManager>();
-  borealis::AllowBorealis(profile_, &features_,
-                          static_cast<ash::FakeChromeUserManager*>(
-                              user_manager::UserManager::Get()),
-                          /*also_enable=*/true);
+  features_.InitWithFeatures(
+      {::ash::features::kBorealis, ash::features::kBorealisPermitted}, {});
+  profile_->GetPrefs()->SetBoolean(borealis::prefs::kBorealisInstalledOnDevice,
+                                   /*also_enable=*/true);
 
   // Simulate size stat callback.
   int64_t total_size = TB;
@@ -719,8 +729,8 @@ TEST_F(StorageHandlerTest, SystemSize) {
 
 TEST_F(StorageHandlerTest, OpenBrowsingDataSettings) {
   EXPECT_CALL(new_window_delegate(),
-              OpenUrl(GURL(chrome::kChromeUISettingsURL)
-                          .Resolve(chrome::kClearBrowserDataSubPage),
+              OpenUrl(GURL(ash::chrome_urls::kChromeUISettingsURL)
+                          .Resolve(ash::chrome_urls::kClearBrowserDataSubPage),
                       ash::NewWindowDelegate::OpenUrlFrom::kUserInteraction,
                       ash::NewWindowDelegate::Disposition::kSwitchToTab));
   base::ListValue empty_args;

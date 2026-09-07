@@ -7,18 +7,28 @@ import '//resources/cr_elements/cr_link_row/cr_link_row.js';
 import '//resources/cr_elements/cr_icon/cr_icon.js';
 import '//resources/cr_elements/cr_toggle/cr_toggle.js';
 import '//resources/cr_elements/cr_lazy_render/cr_lazy_render_lit.js';
+import '//resources/cr_components/help_bubble/new_badge.js';
 
 import type {CrActionMenuElement} from '//resources/cr_elements/cr_action_menu/cr_action_menu.js';
 import type {CrLazyRenderLitElement} from '//resources/cr_elements/cr_lazy_render/cr_lazy_render_lit.js';
 import {WebUiListenerMixinLit} from '//resources/cr_elements/web_ui_listener_mixin_lit.js';
 import {loadTimeData} from '//resources/js/load_time_data.js';
-import {CrLitElement, type PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
+import {CrLitElement, nothing} from '//resources/lit/v3_0/lit.rollup.js';
+import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
+import {browserProxyFactory as userEducationProxyFactory} from '//resources/mojo/components/user_education/webui/user_education.mojom-webui.js';
 
+import type {VisualBrowserProxy} from '../app/visual_browser_proxy.js';
+import {VisualBrowserProxyImpl} from '../app/visual_browser_proxy.js';
 import type {SettingsPrefs} from '../content/read_anything_types.js';
 import {DEFAULT_SETTINGS, SettingsOption, ToolbarEvent} from '../content/read_anything_types.js';
 import {openMenu} from '../shared/common.js';
 import {isActivationKey, isBackwardArrow, isForwardArrow, isVerticalArrow} from '../shared/keyboard_util.js';
+import {ReadAnythingSettingsAction, ReadAnythingSettingsChange} from '../shared/metrics_browser_proxy.js';
+import {ReadAnythingLogger} from '../shared/read_anything_logger.js';
 
+import {LINE_FOCUS_FEATURE_NAME} from './line_focus_menu.js';
+import {SettingsItemType} from './menu_util.js';
+import type {SettingsItem} from './menu_util.js';
 import {getCss} from './settings_menu.css.js';
 import {getHtml} from './settings_menu.html.js';
 
@@ -30,94 +40,134 @@ export const MENU_SHOW_DELAY_MS = 400;
 // opens of submenus.
 export const SUBMENU_SHOW_DELAY_MS = 800;
 
-export enum SettingsItemType {
-  MENU = 1,
-  TOGGLE = 2,
-}
-
-interface SettingsItem {
-  id: SettingsOption;
-  icon: string;
-  title: string;
-  itemType: SettingsItemType;
-  // Whether the toggle is checked. Only used when itemType is TOGGLE
-  enabled?: boolean;
-  // Needed when the aria label should be different from the title
-  ariaLabel?: string;
-  showSeparator?: boolean;
-}
-
 const MENU_ITEM_DATA: Record<SettingsOption, SettingsItem> = {
+  [SettingsOption.APPEARANCE]: {
+    id: SettingsOption.APPEARANCE,
+    icon: 'read-anything:appearance',
+    title: 'appearanceTitle',
+    itemType: SettingsItemType.MENU,
+  },
+  [SettingsOption.AUDIO]: {
+    id: SettingsOption.AUDIO,
+    icon: 'read-anything:volume-up',
+    title: 'audioTitle',
+    itemType: SettingsItemType.MENU,
+  },
   [SettingsOption.COLOR]: {
     id: SettingsOption.COLOR,
-    icon: 'read-anything:color',
+    icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'read-anything:palette' :
+        'read-anything:color-old',
     title: 'themeTitle',
     itemType: SettingsItemType.MENU,
   },
   [SettingsOption.FONT]: {
     id: SettingsOption.FONT,
-    icon: 'read-anything:font',
+    icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'read-anything:font-download' :
+        'read-anything:font-old',
     title: 'fontNameTitle',
     itemType: SettingsItemType.MENU,
   },
   [SettingsOption.FONT_SIZE]: {
     id: SettingsOption.FONT_SIZE,
-    icon: 'read-anything:font-size',
+    icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'read-anything:format-size' :
+        'read-anything:font-size-old',
     title: 'fontSizeTitle',
     itemType: SettingsItemType.MENU,
   },
   [SettingsOption.IMAGES]: {
     id: SettingsOption.IMAGES,
-    icon: 'read-anything:images-enabled',
+    icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'read-anything:image' :
+        'read-anything:images-enabled-old',
     title: 'imagesLabel',
     itemType: SettingsItemType.TOGGLE,
   },
   [SettingsOption.LINKS]: {
     id: SettingsOption.LINKS,
-    icon: 'read-anything:links-enabled',
+    icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'read-anything:link' :
+        'read-anything:links-enabled-old',
     title: 'linksLabel',
     itemType: SettingsItemType.TOGGLE,
     showSeparator: true,
   },
+  [SettingsOption.MEDIA]: {
+    id: SettingsOption.MEDIA,
+    icon: 'read-anything:animated-images',
+    title: 'mediaTitle',
+    itemType: SettingsItemType.MENU,
+  },
   [SettingsOption.LINE_SPACING]: {
     id: SettingsOption.LINE_SPACING,
-    icon: 'read-anything:line-spacing',
+    icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'read-anything:format-line-spacing' :
+        'read-anything:line-spacing-old',
     title: 'lineSpacingTitle',
     itemType: SettingsItemType.MENU,
   },
   [SettingsOption.LETTER_SPACING]: {
     id: SettingsOption.LETTER_SPACING,
-    icon: 'read-anything:letter-spacing',
+    icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'read-anything:format-letter-spacing-2' :
+        'read-anything:letter-spacing-old',
     title: 'letterSpacingTitle',
     itemType: SettingsItemType.MENU,
   },
   [SettingsOption.LINE_FOCUS]: {
     id: SettingsOption.LINE_FOCUS,
-    icon: 'read-anything:line-focus',
+    icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'read-anything:wb-incandescent' :
+        'read-anything:line-focus-old',
     title: 'lineFocusLabel',
     itemType: SettingsItemType.MENU,
+    showBadge: false,
   },
   [SettingsOption.PINNED_TO_TOOLBAR]: {
     id: SettingsOption.PINNED_TO_TOOLBAR,
-    icon: 'read-anything:pin',
+    icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'read-anything:keep' :
+        'read-anything:pin-old',
     title: 'pinLabel',
     itemType: SettingsItemType.TOGGLE,
   },
   [SettingsOption.PRESENTATION]: {
     id: SettingsOption.PRESENTATION,
-    icon: 'read-anything:view',
+    icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'read-anything:fullscreen' :
+        'read-anything:view-old',
     title: 'viewLabel',
     itemType: SettingsItemType.MENU,
   },
+  [SettingsOption.TEXT]: {
+    id: SettingsOption.TEXT,
+    icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'read-anything:font-download' :
+        'read-anything:font-old',
+    title: 'textSettingsTitle',
+    itemType: SettingsItemType.MENU,
+  },
+  [SettingsOption.TRANSLATION_REQUESTED]: {
+    id: SettingsOption.TRANSLATION_REQUESTED,
+    icon: 'read-anything:g-translate',
+    title: 'translateLabel',
+    itemType: SettingsItemType.ACTION,
+  },
   [SettingsOption.VOICE_SELECTION]: {
     id: SettingsOption.VOICE_SELECTION,
-    icon: 'read-anything:voice-selection',
+    icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'read-anything:voice-selection' :
+        'read-anything:voice-selection-old',
     title: 'voiceSelectionLabel',
     itemType: SettingsItemType.MENU,
   },
   [SettingsOption.VOICE_HIGHLIGHT]: {
     id: SettingsOption.VOICE_HIGHLIGHT,
-    icon: 'read-anything:highlight-on',
+    icon: loadTimeData.getBoolean('webuiRoundedIconsEnabled') ?
+        'read-anything:ink-highlighter-move' :
+        'read-anything:highlight-on-old',
     title: 'voiceHighlightLabel',
     itemType: SettingsItemType.MENU,
   },
@@ -150,16 +200,26 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
     return {
       isImmersiveMode: {type: Boolean},
       isReadAnythingPinned: {type: Boolean},
+      isSpeechActive: {type: Boolean},
+      showLineFocusNewBadge: {type: Boolean},
       settingsPrefs: {type: Object},
+      currentOpenId_: {
+        state: true,
+        type: String,
+      },
+      options_: {type: Array},
     };
   }
 
   accessor isImmersiveMode: boolean = false;
   accessor isReadAnythingPinned: boolean = false;
+  accessor isSpeechActive: boolean = false;
+  accessor showLineFocusNewBadge: boolean = false;
   accessor settingsPrefs: SettingsPrefs = DEFAULT_SETTINGS;
 
-  protected options_: SettingsItem[] = [];
-  private currentOpenId_: string|null = null;
+  protected accessor options_: SettingsItem[] = [];
+  protected accessor currentOpenId_: string|null = null;
+
   private interceptedEvents_: string[] =
       ['click', 'pointerdown', 'pointermove'];
   private openTimer_: number|null = null;
@@ -169,6 +229,9 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
   private lastMenuOpenTime_: number = 0;
   private pointerEventCallback_: (e: Event) => void = () => {};
   private keyDownCallback_: (e: KeyboardEvent) => void = () => {};
+  private logger_: ReadAnythingLogger = ReadAnythingLogger.getInstance();
+  private visualBrowserProxy_: VisualBrowserProxy =
+      VisualBrowserProxyImpl.getInstance();
 
   // Used to check if focus is currently on the PreviewPlayButton of the
   // VOICE_SELECTION submenu.
@@ -180,18 +243,34 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
     this.keyDownCallback_ = this.onKeyDown_.bind(this);
   }
 
+  override disconnectedCallback() {
+    super.disconnectedCallback();
+    this.close();
+  }
+
   override willUpdate(changedProperties: PropertyValues<this>) {
     super.willUpdate(changedProperties);
 
     if (changedProperties.has('settingsPrefs') ||
         changedProperties.has('isImmersiveMode') ||
-        changedProperties.has('isReadAnythingPinned')) {
+        changedProperties.has('isReadAnythingPinned') ||
+        changedProperties.has('isSpeechActive') ||
+        changedProperties.has('showLineFocusNewBadge')) {
       this.initializeMenuOptions_();
     }
   }
 
-  private initializeMenuOptions_() {
-    let optionIDs = [
+  protected getAriaExpanded_(item: SettingsItem): string|typeof nothing {
+    if (item.itemType !== SettingsItemType.MENU) {
+      return nothing;
+    }
+    return this.currentOpenId_ === item.id ? 'true' : 'false';
+  }
+
+  // TODO(crbug.com/532659261): Remove initializeMenuOptionsLegacy_() once
+  // the Improved Read Aloud feature flag is defaulted to true and cleaned up.
+  private initializeMenuOptionsLegacy_(): SettingsOption[] {
+    const optionIDs: SettingsOption[] = [
       SettingsOption.COLOR,
       SettingsOption.FONT,
       SettingsOption.LINE_SPACING,
@@ -200,39 +279,89 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
       SettingsOption.VOICE_HIGHLIGHT,
     ];
 
-    if (chrome.readingMode.isLineFocusEnabled) {
+    if (this.visualBrowserProxy_.isLineFocusEnabled()) {
       optionIDs.push(SettingsOption.LINE_FOCUS);
     }
 
-    optionIDs =
-        optionIDs.concat([SettingsOption.PRESENTATION, SettingsOption.LINKS]);
+    optionIDs.push(SettingsOption.PRESENTATION);
+    if (this.visualBrowserProxy_.isReadAnythingTranslateEntryPointEnabled()) {
+      optionIDs.push(SettingsOption.TRANSLATION_REQUESTED);
+    }
+    optionIDs.push(SettingsOption.LINKS);
+    optionIDs.push(SettingsOption.IMAGES);
 
-    if (chrome.readingMode.imagesFeatureEnabled) {
-      optionIDs.push(SettingsOption.IMAGES);
+    if (this.isImmersiveMode) {
+      optionIDs.push(SettingsOption.PINNED_TO_TOOLBAR);
+    }
+
+    return optionIDs;
+  }
+
+  private initializeMenuOptionsForImprovedUi_(): SettingsOption[] {
+    const optionIDs: SettingsOption[] = [
+      SettingsOption.APPEARANCE,
+      SettingsOption.MEDIA,
+      SettingsOption.TEXT,
+      SettingsOption.AUDIO,
+      SettingsOption.VOICE_SELECTION,
+    ];
+
+    if (this.visualBrowserProxy_.isLineFocusEnabled()) {
+      optionIDs.push(SettingsOption.LINE_FOCUS);
+    }
+
+    if (this.visualBrowserProxy_.isReadAnythingTranslateEntryPointEnabled()) {
+      optionIDs.push(SettingsOption.TRANSLATION_REQUESTED);
     }
 
     if (this.isImmersiveMode) {
       optionIDs.push(SettingsOption.PINNED_TO_TOOLBAR);
     }
 
+    return optionIDs;
+  }
+
+  private initializeMenuOptions_() {
+    let optionIDs: SettingsOption[];
+    if (this.visualBrowserProxy_.isReadAnythingImprovedUiEnabled()) {
+      optionIDs = this.initializeMenuOptionsForImprovedUi_();
+    } else {
+      optionIDs = this.initializeMenuOptionsLegacy_();
+    }
+
     this.options_ = optionIDs.map(id => {
       const original = MENU_ITEM_DATA[id];
-      const title = loadTimeData.getString(original.title);
+      let title = loadTimeData.getString(original.title);
       let ariaLabel = title;
-      let enabled = false;
+      let checked = false;
+      let disabled = false;
+      let icon = original.icon;
+
+      if (id === SettingsOption.LINE_FOCUS &&
+          this.visualBrowserProxy_.isReadAnythingImprovedUiEnabled()) {
+        icon = 'read-anything:service_toolbox';
+        title = loadTimeData.getString('toolsLabel');
+        ariaLabel = title;
+      }
 
       if (id === SettingsOption.IMAGES) {
-        enabled = this.settingsPrefs.imagesEnabled;
+        checked = this.visualBrowserProxy_.isImagesEnabled();
+        disabled = this.isSpeechActive;
         ariaLabel = this.getImageItemLabels();
       }
 
       if (id === SettingsOption.LINKS) {
-        enabled = this.settingsPrefs.linksEnabled;
+        checked = this.visualBrowserProxy_.isLinksEnabled();
         ariaLabel = this.getLinkItemLabels();
+        // Since links are disabled when read aloud is playing, the links
+        // toggle should also be disabled.
+        disabled = this.isSpeechActive;
       }
 
+      const showBadge =
+          (id === SettingsOption.LINE_FOCUS) && this.showLineFocusNewBadge;
       if (id === SettingsOption.PINNED_TO_TOOLBAR) {
-        enabled = this.isReadAnythingPinned;
+        checked = this.isReadAnythingPinned;
         ariaLabel = this.getPinItemLabels();
       }
 
@@ -240,14 +369,34 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
         ...original,
         id,
         title,
+        icon,
         ariaLabel,
-        enabled,
+        checked,
+        disabled,
+        showBadge,
       };
     });
+
+    // There should be a separator between the menu items and the action/toggle
+    // items. The base combination is on the Translate action or Links toggle.
+    this.options_.forEach(option => {
+      if (option.itemType === SettingsItemType.TOGGLE ||
+          option.itemType === SettingsItemType.ACTION) {
+        option.showSeparator = false;
+      }
+    });
+
+    // Add the separator to the first action or toggle item.
+    const firstActionOrToggle = this.options_.find(
+        item => item.itemType === SettingsItemType.TOGGLE ||
+            item.itemType === SettingsItemType.ACTION);
+    if (firstActionOrToggle) {
+      firstActionOrToggle.showSeparator = true;
+    }
   }
 
   private getLinkItemLabels() {
-    if (chrome.readingMode.linksEnabled) {
+    if (this.visualBrowserProxy_.isLinksEnabled()) {
       return loadTimeData.getString('disableLinksLabel');
     }
 
@@ -255,7 +404,7 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
   }
 
   private getImageItemLabels() {
-    if (chrome.readingMode.imagesEnabled) {
+    if (this.visualBrowserProxy_.isImagesEnabled()) {
       return loadTimeData.getString('disableImagesLabel');
     }
 
@@ -275,7 +424,24 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
     const currentTarget = e.currentTarget as HTMLElement;
     const index = Number.parseInt(currentTarget.dataset['index']!);
     const item = this.options_[index];
-    if (!item) {
+    if (!item || item.disabled) {
+      return;
+    }
+
+    if (item.itemType === SettingsItemType.ACTION) {
+      if (item.id === SettingsOption.TRANSLATION_REQUESTED) {
+        // Close any open submenus before firing the translate event.
+        if (this.currentOpenId_) {
+          this.fire(ToolbarEvent.CLOSE_SUBMENU_REQUESTED, {
+            previousId: this.currentOpenId_,
+          });
+          this.currentOpenId_ = null;
+        }
+        this.logger_.logSettingsAction(
+            ReadAnythingSettingsAction.TRANSLATE_ACTION);
+        this.fire(ToolbarEvent.TRANSLATION_REQUESTED);
+        this.close();
+      }
       return;
     }
 
@@ -291,39 +457,44 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
       return;
     }
 
-    this.fire(ToolbarEvent.OPEN_SETTINGS_SUBMENU, {
-      id: newMenuId,
-      previousId: this.currentOpenId_,
-      target: currentTarget,
-    });
+    const previousId = this.currentOpenId_;
     this.currentOpenId_ = newMenuId;
     this.lastMenuOpenTime_ = Date.now();
+    this.fire(ToolbarEvent.OPEN_SETTINGS_SUBMENU, {
+      id: newMenuId,
+      previousId,
+      target: currentTarget,
+    });
   }
 
   private onToggleMenuItemClick_(item: SettingsItem) {
-    if (item.itemType !== SettingsItemType.TOGGLE) {
+    if (item.itemType !== SettingsItemType.TOGGLE || item.disabled) {
       return;
     }
 
     if (item.id === SettingsOption.LINKS) {
-      chrome.readingMode.onLinksEnabledToggled();
+      this.logger_.logTextSettingsChange(
+          ReadAnythingSettingsChange.LINKS_ENABLED_CHANGE);
+      this.visualBrowserProxy_.onLinksEnabledToggled();
       this.fire(ToolbarEvent.LINKS);
       item.ariaLabel = this.getLinkItemLabels();
-      item.enabled = chrome.readingMode.linksEnabled;
+      item.checked = this.visualBrowserProxy_.isLinksEnabled();
     } else if (item.id === SettingsOption.IMAGES) {
-      chrome.readingMode.onImagesEnabledToggled();
+      this.logger_.logTextSettingsChange(
+          ReadAnythingSettingsChange.IMAGES_ENABLED_CHANGE);
+      this.visualBrowserProxy_.onImagesEnabledToggled();
       this.fire(ToolbarEvent.IMAGES);
       item.ariaLabel = this.getImageItemLabels();
-      item.enabled = chrome.readingMode.imagesEnabled;
+      item.checked = this.visualBrowserProxy_.isImagesEnabled();
     } else if (item.id === SettingsOption.PINNED_TO_TOOLBAR) {
-      chrome.readingMode.togglePinState();
-      chrome.readingMode.sendPinStateRequest();
+      this.visualBrowserProxy_.togglePinState();
+      this.visualBrowserProxy_.sendPinStateRequest();
     }
 
     this.requestUpdate();
   }
 
-  protected onMenuItemHover_(e: PointerEvent) {
+  protected onPointerenter_(e: PointerEvent) {
     this.clearTimers_();
 
     const currentTarget = e.currentTarget as HTMLElement;
@@ -331,9 +502,23 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
       return;
     }
 
+    const activeItems =
+        this.shadowRoot?.querySelectorAll<HTMLElement>('.active');
+    for (const activeItem of activeItems) {
+      activeItem.classList.remove('active');
+    }
+
     const index = Number.parseInt(currentTarget.dataset['index']!);
     const item = this.options_[index];
-    if (!item || item.itemType === SettingsItemType.TOGGLE) {
+    if (!item || item.itemType === SettingsItemType.TOGGLE ||
+        item.itemType === SettingsItemType.ACTION) {
+      // If there is an open submenu, close it.
+      if (this.currentOpenId_) {
+        this.fire(ToolbarEvent.CLOSE_SUBMENU_REQUESTED, {
+          previousId: this.currentOpenId_,
+        });
+        this.currentOpenId_ = null;
+      }
       return;
     }
 
@@ -349,24 +534,45 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
         MENU_SHOW_DELAY_MS;
 
     this.openTimer_ = window.setTimeout(() => {
-      this.fire(ToolbarEvent.OPEN_SETTINGS_SUBMENU, {
-        id: newMenuId,
-        previousId: this.currentOpenId_,
-        target: currentTarget,
-      });
+      const previousId = this.currentOpenId_;
       this.currentOpenId_ = newMenuId;
       this.lastMenuOpenTime_ = Date.now();
+      this.fire(ToolbarEvent.OPEN_SETTINGS_SUBMENU, {
+        id: newMenuId,
+        previousId,
+        target: currentTarget,
+      });
     }, delay);
   }
 
-  protected onMenuItemLeave_(e: PointerEvent) {
+  protected onPointerleave_(event: PointerEvent) {
     // Clear the open timer so that submenus aren't opened after the cursor
     // stops hovering.
     this.clearOpenTimer_();
 
-    const currentTarget = e.currentTarget as HTMLElement;
-    if (currentTarget) {
-      currentTarget.classList.remove('active');
+    // TODO (crbug.com/473578189): Make submenus children of the settings menu
+    // The submenus are siblings of this menu, living inside the same host
+    // (the toolbar). We use the host as a boundary to avoid traversing the
+    // entire document if the cursor leaves the toolbar completely.
+    const boundary = (this.getRootNode() as ShadowRoot)?.host;
+    let current = event.relatedTarget as Element | null;
+    let isOverSubmenu = false;
+
+    // Manually walk up the DOM to check if the cursor moved into a submenu.
+    // We cannot use element.closest() because it does not pierce Shadow DOM
+    // boundaries, and event.composedPath() only applies to the event target
+    // (the element we are leaving), not the relatedTarget (the destination).
+    while (current && current !== boundary) {
+      if (current.classList && current.classList.contains('settings-submenu')) {
+        isOverSubmenu = true;
+        break;
+      }
+      // Move up the tree, piercing through shadow roots if necessary.
+      current =
+          current.parentElement || (current.getRootNode() as ShadowRoot)?.host;
+    }
+
+    if (!isOverSubmenu) {
       this.startCloseTimer_();
     }
   }
@@ -405,6 +611,13 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
   }
 
   open(anchor: HTMLElement) {
+    if (this.visualBrowserProxy_.isLineFocusEnabled()) {
+      userEducationProxyFactory.getInstance()
+          .handler.maybeShowNewBadgeFor(LINE_FOCUS_FEATURE_NAME)
+          .then(({shouldShow}) => {
+            this.showLineFocusNewBadge = shouldShow;
+          });
+    }
     openMenu(this.$.lazyMenu.get(), anchor);
     window.addEventListener('keydown', this.keyDownCallback_, {capture: true});
     this.interceptedEvents_.forEach(eventType => {
@@ -412,6 +625,10 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
           eventType, this.pointerEventCallback_, {capture: true});
     });
     this.fire(ToolbarEvent.SETTINGS_OPENED);
+  }
+
+  protected onClose_() {
+    this.close();
   }
 
   close() {
@@ -465,6 +682,13 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
     // we should cancel the close timer, as the user intentionally moved into
     // the submenu.
     if (e.type === 'pointermove' && isInsideSubmenu) {
+      if (this.currentOpenId_) {
+        const activeItem = this.shadowRoot?.querySelector<HTMLElement>(
+            `#${this.currentOpenId_}`);
+        if (activeItem) {
+          activeItem.classList.add('active');
+        }
+      }
       this.clearCloseTimer_();
     }
 
@@ -538,13 +762,16 @@ export class SettingsMenuElement extends SettingsMenuElementBase {
 
       const index = Number.parseInt(focused.dataset['index']!);
       const item = this.options_[index];
-      if (!item || item.itemType === SettingsItemType.TOGGLE) {
+      if (!item || item.itemType === SettingsItemType.TOGGLE ||
+          item.itemType === SettingsItemType.ACTION) {
         return;
       }
 
       focused.click();
     }
   }
+
+
 }
 
 declare global {

@@ -15,27 +15,38 @@
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/path_service.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "base/values.h"
+#include "base/version.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/component_extensions_allowlist/allowlist.h"
 #include "chrome/browser/extensions/component_loader_factory.h"
 #include "chrome/browser/extensions/data_deleter.h"
+#include "chrome/browser/extensions/glic_util.h"
 #include "chrome/browser/extensions/profile_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/channel_info.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/extension_constants.h"
+#include "chrome/grit/aim_eligibility_extension_resources.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/browser_resources.h"
+#include "chrome/grit/component_extension_resources.h"
+#include "chrome/grit/contextual_tasks_extension_resources.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/component_updater/component_updater_paths.h"
 #include "components/crx_file/id_util.h"
+#include "components/omnibox/common/omnibox_features.h"
+#include "components/prefs/pref_service.h"
 #include "components/version_info/version_info.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/common/content_switches.h"
@@ -59,6 +70,7 @@
 #include "ui/base/resource/resource_bundle.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
+#include "ash/constants/ash_extension_constants.h"
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
@@ -109,6 +121,61 @@ ExtensionId GenerateId(const base::DictValue& manifest,
   CHECK(Extension::ParsePEMKeyBytes(*raw_key, &id_input));
   ExtensionId id = crx_file::id_util::GenerateId(id_input);
   return id;
+}
+
+bool MaybeLoadStagedAimEligibilityExtension(ComponentLoader& loader,
+                                            PrefService& local_state) {
+  // TODO(b/525368663): Abstract this function into a generic pattern so any
+  // component extension can be updated out-of-band via the component updater.
+  std::string staged_version = local_state.GetString(
+      extension_misc::kAimEligibilityExtensionStagedVersionPref);
+  std::string staged_manifest = local_state.GetString(
+      extension_misc::kAimEligibilityExtensionStagedManifestPref);
+  if (staged_version.empty() && staged_manifest.empty()) {
+    return false;
+  }
+
+  // Clear staged prefs on any failure return.
+  base::ScopedClosureRunner clear_staged_prefs(base::BindOnce(
+      [](PrefService* prefs) {
+        prefs->ClearPref(
+            extension_misc::kAimEligibilityExtensionStagedVersionPref);
+        prefs->ClearPref(
+            extension_misc::kAimEligibilityExtensionStagedManifestPref);
+      },
+      &local_state));
+
+  base::Version version =
+      ComponentLoader::GetVersionFromManifest(staged_manifest);
+  if (!version.IsValid() || version.GetString() != staged_version) {
+    return false;
+  }
+
+  std::string bundled_manifest =
+      ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
+          IDR_AIM_ELIGIBILITY_EXTENSION_MANIFEST_JSON);
+  base::Version bundled_version =
+      ComponentLoader::GetVersionFromManifest(bundled_manifest);
+  if (version <= bundled_version) {
+    return false;
+  }
+
+  base::FilePath user_component_dir;
+  if (!base::PathService::Get(component_updater::DIR_COMPONENT_USER,
+                              &user_component_dir)) {
+    return false;
+  }
+
+  base::FilePath install_dir =
+      user_component_dir.Append(extension_misc::kAimEligibilityExtensionDirName)
+          .AppendASCII(staged_version);
+  if (loader.Add(staged_manifest, install_dir).empty()) {
+    return false;
+  }
+
+  // The staged version is valid; reset the closure to avoid clearing the prefs.
+  std::ignore = clear_staged_prefs.Release();
+  return true;
 }
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -184,6 +251,19 @@ ComponentLoader::ComponentExtensionInfo::~ComponentExtensionInfo() = default;
 // static
 ComponentLoader* ComponentLoader::Get(content::BrowserContext* context) {
   return ComponentLoaderFactory::GetForBrowserContext(context);
+}
+
+// static
+base::Version ComponentLoader::GetVersionFromManifest(
+    std::string_view manifest_contents) {
+  std::optional<base::DictValue> manifest = base::JSONReader::ReadDict(
+      manifest_contents, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+  if (!manifest) {
+    return base::Version();
+  }
+  const std::string* version_str =
+      manifest->FindString(manifest_keys::kVersion);
+  return version_str ? base::Version(*version_str) : base::Version();
 }
 
 ComponentLoader::ComponentLoader(Profile* profile)
@@ -391,6 +471,41 @@ void ComponentLoader::AddNetworkSpeechSynthesisExtension() {
   }
 }
 
+void ComponentLoader::AddAimEligibilityExtension() {
+  if (!base::FeatureList::IsEnabled(
+          omnibox::kAimEligibilityComponentExtension)) {
+    return;
+  }
+
+  // Try to load a newer version from disk installed by the component updater.
+  PrefService* local_state =
+      g_browser_process ? g_browser_process->local_state() : nullptr;
+  if (local_state && omnibox::kAimEligibilityUseComponentUpdater.Get()) {
+    if (MaybeLoadStagedAimEligibilityExtension(*this, *local_state)) {
+      return;
+    }
+  }
+
+  // Fallback to bundled extension if no newer version exists on disk.
+  Add(IDR_AIM_ELIGIBILITY_EXTENSION_MANIFEST_JSON,
+      base::FilePath(extension_misc::kAimEligibilityExtensionDirName));
+}
+
+void ComponentLoader::AddGlicExtension() {
+  if (IsApiGlicPrivateEnabled()) {
+    Add(IDR_GLIC_EXTENSION_MANIFEST,
+        base::FilePath(FILE_PATH_LITERAL("glic_extension")));
+  }
+}
+
+void ComponentLoader::AddContextualTasksExtension() {
+  if (base::FeatureList::IsEnabled(
+          extensions_features::kApiContextualTasksPrivate)) {
+    Add(IDR_CONTEXTUAL_TASKS_EXTENSION_MANIFEST_JSON,
+        base::FilePath(FILE_PATH_LITERAL("contextual_tasks_extension")));
+  }
+}
+
 void ComponentLoader::AddWithNameAndDescription(
     int manifest_resource_id,
     const base::FilePath& root_directory,
@@ -423,10 +538,12 @@ void ComponentLoader::AddWebStoreApp() {
   }
 #endif
 
-  AddWithNameAndDescription(
-      IDR_WEBSTORE_MANIFEST, base::FilePath(FILE_PATH_LITERAL("web_store")),
-      l10n_util::GetStringUTF8(IDS_WEBSTORE_NAME_STORE),
-      l10n_util::GetStringUTF8(IDS_WEBSTORE_APP_DESCRIPTION));
+  if (base::FeatureList::IsEnabled(extensions_features::kWebstoreHostedApp)) {
+    AddWithNameAndDescription(
+        IDR_WEBSTORE_MANIFEST, base::FilePath(FILE_PATH_LITERAL("web_store")),
+        l10n_util::GetStringUTF8(IDS_WEBSTORE_NAME_STORE),
+        l10n_util::GetStringUTF8(IDS_WEBSTORE_APP_DESCRIPTION));
+  }
 }
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -603,6 +720,10 @@ void ComponentLoader::AddDefaultComponentExtensionsWithBackgroundPages(
 #endif  // BUILDFLAG(IS_CHROMEOS)
   }
 
+  AddAimEligibilityExtension();
+  AddGlicExtension();
+  AddContextualTasksExtension();
+
 // http://crbug.com/41070702
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_CHROMEOS)
   AddNetworkSpeechSynthesisExtension();
@@ -738,9 +859,7 @@ void ComponentLoader::AddChromeOsSpeechSynthesisExtensions() {
   if (!ExistsOrPendingAdd(extension_misc::kEspeakSpeechSynthesisExtensionId)) {
     AddComponentFromDir(
         base::FilePath(
-            ::features::IsAccessibilityManifestV3EnabledForEspeakNGTts()
-                ? extension_misc::kEspeakManifestV3SpeechSynthesisExtensionPath
-                : extension_misc::kEspeakSpeechSynthesisExtensionPath),
+            extension_misc::kEspeakManifestV3SpeechSynthesisExtensionPath),
         extension_misc::kEspeakSpeechSynthesisExtensionId,
         base::BindRepeating(
             &ComponentLoader::FinishLoadSpeechSynthesisExtension,

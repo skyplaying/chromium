@@ -9,7 +9,6 @@
 #include "chrome/browser/sync/test/integration/encryption_helper.h"
 #include "chrome/browser/sync/test/integration/sync_service_impl_harness.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/unified_consent/unified_consent_service_factory.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
@@ -444,6 +443,10 @@ IN_PROC_BROWSER_TEST_F(
   ASSERT_TRUE(SetupClients());
 
   ASSERT_TRUE(IsAnonymizedDataCollectionEnabled());
+
+  // The fake server carried over HTTP errors across PRE_ tests, so resolve it
+  // now.
+  GetFakeServer()->ClearHttpError();
 
   // The previous server/connection error has been resolved, so the engine can
   // initialize now.

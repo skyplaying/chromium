@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "base/containers/flat_map.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
@@ -70,8 +71,8 @@ std::optional<ProtocolParserXML::Results> ParseOfflineManifest(
   }
 
   std::string contents(file_size.value(), '\0');
-  if (base::ReadFile(manifest_path.value(), &contents[0], file_size.value()) ==
-      -1) {
+  if (base::ReadFile(manifest_path.value(), contents.data(),
+                     file_size.value()) == -1) {
     VLOG(2) << "Failed to load manifest file: " << manifest_path.value();
     return std::nullopt;
   }
@@ -135,6 +136,13 @@ void ReadInstallCommandFromManifest(
   installer_version = it->manifest.version;
   installer_path = [&offline_dir, &app_id, &it] {
     const base::FilePath app_dir(offline_dir.AppendUTF8(app_id));
+    const base::FilePath run_path(
+        base::FilePath::FromUTF8Unsafe(it->manifest.run));
+    if (run_path.IsAbsolute() || run_path.ReferencesParent()) {
+      VLOG(1) << "Manifest run path is unsafe (absolute or traversal): "
+              << it->manifest.run;
+      return base::FilePath();
+    }
     const base::FilePath path(app_dir.AppendUTF8(it->manifest.run));
     return base::PathExists(path)
                ? path
@@ -200,7 +208,7 @@ bool IsArchitectureSupported(const std::string& arch,
 }
 
 bool IsPlatformCompatible(const std::string& platform) {
-  return platform.empty() || base::ToLowerASCII(platform) == "win";
+  return platform.empty() || base::EqualsCaseInsensitiveASCII(platform, "win");
 }
 
 bool IsArchitectureCompatible(const std::string& arch_list,

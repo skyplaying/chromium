@@ -4,8 +4,11 @@
 
 #include "chrome/browser/contextual_tasks/contextual_search_session_finder.h"
 
+#include "chrome/browser/contextual_tasks/active_task_context_provider.h"
 #include "chrome/browser/contextual_search/contextual_search_web_contents_helper.h"
 #include "chrome/browser/contextual_tasks/contextual_tasks_panel_controller.h"
+#include "chrome/browser/contextual_tasks/contextual_tasks_utils.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/tab_list/tab_list_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/webui/new_tab_page/composebox/variations/composebox_fieldtrial.h"
@@ -72,23 +75,44 @@ void UpdateContextualSearchWebContentsHelperForTask(
     return;
   }
 
+  auto* helper = ContextualSearchWebContentsHelper::GetOrCreateForWebContents(
+      web_contents);
+
   // Since the task has just changed, find if the task has an existing session,
   // i.e. if the task is already open anywhere in the browser.
   // If not found, create a new session for the task.
   // Either way, update the ContextualSearchWebContentsHelper with the task ID
   // and session handle.
   contextual_search::ContextualSearchSessionHandle* existing_session =
-      contextual_tasks::FindSessionForTask(task_id, contextual_tasks_service,
-                                           browser_window, panel_controller);
+      FindSessionForTask(task_id, contextual_tasks_service, browser_window,
+                         panel_controller);
+
+  if (!existing_session) {
+    existing_session = helper->GetSessionForTask(task_id);
+  }
+  if (!existing_session) {
+    existing_session = helper->session_handle();
+  }
 
   std::unique_ptr<contextual_search::ContextualSearchSessionHandle>
       session_handle;
   if (existing_session) {
     session_handle = contextual_search_service->GetSession(
         existing_session->session_id(), existing_session->invocation_source());
+    session_handle->set_smart_tab_sharing_active(
+        existing_session->smart_tab_sharing_active());
+    session_handle->set_smart_tab_sharing_toggled_since_last_turn(
+        existing_session->smart_tab_sharing_toggled_since_last_turn());
+    session_handle->set_sts_toggled_removed_contexts(
+        existing_session->sts_toggled_removed_contexts());
+    session_handle->set_submitted_context_tokens(
+        existing_session->GetSubmittedContextTokens());
+    session_handle->set_persisted_tabs(existing_session->persisted_tabs());
+    session_handle->set_deselected_tabs_urls(
+        existing_session->deselected_tabs_urls());
   } else {
     session_handle = contextual_search_service->CreateSession(
-        ntp_composebox::CreateQueryControllerConfigParams(),
+        CreateQueryControllerConfigParams(),
         contextual_search::ContextualSearchSource::kContextualTasks,
         lens::LensOverlayInvocationSource::kContextualTasksComposebox);
     session_handle->NotifySessionStarted();
@@ -98,10 +122,11 @@ void UpdateContextualSearchWebContentsHelperForTask(
   if (session_handle) {
     session_handle->CheckSearchContentSharingSettings(
         browser_window->GetProfile()->GetPrefs());
-    auto* helper = ContextualSearchWebContentsHelper::GetOrCreateForWebContents(
-        web_contents);
     helper->SetTaskSession(task_id, std::move(session_handle),
                            /*input_state_model=*/nullptr);
+    if (auto* provider = ActiveTaskContextProvider::From(browser_window)) {
+      provider->RefreshContext();
+    }
   }
 }
 

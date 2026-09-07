@@ -161,7 +161,7 @@ bool GridTrackList::AddRepeater(
   repeaters_.emplace_back(repeater_track_sizes_.size(), repeat_size,
                           repeat_count, repeat_type);
   if (!IsSubgriddedAxis()) {
-    repeater_track_sizes_.AppendVector(repeater_track_sizes);
+    repeater_track_sizes_.append_range(repeater_track_sizes);
   }
   return true;
 }
@@ -170,7 +170,9 @@ String GridTrackList::ToString() const {
   StringBuilder builder;
   builder.Append("TrackList: { ");
   builder.AppendRange(repeaters_, ",  ",
-                      [](const auto& repeater) { return repeater.ToString(); });
+                      [](const auto& repeater, StringBuilder& b) {
+                        b.Append(repeater.ToString());
+                      });
   builder.Append(" } ");
   return builder.ToString();
 }

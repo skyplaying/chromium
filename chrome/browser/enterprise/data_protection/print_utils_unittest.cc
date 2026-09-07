@@ -6,8 +6,10 @@
 
 #include "base/containers/span.h"
 #include "base/run_loop.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
+#include "base/test/test_future.h"
 #include "build/build_config.h"
 #include "chrome/browser/enterprise/connectors/analysis/page_print_request_handler.h"
 #include "chrome/browser/enterprise/connectors/common.h"
@@ -16,15 +18,16 @@
 #include "chrome/browser/enterprise/connectors/test/deep_scanning_test_utils.h"
 #include "chrome/browser/policy/dm_token_utils.h"
 #include "chrome/browser/printing/print_preview_test.h"
-#include "chrome/browser/ui/browser_commands.h"
 #include "chrome/test/base/testing_browser_process.h"
+#include "chrome/test/base/testing_profile_manager.h"
 #include "components/enterprise/buildflags/buildflags.h"
 #include "components/enterprise/connectors/core/cloud_content_scanning/common.h"
 #include "components/enterprise/connectors/core/reporting_constants.h"
 #include "components/policy/core/common/cloud/mock_cloud_policy_client.h"
-#include "components/policy/core/common/cloud/realtime_reporting_job_configuration.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_task_environment.h"
+#include "content/public/test/web_contents_tester.h"
 #include "printing/printing_features.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -88,11 +91,6 @@ scoped_refptr<base::RefCountedMemory> CreateData() {
       base::byte_span_from_cstring(kTestData));
 }
 
-const std::set<std::string>* PrintMimeTypes() {
-  static std::set<std::string> set = {""};
-  return &set;
-}
-
 ContentAnalysisResponse::Result CreateResult(
     ContentAnalysisResponse::Result::TriggeredRule::Action action) {
   ContentAnalysisResponse::Result result;
@@ -125,10 +123,10 @@ class PrintTestContentAnalysisDelegate : public ContentAnalysisDelegate {
   static std::unique_ptr<ContentAnalysisDelegate> Create(
       content::WebContents* contents,
       ContentAnalysisDelegate::Data data,
-      ContentAnalysisDelegate::CompletionCallback callback) {
+      ContentAnalysisDelegate::CompletionCallback callback,
+      enterprise_connectors::DeepScanAccessPoint access_point) {
     auto delegate = base::WrapUnique(new PrintTestContentAnalysisDelegate(
-        contents, std::move(data), std::move(callback),
-        enterprise_connectors::DeepScanAccessPoint::PRINT));
+        contents, std::move(data), std::move(callback), access_point));
     test_delegate_ = delegate.get();
     return delegate;
   }
@@ -174,25 +172,26 @@ class PrintContentAnalysisUtilsTest
     : public PrintPreviewTest,
       public testing::WithParamInterface<const char*> {
  public:
-  PrintContentAnalysisUtilsTest() {
+  PrintContentAnalysisUtilsTest()
+      : profile_manager_(TestingBrowserProcess::GetGlobal()) {
     ContentAnalysisDelegate::DisableUIForTesting();
   }
 
   const char* policy_value() const { return GetParam(); }
 
   void SetUp() override {
+    ASSERT_TRUE(profile_manager_.SetUp());
     PrintPreviewTest::SetUp();
-    chrome::NewTab(browser());
+    content::WebContentsTester::For(web_contents())->SetTitle(u"New Tab");
 
     SetDMTokenForTesting(policy::DMToken::CreateValidToken(kDmToken));
 
     client_ = std::make_unique<policy::MockCloudPolicyClient>();
 
     RealtimeReportingClientFactory::GetInstance()->SetTestingFactory(
-        profile(), base::BindRepeating([](content::BrowserContext* context) {
-          return std::unique_ptr<KeyedService>(
-              new enterprise_connectors::RealtimeReportingClient(context));
-        }));
+        profile(),
+        base::BindRepeating(
+            &enterprise_connectors::test::BuildRealtimeReportingClient));
 
     RealtimeReportingClientFactory::GetForProfile(profile())
         ->SetBrowserCloudPolicyClientForTesting(client_.get());
@@ -217,13 +216,13 @@ class PrintContentAnalysisUtilsTest
     dbus_thread_linux::ShutdownOnDBusThreadAndBlock();
 #endif
     PrintPreviewTest::TearDown();
+    profile_manager_.DeleteAllTestingProfiles();
   }
 
-  content::WebContents* contents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
-  }
+  content::WebContents* contents() { return web_contents(); }
 
  protected:
+  TestingProfileManager profile_manager_;
   base::test::ScopedFeatureList scoped_feature_list_;
   std::unique_ptr<policy::MockCloudPolicyClient> client_;
   signin::IdentityTestEnvironment identity_test_environment_;
@@ -368,56 +367,30 @@ TEST_P(PrintContentAnalysisUtilsTest, PrintIfAllowedByPolicyReportOnly) {
   base::RunLoop validator_run_loop;
   validator.SetDoneClosure(validator_run_loop.QuitClosure());
 
-  if (base::FeatureList::IsEnabled(
-          policy::kUploadRealtimeReportingEventsUsingProto)) {
-    chrome::cros::reporting::proto::DlpSensitiveDataEvent expected_event;
-    expected_event.set_url("");
-    expected_event.set_tab_url("");
-    expected_event.set_source("");
-    expected_event.set_destination(kPrinterName);
-    expected_event.set_content_type("");
-    expected_event.set_file_name("New Tab");
-    expected_event.set_scan_id(kScanId);
+  chrome::cros::reporting::proto::DlpSensitiveDataEvent expected_event;
+  expected_event.set_url("");
+  expected_event.set_tab_url("");
+  expected_event.set_source("");
+  expected_event.set_destination(kPrinterName);
+  expected_event.set_content_type("");
+  expected_event.set_file_name("New Tab");
+  expected_event.set_scan_id(kScanId);
 
-    expected_event.set_trigger(
-        chrome::cros::reporting::proto::DataTransferEventTrigger::PAGE_PRINT);
-    expected_event.set_event_result(
-        chrome::cros::reporting::proto::EventResult::EVENT_RESULT_ALLOWED);
+  expected_event.set_trigger(
+      chrome::cros::reporting::proto::DataTransferEventTrigger::PAGE_PRINT);
+  expected_event.set_event_result(
+      chrome::cros::reporting::proto::EventResult::EVENT_RESULT_ALLOWED);
 
-    chrome::cros::reporting::proto::TriggeredRuleInfo triggered_rule;
-    triggered_rule.set_rule_name("print_rule_name");
-    triggered_rule.set_action(
-        chrome::cros::reporting::proto::TriggeredRuleInfo::REPORT_ONLY);
+  chrome::cros::reporting::proto::TriggeredRuleInfo triggered_rule;
+  triggered_rule.set_rule_name("print_rule_name");
+  triggered_rule.set_action(
+      chrome::cros::reporting::proto::TriggeredRuleInfo::REPORT_ONLY);
 
-    *expected_event.add_triggered_rule_info() = triggered_rule;
-    expected_event.set_profile_identifier(profile()->GetPath().AsUTF8Unsafe());
-    expected_event.set_profile_user_name(kUserName);
+  *expected_event.add_triggered_rule_info() = triggered_rule;
+  expected_event.set_profile_identifier(profile()->GetPath().AsUTF8Unsafe());
+  expected_event.set_profile_user_name(kUserName);
 
-    validator.ExpectSensitiveDataEvent(std::move(expected_event));
-  } else {
-    validator.ExpectSensitiveDataEvent(
-        /*url*/ "",
-        /*tab_url*/ "",
-        /*source*/ "",
-        /*destination*/ kPrinterName,
-        /*filename*/ "New Tab",
-        /*sha*/ "",
-        /*trigger*/
-        enterprise_connectors::kPagePrintDataTransferEventTrigger,
-        /*dlp_verdict*/
-        CreateResult(
-            ContentAnalysisResponse::Result::TriggeredRule::REPORT_ONLY),
-        /*mimetype*/ PrintMimeTypes(),
-        /*size*/ std::nullopt,
-        /*result*/
-        enterprise_connectors::EventResultToString(
-            enterprise_connectors::EventResult::ALLOWED),
-        /*username*/ kUserName,
-        /*profile_identifier*/ profile()->GetPath().AsUTF8Unsafe(),
-        /*scan_id*/ kScanId,
-        /*content_transfer_method*/ std::nullopt,
-        /*user_justification*/ std::nullopt);
-  }
+  validator.ExpectSensitiveDataEvent(std::move(expected_event));
 
   auto data = CreateData();
   base::RunLoop run_loop;
@@ -457,55 +430,30 @@ TEST_P(PrintContentAnalysisUtilsTest, PrintIfAllowedByPolicyWarnThenCancel) {
   base::RunLoop validator_run_loop;
   validator.SetDoneClosure(validator_run_loop.QuitClosure());
 
-  if (base::FeatureList::IsEnabled(
-          policy::kUploadRealtimeReportingEventsUsingProto)) {
-    chrome::cros::reporting::proto::DlpSensitiveDataEvent expected_event;
-    expected_event.set_url("");
-    expected_event.set_tab_url("");
-    expected_event.set_source("");
-    expected_event.set_destination(kPrinterName);
-    expected_event.set_content_type("");
-    expected_event.set_file_name("New Tab");
-    expected_event.set_scan_id(kScanId);
+  chrome::cros::reporting::proto::DlpSensitiveDataEvent expected_event;
+  expected_event.set_url("");
+  expected_event.set_tab_url("");
+  expected_event.set_source("");
+  expected_event.set_destination(kPrinterName);
+  expected_event.set_content_type("");
+  expected_event.set_file_name("New Tab");
+  expected_event.set_scan_id(kScanId);
 
-    expected_event.set_trigger(
-        chrome::cros::reporting::proto::DataTransferEventTrigger::PAGE_PRINT);
-    expected_event.set_event_result(
-        chrome::cros::reporting::proto::EventResult::EVENT_RESULT_WARNED);
+  expected_event.set_trigger(
+      chrome::cros::reporting::proto::DataTransferEventTrigger::PAGE_PRINT);
+  expected_event.set_event_result(
+      chrome::cros::reporting::proto::EventResult::EVENT_RESULT_WARNED);
 
-    chrome::cros::reporting::proto::TriggeredRuleInfo triggered_rule;
-    triggered_rule.set_rule_name("print_rule_name");
-    triggered_rule.set_action(
-        chrome::cros::reporting::proto::TriggeredRuleInfo::WARN);
+  chrome::cros::reporting::proto::TriggeredRuleInfo triggered_rule;
+  triggered_rule.set_rule_name("print_rule_name");
+  triggered_rule.set_action(
+      chrome::cros::reporting::proto::TriggeredRuleInfo::WARN);
 
-    *expected_event.add_triggered_rule_info() = triggered_rule;
-    expected_event.set_profile_identifier(profile()->GetPath().AsUTF8Unsafe());
-    expected_event.set_profile_user_name(kUserName);
+  *expected_event.add_triggered_rule_info() = triggered_rule;
+  expected_event.set_profile_identifier(profile()->GetPath().AsUTF8Unsafe());
+  expected_event.set_profile_user_name(kUserName);
 
-    validator.ExpectSensitiveDataEvent(std::move(expected_event));
-  } else {
-    validator.ExpectSensitiveDataEvent(
-        /*url*/ "",
-        /*tab_url*/ "",
-        /*source*/ "",
-        /*destination*/ kPrinterName,
-        /*filename*/ "New Tab",
-        /*sha*/ "",
-        /*trigger*/
-        enterprise_connectors::kPagePrintDataTransferEventTrigger,
-        /*dlp_verdict*/
-        CreateResult(ContentAnalysisResponse::Result::TriggeredRule::WARN),
-        /*mimetype*/ PrintMimeTypes(),
-        /*size*/ std::nullopt,
-        /*result*/
-        enterprise_connectors::EventResultToString(
-            enterprise_connectors::EventResult::WARNED),
-        /*username*/ kUserName,
-        /*profile_identifier*/ profile()->GetPath().AsUTF8Unsafe(),
-        /*scan_id*/ kScanId,
-        /*content_transfer_method*/ std::nullopt,
-        /*user_justification*/ std::nullopt);
-  }
+  validator.ExpectSensitiveDataEvent(std::move(expected_event));
 
   auto data = CreateData();
   base::RunLoop run_loop;
@@ -546,24 +494,29 @@ TEST_P(PrintContentAnalysisUtilsTest,
   base::RunLoop validator_warn_run_loop;
   enterprise_connectors::test::EventReportValidator validator(client_.get());
   validator.SetDoneClosure(validator_warn_run_loop.QuitClosure());
-  validator.ExpectSensitiveDataEventWarnThenBypass(
-      /*url*/ "",
-      /*tab_url*/ "",
-      /*source*/ "",
-      /*destination*/ kPrinterName,
-      /*filename*/ "New Tab",
-      /*sha*/ "",
-      /*trigger*/
-      enterprise_connectors::kPagePrintDataTransferEventTrigger,
-      /*dlp_verdict*/
-      CreateResult(ContentAnalysisResponse::Result::TriggeredRule::WARN),
-      /*mimetype*/ PrintMimeTypes(),
-      /*size*/ std::nullopt,
-      /*username*/ kUserName,
-      /*profile_identifier*/ profile()->GetPath().AsUTF8Unsafe(),
-      /*scan_id*/ kScanId,
-      /*content_transfer_method*/ std::nullopt,
-      /*user_justifications*/ {std::nullopt, kUserJustification});
+  chrome::cros::reporting::proto::DlpSensitiveDataEvent event_bypass;
+  event_bypass.set_destination(kPrinterName);
+  event_bypass.set_file_name("New Tab");
+  event_bypass.set_trigger(chrome::cros::reporting::proto::PAGE_PRINT);
+  event_bypass.set_event_result(
+      chrome::cros::reporting::proto::EventResult::EVENT_RESULT_BYPASSED);
+  event_bypass.set_profile_user_name(kUserName);
+  event_bypass.set_profile_identifier(profile()->GetPath().AsUTF8Unsafe());
+  event_bypass.set_scan_id(kScanId);
+  event_bypass.set_user_justification(base::UTF16ToUTF8(kUserJustification));
+
+  chrome::cros::reporting::proto::DlpSensitiveDataEvent event_warn;
+  event_warn.set_destination(kPrinterName);
+  event_warn.set_file_name("New Tab");
+  event_warn.set_trigger(chrome::cros::reporting::proto::PAGE_PRINT);
+  event_warn.set_event_result(
+      chrome::cros::reporting::proto::EventResult::EVENT_RESULT_WARNED);
+  event_warn.set_profile_user_name(kUserName);
+  event_warn.set_profile_identifier(profile()->GetPath().AsUTF8Unsafe());
+  event_warn.set_scan_id(kScanId);
+
+  validator.ExpectSensitiveDataEventWarnThenBypass(std::move(event_warn),
+                                                   std::move(event_bypass));
 
   auto data = CreateData();
   base::RunLoop run_loop;
@@ -591,55 +544,30 @@ TEST_P(PrintContentAnalysisUtilsTest, PrintIfAllowedByPolicyBlocked) {
   enterprise_connectors::test::EventReportValidator validator(client_.get());
   base::RunLoop validator_run_loop;
   validator.SetDoneClosure(validator_run_loop.QuitClosure());
-  if (base::FeatureList::IsEnabled(
-          policy::kUploadRealtimeReportingEventsUsingProto)) {
-    chrome::cros::reporting::proto::DlpSensitiveDataEvent expected_event;
-    expected_event.set_url("");
-    expected_event.set_tab_url("");
-    expected_event.set_source("");
-    expected_event.set_destination(kPrinterName);
-    expected_event.set_content_type("");
-    expected_event.set_file_name("New Tab");
-    expected_event.set_scan_id(kScanId);
+  chrome::cros::reporting::proto::DlpSensitiveDataEvent expected_event;
+  expected_event.set_url("");
+  expected_event.set_tab_url("");
+  expected_event.set_source("");
+  expected_event.set_destination(kPrinterName);
+  expected_event.set_content_type("");
+  expected_event.set_file_name("New Tab");
+  expected_event.set_scan_id(kScanId);
 
-    expected_event.set_trigger(
-        chrome::cros::reporting::proto::DataTransferEventTrigger::PAGE_PRINT);
-    expected_event.set_event_result(
-        chrome::cros::reporting::proto::EventResult::EVENT_RESULT_BLOCKED);
+  expected_event.set_trigger(
+      chrome::cros::reporting::proto::DataTransferEventTrigger::PAGE_PRINT);
+  expected_event.set_event_result(
+      chrome::cros::reporting::proto::EventResult::EVENT_RESULT_BLOCKED);
 
-    chrome::cros::reporting::proto::TriggeredRuleInfo triggered_rule;
-    triggered_rule.set_rule_name("print_rule_name");
-    triggered_rule.set_action(
-        chrome::cros::reporting::proto::TriggeredRuleInfo::BLOCK);
+  chrome::cros::reporting::proto::TriggeredRuleInfo triggered_rule;
+  triggered_rule.set_rule_name("print_rule_name");
+  triggered_rule.set_action(
+      chrome::cros::reporting::proto::TriggeredRuleInfo::BLOCK);
 
-    *expected_event.add_triggered_rule_info() = triggered_rule;
-    expected_event.set_profile_identifier(profile()->GetPath().AsUTF8Unsafe());
-    expected_event.set_profile_user_name(kUserName);
+  *expected_event.add_triggered_rule_info() = triggered_rule;
+  expected_event.set_profile_identifier(profile()->GetPath().AsUTF8Unsafe());
+  expected_event.set_profile_user_name(kUserName);
 
-    validator.ExpectSensitiveDataEvent(std::move(expected_event));
-  } else {
-    validator.ExpectSensitiveDataEvent(
-        /*url*/ "",
-        /*tab_url*/ "",
-        /*source*/ "",
-        /*destination*/ kPrinterName,
-        /*filename*/ "New Tab",
-        /*sha*/ "",
-        /*trigger*/
-        enterprise_connectors::kPagePrintDataTransferEventTrigger,
-        /*dlp_verdict*/
-        CreateResult(ContentAnalysisResponse::Result::TriggeredRule::BLOCK),
-        /*mimetype*/ PrintMimeTypes(),
-        /*size*/ std::nullopt,
-        /*result*/
-        enterprise_connectors::EventResultToString(
-            enterprise_connectors::EventResult::BLOCKED),
-        /*username*/ kUserName,
-        /*profile_identifier*/ profile()->GetPath().AsUTF8Unsafe(),
-        /*scan_id*/ kScanId,
-        /*content_transfer_method*/ std::nullopt,
-        /*user_justification*/ std::nullopt);
-  }
+  validator.ExpectSensitiveDataEvent(std::move(expected_event));
 
   auto data = CreateData();
   base::RunLoop run_loop;
@@ -661,16 +589,12 @@ TEST_P(PrintContentAnalysisUtilsTest, PrintIfAllowedByPolicyNullInitiator) {
   validator.ExpectNoReport();
 
   auto data = CreateData();
-  base::RunLoop run_loop;
-  auto on_verdict = base::BindLambdaForTesting([&run_loop](bool allowed) {
-    EXPECT_FALSE(allowed);
-    run_loop.Quit();
-  });
+  base::test::TestFuture<bool> future;
   PrintIfAllowedByPolicy(data, /*initiator=*/nullptr, kPrinterName,
                          PrintScanningContext::kNormalPrintAfterPreview,
-                         std::move(on_verdict),
+                         future.GetCallback(),
                          /*hide_preview=*/base::DoNothing());
-  run_loop.Run();
+  EXPECT_FALSE(future.Get());
 }
 
 INSTANTIATE_TEST_SUITE_P(

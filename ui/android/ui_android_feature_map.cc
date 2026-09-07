@@ -9,7 +9,7 @@
 #include "ui/base/ui_base_features.h"
 
 // Must come after all headers that specialize FromJniType() / ToJniType().
-#include "ui/android/ui_android_jni_headers/UiAndroidFeatureMap_jni.h"
+#include "ui/android/ui_android_feature_map_jni/UiAndroidFeatureMap_jni.h"
 
 namespace ui {
 
@@ -17,18 +17,30 @@ namespace {
 
 // Array of features exposed through the Java UiAndroidFeatureMap API.
 const base::Feature* const kFeaturesExposedToJava[] = {
+    &ui::kAndroidResourceMemoryOptimization,
     &ui::kAndroidUseCorrectDisplayWorkArea,
     &ui::kAndroidUseCorrectWindowBounds,
     &ui::kAndroidUseDisplayTopology,
     &ui::kAndroidWindowOcclusion,
+    &ui::kBlockMouseEventsOnView,
+    &ui::kBottomSheetRemeasureFix,
+    &ui::kCachedGestureNavMetrics,
     &ui::kCheckIntentCallerPermission,
+    &ui::kClipboardConfusedDeputyDefenseText,
+    &ui::kClipboardConfusedDeputyDefenseImages,
+    &ui::kClipboardConfusedDeputyDefenseFiles,
+    &ui::kClipboardOversizedPayloadProvider,
     &ui::kDeprecatedExternalPickerFunction,
     &ui::kDisablePhotoPickerForVideoCapture,
+    &ui::kMaximumWindowForGestureNavDetection,
+    &ui::kPointerLockMouseScaling,
     &ui::kRefactorMinWidthContextOverride,
     &ui::kReportBottomOverscrolls,
     &ui::kRequireLeadingInTextViewWithLeading,
-    &ui::kSelectFileOpenDocument,
+    &ui::kAndroidUpdateDisplayForContext,
+    &ui::kSupportKeyboard,
     &ui::kAndroidTouchpadOverscrollHistoryNavigation,
+    &ui::kUpdatePaddingForDisplayCalculation,
 };
 
 // static

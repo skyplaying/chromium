@@ -9,10 +9,7 @@
 #include <optional>
 
 #include "chrome/browser/chromeos/extensions/telemetry/api/common/base_telemetry_extension_api_guard_function.h"
-#include "chrome/browser/chromeos/extensions/telemetry/api/diagnostics/remote_diagnostics_service_strategy.h"
 #include "chromeos/ash/services/cros_healthd/public/mojom/cros_healthd.mojom.h"
-#include "chromeos/crosapi/mojom/diagnostics_service.mojom.h"
-#include "chromeos/crosapi/mojom/telemetry_extension_exception.mojom.h"
 #include "extensions/browser/extension_function.h"
 #include "extensions/browser/extension_function_histogram_value.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -38,14 +35,14 @@ class DiagnosticsApiFunctionBase : public DiagnosticsApiFunctionV1AndV2Base {
  protected:
   ~DiagnosticsApiFunctionBase() override;
 
-  // GetRemoteService is getting gradually replaced by GetService.
-  mojo::Remote<crosapi::mojom::DiagnosticsService>& GetRemoteService();
   const mojo::Remote<ash::cros_healthd::mojom::CrosHealthdDiagnosticsService>&
   GetService();
 
  private:
-  std::unique_ptr<RemoteDiagnosticsServiceStrategy>
-      remote_diagnostics_service_strategy_;
+  void OnMojoDisconnect();
+
+  mojo::Remote<ash::cros_healthd::mojom::CrosHealthdDiagnosticsService>
+      service_;
 };
 
 class DiagnosticsApiFunctionBaseV2 : public DiagnosticsApiFunctionV1AndV2Base {
@@ -505,7 +502,7 @@ class OsDiagnosticsIsRoutineArgumentSupportedFunction
   // BaseTelemetryExtensionApiGuardFunction:
   void RunIfAllowed() override;
 
-  void OnResult(crosapi::mojom::TelemetryExtensionSupportStatusPtr result);
+  void OnResult(ash::cros_healthd::mojom::SupportStatusPtr result);
 };
 
 class OsDiagnosticsIsMemoryRoutineArgumentSupportedFunction
@@ -518,7 +515,7 @@ class OsDiagnosticsIsMemoryRoutineArgumentSupportedFunction
   // BaseTelemetryExtensionApiGuardFunction:
   void RunIfAllowed() override;
 
-  void OnResult(crosapi::mojom::TelemetryExtensionSupportStatusPtr result);
+  void OnResult(ash::cros_healthd::mojom::SupportStatusPtr result);
 };
 
 class OsDiagnosticsIsVolumeButtonRoutineArgumentSupportedFunction
@@ -533,7 +530,7 @@ class OsDiagnosticsIsVolumeButtonRoutineArgumentSupportedFunction
   // BaseTelemetryExtensionApiGuardFunction:
   void RunIfAllowed() override;
 
-  void OnResult(crosapi::mojom::TelemetryExtensionSupportStatusPtr result);
+  void OnResult(ash::cros_healthd::mojom::SupportStatusPtr result);
 };
 
 class OsDiagnosticsIsFanRoutineArgumentSupportedFunction
@@ -546,7 +543,7 @@ class OsDiagnosticsIsFanRoutineArgumentSupportedFunction
   // BaseTelemetryExtensionApiGuardFunction:
   void RunIfAllowed() override;
 
-  void OnResult(crosapi::mojom::TelemetryExtensionSupportStatusPtr result);
+  void OnResult(ash::cros_healthd::mojom::SupportStatusPtr result);
 };
 
 }  // namespace chromeos

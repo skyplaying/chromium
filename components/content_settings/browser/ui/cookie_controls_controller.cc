@@ -10,7 +10,6 @@
 
 #include "base/containers/lru_cache.h"
 #include "base/feature_list.h"
-#include "base/features.h"
 #include "base/functional/bind.h"
 #include "base/json/values_util.h"
 #include "base/metrics/histogram_functions.h"
@@ -48,16 +47,12 @@ namespace {
 using ::base::UserMetricsAction;
 using ::site_engagement::SiteEngagementService;
 
-constexpr char kEntryPointAnimatedKey[] = "entry_point_animated";
-constexpr char kLastExpirationKey[] = "last_expiration";
-constexpr char kLastVisitedActiveException[] = "last_visited_active_exception";
 constexpr char kActivationsCountKey[] = "activations_count_key";
+constexpr base::TimeDelta kCookieControlsUIReloadTime = base::Seconds(30);
 
 using CacheSizeType =
     base::LRUCacheSet<content_settings::AccessDetails>::size_type;
 constexpr CacheSizeType kAccessDetailsCacheSize = 1000;
-constexpr CacheSizeType kMaximumCacheCapacity =
-    std::numeric_limits<CacheSizeType>::max();
 
 base::DictValue GetMetadata(HostContentSettingsMap* settings_map,
                             const GURL& url) {
@@ -70,27 +65,8 @@ base::DictValue GetMetadata(HostContentSettingsMap* settings_map,
   return std::move(stored_value.GetDict());
 }
 
-bool WasEntryPointAlreadyAnimated(const base::DictValue& metadata) {
-  std::optional<bool> entry_point_animated =
-      metadata.FindBool(kEntryPointAnimatedKey);
-  return entry_point_animated.has_value() && entry_point_animated.value();
-}
-
 int GetActivationCount(const base::DictValue& metadata) {
   return metadata.FindInt(kActivationsCountKey).value_or(0);
-}
-
-bool HasExceptionExpiredSinceLastVisit(const base::DictValue& metadata) {
-  auto last_expiration = base::ValueToTime(metadata.Find(kLastExpirationKey))
-                             .value_or(base::Time());
-  auto last_visited =
-      base::ValueToTime(metadata.Find(kLastVisitedActiveException))
-          .value_or(base::Time());
-
-  return !last_expiration.is_null()  // Exception should have an expiration,
-         && last_expiration < base::Time::Now()  // that has already expired,
-         && !last_visited.is_null()              // from a previous visit,
-         && last_visited < last_expiration;      // with no visit since.
 }
 
 void ApplyMetadataChanges(HostContentSettingsMap* settings_map,
@@ -116,6 +92,8 @@ ThirdPartySiteDataAccessType GetSiteDataAccessType(int allowed_sites,
 
 namespace content_settings {
 
+DEFINE_USER_DATA(CookieControlsController);
+
 CookieControlsController::CookieControlsController(
     scoped_refptr<CookieSettings> cookie_settings,
     scoped_refptr<CookieSettings> original_cookie_settings,
@@ -126,6 +104,19 @@ CookieControlsController::CookieControlsController(
       settings_map_(settings_map) {
   CHECK(cookie_settings_);
   cookie_observation_.Observe(cookie_settings_.get());
+}
+
+CookieControlsController::CookieControlsController(
+    ui::UnownedUserDataHost& host,
+    scoped_refptr<CookieSettings> cookie_settings,
+    scoped_refptr<CookieSettings> original_cookie_settings,
+    HostContentSettingsMap* settings_map,
+    bool is_incognito_profile)
+    : CookieControlsController(cookie_settings,
+                               original_cookie_settings,
+                               settings_map,
+                               is_incognito_profile) {
+  scoped_unowned_user_data_.emplace(host, *this);
 }
 
 CookieControlsController::Status::Status(CookieControlsState controls_state,
@@ -157,15 +148,12 @@ void CookieControlsController::Update(content::WebContents* web_contents) {
     return;
   }
   auto status = GetStatus(web_contents);
-  const bool icon_visible =
-      ShouldUserBypassIconBeVisible(status.controls_state);
-  const bool should_highlight =
-      ShouldHighlightUserBypass(status.controls_state);
+  const CookieControlsState icon_state =
+      GetCookieControlsIconState(status.controls_state);
   for (auto& observer : observers_) {
     observer.OnStatusChanged(status.controls_state, status.enforcement,
                              status.expiration);
-    observer.OnCookieControlsIconStatusChanged(
-        icon_visible, status.controls_state, should_highlight);
+    observer.OnCookieControlsIconStatusChanged(icon_state);
   }
 }
 
@@ -188,15 +176,9 @@ CookieControlsController::Status CookieControlsController::GetStatus(
       cookie_settings_->IsThirdPartyAccessAllowed(url, &info);
   CookieControlsEnforcement enforcement =
       GetEnforcementForThirdPartyCookieBlocking(url, info, cookies_allowed);
-
-  CookieControlsState controls_state;
-  if (enforcement == CookieControlsEnforcement::kEnforcedByTpcdGrant) {
-    controls_state = CookieControlsState::kHidden;
-  } else {
-    controls_state = cookies_allowed ? CookieControlsState::kAllowed3pc
-                                     : CookieControlsState::kBlocked3pc;
-  }
-
+  CookieControlsState controls_state = cookies_allowed
+                                           ? CookieControlsState::kAllowed3pc
+                                           : CookieControlsState::kBlocked3pc;
   return {controls_state, enforcement, info.metadata.expiration()};
 }
 
@@ -272,28 +254,12 @@ void CookieControlsController::OnCookieBlockingEnabledForSite(
   base::RecordAction(UserMetricsAction("CookieControls.Bubble.TurnOff"));
   cookie_settings_->SetCookieSettingForUserBypass(url);
   Update(GetWebContents());
-  // Record expiration metadata for the newly created exception, and increased
-  // the activation count.
+  // Record metadata for the newly created exception.
   base::DictValue metadata = GetMetadata(settings_map_, url);
-  metadata.Set(kLastExpirationKey,
-               base::TimeToValue(GetStatus(GetWebContents()).expiration));
   metadata.Set(kActivationsCountKey, GetActivationCount(metadata) + 1);
   ApplyMetadataChanges(settings_map_, url, std::move(metadata));
 
   RecordActivationMetrics();
-}
-
-void CookieControlsController::OnEntryPointAnimated() {
-  // sanity check if WebContents was instantiated (update method called before)
-  // TODO(b/341972754): refactor this to be handled properly via update method
-  // for all Android corner cases.
-  if (GetWebContents() == nullptr) {
-    return;
-  }
-  const GURL& url = GetWebContents()->GetLastCommittedURL();
-  base::DictValue metadata = GetMetadata(settings_map_, url);
-  metadata.Set(kEntryPointAnimatedKey, base::Value(true));
-  ApplyMetadataChanges(settings_map_, url, std::move(metadata));
 }
 
 bool CookieControlsController::StateChangedViaBypass() {
@@ -339,39 +305,16 @@ int CookieControlsController::GetStatefulBounceCount() const {
   }
 }
 
-void CookieControlsController::UpdateUserBypass() {
+void CookieControlsController::UpdateCookieControlsIcon() {
   if (observers_.empty()) {
     return;
   }
   auto status = GetStatus(GetWebContents());
-  const bool icon_visible =
-      ShouldUserBypassIconBeVisible(status.controls_state);
-  const bool should_highlight =
-      ShouldHighlightUserBypass(status.controls_state);
+  const CookieControlsState icon_state =
+      GetCookieControlsIconState(status.controls_state);
   for (auto& observer : observers_) {
-    observer.OnCookieControlsIconStatusChanged(
-        icon_visible, status.controls_state, should_highlight);
+    observer.OnCookieControlsIconStatusChanged(icon_state);
   }
-}
-
-void CookieControlsController::UpdateLastVisitedSitesMap() {
-  // Cache whether the expiration has expired since last visit before updating
-  // the last visited metadata.
-  const GURL& url = GetWebContents()->GetLastCommittedURL();
-  has_exception_expired_since_last_visit_ =
-      HasExceptionExpiredSinceLastVisit(GetMetadata(settings_map_, url));
-
-  // We only care about visits with active expirations, if there is an active
-  // exception, update the last visited time, otherwise clear it.
-  base::DictValue metadata = GetMetadata(settings_map_, url);
-  auto status = GetStatus(GetWebContents());
-  if (status.controls_state == CookieControlsState::kAllowed3pc) {
-    metadata.Set(kLastVisitedActiveException,
-                 base::TimeToValue(base::Time::Now()));
-  } else {
-    metadata.Remove(kLastVisitedActiveException);
-  }
-  ApplyMetadataChanges(settings_map_, url, std::move(metadata));
 }
 
 void CookieControlsController::UpdatePageReloadStatus(
@@ -384,12 +327,6 @@ void CookieControlsController::UpdatePageReloadStatus(
   }
   SetStateChangedViaBypass(false);
   recent_reloads_count_ = recent_reloads_count;
-
-  if (recent_reloads_count_ >= features::kUserBypassUIReloadCount.Get()) {
-    for (auto& observer : observers_) {
-      observer.OnReloadThresholdExceeded();
-    }
-  }
 }
 
 void CookieControlsController::OnBubbleCloseTriggered() {
@@ -403,25 +340,19 @@ void CookieControlsController::OnPageFinishedLoading() {
     return;
   }
   waiting_for_page_load_finish_ = false;
-
-  // Ensure the bubble is closed before subsequent calls are made to update the
-  // UI.
   OnBubbleCloseTriggered();
-  for (auto& observer : observers_) {
-    observer.OnFinishedPageReloadWithChangedSettings();
-  }
 }
 
 void CookieControlsController::OnThirdPartyCookieBlockingChanged(
     bool block_third_party_cookies) {
   if (GetWebContents()) {
-    UpdateUserBypass();
+    UpdateCookieControlsIcon();
   }
 }
 
 void CookieControlsController::OnCookieSettingChanged() {
   if (GetWebContents()) {
-    UpdateUserBypass();
+    UpdateCookieControlsIcon();
   }
 }
 
@@ -440,27 +371,11 @@ void CookieControlsController::RemoveObserver(CookieControlsObserver* obs) {
   observers_.RemoveObserver(obs);
 }
 
-double CookieControlsController::GetSiteEngagementScore() {
-  auto* web_contents = GetWebContents();
-  return SiteEngagementService::Get(web_contents->GetBrowserContext())
-      ->GetScore(web_contents->GetVisibleURL());
-}
-
 void CookieControlsController::RecordActivationMetrics() {
   const GURL& url = GetWebContents()->GetLastCommittedURL();
-
-  // Metrics, related to confidence signals:
-  base::UmaHistogramCounts100(
-      "Privacy.CookieControlsActivated.PageRefreshCount",
-      recent_reloads_count_);
-
   auto site_data_access_type =
       GetSiteDataAccessType(GetAllowedThirdPartyCookiesSitesCount(),
                             GetBlockedThirdPartyCookiesSitesCount());
-  base::UmaHistogramEnumeration(
-      "Privacy.CookieControlsActivated.SiteDataAccessType",
-      site_data_access_type);
-
   // Record activation UKM.
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   auto ukm_source_id =
@@ -480,73 +395,27 @@ void CookieControlsController::RecordActivationMetrics() {
       .Record(ukm::UkmRecorder::Get());
 }
 
-bool CookieControlsController::ShouldHighlightUserBypass(
+CookieControlsState CookieControlsController::GetCookieControlsIconState(
     CookieControlsState controls_state) {
-  // Highlighting is meant to draw attention to bypassing, so just return if
-  // bypass has already happened.
-  if (controls_state == CookieControlsState::kHidden ||
-      controls_state == CookieControlsState::kAllowed3pc) {
-    return false;
+  if (controls_state != CookieControlsState::kBlocked3pc) {
+    return controls_state;
   }
-
-  auto* web_contents = GetWebContents();
-  // We don't want to show UI animation, and IPH in this case as we can't
-  // persist their usage cross-session. This puts us at high risk of
-  // over-triggering noisy UI and annoying users.
-  if (web_contents->GetBrowserContext()->IsOffTheRecord()) {
-    return false;
+  if (show_icon_as_confirmation_ ||
+      // 3PC blocking prevents SameSite=None cookies from being sent when the
+      // top-level document is sandboxed without `allow-origin`. For instance
+      // when loaded with: `Content-Security-Policy: sandbox`. In that case,
+      // we render the UI to allow the user to opt into sending SameSite=None
+      // cookies again in those contexts.
+      HasOriginSandboxedTopLevelDocument() ||
+      // If no 3P sites have attempted to access site data, nor were any
+      // stateful bounces recorded, the icon should not be displayed. Take
+      // into account both allow and blocked counts, since the breakage might
+      // be related to storage partitioning. Partitioned site will be allowed
+      // to access partitioned storage.
+      SiteDataAccessAttempted()) {
+    return controls_state;
   }
-
-  const GURL& url = web_contents->GetLastCommittedURL();
-  if (cookie_settings_->HasAnyFrameRequestedStorageAccess(url)) {
-    return false;
-  }
-
-  // If the user is returning to the site after their previous exception has
-  // expired, highlight user bypass. The order of this check is important,
-  // as the site may now be using SAA / FedCM instead of relying on 3PC. It
-  // should also come before any check for whether the entrypoint was already
-  // animated.
-  if (has_exception_expired_since_last_visit_) {
-    return true;
-  }
-
-  // Check if the entry point was already animated for the site.
-  if (WasEntryPointAlreadyAnimated(GetMetadata(settings_map_, url))) {
-    return false;
-  }
-
-  if (recent_reloads_count_ >= features::kUserBypassUIReloadCount.Get()) {
-    return true;
-  }
-
-  if (SiteEngagementService::IsEngagementAtLeast(
-          GetSiteEngagementScore(), blink::mojom::EngagementLevel::HIGH)) {
-    return true;
-  }
-
-  return false;
-}
-
-bool CookieControlsController::ShouldUserBypassIconBeVisible(
-    CookieControlsState controls_state) {
-  if (controls_state == CookieControlsState::kHidden) {
-    return false;
-  }
-  return show_icon_as_confirmation_ ||
-         controls_state == CookieControlsState::kAllowed3pc ||
-         // 3PC blocking prevents SameSite=None cookies from being sent when the
-         // top-level document is sandboxed without `allow-origin`. For instance
-         // when loaded with: `Content-Security-Policy: sandbox`. In that case,
-         // we render the UI to allow the user to opt into sending SameSite=None
-         // cookies again in those contexts.
-         HasOriginSandboxedTopLevelDocument() ||
-         // If no 3P sites have attempted to access site data, nor were any
-         // stateful bounces recorded, the icon should not be displayed. Take
-         // into account both allow and blocked counts, since the breakage might
-         // be related to storage partitioning. Partitioned site will be allowed
-         // to access partitioned storage.
-         SiteDataAccessAttempted();
+  return CookieControlsState::kHidden;
 }
 
 bool CookieControlsController::SiteDataAccessAttempted() {
@@ -561,11 +430,7 @@ CookieControlsController::TabObserver::TabObserver(
           web_contents),
       content::WebContentsObserver(web_contents),
       cookie_controls_(cookie_controls),
-      // When under the ReducePPMs experiment reduce the capacity of the
-      // cache and leave it practically unbounded otherwise.
-      cookie_accessed_set_(base::features::IsReducePPMsEnabled()
-                               ? kAccessDetailsCacheSize
-                               : kMaximumCacheCapacity) {
+      cookie_accessed_set_(kAccessDetailsCacheSize) {
   last_visited_url_ =
       content::WebContentsObserver::web_contents()->GetVisibleURL();
 }
@@ -575,7 +440,7 @@ CookieControlsController::TabObserver::~TabObserver() = default;
 void CookieControlsController::TabObserver::OnSiteDataAccessed(
     const AccessDetails& access_details) {
   if (access_details.site_data_type != SiteDataType::kCookies) {
-    cookie_controls_->UpdateUserBypass();
+    cookie_controls_->UpdateCookieControlsIcon();
     return;
   }
 
@@ -599,11 +464,11 @@ void CookieControlsController::TabObserver::OnSiteDataAccessed(
   }
 
   cookie_accessed_set_.Put(AccessDetails(access_details));
-  cookie_controls_->UpdateUserBypass();
+  cookie_controls_->UpdateCookieControlsIcon();
 }
 
 void CookieControlsController::TabObserver::OnStatefulBounceDetected() {
-  cookie_controls_->UpdateUserBypass();
+  cookie_controls_->UpdateCookieControlsIcon();
 }
 
 void CookieControlsController::TabObserver::PrimaryPageChanged(
@@ -617,14 +482,13 @@ void CookieControlsController::TabObserver::PrimaryPageChanged(
     timer_.Stop();
   } else {
     if (!timer_.IsRunning()) {
-      timer_.Start(FROM_HERE, features::kUserBypassUIReloadTime.Get(), this,
+      timer_.Start(FROM_HERE, kCookieControlsUIReloadTime, this,
                    &CookieControlsController::TabObserver::ResetReloadCounter);
     }
     reload_count_++;
   }
   last_visited_url_ = current_url;
   cookie_controls_->UpdatePageReloadStatus(reload_count_);
-  cookie_controls_->UpdateLastVisitedSitesMap();
 }
 
 void CookieControlsController::TabObserver::DidStopLoading() {

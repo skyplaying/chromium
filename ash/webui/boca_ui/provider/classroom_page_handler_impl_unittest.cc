@@ -560,7 +560,8 @@ TEST_F(ClassroomPageHandlerImplTest, ListAllAssignments) {
           "updateTime": "2025-01-01T00:00:00.000Z",
           "materials": [
             { "driveFile": { "driveFile": { "title": "drive-file-title" } } },
-            { "youtubeVideo": { "title": "youtube-video-title" } }
+            { "youtubeVideo": { "title": "youtube-video-title" } },
+            { "guidedLearning": { "title": "guided-learning-title" } }
           ]
         },
         {
@@ -619,7 +620,9 @@ TEST_F(ClassroomPageHandlerImplTest, ListAllAssignments) {
 
   EXPECT_CALL(request_handler(),
               HandleRequest(
-                  Field(&HttpRequest::relative_url, HasSubstr("/courseWork?"))))
+                  Field(&HttpRequest::relative_url,
+                        AllOf(HasSubstr("/courseWork?"), HasSubstr("workType"),
+                              HasSubstr("materials")))))
       .WillOnce(Return(ByMove(TestRequestHandler::CreateSuccessfulResponse(
           kOriginalCourseWorkResponse))));
 
@@ -657,13 +660,16 @@ TEST_F(ClassroomPageHandlerImplTest, ListAllAssignments) {
   EXPECT_EQ(
       google_apis::util::FormatTimeAsString(response.at(0)->last_update_time),
       "2025-01-01T00:00:00.000Z");
-  EXPECT_EQ(response.at(0)->materials.size(), 2u);
+  EXPECT_EQ(response.at(0)->materials.size(), 3u);
   EXPECT_EQ(response.at(0)->materials.at(0)->title, "drive-file-title");
   EXPECT_EQ(response.at(0)->materials.at(0)->type,
             mojom::MaterialType::kSharedDriveFile);
   EXPECT_EQ(response.at(0)->materials.at(1)->title, "youtube-video-title");
   EXPECT_EQ(response.at(0)->materials.at(1)->type,
             mojom::MaterialType::kYoutubeVideo);
+  EXPECT_EQ(response.at(0)->materials.at(2)->title, "guided-learning-title");
+  EXPECT_EQ(response.at(0)->materials.at(2)->type,
+            mojom::MaterialType::kGuidedLearning);
 
   EXPECT_EQ(response.at(1)->title, "assignment-link-materials-title");
   EXPECT_EQ(response.at(1)->url,
@@ -753,7 +759,9 @@ TEST_F(ClassroomPageHandlerImplTest, ListAssignmentsOnHttpError) {
   base::HistogramTester histogram_tester;
   EXPECT_CALL(request_handler(),
               HandleRequest(
-                  Field(&HttpRequest::relative_url, HasSubstr("/courseWork?"))))
+                  Field(&HttpRequest::relative_url,
+                        AllOf(HasSubstr("/courseWork?"), HasSubstr("workType"),
+                              HasSubstr("materials")))))
       .WillOnce(Return(ByMove(TestRequestHandler::CreateFailedResponse())));
   EXPECT_CALL(request_handler(),
               HandleRequest(Field(&HttpRequest::relative_url,
@@ -818,9 +826,10 @@ TEST_F(ClassroomPageHandlerImplTest, ListAssignmentsMultiplePages) {
 
   // Mock a 3-page response from the /courseWork endpoint.
   EXPECT_CALL(request_handler(),
-              HandleRequest(Field(&HttpRequest::relative_url,
-                                  AllOf(HasSubstr("/courseWork?"),
-                                        Not(HasSubstr("pageToken"))))))
+              HandleRequest(Field(
+                  &HttpRequest::relative_url,
+                  AllOf(HasSubstr("/courseWork?"), HasSubstr("workType"),
+                        HasSubstr("materials"), Not(HasSubstr("pageToken"))))))
       .WillOnce(Return(ByMove(TestRequestHandler::CreateSuccessfulResponse(R"(
             {
               "courseWork": [
@@ -834,10 +843,12 @@ TEST_F(ClassroomPageHandlerImplTest, ListAssignmentsMultiplePages) {
               "nextPageToken": "page-2-token"
             })"))));
 
-  EXPECT_CALL(request_handler(),
-              HandleRequest(Field(&HttpRequest::relative_url,
-                                  AllOf(HasSubstr("/courseWork?"),
-                                        HasSubstr("pageToken=page-2-token")))))
+  EXPECT_CALL(
+      request_handler(),
+      HandleRequest(Field(
+          &HttpRequest::relative_url,
+          AllOf(HasSubstr("/courseWork?"), HasSubstr("workType"),
+                HasSubstr("materials"), HasSubstr("pageToken=page-2-token")))))
       .WillOnce(Return(ByMove(TestRequestHandler::CreateSuccessfulResponse(R"(
             {
               "courseWork": [
@@ -851,10 +862,12 @@ TEST_F(ClassroomPageHandlerImplTest, ListAssignmentsMultiplePages) {
               "nextPageToken": "page-3-token"
             })"))));
 
-  EXPECT_CALL(request_handler(),
-              HandleRequest(Field(&HttpRequest::relative_url,
-                                  AllOf(HasSubstr("/courseWork?"),
-                                        HasSubstr("pageToken=page-3-token")))))
+  EXPECT_CALL(
+      request_handler(),
+      HandleRequest(Field(
+          &HttpRequest::relative_url,
+          AllOf(HasSubstr("/courseWork?"), HasSubstr("workType"),
+                HasSubstr("materials"), HasSubstr("pageToken=page-3-token")))))
       .WillOnce(Return(ByMove(TestRequestHandler::CreateSuccessfulResponse(R"(
             {
               "courseWork": [

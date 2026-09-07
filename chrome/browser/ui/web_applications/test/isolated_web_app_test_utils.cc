@@ -17,9 +17,10 @@
 #include "chrome/browser/apps/app_service/browser_app_launcher.h"
 #include "chrome/browser/chrome_browser_main.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
 #include "chrome/browser/web_applications/isolated_web_apps/commands/install_isolated_web_app_command.h"
@@ -42,10 +43,13 @@
 #include "components/webapps/browser/installable/installable_metrics.h"
 #include "components/webapps/common/web_app_id.h"
 #include "components/webapps/isolated_web_apps/types/iwa_origin.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/common/content_features.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/navigation_simulator.h"
+#include "net/http/http_response_headers.h"
+#include "net/http/http_version.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom.h"
@@ -55,6 +59,11 @@
 #include "third_party/skia/include/core/SkStream.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
+#include "ui/views/controls/label.h"
+#include "ui/views/controls/styled_label.h"
+#include "ui/views/test/widget_test.h"
+#include "ui/views/view.h"
+#include "ui/views/view_utils.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -150,10 +159,11 @@ IsolatedWebAppBrowserTestHarness::InstallDevModeProxyIsolatedWebApp(
   return web_app::InstallDevModeProxyIsolatedWebApp(profile(), origin);
 }
 
-Browser* IsolatedWebAppBrowserTestHarness::GetBrowserFromFrame(
+BrowserWindowInterface* IsolatedWebAppBrowserTestHarness::GetBrowserFromFrame(
     content::RenderFrameHost* frame) {
-  Browser* browser = chrome::FindBrowserWithTab(
-      content::WebContents::FromRenderFrameHost(frame));
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          content::WebContents::FromRenderFrameHost(frame));
   EXPECT_TRUE(browser);
   return browser;
 }
@@ -166,13 +176,13 @@ content::RenderFrameHost* IsolatedWebAppBrowserTestHarness::OpenApp(
 
 content::RenderFrameHost*
 IsolatedWebAppBrowserTestHarness::NavigateToURLInNewTab(
-    Browser* window,
+    BrowserWindowInterface* window,
     const GURL& url,
     WindowOpenDisposition disposition) {
   auto new_contents = content::WebContents::Create(
-      content::WebContents::CreateParams(browser()->profile()));
-  window->tab_strip_model()->AppendWebContents(std::move(new_contents),
-                                               /*foreground=*/true);
+      content::WebContents::CreateParams(browser()->GetProfile()));
+  window->GetTabStripModel()->AppendWebContents(std::move(new_contents),
+                                                /*foreground=*/true);
   return ui_test_utils::NavigateToURLWithDisposition(
       window, url, disposition, ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
 }
@@ -190,9 +200,9 @@ UpdateDiscoveryTaskResultWaiter::UpdateDiscoveryTaskResultWaiter(
 UpdateDiscoveryTaskResultWaiter::~UpdateDiscoveryTaskResultWaiter() = default;
 
 // IsolatedWebAppUpdateManager::Observer:
-void UpdateDiscoveryTaskResultWaiter::OnUpdateDiscoveryTaskCompleted(
+void UpdateDiscoveryTaskResultWaiter::OnUpdateDiscoverAndPrepareTaskCompleted(
     const webapps::AppId& app_id,
-    IsolatedWebAppUpdateDiscoveryTask::CompletionStatus status) {
+    IwaUpdateCheckAndPrepareResult status) {
   if (app_id != expected_app_id_) {
     return;
   }
@@ -270,7 +280,7 @@ content::RenderFrameHost* OpenIsolatedWebApp(
   base::test::TestFuture<content::WebContents*> future;
   provider->scheduler().LaunchApp(
       app_id, url,
-      base::BindOnce([](base::WeakPtr<Browser>,
+      base::BindOnce([](base::WeakPtr<BrowserWindowInterface>,
                         base::WeakPtr<content::WebContents> web_contents,
                         apps::LaunchContainer) {
         return web_contents.get();
@@ -337,5 +347,26 @@ void CommitPendingIsolatedWebAppNavigation(content::WebContents* web_contents) {
                    permissions_policy_cache->GetPolicy(iwa_origin),
                    iwa_origin.origin());
 }
+
+namespace test {
+
+bool HasChildLabelWithSubstring(views::View* parent,
+                                const std::u16string& substring) {
+  return views::test::AnyViewMatchingPredicate(
+             parent, [&](const views::View* view) {
+               if (auto* label = views::AsViewClass<views::Label>(view)) {
+                 return label->GetText().find(substring) !=
+                        std::u16string::npos;
+               }
+               if (auto* styled_label =
+                       views::AsViewClass<views::StyledLabel>(view)) {
+                 return styled_label->GetText().find(substring) !=
+                        std::u16string::npos;
+               }
+               return false;
+             }) != nullptr;
+}
+
+}  // namespace test
 
 }  // namespace web_app

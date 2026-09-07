@@ -250,6 +250,8 @@ public class MainActivity extends AppCompatActivity
             "androidx.browser.customtabs.extra.ACTIVITY_SCROLL_CONTENT_RESIZE";
     private static final String EXTRA_OMNIBOX_ENABLED =
             "org.chromium.chrome.browser.customtabs.OMNIBOX_ENABLED";
+    private static final String EXTRA_TRANSLUCENT_BACKGROUND =
+            "androidx.browser.customtabs.extra.TRANSLUCENT_BACKGROUND";
 
     private final ActivityResultLauncher<Intent> mLauncher =
             AuthTabIntent.registerActivityResultLauncher(this, this::handleAuthResult);
@@ -661,7 +663,7 @@ public class MainActivity extends AppCompatActivity
     }
 
     private void initializeColorSpinner() {
-        Spinner colorSpinner = (Spinner) findViewById(R.id.color_spinner);
+        Spinner colorSpinner = findViewById(R.id.color_spinner);
         HashMap<String, String> colors = new HashMap<>();
         colors.put("Default", "");
         colors.put("White (AGA Light)", "#ffffff");
@@ -911,7 +913,7 @@ public class MainActivity extends AppCompatActivity
         mOverflowContextualMenuItemCheckbox.setChecked(
                 mSharedPref.getInt(SHARED_PREF_OVERFLOW_CONTEXTUAL_MENU_ITEM_BUTTON, CHECKED)
                         == CHECKED);
-        EditText customSchemeEdit = (EditText) findViewById(R.id.custom_scheme);
+        EditText customSchemeEdit = findViewById(R.id.custom_scheme);
         customSchemeEdit.setText(mCustomScheme, TextView.BufferType.NORMAL);
         mInitialIntentCanLeaveBrowser = findViewById(R.id.allow_initial_navigation_to_leave);
         mInitialIntentCanLeaveBrowser.setChecked(
@@ -919,7 +921,7 @@ public class MainActivity extends AppCompatActivity
     }
 
     private void initializeCctSpinner() {
-        Spinner cctSpinner = (Spinner) findViewById(R.id.cct_spinner);
+        Spinner cctSpinner = findViewById(R.id.cct_spinner);
         String[] cctOptions =
                 new String[] {
                     CCT_OPTION_REGULAR, CCT_OPTION_PARTIAL, CCT_OPTION_INCOGNITO, CCT_OPTION_AUTHTAB
@@ -1309,7 +1311,12 @@ public class MainActivity extends AppCompatActivity
         }
 
         customTabsIntent.intent.putExtra(EXTRA_OMNIBOX_ENABLED, mSearchInCctCheckbox.isChecked());
-
+        CheckBox bgAlpha = findViewById(R.id.bgalpha_checkbox);
+        if (bgAlpha.isChecked()) {
+            EditText bgAlphaText = findViewById(R.id.bgalpha_text);
+            int bgColor = Color.parseColor(bgAlphaText.getText().toString());
+            customTabsIntent.intent.putExtra(EXTRA_TRANSLUCENT_BACKGROUND, bgColor);
+        }
         if (mCctType.equals(CCT_OPTION_AUTHTAB)) {
             launchAuthTab(url);
             editor.putString(SHARED_PREF_CUSTOM_SCHEME, mCustomScheme);
@@ -1384,12 +1391,12 @@ public class MainActivity extends AppCompatActivity
 
     private void launchAuthTab(String url) {
         int colorScheme = getColorSchemeFromButton(null);
-        AuthTabColorSchemeParams.Builder builder = new AuthTabColorSchemeParams.Builder();
+        var colorSchemeBuilder = new AuthTabColorSchemeParams.Builder();
         if (!TextUtils.isEmpty(mToolbarColor)) {
             int toolbarColor = Color.parseColor(mToolbarColor);
-            builder.setToolbarColor(toolbarColor);
+            colorSchemeBuilder.setToolbarColor(toolbarColor);
             if (mNavbarColorToolbarCheckbox.isChecked()) {
-                builder.setNavigationBarColor(toolbarColor);
+                colorSchemeBuilder.setNavigationBarColor(toolbarColor);
             }
         }
         int closeButton = mCloseButtonIcon.getCheckedButtonId();
@@ -1402,14 +1409,17 @@ public class MainActivity extends AppCompatActivity
             closeIconId = R.drawable.baseline_close_white;
         }
         Bitmap closeIcon = BitmapFactory.decodeResource(getResources(), closeIconId);
-        AuthTabIntent authIntent =
+        var intentBuilder =
                 new AuthTabIntent.Builder()
-                        .setSession(getAuthSession())
                         .setColorScheme(colorScheme)
-                        .setDefaultColorSchemeParams(builder.build())
+                        .setDefaultColorSchemeParams(colorSchemeBuilder.build())
                         .setCloseButtonIcon(closeIcon)
-                        .setEphemeralBrowsingEnabled(mEphemeralCctCheckbox.isChecked())
-                        .build();
+                        .setEphemeralBrowsingEnabled(mEphemeralCctCheckbox.isChecked());
+        var authSession = getAuthSession();
+        if (authSession != null) {
+            intentBuilder.setSession(authSession);
+        }
+        var authIntent = intentBuilder.build();
         authIntent.intent.setPackage(mPackageNameToBind);
         String scheme = ((EditText) findViewById(R.id.custom_scheme)).getText().toString();
         if (TextUtils.isEmpty(scheme)) {

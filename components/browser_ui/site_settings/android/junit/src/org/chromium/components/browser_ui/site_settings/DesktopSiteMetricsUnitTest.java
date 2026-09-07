@@ -8,11 +8,12 @@ import static org.junit.Assert.assertEquals;
 import static org.mockito.Mockito.when;
 
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
-import org.robolectric.annotation.Config;
+import org.mockito.junit.MockitoJUnit;
+import org.mockito.junit.MockitoRule;
 
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -20,15 +21,14 @@ import org.chromium.components.content_settings.ContentSetting;
 
 /** Unit tests for {@link DesktopSiteMetrics}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class DesktopSiteMetricsUnitTest {
     private Website mSite;
+    @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
     @Mock private WebsiteAddress mOrigin;
     @Mock private WebsiteAddress mEmbedder;
 
     @Before
     public void setup() {
-        MockitoAnnotations.initMocks(this);
         mSite = new Website(mOrigin, mEmbedder);
     }
 

@@ -22,6 +22,10 @@
 #include "components/sync_device_info/device_info.h"
 #include "components/sync_sessions/synced_session_tracker.h"
 
+namespace syncer {
+class MetadataChangeList;
+}  // namespace syncer
+
 namespace sync_sessions {
 
 // Class responsible for maintaining an in-memory representation of sync
@@ -34,7 +38,8 @@ class SessionStore {
   struct SessionInfo {
     std::string session_tag;
     std::string client_name;
-    sync_pb::SyncEnums::DeviceType device_type = sync_pb::SyncEnums::TYPE_UNSET;
+    syncer::DeviceInfo::DeviceType device_type =
+        syncer::DeviceInfo::DeviceType::kUnset;
     syncer::DeviceInfo::FormFactor device_form_factor =
         syncer::DeviceInfo::FormFactor::kUnknown;
   };
@@ -52,24 +57,6 @@ class SessionStore {
                    SyncSessionsClient* sessions_client,
                    OpenCallback callback);
 
-  // These values are persisted to logs. Entries should not be renumbered and
-  // numeric values should never be reused.
-  // LINT.IfChange(SessionSpecificsInvalidReason)
-  enum class SpecificsInvalidReason {
-    kMissingSessionTag = 0,
-    kBothHeaderAndTab = 1,
-    kNeitherHeaderNorTab = 2,
-    kTabBadTabNodeId = 3,
-    kTabBadTabId = 4,
-    kHeaderWithDuplicateTabIds = 5,
-    kHeaderWithTabNodeId = 6,
-    kMaxValue = kHeaderWithTabNodeId
-  };
-  // LINT.ThenChange(/tools/metrics/histograms/metadata/sync/enums.xml:SessionSpecificsInvalidReason)
-
-  // Returns the reason the given `specifics` is invalid, or nullopt if valid.
-  static std::optional<SpecificsInvalidReason> GetSpecificsInvalidReason(
-      const sync_pb::SessionSpecifics& specifics);
   // Verifies whether a proto is malformed (e.g. required fields are missing).
   static bool AreValidSpecifics(const sync_pb::SessionSpecifics& specifics);
   // |specifics| must be valid, see AreValidSpecifics().
@@ -156,6 +143,7 @@ class SessionStore {
   std::unique_ptr<WriteBatch> CreateWriteBatch(
       syncer::OnceModelErrorHandler error_handler);
 
+
   using RecreateEmptyStoreCallback =
       base::OnceCallback<std::unique_ptr<SessionStore>(
           const std::string& cache_guid,
@@ -165,6 +153,7 @@ class SessionStore {
   // Returns a callback that allows synchronously re-creating an empty
   // SessionStore, by reusing the underlying DataTypeStore.
   static RecreateEmptyStoreCallback DeleteAllDataAndMetadata(
+      std::unique_ptr<syncer::MetadataChangeList> metadata_change_list,
       std::unique_ptr<SessionStore> session_store);
 
   // TODO(crbug.com/41295474): Avoid exposing a mutable tracker, because that
@@ -186,6 +175,7 @@ class SessionStore {
       std::unique_ptr<syncer::MetadataBatch> metadata_batch);
   static void OnReadAllData(std::unique_ptr<Builder> builder,
                             const std::optional<syncer::ModelError>& error);
+
 
   static std::unique_ptr<SessionStore> RecreateEmptyStore(
       SessionInfo local_session_info_without_session_tag,

@@ -47,7 +47,7 @@ TitleAndOrigin GetContextMenuTitleAndOrigin(web::ContextMenuParams params) {
   }
 
   if ([title hasPrefix:base::SysUTF8ToNSString(url::kDataScheme)]) {
-    title = nil;
+    title = @"";
     origin = ContextMenuTitleOrigin::kURL;
   }
 
@@ -79,10 +79,6 @@ TitleAndOrigin GetContextMenuTitleAndOrigin(web::ContextMenuParams params) {
 
 NSString* GetContextMenuTitle(web::ContextMenuParams params) {
   return GetContextMenuTitleAndOrigin(params).first;
-}
-
-NSString* GetContextMenuSubtitle(web::ContextMenuParams params) {
-  return base::SysUTF8ToNSString(params.link_url.spec());
 }
 
 bool IsImageTitle(web::ContextMenuParams params) {

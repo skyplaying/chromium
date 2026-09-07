@@ -28,6 +28,7 @@
 #include "third_party/blink/renderer/core/dom/node.h"
 #include "third_party/blink/renderer/core/editing/commands/editing_state.h"
 #include "third_party/blink/renderer/core/editing/editing_utilities.h"
+#include "third_party/blink/renderer/core/html/forms/text_control_element.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 
@@ -59,7 +60,12 @@ void RemoveNodeCommand::DoApply(EditingState* editing_state) {
   DCHECK(IsEditable(*parent) || !parent->InActiveDocument()) << parent;
 
   parent_ = parent;
-  ref_child_ = node_->nextSibling();
+  Node* next = node_->nextSibling();
+  if (next && TextControlElement::IsPlaceholderBreakElement(next)) {
+    ref_child_ = nullptr;
+  } else {
+    ref_child_ = next;
+  }
 
   node_->remove(IGNORE_EXCEPTION_FOR_TESTING);
   // Node::remove dispatch synchronous events such as IFRAME unload events,
@@ -74,6 +80,12 @@ void RemoveNodeCommand::DoUnapply() {
   Node* ref_child = ref_child_.Release();
   if (!parent || !IsEditable(*parent))
     return;
+
+  if (!ref_child) {
+    if (TextControlElement::IsPlaceholderBreakElement(parent->lastChild())) {
+      parent->RemoveChild(parent->lastChild(), IGNORE_EXCEPTION_FOR_TESTING);
+    }
+  }
 
   parent->InsertBefore(node_.Get(), ref_child, IGNORE_EXCEPTION_FOR_TESTING);
 }

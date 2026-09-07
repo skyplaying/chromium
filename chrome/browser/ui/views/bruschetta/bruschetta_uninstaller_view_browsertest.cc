@@ -10,7 +10,7 @@
 #include "chrome/browser/ash/bruschetta/bruschetta_service.h"
 #include "chrome/browser/ash/bruschetta/bruschetta_service_factory.h"
 #include "chrome/browser/ash/bruschetta/bruschetta_util.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/test/browser_test.h"
@@ -32,7 +32,7 @@ class BruschettaUninstallerViewBrowserTest : public DialogBrowserTest {
 
   // DialogBrowserTest:
   void ShowUi(const std::string& name) override {
-    BruschettaUninstallerView::Show(browser()->profile(),
+    BruschettaUninstallerView::Show(browser()->GetProfile(),
                                     bruschetta::MakeBruschettaId(kTestVmName));
   }
 
@@ -57,7 +57,7 @@ IN_PROC_BROWSER_TEST_F(BruschettaUninstallerViewBrowserTest, InvokeUi_default) {
 }
 
 IN_PROC_BROWSER_TEST_F(BruschettaUninstallerViewBrowserTest, UninstallFlow) {
-  bruschetta::BruschettaServiceFactory::GetForProfile(browser()->profile())
+  bruschetta::BruschettaServiceFactory::GetForProfile(browser()->GetProfile())
       ->RegisterInPrefs(bruschetta::MakeBruschettaId(kTestVmName),
                         kTestVmConfig);
 
@@ -77,7 +77,7 @@ IN_PROC_BROWSER_TEST_F(BruschettaUninstallerViewBrowserTest, UninstallFlow) {
 
   WaitForViewDestroyed();
 
-  EXPECT_TRUE(guest_os::GetContainers(browser()->profile(),
+  EXPECT_TRUE(guest_os::GetContainers(browser()->GetProfile(),
                                       guest_os::VmType::BRUSCHETTA)
                   .empty());
 }

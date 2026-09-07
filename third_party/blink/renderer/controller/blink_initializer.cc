@@ -70,10 +70,6 @@
 #include "third_party/blink/renderer/platform/wtf/wtf.h"
 #include "v8/include/v8.h"
 
-#if defined(USE_BLINK_EXTENSIONS_CHROMEOS)
-#include "third_party/blink/renderer/extensions/chromeos/chromeos_extensions.h"
-#endif
-
 #if defined(USE_BLINK_EXTENSIONS_WEBVIEW)
 #include "third_party/blink/renderer/extensions/webview/webview_extensions.h"
 #endif
@@ -83,6 +79,8 @@
 #include "third_party/blink/renderer/controller/oom_intervention_impl.h"
 #include "third_party/blink/renderer/controller/private_memory_footprint_provider.h"
 #include "third_party/blink/renderer/controller/user_level_memory_pressure_signal_generator.h"
+#include "third_party/blink/renderer/platform/fonts/android/font_prewarmer_android.h"
+#include "third_party/blink/renderer/platform/fonts/font_cache.h"
 #endif
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
@@ -143,9 +141,6 @@ void InitializeCommon(Platform* platform, mojo::BinderMap* binders) {
   // These Initialize() methods for renderer extensions initialize strings which
   // must be done before calling CoreInitializer::Initialize() which is called
   // by GetBlinkInitializer().Initialize() below.
-#if defined(USE_BLINK_EXTENSIONS_CHROMEOS)
-  ChromeOSExtensions::Initialize();
-#endif
 #if defined(USE_BLINK_EXTENSIONS_WEBVIEW)
   WebViewExtensions::Initialize();
 #endif
@@ -173,6 +168,14 @@ void InitializeCommon(Platform* platform, mojo::BinderMap* binders) {
   // is enabled. For that reason, the partition can only be initialized after V8
   // has been initialized.
   Partitions::InitializeArrayBufferPartition();
+  V8Initializer::InitializeInSandboxAllocator();
+
+#if BUILDFLAG(IS_ANDROID)
+  if (base::FeatureList::IsEnabled(features::kAndroidSystemFontPrewarming)) {
+    DEFINE_STATIC_LOCAL(FontPrewarmer, font_prewarmer, ());
+    FontCache::SetFontPrewarmer(&font_prewarmer);
+  }
+#endif
 }
 
 void InitializeCommonWithIsolate(v8::Isolate* isolate) {
@@ -342,9 +345,6 @@ void BlinkInitializer::InitLocalFrame(LocalFrame& frame) const {
 
 void BlinkInitializer::InitServiceWorkerGlobalScope(
     ServiceWorkerGlobalScope& worker_global_scope) const {
-#if defined(USE_BLINK_EXTENSIONS_CHROMEOS)
-  ChromeOSExtensions::InitServiceWorkerGlobalScope(worker_global_scope);
-#endif
 }
 
 void BlinkInitializer::OnClearWindowObjectInMainWorld(

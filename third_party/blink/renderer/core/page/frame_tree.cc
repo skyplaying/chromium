@@ -34,6 +34,7 @@
 #include "third_party/blink/renderer/core/page/create_window.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
@@ -43,6 +44,15 @@ namespace {
 const unsigned kInvalidChildCount = ~0U;
 
 }  // namespace
+
+namespace features {
+
+// When enabled, override WebNavigationPolicy from click modifiers if
+// the navigation was triggered by a synthetic event in a sandboxed frame.
+// Killswitch, see https://crbug.com/544197473.
+BASE_FEATURE(kIgnoreSyntheticClicksForSandboxPropagation,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+}  // namespace features
 
 FrameTree::FrameTree(Frame* this_frame)
     : this_frame_(this_frame), scoped_child_count_(kInvalidChildCount) {}
@@ -192,7 +202,7 @@ Frame* FrameTree::FindFrameByName(const AtomicString& name) const {
   DCHECK(IsA<LocalFrame>(this_frame_.Get()));
   LocalFrame* current_frame = To<LocalFrame>(this_frame_.Get());
 
-  Frame* frame = FindFrameForNavigationInternal(name, KURL());
+  Frame* frame = FindFrameForNavigationInternal(name, NullUrl());
   if (frame && !current_frame->CanNavigate(*frame)) {
     frame = nullptr;
   }
@@ -205,6 +215,29 @@ FrameTree::FindResult FrameTree::FindOrCreateFrameForNavigation(
   // Named frame lookup should always be relative to a local frame.
   DCHECK(IsA<LocalFrame>(this_frame_.Get()));
   LocalFrame* current_frame = To<LocalFrame>(this_frame_.Get());
+
+  // A sandboxed iframe with popup restrictions should not be able to
+  // open a new browsing context by emulating a user gesture in JS.
+  // (e.g. Ctrl+click). Ignore click modifiers by resetting the
+  // navigation policy to kNavigationPolicyCurrentTab.
+  if (request.GetNavigationPolicy() != kNavigationPolicyCurrentTab &&
+      request.GetTriggeringEventInfo() ==
+          mojom::blink::TriggeringEventInfo::kFromUntrustedEvent) {
+    bool should_ignore_synthetic_click_modifiers =
+        this_frame_->GetSecurityContext()->IsSandboxed(
+            network::mojom::blink::WebSandboxFlags::kPopups);
+    if (base::FeatureList::IsEnabled(
+            features::kIgnoreSyntheticClicksForSandboxPropagation)) {
+      should_ignore_synthetic_click_modifiers |=
+          this_frame_->GetSecurityContext()->IsSandboxed(
+              network::mojom::blink::WebSandboxFlags::
+                  kPropagatesToAuxiliaryBrowsingContexts);
+    }
+
+    if (should_ignore_synthetic_click_modifiers) {
+      request.SetNavigationPolicy(kNavigationPolicyCurrentTab);
+    }
+  }
 
   // A GetNavigationPolicy() value other than kNavigationPolicyCurrentTab at
   // this point indicates that a user event modified the navigation policy
@@ -233,6 +266,16 @@ FrameTree::FindResult FrameTree::FindOrCreateFrameForNavigation(
     if (!frame->GetPage())
       frame = nullptr;
   }
+
+  if (frame && !current_frame->IsDescendantOf(frame) && frame->Parent() &&
+      !current_frame->GetSecurityContext()
+           ->GetSecurityOrigin()
+           ->IsSameOriginWith(
+               frame->Parent()->GetSecurityContext()->GetSecurityOrigin())) {
+    UseCounter::Count(
+        current_frame->GetDocument(),
+        WebFeature::kNonParentOriginInitiatedNavigationOfSubframe);
+  }
   return FindResult(frame, new_window);
 }
 
@@ -242,20 +285,21 @@ Frame* FrameTree::FindFrameForNavigationInternal(
     FrameLoadRequest* request) const {
   LocalFrame* current_frame = To<LocalFrame>(this_frame_.Get());
 
-  if (EqualIgnoringASCIICase(name, "_current")) {
+  if (!RuntimeEnabledFeatures::RemoveTargetCurrentEnabled() &&
+      EqualIgnoringAsciiCase(name, "_current")) {
     UseCounter::Count(current_frame->GetDocument(), WebFeature::kTargetCurrent);
-  }
-
-  if (EqualIgnoringASCIICase(name, "_self") ||
-      EqualIgnoringASCIICase(name, "_current") || name.empty()) {
     return current_frame;
   }
 
-  if (EqualIgnoringASCIICase(name, "_top")) {
+  if (EqualIgnoringAsciiCase(name, "_self") || name.empty()) {
+    return current_frame;
+  }
+
+  if (EqualIgnoringAsciiCase(name, "_top")) {
     return &Top();
   }
 
-  if (EqualIgnoringASCIICase(name, "_unfencedTop")) {
+  if (EqualIgnoringAsciiCase(name, "_unfencedTop")) {
     // In fenced frames, we set a flag that will later indicate to the browser
     // that this is an _unfencedTop navigation, and return the current frame
     // so that the renderer-side checks will succeed.
@@ -266,13 +310,13 @@ Frame* FrameTree::FindFrameForNavigationInternal(
     }
   }
 
-  if (EqualIgnoringASCIICase(name, "_parent")) {
+  if (EqualIgnoringAsciiCase(name, "_parent")) {
     return Parent() ? Parent() : current_frame;
   }
 
   // Since "_blank" should never be any frame's name, the following just amounts
   // to an optimization.
-  if (EqualIgnoringASCIICase(name, "_blank")) {
+  if (EqualIgnoringAsciiCase(name, "_blank")) {
     return nullptr;
   }
 

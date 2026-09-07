@@ -25,6 +25,7 @@
 #include "third_party/blink/public/platform/task_type.h"
 #include "third_party/blink/renderer/platform/heap/blink_gc_memory_dump_provider.h"
 #include "third_party/blink/renderer/platform/heap/thread_state.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/scheduler/common/task_priority.h"
 #include "third_party/blink/renderer/platform/scheduler/worker/worker_scheduler_proxy.h"
 #include "third_party/blink/renderer/platform/scheduler/worker/worker_thread_scheduler.h"
@@ -55,8 +56,7 @@ NonMainThreadImpl::NonMainThreadImpl(const ThreadCreationParams& params)
 
   base::MessagePumpType message_pump_type = base::MessagePumpType::DEFAULT;
   if (params.thread_type == ThreadType::kCompositorThread &&
-      base::FeatureList::IsEnabled(features::kDirectCompositorThreadIpc) &&
-      mojo::IsDirectReceiverSupported()) {
+      base::FeatureList::IsEnabled(features::kDirectCompositorThreadIpc)) {
     message_pump_type = base::MessagePumpType::IO;
   }
   thread_ = std::make_unique<SimpleThreadImpl>(
@@ -98,6 +98,18 @@ void NonMainThreadImpl::ShutdownOnThread() {
   Scheduler()->Shutdown();
 }
 
+void NonMainThreadImpl::AddTaskTimeObserver(
+    base::sequence_manager::TaskTimeObserver* task_time_observer) {
+  GetNonMainThreadScheduler()->GetHelper().AddTaskTimeObserver(
+      task_time_observer);
+}
+
+void NonMainThreadImpl::RemoveTaskTimeObserver(
+    base::sequence_manager::TaskTimeObserver* task_time_observer) {
+  GetNonMainThreadScheduler()->GetHelper().RemoveTaskTimeObserver(
+      task_time_observer);
+}
+
 NonMainThreadImpl::SimpleThreadImpl::SimpleThreadImpl(
     const String& name_prefix,
     const base::SimpleThread ::Options& options,
@@ -120,6 +132,10 @@ NonMainThreadImpl::SimpleThreadImpl::SimpleThreadImpl(
       base::sequence_manager::SequenceManager::Settings::Builder()
           .SetMessagePumpType(message_pump_type)
           .SetPrioritySettings(CreatePrioritySettings())
+          // Stamp each task with its queue time so the Long Animation Frame
+          // congested-moment detection can measure queuing delay on workers.
+          .SetAddQueueTimeToTasks(
+              RuntimeEnabledFeatures::LongAnimationFrameWorkerEnabled())
           .Build());
   internal_task_queue_ = sequence_manager_->CreateTaskQueue(
       base::sequence_manager::TaskQueue::Spec(

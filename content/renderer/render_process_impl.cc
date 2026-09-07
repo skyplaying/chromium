@@ -24,6 +24,7 @@
 #include "base/debug/crash_logging.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/system/sys_info.h"
@@ -171,8 +172,9 @@ RenderProcessImpl::RenderProcessImpl()
                           "--js-source-phase-imports",
                           "--no-js-source-phase-imports");
 
-    SetV8FlagIfOverridden(features::kDevToolsLiveEdit, "--inspector-live-edit",
-                          "--no-inspector-live-edit");
+    SetV8FlagIfOverridden(blink::features::kJavaScriptImportText,
+                          "--js-import-text", "--no-js-import-text");
+
   }
 
   bool enable_shared_array_buffer_unconditionally =

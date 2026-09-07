@@ -88,18 +88,17 @@ struct CaseFoldingHashReader {
   }
 };
 
-// The GetHash() functions on CaseFoldingHashTraits do not support null strings.
-// find(), Contains(), and insert() on
-// HashMap<String,..., CaseFoldingHashTraits<String>>
-// cause a null-pointer dereference when passed null strings.
-class CaseFoldingHash {
-  STATIC_ONLY(CaseFoldingHash);
+// The GetHash() functions on DeprecatedCaseFoldingHashTraits do not support
+// null strings. find(), Contains(), and insert() on HashMap<String,...,
+// DeprecatedCaseFoldingHashTraits<String>> cause a null-pointer dereference
+// when passed null strings.
+class DeprecatedCaseFoldingHash {
+  STATIC_ONLY(DeprecatedCaseFoldingHash);
 
  public:
   static unsigned GetHash(base::span<const UChar> span) {
-    base::span<const char> bytes = base::as_chars(span);
     return StringHasher::ComputeHashAndMaskTop8Bits<
-        CaseFoldingHashReader<UChar>>(bytes.data(), bytes.size());
+        CaseFoldingHashReader<UChar>>(base::as_bytes(span));
   }
 
   static unsigned GetHash(StringImpl* str) {
@@ -109,10 +108,8 @@ class CaseFoldingHash {
   }
 
   static unsigned GetHash(base::span<const LChar> span) {
-    base::span<const char> bytes = base::as_chars(span);
-    using Reader = CaseFoldingHashReader<LChar>;
-    return StringHasher::ComputeHashAndMaskTop8Bits<Reader>(
-        bytes.data(), bytes.size() * Reader::kExpansionFactor);
+    return StringHasher::ComputeHashAndMaskTop8Bits<
+        CaseFoldingHashReader<LChar>>(span);
   }
 
   static inline unsigned GetHash(base::span<const char> span) {
@@ -162,10 +159,11 @@ class CaseFoldingHash {
 //
 // See IgnoringAsciiCaseHashTraits for ASCII cases-insensitive strings.
 template <typename T>
-struct CaseFoldingHashTraits : HashTraits<T>, CaseFoldingHash {
-  using CaseFoldingHash::Equal;
-  using CaseFoldingHash::GetHash;
-  using CaseFoldingHash::kSafeToCompareToEmptyOrDeleted;
+struct DeprecatedCaseFoldingHashTraits : HashTraits<T>,
+                                         DeprecatedCaseFoldingHash {
+  using DeprecatedCaseFoldingHash::Equal;
+  using DeprecatedCaseFoldingHash::GetHash;
+  using DeprecatedCaseFoldingHash::kSafeToCompareToEmptyOrDeleted;
 };
 
 }  // namespace blink

@@ -62,8 +62,8 @@ static_library("input_method") {
     "//ash",
     "//ash/constants",
     "//ash/public/cpp",
+    "//ash/strings",
     "//base:i18n",
-    "//chrome/app:generated_resources",
     "//chrome/app/vector_icons",
     "//components/strings:components_strings",
     "//ui/accessibility:ax_enums_mojo",
@@ -124,6 +124,25 @@ source_set("unit_tests") {
     "//ui/events:events_base",
     "//ui/events:test_support",
     "//ui/gfx",
+    "//ui/gfx/geometry",
+    "//ui/views",
+    "//ui/views:test_support",
+  ]
+}
+
+source_set("browser_tests") {
+  testonly = true
+  defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+
+  sources = [ "candidate_window_view_pixeltest.cc" ]
+
+  deps = [
+    ":input_method",
+    "//base",
+    "//chrome/browser/ui",
+    "//chrome/test:test_support",
+    "//content/public/common",
+    "//content/test:test_support",
     "//ui/gfx/geometry",
     "//ui/views",
     "//ui/views:test_support",

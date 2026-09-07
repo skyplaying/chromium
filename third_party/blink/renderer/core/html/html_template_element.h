@@ -39,6 +39,7 @@
 namespace blink {
 
 class DocumentFragment;
+class Patch;
 class TemplateContentDocumentFragment;
 
 class CORE_EXPORT HTMLTemplateElement final : public HTMLElement {
@@ -47,6 +48,10 @@ class CORE_EXPORT HTMLTemplateElement final : public HTMLElement {
  public:
   explicit HTMLTemplateElement(Document&);
   ~HTMLTemplateElement() override;
+
+  ElementType GetElementType() const final {
+    return ElementType::kHTMLTemplateElement;
+  }
 
   bool HasNonInBodyInsertionMode() const override { return true; }
 
@@ -65,31 +70,27 @@ class CORE_EXPORT HTMLTemplateElement final : public HTMLElement {
   // or the content fragment for a "regular" template
   // element. This should only be used by HTMLConstructionSite.
   ContainerNode* InsertionTarget() const;
-  Node* InsertionNextChild() const;
 
   void SetOverrideInsertionTarget(ContainerNode& target) {
     CHECK(target.IsShadowRoot() || target.IsDocumentFragment());
     override_insertion_target_ = &target;
   }
 
-  bool IsShadowRootModeTemplate() const {
-    return override_insertion_target_ &&
-           override_insertion_target_->IsShadowRoot() &&
-           !insertion_start_marker_;
-  }
+  bool IsShadowRootModeTemplate() const { return override_insertion_target_; }
 
-  bool BeginPatch(ContainerNode&);
+  void SetPatch(Patch* patch);
+  Patch* GetPatch() const { return patch_; }
 
  private:
   void CloneNonAttributePropertiesFrom(const Element&,
                                        NodeCloningData&) override;
   void DidMoveToNewDocument(Document& old_document) override;
+  void RemovedFrom(ContainerNode&) override;
   void FinishParsingChildren() override;
   mutable Member<TemplateContentDocumentFragment> content_;
 
   Member<ContainerNode> override_insertion_target_;
-  Member<Node> insertion_start_marker_;
-  Member<Node> insertion_end_marker_;
+  Member<Patch> patch_;
 };
 
 }  // namespace blink

@@ -30,7 +30,6 @@ void VideoFrameMetadata::MergeMetadataFrom(
   if (source.a != kDefaultMetadata.a) \
   this->a = source.a
 
-  MERGE_VALUE_FIELD(allow_overlay, metadata_source);
   MERGE_OPTIONAL_FIELD(capture_begin_time, metadata_source);
   MERGE_OPTIONAL_FIELD(capture_end_time, metadata_source);
   MERGE_OPTIONAL_FIELD(capture_counter, metadata_source);
@@ -73,6 +72,9 @@ void VideoFrameMetadata::MergeMetadataFrom(
   MERGE_OPTIONAL_FIELD(frame_sequence, metadata_source);
   MERGE_OPTIONAL_FIELD(source_id, metadata_source);
   MERGE_OPTIONAL_FIELD(background_blur, metadata_source);
+#if BUILDFLAG(IS_ANDROID)
+  MERGE_OPTIONAL_FIELD(ycbcr_info, metadata_source);
+#endif
 
 #undef MERGE_VALUE_FIELD
 #undef MERGE_OPTIONAL_FIELD

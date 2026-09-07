@@ -53,15 +53,18 @@ class AuthenticationService;
 // of the navigation stack and should be updated accordingly).
 @property(nonatomic, assign, getter=isActive) BOOL active;
 
+// Maximum number of attachments allowed when presented for composebox.
+@property(nonatomic, assign) NSUInteger maxAttachmentCount;
+
 // Pending options. This will take effect when the mediator is set to active.
 @property(nonatomic, assign) std::optional<DriveFilePickerOptions>
     pendingOptions;
 
 // Initializes the mediator.
 - (instancetype)initWithWebState:(web::WebState*)webState
-                      collection:
-                          (std::unique_ptr<DriveFilePickerCollection>)collection
                          options:(DriveFilePickerOptions)options
+                          isRoot:(BOOL)isRoot
+                   forComposebox:(BOOL)forComposebox
                  identityManager:(signin::IdentityManager*)identityManager
            authenticationService:(AuthenticationService*)authenticationService
     NS_DESIGNATED_INITIALIZER;

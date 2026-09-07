@@ -15,7 +15,7 @@
 #include "components/user_education/common/tutorial/tutorial_service.h"
 #include "url/gurl.h"
 
-class Browser;
+class BrowserWindowInterface;
 
 // Utility for opening a page and starting a tutorial. The object exists
 // only as long as the operation is in progress.
@@ -56,7 +56,7 @@ class StartTutorialInPage {
     ~Params();
 
     // The page to open. If not specified, the current page will be used.
-    std::optional<GURL> target_url = std::nullopt;
+    std::optional<GURL> target_url;
 
     // See page_open_mode in show_promo_in_page.h.
     user_education::PageOpenMode page_open_mode =
@@ -69,8 +69,7 @@ class StartTutorialInPage {
     Callback callback = base::DoNothing();
 
     // The ID of the tutorial to start.
-    std::optional<user_education::TutorialIdentifier> tutorial_id =
-        std::nullopt;
+    std::optional<user_education::TutorialIdentifier> tutorial_id;
   };
 
   StartTutorialInPage(const StartTutorialInPage&) = delete;
@@ -79,8 +78,9 @@ class StartTutorialInPage {
 
   // Opens the page in `browser` and starts a Tutorial as described by
   // `params`. This method must be called on the UI thread.
-  static base::WeakPtr<StartTutorialInPage> Start(Browser* browser,
-                                                  Params params);
+  static base::WeakPtr<StartTutorialInPage> Start(
+      BrowserWindowInterface* browser,
+      Params params);
 
  protected:
   StartTutorialInPage();

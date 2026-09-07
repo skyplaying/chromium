@@ -9,6 +9,7 @@
 #include "chrome/browser/actor/tools/tools_test_util.h"
 #include "chrome/common/actor.mojom.h"
 #include "chrome/common/chrome_features.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 
@@ -27,7 +28,7 @@ class ActorMediaControlToolBrowserTest : public ActorToolsTest {
 
   void SetUpOnMainThread() override {
     ActorToolsTest::SetUpOnMainThread();
-    ASSERT_TRUE(embedded_test_server()->Start());
+    ASSERT_TRUE(embedded_https_test_server().Start());
   }
 
  private:
@@ -35,7 +36,8 @@ class ActorMediaControlToolBrowserTest : public ActorToolsTest {
 };
 
 IN_PROC_BROWSER_TEST_F(ActorMediaControlToolBrowserTest, NoMedia) {
-  const GURL url = embedded_test_server()->GetURL("/actor/blank.html");
+  const GURL url =
+      embedded_https_test_server().GetURL("example.com", "/actor/blank.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
   ASSERT_TRUE(WaitForLoadStop(web_contents()));
 
@@ -47,7 +49,8 @@ IN_PROC_BROWSER_TEST_F(ActorMediaControlToolBrowserTest, NoMedia) {
 }
 
 IN_PROC_BROWSER_TEST_F(ActorMediaControlToolBrowserTest, PauseAndPlayMedia) {
-  const GURL url = embedded_test_server()->GetURL("/actor/media.html");
+  const GURL url =
+      embedded_https_test_server().GetURL("example.com", "/actor/media.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
   ASSERT_TRUE(WaitForLoadStop(web_contents()));
 
@@ -60,7 +63,7 @@ IN_PROC_BROWSER_TEST_F(ActorMediaControlToolBrowserTest, PauseAndPlayMedia) {
       MakeMediaControlRequest(*active_tab(), PauseMedia());
   actor_task().Act(ToRequestList(pause_request), pause_result.GetCallback());
   ExpectOkResult(pause_result);
-  EXPECT_EQ("pause", content::EvalJs(web_contents(), "event_log.join(',')"));
+  EXPECT_EQ(true, content::EvalJs(web_contents(), "waitForEvent('pause')"));
 
   // Play the media.
   ActResultFuture play_result;
@@ -68,17 +71,22 @@ IN_PROC_BROWSER_TEST_F(ActorMediaControlToolBrowserTest, PauseAndPlayMedia) {
       MakeMediaControlRequest(*active_tab(), PlayMedia());
   actor_task().Act(ToRequestList(play_request), play_result.GetCallback());
   ExpectOkResult(play_result);
-  EXPECT_EQ("pause,play",
-            content::EvalJs(web_contents(), "event_log.join(',')"));
+  EXPECT_EQ(true, content::EvalJs(web_contents(), "waitForEvent('play')"));
 }
 
 IN_PROC_BROWSER_TEST_F(ActorMediaControlToolBrowserTest, SeekMedia) {
-  const GURL url = embedded_test_server()->GetURL("/actor/media.html");
+  const GURL url =
+      embedded_https_test_server().GetURL("example.com", "/actor/media.html");
   ASSERT_TRUE(content::NavigateToURL(web_contents(), url));
   ASSERT_TRUE(WaitForLoadStop(web_contents()));
 
-  // Start playback.
+  // Start playback to initialize media session.
   ASSERT_TRUE(content::ExecJs(web_contents(), "play()"));
+  EXPECT_EQ(true, content::EvalJs(web_contents(), "waitForEvent('play')"));
+
+  // Pause it so the currentTime doesn't drift during seek.
+  ASSERT_TRUE(content::ExecJs(web_contents(), "video.pause()"));
+  EXPECT_EQ(true, content::EvalJs(web_contents(), "waitForEvent('pause')"));
 
   // Seek the media.
   ActResultFuture result;
@@ -92,7 +100,10 @@ IN_PROC_BROWSER_TEST_F(ActorMediaControlToolBrowserTest, SeekMedia) {
       ToRequestList(request, request_negative_time, request_unreachable_time),
       result.GetCallback());
   ExpectOkResult(result);
-  EXPECT_EQ("seek 1", content::EvalJs(web_contents(), "event_log.join(',')"));
+  EXPECT_EQ(true, content::EvalJs(web_contents(), "waitForSeek(1.0)"));
+  EXPECT_EQ(
+      1.0,
+      content::EvalJs(web_contents(), "video.currentTime").ExtractDouble());
 }
 
 }  // namespace

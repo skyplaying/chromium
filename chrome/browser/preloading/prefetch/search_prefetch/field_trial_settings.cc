@@ -6,11 +6,15 @@
 
 #include <string>
 
+#include "base/byte_size.h"
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
+#include "base/numerics/safe_conversions.h"
+#include "base/strings/string_split.h"
 #include "base/system/sys_info.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
+#include "components/omnibox/browser/autocomplete_match.h"
 #include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_service.h"
 #include "content/public/browser/browser_context.h"
@@ -53,10 +57,11 @@ bool SearchPrefetchServicePrefetchingIsEnabled() {
     return false;
   }
 
-  return base::SysInfo::AmountOfPhysicalMemory().InMiB() >
-         base::GetFieldTrialParamByFeatureAsInt(
-             kSearchPrefetchServicePrefetching, "device_memory_threshold_MB",
-             3000);
+  return base::SysInfo::AmountOfTotalPhysicalMemory() >
+         base::MiB(base::saturated_cast<uint64_t>(
+             base::GetFieldTrialParamByFeatureAsInt(
+                 kSearchPrefetchServicePrefetching,
+                 "device_memory_threshold_MB", 3000)));
 }
 
 base::TimeDelta SearchPrefetchCachingLimit() {
@@ -95,6 +100,14 @@ BASE_FEATURE(kSearchNavigationPrefetch,
 #endif  // BUILDFLAG(IS_ANDROID)
 );
 
+BASE_FEATURE(kSearchPrefetchIgnoreSaverModesOnPress,
+#if BUILDFLAG(IS_ANDROID)
+             base::FEATURE_ENABLED_BY_DEFAULT
+#else
+             base::FEATURE_DISABLED_BY_DEFAULT
+#endif  // BUILDFLAG(IS_ANDROID)
+);
+
 const base::FeatureParam<std::string> kSuggestPrefetchParam{
     &kSearchNavigationPrefetch, "suggest_prefetch_param", "cs"};
 
@@ -118,16 +131,6 @@ bool IsSearchMouseDownPrefetchEnabled() {
 bool IsTouchDownPrefetchEnabled() {
   return base::GetFieldTrialParamByFeatureAsBool(kSearchNavigationPrefetch,
                                                  "touch_down", true);
-}
-
-bool AllowTopNavigationPrefetch() {
-  return base::GetFieldTrialParamByFeatureAsBool(kSearchNavigationPrefetch,
-                                                 "allow_top_selection", true);
-}
-
-bool PrefetchSearchHistorySuggestions() {
-  return base::GetFieldTrialParamByFeatureAsBool(
-      kSearchNavigationPrefetch, "prefetch_search_history", true);
 }
 
 BASE_FEATURE(kSearchPrefetchOnlyAllowDefaultMatchPreloading,
@@ -179,6 +182,13 @@ bool IsSearchPrefetchBeaconLoggingEnabled(
          value == kSuggestPrefetchParam.Get();
 }
 
+BASE_FEATURE(kSearchPrefetchPreloadServingMetrics,
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+bool IsSearchPrefetchPreloadServingMetricsEnabled() {
+  return base::FeatureList::IsEnabled(kSearchPrefetchPreloadServingMetrics);
+}
+
 bool IsPrefetchIncognitoEnabled() {
   return SearchPrefetchServicePrefetchingIsEnabled() &&
          IsSearchNavigationPrefetchEnabled() &&
@@ -193,12 +203,72 @@ const base::FeatureParam<base::TimeDelta>
         &kAutocompleteDictionaryPreload,
         "autocomplete_preloaded_dictionary_timeout", base::Milliseconds(60000)};
 
-BASE_FEATURE(kSuppressesSearchPrefetchOnSlowNetwork,
+BASE_FEATURE(kSuppressPrefetchForUnsupportedSearchMode,
              base::FEATURE_DISABLED_BY_DEFAULT);
+// Allows to specify a comma-separated list of unsupported parameters, e.g.
+// "udm=50,param2=value1=value2", in which case both "udm=50" and
+// "param2=value1" and "param2=value2" will be considered as unsupported.
+const base::FeatureParam<std::string> kUnsupportedSearchPrefetchModes{
+    &kSuppressPrefetchForUnsupportedSearchMode,
+    "unsupported_search_prefetch_modes", "udm=50"};
 
-// Regarding how this number was chosen, see the design doc linked from
-// crbug.com/350519234.
-const base::FeatureParam<base::TimeDelta>
-    kSuppressesSearchPrefetchOnSlowNetworkThreshold{
-        &kSuppressesSearchPrefetchOnSlowNetwork,
-        "slow_network_threshold_for_search_prefetch", base::Milliseconds(208)};
+bool ShouldSuppressPreloadForUnsupportedModeInternal(
+    const GURL& url,
+    std::string_view unsupported_modes_param) {
+  std::vector<std::string_view> unsupported_modes =
+      base::SplitStringPiece(unsupported_modes_param, ",",
+                             base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+  for (std::string_view unsupported_mode : unsupported_modes) {
+    std::vector<std::string_view> key_values =
+        base::SplitStringPiece(unsupported_mode, "=", base::TRIM_WHITESPACE,
+                               base::SPLIT_WANT_NONEMPTY);
+    CHECK(!key_values.empty());
+
+    std::string_view key = key_values[0];
+    std::string value;
+    if (!net::GetValueForKeyInQuery(url, key, &value)) {
+      continue;
+    }
+
+    base::span<std::string_view> unsupported_values =
+        base::span(key_values).subspan(1u);
+    if (std::ranges::contains(unsupported_values, value)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool ShouldSuppressPreloadForUnsupportedModeInternal(
+    const AutocompleteMatch& match,
+    std::string_view unsupported_modes_param) {
+  // TODO(crbug.com/479054738): AIM suggestions should not be prefetched for
+  // now. Revisit this decision later.
+  if (match.IsSearchAimSuggestion()) {
+    return true;
+  }
+
+  return ShouldSuppressPreloadForUnsupportedModeInternal(
+      match.destination_url, unsupported_modes_param);
+}
+
+bool ShouldSuppressPrefetchForUnsupportedMode(const GURL& url) {
+  if (!base::FeatureList::IsEnabled(
+          kSuppressPrefetchForUnsupportedSearchMode)) {
+    return false;
+  }
+
+  return ShouldSuppressPreloadForUnsupportedModeInternal(
+      url, kUnsupportedSearchPrefetchModes.Get());
+}
+
+bool ShouldSuppressPrefetchForUnsupportedMode(const AutocompleteMatch& match) {
+  if (!base::FeatureList::IsEnabled(
+          kSuppressPrefetchForUnsupportedSearchMode)) {
+    return false;
+  }
+
+  return ShouldSuppressPreloadForUnsupportedModeInternal(
+      match, kUnsupportedSearchPrefetchModes.Get());
+}

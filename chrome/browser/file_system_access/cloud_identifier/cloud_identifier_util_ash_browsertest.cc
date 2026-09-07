@@ -15,7 +15,7 @@
 #include "chrome/browser/ash/file_manager/fileapi_util.h"
 #include "chrome/browser/ash/file_manager/volume.h"
 #include "chrome/browser/extensions/scoped_test_mv2_enabler.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chromeos/ash/components/drivefs/fake_drivefs.h"
 #include "content/public/test/browser_test.h"
@@ -124,7 +124,7 @@ class GetDriveFsCloudIdentifierBrowserTest
   base::FilePath AddDriveFsFile(const std::string& item_id) {
     base::FilePath absolute_path;
     base::FilePath relateive_path;
-    AddDriveFileWithRelativePath(browser()->profile(), item_id,
+    AddDriveFileWithRelativePath(browser()->GetProfile(), item_id,
                                  base::FilePath(), &relateive_path,
                                  &absolute_path);
     return absolute_path;
@@ -133,7 +133,7 @@ class GetDriveFsCloudIdentifierBrowserTest
 
 IN_PROC_BROWSER_TEST_F(GetDriveFsCloudIdentifierBrowserTest, GetHandleSuccess) {
   // Set up DriveFS file system.
-  InitTestFileMountRoot(browser()->profile());
+  InitTestFileMountRoot(browser()->GetProfile());
 
   const std::string provider_name = "drive.google.com";
 
@@ -170,7 +170,7 @@ IN_PROC_BROWSER_TEST_F(GetDriveFsCloudIdentifierBrowserTest, GetHandleSuccess) {
 
 IN_PROC_BROWSER_TEST_F(GetDriveFsCloudIdentifierBrowserTest, GetHandleError) {
   // Set up DriveFS file system.
-  InitTestFileMountRoot(browser()->profile());
+  InitTestFileMountRoot(browser()->GetProfile());
 
   // Unexpected type (expect dir for file) should fail.
   const std::string file_item_id = "file-item-id";
@@ -216,7 +216,7 @@ IN_PROC_BROWSER_TEST_F(GetProvidedFsCloudIdentifierBrowserTest,
 
   base::WeakPtr<file_manager::Volume> fsp_volume =
       file_manager::test::InstallFileSystemProviderChromeApp(
-          browser()->profile());
+          browser()->GetProfile());
 
   const std::string provider_name = "provided-file-system-provider";
 
@@ -268,7 +268,7 @@ IN_PROC_BROWSER_TEST_F(GetProvidedFsCloudIdentifierBrowserTest,
 
   base::WeakPtr<file_manager::Volume> fsp_volume =
       file_manager::test::InstallFileSystemProviderChromeApp(
-          browser()->profile());
+          browser()->GetProfile());
 
   // Unexpected type (expect dir for file) should fail.
   base::FilePath file_1_path =

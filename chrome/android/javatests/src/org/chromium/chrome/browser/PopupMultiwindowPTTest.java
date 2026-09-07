@@ -17,10 +17,8 @@ import org.junit.runner.RunWith;
 import org.chromium.base.test.transit.TransitAsserts;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.DoNotBatch;
-import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.Restriction;
-import org.chromium.chrome.browser.app.tab_activity_glue.PopupCreator;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.app.tab_activity_glue.PopupCreatorImpl;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
@@ -36,7 +34,6 @@ import org.chromium.ui.test.util.DeviceRestriction;
 @RunWith(ChromeJUnit4ClassRunner.class)
 @CommandLineFlags.Add(ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE)
 @DoNotBatch(reason = "Safer to not batch as we are using multiple Android tasks")
-@EnableFeatures(ChromeFeatureList.ANDROID_WINDOW_POPUP_LARGE_SCREEN)
 @Restriction({DeviceFormFactor.TABLET_OR_DESKTOP, DeviceRestriction.RESTRICTION_TYPE_NON_AUTO})
 public class PopupMultiwindowPTTest {
     @Rule
@@ -48,7 +45,7 @@ public class PopupMultiwindowPTTest {
     @Before
     public void setUp() {
         mEntryPage = mCtaTestRule.startOnBlankPage();
-        PopupCreator.setSetMovableTaskRequiredForPopupsForTesting(false);
+        PopupCreatorImpl.setSetMovableTaskRequiredForPopupsForTesting(false);
     }
 
     @Test
@@ -73,7 +70,6 @@ public class PopupMultiwindowPTTest {
 
     @Test
     @MediumTest
-    @Restriction(DeviceFormFactor.ONLY_TABLET)
     public void testBasicIncognito() {
         final IncognitoNewTabPageStation incognitoEntryPoint =
                 mEntryPage.openNewIncognitoTabOrWindowFast();

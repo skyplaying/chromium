@@ -81,6 +81,10 @@ const std::vector<GURL>& FakeDownloadItem::GetUrlChain() const {
   return url_chain_;
 }
 
+bool FakeDownloadItem::IsUrlTruncated() const {
+  return false;
+}
+
 void FakeDownloadItem::SetLastReason(
     download::DownloadInterruptReason last_reason) {
   last_reason_ = last_reason;
@@ -286,6 +290,10 @@ void FakeDownloadItem::ValidateInsecureDownload() {
   NOTREACHED();
 }
 
+void FakeDownloadItem::ConfirmNonDangerousDownload() {
+  NOTREACHED();
+}
+
 void FakeDownloadItem::CopyDownload(AcquireFileCallback callback) {
   NOTREACHED();
 }
@@ -458,6 +466,10 @@ bool FakeDownloadItem::IsDangerous() const {
 
 bool FakeDownloadItem::IsInsecure() const {
   return is_insecure_;
+}
+
+bool FakeDownloadItem::IsUserConfirmed() const {
+  NOTREACHED();
 }
 
 download::DownloadDangerType FakeDownloadItem::GetDangerType() const {

@@ -264,13 +264,25 @@ void MockCryptoClientStream::setHandshakeConfirmedForce(bool state) {
   handshake_confirmed_ = state;
 }
 
+bool MockCryptoClientStream::ResumptionAttempted() const {
+  return false;
+}
+
 bool MockCryptoClientStream::EarlyDataAccepted() const {
   return encryption_established_ && !handshake_confirmed_ &&
          (handshake_mode_ == ZERO_RTT || handshake_mode_ == ASYNC_ZERO_RTT);
 }
 
 ssl_early_data_reason_t MockCryptoClientStream::EarlyDataReason() const {
+  if (early_data_reason_.has_value()) {
+    return *early_data_reason_;
+  }
   return EarlyDataAccepted() ? ssl_early_data_accepted : ssl_early_data_unknown;
+}
+
+std::optional<quic::QuicWallTime>
+MockCryptoClientStream::GetSessionTicketCreationTime() const {
+  return ticket_creation_time_;
 }
 
 const QuicCryptoNegotiatedParameters&

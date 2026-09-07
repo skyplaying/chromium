@@ -9,6 +9,7 @@
 #include "third_party/blink/renderer/core/paint/paint_auto_dark_mode.h"
 #include "third_party/blink/renderer/core/style/border_edge.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
+#include "third_party/blink/renderer/core/style/shadow_list.h"
 #include "third_party/blink/renderer/core/style/style_border_shape.h"
 #include "third_party/blink/renderer/platform/geometry/stroke_data.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_context.h"
@@ -16,6 +17,7 @@
 #include "third_party/blink/renderer/platform/graphics/graphics_context_types.h"
 #include "third_party/blink/renderer/platform/text/writing_mode_utils.h"
 #include "third_party/blink/renderer/platform/transforms/affine_transform.h"
+#include "third_party/skia/include/core/SkPathBuilder.h"
 #include "third_party/skia/include/pathops/SkPathOps.h"
 #include "ui/gfx/geometry/outsets_f.h"
 #include "ui/gfx/geometry/rect_f.h"
@@ -24,6 +26,16 @@
 namespace blink {
 namespace {
 
+// The default miter limit of 4.0 is suitable for shapes containing curves or
+// arcs (such as shape() and path() with curved segments) to prevent huge miter
+// spikes at sharp cusps. For purely linear polygon shapes, however, we use a
+// large finite miter limit so acute polygon corners remain sharp miters
+// rather than being cut off into bevels.
+// Note: using an infinite or maximum float miter limit is not supported
+// by Skia, as squaring it during internal miter length calculations causes
+// floating-point overflow and fails internal finiteness validation checks.
+constexpr float kBorderShapePolygonMiterLimit = 1e10f;
+
 Path OuterPathWithoutStroke(const ComputedStyle& style,
                             const PhysicalRect& outer_reference_rect) {
   CHECK(style.HasBorderShape());
@@ -31,6 +43,35 @@ Path OuterPathWithoutStroke(const ComputedStyle& style,
   const StyleBorderShape& border_shape = *style.BorderShape();
   return border_shape.OuterShape().GetPath(gfx::RectF(outer_reference_rect),
                                            style.EffectiveZoom(), 1);
+}
+
+StrokeData GetStrokeData(const StyleBorderShape& border_shape,
+                         const Path& path,
+                         float thickness) {
+  StrokeData stroke_data;
+  stroke_data.SetThickness(thickness);
+
+  // The default miter limit of 4.0 is suitable for shapes containing curves or
+  // arcs (such as shape() and path() with curved segments) to prevent huge
+  // miter spikes at sharp cusps. For purely linear polygon shapes, however, we
+  // use a large finite miter limit so acute polygon corners remain sharp miters
+  // rather than being cut off into bevels.
+  const uint32_t segment_masks = path.GetSkPath().getSegmentMasks();
+  if ((segment_masks & ~SkPath::kLine_SegmentMask) == 0) {
+    stroke_data.SetMiterLimit(kBorderShapePolygonMiterLimit);
+  }
+
+  // If the shape is a polygon with CSS `round <length>`, set line join to round
+  // to handle floating-point noise micro-segments and prevent bevel flattening.
+  // Note: When line join is round (kRoundJoin), Skia renders rounded joins and
+  // completely ignores the miter limit value.
+  const BasicShape& outer_shape = border_shape.OuterShape();
+  if (outer_shape.GetType() == BasicShape::kBasicShapePolygonType &&
+      To<BasicShapePolygon>(outer_shape).HasRoundingRadius()) {
+    stroke_data.SetLineJoin(kRoundJoin);
+  }
+
+  return stroke_data;
 }
 
 }  // namespace
@@ -51,8 +92,8 @@ Path BorderShapePainter::OuterPath(const ComputedStyle& style,
   }
 
   // Add stroke to the outer path, if we don't have an inner one.
-  StrokeData stroke_data;
-  stroke_data.SetThickness(derived_stroke.thickness);
+  StrokeData stroke_data =
+      GetStrokeData(*style.BorderShape(), outer_path, derived_stroke.thickness);
   SkOpBuilder builder;
   builder.add(outer_path.GetSkPath(), SkPathOp::kUnion_SkPathOp);
   Path stroke_path = outer_path.StrokePath(stroke_data, AffineTransform());
@@ -66,8 +107,29 @@ Path BorderShapePainter::InnerPath(const ComputedStyle& style,
   CHECK(style.HasBorderShape());
 
   const StyleBorderShape& border_shape = *style.BorderShape();
-  return border_shape.InnerShape().GetPath(gfx::RectF(inner_reference_rect),
-                                           style.EffectiveZoom(), 1);
+  Path inner_path = border_shape.InnerShape().GetPath(
+      gfx::RectF(inner_reference_rect), style.EffectiveZoom(), 1);
+
+  if (border_shape.HasSeparateInnerShape()) {
+    return inner_path;
+  }
+
+  // For single-shape border-shape, the border is drawn as a stroke centered on
+  // the path with the border width as the stroke thickness. The inner edge of
+  // the border is therefore at path - border_width/2.
+  DerivedStroke derived_stroke = RelevantSideForBorderShape(style);
+  if (derived_stroke.thickness <= 0) {
+    return inner_path;
+  }
+
+  StrokeData stroke_data =
+      GetStrokeData(*style.BorderShape(), inner_path, derived_stroke.thickness);
+  Path stroke_path = inner_path.StrokePath(stroke_data, AffineTransform());
+  SkOpBuilder builder;
+  builder.add(inner_path.GetSkPath(), SkPathOp::kUnion_SkPathOp);
+  builder.add(stroke_path.GetSkPath(), SkPathOp::kDifference_SkPathOp);
+  SkPath result;
+  return builder.resolve(&result) ? Path(result) : inner_path;
 }
 
 Path BorderShapePainter::OuterPathWithOffset(
@@ -75,27 +137,105 @@ Path BorderShapePainter::OuterPathWithOffset(
     const PhysicalRect& outer_reference_rect,
     float offset) {
   CHECK(style.HasBorderShape());
-  Path outer_path = OuterPath(style, outer_reference_rect);
 
-  if (offset == 0) {
-    return outer_path;
+  Path base_path = OuterPathWithoutStroke(style, outer_reference_rect);
+  float total_offset = offset;
+
+  // Add half the border thickness to reach the outer edge of the border
+  if (!style.BorderShape()->HasSeparateInnerShape()) {
+    DerivedStroke derived_stroke = RelevantSideForBorderShape(style);
+    total_offset += derived_stroke.thickness / 2.0f;
   }
 
-  StrokeData stroke_data;
-  stroke_data.SetThickness(std::abs(offset) * 2);
-  Path stroke_path = outer_path.StrokePath(stroke_data, AffineTransform());
+  if (total_offset == 0) {
+    return base_path;
+  }
+
+  const SkPath& sk_base = base_path.GetSkPath();
+
+  // Ovals
+  SkRect oval_bounds;
+  if (sk_base.isOval(&oval_bounds)) {
+    SkRect outset_bounds = oval_bounds.makeOutset(total_offset, total_offset);
+    if (outset_bounds.width() > 0 && outset_bounds.height() > 0) {
+      return SkPath::Oval(outset_bounds);
+    }
+    return Path();
+  }
+
+  // RRects
+  SkRRect rrect;
+  if (sk_base.isRRect(&rrect)) {
+    SkRRect outset_rrect;
+    rrect.outset(total_offset, total_offset, &outset_rrect);
+    if (outset_rrect.rect().width() > 0 && outset_rrect.rect().height() > 0) {
+      return SkPath::RRect(outset_rrect);
+    }
+    return Path();
+  }
+
+  // Anything else
+  StrokeData stroke_data = GetStrokeData(*style.BorderShape(), base_path,
+                                         std::abs(total_offset) * 2);
+  Path stroke_path = base_path.StrokePath(stroke_data, AffineTransform());
 
   SkOpBuilder builder;
-  builder.add(outer_path.GetSkPath(), SkPathOp::kUnion_SkPathOp);
-  if (offset > 0) {
-    // Expand: union the path with its stroke
+  builder.add(sk_base, SkPathOp::kUnion_SkPathOp);
+
+  if (total_offset > 0) {
+    // Expand: union the path with its combined stroke
     builder.add(stroke_path.GetSkPath(), SkPathOp::kUnion_SkPathOp);
   } else {
     // Contract: intersect the path with inverted stroke
     builder.add(stroke_path.GetSkPath(), SkPathOp::kDifference_SkPathOp);
   }
   SkPath result;
-  return builder.resolve(&result) ? Path(result) : outer_path;
+  return builder.resolve(&result) ? Path(result) : base_path;
+}
+
+// Shared implementation for Paint() and PaintBorderArea().
+static void PaintBorderShape(GraphicsContext& context,
+                             const ComputedStyle& style,
+                             const StyleBorderShape& border_shape,
+                             const PhysicalRect& outer_reference_rect,
+                             const PhysicalRect& inner_reference_rect,
+                             const Color& color,
+                             float stroke_thickness) {
+  const Path outer_path = OuterPathWithoutStroke(style, outer_reference_rect);
+
+  const AutoDarkMode auto_dark_mode(
+      PaintAutoDarkMode(style, DarkModeFilter::ElementRole::kBorder));
+  context.SetShouldAntialias(true);
+
+  // When two <basic-shape> values are given, the border is rendered as the
+  // shape between the two paths.
+  if (border_shape.HasSeparateInnerShape()) {
+    SkOpBuilder builder;
+    builder.add(outer_path.GetSkPath(), SkPathOp::kUnion_SkPathOp);
+    const Path inner_path =
+        BorderShapePainter::InnerPath(style, inner_reference_rect);
+    builder.add(inner_path.GetSkPath(), SkPathOp::kDifference_SkPathOp);
+    SkPath result;
+    builder.resolve(&result);
+    Path fill_path(result);
+    context.SetFillColor(color);
+    context.FillPath(fill_path, auto_dark_mode);
+    return;
+  }
+
+  // A stroke thickness of 0 renders a hairline path, but we want to render
+  // nothing.
+  if (!stroke_thickness) {
+    return;
+  }
+
+  // When only a single <basic-shape> is given, the border is rendered as a
+  // stroke with the relevant side’s computed border width as the stroke width.
+  StrokeData stroke_data =
+      GetStrokeData(*style.BorderShape(), outer_path, stroke_thickness);
+  context.SetStrokeColor(color);
+  context.SetStroke(stroke_data);
+  context.StrokePath(outer_path, auto_dark_mode);
 }
 
 bool BorderShapePainter::Paint(GraphicsContext& context,
@@ -107,42 +247,29 @@ bool BorderShapePainter::Paint(GraphicsContext& context,
     return false;
   }
 
-  const Path outer_path = OuterPathWithoutStroke(style, outer_reference_rect);
-
   DerivedStroke derived_stroke = RelevantSideForBorderShape(style);
-  const AutoDarkMode auto_dark_mode(
-      PaintAutoDarkMode(style, DarkModeFilter::ElementRole::kBorder));
-  context.SetShouldAntialias(true);
-
-  // When two <basic-shape> values are given, the border is rendered as the
-  // shape between the two paths.
-  if (border_shape->HasSeparateInnerShape()) {
-    SkOpBuilder builder;
-    builder.add(outer_path.GetSkPath(), SkPathOp::kUnion_SkPathOp);
-    const Path inner_path = InnerPath(style, inner_reference_rect);
-    builder.add(inner_path.GetSkPath(), SkPathOp::kDifference_SkPathOp);
-    SkPath result;
-    builder.resolve(&result);
-    Path fill_path(result);
-    context.SetFillColor(derived_stroke.color);
-    context.FillPath(fill_path, auto_dark_mode);
-    return true;
-  }
-
-  // A stroke thickness of 0 renders a hairline path, but we want to render
-  // nothing.
-  if (!derived_stroke.thickness) {
-    return true;
-  }
-
-  // When only a single <basic-shape> is given, the border is rendered as a
-  // stroke with the relevant side’s computed border width as the stroke width.
-  StrokeData stroke_data;
-  stroke_data.SetThickness(derived_stroke.thickness);
-  context.SetStrokeColor(derived_stroke.color);
-  context.SetStroke(stroke_data);
-  context.StrokePath(outer_path, auto_dark_mode);
+  PaintBorderShape(context, style, *border_shape, outer_reference_rect,
+                   inner_reference_rect, derived_stroke.color,
+                   derived_stroke.thickness);
   return true;
+}
+
+// static
+void BorderShapePainter::PaintBorderArea(
+    GraphicsContext& context,
+    const ComputedStyle& style,
+    const PhysicalRect& outer_reference_rect,
+    const PhysicalRect& inner_reference_rect) {
+  const StyleBorderShape* border_shape = style.BorderShape();
+  CHECK(border_shape);
+
+  // Dark mode color inversion is harmless here because the result is used as
+  // a DstIn mask where only the alpha channel matters, not the RGB values.
+  float thickness = border_shape->HasSeparateInnerShape()
+                        ? 0
+                        : RelevantSideForBorderShape(style).thickness;
+  PaintBorderShape(context, style, *border_shape, outer_reference_rect,
+                   inner_reference_rect, Color::kBlack, thickness);
 }
 
 bool BorderShapePainter::PaintOutline(GraphicsContext& context,
@@ -155,28 +282,6 @@ bool BorderShapePainter::PaintOutline(GraphicsContext& context,
     return false;
   }
 
-  // Calculate the offset from the outer_path to the center of the outline
-  // stroke.
-  //
-  // When border-shape uses a single shape, the border is drawn as a stroke
-  // centered on the outer_path. The outer edge of the border is at
-  // border_width/2 from the path. The outline starts from there.
-  //
-  // When border-shape uses double shapes (outer + inner), the border fills the
-  // area between them. The outline starts from the outer_path directly
-  // (border_stroke_offset = 0).
-  float border_stroke_offset = 0;
-  if (!border_shape->HasSeparateInnerShape()) {
-    DerivedStroke derived_stroke = RelevantSideForBorderShape(style);
-    border_stroke_offset = derived_stroke.thickness / 2.0f;
-  }
-
-  const float center_offset = border_stroke_offset +
-                              static_cast<float>(outline_offset) +
-                              static_cast<float>(outline_width) / 2.0f;
-  Path center_path =
-      OuterPathWithOffset(style, outer_reference_rect, center_offset);
-
   const Color outline_color =
       style.VisitedDependentColor(GetCSSPropertyOutlineColor());
   const AutoDarkMode auto_dark_mode(
@@ -186,47 +291,40 @@ bool BorderShapePainter::PaintOutline(GraphicsContext& context,
 
   EBorderStyle outline_style = style.OutlineStyle();
 
-  // For solid outline, stroke the center path with the outline width.
+  auto fill_outline_band = [&](float outer_extent, float inner_extent) {
+    const Path outer_path =
+        OuterPathWithOffset(style, outer_reference_rect, outer_extent);
+    const Path inner_path =
+        OuterPathWithOffset(style, outer_reference_rect, inner_extent);
+    SkPathBuilder builder(SkPathFillType::kEvenOdd);
+    builder.addPath(outer_path.GetSkPath());
+    builder.addPath(inner_path.GetSkPath());
+    SkPath sk_result = builder.detach();
+    context.FillPath(Path(sk_result), auto_dark_mode);
+  };
+
+  // Draw solid outline as a filled region: OuterBound - InnerBound
   if (outline_style == EBorderStyle::kSolid) {
-    StrokeData stroke_data;
-    stroke_data.SetThickness(static_cast<float>(outline_width));
-    context.SetStrokeColor(outline_color);
-    context.SetStroke(stroke_data);
-    context.StrokePath(center_path, auto_dark_mode);
+    context.SetFillColor(outline_color);
+    fill_outline_band(outline_offset + outline_width, outline_offset);
     return true;
-  } else if (outline_style == EBorderStyle::kDouble) {
-    // For double outline, draw two strokes.
+  }
+
+  if (outline_style == EBorderStyle::kDouble) {
+    context.SetFillColor(outline_color);
     const float stroke_width =
         std::round(static_cast<float>(outline_width) / 3.0f);
+
     if (stroke_width < 1) {
-      // Fall back to solid if too thin.
-      StrokeData stroke_data;
-      stroke_data.SetThickness(static_cast<float>(outline_width));
-      context.SetStrokeColor(outline_color);
-      context.SetStroke(stroke_data);
-      context.StrokePath(center_path, auto_dark_mode);
-      return true;
+      // Fall back to solid logic if too thin
+      fill_outline_band(outline_offset + outline_width, outline_offset);
+    } else {
+      // Outer Band
+      fill_outline_band(outline_offset + outline_width,
+                        outline_offset + outline_width - stroke_width);
+      // Inner Band
+      fill_outline_band(outline_offset + stroke_width, outline_offset);
     }
-
-    // Outer stroke
-    const float outer_offset = center_offset +
-                               static_cast<float>(outline_width) / 2.0f -
-                               stroke_width / 2.0f;
-    Path outer_stroke_path =
-        OuterPathWithOffset(style, outer_reference_rect, outer_offset);
-    StrokeData outer_stroke_data;
-    outer_stroke_data.SetThickness(stroke_width);
-    context.SetStrokeColor(outline_color);
-    context.SetStroke(outer_stroke_data);
-    context.StrokePath(outer_stroke_path, auto_dark_mode);
-
-    // Inner stroke
-    const float inner_offset = center_offset -
-                               static_cast<float>(outline_width) / 2.0f +
-                               stroke_width / 2.0f;
-    Path inner_stroke_path =
-        OuterPathWithOffset(style, outer_reference_rect, inner_offset);
-    context.StrokePath(inner_stroke_path, auto_dark_mode);
     return true;
   }
 
@@ -243,24 +341,69 @@ PhysicalBoxStrut BorderShapePainter::VisualOutsets(
     const PhysicalRect& inner_reference_rect) {
   CHECK(style.HasBorderShape());
 
+  const gfx::RectF border_gfx = gfx::RectF(border_rect);
+
+  // Border path visual bounds: where the border stroke/fill draws.
   const Path outer_path = OuterPath(style, outer_reference_rect);
   gfx::RectF visual_bounds = outer_path.BoundingRect();
   const Path inner_path = InnerPath(style, inner_reference_rect);
   visual_bounds.Union(inner_path.BoundingRect());
 
-  const float top_outset = std::max(0.0f, border_rect.Y() - visual_bounds.y());
-  const float left_outset = std::max(0.0f, border_rect.X() - visual_bounds.x());
-  const float right_outset =
-      std::max(0.0f, visual_bounds.right() - border_rect.Right());
-  const float bottom_outset =
-      std::max(0.0f, visual_bounds.bottom() - border_rect.Bottom());
+  PhysicalBoxStrut outsets = PhysicalBoxStrut::Enclosing(gfx::OutsetsF::TLBR(
+      std::max(0.0f, border_gfx.y() - visual_bounds.y()),
+      std::max(0.0f, border_gfx.x() - visual_bounds.x()),
+      std::max(0.0f, visual_bounds.bottom() - border_gfx.bottom()),
+      std::max(0.0f, visual_bounds.right() - border_gfx.right())));
 
-  if (!top_outset && !right_outset && !bottom_outset && !left_outset) {
-    return PhysicalBoxStrut();
+  // Box-shadow visual bounds. BoxDecorationOutsets() uses (spread + sigma_3)
+  // for shadows, but for border-shape the shadow path is built via:
+  //   OuterPathWithOffset(style, outer_reference_rect, spread)
+  // giving a total visual extent of (spread + sigma_3). Replicate the
+  // exact path the painter builds so the overflow bounds match the pixels
+  // actually drawn.
+  if (const ShadowList* box_shadow = style.BoxShadow()) {
+    for (const ShadowData& shadow : box_shadow->Shadows()) {
+      if (shadow.Style() == ShadowStyle::kInset) {
+        continue;
+      }
+      const float spread = shadow.Spread();
+      // 3 * sigma is how Skia computes the box blur extent.
+      // See ShadowData::RectOutsets().
+      const float sigma_3 = std::ceil(3.0f * shadow.BlurAsSigma());
+
+      const Path shadow_path =
+          OuterPathWithOffset(style, outer_reference_rect, spread);
+
+      // The draw looper blurs shadow_path by sigma_3, then offsets by (X, Y).
+      gfx::RectF shadow_visual_rect = shadow_path.BoundingRect();
+      shadow_visual_rect.Outset(sigma_3);
+      shadow_visual_rect.Offset(shadow.X(), shadow.Y());
+
+      outsets.Unite(PhysicalBoxStrut::Enclosing(gfx::OutsetsF::TLBR(
+          std::max(0.0f, border_gfx.y() - shadow_visual_rect.y()),
+          std::max(0.0f, border_gfx.x() - shadow_visual_rect.x()),
+          std::max(0.0f, shadow_visual_rect.bottom() - border_gfx.bottom()),
+          std::max(0.0f, shadow_visual_rect.right() - border_gfx.right()))));
+    }
   }
 
-  return PhysicalBoxStrut::Enclosing(gfx::OutsetsF::TLBR(
-      top_outset, left_outset, bottom_outset, right_outset));
+  // Outline visual bounds.
+  if (style.HasOutline() && !style.OutlineStyleIsAuto() &&
+      style.OutlineWidth() > 0) {
+    const float outline_extent = static_cast<float>(style.OutlineOffset()) +
+                                 static_cast<float>(style.OutlineWidth());
+    const Path outline_path =
+        OuterPathWithOffset(style, outer_reference_rect, outline_extent);
+    const gfx::RectF outline_visual_rect = outline_path.BoundingRect();
+
+    outsets.Unite(PhysicalBoxStrut::Enclosing(gfx::OutsetsF::TLBR(
+        std::max(0.0f, border_gfx.y() - outline_visual_rect.y()),
+        std::max(0.0f, border_gfx.x() - outline_visual_rect.x()),
+        std::max(0.0f, outline_visual_rect.bottom() - border_gfx.bottom()),
+        std::max(0.0f, outline_visual_rect.right() - border_gfx.right()))));
+  }
+
+  return outsets;
 }
 
 }  // namespace blink

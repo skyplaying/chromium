@@ -4,9 +4,10 @@
 
 #include "components/gwp_asan/client/extreme_lightweight_detector_quarantine.h"
 
+#include "partition_alloc/buildflags.h"
+#include "partition_alloc/internal/partition_page_internal.h"  // nogncheck
+#include "partition_alloc/internal/partition_root_internal.h"  // nogncheck
 #include "partition_alloc/partition_alloc_for_testing.h"
-#include "partition_alloc/partition_page.h"
-#include "partition_alloc/partition_root.h"
 #include "partition_alloc/partition_stats.h"
 #include "partition_alloc/slot_start.h"
 #include "partition_alloc/thread_cache.h"
@@ -14,7 +15,7 @@
 
 namespace gwp_asan::internal {
 
-#if !defined(MEMORY_TOOL_REPLACES_ALLOCATOR)
+#if !PA_BUILDFLAG(MEMORY_TOOL_REPLACES_ALLOCATOR)
 
 namespace {
 
@@ -55,9 +56,8 @@ class PartitionAllocExtremeLightweightDetectorQuarantineTest
   QuarantineBranch* GetQuarantineBranch() { return &branch_.value(); }
 
   bool Quarantine(void* object) {
-    auto slot_start = partition_alloc::internal::SlotStart::Checked(
-                          object, GetPartitionRoot())
-                          .Untag();
+    auto slot_start =
+        partition_alloc::SlotStart::Checked(object, GetPartitionRoot()).Untag();
     auto* slot_span =
         partition_alloc::internal::SlotSpanMetadata::FromSlotStart(slot_start);
     size_t usable_size = GetPartitionRoot()->GetSlotUsableSize(slot_span);
@@ -66,9 +66,8 @@ class PartitionAllocExtremeLightweightDetectorQuarantineTest
   }
 
   size_t GetObjectSize(void* object) {
-    auto slot_start = partition_alloc::internal::SlotStart::Checked(
-                          object, GetPartitionRoot())
-                          .Untag();
+    auto slot_start =
+        partition_alloc::SlotStart::Checked(object, GetPartitionRoot()).Untag();
     auto* entry_slot_span =
         partition_alloc::internal::SlotSpanMetadata::FromSlotStart(slot_start);
     return GetPartitionRoot()->GetSlotUsableSize(entry_slot_span);
@@ -142,6 +141,6 @@ TEST_P(PartitionAllocExtremeLightweightDetectorQuarantineTest,
   ASSERT_EQ(0u, stats.cumulative_count);
 }
 
-#endif  // !defined(MEMORY_TOOL_REPLACES_ALLOCATOR)
+#endif  // !PA_BUILDFLAG(MEMORY_TOOL_REPLACES_ALLOCATOR)
 
 }  // namespace gwp_asan::internal

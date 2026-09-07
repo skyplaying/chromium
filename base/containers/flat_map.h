@@ -72,6 +72,9 @@ struct GetFirst {
 //   flat_map(flat_map&&);
 //   flat_map(InputIterator first, InputIterator last,
 //            const Compare& compare = Compare());
+//   flat_map(std::from_range_t,
+//            Range&& range,
+//            const Compare& comp = Compare());
 //   flat_map(const container_type& items,
 //            const Compare& compare = Compare());
 //   flat_map(container_type&& items,
@@ -83,6 +86,10 @@ struct GetFirst {
 //   flat_map(sorted_unique_t,
 //            InputIterator first, InputIterator last,
 //            const Compare& compare = Compare());
+//   flat_map(std::from_range_t,
+//            sorted_unique_t,
+//            Range&& range,
+//            const Compare& comp = Compare());
 //   flat_map(sorted_unique_t,
 //            const container_type& items,
 //            const Compare& compare = Compare());
@@ -222,9 +229,9 @@ class flat_map : public ::base::internal::
 
   // Out-of-bound calls to at() will CHECK.
   template <class K = Key>
-  mapped_type& at(const KeyT<K>& key);
+  constexpr mapped_type& at(const KeyT<K>& key);
   template <class K = Key>
-  const mapped_type& at(const KeyT<K>& key) const;
+  constexpr const mapped_type& at(const KeyT<K>& key) const;
 
   // --------------------------------------------------------------------------
   // Map-specific insert operations.
@@ -235,10 +242,10 @@ class flat_map : public ::base::internal::
   // Insertion of one element can take O(size).
 
   template <class K = Key>
-  mapped_type& operator[](const KeyT<K>& key);
+  constexpr mapped_type& operator[](const KeyT<K>& key);
   template <class K = Key>
     requires(std::same_as<K, std::remove_cvref_t<K>>)
-  mapped_type& operator[](KeyT<K>&& key);
+  constexpr mapped_type& operator[](KeyT<K>&& key);
 
   template <class K = Key, class M>
   std::pair<iterator, bool> insert_or_assign(const KeyT<K>& key, M&& obj);
@@ -280,7 +287,7 @@ class flat_map : public ::base::internal::
 
 template <class Key, class Mapped, class Compare, class Container>
 template <class K>
-auto flat_map<Key, Mapped, Compare, Container>::at(const KeyT<K>& key)
+constexpr auto flat_map<Key, Mapped, Compare, Container>::at(const KeyT<K>& key)
     -> mapped_type& {
   iterator found = tree::find(key);
   CHECK(found != tree::end());
@@ -289,8 +296,8 @@ auto flat_map<Key, Mapped, Compare, Container>::at(const KeyT<K>& key)
 
 template <class Key, class Mapped, class Compare, class Container>
 template <class K>
-auto flat_map<Key, Mapped, Compare, Container>::at(const KeyT<K>& key) const
-    -> const mapped_type& {
+constexpr auto flat_map<Key, Mapped, Compare, Container>::at(
+    const KeyT<K>& key) const -> const mapped_type& {
   const_iterator found = tree::find(key);
   CHECK(found != tree::cend());
   return found->second;
@@ -301,8 +308,8 @@ auto flat_map<Key, Mapped, Compare, Container>::at(const KeyT<K>& key) const
 
 template <class Key, class Mapped, class Compare, class Container>
 template <class K>
-auto flat_map<Key, Mapped, Compare, Container>::operator[](const KeyT<K>& key)
-    -> mapped_type& {
+constexpr auto flat_map<Key, Mapped, Compare, Container>::operator[](
+    const KeyT<K>& key) -> mapped_type& {
   iterator found = tree::lower_bound(key);
   if (found == tree::end() || tree::key_comp()(key, found->first)) {
     found = tree::unsafe_emplace(found, key, mapped_type());
@@ -313,8 +320,8 @@ auto flat_map<Key, Mapped, Compare, Container>::operator[](const KeyT<K>& key)
 template <class Key, class Mapped, class Compare, class Container>
 template <class K>
   requires(std::same_as<K, std::remove_cvref_t<K>>)
-auto flat_map<Key, Mapped, Compare, Container>::operator[](KeyT<K>&& key)
-    -> mapped_type& {
+constexpr auto flat_map<Key, Mapped, Compare, Container>::operator[](
+    KeyT<K>&& key) -> mapped_type& {
   iterator found = tree::lower_bound(key);
   if (found == tree::end() || tree::key_comp()(key, found->first)) {
     found = tree::unsafe_emplace(found, std::move(key), mapped_type());

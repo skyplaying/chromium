@@ -9,8 +9,10 @@ source_set("metrics") {
   ]
   deps = [
     "//base",
+    "//components/contextual_cueing",
+    "//components/optimization_guide/core",
     "//ios/chrome/browser/intelligence/bwg/utils:constants",
-    "//ios/public/provider/chrome/browser/bwg:bwg_api",
+    "//ios/public/provider/chrome/browser/bwg:gemini_api",
   ]
 }
 
@@ -20,6 +22,8 @@ source_set("unit_tests") {
   deps = [
     ":metrics",
     "//base/test:test_support",
+    "//components/contextual_cueing",
+    "//components/optimization_guide/core",
     "//ios/chrome/browser/intelligence/bwg/utils:constants",
   ]
 }

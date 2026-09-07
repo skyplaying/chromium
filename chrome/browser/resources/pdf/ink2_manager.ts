@@ -2,23 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {assert, assertNotReached} from 'chrome://resources/js/assert.js';
+import {assert} from 'chrome://resources/js/assert.js';
 import {PromiseResolver} from 'chrome://resources/js/promise_resolver.js';
 
-import type {AnnotationBrush, Color, Point, TextAnnotation, TextAttributes, TextBoxRect, TextStyles} from './constants.js';
-import {AnnotationBrushType, TextAlignment, TextStyle, TextTypeface} from './constants.js';
+import type {AnnotationBrush, Color, Point, TextAnnotation, TextAnnotationMessageData, TextAttributes, TextBoxRect, TextStyles} from './constants.js';
+import {AnnotationBrushType, TextAlignment, TextAnnotationSource, TextStyle, TextTypeface} from './constants.js';
 import {PluginController, PluginControllerEventType} from './controller.js';
+import {pageToScreenCoordinates, screenToPageCoordinates} from './ink_text_annotation_utils.js';
+import {colorsEqual} from './pdf_viewer_utils.js';
+import {UndoRedoStack} from './undo_redo_stack.js';
 import type {Viewport, ViewportRect} from './viewport.js';
-
-export interface ViewportParams {
-  clockwiseRotations: number;
-  pageDimensions: ViewportRect;
-  zoom: number;
-}
 
 export interface TextBoxInit {
   annotation: TextAnnotation;
   pageDimensions: ViewportRect;
+  isPaste?: boolean;
 }
 
 export const DEFAULT_TEXTBOX_WIDTH: number = 222;
@@ -27,85 +25,27 @@ export const DEFAULT_TEXTBOX_WIDTH: number = 222;
 // This value is held constant regardless of zoom due to the rendering issue.
 export const MIN_TEXTBOX_SIZE_PX = 24;
 
-export function colorsEqual(color1: Color, color2: Color): boolean {
-  return color1.r === color2.r && color1.g === color2.g &&
-      color1.b === color2.b;
-}
-
 export function stylesEqual(style1: TextStyles, style2: TextStyles): boolean {
-  return style1.bold === style2.bold && style1.italic === style2.italic;
+  return style1.bold === style2.bold && style1.italic === style2.italic &&
+      style1.strikethrough === style2.strikethrough;
 }
 
-/**
- * Converts `rect` from `oldRotations` clockwise rotations to `newRotations`
- * clockwise rotations. `newPageWidth` should be the page width in
- * `newRotations` coordinates, and `newPageHeight` should be the page height in
- * `newRotations` coordinates.
- */
-export function convertRotatedCoordinates(
-    rect: TextBoxRect, oldRotations: number, newRotations: number,
-    newPageWidth: number, newPageHeight: number): TextBoxRect {
-  const pageWidthNR = newRotations % 2 === 0 ? newPageWidth : newPageHeight;
-  const pageHeightNR = newRotations % 2 === 0 ? newPageHeight : newPageWidth;
-  const nonRotated: TextBoxRect = {
-    locationX: rect.locationX,
-    locationY: rect.locationY,
-    width: oldRotations % 2 === 0 ? rect.width : rect.height,
-    height: oldRotations % 2 === 0 ? rect.height : rect.width,
+function getClampedLocation(
+    location: Point, width: number, height: number,
+    pageDimensions: ViewportRect): Point {
+  const maxX = pageDimensions.x + pageDimensions.width - width;
+  const maxY = pageDimensions.y + pageDimensions.height - height;
+  return {
+    x: Math.max(pageDimensions.x, Math.min(location.x, maxX)),
+    y: Math.max(pageDimensions.y, Math.min(location.y, maxY)),
   };
-  switch (oldRotations % 4) {
-    case 0:
-      // Already populated correctly.
-      break;
-    case 1:
-      nonRotated.locationX = rect.locationY;
-      nonRotated.locationY = pageHeightNR - rect.locationX - rect.width;
-      break;
-    case 2:
-      nonRotated.locationX = pageWidthNR - rect.locationX - rect.width;
-      nonRotated.locationY = pageHeightNR - rect.locationY - rect.height;
-      break;
-    case 3:
-      nonRotated.locationX = pageWidthNR - rect.locationY - rect.height;
-      nonRotated.locationY = rect.locationX;
-      break;
-    default:
-      assertNotReached();
-  }
-
-  const newRotated = {
-    locationX: nonRotated.locationX,
-    locationY: nonRotated.locationY,
-    width: newRotations % 2 === 0 ? nonRotated.width : nonRotated.height,
-    height: newRotations % 2 === 0 ? nonRotated.height : nonRotated.width,
-  };
-  switch (newRotations % 4) {
-    case 0:
-      break;
-    case 1:
-      newRotated.locationX =
-          pageHeightNR - nonRotated.locationY - nonRotated.height;
-      newRotated.locationY = nonRotated.locationX;
-      break;
-    case 2:
-      newRotated.locationX =
-          pageWidthNR - nonRotated.locationX - nonRotated.width;
-      newRotated.locationY =
-          pageHeightNR - nonRotated.locationY - nonRotated.height;
-      break;
-    case 3:
-      newRotated.locationX = nonRotated.locationY;
-      newRotated.locationY =
-          pageWidthNR - nonRotated.locationX - nonRotated.width;
-      break;
-    default:
-      assertNotReached();
-  }
-  return newRotated;
 }
 
 export class Ink2Manager extends EventTarget {
   private brush_: AnnotationBrush = {type: AnnotationBrushType.PEN};
+  private stack_ = new UndoRedoStack(this);
+  private listener_: EventListener;
+
   // Map from page numbers to annotations on that page.
   // The annotations on each page are stored in a map from id to TextAnnotation.
   private annotations_: Map<number, Map<number, TextAnnotation>> = new Map();
@@ -118,6 +58,7 @@ export class Ink2Manager extends EventTarget {
     styles: {
       [TextStyle.BOLD]: false,
       [TextStyle.ITALIC]: false,
+      [TextStyle.STRIKETHROUGH]: false,
     },
   };
   private brushResolver_: PromiseResolver<void>|null = null;
@@ -125,31 +66,49 @@ export class Ink2Manager extends EventTarget {
   // user is editing. Null if the user is not editing an annotation or is
   // creating a new annotation using |attributes_|.
   private existingAnnotationAttributes_: TextAttributes|null = null;
-  private pageIndex_: number = -1;
+  private clipboardAnnotation_: TextAnnotation|null = null;
+  private isCutAnnotation_: boolean = false;
   private pluginController_: PluginController = PluginController.getInstance();
   private textResolver_: PromiseResolver<void>|null = null;
   private viewport_: Viewport|null = null;
-  private viewportParams_: ViewportParams = {
-    clockwiseRotations: 0,
-    pageDimensions: {x: 0, y: 0, width: 0, height: 0},
-    zoom: 1.0,
-  };
   private nextAnnotationId_: number = 0;
+  // Keeps track of fonts that have been sent to the backend so that each font
+  // is only serialized and loaded once.
+  private knownFontIds_: number[] = [];
+
+  constructor() {
+    super();
+    this.listener_ = this.handleFinishInkStroke_.bind(this);
+    this.pluginController_.getEventTarget().addEventListener(
+        PluginControllerEventType.FINISH_INK_STROKE, this.listener_);
+  }
+
+  destroy() {
+    this.pluginController_.getEventTarget().removeEventListener(
+        PluginControllerEventType.FINISH_INK_STROKE, this.listener_);
+  }
 
   setViewport(viewport: Viewport) {
     this.viewport_ = viewport;
   }
 
-  resetAnnotationIdForTest() {
-    this.nextAnnotationId_ = 0;
+  get annotations(): Map<number, Map<number, TextAnnotation>> {
+    return this.annotations_;
+  }
+
+  resetStackForTesting() {
+    this.stack_.resetForTesting();
   }
 
   // Initialize a text annotation at `location` in screen coordinates.
-  // No-op if there is no PDF page at `location`.
-  // If location is not provided, creates the annotation at the center of
-  // the visible portion of the most visible page.
-  // Returns true if an annotation was initialized, and false otherwise.
-  initializeTextAnnotation(location?: Point): boolean {
+  // If a text annotation already exists at `location`, activates it for
+  // editing. If `location` is not provided, creates the annotation at the
+  // center of the visible portion of the most visible page. If `onlyExisting`
+  // is true, only existing annotations will be activated; no new annotation
+  // will be created if none exists at `location`. Returns true if an annotation
+  // was initialized or activated, and false otherwise.
+  initializeTextAnnotation(location?: Point, onlyExisting: boolean = false):
+      boolean {
     assert(this.isTextInitializationComplete());
     assert(this.viewport_);
 
@@ -158,6 +117,35 @@ export class Ink2Manager extends EventTarget {
                             this.viewport_.getMostVisiblePage();
     if (page === -1) {
       // Don't initialize an annotation if the click isn't on the PDF itself.
+      return false;
+    }
+
+    if (location) {
+      const annotationsMap = this.annotations_.get(page);
+      if (annotationsMap && annotationsMap.size > 0) {
+        let candidate: TextAnnotation|null = null;
+        let candidateScreenRect: TextBoxRect|null = null;
+        for (const annotation of annotationsMap.values()) {
+          const screenRect = pageToScreenCoordinates(
+              page, annotation.textBoxRect, this.viewport_);
+          if (location.x >= screenRect.locationX &&
+              location.x <= screenRect.locationX + screenRect.width &&
+              location.y >= screenRect.locationY &&
+              location.y <= screenRect.locationY + screenRect.height) {
+            if (!candidate || annotation.id > candidate.id) {
+              candidate = annotation;
+              candidateScreenRect = screenRect;
+            }
+          }
+        }
+        if (candidate) {
+          assert(candidateScreenRect);
+          return this.activateAnnotation_(candidate, candidateScreenRect);
+        }
+      }
+    }
+
+    if (onlyExisting) {
       return false;
     }
 
@@ -184,64 +172,39 @@ export class Ink2Manager extends EventTarget {
       };
     }
 
-    // Is the click in an existing box?
-    let existing = null;
-    // Get the annotations for the current page.
-    const annotationsMap = this.annotations_.get(page);
-    const annotations =
-        annotationsMap ? Array.from(annotationsMap.values()) : [];
-    for (const annotation of annotations) {
-      // Convert box to screen coordinates.
-      const screenBox =
-          this.pageToScreenCoordinates_(page, annotation.textBoxRect);
-      if (location.x >= screenBox.locationX &&
-          location.x <= (screenBox.locationX + screenBox.width) &&
-          location.y >= screenBox.locationY &&
-          location.y <= (screenBox.locationY + screenBox.height)) {
-        // Don't update the original. Create a new object and update its
-        // rectangle to use the computed screen coordinates.
-        existing = structuredClone(annotation);
-        existing.textBoxRect = screenBox;
-        break;
-      }
+    // Adjust the location for a new annotation click so that the center of
+    // the first line of text will align with the center of the cursor,
+    // instead of the top left corner of the text aligning with the center of
+    // the cursor. This does not apply for annotations created with the
+    // keyboard.
+    if (isMouse) {
+      location.y =
+          location.y - this.attributes_.size * this.viewport_.getZoom() / 2;
     }
 
-    // Clamp any new annotation to the page.
-    if (!existing) {
-      // Adjust the location for a new annotation click so that the center of
-      // the first line of text will align with the center of the cursor,
-      // instead of the top left corner of the text aligning with the center of
-      // the cursor. This does not apply for annotations created with the
-      // keyboard.
-      if (isMouse) {
-        location.y =
-            location.y - this.attributes_.size * this.viewport_.getZoom() / 2;
-      }
-
-      const minWidth = 2 * MIN_TEXTBOX_SIZE_PX;
-      if (pageDimensions.width < minWidth ||
-          pageDimensions.height < newBoxHeight) {
-        // Don't try to create a new textbox if the visible page is too small.
-        // The box needs to be big enough in screen coordinates to fit at
-        // least some text, and Blink can't lay out arbitrarily small text
-        // boxes.
-        return false;
-      }
-      const maxX = pageDimensions.x + pageDimensions.width - minWidth;
-      const maxY = pageDimensions.y + pageDimensions.height - newBoxHeight;
-      location.x = Math.max(pageDimensions.x, Math.min(location.x, maxX));
-      location.y = Math.max(pageDimensions.y, Math.min(location.y, maxY));
-      // Check if the box should be narrowed to fit in the page while being
-      // as close as possible to the original click position.
-      newBoxWidth = Math.min(
-          newBoxWidth, pageDimensions.x + pageDimensions.width - location.x);
+    const minWidth = 2 * MIN_TEXTBOX_SIZE_PX;
+    if (pageDimensions.width < minWidth ||
+        pageDimensions.height < newBoxHeight) {
+      // Don't try to create a new textbox if the visible page is too small.
+      // The box needs to be big enough in screen coordinates to fit at
+      // least some text, and Blink can't lay out arbitrarily small text
+      // boxes.
+      return false;
     }
+    location =
+        getClampedLocation(location, minWidth, newBoxHeight, pageDimensions);
+    // Check if the box should be narrowed to fit in the page while being
+    // as close as possible to the original click position.
+    newBoxWidth = Math.min(
+        newBoxWidth, pageDimensions.x + pageDimensions.width - location.x);
 
-    this.pageIndex_ = page;
-    const annotation = existing ? existing : {
-      text: '',
+    const viewportRotations = this.viewport_.getClockwiseRotations();
+    const annotation: TextAnnotation = {
       id: this.nextAnnotationId_,
+      mojoTextInfo: new ArrayBuffer(0),
       pageIndex: page,
+      pdfZoom: this.viewport_.getZoom(),
+      text: '',
       textAttributes: structuredClone(this.attributes_),
       textBoxRect: {
         height: newBoxHeight,
@@ -249,60 +212,146 @@ export class Ink2Manager extends EventTarget {
         locationY: location.y,
         width: newBoxWidth,
       },
-      textOrientation: (4 - this.viewport_.getClockwiseRotations()) % 4,
+      textOrientation: (4 - viewportRotations) % 4,
+      viewportOrientation: viewportRotations,
     };
 
-    if (existing) {
-      this.pluginController_.editTextAnnotation(existing.id);
-      this.existingAnnotationAttributes_ =
-          structuredClone(existing.textAttributes);
-    } else {
-      this.nextAnnotationId_++;
-      this.existingAnnotationAttributes_ = null;
+    this.nextAnnotationId_++;
+    this.initializeTextBox_(annotation, pageDimensions, /*isPaste=*/ false);
+    return true;
+  }
+
+  // Activates an existing text annotation with `id` for editing.
+  // Returns true if the annotation was found and activated, and false
+  // otherwise.
+  activateAnnotationById(id: number): boolean {
+    assert(this.isTextInitializationComplete());
+    for (const pageAnnotations of this.annotations_.values()) {
+      const annotation = pageAnnotations.get(id);
+      if (annotation) {
+        assert(this.viewport_);
+        const screenRect = pageToScreenCoordinates(
+            annotation.pageIndex, annotation.textBoxRect, this.viewport_);
+        return this.activateAnnotation_(annotation, screenRect);
+      }
     }
+    return false;
+  }
+
+  // Activates an existing text annotation for editing.
+  private activateAnnotation_(
+      annotation: TextAnnotation, screenRect: TextBoxRect): boolean {
+    assert(this.viewport_);
+    const pageDimensions =
+        this.viewport_.getPageScreenRect(annotation.pageIndex);
+    if (!pageDimensions) {
+      return false;
+    }
+
+    const annotationToActivate = structuredClone(annotation);
+    annotationToActivate.textBoxRect = screenRect;
+
+    this.initializeTextBox_(
+        annotationToActivate, pageDimensions, /*isPaste=*/ false,
+        /*isExisting=*/ true);
+    this.pluginController_.editTextAnnotation(annotation.id);
+    return true;
+  }
+
+  private initializeTextBox_(
+      annotation: TextAnnotation, pageDimensions: ViewportRect,
+      isPaste: boolean, isExisting: boolean = false) {
+    this.existingAnnotationAttributes_ = (isPaste || isExisting) ?
+        structuredClone(annotation.textAttributes) :
+        null;
 
     this.dispatchEvent(new CustomEvent('initialize-text-box', {
       detail: {
         annotation,
         pageDimensions,
+        isPaste,
       },
     }));
 
     // Notify other listeners of any changes to the viewport and/or attributes,
     // since these may change with the annotation.
-    this.viewportChanged();
     this.fireAttributesChanged_();
-    return true;
   }
 
-  getViewportParams(): ViewportParams {
-    return this.viewportParams_;
+  saveAnnotationToClipboard(
+      annotation: TextAnnotation, isCut: boolean = false) {
+    assert(annotation.text !== '');
+    this.clipboardAnnotation_ = structuredClone(annotation);
+    this.isCutAnnotation_ = isCut;
+    this.dispatchEvent(
+        new CustomEvent('saved-annotation-to-clipboard-for-testing', {
+          detail: {
+            annotation: this.clipboardAnnotation_,
+            isCut: this.isCutAnnotation_,
+          },
+        }));
   }
 
-  viewportChanged() {
-    assert(this.viewport_, 'Must call setViewport() before viewportChanged()');
-    const zoom = this.viewport_.getZoom();
-    const page = this.pageIndex_ !== -1 ? this.pageIndex_ :
-                                          this.viewport_.getMostVisiblePage();
-    const pageDimensions = this.viewport_.getPageScreenRect(page);
-    const rotations = this.viewport_.getClockwiseRotations();
-    if (rotations === this.viewportParams_.clockwiseRotations &&
-        pageDimensions.x === this.viewportParams_.pageDimensions.x &&
-        pageDimensions.y === this.viewportParams_.pageDimensions.y &&
-        pageDimensions.width === this.viewportParams_.pageDimensions.width &&
-        pageDimensions.height === this.viewportParams_.pageDimensions.height &&
-        zoom === this.viewportParams_.zoom) {
-      // Early return to avoid firing unnecessary events.
-      return;
+  // Pastes the clipboard annotation.
+  // Returns true if an annotation was pasted, and false otherwise.
+  pasteAnnotation(): boolean {
+    assert(this.isTextInitializationComplete());
+    assert(this.viewport_);
+
+    if (!this.clipboardAnnotation_) {
+      return false;
     }
 
-    this.viewportParams_ = {
-      clockwiseRotations: rotations,
-      pageDimensions: pageDimensions,
-      zoom,
+    const page = this.clipboardAnnotation_.pageIndex;
+    const pageDimensions = this.viewport_.getPageScreenRect(page);
+    if (!pageDimensions) {
+      return false;
+    }
+
+    const viewportRotations = this.viewport_.getClockwiseRotations();
+    let id: number;
+    if (this.isCutAnnotation_) {
+      id = this.clipboardAnnotation_.id;
+      this.nextAnnotationId_ = Math.max(this.nextAnnotationId_, id + 1);
+      this.isCutAnnotation_ = false;
+    } else {
+      id = this.nextAnnotationId_++;
+    }
+
+    const screenRect = pageToScreenCoordinates(
+        page, this.clipboardAnnotation_.textBoxRect, this.viewport_);
+
+    const location = getClampedLocation(
+        {x: screenRect.locationX + 10, y: screenRect.locationY + 10},
+        screenRect.width, screenRect.height, pageDimensions);
+
+    const textBoxRect: TextBoxRect = {
+      height: screenRect.height,
+      locationX: location.x,
+      locationY: location.y,
+      width: screenRect.width,
     };
-    this.dispatchEvent(
-        new CustomEvent('viewport-changed', {detail: this.viewportParams_}));
+
+    const annotation: TextAnnotation = {
+      id,
+      mojoTextInfo: this.clipboardAnnotation_.mojoTextInfo,
+      pageIndex: page,
+      pdfZoom: this.viewport_.getZoom(),
+      text: this.clipboardAnnotation_.text,
+      textAttributes: structuredClone(this.clipboardAnnotation_.textAttributes),
+      textBoxRect,
+      textOrientation: this.clipboardAnnotation_.textOrientation,
+      viewportOrientation: viewportRotations,
+    };
+
+    // Update clipboard coordinates for subsequent consecutive pastes (+10px
+    // cascading).
+    const pageRect = screenToPageCoordinates(page, textBoxRect, this.viewport_);
+    this.clipboardAnnotation_ = structuredClone(annotation);
+    this.clipboardAnnotation_.textBoxRect = pageRect;
+
+    this.initializeTextBox_(annotation, pageDimensions, /*isPaste=*/ true);
+    return true;
   }
 
   isInitializationStarted(): boolean {
@@ -353,11 +402,11 @@ export class Ink2Manager extends EventTarget {
           this.annotations_.set(annotation.pageIndex, pageMap);
         }
         pageMap.set(annotation.id, annotation);
-        if (annotation.id > this.nextAnnotationId_) {
-          this.nextAnnotationId_ = annotation.id + 1;
-        }
+        this.nextAnnotationId_ =
+            Math.max(this.nextAnnotationId_, annotation.id + 1);
       });
       this.textResolver_!.resolve();
+      this.dispatchEvent(new CustomEvent('annotations-updated'));
     });
     return this.textResolver_.promise;
   }
@@ -443,76 +492,25 @@ export class Ink2Manager extends EventTarget {
     this.fireAttributesChanged_();
   }
 
-  private pageToScreenCoordinates_(pageIndex: number, pageRect: TextBoxRect):
-      TextBoxRect {
-    assert(this.viewport_);
-    const pageDimensions = this.viewport_.getPageScreenRect(pageIndex);
-    const zoom = this.viewport_.getZoom();
-
-    // Apply zoom.
-    const zoomed = {
-      locationX: pageRect.locationX * zoom,
-      locationY: pageRect.locationY * zoom,
-      width: pageRect.width * zoom,
-      height: pageRect.height * zoom,
-    };
-
-    // Apply rotation
-    const rotated = convertRotatedCoordinates(
-        zoomed, 0, this.viewport_.getClockwiseRotations(), pageDimensions.width,
-        pageDimensions.height);
-
-    // Apply offsets.
-    return {
-      locationX: rotated.locationX + pageDimensions.x,
-      locationY: rotated.locationY + pageDimensions.y,
-      height: rotated.height,
-      width: rotated.width,
-    };
+  toggleTextStyle(style: TextStyle) {
+    const current = this.getCurrentTextAttributes();
+    const newStyles = Object.assign({}, current.styles);
+    newStyles[style] = !newStyles[style];
+    this.setTextStyles(newStyles);
   }
 
-  private screenToPageCoordinates_(pageIndex: number, screenRect: TextBoxRect):
-      TextBoxRect {
-    assert(this.viewport_);
-    const zoom = this.viewport_.getZoom();
-    const pageDimensions = this.viewport_.getPageScreenRect(pageIndex);
-
-    // Undo offset
-    const noOffset = {
-      locationX: screenRect.locationX - pageDimensions.x,
-      locationY: screenRect.locationY - pageDimensions.y,
-      width: screenRect.width,
-      height: screenRect.height,
-    };
-
-    // Undo rotation
-    const rotations = this.viewport_.getClockwiseRotations();
-    // Need to pass the width and height for the new number of desired rotations
-    // (0 in this case) to convertRotatedCoordinates().
-    const pageWidth =
-        rotations % 2 === 0 ? pageDimensions.width : pageDimensions.height;
-    const pageHeight =
-        rotations % 2 === 0 ? pageDimensions.height : pageDimensions.width;
-    const noRotation = convertRotatedCoordinates(
-        noOffset, rotations, 0, pageWidth, pageHeight);
-
-    // Undo zoom.
-    return {
-      height: noRotation.height / zoom,
-      locationX: noRotation.locationX / zoom,
-      locationY: noRotation.locationY / zoom,
-      width: noRotation.width / zoom,
-    };
+  getKnownFontIds(): number[] {
+    return [...this.knownFontIds_];
   }
 
-  /**
-   * Updates the stored annotation and notifies the plugin of the new or
-   * modified annotation.
-   */
-  commitTextAnnotation(annotation: TextAnnotation, edited: boolean) {
-    annotation.textBoxRect = this.screenToPageCoordinates_(
-        annotation.pageIndex, annotation.textBoxRect);
+  addKnownFontId(id: number) {
+    assert(!this.knownFontIds_.includes(id));
+    this.knownFontIds_.push(id);
+  }
 
+  // Returns the previous version of the annotation, or null if it is new.
+  private updateStoredAnnotation_(annotation: TextAnnotation): TextAnnotation
+      |null {
     let pageAnnotations = this.annotations_.get(annotation.pageIndex);
     if (!pageAnnotations) {
       // Adding a new annotation, on a page that doesn't have any existing ones.
@@ -521,51 +519,49 @@ export class Ink2Manager extends EventTarget {
       this.annotations_.set(annotation.pageIndex, pageAnnotations);
     }
 
-    if (pageAnnotations.has(annotation.id) && annotation.text === '') {
+    const previous = pageAnnotations.get(annotation.id);
+    if (annotation.text === '') {
       // Delete an existing annotation.
-      pageAnnotations.delete(annotation.id);
+      assert(pageAnnotations.delete(annotation.id));
     } else {
       pageAnnotations.set(annotation.id, annotation);
     }
-    this.pluginController_.finishTextAnnotation(annotation);
-    this.existingAnnotationAttributes_ = null;
-
-    // Using PluginController's event target to dispatch this event, even
-    // though it originates here, because PluginController dispatches this
-    // event for normal Ink strokes and this way clients only need to listen
-    // on one instance.
-    this.pluginController_.getEventTarget().dispatchEvent(new CustomEvent(
-        PluginControllerEventType.FINISH_INK_STROKE, {detail: edited}));
+    return previous || null;
   }
 
-  textBoxFocused(textBoxRect: TextBoxRect) {
+  /**
+   * Updates the stored annotation and notifies the plugin of the new or
+   * modified annotation.
+   */
+  commitTextAnnotation(
+      annotation: TextAnnotation, isEdited: boolean,
+      newTypefaces: chrome.pdfViewerPrivate.Typeface[]) {
     assert(this.viewport_);
-    const viewportPosition = this.viewport_.position;
-    const viewportSize = this.viewport_.size;
+    annotation.textBoxRect = screenToPageCoordinates(
+        annotation.pageIndex, annotation.textBoxRect, this.viewport_);
 
-    let scrollX: number|undefined;
-    let scrollY: number|undefined;
-    if (textBoxRect.locationX < 0 ||
-        textBoxRect.locationX + textBoxRect.width > viewportSize.width) {
-      // Adjusting by 10% of viewport, rather than putting the text box on the
-      // exact edge of the viewport.
-      scrollX = viewportPosition.x + textBoxRect.locationX -
-          Math.floor(viewportSize.width / 10);
+    if (isEdited) {
+      const before = this.updateStoredAnnotation_(annotation);
+      const after = annotation.text === '' ? null : structuredClone(annotation);
+      if (before !== null || after !== null) {
+        this.stack_.push({
+          type: 'text',
+          before,
+          after,
+        });
+      }
     }
 
-    if (textBoxRect.locationY < 0 ||
-        textBoxRect.locationY + textBoxRect.height > viewportSize.height) {
-      scrollY = viewportPosition.y + textBoxRect.locationY -
-          Math.floor(viewportSize.height / 10);
-    }
-
-    if (scrollX !== undefined || scrollY !== undefined) {
-      // TODO(crbug.com/40218278): Re-enable smooth scrolling for all codepaths.
-      this.viewport_.scrollTo({
-        x: scrollX,
-        y: scrollY,
-      });
-    }
+    const messageData: TextAnnotationMessageData = {
+      ...annotation,
+      isEdited,
+      newTypefaces,
+      source: TextAnnotationSource.USER,
+    };
+    this.pluginController_.finishTextAnnotation(messageData);
+    this.existingAnnotationAttributes_ = null;
+    this.dispatchEvent(new CustomEvent('annotations-updated'));
+    this.fireAttributesChanged_();
   }
 
   /**
@@ -593,11 +589,94 @@ export class Ink2Manager extends EventTarget {
         {detail: structuredClone(this.getCurrentTextAttributes())}));
   }
 
+  private handleFinishInkStroke_(e: Event) {
+    if ((e as CustomEvent<boolean>).detail) {
+      this.stack_.push({type: 'ink'});
+    }
+  }
+
+  // Note: Undo/Redo state is tracked for all annotations, but changes are only
+  // applied by the frontend for text annotations. Undo/redo of ink strokes are
+  // handled exclusively by the backend.
+  undo() {
+    const state = this.stack_.undo();
+    if (!state) {
+      return;
+    }
+
+    if (state.type === 'text') {
+      this.applyTextUndoRedo_(
+          state.before, state.after, TextAnnotationSource.UNDO);
+    }
+    this.pluginController_.undo();
+  }
+
+  redo() {
+    const state = this.stack_.redo();
+    if (!state) {
+      return;
+    }
+
+    if (state.type === 'text') {
+      this.applyTextUndoRedo_(
+          state.after, state.before, TextAnnotationSource.REDO);
+    }
+    this.pluginController_.redo();
+  }
+
+  private applyTextUndoRedo_(
+      update: TextAnnotation|null, previous: TextAnnotation|null,
+      source: TextAnnotationSource) {
+    const isDeletion = update === null;
+    // If deleting, the relevant annotation is the "previous" one, which is
+    // being deleted. Otherwise, the relevant annotation is the update.
+    const annotation = isDeletion ? previous : update;
+    assert(annotation);
+    assert(this.viewport_);
+
+    // Since this is an undo or redo of a previous change, the map for this page
+    // should always have been created already.
+    const pageAnnotations = this.annotations_.get(annotation.pageIndex);
+    assert(pageAnnotations);
+    if (isDeletion) {
+      pageAnnotations.delete(annotation.id);
+    } else {
+      pageAnnotations.set(annotation.id, annotation);
+    }
+
+    const messageData: TextAnnotationMessageData = {
+      ...annotation,
+      isEdited: true,
+      newTypefaces: [],
+      source,
+    };
+    if (isDeletion) {
+      messageData.text = '';
+    }
+    this.pluginController_.finishTextAnnotation(messageData);
+    this.dispatchEvent(new CustomEvent('annotations-updated'));
+  }
+
+  initiateSave() {
+    this.stack_.initiateSave();
+  }
+
+  cancelSave() {
+    this.stack_.cancelSave();
+  }
+
+  saved() {
+    this.stack_.setSaved();
+  }
+
   static getInstance(): Ink2Manager {
     return instance || (instance = new Ink2Manager());
   }
 
-  static setInstance(obj: Ink2Manager) {
+  static setInstance(obj: Ink2Manager|null) {
+    if (instance) {
+      instance.destroy();
+    }
     instance = obj;
   }
 }

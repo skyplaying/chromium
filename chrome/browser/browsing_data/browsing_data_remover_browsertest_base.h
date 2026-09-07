@@ -15,6 +15,8 @@
 #include "components/browsing_data/content/browsing_data_model.h"
 #include "components/signin/public/base/signin_buildflags.h"
 
+class BrowserWindowInterface;
+
 namespace network::mojom {
 
 class NetworkContext;
@@ -52,11 +54,16 @@ class BrowsingDataRemoverBrowserTestBase : public PlatformBrowserTest {
   // If `web_contents` is not specified, `GetActiveWebContents` will be used.
   int GetSiteDataCount(content::WebContents* web_contents = nullptr);
 
+  // Helper that waits for the site data count to match `expected_count`.
+  // Returns true if the count matched, false if it timed out.
+  bool WaitForSiteDataCount(int expected_count,
+                            content::WebContents* web_contents = nullptr);
+
 // TODO(crbug.com/40169678): Support incognito browser tests on android.
 #if BUILDFLAG(IS_ANDROID)
   bool IsIncognito() { return false; }
 #else
-  Browser* GetBrowser() const;
+  BrowserWindowInterface* GetBrowser() const;
   void UseIncognitoBrowser();
   void RestartIncognitoBrowser();
   bool IsIncognito() { return incognito_browser_ != nullptr; }
@@ -69,7 +76,7 @@ class BrowsingDataRemoverBrowserTestBase : public PlatformBrowserTest {
   content::WebContents* GetActiveWebContents();
 
 #if !BUILDFLAG(IS_ANDROID)
-  content::WebContents* GetActiveWebContents(Browser* browser);
+  content::WebContents* GetActiveWebContents(BrowserWindowInterface* browser);
 #endif  // !BUILDFLAG(IS_ANDROID)
 
   // Returns the active Profile. On desktop this is in the first browser
@@ -78,7 +85,7 @@ class BrowsingDataRemoverBrowserTestBase : public PlatformBrowserTest {
 
  protected:
   // Searches the user data directory for files that contain `hostname` in the
-  // filename or as part of the content. Returns the number of files that
+  // filename or as part of the content. Fails if there are such files that
   // do not match any regex in `ignore_file_patterns`.
   // If `check_leveldb_content` is true, also tries to open LevelDB files and
   // look for the `hostname` inside them. If LevelDB files are locked and cannot
@@ -89,7 +96,7 @@ class BrowsingDataRemoverBrowserTestBase : public PlatformBrowserTest {
   // user data directory of the current browser process. (Alternatively, this
   // can be specified explicitly since the browser process may no longer exist
   // by the time this is called.)
-  static bool CheckUserDirectoryForString(
+  static void CheckUserDirectoryForString(
       const std::string& hostname,
       const std::vector<std::string>& ignore_file_patterns,
       bool check_leveldb_content,
@@ -107,7 +114,8 @@ class BrowsingDataRemoverBrowserTestBase : public PlatformBrowserTest {
  private:
   base::test::ScopedFeatureList feature_list_;
 #if !BUILDFLAG(IS_ANDROID)
-  raw_ptr<Browser, AcrossTasksDanglingUntriaged> incognito_browser_ = nullptr;
+  raw_ptr<BrowserWindowInterface, AcrossTasksDanglingUntriaged>
+      incognito_browser_ = nullptr;
 #endif
 };
 

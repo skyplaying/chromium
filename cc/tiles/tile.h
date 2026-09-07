@@ -61,7 +61,30 @@ class CC_EXPORT Tile {
     return draw_info().mode();
   }
 
-  bool IsReadyToDraw() { return draw_info().IsReadyToDraw(); }
+  bool IsReadyToDraw() const { return draw_info().IsReadyToDraw(); }
+
+  std::optional<viz::ResourceId> GetResourceId() const {
+    if (IsReadyToDraw() && draw_info().mode() == TileDrawInfo::RESOURCE_MODE) {
+      return draw_info().resource_id_for_export();
+    }
+    return std::nullopt;
+  }
+
+  std::optional<gfx::Size> GetResourceSize() const {
+    if (IsReadyToDraw() && draw_info().mode() == TileDrawInfo::RESOURCE_MODE) {
+      return draw_info().resource_size();
+    }
+    return std::nullopt;
+  }
+
+  std::optional<SkColor4f> GetSolidColor() const {
+    if (draw_info().mode() == TileDrawInfo::SOLID_COLOR_MODE) {
+      return draw_info().solid_color();
+    }
+    return std::nullopt;
+  }
+
+  bool IsOOM() const { return draw_info().mode() == TileDrawInfo::OOM_MODE; }
 
   // TODO(vmpstr): Move this to the iterators.
   bool required_for_activation() const { return required_for_activation_; }
@@ -104,8 +127,6 @@ class CC_EXPORT Tile {
 
   int source_frame_number() const { return source_frame_number_; }
 
-  bool IsReadyToDraw() const { return draw_info().IsReadyToDraw(); }
-
   size_t GPUMemoryUsageInBytes() const;
 
   const gfx::Size& desired_texture_size() const { return content_rect_.size(); }
@@ -125,8 +146,6 @@ class CC_EXPORT Tile {
   }
 
   bool HasRasterTask() const { return !!raster_task_.get(); }
-
-  bool HasMissingLCPCandidateImages() const;
 
   void set_solid_color_analysis_performed(bool performed) {
     is_solid_color_analysis_performed_ = performed;
@@ -203,11 +222,6 @@ class CC_EXPORT Tile {
   bool deleted_ : 1 = false;
 
   Id id_;
-
-  // List of Rect-Transform pairs, representing unoccluded parts of the
-  // tile, to support raster culling. See Bug: 1071932
-  std::vector<std::pair<const gfx::Rect, const gfx::AxisTransform2d>>
-      raster_rects_;
 
   // The rect bounding the changes in this Tile vs the previous tile it
   // replaced.

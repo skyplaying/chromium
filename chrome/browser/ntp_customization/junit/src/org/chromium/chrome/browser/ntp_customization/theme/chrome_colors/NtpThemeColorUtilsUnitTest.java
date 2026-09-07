@@ -23,21 +23,25 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils;
 import org.chromium.chrome.browser.ntp_customization.R;
 import org.chromium.chrome.browser.ntp_customization.theme.chrome_colors.NtpThemeColorInfo.NtpThemeColorId;
+import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataColor;
+import org.chromium.chrome.browser.ntp_customization.theme_sync.data.NtpBackgroundDataCustomizedColor;
+import org.chromium.chrome.browser.ntp_customization.theme_sync.data.PlatformType;
+import org.chromium.chrome.browser.ui.bottombar.BottomBarConfigUtils;
+import org.chromium.chrome.browser.ui.theme.ChromeSemanticColorUtils;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+import org.chromium.ui.util.ColorUtils;
 
 import java.util.ArrayList;
 import java.util.List;
 
 /** Tests for {@link NtpThemeColorUtils}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class NtpThemeColorUtilsUnitTest {
     private static final int COLOR_LIST_SIZE = NtpThemeColorId.NUM_ENTRIES - 1;
     private Context mContext;
@@ -149,6 +153,18 @@ public class NtpThemeColorUtilsUnitTest {
     }
 
     @Test
+    public void testCreateColoredCircle_default() {
+        LayerDrawable drawable =
+                NtpThemeColorUtils.createColoredCircle(
+                        mContext,
+                        /* topColor= */ null,
+                        /* bottomLeftColor= */ null,
+                        /* bottomRightColor= */ null);
+        assertNotNull(drawable);
+        assertEquals(3, drawable.getNumberOfLayers());
+    }
+
+    @Test
     public void testGetNtpThemePrimaryColorFromPreBuiltColors() {
         @ColorRes
         int aquaPrimaryColorResId =
@@ -241,28 +257,43 @@ public class NtpThemeColorUtilsUnitTest {
     public void testGetBackgroundColorFromColorInfo() {
         assertEquals(
                 NtpThemeColorUtils.getDefaultBackgroundColor(mContext),
-                NtpThemeColorUtils.getBackgroundColorFromColorInfo(mContext, null));
+                NtpThemeColorUtils.getBackgroundColorFromNtpBackgroundData(mContext, null));
 
         NtpThemeColorInfo blueInfo =
                 NtpThemeColorUtils.createNtpThemeColorInfo(
                         mContext, NtpThemeColorId.NTP_COLORS_BLUE);
+        NtpBackgroundDataColor dataColor =
+                new NtpBackgroundDataColor(
+                        PlatformType.ANDROID,
+                        /* isChromeColorDailyRefreshEnabled= */ false,
+                        blueInfo);
+        int expectedColor =
+                BottomBarConfigUtils.isBottomBarEnabled(mContext)
+                        ? (ColorUtils.inNightMode(mContext)
+                                ? SemanticColorUtils.getColorSurface(mContext)
+                                : SemanticColorUtils.getColorSurfaceContainer(mContext))
+                        : SemanticColorUtils.getColorSurfaceContainerHigh(mContext);
+
         assertEquals(
-                SemanticColorUtils.getColorSurfaceContainerHigh(mContext),
-                NtpThemeColorUtils.getBackgroundColorFromColorInfo(mContext, blueInfo));
+                expectedColor,
+                NtpThemeColorUtils.getBackgroundColorFromNtpBackgroundData(mContext, dataColor));
 
         @ColorInt int backgroundColor = ContextCompat.getColor(mContext, R.color.green_50);
         NtpThemeColorFromHexInfo customInfo =
                 new NtpThemeColorFromHexInfo(
                         mContext, backgroundColor, NtpThemeColorInfo.COLOR_NOT_SET);
+        NtpBackgroundDataCustomizedColor dataCustomizedColor =
+                new NtpBackgroundDataCustomizedColor(PlatformType.ANDROID, customInfo);
         assertEquals(
                 backgroundColor,
-                NtpThemeColorUtils.getBackgroundColorFromColorInfo(mContext, customInfo));
+                NtpThemeColorUtils.getBackgroundColorFromNtpBackgroundData(
+                        mContext, dataCustomizedColor));
     }
 
     @Test
     public void testGetDefaultBackgroundColor() {
         assertEquals(
-                ContextCompat.getColor(mContext, R.color.home_surface_background_color),
+                ChromeSemanticColorUtils.getHomeSurfaceBackgroundColor(mContext),
                 NtpThemeColorUtils.getDefaultBackgroundColor(mContext));
     }
 

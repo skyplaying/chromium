@@ -38,10 +38,12 @@ suite('AiPageIndex', function() {
       showAiPageAiFeatureSection: true,
       showComposeControl: true,
       showHistorySearchControl: true,
-      showTabOrganizationControl: true,
-      // <if expr="enable_glic">
       showGlicSettings: true,
-      // </if>
+      enableAiModeSearchSetting: true,
+      actorLoginFederatedLoginSupportEnabled: true,
+      showAiSuggestionsControl: true,
+      showInlineCueMenuControl: true,
+      showDictationControl: true,
     });
     resetRouterForTesting();
     return createAiPageIndex();
@@ -50,9 +52,8 @@ suite('AiPageIndex', function() {
   test('Routing', async function() {
     const defaultViews = [
       'aiInfoCard',
-      // <if expr="enable_glic">
+      'aiModeSearch',
       'glic',
-      // </if>
       'parent',
     ];
 
@@ -63,10 +64,6 @@ suite('AiPageIndex', function() {
     await microtasksFinished();
     assertActiveViews(defaultViews);
 
-    Router.getInstance().navigateTo(routes.AI_TAB_ORGANIZATION);
-    await microtasksFinished();
-    assertActiveViews(['tabOrganization']);
-
     Router.getInstance().navigateTo(routes.HISTORY_SEARCH);
     await microtasksFinished();
     assertActiveViews(['historySearch']);
@@ -75,11 +72,25 @@ suite('AiPageIndex', function() {
     await microtasksFinished();
     assertActiveViews(['compose']);
 
-    // <if expr="enable_glic">
     Router.getInstance().navigateTo(routes.GEMINI);
     await microtasksFinished();
     assertActiveViews(['gemini']);
-    // </if>
+
+    Router.getInstance().navigateTo(routes.GEMINI_LOGIN);
+    await microtasksFinished();
+    assertActiveViews(['geminiLoginPermissions']);
+
+    Router.getInstance().navigateTo(routes.AI_SUGGESTIONS);
+    await microtasksFinished();
+    assertActiveViews(['aiSuggestions']);
+
+    Router.getInstance().navigateTo(routes.INLINE_CUE_MENU);
+    await microtasksFinished();
+    assertActiveViews(['inlineCueMenu']);
+
+    Router.getInstance().navigateTo(routes.DICTATION);
+    await microtasksFinished();
+    assertActiveViews(['dictation']);
   });
 
   test('aiFeaturesSectionVisibility', async function() {
@@ -94,7 +105,19 @@ suite('AiPageIndex', function() {
     assertFalse(!!index.$.viewManager.querySelector('#parent[slot=view]'));
   });
 
-  // <if expr="enable_glic">
+  test('aiModeSearchSectionVisibility', async function() {
+    assertTrue(!!index.$.viewManager.querySelector('#aiModeSearch[slot=view]'));
+
+    loadTimeData.overrideValues({
+      showAiPage: true,
+      enableAiModeSearchSetting: false,
+    });
+    resetRouterForTesting();
+    await createAiPageIndex();
+    assertFalse(
+        !!index.$.viewManager.querySelector('#aiModeSearch[slot=view]'));
+  });
+
   test('glicSectionVisibility', async function() {
     assertTrue(!!index.$.viewManager.querySelector('#glic[slot=view]'));
 
@@ -106,20 +129,37 @@ suite('AiPageIndex', function() {
     await createAiPageIndex();
     assertFalse(!!index.$.viewManager.querySelector('#glic[slot=view]'));
   });
-  // </if>
+
+  test('dictationSectionVisibility', async function() {
+    assertTrue(!!index.$.viewManager.querySelector('#dictation[slot=view]'));
+
+    loadTimeData.overrideValues({
+      showAiPage: true,
+      showDictationControl: false,
+    });
+    resetRouterForTesting();
+    await createAiPageIndex();
+    assertFalse(!!index.$.viewManager.querySelector('#dictation[slot=view]'));
+  });
 
   // Test that the child views are properly annotated.
   test('DataParentViewId', function() {
-    const childViewsId = ['tabOrganization', 'historySearch', 'compose'];
+    const childViewsId = [
+      'historySearch',
+      'compose',
+      'aiSuggestions',
+      'inlineCueMenu',
+      'dictation',
+    ];
     for (const id of childViewsId) {
       assertTrue(!!index.$.viewManager.querySelector(
           `#${id}[slot=view][data-parent-view-id=parent]`));
     }
 
-    // <if expr="enable_glic">
     assertTrue(!!index.$.viewManager.querySelector(
         '#gemini[slot=view][data-parent-view-id=glic]'));
-    // </if>
+    assertTrue(!!index.$.viewManager.querySelector(
+        '#geminiLoginPermissions[slot=view][data-parent-view-id=gemini]'));
   });
 
   // Minimal (non-exhaustive) tests to ensure SearchableViewContainerMixin is
@@ -136,32 +176,28 @@ suite('AiPageIndex', function() {
     }
 
     // Case1: Results only in the "AI Innovations" card.
-    let result = await index.searchContents('tab organizer');
+    let result = await index.searchContents('history search');
     assertFalse(result.canceled);
     assertGT(result.matchCount, 0);
     assertFalse(result.wasClearSearch);
     assertVisibleViews(['parent'], ['glic']);
 
-    // <if expr="enable_glic">
     // Case2: Results only in the "Glic" card.
-    result = await index.searchContents('keyboard shortcut');
+    result = await index.searchContents('takeaways');
     assertFalse(result.canceled);
     assertGT(result.matchCount, 0);
     assertFalse(result.wasClearSearch);
     assertVisibleViews(['glic'], ['parent']);
-    // </if>
 
-    // Case3: Results only in both "AI Innovations" and "Glic" card.
-    result = await index.searchContents('a');
+    // Case3: Results in both "AI Innovations" and "Glic" card.
+    result = await index.searchContents('keyboard shortcut');
     assertFalse(result.canceled);
     assertGT(result.matchCount, 0);
     assertFalse(result.wasClearSearch);
     assertVisibleViews(
         [
           'parent',
-          // <if expr="enable_glic">
           'glic',
-          // </if>
         ],
         []);
   });

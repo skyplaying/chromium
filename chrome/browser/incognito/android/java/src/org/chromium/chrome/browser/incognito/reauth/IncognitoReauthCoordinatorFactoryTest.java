@@ -6,15 +6,15 @@ package org.chromium.chrome.browser.incognito.reauth;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
-
-import static org.chromium.base.test.util.Batch.UNIT_TESTS;
 
 import android.content.Context;
 import android.content.Intent;
@@ -31,13 +31,13 @@ import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.ParameterizedRobolectricTestRunner;
-import org.robolectric.annotation.Config;
-import org.robolectric.annotation.LooperMode;
 import org.robolectric.shadows.ShadowLooper;
 
+import org.chromium.base.DeviceInfo;
 import org.chromium.base.supplier.OneshotSupplierImpl;
 import org.chromium.base.test.BaseRobolectricTestRule;
-import org.chromium.base.test.util.Batch;
+import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.hub.HubManager;
 import org.chromium.chrome.browser.hub.PaneId;
 import org.chromium.chrome.browser.hub.PaneManager;
@@ -59,9 +59,6 @@ import java.util.Collection;
  * <p>TODO(crbug.com/40056462): Remove parameterization to improve readability of the tests.
  */
 @RunWith(ParameterizedRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
-@LooperMode(LooperMode.Mode.PAUSED)
-@Batch(UNIT_TESTS)
 public class IncognitoReauthCoordinatorFactoryTest {
     public @Rule MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -129,6 +126,7 @@ public class IncognitoReauthCoordinatorFactoryTest {
 
     @After
     public void tearDown() {
+        DeviceInfo.resetIsDesktopForTesting();
         IncognitoTabHostRegistry.getInstance().unregister(mIncognitoTabHostMock);
 
         verifyNoMoreInteractions(
@@ -149,18 +147,18 @@ public class IncognitoReauthCoordinatorFactoryTest {
         Runnable seeOtherTabsRunnable =
                 mIncognitoReauthCoordinatorFactory.getSeeOtherTabsRunnable();
         if (mIsTabbedActivity) {
-            when(mLayoutManagerMock.isLayoutVisible(LayoutType.TAB_SWITCHER)).thenReturn(false);
+            when(mLayoutManagerMock.isLayoutVisible(LayoutType.HUB)).thenReturn(false);
             doNothing().when(mTabModelSelectorMock).selectModel(/* incognito= */ false);
             doNothing()
                     .when(mLayoutManagerMock)
-                    .showLayout(eq(LayoutType.TAB_SWITCHER), /* animate= */ eq(false));
+                    .showLayout(eq(LayoutType.HUB), /* animate= */ eq(false));
 
             seeOtherTabsRunnable.run();
 
-            verify(mLayoutManagerMock).isLayoutVisible(LayoutType.TAB_SWITCHER);
+            verify(mLayoutManagerMock).isLayoutVisible(LayoutType.HUB);
             verify(mTabModelSelectorMock, times(1)).selectModel(/* incognito= */ eq(false));
             verify(mLayoutManagerMock, times(1))
-                    .showLayout(eq(LayoutType.TAB_SWITCHER), /* animate= */ eq(false));
+                    .showLayout(eq(LayoutType.HUB), /* animate= */ eq(false));
         } else {
             doNothing().when(mContextMock).startActivity(mIntentMock);
             seeOtherTabsRunnable.run();
@@ -170,19 +168,38 @@ public class IncognitoReauthCoordinatorFactoryTest {
 
     @Test
     @SmallTest
+    @EnableFeatures(ChromeFeatureList.DISABLE_GRID_TAB_SWITCHER)
+    public void testSeeOtherTabsRunnable_IsInvokedCorrectly_LayoutNotVisible_disabledOnDesktop_doesNotShowHub() {
+        if (!mIsTabbedActivity) return;
+
+        DeviceInfo.setIsDesktopForTesting(true);
+        Runnable seeOtherTabsRunnable =
+                mIncognitoReauthCoordinatorFactory.getSeeOtherTabsRunnable();
+        when(mLayoutManagerMock.isLayoutVisible(LayoutType.HUB)).thenReturn(false);
+        doNothing().when(mTabModelSelectorMock).selectModel(/* incognito= */ false);
+
+        seeOtherTabsRunnable.run();
+
+        verify(mLayoutManagerMock).isLayoutVisible(LayoutType.HUB);
+        verify(mTabModelSelectorMock, times(1)).selectModel(/* incognito= */ eq(false));
+        verify(mLayoutManagerMock, never()).showLayout(eq(LayoutType.HUB), anyBoolean());
+    }
+
+    @Test
+    @SmallTest
     public void testSeeOtherTabsRunnable_IsInvokedCorrectly_LayoutVisible() {
         Runnable seeOtherTabsRunnable =
                 mIncognitoReauthCoordinatorFactory.getSeeOtherTabsRunnable();
         if (mIsTabbedActivity) {
-            when(mLayoutManagerMock.isLayoutVisible(LayoutType.TAB_SWITCHER)).thenReturn(true);
+            when(mLayoutManagerMock.isLayoutVisible(LayoutType.HUB)).thenReturn(true);
             doNothing().when(mTabModelSelectorMock).selectModel(/* incognito= */ false);
             doNothing()
                     .when(mLayoutManagerMock)
-                    .showLayout(eq(LayoutType.TAB_SWITCHER), /* animate= */ eq(false));
+                    .showLayout(eq(LayoutType.HUB), /* animate= */ eq(false));
 
             seeOtherTabsRunnable.run();
 
-            verify(mLayoutManagerMock).isLayoutVisible(LayoutType.TAB_SWITCHER);
+            verify(mLayoutManagerMock).isLayoutVisible(LayoutType.HUB);
             verify(mTabModelSelectorMock, times(1)).selectModel(/* incognito= */ eq(false));
             verify(mPaneManagerMock).getDefaultPaneId();
             verify(mPaneManagerMock).focusPane(PaneId.TAB_SWITCHER);
@@ -211,15 +228,15 @@ public class IncognitoReauthCoordinatorFactoryTest {
                         /* isTabbedActivity= */ true);
         Runnable seeOtherTabsRunnable =
                 mIncognitoReauthCoordinatorFactory.getSeeOtherTabsRunnable();
-        when(mLayoutManagerMock.isLayoutVisible(LayoutType.TAB_SWITCHER)).thenReturn(true);
+        when(mLayoutManagerMock.isLayoutVisible(LayoutType.HUB)).thenReturn(true);
 
         doNothing().when(mTabModelSelectorMock).selectModel(/* incognito= */ false);
         doNothing()
                 .when(mLayoutManagerMock)
-                .showLayout(eq(LayoutType.TAB_SWITCHER), /* animate= */ eq(false));
+                .showLayout(eq(LayoutType.HUB), /* animate= */ eq(false));
 
         seeOtherTabsRunnable.run();
-        verify(mLayoutManagerMock).isLayoutVisible(LayoutType.TAB_SWITCHER);
+        verify(mLayoutManagerMock).isLayoutVisible(LayoutType.HUB);
         verify(mTabModelSelectorMock, times(1)).selectModel(/* incognito= */ eq(false));
         verifyNoInteractions(mPaneManagerMock);
 
@@ -246,18 +263,17 @@ public class IncognitoReauthCoordinatorFactoryTest {
         Runnable backPressRunnable = mIncognitoReauthCoordinatorFactory.getBackPressRunnable();
         // Does the same thing as see other tabs runnable.
         if (mIsTabbedActivity) {
-            when(mLayoutManagerMock.isLayoutVisible(LayoutType.TAB_SWITCHER)).thenReturn(false);
+            when(mLayoutManagerMock.isLayoutVisible(LayoutType.HUB)).thenReturn(false);
             doNothing().when(mTabModelSelectorMock).selectModel(/* incognito= */ false);
             doNothing()
                     .when(mLayoutManagerMock)
-                    .showLayout(eq(LayoutType.TAB_SWITCHER), /* animate= */ eq(false));
+                    .showLayout(eq(LayoutType.HUB), /* animate= */ eq(false));
 
             backPressRunnable.run();
 
-            verify(mLayoutManagerMock).isLayoutVisible(LayoutType.TAB_SWITCHER);
+            verify(mLayoutManagerMock).isLayoutVisible(LayoutType.HUB);
             verify(mTabModelSelectorMock, times(1)).selectModel(/* incognito= */ eq(false));
-            verify(mLayoutManagerMock)
-                    .showLayout(eq(LayoutType.TAB_SWITCHER), /* animate= */ eq(false));
+            verify(mLayoutManagerMock).showLayout(eq(LayoutType.HUB), /* animate= */ eq(false));
         } else {
             doNothing().when(mContextMock).startActivity(mIntentMock);
             backPressRunnable.run();
@@ -271,15 +287,15 @@ public class IncognitoReauthCoordinatorFactoryTest {
         Runnable backPressRunnable = mIncognitoReauthCoordinatorFactory.getBackPressRunnable();
         // Does the same thing as see other tabs runnable.
         if (mIsTabbedActivity) {
-            when(mLayoutManagerMock.isLayoutVisible(LayoutType.TAB_SWITCHER)).thenReturn(true);
+            when(mLayoutManagerMock.isLayoutVisible(LayoutType.HUB)).thenReturn(true);
             doNothing().when(mTabModelSelectorMock).selectModel(/* incognito= */ false);
             doNothing()
                     .when(mLayoutManagerMock)
-                    .showLayout(eq(LayoutType.TAB_SWITCHER), /* animate= */ eq(false));
+                    .showLayout(eq(LayoutType.HUB), /* animate= */ eq(false));
 
             backPressRunnable.run();
 
-            verify(mLayoutManagerMock).isLayoutVisible(LayoutType.TAB_SWITCHER);
+            verify(mLayoutManagerMock).isLayoutVisible(LayoutType.HUB);
             verify(mTabModelSelectorMock, times(1)).selectModel(/* incognito= */ eq(false));
             verify(mPaneManagerMock).getDefaultPaneId();
             verify(mPaneManagerMock).focusPane(PaneId.TAB_SWITCHER);

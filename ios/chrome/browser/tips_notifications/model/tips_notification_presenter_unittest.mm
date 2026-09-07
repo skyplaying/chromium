@@ -9,7 +9,6 @@
 #import "components/sync/service/sync_service_utils.h"
 #import "components/sync/service/sync_user_settings.h"
 #import "components/sync/test/mock_sync_service.h"
-#import "ios/chrome/browser/authentication/ui_bundled/signin_presenter.h"
 #import "ios/chrome/browser/content_suggestions/ui/content_suggestions_commands.h"
 #import "ios/chrome/browser/default_browser/model/promo_source.h"
 #import "ios/chrome/browser/default_browser/model/utils.h"
@@ -18,7 +17,7 @@
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/credential_provider_promo_commands.h"
-#import "ios/chrome/browser/shared/public/commands/docking_promo_commands.h"
+#import "ios/chrome/browser/shared/public/commands/promos_manager_commands.h"
 #import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/settings_commands.h"
 #import "ios/chrome/browser/shared/public/commands/sync_presenter_commands.h"
@@ -46,7 +45,7 @@ class TipsNotificationPresenterTest : public PlatformTest {
     TestProfileIOS::Builder builder;
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
+        AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
             std::make_unique<FakeAuthenticationServiceDelegate>()));
     builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
                               base::BindRepeating(&CreateMockSyncService));
@@ -105,11 +104,11 @@ TEST_F(TipsNotificationPresenterTest, TestShowWhatsNew) {
 
 // Tests that the presenter can show the Sign-in page.
 TEST_F(TipsNotificationPresenterTest, TestShowSignin) {
-  id mock_handler = MockHandler(@protocol(SigninPresenter));
-  OCMExpect([mock_handler showSignin:[OCMArg any]]);
+  OCMExpect([application_handler_ showSignin:[OCMArg any]
+                          baseViewController:nil]);
   TipsNotificationPresenter::Present(browser_->AsWeakPtr(),
                                      TipsNotificationType::kSignin);
-  EXPECT_OCMOCK_VERIFY(mock_handler);
+  EXPECT_OCMOCK_VERIFY(application_handler_);
 }
 
 // Tests that the presenter can show the Set Up List "See More" menu.
@@ -118,6 +117,15 @@ TEST_F(TipsNotificationPresenterTest, TestShowSetUpListContinuation) {
   OCMExpect([mock_handler showSetUpListSeeMoreMenuExpanded:YES]);
   TipsNotificationPresenter::Present(
       browser_->AsWeakPtr(), TipsNotificationType::kSetUpListContinuation);
+  EXPECT_OCMOCK_VERIFY(mock_handler);
+}
+
+// Tests that the presenter can show the Docking promo.
+TEST_F(TipsNotificationPresenterTest, TestShowDocking) {
+  id mock_handler = MockHandler(@protocol(PromosManagerCommands));
+  OCMExpect([mock_handler showDockingPromo]);
+  TipsNotificationPresenter::Present(browser_->AsWeakPtr(),
+                                     TipsNotificationType::kDocking);
   EXPECT_OCMOCK_VERIFY(mock_handler);
 }
 
@@ -150,7 +158,7 @@ TEST_F(TipsNotificationPresenterTest, TestShowEnhancedSafeBrowsingPromo) {
 
 // Tests that the presenter can show the CPE promo.
 TEST_F(TipsNotificationPresenterTest, TestShowCPEPromo) {
-  id mock_handler = MockHandler(@protocol(CredentialProviderPromoCommands));
+  id mock_handler = MockHandler(@protocol(PromosManagerCommands));
   OCMExpect(
       [mock_handler showCredentialProviderPromoWithTrigger:
                         CredentialProviderPromoTrigger::TipsNotification]);

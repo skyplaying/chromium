@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <ranges>
 #include <string>
 #include <utility>
 
@@ -50,14 +51,14 @@
 #include "ash/system/virtual_keyboard/virtual_keyboard_tray.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
 #include "ash/wm/window_pin_util.h"
-#include "ash/wm_mode/wm_mode_button_tray.h"
 #include "base/check.h"
 #include "base/command_line.h"
-#include "base/containers/adapters.h"
+#include "base/functional/bind.h"
 #include "base/functional/callback_forward.h"
 #include "base/i18n/time_formatting.h"
 #include "base/metrics/histogram_macros.h"
 #include "chromeos/ui/base/window_pin_type.h"
+#include "components/session_manager/session_manager_types.h"
 #include "ui/base/models/image_model.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
@@ -65,14 +66,15 @@
 #include "ui/display/screen.h"
 #include "ui/message_center/message_center.h"
 #include "ui/message_center/message_center_types.h"
+#include "ui/views/accessibility/view_accessibility.h"
 
 namespace ash {
 namespace {
 
 // Ensures that there is no id collision within the subtree of StatusAreaWidget.
-constexpr uint32_t kCustomIconsBaseId = 10000;
+constexpr uint64_t kCustomIconsBaseId = 10000;
 
-uint32_t GetCustomIconId(const TrayIconConfiguration& configuration) {
+uint64_t GetCustomIconId(const TrayIconConfiguration& configuration) {
   return configuration.id + kCustomIconsBaseId;
 }
 
@@ -140,11 +142,6 @@ void StatusAreaWidget::Initialize() {
 
   if (features::IsPhoneHubEnabled()) {
     phone_hub_tray_ = AddTrayButton(std::make_unique<PhoneHubTray>(shelf_));
-  }
-
-  if (features::IsWmModeEnabled()) {
-    wm_mode_button_tray_ =
-        AddTrayButton(std::make_unique<WmModeButtonTray>(shelf_));
   }
 
   if (features::IsScalableShelfPodsEnabled()) {
@@ -288,6 +285,9 @@ void StatusAreaWidget::LogVisiblePodCountMetric() {
   int visible_pod_count = 0;
   for (ash::TrayBackgroundView* tray_button : tray_buttons_) {
     switch (tray_button->catalog_name()) {
+      case TrayBackgroundViewCatalogName::kWmMode_DEPRECATED:
+        NOTREACHED();
+
       case TrayBackgroundViewCatalogName::kUnifiedSystem:
       case TrayBackgroundViewCatalogName::kStatusAreaOverflowButton:
       case TrayBackgroundViewCatalogName::kDateTray:
@@ -316,7 +316,6 @@ void StatusAreaWidget::LogVisiblePodCountMetric() {
       case TrayBackgroundViewCatalogName::kPodsOverflow:
       case TrayBackgroundViewCatalogName::kLogoutButton:
       case TrayBackgroundViewCatalogName::kVirtualKeyboardStatusArea:
-      case TrayBackgroundViewCatalogName::kWmMode:
       case TrayBackgroundViewCatalogName::kVideoConferenceTray:
       case TrayBackgroundViewCatalogName::kFocusMode:
       case TrayBackgroundViewCatalogName::kMouseKeysStatusArea:
@@ -471,7 +470,7 @@ void StatusAreaWidget::CalculateButtonVisibilityForCollapsedState() {
   TrayBackgroundView* previous_tray = nullptr;
   bool show_overflow_button = false;
   int used_width = 0;
-  for (TrayBackgroundView* tray : base::Reversed(tray_buttons_)) {
+  for (TrayBackgroundView* tray : std::views::reverse(tray_buttons_)) {
     // Skip non-enabled tray buttons.
     if (!tray->visible_preferred()) {
       continue;
@@ -579,7 +578,7 @@ StatusAreaWidget::CollapseState StatusAreaWidget::CalculateCollapseState()
     const int available_width = GetCollapseAvailableWidth(force_collapsible);
 
     int used_width = 0;
-    for (TrayBackgroundView* tray : base::Reversed(tray_buttons_)) {
+    for (TrayBackgroundView* tray : std::views::reverse(tray_buttons_)) {
       // If we reach the final overflow tray button, then all the tray buttons
       // fit and there is no need for a collapse state.
       if (tray == overflow_button_tray_) {
@@ -689,22 +688,22 @@ bool StatusAreaWidget::AddTrayIcon(const TrayIconConfiguration& configuration,
   const int64_t icon_id = GetCustomIconId(configuration);
   CHECK(!custom_tray_buttons_ids_.contains(icon_id));
 
-  std::u16string tooltip_text;
-  if (configuration.tool_tip) {
-    tooltip_text = *configuration.tool_tip;
-  }
-
-  ui::ImageModel image_model;
-  if (configuration.image) {
-    image_model = ui::ImageModel::FromImageSkia(*configuration.image);
-  }
+  std::u16string tooltip_text = configuration.tool_tip.value_or(u"");
+  ui::ImageModel image_model =
+      configuration.image ? ui::ImageModel::FromImageSkia(*configuration.image)
+                          : ui::ImageModel();
 
   auto icon = std::make_unique<ImagedTrayIcon>(
-      shelf_, std::move(image_model), std::move(tooltip_text),
+      shelf_, std::move(image_model), /*tooltip=*/tooltip_text,
+      /*accessibility_name=*/tooltip_text,
       TrayBackgroundViewCatalogName::kChromeCustom);
   icon->SetID(icon_id);
   icon->SetCallback(std::move(callback));
   icon->SetVisiblePreferred(true);
+  icon->set_icon_visibility_callback(
+      base::BindRepeating([](session_manager::SessionState state) -> bool {
+        return !Shell::Get()->session_controller()->IsUserSessionBlocked();
+      }));
 
   custom_tray_buttons_ids_.insert(icon_id);
 
@@ -731,9 +730,12 @@ bool StatusAreaWidget::UpdateTrayIcon(
 
   auto* image_view = icon->image_view();
   CHECK(image_view);
-  if (configuration.tool_tip &&
-      configuration.tool_tip != image_view->GetTooltipText()) {
-    image_view->SetTooltipText(*configuration.tool_tip);
+  if (configuration.tool_tip) {
+    const std::u16string& new_tooltip = *configuration.tool_tip;
+    if (new_tooltip != image_view->GetTooltipText()) {
+      icon->SetTooltip(new_tooltip);
+      icon->SetAccessibilityName(new_tooltip);
+    }
   }
 
   if (configuration.image) {

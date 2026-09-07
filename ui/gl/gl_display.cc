@@ -31,7 +31,6 @@
 #include "ui/gl/gl_features.h"
 #include "ui/gl/gl_implementation.h"
 #include "ui/gl/gl_surface.h"
-#include "ui/gl/gpu_switching_manager.h"
 
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/android_info.h"
@@ -180,10 +179,6 @@ EGLDisplay GetDisplayFromType(
       }
       return eglGetDisplay(display);
     }
-    case ANGLE_D3D9:
-      return GetPlatformANGLEDisplay(
-          display, EGL_PLATFORM_ANGLE_TYPE_D3D9_ANGLE, enabled_angle_features,
-          disabled_angle_features, extra_display_attribs);
     case ANGLE_D3D11:
       return GetPlatformANGLEDisplay(
           display, EGL_PLATFORM_ANGLE_TYPE_D3D11_ANGLE, enabled_angle_features,
@@ -292,8 +287,6 @@ EGLDisplay GetDisplayFromType(
 ANGLEImplementation GetANGLEImplementationFromDisplayType(
     DisplayType display_type) {
   switch (display_type) {
-    case ANGLE_D3D9:
-      return ANGLEImplementation::kD3D9;
     case ANGLE_D3D11:
     case ANGLE_D3D11_NULL:
     case ANGLE_D3D11on12:
@@ -329,8 +322,6 @@ const char* DisplayTypeString(DisplayType display_type) {
       return "Default";
     case SWIFT_SHADER:
       return "SwiftShader";
-    case ANGLE_D3D9:
-      return "D3D9";
     case ANGLE_D3D11:
       return "D3D11";
     case ANGLE_D3D11_WARP:
@@ -419,16 +410,6 @@ GLDisplayPlatform* GLDisplay::GetAs() {
 template EXPORT_TEMPLATE_DEFINE(GL_EXPORT)
     GLDisplayEGL* GLDisplay::GetAs<GLDisplayEGL>();
 
-GLDisplayEGL::EGLGpuSwitchingObserver::EGLGpuSwitchingObserver(
-    EGLDisplay display)
-    : display_(display) {
-  DCHECK(display != EGL_NO_DISPLAY);
-}
-
-void GLDisplayEGL::EGLGpuSwitchingObserver::OnGpuSwitched() {
-  eglHandleGPUSwitchANGLE(display_);
-}
-
 // Because on Apple platforms there is a member variable of a type (ObjCStorage)
 // that is defined in gl_display_egl.mm, the constructor/destructor also have to
 // be there. If making changes to this copy, be sure to adjust the other.
@@ -448,12 +429,6 @@ EGLDisplay GLDisplayEGL::GetDisplay() const {
 void GLDisplayEGL::Shutdown() {
   if (display_ == EGL_NO_DISPLAY)
     return;
-
-  if (gpu_switching_observer_.get()) {
-    ui::GpuSwitchingManager::GetInstance()->RemoveObserver(
-        gpu_switching_observer_.get());
-    gpu_switching_observer_.reset();
-  }
 
   DCHECK(g_driver_egl.fn.eglGetProcAddressFn);
   angle::ResetPlatform(display_, g_driver_egl.fn.eglGetProcAddressFn);
@@ -670,7 +645,8 @@ bool GLDisplayEGL::InitializeDisplay(bool supports_angle,
     return true;
   }
 
-  LOG(ERROR) << "Initialization of all EGL display types failed.";
+  LOG(ERROR) << "Initialization of all (" << init_displays.size()
+             << ") EGL display types failed.";
 
   return false;
 }
@@ -757,15 +733,6 @@ void GLDisplayEGL::InitializeCommon(bool for_testing) {
   }
   // LINT.ThenChange(//gpu/config/gpu_finch_features.cc:AndroidSurfaceControlCondition)
 #endif  // BUILDFLAG(IS_ANDROID)
-
-  if (!for_testing) {
-    if (ext->b_EGL_ANGLE_power_preference) {
-      gpu_switching_observer_ =
-          std::make_unique<EGLGpuSwitchingObserver>(display_);
-      ui::GpuSwitchingManager::GetInstance()->AddObserver(
-          gpu_switching_observer_.get());
-    }
-  }
 
 #if BUILDFLAG(IS_APPLE)
   InitMetalSharedEventStorage();

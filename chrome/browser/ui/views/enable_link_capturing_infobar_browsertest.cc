@@ -3,17 +3,21 @@
 // found in the LICENSE file.
 
 #include <algorithm>
+#include <string>
 #include <tuple>
+#include <vector>
 
+#include "base/strings/strcat.h"
 #include "base/test/metrics/user_action_tester.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/apps/app_service/app_registry_cache_waiter.h"
 #include "chrome/browser/apps/link_capturing/enable_link_capturing_infobar_delegate.h"
-#include "chrome/browser/apps/link_capturing/intent_picker_info.h"
 #include "chrome/browser/apps/link_capturing/link_capturing_feature_test_support.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/infobars/infobar_features.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/web_apps/web_app_link_capturing_test_utils.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
@@ -23,8 +27,8 @@
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_registry_update.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/apps/link_capturing/intent_picker_info.h"
 #include "components/infobars/content/content_infobar_manager.h"
 #include "components/infobars/core/confirm_infobar_delegate.h"
 #include "components/infobars/core/infobar.h"
@@ -41,22 +45,47 @@
 namespace web_app {
 namespace {
 
-content::WebContents* GetActiveWebContents(Browser* browser) {
-  return browser->tab_strip_model()->GetActiveWebContents();
+content::WebContents* GetActiveWebContents(BrowserWindowInterface* browser) {
+  return browser->GetTabStripModel()->GetActiveWebContents();
+}
+
+struct TestParams {
+  apps::test::LinkCapturingFeatureVersion feature_version;
+  bool migration_enabled;
+};
+
+std::string TestParamToString(const testing::TestParamInfo<TestParams>& info) {
+  std::string version_str = apps::test::LinkCapturingVersionToString(
+      testing::TestParamInfo<apps::test::LinkCapturingFeatureVersion>(
+          info.param.feature_version, info.index));
+  return base::StrCat({version_str, info.param.migration_enabled
+                                        ? "MigrationEnabled"
+                                        : "MigrationDisabled"});
 }
 
 class EnableLinkCapturingInfobarBrowserTest
     : public WebAppNavigationBrowserTest,
-      public testing::WithParamInterface<
-          apps::test::LinkCapturingFeatureVersion> {
+      public testing::WithParamInterface<TestParams> {
  public:
   EnableLinkCapturingInfobarBrowserTest() {
-    feature_list_.InitWithFeaturesAndParameters(
-        apps::test::GetFeaturesToEnableLinkCapturingUX(GetParam()), {});
+    std::vector<base::test::FeatureRefAndParams> enabled_features =
+        apps::test::GetFeaturesToEnableLinkCapturingUX(
+            GetParam().feature_version);
+    std::vector<base::test::FeatureRef> disabled_features;
+
+    if (GetParam().migration_enabled) {
+      enabled_features.push_back({infobars::kCentralizedInfoBarFramework,
+                                  {{"MigratedLinkCapturing", "true"}}});
+    } else {
+      disabled_features.push_back(infobars::kCentralizedInfoBarFramework);
+    }
+    feature_list_.InitWithFeaturesAndParameters(enabled_features,
+                                                disabled_features);
   }
 
   bool LinkCapturingEnabledByDefault() {
-    return GetParam() == apps::test::LinkCapturingFeatureVersion::kV2DefaultOn;
+    return GetParam().feature_version ==
+           apps::test::LinkCapturingFeatureVersion::kV2DefaultOn;
   }
 
   // Returns [app_id, in_scope_url]
@@ -64,8 +93,7 @@ class EnableLinkCapturingInfobarBrowserTest
     GURL start_url = embedded_test_server()->GetURL("/web_apps/basic.html");
     GURL in_scope_url = embedded_test_server()->GetURL("/web_apps/page1.html");
 
-    webapps::AppId app_id =
-        InstallWebAppFromPageAndCloseAppBrowser(browser(), start_url);
+    webapps::AppId app_id = InstallWebAppInNewTabAndClose(browser(), start_url);
     apps::AppReadinessWaiter(profile(), app_id).Await();
     return {app_id, in_scope_url};
   }
@@ -82,10 +110,10 @@ class EnableLinkCapturingInfobarBrowserTest
 
     // The inner app must be installed first so that it is installable.
     webapps::AppId inner_app_id =
-        InstallWebAppFromPageAndCloseAppBrowser(browser(), inner_start_url);
+        InstallWebAppInNewTabAndClose(browser(), inner_start_url);
     apps::AppReadinessWaiter(profile(), inner_app_id).Await();
     webapps::AppId outer_app_id =
-        InstallWebAppFromPageAndCloseAppBrowser(browser(), outer_start_url);
+        InstallWebAppInNewTabAndClose(browser(), outer_start_url);
     apps::AppReadinessWaiter(profile(), outer_app_id).Await();
     return {outer_app_id, inner_app_id, inner_in_scope_url};
   }
@@ -93,14 +121,14 @@ class EnableLinkCapturingInfobarBrowserTest
   // Calling `NavigateViaLinkClick()` with `LinkTarget::BLANK` ensures that a
   // new top level browsing context is always created, to allow navigation
   // capturing to happen.
-  void NavigateViaLinkClick(Browser* browser,
+  void NavigateViaLinkClick(BrowserWindowInterface* browser,
                             const GURL& url,
                             LinkTarget link_target = LinkTarget::BLANK) {
     ClickLinkAndWait(GetActiveWebContents(browser), url, link_target,
                      std::string());
   }
 
-  infobars::InfoBar* GetLinkCapturingInfoBar(Browser* browser) {
+  infobars::InfoBar* GetLinkCapturingInfoBar(BrowserWindowInterface* browser) {
     return GetLinkCapturingInfoBar(GetActiveWebContents(browser));
   }
 
@@ -142,7 +170,7 @@ IN_PROC_BROWSER_TEST_P(EnableLinkCapturingInfobarBrowserTest,
 
   ui_test_utils::BrowserCreatedObserver browser_created_observer;
   ASSERT_TRUE(web_app::ClickIntentPickerChip(browser()));
-  Browser* app_browser = browser_created_observer.Wait();
+  BrowserWindowInterface* app_browser = browser_created_observer.Wait();
   ASSERT_TRUE(app_browser);
 
   EXPECT_NE(GetLinkCapturingInfoBar(app_browser), nullptr);
@@ -161,7 +189,7 @@ IN_PROC_BROWSER_TEST_P(EnableLinkCapturingInfobarBrowserTest,
 
   NavigateViaLinkClick(browser(), in_scope_url);
 
-  Browser* app_browser;
+  BrowserWindowInterface* app_browser;
   {
     ui_test_utils::BrowserCreatedObserver browser_created_observer;
     ASSERT_TRUE(web_app::ClickIntentPickerChip(browser()));
@@ -206,7 +234,7 @@ IN_PROC_BROWSER_TEST_P(EnableLinkCapturingInfobarBrowserTest,
   // PWA automatically on clicking the intent chip without going through the
   // intent picker bubble.
   ASSERT_TRUE(web_app::ClickIntentPickerChip(browser()));
-  Browser* app_browser = browser_created_observer.Wait();
+  BrowserWindowInterface* app_browser = browser_created_observer.Wait();
   ASSERT_TRUE(app_browser);
 
   EXPECT_EQ(GetLinkCapturingInfoBar(app_browser), nullptr);
@@ -227,7 +255,7 @@ IN_PROC_BROWSER_TEST_P(EnableLinkCapturingInfobarBrowserTest,
 
   ui_test_utils::BrowserCreatedObserver browser_created_observer;
   ASSERT_TRUE(web_app::ClickIntentPickerChip(browser()));
-  Browser* app_browser = browser_created_observer.Wait();
+  BrowserWindowInterface* app_browser = browser_created_observer.Wait();
   ASSERT_TRUE(app_browser);
 
   infobars::InfoBar* infobar = GetLinkCapturingInfoBar(app_browser);
@@ -264,7 +292,7 @@ IN_PROC_BROWSER_TEST_P(EnableLinkCapturingInfobarBrowserTest,
 
   ui_test_utils::BrowserCreatedObserver browser_created_observer;
   ASSERT_TRUE(web_app::ClickIntentPickerChip(browser()));
-  Browser* app_browser = browser_created_observer.Wait();
+  BrowserWindowInterface* app_browser = browser_created_observer.Wait();
   ASSERT_TRUE(app_browser);
 
   infobars::InfoBar* infobar = GetLinkCapturingInfoBar(app_browser);
@@ -295,7 +323,7 @@ IN_PROC_BROWSER_TEST_P(EnableLinkCapturingInfobarBrowserTest, AppLaunched) {
 
   NavigateViaLinkClick(browser(), in_scope_url);
 
-  Browser* app_browser;
+  BrowserWindowInterface* app_browser;
   {
     ui_test_utils::BrowserCreatedObserver browser_created_observer;
     ASSERT_TRUE(web_app::ClickIntentPickerChip(browser()));
@@ -343,7 +371,7 @@ IN_PROC_BROWSER_TEST_P(EnableLinkCapturingInfobarBrowserTest, BarRemoved) {
 
   ui_test_utils::BrowserCreatedObserver browser_created_observer;
   ASSERT_TRUE(web_app::ClickIntentPickerChip(browser()));
-  Browser* app_browser = browser_created_observer.Wait();
+  BrowserWindowInterface* app_browser = browser_created_observer.Wait();
   ASSERT_TRUE(app_browser);
 
   // The web_contents here is moving to `browser()`, and `app_browser` will be
@@ -354,7 +382,7 @@ IN_PROC_BROWSER_TEST_P(EnableLinkCapturingInfobarBrowserTest, BarRemoved) {
   EXPECT_TRUE(GetLinkCapturingInfoBar(web_contents.get()));
 
   // Note: this will close & invalidate app_browser.
-  Browser* tabbed_browser = chrome::OpenInChrome(app_browser);
+  BrowserWindowInterface* tabbed_browser = chrome::OpenInChrome(app_browser);
 
   ASSERT_TRUE(web_contents);
   EXPECT_EQ(web_contents.get(), GetActiveWebContents(tabbed_browser));
@@ -379,7 +407,7 @@ IN_PROC_BROWSER_TEST_P(EnableLinkCapturingInfobarBrowserTest,
 
     ui_test_utils::BrowserCreatedObserver browser_created_observer;
     ASSERT_TRUE(web_app::ClickIntentPickerChip(browser()));
-    Browser* app_browser = browser_created_observer.Wait();
+    BrowserWindowInterface* app_browser = browser_created_observer.Wait();
     ASSERT_TRUE(app_browser);
 
     infobars::InfoBar* infobar = GetLinkCapturingInfoBar(app_browser);
@@ -406,7 +434,7 @@ IN_PROC_BROWSER_TEST_P(EnableLinkCapturingInfobarBrowserTest,
 
   ui_test_utils::BrowserCreatedObserver browser_created_observer;
   ASSERT_TRUE(web_app::ClickIntentPickerChip(browser()));
-  Browser* app_browser = browser_created_observer.Wait();
+  BrowserWindowInterface* app_browser = browser_created_observer.Wait();
 
   infobars::InfoBar* infobar = GetLinkCapturingInfoBar(app_browser);
   EXPECT_FALSE(infobar);
@@ -445,7 +473,7 @@ IN_PROC_BROWSER_TEST_P(EnableLinkCapturingInfobarBrowserTest,
       base::TimeTicks(), ui::EF_LEFT_MOUSE_BUTTON, ui::EF_LEFT_MOUSE_BUTTON));
   web_app::intent_picker_bubble()->AcceptDialog();
 
-  Browser* app_browser = browser_created_observer.Wait();
+  BrowserWindowInterface* app_browser = browser_created_observer.Wait();
   ASSERT_TRUE(app_browser);
   EXPECT_TRUE(AppBrowserController::IsWebApp(app_browser));
   EXPECT_TRUE(AppBrowserController::IsForWebApp(app_browser, outer_app_id));
@@ -455,9 +483,16 @@ IN_PROC_BROWSER_TEST_P(EnableLinkCapturingInfobarBrowserTest,
 INSTANTIATE_TEST_SUITE_P(
     ,
     EnableLinkCapturingInfobarBrowserTest,
-    testing::Values(apps::test::LinkCapturingFeatureVersion::kV2DefaultOff,
-                    apps::test::LinkCapturingFeatureVersion::kV2DefaultOn),
-    apps::test::LinkCapturingVersionToString);
+    testing::Values(
+        TestParams{apps::test::LinkCapturingFeatureVersion::kV2DefaultOff,
+                   false},
+        TestParams{apps::test::LinkCapturingFeatureVersion::kV2DefaultOff,
+                   true},
+        TestParams{apps::test::LinkCapturingFeatureVersion::kV2DefaultOn,
+                   false},
+        TestParams{apps::test::LinkCapturingFeatureVersion::kV2DefaultOn,
+                   true}),
+    TestParamToString);
 
 }  // namespace
 }  // namespace web_app

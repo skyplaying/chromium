@@ -9,11 +9,12 @@
 #include "base/files/file_util.h"
 #include "base/path_service.h"
 #include "base/threading/platform_thread.h"
+#include "base/threading/thread_restrictions.h"
 #include "chrome/browser/extensions/chrome_test_extension_loader.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "components/metrics/content/subprocess_metrics_provider.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -177,7 +178,7 @@ IN_PROC_BROWSER_TEST_F(WasmExtensionCachingBrowserTest, CacheWasmExtensions) {
   // few more loads.
   for (int num_tabs = 1; num_tabs <= 10; ++num_tabs) {
     LOG(INFO) << "Opening new tab #" << num_tabs;
-    chrome::NewTab(browser());
+    chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
     // Wait until we got a total of `num_tabs` many samples.
     WaitForHistogramSamples(kHistogram, num_tabs);
     // If there was a hit, we are happy (and done).

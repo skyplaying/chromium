@@ -31,12 +31,13 @@ import org.chromium.base.test.util.DisableIf;
 import org.chromium.chrome.browser.ChromeTabbedActivity;
 import org.chromium.chrome.browser.document.ChromeLauncherActivity;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
-import org.chromium.chrome.browser.tab.EmptyTabObserver;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab.TabObserver;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
+import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
-import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.content_public.browser.LoadUrlParams;
+import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.url.GURL;
 
 /** Tests for history tab helper. */
@@ -48,14 +49,15 @@ public class HistoryTabHelperTest {
     private static final String FILE_PATH2 = "/chrome/test/data/android/simple.html";
 
     @Rule
-    public FreshCtaTransitTestRule mActivityTestRule =
-            ChromeTransitTestRules.freshChromeTabbedActivityRule();
+    public AutoResetCtaTransitTestRule mActivityTestRule =
+            ChromeTransitTestRules.fastAutoResetCtaActivityRule();
 
     @Test
     @MediumTest
     @DisableIf.Build(
             sdk_is_less_than = VERSION_CODES.UPSIDE_DOWN_CAKE,
             message = "This test is using an API introduced in Android U.")
+    @DisableIf.Device(DeviceFormFactor.DESKTOP_FREEFORM) // crbug.com/511288253
     public void testAppHistory() throws Exception {
         Context context = ContextUtils.getApplicationContext();
         Intent viewIntent =
@@ -89,7 +91,7 @@ public class HistoryTabHelperTest {
                 () -> {
                     Tab tab = getCurrentTab(resultActivity);
                     tab.addObserver(
-                            new EmptyTabObserver() {
+                            new TabObserver() {
                                 @Override
                                 public void onPageLoadFinished(Tab tab, GURL url) {
                                     callbackHelper.notifyCalled();

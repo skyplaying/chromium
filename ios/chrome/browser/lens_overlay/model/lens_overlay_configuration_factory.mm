@@ -6,7 +6,7 @@
 
 #import "base/check.h"
 #import "ios/chrome/browser/lens/ui_bundled/lens_entrypoint.h"
-#import "ios/chrome/browser/lens_overlay/model/lens_overlay_entrypoint.h"
+#import "ios/chrome/browser/lens_overlay/public/lens_overlay_entrypoint.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
@@ -33,6 +33,10 @@ LensEntrypoint LensEntrypointFromOverlayEntrypoint(
       return LensEntrypoint::LensOverlayAIHub;
     case LensOverlayEntrypoint::kFREPromo:
       return LensEntrypoint::LensOverlayFREPromo;
+    case LensOverlayEntrypoint::kAppBar:
+      return LensEntrypoint::AppBar;
+    case LensOverlayEntrypoint::kLevelUp:
+      return LensEntrypoint::LensOverlayLocationBar;
   }
 }
 
@@ -63,8 +67,7 @@ LensEntrypoint LensEntrypointFromOverlayEntrypoint(
   if (!isIncognito) {
     AuthenticationService* authenticationService =
         AuthenticationServiceFactory::GetForProfile(profile);
-    id<SystemIdentity> identity = authenticationService->GetPrimaryIdentity(
-        ::signin::ConsentLevel::kSignin);
+    id<SystemIdentity> identity = authenticationService->GetPrimaryIdentity();
     configuration.identity = identity;
   }
   configuration.localState = GetApplicationContext()->GetLocalState();

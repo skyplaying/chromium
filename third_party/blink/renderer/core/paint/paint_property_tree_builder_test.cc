@@ -4,9 +4,11 @@
 
 #include "third_party/blink/renderer/core/paint/paint_property_tree_builder_test.h"
 
-#include "base/compiler_specific.h"
-#include "cc/test/fake_layer_tree_host_client.h"
+#include <string_view>
+
+#include "cc/test/fake_layer_tree_host_delegate.h"
 #include "cc/trees/effect_node.h"
+#include "cc/trees/layer_tree_host.h"
 #include "cc/trees/scroll_node.h"
 #include "cc/trees/transform_node.h"
 #include "third_party/blink/renderer/core/frame/frame_test_helpers.h"
@@ -25,6 +27,7 @@
 #include "third_party/blink/renderer/platform/testing/layer_tree_host_embedder.h"
 #include "third_party/blink/renderer/platform/testing/paint_property_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/testing_platform_support.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 #include "ui/gfx/geometry/test/geometry_util.h"
 
@@ -101,8 +104,8 @@ void PaintPropertyTreeBuilderTest::SetUp() {
     if ((source_object)->HasLayer() && (ancestor)->HasLayer()) {               \
       auto actual = LocalVisualRect(*(source_object));                         \
       (source_object)                                                          \
-          ->MapToVisualRectInAncestorSpace(ancestor, actual,                   \
-                                           kUseGeometryMapper);                \
+          ->MapToVisualRectInAncestorSpace(                                    \
+              ancestor, actual, {VisualRectFlag::kUseGeometryMapper});         \
       SCOPED_TRACE("GeometryMapper: ");                                        \
       EXPECT_EQ(expected, actual);                                             \
     }                                                                          \
@@ -114,11 +117,10 @@ void PaintPropertyTreeBuilderTest::SetUp() {
     if (slop_factor) {                                                         \
       auto inflated_expected = expected;                                       \
       inflated_expected.Inflate(LayoutUnit(slop_factor));                      \
-      SCOPED_TRACE(String::Format(                                             \
-          "Slow path rect: %s, Expected: %s, Inflated expected: %s",           \
-          slow_path_rect.ToString().Ascii().c_str(),                           \
-          expected.ToString().Ascii().c_str(),                                 \
-          inflated_expected.ToString().Ascii().c_str()));                      \
+      SCOPED_TRACE(                                                            \
+          Format("Slow path rect: {}, Expected: {}, Inflated expected: {}",    \
+                 slow_path_rect.ToString(), expected.ToString(),               \
+                 inflated_expected.ToString()));                               \
       EXPECT_TRUE(                                                             \
           PhysicalRect(ToEnclosingRect(slow_path_rect)).Contains(expected));   \
       EXPECT_TRUE(inflated_expected.Contains(slow_path_rect));                 \
@@ -3733,15 +3735,15 @@ TEST_P(PaintPropertyTreeBuilderTest, ReplacedContentTransformFlattening) {
 TEST_P(PaintPropertyTreeBuilderTest, ContainPaintOrStyleLayoutTreeState) {
   for (const char* containment : {"paint", "style layout"}) {
     SCOPED_TRACE(containment);
-    SetBodyInnerHTML(UNSAFE_TODO(String::Format(R"HTML(
-      <style>body { margin: 20px 30px; }</style>
+    SetBodyInnerHTML(Format(R"HTML(
+      <style>body {{ margin: 20px 30px; }}</style>
       <div id='clipper'
-          style='contain: %s; width: 300px; height: 200px;'>
+          style='contain: {}; width: 300px; height: 200px;'>
         <div id='child'
             style='position: relative; width: 400px; height: 500px;'></div>
       </div>
     )HTML",
-                                                containment)));
+                            containment));
 
     auto* clipper =
         To<LayoutBoxModelObject>(GetLayoutObjectByElementId("clipper"));
@@ -3773,7 +3775,7 @@ TEST_P(PaintPropertyTreeBuilderTest, ContainPaintOrStyleLayoutTreeState) {
     // properties effect.
     EXPECT_EQ(clip_properties->EffectIsolationNode()->Parent(),
               &clip_local_properties.Effect());
-    if (UNSAFE_TODO(strcmp(containment, "paint")) == 0) {
+    if (std::string_view(containment) == "paint") {
       // If we contain paint, then clip isolation node is parented to the
       // overflow clip, which is in turn parented to the local border box
       // properties clip.
@@ -5022,6 +5024,55 @@ TEST_P(PaintPropertyTreeBuilderTest, TransformOriginWithAndWithoutMotionPath) {
   EXPECT_EQ(gfx::Point3F(), will_change_properties->Transform()->Origin());
 }
 
+TEST_P(PaintPropertyTreeBuilderTest, MotionPathCoordBoxFollowsCornerShape) {
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      body { margin: 0 }
+      .container {
+        position: absolute;
+        width: 100px;
+        height: 100px;
+        border-radius: 50px;
+      }
+      #bevel { corner-shape: bevel; }
+      #square { corner-shape: square; }
+      .child {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 10px;
+        height: 10px;
+        offset-path: border-box;
+        offset-distance: 12.5%;
+        offset-rotate: 0deg;
+      }
+    </style>
+    <div id='bevel' class='container'>
+      <div id='bevel-child' class='child'></div>
+    </div>
+    <div id='square' class='container'>
+      <div id='square-child' class='child'></div>
+    </div>
+  )HTML");
+
+  // The 50px border-radius combined with corner-shape: bevel turns the
+  // 100x100 border box into a diamond with vertices at the edge midpoints.
+  // The offset path starts at (50, 0), and 12.5% along the perimeter leads to
+  // (75, 25). Accounting for the child's transform-origin yields (70, 20).
+  const auto bevel_translation =
+      PaintPropertiesForElement("bevel-child")->Offset()->Get2dTranslation();
+  EXPECT_NEAR(70.f, bevel_translation.x(), 0.1f);
+  EXPECT_NEAR(20.f, bevel_translation.y(), 0.1f);
+
+  // corner-shape: square produces a plain 100x100 rect. The path starts at
+  // (0, 0), and 12.5% along the perimeter leads to (50, 0). Accounting for
+  // the child's transform-origin yields (45, -5).
+  const auto square_translation =
+      PaintPropertiesForElement("square-child")->Offset()->Get2dTranslation();
+  EXPECT_NEAR(45.f, square_translation.x(), 0.1f);
+  EXPECT_NEAR(-5.f, square_translation.y(), 0.1f);
+}
+
 TEST_P(PaintPropertyTreeBuilderTest, ChangePositionUpdateDescendantProperties) {
   SetBodyInnerHTML(R"HTML(
     <style>
@@ -5588,6 +5639,30 @@ TEST_P(PaintPropertyTreeBuilderTest, ImageBorderRadius) {
   EXPECT_CLIP_RECT(
       FloatRoundedRect(gfx::RectF(18, 18, 50, 50), FloatRoundedRect::Radii(20)),
       border_radius_clip);
+}
+
+TEST_P(PaintPropertyTreeBuilderTest, BackdropFilterWhenPrinting) {
+  SetBodyInnerHTML(R"HTML(
+    <div id="target" style="backdrop-filter: blur(5px)"></div>
+  )HTML");
+
+  // When printing backdrop filter should be ignored.
+  gfx::SizeF page_size(100, 100);
+  GetFrame().StartPrinting(WebPrintParams(page_size));
+  GetDocument().View()->UpdateLifecyclePhasesForPrinting();
+
+  auto* properties = PaintPropertiesForElement("target");
+  ASSERT_TRUE(properties);
+  ASSERT_TRUE(properties->Effect());
+  EXPECT_FALSE(properties->Effect()->BackdropFilter());
+
+  GetFrame().EndPrinting();
+  UpdateAllLifecyclePhasesForTest();
+
+  properties = PaintPropertiesForElement("target");
+  ASSERT_TRUE(properties);
+  ASSERT_TRUE(properties->Effect());
+  EXPECT_TRUE(properties->Effect()->BackdropFilter());
 }
 
 TEST_P(PaintPropertyTreeBuilderTest, FrameClipWhenPrinting) {
@@ -6643,7 +6718,7 @@ TEST_P(PaintPropertyTreeBuilderTest, SimpleOpacityChangeDoesNotCausePacUpdate) {
           .layer_tree_host()
           ->property_trees()
           ->effect_tree_mutable()
-          .FindNodeFromElementId(
+          .MutableFindNodeFromElementId(
               properties->Effect()->GetCompositorElementId());
   ASSERT_TRUE(cc_effect);
   EXPECT_FLOAT_EQ(cc_effect->opacity, 0.5f);
@@ -6705,13 +6780,12 @@ TEST_P(PaintPropertyTreeBuilderTest, SimpleScrollChangeDoesNotCausePacUpdate) {
               ->GetCompositorElementId());
   ASSERT_TRUE(cc_scroll_node);
 
-  const auto* cc_transform_node =
+  const auto& cc_transform_node =
       property_trees->transform_tree().Node(cc_scroll_node->transform_id);
-  ASSERT_TRUE(cc_transform_node);
 
-  EXPECT_TRUE(cc_transform_node->local.IsIdentity());
-  EXPECT_FLOAT_EQ(cc_transform_node->scroll_offset().x(), 0);
-  EXPECT_FLOAT_EQ(cc_transform_node->scroll_offset().y(), 0);
+  EXPECT_TRUE(cc_transform_node.local.IsIdentity());
+  EXPECT_FLOAT_EQ(cc_transform_node.scroll_offset().x(), 0);
+  EXPECT_FLOAT_EQ(cc_transform_node.scroll_offset().y(), 0);
   auto current_scroll_offset =
       property_trees->scroll_tree().current_scroll_offset(
           properties->ScrollTranslation()
@@ -6726,15 +6800,15 @@ TEST_P(PaintPropertyTreeBuilderTest, SimpleScrollChangeDoesNotCausePacUpdate) {
   EXPECT_EQ(gfx::Vector2dF(0, -10),
             properties->ScrollTranslation()->Get2dTranslation());
   EXPECT_EQ(pac->NeedsUpdate(), PaintArtifactCompositor::UpdateType::kNone);
-  EXPECT_TRUE(cc_transform_node->local.IsIdentity());
-  EXPECT_FLOAT_EQ(cc_transform_node->scroll_offset().x(), 0);
-  EXPECT_FLOAT_EQ(cc_transform_node->scroll_offset().y(), 10);
+  EXPECT_TRUE(cc_transform_node.local.IsIdentity());
+  EXPECT_FLOAT_EQ(cc_transform_node.scroll_offset().x(), 0);
+  EXPECT_FLOAT_EQ(cc_transform_node.scroll_offset().y(), 10);
   current_scroll_offset = property_trees->scroll_tree().current_scroll_offset(
       properties->ScrollTranslation()->ScrollNode()->GetCompositorElementId());
   EXPECT_FLOAT_EQ(current_scroll_offset.x(), 0);
   EXPECT_FLOAT_EQ(current_scroll_offset.y(), 10);
   EXPECT_TRUE(property_trees->transform_tree().needs_update());
-  EXPECT_TRUE(cc_transform_node->transform_changed());
+  EXPECT_TRUE(cc_transform_node.transform_changed());
 
   UpdateAllLifecyclePhasesForTest();
 }
@@ -7614,6 +7688,580 @@ TEST_P(PaintPropertyTreeBuilderTest, ClipPathWithMaskDoNotCreateExpandedRect) {
 
   // The expanded and precise layout clip rects should be equal.
   EXPECT_EQ(mask_clip->LayoutClipRect(), mask_clip->PreciseLayoutClipRect());
+}
+
+TEST_P(PaintPropertyTreeBuilderTest, OverscrollContainerOnInlineDoesNotCrash) {
+  SetBodyInnerHTML(
+      R"HTML(<div id="target" style="display:inline">text</div>)HTML");
+  UpdateAllLifecyclePhasesForTest();
+
+  Element* target = GetDocument().getElementById(AtomicString("target"));
+  target->setAttribute(QualifiedName(AtomicString("overscrollcontainer")),
+                       AtomicString(""));
+  UpdateAllLifecyclePhasesForTest();
+}
+
+class SingleAxisPaintPropertyTest : public PaintPropertyTreeBuilderTest {
+ protected:
+  const TransformPaintPropertyNode* StickyTranslation(const char* id) {
+    const auto* properties = PaintPropertiesForElement(id);
+    return properties ? properties->StickyTranslation() : nullptr;
+  }
+
+  const CompositorStickyConstraint* StickyConstraint(const char* id) {
+    const auto* sticky_translation = StickyTranslation(id);
+    return sticky_translation ? sticky_translation->GetStickyConstraint()
+                              : nullptr;
+  }
+
+  void SetScrollOffset(const char* id, ScrollOffset offset) {
+    GetPaintLayerByElementId(id)->GetScrollableArea()->SetScrollOffset(
+        offset, mojom::blink::ScrollType::kProgrammatic,
+        cc::ScrollSourceType::kNone);
+    UpdateAllLifecyclePhasesForTest();
+  }
+
+  ScopedSingleAxisScrollContainersForTest feature_{true};
+};
+
+INSTANTIATE_PAINT_TEST_SUITE_P(SingleAxisPaintPropertyTest);
+
+TEST_P(SingleAxisPaintPropertyTest, StickyUnderOverflowSplit) {
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      #grandparent-scroller-y {
+        overflow-y: scroll;
+        overflow-x: clip;
+        width: 200px;
+        height: 200px;
+      }
+      #parent-scroller-x {
+        overflow-x: scroll;
+        overflow-y: clip;
+        width: 200px;
+        height: 400px;
+      }
+      #child-sticky-xy {
+        position: sticky;
+        top: 0;
+        left: 0;
+        width: 50px;
+        height: 50px;
+      }
+      .spacer {
+        width: 1000px;
+        height: 1000px;
+      }
+    </style>
+    <div id="grandparent-scroller-y">
+      <div id="parent-scroller-x">
+        <div id="child-sticky-xy"></div>
+        <div class="spacer"></div>
+      </div>
+    </div>
+  )HTML");
+
+  const auto* sticky_translation = StickyTranslation("child-sticky-xy");
+  ASSERT_TRUE(sticky_translation);
+  const auto* constraint = sticky_translation->GetStickyConstraint();
+  ASSERT_TRUE(constraint);
+
+  const auto* parent_scroll =
+      PaintPropertiesForElement("parent-scroller-x")->Scroll();
+  const auto* grandparent_scroll =
+      PaintPropertiesForElement("grandparent-scroller-y")->Scroll();
+  ASSERT_TRUE(parent_scroll);
+  ASSERT_TRUE(grandparent_scroll);
+
+  EXPECT_EQ(parent_scroll->GetCompositorElementId(),
+            constraint->x_scroll_ancestor_element_id);
+  EXPECT_EQ(grandparent_scroll->GetCompositorElementId(),
+            constraint->y_scroll_ancestor_element_id);
+
+  EXPECT_EQ(gfx::Vector2dF(0, 0), sticky_translation->Get2dTranslation());
+
+  SetScrollOffset("parent-scroller-x", ScrollOffset(120, 0));
+
+  const auto* x_scrolled_translation = StickyTranslation("child-sticky-xy");
+  ASSERT_TRUE(x_scrolled_translation);
+  EXPECT_EQ(gfx::Vector2dF(120, 0), x_scrolled_translation->Get2dTranslation());
+
+  SetScrollOffset("grandparent-scroller-y", ScrollOffset(0, 120));
+
+  const auto* xy_scrolled_translation = StickyTranslation("child-sticky-xy");
+  ASSERT_TRUE(xy_scrolled_translation);
+  EXPECT_EQ(gfx::Vector2dF(120, 120),
+            xy_scrolled_translation->Get2dTranslation());
+}
+
+TEST_P(SingleAxisPaintPropertyTest, StickyUnderOverflowSingleAxis) {
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      #scroller-y {
+        overflow-y: scroll;
+        overflow-x: clip;
+        width: 200px;
+        height: 200px;
+      }
+      #child-sticky-y {
+        position: sticky;
+        top: 0;
+        width: 50px;
+        height: 50px;
+      }
+      .spacer {
+        width: 50px;
+        height: 1000px;
+      }
+    </style>
+    <div id="scroller-y">
+      <div id="child-sticky-y"></div>
+      <div class="spacer"></div>
+    </div>
+  )HTML");
+
+  const auto* sticky_translation = StickyTranslation("child-sticky-y");
+  ASSERT_TRUE(sticky_translation);
+  EXPECT_TRUE(sticky_translation->RequiresCompositingForStickyPosition());
+
+  const auto* constraint = sticky_translation->GetStickyConstraint();
+  ASSERT_TRUE(constraint);
+
+  const auto* scroll = PaintPropertiesForElement("scroller-y")->Scroll();
+  ASSERT_TRUE(scroll);
+
+  EXPECT_EQ(CompositorElementId(), constraint->x_scroll_ancestor_element_id);
+  EXPECT_EQ(scroll->GetCompositorElementId(),
+            constraint->y_scroll_ancestor_element_id);
+
+  EXPECT_EQ(gfx::Vector2dF(0, 0), sticky_translation->Get2dTranslation());
+
+  SetScrollOffset("scroller-y", ScrollOffset(0, 120));
+
+  const auto* scrolled_translation = StickyTranslation("child-sticky-y");
+  ASSERT_TRUE(scrolled_translation);
+  EXPECT_EQ(gfx::Vector2dF(0, 120), scrolled_translation->Get2dTranslation());
+}
+
+TEST_P(SingleAxisPaintPropertyTest, StickyUnderOverflowHiddenScroll) {
+  // This test verifies the property tree builder applies sticky offset
+  // correctly when the scroll container for one axis doesn't have a scroll
+  // node, and emits sticky constraints with a null scroll ancestor for that
+  // axis.
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      #grandparent-scroller-y {
+        overflow-y: scroll;
+        overflow-x: clip;
+        width: 200px;
+        height: 200px;
+      }
+      #parent-clip-x {
+        overflow-x: hidden;
+        overflow-y: clip;
+        width: 200px;
+        height: 400px;
+      }
+      #child-sticky-xy {
+        position: sticky;
+        top: 0;
+        left: 0;
+        width: 50px;
+        height: 50px;
+      }
+      .spacer {
+        width: 1000px;
+        height: 1000px;
+      }
+    </style>
+    <div id="grandparent-scroller-y">
+      <div id="parent-clip-x">
+        <div id="child-sticky-xy"></div>
+        <div class="spacer"></div>
+      </div>
+    </div>
+  )HTML");
+
+  const auto* grandparent_scroll =
+      PaintPropertiesForElement("grandparent-scroller-y")->Scroll();
+  ASSERT_TRUE(grandparent_scroll);
+
+  const auto* sticky_translation = StickyTranslation("child-sticky-xy");
+  ASSERT_TRUE(sticky_translation);
+  EXPECT_TRUE(sticky_translation->RequiresCompositingForStickyPosition());
+
+  const auto* constraint = sticky_translation->GetStickyConstraint();
+  ASSERT_TRUE(constraint);
+  EXPECT_EQ(CompositorElementId(), constraint->x_scroll_ancestor_element_id);
+  EXPECT_EQ(grandparent_scroll->GetCompositorElementId(),
+            constraint->y_scroll_ancestor_element_id);
+
+  const auto* parent_clip_properties =
+      PaintPropertiesForElement("parent-clip-x");
+  ASSERT_TRUE(parent_clip_properties);
+  EXPECT_EQ(nullptr, parent_clip_properties->Scroll());
+
+  EXPECT_EQ(gfx::Vector2dF(0, 0), sticky_translation->Get2dTranslation());
+
+  SetScrollOffset("grandparent-scroller-y", ScrollOffset(0, 120));
+
+  const auto* y_scrolled_translation = StickyTranslation("child-sticky-xy");
+  ASSERT_TRUE(y_scrolled_translation);
+  EXPECT_EQ(gfx::Vector2dF(0, 120), y_scrolled_translation->Get2dTranslation());
+
+  // The overflow:hidden scroller will create a scroll node when the scroll
+  // offset is not zero.
+  GetDocument()
+      .getElementById(AtomicString("parent-clip-x"))
+      ->setScrollLeft(50);
+  UpdateAllLifecyclePhasesForTest();
+
+  const auto* new_parent_scroll =
+      PaintPropertiesForElement("parent-clip-x")->Scroll();
+  ASSERT_TRUE(new_parent_scroll);
+
+  const auto* xy_scrolled_translation = StickyTranslation("child-sticky-xy");
+  ASSERT_TRUE(xy_scrolled_translation);
+  EXPECT_EQ(gfx::Vector2dF(50, 120),
+            xy_scrolled_translation->Get2dTranslation());
+
+  const auto* new_constraint = xy_scrolled_translation->GetStickyConstraint();
+  ASSERT_TRUE(new_constraint);
+  EXPECT_EQ(new_parent_scroll->GetCompositorElementId(),
+            new_constraint->x_scroll_ancestor_element_id);
+  EXPECT_EQ(grandparent_scroll->GetCompositorElementId(),
+            new_constraint->y_scroll_ancestor_element_id);
+}
+
+TEST_P(SingleAxisPaintPropertyTest, StickyPerAxisPixelSnapOffset) {
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      #grandparent-scroller-y {
+        overflow-y: scroll;
+        overflow-x: clip;
+        width: 200px;
+        height: 200px;
+      }
+      #parent-scroller-x {
+        overflow-x: scroll;
+        overflow-y: clip;
+        width: 200px;
+        height: 400px;
+      }
+      #child-sticky-negative {
+        position: sticky;
+        top: 0;
+        left: 0;
+        width: 50px;
+        height: 50px;
+        margin-left: 0.5px;
+      }
+      #child-sticky-subpixel {
+        position: sticky;
+        top: 0;
+        left: 0;
+        width: 50px;
+        height: 50px;
+        margin-top: 20.25px;
+        margin-left: 0.125px;
+      }
+      .spacer {
+        width: 1000px;
+        height: 1000px;
+      }
+    </style>
+    <div id="grandparent-scroller-y">
+      <div id="parent-scroller-x">
+        <div id="child-sticky-negative"></div>
+        <div id="child-sticky-subpixel"></div>
+        <div class="spacer"></div>
+      </div>
+    </div>
+  )HTML");
+
+  const auto* negative_constraint = StickyConstraint("child-sticky-negative");
+  ASSERT_TRUE(negative_constraint);
+  EXPECT_EQ(gfx::Vector2dF(-0.499f, 0.f),
+            negative_constraint->pixel_snap_offset);
+
+  const auto* subpixel_constraint = StickyConstraint("child-sticky-subpixel");
+  ASSERT_TRUE(subpixel_constraint);
+  EXPECT_EQ(gfx::Vector2dF(0.125f, 0.25f),
+            subpixel_constraint->pixel_snap_offset);
+
+  SetScrollOffset("parent-scroller-x", ScrollOffset(0.525f, 0.f));
+
+  const auto* scrolled_translation = StickyTranslation("child-sticky-subpixel");
+  ASSERT_TRUE(scrolled_translation);
+  EXPECT_EQ(gfx::Vector2dF(1, 0), scrolled_translation->Get2dTranslation());
+}
+
+TEST_P(SingleAxisPaintPropertyTest, NestedStickyShiftingStickyBox) {
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      #scroller-x {
+        overflow-x: scroll;
+        overflow-y: clip;
+        width: 100px;
+        height: 40px;
+      }
+      #content {
+        width: 1000px;
+        height: 20px;
+        padding-left: 100px;
+        box-sizing: border-box;
+      }
+      #child-sticky {
+        position: sticky;
+        left: 0;
+        display: inline-block;
+        width: 100px;
+        height: 20px;
+      }
+      #child-content {
+        display: inline-block;
+        padding-left: 50px;
+      }
+      #grandchild-sticky {
+        position: sticky;
+        left: 0;
+        display: inline-block;
+        width: 50px;
+        height: 20px;
+      }
+    </style>
+    <div id="scroller-x">
+      <div id="content">
+        <span id="child-sticky">
+          <span id="child-content">
+            <span id="grandchild-sticky"></span>
+          </span>
+        </span>
+      </div>
+    </div>
+  )HTML");
+
+  const auto* child_sticky = StickyTranslation("child-sticky");
+  const auto* grandchild_sticky = StickyTranslation("grandchild-sticky");
+  ASSERT_TRUE(child_sticky);
+  ASSERT_TRUE(grandchild_sticky);
+
+  EXPECT_EQ(gfx::Vector2dF(0, 0), child_sticky->Get2dTranslation());
+  EXPECT_EQ(gfx::Vector2dF(0, 0), grandchild_sticky->Get2dTranslation());
+
+  // Cross the child threshold (100px), but not the grandchild threshold
+  // (100px + 50px).
+  SetScrollOffset("scroller-x", ScrollOffset(125, 0));
+
+  child_sticky = StickyTranslation("child-sticky");
+  grandchild_sticky = StickyTranslation("grandchild-sticky");
+  ASSERT_TRUE(child_sticky);
+  ASSERT_TRUE(grandchild_sticky);
+
+  EXPECT_EQ(gfx::Vector2dF(25, 0), child_sticky->Get2dTranslation());
+  EXPECT_EQ(gfx::Vector2dF(0, 0), grandchild_sticky->Get2dTranslation());
+}
+
+TEST_P(SingleAxisPaintPropertyTest, StickyBlockUnderStickyInline) {
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      #scroller {
+        width: 200px;
+        height: 200px;
+        overflow-x: clip;
+        overflow-y: scroll;
+      }
+      #contents { height: 500px; }
+      #before { height: 100px; }
+      #container { height: 300px; }
+      #outer { display: inline; position: sticky; top: 50px; }
+      #inner {
+        display: block;
+        position: sticky;
+        top: 60px;
+        width: 100px;
+        height: 50px;
+      }
+    </style>
+    <div id="scroller">
+      <div id="contents">
+        <div id="before"></div>
+        <div id="container">
+          <span id="outer"><span id="inner"></span></span>
+        </div>
+      </div>
+    </div>
+  )HTML");
+
+  const auto* outer_translation = StickyTranslation("outer");
+  ASSERT_TRUE(outer_translation);
+  const auto* inner_constraint = StickyConstraint("inner");
+  ASSERT_TRUE(inner_constraint);
+  EXPECT_EQ(outer_translation->GetCompositorElementId(),
+            inner_constraint->nearest_element_shifting_sticky_box);
+}
+
+TEST_P(SingleAxisPaintPropertyTest, NestedStickyShiftingContainingBlock) {
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      #parent-scroller-y {
+        overflow-y: scroll;
+        overflow-x: clip;
+        width: 200px;
+        height: 100px;
+      }
+      #parent-content {
+        width: 200px;
+        height: 1000px;
+        padding-top: 100px;
+        box-sizing: border-box;
+      }
+      #parent-sticky {
+        position: sticky;
+        top: 0;
+        width: 100px;
+        height: 100px;
+      }
+      #child-scroller-x {
+        overflow-x: scroll;
+        overflow-y: clip;
+        width: 100px;
+        height: 100px;
+      }
+      #child-content {
+        width: 1000px;
+        height: 100px;
+        padding-top: 50px;
+        padding-left: 50px;
+        box-sizing: border-box;
+      }
+      #grandchild-sticky {
+        position: sticky;
+        top: 0;
+        left: 0;
+        display: inline-block;
+        width: 50px;
+        height: 20px;
+      }
+    </style>
+    <div id="parent-scroller-y">
+      <div id="parent-content">
+        <div id="parent-sticky">
+          <div id="child-scroller-x">
+            <div id="child-content">
+              <span id="grandchild-sticky"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )HTML");
+
+  const auto* parent_sticky = StickyTranslation("parent-sticky");
+  const auto* grandchild_sticky = StickyTranslation("grandchild-sticky");
+  ASSERT_TRUE(parent_sticky);
+  ASSERT_TRUE(grandchild_sticky);
+
+  EXPECT_EQ(gfx::Vector2dF(0, 0), parent_sticky->Get2dTranslation());
+  EXPECT_EQ(gfx::Vector2dF(0, 0), grandchild_sticky->Get2dTranslation());
+
+  // Cross the grandchild x threshold (50px), but not its y threshold
+  // (100px + 50px).
+  SetScrollOffset("child-scroller-x", ScrollOffset(75, 0));
+
+  parent_sticky = StickyTranslation("parent-sticky");
+  grandchild_sticky = StickyTranslation("grandchild-sticky");
+  ASSERT_TRUE(parent_sticky);
+  ASSERT_TRUE(grandchild_sticky);
+
+  EXPECT_EQ(gfx::Vector2dF(0, 0), parent_sticky->Get2dTranslation());
+  EXPECT_EQ(gfx::Vector2dF(25, 0), grandchild_sticky->Get2dTranslation());
+
+  // Cross the parent sticky threshold (100px), but not the grandchild y
+  // threshold (100px + 50px).
+  SetScrollOffset("parent-scroller-y", ScrollOffset(0, 125));
+
+  parent_sticky = StickyTranslation("parent-sticky");
+  grandchild_sticky = StickyTranslation("grandchild-sticky");
+  ASSERT_TRUE(parent_sticky);
+  ASSERT_TRUE(grandchild_sticky);
+
+  EXPECT_EQ(gfx::Vector2dF(0, 25), parent_sticky->Get2dTranslation());
+  EXPECT_EQ(gfx::Vector2dF(25, 0), grandchild_sticky->Get2dTranslation());
+}
+
+TEST_P(PaintPropertyTreeBuilderTest, ScrollAxisLockPropagatesToCc) {
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      #scroller {
+        overflow: scroll;
+        width: 100px;
+        height: 100px;
+      }
+      .force-scroll {
+        height: 200px;
+        width: 200px;
+      }
+    </style>
+    <div id='scroller'>
+      <div class='force-scroll'></div>
+    </div>
+  )HTML");
+
+  const ObjectPaintProperties* properties =
+      PaintPropertiesForElement("scroller");
+  EXPECT_FALSE(properties->Scroll()->PreventScrollAxisLocking());
+
+  auto* frame_view = GetDocument().GetFrame()->View();
+  auto* pac = frame_view->GetPaintArtifactCompositor();
+
+  const auto* property_trees =
+      pac->RootLayer()->layer_tree_host()->property_trees();
+  const cc::ScrollTree& scroll_tree = property_trees->scroll_tree();
+
+  CompositorElementId element_id =
+      properties->Scroll()->GetCompositorElementId();
+  const cc::ScrollNode* cc_scroll_node =
+      scroll_tree.FindNodeFromElementId(element_id);
+
+  EXPECT_FALSE(cc_scroll_node->prevent_scroll_axis_locking);
+
+  GetElementById("scroller")
+      ->setAttribute(html_names::kStyleAttr,
+                     AtomicString("scroll-axis-lock: none"));
+  UpdateAllLifecyclePhasesForTest();
+
+  properties = PaintPropertiesForElement("scroller");
+  EXPECT_TRUE(properties->Scroll()->PreventScrollAxisLocking());
+
+  cc_scroll_node = scroll_tree.FindNodeFromElementId(element_id);
+  EXPECT_TRUE(cc_scroll_node->prevent_scroll_axis_locking);
+}
+
+TEST_P(PaintPropertyTreeBuilderTest, ElementCanvasTransformPropertyTree) {
+  SetBodyInnerHTML(R"HTML(
+    <canvas layoutsubtree id="canvas">
+      <div id="target" style="translate: 10px 20px"></div>
+    </canvas>
+  )HTML");
+
+  auto* target_element = GetDocument().getElementById(AtomicString("target"));
+  target_element->SetCanvasTransform(gfx::Transform::MakeTranslation(50, 60));
+  UpdateAllLifecyclePhasesForTest();
+
+  const auto* properties = PaintPropertiesForElement("target");
+  ASSERT_TRUE(properties);
+  const auto* canvas_transform = properties->ElementCanvasTransform();
+  ASSERT_TRUE(canvas_transform);
+  EXPECT_EQ(gfx::Transform::MakeTranslation(50, 60),
+            canvas_transform->Matrix());
+  auto* canvas_element = GetDocument().getElementById(AtomicString("canvas"));
+  EXPECT_EQ(&canvas_element->GetLayoutObject()
+                 ->FirstFragment()
+                 .ContentsProperties()
+                 .Transform(),
+            canvas_transform->Parent());
+  EXPECT_EQ(canvas_transform, properties->Translate()->Parent());
 }
 
 }  // namespace blink

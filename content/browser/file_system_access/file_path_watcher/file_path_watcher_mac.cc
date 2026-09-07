@@ -37,7 +37,7 @@ class FilePathWatcherImpl : public FilePathWatcher::PlatformDelegate {
              Type type,
              const FilePathWatcher::Callback& callback) override {
     // Use kqueue for non-recursive watches and FSEvents for recursive ones.
-    DCHECK(!impl_.get());
+    CHECK(!impl_.get(), base::NotFatalUntil::M159);
     if (type == Type::kRecursive) {
       if (!FilePathWatcher::RecursiveWatchAvailable()) {
         return false;
@@ -48,7 +48,7 @@ class FilePathWatcherImpl : public FilePathWatcher::PlatformDelegate {
     } else {
       impl_ = std::make_unique<FilePathWatcherKQueue>();
     }
-    DCHECK(impl_.get());
+    CHECK(impl_.get(), base::NotFatalUntil::M159);
     return impl_->Watch(path, type, callback);
   }
 
@@ -84,6 +84,16 @@ size_t FilePathWatcher::GetQuotaLimitImpl() {
   // so this shouldn't matter.
   return kMaxCreateFSEventCalls *
          features::kFileSystemObserverQuotaLimitMacPercent.Get();
+}
+
+// static
+std::unique_ptr<FilePathWatcher>
+FilePathWatcher::CreateWithFSEventsHookForTesting(base::RepeatingClosure hook) {
+  auto delegate = std::make_unique<FilePathWatcherFSEvents>();
+  delegate->SetOnFSEventsCallbackForTesting(std::move(hook));
+
+  // Use the private constructor of FilePathWatcher
+  return base::WrapUnique(new FilePathWatcher(std::move(delegate)));
 }
 
 }  // namespace content

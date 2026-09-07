@@ -100,6 +100,8 @@ class WebViewGuest : public guest_view::GuestView<WebViewGuest> {
   // Set the zoom mode.
   void SetZoomMode(zoom::ZoomController::ZoomMode zoom_mode);
 
+  // TODO(crbug.com/40436245): allow_scaling may no longer have any effect.
+  // Remove all supporting code.
   void SetAllowScaling(bool allow);
   bool allow_scaling() const { return allow_scaling_; }
 
@@ -254,8 +256,6 @@ class WebViewGuest : public guest_view::GuestView<WebViewGuest> {
                          const content::ContextMenuParams& params) final;
   bool HandleKeyboardEvent(content::WebContents* source,
                            const input::NativeWebKeyboardEvent& event) final;
-  bool PreHandleGestureEvent(content::WebContents* source,
-                             const blink::WebGestureEvent& event) final;
   void RendererResponsive(content::WebContents* source,
                           content::RenderWidgetHost* render_widget_host) final;
   void RendererUnresponsive(
@@ -289,8 +289,7 @@ class WebViewGuest : public guest_view::GuestView<WebViewGuest> {
       base::OnceCallback<void(content::NavigationHandle&)>
           navigation_handle_callback) final;
   void WebContentsCreated(content::WebContents* source_contents,
-                          int opener_render_process_id,
-                          int opener_render_frame_id,
+                          const content::GlobalRenderFrameHostId& opener_id,
                           const std::string& frame_name,
                           const GURL& target_url,
                           content::WebContents* new_contents) final;

@@ -88,6 +88,26 @@ gfx::Insets ChromeLayoutProvider::GetInsetsMetric(int metric) const {
       return gfx::Insets::TLBR(4, 20, 20, 20);
     case INSETS_PAGE_INFO_FOOTER_BUTTON:
       return gfx::Insets::VH(12, 20);
+    case INSETS_ACTION_APP_MENU_POPUP: {
+      if (base::FeatureList::IsEnabled(features::kChroMenuSearch)) {
+        return gfx::Insets::TLBR(4, 16, 16, 16);
+      }
+      return gfx::Insets::VH(16, 16);
+    }
+    case INSETS_ACTION_APP_MENU_ITEM:
+      return gfx::Insets::TLBR(0, 16, 0, 12);
+    case INSETS_ACTION_APP_MENU_FOOTER:
+      return gfx::Insets::TLBR(8, 12, 8, 12);
+    case INSETS_ACTION_APP_MENU_FOOTER_BUTTON:
+      return gfx::Insets::VH(4, 8);
+    case INSETS_PROFILE_SIGNIN_STATUS_CHIP:
+      // Relies on the parent menu's margins for vertical alignment
+      // with other items.
+      return gfx::Insets::VH(0, 12);
+    case INSETS_ACTION_APP_MENU_BLOCK_ROW:
+      return gfx::Insets::VH(4, 4);
+    case INSETS_ACTION_APP_MENU_BLOCK_ENTRY_BUTTON:
+      return gfx::Insets::VH(8, 0);
     default:
       return LayoutProvider::GetInsetsMetric(metric);
   }
@@ -154,9 +174,7 @@ int ChromeLayoutProvider::GetDistanceMetric(int metric) const {
       return 20;
     case DISTANCE_SIDE_PANEL_HEADER_INTERIOR_MARGIN_HORIZONTAL:
       return 4;
-    case DISTANCE_CONTENT_HEIGHT_SIDE_PANEL_CONTENT_RADIUS:
-      return 16;
-    case DISTANCE_TOOLBAR_HEIGHT_SIDE_PANEL_CONTENT_RADIUS:
+    case DISTANCE_SIDE_PANEL_CONTENT_RADIUS:
       return 8;
     case DISTANCE_HORIZONTAL_SEPARATOR_PADDING_PAGE_INFO_VIEW:
       return 20;
@@ -167,9 +185,7 @@ int ChromeLayoutProvider::GetDistanceMetric(int metric) const {
       // top and bottom should be 8dp.
       // The new refreshed button height is 20 + (2 * 6) = 32dp.
       // Therefore, the total infobar height is 32dp + 2 * 12.
-      return base::FeatureList::IsEnabled(features::kInfobarRefresh)
-                 ? 32 + 2 * 12
-                 : 36 + 2 * 8;
+      return 32 + 2 * 12;
     case DISTANCE_PERMISSION_PROMPT_HORIZONTAL_ICON_LABEL_PADDING:
       return 8;
     case DISTANCE_RICH_HOVER_BUTTON_ICON_HORIZONTAL:
@@ -250,6 +266,37 @@ int ChromeLayoutProvider::GetDistanceMetric(int metric) const {
       return 8;
     case DISTANCE_INFOBAR_BUTTON_HORIZONTAL_PADDING:
       return 12;
+    // Block-style Action App Menu layout constants.
+    case DISTANCE_ACTION_APP_MENU_MINIMUM_WIDTH:
+      return 440;
+    case DISTANCE_ACTION_APP_MENU_CONTAINER_CORNER_RADIUS:
+      return 8;
+    case DISTANCE_ACTION_APP_MENU_ITEM_FIRST_TOP_PADDING:
+      return 14;
+    case DISTANCE_ACTION_APP_MENU_ITEM_LAST_BOTTOM_PADDING:
+      return 14;
+    case DISTANCE_ACTION_APP_MENU_ITEM_DEFAULT_VERTICAL_MARGIN:
+      return 8;
+    case DISTANCE_ACTION_APP_MENU_ICON_SIZE:
+      return 16;
+    case DISTANCE_ACTION_APP_MENU_FULL_ITEM_HEIGHT:
+      return 32;
+    case DISTANCE_ACTION_APP_MENU_BLOCK_ENTRY_WIDTH:
+      return 105;
+    case DISTANCE_ACTION_APP_MENU_BLOCK_ENTRY_HEIGHT:
+      return 56;
+    case DISTANCE_ACTION_APP_MENU_BLOCK_ENTRY_ICON_SIZE:
+      return 20;
+    case DISTANCE_ACTION_APP_MENU_FOOTER_BUTTON_SPACING:
+      return 12;
+    case DISTANCE_ACTION_APP_MENU_FOOTER_BUTTON_BETWEEN_CHILD_SPACING:
+    case DISTANCE_ACTION_APP_MENU_FOOTER_BUTTON_CORNER_RADIUS:
+    case DISTANCE_ACTION_APP_MENU_HEADER_VERTICAL_MARGIN:
+    case DISTANCE_ACTION_APP_MENU_BLOCK_ROW_SPACING:
+    case DISTANCE_ACTION_APP_MENU_BLOCK_ENTRY_CORNER_RADIUS:
+      return 8;
+    case DISTANCE_ACTION_APP_MENU_BLOCK_ENTRY_BETWEEN_CHILD_SPACING:
+      return 4;
   }
   NOTREACHED();
 }

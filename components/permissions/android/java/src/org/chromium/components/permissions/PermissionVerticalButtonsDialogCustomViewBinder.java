@@ -5,6 +5,7 @@
 package org.chromium.components.permissions;
 
 import android.content.res.ColorStateList;
+import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.text.Spannable;
 import android.text.SpannableStringBuilder;
@@ -23,7 +24,7 @@ import org.chromium.ui.modelutil.PropertyModel;
 import java.util.ArrayList;
 import java.util.List;
 
-/** The {@View} binder class for the PermissionDialogCustomView MVC. */
+/** The {@link View} binder class for the PermissionDialogCustomView MVC. */
 @NullMarked
 class PermissionVerticalButtonsDialogCustomViewBinder {
     public static void bind(PropertyModel model, View customView, PropertyKey propertyKey) {
@@ -54,7 +55,7 @@ class PermissionVerticalButtonsDialogCustomViewBinder {
             View customView, String messageText, List<Pair<Integer, Integer>> boldedRanges) {
         TextView messageTextView = customView.findViewById(R.id.text);
         final SpannableStringBuilder sb = new SpannableStringBuilder(messageText);
-        final StyleSpan bss = new StyleSpan(android.graphics.Typeface.BOLD);
+        final StyleSpan bss = new StyleSpan(Typeface.BOLD);
         boldedRanges.forEach(
                 boldRange -> {
                     sb.setSpan(

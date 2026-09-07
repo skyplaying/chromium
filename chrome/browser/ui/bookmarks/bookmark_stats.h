@@ -8,6 +8,7 @@
 #include "base/time/time.h"
 #include "components/profile_metrics/browser_profile_type.h"
 
+class GURL;
 class Profile;
 
 namespace bookmarks {
@@ -75,6 +76,10 @@ struct BookmarkLaunchAction {
 };
 std::ostream& operator<<(std::ostream& out, const BookmarkLaunchAction& action);
 
+// Records an app launch metric if the URL is associated with an installed
+// Chrome App.
+void RecordAppLaunchForBookmarkBar(Profile* profile, const GURL& url);
+
 // Records the launch of a bookmark for UMA purposes.
 void RecordBookmarkLaunch(BookmarkLaunchLocation location,
                           profile_metrics::BrowserProfileType profile_type);
@@ -100,9 +105,6 @@ void RecordBookmarkRemoved(BookmarkLaunchLocation location);
 // open tabs... the action is recorded only once and not as many times as
 // count of tabs that were bookmarked.
 void RecordBookmarksAdded(const Profile* profile);
-
-// Records the user bookmarking all tabs, along with the open tabs count.
-void RecordBookmarkAllTabsWithTabsCount(const Profile* profile, int count);
 
 // Records that a bookmark or bookmarks were dropped. Determines the type of
 // drop operation based on the data and parent node.

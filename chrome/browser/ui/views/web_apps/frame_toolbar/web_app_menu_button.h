@@ -12,7 +12,6 @@
 #include "base/memory/raw_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/timer/timer.h"
-#include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/ui/views/frame/app_menu_button.h"
 #include "chrome/browser/ui/web_applications/web_app_menu_model.h"
 #include "chrome/browser/web_applications/web_app_registrar_observer.h"
@@ -31,7 +30,6 @@ class WebAppMenuButton : public AppMenuButton,
   METADATA_HEADER(WebAppMenuButton, AppMenuButton)
 
  public:
-  static int GetMenuButtonSizeForBrowser(Browser* browser);
   explicit WebAppMenuButton(BrowserView* browser_view);
   WebAppMenuButton(const WebAppMenuButton&) = delete;
   WebAppMenuButton& operator=(const WebAppMenuButton&) = delete;
@@ -57,6 +55,7 @@ class WebAppMenuButton : public AppMenuButton,
 
   // Shows the app menu. |run_types| denotes the MenuRunner::RunTypes associated
   // with the menu.
+  using AppMenuButton::ShowMenu;
   void ShowMenu(int run_types);
 
   // Safely waits for the label text to be updated, as per the contracts of

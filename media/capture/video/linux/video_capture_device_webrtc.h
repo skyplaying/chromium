@@ -9,8 +9,6 @@
 
 #include <optional>
 
-#include "base/task/single_thread_task_runner.h"
-#include "base/threading/thread.h"
 #include "base/time/time.h"
 #include "media/capture/video/video_capture_device_factory.h"
 #include "media/capture/video_capture_types.h"
@@ -48,6 +46,7 @@ class VideoCaptureDeviceWebRtc : public VideoCaptureDevice,
   void GetPhotoState(GetPhotoStateCallback callback) override;
   void SetPhotoOptions(mojom::PhotoSettingsPtr settings,
                        SetPhotoOptionsCallback callback) override;
+  void InvalidateBuffers() override;
 
   int32_t OnRawFrame(uint8_t* video_frame,
                      size_t video_frame_length,

@@ -25,28 +25,28 @@ class SavedTabGroupOnCloseHelper : public content::WebContentsObserver {
 
   ~SavedTabGroupOnCloseHelper() override;
 
-  // Sets the closed saved group for which we will add |tab_| when
-  // |tab_| is deleted.
+  // Sets the closed saved group for which we will add `tab_` when
+  // `tab_` is deleted.
   void SetGroup(const base::Uuid&);
 
   void UnsetGroup();
 
-  // Testing function to check if we are set to add |tab_| to a closed
-  // saved group when |tab_| is deleted.
+  // Testing function to check if we are set to add `tab_` to a closed
+  // saved group when `tab_` is deleted.
   bool WillTryToAddToSavedGroupOnClose();
 
   // contents::WebContentsObserver:
   void BeforeUnloadDialogCancelled() override;
 
   // Callback to tabs::TabInterface::RegisterWillDetach to get updates
-  // when |tab_| is closing.
+  // when `tab_` is closing.
   void OnTabClose(tabs::TabInterface* tab,
                   tabs::TabInterface::DetachReason reason);
 
  private:
   const raw_ptr<TabGroupSyncService> service_ = nullptr;
   const raw_ptr<tabs::TabInterface> tab_ = nullptr;
-  std::optional<base::Uuid> saved_tab_group_id_ = std::nullopt;
+  std::optional<base::Uuid> saved_tab_group_id_;
 
   base::CallbackListSubscription tab_detach_subscription_;
 };

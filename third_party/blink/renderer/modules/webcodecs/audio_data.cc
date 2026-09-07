@@ -6,6 +6,7 @@
 
 #include "base/compiler_specific.h"
 #include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
 #include "base/notreached.h"
 #include "base/numerics/checked_math.h"
 #include "base/numerics/safe_conversions.h"
@@ -19,6 +20,7 @@
 #include "third_party/blink/renderer/bindings/modules/v8/v8_audio_data_init.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
@@ -107,16 +109,24 @@ media::SampleFormat BlinkFormatToMediaFormat(V8AudioSampleFormat blink_format) {
 
 template <typename SampleType>
 void CopyToInterleaved(uint8_t* dest_data,
-                       const std::vector<uint8_t*>& src_channels_data,
+                       const std::vector<raw_ptr<uint8_t>>& src_channels_data,
                        const int frame_offset,
-                       const int frames_to_copy) {
+                       const int frames_to_copy,
+                       ExceptionState& exception_state) {
   const int channels = static_cast<int>(src_channels_data.size());
+
+  if (!base::CheckMul(frames_to_copy, channels).IsValid<int>()) {
+    exception_state.ThrowTypeError(
+        "Provided options cause overflow when calculating offset.");
+    return;
+  }
 
   SampleType* dest = reinterpret_cast<SampleType*>(dest_data);
   UNSAFE_TODO({
     for (int ch = 0; ch < channels; ++ch) {
       const SampleType* src_start =
-          reinterpret_cast<SampleType*>(src_channels_data[ch]) + frame_offset;
+          reinterpret_cast<SampleType*>(src_channels_data[ch].get()) +
+          frame_offset;
       for (int i = 0; i < frames_to_copy; ++i) {
         dest[i * channels + ch] = src_start[i];
       }
@@ -146,8 +156,8 @@ void CopyToPlanar(uint8_t* dest_data,
   // below.
   if (overflow ||
       !base::CheckMul(frames_to_copy, src_channel_count).IsValid()) {
-    exception_state.ThrowTypeError(String::Format(
-        "Provided options cause overflow when calculating offset."));
+    exception_state.ThrowTypeError(
+        "Provided options cause overflow when calculating offset.");
     return;
   }
 
@@ -180,6 +190,39 @@ media::SampleFormat RemovePlanar(media::SampleFormat format) {
 
     default:
       NOTREACHED();
+  }
+}
+
+template <typename T>
+bool IsSpanAligned(base::span<const uint8_t> span) {
+  if constexpr (std::is_same_v<T, uint8_t>) {
+    return true;
+  } else {
+    return base::IsAligned(span.data(), sizeof(T));
+  }
+}
+
+template <typename SampleTypeTraits>
+void ConvertToInterleaved(media::AudioBus* source,
+                          size_t source_offset,
+                          base::span<uint8_t> dest) {
+  using SampleType = typename SampleTypeTraits::ValueType;
+
+  if (IsSpanAligned<SampleType>(dest)) {
+    source->ToInterleavedBytesPartial<SampleTypeTraits>(source_offset, dest);
+    return;
+  }
+
+  // `dest` is not aligned. De-interleave into a temporary aligned destination
+  // and copy it it over after.
+  std::vector<SampleType> temp_dest;
+  temp_dest.resize(dest.size() / sizeof(SampleType));
+  source->ToInterleavedPartial<SampleTypeTraits>(source_offset, temp_dest);
+  if constexpr (std::is_same_v<SampleType, float>) {
+    dest.copy_from_nonoverlapping(
+        base::as_byte_span(base::allow_nonunique_obj, temp_dest));
+  } else {
+    dest.copy_from_nonoverlapping(base::as_byte_span(temp_dest));
   }
 }
 
@@ -225,9 +268,9 @@ AudioData::AudioData(ScriptState* script_state,
   if (init->numberOfChannels() > media::limits::kMaxChannels) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kNotSupportedError,
-        String::Format("numberOfChannels exceeds supported implementation "
-                       "limits: %u vs %u.",
-                       init->numberOfChannels(), media::limits::kMaxChannels));
+        Format("numberOfChannels exceeds supported implementation limits: {} "
+               "vs {}.",
+               init->numberOfChannels(), media::limits::kMaxChannels));
     return;
   }
 
@@ -255,8 +298,8 @@ AudioData::AudioData(ScriptState* script_state,
   }
   if (total_bytes > array_span.size()) {
     exception_state.ThrowTypeError(
-        String::Format("data is too small: needs %u bytes, received %zu.",
-                       total_bytes, array_span.size()));
+        Format("data is too small: needs {} bytes, received {}.", total_bytes,
+               array_span.size()));
     return;
   }
 
@@ -277,19 +320,15 @@ AudioData::AudioData(ScriptState* script_state,
       sample_rate > media::limits::kMaxSampleRate) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kNotSupportedError,
-        String::Format("sampleRate is outside of supported implementation "
-                       "limits: need between %u and %u, received %d.",
-                       media::limits::kMinSampleRate,
-                       media::limits::kMaxSampleRate, sample_rate));
+        Format("sampleRate is outside of supported implementation limits: need "
+               "between {} and {}, received {}.",
+               media::limits::kMinSampleRate, media::limits::kMaxSampleRate,
+               sample_rate));
     return;
   }
 
   format_ = init->format();
-  auto channel_layout =
-      init->numberOfChannels() > 8
-          // GuesschannelLayout() doesn't know how to guess above 8 channels.
-          ? media::CHANNEL_LAYOUT_DISCRETE
-          : media::GuessChannelLayout(init->numberOfChannels());
+  auto channel_layout = media::GuessChannelLayout(init->numberOfChannels());
 
   bool sample_aligned = base::IsAligned(array_span.data(), bytes_per_sample);
   if (buffer_contents.IsValid() && sample_aligned) {
@@ -306,30 +345,28 @@ AudioData::AudioData(ScriptState* script_state,
     return;
   }
 
-  std::vector<const uint8_t*> channel_ptrs;
+  std::vector<base::span<const uint8_t>> channel_spans;
   if (media::IsInterleaved(media_format)) {
     // Interleaved data can directly added.
-    channel_ptrs.push_back(array_span.data());
+    channel_spans.push_back(array_span.first(total_bytes));
   } else {
+    auto input_data = array_span.first(total_bytes);
     // Planar data needs one pointer per channel.
-    channel_ptrs.resize(init->numberOfChannels());
+    channel_spans.resize(init->numberOfChannels());
 
     uint32_t plane_size_in_bytes =
         init->numberOfFrames() *
         media::SampleFormatToBytesPerChannel(media_format);
 
-    const uint8_t* plane_start =
-        reinterpret_cast<const uint8_t*>(array_span.data());
-
     for (unsigned ch = 0; ch < init->numberOfChannels(); ++ch) {
-      UNSAFE_TODO(channel_ptrs[ch] = plane_start + ch * plane_size_in_bytes);
+      channel_spans[ch] = input_data.take_first(plane_size_in_bytes);
     }
+    CHECK(input_data.empty());
   }
 
   data_ = media::AudioBuffer::CopyFrom(
       media_format, channel_layout, init->numberOfChannels(), sample_rate,
-      init->numberOfFrames(), channel_ptrs.data(),
-      base::Microseconds(timestamp_));
+      init->numberOfFrames(), channel_spans, base::Microseconds(timestamp_));
   CHECK(data_);
 }
 
@@ -428,8 +465,8 @@ uint32_t AudioData::allocationSize(AudioDataCopyToOptions* copy_to_options,
   const uint32_t total_frames = static_cast<uint32_t>(data_->frame_count());
 
   if (offset >= total_frames) {
-    exception_state.ThrowRangeError(String::Format(
-        "Frame offset exceeds total frames (%u >= %u).", offset, total_frames));
+    exception_state.ThrowRangeError(Format(
+        "Frame offset exceeds total frames ({} >= {}).", offset, total_frames));
     return 0;
   }
 
@@ -440,8 +477,8 @@ uint32_t AudioData::allocationSize(AudioDataCopyToOptions* copy_to_options,
 
   if (frame_count > available_frames) {
     exception_state.ThrowRangeError(
-        String::Format("Frame count exceeds available_frames frames (%u > %u).",
-                       frame_count, available_frames));
+        Format("Frame count exceeds available_frames frames ({} > {}).",
+               frame_count, available_frames));
     return 0;
   }
 
@@ -460,8 +497,8 @@ uint32_t AudioData::allocationSize(AudioDataCopyToOptions* copy_to_options,
   if (overflow || !base::CheckMul(sample_count,
                                   media::SampleFormatToBytesPerChannel(format))
                        .AssignIfValid(&allocation_size)) {
-    exception_state.ThrowTypeError(String::Format(
-        "Provided options cause overflow when calculating allocation size."));
+    exception_state.ThrowTypeError(
+        "Provided options cause overflow when calculating allocation size.");
     return 0;
   }
 
@@ -513,7 +550,7 @@ void AudioData::copyTo(const AllowSharedBufferSource* destination,
 
   // Interleave data.
   if (!media::IsInterleaved(src_format) && media::IsInterleaved(dest_format)) {
-    CopyToInterleaved(dest_wrapper, copy_to_options);
+    CopyToInterleaved(dest_wrapper, copy_to_options, exception_state);
     return;
   }
 
@@ -551,8 +588,8 @@ void AudioData::copyTo(const AllowSharedBufferSource* destination,
       !base::CheckMul(offset_in_samples,
                       media::SampleFormatToBytesPerChannel(dest_format))
            .AssignIfValid(&offset_in_bytes)) {
-    exception_state.ThrowTypeError(String::Format(
-        "Provided options cause overflow when calculating offset."));
+    exception_state.ThrowTypeError(
+        "Provided options cause overflow when calculating offset.");
     return;
   }
 
@@ -589,44 +626,36 @@ void AudioData::CopyConvert(base::span<uint8_t> dest,
   const uint32_t frame_count = copy_to_options->hasFrameCount()
                                    ? copy_to_options->frameCount()
                                    : available_frames;
+
+  const uint32_t sample_count = frame_count * numberOfChannels();
   CHECK_LE(frame_count, available_frames);
 
   if (media::IsInterleaved(dest_format)) {
     CHECK_EQ(0u, copy_to_options->planeIndex());
 
+    auto partial_dest = dest.first(
+        sample_count * media::SampleFormatToBytesPerChannel(dest_format));
+
     switch (dest_format) {
-      case media::kSampleFormatU8: {
-        data_as_f32_bus_
-            ->ToInterleavedPartial<media::UnsignedInt8SampleTypeTraits>(
-                offset, frame_count, dest.data());
+      case media::kSampleFormatU8:
+        ConvertToInterleaved<media::UnsignedInt8SampleTypeTraits>(
+            data_as_f32_bus_.get(), offset, partial_dest);
         return;
-      }
 
-      case media::kSampleFormatS16: {
-        int16_t* dest_data = reinterpret_cast<int16_t*>(dest.data());
-
-        data_as_f32_bus_
-            ->ToInterleavedPartial<media::SignedInt16SampleTypeTraits>(
-                offset, frame_count, dest_data);
+      case media::kSampleFormatS16:
+        ConvertToInterleaved<media::SignedInt16SampleTypeTraits>(
+            data_as_f32_bus_.get(), offset, partial_dest);
         return;
-      }
 
-      case media::kSampleFormatS32: {
-        int32_t* dest_data = reinterpret_cast<int32_t*>(dest.data());
-
-        data_as_f32_bus_
-            ->ToInterleavedPartial<media::SignedInt32SampleTypeTraits>(
-                offset, frame_count, dest_data);
+      case media::kSampleFormatS32:
+        ConvertToInterleaved<media::SignedInt32SampleTypeTraits>(
+            data_as_f32_bus_.get(), offset, partial_dest);
         return;
-      }
 
-      case media::kSampleFormatF32: {
-        float* dest_data = reinterpret_cast<float*>(dest.data());
-
-        data_as_f32_bus_->ToInterleavedPartial<media::Float32SampleTypeTraits>(
-            offset, frame_count, dest_data);
+      case media::kSampleFormatF32:
+        ConvertToInterleaved<media::Float32SampleTypeTraits>(
+            data_as_f32_bus_.get(), offset, partial_dest);
         return;
-      }
 
       default:
         NOTREACHED();
@@ -683,7 +712,8 @@ void AudioData::CopyConvert(base::span<uint8_t> dest,
 }
 
 void AudioData::CopyToInterleaved(base::span<uint8_t> dest,
-                                  AudioDataCopyToOptions* copy_to_options) {
+                                  AudioDataCopyToOptions* copy_to_options,
+                                  ExceptionState& exception_state) {
   const media::SampleFormat src_format = data_->sample_format();
   const media::SampleFormat dest_format =
       BlinkFormatToMediaFormat(copy_to_options->format());
@@ -704,19 +734,22 @@ void AudioData::CopyToInterleaved(base::span<uint8_t> dest,
   switch (dest_format) {
     case media::kSampleFormatU8:
       ::blink::CopyToInterleaved<uint8_t>(dest.data(), channel_data,
-                                          frame_offset, frames_to_copy);
+                                          frame_offset, frames_to_copy,
+                                          exception_state);
       return;
     case media::kSampleFormatS16:
       ::blink::CopyToInterleaved<int16_t>(dest.data(), channel_data,
-                                          frame_offset, frames_to_copy);
+                                          frame_offset, frames_to_copy,
+                                          exception_state);
       return;
     case media::kSampleFormatS32:
       ::blink::CopyToInterleaved<int32_t>(dest.data(), channel_data,
-                                          frame_offset, frames_to_copy);
+                                          frame_offset, frames_to_copy,
+                                          exception_state);
       return;
     case media::kSampleFormatF32:
       ::blink::CopyToInterleaved<float>(dest.data(), channel_data, frame_offset,
-                                        frames_to_copy);
+                                        frames_to_copy, exception_state);
       return;
     default:
       NOTREACHED();

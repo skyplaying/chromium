@@ -188,7 +188,8 @@ void DCOMPTextureWrapperImpl::CreateVideoFrame(
                             gfx::ColorSpace::TransferID::BT709),
             kTopLeft_GrSurfaceOrigin, kPremul_SkAlphaType,
             gpu::SHARED_IMAGE_USAGE_DISPLAY_READ |
-                gpu::SHARED_IMAGE_USAGE_RASTER_READ,
+                gpu::SHARED_IMAGE_USAGE_RASTER_READ |
+                gpu::SHARED_IMAGE_USAGE_SCANOUT,
             GL_TEXTURE_EXTERNAL_OES, "DCOMPTextureWrapperImpl");
 
     CHECK(shared_image);
@@ -199,16 +200,14 @@ void DCOMPTextureWrapperImpl::CreateVideoFrame(
 
   scoped_refptr<gpu::ClientSharedImage> shared_image =
       dcomp_texture_resources_->GetSharedImage();
-
+  CHECK(shared_image);
   auto frame = media::VideoFrame::WrapSharedImage(
-      media::PIXEL_FORMAT_BGRA, shared_image, gpu::SyncToken(),
+      media::PIXEL_FORMAT_ARGB, shared_image, gpu::SyncToken(),
       base::BindPostTask(
           media_task_runner_,
           base::BindOnce(&OnReleaseVideoFrame, dcomp_texture_resources_)),
-      shared_image->size(), gfx::Rect(shared_image->size()), natural_size_,
-      base::TimeDelta());
+      gfx::Rect(shared_image->size()), natural_size_, base::TimeDelta());
 
-  frame->set_color_space(shared_image->color_space());
   frame->metadata().dcomp_surface = true;
 
   std::move(create_video_frame_cb).Run(frame);

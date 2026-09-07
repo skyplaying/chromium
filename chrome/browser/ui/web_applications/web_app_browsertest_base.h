@@ -11,7 +11,6 @@
 #include "chrome/browser/preloading/scoped_prewarm_feature_list.h"
 #include "chrome/browser/web_applications/os_integration/os_integration_manager.h"
 #include "chrome/browser/web_applications/test/os_integration_test_override_impl.h"
-#include "chrome/browser/web_applications/web_app_callback_app_identity.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/browser/web_applications/web_app_ui_manager.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
@@ -24,6 +23,7 @@
 #include "chrome/browser/ui/ash/test_util.h"
 #endif
 
+class BrowserWindowInterface;
 class Profile;
 
 namespace base {
@@ -45,7 +45,23 @@ using WebAppBrowserTestBaseParent = ChromeOSBrowserUITest;
 using WebAppBrowserTestBaseParent = MixinBasedInProcessBrowserTest;
 #endif
 
-// Base class for tests of user interface support for web applications.
+// This is the recommended base class for Web App browsertests. It provides
+// essential baseline functionality, including:
+// 1. Automatic faking of OS integration (e.g. creating desktop shortcuts) via
+//   `OsIntegrationTestOverrideImpl` (inspect via `os_integration_override()`).
+// 2. Dynamic replacement of $PORT in static test data via
+//    RegisterPortReplacementHandler
+// 3. Dynamically serving .well-known file for app migration and scope
+//    extensions using RegisterAssociatedOriginWellKnownHandler.
+// 4. Waiting for the WebAppProvider system to fully start in SetUpOnMainThread.
+//
+// Like all browsertests, this runs a real browser, meaning the full
+// `WebAppProvider` system starts automatically during profile initialization.
+// Faking dependencies is rarely needed and generally discouraged in
+// browsertests. To fake a dependency, use a `FakeWebAppProviderCreator` in the
+// test fixture's constructor to intercept the provider creation before the
+// system starts. For more details, see:
+// chrome/browser/web_applications/docs/testing.md
 class WebAppBrowserTestBase : public WebAppBrowserTestBaseParent {
  public:
   WebAppBrowserTestBase();
@@ -65,17 +81,17 @@ class WebAppBrowserTestBase : public WebAppBrowserTestBaseParent {
   void UninstallWebApp(const webapps::AppId& app_id);
 
   // Launches the app as a window and returns the browser.
-  Browser* LaunchWebAppBrowser(const webapps::AppId&);
+  BrowserWindowInterface* LaunchWebAppBrowser(const webapps::AppId&);
 
   // Launches the app, waits for the app url to load.
-  Browser* LaunchWebAppBrowserAndWait(const webapps::AppId&);
+  BrowserWindowInterface* LaunchWebAppBrowserAndWait(const webapps::AppId&);
 
   // Launches the app, waits for it to load and finish the installability check.
-  Browser* LaunchWebAppBrowserAndAwaitInstallabilityCheck(
+  BrowserWindowInterface* LaunchWebAppBrowserAndAwaitInstallabilityCheck(
       const webapps::AppId&);
 
   // Launches the app as a tab and returns the browser.
-  Browser* LaunchBrowserForWebAppInTab(const webapps::AppId&);
+  BrowserWindowInterface* LaunchBrowserForWebAppInTab(const webapps::AppId&);
 
   // Simulates a page navigating itself to an URL and waits for the
   // navigation.
@@ -83,19 +99,42 @@ class WebAppBrowserTestBase : public WebAppBrowserTestBaseParent {
                                         const GURL& url);
 
   // Returns whether the installable check passed.
-  static bool NavigateAndAwaitInstallabilityCheck(Browser* browser,
-                                                  const GURL& url);
+  static bool NavigateAndAwaitInstallabilityCheck(
+      BrowserWindowInterface* browser,
+      const GURL& url);
 
-  Browser* NavigateInNewWindowAndAwaitInstallabilityCheck(const GURL&);
+  BrowserWindowInterface* NavigateInNewWindowAndAwaitInstallabilityCheck(
+      const GURL&);
 
   std::optional<webapps::AppId> FindAppWithUrlInScope(const GURL& url);
 
   // Opens |url| in a new popup window with the dimensions |popup_size|.
-  Browser* OpenPopupAndWait(Browser* browser,
-                            const GURL& url,
-                            const gfx::Size& popup_size);
+  BrowserWindowInterface* OpenPopupAndWait(BrowserWindowInterface* browser,
+                                           const GURL& url,
+                                           const gfx::Size& popup_size);
 
   OsIntegrationTestOverrideImpl& os_integration_override();
+
+  // Registers a request handler with the `https_server_` that intercepts
+  // requests for files ending with "manifest.replaceport.json". It dynamically
+  // replaces all occurrences of the string "$PORT" in the file's content
+  // with the actual port number the server is running on.
+  void RegisterPortReplacementHandler();
+
+  // Registers a request handler with the `https_server_` that intercepts
+  // requests for the `/.well-known/web-app-origin-association` endpoint.
+  // It responds to requests exactly matching the `source_host` domain
+  // and returns a valid Web App Origin Association JSON authorizing the
+  // `target_manifest_id_template` (with $PORT replaced by the active port)
+  // to migrate from the source app.
+  // Note: This can currently only be called once per host (or origin).
+  // TODO(crbug.com/494641551): Create a map of origin -> target manifests and
+  // have a single handler look at that map instead of registering multiple
+  // handlers.
+  void RegisterAssociatedOriginWellKnownHandler(
+      const std::string& source_host,
+      const std::string& target_manifest_id_template,
+      const std::string& allowed_scope = "/");
 
  protected:
   WebAppBrowserTestBase(
@@ -104,7 +143,6 @@ class WebAppBrowserTestBase : public WebAppBrowserTestBaseParent {
 
   content::WebContents* OpenApplication(const webapps::AppId&);
 
-  net::EmbeddedTestServer* https_server() { return &https_server_; }
 
   virtual void OnWillCreateBrowserContextServices(
       content::BrowserContext* context) {}
@@ -117,6 +155,10 @@ class WebAppBrowserTestBase : public WebAppBrowserTestBaseParent {
   void SetUp() override;
   void TearDown() override;
   void SetUpInProcessBrowserTestFixture() override;
+
+  std::unique_ptr<net::test_server::HttpResponse> HandlePortReplacement(
+      const net::test_server::HttpRequest& request);
+
   void TearDownInProcessBrowserTestFixture() override;
   void TearDownOnMainThread() override;
   void SetUpCommandLine(base::CommandLine* command_line) override;
@@ -133,7 +175,6 @@ class WebAppBrowserTestBase : public WebAppBrowserTestBaseParent {
   base::TimeTicks start_time_ = base::TimeTicks::Now();
 
   base::test::ScopedFeatureList scoped_feature_list_;
-  net::EmbeddedTestServer https_server_;
   base::CallbackListSubscription create_services_subscription_;
 
   // Similar to net::MockCertVerifier, but also updates the CertVerifier
@@ -142,7 +183,6 @@ class WebAppBrowserTestBase : public WebAppBrowserTestBaseParent {
   // Store separately instead of accessing directly from `browser()`, as some
   // tests close that browser (and thus make it a UAF).
   base::WeakPtr<Profile> browser_profile_;
-  base::AutoReset<std::optional<AppIdentityUpdate>> update_dialog_scope_;
 };
 
 }  // namespace web_app

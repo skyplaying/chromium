@@ -9,14 +9,14 @@ import type {CrUrlListItemElement} from './cr_url_list_item.js';
 export function getHtml(this: CrUrlListItemElement) {
   // clang-format off
   return html`
-<a id="anchor" .href="${this.url}" ?hidden="${!this.asAnchor}"
+<a id="anchor" .href="${this.url || nothing}" ?hidden="${!this.asAnchor}"
     target="${this.asAnchorTarget}"
-    aria-label="${this.getItemAriaLabel_()}"
-    aria-description="${this.getItemAriaDescription_() || nothing}">
+    aria-label="${this.getAnchorAriaLabel_() || nothing}"
+    aria-description="${this.getAnchorAriaDescription_() || nothing}">
 </a>
 <button id="button" ?hidden="${this.asAnchor}"
-    aria-label="${this.getItemAriaLabel_()}"
-    aria-description="${this.getItemAriaDescription_() || nothing}">
+    aria-label="${this.getButtonAriaLabel_() || nothing}"
+    aria-description="${this.getButtonAriaDescription_() || nothing}">
 </button>
 
 <div id="item">
@@ -50,20 +50,20 @@ export function getHtml(this: CrUrlListItemElement) {
       </div>
     </slot>
   </div>
-  <slot id="content" name="content" @slotchange="${this.onContentSlotChange_}">
+  <slot id="content" name="content" @slotchange="${this.onContentSlotchange_}">
   </slot>
   <div id="metadata" class="metadata">
     <span class="title">${this.title}</span>
     <div class="descriptions">
       <div class="description" ?hidden="${!this.description}">
-        <span class="description-text">${this.description}</span>
+        <span class="description-text"><bdi>${this.description}</bdi></span>
         <span class="description-meta" ?hidden="${!this.descriptionMeta}">
           &middot; ${this.descriptionMeta}
         </span>
       </div>
       <div id="badgesContainer" class="badges">
         <slot id="badges" name="badges"
-            @slotchange="${this.onBadgesSlotChange_}">
+            @slotchange="${this.onBadgesSlotchange_}">
         </slot>
       </div>
     </div>

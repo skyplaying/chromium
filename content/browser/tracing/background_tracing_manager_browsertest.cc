@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "services/tracing/public/cpp/background_tracing/background_tracing_manager.h"
+
 #include <stddef.h>
 
 #include <memory>
@@ -30,7 +32,7 @@
 #include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_proto_loader.h"
-#include "base/test/trace_event_analyzer.h"
+#include "base/test/tracing/trace_event_analyzer.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/trace_event/interned_args_helper.h"
 #include "base/trace_event/named_trigger.h"
@@ -39,13 +41,11 @@
 #include "content/browser/devtools/protocol/devtools_protocol_test_support.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/tracing/background_tracing_manager_impl.h"
-#include "content/browser/tracing/background_tracing_rule.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/back_forward_cache_util.h"
-#include "content/public/test/background_tracing_test_support.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
@@ -54,6 +54,7 @@
 #include "content/shell/browser/shell.h"
 #include "net/dns/mock_host_resolver.h"
 #include "services/tracing/perfetto/privacy_filtering_check.h"
+#include "services/tracing/public/cpp/background_tracing/background_tracing_rule.h"
 #include "services/tracing/public/cpp/stack_sampling/tracing_sampler_profiler.h"
 #include "services/tracing/public/cpp/trace_startup_config.h"
 #include "services/tracing/public/cpp/tracing_features.h"
@@ -63,6 +64,10 @@
 #include "third_party/re2/src/re2/re2.h"
 #include "third_party/zlib/google/compression_utils.h"
 #include "third_party/zlib/zlib.h"
+
+#if BUILDFLAG(IS_OZONE)
+#include "ui/ozone/public/ozone_platform.h"
+#endif
 
 namespace content {
 namespace {
@@ -94,7 +99,7 @@ class TestStartupPreferenceManagerImpl
 //   [... abort ...]
 //   background_tracing_helper->WaitForScenarioIdle();
 class TestBackgroundTracingHelper
-    : public BackgroundTracingManager::EnabledStateTestObserver,
+    : public tracing::BackgroundTracingManager::EnabledStateTestObserver,
       public perfetto::trace_processor::json::OutputWriter {
  public:
   TestBackgroundTracingHelper() {
@@ -290,9 +295,10 @@ IN_PROC_BROWSER_TEST_F(BackgroundTracingManagerBrowserTest,
       }
     }
   )pb";
-  auto scenarios = BackgroundTracingManager::GetInstance().AddPresetScenarios(
-      ParseFieldTracingConfigFromText(kScenarioConfig),
-      BackgroundTracingManager::NO_DATA_FILTERING);
+  auto scenarios =
+      tracing::BackgroundTracingManager::GetInstance().AddPresetScenarios(
+          ParseFieldTracingConfigFromText(kScenarioConfig),
+          tracing::BackgroundTracingManager::NO_DATA_FILTERING);
   EXPECT_EQ(std::vector<std::string>({"test_scenario"}), scenarios);
   {
     auto all_scenarios =
@@ -302,12 +308,13 @@ IN_PROC_BROWSER_TEST_F(BackgroundTracingManagerBrowserTest,
     scenario->scenario_name = "test_scenario";
     scenario->is_local_scenario = true;
     scenario->is_enabled = false;
-    scenario->current_state = TracingScenario::State::kDisabled;
+    scenario->current_state = tracing::TracingScenario::State::kDisabled;
     expected.push_back(std::move(scenario));
     EXPECT_EQ(expected, all_scenarios);
   }
 
-  BackgroundTracingManager::GetInstance().SetEnabledScenarios(scenarios);
+  tracing::BackgroundTracingManager::GetInstance().SetEnabledScenarios(
+      scenarios);
   EXPECT_EQ(std::vector<std::string>({"test_scenario"}),
             BackgroundTracingManagerImpl::GetInstance().GetEnabledScenarios());
 
@@ -338,12 +345,14 @@ IN_PROC_BROWSER_TEST_F(BackgroundTracingManagerBrowserTest,
       }
     }
   )pb";
-  auto scenarios = BackgroundTracingManager::GetInstance().AddPresetScenarios(
-      ParseFieldTracingConfigFromText(kScenarioConfig),
-      BackgroundTracingManager::NO_DATA_FILTERING);
+  auto scenarios =
+      tracing::BackgroundTracingManager::GetInstance().AddPresetScenarios(
+          ParseFieldTracingConfigFromText(kScenarioConfig),
+          tracing::BackgroundTracingManager::NO_DATA_FILTERING);
 
   EXPECT_EQ(std::vector<std::string>({"test_scenario"}), scenarios);
-  BackgroundTracingManager::GetInstance().SetEnabledScenarios(scenarios);
+  tracing::BackgroundTracingManager::GetInstance().SetEnabledScenarios(
+      scenarios);
   EXPECT_EQ(std::vector<std::string>({"test_scenario"}),
             BackgroundTracingManagerImpl::GetInstance().GetEnabledScenarios());
 
@@ -352,7 +361,7 @@ IN_PROC_BROWSER_TEST_F(BackgroundTracingManagerBrowserTest,
   background_tracing_helper.WaitForTraceStarted();
 
   background_tracing_helper.ExpectOnScenarioIdle("test_scenario");
-  BackgroundTracingManager::GetInstance().SetEnabledScenarios({});
+  tracing::BackgroundTracingManager::GetInstance().SetEnabledScenarios({});
   EXPECT_EQ(std::vector<std::string>(),
             BackgroundTracingManagerImpl::GetInstance().GetEnabledScenarios());
   background_tracing_helper.WaitForScenarioIdle();
@@ -377,9 +386,9 @@ IN_PROC_BROWSER_TEST_F(BackgroundTracingManagerBrowserTest,
       }
     }
   )pb";
-  BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
+  tracing::BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
       ParseFieldTracingConfigFromText(kScenarioConfig),
-      BackgroundTracingManager::NO_DATA_FILTERING, false, 0);
+      tracing::BackgroundTracingManager::NO_DATA_FILTERING, false, 0);
 
   background_tracing_helper.ExpectOnScenarioActive("test_scenario");
   EXPECT_TRUE(base::trace_event::EmitNamedTrigger("start_trigger"));
@@ -408,9 +417,9 @@ IN_PROC_BROWSER_TEST_F(BackgroundTracingManagerBrowserTest,
       }
     }
   )pb";
-  BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
+  tracing::BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
       ParseFieldTracingConfigFromText(kScenarioConfig),
-      BackgroundTracingManager::NO_DATA_FILTERING, false, 0);
+      tracing::BackgroundTracingManager::NO_DATA_FILTERING, false, 0);
 
   background_tracing_helper.ExpectOnScenarioActive("test_scenario");
   background_tracing_helper.ExpectOnScenarioIdle("test_scenario");
@@ -454,9 +463,9 @@ IN_PROC_BROWSER_TEST_F(BackgroundTracingManagerBrowserTest,
       }
     }
   )pb";
-  BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
+  tracing::BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
       ParseFieldTracingConfigFromText(kScenarioConfig),
-      BackgroundTracingManager::ANONYMIZE_DATA, false, 0);
+      tracing::BackgroundTracingManager::ANONYMIZE_DATA, false, 0);
   background_tracing_helper.ExpectOnScenarioActive("test_scenario");
   EXPECT_TRUE(base::trace_event::EmitNamedTrigger("start_trigger"));
   background_tracing_helper.WaitForTraceStarted();
@@ -504,9 +513,9 @@ IN_PROC_BROWSER_TEST_F(BackgroundTracingManagerBrowserTest,
       }
     }
   )pb";
-  BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
+  tracing::BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
       ParseFieldTracingConfigFromText(kScenarioConfig),
-      BackgroundTracingManager::NO_DATA_FILTERING, false, 0);
+      tracing::BackgroundTracingManager::NO_DATA_FILTERING, false, 0);
 
   observer.ExpectOnScenarioActive("test_scenario");
   EXPECT_TRUE(base::trace_event::EmitNamedTrigger("start_trigger"));
@@ -539,9 +548,9 @@ IN_PROC_BROWSER_TEST_F(BackgroundTracingManagerBrowserTest,
       }
     }
   )pb";
-  BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
+  tracing::BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
       ParseFieldTracingConfigFromText(kScenarioConfig),
-      BackgroundTracingManager::NO_DATA_FILTERING, false, 0);
+      tracing::BackgroundTracingManager::NO_DATA_FILTERING, false, 0);
 
   observer.ExpectOnScenarioActive("test_scenario");
   EXPECT_TRUE(base::trace_event::EmitNamedTrigger("start_trigger"));
@@ -558,13 +567,20 @@ IN_PROC_BROWSER_TEST_F(BackgroundTracingManagerBrowserTest,
 }
 
 // This tests that non-allowlisted args get stripped if required.
+#if BUILDFLAG(IS_LINUX) && defined(THREAD_SANITIZER)
+#define MAYBE_LegacyNotAllowlistedArgsStripped \
+  DISABLED_LegacyNotAllowlistedArgsStripped
+#else
+#define MAYBE_LegacyNotAllowlistedArgsStripped LegacyNotAllowlistedArgsStripped
+#endif
 IN_PROC_BROWSER_TEST_F(BackgroundTracingManagerBrowserTest,
-                       LegacyNotAllowlistedArgsStripped) {
+                       MAYBE_LegacyNotAllowlistedArgsStripped) {
   TestBackgroundTracingHelper background_tracing_helper;
 
-  EXPECT_TRUE(BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
-      CreateSimpleScenarioConfig(), BackgroundTracingManager::ANONYMIZE_DATA,
-      false, 0));
+  EXPECT_TRUE(
+      tracing::BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
+          CreateSimpleScenarioConfig(),
+          tracing::BackgroundTracingManager::ANONYMIZE_DATA, false, 0));
 
   background_tracing_helper.ExpectOnScenarioActive("test_scenario");
   EXPECT_TRUE(base::trace_event::EmitNamedTrigger("start_trigger"));
@@ -623,9 +639,9 @@ IN_PROC_BROWSER_TEST_F(BackgroundTracingManagerBrowserTest,
     }
   )pb";
 
-  BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
+  tracing::BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
       ParseFieldTracingConfigFromText(kScenarioConfig),
-      BackgroundTracingManager::NO_DATA_FILTERING, false, 0);
+      tracing::BackgroundTracingManager::NO_DATA_FILTERING, false, 0);
 
   background_tracing_helper.ExpectOnScenarioActive("test_scenario");
   EXPECT_TRUE(base::trace_event::EmitNamedTrigger("start_trigger"));
@@ -682,9 +698,10 @@ IN_PROC_BROWSER_TEST_F(BackgroundTracingManagerBrowserTest,
                        MAYBE_EarlyTraceEventsInTrace) {
   TestBackgroundTracingHelper background_tracing_helper;
 
-  EXPECT_TRUE(BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
-      CreateSimpleScenarioConfig(), BackgroundTracingManager::ANONYMIZE_DATA,
-      false, 0));
+  EXPECT_TRUE(
+      tracing::BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
+          CreateSimpleScenarioConfig(),
+          tracing::BackgroundTracingManager::ANONYMIZE_DATA, false, 0));
 
   background_tracing_helper.ExpectOnScenarioActive("test_scenario");
   EXPECT_TRUE(base::trace_event::EmitNamedTrigger("start_trigger"));
@@ -716,9 +733,10 @@ IN_PROC_BROWSER_TEST_F(BackgroundTracingManagerBrowserTest,
                        MAYBE_TraceMetadataInTrace) {
   TestBackgroundTracingHelper background_tracing_helper;
 
-  EXPECT_TRUE(BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
-      CreateSimpleScenarioConfig(), BackgroundTracingManager::NO_DATA_FILTERING,
-      false, 0));
+  EXPECT_TRUE(
+      tracing::BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
+          CreateSimpleScenarioConfig(),
+          tracing::BackgroundTracingManager::NO_DATA_FILTERING, false, 0));
 
   background_tracing_helper.ExpectOnScenarioActive("test_scenario");
   EXPECT_TRUE(base::trace_event::EmitNamedTrigger("start_trigger"));
@@ -756,9 +774,9 @@ IN_PROC_BROWSER_TEST_F(BackgroundTracingManagerBrowserTest,
       }
     }
   )pb";
-  BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
+  tracing::BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
       ParseFieldTracingConfigFromText(kScenarioConfig),
-      BackgroundTracingManager::NO_DATA_FILTERING, false, 0);
+      tracing::BackgroundTracingManager::NO_DATA_FILTERING, false, 0);
 
   background_tracing_helper.ExpectOnScenarioActive("test_scenario");
   EXPECT_TRUE(base::trace_event::EmitNamedTrigger("start_trigger"));
@@ -825,9 +843,9 @@ IN_PROC_BROWSER_TEST_F(BackgroundTracingManagerBrowserTest,
     }
   )pb";
 
-  BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
+  tracing::BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
       ParseFieldTracingConfigFromText(kScenarioConfig),
-      BackgroundTracingManager::ANONYMIZE_DATA, false, 0);
+      tracing::BackgroundTracingManager::ANONYMIZE_DATA, false, 0);
 
   background_tracing_helper.ExpectOnScenarioActive("test_scenario");
   EXPECT_TRUE(base::trace_event::EmitNamedTrigger("start_trigger"));
@@ -899,22 +917,28 @@ IN_PROC_BROWSER_TEST_F(BackgroundTracingManagerBrowserTest,
   preferences->SetBackgroundStartupTracingEnabled(false);
 
   perfetto::protos::gen::ChromeFieldTracingConfig config;
-  EXPECT_TRUE(BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
-      config, BackgroundTracingManager::ANONYMIZE_DATA, false, 0));
+  EXPECT_TRUE(
+      tracing::BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
+          config, tracing::BackgroundTracingManager::ANONYMIZE_DATA, false, 0));
 
   EXPECT_FALSE(base::trace_event::EmitNamedTrigger(
       base::trace_event::kStartupTracingTriggerName));
 }
 
 // TODO(crbug.com/40267734): Re-enable this test once fixed.
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_ANDROID) || \
-    (BUILDFLAG(IS_LINUX) && defined(THREAD_SANITIZER))
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX)
 #define MAYBE_RunStartupTracing DISABLED_RunStartupTracing
 #else
 #define MAYBE_RunStartupTracing RunStartupTracing
 #endif
 IN_PROC_BROWSER_TEST_F(BackgroundTracingManagerBrowserTest,
                        MAYBE_RunStartupTracing) {
+#if BUILDFLAG(IS_OZONE)
+  // TODO(crbug.com/40267734): Flaky on Linux Wayland.
+  if (ui::OzonePlatform::RunningOnWaylandForTest()) {
+    GTEST_SKIP() << "Flaky on Linux Wayland (crbug.com/40267734)";
+  }
+#endif
   TestBackgroundTracingHelper background_tracing_helper;
 
   std::unique_ptr<TestStartupPreferenceManagerImpl> preferences_moved(
@@ -925,8 +949,9 @@ IN_PROC_BROWSER_TEST_F(BackgroundTracingManagerBrowserTest,
   preferences->SetBackgroundStartupTracingEnabled(true);
 
   perfetto::protos::gen::ChromeFieldTracingConfig config;
-  EXPECT_TRUE(BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
-      config, BackgroundTracingManager::ANONYMIZE_DATA, false, 0));
+  EXPECT_TRUE(
+      tracing::BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
+          config, tracing::BackgroundTracingManager::ANONYMIZE_DATA, false, 0));
 
   background_tracing_helper.ExpectOnScenarioActive("Startup");
   EXPECT_TRUE(base::trace_event::EmitNamedTrigger(
@@ -960,9 +985,10 @@ IN_PROC_BROWSER_TEST_F(ProtoBackgroundTracingTest,
     }
   )pb";
 
-  EXPECT_TRUE(BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
-      ParseFieldTracingConfigFromText(kScenarioConfig),
-      BackgroundTracingManager::NO_DATA_FILTERING, false, 0));
+  EXPECT_TRUE(
+      tracing::BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
+          ParseFieldTracingConfigFromText(kScenarioConfig),
+          tracing::BackgroundTracingManager::NO_DATA_FILTERING, false, 0));
 
   background_tracing_helper.ExpectOnScenarioActive("test_scenario");
   EXPECT_TRUE(base::trace_event::EmitNamedTrigger("start_trigger"));
@@ -975,7 +1001,7 @@ IN_PROC_BROWSER_TEST_F(ProtoBackgroundTracingTest,
       SendCommandSync("Tracing.start");
   ASSERT_TRUE(start_tracing_result);
   background_tracing_helper.ExpectOnScenarioIdle("test_scenario");
-  BackgroundTracingManager::GetInstance().AbortScenarioForTesting();
+  tracing::BackgroundTracingManager::GetInstance().AbortScenarioForTesting();
   background_tracing_helper.WaitForScenarioIdle();
 }
 
@@ -989,9 +1015,10 @@ IN_PROC_BROWSER_TEST_F(ProtoBackgroundTracingTest,
 IN_PROC_BROWSER_TEST_F(ProtoBackgroundTracingTest, MAYBE_ProtoTraceReceived) {
   TestBackgroundTracingHelper background_tracing_helper;
 
-  EXPECT_TRUE(BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
-      CreateSimpleScenarioConfig(), BackgroundTracingManager::ANONYMIZE_DATA,
-      false, 0));
+  EXPECT_TRUE(
+      tracing::BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
+          CreateSimpleScenarioConfig(),
+          tracing::BackgroundTracingManager::ANONYMIZE_DATA, false, 0));
 
   background_tracing_helper.ExpectOnScenarioActive("test_scenario");
   EXPECT_TRUE(base::trace_event::EmitNamedTrigger("start_trigger"));
@@ -1010,11 +1037,12 @@ IN_PROC_BROWSER_TEST_F(ProtoBackgroundTracingTest, MAYBE_ProtoTraceReceived) {
   background_tracing_helper.WaitForScenarioIdle();
 
   background_tracing_helper.WaitForTraceSaved();
-  EXPECT_TRUE(BackgroundTracingManager::GetInstance().HasTraceToUpload());
+  EXPECT_TRUE(
+      tracing::BackgroundTracingManager::GetInstance().HasTraceToUpload());
 
   std::string compressed_trace;
   base::RunLoop run_loop;
-  BackgroundTracingManager::GetInstance().GetTraceToUpload(
+  tracing::BackgroundTracingManager::GetInstance().GetTraceToUpload(
       base::BindLambdaForTesting([&](std::optional<std::string> trace_content,
                                      std::optional<std::string> system_profile,
                                      base::OnceClosure upload_complete) {
@@ -1047,18 +1075,20 @@ IN_PROC_BROWSER_TEST_F(ProtoBackgroundTracingTest, MAYBE_ProtoTraceReceived) {
 IN_PROC_BROWSER_TEST_F(ProtoBackgroundTracingTest, MAYBE_ReceiveCallback) {
   TestBackgroundTracingHelper background_tracing_helper;
 
-  EXPECT_TRUE(BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
-      CreateSimpleScenarioConfig(), BackgroundTracingManager::ANONYMIZE_DATA,
-      false, 0));
+  EXPECT_TRUE(
+      tracing::BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
+          CreateSimpleScenarioConfig(),
+          tracing::BackgroundTracingManager::ANONYMIZE_DATA, false, 0));
 
   // If a ReceiveCallback is given, it should be triggered instead of
   // SetTraceToUpload. (In production this is used to implement the
   // kBackgroundTracingOutputFile parameter, not to upload traces.)
   std::string received_trace_data;
-  BackgroundTracingManager::GetInstance().SetReceiveCallback(
+  tracing::BackgroundTracingManager::GetInstance().SetReceiveCallback(
       base::BindLambdaForTesting(
           [&](const std::string& file_name, std::string proto_content,
-              BackgroundTracingManager::FinishedProcessingCallback callback) {
+              tracing::BackgroundTracingManager::FinishedProcessingCallback
+                  callback) {
             received_trace_data = std::move(proto_content);
             std::move(callback).Run(true);
           }));
@@ -1079,7 +1109,8 @@ IN_PROC_BROWSER_TEST_F(ProtoBackgroundTracingTest, MAYBE_ReceiveCallback) {
   EXPECT_TRUE(base::trace_event::EmitNamedTrigger("upload_trigger"));
   background_tracing_helper.WaitForScenarioIdle();
   background_tracing_helper.WaitForTraceReceived();
-  EXPECT_FALSE(BackgroundTracingManager::GetInstance().HasTraceToUpload());
+  EXPECT_FALSE(
+      tracing::BackgroundTracingManager::GetInstance().HasTraceToUpload());
   ASSERT_TRUE(background_tracing_helper.trace_received());
   std::string trace_data = background_tracing_helper.proto_file_contents();
   EXPECT_EQ(received_trace_data, trace_data);
@@ -1093,6 +1124,30 @@ IN_PROC_BROWSER_TEST_F(ProtoBackgroundTracingTest, MAYBE_ReceiveCallback) {
   EXPECT_TRUE(checker.stats().has_interned_categories);
   EXPECT_TRUE(checker.stats().has_interned_source_locations);
   EXPECT_FALSE(checker.stats().has_interned_log_messages);
+}
+
+// This tests that browser shutdown with an active scenario and trigger rules
+// (which register with TracingAgentObserverManager) does not crash.
+IN_PROC_BROWSER_TEST_F(BackgroundTracingManagerBrowserTest,
+                       ShutdownWithActiveScenario) {
+  TestBackgroundTracingHelper background_tracing_helper;
+  constexpr const char kScenarioConfig[] = R"pb(
+    scenarios: {
+      scenario_name: "test_scenario"
+      start_rules: { manual_trigger_name: "start_trigger" }
+      upload_rules: { histogram: { histogram_name: "fake" min_value: 1 } }
+      trace_config: {
+        data_sources: { config: { name: "org.chromium.trace_metadata2" } }
+      }
+    }
+  )pb";
+  tracing::BackgroundTracingManager::GetInstance().InitializeFieldScenarios(
+      ParseFieldTracingConfigFromText(kScenarioConfig),
+      tracing::BackgroundTracingManager::NO_DATA_FILTERING, false, 0);
+
+  background_tracing_helper.ExpectOnScenarioActive("test_scenario");
+  EXPECT_TRUE(base::trace_event::EmitNamedTrigger("start_trigger"));
+  background_tracing_helper.WaitForTraceStarted();
 }
 
 }  // namespace content

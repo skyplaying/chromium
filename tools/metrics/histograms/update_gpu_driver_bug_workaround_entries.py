@@ -11,14 +11,15 @@ If the file was pretty-printed, the updated version is pretty-printed too.
 
 from __future__ import print_function
 
+import json
 import os.path
 import sys
-import json
 
-import setup_modules
+import setup_modules  # pylint: disable=unused-import
 
 import chromium_src.tools.metrics.common.path_util as path_util
 import chromium_src.tools.metrics.histograms.update_histogram_enum as update_histogram_enum
+
 
 GPU_DRIVER_BUG_WORKAROUND_PATH = 'gpu/config/gpu_driver_bug_list.json'
 
@@ -33,8 +34,8 @@ def ReadGpuDriverBugEntries(filename):
 
   entries = {}
   entries[0] = '0: Recorded once every time this histogram is updated.'
-  for entry in json_data["entries"]:
-    entries[entry["id"]] = "%d: %s" % (entry["id"], entry["description"])
+  for entry in json_data['entries']:
+    entries[entry['id']] = '%d: %s' % (entry['id'], entry['description'])
   return entries
 
 
@@ -45,9 +46,12 @@ def main():
     sys.exit(1)
 
   update_histogram_enum.UpdateHistogramFromDict(
-      'tools/metrics/histograms/enums.xml', 'GpuDriverBugWorkaroundEntry',
-      ReadGpuDriverBugEntries(GPU_DRIVER_BUG_WORKAROUND_PATH),
-      GPU_DRIVER_BUG_WORKAROUND_PATH, os.path.basename(__file__))
+    'tools/metrics/histograms/enums.xml',
+    'GpuDriverBugWorkaroundEntry',
+    ReadGpuDriverBugEntries(GPU_DRIVER_BUG_WORKAROUND_PATH),
+    GPU_DRIVER_BUG_WORKAROUND_PATH,
+    os.path.basename(__file__),
+  )
 
 
 if __name__ == '__main__':

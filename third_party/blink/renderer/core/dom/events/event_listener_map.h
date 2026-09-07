@@ -69,7 +69,7 @@ class CORE_EXPORT EventListenerMap final {
   // `RegisteredEventListener` stored in the map.
   bool Add(const AtomicString& event_type,
            EventListener*,
-           const AddEventListenerOptionsResolved*,
+           const AddEventListenerOptionsResolved&,
            RegisteredEventListener** registered_listener);
   // Remove an event listener. If the listener is found the result will be
   // true and `registered_listener` will be updated to the
@@ -79,6 +79,7 @@ class CORE_EXPORT EventListenerMap final {
               const RegisteredEventListener::OptionsForMatching& options,
               RegisteredEventListener** registered_listener);
   EventListenerVector* Find(const AtomicString& event_type);
+  const EventListenerVector* Find(const AtomicString& event_type) const;
   Vector<AtomicString> EventTypes() const;
 
   template <typename CallbackType>

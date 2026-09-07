@@ -25,39 +25,43 @@ TestMemoryConsumerRegistry::~TestMemoryConsumerRegistry() {
 }
 
 void TestMemoryConsumerRegistry::OnMemoryConsumerAdded(
-    std::string_view consumer_id,
+    uint32_t consumer_id,
+    std::string_view consumer_name,
     MemoryConsumerTraits traits,
-    RegisteredMemoryConsumer consumer) {
-  CHECK(!std::ranges::contains(memory_consumers_, consumer));
-  memory_consumers_.push_back(consumer);
+    MemoryConsumer* consumer) {
+  CHECK(!memory_consumers_.HasObserver(consumer));
+  memory_consumers_.AddObserver(consumer);
+  size_++;
 }
 
 void TestMemoryConsumerRegistry::OnMemoryConsumerRemoved(
-    std::string_view consumer_id,
-    RegisteredMemoryConsumer consumer) {
-  size_t removed = std::erase(memory_consumers_, consumer);
-  CHECK_EQ(removed, 1u);
+    uint32_t consumer_id,
+    MemoryConsumer* consumer) {
+  CHECK(memory_consumers_.HasObserver(consumer));
+  memory_consumers_.RemoveObserver(consumer);
+  size_--;
 }
 
-void TestMemoryConsumerRegistry::NotifyUpdateMemoryLimit(int percentage) {
-  for (RegisteredMemoryConsumer consumer : memory_consumers_) {
-    consumer.UpdateMemoryLimit(percentage);
+void TestMemoryConsumerRegistry::NotifyUpdateMemoryLimit(
+    MemoryLimit memory_limit) {
+  for (MemoryConsumer& consumer : memory_consumers_) {
+    MemoryConsumerRegistry::NotifyUpdateMemoryLimit(&consumer, memory_limit);
   }
 }
 
 void TestMemoryConsumerRegistry::NotifyReleaseMemory() {
-  for (RegisteredMemoryConsumer consumer : memory_consumers_) {
-    consumer.ReleaseMemory();
+  for (MemoryConsumer& consumer : memory_consumers_) {
+    MemoryConsumerRegistry::NotifyReleaseMemory(&consumer);
   }
 }
 
 void TestMemoryConsumerRegistry::NotifyUpdateMemoryLimitAsync(
-    int percentage,
+    MemoryLimit memory_limit,
     OnceClosure on_notification_sent_callback) {
   SingleThreadTaskRunner::GetMainThreadDefault()->PostTaskAndReply(
       FROM_HERE,
       BindOnce(&TestMemoryConsumerRegistry::NotifyUpdateMemoryLimit,
-               weak_ptr_factory_.GetWeakPtr(), percentage),
+               weak_ptr_factory_.GetWeakPtr(), memory_limit),
       std::move(on_notification_sent_callback));
 }
 

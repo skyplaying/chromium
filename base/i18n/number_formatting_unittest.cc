@@ -8,16 +8,45 @@
 #include <stdint.h>
 
 #include <limits>
+#include <vector>
 
+#include "base/i18n/language_tag.h"
 #include "base/i18n/rtl.h"
+#include "base/i18n/test/scoped_icu_locale.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/synchronization/waitable_event.h"
 #include "base/test/icu_test_util.h"
+#include "base/threading/simple_thread.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/icu/source/i18n/unicode/usearch.h"
 
 namespace base {
 namespace {
+
+class NumberFormatWorkerThread : public base::SimpleThread {
+ public:
+  NumberFormatWorkerThread(base::WaitableEvent* event,
+                           int digits,
+                           int iterations)
+      : SimpleThread("NumberFormatWorkerThread"),
+        event_(event),
+        digits_(digits),
+        iterations_(iterations) {}
+
+  void Run() override {
+    event_->Wait();
+    for (int i = 0; i < iterations_; ++i) {
+      FormatDouble(1.2345678, digits_);
+    }
+  }
+
+ private:
+  const raw_ptr<base::WaitableEvent> event_;
+  const int digits_;
+  const int iterations_;
+};
 
 TEST(NumberFormattingTest, FormatNumber) {
   static const struct {
@@ -34,15 +63,19 @@ TEST(NumberFormattingTest, FormatNumber) {
       {-42, "-42", "-42"},
   };
 
-  test::ScopedRestoreICUDefaultLocale restore_locale;
-
   for (const auto& i : cases) {
-    i18n::SetICUDefaultLocale("en");
-    ResetFormattersForTesting();
-    EXPECT_EQ(i.expected_english, UTF16ToUTF8(FormatNumber(i.number)));
-    i18n::SetICUDefaultLocale("de");
-    ResetFormattersForTesting();
-    EXPECT_EQ(i.expected_german, UTF16ToUTF8(FormatNumber(i.number)));
+    {
+      i18n::ScopedDefaultIcuLocale scoped_locale(
+          i18n::GetKnownLanguageTag("en"));
+      ResetFormattersForTesting();
+      EXPECT_EQ(i.expected_english, UTF16ToUTF8(FormatNumber(i.number)));
+    }
+    {
+      i18n::ScopedDefaultIcuLocale scoped_locale(
+          i18n::GetKnownLanguageTag("de"));
+      ResetFormattersForTesting();
+      EXPECT_EQ(i.expected_german, UTF16ToUTF8(FormatNumber(i.number)));
+    }
   }
 }
 
@@ -79,16 +112,21 @@ TEST(NumberFormattingTest, FormatDoubleWithFixedFractionalDigits) {
       {-42.7, 3, "-42.700", "-42,700"},
   };
 
-  test::ScopedRestoreICUDefaultLocale restore_locale;
   for (const auto& i : cases) {
-    i18n::SetICUDefaultLocale("en");
-    ResetFormattersForTesting();
-    EXPECT_EQ(i.expected_english,
-              UTF16ToUTF8(FormatDouble(i.number, i.frac_digits)));
-    i18n::SetICUDefaultLocale("de");
-    ResetFormattersForTesting();
-    EXPECT_EQ(i.expected_german,
-              UTF16ToUTF8(FormatDouble(i.number, i.frac_digits)));
+    {
+      i18n::ScopedDefaultIcuLocale scoped_locale(
+          i18n::GetKnownLanguageTag("en"));
+      ResetFormattersForTesting();
+      EXPECT_EQ(i.expected_english,
+                UTF16ToUTF8(FormatDouble(i.number, i.frac_digits)));
+    }
+    {
+      i18n::ScopedDefaultIcuLocale scoped_locale(
+          i18n::GetKnownLanguageTag("de"));
+      ResetFormattersForTesting();
+      EXPECT_EQ(i.expected_german,
+                UTF16ToUTF8(FormatDouble(i.number, i.frac_digits)));
+    }
   }
 }
 
@@ -126,18 +164,23 @@ TEST(NumberFormattingTest, FormatDoubleWithFractionalDigitRange) {
       {-42.7, 0, 3, "-42.7", "-42,7"},
   };
 
-  test::ScopedRestoreICUDefaultLocale restore_locale;
   for (const auto& i : cases) {
-    i18n::SetICUDefaultLocale("en");
-    ResetFormattersForTesting();
-    EXPECT_EQ(i.expected_english,
-              UTF16ToUTF8(FormatDouble(i.number, i.min_frac_digits,
-                                       i.max_frac_digits)));
-    i18n::SetICUDefaultLocale("de");
-    ResetFormattersForTesting();
-    EXPECT_EQ(i.expected_german,
-              UTF16ToUTF8(FormatDouble(i.number, i.min_frac_digits,
-                                       i.max_frac_digits)));
+    {
+      i18n::ScopedDefaultIcuLocale scoped_locale(
+          i18n::GetKnownLanguageTag("en"));
+      ResetFormattersForTesting();
+      EXPECT_EQ(i.expected_english,
+                UTF16ToUTF8(FormatDouble(i.number, i.min_frac_digits,
+                                         i.max_frac_digits)));
+    }
+    {
+      i18n::ScopedDefaultIcuLocale scoped_locale(
+          i18n::GetKnownLanguageTag("de"));
+      ResetFormattersForTesting();
+      EXPECT_EQ(i.expected_german,
+                UTF16ToUTF8(FormatDouble(i.number, i.min_frac_digits,
+                                         i.max_frac_digits)));
+    }
   }
 }
 
@@ -165,18 +208,54 @@ TEST(NumberFormattingTest, FormatPercent) {
        "1,024\u200e%\u200e", "\u0661\u066c\u0660\u0662\u0664\u066a\u061c"},
   };
 
-  test::ScopedRestoreICUDefaultLocale restore_locale;
   for (const auto& i : cases) {
-    i18n::SetICUDefaultLocale("en");
-    EXPECT_EQ(ASCIIToUTF16(i.expected_english), FormatPercent(i.number));
-    i18n::SetICUDefaultLocale("de");
-    EXPECT_EQ(UTF8ToUTF16(i.expected_german), FormatPercent(i.number));
-    i18n::SetICUDefaultLocale("fa");
-    EXPECT_EQ(UTF8ToUTF16(i.expected_persian), FormatPercent(i.number));
-    i18n::SetICUDefaultLocale("ar");
-    EXPECT_EQ(UTF8ToUTF16(i.expected_arabic), FormatPercent(i.number));
-    i18n::SetICUDefaultLocale("ar-EG");
-    EXPECT_EQ(UTF8ToUTF16(i.expected_arabic_egypt), FormatPercent(i.number));
+    {
+      i18n::ScopedDefaultIcuLocale scoped_locale(
+          i18n::GetKnownLanguageTag("en"));
+      EXPECT_EQ(ASCIIToUTF16(i.expected_english), FormatPercent(i.number));
+    }
+    {
+      i18n::ScopedDefaultIcuLocale scoped_locale(
+          i18n::GetKnownLanguageTag("de"));
+      EXPECT_EQ(UTF8ToUTF16(i.expected_german), FormatPercent(i.number));
+    }
+    {
+      i18n::ScopedDefaultIcuLocale scoped_locale(
+          i18n::GetKnownLanguageTag("fa"));
+      EXPECT_EQ(UTF8ToUTF16(i.expected_persian), FormatPercent(i.number));
+    }
+    {
+      i18n::ScopedDefaultIcuLocale scoped_locale(
+          i18n::GetKnownLanguageTag("ar"));
+      EXPECT_EQ(UTF8ToUTF16(i.expected_arabic), FormatPercent(i.number));
+    }
+    {
+      i18n::ScopedDefaultIcuLocale scoped_locale(
+          i18n::GetKnownLanguageTag("ar-EG"));
+      EXPECT_EQ(UTF8ToUTF16(i.expected_arabic_egypt), FormatPercent(i.number));
+    }
+  }
+}
+
+// Regression test for crbug.com/506477192. Ensure that concurrent calls to
+// FormatDouble with different fractional digits don't cause a data race in
+// the shared ICU number formatter.
+TEST(NumberFormattingTest, FormatDoubleRace) {
+  base::WaitableEvent event(base::WaitableEvent::ResetPolicy::MANUAL,
+                            base::WaitableEvent::InitialState::NOT_SIGNALED);
+  std::vector<std::unique_ptr<NumberFormatWorkerThread>> threads;
+
+  for (int i = 0; i < 20; ++i) {
+    threads
+        .emplace_back(
+            std::make_unique<NumberFormatWorkerThread>(&event, i % 5, 1000))
+        ->Start();
+  }
+
+  event.Signal();
+
+  for (auto& t : threads) {
+    t->Join();
   }
 }
 

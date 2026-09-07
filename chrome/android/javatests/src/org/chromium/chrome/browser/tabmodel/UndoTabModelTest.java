@@ -19,8 +19,6 @@ import android.os.Build.VERSION_CODES;
 
 import androidx.test.filters.MediumTest;
 import androidx.test.platform.app.InstrumentationRegistry;
-import androidx.test.runner.lifecycle.ActivityLifecycleMonitor;
-import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry;
 
 import org.hamcrest.Matchers;
 import org.junit.After;
@@ -55,7 +53,6 @@ import org.chromium.chrome.browser.tab.TabSelectionType;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.transit.AutoResetCtaTransitTestRule;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
-import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.chrome.test.util.ChromeTabUtils;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.ui.base.DeviceFormFactor;
@@ -78,16 +75,15 @@ public class UndoTabModelTest {
     public AutoResetCtaTransitTestRule mActivityTestRule =
             ChromeTransitTestRules.fastAutoResetCtaActivityRule();
 
-    private static final ActivityLifecycleMonitor sMonitor =
-            ActivityLifecycleMonitorRegistry.getInstance();
-
-    private WebPageStation mPage;
-
     @Before
     public void setUp() throws InterruptedException {
-        mPage = mActivityTestRule.startOnBlankPage();
+        mActivityTestRule.startOnBlankPage();
         CriteriaHelper.pollUiThread(
-                () -> mActivityTestRule.getActivity().getTabModelSelector().isTabStateInitialized());
+                () ->
+                        mActivityTestRule
+                                .getActivity()
+                                .getTabModelSelector()
+                                .isTabStateInitialized());
         // When closing the last tab we enter the tab switcher. Just start there to ensure
         // determinism.
         enterTabSwitcher(mActivityTestRule.getActivity());
@@ -126,7 +122,7 @@ public class UndoTabModelTest {
                             return selector.getModel(false).getCount();
                         });
         if (regularTabCount == 0) {
-            Tab tab = createTab(/* isIncognito= */ false);
+            createTab(/* isIncognito= */ false);
             ThreadUtils.runOnUiThreadBlocking(
                     () -> {
                         selector.selectModel(false);
@@ -137,9 +133,8 @@ public class UndoTabModelTest {
         boolean shouldLeaveTabSwitcher =
                 ThreadUtils.runOnUiThreadBlocking(
                         () -> {
-                            return layoutManager.isLayoutVisible(LayoutType.TAB_SWITCHER)
-                                    && !layoutManager.isLayoutStartingToHide(
-                                            LayoutType.TAB_SWITCHER);
+                            return layoutManager.isLayoutVisible(LayoutType.HUB)
+                                    && !layoutManager.isLayoutStartingToHide(LayoutType.HUB);
                         });
         if (shouldLeaveTabSwitcher) {
             leaveTabSwitcher(cta);
@@ -324,7 +319,7 @@ public class UndoTabModelTest {
      */
     @Test
     @MediumTest
-    @Restriction(DeviceFormFactor.PHONE) // See crbug.com/633607
+    @Restriction(DeviceFormFactor.PHONE) // See crbug.com/40478864
     public void testSaveStateCommitsUndos() throws TimeoutException, ExecutionException {
         TabModelOrchestrator orchestrator =
                 ThreadUtils.runOnUiThreadBlocking(
@@ -405,7 +400,7 @@ public class UndoTabModelTest {
     @Test
     @MediumTest
     @DisableIf.Device(DeviceFormFactor.ONLY_TABLET) // https://crbug.com/338997949
-    @DisableIf.Build(sdk_is_greater_than = VERSION_CODES.R) // https://crbug.com/1297370
+    @DisableIf.Build(sdk_is_greater_than = VERSION_CODES.R) // https://crbug.com/40215137
     @CommandLineFlags.Add(ChromeSwitches.DISABLE_TAB_MERGING_FOR_TESTING)
     public void testOpenRecentlyClosedTabMultiWindow() throws TimeoutException {
         final ChromeTabbedActivity2 secondActivity =
@@ -509,7 +504,7 @@ public class UndoTabModelTest {
     @Test
     @MediumTest
     @DisableIf.Device(DeviceFormFactor.ONLY_TABLET) // https://crbug.com/338997949
-    @DisableIf.Build(sdk_is_greater_than = VERSION_CODES.R) // https://crbug.com/1297370
+    @DisableIf.Build(sdk_is_greater_than = VERSION_CODES.R) // https://crbug.com/40215137
     @CommandLineFlags.Add(ChromeSwitches.DISABLE_TAB_MERGING_FOR_TESTING)
     public void testOpenRecentlyClosedTabMultiWindowFallback() throws TimeoutException {
         final ChromeTabbedActivity2 secondActivity =
@@ -592,9 +587,7 @@ public class UndoTabModelTest {
     private void selectTab(final TabModel model, final Tab tab) {
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    model.setIndex(
-                            TabModelUtils.getTabIndexById(model, tab.getId()),
-                            TabSelectionType.FROM_USER);
+                    model.setIndex(model.indexOf(tab), TabSelectionType.FROM_USER);
                 });
     }
 
@@ -723,10 +716,8 @@ public class UndoTabModelTest {
         }
 
         for (int i = 0; i < expectedToClose.length; i++) {
-            Tab tab = expectedToClose[i];
-            int finalI = i;
-            ThreadUtils.runOnUiThreadBlocking(
-                    () -> model.cancelTabClosure(expectedToClose[finalI].getId()));
+            final Tab tab = expectedToClose[i];
+            ThreadUtils.runOnUiThreadBlocking(() -> model.cancelTabClosure(tab.getId()));
         }
 
         willUndoTabClosureHelper.waitForCallback(0, expectedToClose.length);
@@ -839,7 +830,6 @@ public class UndoTabModelTest {
 
         // 5.
         commitTabClosure(model, tab0);
-        fullList = EMPTY;
         checkState(model, EMPTY, null, EMPTY, EMPTY, null);
 
         // 6.
@@ -1759,7 +1749,7 @@ public class UndoTabModelTest {
         // Note: Despite the "undoable=true" setup, incognito tabs won't support undo.
         closeMultipleTabs(model, Arrays.asList(tab2, tab4), /* undoable= */ true);
         fullList = new Tab[] {tab0, tab3};
-        checkState(model, fullList, tab0, EMPTY, fullList, tab0);
+        checkState(model, fullList, tab3, EMPTY, fullList, tab3);
         assertTrue(tab2.isClosing());
         assertTrue(tab4.isClosing());
         assertFalse(tab2.isInitialized());

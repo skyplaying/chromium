@@ -192,7 +192,7 @@ class CustomFrameView : public ash::FrameViewAsh {
 
     if (GetFrameEnabled()) {
       CHECK_EQ(rounded_corners->upper_left(), rounded_corners->upper_right());
-      header_view_->SetHeaderCornerRadius(rounded_corners->upper_left());
+      GetHeaderView()->SetHeaderCornerRadius(rounded_corners->upper_left());
     }
 
     GetWidget()->client_view()->UpdateWindowRoundedCorners(
@@ -305,7 +305,7 @@ class CustomClientView : public views::ClientView {
 class CustomWindowTargeter : public aura::WindowTargeter {
  public:
   explicit CustomWindowTargeter(ShellSurfaceBase* shell_surface)
-      : shell_surface_(shell_surface), widget_(shell_surface->GetWidget()) {}
+      : shell_surface_(shell_surface) {}
 
   CustomWindowTargeter(const CustomWindowTargeter&) = delete;
   CustomWindowTargeter& operator=(const CustomWindowTargeter&) = delete;
@@ -315,6 +315,11 @@ class CustomWindowTargeter : public aura::WindowTargeter {
   // Overridden from aura::WindowTargeter:
   bool EventLocationInsideBounds(aura::Window* window,
                                  const ui::LocatedEvent& event) const override {
+    views::Widget* widget = shell_surface_->GetWidget();
+    if (!widget) {
+      return false;
+    }
+
     gfx::Point local_point =
         ConvertEventLocationToWindowCoordinates(window, event);
 
@@ -323,19 +328,25 @@ class CustomWindowTargeter : public aura::WindowTargeter {
       return false;
     }
 
-    if (IsInResizeHandle(window, event, local_point))
+    if (IsInResizeHandle(window, event, local_point)) {
       return true;
+    }
 
     Surface* surface = GetShellRootSurface(window);
-    if (!surface)
+    if (!surface) {
       return false;
+    }
 
     int component =
-        widget_->non_client_view()
-            ? widget_->non_client_view()->NonClientHitTest(local_point)
+        widget->non_client_view()
+            ? widget->non_client_view()->NonClientHitTest(local_point)
             : HTNOWHERE;
     if (component != HTNOWHERE && component != HTCLIENT &&
         component != HTBORDER) {
+      return true;
+    }
+
+    if (shell_surface_->IsPointWithinOverlay(local_point)) {
       return true;
     }
 
@@ -347,13 +358,19 @@ class CustomWindowTargeter : public aura::WindowTargeter {
   bool IsInResizeHandle(aura::Window* window,
                         const ui::LocatedEvent& event,
                         const gfx::Point& local_point) const {
-    if (window != widget_->GetNativeWindow() ||
-        !widget_->widget_delegate()->CanResize()) {
+    views::Widget* widget = shell_surface_->GetWidget();
+    if (!widget) {
       return false;
     }
 
-    if (!shell_surface_->server_side_resize())
+    if (window != widget->GetNativeWindow() ||
+        !widget->widget_delegate()->CanResize()) {
       return false;
+    }
+
+    if (!shell_surface_->server_side_resize()) {
+      return false;
+    }
 
     ui::EventTarget* parent =
         static_cast<ui::EventTarget*>(window)->GetParentTarget();
@@ -382,7 +399,6 @@ class CustomWindowTargeter : public aura::WindowTargeter {
   }
 
   raw_ptr<ShellSurfaceBase> shell_surface_;
-  const raw_ptr<views::Widget, DanglingUntriaged> widget_;
 };
 
 void CloseAllShellSurfaceTransientChildren(aura::Window* window) {
@@ -539,6 +555,17 @@ void ShellSurfaceBase::SetSystemModal(bool system_modal) {
   if (system_modal == system_modal_)
     return;
 
+  if (system_modal) {
+    SecurityDelegate* security = GetSecurityDelegate();
+    if (!security || !security->CanSetSystemModal()) {
+      return;
+    }
+  }
+
+  // TODO(b/516545207): The system modal widget has to be created as a
+  // system modal and can only be changed to non system modal after that.
+  // It should fail if a client attemps to change from normal to system
+  // modal.
   bool non_system_modal_window_was_active =
       !system_modal_ && widget_ && widget_->IsActive();
 
@@ -827,7 +854,12 @@ void ShellSurfaceBase::UpdateTopInset() {
 }
 
 void ShellSurfaceBase::SetChildAxTreeId(ui::AXTreeID child_ax_tree_id) {
-  GetViewAccessibility().SetChildTreeID(child_ax_tree_id);
+  if (child_ax_tree_id != ui::AXTreeIDUnknown()) {
+    GetViewAccessibility().SetChildTreeID(child_ax_tree_id);
+  } else {
+    GetViewAccessibility().RemoveChildTreeID();
+  }
+
   this->NotifyAccessibilityEventDeprecated(ax::mojom::Event::kChildrenChanged,
                                            false);
 }
@@ -902,6 +934,10 @@ void ShellSurfaceBase::SetRestoreInfo(int32_t restore_session_id,
   // TODO(crbug.com/1327490): Rename restore info variables.
   // Restore information must be set before widget is created.
   DCHECK(!widget_);
+  SecurityDelegate* security = GetSecurityDelegate();
+  if (!security || !security->CanSetRestoreInfo()) {
+    return;
+  }
   restore_session_id_.emplace(restore_session_id);
   restore_window_id_.emplace(restore_window_id);
   ash::LoginUnlockThroughputRecorder* throughput_recorder =
@@ -912,6 +948,10 @@ void ShellSurfaceBase::SetRestoreInfo(int32_t restore_session_id,
 void ShellSurfaceBase::SetRestoreInfoWithWindowIdSource(
     int32_t restore_session_id,
     const std::string& restore_window_id_source) {
+  SecurityDelegate* security = GetSecurityDelegate();
+  if (!security || !security->CanSetRestoreInfo()) {
+    return;
+  }
   restore_session_id_.emplace(restore_session_id);
   if (!restore_window_id_source.empty())
     restore_window_id_source_.emplace(restore_window_id_source);
@@ -1131,6 +1171,19 @@ void ShellSurfaceBase::RemoveOverlay() {
   UpdateResizability();
 }
 
+bool ShellSurfaceBase::IsPointWithinOverlay(const gfx::Point& point) const {
+  if (!HasOverlay()) {
+    return false;
+  }
+
+  gfx::Point point_in_overlay = point;
+  aura::Window::ConvertPointToTarget(widget_->GetNativeWindow(),
+                                     overlay_widget_->GetNativeWindow(),
+                                     &point_in_overlay);
+
+  return overlay_widget_->GetNativeWindow()->ContainsPoint(point_in_overlay);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // SurfaceDelegate overrides:
 
@@ -1182,7 +1235,7 @@ void ShellSurfaceBase::OnSetFrame(SurfaceFrameType frame_type) {
   // not specified, the widget's layer is set to 'NOT_DRAWN' and the frame can't
   // be drawn. `ClientControlledShellSurface` is not affected.
   if (frame_type_changed && widget_ &&
-      widget_->GetNativeWindow()->layer()->type() == ui::LAYER_NOT_DRAWN) {
+      widget_->GetNativeWindow()->layer()->AsNotDrawn()) {
     if (frame_type != SurfaceFrameType::NONE &&
         frame_type != SurfaceFrameType::SHADOW) {
       DLOG(FATAL)
@@ -1433,6 +1486,8 @@ void ShellSurfaceBase::OnCaptureChanged(aura::Window* lost_capture,
   if (lost_capture == gained_capture_parent)
     return;
 
+  base::WeakPtr<aura::Window> weak_gained =
+      gained_capture ? gained_capture->GetWeakPtrAsWindow() : nullptr;
   if (!gained_capture) {
     // If `gained_capture` is nullptr, find the closest ancestor of
     // `lost_capture` that is a popup with grab.
@@ -1443,11 +1498,17 @@ void ShellSurfaceBase::OnCaptureChanged(aura::Window* lost_capture,
         break;
       }
     }
-    // Give capture to the new `gained_capture`.
     if (gained_capture) {
+      base::WeakPtr<aura::Window> weak_lost =
+          lost_capture ? lost_capture->GetWeakPtrAsWindow() : nullptr;
+      weak_gained = gained_capture->GetWeakPtrAsWindow();
       ShellSurfaceBase* parent_shell_surface =
           GetShellSurfaceBaseForWindow(gained_capture);
       parent_shell_surface->StartCapture();
+      // If the lost capture is destroyed, there is nothing to close.
+      if (!weak_lost) {
+        return;
+      }
     }
   }
 
@@ -1474,7 +1535,7 @@ void ShellSurfaceBase::OnCaptureChanged(aura::Window* lost_capture,
 
   // Please note that `gained_capture_ancestors` also includes `gained_capture`.
   base::flat_set<aura::Window*> gained_capture_ancestors;
-  for (aura::Window* next = gained_capture; next != nullptr;
+  for (aura::Window* next = weak_gained.get(); next != nullptr;
        next = wm::GetTransientParent(next)) {
     gained_capture_ancestors.insert(next);
   }
@@ -1654,15 +1715,17 @@ void ShellSurfaceBase::OnWindowActivated(ActivationReason reason,
 void ShellSurfaceBase::OnTooltipShown(aura::Window* target,
                                       std::u16string_view text,
                                       const gfx::Rect& bounds) {
-  if (root_surface()) {
-    root_surface()->OnTooltipShown(text, bounds);
+  if (!IsShellSurfaceWindow(target) || !root_surface()) {
+    return;
   }
+  root_surface()->OnTooltipShown(text, bounds);
 }
 
 void ShellSurfaceBase::OnTooltipHidden(aura::Window* target) {
-  if (root_surface()) {
-    root_surface()->OnTooltipHidden();
+  if (!IsShellSurfaceWindow(target) || !root_surface()) {
+    return;
   }
+  root_surface()->OnTooltipHidden();
 }
 
 // Returns true if surface is currently being resized.
@@ -2114,7 +2177,7 @@ void ShellSurfaceBase::UpdateShadow() {
     UpdateShadowRoundedCorners();
   }
 
-  if (window->layer()->type() == ui::LAYER_NOT_DRAWN) {
+  if (window->layer()->AsNotDrawn()) {
     DCHECK(!window->GetProperty(chromeos::kWindowManagerManagesOpacityKey));
 
     // Snapped window should not be opaque because it can be drag-resized, in
@@ -2126,8 +2189,9 @@ void ShellSurfaceBase::UpdateShadow() {
       // Manually control occlusion, but do not make the window
       // opaque as the host window may not be at the same size unless the
       // window state is either in fullscreen or maximized.
-      window->SetOpaqueRegionsForOcclusion(
-          {gfx::Rect(window->bounds().size())});
+      gfx::Rect opaque_in_widget = host_window()->bounds();
+      opaque_in_widget.Intersect(gfx::Rect(window->bounds().size()));
+      window->SetOpaqueRegionsForOcclusion({opaque_in_widget});
     } else {
       window->SetOpaqueRegionsForOcclusion({});
     }
@@ -2163,7 +2227,7 @@ void ShellSurfaceBase::UpdateShadowRoundedCorners() {
   }
 
   // TODO(crbug.com/40256581): Support shadow with variable radius corners.
-  shadow->SetRoundedCornerRadius(shadow_radii.upper_left());
+  shadow->SetRoundedCorners(gfx::RoundedCornersF(shadow_radii.upper_left()));
 }
 
 void ShellSurfaceBase::UpdateFrameType() {
@@ -2287,9 +2351,21 @@ void ShellSurfaceBase::OnPostWidgetCommit() {
 
 void ShellSurfaceBase::ShowWidget(bool activate) {
   if (activate) {
+    // Minimized windows cannot gain focus, when being un-minimized they will
+    // call into `ShowWidget` again which will validate activation permissions.
+    auto* window_state = ash::WindowState::Get(widget_->GetNativeWindow());
+    if (!(window_state && window_state->IsMinimized()) &&
+        GetSecurityDelegate() &&
+        !GetSecurityDelegate()->CanSelfActivate(widget_->GetNativeWindow())) {
+      activate = false;
+    }
+  }
+
+  if (activate) {
     // Widget will minimize itself if the initial state is minimized.
     widget_->Show();
   } else {
+    // `ShowInactive` does not have minimize support.
     widget_->ShowInactive();
   }
 }

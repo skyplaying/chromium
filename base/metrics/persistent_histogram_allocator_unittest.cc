@@ -10,11 +10,13 @@
 #include "base/debug/leak_annotations.h"
 #include "base/files/file.h"
 #include "base/files/file_util.h"
+#include "base/files/memory_mapped_file.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/bucket_ranges.h"
 #include "base/metrics/histogram.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/metrics/metrics_hashes.h"
 #include "base/metrics/persistent_memory_allocator.h"
 #include "base/metrics/sample_vector.h"
 #include "base/metrics/sparse_histogram.h"
@@ -145,6 +147,96 @@ TEST_F(PersistentHistogramAllocatorTest, CreateAndIterate) {
 
   recovered = histogram_iter.GetNext();
   EXPECT_FALSE(recovered);
+}
+
+// Tests that persistent histograms can be recovered from a file mapped strictly
+// as OS READ_ONLY memory, similar to what `FileMetricsProvider` does on
+// startup.
+TEST_F(PersistentHistogramAllocatorTest, FileReadonlyRecovery) {
+  constexpr char kHistogramName[] = "ReadOnlyTestHistogram";
+  constexpr char kLinearHistogramName[] = "ReadOnlyTestLinearHistogram";
+  constexpr char kBooleanHistogramName[] = "ReadOnlyTestBooleanHistogram";
+  constexpr char kCustomHistogramName[] = "ReadOnlyTestCustomHistogram";
+  constexpr char kSparseHistogramName[] = "ReadOnlyTestSparseHistogram";
+
+  // 1. Create a persistent standard histogram testing all flags.
+  HistogramBase* histogram = Histogram::FactoryGet(kHistogramName, 1, 1000, 10,
+                                                   HistogramBase::kAllFlags);
+  ASSERT_TRUE(histogram);
+  histogram->Add(50);
+
+  // 2. Create a persistent linear histogram testing all flags.
+  HistogramBase* linear_histogram = LinearHistogram::FactoryGet(
+      kLinearHistogramName, 1, 1000, 10, HistogramBase::kAllFlags);
+  ASSERT_TRUE(linear_histogram);
+  linear_histogram->Add(50);
+
+  // 3. Create a persistent boolean histogram testing all flags.
+  HistogramBase* boolean_histogram = BooleanHistogram::FactoryGet(
+      kBooleanHistogramName, HistogramBase::kAllFlags);
+  ASSERT_TRUE(boolean_histogram);
+  boolean_histogram->Add(1);
+
+  // 4. Create a persistent custom histogram testing all flags.
+  const std::vector<int> custom_ranges = {1, 5, 10, 50, 100};
+  HistogramBase* custom_histogram = CustomHistogram::FactoryGet(
+      kCustomHistogramName, custom_ranges, HistogramBase::kAllFlags);
+  ASSERT_TRUE(custom_histogram);
+  custom_histogram->Add(5);
+
+  // 5. Create a persistent sparse histogram testing all flags.
+  HistogramBase* sparse_histogram = SparseHistogram::FactoryGet(
+      kSparseHistogramName, HistogramBase::kAllFlags);
+  ASSERT_TRUE(sparse_histogram);
+  sparse_histogram->Add(50);
+
+  ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+  const FilePath file_path =
+      temp_dir.GetPath().AppendASCII("persistent_memory.pma");
+
+  // Write allocator memory to a temporary file.
+  ASSERT_TRUE(WriteFile(file_path, std::string_view(allocator_memory_.get(),
+                                                    kAllocatorMemorySize)));
+
+  // Map the file strictly as READ_ONLY.
+  auto mmfile = std::make_unique<MemoryMappedFile>();
+  ASSERT_TRUE(
+      mmfile->Initialize(File(file_path, File::FLAG_OPEN | File::FLAG_READ),
+                         MemoryMappedFile::READ_ONLY));
+  EXPECT_TRUE(mmfile->IsValid());
+
+  auto readonly_file_allocator =
+      std::make_unique<FilePersistentMemoryAllocator>(
+          std::move(mmfile), 0, 0, "", PersistentMemoryAllocator::kReadOnly);
+  EXPECT_TRUE(readonly_file_allocator->IsReadonly());
+
+  PersistentHistogramAllocator recovery_readonly(
+      std::move(readonly_file_allocator));
+  PersistentHistogramAllocator::Iterator it(&recovery_readonly);
+
+  const char* const kExpectedNames[] = {
+      kHistogramName, kLinearHistogramName, kBooleanHistogramName,
+      kCustomHistogramName, kSparseHistogramName};
+
+  // Verify recovery of all histograms from read-only PMA.
+  std::unique_ptr<base::HistogramBase> recovered;
+  for (const char* expected_name : kExpectedNames) {
+    recovered = it.GetNext();
+    ASSERT_TRUE(recovered);
+    EXPECT_EQ(expected_name, recovered->histogram_name());
+    EXPECT_TRUE(recovered->HasFlags(HistogramBase::kAllFlags));
+    EXPECT_EQ(1, recovered->SnapshotSamples()->TotalCount());
+  }
+
+  EXPECT_FALSE(it.GetNext());
+
+#if !defined(THREAD_SANITIZER)
+  // Verify that attempting to write/add a sample to a read-only histogram
+  // is intercepted by OS page protection and crashes the process with SIGSEGV.
+  // Death tests are notoriously slow/flaky under TSan.
+  EXPECT_DEATH_IF_SUPPORTED(recovered->Add(100), "");
+#endif
 }
 
 TEST_F(PersistentHistogramAllocatorTest, ConstructPaths) {
@@ -305,7 +397,8 @@ TEST_F(PersistentHistogramAllocatorTest, StatisticsRecorderMerge) {
       break;
     }
 
-    recovery1.MergeHistogramDeltaToStatisticsRecorder(recovered.get());
+    recovery1.MergeHistogramDeltaToStatisticsRecorder(recovered.get(),
+                                                      /*name_override=*/"");
     HistogramBase* found =
         StatisticsRecorder::FindHistogram(recovered->histogram_name());
     EXPECT_NE(recovered.get(), found);
@@ -371,7 +464,8 @@ TEST_F(PersistentHistogramAllocatorTest, StatisticsRecorderMerge) {
     if (!recovered) {
       break;
     }
-    recovery2.MergeHistogramDeltaToStatisticsRecorder(recovered.get());
+    recovery2.MergeHistogramDeltaToStatisticsRecorder(recovered.get(),
+                                                      /*name_override=*/"");
   }
   EXPECT_EQ(global_sr_initial_histogram_count + kNumHistogramsCreated,
             StatisticsRecorder::GetHistogramCount());
@@ -484,7 +578,8 @@ TEST_F(PersistentHistogramAllocatorTest,
       break;
     }
 
-    recovery1.MergeHistogramDeltaToStatisticsRecorder(recovered.get());
+    recovery1.MergeHistogramDeltaToStatisticsRecorder(recovered.get(),
+                                                      /*name_override=*/"");
     HistogramBase* found =
         StatisticsRecorder::FindHistogram(recovered->histogram_name());
     EXPECT_FALSE(found);
@@ -518,7 +613,8 @@ TEST_F(PersistentHistogramAllocatorTest,
       break;
     }
 
-    recovery2.MergeHistogramFinalDeltaToStatisticsRecorder(recovered.get());
+    recovery2.MergeHistogramFinalDeltaToStatisticsRecorder(
+        recovered.get(), /*name_override=*/"");
     found = StatisticsRecorder::FindHistogram(recovered->histogram_name());
     EXPECT_FALSE(found);
   }
@@ -746,6 +842,62 @@ TEST_F(PersistentHistogramAllocatorTest, MovePersistentFile) {
     }
   }
   EXPECT_TRUE(found_histogram);
+}
+
+TEST_F(PersistentHistogramAllocatorTest, CorruptSparseHistogramMetadataId) {
+  using PersistentHistogramData =
+      PersistentHistogramAllocator::PersistentHistogramData;
+
+  const size_t kLocalMemorySize = 64 << 10;
+
+  PersistentHistogramAllocator local_allocator(
+      std::make_unique<LocalPersistentMemoryAllocator>(kLocalMemorySize, 0,
+                                                       "LocalAllocator"));
+
+  const std::string kName = "ManualCorruptSparse";
+  uint64_t name_hash = HashMetricName(kName);
+
+  // Allocate memory for PersistentHistogramData + name.
+  size_t alloc_size =
+      offsetof(PersistentHistogramData, name) + kName.size() + 1;
+  PersistentMemoryAllocator::Reference ref =
+      local_allocator.memory_allocator()->Allocate(
+          alloc_size, PersistentHistogramData::kPersistentTypeId);
+  ASSERT_TRUE(ref);
+
+  uint8_t* ptr = local_allocator.memory_allocator()->GetAsArray<uint8_t>(
+      ref, PersistentHistogramData::kPersistentTypeId, 1);
+  ASSERT_TRUE(ptr);
+
+  auto* histogram_data = reinterpret_cast<PersistentHistogramData*>(ptr);
+
+  // Initialize PersistentHistogramData fields.
+  histogram_data->histogram_type = SPARSE_HISTOGRAM;
+  histogram_data->flags = HistogramBase::kIsPersistent;
+  histogram_data->samples_metadata.id = name_hash;
+
+  // We will set it to name_hash (invalid for sparse) to test the fix.
+  histogram_data->logged_metadata.id = name_hash;
+
+  // SAFETY: We manually serialize a corrupt histogram structure into a raw
+  // memory block for testing. We allocated `alloc_size` bytes which is
+  // guaranteed to be large enough to hold the struct and the name. Copying the
+  // name into the buffer is safe because it is bounded by the allocated size.
+  UNSAFE_BUFFERS(memcpy(histogram_data->name, kName.c_str(), kName.size() + 1));
+
+  // Try to load it.
+  std::unique_ptr<HistogramBase> mutated_histogram =
+      local_allocator.GetHistogram(ref);
+
+  // With the fix, it should detect the corruption and return nullptr.
+  EXPECT_FALSE(mutated_histogram);
+
+  // Now let's test with valid ID to make sure it works when not corrupt.
+  histogram_data->logged_metadata.id = name_hash + 1;  // valid
+
+  std::unique_ptr<HistogramBase> valid_histogram =
+      local_allocator.GetHistogram(ref);
+  EXPECT_TRUE(valid_histogram);
 }
 
 }  // namespace base

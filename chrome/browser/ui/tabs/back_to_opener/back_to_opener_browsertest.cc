@@ -4,10 +4,11 @@
 
 #include "base/test/metrics/histogram_tester.h"
 #include "chrome/app/chrome_command_ids.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_command_controller.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
 #include "chrome/browser/ui/tabs/back_to_opener/back_to_opener_controller.h"
 #include "chrome/browser/ui/tabs/features.h"
 #include "chrome/browser/ui/tabs/public/tab_features.h"
@@ -16,13 +17,17 @@
 #include "chrome/browser/ui/toolbar/back_forward_menu_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/javascript_dialogs/app_modal_dialog_controller.h"
+#include "components/javascript_dialogs/app_modal_dialog_view.h"
 #include "components/tabs/public/tab_interface.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_utils.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/url_constants.h"
 
 namespace back_to_opener {
 
@@ -38,34 +43,49 @@ class BackToOpenerBrowserTest : public InProcessBrowserTest {
     ASSERT_TRUE(embedded_test_server()->Start());
   }
 
+  void OpenDestinationTab(content::WebContents** opener_contents,
+                          content::WebContents** destination_contents) {
+    GURL opener_url =
+        embedded_test_server()->GetURL("/back_to_opener_opener.html");
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), opener_url));
+    *opener_contents = browser()->tab_strip_model()->GetActiveWebContents();
+    ASSERT_TRUE(content::WaitForLoadStop(*opener_contents));
+
+    ui_test_utils::TabAddedWaiter tab_waiter(browser());
+    ASSERT_TRUE(content::ExecJs(*opener_contents,
+                                "document.getElementById('link').click();"));
+
+    *destination_contents = tab_waiter.Wait();
+    ASSERT_NE(*destination_contents, nullptr);
+    ASSERT_NE(*destination_contents, *opener_contents);
+    ASSERT_TRUE(content::WaitForLoadStop(*destination_contents));
+  }
+
+  void InstallBeforeUnloadHandler(content::WebContents* web_contents) {
+    ASSERT_TRUE(content::ExecJs(web_contents,
+                                "window.onbeforeunload = event => {"
+                                "  event.preventDefault();"
+                                "  event.returnValue = '';"
+                                "};"));
+    content::PrepContentsForBeforeUnloadTest(web_contents);
+  }
+
   base::test::ScopedFeatureList feature_list_;
 };
 
 // User clicks link in opener to open in new tab, back button should be enabled
 // and clicking it should close destination and focus opener.
 IN_PROC_BROWSER_TEST_F(BackToOpenerBrowserTest, BasicBackToOpener) {
-  // Navigate opener to a page with a link
-  GURL opener_url =
-      embedded_test_server()->GetURL("/back_to_opener_opener.html");
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), opener_url));
-  content::WebContents* opener_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+  // Create HistogramTester before the link click so it captures the Eligible
+  // histogram emitted during opener relationship establishment.
+  base::HistogramTester histogram_tester;
+
+  content::WebContents* opener_contents = nullptr;
+  content::WebContents* dest_contents = nullptr;
+  ASSERT_NO_FATAL_FAILURE(OpenDestinationTab(&opener_contents, &dest_contents));
+
   int opener_tab_index =
       browser()->tab_strip_model()->GetIndexOfWebContents(opener_contents);
-
-  // Wait for opener page to load
-  EXPECT_TRUE(content::WaitForLoadStop(opener_contents));
-
-  // Wait for new tab to open
-  ui_test_utils::TabAddedWaiter tab_waiter(browser());
-
-  // Click the link to open in new tab
-  content::SimulateMouseClickOrTapElementWithId(opener_contents, "link");
-
-  content::WebContents* dest_contents = tab_waiter.Wait();
-  ASSERT_NE(dest_contents, nullptr);
-  ASSERT_NE(dest_contents, opener_contents);
-  EXPECT_TRUE(content::WaitForLoadStop(dest_contents));
 
   tabs::TabInterface* dest_tab =
       tabs::TabInterface::GetFromContents(dest_contents);
@@ -78,17 +98,20 @@ IN_PROC_BROWSER_TEST_F(BackToOpenerBrowserTest, BasicBackToOpener) {
   EXPECT_TRUE(controller->HasValidOpener());
   EXPECT_TRUE(controller->CanGoBackToOpener());
 
-  // Verify back button is enabled in UI
-  EXPECT_TRUE(browser()->command_controller()->IsCommandEnabled(IDC_BACK));
+  // Verify the Eligible histogram was recorded.
+  histogram_tester.ExpectUniqueSample("Navigation.BackToOpener.Eligible", true,
+                                      1);
 
-  // Verify the histogram for destination tab close duration
-  base::HistogramTester histogram_tester;
+  // Verify back button is enabled in UI
+  EXPECT_TRUE(
+      chrome::BrowserCommandController::From(browser())->IsCommandEnabled(
+          IDC_BACK));
 
   content::WebContentsDestroyedWatcher close_watcher(dest_contents);
   chrome::ExecuteCommand(browser(), IDC_BACK);
   close_watcher.Wait();
 
-  // Verify the histograms were recorded
+  // Verify all histograms were recorded
   histogram_tester.ExpectTotalCount("Navigation.BackToOpener.Clicked", 1);
   histogram_tester.ExpectTotalCount(
       "Navigation.BackToOpener.DestinationTabCloseDuration", 1);
@@ -99,6 +122,69 @@ IN_PROC_BROWSER_TEST_F(BackToOpenerBrowserTest, BasicBackToOpener) {
       browser()->tab_strip_model()->GetIndexOfWebContents(opener_contents));
   EXPECT_EQ(opener_contents,
             browser()->tab_strip_model()->GetActiveWebContents());
+}
+
+IN_PROC_BROWSER_TEST_F(BackToOpenerBrowserTest,
+                       BeforeUnloadAcceptedClosesDestination) {
+  content::WebContents* opener_contents = nullptr;
+  content::WebContents* dest_contents = nullptr;
+  ASSERT_NO_FATAL_FAILURE(OpenDestinationTab(&opener_contents, &dest_contents));
+  ASSERT_NO_FATAL_FAILURE(InstallBeforeUnloadHandler(dest_contents));
+  base::HistogramTester histogram_tester;
+
+  content::WebContentsDestroyedWatcher close_watcher(dest_contents);
+  chrome::ExecuteCommand(browser(), IDC_BACK);
+
+  javascript_dialogs::AppModalDialogController* dialog =
+      ui_test_utils::WaitForAppModalDialog();
+  ASSERT_TRUE(dialog->is_before_unload_dialog());
+  dialog->view()->AcceptAppModalDialog();
+  close_watcher.Wait();
+
+  EXPECT_EQ(opener_contents,
+            browser()->tab_strip_model()->GetActiveWebContents());
+  histogram_tester.ExpectTotalCount(
+      "Navigation.BackToOpener.DestinationTabCloseDuration", 1);
+}
+
+IN_PROC_BROWSER_TEST_F(BackToOpenerBrowserTest,
+                       BeforeUnloadCancelledKeepsDestinationOpen) {
+  content::WebContents* opener_contents = nullptr;
+  content::WebContents* dest_contents = nullptr;
+  ASSERT_NO_FATAL_FAILURE(OpenDestinationTab(&opener_contents, &dest_contents));
+  ASSERT_NO_FATAL_FAILURE(InstallBeforeUnloadHandler(dest_contents));
+  base::HistogramTester histogram_tester;
+
+  content::WebContentsDestroyedWatcher close_watcher(dest_contents);
+  chrome::ExecuteCommand(browser(), IDC_BACK);
+
+  javascript_dialogs::AppModalDialogController* dialog =
+      ui_test_utils::WaitForAppModalDialog();
+  ASSERT_TRUE(dialog->is_before_unload_dialog());
+  dialog->view()->CancelAppModalDialog();
+
+  EXPECT_FALSE(close_watcher.IsDestroyed());
+  EXPECT_EQ(dest_contents,
+            browser()->tab_strip_model()->GetActiveWebContents());
+
+  // Closing the tab for an unrelated reason after cancellation should not
+  // record a stale back-to-opener duration or activate the opener.
+  ASSERT_TRUE(content::ExecJs(dest_contents, "window.onbeforeunload = null;"));
+  chrome::AddTabAt(browser(), GURL(url::kAboutBlankURL), /*index=*/-1,
+                   /*foreground=*/true);
+  content::WebContents* other_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+
+  int dest_index =
+      browser()->tab_strip_model()->GetIndexOfWebContents(dest_contents);
+  browser()->tab_strip_model()->CloseWebContentsAt(dest_index,
+                                                   TabCloseTypes::CLOSE_NONE);
+  close_watcher.Wait();
+
+  EXPECT_EQ(other_contents,
+            browser()->tab_strip_model()->GetActiveWebContents());
+  histogram_tester.ExpectTotalCount(
+      "Navigation.BackToOpener.DestinationTabCloseDuration", 0);
 }
 
 // Opener closed should disable back button
@@ -114,7 +200,8 @@ IN_PROC_BROWSER_TEST_F(BackToOpenerBrowserTest,
   // Wait for new tab to open
   ui_test_utils::TabAddedWaiter tab_waiter(browser());
 
-  content::SimulateMouseClickOrTapElementWithId(opener_contents, "link");
+  ASSERT_TRUE(content::ExecJs(opener_contents,
+                              "document.getElementById('link').click();"));
 
   content::WebContents* dest_contents = tab_waiter.Wait();
   ASSERT_NE(dest_contents, opener_contents);
@@ -129,15 +216,15 @@ IN_PROC_BROWSER_TEST_F(BackToOpenerBrowserTest,
   EXPECT_TRUE(controller->CanGoBackToOpener());
 
   // Close opener tab
-  int opener_index =
-      browser()->tab_strip_model()->GetIndexOfWebContents(opener_contents);
-  browser()->tab_strip_model()->CloseWebContentsAt(opener_index,
-                                                   TabCloseTypes::CLOSE_NONE);
+  browser()->tab_strip_model()->CloseWebContents(opener_contents,
+                                                 TabCloseTypes::CLOSE_NONE);
 
   // Back button should be disabled
   EXPECT_FALSE(controller->HasValidOpener());
   EXPECT_FALSE(controller->CanGoBackToOpener());
-  EXPECT_FALSE(browser()->command_controller()->IsCommandEnabled(IDC_BACK));
+  EXPECT_FALSE(
+      chrome::BrowserCommandController::From(browser())->IsCommandEnabled(
+          IDC_BACK));
 }
 
 // Opener navigated away should disable back button
@@ -154,7 +241,8 @@ IN_PROC_BROWSER_TEST_F(BackToOpenerBrowserTest,
   // Wait for new tab to open
   ui_test_utils::TabAddedWaiter tab_waiter(browser());
 
-  content::SimulateMouseClickOrTapElementWithId(opener_contents, "link");
+  ASSERT_TRUE(content::ExecJs(opener_contents,
+                              "document.getElementById('link').click();"));
 
   content::WebContents* dest_contents = tab_waiter.Wait();
   ASSERT_NE(dest_contents, opener_contents);
@@ -203,7 +291,8 @@ IN_PROC_BROWSER_TEST_F(BackToOpenerBrowserTest,
   // Wait for new tab to open
   ui_test_utils::TabAddedWaiter tab_waiter(browser());
 
-  content::SimulateMouseClickOrTapElementWithId(opener_contents, "link");
+  ASSERT_TRUE(content::ExecJs(opener_contents,
+                              "document.getElementById('link').click();"));
 
   content::WebContents* dest_contents = tab_waiter.Wait();
   ASSERT_NE(dest_contents, opener_contents);
@@ -219,16 +308,16 @@ IN_PROC_BROWSER_TEST_F(BackToOpenerBrowserTest,
       dest_tab->GetTabFeatures()->back_to_opener_controller();
 
   // Close opener
-  int opener_index =
-      browser()->tab_strip_model()->GetIndexOfWebContents(opener_contents);
-  browser()->tab_strip_model()->CloseWebContentsAt(opener_index,
-                                                   TabCloseTypes::CLOSE_NONE);
+  browser()->tab_strip_model()->CloseWebContents(opener_contents,
+                                                 TabCloseTypes::CLOSE_NONE);
 
   // Back button should still be enabled (has navigation history)
   EXPECT_FALSE(controller->HasValidOpener());
   EXPECT_TRUE(dest_contents->GetController().CanGoBack());
 
-  EXPECT_TRUE(browser()->command_controller()->IsCommandEnabled(IDC_BACK));
+  EXPECT_TRUE(
+      chrome::BrowserCommandController::From(browser())->IsCommandEnabled(
+          IDC_BACK));
 }
 
 // Pinned tab should disable back button but maintain relationship
@@ -243,7 +332,8 @@ IN_PROC_BROWSER_TEST_F(BackToOpenerBrowserTest, PinnedTabDisablesBackButton) {
   // Wait for new tab to open
   ui_test_utils::TabAddedWaiter tab_waiter(browser());
 
-  content::SimulateMouseClickOrTapElementWithId(opener_contents, "link");
+  ASSERT_TRUE(content::ExecJs(opener_contents,
+                              "document.getElementById('link').click();"));
 
   content::WebContents* dest_contents = tab_waiter.Wait();
   ASSERT_NE(dest_contents, opener_contents);
@@ -290,7 +380,8 @@ IN_PROC_BROWSER_TEST_F(BackToOpenerBrowserTest, OpenerMovedToAnotherWindow) {
   // Wait for new tab to open
   ui_test_utils::TabAddedWaiter tab_waiter(browser());
 
-  content::SimulateMouseClickOrTapElementWithId(opener_contents, "link");
+  ASSERT_TRUE(content::ExecJs(opener_contents,
+                              "document.getElementById('link').click();"));
 
   content::WebContents* dest_contents = tab_waiter.Wait();
   ASSERT_NE(dest_contents, opener_contents);
@@ -309,10 +400,11 @@ IN_PROC_BROWSER_TEST_F(BackToOpenerBrowserTest, OpenerMovedToAnotherWindow) {
   std::unique_ptr<content::WebContents> detached =
       browser()->tab_strip_model()->DetachWebContentsAtForInsertion(
           opener_index);
-  Browser* new_browser =
-      Browser::Create(Browser::CreateParams(browser()->profile(), true));
-  new_browser->tab_strip_model()->InsertWebContentsAt(0, std::move(detached),
-                                                      AddTabTypes::ADD_ACTIVE);
+  BrowserWindowInterface* new_browser = CreateBrowserWindow(
+      BrowserWindowCreateParams(browser()->GetProfile(),
+                                /*from_user_gesture=*/true));
+  new_browser->GetTabStripModel()->InsertWebContentsAt(0, std::move(detached),
+                                                       AddTabTypes::ADD_ACTIVE);
 
   // Back button should still work
   EXPECT_TRUE(controller->HasValidOpener());
@@ -323,7 +415,7 @@ IN_PROC_BROWSER_TEST_F(BackToOpenerBrowserTest, OpenerMovedToAnotherWindow) {
   close_watcher.Wait();
 
   // Verify opener in new window is active
-  EXPECT_EQ(new_browser->tab_strip_model()->GetActiveWebContents(),
+  EXPECT_EQ(new_browser->GetTabStripModel()->GetActiveWebContents(),
             opener_contents);
 }
 
@@ -332,7 +424,7 @@ IN_PROC_BROWSER_TEST_F(BackToOpenerBrowserTest, OpenerMovedToAnotherWindow) {
 IN_PROC_BROWSER_TEST_F(BackToOpenerBrowserTest,
                        TabOpenedWithoutOpenerNoRelationship) {
   // Open a new tab directly (not from a link click)
-  chrome::NewTab(browser());
+  chrome::NewTab(browser(), NewTabTypes::kNoUserAction);
   content::WebContents* new_tab_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
 
@@ -366,7 +458,8 @@ IN_PROC_BROWSER_TEST_F(BackToOpenerBrowserTest, BackToOpenerMenuAppears) {
   ui_test_utils::TabAddedWaiter tab_waiter(browser());
 
   // Click the link to open in new tab
-  content::SimulateMouseClickOrTapElementWithId(opener_contents, "link");
+  ASSERT_TRUE(content::ExecJs(opener_contents,
+                              "document.getElementById('link').click();"));
   content::WebContents* dest_contents = tab_waiter.Wait();
   ASSERT_NE(dest_contents, opener_contents);
   EXPECT_TRUE(content::WaitForLoadStop(dest_contents));
@@ -443,7 +536,8 @@ IN_PROC_BROWSER_TEST_F(BackToOpenerBrowserTest,
   ui_test_utils::TabAddedWaiter tab_waiter(browser());
 
   // Click the link to open in new tab
-  content::SimulateMouseClickOrTapElementWithId(opener_contents, "link");
+  ASSERT_TRUE(content::ExecJs(opener_contents,
+                              "document.getElementById('link').click();"));
 
   content::WebContents* dest_contents = tab_waiter.Wait();
   ASSERT_NE(dest_contents, nullptr);
@@ -546,7 +640,8 @@ IN_PROC_BROWSER_TEST_F(BackToOpenerBrowserTest,
   ui_test_utils::TabAddedWaiter tab_waiter(browser());
 
   // Click the link to open in new tab
-  content::SimulateMouseClickOrTapElementWithId(opener_contents, "link");
+  ASSERT_TRUE(content::ExecJs(opener_contents,
+                              "document.getElementById('link').click();"));
   content::WebContents* dest_contents = tab_waiter.Wait();
   ASSERT_NE(dest_contents, nullptr);
   ASSERT_NE(dest_contents, opener_contents);

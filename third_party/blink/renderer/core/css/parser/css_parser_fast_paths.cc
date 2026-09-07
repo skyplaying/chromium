@@ -296,7 +296,7 @@ static unsigned FindLengthOfValidDouble(base::span<const LChar> chars) {
   }
 
   bool decimal_mark_seen = false;
-  size_t valid_length = 0;
+  unsigned valid_length = 0;
 #if defined(__SSE2__) || defined(__ARM_NEON__)
   if (chars.size() >= 16) {
     uint8_t b __attribute__((vector_size(16)));
@@ -361,7 +361,7 @@ static unsigned FindLengthOfValidDouble(base::span<const LChar> chars) {
 #endif  // defined(__SSE2__) || defined(__ARM_NEON__)
 
   for (; valid_length < chars.size(); ++valid_length) {
-    if (!IsASCIIDigit(chars[valid_length])) {
+    if (!IsAsciiDigit(chars[valid_length])) {
       if (!decimal_mark_seen && chars[valid_length] == '.') {
         decimal_mark_seen = true;
       } else {
@@ -588,16 +588,16 @@ ALWAYS_INLINE static bool ParseFloatWithMaxValue(base::span<const LChar>& chars,
   } else {
     negative = false;
   }
-  if (current.empty() || !IsASCIIDigit(current.front())) {
+  if (current.empty() || !IsAsciiDigit(current.front())) {
     return false;
   }
-  while (!current.empty() && IsASCIIDigit(current.front())) {
+  while (!current.empty() && IsAsciiDigit(current.front())) {
     double new_value = value * 10 + (current.front() - '0');
     current = current.subspan(1u);
     if (new_value >= max_value) {
       // Clamp values at 255 or 100 (depending on the caller).
       value = max_value;
-      while (!current.empty() && IsASCIIDigit(current.front())) {
+      while (!current.empty() && IsAsciiDigit(current.front())) {
         current = current.subspan(1u);
       }
       break;
@@ -755,12 +755,12 @@ ALWAYS_INLINE static bool ParsePercentage(base::span<const LChar>& chars,
 static inline bool IsTenthAlpha(base::span<const LChar> chars) {
   // "0.X"
   if (chars.size() == 3 && chars[0] == '0' && chars[1] == '.' &&
-      IsASCIIDigit(chars[2])) {
+      IsAsciiDigit(chars[2])) {
     return true;
   }
 
   // ".X"
-  if (chars.size() == 2 && chars[0] == '.' && IsASCIIDigit(chars[1])) {
+  if (chars.size() == 2 && chars[0] == '.' && IsAsciiDigit(chars[1])) {
     return true;
   }
 
@@ -788,7 +788,7 @@ ALWAYS_INLINE static bool ParseAlphaValue(base::span<const LChar>& chars,
     return false;
   }
 
-  if (chars[length - 1] != terminator || !IsASCIIDigit(chars[length - 2])) {
+  if (chars[length - 1] != terminator || !IsAsciiDigit(chars[length - 2])) {
     return false;
   }
 
@@ -1216,7 +1216,7 @@ bool CSSParserFastPaths::IsValidKeywordPropertyAndValue(
              value_id == CSSValueID::kIntersection;
     case CSSPropertyID::kColumnRuleVisibilityItems:
     case CSSPropertyID::kRowRuleVisibilityItems:
-      return value_id == CSSValueID::kAuto || value_id == CSSValueID::kAll ||
+      return value_id == CSSValueID::kNormal || value_id == CSSValueID::kAll ||
              value_id == CSSValueID::kAround ||
              value_id == CSSValueID::kBetween;
     case CSSPropertyID::kColumnSpan:
@@ -1252,11 +1252,14 @@ bool CSSParserFastPaths::IsValidKeywordPropertyAndValue(
       return value_id == CSSValueID::kNormal || value_id == CSSValueID::kDense;
     case CSSPropertyID::kImageAnimation:
       return value_id == CSSValueID::kRunning ||
-             value_id == CSSValueID::kPaused || value_id == CSSValueID::kNormal;
+             value_id == CSSValueID::kPaused ||
+             value_id == CSSValueID::kNormal ||
+             value_id == CSSValueID::kStopped;
     case CSSPropertyID::kImageRendering:
       return value_id == CSSValueID::kAuto ||
              value_id == CSSValueID::kWebkitOptimizeContrast ||
-             value_id == CSSValueID::kPixelated;
+             value_id == CSSValueID::kPixelated ||
+             value_id == CSSValueID::kCrispEdges;
     case CSSPropertyID::kInterpolateSize:
       return value_id == CSSValueID::kNumericOnly ||
              value_id == CSSValueID::kAllowKeywords;
@@ -1274,6 +1277,9 @@ bool CSSParserFastPaths::IsValidKeywordPropertyAndValue(
     case CSSPropertyID::kMathStyle:
       return value_id == CSSValueID::kNormal ||
              value_id == CSSValueID::kCompact;
+    case CSSPropertyID::kMaxContentSizing:
+      return value_id == CSSValueID::kAuto ||
+             value_id == CSSValueID::kShrinkToFit;
     case CSSPropertyID::kObjectFit:
       return value_id == CSSValueID::kFill ||
              value_id == CSSValueID::kContain ||
@@ -1352,6 +1358,8 @@ bool CSSParserFastPaths::IsValidKeywordPropertyAndValue(
              value_id == CSSValueID::kInternalTextareaAuto ||
              (RuntimeEnabledFeatures::CSSResizeAutoEnabled() &&
               value_id == CSSValueID::kAuto);
+    case CSSPropertyID::kScrollAxisLock:
+      return value_id == CSSValueID::kAuto || value_id == CSSValueID::kNone;
     case CSSPropertyID::kScrollTargetGroup:
       return value_id == CSSValueID::kNone || value_id == CSSValueID::kAuto;
     case CSSPropertyID::kScrollBehavior:
@@ -1409,7 +1417,9 @@ bool CSSParserFastPaths::IsValidKeywordPropertyAndValue(
              value_id == CSSValueID::kDotted ||
              value_id == CSSValueID::kDashed || value_id == CSSValueID::kWavy;
     case CSSPropertyID::kTextDecorationSkipInk:
-      return value_id == CSSValueID::kAuto || value_id == CSSValueID::kNone;
+      return value_id == CSSValueID::kAuto || value_id == CSSValueID::kNone ||
+             (RuntimeEnabledFeatures::CSSTextDecorationSkipInkAllEnabled() &&
+              value_id == CSSValueID::kAll);
     case CSSPropertyID::kTextOrientation:
       return value_id == CSSValueID::kMixed ||
              value_id == CSSValueID::kUpright ||
@@ -1429,16 +1439,6 @@ bool CSSParserFastPaths::IsValidKeywordPropertyAndValue(
              value_id == CSSValueID::kOptimizespeed ||
              value_id == CSSValueID::kOptimizelegibility ||
              value_id == CSSValueID::kGeometricprecision;
-    case CSSPropertyID::kTextTransform:
-      return value_id == CSSValueID::kCapitalize ||
-             value_id == CSSValueID::kUppercase ||
-             value_id == CSSValueID::kLowercase ||
-             value_id == CSSValueID::kMathAuto ||
-             value_id == CSSValueID::kNone ||
-             (RuntimeEnabledFeatures::CSSTextTransformFullWidthEnabled() &&
-              value_id == CSSValueID::kFullWidth) ||
-             (RuntimeEnabledFeatures::CSSTextTransformFullSizeKanaEnabled() &&
-              value_id == CSSValueID::kFullSizeKana);
     case CSSPropertyID::kUnicodeBidi:
       return value_id == CSSValueID::kNormal ||
              value_id == CSSValueID::kEmbed ||
@@ -1453,7 +1453,7 @@ bool CSSParserFastPaths::IsValidKeywordPropertyAndValue(
       return value_id == CSSValueID::kNone ||
              value_id == CSSValueID::kNonScalingStroke;
     case CSSPropertyID::kViewTransitionScope:
-      return value_id == CSSValueID::kNone || value_id == CSSValueID::kAuto;
+      return value_id == CSSValueID::kNone || value_id == CSSValueID::kAll;
     case CSSPropertyID::kVisibility:
       return value_id == CSSValueID::kVisible ||
              value_id == CSSValueID::kHidden ||
@@ -1462,6 +1462,8 @@ bool CSSParserFastPaths::IsValidKeywordPropertyAndValue(
       return (value_id >= CSSValueID::kDrag &&
               value_id <= CSSValueID::kNoDrag) ||
              value_id == CSSValueID::kNone;
+    case CSSPropertyID::kWindowDrag:
+      return value_id == CSSValueID::kNone || value_id == CSSValueID::kMove;
     case CSSPropertyID::kAppearance:
       return (value_id == CSSValueID::kCheckbox ||
               value_id == CSSValueID::kRadio ||
@@ -1625,8 +1627,6 @@ bool CSSParserFastPaths::IsValidKeywordPropertyAndValue(
              value_id == CSSValueID::kStart ||
              value_id == CSSValueID::kCenter ||
              value_id == CSSValueID::kSpaceBetween;
-    case CSSPropertyID::kRubyOverhang:
-      return value_id == CSSValueID::kAuto || value_id == CSSValueID::kNone;
     case CSSPropertyID::kWebkitRubyPosition:
       return value_id == CSSValueID::kBefore || value_id == CSSValueID::kAfter;
     case CSSPropertyID::kRubyPosition:
@@ -1708,7 +1708,10 @@ bool CSSParserFastPaths::IsValidKeywordPropertyAndValue(
     case CSSPropertyID::kOverscrollBehaviorX:
     case CSSPropertyID::kOverscrollBehaviorY:
       return value_id == CSSValueID::kAuto ||
-             value_id == CSSValueID::kContain || value_id == CSSValueID::kNone;
+             value_id == CSSValueID::kContain ||
+             value_id == CSSValueID::kNone ||
+             (value_id == CSSValueID::kChain &&
+              RuntimeEnabledFeatures::CSSOverscrollBehaviorChainEnabled());
     case CSSPropertyID::kOriginTrialTestProperty:
       return value_id == CSSValueID::kNormal || value_id == CSSValueID::kNone;
     case CSSPropertyID::kTextBoxTrim:
@@ -1719,15 +1722,20 @@ bool CSSParserFastPaths::IsValidKeywordPropertyAndValue(
     case CSSPropertyID::kInteractivity:
       return value_id == CSSValueID::kAuto || value_id == CSSValueID::kInert;
     case CSSPropertyID::kContinue:
-      return value_id == CSSValueID::kAuto ||
+      return value_id == CSSValueID::kNormal ||
              value_id == CSSValueID::kCollapse ||
              value_id == CSSValueID::kWebkitLegacy;
     case CSSPropertyID::kBlockEllipsis:
-      return value_id == CSSValueID::kAuto ||
+      return value_id == CSSValueID::kEllipsis ||
              value_id == CSSValueID::kNoEllipsis;
-    case CSSPropertyID::kInternalOverscrollArea:
+    case CSSPropertyID::kOverscrollContainerType:
+      return value_id == CSSValueID::kNone || value_id == CSSValueID::kAuto ||
+             value_id == CSSValueID::kPush || value_id == CSSValueID::kOverlay;
+    case CSSPropertyID::kInternalOverscrollContainer:
     case CSSPropertyID::kInternalOverscrollPosition:
       return value_id == CSSValueID::kNone || value_id == CSSValueID::kAuto;
+    case CSSPropertyID::kInternalUnbounded:
+      return value_id == CSSValueID::kNone || value_id == CSSValueID::kActive;
     default:
       NOTREACHED();
   }
@@ -1782,6 +1790,7 @@ CSSBitset CSSParserFastPaths::handled_by_keyword_fast_paths_properties_{{
     CSSPropertyID::kMaskType,
     CSSPropertyID::kMathShift,
     CSSPropertyID::kMathStyle,
+    CSSPropertyID::kMaxContentSizing,
     CSSPropertyID::kObjectFit,
     CSSPropertyID::kOutlineStyle,
     CSSPropertyID::kOverflowAnchor,
@@ -1802,6 +1811,7 @@ CSSBitset CSSParserFastPaths::handled_by_keyword_fast_paths_properties_{{
     CSSPropertyID::kResize,
     CSSPropertyID::kRowRuleBreak,
     CSSPropertyID::kRowRuleVisibilityItems,
+    CSSPropertyID::kScrollAxisLock,
     CSSPropertyID::kScrollTargetGroup,
     CSSPropertyID::kScrollBehavior,
     CSSPropertyID::kOverscrollBehaviorInline,
@@ -1809,7 +1819,6 @@ CSSBitset CSSParserFastPaths::handled_by_keyword_fast_paths_properties_{{
     CSSPropertyID::kOverscrollBehaviorX,
     CSSPropertyID::kOverscrollBehaviorY,
     CSSPropertyID::kRubyAlign,
-    CSSPropertyID::kRubyOverhang,
     CSSPropertyID::kShapeRendering,
     CSSPropertyID::kSpeak,
     CSSPropertyID::kStrokeLinecap,
@@ -1826,12 +1835,12 @@ CSSBitset CSSParserFastPaths::handled_by_keyword_fast_paths_properties_{{
     CSSPropertyID::kWebkitTextOrientation,
     CSSPropertyID::kTextRendering,
     CSSPropertyID::kTextSpacingTrim,
-    CSSPropertyID::kTextTransform,
     CSSPropertyID::kUnicodeBidi,
     CSSPropertyID::kVectorEffect,
     CSSPropertyID::kViewTransitionScope,
     CSSPropertyID::kVisibility,
     CSSPropertyID::kAppRegion,
+    CSSPropertyID::kWindowDrag,
     CSSPropertyID::kBackfaceVisibility,
     CSSPropertyID::kBorderBlockEndStyle,
     CSSPropertyID::kBorderBlockStartStyle,
@@ -1878,8 +1887,10 @@ CSSBitset CSSParserFastPaths::handled_by_keyword_fast_paths_properties_{{
     CSSPropertyID::kTextBoxTrim,
     CSSPropertyID::kScrollInitialTarget,
     CSSPropertyID::kInteractivity,
-    CSSPropertyID::kInternalOverscrollArea,
+    CSSPropertyID::kOverscrollContainerType,
+    CSSPropertyID::kInternalOverscrollContainer,
     CSSPropertyID::kInternalOverscrollPosition,
+    CSSPropertyID::kInternalUnbounded,
 }};
 
 bool CSSParserFastPaths::IsValidSystemFont(CSSValueID value_id) {
@@ -1899,7 +1910,7 @@ static inline CSSValue* ParseCSSWideKeywordValue(
     return CSSInheritedValue::Create();
   }
   if (length == 5 && MatchesCaseInsensitiveLiteral4(ptr, "unse") &&
-      IsASCIIAlphaCaselessEqual(UNSAFE_BUFFERS(ptr[4]), 't')) {
+      EqualIgnoringAsciiCase<'t'>(UNSAFE_BUFFERS(ptr[4]))) {
     return cssvalue::CSSUnsetValue::Create();
   }
   if (length == 6 && MatchesCaseInsensitiveLiteral4(ptr, "reve") &&
@@ -1914,7 +1925,7 @@ static inline CSSValue* ParseCSSWideKeywordValue(
   if (length == 11 && MatchesCaseInsensitiveLiteral4(ptr, "reve") &&
       MatchesCaseInsensitiveLiteral4(UNSAFE_BUFFERS(ptr + 4), "rt-r") &&
       MatchesCaseInsensitiveLiteral2(UNSAFE_BUFFERS(ptr + 8), "ul") &&
-      IsASCIIAlphaCaselessEqual(UNSAFE_BUFFERS(ptr[10]), 'e')) {
+      EqualIgnoringAsciiCase<'e'>(UNSAFE_BUFFERS(ptr[10]))) {
     if (RuntimeEnabledFeatures::CSSRevertRuleEnabled()) {
       return cssvalue::CSSRevertRuleValue::Create();
     }
@@ -2069,11 +2080,11 @@ static CSSFunctionValue* ParseSimpleTransformValue(
     CSSValueID transform_type;
     unsigned expected_argument_count = 1;
     unsigned argument_start = 11;
-    if (IsASCIIAlphaCaselessEqual(chars[9], 'x') && chars[10] == '(') {
+    if (EqualIgnoringAsciiCase<'x'>(chars[9]) && chars[10] == '(') {
       transform_type = CSSValueID::kTranslateX;
-    } else if (IsASCIIAlphaCaselessEqual(chars[9], 'y') && chars[10] == '(') {
+    } else if (EqualIgnoringAsciiCase<'y'>(chars[9]) && chars[10] == '(') {
       transform_type = CSSValueID::kTranslateY;
-    } else if (IsASCIIAlphaCaselessEqual(chars[9], 'z') && chars[10] == '(') {
+    } else if (EqualIgnoringAsciiCase<'z'>(chars[9]) && chars[10] == '(') {
       transform_type = CSSValueID::kTranslateZ;
     } else if (chars[9] == '(') {
       transform_type = CSSValueID::kTranslate;
@@ -2127,7 +2138,7 @@ static CSSFunctionValue* ParseSimpleTransformValue(
     if (chars[6] == '(') {
       chars = chars.subspan(7u);
       rotate_value_id = CSSValueID::kRotate;
-    } else if (IsASCIIAlphaCaselessEqual(chars[6], 'z') && chars[7] == '(') {
+    } else if (EqualIgnoringAsciiCase<'z'>(chars[6]) && chars[7] == '(') {
       chars = chars.subspan(8u);
       rotate_value_id = CSSValueID::kRotateZ;
     } else {

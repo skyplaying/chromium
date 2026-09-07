@@ -35,9 +35,7 @@ import java.io.IOException;
 
 /** Unit tests for {@link DexFixer}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(
-        manifest = Config.NONE,
-        shadows = {DexFixerTest.ShadowOs.class})
+@Config(shadows = {DexFixerTest.ShadowOs.class})
 public class DexFixerTest {
     @Implements(Os.class)
     public static class ShadowOs {
@@ -53,7 +51,7 @@ public class DexFixerTest {
         }
     }
 
-    @Mock private Runtime mMockRuntime;
+    @Mock private DexFixer.CommandExecutor mMockExecutor;
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.STRICT_STUBS);
 
     @Before
@@ -63,7 +61,7 @@ public class DexFixerTest {
 
     private void verifyDexOpt() {
         try {
-            verify(mMockRuntime)
+            verify(mMockExecutor)
                     .exec(Mockito.matches("/system/bin/cmd package compile -r shared \\S+"));
         } catch (IOException e) {
             // Mocks don't actually throw...
@@ -72,15 +70,15 @@ public class DexFixerTest {
 
     @Test
     public void testFixDexIfNecessary_notNeeded() {
-        @DexFixerReason int reason = DexFixer.fixDexIfNecessary(mMockRuntime);
+        @DexFixerReason int reason = DexFixer.fixDexIfNecessary(mMockExecutor);
         assertThat(reason).isEqualTo(DexFixerReason.NOT_NEEDED);
-        verifyNoMoreInteractions(mMockRuntime);
+        verifyNoMoreInteractions(mMockExecutor);
     }
 
     @Test
     public void testFixDexIfNecessary_notReadable() {
         ShadowOs.sWorldReadable = false;
-        @DexFixerReason int reason = DexFixer.fixDexIfNecessary(mMockRuntime);
+        @DexFixerReason int reason = DexFixer.fixDexIfNecessary(mMockExecutor);
         assertThat(reason).isEqualTo(DexFixerReason.NOT_READABLE);
         verifyDexOpt();
     }
@@ -91,7 +89,7 @@ public class DexFixerTest {
         appInfo.splitNames = new String[] {"ignored.en"};
         ShadowOs.sWorldReadable = false;
 
-        @DexFixerReason int reason = DexFixer.fixDexIfNecessary(mMockRuntime);
+        @DexFixerReason int reason = DexFixer.fixDexIfNecessary(mMockExecutor);
         assertThat(reason).isEqualTo(DexFixerReason.NOT_READABLE);
         verifyDexOpt();
     }

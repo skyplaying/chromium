@@ -10,10 +10,11 @@
 
 namespace autofill {
 
+class AutofillClient;
+
 class MockMerchantPromoCodeManager : public MerchantPromoCodeManager {
  public:
-  explicit MockMerchantPromoCodeManager(
-      PaymentsDataManager* payments_data_manager);
+  explicit MockMerchantPromoCodeManager(AutofillClient* autofill_client);
   ~MockMerchantPromoCodeManager() override;
 
   MOCK_METHOD(bool,
@@ -21,7 +22,7 @@ class MockMerchantPromoCodeManager : public MerchantPromoCodeManager {
               (const FormStructure& form_structure,
                const FormFieldData& field,
                const AutofillField& autofill_field,
-               const AutofillClient& client,
+               AutofillClient& client,
                SingleFieldFillRouter::OnSuggestionsReturnedCallback& callback),
               (override));
   MOCK_METHOD(void,

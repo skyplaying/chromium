@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/nearby_sharing/client/nearby_share_client_impl.h"
+
 #include <string>
 #include <utility>
 #include <vector>
@@ -16,13 +18,13 @@
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/nearby_sharing/client/nearby_share_client.h"
-#include "chrome/browser/nearby_sharing/client/nearby_share_client_impl.h"
 #include "chrome/browser/nearby_sharing/client/nearby_share_http_notifier.h"
 #include "chrome/browser/nearby_sharing/common/nearby_share_switches.h"
 #include "chromeos/ash/components/nearby/common/client/nearby_api_call_flow.h"
 #include "chromeos/ash/components/nearby/common/client/nearby_api_call_flow_impl.h"
 #include "chromeos/ash/components/nearby/common/client/nearby_http_result.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/nearby/sharing/proto/certificate_rpc.pb.h"
@@ -144,7 +146,7 @@ std::vector<std::string> ExpectQueryStringValues(
       values.push_back(pair.second);
     }
   }
-  EXPECT_TRUE(values.size() > 0);
+  EXPECT_GT(values.size(), 0u);
   return values;
 }
 
@@ -320,10 +322,10 @@ class NearbyShareClientImplTest : public testing::Test,
       list_public_certificate_response_from_notifier_;
   base::test::TaskEnvironment task_environment_;
   signin::IdentityTestEnvironment identity_test_environment_;
-  raw_ptr<FakeNearbyShareApiCallFlow, DanglingUntriaged> api_call_flow_;
   scoped_refptr<network::SharedURLLoaderFactory> shared_factory_;
   NearbyShareHttpNotifier notifier_;
   std::unique_ptr<NearbyShareClient> client_;
+  raw_ptr<FakeNearbyShareApiCallFlow> api_call_flow_;
 };
 
 TEST_F(NearbyShareClientImplTest, UpdateDeviceSuccess) {
@@ -557,7 +559,8 @@ TEST_F(NearbyShareClientImplTest, FetchAccessTokenFailure) {
       future.GetCallback());
   identity_test_environment_
       .WaitForAccessTokenRequestIfNecessaryAndRespondWithError(
-          GoogleServiceAuthError(GoogleServiceAuthError::SERVICE_UNAVAILABLE));
+          GoogleServiceAuthError::FromServiceUnavailable(
+              "Service unavailable."));
 
   EXPECT_EQ(ash::nearby::NearbyHttpError::kAuthenticationError, future.Get());
 }

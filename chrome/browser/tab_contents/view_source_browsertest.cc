@@ -15,7 +15,6 @@
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_features.h"
-#include "chrome/common/url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/back_forward_cache.h"
@@ -25,6 +24,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/isolated_world_ids.h"
+#include "content/public/common/url_constants.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/prerender_test_util.h"
@@ -94,7 +94,7 @@ class ViewSourcePermissionsPolicyTest : public ViewSourceTest {
 // This test renders a page in view-source and then checks to see if the title
 // set in the html was set successfully (it shouldn't because we rendered the
 // page in view source).
-// Flaky; see http://crbug.com/72201.
+// Flaky; see http://crbug.com/41319283.
 IN_PROC_BROWSER_TEST_F(ViewSourceTest, DoesBrowserRenderInViewSource) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
@@ -143,7 +143,7 @@ IN_PROC_BROWSER_TEST_F(ViewSourceTest, ViewSourceInMenuEnabledOnANormalPage) {
 }
 
 // For page that is media content, make sure that we cannot select "View Source"
-// See http://crbug.com/83714
+// See http://crbug.com/40573724
 IN_PROC_BROWSER_TEST_F(ViewSourceTest, ViewSourceInMenuDisabledOnAMediaPage) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
@@ -326,7 +326,7 @@ IN_PROC_BROWSER_TEST_F(ViewSourceTest, CrossSiteSubframe) {
 }
 
 // Tests that "View Source" works fine for pages shown via HTTP POST.
-// This is a regression test for https://crbug.com/523.
+// This is a regression test for https://crbug.com/40432314.
 IN_PROC_BROWSER_TEST_F(ViewSourceTest, HttpPostInMainframe) {
   // Navigate to a page with a form.
   content::SetupCrossSiteRedirector(embedded_test_server());

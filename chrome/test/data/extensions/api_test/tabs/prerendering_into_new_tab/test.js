@@ -21,17 +21,16 @@ async function setup() {
   const kInitiatorUrl = getUrl('initiator.html');
   const kEmptyJsUrl = getUrl('empty.js');
   await new Promise(resolve => {
-    const onBeforeRequest =
-        (details => {
-          if (details.documentLifecycle === 'prerender') {
-            prerenderingTabId = details.tabId;
-            prerenderingFrameId = details.frameId;
-            prerenderingDocumentId = details.documentId;
-            chrome.test.assertNe(0, prerenderingFrameId);
-            chrome.webRequest.onBeforeRequest.removeListener(onBeforeRequest);
-            resolve();
-          }
-        });
+    const onBeforeRequest = (details => {
+      if (details.documentLifecycle === 'prerender') {
+        prerenderingTabId = details.tabId;
+        prerenderingFrameId = details.frameId;
+        prerenderingDocumentId = details.documentId;
+        chrome.test.assertNe(0, prerenderingFrameId);
+        chrome.webRequest.onBeforeRequest.removeListener(onBeforeRequest);
+        resolve();
+      }
+    });
     chrome.webRequest.onBeforeRequest.addListener(
         onBeforeRequest, {urls: [kEmptyJsUrl]}, []);
     chrome.test.waitForRoundTrip('msg', () => {
@@ -95,13 +94,12 @@ async function testGetTitleByFrameId() {
 // Checks that manifest v2 does not support `documentId`.
 async function testGetTitleByDocumentId() {
   await setup();
+  // Verify `executeScript` throws when using `documentId` in manifest v2.
   chrome.test.assertThrows(
-      chrome.tabs.executeScript,
-      [
-        prerenderingTabId,
-        {documentId: prerenderingDocumentId, code: 'document.title;'},
-        results => chrome.test.fail('should not succeed.')
-      ],
+      chrome.tabs.executeScript.bind(
+          null, prerenderingTabId,
+          {documentId: prerenderingDocumentId, code: 'document.title;'},
+          results => chrome.test.fail('should not succeed.')),
       'Error in invocation of tabs.executeScript(optional integer tabId, ' +
           'extensionTypes.InjectDetails details, optional function ' +
           'callback): Error at parameter \'details\': Unexpected property: \'' +
@@ -132,71 +130,67 @@ async function testOnAttachedWithoutActivation() {
       null, pass(function(tab) {
         windowId = tab.windowId;
         waitForAllTabs(pass(function() {
-          createWindow(
-              [''], {}, pass(function(winId, tabIds) {
-                secondWindowId = winId;
-                chrome.test.assertNe(windowId, -1);
-                chrome.test.assertNe(secondWindowId, -1);
-                chrome.tabs.move(
-                    prerenderingTabId, {'windowId': secondWindowId, 'index': 0},
-                    function() {
-                      chrome.test.assertEq(
-                          chrome.runtime.lastError.message,
-                          'No tab with id: ' + prerenderingTabId + '.');
-                    });
-              }));
+          createWindow([''], {}, pass(function(winId, tabIds) {
+                         secondWindowId = winId;
+                         chrome.test.assertNe(windowId, -1);
+                         chrome.test.assertNe(secondWindowId, -1);
+                         chrome.tabs.move(
+                             prerenderingTabId,
+                             {windowId: secondWindowId, index: 0},
+                             fail('Invalid value for state'));
+                       }));
         }));
       }));
-
-  chrome.test.succeed();
 }
 
 // Tests that OnAttached is aware of the newly created prerendering into a new
 // tab after activation.
 async function testOnAttachedAfterActivation() {
-  const activationCallback = details => {
-    if (details.documentLifecycle === 'prerender') {
-      chrome.tabs.executeScript(tabId, {
-        code: `document.getElementById(\'link\').click();`,
-        runAt: 'document_idle'
-      });
-
-      let windowId = -1;
-      let secondWindowId = -1;
-      chrome.tabs.getSelected(
-          null, pass(function(tab) {
-            windowId = tab.windowId;
-
-            waitForAllTabs(pass(function() {
-              createWindow([''], {}, pass(function(winId, tabIds) {
-                             secondWindowId = winId;
-                             chrome.test.listenOnce(
-                                 chrome.tabs.onAttached,
-                                 function(testTabId, info) {
-                                   // Ensure notification is correct.
-                                   assertEq(testTabId, prerenderingTabId);
-                                   assertEq(winId, info.newWindowId);
-                                   chrome.test.succeed();
-                                 });
-
-                             chrome.test.assertNe(windowId, -1);
-                             chrome.test.assertNe(secondWindowId, -1);
-                             chrome.tabs.move(
-                                 prerenderingTabId,
-                                 {'windowId': secondWindowId, 'index': 0},
-                                 function() {});
-                           }));
-            }));
-          }));
-    }
-  };
-
-  chrome.webRequest.onCompleted.addListener(
-      activationCallback, {urls: [getUrl('empty.js')]}, []);
-
   // This test is intended to check the behavior after activation, so it is
   // needed to set up activationCallback before calling setup function.
+  const activation = new Promise(resolve => {
+    const activationCallback = details => {
+      if (details.documentLifecycle === 'prerender') {
+        chrome.webRequest.onCompleted.removeListener(activationCallback);
+        resolve();
+      }
+    };
+    chrome.webRequest.onCompleted.addListener(
+        activationCallback, {urls: [getUrl('empty.js')]}, []);
+  });
+
   await setup();
+  await activation;
+
+  chrome.tabs.executeScript(tabId, {
+    code: `document.getElementById('link').click();`,
+    runAt: 'document_idle',
+  });
+
+  let windowId = -1;
+  let secondWindowId = -1;
+  chrome.tabs.getSelected(
+      null, pass(function(tab) {
+        windowId = tab.windowId;
+
+        waitForAllTabs(pass(function() {
+          createWindow([''], {}, pass(function(winId, tabIds) {
+                         secondWindowId = winId;
+                         chrome.test.listenOnce(
+                             chrome.tabs.onAttached, function(testTabId, info) {
+                               // Ensure notification is correct.
+                               assertEq(testTabId, prerenderingTabId);
+                               assertEq(winId, info.newWindowId);
+                             });
+
+                         chrome.test.assertNe(windowId, -1);
+                         chrome.test.assertNe(secondWindowId, -1);
+                         chrome.tabs.move(
+                             prerenderingTabId,
+                             {windowId: secondWindowId, index: 0}, pass());
+                       }));
+        }));
+      }));
 }
 
 chrome.test.getConfig(async config => {

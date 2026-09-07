@@ -9,14 +9,12 @@ import static org.chromium.build.NullUtil.assumeNonNull;
 import android.content.Context;
 import android.net.Uri;
 import android.os.Bundle;
-import android.view.Menu;
-import android.view.MenuInflater;
-import android.view.MenuItem;
 
 import androidx.annotation.DrawableRes;
 import androidx.annotation.VisibleForTesting;
 import androidx.appcompat.content.res.AppCompatResources;
 import androidx.browser.customtabs.CustomTabsIntent;
+import androidx.lifecycle.Lifecycle;
 import androidx.preference.Preference;
 import androidx.preference.PreferenceScreen;
 
@@ -31,6 +29,7 @@ import org.chromium.chrome.R;
 import org.chromium.chrome.browser.autofill.AutofillUiUtils;
 import org.chromium.chrome.browser.autofill.PersonalDataManager;
 import org.chromium.chrome.browser.autofill.PersonalDataManagerFactory;
+import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
 import org.chromium.chrome.browser.settings.search.ChromeBaseSearchIndexProvider;
 import org.chromium.chrome.browser.touch_to_fill.common.TouchToFillResourceProvider;
@@ -66,34 +65,16 @@ public class AutofillBuyNowPayLaterFragment extends ChromeBaseSettingsFragment
     @Override
     public void onCreatePreferences(@Nullable Bundle savedInstanceState, @Nullable String rootKey) {
         mPageTitle.set(getString(R.string.autofill_bnpl_settings_label));
-        setHasOptionsMenu(true);
+
+        requireActivity()
+                .addMenuProvider(new AutofillHelpMenuProvider(this), this, Lifecycle.State.RESUMED);
+
         // Create blank preference screen.
         PreferenceScreen screen = getPreferenceManager().createPreferenceScreen(getStyledContext());
         // Suppresses unwanted animations while Preferences are removed from and re-added to the
         // screen.
         screen.setShouldUseGeneratedIds(false);
         setPreferenceScreen(screen);
-    }
-
-    @Override
-    public void onCreateOptionsMenu(Menu menu, MenuInflater inflater) {
-        menu.clear();
-        MenuItem help =
-                menu.add(Menu.NONE, R.id.menu_id_targeted_help, Menu.NONE, R.string.menu_help);
-        help.setIcon(R.drawable.ic_help_24dp);
-    }
-
-    @Override
-    public boolean onOptionsItemSelected(MenuItem item) {
-        if (item.getItemId() == R.id.menu_id_targeted_help) {
-            getHelpAndFeedbackLauncher()
-                    .show(
-                            getActivity(),
-                            getActivity().getString(R.string.help_context_autofill),
-                            /* url= */ null);
-            return true;
-        }
-        return super.onOptionsItemSelected(item);
     }
 
     @Override
@@ -218,12 +199,18 @@ public class AutofillBuyNowPayLaterFragment extends ChromeBaseSettingsFragment
             new ChromeBaseSearchIndexProvider(AutofillBuyNowPayLaterFragment.class.getName(), 0) {
 
                 @Override
-                public void updateDynamicPreferences(Context context, SettingsIndexData indexData) {
-                    indexData.addEntryForKey(
-                            AutofillBuyNowPayLaterFragment.class.getName(),
-                            PREF_KEY_ENABLE_BUY_NOW_PAY_LATER,
-                            R.string.autofill_bnpl_settings_label,
-                            R.string.autofill_bnpl_settings_toggle_sublabel);
+                public void updateDynamicPreferences(
+                        Context context, SettingsIndexData indexData, Profile profile) {
+                    PersonalDataManager personalDataManager =
+                            PersonalDataManagerFactory.getForProfile(profile);
+                    if (AutofillPaymentMethodsFragment.shouldShowBnplPref(
+                            personalDataManager, profile)) {
+                        indexData.addEntryForKey(
+                                AutofillBuyNowPayLaterFragment.class.getName(),
+                                PREF_KEY_ENABLE_BUY_NOW_PAY_LATER,
+                                R.string.autofill_bnpl_settings_label,
+                                R.string.autofill_bnpl_settings_toggle_sublabel);
+                    }
                 }
             };
 }

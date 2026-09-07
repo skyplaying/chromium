@@ -9,7 +9,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/threading/thread_restrictions.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "components/on_device_translation/public/language_pack.h"
 #include "components/on_device_translation/public/pref_names.h"
@@ -26,6 +26,59 @@ MockComponentManager::MockComponentManager(const base::FilePath& package_dir)
       mock_component_manager_(ComponentManager::SetForTesting(this)) {}
 
 MockComponentManager::~MockComponentManager() = default;
+
+TestInstallerAdapter::TestInstallerAdapter() = default;
+TestInstallerAdapter::~TestInstallerAdapter() = default;
+
+bool TestInstallerAdapter::IsInit() const {
+  return OnDeviceTranslationInstaller::GetInstance()->IsInit();
+}
+
+std::set<LanguagePackKey> TestInstallerAdapter::RegisteredLanguagePacks()
+    const {
+  return OnDeviceTranslationInstaller::GetInstance()->RegisteredLanguagePacks();
+}
+
+std::set<LanguagePackKey> TestInstallerAdapter::InstalledLanguagePacks() const {
+  return OnDeviceTranslationInstaller::GetInstance()->InstalledLanguagePacks();
+}
+
+base::FilePath TestInstallerAdapter::GetLibraryPath() const {
+  return g_browser_process->local_state()->GetFilePath(
+      prefs::kTranslateKitBinaryPath);
+}
+
+base::FilePath TestInstallerAdapter::GetLanguagePackPath(
+    LanguagePackKey language_pack) const {
+  const LanguagePackComponentConfig* config =
+      kLanguagePackComponentConfigMap.at(language_pack);
+  return g_browser_process->local_state()->GetFilePath(
+      GetComponentPathPrefName(*config));
+}
+
+void TestInstallerAdapter::Init(base::RepeatingClosure on_ready_callback) {
+  ComponentManager::GetInstance().RegisterTranslateKitComponent();
+  on_ready_callback.Run();
+}
+
+void TestInstallerAdapter::InstallLanguagePack(LanguagePackKey language_pack) {
+  ComponentManager::GetInstance().RegisterTranslateKitLanguagePackComponent(
+      language_pack);
+}
+
+void TestInstallerAdapter::UnInstallLanguagePack(
+    LanguagePackKey language_pack) {
+  ComponentManager::GetInstance().UninstallTranslateKitLanguagePackComponent(
+      language_pack);
+}
+
+void TestInstallerAdapter::AddObserver(Observer* observer) {
+  OnDeviceTranslationInstaller::GetInstance()->AddObserver(observer);
+}
+
+void TestInstallerAdapter::RemoveObserver(Observer* observer) {
+  OnDeviceTranslationInstaller::GetInstance()->RemoveObserver(observer);
+}
 void MockComponentManager::DoNotExpectCallRegisterTranslateKitComponent() {
   EXPECT_CALL(*this, RegisterTranslateKitComponentImpl()).Times(0);
 }
@@ -79,6 +132,9 @@ void MockComponentManager::InstallComponent(base::FilePath library_path) {
   CHECK(base::CopyFile(library_path, binary_path));
   g_browser_process->local_state()->SetFilePath(prefs::kTranslateKitBinaryPath,
                                                 binary_path);
+  if (on_installation_changed_callback_) {
+    on_installation_changed_callback_.Run();
+  }
 }
 
 void MockComponentManager::InstallMockLanguagePack(
@@ -115,6 +171,9 @@ void MockComponentManager::InstallMockLanguagePack(
       GetRegisteredFlagPrefName(*config), true);
   g_browser_process->local_state()->SetFilePath(
       GetComponentPathPrefName(*config), dict_dir_path);
+  if (on_installation_changed_callback_) {
+    on_installation_changed_callback_.Run();
+  }
 }
 
 void MockComponentManager::InstallMockTranslateKitComponentLater() {
@@ -156,20 +215,20 @@ std::string CreateFakeDictionaryData(const std::string_view sourceLang,
   return base::StringPrintf("%s to %s: ", sourceLang, targetLang);
 }
 
-void TestSimpleTranslationWorks(Browser* browser,
+void TestSimpleTranslationWorks(BrowserWindowInterface* browser,
                                 LanguagePackKey language_pack_key) {
   TestSimpleTranslationWorks(browser, GetSourceLanguageCode(language_pack_key),
                              GetTargetLanguageCode(language_pack_key));
 }
 
-void TestSimpleTranslationWorks(Browser* browser,
+void TestSimpleTranslationWorks(BrowserWindowInterface* browser,
                                 const std::string_view sourceLang,
                                 const std::string_view targetLang) {
   // Translate "hello" from `sourceLang` to `targetLang`.
   // Note: the mock TranslateKit component returns the concatenation of the
   // content of "dict.dat" in the language pack and the input text.
   // See comments in mock_translate_kit_lib.cc for more details.
-  EXPECT_EQ(EvalJs(browser->tab_strip_model()->GetActiveWebContents(),
+  EXPECT_EQ(EvalJs(browser->GetTabStripModel()->GetActiveWebContents(),
                    base::StringPrintf(R"(
         (async () => {
           try {
@@ -188,7 +247,7 @@ void TestSimpleTranslationWorks(Browser* browser,
             base::StringPrintf("%s to %s: hello", sourceLang, targetLang));
 }
 
-void TestCreateTranslator(Browser* browser,
+void TestCreateTranslator(BrowserWindowInterface* browser,
                           LanguagePackKey language_pack_key,
                           const std::string_view result) {
   TestCreateTranslator(browser, GetSourceLanguageCode(language_pack_key),
@@ -196,11 +255,11 @@ void TestCreateTranslator(Browser* browser,
 }
 
 // Tests that the createTranslator() returns the expected result.
-void TestCreateTranslator(Browser* browser,
+void TestCreateTranslator(BrowserWindowInterface* browser,
                           const std::string_view sourceLang,
                           const std::string_view targetLang,
                           const std::string_view result) {
-  ASSERT_EQ(EvalJs(browser->tab_strip_model()->GetActiveWebContents(),
+  ASSERT_EQ(EvalJs(browser->GetTabStripModel()->GetActiveWebContents(),
                    base::StringPrintf(R"(
   (async () => {
     try {
@@ -221,11 +280,11 @@ void TestCreateTranslator(Browser* browser,
 
 // Tests that availability() method returns the expected result for the given
 // languages.
-void TestTranslationAvailable(Browser* browser,
+void TestTranslationAvailable(BrowserWindowInterface* browser,
                               const std::string_view sourceLang,
                               const std::string_view targetLang,
                               const std::string_view result) {
-  ASSERT_EQ(EvalJs(browser->tab_strip_model()->GetActiveWebContents(),
+  ASSERT_EQ(EvalJs(browser->GetTabStripModel()->GetActiveWebContents(),
                    base::StringPrintf(R"(
   (async () => {
     try {

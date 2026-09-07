@@ -54,8 +54,8 @@ typedef int            FcBool;
  */
 
 #define FC_MAJOR                2
-#define FC_MINOR                17
-#define FC_REVISION             1
+#define FC_MINOR                18
+#define FC_REVISION             3
 
 #define FC_VERSION              ((FC_MAJOR * 10000) + (FC_MINOR * 100) + (FC_REVISION))
 
@@ -69,10 +69,21 @@ typedef int            FcBool;
  * it means multiple copies of the font information.
  */
 
-#define FC_CACHE_VERSION_NUMBER 11
-#define _FC_STRINGIFY_(s)       #s
-#define _FC_STRINGIFY(s)        _FC_STRINGIFY_ (s)
-#define FC_CACHE_VERSION        _FC_STRINGIFY (FC_CACHE_VERSION_NUMBER)
+/* clang-format off */
+/* Keep @...@ tokens intact for meson configure_file() substitution. */
+#define FC_CACHE_VERSION_NUMBER		12
+#define FC_CACHE_SNAP_VERSION_NUMBER	0
+#define FC_NEXT_CACHE_VERSION_NUMBER	0
+#define FC_CACHE_MIN_COMPAT_VERSION	9
+/* clang-format on */
+
+#define _FC_STRINGIFY_(s) #s
+#define _FC_STRINGIFY(s)  _FC_STRINGIFY_ (s)
+#if FC_NEXT_CACHE_VERSION_NUMBER > 0
+#  define FC_CACHE_VERSION _FC_STRINGIFY (FC_NEXT_CACHE_VERSION_NUMBER) "~snap" _FC_STRINGIFY (FC_CACHE_SNAP_VERSION_NUMBER)
+#else
+#  define FC_CACHE_VERSION _FC_STRINGIFY (FC_CACHE_VERSION_NUMBER)
+#endif
 
 #define FcFalse                 0
 #define FcTrue                  1
@@ -223,6 +234,9 @@ typedef int            FcBool;
 #define FC_FAMILY_EMOJI         11
 #define FC_FAMILY_MATH          12
 #define FC_FAMILY_FANGSONG      13
+
+/* Warnings */
+#define FC_WARN_INVALID_ATTR    (1 << 0)
 
 typedef enum _FcType {
     FcTypeUnknown = -1,
@@ -467,6 +481,9 @@ FcPublic FcStrList *
 FcConfigGetFontDirs (FcConfig *config);
 
 FcPublic FcStrList *
+FcConfigGetAppFonts (FcConfig *config);
+
+FcPublic FcStrList *
 FcConfigGetConfigDirs (FcConfig *config);
 
 FcPublic FcStrList *
@@ -496,6 +513,10 @@ FcConfigAcceptFont (FcConfig        *config,
                     const FcPattern *font);
 
 FcPublic FcBool
+FcConfigAcceptFilename (FcConfig      *config,
+                        const FcChar8 *filename);
+
+FcPublic FcBool
 FcConfigAcceptFilter (FcConfig        *config,
                       const FcPattern *font);
 
@@ -512,6 +533,12 @@ FcConfigAppFontClear (FcConfig *config);
 
 FcPublic void
 FcConfigPreferAppFont (FcConfig *config, FcBool flag);
+
+FcPublic void
+FcConfigSetWarningFlags (FcConfig *config, int warn, FcBool flag);
+
+FcPublic int
+FcConfigGetWarningFlags (FcConfig *config);
 
 FcPublic FcBool
 FcConfigSubstituteWithPat (FcConfig   *config,
@@ -940,7 +967,7 @@ FcValueSave (FcValue v);
 FcPublic void
 FcPatternDestroy (FcPattern *p);
 
-int
+FcPublic int
 FcPatternObjectCount (const FcPattern *pat);
 
 FcPublic FcBool
@@ -1203,7 +1230,6 @@ FcPublic FcChar8 *
 FcConfigFileGenerate (FcConfig      *config,
                       FcPattern     *pat,
                       const FcChar8 *font_path);
-
 
 _FCFUNCPROTOEND
 

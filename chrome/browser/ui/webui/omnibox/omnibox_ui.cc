@@ -27,22 +27,46 @@
 #include "ui/base/webui/web_ui_util.h"
 #include "ui/webui/webui_util.h"
 
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/ui/webui/theme_source.h"
+#endif
+
+bool OmniboxUIConfig::SupportsInProcessResourceLoadingV2() const {
+  return true;
+}
+
+bool OmniboxUIConfig::ShouldCrashOnJavascriptErrorInDevelopmentBuild() const {
+  return true;
+}
+
+// static
+base::DictValue OmniboxUI::GetAimEligibilityLoadTimeData(Profile* profile) {
+  // The following keys (`aimEligibilityTitle`, `showAimEligibilityFooter`) are
+  // for illustration and parity purposes with the component extension version.
+  base::DictValue dict;
+  dict.Set("aimEligibilityTitle", "AIM Eligibility Diagnostic");
+  dict.Set("showAimEligibilityFooter", true);
+  return dict;
+}
+
 OmniboxUI::OmniboxUI(content::WebUI* web_ui)
     : ui::MojoWebUIController(web_ui, /*enable_chrome_send=*/true) {
+  Profile* profile = Profile::FromWebUI(web_ui);
+
   // Set up the chrome://omnibox/ source.
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
-      Profile::FromWebUI(web_ui), chrome::kChromeUIOmniboxHost);
+      profile, chrome::kChromeUIOmniboxHost);
 
-  source->OverrideContentSecurityPolicy(
-      network::mojom::CSPDirectiveName::TrustedTypes,
-      "trusted-types static-types parse-html-subset lit-html-desktop;");
+  webui::SetupWebUIDataSource(source, kOmniboxResources,
+                              IDR_OMNIBOX_OMNIBOX_HTML);
+
+#if !BUILDFLAG(IS_ANDROID)
+  content::URLDataSource::Add(profile, std::make_unique<ThemeSource>(profile));
+#endif
 
   // Expose version information to client because it is useful in output.
   VersionUI::AddVersionDetailStrings(source);
-  source->UseStringsJs();
 
-  source->AddResourcePaths(kOmniboxResources);
-  source->SetDefaultResource(IDR_OMNIBOX_OMNIBOX_HTML);
   source->AddResourcePath("ml", IDR_OMNIBOX_ML_ML_HTML);
   source->AddResourcePath("aim-eligibility",
                           IDR_OMNIBOX_AIM_ELIGIBILITY_AIM_ELIGIBILITY_HTML);
@@ -50,6 +74,8 @@ OmniboxUI::OmniboxUI(content::WebUI* web_ui)
 
   source->AddBoolean("isMlUrlScoringEnabled",
                      OmniboxFieldTrial::IsMlUrlScoringEnabled());
+
+  source->AddLocalizedStrings(GetAimEligibilityLoadTimeData(profile));
 }
 
 WEB_UI_CONTROLLER_TYPE_IMPL(OmniboxUI)

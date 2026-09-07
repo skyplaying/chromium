@@ -19,7 +19,6 @@
 #include "components/feature_engagement/public/event_constants.h"
 #include "components/feature_engagement/public/tracker.h"
 #include "components/infobars/content/content_infobar_manager.h"
-#include "components/security_state/content/security_state_tab_helper.h"
 #include "components/webapps/browser/android/add_to_homescreen_params.h"
 #include "components/webapps/browser/android/app_banner_manager_android.h"
 #include "components/webapps/browser/android/webapps_utils.h"
@@ -73,7 +72,8 @@ WebappInstallSource WebappsClientAndroid::GetInstallSource(
 
 AppBannerManager* WebappsClientAndroid::GetAppBannerManager(
     content::WebContents* web_contents) {
-  return AppBannerManagerAndroid::FromWebContents(web_contents);
+  return AppBannerManagerAndroid::FromWebContents(web_contents)
+      ->app_banner_manager();
 }
 
 void WebappsClientAndroid::DoesNewWebAppConflictWithExistingInstallation(
@@ -85,7 +85,7 @@ void WebappsClientAndroid::DoesNewWebAppConflictWithExistingInstallation(
   // some time, so ensure we don't accidentally allow a new installation whilst
   // one is in flight for the current site.
   const bool is_installation_in_progress =
-      IsInstallationInProgress(browser_context, manifest_id);
+      IsInstallationInProgress(browser_context, manifest_id.value());
   if (is_installation_in_progress) {
     std::move(callback).Run(/* does_conflict= */ true);
     return;

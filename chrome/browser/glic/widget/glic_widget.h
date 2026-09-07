@@ -55,10 +55,12 @@ class GlicWidget : public views::Widget, public ThemeServiceObserver {
       bool user_resizable);
 
   // Create a widget with the given bounds.
-  static std::unique_ptr<GlicWidget> Create(views::WidgetDelegate* delegate,
-                                            Profile* profile,
-                                            const gfx::Rect& initial_bounds,
-                                            bool user_resizable);
+  static std::unique_ptr<GlicWidget> Create(
+      views::WidgetDelegate* delegate,
+      Profile* profile,
+      const gfx::Rect& initial_bounds,
+      bool user_resizable,
+      gfx::NativeWindow context = gfx::NativeWindow());
 
   // Get the most-overlapping display.
   display::Display GetDisplay();
@@ -76,9 +78,6 @@ class GlicWidget : public views::Widget, public ThemeServiceObserver {
   gfx::Rect VisibleToWidgetBounds(gfx::Rect visible_bounds);
   gfx::Rect WidgetToVisibleBounds(gfx::Rect widget_bounds);
 
-  void SetIsDragging(bool is_dragging);
-  bool IsDragging() { return is_dragging_; }
-
   base::WeakPtr<GlicWidget> GetWeakPtr();
   GlicView* GetGlicView();
 
@@ -92,8 +91,6 @@ class GlicWidget : public views::Widget, public ThemeServiceObserver {
   void OnThemeChanged() override;
 
   gfx::Size minimum_widget_size_;
-
-  bool is_dragging_ = false;
 
   base::ScopedObservation<ThemeService, ThemeServiceObserver>
       theme_service_observation_{this};

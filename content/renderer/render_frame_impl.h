@@ -17,6 +17,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/byte_size.h"
 #include "base/containers/id_map.h"
 #include "base/files/file_path.h"
 #include "base/functional/callback.h"
@@ -116,7 +117,6 @@
 #include "third_party/blink/public/web/web_frame_serializer.h"
 #include "third_party/blink/public/web/web_frame_serializer_client.h"
 #include "third_party/blink/public/web/web_history_commit_type.h"
-#include "third_party/blink/public/web/web_link_preview_triggerer.h"
 #include "third_party/blink/public/web/web_local_frame.h"
 #include "third_party/blink/public/web/web_local_frame_client.h"
 #include "third_party/blink/public/web/web_meaningful_layout.h"
@@ -148,6 +148,10 @@ class WebURL;
 struct FramePolicy;
 struct JavaScriptFrameworkDetectionResult;
 }  // namespace blink
+
+namespace network {
+class PendingSharedURLLoaderFactory;
+}  // namespace network
 
 namespace gfx {
 class Point;
@@ -249,6 +253,7 @@ class CONTENT_EXPORT RenderFrameImpl
       blink::mojom::FrameOwnerPropertiesPtr frame_owner_properties,
       bool is_on_initial_empty_document,
       const blink::DocumentToken& document_token,
+      const blink::InitiatorStateToken& initiator_state_token,
       blink::mojom::PolicyContainerPtr policy_container,
       bool is_for_nested_main_frame);
 
@@ -347,7 +352,6 @@ class CONTENT_EXPORT RenderFrameImpl
   blink::WebView* GetWebView() override;
   const blink::WebView* GetWebView() const override;
   const blink::web_pref::WebPreferences& GetBlinkPreferences() override;
-  void ShowVirtualKeyboard() override;
   void ExecuteJavaScript(const std::u16string& javascript) override;
   bool IsMainFrame() override;
   bool IsInFencedFrameTree() const override;
@@ -400,8 +404,9 @@ class CONTENT_EXPORT RenderFrameImpl
       network::mojom::URLResponseHeadPtr head,
       network::mojom::RequestDestination request_destination,
       bool is_ad_resource) override;
-  void NotifyResourceTransferSizeUpdated(int64_t request_id,
-                                         int32_t transfer_size_diff) override;
+  void NotifyResourceTransferSizeUpdated(
+      int64_t request_id,
+      base::ByteSize transfer_size_diff) override;
   void NotifyResourceLoadCompleted(
       blink::mojom::ResourceLoadInfoPtr resource_load_info,
       const ::network::URLLoaderCompletionStatus& status) override;
@@ -441,6 +446,7 @@ class CONTENT_EXPORT RenderFrameImpl
           fetch_later_loader_factory,
       const blink::DocumentToken& document_token,
       const base::UnguessableToken& devtools_navigation_token,
+      const blink::InitiatorStateToken& initiator_state_token,
       const base::Uuid& base_auction_nonce,
       blink::mojom::PolicyContainerPtr policy_container,
       mojo::PendingRemote<blink::mojom::CodeCacheHost> code_cache_host,
@@ -461,6 +467,7 @@ class CONTENT_EXPORT RenderFrameImpl
           subresource_loader_factories,
       const blink::DocumentToken& document_token,
       const base::UnguessableToken& devtools_navigation_token,
+      const blink::InitiatorStateToken& initiator_state_token,
       blink::mojom::PolicyContainerPtr policy_container,
       mojom::AlternativeErrorPageOverrideInfoPtr alternative_error_page_info,
       mojom::NavigationClient::CommitFailedNavigationCallback
@@ -554,7 +561,8 @@ class CONTENT_EXPORT RenderFrameImpl
       bool is_client_redirect,
       const std::optional<blink::SameDocNavigationScreenshotDestinationToken>&
           screenshot_destination,
-      base::UnguessableToken same_document_metrics_token) override;
+      base::UnguessableToken same_document_metrics_token,
+      bool caused_by_ad) override;
   void DidFailAsyncSameDocumentCommit() override;
   void WillFreezePage() override;
   void DidOpenDocumentInputStream(const blink::WebURL& url) override;
@@ -567,8 +575,7 @@ class CONTENT_EXPORT RenderFrameImpl
   void DidChangeSelection(bool is_empty_selection,
                           blink::SyncCondition force_sync) override;
   void FocusedElementChanged(const blink::WebElement& element) override;
-  void OnMainFrameIntersectionChanged(
-      const gfx::Rect& main_frame_intersection_rect) override;
+  void OnMainFrameRectangleChanged(const gfx::Rect& main_frame_rect) override;
   void OnMainFrameViewportRectangleChanged(
       const gfx::Rect& main_frame_viewport_rect) override;
   void OnMainFrameAdRectangleChanged(int element_id,
@@ -586,11 +593,14 @@ class CONTENT_EXPORT RenderFrameImpl
       const blink::WebURLRequest& request,
       const blink::WebURLResponse& response) override;
   void DidChangePerformanceTiming() override;
-  void DidObserveUserInteraction(base::TimeTicks max_event_start,
-                                 base::TimeTicks max_event_queued_main_thread,
-                                 base::TimeTicks max_event_commit_finish,
-                                 base::TimeTicks max_event_end,
-                                 uint64_t interaction_offset) override;
+  void DidObserveUserInteraction(
+      base::TimeTicks max_event_start,
+      base::TimeTicks max_event_queued_main_thread,
+      base::TimeTicks max_event_processing_start,
+      base::TimeTicks max_event_commit_finish,
+      base::TimeTicks max_event_end,
+      uint64_t interaction_offset,
+      uint64_t performance_timeline_navigation_id) override;
   void DidChangeCpuTiming(base::TimeDelta time) override;
   void DidObserveLoadingBehavior(blink::LoadingBehaviorFlag behavior) override;
   void DidObserveJavaScriptFrameworks(
@@ -601,9 +611,15 @@ class CONTENT_EXPORT RenderFrameImpl
       const blink::UseCounterFeature& feature) override;
   void DidObserveSoftNavigation(
       blink::SoftNavigationMetricsForReporting metrics) override;
+  void DidObserveSoftNavigationFirstContentfulPaint(
+      uint64_t performance_timeline_navigation_id,
+      base::TimeDelta first_contentful_paint) override;
   void DidObserveSoftLargestContentfulPaint(
       const blink::LargestContentfulPaintDetailsForReporting& lcp) override;
-  void DidObserveLayoutShift(double score, bool after_input_or_scroll) override;
+  void DidObserveLayoutShift(
+      double score,
+      bool after_input_or_scroll,
+      uint64_t performance_timeline_navigation_id) override;
   void DidCreateScriptContext(v8::Local<v8::Context> context,
                               int world_id) override;
   void WillReleaseScriptContext(v8::Local<v8::Context> context,
@@ -638,11 +654,8 @@ class CONTENT_EXPORT RenderFrameImpl
       network::mojom::WebSandboxFlags sandbox_flags,
       const blink::SessionStorageNamespaceId& session_storage_namespace_id,
       bool& consumed_user_gesture,
-      const std::optional<blink::Impression>& impression,
       const std::optional<blink::WebPictureInPictureWindowOptions>& pip_options,
       const blink::WebURL& base_url) override;
-  std::unique_ptr<blink::WebLinkPreviewTriggerer> CreateLinkPreviewTriggerer()
-      override;
 
   base::ScopedClosureRunner CreateScopedClientNavigationThrottler() override;
 
@@ -670,11 +683,6 @@ class CONTENT_EXPORT RenderFrameImpl
   void DidMeaningfulLayout(blink::WebMeaningfulLayout layout_type) override;
   void WasHidden() override;
   void WasShown() override;
-  void OnFrameVisibilityChanged(
-      blink::mojom::FrameVisibility render_status) override;
-
-  void SetUpSharedMemoryForDroppedFrames(
-      base::ReadOnlySharedMemoryRegion dropped_frames_memory) override;
 
   blink::WebURL LastCommittedUrlForUKM() override;
   void ScriptedPrint() override;
@@ -755,7 +763,8 @@ class CONTENT_EXPORT RenderFrameImpl
   void DidCompleteResponse(int request_id,
                            const network::URLLoaderCompletionStatus& status);
   void DidCancelResponse(int request_id);
-  void DidReceiveTransferSizeUpdate(int request_id, int received_data_length);
+  void DidReceiveTransferSizeUpdate(int request_id,
+                                    base::ByteSize received_data_length);
 
   // Used in tests to install a fake URLLoaderFactory via
   // RenderViewTest::CreateFakeURLLoaderFactory().
@@ -764,6 +773,11 @@ class CONTENT_EXPORT RenderFrameImpl
 
   // Clones and returns `this` frame's blink::ChildURLLoaderFactoryBundle.
   scoped_refptr<blink::ChildURLLoaderFactoryBundle> CloneLoaderFactories();
+
+  // Clones and returns `this` frame's underlying
+  // network::PendingSharedURLLoaderFactory.
+  std::unique_ptr<network::PendingSharedURLLoaderFactory>
+  CloneLoaderFactoryBundle();
 
   url::Origin GetSecurityOriginOfTopFrame();
 
@@ -889,13 +903,6 @@ class CONTENT_EXPORT RenderFrameImpl
       const std::optional<base::UnguessableToken>& devtools_frame_token)
       override;
   void Delete(mojom::FrameDeleteIntention intent) override;
-  void UndoCommitNavigation(
-      bool is_loading,
-      blink::mojom::FrameReplicationStatePtr replicated_frame_state,
-      const blink::RemoteFrameToken& frame_token,
-      blink::mojom::RemoteFrameInterfacesFromBrowserPtr remote_frame_interfaces,
-      blink::mojom::RemoteMainFrameInterfacesPtr remote_main_frame_interfaces)
-      override;
   void GetInterfaceProvider(
       mojo::PendingReceiver<service_manager::mojom::InterfaceProvider> receiver)
       override;
@@ -1260,7 +1267,13 @@ class CONTENT_EXPORT RenderFrameImpl
   base::flat_map<std::string, bool> history_subframe_unique_names_;
 
   // All the registered observers.
-  base::ObserverList<RenderFrameObserver>::Unchecked observers_;
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      RenderFrameObserver,
+      /*check_empty=*/false,
+      /*reentrancy=*/
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>::Unchecked
+      observers_;
 
   // The callback to send the feature usage to the browser process through
   // PageLoadMetrics.
@@ -1498,9 +1511,9 @@ class CONTENT_EXPORT RenderFrameImpl
   // kError severity.
   bool want_error_message_stack_trace_ = false;
 
-  // Used for tracking a frame's main frame document intersection and
-  // replicating it to the browser when it changes.
-  std::optional<gfx::Rect> main_frame_intersection_rect_;
+  // Used for tracking a frame's main frame document rectangle and replicating
+  // it to the browser when it changes.
+  std::optional<gfx::Rect> main_frame_rect_;
 
   // Used for tracking the main frame viewport rectangle (i.e. dimensions and
   // scroll offset) within the main frame document.
@@ -1601,6 +1614,11 @@ class CONTENT_EXPORT RenderFrameImpl
   // subset of topchrome WebUIs that are loaded and shown from the initial
   // browser startup, e.g. the reload button.
   bool is_initial_webui_ = false;
+
+  // Set to true while CommitSameDocumentNavigation is calling into Blink,
+  // so reentrant calls to DidFailAsyncSameDocumentCommit know not to consume
+  // the incoming NavigationState.
+  bool is_committing_same_document_navigation_ = false;
 
   base::WeakPtrFactory<RenderFrameImpl> weak_factory_{this};
 };

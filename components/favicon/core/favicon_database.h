@@ -51,15 +51,12 @@ class FaviconDatabase {
   // Transactions on the database.
   void BeginTransaction();
   void CommitTransaction();
-  int transaction_nesting() const { return db_.transaction_nesting(); }
+  bool HasActiveTransactions() const { return db_.HasActiveTransactions(); }
   void RollbackTransaction();
 
   // Vacuums the database. This will cause sqlite to defragment and collect
   // unused space in the file. It can be VERY SLOW.
   void Vacuum();
-
-  // Release all non-essential memory associated with this database connection.
-  void TrimMemory();
 
   // Get all on-demand favicon bitmaps that have been last requested prior to
   // `threshold`.

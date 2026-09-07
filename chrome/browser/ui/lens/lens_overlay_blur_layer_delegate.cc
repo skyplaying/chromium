@@ -10,9 +10,11 @@
 #include "components/lens/lens_features.h"
 #include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "content/public/browser/render_widget_host_view.h"
+#include "ui/compositor/layer_textured.h"
 #include "ui/compositor/paint_recorder.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/rect_f.h"
+#include "ui/gfx/image/image_skia.h"
 #include "ui/gfx/skia_util.h"
 
 namespace lens {
@@ -20,7 +22,7 @@ namespace lens {
 LensOverlayBlurLayerDelegate::LensOverlayBlurLayerDelegate(
     content::RenderWidgetHost* background_view_host)
     : background_view_host_(background_view_host) {
-  SetLayer(std::make_unique<ui::Layer>(ui::LAYER_TEXTURED));
+  SetLayer(std::make_unique<ui::LayerTextured>());
   layer()->SetFillsBoundsOpaquely(true);
   layer()->set_delegate(this);
 

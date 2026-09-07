@@ -23,6 +23,7 @@
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/browser/install_tracker.h"
 #include "extensions/browser/pref_names.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/extension_features.h"
 #include "extensions/common/extension_id.h"
 
@@ -220,8 +221,8 @@ TEST_F(ExtensionGarbageCollectorUnitTest, UpdateOnStartup) {
 
   // Make sure update information got deleted.
   ExtensionPrefs* prefs = ExtensionPrefs::Get(profile());
-  EXPECT_FALSE(
-      prefs->GetDelayedInstallInfo("bjafgdebaacbbbecmhlhpofkepfkgcpa"));
+  EXPECT_FALSE(prefs->GetDelayedInstallExtensionInfo(
+      "bjafgdebaacbbbecmhlhpofkepfkgcpa"));
 }
 
 }  // namespace extensions

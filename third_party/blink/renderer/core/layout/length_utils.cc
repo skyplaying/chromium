@@ -154,10 +154,8 @@ LayoutUnit ResolveInlineLengthInternal(
       return kIndefiniteSize;
     case Length::kFlex:
       NOTREACHED() << "Should only be used for grid.";
-    case Length::kDeviceWidth:
-    case Length::kDeviceHeight:
-    case Length::kExtendToZoom:
-      NOTREACHED() << "Should only be used for viewport definitions.";
+    case Length::kOverlapJoin:
+      NOTREACHED() << "Should only be used for gap decoration insets.";
   }
 }
 
@@ -275,10 +273,8 @@ LayoutUnit ResolveBlockLengthInternal(
       return kIndefiniteSize;
     case Length::kFlex:
       NOTREACHED() << "Should only be used for grid.";
-    case Length::kDeviceWidth:
-    case Length::kDeviceHeight:
-    case Length::kExtendToZoom:
-      NOTREACHED() << "Should only be used for viewport definitions.";
+    case Length::kOverlapJoin:
+      NOTREACHED() << "Should only be used for gap decoration insets.";
   }
 }
 
@@ -432,7 +428,7 @@ MinMaxSizesResult ComputeMinAndMaxContentContributionInternal(
   // Check if we should apply the automatic minimum size.
   // https://drafts.csswg.org/css-sizing-4/#aspect-ratio-minimum
   const Length* auto_min_length =
-      (!style.IsScrollContainer() && applied_aspect_ratio)
+      (!style.IsOverflowValueScrollableInline() && applied_aspect_ratio)
           ? &Length::MinIntrinsic()
           : nullptr;
 
@@ -576,7 +572,7 @@ LayoutUnit ComputeInlineSizeForFragmentInternal(
   // Check if we should apply the automatic minimum size.
   // https://drafts.csswg.org/css-sizing-4/#aspect-ratio-minimum
   bool apply_automatic_min_size = ([&]() {
-    if (style.IsScrollContainer()) {
+    if (style.IsOverflowValueScrollableInline()) {
       return false;
     }
     if (!may_apply_aspect_ratio) {
@@ -852,7 +848,7 @@ LayoutUnit ComputeBlockSizeForFragmentInternal(
     if (intrinsic_size == kIndefiniteSize) {
       return false;
     }
-    if (style.IsScrollContainer()) {
+    if (style.IsOverflowValueScrollableBlock()) {
       return false;
     }
     if (!may_apply_aspect_ratio) {
@@ -1033,8 +1029,8 @@ LogicalSize ComputeReplacedSizeInternal(const BlockNode& node,
       return natural_size->block_size;
     }
     if (mode == ReplacedSizeMode::kNormal) {
-      return ComputeReplacedSize(node, space, border_padding,
-                                 ReplacedSizeMode::kIgnoreBlockLengths)
+      return ComputeReplacedSizeInternal(node, space, border_padding,
+                                         ReplacedSizeMode::kIgnoreBlockLengths)
           .block_size;
     }
     if (natural_size) {
@@ -1111,8 +1107,9 @@ LogicalSize ComputeReplacedSizeInternal(const BlockNode& node,
     } else if (natural_size) {
       DCHECK_NE(mode, ReplacedSizeMode::kIgnoreInlineLengths);
       size = mode == ReplacedSizeMode::kNormal
-                 ? ComputeReplacedSize(node, space, border_padding,
-                                       ReplacedSizeMode::kIgnoreInlineLengths)
+                 ? ComputeReplacedSizeInternal(
+                       node, space, border_padding,
+                       ReplacedSizeMode::kIgnoreInlineLengths)
                        .inline_size
                  : natural_size->inline_size;
     } else {
@@ -1138,18 +1135,6 @@ LogicalSize ComputeReplacedSizeInternal(const BlockNode& node,
         ResolveMaxInlineLength(space, style, border_padding, MinMaxSizesFunc,
                                style.LogicalMaxWidth())};
 
-    // Transfer the block min/max sizes if applicable.
-    if (style.LogicalWidth().HasAuto() &&
-        space.InlineAutoBehavior() != AutoSizeBehavior::kStretchExplicit) {
-      // https://drafts.csswg.org/css-sizing-4/#aspect-ratio-size-transfers
-      inline_min_max_sizes.min_size =
-          std::max(inline_min_max_sizes.min_size,
-                   std::min(transferred_min_max_sizes.min_size,
-                            inline_min_max_sizes.max_size));
-      inline_min_max_sizes.max_size = std::min(
-          inline_min_max_sizes.max_size, transferred_min_max_sizes.max_size);
-    }
-
     // Ensure the max-size encompasses the min-size.
     inline_min_max_sizes.max_size =
         std::max(inline_min_max_sizes.min_size, inline_min_max_sizes.max_size);
@@ -1169,6 +1154,17 @@ LogicalSize ComputeReplacedSizeInternal(const BlockNode& node,
         replaced_inline =
             inline_min_max_sizes.ClampSizeToMinAndMax(inline_size);
       }
+    }
+
+    // Transfer the block min/max sizes if we didn't resolve our main size.
+    if (!replaced_inline) {
+      // https://drafts.csswg.org/css-sizing-4/#aspect-ratio-size-transfers
+      inline_min_max_sizes.min_size =
+          std::max(inline_min_max_sizes.min_size,
+                   std::min(transferred_min_max_sizes.min_size,
+                            inline_min_max_sizes.max_size));
+      inline_min_max_sizes.max_size = std::min(
+          inline_min_max_sizes.max_size, transferred_min_max_sizes.max_size);
     }
   }
 
@@ -1396,8 +1392,8 @@ LayoutUnit ResolveFlowToleranceForGridLanes(const ComputedStyle& style,
                                             const LogicalSize& available_size) {
   return ResolveFlowToleranceLength(
              style, (style.GridLanesTrackSizingDirection() == kForColumns)
-                        ? available_size.block_size
-                        : available_size.inline_size)
+                        ? available_size.inline_size
+                        : available_size.block_size)
       .value_or(LayoutUnit(style.GetFontDescription().ComputedPixelSize()));
 }
 
@@ -1500,6 +1496,10 @@ BoxStrut ComputeBorders(const ConstraintSpace& constraint_space,
     return To<TableNode>(node).GetTableBorders()->TableBorder();
   }
 
+  if (node.IsTableSection() || node.IsTableRow()) {
+    return BoxStrut();
+  }
+
   return ComputeBordersInternal(node.Style());
 }
 
@@ -1523,7 +1523,7 @@ BoxStrut ComputePadding(const ConstraintSpace& constraint_space,
     return BoxStrut();
 
   // Tables with collapsed borders don't have any padding.
-  if (style.IsDisplayTableBox() &&
+  if (style.IsDisplayTable() &&
       style.BorderCollapse() == EBorderCollapse::kCollapse) {
     return BoxStrut();
   }
@@ -1727,7 +1727,10 @@ FragmentGeometry CalculateInitialFragmentGeometry(
     const auto content_box_inline_size =
         inline_size - border_padding.InlineSum();
     if (scrollbar.InlineSum() > content_box_inline_size) {
-      if (scrollbar.inline_end) {
+      if (scrollbar.inline_start && scrollbar.inline_end) {
+        scrollbar.inline_start = content_box_inline_size / 2;
+        scrollbar.inline_end = content_box_inline_size - scrollbar.inline_start;
+      } else if (scrollbar.inline_end) {
         DCHECK(!scrollbar.inline_start);
         scrollbar.inline_end = content_box_inline_size;
       } else {
@@ -1980,6 +1983,26 @@ void AddScrollbarFreeze(const BoxStrut& scrollbars_before,
                         (!physical_before.bottom && physical_after.bottom);
   *freeze_vertical |= (!physical_before.left && physical_after.left) ||
                       (!physical_before.right && physical_after.right);
+}
+
+LayoutUnit CalculateReverseChildOffset(
+    LayoutUnit offset,
+    LayoutUnit fragment_size,
+    LayoutUnit container_size,
+    LayoutUnit border_scrollbar_padding_start,
+    LayoutUnit margin_start,
+    LayoutUnit margin_end) {
+  // `container_size` is the content-box size, while `offset` is measured from
+  // the border-box start. Convert the offset to the content-box coordinate
+  // space before reflecting it, then convert the result back.
+  const LayoutUnit content_offset = offset - border_scrollbar_padding_start;
+  LayoutUnit reversed_offset = container_size - content_offset - fragment_size;
+  reversed_offset += border_scrollbar_padding_start;
+
+  // Margins keep their physical sides under reversal (e.g., margin-bottom stays
+  // on the bottom of the box). Leave room for both physical-side margins.
+  reversed_offset += margin_start - margin_end;
+  return reversed_offset;
 }
 
 }  // namespace blink

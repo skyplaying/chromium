@@ -8,9 +8,10 @@
 #include <string_view>
 #include <utility>
 
+#include "ash/constants/webui_url_constants.h"
 #include "base/functional/bind.h"
-#include "base/i18n/time_formatting.h"
 #include "base/location.h"
+#include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "base/values.h"
@@ -20,12 +21,10 @@
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/extensions/window_controller.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/common/extensions/api/echo_private.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/url_constants.h"
 #include "chromeos/ash/components/report/utils/time_utils.h"
 #include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
@@ -141,8 +140,10 @@ ExtensionFunction::ResponseAction EchoPrivateGetOobeTimestampFunction::Run() {
     // Returns an empty string on error.
     return RespondNow(WithArguments(std::string()));
   }
-  std::string result = base::UnlocalizedTimeFormatWithPattern(
-      timestamp.value(), "y-M-d", icu::TimeZone::getGMT());
+  base::Time::Exploded exploded;
+  timestamp.value().UTCExplode(&exploded);
+  std::string result = base::StringPrintf(
+      "%d-%d-%d", exploded.year, exploded.month, exploded.day_of_month);
   return RespondNow(WithArguments(std::move(result)));
 }
 
@@ -173,10 +174,10 @@ ExtensionFunction::ResponseAction EchoPrivateGetUserConsentFunction::Run() {
     }
   } else {
     extensions::WindowController* window = nullptr;
-    int tab_index = -1;
     if (!extensions::ExtensionTabUtil::GetTabById(
             *params->consent_requester.tab_id, browser_context(),
-            false /*incognito_enabled*/, &window, &web_contents, &tab_index) ||
+            /*include_incognito=*/false, &window, &web_contents,
+            /*tab_index=*/nullptr) ||
         !window) {
       return RespondNow(Error("Tab not found."));
     }
@@ -184,7 +185,7 @@ ExtensionFunction::ResponseAction EchoPrivateGetUserConsentFunction::Run() {
     // Bail out if the requested tab is not active - the dialog is modal to the
     // window, so showing it for a request from an inactive tab could be
     // misleading/confusing to the user.
-    if (tab_index != window->GetBrowser()->tab_strip_model()->active_index()) {
+    if (web_contents != window->GetActiveTab()) {
       return RespondNow(Error("Consent requested from an inactive tab."));
     }
   }
@@ -249,7 +250,7 @@ void EchoPrivateGetUserConsentFunction::OnCancel() {
 
 void EchoPrivateGetUserConsentFunction::OnMoreInfoLinkClicked() {
   NavigateParams params(Profile::FromBrowserContext(browser_context()),
-                        GURL(chrome::kEchoLearnMoreURL),
+                        GURL(ash::kChromeUIEchoLearnMoreURL),
                         ui::PAGE_TRANSITION_LINK);
   // Open the link in a new window. The echo dialog is modal, so the current
   // window is useless until the dialog is closed.

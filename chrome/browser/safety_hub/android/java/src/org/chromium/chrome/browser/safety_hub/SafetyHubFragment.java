@@ -76,7 +76,7 @@ public class SafetyHubFragment extends SafetyHubBaseFragment
     private final SettableMonotonicObservableSupplier<String> mPageTitle =
             ObservableSuppliers.createMonotonic();
 
-    private SafetyHubModuleDelegate mDelegate;
+    private @Nullable SafetyHubModuleDelegate mDelegate;
     private @Nullable CallbackController mCallbackController;
     private List<SafetyHubModuleMediator> mModuleMediators;
     private @Nullable SafetyHubBrowserStateModuleMediator mBrowserStateModuleMediator;
@@ -100,7 +100,7 @@ public class SafetyHubFragment extends SafetyHubBaseFragment
     private void setUpModuleMediators() {
         SafetyHubFetchService safetyHubFetchService =
                 SafetyHubFetchServiceFactory.getForProfile(getProfile());
-
+        assert mDelegate != null;
         SafetyHubModuleMediator updateCheckModuleMediator =
                 new SafetyHubUpdateCheckModuleMediator(
                         findPreference(PREF_UPDATE), this, mDelegate, safetyHubFetchService);
@@ -263,7 +263,7 @@ public class SafetyHubFragment extends SafetyHubBaseFragment
     public void onCreateOptionsMenu(Menu menu, MenuInflater inflater) {
         menu.clear();
         MenuItem help =
-                menu.add(Menu.NONE, R.id.menu_id_targeted_help, Menu.NONE, R.string.menu_help);
+                menu.add(Menu.NONE, R.id.menu_id_targeted_help, Menu.NONE, getHelpMenuStringRes());
         help.setIcon(
                 TraceEventVectorDrawableCompat.create(
                         getResources(), R.drawable.ic_help_24dp, getActivity().getTheme()));
@@ -316,6 +316,11 @@ public class SafetyHubFragment extends SafetyHubBaseFragment
         if (mBrowserStateModuleMediator != null) {
             mBrowserStateModuleMediator.destroy();
             mBrowserStateModuleMediator = null;
+        }
+
+        if (mDelegate != null) {
+            mDelegate.destroy();
+            mDelegate = null;
         }
     }
 
@@ -389,5 +394,7 @@ public class SafetyHubFragment extends SafetyHubBaseFragment
 
     public static final ChromeBaseSearchIndexProvider SEARCH_INDEX_DATA_PROVIDER =
             new ChromeBaseSearchIndexProvider(
-                    SafetyHubFragment.class.getName(), ChromeBaseSearchIndexProvider.INDEX_OPT_OUT);
+                    SafetyHubFragment.class.getName(),
+                    R.xml.safety_hub_preferences,
+                    /* isSearchable= */ false);
 }

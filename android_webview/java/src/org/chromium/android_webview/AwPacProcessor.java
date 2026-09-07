@@ -16,6 +16,7 @@ import org.jni_zero.JniType;
 import org.jni_zero.NativeMethods;
 
 import org.chromium.base.ContextUtils;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.build.annotations.UsedByReflection;
 
 import java.util.ArrayList;
@@ -29,7 +30,8 @@ import java.util.List;
 // TODO(amalova): remove UsedByReflection
 @UsedByReflection("Android")
 public class AwPacProcessor {
-    private final long mNativePacProcessor;
+    // 0 if it's already been destroyed.
+    private long mNativePacProcessor;
     private Network mNetwork;
     private ConnectivityManager.NetworkCallback mNetworkCallback;
 
@@ -55,7 +57,9 @@ public class AwPacProcessor {
     private void updateNetworkLinkAddress(Network network, LinkProperties linkProperties) {
         long networkHandle = NETWORK_UNSPECIFIED;
         ArrayList<String> addresses = new ArrayList<>();
-        if (network != null && linkProperties != null) {
+        if (network != null
+                && linkProperties != null
+                && !linkProperties.getLinkAddresses().isEmpty()) {
             networkHandle = network.getNetworkHandle();
             for (LinkAddress addr : linkProperties.getLinkAddresses()) {
                 addresses.add(addr.getAddress().getHostAddress());
@@ -65,6 +69,7 @@ public class AwPacProcessor {
     }
 
     public void setNetworkAndLinkAddresses(long networkHandle, List<String> addresses) {
+        if (mNativePacProcessor == 0) return;
         AwPacProcessorJni.get()
                 .setNetworkAndLinkAddresses(mNativePacProcessor, networkHandle, addresses);
     }
@@ -97,17 +102,22 @@ public class AwPacProcessor {
     // The calling code must not call any methods after it called destroy().
     @UsedByReflection("Android")
     public void destroy() {
+        if (mNativePacProcessor == 0) return;
+        long nativePacProcessor = mNativePacProcessor;
+        mNativePacProcessor = 0;
         unregisterNetworkCallback();
-        AwPacProcessorJni.get().destroyNative(mNativePacProcessor);
+        AwPacProcessorJni.get().destroyNative(nativePacProcessor);
     }
 
     @UsedByReflection("Android")
     public boolean setProxyScript(String script) {
+        if (mNativePacProcessor == 0) return false;
         return AwPacProcessorJni.get().setProxyScript(mNativePacProcessor, script);
     }
 
     @UsedByReflection("Android")
     public String makeProxyRequest(String url) {
+        if (mNativePacProcessor == 0) return null;
         return AwPacProcessorJni.get().makeProxyRequest(mNativePacProcessor, url);
     }
 
@@ -139,7 +149,9 @@ public class AwPacProcessor {
 
         boolean setProxyScript(long nativeAwPacProcessor, @JniType("std::string") String script);
 
-        String makeProxyRequest(long nativeAwPacProcessor, String url);
+        @JniType("std::optional<std::string>")
+        @Nullable String makeProxyRequest(
+                long nativeAwPacProcessor, @JniType("std::string") String url);
 
         void destroyNative(long nativeAwPacProcessor);
 

@@ -14,14 +14,16 @@ export function getHtml(this: SidePanelElement) {
 ${this.showing_ ? html`
   <div id="frame">
     <div id="header">
-    <h2>${this.title_}</h2>
-    <cr-icon-button
-        id="closeButton"
-        iron-icon="cr:clear"
-        @click="${this.close}">
-    </cr-icon-button>
+      <h2>${this.title_}</h2>
+      <cr-icon-button id="closeButton" iron-icon="cr:close"
+        @click="${this.onCloseClick_}">
+      </cr-icon-button>
     </div>
-    <div id="content">${this.webView}</div>
+    <div id="content">
+      ${this.showBookmarks_ ? html`
+        <webui-browser-bookmarks></webui-browser-bookmarks>
+      ` : this.webView}
+    </div>
   </div>
 ` : ''}
 <!--_html_template_end_-->`;

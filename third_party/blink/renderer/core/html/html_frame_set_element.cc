@@ -120,11 +120,11 @@ void HTMLFrameSetElement::ParseAttribute(
     DirtyEdgeInfo();
   } else if (name == html_names::kFrameborderAttr) {
     if (!value.IsNull()) {
-      if (EqualIgnoringASCIICase(value, "no") ||
-          EqualIgnoringASCIICase(value, "0")) {
+      if (EqualIgnoringAsciiCase(value, "no") ||
+          EqualIgnoringAsciiCase(value, "0")) {
         frameborder_ = false;
-      } else if (EqualIgnoringASCIICase(value, "yes") ||
-                 EqualIgnoringASCIICase(value, "1")) {
+      } else if (EqualIgnoringAsciiCase(value, "yes") ||
+                 EqualIgnoringAsciiCase(value, "1")) {
         frameborder_ = true;
       }
     } else {
@@ -139,7 +139,7 @@ void HTMLFrameSetElement::ParseAttribute(
     DirtyEdgeInfo();
   } else if (name == html_names::kBorderAttr) {
     if (!value.IsNull()) {
-      border_ = StringToInt(value).value_or(0);
+      border_ = StringToIntLoose(value).value_or(0);
     } else {
       border_.reset();
     }
@@ -441,15 +441,13 @@ Node::InsertionNotificationRequest HTMLFrameSetElement::InsertedInto(
   return HTMLElement::InsertedInto(insertion_point);
 }
 void HTMLFrameSetElement::WillRecalcStyle(const StyleRecalcChange) {
+  // TODO(futhark): This makes no sense at all. Any style changes should trigger
+  // layout and paint invalidation as a result of the style recalc. With that
+  // fixed, WillRecalcStyle() can be removed.
   if (NeedsStyleRecalc() && GetLayoutObject()) {
-    if (GetForceReattachLayoutTree()) {
-      // Adding a frameset to the top layer for fullscreen forces a reattach.
-      SetNeedsReattachLayoutTree();
-    } else {
-      GetLayoutObject()->SetNeedsLayoutAndFullPaintInvalidation(
-          layout_invalidation_reason::kStyleChange);
-    }
-    ClearNeedsStyleRecalc();
+    // fast/frames/ tests for border invalidation rely on this in order to pass
+    GetLayoutObject()->SetNeedsLayoutAndFullPaintInvalidation(
+        layout_invalidation_reason::kStyleChange);
   }
 }
 

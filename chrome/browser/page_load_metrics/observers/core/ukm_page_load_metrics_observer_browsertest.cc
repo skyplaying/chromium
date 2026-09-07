@@ -9,7 +9,9 @@
 #include "base/command_line.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/page_load_metrics/chrome_initiator_location.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/page_load_metrics/browser/navigation_handle_user_data.h"
@@ -27,6 +29,8 @@
 #include "services/metrics/public/cpp/ukm_source.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 
 namespace {
 
@@ -136,7 +140,7 @@ std::unique_ptr<net::test_server::HttpResponse> HandleRedirectRequest(
 }
 }  // namespace
 
-// Regression test for crbug.com/1029959.
+// Regression test for crbug.com/40661610.
 IN_PROC_BROWSER_TEST_F(UkmPageLoadMetricsObserverBrowserTest,
                        MainFrameHadCookies_CrossOriginCookiesOnRedirect) {
   net::EmbeddedTestServer redirect_server(net::EmbeddedTestServer::TYPE_HTTP);
@@ -149,7 +153,7 @@ IN_PROC_BROWSER_TEST_F(UkmPageLoadMetricsObserverBrowserTest,
   NavigateTo(redirect_server.GetURL("redirect.com",
                                     "/subresource_loading/redirect_me"));
   content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
+      browser()->GetTabStripModel()->GetActiveWebContents();
   EXPECT_TRUE(content::WaitForLoadStop(web_contents));
   EXPECT_EQ(web_contents->GetLastCommittedURL(),
             GetOriginURL("/subresource_loading/index.html"));
@@ -173,27 +177,13 @@ IN_PROC_BROWSER_TEST_F(UkmPageLoadMetricsObserverBrowserTest,
                   .empty());
 }
 
-void AttachBookmarkBarNavigationHandleUserData(
-    content::NavigationHandle& navigation_handle) {
-  page_load_metrics::NavigationHandleUserData::CreateForNavigationHandle(
-      navigation_handle, page_load_metrics::NavigationHandleUserData::
-                             InitiatorLocation::kBookmarkBar);
-}
-
-void AttachNewTabPageNavigationHandleUserData(
-    content::NavigationHandle& navigation_handle) {
-  page_load_metrics::NavigationHandleUserData::CreateForNavigationHandle(
-      navigation_handle, page_load_metrics::NavigationHandleUserData::
-                             InitiatorLocation::kNewTabPage);
-}
-
 IN_PROC_BROWSER_TEST_F(UkmPageLoadMetricsObserverBrowserTest,
                        NavigationHandleUserDataTypeMetrics_BookmarkBar) {
   base::RepeatingCallback<void(content::NavigationHandle&)>
       prerender_navigation_handle_callback =
           base::BindRepeating(&AttachBookmarkBarNavigationHandleUserData);
 
-  browser()->tab_strip_model()->GetActiveWebContents()->OpenURL(
+  browser()->GetTabStripModel()->GetActiveWebContents()->OpenURL(
       content::OpenURLParams(
           embedded_test_server()->GetURL("origin.com",
                                          "/subresource_loading/index.html"),
@@ -209,8 +199,7 @@ IN_PROC_BROWSER_TEST_F(UkmPageLoadMetricsObserverBrowserTest,
       GetUkmMetricEntryValues(PageLoad::kEntryName,
                               PageLoad::kNavigation_InitiatorLocationName),
       testing::ElementsAre(
-          static_cast<int>(page_load_metrics::NavigationHandleUserData::
-                               InitiatorLocation::kBookmarkBar)));
+          GetInitiatorLocation(ChromeInitiatorLocation::kBookmarkBar)));
 }
 
 IN_PROC_BROWSER_TEST_F(UkmPageLoadMetricsObserverBrowserTest,
@@ -219,7 +208,7 @@ IN_PROC_BROWSER_TEST_F(UkmPageLoadMetricsObserverBrowserTest,
       prerender_navigation_handle_callback =
           base::BindRepeating(&AttachNewTabPageNavigationHandleUserData);
 
-  browser()->tab_strip_model()->GetActiveWebContents()->OpenURL(
+  browser()->GetTabStripModel()->GetActiveWebContents()->OpenURL(
       content::OpenURLParams(
           embedded_test_server()->GetURL("origin.com",
                                          "/subresource_loading/index.html"),
@@ -235,8 +224,7 @@ IN_PROC_BROWSER_TEST_F(UkmPageLoadMetricsObserverBrowserTest,
       GetUkmMetricEntryValues(PageLoad::kEntryName,
                               PageLoad::kNavigation_InitiatorLocationName),
       testing::ElementsAre(
-          static_cast<int>(page_load_metrics::NavigationHandleUserData::
-                               InitiatorLocation::kNewTabPage)));
+          GetInitiatorLocation(ChromeInitiatorLocation::kNewTabPage)));
 }
 
 }  // namespace

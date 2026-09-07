@@ -13,6 +13,7 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/i18n/rtl.h"
+#include "base/i18n/test/scoped_rtl_for_testing.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/icu_test_util.h"
 #include "build/branding_buildflags.h"
@@ -84,7 +85,7 @@ class PluginInfoHostImplTest : public ::testing::Test {
   PluginInfoHostImplTest()
       : foo_plugin_path_(FILE_PATH_LITERAL("/path/to/foo")),
         bar_plugin_path_(FILE_PATH_LITERAL("/path/to/bar")),
-        context_(0, &profile_),
+        context_(content::GlobalRenderFrameHostToken(), &profile_),
         host_content_settings_map_(
             HostContentSettingsMapFactory::GetForProfile(&profile_)) {}
 
@@ -198,7 +199,7 @@ TEST_F(PluginInfoHostImplTest, FindEnabledPlugin) {
 
 TEST_F(PluginInfoHostImplTest, FindEnabledPluginWithBidiPdfViewerName) {
   base::test::ScopedRestoreICUDefaultLocale restore_locale;
-  base::i18n::SetRTLForTesting(true);
+  base::i18n::ScopedRTLForTesting scoped_rtl(true);
 
   static constexpr char16_t kPluginName[] = u"Bidi Name";
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)

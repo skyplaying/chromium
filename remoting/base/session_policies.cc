@@ -43,12 +43,16 @@ std::ostream& operator<<(std::ostream& os,
      << ", allow_uri_forwarding: " << session_policies.allow_uri_forwarding
      << ", allow_webauthn_forwarding: "
      << session_policies.allow_webauthn_forwarding
+     << ", allow_gnubby_forwarding: "
+     << session_policies.allow_gnubby_forwarding
      << ", maximum_session_duration: "
      << session_policies.maximum_session_duration
      << ", curtain_required: " << session_policies.curtain_required
      << ", host_username_match_required: "
      << session_policies.host_username_match_required
-     << ", allow_remote_input: " << session_policies.allow_remote_input << " }";
+     << ", allow_remote_input: " << session_policies.allow_remote_input
+     << ", allow_terminal_mode: " << session_policies.allow_terminal_mode
+     << " }";
   return os;
 }
 

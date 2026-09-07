@@ -4,6 +4,7 @@
 
 package org.chromium.chrome.browser.tasks.tab_management;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
 import static org.chromium.chrome.browser.tasks.tab_management.TabListModel.CardProperties.BASE_ANIMATION_DURATION_MS;
 
 import android.animation.Animator;
@@ -12,17 +13,20 @@ import android.animation.AnimatorSet;
 import android.animation.ObjectAnimator;
 import android.content.Context;
 import android.content.res.ColorStateList;
+import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.InsetDrawable;
 import android.util.AttributeSet;
+import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.widget.ImageView;
 import android.widget.TextView;
 
+import androidx.annotation.DrawableRes;
 import androidx.annotation.IntDef;
 import androidx.constraintlayout.widget.ConstraintLayout;
 import androidx.core.content.ContextCompat;
@@ -32,15 +36,18 @@ import androidx.vectordrawable.graphics.drawable.AnimatedVectorDrawableCompat;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.actor.ui.InnerGlowDrawable;
 import org.chromium.chrome.browser.quick_delete.QuickDeleteAnimationGradientDrawable;
-import org.chromium.chrome.browser.tab.Tab.MediaState;
 import org.chromium.chrome.browser.tab.TabUtils;
+import org.chromium.chrome.browser.tab_ui.TabThumbnailView;
+import org.chromium.chrome.browser.tab_ui.TabThumbnailView.ThumbnailViewState;
 import org.chromium.chrome.browser.tasks.tab_management.TabActionButtonData.TabActionButtonType;
 import org.chromium.chrome.browser.tasks.tab_management.TabListModel.AnimationStatus;
 import org.chromium.chrome.browser.tasks.tab_management.TabProperties.TabActionState;
 import org.chromium.chrome.browser.tasks.tab_management.TabProperties.TabCardHighlightState;
 import org.chromium.chrome.tab_ui.R;
 import org.chromium.components.browser_ui.widget.selectable_list.SelectableItemViewBase;
+import org.chromium.components.tabs.TabAlert;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -75,6 +82,8 @@ public class TabGridView extends SelectableItemViewBase<TabListEditorItemSelecti
     private @Nullable QuickDeleteAnimationGradientDrawable mQuickDeleteAnimationDrawable;
     private ImageView mActionButton;
     private @Nullable ColorStateList mActionButtonTint;
+    private boolean mActorUiVisible;
+    private boolean mIsAttachedToWindow;
 
     public TabGridView(Context context, AttributeSet attrs) {
         super(context, attrs);
@@ -137,6 +146,18 @@ public class TabGridView extends SelectableItemViewBase<TabListEditorItemSelecti
         scaleAnimator.start();
     }
 
+    void setThumbnailSpinnerVisibility(boolean isVisible) {
+        View spinner = findViewById(R.id.fetch_thumbnail_spinner);
+        if (spinner == null) return;
+
+        spinner.setVisibility(isVisible ? View.VISIBLE : View.GONE);
+        TabThumbnailView thumbnail = findViewById(R.id.tab_thumbnail);
+        if (thumbnail != null) {
+            thumbnail.setThumbnailViewState(
+                    isVisible ? ThumbnailViewState.LOADING : ThumbnailViewState.PLACEHOLDER_LOADED);
+        }
+    }
+
     void hideTabGridCardViewForQuickDelete(
             @QuickDeleteAnimationStatus int status, boolean isIncognito) {
         assert mTabActionState != TabActionState.UNSET;
@@ -187,7 +208,17 @@ public class TabGridView extends SelectableItemViewBase<TabListEditorItemSelecti
 
     void setTabActionButtonTint(ColorStateList actionButtonTint) {
         mActionButtonTint = actionButtonTint;
-        setTabActionButtonDrawable();
+        applyActionButtonTint();
+    }
+
+    void updateActionButtonBackground(boolean isSelected, boolean isIncognito) {
+        if (mTabActionState != TabActionState.CLOSABLE) return;
+        if (mTabActionButtonType == TabActionButtonType.PIN) return;
+
+        mActionButton.setBackgroundResource(
+                isSelected && !isIncognito
+                        ? R.drawable.small_icon_background_on_primary
+                        : R.drawable.small_icon_background);
     }
 
     void setTabActionState(@TabActionState int tabActionState) {
@@ -209,37 +240,28 @@ public class TabGridView extends SelectableItemViewBase<TabListEditorItemSelecti
         mTabCardHighlightHandler.maybeAnimateForHighlightState(highlightState, isIncognito);
     }
 
-    void setMediaIndicator(@MediaState int mediaState) {
-        TextView tabTitle = findViewById(R.id.tab_title);
-        ImageView tabMediaIndicator = findViewById(R.id.media_indicator_icon);
-        tabMediaIndicator.setImageResource(TabUtils.getMediaIndicatorDrawable(mediaState));
+    void setAlertState(@TabAlert int alertState) {
+        TextView tabTitle = fastFindViewById(R.id.tab_title);
+        ImageView tabAlertIndicator = fastFindViewById(R.id.alert_indicator_icon);
+        @DrawableRes int iconRes = TabUtils.getTabAlertDrawable(alertState);
+        tabAlertIndicator.setImageResource(iconRes);
         ConstraintLayout.LayoutParams titleParams =
                 (ConstraintLayout.LayoutParams) tabTitle.getLayoutParams();
 
         // Default values when no indicator is shown.
-        int mediaIndicatorVisibility = View.GONE;
+        int alertIndicatorVisibility = View.GONE;
         int marginResId = R.dimen.tab_grid_card_title_end_margin;
 
-        switch (mediaState) {
-            case MediaState.AUDIBLE:
-            case MediaState.MUTED:
-            case MediaState.RECORDING:
-            case MediaState.SHARING:
-                marginResId = R.dimen.tab_grid_card_title_end_margin_media_indicator;
-                mediaIndicatorVisibility = View.VISIBLE;
-                break;
-            case MediaState.NONE:
-                break;
-            default:
-                assert false : "Invalid media state";
-                break;
+        if (iconRes != Resources.ID_NULL) {
+            marginResId = R.dimen.tab_grid_card_title_end_margin_alert_indicator;
+            alertIndicatorVisibility = View.VISIBLE;
         }
 
         int endMargin = getResources().getDimensionPixelSize(marginResId);
 
         titleParams.setMarginEnd(endMargin);
         tabTitle.setLayoutParams(titleParams);
-        tabMediaIndicator.setVisibility(mediaIndicatorVisibility);
+        tabAlertIndicator.setVisibility(alertIndicatorVisibility);
     }
 
     void clearHighlight() {
@@ -277,6 +299,7 @@ public class TabGridView extends SelectableItemViewBase<TabListEditorItemSelecti
         mActionButton.setImageDrawable(
                 ResourcesCompat.getDrawable(
                         getResources(), R.drawable.ic_more_vert_24dp, getContext().getTheme()));
+        mActionButton.setBackgroundResource(R.drawable.small_icon_background);
         mActionButton.setFocusable(true);
     }
 
@@ -310,15 +333,71 @@ public class TabGridView extends SelectableItemViewBase<TabListEditorItemSelecti
     }
 
     private void setTabActionButtonDrawable() {
+        int accessibilityMode = IMPORTANT_FOR_ACCESSIBILITY_YES;
         if (mTabActionButtonType == TabActionButtonType.OVERFLOW) {
             setTabActionButtonOverflowDrawable();
         } else if (mTabActionButtonType == TabActionButtonType.PIN) {
             setTabActionButtonPinDrawable();
+            accessibilityMode = IMPORTANT_FOR_ACCESSIBILITY_NO;
         } else {
             setTabActionButtonCloseDrawable();
         }
 
         applyActionButtonTint();
+        mActionButton.setImportantForAccessibility(accessibilityMode);
+    }
+
+    private @Nullable View getActorUi(boolean inflateIfMissing) {
+        View actorContainer = fastFindViewById(R.id.actor_ui_container);
+
+        if (actorContainer == null && inflateIfMissing) {
+            ViewGroup contentView = (ViewGroup) fastFindViewById(R.id.content_view);
+            if (contentView == null) return null;
+
+            LayoutInflater.from(getContext())
+                    .inflate(R.layout.actor_gts_tab_indicator, contentView, true);
+
+            actorContainer = fastFindViewById(R.id.actor_ui_container);
+
+            assumeNonNull(actorContainer);
+            ImageView thumbnailOverlay = actorContainer.findViewById(R.id.actor_thumbnail_overlay);
+            thumbnailOverlay.setImageDrawable(InnerGlowDrawable.createGtsPreviewGlow(getContext()));
+            contentView.bringChildToFront(actorContainer);
+        }
+        return actorContainer;
+    }
+
+    /**
+     * Sets the visibility of the actor-specific tab UI elements. Injects the view programmatically
+     * if it doesn't exist yet.
+     *
+     * @param visible Whether the actor active UI should be shown.
+     */
+    public void setActorActiveUiVisible(boolean visible) {
+        mActorUiVisible = visible;
+        if (!mIsAttachedToWindow) return;
+
+        View actorContainer = getActorUi(visible);
+        if (actorContainer == null) return;
+
+        if (visible) {
+            actorContainer.setVisibility(View.VISIBLE);
+        } else {
+            actorContainer.setVisibility(View.GONE);
+        }
+    }
+
+    @Override
+    protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        mIsAttachedToWindow = true;
+        setActorActiveUiVisible(mActorUiVisible);
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        super.onDetachedFromWindow();
+        mIsAttachedToWindow = false;
     }
 
     // SelectableItemViewBase implementation.

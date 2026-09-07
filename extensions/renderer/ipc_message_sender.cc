@@ -7,14 +7,16 @@
 #include <optional>
 #include <utility>
 
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/metrics/histogram_macros.h"
+#include "base/strings/string_number_conversions.h"
 #include "content/public/renderer/render_frame.h"
 #include "content/public/renderer/render_thread.h"
 #include "content/public/renderer/worker_thread.h"
 #include "extensions/common/api/messaging/messaging_endpoint.h"
 #include "extensions/common/api/messaging/port_context.h"
+#include "extensions/common/api/messaging/signing_certificate.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/features/feature.h"
 #include "extensions/common/mojom/automation_registry.mojom.h"
@@ -23,6 +25,7 @@
 #include "extensions/common/mojom/frame.mojom.h"
 #include "extensions/common/mojom/message_port.mojom-shared.h"
 #include "extensions/common/mojom/renderer_host.mojom.h"
+#include "extensions/common/mojom/web_request_host.mojom.h"
 #include "extensions/common/trace_util.h"
 #include "extensions/renderer/api/messaging/message_target.h"
 #include "extensions/renderer/dispatcher.h"
@@ -33,7 +36,7 @@
 #include "extensions/renderer/service_worker_data.h"
 #include "extensions/renderer/trace_util.h"
 #include "extensions/renderer/worker_thread_dispatcher.h"
-#include "ipc/ipc_sync_channel.h"
+#include "ipc/ipc_channel_proxy.h"
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "mojo/public/cpp/bindings/pending_associated_remote.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_registration.mojom.h"
@@ -42,6 +45,18 @@
 namespace extensions {
 
 namespace {
+
+#if BUILDFLAG(IS_ANDROID)
+MojomSigningCertificates ConvertCertificatesForMojom(
+    const SigningCertificates& certificates) {
+  MojomSigningCertificates mojo_certificates;
+  mojo_certificates.reserve(certificates.size());
+  for (const auto& cert : certificates) {
+    mojo_certificates.emplace_back(cert.begin(), cert.end());
+  }
+  return mojo_certificates;
+}
+#endif
 
 class MainThreadIPCMessageSender : public IPCMessageSender {
  public:
@@ -92,7 +107,7 @@ class MainThreadIPCMessageSender : public IPCMessageSender {
     DCHECK_EQ(kMainThreadId, content::WorkerThread::GetCurrentId());
 
     GetEventRouter(context)->AddListenerForMainThread(mojom::EventListener::New(
-        GetEventListenerOwner(context), event_name, nullptr, std::nullopt));
+        GetEventListenerOwner(context), event_name, std::nullopt));
   }
 
   void SendRemoveUnfilteredEventListenerIPC(
@@ -103,7 +118,7 @@ class MainThreadIPCMessageSender : public IPCMessageSender {
 
     GetEventRouter(context)->RemoveListenerForMainThread(
         mojom::EventListener::New(GetEventListenerOwner(context), event_name,
-                                  nullptr, std::nullopt));
+                                  std::nullopt));
   }
 
   void SendAddUnfilteredLazyEventListenerIPC(
@@ -147,6 +162,22 @@ class MainThreadIPCMessageSender : public IPCMessageSender {
     GetEventRouter(context)->RemoveFilteredListenerForMainThread(
         GetEventListenerOwner(context), event_name, filter.Clone(),
         remove_lazy_listener);
+  }
+
+  void SendWebRequestEventHandlingDoneIPC(
+      const std::optional<ExtensionId>& extension_id,
+      const std::string& event_name,
+      uint64_t request_id,
+      int web_view_instance_id) override {
+    DCHECK_EQ(kMainThreadId, content::WorkerThread::GetCurrentId());
+
+    if (!web_request_host_.is_bound()) {
+      render_thread_->GetChannel()->GetRemoteAssociatedInterface(
+          &web_request_host_);
+    }
+    web_request_host_->EventHandlingDone(
+        extension_id, event_name, request_id, web_view_instance_id,
+        kMainThreadId, blink::mojom::kInvalidServiceWorkerVersionId);
   }
 
   void SendBindAutomationIPC(
@@ -236,8 +267,12 @@ class MainThreadIPCMessageSender : public IPCMessageSender {
         CHECK_EQ(mojom::ChannelType::kNative, channel_type);
         ExtensionFrameHelper::Get(render_frame)
             ->GetLocalFrameHost()
-            ->OpenChannelToNativeApp(*target.native_application_name, port_id,
-                                     std::move(port), std::move(port_host));
+            ->OpenChannelToNativeApp(
+                *target.native_application_name,
+#if BUILDFLAG(IS_ANDROID)
+                ConvertCertificatesForMojom(target.android_certificates),
+#endif
+                port_id, std::move(port), std::move(port_host));
         break;
     }
   }
@@ -298,6 +333,7 @@ class MainThreadIPCMessageSender : public IPCMessageSender {
 
   const raw_ptr<content::RenderThread, DanglingUntriaged> render_thread_;
   mojo::AssociatedRemote<mojom::RendererHost> renderer_host_;
+  mojo::AssociatedRemote<mojom::WebRequestHost> web_request_host_;
 
   base::WeakPtrFactory<MainThreadIPCMessageSender> weak_ptr_factory_{this};
 };
@@ -365,14 +401,14 @@ class WorkerThreadIPCMessageSender : public IPCMessageSender {
 
     auto event_listener = mojom::EventListener::New(
         mojom::EventListenerOwner::NewExtensionId(context->GetExtensionID()),
-        event_name,
-        mojom::ServiceWorkerContext::New(context->service_worker_scope(),
-                                         context->service_worker_version_id(),
-                                         content::WorkerThread::GetCurrentId()),
-        /*event_filter=*/std::nullopt);
+        event_name, /*event_filter=*/std::nullopt);
+    auto service_worker_context = mojom::ServiceWorkerContext::New(
+        context->service_worker_scope(), context->service_worker_version_id(),
+        content::WorkerThread::GetCurrentId());
     WorkerThreadDispatcher::GetServiceWorkerData()
         ->GetEventRouter()
-        ->AddListenerForServiceWorker(std::move(event_listener));
+        ->AddListenerForServiceWorker(std::move(event_listener),
+                                      std::move(service_worker_context));
   }
 
   void SendRemoveUnfilteredEventListenerIPC(
@@ -385,15 +421,15 @@ class WorkerThreadIPCMessageSender : public IPCMessageSender {
 
     auto event_listener = mojom::EventListener::New(
         mojom::EventListenerOwner::NewExtensionId(context->GetExtensionID()),
-        event_name,
-        mojom::ServiceWorkerContext::New(context->service_worker_scope(),
-                                         context->service_worker_version_id(),
-                                         content::WorkerThread::GetCurrentId()),
-        /*event_filter=*/std::nullopt);
+        event_name, /*event_filter=*/std::nullopt);
+    auto service_worker_context = mojom::ServiceWorkerContext::New(
+        context->service_worker_scope(), context->service_worker_version_id(),
+        content::WorkerThread::GetCurrentId());
 
     WorkerThreadDispatcher::GetServiceWorkerData()
         ->GetEventRouter()
-        ->RemoveListenerForServiceWorker(std::move(event_listener));
+        ->RemoveListenerForServiceWorker(std::move(event_listener),
+                                         std::move(service_worker_context));
   }
 
   void SendAddUnfilteredLazyEventListenerIPC(
@@ -462,6 +498,18 @@ class WorkerThreadIPCMessageSender : public IPCMessageSender {
             filter.Clone(), remove_lazy_listener);
   }
 
+  void SendWebRequestEventHandlingDoneIPC(
+      const std::optional<ExtensionId>& extension_id,
+      const std::string& event_name,
+      uint64_t request_id,
+      int web_view_instance_id) override {
+    DCHECK_NE(kMainThreadId, content::WorkerThread::GetCurrentId());
+
+    GetWebRequestHost()->EventHandlingDone(
+        extension_id, event_name, request_id, web_view_instance_id,
+        content::WorkerThread::GetCurrentId(), service_worker_version_id_);
+  }
+
   void SendBindAutomationIPC(
       ScriptContext* context,
       mojo::PendingAssociatedRemote<ax::mojom::Automation> pending_remote)
@@ -524,8 +572,12 @@ class WorkerThreadIPCMessageSender : public IPCMessageSender {
         CHECK_EQ(mojom::ChannelType::kNative, channel_type);
         WorkerThreadDispatcher::GetServiceWorkerData()
             ->GetServiceWorkerHost()
-            ->OpenChannelToNativeApp(*target.native_application_name, port_id,
-                                     std::move(port), std::move(port_host));
+            ->OpenChannelToNativeApp(
+                *target.native_application_name,
+#if BUILDFLAG(IS_ANDROID)
+                ConvertCertificatesForMojom(target.android_certificates),
+#endif
+                port_id, std::move(port), std::move(port_host));
         break;
     }
   }
@@ -561,6 +613,10 @@ class WorkerThreadIPCMessageSender : public IPCMessageSender {
 
   mojom::RendererHost* GetRendererHost() {
     return WorkerThreadDispatcher::GetServiceWorkerData()->GetRendererHost();
+  }
+
+  mojom::WebRequestHost* GetWebRequestHost() {
+    return WorkerThreadDispatcher::GetServiceWorkerData()->GetWebRequestHost();
   }
 
   const raw_ptr<WorkerThreadDispatcher> dispatcher_;

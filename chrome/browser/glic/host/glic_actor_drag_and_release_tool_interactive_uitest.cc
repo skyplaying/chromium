@@ -6,7 +6,7 @@
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/actor/actor_test_util.h"
 #include "chrome/browser/glic/host/glic_actor_interactive_uitest_common.h"
-#include "chrome/common/chrome_features.h"
+#include "components/actor/public/mojom/actor_types.mojom.h"
 #include "components/optimization_guide/proto/features/actions_data.pb.h"
 #include "content/public/test/browser_test.h"
 #include "third_party/abseil-cpp/absl/strings/str_format.h"
@@ -21,7 +21,8 @@ using apc::Actions;
 
 IN_PROC_BROWSER_TEST_F(GlicActorUiTest, DragAndReleaseTool_Range) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
-  const GURL task_url = embedded_test_server()->GetURL("/actor/drag.html");
+  const GURL task_url =
+      embedded_https_test_server().GetURL("example.com", "/actor/drag.html");
 
   gfx::Rect range_rect;
   auto drag_provider = base::BindLambdaForTesting([this, &range_rect]() {
@@ -33,8 +34,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorUiTest, DragAndReleaseTool_Range) {
 
     gfx::Point end = range_rect.CenterPoint();
 
-    Actions action = actor::MakeDragAndRelease(tab_handle_, start, end);
-    action.set_task_id(task_id_.value());
+    Actions action =
+        actor::MakeDragAndRelease(tab_handle_, start, end, task_id_);
     return EncodeActionProto(action);
   });
 
@@ -65,7 +66,8 @@ class GlicActorDragDSFTest : public GlicActorUiTest,
 // Ensure the drag tool sends the expected mouse down, move and up events.
 IN_PROC_BROWSER_TEST_P(GlicActorDragDSFTest, Events) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
-  const GURL task_url = embedded_test_server()->GetURL("/actor/drag.html");
+  const GURL task_url =
+      embedded_https_test_server().GetURL("example.com", "/actor/drag.html");
 
   // The values are provided in DIPs. Since there is no browser zoom, this is
   // equivalent to CSS pixels so should be the same values provided to web APIs,
@@ -75,8 +77,8 @@ IN_PROC_BROWSER_TEST_P(GlicActorDragDSFTest, Events) {
   const gfx::Point end = start + delta;
 
   auto drag_provider = base::BindLambdaForTesting([this, start, end]() {
-    Actions action = actor::MakeDragAndRelease(tab_handle_, start, end);
-    action.set_task_id(task_id_.value());
+    Actions action =
+        actor::MakeDragAndRelease(tab_handle_, start, end, task_id_);
     return EncodeActionProto(action);
   });
 
@@ -111,7 +113,8 @@ INSTANTIATE_TEST_SUITE_P(,
 // Ensure coordinates outside of the viewport are rejected.
 IN_PROC_BROWSER_TEST_F(GlicActorUiTest, DragAndReleaseTool_Offscreen) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
-  const GURL task_url = embedded_test_server()->GetURL("/actor/drag.html");
+  const GURL task_url =
+      embedded_https_test_server().GetURL("example.com", "/actor/drag.html");
 
   gfx::Rect range_rect;
   auto drag_provider = base::BindLambdaForTesting([this, &range_rect]() {
@@ -123,8 +126,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorUiTest, DragAndReleaseTool_Offscreen) {
 
     gfx::Point end = range_rect.CenterPoint();
 
-    Actions action = actor::MakeDragAndRelease(tab_handle_, start, end);
-    action.set_task_id(task_id_.value());
+    Actions action =
+        actor::MakeDragAndRelease(tab_handle_, start, end, task_id_);
     return EncodeActionProto(action);
   });
 
@@ -152,8 +155,8 @@ IN_PROC_BROWSER_TEST_F(GlicActorUiTest, DragAndReleaseTool_Offscreen) {
 
 IN_PROC_BROWSER_TEST_F(GlicActorUiTest, DragAndReleaseTool_DOMNodeId) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kNewActorTabId);
-  const GURL task_url =
-      embedded_test_server()->GetURL("/actor/drag_dom_node_id.html");
+  const GURL task_url = embedded_https_test_server().GetURL(
+      "example.com", "/actor/drag_dom_node_id.html");
 
   auto drag_provider = base::BindLambdaForTesting([this]() {
     int32_t from_node_id = SearchAnnotatedPageContent("fromTarget");
@@ -161,8 +164,7 @@ IN_PROC_BROWSER_TEST_F(GlicActorUiTest, DragAndReleaseTool_DOMNodeId) {
     content::RenderFrameHost* frame =
         tab_handle_.Get()->GetContents()->GetPrimaryMainFrame();
     Actions action =
-        actor::MakeDragAndRelease(*frame, from_node_id, to_node_id);
-    action.set_task_id(task_id_.value());
+        actor::MakeDragAndRelease(*frame, from_node_id, to_node_id, task_id_);
     return EncodeActionProto(action);
   });
 

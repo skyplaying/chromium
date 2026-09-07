@@ -23,16 +23,20 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/menu_model.h"
 #include "ui/base/mojom/menu_source_type.mojom.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/compositor/layer.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/animation_builder.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/button/image_button_factory.h"
+#include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/highlight_path_generator.h"
+#include "ui/views/controls/image_view.h"
 #include "ui/views/controls/menu/menu_item_view.h"
 #include "ui/views/controls/menu/menu_model_adapter.h"
 #include "ui/views/controls/menu/menu_runner.h"
+#include "ui/views/controls/throbber.h"
 #include "ui/views/layout/flex_layout.h"
 #include "ui/views/layout/flex_layout_types.h"
 #include "ui/views/layout/layout_provider.h"
@@ -55,9 +59,9 @@ gfx::Transform GetScaleTransformation(gfx::Rect bounds) {
   return transform;
 }
 
-bool IsCompatibleImageSize(const ui::ImageModel* image) {
+bool IsCompatibleImageSize(const ui::ImageModel& image) {
   const auto intended_size = toasts::ToastView::GetIconSize();
-  const auto image_size = image->Size();
+  const auto image_size = image.Size();
   return image_size.width() == intended_size &&
          image_size.height() == intended_size;
 }
@@ -105,14 +109,37 @@ ToastView::ToastView(
     views::View* anchor_view,
     const std::u16string& toast_text,
     const gfx::VectorIcon& icon,
-    const ui::ImageModel* image_override,
+    std::optional<ui::ImageModel> image_override,
     bool render_toast_over_web_contents,
     base::RepeatingCallback<void(ToastCloseReason)> toast_close_callback)
     : BubbleDialogDelegateView(anchor_view, views::BubbleBorder::NONE),
       AnimationDelegateViews(this),
       toast_text_(toast_text),
-      icon_(icon),
-      image_override_(image_override),
+      icon_(&icon),
+      image_override_(std::move(image_override)),
+      render_toast_over_web_contents_(render_toast_over_web_contents),
+      toast_close_callback_(std::move(toast_close_callback)) {
+  SetBackgroundColor(ui::kColorToastBackgroundProminent);
+  SetShowCloseButton(false);
+  DialogDelegate::SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
+  set_corner_radius(ChromeLayoutProvider::Get()->GetDistanceMetric(
+      DISTANCE_TOAST_BUBBLE_HEIGHT));
+  SetProperty(views::kElementIdentifierKey, kToastElementId);
+  set_close_on_deactivate(false);
+  SetProperty(views::kElementIdentifierKey, kToastViewId);
+  SetAccessibleWindowRole(ax::mojom::Role::kAlert);
+  SetAccessibleTitle(toast_text_);
+}
+
+ToastView::ToastView(
+    views::View* anchor_view,
+    const std::u16string& toast_text,
+    bool render_toast_over_web_contents,
+    base::RepeatingCallback<void(ToastCloseReason)> toast_close_callback)
+    : BubbleDialogDelegateView(anchor_view, views::BubbleBorder::NONE),
+      AnimationDelegateViews(this),
+      toast_text_(toast_text),
+      icon_(nullptr),
       render_toast_over_web_contents_(render_toast_over_web_contents),
       toast_close_callback_(std::move(toast_close_callback)) {
   SetBackgroundColor(ui::kColorToastBackgroundProminent);
@@ -155,6 +182,10 @@ void ToastView::AddMenu(std::unique_ptr<ui::MenuModel> model) {
                           ToastCloseReason::kMenuItemClick));
 }
 
+void ToastView::AddThrobber() {
+  has_throbber_ = true;
+}
+
 int ToastView::GetIconSize() {
   const ChromeLayoutProvider* lp = ChromeLayoutProvider::Get();
   return lp->GetDistanceMetric(DISTANCE_TOAST_BUBBLE_ICON_SIZE);
@@ -167,11 +198,27 @@ void ToastView::Init() {
   SetLayoutManager(std::make_unique<views::FlexLayout>())
       ->SetOrientation(views::LayoutOrientation::kHorizontal);
 
-  icon_view_ = AddChildView(std::make_unique<views::ImageView>());
-  icon_view_->SetProperty(
-      views::kMarginsKey,
-      gfx::Insets::VH(0, lp->GetDistanceMetric(
-                             DISTANCE_TOAST_BUBBLE_LEADING_ICON_SIDE_MARGINS)));
+  if (has_throbber_) {
+    CHECK(!icon_);
+    CHECK(!image_override_.has_value());
+    auto throbber = std::make_unique<views::Throbber>(GetIconSize());
+    throbber->SetColorId(ui::kColorToastForeground);
+    throbber->Start();
+    throbber_ = AddChildView(std::move(throbber));
+    throbber_->SetProperty(
+        views::kMarginsKey,
+        gfx::Insets::VH(0,
+                        lp->GetDistanceMetric(
+                            DISTANCE_TOAST_BUBBLE_LEADING_ICON_SIDE_MARGINS)));
+  } else {
+    CHECK(icon_ || image_override_.has_value());
+    icon_view_ = AddChildView(std::make_unique<views::ImageView>());
+    icon_view_->SetProperty(
+        views::kMarginsKey,
+        gfx::Insets::VH(0,
+                        lp->GetDistanceMetric(
+                            DISTANCE_TOAST_BUBBLE_LEADING_ICON_SIDE_MARGINS)));
+  }
 
   label_ = AddChildView(
       std::make_unique<views::Label>(toast_text_, CONTEXT_TOAST_BODY_TEXT));
@@ -225,8 +272,11 @@ void ToastView::Init() {
         close_button_callback_.Then(
             base::BindRepeating(&ToastView::Close, base::Unretained(this),
                                 ToastCloseReason::kCloseButton)),
-        vector_icons::kCloseChromeRefreshIcon,
+        features::IsRoundedIconsEnabled()
+            ? vector_icons::kCloseIcon
+            : vector_icons::kCloseChromeRefreshOldIcon,
         lp->GetDistanceMetric(DISTANCE_TOAST_BUBBLE_ICON_SIZE),
+        ui::kColorToastForeground, ui::kColorIconDisabled,
         ui::kColorToastForeground));
     // Override the image button's border with the appropriate icon border size.
     const gfx::Insets insets =
@@ -251,9 +301,12 @@ void ToastView::Init() {
 
   if (menu_model_) {
     menu_button_ = AddChildView(views::CreateVectorImageButtonWithNativeTheme(
-        base::RepeatingClosure(), kBrowserToolsChromeRefreshIcon,
+        base::RepeatingClosure(),
+        features::IsRoundedIconsEnabled() ? kMoreVertIcon
+                                          : kBrowserToolsChromeRefreshOldIcon,
         /*dip_size=*/
         lp->GetDistanceMetric(DISTANCE_TOAST_BUBBLE_MENU_ICON_SIZE),
+        ui::kColorToastForeground, ui::kColorIconDisabled,
         ui::kColorToastForeground));
     views::InstallCircleHighlightPathGenerator(menu_button_);
     menu_button_->SetProperty(views::kElementIdentifierKey, kToastMenuButton);
@@ -402,6 +455,8 @@ gfx::Rect ToastView::GetBubbleBounds() {
   const gfx::Size preferred_size =
       GetWidget()->GetContentsView()->GetPreferredSize();
   const gfx::Rect anchor_bounds = anchor_view->GetBoundsInScreen();
+  const gfx::Rect anchor_widget_bounds =
+      anchor_view->GetWidget()->GetWindowBoundsInScreen();
 
   // A wide toast in a narrow browser window needs to be compressed to fit.
   const int minimum_margin = ChromeLayoutProvider::Get()->GetDistanceMetric(
@@ -409,8 +464,11 @@ gfx::Rect ToastView::GetBubbleBounds() {
                              views::BubbleBorder::kShadowBlur;
   const int width =
       std::min(preferred_size.width(),
-               std::max(anchor_bounds.width() - 2 * minimum_margin, 0));
-  const int x = anchor_bounds.x() + ((anchor_bounds.width() - width) / 2);
+               std::max(anchor_widget_bounds.width() - 2 * minimum_margin, 0));
+  const int x =
+      std::clamp(anchor_bounds.x() + ((anchor_bounds.width() - width) / 2),
+                 anchor_widget_bounds.x() + minimum_margin,
+                 anchor_widget_bounds.right() - minimum_margin - width);
 
   // Take bubble out of its original bounds to cross "line of death", unless in
   // fullscreen mode where the top container isn't rendered.
@@ -422,13 +480,17 @@ gfx::Rect ToastView::GetBubbleBounds() {
 
 void ToastView::OnThemeChanged() {
   BubbleDialogDelegateView::OnThemeChanged();
-  const auto* color_provider = GetColorProvider();
-  if (image_override_ != nullptr && IsCompatibleImageSize(image_override_)) {
-    icon_view_->SetImage(*image_override_);
-  } else {
-    icon_view_->SetImage(ui::ImageModel::FromVectorIcon(
-        *icon_, color_provider->GetColor(ui::kColorToastForeground),
-        GetIconSize()));
+  if (icon_view_) {
+    const auto* color_provider = GetColorProvider();
+    if (image_override_.has_value() &&
+        IsCompatibleImageSize(image_override_.value())) {
+      icon_view_->SetImage(image_override_.value());
+    } else {
+      CHECK(icon_);
+      icon_view_->SetImage(ui::ImageModel::FromVectorIcon(
+          *icon_, color_provider->GetColor(ui::kColorToastForeground),
+          GetIconSize()));
+    }
   }
 }
 

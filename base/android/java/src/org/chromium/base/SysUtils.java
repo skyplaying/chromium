@@ -203,6 +203,20 @@ public class SysUtils {
         return sLowMemoryThresholdMB;
     }
 
+    /** Queries ActivityManager and checks if the process importance is Cached or below. */
+    @CalledByNative
+    public static boolean isProcessInBackground() {
+        ActivityManager.RunningAppProcessInfo processInfo =
+                new ActivityManager.RunningAppProcessInfo();
+        try {
+            ActivityManager.getMyMemoryState(processInfo);
+            return processInfo.importance
+                    >= ActivityManager.RunningAppProcessInfo.IMPORTANCE_CACHED;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     /**
      * Creates a new trace event to log the number of minor / major page faults, if tracing is
      * enabled.
@@ -211,8 +225,17 @@ public class SysUtils {
         SysUtilsJni.get().logPageFaultCountToTracing();
     }
 
+    /**
+     * @return Whether the device has support for large process counts.
+     */
+    public static boolean hasLargeProcessCountSupport() {
+        return SysUtilsJni.get().hasLargeProcessCountSupport();
+    }
+
     @NativeMethods
     interface Natives {
         void logPageFaultCountToTracing();
+
+        boolean hasLargeProcessCountSupport();
     }
 }

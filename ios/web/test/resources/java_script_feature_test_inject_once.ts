@@ -34,9 +34,22 @@ function replyWithPostMessageAndPostReply(messageBody: object) {
   });
 }
 
-const body = document.getElementsByTagName('body')[0];
-if (body) {
-  body.appendChild(document.createTextNode('injected_script_loaded'));
+function addBodyElementOnLoad() {
+  const body = document.getElementsByTagName('body')[0];
+  if (body) {
+    body.appendChild(document.createTextNode('injected_script_loaded'));
+  }
+}
+
+async function asyncSum(options: {a: number, b: number}) {
+  await new Promise(resolve => setTimeout(resolve, 10));
+  return options.a + options.b;
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', addBodyElementOnLoad);
+} else {
+  addBodyElementOnLoad();
 }
 
 const javaScriptFeatureTest = new CrWebApi('javaScriptFeatureTest');
@@ -46,6 +59,7 @@ javaScriptFeatureTest.addFunction('replaceDivContents', replaceDivContents);
 javaScriptFeatureTest.addFunction('replyWithPostMessage', replyWithPostMessage);
 javaScriptFeatureTest.addFunction(
     'replyWithPostMessageAndPostReply', replyWithPostMessageAndPostReply);
+javaScriptFeatureTest.addFunction('asyncSum', asyncSum);
 javaScriptFeatureTest.addProperty('errorReceivedCount', errorReceivedCount_);
 
 gCrWeb.registerApi(javaScriptFeatureTest);

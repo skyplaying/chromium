@@ -7,6 +7,7 @@
 
 #include <string>
 
+#include "third_party/skia/include/core/SkColor.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider_key.h"
 #include "ui/color/color_transform.h"
@@ -16,6 +17,11 @@ inline constexpr SkAlpha kToolbarInkDropHighlightVisibleAlpha = 0x14;
 
 // Converts ColorId if |color_id| is in CHROME_COLOR_IDS.
 std::string ChromeColorIdName(ui::ColorId color_id);
+
+// Converts ColorId to its CSS variable name format "--color-..." as a string
+// view with zero allocations if |color_id| is in CHROME_COLOR_IDS. Backed by a
+// compile-time fixed flat map using `ui::internal::CssNameHolder`.
+std::string_view ChromeColorIdToCSSColorId(ui::ColorId color_id);
 
 // Returns the tint associated with the given ID either from the custom theme or
 // the default from ThemeProperties::GetDefaultTint().

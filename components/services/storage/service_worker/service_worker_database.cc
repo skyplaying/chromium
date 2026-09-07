@@ -5,7 +5,9 @@
 #include "components/services/storage/service_worker/service_worker_database.h"
 
 #include <optional>
+#include <string_view>
 
+#include "base/byte_size.h"
 #include "base/command_line.h"
 #include "base/debug/crash_logging.h"
 #include "base/location.h"
@@ -27,6 +29,7 @@
 #include "services/network/public/mojom/referrer_policy.mojom.h"
 #include "services/network/public/mojom/service_worker_router_info.mojom-shared.h"
 #include "services/network/public/mojom/web_sandbox_flags.mojom-shared.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/service_worker/service_worker_router_rule.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
 #include "third_party/blink/public/mojom/service_worker/service_worker_ancestor_frame_type.mojom.h"
@@ -225,8 +228,9 @@ std::string CreateUserDataKeyPrefix(int64_t registration_id) {
 }
 
 std::string CreateUserDataKey(int64_t registration_id,
-                              const std::string& user_data_name) {
-  return CreateUserDataKeyPrefix(registration_id).append(user_data_name);
+                              std::string_view user_data_name) {
+  return base::StrCat(
+      {CreateUserDataKeyPrefix(registration_id), user_data_name});
 }
 
 std::string CreateHasUserDataKeyPrefix(const std::string& user_data_name) {
@@ -262,7 +266,7 @@ void PutPurgeableResourceIdToBatch(int64_t resource_id,
       "");
 }
 
-ServiceWorkerDatabase::Status ParseId(const std::string& serialized,
+ServiceWorkerDatabase::Status ParseId(std::string_view serialized,
                                       int64_t* out) {
   DCHECK(out);
   int64_t id;
@@ -288,12 +292,15 @@ ServiceWorkerDatabase::Status LevelDBStatusToServiceWorkerDBStatus(
     return ServiceWorkerDatabase::Status::kErrorFailed;
 }
 
-int64_t AccumulateResourceSizeInBytes(
+base::ByteSize AccumulateResourceSizeInBytes(
     const std::vector<mojom::ServiceWorkerResourceRecordPtr>& resources) {
-  int64_t total_size_bytes = 0;
-  for (const auto& resource : resources)
-    total_size_bytes += resource->size_bytes;
-  return total_size_bytes;
+  base::ByteSize total_size;
+  for (const auto& resource : resources) {
+    // TODO(https://crbug.com/474382520): This code assumes no error; verify
+    // this.
+    total_size += resource->size.value();
+  }
+  return total_size;
 }
 
 std::optional<std::vector<liburlpattern::Part>> ConvertToBlinkParts(
@@ -681,7 +688,7 @@ bool WriteToBlinkCondition(
           case ServiceWorkerRegistrationData::RouterRules::RuleV1::Condition::
               Request::kDictionaryDestination:
             request.destination =
-                network::mojom::RequestDestination::kDictionary;
+                network::mojom::RequestDestination::kCompressionDictionary;
             break;
           case ServiceWorkerRegistrationData::RouterRules::RuleV1::Condition::
               Request::kSpeculationRulesDestination:
@@ -693,9 +700,11 @@ bool WriteToBlinkCondition(
             request.destination = network::mojom::RequestDestination::kJson;
             break;
           case ServiceWorkerRegistrationData::RouterRules::RuleV1::Condition::
+              Request::kTextDestination:
+            request.destination = network::mojom::RequestDestination::kText;
+            break;
+          case ServiceWorkerRegistrationData::RouterRules::RuleV1::Condition::
               Request::kSharedStorageWorkletDestination:
-            request.destination =
-                network::mojom::RequestDestination::kSharedStorageWorklet;
             break;
         }
       }
@@ -1041,7 +1050,7 @@ void WriteConditionToProtoWithHelper(
               ServiceWorkerRegistrationData::RouterRules::RuleV1::Condition::
                   Request::kEmailVerificationDestination);
           break;
-        case network::mojom::RequestDestination::kDictionary:
+        case network::mojom::RequestDestination::kCompressionDictionary:
           mutable_request->set_destination(
               ServiceWorkerRegistrationData::RouterRules::RuleV1::Condition::
                   Request::kDictionaryDestination);
@@ -1056,10 +1065,10 @@ void WriteConditionToProtoWithHelper(
               ServiceWorkerRegistrationData::RouterRules::RuleV1::Condition::
                   Request::kJsonDestination);
           break;
-        case network::mojom::RequestDestination::kSharedStorageWorklet:
+        case network::mojom::RequestDestination::kText:
           mutable_request->set_destination(
               ServiceWorkerRegistrationData::RouterRules::RuleV1::Condition::
-                  Request::kSharedStorageWorkletDestination);
+                  Request::kTextDestination);
           break;
       }
     }
@@ -1183,6 +1192,35 @@ ServiceWorkerDatabase::Status ServiceWorkerDatabase::GetNextAvailableIds(
                                &next_avail_resource_id_);
   if (status != Status::kOk)
     return status;
+
+  if (base::FeatureList::IsEnabled(
+          blink::features::kServiceWorkerDatabaseDoomOnMissingNextId) &&
+      (next_avail_registration_id_ == 0 || next_avail_version_id_ == 0 ||
+       next_avail_resource_id_ == 0)) {
+    // If any next available ID metadata is 0 while pre-existing registrations
+    // exist on disk, the database ID metadata was lost or corrupted.
+    // Treat this as database corruption to allow ServiceWorkerStorage to doom
+    // the database and recover cleanly.
+    {
+      std::unique_ptr<leveldb::Iterator> itr(
+          db_->NewIterator(leveldb::ReadOptions()));
+      itr->Seek(service_worker_internals::kRegKeyPrefix);
+      status = LevelDBStatusToServiceWorkerDBStatus(itr->status());
+      if (status == Status::kOk && itr->Valid()) {
+        std::string_view key_str(itr->key().data(), itr->key().size());
+        if (base::StartsWith(key_str, service_worker_internals::kRegKeyPrefix,
+                             base::CompareCase::SENSITIVE)) {
+          DLOG(ERROR) << "Registrations exist on disk but next available ID "
+                         "metadata is missing.";
+          status = Status::kErrorCorrupted;
+        }
+      }
+    }
+    if (status != Status::kOk) {
+      HandleReadResult(FROM_HERE, status);
+      return status;
+    }
+  }
 
   *next_avail_registration_id = next_avail_registration_id_;
   *next_avail_version_id = next_avail_version_id_;
@@ -1315,10 +1353,10 @@ ServiceWorkerDatabase::GetRegistrationsForStorageKey(
 
 ServiceWorkerDatabase::Status ServiceWorkerDatabase::GetUsageForStorageKey(
     const blink::StorageKey& key,
-    int64_t& out_usage) {
+    base::ByteSize& out_usage) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  out_usage = 0;
+  out_usage = base::ByteSize(0);
 
   Status status = LazyOpen(false);
   if (IsNewOrNonexistentDatabase(status))
@@ -1345,7 +1383,7 @@ ServiceWorkerDatabase::Status ServiceWorkerDatabase::GetUsageForStorageKey(
           ParseRegistrationData(itr->value().ToString(), key, &registration);
       if (status != Status::kOk)
         break;
-      out_usage += registration->resources_total_size_bytes;
+      out_usage += registration->resources_total_size;
     }
   }
 
@@ -1353,7 +1391,7 @@ ServiceWorkerDatabase::Status ServiceWorkerDatabase::GetUsageForStorageKey(
   // purposes.
   HandleReadResult(FROM_HERE, status);
   if (status != Status::kOk) {
-    out_usage = 0;
+    out_usage = base::ByteSize(0);
   }
 
   return status;
@@ -1523,7 +1561,7 @@ ServiceWorkerDatabase::Status ServiceWorkerDatabase::WriteRegistration(
   PutUniqueOriginToBatch(registration.key, &batch);
 
   DCHECK_EQ(AccumulateResourceSizeInBytes(resources),
-            registration.resources_total_size_bytes)
+            registration.resources_total_size)
       << "The total size in the registration must match the cumulative "
       << "sizes of the resources.";
 
@@ -1566,8 +1604,8 @@ ServiceWorkerDatabase::Status ServiceWorkerDatabase::WriteRegistration(
     DCHECK_LT(old_registration->version_id, registration.version_id);
     deleted_version->registration_id = old_registration->registration_id;
     deleted_version->version_id = old_registration->version_id;
-    deleted_version->resources_total_size_bytes =
-        old_registration->resources_total_size_bytes;
+    deleted_version->resources_total_size =
+        old_registration->resources_total_size;
     status = DeleteResourceRecords(old_registration->version_id,
                                    &deleted_version->newly_purgeable_resources,
                                    &batch);
@@ -1803,8 +1841,8 @@ ServiceWorkerDatabase::Status ServiceWorkerDatabase::DeleteRegistration(
     if (registration->registration_id == registration_id) {
       deleted_version->registration_id = registration_id;
       deleted_version->version_id = registration->version_id;
-      deleted_version->resources_total_size_bytes =
-          registration->resources_total_size_bytes;
+      deleted_version->resources_total_size =
+          registration->resources_total_size;
       status = DeleteResourceRecords(
           registration->version_id, &deleted_version->newly_purgeable_resources,
           &batch);
@@ -2163,9 +2201,9 @@ ServiceWorkerDatabase::ReadUserDataForAllRegistrationsByKeyPrefix(
         break;
       }
 
-      std::vector<std::string> parts = base::SplitString(
+      std::vector<std::string_view> parts = base::SplitStringPiece(
           user_data_name_with_id,
-          std::string(1, service_worker_internals::kKeySeparator),
+          std::string_view(&service_worker_internals::kKeySeparator, 1),
           base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL);
       if (parts.size() != 2) {
         status = Status::kErrorCorrupted;
@@ -2188,8 +2226,8 @@ ServiceWorkerDatabase::ReadUserDataForAllRegistrationsByKeyPrefix(
         user_data->clear();
         break;
       }
-      user_data->push_back(
-          mojom::ServiceWorkerUserData::New(registration_id, parts[0], value));
+      user_data->push_back(mojom::ServiceWorkerUserData::New(
+          registration_id, std::string(parts[0]), value));
     }
   }
 
@@ -2231,9 +2269,9 @@ ServiceWorkerDatabase::DeleteUserDataForAllRegistrationsByKeyPrefix(
                      &user_data_name_with_id);
     DCHECK(did_remove_prefix);
 
-    std::vector<std::string> parts = base::SplitString(
+    std::vector<std::string_view> parts = base::SplitStringPiece(
         user_data_name_with_id,
-        std::string(1, service_worker_internals::kKeySeparator),
+        std::string_view(&service_worker_internals::kKeySeparator, 1),
         base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL);
     if (parts.size() != 2)
       return Status::kErrorCorrupted;
@@ -2611,7 +2649,8 @@ ServiceWorkerDatabase::Status ServiceWorkerDatabase::ParseRegistrationData(
   }
   (*out)->last_update_check = base::Time::FromDeltaSinceWindowsEpoch(
       base::Microseconds(data.last_update_check_time()));
-  (*out)->resources_total_size_bytes = data.resources_total_size_bytes();
+  (*out)->resources_total_size =
+      base::ByteSize(data.resources_total_size_bytes());
   if (data.has_origin_trial_tokens()) {
     const ServiceWorkerOriginTrialInfo& info = data.origin_trial_tokens();
     FeatureToTokensMap origin_trial_tokens;
@@ -3010,7 +3049,8 @@ void ServiceWorkerDatabase::WriteRegistrationDataInBatch(
   data.set_script_response_time(
       registration.script_response_time.ToDeltaSinceWindowsEpoch()
           .InMicroseconds());
-  data.set_resources_total_size_bytes(registration.resources_total_size_bytes);
+  data.set_resources_total_size_bytes(
+      registration.resources_total_size.InBytes());
   if (registration.origin_trial_tokens) {
     ServiceWorkerOriginTrialInfo* info = data.mutable_origin_trial_tokens();
     for (const auto& feature : *registration.origin_trial_tokens) {
@@ -3209,7 +3249,7 @@ ServiceWorkerDatabase::Status ServiceWorkerDatabase::ParseResourceRecord(
   *out = mojom::ServiceWorkerResourceRecord::New();
   (*out)->resource_id = record.resource_id();
   (*out)->url = url;
-  (*out)->size_bytes = record.size_bytes();
+  (*out)->size = base::ByteSize(record.size_bytes());
   if (record.has_sha256_checksum()) {
     (*out)->sha256_checksum = record.sha256_checksum();
   }
@@ -3221,7 +3261,6 @@ void ServiceWorkerDatabase::WriteResourceRecordInBatch(
     int64_t version_id,
     leveldb::WriteBatch* batch) {
   DCHECK(batch);
-  DCHECK_GE(resource.size_bytes, 0);
 
   // The next available resource id should be bumped when a resource is recorded
   // in the uncommitted list and this should be nop. However, we attempt it here
@@ -3236,7 +3275,8 @@ void ServiceWorkerDatabase::WriteResourceRecordInBatch(
   ServiceWorkerResourceRecord data;
   data.set_resource_id(resource.resource_id);
   data.set_url(resource.url.spec());
-  data.set_size_bytes(resource.size_bytes);
+  // TODO(https://crbug.com/474382520): This code assumes no error; verify this.
+  data.set_size_bytes(resource.size.value().InBytes());
   if (resource.sha256_checksum) {
     data.set_sha256_checksum(*resource.sha256_checksum);
   }

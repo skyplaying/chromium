@@ -63,6 +63,10 @@ CREATE PERFETTO TABLE chrome_scroll_frame_info_v4 (
   -- included in this frame (in pixels). NULL if the first scroll update in this
   -- frame is synthetic.
   real_abs_total_raw_delta_pixels DOUBLE,
+  -- The total raw (unpredicted) delta of all real scroll updates included in
+  -- this frame (in pixels). NULL if the first scroll update in this frame is
+  -- synthetic, or if the trace was recorded before the field was added.
+  real_total_raw_delta_pixels DOUBLE,
   -- Duration from the start of the browser process to the input generation
   -- timestamp of the first scroll update in this frame. NULL if the first
   -- scroll update in this frame is synthetic.
@@ -295,6 +299,18 @@ CREATE PERFETTO TABLE chrome_scroll_frame_info_v4 (
   -- Difference between `viz_swap_buffers_to_latch_dur` for this frame and the
   -- previous frame in the same scroll. NULL if either frame is non-damaging.
   viz_swap_buffers_to_latch_delta_dur DURATION,
+  -- Timestamp of `EventLatency`'s `BufferAvailableToBufferReady` step. NULL if
+  -- this frame is non-damaging.
+  buffer_available_timestamp TIMESTAMP,
+  -- Duration of `EventLatency`'s `BufferAvailableToBufferReady` step. NULL if
+  -- this frame is non-damaging.
+  buffer_available_to_ready_dur DURATION,
+  -- Difference between `buffer_available_to_ready_dur` for this frame and the
+  -- previous frame in the same scroll. NULL if either frame is non-damaging.
+  buffer_available_to_ready_delta_dur DURATION,
+  -- Timestamp for `EventLatency`'s `BufferReadyToLatch` step. NULL if this
+  -- frame is non-damaging.
+  buffer_ready_timestamp TIMESTAMP,
   -- Timestamp for `EventLatency`'s `LatchToSwapEnd` step. NULL if this frame is
   -- non-damaging.
   latch_timestamp TIMESTAMP,
@@ -317,6 +333,7 @@ SELECT
   row_number() OVER (PARTITION BY info.scroll_id ORDER BY results.ts) AS frame_index_in_scroll,
   -- Columns which are only relevant frames whose first scroll update is REAL.
   _if_real_first_scroll_update!(results.real_abs_total_raw_delta_pixels) AS real_abs_total_raw_delta_pixels,
+  _if_real_first_scroll_update!(results.real_total_raw_delta_pixels) AS real_total_raw_delta_pixels,
   _if_real_first_scroll_update!(info.browser_uptime_dur) AS browser_uptime_dur,
   _if_real_first_scroll_update!(info.generation_ts) AS first_input_generation_ts,
   _if_real_first_scroll_update!(info.input_reader_dur) AS input_reader_dur,
@@ -389,6 +406,10 @@ SELECT
   _if_damaging_frame!(info.viz_swap_buffers_end_ts) AS viz_swap_buffers_end_ts,
   _if_damaging_frame!(info.viz_swap_buffers_to_latch_dur) AS viz_swap_buffers_to_latch_dur,
   _if_damaging_frame!(_stage_dur_delta_v4!(info.viz_swap_buffers_to_latch_dur)) AS viz_swap_buffers_to_latch_delta_dur,
+  _if_damaging_frame!(info.buffer_available_timestamp) AS buffer_available_timestamp,
+  _if_damaging_frame!(info.buffer_available_to_ready_dur) AS buffer_available_to_ready_dur,
+  _if_damaging_frame!(_stage_dur_delta_v4!(info.buffer_available_to_ready_dur)) AS buffer_available_to_ready_delta_dur,
+  _if_damaging_frame!(info.buffer_ready_timestamp) AS buffer_ready_timestamp,
   _if_damaging_frame!(info.latch_timestamp) AS latch_timestamp,
   _if_damaging_frame!(info.viz_latch_to_presentation_dur) AS viz_latch_to_presentation_dur,
   _if_damaging_frame!(_stage_dur_delta_v4!(info.viz_latch_to_presentation_dur)) AS viz_latch_to_presentation_delta_dur,

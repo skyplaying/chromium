@@ -52,7 +52,8 @@ class ProtocolHandler {
   static ProtocolHandler CreateExtensionProtocolHandler(
       const std::string& protocol,
       const GURL& url,
-      const std::string& extension_id);
+      const std::string& extension_id,
+      bool is_allowed_in_incognito = false);
 
   ProtocolHandler(const std::string& protocol,
                   const GURL& url,
@@ -60,6 +61,7 @@ class ProtocolHandler {
                   std::optional<std::string> extension_id,
                   base::Time last_modified,
                   bool is_confirmed,
+                  bool is_allowed_in_incognito,
                   blink::ProtocolHandlerSecurityLevel security_level);
 
   ProtocolHandler(const ProtocolHandler& other);
@@ -78,6 +80,12 @@ class ProtocolHandler {
   // safelist as described in steps 1, 2, 6 and 7 (except same origin).
   // https://html.spec.whatwg.org/multipage/system-state.html#custom-handlers.
   bool IsValid() const;
+
+  // Extra security check, separate from the HTML-spec validity of IsValid():
+  // a handler using extension-level privileges (kExtensionFeatures) must be
+  // associated with an extension, otherwise extension cleanup can never remove
+  // it. Returns true for handlers that do not use extension privileges.
+  bool IsAllowedExtensionHandler() const;
 
   // Returns true if this handler's url has the same origin as the given one.
   bool IsSameOrigin(const ProtocolHandler& handler) const;
@@ -123,6 +131,11 @@ class ProtocolHandler {
   // Extensions, through the 'protocol_handlers' Manifest key.
   bool is_confirmed() const { return is_confirmed_; }
 
+  bool is_allowed_in_incognito() const { return is_allowed_in_incognito_; }
+  void set_is_allowed_in_incognito(bool is_allowed_in_incognito) {
+    is_allowed_in_incognito_ = is_allowed_in_incognito;
+  }
+
   bool IsEmpty() const { return protocol_.empty(); }
   bool IsExtensionHandler() const { return extension_id_.has_value(); }
 
@@ -143,6 +156,7 @@ class ProtocolHandler {
   std::optional<std::string> extension_id_;
   base::Time last_modified_;
   bool is_confirmed_{true};
+  bool is_allowed_in_incognito_{false};
   blink::ProtocolHandlerSecurityLevel security_level_;
 };
 

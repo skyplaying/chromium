@@ -5,6 +5,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_ANIMATION_TIMELINE_TRIGGER_RANGE_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_ANIMATION_TIMELINE_TRIGGER_RANGE_H_
 
+#include "cc/animation/timeline_trigger.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_timeline_trigger_options.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_string_timelinerangeoffset.h"
 #include "third_party/blink/renderer/core/core_export.h"
@@ -15,17 +16,8 @@ namespace blink {
 class AnimationTimeline;
 class Element;
 class ExecutionContext;
+class Node;
 class ScrollTimeline;
-
-// https://drafts.csswg.org/web-animations-2/#trigger-state
-enum class TimelineTriggerState {
-  // The initial state of the trigger. The trigger has not yet taken any action.
-  kIdle,
-  // The last action taken by the trigger was due to entering the trigger range.
-  kPrimary,
-  // The last action taken by the trigger was due to exiting the exit range.
-  kInverse,
-};
 
 // This class encapsulates a single instance of the configuration that a
 // TimelineTrigger needs to function, i.e. an AnimationTimeline, the boundaries
@@ -38,7 +30,8 @@ class CORE_EXPORT TimelineTriggerRange : public ScriptWrappable {
 
  public:
   using Boundary = V8UnionStringOrTimelineRangeOffset;
-  using State = TimelineTriggerState;
+  using State = cc::AnimationTrigger::State;
+  using CcBoundaries = cc::TimelineTrigger::Boundaries;
 
   TimelineTriggerRange(AnimationTimeline* timeline,
                        Boundary* activation_range_start,
@@ -73,17 +66,23 @@ class CORE_EXPORT TimelineTriggerRange : public ScriptWrappable {
     double current_offset = 0.;
   };
 
+  static Node* ComputeBoundariesSource(const ScrollTimeline& timeline);
   std::optional<TriggerBoundaries> CalculateTriggerBoundaries();
-  TriggerBoundaries ComputeTriggerBoundaries(double current_offset,
-                                             Element& timeline_source,
-                                             const ScrollTimeline& timeline);
-  TriggerBoundaries ComputeTriggerBoundariesForTest(
+  std::optional<TriggerBoundaries> ComputeTriggerBoundaries(
+      double current_offset,
+      Element& timeline_source,
+      const ScrollTimeline& timeline);
+  std::optional<TriggerBoundaries> ComputeTriggerBoundariesForTest(
       double current_offset,
       Element& timeline_source,
       const ScrollTimeline& timeline) {
     return ComputeTriggerBoundaries(current_offset, timeline_source, timeline);
   }
 
+  std::optional<CcBoundaries> ComputeCcBoundaries(
+      cc::AnimationTimeline* cc_timeline);
+
+  void SetState(State state) { state_ = state; }
   std::optional<State> UpdateState();
   std::optional<State> ComputeState();
   void SetRangeBoundariesForTest(Boundary* activation_start,
@@ -111,7 +110,7 @@ class CORE_EXPORT TimelineTriggerRange : public ScriptWrappable {
   // TimelineTriggerRange track its state and have TimelineTrigger read its
   // state from this range. When we support multiple TimelineTriggerRanges, we
   // might want to have only the TimelineTrigger tracking state.
-  State last_snapshot_state_;
+  State state_;
 };
 
 }  // namespace blink

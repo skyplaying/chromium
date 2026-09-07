@@ -12,6 +12,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sessions/tab_restore_service_factory.h"
 #include "chrome/common/buildflags.h"
+#include "components/history/core/browser/url_row.h"
 #include "components/sessions/core/serialized_navigation_entry.h"
 #include "components/sessions/core/tab_restore_service.h"
 #include "components/sessions/core/tab_restore_service_observer.h"
@@ -66,13 +67,13 @@ bool ShouldDeleteSerializedNavigationEntry(
 
 bool UrlMatcherForNavigationEntry(const base::flat_set<GURL>& urls,
                                   content::NavigationEntry* entry) {
-  return urls.find(entry->GetURL()) != urls.end();
+  return urls.contains(entry->GetURL());
 }
 
 bool UrlMatcherForSerializedNavigationEntry(
     const base::flat_set<GURL>& urls,
     const sessions::SerializedNavigationEntry& entry) {
-  return urls.find(entry.virtual_url()) != urls.end();
+  return urls.contains(entry.virtual_url());
 }
 
 base::flat_set<GURL> CreateUrlSet(const history::URLRows& deleted_rows) {
@@ -233,7 +234,7 @@ void RemoveNavigationEntries(Profile* profile,
   // deleted entries.
   // However deletion of foreign visits specifically can occur during startup
   // and clearing session service data will delete the user's previous session
-  // with no ability to rebuild/recover (see crbug.com/1424800). Foreign visits
+  // with no ability to rebuild/recover (see crbug.com/40063610). Foreign visits
   // can't be part of the local session so there is no risk of retaining the
   // session service data in this case.
   if (deletion_info.deletion_reason() !=

@@ -55,14 +55,18 @@ source_set("impl") {
     ":tab_model",
     "//chrome/android:chrome_jni_headers",
     "//chrome/browser:browser_process",
+    "//chrome/browser/android:tabs_public",
     "//chrome/browser/content_settings:content_settings_factory",
+    "//chrome/browser/glic",
+    "//chrome/browser/performance_manager",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/sessions",
     "//chrome/browser/sync",
     "//chrome/browser/tab",
-    "//chrome/browser/ui:browser_navigator_params_headers",
+    "//chrome/browser/tab_contents",
     "//chrome/browser/ui/browser_window",
     "//chrome/browser/ui/browser_window/internal",
+    "//chrome/browser/ui/navigator",
     "//chrome/browser/ui/tabs:tabs_public",
     "//components/content_settings/core/browser",
     "//content/public/browser",
@@ -83,11 +87,11 @@ source_set("test_support") {
   ]
   public_deps = [
     ":tab_model",
-    "//chrome/browser",
     "//content/test:test_support",
     "//ui/base/unowned_user_data",
   ]
   deps = [
+    "//chrome/browser/android:tabs_public",
     "//chrome/browser/flags:flags_android",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/ui/android/tab_model",
@@ -114,6 +118,9 @@ source_set("browser_tests") {
   ]
   deps = [
     ":test_support",
+    "//chrome/browser/content_settings:content_settings_factory",
+    "//chrome/browser/flags:flags_android",
+    "//chrome/browser/performance_manager",
     "//chrome/test:test_support",
     "//content/public/browser",
   ]

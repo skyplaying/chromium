@@ -4,6 +4,13 @@
 
 #include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_component_store.h"
 
+#include <memory>
+#include <utility>
+
+#include "base/containers/flat_map.h"
+#include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_component.h"
+#include "components/autofill/core/browser/field_types.h"
+
 namespace autofill {
 
 AddressComponentsStore::AddressComponentsStore() = default;
@@ -31,6 +38,9 @@ AddressComponent* AddressComponentsStore::GetNodeForType(
 
 AddressComponentsStore& AddressComponentsStore::operator=(
     AddressComponentsStore&& other) {
+  if (this == &other) {
+    return *this;
+  }
   WipeRawPtrsForDestruction();
   components_ = std::move(other.components_);
   return *this;

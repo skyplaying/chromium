@@ -16,10 +16,10 @@
 
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
-#include "base/containers/lru_cache.h"
+#include "base/containers/hashing_lru_cache.h"
+#include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/memory/discardable_memory.h"
-#include "base/memory/memory_pressure_listener.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ptr_exclusion.h"
 #include "base/memory/ref_counted.h"
@@ -112,8 +112,7 @@ class RasterDarkModeFilter;
 //      |persistent_cache_| or |in_use_cache_|.
 class CC_EXPORT GpuImageDecodeCache
     : public ImageDecodeCache,
-      public base::trace_event::MemoryDumpProvider,
-      public base::MemoryPressureListener {
+      public base::trace_event::MemoryDumpProvider {
  public:
   explicit GpuImageDecodeCache(viz::RasterContextProvider* context,
                                SkColorType color_type,
@@ -152,10 +151,6 @@ class CC_EXPORT GpuImageDecodeCache
   // MemoryDumpProvider overrides.
   bool OnMemoryDump(const base::trace_event::MemoryDumpArgs& args,
                     base::trace_event::ProcessMemoryDump* pmd) override;
-
-  // TODO(gyuyoung): OnMemoryPressure is deprecated. So this should be removed
-  // when the memory coordinator is enabled by default.
-  void OnMemoryPressure(base::MemoryPressureLevel level) override;
 
   // Called by Decode / Upload tasks.
   void DecodeImageInTask(const DrawImage& image, TaskType task_type);
@@ -721,8 +716,6 @@ class CC_EXPORT GpuImageDecodeCache
   std::vector<uint32_t> ids_pending_unlock_;
   std::vector<uint32_t> ids_pending_deletion_;
 
-  std::unique_ptr<base::AsyncMemoryPressureListenerRegistration>
-      memory_pressure_listener_registration_;
   base::WeakPtrFactory<GpuImageDecodeCache> weak_ptr_factory_{this};
 };
 

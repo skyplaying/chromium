@@ -61,6 +61,7 @@ class CORE_EXPORT LayoutEmbeddedContent : public LayoutReplaced {
   // Subtracts border/padding, and other offsets if they exist.
   PhysicalOffset EmbeddedContentFromBorderBox(const PhysicalOffset&) const;
   gfx::PointF EmbeddedContentFromBorderBox(const gfx::PointF&) const;
+  gfx::Rect EmbeddedContentFromBorderBox(const gfx::Rect&) const;
   // Adds border/padding, and other offsets if they exist.
   PhysicalOffset BorderBoxFromEmbeddedContent(const PhysicalOffset&) const;
   gfx::Rect BorderBoxFromEmbeddedContent(const gfx::Rect&) const;
@@ -95,6 +96,7 @@ class CORE_EXPORT LayoutEmbeddedContent : public LayoutReplaced {
 
   void StyleDidChange(StyleDifference,
                       const ComputedStyle* old_style,
+                      const ComputedStyle& new_style,
                       const StyleChangeContext&) final;
   void PaintReplaced(const PaintInfo&,
                      const PhysicalOffset& paint_offset) const override;
@@ -110,8 +112,10 @@ class CORE_EXPORT LayoutEmbeddedContent : public LayoutReplaced {
     return To<HTMLFrameOwnerElement>(GetNode());
   }
 
+  void CountSvgFilterPaint() const;
+
  private:
-  void WillBeDestroyed() final;
+  void WillBeDestroyed(const ComputedStyle*) final;
 
   bool NodeAtPointOverEmbeddedContentView(
       HitTestResult&,

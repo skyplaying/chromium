@@ -12,7 +12,8 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/safe_browsing/download_protection/download_protection_util.h"
 #include "chrome/browser/safe_browsing/safe_browsing_navigation_observer_manager_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/download/public/common/mock_download_item.h"
@@ -26,6 +27,7 @@
 #include "components/safe_browsing/content/browser/safe_browsing_navigation_observer.h"
 #include "components/safe_browsing/content/browser/safe_browsing_navigation_observer_manager.h"
 #include "components/sessions/content/session_tab_helper.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/navigation_simulator.h"
 #include "content/public/test/test_utils.h"
@@ -70,12 +72,12 @@ class DataProtectionNavigationControllerTest : public InProcessBrowserTest {
 
   safe_browsing::NavigationEventList* navigation_event_list() {
     return safe_browsing::SafeBrowsingNavigationObserverManagerFactory::
-        GetForBrowserContext(browser()->profile())
+        GetForBrowserContext(browser()->GetProfile())
             ->navigation_event_list();
   }
 
   content::WebContents* contents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
   GURL main_url() {
@@ -89,7 +91,7 @@ class DataProtectionNavigationControllerTest : public InProcessBrowserTest {
     base::Time one_second_ago = base::Time::FromSecondsSinceUnixEpoch(
         now.InSecondsFSinceUnixEpoch() - 1.0);
     auto tab_id = sessions::SessionTabHelper::IdForTab(
-        browser()->tab_strip_model()->GetActiveWebContents());
+        browser()->GetTabStripModel()->GetActiveWebContents());
 
     std::unique_ptr<safe_browsing::NavigationEvent> first_navigation =
         std::make_unique<safe_browsing::NavigationEvent>();
@@ -117,7 +119,7 @@ class DataProtectionNavigationControllerTest : public InProcessBrowserTest {
 
 IN_PROC_BROWSER_TEST_F(DataProtectionNavigationControllerTest, PolicyUnset) {
   auto chain = enterprise_connectors::GetReferrerChain(
-      main_url(), *browser()->tab_strip_model()->GetActiveWebContents());
+      main_url(), *browser()->GetTabStripModel()->GetActiveWebContents());
   ASSERT_TRUE(chain.empty());
 
   AddFakeNavigationsToChain();
@@ -137,11 +139,11 @@ IN_PROC_BROWSER_TEST_F(DataProtectionNavigationControllerTest, PolicyUnset) {
 
 IN_PROC_BROWSER_TEST_F(DataProtectionNavigationControllerTest, DownloadItem) {
   auto chain = enterprise_connectors::GetReferrerChain(
-      main_url(), *browser()->tab_strip_model()->GetActiveWebContents());
+      main_url(), *browser()->GetTabStripModel()->GetActiveWebContents());
   ASSERT_TRUE(chain.empty());
 
   enterprise_connectors::test::SetAnalysisConnector(
-      browser()->profile()->GetPrefs(),
+      browser()->GetProfile()->GetPrefs(),
       enterprise_connectors::AnalysisConnector::FILE_DOWNLOADED,
       GetAnalysisPolicy());
   AddFakeNavigationsToChain();
@@ -194,31 +196,31 @@ class DataProtectionNavigationControllerPolicyTest
       public testing::WithParamInterface<
           base::RepeatingCallback<void(PrefService*)>> {
  public:
-  void EnablePolicy() { GetParam().Run(browser()->profile()->GetPrefs()); }
+  void EnablePolicy() { GetParam().Run(browser()->GetProfile()->GetPrefs()); }
 
   void TearDownOnMainThread() override {
     enterprise_connectors::test::ClearAnalysisConnector(
-        browser()->profile()->GetPrefs(),
+        browser()->GetProfile()->GetPrefs(),
         enterprise_connectors::AnalysisConnector::BULK_DATA_ENTRY);
     enterprise_connectors::test::ClearAnalysisConnector(
-        browser()->profile()->GetPrefs(),
+        browser()->GetProfile()->GetPrefs(),
         enterprise_connectors::AnalysisConnector::FILE_ATTACHED);
     enterprise_connectors::test::ClearAnalysisConnector(
-        browser()->profile()->GetPrefs(),
+        browser()->GetProfile()->GetPrefs(),
         enterprise_connectors::AnalysisConnector::FILE_DOWNLOADED);
 #if BUILDFLAG(IS_CHROMEOS)
     enterprise_connectors::test::ClearAnalysisConnector(
-        browser()->profile()->GetPrefs(),
+        browser()->GetProfile()->GetPrefs(),
         enterprise_connectors::AnalysisConnector::FILE_TRANSFER);
 #endif
     enterprise_connectors::test::ClearAnalysisConnector(
-        browser()->profile()->GetPrefs(),
+        browser()->GetProfile()->GetPrefs(),
         enterprise_connectors::AnalysisConnector::PRINT);
     enterprise_connectors::test::SetOnSecurityEventReporting(
-        browser()->profile()->GetPrefs(), false);
-    browser()->profile()->GetPrefs()->ClearPref(
+        browser()->GetProfile()->GetPrefs(), false);
+    browser()->GetProfile()->GetPrefs()->ClearPref(
         enterprise_connectors::kEnterpriseRealTimeUrlCheckMode);
-    browser()->profile()->GetPrefs()->ClearPref(
+    browser()->GetProfile()->GetPrefs()->ClearPref(
         enterprise_connectors::kEnterpriseRealTimeUrlCheckScope);
   }
 };
@@ -226,7 +228,7 @@ class DataProtectionNavigationControllerPolicyTest
 IN_PROC_BROWSER_TEST_P(DataProtectionNavigationControllerPolicyTest,
                        PolicySet) {
   auto chain = enterprise_connectors::GetReferrerChain(
-      main_url(), *browser()->tab_strip_model()->GetActiveWebContents());
+      main_url(), *browser()->GetTabStripModel()->GetActiveWebContents());
   ASSERT_TRUE(chain.empty());
 
   EnablePolicy();
@@ -239,7 +241,7 @@ IN_PROC_BROWSER_TEST_P(DataProtectionNavigationControllerPolicyTest,
   ASSERT_TRUE(enterprise_connectors::HasCachedChainForTesting(*contents()));
 
   chain = enterprise_connectors::GetReferrerChain(
-      main_url(), *browser()->tab_strip_model()->GetActiveWebContents());
+      main_url(), *browser()->GetTabStripModel()->GetActiveWebContents());
   ASSERT_EQ(chain.size(), 2u);
   ASSERT_EQ(chain[0].url(), main_url());
   ASSERT_EQ(chain[1].url(), secondary_url());

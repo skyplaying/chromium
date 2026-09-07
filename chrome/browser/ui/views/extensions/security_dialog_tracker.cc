@@ -7,8 +7,6 @@
 #include <memory>
 
 #include "base/no_destructor.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/views/interaction/browser_elements_views.h"
 #include "ui/base/class_property.h"
 #include "ui/base/interaction/element_identifier.h"
@@ -66,7 +64,7 @@ void SecurityDialogTracker::RemoveSecurityDialog(views::Widget* widget) {
 }
 
 bool SecurityDialogTracker::BrowserHasVisibleSecurityDialogs(
-    Browser* browser) const {
+    BrowserWindowInterface* browser) const {
   const auto views = BrowserElementsViews::From(browser)->GetAllViews(
       kSecuritySensitiveDialogIdentifier);
   return std::any_of(views.begin(), views.end(),

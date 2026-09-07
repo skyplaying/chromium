@@ -12,6 +12,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/string_util.h"
 #include "base/time/time.h"
 #include "components/lens/lens_entrypoints.h"
 #include "components/lens/lens_features.h"
@@ -57,7 +58,12 @@ inline constexpr char kInvocationSourceHomeworkActionChip[] = "hwac";
 inline constexpr char kInvocationSourceNtpContextualQuery[] = "rb";
 inline constexpr char kInvocationSourceOmniboxContextualQuery[] = "obic";
 inline constexpr char kInvocationSourceCobrowseToolbarButton[] = "cct";
+inline constexpr char kInvocationSourceCobrowsePinnedToolbarButton[] = "ccpt";
 inline constexpr char kInvocationSourceContextualTasksComposeBox[] = "cntk";
+inline constexpr char kInvocationSourceNtpActionChips[] = "ntpac";
+inline constexpr char kInvocationSourceAppBarAimButton[] = "abab";
+inline constexpr char kInvocationSourceOmniboxEverywhereComposebox[] = "oecb";
+inline constexpr char kInvocationSourceOmniboxPopupButton[] = "obpb";
 
 void AppendQueryParam(std::string* query_string,
                       const char name[],
@@ -169,6 +175,25 @@ std::string VitQueryParamValueForMimeType(MimeType mime_type) {
     case lens::MimeType::kJson:
       // These content types are not supported for the page content upload flow.
       NOTREACHED() << "Unsupported option in page content upload";
+  }
+  return vitValue;
+}
+
+std::string VitQueryParamValueForMimeTypeString(
+    const std::string& mime_type_string) {
+  // Default contextual visual input type.
+  std::string vitValue = kContextualVisualInputTypeQueryParameterValue;
+  if (base::StartsWith(mime_type_string, "application/pdf",
+                       base::CompareCase::INSENSITIVE_ASCII)) {
+    vitValue = kPdfVisualInputTypeQueryParameterValue;
+  } else if (base::StartsWith(mime_type_string, "text/html",
+                              base::CompareCase::INSENSITIVE_ASCII) ||
+             base::StartsWith(mime_type_string, "text/plain",
+                              base::CompareCase::INSENSITIVE_ASCII)) {
+    vitValue = kWebpageVisualInputTypeQueryParameterValue;
+  } else if (base::StartsWith(mime_type_string, "image/",
+                              base::CompareCase::INSENSITIVE_ASCII)) {
+    vitValue = kImageVisualInputTypeQueryParameterValue;
   }
   return vitValue;
 }
@@ -306,8 +331,23 @@ GURL AppendInvocationSourceParamToURL(
     case lens::LensOverlayInvocationSource::kCobrowseToolbarButton:
       param_value += kInvocationSourceCobrowseToolbarButton;
       break;
+    case lens::LensOverlayInvocationSource::kCobrowsePinnedToolbarButton:
+      param_value += kInvocationSourceCobrowsePinnedToolbarButton;
+      break;
     case lens::LensOverlayInvocationSource::kContextualTasksComposebox:
       param_value += kInvocationSourceContextualTasksComposeBox;
+      break;
+    case lens::LensOverlayInvocationSource::kOmniboxEverywhereComposebox:
+      param_value += kInvocationSourceOmniboxEverywhereComposebox;
+      break;
+    case lens::LensOverlayInvocationSource::kOmniboxPopupButton:
+      param_value += kInvocationSourceOmniboxPopupButton;
+      break;
+    case lens::LensOverlayInvocationSource::kNtpActionChips:
+      param_value += kInvocationSourceNtpActionChips;
+      break;
+    case lens::LensOverlayInvocationSource::kAppBarAimButton:
+      param_value += kInvocationSourceAppBarAimButton;
       break;
     case lens::LensOverlayInvocationSource::kLVFShutterButton:
     case lens::LensOverlayInvocationSource::kLVFGallery:
@@ -318,6 +358,12 @@ GURL AppendInvocationSourceParamToURL(
   }
   return net::AppendOrReplaceQueryParameter(
       url_to_modify, kInvocationSourceParameterKey, param_value);
+}
+
+const std::string ExtractTextQueryParameterValue(const GURL& url) {
+  std::string param_value = "";
+  net::GetValueForKeyInQuery(url, kTextQueryParameterKey, &param_value);
+  return param_value;
 }
 
 }  // namespace lens

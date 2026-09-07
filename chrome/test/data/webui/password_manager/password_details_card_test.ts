@@ -5,10 +5,13 @@
 import 'chrome://password-manager/password_manager.js';
 
 import type {EditPasswordDialogElement, PasswordDetailsCardElement} from 'chrome://password-manager/password_manager.js';
-import {Page, PasswordManagerImpl, PasswordViewPageInteractions, Router, SyncBrowserProxyImpl} from 'chrome://password-manager/password_manager.js';
+import {OpenWindowProxyImpl, Page, PasswordManagerImpl, PasswordViewPageInteractions, Router, SyncBrowserProxyImpl} from 'chrome://password-manager/password_manager.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
+import type {MetricsTracker} from 'chrome://webui-test/metrics_test_support.js';
+import {fakeMetricsPrivate} from 'chrome://webui-test/metrics_test_support.js';
 import {flushTasks} from 'chrome://webui-test/polymer_test_util.js';
+import {TestOpenWindowProxy} from 'chrome://webui-test/test_open_window_proxy.js';
 import {eventToPromise, isChildVisible, isVisible} from 'chrome://webui-test/test_util.js';
 
 import {TestPasswordManagerProxy} from './test_password_manager_proxy.js';
@@ -32,17 +35,20 @@ async function createCardElement(
 }
 
 suite('PasswordDetailsCardTest', function() {
+  let openWindowProxy: TestOpenWindowProxy;
   let passwordManager: TestPasswordManagerProxy;
   let syncProxy: TestSyncBrowserProxy;
+  let metrics: MetricsTracker;
 
   setup(function() {
-    loadTimeData.overrideValues({'passwordUploadUiUpdate': true});
-
     document.body.innerHTML = window.trustedTypes!.emptyHTML;
+    openWindowProxy = new TestOpenWindowProxy();
+    OpenWindowProxyImpl.setInstance(openWindowProxy);
     passwordManager = new TestPasswordManagerProxy();
     PasswordManagerImpl.setInstance(passwordManager);
     syncProxy = new TestSyncBrowserProxy();
     SyncBrowserProxyImpl.setInstance(syncProxy);
+    metrics = fakeMetricsPrivate();
     Router.getInstance().navigateTo(Page.PASSWORDS);
     return flushTasks();
   });
@@ -130,8 +136,6 @@ suite('PasswordDetailsCardTest', function() {
   });
 
   test('show/hide password', async function() {
-    const refresh_suffix =
-        loadTimeData.getBoolean('passwordUploadUiUpdate') ? '-refresh' : '';
     const password = createPasswordEntry(
         {id: 1, url: 'test.com', username: 'vik', password: 'password69'});
 
@@ -143,8 +147,7 @@ suite('PasswordDetailsCardTest', function() {
     assertEquals('password', card.$.passwordValue.type);
     assertTrue(card.$.showPasswordButton.hasAttribute('class'));
     assertEquals(
-        'icon-visibility' + refresh_suffix,
-        card.$.showPasswordButton.getAttribute('class'));
+        'icon-visibility', card.$.showPasswordButton.getAttribute('class'));
 
     card.$.showPasswordButton.click();
     assertEquals(
@@ -157,8 +160,7 @@ suite('PasswordDetailsCardTest', function() {
     assertEquals('text', card.$.passwordValue.type);
     assertTrue(card.$.showPasswordButton.hasAttribute('class'));
     assertEquals(
-        'icon-visibility-off' + refresh_suffix,
-        card.$.showPasswordButton.getAttribute('class'));
+        'icon-visibility-off', card.$.showPasswordButton.getAttribute('class'));
   });
 
   test('clicking edit button opens an edit dialog', async function() {
@@ -365,6 +367,11 @@ suite('PasswordDetailsCardTest', function() {
 
     assertTrue(isVisible(card.$.shareButton));
     assertEquals(card.$.shareButton.textContent.trim(), card.i18n('share'));
+    assertEquals(
+        card.i18n(
+            'passwordDetailsCardShareButtonAriaLabel',
+            card.i18n('passwordLabel'), 'vik'),
+        card.$.shareButton.getAttribute('aria-label'));
 
     assertFalse(!!card.shadowRoot!.querySelector('share-password-flow'));
 
@@ -400,9 +407,10 @@ suite('PasswordDetailsCardTest', function() {
     const card = document.createElement('password-details-card');
     card.password = createPasswordEntry();
     card.prefs = makePasswordManagerPrefs();
-    card.prefs.password_manager.password_sharing_enabled.value = false;
-    card.prefs.password_manager.password_sharing_enabled.enforcement =
-        chrome.settingsPrivate.Enforcement.ENFORCED;
+    const prefObject =
+        card.getPref<boolean>('password_manager.password_sharing_enabled');
+    prefObject.value = false;
+    prefObject.enforcement = chrome.settingsPrivate.Enforcement.ENFORCED;
     document.body.appendChild(card);
     await flushTasks();
 
@@ -462,11 +470,8 @@ suite('PasswordDetailsCardTest', function() {
     await flushTasks();
 
     assertTrue(isChildVisible(card, '.move-password-container'));
-    assertTrue(isChildVisible(card, '#uploadSinglePasswordLarge'));
+    assertTrue(isChildVisible(card, '#uploadSinglePasswordIcon'));
     assertTrue(isChildVisible(card, '#uploadPasswordButton'));
-
-    assertFalse(isChildVisible(card, '#uploadSinglePasswordSmall'));
-    assertFalse(isChildVisible(card, '#movePasswordLink'));
   });
 
   test(
@@ -490,57 +495,148 @@ suite('PasswordDetailsCardTest', function() {
         const movedIds =
             await passwordManager.whenCalled('movePasswordsToAccount');
         assertEquals(1, movedIds.length);
+
+        assertEquals(
+            1,
+            metrics.count(
+                'PasswordManager.AccountStorage.' +
+                'MoveToAccountStoreFlowAccepted2'));
       });
-});
 
-suite('PasswordDetailsCardWithoutUploadUiUpdateTest', function() {
-  let passwordManager: TestPasswordManagerProxy;
-  let syncProxy: TestSyncBrowserProxy;
-  let card: PasswordDetailsCardElement;
+  test('compromised password banner displayed', async function() {
+    loadTimeData.overrideValues({showCompromiseWarningInDetailsCard: true});
+    const password = createPasswordEntry({
+      url: 'test.com',
+      username: 'vik',
+      password: 'password69',
+      changePasswordUrl: 'https://test.com/change-password',
+      compromisedInfo: {
+        compromiseTypes: [chrome.passwordsPrivate.CompromiseType.LEAKED],
+        compromiseTime: 1234,
+        elapsedTimeSinceCompromise: '5 minutes ago',
+        isMuted: false,
+      },
+    });
 
-  setup(async function() {
-    loadTimeData.overrideValues({'passwordUploadUiUpdate': false});
+    const card = await createCardElement(password);
 
-    document.body.innerHTML = window.trustedTypes!.emptyHTML;
-    passwordManager = new TestPasswordManagerProxy();
-    PasswordManagerImpl.setInstance(passwordManager);
-    syncProxy = new TestSyncBrowserProxy();
-    SyncBrowserProxyImpl.setInstance(syncProxy);
-    Router.getInstance().navigateTo(Page.PASSWORDS);
+    const banner = card.shadowRoot!.querySelector('#warningContainer');
+    assertTrue(!!banner);
+    assertTrue(isVisible(banner as HTMLElement));
 
-    passwordManager.data.isAccountStorageActive = true;
-    syncProxy.syncInfo = {
-      isSyncingPasswords: false,
-    };
-    card = await createCardElement();
-    card.isUsingAccountStore = true;
-    return flushTasks();
+    const warningIcon =
+        card.shadowRoot!.querySelector<HTMLElement>('#warningIcon');
+    assertTrue(!!warningIcon);
+    assertEquals('cr:error', warningIcon.getAttribute('icon'));
+
+    const warningDesc = card.shadowRoot!.querySelector('#warningDesc');
+    assertTrue(!!warningDesc);
+    assertTrue(isVisible(warningDesc as HTMLElement));
+    assertEquals(
+        loadTimeData.getString('detailsCardCompromiseWarning'),
+        warningDesc.innerHTML);
+
+    const checkupLink = warningDesc.querySelector<HTMLAnchorElement>('a');
+    assertTrue(!!checkupLink);
+    assertEquals(
+        loadTimeData.getString('checkupTitle'), checkupLink.textContent.trim());
+    checkupLink.click();
+    assertEquals(Page.CHECKUP, Router.getInstance().currentRoute.page);
+
+    const changePasswordButton =
+        card.shadowRoot!.querySelector<HTMLElement>('#changePasswordButton');
+    assertTrue(!!changePasswordButton);
+    assertTrue(isVisible(changePasswordButton));
+
+    changePasswordButton.click();
+    assertEquals(
+        'https://test.com/change-password',
+        await openWindowProxy.whenCalled('openUrl'));
+    assertEquals(
+        PasswordViewPageInteractions.CHANGE_PASSWORD_CLICKED,
+        await passwordManager.whenCalled('recordPasswordViewInteraction'));
   });
 
-  test('Move password container content displayed properly', function() {
-    assertTrue(isChildVisible(card, '.move-password-container'));
-    assertTrue(isChildVisible(card, '#uploadSinglePasswordSmall'));
-    assertTrue(isChildVisible(card, '#movePasswordLink'));
+  test('compromised password banner hidden when muted', async function() {
+    loadTimeData.overrideValues({showCompromiseWarningInDetailsCard: true});
+    const password = createPasswordEntry({
+      url: 'test.com',
+      username: 'vik',
+      password: 'password69',
+      compromisedInfo: {
+        compromiseTypes: [chrome.passwordsPrivate.CompromiseType.LEAKED],
+        compromiseTime: 1234,
+        elapsedTimeSinceCompromise: '5 minutes ago',
+        isMuted: true,
+      },
+    });
 
-    assertFalse(isChildVisible(card, '#uploadSinglePasswordLarge'));
-    assertFalse(isChildVisible(card, '#uploadPasswordButton'));
+    const card = await createCardElement(password);
+
+    const banner = card.shadowRoot!.querySelector('#warningContainer');
+    assertFalse(!!banner);
   });
 
   test(
-      'clicking save password in account opens move password dialog',
+      'compromised password banner hidden when flag disabled',
       async function() {
-        const movePasswordLabel = card.shadowRoot!.querySelector<HTMLElement>(
-            '.move-password-container div');
-        assertTrue(!!movePasswordLabel);
-        assertTrue(isVisible(movePasswordLabel));
+        loadTimeData.overrideValues(
+            {showCompromiseWarningInDetailsCard: false});
+        const password = createPasswordEntry({
+          url: 'test.com',
+          username: 'vik',
+          password: 'password69',
+          compromisedInfo: {
+            compromiseTypes: [chrome.passwordsPrivate.CompromiseType.LEAKED],
+            compromiseTime: 1234,
+            elapsedTimeSinceCompromise: '5 minutes ago',
+            isMuted: false,
+          },
+        });
 
-        movePasswordLabel.click();
-        await flushTasks();
+        const card = await createCardElement(password);
 
-        const moveDialog =
-            card.shadowRoot!.querySelector('move-single-password-dialog');
-        assertTrue(!!moveDialog);
-        const dialog = moveDialog.shadowRoot!.querySelector('#dialog');
-        assertTrue(!!dialog);
+        const banner = card.shadowRoot!.querySelector('#warningContainer');
+        assertFalse(!!banner);
       });
+
+  test('compromised password banner hidden when only weak', async function() {
+    loadTimeData.overrideValues({showCompromiseWarningInDetailsCard: true});
+    const password = createPasswordEntry({
+      url: 'test.com',
+      username: 'vik',
+      password: 'password69',
+      compromisedInfo: {
+        compromiseTypes: [chrome.passwordsPrivate.CompromiseType.WEAK],
+        compromiseTime: 1234,
+        elapsedTimeSinceCompromise: '5 minutes ago',
+        isMuted: false,
+      },
+    });
+
+    const card = await createCardElement(password);
+
+    const banner = card.shadowRoot!.querySelector('#warningContainer');
+    assertFalse(!!banner);
+  });
+
+  test('compromised password banner hidden when only reused', async function() {
+    loadTimeData.overrideValues({showCompromiseWarningInDetailsCard: true});
+    const password = createPasswordEntry({
+      url: 'test.com',
+      username: 'vik',
+      password: 'password69',
+      compromisedInfo: {
+        compromiseTypes: [chrome.passwordsPrivate.CompromiseType.REUSED],
+        compromiseTime: 1234,
+        elapsedTimeSinceCompromise: '5 minutes ago',
+        isMuted: false,
+      },
+    });
+
+    const card = await createCardElement(password);
+
+    const banner = card.shadowRoot!.querySelector('#warningContainer');
+    assertFalse(!!banner);
+  });
 });

@@ -51,7 +51,7 @@ RendererWebMediaPlayerDelegate::RendererWebMediaPlayerDelegate(
       render_frame->GetTaskRunner(blink::TaskType::kInternalMedia));
 }
 
-RendererWebMediaPlayerDelegate::~RendererWebMediaPlayerDelegate() {}
+RendererWebMediaPlayerDelegate::~RendererWebMediaPlayerDelegate() = default;
 
 bool RendererWebMediaPlayerDelegate::IsPageHidden() {
   // There is always a render frame except perhaps during teardown (though
@@ -71,19 +71,6 @@ bool RendererWebMediaPlayerDelegate::IsPageHidden() {
       return true;
   }
   NOTREACHED();
-}
-
-bool RendererWebMediaPlayerDelegate::IsFrameHidden() {
-  // There is always a render frame except perhaps during teardown (though
-  // `this` should be deleted before that would be observable).
-  CHECK(render_frame());
-
-  // If the view is gone it means we are tearing down.
-  if (!render_frame()->GetWebView()) {
-    return true;
-  }
-
-  return is_frame_hidden_;
 }
 
 int RendererWebMediaPlayerDelegate::AddObserver(Observer* observer) {
@@ -254,17 +241,6 @@ bool RendererWebMediaPlayerDelegate::IsIdleCleanupTimerRunningForTesting()
   return idle_cleanup_timer_.IsRunning();
 }
 
-void RendererWebMediaPlayerDelegate::SetFrameHiddenForTesting(
-    bool is_frame_hidden) {
-  if (is_frame_hidden == is_frame_hidden_) {
-    return;
-  }
-
-  is_frame_hidden_ = is_frame_hidden;
-
-  ScheduleUpdateTask();
-}
-
 void RendererWebMediaPlayerDelegate::ScheduleUpdateTask() {
   if (!pending_update_task_) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
@@ -322,9 +298,10 @@ void RendererWebMediaPlayerDelegate::CleanUpIdlePlayers(
   // Create a list of stale players before making any possibly reentrant calls
   // to OnIdleTimeout().
   std::vector<int> stale_players;
-  for (const auto& it : idle_player_map_) {
-    if (now - it.second >= timeout)
-      stale_players.push_back(it.first);
+  for (const auto& [player_id, idle_time] : idle_player_map_) {
+    if (now - idle_time >= timeout) {
+      stale_players.push_back(player_id);
+    }
   }
 
   // Notify stale players.
@@ -335,30 +312,6 @@ void RendererWebMediaPlayerDelegate::CleanUpIdlePlayers(
       player->OnIdleTimeout();
     }
   }
-}
-
-void RendererWebMediaPlayerDelegate::OnFrameVisibilityChanged(
-    blink::mojom::FrameVisibility render_status) {
-  bool is_frame_hidden =
-      (render_status == blink::mojom::FrameVisibility::kNotRendered);
-  if (is_frame_hidden == is_frame_hidden_) {
-    return;
-  }
-
-  is_frame_hidden_ = is_frame_hidden;
-  if (is_frame_hidden_) {
-    for (base::IDMap<Observer*>::iterator it(&id_map_); !it.IsAtEnd();
-         it.Advance()) {
-      it.GetCurrentValue()->OnFrameHidden();
-    }
-  } else {
-    for (base::IDMap<Observer*>::iterator it(&id_map_); !it.IsAtEnd();
-         it.Advance()) {
-      it.GetCurrentValue()->OnFrameShown();
-    }
-  }
-
-  ScheduleUpdateTask();
 }
 
 void RendererWebMediaPlayerDelegate::OnDestruct() {

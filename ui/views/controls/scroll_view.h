@@ -12,6 +12,7 @@
 #include "base/callback_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "ui/color/color_variant.h"
 #include "ui/compositor/layer_type.h"
 #include "ui/views/controls/focus_ring.h"
@@ -71,6 +72,25 @@ class VIEWS_EXPORT ScrollView : public View, public ScrollBarController {
 
   using ScrollViewCallbackList = base::RepeatingClosureList;
   using ScrollViewCallback = ScrollViewCallbackList::CallbackType;
+
+  // While held, the `ScrollView` will disable optimizations to prioritize the
+  // ability to synchronize other layout updates with scroll updates.
+  class VIEWS_EXPORT ScopedScrollSynchronizer : public ViewObserver {
+   public:
+    explicit ScopedScrollSynchronizer(base::PassKey<ScrollView>,
+                                      ScrollView& scroll_view);
+    ScopedScrollSynchronizer(const ScopedScrollSynchronizer&) = delete;
+    ScopedScrollSynchronizer& operator=(const ScopedScrollSynchronizer&) =
+        delete;
+    ~ScopedScrollSynchronizer() override;
+
+    // ViewObserver
+    void OnViewIsDeleting(View* observed_view) override;
+
+   private:
+    base::ScopedObservation<ScrollView, ViewObserver> scroll_view_observation_{
+        this};
+  };
 
   ScrollView();
 
@@ -140,6 +160,10 @@ class VIEWS_EXPORT ScrollView : public View, public ScrollBarController {
   // Returns the visible region of the content View.
   gfx::Rect GetVisibleRect() const;
 
+  // Returns the opaque visible region of the content view which excludes any
+  // gradient mask that is applied by the scroll view.
+  gfx::Rect GetOpaqueVisibleRect() const;
+
   // Scrolls the `contents_` by an offset.
   void ScrollByOffset(const gfx::PointF& offset);
 
@@ -177,7 +201,15 @@ class VIEWS_EXPORT ScrollView : public View, public ScrollBarController {
                                    bool fills_opaquely);
 
   // Direction of linear opacity gradient applied when overflow content exists.
-  enum class GradientDirection { kNone = 0, kHorizontal = 1, kVertical = 2 };
+  enum class GradientDirection {
+    kNone = 0,
+    kHorizontal = 1,
+    kVertical = 2,
+    kHorizontalLeading = 3,
+    kHorizontalTrailing = 4,
+    kVerticalLeading = 5,
+    kVerticalTrailing = 6,
+  };
 
   // Sets which direction a opacity gradient should be shown when content
   // overflows. Gradient can only be applied to one direction at a time, so in
@@ -210,6 +242,15 @@ class VIEWS_EXPORT ScrollView : public View, public ScrollBarController {
   // Gets/Sets whether this ScrollView has a focus indicator or not.
   bool GetHasFocusIndicator() const { return draw_focus_indicator_; }
   void SetHasFocusIndicator(bool has_focus_indicator);
+
+  // Returns whether the content view is currently overflowing the viewport
+  // along the horizontal and vertical axes respectively.
+  bool IsHorizontalContentOverflowing() const;
+  bool IsVerticalContentOverflowing() const;
+
+  // Ensures that this will disabled optimizations to prioritize the ability
+  // to synchronize other layout updates with scrolling updates.
+  std::unique_ptr<ScopedScrollSynchronizer> EnableScrollSynchronization();
 
   // Called when |contents_| scrolled. This can be triggered by each single
   // event that is able to scroll the contents. KeyEvents like ui::VKEY_LEFT,
@@ -256,9 +297,6 @@ class VIEWS_EXPORT ScrollView : public View, public ScrollBarController {
   // callback can be used e.g. to scroll the view to the appropriate position
   // in the contents by explicitly calling `ScrollToOffset` or `ScrollByOffset`
   // and to update the scrollbars to reflect the new position.
-  // The callback should not trigger any new layouts on the scroll view,
-  // otherwise it will lead to a CHECK failure.
-  // DEPRECATED: Use `RegisterNextSuccessfulFramePostLayoutCallback()` instead.
   void RegisterPostLayoutCallback(
       base::RepeatingCallback<void(ScrollView*)> post_layout_callback);
 
@@ -268,6 +306,7 @@ class VIEWS_EXPORT ScrollView : public View, public ScrollBarController {
   // be reflected on a content view's layer until a frame has been produced.
   // Failing to wait for frame production will result in incorrect scroll
   // behavior of APIs such as `ScrollToOffset()` and `ScrollByOffset()`.
+  // TODO(tluk): Remove this once remaining callsites have been migrated.
   void RegisterNextSuccessfulFramePostLayoutCallback(
       base::OnceClosure callback);
 
@@ -275,9 +314,8 @@ class VIEWS_EXPORT ScrollView : public View, public ScrollBarController {
     return horiz_sb_->is_scrolling() || vert_sb_->is_scrolling();
   }
 
-  void SetUseContentsPreferredSize(bool use_contents_preferred_size) {
-    use_contents_preferred_size_ = use_contents_preferred_size;
-  }
+  bool GetUseContentsPreferredSize() const;
+  void SetUseContentsPreferredSize(bool use_contents_preferred_size);
 
  private:
   friend class test::ScrollViewTestApi;
@@ -351,6 +389,9 @@ class VIEWS_EXPORT ScrollView : public View, public ScrollBarController {
   // Shows/hides the overflow indicators depending on the position of the
   // scrolling content within the viewport.
   void UpdateOverflowIndicatorVisibility(const gfx::PointF& offset);
+
+  void OnScopedScrollSynchronizerDestroyed();
+  void UpdateMainSideScrollingEnabledState();
 
   View* GetContentsViewportForTest() const;
 
@@ -454,6 +495,8 @@ class VIEWS_EXPORT ScrollView : public View, public ScrollBarController {
 
   // Track if the trailing gradient is shown
   bool is_trailing_gradient_visible_ = false;
+
+  int scroll_synchronizer_count_ = 0;
 
   base::WeakPtrFactory<ScrollView> weak_ptr_factory_{this};
 };

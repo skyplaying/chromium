@@ -12,22 +12,27 @@
 #include "base/test/mock_callback.h"
 #include "base/test/test_proto_loader.h"
 #include "base/token.h"
+#include "content/browser/tracing/background_tracing_manager_impl.h"
 #include "content/browser/tracing/test_tracing_session.h"
-#include "content/browser/tracing/trace_upload_list.h"
 #include "content/browser/tracing/traces_internals/traces_internals.mojom.h"
-#include "content/public/browser/background_tracing_manager.h"
 #include "content/public/browser/tracing_delegate.h"
 #include "content/public/test/browser_task_environment.h"
 #include "mojo/public/cpp/base/big_buffer.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
+#include "services/tracing/public/cpp/background_tracing/background_tracing_manager.h"
+#include "services/tracing/public/cpp/background_tracing/trace_upload_list.h"
+#include "services/tracing/public/cpp/trace_startup_config.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace content {
 
 using testing::_;
+using tracing::ClientTraceReport;
+using tracing::ReportUploadState;
+using tracing::SkipUploadReason;
 
 perfetto::protos::gen::TraceConfig ParseTraceConfigFromText(
     const std::string& proto_text) {
@@ -43,7 +48,7 @@ perfetto::protos::gen::TraceConfig ParseTraceConfigFromText(
   return destination;
 }
 
-class FakeTraceUploadList : public TraceUploadList {
+class FakeTraceUploadList : public tracing::TraceUploadList {
  public:
   // Functions we want to intercept.
   MOCK_METHOD(void, OpenDatabaseIfExists, (), (override));
@@ -110,7 +115,7 @@ class TracesInternalsHandlerForTesting : public TracesInternalsHandler {
   TracesInternalsHandlerForTesting(
       mojo::PendingReceiver<traces_internals::mojom::PageHandler> receiver,
       mojo::PendingRemote<traces_internals::mojom::Page> page,
-      TraceUploadList& trace_upload_list,
+      tracing::TraceUploadList& trace_upload_list,
       BackgroundTracingManagerImpl& background_tracing_manager,
       TracingDelegate* tracing_delegate)
       : TracesInternalsHandler(std::move(receiver),
@@ -143,6 +148,7 @@ class TracesInternalsHandlerTest : public testing::Test {
   }
 
  protected:
+  tracing::TraceStartupConfig startup_config_;
   BrowserTaskEnvironment task_environment_;
   std::unique_ptr<BackgroundTracingManagerImpl> background_tracing_manager_;
   testing::StrictMock<FakeTraceUploadList> fake_trace_upload_list_;
@@ -402,6 +408,24 @@ TEST_F(TracesInternalsHandlerTest, DownloadTrace) {
             std::string_view(result->data(), result->size()));
       });
   handler_->DownloadTrace(uuid, callback.Get());
+}
+
+TEST_F(TracesInternalsHandlerTest, GetTrackEventCategories) {
+  base::MockCallback<
+      traces_internals::mojom::PageHandler::GetTrackEventCategoriesCallback>
+      callback;
+  base::RunLoop run_loop;
+  EXPECT_CALL(callback, Run)
+      .WillOnce(
+          [&run_loop](std::vector<traces_internals::mojom::TraceCategoryPtr>
+                          categories) {
+            ASSERT_EQ(categories.size(), 1u);
+            EXPECT_EQ(categories[0]->name, "test_cat");
+            EXPECT_EQ(categories[0]->description, "test description");
+            run_loop.Quit();
+          });
+  handler_->GetTrackEventCategories(callback.Get());
+  run_loop.Run();
 }
 
 #if BUILDFLAG(IS_WIN)

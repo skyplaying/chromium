@@ -6,10 +6,6 @@ package org.chromium.chrome.test;
 
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.doAnswer;
-import static org.mockito.Mockito.when;
 
 import android.app.Activity;
 import android.content.ComponentName;
@@ -22,14 +18,11 @@ import androidx.test.platform.app.InstrumentationRegistry;
 import org.hamcrest.Matchers;
 import org.junit.runner.Description;
 import org.junit.runners.model.Statement;
-import org.mockito.Mockito;
 
 import org.chromium.base.ApplicationStatus;
-import org.chromium.base.Callback;
 import org.chromium.base.CommandLine;
 import org.chromium.base.Holder;
 import org.chromium.base.Log;
-import org.chromium.base.ResettersForTesting;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.BaseActivityTestRule;
 import org.chromium.base.test.util.CallbackHelper;
@@ -42,7 +35,6 @@ import org.chromium.chrome.browser.WarmupManager;
 import org.chromium.chrome.browser.app.ChromeActivity;
 import org.chromium.chrome.browser.document.ChromeLauncherActivity;
 import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
-import org.chromium.chrome.browser.infobar.InfoBarContainer;
 import org.chromium.chrome.browser.init.ChromeBrowserInitializer;
 import org.chromium.chrome.browser.prefetch.settings.PreloadPagesSettingsBridge;
 import org.chromium.chrome.browser.prefetch.settings.PreloadPagesState;
@@ -56,10 +48,13 @@ import org.chromium.chrome.browser.ui.appmenu.AppMenuCoordinator;
 import org.chromium.chrome.test.util.ChromeApplicationTestUtils;
 import org.chromium.chrome.test.util.ChromeTabUtils;
 import org.chromium.chrome.test.util.NewTabPageTestUtils;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
+import org.chromium.components.browser_ui.bottomsheet.BottomSheetControllerProvider;
+import org.chromium.components.browser_ui.bottomsheet.ManagedBottomSheetController;
 import org.chromium.components.browser_ui.widget.highlight.PulseDrawable;
 import org.chromium.components.embedder_support.util.UrlUtilities;
+import org.chromium.components.feature_engagement.TestTracker;
 import org.chromium.components.feature_engagement.Tracker;
-import org.chromium.components.infobars.InfoBar;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.test.util.Coordinates;
@@ -69,9 +64,9 @@ import org.chromium.net.test.EmbeddedTestServer;
 import org.chromium.net.test.EmbeddedTestServerRule;
 import org.chromium.ui.KeyboardVisibilityDelegate;
 import org.chromium.ui.base.PageTransition;
+import org.chromium.ui.base.WindowAndroid;
 import org.chromium.url.GURL;
 
-import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
@@ -94,6 +89,7 @@ public class ChromeActivityTestRule<T extends ChromeActivity> extends BaseActivi
     // The number of ms to wait for the rendering activity to be started.
     private static final int ACTIVITY_START_TIMEOUT_MS = 1000;
     private static final String TAG = "TestRule";
+    private static final Tracker sDisabledTracker = new TestTracker();
 
     private final EmbeddedTestServerRule mTestServerRule = new EmbeddedTestServerRule();
 
@@ -130,19 +126,9 @@ public class ChromeActivityTestRule<T extends ChromeActivity> extends BaseActivi
         // Disable IPH to prevent it from interfering with the tests.
         Log.w(
                 TAG,
-                "A mock Tracker is set in ChromeActivityTestRule. This will"
+                "A fake Tracker is set in ChromeActivityTestRule. This will"
                         + " prevent any IPH from showing. See crbug.com/342240475.");
-        Tracker tracker = Mockito.mock(Tracker.class);
-        when(tracker.shouldTriggerHelpUi(anyString())).thenReturn(false);
-        doAnswer(
-                        invocation -> {
-                            invocation.<Callback<Boolean>>getArgument(0).onResult(true);
-                            return null;
-                        })
-                .when(tracker)
-                .addOnInitializedCallback(any());
-        TrackerFactory.setTrackerForTests(tracker);
-        ResettersForTesting.register(() -> Mockito.reset(tracker));
+        TrackerFactory.setTrackerForTests(sDisabledTracker);
     }
 
     private void slowDownPulseDrawableAnimations() {
@@ -164,6 +150,24 @@ public class ChromeActivityTestRule<T extends ChromeActivity> extends BaseActivi
 
     @Override
     protected void after() {
+        // Hide any open bottom sheet (and clear queued ones) so their observers fire and tear
+        // down attached mediators (e.g. AccountPickerBottomSheetCoordinator). Otherwise those
+        // observers stay registered with process-wide singletons (e.g. AccountManagerFacade) and
+        // leak the destroyed Activity. This must run before super.after() finishes the Activity.
+        T activity = getActivity();
+        if (activity != null) {
+            WindowAndroid windowAndroid = activity.getWindowAndroid();
+            if (windowAndroid != null) {
+                ThreadUtils.runOnUiThreadBlocking(
+                        () -> {
+                            BottomSheetController controller =
+                                    BottomSheetControllerProvider.from(windowAndroid);
+                            if (controller instanceof ManagedBottomSheetController managed) {
+                                managed.clearRequestsAndHide();
+                            }
+                        });
+            }
+        }
         super.after();
         // Activity is finish()'ed in super.after(), and CCT activities sometimes trigger creation
         // of spare tabs in their onDestroy() (https://crrev.com/c/5597549).
@@ -355,7 +359,7 @@ public class ChromeActivityTestRule<T extends ChromeActivity> extends BaseActivi
      */
     public LoadUrlResult loadUrlInTab(String url, int pageTransition, Tab tab, long secondsToWait) {
         assertNotNull("Cannot load the URL in a null tab", tab);
-        AtomicReference<LoadUrlResult> result = new AtomicReference();
+        AtomicReference<LoadUrlResult> result = new AtomicReference<>();
 
         ChromeTabUtils.waitForTabPageLoaded(
                 tab,
@@ -461,20 +465,6 @@ public class ChromeActivityTestRule<T extends ChromeActivity> extends BaseActivi
                 });
     }
 
-    /** Returns the infobars being displayed by the current tab, or null if they don't exist. */
-    public List<InfoBar> getInfoBars() {
-        return ThreadUtils.runOnUiThreadBlocking(
-                new Callable<>() {
-                    @Override
-                    public List<InfoBar> call() {
-                        Tab currentTab = getActivityTab();
-                        assertNotNull(currentTab);
-                        assertNotNull(InfoBarContainer.get(currentTab));
-                        return InfoBarContainer.get(currentTab).getInfoBarsForTesting();
-                    }
-                });
-    }
-
     /**
      * Executes the given snippet of JavaScript code within the current tab. Returns the result of
      * its execution in JSON format.
@@ -500,15 +490,6 @@ public class ChromeActivityTestRule<T extends ChromeActivity> extends BaseActivi
      */
     public void assertWaitForPageScaleFactorMatch(float expectedScale) {
         ChromeApplicationTestUtils.assertWaitForPageScaleFactorMatch(getActivity(), expectedScale);
-    }
-
-    /**
-     * @return {@link InfoBarContainer} of the active tab of the activity. {@code null} if there is
-     *     no tab for the activity or infobar is available.
-     */
-    public InfoBarContainer getInfoBarContainer() {
-        return ThreadUtils.runOnUiThreadBlocking(
-                () -> getActivityTab() != null ? InfoBarContainer.get(getActivityTab()) : null);
     }
 
     /** Gets the ChromeActivityTestRule's EmbeddedTestServer instance if it has one. */

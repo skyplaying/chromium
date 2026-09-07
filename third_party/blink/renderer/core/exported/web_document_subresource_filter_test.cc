@@ -6,6 +6,7 @@
 
 #include <algorithm>
 
+#include "base/memory/raw_ptr.h"
 #include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -41,7 +42,7 @@ class TestDocumentSubresourceFilter : public WebDocumentSubresourceFilter {
     }
     String resource_string = resource_url.GetString();
     for (const String& suffix : blocklisted_suffixes_) {
-      if (resource_string.EndsWith(suffix)) {
+      if (resource_string.ends_with(suffix)) {
         return load_policy_;
       }
     }
@@ -55,6 +56,20 @@ class TestDocumentSubresourceFilter : public WebDocumentSubresourceFilter {
   LoadPolicy GetLoadPolicyForWebTransportConnect(const WebURL&) override {
     return kAllow;
   }
+
+  void GetDomainSelectors(
+      std::vector<std::string_view>& out_selectors) override {}
+  bool MaybeHasStyleRule(uint32_t hash) override { return false; }
+  void GetSelectorsByClass(
+      std::string_view class_name,
+      uint32_t hash,
+      std::vector<std::string_view>& out_selectors) override {}
+  void GetSelectorsById(std::string_view id_name,
+                        uint32_t hash,
+                        std::vector<std::string_view>& out_selectors) override {
+  }
+  bool IsDryRun() override { return false; }
+  uint64_t GetRulesetId() const override { return 0; }
 
   void ReportDisallowedLoad() override {}
 
@@ -99,7 +114,9 @@ class SubresourceFilteringWebFrameClient
 
  private:
   // Weak, owned by WebDocumentLoader.
-  TestDocumentSubresourceFilter* subresource_filter_ = nullptr;
+  raw_ptr<TestDocumentSubresourceFilter,
+          UnprotectedInRelease | DanglingUntriaged>
+      subresource_filter_ = nullptr;
   TestDocumentSubresourceFilter::LoadPolicy load_policy_for_next_load_;
 };
 

@@ -8,18 +8,22 @@
 #include <utility>
 
 #include "base/functional/callback_helpers.h"
+#include "base/memory/ptr_util.h"
 #include "base/test/gtest_util.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/element_tracker.h"
 #include "ui/base/models/dialog_model.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/views/controls/button/label_button.h"
+#include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/interaction/element_tracker_views.h"
+#include "ui/views/layout/box_layout_view.h"
 #include "ui/views/metadata/view_factory.h"
 #include "ui/views/test/views_test_base.h"
 #include "ui/views/test/widget_test.h"
 #include "ui/views/view_class_properties.h"
+#include "ui/views/view_utils.h"
 
 class BubbleDialogModelHostTestPassKey {
  public:
@@ -67,7 +71,8 @@ TEST_F(BubbleDialogModelHostTest, CloseIsSynchronousAndCallsWindowClosing) {
       anchor_widget->GetContentsView(), BubbleBorder::Arrow::TOP_RIGHT);
   auto* host_ptr = host.get();
 
-  Widget* bubble_widget = BubbleDialogDelegate::CreateBubble(std::move(host));
+  Widget* bubble_widget = BubbleDialogDelegate::CreateBubbleDeprecated(
+      std::move(host), views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
   test::WidgetDestroyedWaiter waiter(bubble_widget);
 
   EXPECT_EQ(0, window_closing_count);
@@ -141,8 +146,8 @@ TEST_F(BubbleDialogModelHostTest, ElementIDsReportedCorrectly) {
           .Build(),
       anchor_widget->GetContentsView(), BubbleBorder::Arrow::TOP_RIGHT);
 
-  Widget* const bubble_widget =
-      BubbleDialogDelegate::CreateBubble(std::move(host));
+  Widget* const bubble_widget = BubbleDialogDelegate::CreateBubbleDeprecated(
+      std::move(host), views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
   test::WidgetVisibleWaiter waiter(bubble_widget);
   bubble_widget->Show();
   waiter.Wait();
@@ -266,8 +271,9 @@ TEST_F(BubbleDialogModelHostTest, SetEnabledButtons) {
       anchor_widget->GetContentsView(), BubbleBorder::Arrow::TOP_RIGHT);
 
   auto* host = host_unique.get();
-  Widget* const bubble_widget =
-      BubbleDialogDelegate::CreateBubble(std::move(host_unique));
+  Widget* const bubble_widget = BubbleDialogDelegate::CreateBubbleDeprecated(
+      std::move(host_unique),
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
   test::WidgetVisibleWaiter waiter(bubble_widget);
   bubble_widget->Show();
   waiter.Wait();
@@ -302,8 +308,8 @@ TEST_F(BubbleDialogModelHostTest, TestFieldVisibility) {
       std::move(dialog_model), anchor_widget->GetContentsView(),
       BubbleBorder::Arrow::TOP_RIGHT);
 
-  Widget* const bubble_widget =
-      BubbleDialogDelegate::CreateBubble(std::move(host));
+  Widget* const bubble_widget = BubbleDialogDelegate::CreateBubbleDeprecated(
+      std::move(host), views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
   test::WidgetVisibleWaiter waiter(bubble_widget);
   bubble_widget->Show();
   waiter.Wait();
@@ -357,8 +363,9 @@ TEST_F(BubbleDialogModelHostTest, TestButtonLabelUpdate) {
       BubbleBorder::Arrow::TOP_RIGHT);
 
   auto* host = host_unique.get();
-  Widget* const bubble_widget =
-      BubbleDialogDelegate::CreateBubble(std::move(host_unique));
+  Widget* const bubble_widget = BubbleDialogDelegate::CreateBubbleDeprecated(
+      std::move(host_unique),
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
   test::WidgetVisibleWaiter waiter(bubble_widget);
   bubble_widget->Show();
   waiter.Wait();
@@ -394,8 +401,9 @@ TEST_F(BubbleDialogModelHostTest, TestButtonEnableUpdate) {
       BubbleBorder::Arrow::TOP_RIGHT);
 
   auto* const host = host_unique.get();
-  Widget* const bubble_widget =
-      BubbleDialogDelegate::CreateBubble(std::move(host_unique));
+  Widget* const bubble_widget = BubbleDialogDelegate::CreateBubbleDeprecated(
+      std::move(host_unique),
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
   test::WidgetVisibleWaiter waiter(bubble_widget);
   bubble_widget->Show();
   waiter.Wait();
@@ -434,8 +442,9 @@ TEST_F(BubbleDialogModelHostTest, TestAddButtonsWithCloseCallback) {
       BubbleBorder::Arrow::TOP_RIGHT);
 
   auto* host = host_unique.get();
-  Widget* const bubble_widget =
-      BubbleDialogDelegate::CreateBubble(std::move(host_unique));
+  Widget* const bubble_widget = BubbleDialogDelegate::CreateBubbleDeprecated(
+      std::move(host_unique),
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
   test::WidgetVisibleWaiter shown_waiter(bubble_widget);
   bubble_widget->Show();
   shown_waiter.Wait();
@@ -463,8 +472,9 @@ TEST_F(BubbleDialogModelHostTest, DisableCloseOnEscape) {
       std::move(dialog_model), anchor_widget->GetContentsView(),
       BubbleBorder::Arrow::TOP_RIGHT);
 
-  Widget* const bubble_widget =
-      BubbleDialogDelegate::CreateBubble(std::move(host_unique));
+  Widget* const bubble_widget = BubbleDialogDelegate::CreateBubbleDeprecated(
+      std::move(host_unique),
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
   bubble_widget->Show();
 
   bubble_widget->CloseWithReason(Widget::ClosedReason::kEscKeyPressed);
@@ -472,6 +482,207 @@ TEST_F(BubbleDialogModelHostTest, DisableCloseOnEscape) {
 
   bubble_widget->CloseWithReason(Widget::ClosedReason::kUnspecified);
   EXPECT_TRUE(bubble_widget->IsClosed());
+}
+
+TEST_F(BubbleDialogModelHostTest, ShouldAllowKeyEventsDuringInputProtection) {
+  std::unique_ptr<Widget> anchor_widget = CreateTestWidget(
+      Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_WINDOW);
+  anchor_widget->Show();
+
+  std::unique_ptr<ui::DialogModel> dialog_model_default =
+      ui::DialogModel::Builder().AddOkButton(base::DoNothing()).Build();
+  auto host_default = std::make_unique<BubbleDialogModelHost>(
+      std::move(dialog_model_default), anchor_widget->GetContentsView(),
+      BubbleBorder::Arrow::TOP_RIGHT);
+  EXPECT_TRUE(host_default->ShouldAllowKeyEventsDuringInputProtection());
+
+  std::unique_ptr<ui::DialogModel> dialog_model_false =
+      ui::DialogModel::Builder()
+          .AddOkButton(base::DoNothing())
+          .SetEnableInputProtection(true)
+          .Build();
+  auto host_false = std::make_unique<BubbleDialogModelHost>(
+      std::move(dialog_model_false), anchor_widget->GetContentsView(),
+      BubbleBorder::Arrow::TOP_RIGHT);
+  EXPECT_FALSE(host_false->ShouldAllowKeyEventsDuringInputProtection());
+}
+
+// Test that checkbox is wrapped in a container that prevents it from stretching
+// to the full width of the dialog. This verifies the fix for the issue where
+// the checkbox clickable area extended beyond the label text.
+TEST_F(BubbleDialogModelHostTest, CheckboxWrappedInContainer) {
+  DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kCheckboxId);
+
+  std::unique_ptr<Widget> anchor_widget = CreateTestWidget(
+      Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_WINDOW);
+  anchor_widget->Show();
+
+  auto host_unique = std::make_unique<BubbleDialogModelHost>(
+      ui::DialogModel::Builder()
+          .AddCheckbox(kCheckboxId, ui::DialogModelLabel(u"Test checkbox"),
+                       ui::DialogModelCheckbox::Params())
+          .Build(),
+      anchor_widget->GetContentsView(), BubbleBorder::Arrow::TOP_RIGHT);
+
+  Widget* const bubble_widget = BubbleDialogDelegate::CreateBubbleDeprecated(
+      std::move(host_unique), Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
+  test::WidgetVisibleWaiter waiter(bubble_widget);
+  bubble_widget->Show();
+  waiter.Wait();
+
+  // Find the checkbox view
+  const ui::ElementContext context =
+      views::ElementTrackerViews::GetContextForWidget(bubble_widget);
+  View* checkbox = views::ElementTrackerViews::GetInstance()->GetUniqueView(
+      kCheckboxId, context);
+
+  ASSERT_NE(checkbox, nullptr);
+
+  // The checkbox should be wrapped in a BoxLayoutView container
+  BoxLayoutView* container =
+      views::AsViewClass<BoxLayoutView>(checkbox->parent());
+  ASSERT_NE(container, nullptr)
+      << "Checkbox should be wrapped in a BoxLayoutView container";
+
+  // Verify the container has horizontal orientation
+  EXPECT_EQ(container->GetOrientation(), BoxLayout::Orientation::kHorizontal);
+
+  // Verify the container has kStart cross-axis alignment
+  // This prevents the checkbox from stretching to full width
+  EXPECT_EQ(container->GetCrossAxisAlignment(),
+            BoxLayout::CrossAxisAlignment::kStart);
+
+  // Verify the container has exactly one child (the checkbox)
+  EXPECT_EQ(container->children().size(), 1u);
+
+  bubble_widget->CloseNow();
+}
+
+// Test that checkbox does not stretch to full dialog width.
+// This test verifies that the checkbox's preferred width is less than the
+// dialog width, ensuring the clickable area is limited to the label text.
+TEST_F(BubbleDialogModelHostTest, CheckboxDoesNotStretchToFullWidth) {
+  DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kCheckboxId);
+
+  std::unique_ptr<Widget> anchor_widget = CreateTestWidget(
+      Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_WINDOW);
+  anchor_widget->Show();
+
+  auto host_unique = std::make_unique<BubbleDialogModelHost>(
+      ui::DialogModel::Builder()
+          .AddCheckbox(kCheckboxId, ui::DialogModelLabel(u"Short label"),
+                       ui::DialogModelCheckbox::Params())
+          .Build(),
+      anchor_widget->GetContentsView(), BubbleBorder::Arrow::TOP_RIGHT);
+
+  Widget* const bubble_widget = BubbleDialogDelegate::CreateBubbleDeprecated(
+      std::move(host_unique), Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET);
+  test::WidgetVisibleWaiter waiter(bubble_widget);
+  bubble_widget->Show();
+  waiter.Wait();
+
+  // Find the checkbox field view
+  const ui::ElementContext context =
+      views::ElementTrackerViews::GetContextForWidget(bubble_widget);
+  View* checkbox_field =
+      views::ElementTrackerViews::GetInstance()->GetUniqueView(kCheckboxId,
+                                                               context);
+
+  ASSERT_NE(checkbox_field, nullptr);
+
+  // Get the dialog content width
+  View* content_view = bubble_widget->GetContentsView();
+  int dialog_content_width = content_view->width();
+
+  // Get the checkbox container's preferred width
+  gfx::Size checkbox_preferred_size =
+      checkbox_field->GetPreferredSize(SizeBounds());
+  int checkbox_preferred_width = checkbox_preferred_size.width();
+
+  // The checkbox's preferred width should be less than the dialog content width
+  // This ensures the checkbox doesn't stretch to fill the entire dialog
+  EXPECT_LT(checkbox_preferred_width, dialog_content_width);
+
+  bubble_widget->CloseNow();
+}
+
+TEST_F(BubbleDialogModelHostTest, ClientOwnedBubbleLifetime) {
+  std::unique_ptr<Widget> anchor_widget = CreateTestWidget(
+      Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_WINDOW);
+  anchor_widget->Show();
+
+  auto host = std::make_unique<BubbleDialogModelHost>(
+      ui::DialogModel::Builder().AddOkButton(base::DoNothing()).Build(),
+      anchor_widget->GetContentsView(), BubbleBorder::Arrow::TOP_RIGHT,
+      /*autosize=*/true, /*owned_by_widget=*/false);
+
+  std::unique_ptr<Widget> bubble_widget =
+      BubbleDialogDelegate::CreateBubble(host.get());
+  test::WidgetVisibleWaiter waiter(bubble_widget.get());
+  bubble_widget->Show();
+  waiter.Wait();
+  ASSERT_TRUE(bubble_widget->IsVisible());
+
+  // In CLIENT_OWNS_WIDGET mode, the client explicitly owns the Widget and the
+  // delegate (BubbleDialogModelHost). Destruction must proceed widget-first,
+  // then delegate-second.
+  bubble_widget.reset();
+  host.reset();
+}
+
+TEST_F(BubbleDialogModelHostTest, ClientOwnedModalDialogLifetime) {
+  std::unique_ptr<Widget> anchor_widget = CreateTestWidget(
+      Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_WINDOW);
+  anchor_widget->Show();
+
+  auto host = BubbleDialogModelHost::CreateModal(
+      ui::DialogModel::Builder().AddOkButton(base::DoNothing()).Build(),
+      ui::mojom::ModalType::kWindow, /*autosize=*/true,
+      /*owned_by_widget=*/false);
+  host->SetOwnershipOfNewWidget(Widget::InitParams::CLIENT_OWNS_WIDGET);
+
+  std::unique_ptr<Widget> dialog_widget =
+      base::WrapUnique(DialogDelegate::CreateDialogWidget(
+          host.get(), GetContext(), anchor_widget->GetNativeView()));
+  test::WidgetVisibleWaiter waiter(dialog_widget.get());
+  dialog_widget->Show();
+  waiter.Wait();
+  ASSERT_TRUE(dialog_widget->IsVisible());
+
+  dialog_widget.reset();
+  host.reset();
+}
+
+TEST_F(BubbleDialogModelHostTest, ClientOwnedWithTextfieldConsensusGroups) {
+  DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kField1Id);
+  DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kField2Id);
+
+  std::unique_ptr<Widget> anchor_widget = CreateTestWidget(
+      Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_WINDOW);
+  anchor_widget->Show();
+
+  // Adding multiple textfields creates LayoutConsensusGroup registrations in
+  // BubbleDialogModelHostContentsView.
+  auto host = std::make_unique<BubbleDialogModelHost>(
+      ui::DialogModel::Builder()
+          .AddTextfield(kField1Id, u"Label 1", u"Text 1")
+          .AddTextfield(kField2Id, u"Label 2", u"Text 2")
+          .AddOkButton(base::DoNothing())
+          .Build(),
+      anchor_widget->GetContentsView(), BubbleBorder::Arrow::TOP_RIGHT,
+      /*autosize=*/true, /*owned_by_widget=*/false);
+
+  std::unique_ptr<Widget> bubble_widget =
+      BubbleDialogDelegate::CreateBubble(host.get());
+  test::WidgetVisibleWaiter waiter(bubble_widget.get());
+  bubble_widget->Show();
+  waiter.Wait();
+  ASSERT_TRUE(bubble_widget->IsVisible());
+
+  // Teardown of the widget first should cleanly detach consensus groups and
+  // children before member destruction.
+  bubble_widget.reset();
+  host.reset();
 }
 
 }  // namespace views

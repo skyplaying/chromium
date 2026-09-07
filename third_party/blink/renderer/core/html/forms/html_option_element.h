@@ -59,6 +59,10 @@ class CORE_EXPORT HTMLOptionElement final : public HTMLElement {
   ~HTMLOptionElement() override;
   void Trace(Visitor* visitor) const override;
 
+  ElementType GetElementType() const final {
+    return ElementType::kHTMLOptionElement;
+  }
+
   // A text to be shown to users.  The difference from |label()| is |label()|
   // returns an empty string if |label| content attribute is empty.
   // |displayLabel()| returns the value string in that case.
@@ -82,6 +86,14 @@ class CORE_EXPORT HTMLOptionElement final : public HTMLElement {
 
   HTMLSelectElement* OwnerSelectElement() const {
     return nearest_ancestor_select_;
+  }
+
+  HTMLSelectElement* OwnerElementForList() const {
+    return nearest_ancestor_select_;
+  }
+
+  HTMLOptGroupElement* NearestAncestorOptgroup() const {
+    return nearest_ancestor_optgroup_;
   }
 
   String label() const;
@@ -114,6 +126,7 @@ class CORE_EXPORT HTMLOptionElement final : public HTMLElement {
   bool IsMultiSelectFocused() const;
 
   Node::InsertionNotificationRequest InsertedInto(ContainerNode&) override;
+  void DidNotifySubtreeInsertionsToDocument() override;
   void RemovedFrom(ContainerNode&) override;
 
   void FinishParsingChildren() override;
@@ -129,6 +142,30 @@ class CORE_EXPORT HTMLOptionElement final : public HTMLElement {
 
   void UpdateMutationObserver(bool in_style_recalc);
   bool HasMutationObserver() const { return text_observer_; }
+
+  // Returns true if this option is in a state which supports the :active-option
+  // pseudo-element, meaning that this option is visible and not disabled.
+  bool SupportsActiveOptionPseudo();
+
+  // Helper to choose the option for customizable select event handling in
+  // DefaultEventHandler. Depending on the state of OwnerSelectElement, it may
+  // toggle selectedness and dirtiness, deselect other options, close the
+  // select's picker, and set default handled on the event.
+  void ChooseOption(Event&);
+
+  // Helper to choose the option for customizable combobox event handling in
+  // DefaultEventHandler. It sets the value of the input element to the value or
+  // contents of this option and fires the input and change events on the input.
+  void ChooseOptionForCombobox(HTMLInputElement&, HTMLDataListElement&);
+
+  // Gets and sets whether this element matches the :filtered pseudo-class.
+  bool IsFiltered() const { return is_filtered_; }
+  void SetFiltered(bool);
+
+  // Returns true if this option is currently scrolled into view in its
+  // scrollable listbox container, which is the popover for dropdown select
+  // elements or the select element itself for listboxes.
+  bool IsVisibleInViewport();
 
   // This constant is a distance in pixels (post zoom, page-relative). It is
   // used in multiple cases (select popups, submenu popups) where we support
@@ -146,6 +183,7 @@ class CORE_EXPORT HTMLOptionElement final : public HTMLElement {
   bool IsKeyboardFocusableSlow(UpdateBehavior update_behavior) const override;
   bool MatchesDefaultPseudoClass() const override;
   bool MatchesEnabledPseudoClass() const override;
+  bool MatchesDisabledPseudoClass() const override;
   void ParseAttribute(const AttributeModificationParams&) override;
   void AccessKeyAction(SimulatedClickCreationScope) override;
   void ChildrenChanged(const ChildrenChange&) override;
@@ -155,19 +193,25 @@ class CORE_EXPORT HTMLOptionElement final : public HTMLElement {
   String CollectOptionInnerText() const;
 
   void UpdateLabel();
-  void UpdateAncestors();
+  void WalkAncestorsAndUpdate();
 
   void DefaultEventHandlerInternal(Event&);
 
+  enum Direction {
+    kNext,
+    kPrevious,
+  };
+  // This is called when the left, right, up, or down arrow keys are pressed on
+  // an option in a select element which is a customizable select or is a
+  // desktop <select multiple size=1>. If kNext is returned, then the next
+  // focusable option should be focused. If kPrevious is returned, then the
+  // previous focusable option should be focused. If nullopt is returned, then
+  // focus should not change and this event should not be handled.
+  std::optional<Direction> GetFocusDirectionFromKeyboardEvent(
+      const AtomicString& key);
+
   void RecalcOwnerSelectElement() const;
 
-  // Helper to choose the option for customizable select event handling in
-  // DefaultEventHandler. Depending on the state of OwnerSelectElement, it may
-  // toggle selectedness and dirtiness, deselect other options, close the
-  // select's picker, and set default handled on the event.
-  void ChooseOption(Event&);
-
-  bool IsVisibleInViewport();
   bool NeedsMutationObserver();
 
   Member<OptionTextObserver> text_observer_;
@@ -183,6 +227,13 @@ class CORE_EXPORT HTMLOptionElement final : public HTMLElement {
   // instead of a node traversal. That would probably also require changing
   // HTMLOptionsCollection to support flat tree traversals as well.
   Member<HTMLSelectElement> nearest_ancestor_select_;
+
+  // The child of nearest_ancestor_select_ which is in the ancestor chain in
+  // between this element and nearest_ancestor_select_. We need to store it in
+  // order to call OptionRemoved on nearest_ancestor_select_ in RemovedFrom,
+  // where we can't figure out which child of the select element this option was
+  // inside of anymore.
+  Member<ContainerNode> nearest_ancestor_select_child_;
 
   // The closest ancestor <optgroup> in the DOM tree. This is created and
   // maintained just like nearest_ancestor_select_, but doesn't account for any
@@ -220,6 +271,10 @@ class CORE_EXPORT HTMLOptionElement final : public HTMLElement {
   // Gets set to true when a child element is inserted into this option
   // element. Never gets set back to false once set to true.
   bool was_element_inserted_ = false;
+  // is_filtered_ corresponds to the :filtered pseudo-class. If this is true,
+  // then this element will match :filtered. Otherwise, it won't. Only used for
+  // customizable combobox and filterable select.
+  bool is_filtered_ = false;
 
   friend class HTMLOptionElementTest;
 };

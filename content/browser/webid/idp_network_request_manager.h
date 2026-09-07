@@ -10,17 +10,20 @@
 #include <string>
 #include <vector>
 
+#include "base/containers/flat_map.h"
 #include "base/functional/callback.h"
 #include "base/values.h"
+#include "content/browser/webid/identity_registry.h"
 #include "content/browser/webid/network_request_manager.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/frame_tree_node_id.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/webid/identity_request_account.h"
 #include "content/public/browser/webid/identity_request_dialog_controller.h"
-#include "services/data_decoder/public/cpp/data_decoder.h"
+#include "content/public/browser/webid/native_idp_fetcher.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/mojom/client_security_state.mojom-forward.h"
+#include "third_party/blink/public/mojom/webid/federated_request.mojom.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -34,10 +37,9 @@ enum class ReferrerPolicy;
 
 namespace content {
 
-using IdentityProviderDataPtr = scoped_refptr<IdentityProviderData>;
-using IdentityRequestAccountPtr = scoped_refptr<IdentityRequestAccount>;
 class FederatedIdentityPermissionContextDelegate;
 class RenderFrameHostImpl;
+class WeakDocumentPtr;
 
 namespace webid {
 
@@ -46,7 +48,7 @@ enum class MetricsEndpointErrorCode;
 
 // Manages network requests and maintains relevant state for interaction with
 // the Identity Provider across a FedCM transaction. Owned by
-// RequestService and has a lifetime limited to a single identity
+// Request and has a lifetime limited to a single identity
 // transaction between an RP and an IDP.
 //
 // Diagram of the permission-based data flows between the browser and the IDP:
@@ -74,11 +76,6 @@ enum class MetricsEndpointErrorCode;
 // the user to interact with the IDP.
 class CONTENT_EXPORT IdpNetworkRequestManager : public NetworkRequestManager {
  public:
-  enum class LogoutResponse {
-    kSuccess,
-    kError,
-  };
-
   // Don't change the meaning or the order of these values because they are
   // being recorded in metrics and in sync with the counterpart in enums.xml.
   // LINT.IfChange(AccountsResponseInvalidReason)
@@ -148,11 +145,21 @@ class CONTENT_EXPORT IdpNetworkRequestManager : public NetworkRequestManager {
     AccountsResponse(AccountsResponse&&);
     AccountsResponse& operator=(const AccountsResponse&);
 
-    std::vector<IdentityRequestAccountPtr> PotentialAccountsForOrigin(
-        const url::Origin& origin) const;
+    // Returns potentially sign-in accounts on a given website based on the
+    // website's eTLD+1. e.g. for an origin https://login.website.example, we
+    // check if the user has any sign-in accounts from this IdP on the site
+    // "website.example".
+    std::vector<scoped_refptr<IdentityRequestAccount>> PotentialAccountsForSite(
+        const std::string& site) const;
 
-    std::vector<IdentityRequestAccountPtr> accounts;
-    std::string origin_salt;
+    // The list of all accounts to be shown in the UI.
+    std::vector<scoped_refptr<IdentityRequestAccount>> accounts;
+    // A salt used to compute hashes of the RP site (eTLD+1) to check against
+    // potentially_approved_site_hashes in each account. This allows the browser
+    // to filter accounts based on whether they have been used on the current
+    // site before, without the IdP knowing the current site until an account is
+    // selected.
+    std::string site_salt;
   };
 
   enum class DisconnectResponse {
@@ -199,7 +206,24 @@ class CONTENT_EXPORT IdpNetworkRequestManager : public NetworkRequestManager {
     kTokenReceivedAndErrorReceivedAndContinueOnReceived = 5,
     kTokenNotReceivedAndErrorNotReceivedAndContinueOnReceived = 6,
     kTokenNotReceivedAndErrorReceivedAndContinueOnReceived = 7,
-    kMaxValue = kTokenNotReceivedAndErrorReceivedAndContinueOnReceived
+    kTokenReceivedAndErrorNotReceivedAndContinueOnNotReceivedAndRedirectToReceived =
+        8,
+    kTokenReceivedAndErrorReceivedAndContinueOnNotReceivedAndRedirectToReceived =
+        9,
+    kTokenNotReceivedAndErrorNotReceivedAndContinueOnNotReceivedAndRedirectToReceived =
+        10,
+    kTokenNotReceivedAndErrorReceivedAndContinueOnNotReceivedAndRedirectToReceived =
+        11,
+    kTokenReceivedAndErrorNotReceivedAndContinueOnReceivedAndRedirectToReceived =
+        12,
+    kTokenReceivedAndErrorReceivedAndContinueOnReceivedAndRedirectToReceived =
+        13,
+    kTokenNotReceivedAndErrorNotReceivedAndContinueOnReceivedAndRedirectToReceived =
+        14,
+    kTokenNotReceivedAndErrorReceivedAndContinueOnReceivedAndRedirectToReceived =
+        15,
+    kMaxValue =
+        kTokenNotReceivedAndErrorReceivedAndContinueOnReceivedAndRedirectToReceived
   };
 
   // LINT.ThenChange(//tools/metrics/histograms/metadata/blink/enums.xml:FedCmTokenResponseType)
@@ -220,30 +244,33 @@ class CONTENT_EXPORT IdpNetworkRequestManager : public NetworkRequestManager {
 
   using AccountsRequestCallback =
       base::OnceCallback<void(FetchStatus, AccountsResponse)>;
+  using ContinueOnCallback = base::OnceCallback<void(FetchStatus, const GURL&)>;
+  using DisconnectCallback =
+      base::OnceCallback<void(FetchStatus, const std::string&)>;
   using FetchAccountPicturesAndBrandIconsCallback =
       base::OnceCallback<void(AccountsResponse,
                               std::unique_ptr<IdentityProviderInfo>,
                               const gfx::Image&)>;
+  using FetchClientMetadataCallback =
+      base::OnceCallback<void(FetchStatus, ClientMetadata)>;
+  using FetchConfigCallback = base::OnceCallback<
+      void(FetchStatus, Endpoints, IdentityProviderMetadata)>;
   using FetchIdpBrandIconCallback =
       base::OnceCallback<void(std::unique_ptr<IdentityProviderInfo>)>;
   using FetchWellKnownCallback =
       base::OnceCallback<void(FetchStatus, const WellKnown&)>;
-  using FetchConfigCallback = base::OnceCallback<
-      void(FetchStatus, Endpoints, IdentityProviderMetadata)>;
-  using FetchClientMetadataCallback =
-      base::OnceCallback<void(FetchStatus, ClientMetadata)>;
-  using LogoutCallback = base::OnceCallback<void()>;
-  using DisconnectCallback =
-      base::OnceCallback<void(FetchStatus, const std::string&)>;
-  using TokenRequestCallback =
-      base::OnceCallback<void(FetchStatus, TokenResult&&)>;
-  using ContinueOnCallback = base::OnceCallback<void(FetchStatus, const GURL&)>;
-  using RedirectToCallback = base::OnceCallback<void(FetchStatus, const GURL&)>;
+  using ImageCallback = base::OnceCallback<void(const gfx::Image&)>;
   using RecordErrorMetricsCallback =
       base::OnceCallback<void(FedCmTokenResponseType,
                               std::optional<FedCmErrorDialogType>,
                               std::optional<FedCmErrorUrlType>)>;
-  using ImageCallback = base::OnceCallback<void(const gfx::Image&)>;
+  using RedirectToCallback =
+      base::OnceCallback<void(FetchStatus,
+                              blink::mojom::RedirectParams::Tag,
+                              const GURL&,
+                              const std::string& request_body)>;
+  using TokenRequestCallback =
+      base::OnceCallback<void(FetchStatus, TokenResult&&)>;
 
   static std::unique_ptr<IdpNetworkRequestManager> Create(
       RenderFrameHostImpl* host);
@@ -254,7 +281,8 @@ class CONTENT_EXPORT IdpNetworkRequestManager : public NetworkRequestManager {
       scoped_refptr<network::SharedURLLoaderFactory> loader_factory,
       FederatedIdentityPermissionContextDelegate* permission_delegate,
       network::mojom::ClientSecurityStatePtr client_security_state,
-      content::FrameTreeNodeId frame_tree_node_id);
+      FrameTreeNodeId frame_tree_node_id,
+      WeakDocumentPtr initiator_document);
 
   ~IdpNetworkRequestManager() override;
 
@@ -287,7 +315,6 @@ class CONTENT_EXPORT IdpNetworkRequestManager : public NetworkRequestManager {
   // whether a network request is sent to fetch accounts.
   virtual bool SendAccountsRequest(const url::Origin& idp_origin,
                                    const GURL& accounts_url,
-                                   const std::string& client_id,
                                    AccountsRequestCallback callback);
 
   // Request a new token for this user account and RP from the IDP.
@@ -314,9 +341,6 @@ class CONTENT_EXPORT IdpNetworkRequestManager : public NetworkRequestManager {
       const GURL& metrics_endpoint_url,
       bool did_show_ui,
       MetricsEndpointErrorCode error_code);
-
-  // Send logout request to a single target.
-  virtual void SendLogout(const GURL& logout_url, LogoutCallback);
 
   // Send a disconnect request to the IDP.
   virtual void SendDisconnectRequest(const GURL& disconnect_url,
@@ -350,9 +374,36 @@ class CONTENT_EXPORT IdpNetworkRequestManager : public NetworkRequestManager {
   virtual void CacheAccountPictures(const url::Origin& idp_origin,
                                     const std::vector<GURL>& picture_urls);
 
+  // Returns an existing NativeIdpFetcher for `idp_origin`, or creates a new one
+  // via ContentBrowserClient if supported. Returns nullptr if not supported.
+  NativeIdpFetcher* GetOrCreateNativeIdpFetcher(const url::Origin& idp_origin);
+
+  // Returns an existing NativeIdpFetcher for `idp_origin`, or nullptr if none
+  // exists (e.g. native fetch was not used for accounts).
+  NativeIdpFetcher* GetNativeIdpFetcher(const url::Origin& idp_origin) const;
+
+  void SetNativeIdpFetcherForTesting(const url::Origin& idp_origin,
+                                     std::unique_ptr<NativeIdpFetcher> fetcher);
+
  private:
   // NetworkRequestManager:
   net::NetworkTrafficAnnotationTag CreateTrafficAnnotation() override;
+
+  // Handles the subdomain well-known result when FedCmWebIdentitySubdomain is
+  // enabled. Uses it if valid (success, <= 1 provider URL); otherwise falls
+  // back to `apex_well_known_url`.
+  void OnSubdomainWellKnownAttempted(const GURL& apex_well_known_url,
+                                     FetchWellKnownCallback callback,
+                                     FetchStatus fetch_status,
+                                     const WellKnown& subdomain_well_known);
+
+  void OnNativeTokenFetched(
+      TokenRequestCallback callback,
+      ContinueOnCallback continue_on_callback,
+      RedirectToCallback redirect_to_callback,
+      RecordErrorMetricsCallback record_error_metrics_callback,
+      const GURL& token_url,
+      NativeIdpFetcher::FetchResult fetch_result);
 
   void FetchImage(const GURL& url, base::OnceClosure callback);
   void FetchCachedAccountImage(const url::Origin& idp_origin,
@@ -391,6 +442,9 @@ class CONTENT_EXPORT IdpNetworkRequestManager : public NetworkRequestManager {
 
   // The downloaded image data.
   std::map<GURL, gfx::Image> downloaded_images_;
+
+  base::flat_map<url::Origin, std::unique_ptr<NativeIdpFetcher>>
+      native_idp_fetchers_;
 
   base::WeakPtrFactory<IdpNetworkRequestManager> weak_ptr_factory_{this};
 };

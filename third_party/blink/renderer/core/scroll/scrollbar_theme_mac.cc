@@ -31,7 +31,7 @@
 #include "third_party/blink/public/common/input/web_mouse_event.h"
 #include "third_party/blink/public/platform/mac/web_scrollbar_theme.h"
 #include "third_party/blink/public/platform/web_theme_engine.h"
-#include "third_party/blink/renderer/core/page/page.h"
+#include "third_party/blink/renderer/core/paint/paint_info.h"
 #include "third_party/blink/renderer/core/scroll/mac_scrollbar_animator.h"
 #include "third_party/blink/renderer/core/scroll/scrollable_area.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_context.h"
@@ -46,7 +46,6 @@ namespace blink {
 
 static float s_initial_button_delay = 0.5f;
 static float s_autoscroll_button_delay = 0.05f;
-static bool s_prefer_overlay_scroller_style = false;
 static bool s_jump_on_track_click = false;
 
 typedef HeapHashSet<WeakMember<Scrollbar>> ScrollbarSet;
@@ -95,7 +94,7 @@ const NSScrollerImpValues& GetScrollbarPainterValues(bool overlay,
 const NSScrollerImpValues& GetScrollbarPainterValues(
     const Scrollbar& scrollbar) {
   return GetScrollbarPainterValues(
-      ScrollbarThemeMac::PreferOverlayScrollerStyle(),
+      ScrollbarThemeMac::OverlayScrollbarsEnabled(),
       scrollbar.CSSScrollbarWidth());
 }
 
@@ -106,13 +105,13 @@ ScrollbarTheme& ScrollbarTheme::NativeTheme() {
   return overlay_theme;
 }
 
-void ScrollbarThemeMac::PaintTickmarks(GraphicsContext& context,
+void ScrollbarThemeMac::PaintTickmarks(const PaintInfo& paint_info,
                                        const Scrollbar& scrollbar,
                                        const gfx::Rect& rect) {
   gfx::Rect tickmark_track_rect = rect;
   tickmark_track_rect.set_x(tickmark_track_rect.x() + 1);
   tickmark_track_rect.set_width(tickmark_track_rect.width() - 1);
-  ScrollbarTheme::PaintTickmarks(context, scrollbar, tickmark_track_rect);
+  ScrollbarTheme::PaintTickmarks(paint_info, scrollbar, tickmark_track_rect);
 }
 
 bool ScrollbarThemeMac::ShouldCenterOnThumb(const Scrollbar& scrollbar,
@@ -189,9 +188,10 @@ WebThemeEngine::ExtraParams GetPaintParams(const Scrollbar& scrollbar,
   return WebThemeEngine::ExtraParams(scrollbar_extra);
 }
 
-void ScrollbarThemeMac::PaintTrackBackground(GraphicsContext& context,
+void ScrollbarThemeMac::PaintTrackBackground(const PaintInfo& paint_info,
                                              const Scrollbar& scrollbar,
                                              const gfx::Rect& rect) {
+  GraphicsContext& context = paint_info.context;
   GraphicsContextStateSaver state_saver(context);
   context.Translate(rect.x(), rect.y());
 
@@ -227,15 +227,16 @@ void ScrollbarThemeMac::PaintTrackBackground(GraphicsContext& context,
     context.EndLayer();
 }
 
-void ScrollbarThemeMac::PaintScrollCorner(GraphicsContext& context,
+void ScrollbarThemeMac::PaintScrollCorner(const PaintInfo& paint_info,
                                           const ScrollableArea& scrollable_area,
                                           const DisplayItemClient& item,
                                           const gfx::Rect& rect) {
   const Scrollbar* vertical_scrollbar = scrollable_area.VerticalScrollbar();
   if (!vertical_scrollbar) {
-    ScrollbarTheme::PaintScrollCorner(context, scrollable_area, item, rect);
+    ScrollbarTheme::PaintScrollCorner(paint_info, scrollable_area, item, rect);
     return;
   }
+  GraphicsContext& context = paint_info.context;
   if (DrawingRecorder::UseCachedDrawingIfPossible(context, item,
                                                   DisplayItem::kScrollCorner)) {
     return;
@@ -257,9 +258,10 @@ void ScrollbarThemeMac::PaintScrollCorner(GraphicsContext& context,
       vertical_scrollbar->GetColorProvider(color_scheme));
 }
 
-void ScrollbarThemeMac::PaintThumb(GraphicsContext& context,
+void ScrollbarThemeMac::PaintThumb(const PaintInfo& paint_info,
                                    const Scrollbar& scrollbar,
                                    const gfx::Rect& rect) {
+  GraphicsContext& context = paint_info.context;
   if (DrawingRecorder::UseCachedDrawingIfPossible(
           context, scrollbar, DisplayItem::kScrollbarThumb)) {
     return;
@@ -309,8 +311,8 @@ void ScrollbarThemeMac::PaintThumb(GraphicsContext& context,
           : WebThemeEngine::Part::kPartScrollbarVerticalThumb;
   mojom::blink::ColorScheme color_scheme = scrollbar.UsedColorScheme();
   WebThemeEngineHelper::GetNativeThemeEngine()->Paint(
-      context.Canvas(), thumb_part, WebThemeEngine::State::kStateNormal, bounds,
-      &params, scrollbar.InForcedColorsMode(), color_scheme,
+      context.Canvas(), thumb_part, scrollbar.GetStateForPart(kThumbPart),
+      bounds, &params, scrollbar.InForcedColorsMode(), color_scheme,
       scrollbar.GetPreferredContrast(),
       scrollbar.GetColorProvider(color_scheme));
 }
@@ -326,7 +328,7 @@ int ScrollbarThemeMac::ScrollbarThickness(
 }
 
 bool ScrollbarThemeMac::UsesOverlayScrollbars() const {
-  return PreferOverlayScrollerStyle();
+  return OverlayScrollbarsEnabled();
 }
 
 bool ScrollbarThemeMac::HasThumb(const Scrollbar& scrollbar) const {
@@ -381,17 +383,12 @@ bool ScrollbarThemeMac::JumpOnTrackClick() const {
 void ScrollbarThemeMac::UpdateScrollbarsWithNSDefaults(
     std::optional<float> initial_button_delay,
     std::optional<float> autoscroll_button_delay,
-    bool prefer_overlay_scroller_style,
     bool redraw,
     bool jump_on_track_click) {
   s_initial_button_delay =
       initial_button_delay.value_or(s_initial_button_delay);
   s_autoscroll_button_delay =
       autoscroll_button_delay.value_or(s_autoscroll_button_delay);
-  if (s_prefer_overlay_scroller_style != prefer_overlay_scroller_style) {
-    s_prefer_overlay_scroller_style = prefer_overlay_scroller_style;
-    Page::UsesOverlayScrollbarsChanged();
-  }
   s_jump_on_track_click = jump_on_track_click;
   if (redraw) {
     for (const auto& scrollbar : GetScrollbarSet()) {
@@ -399,13 +396,6 @@ void ScrollbarThemeMac::UpdateScrollbarsWithNSDefaults(
       scrollbar->SetNeedsPaintInvalidation(kAllParts);
     }
   }
-}
-
-// static
-bool ScrollbarThemeMac::PreferOverlayScrollerStyle() {
-  if (OverlayScrollbarsEnabled())
-    return true;
-  return s_prefer_overlay_scroller_style;
 }
 
 }  // namespace blink

@@ -20,6 +20,7 @@
 
 #include "base/compiler_specific.h"
 #include "base/component_export.h"
+#include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/files/memory_mapped_file.h"
 #include "base/memory/raw_ptr.h"
@@ -53,8 +54,9 @@ class COMPONENT_EXPORT(UI_DATA_PACK) DataPack : public ResourceHandle {
 // buffer directly.
 //
 // TODO(davidben): Ideally we would load these structures through memcpy, or
-// a little-endian variant of base/big_endian.h, rather than type-punning
-// pointers. This code currently depends on Chromium disabling strict aliasing.
+// base::SpanReader or base/numerics/byte_conversions.h, rather than
+// type-punning pointers. This code currently depends on Chromium disabling
+// strict aliasing.
 #pragma pack(push, 1)
   struct Entry {
     static int CompareById(const void* void_key, const void* void_entry);
@@ -127,8 +129,9 @@ class COMPONENT_EXPORT(UI_DATA_PACK) DataPack : public ResourceHandle {
    public:
     virtual ~DataSource() = default;
 
-    virtual size_t GetLength() const = 0;
-    virtual const uint8_t* GetData() const = 0;
+    size_t GetLength() const { return bytes().size(); }
+    const uint8_t* GetData() const { return bytes().data(); }
+    virtual base::span<const uint8_t> bytes() const = 0;
   };
 
   // Load a pack file from |path|, returning false on error. If the final
@@ -148,6 +151,7 @@ class COMPONENT_EXPORT(UI_DATA_PACK) DataPack : public ResourceHandle {
     kBoundsExceeded,
     kOrderingViolation,
     kAliasTableCorrupt,
+    kEmptyFile,
   };
 
   struct ErrorState {
@@ -198,7 +202,7 @@ class COMPONENT_EXPORT(UI_DATA_PACK) DataPack : public ResourceHandle {
   bool HasResource(uint16_t resource_id) const override;
   std::optional<std::string_view> GetStringView(
       uint16_t resource_id) const override;
-  base::RefCountedStaticMemory* GetStaticMemory(
+  scoped_refptr<base::RefCountedStaticMemory> GetStaticMemory(
       uint16_t resource_id) const override;
   TextEncodingType GetTextEncodingType() const override;
   ResourceScaleFactor GetResourceScaleFactor() const override;

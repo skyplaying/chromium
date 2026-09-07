@@ -5,16 +5,10 @@
 #ifndef DEVICE_VR_PUBLIC_MOJOM_TEST_DEVICE_CONFIG_H_
 #define DEVICE_VR_PUBLIC_MOJOM_TEST_DEVICE_CONFIG_H_
 
-#include <array>
-
 namespace device {
 
 struct DeviceConfig {
-  float interpupillary_distance;
-  std::array<float, 4>
-      viewport_left;  // raw projection left {left, right, top, bottom}
-  std::array<float, 4>
-      viewport_right;  // raw projection right {left, right, top, bottom}
+  float interpupillary_distance = 0.0f;
 };
 
 }  // namespace device

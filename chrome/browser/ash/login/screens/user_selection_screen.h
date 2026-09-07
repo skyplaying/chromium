@@ -11,6 +11,8 @@
 
 #include "ash/public/cpp/token_handle_store.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
@@ -26,6 +28,20 @@
 #include "ui/base/ime/ash/input_method_manager.h"
 
 class AccountId;
+class ApplicationLocaleStorage;
+class PrefService;
+
+namespace network {
+class SharedURLLoaderFactory;
+}  // namespace network
+
+namespace policy {
+class BrowserPolicyConnectorAsh;
+}  // namespace policy
+
+namespace user_manager {
+class MultiUserSignInPolicyController;
+}  // namespace user_manager
 
 namespace ash {
 
@@ -42,7 +58,19 @@ class UserSelectionScreen
       public PasswordSyncTokenLoginChecker::Observer,
       public UserOnlineSigninNotifier::Observer {
  public:
-  explicit UserSelectionScreen(DisplayedScreen display_type);
+  // `local_state`, `application_locale_storage`,
+  // `browser_policy_connector_ash`, `multi_user_sign_in_policy_controller`,
+  // and `system_clock` must be non-null and must outlive `this`.
+  // `shared_url_loader_factory` must be non-null.
+  UserSelectionScreen(
+      PrefService* local_state,
+      const ApplicationLocaleStorage* application_locale_storage,
+      scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
+      const policy::BrowserPolicyConnectorAsh* browser_policy_connector_ash,
+      const user_manager::MultiUserSignInPolicyController*
+          multi_user_sign_in_policy_controller,
+      system::SystemClock* system_clock,
+      DisplayedScreen display_type);
 
   UserSelectionScreen(const UserSelectionScreen&) = delete;
   UserSelectionScreen& operator=(const UserSelectionScreen&) = delete;
@@ -99,6 +127,13 @@ class UserSelectionScreen
   void SetUsersLoaded(bool loaded);
 
  protected:
+  const raw_ref<PrefService> local_state_;
+  const raw_ref<const ApplicationLocaleStorage> application_locale_storage_;
+  const scoped_refptr<network::SharedURLLoaderFactory>
+      shared_url_loader_factory_;
+  const raw_ref<const policy::BrowserPolicyConnectorAsh>
+      browser_policy_connector_ash_;
+
   raw_ptr<UserBoardView> view_ = nullptr;
 
   // Map from public session account IDs to recommended locales set by policy.
@@ -119,6 +154,10 @@ class UserSelectionScreen
                            const std::string& token,
                            bool reauth_required);
   void OnAllowedInputMethodsChanged();
+
+  const raw_ref<const user_manager::MultiUserSignInPolicyController>
+      multi_user_sign_in_policy_controller_;
+  const raw_ref<system::SystemClock> system_clock_;
 
   // Purpose of the screen.
   const DisplayedScreen display_type_;

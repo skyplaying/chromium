@@ -12,7 +12,6 @@
 #include <string_view>
 #include <vector>
 
-#include "base/auto_reset.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
 #include "base/memory/raw_ptr.h"
@@ -24,7 +23,6 @@
 #include "chrome/browser/web_applications/proto/web_app_install_state.pb.h"
 #include "chrome/browser/web_applications/test/os_integration_test_override_impl.h"
 #include "chrome/browser/web_applications/test/web_app_test_observers.h"
-#include "chrome/browser/web_applications/web_app_callback_app_identity.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_ui_manager.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -42,8 +40,10 @@
 #include "chrome/browser/ui/webui/app_home/app_home_page_handler.h"
 #endif
 
-class Browser;
-class IconLabelBubbleView;
+class BrowserWindowInterface;
+namespace page_actions {
+class PageActionViewInterface;
+}
 
 namespace base {
 class CommandLine;
@@ -79,6 +79,8 @@ enum class Site : int {
   kSubApp1,
   kSubApp2,
   kChromeUrl,
+  kStandaloneMigratedSuggested,
+  kStandaloneMigratedForced,
 };
 
 enum class InstallableSite {
@@ -97,7 +99,14 @@ enum class InstallableSite {
   kChromeUrl,
 };
 
-enum class Title { kStandaloneOriginal, kStandaloneUpdated };
+enum class Title {
+  kNotPromotableOriginal,
+  kNotPromotableUpdated,
+  kStandaloneOriginal,
+  kStandaloneUpdated,
+  kStandaloneMigratedSuggested,
+  kStandaloneMigratedForced,
+};
 
 enum class Color { kRed, kGreen, kGreenSmallDiff };
 
@@ -139,7 +148,9 @@ enum class FilesOptions {
 enum class UpdateDialogResponse {
   kAcceptUpdate,
   kCancelDialogAndUninstall,
+  kCancelDialogAndCancelUninstall,
   kIgnoreDialog,
+  kCloseDialog,
 };
 
 enum class SubAppInstallDialogOptions {
@@ -165,7 +176,7 @@ struct TabState {
 };
 
 struct BrowserState {
-  BrowserState(Browser* browser_ptr,
+  BrowserState(BrowserWindowInterface* browser_ptr,
                base::flat_map<content::WebContents*, TabState> tab_state,
                content::WebContents* active_web_contents,
                const webapps::AppId& app_id,
@@ -174,7 +185,7 @@ struct BrowserState {
   BrowserState(const BrowserState&);
   bool operator==(const BrowserState& other) const;
 
-  raw_ptr<Browser, DanglingUntriaged> browser;
+  raw_ptr<BrowserWindowInterface, DanglingUntriaged> browser;
   base::flat_map<content::WebContents*, TabState> tabs;
   raw_ptr<content::WebContents, DanglingUntriaged> active_tab;
   // If this isn't an app browser, `app_id` is empty.
@@ -208,13 +219,14 @@ struct AppState {
 };
 
 struct ProfileState {
-  ProfileState(base::flat_map<Browser*, BrowserState> browser_state,
-               base::flat_map<webapps::AppId, AppState> app_state);
+  ProfileState(
+      base::flat_map<BrowserWindowInterface*, BrowserState> browser_state,
+      base::flat_map<webapps::AppId, AppState> app_state);
   ~ProfileState();
   ProfileState(const ProfileState&);
   bool operator==(const ProfileState& other) const;
 
-  base::flat_map<Browser*, BrowserState> browsers;
+  base::flat_map<BrowserWindowInterface*, BrowserState> browsers;
   base::flat_map<webapps::AppId, AppState> apps;
 };
 
@@ -233,9 +245,9 @@ class WebAppIntegrationTestDriver {
   class TestDelegate {
    public:
     // Exposing normal functionality of testing::InProcBrowserTest:
-    virtual Browser* CreateBrowser(Profile* profile) = 0;
-    virtual void CloseBrowserSynchronously(Browser* browser) = 0;
-    virtual void AddBlankTabAndShow(Browser* browser) = 0;
+    virtual BrowserWindowInterface* CreateBrowser(Profile* profile) = 0;
+    virtual void CloseBrowserSynchronously(BrowserWindowInterface* browser) = 0;
+    virtual void AddBlankTabAndShow(BrowserWindowInterface* browser) = 0;
     virtual const net::EmbeddedTestServer* EmbeddedTestServer() const = 0;
     virtual Profile* GetDefaultProfile() = 0;
 
@@ -331,6 +343,7 @@ class WebAppIntegrationTestDriver {
   void ManifestUpdateTitle(Site site, Title title);
   void ManifestUpdateDisplay(Site site, Display display);
   void ManifestUpdateScopeTo(Site app, Site scope);
+  void ManifestUpdateAddMigrateTo(Site app, Site to);
   void OpenInChrome();
   void SetOpenInTabFromAppHome(Site site);
   void SetOpenInTabFromAppSettings(Site site);
@@ -353,6 +366,8 @@ class WebAppIntegrationTestDriver {
   void QuitAppShim(Site site);
 #endif
   void TriggerUpdateDialogAndHandleResponse(UpdateDialogResponse response);
+  void CheckUpdateDialogIsShowing();
+  void HandleUpdateDialogResponse(UpdateDialogResponse response);
 
   // State Check Actions:
   void CheckAppListEmpty();
@@ -428,9 +443,16 @@ class WebAppIntegrationTestDriver {
   // the manifest url loaded as well.
   void AwaitManifestUpdateStartedPostNavigation(content::WebContents*);
 
+  void WaitForAppIdentityUpdateDialogToShow();
+
   void HandleAppIdentityUpdateDialogResponse(
       UpdateDialogResponse response,
       std::unique_ptr<WebAppMenuModel> menu_model);
+
+  void WaitForAndAcceptInstallDialogForSite(Site site);
+
+  void OnWidgetShown(views::Widget* widget);
+  void OnWidgetClosing(views::Widget* widget);
 
   webapps::AppId GetAppIdBySiteMode(Site site);
   GURL GetUrlForSite(Site site, const std::string& suffix = "");
@@ -444,7 +466,7 @@ class WebAppIntegrationTestDriver {
 
   Profile* GetOrCreateProfile(ProfileName profile_name);
 
-  content::WebContents* GetCurrentTab(Browser* browser);
+  content::WebContents* GetCurrentTab(BrowserWindowInterface* browser);
   GURL GetInScopeURL(Site site);
   base::FilePath GetShortcutPath(base::FilePath shortcut_dir,
                                  const std::string& app_name,
@@ -466,7 +488,8 @@ class WebAppIntegrationTestDriver {
 
   // Returns an existing app browser if one exists, or launches a new one if
   // not.
-  Browser* GetAppBrowserForSite(Site site, bool launch_if_not_open = true);
+  BrowserWindowInterface* GetAppBrowserForSite(Site site,
+                                               bool launch_if_not_open = true);
 
   bool IsShortcutAndIconCreated(Profile* profile,
                                 const std::string& name,
@@ -498,13 +521,14 @@ class WebAppIntegrationTestDriver {
   void SyncAndInstallPreinstalledAppConfig(const GURL& install_url,
                                            std::string_view app_config_string);
 
-  Browser* browser();
+  BrowserWindowInterface* browser();
   Profile* profile();
   std::vector<Profile*> GetAllProfiles();
 
-  Browser* app_browser() { return app_browser_; }
+  BrowserWindowInterface* app_browser() { return app_browser_; }
   WebAppProvider* provider() { return WebAppProvider::GetForTest(profile()); }
-  IconLabelBubbleView* pwa_install_view();
+  page_actions::PageActionViewInterface* pwa_install_view();
+  bool IsPwaInstallIconVisible();
 
   const net::EmbeddedTestServer& GetTestServerForSiteMode(Site site_mode) const;
 
@@ -530,7 +554,8 @@ class WebAppIntegrationTestDriver {
 
   raw_ptr<Profile, AcrossTasksDanglingUntriaged> active_profile_ = nullptr;
   webapps::AppId active_app_id_;
-  raw_ptr<Browser, AcrossTasksDanglingUntriaged> app_browser_ = nullptr;
+  raw_ptr<BrowserWindowInterface, AcrossTasksDanglingUntriaged> app_browser_ =
+      nullptr;
 
   // Normally BeforeState*Action returns false if a fatal error has been
   // reported in a previous action, to avoid actions operating on potentially
@@ -538,7 +563,8 @@ class WebAppIntegrationTestDriver {
   // all actions.
   bool in_tear_down_ = false;
 
-  std::unique_ptr<views::NamedWidgetShownWaiter> app_id_update_dialog_waiter_;
+  views::AnyWidgetObserver any_widget_observer_;
+  raw_ptr<views::Widget> active_update_dialog_widget_ = nullptr;
   std::unique_ptr<OsIntegrationTestOverrideImpl::BlockingRegistration>
       override_registration_;
 
@@ -576,9 +602,9 @@ class WebAppIntegrationTest : public InProcessBrowserTest,
   void SetUpCommandLine(base::CommandLine* command_line) override;
 
   // WebAppIntegrationTestDriver::TestDelegate:
-  Browser* CreateBrowser(Profile* profile) override;
-  void CloseBrowserSynchronously(Browser* browser) override;
-  void AddBlankTabAndShow(Browser* browser) override;
+  BrowserWindowInterface* CreateBrowser(Profile* profile) override;
+  void CloseBrowserSynchronously(BrowserWindowInterface* browser) override;
+  void AddBlankTabAndShow(BrowserWindowInterface* browser) override;
   const net::EmbeddedTestServer* EmbeddedTestServer() const override;
   Profile* GetDefaultProfile() override;
 

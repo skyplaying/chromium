@@ -111,11 +111,21 @@ class FakeServiceEndpointRequest : public HostResolver::ServiceEndpointRequest {
   // CallOnServiceEndpointRequestFinished()
   FakeServiceEndpointRequest& CallOnServiceEndpointsUpdated();
 
-  // Calls `delegate_->OnServiceEndpointRequestFinished()`. Mut not be used
-  // after calling CompleteStartSynchronously().
-  FakeServiceEndpointRequest& CallOnServiceEndpointRequestFinished(int rv);
+  // Calls `delegate_->OnServiceEndpointRequestFinished()`. Must not be used
+  // after calling CompleteStartSynchronously(). Unlike other methods, this
+  // doesn't return `*this` since `this` can be deleted during the delegate
+  // call.
+  void CallOnServiceEndpointRequestFinished(int rv);
+
+  FakeServiceEndpointRequest& set_is_stale_while_refreshing(bool is_stale) {
+    is_stale_while_refreshing_ = is_stale;
+    return *this;
+  }
 
   RequestPriority priority() const { return resolution_.priority(); }
+  const HostResolver::ResolveHostParameters& resolve_host_params() const {
+    return resolve_host_params_;
+  }
 
   // HostResolver::ServiceEndpointRequest methods:
   int Start(Delegate* delegate) override;
@@ -124,8 +134,9 @@ class FakeServiceEndpointRequest : public HostResolver::ServiceEndpointRequest {
   bool EndpointsCryptoReady() override;
   ResolveErrorInfo GetResolveErrorInfo() override;
   const HostCache::EntryStaleness* GetStaleInfo() const override;
-  bool IsStaleWhileRefresing() const override;
+  bool IsStaleWhileRefreshing() const override;
   void ChangeRequestPriority(RequestPriority priority) override;
+  std::optional<ResolutionDetails> GetResolutionDetails() const override;
 
  private:
   friend class FakeServiceEndpointResolver;
@@ -134,9 +145,12 @@ class FakeServiceEndpointRequest : public HostResolver::ServiceEndpointRequest {
 
   raw_ptr<Delegate> delegate_;
 
+  bool is_stale_while_refreshing_ = false;
+
   FakeServiceEndpointResolution resolution_;
 
   base::OnceClosure start_callback_;
+  HostResolver::ResolveHostParameters resolve_host_params_;
 
   base::WeakPtrFactory<FakeServiceEndpointRequest> weak_ptr_factory_{this};
 };
@@ -185,16 +199,19 @@ class FakeServiceEndpointResolver : public HostResolver {
   std::unique_ptr<ResolveHostRequest> CreateRequest(
       url::SchemeHostPort host,
       NetworkAnonymizationKey network_anonymization_key,
+      handles::NetworkHandle target_network,
       NetLogWithSource net_log,
       std::optional<ResolveHostParameters> optional_parameters) override;
   std::unique_ptr<ResolveHostRequest> CreateRequest(
       const HostPortPair& host,
       const NetworkAnonymizationKey& network_anonymization_key,
+      handles::NetworkHandle target_network,
       const NetLogWithSource& net_log,
       const std::optional<ResolveHostParameters>& optional_parameters) override;
   std::unique_ptr<ServiceEndpointRequest> CreateServiceEndpointRequest(
       Host host,
       NetworkAnonymizationKey network_anonymization_key,
+      handles::NetworkHandle target_network,
       NetLogWithSource net_log,
       ResolveHostParameters parameters) override;
   bool IsHappyEyeballsV3Enabled() const override;
@@ -322,6 +339,11 @@ class StreamKeyBuilder {
     return *this;
   }
 
+  StreamKeyBuilder& set_target_network(handles::NetworkHandle target_network) {
+    target_network_ = target_network;
+    return *this;
+  }
+
   HttpStreamKey Build() const;
 
  private:
@@ -330,6 +352,7 @@ class StreamKeyBuilder {
   SecureDnsPolicy secure_dns_policy_ = SecureDnsPolicy::kAllow;
   bool disable_cert_network_fetches_ = true;
   std::optional<AlternativeService> alt_service_;
+  handles::NetworkHandle target_network_ = handles::kInvalidNetworkHandle;
 };
 
 // An HttpStreamPool::Job::Delegate implementation for tests.

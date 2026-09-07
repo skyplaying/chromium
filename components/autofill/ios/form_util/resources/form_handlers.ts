@@ -9,10 +9,12 @@
  */
 
 import {processChildFrameMessage} from '//components/autofill/ios/form_util/resources/child_frame_registration_lib.js';
+import {HAS_BEEN_PASSWORD_SYMBOL} from '//components/autofill/ios/form_util/resources/fill_constants.js';
 import {isAutofillableElement} from '//components/autofill/ios/form_util/resources/fill_element_inference_util.js';
 import * as fillUtil from '//components/autofill/ios/form_util/resources/fill_util.js';
 import {formSubmitted, reportFormSubmissionError, wasEditedByUser} from '//components/autofill/ios/form_util/resources/fill_web_form.js';
 import {getFieldIdentifier, getFormIdentifier, reportDetectedFormSubmission} from '//components/autofill/ios/form_util/resources/form_utils.js';
+import {getElementMap} from '//components/autofill/ios/form_util/resources/renderer_id.js';
 import {CrWebApi, gCrWeb} from '//ios/web/public/js_messaging/resources/gcrweb.js';
 import {sendWebKitMessage} from '//ios/web/public/js_messaging/resources/utils.js';
 
@@ -32,9 +34,59 @@ interface FormMsgBatchMetadata {
 }
 
 /**
+ * An HTMLInputElement that can be tracked with a Symbol property to indicate
+ * it has been a password field.
+ */
+interface PasswordTrackedElement extends HTMLInputElement {
+  [key: symbol]: boolean;
+}
+
+/**
  * The MutationObserver tracking form related changes.
  */
 let formMutationObserver: MutationObserver|null = null;
+
+/**
+ * The MutationObserver tracking password type changes.
+ */
+let passwordTypeObserver: MutationObserver|null = null;
+
+/**
+ * Timer handle for the throttled mutation processing.
+ */
+let mutationProcessTimeout: ReturnType<typeof setTimeout>|null = null;
+
+/**
+ * Snapshot of the total number of form controls in the document.
+ */
+let formControlCount: number = -1;
+
+/**
+ * Cache the live HTMLCollections.
+ * WebCore automatically updates live collections's length when the DOM changes,
+ * eliminating new JS HTMLCollection wrapper allocations and binding lookups on
+ * subsequent calls.
+ */
+let formControlCollections: Array<HTMLCollectionOf<Element>> = [];
+
+/**
+ * The set of tag names that are considered form elements.
+ */
+const FORM_TAGS = new Set(['FORM', 'INPUT', 'SELECT', 'OPTION', 'TEXTAREA']);
+
+/**
+ * Tag names used to compute live HTMLCollection form control counts.
+ *
+ * Unlike `FORM_TAGS`, 'OPTION' can be safely excluded because:
+ * 1. <option> elements are only child items of <select> controls and are not
+ *    independent autofillable form controls themselves. Any addition or
+ *    removal of a select control is already captured by tracking <select>.
+ * 2. Forms (e.g., country or date-of-birth dropdowns) can contain hundreds or
+ *    thousands of <option> elements. Excluding them avoids expensive DOM
+ *    subtree scanning and live HTMLCollection maintenance for large option
+ *    lists.
+ */
+const FORM_CONTROL_TAGS = ['FORM', 'INPUT', 'SELECT', 'TEXTAREA'];
 
 /**
  * A message scheduled to be sent to host on the next runloop.
@@ -90,6 +142,42 @@ function shouldListenToFormSubmissionEventsInCaptureMode(): boolean {
 }
 
 /**
+ * Returns true if autofill optimization form search is enabled.
+ */
+function isAutofillOptimizationFormSearchEnabled(): boolean {
+  return (window as any).gCrWebPlaceholderAutofillOptimizationFormSearch;
+}
+
+/**
+ * Returns true if autofill track form mutations optimization is enabled.
+ */
+function isAutofillTrackFormMutationsOptimizationEnabled(): boolean {
+  return (window as any).gCrWebPlaceholderTrackFormMutationsOptimization;
+}
+
+
+
+/**
+ * Returns true if element1 and element2 have an ancestor/descendant
+ * (parent-child) relationship directly or indirectly.
+ */
+function areElementsRelated(
+    element1: Element|null, element2: Element|null): boolean {
+  if (!element1 || !element2) {
+    return false;
+  }
+  return element1.contains(element2) || element2.contains(element1);
+}
+
+/**
+ * Returns true if the password fields tracking feature is enabled.
+ */
+function isTrackPasswordFieldsEnabled(): boolean {
+  return autofillFormFeaturesApi.getFunction(
+      'isAutofillTrackPasswordFieldsEnabled')();
+}
+
+/**
  * Schedule `mesg` to be sent on next runloop.
  * If called multiple times on the same runloop, only the last message is really
  * sent.
@@ -122,13 +210,12 @@ function sendMessageOnNextLoop(mesg: object): void {
  * is much easier to manage than adding handlers to individual elements.
  */
 function formActivity(evt: Event): void {
-  const validTagNames = ['FORM', 'INPUT', 'OPTION', 'SELECT', 'TEXTAREA'];
   if (!evt.target) {
     return;
   }
 
   let target = evt.target as Element;
-  if (!validTagNames.includes(target.tagName)) {
+  if (!FORM_TAGS.has(target.tagName) && !fillUtil.isContentEditable(target)) {
     const path = evt.composedPath() as Element[];
     let foundValidTagName = false;
 
@@ -136,7 +223,8 @@ function formActivity(evt: Event): void {
     // of the event target is not valid itself.
     if (path) {
       for (const htmlElement of path) {
-        if (validTagNames.includes(htmlElement.tagName)) {
+        if (FORM_TAGS.has(htmlElement.tagName) ||
+            fillUtil.isContentEditable(htmlElement)) {
           target = htmlElement;
           foundValidTagName = true;
           break;
@@ -154,7 +242,9 @@ function formActivity(evt: Event): void {
     wasEditedByUser.set(target, evt.isTrusted);
   }
 
-  if (evt.target !== lastFocusedElement) {
+  const isTargetEditable = fillUtil.isContentEditable(target);
+  if (evt.target !== lastFocusedElement &&
+      (!isTargetEditable || !areElementsRelated(lastFocusedElement, target))) {
     return;
   }
   const form =
@@ -164,8 +254,13 @@ function formActivity(evt: Event): void {
   const formRendererID = fillUtil.getUniqueID(form);
   const fieldRendererID = fillUtil.getUniqueID(field);
 
-  const fieldType = 'type' in target ? target.type : '';
-  const fieldValue = 'value' in target ? target.value : '';
+  let fieldType = 'type' in target ? target.type : '';
+  if (!fieldType && isTargetEditable) {
+    fieldType = 'contenteditable';
+  }
+  const fieldValue = 'value' in target ?
+      target.value :
+      (isTargetEditable ? (target.textContent ?? '') : '');
 
   const msg = {
     'command': 'form.activity',
@@ -272,13 +367,10 @@ function sendFormMutationMessagesAfterDelay(
 }
 
 /**
- * Checks if cross-frame filling is enabled and, if so, forwards messages to
- * the Child Frame Registration lib.
+ * Forwards messages to the Child Frame Registration lib.
  */
 function processInboundMessage(event: MessageEvent<any>): void {
-  if (autofillFormFeaturesApi.getFunction('isAutofillAcrossIframesEnabled')()) {
-    processChildFrameMessage(event);
-  }
+  processChildFrameMessage(event);
 }
 
 function attachListeners(): void {
@@ -325,15 +417,40 @@ setTimeout(attachListeners, 1000);
  *     match.
  */
 function findAllFormElementsInNodes(nodeList: NodeList): Element[] {
-  return [...nodeList]
-             .filter(n => n.nodeType === Node.ELEMENT_NODE)
-             .map(n => [n, ...(n as Element).getElementsByTagName('*')])
-             .map(
-                 elems => elems.filter(
-                     e => (e as Element)
-                              .tagName.match(
-                                  /^(FORM|INPUT|SELECT|OPTION|TEXTAREA)$/)))
-             .flat() as Element[];
+  // The feature should give the same result in both case.
+  // The only difference should be performance.
+  if (isAutofillOptimizationFormSearchEnabled()) {
+    const elements: Element[] = [];
+
+    // Filter using a single for-loop instead of array functions
+    // to minimize intermediate memory allocations that affect performance.
+    for (const node of nodeList) {
+      if (node.nodeType !== Node.ELEMENT_NODE) {
+        continue;
+      }
+
+      const element = node as Element;
+      if (FORM_TAGS.has(element.tagName)) {
+        elements.push(element);
+      }
+      const descendants =
+          element.querySelectorAll('FORM, INPUT, SELECT, OPTION, TEXTAREA');
+      for (const descendant of descendants) {
+        elements.push(descendant);
+      }
+    }
+    return elements;
+  } else {
+    return [...nodeList]
+               .filter(n => n.nodeType === Node.ELEMENT_NODE)
+               .map(n => [n, ...(n as Element).getElementsByTagName('*')])
+               .map(
+                   elems => elems.filter(
+                       e => (e as Element)
+                                .tagName.match(
+                                    /^(FORM|INPUT|SELECT|OPTION|TEXTAREA)$/)))
+               .flat() as Element[];
+  }
 }
 
 /**
@@ -344,44 +461,41 @@ function findAllFormElementsInNodes(nodeList: NodeList): Element[] {
  * @return Renderer ids of the formless fields.
  */
 function findFormlessFieldsIds(elements: Element[]): string[] {
-  return elements
-      .filter(
-          e => isAutofillableElement(e) &&
-              !(e as HTMLInputElement).form)
-      .map(fillUtil.getUniqueID);
+  if (isAutofillOptimizationFormSearchEnabled()) {
+    const result: string[] = [];
+    for (const e of elements) {
+      if (isAutofillableElement(e) && !(e as HTMLInputElement).form) {
+        result.push(fillUtil.getUniqueID(e));
+      }
+    }
+    return result;
+  } else {
+    return elements
+        .filter(e => isAutofillableElement(e) && !(e as HTMLInputElement).form)
+        .map(fillUtil.getUniqueID);
+  }
 }
 
 /**
- * Installs a MutationObserver to track form related changes. Waits |delay|
- * milliseconds before sending a message to browser. A delay is used because
- * form mutations are likely to come in batches. An undefined or zero value for
- * |delay| would stop the MutationObserver, if any. Batches
- * messages for removed and added forms together. This relaxes the messages
- * throttling and allows correctly handling form replacements.
+ * Processes form mutations using the standard DOM-traversal strategy.
+ *
+ * @param mutations The list of mutation records from the MutationObserver.
+ * @param delay The scheduling delay for sending messages.
  */
-function trackFormMutations(delay: number): void {
-  if (formMutationObserver) {
-    formMutationObserver.disconnect();
-    formMutationObserver = null;
-  }
+function processFormMutationsStandard(
+    mutations: MutationRecord[], delay: number): void {
+  // Message for the first added form found in the mutations, if there is.
+  let addedFormMessage: object|null = null;
+  // Message for the first removed form found in the mutations, if there is.
+  let removedFormMessage: object|null = null;
 
-  if (!delay) return;
-
-  formMutationObserver = new MutationObserver(function(mutations) {
-    // Message for the first added form found in the mutations, if there is.
-    let addedFormMessage: object|null = null;
-    // Message for the first removed form found in the mutations, if there is.
-    let removedFormMessage: object|null = null;
-
-    for (const mutation of mutations) {
-      // Only process mutations to the tree of nodes.
-      if (mutation.type !== 'childList') {
-        continue;
-      }
+  for (const mutation of mutations) {
+    // Process mutations to the tree of nodes.
+    if (mutation.type === 'childList') {
+      const addedFormElements = findAllFormElementsInNodes(mutation.addedNodes);
 
       // Handle added nodes.
-      const formWasAdded =
-          findAllFormElementsInNodes(mutation.addedNodes).length > 0;
+      const formWasAdded = addedFormElements.length > 0;
       if (!addedFormMessage && formWasAdded) {
         addedFormMessage = {
           'command': 'form.activity',
@@ -423,8 +537,7 @@ function trackFormMutations(delay: number): void {
           continue;
         } else {
           // Send the removed forms identifiers to the browser.
-          const filteredFormIDs =
-              forms.map(form => fillUtil.getUniqueID(form));
+          const filteredFormIDs = forms.map(form => fillUtil.getUniqueID(form));
           removedFormMessage = {
             'command': 'form.removal',
             'frameID': gCrWeb.getFrameId(),
@@ -467,15 +580,273 @@ function trackFormMutations(delay: number): void {
         ++formMsgBatchMetadata.dropCount;
       }
     }
-    const messagesToSend: object[] =
+  }
+  let messagesToSend: object[];
+  if (isAutofillOptimizationFormSearchEnabled()) {
+    messagesToSend = [];
+    if (removedFormMessage) {
+      messagesToSend.push(removedFormMessage);
+    }
+    if (addedFormMessage) {
+      messagesToSend.push(addedFormMessage);
+    }
+  } else {
+    messagesToSend =
         [removedFormMessage, addedFormMessage].filter(v => !!v).map(v => v!);
-    if (messagesToSend.length > 0 &&
-        !sendFormMutationMessagesAfterDelay(messagesToSend, delay, true)) {
-      // Count the messages that couldn't be scheduled as dropped.
-      formMsgBatchMetadata.dropCount += messagesToSend.length;
+  }
+  if (messagesToSend.length > 0 &&
+      !sendFormMutationMessagesAfterDelay(messagesToSend, delay, true)) {
+    // Count the messages that couldn't be scheduled as dropped.
+    formMsgBatchMetadata.dropCount += messagesToSend.length;
+  }
+}
+
+/**
+ * Lazily initializes the live HTMLCollection caches.
+ */
+function initializeFormControlCollections(): void {
+  if (formControlCollections.length === 0) {
+    formControlCollections =
+        FORM_CONTROL_TAGS.map(tag => document.getElementsByTagName(tag));
+  }
+}
+
+/**
+ * Gets the total count of form elements using live HTMLCollections.
+ */
+function getFormControlCount(): number {
+  let total = 0;
+  for (const collection of formControlCollections) {
+    total += collection.length;
+  }
+  return total;
+}
+
+/**
+ * Processes form mutations using the diffing strategy.
+ *
+ * This strategy avoids iterating over `mutation.removedNodes` and
+ * `mutation.addedNodes`, eliminating subtree crawls and preventing JavaScript
+ * wrapper materializations for non-form elements. WebView creates a wrapper
+ * around the DOM object when we access it, so we want to avoid it to reduce
+ * allocation/deallocation churn in a tight loop.
+ *
+ * For removals: Instead of parsing removed nodes, we iterate over the active
+ * form controls tracked in `document.__gCrElementMap` and verify if they are
+ * still connected to the DOM via the lightweight `.isConnected` property.
+ *
+ * For additions: We calculate if any form control elements were added
+ * using cached live HTMLCollections. If any additions are detected, send
+ * a single generic form activity message.
+ *
+ */
+function processFormMutationsOptimized(): void {
+  const newFormControlCount = getFormControlCount();
+
+  const removedFormIDs: string[] = [];
+  const removedFieldIDs: string[] = [];
+  let removedFormControlCount = 0;
+
+  // Process form and formless field removals
+  // Check if any tracked elements in the global elements map have
+  // been disconnected from the DOM.
+  const elementMap = getElementMap()!;
+  elementMap.forEach((ref, id) => {
+    const element = ref.deref() as Element | null;
+    if (!element) {
+      // Element was garbage-collected, which implies it was already
+      // disconnected from the DOM and is not part of the current mutation
+      // records (which hold strong references to removed nodes). We simply
+      // clean up our map without reporting it as a new removal. This
+      // ensures that future mutation processing iterations are faster.
+      elementMap.delete(id);
+      return;
+    }
+
+    if (element.isConnected) {
+      return;
+    }
+
+    const idStr = id.toString();
+    if (element.tagName === 'FORM') {
+      removedFormIDs.push(idStr);
+    } else if (
+        isAutofillableElement(element) && !(element as HTMLInputElement).form) {
+      // Handles unowned fields deletion in formless forms.
+      removedFieldIDs.push(idStr);
+    }
+
+    // Mathematically align removedFormControlCount with getFormControlCount()
+    if (FORM_CONTROL_TAGS.includes(element.tagName)) {
+      removedFormControlCount++;
+    }
+
+    // Delete the detached element from our active tracking map.
+    elementMap.delete(id);
+  });
+
+  let removedFormMessage: object|null = null;
+  let addedFormMessage: object|null = null;
+
+  if (removedFormIDs.length > 0 || removedFieldIDs.length > 0) {
+    removedFormMessage = {
+      'command': 'form.removal',
+      'frameID': gCrWeb.getFrameId(),
+      'removedFormIDs': fillUtil.stringify(removedFormIDs),
+      'removedFieldIDs': fillUtil.stringify(removedFieldIDs),
+    };
+  }
+
+  // Process form changed
+
+  // Calculate if any form elements were added to avoid `addedNodes` subtree
+  // crawls. The formula is based on:
+  // newFormControlCount = formControlCount + addedFormControlCount -
+  // removedFormControlCount where:
+  //  `newFormControlCount` = form elements count after applying the mutations.
+  //  `formControlCount` = form elements count before applying the mutations.
+  //  `addedFormControlCount` = number of form elements added in this mutation
+  //  `removedFormControlCount` = number of form elements removed in this
+  //  mutation.
+  const addedFormControlCount =
+      (newFormControlCount - formControlCount) + removedFormControlCount;
+
+   // Handle the removed form control element case as a form changed
+   // mutation. Removed form control are elements that are not form nor
+   // unowned autofillable fields.
+  if (addedFormControlCount > 0 ||
+      removedFormControlCount >
+          (removedFormIDs.length + removedFieldIDs.length)) {
+    addedFormMessage = {
+      'command': 'form.activity',
+      'frameID': gCrWeb.getFrameId(),
+      'formName': '',
+      'formRendererID': '',
+      'fieldIdentifier': '',
+      'fieldRendererID': '',
+      'fieldType': '',
+      'type': 'form_changed',
+      'value': '',
+      'hasUserGesture': false,
+    };
+  }
+
+  // Update the count snapshot
+  formControlCount = newFormControlCount;
+
+  // Send the messages
+  const messagesToSend: object[] = [];
+  if (removedFormMessage) {
+    messagesToSend.push(removedFormMessage);
+  }
+  if (addedFormMessage) {
+    messagesToSend.push(addedFormMessage);
+  }
+  // The delay has already been applied in `trackFormMutations`.
+  if (messagesToSend.length > 0 &&
+      !sendFormMutationMessagesAfterDelay(messagesToSend, 0, true)) {
+    formMsgBatchMetadata.dropCount += messagesToSend.length;
+  }
+}
+
+/**
+ * Initializes the password field type observer.
+ */
+function initializePasswordFieldTypeObserver(): void {
+  passwordTypeObserver = new MutationObserver(function(mutations) {
+    for (const mutation of mutations) {
+      if (mutation.type === 'attributes') {
+        const target = mutation.target as HTMLInputElement;
+        if (target.type === 'password') {
+          (target as PasswordTrackedElement)[HAS_BEEN_PASSWORD_SYMBOL] = true;
+        }
+      }
     }
   });
-  formMutationObserver.observe(document, {childList: true, subtree: true});
+  passwordTypeObserver.observe(document, {
+    attributes: true,
+    attributeFilter: ['type'],
+    subtree: true,
+  });
+}
+
+/**
+ * Clean up the properties used to track form mutations.
+ */
+function cleanUpFormMutationTracking(): void {
+  if (formMutationObserver) {
+    formMutationObserver.disconnect();
+    formMutationObserver = null;
+  }
+  if (passwordTypeObserver) {
+    passwordTypeObserver.disconnect();
+    passwordTypeObserver = null;
+  }
+  if (mutationProcessTimeout) {
+    clearTimeout(mutationProcessTimeout);
+    mutationProcessTimeout = null;
+  }
+  formControlCollections = [];
+  lastFocusedElement = null;
+}
+
+/**
+ * Starts observing form mutations.
+ * @param observer The MutationObserver to observe for mutations.
+ */
+function observeFormMutations(observer: MutationObserver|null): void {
+  if (!observer) {
+    return;
+  }
+  observer.observe(document, {childList: true, subtree: true});
+}
+
+/**
+ * Installs a MutationObserver to track form related changes. Waits |delay|
+ * milliseconds before sending a message to browser. A delay is used because
+ * form mutations are likely to come in batches. An undefined or zero value for
+ * |delay| would stop the MutationObserver, if any. Batches
+ * messages for removed and added forms together. This relaxes the messages
+ * throttling and allows correctly handling form replacements.
+ */
+function trackFormMutations(delay: number): void {
+  cleanUpFormMutationTracking();
+
+  if (!delay) {
+    return;
+  }
+
+  // Track password field mutations.
+  if (isTrackPasswordFieldsEnabled()) {
+    initializePasswordFieldTypeObserver();
+  }
+
+  // Track form mutations.
+  if (isAutofillTrackFormMutationsOptimizationEnabled()) {
+    initializeFormControlCollections();
+    formControlCount = getFormControlCount();
+
+    formMutationObserver = new MutationObserver(function() {
+      // Disconnect the observer to reduce the number of microtasks
+      // during the delay period.
+      if (formMutationObserver) {
+        formMutationObserver.disconnect();
+      }
+
+      mutationProcessTimeout = setTimeout(function() {
+        mutationProcessTimeout = null;
+        processFormMutationsOptimized();
+        // Reconnect the observer to start listening for new mutations again.
+        observeFormMutations(formMutationObserver);
+      }, delay);
+    });
+    observeFormMutations(formMutationObserver);
+  } else {
+    formMutationObserver = new MutationObserver(function(mutations) {
+      processFormMutationsStandard(mutations, delay);
+    });
+    formMutationObserver.observe(document, {childList: true, subtree: true});
+  }
 }
 
 const formHandlersApi = new CrWebApi('formHandlers');

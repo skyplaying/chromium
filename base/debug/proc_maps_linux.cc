@@ -29,7 +29,7 @@ namespace base::debug {
 MappedMemoryRegion::MappedMemoryRegion() = default;
 MappedMemoryRegion::MappedMemoryRegion(const MappedMemoryRegion&) = default;
 MappedMemoryRegion::MappedMemoryRegion(MappedMemoryRegion&&) noexcept = default;
-MappedMemoryRegion& MappedMemoryRegion::operator=(MappedMemoryRegion&) =
+MappedMemoryRegion& MappedMemoryRegion::operator=(const MappedMemoryRegion&) =
     default;
 MappedMemoryRegion& MappedMemoryRegion::operator=(
     MappedMemoryRegion&&) noexcept = default;
@@ -200,7 +200,7 @@ std::optional<SmapsRollup> ParseSmapsRollup(const std::string& buffer) {
       // here. |resize| does not count the length of the nul-byte, and we want
       // to trim off the trailing colon at the end, so we use |strlen - 1| here.
       key.resize(strlen(key.c_str()) - 1);
-      tmp[key] = KiBU(val);
+      tmp[key] = KiB(val);
     }
   }
 

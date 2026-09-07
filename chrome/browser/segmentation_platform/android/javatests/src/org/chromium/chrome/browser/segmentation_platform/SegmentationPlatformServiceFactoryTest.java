@@ -29,7 +29,6 @@ import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.profiles.ProfileManager;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
 import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
-import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.components.segmentation_platform.ClassificationResult;
 import org.chromium.components.segmentation_platform.Constants;
 import org.chromium.components.segmentation_platform.InputContext;
@@ -50,7 +49,6 @@ public class SegmentationPlatformServiceFactoryTest {
     public FreshCtaTransitTestRule mActivityTestRule =
             ChromeTransitTestRules.freshChromeTabbedActivityRule();
 
-    private WebPageStation mPage;
     private final CallbackHelper mCallbackHelper = new CallbackHelper();
 
     @Test
@@ -117,9 +115,6 @@ public class SegmentationPlatformServiceFactoryTest {
                                 ProcessedValue.fromFloat(0.0f));
                         inputContext.addEntry(
                                 Constants.CONTEXTUAL_PAGE_ACTIONS_TAB_GROPING_INPUT,
-                                ProcessedValue.fromFloat(0.0f));
-                        inputContext.addEntry(
-                                Constants.CONTEXTUAL_PAGE_ACTIONS_GLIC_INPUT,
                                 ProcessedValue.fromFloat(0.0f));
                         inputContext.addEntry("url", ProcessedValue.fromGURL(GURL.emptyGURL()));
 

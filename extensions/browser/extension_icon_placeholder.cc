@@ -26,6 +26,7 @@ ui::ResourceBundle::FontStyle GetFontStyleForIconSize(
   switch (size) {
     case extension_misc::EXTENSION_ICON_INVALID:
     case extension_misc::EXTENSION_ICON_BITTY:
+    case extension_misc::EXTENSION_ICON_MINI:
       return ui::ResourceBundle::SmallFont;
     case extension_misc::EXTENSION_ICON_SMALLISH:
     case extension_misc::EXTENSION_ICON_SMALL:
@@ -50,6 +51,7 @@ gfx::Image GetBackgroundImageForIconSize(extension_misc::ExtensionIcons size) {
   switch (size) {
     case extension_misc::EXTENSION_ICON_INVALID:
     case extension_misc::EXTENSION_ICON_BITTY:
+    case extension_misc::EXTENSION_ICON_MINI:
     case extension_misc::EXTENSION_ICON_SMALLISH:
     case extension_misc::EXTENSION_ICON_SMALL:
       resource_id = IDR_EXTENSION_ACTION_PLAIN_BACKGROUND;
@@ -74,7 +76,7 @@ ExtensionIconPlaceholder::ExtensionIconPlaceholder(
       base_image_(GetBackgroundImageForIconSize(size)) {
   // Remove RTL formatting characters, if any, that may pad the extension name.
   // See https://crbug.com/41405074
-  std::u16string sanitized_name = base::UTF8ToUTF16(std::string(name));
+  std::u16string sanitized_name = base::UTF8ToUTF16(name);
   base::i18n::UnadjustStringForLocaleDirection(&sanitized_name);
 
   letter_ = sanitized_name.substr(0, 1);

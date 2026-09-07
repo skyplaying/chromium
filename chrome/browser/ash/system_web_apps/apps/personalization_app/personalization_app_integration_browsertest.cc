@@ -7,7 +7,6 @@
 #include "ash/shell.h"
 #include "ash/test/pixel/ash_pixel_diff_util.h"
 #include "ash/webui/personalization_app/personalization_app_url_constants.h"
-#include "ash/webui/system_apps/public/system_web_app_type.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
@@ -15,8 +14,8 @@
 #include "base/scoped_observation.h"
 #include "base/test/bind.h"
 #include "chrome/browser/ash/system_web_apps/test_support/system_web_app_integration_test.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "chromeos/ash/components/system_web_apps/system_web_app_type.h"
 #include "chromeos/ui/base/window_properties.h"
 #include "components/services/app_service/public/cpp/app_launch_params.h"
 #include "components/viz/common/frame_timing_details.h"
@@ -139,7 +138,8 @@ class PersonalizationAppIntegrationBrowserTest
 
   // Launch the app at the wallpaper subpage to avoid a redirect while loading
   // the app.
-  content::WebContents* LaunchAppAtWallpaperSubpage(Browser** browser) {
+  content::WebContents* LaunchAppAtWallpaperSubpage(
+      BrowserWindowInterface** browser) {
     apps::AppLaunchParams launch_params =
         LaunchParamsForApp(ash::SystemWebAppType::PERSONALIZATION);
     launch_params.override_url =
@@ -166,7 +166,7 @@ IN_PROC_BROWSER_TEST_P(PersonalizationAppIntegrationBrowserTest,
 IN_PROC_BROWSER_TEST_P(PersonalizationAppIntegrationBrowserTest,
                        PersonalizationAppWidgetIsTransparent) {
   WaitForTestSystemAppInstall();
-  Browser* browser;
+  BrowserWindowInterface* browser = nullptr;
   content::WebContents* web_contents = LaunchAppAtWallpaperSubpage(&browser);
 
   CallMakeTransparent(web_contents);
@@ -181,7 +181,7 @@ IN_PROC_BROWSER_TEST_P(PersonalizationAppIntegrationBrowserTest,
 IN_PROC_BROWSER_TEST_P(PersonalizationAppIntegrationBrowserTest,
                        PersonalizationAppDisablesWindowBackdrop) {
   WaitForTestSystemAppInstall();
-  Browser* browser;
+  BrowserWindowInterface* browser = nullptr;
   content::WebContents* web_contents = LaunchAppAtWallpaperSubpage(&browser);
   aura::Window* window = web_contents->GetTopLevelNativeWindow();
 

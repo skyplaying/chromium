@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include "base/numerics/byte_conversions.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "crypto/kdf.h"
@@ -61,31 +62,31 @@ uint64_t CalculatePasswordHash(std::u16string_view text,
   };
 
   std::array<uint8_t, 8> result;
-  crypto::kdf::DeriveKeyScrypt(kScryptParams, base::as_byte_span(text),
-                               base::as_byte_span(salt), result,
-                               MakeCryptoPassKeyForPasswordHash());
+  crypto::kdf::Scrypt(kScryptParams, base::as_byte_span(text),
+                      base::as_byte_span(salt), result,
+                      MakeCryptoPassKeyForPasswordHash());
 
   uint64_t val = base::U64FromLittleEndian(result);
   // Take 37 bits of |hash|.
   return val & UINT64_C(0x1FFFFFFFFF);
 }
 
-std::string CanonicalizeUsername(const std::string& username,
+std::string CanonicalizeUsername(std::string_view username,
                                  bool is_gaia_account) {
-  std::vector<std::string> parts = base::SplitString(
+  std::vector<std::string_view> parts = base::SplitStringPiece(
       username, "@", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
   if (parts.size() != 2U) {
     if (is_gaia_account && parts.size() == 1U) {
-      return gaia::CanonicalizeEmail(username + "@gmail.com");
+      return gaia::CanonicalizeEmail(base::StrCat({username, "@gmail.com"}));
     }
-    return username;
+    return std::string(username);
   }
   return gaia::CanonicalizeEmail(username);
 }
 
-bool AreUsernamesSame(const std::string& username1,
+bool AreUsernamesSame(std::string_view username1,
                       bool is_username1_gaia_account,
-                      const std::string& username2,
+                      std::string_view username2,
                       bool is_username2_gaia_account) {
   if (is_username1_gaia_account != is_username2_gaia_account) {
     return false;

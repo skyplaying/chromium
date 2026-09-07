@@ -15,6 +15,7 @@
 #include "cc/input/browser_controls_state.h"
 #include "cc/input/input_handler.h"
 #include "cc/input/snap_fling_controller.h"
+#include "cc/metrics/scroll_sequence_tracker.h"
 #include "cc/paint/element_id.h"
 #include "components/viz/common/features.h"
 #include "third_party/blink/public/common/input/web_coalesced_input_event.h"
@@ -224,6 +225,8 @@ class PLATFORM_EXPORT InputHandlerProxy : public cc::InputHandlerClient,
   void SetHandwritingRadiusOnInputThread(int handwriting_radius);
   int HandwritingRadiusOnInputThread() const { return handwriting_radius_; }
 
+  void SetPointerLockedOnInputThread(bool is_locked);
+
   void RequestCallbackAfterEventQueueFlushed(base::OnceClosure callback);
 
   // cc::InputHandlerClient implementation.
@@ -278,8 +281,6 @@ class PLATFORM_EXPORT InputHandlerProxy : public cc::InputHandlerClient,
   // Returns the ElementId of the currently latched scroller, or invalid id.
   cc::ElementId LatchedScrollerElementId() const;
 
-  bool HandlingFlingForTesting() const { return handling_fling_; }
-
  private:
   friend class test::TestInputHandlerProxy;
   friend class test::InputHandlerProxyTest;
@@ -295,13 +296,14 @@ class PLATFORM_EXPORT InputHandlerProxy : public cc::InputHandlerClient,
 
   // Helper functions for handling more complicated input events.
   EventDisposition HandleMouseWheel(const blink::WebMouseWheelEvent& event);
-  EventDisposition HandleGestureScrollBegin(
-      const blink::WebGestureEvent& event);
+  EventDisposition HandleGestureScrollBegin(const blink::WebGestureEvent& event,
+                                            cc::EventMetrics* metrics);
   EventDisposition HandleGestureScrollUpdate(
       const blink::WebGestureEvent& event,
       cc::EventMetrics* metrics,
       int64_t trace_id);
-  EventDisposition HandleGestureScrollEnd(const blink::WebGestureEvent& event);
+  EventDisposition HandleGestureScrollEnd(const blink::WebGestureEvent& event,
+                                          cc::EventMetrics* metrics);
   EventDisposition HandleTouchStart(EventWithCallback* event_with_callback);
   EventDisposition HandleTouchMove(EventWithCallback* event_with_callback);
   EventDisposition HandleTouchEnd(EventWithCallback* event_with_callback);
@@ -317,7 +319,8 @@ class PLATFORM_EXPORT InputHandlerProxy : public cc::InputHandlerClient,
       EventWithCallback* event_with_callback,
       const gfx::PointF& position);
 
-  void InputHandlerScrollEnd();
+  cc::InputHandlerScrollEndResult InputHandlerScrollEnd(
+      std::optional<cc::InputHandler::ScrollVector> scroll_state);
 
   // Request a frame of animation from the InputHandler or
   // SynchronousInputHandler. They can provide that by calling Animate().
@@ -354,10 +357,11 @@ class PLATFORM_EXPORT InputHandlerProxy : public cc::InputHandlerClient,
     event_attribution_enabled_ = enabled;
   }
 
-  void RecordScrollBegin(blink::WebGestureDevice device,
-                         uint32_t main_thread_hit_tested_reasons,
-                         uint32_t main_thread_repaint_reasons,
-                         bool raster_inducing = false);
+  void RecordScrollBegin(
+      blink::WebGestureDevice device,
+      cc::MainThreadHitTestReasons main_thread_hit_tested_reasons,
+      cc::MainThreadRepaintReasons main_thread_repaint_reasons,
+      bool raster_inducing = false);
 
   bool HasQueuedEventsReadyForDispatch(
       bool frame_aligned,
@@ -381,6 +385,14 @@ class PLATFORM_EXPORT InputHandlerProxy : public cc::InputHandlerClient,
   // update for the current frame.
   void GenerateSyntheticScrollPredictionFromFutureEvent(
       const viz::BeginFrameArgs& args);
+
+  // Returns the dispatch mode, overriding `kUseScrollPredictorForEmptyQueue` to
+  // `kDispatchScrollEventsImmediately` for non-touchscreen inputs
+  // (touchpads/wheels etc.) when `kUpdateScrollPredictorInputMapping` is
+  // enabled.
+  cc::InputHandlerClient::ScrollEventDispatchMode
+  GetEffectiveScrollEventDispatchMode(
+      std::optional<blink::WebGestureDevice> device) const;
 
   raw_ptr<InputHandlerProxyClient> client_;
 
@@ -435,18 +447,23 @@ class PLATFORM_EXPORT InputHandlerProxy : public cc::InputHandlerClient,
   // for "near-miss" pointer scenarios.
   int handwriting_radius_ = blink::kStylusWritingHitTestRadius;
 
+  // Set by the main thread. This is set when the pointer lock is acquired,
+  // and unset when exit from the pointer lock.
+  bool is_pointer_locked_ = false;
+
   // Tracks whether the first scroll update gesture event has been seen after a
   // scroll begin. This is set/reset when scroll gestures are processed in
   // HandleInputEventWithLatencyInfo and shouldn't be used outside the scope
   // of that method.
   bool has_seen_first_gesture_scroll_update_after_begin_;
 
-  // Whether the last injected scroll gesture was a GestureScrollBegin. Used to
-  // determine which GestureScrollUpdate is the first in a gesture sequence for
-  // latency classification. This is separate from
-  // |is_first_gesture_scroll_update_| and is used to determine which type of
-  // latency component should be added for injected GestureScrollUpdates.
-  bool last_injected_gesture_was_begin_;
+  // Tracks the current injected scroll sequence for metrics purposes. Among
+  // other things, it determines whether a scroll-update is the first one in an
+  // injected scroll sequence or not. This is separate from
+  // `has_seen_first_gesture_scroll_update_after_begin_` and is used to
+  // determine which type of latency component should be added for injected
+  // GestureScrollUpdates.
+  cc::ScrollSequenceTracker injected_scroll_tracker_;
 
   raw_ptr<const base::TickClock> tick_clock_;
 
@@ -466,8 +483,7 @@ class PLATFORM_EXPORT InputHandlerProxy : public cc::InputHandlerClient,
   // will come by calling ContinueScrollBeginAfterMainThreadHitTest where the
   // queue will be flushed and this bit cleared. Used only in scroll
   // unification.
-  uint32_t scroll_begin_main_thread_hit_test_reasons_ =
-      cc::MainThreadScrollingReason::kNotScrollingOnMain;
+  cc::MainThreadHitTestReasons scroll_begin_main_thread_hit_test_reasons_;
 
   // This bit can be used to disable event attribution in cases where the
   // hit test information is unnecessary (e.g. tests).
@@ -496,14 +512,7 @@ class PLATFORM_EXPORT InputHandlerProxy : public cc::InputHandlerClient,
   // Cached value of the kUpdateScrollPredictorInputMapping feature flag.
   const bool update_scroll_predictor_;
 
-  // Cached value of the kFlingSchedulingImprovements feature flag.
-  const bool fling_scheduling_improvements_;
 
-  // Tracks whether a fling is currently in progress. This is only set to true
-  // if `fling_scheduling_improvements_` is enabled. When true, input events
-  // are processed up to the current |frame_time| instead of using resampling
-  // offset.
-  bool handling_fling_ = false;
 
   // `cc::InputHandlerClient::ScrollEventDispatchMode::kEnqueueScrollEvents`:
   // Scroll events arriving in `HandleInputEventWithLatencyInfo` will be

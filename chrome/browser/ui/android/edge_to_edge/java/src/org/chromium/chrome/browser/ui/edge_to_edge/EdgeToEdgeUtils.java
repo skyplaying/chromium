@@ -6,6 +6,7 @@ package org.chromium.chrome.browser.ui.edge_to_edge;
 
 import android.app.Activity;
 import android.content.Context;
+import android.os.Build;
 import android.os.Build.VERSION_CODES;
 import android.view.Window;
 
@@ -29,6 +30,7 @@ import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.ui.native_page.NativePage;
 import org.chromium.components.browser_ui.display_cutout.DisplayCutoutController;
 import org.chromium.components.browser_ui.display_cutout.DisplayCutoutController.SafeAreaInsetsTracker;
+import org.chromium.components.embedder_support.util.UrlUtilities;
 import org.chromium.content_public.browser.WebContentsObserver;
 import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.display.DisplayUtil;
@@ -45,7 +47,6 @@ import java.util.function.Supplier;
 public class EdgeToEdgeUtils {
     private static final String TAG = "E2E_Utils";
     private static @Nullable Boolean sIsTargetSdkEnforceEdgeToEdge;
-    private static boolean sObservedTappableNavigationBar;
     private static boolean sAlwaysDrawWebEdgeToEdgeForTesting;
     private static @Nullable Boolean sHas3ButtonNavBarForTesting;
 
@@ -99,16 +100,6 @@ public class EdgeToEdgeUtils {
         int NUM_ENTRIES = 5;
     }
 
-    /**
-     * Whether the edge-to-edge bottom chin is enabled.
-     *
-     * <p>When enabled, Chrome will replace the OS navigation bar with a thin "Chin" layer in the
-     * browser controls and can be scrolled off the screen on web pages.
-     */
-    public static boolean isBottomChinFeatureEnabled() {
-        return ChromeFeatureList.sEdgeToEdgeBottomChin.isEnabled();
-    }
-
     /** Whether it is allowed to use other insets as a backup for missing navigation bar insets. */
     public static boolean isUseBackupNavbarInsetsEnabled() {
         return ChromeFeatureList.sEdgeToEdgeUseBackupNavbarInsets.isEnabled();
@@ -140,8 +131,12 @@ public class EdgeToEdgeUtils {
             return false;
         }
 
-        if (!isBottomChinFeatureEnabled()) return false;
         return !DeviceInfo.isAutomotive() && !hasTappableNavigationBar(activity.getWindow());
+    }
+
+    /** Whether the edge-to-edge feature is enabled on automotive. */
+    public static boolean isEdgeToEdgeAutomotiveEnabled() {
+        return ChromeFeatureList.sEdgeToEdgeAutomotive.isEnabled();
     }
 
     /**
@@ -199,7 +194,7 @@ public class EdgeToEdgeUtils {
             return false;
         }
 
-        if (DeviceInfo.isAutomotive()) {
+        if (DeviceInfo.isAutomotive() && !isEdgeToEdgeAutomotiveEnabled()) {
             return false;
         }
 
@@ -213,14 +208,6 @@ public class EdgeToEdgeUtils {
             Log.i(TAG, "sIsTargetSdkEnforceEdgeToEdge " + sIsTargetSdkEnforceEdgeToEdge);
         }
         return sIsTargetSdkEnforceEdgeToEdge;
-    }
-
-    /**
-     * Whether reporting the page's safe area constraint to the bottom chin. Required when {@link
-     * isEdgeToEdgeBottomChinEnabled}.
-     */
-    public static boolean isSafeAreaConstraintEnabled() {
-        return isBottomChinFeatureEnabled();
     }
 
     /**
@@ -273,13 +260,13 @@ public class EdgeToEdgeUtils {
                     ineligibleName, IneligibilityReason.FORM_FACTOR, IneligibilityReason.NUM_TYPES);
         }
 
-        if (android.os.Build.VERSION.SDK_INT < VERSION_CODES.R) {
+        if (Build.VERSION.SDK_INT < VERSION_CODES.R) {
             eligible = false;
             RecordHistogram.recordEnumeratedHistogram(
                     ineligibleName, IneligibilityReason.OS_VERSION, IneligibilityReason.NUM_TYPES);
         }
 
-        if (DeviceInfo.isAutomotive()) {
+        if (DeviceInfo.isAutomotive() && !isEdgeToEdgeAutomotiveEnabled()) {
             eligible = false;
             RecordHistogram.recordEnumeratedHistogram(
                     ineligibleName, IneligibilityReason.DEVICE_TYPE, IneligibilityReason.NUM_TYPES);
@@ -310,8 +297,8 @@ public class EdgeToEdgeUtils {
     static boolean shouldDrawToEdge(
             boolean isPageOptedIntoEdgeToEdge, @LayoutType int layoutType, int bottomInset) {
         return isPageOptedIntoEdgeToEdge
-                || (isBottomChinFeatureEnabled() && isBottomChinAllowed(layoutType, bottomInset))
-                || (layoutType == LayoutType.TAB_SWITCHER);
+                || isBottomChinAllowed(layoutType, bottomInset)
+                || (layoutType == LayoutType.HUB);
     }
 
     /**
@@ -370,13 +357,21 @@ public class EdgeToEdgeUtils {
         return safeAreaInsetsTracker != null && safeAreaInsetsTracker.hasSafeAreaConstraint();
     }
 
-    /** Whether a native tab will be drawn edge to to edge. */
+    /** Whether a native tab will be drawn edge to edge. */
     static boolean isNativeTabDrawingToEdge(@Nullable Tab activeTab) {
         // TODO(crbug.com/339025702): Check if we are in tab switcher when activeTab is null.
         if (activeTab == null) return false;
 
         NativePage nativePage = activeTab.getNativePage();
         return nativePage != null && nativePage.supportsEdgeToEdge();
+    }
+
+    /** Whether a native tab will be drawn top edge to edge. */
+    static boolean isNativeTabDrawingToTopEdge(@Nullable Tab activeTab) {
+        if (activeTab == null) return false;
+
+        NativePage nativePage = activeTab.getNativePage();
+        return nativePage != null && nativePage.supportsEdgeToEdgeOnTop();
     }
 
     /**
@@ -404,17 +399,10 @@ public class EdgeToEdgeUtils {
             return sHas3ButtonNavBarForTesting;
         }
 
-        if (sObservedTappableNavigationBar
-                && ChromeFeatureList.sEdgeToEdgeMonitorConfigurations.isEnabled()) {
-            return true;
-        }
-
         var rootInsets = insetsSupplier.get();
         assert rootInsets != null;
 
-        boolean hasTappableNavBar = hasTappableNavigationBarFromInsets(rootInsets);
-        sObservedTappableNavigationBar |= hasTappableNavBar;
-        return hasTappableNavBar;
+        return hasTappableNavigationBarFromInsets(rootInsets);
     }
 
     /** Returns whether the given window's insets contains a tappable navigation bar. */
@@ -470,11 +458,6 @@ public class EdgeToEdgeUtils {
         ResettersForTesting.register(() -> sAlwaysDrawWebEdgeToEdgeForTesting = false);
     }
 
-    public static void setObservedTappableNavigationBarForTesting(boolean observed) {
-        sObservedTappableNavigationBar = observed;
-        ResettersForTesting.register(() -> sObservedTappableNavigationBar = false);
-    }
-
     public static void setHas3ButtonNavBarForTesting(Boolean has3ButtonNavBar) {
         sHas3ButtonNavBarForTesting = has3ButtonNavBar;
         ResettersForTesting.register(() -> sHas3ButtonNavBarForTesting = null);
@@ -495,5 +478,46 @@ public class EdgeToEdgeUtils {
         // the display cutout / camera will not show a gesture inset (the other side will still show
         // an inset).
         return nonMandatorySystemGestures.left > 0 || nonMandatorySystemGestures.right > 0;
+    }
+
+    /** Returns whether the EdgelessTopInset feature flag is enabled. */
+    public static boolean isEdgelessTopInsetEnabled() {
+        if (Build.VERSION.SDK_INT < VERSION_CODES.R) {
+            return false;
+        }
+        return ChromeFeatureList.sEdgelessTopInset.isEnabled();
+    }
+
+    /**
+     * Returns whether the given Tab supports drawing top edge to edge.
+     *
+     * @param tab The Tab to check.
+     * @return True if the tab is a native page that supports top edge to edge, false otherwise.
+     */
+    public static boolean supportsEnableTopEdgeToEdge(@Nullable Tab tab) {
+        // TODO(crbug.com/498302496): Currently top edge-to-edge is only supported on native pages.
+        // Support for web pages (e.g. viewport-fit=cover) will be added in future iterations.
+        if (!isEdgelessTopInsetEnabled() || tab == null) {
+            return false;
+        }
+
+        if (tab.isNativePage()) {
+            return isNativeTabDrawingToTopEdge(tab);
+        }
+
+        return false;
+    }
+
+    /**
+     * Returns whether the given tab is a regular (non-incognito) New Tab Page.
+     *
+     * @param tab The Tab to check.
+     * @return True if the tab is non-incognito and has an NTP URL.
+     */
+    public static boolean isRegularNtp(@Nullable Tab tab) {
+        return tab != null
+                && !tab.isIncognito()
+                && tab.getUrl() != null
+                && UrlUtilities.isNtpUrl(tab.getUrl());
     }
 }

@@ -17,8 +17,8 @@
 #include "chrome/browser/ash/file_manager/volume_manager.h"
 #include "chrome/browser/ash/policy/skyvault/local_files_migration_constants.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/notifications/notification_display_service_tester.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "storage/browser/file_system/external_mount_points.h"
 
@@ -42,7 +42,7 @@ void SkyvaultTestBase::TearDown() {
 }
 
 void SkyvaultTestBase::SetUpMyFiles() {
-  my_files_dir_ = GetMyFilesPath(browser()->profile());
+  my_files_dir_ = GetMyFilesPath(browser()->GetProfile());
   {
     base::ScopedAllowBlockingForTesting allow_blocking;
     ASSERT_TRUE(base::CreateDirectory(my_files_dir_));
@@ -174,7 +174,7 @@ base::FilePath SkyvaultGoogleDriveTest::SetUpSourceFile(
   base::FilePath source_file_path = CopyTestFile(test_file_name, source_path);
 
   base::FilePath local_relative_path;
-  GetMyFilesPath(browser()->profile())
+  GetMyFilesPath(browser()->GetProfile())
       .AppendRelativePath(source_file_path, &local_relative_path);
   FileInfo info(test_file_name, local_relative_path);
   // Check that the source file exists at the intended source location and is
@@ -227,7 +227,8 @@ DriveIntegrationService* SkyvaultGoogleDriveTest::CreateDriveIntegrationService(
       std::make_unique<file_manager::test::FakeSimpleDriveFsHelper>(
           profile, drive_mount_point_);
   return new DriveIntegrationService(
-      g_browser_process->local_state(), profile, "", drive_mount_point_,
+      g_browser_process->local_state(), profile,
+      IdentityManagerFactory::GetForProfile(profile), "", drive_mount_point_,
       fake_drivefs_helpers_[profile]->CreateFakeDriveFsListenerFactory());
 }
 

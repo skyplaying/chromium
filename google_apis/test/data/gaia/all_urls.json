@@ -30,6 +30,9 @@
     "people_api_origin_url": {
       "url": "https://people.will-be-overridden.com"
     },
+    "kids_management_api_origin_url": {
+      "url": "https://kidsmanagement.will-be-overridden.com"
+    },
     "embedded_setup_chromeos_url_v2": {
       "url": "https://accounts.example.com/embedded/setup/v2/chromeos"
     },
@@ -56,6 +59,9 @@
     },
     "signin_chrome_sync_keys_recoverability_degraded_url": {
       "url": "https://accounts.example.com/encryption/unlock/example-platform?kdi=CAIaDgoKY2hyb21lc3luYxAB"
+    },
+    "signin_chrome_passkey_unlock_desktop_embedded_url": {
+      "url": "https://accounts.example.com/encryption/unlock/desktopembedded?kdi=CAESDgoMaHdfcHJvdGVjdGVk"
     },
     "service_logout_url": {
       "url": "https://accounts.example.com/Logout"
@@ -84,17 +90,23 @@
     "account_capabilities_batch_get_url": {
       "url": "https://accountcapabilities.exampleapis.com/v1/capabilities"
     },
-    "account_capabilities_get_all_visible_url": {
-      "url": "https://accountcapabilities.exampleapis.com/v1/getAllVisibleCapabilities"
-    },
     "get_check_connection_info_url": {
       "url": "https://accounts.example.com/GetCheckConnectionInfo"
     },
     "oauth2_token_url": {
       "url": "https://www.exampleapis.com/oauth2/v4/token"
     },
+    "mtls_oauth2_token_url": {
+      "url": "https://mtls.exampleapis.com/token"
+    },
     "oauth2_issue_token_url": {
       "url": "https://oauthaccountmanager.exampleapis.com/v1/issuetoken"
+    },
+    "mtls_oauth2_issue_token_url": {
+      "url": "https://mtls.oauthaccountmanager.exampleapis.com/v1/issuetoken"
+    },
+    "oauth2_upgrade_token_url": {
+      "url": "https://oauthaccountmanager.exampleapis.com/v1/upgradetoken"
     },
     "oauth2_token_info_url": {
       "url": "https://www.exampleapis.com/oauth2/v2/tokeninfo"

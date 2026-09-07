@@ -14,9 +14,9 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
 #include "base/synchronization/lock.h"
+#include "base/task/current_thread.h"
 #include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
-#include "mojo/core/embedder/embedder.h"
 #include "mojo/core/ipcz_api.h"
 #include "mojo/core/ipcz_driver/driver.h"
 #include "mojo/core/ipcz_driver/transport.h"
@@ -125,7 +125,6 @@ thread_local ThreadLocalNode* g_thread_local_node;
 }  // namespace
 
 ThreadLocalNode::ThreadLocalNode(base::PassKey<ThreadLocalNode>) {
-  CHECK(IsDirectReceiverSupported());
   CHECK(!g_thread_local_node);
   g_thread_local_node = this;
 
@@ -152,8 +151,9 @@ ThreadLocalNode::ThreadLocalNode(base::PassKey<ThreadLocalNode>) {
       .memory_flags = IPCZ_MEMORY_FIXED_PARCEL_CAPACITY,
   };
   IpczHandle node;
-  const IpczResult create_result = ipcz.CreateNode(
-      &core::ipcz_driver::kDriver, IPCZ_NO_FLAGS, &create_options, &node);
+  const IpczResult create_result =
+      ipcz.CreateNode(&core::ipcz_driver::GetIpczDriver(), IPCZ_NO_FLAGS,
+                      &create_options, &node);
   CHECK_EQ(create_result, IPCZ_RESULT_OK);
   node_.reset(Handle(node));
 
@@ -362,8 +362,12 @@ void ThreadLocalNode::OnTransferredPortalAvailable() {
 
 namespace mojo {
 
-bool IsDirectReceiverSupported() {
-  return core::IsMojoIpczEnabled();
+bool IsAsyncIOSupported() {
+  if (!base::CurrentThread::IsSet()) {
+    return false;
+  }
+  return base::CurrentIOThread::IsSet() ||
+         base::CurrentThread::Get()->IsAsyncIOSupported();
 }
 
 #if BUILDFLAG(IS_WIN)
@@ -371,9 +375,7 @@ bool IsDirectReceiverSupported() {
 void CreateDirectReceiverTransportBeforeSandbox() {
   CHECK(!internal::g_use_precreated_transport);
   internal::g_use_precreated_transport = true;
-  if (IsDirectReceiverSupported()) {
-    internal::TransportPairStorage::Get().CreateTransportPairBeforeSandbox();
-  }
+  internal::TransportPairStorage::Get().CreateTransportPairBeforeSandbox();
 }
 
 #endif  // BUILDFLAG(IS_WIN)

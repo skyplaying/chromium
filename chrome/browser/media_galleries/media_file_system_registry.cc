@@ -16,8 +16,8 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/singleton.h"
 #include "base/memory/weak_ptr.h"
+#include "base/no_destructor.h"
 #include "build/build_config.h"
 #include "chrome/browser/media_galleries/fileapi/media_file_system_backend.h"
 #include "chrome/browser/media_galleries/fileapi/mtp_device_map_service.h"
@@ -30,6 +30,7 @@
 #include "components/storage_monitor/storage_monitor.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/page_user_data.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
@@ -55,8 +56,9 @@ class MediaFileSystemRegistryShutdownNotifierFactory
     : public BrowserContextKeyedServiceShutdownNotifierFactory {
  public:
   static MediaFileSystemRegistryShutdownNotifierFactory* GetInstance() {
-    return base::Singleton<
-        MediaFileSystemRegistryShutdownNotifierFactory>::get();
+    static base::NoDestructor<MediaFileSystemRegistryShutdownNotifierFactory>
+        instance;
+    return instance.get();
   }
 
   MediaFileSystemRegistryShutdownNotifierFactory(
@@ -65,8 +67,7 @@ class MediaFileSystemRegistryShutdownNotifierFactory
       const MediaFileSystemRegistryShutdownNotifierFactory&) = delete;
 
  private:
-  friend struct base::DefaultSingletonTraits<
-      MediaFileSystemRegistryShutdownNotifierFactory>;
+  friend base::NoDestructor<MediaFileSystemRegistryShutdownNotifierFactory>;
 
   MediaFileSystemRegistryShutdownNotifierFactory()
       : BrowserContextKeyedServiceShutdownNotifierFactory(

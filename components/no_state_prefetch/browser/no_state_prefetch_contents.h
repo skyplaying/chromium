@@ -36,7 +36,7 @@ class ProcessMetrics;
 namespace content {
 class BrowserContext;
 class RenderViewHost;
-class SessionStorageNamespace;
+class SessionStorageNamespaceHandle;
 class WebContents;
 class PreloadingAttempt;
 }  // namespace content
@@ -112,12 +112,13 @@ class NoStatePrefetchContents
 
   // Starts rendering the contents in the prerendered state.
   // |bounds| indicates the rectangle that the prerendered page should be in.
-  // |session_storage_namespace| indicates the namespace that the prerendered
-  // page should be part of. |preloading_attempt| allows to log metrics for this
-  // NoStatePrefetch attempt.
+  // |session_storage_namespace| indicates the namespace of the launching tab
+  // and is recorded for use in Matches(); the hidden WebContents is given its
+  // own independent namespace. |preloading_attempt| allows to log metrics for
+  // this NoStatePrefetch attempt.
   virtual void StartPrerendering(
       const gfx::Rect& bounds,
-      content::SessionStorageNamespace* session_storage_namespace,
+      content::SessionStorageNamespaceHandle* session_storage_namespace,
       base::WeakPtr<content::PreloadingAttempt> preloading_attempt);
 
   // Verifies that the prerendering is not using too many resources, and kills
@@ -144,7 +145,7 @@ class NoStatePrefetchContents
   // |url| and |session_storage_namespace|.
   bool Matches(
       const GURL& url,
-      content::SessionStorageNamespace* session_storage_namespace) const;
+      content::SessionStorageNamespaceHandle* session_storage_namespace) const;
 
   // content::WebContentsObserver implementation.
   void RenderFrameCreated(content::RenderFrameHost* render_frame_host) override;
@@ -215,8 +216,7 @@ class NoStatePrefetchContents
   void NotifyPrefetchStopLoading();
   void NotifyPrefetchStop();
 
-  std::unique_ptr<content::WebContents> CreateWebContents(
-      content::SessionStorageNamespace* session_storage_namespace);
+  std::unique_ptr<content::WebContents> CreateWebContents();
 
   bool prefetching_has_started_ = false;
 

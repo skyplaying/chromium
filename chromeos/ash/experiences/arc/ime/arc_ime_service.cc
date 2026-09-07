@@ -11,8 +11,8 @@
 #include "ash/public/cpp/app_types_util.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/singleton.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/no_destructor.h"
 #include "base/notimplemented.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -160,11 +160,12 @@ class ArcImeServiceFactory
   static constexpr const char* kName = "ArcImeServiceFactory";
 
   static ArcImeServiceFactory* GetInstance() {
-    return base::Singleton<ArcImeServiceFactory>::get();
+    static base::NoDestructor<ArcImeServiceFactory> instance;
+    return instance.get();
   }
 
  private:
-  friend base::DefaultSingletonTraits<ArcImeServiceFactory>;
+  friend base::NoDestructor<ArcImeServiceFactory>;
   ArcImeServiceFactory() = default;
   ~ArcImeServiceFactory() override = default;
 };
@@ -209,6 +210,9 @@ ArcImeService::~ArcImeService() {
   }
 
   if (focused_arc_window_) {
+    if (focused_arc_window_ != focused_arc_window_->GetToplevelWindow()) {
+      focused_arc_window_->GetToplevelWindow()->RemoveObserver(this);
+    }
     focused_arc_window_->RemoveObserver(this);
   }
   arc_window_delegate_->UnregisterFocusObserver();
@@ -291,6 +295,33 @@ void ArcImeService::OnWindowRemoved(aura::Window* removed_window) {
   // children other than ExoSurface e.g. WebContentsViewAura for CustomTabs.
   // Restore the IME focus when such a window is removed.
   ReattachInputMethod(nullptr, focused_arc_window_);
+}
+
+void ArcImeService::OnWindowHierarchyChanging(
+    const HierarchyChangeParams& params) {
+  if (params.receiver == focused_arc_window_ &&
+      params.target->Contains(params.receiver)) {
+    aura::Window* toplevel = focused_arc_window_->GetToplevelWindow();
+    // When the focused child ARC window is leaving its current toplevel window
+    // hierarchy, remove the observer from the toplevel window before detachment
+    // occurs (since GetToplevelWindow() would return the child window itself
+    // after detachment in OnWindowFocused).
+    //
+    // Remove observer if:
+    // 1. The window is being removed from the window tree (!params.new_parent).
+    // 2. The window is moving to a different root window / display
+    //    (params.new_parent->GetRootWindow() !=
+    //     focused_arc_window_->GetRootWindow()).
+    // 3. The window is moving to a different toplevel window
+    //    (params.new_parent->GetToplevelWindow() != toplevel).
+    if (focused_arc_window_ != toplevel &&
+        (!params.new_parent ||
+         params.new_parent->GetRootWindow() !=
+             focused_arc_window_->GetRootWindow() ||
+         params.new_parent->GetToplevelWindow() != toplevel)) {
+      toplevel->RemoveObserver(this);
+    }
+  }
 }
 
 ////////////////////////////////////////////////////////////////////////////////

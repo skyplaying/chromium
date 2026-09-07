@@ -14,7 +14,7 @@
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/extensions/profile_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "content/public/browser/web_contents.h"
 #include "extensions/common/api/automation.h"
 #include "extensions/common/api/automation_internal.h"
@@ -43,8 +43,9 @@ bool ChromeAutomationInternalApiDelegate::CanRequestAutomation(
     const Extension* extension,
     const AutomationInfo* automation_info,
     content::WebContents* contents) {
-  if (automation_info->desktop)
+  if (automation_info->desktop) {
     return true;
+  }
 
   const GURL& url = contents->GetURL();
 
@@ -60,8 +61,9 @@ bool ChromeAutomationInternalApiDelegate::EnableTree(
   arc::ArcAccessibilityHelperBridge* bridge =
       arc::ArcAccessibilityHelperBridge::GetForBrowserContext(
           GetActiveUserContext());
-  if (bridge)
+  if (bridge) {
     return bridge->EnableTree(tree_id);
+  }
 #endif
   return false;
 }

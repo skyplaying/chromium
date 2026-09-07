@@ -4,8 +4,6 @@
 
 import unittest
 
-import six
-
 from telemetry.page import shared_page_state
 from telemetry.core import optparse_argparse_migration as oam
 
@@ -14,7 +12,6 @@ from contrib.cluster_telemetry import skpicture_printer
 
 
 class MockErrorParser(object):
-
   def __init__(self):
     self.err_msg = None
 
@@ -23,11 +20,10 @@ class MockErrorParser(object):
 
 
 class CTBenchmarks(unittest.TestCase):
-
   def setUp(self):
     self.ct_benchmarks = [
-        rasterize_and_record_micro_ct.RasterizeAndRecordMicroCT(),
-        skpicture_printer.SkpicturePrinterCT(),
+      rasterize_and_record_micro_ct.RasterizeAndRecordMicroCT(),
+      skpicture_printer.SkpicturePrinterCT(),
     ]
     self.shared_page_state_class = shared_page_state.SharedMobilePageState
     self.archive_data_file = '/b/test'
@@ -82,21 +78,16 @@ class CTBenchmarks(unittest.TestCase):
         benchmark.ProcessCommandLineArgs(None, parser)
         self.fail('Expected AttributeError')
       except AttributeError as e:
-        if six.PY2:
-          expected_error = (
-              "ArgumentParser instance has no attribute 'archive_data_file'")
-          actual_error = e.message
-        else:
-          expected_error = (
-              "'ArgumentParser' object has no attribute 'archive_data_file'")
-          actual_error = str(e)
-        self.assertEqual(actual_error, expected_error)
+        self.assertEqual(
+          "'ArgumentParser' object has no attribute 'archive_data_file'", str(e)
+        )
 
       # Now add an empty archive_data_file.
       parser.archive_data_file = ''
       benchmark.ProcessCommandLineArgs(self.mock_parser, parser)
-      self.assertEqual('Please specify --archive-data-file.',
-                       self.mock_parser.err_msg)
+      self.assertEqual(
+        'Please specify --archive-data-file.', self.mock_parser.err_msg
+      )
 
   def testCTBenchmarks_missingDataFileUseLiveSites(self):
     for benchmark in self.ct_benchmarks:
@@ -123,12 +114,9 @@ class CTBenchmarks(unittest.TestCase):
         benchmark.ProcessCommandLineArgs(None, parser)
         self.fail('Expected AttributeError')
       except AttributeError as e:
-        if six.PY2:
-          self.assertEqual(
-              "ArgumentParser instance has no attribute 'urls_list'", str(e))
-        else:
-          self.assertEqual(
-              "'ArgumentParser' object has no attribute 'urls_list'", str(e))
+        self.assertEqual(
+          "'ArgumentParser' object has no attribute 'urls_list'", str(e)
+        )
 
       # Now add an empty urls_list.
       parser.urls_list = ''

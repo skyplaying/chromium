@@ -30,9 +30,7 @@ blink::mojom::InputEventResultState MockInputRouterClient::FilterInputEvent(
 
   // Mimic filtering behavior in production code during paint-holding, see
   // `RenderInputRouter::FilterInputEvent`.
-  if (base::FeatureList::IsEnabled(
-          blink::features::kDropInputEventsWhilePaintHolding) &&
-      input_router_ && !input_router_->IsActive()) {
+  if (input_router_ && !input_router_->IsActive()) {
     return blink::mojom::InputEventResultState::kNoConsumerExists;
   }
   return filter_state_;
@@ -61,6 +59,8 @@ void MockInputRouterClient::OnSetCompositorAllowedTouchAction(
 }
 
 void MockInputRouterClient::DidStartScrollingViewport() {}
+
+void MockInputRouterClient::OnInputRouterActive() {}
 
 void MockInputRouterClient::ForwardGestureEventWithLatencyInfo(
     const blink::WebGestureEvent& gesture_event,

@@ -43,9 +43,6 @@ import java.util.List;
 @RunWith(ChromeJUnit4ClassRunner.class)
 @DoNotBatch(reason = "Activity should be restarted")
 public class SigninSurveyControllerTest {
-    private static final String TRIGGER =
-            ":" + TestSurveyUtils.TRIGGER_ID_PARAM_NAME + "/" + TestSurveyUtils.TEST_TRIGGER_ID_FOO;
-
     @Rule
     public FreshCtaTransitTestRule mActivityTestRule =
             ChromeTransitTestRules.freshChromeTabbedActivityRule();
@@ -65,51 +62,51 @@ public class SigninSurveyControllerTest {
 
     @Test
     @MediumTest
-    @Features.EnableFeatures(SigninFeatures.CHROME_ANDROID_IDENTITY_SURVEY_FIRST_RUN + TRIGGER)
     public void acceptFreSigninSurvey() {
-        acceptSigninSurvey(SigninSurveyController.SigninSurveyType.FRE);
+        acceptSigninSurvey(
+                SigninSurveyController.SigninSurveyType.FRE, "HhgAhQYhw0tK1KeaPYj0NeTaRKBh");
     }
 
     @Test
     @MediumTest
-    @Features.EnableFeatures(SigninFeatures.CHROME_ANDROID_IDENTITY_SURVEY_BOOKMARK_PROMO + TRIGGER)
     public void acceptBookmarkSigninSurvey() {
-        acceptSigninSurvey(SigninSurveyController.SigninSurveyType.BOOKMARK_PROMO);
+        acceptSigninSurvey(
+                SigninSurveyController.SigninSurveyType.BOOKMARK_PROMO,
+                "o2YBX3ZJc0tK1KeaPYj0UveLWhmf");
     }
 
     @Test
     @MediumTest
-    @Features.EnableFeatures(
-            SigninFeatures.CHROME_ANDROID_IDENTITY_SURVEY_NTP_SIGNIN_BUTTON + TRIGGER)
     public void acceptNtpSigninButton() {
-        acceptSigninSurvey(SigninSurveyController.SigninSurveyType.NTP_SIGNIN_BUTTON);
+        acceptSigninSurvey(
+                SigninSurveyController.SigninSurveyType.NTP_SIGNIN_BUTTON,
+                "yirfCKnhD0tK1KeaPYj0P9BTzPNw");
     }
 
     @Test
     @MediumTest
-    @Features.EnableFeatures(
-            SigninFeatures.CHROME_ANDROID_IDENTITY_SURVEY_NTP_ACCOUNT_AVATAR_TAP + TRIGGER)
     public void acceptNtpAccountAvatarTap() {
-        acceptSigninSurvey(SigninSurveyController.SigninSurveyType.NTP_ACCOUNT_AVATAR_TAP);
+        acceptSigninSurvey(
+                SigninSurveyController.SigninSurveyType.NTP_ACCOUNT_AVATAR_TAP,
+                "DujcsCGkZ0tK1KeaPYj0RGm9FgKX");
     }
 
     @Test
     @MediumTest
-    @Features.EnableFeatures(SigninFeatures.CHROME_ANDROID_IDENTITY_SURVEY_NTP_PROMO + TRIGGER)
     public void acceptNtpPromoSigninSurvey() {
-        acceptSigninSurvey(SigninSurveyController.SigninSurveyType.NTP_PROMO);
+        acceptSigninSurvey(
+                SigninSurveyController.SigninSurveyType.NTP_PROMO, "15CWgMniG0tK1KeaPYj0RkWoZ4B9");
     }
 
     @Test
     @MediumTest
-    @Features.EnableFeatures(SigninFeatures.CHROME_ANDROID_IDENTITY_SURVEY_WEB + TRIGGER)
     public void acceptWebSigninSurvey() {
-        acceptSigninSurvey(SigninSurveyController.SigninSurveyType.WEB);
+        acceptSigninSurvey(
+                SigninSurveyController.SigninSurveyType.WEB, "36F2N72TP0tK1KeaPYj0SdXcHEJ4");
     }
 
     @Test
     @MediumTest
-    @Features.EnableFeatures(SigninFeatures.CHROME_ANDROID_IDENTITY_SURVEY_BOOKMARK_PROMO + TRIGGER)
     public void dismissSigninSurvey() {
         showSigninSurvey(SigninSurveyController.SigninSurveyType.BOOKMARK_PROMO);
         waitForSurveyMessageToShow();
@@ -119,14 +116,14 @@ public class SigninSurveyControllerTest {
 
         Assert.assertTrue(
                 "Survey displayed not recorded.",
-                mTestSurveyComponentRule.isPromptShownForTriggerId(
-                        TestSurveyUtils.TEST_TRIGGER_ID_FOO));
+                mTestSurveyComponentRule.isPromptShownForTriggerId("o2YBX3ZJc0tK1KeaPYj0UveLWhmf"));
     }
 
     // Tests that the survey is not shown for a type that is not enabled by the feature.
     @Test
     @MediumTest
-    @Features.EnableFeatures(SigninFeatures.CHROME_ANDROID_IDENTITY_SURVEY_BOOKMARK_PROMO + TRIGGER)
+    // Disable the feature as it's enabled in testing/variations/fieldtrial_testing_config.json.
+    @Features.DisableFeatures(SigninFeatures.CHROME_ANDROID_IDENTITY_SURVEY_WEB)
     public void notShownForDifferentType() {
         Profile profile =
                 ThreadUtils.runOnUiThreadBlocking(ProfileManager::getLastUsedRegularProfile);
@@ -139,19 +136,19 @@ public class SigninSurveyControllerTest {
                 CriteriaHelper.TimeoutException.class, this::waitForSurveyMessageToShow);
     }
 
-    private void acceptSigninSurvey(@SigninSurveyController.SigninSurveyType int type) {
+    private void acceptSigninSurvey(
+            @SigninSurveyController.SigninSurveyType int type, String triggerId) {
         showSigninSurvey(type);
         waitForSurveyMessageToShow();
 
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
-                    var unused =
-                            mSurveyMessage.get(MessageBannerProperties.ON_PRIMARY_ACTION).get();
+                    var _ = mSurveyMessage.get(MessageBannerProperties.ON_PRIMARY_ACTION).get();
                 });
 
         Assert.assertEquals(
                 "Last shown survey triggerId do not match.",
-                TestSurveyUtils.TEST_TRIGGER_ID_FOO,
+                triggerId,
                 mTestSurveyComponentRule.getLastShownTriggerId());
     }
 

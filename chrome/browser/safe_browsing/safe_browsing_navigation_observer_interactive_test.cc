@@ -7,19 +7,22 @@
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/safe_browsing/test_safe_browsing_navigation_observer_manager.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/prefs/pref_service.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "components/sessions/content/session_tab_helper.h"
+#include "components/sessions/core/session_id.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/prerender_test_util.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "net/dns/mock_host_resolver.h"
+#include "ui/base/clipboard/clipboard.h"
 
 namespace safe_browsing {
 
@@ -56,14 +59,14 @@ class SBNavigationObserverBrowserTest : public InProcessBrowserTest {
     // Disable Safe Browsing service so we can directly control when
     // SafeBrowsingNavigationObserverManager and SafeBrowsingNavigationObserver
     // are instantiated.
-    browser()->profile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled,
-                                                 false);
+    browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kSafeBrowsingEnabled,
+                                                    false);
     ASSERT_TRUE(embedded_test_server()->Start());
     host_resolver()->AddRule("*", "127.0.0.1");
     observer_manager_ =
         std::make_unique<TestSafeBrowsingNavigationObserverManager>(browser());
     observer_manager_->ObserveContents(
-        browser()->tab_strip_model()->GetActiveWebContents());
+        browser()->GetTabStripModel()->GetActiveWebContents());
     ASSERT_TRUE(InitialSetup());
   }
 
@@ -74,13 +77,13 @@ class SBNavigationObserverBrowserTest : public InProcessBrowserTest {
       return false;
     }
 
-    browser()->profile()->GetPrefs()->SetBoolean(prefs::kPromptForDownload,
-                                                 false);
+    browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kPromptForDownload,
+                                                    false);
     return true;
   }
 
   content::WebContents* web_contents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
   void AppendRecentNavigations(int recent_navigation_count,
@@ -93,9 +96,27 @@ class SBNavigationObserverBrowserTest : public InProcessBrowserTest {
     return observer_manager_->navigation_event_list();
   }
 
+  // Waits until a URL is copied to the clipboard.
+  class TestClipboardObserver : public ui::Clipboard::ClipboardWriteObserver {
+   public:
+    TestClipboardObserver() = default;
+    ~TestClipboardObserver() override = default;
+
+    void OnCopyURL(const GURL& url,
+                   const GURL& source_frame_url,
+                   const GURL& source_main_frame_url) override {
+      run_loop_.Quit();
+    }
+
+    void Wait() { run_loop_.Run(); }
+
+   private:
+    base::RunLoop run_loop_;
+  };
+
   void CopyUrlToWebClipboard(std::string urlToCopy,
                              std::optional<int> subframe_index = std::nullopt) {
-    TabStripModel* tab_strip = browser()->tab_strip_model();
+    TabStripModel* tab_strip = browser()->GetTabStripModel();
     content::WebContents* current_web_contents =
         tab_strip->GetActiveWebContents();
     content::RenderFrameHost* script_executing_frame =
@@ -108,9 +129,14 @@ class SBNavigationObserverBrowserTest : public InProcessBrowserTest {
     content::HandleMissingKeyWindow();
 #endif
     script_executing_frame->GetView()->Focus();
+
+    TestClipboardObserver observer;
+    ui::Clipboard::GetForCurrentThread()->AddObserver(&observer);
     std::string script = base::StringPrintf(
-        "navigator.clipboard.writeText('%s');", urlToCopy.c_str());
+        "navigator.clipboard.writeText('%s')", urlToCopy.c_str());
     ASSERT_TRUE(content::ExecJs(script_executing_frame, script));
+    observer.Wait();
+    ui::Clipboard::GetForCurrentThread()->RemoveObserver(&observer);
   }
 
   void IdentifyReferrerChainByEventURL(
@@ -204,7 +230,7 @@ IN_PROC_BROWSER_TEST_F(SBNavigationObserverBrowserTest,
   ASSERT_TRUE(nav_list);
   ASSERT_EQ(2U, nav_list->NavigationEventsSize());
 
-  TabStripModel* tab_strip = browser()->tab_strip_model();
+  TabStripModel* tab_strip = browser()->GetTabStripModel();
   ASSERT_TRUE(content::WaitForLoadStop(tab_strip->GetActiveWebContents()));
   ui_test_utils::SendToOmniboxAndSubmit(
       browser(), embedded_test_server()->GetURL(kLandingURL).spec());
@@ -264,7 +290,7 @@ IN_PROC_BROWSER_TEST_F(SBNavigationObserverBrowserTest,
   ASSERT_TRUE(nav_list);
   ASSERT_EQ(2U, nav_list->NavigationEventsSize());
 
-  TabStripModel* tab_strip = browser()->tab_strip_model();
+  TabStripModel* tab_strip = browser()->GetTabStripModel();
   ASSERT_TRUE(content::WaitForLoadStop(tab_strip->GetActiveWebContents()));
   ui_test_utils::SendToOmniboxAndSubmit(
       browser(), embedded_test_server()->GetURL(kLandingURL).spec());
@@ -324,7 +350,7 @@ IN_PROC_BROWSER_TEST_F(SBNavigationObserverBrowserTest,
   ASSERT_TRUE(nav_list);
   ASSERT_EQ(2U, nav_list->NavigationEventsSize());
 
-  TabStripModel* tab_strip = browser()->tab_strip_model();
+  TabStripModel* tab_strip = browser()->GetTabStripModel();
   ASSERT_TRUE(content::WaitForLoadStop(tab_strip->GetActiveWebContents()));
   ui_test_utils::SendToOmniboxAndSubmit(
       browser(), embedded_test_server()->GetURL(kLandingURL).spec());

@@ -9,11 +9,14 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "base/android/scoped_java_ref.h"
+#include "base/containers/flat_set.h"
 #include "base/functional/callback.h"
+#include "base/gtest_prod_util.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/task/sequenced_task_runner_helpers.h"
@@ -52,11 +55,14 @@ namespace media {
 class MEDIA_EXPORT MediaDrmBridge : public ContentDecryptionModule,
                                     public CdmContext {
  public:
-  // TODO(ddorwin): These are specific to Widevine. http://crbug.com/459400
+  // See android.media.MediaDrm.SecurityLevel.
   enum SecurityLevel {
-    SECURITY_LEVEL_DEFAULT = 0,
-    SECURITY_LEVEL_1 = 1,
-    SECURITY_LEVEL_3 = 3,
+    SECURITY_LEVEL_UNKNOWN = 0,
+    SECURITY_LEVEL_SW_SECURE_CRYPTO = 1,
+    SECURITY_LEVEL_SW_SECURE_DECODE = 2,
+    SECURITY_LEVEL_HW_SECURE_CRYPTO = 3,
+    SECURITY_LEVEL_HW_SECURE_DECODE = 4,
+    SECURITY_LEVEL_HW_SECURE_ALL = 5,
   };
 
   // MediaDrm system codes. These are used to keep track of failures in
@@ -100,6 +106,15 @@ class MEDIA_EXPORT MediaDrmBridge : public ContentDecryptionModule,
     MAX_VALUE = UNSUPPORTED_MEDIACRYPTO_SCHEME,
   };
 
+  // Reasons for CDM session closed unique to MediaDrm.
+  // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.media
+  enum class MediaDrmCdmSessionClosedReason {
+    CLOSE = 0,
+    SESSION_RECLAIMED = 1,
+    SESSION_LOST = 2,
+    MAX_VALUE = SESSION_LOST,
+  };
+
   using MediaCryptoReadyCB = MediaCryptoContext::MediaCryptoReadyCB;
   using CdmCreationResult =
       CreateCdmTypedStatus::Or<scoped_refptr<MediaDrmBridge>>;
@@ -108,15 +123,13 @@ class MEDIA_EXPORT MediaDrmBridge : public ContentDecryptionModule,
   // Checks whether |key_system| is supported.
   static bool IsKeySystemSupported(const std::string& key_system);
 
-  // Checks whether |key_system| is supported with |container_mime_type|.
-  // |container_mime_type| must not be empty.
-  static bool IsKeySystemSupportedWithType(
-      const std::string& key_system,
-      const std::string& container_mime_type);
+  using SupportedContainers = base::flat_set<std::string>;
 
-  // Returns true if this device supports per-application provisioning, false
-  // otherwise.
-  static bool IsPerApplicationProvisioningSupported();
+  // Returns the supported container MIME types (e.g. "video/webm", "video/mp4")
+  // for the specified |key_system| and |security_level|.
+  static SupportedContainers GetSupportedContainers(
+      const std::string& key_system,
+      SecurityLevel security_level = SECURITY_LEVEL_UNKNOWN);
 
   static bool IsPersistentLicenseTypeSupported(const std::string& key_system);
 
@@ -129,10 +142,9 @@ class MEDIA_EXPORT MediaDrmBridge : public ContentDecryptionModule,
 
   // Gets the current version for `key_system`. Returns an error if unable
   // to create a MediaDrm object, signifying that the device does not support
-  // `security_level`. May return an invalid base::Version if the string
-  // returned does not appear to be a version. For key systems other than
-  // Widevine, base::Version() is returned.
-  static GetVersionResult GetVersion(
+  // `security_level`. For key systems other than Widevine, base::Version() is
+  // returned. Note, this may be invalid.
+  static GetVersionResult MaybeGetVersion(
       const std::string& key_system,
       MediaDrmBridge::SecurityLevel security_level);
 
@@ -225,6 +237,8 @@ class MEDIA_EXPORT MediaDrmBridge : public ContentDecryptionModule,
   // video playback.
   bool IsSecureCodecRequired();
 
+  MediaDrmStorageBridge* storage() const { return storage_.get(); }
+
   // Helper functions to resolve promises.
   void ResolvePromise(uint32_t promise_id);
   void ResolvePromiseWithSession(uint32_t promise_id,
@@ -241,6 +255,11 @@ class MEDIA_EXPORT MediaDrmBridge : public ContentDecryptionModule,
   // The registered callbacks will be fired on |task_runner_|. The caller
   // should make sure that the callbacks are posted to the correct thread.
   void SetMediaCryptoReadyCB(MediaCryptoReadyCB media_crypto_ready_cb);
+
+  // Completes initialization by setting the security origin and triggering
+  // MediaCrypto creation.
+  void CompleteInitialization(const std::string& origin_id,
+                              MediaCryptoReadyCB media_crypto_ready_cb);
 
   // Sets 'property_name' with 'property_value' in MediaDrm. This can
   // potentially throw exceptions if the property_name does not exist for the
@@ -291,7 +310,8 @@ class MEDIA_EXPORT MediaDrmBridge : public ContentDecryptionModule,
                         int32_t j_message_type,
                         const base::android::JavaRef<jbyteArray>& j_message);
   void OnSessionClosed(JNIEnv* env,
-                       const base::android::JavaRef<jbyteArray>& j_session_id);
+                       const base::android::JavaRef<jbyteArray>& j_session_id,
+                       int32_t j_reason);
 
   // Called when key statuses of session are changed. |is_key_release| is set to
   // true when releasing keys. Some of the MediaDrm key status codes should be
@@ -318,6 +338,7 @@ class MEDIA_EXPORT MediaDrmBridge : public ContentDecryptionModule,
 
  private:
   friend class MediaDrmBridgeFactory;
+  FRIEND_TEST_ALL_PREFIXES(MediaDrmBridgeTest, MaybeParseCdmVersion);
   // For DeleteSoon() in DeleteOnCorrectThread().
   friend class base::DeleteHelper<MediaDrmBridge>;
 
@@ -335,6 +356,11 @@ class MEDIA_EXPORT MediaDrmBridge : public ContentDecryptionModule,
       const SessionExpirationUpdateCB& session_expiration_update_cb);
 
   ~MediaDrmBridge() override;
+
+  // Parses a version string, handling potential non-numeric suffixes.
+  // This returns an invalid version to be handled by the caller if the
+  // version string cannot be parsed.
+  static base::Version MaybeParseCdmVersion(std::string_view version_str);
 
   // Get the security level of the media. Only valid for Widevine.
   SecurityLevel GetSecurityLevel();
@@ -369,12 +395,14 @@ class MEDIA_EXPORT MediaDrmBridge : public ContentDecryptionModule,
   base::android::ScopedJavaGlobalRef<jobject> j_media_drm_;
 
   // Java MediaCrypto instance. Possible values are:
-  // !j_media_crypto_:
-  //   MediaCrypto creation has not been notified via NotifyMediaCryptoReady().
-  //   Or: MediaCrypto creation failed and it has been notified.
-  // !j_media_crypto_.is_null():
+  // `!j_media_crypto_.has_value()`:
+  //   MediaCrypto creation has not been notified via
+  //   `NotifyMediaCryptoReady()`.
+  // `j_media_crypto_.has_value() && j_media_crypto_->is_null()`:
+  //   MediaCrypto creation failed and it has been notified.
+  // `j_media_crypto_.has_value() && !j_media_crypto_->is_null()`:
   //   MediaCrypto creation succeeded and it has been notified.
-  base::android::ScopedJavaGlobalRef<jobject> j_media_crypto_;
+  std::optional<base::android::ScopedJavaGlobalRef<jobject>> j_media_crypto_;
 
   // The callback to create a ProvisionFetcher.
   CreateFetcherCB create_fetcher_cb_;
@@ -400,6 +428,9 @@ class MEDIA_EXPORT MediaDrmBridge : public ContentDecryptionModule,
 
   // Default task runner.
   scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
+
+  // The security level of the MediaDrmBridge.
+  const SecurityLevel security_level_;
 
   MediaCryptoContextImpl media_crypto_context_;
 

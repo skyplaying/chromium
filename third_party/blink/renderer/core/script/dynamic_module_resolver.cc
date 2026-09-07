@@ -13,12 +13,15 @@
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/core/loader/modulescript/module_script_creation_params.h"
 #include "third_party/blink/renderer/core/loader/modulescript/module_script_fetch_request.h"
+#include "third_party/blink/renderer/core/scheduler/task_attribution_util.h"
 #include "third_party/blink/renderer/core/script/modulator.h"
 #include "third_party/blink/renderer/core/script/module_script.h"
+#include "third_party/blink/renderer/core/timing/resource_timing_context.h"
 #include "third_party/blink/renderer/core/workers/worker_global_scope.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/v8_throw_exception.h"
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_client_settings_object_snapshot.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "v8/include/v8.h"
 
 namespace blink {
@@ -73,9 +76,11 @@ class ModuleResolutionSuccessCallback final : public ModuleResolutionCallback {
  public:
   ModuleResolutionSuccessCallback(
       ScriptPromiseResolver<IDLAny>* promise_resolver,
-      ModuleScript* module_script)
+      ModuleScript* module_script,
+      v8::ModuleImportPhase import_phase)
       : ModuleResolutionCallback(promise_resolver),
-        module_script_(module_script) {}
+        module_script_(module_script),
+        import_phase_(import_phase) {}
 
   void Trace(Visitor* visitor) const final {
     visitor->Trace(module_script_);
@@ -86,11 +91,13 @@ class ModuleResolutionSuccessCallback final : public ModuleResolutionCallback {
   void React(ScriptState* script_state, ScriptValue value) final {
     ScriptState::Scope scope(script_state);
     v8::Local<v8::Module> record = module_script_->V8Module();
-    v8::Local<v8::Value> module_namespace = ModuleRecord::V8Namespace(record);
+    v8::Local<v8::Value> module_namespace =
+        ModuleRecord::V8Namespace(record, import_phase_);
     promise_resolver_->Resolve(module_namespace);
   }
 
   Member<ModuleScript> module_script_;
+  v8::ModuleImportPhase import_phase_;
 };
 
 // Callback for modules with top-level await.
@@ -158,13 +165,22 @@ void DynamicImportTreeClient::NotifyModuleTreeLoadFinished(
     return;
   }
 
+  // https://github.com/MicrosoftEdge/MSEdgeExplainers/blob/main/ResourceTimingInitiatorInfo/explainer.md
+  std::optional<scheduler::TaskAttributionTracker::TaskScope>
+      task_attribution_resource_timing_scope;
+  if (RuntimeEnabledFeatures::ResourceTimingInitiatorEnabled()) {
+    ResourceTimingContext* resource_timing_context =
+        MakeGarbageCollected<ResourceTimingContext>(module_script->SourceUrl());
+    task_attribution_resource_timing_scope = SetTaskStateVariable(
+        resource_timing_context, ExecutionContext::From(script_state));
+  }
+
   // <spec step="9">Otherwise, set promise to the result of running a module
   // script given result and true.</spec>
   ScriptEvaluationResult result =
-      module_script->RunScriptOnScriptStateAndReturnValue(
-          script_state,
-          ExecuteScriptPolicy::kDoNotExecuteScriptWhenScriptsDisabled,
-          V8ScriptRunner::RethrowErrorsOption::Rethrow(String()));
+      module_script->RunScriptOnScriptStateAndReturnValueWithImportPhase(
+          script_state, V8ScriptRunner::RethrowErrorsOption::Rethrow(String()),
+          import_phase_);
 
   switch (result.GetResultType()) {
     case ScriptEvaluationResult::ResultType::kException:
@@ -186,7 +202,7 @@ void DynamicImportTreeClient::NotifyModuleTreeLoadFinished(
       result.GetPromise(script_state)
           .Then(script_state,
                 MakeGarbageCollected<ModuleResolutionSuccessCallback>(
-                    promise_resolver_, module_script),
+                    promise_resolver_, module_script, import_phase_),
                 MakeGarbageCollected<ModuleResolutionFailureCallback>(
                     promise_resolver_));
       break;
@@ -263,8 +279,8 @@ void DynamicModuleResolver::ResolveDynamically(
     if (!url.IsValid()) {
       error_message = StrCat({"Failed to resolve module specifier '",
                               module_request.specifier, "'"});
-      if (referrer_info.BaseURL().IsAboutBlankURL() &&
-          base_url.IsAboutBlankURL()) {
+      if (referrer_info.BaseURL().IsAboutBlankUrl() &&
+          base_url.IsAboutBlankUrl()) {
         error_message =
             StrCat({error_message,
                     ". The base URL is about:blank because import() is called "

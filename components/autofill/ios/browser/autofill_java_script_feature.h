@@ -49,33 +49,20 @@ class AutofillJavaScriptFeature : public web::JavaScriptFeature {
 
   // Fills a number of fields in the same named form for full-form Autofill.
   // Applies Autofill CSS (i.e. yellow background) to filled elements.
-  // Only empty fields will be filled, except that field named
-  // Field identified by `force_fill_field_id` will always be filled even if
-  // non-empty. `force_fill_field_id` may be null. Fields must be contained in
+  // Only empty fields will be filled, except the focused field which will
+  // always be filled even if non-empty. Fields must be contained in
   // `frame`. `callback` is called after the forms are filled with `data`
   // which must contain pairs of unique renderer ids of filled fields and
   // corresponding filled values. `callback` cannot be nil.
   void FillForm(web::WebFrame* frame,
                 base::DictValue data,
-                autofill::FieldRendererId force_fill_field_id,
                 base::OnceCallback<void(NSString*)> callback);
-
-  // Clear autofilled fields of the specified form and frame. Fields that are
-  // not currently autofilled are not modified. Field contents are cleared, and
-  // Autofill flag and styling are removed. 'change' events are sent for fields
-  // whose contents changed.
-  // `form_renderer_id` and `field_renderer_id` identify the field that
-  // initiated the clear action. `callback is called after the forms are filled
-  // with the JSON string containing a list of unique renderer ids of cleared
-  // fields. `callback` cannot be nil.
-  void ClearAutofilledFieldsForForm(
-      web::WebFrame* frame,
-      autofill::FormRendererId form_renderer_id,
-      autofill::FieldRendererId field_renderer_id,
-      base::OnceCallback<void(NSString*)> callback);
 
   // Marks up the form with autofill field prediction data (diagnostic tool).
   void FillPredictionData(web::WebFrame* frame, base::DictValue data);
+
+  // Scrolls the form field identified by `field` into view in `frame`.
+  void ScrollFieldIntoView(web::WebFrame* frame, FieldRendererId field);
 
   // web::JavaScriptFeature:
   std::optional<std::string> GetScriptMessageHandlerName() const override;

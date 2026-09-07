@@ -10,6 +10,7 @@
 #import "components/favicon_base/favicon_types.h"
 #import "components/password_manager/core/browser/ui/affiliated_group.h"
 #import "components/password_manager/core/browser/ui/saved_passwords_presenter.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/identity_manager/account_info.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "components/sync/service/sync_service.h"
@@ -18,8 +19,8 @@
 #import "ios/chrome/browser/credential_exchange/model/credential_exporter.h"
 #import "ios/chrome/browser/credential_exchange/ui/credential_group_identifier.h"
 #import "ios/chrome/browser/favicon/model/favicon_loader.h"
-#import "ios/chrome/browser/passwords/coordinator/password_exporter.h"
 #import "ios/chrome/browser/passwords/model/password_manager_util_ios.h"
+#import "ios/chrome/browser/passwords/password_exporter/coordinator/password_exporter.h"
 #import "ios/chrome/browser/settings/ui_bundled/password/password_manager_view_controller_items.h"
 #import "ios/chrome/common/ui/favicon/favicon_attributes.h"
 
@@ -30,7 +31,8 @@ const CGFloat kMinFaviconSize = 16.0;
 
 }  // namespace
 
-@interface CredentialExportMediator () <PasswordExporterDelegate>
+@interface CredentialExportMediator () <CredentialExporterDelegate,
+                                        PasswordExporterDelegate>
 @end
 
 @implementation CredentialExportMediator {
@@ -201,7 +203,8 @@ const CGFloat kMinFaviconSize = 16.0;
                                         sync_pb::WebauthnCredentialSpecifics>)
                                         passkeys {
   if (@available(iOS 26, *)) {
-    _credentialExporter = [[CredentialExporter alloc] initWithWindow:_window];
+    _credentialExporter = [[CredentialExporter alloc] initWithWindow:_window
+                                                            delegate:self];
     NSString* userEmail = base::SysUTF8ToNSString(
         _identityManager->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin)
             .email);
@@ -232,6 +235,16 @@ const CGFloat kMinFaviconSize = 16.0;
       ^(FaviconAttributes* attributes, bool cached) {
         completion(attributes, cached);
       });
+}
+
+#pragma mark - CredentialExporterDelegate
+
+- (void)onExportError {
+  [_delegate showGenericError];
+}
+
+- (void)exportFlowCancelled {
+  [_passwordExporter cancelExport];
 }
 
 @end

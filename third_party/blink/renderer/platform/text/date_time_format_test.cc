@@ -66,7 +66,8 @@ class DateTimeFormatTest : public testing::Test {
           return builder.ToString();
         }
         default:
-          return String::Format("Token(%d, %d)", field_type, count);
+          return StrCat({"Token(", String::Number(static_cast<int>(field_type)),
+                         ", ", String::Number(count), ")"});
       }
     }
   };
@@ -133,7 +134,9 @@ class DateTimeFormatTest : public testing::Test {
       StringBuilder builder;
       builder.Append("Tokens(");
       builder.AppendRange(tokens_, ",",
-                          [](const auto& token) { return token.ToString(); });
+                          [](const auto& token, StringBuilder& b) {
+                            b.Append(token.ToString());
+                          });
       builder.Append(')');
       return builder.ReleaseString();
     }
@@ -284,7 +287,7 @@ TEST_F(DateTimeFormatTest, SingleUpperCaseCharacter) {
   EXPECT_EQ(DateTimeFormat::kFieldTypeWeekOfYear, Single('w'));
   EXPECT_EQ(DateTimeFormat::kFieldTypeZoneIso8601Z, Single('X'));
   EXPECT_EQ(DateTimeFormat::kFieldTypeYearOfWeekOfYear, Single('Y'));
-  EXPECT_EQ(DateTimeFormat::kFieldTypeRFC822Zone, Single('Z'));
+  EXPECT_EQ(DateTimeFormat::kFieldTypeRfc822Zone, Single('Z'));
 }
 
 TEST_F(DateTimeFormatTest, SingleUpperCaseInvalid) {

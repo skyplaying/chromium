@@ -8,7 +8,7 @@
 
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/permissions/permission_prompt_bubble_base_view.h"
 #include "chrome/browser/ui/views/permissions/permission_prompt_desktop.h"
@@ -25,10 +25,10 @@ PermissionRequestManagerTestApi::PermissionRequestManagerTestApi(
     : manager_(manager) {}
 
 PermissionRequestManagerTestApi::PermissionRequestManagerTestApi(
-    Browser* browser)
+    BrowserWindowInterface* browser)
     : PermissionRequestManagerTestApi(
           permissions::PermissionRequestManager::FromWebContents(
-              browser->tab_strip_model()->GetActiveWebContents())) {}
+              browser->GetTabStripModel()->GetActiveWebContents())) {}
 
 void PermissionRequestManagerTestApi::AddSimpleRequest(
     content::RenderFrameHost* source_frame,
@@ -38,9 +38,7 @@ void PermissionRequestManagerTestApi::AddSimpleRequest(
       source_frame,
       std::make_unique<permissions::PermissionRequest>(
           std::make_unique<permissions::PermissionRequestData>(
-              std::make_unique<permissions::ContentSettingPermissionResolver>(
-                  permissions::RequestTypeToContentSettingsType(type).value()),
-              /*user_gesture=*/user_gesture, permission_request_origin_),
+              type, /*user_gesture=*/user_gesture, permission_request_origin_),
           base::DoNothing()));
 }
 

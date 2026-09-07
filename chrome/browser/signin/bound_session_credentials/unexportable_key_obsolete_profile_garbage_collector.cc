@@ -86,22 +86,34 @@ void UnexportableKeyObsoleteProfileGarbageCollector::
               std::move(profile_service)));
 }
 
+void UnexportableKeyObsoleteProfileGarbageCollector::
+    OnProfileManagerDestroying() {
+  // Invalidate all weak pointers to prevent any further calls to the profile
+  // manager after it has been destroyed. This should only happen on shutdown.
+  // The profile manager checks in its destructor that no observers are left,
+  // thus it is not sufficient to just rely on the destructor of this class.
+  // See https://crbug.com/485300762.
+  weak_ptr_factory_.InvalidateWeakPtrs();
+  profile_manager_observation_.Reset();
+}
+
 void UnexportableKeyObsoleteProfileGarbageCollector::StartGarbageCollection() {
-  user_data_dir_service_->GetAllSigningKeysForGarbageCollectionSlowlyAsync(
+  user_data_dir_service_->GetAllKeysForGarbageCollectionSlowlyAsync(
       BackgroundTaskPriority::kBestEffort,
       base::BindOnce(&UnexportableKeyObsoleteProfileGarbageCollector::
-                         OnGetAllSigningKeysForGarbageCollection,
+                         OnGetAllKeysForGarbageCollection,
                      weak_ptr_factory_.GetWeakPtr()));
 }
 
 void UnexportableKeyObsoleteProfileGarbageCollector::
-    OnGetAllSigningKeysForGarbageCollection(
-        ServiceErrorOr<std::vector<UnexportableKeyId>> key_ids_or_error) {
+    OnGetAllKeysForGarbageCollection(
+        ServiceErrorOr<std::vector<UnexportableSigningKeyId>>
+            key_ids_or_error) {
   if (!key_ids_or_error.has_value() || key_ids_or_error->empty()) {
     return;
   }
 
-  std::vector<UnexportableKeyId>& key_ids = *key_ids_or_error;
+  std::vector<UnexportableSigningKeyId>& key_ids = *key_ids_or_error;
   const size_t key_count = key_ids.size();
   base::UmaHistogramCounts100(
       base::StrCat({kObsoleteProfilesHistogramPrefix, "TotalKeyCount"}),

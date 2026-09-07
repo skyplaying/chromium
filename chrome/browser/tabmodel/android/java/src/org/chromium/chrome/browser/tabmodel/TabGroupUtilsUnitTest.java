@@ -16,6 +16,7 @@ import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -33,7 +34,6 @@ import org.mockito.ArgumentMatcher;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.Token;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -52,13 +52,13 @@ import org.chromium.url.JUnitTestGURLs;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 
 /** Tests for {@link TabGroupUtils}. */
 @SuppressWarnings("ResultOfMethodCallIgnored")
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class TabGroupUtilsUnitTest {
     private static final String TAB1_TITLE = "Tab1";
     private static final String TAB2_TITLE = "Tab2";
@@ -83,7 +83,6 @@ public class TabGroupUtilsUnitTest {
 
     @Mock TabModel mTabModel;
     @Mock TabModelSelector mTabModelSelector;
-    @Mock TabGroupModelFilter mTabGroupModelFilter;
     @Mock TabGroupSyncService mTabGroupSyncService;
     @Mock TabGroupSyncFeatures.Natives mTabGroupSyncFeaturesJniMock;
     @Mock TabCreator mTabCreator;
@@ -101,7 +100,7 @@ public class TabGroupUtilsUnitTest {
         mTab2 = TabUiUnitTestUtils.prepareTab(TAB2_ID, TAB2_TITLE, GURL.emptyGURL());
         mTab3 = TabUiUnitTestUtils.prepareTab(TAB3_ID, TAB3_TITLE, GURL.emptyGURL());
 
-        doReturn(mTabGroupModelFilter).when(mTabModelSelector).getCurrentTabGroupModelFilter();
+        doReturn(mTabModel).when(mTabModelSelector).getCurrentModel();
         doReturn(POSITION1).when(mTabModel).indexOf(mTab1);
         doReturn(POSITION2).when(mTabModel).indexOf(mTab2);
         doReturn(POSITION3).when(mTabModel).indexOf(mTab3);
@@ -117,16 +116,12 @@ public class TabGroupUtilsUnitTest {
     public void testGetSelectedTabInGroupForTab() {
         List<Tab> tabs = new ArrayList<>(Arrays.asList(mTab1, mTab2));
         createTabGroup(tabs, TAB_GROUP_ID1);
-        doReturn(mTab1).when(mTabGroupModelFilter).getRepresentativeTabAt(POSITION1);
-        doReturn(POSITION1).when(mTabGroupModelFilter).representativeIndexOf(mTab1);
-        doReturn(POSITION1).when(mTabGroupModelFilter).representativeIndexOf(mTab2);
+        doReturn(mTab1).when(mTabModel).getRepresentativeTabAt(POSITION1);
+        doReturn(POSITION1).when(mTabModel).representativeIndexOf(mTab1);
+        doReturn(POSITION1).when(mTabModel).representativeIndexOf(mTab2);
 
-        assertThat(
-                TabGroupUtils.getSelectedTabInGroupForTab(mTabGroupModelFilter, mTab1),
-                equalTo(mTab1));
-        assertThat(
-                TabGroupUtils.getSelectedTabInGroupForTab(mTabGroupModelFilter, mTab2),
-                equalTo(mTab1));
+        assertThat(TabGroupUtils.getSelectedTabInGroupForTab(mTabModel, mTab1), equalTo(mTab1));
+        assertThat(TabGroupUtils.getSelectedTabInGroupForTab(mTabModel, mTab2), equalTo(mTab1));
     }
 
     @Test
@@ -145,13 +140,12 @@ public class TabGroupUtilsUnitTest {
 
     @Test
     public void testOpenUrlInGroup() {
-        when(mTabGroupModelFilter.getRelatedTabList(eq(TAB1_ID))).thenReturn(Arrays.asList(mTab1));
-        when(mTabGroupModelFilter.getTabModel()).thenReturn(mTabModel);
+        when(mTabModel.getRelatedTabList(eq(TAB1_ID))).thenReturn(Arrays.asList(mTab1));
         when(mTabModel.getTabCreator()).thenReturn(mTabCreator);
 
         @TabLaunchType int launchType = TabLaunchType.FROM_TAB_GROUP_UI;
         String url = JUnitTestGURLs.URL_1.getSpec();
-        TabGroupUtils.openUrlInGroup(mTabGroupModelFilter, url, TAB1_ID, launchType);
+        TabGroupUtils.openUrlInGroup(mTabModel, url, TAB1_ID, launchType);
         ArgumentMatcher<LoadUrlParams> matcher = params -> TextUtils.equals(params.getUrl(), url);
         verify(mTabCreator).createNewTab(argThat(matcher), eq(launchType), eq(mTab1));
     }
@@ -269,25 +263,71 @@ public class TabGroupUtilsUnitTest {
                         /* isGroupShared= */ false,
                         /* isIncognito= */ false);
         when(mTab1.getTabGroupId()).thenReturn(TAB_GROUP_ID1);
-        TabGroupUtils.regroupTabs(
-                mTabGroupModelFilter, tabs, tabGroupMetadata, shouldApplyCollapse);
+        TabGroupUtils.regroupTabs(mTabModel, tabs, tabGroupMetadata, shouldApplyCollapse);
 
-        verify(mTabGroupModelFilter).createTabGroupForTabGroupSync(any(), eq(TAB_GROUP_ID1));
-        verify(mTabGroupModelFilter).setTabGroupColor(eq(TAB_GROUP_ID1), eq(0));
-        verify(mTabGroupModelFilter).setTabGroupTitle(eq(TAB_GROUP_ID1), eq(TAB_GROUP_TITLE));
+        verify(mTabModel).createTabGroupForTabGroupSync(any(), eq(TAB_GROUP_ID1));
+        verify(mTabModel).setTabGroupColor(eq(TAB_GROUP_ID1), eq(0));
+        verify(mTabModel).setTabGroupTitle(eq(TAB_GROUP_ID1), eq(TAB_GROUP_TITLE));
         if (shouldApplyCollapse) {
-            verify(mTabGroupModelFilter)
-                    .setTabGroupCollapsed(eq(TAB_GROUP_ID1), eq(true), eq(false));
+            verify(mTabModel).setTabGroupCollapsed(eq(TAB_GROUP_ID1), eq(true), eq(false));
         } else {
-            verify(mTabGroupModelFilter, never())
-                    .setTabGroupCollapsed(any(), anyBoolean(), anyBoolean());
+            verify(mTabModel, never()).setTabGroupCollapsed(any(), anyBoolean(), anyBoolean());
         }
     }
 
     private void createTabGroup(List<Tab> tabs, Token tabGroupId) {
         for (Tab tab : tabs) {
-            when(mTabGroupModelFilter.getTabsInGroup(tabGroupId)).thenReturn(tabs);
+            when(mTabModel.getTabsInGroup(tabGroupId)).thenReturn(tabs);
             when(tab.getTabGroupId()).thenReturn(tabGroupId);
         }
+    }
+
+    @Test
+    public void testHasTabGroups_hasGroupsInCurrentModel() {
+        when(mTabModel.getTabGroupCount()).thenReturn(1);
+        assertTrue(TabGroupUtils.hasTabGroups(mTabModel));
+        assertTrue(TabGroupUtils.hasTabGroups(mTabModel, List.of(mTabModelSelector)));
+    }
+
+    @Test
+    public void testHasTabGroups_hasGroupsInOtherWindow() {
+        when(mTabModel.getTabGroupCount()).thenReturn(0);
+        when(mTabModel.isIncognito()).thenReturn(false);
+
+        TabModelSelector otherSelector = mock(TabModelSelector.class);
+        TabModel otherModel = mock(TabModel.class);
+
+        when(mTabModelSelector.getModel(false)).thenReturn(mTabModel);
+        when(otherSelector.getModel(false)).thenReturn(otherModel);
+        when(otherModel.getTabGroupCount()).thenReturn(2);
+
+        assertTrue(
+                TabGroupUtils.hasTabGroups(mTabModel, List.of(mTabModelSelector, otherSelector)));
+        assertFalse(TabGroupUtils.hasTabGroups(mTabModel, (Collection<TabModelSelector>) null));
+    }
+
+    @Test
+    public void testRegroupTabs_alreadyGrouped_skipsCreateTabGroupForTabGroupSync() {
+        List<Tab> tabs = new ArrayList<>(Arrays.asList(mTab1, mTab2, mTab3));
+        TabGroupMetadata tabGroupMetadata =
+                new TabGroupMetadata(
+                        /* selectedTabId= */ TAB1_ID,
+                        /* sourceWindowId= */ 1,
+                        TAB_GROUP_ID1,
+                        TAB_IDS_TO_URLS,
+                        /* tabGroupColor= */ 0,
+                        TAB_GROUP_TITLE,
+                        /* mhtmlTabTitle= */ null,
+                        /* tabGroupCollapsed= */ false,
+                        /* isGroupShared= */ false,
+                        /* isIncognito= */ false);
+        when(mTab1.getTabGroupId()).thenReturn(TAB_GROUP_ID1);
+        when(mTab2.getTabGroupId()).thenReturn(TAB_GROUP_ID1);
+        when(mTab3.getTabGroupId()).thenReturn(TAB_GROUP_ID1);
+        TabGroupUtils.regroupTabs(mTabModel, tabs, tabGroupMetadata, false);
+
+        verify(mTabModel, never()).createTabGroupForTabGroupSync(any(), any());
+        verify(mTabModel).setTabGroupColor(eq(TAB_GROUP_ID1), eq(0));
+        verify(mTabModel).setTabGroupTitle(eq(TAB_GROUP_ID1), eq(TAB_GROUP_TITLE));
     }
 }

@@ -43,6 +43,15 @@ class StringHasher {
 
   // The main entry point for the string hasher. Computes the hash and returns
   // only the lowest 24 bits, since that's what we have room for in StringImpl.
+  template <class Reader = PlainHashReader>
+  static uint32_t ComputeHashAndMaskTop8Bits(base::span<const uint8_t> data) {
+    return MaskTop8Bits(rapidhash<Reader>(
+        data.data(),
+        data.size() * Reader::kExpansionFactor / Reader::kCompressionFactor));
+  }
+
+  // Another entry point for the string hasher. Computes the hash and returns
+  // only the lowest 24 bits, since that's what we have room for in StringImpl.
   //
   // NOTE: length is the number of bytes produced _by the reader_.
   // Normally, this means that the number of bytes actually read will be
@@ -86,10 +95,18 @@ class StringHasher {
   // uint8_t>.
   template <typename T>
     requires(std::convertible_to<T, base::span<const uint8_t>>)
-  static uint64_t HashMemory(const T& t) {
+  static uint64_t HashMemory64(const T& t) {
     base::span data = t;
     static_assert(std::same_as<typename decltype(data)::value_type, uint8_t>);
     return rapidhash(data.data(), data.size());
+  }
+  // TODO(crbug.com/458429790): Once clang is better able to optimize this,
+  // simplify this to a single overload that accepts a base::span<const
+  // uint8_t>.
+  template <typename T>
+    requires(std::convertible_to<T, base::span<const uint8_t>>)
+  static uint32_t HashMemory32(const T& t) {
+    return static_cast<uint32_t>(HashMemory64(t));
   }
 
  private:

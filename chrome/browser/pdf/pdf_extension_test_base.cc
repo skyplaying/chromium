@@ -12,9 +12,9 @@
 #include "base/path_service.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/pdf/pdf_extension_test_util.h"
-#include "chrome/browser/pdf/test_pdf_viewer_stream_manager.h"
+#include "chrome/browser/pdf/test_mime_handler_stream_manager.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -32,6 +32,7 @@
 #include "pdf/pdf_features.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/geometry/point.h"
 
 using ::content::WebContents;
@@ -61,7 +62,7 @@ void PDFExtensionTestBase::SetUpOnMainThread() {
   embedded_test_server()->StartAcceptingConnections();
 
   if (UseOopif()) {
-    factory_ = std::make_unique<pdf::TestPdfViewerStreamManagerFactory>();
+    factory_ = std::make_unique<pdf::TestMimeHandlerStreamManagerFactory>();
   } else {
     factory_ = std::make_unique<guest_view::TestGuestViewManagerFactory>();
   }
@@ -203,7 +204,7 @@ void PDFExtensionTestBase::TestGetSelectedTextReply(
 }
 
 WebContents* PDFExtensionTestBase::GetActiveWebContents() {
-  return browser()->tab_strip_model()->GetActiveWebContents();
+  return browser()->GetTabStripModel()->GetActiveWebContents();
 }
 
 void PDFExtensionTestBase::ResetFeatureList() {
@@ -229,7 +230,7 @@ TestGuestViewManager* PDFExtensionTestBase::GetGuestViewManager() {
 TestGuestViewManager* PDFExtensionTestBase::GetGuestViewManagerForProfile(
     content::BrowserContext* profile) {
   if (!profile) {
-    profile = browser()->profile();
+    profile = browser()->GetProfile();
   }
   return std::get<std::unique_ptr<guest_view::TestGuestViewManagerFactory>>(
              factory_)
@@ -238,18 +239,18 @@ TestGuestViewManager* PDFExtensionTestBase::GetGuestViewManagerForProfile(
           ExtensionsAPIClient::Get()->CreateGuestViewManagerDelegate());
 }
 
-pdf::TestPdfViewerStreamManager*
-PDFExtensionTestBase::GetTestPdfViewerStreamManager(
+pdf::TestMimeHandlerStreamManager*
+PDFExtensionTestBase::GetTestMimeHandlerStreamManager(
     content::WebContents* contents) {
-  return std::get<std::unique_ptr<pdf::TestPdfViewerStreamManagerFactory>>(
+  return std::get<std::unique_ptr<pdf::TestMimeHandlerStreamManagerFactory>>(
              factory_)
-      ->GetTestPdfViewerStreamManager(contents);
+      ->GetTestMimeHandlerStreamManager(contents);
 }
 
-void PDFExtensionTestBase::CreateTestPdfViewerStreamManager(
+void PDFExtensionTestBase::CreateTestMimeHandlerStreamManager(
     content::WebContents* contents) {
-  std::get<std::unique_ptr<pdf::TestPdfViewerStreamManagerFactory>>(factory_)
-      ->CreatePdfViewerStreamManager(contents);
+  std::get<std::unique_ptr<pdf::TestMimeHandlerStreamManagerFactory>>(factory_)
+      ->CreateMimeHandlerStreamManager(contents);
 }
 
 content::RenderFrameHost*
@@ -279,7 +280,7 @@ PDFExtensionTestBase::EnsureFullPagePDFHasLoadedWithValidFrameTree(
     bool allow_multiple_frames) {
   testing::AssertionResult result = testing::AssertionFailure();
   if (UseOopif()) {
-    auto* manager = GetTestPdfViewerStreamManager(contents);
+    auto* manager = GetTestMimeHandlerStreamManager(contents);
     content::RenderFrameHost* embedder_host = contents->GetPrimaryMainFrame();
     result = allow_multiple_frames
                  ? manager->WaitUntilPdfLoadedAllowMultipleFrames(embedder_host)
@@ -297,7 +298,7 @@ testing::AssertionResult
 PDFExtensionTestBase::EnsurePDFHasLoadedInFirstChildWithValidFrameTree(
     content::WebContents* contents) {
   testing::AssertionResult result =
-      UseOopif() ? GetTestPdfViewerStreamManager(contents)
+      UseOopif() ? GetTestMimeHandlerStreamManager(contents)
                        ->WaitUntilPdfLoadedInFirstChild()
                  : pdf_extension_test_util::EnsurePDFHasLoaded(contents);
 

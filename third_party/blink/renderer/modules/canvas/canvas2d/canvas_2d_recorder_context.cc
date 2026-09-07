@@ -34,18 +34,15 @@
 #include "cc/paint/paint_flags.h"
 #include "cc/paint/paint_image.h"
 #include "cc/paint/record_paint_canvas.h"
-#include "cc/paint/refcounted_buffer.h"
 #include "components/viz/common/resources/shared_image_format_utils.h"
 #include "media/base/video_frame.h"
 #include "media/base/video_frame_metadata.h"
 #include "media/base/video_transformation.h"
 #include "third_party/blink/public/common/features.h"
-#include "third_party/blink/public/mojom/frame/color_scheme.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/idl_types.h"
 #include "third_party/blink/renderer/bindings/core/v8/native_value_traits_impl.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_object_objectarray_string.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_begin_layer_options.h"
-#include "third_party/blink/renderer/bindings/modules/v8/v8_canvas_2d_gpu_transfer_option.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_canvas_fill_rule.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_gpu_texture_format.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_typedefs.h"
@@ -105,8 +102,9 @@
 #include "third_party/blink/renderer/platform/geometry/stroke_data.h"
 #include "third_party/blink/renderer/platform/graphics/bitmap_image.h"
 #include "third_party/blink/renderer/platform/graphics/blend_mode.h"
-#include "third_party/blink/renderer/platform/graphics/canvas_resource_provider.h"
+#include "third_party/blink/renderer/platform/graphics/canvas_2d_resource_provider.h"
 #include "third_party/blink/renderer/platform/graphics/color.h"
+#include "third_party/blink/renderer/platform/graphics/filters/filter_effect.h"
 #include "third_party/blink/renderer/platform/graphics/filters/paint_filter_builder.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/webgpu_mailbox_texture.h"
 #include "third_party/blink/renderer/platform/graphics/graphics_context.h"
@@ -144,7 +142,6 @@
 #include "third_party/skia/include/core/SkRefCnt.h"
 #include "third_party/skia/include/core/SkSamplingOptions.h"
 #include "third_party/skia/include/core/SkScalar.h"
-#include "third_party/skia/include/private/base/SkTo.h"
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/quad_f.h"
 #include "ui/gfx/geometry/rect.h"
@@ -455,18 +452,6 @@ void Canvas2DRecorderContext::beginLayerImpl(ScriptState* script_state,
     return;
   }
 
-  // Make sure we have a recorder and paint canvas.
-  if (!GetOrCreatePaintCanvas()) {
-    return;
-  }
-
-  MemoryManagedPaintRecorder* recorder = Recorder();
-  if (!recorder) {
-    return;
-  }
-
-  ValidateStateStack();
-
   sk_sp<PaintFilter> filter;
   if (options != nullptr) {
     CHECK(exception_state != nullptr);
@@ -488,12 +473,30 @@ void Canvas2DRecorderContext::beginLayerImpl(ScriptState* script_state,
           1.0f,  // Deliberately ignore zoom on the canvas element.
           Color::kBlack, mojom::blink::ColorScheme::kLight);
 
-      filter = paint_filter_builder::Build(
-          filter_effect_builder.BuildFilterEffect(std::move(filter_operations),
-                                                  !OriginClean()),
-          kInterpolationSpaceSRGB);
+      FilterEffect* filter_effect = filter_effect_builder.BuildFilterEffect(
+          std::move(filter_operations), !OriginClean());
+      if (filter_effect && filter_effect->OriginTainted() &&
+          !origin_tainted_by_content_) {
+        SetOriginTaintedByContent();
+      }
+      filter =
+          paint_filter_builder::Build(filter_effect, kInterpolationSpaceSRGB);
     }
   }
+
+  // Create the `PaintCanvas` AFTER parsing the filter. It's possible for
+  // filters to reset the canvas, using a custom object property getter for
+  // instance.
+  if (!GetOrCreatePaintCanvas()) {
+    return;
+  }
+
+  MemoryManagedPaintRecorder* recorder = Recorder();
+  if (!recorder) {
+    return;
+  }
+
+  ValidateStateStack();
 
   if (layer_count_ == 0) {
     recorder->BeginSideRecording();
@@ -721,7 +724,8 @@ void Canvas2DRecorderContext::endLayer(ExceptionState& exception_state) {
   cc::PaintCanvas& parent_canvas = recorder->getRecordingCanvas();
   SkIRect clip_bounds;
   if (parent_canvas.getDeviceClipBounds(&clip_bounds)) {
-    WillDraw(clip_bounds, CanvasPerformanceMonitor::DrawType::kOther);
+    WillDraw(gfx::SkIRectToRect(clip_bounds),
+             CanvasPerformanceMonitor::DrawType::kOther);
   }
 
   ValidateStateStack();
@@ -838,7 +842,7 @@ void Canvas2DRecorderContext::ResetInternal() {
   if (cc::PaintCanvas* c = GetPaintCanvas()) {
     int width = Width();  // Keeping results to avoid repetitive virtual calls.
     int height = Height();
-    WillDraw(SkIRect::MakeXYWH(0, 0, width, height),
+    WillDraw(gfx::Rect(width, height),
              CanvasPerformanceMonitor::DrawType::kOther);
     c->drawRect(SkRect::MakeXYWH(0.0f, 0.0f, width, height), GetClearFlags());
   }
@@ -856,8 +860,7 @@ void Canvas2DRecorderContext::reset() {
 RespectImageOrientationEnum
 Canvas2DRecorderContext::RespectImageOrientationInternal(
     CanvasImageSource* image_source) {
-  if ((image_source->IsImageBitmap() || image_source->IsImageElement()) &&
-      image_source->WouldTaintOrigin()) {
+  if (image_source->WouldTaintOrigin()) {
     return kRespectImageOrientation;
   }
   return RespectImageOrientation();
@@ -1003,11 +1006,11 @@ ColorParseResult Canvas2DRecorderContext::ParseColorOrCurrentColor(
                : kDefaultTextLinkColors;
     // TODO(40946458): Don't use default length resolver here!
     const ResolveColorValueContext context{
-        .conversion_data = CSSToLengthConversionData(/*element=*/nullptr),
+        .length_resolver = CSSToLengthConversionData(/*element=*/nullptr),
         .text_link_colors = text_link_colors,
         .used_color_scheme = color_scheme_,
         .color_provider = GetColorProvider(),
-        .is_in_web_app_scope = IsInWebAppScope()};
+        .can_expose_accent_color = IsInWebAppScope()};
     const StyleColor style_color = ResolveColorValue(*color_value, context);
     color = style_color.Resolve(GetCurrentColor(), color_scheme_);
     return ColorParseResult::kColor;
@@ -1589,6 +1592,13 @@ void Canvas2DRecorderContext::DrawPathInternal(
   }
 
   if (paint_type == CanvasRenderingContext2DState::kStrokePaintType) {
+    // Zero-size bounds mean all path points are coincident — a degenerate
+    // segment that the spec requires to be pruned before stroking. Exact
+    // float equality is intentional: near-degenerate paths (non-zero but
+    // very small bounds) are not pruned, matching spec intent.
+    if (bounds.width() == 0 && bounds.height() == 0) {
+      return;
+    }
     InflateStrokeRect(bounds);
   }
 
@@ -1957,15 +1967,31 @@ void Canvas2DRecorderContext::clearRect(double x,
   float fheight = ClampTo<float>(height);
 
   gfx::RectF rect(fx, fy, fwidth, fheight);
+  if (CanvasRenderingContextHost* host = GetCanvasRenderingContextHost();
+      host && host->ShouldCaptureRenderedText()) {
+    // Map the cleared rect from context coordinates to canvas element
+    // coordinates.
+    gfx::RectF canvas_clear_rect = GetTransform().MapRect(rect);
+    gfx::RectF canvas_rect(0, 0, host->width(), host->height());
+    // If the cleared area covers the entire canvas, clear all recorded text.
+    // Otherwise, clear only the text that intersects with the cleared area.
+    if (canvas_clear_rect.Contains(canvas_rect)) {
+      host->ClearRenderedText();
+    } else {
+      host->ClearRenderedText(canvas_clear_rect);
+    }
+  }
   if (RectContainsTransformedRect(rect, clip_bounds)) {
     CheckOverdraw(&clear_flags, CanvasRenderingContext2DState::kNoImage,
                   OverdrawOp::kClearRect);
-    WillDraw(clip_bounds, CanvasPerformanceMonitor::DrawType::kOther);
+    WillDraw(gfx::SkIRectToRect(clip_bounds),
+             CanvasPerformanceMonitor::DrawType::kOther);
     c->drawRect(gfx::RectFToSkRect(rect), clear_flags);
   } else {
     SkIRect dirty_rect;
     if (ComputeDirtyRect(rect, clip_bounds, &dirty_rect)) {
-      WillDraw(clip_bounds, CanvasPerformanceMonitor::DrawType::kOther);
+      WillDraw(gfx::SkIRectToRect(clip_bounds),
+               CanvasPerformanceMonitor::DrawType::kOther);
       c->drawRect(gfx::RectFToSkRect(rect), clear_flags);
     }
   }
@@ -2163,30 +2189,20 @@ void Canvas2DRecorderContext::DrawImageInternal(
     c->translate(-src_rect.x(), -src_rect.y());
     HTMLVideoElement* video = static_cast<HTMLVideoElement*>(image_source);
     video->PaintCurrentFrame(
-        c, gfx::Rect(video->videoWidth(), video->videoHeight()), image_flags);
+        c, gfx::Rect(video->videoWidth(), video->videoHeight()), image_flags,
+        /*acquire_texture_backing*/ false);
   } else if (image_source->IsVideoFrame()) {
     VideoFrame* frame = static_cast<VideoFrame*>(image_source);
     auto media_frame = frame->frame();
     bool ignore_transformation =
         RespectImageOrientationInternal(image_source) ==
         kDoNotRespectImageOrientation;
-    gfx::RectF corrected_src_rect = src_rect;
-
-    if (!ignore_transformation) {
-      auto orientation_enum = VideoTransformationToImageOrientation(
-          media_frame->metadata().transformation.value_or(
-              media::kNoTransformation));
-      if (ImageOrientation(orientation_enum).UsesWidthAsHeight()) {
-        corrected_src_rect = gfx::TransposeRect(src_rect);
-      }
-    }
-
     c->save();
     c->clipRect(gfx::RectFToSkRect(dst_rect));
     c->translate(dst_rect.x(), dst_rect.y());
-    c->scale(dst_rect.width() / corrected_src_rect.width(),
-             dst_rect.height() / corrected_src_rect.height());
-    c->translate(-corrected_src_rect.x(), -corrected_src_rect.y());
+    c->scale(dst_rect.width() / src_rect.width(),
+             dst_rect.height() / src_rect.height());
+    c->translate(-src_rect.x(), -src_rect.y());
     DrawVideoFrameIntoCanvas(std::move(media_frame), c, image_flags,
                              ignore_transformation);
   } else {
@@ -2366,10 +2382,10 @@ CanvasGradient* Canvas2DRecorderContext::createRadialGradient(
     double r1,
     ExceptionState& exception_state) {
   if (r0 < 0 || r1 < 0) {
-    exception_state.ThrowDOMException(
-        DOMExceptionCode::kIndexSizeError,
-        UNSAFE_TODO(String::Format("The %s provided is less than 0.",
-                                   r0 < 0 ? "r0" : "r1")));
+    exception_state.ThrowDOMException(DOMExceptionCode::kIndexSizeError,
+                                      r0 < 0
+                                          ? "The r0 provided is less than 0."
+                                          : "The r1 provided is less than 0.");
     return nullptr;
   }
 
@@ -2440,7 +2456,7 @@ CanvasPattern* Canvas2DRecorderContext::createPattern(
     return nullptr;
   }
 
-  SourceImageStatus status;
+  SourceImageStatus status = kInvalidSourceImageStatus;
 
   gfx::SizeF default_object_size(Width(), Height());
   scoped_refptr<Image> image_for_rendering =
@@ -2452,15 +2468,12 @@ CanvasPattern* Canvas2DRecorderContext::createPattern(
     case kZeroSizeCanvasSourceImageStatus:
       exception_state.ThrowDOMException(
           DOMExceptionCode::kInvalidStateError,
-          UNSAFE_TODO(String::Format(
-              "The canvas %s is 0.",
-              image_source
-                      ->ElementSize(
-                          default_object_size,
-                          RespectImageOrientationInternal(image_source))
-                      .width()
-                  ? "height"
-                  : "width")));
+          image_source
+                  ->ElementSize(default_object_size,
+                                RespectImageOrientationInternal(image_source))
+                  .width()
+              ? "The canvas height is 0."
+              : "The canvas width is 0.");
       return nullptr;
     case kZeroSizeImageSourceStatus:
       return nullptr;
@@ -2709,45 +2722,6 @@ Canvas2DRecorderContext::UsageCounters::UsageCounters()
       num_clear_rect_calls(0),
       num_draw_focus_calls(0),
       num_frames_since_reset(0) {}
-
-namespace {
-
-void CanvasOverdrawHistogram(Canvas2DRecorderContext::OverdrawOp op) {
-  UMA_HISTOGRAM_ENUMERATION("Blink.Canvas.OverdrawOp", op);
-}
-
-}  // unnamed namespace
-
-void Canvas2DRecorderContext::WillOverwriteCanvas(
-    Canvas2DRecorderContext::OverdrawOp op) {
-  auto* host = GetCanvasRenderingContextHost();
-  if (host) {  // CSS paint use cases not counted.
-    UseCounter::Count(GetTopExecutionContext(),
-                      WebFeature::kCanvasRenderingContext2DHasOverdraw);
-    CanvasOverdrawHistogram(op);
-    CanvasOverdrawHistogram(OverdrawOp::kTotal);
-  }
-
-  // We only hit the kHasTransform bucket if the op is affected by transforms.
-  if (op == OverdrawOp::kClearRect || op == OverdrawOp::kDrawImage) {
-    const CanvasRenderingContext2DState& state = GetState();
-    bool has_clip = state.HasClip();
-    bool has_transform = !state.GetTransform().IsIdentity();
-    if (has_clip && has_transform) {
-      CanvasOverdrawHistogram(OverdrawOp::kHasClipAndTransform);
-    }
-    if (has_clip) {
-      CanvasOverdrawHistogram(OverdrawOp::kHasClip);
-    }
-    if (has_transform) {
-      CanvasOverdrawHistogram(OverdrawOp::kHasTransform);
-    }
-  }
-
-  if (MemoryManagedPaintRecorder* recorder = Recorder(); recorder != nullptr) {
-    recorder->RestartCurrentLayer();
-  }
-}
 
 HTMLCanvasElement* Canvas2DRecorderContext::HostAsHTMLCanvasElement() const {
   return nullptr;

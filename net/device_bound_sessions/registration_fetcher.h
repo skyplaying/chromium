@@ -10,9 +10,11 @@
 
 #include "base/functional/callback_forward.h"
 #include "components/unexportable_keys/unexportable_key_service.h"
+#include "crypto/sign.h"
 #include "net/base/isolation_info.h"
 #include "net/base/net_errors.h"
 #include "net/base/net_export.h"
+#include "net/cookies/site_for_cookies.h"
 #include "net/device_bound_sessions/registration_fetcher_param.h"
 #include "net/device_bound_sessions/registration_result.h"
 #include "net/device_bound_sessions/session.h"
@@ -57,8 +59,10 @@ class NET_EXPORT RegistrationFetcher {
       unexportable_keys::UnexportableKeyService& key_service,
       const URLRequestContext* context,
       const IsolationInfo& isolation_info,
+      const net::SiteForCookies& site_for_cookies,
       std::optional<NetLogSource> net_log_source,
-      const std::optional<url::Origin>& original_request_initiator);
+      const std::optional<url::Origin>& original_request_initiator,
+      unexportable_keys::BackgroundTaskPriority priority);
 
   // Creates an unexportable key from the key service, creates a registration
   // JWT and signs it with the new key. Starts the network request to the DBSC
@@ -68,8 +72,7 @@ class NET_EXPORT RegistrationFetcher {
   // and if so it the callback with be called with a std::nullopt.
   virtual void StartCreateTokenAndFetch(
       RegistrationRequestParam& registration_params,
-      base::span<const crypto::SignatureVerifier::SignatureAlgorithm>
-          supported_algos,
+      base::span<const crypto::sign::SignatureKind> supported_algos,
       RegistrationCompleteCallback callback) = 0;
 
   // Starts the network request to the DBSC refresh endpoint with existing key
@@ -78,7 +81,7 @@ class NET_EXPORT RegistrationFetcher {
   // will be called with a std::nullopt.
   virtual void StartFetchWithExistingKey(
       RegistrationRequestParam& request_params,
-      unexportable_keys::UnexportableKeyId key_id,
+      unexportable_keys::UnexportableSigningKeyId key_id,
       RegistrationCompleteCallback callback) = 0;
 
   // Starts the network request to the DBSC registration endpoint for a
@@ -86,7 +89,7 @@ class NET_EXPORT RegistrationFetcher {
   // completion.
   virtual void StartFetchWithFederatedKey(
       RegistrationRequestParam& request_params,
-      unexportable_keys::UnexportableKeyId key_id,
+      unexportable_keys::UnexportableSigningKeyId key_id,
       const GURL& provider_url,
       RegistrationCompleteCallback callback) = 0;
 
@@ -97,7 +100,7 @@ class NET_EXPORT RegistrationFetcher {
       unexportable_keys::UnexportableKeyService& unexportable_key_service,
       std::string challenge,
       std::optional<std::string> authorization,
-      base::OnceCallback<void(std::optional<RegistrationToken>)> callback);
+      base::OnceCallback<void(SessionErrorOr<RegistrationToken>)> callback);
 
   static void SetFetcherForTesting(FetcherType* fetcher);
 

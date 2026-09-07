@@ -9,8 +9,11 @@
 
 #include "base/check_op.h"
 #include "base/trace_event/trace_event.h"
+#include "chrome/browser/ui/tabs/tab_change_type.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "components/sessions/core/session_id.h"
 #include "components/split_tabs/split_tab_visual_data.h"
+#include "components/tab_groups/tab_group_id.h"
 #include "components/tabs/public/split_tab_collection.h"
 #include "components/tabs/public/tab_group_tab_collection.h"
 #include "components/tabs/public/tab_interface.h"
@@ -253,10 +256,12 @@ SplitTabChange::AddedChange::AddedChange(const SplitTabChange::AddedChange&) =
 SplitTabChange::VisualsChange::VisualsChange(
     const split_tabs::SplitTabVisualData& old_visual_data,
     const split_tabs::SplitTabVisualData& new_visual_data,
-    SplitVisualChangeReason reason)
+    SplitVisualChangeReason reason,
+    bool is_intermediate)
     : old_visual_data_(old_visual_data),
       new_visual_data_(new_visual_data),
-      reason_(reason) {}
+      reason_(reason),
+      is_intermediate_(is_intermediate) {}
 SplitTabChange::VisualsChange::~VisualsChange() = default;
 
 SplitTabChange::ContentsChange::ContentsChange(
@@ -357,7 +362,6 @@ void TabStripModelObserver::OnTabCloseCancelled(const tabs::TabInterface* tab) {
 }
 
 void TabStripModelObserver::OnTabChangedAt(tabs::TabInterface* tab,
-                                           int index,
                                            TabChangeType change_type) {}
 
 void TabStripModelObserver::OnTabPinnedStateChanged(tabs::TabInterface* tab,
@@ -414,20 +418,12 @@ int TabStripModelObserver::CountObservedModels(
 void TabStripModelObserver::StartedObserving(
     TabStripModelObserver::ModelPasskey,
     TabStripModel* model) {
-  // TODO(crbug.com/40639200): Add this DCHECK here. This DCHECK enforces
-  // that a given TabStripModelObserver only observes a given TabStripModel
-  // once.
-  // DCHECK_EQ(observed_models_.count(model), 0U);
   observed_models_.insert(model);
 }
 
 void TabStripModelObserver::StoppedObserving(
     TabStripModelObserver::ModelPasskey,
     TabStripModel* model) {
-  // TODO(crbug.com/40639200): Add this DCHECK here. This DCHECK enforces
-  // that a given TabStripModelObserver is only removed from a given
-  // TabStripModel once.
-  // DCHECK_EQ(observed_models_.count(model), 1U);
   observed_models_.erase(model);
 }
 

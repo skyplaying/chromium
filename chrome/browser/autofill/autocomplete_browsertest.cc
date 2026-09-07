@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <optional>
+
 #include "base/check.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -16,21 +18,21 @@
 #include "build/build_config.h"
 #include "chrome/browser/autofill/autocomplete_history_manager_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/webdata_services/web_data_service_factory.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/autofill/content/browser/content_autofill_driver.h"
 #include "components/autofill/content/browser/test_autofill_manager_injector.h"
-#include "components/autofill/core/browser/data_manager/personal_data_manager_test_utils.h"
+#include "components/autofill/core/browser/data_manager/personal_data_manager_test_util.h"
 #include "components/autofill/core/browser/foundations/browser_autofill_manager.h"
 #include "components/autofill/core/browser/foundations/test_autofill_manager_waiter.h"
 #include "components/autofill/core/browser/single_field_fillers/autocomplete/autocomplete_history_manager.h"
 #include "components/autofill/core/browser/suggestions/suggestion.h"
 #include "components/autofill/core/browser/suggestions/suggestion_test_helpers.h"
-#include "components/autofill/core/browser/suggestions/suggestions_context.h"
-#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #include "components/autofill/core/browser/test_utils/test_autofill_clock.h"
 #include "components/autofill/core/common/autofill_clock.h"
 #include "components/autofill/core/common/autofill_constants.h"
@@ -45,6 +47,8 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/switches.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/events/keycodes/keyboard_code_conversion.h"
 
 namespace autofill {
@@ -119,7 +123,8 @@ class AutocompleteTest : public InProcessBrowserTest {
         web_contents()->GetPrimaryMainFrame())
         ->GetAutofillManager()
         .client()
-        .HideAutofillSuggestions(SuggestionHidingReason::kTabGone);
+        .HideSuggestions(SuggestionHidingReason::kTabGone,
+                         /*product=*/std::nullopt);
     active_browser_ = nullptr;
   }
 
@@ -154,18 +159,14 @@ class AutocompleteTest : public InProcessBrowserTest {
     content::SimulateEndOfPaintHoldingOnPrimaryMainFrame(web_contents());
 
     for (const char c : value) {
-      ui::DomKey key = ui::DomKey::FromCharacter(c);
-      ui::DomCode code = UsLayoutDomKeyToDomCode(key);
-      ui::KeyboardCode key_code = DomCodeToUsLayoutKeyboardCode(code);
-      content::SimulateKeyPress(web_contents(), key, code, key_code, false,
-                                false, false, false);
+      content::SimulateCharTyped(web_contents(), c);
       ASSERT_TRUE(autofill_manager()->text_field_change_waiter().Wait(1));
     }
 
     // Simulate a mouse click to submit the form because form submissions not
     // triggered by user gestures are ignored.
     content::SimulateMouseClick(
-        active_browser_->tab_strip_model()->GetActiveWebContents(), 0,
+        active_browser_->GetTabStripModel()->GetActiveWebContents(), 0,
         blink::WebMouseEvent::Button::kLeft);
     ASSERT_TRUE(autofill_manager()->form_submitted_waiter().Wait(1));
 
@@ -174,25 +175,29 @@ class AutocompleteTest : public InProcessBrowserTest {
   }
 
   // The retention policy clean-up is run once per major version during
-  // initialization. This function triggers it by reinitializing the
-  // `autocomplete_history_manager()` and waiting for the cleanup to complete.
+  // initialization. This function triggers it by instantiating an
+  // `AutocompleteHistoryManager` and waiting for the cleanup to complete.
   void TriggerRetentionPolicyCleanup() {
     pref_service()->SetInteger(prefs::kAutocompleteLastVersionRetentionPolicy,
                                version_info::GetMajorVersionNumberAsInt() - 1);
-    autocomplete_history_manager()->Init(
+    AutocompleteHistoryManager manager(
         WebDataServiceFactory::GetAutofillWebDataForProfile(
             current_profile(), ServiceAccessType::EXPLICIT_ACCESS),
-        pref_service(), current_profile()->IsOffTheRecord());
+        pref_service());
     WaitForPendingDBTasks(*GetWebDataService());
   }
 
-  void set_active_browser(Browser* browser) { active_browser_ = browser; }
+  void set_active_browser(BrowserWindowInterface* browser) {
+    active_browser_ = browser;
+  }
 
   AutocompleteHistoryManager* autocomplete_history_manager() {
     return AutocompleteHistoryManagerFactory::GetForProfile(current_profile());
   }
 
-  PrefService* pref_service() { return active_browser_->profile()->GetPrefs(); }
+  PrefService* pref_service() {
+    return active_browser_->GetProfile()->GetPrefs();
+  }
 
   std::vector<Suggestion> GetAutocompleteSuggestions(
       const std::string& input_name,
@@ -230,14 +235,14 @@ class AutocompleteTest : public InProcessBrowserTest {
 
  private:
   content::WebContents* web_contents() {
-    return active_browser_->tab_strip_model()->GetActiveWebContents();
+    return active_browser_->GetTabStripModel()->GetActiveWebContents();
   }
 
-  Profile* current_profile() { return active_browser_->profile(); }
+  Profile* current_profile() { return active_browser_->GetProfile(); }
 
   test::AutofillBrowserTestEnvironment autofill_test_environment_;
   TestAutofillManagerInjector<TestAutofillManager> autofill_manager_injector_;
-  raw_ptr<Browser> active_browser_ = nullptr;
+  raw_ptr<BrowserWindowInterface> active_browser_ = nullptr;
 };
 
 // Tests that a user can save a simple Autocomplete value.

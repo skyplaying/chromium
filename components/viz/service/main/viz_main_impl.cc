@@ -9,6 +9,7 @@
 
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/power_monitor/power_monitor.h"
 #include "base/power_monitor/power_monitor_source.h"
@@ -125,6 +126,8 @@ VizMainImpl::VizMainImpl(Delegate* delegate,
 #if BUILDFLAG(SKIA_USE_DAWN)
   init_params.dawn_context_provider = gpu_init_->TakeDawnContextProvider();
 #endif
+  init_params.bind_webnn_browser_host =
+      std::move(dependencies_.bind_webnn_browser_host);
 
   init_params.vulkan_implementation = gpu_init_->vulkan_implementation();
   gpu_service_ = std::make_unique<GpuServiceImpl>(
@@ -227,6 +230,13 @@ void VizMainImpl::CreateGpuService(
       dependencies_.shutdown_event);
 #endif
 
+  CompositorGpuThread* compositor_gpu_thread =
+      gpu_service_->compositor_gpu_thread();
+  if (delegate_ && compositor_gpu_thread) {
+    delegate_->PostDisplayCompositorGpuThreadCreated(
+        compositor_gpu_thread->task_runner().get());
+  }
+
   gpu_service_->Bind(std::move(pending_receiver));
 
   {
@@ -241,9 +251,6 @@ void VizMainImpl::CreateGpuService(
 #if BUILDFLAG(IS_ANDROID)
     viz_compositor_thread_runner_->SetGpuMainThreadId(main_thread_id);
 #endif
-
-    CompositorGpuThread* compositor_gpu_thread =
-        gpu_service_->compositor_gpu_thread();
 
     if (compositor_gpu_thread) {
       gpu_process_thread_ids.insert(compositor_gpu_thread->GetThreadId());

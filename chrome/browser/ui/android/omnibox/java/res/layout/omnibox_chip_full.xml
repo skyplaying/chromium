@@ -9,6 +9,7 @@ found in the LICENSE file.
 <Button
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/omnibox_chip_full"
     android:layout_width="wrap_content"
     android:layout_height="match_parent"
     android:minWidth="?attr/minInteractTargetSize"
@@ -17,6 +18,10 @@ found in the LICENSE file.
     android:insetRight="@dimen/omnibox_chip_padding"
     android:lines="1"
     android:ellipsize="end"
+    android:includeFontPadding="false"
+    android:foreground="@drawable/omnibox_chip_full_foreground_selector"
+    app:iconGravity="textStart"
     app:iconTint="@null"
     app:iconPadding="@dimen/omnibox_chip_padding"
-    app:materialSizeOverlay="@style/OmniboxChipSizeOverlay" />
+    app:materialSizeOverlay="@style/OmniboxChipSizeOverlay"
+    app:materialThemeOverlay="@style/OmniboxChipThemeOverlay" />

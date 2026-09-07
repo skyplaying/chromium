@@ -9,7 +9,7 @@
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/content_settings/browser/page_specific_content_settings.h"
@@ -244,7 +244,7 @@ IN_PROC_BROWSER_TEST_F(SoundContentSettingObserverBrowserTest,
   // Configures to check `logged_site_muted_ukm_` in
   // SoundContentSettingObserver.
   HostContentSettingsMap* content_settings =
-      HostContentSettingsMapFactory::GetForProfile(browser()->profile());
+      HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile());
   content_settings->SetDefaultContentSetting(ContentSettingsType::SOUND,
                                              CONTENT_SETTING_BLOCK);
 
@@ -294,7 +294,7 @@ IN_PROC_BROWSER_TEST_F(SoundContentSettingObserverBrowserTest,
   // Configures SoundContentSettingObserver.
   GURL url = embedded_test_server()->GetURL("/simple.html");
   HostContentSettingsMap* content_settings =
-      HostContentSettingsMapFactory::GetForProfile(browser()->profile());
+      HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile());
   content_settings->SetContentSettingDefaultScope(
       url, url, ContentSettingsType::SOUND, CONTENT_SETTING_ALLOW);
 
@@ -392,7 +392,7 @@ IN_PROC_BROWSER_TEST_F(SoundContentSettingObserverFencedFrameBrowserTest,
   // setting for the primary page's URL.
   GURL url = https_server().GetURL("/simple.html");
   HostContentSettingsMap* content_settings =
-      HostContentSettingsMapFactory::GetForProfile(browser()->profile());
+      HostContentSettingsMapFactory::GetForProfile(browser()->GetProfile());
   content_settings->SetContentSettingDefaultScope(
       url, url, ContentSettingsType::SOUND, CONTENT_SETTING_ALLOW);
 

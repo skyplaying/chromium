@@ -29,9 +29,12 @@
 #include "mojo/public/cpp/system/data_pipe_drainer.h"
 #include "services/tracing/perfetto/perfetto_service.h"
 #include "services/tracing/perfetto/test_utils.h"
+#include "services/tracing/public/cpp/perfetto/perfetto_data_source_names.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/perfetto/include/perfetto/ext/tracing/core/trace_packet.h"
 #include "third_party/perfetto/include/perfetto/tracing/core/trace_config.h"
+#include "third_party/perfetto/protos/perfetto/common/tracing_service_state.gen.h"
+#include "third_party/perfetto/protos/perfetto/common/track_event_descriptor.gen.h"
 #include "third_party/perfetto/protos/perfetto/config/trace_config.pb.h"
 #include "third_party/perfetto/protos/perfetto/trace/trace.pb.h"
 #include "third_party/perfetto/protos/perfetto/trace/trace_packet.pb.h"
@@ -138,6 +141,16 @@ class ThreadedPerfettoService : public mojom::TracingSessionClient {
     return trace_writer;
   }
 
+  void RegisterDataSourceOnly(const perfetto::DataSourceDescriptor& desc) {
+    base::RunLoop wait_for_datasource;
+    task_runner_->PostTaskAndReply(FROM_HERE,
+                                   base::BindLambdaForTesting([this, desc]() {
+                                     producer_->RegisterDataSource(desc);
+                                   }),
+                                   wait_for_datasource.QuitClosure());
+    wait_for_datasource.Run();
+  }
+
   std::unique_ptr<perfetto::TraceWriter> CreateTraceWriter(
       const std::string& data_source_name) {
     base::RunLoop wait_for_datasource;
@@ -179,7 +192,7 @@ class ThreadedPerfettoService : public mojom::TracingSessionClient {
   void CreateProducerOnSequence(base::OnceClosure on_producer_connected) {
     producer_ = std::make_unique<MockProducer>();
     producer_->Connect(perfetto_service_.get(),
-                       base::StrCat({mojom::kPerfettoProducerNamePrefix,
+                       base::StrCat({kPerfettoProducerNamePrefix,
                                      base::NumberToString(kProducerPid)}));
     EXPECT_CALL(*producer_, OnConnect())
         .WillOnce(base::test::RunOnceClosure(std::move(on_producer_connected)));
@@ -239,6 +252,31 @@ class ThreadedPerfettoService : public mojom::TracingSessionClient {
         std::move(tracing_session_client), std::move(config), base::File());
   }
 
+  std::pair<bool, std::string> QueryServiceState() {
+    base::RunLoop wait_for_call;
+    bool success = false;
+    std::string service_state_data;
+    task_runner_->PostTask(
+        FROM_HERE,
+        base::BindOnce(
+            [](ConsumerHost* consumer, base::OnceClosure quit_closure,
+               bool* out_success, std::string* out_data) {
+              consumer->QueryServiceState(base::BindOnce(
+                  [](base::OnceClosure quit_closure, bool* out_success,
+                     std::string* out_data, bool success,
+                     const std::string& service_state_data) {
+                    *out_success = success;
+                    *out_data = service_state_data;
+                    std::move(quit_closure).Run();
+                  },
+                  std::move(quit_closure), out_success, out_data));
+            },
+            consumer_.get(), wait_for_call.QuitClosure(), &success,
+            &service_state_data));
+    wait_for_call.Run();
+    return {success, service_state_data};
+  }
+
   void ReadBuffers(mojo::ScopedDataPipeProducerHandle stream,
                    ConsumerHost::TracingSession::ReadBuffersCallback callback) {
     task_runner_->PostTask(
@@ -262,16 +300,15 @@ class ThreadedPerfettoService : public mojom::TracingSessionClient {
 
   void DisableTracingAndEmitJson(
       mojo::ScopedDataPipeProducerHandle stream,
-      ConsumerHost::TracingSession::DisableTracingAndEmitJsonCallback callback,
-      bool enable_privacy_filtering) {
+      ConsumerHost::TracingSession::DisableTracingAndEmitJsonCallback
+          callback) {
     base::RunLoop wait_for_call;
     task_runner_->PostTaskAndReply(
         FROM_HERE,
         base::BindOnce(
             &ConsumerHost::TracingSession::DisableTracingAndEmitJson,
             base::Unretained(consumer_.get()->tracing_session_for_testing()),
-            std::string(), std::move(stream), enable_privacy_filtering,
-            std::move(callback)),
+            std::string(), std::move(stream), std::move(callback)),
         wait_for_call.QuitClosure());
     wait_for_call.Run();
   }
@@ -426,8 +463,7 @@ class TracingConsumerTest : public testing::Test,
         std::make_unique<mojo::DataPipeDrainer>(this, std::move(consumer));
   }
 
-  void DisableTracingAndEmitJson(base::OnceClosure write_callback,
-                                 bool enable_privacy_filtering = false) {
+  void DisableTracingAndEmitJson(base::OnceClosure write_callback) {
     expect_json_data_ = true;
     MojoCreateDataPipeOptions options = {sizeof(MojoCreateDataPipeOptions),
                                          MOJO_CREATE_DATA_PIPE_FLAG_NONE, 1, 0};
@@ -436,8 +472,7 @@ class TracingConsumerTest : public testing::Test,
     MojoResult rv = mojo::CreateDataPipe(&options, producer, consumer);
     ASSERT_EQ(MOJO_RESULT_OK, rv);
     threaded_service_->DisableTracingAndEmitJson(std::move(producer),
-                                                 std::move(write_callback),
-                                                 enable_privacy_filtering);
+                                                 std::move(write_callback));
     drainer_ =
         std::make_unique<mojo::DataPipeDrainer>(this, std::move(consumer));
   }
@@ -625,8 +660,8 @@ TEST_F(TracingConsumerTest, NotifiesOnTracingEnabledWaitsForFilteredProducer) {
   // Filter for the expected producer.
   auto config = GetDefaultTraceConfig(kDataSourceName);
   *config.mutable_data_sources()->front().add_producer_name_filter() =
-      base::StrCat({mojom::kPerfettoProducerNamePrefix,
-                    base::NumberToString(kProducerPid)});
+      base::StrCat(
+          {kPerfettoProducerNamePrefix, base::NumberToString(kProducerPid)});
   threaded_perfetto_service()->EnableTracingWithConfig(config);
 
   // Tracing is only marked as enabled once the expected producer has acked that
@@ -647,7 +682,7 @@ TEST_F(TracingConsumerTest,
   // Filter for an unexpected producer whose PID is not active.
   auto config = GetDefaultTraceConfig(kDataSourceName);
   *config.mutable_data_sources()->front().add_producer_name_filter() =
-      base::StrCat({mojom::kPerfettoProducerNamePrefix,
+      base::StrCat({kPerfettoProducerNamePrefix,
                     base::NumberToString(kProducerPid + 1)});
   threaded_perfetto_service()->EnableTracingWithConfig(config);
 
@@ -706,31 +741,45 @@ TEST_F(TracingConsumerTest, NoPrivacyFilterWithJsonConversion) {
   EXPECT_FALSE(base_config.IsArgumentFilterEnabled());
 }
 
-TEST_F(TracingConsumerTest, PrivacyFilterConfigInJson) {
-  EnableTracingWithDataSourceName(kDataSourceName,
-                                  /* enable_privacy_filtering =*/true,
-                                  /* convert_to_legacy_json =*/true);
-
+TEST_F(TracingConsumerTest, QueryServiceState) {
   threaded_perfetto_service()->CreateProducer();
-  auto config =
-      threaded_perfetto_service()->GetDataSourceConfig(kDataSourceName);
-  EXPECT_FALSE(config.chrome_config().privacy_filtering_enabled());
-  base::trace_event::TraceConfig base_config(
-      config.chrome_config().trace_config());
-  EXPECT_TRUE(base_config.IsArgumentFilterEnabled());
 
-  base::RunLoop no_more_data;
-  ExpectPackets("\"trace_processor_stats\":\"__stripped__\"",
-                no_more_data.QuitClosure());
+  perfetto::DataSourceDescriptor dsd;
+  dsd.set_name(kDataSourceName);
+  perfetto::protos::gen::TrackEventDescriptor ted;
+  auto* cat = ted.add_available_categories();
+  cat->set_name("my_test_category");
+  cat->set_description("Test Category Description");
+  dsd.set_track_event_descriptor_raw(ted.SerializeAsString());
 
-  base::RunLoop write_done;
-  DisableTracingAndEmitJson(write_done.QuitClosure(),
-                            /* enable_privacy_filtering =*/true);
+  threaded_perfetto_service()->RegisterDataSourceOnly(dsd);
 
-  no_more_data.Run();
-  write_done.Run();
-
-  EXPECT_EQ(1u, matching_packet_count());
+  auto [success, service_state_data] =
+      threaded_perfetto_service()->QueryServiceState();
+  EXPECT_TRUE(success);
+  perfetto::protos::gen::TracingServiceState service_state;
+  EXPECT_TRUE(service_state.ParseFromArray(service_state_data.data(),
+                                           service_state_data.size()));
+  bool found_data_source = false;
+  bool found_category = false;
+  for (const auto& ds : service_state.data_sources()) {
+    if (ds.ds_descriptor().name() == kDataSourceName) {
+      found_data_source = true;
+      if (!ds.ds_descriptor().track_event_descriptor_raw().empty()) {
+        perfetto::protos::gen::TrackEventDescriptor parsed_ted;
+        if (parsed_ted.ParseFromString(
+                ds.ds_descriptor().track_event_descriptor_raw())) {
+          for (const auto& category : parsed_ted.available_categories()) {
+            if (category.name() == "my_test_category") {
+              found_category = true;
+            }
+          }
+        }
+      }
+    }
+  }
+  EXPECT_TRUE(found_data_source);
+  EXPECT_TRUE(found_category);
 }
 
 }  // namespace tracing

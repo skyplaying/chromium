@@ -8,6 +8,9 @@
 #import "base/test/metrics/histogram_tester.h"
 #import "base/test/scoped_feature_list.h"
 #import "components/prefs/pref_service.h"
+#import "components/sync/test/test_sync_service.h"
+#import "ios/chrome/browser/authentication/ui_bundled/cells/signin_promo_view_configurator.h"
+#import "ios/chrome/browser/authentication/ui_bundled/cells/signin_promo_view_constants.h"
 #import "ios/chrome/browser/discover_feed/model/feed_constants.h"
 #import "ios/chrome/browser/ntp/ui_bundled/feed_top_section/feed_top_section_mediator+testing.h"
 #import "ios/chrome/browser/ntp/ui_bundled/feed_top_section/feed_top_section_mutator.h"
@@ -24,12 +27,15 @@
 #import "ios/chrome/browser/signin/model/fake_system_identity.h"
 #import "ios/chrome/browser/signin/model/fake_system_identity_manager.h"
 #import "ios/chrome/browser/signin/model/identity_manager_factory.h"
+#import "ios/chrome/browser/sync/model/sync_service_factory.h"
+#import "ios/chrome/browser/sync/model/test_sync_service_utils.h"
 #import "ios/chrome/test/ios_chrome_scoped_testing_local_state.h"
 #import "ios/web/public/test/web_task_environment.h"
 #import "testing/gtest/include/gtest/gtest.h"
 #import "testing/gtest_mac.h"
 #import "testing/platform_test.h"
 #import "third_party/ocmock/OCMock/OCMock.h"
+#import "third_party/ocmock/gtest_support.h"
 
 class FeedTopSectionMediatorTest : public PlatformTest {
  public:
@@ -38,8 +44,10 @@ class FeedTopSectionMediatorTest : public PlatformTest {
     TestProfileIOS::Builder builder;
     builder.AddTestingFactory(
         AuthenticationServiceFactory::GetInstance(),
-        AuthenticationServiceFactory::GetFactoryWithDelegate(
+        AuthenticationServiceFactory::GetFactoryWithDelegateForTesting(
             std::make_unique<FakeAuthenticationServiceDelegate>()));
+    builder.AddTestingFactory(SyncServiceFactory::GetInstance(),
+                              base::BindRepeating(&CreateTestSyncService));
     fake_profile_ = std::move(builder).Build();
     fake_authentication_service_ = GetAuthenticationService();
     fake_pref_service_ = fake_profile_->GetPrefs();
@@ -68,11 +76,10 @@ class FeedTopSectionMediatorTest : public PlatformTest {
 
  protected:
   IOSChromeScopedTestingLocalState scoped_testing_local_state_;
-  raw_ptr<AuthenticationService, DanglingUntriaged>
-      fake_authentication_service_;
-  raw_ptr<PrefService, DanglingUntriaged> fake_pref_service_;
   web::WebTaskEnvironment task_environment_;
   std::unique_ptr<TestProfileIOS> fake_profile_;
+  raw_ptr<AuthenticationService> fake_authentication_service_;
+  raw_ptr<PrefService> fake_pref_service_;
   FeedTopSectionMediator* feed_top_section_mediator_;
   FeedTopSectionViewController* feed_top_section_view_controller_;
   base::test::ScopedFeatureList feature_list_;
@@ -98,6 +105,33 @@ TEST_F(FeedTopSectionMediatorTest, TestPromoForNotEngagedUser) {
   histogram_tester.ExpectUniqueSample(
       "Signin.SignIn.Offered", signin_metrics::AccessPoint::kNtpFeedTopPromo,
       0);
+}
+
+// Tests that `configureSigninPromoWithConfigurator:` updates the cached
+// configurator and forwards it to the consumer.
+TEST_F(FeedTopSectionMediatorTest, TestConfigureSigninPromoWithConfigurator) {
+  id consumer_mock = OCMProtocolMock(@protocol(FeedTopSectionConsumer));
+  feed_top_section_mediator_ = [[FeedTopSectionMediator alloc]
+                        initWithConsumer:consumer_mock
+                         identityManager:IdentityManagerFactory::GetForProfile(
+                                             fake_profile_.get())
+                             authService:fake_authentication_service_
+      provisionalPushNotificationService:nullptr
+                               incognito:fake_profile_.get()->IsOffTheRecord()
+                             prefService:fake_pref_service_];
+  SigninPromoViewConfigurator* configurator =
+      [[SigninPromoViewConfigurator alloc]
+          initWithSigninPromoViewMode:SigninPromoViewModeSigninWithAccount
+                            userEmail:@"test@example.com"
+                        userGivenName:@"Test"
+                            userImage:nil
+                       hasCloseButton:NO
+                     hasSignInSpinner:NO];
+  OCMExpect([consumer_mock updateSigninPromoWithConfigurator:configurator]);
+  [feed_top_section_mediator_
+      configureSigninPromoWithConfigurator:configurator];
+  EXPECT_EQ(feed_top_section_mediator_.signinPromoConfigurator, configurator);
+  EXPECT_OCMOCK_VERIFY(consumer_mock);
 }
 
 #pragma mark - Notifications Promo Action Tests

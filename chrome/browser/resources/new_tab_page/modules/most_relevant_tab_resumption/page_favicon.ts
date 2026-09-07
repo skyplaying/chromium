@@ -5,7 +5,7 @@
 import '//resources/cr_elements/cr_auto_img/cr_auto_img.js';
 
 import {getFaviconForPageURL} from '//resources/js/icon.js';
-import {CrLitElement, html} from '//resources/lit/v3_0/lit.rollup.js';
+import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
 import type {Url} from '//resources/mojo/url/mojom/url.mojom-webui.js';
 
@@ -24,14 +24,10 @@ class PageFaviconElement extends CrLitElement {
     return getCss();
   }
 
-  override render() {
-    return html``;
-  }
-
   static override get properties() {
     return {
       /* The URL for which the favicon is shown. */
-      url: {type: Object},
+      url: {type: String},
 
       /**
        * Whether the favicon should use fallback to host. Used for the purpose

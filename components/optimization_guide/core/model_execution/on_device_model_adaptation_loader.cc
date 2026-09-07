@@ -18,9 +18,8 @@
 #include "components/optimization_guide/core/model_execution/model_execution_util.h"
 #include "components/optimization_guide/core/model_execution/on_device_features.h"
 #include "components/optimization_guide/core/model_execution/on_device_model_feature_adapter.h"
-#include "components/optimization_guide/core/model_execution/on_device_model_service_controller.h"
+#include "components/optimization_guide/core/model_execution/on_device_model_names.h"
 #include "components/optimization_guide/core/model_execution/usage_tracker.h"
-#include "components/optimization_guide/core/optimization_guide_constants.h"
 #include "components/optimization_guide/core/optimization_guide_enums.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/optimization_guide/core/optimization_guide_switches.h"
@@ -93,6 +92,12 @@ bool ArePerformanceHintsCompatible(
   if (adaptation_metadata.supported_performance_hints().empty()) {
     return true;
   }
+  // If the base model has no specific hint, it's compatible with any
+  // adaptation.
+  if (base_spec.selected_performance_hint ==
+      proto::ON_DEVICE_MODEL_PERFORMANCE_HINT_UNSPECIFIED) {
+    return true;
+  }
   // Check if the adaptation model supports any of the base model's hints.
   return std::ranges::contains(
       adaptation_metadata.supported_performance_hints(),
@@ -102,7 +107,7 @@ bool ArePerformanceHintsCompatible(
 std::optional<OnDeviceModelAdaptationAvailability>
 DetectBaseModelIncompatibility(const optimization_guide::ModelInfo& model_info,
                                const OnDeviceBaseModelSpec& registered_spec) {
-  const std::optional<proto::Any>& metadata = model_info.GetModelMetadata();
+  const std::optional<proto::Any>& metadata = model_info.model_metadata;
   if (!metadata.has_value()) {
     return OnDeviceModelAdaptationAvailability::kAdaptationModelInvalid;
   }
@@ -304,7 +309,7 @@ void OnDeviceModelAdaptationLoader::OnModelUpdated(
       base::BindOnce(&ReadOnDeviceModelExecutionConfig, *execution_config_file),
       base::BindOnce(&CreateAdaptationMetadataFromModelExecutionConfig,
                      feature_, MaybeGetAdaptationPaths(*model_info),
-                     model_info->GetVersion())
+                     model_info->version)
           .Then(
               base::BindOnce(&OnDeviceModelAdaptationMetadataCreated, feature_))
           .Then(on_load_fn_));

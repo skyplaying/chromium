@@ -4,7 +4,7 @@
 
 #include "chrome/browser/custom_handlers/chrome_protocol_handler_navigation_throttle.h"
 
-#include "chrome/browser/ui/extensions/extensions_dialogs.h"
+#include "chrome/browser/ui/extensions/confirm_protocol_handler_dialog.h"
 #include "components/custom_handlers/protocol_handler_registry.h"
 #include "content/public/browser/navigation_handle.h"
 
@@ -26,17 +26,13 @@ void ChromeProtocolHandlerNavigationThrottle::MaybeCreateAndAdd(
   content::NavigationHandle& handle = registry.GetNavigationHandle();
   const GURL& url = handle.GetURL();
 
-  // TODO(crbug.com/40482153): We should use scheme_piece instead, which would
-  // imply adapting the ProtocolHandlerRegistry code to use std::string_view.
-  if (!protocol_handler_registry ||
-      !protocol_handler_registry->IsHandledProtocol(url.scheme()) ||
-      protocol_handler_registry->IsProtocolHandlerConfirmed(url.scheme())) {
-    return;
+  if (protocol_handler_registry &&
+      protocol_handler_registry->ProtocolHandlerNeedsConfirmation(
+          url.scheme())) {
+    registry.AddThrottle(
+        std::make_unique<ChromeProtocolHandlerNavigationThrottle>(
+            registry, *protocol_handler_registry));
   }
-
-  registry.AddThrottle(
-      std::make_unique<ChromeProtocolHandlerNavigationThrottle>(
-          registry, *protocol_handler_registry));
 }
 
 const char* ChromeProtocolHandlerNavigationThrottle::GetNameForLogging() {

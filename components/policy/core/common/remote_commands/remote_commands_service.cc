@@ -76,6 +76,8 @@ RemoteCommandsService::MetricReceivedRemoteCommand RemoteCommandMetricFromType(
       return Metric::kFetchSupportPacket;
     case em::RemoteCommand_Type_QUERY_GEOLOCATION:
       return Metric::kQueryGeolocation;
+    case em::RemoteCommand_Type_BROWSER_EXTENSION_UPDATE_CHECK:
+      return Metric::kBrowserExtensionUpdateCheck;
   }
 
   // None of possible types matched. May indicate that there is new unhandled
@@ -123,6 +125,8 @@ const char* RemoteCommandTypeToString(em::RemoteCommand_Type type) {
       return "FetchSupportPacket";
     case em::RemoteCommand_Type_QUERY_GEOLOCATION:
       return "QueryGeolocation";
+    case em::RemoteCommand_Type_BROWSER_EXTENSION_UPDATE_CHECK:
+      return "BrowserExtensionUpdateCheck";
   }
 
   NOTREACHED() << "Unknown command type: " << type;
@@ -329,7 +333,8 @@ void RemoteCommandsService::VerifyAndEnqueueSignedCommand(
 void RemoteCommandsService::EnqueueCommand(
     const em::RemoteCommand& command,
     const em::SignedData& signed_command) {
-  if (!command.has_type() || !command.has_command_id()) {
+  if (!command.has_type() || !em::RemoteCommand::Type_IsValid(command.type()) ||
+      !command.has_command_id()) {
     LOG_POLICY(ERROR, REMOTE_COMMANDS) << "Invalid remote command from server.";
     const auto metric = !command.has_command_id()
                             ? MetricReceivedRemoteCommand::kInvalid

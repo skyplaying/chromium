@@ -155,7 +155,6 @@ GL_APICALL void         GL_APIENTRY glSamplerParameteriv (GLidBindSampler sample
 GL_APICALL void         GL_APIENTRY glScissor (GLint x, GLint y, GLsizei width, GLsizei height);
 GL_APICALL void         GL_APIENTRY glShaderBinary (GLsizeiNotNegative n, const GLuint* shaders, GLenumShaderBinaryFormat binaryformat, const void* binary, GLsizeiNotNegative length);
 GL_APICALL void         GL_APIENTRY glShaderSource (GLidShader shader, GLsizeiNotNegative count, const GLchar* const* str, const GLint* length);
-GL_APICALL void         GL_APIENTRY glShallowFinishCHROMIUM (void);
 GL_APICALL void         GL_APIENTRY glOrderingBarrierCHROMIUM (void);
 
 // Extensions WEBGL_multi_draw
@@ -275,14 +274,10 @@ GL_APICALL void         GL_APIENTRY glFramebufferParameteri (GLenumFramebufferTa
 
 // Non-GL commands.
 GL_APICALL GLuint       GL_APIENTRY glGetMaxValueInBufferCHROMIUM (GLidBuffer buffer_id, GLsizei count, GLenumGetMaxIndexType type, GLuint offset);
-GL_APICALL GLboolean    GL_APIENTRY glEnableFeatureCHROMIUM (const char* feature);
 GL_APICALL void*        GL_APIENTRY glMapBufferCHROMIUM (GLuint target, GLenum access);
 GL_APICALL GLboolean    GL_APIENTRY glUnmapBufferCHROMIUM (GLuint target);
 GL_APICALL void*        GL_APIENTRY glMapBufferSubDataCHROMIUM (GLuint target, GLintptrNotNegative offset, GLsizeiptr size, GLenum access);
 GL_APICALL void         GL_APIENTRY glUnmapBufferSubDataCHROMIUM (const void* mem);
-GL_APICALL void*        GL_APIENTRY glMapBufferRange (GLenumBufferTarget target, GLintptrNotNegative offset, GLsizeiptr size, GLbitfieldMapBufferAccess access);
-GL_APICALL GLboolean    GL_APIENTRY glUnmapBuffer (GLenumBufferTarget target);
-GL_APICALL void         GL_APIENTRY glFlushMappedBufferRange (GLenumBufferTarget target, GLintptrNotNegative offset, GLsizeiptr size);
 GL_APICALL void*        GL_APIENTRY glMapTexSubImage2DCHROMIUM (GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, GLenum access);
 GL_APICALL void         GL_APIENTRY glUnmapTexSubImage2DCHROMIUM (const void* mem);
 GL_APICALL const GLchar* GL_APIENTRY glGetRequestableExtensionsCHROMIUM (void);
@@ -309,6 +304,9 @@ GL_APICALL void         GL_APIENTRY glDrawBuffersEXT (GLsizei count, const GLenu
 GL_APICALL void         GL_APIENTRY glFlushDriverCachesCHROMIUM (void);
 GL_APICALL GLuint       GL_APIENTRY glGetLastFlushIdCHROMIUM (void);
 GL_APICALL void         GL_APIENTRY glSetActiveURLCHROMIUM (const char* url);
+
+// Used to implemenent the WebGL2 getBufferSubData call.
+GL_APICALL void        GL_APIENTRY glGetBufferSubDataCHROMIUM (GLenumBufferTarget target, GLintptr offset, GLsizeiptr size, void* data);
 
 // Extension CHROMIUM_context_visibility_hint
 GL_APICALL void         GL_APIENTRY glContextVisibilityHintCHROMIUM (GLboolean visibility);
@@ -369,18 +367,20 @@ GL_APICALL GLboolean    GL_APIENTRY glIsEnablediOES (GLenum target, GLuint index
 GL_APICALL void         GL_APIENTRY glProvokingVertexANGLE (GLenum provokeMode);
 
 // Extension ANGLE_shader_pixel_local_storage
-GL_APICALL void         GL_APIENTRY glFramebufferMemorylessPixelLocalStorageANGLE (GLint plane, GLenum internalformat);
-GL_APICALL void         GL_APIENTRY glFramebufferTexturePixelLocalStorageANGLE (GLint plane, GLuint backingtexture, GLint level, GLint layer);
+GL_APICALL void         GL_APIENTRY glFramebufferMemorylessPixelLocalStorageANGLE (GLint plane, GLenum internalformat, GLbitfield usage);
+GL_APICALL void         GL_APIENTRY glFramebufferTexturePixelLocalStorageANGLE (GLint plane, GLuint backingtexture, GLint level, GLint layer, GLbitfield usage);
 GL_APICALL void         GL_APIENTRY glFramebufferPixelLocalClearValuefvANGLE (GLint plane, const GLfloat* value);
 GL_APICALL void         GL_APIENTRY glFramebufferPixelLocalClearValueivANGLE (GLint plane, const GLint* value);
 GL_APICALL void         GL_APIENTRY glFramebufferPixelLocalClearValueuivANGLE (GLint plane, const GLuint* value);
 GL_APICALL void         GL_APIENTRY glBeginPixelLocalStorageANGLE (GLsizei count, const GLenum* loadops);
 GL_APICALL void         GL_APIENTRY glEndPixelLocalStorageANGLE (GLsizei count, const GLenum* storeops);
+GL_APICALL void         GL_APIENTRY glEndPixelLocalStorageImplicitANGLE (void);
 GL_APICALL void         GL_APIENTRY glPixelLocalStorageBarrierANGLE (void);
 GL_APICALL void         GL_APIENTRY glFramebufferPixelLocalStorageInterruptANGLE (void);
 GL_APICALL void         GL_APIENTRY glFramebufferPixelLocalStorageRestoreANGLE (void);
-GL_APICALL void         GL_APIENTRY glGetFramebufferPixelLocalStorageParameterfvANGLE (GLint plane, GLenum pname, GLfloat* params);
-GL_APICALL void         GL_APIENTRY glGetFramebufferPixelLocalStorageParameterivANGLE (GLint plane, GLenum pname, GLint* params);
+GL_APICALL void         GL_APIENTRY glGetFramebufferPixelLocalStorageParameterfvANGLE (GLint plane, GLenumFramebufferPixelLocalStorageParameter pname, GLfloat* params);
+GL_APICALL void         GL_APIENTRY glGetFramebufferPixelLocalStorageParameterivANGLE (GLint plane, GLenumFramebufferPixelLocalStorageParameter pname, GLint* params);
+GL_APICALL void         GL_APIENTRY glGetFramebufferPixelLocalStorageParameteruivANGLE (GLint plane, GLenumFramebufferPixelLocalStorageParameter pname, GLuint* params);
 
 // Extension EXT_clip_control
 GL_APICALL void         GL_APIENTRY glClipControlEXT (GLenum origin, GLenum depth);

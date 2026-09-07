@@ -32,8 +32,8 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_test_util.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
@@ -296,7 +296,7 @@ class DownloadNotificationTestBase : public InProcessBrowserTest {
     ASSERT_TRUE(embedded_test_server()->Start());
 
     display_service_ = std::make_unique<NotificationDisplayServiceTester>(
-        browser()->profile());
+        browser()->GetProfile());
 
     interceptor_ = std::make_unique<SlowDownloadInterceptor>();
   }
@@ -308,8 +308,9 @@ class DownloadNotificationTestBase : public InProcessBrowserTest {
   }
 
  protected:
-  content::DownloadManager* GetDownloadManager(Browser* browser) {
-    return browser->profile()->GetDownloadManager();
+  content::DownloadManager* GetDownloadManager(
+      BrowserWindowInterface* browser) {
+    return browser->GetProfile()->GetDownloadManager();
   }
 
   // Requests to complete the download and wait for it.
@@ -341,7 +342,7 @@ class DownloadNotificationTest : public DownloadNotificationTestBase {
   ~DownloadNotificationTest() override = default;
 
   void SetUpOnMainThread() override {
-    Profile* profile = browser()->profile();
+    Profile* profile = browser()->GetProfile();
 
     std::unique_ptr<TestChromeDownloadManagerDelegate> test_delegate;
     test_delegate =
@@ -356,13 +357,14 @@ class DownloadNotificationTest : public DownloadNotificationTestBase {
 
   TestChromeDownloadManagerDelegate* GetDownloadManagerDelegate() const {
     return static_cast<TestChromeDownloadManagerDelegate*>(
-        DownloadCoreServiceFactory::GetForBrowserContext(browser()->profile())
+        DownloadCoreServiceFactory::GetForBrowserContext(
+            browser()->GetProfile())
             ->GetDownloadManagerDelegate());
   }
 
   void PrepareIncognitoBrowser() {
     incognito_browser_ = CreateIncognitoBrowser();
-    Profile* incognito_profile = incognito_browser_->profile();
+    Profile* incognito_profile = incognito_browser_->GetProfile();
 
     std::unique_ptr<TestChromeDownloadManagerDelegate> incognito_test_delegate;
     incognito_test_delegate =
@@ -373,12 +375,12 @@ class DownloadNotificationTest : public DownloadNotificationTestBase {
 
     incognito_display_service_ =
         std::make_unique<NotificationDisplayServiceTester>(
-            incognito_browser()->profile());
+            incognito_browser()->GetProfile());
   }
 
   TestChromeDownloadManagerDelegate* GetIncognitoDownloadManagerDelegate()
       const {
-    Profile* incognito_profile = incognito_browser()->profile();
+    Profile* incognito_profile = incognito_browser()->GetProfile();
     return static_cast<TestChromeDownloadManagerDelegate*>(
         DownloadCoreServiceFactory::GetForBrowserContext(incognito_profile)
             ->GetDownloadManagerDelegate());
@@ -389,21 +391,22 @@ class DownloadNotificationTest : public DownloadNotificationTestBase {
         browser(), GURL(SlowDownloadInterceptor::kKnownSizeUrl));
   }
 
-  // Returns the correct display service for the given Browser. If |browser| is
-  // null, returns the service for browser().
+  // Returns the correct display service for the given browser window. If
+  // |browser| is null, returns the service for browser().
   NotificationDisplayServiceTester* GetDisplayServiceForBrowser(
-      Browser* browser) {
+      BrowserWindowInterface* browser) {
     return (browser && browser == DownloadNotificationTest::incognito_browser())
                ? incognito_display_service_.get()
                : display_service_.get();
   }
 
-  void WaitForDownloadNotification(Browser* browser = nullptr) {
+  void WaitForDownloadNotification(BrowserWindowInterface* browser = nullptr) {
     WaitForDownloadNotificationForDisplayService(
         GetDisplayServiceForBrowser(browser));
   }
 
-  void CreateDownloadForBrowserAndURL(Browser* browser, GURL url) {
+  void CreateDownloadForBrowserAndURL(BrowserWindowInterface* browser,
+                                      GURL url) {
     // Starts a download.
     content::DownloadTestObserverInProgress download_in_progress_observer(
         GetDownloadManager(browser), /*wait_count=*/1u);
@@ -422,7 +425,7 @@ class DownloadNotificationTest : public DownloadNotificationTestBase {
     CacheNotification(browser);
   }
 
-  void CacheNotification(Browser* browser) {
+  void CacheNotification(BrowserWindowInterface* browser) {
     ASSERT_FALSE(notification());
     ASSERT_TRUE(notification_id_.empty());
 
@@ -473,7 +476,9 @@ class DownloadNotificationTest : public DownloadNotificationTestBase {
   std::optional<message_center::Notification> notification() const {
     return GetNotification(notification_id_);
   }
-  Browser* incognito_browser() const { return incognito_browser_; }
+  BrowserWindowInterface* incognito_browser() const {
+    return incognito_browser_;
+  }
   base::FilePath GetDownloadPath() {
     return DownloadPrefs::FromDownloadManager(GetDownloadManager(browser()))
         ->DownloadPath();
@@ -485,7 +490,8 @@ class DownloadNotificationTest : public DownloadNotificationTestBase {
 
  private:
   raw_ptr<download::DownloadItem, DanglingUntriaged> download_item_ = nullptr;
-  raw_ptr<Browser, DanglingUntriaged> incognito_browser_ = nullptr;
+  raw_ptr<BrowserWindowInterface, DanglingUntriaged> incognito_browser_ =
+      nullptr;
   std::string notification_id_;
 };
 
@@ -525,7 +531,7 @@ IN_PROC_BROWSER_TEST_F(DownloadNotificationTest, DownloadFile) {
   EXPECT_FALSE(GetNotification(notification_id()));
 }
 
-// Flaky test: crbug/822470.
+// Flaky test: crbug.com/41376889.
 IN_PROC_BROWSER_TEST_F(DownloadNotificationTest,
                        DISABLED_DownloadDangerousFile) {
   GURL download_url(
@@ -714,7 +720,7 @@ IN_PROC_BROWSER_TEST_F(DownloadNotificationTest, DownloadRemoved) {
   EXPECT_EQ(0u, downloads.size());
 }
 
-// Test is flaky: https://crbug.com/1252430
+// Test is flaky: https://crbug.com/40793163
 IN_PROC_BROWSER_TEST_F(DownloadNotificationTest,
                        DISABLED_DownloadMultipleFiles) {
   GURL url1(SlowDownloadInterceptor::kUnknownSizeUrl);
@@ -1107,8 +1113,8 @@ IN_PROC_BROWSER_TEST_F(MultiProfileDownloadNotificationTest,
 
   Profile* profile1 = GetProfileByIndex(1);
   Profile* profile2 = GetProfileByIndex(2);
-  Browser* browser1 = CreateBrowser(profile1);
-  Browser* browser2 = CreateBrowser(profile2);
+  BrowserWindowInterface* browser1 = CreateBrowser(profile1);
+  BrowserWindowInterface* browser2 = CreateBrowser(profile2);
   EXPECT_NE(browser1, browser2);
 
   display_service1_ =

@@ -4,7 +4,8 @@
 
 #include "third_party/jni_zero/common_apis.h"
 
-#include "third_party/jni_zero/generate_jni/JniUtil_jni.h"
+#include "third_party/jni_zero/generate_jni/CommonApis_jni.h"
+#include "third_party/jni_zero/jni_unique_ptr.h"
 #include "third_party/jni_zero/system_jni/Arrays_jni.h"
 #include "third_party/jni_zero/system_jni/Boolean_jni.h"
 #include "third_party/jni_zero/system_jni/Collection_jni.h"
@@ -20,6 +21,10 @@
 
 namespace jni_zero {
 
+ScopedJavaLocalRef<jstring> NewAsciiString(JNIEnv* env, const char* str) {
+  return ScopedJavaLocalRef<jstring>::Adopt(env, env->NewStringUTF(str));
+}
+
 ScopedJavaLocalRef<jobjectArray> CollectionToArray(
     JNIEnv* env,
     const JavaRef<jobject>& collection) {
@@ -33,12 +38,12 @@ ScopedJavaLocalRef<jobject> ArrayToList(JNIEnv* env,
 
 ScopedJavaLocalRef<jobjectArray> MapToArray(JNIEnv* env,
                                             const JavaRef<jobject>& map) {
-  return Java_JniUtil_mapToArray(env, map);
+  return Java_CommonApis_mapToArray(env, map);
 }
 
 ScopedJavaLocalRef<jobject> ArrayToMap(JNIEnv* env,
                                        const JavaRef<jobjectArray>& array) {
-  return Java_JniUtil_arrayToMap(env, array);
+  return Java_CommonApis_arrayToMap(env, array);
 }
 
 //
@@ -192,6 +197,15 @@ ScopedJavaLocalRef<jobject> ByteBufferAllocateDirect(JNIEnv* env, int size) {
   return ret;
 }
 
+static void JNI_CommonApis_DeleteDeleterBasePtr(JNIEnv* env,
+                                                int64_t ptr,
+                                                int64_t deleter_ptr) {
+  JNI_ZERO_DCHECK(ptr != 0);
+  JNI_ZERO_DCHECK(deleter_ptr != 0);
+  const auto* deleter = reinterpret_cast<const DeleterBase*>(deleter_ptr);
+  deleter->Destroy(reinterpret_cast<void*>(ptr));
+}
+
 }  // namespace jni_zero
 
-DEFINE_JNI(JniUtil)
+DEFINE_JNI(CommonApis)

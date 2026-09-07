@@ -18,9 +18,11 @@
 #include "base/timer/timer.h"
 #include "chrome/browser/actor/tools/page_stability_test_util.h"
 #include "chrome/common/actor.mojom.h"
-#include "chrome/common/actor/page_stability_metrics_common.h"
 #include "chrome/common/chrome_features.h"
+#include "components/actor/core/page_stability_metrics_common.h"
 #include "components/metrics/content/subprocess_metrics_provider.h"
+#include "components/page_content_annotations/content/mojom/page_stability.mojom.h"
+#include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -140,7 +142,7 @@ IN_PROC_BROWSER_TEST_F(PageStabilityMetricsTest, NetworkAndMainThreadIdle) {
   ASSERT_TRUE(
       content::NavigateToURL(web_contents(), GetPageStabilityTestURL()));
 
-  mojo::Remote<mojom::PageStabilityMonitor> monitor =
+  mojo::Remote<page_content_annotations::mojom::PageStabilityMonitor> monitor =
       CreatePageStabilityMonitor();
 
   ASSERT_EQ(GetOutputText(), "INITIAL");
@@ -204,7 +206,7 @@ IN_PROC_BROWSER_TEST_F(PageStabilityMetricsTest, Paint) {
       content::NavigateToURL(web_contents(), GetPageStabilityTestURL()));
   content::SimulateEndOfPaintHoldingOnPrimaryMainFrame(web_contents());
 
-  mojo::Remote<mojom::PageStabilityMonitor> monitor =
+  mojo::Remote<page_content_annotations::mojom::PageStabilityMonitor> monitor =
       CreatePageStabilityMonitor();
 
   ASSERT_EQ(GetOutputText(), "INITIAL");
@@ -291,7 +293,7 @@ IN_PROC_BROWSER_TEST_F(PageStabilityMetricsTest, Timeout) {
   ASSERT_TRUE(
       content::NavigateToURL(web_contents(), GetPageStabilityTestURL()));
 
-  mojo::Remote<mojom::PageStabilityMonitor> monitor =
+  mojo::Remote<page_content_annotations::mojom::PageStabilityMonitor> monitor =
       CreatePageStabilityMonitor();
 
   ASSERT_EQ(GetOutputText(), "INITIAL");
@@ -352,7 +354,7 @@ IN_PROC_BROWSER_TEST_F(PageStabilityMetricsTest, RenderFrameGoingAway) {
   ASSERT_TRUE(
       content::NavigateToURL(web_contents(), GetPageStabilityTestURL()));
 
-  mojo::Remote<mojom::PageStabilityMonitor> monitor =
+  mojo::Remote<page_content_annotations::mojom::PageStabilityMonitor> monitor =
       CreatePageStabilityMonitor();
 
   ASSERT_EQ(GetOutputText(), "INITIAL");
@@ -368,7 +370,8 @@ IN_PROC_BROWSER_TEST_F(PageStabilityMetricsTest, RenderFrameGoingAway) {
   EXPECT_FALSE(result.IsReady());
 
   // Navigate away and finish the navigation.
-  const GURL url = embedded_test_server()->GetURL("/actor/blank.html");
+  const GURL url =
+      embedded_https_test_server().GetURL("example.com", "/actor/blank.html");
   content::TestNavigationManager manager(web_contents(), url);
   ASSERT_TRUE(
       ExecJs(web_contents(), content::JsReplace("window.location = $1", url)));
@@ -409,7 +412,7 @@ IN_PROC_BROWSER_TEST_F(PageStabilityMetricsTest, MojoDisconnected) {
   ASSERT_TRUE(
       content::NavigateToURL(web_contents(), GetPageStabilityTestURL()));
 
-  mojo::Remote<mojom::PageStabilityMonitor> monitor =
+  mojo::Remote<page_content_annotations::mojom::PageStabilityMonitor> monitor =
       CreatePageStabilityMonitor();
 
   ASSERT_EQ(GetOutputText(), "INITIAL");
@@ -468,7 +471,7 @@ IN_PROC_BROWSER_TEST_F(PageStabilityMetricsTest, MojoDisconnectedAndTimeout) {
   ASSERT_TRUE(
       content::NavigateToURL(web_contents(), GetPageStabilityTestURL()));
 
-  mojo::Remote<mojom::PageStabilityMonitor> monitor =
+  mojo::Remote<page_content_annotations::mojom::PageStabilityMonitor> monitor =
       CreatePageStabilityMonitor();
 
   ASSERT_EQ(GetOutputText(), "INITIAL");
@@ -550,7 +553,7 @@ IN_PROC_BROWSER_TEST_F(PageStabilityMetricsMinWaitTest,
   ASSERT_TRUE(
       content::NavigateToURL(web_contents(), GetPageStabilityTestURL()));
 
-  mojo::Remote<mojom::PageStabilityMonitor> monitor =
+  mojo::Remote<page_content_annotations::mojom::PageStabilityMonitor> monitor =
       CreatePageStabilityMonitor();
 
   ASSERT_EQ(GetOutputText(), "INITIAL");
@@ -604,7 +607,7 @@ IN_PROC_BROWSER_TEST_F(PageStabilityMetricsMinWaitTest, PaintDelayed) {
   ASSERT_TRUE(
       content::NavigateToURL(web_contents(), GetPageStabilityTestURL()));
 
-  mojo::Remote<mojom::PageStabilityMonitor> monitor =
+  mojo::Remote<page_content_annotations::mojom::PageStabilityMonitor> monitor =
       CreatePageStabilityMonitor();
 
   ASSERT_EQ(GetOutputText(), "INITIAL");

@@ -13,7 +13,6 @@ import org.chromium.chrome.browser.omnibox.suggestions.OmniboxSuggestionsDropdow
 import org.chromium.chrome.browser.omnibox.suggestions.OmniboxSuggestionsVisualState;
 import org.chromium.chrome.browser.omnibox.voice.VoiceRecognitionHandler;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.components.browser_ui.accessibility.PageZoomUtils;
 
 /** Container that holds the {@link UrlBar} and SSL state related with the current {@link Tab}. */
 @NullMarked
@@ -35,26 +34,12 @@ public interface LocationBar {
     void setShowTitle(boolean showTitle);
 
     /**
-     * Sends an accessibility event to the URL bar to request accessibility focus on it (e.g. for
-     * TalkBack).
-     */
-    default void requestUrlBarAccessibilityFocus() {}
-
-    /**
      * Triggers the cursor to be visible in the UrlBar without triggering any of the focus animation
      * logic.
      *
      * <p>Only applies to devices with a hardware keyboard attached.
      */
     void showUrlBarCursorWithoutFocusAnimations();
-
-    /**
-     * Notifies the LocationBar to take necessary action after exiting from the NTP, while a
-     * hardware keyboard is connected. If the URL bar was previously focused on the NTP due to a
-     * connected keyboard, a navigation away from the NTP should clear this focus before filling the
-     * current tab's URL.
-     */
-    void clearUrlBarCursorWithoutFocusAnimations();
 
     /**
      * Reverts any pending edits of the location bar and reset to the page state. This does not
@@ -64,15 +49,6 @@ public interface LocationBar {
 
     /** Returns {@link ViewGroup} that this container holds. */
     View getContainerView();
-
-    /**
-     * TODO(twellington): Try to remove this method. It's only used to return an in-product help
-     * bubble anchor view... which should be moved out of tab and perhaps into the status bar icon
-     * component.
-     *
-     * @return The view containing the security icon.
-     */
-    View getSecurityIconView();
 
     /** Returns the {@link VoiceRecognitionHandler} associated with this LocationBar. */
     default @Nullable VoiceRecognitionHandler getVoiceRecognitionHandler() {
@@ -101,7 +77,7 @@ public interface LocationBar {
 
     /**
      * Toggle showing only the origin portion of the URL (as opposed to the default behavior of
-     * showing the max amount of the url, prioritizing the origin)
+     * showing the max amount of the url, prioritizing the origin).
      */
     default void setShowOriginOnly(boolean showOriginOnly) {}
 
@@ -116,6 +92,12 @@ public interface LocationBar {
      * reduce the clutter.
      */
     default void setShowStatusIconForSecureOrigins(boolean showStatusIconForSecureOrigins) {}
+
+    /**
+     * Sets whether the location bar is in mini origin mode. In this mode, certain UI elements are
+     * hidden or modified.
+     */
+    default void setMiniOriginMode(boolean active) {}
 
     /** Gets the height of the url bar view contained by the location bar. */
     default float getUrlBarHeight() {
@@ -133,16 +115,10 @@ public interface LocationBar {
      */
     default void maybeShowOrClearCursorInLocationBar() {}
 
-    /**
-     * Called when the zoom level of the page has changed. Note: The zoom level value is not
-     * represented as a percentage (e.g., 100.0) or a fraction (e.g., 1.0). Instead, it uses an
-     * internal table where a value of `0.0` corresponds to 100% zoom. The default zoom level can
-     * differ if the user has set a preference. For the complete mapping of values to zoom
-     * percentages, see the zoom table variable. Read more at {@link PageZoomUtils}
-     *
-     * @param zoomLevel The new zoom level.
-     */
-    default void onZoomLevelChanged(double zoomLevel) {}
+    /** Returns the optional button view for testing. */
+    default @Nullable View getOptionalButtonViewForTesting() {
+        return null;
+    }
 
     /** Destroys the LocationBar. */
     void destroy();

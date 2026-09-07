@@ -22,9 +22,10 @@
 #include "content/common/process_priority_tracker.h"
 #include "content/public/common/content_features.h"
 #include "mojo/public/cpp/bindings/interface_endpoint_client.h"
+#include "net/base/features.h"
+#include "net/base/scheduler/sequence_manager_configurator.h"
 #include "sandbox/policy/sandbox_type.h"
 #include "services/network/public/cpp/features.h"
-#include "services/network/public/cpp/sequence_manager_configurator.h"
 #include "services/tracing/public/cpp/trace_startup.h"
 #include "third_party/blink/public/common/features.h"
 
@@ -141,12 +142,11 @@ ChildProcess::ChildProcess(base::ThreadType io_thread_type,
   // SequenceManager with specific settings for network service task scheduler.
   // This ensures the network thread's task scheduling is handled by the
   // experimental scheduler infrastructure.
-  if (base::FeatureList::IsEnabled(
-          network::features::kNetworkServiceTaskScheduler) &&
+  if (base::FeatureList::IsEnabled(net::features::kNetTaskScheduler) &&
       base::ThreadIdNameManager::GetInstance()->GetName(
           base::PlatformThread::CurrentId()) ==
           std::string_view("network.CrUtilityMain")) {
-    network::ConfigureSequenceManager(thread_options);
+    net::ConfigureSequenceManager(thread_options);
   }
 
   CHECK(io_thread_->StartWithOptions(std::move(thread_options)));
@@ -188,7 +188,7 @@ ChildProcess::~ChildProcess() {
     base::ThreadPoolInstance::Get()->Shutdown();
   }
 
-#if BUILDFLAG(CLANG_PROFILING_INSIDE_SANDBOX) && BUILDFLAG(CLANG_PGO_PROFILING)
+#if BUILDFLAG(CLANG_PROFILING_INSIDE_SANDBOX)
   // Flush the profiling data to disk. Doing this manually (vs relying on this
   // being done automatically when the process exits) will ensure that this data
   // doesn't get lost if the process is fast killed.

@@ -6,16 +6,20 @@
 
 #include <random>
 
+#include "base/functional/bind.h"
 #include "base/json/values_util.h"
 #include "base/rand_util.h"
+#include "base/time/default_tick_clock.h"
+#include "base/time/tick_clock.h"
 #include "chrome/browser/apps/app_service/metrics/app_platform_metrics_utils.h"
 #include "chrome/browser/apps/browser_instance/web_contents_instance_id_utils.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_init_state.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "components/history/core/browser/history_types.h"
 #include "components/prefs/pref_service.h"
@@ -58,7 +62,7 @@ bool IsAppBrowser(BrowserWindowInterface* browser) {
     return false;
   }
   return !web_app::GetAppIdFromApplicationName(
-              browser->GetBrowserForMigrationOnly()->app_name())
+              BrowserInitState::From(browser)->create_params().app_name)
               .empty();
 }
 
@@ -134,7 +138,24 @@ void WebsiteMetrics::ActiveTabWebContentsObserver::OnPrimaryPageChanged() {
   // In some test cases, AppBannerManager might be null.
   if (app_banner_manager) {
     app_banner_manager_observer_.Observe(app_banner_manager);
+    // The manager's lifetime is tied to the tab, which can end before this
+    // observer's WebContents. Detach when the tab goes away; the
+    // drag-to-another-window path re-attaches via OnPrimaryPageChanged.
+    tabs::TabInterface* tab =
+        tabs::TabInterface::MaybeGetFromContents(web_contents());
+    if (tab) {
+      tab_will_detach_subscription_ = tab->RegisterWillDetach(
+          base::BindRepeating(&ActiveTabWebContentsObserver::OnTabWillDetach,
+                              base::Unretained(this)));
+    }
   }
+}
+
+void WebsiteMetrics::ActiveTabWebContentsObserver::OnTabWillDetach(
+    tabs::TabInterface* tab,
+    tabs::TabInterface::DetachReason reason) {
+  app_banner_manager_observer_.Reset();
+  tab_will_detach_subscription_ = {};
 }
 
 void WebsiteMetrics::ActiveTabWebContentsObserver::PrimaryPageChanged(
@@ -182,10 +203,13 @@ base::DictValue WebsiteMetrics::UrlInfo::ConvertToDict() const {
   return usage_time_dict;
 }
 
-WebsiteMetrics::WebsiteMetrics(Profile* profile, int user_type_by_device_type)
+WebsiteMetrics::WebsiteMetrics(Profile* profile,
+                               int user_type_by_device_type,
+                               const base::TickClock& tick_clock)
     : profile_(profile),
       browser_tab_strip_tracker_(this, nullptr),
-      user_type_by_device_type_(user_type_by_device_type) {
+      user_type_by_device_type_(user_type_by_device_type),
+      tick_clock_(tick_clock) {
   browser_collection_observation_.Observe(
       ProfileBrowserCollection::GetForProfile(profile_));
   browser_tab_strip_tracker_.Init();
@@ -538,7 +562,7 @@ void WebsiteMetrics::OnWebContentsUpdated(content::WebContents* web_contents) {
                       it != window_to_web_contents_.end() &&
                       it->second == web_contents;
   AddUrlInfo(url, web_contents->GetPrimaryMainFrame()->GetPageUkmSourceId(),
-             base::TimeTicks::Now(), is_activated, /*promotable=*/false);
+             tick_clock_->NowTicks(), is_activated, /*promotable=*/false);
 }
 
 void WebsiteMetrics::OnInstallableWebAppStatusUpdated(
@@ -601,7 +625,7 @@ void WebsiteMetrics::SetTabActivated(content::WebContents* web_contents) {
   if (url_it == url_infos_.end()) {
     return;
   }
-  url_it->second.start_time = base::TimeTicks::Now();
+  url_it->second.start_time = tick_clock_->NowTicks();
   url_it->second.is_activated = true;
 }
 
@@ -618,7 +642,7 @@ void WebsiteMetrics::SetTabInActivated(content::WebContents* web_contents) {
     return;
   }
 
-  const auto current_time = base::TimeTicks::Now();
+  const auto current_time = tick_clock_->NowTicks();
   DCHECK_GE(current_time, it->second.start_time);
   it->second.running_time_in_five_minutes +=
       current_time - it->second.start_time;
@@ -630,7 +654,7 @@ void WebsiteMetrics::SaveUsageTime() {
   for (auto& it : url_infos_) {
     if (it.second.is_activated) {
       // Continued usage of active web content.
-      const auto current_time = base::TimeTicks::Now();
+      const auto current_time = tick_clock_->NowTicks();
       DCHECK_GE(current_time, it.second.start_time);
       it.second.running_time_in_five_minutes +=
           current_time - it.second.start_time;

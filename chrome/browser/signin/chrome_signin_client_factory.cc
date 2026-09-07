@@ -6,8 +6,9 @@
 
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "extensions/buildflags/buildflags.h"
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "extensions/browser/extension_registry_factory.h"
 #endif
 
@@ -25,7 +26,7 @@ ChromeSigninClientFactory::ChromeSigninClientFactory()
               .Build()) {
   // Used to keep track of bookmark metrics on Signin/Sync.
   DependsOn(BookmarkModelFactory::GetInstance());
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   // Used to keep track of extensions metrics on Signin/Sync.
   DependsOn(extensions::ExtensionRegistryFactory::GetInstance());
 #endif

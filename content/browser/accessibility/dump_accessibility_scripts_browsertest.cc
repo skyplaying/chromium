@@ -39,6 +39,7 @@ constexpr const char kMacTextMarker[]{"mac/textmarker"};
 constexpr const char kMacMethods[]{"mac/methods"};
 constexpr const char kMacParameterizedAttributes[]{
     "mac/parameterized-attributes"};
+constexpr const char kMacTextOperation[]{"mac/text-operation"};
 
 #endif
 
@@ -80,6 +81,14 @@ class DumpAccessibilityScriptTest : public DumpAccessibilityTestBase {
   void Migration_RunTypedTest(const base::FilePath::CharType* file_path) {
     if (features::IsMacAccessibilityAPIMigrationEnabled()) {
       RunTypedTest<type>(file_path);
+    } else {
+      GTEST_SKIP();
+    }
+  }
+
+  void AXTextOperation_RunTest(const base::FilePath::CharType* file_path) {
+    if (features::IsMacAccessibilityTextOperationEnabled()) {
+      RunTypedTest<kMacTextOperation>(file_path);
     } else {
       GTEST_SKIP();
     }
@@ -319,6 +328,13 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityScriptTest,
   RunTypedTest<kMacAttributes>("ax-insertion-point-line-number.html");
 }
 
+// TODO(crbug.com/548552911): This test shows the incorrect line number.
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityScriptTest,
+                       AXInsertionPointLineNumberContenteditable) {
+  RunTypedTest<kMacAttributes>(
+      "ax-insertion-point-line-number-contenteditable.html");
+}
+
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityScriptTest, AXInvalid) {
   RunTypedTest<kMacAttributes>("ax-invalid.html");
 }
@@ -417,6 +433,10 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityScriptTest, AXSelectedRows) {
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityScriptTest, AXSize) {
   RunTypedTest<kMacAttributes>("ax-size.html");
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityScriptTest, AXSubrole) {
+  RunTypedTest<kMacAttributes>("ax-subrole.html");
 }
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityScriptTest, AXTitleUIElement) {
@@ -520,6 +540,12 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityScriptTest, AXStartTextMarker) {
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityScriptTest,
                        AXTextMarkerRangeForUIElement) {
   RunTypedTest<kMacTextMarker>("ax-text-marker-range-for-ui-element.html");
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityScriptTest,
+                       AXLineTextMarkerRangeForTextMarker) {
+  RunTypedTest<kMacTextMarker>(
+      "ax-line-text-marker-range-for-text-marker.html");
 }
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityScriptTest, AccessibilityColumns) {
@@ -726,6 +752,39 @@ IN_PROC_BROWSER_TEST_P(DumpAccessibilityScriptTest,
 
 IN_PROC_BROWSER_TEST_P(DumpAccessibilityScriptTest, AXStringForRange) {
   RunTypedTest<kMacParameterizedAttributes>("ax-string-for-range.html");
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityScriptTest,
+                       AXLineForIndexAndRangeForLine) {
+  RunTypedTest<kMacParameterizedAttributes>(
+      "ax-line-for-index-and-range-for-line.html");
+}
+
+// Text Operation
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityScriptTest, AXTextOperationSelect) {
+  AXTextOperation_RunTest("ax-text-operation-select.html");
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityScriptTest, AXTextOperationCapitalize) {
+  AXTextOperation_RunTest("ax-text-operation-capitalize.html");
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityScriptTest, AXTextOperationLowercase) {
+  AXTextOperation_RunTest("ax-text-operation-lowercase.html");
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityScriptTest, AXTextOperationUppercase) {
+  AXTextOperation_RunTest("ax-text-operation-uppercase.html");
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityScriptTest, AXTextOperationReplace) {
+  AXTextOperation_RunTest("ax-text-operation-replace.html");
+}
+
+IN_PROC_BROWSER_TEST_P(DumpAccessibilityScriptTest,
+                       AXTextOperationReplacePreserveCase) {
+  AXTextOperation_RunTest("ax-text-operation-replace-preserve-case.html");
 }
 
 #endif

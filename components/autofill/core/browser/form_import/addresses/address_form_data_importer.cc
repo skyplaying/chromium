@@ -4,37 +4,69 @@
 
 #include "components/autofill/core/browser/form_import/addresses/address_form_data_importer.h"
 
+#include <stddef.h>
+
+#include <algorithm>
+#include <map>
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "base/check.h"
 #include "base/check_deref.h"
+#include "base/containers/flat_map.h"
+#include "base/containers/flat_set.h"
+#include "base/containers/map_util.h"
+#include "base/containers/span.h"
+#include "base/debug/crash_logging.h"
+#include "base/feature_list.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/types/optional_ref.h"
+#include "base/types/optional_util.h"
 #include "components/autofill/core/browser/autofill_field.h"
+#include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
 #include "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_i18n_api.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_structured_address_component.h"
 #include "components/autofill/core/browser/data_model/addresses/phone_number.h"
+#include "components/autofill/core/browser/data_quality/addresses/address_import_requirement_util.h"
 #include "components/autofill/core/browser/data_quality/validation.h"
+#include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/browser/form_import/addresses/address_profile_save_manager.h"
+#include "components/autofill/core/browser/form_import/addresses/autofill_profile_import_process.h"
+#include "components/autofill/core/browser/form_import/form_data_importer_util.h"
+#include "components/autofill/core/browser/form_structure.h"
 #include "components/autofill/core/browser/foundations/autofill_client.h"
-#include "components/autofill/core/browser/integrators/plus_addresses/autofill_plus_address_delegate.h"
+#include "components/autofill/core/browser/logging/log_manager.h"
 #include "components/autofill/core/browser/metrics/profile_import_metrics.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_internals/log_message.h"
+#include "components/autofill/core/common/autofill_internals/logging_scope.h"
+#include "components/autofill/core/common/html_field_types.h"
 #include "components/autofill/core/common/logging/log_buffer.h"
 #include "components/autofill/core/common/logging/log_macros.h"
+#include "components/autofill/core/common/mojom/autofill_types.mojom-shared.h"
+#include "services/metrics/public/cpp/ukm_source_id.h"
+#include "url/gurl.h"
+#include "url/origin.h"
 
 namespace autofill {
 
 namespace {
+
+using AddressImportRequirement =
+    autofill_metrics::AddressProfileImportRequirementMetric;
 
 // Struct storing a field's value for import and selected option value, if
 // present.
 struct ValueForImport {
   // The return value of `AutofillField::value_for_import()`.
   std::u16string value_for_import;
-  // The value of the selected option. Only set for <select> fields and where
-  // `FormFieldData::selected_option()` doesn't return std::nullopt.
+  // The value of the selected option. Only set for <select> fields.
   std::optional<std::u16string> selected_option_value;
 };
 
@@ -89,7 +121,7 @@ bool IsValidFieldTypeAndValue(
     const base::flat_map<FieldType, ValueForImport>& preceding_values,
     FieldType field_type,
     const ValueForImport& current_values,
-    LogBuffer* import_log_buffer) {
+    LogBuffer& import_log_buffer) {
   // Abandon the import if an email address value shows up in a field that is
   // not an email address.
   if (field_type != EMAIL_ADDRESS &&
@@ -136,16 +168,16 @@ bool IsValidFieldTypeAndValue(
   return false;
 }
 
-}  // namespace
-
-AddressFormDataImporter::AddressFormDataImporter(AutofillClient* client)
-    : client_(CHECK_DEREF(client)) {}
-
-AddressFormDataImporter::~AddressFormDataImporter() = default;
-
-AddressDataManager& AddressFormDataImporter::address_data_manager() {
-  return client_->GetPersonalDataManager().address_data_manager();
+bool HasSynthesizedTypes(
+    const base::flat_map<FieldType, std::u16string>& observed_field_values,
+    AddressCountryCode country_code) {
+  return std::ranges::any_of(observed_field_values, [country_code](
+                                                        const auto& entry) {
+    return i18n_model_definition::IsSynthesizedType(entry.first, country_code);
+  });
 }
+
+}  // namespace
 
 AddressFormDataImporter::ExtractedAddressProfile::ExtractedAddressProfile() =
     default;
@@ -154,16 +186,151 @@ AddressFormDataImporter::ExtractedAddressProfile::ExtractedAddressProfile(
 AddressFormDataImporter::ExtractedAddressProfile::~ExtractedAddressProfile() =
     default;
 
+AddressFormDataImporter::AddressFormDataImporter(AutofillClient* client)
+    : client_(CHECK_DEREF(client)),
+      multistep_importer_(client_->GetAppLocale(),
+                          client_->GetVariationConfigCountryCode()),
+      address_profile_save_manager_(
+          std::make_unique<AddressProfileSaveManager>(client)) {
+  address_data_manager_observation_.Observe(&address_data_manager());
+}
+
+AddressFormDataImporter::~AddressFormDataImporter() = default;
+
+void AddressFormDataImporter::OnAddressDataChanged() {
+  multistep_importer_.OnAddressDataChanged(address_data_manager());
+}
+
+std::vector<AddressFormDataImporter::ExtractedAddressProfile>
+AddressFormDataImporter::ExtractAddressProfiles(const FormStructure& form) {
+  if (client_->IsAutofillTypeBlockedByPolicy(
+          client_->GetLastCommittedPrimaryMainFrameURL(),
+          AutofillClient::AutofillPolicyDataCategory::kContactInfo)) {
+    return {};
+  }
+
+  std::vector<ExtractedAddressProfile> extracted_address_profiles;
+
+  // Create a buffer to collect logging output for the autofill-internals.
+  LogManager* log_manager = client_->GetCurrentLogManager();
+  LogBuffer import_log_buffer(IsLoggingActive(log_manager));
+  LOG_AF(import_log_buffer) << LoggingScope::kAddressProfileFormImport;
+  // Print the full form into the logging scope.
+  LOG_AF(import_log_buffer)
+      << LogMessage::kImportAddressProfileFromForm << form << CTag{};
+
+  // We save a maximum of 2 profiles per submitted form (e.g. for shipping and
+  // billing).
+  static const size_t kMaxNumAddressProfilesSaved = 2;
+
+  if (!form.field_count()) {
+    LOG_AF(import_log_buffer) << LogMessage::kImportAddressProfileFromFormFailed
+                              << "Form is empty." << CTag{};
+  } else {
+    // Relevant sections for address fields.
+    std::map<Section, std::vector<const AutofillField*>> section_fields;
+    for (const auto& field : form) {
+      if (field->Type().GetAddressType() != UNKNOWN_TYPE) {
+        section_fields[field->section()].push_back(field.get());
+      }
+    }
+
+    for (const auto& [section, fields] : section_fields) {
+      if (extracted_address_profiles.size() >= kMaxNumAddressProfilesSaved) {
+        break;
+      }
+      // Log the output from a section in a separate div for readability.
+      LOG_AF(import_log_buffer)
+          << Tag{"div"} << Attrib{"class", "profile_import_from_form_section"};
+      LOG_AF(import_log_buffer)
+          << LogMessage::kImportAddressProfileFromFormSection << section
+          << CTag{};
+      // Try to extract an address profile from the form fields of this section.
+      // Only allow for a prompt if no other complete profile was found so far.
+      if (std::optional<ExtractedAddressProfile> profile =
+              ExtractAddressProfileFromSection(fields, form.source_url(),
+                                               form.submission_source(),
+                                               import_log_buffer)) {
+        extracted_address_profiles.push_back(std::move(*profile));
+      }
+      // And close the div of the section import log.
+      LOG_AF(import_log_buffer) << CTag{"div"};
+    }
+    autofill_metrics::LogAddressFormImportStatusMetric(
+        extracted_address_profiles.empty()
+            ? autofill_metrics::AddressProfileImportStatusMetric::kNoImport
+            : autofill_metrics::AddressProfileImportStatusMetric::
+                  kRegularImport);
+  }
+  LOG_AF(import_log_buffer)
+      << LogMessage::kImportAddressProfileFromFormNumberOfImports
+      << extracted_address_profiles.size() << CTag{};
+
+  // Write log buffer to autofill-internals.
+  LOG_AF(log_manager) << std::move(import_log_buffer);
+
+  return extracted_address_profiles;
+}
+
+bool AddressFormDataImporter::ProcessExtractedAddressProfiles(
+    const std::vector<ExtractedAddressProfile>& extracted_address_profiles,
+    bool allow_prompt,
+    ukm::SourceId ukm_source_id) {
+  int imported_profiles = 0;
+  // `allow_prompt` is true if no credit card or IBAN prompt was shown. If it is
+  // true, we know there is no UI currently displaying, so we can display UI to
+  // import addresses. If it is false, we should not display UI to import
+  // addresses due to a possible dialog or bubble conflict.
+  bool allow_only_silent_updates = !allow_prompt;
+  for (const ExtractedAddressProfile& candidate : extracted_address_profiles) {
+    address_profile_save_manager_->ImportProfileFromForm(
+        candidate.profile, client_->GetAppLocale(), candidate.url,
+        ukm_source_id, allow_only_silent_updates, candidate.import_metadata);
+    // Limit the number of importable profiles to 2.
+    if (!allow_only_silent_updates && ++imported_profiles >= 2) {
+      return true;
+    }
+  }
+  return imported_profiles > 0;
+}
+
+base::flat_set<std::string>
+AddressFormDataImporter::ExtractGUIDsOfProfilesWithoutManualEdits(
+    const FormStructure& submitted_form) const {
+  base::flat_set<std::string> unedited_source_profile_guids;
+  for (const std::unique_ptr<AutofillField>& field : submitted_form) {
+    if (field->all_modifiers().contains(FieldModifier::kUser)) {
+      return {};
+    }
+    if (const std::optional<std::string>& guid =
+            field->autofill_source_profile_guid()) {
+      unedited_source_profile_guids.insert(guid.value());
+    }
+  }
+  return unedited_source_profile_guids;
+}
+
+AddressDataManager& AddressFormDataImporter::address_data_manager() {
+  return client_->GetPersonalDataManager().address_data_manager();
+}
+
+const AddressDataManager& AddressFormDataImporter::address_data_manager()
+    const {
+  return client_->GetPersonalDataManager().address_data_manager();
+}
+
+MultiStepImportMerger& AddressFormDataImporter::multi_step_import_merger() {
+  return multistep_importer_;
+}
+
 base::flat_map<FieldType, std::u16string>
 AddressFormDataImporter::GetAddressObservedFieldValues(
     base::span<const AutofillField* const> section_fields,
     ProfileImportMetadata& import_metadata,
-    LogBuffer* import_log_buffer,
+    LogBuffer& import_log_buffer,
     bool& has_invalid_field_types,
     bool& has_multiple_distinct_email_addresses,
     bool& has_address_related_fields) const {
-  AutofillPlusAddressDelegate* plus_address_delegate =
-      client_->GetPlusAddressDelegate();
   base::flat_map<FieldType, ValueForImport> preceding_values;
 
   // Tracks if subsequent phone number fields should be ignored,
@@ -186,14 +353,6 @@ AddressFormDataImporter::GetAddressObservedFieldValues(
     if (field->WasAutofilledWithFallback()) {
       continue;
     }
-    // When the experimental plus addresses feature is enabled, and the value is
-    // a plus address, exclude it from the resulting address profile.
-    if (plus_address_delegate &&
-        (plus_address_delegate->IsPlusAddress(base::UTF16ToUTF8(value)) ||
-         plus_address_delegate->MatchesPlusAddressFormat(value))) {
-      continue;
-    }
-
     FieldType field_type = field->Type().GetAddressType();
     // Only address types are relevant in this function, other types are treated
     // in different flows.
@@ -201,6 +360,14 @@ AddressFormDataImporter::GetAddressObservedFieldValues(
       continue;
     }
     has_address_related_fields = true;
+
+    // Skip common placeholder values (e.g. "select", "optional").
+    if (base::FeatureList::IsEnabled(
+            features::kAutofillFilterPlaceholderValuesOnImport) &&
+        IsPlaceholder(value)) {
+      autofill_metrics::LogRemovedPlaceholderValue(field_type);
+      continue;
+    }
 
     // There can be multiple email fields (e.g. in the case of 'confirm email'
     // fields) but they must all contain the same value, else the profile is
@@ -215,10 +382,12 @@ AddressFormDataImporter::GetAddressObservedFieldValues(
         has_multiple_distinct_email_addresses = true;
       }
     }
-    std::optional<std::u16string> selected_option_value = std::nullopt;
-    if (base::optional_ref<const SelectOption> o = field->selected_option()) {
-      selected_option_value = o->value;
-    }
+    // This is different from `value = field->value_for_import()` because in
+    // case of select fields this can be equal to the SelectOption::text and not
+    // SelectOption::value of the selected option (see `SelectOption`
+    // documentation and `AutofillField::value_for_import()` for more details).
+    std::optional<std::u16string> selected_option_value =
+        field->IsSelectElement() ? std::optional(field->value()) : std::nullopt;
     // If the field type and |value| don't pass basic validity checks then
     // abandon the import.
     if (!IsValidFieldTypeAndValue(
@@ -274,53 +443,63 @@ AddressFormDataImporter::GetAddressObservedFieldValues(
 
 AutofillProfile AddressFormDataImporter::ConstructProfileFromObservedValues(
     const base::flat_map<FieldType, std::u16string>& observed_values,
-    LogBuffer* import_log_buffer,
+    LogBuffer& import_log_buffer,
     ProfileImportMetadata& import_metadata) {
   AutofillProfile candidate_profile(
       i18n_model_definition::kLegacyHierarchyCountryCode);
 
-  auto country_it = observed_values.find(ADDRESS_HOME_COUNTRY);
-  if (country_it != observed_values.end()) {
-    // Try setting the collected country value into the profile and report
-    // invalid country if the operation failed.
-    candidate_profile.SetInfoWithVerificationStatus(
-        ADDRESS_HOME_COUNTRY, country_it->second, client_->GetAppLocale(),
-        VerificationStatus::kObserved);
+  // Since the profile requires a complete phone number, the observed components
+  // of a phone number are collected first. If possible, these components are
+  // then combined into a whole phone number that can be stored in the profile.
+  const PhoneNumber::PhoneCombineHelper combined_phone =
+      PhoneNumber::PhoneCombineHelper::FromObservedValues(observed_values);
 
-    // Track the validity of the entered country for metrics.
+  // In order to use the correct representation for addresses, establish the
+  // country of the profile first.
+  if (const std::u16string* country =
+          base::FindOrNull(observed_values, ADDRESS_HOME_COUNTRY)) {
+    if (candidate_profile.SetInfoWithVerificationStatus(
+            ADDRESS_HOME_COUNTRY, *country, client_->GetAppLocale(),
+            VerificationStatus::kObserved)) {
+      import_metadata.country_source =
+          ProfileCountrySource::kExplicitlyObserved;
+    }
+
     import_metadata.observed_invalid_country =
         !candidate_profile.HasRawInfo(ADDRESS_HOME_COUNTRY);
   }
 
-  // When setting a phone number, the region is deduced from the profile's
-  // country or the app locale. For the variation country code to take
-  // precedence over the app locale, country code complemention needs to happen
-  // before `SetPhoneNumber()`.
-  import_metadata.did_complement_country =
-      ComplementCountry(candidate_profile, import_log_buffer);
+  // When setting a phone number, the region is only deduced from the profile's
+  // country or the app locale. To also use the variation country for
+  // complementing the phone number's country code, the profile country
+  // complemention needs to happen before `SetPhoneNumber()`.
+  if (!candidate_profile.HasRawInfo(ADDRESS_HOME_COUNTRY)) {
+    std::u16string fallback_country;
+    std::tie(fallback_country, import_metadata.country_source) =
+        GetFallbackCountry(combined_phone);
 
-  // We only set complete phone, so aggregate phone parts in these vars and set
-  // complete at the end.
-  PhoneNumber::PhoneCombineHelper combined_phone;
+    if (!candidate_profile.SetInfoWithVerificationStatus(
+            ADDRESS_HOME_COUNTRY, fallback_country, client_->GetAppLocale(),
+            VerificationStatus::kObserved)) {
+      import_metadata.country_source = ProfileCountrySource::kNoCountry;
+    }
 
-  // Populate the profile with the collected values. Note that this is after the
-  // profile's country has been set to make sure the correct address
-  // representation is used.
+    LOG_AF(import_log_buffer)
+        << LogMessage::kImportAddressProfileComplementedCountryCode
+        << fallback_country << CTag{};
+  }
+
   for (const auto& [type, value] : observed_values) {
     // The profile country has already been established by this point. It's
     // ignored here to avoid re-setting up a potentially invalid country that
-    // was present in the form.
-    if (type == ADDRESS_HOME_COUNTRY) {
+    // was present in the form. The same applies to fields for a phone number.
+    if (type == ADDRESS_HOME_COUNTRY ||
+        GroupTypeOfFieldType(type) == FieldTypeGroup::kPhone) {
       continue;
     }
-    if (GroupTypeOfFieldType(type) == FieldTypeGroup::kPhone) {
-      // We need to store phone data in the variables, before building the whole
-      // number at the end.
-      combined_phone.SetInfo(type, value);
-    } else {
-      candidate_profile.SetInfoWithVerificationStatus(
-          type, value, client_->GetAppLocale(), VerificationStatus::kObserved);
-    }
+
+    candidate_profile.SetInfoWithVerificationStatus(
+        type, value, client_->GetAppLocale(), VerificationStatus::kObserved);
   }
 
   // Track if the form contains split zip fields such that at least zip prefix
@@ -340,33 +519,164 @@ AutofillProfile AddressFormDataImporter::ConstructProfileFromObservedValues(
   return candidate_profile;
 }
 
-void AddressFormDataImporter::RemoveInaccessibleProfileValues(
-    AutofillProfile& profile) {
-  const FieldTypeSet inaccessible_fields =
-      profile.FindInaccessibleProfileValues();
-  profile.ClearFields(inaccessible_fields);
-  autofill_metrics::LogRemovedSettingInaccessibleFields(
-      !inaccessible_fields.empty());
-  for (const FieldType inaccessible_field : inaccessible_fields) {
-    autofill_metrics::LogRemovedSettingInaccessibleField(inaccessible_field);
+std::optional<AddressFormDataImporter::ExtractedAddressProfile>
+AddressFormDataImporter::ExtractAddressProfileFromSection(
+    base::span<const AutofillField* const> section_fields,
+    const GURL& source_url,
+    mojom::SubmissionSource submission_source,
+    LogBuffer& import_log_buffer) {
+  // Tracks if the form section contains multiple distinct email addresses.
+  bool has_multiple_distinct_email_addresses = false;
+
+  // Tracks if the form section contains an invalid types.
+  bool has_invalid_field_types = false;
+
+  // Metadata about the way we construct candidate_profile.
+  ProfileImportMetadata import_metadata;
+  import_metadata.origin = url::Origin::Create(source_url);
+  import_metadata.submission_source = submission_source;
+
+  // Tracks if any of the fields belongs to FormType::kAddressForm.
+  bool has_address_related_fields = false;
+
+  // Stores the values collected for each related `FieldType`. Used as
+  // well to detect and discard address forms with multiple fields of the same
+  // type.
+  base::flat_map<FieldType, std::u16string> observed_field_values =
+      GetAddressObservedFieldValues(section_fields, import_metadata,
+                                    import_log_buffer, has_invalid_field_types,
+                                    has_multiple_distinct_email_addresses,
+                                    has_address_related_fields);
+
+  // The candidate for profile import.
+  AutofillProfile candidate_profile = ConstructProfileFromObservedValues(
+      observed_field_values, import_log_buffer, import_metadata);
+
+  // After ensuring the correct country is set on the profile, we can search for
+  // any synthesized nodes. If any of these exist, we'll exclude the profile
+  // from the import process
+  bool has_synthesized_types = HasSynthesizedTypes(
+      observed_field_values, candidate_profile.GetAddressCountryCode());
+
+  // This is done prior to checking the validity of the profile, because multi-
+  // step import profile merging requires the profile to be finalized. Ideally
+  // we would return false here if it fails, but that breaks the metrics.
+  bool finalized_import = candidate_profile.FinalizeAfterImport();
+
+  // Remove invalid values of types that are optional in some countries.
+  // This is done after `FinalizeAfterImport()` to ensure that formatted
+  // invalid values are also removed.
+  RemoveInvalidValuesForImportedProfile(candidate_profile, &import_log_buffer,
+                                        import_metadata);
+
+  // Reject the profile if the validation requirements are not met.
+  // `ValidateNonEmptyProfileValues()` goes first to collect metrics.
+  bool has_invalid_information = !ValidateNonEmptyValuesForImportedProfile(
+                                     candidate_profile, &import_log_buffer) ||
+                                 has_multiple_distinct_email_addresses ||
+                                 has_invalid_field_types ||
+                                 has_synthesized_types;
+
+  // TODO(crbug.com/414842437) Remove debug data.
+  SCOPED_CRASH_KEY_BOOL("Autofill", "has_observed_country",
+                        observed_field_values.contains(ADDRESS_HOME_COUNTRY));
+  SCOPED_CRASH_KEY_STRING32(
+      "Autofill", "observed_country",
+      base::UTF16ToUTF8(
+          base::OptionalFromPtr(
+              base::FindOrNull(observed_field_values, ADDRESS_HOME_COUNTRY))
+              .value_or(u"")));
+  SCOPED_CRASH_KEY_STRING32(
+      "Autofill", "default_country",
+      *address_data_manager().GetDefaultCountryCodeForNewAddress());
+  SCOPED_CRASH_KEY_STRING32("Autofill", "app_locale",
+                            address_data_manager().app_locale());
+  SCOPED_CRASH_KEY_NUMBER("Autofill", "country_source",
+                          std::to_underlying(import_metadata.country_source));
+
+  // Profiles with valid information qualify for multi-step imports.
+  // This requires the profile to be finalized to apply the merging logic.
+  if (finalized_import && has_address_related_fields &&
+      !has_invalid_information) {
+    multistep_importer_.ProcessMultiStepImport(candidate_profile,
+                                               import_metadata);
   }
+
+  // Requires that the profile's country code is set first (e.g., to
+  // `GetFallbackCountry()` if not observed explicitly).
+  candidate_profile.ClearFields(
+      candidate_profile.FindInaccessibleProfileValues());
+
+  // Do not import a profile if any of the requirements is violated.
+  // `IsMinimumAddress()` goes first, since it logs to autofill-internals.
+  bool all_fulfilled =
+      IsMinimumAddress(candidate_profile, &import_log_buffer) &&
+      !has_invalid_information;
+
+  // Collect metrics regarding the requirements for an address profile import.
+  autofill_metrics::LogAddressFormImportRequirementMetric(candidate_profile);
+  autofill_metrics::LogAddressFormImportRequirementMetric(
+      has_multiple_distinct_email_addresses
+          ? AddressImportRequirement::kEmailAddressUniqueRequirementViolated
+          : AddressImportRequirement::kEmailAddressUniqueRequirementFulfilled);
+  autofill_metrics::LogAddressFormImportRequirementMetric(
+      has_invalid_field_types
+          ? AddressImportRequirement::kNoInvalidFieldTypesRequirementViolated
+          : AddressImportRequirement::kNoInvalidFieldTypesRequirementFulfilled);
+  autofill_metrics::LogAddressFormImportRequirementMetric(
+      has_synthesized_types
+          ? AddressImportRequirement::kNoSythesizedTypesRequirementViolated
+          : AddressImportRequirement::kNoSythesizedTypesRequirementFulfilled);
+  autofill_metrics::LogAddressFormImportRequirementMetric(
+      import_metadata.observed_invalid_country
+          ? AddressImportRequirement::kCountryValidRequirementViolated
+          : AddressImportRequirement::kCountryValidRequirementFulfilled);
+  autofill_metrics::LogAddressFormImportRequirementMetric(
+      all_fulfilled ? AddressImportRequirement::kOverallRequirementFulfilled
+                    : AddressImportRequirement::kOverallRequirementViolated);
+
+  if (!finalized_import || !all_fulfilled) {
+    return std::nullopt;
+  }
+
+  autofill_metrics::LogZipCodeLengthMetric(
+      candidate_profile.GetRawInfo(ADDRESS_HOME_ZIP));
+  autofill_metrics::LogZipCodeSeparatorMetric(
+      candidate_profile.GetRawInfo(ADDRESS_HOME_ZIP));
+  autofill_metrics::LogAddressFormImportCountrySource(import_metadata);
+
+  // At this stage, the saving of the profile can only be omitted by the
+  // incognito mode but the import is not triggered if the browser is in the
+  // incognito mode.
+  DCHECK(!client_->IsOffTheRecord());
+
+  ExtractedAddressProfile extracted_address_profile;
+  extracted_address_profile.profile = candidate_profile;
+  extracted_address_profile.url = source_url;
+  extracted_address_profile.import_metadata = import_metadata;
+  return extracted_address_profile;
 }
 
-bool AddressFormDataImporter::ComplementCountry(AutofillProfile& profile,
-                                                LogBuffer* import_log_buffer) {
-  if (profile.HasRawInfo(ADDRESS_HOME_COUNTRY)) {
-    return false;
-  }
-  const std::string fallback =
-      address_data_manager().GetDefaultCountryCodeForNewAddress().value();
-  if (import_log_buffer) {
-    *import_log_buffer
-        << LogMessage::kImportAddressProfileComplementedCountryCode << fallback
-        << CTag{};
-  }
-  return profile.SetInfoWithVerificationStatus(
-      ADDRESS_HOME_COUNTRY, base::ASCIIToUTF16(fallback),
-      client_->GetAppLocale(), VerificationStatus::kObserved);
+std::pair<std::u16string, ProfileCountrySource>
+AddressFormDataImporter::GetFallbackCountry(
+    const PhoneNumber::PhoneCombineHelper& combined_phone) const {
+  return combined_phone.GetRegionCode()
+      .and_then([](std::u16string region_code)
+                    -> std::optional<
+                        std::pair<std::u16string, ProfileCountrySource>> {
+        // Perform feature check only if phone number is in international
+        // format and contains a region code.
+        if (base::FeatureList::IsEnabled(
+                features::kAutofillComplementCountryUsingPhoneNumber)) {
+          return std::make_pair(region_code,
+                                ProfileCountrySource::kPhoneNumberRegionCode);
+        }
+        return std::nullopt;
+      })
+      .value_or(std::make_pair(
+          base::UTF8ToUTF16(
+              *address_data_manager().GetDefaultCountryCodeForNewAddress()),
+          ProfileCountrySource::kDefaultCountryCodeForNewAddress));
 }
 
 bool AddressFormDataImporter::SetPhoneNumber(

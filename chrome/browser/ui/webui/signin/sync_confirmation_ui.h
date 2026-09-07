@@ -16,7 +16,7 @@
 #include "content/public/browser/webui_config.h"
 #include "content/public/common/url_constants.h"
 
-class Browser;
+class BrowserWindowInterface;
 class Profile;
 
 namespace content {
@@ -69,12 +69,14 @@ class SyncConfirmationUI : public SigninWebDialogUI {
 
   // SigninWebDialogUI:
   // `browser` can be nullptr when the UI is displayed without a browser.
-  void InitializeMessageHandlerWithBrowser(Browser* browser) override;
+  void InitializeMessageHandlerWithBrowser(
+      BrowserWindowInterface* browser) override;
 
  private:
   void InitializeForSyncConfirmation(content::WebUIDataSource* source,
                                      SyncConfirmationStyle style,
-                                     bool is_sync_promo);
+                                     bool is_sync_promo,
+                                     bool is_first_run_desktop_refresh_enabled);
   void InitializeForSyncDisabled(content::WebUIDataSource* source);
 
   // Adds a string resource with the given GRD |ids| to the WebUI data |source|

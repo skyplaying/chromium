@@ -8,12 +8,12 @@ import static org.chromium.build.NullUtil.assertNonNull;
 import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.content.Context;
-import android.content.res.Resources;
 import android.view.View;
 
 import androidx.appcompat.content.res.AppCompatResources;
 
 import org.chromium.base.Callback;
+import org.chromium.base.CallbackUtils;
 import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.NonNullObservableSupplier;
 import org.chromium.base.supplier.NullableObservableSupplier;
@@ -33,7 +33,6 @@ import org.chromium.chrome.browser.user_education.IphCommandBuilder;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController.SheetState;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetObserver;
-import org.chromium.components.browser_ui.bottomsheet.EmptyBottomSheetObserver;
 import org.chromium.components.feature_engagement.FeatureConstants;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 
@@ -46,6 +45,7 @@ import java.util.function.Supplier;
  */
 @NullMarked
 public class PriceTrackingButtonController extends BaseButtonDataProvider {
+    public static final int ACTION_CHIP_COLLAPSE_DELAY_MS = 6000;
 
     private final SnackbarManager mSnackbarManager;
     private final Supplier<TabBookmarker> mTabBookmarkerSupplier;
@@ -73,13 +73,15 @@ public class PriceTrackingButtonController extends BaseButtonDataProvider {
         super(
                 tabSupplier,
                 modalDialogManager,
-                AppCompatResources.getDrawable(context, R.drawable.price_tracking_disabled),
-                context.getString(R.string.enable_price_tracking_menu_item),
-                /* actionChipLabelResId= */ R.string.enable_price_tracking_menu_item,
-                /* supportsTinting= */ true,
-                /* iphCommandBuilder= */ null,
-                AdaptiveToolbarButtonVariant.PRICE_TRACKING,
-                /* tooltipTextResId= */ Resources.ID_NULL);
+                new ButtonSpec.Builder(
+                                AppCompatResources.getDrawable(
+                                        context, R.drawable.price_tracking_disabled),
+                                context.getString(R.string.enable_price_tracking_menu_item),
+                                /* supportsTinting= */ true)
+                        .setActionChipLabelResId(R.string.enable_price_tracking_menu_item)
+                        .setActionChipCollapseDelayMs(ACTION_CHIP_COLLAPSE_DELAY_MS)
+                        .setButtonVariant(AdaptiveToolbarButtonVariant.PRICE_TRACKING)
+                        .build());
         mSnackbarManager = snackbarManager;
         mTabBookmarkerSupplier = tabBookmarkerSupplier;
         mBottomSheetController = bottomSheetController;
@@ -91,23 +93,18 @@ public class PriceTrackingButtonController extends BaseButtonDataProvider {
         // Create another ButtonSpec with a filled price tracking icon and a "Stop tracking"
         // description.
         mFilledButtonSpec =
-                new ButtonSpec(
-                        /* drawable= */ AppCompatResources.getDrawable(
-                                context, R.drawable.price_tracking_enabled_filled),
-                        /* onClickListener= */ this,
-                        /* onLongClickListener= */ null,
-                        /* contentDescription= */ context.getString(
-                                R.string.disable_price_tracking_menu_item),
-                        /* supportsTinting= */ true,
-                        /* iphCommandBuilder= */ null,
-                        /* buttonVariant= */ AdaptiveToolbarButtonVariant.PRICE_TRACKING,
-                        /* actionChipLabelResId= */ Resources.ID_NULL,
-                        /* tooltipTextResId= */ Resources.ID_NULL,
-                        /* hasErrorBadge= */ false,
-                        /* isChecked= */ true);
+                new ButtonSpec.Builder(
+                                AppCompatResources.getDrawable(
+                                        context, R.drawable.price_tracking_enabled_filled),
+                                context.getString(R.string.disable_price_tracking_menu_item),
+                                /* supportsTinting= */ true)
+                        .setOnClickListener(this)
+                        .setButtonVariant(AdaptiveToolbarButtonVariant.PRICE_TRACKING)
+                        .setIsChecked(true)
+                        .build();
 
         mBottomSheetObserver =
-                new EmptyBottomSheetObserver() {
+                new BottomSheetObserver() {
                     @Override
                     public void onSheetStateChanged(int newState, int reason) {
                         mButtonData.setEnabled(newState == SheetState.HIDDEN);
@@ -148,7 +145,7 @@ public class PriceTrackingButtonController extends BaseButtonDataProvider {
                     mSnackbarManager,
                     view.getResources(),
                     profile,
-                    (success) -> {},
+                    CallbackUtils.emptyCallback(),
                     PriceDropNotificationManagerFactory.create(profile));
         } else {
             mTabBookmarkerSupplier.get().startOrModifyPriceTracking(mActiveTabSupplier.get());

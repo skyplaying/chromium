@@ -14,6 +14,7 @@
 #include "base/test/task_environment.h"
 #include "services/tracing/perfetto/perfetto_service.h"
 #include "services/tracing/public/cpp/perfetto/perfetto_traced_process.h"
+#include "services/tracing/public/cpp/trace_startup_config.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/perfetto/include/perfetto/ext/tracing/core/consumer.h"
@@ -46,6 +47,7 @@ class MockProducer : public perfetto::Producer {
                uid_t uid = 42,
                pid_t pid = 1025);
   void RegisterDataSource(const std::string& name);
+  void RegisterDataSource(const perfetto::DataSourceDescriptor& desc);
   void UnregisterDataSource(const std::string& name);
 
   perfetto::TracingService::ProducerEndpoint* endpoint() {
@@ -188,6 +190,9 @@ class TracedProcessForTesting {
   explicit TracedProcessForTesting(
       scoped_refptr<base::SequencedTaskRunner> task_runner);
   ~TracedProcessForTesting();
+
+ private:
+  TraceStartupConfig startup_config_;
 };
 
 }  // namespace tracing

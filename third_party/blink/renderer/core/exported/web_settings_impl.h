@@ -31,6 +31,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_EXPORTED_WEB_SETTINGS_IMPL_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_EXPORTED_WEB_SETTINGS_IMPL_H_
 
+#include "base/memory/raw_ptr.h"
 #include "third_party/blink/public/mojom/v8_cache_options.mojom-blink.h"
 #include "third_party/blink/public/mojom/webpreferences/web_preferences.mojom-blink.h"
 #include "third_party/blink/public/web/web_settings.h"
@@ -63,7 +64,7 @@ class CORE_EXPORT WebSettingsImpl final : public WebSettings {
   void SetAllowGeolocationOnInsecureOrigins(bool) override;
   void SetAllowRunningOfInsecureContent(bool) override;
   void SetAllowScriptsToCloseWindows(bool) override;
-  void SetAllowWindowFocusWithoutUserGesture(bool) override;
+  void SetAllowUnrestrictedWindowFocus(bool) override;
   void SetAllowUniversalAccessFromFileURLs(bool) override;
   void SetAlwaysShowContextMenuOnTouch(bool) override;
   void SetAntialiased2dCanvasEnabled(bool) override;
@@ -80,7 +81,6 @@ class CORE_EXPORT WebSettingsImpl final : public WebSettings {
   void SetDefaultFontSize(int) override;
   void SetDefaultTextEncodingName(const WebString&) override;
   void SetDefaultVideoPosterURL(const WebString&) override;
-  void SetDeviceScaleAdjustment(float) override;
 
   void SetDisableReadingFromCanvas(bool) override;
   void SetDontSendKeyEventsToJavascript(bool) override;
@@ -107,6 +107,7 @@ class CORE_EXPORT WebSettingsImpl final : public WebSettings {
   void SetHideDownloadUI(bool) override;
   void SetPresentationReceiver(bool) override;
   void SetHighlightAds(bool) override;
+  void SetInspectorHighlightAds(bool) override;
   void SetHyperlinkAuditingEnabled(bool) override;
   void SetIgnoreMainFrameOverflowHiddenQuirk(bool) override;
   void SetImageAnimationPolicy(mojom::blink::ImageAnimationPolicy) override;
@@ -122,9 +123,12 @@ class CORE_EXPORT WebSettingsImpl final : public WebSettings {
   void SetMaxTouchPoints(int) override;
   void SetPictureInPictureEnabled(bool) override;
   void SetWebAppScope(const WebString&) override;
+  void SetWebAppCustomManifestUrl(const WebURL&) override;
+  void SetIsInitialProfile(bool) override;
   void SetPresentationRequiresUserGesture(bool) override;
   void SetEmbeddedMediaExperienceEnabled(bool) override;
   void SetImmersiveModeEnabled(bool) override;
+  void SetImmersiveVideoPlaybackEnabled(bool) override;
   void SetMinimumFontSize(int) override;
   void SetMinimumLogicalFontSize(int) override;
   void SetHideScrollbars(bool) override;
@@ -170,10 +174,10 @@ class CORE_EXPORT WebSettingsImpl final : public WebSettings {
   void SetTargetBlankImpliesNoOpenerEnabledWillBeRemoved(bool) override;
   void SetIgnorePermissionForDeviceChangedEvent(bool) override;
   void SetTextAreasAreResizable(bool) override;
-  void SetTextAutosizingEnabled(bool) override;
   void SetAccessibilityFontScaleFactor(float) override;
   void SetAccessibilityTextSizeContrastFactor(int) override;
   void SetAccessibilityAlwaysShowFocus(bool) override;
+  void SetTextSizeAdjustEnabled(bool) override;
   void SetTextTrackKindUserPreference(TextTrackKindUserPreference) override;
   void SetTextTrackBackgroundColor(const WebString&) override;
   void SetTextTrackFontFamily(const WebString&) override;
@@ -237,9 +241,9 @@ class CORE_EXPORT WebSettingsImpl final : public WebSettings {
   void SetAccessibilityIncludeSvgGElement(bool) override;
   void SetWebXRImmersiveArAllowed(bool webxr_immersive_ar_allowed) override;
   void SetModalContextMenu(bool) override;
-  void SetRequireTransientActivationAndAuthorizationForSubAppsAPIs(
-      bool) override;
   void SetRootScrollbarThemeColor(std::optional<SkColor>) override;
+  void SetBatterySaverEnabled(bool) override;
+  void SetPreloadingDisabled(bool) override;
 
   bool RenderVSyncNotificationEnabled() const {
     return render_v_sync_notification_enabled_;
@@ -263,7 +267,7 @@ class CORE_EXPORT WebSettingsImpl final : public WebSettings {
   bool MockGestureTapHighlightsEnabled() const;
 
  private:
-  Settings* settings_;
+  raw_ptr<Settings, UnprotectedInRelease | DanglingUntriaged> settings_;
   Persistent<DevToolsEmulator> dev_tools_emulator_;
   bool render_v_sync_notification_enabled_;
   bool auto_zoom_focused_editable_to_legible_scale_;

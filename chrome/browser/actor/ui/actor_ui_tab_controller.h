@@ -28,28 +28,27 @@ class ActorUiTabController : public ActorUiTabControllerInterface {
   // ActorUiTabControllerInterface:
   void OnUiTabStateChange(const UiTabState& ui_tab_state,
                           UiResultCallback callback) override;
-  void OnWebContentsAttached() override;
-  void OnViewBoundsChanged() override;
   void SetActorTaskPaused() override;
   void SetActorTaskResume() override;
+  base::WeakPtr<ActorUiTabControllerInterface> GetWeakPtr() override;
+  UiTabState GetCurrentUiTabState() const override;
+
+#if !BUILDFLAG(IS_ANDROID)
+  void OnWebContentsAttached() override;
+  void OnViewBoundsChanged() override;
   void OnOverlayHoverStatusChanged(bool is_hovering) override;
   void OnHandoffButtonHoverStatusChanged() override;
   void OnHandoffButtonFocusStatusChanged() override;
   [[nodiscard]] base::ScopedClosureRunner RegisterHandoffButtonController(
       HandoffButtonController* controller) override;
-  UiTabState GetCurrentUiTabState() const override;
 
   void OnImmersiveModeChanged() override;
 
-  base::WeakPtr<ActorUiTabControllerInterface> GetWeakPtr() override;
-
-  [[nodiscard]] base::ScopedClosureRunner
-  RegisterActorTabIndicatorStateChangedCallback(
-      ActorTabIndicatorStateChangedCallback callback) override;
   [[nodiscard]] base::ScopedClosureRunner RegisterActorOverlayStateChange(
       ActorOverlayStateChangeCallback callback) override;
   [[nodiscard]] base::ScopedClosureRunner RegisterActorOverlayBackgroundChange(
       ActorOverlayBackgroundChangeCallback callback) override;
+#endif
 
  private:
   // Called only once on startup to initialize tab subscriptions.
@@ -70,8 +69,12 @@ class ActorUiTabController : public ActorUiTabControllerInterface {
   // Run the test callback after updates have been made.
   void OnUpdateFinished();
 
+#if !BUILDFLAG(IS_ANDROID)
   // Called when the omnibox's popup visibility changes.
   void OnWindowOmniboxPopupVisibilityChanged() override;
+  // Called when tab modal UI showing state changes.
+  void OnModalUIChanged(tabs::TabInterface* tab);
+#endif
 
   // Sets the Tab Indicator visibility.
   void SetActorTabIndicatorVisibility(TabIndicatorStatus tab_indicator_status,
@@ -91,7 +94,6 @@ class ActorUiTabController : public ActorUiTabControllerInterface {
 
   void UnregisterActorOverlayStateChange();
   void UnregisterActorOverlayBackgroundChange();
-  void UnregisterActorTabIndicatorStateChange();
   void UnregisterHandoffButtonController();
 
   // The current UiTabState.
@@ -112,11 +114,11 @@ class ActorUiTabController : public ActorUiTabControllerInterface {
   // Holds subscriptions for TabInterface callbacks.
   std::vector<base::CallbackListSubscription> tab_subscriptions_;
 
-  ActorTabIndicatorStateChangedCallback
-      on_actor_tab_indicator_changed_callback_;
+#if !BUILDFLAG(IS_ANDROID)
   ActorOverlayStateChangeCallback on_actor_overlay_state_changed_callback_;
   ActorOverlayBackgroundChangeCallback
       actor_overlay_background_changed_callback_;
+#endif
 
   // The Actor Keyed Service for the associated profile.
   raw_ptr<ActorKeyedService> actor_keyed_service_ = nullptr;

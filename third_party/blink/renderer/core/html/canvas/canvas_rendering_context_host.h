@@ -5,6 +5,8 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_HTML_CANVAS_CANVAS_RENDERING_CONTEXT_HOST_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_CANVAS_CANVAS_RENDERING_CONTEXT_HOST_H_
 
+#include <optional>
+
 #include "base/byte_size.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
@@ -16,9 +18,12 @@
 #include "third_party/blink/renderer/core/html/canvas/ukm_parameters.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/v8_external_memory_accounter.h"
-#include "third_party/blink/renderer/platform/graphics/canvas_resource_provider.h"
+#include "third_party/blink/renderer/platform/graphics/canvas_2d_resource_provider.h"
+#include "third_party/blink/renderer/platform/graphics/canvas_child_paint_record.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/text/text_direction.h"
+#include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/size.h"
 
 namespace cc {
@@ -28,9 +33,9 @@ class Layer;
 namespace blink {
 
 class CanvasRenderingContext;
-class CanvasResource;
 class CanvasResourceDispatcher;
 class ComputedStyle;
+class ElementImage;
 class KURL;
 class LayoutLocale;
 class PlainTextPainter;
@@ -44,7 +49,7 @@ enum class RasterModeHint {
 
 class CORE_EXPORT CanvasRenderingContextHost
     : public GarbageCollectedMixin,
-      public CanvasResourceProvider::Delegate,
+      public CanvasResourceProviderDelegate,
       public CanvasImageSource,
       public ImageBitmapSource {
  public:
@@ -60,13 +65,11 @@ class CORE_EXPORT CanvasRenderingContextHost
 
   virtual void DetachContext() = 0;
 
-  virtual void DidDraw(const SkIRect& rect) = 0;
-  void DidDraw() { DidDraw(SkIRect::MakeWH(width(), height())); }
+  virtual void DidDraw(const gfx::Rect& rect) = 0;
+  void DidDraw() { DidDraw(gfx::Rect(Size())); }
 
   virtual void PostFinalizeFrame(FlushReason) = 0;
   void NotifyCachesOfSwitchingFrame();
-  virtual bool PushFrame(scoped_refptr<CanvasResource>&& frame,
-                         const SkIRect& damage_rect) = 0;
   virtual bool OriginClean() const = 0;
   virtual void SetOriginTainted() = 0;
   virtual CanvasRenderingContext* RenderingContext() const = 0;
@@ -109,7 +112,6 @@ class CORE_EXPORT CanvasRenderingContextHost
 
   virtual bool LowLatencyEnabled() const { return false; }
 
-  virtual void SetTransferToGPUTextureWasInvoked() {}
 
   // Required by template functions in WebGLRenderingContextBase
   int width() const { return Size().width(); }
@@ -117,6 +119,9 @@ class CORE_EXPORT CanvasRenderingContextHost
 
   // Partial CanvasResourceProvider::Delegate implementation
   void InitializeForRecording(cc::PaintCanvas*) const final;
+  scoped_refptr<const cc::AnimatedImageFrameIndexMap>
+  GetAnimatedImageFrameIndexes(uint32_t id) const override;
+  void DidFlush() override;
 
   virtual void PageVisibilityChanged();
 
@@ -125,9 +130,6 @@ class CORE_EXPORT CanvasRenderingContextHost
   bool IsRenderingContext2D() const;
   bool IsImageBitmapRenderingContext() const;
 
-  SkAlphaType GetRenderingContextAlphaType() const;
-  viz::SharedImageFormat GetRenderingContextFormat() const;
-  gfx::ColorSpace GetRenderingContextColorSpace() const;
   PlainTextPainter& GetPlainTextPainter();
 
   // Actual RasterMode used for rendering 2d primitives.
@@ -136,6 +138,15 @@ class CORE_EXPORT CanvasRenderingContextHost
   virtual bool IsPageVisible() const = 0;
   virtual void SetNeedsCompositingUpdate() = 0;
   virtual void ClearCanvas2DLayerTexture() {}
+
+  virtual void RecordRenderedText(const String& text,
+                                  const gfx::RectF& bounds,
+                                  float font_height) {}
+  virtual void ClearRenderedText(const gfx::RectF& rect) {}
+  virtual void ClearRenderedText() {}
+  virtual bool ShouldCaptureRenderedText() {
+    return should_capture_rendered_text_;
+  }
 
   // blink::CanvasImageSource
   bool IsOffscreenCanvas() const override;
@@ -151,6 +162,21 @@ class CORE_EXPORT CanvasRenderingContextHost
 
   virtual void DiscardResources() = 0;
 
+  virtual std::optional<CanvasChildPaintRecord> GetCanvasChildPaintRecord(
+      DOMNodeId child_id) const {
+    return std::nullopt;
+  }
+
+  enum UpdateGeometryBehavior { kUpdateHitTestOrder, kPreserveHitTestOrder };
+  virtual void UpdateDrawnElementGeometry(Element&,
+                                          const gfx::Transform*,
+                                          bool update_hit_test_order) = 0;
+  virtual void UpdateDrawnElementGeometry(ElementImage&,
+                                          const gfx::Transform*,
+                                          bool update_hit_test_order) = 0;
+  virtual void ClearDrawnElementGeometry(Element&) = 0;
+  virtual void ClearDrawnElementGeometry(ElementImage&) = 0;
+
  protected:
   ~CanvasRenderingContextHost() override;
 
@@ -161,6 +187,7 @@ class CORE_EXPORT CanvasRenderingContextHost
   Member<PlainTextPainter> plain_text_painter_;
   Member<UniqueFontSelector> unique_font_selector_;
   gfx::Size size_;
+  bool should_capture_rendered_text_ = false;
 
  private:
 

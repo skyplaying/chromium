@@ -54,30 +54,36 @@ base::span<uint8_t> GetTargetData(base::MappedReadOnlyRegion& region,
   return base::span(region.mapping).subspan(offset, size);
 }
 
-std::vector<SyncToken> GenerateDependenciesFromSyncToken(
-    SyncToken sync_token,
+std::vector<SyncToken> GenerateDependenciesFromSyncTokens(
+    std::vector<SyncToken> sync_tokens,
     GpuChannelHost* const host) {
   DCHECK(host);
-  std::vector<SyncToken> dependencies;
-  if (sync_token.HasData()) {
-    dependencies.push_back(sync_token);
-    SyncToken& new_token = dependencies.back();
-    if (!new_token.verified_flush()) {
+  for (auto& sync_token : sync_tokens) {
+    if (sync_token.HasData() && !sync_token.verified_flush()) {
       // Only allow unverified sync tokens for the same channel.
       DCHECK_EQ(sync_token.namespace_id(), gpu::CommandBufferNamespace::GPU_IO);
       int sync_token_channel_id =
           ChannelIdFromCommandBufferId(sync_token.command_buffer_id());
       DCHECK_EQ(sync_token_channel_id, host->channel_id());
-      new_token.SetVerifyFlush();
+      sync_token.SetVerifyFlush();
     }
   }
-  return dependencies;
+  return sync_tokens;
+}
+
+std::vector<SyncToken> GenerateDependenciesFromSyncToken(
+    SyncToken sync_token,
+    GpuChannelHost* const host) {
+  if (sync_token.HasData()) {
+    return GenerateDependenciesFromSyncTokens({sync_token}, host);
+  }
+  return std::vector<SyncToken>();
 }
 
 mojom::SharedImageInfoPtr CreateSharedImageInfo(
     const SharedImageInfo& si_info) {
   auto info = mojom::SharedImageInfo::New();
-  info->meta = si_info.meta;
+  info->meta = si_info;
   info->debug_label = si_info.debug_label;
   return info;
 }
@@ -124,25 +130,25 @@ Mailbox SharedImageInterfaceProxy::CreateSharedImage(
   // from it.
   {
     mojo::SyncCallRestrictions::ScopedAllowSyncCall allow_sync_call;
-    host_->CreateGpuMemoryBuffer(si_info.meta.size, si_info.meta.format,
-                                 buffer_usage, handle_to_populate);
+    host_->CreateGpuMemoryBuffer(si_info.size, si_info.format, buffer_usage,
+                                 handle_to_populate);
   }
 
   if (handle_to_populate->is_null()) {
     if (!host_->IsLost()) {
-      LOG(ERROR) << "Buffer handle is null. Not creating a mailbox from it.";
+      VLOG(1) << "Buffer handle is null. Not creating a mailbox from it.";
     }
     return Mailbox();
   }
 
   // Clear the external sampler prefs for shared memory case if it is set. Note
-  // that the |si_info.meta.format| is a reference, so any modifications to it
+  // that the |si_info.format| is a reference, so any modifications to it
   // will also be reflected at the place from which this method is called from.
   // https://issues.chromium.org/339546249.
-  if (si_info.meta.format.PrefersExternalSampler() &&
+  if (si_info.format.PrefersExternalSampler() &&
       (handle_to_populate->type ==
        gfx::GpuMemoryBufferType::SHARED_MEMORY_BUFFER)) {
-    si_info.meta.format.ClearPrefersExternalSampler();
+    si_info.format.ClearPrefersExternalSampler();
   }
 
   // Call existing SI method to create a SI from handle. Note that we are doing
@@ -574,6 +580,15 @@ void SharedImageInterfaceProxy::DestroySharedImagePool(
                 std::move(params))),
         /*sync_token_fences=*/{}, ++next_release_id_);
   }
+}
+
+void SharedImageInterfaceProxy::SignalSyncToken(
+    std::vector<SyncToken> sync_tokens,
+    base::OnceClosure callback) {
+  base::AutoLock lock(lock_);
+  host_->SignalSyncToken(
+      GenerateDependenciesFromSyncTokens(std::move(sync_tokens), host_),
+      std::move(callback));
 }
 
 SharedImageInterfaceProxy::SharedImageRefData::SharedImageRefData() = default;

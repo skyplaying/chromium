@@ -104,6 +104,7 @@ class VIZ_SERVICE_EXPORT FrameSinkManagerImpl
     base::ProcessId host_process_id = base::kNullProcessId;
     raw_ptr<HintSessionFactory> hint_session_factory = nullptr;
     size_t max_uncommitted_frames = 0;
+    bool use_direct_receiver = false;
   };
   explicit FrameSinkManagerImpl(const InitParams& params);
 
@@ -171,6 +172,13 @@ class VIZ_SERVICE_EXPORT FrameSinkManagerImpl
   void UnregisterFrameSinkHierarchy(
       const FrameSinkId& parent_frame_sink_id,
       const FrameSinkId& child_frame_sink_id) override;
+  // Returns true if `unbounded_frame_sink_id` is a valid target for an
+  // unbounded surface under `parent_frame_sink_id`. This checks that the ID is
+  // registered in Viz by the Browser process or is a registered descendant
+  // in the frame sink hierarchy of `parent_frame_sink_id`.
+  bool IsValidUnboundedFrameSinkId(
+      const FrameSinkId& parent_frame_sink_id,
+      const FrameSinkId& unbounded_frame_sink_id) const;
   void AddVideoDetectorObserver(
       mojo::PendingRemote<mojom::VideoDetectorObserver> observer) override;
   void CreateVideoCapturer(
@@ -279,6 +287,10 @@ class VIZ_SERVICE_EXPORT FrameSinkManagerImpl
   void RemoveHitTestRegionObserver(HitTestRegionObserver* observer) override;
   const DisplayHitTestQueryMap& GetDisplayHitTestQuery() const override;
 
+  // HitTestAggregatorDelegate and HitTestManager::Delegate implementation:
+  bool IsChildOf(const FrameSinkId& parent,
+                 const FrameSinkId& child) const override;
+
   // CompositorFrameSinkSupport, hierarchy, and BeginFrameSource can be
   // registered and unregistered in any order with respect to each other.
   //
@@ -305,7 +317,7 @@ class VIZ_SERVICE_EXPORT FrameSinkManagerImpl
 
   virtual InputManager* GetInputManager();  // virtual for testing.
 
-  void SubmitHitTestRegionList(
+  bool SubmitHitTestRegionList(
       const SurfaceId& surface_id,
       uint64_t frame_index,
       std::optional<HitTestRegionList> hit_test_region_list);
@@ -433,18 +445,12 @@ class VIZ_SERVICE_EXPORT FrameSinkManagerImpl
 
   GpuServiceImpl* GetGpuService();
 
-#if BUILDFLAG(IS_ANDROID)
-  // Android: if true, opts the current ADPF session (held by viz) into
-  // power-efficient scheduling.
-  void SetPreferEfficientScheduling(bool prefer_efficient_scheduling) const;
-#endif
-
 #if BUILDFLAG(IS_MAC)
   // This is called after SetSupportedDisplayLinkId() in the browser process.
-  // This function will force ExternalDisplayLinkMac in every
-  // RootCompositorFrameSink to check whether we need to get a new
-  // DisplayLinkMac when a display is added or removed.
-  void UpdateVSyncDisplays();
+  // Forces every RootCompositorFrameSink associated with the specified display
+  // to update its DisplayLinkMac. This ensures that frame sinks stay in sync
+  // with the display configuration when displays are added or removed.
+  void UpdateVSyncDisplays(int64_t display_id);
 #endif
 
  private:
@@ -679,7 +685,7 @@ class VIZ_SERVICE_EXPORT FrameSinkManagerImpl
   mojo::Receiver<mojom::FrameSinksMetricsRecorder> metrics_receiver_{this};
   mojo::Receiver<mojom::FrameSinkManagerTestApi> test_api_receiver_{this};
 
-  base::ObserverList<FrameSinkObserver>::Unchecked observer_list_;
+  base::ObserverList<FrameSinkObserver> observer_list_;
 
 #if BUILDFLAG(IS_MAC)
   // Only one ExternalBeginFrameSourceMojoMac object is created and is

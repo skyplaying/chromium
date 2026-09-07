@@ -12,7 +12,7 @@
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
 #include "chrome/browser/themes/theme_service.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/lens/lens_composebox_handler.h"
 #include "chrome/browser/ui/lens/lens_overlay_controller.h"
 #include "chrome/browser/ui/lens/lens_overlay_side_panel_coordinator.h"
@@ -53,7 +53,6 @@ class TestLensComposeboxController : public lens::LensComposeboxController {
 
   void BindComposebox(
       mojo::PendingReceiver<composebox::mojom::PageHandler> pending_handler,
-      mojo::PendingRemote<composebox::mojom::Page> pending_page,
       mojo::PendingRemote<searchbox::mojom::Page> pending_searchbox_page,
       mojo::PendingReceiver<searchbox::mojom::PageHandler>
           pending_searchbox_handler) override {
@@ -64,8 +63,7 @@ class TestLensComposeboxController : public lens::LensComposeboxController {
       mock_searchbox_page_.receiver_.reset();
     }
     lens::LensComposeboxController::BindComposebox(
-        std::move(pending_handler), std::move(pending_page),
-        mock_searchbox_page_.BindAndGetRemote(),
+        std::move(pending_handler), mock_searchbox_page_.BindAndGetRemote(),
         std::move(pending_searchbox_handler));
   }
 
@@ -191,6 +189,7 @@ class LensComposeboxControllerBrowserTest : public InProcessBrowserTest {
           {{"lens-aim-suggestions-type", "Contextual"}}},
          {lens::features::kLensSearchReinvocationAffordance, {}}},
         /*disabled_features=*/{contextual_tasks::kContextualTasks,
+                               contextual_tasks::kContextualTasksSidePanel,
                                omnibox::kAimServerEligibilityEnabled});
 
     InProcessBrowserTest::SetUp();
@@ -201,7 +200,7 @@ class LensComposeboxControllerBrowserTest : public InProcessBrowserTest {
     embedded_test_server()->StartAcceptingConnections();
 
     // Permits sharing the page screenshot by default.
-    PrefService* prefs = browser()->profile()->GetPrefs();
+    PrefService* prefs = browser()->GetProfile()->GetPrefs();
     prefs->SetBoolean(lens::prefs::kLensSharingPageScreenshotEnabled, true);
     prefs->SetBoolean(lens::prefs::kLensSharingPageContentEnabled, true);
   }
@@ -211,7 +210,7 @@ class LensComposeboxControllerBrowserTest : public InProcessBrowserTest {
     InProcessBrowserTest::TearDownOnMainThread();
 
     // Disallow sharing the page screenshot by default.
-    PrefService* prefs = browser()->profile()->GetPrefs();
+    PrefService* prefs = browser()->GetProfile()->GetPrefs();
     prefs->SetBoolean(lens::prefs::kLensSharingPageScreenshotEnabled, false);
     prefs->SetBoolean(lens::prefs::kLensSharingPageContentEnabled, false);
   }
@@ -340,7 +339,7 @@ IN_PROC_BROWSER_TEST_F(LensComposeboxControllerBrowserTest,
   GetLensComposeboxController()->composebox_handler_for_testing()->SubmitQuery(
       "test query", /*mouse_button=*/0, /*alt_key=*/false, /*ctrl_key=*/false,
       /*meta_key=*/false,
-      /*shift_key=*/false);
+      /*shift_key=*/false, /*is_voice_search=*/false);
 
   // Verify the client message sent.
   auto* test_side_panel_coordinator = GetLensSidePanelCoordinator();
@@ -392,8 +391,8 @@ IN_PROC_BROWSER_TEST_F(LensComposeboxControllerBrowserTest,
   // Send a query with params.
   std::map<std::string, std::string> additional_params;
   additional_params["gs_lcrp"] = "test_value";
-  GetLensComposeboxController()->IssueComposeboxQuery("test query",
-                                                      additional_params);
+  GetLensComposeboxController()->IssueComposeboxQuery(
+      "test query", additional_params, /*is_voice_search=*/false);
 
   // Verify the client message sent.
   auto* test_side_panel_coordinator = GetLensSidePanelCoordinator();
@@ -436,8 +435,8 @@ IN_PROC_BROWSER_TEST_F(LensComposeboxControllerBrowserTest,
   // Send a query with params before handshake.
   std::map<std::string, std::string> additional_params;
   additional_params["gs_lcrp"] = "test_value";
-  GetLensComposeboxController()->IssueComposeboxQuery("test query",
-                                                      additional_params);
+  GetLensComposeboxController()->IssueComposeboxQuery(
+      "test query", additional_params, /*is_voice_search=*/false);
 
   // Verify the client message was not sent.
   auto* test_side_panel_coordinator = GetLensSidePanelCoordinator();
@@ -532,7 +531,7 @@ IN_PROC_BROWSER_TEST_F(LensComposeboxControllerBrowserTest,
   GetLensComposeboxController()->composebox_handler_for_testing()->SubmitQuery(
       "test query", /*mouse_button=*/0, /*alt_key=*/false, /*ctrl_key=*/false,
       /*meta_key=*/false,
-      /*shift_key=*/false);
+      /*shift_key=*/false, /*is_voice_search=*/false);
   histogram_tester.ExpectBucketCount(
       "Lens.Composebox.UserAction",
       lens::LensComposeboxUserAction::kQuerySubmitted, 1);
@@ -549,7 +548,7 @@ IN_PROC_BROWSER_TEST_F(LensComposeboxControllerBrowserTest,
   GetLensComposeboxController()->composebox_handler_for_testing()->SubmitQuery(
       "test query 2", /*mouse_button=*/0, /*alt_key=*/false, /*ctrl_key=*/false,
       /*meta_key=*/false,
-      /*shift_key=*/false);
+      /*shift_key=*/false, /*is_voice_search=*/false);
   histogram_tester.ExpectBucketCount(
       "Lens.Composebox.UserAction",
       lens::LensComposeboxUserAction::kQuerySubmitted, 2);
@@ -594,7 +593,7 @@ IN_PROC_BROWSER_TEST_F(LensComposeboxControllerBrowserTest,
   GetLensComposeboxController()->composebox_handler_for_testing()->SubmitQuery(
       "test query", /*mouse_button=*/0, /*alt_key=*/false, /*ctrl_key=*/false,
       /*meta_key=*/false,
-      /*shift_key=*/false);
+      /*shift_key=*/false, /*is_voice_search=*/false);
 
   // The new query should be logged as submitted but not issued.
   histogram_tester.ExpectBucketCount(
@@ -704,7 +703,7 @@ IN_PROC_BROWSER_TEST_F(LensComposeboxControllerBrowserTest,
   GetLensComposeboxController()->composebox_handler_for_testing()->SubmitQuery(
       "test query", /*mouse_button=*/0, /*alt_key=*/false, /*ctrl_key=*/false,
       /*meta_key=*/false,
-      /*shift_key=*/false);
+      /*shift_key=*/false, /*is_voice_search=*/false);
   histogram_tester.ExpectBucketCount(
       "Lens.Composebox.UserAction",
       lens::LensComposeboxUserAction::kQuerySubmitted, 1);
@@ -717,7 +716,7 @@ IN_PROC_BROWSER_TEST_F(LensComposeboxControllerBrowserTest,
       "test query 2", /*mouse_button=*/0, /*alt_key=*/false,
       /*ctrl_key=*/false,
       /*meta_key=*/false,
-      /*shift_key=*/false);
+      /*shift_key=*/false, /*is_voice_search=*/false);
   histogram_tester.ExpectBucketCount(
       "Lens.Composebox.UserAction",
       lens::LensComposeboxUserAction::kQuerySubmitted, 2);
@@ -798,7 +797,7 @@ IN_PROC_BROWSER_TEST_F(LensComposeboxControllerBrowserTest,
   GetLensComposeboxController()->composebox_handler_for_testing()->SubmitQuery(
       "test query", /*mouse_button=*/0, /*alt_key=*/false, /*ctrl_key=*/false,
       /*meta_key=*/false,
-      /*shift_key=*/false);
+      /*shift_key=*/false, /*is_voice_search=*/false);
 
   // Verify the client message sent.
   auto* test_side_panel_coordinator = GetLensSidePanelCoordinator();
@@ -822,7 +821,7 @@ IN_PROC_BROWSER_TEST_F(LensComposeboxControllerBrowserTest,
   GetLensComposeboxController()->composebox_handler_for_testing()->SubmitQuery(
       "test query 2", /*mouse_button=*/0, /*alt_key=*/false, /*ctrl_key=*/false,
       /*meta_key=*/false,
-      /*shift_key=*/false);
+      /*shift_key=*/false, /*is_voice_search=*/false);
 
   // Verify the new message.
   submit_query = test_side_panel_coordinator->last_sent_client_message_to_aim_
@@ -1095,7 +1094,7 @@ IN_PROC_BROWSER_TEST_F(LensComposeboxControllerBrowserTest,
   GetLensComposeboxController()->composebox_handler_for_testing()->SubmitQuery(
       "test query", /*mouse_button=*/0, /*alt_key=*/false, /*ctrl_key=*/false,
       /*meta_key=*/false,
-      /*shift_key=*/false);
+      /*shift_key=*/false, /*is_voice_search=*/false);
 
   // Verify the client message sent.
   auto* test_side_panel_coordinator = GetLensSidePanelCoordinator();
@@ -1126,7 +1125,7 @@ IN_PROC_BROWSER_TEST_F(LensComposeboxControllerBrowserTest,
       "test query 2", /*mouse_button=*/0, /*alt_key=*/false,
       /*ctrl_key=*/false,
       /*meta_key=*/false,
-      /*shift_key=*/false);
+      /*shift_key=*/false, /*is_voice_search=*/false);
 
   // Verify the new message has no image crop in the vsint data.
   submit_query = test_side_panel_coordinator->last_sent_client_message_to_aim_
@@ -1261,7 +1260,7 @@ IN_PROC_BROWSER_TEST_F(LensComposeboxControllerBrowserTest,
   EXPECT_CALL(
       mock_searchbox_page,
       OnContextualInputStatusChanged(
-          first_id, contextual_search::FileUploadStatus::kUploadReplaced,
+          first_id, contextual_search::ContextUploadStatus::kUploadReplaced,
           testing::_))
       .Times(1);
 
@@ -1376,9 +1375,24 @@ IN_PROC_BROWSER_TEST_F(LensComposeboxControllerBrowserTest,
   // Send a query.
   GetLensComposeboxController()->composebox_handler_for_testing()->SubmitQuery(
       "test query", /*mouse_button=*/0, /*alt_key=*/false, /*ctrl_key=*/false,
-      /*meta_key=*/false, /*shift_key=*/false);
+      /*meta_key=*/false, /*shift_key=*/false, /*is_voice_search=*/false);
 
   // Verify overlay is hidden.
   ASSERT_TRUE(base::test::RunUntil(
       [&]() { return overlay_controller->state() == State::kHidden; }));
+}
+
+IN_PROC_BROWSER_TEST_F(LensComposeboxControllerBrowserTest,
+                       OnFocusChangedDoesNotCrashWhenOff) {
+  WaitForPaint();
+
+  // Contextualize on focus should be default enabled.
+  auto* lens_controller = GetLensSearchController();
+  ASSERT_TRUE(lens_controller);
+
+  // Ensure the controller is OFF.
+  ASSERT_TRUE(lens_controller->IsOff());
+
+  // Simulate focus. This should not crash.
+  GetLensComposeboxController()->OnFocusChanged(true);
 }

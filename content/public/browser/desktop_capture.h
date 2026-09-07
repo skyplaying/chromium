@@ -5,13 +5,22 @@
 #ifndef CONTENT_PUBLIC_BROWSER_DESKTOP_CAPTURE_H_
 #define CONTENT_PUBLIC_BROWSER_DESKTOP_CAPTURE_H_
 
+class SkBitmap;
+
 #include <optional>
 
 #include "base/functional/callback.h"
+#include "build/build_config.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/desktop_media_id.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_capture_options.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_capturer.h"
+
+#if BUILDFLAG(IS_MAC)
+#include <sys/types.h>
+
+#include <string>
+#endif
 
 namespace content::desktop_capture {
 
@@ -54,11 +63,42 @@ CONTENT_EXPORT void OpenNativeScreenCapturePicker(
 // closes the picker dialog if it is not observing anything else.
 CONTENT_EXPORT void CloseNativeScreenCapturePicker(DesktopMediaID source_id);
 
-// Returns the ID of the PiP window if it exists and should be excluded from the
-// capture of the specified `desktop_id`, by the application owning the PiP
-// window. Must only be called on the UI thread.
-CONTENT_EXPORT std::optional<DesktopMediaID::Id>
-GetPipWindowToExcludeFromScreenCapture(DesktopMediaID::Id desktop_id);
+#if BUILDFLAG(IS_MAC)
+struct ApplicationAudioCaptureId {
+  std::string bundle_id;
+  std::optional<pid_t> pid;
+
+  bool operator==(const ApplicationAudioCaptureId& other) const = default;
+};
+
+using GetApplicationAudioCaptureIdCallback =
+    base::OnceCallback<void(const std::optional<ApplicationAudioCaptureId>&)>;
+
+// Resolves a DesktopMediaID (session or native) into its main
+// ApplicationAudioCaptureId. Must be called from a sequenced
+// thread. Callback will be invoked on the calling sequence.
+CONTENT_EXPORT void GetApplicationAudioCaptureId(
+    DesktopMediaID desktop_media_id,
+    GetApplicationAudioCaptureIdCallback callback);
+#endif  // #if BUILDFLAG(IS_MAC)
+
+// An opaque RAII handle representing an in-flight screenshot capture request.
+// Callers retain ownership of this object for the duration of the capture.
+// Destroying the handle aborts any pending capture operation and guarantees
+// that the completion callback will not be invoked.
+class CONTENT_EXPORT ScreenshotCaptureRequest {
+ public:
+  virtual ~ScreenshotCaptureRequest() = default;
+};
+
+// Captures a screenshot from the specified desktop media source. Returns an
+// RAII handle representing the in-flight capture request, or nullptr if
+// initialization failed (in which case `callback` will not be executed).
+// Destructing the handle cancels the capture and prevents `callback` from
+// being called.
+CONTENT_EXPORT std::unique_ptr<ScreenshotCaptureRequest> CaptureScreenshot(
+    DesktopMediaID source,
+    base::OnceCallback<void(const ::SkBitmap&)> callback);
 
 }  // namespace content::desktop_capture
 

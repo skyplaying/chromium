@@ -32,11 +32,17 @@
 #include "net/dns/public/dns_query_type.h"
 #include "net/dns/public/host_resolver_results.h"
 #include "net/dns/public/host_resolver_source.h"
+#include "net/dns/public/insecure_dns_mode.h"
 #include "net/dns/public/mdns_listener_update_type.h"
+#include "net/dns/public/resolution_details.h"
 #include "net/dns/public/resolve_error_info.h"
 #include "net/dns/public/secure_dns_policy.h"
 #include "net/log/net_log_with_source.h"
 #include "url/scheme_host_port.h"
+
+namespace base {
+class SingleThreadTaskRunner;
+}
 
 namespace net {
 
@@ -194,6 +200,11 @@ class NET_EXPORT HostResolver {
     // the request is running (after Start() returns |ERR_IO_PENDING| and before
     // the callback is invoked).
     virtual void ChangeRequestPriority(RequestPriority priority) {}
+
+    // Returns details about how the host resolution was performed. Only
+    // available after the request has completed. Returns std::nullopt if the
+    // resolution is not completed or failed.
+    virtual std::optional<ResolutionDetails> GetResolutionDetails() const = 0;
   };
 
   // Handler for a service endpoint resolution request. Unlike
@@ -264,10 +275,14 @@ class NET_EXPORT HostResolver {
     // equivalent to checking the staleness from GetStaleInfo() while the
     // request isn't final. This can be changed over time while resolution is
     // still ongoing.
-    virtual bool IsStaleWhileRefresing() const = 0;
+    virtual bool IsStaleWhileRefreshing() const = 0;
 
     // Change the priority of this request.
     virtual void ChangeRequestPriority(RequestPriority priority) = 0;
+
+    // Returns details about how the host resolution was performed. Returns
+    // std::nullopt if the resolution is not completed or failed.
+    virtual std::optional<ResolutionDetails> GetResolutionDetails() const = 0;
 
     // TODO(crbug.com/403373872): Remove this method once we identify the cause
     // of the bug.
@@ -333,10 +348,10 @@ class NET_EXPORT HostResolver {
     size_t max_system_retry_attempts =
         HostResolverSystemTask::Params::kDefaultRetryAttempts;
 
-    // Initial setting for whether the insecure portion of the built-in
-    // asynchronous DnsClient is enabled or disabled. See HostResolverManager::
-    // SetInsecureDnsClientEnabled() for details.
-    bool insecure_dns_client_enabled = false;
+    // Initial setting for the mode of operation of the insecure portion of the
+    // built-in DNS client. See
+    // HostResolverManager::SetInsecureDnsClientEnabled() for details.
+    InsecureDnsMode insecure_dns_mode = InsecureDnsMode::kDisabled;
 
     // Initial setting for whether additional DNS types (e.g. HTTPS) may be
     // queried when using the built-in resolver for insecure DNS.
@@ -520,6 +535,7 @@ class NET_EXPORT HostResolver {
   virtual std::unique_ptr<ResolveHostRequest> CreateRequest(
       url::SchemeHostPort host,
       NetworkAnonymizationKey network_anonymization_key,
+      handles::NetworkHandle target_network,
       NetLogWithSource net_log,
       std::optional<ResolveHostParameters> optional_parameters) = 0;
 
@@ -528,6 +544,7 @@ class NET_EXPORT HostResolver {
   virtual std::unique_ptr<ResolveHostRequest> CreateRequest(
       const HostPortPair& host,
       const NetworkAnonymizationKey& network_anonymization_key,
+      handles::NetworkHandle target_network,
       const NetLogWithSource& net_log,
       const std::optional<ResolveHostParameters>& optional_parameters) = 0;
 
@@ -535,6 +552,7 @@ class NET_EXPORT HostResolver {
   virtual std::unique_ptr<ServiceEndpointRequest> CreateServiceEndpointRequest(
       Host host,
       NetworkAnonymizationKey network_anonymization_key,
+      handles::NetworkHandle target_network,
       NetLogWithSource net_log,
       ResolveHostParameters parameters) = 0;
 
@@ -657,6 +675,13 @@ class NET_EXPORT HostResolver {
   static bool MayUseNAT64ForIPv4Literal(HostResolverFlags flags,
                                         HostResolverSource source,
                                         const IPAddress& ip_address);
+
+  // Returns the prioritized SingleThreadTaskRunner matching `priority` if the
+  // HostResolver task scheduler experiment is enabled. Falls back to the
+  // current default SingleThreadTaskRunner.
+  static const scoped_refptr<base::SingleThreadTaskRunner>& GetTaskRunner(
+      RequestPriority priority);
+
  protected:
   HostResolver();
 

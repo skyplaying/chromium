@@ -9,8 +9,12 @@
 #import <UIKit/UIKit.h>
 
 #import "base/ios/block_types.h"
+#import "ios/chrome/browser/fullscreen/public/fullscreen_metrics.h"
 
 enum class ComposeboxEntrypoint;
+namespace send_tab_to_self {
+enum class ShareEntryPoint;
+}
 namespace base {
 class ScopedClosureRunner;
 }
@@ -23,6 +27,7 @@ enum class AccessPoint;
 namespace trusted_vault {
 enum class TrustedVaultUserActionTriggerForUMA;
 }
+@class ComposeboxFocusParams;
 
 // Protocol for commands that will be handled by the BrowserCoordinator.
 // TODO(crbug.com/41427057) : Rename this protocol to one that is more
@@ -64,13 +69,11 @@ enum class TrustedVaultUserActionTriggerForUMA;
 - (void)showComposeboxFromEntrypoint:(ComposeboxEntrypoint)entryPoint
                            withQuery:(NSString*)query;
 
+// Shows the composebox with the given `params`.
+- (void)showComposeboxWithParams:(ComposeboxFocusParams*)params;
+
 // Hides the composebox on the next run loop.
 - (void)hideComposebox;
-
-// Hides the composebox and, upon completion, opens the share sheet.
-// This is a temporary command that is only introduced for an experiment, see
-// crbug.com/479521675 for context.
-- (void)hideComposeboxAndShowShareSheet;
 
 // Hides the compose box on the next run loop. The completion block is called
 // once hidden.
@@ -82,10 +85,6 @@ enum class TrustedVaultUserActionTriggerForUMA;
 
 // Shows the AddCreditCard UI.
 - (void)showAddCreditCard;
-
-// Shows the dialog for sending the page with `url` and `title` between a user's
-// devices.
-- (void)showSendTabToSelfUI:(const GURL&)url title:(NSString*)title;
 
 #if !defined(NDEBUG)
 // Inserts a new tab showing the HTML source of the current page.
@@ -107,23 +106,28 @@ enum class TrustedVaultUserActionTriggerForUMA;
 // Preloads voice search in the current BVC.
 - (void)preloadVoiceSearch;
 
+// Shows the voice search UI after stopping it on all other browsers in the
+// scene.
+- (void)startVoiceSearch;
+
+// Stops voice search on this browser. To stop voice search on all browsers in
+// a scene, `stopAllVoiceSearch` from `SceneCommands` can be used.
+- (void)stopVoiceSearch;
+
 // Dismiss the password suggestions.
+// TODO(crbug.com/543354673): Remove this.
 - (void)dismissPasswordSuggestions;
 
-// Dismiss the payments suggestions.
-- (void)dismissPaymentSuggestions;
-
-// Dismisses the passkey creation bottom sheet.
-- (void)dismissPasskeyCreation;
-
 // Dismiss the card unmask authentication prompt.
-- (void)dismissCardUnmaskAuthentication;
-
-// Dismiss the plus address bottom sheet.
-- (void)dismissPlusAddressBottomSheet;
+// Deprecated: use AutofillCommands instead.
+- (void)legacyDismissCardUnmaskAuthentication;
 
 // Dismiss the virtual card enrollment bottom sheet.
-- (void)dismissVirtualCardEnrollmentBottomSheet;
+// Deprecated: use AutofillCommands instead.
+- (void)legacyDismissVirtualCardEnrollmentBottomSheet;
+
+// Command to reset the autofill suggestions loading states.
+- (void)resetAutofillSuggestionsLoadingStates;
 
 // Shows the omnibox position choice screen.
 - (void)showOmniboxPositionChoice;
@@ -143,6 +147,14 @@ enum class TrustedVaultUserActionTriggerForUMA;
 - (void)showSearchWhatYouSeePromo;
 - (void)dismissSearchWhatYouSeePromo;
 
+// Shows and dismisses the Price Tracking promo.
+- (void)showPriceTrackingPromo;
+- (void)dismissPriceTrackingPromo;
+
+// Shows and dismisses the Tab Groups promo.
+- (void)showTabGroupsPromo;
+- (void)dismissTabGroupsPromo;
+
 // Shows the notifications opt-in view from `accessPoint`.
 - (void)showNotificationsOptInFromAccessPoint:
             (NotificationOptInAccessPoint)accessPoint
@@ -156,8 +168,12 @@ enum class TrustedVaultUserActionTriggerForUMA;
 - (void)showAddAccountWithAccessPoint:(signin_metrics::AccessPoint)accessPoint
                        prefilledEmail:(NSString*)email;
 
+// Shows and dismisses the multimodal actions menu.
+- (void)showMultimodalActionsMenu;
+- (void)dismissMultimodalActionsMenu;
+
 // Forces fullscreen mode which means that toolbars are collapsed.
-- (void)forceFullscreenMode;
+- (void)forceFullscreenMode:(FullscreenModeTransitionTrigger)trigger;
 
 // Clears any presented state on BVC.
 - (void)clearPresentedStateWithCompletion:(ProceduralBlock)completion

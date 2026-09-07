@@ -20,7 +20,7 @@
 #include "media/capture/video/chromeos/pixel_format_utils.h"
 #include "media/capture/video/chromeos/request_builder.h"
 #include "media/capture/video/chromeos/request_manager.h"
-#include "media/capture/video/video_capture_buffer_pool.h"
+#include "media/capture/video/video_capture_buffer_pool_constants.h"
 #include "mojo/public/cpp/platform/platform_handle.h"
 #include "mojo/public/cpp/system/platform_handle.h"
 #include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
@@ -260,6 +260,14 @@ void StreamBufferManager::SetUpStreamsAndBuffers(
       case StreamType::kRecordingOutput: {
         stream_context->buffer_dimension = gfx::Size(
             stream_context->stream->width, stream_context->stream->height);
+        // HAL must not change stream width/height in configure_streams(). A
+        // mismatch here causes AcquireBufferForClientById to allocate the
+        // rotated destination at |capture_format.frame_size| while libyuv
+        // writes |buffer_dimension worth of data, producing a
+        // controlled-content OOB write in the unsandboxed Video Capture
+        // Service.
+        CHECK_EQ(stream_context->buffer_dimension,
+                 stream_context->capture_format.frame_size);
         stream_context->buffer_usage =
             gfx::BufferUsage::VEA_READ_CAMERA_AND_CPU_READ_WRITE;
         break;
@@ -457,8 +465,8 @@ void StreamBufferManager::ReserveBufferFromPool(StreamType stream_type) {
   }
   Buffer vcd_buffer;
   auto client_type = kStreamClientTypeMap[static_cast<int>(stream_type)];
-  int require_new_buffer_id = VideoCaptureBufferPool::kInvalidId;
-  int retire_old_buffer_id = VideoCaptureBufferPool::kInvalidId;
+  int require_new_buffer_id = VideoCaptureBufferPoolConstants::kInvalidId;
+  int retire_old_buffer_id = VideoCaptureBufferPoolConstants::kInvalidId;
   if (!device_context_->ReserveVideoCaptureBufferFromPool(
           client_type, stream_context->buffer_dimension,
           stream_context->capture_format.pixel_format, &vcd_buffer,
@@ -470,7 +478,7 @@ void StreamBufferManager::ReserveBufferFromPool(StreamType stream_type) {
   // service crash until we figure out the crash root cause.
   const bool kEnableBufferSynchronizationWithCameraService = false;
   if (kEnableBufferSynchronizationWithCameraService &&
-      retire_old_buffer_id != VideoCaptureBufferPool::kInvalidId) {
+      retire_old_buffer_id != VideoCaptureBufferPoolConstants::kInvalidId) {
     buffer_observer_->OnBufferRetired(
         client_type, GetBufferIpcId(stream_type, retire_old_buffer_id));
   }
@@ -491,7 +499,7 @@ void StreamBufferManager::ReserveBufferFromPool(StreamType stream_type) {
   }
 
   if (kEnableBufferSynchronizationWithCameraService &&
-      require_new_buffer_id != VideoCaptureBufferPool::kInvalidId) {
+      require_new_buffer_id != VideoCaptureBufferPoolConstants::kInvalidId) {
     gfx::NativePixmapHandle native_pixmap_handle;
     if (auto gmb_handle = shared_image->CloneGpuMemoryBufferHandle();
         gmb_handle.type == gfx::NATIVE_PIXMAP) {

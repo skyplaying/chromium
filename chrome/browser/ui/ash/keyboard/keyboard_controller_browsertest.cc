@@ -9,6 +9,7 @@
 #include "base/functional/callback_helpers.h"
 #include "base/run_loop.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "chrome/browser/apps/platform_apps/app_browsertest_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/keyboard/chrome_keyboard_controller_client.h"
@@ -188,7 +189,7 @@ class KeyboardControllerWebContentTest : public InProcessBrowserTest {
   ui::ScopedTestInputMethodFactory scoped_test_input_method_factory_;
 };
 
-// Test for crbug.com/404340. After enabling an IME in a different extension,
+// Test for crbug.com/41126256. After enabling an IME in a different extension,
 // its virtual keyboard should not become visible if previous one is not.
 IN_PROC_BROWSER_TEST_F(KeyboardControllerWebContentTest,
                        EnableIMEInDifferentExtension) {
@@ -290,8 +291,8 @@ IN_PROC_BROWSER_TEST_F(KeyboardControllerAppWindowTest,
   extensions::AppWindow::CreateParams params;
   params.frame = extensions::AppWindow::FRAME_NONE;
   params.state = ui::mojom::WindowShowState::kMaximized;
-  extensions::AppWindow* app_window =
-      CreateAppWindowFromParams(browser()->profile(), extension.get(), params);
+  extensions::AppWindow* app_window = CreateAppWindowFromParams(
+      browser()->GetProfile(), extension.get(), params);
 
   // Wait until the keyboard is shown.
   KeyboardLoadedWaiter().Wait();
@@ -314,8 +315,8 @@ IN_PROC_BROWSER_TEST_F(KeyboardControllerAppWindowTest,
   extensions::AppWindow::CreateParams params;
   params.frame = extensions::AppWindow::FRAME_NONE;
   params.state = ui::mojom::WindowShowState::kMaximized;
-  extensions::AppWindow* app_window =
-      CreateAppWindowFromParams(browser()->profile(), extension.get(), params);
+  extensions::AppWindow* app_window = CreateAppWindowFromParams(
+      browser()->GetProfile(), extension.get(), params);
 
   // Wait until the keyboard is shown.
   KeyboardLoadedWaiter().Wait();
@@ -335,14 +336,14 @@ IN_PROC_BROWSER_TEST_F(KeyboardControllerAppWindowTest,
                                 .height());
 }
 
-// Tests that ime window won't overscroll. See crbug.com/529880.
+// Tests that ime window won't overscroll. See crbug.com/40435010.
 IN_PROC_BROWSER_TEST_F(KeyboardControllerAppWindowTest,
                        DisableOverscrollForImeWindow) {
   auto extension = CreateDummyExtension();
   extensions::AppWindow::CreateParams non_ime_params;
   non_ime_params.frame = extensions::AppWindow::FRAME_NONE;
   extensions::AppWindow* non_ime_app_window = CreateAppWindowFromParams(
-      browser()->profile(), extension.get(), non_ime_params);
+      browser()->GetProfile(), extension.get(), non_ime_params);
   int non_ime_window_visible_height = non_ime_app_window->web_contents()
                                           ->GetRenderWidgetHostView()
                                           ->GetVisibleViewportSize()
@@ -352,7 +353,7 @@ IN_PROC_BROWSER_TEST_F(KeyboardControllerAppWindowTest,
   ime_params.frame = extensions::AppWindow::FRAME_NONE;
   ime_params.is_ime_window = true;
   extensions::AppWindow* ime_app_window = CreateAppWindowFromParams(
-      browser()->profile(), extension.get(), ime_params);
+      browser()->GetProfile(), extension.get(), ime_params);
   int ime_window_visible_height = ime_app_window->web_contents()
                                       ->GetRenderWidgetHostView()
                                       ->GetVisibleViewportSize()
@@ -448,15 +449,28 @@ IN_PROC_BROWSER_TEST_F(KeyboardControllerStateTest, OpenAndCloseAndOpen) {
 // and will not work in Multi Process Mash. TODO(stevenjb/shend): Determine
 // whether this needs to be tested in a keyboard::KeyboardController unit test.
 
-IN_PROC_BROWSER_TEST_F(KeyboardControllerStateTest, StateResolvesAfterPreload) {
+// TODO(crbug.com/547006204): Test is flaky on ChromeOS.
+#if BUILDFLAG(IS_CHROMEOS)
+#define MAYBE_StateResolvesAfterPreload DISABLED_StateResolvesAfterPreload
+#else
+#define MAYBE_StateResolvesAfterPreload StateResolvesAfterPreload
+#endif
+IN_PROC_BROWSER_TEST_F(KeyboardControllerStateTest,
+                       MAYBE_StateResolvesAfterPreload) {
   auto* controller = keyboard::KeyboardUIController::Get();
   EXPECT_EQ(controller->GetStateForTest(), keyboard::KeyboardUIState::kLoading);
   KeyboardLoadedWaiter().Wait();
   EXPECT_EQ(controller->GetStateForTest(), keyboard::KeyboardUIState::kHidden);
 }
 
+// TODO(crbug.com/547006204): Test is flaky on ChromeOS.
+#if BUILDFLAG(IS_CHROMEOS)
+#define MAYBE_OpenAndCloseAndOpenInternal DISABLED_OpenAndCloseAndOpenInternal
+#else
+#define MAYBE_OpenAndCloseAndOpenInternal OpenAndCloseAndOpenInternal
+#endif
 IN_PROC_BROWSER_TEST_F(KeyboardControllerStateTest,
-                       OpenAndCloseAndOpenInternal) {
+                       MAYBE_OpenAndCloseAndOpenInternal) {
   auto* controller = keyboard::KeyboardUIController::Get();
   controller->ShowKeyboard(false);
   // Need to wait the extension to be loaded. Hence LOADING_EXTENSION.
@@ -471,9 +485,17 @@ IN_PROC_BROWSER_TEST_F(KeyboardControllerStateTest,
   EXPECT_EQ(controller->GetStateForTest(), keyboard::KeyboardUIState::kShown);
 }
 
-// See crbug.com/755354.
+// TODO(crbug.com/547006204): Test is flaky on ChromeOS.
+#if BUILDFLAG(IS_CHROMEOS)
+#define MAYBE_DisablingKeyboardGoesToInitialState \
+  DISABLED_DisablingKeyboardGoesToInitialState
+#else
+#define MAYBE_DisablingKeyboardGoesToInitialState \
+  DisablingKeyboardGoesToInitialState
+#endif
+// See crbug.com/41339286.
 IN_PROC_BROWSER_TEST_F(KeyboardControllerStateTest,
-                       DisablingKeyboardGoesToInitialState) {
+                       MAYBE_DisablingKeyboardGoesToInitialState) {
   auto* controller = keyboard::KeyboardUIController::Get();
 
   EXPECT_EQ(controller->GetStateForTest(), keyboard::KeyboardUIState::kLoading);

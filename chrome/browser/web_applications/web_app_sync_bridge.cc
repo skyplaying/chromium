@@ -18,6 +18,7 @@
 #include "base/check_op.h"
 #include "base/containers/flat_set.h"
 #include "base/containers/flat_tree.h"
+#include "base/containers/span.h"
 #include "base/dcheck_is_on.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
@@ -46,7 +47,6 @@
 #include "chrome/browser/web_applications/web_app_registry_update.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
 #include "chrome/common/channel_info.h"
-#include "chrome/common/chrome_features.h"
 #include "components/sync/base/data_type.h"
 #include "components/sync/base/deletion_origin.h"
 #include "components/sync/base/report_unrecoverable_error.h"
@@ -90,17 +90,17 @@ ParseManifestIdFromSyncEntity(const sync_pb::WebAppSpecifics& specifics) {
 
   // Set the manifest id first, as `WebApp::MergeInSyncDataFromApp()` ensures
   // that the computed manifest ids match.
-  webapps::ManifestId manifest_id;
+  std::optional<webapps::ManifestId> manifest_id;
   if (specifics.has_relative_manifest_id()) {
     manifest_id =
         GenerateManifestIdUnsafe(specifics.relative_manifest_id(), start_url);
   } else {
     manifest_id = GenerateManifestIdFromStartUrlOnly(start_url);
   }
-  if (!manifest_id.is_valid()) {
+  if (!manifest_id.has_value()) {
     return base::unexpected(StorageKeyParseResult::kInvalidManifestId);
   }
-  return base::ok(manifest_id);
+  return base::ok(*manifest_id);
 }
 
 base::expected<webapps::ManifestId, ManifestIdParseResult>
@@ -112,11 +112,10 @@ ValidateManifestIdFromParsableSyncEntity(
   // These are guaranteed to be true, as it is checked in IsEntityDataValid,
   // which prevents the entity from ever being given to our system.
   CHECK(manifest_id.has_value());
-  CHECK(manifest_id->is_valid());
   GURL start_url = GURL(specifics.start_url());
   CHECK(start_url.is_valid());
 
-  if (!url::IsSameOriginWith(start_url, manifest_id.value())) {
+  if (!url::IsSameOriginWith(start_url, manifest_id->value())) {
     return base::unexpected(
         ManifestIdParseResult::kManifestIdResolutionFailure);
   }
@@ -126,7 +125,7 @@ ValidateManifestIdFromParsableSyncEntity(
         ManifestIdParseResult::kManifestIdDoesNotMatchLocalData);
   }
 
-  return base::ok(manifest_id.value());
+  return base::ok(*manifest_id);
 }
 
 }  // namespace
@@ -200,7 +199,7 @@ void WebAppSyncBridge::SetProvider(base::PassKey<WebAppProvider> pass_key,
                      weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
 }
 
-void WebAppSyncBridge::Init(base::OnceClosure initialized_callback) {
+void WebAppSyncBridge::Init(InitCallback initialized_callback) {
   database_->OpenDatabase(base::BindOnce(&WebAppSyncBridge::OnDatabaseOpened,
                                          weak_ptr_factory_.GetWeakPtr(),
                                          std::move(initialized_callback)));
@@ -280,16 +279,19 @@ void WebAppSyncBridge::SetAppLastBadgingTime(const webapps::AppId& app_id,
   registrar_->NotifyWebAppLastBadgingTimeChanged(app_id, time);
 }
 
-void WebAppSyncBridge::SetAppLastLaunchTime(const webapps::AppId& app_id,
-                                            const base::Time& time) {
+void WebAppSyncBridge::SetAppLastLaunchTime(
+    const webapps::AppId& app_id,
+    const std::optional<base::Time>& time) {
+  std::optional<base::Time> actual_time =
+      time.has_value() && time->is_null() ? std::nullopt : time;
   {
     ScopedRegistryUpdate update = BeginUpdate();
     WebApp* web_app = update->UpdateApp(app_id);
     if (web_app) {
-      web_app->SetLastLaunchTime(time);
+      web_app->SetLastLaunchTime(actual_time);
     }
   }
-  registrar_->NotifyWebAppLastLaunchTimeChanged(app_id, time);
+  registrar_->NotifyWebAppLastLaunchTimeChanged(app_id, actual_time);
 }
 
 void WebAppSyncBridge::SetAppFirstInstallTime(const webapps::AppId& app_id,
@@ -323,7 +325,7 @@ void WebAppSyncBridge::SetUserPageOrdinal(const webapps::AppId& app_id,
   // Due to the extensions sync system setting ordinals on sync, this can get
   // called before the app is installed in the web apps system. Until apps are
   // no longer double-installed on both systems, ignore this case.
-  // https://crbug.com/1101781
+  // https://crbug.com/40703751
   // TODO(crbug.com/379136842): This is likely too 'permissive' of a check, and
   // different more restrictive filter should likely be used instead.
   if (!registrar_->AppMatches(app_id, WebAppFilter::IsAppSurfaceableToUser())) {
@@ -342,7 +344,7 @@ void WebAppSyncBridge::SetUserLaunchOrdinal(
   // Due to the extensions sync system setting ordinals on sync, this can get
   // called before the app is installed in the web apps system. Until apps are
   // no longer double-installed on both systems, ignore this case.
-  // https://crbug.com/1101781
+  // https://crbug.com/40703751
   // TODO(crbug.com/379136842): This is likely too 'permissive' of a check, and
   // different more restrictive filter should likely be used instead.
   if (!registrar_->AppMatches(app_id, WebAppFilter::IsAppSurfaceableToUser())) {
@@ -454,7 +456,8 @@ void WebAppSyncBridge::UpdateRegistrar(
 
   for (std::unique_ptr<WebApp>& web_app : update_data->apps_to_create) {
     webapps::AppId app_id = web_app->app_id();
-    DCHECK(!registrar_->GetAppById(app_id));
+    DCHECK(!registrar_->GetAppById(app_id,
+                                   WebAppFilter::IsAppSurfaceableToUser()));
     registrar_->registry().emplace(std::move(app_id), std::move(web_app));
   }
 
@@ -531,10 +534,35 @@ void WebAppSyncBridge::UpdateSync(
 }
 
 void WebAppSyncBridge::OnDatabaseOpened(
-    base::OnceClosure initialized_callback,
+    InitCallback callback,
     Registry registry,
-    std::unique_ptr<syncer::MetadataBatch> metadata_batch) {
-  DCHECK(database_->is_opened());
+    std::unique_ptr<syncer::MetadataBatch> metadata_batch,
+    WebAppDatabaseOpenResult result,
+    std::vector<std::pair<webapps::AppId, GURL>> salvaged_apps) {
+  DCHECK(database_->is_opened() ||
+         result != WebAppDatabaseOpenResult::kSuccess);
+
+  // Report errors to sync.
+  switch (result) {
+    case WebAppDatabaseOpenResult::kSuccess:
+      break;
+    case WebAppDatabaseOpenResult::kOpenError:
+      ReportErrorToChangeProcessor(syncer::ModelError(
+          FROM_HERE,
+          syncer::ModelError::Type::kDataTypeStoreBackendDbOpenFailed));
+      break;
+    case WebAppDatabaseOpenResult::kReadError:
+      ReportErrorToChangeProcessor(syncer::ModelError(
+          FROM_HERE,
+          syncer::ModelError::Type::kDataTypeStoreBackendDbReadFailed));
+      break;
+    case WebAppDatabaseOpenResult::kDowngradeDetected:
+      break;
+  }
+  if (result != WebAppDatabaseOpenResult::kSuccess) {
+    std::move(callback).Run(result, std::move(salvaged_apps));
+    return;
+  }
 
   // Provide sync metadata to the processor _before_ any local changes occur.
   change_processor()->ModelReadyToSync(std::move(metadata_batch));
@@ -543,7 +571,7 @@ void WebAppSyncBridge::OnDatabaseOpened(
 
   // Database migrations happen inside WebAppDatabase::MigrateDatabase.
 
-  std::move(initialized_callback).Run();
+  std::move(callback).Run(WebAppDatabaseOpenResult::kSuccess, {});
 
   // Already have data stored in web app system and shouldn't expect further
   // callbacks once `IsTrackingMetadata` is true.
@@ -601,7 +629,8 @@ ManifestIdParseResult WebAppSyncBridge::PrepareLocalUpdateFromSyncChange(
   // app_id is storage key.
   const webapps::AppId& app_id = change.storage_key();
 
-  const WebApp* existing_web_app = registrar_->GetAppById(app_id);
+  const WebApp* existing_web_app =
+      registrar_->GetAppById(app_id, WebAppFilter::IsAppSurfaceableToUser());
 
   // Handle deletion first.
   if (change.type() == syncer::EntityChange::ACTION_DELETE) {
@@ -658,6 +687,7 @@ ManifestIdParseResult WebAppSyncBridge::PrepareLocalUpdateFromSyncChange(
                           base::CompareCase::SENSITIVE)) {
       scope = start_url.GetWithoutFilename();
     }
+    specifics.set_scope(scope.spec());
 
     web_app = std::make_unique<WebApp>(specifics);
 
@@ -746,10 +776,6 @@ void WebAppSyncBridge::ApplyIncrementalSyncChangesToRegistrar(
   }
 }
 
-std::unique_ptr<syncer::MetadataChangeList>
-WebAppSyncBridge::CreateMetadataChangeList() {
-  return syncer::DataTypeStore::WriteBatch::CreateMetadataChangeList();
-}
 
 std::optional<syncer::ModelError> WebAppSyncBridge::MergeFullSyncData(
     std::unique_ptr<syncer::MetadataChangeList> metadata_change_list,
@@ -877,12 +903,20 @@ std::string WebAppSyncBridge::GetClientTag(
   // This is guaranteed to be true, as the contract for this function is that
   // IsEntityDataValid must be true.
   CHECK(manifest_id.has_value());
-  return GenerateAppIdFromManifestId(manifest_id.value());
+  return GenerateAppIdFromManifestId(*manifest_id);
 }
 
 std::string WebAppSyncBridge::GetStorageKey(
     const syncer::EntityData& entity_data) const {
   return GetClientTag(entity_data);
+}
+
+sync_pb::EntitySpecifics
+WebAppSyncBridge::TrimAllSupportedFieldsFromRemoteSpecifics(
+    const sync_pb::EntitySpecifics& entity_specifics) const {
+  // Clears all fields by default to avoid the memory and I/O overhead of an
+  // additional copy of the data.
+  return sync_pb::EntitySpecifics();
 }
 
 bool WebAppSyncBridge::IsEntityDataValid(

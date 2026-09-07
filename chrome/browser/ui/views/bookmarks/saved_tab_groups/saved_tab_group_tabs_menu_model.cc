@@ -4,35 +4,29 @@
 
 #include "chrome/browser/ui/views/bookmarks/saved_tab_groups/saved_tab_group_tabs_menu_model.h"
 
-#include <memory>
 #include <optional>
 
-#include "base/metrics/user_metrics.h"
-#include "base/strings/utf_string_conversions.h"
-#include "base/uuid.h"
 #include "chrome/app/vector_icons/vector_icons.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
 #include "chrome/browser/favicon/favicon_utils.h"
-#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
-#include "chrome/browser/ui/browser_command_controller.h"
-#include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_metrics.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
 #include "chrome/browser/ui/tabs/saved_tab_groups/tab_group_action_context_desktop.h"
 #include "chrome/browser/ui/tabs/tab_group_model.h"
 #include "chrome/browser/ui/tabs/tab_group_theme.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/bookmarks/saved_tab_groups/saved_tab_group_tabs_menu_model.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/favicon/core/favicon_service.h"
+#include "components/saved_tab_groups/public/features.h"
 #include "components/saved_tab_groups/public/tab_group_sync_service.h"
-#include "components/saved_tab_groups/public/types.h"
+#include "components/tab_groups/tab_group_id.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/mojom/menu_source_type.mojom.h"
-#include "ui/gfx/favicon_size.h"
+#include "ui/base/ui_base_features.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/views/controls/menu/menu_model_adapter.h"
-#include "ui/views/widget/widget.h"
 
 namespace tab_groups {
 
@@ -41,8 +35,6 @@ static constexpr int kUIUpdateIconSize = 16;
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(STGTabsMenuModel, kDeleteGroupMenuItem);
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(STGTabsMenuModel, kLeaveGroupMenuItem);
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(STGTabsMenuModel,
-                                      kConvertToBookmarkMenuItem);
-DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(STGTabsMenuModel,
                                       kMoveGroupToNewWindowMenuItem);
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(STGTabsMenuModel, kOpenGroup);
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(STGTabsMenuModel,
@@ -50,12 +42,12 @@ DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(STGTabsMenuModel,
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(STGTabsMenuModel, kTabsTitleItem);
 DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(STGTabsMenuModel, kTab);
 
-STGTabsMenuModel::STGTabsMenuModel(Browser* browser,
+STGTabsMenuModel::STGTabsMenuModel(BrowserWindowInterface* browser,
                                    TabGroupMenuContext context)
     : ui::SimpleMenuModel(this), browser_(browser), context_(context) {}
 
 STGTabsMenuModel::STGTabsMenuModel(ui::SimpleMenuModel::Delegate* delegate,
-                                   Browser* browser,
+                                   BrowserWindowInterface* browser,
                                    TabGroupMenuContext context)
     : ui::SimpleMenuModel(delegate), browser_(browser), context_(context) {}
 
@@ -76,8 +68,10 @@ void STGTabsMenuModel::Build(
   int latest_command_id = get_next_command_id.Run();
   AddItemWithStringIdAndIcon(
       latest_command_id, IDS_OPEN_GROUP_IN_BROWSER_MENU,
-      ui::ImageModel::FromVectorIcon(kOpenInBrowserIcon, ui::kColorMenuIcon,
-                                     kUIUpdateIconSize));
+      ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                         ? kOpenInBrowserIcon
+                                         : kOpenInBrowserOldIcon,
+                                     ui::kColorMenuIcon, kUIUpdateIconSize));
   SetElementIdentifierAt(GetIndexOfCommandId(latest_command_id).value(),
                          kOpenGroup);
   command_id_to_action_.emplace(
@@ -95,7 +89,9 @@ void STGTabsMenuModel::Build(
   latest_command_id = get_next_command_id.Run();
   AddItemWithIcon(
       latest_command_id, move_or_open_group_text,
-      ui::ImageModel::FromVectorIcon(kMoveGroupToNewWindowRefreshIcon,
+      ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                         ? kMoveGroupIcon
+                                         : kMoveGroupToNewWindowRefreshOldIcon,
                                      ui::kColorMenuIcon, kUIUpdateIconSize));
   SetElementIdentifierAt(GetIndexOfCommandId(latest_command_id).value(),
                          kMoveGroupToNewWindowMenuItem);
@@ -111,8 +107,12 @@ void STGTabsMenuModel::Build(
       latest_command_id,
       group_pinned ? IDS_TAB_GROUP_HEADER_CXMENU_UNPIN_GROUP
                    : IDS_TAB_GROUP_HEADER_CXMENU_PIN_GROUP,
-      ui::ImageModel::FromVectorIcon(group_pinned ? kKeepOffIcon : kKeepIcon,
-                                     ui::kColorMenuIcon, kUIUpdateIconSize));
+      ui::ImageModel::FromVectorIcon(
+          group_pinned ? features::IsRoundedIconsEnabled() ? kKeepOffIcon
+                                                           : kKeepOffOldIcon
+          : features::IsRoundedIconsEnabled() ? kKeepIcon
+                                              : kKeepOldIcon,
+          ui::kColorMenuIcon, kUIUpdateIconSize));
   SetElementIdentifierAt(GetIndexOfCommandId(latest_command_id).value(),
                          kToggleGroupPinStateMenuItem);
   command_id_to_action_.emplace(
@@ -121,12 +121,14 @@ void STGTabsMenuModel::Build(
                          sync_id_.value()});
 
   latest_command_id = get_next_command_id.Run();
-  if (SavedTabGroupUtils::IsOwnerOfSharedTabGroup(browser_->profile(),
+  if (SavedTabGroupUtils::IsOwnerOfSharedTabGroup(browser_->GetProfile(),
                                                   sync_id_.value())) {
     // Add item: delete group.
     AddItemWithStringIdAndIcon(
         latest_command_id, IDS_TAB_GROUP_HEADER_CXMENU_DELETE_GROUP,
-        ui::ImageModel::FromVectorIcon(kCloseGroupRefreshIcon,
+        ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                           ? kTabCloseIcon
+                                           : kCloseGroupRefreshOldIcon,
                                        ui::kColorMenuIcon, kUIUpdateIconSize));
     SetElementIdentifierAt(GetIndexOfCommandId(latest_command_id).value(),
                            kDeleteGroupMenuItem);
@@ -138,7 +140,9 @@ void STGTabsMenuModel::Build(
     // Add item: leave group.
     AddItemWithStringIdAndIcon(
         latest_command_id, IDS_DATA_SHARING_LEAVE_GROUP,
-        ui::ImageModel::FromVectorIcon(kCloseGroupRefreshIcon,
+        ui::ImageModel::FromVectorIcon(features::IsRoundedIconsEnabled()
+                                           ? kTabCloseIcon
+                                           : kCloseGroupRefreshOldIcon,
                                        ui::kColorMenuIcon, kUIUpdateIconSize));
     SetElementIdentifierAt(GetIndexOfCommandId(latest_command_id).value(),
                            kLeaveGroupMenuItem);
@@ -148,21 +152,6 @@ void STGTabsMenuModel::Build(
                            sync_id_.value()});
   }
 
-  if (!saved_group.is_shared_tab_group() &&
-      features::IsTabGroupMenuImprovementsEnabled()) {
-    latest_command_id = get_next_command_id.Run();
-    AddItemWithStringIdAndIcon(
-        latest_command_id,
-        IDS_TAB_GROUP_HEADER_CXMENU_CONVERT_GROUP_TO_BOOKMARK_FOLDER,
-        ui::ImageModel::FromVectorIcon(kBookmarkAllTabsChromeRefreshIcon,
-                                       ui::kColorMenuIcon, kUIUpdateIconSize));
-    SetElementIdentifierAt(GetIndexOfCommandId(latest_command_id).value(),
-                           kConvertToBookmarkMenuItem);
-    command_id_to_action_.emplace(
-        latest_command_id,
-        TabGroupMenuAction{TabGroupMenuAction::Type::CONVERT_TO_BOOKMARK,
-                           sync_id_.value()});
-  }
 
   // Add a separator and title.
   AddSeparator(ui::NORMAL_SEPARATOR);
@@ -172,7 +161,7 @@ void STGTabsMenuModel::Build(
 
   // Perform an async request for the favicon from the favicon service
   favicon::FaviconService* favicon_service =
-      FaviconServiceFactory::GetForProfile(browser_->profile(),
+      FaviconServiceFactory::GetForProfile(browser_->GetProfile(),
                                            ServiceAccessType::EXPLICIT_ACCESS);
 
   // Append open urls.
@@ -206,12 +195,12 @@ void STGTabsMenuModel::Build(
   }
 
   if (saved_group.local_group_id().has_value()) {
-    const Browser* const browser_with_local_group_id =
+    const BrowserWindowInterface* const browser_with_local_group_id =
         SavedTabGroupUtils::GetBrowserWithTabGroupId(
             saved_group.local_group_id().value());
     if (browser_with_local_group_id) {
       const TabStripModel* const tab_strip_model =
-          browser_with_local_group_id->tab_strip_model();
+          browser_with_local_group_id->GetTabStripModel();
 
       // Show the menu item if there are tabs outside of the saved group.
       should_enable_move_menu_item_ =
@@ -248,7 +237,7 @@ void STGTabsMenuModel::ExecuteCommand(int command_id, int event_flags) {
   TabGroupMenuAction action = it->second;
   TabGroupSyncService* tab_group_service =
       tab_groups::TabGroupSyncServiceFactory::GetForProfile(
-          browser_->profile());
+          browser_->GetProfile());
   SavedTabGroupUtils::PerformTabGroupMenuAction(action, context_, browser_,
                                                 tab_group_service);
 }

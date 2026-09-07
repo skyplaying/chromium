@@ -4,12 +4,13 @@
 
 #include "components/supervised_user/core/browser/supervised_user_url_filtering_service.h"
 
+#include <type_traits>
+
 #include "base/feature_list.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/string_util.h"
-#include "components/supervised_user/core/browser/supervised_user_service.h"
 #include "components/supervised_user/core/common/features.h"
 
 namespace supervised_user {
@@ -20,12 +21,18 @@ namespace {
 static const char kUrlFilteringServiceComponentName[] = "All";
 // LINT.ThenChange(//tools/metrics/histograms/metadata/families/histograms.xml:url_filtering_service)
 
-// Combines two callbacks into one.
-void CombineCallbacks(WebFilteringResult::Callback a,
-                      WebFilteringResult::Callback b,
-                      WebFilteringResult result) {
-  std::move(a).Run(result);
-  std::move(b).Run(result);
+template <typename... Callbacks>
+  requires(std::is_same_v<WebFilteringResult::Callback, Callbacks> && ...)
+void BroadcastCallbackImpl(Callbacks... callbacks, WebFilteringResult result) {
+  (std::move(callbacks).Run(result), ...);
+}
+
+// Broadcasts web filtering result to all callbacks, in order.
+template <typename... Callbacks>
+  requires(std::is_same_v<WebFilteringResult::Callback, Callbacks> && ...)
+WebFilteringResult::Callback BroadcastResult(Callbacks... callbacks) {
+  return base::BindOnce(&BroadcastCallbackImpl<Callbacks...>,
+                        std::move(callbacks)...);
 }
 
 FilteringBehavior GetBehaviorFromSafeSearchClassification(
@@ -178,13 +185,14 @@ SupervisedUserFilterTopLevelResult WebFilteringResult::ToTopLevelResult()
 }
 
 SupervisedUserUrlFilteringService::SupervisedUserUrlFilteringService(
-    const SupervisedUserService& supervised_user_service,
+    std::unique_ptr<UrlFilteringDelegate> family_link_url_filter,
     std::unique_ptr<UrlFilteringDelegate> device_parental_controls_url_filter)
-    : supervised_user_service_(supervised_user_service),
+    : family_link_url_filter_(std::move(family_link_url_filter)),
       device_parental_controls_url_filter_(
           std::move(device_parental_controls_url_filter)) {
-  family_link_url_filter_observation_.Observe(
-      supervised_user_service_->GetURLFilter());
+  CHECK(family_link_url_filter_);
+  CHECK(device_parental_controls_url_filter_);
+  family_link_url_filter_observation_.Observe(family_link_url_filter_.get());
   device_parental_controls_url_filter_observation_.Observe(
       device_parental_controls_url_filter_.get());
 }
@@ -192,22 +200,17 @@ SupervisedUserUrlFilteringService::~SupervisedUserUrlFilteringService() =
     default;
 
 WebFilterType SupervisedUserUrlFilteringService::GetWebFilterType() const {
-  if (base::FeatureList::IsEnabled(kSupervisedUserUseUrlFilteringService)) {
-    return AggregateWebFilterType(*device_parental_controls_url_filter_,
-                                  *supervised_user_service_->GetURLFilter());
-  }
-  return supervised_user_service_->GetURLFilter()->GetWebFilterType();
+  return AggregateWebFilterType(*device_parental_controls_url_filter_,
+                                *family_link_url_filter_);
 }
 
 WebFilteringResult SupervisedUserUrlFilteringService::GetFilteringBehavior(
     const GURL& url) const {
-  if (base::FeatureList::IsEnabled(kSupervisedUserUseUrlFilteringService)) {
-    WebFilteringResult device_filtering_result =
-        device_parental_controls_url_filter_->GetFilteringBehavior(url);
-    CHECK(device_filtering_result.IsAllowed())
-        << "Device filtering always passes synchronous checks.";
-  }
-  return supervised_user_service_->GetURLFilter()->GetFilteringBehavior(url);
+  WebFilteringResult device_filtering_result =
+      device_parental_controls_url_filter_->GetFilteringBehavior(url);
+  CHECK(device_filtering_result.IsAllowed())
+      << "Device filtering always passes synchronous checks.";
+  return family_link_url_filter_->GetFilteringBehavior(url);
 }
 
 void SupervisedUserUrlFilteringService::GetFilteringBehavior(
@@ -215,27 +218,20 @@ void SupervisedUserUrlFilteringService::GetFilteringBehavior(
     bool skip_manual_parent_filter,
     WebFilteringResult::Callback callback,
     const WebFilterMetricsOptions& options) const {
-  callback =
-      base::BindOnce(&CombineCallbacks,
-                     base::BindOnce(&EmitMetrics, GetWebFilterType(),
-                                    kUrlFilteringServiceComponentName, options),
-                     std::move(callback));
-  callback = base::BindOnce(
-      &CombineCallbacks, std::move(callback),
+  // Emit metrics, then call the original callback and finally notify observers.
+  callback = BroadcastResult(
+      base::BindOnce(&EmitMetrics, GetWebFilterType(),
+                     kUrlFilteringServiceComponentName, options),
+      std::move(callback),
       base::BindOnce(&SupervisedUserUrlFilteringService::NotifyUrlChecked,
                      weak_ptr_factory_.GetWeakPtr()));
 
-  if (base::FeatureList::IsEnabled(kSupervisedUserUseUrlFilteringService)) {
-    device_parental_controls_url_filter_->GetFilteringBehavior(
-        url, skip_manual_parent_filter,
-        base::BindOnce(&OnFirstFilteringBehaviorResult, url,
-                       skip_manual_parent_filter, std::move(callback), options,
-                       supervised_user_service_->GetURLFilter()->GetWeakPtr()),
-        options);
-    return;
-  }
-  supervised_user_service_->GetURLFilter()->GetFilteringBehavior(
-      url, skip_manual_parent_filter, std::move(callback), options);
+  device_parental_controls_url_filter_->GetFilteringBehavior(
+      url, skip_manual_parent_filter,
+      base::BindOnce(&OnFirstFilteringBehaviorResult, url,
+                     skip_manual_parent_filter, std::move(callback), options,
+                     family_link_url_filter_->GetWeakPtr()),
+      options);
 }
 
 // Version of the above method that for use in subframe context.
@@ -244,27 +240,20 @@ void SupervisedUserUrlFilteringService::GetFilteringBehaviorForSubFrame(
     const GURL& main_frame_url,
     WebFilteringResult::Callback callback,
     const WebFilterMetricsOptions& options) const {
-  callback =
-      base::BindOnce(&CombineCallbacks,
-                     base::BindOnce(&EmitMetrics, GetWebFilterType(),
-                                    kUrlFilteringServiceComponentName, options),
-                     std::move(callback));
-  callback = base::BindOnce(
-      &CombineCallbacks, std::move(callback),
+  // Emit metrics, then call the original callback and finally notify observers.
+  callback = BroadcastResult(
+      base::BindOnce(&EmitMetrics, GetWebFilterType(),
+                     kUrlFilteringServiceComponentName, options),
+      std::move(callback),
       base::BindOnce(&SupervisedUserUrlFilteringService::NotifyUrlChecked,
                      weak_ptr_factory_.GetWeakPtr()));
-  if (base::FeatureList::IsEnabled(kSupervisedUserUseUrlFilteringService)) {
-    device_parental_controls_url_filter_->GetFilteringBehaviorForSubFrame(
-        url, main_frame_url,
-        base::BindOnce(&OnFirstFilteringBehaviorResultForSubFrame, url,
-                       main_frame_url, std::move(callback), options,
-                       supervised_user_service_->GetURLFilter()->GetWeakPtr()),
-        options);
-    return;
-  }
 
-  supervised_user_service_->GetURLFilter()->GetFilteringBehaviorForSubFrame(
-      url, main_frame_url, std::move(callback), options);
+  device_parental_controls_url_filter_->GetFilteringBehaviorForSubFrame(
+      url, main_frame_url,
+      base::BindOnce(&OnFirstFilteringBehaviorResultForSubFrame, url,
+                     main_frame_url, std::move(callback), options,
+                     family_link_url_filter_->GetWeakPtr()),
+      options);
 }
 
 void SupervisedUserUrlFilteringService::NotifyUrlChecked(
@@ -294,10 +283,29 @@ void SupervisedUserUrlFilteringService::AddObserver(Observer* observer) {
 void SupervisedUserUrlFilteringService::RemoveObserver(Observer* observer) {
   observer_list_.RemoveObserver(observer);
 }
+
+const UrlFilteringDelegate&
+SupervisedUserUrlFilteringService::GetFamilyLinkUrlFilter() const {
+  return *family_link_url_filter_;
+}
+const UrlFilteringDelegate&
+SupervisedUserUrlFilteringService::GetDeviceParentalControlsUrlFilter() const {
+  return *device_parental_controls_url_filter_;
+}
+
 SupervisedUserUrlFilteringService::Observer::~Observer() = default;
 
 UrlFilteringDelegate::UrlFilteringDelegate() = default;
 UrlFilteringDelegate::~UrlFilteringDelegate() = default;
+
+bool UrlFilteringDelegate::IsEnabled() const {
+  return GetWebFilterType() != WebFilterType::kDisabled;
+}
+
+UrlFilteringDelegate::Statistics UrlFilteringDelegate::GetFilteringStatistics()
+    const {
+  return {};
+}
 
 void UrlFilteringDelegate::NotifyUrlFilteringDelegateChanged() const {
   for (auto& observer : observers_) {
@@ -327,8 +335,7 @@ WebFilteringResult::Callback
 UrlFilteringDelegate::WrapCallbackWithUrlServiceMetrics(
     WebFilteringResult::Callback callback,
     const WebFilterMetricsOptions& options) const {
-  return base::BindOnce(
-      &CombineCallbacks,
+  return BroadcastResult(
       base::BindOnce(&EmitMetrics, GetWebFilterType(), GetName(), options),
       std::move(callback));
 }

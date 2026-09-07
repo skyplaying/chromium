@@ -11,6 +11,7 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.hub.PaneId;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
+import org.chromium.chrome.browser.ui.signin.BottomSheetSigninAndHistorySyncConfig;
 import org.chromium.chrome.browser.ui.signin.BottomSheetSigninAndHistorySyncCoordinator;
 import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 import org.chromium.components.signin.metrics.SigninAccessPoint;
@@ -44,11 +45,24 @@ public interface EducationTipModuleActionDelegate {
     /** Opens the app menu and highlights the quick delete menu item. */
     void openAndHighlightQuickDeleteMenuItem();
 
-    /** Opens the the history sync opt in page. */
-    void showHistorySyncOptIn(Runnable removeModuleCallback);
+    /** Opens the NTP theme customization bottom sheet. */
+    void openNtpThemeCustomizationBottomSheet();
 
-    /** Opens the settings page for the Tips Notifications channel. */
-    void showTipsNotificationsChannelSettings();
+    /**
+     * Opens the the history sync opt in page.
+     *
+     * @deprecated Use {@link #createBottomSheetSigninAndHistorySyncCoordinator()} and {@link
+     *     BottomSheetSigninAndHistorySyncCoordinator#startSigninFlow} instead.
+     */
+    void showHistorySyncOptInLegacy(Runnable removeModuleCallback);
+
+    /**
+     * Opens the the sign-in page.
+     *
+     * @deprecated Use {@link #createBottomSheetSigninAndHistorySyncCoordinator()} and {@link
+     *     BottomSheetSigninAndHistorySyncCoordinator#startSigninFlow} instead.
+     */
+    void showSignInLegacy();
 
     /** Opens the Password Checkup UI. */
     void showPasswordCheckup();
@@ -60,7 +74,7 @@ public interface EducationTipModuleActionDelegate {
     int getTabCountForRelaunchFromPersistentStore();
 
     /**
-     * Creates a coordinator for the bottom-sheet sign-in and history sync flow.
+     * Creates a coordinator for the history sync opt in and sign-in pages.
      *
      * @param delegate The delegate to notify when the flow is complete.
      * @param accessPoint The access point from which the sign-in was triggered.
@@ -69,10 +83,22 @@ public interface EducationTipModuleActionDelegate {
             BottomSheetSigninAndHistorySyncCoordinator.Delegate delegate,
             @SigninAccessPoint int accessPoint);
 
+    /** Creates a configuration for the history sync opt in page. */
+    BottomSheetSigninAndHistorySyncConfig createHistorySyncBottomSheetConfig();
+
+    /** Creates a configuration for the sign-in page. */
+    BottomSheetSigninAndHistorySyncConfig createSigninBottomSheetConfig();
+
     /**
-     * Configures and starts the sign-in and history sync flow.
+     * Launch the Role Manager for the Setup list default browser promo if eligible.
      *
-     * @param coordinator The coordinator to use for the flow.
+     * @return True if the Role Manager was shown.
      */
-    void startSignInFlow(BottomSheetSigninAndHistorySyncCoordinator coordinator);
+    boolean maybeShowDefaultBrowserPromoWithRoleManager();
+
+    /**
+     * Returns whether customized NTP background can be displayed on this device. It returns true on
+     * tablets, while checks whether edge-to-edge is enabled on phones.
+     */
+    boolean supportCustomizedNtpTheme();
 }

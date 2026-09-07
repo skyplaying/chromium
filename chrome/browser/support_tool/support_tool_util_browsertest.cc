@@ -16,7 +16,6 @@
 #include "chrome/browser/policy/profile_policy_connector_builder.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/support_tool/data_collection_module.pb.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
@@ -139,7 +138,7 @@ IN_PROC_BROWSER_TEST_F(SupportToolUtilTest, GetSupportToolHandler) {
 #endif
 
   std::unique_ptr<SupportToolHandler> handler = GetSupportToolHandler(
-      kCaseId, kEmail, kIssueDescription, kUploadId, browser()->profile(),
+      kCaseId, kEmail, kIssueDescription, kUploadId, browser()->GetProfile(),
       std::set<support_tool::DataCollectorType>(data_collectors.begin(),
                                                 data_collectors.end()));
   EXPECT_EQ(data_collectors.size() - excluded_data_collectors.size(),

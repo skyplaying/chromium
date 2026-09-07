@@ -2,15 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {hasKeyModifiers} from 'chrome://resources/js/util.js';
+
 import {FormFieldFocusType} from './constants.js';
 import type {PinchEventDetail} from './gesture_detector.js';
 import {GestureDetector} from './gesture_detector.js';
 import {convertFormFocusChangeMessage} from './message_converter.js';
+import {hasCtrlModifier, hasCtrlModifierOnly} from './pdf_viewer_utils.js';
 import type {SwipeDirection} from './swipe_detector.js';
 import {SwipeDetector} from './swipe_detector.js';
 
 interface InProcessPdfPluginElement extends HTMLEmbedElement {
-  postMessage(message: any): void;
+  postMessage(message: unknown): void;
 }
 
 const channel = new MessageChannel();
@@ -56,6 +59,10 @@ plugin.addEventListener('message', e => {
 let isPresentationMode = false;
 channel.port1.onmessage = e => {
   switch (e.data.type) {
+    case 'focus':
+      plugin.focus();
+      return;
+
     case 'setPresentationMode':
       isPresentationMode = e.data.enablePresentationMode;
 
@@ -65,9 +72,6 @@ channel.port1.onmessage = e => {
         document.documentElement.className = 'fullscreen';
       } else {
         document.documentElement.className = '';
-
-        // Ensure that directional keys still work after exiting.
-        plugin.focus();
       }
       break;
 
@@ -242,6 +246,11 @@ document.addEventListener('keydown', e => {
       if (hasCtrlModifier(e)) {
         break;
       }
+      // <if expr="enable_pdf_ink2">
+      if (e.altKey) {
+        break;
+      }
+      // </if>
       return;
   }
 
@@ -274,26 +283,3 @@ document.addEventListener('keypress', e => {
       break;
   }
 });
-
-// TODO(crbug.com/40792950): Load from pdf_viewer_utils.js instead.
-function hasCtrlModifier(e: KeyboardEvent): boolean {
-  let hasModifier = e.ctrlKey;
-  // <if expr="is_macosx">
-  hasModifier = e.metaKey;  // AKA Command.
-  // </if>
-  return hasModifier;
-}
-
-// TODO(crbug.com/40792950): Load from pdf_viewer_utils.js instead.
-function hasCtrlModifierOnly(e: KeyboardEvent): boolean {
-  let metaModifier = e.metaKey;
-  // <if expr="is_macosx">
-  metaModifier = e.ctrlKey;
-  // </if>
-  return hasCtrlModifier(e) && !e.shiftKey && !e.altKey && !metaModifier;
-}
-
-// TODO(crbug.com/40792950): Load from chrome://resources/js/util.js instead.
-function hasKeyModifiers(e: KeyboardEvent): boolean {
-  return !!(e.altKey || e.ctrlKey || e.metaKey || e.shiftKey);
-}

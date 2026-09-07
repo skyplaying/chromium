@@ -11,8 +11,8 @@
 #include "chrome/browser/new_tab_page/modules/modules_switches.h"
 #include "chrome/browser/new_tab_page/modules/test_support.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/tabs/tab_group_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -26,8 +26,11 @@
 #include "components/policy/policy_constants.h"
 #include "components/prefs/pref_service.h"
 #include "components/search/ntp_features.h"
+#include "components/tab_groups/tab_group_id.h"
+#include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
 #include "ui/base/interaction/interactive_test.h"
+#include "ui/base/page_transition_types.h"
 
 namespace {
 
@@ -38,12 +41,14 @@ const DeepQuery kModulesV2Container = {"ntp-app", "ntp-modules", "#container"};
 const DeepQuery kModulesV2Wrapper = {"ntp-app", "ntp-modules", "#container",
                                      "ntp-module-wrapper"};
 const DeepQuery kMicrosoftAuthIframe = {"ntp-app", "#microsoftAuth"};
-const DeepQuery kTabGroupsModule = {"ntp-app", "ntp-modules", "ntp-tab-groups"};
+const DeepQuery kTabGroupsModule = {"ntp-app", "ntp-modules",
+                                    "ntp-tab-groups-module"};
 const DeepQuery kTabGroupsModuleContainer = {
-    "ntp-app", "ntp-modules", "ntp-tab-groups", "#tabGroupsContainer"};
+    "ntp-app", "ntp-modules", "ntp-tab-groups-module", "#tabGroupsContainer"};
 const DeepQuery kCreateNewTabGroup = {
-    "ntp-app", "ntp-modules", "ntp-tab-groups", ".create-new-tab-group"};
-const DeepQuery kFirstTabGroup = {"ntp-app", "ntp-modules", "ntp-tab-groups",
+    "ntp-app", "ntp-modules", "ntp-tab-groups-module", ".create-new-tab-group"};
+const DeepQuery kFirstTabGroup = {"ntp-app", "ntp-modules",
+                                  "ntp-tab-groups-module",
                                   ".tab-group:nth-of-type(1)"};
 
 struct ModuleLink {
@@ -68,18 +73,21 @@ ModuleDetails kMostRelevantTabResumptionModuleDetails = {
       {{ntp_features::kNtpMostRelevantTabResumptionModuleDataParam,
         "Fake Data"}}}},
     {"ntp-app", "ntp-modules", "ntp-module-wrapper",
-     "ntp-most-relevant-tab-resumption"},
+     "ntp-most-relevant-tab-resumption-module"},
     {"ntp-app", "ntp-modules", "ntp-module-wrapper",
-     "ntp-most-relevant-tab-resumption", "ntp-module-header-v2", "#menuButton"},
+     "ntp-most-relevant-tab-resumption-module", "ntp-module-header-v2",
+     "#menuButton"},
     {"ntp-app", "ntp-modules", "ntp-module-wrapper",
-     "ntp-most-relevant-tab-resumption", "ntp-module-header-v2",
+     "ntp-most-relevant-tab-resumption-module", "ntp-module-header-v2",
      "cr-action-menu", "dialog"},
     {"ntp-app", "ntp-modules", "ntp-module-wrapper",
-     "ntp-most-relevant-tab-resumption", "ntp-module-header-v2", "#dismiss"},
+     "ntp-most-relevant-tab-resumption-module", "ntp-module-header-v2",
+     "#dismiss"},
     {"ntp-app", "ntp-modules", "ntp-module-wrapper",
-     "ntp-most-relevant-tab-resumption", "ntp-module-header-v2", "#disable"},
+     "ntp-most-relevant-tab-resumption-module", "ntp-module-header-v2",
+     "#disable"},
     {{{"ntp-app", "ntp-modules", "ntp-module-wrapper",
-       "ntp-most-relevant-tab-resumption", "#urlVisits", "a"},
+       "ntp-most-relevant-tab-resumption-module", "#urlVisits", "a"},
       "https://www.google.com"}},
 };
 
@@ -150,11 +158,12 @@ class NewTabPageModulesInteractiveUiBaseTest : public InteractiveBrowserTest {
   }
 
   InteractiveTestApi::MultiStep LoadNewTabPage() {
-    return Steps(InstrumentTab(kNewTabPageElementId, 0),
-                 NavigateWebContents(kNewTabPageElementId,
-                                     GURL(chrome::kChromeUINewTabPageURL)),
-                 WaitForWebContentsReady(kNewTabPageElementId,
-                                         GURL(chrome::kChromeUINewTabPageURL)));
+    return Steps(
+        InstrumentTab(kNewTabPageElementId, 0),
+        NavigateWebContents(kNewTabPageElementId,
+                            chrome::ChromeUINewTabPageURLAsGURL()),
+        WaitForWebContentsReady(kNewTabPageElementId,
+                                chrome::ChromeUINewTabPageURLAsGURL()));
   }
 
   InteractiveTestApi::MultiStep WaitForElementToLoad(
@@ -452,12 +461,12 @@ class NewTabPageModulesInteractiveTabGroupsUiTest
                  WaitForShow(kTabGroupEditorBubbleId));
   }
 
-  size_t GetTabGroupCount(Browser* browser) {
-    return browser->tab_strip_model()->group_model()->ListTabGroups().size();
+  size_t GetTabGroupCount(BrowserWindowInterface* browser) {
+    return browser->GetTabStripModel()->group_model()->ListTabGroups().size();
   }
 
-  size_t GetTabCount(Browser* browser) {
-    return browser->tab_strip_model()->count();
+  size_t GetTabCount(BrowserWindowInterface* browser) {
+    return browser->GetTabStripModel()->count();
   }
 };
 
@@ -510,8 +519,14 @@ IN_PROC_BROWSER_TEST_F(NewTabPageModulesInteractiveTabGroupsUiTest,
       CheckResult([&]() { return GetTabGroupCount(browser()); }, 1));
 }
 
+#if BUILDFLAG(IS_MAC)
+#define MAYBE_ResumeTabGroupInCurrentWindow \
+  DISABLED_ResumeTabGroupInCurrentWindow
+#else
+#define MAYBE_ResumeTabGroupInCurrentWindow ResumeTabGroupInCurrentWindow
+#endif  // BUILDFLAG(IS_MAC)
 IN_PROC_BROWSER_TEST_F(NewTabPageModulesInteractiveTabGroupsUiTest,
-                       ResumeTabGroupInCurrentWindow) {
+                       MAYBE_ResumeTabGroupInCurrentWindow) {
   ASSERT_TRUE(
       AddTabAtIndex(0, GURL(url::kAboutBlankURL), ui::PAGE_TRANSITION_TYPED));
   const tab_groups::TabGroupId group_id =
@@ -543,8 +558,14 @@ IN_PROC_BROWSER_TEST_F(NewTabPageModulesInteractiveTabGroupsUiTest,
       CheckResult([&]() { return GetTabCount(browser()); }, 2));
 }
 
+#if BUILDFLAG(IS_MAC)
+#define MAYBE_ResumeTabGroupInAnotherWindow \
+  DISABLED_ResumeTabGroupInAnotherWindow
+#else
+#define MAYBE_ResumeTabGroupInAnotherWindow ResumeTabGroupInAnotherWindow
+#endif  // BUILDFLAG(IS_MAC)
 IN_PROC_BROWSER_TEST_F(NewTabPageModulesInteractiveTabGroupsUiTest,
-                       ResumeTabGroupInAnotherWindow) {
+                       MAYBE_ResumeTabGroupInAnotherWindow) {
   ASSERT_TRUE(
       AddTabAtIndex(0, GURL(url::kAboutBlankURL), ui::PAGE_TRANSITION_TYPED));
   const tab_groups::TabGroupId group_id =

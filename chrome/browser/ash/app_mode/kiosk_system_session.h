@@ -12,7 +12,6 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/raw_ref.h"
-#include "chrome/browser/ash/app_mode/auto_sleep/device_weekly_scheduled_suspend_controller.h"
 #include "chrome/browser/ash/app_mode/kiosk_app_types.h"
 #include "chrome/browser/ash/app_mode/kiosk_network_state_observer.h"
 #include "chrome/browser/ash/app_mode/metrics/low_disk_metrics_service.h"
@@ -25,6 +24,7 @@ class PrefRegistrySimple;
 
 namespace ash {
 
+class BrowserDelegate;
 class NetworkConnectivityMetricsService;
 
 // Maintains system-level services tied to a Kiosk session.
@@ -32,10 +32,11 @@ class NetworkConnectivityMetricsService;
 // Example services are accessibility, metrics and browser crash recovery.
 class KioskSystemSession {
  public:
-  KioskSystemSession(PrefService& local_state,
-                     Profile* profile,
-                     const KioskAppId& kiosk_app_id,
-                     const std::optional<std::string>& app_name = std::nullopt);
+  KioskSystemSession(
+      PrefService& local_state,
+      Profile* profile,
+      const KioskAppId& kiosk_app_id,
+      const std::optional<webapps::AppId>& app_id = std::nullopt);
   KioskSystemSession(const KioskSystemSession&) = delete;
   KioskSystemSession& operator=(const KioskSystemSession&) = delete;
   ~KioskSystemSession();
@@ -49,15 +50,10 @@ class KioskSystemSession {
 
   bool is_shutting_down() const;
 
-  Browser* GetSettingsBrowserForTesting();
+  BrowserDelegate* GetSettingsBrowserForTesting();
 
   void SetOnHandleBrowserCallbackForTesting(
       base::RepeatingCallback<void(bool)> callback);
-
-  DeviceWeeklyScheduledSuspendController*
-  device_weekly_scheduled_suspend_controller_for_testing() {
-    return device_weekly_scheduled_suspend_controller_.get();
-  }
 
   KioskNetworkStateObserver& network_state_observer_for_testing() {
     return network_state_observer_;
@@ -65,8 +61,8 @@ class KioskSystemSession {
 
  private:
   void InitForChromeAppKiosk();
-  void InitForWebKiosk(const std::optional<std::string>& app_name);
-  void InitForIwaKiosk(const std::optional<std::string>& app_name);
+  void InitForWebKiosk(const webapps::AppId& app_id);
+  void InitForIwaKiosk(const webapps::AppId& app_id);
 
   void InitCommon();
 
@@ -95,8 +91,6 @@ class KioskSystemSession {
   std::unique_ptr<NetworkConnectivityMetricsService> network_metrics_service_;
 
   const std::unique_ptr<PeriodicMetricsService> periodic_metrics_service_;
-  const std::unique_ptr<DeviceWeeklyScheduledSuspendController>
-      device_weekly_scheduled_suspend_controller_;
 
   // Tracks low disk notifications.
   LowDiskMetricsService low_disk_metrics_service_;

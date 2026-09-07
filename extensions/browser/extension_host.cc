@@ -139,6 +139,7 @@ ExtensionHost::ExtensionHost(const Extension* extension,
       browser_context_(browser_context),
       initial_url_(url),
       extension_host_type_(host_type) {
+  DCHECK(delegate_);
   DCHECK(host_type == mojom::ViewType::kExtensionBackgroundPage ||
          host_type == mojom::ViewType::kOffscreenDocument ||
          host_type == mojom::ViewType::kExtensionPopup ||
@@ -160,7 +161,9 @@ ExtensionHost::ExtensionHost(const Extension* extension,
 
   // Listen for when an extension is unloaded from the same profile, as it may
   // be the same extension that this points to.
-  ExtensionRegistry::Get(browser_context_)->AddObserver(this);
+  auto* registry = ExtensionRegistry::Get(browser_context_);
+  DCHECK(registry);
+  registry->AddObserver(this);
 
   // Set up web contents observers and pref observers.
   delegate_->OnExtensionHostCreated(host_contents());
@@ -540,8 +543,8 @@ content::WebContents* ExtensionHost::AddNewContents(
     const blink::mojom::WindowFeatures& window_features,
     bool user_gesture,
     bool* was_blocked) {
-  delegate_->CreateTab(std::move(new_contents), extension_id_, disposition,
-                       window_features, user_gesture);
+  delegate_->CreateTab(std::move(new_contents), target_url, extension_id_,
+                       disposition, window_features, user_gesture);
 
   return nullptr;
 }

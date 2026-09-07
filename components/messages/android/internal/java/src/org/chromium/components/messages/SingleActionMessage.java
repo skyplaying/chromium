@@ -174,7 +174,18 @@ public class SingleActionMessage implements MessageStateHandler, MessageContaine
         assumeNonNull(mMessageBanner);
         assumeNonNull(mView);
         return mMessageBanner.hide(
-                fromIndex, toIndex, animate, () -> mContainer.removeMessage(mView));
+                fromIndex,
+                toIndex,
+                animate,
+                () -> {
+                    mContainer.removeMessage(mView);
+                    // Only destroy the banner if the message is being dismissed. If it was only
+                    // hidden temporarily (e.g. backgrounded during a tab switch), preserve the
+                    // banner so it can be re-shown when the scope reactivates.
+                    if (mMessageDismissed) {
+                        mMessageBanner.destroy();
+                    }
+                });
     }
 
     /**
@@ -187,14 +198,19 @@ public class SingleActionMessage implements MessageStateHandler, MessageContaine
         Callback<Integer> onDismissed = mModel.get(MessageBannerProperties.ON_DISMISSED);
         if (onDismissed != null) onDismissed.onResult(dismissReason);
         mMessageDismissed = true;
+        // If the view is already detached (e.g. dismissed while hidden in the background), clean up
+        // immediately since no exit animation will run. If it is currently attached to the
+        // container, destruction is deferred to the hide() completion callback after the exit
+        // animation finishes.
+        if (mMessageBanner != null && mContainer.indexOfChild(mView) == -1) {
+            mMessageBanner.destroy();
+        }
         if (dismissReason == DismissReason.PRIMARY_ACTION
                 || dismissReason == DismissReason.SECONDARY_ACTION
                 || dismissReason == DismissReason.GESTURE) {
             // Only record time to dismiss when the user explicitly dismissed the message.
             MessagesMetrics.recordTimeToAction(
-                    getMessageIdentifier(),
-                    dismissReason == DismissReason.GESTURE,
-                    MessagesMetrics.now() - mMessageShownTime);
+                    getMessageIdentifier(), MessagesMetrics.now() - mMessageShownTime);
         }
         if (mAreExtraHistogramsEnabled && !mFullyVisibleBefore) {
             MessagesMetrics.recordDismissedWithoutFullyVisible(getMessageIdentifier());

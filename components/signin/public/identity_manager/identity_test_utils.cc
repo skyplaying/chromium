@@ -28,6 +28,7 @@
 #include "components/signin/public/identity_manager/primary_account_mutator.h"
 #include "components/signin/public/identity_manager/signin_constants.h"
 #include "components/signin/public/identity_manager/test_identity_manager_observer.h"
+#include "components/signin/public/identity_manager/token_binding_info.h"
 #include "google_apis/gaia/gaia_auth_util.h"
 #include "google_apis/gaia/gaia_constants.h"
 #include "google_apis/gaia/gaia_id.h"
@@ -62,10 +63,10 @@ void UpdateRefreshTokenForAccount(
     IdentityManager* identity_manager,
     const CoreAccountId& account_id,
     const std::string& new_token,
-    const std::vector<uint8_t> wrapped_binding_key,
+    const TokenBindingInfo& token_binding_info,
     signin_metrics::SourceForRefreshTokenOperation source =
         signin_metrics::SourceForRefreshTokenOperation::kUnknown) {
-  DCHECK_EQ(account_tracker_service->GetAccountInfo(account_id).account_id,
+  DCHECK_EQ(account_tracker_service->GetAccountInfo(account_id).GetAccountId(),
             account_id)
       << "To set the refresh token for an unknown account, use "
          "MakeAccountAvailable()";
@@ -85,13 +86,13 @@ void UpdateRefreshTokenForAccount(
   const AccountInfo& account_info =
       account_tracker_service->GetAccountInfo(account_id);
   account_manager::Account account{
-      account_manager::AccountKey::FromGaiaId(account_info.gaia),
-      account_info.email};
+      account_manager::AccountKey::FromGaiaId(account_info.GetGaiaId()),
+      std::string(account_info.GetEmail())};
   GetAccountManagerFacade(identity_manager)
       ->UpsertAccountForTesting(account, new_token);
 #else
   token_service->UpdateCredentials(account_id, new_token, source,
-                                   wrapped_binding_key);
+                                   token_binding_info);
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
   run_loop.Run();
@@ -126,14 +127,14 @@ AccountAvailabilityOptions::AccountAvailabilityOptions(
     const GaiaId& gaia_id,
     std::optional<ConsentLevel> consent_level,
     std::optional<std::string> refresh_token,
-    const std::vector<uint8_t>& wrapped_binding_key,
+    const TokenBindingInfo& token_binding_info,
     raw_ptr<network::TestURLLoaderFactory> url_loader_factory_for_cookies,
     signin_metrics::AccessPoint access_point)
     : email(email),
       gaia_id(gaia_id),
       consent_level(consent_level),
       refresh_token(refresh_token),
-      wrapped_binding_key(wrapped_binding_key),
+      token_binding_info(token_binding_info),
       url_loader_factory_for_cookies(url_loader_factory_for_cookies),
       access_point(access_point) {
   CHECK(!email.empty());
@@ -191,16 +192,17 @@ AccountAvailabilityOptionsBuilder::WithRefreshToken(
 }
 
 AccountAvailabilityOptionsBuilder&
-AccountAvailabilityOptionsBuilder::WithRefreshTokenBindingKey(
-    const std::vector<uint8_t>& wrapped_binding_key) {
-  CHECK(refresh_token_.has_value()) << "Binding key requires a refresh token";
-  wrapped_binding_key_ = wrapped_binding_key;
+AccountAvailabilityOptionsBuilder::WithRefreshTokenBindingInfo(
+    const TokenBindingInfo& token_binding_info) {
+  CHECK(refresh_token_.has_value()) << "Binding info requires a refresh token";
+  token_binding_info_ = token_binding_info;
   return *this;
 }
 
 AccountAvailabilityOptionsBuilder&
 AccountAvailabilityOptionsBuilder::WithoutRefreshToken() {
-  CHECK(wrapped_binding_key_.empty()) << "Binding key requires a refresh token";
+  CHECK(token_binding_info_.wrapped_binding_key.empty())
+      << "Binding key requires a refresh token";
   refresh_token_ = std::nullopt;
   return *this;
 }
@@ -216,7 +218,7 @@ AccountAvailabilityOptions AccountAvailabilityOptionsBuilder::Build(
     std::string_view email) {
   return AccountAvailabilityOptions(
       email, gaia_id_, primary_account_consent_level_, refresh_token_,
-      wrapped_binding_key_,
+      token_binding_info_,
       with_cookie_ ? url_loader_factory_for_cookies_ : nullptr, access_point_);
 }
 
@@ -255,7 +257,7 @@ std::optional<signin::ConsentLevel> GetPrimaryAccountConsentLevel(
 }
 
 CoreAccountInfo SetPrimaryAccount(IdentityManager* identity_manager,
-                                  const std::string& email,
+                                  std::string_view email,
                                   ConsentLevel consent_level) {
   return MakeAccountAvailable(identity_manager,
                               AccountAvailabilityOptionsBuilder()
@@ -305,7 +307,7 @@ void RemoveRefreshTokenForPrimaryAccount(IdentityManager* identity_manager) {
 }
 
 AccountInfo MakePrimaryAccountAvailable(IdentityManager* identity_manager,
-                                        const std::string& email,
+                                        std::string_view email,
                                         ConsentLevel consent_level) {
   CoreAccountInfo account_info =
       MakeAccountAvailable(identity_manager, AccountAvailabilityOptionsBuilder()
@@ -424,10 +426,11 @@ AccountInfo MakeAccountAvailable(IdentityManager* identity_manager,
 
   AccountInfo account_info =
       account_tracker_service->FindAccountInfoByEmail(options.email);
-  CHECK(!account_info.account_id.empty());
-  CHECK(options.gaia_id.empty() || account_info.gaia == options.gaia_id)
+  CHECK(!account_info.GetAccountId().empty());
+  CHECK(options.gaia_id.empty() || account_info.GetGaiaId() == options.gaia_id)
       << "The already available account does not match the requested gaia: '"
-      << account_info.gaia << "' instead of '" << options.gaia_id << "'.";
+      << account_info.GetGaiaId() << "' instead of '" << options.gaia_id
+      << "'.";
 
   if (options.consent_level.has_value()) {
     auto consent_level = options.consent_level.value();
@@ -435,19 +438,20 @@ AccountInfo MakeAccountAvailable(IdentityManager* identity_manager,
         identity_manager->GetPrimaryAccountManager();
     primary_account_manager->SetPrimaryAccountInfo(account_info, consent_level,
                                                    options.access_point);
-    CHECK_EQ(account_info.gaia,
+    CHECK_EQ(account_info.GetGaiaId(),
              identity_manager->GetPrimaryAccountInfo(consent_level).gaia);
   }
 
   if (options.refresh_token.has_value()) {
-    SetRefreshTokenForAccount(identity_manager, account_info.account_id,
+    SetRefreshTokenForAccount(identity_manager, account_info.GetAccountId(),
                               options.refresh_token.value(),
-                              options.wrapped_binding_key);
+                              options.token_binding_info);
   }
 
   if (options.url_loader_factory_for_cookies) {
-    AddCookieAccount(identity_manager, options.url_loader_factory_for_cookies,
-                     {account_info.email, account_info.gaia});
+    AddCookieAccount(
+        identity_manager, options.url_loader_factory_for_cookies,
+        {std::string(account_info.GetEmail()), account_info.GetGaiaId()});
   }
 
   return account_info;
@@ -459,11 +463,10 @@ AccountInfo MakeAccountAvailable(IdentityManager* identity_manager,
                               AccountAvailabilityOptionsBuilder().Build(email));
 }
 
-void SetRefreshTokenForAccount(
-    IdentityManager* identity_manager,
-    const CoreAccountId& account_id,
-    const std::string& token_value,
-    const std::vector<uint8_t>& wrapped_binding_key) {
+void SetRefreshTokenForAccount(IdentityManager* identity_manager,
+                               const CoreAccountId& account_id,
+                               const std::string& token_value,
+                               const TokenBindingInfo& token_binding_info) {
   UpdateRefreshTokenForAccount(
       identity_manager->GetTokenService(),
       identity_manager->GetAccountTrackerService(), identity_manager,
@@ -472,7 +475,7 @@ void SetRefreshTokenForAccount(
           ? "refresh_token_for_" + account_id.ToString() + "_" +
                 base::Uuid::GenerateRandomV4().AsLowercaseString()
           : token_value,
-      wrapped_binding_key);
+      token_binding_info);
 }
 
 void SetInvalidRefreshTokenForAccount(
@@ -483,7 +486,7 @@ void SetInvalidRefreshTokenForAccount(
                                identity_manager->GetAccountTrackerService(),
                                identity_manager, account_id,
                                GaiaConstants::kInvalidRefreshToken,
-                               /*wrapped_binding_key=*/{}, source);
+                               TokenBindingInfo(), source);
 }
 
 void RemoveRefreshTokenForAccount(IdentityManager* identity_manager,
@@ -502,7 +505,7 @@ void RemoveRefreshTokenForAccount(IdentityManager* identity_manager,
       identity_manager->GetAccountTrackerService()->GetAccountInfo(account_id);
   GetAccountManagerFacade(identity_manager)
       ->RemoveAccountForTesting(
-          account_manager::AccountKey::FromGaiaId(account_info.gaia));
+          account_manager::AccountKey::FromGaiaId(account_info.GetGaiaId()));
 #else
   identity_manager->GetTokenService()->RevokeCredentials(account_id);
 #endif  // BUILDFLAG(IS_CHROMEOS)
@@ -613,8 +616,9 @@ void UpdateAccountInfoForAccount(IdentityManager* identity_manager,
       identity_manager->GetAccountTrackerService();
 
   DCHECK(account_tracker_service);
-  DCHECK(!account_tracker_service->GetAccountInfo(account_info.account_id)
-              .account_id.empty());
+  DCHECK(!account_tracker_service->GetAccountInfo(account_info.GetAccountId())
+              .GetAccountId()
+              .empty());
 
   account_tracker_service->SeedAccountInfo(account_info);
 }
@@ -691,13 +695,13 @@ void CancelAllOngoingGaiaCookieOperations(IdentityManager* identity_manager) {
 
 void SimulateSuccessfulFetchOfAccountInfo(IdentityManager* identity_manager,
                                           const CoreAccountId& account_id,
-                                          const std::string& email,
+                                          std::string_view email,
                                           const GaiaId& gaia,
-                                          const std::string& hosted_domain,
-                                          const std::string& full_name,
-                                          const std::string& given_name,
-                                          const std::string& locale,
-                                          const std::string& picture_url) {
+                                          std::string_view hosted_domain,
+                                          std::string_view full_name,
+                                          std::string_view given_name,
+                                          std::string_view locale,
+                                          std::string_view picture_url) {
   base::DictValue user_info;
   user_info.Set("id", gaia.ToString());
   user_info.Set("email", email);
@@ -709,8 +713,11 @@ void SimulateSuccessfulFetchOfAccountInfo(IdentityManager* identity_manager,
 
   AccountTrackerService* account_tracker_service =
       identity_manager->GetAccountTrackerService();
-  account_tracker_service->SetAccountInfoFromUserInfo(
-      account_id, signin::AccountInfoFromUserInfo(user_info));
+  std::optional<AccountInfo> account_info =
+      signin::AccountInfoFromUserInfo(user_info);
+  CHECK(account_info);
+  account_tracker_service->SetAccountInfoFromUserInfo(account_id,
+                                                      *account_info);
 
   bool managed =
       !hosted_domain.empty() && hosted_domain != kNoHostedDomainFound;
@@ -730,10 +737,12 @@ account_manager::AccountManagerFacade* GetAccountManagerFacade(
 }
 #endif
 
-void SetIgnoreNonOfficialApiKeys() {
+std::optional<base::AutoReset<bool>> SetIgnoreNonOfficialApiKeysForTesting() {
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
-  MutableProfileOAuth2TokenServiceDelegate::
+  return MutableProfileOAuth2TokenServiceDelegate::
       SetIgnoreNonOfficialApiKeysForTesting();
+#else
+  return std::nullopt;
 #endif
 }
 

@@ -4,7 +4,6 @@
 
 #include "chromeos/ash/components/dbus/resourced/resourced_client.h"
 
-#include "base/byte_count.h"
 #include "base/byte_size.h"
 #include "base/check_op.h"
 #include "base/functional/callback_helpers.h"
@@ -120,7 +119,7 @@ class ResourcedClientImpl : public ResourcedClient {
 
   // Caches the total memory for reclaim_target_kb sanity check. The default
   // value is 32 GiB in case reading total memory failed.
-  base::ByteCount total_memory_ = base::GiB(32);
+  base::ByteSize total_memory_ = base::GiB(32);
 
   // A list of observers that are listening on state changes, etc.
   base::ObserverList<Observer> observers_;
@@ -134,7 +133,7 @@ class ResourcedClientImpl : public ResourcedClient {
 ResourcedClientImpl::ResourcedClientImpl() {
   base::SystemMemoryInfo info;
   if (base::GetSystemMemoryInfo(&info)) {
-    total_memory_ = base::ByteCount::FromUnsigned(info.total.InBytes());
+    total_memory_ = info.total;
   } else {
     PLOG(ERROR) << "Error reading total memory.";
   }

@@ -6,10 +6,7 @@
 
 #import "base/apple/foundation_util.h"
 #import "ios/chrome/browser/shared/ui/symbols/symbols.h"
-#import "ios/chrome/browser/shared/ui/table_view/legacy_chrome_table_view_styler.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
-#import "ios/chrome/common/ui/colors/semantic_color_names.h"
-#import "ios/chrome/common/ui/table_view/table_view_cells_constants.h"
 #import "testing/gtest_mac.h"
 #import "testing/platform_test.h"
 
@@ -28,7 +25,7 @@ TEST_F(WhatsNewTableViewItemTest, ItemProperties) {
   item.title = title;
   item.detailText = detail_text;
   item.iconImage =
-      DefaultSymbolWithPointSize(kMagnifyingglassSymbol, kTestIconPointSize);
+      SymbolWithPointSize(SymbolMagnifyingglass, kTestIconPointSize);
   item.iconBackgroundColor = UIColor.blueColor;
 
   id cell = [[[item cellClass] alloc] init];
@@ -36,9 +33,7 @@ TEST_F(WhatsNewTableViewItemTest, ItemProperties) {
 
   WhatsNewTableViewCell* whats_new_cell =
       base::apple::ObjCCastStrict<WhatsNewTableViewCell>(cell);
-
-  ChromeTableViewStyler* styler = [[ChromeTableViewStyler alloc] init];
-  [item configureCell:cell withStyler:styler];
+  [item configureCell:cell];
 
   // Check text label (title).
   EXPECT_NSEQ(title, whats_new_cell.textLabel.text);
@@ -59,7 +54,7 @@ TEST_F(WhatsNewTableViewItemTest, ItemProperties) {
   EXPECT_EQ(detailFont, whats_new_cell.detailTextLabel.font);
   EXPECT_EQ(YES,
             whats_new_cell.detailTextLabel.adjustsFontForContentSizeCategory);
-  EXPECT_EQ(3, whats_new_cell.detailTextLabel.numberOfLines);
+  EXPECT_EQ(4, whats_new_cell.detailTextLabel.numberOfLines);
 
   // Check that the main background is set properly.
   UIImageView* main_background_image_view =
@@ -92,16 +87,14 @@ TEST_F(WhatsNewTableViewItemTest, ItemWithoutBackgroundImageView) {
   item.title = title;
   item.detailText = detail_text;
   item.iconImage =
-      DefaultSymbolWithPointSize(kMagnifyingglassSymbol, kTestIconPointSize);
+      SymbolWithPointSize(SymbolMagnifyingglass, kTestIconPointSize);
 
   id cell = [[[item cellClass] alloc] init];
   ASSERT_TRUE([cell isMemberOfClass:[WhatsNewTableViewCell class]]);
 
   WhatsNewTableViewCell* whats_new_cell =
       base::apple::ObjCCastStrict<WhatsNewTableViewCell>(cell);
-
-  ChromeTableViewStyler* styler = [[ChromeTableViewStyler alloc] init];
-  [item configureCell:cell withStyler:styler];
+  [item configureCell:cell];
 
   // Check text label (title).
   EXPECT_NSEQ(title, whats_new_cell.textLabel.text);
@@ -123,7 +116,7 @@ TEST_F(WhatsNewTableViewItemTest, ItemWithoutBackgroundImageView) {
   EXPECT_EQ(detailFont, whats_new_cell.detailTextLabel.font);
   EXPECT_EQ(YES,
             whats_new_cell.detailTextLabel.adjustsFontForContentSizeCategory);
-  EXPECT_EQ(3, whats_new_cell.detailTextLabel.numberOfLines);
+  EXPECT_EQ(4, whats_new_cell.detailTextLabel.numberOfLines);
 
   // Check that the main background is set properly.
   UIImageView* main_background_image_view =

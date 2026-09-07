@@ -11,6 +11,8 @@
 #include <tuple>
 #include <variant>
 
+#include "ash/constants/ash_policy_pref_names.h"
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
 #include "base/check.h"
 #include "base/memory/raw_ptr.h"
@@ -31,7 +33,6 @@
 #include "chrome/browser/ash/policy/server_backed_state/server_backed_device_state.h"
 #include "chrome/browser/ash/policy/server_backed_state/server_backed_state_keys_broker.h"
 #include "chrome/browser/ash/settings/device_settings_service.h"
-#include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/system/statistics_provider.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/dmserver_job_configurations.h"
@@ -153,7 +154,7 @@ struct DeterminationContext {
 };
 
 void StorePsmError(PrefService* local_state) {
-  local_state->SetInteger(prefs::kEnrollmentPsmResult,
+  local_state->SetInteger(ash::prefs::kEnrollmentPsmResult,
                           em::DeviceRegisterRequest::PSM_RESULT_ERROR);
 }
 
@@ -187,24 +188,33 @@ class DeviceIdentifiers {
   DeviceIdentifiers(const DeviceIdentifiers&) = delete;
   DeviceIdentifiers& operator=(const DeviceIdentifiers&) = delete;
 
+  using OnRetrievedCallback =
+      base::OnceCallback<void(std::string, std::string)>;
+
+  void StartRetrieval(ash::system::StatisticsProvider* statistics_provider,
+                      OnRetrievedCallback callback) {
+    statistics_provider->ScheduleOnMachineStatisticsLoaded(
+        base::BindOnce(&DeviceIdentifiers::Retrieve, weak_factory_.GetWeakPtr(),
+                       statistics_provider, std::move(callback)));
+  }
+
+ private:
   // Retrieves brand code and serial numbers.
   //
   // On success, stores retrieved identifiers in `rlz_brand_code` and
   // `serial_number` and returns true.
-  bool Retrieve(ash::system::StatisticsProvider* statistics_provider,
-                std::string& out_rlz_brand_code,
-                std::string& out_serial_number) {
-    out_rlz_brand_code = std::string(
+  void Retrieve(ash::system::StatisticsProvider* statistics_provider,
+                OnRetrievedCallback callback) {
+    std::string rlz_brand_code = std::string(
         statistics_provider->GetMachineStatistic(ash::system::kRlzBrandCodeKey)
             .value_or(""));
-    out_serial_number =
+    std::string serial_number =
         std::string(statistics_provider->GetMachineID().value_or(""));
-    ReportDeviceIdentifierStatus(out_serial_number.empty(),
-                                 out_rlz_brand_code.empty());
-    return !out_serial_number.empty() && !out_rlz_brand_code.empty();
+    ReportDeviceIdentifierStatus(serial_number.empty(), rlz_brand_code.empty());
+    std::move(callback).Run(std::move(rlz_brand_code),
+                            std::move(serial_number));
   }
 
- private:
   static void ReportDeviceIdentifierStatus(bool serial_number_missing,
                                            bool rlz_brand_code_missing) {
     enum class DeviceIdentifierStatus {
@@ -235,6 +245,8 @@ class DeviceIdentifiers {
           DeviceIdentifierStatus::kAllPresent);
     }
   }
+
+  base::WeakPtrFactory<DeviceIdentifiers> weak_factory_{this};
 };
 
 // Class to send RLWE OPRF request as part of PSM protocol.
@@ -452,24 +464,24 @@ class RlweQuery {
   }
 
   void StoreResponse(PrefService* local_state, bool is_member) {
-    local_state->SetTime(prefs::kEnrollmentPsmDeterminationTime,
+    local_state->SetTime(ash::prefs::kEnrollmentPsmDeterminationTime,
                          base::Time::Now());
     local_state->SetInteger(
-        prefs::kEnrollmentPsmResult,
+        ash::prefs::kEnrollmentPsmResult,
         is_member
             ? em::DeviceRegisterRequest::PSM_RESULT_SUCCESSFUL_WITH_STATE
             : em::DeviceRegisterRequest::PSM_RESULT_SUCCESSFUL_WITHOUT_STATE);
   }
 
   void MarkResultIgnoredForTokenBasedEnrollment(PrefService* local_state) {
-    local_state->SetTime(prefs::kEnrollmentPsmDeterminationTime,
+    local_state->SetTime(ash::prefs::kEnrollmentPsmDeterminationTime,
                          base::Time::Now());
     // TODO(b/331285209): Consider changing name of
     // PSM_SKIPPED_FOR_FLEX_AUTO_ENROLLMENT (unlikely since it's in a shared
     // proto), or adding a new value, to remove "Flex" from the name, and
     // change "skipped" to "ignored", as "skipped" isn't entirely accurate here.
     local_state->SetInteger(
-        prefs::kEnrollmentPsmResult,
+        ash::prefs::kEnrollmentPsmResult,
         em::DeviceRegisterRequest::PSM_SKIPPED_FOR_FLEX_AUTO_ENROLLMENT);
   }
 
@@ -647,6 +659,11 @@ class EnrollmentState {
     if (state_response.has_disabled_state()) {
       result.dict.Set(kDeviceStateDisabledMessage,
                       state_response.disabled_state().message());
+      if (state_response.disabled_state().has_location_tracking_enabled()) {
+        result.dict.Set(
+            kDeviceStateLocationTrackingEnabled,
+            state_response.disabled_state().location_tracking_enabled());
+      }
     }
 
     LOG(WARNING) << "Initial enrollment mode = '" << mode << "', "
@@ -680,6 +697,11 @@ class EnrollmentState {
     if (state_response.has_disabled_state()) {
       result.dict.Set(kDeviceStateDisabledMessage,
                       state_response.disabled_state().message());
+      if (state_response.disabled_state().has_location_tracking_enabled()) {
+        result.dict.Set(
+            kDeviceStateLocationTrackingEnabled,
+            state_response.disabled_state().location_tracking_enabled());
+      }
     }
 
     if (state_response.has_license_type()) {
@@ -698,7 +720,7 @@ class EnrollmentState {
 
   void StoreResponse(PrefService* local_state, const base::DictValue& dict) {
     LOG(WARNING) << "ServerBackedDeviceState pref: " << dict;
-    local_state->SetDict(prefs::kServerBackedDeviceState, dict.Clone());
+    local_state->SetDict(ash::prefs::kServerBackedDeviceState, dict.Clone());
   }
 
  private:
@@ -857,9 +879,18 @@ class EnrollmentStateFetcherImpl::Sequence {
     base::UmaHistogramBoolean(kUMAStateDeterminationOnFlex,
                               ash::switches::IsRevenBranding());
 
-    if (!device_identifiers_.Retrieve(context_.statistics_provider,
-                                      context_.rlz_brand_code,
-                                      context_.serial_number)) {
+    device_identifiers_.StartRetrieval(
+        context_.statistics_provider,
+        base::BindOnce(&Sequence::OnDeviceIdentifierRetrieved,
+                       weak_factory_.GetWeakPtr()));
+  }
+
+ private:
+  void OnDeviceIdentifierRetrieved(std::string rlz_brand_code,
+                                   std::string serial_number) {
+    context_.rlz_brand_code = std::move(rlz_brand_code);
+    context_.serial_number = std::move(serial_number);
+    if (context_.rlz_brand_code.empty() || context_.serial_number.empty()) {
       // Skip enrollment if serial number or brand code are missing.
       // This is expected to happen for prototype devices, for instance.
       // See crbug.com/376581659.
@@ -872,19 +903,13 @@ class EnrollmentStateFetcherImpl::Sequence {
                                     weak_factory_.GetWeakPtr()));
   }
 
- private:
   void OnOwnershipChecked(ash::DeviceSettingsService::OwnershipStatus status) {
     base::UmaHistogramEnumeration(kUMAStateDeterminationOwnershipStatus,
                                   status);
-    if (status ==
-        ash::DeviceSettingsService::OwnershipStatus::kOwnershipUnknown) {
+    if (status != ash::DeviceSettingsService::OwnershipStatus::kOwnershipNone) {
+      // Note: OwnershipUnknown is treated as owned.
+      // Unknown is weird. Do not trust it and assume ownership.
       // See crbug.com/470630590
-      LOG(ERROR) << "Device ownership is unknown. Powerwash might be required.";
-    }
-
-    if (status ==
-        ash::DeviceSettingsService::OwnershipStatus::kOwnershipTaken) {
-      LOG(WARNING) << "Device ownership is already taken. Skipping enrollment";
       return ReportResult(AutoEnrollmentResult::kDeviceAlreadyOwned);
     }
 
@@ -1005,7 +1030,7 @@ class EnrollmentStateFetcherImpl::Sequence {
   base::TimeTicks fetch_started_;
 
   // Used to store the initial enrollment state (if available) in a dict at
-  // `prefs::kServerBackedDeviceState`.
+  // `ash::prefs::kServerBackedDeviceState`.
   // Must not be nullptr for initial enrollment state determination.
   raw_ptr<PrefService> local_state_ = nullptr;
 
@@ -1071,8 +1096,8 @@ std::unique_ptr<EnrollmentStateFetcher> EnrollmentStateFetcher::Create(
 
 // static
 void EnrollmentStateFetcher::RegisterPrefs(PrefRegistrySimple* registry) {
-  registry->RegisterIntegerPref(prefs::kEnrollmentPsmResult, -1);
-  registry->RegisterTimePref(prefs::kEnrollmentPsmDeterminationTime,
+  registry->RegisterIntegerPref(ash::prefs::kEnrollmentPsmResult, -1);
+  registry->RegisterTimePref(ash::prefs::kEnrollmentPsmDeterminationTime,
                              base::Time());
 }
 

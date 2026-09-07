@@ -5,10 +5,13 @@
 #ifndef EXTENSIONS_BROWSER_EXTENSION_INSTALL_PROMPT_CLIENT_H_
 #define EXTENSIONS_BROWSER_EXTENSION_INSTALL_PROMPT_CLIENT_H_
 
+#include <memory>
 #include <string>
+#include <utility>
 
 #include "base/functional/callback.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/observer_list_types.h"
 #include "extensions/buildflags/buildflags.h"
 
 static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
@@ -22,6 +25,7 @@ class BrowserContext;
 namespace extensions {
 class CrxInstallError;
 class Extension;
+class PermissionSet;
 
 class ExtensionInstallPromptClient {
  public:
@@ -33,12 +37,26 @@ class ExtensionInstallPromptClient {
   };
 
   struct DoneCallbackPayload {
-    explicit DoneCallbackPayload(Result result);
-    DoneCallbackPayload(Result result, std::string justification);
+    explicit DoneCallbackPayload(Result result) : result(result) {}
+    DoneCallbackPayload(Result result, std::string justification)
+        : result(result), justification(std::move(justification)) {}
     ~DoneCallbackPayload() = default;
 
     const Result result;
     const std::string justification;
+  };
+
+  // Interface for observing events on the prompt.
+  class Observer : public base::CheckedObserver {
+   public:
+    // Called right before the dialog is about to show.
+    virtual void OnDialogOpened() = 0;
+
+    // Called when the user clicks accept on the dialog.
+    virtual void OnDialogAccepted() = 0;
+
+    // Called when the user clicks cancel on the dialog, presses 'x' or escape.
+    virtual void OnDialogCanceled() = 0;
   };
 
   using DoneCallback = base::OnceCallback<void(DoneCallbackPayload payload)>;
@@ -64,6 +82,22 @@ class ExtensionInstallPromptClient {
   virtual void ConfirmReEnable(DoneCallback install_callback,
                                const Extension* extension,
                                content::BrowserContext* browser_context) = 0;
+
+  // Starts the process to show a prompt requesting a specific set of
+  // additional permissions (e.g. via chrome.permissions.request()), as
+  // opposed to the extension's full permission set. `custom_permissions`
+  // must be non-null.
+  virtual void ConfirmPermissions(
+      DoneCallback done_callback,
+      const Extension* extension,
+      std::unique_ptr<const PermissionSet> custom_permissions) = 0;
+
+  // Starts the process to show the install prompt.
+  // `extension` can be null in the case of a bundle install.
+  // If `icon` is null, this will attempt to load the extension's icon.
+  virtual void ShowInstallDialog(DoneCallback install_callback,
+                                 const Extension* extension,
+                                 const SkBitmap* icon) = 0;
 
   virtual ~ExtensionInstallPromptClient() = default;
 };

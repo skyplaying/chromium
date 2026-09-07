@@ -4,9 +4,12 @@
 
 package org.chromium.chrome.browser.tab;
 
+import static org.chromium.build.NullUtil.assertNonNull;
+
 import android.annotation.SuppressLint;
 import android.os.Handler;
 import android.os.Message;
+import android.util.ArraySet;
 
 import androidx.annotation.IntDef;
 
@@ -21,7 +24,7 @@ import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.util.ChromeAccessibilityUtil;
 import org.chromium.components.browser_ui.util.BrowserControlsVisibilityDelegate;
 import org.chromium.components.dom_distiller.core.DomDistillerUrlUtils;
-import org.chromium.components.embedder_support.util.UrlConstants;
+import org.chromium.components.embedder_support.util.UrlUtilities;
 import org.chromium.components.security_state.SecurityStateModel;
 import org.chromium.content_public.browser.ImeAdapter;
 import org.chromium.content_public.browser.ImeEventObserver;
@@ -32,7 +35,6 @@ import org.chromium.url.GURL;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
-import java.util.HashSet;
 import java.util.Set;
 
 /**
@@ -83,7 +85,8 @@ public class TabStateBrowserControlsVisibilityDelegate extends BrowserControlsVi
     private boolean mIsFullscreenWaitingForLoad;
     private boolean mIsFocusedNodeEditable;
 
-    private final Set<Long> mOutstandingNavigations = new HashSet<>();
+    // There shouldn't be very many outstanding navigations at once so an ArraySet should be fine.
+    private final Set<Long> mOutstandingNavigations = new ArraySet<>();
 
     /**
      * Basic constructor.
@@ -93,7 +96,7 @@ public class TabStateBrowserControlsVisibilityDelegate extends BrowserControlsVi
     public TabStateBrowserControlsVisibilityDelegate(Tab tab) {
         mTab = (TabImpl) tab;
         mTab.addObserver(
-                new EmptyTabObserver() {
+                new TabObserver() {
                     @SuppressLint("HandlerLeak")
                     private final Handler mHandler =
                             new Handler() {
@@ -196,7 +199,7 @@ public class TabStateBrowserControlsVisibilityDelegate extends BrowserControlsVi
                         // TODO(crbug.com/40926082): Associate events with navigation ids or
                         // urls, so that we can fully unlock controls here possible here.
                         // May have already received the start of a different navigation. Do not
-                        // cancel the outstanding delay. See https://crbug.com/1447237.
+                        // cancel the outstanding delay. See https://crbug.com/40064686.
                         if (!ChromeFeatureList.sControlsVisibilityFromNavigations.isEnabled()) {
                             scheduleEnableFullscreenLoadDelayIfNecessary();
                         }
@@ -235,8 +238,6 @@ public class TabStateBrowserControlsVisibilityDelegate extends BrowserControlsVi
 
                     @Override
                     public void onDestroyed(Tab tab) {
-                        super.onDestroyed(tab);
-
                         // Remove pending handler actions to prevent memory leaks.
                         mHandler.removeCallbacksAndMessages(null);
                     }
@@ -248,8 +249,13 @@ public class TabStateBrowserControlsVisibilityDelegate extends BrowserControlsVi
     private void onWebContentsUpdated(@Nullable WebContents contents) {
         if (mWebContents == contents) return;
         mWebContents = contents;
+
         if (mWebContents == null) return;
-        ImeAdapter.fromWebContents(mWebContents).addEventObserver(this);
+
+        ImeAdapter adapter = assertNonNull(ImeAdapter.fromWebContents(mWebContents));
+
+        // Gracefully handle a null adapter in non-debug builds.
+        if (adapter != null) adapter.addEventObserver(this);
     }
 
     private void updateWaitingForLoad(boolean waiting) {
@@ -265,47 +271,38 @@ public class TabStateBrowserControlsVisibilityDelegate extends BrowserControlsVi
         GURL url = mTab.getUrl();
         boolean enableHidingBrowserControls = true;
         int flags = 0;
-        if (url.getScheme().equals(UrlConstants.CHROME_SCHEME)
-                || url.getScheme().equals(UrlConstants.CHROME_NATIVE_SCHEME)) {
+        if (UrlUtilities.isChromeScheme(url)) {
             enableHidingBrowserControls = false;
-            recordBrowserControlsLockReason(LockReason.CHROME_URL);
             flags |= (1 << (int) LockReason.CHROME_URL);
         }
         if (SecurityStateModel.isContentDangerous(mTab.getWebContents())) {
             enableHidingBrowserControls = false;
-            recordBrowserControlsLockReason(LockReason.TAB_CONTENT_DANGEROUS);
             flags |= (1 << (int) LockReason.TAB_CONTENT_DANGEROUS);
         }
         if (mIsFocusedNodeEditable) {
             enableHidingBrowserControls = false;
-            recordBrowserControlsLockReason(LockReason.EDITABLE_NODE_FOCUS);
             flags |= (1 << (int) LockReason.EDITABLE_NODE_FOCUS);
         }
         if (mTab.isShowingErrorPage() || mTab.isRendererUnresponsive()) {
             enableHidingBrowserControls = false;
-            recordBrowserControlsLockReason(LockReason.TAB_ERROR);
             flags |= (1 << (int) LockReason.TAB_ERROR);
         }
         if (mTab.isHidden()) {
             enableHidingBrowserControls = false;
-            recordBrowserControlsLockReason(LockReason.TAB_HIDDEN);
             flags |= (1 << (int) LockReason.TAB_HIDDEN);
         }
         if (mIsFullscreenWaitingForLoad) {
             enableHidingBrowserControls = false;
-            recordBrowserControlsLockReason(LockReason.FULLSCREEN_LOADING);
             flags |= (1 << (int) LockReason.FULLSCREEN_LOADING);
         }
         // TODO(tedchoc): AccessibilityUtil and DeviceClassManager checks do not belong in Tab
         //                logic.  They should be moved to application level checks.
         if (ChromeAccessibilityUtil.get().isAccessibilityEnabled()) {
             enableHidingBrowserControls = false;
-            recordBrowserControlsLockReason(LockReason.A11Y_ENABLED);
             flags |= (1 << (int) LockReason.A11Y_ENABLED);
         }
         if (!DeviceClassManager.enableFullscreen()) {
             enableHidingBrowserControls = false;
-            recordBrowserControlsLockReason(LockReason.FULLSCREEN_DISABLED);
             flags |= (1 << (int) LockReason.FULLSCREEN_DISABLED);
         }
 
@@ -345,10 +342,5 @@ public class TabStateBrowserControlsVisibilityDelegate extends BrowserControlsVi
     public void onNodeAttributeUpdated(boolean editable, boolean password) {
         mIsFocusedNodeEditable = editable;
         updateVisibilityConstraints();
-    }
-
-    private static void recordBrowserControlsLockReason(@LockReason int reason) {
-        RecordHistogram.recordEnumeratedHistogram(
-                "Android.BrowserControls.LockedByTabState.Reason", reason, LockReason.NUM_TOTAL);
     }
 }

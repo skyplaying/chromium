@@ -4,21 +4,27 @@
 
 package org.chromium.chrome.browser.suggestions.tile;
 
+import static android.view.View.GONE;
+
 import static org.chromium.build.NullUtil.assumeNonNull;
 
 import android.app.Activity;
 import android.content.res.Configuration;
+import android.content.res.Resources;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.View;
 import android.view.ViewGroup;
 
+import org.chromium.base.ResettersForTesting;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.lifecycle.ConfigurationChangedObserver;
 import org.chromium.chrome.browser.native_page.ContextMenuManager;
+import org.chromium.chrome.browser.ntp.NewTabPageUtils;
+import org.chromium.chrome.browser.ntp.NewTabPageUtils.PaddingStyle;
 import org.chromium.chrome.browser.offlinepages.OfflinePageBridge;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.suggestions.SuggestionsConfig;
@@ -39,8 +45,10 @@ public class MostVisitedTilesCoordinator implements ConfigurationChangedObserver
 
     private final Activity mActivity;
     private final ActivityLifecycleDispatcher mActivityLifecycleDispatcher;
-    private final MostVisitedTilesMediator mMediator;
     private final UiConfig mUiConfig;
+    private final View mMvTilesContainerLayout;
+    private final boolean mIsLff;
+    private MostVisitedTilesMediator mMediator;
     private @Nullable TileRenderer mRenderer;
     private @Nullable UserEducationHelper mUserEducationHelper;
     private @Nullable ContextMenuManager mContextMenuManager;
@@ -52,6 +60,7 @@ public class MostVisitedTilesCoordinator implements ConfigurationChangedObserver
      *     e.g.configuration changes. We need this to adjust the paddings and margins of the tile
      *     views.
      * @param mvTilesContainerLayout The container view of most visited tiles layout.
+     * @param uiConfig UiConfig providing display style information for the surface.
      * @param snapshotTileGridChangedRunnable The runnable called when the snapshot tile grid is
      *     changed.
      * @param tileCountChangedRunnable The runnable called when the tile count is changed.
@@ -60,15 +69,40 @@ public class MostVisitedTilesCoordinator implements ConfigurationChangedObserver
             Activity activity,
             ActivityLifecycleDispatcher activityLifecycleDispatcher,
             View mvTilesContainerLayout,
+            UiConfig uiConfig,
             @Nullable Runnable snapshotTileGridChangedRunnable,
             @Nullable Runnable tileCountChangedRunnable) {
         mActivity = activity;
         mActivityLifecycleDispatcher = activityLifecycleDispatcher;
+        mMvTilesContainerLayout = mvTilesContainerLayout;
+        mUiConfig = uiConfig;
+        mIsLff = DeviceFormFactor.isNonMultiDisplayContextOnTablet(mActivity);
+
+        @PaddingStyle int paddingStyle = NewTabPageUtils.getPaddingStyleForAurora();
+        if (paddingStyle != PaddingStyle.DEFAULT) {
+            Resources res = activity.getResources();
+            int topPadding = res.getDimensionPixelSize(R.dimen.mvt_container_top_padding_small);
+            int bottomPadding =
+                    res.getDimensionPixelSize(R.dimen.mvt_container_bottom_padding_small);
+            mvTilesContainerLayout.setPaddingRelative(
+                    mvTilesContainerLayout.getPaddingStart(),
+                    topPadding,
+                    mvTilesContainerLayout.getPaddingEnd(),
+                    bottomPadding);
+
+            int topMarginDimen =
+                    (paddingStyle == PaddingStyle.SMALL)
+                            ? R.dimen.mvt_container_top_margin_medium
+                            : R.dimen.mvt_container_top_margin_large;
+            ViewGroup.MarginLayoutParams marginLayoutParams =
+                    (ViewGroup.MarginLayoutParams) mvTilesContainerLayout.getLayoutParams();
+            marginLayoutParams.topMargin = res.getDimensionPixelSize(topMarginDimen);
+            mvTilesContainerLayout.setLayoutParams(marginLayoutParams);
+        }
 
         MostVisitedTilesLayout tilesLayout =
                 mvTilesContainerLayout.findViewById(R.id.mv_tiles_layout);
 
-        mUiConfig = new UiConfig(tilesLayout);
         PropertyModel propertyModel = new PropertyModel(MostVisitedTilesProperties.ALL_KEYS);
         PropertyModelChangeProcessor.create(
                 propertyModel,
@@ -76,24 +110,26 @@ public class MostVisitedTilesCoordinator implements ConfigurationChangedObserver
                 MostVisitedTilesViewBinder::bind);
         mRenderer =
                 new TileRenderer(
-                        mActivity, SuggestionsConfig.getTileStyle(mUiConfig), TITLE_LINES, null);
+                        mActivity,
+                        SuggestionsConfig.getTileStyle(mUiConfig, mIsLff),
+                        TITLE_LINES,
+                        /* imageFetcher= */ null);
 
-        boolean isTablet = DeviceFormFactor.isNonMultiDisplayContextOnTablet(mActivity);
         mMediator =
                 new MostVisitedTilesMediator(
                         activity,
                         mUiConfig,
-                        tilesLayout,
+                        mvTilesContainerLayout,
                         mRenderer,
                         propertyModel,
-                        isTablet,
+                        mIsLff,
                         snapshotTileGridChangedRunnable,
                         tileCountChangedRunnable);
     }
 
     /**
      * Called before the TasksSurface is showing to initialize MV tiles. {@link
-     * MostVisitedTilesCoordinator#destroyMvtiles()} is called after the TasksSurface hides.
+     * MostVisitedTilesCoordinator#destroy()} is called after the TasksSurface hides.
      *
      * @param profile The Profile associated with the MV Tiles being displayed.
      * @param suggestionsUiDelegate The UI delegate of suggestion surface.
@@ -111,8 +147,8 @@ public class MostVisitedTilesCoordinator implements ConfigurationChangedObserver
             mRenderer =
                     new TileRenderer(
                             mActivity,
-                            SuggestionsConfig.getTileStyle(mUiConfig),
-                            1,
+                            SuggestionsConfig.getTileStyle(mUiConfig, mIsLff),
+                            /* titleLines= */ 1,
                             suggestionsUiDelegate.getImageFetcher());
         } else {
             mRenderer.setImageFetcher(suggestionsUiDelegate.getImageFetcher());
@@ -145,8 +181,30 @@ public class MostVisitedTilesCoordinator implements ConfigurationChangedObserver
         mMediator.updateMvtVisibility();
     }
 
+    /**
+     * Updates the width and lateral margins of the MVT container.
+     *
+     * @param totalWidth The total available width of the parent layout.
+     * @param mvtWidth The target width that the MVT layout should align to.
+     */
+    public void updateMvtWidth(int totalWidth, int mvtWidth) {
+        if (mMvTilesContainerLayout.getVisibility() != GONE) {
+            mMediator.updateMvtWidth(totalWidth, mvtWidth);
+        }
+    }
+
+    /**
+     * Updates the margins for the most visited tiles layout based on what is shown above it.
+     *
+     * @param shouldShowLogo Whether the logo is shown.
+     * @param isLff Whether the device is a large form factor.
+     */
+    public void updateTilesLayoutMargins(boolean shouldShowLogo, boolean isLff) {
+        mMediator.updateTilesLayoutMargins(shouldShowLogo, isLff);
+    }
+
     /** Called when the TasksSurface is hidden or NewTabPageLayout is destroyed. */
-    public void destroyMvtiles() {
+    public void destroy() {
         mActivityLifecycleDispatcher.unregister(this);
 
         if (mOfflinePageBridge != null) mOfflinePageBridge = null;
@@ -165,7 +223,14 @@ public class MostVisitedTilesCoordinator implements ConfigurationChangedObserver
     /* ConfigurationChangedObserver implementation. */
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
+        // TODO(crbug.com/515150822): Investigate to see whether this logic also needs to be
+        //  triggered by #onSizeChanged().
         mMediator.onConfigurationChanged();
-        mUiConfig.updateDisplayStyle();
+    }
+
+    public void setMediatorForTesting(MostVisitedTilesMediator mediator) {
+        var oldValue = mediator;
+        mMediator = mediator;
+        ResettersForTesting.register(() -> mMediator = oldValue);
     }
 }

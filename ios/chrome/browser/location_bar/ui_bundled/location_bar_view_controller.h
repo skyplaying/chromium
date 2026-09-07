@@ -11,20 +11,21 @@
 #import "ios/chrome/browser/location_bar/ui_bundled/location_bar_consumer.h"
 #import "ios/chrome/browser/orchestrator/ui_bundled/location_bar_animatee.h"
 #import "ios/chrome/browser/shared/public/commands/omnibox_commands.h"
+#import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 
 @protocol ActivityServiceCommands;
 @protocol BadgeViewVisibilityDelegate;
 @protocol BrowserCoordinatorCommands;
-@protocol BWGCommands;
 @protocol ContextualPanelEntrypointVisibilityDelegate;
 @protocol FakeboxButtonsSnapshotProvider;
+@protocol GeminiCommands;
 @protocol HelpCommands;
 @protocol IncognitoBadgeViewVisibilityDelegate;
 @class LayoutGuideCenter;
 @protocol LensCommands;
 @protocol LensOverlayCommands;
-@protocol LocationBarOffsetProvider;
 @protocol LocationBarMutator;
+@protocol LocationBarOffsetProvider;
 @class LocationBarViewController;
 @protocol PageActionMenuCommands;
 @protocol PageActionMenuEntryPointCommands;
@@ -78,19 +79,29 @@ class Tracker;
 // Decides if AI Hub new badge should show.
 - (BOOL)shouldShowAIHubNewFeatureBadge;
 
-// Edit state required `height` changed.
-- (void)locationBarViewController:(LocationBarViewController*)controller
-         didChangeEditStateHeight:(CGFloat)height;
+// Notifies the delegate about a tap on the Hide Toolbar context menu action.
+- (void)locationBarHideToolbarTapped;
+
+// Returns whether the location bar can send the current tab to other devices.
+- (BOOL)locationBarCanSendTabToSelf;
+
+// Notifies the delegate that the "Send to your device" context menu item was
+// tapped.
+- (void)locationBarSendTabToSelfTapped;
 
 @end
 
 // The view controller displaying the location bar. Manages the two states of
+enum class CustomLeadingViewType;
+
 // the omnibox - the editing and the non-editing states. In the editing state,
 // the omnibox textfield is displayed; in the non-editing state, the current
 // location is displayed.
-@interface LocationBarViewController : UIViewController <FullscreenUIElement,
-                                                         LocationBarAnimatee,
-                                                         LocationBarConsumer>
+@interface LocationBarViewController
+    : UIViewController <ContextMenuTransitionStateProviding,
+                        FullscreenUIElement,
+                        LocationBarAnimatee,
+                        LocationBarConsumer>
 
 @property(nonatomic, assign) BOOL incognito;
 
@@ -111,6 +122,10 @@ class Tracker;
 // Delegate for this location bar view controller.
 @property(nonatomic, weak) id<LocationBarViewControllerDelegate> delegate;
 
+// The active context menu interaction animator, if any.
+@property(nonatomic, strong) id<UIContextMenuInteractionAnimating>
+    activeContextMenuAnimator;
+
 // Mutator for this location bar view controller.
 @property(nonatomic, weak) id<LocationBarMutator> mutator;
 
@@ -119,6 +134,9 @@ class Tracker;
 
 // The layout guide center to use to refer to the first suggestion label.
 @property(nonatomic, strong) LayoutGuideCenter* layoutGuideCenter;
+
+// Whether the location bar is currently active.
+@property(nonatomic, assign) BOOL active;
 
 // Feature engagement tracker.
 @property(nonatomic, assign) feature_engagement::Tracker* tracker;
@@ -134,7 +152,7 @@ class Tracker;
 @property(nonatomic, weak) id<PageActionMenuCommands> pageActionMenuHandler;
 
 // The Gemini command handler.
-@property(nonatomic, weak) id<BWGCommands> geminiHandler;
+@property(nonatomic, weak) id<GeminiCommands> geminiHandler;
 
 // The page action menu entry point handler. Returns the page action menu entry
 // point view for direct communication between a command dispatched and the page
@@ -149,6 +167,19 @@ class Tracker;
 
 // Whether Lens overlay is currently visible.
 @property(nonatomic, assign) BOOL lensOverlayVisible;
+
+// The layout guide constrained to the steady view. Only available when non-text
+// only.
+@property(nonatomic, readonly) UILayoutGuide* steadyViewLayoutGuide;
+
+// Initializes the view controller, optionally configured as text-only with
+// icons.
+- (instancetype)initWithTextOnly:(BOOL)textOnly NS_DESIGNATED_INITIALIZER;
+
+- (instancetype)init;
+- (instancetype)initWithCoder:(NSCoder*)coder NS_UNAVAILABLE;
+- (instancetype)initWithNibName:(NSString*)nibNameOrNil
+                         bundle:(NSBundle*)nibBundleOrNil NS_UNAVAILABLE;
 
 // Sets the edit view to use in the editing state. This must be set before the
 // view of this view controller is initialized. This must only be called once.
@@ -221,11 +252,17 @@ class Tracker;
 // Records the lens overlay entrypoint availability in the location bar.
 - (void)recordLensOverlayAvailability;
 
+// Updates the visibility of the AI Hub "New" feature badge.
+- (void)updateAIHubNewBadgeVisibility;
+
 // Moves the focus of VoiceOver to the steady view.
 - (void)focusSteadyViewForVoiceOver;
 
 // Creates a visual copy of the location bar steady view.
 - (UIView*)locationBarSteadyViewVisualCopy;
+
+// Sets the type of custom leading view to display in the steady view.
+- (void)setCustomLeadingViewType:(CustomLeadingViewType)type;
 
 @end
 

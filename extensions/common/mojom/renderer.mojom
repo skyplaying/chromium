@@ -57,6 +57,10 @@ struct ExtensionLoadedParams {
 
   // Reuse the extension guid when creating the extension in the renderer.
   string guid;
+
+  // Whether Mojo JS bindings should be enabled in service workers for this
+  // extension.
+  bool is_mojo_js_enabled_for_service_worker;
 };
 
 // Settings for a given user script world.
@@ -88,6 +92,9 @@ interface Renderer {
   // sent if logging is or was previously enabled; not being enabled is assumed
   // otherwise.
   SetActivityLoggingEnabled(bool enabled);
+
+  // Tells the renderer whether or not policy activity logging is enabled.
+  SetPolicyActivityLoggingEnabled(bool enabled);
 
   // Notifies the renderer that extensions were loaded in the browser.
   LoadExtensions(array<ExtensionLoadedParams> params);

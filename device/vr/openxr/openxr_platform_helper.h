@@ -14,6 +14,9 @@
 #include "device/vr/openxr/openxr_extension_helper.h"
 #include "device/vr/public/mojom/isolated_xr_service.mojom-forward.h"
 #include "device/vr/vr_export.h"
+#include "ipc/constants.mojom-forward.h"
+#include "mojo/public/cpp/system/message_pipe.h"
+#include "services/network/public/cpp/renderer_process_id.h"
 
 namespace device {
 class OpenXrGraphicsBinding;
@@ -24,9 +27,8 @@ class OpenXrGraphicsBinding;
 // Activity that this session should be associated with, and this value is
 // unused on Windows.
 struct OpenXrCreateInfo {
-  int render_process_id;
-  int render_frame_id;
-  bool needs_separate_activity = true;
+  network::RendererProcessId render_process_id;
+  int render_frame_id = IPC::mojom::kRoutingIdNone;
 };
 
 // This class exists to help provide an interface for working with OpenXR
@@ -51,6 +53,21 @@ class DEVICE_VR_EXPORT OpenXrPlatformHelper {
   // of an XrInstance if they are not available. This could be things like
   // e.g. specific controllers.
   static std::vector<const char*> GetOptionalExtensions();
+
+  // Registers a callback to initialize the mock OpenXR runtime trampoline in
+  // test builds. Invoked automatically during `EnsureInitialized()`.
+  using InitializeOpenXrMockTrampolineFn = bool (*)();
+  static void RegisterInitializeOpenXrMockTrampolineFn(
+      InitializeOpenXrMockTrampolineFn fn);
+
+  // Registers a callback to bind a test hook receiver to the mock OpenXR
+  // runtime using a type-erased message pipe in test builds.
+  using BindTestHookFn = void (*)(mojo::ScopedMessagePipeHandle);
+  static void RegisterBindTestHookFn(BindTestHookFn fn);
+
+  // Forwards a type-erased message pipe to the registered test hook handler.
+  // Must only be called in test environments.
+  static void BindHookForTesting(mojo::ScopedMessagePipeHandle receiver);
 
   virtual ~OpenXrPlatformHelper();
 

@@ -26,7 +26,7 @@ SelectToSpeakMouseSelectionTest = class extends SelectToSpeakE2ETest {
     await new Promise(resolve => {
       chrome.settingsPrivate.setPref(
           PrefsManager.ENHANCED_VOICES_DIALOG_SHOWN_KEY, true,
-          '' /* unused, see crbug.com/866161 */, () => resolve());
+          '' /* unused, see crbug.com/40586037 */, () => resolve());
     });
     if (!selectToSpeak.prefsManager_.enhancedVoicesDialogShown()) {
       // TODO(b/267705784): This shouldn't happen, but sometimes the
@@ -356,3 +356,27 @@ AX_TEST_F('SelectToSpeakMouseSelectionTest', 'SystemUI', async function() {
     this.triggerReadMouseSelectedText(start, end);
   });
 });
+
+// Verifies that unrequested desktop MOUSE_RELEASED events do not trigger
+// speech when hit testing uses direct callback replies.
+AX_TEST_F(
+    'SelectToSpeakMouseSelectionTest', 'IgnoresUnrequestedMouseReleasedEvent',
+    async function() {
+      const root = await this.runWithLoadedTree(
+          'data:text/html;charset=utf-8,' +
+          '<p id="target">Test text to speak</p>');
+      assertFalse(this.mockTts.currentlySpeaking());
+      assertEquals(this.mockTts.pendingUtterances().length, 0);
+
+      const textNode = this.findTextNode(root, 'Test text to speak');
+      assertNotNullNorUndefined(textNode);
+      const x = textNode.location.left + 1;
+      const y = textNode.location.top + 1;
+      root.hitTest(x, y, EventType.MOUSE_RELEASED);
+
+      // Wait an event loop to ensure any pending tasks would execute.
+      await new Promise(resolve => setTimeout(resolve, 200));
+
+      assertFalse(this.mockTts.currentlySpeaking());
+      assertEquals(this.mockTts.pendingUtterances().length, 0);
+    });

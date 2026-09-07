@@ -35,9 +35,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 /** Unit tests for the {@link CompositorAnimator} class. */
 @RunWith(BaseRobolectricTestRunner.class)
 @Config(
-        manifest = Config.NONE,
         // AnimatorSet seems to not work in Robolectric 3.4.2. Remove this SDK
-        // specification once we upgrade to a version in which it works. crbug.com/774357
+        // specification once we upgrade to a version in which it works. crbug.com/40544586
         sdk = Build.VERSION_CODES.TIRAMISU)
 public final class CompositorAnimatorTest {
     /** An animation update listener that counts calls to its methods. */
@@ -545,7 +544,7 @@ public final class CompositorAnimatorTest {
                 listener2.mEndCallbackHelper.getCallCount());
     }
 
-    @DisabledTest(message = "crbug.com/774357")
+    @DisabledTest(message = "crbug.com/40544586")
     @Test
     public void testAnimatorSet_playSequentially() {
         CompositorAnimator animator = new CompositorAnimator(mHandler);

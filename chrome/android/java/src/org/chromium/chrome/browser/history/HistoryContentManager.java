@@ -213,6 +213,7 @@ public class HistoryContentManager implements SignInStateObserver, PrefObserver 
                 null,
                 /* launchedForApp= */ false,
                 /* showAppFilter= */ false,
+                /* shouldClusterByDomain= */ false,
                 /* openHistoryItemCallback= */ null,
                 regularAsyncTabLauncher,
                 incognitoAsyncTabLauncher);
@@ -240,7 +241,7 @@ public class HistoryContentManager implements SignInStateObserver, PrefObserver 
      * @param selectionDelegate A class responsible for handling list item selection, null for
      *     unselectable items.
      * @param bottomSheetController Supplier of the {@link BottomSheetController}.
-     * @param modalDialogManagerSupplier Supplies the {@link ModalDialogManager}.
+     * @param modalDialogManagerSupplier Supplier of the {@link ModalDialogManager}.
      * @param snackbarManager The {@link SnackbarManager} used to display snackbars.
      * @param activityResultTracker Tracker of activity results.
      * @param tabSupplier Supplies the current tab, null if the history UI will be shown in a
@@ -267,7 +268,7 @@ public class HistoryContentManager implements SignInStateObserver, PrefObserver 
             boolean shouldShowClearDataIfAvailable,
             SelectionDelegate<HistoryItem> selectionDelegate,
             Supplier<BottomSheetController> bottomSheetController,
-            Supplier<@Nullable ModalDialogManager> modalDialogManagerSupplier,
+            Supplier<ModalDialogManager> modalDialogManagerSupplier,
             SnackbarManager snackbarManager,
             ActivityResultTracker activityResultTracker,
             @Nullable Supplier<@Nullable Tab> tabSupplier,
@@ -277,6 +278,7 @@ public class HistoryContentManager implements SignInStateObserver, PrefObserver 
             @Nullable String appId,
             boolean launchedForApp,
             boolean showAppFilter,
+            boolean shouldClusterByDomain,
             @Nullable Runnable openHistoryItemCallback,
             AsyncTabLauncher regularAsyncTabLauncher,
             AsyncTabLauncher incognitoAsyncTabLauncher) {
@@ -303,6 +305,7 @@ public class HistoryContentManager implements SignInStateObserver, PrefObserver 
                 appId,
                 launchedForApp,
                 showAppFilter,
+                shouldClusterByDomain,
                 openHistoryItemCallback,
                 regularAsyncTabLauncher,
                 incognitoAsyncTabLauncher);
@@ -320,7 +323,7 @@ public class HistoryContentManager implements SignInStateObserver, PrefObserver 
             @Nullable String hostName,
             @Nullable SelectionDelegate<HistoryItem> selectionDelegate,
             @Nullable Supplier<BottomSheetController> bottomSheetControllerSupplier,
-            @Nullable Supplier<@Nullable ModalDialogManager> modalDialogManagerSupplier,
+            @Nullable Supplier<ModalDialogManager> modalDialogManagerSupplier,
             @Nullable SnackbarManager snackbarManager,
             @Nullable ActivityResultTracker activityResultTracker,
             @Nullable Supplier<@Nullable Tab> tabSupplier,
@@ -330,6 +333,7 @@ public class HistoryContentManager implements SignInStateObserver, PrefObserver 
             @Nullable String appId,
             boolean launchedForApp,
             boolean showAppFilter,
+            boolean shouldClusterByDomain,
             @Nullable Runnable openHistoryItemCallback,
             AsyncTabLauncher regularAsyncTabLauncher,
             AsyncTabLauncher incognitoAsyncTabLauncher) {
@@ -383,7 +387,7 @@ public class HistoryContentManager implements SignInStateObserver, PrefObserver 
                             assumeNonNull(activityResultTracker),
                             SigninAndHistorySyncActivityLauncherImpl.get(),
                             assertNonNull(bottomSheetControllerSupplier),
-                            assumeNonNull(modalDialogManagerSupplier),
+                            assumeNonNull(modalDialogManagerSupplier).get(),
                             assumeNonNull(snackbarManager),
                             DeviceLockActivityLauncherImpl.get(),
                             new HistoryPageSigninPromoDelegate(
@@ -402,7 +406,10 @@ public class HistoryContentManager implements SignInStateObserver, PrefObserver 
                 new HistoryAdapter(
                         this,
                         sProviderForTests != null ? sProviderForTests : historyProvider,
-                        mHistorySyncPromoCoordinator);
+                        mHistorySyncPromoCoordinator,
+                        shouldClusterByDomain,
+                        snackbarManager,
+                        mProfile.isOffTheRecord() ? null : mProfile);
 
         // Create a recycler view.
         mRecyclerView =
@@ -540,13 +547,14 @@ public class HistoryContentManager implements SignInStateObserver, PrefObserver 
     }
 
     /**
-     * Check if we want to enable the scrolling to load for recycled view. Noting this function
-     * will be called during testing with RecycledView == null. Will return False in such case.
+     * Check if we want to enable the scrolling to load for recycled view. Noting this function will
+     * be called during testing with RecycledView == null. Will return False in such case.
+     *
      * @return True if accessibility is enabled or a hardware keyboard is attached.
      */
     boolean isScrollToLoadDisabled() {
         if (sIsScrollToLoadDisabledForTests != null) {
-            return sIsScrollToLoadDisabledForTests.booleanValue();
+            return sIsScrollToLoadDisabledForTests;
         }
 
         return mIsScrollToLoadDisabled;
@@ -558,6 +566,8 @@ public class HistoryContentManager implements SignInStateObserver, PrefObserver 
     }
 
     /** Binds the ViewHolder with the given HistoryItem. */
+    @SuppressWarnings(
+            "unchecked") // ViewHolder param from override; always SelectableItemViewHolder.
     public void bindViewHolderForHistoryItem(ViewHolder holder, HistoryItem item) {
         item.setHistoryManager(this);
         SelectableItemViewHolder<HistoryItem> selectableHolder =
@@ -725,8 +735,13 @@ public class HistoryContentManager implements SignInStateObserver, PrefObserver 
         // Set other intent extras.
         if (isIncognito != null) {
             viewIntent.putExtra(IntentHandler.EXTRA_OPEN_NEW_INCOGNITO_TAB, isIncognito);
+        } else if (createNewTab) {
+            viewIntent.putExtra(Browser.EXTRA_CREATE_NEW_TAB, true);
+        } else {
+            viewIntent.putExtra(
+                    IntentHandler.EXTRA_TAB_OPEN_TYPE,
+                    IntentHandler.TabOpenType.CLOBBER_CURRENT_TAB);
         }
-        if (createNewTab) viewIntent.putExtra(Browser.EXTRA_CREATE_NEW_TAB, true);
 
         return viewIntent;
     }
@@ -791,8 +806,17 @@ public class HistoryContentManager implements SignInStateObserver, PrefObserver 
      * @param item The item that has been clicked.
      */
     public void onItemClicked(HistoryItem item) {
+        if (item.isClusterHead()) {
+            toggleCluster(item);
+            return;
+        }
         mObserver.onItemClicked(item);
         openUrl(item.getUrl(), null, false, true);
+    }
+
+    /** Toggles the expansion state of a clustered item. */
+    public void toggleCluster(HistoryItem item) {
+        mHistoryAdapter.toggleCluster(item);
     }
 
     /**

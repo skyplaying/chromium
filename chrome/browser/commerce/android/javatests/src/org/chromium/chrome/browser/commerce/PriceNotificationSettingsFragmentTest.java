@@ -5,7 +5,6 @@
 package org.chromium.chrome.browser.commerce;
 
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -28,7 +27,7 @@ import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.browser.preferences.Pref;
-import org.chromium.chrome.browser.settings.SettingsActivityTestRule;
+import org.chromium.chrome.browser.settings.SettingsTestRule;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.transit.ChromeTransitTestRules;
@@ -36,7 +35,7 @@ import org.chromium.chrome.test.transit.FreshCtaTransitTestRule;
 import org.chromium.chrome.test.transit.page.WebPageStation;
 import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
 import org.chromium.components.prefs.PrefService;
-import org.chromium.components.signin.base.CoreAccountInfo;
+import org.chromium.components.signin.base.AccountInfo;
 import org.chromium.components.signin.identitymanager.IdentityManager;
 import org.chromium.google_apis.gaia.GaiaId;
 
@@ -52,8 +51,8 @@ public class PriceNotificationSettingsFragmentTest {
     @Rule public final MockitoRule mMockitoRule = MockitoJUnit.rule();
 
     @Rule
-    public final SettingsActivityTestRule<PriceNotificationSettingsFragment> mTestRule =
-            new SettingsActivityTestRule<>(PriceNotificationSettingsFragment.class);
+    public final SettingsTestRule<PriceNotificationSettingsFragment> mTestRule =
+            new SettingsTestRule<>(PriceNotificationSettingsFragment.class);
 
     @Rule
     public final FreshCtaTransitTestRule mActivityTestRule =
@@ -71,10 +70,9 @@ public class PriceNotificationSettingsFragmentTest {
         // Make sure the browser is set up correctly prior to mocking everything for settings.
         mPage = mActivityTestRule.startOnBlankPage();
 
-        when(mIdentityManager.getPrimaryAccountInfo(anyInt()))
+        when(mIdentityManager.getPrimaryAccountInfo())
                 .thenReturn(
-                        CoreAccountInfo.createFromEmailAndGaiaId(
-                                "user@example.com", new GaiaId("12345")));
+                        new AccountInfo.Builder("user@example.com", new GaiaId("12345")).build());
         when(mIdentityServicesProvider.getIdentityManager(any())).thenReturn(mIdentityManager);
 
         IdentityServicesProvider.setInstanceForTests(mIdentityServicesProvider);
@@ -95,7 +93,7 @@ public class PriceNotificationSettingsFragmentTest {
     @SmallTest
     @Feature("PriceTrackingSettings")
     public void testEmailPreferenceToggleInvisibleIfNoAccount() {
-        when(mIdentityManager.getPrimaryAccountInfo(anyInt())).thenReturn(null);
+        when(mIdentityManager.getPrimaryAccountInfo()).thenReturn(null);
 
         mTestRule.startSettingsActivity();
 

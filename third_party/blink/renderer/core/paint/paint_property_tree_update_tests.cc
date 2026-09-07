@@ -4,7 +4,9 @@
 
 #include "cc/input/scroll_snap_data.h"
 #include "third_party/blink/renderer/core/animation/animation_clock.h"
+#include "third_party/blink/renderer/core/dom/pseudo_element.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
+#include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/frame/visual_viewport.h"
 #include "third_party/blink/renderer/core/html/forms/html_select_element.h"
 #include "third_party/blink/renderer/core/html/html_iframe_element.h"
@@ -2327,6 +2329,188 @@ TEST_P(PaintPropertyTreeUpdateTest, RestrictionTargetIdChange) {
       node->Update(EffectPaintPropertyNode::Root(), std::move(new_state));
 
   EXPECT_EQ(PaintPropertyChangeType::kChangedOnlyValues, change);
+}
+
+TEST_P(PaintPropertyTreeUpdateTest, FixedPositionChangeCompositingReason) {
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      body { margin: 0; height: 1000px; }
+      #target { position: fixed; width: 100px; height: 100px; }
+    </style>
+    <div id="target" style="top: 100px; left: 0"></div>
+  )HTML");
+
+  auto* translation =
+      PaintPropertiesForElement("target")->PaintOffsetTranslation();
+  EXPECT_EQ(gfx::Vector2dF(0, 100), translation->Matrix().To2dTranslation());
+  EXPECT_FALSE(translation->IsAffectedByOuterViewportBoundsDelta());
+
+  // Change target to attach to the bottom of viewport.
+  // The bottom value is chosen to keep the initial location unchanged.
+  GetDocument()
+      .getElementById(AtomicString("target"))
+      ->setAttribute(html_names::kStyleAttr,
+                     AtomicString("bottom: 400px; left: 0"));
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_EQ(gfx::Vector2dF(0, 100), translation->Matrix().To2dTranslation());
+  EXPECT_TRUE(translation->IsAffectedByOuterViewportBoundsDelta());
+
+  // Change target back to top-anchored; should no longer be affected.
+  GetDocument()
+      .getElementById(AtomicString("target"))
+      ->setAttribute(html_names::kStyleAttr,
+                     AtomicString("top: 100px; left: 0"));
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_FALSE(translation->IsAffectedByOuterViewportBoundsDelta());
+
+  // Change target to use bottom relative to safe area inset.
+  // This is also affected by outer viewport bounds delta since safe area
+  // insets change when the browser UI (e.g. address bar) resizes.
+  GetDocument()
+      .getElementById(AtomicString("target"))
+      ->setAttribute(
+          html_names::kStyleAttr,
+          AtomicString("bottom: env(safe-area-inset-bottom); left: 0"));
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_TRUE(translation->IsAffectedByOuterViewportBoundsDelta());
+
+  // Change target back to top-anchored; should no longer be affected.
+  GetDocument()
+      .getElementById(AtomicString("target"))
+      ->setAttribute(html_names::kStyleAttr,
+                     AtomicString("top: 100px; left: 0"));
+  UpdateAllLifecyclePhasesForTest();
+  EXPECT_FALSE(translation->IsAffectedByOuterViewportBoundsDelta());
+}
+
+TEST_P(PaintPropertyTreeUpdateTest, CanvasSubtreePseudoElementFilter) {
+  ScopedCanvasDrawElementForTest forced_canvas_draw_element_feature(true);
+  GetDocument().GetSettings()->SetScriptEnabled(true);
+
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      canvas { width: 200px; height: 200px; }
+      #target::before {
+        content: 'FAIL';
+        filter: drop-shadow(0px 0px 0px rgba(0,0,0,0));
+      }
+    </style>
+    <canvas id="canvas" layoutsubtree>
+      <div id="target"></div>
+    </canvas>
+  )HTML");
+
+  Element* target = GetDocument().getElementById(AtomicString("target"));
+  PseudoElement* before = target->GetPseudoElement(kPseudoIdBefore);
+  LayoutObject* before_layout = before->GetLayoutObject();
+  const auto* properties = before_layout->FirstFragment().PaintProperties();
+
+  // Initially, the pseudo-element is inside the layoutsubtree canvas,
+  // so its filter effect node should have is_in_canvas_subtree set to true.
+  const auto* filter_effect = properties->Filter();
+  EXPECT_TRUE(filter_effect->IsInDrawableCanvasSubtree());
+
+  // Now, dynamically move the target out of the canvas.
+  GetDocument().body()->appendChild(target);
+  UpdateAllLifecyclePhasesForTest();
+
+  // The filter effect node should now have is_in_canvas_subtree set to false.
+  before = target->GetPseudoElement(kPseudoIdBefore);
+  before_layout = before->GetLayoutObject();
+  properties = before_layout->FirstFragment().PaintProperties();
+  filter_effect = properties->Filter();
+  EXPECT_FALSE(filter_effect->IsInDrawableCanvasSubtree());
+}
+
+TEST_P(PaintPropertyTreeUpdateTest, CanvasScriptsDisabled) {
+  ScopedCanvasDrawElementForTest forced_canvas_draw_element_feature(true);
+  GetDocument().GetSettings()->SetScriptEnabled(false);
+
+  SetBodyInnerHTML(R"HTML(
+    <canvas layoutsubtree style="display: inline;">
+      <div id="target">Hello</div>
+    </canvas>
+  )HTML");
+  UpdateAllLifecyclePhasesForTest();
+  // Pass if no crash.
+}
+
+TEST_P(PaintPropertyTreeUpdateTest, CanvasSubtreeScrollbarInIframe) {
+  ScopedCanvasDrawElementForTest forced_canvas_draw_element_feature(true);
+  GetDocument().GetSettings()->SetScriptEnabled(true);
+
+  SetBodyInnerHTML(R"HTML(
+    <style>
+      canvas, iframe {
+        width: 200px;
+        height: 200px;
+      }
+    </style>
+    <canvas id="canvas" layoutsubtree></canvas>
+    <iframe id="iframe"></iframe>
+  )HTML");
+  SetChildFrameHTML(R"HTML(
+    <style>
+      #scroll {
+        width: 100px;
+        height: 100px;
+        overflow: scroll;
+      }
+      .tall { height: 500px; }
+    </style>
+    <div id="scroll">
+      <div class="tall"></div>
+    </div>
+    <div class="tall"></div>
+  )HTML");
+  UpdateAllLifecyclePhasesForTest();
+
+  auto* iframe = To<HTMLIFrameElement>(
+      GetDocument().getElementById(AtomicString("iframe")));
+  auto* canvas = GetDocument().getElementById(AtomicString("canvas"));
+  auto* child_layout_view = ChildDocument().GetLayoutView();
+  auto* child_scroll =
+      ChildDocument().getElementById(AtomicString("scroll"))->GetLayoutObject();
+
+  auto check_scrollbar_items = [&](bool expected_composited) {
+    int scrollbar_count = 0;
+    for (const auto& item :
+         GetDocument().View()->GetPaintArtifact().GetDisplayItemList()) {
+      if (const auto* scrollbar = DynamicTo<ScrollbarDisplayItem>(&item)) {
+        EXPECT_EQ(expected_composited, !!scrollbar->ScrollTranslation());
+        scrollbar_count++;
+      }
+    }
+    EXPECT_EQ(2, scrollbar_count);
+  };
+  auto check_scrollbar_effect_in_canvas_subtree =
+      [&](const LayoutObject* object, bool expected_in_canvas_subtree) {
+        EXPECT_EQ(expected_in_canvas_subtree,
+                  object->FirstFragment()
+                      .PaintProperties()
+                      ->VerticalScrollbarEffect()
+                      ->IsInDrawableCanvasSubtree());
+      };
+
+  // Outside canvas, scrollbar is composited.
+  check_scrollbar_items(true);
+  check_scrollbar_effect_in_canvas_subtree(child_layout_view, false);
+  check_scrollbar_effect_in_canvas_subtree(child_scroll, false);
+
+  const auto* v_scrollbar_effect = child_layout_view->FirstFragment()
+                                       .PaintProperties()
+                                       ->VerticalScrollbarEffect();
+  EXPECT_FALSE(v_scrollbar_effect->IsInDrawableCanvasSubtree());
+
+  // Move the iframe into the canvas subtree.
+  canvas->moveBefore(iframe, nullptr, ASSERT_NO_EXCEPTION);
+  UpdateAllLifecyclePhasesForTest();
+
+  // Inside canvas, composited scrollbars are disabled; the scrollbar must be
+  // repainted without a scroll translation.
+  check_scrollbar_items(false);
+  check_scrollbar_effect_in_canvas_subtree(child_layout_view, true);
+  check_scrollbar_effect_in_canvas_subtree(child_scroll, true);
 }
 
 }  // namespace blink

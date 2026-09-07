@@ -7,22 +7,24 @@ syntax = "proto3";
 option java_multiple_files = true;
 option java_package = "org.chromium.components.sharing_message.proto";
 
-import "click_to_call_message.proto";
-import "one_time_token_backend_tickle.proto";
+import "one_time_token_backend_notification.proto";
+import "glic_experimental_triggering.proto";
 import "optimization_guide_push_notification.proto";
 import "peer_connection_messages.proto";
 import "remote_copy_message.proto";
-import "shared_clipboard_message.proto";
 import "sms_fetch_message_test_proto3_optional.proto";
+import "components/browser_actuator/proto/actuator_downstream_message.proto";
 
 package components_sharing_message;
 
-// Required in Chrome.
 option optimize_for = LITE_RUNTIME;
 
 // Message for sending between devices in Sharing.
-// Next tag: 17
+// Next tag: 20
 message SharingMessage {
+  reserved 4, 5;
+  reserved "shared_clipboard_message";
+
   // Identifier of sender. required unless any of the following is true:
   // 1. payload is a AckMessage
   // 2. ack_channel_configuration is a ServerChannelConfiguration
@@ -32,8 +34,6 @@ message SharingMessage {
   oneof payload {
     PingMessage ping_message = 2;
     AckMessage ack_message = 3;
-    ClickToCallMessage click_to_call_message = 4;
-    SharedClipboardMessage shared_clipboard_message = 5;
     SmsFetchRequest sms_fetch_request = 8;
     RemoteCopyMessage remote_copy_message = 9;
     PeerConnectionOfferMessage peer_connection_offer_message = 10;
@@ -42,7 +42,9 @@ message SharingMessage {
     DiscoveryRequest discovery_request = 13;
     WebRtcSignalingMessage web_rtc_signaling_frame = 14;
     OptimizationGuidePushNotification optimization_guide_push_notification = 16;
-    OneTimeTokenBackendTickle one_time_token_backend_tickle = 17;
+    OneTimeTokenBackendNotification one_time_token_backend_notification = 17;
+    GlicExperimentalTriggering glic_experimental_triggering = 18;
+    browser_actuator.ActuatorDownstreamMessage actuator_downstream_message = 19;
   }
 
   oneof ack_channel_configuration {
@@ -87,6 +89,7 @@ message ResponseMessage {
     SmsFetchResponse sms_fetch_response = 1;
     PeerConnectionAnswerMessage peer_connection_answer_message_response = 2;
     DiscoveryResponse discovery_response = 3;
+    GlicExperimentalTriggering glic_experimental_triggering = 4;
   }
 }
 

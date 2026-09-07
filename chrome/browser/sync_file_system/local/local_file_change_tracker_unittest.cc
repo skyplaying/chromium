@@ -40,7 +40,7 @@ class LocalFileChangeTrackerTest : public testing::Test {
   LocalFileChangeTrackerTest()
       : task_environment_(content::BrowserTaskEnvironment::IO_MAINLOOP),
         in_memory_env_(leveldb_chrome::NewMemEnv("LocalFileChangeTrackerTest")),
-        file_system_(GURL("http://example.com"),
+        file_system_(GURL("chrome-extension://example"),
                      in_memory_env_.get(),
                      base::SingleThreadTaskRunner::GetCurrentDefault().get(),
                      base::SingleThreadTaskRunner::GetCurrentDefault().get()) {}
@@ -623,7 +623,7 @@ TEST_F(LocalFileChangeTrackerTest, NextChangedURLsWithRecursiveCopy) {
   change_tracker()->GetNextChangedURLs(&urls_to_process, 0);
   ASSERT_EQ(6U, urls_to_process.size());
 
-  // Creation must have occured first.
+  // Creation must have occurred first.
   EXPECT_EQ(URL(kPath0), urls_to_process[0]);
   EXPECT_EQ(URL(kPath1), urls_to_process[1]);
   EXPECT_EQ(URL(kPath2), urls_to_process[2]);

@@ -15,6 +15,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/navigation_simulator.h"
 #include "content/public/test/test_renderer_host.h"
+#include "net/base/net_errors.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
@@ -38,7 +39,8 @@ class MockContentFacilitatedPaymentsDriver
                const std::optional<GURL>& iframe_url,
                const url::Origin& main_frame_origin,
                const std::u16string& copied_text,
-               ukm::SourceId ukm_source_id),
+               ukm::SourceId ukm_source_id,
+               bool is_same_origin),
               (override));
 };
 
@@ -68,29 +70,6 @@ class ContentFacilitatedPaymentsDriverFactoryTest
   std::unique_ptr<MockFacilitatedPaymentsClient> client_;
   std::unique_ptr<ContentFacilitatedPaymentsDriverFactory> factory_;
 };
-
-TEST_F(
-    ContentFacilitatedPaymentsDriverFactoryTest,
-    OnTextCopiedToClipboard_PixCodeInIFrame_DoesNotTriggerPixDetection_PixFlowExitedReasonLogged) {
-  base::HistogramTester histogram_tester;
-  NavigateAndCommit(GURL("https://example.com"));
-  content::RenderFrameHost* main_frame = web_contents()->GetPrimaryMainFrame();
-  content::RenderFrameHost* subframe =
-      content::RenderFrameHostTester::For(main_frame)->AppendChild("subframe");
-
-  const std::u16string kValidPixCode = u"00020126180014br.gov.bcb.pix63041D3D";
-
-  // Expect that the client is not called because the copy happened in an
-  // iframe.
-  EXPECT_CALL(*client_, ShowPixPaymentPrompt).Times(0);
-
-  factory_->OnTextCopiedToClipboard(subframe, kValidPixCode);
-
-  histogram_tester.ExpectUniqueSample(
-      "FacilitatedPayments.Pix.PayflowExitedReason",
-      /*sample=*/PixFlowExitedReason::kPixCodeInIFrame,
-      /*expected_bucket_count=*/1);
-}
 
 TEST_F(
     ContentFacilitatedPaymentsDriverFactoryTest,
@@ -144,7 +123,8 @@ TEST_F(
           /*main_frame_url=*/main_frame->GetLastCommittedURL(),
           /*iframe_url=*/std::make_optional(iframe->GetLastCommittedURL()),
           /*main_frame_origin=*/main_frame->GetLastCommittedOrigin(),
-          kValidPixCode, iframe->GetPageUkmSourceId()));
+          kValidPixCode, iframe->GetPageUkmSourceId(),
+          /*is_same_origin=*/testing::_));
 
   factory_->OnTextCopiedToClipboard(iframe, kValidPixCode);
 }
@@ -168,6 +148,40 @@ TEST_F(
   histogram_tester.ExpectUniqueSample(
       "FacilitatedPayments.Pix.PayflowExitedReason",
       /*sample=*/PixFlowExitedReason::kFrameNotActive,
+      /*expected_bucket_count=*/1);
+}
+
+TEST_F(
+    ContentFacilitatedPaymentsDriverFactoryTest,
+    OnTextCopiedToClipboard_ErrorDocument_DoesNotTriggerPixDetection_PixFlowExitedReasonLogged) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(kEnableIframeForPix);
+
+  base::HistogramTester histogram_tester;
+  NavigateAndCommit(GURL("https://example.com"));
+  content::RenderFrameHost* main_frame = web_contents()->GetPrimaryMainFrame();
+  content::RenderFrameHost* iframe =
+      content::RenderFrameHostTester::For(main_frame)->AppendChild("iframe");
+
+  std::unique_ptr<content::NavigationSimulator> simulator =
+      content::NavigationSimulator::CreateRendererInitiated(
+          GURL("https://example.com/error"), iframe);
+  simulator->Fail(net::ERR_BLOCKED_BY_CLIENT);
+  simulator->CommitErrorPage();
+  content::RenderFrameHost* error_frame = simulator->GetFinalRenderFrameHost();
+  ASSERT_TRUE(error_frame->IsErrorDocument());
+
+  const std::u16string kValidPixCode = u"00020126180014br.gov.bcb.pix63041D3D";
+
+  // Expect that the client is not called because the frame is an error
+  // document.
+  EXPECT_CALL(*client_, ShowPixPaymentPrompt).Times(0);
+
+  factory_->OnTextCopiedToClipboard(error_frame, kValidPixCode);
+
+  histogram_tester.ExpectUniqueSample(
+      "FacilitatedPayments.Pix.PayflowExitedReason",
+      /*sample=*/PixFlowExitedReason::kFrameIsErrorDocument,
       /*expected_bucket_count=*/1);
 }
 

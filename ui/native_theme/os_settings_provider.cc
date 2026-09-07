@@ -228,6 +228,14 @@ bool OsSettingsProvider::PrefersInvertedColors() const {
   return false;
 }
 
+bool OsSettingsProvider::PrefersOverlayScrollbars() const {
+  // Normally a platform-specific subclass will override this method.
+  // The base class (OsSettingsProvider) is directly instantiated by tests;
+  // see e.g. ShellMainDelegate::os_settings_provider_.
+  // Web tests expect non-overlay scrollbars by default.
+  return false;
+}
+
 bool OsSettingsProvider::ForcedColorsActive() const {
   return false;
 }
@@ -248,6 +256,12 @@ OsSettingsProvider::SchemeVariant() const {
 base::TimeDelta OsSettingsProvider::CaretBlinkInterval() const {
   return kDefaultCaretBlinkInterval;
 }
+
+#if BUILDFLAG(IS_ANDROID)
+bool OsSettingsProvider::IsAndroidProvider() const {
+  return false;
+}
+#endif
 
 void OsSettingsProvider::NotifyOnSettingsChanged(bool force_notify) {
   // Don't notify if this provider isn't the active one.

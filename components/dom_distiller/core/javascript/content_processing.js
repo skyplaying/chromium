@@ -11,23 +11,29 @@ function sanitizeLinks(element) {
   const allLinks = element.querySelectorAll('a');
 
   allLinks.forEach(linkElement => {
-    const href = linkElement.getAttribute('href');
+    const href = linkElement.getAttribute('href') ||
+        linkElement.getAttributeNS('http://www.w3.org/1999/xlink', 'href');
 
     if (href) {
       let keepLink = false;
-      // Use a try-catch block to handle malformed URLs gracefully.
-      try {
-        if (href) {
+      if (href.startsWith('#')) {
+        if (href.length > 1) {
+          // Preserve non-empty #in-page links, don't open to new tab.
+          keepLink = true;
+        }
+      } else {
+        // Use a try-catch block to handle malformed URLs gracefully.
+        try {
           const url = new URL(href, window.location.href);
-          // In particular, reject javascript: and #in-page links.
+          // In particular, reject javascript:.
           if (url.protocol === 'http:' || url.protocol === 'https:') {
             keepLink = true;
             // Open to new tab.
             linkElement.target = '_blank';
           }
+        } catch (error) {
+          // URL is malformed.
         }
-      } catch (error) {
-        // URL is malformed.
       }
 
       if (!keepLink) {
@@ -81,20 +87,24 @@ function identifyEmptySVGs(element) {
  * @param {HTMLElement} element The element to search for placeholders in.
  */
 function fillYouTubePlaceholders(element) {
-  const placeholders = element.getElementsByClassName('embed-placeholder');
-  for (let i = 0; i < placeholders.length; i++) {
-    if (!placeholders[i].hasAttribute('data-type') ||
-        placeholders[i].getAttribute('data-type') !== 'youtube' ||
-        !placeholders[i].hasAttribute('data-id')) {
-      continue;
-    }
+  const placeholders = element.querySelectorAll(
+      '.embed-placeholder[data-type="youtube"][data-id]');
+  for (const placeholder of placeholders.values()) {
     const embed = document.createElement('iframe');
-    const url = 'http://www.youtube.com/embed/' +
-        placeholders[i].getAttribute('data-id');
+    const url =
+        'http://www.youtube.com/embed/' + placeholder.getAttribute('data-id');
     embed.setAttribute('src', url);
     embed.setAttribute('type', 'text/html');
     embed.setAttribute('frameborder', '0');
-    embedYoutubeIFrame(embed);
+
+    // The placeholder must be replaced with the new element before it is
+    // passed to embedYoutubeIFrame, which expects the element to have a
+    // parent.
+    const parent = placeholder.parentElement;
+    if (parent) {
+      parent.replaceChild(embed, placeholder);
+      embedYoutubeIFrame(embed);
+    }
   }
 }
 
@@ -171,4 +181,75 @@ function wrapTables(element) {
     tableParent.insertBefore(wrapper, table);
     wrapper.appendChild(table);
   });
+}
+
+/**
+ * Removes descendants of the given container that are explicitly UI labels,
+ * accessibility announcements, or visually hidden wrappers that survive
+ * distillation. The container itself is never removed.
+ * @param {HTMLElement} container The root element to search within.
+ */
+function removeExtraneousElementsFrom(container) {
+  const accessibilitySelector =
+      '[aria-live], [role="alert"], [role="status"], [role="log"]';
+  const uiKeywords = [
+    'advertisement',
+    'sponsored',
+    'supported by',
+    'skip advertisement',
+  ];
+  const removableTags = [
+    'DIV',     'SPAN', 'P',   'SECTION', 'ASIDE',      'HEADER', 'FOOTER',
+    'ARTICLE', 'MAIN', 'NAV', 'FIGURE',  'FIGCAPTION', 'UL',     'OL',
+    'LI',      'B',    'I',   'STRONG',  'EM',
+  ];
+
+  /**
+   * Predicate to decide whether an Element can be removed.
+   * @param {HTMLElement} elt The element to check.
+   * @return {boolean}
+   */
+  const shouldRemoveNode = (elt) => {
+    // 1. Remove short accessibility announcements.
+    if (elt.matches(accessibilitySelector)) {
+      if (elt.textContent.trim().length < 200) {
+        return true;
+      }
+    }
+
+    const textContent = elt.textContent;
+
+    // 2. Remove short labels like "Advertisement" or "Sponsored".
+    if (textContent.length > 0 && textContent.length < 100) {
+      const text = textContent.trim().toLowerCase();
+      if (text.length > 0 && text.length < 40 &&
+          uiKeywords.some(keyword => text.includes(keyword))) {
+        return true;
+      }
+    }
+
+    // 3. Remove visually hidden elements.
+    if (removableTags.includes(elt.tagName)) {
+      const rect = elt.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0 &&
+          textContent.trim().length === 0) {
+        return true;
+      }
+    }
+
+    return false;
+  };
+
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_ELEMENT);
+  let prevElt = container;
+  let elt = walker.nextNode();
+  while (elt) {
+    if (shouldRemoveNode(elt)) {
+      walker.currentNode = prevElt;  // Rewind to safety.
+      elt.remove();
+    } else {
+      prevElt = elt;  // Can advance.
+    }
+    elt = walker.nextNode();
+  }
 }

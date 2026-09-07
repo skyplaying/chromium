@@ -4,7 +4,6 @@
 
 #include "content/public/common/content_switch_dependent_feature_overrides.h"
 
-#include "components/attribution_reporting/features.h"
 #include "content/common/features.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
@@ -30,6 +29,12 @@ GetSwitchDependentFeatureOverrides(const base::CommandLine& command_line) {
     base::FeatureList::OverrideState override_state;
   } override_info[] = {
       // Overrides for --enable-experimental-web-platform-features.
+      {switches::kEnableExperimentalWebPlatformFeatures,
+       std::cref(blink::features::kHTMLProcessingInstruction),
+       base::FeatureList::OVERRIDE_ENABLE_FEATURE},
+      {switches::kEnableExperimentalWebPlatformFeatures,
+       std::cref(blink::features::kJavaScriptImportText),
+       base::FeatureList::OVERRIDE_ENABLE_FEATURE},
       {switches::kEnableExperimentalWebPlatformFeatures,
        std::cref(net::features::kCookieSameSiteConsidersRedirectChain),
        base::FeatureList::OVERRIDE_ENABLE_FEATURE},
@@ -62,6 +67,15 @@ GetSwitchDependentFeatureOverrides(const base::CommandLine& command_line) {
        base::FeatureList::OVERRIDE_ENABLE_FEATURE},
       {switches::kEnableExperimentalWebPlatformFeatures,
        std::cref(net::features::kHstsTopLevelNavigationsOnly),
+       base::FeatureList::OVERRIDE_ENABLE_FEATURE},
+      {switches::kEnableExperimentalWebPlatformFeatures,
+       std::cref(blink::features::kResponsiveIframes),
+       base::FeatureList::OVERRIDE_ENABLE_FEATURE},
+      {switches::kEnableExperimentalWebPlatformFeatures,
+       std::cref(blink::features::kGlobalPrivacyControlTest),
+       base::FeatureList::OVERRIDE_ENABLE_FEATURE},
+      {switches::kEnableExperimentalWebPlatformFeatures,
+       std::cref(blink::features::kSpecCompliantXmlMimeTypes),
        base::FeatureList::OVERRIDE_ENABLE_FEATURE},
 
       // Overrides for --enable-experimental-cookie-features.
@@ -119,28 +133,13 @@ GetSwitchDependentFeatureOverrides(const base::CommandLine& command_line) {
        std::cref(features::kPrivacySandboxAdsAPIsOverride),
        base::FeatureList::OVERRIDE_ENABLE_FEATURE},
       {switches::kEnablePrivacySandboxAdsApis,
-       std::cref(network::features::kInterestGroupStorage),
-       base::FeatureList::OVERRIDE_ENABLE_FEATURE},
-      {switches::kEnablePrivacySandboxAdsApis,
-       std::cref(blink::features::kFledge),
-       base::FeatureList::OVERRIDE_ENABLE_FEATURE},
-      {switches::kEnablePrivacySandboxAdsApis,
        std::cref(blink::features::kAllowURNsInIframes),
        base::FeatureList::OVERRIDE_ENABLE_FEATURE},
       {switches::kEnablePrivacySandboxAdsApis,
        std::cref(network::features::kBrowsingTopics),
        base::FeatureList::OVERRIDE_ENABLE_FEATURE},
       {switches::kEnablePrivacySandboxAdsApis,
-       std::cref(attribution_reporting::features::kConversionMeasurement),
-       base::FeatureList::OVERRIDE_ENABLE_FEATURE},
-      {switches::kEnablePrivacySandboxAdsApis,
        std::cref(blink::features::kFencedFrames),
-       base::FeatureList::OVERRIDE_ENABLE_FEATURE},
-      {switches::kEnablePrivacySandboxAdsApis,
-       std::cref(network::features::kSharedStorageAPI),
-       base::FeatureList::OVERRIDE_ENABLE_FEATURE},
-      {switches::kEnablePrivacySandboxAdsApis,
-       std::cref(blink::features::kPrivateAggregationApi),
        base::FeatureList::OVERRIDE_ENABLE_FEATURE},
   };
 

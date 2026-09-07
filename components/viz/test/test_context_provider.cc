@@ -232,12 +232,6 @@ TestContextProvider::TestContextProvider(
 
   shared_image_interface_ =
       base::MakeRefCounted<gpu::TestSharedImageInterface>();
-
-  // By default, luminance textures are supported in GLES2.
-  gpu::SharedImageCapabilities shared_image_caps;
-  shared_image_caps.supports_luminance_shared_images = true;
-
-  shared_image_interface_->SetCapabilities(shared_image_caps);
 }
 
 TestContextProvider::~TestContextProvider() {
@@ -349,6 +343,14 @@ void TestContextProvider::AddObserver(ContextLostObserver* obs) {
 
 void TestContextProvider::RemoveObserver(ContextLostObserver* obs) {
   observers_.RemoveObserver(obs);
+}
+
+bool TestContextProvider::IsLost() {
+  if (context_gl_) {
+    return context_gl_->GetGraphicsResetStatusKHR() != GL_NO_ERROR;
+  } else {
+    return raster_context_->GetGraphicsResetStatusKHR() != GL_NO_ERROR;
+  }
 }
 
 }  // namespace viz

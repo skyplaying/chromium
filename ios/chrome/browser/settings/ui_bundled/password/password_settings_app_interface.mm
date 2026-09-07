@@ -15,8 +15,10 @@
 #import "components/keyed_service/core/service_access_type.h"
 #import "components/password_manager/core/browser/password_form.h"
 #import "components/password_manager/core/browser/password_manager_test_utils.h"
+#import "components/password_manager/core/browser/password_store/password_form_converters.h"
 #import "components/password_manager/core/browser/password_store/password_store_consumer.h"
 #import "components/password_manager/core/browser/password_store/password_store_interface.h"
+#import "components/password_manager/core/browser/password_string.h"
 #import "components/password_manager/core/common/password_manager_pref_names.h"
 #import "components/password_manager/ios/fake_bulk_leak_check_service.h"
 #import "components/prefs/pref_service.h"
@@ -31,17 +33,14 @@
 #import "ios/chrome/browser/shared/public/commands/snackbar_commands.h"
 #import "ios/chrome/browser/sync/model/sync_service_factory.h"
 #import "ios/chrome/browser/webauthn/model/ios_passkey_model_factory.h"
-#import "ios/chrome/common/ui/reauthentication/mock_reauthentication_module.h"
 #import "ios/chrome/test/app/chrome_test_util.h"
-#import "ios/chrome/test/app/password_test_util.h"
 #import "ios/public/provider/chrome/browser/passcode_settings/passcode_settings_api.h"
 #import "url/gurl.h"
 #import "url/origin.h"
 
-using chrome_test_util::
-    SetUpAndReturnMockReauthenticationModuleForPasswordManager;
 using password_manager::FakeBulkLeakCheckService;
 using password_manager::PasswordForm;
+using password_manager::PasswordString;
 
 namespace {
 
@@ -75,24 +74,32 @@ webauthn::PasskeyModel* GetPasskeyStore() {
 // processing.
 class FakeStoreConsumer : public password_manager::PasswordStoreConsumer {
  public:
-  void OnGetPasswordStoreResults(
-      std::vector<std::unique_ptr<password_manager::PasswordForm>> obtained)
-      override {
-    obtained_ = std::move(obtained);
+  void OnGetPasswordStoreResultsOrErrorFrom(
+      password_manager::PasswordStoreInterface* store,
+      password_manager::LoginsResultOrError results_or_error) override {
+    if (std::holds_alternative<password_manager::PasswordStoreBackendError>(
+            results_or_error)) {
+      obtained_ = std::vector<PasswordForm>();
+    } else {
+      obtained_ = password_manager::ToPasswordForms(
+          std::get<password_manager::LoginsResult>(
+              std::move(results_or_error)));
+    }
   }
 
   // Retrieves all logins from the profile password store and updates
   // `results_`. Returns true if the logins retrieved successfully.
   bool FetchProfileStoreResults() {
     results_.clear();
-    ResetObtained();
+    obtained_.reset();
     GetPasswordProfileStore()->GetAllLogins(weak_ptr_factory_.GetWeakPtr());
     bool responded =
         base::test::ios::WaitUntilConditionOrTimeout(base::Seconds(2), ^bool {
-          return !AreObtainedReset();
+          return obtained_.has_value();
         });
-    if (responded) {
-      AppendObtainedToResults();
+    if (responded && obtained_.has_value()) {
+      results_ = std::move(obtained_.value());
+      obtained_.reset();
     }
     return responded;
   }
@@ -101,14 +108,15 @@ class FakeStoreConsumer : public password_manager::PasswordStoreConsumer {
   // `results_`. Returns true if the logins retrieved successfully.
   bool FetchAccountStoreResults() {
     results_.clear();
-    ResetObtained();
+    obtained_.reset();
     GetPasswordAccountStore()->GetAllLogins(weak_ptr_factory_.GetWeakPtr());
     bool responded =
         base::test::ios::WaitUntilConditionOrTimeout(base::Seconds(2), ^bool {
-          return !AreObtainedReset();
+          return obtained_.has_value();
         });
-    if (responded) {
-      AppendObtainedToResults();
+    if (responded && obtained_.has_value()) {
+      results_ = std::move(obtained_.value());
+      obtained_.reset();
     }
     return responded;
   }
@@ -118,25 +126,8 @@ class FakeStoreConsumer : public password_manager::PasswordStoreConsumer {
   }
 
  private:
-  // Puts `obtained_` in a known state not corresponding to any PasswordStore
-  // state.
-  void ResetObtained() {
-    obtained_.clear();
-    obtained_.emplace_back(nullptr);
-  }
-
-  // Returns true if `obtained_` are in the reset state.
-  bool AreObtainedReset() { return obtained_.size() == 1 && !obtained_[0]; }
-
-  void AppendObtainedToResults() {
-    for (const auto& source : obtained_) {
-      results_.emplace_back(*source);
-    }
-    ResetObtained();
-  }
-
   // Temporary cache of obtained store results.
-  std::vector<std::unique_ptr<password_manager::PasswordForm>> obtained_;
+  std::optional<std::vector<password_manager::PasswordForm>> obtained_;
 
   // Combination of fillable and blocked credentials from the store.
   std::vector<password_manager::PasswordForm> results_;
@@ -147,7 +138,7 @@ class FakeStoreConsumer : public password_manager::PasswordStoreConsumer {
 // Saves `form` to the password store and waits until the async processing is
 // done.
 bool SaveToPasswordProfileStore(const PasswordForm& form) {
-  GetPasswordProfileStore()->AddLogin(form);
+  GetPasswordProfileStore()->AddLogin(password_manager::FromPasswordForm(form));
   // When we retrieve the form from the store, `in_store` should be set.
   password_manager::PasswordForm expected_form = form;
   expected_form.in_store = password_manager::PasswordForm::Store::kProfileStore;
@@ -170,7 +161,7 @@ bool SaveToPasswordProfileStore(const PasswordForm& form) {
 // processing is done.
 // Returns true if `form` is saved successfully, otherwise returns false.
 bool SaveToPasswordAccountStore(const PasswordForm& form) {
-  GetPasswordAccountStore()->AddLogin(form);
+  GetPasswordAccountStore()->AddLogin(password_manager::FromPasswordForm(form));
   // When we retrieve the form from the store, `in_store` should be set.
   password_manager::PasswordForm expected_form = form;
   expected_form.in_store = password_manager::PasswordForm::Store::kAccountStore;
@@ -195,8 +186,8 @@ PasswordForm CreateSampleFormWithIndex(int index) {
   PasswordForm form;
   form.username_value =
       base::ASCIIToUTF16(base::StringPrintf("concrete username %02d", index));
-  form.password_value =
-      base::ASCIIToUTF16(base::StringPrintf("concrete password %02d", index));
+  form.password_value = PasswordString(
+      base::ASCIIToUTF16(base::StringPrintf("concrete password %02d", index)));
   form.url = GURL(base::StringPrintf("https://www%02d.example.com", index));
   form.signon_realm = form.url.spec();
   form.date_created = base::Time::Now();
@@ -240,61 +231,7 @@ bool ClearPasswordStores() {
 
 }  // namespace
 
-@implementation PasswordSettingsAppInterface {
-  std::unique_ptr<ScopedPasswordSettingsReauthModuleOverride>
-      _scopedReauthOverride;
-}
-
-+ (instancetype)sharedInstance {
-  static PasswordSettingsAppInterface* sharedInstance = nil;
-  static dispatch_once_t onceToken;
-  dispatch_once(&onceToken, ^{
-    sharedInstance = [[PasswordSettingsAppInterface alloc] init];
-  });
-  return sharedInstance;
-}
-
-// Helper for accessing the scoped override's module.
-+ (MockReauthenticationModule*)mockModule {
-  PasswordSettingsAppInterface* shared =
-      [PasswordSettingsAppInterface sharedInstance];
-  DCHECK(shared->_scopedReauthOverride);
-
-  return base::apple::ObjCCastStrict<MockReauthenticationModule>(
-      shared->_scopedReauthOverride->module);
-}
-
-+ (void)setUpMockReauthenticationModule {
-  PasswordSettingsAppInterface* shared =
-      [PasswordSettingsAppInterface sharedInstance];
-  shared->_scopedReauthOverride =
-      SetUpAndReturnMockReauthenticationModuleForPasswordManager();
-}
-
-+ (void)removeMockReauthenticationModule {
-  PasswordSettingsAppInterface* shared =
-      [PasswordSettingsAppInterface sharedInstance];
-  shared->_scopedReauthOverride = nullptr;
-}
-
-+ (void)mockReauthenticationModuleExpectedResult:
-    (ReauthenticationResult)expectedResult {
-  [self mockModule].expectedResult = expectedResult;
-}
-
-+ (void)mockReauthenticationModuleCanAttempt:(BOOL)canAttempt {
-  DCHECK([PasswordSettingsAppInterface sharedInstance]->_scopedReauthOverride);
-
-  [self mockModule].canAttempt = canAttempt;
-}
-
-+ (void)mockReauthenticationModuleShouldSkipReAuth:(BOOL)returnSync {
-  [self mockModule].shouldSkipReAuth = returnSync;
-}
-
-+ (void)mockReauthenticationModuleReturnMockedResult {
-  [[self mockModule] returnMockedReauthenticationResult];
-}
+@implementation PasswordSettingsAppInterface
 
 + (void)dismissSnackBar {
   id<SnackbarCommands> handler = HandlerForProtocol(
@@ -305,7 +242,8 @@ bool ClearPasswordStores() {
 
 + (void)saveExamplePasswordToProfileWithCount:(NSInteger)count {
   for (int i = 1; i <= count; ++i) {
-    GetPasswordProfileStore()->AddLogin(CreateSampleFormWithIndex(i));
+    GetPasswordProfileStore()->AddLogin(
+        password_manager::FromPasswordForm(CreateSampleFormWithIndex(i)));
   }
 }
 
@@ -314,7 +252,7 @@ bool ClearPasswordStores() {
                                    origin:(NSString*)origin {
   PasswordForm example;
   example.username_value = base::SysNSStringToUTF16(username);
-  example.password_value = base::SysNSStringToUTF16(password);
+  example.password_value = PasswordString(base::SysNSStringToUTF16(password));
   example.url = GURL(base::SysNSStringToUTF16(origin));
   example.signon_realm = example.url.spec();
   example.date_created = base::Time::Now();
@@ -326,7 +264,7 @@ bool ClearPasswordStores() {
                                    origin:(NSString*)origin {
   PasswordForm example;
   example.username_value = base::SysNSStringToUTF16(username);
-  example.password_value = base::SysNSStringToUTF16(password);
+  example.password_value = PasswordString(base::SysNSStringToUTF16(password));
   example.url = GURL(base::SysNSStringToUTF16(origin));
   example.signon_realm = example.url.spec();
   example.date_created = base::Time::Now();
@@ -339,7 +277,7 @@ bool ClearPasswordStores() {
                                origin:(NSString*)origin {
   PasswordForm example;
   example.username_value = base::SysNSStringToUTF16(username);
-  example.password_value = base::SysNSStringToUTF16(password);
+  example.password_value = PasswordString(base::SysNSStringToUTF16(password));
   example.url = GURL(base::SysNSStringToUTF16(origin));
   example.signon_realm = example.url.spec();
   example.notes = {password_manager::PasswordNote(
@@ -352,7 +290,7 @@ bool ClearPasswordStores() {
                                        origin:(NSString*)origin {
   PasswordForm example;
   example.username_value = base::SysNSStringToUTF16(username);
-  example.password_value = base::SysNSStringToUTF16(password);
+  example.password_value = PasswordString(base::SysNSStringToUTF16(password));
   example.url = GURL(base::SysNSStringToUTF16(origin));
   example.signon_realm = example.url.spec();
   example.password_issues.insert({password_manager::InsecureType::kLeaked,
@@ -365,7 +303,7 @@ bool ClearPasswordStores() {
                                             origin:(NSString*)origin {
   PasswordForm example;
   example.username_value = base::SysNSStringToUTF16(userName);
-  example.password_value = base::SysNSStringToUTF16(password);
+  example.password_value = PasswordString(base::SysNSStringToUTF16(password));
   example.url = GURL(base::SysNSStringToUTF16(origin));
   example.signon_realm = example.url.spec();
   example.password_issues.insert(
@@ -454,6 +392,10 @@ bool ClearPasswordStores() {
 
 + (BOOL)clearPasswordStores {
   return ClearPasswordStores();
+}
+
++ (void)clearPasskeyStore {
+  GetPasskeyStore()->DeleteAllPasskeys();
 }
 
 + (BOOL)isCredentialsServiceEnabled {

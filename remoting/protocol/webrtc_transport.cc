@@ -25,6 +25,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
+#include "build/build_config.h"
 #include "components/webrtc/net_address_utils.h"
 #include "components/webrtc/thread_wrapper.h"
 #include "remoting/base/constants.h"
@@ -45,6 +46,7 @@
 #include "third_party/webrtc/api/enable_media.h"
 #include "third_party/webrtc/api/peer_connection_interface.h"
 #include "third_party/webrtc/api/rtc_event_log/rtc_event_log_factory.h"
+#include "third_party/webrtc/api/scoped_refptr.h"
 #include "third_party/webrtc/api/video_codecs/builtin_video_decoder_factory.h"
 #include "third_party/webrtc_overrides/environment.h"
 
@@ -68,9 +70,6 @@ using DataChannelState = webrtc::DataChannelInterface::DataState;
 // accumulate multiple candidates. This is an optimization to reduce number of
 // transport-info messages.
 const int kTransportInfoSendDelayMs = 20;
-
-// XML namespace for the transport elements.
-const char kTransportNamespace[] = "google:remoting:webrtc";
 
 // Global maximum bitrate set for the PeerConnection.
 const int kMaxBitrateBps = 1e8;  // 100 Mbps.
@@ -478,7 +477,7 @@ void WebrtcTransport::ApplyNetworkSettings(
 }
 
 void WebrtcTransport::Start(
-    Authenticator* authenticator,
+    const std::string& auth_key,
     SendTransportInfoCallback send_transport_info_callback) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DCHECK(send_transport_info_callback_.is_null());
@@ -490,7 +489,7 @@ void WebrtcTransport::Start(
 
   send_transport_info_callback_ = std::move(send_transport_info_callback);
 
-  hmac_key_ = base::ToVector(base::as_byte_span(authenticator->GetAuthKey()));
+  hmac_key_ = base::ToVector(base::as_byte_span(auth_key));
 
   event_handler_->OnWebrtcTransportConnecting();
 
@@ -502,10 +501,6 @@ void WebrtcTransport::Start(
 bool WebrtcTransport::ProcessTransportInfo(
     const JingleTransportInfo& transport_info) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-
-  if (transport_info.xml_namespace != kTransportNamespace) {
-    return false;
-  }
 
   if (!peer_connection()) {
     return false;
@@ -808,7 +803,6 @@ void WebrtcTransport::OnLocalSessionDescriptionCreated(
 
   // Format and send the session description to the peer.
   auto transport_info = std::make_unique<JingleTransportInfo>();
-  transport_info->xml_namespace = kTransportNamespace;
 
   SessionDescription session_description;
   if (description->GetType() == webrtc::SdpType::kOffer) {
@@ -829,6 +823,13 @@ void WebrtcTransport::OnLocalSessionDescriptionCreated(
 
   session_description.signature.assign(digest.begin(), digest.end());
   transport_info->session_description = std::move(session_description);
+
+  if (pending_transport_info_message_) {
+    transport_info->candidates =
+        std::move(pending_transport_info_message_->candidates);
+    pending_transport_info_message_.reset();
+    transport_info_timer_.Stop();
+  }
 
   send_transport_info_callback_.Run(std::move(transport_info));
 
@@ -1171,6 +1172,10 @@ void WebrtcTransport::SetSenderBitrates(
 void WebrtcTransport::RequestNegotiation() {
   DCHECK(transport_context_->role() == TransportRole::SERVER);
 
+  if (send_transport_info_callback_.is_null()) {
+    return;
+  }
+
   if (!negotiation_pending_) {
     negotiation_pending_ = true;
     auto send_offer_cb =
@@ -1196,7 +1201,11 @@ void WebrtcTransport::SendOffer() {
 
   webrtc::PeerConnectionInterface::RTCOfferAnswerOptions options;
   options.offer_to_receive_video = false;
-  options.offer_to_receive_audio = false;
+  // The host always offers `sendrecv` but the client will downgrade it to
+  // `recvonly` if microphone remoting is not enabled. Only Linux hosts support
+  // audio injection (microphone remoting).
+  // TODO: crbug.com/513327818 - Hook this up with AudioInjector::IsSupported().
+  options.offer_to_receive_audio = BUILDFLAG(IS_LINUX);
   options.ice_restart = want_ice_restart_;
   peer_connection()->CreateOffer(
       CreateSessionDescriptionObserver::Create(
@@ -1208,17 +1217,14 @@ void WebrtcTransport::SendOffer() {
 void WebrtcTransport::EnsurePendingTransportInfoMessage() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
-  // |transport_info_timer_| must be running iff
-  // |pending_transport_info_message_| exists.
-  DCHECK_EQ(pending_transport_info_message_ != nullptr,
-            transport_info_timer_.IsRunning());
-
   if (!pending_transport_info_message_) {
     pending_transport_info_message_ = std::make_unique<JingleTransportInfo>();
-    pending_transport_info_message_->xml_namespace = kTransportNamespace;
+  }
 
-    // Delay sending the new candidates in case we get more candidates
-    // that we can send in one message.
+  // Delay sending the new candidates in case we get more candidates
+  // that we can send in one message.
+  if (!send_transport_info_callback_.is_null() &&
+      !transport_info_timer_.IsRunning()) {
     transport_info_timer_.Start(FROM_HERE,
                                 base::Milliseconds(kTransportInfoSendDelayMs),
                                 this, &WebrtcTransport::SendTransportInfo);
@@ -1228,6 +1234,7 @@ void WebrtcTransport::EnsurePendingTransportInfoMessage() {
 void WebrtcTransport::SendTransportInfo() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DCHECK(pending_transport_info_message_);
+  DCHECK(!send_transport_info_callback_.is_null());
 
   send_transport_info_callback_.Run(std::move(pending_transport_info_message_));
 }

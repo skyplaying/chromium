@@ -10,6 +10,7 @@
 #import "components/feature_engagement/public/tracker.h"
 #import "components/reading_list/core/reading_list_model.h"
 #import "components/reading_list/ios/reading_list_model_bridge_observer.h"
+#import "components/signin/public/base/consent_level.h"
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "ios/chrome/browser/content_suggestions/model/content_suggestions_metrics_recorder.h"
 #import "ios/chrome/browser/content_suggestions/public/content_suggestions_constants.h"
@@ -94,6 +95,37 @@
   [self readingListModelDidApplyChanges:model];
 }
 
+// Updates the config with the latest state of the ReadingListModel.
+- (void)readingListModelDidApplyChanges:(const ReadingListModel*)model {
+  _readingListUnreadCount = model->unread_size();
+  _readingListModelIsLoaded = model->loaded();
+  if (_readingListItem) {
+    _shortcutsConfig.shortcutItems = [self shortcutItems];
+    [self.delegate shortcutsMediatorDidReconfigureItem];
+  }
+}
+
+- (void)readingListModel:(const ReadingListModel*)model
+             didAddEntry:(const GURL&)url
+             entrySource:(reading_list::EntrySource)source {
+  [self readingListModelDidApplyChanges:model];
+}
+
+- (void)readingListModel:(const ReadingListModel*)model
+         willRemoveEntry:(const GURL&)url {
+  // Note: unread_size() will update after removal completes, but we ensure
+  // we capture apply changes or removal completion.
+}
+
+- (void)readingListModel:(const ReadingListModel*)model
+          didUpdateEntry:(const GURL&)url {
+  [self readingListModelDidApplyChanges:model];
+}
+
+- (void)readingListModelCompletedBatchUpdates:(const ReadingListModel*)model {
+  [self readingListModelDidApplyChanges:model];
+}
+
 #pragma mark - ShortcutsCommands
 
 - (void)shortcutsTapped:(UIGestureRecognizer*)sender {
@@ -108,7 +140,7 @@
   [self.NTPActionsDelegate shortcutTileOpened];
   [self.delegate
       logMagicStackEngagementForType:ContentSuggestionsModuleType::kShortcuts];
-  [self.contentSuggestionsMetricsRecorder
+  [ContentSuggestionsMetricsRecorder
       recordShortcutTileTapped:shortcutsItem.collectionShortcutType];
   switch (shortcutsItem.collectionShortcutType) {
     case NTPCollectionShortcutTypeBookmark:
@@ -132,15 +164,6 @@
 
 #pragma mark - Private
 
-// Updates the config with the latest state of the ReadingListModel.
-- (void)readingListModelDidApplyChanges:(const ReadingListModel*)model {
-  _readingListUnreadCount = model->unread_size();
-  _readingListModelIsLoaded = model->loaded();
-  if (_readingListItem) {
-    _shortcutsConfig.shortcutItems = [self shortcutItems];
-    [self.delegate shortcutsMediatorDidReconfigureItem];
-  }
-}
 
 // YES if the "What's New" tile should be shown in the Shortcuts module.
 - (BOOL)shouldShowWhatsNewActionItem {

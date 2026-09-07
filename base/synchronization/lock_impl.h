@@ -12,6 +12,7 @@
 #include "base/dcheck_is_on.h"
 #include "base/memory/raw_ptr_exclusion.h"
 #include "base/memory/stack_allocated.h"
+#include "base/synchronization/lock_metrics_recorder_tags.h"
 #include "base/synchronization/lock_subtle.h"
 #include "base/synchronization/synchronization_buildflags.h"
 #include "base/thread_annotations.h"
@@ -28,6 +29,7 @@
 namespace base {
 class Lock;
 class ConditionVariable;
+class LockMetricTag;
 
 namespace win {
 namespace internal {
@@ -44,6 +46,11 @@ class BASE_EXPORT LockImpl {
  public:
   LockImpl(const LockImpl&) = delete;
   LockImpl& operator=(const LockImpl&) = delete;
+
+#if BUILDFLAG(IS_POSIX)
+  // Sets the maximum number of yields before blocking in the kernel.
+  static void SetTrySpinCount(int spin_count);
+#endif
 
  private:
   friend class base::Lock;
@@ -64,8 +71,11 @@ class BASE_EXPORT LockImpl {
   // held by something else, immediately return false.
   inline bool Try();
 
-  // Take the lock, blocking until it is available if necessary.
+  // Default lock acquisition with `BaseLock` tag.
   inline void Lock();
+
+  // Takes `LockMetricTagList` for recording lock acquisition times.
+  inline void Lock(const LockMetricTagList& tags);
 
   // Release the lock.  This must only be called by the lock's holder: after
   // a successful call to Try, or a call to Lock.
@@ -81,11 +91,20 @@ class BASE_EXPORT LockImpl {
   static bool PriorityInheritanceAvailable();
 #endif
 
-  void LockInternal();
+#if BUILDFLAG(IS_POSIX)
+  // Repeatedly attempts to acquire the lock, yielding the processor between
+  // attempts. Returns true if the lock was acquired, false if the maximum
+  // number of yields was reached.
+  bool TrySpin();
+#endif
+
+  // Must only be called after an initial `Try()` has failed under contention.
+  void LockInternal(const LockMetricTagList& tags);
   NativeHandle native_handle_;
 };
 
-void LockImpl::Lock() {
+// Takes `LockMetricTagList` for recording lock acquisition times.
+inline void LockImpl::Lock(const LockMetricTagList& tags) {
   // Try the lock first to acquire it cheaply if it's not contended. Try() is
   // cheap on platforms with futex-type locks, as it doesn't call into the
   // kernel. Not marked `[[likely]]`, as:
@@ -96,7 +115,7 @@ void LockImpl::Lock() {
     return;
   }
 
-  LockInternal();
+  LockInternal(tags);
 }
 
 #if BUILDFLAG(IS_WIN)

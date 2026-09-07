@@ -40,10 +40,6 @@ class DropTargetEvent;
 class TouchSelectionController;
 }
 
-namespace url {
-class Origin;
-}
-
 namespace content {
 class GestureNavSimple;
 class RenderWidgetHostImpl;
@@ -100,6 +96,10 @@ class CONTENT_EXPORT WebContentsViewAura
     int flags;
   };
 
+#if BUILDFLAG(IS_WIN)
+  class AsyncDropNavigationObserver;
+#endif
+
   // A structure used to keep drop context for asynchronously finishing a
   // drop operation.  This is required because some drop event data gets
   // cleared out once PerformDropCallback() returns.
@@ -124,9 +124,15 @@ class CONTENT_EXPORT WebContentsViewAura
     base::ScopedClosureRunner drop_exit_cleanup;
     std::optional<gfx::PointF> transformed_pt;
     gfx::PointF screen_pt;
+#if BUILDFLAG(IS_WIN)
+    // Watches for navigations that complete while virtual file retrieval is in
+    // progress so that this drop can be disallowed if the page changes.
+    std::unique_ptr<AsyncDropNavigationObserver> navigation_observer;
+#endif
   };
 
   friend class WebContentsViewAuraTest;
+  FRIEND_TEST_ALL_PREFIXES(WebContentsViewAuraTest, StartDraggingBlockedByPolicy);
   FRIEND_TEST_ALL_PREFIXES(WebContentsViewAuraTest, EnableDisableOverscroll);
   FRIEND_TEST_ALL_PREFIXES(WebContentsViewAuraTest, RenderViewHostChanged);
   FRIEND_TEST_ALL_PREFIXES(WebContentsViewAuraTest, DragDropFiles);
@@ -136,6 +142,14 @@ class CONTENT_EXPORT WebContentsViewAura
   FRIEND_TEST_ALL_PREFIXES(WebContentsViewAuraTest, DragDropVirtualFiles);
   FRIEND_TEST_ALL_PREFIXES(WebContentsViewAuraTest,
                            DragDropVirtualFilesOriginateFromRenderer);
+  FRIEND_TEST_ALL_PREFIXES(
+      WebContentsViewAuraTest,
+      DragDropVirtualFilesNavigationObservedAcrossOverlappingDrops);
+  FRIEND_TEST_ALL_PREFIXES(WebContentsViewAuraTest,
+                           DragDropVirtualFiles_DestroyDuringExtraction);
+  FRIEND_TEST_ALL_PREFIXES(WebContentsViewAuraTest,
+                           DragDropVirtualFiles_UnrelatedNavigation);
+
   FRIEND_TEST_ALL_PREFIXES(WebContentsViewAuraTest, DragDropUrlData);
   FRIEND_TEST_ALL_PREFIXES(WebContentsViewAuraTest, DragDropOnOopif);
   FRIEND_TEST_ALL_PREFIXES(WebContentsViewAuraTest,
@@ -147,6 +161,10 @@ class CONTENT_EXPORT WebContentsViewAura
   FRIEND_TEST_ALL_PREFIXES(WebContentsViewAuraTest,
                            Drop_DropZone_DelegateBlocks);
   FRIEND_TEST_ALL_PREFIXES(WebContentsViewAuraTest, StartDragging);
+  FRIEND_TEST_ALL_PREFIXES(WebContentsViewAuraTest,
+                           DragEnterFilesAppCustomTypesFromWebSource);
+  FRIEND_TEST_ALL_PREFIXES(WebContentsViewAuraTest,
+                           DragEnterFilesAppCustomTypesFromWebUISource);
   FRIEND_TEST_ALL_PREFIXES(WebContentsViewAuraTest, GetDropCallback_Run);
   FRIEND_TEST_ALL_PREFIXES(WebContentsViewAuraTest,
                            DragInProgressFinishesAfterDrop);
@@ -171,7 +189,10 @@ class CONTENT_EXPORT WebContentsViewAura
       EmptyTextWithUrlInDropDataIsEmptyInOSExchangeDataGetString);
   FRIEND_TEST_ALL_PREFIXES(WebContentsViewAuraTest,
                            RejectDragFromHiddenWebContents);
-  FRIEND_TEST_ALL_PREFIXES(WebContentsViewAuraTest, RejectDragFromOutsideView);
+  FRIEND_TEST_ALL_PREFIXES(WebContentsViewAuraTest,
+                           ClampMouseLocationToBrowserObservedPoint);
+  FRIEND_TEST_ALL_PREFIXES(WebContentsViewAuraTest,
+                           ClampTouchLocationToBrowserObservedPoint);
   FRIEND_TEST_ALL_PREFIXES(WebContentsViewAuraTest,
                            UrlInDropDataReturnsUrlInOSExchangeDataGetString);
   FRIEND_TEST_ALL_PREFIXES(WebContentsViewAuraTest,
@@ -192,10 +213,18 @@ class CONTENT_EXPORT WebContentsViewAura
   virtual void EndDrag(base::WeakPtr<RenderWidgetHostImpl> source_rwh_weak_ptr,
                        ui::mojom::DragOperation op);
 
+  // Clears drag-and-drop state when a drag attempt fails to start (e.g. due to
+  // drag failures from system/OS errors during initiation).
+  void ClearDragStateOnStartFailure(RenderWidgetHostImpl* source_rwh);
+
   void InstallOverscrollControllerDelegate(RenderWidgetHostViewAura* view);
 
   ui::TouchSelectionController* GetSelectionController() const;
   TouchSelectionControllerClientAura* GetSelectionControllerClient() const;
+
+  void OnContextMenuHandled(const GlobalRenderFrameHostId& rfh_id,
+                            const ContextMenuParams& params,
+                            bool handled);
 
   // Returns GetNativeView unless overridden for testing.
   gfx::NativeView GetRenderWidgetHostViewParent() const;
@@ -242,14 +271,14 @@ class CONTENT_EXPORT WebContentsViewAura
   // Overridden from RenderViewHostDelegateView:
   void ShowContextMenu(RenderFrameHost& render_frame_host,
                        const ContextMenuParams& params) override;
-  void StartDragging(const DropData& drop_data,
-                     const url::Origin& source_origin,
-                     blink::DragOperationsMask operations,
-                     const gfx::ImageSkia& image,
-                     const gfx::Vector2d& cursor_offset,
-                     const gfx::Rect& drag_obj_rect,
-                     const blink::mojom::DragEventSourceInfo& event_info,
-                     RenderWidgetHostImpl* source_rwh) override;
+  void StartDragging(
+      RenderFrameHost& source_rfh,
+      const DropData& drop_data,
+      blink::DragOperationsMask operations,
+      const gfx::ImageSkia& image,
+      const gfx::Vector2d& cursor_offset,
+      const gfx::Rect& drag_obj_rect,
+      const blink::mojom::DragEventSourceInfo& event_info) override;
   void UpdateDragOperation(ui::mojom::DragOperation operation,
                            bool document_is_handling_drag) override;
   void GotFocus(RenderWidgetHostImpl* render_widget_host) override;
@@ -368,8 +397,6 @@ class CONTENT_EXPORT WebContentsViewAura
                                   /*display name*/ base::FilePath>>&
           filepaths_and_names);
 
-  class AsyncDropNavigationObserver;
-  std::unique_ptr<AsyncDropNavigationObserver> async_drop_navigation_observer_;
 
   class AsyncDropTempFileDeleter;
   std::unique_ptr<AsyncDropTempFileDeleter> async_drop_temp_file_deleter_;

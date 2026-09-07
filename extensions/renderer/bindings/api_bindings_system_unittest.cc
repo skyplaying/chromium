@@ -4,9 +4,14 @@
 
 #include "extensions/renderer/bindings/api_bindings_system_unittest.h"
 
+#include <string>
+#include <string_view>
+
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
+#include "base/test/gtest_util.h"
 #include "extensions/common/mojom/event_dispatcher.mojom.h"
 #include "extensions/renderer/bindings/api_binding.h"
 #include "extensions/renderer/bindings/api_binding_hooks.h"
@@ -333,6 +338,20 @@ TEST_F(APIBindingsSystemTest, TestInitializationAndCallbacks) {
   }
 }
 
+TEST_F(APIBindingsSystemTest, AcceptsNonNullTerminatedAPIName) {
+  v8::HandleScope handle_scope(isolate());
+  v8::Local<v8::Context> context = MainContext();
+
+  const std::string api_name_with_suffix =
+      base::StrCat({kAlphaAPIName, ".suffix"});
+  const std::string_view api_name(api_name_with_suffix.data(),
+                                  std::string_view(kAlphaAPIName).size());
+  v8::Local<v8::Object> api =
+      bindings_system()->CreateAPIInstance(api_name, context, nullptr);
+
+  EXPECT_FALSE(api.IsEmpty());
+}
+
 // Tests adding a custom hook to an API.
 TEST_F(APIBindingsSystemTest, TestCustomHooks) {
   v8::HandleScope handle_scope(isolate());
@@ -610,6 +629,23 @@ TEST_F(APIBindingsSystemTest, TestCustomEvent) {
   EXPECT_EQ(R"("alpha.alphaOtherEvent")",
             GetStringPropertyFromObject(other_event, context, "name"));
   EXPECT_NE(event, other_event);
+}
+
+// Tests that requesting an unknown type for an already-instantiated API
+// crashes the renderer. In theory this could be triggered by a compromised
+// renderer mishandling bindingUtil, so we just kill the renderer if it happens.
+TEST_F(APIBindingsSystemTest, DeathOnUnknownTypeInitialize) {
+  v8::HandleScope handle_scope(isolate());
+  v8::Local<v8::Context> context = MainContext();
+
+  // Instantiate the 'alpha' API.
+  v8::Local<v8::Object> alpha_api =
+      bindings_system()->CreateAPIInstance(kAlphaAPIName, context, nullptr);
+  ASSERT_FALSE(alpha_api.IsEmpty());
+
+  // Trigger InitializeType for the 'alpha' API with an unknown type.
+  EXPECT_CHECK_DEATH(
+      bindings_system()->type_reference_map()->GetSpec("alpha.doesNotExist"));
 }
 
 }  // namespace extensions

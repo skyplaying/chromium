@@ -193,8 +193,9 @@ bool NumberInputType::GetSizeWithDecoration(int default_size,
 
   const String step_string =
       GetElement().FastGetAttribute(html_names::kStepAttr);
-  if (EqualIgnoringASCIICase(step_string, "any"))
+  if (EqualIgnoringAsciiCase(step_string, "any")) {
     return false;
+  }
 
   const Decimal minimum = ParseToDecimalForNumberType(
       GetElement().FastGetAttribute(html_names::kMinAttr));
@@ -232,9 +233,14 @@ void NumberInputType::HandleKeydownEvent(KeyboardEvent& event) {
 
 void NumberInputType::HandleBeforeTextInsertedEvent(
     BeforeTextInsertedEvent& event) {
+  DCHECK(!RuntimeEnabledFeatures::CleanUpActivationBehaviorEnabled());
+  event.SetText(FilterBeforeTextInserted(event.GetText()));
+}
+
+String NumberInputType::FilterBeforeTextInserted(const String& text) {
   Locale& locale = GetLocale();
 
-  String normalized_input = event.GetText();
+  String normalized_input = text;
   if (RuntimeEnabledFeatures::NumberInputFullWidthCharsEnabled()) {
     // Normalize full-width digits and minus sign to ASCII
     normalized_input = NormalizeFullWidthNumberChars(normalized_input);
@@ -247,14 +253,13 @@ void NumberInputType::HandleBeforeTextInsertedEvent(
 
   // Check if locale supports more cleanup rules
   if (!locale.UsesSingleCharNumberFiltering()) {
-    event.SetText(updated_event_text);
-    return;
+    return updated_event_text;
   }
 
   // Get left and right of cursor
   String original_value = GetElement().InnerEditorValue();
-  String left_half = original_value.Substring(0, GetElement().selectionStart());
-  String right_half = original_value.Substring(GetElement().selectionEnd());
+  String left_half = original_value.substr(0, GetElement().selectionStart());
+  String right_half = original_value.substr(GetElement().selectionEnd());
 
   // Process 1 char at a time
   unsigned len = updated_event_text.length();
@@ -272,8 +277,9 @@ void NumberInputType::HandleBeforeTextInsertedEvent(
       if (locale.HasDecimalSeparator(left_half) ||
           locale.HasDecimalSeparator(right_half) ||
           left_half.Find(IsE) != kNotFound ||
-          locale.HasSignNotAfterE(right_half))
+          locale.HasSignNotAfterE(right_half)) {
         continue;
+      }
     }
     // For 'e' input:
     // - Reject if the editing value already contains another 'e'
@@ -282,8 +288,9 @@ void NumberInputType::HandleBeforeTextInsertedEvent(
     else if (IsE(c)) {
       if (left_half.Find(IsE) != kNotFound ||
           right_half.Find(IsE) != kNotFound ||
-          locale.HasDecimalSeparator(right_half))
+          locale.HasDecimalSeparator(right_half)) {
         continue;
+      }
     }
     // For '-' or '+' input:
     // - Reject if the editing value already contains two signs
@@ -311,15 +318,16 @@ void NumberInputType::HandleBeforeTextInsertedEvent(
       if ((left_half.empty() && !right_half.empty() &&
            locale.IsSignPrefix(right_half[0])) ||
           (!left_half.empty() && IsE(left_half[left_half.length() - 1]) &&
-           !right_half.empty() && locale.IsSignPrefix(right_half[0])))
+           !right_half.empty() && locale.IsSignPrefix(right_half[0]))) {
         continue;
+      }
     }
 
     // Add character
     left_half = StrCat({left_half, StringView(base::span_from_ref(c))});
     final_event_text.Append(c);
   }
-  event.SetText(final_event_text.ReleaseString());
+  return final_event_text.ReleaseString();
 }
 
 Decimal NumberInputType::ParseToNumber(const String& src,
@@ -368,7 +376,7 @@ void NumberInputType::WarnIfValueIsInvalid(const String& value) const {
   if (value.empty() || !GetElement().SanitizeValue(value).empty())
     return;
   AddWarningToConsole(
-      "The specified value %s cannot be parsed, or is out of range.", value);
+      "The specified value {} cannot be parsed, or is out of range.", value);
 }
 
 bool NumberInputType::HasBadInput() const {

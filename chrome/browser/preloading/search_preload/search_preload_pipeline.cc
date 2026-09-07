@@ -9,11 +9,13 @@
 #include "chrome/browser/preloading/prerender/prerender_utils.h"
 #include "chrome/browser/preloading/search_preload/search_preload_features.h"
 #include "chrome/browser/preloading/search_preload/search_preload_service.h"
+#include "content/public/browser/prefetch_priority.h"
 #include "content/public/browser/preloading_data.h"
 #include "content/public/browser/preloading_trigger_type.h"
 #include "content/public/browser/web_contents.h"
 #include "net/http/http_no_vary_search_data.h"
 #include "third_party/blink/public/mojom/loader/referrer.mojom.h"
+#include "ui/base/page_transition_types.h"
 
 SearchPreloadPipeline::SearchPreloadPipeline(GURL canonical_url)
     : pipeline_info_(content::PreloadPipelineInfo::Create(
@@ -53,7 +55,8 @@ SearchPreloadSignalResult SearchPreloadPipeline::StartPrefetch(
     const GURL& prefetch_url,
     content::PreloadingPredictor predictor,
     const std::optional<net::HttpNoVarySearchData>& no_vary_search_hint,
-    bool is_navigation_likely) {
+    bool is_navigation_likely,
+    bool should_ignore_saver_modes) {
   // Don't trigger prefetch if already triggered and is alive.
   //
   // TODO(crbug.com/394213503): Reconsider the behavior when prefetch is already
@@ -80,6 +83,20 @@ SearchPreloadSignalResult SearchPreloadPipeline::StartPrefetch(
       /*triggering_primary_page_source_id=*/
       web_contents.GetPrimaryMainFrame()->GetPageUkmSourceId());
 
+  std::optional<content::PrefetchPriority> priority = std::nullopt;
+  switch (features::kDsePreload2PrefetchPriorityPolicy.Get()) {
+    case features::DsePreload2PrefetchPriorityPolicy::kSearchPrefetchCompat:
+      priority = is_navigation_likely ? content::PrefetchPriority::kHighest
+                                      : content::PrefetchPriority::kMedium;
+      break;
+    case features::DsePreload2PrefetchPriorityPolicy::kAlwaysHighest:
+      priority = content::PrefetchPriority::kHighest;
+      break;
+    case features::DsePreload2PrefetchPriorityPolicy::kNull:
+      priority = std::nullopt;
+      break;
+  }
+
   // TODO(crbug.com/379140429): Create `preloading_utils` and move common
   // preloading histograms suffixes to it.
   prefetch_handle_ = web_contents.StartPrefetch(
@@ -88,10 +105,11 @@ SearchPreloadSignalResult SearchPreloadPipeline::StartPrefetch(
       prerender_utils::kDefaultSearchEngineMetricSuffix,
       blink::mojom::Referrer(),
       /*referring_origin=*/std::nullopt, no_vary_search_hint,
-      /*priority=*/std::nullopt, pipeline_info_, attempt->GetWeakPtr(),
+      std::move(priority), pipeline_info_, attempt->GetWeakPtr(),
       /*holdback_status_override=*/
       content::PreloadingHoldbackStatus::kUnspecified,
-      /*ttl=*/features::kDsePreload2PrefetchTtl.Get());
+      /*ttl=*/features::kDsePreload2PrefetchTtl.Get(),
+      should_ignore_saver_modes);
   CHECK(prefetch_handle_);
   prefetch_handle_->SetOnPrefetchHeadReceivedCallback(base::BindRepeating(
       &SearchPreloadService::OnPrefetchHeadReceived, search_preload_service));

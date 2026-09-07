@@ -12,8 +12,7 @@ import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 
 import {getCss} from './app.css.js';
 import {getHtml} from './app.html.js';
-import {UnexportableKeysInternalsBrowserProxyImpl} from './browser_proxy.js';
-import type {UnexportableKeysInternalsBrowserProxy} from './browser_proxy.js';
+import {browserProxyFactory} from './unexportable_keys_internals.mojom-webui.js';
 import type {UnexportableKeyInfo} from './unexportable_keys_internals.mojom-webui.js';
 
 type SortKey = 'wrappedKey'|'algorithm'|'keyTag'|'creationTime';
@@ -70,8 +69,7 @@ export class UnexportableKeysInternalsAppElement extends CrLitElement {
   protected accessor sortColumn_: SortKey = 'creationTime';
   protected accessor sortReverse_: boolean = true;
 
-  private browserProxy_: UnexportableKeysInternalsBrowserProxy =
-      UnexportableKeysInternalsBrowserProxyImpl.getInstance();
+  private browserProxy_ = browserProxyFactory.getInstance();
 
   override connectedCallback() {
     super.connectedCallback();
@@ -106,7 +104,7 @@ export class UnexportableKeysInternalsAppElement extends CrLitElement {
     this.sortKeys_();
   }
 
-  protected onSortKeyDown_(e: KeyboardEvent) {
+  protected onSortKeydown_(e: KeyboardEvent) {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       this.onSortClick_(e);

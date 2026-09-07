@@ -8,6 +8,7 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/callback_helpers.h"
 #include "base/rand_util.h"
+#include "base/strings/strcat.h"
 #include "base/task/thread_pool.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
@@ -58,15 +59,14 @@ class PredictionModelStoreTest : public testing::Test {
     RunUntilIdle();
   }
 
-  void OnPredictionModelLoaded(
-      base::RunLoop* run_loop,
-      std::unique_ptr<proto::PredictionModel> loaded_prediction_model) {
-    last_loaded_prediction_model_ = std::move(loaded_prediction_model);
+  void OnPredictionModelLoaded(base::RunLoop* run_loop,
+                               std::optional<ModelInfo> loaded_model_info) {
+    last_loaded_model_info_ = std::move(loaded_model_info);
     run_loop->Quit();
   }
 
-  proto::PredictionModel* last_loaded_prediction_model() {
-    return last_loaded_prediction_model_.get();
+  const std::optional<ModelInfo>& last_loaded_model_info() const {
+    return last_loaded_model_info_;
   }
 
   void RunUntilIdle() { task_environment_.RunUntilIdle(); }
@@ -123,7 +123,7 @@ class PredictionModelStoreTest : public testing::Test {
   base::ScopedTempDir temp_models_dir_;
   TestingPrefServiceSimple local_state_;
   ModelStoreLedger ledger_{local_state_};
-  std::unique_ptr<proto::PredictionModel> last_loaded_prediction_model_;
+  std::optional<ModelInfo> last_loaded_model_info_;
   std::unique_ptr<PredictionModelStore> prediction_model_store_;
 };
 
@@ -158,13 +158,11 @@ TEST_F(PredictionModelStoreTest, ModelUpdateAndLoad) {
 
   WaitForModeLoad(kTestOptimizationTargetFoo, model_cache_key);
 
-  proto::PredictionModel* loaded_model = last_loaded_prediction_model();
-  EXPECT_TRUE(loaded_model);
-  EXPECT_EQ(kTestOptimizationTargetFoo,
-            loaded_model->model_info().optimization_target());
-  EXPECT_EQ(StringToFilePath(loaded_model->model().download_url()).value(),
+  const auto& loaded_model = last_loaded_model_info();
+  EXPECT_TRUE(loaded_model.has_value());
+  EXPECT_EQ(loaded_model->model_file_path,
             model_detail.base_model_dir.Append(GetBaseFileNameForModels()));
-  EXPECT_EQ(0, loaded_model->model_info().additional_files_size());
+  EXPECT_EQ(0u, loaded_model->additional_files.size());
 
   auto metadata_entry =
       ledger_.GetEntryIfExists(kTestOptimizationTargetFoo, model_cache_key);
@@ -173,7 +171,7 @@ TEST_F(PredictionModelStoreTest, ModelUpdateAndLoad) {
       temp_models_dir_.GetPath().Append(*metadata_entry->GetModelBaseDir()));
 
   WaitForModeLoad(kTestOptimizationTargetBar, model_cache_key);
-  EXPECT_FALSE(last_loaded_prediction_model());
+  EXPECT_FALSE(last_loaded_model_info().has_value());
 }
 
 // Tests model with an additional file.
@@ -191,11 +189,10 @@ TEST_F(PredictionModelStoreTest, ModelWithAdditionalFile) {
                                                 model_cache_key));
 
   WaitForModeLoad(kTestOptimizationTargetFoo, model_cache_key);
-  auto* loaded_model = last_loaded_prediction_model();
-  EXPECT_TRUE(loaded_model);
-  EXPECT_EQ(1, loaded_model->model_info().additional_files_size());
-  auto additional_file = *StringToFilePath(
-      loaded_model->model_info().additional_files(0).file_path());
+  const auto& loaded_model = last_loaded_model_info();
+  EXPECT_TRUE(loaded_model.has_value());
+  EXPECT_EQ(1u, loaded_model->additional_files.size());
+  auto additional_file = loaded_model->additional_files[0];
   EXPECT_EQ(FILE_PATH_LITERAL("valid_additional_file.txt"),
             additional_file.BaseName().value());
   EXPECT_TRUE(additional_file.IsAbsolute());
@@ -220,7 +217,7 @@ TEST_F(PredictionModelStoreTest, InvalidModelAdditionalFile) {
                                                  model_cache_key));
 
   WaitForModeLoad(kTestOptimizationTargetFoo, model_cache_key);
-  EXPECT_FALSE(last_loaded_prediction_model());
+  EXPECT_FALSE(last_loaded_model_info().has_value());
 }
 
 TEST_F(PredictionModelStoreTest, ModelsSharedBasedOnServerModelCacheKey) {
@@ -253,13 +250,13 @@ TEST_F(PredictionModelStoreTest, ModelsSharedBasedOnServerModelCacheKey) {
 
   WaitForModeLoad(kTestOptimizationTargetFoo, model_cache_key_foo);
 
-  auto model_file_foo = last_loaded_prediction_model()->model().download_url();
+  auto model_file_foo = last_loaded_model_info()->model_file_path;
 
-  last_loaded_prediction_model_.reset();
+  last_loaded_model_info_.reset();
   WaitForModeLoad(kTestOptimizationTargetFoo, model_cache_key_bar);
-  proto::PredictionModel* loaded_model_bar = last_loaded_prediction_model();
-  EXPECT_TRUE(loaded_model_bar);
-  EXPECT_EQ(loaded_model_bar->model().download_url(), model_file_foo);
+  const auto& loaded_model_bar = last_loaded_model_info();
+  EXPECT_TRUE(loaded_model_bar.has_value());
+  EXPECT_EQ(loaded_model_bar->model_file_path, model_file_foo);
 }
 
 TEST_F(PredictionModelStoreTest, UpdateMetadataForExistingModel) {
@@ -274,11 +271,8 @@ TEST_F(PredictionModelStoreTest, UpdateMetadataForExistingModel) {
   EXPECT_TRUE(prediction_model_store_->HasModel(kTestOptimizationTargetFoo,
                                                 model_cache_key));
   WaitForModeLoad(kTestOptimizationTargetFoo, model_cache_key);
-  proto::PredictionModel* loaded_model = last_loaded_prediction_model();
-  EXPECT_TRUE(loaded_model);
-  EXPECT_EQ(kTestOptimizationTargetFoo,
-            loaded_model->model_info().optimization_target());
-  EXPECT_FALSE(loaded_model->model_info().keep_beyond_valid_duration());
+  const auto& loaded_model = last_loaded_model_info();
+  EXPECT_TRUE(loaded_model.has_value());
 
   proto::ModelInfo model_info;
   model_info.set_optimization_target(kTestOptimizationTargetFoo);
@@ -397,7 +391,7 @@ TEST_F(PredictionModelStoreTest, ExpiredModelRemovedOnLoadModel) {
       base::Seconds(1));
 
   WaitForModeLoad(kTestOptimizationTargetFoo, model_cache_key);
-  EXPECT_FALSE(last_loaded_prediction_model());
+  EXPECT_FALSE(last_loaded_model_info().has_value());
   EXPECT_FALSE(prediction_model_store_->HasModel(kTestOptimizationTargetFoo,
                                                  model_cache_key));
   histogram_tester.ExpectUniqueSample(
@@ -482,7 +476,7 @@ TEST_F(PredictionModelStoreTest, InvalidModelDirModelRemoved) {
       model_detail.base_model_dir.Append(GetBaseFileNameForModels()));
 
   WaitForModeLoad(kTestOptimizationTargetFoo, model_cache_key);
-  EXPECT_FALSE(last_loaded_prediction_model());
+  EXPECT_FALSE(last_loaded_model_info().has_value());
   EXPECT_FALSE(prediction_model_store_->HasModel(kTestOptimizationTargetFoo,
                                                  model_cache_key));
   histogram_tester.ExpectUniqueSample(
@@ -548,12 +542,14 @@ TEST_F(PredictionModelStoreTest, InconsistentModelDirsRemoved) {
       "OptimizationGuide.PredictionModelStore.ModelRemovalReason",
       PredictionModelStoreModelRemovalReason::kInconsistentModelDir, 2);
   histogram_tester.ExpectUniqueSample(
-      "OptimizationGuide.PredictionModelStore.ModelRemovalReason." +
-          GetStringNameForOptimizationTarget(kTestOptimizationTargetFoo),
+      base::StrCat(
+          {"OptimizationGuide.PredictionModelStore.ModelRemovalReason.",
+           GetStringNameForOptimizationTarget(kTestOptimizationTargetFoo)}),
       PredictionModelStoreModelRemovalReason::kInconsistentModelDir, 1);
   histogram_tester.ExpectUniqueSample(
-      "OptimizationGuide.PredictionModelStore.ModelRemovalReason." +
-          GetStringNameForOptimizationTarget(kTestOptimizationTargetBar),
+      base::StrCat(
+          {"OptimizationGuide.PredictionModelStore.ModelRemovalReason.",
+           GetStringNameForOptimizationTarget(kTestOptimizationTargetBar)}),
       PredictionModelStoreModelRemovalReason::kInconsistentModelDir, 1);
   EXPECT_TRUE(base::DirectoryExists(model_detail.base_model_dir));
   EXPECT_FALSE(
@@ -596,9 +592,10 @@ TEST_F(PredictionModelStoreTest, InconsistentOptTargetDirsRemoved) {
       "OptimizationGuide.PredictionModelStore.ModelRemovalReason",
       PredictionModelStoreModelRemovalReason::kInconsistentModelDir, 2);
   histogram_tester.ExpectUniqueSample(
-      "OptimizationGuide.PredictionModelStore.ModelRemovalReason." +
-          GetStringNameForOptimizationTarget(
-              proto::OPTIMIZATION_TARGET_UNKNOWN),
+      base::StrCat(
+          {"OptimizationGuide.PredictionModelStore.ModelRemovalReason.",
+           GetStringNameForOptimizationTarget(
+               proto::OPTIMIZATION_TARGET_UNKNOWN)}),
       PredictionModelStoreModelRemovalReason::kInconsistentModelDir, 2);
   EXPECT_TRUE(base::DirectoryExists(model_detail.base_model_dir));
   EXPECT_FALSE(base::DirectoryExists(model_detail_unknown.base_model_dir));

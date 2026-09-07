@@ -12,7 +12,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/types/pass_key.h"
-#include "components/viz/common/gpu/vulkan_context_provider.h"
+#include "gpu/command_buffer/common/shared_image_info.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
 #include "gpu/command_buffer/service/external_semaphore.h"
 #include "gpu/command_buffer/service/external_semaphore_pool.h"
@@ -20,6 +20,7 @@
 #include "gpu/command_buffer/service/shared_image/shared_image_backing.h"
 #include "gpu/command_buffer/service/shared_image/texture_holder_vk.h"
 #include "gpu/command_buffer/service/shared_memory_region_wrapper.h"
+#include "gpu/command_buffer/service/vulkan_context_provider.h"
 #include "gpu/ipc/common/surface_handle.h"
 #include "gpu/vulkan/vulkan_device_queue.h"
 #include "third_party/skia/include/private/chromium/GrPromiseImageTexture.h"
@@ -38,13 +39,7 @@ class ExternalVkImageBacking final : public ClearTrackingSharedImageBacking {
       bool enable_webgpu_on_vk_via_gl_interop,
       VulkanCommandPool* command_pool,
       const Mailbox& mailbox,
-      viz::SharedImageFormat format,
-      const gfx::Size& size,
-      const gfx::ColorSpace& color_space,
-      GrSurfaceOrigin surface_origin,
-      SkAlphaType alpha_type,
-      SharedImageUsageSet usage,
-      std::string debug_label,
+      const SharedImageInfo& si_info,
       const base::flat_map<VkFormat, VkImageUsageFlags>& image_usage_cache,
       base::span<const uint8_t> pixel_data);
 
@@ -53,14 +48,8 @@ class ExternalVkImageBacking final : public ClearTrackingSharedImageBacking {
       bool enable_webgpu_on_vk_via_gl_interop,
       VulkanCommandPool* command_pool,
       const Mailbox& mailbox,
+      const SharedImageInfo& si_info,
       gfx::GpuMemoryBufferHandle handle,
-      viz::SharedImageFormat format,
-      const gfx::Size& size,
-      const gfx::ColorSpace& color_space,
-      GrSurfaceOrigin surface_origin,
-      SkAlphaType alpha_type,
-      gpu::SharedImageUsageSet usage,
-      std::string debug_label,
       std::optional<gfx::BufferUsage> buffer_usage = std::nullopt);
 
   static std::unique_ptr<ExternalVkImageBacking> CreateWithPixmap(
@@ -68,26 +57,21 @@ class ExternalVkImageBacking final : public ClearTrackingSharedImageBacking {
       bool enable_webgpu_on_vk_via_gl_interop,
       VulkanCommandPool* command_pool,
       const Mailbox& mailbox,
-      viz::SharedImageFormat format,
+      const SharedImageInfo& si_info,
       SurfaceHandle surface_handle,
-      const gfx::Size& size,
-      const gfx::ColorSpace& color_space,
-      GrSurfaceOrigin surface_origin,
-      SkAlphaType alpha_type,
-      SharedImageUsageSet usage,
-      std::string debug_label,
       gfx::BufferUsage buffer_usage);
+
+  static bool UseSeparateGLTexture(SharedContextState* context_state,
+                                   viz::SharedImageFormat format);
+
+  static bool CheckSupportForAccessStream(SharedImageAccessStream stream,
+                                          viz::SharedImageFormat format,
+                                          const AccessParams& params);
 
   ExternalVkImageBacking(
       base::PassKey<ExternalVkImageBacking>,
       const Mailbox& mailbox,
-      viz::SharedImageFormat format,
-      const gfx::Size& size,
-      const gfx::ColorSpace& color_space,
-      GrSurfaceOrigin surface_origin,
-      SkAlphaType alpha_type,
-      SharedImageUsageSet usage,
-      std::string debug_label,
+      const SharedImageInfo& si_info,
       size_t estimated_size_bytes,
       scoped_refptr<SharedContextState> context_state,
       std::vector<TextureHolderVk> vk_textures,
@@ -107,7 +91,7 @@ class ExternalVkImageBacking final : public ClearTrackingSharedImageBacking {
     return vk_textures_[0].backend_texture;
   }
   VulkanImage* image() const { return vk_textures_[0].vulkan_image.get(); }
-  viz::VulkanContextProvider* context_provider() const {
+  VulkanContextProvider* context_provider() const {
     return context_state()->vk_context_provider();
   }
   VulkanImplementation* vulkan_implementation() const {
@@ -167,6 +151,8 @@ class ExternalVkImageBacking final : public ClearTrackingSharedImageBacking {
 
   // SharedImageBacking implementation.
   SharedImageBackingType GetType() const override;
+  bool SupportsAccess(SharedImageAccessStream stream,
+                      const AccessParams& params) const override;
   void Update(std::unique_ptr<gfx::GpuFence> in_fence) override;
   bool UploadFromMemory(const std::vector<SkPixmap>& pixmaps) override;
   bool ReadbackToMemory(const std::vector<SkPixmap>& pixmaps) override;
@@ -252,7 +238,7 @@ class ExternalVkImageBacking final : public ClearTrackingSharedImageBacking {
   bool is_updating_content_ = false;
   uint32_t gl_reads_in_progress_ = 0;
 
-  std::vector<GLTextureHolder> gl_textures_;
+  std::vector<scoped_refptr<GLTextureHolder>> gl_textures_;
 
   enum LatestContent {
     kInVkImage = 1 << 0,

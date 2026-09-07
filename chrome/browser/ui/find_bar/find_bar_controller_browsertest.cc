@@ -4,9 +4,9 @@
 
 #include "chrome/browser/ui/find_bar/find_bar_controller.h"
 
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/test/browser_test.h"
 
@@ -14,7 +14,7 @@ using FindBarControllerTest = InProcessBrowserTest;
 
 // Creating the FindBarController on startup can result in a startup performance
 // regression. This test ensures that the FindBarController isn't created until
-// truly needed. See https://crbug.com/783350.
+// truly needed. See https://crbug.com/41354464.
 IN_PROC_BROWSER_TEST_F(FindBarControllerTest,
                        NoFindBarControllerOnBrowserCreate) {
   // FindBarController should not be created on browser start.

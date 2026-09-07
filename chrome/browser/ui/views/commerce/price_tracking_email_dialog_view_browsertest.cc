@@ -6,8 +6,8 @@
 
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/views/chrome_test_widget.h"
@@ -25,11 +25,11 @@ class PriceTrackingEmailDialogViewBrowserTest : public InProcessBrowserTest {
         views::UniqueWidgetPtr(std::make_unique<ChromeTestWidget>());
     views::Widget::InitParams widget_params(
         views::Widget::InitParams::CLIENT_OWNS_WIDGET);
-    widget_params.context = browser()->window()->GetNativeWindow();
+    widget_params.context = browser()->GetWindow()->GetNativeWindow();
     anchor_widget_->Init(std::move(widget_params));
 
     dialog_coordinator_ = std::make_unique<PriceTrackingEmailDialogCoordinator>(
-        anchor_widget_->GetContentsView());
+        views::BubbleAnchor(anchor_widget_->GetContentsView()));
 
     signin::MakePrimaryAccountAvailable(
         IdentityManagerFactory::GetForProfile(GetProfile()), "test@example.com",
@@ -53,8 +53,9 @@ class PriceTrackingEmailDialogViewBrowserTest : public InProcessBrowserTest {
 
  protected:
   void CreateAndShowDialog() {
-    dialog_coordinator_->Show(browser()->tab_strip_model()->GetWebContentsAt(0),
-                              GetProfile(), base::DoNothing());
+    dialog_coordinator_->Show(
+        browser()->GetTabStripModel()->GetWebContentsAt(0), GetProfile(),
+        base::DoNothing());
   }
 
   PriceTrackingEmailDialogCoordinator* GetCoordinator() {

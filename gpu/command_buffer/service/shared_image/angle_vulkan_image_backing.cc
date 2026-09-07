@@ -5,14 +5,15 @@
 #include "gpu/command_buffer/service/shared_image/angle_vulkan_image_backing.h"
 
 #include "base/logging.h"
-#include "components/viz/common/gpu/vulkan_context_provider.h"
 #include "components/viz/common/resources/shared_image_format_utils.h"
+#include "gpu/command_buffer/common/shared_image_info.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_format_service_utils.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_gl_utils.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_representation.h"
 #include "gpu/command_buffer/service/shared_image/skia_gl_image_representation.h"
 #include "gpu/command_buffer/service/skia_utils.h"
+#include "gpu/command_buffer/service/vulkan_context_provider.h"
 #include "gpu/vulkan/vulkan_device_queue.h"
 #include "gpu/vulkan/vulkan_fence_helper.h"
 #include "gpu/vulkan/vulkan_image.h"
@@ -25,6 +26,7 @@
 #include "third_party/skia/include/gpu/ganesh/SkSurfaceGanesh.h"
 #include "third_party/skia/include/gpu/ganesh/vk/GrVkBackendSurface.h"
 #include "third_party/skia/include/private/chromium/GrPromiseImageTexture.h"
+#include "ui/gfx/extension_set.h"
 #include "ui/gl/egl_util.h"
 #include "ui/gl/gl_context.h"
 #include "ui/gl/scoped_egl_image.h"
@@ -87,7 +89,7 @@ class AngleVulkanImageBacking::
 
   // GLTexturePassthroughImageRepresentation:
   const scoped_refptr<gles2::TexturePassthrough>& GetTexturePassthrough(
-      int plane_index) override {
+      size_t plane_index) override {
     DCHECK(format().IsValidPlaneIndex(plane_index));
     return textures_[plane_index];
   }
@@ -217,23 +219,12 @@ class AngleVulkanImageBacking::SkiaAngleVulkanImageRepresentation
 AngleVulkanImageBacking::AngleVulkanImageBacking(
     scoped_refptr<SharedContextState> context_state,
     const Mailbox& mailbox,
-    viz::SharedImageFormat format,
-    const gfx::Size& size,
-    const gfx::ColorSpace& color_space,
-    GrSurfaceOrigin surface_origin,
-    SkAlphaType alpha_type,
-    gpu::SharedImageUsageSet usage,
-    std::string debug_label)
-    : ClearTrackingSharedImageBacking(mailbox,
-                                      format,
-                                      size,
-                                      color_space,
-                                      surface_origin,
-                                      alpha_type,
-                                      usage,
-                                      std::move(debug_label),
-                                      format.EstimatedSizeInBytes(size),
-                                      /*is_thread_safe=*/false),
+    const SharedImageInfo& si_info)
+    : ClearTrackingSharedImageBacking(
+          mailbox,
+          si_info,
+          si_info.format.EstimatedSizeInBytes(si_info.size),
+          /*is_thread_safe=*/false),
       context_state_(std::move(context_state)) {}
 
 AngleVulkanImageBacking::~AngleVulkanImageBacking() {
@@ -287,12 +278,26 @@ bool AngleVulkanImageBacking::Initialize(
   VkImageUsageFlags vk_usage = VK_IMAGE_USAGE_SAMPLED_BIT |
                                VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                                VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+  VkImageCreateFlags vk_create_flags = 0;
   if (usage().HasAny(usages_needing_color_attachment)) {
     vk_usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
                 VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
     if (format().IsCompressed()) {
       DLOG(ERROR) << "ETC1 format cannot be used as color attachment.";
       return false;
+    }
+
+    // ANGLE supportsMultisampledRenderToSingleSampled requires
+    // VK_IMAGE_CREATE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT. We don't
+    // directly know if ANGLE enables the feature or not, but the feature is
+    // tied to Vulkan's
+    // VK_EXT_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_EXTENSION_NAME and
+    // multisampledRenderToSingleSampled.
+    if (gfx::HasExtension(
+            device_queue->enabled_extensions(),
+            VK_EXT_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_EXTENSION_NAME)) {
+      vk_create_flags |=
+          VK_IMAGE_CREATE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT;
     }
   }
 
@@ -303,7 +308,6 @@ bool AngleVulkanImageBacking::Initialize(
   for (int plane = 0; plane < num_planes; ++plane) {
     VkFormat vk_format = ToVkFormat(format(), plane);
     gfx::Size plane_size = format().GetPlaneSize(plane, size());
-    VkImageCreateFlags vk_create_flags = 0;
     auto vulkan_image =
         VulkanImage::Create(device_queue, plane_size, vk_format, vk_usage,
                             vk_create_flags, VK_IMAGE_TILING_OPTIMAL);
@@ -345,7 +349,6 @@ bool AngleVulkanImageBacking::InitializeWihGMB(
                            : ToVkFormatSinglePlanar(format());
   auto vulkan_image = vulkan_implementation->CreateImageFromGpuMemoryHandle(
       device_queue, std::move(handle), size(), vk_format, color_space());
-
   if (!vulkan_image) {
     return false;
   }
@@ -353,7 +356,6 @@ bool AngleVulkanImageBacking::InitializeWihGMB(
   vk_textures_.emplace_back(std::move(vulkan_image), format(), color_space());
 
   SetCleared();
-
   return true;
 }
 
@@ -689,7 +691,8 @@ bool AngleVulkanImageBacking::InitializePassthroughTexture() {
     if (gl::g_current_gl_driver->ext.b_GL_KHR_debug) {
       const std::string label =
           "SharedImage_AngleVulkan" + CreateLabelForSharedImageUsage(usage());
-      api->glObjectLabelFn(GL_TEXTURE, texture_id, label.size(), label.c_str());
+      api->glObjectLabelKHRFn(GL_TEXTURE, texture_id, label.size(),
+                              label.c_str());
     }
 
     auto& gl_texture = gl_textures_.emplace_back();

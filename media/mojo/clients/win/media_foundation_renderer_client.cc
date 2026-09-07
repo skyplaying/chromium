@@ -317,8 +317,9 @@ void MediaFoundationRendererClient::OnSetOutputRectDone(
   if (!success) {
     DLOG(ERROR) << "Failed to SetOutputRect";
     MEDIA_LOG(WARNING, media_log_) << "Failed to SetOutputRect";
-    // Ignore this error as video can possibly be seen but displayed incorrectly
-    // against the video output area.
+    // Fatal error or hardware context reset should've already been handled in
+    // MediaFoundationRenderer. Ignore other errors as video can possibly be
+    // seen but displayed incorrectly against the video output area.
     return;
   }
 
@@ -404,8 +405,7 @@ void MediaFoundationRendererClient::OnVideoFrameCreated(
   DVLOG_FUNC(1);
   DCHECK(media_task_runner_->RunsTasksInCurrentSequence());
   DCHECK(has_video_);
-
-  video_frame->metadata().allow_overlay = true;
+  CHECK(video_frame->HasSharedImage());
 
   if (cdm_context_) {
     video_frame->metadata().protected_video = true;

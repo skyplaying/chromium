@@ -4,7 +4,11 @@
 
 package org.chromium.media;
 
+import android.app.Activity;
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.graphics.ImageFormat;
 import android.graphics.Rect;
 import android.hardware.HardwareBuffer;
@@ -35,6 +39,8 @@ import androidx.annotation.IntDef;
 
 import org.jni_zero.JNINamespace;
 
+import org.chromium.base.ApplicationStatus;
+import org.chromium.base.ApplicationStatus.WindowFocusChangedListener;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.Log;
 import org.chromium.base.TraceEvent;
@@ -76,6 +82,10 @@ public class VideoCaptureCamera2 extends VideoCapture {
             assert mCameraThreadHandler.getLooper() == Looper.myLooper() : "called on wrong thread";
             Log.e(TAG, "cameraDevice was closed unexpectedly");
 
+            // onDisconnected can be triggered by higher-priority client eviction, physical
+            // disconnection, security policy or permission changes. Try to re-open the camera on
+            // the next time the window regains focus.
+            mRetryCameraOpenOnFocus = true;
             cameraDevice.close();
             mCameraDevice = null;
             changeCameraStateAndNotify(CameraState.STOPPED);
@@ -108,7 +118,6 @@ public class VideoCaptureCamera2 extends VideoCapture {
             mWaitForDeviceClosedConditionVariable.open();
         }
     }
-    ;
 
     // Inner class to extend a Capture Session state change listener.
     private class CrPreviewSessionListener extends CameraCaptureSession.StateCallback {
@@ -221,6 +230,11 @@ public class VideoCaptureCamera2 extends VideoCapture {
                     throw new IllegalStateException();
                 }
 
+                int dataSpace = 0;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    dataSpace = image.getDataSpace();
+                }
+
                 if (mUseHardwareBuffers) {
                     try (HardwareBuffer hardwareBuffer = image.getHardwareBuffer()) {
                         if (hardwareBuffer == null) {
@@ -231,7 +245,10 @@ public class VideoCaptureCamera2 extends VideoCapture {
                             return;
                         }
                         onHardwareBufferAvailable(
-                                hardwareBuffer, getCameraRotation(), image.getTimestamp());
+                                hardwareBuffer,
+                                dataSpace,
+                                getCameraRotation(),
+                                image.getTimestamp());
                     }
                 } else {
                     if (image.getFormat() != ImageFormat.YUV_420_888
@@ -256,14 +273,14 @@ public class VideoCaptureCamera2 extends VideoCapture {
                             image.getWidth(),
                             image.getHeight(),
                             getCameraRotation(),
-                            image.getTimestamp());
+                            image.getTimestamp(),
+                            dataSpace);
                 }
             } catch (IllegalStateException ex) {
                 Log.e(TAG, "acquireLatestImage():", ex);
             }
         }
     }
-    ;
 
     // Inner class to extend a Photo Session state change listener.
     // Error paths must signal notifyTakePhotoError().
@@ -367,13 +384,13 @@ public class VideoCaptureCamera2 extends VideoCapture {
                     AndroidVideoCaptureError.ANDROID_API_2_ERROR_RESTARTING_PREVIEW);
         }
     }
-    ;
 
     private class StopCaptureTask implements Runnable {
         @Override
         public void run() {
             assert mCameraThreadHandler.getLooper() == Looper.myLooper() : "called on wrong thread";
 
+            mRetryCameraOpenOnFocus = false;
             if (mCameraDevice == null) return;
 
             // As per Android API documentation, this will automatically abort captures
@@ -1143,19 +1160,21 @@ public class VideoCaptureCamera2 extends VideoCapture {
     private int mIso;
     private boolean mRedEyeReduction;
     private int mFillLightMode = AndroidFillLightMode.OFF;
+    private boolean mRetryCameraOpenOnFocus;
+    private @Nullable WindowFocusChangedListener mWindowFocusListener;
     private boolean mTorch;
     private boolean mEnableFaceDetection;
     private boolean mUseHardwareBuffers;
 
     // Service function to grab CameraCharacteristics and handle exceptions.
-    private static @Nullable CameraCharacteristics getCameraCharacteristics(int id) {
+    private static @Nullable CameraCharacteristics getCameraCharacteristics(String id) {
+        if (id == null) return null;
         final CameraManager manager =
                 (CameraManager)
                         ContextUtils.getApplicationContext()
                                 .getSystemService(Context.CAMERA_SERVICE);
         try {
-            final String strId = String.valueOf(id);
-            return manager.getCameraCharacteristics(strId);
+            return manager.getCameraCharacteristics(id);
         } catch (CameraAccessException
                 | IllegalArgumentException
                 | AssertionError
@@ -1478,7 +1497,7 @@ public class VideoCaptureCamera2 extends VideoCapture {
         return matchedTemperature;
     }
 
-    public static boolean isLegacyDevice(int id) {
+    public static boolean isLegacyDevice(String id) {
         final CameraCharacteristics cameraCharacteristics = getCameraCharacteristics(id);
         return cameraCharacteristics != null
                 && cameraCharacteristics.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL)
@@ -1508,7 +1527,7 @@ public class VideoCaptureCamera2 extends VideoCapture {
 
     public static int getCaptureApiType(int index) {
         final CameraCharacteristics cameraCharacteristics =
-                getCameraCharacteristics(getDeviceIdInt(index));
+                getCameraCharacteristics(getDeviceId(index));
         if (cameraCharacteristics == null) {
             return VideoCaptureApi.UNKNOWN;
         }
@@ -1549,20 +1568,19 @@ public class VideoCaptureCamera2 extends VideoCapture {
 
     public static boolean isZoomSupported(int index) {
         final CameraCharacteristics cameraCharacteristics =
-                getCameraCharacteristics(getDeviceIdInt(index));
+                getCameraCharacteristics(getDeviceId(index));
         if (cameraCharacteristics == null) {
             return false;
         }
 
-        final float maxZoom =
+        final Float maxZoom =
                 cameraCharacteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM);
-        final boolean isZoomSupported = maxZoom > 1.0f;
-        return isZoomSupported;
+        return maxZoom != null && maxZoom > 1.0f;
     }
 
     public static int getFacingMode(int index) {
         final CameraCharacteristics cameraCharacteristics =
-                getCameraCharacteristics(getDeviceIdInt(index));
+                getCameraCharacteristics(getDeviceId(index));
         if (cameraCharacteristics == null) {
             return VideoFacingMode.MEDIA_VIDEO_FACING_NONE;
         }
@@ -1580,7 +1598,7 @@ public class VideoCaptureCamera2 extends VideoCapture {
 
     public static @Nullable String getName(int index) {
         final CameraCharacteristics cameraCharacteristics =
-                getCameraCharacteristics(getDeviceIdInt(index));
+                getCameraCharacteristics(getDeviceId(index));
         if (cameraCharacteristics == null) return null;
         final int facing = cameraCharacteristics.get(CameraCharacteristics.LENS_FACING);
         String displayFacing = "unknown";
@@ -1613,7 +1631,7 @@ public class VideoCaptureCamera2 extends VideoCapture {
 
     // Retrieves the index within the camera ID list for the specified camera ID; returns
     // -1 if the specified camera ID is not found
-    public static int getDeviceIndex(int id) {
+    public static int getDeviceIndex(String id) {
         final CameraManager manager =
                 (CameraManager)
                         ContextUtils.getApplicationContext()
@@ -1621,29 +1639,14 @@ public class VideoCaptureCamera2 extends VideoCapture {
         try {
             final String[] cameraIdList = manager.getCameraIdList();
             for (int index = 0; index < cameraIdList.length; ++index) {
-                try {
-                    if (Integer.parseInt(cameraIdList[index]) == id) {
-                        return index;
-                    }
-                } catch (NumberFormatException e) {
+                if (cameraIdList[index].equals(id)) {
+                    return index;
                 }
             }
         } catch (CameraAccessException ex) {
             Log.e(TAG, "manager.getCameraIdList: ", ex);
         }
         return -1;
-    }
-
-    // Helper to retrieve the camera device ID, as an integer, at the specified
-    // index within the camera ID list; returns -1 if camera does not exist at the
-    // specified index
-    private static int getDeviceIdInt(int index) {
-        try {
-            return Integer.parseInt(getDeviceId(index));
-        } catch (NumberFormatException ex) {
-            Log.e(TAG, "Invalid camera index: ", index);
-            return -1;
-        }
     }
 
     static @Nullable String getDeviceId(int index) {
@@ -1666,7 +1669,7 @@ public class VideoCaptureCamera2 extends VideoCapture {
 
     public static VideoCaptureFormat @Nullable [] getDeviceSupportedFormats(int index) {
         final CameraCharacteristics cameraCharacteristics =
-                getCameraCharacteristics(getDeviceIdInt(index));
+                getCameraCharacteristics(getDeviceId(index));
         if (cameraCharacteristics == null) return null;
 
         try {
@@ -1716,7 +1719,9 @@ public class VideoCaptureCamera2 extends VideoCapture {
         }
     }
 
-    VideoCaptureCamera2(int id, long nativeVideoCaptureDeviceAndroid) {
+    private @Nullable BroadcastReceiver mInteractiveStateReceiver;
+
+    VideoCaptureCamera2(String id, long nativeVideoCaptureDeviceAndroid) {
         super(id, nativeVideoCaptureDeviceAndroid);
 
         dCheckCurrentlyOnIncomingTaskRunner();
@@ -1748,7 +1753,8 @@ public class VideoCaptureCamera2 extends VideoCapture {
             int height,
             int frameRate,
             boolean enableFaceDetection,
-            boolean useHardwareBuffers) {
+            boolean useHardwareBuffers,
+            boolean enableBackgroundMediaCapturing) {
         Log.d(TAG, "allocate: requested (%d x %d) @%dfps", width, height, frameRate);
         dCheckCurrentlyOnIncomingTaskRunner();
         synchronized (mCameraStateLock) {
@@ -1814,18 +1820,78 @@ public class VideoCaptureCamera2 extends VideoCapture {
 
         // TODO(mcasas): The following line is correct for N5 with prerelease Build,
         // but NOT for N7 with a dev Build. Figure out which one to support.
-        mInvertDeviceOrientationReadings =
-                cameraCharacteristics.get(CameraCharacteristics.LENS_FACING)
-                        == CameraCharacteristics.LENS_FACING_BACK;
+        final int facing = cameraCharacteristics.get(CameraCharacteristics.LENS_FACING);
+        mInvertDeviceOrientationReadings = facing == CameraCharacteristics.LENS_FACING_BACK;
+        mIsExternalCamera = facing == CameraCharacteristics.LENS_FACING_EXTERNAL;
 
         mEnableFaceDetection = enableFaceDetection;
         mUseHardwareBuffers = useHardwareBuffers;
+
+        if (enableBackgroundMediaCapturing && mInteractiveStateReceiver == null) {
+            mInteractiveStateReceiver =
+                    new BroadcastReceiver() {
+                        @Override
+                        public void onReceive(Context context, Intent intent) {
+                            if (Intent.ACTION_SCREEN_OFF.equals(intent.getAction())) {
+                                onInteractiveStateChanged(false);
+                            } else if (Intent.ACTION_USER_PRESENT.equals(intent.getAction())) {
+                                onInteractiveStateChanged(true);
+                            }
+                        }
+                    };
+            IntentFilter filter = new IntentFilter();
+            filter.addAction(Intent.ACTION_SCREEN_OFF);
+            filter.addAction(Intent.ACTION_USER_PRESENT);
+            ContextUtils.registerProtectedBroadcastReceiver(
+                    ContextUtils.getApplicationContext(), mInteractiveStateReceiver, filter);
+        }
+
+        if (mWindowFocusListener == null && ApplicationStatus.isInitialized()) {
+            mWindowFocusListener =
+                    new WindowFocusChangedListener() {
+                        @Override
+                        public void onWindowFocusChanged(Activity activity, boolean hasFocus) {
+                            mCameraThreadHandler.post(
+                                    new Runnable() {
+                                        @Override
+                                        public void run() {
+                                            if (hasFocus && mRetryCameraOpenOnFocus) {
+                                                mRetryCameraOpenOnFocus = false;
+                                                Log.d(
+                                                        TAG,
+                                                        "Window regained focus, attempting to"
+                                                                + " resume camera.");
+                                                onInteractiveStateChanged(true);
+                                            }
+                                        }
+                                    });
+                        }
+                    };
+            final WindowFocusChangedListener listenerToRegister = mWindowFocusListener;
+            new Handler(Looper.getMainLooper())
+                    .post(
+                            new Runnable() {
+                                @Override
+                                public void run() {
+                                    ApplicationStatus.registerWindowFocusChangedListener(
+                                            listenerToRegister);
+                                }
+                            });
+        }
+
         return true;
     }
 
     @Override
     public boolean startCaptureMaybeAsync() {
         dCheckCurrentlyOnIncomingTaskRunner();
+
+        synchronized (mCameraStateLock) {
+            if (mCameraState != CameraState.STOPPED) {
+                Log.d(TAG, "startCaptureMaybeAsync: Camera is not stopped, ignoring.");
+                return true;
+            }
+        }
 
         changeCameraStateAndNotify(CameraState.OPENING);
         final CameraManager manager =
@@ -1940,6 +2006,24 @@ public class VideoCaptureCamera2 extends VideoCapture {
 
     @Override
     public void deallocateInternal() {
+        dCheckCurrentlyOnIncomingTaskRunner();
+        if (mInteractiveStateReceiver != null) {
+            ContextUtils.getApplicationContext().unregisterReceiver(mInteractiveStateReceiver);
+            mInteractiveStateReceiver = null;
+        }
+        if (mWindowFocusListener != null) {
+            final WindowFocusChangedListener listenerToUnregister = mWindowFocusListener;
+            mWindowFocusListener = null;
+            new Handler(Looper.getMainLooper())
+                    .post(
+                            new Runnable() {
+                                @Override
+                                public void run() {
+                                    ApplicationStatus.unregisterWindowFocusChangedListener(
+                                            listenerToUnregister);
+                                }
+                            });
+        }
         Log.d(TAG, "deallocate");
     }
 }

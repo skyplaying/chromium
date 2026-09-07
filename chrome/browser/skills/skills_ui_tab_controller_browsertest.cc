@@ -8,35 +8,42 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/test_future.h"
 #include "base/values.h"
+#include "build/build_config.h"
+#include "chrome/browser/glic/public/glic_enabling.h"
+#include "chrome/browser/glic/public/glic_invoke_options.h"
 #include "chrome/browser/skills/skills_ui_tab_controller_interface.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/toasts/api/toast_id.h"
+#include "chrome/browser/ui/toasts/toast_controller.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/webui/skills/skills_dialog_view.h"
 #include "chrome/browser/ui/webui/skills/skills_ui.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/skills/features.h"
 #include "components/skills/public/skill.h"
+#include "components/skills/public/skill.mojom.h"
 #include "components/skills/public/skills_metrics.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/interaction/element_tracker.h"
+#include "ui/base/page_transition_types.h"
 #include "ui/views/controls/webview/webview.h"
 #include "ui/views/interaction/element_tracker_views.h"
 #include "ui/views/test/widget_test.h"
 #include "ui/views/widget/widget.h"
-
-#if BUILDFLAG(ENABLE_GLIC)
-#include "chrome/browser/glic/public/glic_enabling.h"
-#endif
 
 namespace skills {
 
 class SkillsUiTabControllerBrowserTest : public InProcessBrowserTest {
  public:
   SkillsUiTabControllerBrowserTest() {
-    feature_list_.InitAndEnableFeature(features::kSkillsEnabled);
+    feature_list_.InitWithFeatures({features::kSkillsEnabled},
+                                   {features::kSkillsWebViewV2Enabled});
   }
 
   SkillsUiTabController* skills_ui_tab_controller() {
@@ -50,7 +57,7 @@ class SkillsUiTabControllerBrowserTest : public InProcessBrowserTest {
 
   // Helper to determine if a dialog is visible on the current active tab.
   bool IsDialogVisible() {
-    auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+    auto* web_contents = browser()->GetTabStripModel()->GetActiveWebContents();
     auto* manager =
         web_modal::WebContentsModalDialogManager::FromWebContents(web_contents);
     return manager && manager->IsDialogActive();
@@ -100,27 +107,35 @@ IN_PROC_BROWSER_TEST_F(SkillsUiTabControllerBrowserTest,
                        ShowDialogOpensWidget) {
   EXPECT_FALSE(IsDialogVisible());
   histogram_tester_.ExpectBucketCount(
-      "Skills.Actions", skills::SkillsActions::kOpenedCreationDialog, 0);
-  skills::Skill test_skill("id", "skill_name", "icon", "Test Prompt");
-  skills_ui_tab_controller()->ShowDialog(std::move(test_skill));
+      "Skills.Dialog.Creation.WebClient.Prefilled.Action",
+      SkillsDialogAction::kOpened, 0);
+  skills::Skill test_skill("", "skill_name", "icon", "Test Prompt");
+  skills_ui_tab_controller()->ShowDialog(
+      std::move(test_skill), SkillsDialogEntryPoint::kWebClientPrefilled,
+      mojom::SkillsDialogType::kAdd, nullptr);
 
   EXPECT_TRUE(IsDialogVisible());
   EXPECT_NE(nullptr, GetDialogWebContents());
   histogram_tester_.ExpectBucketCount(
-      "Skills.Actions", skills::SkillsActions::kOpenedCreationDialog, 1);
+      "Skills.Dialog.Creation.WebClient.Prefilled.Action",
+      SkillsDialogAction::kOpened, 1);
 }
 
 // Verify calling ShowDialog twice doesn't open two dialogs.
 IN_PROC_BROWSER_TEST_F(SkillsUiTabControllerBrowserTest, PreventDoubleOpen) {
   skills::Skill test_skill("id", "skill_name", "icon", "Test Prompt");
-  skills_ui_tab_controller()->ShowDialog(std::move(test_skill));
+  skills_ui_tab_controller()->ShowDialog(
+      std::move(test_skill), SkillsDialogEntryPoint::kWebClientPrefilled,
+      mojom::SkillsDialogType::kEdit, nullptr);
 
   views::Widget* first_widget = GetDialogWidget();
   ASSERT_TRUE(first_widget);
 
   // Try to open again immediately.
   skills::Skill test_skill2("id2", "skill_name2", "icon", "Test Prompt");
-  skills_ui_tab_controller()->ShowDialog(std::move(test_skill2));
+  skills_ui_tab_controller()->ShowDialog(
+      std::move(test_skill2), SkillsDialogEntryPoint::kWebClientPrefilled,
+      mojom::SkillsDialogType::kEdit, nullptr);
 
   // Widget should be exactly the same instance.
   views::Widget* second_widget = GetDialogWidget();
@@ -132,7 +147,9 @@ IN_PROC_BROWSER_TEST_F(SkillsUiTabControllerBrowserTest, PreventDoubleOpen) {
 IN_PROC_BROWSER_TEST_F(SkillsUiTabControllerBrowserTest,
                        CloseDialogDestroysWidget) {
   skills::Skill test_skill("id", "skill_name", "icon", "Test Prompt");
-  skills_ui_tab_controller()->ShowDialog(std::move(test_skill));
+  skills_ui_tab_controller()->ShowDialog(
+      std::move(test_skill), SkillsDialogEntryPoint::kWebClientPrefilled,
+      mojom::SkillsDialogType::kEdit, nullptr);
   EXPECT_TRUE(IsDialogVisible());
 
   // Trigger the close.
@@ -147,7 +164,9 @@ IN_PROC_BROWSER_TEST_F(SkillsUiTabControllerBrowserTest,
                        NativeCloseCleansUpState) {
   // Open dialog.
   skills::Skill test_skill("id", "name", "icon", "prompt");
-  skills_ui_tab_controller()->ShowDialog(std::move(test_skill));
+  skills_ui_tab_controller()->ShowDialog(
+      std::move(test_skill), SkillsDialogEntryPoint::kWebClientPrefilled,
+      mojom::SkillsDialogType::kEdit, nullptr);
 
   views::Widget* widget = GetDialogWidget();
   ASSERT_TRUE(widget);
@@ -166,7 +185,9 @@ IN_PROC_BROWSER_TEST_F(SkillsUiTabControllerBrowserTest,
 
   // Verify we can reopen (implies internal state was reset).
   skills::Skill test_skill2("id2", "name2", "icon2", "prompt2");
-  skills_ui_tab_controller()->ShowDialog(std::move(test_skill2));
+  skills_ui_tab_controller()->ShowDialog(
+      std::move(test_skill2), SkillsDialogEntryPoint::kWebClientPrefilled,
+      mojom::SkillsDialogType::kEdit, nullptr);
   EXPECT_TRUE(IsDialogVisible());
 }
 
@@ -174,14 +195,16 @@ IN_PROC_BROWSER_TEST_F(SkillsUiTabControllerBrowserTest,
 // (Regression test for the destruction race condition).
 IN_PROC_BROWSER_TEST_F(SkillsUiTabControllerBrowserTest, TabCloseDoesNotCrash) {
   skills::Skill test_skill("id", "name", "icon", "prompt");
-  skills_ui_tab_controller()->ShowDialog(std::move(test_skill));
+  skills_ui_tab_controller()->ShowDialog(
+      std::move(test_skill), SkillsDialogEntryPoint::kWebClientPrefilled,
+      mojom::SkillsDialogType::kEdit, nullptr);
   EXPECT_TRUE(IsDialogVisible());
 
   // Close the tab.
   // This destroys the Controller (SkillsUiTabController) AND
   // the View (SkillsUI) simultaneously.
   // The test passes if this line does not trigger an ASAN crash / Segfault.
-  browser()->tab_strip_model()->CloseAllTabs();
+  browser()->GetTabStripModel()->CloseAllTabs();
 }
 
 // Verify Tab Switching Isolation
@@ -189,7 +212,9 @@ IN_PROC_BROWSER_TEST_F(SkillsUiTabControllerBrowserTest, TabCloseDoesNotCrash) {
 IN_PROC_BROWSER_TEST_F(SkillsUiTabControllerBrowserTest, DialogIsTabScoped) {
   auto* controller_a = skills_ui_tab_controller();
   skills::Skill test_skill("id", "skill_name", "icon", "Test Prompt");
-  controller_a->ShowDialog(std::move(test_skill));
+  controller_a->ShowDialog(std::move(test_skill),
+                           SkillsDialogEntryPoint::kWebClientPrefilled,
+                           mojom::SkillsDialogType::kEdit, nullptr);
   EXPECT_TRUE(IsDialogVisible());
 
   // Open a new Tab B and switch to it.
@@ -203,25 +228,28 @@ IN_PROC_BROWSER_TEST_F(SkillsUiTabControllerBrowserTest, DialogIsTabScoped) {
   // Controller B shouldn't have a dialog open.
   // Verify this by calling ShowDialog and ensuring it does open one.
   skills::Skill test_skill2("id2", "skill_name2", "icon", "Test Prompt");
-  controller_b->ShowDialog(std::move(test_skill2));
+  controller_b->ShowDialog(std::move(test_skill2),
+                           SkillsDialogEntryPoint::kWebClientPrefilled,
+                           mojom::SkillsDialogType::kEdit, nullptr);
 
   EXPECT_TRUE(IsDialogVisible());
 
   // Switch back to A to prove the dialog is still there.
-  browser()->tab_strip_model()->ActivateTabAt(0);
+  browser()->GetTabStripModel()->ActivateTabAt(0);
   EXPECT_TRUE(IsDialogVisible());
 }
 
 // Verify that the UI Controller (SkillsUI) received the delegate pointer.
 IN_PROC_BROWSER_TEST_F(SkillsUiTabControllerBrowserTest, VerifyWebUIPlumbing) {
-#if BUILDFLAG(ENABLE_GLIC)
   // Enable Glic late to avoid a crash in GlicTabIndicatorHelper during tab
   // creation.
-  glic::GlicEnabling::SetBypassEnablementChecksForTesting(true);
+  glic::GlicEnabling::ScopedBypassEnablementChecksForTesting scoped_glic_bypass;
 
   // Show the dialog.
   skills::Skill test_skill("id", "skill_name", "icon", "Test Prompt");
-  skills_ui_tab_controller()->ShowDialog(std::move(test_skill));
+  skills_ui_tab_controller()->ShowDialog(
+      std::move(test_skill), SkillsDialogEntryPoint::kWebClientPrefilled,
+      mojom::SkillsDialogType::kEdit, nullptr);
 
   // Dig down to find the SkillsUI.
   // The controller holds the delegate -> which holds WebContents -> which holds
@@ -241,27 +269,26 @@ IN_PROC_BROWSER_TEST_F(SkillsUiTabControllerBrowserTest, VerifyWebUIPlumbing) {
   EXPECT_TRUE(skills_ui->GetDelegateForTesting());
   EXPECT_EQ(skills_ui->GetInitialSkillForTesting().name, "skill_name");
   EXPECT_EQ(skills_ui->GetInitialSkillForTesting().icon, "icon");
-  glic::GlicEnabling::SetBypassEnablementChecksForTesting(false);
-#endif
 }
 
 // Verify that clicking the Cancel button closes the dialog.
 IN_PROC_BROWSER_TEST_F(SkillsUiTabControllerBrowserTest,
                        CancelButtonClosesDialog) {
-#if BUILDFLAG(ENABLE_GLIC)
   // Enable Glic late to avoid a crash in GlicTabIndicatorHelper during tab
   // creation.
-  glic::GlicEnabling::SetBypassEnablementChecksForTesting(true);
-  skills::Skill test_skill("id", "name", "icon", "prompt");
-  skills_ui_tab_controller()->ShowDialog(std::move(test_skill));
+  glic::GlicEnabling::ScopedBypassEnablementChecksForTesting scoped_glic_bypass;
+  skills::Skill test_skill("", "name", "icon", "prompt");
+  skills_ui_tab_controller()->ShowDialog(
+      std::move(test_skill), SkillsDialogEntryPoint::kWebClientPrefilled,
+      mojom::SkillsDialogType::kAdd, nullptr);
 
   content::WebContents* web_contents = GetDialogWebContents();
   ASSERT_TRUE(web_contents);
   ASSERT_TRUE(content::WaitForLoadStop(web_contents));
 
   histogram_tester_.ExpectBucketCount(
-      "Skills.Actions", skills::SkillsActions::kClickedCancelInCreationDialog,
-      0);
+      "Skills.Dialog.Creation.WebClient.Prefilled.Action",
+      SkillsDialogAction::kCancelled, 0);
 
   // Setup Listener.
   base::test::TestFuture<void> close_future;
@@ -287,18 +314,20 @@ IN_PROC_BROWSER_TEST_F(SkillsUiTabControllerBrowserTest,
   EXPECT_FALSE(IsDialogVisible());
 
   histogram_tester_.ExpectBucketCount(
-      "Skills.Actions", skills::SkillsActions::kClickedCancelInCreationDialog,
-      1);
-  glic::GlicEnabling::SetBypassEnablementChecksForTesting(false);
-#endif
+      "Skills.Dialog.Creation.WebClient.Prefilled.Action",
+      SkillsDialogAction::kCancelled, 1);
 }
 
 // Verify that the Skill data passed to ShowDialog correctly populates the
 // HTML input fields in the WebUI.
+#if BUILDFLAG(IS_MAC)
+#define MAYBE_SkillPopulatesUIFields DISABLED_SkillPopulatesUIFields
+#else
+#define MAYBE_SkillPopulatesUIFields SkillPopulatesUIFields
+#endif
 IN_PROC_BROWSER_TEST_F(SkillsUiTabControllerBrowserTest,
-                       SkillPopulatesUIFields) {
-#if BUILDFLAG(ENABLE_GLIC)
-  glic::GlicEnabling::SetBypassEnablementChecksForTesting(true);
+                       MAYBE_SkillPopulatesUIFields) {
+  glic::GlicEnabling::ScopedBypassEnablementChecksForTesting scoped_glic_bypass;
 
   // Setup a specific test skill.
   const std::string kTestName = "Vegan for 3";
@@ -308,7 +337,9 @@ IN_PROC_BROWSER_TEST_F(SkillsUiTabControllerBrowserTest,
   skills::Skill test_skill("test-id", kTestName, kTestIcon, kTestPrompt);
 
   // Open the dialog.
-  skills_ui_tab_controller()->ShowDialog(std::move(test_skill));
+  skills_ui_tab_controller()->ShowDialog(
+      std::move(test_skill), SkillsDialogEntryPoint::kWebClientPrefilled,
+      mojom::SkillsDialogType::kEdit, nullptr);
   EXPECT_TRUE(IsDialogVisible());
 
   //  Get the WebContents and wait for it to load.
@@ -355,9 +386,94 @@ IN_PROC_BROWSER_TEST_F(SkillsUiTabControllerBrowserTest,
   EXPECT_EQ(*name, kTestName);
   EXPECT_EQ(*prompt, kTestPrompt);
   EXPECT_EQ(*icon, kTestIcon);
+}
 
-  glic::GlicEnabling::SetBypassEnablementChecksForTesting(false);
+IN_PROC_BROWSER_TEST_F(SkillsUiTabControllerBrowserTest,
+                       KeyboardShortcutsAreRouted) {
+  glic::GlicEnabling::ScopedBypassEnablementChecksForTesting scoped_glic_bypass;
+
+  skills::Skill test_skill("id", "name", "icon", "prompt");
+  skills_ui_tab_controller()->ShowDialog(
+      std::move(test_skill), SkillsDialogEntryPoint::kWebClientPrefilled,
+      mojom::SkillsDialogType::kEdit, nullptr);
+
+  content::WebContents* dialog_contents = GetDialogWebContents();
+  ASSERT_TRUE(dialog_contents);
+  ASSERT_TRUE(content::WaitForLoadStop(dialog_contents));
+
+  // Focus the WebView to ensure it's ready for input.
+  views::Widget* widget = GetDialogWidget();
+  widget->GetFocusManager()->SetFocusedView(
+      views::ElementTrackerViews::GetInstance()->GetUniqueView(
+          SkillsDialogView::kSkillsDialogElementId, GetBrowserContext()));
+
+  static constexpr char kSetupScript[] = R"(
+    (async function() {
+      await customElements.whenDefined('skills-dialog-app');
+      for (let i = 0; i < 40; i++) {
+        const app = document.querySelector('skills-dialog-app');
+        if (app && app.shadowRoot) {
+            const crInput = app.shadowRoot.getElementById('nameText');
+            if (crInput && crInput.shadowRoot) {
+              const nativeInput = crInput.shadowRoot.querySelector('input');
+              if (nativeInput) {
+                // Use cr-input's API to set the value safely
+                crInput.value = 'Hello World';
+                nativeInput.focus();
+                // Force an input event so the Undo stack registers it
+                nativeInput.dispatchEvent(
+                  new Event('input', { bubbles: true }));
+                return true;
+              }
+            }
+          }
+        await new Promise(r => setTimeout(r, 100));
+      }
+      return false;
+    })();
+  )";
+  EXPECT_EQ(true, content::EvalJs(dialog_contents, kSetupScript));
+
+  // Simulate the Accelerator (Ctrl+A / Cmd+A).
+  ui::KeyboardCode key = ui::VKEY_A;
+  bool control = false;
+  bool command = false;
+#if BUILDFLAG(IS_MAC)
+  command = true;
+#else
+  control = true;
 #endif
+
+  content::SimulateKeyPress(dialog_contents, ui::DomKey::FromCharacter('a'),
+                            ui::DomCode::US_A, key, control, /*shift=*/false,
+                            /*alt=*/false, command);
+
+  auto selection_check = content::EvalJs(dialog_contents, R"(
+    (function() {
+      const app = document.querySelector('skills-dialog-app');
+      const crInput = app && app.shadowRoot ?
+                      app.shadowRoot.getElementById('nameText') : null;
+      const nativeInput = crInput && crInput.shadowRoot ?
+                          crInput.shadowRoot.querySelector('input') : null;
+      return nativeInput ?
+        (nativeInput.selectionEnd - nativeInput.selectionStart) : 0;
+    })()
+  )");
+}
+
+// Verify that OnSkillDeleted triggers the deleted toast.
+IN_PROC_BROWSER_TEST_F(SkillsUiTabControllerBrowserTest,
+                       OnSkillDeletedTriggersToast) {
+  // Ensure no toast is initially showing.
+  const auto* toast_controller = ToastController::From(browser());
+  EXPECT_FALSE(toast_controller->IsShowingToast());
+
+  // Trigger the deletion notification on the Tab Controller.
+  skills_ui_tab_controller()->OnSkillDeleted("id");
+
+  // Verify that the toast is now showing and has the correct ID.
+  EXPECT_TRUE(toast_controller->IsShowingToast());
+  EXPECT_EQ(toast_controller->GetCurrentToastId(), ToastId::kSkillDeleted);
 }
 
 }  // namespace skills

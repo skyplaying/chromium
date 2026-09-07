@@ -60,8 +60,10 @@
 #include "third_party/blink/renderer/core/inspector/devtools_agent.h"
 #include "third_party/blink/renderer/core/inspector/devtools_session.h"
 #include "third_party/blink/renderer/core/inspector/inspected_frames.h"
+#include "third_party/blink/renderer/core/inspector/inspector_ads_agent.h"
 #include "third_party/blink/renderer/core/inspector/inspector_animation_agent.h"
 #include "third_party/blink/renderer/core/inspector/inspector_audits_agent.h"
+#include "third_party/blink/renderer/core/inspector/inspector_crash_report_context_agent.h"
 #include "third_party/blink/renderer/core/inspector/inspector_css_agent.h"
 #include "third_party/blink/renderer/core/inspector/inspector_dom_agent.h"
 #include "third_party/blink/renderer/core/inspector/inspector_dom_debugger_agent.h"
@@ -82,6 +84,7 @@
 #include "third_party/blink/renderer/core/inspector/inspector_resource_container.h"
 #include "third_party/blink/renderer/core/inspector/inspector_resource_content_loader.h"
 #include "third_party/blink/renderer/core/inspector/inspector_task_runner.h"
+#include "third_party/blink/renderer/core/inspector/inspector_web_mcp_agent.h"
 #include "third_party/blink/renderer/core/inspector/main_thread_debugger.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/page/focus_controller.h"
@@ -256,7 +259,11 @@ class ClientMessageLoopAdapter : public MainThreadDebugger::ClientMessageLoop {
     CHECK(!input_events_disabler_);
     input_events_disabler_ =
         std::make_unique<ScopedInputEventsDisabler>(*frame);
-    for (auto* const view : WebViewImpl::AllInstances())
+    // NotifyPopupOpeningObservers() can run author scripts which can
+    // synchronously create a new WebViewImpl (e.g. via window.open()),
+    // mutating AllInstances() and invalidating the iterator. Snapshot first.
+    const HashSet<WebViewImpl*> instances = WebViewImpl::AllInstances();
+    for (auto* const view : instances)
       view->GetChromeClient().NotifyPopupOpeningObservers();
 
     // 2. Disable active objects
@@ -326,55 +333,56 @@ void WebDevToolsAgentImpl::AttachSession(DevToolsSession* session,
   session->ConnectToV8(main_thread_debugger->GetV8Inspector(),
                        context_group_id);
 
-  InspectorDOMAgent* dom_agent = session->CreateAndAppend<InspectorDOMAgent>(
-      isolate, inspected_frames, session->V8Session());
+  InspectorDOMAgent* dom_agent =
+      session->CreateAndAppend<InspectorDOMAgent>(isolate, inspected_frames);
 
   session->CreateAndAppend<InspectorLayerTreeAgent>(inspected_frames, this);
 
   InspectorNetworkAgent* network_agent =
-      session->CreateAndAppend<InspectorNetworkAgent>(inspected_frames, nullptr,
-                                                      session->V8Session());
+      session->CreateAndAppend<InspectorNetworkAgent>(inspected_frames,
+                                                      nullptr);
 
+  session->CreateAndAppend<InspectorCrashReportContextAgent>(inspected_frames);
   auto* css_agent = session->CreateAndAppend<InspectorCSSAgent>(
       dom_agent, inspected_frames, network_agent,
       resource_content_loader_.Get(), resource_container_.Get());
 
   InspectorDOMDebuggerAgent* dom_debugger_agent =
-      session->CreateAndAppend<InspectorDOMDebuggerAgent>(isolate, dom_agent,
-                                                          session->V8Session());
+      session->CreateAndAppend<InspectorDOMDebuggerAgent>(isolate, dom_agent);
 
-  session->CreateAndAppend<InspectorEventBreakpointsAgent>(
-      session->V8Session());
+  session->CreateAndAppend<InspectorEventBreakpointsAgent>();
 
   session->CreateAndAppend<InspectorPerformanceAgent>(inspected_frames);
 
   session->CreateAndAppend<InspectorDOMSnapshotAgent>(inspected_frames,
                                                       dom_debugger_agent);
 
-  session->CreateAndAppend<InspectorAnimationAgent>(inspected_frames, css_agent,
-                                                    session->V8Session());
+  session->CreateAndAppend<InspectorAnimationAgent>(inspected_frames,
+                                                    css_agent);
 
   session->CreateAndAppend<InspectorMemoryAgent>(inspected_frames);
+  session->CreateAndAppend<InspectorWebMCPAgent>(inspected_frames);
 
-  auto* page_agent = session->CreateAndAppend<InspectorPageAgent>(
+  session->CreateAndAppend<InspectorPageAgent>(
       inspected_frames, this, resource_content_loader_.Get(),
-      session->V8Session(), session->script_to_evaluate_on_load());
+      session->script_to_evaluate_on_load(), session->InjectedScriptManager());
 
   session->CreateAndAppend<InspectorLogAgent>(
       &inspected_frames->Root()->GetPage()->GetConsoleMessageStorage(),
-      inspected_frames->Root()->GetPerformanceMonitor(), session->V8Session());
+      inspected_frames->Root()->GetPerformanceMonitor());
 
   InspectorOverlayAgent* overlay_agent =
       session->CreateAndAppend<InspectorOverlayAgent>(
-          web_local_frame_impl_.Get(), inspected_frames, session->V8Session(),
-          dom_agent);
+          web_local_frame_impl_.Get(), inspected_frames, dom_agent);
 
-  session->CreateAndAppend<InspectorIOAgent>(isolate, session->V8Session());
+  session->CreateAndAppend<InspectorIOAgent>(isolate);
 
   session->CreateAndAppend<InspectorAuditsAgent>(
       network_agent,
       &inspected_frames->Root()->GetPage()->GetInspectorIssueStorage(),
       inspected_frames, web_local_frame_impl_->AutofillClient());
+
+  session->CreateAndAppend<InspectorAdsAgent>(inspected_frames);
 
   session->CreateAndAppend<InspectorMediaAgent>(
       inspected_frames, /*worker_global_scope=*/nullptr);
@@ -403,7 +411,6 @@ void WebDevToolsAgentImpl::AttachSession(DevToolsSession* session,
   }
 
   network_agents_.insert(session, network_agent);
-  page_agents_.insert(session, page_agent);
   overlay_agents_.insert(session, overlay_agent);
 }
 
@@ -436,7 +443,6 @@ WebDevToolsAgentImpl::~WebDevToolsAgentImpl() {}
 void WebDevToolsAgentImpl::Trace(Visitor* visitor) const {
   visitor->Trace(agent_);
   visitor->Trace(network_agents_);
-  visitor->Trace(page_agents_);
   visitor->Trace(overlay_agents_);
   visitor->Trace(web_local_frame_impl_);
   visitor->Trace(probe_sink_);
@@ -463,7 +469,6 @@ void WebDevToolsAgentImpl::BindReceiver(
 
 void WebDevToolsAgentImpl::DetachSession(DevToolsSession* session) {
   network_agents_.erase(session);
-  page_agents_.erase(session);
   overlay_agents_.erase(session);
   if (!network_agents_.size()) {
     Thread::Current()->RemoveTaskObserver(this);
@@ -527,14 +532,6 @@ void WebDevToolsAgentImpl::DebuggerTaskFinished() {
 void WebDevToolsAgentImpl::DidCommitLoadForLocalFrame(LocalFrame* frame) {
   resource_container_->DidCommitLoadForLocalFrame(frame);
   resource_content_loader_->DidCommitLoadForLocalFrame(frame);
-}
-
-bool WebDevToolsAgentImpl::ScreencastEnabled() {
-  for (auto& it : page_agents_) {
-    if (it.value->ScreencastEnabled())
-      return true;
-  }
-  return false;
 }
 
 void WebDevToolsAgentImpl::PageLayoutInvalidated(bool resized) {

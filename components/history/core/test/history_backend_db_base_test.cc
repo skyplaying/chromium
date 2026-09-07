@@ -16,6 +16,7 @@
 #include "components/history/core/browser/history_backend.h"
 #include "components/history/core/browser/history_backend_client.h"
 #include "components/history/core/browser/history_constants.h"
+#include "components/history/core/browser/history_database.h"
 #include "components/history/core/browser/history_database_params.h"
 #include "components/history/core/browser/history_types.h"
 #include "components/history/core/browser/in_memory_history_backend.h"
@@ -96,15 +97,25 @@ bool HistoryBackendDBBaseTest::CreateBackendAndDatabase() {
 }
 
 void HistoryBackendDBBaseTest::CreateDBVersion(int version) {
+  CreateDBFromSQLFile(base::StringPrintf("history.%d.sql", version));
+}
+
+void HistoryBackendDBBaseTest::CreateDBFromSQLFile(
+    const std::string& filename) {
   base::FilePath data_path;
   ASSERT_TRUE(GetTestDataHistoryDir(&data_path));
-  data_path =
-      data_path.AppendASCII(base::StringPrintf("history.%d.sql", version));
+  data_path = data_path.AppendASCII(filename);
   ASSERT_NO_FATAL_FAILURE(
       ExecuteSQLScript(data_path, history_dir_.Append(kHistoryFilename)));
 }
 
 int HistoryBackendDBBaseTest::GetDatabaseVersion() const {
+  // If the backend is open, read the version directly from it.
+  // Otherwise, open a standalone connection to read the version.
+
+  if (db_) {
+    return db_->GetDatabaseVersionForTesting();
+  }
   sql::Database db(sql::test::kTestTag);
   CHECK(db.Open(history_dir_.Append(kHistoryFilename)));
   return sql::InitializedMetaTable(db).GetVersionNumber();

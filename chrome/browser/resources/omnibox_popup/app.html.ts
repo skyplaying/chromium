@@ -9,49 +9,18 @@ import type {OmniboxPopupAppElement} from './app.js';
 export function getHtml(this: OmniboxPopupAppElement) {
   // clang-format off
   return html`<!--_html_template_start_-->
-${this.showContextEntrypoint_ ? html`
-<!-- WebUI Omnibox popup w/ "Add Context" button -->
 <div class="dropdownContainer">
-  <contextual-entrypoint-and-carousel id="context"
-      part="contextual-entrypoint-and-carousel"
-      exportparts="composebox-entrypoint, context-menu-entrypoint-icon"
-      .showMenuOnClick="${false}"
-      entrypoint-name="Omnibox"
-      searchbox-layout-mode="${this.searchboxLayoutMode_}"
-      .tabSuggestions="${this.tabSuggestions_}"
-      ?hide-entrypoint-button="${this.shouldHideEntrypointButton_}"
-      ?show-dropdown="${this.hasVisibleMatches_}"
-      ?show-lens-search-chip="${
-        this.isContentSharingEnabled_ && this.isLensSearchEligible_}"
-      ?show-recent-tab-chip="${
-        this.isContentSharingEnabled_ && this.computeShowRecentTabChip_()}"
-      .inputState="${this.inputState_}"
-      ?show-model-picker="${this.usePecApi_}"
-      @add-tab-context="${this.addTabContext_}"
-      @context-menu-entrypoint-click="${this.onContextualEntryPointClicked_}"
-      @lens-search-click="${this.onLensSearchChipClicked_}">
-    <cr-searchbox-dropdown part="searchbox-dropdown"
-        exportparts="dropdown-content"
-        role="listbox" .result="${this.result_}"
-        ?can-show-secondary-side="${this.canShowSecondarySide}"
-        ?has-secondary-side="${this.hasSecondarySide}"
-        @has-secondary-side-changed="${this.onHasSecondarySideChanged_}"
-        @dom-change="${this.onResultRepaint_}"
-        ?hidden="${!this.hasVisibleMatches_}">
-    </cr-searchbox-dropdown>
-  </contextual-entrypoint-and-carousel>
-</div>` : html`
-<!-- WebUI Omnibox popup w/o "Add Context" button -->
   <cr-searchbox-dropdown part="searchbox-dropdown"
       exportparts="dropdown-content"
       role="listbox" .result="${this.result_}"
       ?can-show-secondary-side="${this.canShowSecondarySide}"
       ?has-secondary-side="${this.hasSecondarySide}"
       @has-secondary-side-changed="${this.onHasSecondarySideChanged_}"
-      @dom-change="${this.onResultRepaint_}"
+      @dom-change="${this.onDropdownDomChange_}"
       ?hidden="${!this.hasVisibleMatches_}">
   </cr-searchbox-dropdown>
-`}
+  <omnibox-popup-contextual-entrypoint></omnibox-popup-contextual-entrypoint>
+</div>
 <!--_html_template_end_-->`;
   // clang-format on
 }

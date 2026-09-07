@@ -141,6 +141,12 @@ SK_API void SkLog_FileLine(const char* file,
 
 #define SK_SUPPORT_LEGACY_RRECT_TRANSFORM
 
+#define SK_USE_SAFE_INSET_FOR_TEXTURE_SAMPLING
+
+#define SK_GRAPHITE_USE_LEGACY_RRECT_CLIP_SHADER
+
+#define SK_GANESH_LEGACY_MIXED_AA_CLIP_HANDLING
+
 ///////////////////////// Imported from BUILD.gn and skia_common.gypi
 
 /* In some places Skia can use static initializers for global initialization,
@@ -158,5 +164,11 @@ SK_API void SkLog_FileLine(const char* file,
 
 // glGetError() forces a sync with gpu process on chrome
 #define GR_GL_CHECK_ERROR_START 0
+
+#if defined(SK_DEBUG)
+#define SKIA_LOWEST_ACTIVE_LOG_PRIORITY SkLogPriority::kWarning
+#else
+#define SKIA_LOWEST_ACTIVE_LOG_PRIORITY SkLogPriority::kInfo
+#endif
 
 #endif  // SKIA_CONFIG_SKUSERCONFIG_H_

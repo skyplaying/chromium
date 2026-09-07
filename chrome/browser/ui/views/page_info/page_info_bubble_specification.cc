@@ -4,14 +4,12 @@
 
 #include "chrome/browser/ui/views/page_info/page_info_bubble_specification.h"
 
-#include <algorithm>
 #include <memory>
 
 #include "base/check.h"
 #include "base/functional/callback_helpers.h"
 #include "chrome/browser/ui/page_info/page_info_dialog.h"
 #include "components/content_settings/core/common/content_settings_types.h"
-#include "ui/views/view.h"
 
 PageInfoBubbleSpecification::Builder::Builder(
     views::BubbleAnchor anchor,
@@ -54,6 +52,13 @@ PageInfoBubbleSpecification::Builder::AddPageInfoClosingCallback(
 }
 
 PageInfoBubbleSpecification::Builder&
+PageInfoBubbleSpecification::Builder::AddGetBrowserCallback(
+    ChromePageInfoDelegate::GetBrowserCallback callback) {
+  page_info_bubble_specification_->AddGetBrowserCallback(std::move(callback));
+  return *this;
+}
+
+PageInfoBubbleSpecification::Builder&
 PageInfoBubbleSpecification::Builder::HideExtendedSiteInfo() {
   page_info_bubble_specification_->HideExtendedSiteInfo();
   return *this;
@@ -67,19 +72,14 @@ PageInfoBubbleSpecification::Builder::ShowPermissionPage(
 }
 
 PageInfoBubbleSpecification::Builder&
-PageInfoBubbleSpecification::Builder::ShowMerchantTrustPage() {
-  page_info_bubble_specification_->ShowMerchantTrustPage();
+PageInfoBubbleSpecification::Builder::SetShowExtensionsMenu(
+    bool show_extensions_menu) {
+  page_info_bubble_specification_->SetShowExtensionsMenu(show_extensions_menu);
   return *this;
 }
 
 void PageInfoBubbleSpecification::Builder::ValidateSpecification() {
   CHECK(page_info_bubble_specification_->web_contents());
-
-  // Bubbles on creation can show either the content settings page or the
-  // merchant trust page but not both.
-  if (page_info_bubble_specification_->permission_page_type().has_value()) {
-    CHECK(!page_info_bubble_specification_->show_merchant_trust_page());
-  }
 }
 
 std::unique_ptr<PageInfoBubbleSpecification>
@@ -115,6 +115,11 @@ void PageInfoBubbleSpecification::AddPageInfoClosingCallback(
   page_info_closing_callback_ = std::move(callback);
 }
 
+void PageInfoBubbleSpecification::AddGetBrowserCallback(
+    ChromePageInfoDelegate::GetBrowserCallback callback) {
+  get_browser_callback_ = std::move(callback);
+}
+
 void PageInfoBubbleSpecification::HideExtendedSiteInfo() {
   show_extended_site_info_ = false;
 }
@@ -123,8 +128,13 @@ void PageInfoBubbleSpecification::ShowPermissionPage(ContentSettingsType type) {
   permission_page_type_ = type;
 }
 
-void PageInfoBubbleSpecification::ShowMerchantTrustPage() {
-  show_merchant_trust_page_ = true;
+void PageInfoBubbleSpecification::SetShowExtensionsMenu(
+    bool show_extensions_menu) {
+  show_extensions_menu_ = show_extensions_menu;
+}
+
+bool PageInfoBubbleSpecification::show_extensions_menu() const {
+  return show_extensions_menu_;
 }
 
 views::BubbleAnchor PageInfoBubbleSpecification::anchor() {
@@ -159,6 +169,11 @@ PageInfoBubbleSpecification::page_info_closing_callback() {
              : std::move(page_info_closing_callback_);
 }
 
+ChromePageInfoDelegate::GetBrowserCallback
+PageInfoBubbleSpecification::get_browser_callback() {
+  return get_browser_callback_;
+}
+
 bool PageInfoBubbleSpecification::show_extended_site_info() {
   return show_extended_site_info_;
 }
@@ -166,8 +181,4 @@ bool PageInfoBubbleSpecification::show_extended_site_info() {
 std::optional<ContentSettingsType>
 PageInfoBubbleSpecification::permission_page_type() {
   return permission_page_type_;
-}
-
-bool PageInfoBubbleSpecification::show_merchant_trust_page() {
-  return show_merchant_trust_page_;
 }

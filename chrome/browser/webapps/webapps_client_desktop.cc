@@ -21,7 +21,7 @@
 #include "chrome/browser/web_applications/web_app_tab_helper.h"
 #include "chrome/common/url_constants.h"
 #include "components/infobars/content/content_infobar_manager.h"
-#include "components/security_state/content/security_state_tab_helper.h"
+#include "components/tabs/public/tab_interface.h"
 #include "components/webapps/browser/features.h"
 #include "components/webapps/browser/installable/installable_metrics.h"
 #include "content/public/browser/web_contents.h"
@@ -76,10 +76,8 @@ bool CheckNewWebAppConflictsWithExistingInstallation(
 
   // If there is an existing crafted or DIY app that has the same manifest_id,
   // do not promote installation.
-  if (provider->registrar_unsafe().IsInstallState(
-          installing_app_id,
-          {web_app::proto::InstallState::INSTALLED_WITH_OS_INTEGRATION,
-           web_app::proto::InstallState::INSTALLED_WITHOUT_OS_INTEGRATION})) {
+  if (provider->registrar_unsafe().AppMatches(
+          installing_app_id, web_app::WebAppFilter::InstalledInChrome())) {
     return true;
   }
 
@@ -100,7 +98,8 @@ bool CheckNewWebAppConflictsWithExistingInstallation(
   std::optional<AppId> non_diy_extended_scope_app_id =
       provider->registrar_unsafe().FindBestAppWithUrlInScope(
           start_url,
-          web_app::WebAppFilter::IsCraftedAppAndOpensInDedicatedWindow(),
+          web_app::WebAppFilter::IsCraftedApp() &
+              web_app::WebAppFilter::OpensInDedicatedWindow(),
           {.exclude_scope_extensions = false});
   if (non_diy_extended_scope_app_id) {
     return true;
@@ -138,7 +137,12 @@ WebappInstallSource WebappsClientDesktop::GetInstallSource(
 AppBannerManager* WebappsClientDesktop::GetAppBannerManager(
     content::WebContents* web_contents) {
   CHECK(web_contents);
-  return AppBannerManagerDesktop::FromWebContents(web_contents);
+  tabs::TabInterface* tab =
+      tabs::TabInterface::MaybeGetFromContents(web_contents);
+  if (auto* manager = tab ? AppBannerManagerDesktop::From(tab) : nullptr) {
+    return manager->app_banner_manager();
+  }
+  return nullptr;
 }
 
 void WebappsClientDesktop::DoesNewWebAppConflictWithExistingInstallation(
@@ -204,8 +208,9 @@ void WebappsClientDesktop::SaveInstallationDismissedForMl(
   Profile* profile = Profile::FromBrowserContext(browser_context);
   CHECK(profile);
   web_app::WebAppPrefGuardrails::GetForMlInstallPrompt(profile->GetPrefs())
-      .RecordDismiss(web_app::GenerateAppIdFromManifestId(ManifestId(manifest_id)),
-                     base::Time::Now());
+      .RecordDismiss(
+          web_app::GenerateAppIdFromManifestId(ManifestId(manifest_id)),
+          base::Time::Now());
 }
 
 void WebappsClientDesktop::SaveInstallationIgnoredForMl(
@@ -215,8 +220,9 @@ void WebappsClientDesktop::SaveInstallationIgnoredForMl(
   Profile* profile = Profile::FromBrowserContext(browser_context);
   CHECK(profile);
   web_app::WebAppPrefGuardrails::GetForMlInstallPrompt(profile->GetPrefs())
-      .RecordIgnore(web_app::GenerateAppIdFromManifestId(ManifestId(manifest_id)),
-                    base::Time::Now());
+      .RecordIgnore(
+          web_app::GenerateAppIdFromManifestId(ManifestId(manifest_id)),
+          base::Time::Now());
 }
 
 void WebappsClientDesktop::SaveInstallationAcceptedForMl(
@@ -226,7 +232,8 @@ void WebappsClientDesktop::SaveInstallationAcceptedForMl(
   Profile* profile = Profile::FromBrowserContext(browser_context);
   CHECK(profile);
   web_app::WebAppPrefGuardrails::GetForMlInstallPrompt(profile->GetPrefs())
-      .RecordAccept(web_app::GenerateAppIdFromManifestId(ManifestId(manifest_id)));
+      .RecordAccept(
+          web_app::GenerateAppIdFromManifestId(ManifestId(manifest_id)));
 }
 
 bool WebappsClientDesktop::IsMlPromotionBlockedByHistoryGuardrail(

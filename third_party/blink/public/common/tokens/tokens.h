@@ -26,6 +26,11 @@ namespace blink {
 using DocumentToken = base::TokenType<class DocumentTokenTypeMarker>;
 
 ////////////////////////////////////////////////////////////////////////////////
+// INITIATOR STATE TOKENS
+using InitiatorStateToken =
+    base::TokenType<class InitiatorStateTokenTypeMarker>;
+
+////////////////////////////////////////////////////////////////////////////////
 // FRAME TOKENS
 
 // Uniquely identifies a blink::LocalFrame / blink::WebLocalFrame /
@@ -102,10 +107,6 @@ using ShadowRealmToken = base::TokenType<class ShadowRealmTokenTypeMarker>;
 // If you have multiple tokens that make a thematic group, please lift them to
 // their own section, in alphabetical order. If adding a new token here, please
 // keep the following list in alphabetic order.
-
-// Identifies an attributionsrc request made by the Attribution Reporting API.
-using AttributionSrcToken =
-    base::TokenType<class AttributionSrcTokenTypeMarker>;
 
 // Identifies a unique clipboard state.
 using ClipboardSequenceNumberToken = ui::ClipboardSequenceNumberToken;

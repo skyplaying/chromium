@@ -30,8 +30,8 @@
 
 using base::UserMetricsAction;
 
-@interface OmniboxViewController () <OmniboxTextInputDelegate,
-                                     OmniboxKeyboardDelegate,
+@interface OmniboxViewController () <OmniboxKeyboardDelegate,
+                                     OmniboxTextInputDelegate,
                                      UIScribbleInteractionDelegate>
 
 // Override of UIViewController's view with a different type.
@@ -315,6 +315,8 @@ using base::UserMetricsAction;
     RecordAction(
         UserMetricsAction("Mobile_FocusedDefocusedOmnibox_WithNoAction"));
   }
+
+  [self.mutator onDidEndEditing];
 }
 
 - (UIMenu*)textInput:(id<OmniboxTextInput>)textInput
@@ -562,7 +564,10 @@ using base::UserMetricsAction;
   [self.textInput updateTextDirection];
   self.semanticContentAttribute = [self.textInput bestSemanticContentAttribute];
 
-  [self.mutator onTextInputModeChange];
+  __weak __typeof(self) weakSelf = self;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [weakSelf.mutator onTextInputModeChange];
+  });
 }
 
 - (void)updateCachedClipboardState {

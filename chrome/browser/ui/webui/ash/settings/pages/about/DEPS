@@ -16,12 +16,10 @@ include_rules = [
   "+chrome/browser/browser_process_platform_part.h",
   "+chrome/browser/enterprise/browser_management",
   "+chrome/browser/obsolete_system",
-  "+chrome/browser/signin",
   "+chrome/browser/ui/webui/ash/settings/pages",
   "+chrome/browser/ui/webui/ash/settings/search",
   "+chrome/browser/ui/webui/management",
   "+chrome/browser/ui/webui/settings",
   "+chrome/browser/ui/webui/version",
-  "+chrome/common",
   "+chrome/grit",
 ]

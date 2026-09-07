@@ -13,12 +13,11 @@
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/avatar_menu_observer.h"
+#include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
 #include "chrome/browser/profiles/profile_list_desktop.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile_window.h"
 #include "chrome/browser/profiles/profiles_state.h"
-#include "chrome/browser/supervised_user/supervised_user_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/dialogs/browser_dialogs.h"
@@ -28,9 +27,7 @@
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/webui_url_constants.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/prefs/pref_service.h"
-#include "components/supervised_user/core/browser/supervised_user_service.h"
 #include "content/public/browser/browser_thread.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -38,6 +35,26 @@
 using content::BrowserThread;
 
 namespace {
+
+bool HasProfileEverDisplayedBrowserWindow(Profile* profile) {
+  // Return true for testing profile so that the unit test can pass.
+  if (profile->AsTestingProfile()) {
+    return true;
+  }
+
+  ProfileManager* profile_manager = g_browser_process->profile_manager();
+  if (!profile_manager) {
+    return false;
+  }
+
+  auto keep_alives = profile_manager->GetKeepAlivesByPath(profile->GetPath());
+  // Check if the profile is in `kWaitingForFirstBrowserWindow` state.
+  // TODO(crbug.com/489549613): create a method from `ProfileManager` to return
+  // this information instead of directly looking into the keepalives map.
+  auto it =
+      keep_alives.find(ProfileKeepAliveOrigin::kWaitingForFirstBrowserWindow);
+  return it == keep_alives.end() || it->second == 0;
+}
 
 bool CanOpenBrowserForProfile(const AvatarMenu::Item& profile_item) {
   if (profile_item.signin_required) {
@@ -58,7 +75,7 @@ bool CanOpenBrowserForProfile(const AvatarMenu::Item& profile_item) {
 
 AvatarMenu::AvatarMenu(ProfileAttributesStorage* profile_storage,
                        AvatarMenuObserver* observer,
-                       Browser* browser)
+                       BrowserWindowInterface* browser)
     : profile_list_(std::make_unique<ProfileListDesktop>(profile_storage)),
       profile_storage_(profile_storage->AsWeakPtr()),
       observer_(observer),
@@ -70,21 +87,11 @@ AvatarMenu::AvatarMenu(ProfileAttributesStorage* profile_storage,
 
   // Register this as an observer of the info cache.
   profile_storage_->AddObserver(this);
-
-  // Register this as an observer of the SupervisedUserService to be notified
-  // of changes to the custodian info.
-  if (browser_) {
-    auto* supervised_user_service =
-        SupervisedUserServiceFactory::GetForProfile(browser_->GetProfile());
-    if (supervised_user_service) {
-      supervised_user_observation_.Observe(supervised_user_service);
-    }
-  }
 }
 
 AvatarMenu::~AvatarMenu() {
   // Note that |profile_storage_| may be destroyed before |this|.
-  // https://crbug.com/1008947
+  // https://crbug.com/40050259
   if (profile_storage_) {
     profile_storage_->RemoveObserver(this);
   }
@@ -165,9 +172,19 @@ std::optional<size_t> AvatarMenu::GetActiveProfileIndex() const {
     return std::nullopt;
   }
 
-  Profile* active_profile = browser_
-                                ? browser_->GetProfile()
-                                : ProfileManager::GetLastUsedProfileIfLoaded();
+  Profile* active_profile = nullptr;
+  if (browser_) {
+    active_profile = browser_->GetProfile();
+  } else {
+    active_profile = ProfileManager::GetLastUsedProfileIfLoaded();
+    // Only fall back to the last used profile if it has actually been active
+    // in a browser window. This prevents background-loaded profiles (like
+    // those for InitialWebUI) from appearing as "active" prematurely.
+    if (active_profile &&
+        !HasProfileEverDisplayedBrowserWindow(active_profile)) {
+      active_profile = nullptr;
+    }
+  }
 
   if (!active_profile) {
     return std::nullopt;
@@ -242,10 +259,6 @@ void AvatarMenu::OnProfileSigninRequiredChanged(
 }
 
 void AvatarMenu::OnProfileIsOmittedChanged(const base::FilePath& profile_path) {
-  Update();
-}
-
-void AvatarMenu::OnCustodianInfoChanged() {
   Update();
 }
 

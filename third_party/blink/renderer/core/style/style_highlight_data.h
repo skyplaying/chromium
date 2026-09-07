@@ -7,6 +7,7 @@
 
 #include <optional>
 
+#include "base/functional/function_ref.h"
 #include "base/types/pass_key.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/style/computed_style_constants.h"
@@ -39,6 +40,10 @@ class CORE_EXPORT StyleHighlightData final {
   const ComputedStyle* SpellingError() const;
   const ComputedStyle* GrammarError() const;
   const ComputedStyle* CustomHighlight(const AtomicString&) const;
+  const ComputedStyle* CustomHighlightUniversal() const {
+    return custom_highlight_universal_.Get();
+  }
+  const ComputedStyle* CustomHighlightOrUniversal(const AtomicString&) const;
   const CustomHighlightsStyleMap& CustomHighlights() const {
     return custom_highlights_;
   }
@@ -49,6 +54,38 @@ class CORE_EXPORT StyleHighlightData final {
   void SetSpellingError(const ComputedStyle*);
   void SetGrammarError(const ComputedStyle*);
   void SetCustomHighlight(const AtomicString&, const ComputedStyle*);
+  void SetCustomHighlightUniversal(const ComputedStyle*);
+
+  bool StylesDependOnFunc(
+      base::FunctionRef<bool(const ComputedStyle&)> func) const {
+    if (selection_ && func(*selection_)) {
+      return true;
+    }
+    if (search_text_current_ && func(*search_text_current_)) {
+      return true;
+    }
+    if (search_text_not_current_ && func(*search_text_not_current_)) {
+      return true;
+    }
+    if (target_text_ && func(*target_text_)) {
+      return true;
+    }
+    if (spelling_error_ && func(*spelling_error_)) {
+      return true;
+    }
+    if (grammar_error_ && func(*grammar_error_)) {
+      return true;
+    }
+    if (custom_highlight_universal_ && func(*custom_highlight_universal_)) {
+      return true;
+    }
+    for (const auto& custom_highlight : custom_highlights_) {
+      if (custom_highlight.value && func(*custom_highlight.value)) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   bool DependsOnSizeContainerQueries() const;
 
@@ -61,6 +98,7 @@ class CORE_EXPORT StyleHighlightData final {
   Member<const ComputedStyle> target_text_;
   Member<const ComputedStyle> spelling_error_;
   Member<const ComputedStyle> grammar_error_;
+  Member<const ComputedStyle> custom_highlight_universal_;
   CustomHighlightsStyleMap custom_highlights_;
 };
 

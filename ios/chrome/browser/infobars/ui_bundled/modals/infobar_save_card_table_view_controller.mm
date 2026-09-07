@@ -12,7 +12,7 @@
 #import "components/autofill/core/common/autofill_features.h"
 #import "components/autofill/core/common/autofill_payments_features.h"
 #import "components/strings/grit/components_strings.h"
-#import "ios/chrome/browser/autofill/model/message/save_card_message_with_links.h"
+#import "ios/chrome/browser/autofill/model/message/autofill_legal_message_line.h"
 #import "ios/chrome/browser/infobars/model/infobar_metrics_recorder.h"
 #import "ios/chrome/browser/infobars/ui_bundled/modals/infobar_modal_constants.h"
 #import "ios/chrome/browser/infobars/ui_bundled/modals/infobar_save_card_modal_constants.h"
@@ -21,7 +21,6 @@
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_text_edit_item.h"
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_text_edit_item_delegate.h"
 #import "ios/chrome/browser/shared/ui/table_view/cells/table_view_text_link_item.h"
-#import "ios/chrome/browser/shared/ui/table_view/legacy_chrome_table_view_styler.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/common/ui/table_view/table_view_cells_constants.h"
@@ -76,8 +75,7 @@ typedef NS_ENUM(NSInteger, ItemType) {
 // Card Security code to be displayed.
 @property(nonatomic, strong) NSString* cardCvc;
 // Card related Legal Messages to be displayed.
-@property(nonatomic, copy)
-    NSMutableArray<SaveCardMessageWithLinks*>* legalMessages;
+@property(nonatomic, copy) NSArray<AutofillLegalMessageLine*>* legalMessages;
 // YES if the Card being displayed has been accepted to be saved.
 @property(nonatomic, assign) BOOL currentCardSaveAccepted;
 // Set to YES if the Modal should support editing.
@@ -211,24 +209,21 @@ typedef NS_ENUM(NSInteger, ItemType) {
   [model addItem:self.expirationYearItem
       toSectionWithIdentifier:SectionIdentifierContent];
 
-  if (base::FeatureList::IsEnabled(
-          autofill::features::kAutofillEnableCvcStorageAndFilling)) {
-    self.cardCvcItem =
-        [self textEditItemWithType:ItemTypeCardCvc
-                fieldNameLabelText:l10n_util::GetNSString(IDS_IOS_AUTOFILL_CVC)
-                    textFieldValue:self.cardCvc
-                  textFieldEnabled:self.supportsEditing];
-    self.cardCvcItem.keyboardType = UIKeyboardTypeNumberPad;
-    self.cardCvcItem.customTextfieldAccessibilityIdentifier =
-        kSaveCardModalCVCTextFieldIdentifier;
-    [model addItem:self.cardCvcItem
-        toSectionWithIdentifier:SectionIdentifierContent];
-  }
+  self.cardCvcItem =
+      [self textEditItemWithType:ItemTypeCardCvc
+              fieldNameLabelText:l10n_util::GetNSString(IDS_IOS_AUTOFILL_CVC)
+                  textFieldValue:self.cardCvc
+                textFieldEnabled:self.supportsEditing];
+  self.cardCvcItem.keyboardType = UIKeyboardTypeNumberPad;
+  self.cardCvcItem.customTextfieldAccessibilityIdentifier =
+      kSaveCardModalCVCTextFieldIdentifier;
+  [model addItem:self.cardCvcItem
+      toSectionWithIdentifier:SectionIdentifierContent];
 
   // Add a `TableViewTextLinkItem` for each legal message and add logo to the
   // last item.
   for (size_t index = 0; index < self.legalMessages.count; index++) {
-    SaveCardMessageWithLinks* message = self.legalMessages[index];
+    AutofillLegalMessageLine* message = self.legalMessages[index];
     TableViewTextLinkItem* legalMessageItem =
         [[TableViewTextLinkItem alloc] initWithType:ItemTypeCardLegalMessage];
     // Logo needs to be added once, at the end of all legal messages, within the
@@ -272,6 +267,7 @@ typedef NS_ENUM(NSInteger, ItemType) {
   self.supportsEditing = [prefs[kSupportsEditingPrefKey] boolValue];
   self.displayedTargetAccountEmail = prefs[kDisplayedTargetAccountEmailPrefKey];
   self.logoIcon = prefs[kLogoIconPrefKey];
+  self.logoIconDescription = prefs[kLogoIconDescriptionPrefKey];
   [self.tableView reloadData];
 
   [self updateSaveCardButtonState];
@@ -507,12 +503,12 @@ typedef NS_ENUM(NSInteger, ItemType) {
 
 - (UIImage*)logoIconImage {
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-  return MakeSymbolMulticolor(CustomSymbolWithPointSize(
-      base::FeatureList::IsEnabled(
-          autofill::features::kAutofillEnableWalletBranding)
-          ? kGoogleWalletSymbol
-          : kGooglePaySymbol,
-      kGoogleWalletLogoHeight));
+  Symbol symbol = base::FeatureList::IsEnabled(
+                      autofill::features::kAutofillEnableGradientGoogleLogos)
+                      ? SymbolGoogleWalletV2
+                      : SymbolGoogleWallet;
+  return MakeSymbolMulticolor(
+      SymbolWithPointSize(symbol, kGoogleWalletLogoHeight));
 #else
   return self.logoIcon;
 #endif

@@ -4,12 +4,14 @@
 
 package org.chromium.chrome.browser.omnibox.voice;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+
 import android.os.Bundle;
 import android.speech.RecognizerIntent;
 
-import org.junit.Assert;
-
-import org.chromium.chrome.browser.omnibox.voice.VoiceRecognitionHandler.VoiceResult;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.chrome.browser.omnibox.voice.VoiceRecognitionIntentHandler.VoiceResult;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -19,12 +21,14 @@ import java.util.List;
  * A helper class that simplifies creation of {@link VoiceRecognitionHandler}'s test dependencies
  * and provides utility methods for tests.
  */
+@NullMarked
 public class RecognitionTestHelper {
     /**
      * Creates a test bundle.
      *
      * @param texts the queries representing transcription results
      * @param confidences confidence values for corresponding queries
+     * @return Bundle containing voice recognition test results and scores.
      */
     public static Bundle createPlaceholderBundle(String[] texts, float[] confidences) {
         Bundle b = new Bundle();
@@ -36,14 +40,17 @@ public class RecognitionTestHelper {
 
     public static void assertVoiceResultsAreEqual(
             List<VoiceResult> results, String[] texts, float[] confidences) {
-        Assert.assertTrue(
+        assertTrue(
                 "Invalid array sizes",
                 results.size() == texts.length && texts.length == confidences.length);
         for (int i = 0; i < texts.length; ++i) {
             VoiceResult result = results.get(i);
-            Assert.assertEquals("Match text is not equal", texts[i], result.getMatch());
-            Assert.assertEquals(
-                    "Confidence is not equal", confidences[i], result.getConfidence(), 0);
+            assertEquals("Match text is not equal", texts[i], result.getMatch());
+            assertEquals(
+                    "Confidence is not equal",
+                    confidences[i],
+                    result.getConfidence(),
+                    /* delta= */ 0);
         }
     }
 }

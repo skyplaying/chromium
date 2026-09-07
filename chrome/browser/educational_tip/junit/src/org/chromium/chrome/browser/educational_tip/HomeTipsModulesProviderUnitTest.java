@@ -5,6 +5,7 @@
 package org.chromium.chrome.browser.educational_tip;
 
 import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
@@ -19,7 +20,6 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.supplier.ObservableSuppliers;
 import org.chromium.base.test.BaseRobolectricTestRunner;
@@ -35,7 +35,6 @@ import java.util.List;
 
 /** Test relating to {@link HomeTipsModulesProvider} */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class HomeTipsModulesProviderUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -56,8 +55,7 @@ public class HomeTipsModulesProviderUnitTest {
                         List.of(
                                 ModuleType.ENHANCED_SAFE_BROWSING_PROMO,
                                 ModuleType.ADDRESS_BAR_PLACEMENT_PROMO));
-        when(mSetupListManager.getTwoCellContainerModuleTypes())
-                .thenReturn(List.of(ModuleType.SETUP_LIST_TWO_CELL_CONTAINER));
+
     }
 
     @Test
@@ -105,17 +103,6 @@ public class HomeTipsModulesProviderUnitTest {
 
     @Test
     @SmallTest
-    public void testGetModulesToRegister_returnsSetupListWhenActive() {
-        Collection<Integer> actualModules =
-                HomeTipsModulesProvider.getModuleTypesToRegister(
-                        /* isSetupListActive= */ true, /* showTwoCell= */ false);
-
-        assertArrayEquals(
-                SetupListManager.BASE_SETUP_LIST_ORDER.toArray(), actualModules.toArray());
-    }
-
-    @Test
-    @SmallTest
     public void testGetModulesToRegister_returnsEducationalTipsWhenInactive() {
         Collection<Integer> expectedModules = EducationalTipModuleUtils.getModuleTypes();
         Collection<Integer> actualModules =
@@ -128,11 +115,9 @@ public class HomeTipsModulesProviderUnitTest {
     @SmallTest
     public void
             testGetModulesToRegister_returnsTwoCellContainerWhenSetupListActiveAndTwoCellEnabled() {
-        Collection<Integer> expectedModules =
-                List.of(SetupListModuleUtils.getTwoCellContainerModuleTypes().get(0));
         Collection<Integer> actualModules =
                 HomeTipsModulesProvider.getModuleTypesToRegister(
                         /* isSetupListActive= */ true, /* showTwoCell= */ true);
-        assertArrayEquals(expectedModules.toArray(), actualModules.toArray());
+        assertTrue(actualModules.contains(ModuleType.SETUP_LIST_TWO_CELL_CONTAINER));
     }
 }

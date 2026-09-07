@@ -85,8 +85,8 @@ class MockAudioBusPool : public AudioBusPool {
 }  // namespace
 
 // <channel layout, sample rate, frames per buffer, number of buffer writes
-typedef std::tuple<ChannelLayoutConfig, int, int, int>
-    AudioDebugFileWriterTestData;
+using AudioDebugFileWriterTestData =
+    std::tuple<ChannelLayoutConfig, int, int, int>;
 
 class AudioDebugFileWriterTest
     : public testing::TestWithParam<AudioDebugFileWriterTestData> {
@@ -226,15 +226,16 @@ class AudioDebugFileWriterTest
     EXPECT_CALL(*mock_audio_bus_pool_, OnInsertAudioBus(_))
         .Times(expect_buses_returned_to_pool ? writes_ : 0);
 
+    auto remaining_data = source_interleaved_.as_span();
+    const size_t samples_per_buffer =
+        params_.frames_per_buffer() * params_.channels();
+
     for (int i = 0; i < writes_; ++i) {
       std::unique_ptr<AudioBus> bus =
           AudioBus::Create(params_.channels(), params_.frames_per_buffer());
 
       bus->FromInterleaved<media::SignedInt16SampleTypeTraits>(
-          source_interleaved_
-              .subspan(i * params_.channels() * params_.frames_per_buffer())
-              .data(),
-          params_.frames_per_buffer());
+          remaining_data.take_first(samples_per_buffer));
 
       debug_writer_->Write(*bus);
     }

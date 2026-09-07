@@ -2,11 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/containers/to_vector.h"
 #include "components/cbor/reader.h"
 #include "device/fido/ctap_get_assertion_request.h"
 #include "device/fido/ctap_make_credential_request.h"
 #include "device/fido/ctap_request_common.h"
-#include "device/fido/fido_parsing_utils.h"
 #include "device/fido/fido_test_data.h"
 #include "device/fido/mock_fido_device.h"
 #include "device/fido/public/fido_constants.h"
@@ -26,8 +26,7 @@ TEST(CTAPRequestTest, TestConstructMakeCredentialRequestParam) {
   PublicKeyCredentialRpEntity rp("acme.com");
   rp.name = "Acme";
 
-  PublicKeyCredentialUserEntity user(
-      fido_parsing_utils::Materialize(test_data::kUserId));
+  PublicKeyCredentialUserEntity user(base::ToVector(test_data::kUserId));
   user.name = "johnpsmith@example.com";
   user.display_name = "John P. Smith";
 
@@ -202,8 +201,7 @@ TEST(CTAPRequestTest, ParseHMACSecret) {
 
     PublicKeyCredentialRpEntity rp("acme.com");
     rp.name = "Acme";
-    PublicKeyCredentialUserEntity user(
-        fido_parsing_utils::Materialize(test_data::kUserId));
+    PublicKeyCredentialUserEntity user(base::ToVector(test_data::kUserId));
     user.name = "johnpsmith@example.com";
     user.display_name = "John P. Smith";
     CtapMakeCredentialRequest make_credential_request(
@@ -244,6 +242,39 @@ TEST(CTAPRequestTest, ParseHMACSecret) {
       EXPECT_EQ(PINUVAuthProtocol::kV2, new_secret.pin_protocol);
     }
   }
+}
+
+TEST(CTAPRequestTest, TestGetAssertionCrossDeviceFallbackUrl) {
+  CtapGetAssertionRequest get_assertion_req("acme.com",
+                                            test_data::kClientDataJson);
+  get_assertion_req.cross_device_fallback_url = "https://acme.com/fallback";
+
+  auto request_pair = AsCTAPRequestValuePair(get_assertion_req);
+  EXPECT_EQ(request_pair.first, CtapRequestCommand::kAuthenticatorGetAssertion);
+  ASSERT_TRUE(request_pair.second.has_value());
+
+  const cbor::Value& request_value = *request_pair.second;
+  ASSERT_TRUE(request_value.is_map());
+  const auto& request_map = request_value.GetMap();
+
+  // Key 4 is extensions.
+  auto extensions_it = request_map.find(cbor::Value(4));
+  ASSERT_NE(extensions_it, request_map.end());
+  ASSERT_TRUE(extensions_it->second.is_map());
+  const auto& extensions_map = extensions_it->second.GetMap();
+
+  // Key "crossDeviceFallbackUrl" should be present.
+  auto fallback_url_it =
+      extensions_map.find(cbor::Value("crossDeviceFallbackUrl"));
+  ASSERT_NE(fallback_url_it, extensions_map.end());
+  ASSERT_TRUE(fallback_url_it->second.is_string());
+  EXPECT_EQ(fallback_url_it->second.GetString(), "https://acme.com/fallback");
+
+  // Test parsing back.
+  auto parsed_request = CtapGetAssertionRequest::Parse(request_map);
+  ASSERT_TRUE(parsed_request.has_value());
+  EXPECT_EQ(parsed_request->cross_device_fallback_url,
+            "https://acme.com/fallback");
 }
 
 }  // namespace device

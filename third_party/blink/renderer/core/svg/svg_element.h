@@ -154,8 +154,6 @@ class CORE_EXPORT SVGElement : public Element {
   void SynchronizeSVGAttribute(const QualifiedName&) const;
   virtual void SynchronizeAllSVGAttributes() const;
 
-  const ComputedStyle* CustomStyleForLayoutObject(
-      const StyleRecalcContext&) final;
   bool LayoutObjectIsNeeded(const DisplayStyle&) const override;
 
 #if DCHECK_IS_ON()
@@ -168,7 +166,7 @@ class CORE_EXPORT SVGElement : public Element {
   virtual void BuildPendingResource() {}
   virtual bool HaveLoadedRequiredResources();
 
-  SVGAnimatedString* className() { return class_name_.Get(); }
+  SVGAnimatedString* className() { return &EnsureClassName(); }
 
   bool InUseShadowTree() const;
 
@@ -246,6 +244,7 @@ class CORE_EXPORT SVGElement : public Element {
   SVGElementSet* SetOfIncomingReferences() const;
 
   SVGElementRareData* EnsureSVGRareData();
+  bool MayHaveInstances() const { return HasSVGRareData(); }
   inline bool HasSVGRareData() const { return svg_rare_data_ != nullptr; }
   inline SVGElementRareData* SvgRareData() const {
     DCHECK(svg_rare_data_);
@@ -285,8 +284,10 @@ class CORE_EXPORT SVGElement : public Element {
   void SynchronizeAttributeInShadowInstances(const QualifiedName& name,
                                              const AtomicString& value);
 
+  SVGAnimatedString& EnsureClassName() const;
+
   Member<SVGElementRareData> svg_rare_data_;
-  Member<SVGAnimatedString> class_name_;
+  mutable Member<SVGAnimatedString> class_name_;
 };
 
 template <typename InvalidationFunction>

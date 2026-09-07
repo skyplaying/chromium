@@ -9,6 +9,8 @@
 #include <utility>
 
 #include "ash/constants/ash_features.h"
+#include "ash/constants/ash_pref_names.h"
+#include "ash/constants/webui_url_constants.h"
 #include "ash/public/cpp/audio_config_service.h"
 #include "ash/public/cpp/bluetooth_config_service.h"
 #include "ash/public/cpp/connectivity_services.h"
@@ -53,8 +55,8 @@
 #include "chrome/browser/ui/webui/ash/settings/services/settings_manager/os_settings_manager.h"
 #include "chrome/browser/ui/webui/ash/settings/services/settings_manager/os_settings_manager_factory.h"
 #include "chrome/browser/ui/webui/managed_ui_handler.h"
-#include "chrome/browser/ui/webui/sanitized_image_source.h"
-#include "chrome/common/webui_url_constants.h"
+#include "chrome/browser/ui/webui/sanitized_image/sanitized_image_source.h"
+#include "chrome/browser/ui/webui/theme_source.h"
 #include "chrome/grit/os_settings_resources.h"
 #include "chrome/grit/os_settings_resources_map.h"
 #include "chromeos/ash/services/auth_factor_config/in_process_instances.h"
@@ -66,6 +68,7 @@
 #include "chromeos/components/in_session_auth/mojom/in_session_auth.mojom.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
+#include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -158,7 +161,7 @@ namespace ash::settings {
 // static
 void OSSettingsUI::RegisterProfilePrefs(
     user_prefs::PrefRegistrySyncable* registry) {
-  registry->RegisterBooleanPref(prefs::kSyncOsWallpaper, false);
+  registry->RegisterBooleanPref(ash::prefs::kSyncOsWallpaper, false);
 }
 
 OSSettingsUI::OSSettingsUI(content::WebUI* web_ui)
@@ -170,7 +173,8 @@ OSSettingsUI::OSSettingsUI(content::WebUI* web_ui)
   Profile* profile = Profile::FromWebUI(web_ui);
   content::WebUIDataSource* html_source =
       content::WebUIDataSource::CreateAndAdd(profile,
-                                             chrome::kChromeUIOSSettingsHost);
+                                             ash::kChromeUIOSSettingsHost);
+  content::URLDataSource::Add(profile, std::make_unique<ThemeSource>(profile));
   html_source->SetRequestFilter(
       base::BindRepeating([](const std::string& path) {
         return ExtractJapaneseDictionaryExportIdParam(path).has_value();
@@ -392,9 +396,7 @@ void OSSettingsUI::BindInterface(
   auto* provider =
       OsSettingsManagerFactory::GetForProfile(Profile::FromWebUI(web_ui()))
           ->input_device_settings_provider();
-  if (features::IsPeripheralCustomizationEnabled()) {
-    provider->Initialize(web_ui());
-  }
+  provider->Initialize(web_ui());
   provider->BindInterface(std::move(receiver));
 }
 
@@ -415,7 +417,6 @@ void OSSettingsUI::BindInterface(
 void OSSettingsUI::BindInterface(
     mojo::PendingReceiver<::ash::common::mojom::ShortcutInputProvider>
         receiver) {
-  CHECK(features::IsPeripheralCustomizationEnabled());
   auto* shortcut_input_provider =
       OsSettingsManagerFactory::GetForProfile(Profile::FromWebUI(web_ui()))
           ->shortcut_input_provider();

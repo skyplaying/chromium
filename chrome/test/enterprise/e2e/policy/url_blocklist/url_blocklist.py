@@ -16,7 +16,7 @@ _ERR_BLOCKED_BY_ADMINISTRATOR = 'is blocked'
 class UrlBlocklistTest(ChromeEnterpriseTestCase):
   """Test the URLBlocklist policy.
 
-  See https://cloud.google.com/docs/chrome-enterprise/policies/?policy=URLBlocklist"""
+  See https://chromeenterprise.google/policies/?policy=URLBlocklist"""
 
   @before_all
   def setup(self):
@@ -30,8 +30,9 @@ class UrlBlocklistTest(ChromeEnterpriseTestCase):
 
     dir = os.path.dirname(os.path.abspath(__file__))
     logging.info('Opening page: %s' % url)
-    output = self.RunWebDriverTest(self.win_config['client'],
-                                   os.path.join(dir, '../open_page.py'), args)
+    output = self.RunWebDriverTest(
+      self.win_config['client'], os.path.join(dir, '../open_page.py'), args
+    )
     return output
 
   @test
@@ -48,8 +49,9 @@ class UrlBlocklistTest(ChromeEnterpriseTestCase):
 
   @test
   def test_BlocklistYouTubeCantVisit(self, incognito=False):
-    self.SetPolicy(self.win_config['dc'], r'URLBlocklist\1',
-                   'https://youtube.com', 'String')
+    self.SetPolicy(
+      self.win_config['dc'], r'URLBlocklist\1', 'https://youtube.com', 'String'
+    )
     self.RunCommand(self.win_config['client'], 'gpupdate /force')
 
     # Verify that we can't visit YouTube, but can still visit other sites.

@@ -27,6 +27,7 @@
 #include "extensions/browser/extension_host.h"
 #include "extensions/browser/extension_host_test_helper.h"
 #include "extensions/browser/extension_system.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/mojom/view_type.mojom.h"
 #include "extensions/test/extension_test_message_listener.h"
 #include "net/base/network_change_notifier.h"
@@ -754,9 +755,6 @@ IN_PROC_BROWSER_TEST_P(TtsApiTest, LanguageStatusRequestEmitsEvent) {
   ASSERT_TRUE(validate_requestor_param_listener.WaitUntilSatisfied());
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-// TODO(crbug.com/40200835): Port to desktop Android when PRE_ steps are
-// supported.
 IN_PROC_BROWSER_TEST_P(TtsApiTest, PRE_VoicesAreCached) {
   EXPECT_FALSE(HasVoiceWithName("Dynamic Voice 1"));
   EXPECT_FALSE(HasVoiceWithName("Dynamic Voice 2"));
@@ -778,7 +776,6 @@ IN_PROC_BROWSER_TEST_P(TtsApiTest, VoicesAreCached) {
     waiter.Wait();
   }
 }
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 #if BUILDFLAG(IS_CHROMEOS)
 IN_PROC_BROWSER_TEST_P(TtsApiTest, OnSpeakWithAudioStream) {

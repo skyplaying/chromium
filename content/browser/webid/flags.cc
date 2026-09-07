@@ -36,6 +36,10 @@ bool IsWithoutWellKnownEnforcementEnabled() {
       features::kFedCmWithoutWellKnownEnforcement);
 }
 
+bool IsWebIdentitySubdomainEnabled() {
+  return base::FeatureList::IsEnabled(features::kFedCmWebIdentitySubdomain);
+}
+
 bool IsDigitalCredentialsEnabled() {
   return base::FeatureList::IsEnabled(features::kWebIdentityDigitalCredentials);
 }
@@ -54,10 +58,6 @@ bool IsLightweightModeEnabled() {
   return base::FeatureList::IsEnabled(features::kFedCmLightweightMode);
 }
 
-bool IsFedCmEmbedderCheckEnabled() {
-  return base::FeatureList::IsEnabled(features::kFedCmEmbedderCheck);
-}
-
 bool IsAutofillEnabled() {
   // FedCmAutofill is a new flag extracted from FedCmDelegation. To avoid
   // breaking existing developer testing, we consider the new flag being enabled
@@ -70,10 +70,6 @@ bool IsNonceInParamsEnabled() {
   return base::FeatureList::IsEnabled(features::kFedCmNonceInParams);
 }
 
-bool IsNonStringTokenEnabled() {
-  return base::FeatureList::IsEnabled(features::kFedCmNonStringToken);
-}
-
 bool IsWellKnownEndpointValidationEnabled() {
   return base::FeatureList::IsEnabled(
       features::kFedCmWellKnownEndpointValidation);
@@ -83,16 +79,29 @@ bool IsPreservePortsForTestingEnabled() {
   return base::FeatureList::IsEnabled(features::kFedCmPreservePortsForTesting);
 }
 
-bool IsErrorAttributeEnabled() {
-  return base::FeatureList::IsEnabled(features::kFedCmErrorAttribute);
-}
-
 bool IsNavigationInterceptionEnabled() {
   return base::FeatureList::IsEnabled(features::kFedCmNavigationInterception);
 }
 
+bool IsFedCmIdentityHandlerEnabled() {
+  return base::FeatureList::IsEnabled(features::kFedCmIdentityHandler);
+}
+
 bool IsEmbedderInitiatedLoginEnabled() {
   return base::FeatureList::IsEnabled(features::kFedCmEmbedderInitiatedLogin);
+}
+
+bool IsFedCmAmbientUIEnabled() {
+  return base::FeatureList::IsEnabled(features::kFedCmAmbientUI);
+}
+
+bool IsFedCmNativeIdPsEnabled() {
+  return base::FeatureList::IsEnabled(features::kFedCmNativeIdPs);
+}
+
+bool IsActiveModeMultipleIdentityProvidersEnabled() {
+  return base::FeatureList::IsEnabled(
+      features::kFedCmActiveModeMultipleIdentityProviders);
 }
 
 }  // namespace content::webid

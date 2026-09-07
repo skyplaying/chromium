@@ -16,8 +16,10 @@
 #include "chrome/browser/ui/exclusive_access/exclusive_access_context.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/sessions/core/session_id.h"
 #include "content/public/test/browser_test.h"
 #include "ui/display/types/display_constants.h"
+#include "ui/gfx/geometry/rect.h"
 
 #if BUILDFLAG(IS_MAC)
 #include "chrome/browser/devtools/devtools_window_testing.h"
@@ -38,7 +40,7 @@ class DevToolsManagerDelegateTest : public InProcessBrowserTest {
     auto window_bounds =
         protocol::Browser::Bounds::Create().SetWindowState(state).Build();
     BrowserHandler handler(nullptr, "");
-    handler.SetWindowBounds(browser()->session_id().id(),
+    handler.SetWindowBounds(browser()->GetSessionID().id(),
                             std::move(window_bounds));
   }
 
@@ -49,39 +51,39 @@ class DevToolsManagerDelegateTest : public InProcessBrowserTest {
                              .SetHeight(400)
                              .Build();
     BrowserHandler handler(nullptr, "");
-    handler.SetWindowBounds(browser()->session_id().id(),
+    handler.SetWindowBounds(browser()->GetSessionID().id(),
                             std::move(window_bounds));
   }
 
   void CheckIsMaximized(bool maximized) {
     ui_test_utils::CheckWaiter(
-        base::BindRepeating(&BrowserWindow::IsMaximized,
-                            base::Unretained(browser()->window())),
+        base::BindRepeating(&ui::BaseWindow::IsMaximized,
+                            base::Unretained(browser()->GetWindow())),
         maximized, base::Seconds(1))
         .Wait();
-    EXPECT_EQ(maximized, browser()->window()->IsMaximized());
+    EXPECT_EQ(maximized, browser()->GetWindow()->IsMaximized());
   }
 
   void CheckIsMinimized(bool minimized) {
     ui_test_utils::CheckWaiter(
-        base::BindRepeating(&BrowserWindow::IsMinimized,
-                            base::Unretained(browser()->window())),
+        base::BindRepeating(&ui::BaseWindow::IsMinimized,
+                            base::Unretained(browser()->GetWindow())),
         minimized, base::Seconds(1))
         .Wait();
-    EXPECT_EQ(minimized, browser()->window()->IsMinimized());
+    EXPECT_EQ(minimized, browser()->GetWindow()->IsMinimized());
   }
 
   void CheckIsFullscreen(bool fullscreen) {
     ui_test_utils::CheckWaiter(
-        base::BindRepeating(&BrowserWindow::IsFullscreen,
-                            base::Unretained(browser()->window())),
+        base::BindRepeating(&ui::BaseWindow::IsFullscreen,
+                            base::Unretained(browser()->GetWindow())),
         fullscreen, base::Seconds(1))
         .Wait();
-    EXPECT_EQ(fullscreen, browser()->window()->IsFullscreen());
+    EXPECT_EQ(fullscreen, browser()->GetWindow()->IsFullscreen());
   }
 
   bool IsWindowBoundsEqual(gfx::Rect expected) {
-    return browser()->window()->GetBounds() == expected;
+    return browser()->GetWindow()->GetBounds() == expected;
   }
 
   void CheckWindowBounds(gfx::Rect expected) {
@@ -90,12 +92,12 @@ class DevToolsManagerDelegateTest : public InProcessBrowserTest {
                             base::Unretained(this), expected),
         true, base::Seconds(1))
         .Wait();
-    EXPECT_EQ(expected, browser()->window()->GetBounds());
+    EXPECT_EQ(expected, browser()->GetWindow()->GetBounds());
   }
 };
 
 IN_PROC_BROWSER_TEST_F(DevToolsManagerDelegateTest, NormalWindowChangeBounds) {
-  browser()->window()->SetBounds(gfx::Rect(100, 100, 600, 600));
+  browser()->GetWindow()->SetBounds(gfx::Rect(100, 100, 600, 600));
   CheckWindowBounds(gfx::Rect(100, 100, 600, 600));
   UpdateBounds();
   CheckWindowBounds(gfx::Rect(200, 100, 600, 400));
@@ -137,7 +139,7 @@ IN_PROC_BROWSER_TEST_F(DevToolsManagerDelegateTest, NormalToFullscreenWindow) {
 #endif
 IN_PROC_BROWSER_TEST_F(DevToolsManagerDelegateTest,
                        MAYBE_MaximizedToMinimizedWindow) {
-  browser()->window()->Maximize();
+  browser()->GetWindow()->Maximize();
   CheckIsMaximized(true);
 
   CheckIsMinimized(false);
@@ -153,7 +155,7 @@ IN_PROC_BROWSER_TEST_F(DevToolsManagerDelegateTest,
 #endif
 IN_PROC_BROWSER_TEST_F(DevToolsManagerDelegateTest,
                        MAYBE_MaximizedToFullscreenWindow) {
-  browser()->window()->Maximize();
+  browser()->GetWindow()->Maximize();
   CheckIsMaximized(true);
 
   CheckIsFullscreen(false);
@@ -162,7 +164,7 @@ IN_PROC_BROWSER_TEST_F(DevToolsManagerDelegateTest,
 }
 
 IN_PROC_BROWSER_TEST_F(DevToolsManagerDelegateTest, ShowMinimizedWindow) {
-  browser()->window()->Minimize();
+  browser()->GetWindow()->Minimize();
   CheckIsMinimized(true);
   SendCommand("normal");
   CheckIsMinimized(false);
@@ -176,7 +178,7 @@ IN_PROC_BROWSER_TEST_F(DevToolsManagerDelegateTest, ShowMinimizedWindow) {
 #endif
 IN_PROC_BROWSER_TEST_F(DevToolsManagerDelegateTest,
                        MAYBE_RestoreMaximizedWindow) {
-  browser()->window()->Maximize();
+  browser()->GetWindow()->Maximize();
   CheckIsMaximized(true);
   SendCommand("normal");
   CheckIsMaximized(false);
@@ -186,8 +188,10 @@ IN_PROC_BROWSER_TEST_F(DevToolsManagerDelegateTest, ExitFullscreenWindow) {
 #if BUILDFLAG(IS_MAC)
   ui::test::ScopedFakeNSWindowFullscreen faker;
 #endif
-  browser()->window()->GetExclusiveAccessContext()->EnterFullscreen(
-      url::Origin(), EXCLUSIVE_ACCESS_BUBBLE_TYPE_NONE, FullscreenTabParams());
+  BrowserWindow::FromBrowser(browser())
+      ->GetExclusiveAccessContext()
+      ->EnterFullscreen(url::Origin(), EXCLUSIVE_ACCESS_BUBBLE_TYPE_NONE,
+                        FullscreenTabParams());
   CheckIsFullscreen(true);
   SendCommand("normal");
   CheckIsFullscreen(false);
@@ -208,13 +212,13 @@ class DevToolsPWAFocusTest : public InProcessBrowserTest {
             embedded_test_server()->GetURL("/simple.html"));
     web_app_info->title = u"Test PWA";
     web_app_info->scope = embedded_test_server()->GetURL("/");
-    app_id_ = web_app::test::InstallWebApp(browser()->profile(),
+    app_id_ = web_app::test::InstallWebApp(browser()->GetProfile(),
                                            std::move(web_app_info));
   }
 
   void TearDownOnMainThread() override {
     if (!app_id_.empty()) {
-      web_app::test::UninstallWebApp(browser()->profile(), app_id_);
+      web_app::test::UninstallWebApp(browser()->GetProfile(), app_id_);
     }
     InProcessBrowserTest::TearDownOnMainThread();
   }
@@ -227,7 +231,7 @@ class DevToolsPWAFocusTest : public InProcessBrowserTest {
 IN_PROC_BROWSER_TEST_F(DevToolsPWAFocusTest,
                        ClosingUndockedDevToolsFocusesPWAWindow) {
   BrowserWindowInterface* const pwa_browser =
-      web_app::LaunchWebAppBrowserAndWait(browser()->profile(), app_id_);
+      web_app::LaunchWebAppBrowserAndWait(browser()->GetProfile(), app_id_);
   ASSERT_TRUE(pwa_browser);
   ASSERT_TRUE(pwa_browser->GetWindow());
 
@@ -254,6 +258,6 @@ IN_PROC_BROWSER_TEST_F(DevToolsPWAFocusTest,
   // not the main browser window.
   ui_test_utils::WaitUntilBrowserBecomeActive(pwa_browser);
   EXPECT_TRUE(pwa_browser->GetWindow()->IsActive());
-  EXPECT_FALSE(browser()->window()->IsActive());
+  EXPECT_FALSE(browser()->GetWindow()->IsActive());
 }
 #endif  // BUILDFLAG(IS_MAC)

@@ -23,7 +23,7 @@ use toktrie::{
 };
 
 use crate::{
-    api::{ParserLimits, StopReason},
+    api::{ParserLimits, SkipRepetition, StopReason},
     earley::{lexer::Lexer, lexerspec::LexemeClass},
     id32_type,
 };
@@ -99,86 +99,8 @@ pub struct ParserStats {
     pub num_lexemes: usize,
 }
 
-#[derive(Debug, Clone)]
-pub struct XorShift {
-    seed: u32,
-}
-
-impl XorShift {
-    pub fn new(seed: u32) -> Self {
-        XorShift { seed }
-    }
-
-    pub fn new_str(s: &str) -> Self {
-        XorShift {
-            seed: XorShift::fnv1a_32(s.as_bytes()),
-        }
-    }
-
-    #[allow(clippy::should_implement_trait)]
-    pub fn next(&mut self) -> u32 {
-        let mut x = self.seed;
-        x ^= x << 13;
-        x ^= x >> 17;
-        x ^= x << 5;
-        self.seed = x;
-        x
-    }
-
-    pub fn from_range(&mut self, r: Range<usize>) -> usize {
-        assert!(r.start < r.end);
-        assert!(r.end < u32::MAX as usize);
-        r.start + (self.next() as usize) % (r.end - r.start)
-    }
-
-    pub fn one_in(&mut self, n: u32) -> bool {
-        self.next().is_multiple_of(n)
-    }
-
-    pub fn next_alt(&mut self) -> u32 {
-        let mut x = self.seed;
-        x ^= x << 15;
-        x ^= x >> 4;
-        x ^= x << 23;
-        self.seed = x;
-        x
-    }
-
-    pub fn fnv1a_32(s: &[u8]) -> u32 {
-        let mut hash: u32 = 0x811c9dc5;
-        for byte in s {
-            hash ^= *byte as u32;
-            hash = hash.wrapping_mul(0x01000193);
-        }
-        hash
-    }
-
-    pub fn sample_from_vob(&mut self, vob: &SimpleVob) -> u32 {
-        let nset = vob.num_set();
-        assert!(nset > 0);
-        if nset > vob.len() / 10 {
-            loop {
-                let idx = self.from_range(0..vob.len());
-                if vob[idx] {
-                    return idx as u32;
-                }
-            }
-        } else {
-            let choices = vob.to_list();
-            choices[self.from_range(0..choices.len())]
-        }
-    }
-}
-
-impl Default for XorShift {
-    fn default() -> Self {
-        XorShift { seed: 0xdeadf00d }
-    }
-}
-
 #[derive(Debug, Default, Clone)]
 pub struct ParserMetrics {
-    pub rand: XorShift,
     pub message: String,
     pub slicer_leftover_us: usize,
 }
@@ -468,7 +390,19 @@ struct ParserState {
     parser_error: Option<String>,
     backtrack_byte_count: usize,
 
+    // Cache for compute_bias - avoids recomputing identical masks when lexer state hasn't changed
+    // (common in long lexemes, e.g. the interior of JSON strings)
+    bias_cache: Option<BiasCache>,
+
     shared_box: Box<SharedState>,
+}
+
+#[derive(Clone)]
+struct BiasCache {
+    lexer_state: StateID,
+    row_idx: u32,
+    has_pending_lexeme_bytes: bool,
+    mask: SimpleVob,
 }
 
 #[derive(Clone, Default)]
@@ -728,6 +662,7 @@ impl ParserState {
             }],
             trie_grammar_stack: 0,
             parser_error: None,
+            bias_cache: None,
             shared_box: Box::new(SharedState {
                 lexer_opt: Some(lexer),
             }),
@@ -820,6 +755,25 @@ impl ParserState {
 
     fn compute_bias(&mut self, computer: &dyn BiasComputer, start: &[u8]) -> SimpleVob {
         let t0 = Instant::now();
+
+        // Check cache - only valid when start is empty (common case)
+        if start.is_empty() {
+            let curr_state = self.lexer_state();
+            let has_pending = self.has_pending_lexeme_bytes();
+            if let Some(ref cache) = self.bias_cache {
+                if cache.lexer_state == curr_state.lexer_state
+                    && cache.row_idx == curr_state.row_idx
+                    && cache.has_pending_lexeme_bytes == has_pending
+                {
+                    // Cache hit - return cloned mask
+                    let d = t0.elapsed();
+                    self.stats.compute_time_us += d.as_micros() as u64;
+                    self.perf_counters.compute_bias.record(d);
+                    return cache.mask.clone();
+                }
+            }
+        }
+
         let limits = self.limits.clone();
         let dfa = &mut self.lexer_mut().dfa;
         dfa.set_fuel(limits.step_lexer_fuel);
@@ -852,6 +806,17 @@ impl ParserState {
         let eos = computer.trie().eos_token();
         if eos != INVALID_TOKEN && start.is_empty() && self.lexer_allows_eos() {
             set.allow_token(eos);
+        }
+
+        // Update cache when start is empty
+        if start.is_empty() {
+            let curr_state = self.lexer_state();
+            self.bias_cache = Some(BiasCache {
+                lexer_state: curr_state.lexer_state,
+                row_idx: curr_state.row_idx,
+                has_pending_lexeme_bytes: self.has_pending_lexeme_bytes(),
+                mask: set.clone(),
+            });
         }
 
         let d = t0.elapsed();
@@ -1078,11 +1043,10 @@ impl ParserState {
             let mut applied_idx = state.byte_to_token_idx.len();
             let tok_env = state.tok_env.clone();
             let trie = tok_env.tok_trie();
-            let eos = trie.eos_token();
             let mut recog = ParserRecognizer { state };
             for (tidx, &tok) in tokens.iter().enumerate() {
                 let state = &mut recog.state;
-                if tok == eos {
+                if trie.eos_tokens().contains(&tok) {
                     if applied_idx == state.bytes.len() && state.is_accepting_inner() {
                         return tidx + 1;
                     } else {
@@ -1790,7 +1754,7 @@ impl ParserState {
     }
 
     // this just copies current row
-    fn scan_skip_lexeme(&mut self, lexeme: &Lexeme) -> bool {
+    fn scan_skip_lexeme(&mut self, lexeme: &Lexeme, skip_repetition: SkipRepetition) -> bool {
         let src = self.curr_row().item_indices();
         let n = src.len();
         if n == 0 {
@@ -1809,7 +1773,8 @@ impl ParserState {
                 .just_add_idx(self.scratch.items[i], i, "skip_lexeme");
         }
 
-        let (grammar_id, max_token_ptr) = self.maybe_pop_grammar_stack(lexeme.idx);
+        let (mut grammar_id, max_token_ptr) = self.maybe_pop_grammar_stack(lexeme.idx);
+        let hit_max_tokens = max_token_ptr.is_some();
 
         // no process_agenda() in the normal case
 
@@ -1818,9 +1783,22 @@ impl ParserState {
             self.process_max_tokens(ptr, lexeme);
             // process_agenda() will recompute push_allowed_lexemes etc
             lex_start = None;
+            grammar_id =
+                self.scratch.grammar_stack[self.scratch.push_grm_top.as_usize()].grammar_id;
+        } else if skip_repetition == SkipRepetition::Once {
+            let skip_id = self.lexer_spec().skip_id(grammar_id);
+            let mut possible = self
+                .shared_box
+                .lexer()
+                .possible_lexemes(lex_start.unwrap())
+                .clone();
+            possible.remove(skip_id);
+            lex_start = Some(self.shared_box.lexer_mut().start_state(&possible));
         }
 
-        let push_res = self.just_push_row(grammar_id, lex_start);
+        // A max-token pop moves to the parent grammar, whose skip has not been consumed.
+        let allow_skip = hit_max_tokens || skip_repetition == SkipRepetition::Unbounded;
+        let push_res = self.just_push_row(grammar_id, lex_start, allow_skip);
         assert!(push_res);
 
         true
@@ -1839,10 +1817,11 @@ impl ParserState {
         let set = self.shared_box.lexer().lexemes_from_idx(lexeme.idx);
 
         let lex_spec = self.lexer_spec();
-        for lx in set.as_slice() {
-            if lex_spec.lexeme_spec(*lx).is_skip {
-                return self.scan_skip_lexeme(lexeme);
-            }
+        if let Some(skip_repetition) = set.as_slice().iter().find_map(|lx| {
+            let spec = lex_spec.lexeme_spec(*lx);
+            spec.is_skip.then_some(spec.skip_repetition)
+        }) {
+            return self.scan_skip_lexeme(lexeme, skip_repetition);
         }
 
         let row_idx = self.num_rows() - 1;
@@ -2071,7 +2050,12 @@ impl ParserState {
     }
 
     #[inline(always)]
-    fn just_push_row(&mut self, grammar_id: LexemeClass, lex_start: Option<StateID>) -> bool {
+    fn just_push_row(
+        &mut self,
+        grammar_id: LexemeClass,
+        lex_start: Option<StateID>,
+        allow_skip: bool,
+    ) -> bool {
         let row_len = self.scratch.row_len();
 
         self.stats.rows += 1;
@@ -2085,12 +2069,36 @@ impl ParserState {
                 l
             } else {
                 // accept a SKIP lexeme, if the grammar didn't finish
-                if self
-                    .scratch
-                    .push_allowed_grammar_ids
-                    .get(grammar_id.as_usize())
-                {
-                    let skip = self.lexer_spec().skip_id(grammar_id);
+                let mut skip_grammar_id = None;
+                if allow_skip {
+                    if self
+                        .scratch
+                        .push_allowed_grammar_ids
+                        .get(grammar_id.as_usize())
+                    {
+                        skip_grammar_id = Some(grammar_id);
+                    } else {
+                        // A nested grammar may have completed on this lexeme. Find the
+                        // nearest parent grammar that can accept the next lexeme.
+                        let mut ptr = self.scratch.push_grm_top;
+                        while ptr.as_usize() > 0 {
+                            let top = &self.scratch.grammar_stack[ptr.as_usize()];
+                            ptr = top.back_ptr;
+                            let parent_id = self.scratch.grammar_stack[ptr.as_usize()].grammar_id;
+                            if self
+                                .scratch
+                                .push_allowed_grammar_ids
+                                .get(parent_id.as_usize())
+                            {
+                                skip_grammar_id = Some(parent_id);
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if let Some(skip_grammar_id) = skip_grammar_id {
+                    let skip = self.lexer_spec().skip_id(skip_grammar_id);
                     self.scratch.push_allowed_lexemes.add(skip);
                 }
 
@@ -2182,7 +2190,7 @@ impl ParserState {
             self.process_max_tokens(ptr, lexeme);
         }
 
-        self.just_push_row(grammar_id, None)
+        self.just_push_row(grammar_id, None, true)
     }
 
     fn mk_grammar_stack_node(&self, sym_data: &CSymbol, curr_idx: usize) -> GrammarStackNode {
@@ -2950,5 +2958,9 @@ impl Parser {
         self.with_shared(|_state| {
             panic!("synthetic error");
         })
+    }
+
+    pub fn invalidate_bias_cache(&mut self) {
+        self.state.bias_cache = None;
     }
 }

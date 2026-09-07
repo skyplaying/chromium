@@ -10,12 +10,14 @@
 #import "base/debug/dump_without_crashing.h"
 #import "base/feature_list.h"
 #import "base/memory/raw_ptr.h"
+#import "base/metrics/histogram_functions.h"
 #import "base/metrics/histogram_macros.h"
 #import "base/metrics/user_metrics.h"
 #import "base/metrics/user_metrics_action.h"
 #import "base/strings/sys_string_conversions.h"
 #import "base/task/sequenced_task_runner.h"
 #import "build/branding_buildflags.h"
+#import "components/autofill/core/browser/metrics/autofill_settings_metrics.h"
 #import "components/autofill/core/common/autofill_prefs.h"
 #import "components/feature_engagement/public/event_constants.h"
 #import "components/feature_engagement/public/feature_constants.h"
@@ -47,11 +49,19 @@
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_coordinator.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin/signin_utils.h"
 #import "ios/chrome/browser/authentication/ui_bundled/signin_presenter.h"
+#import "ios/chrome/browser/backend_promo/model/backend_promo_service.h"
 #import "ios/chrome/browser/bubble/ui_bundled/bubble_constants.h"
 #import "ios/chrome/browser/bubble/ui_bundled/bubble_view_controller_presenter.h"
+#import "ios/chrome/browser/catalogs/ui/button_catalog_view_controller.h"
+#import "ios/chrome/browser/catalogs/ui/table_cell_catalog_view_controller.h"
+#import "ios/chrome/browser/catalogs/ui/view_catalog_view_controller.h"
+#import "ios/chrome/browser/catalogs/ui/view_controller_catalog_view_controller.h"
 #import "ios/chrome/browser/commerce/model/push_notification/push_notification_feature.h"
 #import "ios/chrome/browser/content_notification/model/content_notification_util.h"
+#import "ios/chrome/browser/default_browser/model/features.h"
 #import "ios/chrome/browser/default_browser/model/utils.h"
+#import "ios/chrome/browser/default_browser/promo/public/features.h"
+#import "ios/chrome/browser/default_browser/promo/ui/default_browser_passive_promo_card_item.h"
 #import "ios/chrome/browser/discover_feed/model/discover_feed_visibility_browser_agent.h"
 #import "ios/chrome/browser/discover_feed/model/discover_feed_visibility_observer.h"
 #import "ios/chrome/browser/discover_feed/model/feed_constants.h"
@@ -73,14 +83,18 @@
 #import "ios/chrome/browser/safari_data_import/public/safari_data_import_ui_handler.h"
 #import "ios/chrome/browser/search_engines/model/search_engine_observer_bridge.h"
 #import "ios/chrome/browser/search_engines/model/template_url_service_factory.h"
+#import "ios/chrome/browser/settings/autofill/autofill_and_passwords/coordinator/autofill_and_passwords_coordinator.h"
+#import "ios/chrome/browser/settings/autofill/autofill_and_passwords/utils/autofill_and_passwords_item_utils.h"
+#import "ios/chrome/browser/settings/autofill/payments/coordinator/autofill_credit_card_coordinator.h"
+#import "ios/chrome/browser/settings/autofill/payments/coordinator/autofill_credit_card_coordinator_delegate.h"
+#import "ios/chrome/browser/settings/google_services/coordinator/google_services_settings_coordinator.h"
+#import "ios/chrome/browser/settings/manage_sync/coordinator/manage_sync_settings_coordinator.h"
 #import "ios/chrome/browser/settings/model/sync/utils/identity_error_util.h"
 #import "ios/chrome/browser/settings/model/sync/utils/sync_util.h"
 #import "ios/chrome/browser/settings/ui_bundled/about_chrome_table_view_controller.h"
 #import "ios/chrome/browser/settings/ui_bundled/address_bar_preference/address_bar_preference_coordinator.h"
-#import "ios/chrome/browser/settings/ui_bundled/autofill/autofill_credit_card_table_view_controller.h"
 #import "ios/chrome/browser/settings/ui_bundled/autofill/autofill_profile_table_view_controller.h"
 #import "ios/chrome/browser/settings/ui_bundled/bandwidth/bandwidth_management_table_view_controller.h"
-#import "ios/chrome/browser/settings/ui_bundled/button_catalog_view_controller.h"
 #import "ios/chrome/browser/settings/ui_bundled/bwg/coordinator/gemini_settings_coordinator.h"
 #import "ios/chrome/browser/settings/ui_bundled/cells/enhanced_safe_browsing_inline_promo_item.h"
 #import "ios/chrome/browser/settings/ui_bundled/cells/settings_check_item.h"
@@ -91,8 +105,6 @@
 #import "ios/chrome/browser/settings/ui_bundled/downloads/downloads_settings_coordinator.h"
 #import "ios/chrome/browser/settings/ui_bundled/downloads/downloads_settings_coordinator_delegate.h"
 #import "ios/chrome/browser/settings/ui_bundled/elements/enterprise_info_popover_view_controller.h"
-#import "ios/chrome/browser/settings/ui_bundled/google_services/google_services_settings_coordinator.h"
-#import "ios/chrome/browser/settings/ui_bundled/google_services/manage_sync_settings_coordinator.h"
 #import "ios/chrome/browser/settings/ui_bundled/language/language_settings_mediator.h"
 #import "ios/chrome/browser/settings/ui_bundled/language/language_settings_table_view_controller.h"
 #import "ios/chrome/browser/settings/ui_bundled/notifications/notifications_coordinator.h"
@@ -105,7 +117,8 @@
 #import "ios/chrome/browser/settings/ui_bundled/safety_check/safety_check_utils.h"
 #import "ios/chrome/browser/settings/ui_bundled/search_engine_table_view_controller.h"
 #import "ios/chrome/browser/settings/ui_bundled/settings_table_view_controller_constants.h"
-#import "ios/chrome/browser/settings/ui_bundled/table_cell_catalog_view_controller.h"
+#import "ios/chrome/browser/settings/ui_bundled/site_permissions/site_permissions_coordinator.h"
+#import "ios/chrome/browser/settings/ui_bundled/site_permissions/site_permissions_coordinator_delegate.h"
 #import "ios/chrome/browser/settings/ui_bundled/tabs/tabs_settings_coordinator.h"
 #import "ios/chrome/browser/settings/ui_bundled/voice_search_table_view_controller.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
@@ -119,6 +132,7 @@
 #import "ios/chrome/browser/shared/model/utils/first_run_util.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/open_new_tab_command.h"
+#import "ios/chrome/browser/shared/public/commands/picture_in_picture_commands.h"
 #import "ios/chrome/browser/shared/public/commands/popup_menu_commands.h"
 #import "ios/chrome/browser/shared/public/commands/scene_commands.h"
 #import "ios/chrome/browser/shared/public/commands/settings_commands.h"
@@ -137,6 +151,7 @@
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/signin/model/authentication_service.h"
 #import "ios/chrome/browser/signin/model/authentication_service_factory.h"
+#import "ios/chrome/browser/signin/model/authentication_service_observer_bridge.h"
 #import "ios/chrome/browser/signin/model/avatar/avatar_provider.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service.h"
 #import "ios/chrome/browser/signin/model/chrome_account_manager_service_factory.h"
@@ -171,18 +186,27 @@ NSString* const kDevViewSourceKey = @"DevViewSource";
 // Returns the branded version of the Google Services symbol.
 UIImage* GetBrandedGoogleServicesSymbol() {
 #if BUILDFLAG(IOS_USE_BRANDED_ASSETS)
-  return CustomSettingsRootMulticolorSymbol(kGoogleIconSymbol);
+  return SettingsRootMulticolorSymbol(SymbolGoogleIcon);
 #else
-  return DefaultSettingsRootSymbol(kGearshape2Symbol);
+  return SettingsRootSymbol(SymbolGearshape2);
 #endif
 }
 
 // Returns the branded version of the Gemini symbol.
 UIImage* GetBrandedGeminiSymbol() {
 #if BUILDFLAG(IOS_USE_BRANDED_ASSETS)
-  return CustomSettingsRootSymbol(kGeminiBrandedLogoSymbol);
+  return SettingsRootSymbol(SymbolGeminiBrandedLogo);
 #else
-  return DefaultSettingsRootSymbol(kGeminiNonBrandedLogoSymbol);
+  return SettingsRootSymbol(SymbolGeminiNonBrandedLogo);
+#endif
+}
+
+// Returns the branded version of the Chrome ball symbol.
+UIImage* GetChromeBallSymbol() {
+#if BUILDFLAG(IOS_USE_BRANDED_ASSETS)
+  return SettingsRootMulticolorSymbol(SymbolMulticolorChromeball);
+#else
+  return SettingsRootMulticolorSymbol(SymbolChromeProduct);
 #endif
 }
 
@@ -198,31 +222,64 @@ struct EnhancedSafeBrowsingActivePromoData
   static constexpr char key[] = "EnhancedSafeBrowsingActivePromoData";
 };
 
+// Struct used to count active Settings Default Browser passive promos across
+// windows (as the FET does not support showing multiple promos for the same FET
+// feature at the same time in a multi-window setup) and track whether the card
+// promo has been shown in the current session.
+struct DefaultBrowserPassivePromoActiveData
+    : public base::SupportsUserData::Data {
+  // The number of active promos across all windows.
+  int active_promos = 0;
+
+  // Whether the default browser promo card should be shown in the current
+  // session and bypass the FET.
+  BOOL should_show_promo_card = NO;
+
+  // Key to use for this type in SupportsUserData
+  static constexpr char key[] = "DefaultBrowserPassivePromoActiveData";
+};
+
+// Values of the UMA IOS.Settings.DefaultBrowserSettingsPassivePromo histogram.
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// LINT.IfChange(IOSDefaultBrowserSettingsPassivePromoAction)
+enum class IOSDefaultBrowserSettingsPassivePromoAction {
+  kClosed = 0,
+  kAction = 1,
+  kNoAction = 2,
+  kMaxValue = kNoAction,
+};
+// LINT.ThenChange(/tools/metrics/histograms/metadata/ios/enums.xml:IOSDefaultBrowserSettingsPassivePromoAction)
+
 }  // namespace
 
 #pragma mark - SettingsTableViewController
 
 @interface SettingsTableViewController () <
     AddressBarPreferenceCoordinatorDelegate,
+    AuthenticationServiceObserving,
+    AutofillAndPasswordsCoordinatorDelegate,
+    AutofillCreditCardCoordinatorDelegate,
     BooleanObserver,
-    GeminiSettingsCoordinatorDelegate,
     ContentSettingsCoordinatorDelegate,
     DiscoverFeedVisibilityObserver,
     DownloadsSettingsCoordinatorDelegate,
     EnhancedSafeBrowsingInlinePromoDelegate,
+    GeminiSettingsCoordinatorDelegate,
     GoogleServicesSettingsCoordinatorDelegate,
-    IdentityManagerObserverBridgeDelegate,
+    IdentityManagerObserving,
     ManageSyncSettingsCoordinatorDelegate,
+    NotificationsCoordinatorDelegate,
     NotificationsSettingsObserverDelegate,
     PasswordCheckObserver,
     PasswordsCoordinatorDelegate,
     PopoverLabelViewControllerDelegate,
     PrefObserverDelegate,
-    NotificationsCoordinatorDelegate,
     PrivacyCoordinatorDelegate,
     SafariDataImportUIHandler,
     SafetyCheckCoordinatorDelegate,
     SearchEngineObserving,
+    SitePermissionsCoordinatorDelegate,
     SyncObserverModelBridge,
     TabsSettingsCoordinatorDelegate> {
   // The browser where the settings are being displayed.
@@ -252,6 +309,9 @@ struct EnhancedSafeBrowsingActivePromoData
   // The item related to the safety check.
   SettingsCheckItem* _safetyCheckItem;
   SigninCoordinator* _signinAndHistorySyncCoordinator;
+  raw_ptr<AuthenticationService> _authService;
+  std::unique_ptr<AuthenticationServiceObserverBridge>
+      _authServiceObserverBridge;
 
   // Gemini settings coordinator.
   GeminiSettingsCoordinator* _geminiSettingsCoordinator;
@@ -274,10 +334,23 @@ struct EnhancedSafeBrowsingActivePromoData
   // Passwords coordinator.
   PasswordsCoordinator* _passwordsCoordinator;
 
+  // Autofill and passwords coordinator.
+  AutofillAndPasswordsCoordinator* _autofillAndPasswordsCoordinator;
+
+  // Autofill credit card coordinator.
+  AutofillCreditCardCoordinator* _autofillCreditCardCoordinator;
+
   // Feature engagement tracker for the signin IPH.
-  raw_ptr<feature_engagement::Tracker, DanglingUntriaged>
+  raw_ptr<feature_engagement::Tracker>
       _featureEngagementTracker;
-  // Presenter for the signin IPH.
+
+  // Whether the default browser passive promo cell was shown.
+  BOOL _defaultBrowserPromoCellShown;
+
+  // Whether the default browser passive promo card was shown.
+  BOOL _defaultBrowserPromoCardShown;
+
+  // Presenter for the signin or Level Up IPH.
   BubbleViewControllerPresenter* _bubblePresenter;
 
   // Discover feed visibility browser agent.
@@ -304,6 +377,7 @@ struct EnhancedSafeBrowsingActivePromoData
   TableViewDetailIconItem* _passwordsDetailItem;
   TableViewDetailIconItem* _autoFillProfileDetailItem;
   TableViewDetailIconItem* _autoFillCreditCardDetailItem;
+  TableViewDetailIconItem* _autofillAndPasswordsDetailItem;
   TableViewDetailIconItem* _notificationsItem;
   TableViewDetailIconItem* _defaultBrowserCellItem;
   TableViewDetailIconItem* _BWGDetailItem;
@@ -322,6 +396,9 @@ struct EnhancedSafeBrowsingActivePromoData
 
   // Downloads settings coordinator.
   DownloadsSettingsCoordinator* _downloadsSettingsCoordinator;
+
+  // Site permissions coordinator.
+  SitePermissionsCoordinator* _sitePermissionsCoordinator;
 }
 
 // The item related to the switch for the show feed settings.
@@ -382,9 +459,8 @@ struct EnhancedSafeBrowsingActivePromoData
                    prefName:prefs::kShowMemoryDebuggingTools];
     [_showMemoryDebugToolsEnabled setObserver:self];
 
-    AuthenticationService* authService =
-        AuthenticationServiceFactory::GetForProfile(_profile);
-    _identity = authService->GetPrimaryIdentity(signin::ConsentLevel::kSignin);
+    _authService = AuthenticationServiceFactory::GetForProfile(_profile);
+    _identity = _authService->GetPrimaryIdentity();
 
     _featureEngagementTracker =
         feature_engagement::TrackerFactory::GetForProfile(_profile);
@@ -402,7 +478,9 @@ struct EnhancedSafeBrowsingActivePromoData
         [[PrefBackedBoolean alloc] initWithPrefService:prefService
                                               prefName:prefs::kSigninAllowed];
     _allowChromeSigninPreference.observer = self;
-
+    _authServiceObserverBridge =
+        std::make_unique<AuthenticationServiceObserverBridge>(_authService,
+                                                              self);
     _bottomOmniboxEnabled = [[PrefBackedBoolean alloc]
         initWithPrefService:localState
                    prefName:omnibox::kIsOmniboxInBottomPosition];
@@ -468,6 +546,10 @@ struct EnhancedSafeBrowsingActivePromoData
 
 - (void)viewIsAppearing:(BOOL)animated {
   [super viewIsAppearing:animated];
+  if (_settingsAreDismissed) {
+    return;
+  }
+
   // Update the `_safetyCheckItem` icon when returning to this view controller.
   [self updateSafetyCheckItemTrailingIcon];
   if (IsBottomOmniboxAvailable()) {
@@ -487,7 +569,12 @@ struct EnhancedSafeBrowsingActivePromoData
 
 - (void)viewDidAppear:(BOOL)animated {
   [super viewDidAppear:animated];
+  if (_settingsAreDismissed) {
+    return;
+  }
+
   [self maybeShowSigninIPH];
+  [self maybeShowLevelUpWalkthroughIPH];
 }
 
 #pragma mark SettingsRootTableViewController
@@ -495,14 +582,30 @@ struct EnhancedSafeBrowsingActivePromoData
 - (void)loadModel {
   [super loadModel];
 
+  // Evaluates whether the default browser passive promo should be shown.
+  [self evaluateDefaultBrowserPassivePromoVisibility];
+
   // Sign-in section.
   [self updateSigninSection];
+
+  // Default Browser Passive card section.
+  if (_defaultBrowserPromoCardShown) {
+    [self addDefaultPassiveCardSection];
+  }
+
+  // Default Browser Passive Promo section.
+  if (_defaultBrowserPromoCellShown) {
+    [self addDefaultPassiveCellSection];
+  }
 
   // Defaults section.
   TableViewModel<TableViewItem*>* model = self.tableViewModel;
   [model addSectionWithIdentifier:SettingsSectionIdentifierDefaults];
-  [model addItem:[self defaultBrowserCellItem]
-      toSectionWithIdentifier:SettingsSectionIdentifierDefaults];
+
+  if (!_defaultBrowserPromoCellShown) {
+    [model addItem:[self defaultBrowserCellItem]
+        toSectionWithIdentifier:SettingsSectionIdentifierDefaults];
+  }
 
   // Show managed UI if default search engine is managed by policy.
   if ([self isDefaultSearchEngineManagedByPolicy]) {
@@ -520,12 +623,17 @@ struct EnhancedSafeBrowsingActivePromoData
 
   // Basics section
   [model addSectionWithIdentifier:SettingsSectionIdentifierBasics];
-  [model addItem:[self passwordsDetailItem]
-      toSectionWithIdentifier:SettingsSectionIdentifierBasics];
-  [model addItem:[self autoFillCreditCardDetailItem]
-      toSectionWithIdentifier:SettingsSectionIdentifierBasics];
-  [model addItem:[self autoFillProfileDetailItem]
-      toSectionWithIdentifier:SettingsSectionIdentifierBasics];
+  if (IsYourSavedInfoSettingsPageIosEnabled()) {
+    [model addItem:[self autofillAndPasswordsDetailItem]
+        toSectionWithIdentifier:SettingsSectionIdentifierBasics];
+  } else {
+    [model addItem:[self passwordsDetailItem]
+        toSectionWithIdentifier:SettingsSectionIdentifierBasics];
+    [model addItem:[self autoFillCreditCardDetailItem]
+        toSectionWithIdentifier:SettingsSectionIdentifierBasics];
+    [model addItem:[self autoFillProfileDetailItem]
+        toSectionWithIdentifier:SettingsSectionIdentifierBasics];
+  }
 
   // Advanced Section
   [model addSectionWithIdentifier:SettingsSectionIdentifierAdvanced];
@@ -572,6 +680,10 @@ struct EnhancedSafeBrowsingActivePromoData
       toSectionWithIdentifier:SettingsSectionIdentifierInfo];
   [model addItem:[self contentSettingsDetailItem]
       toSectionWithIdentifier:SettingsSectionIdentifierInfo];
+  if (IsDomainLevelSitePermissionsEnabled()) {
+    [model addItem:[self sitePermissionsDetailItem]
+        toSectionWithIdentifier:SettingsSectionIdentifierInfo];
+  }
   if (shouldShowDownloadsSettings) {
     [model addItem:[self downloadsSettingsDetailItem]
         toSectionWithIdentifier:SettingsSectionIdentifierInfo];
@@ -606,6 +718,15 @@ struct EnhancedSafeBrowsingActivePromoData
         toSectionWithIdentifier:SettingsSectionIdentifierDebug];
     [model addItem:[self buttonCatalogDetailItem]
         toSectionWithIdentifier:SettingsSectionIdentifierDebug];
+    [model addItem:[self viewControllerCatalogDetailItem]
+        toSectionWithIdentifier:SettingsSectionIdentifierDebug];
+    [model addItem:[self viewCatalogDetailItem]
+        toSectionWithIdentifier:SettingsSectionIdentifierDebug];
+  }
+
+  if (experimental_flags::ShouldShowBackendPromoDebugTools()) {
+    [model addItem:[self backendPromoDebugToolsItem]
+        toSectionWithIdentifier:SettingsSectionIdentifierDebug];
   }
 }
 
@@ -618,26 +739,103 @@ struct EnhancedSafeBrowsingActivePromoData
     [model removeSectionWithIdentifier:SettingsSectionIdentifierAccount];
   }
 
+  NSUInteger insertIndex = 0;
+  if ([model hasSectionForSectionIdentifier:
+                 SettingsSectionIdentifierDefaultPassiveCard]) {
+    insertIndex = 1;
+  }
+
   [model insertSectionWithIdentifier:SettingsSectionIdentifierAccount
-                             atIndex:0];
+                             atIndex:insertIndex];
   [self addAccountToSigninSection];
 
   // Temporarily place this in the first index position in case it is populated.
   // If this is not the case SettingsSectionIdentifierAccount will remain at
-  // index 0.
-  [model insertSectionWithIdentifier:SettingsSectionIdentifierSignIn atIndex:0];
+  // the insertIndex.
+  [model insertSectionWithIdentifier:SettingsSectionIdentifierSignIn
+                             atIndex:insertIndex];
   [self addPromoToSigninSection];
   [self addPromoToEnhancedSafeBrowsingSection];
+}
+
+// Adds the Default Browser passive promo card section to the table view.
+- (void)addDefaultPassiveCardSection {
+  TableViewModel<TableViewItem*>* model = self.tableViewModel;
+
+  // Insert the section at index 0 so that the promo card is displayed at the
+  // very top of the Settings page for high visibility.
+  [model insertSectionWithIdentifier:SettingsSectionIdentifierDefaultPassiveCard
+                             atIndex:0];
+  [self addDefaultPassiveCardItem];
+}
+
+// Adds the Default Browser passive promo card item to the passive card section.
+- (void)addDefaultPassiveCardItem {
+  DefaultBrowserPassivePromoCardItem* item =
+      [[DefaultBrowserPassivePromoCardItem alloc]
+          initWithType:SettingsItemTypeDefaultBrowserPassiveCard];
+  item.target = self;
+  item.closeAction = @selector(didTapDefaultBrowserPromoCardCloseButton:);
+  item.primaryAction = @selector(didTapDefaultBrowserPromoCardActionButton:);
+
+  [self.tableViewModel addItem:item
+       toSectionWithIdentifier:SettingsSectionIdentifierDefaultPassiveCard];
+}
+
+// Adds the Default Browser passive promo cell section to the table view.
+- (void)addDefaultPassiveCellSection {
+  TableViewModel<TableViewItem*>* model = self.tableViewModel;
+  NSUInteger insertIndex = 0;
+  if ([model hasSectionForSectionIdentifier:
+                 SettingsSectionIdentifierDefaultPassiveCard]) {
+    insertIndex = 1;
+  }
+  // If the account section exists (which contains the "Google services" cell
+  // when signed out, and both the user profile and Google services when signed
+  // in), place the Default Passive section directly below it. This ensures that
+  // the Default Passive section is always positioned below the Google services
+  // or account management sections regardless of the user's sign-in status.
+  if ([model hasSectionForSectionIdentifier:SettingsSectionIdentifierAccount]) {
+    insertIndex =
+        [model sectionForSectionIdentifier:SettingsSectionIdentifierAccount] +
+        1;
+  } else if ([model hasSectionForSectionIdentifier:
+                        SettingsSectionIdentifierSignIn]) {
+    insertIndex =
+        [model sectionForSectionIdentifier:SettingsSectionIdentifierSignIn] + 1;
+  }
+
+  [model insertSectionWithIdentifier:SettingsSectionIdentifierDefaultPassiveCell
+                             atIndex:insertIndex];
+  [self addDefaultPassiveCellItem];
+}
+
+// Adds the Default Browser passive promo cell item to the passive cell section.
+- (void)addDefaultPassiveCellItem {
+  TableViewDetailIconItem* item = [[TableViewDetailIconItem alloc]
+      initWithType:SettingsItemTypeDefaultBrowserPassiveCell];
+  item.accessibilityIdentifier = kSettingsDefaultBrowserPassiveCellId;
+  item.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+  item.text = l10n_util::GetNSString(
+      IDS_IOS_SETTINGS_DEFAULT_BROWSER_PASSIVE_CELL_TITLE);
+  item.detailText = l10n_util::GetNSString(
+      IDS_IOS_SETTINGS_DEFAULT_BROWSER_PASSIVE_CELL_SUBTITLE);
+  item.textLayoutConstraintAxis = UILayoutConstraintAxisVertical;
+  item.detailTextNumberOfLines = 0;
+
+  item.iconImage = GetChromeBallSymbol();
+  item.iconBackgroundColor = nil;
+
+  [self.tableViewModel addItem:item
+       toSectionWithIdentifier:SettingsSectionIdentifierDefaultPassiveCell];
 }
 
 // Adds the identity promo to promote the sign-in or sync state.
 - (void)addPromoToSigninSection {
   TableViewItem* item = nil;
 
-  AuthenticationService* authService =
-      AuthenticationServiceFactory::GetForProfile(_profile);
   const AuthenticationService::ServiceStatus authServiceStatus =
-      authService->GetServiceStatus();
+      _authService->GetServiceStatus();
   // If sign-in is disabled by policy there should not be a sign-in promo.
   if ((authServiceStatus ==
        AuthenticationService::ServiceStatus::SigninDisabledByPolicy)) {
@@ -646,9 +844,10 @@ struct EnhancedSafeBrowsingActivePromoData
                   AuthenticationService::ServiceStatus::SigninForcedByPolicy ||
               authServiceStatus ==
                   AuthenticationService::ServiceStatus::SigninAllowed) &&
-             !authService->HasPrimaryIdentity(signin::ConsentLevel::kSignin)) {
+             !_authService->HasPrimaryIdentity()) {
     item = [self accountSignInItem];
   } else {
+    // Signin is disabled by user or by internal.
     [self.tableViewModel
         removeSectionWithIdentifier:SettingsSectionIdentifierSignIn];
 
@@ -671,9 +870,7 @@ struct EnhancedSafeBrowsingActivePromoData
 // Adds the account profile to the Account section if the user is signed in.
 - (void)addAccountToSigninSection {
   TableViewModel<TableViewItem*>* model = self.tableViewModel;
-  AuthenticationService* authService =
-      AuthenticationServiceFactory::GetForProfile(_profile);
-  if (authService->HasPrimaryIdentity(signin::ConsentLevel::kSignin)) {
+  if (_authService->HasPrimaryIdentity()) {
     // Account profile item.
     [model addItem:[self accountCellItem]
         toSectionWithIdentifier:SettingsSectionIdentifierAccount];
@@ -698,9 +895,14 @@ struct EnhancedSafeBrowsingActivePromoData
     [self.tableViewModel
         removeSectionWithIdentifier:SettingsSectionIdentifierESBPromo];
   }
+  NSUInteger insertIndex = 0;
+  if ([self.tableViewModel hasSectionForSectionIdentifier:
+                               SettingsSectionIdentifierDefaultPassiveCard]) {
+    insertIndex = 1;
+  }
   [self.tableViewModel
       insertSectionWithIdentifier:SettingsSectionIdentifierESBPromo
-                          atIndex:0];
+                          atIndex:insertIndex];
 
   if (![self.tableViewModel
           hasItemForItemType:SettingsItemTypeESBPromo
@@ -724,8 +926,8 @@ struct EnhancedSafeBrowsingActivePromoData
       l10n_util::GetNSString(IDS_IOS_SIGNIN_PROMO_SIGNIN_WITH_UNO);
   signInTextItem.detailText =
       l10n_util::GetNSString(IDS_IOS_IDENTITY_DISC_SIGN_IN_PROMO_LABEL);
-  signInTextItem.image = DefaultSymbolTemplateWithPointSize(
-      kPersonCropCircleSymbol, kAccountProfilePhotoDimension);
+  signInTextItem.image = SymbolTemplateWithPointSize(
+      SymbolPersonCropCircle, kAccountProfilePhotoDimension);
   signInTextItem.imageViewTintColor = [UIColor colorNamed:kBlue600Color];
 
   return signInTextItem;
@@ -766,8 +968,7 @@ struct EnhancedSafeBrowsingActivePromoData
   _defaultBrowserCellItem.text =
       l10n_util::GetNSString(IDS_IOS_SETTINGS_SET_DEFAULT_BROWSER);
 
-  _defaultBrowserCellItem.iconImage =
-      DefaultSettingsRootSymbol(kDefaultBrowserSymbol);
+  _defaultBrowserCellItem.iconImage = SettingsRootSymbol(SymbolDefaultBrowser);
   _defaultBrowserCellItem.iconBackgroundColor =
       [UIColor colorNamed:kPurple500Color];
   _defaultBrowserCellItem.iconTintColor = UIColor.whiteColor;
@@ -797,7 +998,7 @@ struct EnhancedSafeBrowsingActivePromoData
                              text:l10n_util::GetNSString(
                                       IDS_IOS_SEARCH_ENGINE_SETTING_TITLE)
                        detailText:defaultSearchEngineName
-                           symbol:DefaultSettingsRootSymbol(kSearchSymbol)
+                           symbol:SettingsRootSymbol(SymbolSearch)
             symbolBackgroundColor:[UIColor colorNamed:kPurple500Color]
           accessibilityIdentifier:kSettingsSearchEngineCellId];
 
@@ -805,18 +1006,18 @@ struct EnhancedSafeBrowsingActivePromoData
 }
 
 - (TableViewItem*)addressBarPreferenceItem {
-  _addressBarPreferenceItem = [self
-           detailItemWithType:SettingsItemTypeAddressBar
-                         text:l10n_util::GetNSString(
-                                  IDS_IOS_ADDRESS_BAR_SETTING)
-                   detailText:[_bottomOmniboxEnabled value]
-                                  ? l10n_util::GetNSString(
-                                        IDS_IOS_BOTTOM_ADDRESS_BAR_OPTION)
-                                  : l10n_util::GetNSString(
-                                        IDS_IOS_TOP_ADDRESS_BAR_OPTION)
-                       symbol:DefaultSettingsRootSymbol(kGlobeAmericasSymbol)
-        symbolBackgroundColor:[UIColor colorNamed:kPurple500Color]
-      accessibilityIdentifier:kSettingsAddressBarCellId];
+  _addressBarPreferenceItem =
+      [self detailItemWithType:SettingsItemTypeAddressBar
+                             text:l10n_util::GetNSString(
+                                      IDS_IOS_ADDRESS_BAR_SETTING)
+                       detailText:[_bottomOmniboxEnabled value]
+                                      ? l10n_util::GetNSString(
+                                            IDS_IOS_BOTTOM_ADDRESS_BAR_OPTION)
+                                      : l10n_util::GetNSString(
+                                            IDS_IOS_TOP_ADDRESS_BAR_OPTION)
+                           symbol:SettingsRootSymbol(SymbolGlobeAmericas)
+            symbolBackgroundColor:[UIColor colorNamed:kPurple500Color]
+          accessibilityIdentifier:kSettingsAddressBarCellId];
   return _addressBarPreferenceItem;
 }
 
@@ -826,7 +1027,7 @@ struct EnhancedSafeBrowsingActivePromoData
                              text:l10n_util::GetNSString(
                                       IDS_IOS_SEARCH_ENGINE_SETTING_TITLE)
                            status:[self managedSearchEngineDetailText]
-                            image:DefaultSettingsRootSymbol(kSearchSymbol)
+                            image:SettingsRootSymbol(SymbolSearch)
                   imageBackground:[UIColor colorNamed:kPurple500Color]
                 accessibilityHint:
                     l10n_util::GetNSString(
@@ -838,62 +1039,33 @@ struct EnhancedSafeBrowsingActivePromoData
 }
 
 - (TableViewItem*)passwordsDetailItem {
-  BOOL passwordsEnabled = _profile->GetPrefs()->GetBoolean(
-      password_manager::prefs::kCredentialsEnableService);
-
-  NSString* passwordsDetail = passwordsEnabled
-                                  ? l10n_util::GetNSString(IDS_IOS_SETTING_ON)
-                                  : l10n_util::GetNSString(IDS_IOS_SETTING_OFF);
-
-  NSString* passwordsSectionTitle =
-      l10n_util::GetNSString(IDS_IOS_PASSWORD_MANAGER);
-
-  _passwordsDetailItem =
-      [self detailItemWithType:SettingsItemTypePasswords
-                             text:passwordsSectionTitle
-                       detailText:passwordsDetail
-                           symbol:CustomSettingsRootSymbol(kPasswordSymbol)
-            symbolBackgroundColor:[UIColor colorNamed:kYellow500Color]
-          accessibilityIdentifier:kSettingsPasswordsCellId];
-
+  _passwordsDetailItem = PasswordsItem(_profile->GetPrefs()->GetBoolean(
+      password_manager::prefs::kCredentialsEnableService));
   return _passwordsDetailItem;
 }
 
 - (TableViewItem*)autoFillCreditCardDetailItem {
-  BOOL autofillCreditCardEnabled =
-      autofill::prefs::IsAutofillPaymentMethodsEnabled(_profile->GetPrefs());
-  NSString* detailText = autofillCreditCardEnabled
-                             ? l10n_util::GetNSString(IDS_IOS_SETTING_ON)
-                             : l10n_util::GetNSString(IDS_IOS_SETTING_OFF);
-
-  _autoFillCreditCardDetailItem =
-      [self detailItemWithType:SettingsItemTypeAutofillCreditCard
-                             text:l10n_util::GetNSString(
-                                      IDS_AUTOFILL_PAYMENT_METHODS)
-                       detailText:detailText
-                           symbol:DefaultSettingsRootSymbol(kCreditCardSymbol)
-            symbolBackgroundColor:[UIColor colorNamed:kYellow500Color]
-          accessibilityIdentifier:kSettingsPaymentMethodsCellId];
-
+  _autoFillCreditCardDetailItem = AutofillCreditCardItem(
+      autofill::prefs::IsAutofillPaymentMethodsEnabled(_profile->GetPrefs()));
   return _autoFillCreditCardDetailItem;
 }
 
 - (TableViewItem*)autoFillProfileDetailItem {
-  BOOL autofillProfileEnabled =
-      autofill::prefs::IsAutofillProfileEnabled(_profile->GetPrefs());
-  NSString* detailText = autofillProfileEnabled
-                             ? l10n_util::GetNSString(IDS_IOS_SETTING_ON)
-                             : l10n_util::GetNSString(IDS_IOS_SETTING_OFF);
-
-  _autoFillProfileDetailItem =
-      [self detailItemWithType:SettingsItemTypeAutofillProfile
-                             text:l10n_util::GetNSString(
-                                      IDS_AUTOFILL_ADDRESSES_SETTINGS_TITLE)
-                       detailText:detailText
-                           symbol:CustomSettingsRootSymbol(kLocationSymbol)
-            symbolBackgroundColor:[UIColor colorNamed:kYellow500Color]
-          accessibilityIdentifier:kSettingsAddressesAndMoreCellId];
+  _autoFillProfileDetailItem = AutofillProfileItem(
+      autofill::prefs::IsAutofillProfileEnabled(_profile->GetPrefs()));
   return _autoFillProfileDetailItem;
+}
+
+- (TableViewItem*)autofillAndPasswordsDetailItem {
+  _autofillAndPasswordsDetailItem =
+      [self detailItemWithType:SettingsItemTypeAutofillAndPasswords
+                             text:l10n_util::GetNSString(
+                                      IDS_IOS_SETTINGS_AUTOFILL_AND_PASSWORDS)
+                       detailText:nil
+                           symbol:SettingsRootSymbol(SymbolPassword)
+            symbolBackgroundColor:[UIColor colorNamed:kYellow500Color]
+          accessibilityIdentifier:kSettingsAutofillAndPasswordsCellId];
+  return _autofillAndPasswordsDetailItem;
 }
 
 - (TableViewItem*)voiceSearchDetailItem {
@@ -910,7 +1082,7 @@ struct EnhancedSafeBrowsingActivePromoData
                              text:l10n_util::GetNSString(
                                       IDS_IOS_VOICE_SEARCH_SETTING_TITLE)
                        detailText:languageName
-                           symbol:DefaultSettingsRootSymbol(kMicrophoneSymbol)
+                           symbol:SettingsRootSymbol(SymbolMicrophone)
             symbolBackgroundColor:[UIColor colorNamed:kGreen500Color]
           accessibilityIdentifier:kSettingsVoiceSearchCellId];
 
@@ -928,7 +1100,7 @@ struct EnhancedSafeBrowsingActivePromoData
   _safetyCheckItem.infoButtonHidden = YES;
   _safetyCheckItem.trailingImage = nil;
   _safetyCheckItem.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-  _safetyCheckItem.leadingIcon = CustomSettingsRootSymbol(kSafetyCheckSymbol);
+  _safetyCheckItem.leadingIcon = SettingsRootSymbol(SymbolSafetyCheck);
   _safetyCheckItem.leadingIconBackgroundColor =
       [UIColor colorNamed:kBlue500Color];
   _safetyCheckItem.leadingIconTintColor = UIColor.whiteColor;
@@ -946,7 +1118,7 @@ struct EnhancedSafeBrowsingActivePromoData
   return [self detailItemWithType:SettingsItemTypeNotifications
                              text:title
                        detailText:nil
-                           symbol:DefaultSettingsRootSymbol(kBellSymbol)
+                           symbol:SettingsRootSymbol(SymbolBell)
             symbolBackgroundColor:[UIColor colorNamed:kPink500Color]
           accessibilityIdentifier:kSettingsNotificationsId];
 }
@@ -958,7 +1130,7 @@ struct EnhancedSafeBrowsingActivePromoData
   return [self detailItemWithType:SettingsItemTypePrivacy
                              text:title
                        detailText:nil
-                           symbol:CustomSettingsRootSymbol(kPrivacySymbol)
+                           symbol:SettingsRootSymbol(SymbolPrivacy)
             symbolBackgroundColor:[UIColor colorNamed:kBlue500Color]
           accessibilityIdentifier:kSettingsPrivacyCellId];
 }
@@ -970,7 +1142,7 @@ struct EnhancedSafeBrowsingActivePromoData
     _feedSettingsItem =
         [self switchItemWithType:SettingsItemTypeArticlesForYou
                               title:settingTitle
-                             symbol:DefaultSettingsRootSymbol(kDiscoverSymbol)
+                             symbol:SettingsRootSymbol(SymbolDiscover)
               symbolBackgroundColor:[UIColor colorNamed:kOrange500Color]
             accessibilityIdentifier:kSettingsArticleSuggestionsCellId];
     _feedSettingsItem.on = _discoverFeedVisibilityBrowserAgent->IsEnabled();
@@ -986,7 +1158,7 @@ struct EnhancedSafeBrowsingActivePromoData
         [self infoButtonWithType:SettingsItemTypeManagedArticlesForYou
                                text:[self feedItemTitle]
                              status:l10n_util::GetNSString(IDS_IOS_SETTING_OFF)
-                              image:DefaultSettingsRootSymbol(kDiscoverSymbol)
+                              image:SettingsRootSymbol(SymbolDiscover)
                     imageBackground:[UIColor colorNamed:kOrange500Color]
                   accessibilityHint:
                       l10n_util::GetNSString(
@@ -1003,20 +1175,29 @@ struct EnhancedSafeBrowsingActivePromoData
                              text:l10n_util::GetNSString(
                                       IDS_IOS_LANGUAGE_SETTINGS_TITLE)
                        detailText:nil
-                           symbol:CustomSettingsRootSymbol(kLanguageSymbol)
+                           symbol:SettingsRootSymbol(SymbolLanguage)
             symbolBackgroundColor:[UIColor colorNamed:kGrey400Color]
           accessibilityIdentifier:kSettingsLanguagesCellId];
 }
 
 - (TableViewItem*)contentSettingsDetailItem {
-  return [self
-           detailItemWithType:SettingsItemTypeContentSettings
-                         text:l10n_util::GetNSString(
-                                  IDS_IOS_CONTENT_SETTINGS_TITLE)
-                   detailText:nil
-                       symbol:DefaultSettingsRootSymbol(kSettingsFilledSymbol)
-        symbolBackgroundColor:[UIColor colorNamed:kGrey400Color]
-      accessibilityIdentifier:kSettingsContentSettingsCellId];
+  return [self detailItemWithType:SettingsItemTypeContentSettings
+                             text:l10n_util::GetNSString(
+                                      IDS_IOS_CONTENT_SETTINGS_TITLE)
+                       detailText:nil
+                           symbol:SettingsRootSymbol(SymbolSettingsFilled)
+            symbolBackgroundColor:[UIColor colorNamed:kGrey400Color]
+          accessibilityIdentifier:kSettingsContentSettingsCellId];
+}
+
+- (TableViewItem*)sitePermissionsDetailItem {
+  // TODO(crbug.com/553098545): Use localized string.
+  return [self detailItemWithType:SettingsItemTypeSitePermissions
+                             text:@"Site Permissions"
+                       detailText:nil
+                           symbol:SettingsRootSymbol(SymbolGearshape2)
+            symbolBackgroundColor:[UIColor colorNamed:kGrey400Color]
+          accessibilityIdentifier:kSettingsSitePermissionsCellId];
 }
 
 - (TableViewItem*)downloadsSettingsDetailItem {
@@ -1024,20 +1205,19 @@ struct EnhancedSafeBrowsingActivePromoData
                              text:l10n_util::GetNSString(
                                       IDS_IOS_SETTINGS_DOWNLOADS_TITLE)
                        detailText:nil
-                           symbol:DefaultSettingsRootSymbol(kDownloadSymbol)
+                           symbol:SettingsRootSymbol(SymbolDownload)
             symbolBackgroundColor:[UIColor colorNamed:kGrey400Color]
           accessibilityIdentifier:kSettingsDownloadsSettingsCellId];
 }
 
 - (TableViewItem*)safariDataImportSettingsDetailItem {
-  return [self
-           detailItemWithType:SettingsItemTypeSafariDataImport
-                         text:l10n_util::GetNSString(
-                                  IDS_IOS_SETTINGS_SAFARI_IMPORT_TITLE)
-                   detailText:nil
-                       symbol:DefaultSettingsRootSymbol(kSaveImageActionSymbol)
-        symbolBackgroundColor:[UIColor colorNamed:kGrey400Color]
-      accessibilityIdentifier:kSettingsSafariDataImportSettingsCellId];
+  return [self detailItemWithType:SettingsItemTypeSafariDataImport
+                             text:l10n_util::GetNSString(
+                                      IDS_IOS_SETTINGS_SAFARI_IMPORT_TITLE)
+                       detailText:nil
+                           symbol:SettingsRootSymbol(SymbolSaveImageAction)
+            symbolBackgroundColor:[UIColor colorNamed:kGrey400Color]
+          accessibilityIdentifier:kSettingsSafariDataImportSettingsCellId];
 }
 
 - (TableViewItem*)tabsSettingsDetailItem {
@@ -1046,7 +1226,7 @@ struct EnhancedSafeBrowsingActivePromoData
   return [self detailItemWithType:SettingsItemTypeTabs
                              text:title
                        detailText:nil
-                           symbol:DefaultSettingsRootSymbol(kTabsSymbol)
+                           symbol:SettingsRootSymbol(SymbolTabs)
             symbolBackgroundColor:[UIColor colorNamed:kOrange500Color]
           accessibilityIdentifier:kSettingsTabsCellId];
 }
@@ -1056,7 +1236,7 @@ struct EnhancedSafeBrowsingActivePromoData
                              text:l10n_util::GetNSString(
                                       IDS_IOS_BANDWIDTH_MANAGEMENT_SETTINGS)
                        detailText:nil
-                           symbol:DefaultSettingsRootSymbol(kWifiSymbol)
+                           symbol:SettingsRootSymbol(SymbolWifi)
             symbolBackgroundColor:[UIColor colorNamed:kGrey400Color]
           accessibilityIdentifier:kSettingsBandwidthCellId];
 }
@@ -1065,7 +1245,7 @@ struct EnhancedSafeBrowsingActivePromoData
   return [self detailItemWithType:SettingsItemTypeAboutChrome
                              text:l10n_util::GetNSString(IDS_IOS_PRODUCT_NAME)
                        detailText:nil
-                           symbol:DefaultSettingsRootSymbol(kInfoCircleSymbol)
+                           symbol:SettingsRootSymbol(SymbolInfoCircle)
             symbolBackgroundColor:[UIColor colorNamed:kGrey400Color]
           accessibilityIdentifier:kSettingsAboutCellId];
 }
@@ -1074,7 +1254,7 @@ struct EnhancedSafeBrowsingActivePromoData
   TableViewSwitchItem* showMemoryDebugSwitchItem =
       [self switchItemWithType:SettingsItemTypeMemoryDebugging
                             title:@"Show memory debug tools"
-                           symbol:DefaultSettingsRootSymbol(@"memorychip")
+                           symbol:SettingsRootSymbol(SymbolSpeedometer)
             symbolBackgroundColor:[UIColor colorNamed:kGrey400Color]
           accessibilityIdentifier:nil];
   showMemoryDebugSwitchItem.on = [_showMemoryDebugToolsEnabled value];
@@ -1108,7 +1288,7 @@ struct EnhancedSafeBrowsingActivePromoData
 
 - (TableViewSwitchItem*)viewSourceSwitchItem {
   UIImage* image;
-  image = DefaultSettingsRootSymbol(@"keyboard.badge.eye");
+  image = SettingsRootSymbol(SymbolDocPlaintext);
   TableViewSwitchItem* viewSourceItem =
       [self switchItemWithType:SettingsItemTypeViewSource
                             title:@"View source menu"
@@ -1129,7 +1309,7 @@ struct EnhancedSafeBrowsingActivePromoData
   return [self detailItemWithType:SettingsItemTypeTableCellCatalog
                              text:@"TableView Cell Catalog"
                        detailText:nil
-                           symbol:DefaultSettingsRootSymbol(kCartSymbol)
+                           symbol:SettingsRootSymbol(SymbolCart)
             symbolBackgroundColor:[UIColor colorNamed:kGrey400Color]
           accessibilityIdentifier:nil];
 }
@@ -1138,7 +1318,34 @@ struct EnhancedSafeBrowsingActivePromoData
   return [self detailItemWithType:SettingsItemTypeButtonCatalog
                              text:@"Button Catalog"
                        detailText:nil
-                           symbol:DefaultSettingsRootSymbol(kCartSymbol)
+                           symbol:SettingsRootSymbol(SymbolCart)
+            symbolBackgroundColor:[UIColor colorNamed:kGrey400Color]
+          accessibilityIdentifier:nil];
+}
+
+- (TableViewDetailIconItem*)backendPromoDebugToolsItem {
+  return [self detailItemWithType:SettingsItemTypeBackendPromoDebugTools
+                             text:@"Backend promo debug tools"
+                       detailText:nil
+                           symbol:SettingsRootSymbol(SymbolCart)
+            symbolBackgroundColor:[UIColor colorNamed:kGrey400Color]
+          accessibilityIdentifier:nil];
+}
+
+- (TableViewDetailIconItem*)viewControllerCatalogDetailItem {
+  return [self detailItemWithType:SettingsItemTypeViewControllerCatalog
+                             text:@"ViewController Catalog"
+                       detailText:nil
+                           symbol:SettingsRootSymbol(SymbolCart)
+            symbolBackgroundColor:[UIColor colorNamed:kGrey400Color]
+          accessibilityIdentifier:nil];
+}
+
+- (TableViewDetailIconItem*)viewCatalogDetailItem {
+  return [self detailItemWithType:SettingsItemTypeViewCatalog
+                             text:@"View Catalog"
+                       detailText:nil
+                           symbol:SettingsRootSymbol(SymbolCart)
             symbolBackgroundColor:[UIColor colorNamed:kGrey400Color]
           accessibilityIdentifier:nil];
 }
@@ -1262,7 +1469,31 @@ struct EnhancedSafeBrowsingActivePromoData
         [self reloadData];
       }
 
-      controller = [[DefaultBrowserSettingsTableViewController alloc] init];
+      DefaultBrowserSettingsTableViewController* defaultBrowserController =
+          [[DefaultBrowserSettingsTableViewController alloc] init];
+      defaultBrowserController.PIPHandler = HandlerForProtocol(
+          _browser->GetCommandDispatcher(), PictureInPictureCommands);
+      defaultBrowserController.settingsHandler = HandlerForProtocol(
+          _browser->GetCommandDispatcher(), SettingsCommands);
+      controller = defaultBrowserController;
+      break;
+    }
+    case SettingsItemTypeDefaultBrowserPassiveCell: {
+      base::RecordAction(base::UserMetricsAction(
+          "Settings.OpenDefaultBrowserFromPassiveCell"));
+      DefaultBrowserSettingsTableViewController* defaultBrowserController =
+          [[DefaultBrowserSettingsTableViewController alloc] init];
+      defaultBrowserController.PIPHandler = HandlerForProtocol(
+          _browser->GetCommandDispatcher(), PictureInPictureCommands);
+      defaultBrowserController.settingsHandler = HandlerForProtocol(
+          _browser->GetCommandDispatcher(), SettingsCommands);
+      controller = defaultBrowserController;
+      [self dismissPassivePromoWithFeature:
+                feature_engagement::
+                    kIPHiOSPromoSettingsCellDefaultBrowserFeature];
+      _defaultBrowserPromoCellShown = NO;
+      _featureEngagementTracker->NotifyEvent(
+          feature_engagement::events::kDefaultBrowserSettingsCellPromoUsed);
       break;
     }
     case SettingsItemTypeSearchEngine:
@@ -1287,13 +1518,16 @@ struct EnhancedSafeBrowsingActivePromoData
       break;
     case SettingsItemTypeAutofillCreditCard:
       base::RecordAction(base::UserMetricsAction("AutofillCreditCardsViewed"));
-      controller = [[AutofillCreditCardTableViewController alloc]
-          initWithBrowser:_browser];
+      [self showCreditCardSettingsWithLevelUpWalkthroughIPH:NO];
       break;
     case SettingsItemTypeAutofillProfile:
       base::RecordAction(base::UserMetricsAction("AutofillAddressesViewed"));
       controller =
           [[AutofillProfileTableViewController alloc] initWithBrowser:_browser];
+      break;
+    case SettingsItemTypeAutofillAndPasswords:
+      // TODO(crbug.com/500341282): Add user metric for this item.
+      [self showAutofillAndPasswords];
       break;
     case SettingsItemTypeNotifications:
       base::RecordAction(base::UserMetricsAction("Settings.Notifications"));
@@ -1330,6 +1564,10 @@ struct EnhancedSafeBrowsingActivePromoData
     case SettingsItemTypeContentSettings:
       base::RecordAction(base::UserMetricsAction("Settings.ContentSettings"));
       [self showContentSettings];
+      break;
+    case SettingsItemTypeSitePermissions:
+      base::RecordAction(base::UserMetricsAction("Settings.SitePermissions"));
+      [self showSitePermissionsSettings];
       break;
     case SettingsItemTypeDownloadsSettings:
       base::RecordAction(base::UserMetricsAction("Settings.DownloadsSettings"));
@@ -1377,12 +1615,26 @@ struct EnhancedSafeBrowsingActivePromoData
           pushViewController:[[ButtonCatalogViewController alloc] init]
                     animated:YES];
       break;
+    case SettingsItemTypeViewControllerCatalog:
+      [self.navigationController
+          pushViewController:[[ViewControllerCatalogViewController alloc] init]
+                    animated:YES];
+      break;
+    case SettingsItemTypeViewCatalog:
+      [self.navigationController
+          pushViewController:[[ViewCatalogViewController alloc]
+                                 initWithBrowser:_browser]
+                    animated:YES];
+      break;
     case SettingsItemTypeBWGSettings:
       base::RecordAction(base::UserMetricsAction("Settings.BWGSettings"));
       [self showGeminiSettings];
       // Sets the "new" IPH badge shown count to max so it's not shown again.
       GetApplicationContext()->GetLocalState()->SetInteger(
           prefs::kBWGSettingsNewBadgeShownCount, INT_MAX);
+      break;
+    case SettingsItemTypeBackendPromoDebugTools:
+      ios::provider::ShowBackendPromoDebugTools();
       break;
     default:
       break;
@@ -1393,6 +1645,89 @@ struct EnhancedSafeBrowsingActivePromoData
     [self configureHandlersForRootViewController:controller];
     [self.navigationController pushViewController:controller animated:YES];
   }
+}
+
+// Removes the Default Browser Passive Card section from the table view.
+- (void)removeDefaultPassiveCardSection {
+  SettingsSectionIdentifier sectionID =
+      SettingsSectionIdentifierDefaultPassiveCard;
+  if (![self.tableViewModel hasSectionForSectionIdentifier:sectionID]) {
+    return;
+  }
+  NSUInteger index =
+      [self.tableViewModel sectionForSectionIdentifier:sectionID];
+  __weak SettingsTableViewController* weakSelf = self;
+  [self.tableView
+      performBatchUpdates:^{
+        [weakSelf.tableViewModel removeSectionWithIdentifier:sectionID];
+        [weakSelf.tableView deleteSections:[NSIndexSet indexSetWithIndex:index]
+                          withRowAnimation:UITableViewRowAnimationFade];
+      }
+               completion:nil];
+}
+
+// User dismissed the default browser settings passive promo card.
+- (void)didTapDefaultBrowserPromoCardCloseButton:(UIButton*)sender {
+  base::UmaHistogramEnumeration(
+      "IOS.Settings.DefaultBrowserSettingsPassivePromo",
+      IOSDefaultBrowserSettingsPassivePromoAction::kClosed);
+
+  _defaultBrowserPromoCardShown = NO;
+  _featureEngagementTracker->NotifyEvent(
+      feature_engagement::events::kDefaultBrowserSettingsCardPromoUsed);
+
+  DefaultBrowserPassivePromoActiveData* data =
+      static_cast<DefaultBrowserPassivePromoActiveData*>(
+          _featureEngagementTracker->GetUserData(
+              DefaultBrowserPassivePromoActiveData::key));
+  if (data) {
+    data->should_show_promo_card = NO;
+  }
+
+  [self dismissPassivePromoWithFeature:
+            feature_engagement::kIPHiOSPromoSettingsCardDefaultBrowserFeature];
+
+  [self removeDefaultPassiveCardSection];
+}
+
+// User tapped the action button on the default browser settings passive promo
+// card.
+- (void)didTapDefaultBrowserPromoCardActionButton:(UIButton*)sender {
+  base::UmaHistogramEnumeration(
+      "IOS.Settings.DefaultBrowserSettingsPassivePromo",
+      IOSDefaultBrowserSettingsPassivePromoAction::kAction);
+
+  _defaultBrowserPromoCardShown = NO;
+  _featureEngagementTracker->NotifyEvent(
+      feature_engagement::events::kDefaultBrowserSettingsCardPromoUsed);
+
+  DefaultBrowserPassivePromoActiveData* data =
+      static_cast<DefaultBrowserPassivePromoActiveData*>(
+          _featureEngagementTracker->GetUserData(
+              DefaultBrowserPassivePromoActiveData::key));
+  if (data) {
+    data->should_show_promo_card = NO;
+  }
+
+  [self dismissPassivePromoWithFeature:
+            feature_engagement::kIPHiOSPromoSettingsCardDefaultBrowserFeature];
+
+  [self removeDefaultPassiveCardSection];
+
+  id<PictureInPictureCommands> pipHandler = HandlerForProtocol(
+      _browser->GetCommandDispatcher(), PictureInPictureCommands);
+
+  if (IsDefaultBrowserPictureInPictureEnabled()) {
+    [self.sceneHandler closePresentedViews];
+  }
+
+  BOOL useDefaultAppsDestination =
+      IsDefaultBrowserPictureInPictureEnabled()
+          ? IsDefaultAppsPictureInPictureVariant()
+          : (IsDefaultAppsDestinationAvailable() &&
+             IsUseDefaultAppsDestinationForPromosEnabled());
+  OpenIOSDefaultBrowserSettingsPage(useDefaultAppsDestination,
+                                    /*ui_application_to_use=*/nil, pipHandler);
 }
 
 #pragma mark - Actions
@@ -1525,6 +1860,9 @@ struct EnhancedSafeBrowsingActivePromoData
     base::debug::DumpWithoutCrashing();
   }
 
+  // Stop the coordinator before restarting it, if it exists.
+  [_contentSettingsCoordinator stop];
+
   _contentSettingsCoordinator = [[ContentSettingsCoordinator alloc]
       initWithBaseNavigationController:self.navigationController
                                browser:_browser];
@@ -1586,6 +1924,16 @@ struct EnhancedSafeBrowsingActivePromoData
     base::debug::DumpWithoutCrashing();
   }
 
+  AuthenticationService* authService =
+      AuthenticationServiceFactory::GetForProfile(_browser->GetProfile());
+  if (!authService->HasPrimaryIdentity() || !authService->SigninEnabled()) {
+    // Due to race condition, the user may be signed-out, or sign-in may be
+    // disabled between the time the user tap on the button and the execution of
+    // this method. In this case, do nothing, the button will disappear by
+    // itself. See crbug.com/488974911
+    return;
+  }
+
   // Stop the coordinator before restarting it, if it exists.
   [_manageSyncSettingsCoordinator stop];
 
@@ -1610,6 +1958,25 @@ struct EnhancedSafeBrowsingActivePromoData
                                browser:_browser];
   _passwordsCoordinator.delegate = self;
   [_passwordsCoordinator start];
+}
+
+- (void)showAutofillAndPasswords {
+  if (_autofillAndPasswordsCoordinator &&
+      self.navigationController.topViewController != self) {
+    base::debug::DumpWithoutCrashing();
+  }
+
+  // Stop the coordinator before restarting it, if it exists.
+  [_autofillAndPasswordsCoordinator stop];
+
+  _autofillAndPasswordsCoordinator = [[AutofillAndPasswordsCoordinator alloc]
+      initWithBaseNavigationController:self.navigationController
+                               browser:_browser
+                              referrer:autofill::autofill_metrics::
+                                           AutofillSettingsReferrer::
+                                               kSettingsMenu];
+  _autofillAndPasswordsCoordinator.delegate = self;
+  [_autofillAndPasswordsCoordinator start];
 }
 
 // Shows the Safety Check screen.
@@ -1721,15 +2088,14 @@ struct EnhancedSafeBrowsingActivePromoData
   return YES;
 #else
   return experimental_flags::IsMemoryDebuggingEnabled() ||
-         experimental_flags::ShouldShowCatalogItems();
+         experimental_flags::ShouldShowCatalogItems() ||
+         experimental_flags::ShouldShowBackendPromoDebugTools();
 #endif  // BUILDFLAG(CHROMIUM_BRANDING) && !defined(NDEBUG)
 }
 
 // Updates the identity cell.
 - (void)updateIdentityAccountItem:(TableViewAccountItem*)identityAccountItem {
-  AuthenticationService* authService =
-      AuthenticationServiceFactory::GetForProfile(_profile);
-  _identity = authService->GetPrimaryIdentity(signin::ConsentLevel::kSignin);
+  _identity = _authService->GetPrimaryIdentity();
   if (!_identity) {
     // This could occur during the sign out process. Just ignore as the account
     // cell will be replaced by the "Sign in" button.
@@ -1738,8 +2104,14 @@ struct EnhancedSafeBrowsingActivePromoData
   identityAccountItem.image =
       GetApplicationContext()->GetIdentityAvatarProvider()->GetIdentityAvatar(
           _identity, IdentityAvatarSize::TableViewIcon);
-  identityAccountItem.text = _identity.userFullName;
-  identityAccountItem.detailText = _identity.userEmail;
+  NSString* name = _identity.userFullName;
+  NSString* email = _identity.userEmail;
+  if (name) {
+    identityAccountItem.text = name;
+    identityAccountItem.detailText = email;
+  } else {
+    identityAccountItem.text = email;
+  }
 
   syncer::SyncService* syncService =
       SyncServiceFactory::GetForProfile(_profile);
@@ -1771,9 +2143,7 @@ struct EnhancedSafeBrowsingActivePromoData
   if (_settingsAreDismissed) {
     return;
   }
-  AuthenticationService* authService =
-      AuthenticationServiceFactory::GetForProfile(_browser->GetProfile());
-  if (!authService->HasPrimaryIdentity(signin::ConsentLevel::kSignin)) {
+  if (!_authService->HasPrimaryIdentity()) {
     return;
   }
 
@@ -1828,6 +2198,119 @@ struct EnhancedSafeBrowsingActivePromoData
   _featureEngagementTracker->Dismissed(
       feature_engagement::kIPHiOSReplaceSyncPromosWithSignInPromos);
   _bubblePresenter = nil;
+}
+
+// Presents the Level Up Payment Methods walkthrough IPH if needed.
+- (void)maybeShowLevelUpWalkthroughIPH {
+  if (!self.shouldShowLevelUpPaymentMethodsWalkthroughIPH ||
+      _settingsAreDismissed || !IsYourSavedInfoSettingsPageIosEnabled()) {
+    return;
+  }
+
+  UIView* targetView = self.view;
+  CHECK(targetView.window);
+
+  NSString* text = l10n_util::GetNSString(
+      IDS_IOS_LEVEL_UP_WALKTHROUGH_OPEN_AUTOFILL_AND_PASSWORDS);
+
+  NSIndexPath* targetIndexPath = [self.tableViewModel
+      indexPathForItemType:SettingsItemTypeAutofillAndPasswords
+         sectionIdentifier:SettingsSectionIdentifierBasics];
+
+  if (!targetIndexPath) {
+    return;
+  }
+
+  CGPoint anchorPoint = CGPointZero;
+  BubbleArrowDirection arrowDirection = BubbleArrowDirectionDown;
+
+  UITableViewCell* cell =
+      [self.tableView cellForRowAtIndexPath:targetIndexPath];
+  if (cell.window) {
+    CGPoint anchorPointInCell =
+        CGPointMake(CGRectGetMidX(cell.bounds), CGRectGetMaxY(cell.bounds));
+    anchorPoint = [cell convertPoint:anchorPointInCell toView:cell.window];
+    arrowDirection = BubbleArrowDirectionUp;
+  } else {
+    anchorPoint = CGPointMake(0.5 * CGRectGetWidth(targetView.bounds),
+                              0.5 * CGRectGetHeight(targetView.bounds));
+  }
+
+  __weak __typeof(self) weakSelf = self;
+  CallbackWithIPHDismissalReasonType dismissalCallback =
+      ^(IPHDismissalReasonType reason) {
+        [weakSelf levelUpWalkthroughStep3DidDismissWithReason:reason];
+      };
+
+  BubbleViewControllerPresenter* presenter =
+      [[BubbleViewControllerPresenter alloc]
+                   initWithText:text
+                          title:nil
+                 arrowDirection:arrowDirection
+                      alignment:BubbleAlignmentBottomOrTrailing
+                     bubbleType:BubbleViewTypeRichWithNext
+                pageControlPage:BubblePageControlPageThird
+          totalPageControlPages:4
+          customNextButtonTitle:l10n_util::GetNSString(IDS_IOS_IPH_BUBBLE_NEXT)
+              dismissalCallback:dismissalCallback];
+  presenter.dismissalTimerDisabled = YES;
+
+  if ([presenter canPresentInView:targetView anchorPoint:anchorPoint]) {
+    self.shouldShowLevelUpPaymentMethodsWalkthroughIPH = NO;
+    _bubblePresenter = presenter;
+    [presenter presentInViewController:self anchorPoint:anchorPoint];
+  }
+}
+
+// Handles dismissal of the Level Up Payment Methods walkthrough IPH.
+- (void)levelUpWalkthroughStep3DidDismissWithReason:
+    (IPHDismissalReasonType)reason {
+  _bubblePresenter = nil;
+  switch (reason) {
+    case IPHDismissalReasonType::kTappedNext:
+    case IPHDismissalReasonType::kTappedAnchorView:
+    case IPHDismissalReasonType::kTappedIPH:
+      [self showAutofillAndPasswordsWithLevelUpWalkthroughIPH:YES];
+      break;
+    default:
+      break;
+  }
+}
+
+// Shows the Autofill & Passwords settings page, optionally triggering the
+// Level Up Payment Methods walkthrough IPH.
+- (void)showAutofillAndPasswordsWithLevelUpWalkthroughIPH:(BOOL)shouldShowIPH {
+  if (_autofillAndPasswordsCoordinator &&
+      self.navigationController.topViewController != self) {
+    base::debug::DumpWithoutCrashing();
+  }
+
+  [_autofillAndPasswordsCoordinator stop];
+
+  _autofillAndPasswordsCoordinator = [[AutofillAndPasswordsCoordinator alloc]
+      initWithBaseNavigationController:self.navigationController
+                               browser:_browser
+                              referrer:autofill::autofill_metrics::
+                                           AutofillSettingsReferrer::
+                                               kSettingsMenu];
+  _autofillAndPasswordsCoordinator.delegate = self;
+  _autofillAndPasswordsCoordinator
+      .shouldShowLevelUpPaymentMethodsWalkthroughIPH = shouldShowIPH;
+  [_autofillAndPasswordsCoordinator start];
+}
+
+// Shows the Payment Methods settings page, optionally triggering the Level Up
+// Payment Methods walkthrough IPH.
+- (void)showCreditCardSettingsWithLevelUpWalkthroughIPH:(BOOL)shouldShowIPH {
+  [_autofillCreditCardCoordinator stop];
+
+  _autofillCreditCardCoordinator = [[AutofillCreditCardCoordinator alloc]
+      initWithBaseNavigationController:self.navigationController
+                               browser:_browser];
+  _autofillCreditCardCoordinator.delegate = self;
+  _autofillCreditCardCoordinator.shouldShowLevelUpPaymentMethodsWalkthroughIPH =
+      shouldShowIPH;
+  [_autofillCreditCardCoordinator start];
 }
 
 // Check if the default search engine is managed by policy.
@@ -1946,10 +2429,7 @@ struct EnhancedSafeBrowsingActivePromoData
   }
 
   NSString* detailText = nil;
-  AuthenticationService* authService =
-      AuthenticationServiceFactory::GetForProfile(_profile);
-  id<SystemIdentity> identity =
-      authService->GetPrimaryIdentity(signin::ConsentLevel::kSignin);
+  id<SystemIdentity> identity = _authService->GetPrimaryIdentity();
   PrefService* prefService = _profile->GetPrefs();
   push_notification_settings::ClientPermissionState permission_state =
       push_notification_settings::GetNotificationPermissionState(
@@ -1980,6 +2460,22 @@ struct EnhancedSafeBrowsingActivePromoData
                                browser:_browser];
   _downloadsSettingsCoordinator.delegate = self;
   [_downloadsSettingsCoordinator start];
+}
+
+- (void)showSitePermissionsSettings {
+  if (_sitePermissionsCoordinator &&
+      self.navigationController.topViewController != self) {
+    base::debug::DumpWithoutCrashing();
+  }
+
+  // Stop the coordinator before restarting it, if it exists.
+  [_sitePermissionsCoordinator stop];
+
+  _sitePermissionsCoordinator = [[SitePermissionsCoordinator alloc]
+      initWithBaseNavigationController:self.navigationController
+                               browser:_browser];
+  _sitePermissionsCoordinator.delegate = self;
+  [_sitePermissionsCoordinator start];
 }
 
 // Records that the user has reached the impression limit for the enhanced safe
@@ -2025,10 +2521,7 @@ struct EnhancedSafeBrowsingActivePromoData
   //   3.) Have Safe Browsing standard protection enabled.
   //   4.) One of the trigerring criteria has been met.
   //   5.) Not have their Safe Browsing preferences enterprise-managed.
-  AuthenticationService* authService =
-      AuthenticationServiceFactory::GetForProfile(_profile);
-  bool isSignedIn =
-      authService->HasPrimaryIdentity(signin::ConsentLevel::kSignin);
+  bool isSignedIn = _authService->HasPrimaryIdentity();
   bool isDefaultBrowser = IsChromeLikelyDefaultBrowser();
   bool isStandardProtectionEnabled =
       safe_browsing::GetSafeBrowsingState(*_profile->GetPrefs()) ==
@@ -2116,10 +2609,117 @@ struct EnhancedSafeBrowsingActivePromoData
   return gradientImage;
 }
 
+// Evaluates conditions and FET states to determine if the passive default
+// browser promo (either card or cell) should be visible in Settings.
+- (void)evaluateDefaultBrowserPassivePromoVisibility {
+  if (IsChromeLikelyDefaultBrowser()) {
+    return;
+  }
+
+  if (!IsIOSSettingsDefaultBrowserPromoV2Enabled()) {
+    return;
+  }
+
+  if (_defaultBrowserPromoCellShown) {
+    return;
+  }
+
+  switch (CurrentSettingsDefaultBrowserPromoType()) {
+    case SettingsDefaultBrowserPromoType::kSettingsDefaultBrowserCard:
+      _defaultBrowserPromoCardShown =
+          [self triggerPassivePromoIfNeeded:
+                    feature_engagement::
+                        kIPHiOSPromoSettingsCardDefaultBrowserFeature];
+      break;
+    case SettingsDefaultBrowserPromoType::kSettingsDefaultBrowserCell:
+      _defaultBrowserPromoCellShown =
+          [self triggerPassivePromoIfNeeded:
+                    feature_engagement::
+                        kIPHiOSPromoSettingsCellDefaultBrowserFeature];
+      break;
+  }
+}
+
+// Triggers a passive promo safely in a multi-window context, avoiding duplicate
+// ShouldTriggerHelpUI calls.
+- (BOOL)triggerPassivePromoIfNeeded:(const base::Feature&)feature {
+  if (!_featureEngagementTracker) {
+    return NO;
+  }
+
+  DefaultBrowserPassivePromoActiveData* data =
+      static_cast<DefaultBrowserPassivePromoActiveData*>(
+          _featureEngagementTracker->GetUserData(
+              DefaultBrowserPassivePromoActiveData::key));
+
+  BOOL isPromoTypeCard =
+      &feature ==
+      &feature_engagement::kIPHiOSPromoSettingsCardDefaultBrowserFeature;
+
+  // If the promo is already active in another window or has already been shown
+  // in this session (card promo), increment the refcount without re-querying
+  // the FET.
+  BOOL isPromoAlreadyActive =
+      data && (isPromoTypeCard ? data->should_show_promo_card
+                               : data->active_promos > 0);
+  if (isPromoAlreadyActive) {
+    data->active_promos++;
+    return YES;
+  }
+
+  if (!_featureEngagementTracker->ShouldTriggerHelpUI(feature)) {
+    return NO;
+  }
+
+  // Create user data struct on first trigger.
+  if (!data) {
+    auto new_data = std::make_unique<DefaultBrowserPassivePromoActiveData>();
+    data = new_data.get();
+    _featureEngagementTracker->SetUserData(
+        DefaultBrowserPassivePromoActiveData::key, std::move(new_data));
+  }
+
+  data->active_promos++;
+  if (isPromoTypeCard) {
+    data->should_show_promo_card = YES;
+  }
+
+  return YES;
+}
+
+// Decrements the active counter for a passive promo and dismisses the FET when
+// no active windows remain.
+- (void)dismissPassivePromoWithFeature:(const base::Feature&)feature {
+  if (!_featureEngagementTracker) {
+    return;
+  }
+  DefaultBrowserPassivePromoActiveData* data =
+      static_cast<DefaultBrowserPassivePromoActiveData*>(
+          _featureEngagementTracker->GetUserData(
+              DefaultBrowserPassivePromoActiveData::key));
+  if (data) {
+    data->active_promos--;
+    if (data->active_promos <= 0) {
+      _featureEngagementTracker->Dismissed(feature);
+      if (!data->should_show_promo_card) {
+        _featureEngagementTracker->RemoveUserData(
+            DefaultBrowserPassivePromoActiveData::key);
+      }
+    }
+  } else {
+    _featureEngagementTracker->Dismissed(feature);
+  }
+}
+
 #pragma mark - Sign in
 
 - (void)showSignIn {
   if (_signinAndHistorySyncCoordinator.viewWillPersist) {
+    return;
+  }
+  if (!_authService->SigninEnabled()) {
+    // This can occur if the device policies were changed while the users was in
+    // settings.
     return;
   }
   [_signinAndHistorySyncCoordinator stop];
@@ -2182,10 +2782,34 @@ struct EnhancedSafeBrowsingActivePromoData
 }
 
 - (void)settingsWillBeDismissed {
-  CHECK(!_settingsAreDismissed, base::NotFatalUntil::M151);
+  if (_settingsAreDismissed) {
+    return;
+  }
+
+  if (_defaultBrowserPromoCellShown) {
+    [self
+        dismissPassivePromoWithFeature:
+            feature_engagement::kIPHiOSPromoSettingsCellDefaultBrowserFeature];
+    _defaultBrowserPromoCellShown = NO;
+  }
+
+  if (_defaultBrowserPromoCardShown) {
+    // Logs that the user dismissed the settings without taking action on the
+    // promo card.
+    base::UmaHistogramEnumeration(
+        "IOS.Settings.DefaultBrowserSettingsPassivePromo",
+        IOSDefaultBrowserSettingsPassivePromoAction::kNoAction);
+    [self
+        dismissPassivePromoWithFeature:
+            feature_engagement::kIPHiOSPromoSettingsCardDefaultBrowserFeature];
+    _defaultBrowserPromoCardShown = NO;
+  }
 
   // Remove Enhanced Safe Browsing Promo.
   [self removeEnhancedSafeBrowsingPromoFETDataIfNeeded];
+
+  [_bubblePresenter dismissAnimated:NO];
+  _bubblePresenter = nil;
 
   // Stop children coordinators.
   [_geminiSettingsCoordinator stop];
@@ -2205,6 +2829,14 @@ struct EnhancedSafeBrowsingActivePromoData
   _passwordsCoordinator.delegate = nil;
   _passwordsCoordinator = nil;
 
+  [_autofillAndPasswordsCoordinator stop];
+  _autofillAndPasswordsCoordinator.delegate = nil;
+  _autofillAndPasswordsCoordinator = nil;
+
+  [_autofillCreditCardCoordinator stop];
+  _autofillCreditCardCoordinator.delegate = nil;
+  _autofillCreditCardCoordinator = nil;
+
   [_notificationsCoordinator stop];
   _notificationsCoordinator = nil;
 
@@ -2221,6 +2853,9 @@ struct EnhancedSafeBrowsingActivePromoData
 
   [_downloadsSettingsCoordinator stop];
   _downloadsSettingsCoordinator = nil;
+
+  [_sitePermissionsCoordinator stop];
+  _sitePermissionsCoordinator = nil;
 
   // Stop observable prefs.
   [_showMemoryDebugToolsEnabled stop];
@@ -2247,6 +2882,8 @@ struct EnhancedSafeBrowsingActivePromoData
   _searchEngineObserverBridge.reset();
   _syncObserverBridge.reset();
   _identityObserverBridge.reset();
+  _authServiceObserverBridge.reset();
+  _authService = nil;
 
   // Remove PrefObserverDelegates.
   _notificationsObserver.delegate = nil;
@@ -2257,6 +2894,7 @@ struct EnhancedSafeBrowsingActivePromoData
   // Clear C++ ivars.
   _voiceLocaleCode.Destroy();
   _passwordCheckManager.reset();
+  _featureEngagementTracker = nullptr;
   _browser = nullptr;
   _profile = nullptr;
 
@@ -2296,8 +2934,7 @@ struct EnhancedSafeBrowsingActivePromoData
 
 - (void)addressBarPreferenceCoordinatorViewControllerWasRemoved:
     (AddressBarPreferenceCoordinator*)coordinator {
-  CHECK_EQ(_addressBarPreferenceCoordinator, coordinator,
-           base::NotFatalUntil::M139);
+  CHECK_EQ(_addressBarPreferenceCoordinator, coordinator);
   [_addressBarPreferenceCoordinator stop];
   _addressBarPreferenceCoordinator.delegate = nil;
   _addressBarPreferenceCoordinator = nil;
@@ -2420,33 +3057,26 @@ struct EnhancedSafeBrowsingActivePromoData
     [self reconfigureCellsForItems:@[ _voiceSearchDetailItem ]];
   }
 
-  if (preferenceName == password_manager::prefs::kCredentialsEnableService) {
-    BOOL passwordsEnabled = _profile->GetPrefs()->GetBoolean(preferenceName);
-    NSString* passwordsDetail =
-        passwordsEnabled ? l10n_util::GetNSString(IDS_IOS_SETTING_ON)
-                         : l10n_util::GetNSString(IDS_IOS_SETTING_OFF);
-    _passwordsDetailItem.detailText = passwordsDetail;
-    [self reconfigureCellsForItems:@[ _passwordsDetailItem ]];
-  }
+  if (!IsYourSavedInfoSettingsPageIosEnabled()) {
+    if (preferenceName == password_manager::prefs::kCredentialsEnableService) {
+      _passwordsDetailItem.detailText =
+          DetailTextForEnabledState(_profile->GetPrefs()->GetBoolean(
+              password_manager::prefs::kCredentialsEnableService));
+      [self reconfigureCellsForItems:@[ _passwordsDetailItem ]];
+    }
 
-  if (preferenceName == autofill::prefs::kAutofillProfileEnabled) {
-    BOOL autofillProfileEnabled =
-        autofill::prefs::IsAutofillProfileEnabled(_profile->GetPrefs());
-    NSString* detailText = autofillProfileEnabled
-                               ? l10n_util::GetNSString(IDS_IOS_SETTING_ON)
-                               : l10n_util::GetNSString(IDS_IOS_SETTING_OFF);
-    _autoFillProfileDetailItem.detailText = detailText;
-    [self reconfigureCellsForItems:@[ _autoFillProfileDetailItem ]];
-  }
+    if (preferenceName == autofill::prefs::kAutofillProfileEnabled) {
+      _autoFillProfileDetailItem.detailText = DetailTextForEnabledState(
+          autofill::prefs::IsAutofillProfileEnabled(_profile->GetPrefs()));
+      [self reconfigureCellsForItems:@[ _autoFillProfileDetailItem ]];
+    }
 
-  if (preferenceName == autofill::prefs::kAutofillCreditCardEnabled) {
-    BOOL autofillCreditCardEnabled =
-        autofill::prefs::IsAutofillPaymentMethodsEnabled(_profile->GetPrefs());
-    NSString* detailText = autofillCreditCardEnabled
-                               ? l10n_util::GetNSString(IDS_IOS_SETTING_ON)
-                               : l10n_util::GetNSString(IDS_IOS_SETTING_OFF);
-    _autoFillCreditCardDetailItem.detailText = detailText;
-    [self reconfigureCellsForItems:@[ _autoFillCreditCardDetailItem ]];
+    if (preferenceName == autofill::prefs::kAutofillCreditCardEnabled) {
+      _autoFillCreditCardDetailItem.detailText = DetailTextForEnabledState(
+          autofill::prefs::IsAutofillPaymentMethodsEnabled(
+              _profile->GetPrefs()));
+      [self reconfigureCellsForItems:@[ _autoFillCreditCardDetailItem ]];
+    }
   }
 
   if (preferenceName ==
@@ -2505,6 +3135,28 @@ struct EnhancedSafeBrowsingActivePromoData
   _safetyCheckCoordinator = nil;
 }
 
+#pragma mark - AutofillAndPasswordsCoordinatorDelegate
+
+- (void)autofillAndPasswordsCoordinatorDidRemove:
+    (AutofillAndPasswordsCoordinator*)coordinator {
+  CHECK_EQ(_autofillAndPasswordsCoordinator, coordinator,
+           base::NotFatalUntil::M151);
+  [_autofillAndPasswordsCoordinator stop];
+  _autofillAndPasswordsCoordinator.delegate = nil;
+  _autofillAndPasswordsCoordinator = nil;
+}
+
+#pragma mark - AutofillCreditCardCoordinatorDelegate
+
+- (void)autofillCreditCardCoordinatorDidRemove:
+    (AutofillCreditCardCoordinator*)coordinator {
+  CHECK_EQ(_autofillCreditCardCoordinator, coordinator,
+           base::NotFatalUntil::M157);
+  [_autofillCreditCardCoordinator stop];
+  _autofillCreditCardCoordinator.delegate = nil;
+  _autofillCreditCardCoordinator = nil;
+}
+
 #pragma mark - PasswordsCoordinatorDelegate
 
 - (void)passwordsCoordinatorDidRemove:(PasswordsCoordinator*)coordinator {
@@ -2553,7 +3205,7 @@ struct EnhancedSafeBrowsingActivePromoData
   _privacyCoordinator = nil;
 }
 
-#pragma mark - IdentityManagerObserverBridgeDelegate
+#pragma mark - IdentityManagerObserving
 
 // Notifies this controller that the sign in state has changed.
 - (void)signinStateDidChange {
@@ -2570,12 +3222,12 @@ struct EnhancedSafeBrowsingActivePromoData
   [self reloadData];
 }
 
-- (void)onPrimaryAccountChanged:
+- (void)primaryAccountDidChange:
     (const signin::PrimaryAccountChangeEvent&)event {
   [self signinStateDidChange];
 }
 
-- (void)onExtendedAccountInfoUpdated:(const AccountInfo&)info {
+- (void)extendedAccountInfoDidUpdate:(const AccountInfo&)info {
   id<SystemIdentity> identity =
       _accountManagerService->GetIdentityOnDeviceWithGaiaID(info.gaia);
   if ([_identity isEqual:identity]) {
@@ -2631,6 +3283,14 @@ struct EnhancedSafeBrowsingActivePromoData
   _downloadsSettingsCoordinator = nil;
 }
 
+#pragma mark - SitePermissionsCoordinatorDelegate
+
+- (void)sitePermissionsCoordinatorWasRemoved:
+    (SitePermissionsCoordinator*)coordinator {
+  [_sitePermissionsCoordinator stop];
+  _sitePermissionsCoordinator = nil;
+}
+
 #pragma mark - EnhancedSafeBrowsingInlinePromoDelegate
 
 - (void)dismissEnhancedSafeBrowsingInlinePromo {
@@ -2662,6 +3322,13 @@ struct EnhancedSafeBrowsingActivePromoData
   [handler showSafeBrowsingSettingsFromPromoInteraction];
   base::RecordAction(base::UserMetricsAction(
       "MobileSettingsEnhancedSafeBrowsingInlinePromoProceed"));
+}
+
+#pragma mark - AuthenticationServiceObserving
+
+- (void)onServiceStatusChanged {
+  [self updateSigninSection];
+  [self.tableView reloadData];
 }
 
 @end

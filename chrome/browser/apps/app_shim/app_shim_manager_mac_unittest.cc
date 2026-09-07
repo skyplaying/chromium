@@ -19,18 +19,20 @@
 #include "base/strings/sys_string_conversions.h"
 #include "base/test/gmock_callback_support.h"
 #include "base/test/mock_callback.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/apps/app_shim/app_shim_host_bootstrap_mac.h"
 #include "chrome/browser/apps/app_shim/app_shim_host_mac.h"
 #include "chrome/browser/apps/app_shim/code_signature_mac.h"
 #include "chrome/browser/profiles/avatar_menu.h"
+#include "chrome/browser/ui/browser_window/test/mock_browser_window_interface.h"
+#include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/web_applications/os_integration/mac/app_shim_registry.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/mac/app_shim.mojom.h"
 #include "chrome/services/mac_notifications/public/mojom/mac_notifications.mojom.h"
-#include "chrome/test/base/test_browser_window.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/prefs/testing_pref_service.h"
 #include "content/public/test/browser_task_environment.h"
@@ -39,6 +41,10 @@
 #include "mojo/public/cpp/bindings/remote.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/base_window.h"
+#include "ui/base/mojom/window_show_state.mojom.h"
+#include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace apps {
 
@@ -213,6 +219,7 @@ class TestingAppShimHostBootstrap : public AppShimHostBootstrap {
       delete;
 
   void DoTestLaunch(
+      mojo::Remote<chrome::mojom::AppShimHost>& mojo_host,
       chrome::mojom::AppShimLaunchType launch_type,
       const std::vector<base::FilePath>& files,
       const std::vector<GURL>& urls,
@@ -220,7 +227,6 @@ class TestingAppShimHostBootstrap : public AppShimHostBootstrap {
       mojo::PendingReceiver<
           mac_notifications::mojom::MacNotificationActionHandler>
           notification_action_handler) {
-    mojo::Remote<chrome::mojom::AppShimHost> host;
     auto app_shim_info = chrome::mojom::AppShimInfo::New();
     app_shim_info->profile_path = profile_path_;
     app_shim_info->app_id = app_id_;
@@ -234,7 +240,7 @@ class TestingAppShimHostBootstrap : public AppShimHostBootstrap {
     app_shim_info->notification_action_handler =
         std::move(notification_action_handler);
     OnShimConnected(
-        host.BindNewPipeAndPassReceiver(), std::move(app_shim_info),
+        mojo_host.BindNewPipeAndPassReceiver(), std::move(app_shim_info),
         base::BindOnce(&TestingAppShimHostBootstrap::DoTestLaunchDone,
                        launch_result_));
   }
@@ -257,6 +263,7 @@ class TestingAppShimHostBootstrap : public AppShimHostBootstrap {
   const base::FilePath profile_path_;
   const std::string app_id_;
   const bool is_from_bookmark_;
+
   // Note that |launch_result_| is optional so that we can track whether or not
   // the callback to set it has arrived.
   raw_ptr<std::optional<chrome::mojom::AppShimLaunchResult>> launch_result_ =
@@ -373,6 +380,31 @@ class TestHost : public AppShimHost {
   bool did_connect_to_host_ = false;
 
   base::WeakPtrFactory<TestHost> test_weak_factory_;
+};
+
+class MockAppBrowserController : public web_app::AppBrowserController {
+ public:
+  MockAppBrowserController(BrowserWindowInterface* browser,
+                           webapps::AppId app_id)
+      : web_app::AppBrowserController(browser, std::move(app_id)) {
+    ON_CALL(*this, HasMinimalUiButtons).WillByDefault(testing::Return(false));
+    ON_CALL(*this, GetAppShortName).WillByDefault(testing::Return(u""));
+    ON_CALL(*this, GetAppStartUrl)
+        .WillByDefault(testing::ReturnRef(GURL::EmptyGURL()));
+    ON_CALL(*this, IsUrlInAppScope).WillByDefault(testing::Return(false));
+    ON_CALL(*this, CanUserUninstall).WillByDefault(testing::Return(false));
+    ON_CALL(*this, IsInstalled).WillByDefault(testing::Return(true));
+  }
+
+  MOCK_METHOD(bool, HasMinimalUiButtons, (), (const, override));
+  MOCK_METHOD(ui::ImageModel, GetWindowAppIcon, (), (const, override));
+  MOCK_METHOD(ui::ImageModel, GetWindowIcon, (), (const, override));
+  MOCK_METHOD(std::u16string, GetAppShortName, (), (const, override));
+  MOCK_METHOD(std::u16string, GetFormattedUrlOrigin, (), (const, override));
+  MOCK_METHOD(const GURL&, GetAppStartUrl, (), (const, override));
+  MOCK_METHOD(bool, IsUrlInAppScope, (const GURL& url), (const, override));
+  MOCK_METHOD(bool, CanUserUninstall, (), (const, override));
+  MOCK_METHOD(bool, IsInstalled, (), (const, override));
 };
 
 class AppShimManagerTest : public testing::Test {
@@ -502,6 +534,8 @@ class AppShimManagerTest : public testing::Test {
   }
 
   void TearDown() override {
+    mojo_hosts_.clear();
+
     host_aa_unique_.reset();
     host_ab_unique_.reset();
     host_ba_unique_.reset();
@@ -542,8 +576,11 @@ class AppShimManagerTest : public testing::Test {
     if (host) {
       manager_->SetHostForCreate(std::move(host));
     }
-    bootstrap->DoTestLaunch(launch_type, files, urls, login_item_restore_state,
+    mojo::Remote<chrome::mojom::AppShimHost> mojo_host;
+    bootstrap->DoTestLaunch(mojo_host, launch_type, files, urls,
+                            login_item_restore_state,
                             std::move(notification_action_handler));
+    mojo_hosts_.push_back(std::move(mojo_host));
   }
 
   void NormalLaunch(base::WeakPtr<TestingAppShimHostBootstrap> bootstrap,
@@ -640,6 +677,8 @@ class AppShimManagerTest : public testing::Test {
   base::WeakPtr<TestHost> host_ba_;
   base::WeakPtr<TestHost> host_bb_;
 
+  std::vector<mojo::Remote<chrome::mojom::AppShimHost>> mojo_hosts_;
+
   base::test::ScopedFeatureList scoped_feature_list_;
 
  private:
@@ -697,6 +736,37 @@ TEST_F(AppShimManagerTest, LaunchAppNotEnabled) {
   EXPECT_CALL(*delegate_, EnableExtension(&profile_a_, kTestAppIdA, _))
       .WillOnce(RunOnceCallback<2>());
   NormalLaunch(bootstrap_aa_, std::move(host_aa_unique_));
+}
+
+// Regression test for crbug.com/513128608.
+TEST_F(AppShimManagerTest, DisallowedProtocolCancelsLaunchReentrancy) {
+  // OnAppDeactivated -> apps_.empty() -> MaybeTerminate(). Mock it as a no-op.
+  EXPECT_CALL(*manager_, MaybeTerminate()).Times(testing::AnyNumber());
+
+  // When the delegate's LaunchApp is invoked (synchronously, from inside
+  // LoadAndLaunchApp_OnProfilesAndAppReady), simulate the production
+  // disallowed-protocol fast-path: synchronously call OnAppLaunchCancelled,
+  // which frees the just-created ProfileState before control returns to the
+  // caller that still holds a bare pointer to it.
+  EXPECT_CALL(*delegate_, LaunchApp(&profile_a_, kTestAppIdA, _, _, _, _, _))
+      .WillOnce(WithArgs<6>([this](base::OnceClosure finished) {
+        // Mirrors the following flow: cancel app launch ->
+        // AppShimManager::Get()->OnAppLaunchCancelled()
+        manager_->OnAppLaunchCancelled(&profile_a_, kTestAppIdA);
+        std::move(finished).Run();
+      }));
+
+  // Launch with a non-empty `urls` vector so params.HasFilesOrURLs() is true
+  // and delegate_->LaunchApp is called from
+  // LoadAndLaunchApp_LaunchIfAppropriate.
+  //
+  // ASAN: heap-use-after-free fires inside this call at
+  // OnShimProcessConnectedAndAllLaunchesDone -> profile_state->GetHost().
+  DoShimLaunch(bootstrap_aa_, std::move(host_aa_unique_),
+               chrome::mojom::AppShimLaunchType::kNormal,
+               /*files=*/std::vector<base::FilePath>(),
+               /*urls=*/std::vector<GURL>{GURL("web+evil://x")},
+               chrome::mojom::AppShimLoginItemRestoreState::kNone);
 }
 
 TEST_F(AppShimManagerTest, LaunchAndCloseShim) {
@@ -785,8 +855,9 @@ TEST_F(AppShimManagerTest, AppLaunchCancelled) {
   EXPECT_EQ(host_bb_.get(), manager_->FindHost(&profile_b_, kTestAppIdB));
   EXPECT_CALL(*manager_, MaybeTerminate()).WillOnce(Return());
   manager_->OnAppLaunchCancelled(&profile_b_, kTestAppIdB);
-  EXPECT_FALSE(manager_->FindHost(&profile_b_, kTestAppIdB));
-  EXPECT_EQ(host_bb_.get(), nullptr);
+  EXPECT_TRUE(base::test::RunUntil([&] {
+    return !host_bb_ && !manager_->FindHost(&profile_b_, kTestAppIdB);
+  }));
 
   // Validate that if a browser is registered during a launch
   // that OnAppLaunchCancelled is an no-op
@@ -794,13 +865,13 @@ TEST_F(AppShimManagerTest, AppLaunchCancelled) {
   EXPECT_EQ(host_aa_.get(), manager_->FindHost(&profile_a_, kTestAppIdA));
 
   // Notify manager that a new browser has been associated with the app.
-  auto browser_window = std::make_unique<TestBrowserWindow>();
-  std::string app_name = web_app::GenerateApplicationNameFromAppId(kTestAppIdA);
-  Browser::CreateParams params = Browser::CreateParams::CreateForApp(
-      app_name, true, browser_window->GetBounds(), &profile_a_, true);
-  params.window = browser_window.release();
-  auto browser = Browser::DeprecatedCreateOwnedForTesting(params);
-  manager_->OnBrowserAdded(browser.get());
+  auto mock_browser = std::make_unique<MockBrowserWindowInterface>();
+  EXPECT_CALL(*mock_browser, GetProfile()).WillRepeatedly(Return(&profile_a_));
+  ui::UnownedUserDataHost user_data_host;
+  ON_CALL(testing::Const(*mock_browser), GetUnownedUserDataHost())
+      .WillByDefault(testing::ReturnRef(user_data_host));
+  MockAppBrowserController controller(mock_browser.get(), kTestAppIdA);
+  manager_->OnBrowserCreated(mock_browser.get());
 
   // Validate that OnAppLaunchCancelled does not close the app,
   // and that the state is still valid.
@@ -810,8 +881,10 @@ TEST_F(AppShimManagerTest, AppLaunchCancelled) {
 
   // Removing the browser should close the app.
   EXPECT_CALL(*manager_, MaybeTerminate()).WillOnce(Return());
-  manager_->OnBrowserRemoved(browser.get());
-  EXPECT_EQ(host_aa_.get(), manager_->FindHost(&profile_a_, kTestAppIdA));
+  manager_->OnBrowserClosed(mock_browser.get());
+  EXPECT_TRUE(base::test::RunUntil([&] {
+    return !host_aa_ && !manager_->FindHost(&profile_a_, kTestAppIdA);
+  }));
 }
 
 TEST_F(AppShimManagerTest, AppLifetime) {
@@ -1463,11 +1536,40 @@ TEST_F(AppShimManagerTest, MultiProfileSelectMenu) {
 }
 
 namespace {
-// A helper that records when Show is called on a BrowserWindow to verify
+// A helper that records when Show is called on a BaseWindow to verify
 // activation of existing browser windows.
-class TestBrowserWindowShow : public TestBrowserWindow {
+class TestBaseWindowShow final : public ui::BaseWindow {
  public:
+  ~TestBaseWindowShow() = default;
+
+  bool IsActive() const override { return false; }
+  bool IsMaximized() const override { return false; }
+  bool IsMinimized() const override { return false; }
+  bool IsFullscreen() const override { return false; }
+  gfx::NativeWindow GetNativeWindow() const override {
+    return gfx::NativeWindow();
+  }
+  gfx::Rect GetRestoredBounds() const override { return gfx::Rect(); }
+  ui::mojom::WindowShowState GetRestoredState() const override {
+    return ui::mojom::WindowShowState::kDefault;
+  }
+  gfx::Rect GetBounds() const override { return gfx::Rect(); }
   void Show() override { did_show = true; }
+  void Hide() override {}
+  bool IsVisible() const override { return false; }
+  void ShowInactive() override {}
+  void Close() override {}
+  void Activate() override {}
+  void Deactivate() override {}
+  void Maximize() override {}
+  void Minimize() override {}
+  void Restore() override {}
+  void SetBounds(const gfx::Rect& bounds) override {}
+  void FlashFrame(bool flash) override {}
+  ui::ZOrderLevel GetZOrderLevel() const override {
+    return ui::ZOrderLevel::kNormal;
+  }
+  void SetZOrderLevel(ui::ZOrderLevel order) override {}
 
   bool did_show = false;
 };
@@ -1499,14 +1601,18 @@ TEST_F(AppShimManagerTest, MultiProfileSelectMenu_ShowsBrowser) {
   EXPECT_TRUE(terminated_callback);
 
   // Notify manager that a new browser has been associated with the app.
-  auto browser_window_a = std::make_unique<TestBrowserWindowShow>();
-  TestBrowserWindowShow* browser_window_a_ptr = browser_window_a.get();
-  std::string app_name = web_app::GenerateApplicationNameFromAppId(kTestAppIdA);
-  Browser::CreateParams params_a = Browser::CreateParams::CreateForApp(
-      app_name, true, browser_window_a->GetBounds(), &profile_a_, true);
-  params_a.window = browser_window_a.release();
-  auto browser_a = Browser::DeprecatedCreateOwnedForTesting(params_a);
-  manager_->OnBrowserAdded(browser_a.get());
+  auto browser_window_a = std::make_unique<TestBaseWindowShow>();
+  TestBaseWindowShow* browser_window_a_ptr = browser_window_a.get();
+  auto mock_browser_a = std::make_unique<MockBrowserWindowInterface>();
+  EXPECT_CALL(*mock_browser_a, GetProfile())
+      .WillRepeatedly(Return(&profile_a_));
+  EXPECT_CALL(*mock_browser_a, GetWindow())
+      .WillRepeatedly(Return(browser_window_a.get()));
+  ui::UnownedUserDataHost user_data_host_a;
+  ON_CALL(testing::Const(*mock_browser_a), GetUnownedUserDataHost())
+      .WillByDefault(testing::ReturnRef(user_data_host_a));
+  MockAppBrowserController controller_a(mock_browser_a.get(), kTestAppIdA);
+  manager_->OnBrowserCreated(mock_browser_a.get());
 
   // Select profile B from the menu. This should request that the app be
   // launched.
@@ -1518,13 +1624,18 @@ TEST_F(AppShimManagerTest, MultiProfileSelectMenu_ShowsBrowser) {
   manager_->OnAppActivated(&profile_b_, kTestAppIdA);
 
   // Notify manager that a new browser has been associated with the app.
-  auto browser_window_b = std::make_unique<TestBrowserWindowShow>();
-  TestBrowserWindowShow* browser_window_b_ptr = browser_window_b.get();
-  Browser::CreateParams params_b = Browser::CreateParams::CreateForApp(
-      app_name, true, browser_window_b->GetBounds(), &profile_b_, true);
-  params_b.window = browser_window_b.release();
-  auto browser_b = Browser::DeprecatedCreateOwnedForTesting(params_b);
-  manager_->OnBrowserAdded(browser_b.get());
+  auto browser_window_b = std::make_unique<TestBaseWindowShow>();
+  TestBaseWindowShow* browser_window_b_ptr = browser_window_b.get();
+  auto mock_browser_b = std::make_unique<MockBrowserWindowInterface>();
+  EXPECT_CALL(*mock_browser_b, GetProfile())
+      .WillRepeatedly(Return(&profile_b_));
+  EXPECT_CALL(*mock_browser_b, GetWindow())
+      .WillRepeatedly(Return(browser_window_b.get()));
+  ui::UnownedUserDataHost user_data_host_b;
+  ON_CALL(testing::Const(*mock_browser_b), GetUnownedUserDataHost())
+      .WillByDefault(testing::ReturnRef(user_data_host_b));
+  MockAppBrowserController controller_b(mock_browser_b.get(), kTestAppIdA);
+  manager_->OnBrowserCreated(mock_browser_b.get());
 
   EXPECT_FALSE(browser_window_a_ptr->did_show);
   EXPECT_FALSE(browser_window_b_ptr->did_show);
@@ -1889,25 +2000,22 @@ TEST_F(AppShimManagerTest, UpdateApplicationDockMenu) {
   // Validate no application dock menu items have been set yet.
   ValidateDockMenuItems(nullptr, 0);
 
-  // Create browser objects that can be passed via OnBrowserSetLastActive.
-  std::string app_name = web_app::GenerateApplicationNameFromAppId(kTestAppIdA);
-  std::unique_ptr<Browser> browser_profile_a, browser_profile_b;
+  // Create mock browser objects that can be passed via OnBrowserActivated.
+  auto browser_profile_a = std::make_unique<MockBrowserWindowInterface>();
+  EXPECT_CALL(*browser_profile_a, GetProfile())
+      .WillRepeatedly(Return(&profile_a_));
+  ui::UnownedUserDataHost user_data_host_a;
+  ON_CALL(testing::Const(*browser_profile_a), GetUnownedUserDataHost())
+      .WillByDefault(testing::ReturnRef(user_data_host_a));
+  MockAppBrowserController controller_a(browser_profile_a.get(), kTestAppIdA);
 
-  {
-    auto browser_window_a = std::make_unique<TestBrowserWindow>();
-    Browser::CreateParams params = Browser::CreateParams::CreateForApp(
-        app_name, true, browser_window_a->GetBounds(), &profile_a_, true);
-    params.window = browser_window_a.release();
-    browser_profile_a = Browser::DeprecatedCreateOwnedForTesting(params);
-  }
-
-  {
-    auto browser_window_b = std::make_unique<TestBrowserWindow>();
-    Browser::CreateParams params = Browser::CreateParams::CreateForApp(
-        app_name, true, browser_window_b->GetBounds(), &profile_b_, true);
-    params.window = browser_window_b.release();
-    browser_profile_b = Browser::DeprecatedCreateOwnedForTesting(params);
-  }
+  auto browser_profile_b = std::make_unique<MockBrowserWindowInterface>();
+  EXPECT_CALL(*browser_profile_b, GetProfile())
+      .WillRepeatedly(Return(&profile_b_));
+  ui::UnownedUserDataHost user_data_host_b;
+  ON_CALL(testing::Const(*browser_profile_b), GetUnownedUserDataHost())
+      .WillByDefault(testing::ReturnRef(user_data_host_b));
+  MockAppBrowserController controller_b(browser_profile_b.get(), kTestAppIdA);
 
   // Set profile A browser as last active, and validate the application dock
   // menu items.
@@ -1916,7 +2024,7 @@ TEST_F(AppShimManagerTest, UpdateApplicationDockMenu) {
       .WillOnce(Return(testing::ByMove(
           MakeDockMenuItems(menu_items_profile_a, kNumMenuItemsForProfileA))));
 
-  manager_->OnBrowserSetLastActive(browser_profile_a.get());
+  manager_->OnBrowserActivated(browser_profile_a.get());
   ValidateDockMenuItems(menu_items_profile_a, kNumMenuItemsForProfileA);
 
   // Set profile B browser as last active, and validate the application dock
@@ -1926,7 +2034,7 @@ TEST_F(AppShimManagerTest, UpdateApplicationDockMenu) {
       .WillOnce(Return(testing::ByMove(
           MakeDockMenuItems(menu_items_profile_b, kNumMenuItemsForProfileB))));
 
-  manager_->OnBrowserSetLastActive(browser_profile_b.get());
+  manager_->OnBrowserActivated(browser_profile_b.get());
   ValidateDockMenuItems(menu_items_profile_b, kNumMenuItemsForProfileB);
 }
 

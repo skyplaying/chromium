@@ -30,6 +30,10 @@ consoles.list_view(
     name = "tryserver.chromium.cft",
 )
 
+_LOCATION_FILTER = [
+    ".*chrome_for_testing.*",
+]
+
 try_.builder(
     name = "linux-rel-cft",
     mirrors = [
@@ -42,11 +46,16 @@ try_.builder(
             "no_symbols",
             "devtools_do_typecheck",
             "chrome_for_testing",
+            "chrome_with_codecs",
             "linux",
             "x64",
         ],
     ),
     os = os.LINUX_DEFAULT,
+    cq_settings = try_.cq_settings(
+        location_filters = _LOCATION_FILTER,
+    ),
+    siso_remote_linking = True,
 )
 
 try_.builder(
@@ -60,13 +69,17 @@ try_.builder(
             "remoteexec",
             "no_symbols",
             "chrome_for_testing",
+            "chrome_with_codecs",
             "mac",
-            "x64",
+            "arm64",
         ],
     ),
     cores = None,
     os = os.MAC_DEFAULT,
     cpu = cpu.ARM64,
+    cq_settings = try_.cq_settings(
+        location_filters = _LOCATION_FILTER,
+    ),
 )
 
 try_.builder(
@@ -83,10 +96,14 @@ try_.builder(
             # is no longer needed.
             "no_resource_allowlisting",
             "chrome_for_testing",
+            "chrome_with_codecs",
             "win",
             "x64",
         ],
     ),
     os = os.WINDOWS_DEFAULT,
-    execution_timeout = 6 * time.hour,
+    cq_settings = try_.cq_settings(
+        location_filters = _LOCATION_FILTER,
+    ),
+    siso_remote_linking = True,
 )

@@ -10,6 +10,7 @@
 #include <string>
 #include <type_traits>
 
+#include "base/byte_size.h"
 #include "base/functional/bind.h"
 #include "base/strings/string_number_conversions.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -20,6 +21,7 @@
 #include "net/http/http_status_code.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "services/network/public/cpp/resource_request.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/url_loader_completion_status.h"
 #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
@@ -157,7 +159,7 @@ class HttpClientTest : public testing::Test {
         head->headers->SetHeader(key, value);
       }
 
-      status.decoded_body_length = response.body.length();
+      status.decoded_body_length = base::ByteSize(response.body.length());
     }
 
     test_url_loader_factory_.AddResponse(

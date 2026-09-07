@@ -106,7 +106,19 @@ public class TemplateUrlService {
     }
 
     /**
+     * Returns two lists: The first including prepopulated and policy enforced engines and the
+     * default engine, the second one recently visited sites.
+     */
+    public PrepopulatedAndRecentlyVisitedTemplateURLs
+            getPrepopulatedAndRecentlyVisitedTemplateURLs() {
+        ThreadUtils.assertOnUiThread();
+        return TemplateUrlServiceJni.get()
+                .getPrepopulatedAndRecentlyVisitedTemplateURLs(mNativeTemplateUrlServiceAndroid);
+    }
+
+    /**
      * Called from native to populate the list of all available search engines.
+     *
      * @param templateUrls The list of {@link TemplateUrl} to be added.
      * @param templateUrl The {@link TemplateUrl} would add to the list.
      */
@@ -139,6 +151,14 @@ public class TemplateUrlService {
     public @Nullable TemplateUrl getDefaultSearchEngineTemplateUrl() {
         if (!isLoaded()) return null;
         return TemplateUrlServiceJni.get().getDefaultSearchEngine(mNativeTemplateUrlServiceAndroid);
+    }
+
+    /**
+     * @return The display URL of the search engine (converting {searchTerms} to %s).
+     */
+    public String getDisplayUrl(TemplateUrl templateUrl) {
+        return TemplateUrlServiceJni.get()
+                .getDisplayUrl(mNativeTemplateUrlServiceAndroid, templateUrl.getNativePtr());
     }
 
     public void setSearchEngine(String selectedKeyword, @ChoiceMadeLocation int choiceLocation) {
@@ -343,6 +363,17 @@ public class TemplateUrlService {
     }
 
     /**
+     * Finds the TemplateUrl for the search engine for the given keyword.
+     *
+     * @param keyword The templateUrl keyword to look up.
+     * @return A {@link TemplateUrl} of the specified search engine, or null if not found.
+     */
+    public @Nullable TemplateUrl getTemplateUrlForKeyword(String keyword) {
+        return TemplateUrlServiceJni.get()
+                .getTemplateUrlForKeyword(mNativeTemplateUrlServiceAndroid, keyword);
+    }
+
+    /**
      * Finds the URL for the search engine for the given keyword.
      *
      * @param keyword The templateUrl keyword to look up.
@@ -467,6 +498,21 @@ public class TemplateUrlService {
     }
 
     /**
+     * Adds a search engine. The search engine is active by default.
+     *
+     * @param shortName The short name of the search engine to be added.
+     * @param keyword The keyword of the search engine to be added.
+     * @param searchUrl The search url of the search engine to be added.
+     * @return True if search engine was successfully added, false if add failed (e.g. search engine
+     *     with such keyword already exists).
+     */
+    public boolean addSearchEngine(String shortName, String keyword, String searchUrl) {
+        ThreadUtils.assertOnUiThread();
+        return TemplateUrlServiceJni.get()
+                .addSearchEngine(mNativeTemplateUrlServiceAndroid, shortName, keyword, searchUrl);
+    }
+
+    /**
      * Edits the search engine by keyword.
      *
      * @param keyword The keyword of the search engine to be edited.
@@ -488,6 +534,93 @@ public class TemplateUrlService {
                         searchUrl);
     }
 
+    /**
+     * Activates the search engine with the given keyword.
+     *
+     * @param keyword The keyword of the search engine to be activated.
+     */
+    public void activateSearchEngine(String keyword) {
+        ThreadUtils.assertOnUiThread();
+        TemplateUrlServiceJni.get().activateSearchEngine(mNativeTemplateUrlServiceAndroid, keyword);
+    }
+
+    /**
+     * Deactivates the search engine with the given keyword.
+     *
+     * @param keyword The keyword of the search engine to be deactivated.
+     */
+    public void deactivateSearchEngine(String keyword) {
+        ThreadUtils.assertOnUiThread();
+        TemplateUrlServiceJni.get()
+                .deactivateSearchEngine(mNativeTemplateUrlServiceAndroid, keyword);
+    }
+
+    /**
+     * Checks if the search engine name is valid to use.
+     *
+     * @param name The search engine name to check.
+     * @return True if the name is valid.
+     */
+    public boolean isSearchEngineNameValid(String name) {
+        ThreadUtils.assertOnUiThread();
+        return TemplateUrlServiceJni.get()
+                .isSearchEngineNameValid(mNativeTemplateUrlServiceAndroid, name);
+    }
+
+    /**
+     * Checks if a new search engine keyword is valid to use for adding a new search engine.
+     *
+     * @param keyword The keyword to check.
+     * @return True if the keyword is valid for a new search engine.
+     */
+    public boolean isSearchEngineKeywordValidToAdd(String keyword) {
+        ThreadUtils.assertOnUiThread();
+        return TemplateUrlServiceJni.get()
+                .isSearchEngineKeywordValidToAdd(mNativeTemplateUrlServiceAndroid, keyword);
+    }
+
+    /**
+     * Checks if a new search engine keyword is valid to use for the search engine with the given
+     * keyword.
+     *
+     * @param newKeyword The new keyword to check.
+     * @param currentKeyword The current keyword of the search engine being edited.
+     * @return True if the keyword is valid for the existing search engine.
+     */
+    public boolean isSearchEngineKeywordValidToEdit(String newKeyword, String currentKeyword) {
+        ThreadUtils.assertOnUiThread();
+        return TemplateUrlServiceJni.get()
+                .isSearchEngineKeywordValidToEdit(
+                        mNativeTemplateUrlServiceAndroid, newKeyword, currentKeyword);
+    }
+
+    /**
+     * Checks if a new search engine url is valid to use for adding a new search engine.
+     *
+     * @param url The search engine url to check.
+     * @return True if the url is valid.
+     */
+    public boolean isSearchEngineUrlValidToAdd(String url) {
+        ThreadUtils.assertOnUiThread();
+        return TemplateUrlServiceJni.get()
+                .isSearchEngineUrlValidToAdd(mNativeTemplateUrlServiceAndroid, url);
+    }
+
+    /**
+     * Checks if a new search engine url is valid to use for the search engine with the given
+     * keyword.
+     *
+     * @param url The search engine url to check.
+     * @param currentKeyword The current keyword of the search engine being edited.
+     * @return True if the url is valid.
+     */
+    public boolean isSearchEngineUrlValidToEdit(String url, String currentKeyword) {
+        ThreadUtils.assertOnUiThread();
+        return TemplateUrlServiceJni.get()
+                .isSearchEngineUrlValidToEdit(
+                        mNativeTemplateUrlServiceAndroid, url, currentKeyword);
+    }
+
     @NativeMethods
     public interface Natives {
         void load(long nativeTemplateUrlServiceAndroid);
@@ -500,12 +633,37 @@ public class TemplateUrlService {
         boolean removeSearchEngine(
                 long nativeTemplateUrlServiceAndroid, @JniType("std::u16string") String keyword);
 
+        boolean addSearchEngine(
+                long nativeTemplateUrlServiceAndroid,
+                @JniType("std::u16string") String shortName,
+                @JniType("std::u16string") String keyword,
+                @JniType("std::string") String searchUrl);
+
         boolean editSearchEngine(
                 long nativeTemplateUrlServiceAndroid,
                 @JniType("std::u16string") String keyword,
                 @JniType("std::u16string") String shortName,
                 @JniType("std::u16string") String newKeyword,
                 @JniType("std::string") String searchUrl);
+
+        boolean isSearchEngineNameValid(
+                long nativeTemplateUrlServiceAndroid, @JniType("std::u16string") String name);
+
+        boolean isSearchEngineKeywordValidToAdd(
+                long nativeTemplateUrlServiceAndroid, @JniType("std::u16string") String newKeyword);
+
+        boolean isSearchEngineKeywordValidToEdit(
+                long nativeTemplateUrlServiceAndroid,
+                @JniType("std::u16string") String newKeyword,
+                @JniType("std::u16string") String currentKeyword);
+
+        boolean isSearchEngineUrlValidToAdd(
+                long nativeTemplateUrlServiceAndroid, @JniType("std::string") String url);
+
+        boolean isSearchEngineUrlValidToEdit(
+                long nativeTemplateUrlServiceAndroid,
+                @JniType("std::string") String url,
+                @JniType("std::u16string") String currentKeyword);
 
         boolean isDefaultSearchManaged(long nativeTemplateUrlServiceAndroid);
 
@@ -536,6 +694,9 @@ public class TemplateUrlService {
                 boolean shouldPrefetch,
                 String protocolVersion);
 
+        TemplateUrl getTemplateUrlForKeyword(
+                long nativeTemplateUrlServiceAndroid, @JniType("std::u16string") String keyword);
+
         String getSearchEngineUrlFromTemplateUrl(
                 long nativeTemplateUrlServiceAndroid, String keyword);
 
@@ -565,6 +726,9 @@ public class TemplateUrlService {
 
         void getTemplateUrls(long nativeTemplateUrlServiceAndroid, List<TemplateUrl> templateUrls);
 
+        PrepopulatedAndRecentlyVisitedTemplateURLs getPrepopulatedAndRecentlyVisitedTemplateURLs(
+                long nativeTemplateUrlServiceAndroid);
+
         @JniType("std::vector<const TemplateURL*>")
         List<TemplateUrl> getTemplateUrlsByCategory(
                 long nativeTemplateUrlServiceAndroid,
@@ -572,6 +736,15 @@ public class TemplateUrlService {
 
         TemplateUrl getDefaultSearchEngine(long nativeTemplateUrlServiceAndroid);
 
+        @JniType("std::u16string")
+        String getDisplayUrl(long nativeTemplateUrlServiceAndroid, long templateUrlPtr);
+
         String[] getImageUrlAndPostContent(long nativeTemplateUrlServiceAndroid);
+
+        void activateSearchEngine(
+                long nativeTemplateUrlServiceAndroid, @JniType("std::u16string") String keyword);
+
+        void deactivateSearchEngine(
+                long nativeTemplateUrlServiceAndroid, @JniType("std::u16string") String keyword);
     }
 }

@@ -31,7 +31,9 @@ build_webui("build_overlay") {
 
   static_files = [
     "arrow_right.svg",
+    "arrow_right_old.svg",
     "feedback.svg",
+    "feedback_old.svg",
     "icon_clear.svg",
     "learn_more.svg",
     "lens_overlay.html",
@@ -76,6 +78,9 @@ build_webui("build_overlay") {
     "screenshot_bitmap_browser_proxy.ts",
     "screenshot_utils.ts",
     "searchbox_utils.ts",
+    "selection_overlay_base.ts",
+    "selection_overlay_base_lit.ts",
+    "selection_overlay_base_handler.ts",
     "selection_utils.ts",
     "side_panel/feedback_toast.html.ts",
     "side_panel/feedback_toast.ts",

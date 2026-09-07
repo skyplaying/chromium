@@ -20,13 +20,11 @@ import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.Shadows;
-import org.robolectric.annotation.Config;
-import org.robolectric.shadows.ShadowLooper;
 
 import org.chromium.base.task.PostTask;
 import org.chromium.base.task.TaskTraits;
-import org.chromium.base.test.BaseRobolectricTestRule;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.build.BuildConfig;
 
 import java.util.ArrayList;
@@ -35,7 +33,6 @@ import java.util.concurrent.FutureTask;
 
 /** Test class for {@link UnownedUserDataKey}, which also describes typical usage. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class UnownedUserDataKeyTest {
     private static void forceGC() {
         try {
@@ -93,7 +90,7 @@ public class UnownedUserDataKeyTest {
 
     @Before
     public void setUp() {
-        ShadowLooper.pauseMainLooper();
+
         mHost1 = new UnownedUserDataHost(new Handler(Looper.getMainLooper()));
         mHost2 = new UnownedUserDataHost(new Handler(Looper.getMainLooper()));
     }
@@ -784,7 +781,7 @@ public class UnownedUserDataKeyTest {
                 new FutureTask<>(
                         () -> assertAsserts(() -> KEY1.retrieveDataFromHost(mHost1)), null);
         PostTask.postTask(TaskTraits.USER_VISIBLE, getTask);
-        BaseRobolectricTestRule.runAllBackgroundAndUi();
+        RobolectricUtil.runAllBackgroundAndUi();
         getTask.get();
 
         // Manual cleanup to ensure we can verify host map size during tear down.

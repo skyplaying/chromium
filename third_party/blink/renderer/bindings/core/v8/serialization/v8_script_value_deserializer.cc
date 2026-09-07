@@ -30,6 +30,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_dom_quad.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_dom_rect.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_dom_rect_read_only.h"
+#include "third_party/blink/renderer/bindings/core/v8/v8_element_image.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_fenced_frame_config.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_file.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_file_list.h"
@@ -57,6 +58,7 @@
 #include "third_party/blink/renderer/core/geometry/dom_quad.h"
 #include "third_party/blink/renderer/core/geometry/dom_rect.h"
 #include "third_party/blink/renderer/core/geometry/dom_rect_read_only.h"
+#include "third_party/blink/renderer/core/html/canvas/element_image.h"
 #include "third_party/blink/renderer/core/html/canvas/image_data.h"
 #include "third_party/blink/renderer/core/html/fenced_frame/fenced_frame_config.h"
 #include "third_party/blink/renderer/core/imagebitmap/image_bitmap.h"
@@ -192,6 +194,13 @@ V8ScriptValueDeserializer::V8ScriptValueDeserializer(
       transferred_message_ports_(options.message_ports),
       blob_info_array_(options.blob_info) {
   deserializer_.SetSupportsLegacyWireFormat(true);
+  if (!serialized_script_value_->SharedImmutableArrayBuffersContents()
+           .empty()) {
+    auto* execution_context = ExecutionContext::From(script_state_);
+    CHECK(execution_context->SharedArrayBufferTransferAllowed());
+    deserializer_.SetSharedImmutableBackingStores(
+        serialized_script_value_->ReleaseSharedImmutableBackingStores());
+  }
 }
 
 v8::Local<v8::Value> V8ScriptValueDeserializer::Deserialize() {
@@ -217,8 +226,10 @@ v8::Local<v8::Value> V8ScriptValueDeserializer::Deserialize() {
   }
 
   bool read_header;
-  if (!deserializer_.ReadHeader(context).To(&read_header))
+  if (!deserializer_.ReadHeader(context).To(&read_header)) {
+    has_error_ = true;
     return v8::Null(isolate);
+  }
   DCHECK(read_header);
 
   // If there was no Blink envelope earlier, Blink shares the wire format
@@ -230,8 +241,11 @@ v8::Local<v8::Value> V8ScriptValueDeserializer::Deserialize() {
   Transfer();
 
   v8::Local<v8::Value> value;
-  if (!deserializer_.ReadValue(context).ToLocal(&value))
+  if (!deserializer_.ReadValue(context).ToLocal(&value)) {
+    has_error_ = true;
     return v8::Null(isolate);
+  }
+
   if (slow_mode_ && value->IsObject()) {
     // TODO(caseq): consider additionally gating this on payload size.
     MaskDeserializationTimings(value.As<v8::Object>());
@@ -334,6 +348,10 @@ void V8ScriptValueDeserializer::MaskDeserializationTimings(
     v8::ValueDeserializer deserializer(isolate, serialized->Data(),
                                        serialized->DataLengthInBytes(),
                                        &delegate);
+    if (!serialized->SharedImmutableArrayBuffersContents().empty()) {
+      deserializer.SetSharedImmutableBackingStores(
+          serialized->ReleaseSharedImmutableBackingStores());
+    }
 
     uint32_t version;
     size_t version_envelope_size =
@@ -401,7 +419,7 @@ bool V8ScriptValueDeserializer::ReadUTF8String(String* string) {
       !ReadRawBytesToSpan(utf8_length, &utf8_data)) {
     return false;
   }
-  *string = String::FromUTF8(utf8_data);
+  *string = String::FromUtf8(utf8_data);
 
   // Decoding must have failed; this encoding does not distinguish between null
   // and empty strings.
@@ -558,6 +576,17 @@ ScriptWrappable* V8ScriptValueDeserializer::ReadDOMObject(
       if (!ReadUint32(&index) || index >= transferred_image_bitmaps.size())
         return nullptr;
       return transferred_image_bitmaps[index].Get();
+    }
+    case kElementImageTransferTag: {
+      uint32_t index = 0;
+      if (!unpacked_value_) {
+        return nullptr;
+      }
+      const auto& transferred_element_images = unpacked_value_->ElementImages();
+      if (!ReadUint32(&index) || index >= transferred_element_images.size()) {
+        return nullptr;
+      }
+      return transferred_element_images[index].Get();
     }
     case kImageDataTag: {
       SerializedPredefinedColorSpace predefined_color_space =
@@ -728,13 +757,11 @@ ScriptWrappable* V8ScriptValueDeserializer::ReadDOMObject(
           !ReadUint32(&sink_id)) {
         return nullptr;
       }
-      OffscreenCanvas* canvas =
-          OffscreenCanvas::Create(GetScriptState(), width, height);
+      OffscreenCanvas* canvas = OffscreenCanvas::Create(
+          GetScriptState(), width, height, client_id, sink_id, canvas_id);
       canvas->SetLocale(LayoutLocale::Get(AtomicString(locale_string)));
       SerializedTextDirectionSettings direction_setting(serialized_direction);
       canvas->SetTextDirection(direction_setting.GetTextDirection());
-      canvas->SetPlaceholderCanvasId(canvas_id);
-      canvas->SetFrameSinkId(client_id, sink_id);
       return canvas;
     }
     case kReadableStreamTransferTag: {
@@ -819,10 +846,9 @@ ScriptWrappable* V8ScriptValueDeserializer::ReadDOMObject(
           has_requested ? std::make_optional(requested) : std::nullopt);
     }
     case kFencedFrameConfigTag: {
-      String url_string, shared_storage_context, urn_uuid_string;
-      uint32_t has_shared_storage_context, has_container_size, container_width,
-          container_height, has_content_size, content_width, content_height,
-          freeze_initial_size;
+      String url_string, urn_uuid_string;
+      uint32_t has_container_size, container_width, container_height,
+          has_content_size, content_width, content_height, freeze_initial_size;
       KURL url;
       std::optional<KURL> urn_uuid;
       FencedFrameConfig::AttributeVisibility url_visibility;
@@ -833,17 +859,6 @@ ScriptWrappable* V8ScriptValueDeserializer::ReadDOMObject(
               &url_visibility) ||
           !ReadUint32(&freeze_initial_size) ||
           !ReadUTF8String(&urn_uuid_string)) {
-        return nullptr;
-      }
-
-      // `ReadUTF8String` does not distinguish between null and empty strings.
-      // Adding the `has_shared_storage_context` bit allows us to get this
-      // functionality back, which is needed for Shared Storage.
-      if (!ReadUint32(&has_shared_storage_context)) {
-        return nullptr;
-      }
-      if (has_shared_storage_context &&
-          !ReadUTF8String(&shared_storage_context)) {
         return nullptr;
       }
 
@@ -878,9 +893,9 @@ ScriptWrappable* V8ScriptValueDeserializer::ReadDOMObject(
         return nullptr;
       }
 
-      return FencedFrameConfig::Create(url, shared_storage_context, urn_uuid,
-                                       container_size, content_size,
-                                       url_visibility, freeze_initial_size);
+      return FencedFrameConfig::Create(url, urn_uuid, container_size,
+                                       content_size, url_visibility,
+                                       freeze_initial_size);
     }
     default:
       break;
@@ -1049,6 +1064,8 @@ bool V8ScriptValueDeserializer::ExecutionContextExposesInterface(
     case kImageBitmapTag:
     case kImageBitmapTransferTag:
       return V8ImageBitmap::IsExposed(execution_context);
+    case kElementImageTransferTag:
+      return V8ElementImage::IsExposed(execution_context);
     case kImageDataTag:
       return V8ImageData::IsExposed(execution_context);
     case kDOMPointTag:

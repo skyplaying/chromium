@@ -65,8 +65,6 @@ using pAPerformanceHint_notifyWorkloadIncrease =
             bool cpu,
             bool gpu,
             const char* identifier);
-using pAPerformanceHint_setPreferPowerEfficiency =
-    int (*)(APerformanceHintSession* session, bool preferPowerEfficiency);
 }
 
 namespace viz {
@@ -90,14 +88,9 @@ bool ShouldUseWorkloadReset() {
 }
 
 bool ShouldUseWorkloadIncrease() {
-  return android_get_device_api_level() > __ANDROID_API_V__ &&
-         base::FeatureList::IsEnabled(
-             features::kEnableADPFWorkloadIncreaseOnPageLoad);
+  return android_get_device_api_level() > __ANDROID_API_V__;
 }
 
-bool CanUsePowerEfficiencyHint() {
-  return android_get_device_api_level() >= __ANDROID_API_V__;
-}
 
 struct AdpfMethods {
   static const AdpfMethods& Get() {
@@ -129,9 +122,6 @@ struct AdpfMethods {
     if (ShouldUseWorkloadIncrease()) {
       LOAD_FUNCTION(main_dl_handle, APerformanceHint_notifyWorkloadIncrease);
     }
-    if (CanUsePowerEfficiencyHint()) {
-      LOAD_FUNCTION(main_dl_handle, APerformanceHint_setPreferPowerEfficiency);
-    }
   }
 
   ~AdpfMethods() = default;
@@ -148,8 +138,6 @@ struct AdpfMethods {
   pAPerformanceHint_notifyWorkloadReset APerformanceHint_notifyWorkloadResetFn;
   pAPerformanceHint_notifyWorkloadIncrease
       APerformanceHint_notifyWorkloadIncreaseFn;
-  pAPerformanceHint_setPreferPowerEfficiency
-      APerformanceHint_setPreferPowerEfficiencyFn;
 };
 
 class AdpfHintSession : public HintSession {
@@ -168,37 +156,18 @@ class AdpfHintSession : public HintSession {
       const base::flat_set<base::PlatformThreadId>& thread_ids) override;
   void NotifyWorkloadReset() override;
   void NotifyWorkloadIncrease() override;
-  void SetPreferPowerEfficientScheduling(
-      bool prefer_efficient_scheduling) final;
 
   void WakeUp();
 
  private:
-  bool ShouldScheduleForEfficiency() const;
-  void UpdateEfficiencyHintIfNeeded(const bool);
-  void UpdateLastFrameReportTime();
   void CloseSessionImpl(base::WaitableEvent* session_closed);
   void SetThreadsImpl(std::vector<int> thread_ids);
 
-  const bool rate_limit_boost_;
-  const base::TimeDelta rate_limit_boost_min_wait_;
-
-  base::TimeTicks last_frame_report_time_ = base::TimeTicks();
   const raw_ptr<APerformanceHintSession> hint_session_;
   const raw_ptr<HintSessionFactoryImpl> factory_;
   base::TimeDelta target_duration_;
   const SessionType type_;
   BoostManager boost_manager_;
-  // Debounces this session's preference for adaptive mode. We should usually be
-  // efficient, so most compositor frame sources should be sending efficiency
-  // hints most of the time. However, because we can receive updates out of
-  // order and at different frame rates, and ADPF is global, some smoothing is
-  // required to avoid rapid strobing. Each time an boost is requested, we hold
-  // it for a minimum of 4 frames.
-  int8_t will_prefer_efficiency_in_frames_ = 0;
-  static constexpr int kMinimumFramesForPerformanceBoost = 4;
-  // Stores the most recent efficiency preference sent to ADPF.
-  bool prefer_efficiency_applied_ = false;
 
   // Task runner for making heavier calls to the ADPF API off the Viz thread.
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
@@ -221,8 +190,6 @@ class HintSessionFactoryImpl : public HintSessionFactory {
       base::flat_set<base::PlatformThreadId> transient_thread_ids,
       HintSession::SessionType type) override;
 
-  void SetPreferPowerEfficientScheduling(bool) override;
-
  private:
   friend class AdpfHintSession;
   friend class HintSessionFactory;
@@ -244,10 +211,7 @@ AdpfHintSession::AdpfHintSession(APerformanceHintSession* session,
                                  HintSessionFactoryImpl* factory,
                                  base::TimeDelta target_duration,
                                  SessionType type)
-    : rate_limit_boost_(
-          base::FeatureList::IsEnabled(features::kEnableADPFBoostRateLimit)),
-      rate_limit_boost_min_wait_(features::kAdpfBoostRateLimitMinWait.Get()),
-      hint_session_(session),
+    : hint_session_(session),
       factory_(factory),
       target_duration_(target_duration),
       type_(type) {
@@ -295,54 +259,10 @@ void AdpfHintSession::UpdateTargetDuration(base::TimeDelta target_duration) {
       hint_session_, target_duration.InNanoseconds());
 }
 
-bool AdpfHintSession::ShouldScheduleForEfficiency() const {
-  switch (features::kAdpfEfficiencyModeParam.Get()) {
-    case features::AdpfEfficiencyMode::kNever:
-      [[likely]] return false;
-    case features::AdpfEfficiencyMode::kAdaptive: {
-      return will_prefer_efficiency_in_frames_ <= 0;
-    }
-    default:
-      return true;
-  }
-}
-
-void AdpfHintSession::UpdateLastFrameReportTime() {
-  last_frame_report_time_ = base::TimeTicks::Now();
-}
-
-void AdpfHintSession::UpdateEfficiencyHintIfNeeded(
-    const bool prefer_efficient_scheduling) {
-  if (prefer_efficiency_applied_ == prefer_efficient_scheduling ||
-      !CanUsePowerEfficiencyHint()) [[likely]] {
-    return;
-  }
-  const int result =
-      AdpfMethods::Get().APerformanceHint_setPreferPowerEfficiencyFn(
-          hint_session_, prefer_efficient_scheduling);
-  if (result == 0) [[likely]] {
-    prefer_efficiency_applied_ = prefer_efficient_scheduling;
-    if (!prefer_efficient_scheduling) {
-      TRACE_EVENT_ASYNC_BEGIN1("android.adpf", "AdpfHintSession::Boost", this,
-                               "session", (uintptr_t)this);
-    } else {
-      TRACE_EVENT_ASYNC_END1("android.adpf", "AdpfHintSession::Boost", this,
-                             "session", (uintptr_t)this);
-    }
-  } else {
-    LOG(ERROR) << "setPreferPowerEfficiency (service failure). Returned: "
-               << std::strerror(result);
-  }
-}
-
 void AdpfHintSession::ReportCpuCompletionTime(base::TimeDelta actual_duration,
                                               base::TimeTicks draw_start,
                                               BoostType preferable_boost_type) {
   DCHECK_CALLED_ON_VALID_THREAD(factory_->thread_checker_);
-
-  UpdateEfficiencyHintIfNeeded(ShouldScheduleForEfficiency());
-  will_prefer_efficiency_in_frames_ =
-      std::max(0, will_prefer_efficiency_in_frames_ - 1);
 
   // At the moment, we don't have a good way to distinguish repeating animation
   // work from other workloads on CrRendererMain, so we don't report any timing
@@ -358,21 +278,8 @@ void AdpfHintSession::ReportCpuCompletionTime(base::TimeDelta actual_duration,
                       "target_duration_ms", target_duration_.InMillisecondsF());
   AdpfMethods::Get().APerformanceHint_reportActualWorkDurationFn(
       hint_session_, frame_duration.InNanoseconds());
-  UpdateLastFrameReportTime();
 }
 
-void AdpfHintSession::SetPreferPowerEfficientScheduling(
-    bool prefer_efficient_scheduling) {
-  DCHECK_CALLED_ON_VALID_THREAD(factory_->thread_checker_);
-  if (!prefer_efficient_scheduling) [[unlikely]] {
-    // prefer_efficient_scheduling is derived from MainThreadSchedulerImpl's
-    // code, which typically holds prefer_efficient_scheduling = false for
-    // hundreds of milliseconds. We de-bounce this side because we may be
-    // receiving different efficiency hints from different
-    // MainThreadSchedulerImpl's, running at different frame rates.
-    will_prefer_efficiency_in_frames_ = kMinimumFramesForPerformanceBoost;
-  }
-}
 
 void AdpfHintSession::SetThreadsImpl(std::vector<int> thread_ids) {
   int retval = AdpfMethods::Get().APerformanceHint_setThreadsFn(
@@ -424,12 +331,6 @@ void AdpfHintSession::NotifyWorkloadIncrease() {
 
 void AdpfHintSession::WakeUp() {
   DCHECK_CALLED_ON_VALID_THREAD(factory_->thread_checker_);
-  if (rate_limit_boost_ &&
-      base::TimeTicks::Now() <=
-          last_frame_report_time_ + rate_limit_boost_min_wait_) {
-    TRACE_EVENT_INSTANT("android.adpf", "Skip WakeUp");
-    return;
-  }
   if (ShouldUseWorkloadReset()) {
     NotifyWorkloadReset();
   } else {
@@ -486,13 +387,6 @@ std::unique_ptr<HintSession> HintSessionFactoryImpl::CreateSession(
                                            type);
 }
 
-void HintSessionFactoryImpl::SetPreferPowerEfficientScheduling(
-    bool prefer_efficient_scheduling) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  for (auto& session : hint_sessions_) {
-    session->SetPreferPowerEfficientScheduling(prefer_efficient_scheduling);
-  }
-}
 
 void HintSessionFactoryImpl::WakeUp() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);

@@ -32,14 +32,8 @@ struct AdaptiveRefreshRateInfo {
 };
 
 // The DisplayPrivate is used by privileged clients to talk to Display.
-[DirectReceiver]
 interface DisplayPrivate {
   SetDisplayVisible(bool visible);
-
-  // Attempts to immediately swap a frame with the current size if possible,
-  // then will no longer swap until Resize() is called with a non-empty size.
-  [EnableIf=is_win, Sync]
-  DisableSwapUntilResize() => ();
 
   // Resizes the display.
   Resize(gfx.mojom.Size size);
@@ -72,7 +66,7 @@ interface DisplayPrivate {
   ForceImmediateDrawAndSwapIfPossible();
 
   // Updates the refresh rate of the associated Display.
-  [EnableIf=is_android]
+  [EnableIf=is_android|is_mac]
   UpdateRefreshRate(float refresh_rate);
 
   // Updates adaptive refresh rate information of the associated Display.

@@ -4,7 +4,6 @@
 
 #import "ios/chrome/common/ui/button_stack/button_stack_view_controller.h"
 
-#import "ios/chrome/common/app_group/app_group_utils.h"
 #import "ios/chrome/common/ui/button_stack/button_stack_action_delegate.h"
 #import "ios/chrome/common/ui/button_stack/button_stack_configuration.h"
 #import "ios/chrome/common/ui/button_stack/button_stack_constants.h"
@@ -66,8 +65,6 @@ typedef NS_ENUM(NSInteger, ButtonStackButtonPosition) {
   NSLayoutConstraint* _scrollContainerBottomToSafeAreaBottomConstraint;
   // Stack view for the action buttons.
   UIStackView* _actionStackView;
-  // The bottom constraint for the action stack view against the safe area.
-  NSLayoutConstraint* _actionStackSafeAreaBottomConstraint;
   // A secondary bottom constraint for the action stack view against the view.
   NSLayoutConstraint* _actionStackBottomConstraint;
   // The container for the scroll view.
@@ -107,7 +104,7 @@ typedef NS_ENUM(NSInteger, ButtonStackButtonPosition) {
 - (void)viewDidLoad {
   [super viewDidLoad];
 
-  self.view.backgroundColor = [UIColor colorNamed:kBackgroundColor];
+  self.view.backgroundColor = [UIColor colorNamed:kPrimaryBackgroundColor];
 
   _scrollContainerView = [self createScrollContainerView];
   [self.view addSubview:_scrollContainerView];
@@ -139,6 +136,13 @@ typedef NS_ENUM(NSInteger, ButtonStackButtonPosition) {
   [super viewDidAppear:animated];
   [_scrollView flashScrollIndicators];
   [self updateGradientVisibility];
+}
+
+- (void)viewDidDisappear:(BOOL)animated {
+  [super viewDidDisappear:animated];
+  if (self.isBeingDismissed) {
+    [self.actionDelegate didDismissButtonStackViewController];
+  }
 }
 
 - (void)viewDidLayoutSubviews {
@@ -381,17 +385,9 @@ typedef NS_ENUM(NSInteger, ButtonStackButtonPosition) {
                                  action:@selector(handleSecondaryAction)
                        forControlEvents:UIControlEventTouchUpInside];
 
-  // The order of the primary and secondary buttons can be swapped based on this
-  // feature flag.
-  if (app_group::IsConfirmationButtonSwapOrderEnabled()) {
-    [_actionStackView addArrangedSubview:self.tertiaryActionButton];
-    [_actionStackView addArrangedSubview:self.secondaryActionButton];
-    [_actionStackView addArrangedSubview:self.primaryActionButton];
-  } else {
-    [_actionStackView addArrangedSubview:self.tertiaryActionButton];
-    [_actionStackView addArrangedSubview:self.primaryActionButton];
-    [_actionStackView addArrangedSubview:self.secondaryActionButton];
-  }
+  [_actionStackView addArrangedSubview:self.tertiaryActionButton];
+  [_actionStackView addArrangedSubview:self.primaryActionButton];
+  [_actionStackView addArrangedSubview:self.secondaryActionButton];
 
   [self.view addSubview:_actionStackView];
 }
@@ -412,12 +408,8 @@ typedef NS_ENUM(NSInteger, ButtonStackButtonPosition) {
 
   BOOL useLegacyBottomMargin = NO;
   if (@available(iOS 26, *)) {
-  } else {
-    if (!app_group::IsConfirmationButtonSwapOrderEnabled()) {
-      if (!_secondaryActionButton.hidden) {
-        useLegacyBottomMargin = YES;
-      }
-    }
+  } else if (!_secondaryActionButton.hidden) {
+    useLegacyBottomMargin = YES;
   }
   self.actionStackBottomMargin = useLegacyBottomMargin
                                      ? kLegacyButtonStackBottomMargin
@@ -433,7 +425,6 @@ typedef NS_ENUM(NSInteger, ButtonStackButtonPosition) {
   if (![self hasVisibleButtons]) {
     contraintConstant = 0;
   }
-  _actionStackSafeAreaBottomConstraint.constant = contraintConstant;
   _actionStackBottomConstraint.constant = contraintConstant;
 }
 
@@ -459,6 +450,7 @@ typedef NS_ENUM(NSInteger, ButtonStackButtonPosition) {
   switch (position) {
     case ButtonStackButtonPositionPrimary:
       button = _primaryActionButton;
+      image = _configuration.primaryActionImage;
       break;
     case ButtonStackButtonPositionSecondary: {
       button = _secondaryActionButton;
@@ -534,10 +526,11 @@ typedef NS_ENUM(NSInteger, ButtonStackButtonPosition) {
       constraintGreaterThanOrEqualToAnchor:_scrollView.heightAnchor];
   _contentViewHeightConstraint.priority = UILayoutPriorityDefaultLow;
 
-  _actionStackSafeAreaBottomConstraint = [_actionStackView.bottomAnchor
-      constraintEqualToAnchor:safeAreaLayoutGuide.bottomAnchor];
+  NSLayoutConstraint* actionStackSafeAreaBottomConstraint =
+      [_actionStackView.bottomAnchor
+          constraintEqualToAnchor:safeAreaLayoutGuide.bottomAnchor];
   // Lower priority to avoid conflicts when the safe area bottom inset is zero.
-  _actionStackSafeAreaBottomConstraint.priority = UILayoutPriorityDefaultHigh;
+  actionStackSafeAreaBottomConstraint.priority = UILayoutPriorityDefaultHigh;
 
   _actionStackBottomConstraint = [_actionStackView.bottomAnchor
       constraintLessThanOrEqualToAnchor:view.bottomAnchor];
@@ -553,7 +546,7 @@ typedef NS_ENUM(NSInteger, ButtonStackButtonPosition) {
         constraintEqualToAnchor:_widthLayoutGuide.trailingAnchor],
     _contentViewHeightConstraint,
     _actionStackBottomConstraint,
-    _actionStackSafeAreaBottomConstraint,
+    actionStackSafeAreaBottomConstraint,
   ]];
 }
 
@@ -575,6 +568,11 @@ typedef NS_ENUM(NSInteger, ButtonStackButtonPosition) {
     _primaryActionButton.primaryButtonImage = PrimaryButtonImageCheckmark;
     _primaryActionButton.imageView.accessibilityIdentifier =
         kButtonStackCheckmarkSymbolAccessibilityIdentifier;
+  } else if (self.configuration.primaryActionImage) {
+    UIButtonConfiguration* config = _primaryActionButton.configuration;
+    config.image = self.configuration.primaryActionImage;
+    _primaryActionButton.configuration = config;
+    _primaryActionButton.primaryButtonImage = PrimaryButtonImageCustom;
   } else {
     _primaryActionButton.primaryButtonImage = PrimaryButtonImageNone;
   }

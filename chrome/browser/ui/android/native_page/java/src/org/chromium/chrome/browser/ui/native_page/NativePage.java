@@ -11,7 +11,11 @@ import androidx.annotation.IntDef;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.settings.SettingsInTab;
 import org.chromium.components.embedder_support.util.UrlConstants;
+import org.chromium.components.embedder_support.util.UrlUtilities;
+import org.chromium.components.extensions.ExtensionsBuildflags;
 import org.chromium.url.GURL;
 
 import java.lang.annotation.Retention;
@@ -93,6 +97,18 @@ public interface NativePage {
     default void reload() {}
 
     /**
+     * Whether the NativePage should be reused for the next URL.
+     *
+     * @param curl current URL
+     * @param nurl next URL.
+     * @param preferReuse Prefer reusing NativePage.
+     */
+    default boolean shouldReusePage(@Nullable String curl, String nurl, boolean preferReuse) {
+        // By default, we do not reuse but create a new NativePage for the next URL.
+        return false;
+    }
+
+    /**
      * @return True if the native page needs the toolbar shadow to be drawn.
      */
     boolean needsToolbarShadow();
@@ -152,6 +168,9 @@ public interface NativePage {
         return true;
     }
 
+    /** Triggers downloading for the native page. */
+    default void download() {}
+
     /** Notify the native page that it is about to be navigated back or hidden by a back press. */
     default void notifyHidingWithBack() {}
 
@@ -177,7 +196,9 @@ public interface NativePage {
         NativePageType.HISTORY,
         NativePageType.EXPLORE,
         NativePageType.MANAGEMENT,
-        NativePageType.PDF
+        NativePageType.PDF,
+        NativePageType.BRICKS,
+        NativePageType.SETTINGS,
     })
     @Retention(RetentionPolicy.SOURCE)
     @interface NativePageType {
@@ -191,6 +212,8 @@ public interface NativePage {
         int EXPLORE = 7;
         int MANAGEMENT = 8;
         int PDF = 9;
+        int BRICKS = 10;
+        int SETTINGS = 11;
     }
 
     /**
@@ -201,7 +224,8 @@ public interface NativePage {
      */
     static boolean isNativePageUrl(GURL url, boolean isIncognito, boolean hasPdfDownload) {
         return url != null
-                && nativePageType(url, null, isIncognito, hasPdfDownload) != NativePageType.NONE;
+                && nativePageType(url, null, isIncognito, /* preferReuse= */ false, hasPdfDownload)
+                        != NativePageType.NONE;
     }
 
     /**
@@ -218,6 +242,7 @@ public interface NativePage {
      * @param url The URL to be checked.
      * @param candidatePage NativePage to return as result if the url is matched.
      * @param isIncognito Whether the page will be displayed in incognito mode.
+     * @param preferReuse Prefer reusing NativePage.
      * @param hasPdfDownload Whether the page has an associated pdf download.
      * @return Type of the native page defined in {@link NativePageType}.
      */
@@ -225,14 +250,12 @@ public interface NativePage {
             GURL url,
             @Nullable NativePage candidatePage,
             boolean isIncognito,
+            boolean preferReuse,
             boolean hasPdfDownload) {
         if (hasPdfDownload) {
-            // For navigation with associated pdf download (e.g. open a pdf link), pdf page should
-            // be created.
-            // Unlike other native pages, each pdf page could be different. We need to compare
-            // the entire url instead of the host to determine if the pdf candidate page could
-            // be reused.
-            if (candidatePage != null && candidatePage.getUrl().equals(url.getSpec())) {
+            String curl = candidatePage != null ? candidatePage.getUrl() : null;
+            String nurl = url.getSpec();
+            if (candidatePage != null && candidatePage.shouldReusePage(curl, nurl, preferReuse)) {
                 return NativePageType.CANDIDATE;
             } else {
                 return NativePageType.PDF;
@@ -256,12 +279,11 @@ public interface NativePage {
      */
     private static @NativePageType int chromePageType(
             GURL url, @Nullable NativePage candidatePage, boolean isIncognito) {
-        String host = url.getHost();
-        String scheme = url.getScheme();
-        if (!UrlConstants.CHROME_NATIVE_SCHEME.equals(scheme)
-                && !UrlConstants.CHROME_SCHEME.equals(scheme)) {
+        if (!UrlUtilities.isChromeScheme(url)) {
             return NativePageType.NONE;
         }
+
+        String host = url.getHost();
 
         if (candidatePage != null && candidatePage.getHost().equals(host)) {
             return NativePageType.CANDIDATE;
@@ -280,7 +302,21 @@ public interface NativePage {
         } else if (UrlConstants.EXPLORE_HOST.equals(host)) {
             return NativePageType.EXPLORE;
         } else if (UrlConstants.MANAGEMENT_HOST.equals(host)) {
+            // WebUI chrome://management is enabled by default on Desktop Android (which supports
+            // extensions core) and gated behind an experiment flag on Mobile Android.
+            if (ExtensionsBuildflags.ENABLE_EXTENSIONS_CORE
+                    || ChromeFeatureList.sMigrateManagementToWebUIOnMobile.isEnabled()) {
+                return NativePageType.NONE;
+            }
             return NativePageType.MANAGEMENT;
+        } else if ((UrlConstants.BRICKS_HOST.equals(host)
+                        || UrlConstants.BRICKS_JAVA_HOST.equals(host))
+                && ChromeFeatureList.isEnabled(ChromeFeatureList.ANDROID_BRICKS_NATIVE_PAGE)) {
+            return NativePageType.BRICKS;
+        } else if (UrlConstants.SETTINGS_HOST.equals(host)
+                && SettingsInTab.isEnabled()
+                && !isIncognito) {
+            return NativePageType.SETTINGS;
         } else {
             return NativePageType.NONE;
         }

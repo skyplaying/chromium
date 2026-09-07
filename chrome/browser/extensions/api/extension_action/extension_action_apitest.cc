@@ -12,7 +12,8 @@
 #include "base/strings/strcat.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/scoped_feature_list.h"
+#include "base/test/run_until.h"
+#include "base/test/with_feature_override.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/api/extension_action/extension_action_api.h"
 #include "chrome/browser/extensions/api/extension_action/test_icon_image_observer.h"
@@ -23,8 +24,11 @@
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/toolbar/toolbar_action_view_model.h"
 #include "chrome/browser/ui/toolbar/toolbar_actions_model.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "components/sessions/content/session_tab_helper.h"
+#include "components/sessions/core/session_id.h"
 #include "components/version_info/channel.h"
+#include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
@@ -45,6 +49,7 @@
 #include "extensions/common/extension_features.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/manifest_constants.h"
+#include "extensions/common/manifest_handlers/description_info.h"
 #include "extensions/test/extension_test_message_listener.h"
 #include "extensions/test/result_catcher.h"
 #include "extensions/test/test_extension_dir.h"
@@ -54,8 +59,8 @@
 #include "ui/gfx/color_utils.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/extensions/extension_action_test_helper.h"
 #include "chrome/browser/ui/extensions/extensions_container.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -224,6 +229,59 @@ void FlushStateStore(Profile* profile) {
 
 }  // namespace
 
+class ExtensionActionSetBadgeTextApiTest
+    : public ExtensionApiTest,
+      public base::test::WithFeatureOverride {
+ public:
+  ExtensionActionSetBadgeTextApiTest()
+      : base::test::WithFeatureOverride(
+            extensions_features::kApiActionSetBadgeTextByteLimit) {}
+};
+
+// Test that the histogram for determining maximum badge text lengths counts
+// the length of the badge text in each successful call.
+// TODO(crbug.com/491158086, crbug.com/492555224): Remove this histogram test.
+IN_PROC_BROWSER_TEST_P(ExtensionActionSetBadgeTextApiTest,
+                       TextLengthHistogram) {
+  // Propagate kApiActionSetBadgeTextByteLimit feature state to extension
+  // background.
+  SetCustomArg(IsParamFeatureEnabled() ? "true" : "false");
+
+  base::HistogramTester histogram;
+
+  // Run extension which modifies the badge text a few times.
+  EXPECT_TRUE(RunExtensionTest("extension_action/badge_text")) << message_;
+
+  // Check that every setting of badge text is counted exactly once.
+  histogram.ExpectTotalCount("Extensions.Action.SetBadgeTextLength",
+                             /*expected_count=*/4);
+
+  // Check number of samples in each affected bucket and two empty buckets.
+  histogram.ExpectBucketCount("Extensions.Action.SetBadgeTextLength",
+                              /*sample=*/0,
+                              /*expected_count=*/1);
+  histogram.ExpectBucketCount("Extensions.Action.SetBadgeTextLength",
+                              /*sample=*/1,
+                              /*expected_count=*/1);
+  histogram.ExpectBucketCount("Extensions.Action.SetBadgeTextLength",
+                              /*sample=*/2,
+                              /*expected_count=*/0);
+  histogram.ExpectBucketCount("Extensions.Action.SetBadgeTextLength",
+                              /*sample=*/3,
+                              /*expected_count=*/1);
+  histogram.ExpectBucketCount("Extensions.Action.SetBadgeTextLength",
+                              /*sample=*/4,
+                              /*expected_count=*/0);
+  // Histogram always logs the call, even if it exceeds the limit and fails.
+  histogram.ExpectBucketCount("Extensions.Action.SetBadgeTextLength",
+                              /*sample=*/150,
+                              /*expected_count=*/1);
+}
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         ExtensionActionSetBadgeTextApiTest,
+                         testing::Bool());
+
 // A class that allows for cross-origin navigations with embedded test server.
 class ExtensionActionAPITest : public ExtensionApiTest {
  protected:
@@ -233,6 +291,32 @@ class ExtensionActionAPITest : public ExtensionApiTest {
     ASSERT_TRUE(StartEmbeddedTestServer());
   }
 };
+
+// Test that the histogram for determining maximum title lengths counts
+// the length of the title in each successful call.
+// TODO(crbug.com/492555224): Remove this histogram test.
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, ActionSetTitleLengthHistogram) {
+  base::HistogramTester histogram;
+
+  // Run extension which modifies the badge text a few times.
+  EXPECT_TRUE(RunExtensionTest("extension_action/title")) << message_;
+
+  // Check that rejected calls do not increment the counts.
+  histogram.ExpectTotalCount("Extensions.Action.SetTitleLength",
+                             /*expected_count=*/4);
+
+  // Check number of samples in each affected bucket and one empty bucket.
+  histogram.ExpectBucketCount("Extensions.Action.SetTitleLength",
+                              /*sample=*/0, /*expected_count=*/1);
+  histogram.ExpectBucketCount("Extensions.Action.SetTitleLength",
+                              /*sample=*/1, /*expected_count=*/1);
+  histogram.ExpectBucketCount("Extensions.Action.SetTitleLength",
+                              /*sample=*/2, /*expected_count=*/0);
+  histogram.ExpectBucketCount("Extensions.Action.SetTitleLength",
+                              /*sample=*/60, /*expected_count=*/1);
+  histogram.ExpectBucketCount("Extensions.Action.SetTitleLength",
+                              /*sample=*/150, /*expected_count=*/1);
+}
 
 #if !BUILDFLAG(IS_ANDROID)
 // Alias these for readability, when a test only exercises one type of action.
@@ -415,7 +499,7 @@ IN_PROC_BROWSER_TEST_P(MultiActionAPITest,
 }
 
 // Tests that tooltips of an extension action icon can be specified using UTF8.
-// See http://crbug.com/25349.
+// See http://crbug.com/41020882.
 IN_PROC_BROWSER_TEST_P(MultiActionAPITest, TitleLocalization) {
   TestExtensionDir test_dir;
   constexpr char kManifestTemplate[] =
@@ -440,7 +524,7 @@ IN_PROC_BROWSER_TEST_P(MultiActionAPITest, TitleLocalization) {
   ASSERT_TRUE(action);
 
   EXPECT_EQ(base::WideToUTF8(L"Hreggvi\u00F0ur: l10n action"),
-            extension->description());
+            DescriptionInfo::GetDescription(*extension));
   EXPECT_EQ(base::WideToUTF8(L"Hreggvi\u00F0ur is my name"), extension->name());
   content::WebContents* web_contents = GetActiveWebContents();
   int tab_id = sessions::SessionTabHelper::IdForTab(web_contents).id();
@@ -466,6 +550,7 @@ IN_PROC_BROWSER_TEST_P(MultiActionAPITest, OnClickedDispatching) {
            chrome.test.assertTrue(!!tab);
            chrome.test.assertTrue(tab.id > 0);
            chrome.test.assertTrue(tab.index > -1);
+           chrome.test.assertTrue(chrome.test.isProcessingUserGesture());
            chrome.test.notifyPass();
          });)";
 
@@ -816,7 +901,7 @@ IN_PROC_BROWSER_TEST_P(ActionAndBrowserActionAPITest, ValuesArePersisted) {
   EXPECT_EQ(expected_badge_text,
             action->GetExplicitlySetBadgeText(ExtensionAction::kDefaultTabId));
 
-  // Due to https://crbug.com/1110156, action values with defaults specified in
+  // Due to https://crbug.com/40708464, action values with defaults specified in
   // the manifest - like popup and title - aren't persisted, even for browser
   // actions.
   EXPECT_EQ(extension->GetResourceURL("default_popup.html"),
@@ -836,8 +921,7 @@ class MultiActionAPICanvasTest : public MultiActionAPITest {
 };
 
 // Tests setting the icon dynamically from the background page.
-// TODO(crbug.com/40230315): flaky.
-IN_PROC_BROWSER_TEST_P(MultiActionAPICanvasTest, DISABLED_DynamicSetIcon) {
+IN_PROC_BROWSER_TEST_P(MultiActionAPICanvasTest, DynamicSetIcon) {
   constexpr char kManifestTemplate[] =
       R"({
            "name": "Test Clicking",
@@ -883,17 +967,24 @@ IN_PROC_BROWSER_TEST_P(MultiActionAPICanvasTest, DISABLED_DynamicSetIcon) {
   ASSERT_EQ(1, toolbar_helper->NumberOfBrowserActions());
   EXPECT_TRUE(toolbar_helper->HasAction(extension->id()));
 
-  gfx::Image default_icon = toolbar_helper->GetIcon(extension->id());
-  EXPECT_FALSE(default_icon.IsEmpty());
+  gfx::Image default_icon;
+  int mid_x = 0;
+  int mid_y = 0;
 
   // Check the midpoint. All these icons are solid, but the rendered icon
   // includes padding.
-  const int mid_x = default_icon.Width() / 2;
-  const int mid_y = default_icon.Height() / 2;
   // Note: We only validate the color here as a quick-and-easy way of validating
   // the icon is what we expect. Other tests do much more rigorous testing of
   // the icon's rendering.
-  EXPECT_EQ(SK_ColorRED, default_icon.AsBitmap().getColor(mid_x, mid_y));
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    default_icon = toolbar_helper->GetIcon(extension->id());
+    if (default_icon.IsEmpty()) {
+      return false;
+    }
+    mid_x = default_icon.Width() / 2;
+    mid_y = default_icon.Height() / 2;
+    return default_icon.AsBitmap().getColor(mid_x, mid_y) == SK_ColorRED;
+  }));
 
   // Open a tab to run the extension commands in.
   NavigateToURLInNewTab(extension->GetResourceURL("page.html"));
@@ -908,9 +999,12 @@ IN_PROC_BROWSER_TEST_P(MultiActionAPICanvasTest, DISABLED_DynamicSetIcon) {
   EnsureActionIsEnabledOnActiveTab(action);
 
   // The new tab should still have the same icon (the default).
-  gfx::Image new_tab_icon = toolbar_helper->GetIcon(extension->id());
-  EXPECT_FALSE(default_icon.IsEmpty());
-  EXPECT_EQ(SK_ColorRED, default_icon.AsBitmap().getColor(mid_x, mid_y));
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    gfx::Image icon = toolbar_helper->GetIcon(extension->id());
+    return !icon.IsEmpty() &&
+           icon.AsBitmap().getColor(mid_x, mid_y) == SK_ColorRED;
+  }));
+  gfx::Image new_tab_icon;
 
   // Set the icon for the new tab to a different icon in the extension package.
   RunTestAndWaitForSuccess(
@@ -918,9 +1012,11 @@ IN_PROC_BROWSER_TEST_P(MultiActionAPICanvasTest, DISABLED_DynamicSetIcon) {
       base::StringPrintf("setIcon({tabId: %d, path: 'blue_icon.png'});",
                          new_tab_id));
 
-  new_tab_icon = toolbar_helper->GetIcon(extension->id());
-  EXPECT_FALSE(new_tab_icon.IsEmpty());
-  EXPECT_EQ(SK_ColorBLUE, new_tab_icon.AsBitmap().getColor(mid_x, mid_y));
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    new_tab_icon = toolbar_helper->GetIcon(extension->id());
+    return !new_tab_icon.IsEmpty() &&
+           new_tab_icon.AsBitmap().getColor(mid_x, mid_y) == SK_ColorBLUE;
+  }));
 
   // Next, set the icon to a dynamically-generated one (from canvas image data).
   constexpr char kSetIconFromImageData[] =
@@ -938,9 +1034,11 @@ IN_PROC_BROWSER_TEST_P(MultiActionAPICanvasTest, DISABLED_DynamicSetIcon) {
   RunTestAndWaitForSuccess(
       web_contents, base::StringPrintf(kSetIconFromImageData, new_tab_id));
 
-  new_tab_icon = toolbar_helper->GetIcon(extension->id());
-  EXPECT_FALSE(new_tab_icon.IsEmpty());
-  EXPECT_EQ(SK_ColorGREEN, new_tab_icon.AsBitmap().getColor(mid_x, mid_y));
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    new_tab_icon = toolbar_helper->GetIcon(extension->id());
+    return !new_tab_icon.IsEmpty() &&
+           new_tab_icon.AsBitmap().getColor(mid_x, mid_y) == SK_ColorGREEN;
+  }));
 
   // Manifest V3 extensions using the action API should also be able to use a
   // promise version of setIcon.
@@ -950,17 +1048,21 @@ IN_PROC_BROWSER_TEST_P(MultiActionAPICanvasTest, DISABLED_DynamicSetIcon) {
     RunTestAndWaitForSuccess(
         web_contents, base::StringPrintf(kSetIconPromiseScript, new_tab_id));
 
-    new_tab_icon = toolbar_helper->GetIcon(extension->id());
-    EXPECT_FALSE(new_tab_icon.IsEmpty());
-    EXPECT_EQ(SK_ColorBLUE, new_tab_icon.AsBitmap().getColor(mid_x, mid_y));
+    EXPECT_TRUE(base::test::RunUntil([&]() {
+      new_tab_icon = toolbar_helper->GetIcon(extension->id());
+      return !new_tab_icon.IsEmpty() &&
+             new_tab_icon.AsBitmap().getColor(mid_x, mid_y) == SK_ColorBLUE;
+    }));
   }
 
   // Switch back to the first tab. The icon should still be red, since the other
   // changes were for specific tabs.
   browser()->tab_strip_model()->ActivateTabAt(0);
-  gfx::Image first_tab_icon = toolbar_helper->GetIcon(extension->id());
-  EXPECT_FALSE(first_tab_icon.IsEmpty());
-  EXPECT_EQ(SK_ColorRED, first_tab_icon.AsBitmap().getColor(mid_x, mid_y));
+  EXPECT_TRUE(base::test::RunUntil([&]() {
+    gfx::Image first_tab_icon = toolbar_helper->GetIcon(extension->id());
+    return !first_tab_icon.IsEmpty() &&
+           SK_ColorRED == first_tab_icon.AsBitmap().getColor(mid_x, mid_y);
+  }));
 
   // TODO(devlin): Add tests for setting icons as a dictionary of
   // { size -> image_data }.
@@ -969,7 +1071,7 @@ IN_PROC_BROWSER_TEST_P(MultiActionAPICanvasTest, DISABLED_DynamicSetIcon) {
 
 // Tests calling setIcon() from JS with hooks that might cause issues with our
 // custom bindings.
-// Regression test for https://crbug.com/1087948.
+// Regression test for https://crbug.com/40695168.
 IN_PROC_BROWSER_TEST_P(MultiActionAPITest, SetIconWithJavascriptHooks) {
   constexpr char kManifestTemplate[] =
       R"({
@@ -1031,7 +1133,7 @@ IN_PROC_BROWSER_TEST_P(MultiActionAPITest, SetIconWithJavascriptHooks) {
 }
 
 // Tests calling setIcon() from JS with `self` defined at the top-level.
-// Regression test for https://crbug.com/1087948.
+// Regression test for https://crbug.com/40695168.
 IN_PROC_BROWSER_TEST_P(MultiActionAPITest, SetIconWithSelfDefined) {
   // TODO(devlin): Pull code to load an extension like this into a helper
   // function.
@@ -1077,7 +1179,7 @@ IN_PROC_BROWSER_TEST_P(MultiActionAPITest, SetIconWithSelfDefined) {
   // Try setting the icon. This should succeed. Previously, the custom bindings
   // for the setIcon code looked at the 'self' variable, but this could be
   // overridden by the extension.
-  // See also https://crbug.com/1087948.
+  // See also https://crbug.com/40695168.
   constexpr char kSetIconScript[] =
       "setIcon({tabId: %d, path: 'blue_icon.png'});";
   RunTestAndWaitForSuccess(web_contents,
@@ -1144,8 +1246,8 @@ IN_PROC_BROWSER_TEST_P(MultiActionAPITest, SetIconInTabWithInvalidPath) {
 }
 
 // Tests calling setIcon() in the service worker with an invalid icon paths
-// specified. Regression test for https://crbug.com/1262029. Regression test for
-// https://crbug.com/1372518.
+// specified. Regression test for https://crbug.com/40799229. Regression test
+// for https://crbug.com/40871095.
 IN_PROC_BROWSER_TEST_F(ExtensionActionAPITest, SetIconInWorkerWithInvalidPath) {
   constexpr char kManifestTemplate[] =
       R"({
@@ -1727,7 +1829,16 @@ IN_PROC_BROWSER_TEST_F(ExtensionActionAPITest, IsEnabledIgnoreDeclarative) {
   EXPECT_FALSE(script_result.GetBool());
 }
 
-using ActionAPITest = ExtensionApiTest;
+class ActionAPITest : public ExtensionApiTest {
+ public:
+  ActionAPITest() {
+    scoped_feature_list_.InitAndDisableFeature(
+        features::kExtensionsPinnedByDefault);
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
 
 IN_PROC_BROWSER_TEST_F(ActionAPITest, TestGetUserSettings) {
   constexpr char kManifest[] =
@@ -1795,7 +1906,8 @@ IN_PROC_BROWSER_TEST_F(ActionAPITest, OnUserSettingsChanged) {
          })";
   constexpr char kWorker[] =
       R"(chrome.action.onUserSettingsChanged.addListener(change => {
-           chrome.test.sendMessage(JSON.stringify(change));
+           const userGesture = chrome.test.isProcessingUserGesture();
+           chrome.test.sendMessage(JSON.stringify({change, userGesture}));
          });)";
 
   TestExtensionDir test_dir;
@@ -1818,10 +1930,10 @@ IN_PROC_BROWSER_TEST_F(ActionAPITest, OnUserSettingsChanged) {
     return listener.message();
   };
 
-  EXPECT_EQ(R"({"isOnToolbar":true})",
+  EXPECT_EQ(R"({"change":{"isOnToolbar":true},"userGesture":false})",
             change_visibility_and_get_response(/*pinned_state=*/true));
 
-  EXPECT_EQ(R"({"isOnToolbar":false})",
+  EXPECT_EQ(R"({"change":{"isOnToolbar":false},"userGesture":false})",
             change_visibility_and_get_response(/*pinned_state=*/false));
 }
 
@@ -1980,77 +2092,6 @@ IN_PROC_BROWSER_TEST_P(ActionAndBrowserActionAPITest,
   EXPECT_TRUE(run_script_and_wait_for_callback(kUnsetGlobalText).GetBool());
   EXPECT_EQ("", action->GetExplicitlySetBadgeText(tab_id1));
   EXPECT_EQ("", action->GetExplicitlySetBadgeText(tab_id2));
-}
-
-class ExtensionActionWithOpenPopupFeatureDisabledTest
-    : public ExtensionActionAPITest {
- public:
-  ExtensionActionWithOpenPopupFeatureDisabledTest() {
-    feature_list_.InitAndDisableFeature(
-        extensions_features::kApiActionOpenPopup);
-  }
-  ~ExtensionActionWithOpenPopupFeatureDisabledTest() override = default;
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
-// Tests that the action.openPopup() API is available to policy-installed
-// extensions on even if the feature flag is disabled. Since this is controlled
-// through our features files (which are tested separately), this is more of a
-// smoke test than an end-to-end test.
-// TODO(crbug.com/40057101): Remove this test when the API is available
-// for all extensions on stable without a feature flag.
-IN_PROC_BROWSER_TEST_F(ExtensionActionWithOpenPopupFeatureDisabledTest,
-                       OpenPopupAvailabilityOnStableChannel) {
-  TestExtensionDir test_dir;
-  static constexpr char kManifest[] =
-      R"({
-           "name": "Test",
-           "manifest_version": 3,
-           "version": "0.1",
-           "background": {"service_worker": "background.js"},
-           "action": {}
-         })";
-  test_dir.WriteManifest(kManifest);
-  test_dir.WriteFile(FILE_PATH_LITERAL("background.js"),
-                     "chrome.test.sendMessage('ready');");
-
-  auto is_open_popup_defined = [this](const Extension& extension) {
-    static constexpr char kScript[] =
-        R"(chrome.test.sendScriptResult(!!chrome.action.openPopup);)";
-    return BackgroundScriptExecutor::ExecuteScript(
-        profile(), extension.id(), kScript,
-        BackgroundScriptExecutor::ResultCapture::kSendScriptResult);
-  };
-
-  // Technically, we don't need the "ready" listener here, but this ensures we
-  // don't cross streams with the policy extension loaded below (where we do
-  // need the listener).
-  ExtensionTestMessageListener non_policy_listener("ready");
-  const Extension* non_policy_extension =
-      LoadExtension(test_dir.UnpackedPath());
-  ASSERT_TRUE(non_policy_extension);
-  ASSERT_TRUE(non_policy_listener.WaitUntilSatisfied());
-
-  // Somewhat annoying: due to how our test helpers are written,
-  // `EXPECT_EQ(false, base::Value)` works, but EXPECT_FALSE(base::Value) does
-  // not.
-  EXPECT_EQ(false, is_open_popup_defined(*non_policy_extension));
-
-  // Unlike `LoadExtension()`, `InstallExtension()` doesn't wait for the service
-  // worker to be ready, so we need a few manual waiters.
-  base::FilePath packed_path = test_dir.Pack();
-  service_worker_test_utils::TestServiceWorkerContextObserver
-      registration_observer(profile());
-  ExtensionTestMessageListener policy_listener("ready");
-  const Extension* policy_extension = InstallExtension(
-      packed_path, 1, mojom::ManifestLocation::kExternalPolicyDownload);
-  ASSERT_TRUE(policy_extension);
-  ASSERT_TRUE(policy_listener.WaitUntilSatisfied());
-  registration_observer.WaitForRegistrationStored();
-
-  EXPECT_EQ(true, is_open_popup_defined(*policy_extension));
 }
 
 #if BUILDFLAG(IS_ANDROID)

@@ -14,7 +14,6 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
-#include "base/containers/flat_map.h"
 #include "base/observer_list.h"
 #include "chromeos/ash/components/dbus/debug_daemon/debug_daemon_client.h"
 #include "chromeos/dbus/common/dbus_callback.h"
@@ -81,10 +80,6 @@ class COMPONENT_EXPORT(DEBUG_DAEMON) FakeDebugDaemonClient
   void TestICMPWithOptions(const std::string& ip_address,
                            const std::map<std::string, std::string>& options,
                            TestICMPCallback callback) override;
-  void TestHostsConnectivity(
-      const std::vector<std::string>& hosts,
-      const base::flat_map<std::string, std::string>& options,
-      TestHostsConnectivityCallback callback) override;
   void UploadCrashes(UploadCrashesCallback callback) override;
   void EnableDebuggingFeatures(const std::string& password,
                                EnableDebuggingCallback callback) override;
@@ -94,10 +89,6 @@ class COMPONENT_EXPORT(DEBUG_DAEMON) FakeDebugDaemonClient
       chromeos::WaitForServiceToBeAvailableCallback callback) override;
   void SetOomScoreAdj(const std::map<pid_t, int32_t>& pid_to_oom_score_adj,
                       SetOomScoreAdjCallback callback) override;
-  void StartPluginVmDispatcher(const std::string& owner_id,
-                               const std::string& lang,
-                               PluginVmDispatcherCallback callback) override;
-  void StopPluginVmDispatcher(PluginVmDispatcherCallback callback) override;
   void SetRlzPingSent(SetRlzPingSentCallback callback) override;
   void SetSchedulerConfigurationV2(
       const std::string& config_name,
@@ -128,6 +119,9 @@ class COMPONENT_EXPORT(DEBUG_DAEMON) FakeDebugDaemonClient
   // Sets routes that will be returned by GetRoutes() for testing.
   void SetRoutesForTesting(std::vector<std::string> routes);
 
+  // Configures logs to be returned from GetLog()/GetAllLogs().
+  void SetLog(std::string_view log_name, std::optional<std::string> log_data);
+
   const std::string& scheduler_configuration_name() const {
     return scheduler_configuration_name_;
   }
@@ -142,6 +136,7 @@ class COMPONENT_EXPORT(DEBUG_DAEMON) FakeDebugDaemonClient
       pending_wait_for_service_to_be_available_callbacks_;
   // Stores printer's name as a key and PPD content as a value.
   std::map<std::string, std::string> printers_;
+  std::map<std::string, std::string, std::less<>> logs_;
   std::vector<std::string> routes_;
   std::string scheduler_configuration_name_;
   std::set<std::string> u2f_flags_;

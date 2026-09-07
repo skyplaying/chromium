@@ -31,12 +31,16 @@ inspector_protocol_generate("protocol_sources") {
   outputs = [
     "inspector/protocol/accessibility.cc",
     "inspector/protocol/accessibility.h",
+    "inspector/protocol/ads.cc",
+    "inspector/protocol/ads.h",
     "inspector/protocol/animation.cc",
     "inspector/protocol/animation.h",
     "inspector/protocol/audits.cc",
     "inspector/protocol/audits.h",
     "inspector/protocol/cache_storage.cc",
     "inspector/protocol/cache_storage.h",
+    "inspector/protocol/crash_report_context.cc",
+    "inspector/protocol/crash_report_context.h",
     "inspector/protocol/css.cc",
     "inspector/protocol/css.h",
     "inspector/protocol/debugger.h",
@@ -92,6 +96,8 @@ inspector_protocol_generate("protocol_sources") {
     "inspector/protocol/storage.h",
     "inspector/protocol/web_audio.cc",
     "inspector/protocol/web_audio.h",
+    "inspector/protocol/web_mcp.cc",
+    "inspector/protocol/web_mcp.h",
   ]
 
   deps = [ "//third_party/blink/public/devtools_protocol:protocol_version" ]

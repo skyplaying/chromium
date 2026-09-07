@@ -14,10 +14,12 @@
 #import "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #import "components/autofill/core/browser/data_manager/personal_data_manager_observer.h"
 #import "components/password_manager/core/browser/password_manager_util.h"
+#import "components/password_manager/core/browser/password_store/password_form_converters.h"
 #import "components/password_manager/core/browser/password_store/password_store_change.h"
 #import "components/password_manager/core/browser/password_store/password_store_consumer.h"
 #import "components/password_manager/core/browser/password_store/password_store_interface.h"
 #import "components/password_manager/core/browser/password_store/password_store_util.h"
+#import "components/password_manager/core/browser/password_string.h"
 #import "ios/web/public/thread/web_task_traits.h"
 #import "ios/web/public/thread/web_thread.h"
 #import "ios/web_view/internal/autofill/cwv_autofill_data_manager_internal.h"
@@ -92,26 +94,27 @@ class WebViewPasswordStoreConsumer
   explicit WebViewPasswordStoreConsumer(CWVAutofillDataManager* data_manager)
       : data_manager_(data_manager) {}
 
-  void OnGetPasswordStoreResults(
-      std::vector<std::unique_ptr<password_manager::PasswordForm>> results)
-      override {
+  void OnGetPasswordStoreResultsOrErrorFrom(
+      password_manager::PasswordStoreInterface* store,
+      password_manager::LoginsResultOrError results_or_error) override {
+    if (std::holds_alternative<password_manager::PasswordStoreBackendError>(
+            results_or_error)) {
+      [data_manager_ handlePasswordStoreResults:@[]];
+      return;
+    }
+    auto results =
+        std::get<password_manager::LoginsResult>(std::move(results_or_error));
+
     BOOL isAffiliationsEnabled = [data_manager_ isPasswordAffiliationEnabled];
 
-    // Move forms to a regular vector.
-    PasswordFormList forms;
-    forms.reserve(results.size());
+    NSMutableArray<CWVPassword*>* passwords = [NSMutableArray array];
     for (auto& form : results) {
-      forms.push_back(*form);
+      CWVPassword* password =
+          [[CWVPassword alloc] initWithPasswordForm:ToPasswordForm(form)
+                               isAffiliationEnabled:isAffiliationsEnabled];
+      [passwords addObject:password];
     }
-
-      NSMutableArray<CWVPassword*>* passwords = [NSMutableArray array];
-      for (auto& form : results) {
-        CWVPassword* password =
-            [[CWVPassword alloc] initWithPasswordForm:*form
-                                 isAffiliationEnabled:isAffiliationsEnabled];
-        [passwords addObject:password];
-      }
-      [data_manager_ handlePasswordStoreResults:passwords];
+    [data_manager_ handlePasswordStoreResults:passwords];
   }
 
   base::WeakPtr<password_manager::PasswordStoreConsumer> GetWeakPtr() {
@@ -137,12 +140,12 @@ class WebViewPasswordStoreObserver
     NSMutableArray* updated = [NSMutableArray array];
     NSMutableArray* removed = [NSMutableArray array];
     for (const password_manager::PasswordStoreChange& change : changes) {
-      if (change.form().blocked_by_user) {
+      if (change.credential().blocked_by_user) {
         continue;
       }
-      CWVPassword* password =
-          [[CWVPassword alloc] initWithPasswordForm:change.form()
-                               isAffiliationEnabled:isAffiliationsEnabled];
+      CWVPassword* password = [[CWVPassword alloc]
+          initWithPasswordForm:ToPasswordForm(change.credential())
+          isAffiliationEnabled:isAffiliationsEnabled];
       switch (change.type()) {
         case password_manager::PasswordStoreChange::ADD:
           [added addObject:password];
@@ -162,8 +165,8 @@ class WebViewPasswordStoreObserver
                                             removed:removed];
   }
   void OnLoginsRetained(password_manager::PasswordStoreInterface* store,
-                        const std::vector<password_manager::PasswordForm>&
-                            retained_passwords) override {
+                        const std::vector<password_manager::StoredCredential>&
+                            retained_credentials) override {
     // No op.
   }
 
@@ -327,7 +330,8 @@ class WebViewPasswordStoreObserver
   // Only change the password if it actually changed and not empty.
   if (newPassword && newPassword.length > 0 &&
       ![newPassword isEqualToString:password.password]) {
-    passwordForm->password_value = base::SysNSStringToUTF16(newPassword);
+    passwordForm->password_value =
+        password_manager::PasswordString(base::SysNSStringToUTF16(newPassword));
   }
 
   // Because a password's primary key depends on its username, changing the
@@ -338,14 +342,18 @@ class WebViewPasswordStoreObserver
     auto oldPasswordForm = *passwordForm;
     passwordForm->username_value = base::SysNSStringToUTF16(newUsername);
     auto newPasswordForm = *passwordForm;
-    _passwordStore->UpdateLoginWithPrimaryKey(newPasswordForm, oldPasswordForm);
+    _passwordStore->UpdateLoginWithPrimaryKey(
+        password_manager::FromPasswordForm(std::move(newPasswordForm)),
+        password_manager::FromPasswordForm(std::move(oldPasswordForm)));
   } else {
-    _passwordStore->UpdateLogin(*passwordForm);
+    _passwordStore->UpdateLogin(
+        password_manager::FromPasswordForm(*passwordForm));
   }
 }
 
 - (void)deletePassword:(CWVPassword*)password {
-  _passwordStore->RemoveLogin(FROM_HERE, *[password internalPasswordForm]);
+  _passwordStore->RemoveLogin(FROM_HERE, password_manager::FromPasswordForm(
+                                             *[password internalPasswordForm]));
 }
 
 - (void)addNewPasswordForUsername:(NSString*)username
@@ -362,10 +370,11 @@ class WebViewPasswordStoreObserver
   form.url = password_manager_util::StripAuthAndParams(url);
   form.signon_realm = form.url.DeprecatedGetOriginAsURL().spec();
   form.username_value = base::SysNSStringToUTF16(username);
-  form.password_value = base::SysNSStringToUTF16(password);
+  form.password_value =
+      password_manager::PasswordString(base::SysNSStringToUTF16(password));
   form.date_created = base::Time::FromNSDate(timestamp);
 
-  _passwordStore->AddLogin(form);
+  _passwordStore->AddLogin(password_manager::FromPasswordForm(std::move(form)));
 }
 
 - (void)addNewPasswordForUsername:(NSString*)username
@@ -383,7 +392,7 @@ class WebViewPasswordStoreObserver
   form.keychain_identifier = base::SysNSStringToUTF8(keychainIdentifier);
   form.date_created = base::Time::FromNSDate(timestamp);
 
-  _passwordStore->AddLogin(form);
+  _passwordStore->AddLogin(password_manager::FromPasswordForm(std::move(form)));
 }
 
 #pragma mark - Private Methods
@@ -449,12 +458,23 @@ class WebViewPasswordStoreObserver
 }
 
 - (NSArray<CWVCreditCard*>*)creditCards {
+  std::vector<const autofill::CreditCard*> fetchedCards =
+      _personalDataManager->payments_data_manager().GetCreditCards();
+
   NSMutableArray* creditCards = [NSMutableArray array];
-  for (const autofill::CreditCard* internalCard :
-       _personalDataManager->payments_data_manager().GetCreditCards()) {
-    CWVCreditCard* creditCard =
-        [[CWVCreditCard alloc] initWithCreditCard:*internalCard];
-    [creditCards addObject:creditCard];
+  for (const autofill::CreditCard* card : fetchedCards) {
+    if (card->virtual_card_enrollment_state() ==
+        autofill::CreditCard::VirtualCardEnrollmentState::kEnrolled) {
+      autofill::CreditCard virtualCard =
+          autofill::CreditCard::CreateVirtualCard(*card);
+      CWVCreditCard* cwvVirtualCard =
+          [[CWVCreditCard alloc] initWithCreditCard:virtualCard];
+      [creditCards addObject:cwvVirtualCard];
+      // Do not `continue` here. Enrolled cards should be added twice, once as
+      // a virtual card and once as a regular card, to allow the user to choose.
+    }
+    CWVCreditCard* cwvCard = [[CWVCreditCard alloc] initWithCreditCard:*card];
+    [creditCards addObject:cwvCard];
   }
   return [creditCards copy];
 }

@@ -140,6 +140,13 @@ void FileSystemAccessDirectoryHandleImpl::GetFile(const std::string& basename,
   // and create the document. DidGetFile() will then update the child path
   // before creating the returned handle.
   if (url().virtual_path().IsContentUri()) {
+    if (!IsSafePathComponent(basename)) {
+      std::move(callback).Run(
+          file_system_access_error::FromStatus(
+              FileSystemAccessStatus::kInvalidArgument, "Name is not allowed."),
+          mojo::NullRemote());
+      return;
+    }
     std::string mime_type;
     if (!net::GetWellKnownMimeTypeFromFile(base::FilePath(basename),
                                            &mime_type)) {
@@ -281,6 +288,13 @@ void FileSystemAccessDirectoryHandleImpl::GetDirectory(
   // and create the document. DidGetDirectory() will then update the child path
   // before creating the returned handle.
   if (url().virtual_path().IsContentUri()) {
+    if (!IsSafePathComponent(basename)) {
+      std::move(callback).Run(
+          file_system_access_error::FromStatus(
+              FileSystemAccessStatus::kInvalidArgument, "Name is not allowed."),
+          mojo::NullRemote());
+      return;
+    }
     base::ThreadPool::PostTaskAndReplyWithResult(
         FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
         base::BindOnce(&base::ContentUriGetChildDocumentOrQuery,
@@ -398,9 +412,20 @@ void FileSystemAccessDirectoryHandleImpl::Move(
     MoveCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  // TODO(crbug.com/40198034): Implement move for directory handles.
-  std::move(callback).Run(file_system_access_error::FromStatus(
-      blink::mojom::FileSystemAccessStatus::kOperationAborted));
+  RenderFrameHost* rfh = RenderFrameHost::FromID(context().frame_id);
+  bool has_transient_user_activation = rfh && rfh->HasTransientUserActivation();
+
+  RunWithPermission(
+      FileSystemAccessManagerImpl::GetEffectiveWritePermissionMode(),
+      base::BindOnce(&FileSystemAccessHandleBase::DoMove,
+                     weak_factory_.GetWeakPtr(),
+                     std::move(destination_directory), new_entry_name,
+                     has_transient_user_activation),
+      base::BindOnce([](blink::mojom::FileSystemAccessErrorPtr result,
+                        MoveCallback callback) {
+        std::move(callback).Run(std::move(result));
+      }),
+      std::move(callback));
 }
 
 void FileSystemAccessDirectoryHandleImpl::Rename(
@@ -408,9 +433,19 @@ void FileSystemAccessDirectoryHandleImpl::Rename(
     RenameCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  // TODO(crbug.com/40198034): Implement rename for directory handles.
-  std::move(callback).Run(file_system_access_error::FromStatus(
-      blink::mojom::FileSystemAccessStatus::kOperationAborted));
+  RenderFrameHost* rfh = RenderFrameHost::FromID(context().frame_id);
+  bool has_transient_user_activation = rfh && rfh->HasTransientUserActivation();
+
+  RunWithPermission(
+      FileSystemAccessManagerImpl::GetEffectiveWritePermissionMode(),
+      base::BindOnce(&FileSystemAccessHandleBase::DoRename,
+                     weak_factory_.GetWeakPtr(), new_entry_name,
+                     has_transient_user_activation),
+      base::BindOnce([](blink::mojom::FileSystemAccessErrorPtr result,
+                        MoveCallback callback) {
+        std::move(callback).Run(std::move(result));
+      }),
+      std::move(callback));
 }
 
 void FileSystemAccessDirectoryHandleImpl::Remove(bool recurse,
@@ -437,6 +472,11 @@ void FileSystemAccessDirectoryHandleImpl::RemoveEntry(
 #if BUILDFLAG(IS_ANDROID)
   // Lookup content-URI by display-name.
   if (url().virtual_path().IsContentUri()) {
+    if (!IsSafePathComponent(basename)) {
+      std::move(callback).Run(file_system_access_error::FromStatus(
+          FileSystemAccessStatus::kInvalidArgument, "Name is not allowed."));
+      return;
+    }
     base::ThreadPool::PostTaskAndReplyWithResult(
         FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
         base::BindOnce(&base::ContentUriGetChildDocumentOrQuery,
@@ -517,7 +557,8 @@ void FileSystemAccessDirectoryHandleImpl::ResolveImpl(
     FileSystemAccessTransferTokenImpl* possible_child) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  if (!possible_child) {
+  if (!possible_child ||
+      possible_child->origin() != context().storage_key.origin()) {
     std::move(callback).Run(
         file_system_access_error::FromStatus(
             blink::mojom::FileSystemAccessStatus::kOperationFailed),
@@ -536,10 +577,10 @@ void FileSystemAccessDirectoryHandleImpl::ResolveImpl(
 
   // URLs from the sandboxed file system must include bucket info, while URLs
   // from non-sandboxed file systems should not.
-  DCHECK_EQ(parent_url.type() == storage::kFileSystemTypeTemporary,
-            parent_url.bucket().has_value());
-  DCHECK_EQ(child_url.type() == storage::kFileSystemTypeTemporary,
-            child_url.bucket().has_value());
+  CHECK_EQ(parent_url.type() == storage::kFileSystemTypeTemporary,
+           parent_url.bucket().has_value(), base::NotFatalUntil::M159);
+  CHECK_EQ(child_url.type() == storage::kFileSystemTypeTemporary,
+           child_url.bucket().has_value(), base::NotFatalUntil::M159);
 
   // Since the types match, either both or neither URL will have bucket info.
   if (parent_url.bucket() != child_url.bucket()) {
@@ -598,8 +639,8 @@ void FileSystemAccessDirectoryHandleImpl::GetFileWithWritePermission(
     const storage::FileSystemURL& child_url,
     GetFileCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK_EQ(GetEffectiveWritePermissionStatus(),
-            blink::mojom::PermissionStatus::GRANTED);
+  CHECK_EQ(GetEffectiveWritePermissionStatus(),
+           blink::mojom::PermissionStatus::GRANTED, base::NotFatalUntil::M159);
 
   manager()->DoFileSystemOperation(
       FROM_HERE, &FileSystemOperationRunner::CreateFile,
@@ -666,8 +707,8 @@ void FileSystemAccessDirectoryHandleImpl::GetDirectoryWithWritePermission(
     const storage::FileSystemURL& child_url,
     GetDirectoryCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK_EQ(GetEffectiveWritePermissionStatus(),
-            blink::mojom::PermissionStatus::GRANTED);
+  CHECK_EQ(GetEffectiveWritePermissionStatus(),
+           blink::mojom::PermissionStatus::GRANTED, base::NotFatalUntil::M159);
 
   manager()->DoFileSystemOperation(
       FROM_HERE, &FileSystemOperationRunner::CreateDirectory,
@@ -741,7 +782,7 @@ void FileSystemAccessDirectoryHandleImpl::DidReadDirectory(
   }
 
   if (result != base::File::FILE_OK) {
-    DCHECK(!has_more_entries);
+    CHECK(!has_more_entries, base::NotFatalUntil::M159);
     listener_holder->listener->DidReadDirectory(
         file_system_access_error::FromFileError(result), {}, false);
     return;
@@ -892,19 +933,23 @@ void FileSystemAccessDirectoryHandleImpl::CurrentBatchEntriesReady(
                                               more_batches_are_expected);
 }
 
+bool FileSystemAccessDirectoryHandleImpl::IsSafePathComponent(
+    const std::string& basename) const {
+  return manager()->IsSafePathComponent(url().type(), basename);
+}
+
 blink::mojom::FileSystemAccessErrorPtr
 FileSystemAccessDirectoryHandleImpl::GetChildURL(
     const std::string& basename,
     storage::FileSystemURL* result) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  const storage::FileSystemURL& parent = url();
-  if (!manager()->IsSafePathComponent(
-          parent.type(), context().storage_key.origin(), basename)) {
+  if (!IsSafePathComponent(basename)) {
     return file_system_access_error::FromStatus(
         FileSystemAccessStatus::kInvalidArgument, "Name is not allowed.");
   }
 
+  const storage::FileSystemURL& parent = url();
 #if BUILDFLAG(IS_ANDROID)
   base::FilePath child_path =
       parent.virtual_path().IsContentUri()
@@ -917,8 +962,14 @@ FileSystemAccessDirectoryHandleImpl::GetChildURL(
         blink::mojom::FileSystemAccessStatus::kInvalidModificationError);
   }
 #else
+  // OPFS uses kFileSystemTypeTemporary, where names are virtual path
+  // components. StringToFilePath() preserves their bytes on POSIX, avoiding
+  // locale-dependent native conversion through FromUTF8Unsafe().
   base::FilePath child_path =
-      parent.virtual_path().Append(base::FilePath::FromUTF8Unsafe(basename));
+      parent.type() == storage::kFileSystemTypeTemporary
+          ? parent.virtual_path().Append(storage::StringToFilePath(basename))
+          : parent.virtual_path().Append(
+                base::FilePath::FromUTF8Unsafe(basename));
 #endif
   *result = CreateChildURL(child_path);
   return file_system_access_error::Ok();
@@ -944,8 +995,14 @@ FileSystemAccessEntryPtr FileSystemAccessDirectoryHandleImpl::CreateEntry(
     HandleType handle_type) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  std::string name =
-      !display_name.empty() ? display_name : basename.AsUTF8Unsafe();
+  std::string name = display_name;
+  if (name.empty()) {
+    // OPFS names are virtual path components, so avoid locale-dependent native
+    // path conversion when no display name is provided.
+    name = url.type() == storage::kFileSystemTypeTemporary
+               ? storage::FilePathToString(basename.path())
+               : basename.AsUTF8Unsafe();
+  }
   if (handle_type == HandleType::kDirectory) {
     return FileSystemAccessEntry::New(
         FileSystemAccessHandle::NewDirectory(
@@ -963,7 +1020,7 @@ void FileSystemAccessDirectoryHandleImpl::GetUniqueId(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   base::Uuid id = manager()->GetUniqueId(*this);
-  DCHECK(id.is_valid());
+  CHECK(id.is_valid(), base::NotFatalUntil::M159);
   std::move(callback).Run(file_system_access_error::Ok(),
                           id.AsLowercaseString());
 }

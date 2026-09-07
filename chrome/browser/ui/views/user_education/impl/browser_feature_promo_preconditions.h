@@ -12,16 +12,18 @@
 #include "base/time/clock.h"
 #include "base/time/default_clock.h"
 #include "base/time/time.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "components/user_education/common/feature_promo/feature_promo_precondition.h"
 #include "components/user_education/common/feature_promo/feature_promo_result.h"
+#include "components/user_education/common/feature_promo/impl/typed_data_collection.h"
 #include "components/user_education/common/user_education_storage_service.h"
-#include "ui/base/interaction/typed_data_collection.h"
 #include "ui/events/event.h"
 #include "ui/events/event_observer.h"
 #include "ui/views/event_monitor.h"
 #include "ui/views/view.h"
 #include "ui/views/view_observer.h"
+
+class BrowserView;
+class BrowserWindowInterface;
 
 DECLARE_FEATURE_PROMO_PRECONDITION_IDENTIFIER_VALUE(kWindowActivePrecondition);
 DECLARE_FEATURE_PROMO_PRECONDITION_IDENTIFIER_VALUE(
@@ -36,6 +38,8 @@ DECLARE_FEATURE_PROMO_PRECONDITION_IDENTIFIER_VALUE(
     kNoCriticalNoticeShowingPrecondition);
 DECLARE_FEATURE_PROMO_PRECONDITION_IDENTIFIER_VALUE(kUserNotActivePrecondition);
 DECLARE_FEATURE_PROMO_PRECONDITION_IDENTIFIER_VALUE(
+    kEnterprisePolicyNotBlockingPrecondition);
+DECLARE_FEATURE_PROMO_PRECONDITION_IDENTIFIER_VALUE(
     kActorNotActuatingActiveTabPrecondition);
 
 // Requires that the window a promo will be shown in is active.
@@ -47,22 +51,22 @@ class WindowActivePrecondition
 
   // FeaturePromoPreconditionBase:
   user_education::FeaturePromoResult CheckPrecondition(
-      ui::UnownedTypedDataCollection& data) const override;
+      user_education::UnownedTypedDataCollection& data) const override;
 };
 
 // Requires that the window isn't in content-fullscreen.
 class ContentNotFullscreenPrecondition
     : public user_education::FeaturePromoPreconditionBase {
  public:
-  explicit ContentNotFullscreenPrecondition(Browser& browser);
+  explicit ContentNotFullscreenPrecondition(BrowserWindowInterface& browser);
   ~ContentNotFullscreenPrecondition() override;
 
   // FeaturePromoPreconditionBase:
   user_education::FeaturePromoResult CheckPrecondition(
-      ui::UnownedTypedDataCollection& data) const override;
+      user_education::UnownedTypedDataCollection& data) const override;
 
  private:
-  const raw_ref<Browser> browser_;
+  const raw_ref<BrowserWindowInterface> browser_;
 };
 
 // Precondition that the Omnibox isn't open.
@@ -74,7 +78,7 @@ class OmniboxNotOpenPrecondition
 
   // FeaturePromoPreconditionBase:
   user_education::FeaturePromoResult CheckPrecondition(
-      ui::UnownedTypedDataCollection& data) const override;
+      user_education::UnownedTypedDataCollection& data) const override;
 
  private:
   const raw_ref<const BrowserView> browser_view_;
@@ -92,7 +96,7 @@ class ToolbarNotCollapsedPrecondition
 
   // FeaturePromoPreconditionBase:
   user_education::FeaturePromoResult CheckPrecondition(
-      ui::UnownedTypedDataCollection& data) const override;
+      user_education::UnownedTypedDataCollection& data) const override;
 
  private:
   const raw_ref<BrowserView> browser_view_;
@@ -110,7 +114,7 @@ class BrowserNotClosingPrecondition
 
   // FeaturePromoPreconditionBase:
   user_education::FeaturePromoResult CheckPrecondition(
-      ui::UnownedTypedDataCollection& data) const override;
+      user_education::UnownedTypedDataCollection& data) const override;
 
  private:
   const raw_ref<BrowserView> browser_view_;
@@ -127,7 +131,7 @@ class NoCriticalNoticeShowingPrecondition
 
   // FeaturePromoPreconditionBase:
   user_education::FeaturePromoResult CheckPrecondition(
-      ui::UnownedTypedDataCollection& data) const override;
+      user_education::UnownedTypedDataCollection& data) const override;
 
  private:
   const raw_ref<BrowserView> browser_view_;
@@ -146,7 +150,7 @@ class UserNotActivePrecondition
 
   // FeaturePromoPreconditionBase:
   user_education::FeaturePromoResult CheckPrecondition(
-      ui::UnownedTypedDataCollection& data) const override;
+      user_education::UnownedTypedDataCollection& data) const override;
 
  private:
   void CreateEventMonitor();
@@ -166,6 +170,18 @@ class UserNotActivePrecondition
       browser_view_observation_{this};
 };
 
+// Requires that there is no enterprise policy blocking promotions.
+class EnterprisePolicyNotBlockingPrecondition
+    : public user_education::FeaturePromoPreconditionBase {
+ public:
+  EnterprisePolicyNotBlockingPrecondition();
+  ~EnterprisePolicyNotBlockingPrecondition() override;
+
+  // FeaturePromoPreconditionBase:
+  user_education::FeaturePromoResult CheckPrecondition(
+      user_education::UnownedTypedDataCollection& data) const override;
+};
+
 // Requires that the active tab is not being actuated by an actor.
 class ActorNotActuatingActiveTabPrecondition
     : public user_education::FeaturePromoPreconditionBase {
@@ -176,7 +192,7 @@ class ActorNotActuatingActiveTabPrecondition
 
   // FeaturePromoPreconditionBase:
   user_education::FeaturePromoResult CheckPrecondition(
-      ui::UnownedTypedDataCollection& data) const override;
+      user_education::UnownedTypedDataCollection& data) const override;
 
  private:
   const raw_ref<BrowserWindowInterface> browser_window_interface_;

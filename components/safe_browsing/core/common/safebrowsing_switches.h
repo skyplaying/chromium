@@ -12,7 +12,7 @@ extern const char kMarkAsMalware[];
 extern const char kMarkAsUws[];
 extern const char kMarkAsHighConfidenceAllowlisted[];
 extern const char kArtificialCachedUrlRealTimeVerdictFlag[];
-extern const char kArtificialCachedHashPrefixRealTimeVerdictFlag[];
+extern const char kArtificialCachedV5SearchHashesVerdictFlag[];
 extern const char kArtificialCachedEnterpriseBlockedVerdictFlag[];
 extern const char kArtificialCachedEnterpriseWarnedVerdictFlag[];
 extern const char kSkipHighConfidenceAllowlist[];
@@ -22,13 +22,13 @@ extern const char kSkipCSDAllowlistOnPreclassification[];
 extern const char kOverrideCsdModelFlag[];
 extern const char kArtificialCachedPhishGuardVerdictFlag[];
 extern const char kMarkAsPasswordProtectionAllowlisted[];
-extern const char kWpMaxParallelActiveRequests[];
 extern const char kWpMaxFileOpeningThreads[];
 extern const char kCloudBinaryUploadServiceUrlFlag[];
 extern const char kSbManualDownloadBlocklist[];
 extern const char kSbEnableEnhancedProtection[];
 extern const char kForceTreatUserAsAdvancedProtection[];
 extern const char kScamDetectionKeyboardLockTriggerAndroid[];
+extern const char kSbFastInitialListsUpdate[];
 
 }  // namespace safe_browsing::switches
 

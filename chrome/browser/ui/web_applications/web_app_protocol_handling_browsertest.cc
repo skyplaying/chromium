@@ -5,9 +5,7 @@
 #include <algorithm>
 
 #include "base/test/metrics/histogram_tester.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
@@ -45,7 +43,7 @@ class WebAppProtocolHandlingBrowserTest : public WebAppNavigationBrowserTest {
   webapps::AppId InstallTestApp(const char* path, bool await_metric) {
     GURL start_url = embedded_test_server()->GetURL(path);
     page_load_metrics::PageLoadMetricsTestWaiter metrics_waiter(
-        browser()->tab_strip_model()->GetActiveWebContents());
+        browser()->GetTabStripModel()->GetActiveWebContents());
     if (await_metric) {
       metrics_waiter.AddWebFeatureExpectation(protocol_handling_feature);
     }
@@ -60,7 +58,7 @@ class WebAppProtocolHandlingBrowserTest : public WebAppNavigationBrowserTest {
   }
 
   web_app::WebAppProvider* provider() {
-    return WebAppProvider::GetForTest(browser()->profile());
+    return WebAppProvider::GetForTest(browser()->GetProfile());
   }
 
   web_app::WebAppProtocolHandlerManager& protocol_handler_manager() {

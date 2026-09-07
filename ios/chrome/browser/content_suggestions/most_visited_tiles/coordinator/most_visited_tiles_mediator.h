@@ -35,7 +35,6 @@ class ChromeAccountManagerService;
 @protocol ContentSuggestionsConsumer;
 @protocol ContentSuggestionsDelegate;
 enum class ContentSuggestionsModuleType;
-@class ContentSuggestionsMetricsRecorder;
 @protocol HelpCommands;
 class LargeIconCache;
 @class LayoutGuideCenter;
@@ -55,10 +54,6 @@ class UrlLoadingBrowserAgent;
 // The config object for the latest Most Visited Tiles.
 @property(nonatomic, strong, readonly)
     MostVisitedTilesConfig* mostVisitedConfig;
-
-// Recorder for content suggestions metrics.
-@property(nonatomic, weak)
-    ContentSuggestionsMetricsRecorder* contentSuggestionsMetricsRecorder;
 
 // Action factory for mediator.
 @property(nonatomic, strong) BrowserActionFactory* actionFactory;
@@ -82,9 +77,6 @@ class UrlLoadingBrowserAgent;
 
 // Delegate for reporting content suggestions actions to the NTP.
 @property(nonatomic, weak) id<NewTabPageActionsDelegate> NTPActionsDelegate;
-
-// Get the maximum number of sites shown.
-+ (NSUInteger)maxSitesShown;
 
 // Default initializer.
 - (instancetype)

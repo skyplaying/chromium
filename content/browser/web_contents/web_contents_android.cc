@@ -190,7 +190,7 @@ void AddTreeLevelDataToViewStructure(
 // static
 WebContents* WebContents::FromJavaWebContents(
     const JavaRef<jobject>& jweb_contents_android) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M158);
   if (jweb_contents_android.is_null())
     return NULL;
 
@@ -243,21 +243,21 @@ WebContentsAndroid::WebContentsAndroid(WebContentsImpl* web_contents)
       navigation_controller_(&(web_contents->GetController())) {
   GetAllocatedWebContentsAndroids().insert(this);
   JNIEnv* env = AttachCurrentThread();
-  obj_ = JavaObjectWeakGlobalRef(
-      env, Java_WebContentsImpl_create(env, reinterpret_cast<intptr_t>(this),
-                                       navigation_controller_.GetJavaObject()));
+  Java_WebContentsImpl_create(env, reinterpret_cast<intptr_t>(this),
+                              navigation_controller_.GetJavaObject());
 }
 
 WebContentsAndroid::~WebContentsAndroid() {
-  DCHECK(GetAllocatedWebContentsAndroids().find(this) !=
-         GetAllocatedWebContentsAndroids().end());
+  CHECK(GetAllocatedWebContentsAndroids().find(this) !=
+            GetAllocatedWebContentsAndroids().end(),
+        base::NotFatalUntil::M158);
   GetAllocatedWebContentsAndroids().erase(this);
   offset_tag_mediator_ = nullptr;
   for (auto& observer : destruction_observers_)
     observer.WebContentsAndroidDestroyed(this);
 
   JNIEnv* env = AttachCurrentThread();
-  ScopedJavaLocalRef<jobject> java_obj = obj_.get(env);
+  ScopedJavaLocalRef<jobject> java_obj = GetJavaObject();
   CHECK(!java_obj.is_null());
   Java_WebContentsImpl_clearNativePtr(env, java_obj);
 }
@@ -265,9 +265,8 @@ WebContentsAndroid::~WebContentsAndroid() {
 base::android::ScopedJavaLocalRef<jobject>
 WebContentsAndroid::GetJavaObject() {
   JNIEnv* env = AttachCurrentThread();
-  ScopedJavaLocalRef<jobject> obj = obj_.get(env);
-  CHECK(!obj.is_null());
-  return obj;
+  return Java_WebContentsImpl_getJavaObject(env,
+                                            reinterpret_cast<intptr_t>(this));
 }
 
 void WebContentsAndroid::CaptureContentAsBitmapForTesting(
@@ -342,6 +341,8 @@ void WebContentsAndroid::SetTopLevelNativeWindow(
     view->RemoveFromParent();
   if (window)
     window->AddChild(view);
+
+  web_contents_->SetColorProviderSource(window);
 }
 
 void WebContentsAndroid::SetViewAndroidDelegate(
@@ -603,7 +604,7 @@ void WebContentsAndroid::EvaluateJavaScript(JNIEnv* env,
                                             const JavaRef<jstring>& script,
                                             const JavaRef<jobject>& callback) {
   RenderViewHost* rvh = web_contents_->GetRenderViewHost();
-  DCHECK(rvh);
+  CHECK(rvh, base::NotFatalUntil::M158);
 
   if (!InitializeRenderFrameForJavaScript())
     return;
@@ -630,7 +631,7 @@ void WebContentsAndroid::EvaluateJavaScriptForTests(
     const JavaRef<jstring>& script,
     const JavaRef<jobject>& callback) {
   RenderViewHost* rvh = web_contents_->GetRenderViewHost();
-  DCHECK(rvh);
+  CHECK(rvh, base::NotFatalUntil::M158);
 
   if (!InitializeRenderFrameForJavaScript())
     return;
@@ -658,8 +659,9 @@ void WebContentsAndroid::AddMessageToDevToolsConsole(
     JNIEnv* env,
     int32_t level,
     const JavaRef<jstring>& message) {
-  DCHECK_GE(level, 0);
-  DCHECK_LE(level, static_cast<int>(blink::mojom::ConsoleMessageLevel::kError));
+  CHECK_GE(level, 0, base::NotFatalUntil::M158);
+  CHECK_LE(level, static_cast<int>(blink::mojom::ConsoleMessageLevel::kError),
+           base::NotFatalUntil::M158);
 
   web_contents_->GetPrimaryMainFrame()->AddMessageToConsole(
       static_cast<blink::mojom::ConsoleMessageLevel>(level),
@@ -776,8 +778,10 @@ void WebContentsAndroid::SetOverscrollRefreshHandler(
   WebContentsViewAndroid* view =
       static_cast<WebContentsViewAndroid*>(web_contents_->GetView());
   view->SetOverscrollRefreshHandler(
-      std::make_unique<ui::OverscrollRefreshHandler>(
-          overscroll_refresh_handler));
+      overscroll_refresh_handler.is_null()
+          ? nullptr
+          : std::make_unique<ui::OverscrollRefreshHandler>(
+                overscroll_refresh_handler));
 }
 
 void WebContentsAndroid::SetSpatialNavigationDisabled(JNIEnv* env,
@@ -836,6 +840,10 @@ int WebContentsAndroid::GetWidth(JNIEnv* env) {
   return web_contents_->GetNativeView()->GetSizeDIPs().width();
 }
 
+bool WebContentsAndroid::IsBeingCaptured(JNIEnv* env) {
+  return web_contents_->IsBeingCaptured();
+}
+
 int WebContentsAndroid::GetHeight(JNIEnv* env) {
   return web_contents_->GetNativeView()->GetSizeDIPs().height();
 }
@@ -892,6 +900,7 @@ void WebContentsAndroid::SendOrientationChangeEvent(JNIEnv* env,
 void WebContentsAndroid::OnScaleFactorChanged(JNIEnv* env) {
   RenderWidgetHostViewAndroid* rwhva = GetRenderWidgetHostViewAndroid();
   if (rwhva) {
+    rwhva->UpdateScreenInfo();
     // |SendScreenRects()| indirectly calls GetViewSize() that asks Java layer.
     web_contents_->SendScreenRects();
     rwhva->SynchronizeVisualProperties(cc::DeadlinePolicy::UseDefaultDeadline(),

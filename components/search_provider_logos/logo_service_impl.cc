@@ -28,6 +28,7 @@
 #include "components/search_provider_logos/logo_cache.h"
 #include "components/search_provider_logos/logo_observer.h"
 #include "components/search_provider_logos/switches.h"
+#include "components/variations/net/variations_http_headers.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_status_code.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
@@ -215,10 +216,12 @@ void LogoServiceImpl::GetLogo(search_provider_logos::LogoObserver* observer) {
       base::BindOnce(ObserverOnLogoAvailable, observer, true);
   callbacks.on_fresh_decoded_logo_available =
       base::BindOnce(ObserverOnLogoAvailable, observer, false);
-  GetLogo(std::move(callbacks), false);
+  GetLogo(std::move(callbacks), false, false);
 }
 
-void LogoServiceImpl::GetLogo(LogoCallbacks callbacks, bool for_webui_ntp) {
+void LogoServiceImpl::GetLogo(LogoCallbacks callbacks,
+                              bool for_webui_ntp,
+                              bool enable_animated_logo) {
   if (!template_url_service_) {
     RunCallbacksWithDisabled(std::move(callbacks));
     return;
@@ -247,9 +250,9 @@ void LogoServiceImpl::GetLogo(LogoCallbacks callbacks, bool for_webui_ntp) {
 
   GURL base_url;
   GURL doodle_url;
-  const bool is_google = template_url->url_ref().HasGoogleBaseURLs(
+  is_google_ = template_url->url_ref().HasGoogleBaseURLs(
       template_url_service_->search_terms_data());
-  if (is_google) {
+  if (is_google_) {
     // Note: Ideally the Google doodle URL would be specified in
     // prepopulated_engines.json, but there is some custom logic in
     // `GetGoogleDoodleURL()` that can't be represented in the static file.
@@ -285,7 +288,8 @@ void LogoServiceImpl::GetLogo(LogoCallbacks callbacks, bool for_webui_ntp) {
     // We encode the type of doodle (regular or gray) in the URL so that the
     // logo cache gets cleared when that value changes.
     GURL prefilled_url = AppendPreliminaryParamsToDoodleURL(
-        want_gray_logo_getter_.Run(), for_webui_ntp, doodle_url);
+        want_gray_logo_getter_.Run(), for_webui_ntp, enable_animated_logo,
+        doodle_url);
     SetServerAPI(
         prefilled_url,
         base::BindRepeating(&search_provider_logos::ParseDoodleLogoResponse,
@@ -506,8 +510,16 @@ void LogoServiceImpl::FetchLogo() {
   auto request = std::make_unique<network::ResourceRequest>();
   request->url = url;
   request->site_for_cookies = net::SiteForCookies::FromUrl(url);
-  loader_ =
-      network::SimpleURLLoader::Create(std::move(request), traffic_annotation);
+  if (is_google_) {
+    loader_ =
+        variations::CreateSimpleURLLoaderWithVariationsHeaderUnknownSignedIn(
+            std::move(request),
+            // Incognito NTP does not have a Logo.
+            variations::InIncognito::kNo, traffic_annotation);
+  } else {
+    loader_ = network::SimpleURLLoader::Create(std::move(request),
+                                               traffic_annotation);
+  }
   loader_->DownloadToString(
       url_loader_factory_.get(),
       base::BindOnce(&LogoServiceImpl::OnURLLoadComplete,

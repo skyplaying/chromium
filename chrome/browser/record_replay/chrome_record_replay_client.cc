@@ -5,18 +5,33 @@
 #include "chrome/browser/record_replay/chrome_record_replay_client.h"
 
 #include "base/check.h"
+#include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
+#include "chrome/browser/glic/browser_ui/glic_nudge_controller.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/record_replay/record_replay_driver.h"
-#include "chrome/browser/record_replay/record_replay_driver_factory.h"
-#include "chrome/browser/record_replay/recording_data_manager.h"
-#include "chrome/browser/record_replay/recording_data_manager_factory.h"
+#include "chrome/browser/record_replay/task_parameters_extractor_factory.h"
+#include "chrome/browser/record_replay/task_service_factory.h"
+#include "chrome/browser/record_replay/task_store_factory.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/simple_message_box.h"
 #include "chrome/browser/ui/toasts/api/toast_id.h"
 #include "chrome/browser/ui/toasts/toast_controller.h"
-#include "chrome/common/record_replay/record_replay.mojom.h"
-#include "chrome/common/record_replay/record_replay_features.h"
 #include "components/autofill/content/browser/content_autofill_client.h"
+#include "components/record_replay/content/browser/content_record_replay_driver.h"
+#include "components/record_replay/content/browser/content_record_replay_driver_factory.h"
+#include "components/record_replay/core/browser/record_replay_driver.h"
+#include "components/record_replay/core/browser/task_discovery_service.h"
+#include "components/record_replay/core/browser/task_discovery_service_impl.h"
+#include "components/record_replay/core/browser/task_parameters_extractor.h"
+#include "components/record_replay/core/browser/task_service.h"
+#include "components/record_replay/core/browser/task_store.h"
+#include "components/record_replay/core/common/record_replay.mojom.h"
+#include "components/record_replay/core/common/record_replay_features.h"
+#include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
+#include "ui/base/l10n/l10n_util.h"
+#include "ui/strings/grit/ui_strings.h"
 #include "url/gurl.h"
 
 namespace {
@@ -35,7 +50,15 @@ GURL StripAuthAndParams(const GURL& gurl) {
 DEFINE_USER_DATA(ChromeRecordReplayClient);
 
 ChromeRecordReplayClient::ChromeRecordReplayClient(tabs::TabInterface& tab)
-    : tabs::ContentsObservingTabFeature(tab) {
+    : ChromeRecordReplayClient(
+          tab,
+          std::make_unique<record_replay::TaskDiscoveryServiceImpl>()) {}
+
+ChromeRecordReplayClient::ChromeRecordReplayClient(
+    tabs::TabInterface& tab,
+    std::unique_ptr<record_replay::TaskDiscoveryService> service)
+    : tabs::ContentsObservingTabFeature(tab),
+      task_discovery_service_(std::move(service)) {
   CHECK(
       base::FeatureList::IsEnabled(record_replay::features::kRecordReplayBase));
   driver_factory_.Observe(tab.GetContents());
@@ -62,12 +85,15 @@ void ChromeRecordReplayClient::BindRecordReplayDriver(
   if (!client) {
     return;
   }
-  record_replay::RecordReplayDriver* driver =
-      client->GetDriverFactory().GetOrCreateDriver(rfh);
+  record_replay::ContentRecordReplayDriverFactory& driver_factory =
+      static_cast<ChromeRecordReplayClient*>(client)->driver_factory_;
+  record_replay::ContentRecordReplayDriver* driver =
+      driver_factory.GetOrCreateDriver(rfh);
   if (!driver) {
     return;
   }
-  driver->BindPendingReceiver(std::move(pending_receiver));
+  static_cast<record_replay::ContentRecordReplayDriver*>(driver)
+      ->BindPendingReceiver(std::move(pending_receiver));
 }
 
 record_replay::RecordReplayManager& ChromeRecordReplayClient::GetManager() {
@@ -79,11 +105,10 @@ ChromeRecordReplayClient::GetDriverFactory() {
   return driver_factory_;
 }
 
-record_replay::RecordingDataManager*
-ChromeRecordReplayClient::GetRecordingDataManager() {
+record_replay::TaskStore* ChromeRecordReplayClient::GetTaskStore() {
   Profile* profile =
       Profile::FromBrowserContext(tab().GetContents()->GetBrowserContext());
-  return record_replay::RecordingDataManagerFactory::GetForProfile(profile);
+  return record_replay::TaskStoreFactory::GetForProfile(profile);
 }
 
 GURL ChromeRecordReplayClient::GetPrimaryMainFrameUrl() {
@@ -96,10 +121,121 @@ autofill::AutofillClient* ChromeRecordReplayClient::GetAutofillClient() {
 
 void ChromeRecordReplayClient::ReportToUser(std::string_view message) {
   ToastController* const toast_controller =
-      ToastController::MaybeGetForWebContents(tab().GetContents());
+      ToastController::MaybeGetForTabInterface(&tab());
   if (toast_controller) {
     ToastParams params(ToastId::kRecordReplay);
     params.body_string_override = base::UTF8ToUTF16(message);
     toast_controller->MaybeShowToast(std::move(params));
+  }
+}
+
+base::WeakPtr<record_replay::RecordReplayClient>
+ChromeRecordReplayClient::GetWeakPtr() {
+  return weak_ptr_factory_.GetWeakPtr();
+}
+
+void ChromeRecordReplayClient::OfferExecuting(
+    const record_replay::TaskDefinition& definition,
+    const std::vector<record_replay::TaskParameter>& values) {
+  offered_task_definition_ = definition;
+  offered_task_parameter_values_ = values;
+
+  chrome::ShowQuestionMessageBoxAsync(
+      tab().GetContents()->GetTopLevelNativeWindow(),
+      l10n_util::GetStringUTF16(IDS_APP_CONTINUE),
+      base::UTF8ToUTF16(definition.title()),
+      base::BindOnce(
+          [](base::WeakPtr<ChromeRecordReplayClient> client,
+             chrome::MessageBoxResult result) {
+            if (client && result == chrome::MESSAGE_BOX_RESULT_YES) {
+              client->OnExecutionAccepted();
+            }
+          },
+          weak_ptr_factory_.GetWeakPtr()));
+}
+
+void ChromeRecordReplayClient::OnExecutionAccepted() {
+  if (!offered_task_definition_) {
+    return;
+  }
+  Profile* profile =
+      Profile::FromBrowserContext(tab().GetContents()->GetBrowserContext());
+  if (auto* task_service =
+          record_replay::TaskServiceFactory::GetForProfile(profile)) {
+    task_service->OnExecutionAccepted(
+        *offered_task_definition_,
+        offered_task_parameter_values_.value_or(
+            std::vector<record_replay::TaskParameter>()));
+  }
+  offered_task_definition_.reset();
+  offered_task_parameter_values_.reset();
+}
+
+void ChromeRecordReplayClient::DidFinishNavigation(
+    content::NavigationHandle* navigation_handle) {
+  if (!navigation_handle->IsInPrimaryMainFrame() ||
+      !navigation_handle->HasCommitted()) {
+    return;
+  }
+
+  Profile* profile =
+      Profile::FromBrowserContext(tab().GetContents()->GetBrowserContext());
+  if (auto* task_service =
+          record_replay::TaskServiceFactory::GetForProfile(profile)) {
+    task_service->OnURLVisited(this, navigation_handle->GetURL());
+  }
+
+  task_discovery_service_->ShouldOfferTask(
+      navigation_handle->GetURL(),
+      base::BindOnce(&ChromeRecordReplayClient::OnShouldOfferTask,
+                     weak_ptr_factory_.GetWeakPtr()));
+  // TODO(crbug.com/504555471): Refine the logic of triggering the parameter
+  // extraction (e.g., we could consider triggering it less frequently, or we
+  // could trigger it in case of some other events).
+  PerformParametersExtraction(navigation_handle->GetURL());
+}
+
+void ChromeRecordReplayClient::DOMContentLoaded(
+    content::RenderFrameHost* render_frame_host) {
+  if (!render_frame_host->IsInPrimaryMainFrame()) {
+    return;
+  }
+  // TODO(crbug.com/504555471): Refine the logic of triggering the parameter
+  // extraction (e.g., we could consider triggering it less frequently, or we
+  // could trigger it in case of some other events).
+  PerformParametersExtraction(render_frame_host->GetLastCommittedURL());
+}
+
+void ChromeRecordReplayClient::PerformParametersExtraction(const GURL& url) {
+  Profile* profile =
+      Profile::FromBrowserContext(tab().GetContents()->GetBrowserContext());
+  if (auto* extractor =
+          record_replay::TaskParametersExtractorFactory::GetForProfile(
+              profile)) {
+    content::RenderFrameHost* main_frame =
+        tab().GetContents()->GetPrimaryMainFrame();
+    if (record_replay::ContentRecordReplayDriver* driver =
+            static_cast<record_replay::ContentRecordReplayDriver*>(
+                driver_factory_.GetOrCreateDriver(main_frame))) {
+      driver->ExtractParameters(extractor->GetWeakPtr(), url);
+    }
+  }
+}
+
+void ChromeRecordReplayClient::OnShouldOfferTask(bool offered) {
+  if (!offered) {
+    return;
+  }
+
+  if (glic::GlicNudgeController* nudge_controller =
+          glic::GlicNudgeController::From(tab().GetBrowserWindowInterface())) {
+    std::optional<record_replay::TaskDiscoveryService::AutomationMetadata>
+        metadata = task_discovery_service_->GetMetadata();
+    if (metadata.has_value()) {
+      nudge_controller->UpdateNudgeLabel(
+          tab().GetContents(), metadata->title,
+          std::make_optional(metadata->instructions), /*task=*/std::nullopt,
+          base::DoNothing());
+    }
   }
 }

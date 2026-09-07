@@ -21,9 +21,10 @@
 #include "components/autofill/core/browser/payments/autofill_virtual_card_enrollment_bottom_sheet_delegate_mobile.h"
 #include "components/infobars/core/infobar.h"  // nogncheck
 #else
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #endif  // BUILDFLAG(IS_ANDROID)
 
 namespace autofill {
@@ -251,8 +252,6 @@ void VirtualCardEnrollBubbleControllerImpl::LogBubbleCloseMetrics(
         LogVirtualCardEnrollmentLoadingViewResult(get_metric(closed_reason));
         return true;
       case EnrollmentStatus::kCompleted:
-        LogVirtualCardEnrollmentConfirmationViewResult(
-            get_metric(closed_reason), confirmation_ui_params_->is_success);
         return true;
       case EnrollmentStatus::kNone:
         return false;
@@ -379,21 +378,20 @@ void VirtualCardEnrollBubbleControllerImpl::DoShowBubble() {
     return;
   }
 
-  Browser* browser = chrome::FindBrowserWithTab(web_contents());
+  BrowserWindowInterface* browser =
+      GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(
+          web_contents());
 
   if (enrollment_status_ == EnrollmentStatus::kCompleted) {
     SetBubbleView(
-        *browser->window()
+        *BrowserWindow::FromBrowser(browser)
              ->GetAutofillBubbleHandler()
              ->ShowVirtualCardEnrollConfirmationBubble(web_contents(), this));
-    LogVirtualCardEnrollmentConfirmationViewShown(
-        /*is_shown=*/true, confirmation_ui_params_->is_success);
-
   } else {
     // For reprompts after link clicks, `is_user_gesture` is set to false.
     bool user_gesture_reprompt = reprompt_required_ ? false : is_user_gesture_;
 
-    SetBubbleView(*browser->window()
+    SetBubbleView(*BrowserWindow::FromBrowser(browser)
                        ->GetAutofillBubbleHandler()
                        ->ShowVirtualCardEnrollBubble(web_contents(), this,
                                                      user_gesture_reprompt));
@@ -450,12 +448,13 @@ VirtualCardEnrollBubbleControllerImpl::GetBubbleControllerBaseWeakPtr() {
 
 #if !BUILDFLAG(IS_ANDROID)
 bool VirtualCardEnrollBubbleControllerImpl::IsWebContentsActive() {
-  Browser* active_browser = chrome::FindBrowserWithActiveWindow();
+  BrowserWindowInterface* active_browser =
+      GlobalBrowserCollection::GetInstance()->GetActiveBrowser();
   if (!active_browser) {
     return false;
   }
 
-  return active_browser->tab_strip_model()->GetActiveWebContents() ==
+  return active_browser->GetTabStripModel()->GetActiveWebContents() ==
          web_contents();
 }
 

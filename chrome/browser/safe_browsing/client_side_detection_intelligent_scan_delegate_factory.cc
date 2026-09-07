@@ -5,10 +5,13 @@
 #include "chrome/browser/safe_browsing/client_side_detection_intelligent_scan_delegate_factory.h"
 
 #include "build/buildflag.h"
+#include "chrome/browser/enterprise/browser_management/management_service_factory.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/common/chrome_features.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "components/policy/core/common/management/management_service.h"
 #include "components/safe_browsing/core/browser/intelligent_scan_delegate.h"
 #if BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/safe_browsing/android/client_side_detection_intelligent_scan_delegate_android.h"
@@ -44,6 +47,7 @@ ClientSideDetectionIntelligentScanDelegateFactory::
               .WithAshInternals(ProfileSelection::kOriginalOnly)
               .Build()) {
   DependsOn(OptimizationGuideKeyedServiceFactory::GetInstance());
+  DependsOn(policy::ManagementServiceFactory::GetInstance());
 }
 
 std::unique_ptr<KeyedService>
@@ -61,12 +65,18 @@ ClientSideDetectionIntelligentScanDelegateFactory::
       *profile->GetPrefs(), opt_guide->CreateModelBrokerClient(), opt_guide);
 #else
   return std::make_unique<ClientSideDetectionIntelligentScanDelegateDesktop>(
-      *profile->GetPrefs(), opt_guide);
+      *profile->GetPrefs(), opt_guide,
+      policy::ManagementServiceFactory::GetForProfile(profile));
 #endif
 }
 
 bool ClientSideDetectionIntelligentScanDelegateFactory::
     ServiceIsCreatedWithBrowserContext() const {
+  if (base::FeatureList::IsEnabled(
+          ::features::kLazyKeyedServiceInstantiation) &&
+      ::features::kLazyKeyedServiceInstantiationOptimizationGuide.Get()) {
+    return false;
+  }
   // The service is created early to start listening to on-device model updates.
   return true;
 }

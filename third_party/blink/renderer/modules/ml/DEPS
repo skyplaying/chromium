@@ -5,6 +5,7 @@ include_rules = [
   "+components/viz/common/resources/shared_image_format.h",
   "+gpu/command_buffer/client/client_shared_image.h",
   "+gpu/command_buffer/client/shared_image_interface.h",
+  "+gpu/command_buffer/client/webgpu_interface.h",
   "+gpu/command_buffer/common/capabilities.h",
   "+gpu/command_buffer/common/sync_token.h",
   "+services/webnn/public/cpp",
@@ -21,17 +22,21 @@ specific_include_rules = {
   ],
   # Additional allowed list of include for ml graph dump,
   # we need them for dumping the graph.
-  "ml_graph_dump\.h" : [
+  "ml_graph_dump\\.h" : [
     "+base/values.h",
   ],
-  "ml_graph_dump\.cc" : [
+  "ml_graph_dump\\.cc" : [
     "+fp16/fp16.h",
     "+base/json/json_writer.h",
   ],
-  "ml_graph_test\.cc" : [
+  "ml_graph_test\\.cc" : [
     "+base/values.h",
   ],
-  "webnn_introspection_impl\.h" : [
+  "webnn_introspection_impl\\.h" : [
     "+base/no_destructor.h",
   ],
+  # Required to check if SyncPointGraphValidation is enabled.
+  "ml_tensor\\.cc" : [
+    "+gpu/config/gpu_finch_features.h"
+  ]
 }

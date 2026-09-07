@@ -70,9 +70,7 @@ gfx::Size DecorationIconTitle::calculateSize(int icon_width) {
 
 void DecorationIconTitle::handleIconResource(
     ui::AndroidResourceType resource_type) {
-  if (!icon_needs_refresh_ &&
-      base::FeatureList::IsEnabled(
-          chrome::android::kReloadTabUiResourcesIfChanged)) {
+  if (!icon_needs_refresh_) {
     return;
   }
   if (icon_resource_id_ != ui::Resource::kInvalidResourceId) {
@@ -119,7 +117,7 @@ void DecorationIconTitle::setBounds(const gfx::Size& bounds) {
   } else if (icon_resource_id_ != ui::Resource::kInvalidResourceId) {
     int icon_x = icon_start_padding_;
     if (sys_rtl) {
-      icon_x = bounds.width() - icon_size_.width() - icon_start_padding_;
+      icon_x = bounds.width() - icon_size_.width() - icon_x;
     }
     layer_icon_->SetIsDrawable(true);
     layer_icon_->SetBounds(icon_size_);

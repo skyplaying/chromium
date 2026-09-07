@@ -36,8 +36,11 @@ public class NtpSyncedThemeBridge {
     public NtpSyncedThemeBridge(
             Profile profile,
             Callback<@Nullable CustomBackgroundInfo> onThemeCollectionSyncedCallback) {
-        mNativeNtpSyncedThemeBridge = NtpSyncedThemeBridgeJni.get().init(profile, this);
+        // Set the callback before calling native init(), since init attaches this bridge to
+        // NtpAndroidCustomBackgroundService, which may immediately notify this bridge of an
+        // already-existing synced background.
         mOnThemeCollectionSyncedCallback = onThemeCollectionSyncedCallback;
+        mNativeNtpSyncedThemeBridge = NtpSyncedThemeBridgeJni.get().init(profile, this);
     }
 
     /** Cleans up the C++ side of this class. */
@@ -53,6 +56,12 @@ public class NtpSyncedThemeBridge {
         if (mNativeNtpSyncedThemeBridge == 0) return;
 
         NtpSyncedThemeBridgeJni.get().fetchNextThemeCollectionImage(mNativeNtpSyncedThemeBridge);
+    }
+
+    /** Exposes whether the C++ service is actively processing a sync update. */
+    public boolean isProcessingSyncUpdate() {
+        if (mNativeNtpSyncedThemeBridge == 0) return false;
+        return NtpSyncedThemeBridgeJni.get().isProcessingSyncUpdate(mNativeNtpSyncedThemeBridge);
     }
 
     /**
@@ -99,5 +108,7 @@ public class NtpSyncedThemeBridge {
         void fetchNextThemeCollectionImage(long nativeNtpSyncedThemeBridge);
 
         @Nullable CustomBackgroundInfo getCustomBackgroundInfo(long nativeNtpSyncedThemeBridge);
+
+        boolean isProcessingSyncUpdate(long nativeNtpSyncedThemeBridge);
     }
 }

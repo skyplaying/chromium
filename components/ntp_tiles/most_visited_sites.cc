@@ -202,18 +202,10 @@ MostVisitedSites::MostVisitedSites(
       is_observing_(false) {
   DCHECK(prefs_);
 #if BUILDFLAG(ENABLE_SUPERVISED_USERS)
-  if (base::FeatureList::IsEnabled(
-          supervised_user::kSupervisedUserUseUrlFilteringService)) {
-    if (supervised_user_url_filtering_service_) {
-      url_filtering_service_observation_.Observe(
-          supervised_user_url_filtering_service);
-    }
-  } else {
-    if (supervised_user_service_) {
-      supervised_user_service_observation_.Observe(supervised_user_service_);
-    }
+  if (supervised_user_url_filtering_service_) {
+    url_filtering_service_observation_.Observe(
+        supervised_user_url_filtering_service);
   }
-
 #endif
 }
 
@@ -529,11 +521,8 @@ void MostVisitedSites::ClearBlockedUrls() {
 }
 
 #if BUILDFLAG(ENABLE_SUPERVISED_USERS)
-void MostVisitedSites::OnURLFilterChanged() {
-  OnUrlFilteringServiceChanged();
-}
 void MostVisitedSites::OnUrlFilteringServiceChanged() {
-  BuildCurrentTiles(/* is_user_triggered= */ false);
+  BuildCurrentTiles(/*is_user_triggered=*/false);
 }
 #endif
 
@@ -565,8 +554,11 @@ size_t MostVisitedSites::GetMaxNumSites() const {
   // The "Add new" button (for custom tiles) is not a Tile; don't include.
   return max_num_sites_;
 #else
-  return max_num_sites_ +
-         ((custom_links_manager_ && IsCustomLinksEnabled()) ? 1 : 0);
+  size_t limit = max_num_sites_;
+  if (base::FeatureList::IsEnabled(ntp_features::kNtpShortcutsRedesign)) {
+    limit = ntp_features::GetMaxMostVisitedTilesInExpandedState();
+  }
+  return limit + ((custom_links_manager_ && IsCustomLinksEnabled()) ? 1 : 0);
 #endif
 }
 
@@ -854,7 +846,8 @@ void MostVisitedSites::ReloadCustomLinksCache() {
 
   // The maximum number of custom links that can be shown is independent of the
   // maximum number of Most Visited sites that can be shown.
-  size_t num_tiles = std::min(links.size(), kMaxNumCustomLinks);
+  size_t max_links = custom_links_manager_->GetMaxLinks();
+  size_t num_tiles = std::min(links.size(), max_links);
   for (size_t i = 0; i < num_tiles; ++i) {
     const CustomLinksManager::Link& link = links.at(i);
 #if BUILDFLAG(ENABLE_SUPERVISED_USERS)

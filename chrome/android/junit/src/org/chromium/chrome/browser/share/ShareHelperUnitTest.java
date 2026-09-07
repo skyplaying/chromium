@@ -20,9 +20,7 @@ import android.graphics.Bitmap;
 import android.graphics.drawable.Icon;
 import android.net.Uri;
 import android.os.Build;
-import android.os.Bundle;
 import android.os.Looper;
-import android.os.Parcelable;
 
 import org.junit.After;
 import org.junit.Before;
@@ -31,14 +29,12 @@ import org.junit.runner.RunWith;
 import org.robolectric.Robolectric;
 import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
-import org.robolectric.annotation.Implementation;
-import org.robolectric.annotation.Implements;
-import org.robolectric.shadows.ShadowLooper;
 import org.robolectric.shadows.ShadowPendingIntent;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.IntentUtils;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.DestroyableHolder;
 import org.chromium.base.test.util.Matchers;
@@ -60,9 +56,6 @@ import java.util.List;
 public class ShareHelperUnitTest {
     private static final String INTENT_EXTRA_CHOOSER_CUSTOM_ACTIONS =
             "android.intent.extra.CHOOSER_CUSTOM_ACTIONS";
-    private static final String KEY_CHOOSER_ACTION_ICON = "icon";
-    private static final String KEY_CHOOSER_ACTION_NAME = "name";
-    private static final String KEY_CHOOSER_ACTION_ACTION = "action";
     private static final String IMAGE_URI = "file://path/to/image.png";
     private static final ComponentName TEST_COMPONENT_NAME_1 =
             new ComponentName("test.package.one", "test.class.name.one");
@@ -84,15 +77,15 @@ public class ShareHelperUnitTest {
                         /* listenToActivityState= */ false,
                         IntentRequestTracker.createFromActivity(mActivity),
                         /* insetObserver= */ null,
-                        /* trackOcclusion= */ true);
+                        /* occlusionTrackingAllowed= */ true);
         mWindowDestroyRef.set(mWindow);
         mImageUri = Uri.parse(IMAGE_URI);
     }
 
     @After
     public void tearDown() {
-        ShadowLooper.idleMainLooper();
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
+        RobolectricUtil.runAllBackgroundAndUi();
         ChromeSharedPreferences.getInstance()
                 .removeKey(ChromePreferenceKeys.SHARING_LAST_SHARED_COMPONENT_NAME);
         mWindowDestroyRef.destroy();
@@ -288,7 +281,7 @@ public class ShareHelperUnitTest {
     }
 
     @Test
-    @Config(shadows = {ShadowChooserActionHelper.class})
+    @Config(sdk = 34)  // ChooserAction requires SDK 34+.
     public void shareWithCustomActions() throws SendIntentException {
         String actionKey = "key";
         CallbackHelper callbackHelper = new CallbackHelper();
@@ -372,7 +365,7 @@ public class ShareHelperUnitTest {
                 sendBackIntent,
                 null,
                 null);
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
     }
 
     private void selectCustomActionFromChooserIntent(Intent chooserIntent, String action)
@@ -390,7 +383,7 @@ public class ShareHelperUnitTest {
                 sendBackIntent,
                 null,
                 null);
-        ShadowLooper.idleMainLooper();
+        RobolectricUtil.runAllBackgroundAndUi();
     }
 
     private void assertLastComponentNameRecorded(ComponentName name) {
@@ -398,6 +391,30 @@ public class ShareHelperUnitTest {
                 "Last shared component name not match.",
                 ShareHelper.getLastShareComponentName(),
                 Matchers.is(name));
+    }
+
+    @Test
+    public void testCleanupIntentNotSentIfActivityFinishing() {
+        Activity activity = Robolectric.buildActivity(Activity.class).get();
+        WindowAndroid window =
+                new ActivityWindowAndroid(
+                        activity,
+                        /* listenToActivityState= */ false,
+                        IntentRequestTracker.createFromActivity(activity),
+                        /* insetObserver= */ null,
+                        /* occlusionTrackingAllowed= */ true);
+
+        ShareParams params = new ShareParams.Builder(window, "", "").build();
+        ShareHelper.shareWithSystemShareSheetUi(params, null, true);
+
+        Intent chooserIntent = Shadows.shadowOf(activity).getNextStartedActivity();
+        assertNotNull("Chooser intent should have been started", chooserIntent);
+
+        activity.finish();
+        window.destroy();
+
+        Intent nextIntent = Shadows.shadowOf(activity).getNextStartedActivity();
+        assertNull("Cleanup intent should not be sent when activity is finishing.", nextIntent);
     }
 
     private ShareParams emptyShareParams() {
@@ -422,24 +439,6 @@ public class ShareHelperUnitTest {
                                     Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)),
                             "label",
                             mCallbackHelper::notifyCalled));
-        }
-    }
-
-    /** Test implementation to build a ChooserAction. */
-    @Implements(ShareHelper.ChooserActionHelper.class)
-    static class ShadowChooserActionHelper {
-        @Implementation
-        protected static boolean isSupported() {
-            return true;
-        }
-
-        @Implementation
-        protected static Parcelable newChooserAction(Icon icon, String name, PendingIntent action) {
-            Bundle bundle = new Bundle();
-            bundle.putParcelable(KEY_CHOOSER_ACTION_ICON, icon);
-            bundle.putString(KEY_CHOOSER_ACTION_NAME, name);
-            bundle.putParcelable(KEY_CHOOSER_ACTION_ACTION, action);
-            return bundle;
         }
     }
 }

@@ -12,6 +12,7 @@
 #include "cc/test/pixel_test_utils.h"
 #include "components/viz/common/resources/shared_image_format.h"
 #include "gpu/command_buffer/common/mailbox.h"
+#include "gpu/command_buffer/common/shared_image_info.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
 #include "gpu/command_buffer/service/service_utils.h"
 #include "gpu/command_buffer/service/shared_context_state.h"
@@ -33,6 +34,7 @@
 #include "third_party/skia/include/private/chromium/GrPromiseImageTexture.h"
 #include "ui/gfx/color_space.h"
 #include "ui/gfx/gpu_memory_buffer_handle.h"
+#include "ui/gl/gl_implementation.h"
 #include "ui/gl/gl_version_info.h"
 #include "ui/gl/progress_reporter.h"
 
@@ -72,9 +74,6 @@ class GLTextureImageBackingFactoryTestBase : public SharedImageTestBase {
     supports_rgba_f16_ =
         feature_info->validators()->pixel_type.IsValid(GL_HALF_FLOAT_OES) ||
         feature_info->gl_version_info().IsAtLeastGLES(3, 0);
-    supports_etc1_ =
-        feature_info->validators()->compressed_texture_format.IsValid(
-            GL_ETC1_RGB8_OES);
     supports_ar30_ = feature_info->feature_flags().chromium_image_ar30;
     supports_ab30_ = feature_info->feature_flags().chromium_image_ab30;
 
@@ -115,9 +114,6 @@ class GLTextureImageBackingFactoryTestBase : public SharedImageTestBase {
         format == viz::SinglePlaneFormat::kRGBA_1010102) {
       return supports_ar30_ || supports_ab30_;
     }
-    if (format == viz::SinglePlaneFormat::kETC1) {
-      return supports_etc1_;
-    }
     if (format == viz::SinglePlaneFormat::kBGRA_8888) {
       return supports_bgra_;
     }
@@ -130,7 +126,6 @@ class GLTextureImageBackingFactoryTestBase : public SharedImageTestBase {
   bool supports_r_rg_ = false;
   bool supports_rg16_ = false;
   bool supports_rgba_f16_ = false;
-  bool supports_etc1_ = false;
   bool supports_ar30_ = false;
   bool supports_ab30_ = false;
   bool supports_bgra_ = false;
@@ -223,6 +218,18 @@ TEST_F(GLTextureImageBackingFactoryTest, InvalidUsageWithGraphite) {
     supported = backing_factory_->CanCreateSharedImage(
         graphite_invalid_usage, format, size, /*thread_safe=*/false,
         gfx::EMPTY_BUFFER, GrContextType::kGraphiteDawn, {});
+    if (gl::GetGLImplementation() == gl::kGLImplementationEGLANGLE &&
+        gl::GetANGLEImplementation() == gl::ANGLEImplementation::kOpenGL) {
+      EXPECT_TRUE(supported)
+          << CreateLabelForSharedImageUsage(graphite_invalid_usage);
+    } else {
+      EXPECT_FALSE(supported)
+          << CreateLabelForSharedImageUsage(graphite_invalid_usage);
+    }
+
+    supported = backing_factory_->CanCreateSharedImage(
+        graphite_invalid_usage, format, size, /*thread_safe=*/false,
+        gfx::EMPTY_BUFFER, GrContextType::kVulkan, {});
     EXPECT_FALSE(supported)
         << CreateLabelForSharedImageUsage(graphite_invalid_usage);
   }
@@ -248,8 +255,10 @@ TEST_F(GLTextureImageBackingFactoryTest, EstimatedSize) {
   ASSERT_TRUE(supported);
 
   auto backing = backing_factory_->CreateSharedImage(
-      mailbox, format, surface_handle, size, color_space, surface_origin,
-      alpha_type, usage, "TestLabel", /*is_thread_safe=*/false);
+      mailbox,
+      {format, size, color_space, surface_origin, alpha_type, usage,
+       "TestLabel"},
+      surface_handle, /*is_thread_safe=*/false);
   ASSERT_TRUE(backing);
 
   size_t backing_estimated_size = backing->GetEstimatedSize();
@@ -329,11 +338,14 @@ TEST_F(GLTextureImageBackingFactoryTest, ProduceVideo) {
   ASSERT_TRUE(supported);
 
   auto backing = backing_factory_->CreateSharedImage(
-      mailbox, format, surface_handle, size, color_space, surface_origin,
-      alpha_type, usage, "TestLabel", /*is_thread_safe=*/false);
+      mailbox,
+      {format, size, color_space, surface_origin, alpha_type, usage,
+       "TestLabel"},
+      surface_handle, /*is_thread_safe=*/false);
   ASSERT_TRUE(backing);
   std::unique_ptr<SharedImageRepresentationFactoryRef> shared_image =
       shared_image_manager_.Register(std::move(backing), &memory_type_tracker_);
+  shared_image->SetCleared();
 
   Microsoft::WRL::ComPtr<ID3D11Device> d3d11_device;
   UINT creation_flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
@@ -409,8 +421,10 @@ TEST_P(GLTextureImageBackingFactoryWithFormatTest, Basic) {
   ASSERT_TRUE(supported);
 
   auto backing = backing_factory_->CreateSharedImage(
-      mailbox, format, surface_handle, size, color_space, surface_origin,
-      alpha_type, usage, "TestLabel", /*is_thread_safe=*/false);
+      mailbox,
+      {format, size, color_space, surface_origin, alpha_type, usage,
+       "TestLabel"},
+      surface_handle, /*is_thread_safe=*/false);
   ASSERT_TRUE(backing);
 
   // Check clearing.
@@ -545,8 +559,10 @@ TEST_P(GLTextureImageBackingFactoryInitialDataTest, InitialData) {
   ASSERT_TRUE(supported);
 
   auto backing = backing_factory_->CreateSharedImage(
-      mailbox, format, size, color_space, surface_origin, alpha_type, usage,
-      "TestLabel", /*is_thread_safe=*/false, initial_data);
+      mailbox,
+      {format, size, color_space, surface_origin, alpha_type, usage,
+       "TestLabel"},
+      /*is_thread_safe=*/false, initial_data);
   ASSERT_TRUE(backing);
   EXPECT_TRUE(backing->IsCleared());
 
@@ -647,8 +663,10 @@ TEST_P(GLTextureImageBackingFactoryWithUploadTest, UploadFromMemory) {
   ASSERT_TRUE(supported);
 
   auto backing = backing_factory_->CreateSharedImage(
-      mailbox, format, surface_handle, size, color_space, surface_origin,
-      alpha_type, usage, "TestLabel", /*is_thread_safe=*/false);
+      mailbox,
+      {format, size, color_space, surface_origin, alpha_type, usage,
+       "TestLabel"},
+      surface_handle, /*is_thread_safe=*/false);
   ASSERT_TRUE(backing);
 
   // Upload from bitmap with expected stride.
@@ -690,8 +708,10 @@ TEST_P(GLTextureImageBackingFactoryWithReadbackTest, ReadbackToMemory) {
   ASSERT_TRUE(supported);
 
   auto backing = backing_factory_->CreateSharedImage(
-      mailbox, format, surface_handle, size, color_space, surface_origin,
-      alpha_type, usage, "TestLabel", /*is_thread_safe=*/false);
+      mailbox,
+      {format, size, color_space, surface_origin, alpha_type, usage,
+       "TestLabel"},
+      surface_handle, /*is_thread_safe=*/false);
   ASSERT_TRUE(backing);
 
   std::vector<SkBitmap> src_bitmaps =
@@ -752,8 +772,7 @@ std::string TestParamToString(
 }
 
 const auto kInitialDataFormats =
-    ::testing::Values(viz::SinglePlaneFormat::kETC1,
-                      viz::SinglePlaneFormat::kRGBA_8888,
+    ::testing::Values(viz::SinglePlaneFormat::kRGBA_8888,
                       viz::SinglePlaneFormat::kBGRA_8888,
                       viz::SinglePlaneFormat::kRGBA_4444,
                       viz::SinglePlaneFormat::kR_8,

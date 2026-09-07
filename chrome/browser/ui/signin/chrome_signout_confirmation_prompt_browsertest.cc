@@ -10,8 +10,8 @@
 #include "base/strings/stringprintf.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/signin/signin_browser_test_base.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/signin/chrome_signout_confirmation_prompt.h"
 #include "chrome/browser/ui/signin/signin_view_controller.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
@@ -20,6 +20,7 @@
 #include "components/sync/base/features.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_navigation_observer.h"
+#include "extensions/buildflags/buildflags.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/views/widget/any_widget_observer.h"
 
@@ -56,7 +57,7 @@ class ChromeSignoutConfirmationPromptPixelTest
         views::test::AnyWidgetTestPasskey{},
         "SigninViewControllerDelegateViews");
 
-    auto* controller = browser()->GetFeatures().signin_view_controller();
+    auto* controller = SigninViewController::From(browser());
     controller->ShowSignoutConfirmationPrompt(
         GetVariant(), GetUnsyncedDataCount(),
         base::BindOnce([](ChromeSignoutConfirmationChoice choice,
@@ -155,17 +156,18 @@ class ChromeSignoutConfirmationPromptWithExtensionsPixelTest
 
 IN_PROC_BROWSER_TEST_P(ChromeSignoutConfirmationPromptWithExtensionsPixelTest,
                        InvokeUi_Default) {
-  extensions::signin_test_util::SimulateExplicitSignIn(browser()->profile(),
+  extensions::signin_test_util::SimulateExplicitSignIn(browser()->GetProfile(),
                                                        identity_test_env());
 
   // Install an account extension before showing the dialog.
-  extensions::ChromeTestExtensionLoader extension_loader(browser()->profile());
+  extensions::ChromeTestExtensionLoader extension_loader(
+      browser()->GetProfile());
   extension_loader.set_pack_extension(true);
   scoped_refptr<const extensions::Extension> account_extension =
       extension_loader.LoadExtension(
           extension_data_dir().AppendASCII("simple_with_icon"));
 
-  extensions::AccountExtensionTracker::Get(browser()->profile())
+  extensions::AccountExtensionTracker::Get(browser()->GetProfile())
       ->SetAccountExtensionTypeForTesting(
           account_extension->id(),
           extensions::AccountExtensionTracker::AccountExtensionType::

@@ -13,6 +13,7 @@
 
 #include "base/check_op.h"
 #include "base/compiler_specific.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/css_property_names.h"
 
@@ -60,13 +61,6 @@ class CORE_EXPORT CSSBitsetBase {
     UNSAFE_BUFFERS(chunks_.data()[bit / 64]) |= (1ull << (bit % 64));
   }
 
-  inline void Or(CSSPropertyID id, bool v) {
-    size_t bit = static_cast<size_t>(static_cast<unsigned>(id));
-    DCHECK_LT(bit, kBits);
-    UNSAFE_BUFFERS(chunks_.data()[bit / 64]) |=
-        (static_cast<uint64_t>(v) << (bit % 64));
-  }
-
   inline bool Has(CSSPropertyID id) const {
     size_t bit = static_cast<size_t>(static_cast<unsigned>(id));
     DCHECK_LT(bit, kBits);
@@ -82,9 +76,7 @@ class CORE_EXPORT CSSBitsetBase {
     return false;
   }
 
-  inline void Reset() {
-    UNSAFE_BUFFERS(std::memset(chunks_.data(), 0, sizeof(chunks_)));
-  }
+  inline void Reset() { std::fill(chunks_.begin(), chunks_.end(), 0); }
 
   // Yields the CSSPropertyIDs which are set.
   class Iterator {
@@ -132,7 +124,10 @@ class CORE_EXPORT CSSBitsetBase {
     }
 
    private:
-    const uint64_t* chunks_;
+    // Excluded for performance reasons: this iterator is short-lived and
+    // walks a hot bitset loop, so BRP ref-count churn would cost more than
+    // the protection is worth.
+    RAW_PTR_EXCLUSION const uint64_t* chunks_;
     // The current bit index this Iterator is pointing to. Note that this is
     // the "global" index, i.e. it has the range [0, kBits]. (It is not a local
     // index with range [0, 64]).

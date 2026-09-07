@@ -6,6 +6,7 @@
 
 #include <datetimeapi.h>
 #include <lmerr.h>
+#include <shlobj.h>
 #include <wrl/client.h>
 
 #include <memory>
@@ -17,6 +18,7 @@
 #include "base/environment.h"
 #include "base/file_version_info.h"
 #include "base/files/file.h"
+#include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/process/launch.h"
@@ -30,6 +32,7 @@
 #include "base/test/test_reg_util_win.h"
 #include "base/win/atl.h"
 #include "base/win/registry.h"
+#include "base/win/scoped_bstr.h"
 #include "base/win/scoped_com_initializer.h"
 #include "base/win/win_util.h"
 #include "build/build_config.h"
@@ -59,6 +62,7 @@ class GcpSetupTest : public ::testing::Test {
   void CreateSentinelFileToSimulateCrash(const std::wstring& product_version);
 
   void ExpectAllFilesToExist(bool exist, const std::wstring& product_version);
+  void WaitUntilAllFilesDeleted(const std::wstring& product_version);
   void ExpectSentinelFileToNotExist(const std::wstring& product_version);
   void ExpectCredentialProviderToBeRegistered(
       bool registered,
@@ -258,16 +262,34 @@ void GcpSetupTest::ExpectSentinelFileToNotExist(
 void GcpSetupTest::ExpectAllFilesToExist(bool exist,
                                          const std::wstring& product_version) {
   base::FilePath root = installed_path_for_version(product_version);
-  EXPECT_EQ(exist, base::PathExists(root));
+  bool root_exists = false;
+  for (int i = 0; i < 25; ++i) {
+    root_exists = base::PathExists(root);
+    if (root_exists == exist) {
+      break;
+    }
+    base::PlatformThread::Sleep(base::Milliseconds(100));
+  }
+  EXPECT_EQ(exist, root_exists);
 
   bool extension_found = false;
   auto install_files = GCPWFiles::Get()->GetEffectiveInstallFiles();
 
   for (auto& install_file : install_files) {
     if (kCredentialProviderExtensionExe.find(install_file) !=
-        base::FilePath::StringType::npos)
+        base::FilePath::StringType::npos) {
       extension_found = true;
-    EXPECT_EQ(exist, base::PathExists(root.Append(install_file)));
+    }
+    base::FilePath path = root.Append(install_file);
+    bool path_exists = false;
+    for (int i = 0; i < 25; ++i) {
+      path_exists = base::PathExists(path);
+      if (path_exists == exist) {
+        break;
+      }
+      base::PlatformThread::Sleep(base::Milliseconds(100));
+    }
+    EXPECT_EQ(exist, path_exists);
   }
 
   EXPECT_EQ(extension::IsGCPWExtensionEnabled(), extension_found);
@@ -325,6 +347,10 @@ void GcpSetupTest::ExpectRequiredRegistryEntriesToBePresent() {
 }
 
 void GcpSetupTest::SetUp() {
+  if (!::IsUserAnAdmin()) {
+    GTEST_SKIP() << "Test requires administrative privileges.";
+  }
+
   // Get the path to the setup exe (this exe during unit tests) and the
   // chrome version.
   GetModulePathAndProductVersion(&module_path_, &product_version_);
@@ -451,6 +477,18 @@ class GcpInstallOverOldInstallTest : public GcpSetupTest,
 #else
 #define MAYBE_DoInstallOverOldInstall DoInstallOverOldInstall
 #endif
+void GcpSetupTest::WaitUntilAllFilesDeleted(
+    const std::wstring& product_version) {
+  base::FilePath root = installed_path_for_version(product_version);
+  for (int i = 0; i < 50; ++i) {
+    if (!base::PathExists(root)) {
+      return;
+    }
+    base::PlatformThread::Sleep(base::Milliseconds(100));
+  }
+  EXPECT_FALSE(base::PathExists(root));
+}
+
 TEST_P(GcpInstallOverOldInstallTest, MAYBE_DoInstallOverOldInstall) {
   logging::ResetEventSourceForTesting();
 
@@ -492,7 +530,7 @@ TEST_P(GcpInstallOverOldInstallTest, MAYBE_DoInstallOverOldInstall) {
 
   // Make sure newer version exists and old version is gone.
   ExpectAllFilesToExist(true, product_version());
-  ExpectAllFilesToExist(false, old_version);
+  WaitUntilAllFilesDeleted(old_version);
   ExpectSentinelFileToNotExist(old_version);
 
   // Make sure kGaiaAccountName info and private data are unchanged.
@@ -699,15 +737,41 @@ TEST_F(GcpSetupTest, MAYBE_DoUninstallWithExtension) {
                   .empty());
 }
 
+TEST_F(GcpSetupTest, RelaunchUninstallerStagesUnderSystemTemp) {
+#if defined(COMPONENT_BUILD)
+  GTEST_SKIP() << "RelaunchUninstaller is not supported in component builds.";
+#else
+  base::ScopedTempDir system_temp;
+  EXPECT_TRUE(system_temp.CreateUniqueTempDir());
+  base::ScopedPathOverride system_temp_override(base::DIR_SYSTEM_TEMP,
+                                                system_temp.GetPath());
+
+  base::ScopedTempDir source_dir;
+  EXPECT_TRUE(source_dir.CreateUniqueTempDir());
+  base::FilePath installer_path =
+      source_dir.GetPath().Append(FILE_PATH_LITERAL("gcp_setup.exe"));
+  EXPECT_TRUE(base::WriteFile(installer_path, "stub"));
+
+  RelaunchUninstaller(installer_path);
+
+  base::FileEnumerator enumerator(system_temp.GetPath(), /*recursive=*/false,
+                                  base::FileEnumerator::DIRECTORIES,
+                                  FILE_PATH_LITERAL("gcp*"));
+  base::FilePath staged_dir = enumerator.Next();
+  EXPECT_FALSE(staged_dir.empty());
+  EXPECT_TRUE(base::PathExists(staged_dir.Append(installer_path.BaseName())));
+#endif  // defined(COMPONENT_BUILD)
+}
+
 TEST_F(GcpSetupTest, ValidLsaWithNoExistingUser) {
   logging::ResetEventSourceForTesting();
 
   // Create the default user so that name is not taken when the user is created.
-  CComBSTR sid;
+  base::win::ScopedBstr sid;
   DWORD error;
   EXPECT_EQ(S_OK, fake_os_user_manager()->AddUser(
                       kDefaultGaiaAccountName, L"password", L"fullname",
-                      L"comment", true, &sid, &error));
+                      L"comment", true, sid.Receive(), &error));
   // Even if the LSA information is correct, if no actual user exists, a new
   // user needs to be created.
   fake_scoped_lsa_policy_factory()->private_data()[kLsaKeyGaiaUsername] =
@@ -891,20 +955,21 @@ class GcpGaiaUserCreationTest
       public testing::WithParamInterface<std::tuple<int, bool>> {};
 
 TEST_P(GcpGaiaUserCreationTest, ExistingGaiaUserTest) {
-  CComBSTR sid;
+  base::win::ScopedBstr sid;
   DWORD error;
   EXPECT_EQ(S_OK, fake_os_user_manager()->AddUser(
                       kDefaultGaiaAccountName, L"password", L"fullname",
-                      L"comment", true, &sid, &error));
+                      L"comment", true, sid.Receive(), &error));
 
   int last_user_index = std::get<0>(GetParam());
   for (int i = 0; i < last_user_index; ++i) {
     std::wstring existing_gaia_username = kDefaultGaiaAccountName;
     existing_gaia_username +=
         base::NumberToWString(i + kInitialDuplicateUsernameIndex);
+    sid.Reset();
     EXPECT_EQ(S_OK, fake_os_user_manager()->AddUser(
                         existing_gaia_username.c_str(), L"password",
-                        L"fullname", L"comment", true, &sid, &error));
+                        L"fullname", L"comment", true, sid.Receive(), &error));
   }
   logging::ResetEventSourceForTesting();
 

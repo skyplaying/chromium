@@ -32,7 +32,6 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.Token;
@@ -44,7 +43,6 @@ import java.util.List;
 
 /** Tests for {@link TabGroupTitleUtils}. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class TabGroupTitleUtilsUnitTest {
     private static final String TAB_GROUP_TITLES_FILE_NAME = "tab_group_titles";
 
@@ -58,7 +56,7 @@ public class TabGroupTitleUtilsUnitTest {
     @Mock SharedPreferences.Editor mEditor;
     @Mock SharedPreferences.Editor mPutStringEditor;
     @Mock SharedPreferences.Editor mRemoveEditor;
-    @Mock TabGroupModelFilter mTabGroupModelFilter;
+    @Mock TabModel mTabModel;
     @Mock Tab mTab1;
     @Mock Tab mTab2;
     @Mock Tab mTab3;
@@ -135,19 +133,17 @@ public class TabGroupTitleUtilsUnitTest {
     @Test
     public void testGetDisplayableTitle_Explicit() {
         String title = "t1";
-        when(mTabGroupModelFilter.tabGroupExists(TAB_GROUP_ID)).thenReturn(true);
-        when(mTabGroupModelFilter.getTabGroupTitle(TAB_GROUP_ID)).thenReturn(title);
+        when(mTabModel.tabGroupExists(TAB_GROUP_ID)).thenReturn(true);
+        when(mTabModel.getTabGroupTitle(TAB_GROUP_ID)).thenReturn(title);
         assertEquals(
-                title,
-                TabGroupTitleUtils.getDisplayableTitle(
-                        mContext, mTabGroupModelFilter, TAB_GROUP_ID));
+                title, TabGroupTitleUtils.getDisplayableTitle(mContext, mTabModel, TAB_GROUP_ID));
     }
 
     @Test
     public void testGetDisplayableTitle_Fallback() {
         int tabCount = 4567;
-        when(mTabGroupModelFilter.tabGroupExists(TAB_GROUP_ID)).thenReturn(true);
-        when(mTabGroupModelFilter.getTabGroupTitle(TAB_GROUP_ID)).thenReturn("");
+        when(mTabModel.tabGroupExists(TAB_GROUP_ID)).thenReturn(true);
+        when(mTabModel.getTabGroupTitle(TAB_GROUP_ID)).thenReturn("");
 
         List<Tab> tabs = new ArrayList<>();
         for (int i = 0; i < tabCount; i++) {
@@ -155,36 +151,32 @@ public class TabGroupTitleUtilsUnitTest {
             when(tab.isClosing()).thenReturn(false);
             tabs.add(tab);
         }
-        when(mTabGroupModelFilter.getTabsInGroup(TAB_GROUP_ID)).thenReturn(tabs);
+        when(mTabModel.getTabsInGroup(TAB_GROUP_ID)).thenReturn(tabs);
 
-        String title =
-                TabGroupTitleUtils.getDisplayableTitle(
-                        mContext, mTabGroupModelFilter, TAB_GROUP_ID);
+        String title = TabGroupTitleUtils.getDisplayableTitle(mContext, mTabModel, TAB_GROUP_ID);
         assertTrue(title.contains(String.valueOf(tabCount)));
     }
 
     @Test
     public void testGetDisplayableTitle_FallbackNoClosingTabs() {
-        when(mTabGroupModelFilter.tabGroupExists(TAB_GROUP_ID)).thenReturn(true);
-        when(mTabGroupModelFilter.getTabGroupTitle(TAB_GROUP_ID)).thenReturn(UNSET_TAB_GROUP_TITLE);
+        when(mTabModel.tabGroupExists(TAB_GROUP_ID)).thenReturn(true);
+        when(mTabModel.getTabGroupTitle(TAB_GROUP_ID)).thenReturn(UNSET_TAB_GROUP_TITLE);
         List<Tab> tabs = new ArrayList<>();
         tabs.add(mTab1);
         tabs.add(mTab2);
         when(mTab1.isClosing()).thenReturn(false);
         when(mTab2.isClosing()).thenReturn(false);
-        when(mTabGroupModelFilter.getTabsInGroup(TAB_GROUP_ID)).thenReturn(tabs);
+        when(mTabModel.getTabsInGroup(TAB_GROUP_ID)).thenReturn(tabs);
 
-        String title =
-                TabGroupTitleUtils.getDisplayableTitle(
-                        mContext, mTabGroupModelFilter, TAB_GROUP_ID);
+        String title = TabGroupTitleUtils.getDisplayableTitle(mContext, mTabModel, TAB_GROUP_ID);
 
         assertTrue(title.contains("2"));
     }
 
     @Test
     public void testGetDisplayableTitle_FallbackSomeClosingTabs() {
-        when(mTabGroupModelFilter.tabGroupExists(TAB_GROUP_ID)).thenReturn(true);
-        when(mTabGroupModelFilter.getTabGroupTitle(TAB_GROUP_ID)).thenReturn(UNSET_TAB_GROUP_TITLE);
+        when(mTabModel.tabGroupExists(TAB_GROUP_ID)).thenReturn(true);
+        when(mTabModel.getTabGroupTitle(TAB_GROUP_ID)).thenReturn(UNSET_TAB_GROUP_TITLE);
         List<Tab> tabs = new ArrayList<>();
         tabs.add(mTab1);
         tabs.add(mTab2);
@@ -192,11 +184,9 @@ public class TabGroupTitleUtilsUnitTest {
         when(mTab1.isClosing()).thenReturn(false);
         when(mTab2.isClosing()).thenReturn(true);
         when(mTab3.isClosing()).thenReturn(false);
-        when(mTabGroupModelFilter.getTabsInGroup(TAB_GROUP_ID)).thenReturn(tabs);
+        when(mTabModel.getTabsInGroup(TAB_GROUP_ID)).thenReturn(tabs);
 
-        String title =
-                TabGroupTitleUtils.getDisplayableTitle(
-                        mContext, mTabGroupModelFilter, TAB_GROUP_ID);
+        String title = TabGroupTitleUtils.getDisplayableTitle(mContext, mTabModel, TAB_GROUP_ID);
 
         assertTrue(title.contains("2"));
         assertFalse(title.contains("3"));
@@ -204,18 +194,16 @@ public class TabGroupTitleUtilsUnitTest {
 
     @Test
     public void testGetDisplayableTitle_FallbackAllClosingTabs() {
-        when(mTabGroupModelFilter.tabGroupExists(TAB_GROUP_ID)).thenReturn(true);
-        when(mTabGroupModelFilter.getTabGroupTitle(TAB_GROUP_ID)).thenReturn(UNSET_TAB_GROUP_TITLE);
+        when(mTabModel.tabGroupExists(TAB_GROUP_ID)).thenReturn(true);
+        when(mTabModel.getTabGroupTitle(TAB_GROUP_ID)).thenReturn(UNSET_TAB_GROUP_TITLE);
         List<Tab> tabs = new ArrayList<>();
         tabs.add(mTab1);
         tabs.add(mTab2);
         when(mTab1.isClosing()).thenReturn(true);
         when(mTab2.isClosing()).thenReturn(true);
-        when(mTabGroupModelFilter.getTabsInGroup(TAB_GROUP_ID)).thenReturn(tabs);
+        when(mTabModel.getTabsInGroup(TAB_GROUP_ID)).thenReturn(tabs);
 
-        String title =
-                TabGroupTitleUtils.getDisplayableTitle(
-                        mContext, mTabGroupModelFilter, TAB_GROUP_ID);
+        String title = TabGroupTitleUtils.getDisplayableTitle(mContext, mTabModel, TAB_GROUP_ID);
 
         assertTrue(title.contains("0"));
         assertFalse(title.contains("2"));
@@ -223,14 +211,12 @@ public class TabGroupTitleUtilsUnitTest {
 
     @Test
     public void testGetDisplayableTitle_FallbackNoTabs() {
-        when(mTabGroupModelFilter.tabGroupExists(TAB_GROUP_ID)).thenReturn(true);
-        when(mTabGroupModelFilter.getTabGroupTitle(TAB_GROUP_ID)).thenReturn(UNSET_TAB_GROUP_TITLE);
+        when(mTabModel.tabGroupExists(TAB_GROUP_ID)).thenReturn(true);
+        when(mTabModel.getTabGroupTitle(TAB_GROUP_ID)).thenReturn(UNSET_TAB_GROUP_TITLE);
         List<Tab> tabs = new ArrayList<>();
-        when(mTabGroupModelFilter.getTabsInGroup(TAB_GROUP_ID)).thenReturn(tabs);
+        when(mTabModel.getTabsInGroup(TAB_GROUP_ID)).thenReturn(tabs);
 
-        String title =
-                TabGroupTitleUtils.getDisplayableTitle(
-                        mContext, mTabGroupModelFilter, TAB_GROUP_ID);
+        String title = TabGroupTitleUtils.getDisplayableTitle(mContext, mTabModel, TAB_GROUP_ID);
 
         assertTrue(title.contains("0"));
     }

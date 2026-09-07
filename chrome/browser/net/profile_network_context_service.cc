@@ -9,6 +9,7 @@
 #include <string_view>
 
 #include "base/base64.h"
+#include "base/byte_size.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/containers/span.h"
@@ -20,7 +21,6 @@
 #include "base/functional/callback_helpers.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/field_trial_params.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_split.h"
@@ -53,6 +53,7 @@
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths_internal.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/common/webui_url_constants.h"
 #include "components/certificate_transparency/pref_names.h"
 #include "components/content_settings/core/browser/cookie_settings.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
@@ -68,12 +69,12 @@
 #include "components/language/core/browser/language_prefs.h"
 #include "components/language/core/browser/pref_names.h"
 #include "components/metrics/metrics_pref_names.h"
+#include "components/metrics/metrics_reporting_choice_service.h"
 #include "components/permissions/features.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/privacy_sandbox/privacy_sandbox_prefs.h"
-#include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/first_party_sets_handler.h"
@@ -83,6 +84,7 @@
 #include "content/public/browser/storage_partition.h"
 #include "content/public/common/url_constants.h"
 #include "crypto/crypto_buildflags.h"
+#include "extensions/buildflags/buildflags.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "net/base/features.h"
 #include "net/cert/asn1_util.h"
@@ -140,7 +142,7 @@
 #include "net/ssl/client_cert_store_empty.h"
 #endif  // BUILDFLAG(IS_ANDROID)
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "extensions/common/constants.h"
 #endif
 
@@ -172,6 +174,25 @@
 #include "components/unexportable_keys/mojom/unexportable_key_service.mojom.h"  // nogncheck
 #include "components/unexportable_keys/mojom/unexportable_key_service_proxy_impl.h"  // nogncheck
 #endif
+
+#include "chrome/browser/metrics/chrome_metrics_service_accessor.h"
+#include "components/domain_reliability/domain_reliability_prefs.h"
+
+class ChromeDomainReliabilityDelegate
+    : public domain_reliability::DomainReliabilityServiceDelegate {
+ public:
+  ChromeDomainReliabilityDelegate() = default;
+  ~ChromeDomainReliabilityDelegate() override = default;
+
+  bool IsDomainReliabilityAllowed() const override {
+    return g_browser_process->local_state()->GetBoolean(
+        domain_reliability::prefs::kDomainReliabilityAllowedByPolicy);
+  }
+
+  bool IsMetricsAndCrashReportingEnabled() const override {
+    return ChromeMetricsServiceAccessor::IsMetricsAndCrashReportingEnabled();
+  }
+};
 
 namespace {
 
@@ -220,11 +241,14 @@ bool IsAmbientAuthAllowedForProfile(Profile* profile) {
   net::AmbientAuthAllowedProfileTypes type =
       static_cast<net::AmbientAuthAllowedProfileTypes>(local_state->GetInteger(
           prefs::kAmbientAuthenticationInPrivateModesEnabled));
-
+  // TODO(b/540249284): Temporarily Isolated mode is treated as Incognito. This
+  // should be revisited when deciding on the final integration of Isolated
+  // mode.
   if (profile->IsGuestSession()) {
     return type == net::AmbientAuthAllowedProfileTypes::kGuestAndRegular ||
            type == net::AmbientAuthAllowedProfileTypes::kAll;
-  } else if (profile->IsIncognitoProfile()) {
+  } else if (profile->IsIncognitoProfile() ||
+             profile->IsEnterpriseIsolatedModeProfile()) {
     return type == net::AmbientAuthAllowedProfileTypes::kIncognitoAndRegular ||
            type == net::AmbientAuthAllowedProfileTypes::kAll;
   }
@@ -414,7 +438,19 @@ bool MaybeAddCertWithConstraints(
 constexpr std::string_view kDiskCacheExperimentNameSeparator = " ";
 constexpr std::string_view kDiskCacheExperimentNameNone = "None";
 
-bool GetHttpCacheBackendResetParam(PrefService* local_state) {
+bool GetHttpCacheBackendResetParam(
+    Profile* profile,
+    const base::FilePath& relative_partition_path) {
+  // Only reset the HTTP cache for the default partition, as resetting
+  // non-default partitions is not critical for experiment performance metrics.
+  // Non-default partitions share profile preferences. If a non-default
+  // partition initialized first and updated the shared pref, the default
+  // partition would skip its reset. We also avoid tracking per-partition
+  // state to prevent pref leaks for deleted partitions.
+  if (!relative_partition_path.empty()) {
+    return false;
+  }
+  PrefService* profile_prefs = profile->GetPrefs();
   // Get the field trial groups.  If the server cannot be reached, then
   // this corresponds to "None" for each experiment.
   base::FieldTrial* isolation_key_field_trial =
@@ -443,8 +479,10 @@ bool GetHttpCacheBackendResetParam(PrefService* local_state) {
                                  ? credentials_field_trial->group_name()
                                  : kDiskCacheExperimentNameNone);
 
-  // Add the disk cache backend experiment group if active.
-  if (backend_field_trial) {
+  // Add the disk cache backend experiment group if active, and the
+  // DiskCacheBackendResetCacheOnGroupChange param is true.
+  if (backend_field_trial &&
+      net::features::kDiskCacheBackendResetCacheOnGroupChange.Get()) {
     experiment_parts.push_back(backend_field_trial->group_name());
   }
 
@@ -452,12 +490,34 @@ bool GetHttpCacheBackendResetParam(PrefService* local_state) {
       base::JoinString(experiment_parts, kDiskCacheExperimentNameSeparator);
 
   const std::string previous_field_trial_status =
-      local_state->GetString(kHttpCacheFinchExperimentGroups);
-  local_state->SetString(kHttpCacheFinchExperimentGroups,
-                         current_field_trial_status);
+      profile_prefs->GetString(kHttpCacheFinchExperimentGroups);
+  profile_prefs->SetString(kHttpCacheFinchExperimentGroups,
+                           current_field_trial_status);
 
-  return !previous_field_trial_status.empty() &&
-         current_field_trial_status != previous_field_trial_status;
+  // If `previous_field_trial_status` is empty, it means this is either a new
+  // profile or we upgraded from a version before M150 where this pref was
+  // browser-wide instead of profile-specific.
+  // In the latter case, if the user is now in an active experiment group,
+  // we should reset the cache to ensure they don't use a stale cache from
+  // a different experiment state.
+  //
+  // For a new profile, we don't need to reset the cache as it is already
+  // empty.
+  //
+  // TODO(crbug.com/515559895): This is a temporary logic for M150 migration
+  // and can be removed after a few milestones when most users have upgraded.
+  if (previous_field_trial_status.empty()) {
+    bool is_current_default = true;
+    for (std::string_view part : experiment_parts) {
+      if (part != kDiskCacheExperimentNameNone) {
+        is_current_default = false;
+        break;
+      }
+    }
+    return !is_current_default && !profile->IsNewProfile();
+  }
+
+  return current_field_trial_status != previous_field_trial_status;
 }
 
 }  // namespace
@@ -603,12 +663,14 @@ void ProfileNetworkContextService::RegisterProfilePrefs(
   registry->RegisterListPref(prefs::kCACertificatesWithConstraints);
   registry->RegisterListPref(prefs::kCADistrustedCertificates);
   registry->RegisterListPref(prefs::kCAHintCertificates);
+  // For information about whether to reset the HTTP Cache or not, defaults
+  // to the empty string, which does not prompt a reset.
+  registry->RegisterStringPref(kHttpCacheFinchExperimentGroups, "");
 #if !BUILDFLAG(IS_CHROMEOS)
   // Include user added platform certs by default.
   registry->RegisterBooleanPref(prefs::kCAPlatformIntegrationEnabled, true);
 #endif
 #if BUILDFLAG(IS_CHROMEOS)
-  net::ServerCertificateDatabaseService::RegisterProfilePrefs(registry);
   // The following two prefs are primarily used (elsewhere) as local_state
   // prefs, but they are also used here as Profile prefs, for the login screen
   // Profile on ChromeOS. Their value is only used if managed.
@@ -623,10 +685,6 @@ void ProfileNetworkContextService::RegisterLocalStatePrefs(
   registry->RegisterIntegerPref(
       prefs::kAmbientAuthenticationInPrivateModesEnabled,
       static_cast<int>(net::AmbientAuthAllowedProfileTypes::kRegularOnly));
-
-  // For information about whether to reset the HTTP Cache or not, defaults
-  // to the empty string, which does not prompt a reset.
-  registry->RegisterStringPref(kHttpCacheFinchExperimentGroups, "");
 }
 
 void ProfileNetworkContextService::DisableQuicIfNotAllowed() {
@@ -660,28 +718,16 @@ void ProfileNetworkContextService::OnThirdPartyCookieBlockingChanged(
       });
 }
 
-void ProfileNetworkContextService::OnMitigationsEnabledFor3pcdChanged(
-    bool enable) {
-  profile_->ForEachLoadedStoragePartition(
-      [&](content::StoragePartition* storage_partition) {
-        storage_partition->GetCookieManagerForBrowserProcess()
-            ->SetMitigationsEnabledFor3pcd(enable);
-      });
-}
-
 std::string ProfileNetworkContextService::ComputeAcceptLanguage() const {
   // TODO:(https://crbug.com/40224802) Return only single language without
   // expanding the language list if the DisableReduceAcceptLanguage deprecation
   // trial ends.
 
-  if (profile_->IsOffTheRecord()) {
-    // In incognito mode return only the first language.
-    return ComputeAcceptLanguageFromPref(
-        language::GetFirstLanguage(pref_accept_language_.GetValue()));
-  }
   return ComputeAcceptLanguageFromPref(
       content::ReduceAcceptLanguageUtils::GetLanguagesWithMaxCount(
-          pref_accept_language_.GetValue()));
+          profile_->IsOffTheRecord() ? language::GetIncognitoLanguageList(
+                                           pref_accept_language_.GetValue())
+                                     : pref_accept_language_.GetValue()));
 }
 
 void ProfileNetworkContextService::UpdateReferrersEnabled() {
@@ -1088,7 +1134,15 @@ ProfileNetworkContextService::CreateCookieManagerParams(
   // (chrome://new-tab-page), etc.
   out->secure_origin_cookies_allowed_schemes.push_back(
       content::kChromeUIScheme);
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if !BUILDFLAG(IS_ANDROID)
+  // TODO(crbug.com/483614998): Granting Lens side panel is a temporary
+  // exception to use SameSite cookies while it migrates to a <webview>
+  // approach. This should not be done for other untrusted WebUI.
+  out->secure_origin_cookies_allowed_origins.push_back(
+      url::Origin::Create(GURL(chrome::kChromeUILensUntrustedSidePanelURL)));
+#endif
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   // TODO(chlily): To be consistent with the content_settings version of
   // CookieSettings, we should probably also add kExtensionScheme to the list of
   // matching_scheme_cookies_allowed_schemes.
@@ -1122,12 +1176,6 @@ ProfileNetworkContextService::CreateCookieManagerParams(
 
   out->cookie_access_delegate_type =
       network::mojom::CookieAccessDelegateType::USE_CONTENT_SETTINGS;
-
-  out->mitigations_enabled_for_3pcd =
-      cookie_settings.MitigationsEnabledFor3pcd();
-
-  out->tracking_protection_enabled_for_3pcd = base::FeatureList::IsEnabled(
-      content_settings::features::kTrackingProtection3pcd);
 
   return out;
 }
@@ -1351,7 +1399,10 @@ void ProfileNetworkContextService::ConfigureNetworkContextParamsInternal(
     }
     const int disk_cache_size = local_state->GetInteger(prefs::kDiskCacheSize);
     network_context_params->http_cache_max_size = disk_cache_size;
-    network_context_params->shared_dictionary_cache_max_size = disk_cache_size;
+    if (disk_cache_size > 0) {
+      network_context_params->shared_dictionary_cache_max_size =
+          base::ByteSize(static_cast<uint64_t>(disk_cache_size));
+    }
 
     network_context_params->file_paths =
         ::network::mojom::NetworkContextFilePaths::New();
@@ -1447,15 +1498,17 @@ void ProfileNetworkContextService::ConfigureNetworkContextParamsInternal(
   network_context_params->ct_policy = GetCTPolicy();
   cert_verifier_creation_params->ct_policy = GetCTPolicy();
 
-  if (domain_reliability::ShouldCreateService()) {
+  ChromeDomainReliabilityDelegate delegate;
+  if (domain_reliability::ShouldCreateService(&delegate)) {
     network_context_params->enable_domain_reliability = true;
     network_context_params->domain_reliability_upload_reporter =
         domain_reliability::kUploadReporterString;
     network_context_params->discard_domain_reliablity_uploads =
         g_discard_domain_reliability_uploads_for_testing
             ? *g_discard_domain_reliability_uploads_for_testing
-            : !g_browser_process->local_state()->GetBoolean(
-                  metrics::prefs::kMetricsReportingEnabled);
+            : !metrics::MetricsReportingChoiceService::
+                  IsBasicMetricsReportingEnabled(
+                      g_browser_process->local_state());
   }
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -1508,7 +1561,7 @@ void ProfileNetworkContextService::ConfigureNetworkContextParamsInternal(
 #endif  // BUILDFLAG(CHROME_ROOT_STORE_CERT_MANAGEMENT_UI)
 
   network_context_params->reset_http_cache_backend =
-      GetHttpCacheBackendResetParam(g_browser_process->local_state());
+      GetHttpCacheBackendResetParam(profile_, relative_partition_path);
 
 #if BUILDFLAG(ENTERPRISE_CACHE_ENCRYPTION)
   // Enable encrypted HTTP cache if the enterprise policy is set.

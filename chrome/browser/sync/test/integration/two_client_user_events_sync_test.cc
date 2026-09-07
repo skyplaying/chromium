@@ -12,6 +12,8 @@
 #include "chrome/browser/sync/test/integration/user_events_helper.h"
 #include "chrome/browser/sync/user_event_service_factory.h"
 #include "components/bookmarks/browser/bookmark_model.h"
+#include "components/browser_sync/browser_sync_switches.h"
+#include "components/signin/public/base/signin_switches.h"
 #include "components/sync/protocol/user_event_specifics.pb.h"
 #include "components/sync_user_events/user_event_service.h"
 #include "content/public/test/browser_test.h"
@@ -34,8 +36,10 @@ class TwoClientUserEventsSyncTest
  public:
   TwoClientUserEventsSyncTest() : SyncTest(TWO_CLIENT) {
     if (GetSetupSyncMode() == SetupSyncMode::kSyncTransportOnly) {
-      scoped_feature_list_.InitAndEnableFeature(
-          syncer::kReplaceSyncPromosWithSignInPromos);
+      scoped_feature_list_.InitWithFeatures(
+          {syncer::kReplaceSyncPromosWithSignInPromos,
+           switches::kSyncEnableBookmarksInTransportMode},
+          {});
     }
   }
 
@@ -76,7 +80,7 @@ IN_PROC_BROWSER_TEST_P(TwoClientUserEventsSyncTest,
   if (GetSetupSyncMode() == SetupSyncMode::kSyncTheFeature) {
     ASSERT_TRUE(GetClient(kEncryptingClientId)->SetupSync());
   } else {
-    ASSERT_TRUE(GetClient(kEncryptingClientId)->SignInPrimaryAccount());
+    ASSERT_TRUE(GetClient(kEncryptingClientId)->SignInNoWaitForCompletion());
     ASSERT_TRUE(GetClient(kEncryptingClientId)->AwaitSyncTransportActive());
   }
 
@@ -106,7 +110,7 @@ IN_PROC_BROWSER_TEST_P(TwoClientUserEventsSyncTest,
   if (GetSetupSyncMode() == SetupSyncMode::kSyncTheFeature) {
     ASSERT_TRUE(GetClient(kDecryptingClientId)->SetupSyncNoWaitForCompletion());
   } else {
-    ASSERT_TRUE(GetClient(kDecryptingClientId)->SignInPrimaryAccount());
+    ASSERT_TRUE(GetClient(kDecryptingClientId)->SignInNoWaitForCompletion());
     ASSERT_TRUE(GetClient(kDecryptingClientId)->AwaitSyncTransportActive());
   }
   // The second client asks the user to provide a password for decryption.

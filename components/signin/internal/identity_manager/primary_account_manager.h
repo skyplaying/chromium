@@ -29,8 +29,10 @@
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
 #include "base/scoped_observation.h"
+#include "build/build_config.h"
 #include "components/signin/internal/identity_manager/profile_oauth2_token_service_observer.h"
 #include "components/signin/public/base/consent_level.h"
+#include "components/signin/public/base/signin_buildflags.h"
 #include "components/signin/public/base/signin_client.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/primary_account_change_event.h"
@@ -38,6 +40,10 @@
 class AccountTrackerService;
 class PrefRegistrySimple;
 class ProfileOAuth2TokenService;
+
+namespace metrics {
+class ProfileMetricsService;
+}  // namespace metrics
 
 namespace signin_metrics {
 enum class ProfileSignout;
@@ -83,9 +89,27 @@ class PrimaryAccountManager : public ProfileOAuth2TokenServiceObserver {
   };
   // LINT.ThenChange(//tools/metrics/histograms/metadata/signin/enums.xml:PAMInitializePrimaryAccountInfoState)
 
-  PrimaryAccountManager(SigninClient* client,
-                        ProfileOAuth2TokenService* token_service,
-                        AccountTrackerService* account_tracker_service);
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+  // LINT.IfChange(ExplicitSigninDatatypeMigrationState)
+  // Enum for histogram 'Signin.ExplicitSigninDatatypeMigration'.
+  //
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  enum class ExplicitSigninDatatypeMigrationState {
+    kSignedIn = 0,  // Baseline.
+    kSignedInWithExplicitBookmarks = 1,
+    kSignedInWithExplicitExtensions = 2,
+
+    kMaxValue = kSignedInWithExplicitExtensions,
+  };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/signin/enums.xml:ExplicitSigninDatatypeMigrationState)
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
+
+  PrimaryAccountManager(
+      SigninClient* client,
+      ProfileOAuth2TokenService* token_service,
+      AccountTrackerService* account_tracker_service,
+      metrics::ProfileMetricsService* profile_metrics_service);
 
   PrimaryAccountManager(const PrimaryAccountManager&) = delete;
   PrimaryAccountManager& operator=(const PrimaryAccountManager&) = delete;
@@ -237,13 +261,27 @@ class PrimaryAccountManager : public ProfileOAuth2TokenServiceObserver {
   // outlive this object.
   raw_ptr<AccountTrackerService> account_tracker_service_ = nullptr;
 
+  // Allows per profile metrics to be recorded. Should be used to record metrics
+  // of interest instead of regular `base::Uma*()` methods. Must outlive this
+  // object.
+  raw_ref<metrics::ProfileMetricsService> profile_metrics_service_;
+
   // The primary account information. The account may or may not be consented
   // for Sync.
   // Must be kept in sync with prefs. Use SetPrimaryAccountInternal() to change
   // this field.
   std::optional<PrimaryAccount> primary_account_;
 
+#if BUILDFLAG(IS_IOS)
+  // TODO(crbug.com/484371187): Investigate if reentrancy can be removed.
+  base::ObserverList<
+      Observer,
+      false,
+      base::ObserverListReentrancyPolicy::kAllowReentrancyUntriaged>
+      observers_;
+#else
   base::ObserverList<Observer> observers_;
+#endif
   base::ScopedObservation<ProfileOAuth2TokenService,
                           ProfileOAuth2TokenServiceObserver>
       token_service_observation_{this};

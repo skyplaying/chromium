@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 import type {BookmarksPageState, NodeMap} from 'chrome://bookmarks/bookmarks.js';
-import {createEmptyState, removeBookmark, Store, StoreClientMixinLit} from 'chrome://bookmarks/bookmarks.js';
+import {createEmptyState, removeBookmark, ROOT_NODE_ID, Store, StoreClientMixinLit} from 'chrome://bookmarks/bookmarks.js';
 import {CrLitElement, html} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 import {assertDeepEquals, assertEquals, assertFalse, assertTrue} from 'chrome://webui-test/chai_assert.js';
@@ -12,9 +12,9 @@ import {microtasksFinished} from 'chrome://webui-test/test_util.js';
 import {TestStore} from './test_store.js';
 import {createFolder, createItem, getAllFoldersOpenState, testTree} from './test_util.js';
 
-const TestStoreClientBase = StoreClientMixinLit(CrLitElement);
+const TestStoreClientElementBase = StoreClientMixinLit(CrLitElement);
 
-class TestStoreClient extends TestStoreClientBase {
+class TestStoreClientElement extends TestStoreClientElementBase {
   static get is() {
     return 'test-store-client';
   }
@@ -63,7 +63,7 @@ class TestStoreClient extends TestStoreClientBase {
   }
 }
 
-customElements.define(TestStoreClient.is, TestStoreClient);
+customElements.define(TestStoreClientElement.is, TestStoreClientElement);
 
 suite('bookmarks.Store', function() {
   let store: TestStore;
@@ -105,7 +105,7 @@ suite('bookmarks.Store', function() {
 
 suite('bookmarks.StoreClientMixin', function() {
   let store: Store;
-  let client: TestStoreClient;
+  let client: TestStoreClientElement;
 
   function update(newState: BookmarksPageState): Promise<void> {
     store.data = newState;
@@ -132,13 +132,14 @@ suite('bookmarks.StoreClientMixin', function() {
     ]));
     store.init(state);
 
-    client = document.createElement('test-store-client') as TestStoreClient;
+    client =
+        document.createElement('test-store-client') as TestStoreClientElement;
     document.body.appendChild(client);
     return microtasksFinished();
   });
 
   test('renders initial data', function() {
-    assertDeepEquals(['0', '1', '11', '12', '13'], getRenderedItems());
+    assertDeepEquals([ROOT_NODE_ID, '1', '11', '12', '13'], getRenderedItems());
   });
 
   test('renders changes to watched state', async () => {
@@ -153,7 +154,7 @@ suite('bookmarks.StoreClientMixin', function() {
     await update(newState);
 
     assertTrue(client.hasChanged);
-    assertDeepEquals(['0', '1', '11', '12'], getRenderedItems());
+    assertDeepEquals([ROOT_NODE_ID, '1', '11', '12'], getRenderedItems());
   });
 
   test('ignores changes to other subtrees', async () => {

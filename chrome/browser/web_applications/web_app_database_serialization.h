@@ -46,7 +46,7 @@ enum class ProtoParseResult {
   kInvalidFileHandlerNoActionOrLaunchType = 20,
   kInvalidFileHandlerAction = 21,
   kInvalidFileHandlerAcceptEntry = 22,
-  kInvalidIconsInFileHandler = 23,
+  kObsolete_InvalidIconsInFileHandler = 23,
   kInvalidShareTarget = 24,
   kInvalidShareTargetAction = 25,
   kInvalidShareTargetFile = 26,
@@ -95,7 +95,9 @@ enum class ProtoParseResult {
   kInvalidDisplayOverrideUrlPatterns = 69,
   kStartUrlNotInScope = 70,
   kMigratedFromManifestIdInvalid = 71,
-  kMaxValue = kMigratedFromManifestIdInvalid,
+  kAppIdMismatch = 72,
+  kAppIdMismatchForSubApp = 73,
+  kMaxValue = kAppIdMismatchForSubApp,
 };
 // LINT.ThenChange(//tools/metrics/histograms/metadata/webapps/enums.xml:WebAppProtoParseResult)
 

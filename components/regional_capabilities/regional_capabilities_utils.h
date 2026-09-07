@@ -9,7 +9,10 @@
 #include <variant>
 #include <vector>
 
-#include "base/containers/span.h"
+#include "base/auto_reset.h"
+#include "base/containers/flat_map.h"
+#include "base/feature_list.h"
+#include "base/memory/raw_ptr.h"
 
 class PrefService;
 
@@ -64,24 +67,62 @@ std::optional<SearchEngineCountryOverride> GetSearchEngineCountryOverride();
 bool HasSearchEngineCountryListOverride();
 
 // Returns the prepopulated engines for the given country.
-std::vector<const TemplateURLPrepopulateData::PrepopulatedEngine*>
+std::vector<raw_ptr<const TemplateURLPrepopulateData::PrepopulatedEngine>>
 GetPrepopulatedEngines(country_codes::CountryId country_id,
                        PrefService& prefs,
                        SearchEngineListType search_engine_list_type);
 
+const base::span<
+    const raw_ptr<const TemplateURLPrepopulateData::PrepopulatedEngine>>
+GetAllPrepopulatedEngines();
+
+// Maps from the `id` of a new entry to the deprecated `PrepopulatedEngine` that
+// points to it.
+using MigratingEngines = base::flat_map<
+    int,
+    raw_ptr<const TemplateURLPrepopulateData::PrepopulatedEngine>>;
+const MigratingEngines& GetMigratingPrepopulatedEngines();
+
 // Returns all the prepopulated engines that are used in the EEA region.
-std::vector<const TemplateURLPrepopulateData::PrepopulatedEngine*>
+std::vector<raw_ptr<const TemplateURLPrepopulateData::PrepopulatedEngine>>
 GetAllEeaRegionPrepopulatedEngines();
 
 // Returns the set of search engines that is used when the country is unknown.
-std::vector<const TemplateURLPrepopulateData::PrepopulatedEngine*>
+std::vector<raw_ptr<const TemplateURLPrepopulateData::PrepopulatedEngine>>
 GetDefaultPrepopulatedEngines();
 
-std::vector<const TemplateURLPrepopulateData::PrepopulatedEngine*>
-GetTestOverridePrepopulatedEngines();
+// -- Test-only utils ---------------------------------------------------------
 
-void SetPrepopulatedEnginesOverrideForTesting(
-    base::span<const TemplateURLPrepopulateData::PrepopulatedEngine*> engines);
+struct PrepopulatedEnginesOverride {
+  PrepopulatedEnginesOverride();
+  ~PrepopulatedEnginesOverride();
+
+  // If you need to copy or move this struct,
+  // you should declare those out-of-line as well
+  PrepopulatedEnginesOverride(const PrepopulatedEnginesOverride&);
+  PrepopulatedEnginesOverride& operator=(const PrepopulatedEnginesOverride&);
+  // Move operations
+  PrepopulatedEnginesOverride(PrepopulatedEnginesOverride&&);
+  PrepopulatedEnginesOverride& operator=(PrepopulatedEnginesOverride&&);
+
+  std::vector<raw_ptr<const TemplateURLPrepopulateData::PrepopulatedEngine>>
+      regional_engines;
+  std::vector<raw_ptr<const TemplateURLPrepopulateData::PrepopulatedEngine>>
+      all_engines;
+  MigratingEngines migrating_engines;
+};
+
+using ScopedPrepopulatedEnginesOverride =
+    base::AutoReset<std::optional<PrepopulatedEnginesOverride>>;
+
+const PrepopulatedEnginesOverride& GetPrepopulatedEnginesOverrideForTesting();
+
+ScopedPrepopulatedEnginesOverride SetPrepopulatedEnginesOverrideForTesting(
+    std::vector<raw_ptr<const TemplateURLPrepopulateData::PrepopulatedEngine>>
+        regional_engines,
+    std::vector<raw_ptr<const TemplateURLPrepopulateData::PrepopulatedEngine>>
+        other_known_engines);
+
 void ClearPrepopulatedEnginesOverrideForTesting();
 
 }  // namespace regional_capabilities

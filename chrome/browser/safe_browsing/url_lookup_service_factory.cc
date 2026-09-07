@@ -28,7 +28,9 @@
 #include "components/safe_browsing/core/common/utils.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/storage_partition.h"
 #include "services/network/public/cpp/cross_thread_pending_shared_url_loader_factory.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 
 namespace safe_browsing {
 
@@ -78,6 +80,7 @@ RealTimeUrlLookupServiceFactory::BuildServiceInstanceForBrowserContext(
     return nullptr;
   }
   Profile* profile = Profile::FromBrowserContext(context);
+
   return std::make_unique<RealTimeUrlLookupService>(
       GetURLLoaderFactory(context),
       VerdictCacheManagerFactory::GetForProfile(profile),
@@ -98,8 +101,9 @@ RealTimeUrlLookupServiceFactory::BuildServiceInstanceForBrowserContext(
       SafeBrowsingNavigationObserverManagerFactory::GetForBrowserContext(
           profile),
       WebUIContentInfoSingleton::GetInstance(),
-      ClientSideDetectionIntelligentScanDelegateFactory::GetForProfile(
-          profile));
+      ClientSideDetectionIntelligentScanDelegateFactory::GetForProfile(profile),
+      base::BindRepeating(&RealTimeUrlLookupServiceFactory::GetNetworkContext,
+                          profile));
 }
 
 scoped_refptr<network::SharedURLLoaderFactory>
@@ -128,6 +132,12 @@ RealTimeUrlLookupServiceFactory::GetMinAllowedTimestampForReferrerChains(
     Profile* profile) {
   return g_browser_process->safe_browsing_service()
       ->GetMinAllowedTimestampForReferrerChains(profile);
+}
+
+// static
+network::mojom::NetworkContext*
+RealTimeUrlLookupServiceFactory::GetNetworkContext(Profile* profile) {
+  return profile->GetDefaultStoragePartition()->GetNetworkContext();
 }
 
 void RealTimeUrlLookupServiceFactory::SetURLLoaderFactoryForTesting(

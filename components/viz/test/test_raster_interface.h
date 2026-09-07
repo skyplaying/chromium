@@ -108,8 +108,11 @@ class TestRasterInterface : public gpu::raster::RasterInterface {
                       const gfx::Vector2dF& post_scale,
                       bool requires_clear,
                       const ScrollOffsetMap* raster_inducing_scroll_offsets,
-                      size_t* max_op_size_hint) override {}
+                      size_t* max_op_size_hint,
+                      base::RepeatingCallback<void(SkCanvas*, uint32_t)>
+                          custom_raster_callback) override {}
   void EndRasterCHROMIUM() override {}
+  void FlushTileRasterGraphiteCommandsCHROMIUM() override {}
   void ReadbackARGBPixelsAsync(
       const gpu::Mailbox& source_mailbox,
       GLenum source_target,
@@ -123,7 +126,7 @@ class TestRasterInterface : public gpu::raster::RasterInterface {
   void ReadbackYUVPixelsAsync(
       const gpu::Mailbox& source_mailbox,
       GLenum source_target,
-      const gfx::Size& source_size,
+      const gfx::Rect& source_rect,
       const gfx::Rect& output_rect,
       bool vertically_flip_texture,
       int y_plane_row_stride_bytes,
@@ -132,7 +135,6 @@ class TestRasterInterface : public gpu::raster::RasterInterface {
       base::span<uint8_t> u_plane_data,
       int v_plane_row_stride_bytes,
       base::span<uint8_t> v_plane_data,
-      const gfx::Point& paste_location,
       base::OnceCallback<void()> release_mailbox,
       base::OnceCallback<void(bool)> readback_done) override {}
   bool ReadbackImagePixels(const gpu::Mailbox& source_mailbox,
@@ -158,6 +160,7 @@ class TestRasterInterface : public gpu::raster::RasterInterface {
   gpu::Capabilities caps_;
   base::OnceClosure context_lost_callback_;
   raw_ptr<TestContextSupport> test_support_ = nullptr;
+  const uint64_t test_command_buffer_id_ = 2u;
 
   bool context_lost_ = false;
   uint64_t next_insert_fence_sync_ = 1;

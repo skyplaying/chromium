@@ -227,6 +227,11 @@ SavePackage::SavePackage(PageImpl& page,
          saved_main_file_path_.value().length() <= kMaxFilePathLength);
   DCHECK(!saved_main_directory_path_.empty() &&
          saved_main_directory_path_.value().length() < kMaxFilePathLength);
+
+  // Ensure that the main path has a reasonable and useful extension.
+  net::GenerateSafeFileName(GetMimeTypeForSaveType(save_type),
+                            /*ignore_extension=*/true, &saved_main_file_path_);
+
   InternalInit();
 }
 
@@ -396,7 +401,7 @@ void SavePackage::OnMHTMLGenerated(int64_t size) {
   }
   wrote_to_completed_file_ = true;
 
-  download_->OnAllDataSaved(size, std::unique_ptr<crypto::SecureHash>());
+  download_->OnAllDataSaved(size, std::nullopt);
 
   auto* delegate = download_manager_->GetDelegate();
   if (!delegate || delegate->ShouldCompleteDownload(
@@ -882,8 +887,7 @@ void SavePackage::Finish() {
       download_->DestinationUpdate(
           all_save_items_count_, CurrentSpeed(),
           std::vector<download::DownloadItem::ReceivedSlice>());
-      download_->OnAllDataSaved(all_save_items_count_,
-                                std::unique_ptr<crypto::SecureHash>());
+      download_->OnAllDataSaved(all_save_items_count_, std::nullopt);
     }
     download_->MarkAsComplete();
 

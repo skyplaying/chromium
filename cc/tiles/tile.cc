@@ -15,6 +15,7 @@
 #include "cc/base/math_util.h"
 #include "cc/tiles/tile_manager.h"
 #include "components/viz/common/traced_value.h"
+#include "third_party/perfetto/include/perfetto/tracing/track_event_args.h"
 
 namespace cc {
 
@@ -34,14 +35,11 @@ Tile::Tile(TileManager* tile_manager,
       tiling_i_index_(info.tiling_i_index),
       tiling_j_index_(info.tiling_j_index),
       can_use_lcd_text_(info.can_use_lcd_text),
-      id_(tile_manager->GetUniqueTileId()) {
-  raster_rects_.emplace_back(info.content_rect, info.raster_transform);
-}
+      id_(tile_manager->GetUniqueTileId()) {}
 
 Tile::~Tile() {
-  TRACE_EVENT_OBJECT_DELETED_WITH_ID(
-      TRACE_DISABLED_BY_DEFAULT("cc.debug"),
-      "cc::Tile", this);
+  TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("cc.debug"), "cc::Tile:deleted",
+                      perfetto::TerminatingFlow::FromPointer(this, "Tile"));
   deleted_ = true;
   tile_manager_->Release(this);
 }
@@ -78,10 +76,6 @@ void Tile::AsValueInto(base::trace_event::TracedValue* value) const {
   value->SetBoolean("use_picture_analysis", use_picture_analysis());
   value->SetInteger("gpu_memory_usage",
                     base::saturated_cast<int>(GPUMemoryUsageInBytes()));
-}
-
-bool Tile::HasMissingLCPCandidateImages() const {
-  return HasRasterTask() && raster_task_->TaskContainsLCPCandidateImages();
 }
 
 size_t Tile::GPUMemoryUsageInBytes() const {

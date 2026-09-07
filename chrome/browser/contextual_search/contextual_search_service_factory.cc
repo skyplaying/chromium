@@ -5,11 +5,15 @@
 #include "chrome/browser/contextual_search/contextual_search_service_factory.h"
 
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/contextual_search/chrome_contextual_search_session_tab_validator.h"
+#include "chrome/browser/lens/lens_identity_delegation_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/common/channel_info.h"
 #include "components/contextual_search/contextual_search_service.h"
+#include "components/google/core/common/google_util.h"
+#include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/version_info/version_info.h"
 
 // static
@@ -42,10 +46,16 @@ std::unique_ptr<KeyedService>
 ContextualSearchServiceFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
   Profile* profile = Profile::FromBrowserContext(context);
+  auto validator =
+      std::make_unique<ChromeContextualSearchSessionTabValidator>(profile);
   return std::make_unique<contextual_search::ContextualSearchService>(
       IdentityManagerFactory::GetForProfile(profile),
       profile->GetURLLoaderFactory(),
       TemplateURLServiceFactory::GetForProfile(profile),
       profile->GetVariationsClient(), chrome::GetChannel(),
-      g_browser_process->GetApplicationLocale());
+      g_browser_process->GetApplicationLocale(), std::move(validator),
+      base::BindRepeating(
+          &lens::FetchIdentityDelegationHeaders, base::Unretained(profile),
+          IdentityManagerFactory::GetForProfile(profile),
+          google_util::kGoogleHomepageURL));
 }

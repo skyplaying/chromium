@@ -4,13 +4,7 @@
 
 package org.chromium.chrome.browser.tasks.tab_management;
 
-import static org.chromium.ui.listmenu.ListItemType.MENU_ITEM;
-import static org.chromium.ui.listmenu.ListItemType.MENU_ITEM_WITH_SUBMENU;
-import static org.chromium.ui.listmenu.ListMenuItemProperties.CLICK_LISTENER;
-import static org.chromium.ui.listmenu.ListMenuItemProperties.ENABLED;
-import static org.chromium.ui.listmenu.ListMenuItemProperties.TITLE;
-import static org.chromium.ui.listmenu.ListMenuItemProperties.TITLE_ID;
-import static org.chromium.ui.listmenu.ListMenuSubmenuItemProperties.SUBMENU_ITEMS;
+import static org.chromium.chrome.browser.multiwindow.UiUtils.getItemTitle;
 
 import android.app.Activity;
 import android.content.Context;
@@ -20,6 +14,8 @@ import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ListAdapter;
+import android.widget.ListView;
 
 import androidx.annotation.DimenRes;
 import androidx.annotation.DrawableRes;
@@ -33,11 +29,13 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.build.annotations.RequiresNonNull;
 import org.chromium.chrome.browser.compositor.overlays.strip.TabGroupContextMenuCoordinator;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.incognito.IncognitoUtils;
 import org.chromium.chrome.browser.multiwindow.InstanceInfo;
 import org.chromium.chrome.browser.multiwindow.MultiInstanceManager;
 import org.chromium.chrome.browser.multiwindow.MultiInstanceManager.PersistedInstanceType;
-import org.chromium.chrome.browser.multiwindow.MultiWindowUtils;
+import org.chromium.chrome.browser.multiwindow.MultiInstanceOrchestrator;
+import org.chromium.chrome.browser.multiwindow.MultiInstanceOrchestratorFactory;
+import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.tab_ui.R;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
@@ -50,13 +48,9 @@ import org.chromium.ui.UiUtils;
 import org.chromium.ui.hierarchicalmenu.FlyoutController;
 import org.chromium.ui.hierarchicalmenu.FlyoutController.FlyoutHandler;
 import org.chromium.ui.hierarchicalmenu.HierarchicalMenuController;
-import org.chromium.ui.hierarchicalmenu.HierarchicalMenuController.AccessibilityListObserver;
-import org.chromium.ui.listmenu.ListMenuItemProperties;
-import org.chromium.ui.listmenu.ListMenuSubmenuItemProperties;
 import org.chromium.ui.listmenu.ListMenuUtils;
 import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
 import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
-import org.chromium.ui.modelutil.PropertyModel;
 import org.chromium.ui.widget.AnchoredPopupWindow;
 import org.chromium.ui.widget.AnchoredPopupWindow.HorizontalOrientation;
 import org.chromium.ui.widget.RectProvider;
@@ -96,17 +90,20 @@ public abstract class TabOverflowMenuCoordinator<T>
     protected final CollaborationService mCollaborationService;
     protected final Supplier<TabModel> mTabModelSupplier;
     protected final @Nullable MultiInstanceManager mMultiInstanceManager;
+    protected final MultiInstanceOrchestrator mMultiInstanceOrchestrator;
     protected @Nullable TabGroupSyncService mTabGroupSyncService;
 
     private final Activity mActivity;
     private final @LayoutRes int mMenuLayout;
     private final @LayoutRes int mFlyoutMenuLayout;
     private final OnItemClickedCallback<T> mOnItemClickedCallback;
-    private final HierarchicalMenuController mHierarchicalMenuController;
+    private final HierarchicalMenuController<TabOverflowMenuHolder<T>> mHierarchicalMenuController;
 
     private boolean mIsIncognito;
     private @Nullable String mCollaborationId;
     private @Nullable T mId;
+    private @Nullable TabOverflowMenuHolder<T> mMenuHolder;
+    private int mMenuMaxWidth;
 
     /**
      * @param menuLayout The menu layout to use.
@@ -132,6 +129,7 @@ public abstract class TabOverflowMenuCoordinator<T>
         mOnItemClickedCallback = onItemClickedCallback;
         mTabModelSupplier = tabModelSupplier;
         mMultiInstanceManager = multiInstanceManager;
+        mMultiInstanceOrchestrator = MultiInstanceOrchestratorFactory.getInstance();
         mTabGroupSyncService = tabGroupSyncService;
         assert collaborationService != null;
         mCollaborationService = collaborationService;
@@ -166,9 +164,45 @@ public abstract class TabOverflowMenuCoordinator<T>
     protected void buildCollaborationMenuItems(ModelList itemList, @MemberRole int memberRole) {}
 
     /**
+     * Calculates the desired content dimensions (width at index 0, height at index 1) for the menu.
+     * Can be overridden by subclasses with custom views to include non-list components in the width
+     * calculation.
+     *
+     * @param adapter The adapter for the list view.
+     * @param listView The list view containing menu items.
+     * @return An int array containing width at index 0 and height at index 1 in pixels.
+     */
+    protected int[] getDesiredContentDimensions(ListAdapter adapter, ListView listView) {
+        int minWidthPx = mActivity.getResources().getDimensionPixelSize(R.dimen.menu_width_min);
+        int marginPx =
+                mActivity.getResources().getDimensionPixelSize(R.dimen.menu_horizontal_margin);
+        int windowWidthPx = mActivity.getResources().getDisplayMetrics().widthPixels;
+        int[] contentDimensions = UiUtils.computeListAdapterContentDimensions(adapter, listView);
+        int widthPx =
+                UiUtils.computeMenuWidth(
+                        contentDimensions[0]
+                                + listView.getPaddingLeft()
+                                + listView.getPaddingRight(),
+                        minWidthPx,
+                        mMenuMaxWidth,
+                        marginPx,
+                        windowWidthPx);
+        return new int[] {widthPx, contentDimensions[1]};
+    }
+
+    /**
      * A function to run after the menu is created but before it is shown, to make any adjustments.
      */
-    protected void afterCreate() {}
+    protected void afterCreate() {
+        if (mMenuHolder != null) {
+            ListView listView = mMenuHolder.getListView();
+            ListAdapter adapter = listView.getAdapter();
+            if (adapter != null) {
+                int[] dimensions = getDesiredContentDimensions(adapter, listView);
+                mMenuHolder.setDesiredContentWidth(dimensions[0]);
+            }
+        }
+    }
 
     /**
      * Concrete class required to get a specific menu width for the menu pop up window.
@@ -288,7 +322,8 @@ public abstract class TabOverflowMenuCoordinator<T>
         if (mActivity != null) {
             offsetPopupRect(mActivity, isIncognito, anchorViewRectProvider.getRect());
         }
-        TabOverflowMenuHolder<T> menuHolder =
+        mMenuMaxWidth = getMenuWidth(anchorViewRectProvider.getRect().width());
+        mMenuHolder =
                 new TabOverflowMenuHolder<>(
                         anchorViewRectProvider,
                         horizontalOverlapAnchor,
@@ -301,26 +336,31 @@ public abstract class TabOverflowMenuCoordinator<T>
                         mOnItemClickedCallback,
                         id,
                         mCollaborationId,
-                        getMenuWidth(anchorViewRectProvider.getRect().width()),
+                        mMenuMaxWidth,
                         this::onDismiss,
                         activity,
                         /* isFlyout= */ false);
-        buildCustomView(menuHolder.getContentView(), isIncognito);
+        buildCustomView(mMenuHolder.getContentView(), isIncognito);
         afterCreate();
 
         modelList.addObserver(
                 mHierarchicalMenuController
                 .new AccessibilityListObserver(
-                        menuHolder.getContentView(),
+                        mMenuHolder.getContentView(),
                         /* headerView= */ null,
-                        menuHolder.getContentView().findViewById(R.id.tab_group_action_menu_list),
+                        mMenuHolder.getContentView().findViewById(R.id.tab_group_action_menu_list),
                         /* headerModelList= */ null,
                         modelList));
 
-        menuHolder.show();
+        mMenuHolder.show();
 
         mHierarchicalMenuController.setupFlyoutController(
-                /* flyoutHandler= */ this, menuHolder, /* drillDownOverrideValue= */ null);
+                /* flyoutHandler= */ this,
+                mMenuHolder,
+                mMenuHolder::setOnScrollChangeListener,
+                /* drillDownOverrideValue= */ null);
+        mHierarchicalMenuController.setupBackPressBehaviorForPopupWindow(
+                mMenuHolder.getContentView(), this::dismiss);
     }
 
     /**
@@ -328,7 +368,7 @@ public abstract class TabOverflowMenuCoordinator<T>
      * adding collaboration items for {@link TabGroupContextMenuCoordinator}.
      */
     protected void resizeMenu() {
-        FlyoutController<TabOverflowMenuHolder> controller =
+        FlyoutController<TabOverflowMenuHolder<T>> controller =
                 mHierarchicalMenuController.getFlyoutController();
         if (controller != null) {
             controller.getMainPopup().resize();
@@ -347,7 +387,7 @@ public abstract class TabOverflowMenuCoordinator<T>
 
     /** Returns true if the menu is currently showing. */
     public boolean isMenuShowing() {
-        FlyoutController<TabOverflowMenuHolder> controller =
+        FlyoutController<TabOverflowMenuHolder<T>> controller =
                 mHierarchicalMenuController.getFlyoutController();
         if (controller == null) {
             return false;
@@ -358,19 +398,26 @@ public abstract class TabOverflowMenuCoordinator<T>
 
     protected void onMenuDismissed() {}
 
-    protected @Nullable TabModel getTabModel() {
+    protected TabModel getTabModel() {
         return mTabModelSupplier.get();
     }
 
     /**
-     * @return The DP measure {@param dimenRes}, converted to px.
+     * @return The DP measure {@code dimenRes}, converted to px.
      */
     protected int getDimensionPixelSize(@DimenRes int dimenRes) {
         assert mActivity != null : "Activity needs to be non-null to get pixel size";
         return mActivity.getResources().getDimensionPixelSize(dimenRes);
     }
 
+    protected @Nullable TabOverflowMenuHolder<T> getMenuHolder() {
+        return mMenuHolder;
+    }
+
     private void onDismiss(TabOverflowMenuHolder<T> menuHolder) {
+        if (mMenuHolder == menuHolder) {
+            mMenuHolder = null;
+        }
         if (mHierarchicalMenuController.getFlyoutController() != null) {
             mHierarchicalMenuController.destroyFlyoutController();
         }
@@ -389,12 +436,8 @@ public abstract class TabOverflowMenuCoordinator<T>
                     modelList, mCollaborationService.getCurrentUserRoleForGroup(collaborationId));
         }
         // Set up callbacks for submenu navigation.
-        mHierarchicalMenuController.setupCallbacksRecursively(
-                /* headerModelList= */ null,
-                modelList,
-                () -> {
-                    dismiss();
-                });
+        mHierarchicalMenuController.setupCallbacks(
+                /* headerModelList= */ null, modelList, this::dismiss);
     }
 
     public void configureMenuItemsForTesting(ModelList modelList, T id) {
@@ -421,15 +464,27 @@ public abstract class TabOverflowMenuCoordinator<T>
      * @param focusable True if the menu is focusable, false otherwise.
      */
     public void setMenuFocusable(boolean focusable) {
-        FlyoutController<TabOverflowMenuHolder> controller =
+        FlyoutController<TabOverflowMenuHolder<T>> controller =
                 mHierarchicalMenuController.getFlyoutController();
         if (controller != null) {
             controller.getMainPopup().getMenuWindow().setFocusable(focusable);
         }
     }
 
+    /** Forces the underlying main menu popup window to update its layout position. */
+    protected void updateMenuLayout() {
+        FlyoutController<TabOverflowMenuHolder<T>> controller =
+                mHierarchicalMenuController.getFlyoutController();
+        if (controller != null && controller.getMainPopup() != null) {
+            AnchoredPopupWindow menuWindow = controller.getMainPopup().getMenuWindow();
+            if (menuWindow != null) {
+                menuWindow.onRectChanged();
+            }
+        }
+    }
+
     public @Nullable ModelList getModelListForTesting() {
-        FlyoutController<TabOverflowMenuHolder> controller =
+        FlyoutController<TabOverflowMenuHolder<T>> controller =
                 mHierarchicalMenuController.getFlyoutController();
         if (controller == null) {
             return null;
@@ -439,7 +494,7 @@ public abstract class TabOverflowMenuCoordinator<T>
     }
 
     public @Nullable View getContentViewForTesting() {
-        FlyoutController<TabOverflowMenuHolder> controller =
+        FlyoutController<TabOverflowMenuHolder<T>> controller =
                 mHierarchicalMenuController.getFlyoutController();
         if (controller == null) {
             return null;
@@ -455,84 +510,95 @@ public abstract class TabOverflowMenuCoordinator<T>
      * @param isIncognito Whether we are in incognito mode.
      * @param pluralsRes The pluralizable string resource to move item(s) to another window.
      * @param menuId The menu ID to use when clicking.
+     * @param allowMoveToNewWindow Whether the set of tabs can be moved to a new window.
      * @return The {@link ListItem} letting a user choose a window to move to.
      */
     @RequiresNonNull("mMultiInstanceManager")
     protected ListItem createMoveToWindowItem(
-            T id, boolean isIncognito, @PluralsRes int pluralsRes, @IdRes int menuId) {
-        // TODO(crbug.com/437418051): Clean up move_tab_to_another_window strings.
-        if (!ChromeFeatureList.isEnabled(
-                ChromeFeatureList.SUBMENUS_TAB_CONTEXT_MENU_LFF_TAB_STRIP)) {
+            T id,
+            boolean isIncognito,
+            @PluralsRes int pluralsRes,
+            @IdRes int menuId,
+            boolean allowMoveToNewWindow) {
+        @PersistedInstanceType int instanceType = getActiveInstanceTypeForProfileType(isIncognito);
+        List<InstanceInfo> activeInstances = mMultiInstanceManager.getInstanceInfo(instanceType);
+        if (activeInstances.size() <= 1) {
             return new ListItemBuilder()
                     .withTitle(
                             mActivity
                                     .getResources()
-                                    .getQuantityString(
-                                            pluralsRes,
-                                            MultiWindowUtils.getInstanceCountWithFallback(
-                                                    PersistedInstanceType.ACTIVE)))
+                                    .getQuantityString(pluralsRes, activeInstances.size()))
                     .withMenuId(menuId)
                     .withIsIncognito(isIncognito)
                     .build();
         }
         List<ListItem> submenuItems = new ArrayList<>();
-        submenuItems.add(
-                new ListItem(
-                        MENU_ITEM,
-                        new PropertyModel.Builder(ListMenuItemProperties.ALL_KEYS)
-                                .with(TITLE_ID, R.string.menu_new_window)
-                                .with(ENABLED, true)
-                                .with(
-                                        CLICK_LISTENER,
-                                        v -> {
-                                            moveToNewWindow(id);
-                                        })
-                                .build()));
-        List<InstanceInfo> activeInstances =
-                mMultiInstanceManager.getInstanceInfo(PersistedInstanceType.ACTIVE);
-        if (activeInstances.size() > 1) {
-            for (InstanceInfo instanceInfo : activeInstances) {
-                if (mMultiInstanceManager.getCurrentInstanceId() == instanceInfo.instanceId) {
-                    continue;
-                }
-                String windowDisplayName =
-                        instanceInfo.title.isBlank()
-                                ? mActivity.getString(R.string.instance_switcher_entry_empty_window)
-                                : instanceInfo.title;
-                submenuItems.add(
-                        new ListItem(
-                                MENU_ITEM,
-                                new PropertyModel.Builder(ListMenuItemProperties.ALL_KEYS)
-                                        .with(TITLE, windowDisplayName)
-                                        .with(
-                                                CLICK_LISTENER,
-                                                (v) -> {
-                                                    moveToWindow(instanceInfo, id);
-                                                })
-                                        .with(ENABLED, true)
-                                        .build()));
-            }
+        if (allowMoveToNewWindow) {
+            Profile profile = mTabModelSupplier.get().getProfile();
+            boolean isIncognitoForced = profile != null && IncognitoUtils.isIncognitoModeForced(profile);
+            submenuItems.add(
+                    new ListItemBuilder()
+                            .withTitleRes(
+                                    isIncognitoForced
+                                            ? R.string.menu_new_incognito_window
+                                            : R.string.menu_new_window)
+                            .withStartIconRes(isIncognitoForced ? R.drawable.ic_domain : 0)
+                            .withIsIncognito(isIncognito)
+                            .withClickListener(_ -> moveToNewWindow(id))
+                            .build());
         }
-        return new ListItem(
-                MENU_ITEM_WITH_SUBMENU,
-                new PropertyModel.Builder(ListMenuSubmenuItemProperties.ALL_KEYS)
-                        .with(
-                                TITLE,
-                                mActivity
-                                        .getResources()
-                                        .getQuantityString(pluralsRes, 2)) // Any # > 1
-                        .with(SUBMENU_ITEMS, submenuItems)
-                        .with(ENABLED, true)
-                        .build());
+        for (InstanceInfo instanceInfo : activeInstances) {
+            if (mMultiInstanceManager.getCurrentInstanceId() == instanceInfo.instanceId) {
+                continue;
+            }
+            String windowDisplayName = getItemTitle(mActivity, instanceInfo);
+            submenuItems.add(
+                    new ListItemBuilder()
+                            .withTitle(windowDisplayName)
+                            .withIsIncognito(isIncognito)
+                            .withClickListener((_) -> moveToWindow(instanceInfo, id))
+                            .build());
+        }
+        return new ListItemBuilder()
+                .withTitle(
+                        mActivity.getResources().getQuantityString(pluralsRes, 2) // Any # > 1
+                        )
+                .withIsIncognito(isIncognito)
+                .withSubmenuItems(submenuItems)
+                .build();
     }
 
-    /** Creates a new window and moves item with ID {@param id} to it. */
+    /**
+     * Runs a move action and cleans up the source window if it becomes empty.
+     *
+     * @param multiInstanceManager The {@link MultiInstanceManager}.
+     * @param moveAction The action to perform the move.
+     */
+    protected static void moveAndCleanupSource(
+            MultiInstanceManager multiInstanceManager, Runnable moveAction) {
+        moveAction.run();
+        multiInstanceManager.closeChromeWindowIfEmpty(multiInstanceManager.getCurrentInstanceId());
+    }
+
+    /** Creates a new window and moves item with ID {@code id} to it. */
     @RequiresNonNull("mMultiInstanceManager")
     protected void moveToNewWindow(T id) {}
 
-    /** Moves item with ID {@param id} to window with instance info {@param instanceInfo}. */
+    /** Moves item with ID {@code id} to window with instance info {@code instanceInfo}. */
     @RequiresNonNull("mMultiInstanceManager")
     protected void moveToWindow(InstanceInfo instanceInfo, T id) {}
+
+    protected static @PersistedInstanceType int getActiveInstanceTypeForProfileType(
+            boolean isIncognito) {
+        @PersistedInstanceType int instanceType = PersistedInstanceType.ACTIVE;
+        if (IncognitoUtils.shouldOpenIncognitoAsWindow()) {
+            instanceType |=
+                    isIncognito
+                            ? PersistedInstanceType.OFF_THE_RECORD
+                            : PersistedInstanceType.REGULAR;
+        }
+        return instanceType;
+    }
 
     @Override
     public Rect getPopupRect(TabOverflowMenuHolder<T> popupWindow) {
@@ -552,6 +618,7 @@ public abstract class TabOverflowMenuCoordinator<T>
 
     @Override
     public void setWindowFocus(TabOverflowMenuHolder<T> popupWindow, boolean hasFocus) {
+        popupWindow.getMenuWindow().setFocusable(hasFocus);
         ViewGroup contentView = (ViewGroup) popupWindow.getMenuWindow().getContentView();
         if (contentView == null) {
             return;
@@ -563,8 +630,12 @@ public abstract class TabOverflowMenuCoordinator<T>
 
     @Override
     public TabOverflowMenuHolder<T> createAndShowFlyoutPopup(
-            ListItem item, View view, Runnable dismissRunnable) {
-        ModelList modelList = getModelListSubtree(item);
+            List<ListItem> items,
+            View view,
+            Runnable dismissRunnable,
+            View.OnScrollChangeListener scrollListener) {
+        ModelList modelList = new ModelList();
+        modelList.addAll(items);
 
         Rect anchorRect =
                 FlyoutController.calculateFlyoutAnchorRect(
@@ -594,20 +665,15 @@ public abstract class TabOverflowMenuCoordinator<T>
                         mOnItemClickedCallback,
                         mId,
                         mCollaborationId,
-                        getMenuWidth(rectProvider.getRect().width()),
-                        (holder) -> dismissRunnable.run(),
+                        mActivity
+                                .getResources()
+                                .getDimensionPixelSize(R.dimen.flyout_menu_max_width),
+                        (_) -> dismissRunnable.run(),
                         mActivity,
                         /* isFlyout= */ true);
 
+        menuHolder.setOnScrollChangeListener(scrollListener);
         menuHolder.show();
         return menuHolder;
-    }
-
-    private static ModelList getModelListSubtree(ListItem item) {
-        ModelList modelList = new ModelList();
-        for (ListItem listItem : item.model.get(ListMenuSubmenuItemProperties.SUBMENU_ITEMS)) {
-            modelList.add(listItem);
-        }
-        return modelList;
     }
 }

@@ -19,6 +19,7 @@ class MockWalletPassAccessManager : public WalletPassAccessManager {
   MOCK_METHOD(void,
               SaveWalletEntityInstance,
               (const EntityInstance& entity,
+               const consent_auditor::ConsentAuditor::SessionId& session_id,
                UpsertEntityInstanceCallback callback),
               (override));
   MOCK_METHOD(void,
@@ -30,6 +31,10 @@ class MockWalletPassAccessManager : public WalletPassAccessManager {
               GetUnmaskedWalletEntityInstance,
               (const EntityInstance::EntityId& entity_id,
                GetUnmaskedEntityInstanceCallback callback),
+              (override));
+  MOCK_METHOD(void,
+              GetDetailsForUpsertPass,
+              (GetDetailsForUpsertPassCallback callback),
               (override));
 };
 

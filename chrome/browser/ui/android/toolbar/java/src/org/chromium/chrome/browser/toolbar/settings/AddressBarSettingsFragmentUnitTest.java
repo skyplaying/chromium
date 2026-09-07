@@ -19,6 +19,7 @@ import static org.mockito.Mockito.when;
 import android.app.Activity;
 import android.content.pm.PackageManager;
 import android.graphics.drawable.ColorDrawable;
+import android.os.Build;
 import android.os.Bundle;
 import android.widget.ImageView;
 
@@ -38,19 +39,21 @@ import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
 import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
-import org.robolectric.shadows.ShadowLooper;
 import org.robolectric.shadows.ShadowPackageManager;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.shared_preferences.SharedPreferencesManager;
 import org.chromium.base.test.BaseRobolectricTestRunner;
+import org.chromium.base.test.RobolectricUtil;
+import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.chrome.R;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.prefs.LocalStatePrefs;
 import org.chromium.chrome.browser.prefs.LocalStatePrefsJni;
+import org.chromium.chrome.browser.toolbar.R;
 import org.chromium.chrome.browser.toolbar.ToolbarPositionController.ToolbarPositionAndSource;
 import org.chromium.chrome.browser.toolbar.settings.AddressBarSettingsFragment.HighlightedOption;
 import org.chromium.components.browser_ui.styles.SemanticColorUtils;
@@ -62,6 +65,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 /** Unit tests for {@link AddressBarSettingsFragment}. */
 @RunWith(BaseRobolectricTestRunner.class)
+@DisableFeatures(ChromeFeatureList.CROSS_DEVICE_PREF_TRACKER_EXTRA_LOGS)
 public class AddressBarSettingsFragmentUnitTest {
     @Rule public MockitoRule mockitoRule = MockitoJUnit.rule();
 
@@ -122,7 +126,7 @@ public class AddressBarSettingsFragmentUnitTest {
                 initialBackground.getColor());
 
         // Run delayed animation that reverts the color.
-        ShadowLooper.runUiThreadTasksIncludingDelayedTasks();
+        RobolectricUtil.runAllBackgroundAndUiIncludingDelayed();
 
         ColorDrawable finalBackground = (ColorDrawable) mBottomButton.getBackground();
         assertEquals(SemanticColorUtils.getDefaultBgColor(mActivity), finalBackground.getColor());
@@ -270,7 +274,7 @@ public class AddressBarSettingsFragmentUnitTest {
 
     @Test
     @SmallTest
-    @Config(sdk = android.os.Build.VERSION_CODES.R)
+    @Config(sdk = Build.VERSION_CODES.R)
     public void testFoldable() {
         ShadowPackageManager shadowPackageManager =
                 Shadows.shadowOf(ContextUtils.getApplicationContext().getPackageManager());

@@ -18,6 +18,7 @@ import android.widget.FrameLayout;
 
 import androidx.test.ext.junit.rules.ActivityScenarioRule;
 
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -36,6 +37,8 @@ import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 import org.chromium.base.supplier.SettableNonNullObservableSupplier;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.CommandLineFlags;
+import org.chromium.base.test.util.Features.EnableFeatures;
+import org.chromium.chrome.browser.app.tabmodel.ArchivedTabModelOrchestrator;
 import org.chromium.chrome.browser.back_press.BackPressManager;
 import org.chromium.chrome.browser.bookmarks.BookmarkModel;
 import org.chromium.chrome.browser.bookmarks.TabBookmarker;
@@ -44,26 +47,28 @@ import org.chromium.chrome.browser.collaboration.CollaborationServiceFactory;
 import org.chromium.chrome.browser.data_sharing.DataSharingServiceFactory;
 import org.chromium.chrome.browser.data_sharing.DataSharingTabManager;
 import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.hub.PaneManager;
 import org.chromium.chrome.browser.incognito.reauth.IncognitoReauthManager;
 import org.chromium.chrome.browser.layouts.LayoutStateProvider;
 import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
 import org.chromium.chrome.browser.lifecycle.LifecycleObserver;
 import org.chromium.chrome.browser.lifecycle.NativeInitObserver;
+import org.chromium.chrome.browser.multiwindow.MultiInstanceOrchestrator;
+import org.chromium.chrome.browser.multiwindow.MultiInstanceOrchestratorFactory;
 import org.chromium.chrome.browser.multiwindow.MultiWindowModeStateDispatcher;
 import org.chromium.chrome.browser.price_tracking.PriceTrackingFeatures;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.profiles.ProfileProvider;
 import org.chromium.chrome.browser.tab.Tab;
+import org.chromium.chrome.browser.tab.TabArchiveSettings;
 import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncServiceFactory;
 import org.chromium.chrome.browser.tab_ui.TabContentManager;
+import org.chromium.chrome.browser.tab_ui.TabListMode;
 import org.chromium.chrome.browser.tabmodel.TabCreatorManager;
-import org.chromium.chrome.browser.tabmodel.TabGroupModelFilter;
 import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
-import org.chromium.chrome.browser.tabmodel.TabModelSelectorObserver;
 import org.chromium.chrome.browser.tabmodel.TabUiUnitTestUtils;
-import org.chromium.chrome.browser.tasks.tab_management.TabListCoordinator.TabListMode;
 import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.chrome.browser.undo_tab_close_snackbar.UndoBarThrottle;
@@ -85,6 +90,7 @@ import java.util.List;
 import java.util.function.Supplier;
 
 /** Unit tests for {@link TabSwitcherPaneCoordinatorFactory}. */
+@EnableFeatures({ChromeFeatureList.GLIC, ChromeFeatureList.SEND_TAB_TO_SELF_AUTO_OPEN})
 @RunWith(BaseRobolectricTestRunner.class)
 public class TabSwitcherPaneCoordinatorFactoryUnitTest {
     private static final int TAB1_ID = 456;
@@ -98,12 +104,12 @@ public class TabSwitcherPaneCoordinatorFactoryUnitTest {
 
     @Mock private ActivityLifecycleDispatcher mLifecycleDispatcher;
     @Mock private TabModelSelector mTabModelSelector;
-    @Mock private TabGroupModelFilter mTabGroupModelFilter;
     @Mock private TabModel mTabModel;
     @Mock private TabContentManager mTabContentManager;
     @Mock private TabCreatorManager mTabCreatorManager;
     @Mock private BrowserControlsStateProvider mBrowserControlsStateProvider;
     @Mock private MultiWindowModeStateDispatcher mMultiWindowModeStateDispatcher;
+    @Mock private MultiInstanceOrchestrator mMultiInstanceOrchestrator;
     @Mock private ScrimManager mScrimManager;
     @Mock private SnackbarManager mSnackbarManager;
     @Mock private ModalDialogManager mModalDialogManager;
@@ -124,8 +130,9 @@ public class TabSwitcherPaneCoordinatorFactoryUnitTest {
     @Mock private Supplier<PaneManager> mPaneManagerSupplier;
     @Mock private Supplier<TabGroupUiActionHandler> mTabGroupUiActionHandlerSupplier;
     @Mock private Supplier<LayoutStateProvider> mLayoutStateProviderSupplier;
+    @Mock private ArchivedTabModelOrchestrator mArchivedTabModelOrchestrator;
+    @Mock private TabArchiveSettings mTabArchiveSettings;
 
-    @Captor private ArgumentCaptor<TabModelSelectorObserver> mTabModelSelectorObserverCaptor;
     @Captor private ArgumentCaptor<LifecycleObserver> mLifecycleObserverCaptor;
 
     private final OneshotSupplierImpl<ProfileProvider> mProfileProviderSupplier =
@@ -134,14 +141,16 @@ public class TabSwitcherPaneCoordinatorFactoryUnitTest {
             ObservableSuppliers.createNonNull(true);
     private final SettableNonNullObservableSupplier<Boolean> mIsAnimatingSupplier =
             ObservableSuppliers.createNonNull(false);
-    private final SettableMonotonicObservableSupplier<TabGroupModelFilter>
-            mTabGroupModelFilterSupplier = ObservableSuppliers.createMonotonic();
+    private final SettableMonotonicObservableSupplier<TabModel> mTabModelSupplier =
+            ObservableSuppliers.createMonotonic();
     private final SettableMonotonicObservableSupplier<EdgeToEdgeController> mEdgeToEdgeSupplier =
             ObservableSuppliers.createMonotonic();
     private final SettableNonNullObservableSupplier<Boolean> mHubSearchBoxVisibilitySupplier =
             ObservableSuppliers.createNonNull(false);
     private final SettableMonotonicObservableSupplier<TabBookmarker> mTabBookmarkerSupplier =
             ObservableSuppliers.createMonotonic();
+    private final SettableNonNullObservableSupplier<Integer> mArchivedTabCountSupplier =
+            ObservableSuppliers.createNonNull(0);
     private FrameLayout mParentView;
     private TabSwitcherPaneCoordinatorFactory mFactory;
 
@@ -152,9 +161,14 @@ public class TabSwitcherPaneCoordinatorFactoryUnitTest {
         IncognitoReauthManager.setIsIncognitoReauthFeatureAvailableForTesting(false);
 
         TrackerFactory.setTrackerForTests(mTracker);
+        MultiInstanceOrchestratorFactory.setInstanceForTesting(mMultiInstanceOrchestrator);
         DataSharingServiceFactory.setForTesting(new TestDataSharingService());
         CollaborationServiceFactory.setForTesting(mCollaborationService);
         TabGroupSyncServiceFactory.setForTesting(mTabGroupSyncService);
+        ArchivedTabModelOrchestrator.setInstanceForTesting(mArchivedTabModelOrchestrator);
+        when(mArchivedTabModelOrchestrator.getTabArchiveSettings()).thenReturn(mTabArchiveSettings);
+        when(mTabArchiveSettings.getArchivedTabCountSupplier())
+                .thenReturn(mArchivedTabCountSupplier);
         when(mCollaborationService.getServiceStatus())
                 .thenReturn(
                         new ServiceStatus(
@@ -169,15 +183,11 @@ public class TabSwitcherPaneCoordinatorFactoryUnitTest {
 
         when(mTabModelSelector.getModel(false)).thenReturn(mTabModel);
         when(mTabModelSelector.getModels()).thenReturn(List.of(mTabModel));
-        when(mTabGroupModelFilter.getTabModel()).thenReturn(mTabModel);
-        when(mTabModelSelector.getTabGroupModelFilter(false)).thenReturn(mTabGroupModelFilter);
 
-        mTabGroupModelFilterSupplier.set(mTabGroupModelFilter);
+        mTabModelSupplier.set(mTabModel);
         mTabBookmarkerSupplier.set(mTabBookmarker);
 
-        when(mTabModelSelector.getCurrentTabGroupModelFilterSupplier())
-                .thenReturn(mTabGroupModelFilterSupplier);
-        when(mTabGroupModelFilter.getTabModel()).thenReturn(mTabModel);
+        when(mTabModelSelector.getCurrentTabModelSupplier()).thenReturn(mTabModelSupplier);
         when(mTabModel.iterator()).thenAnswer(invocation -> List.of(tab).iterator());
         when(mTabModel.getCount()).thenReturn(1);
         when(mTabModel.getTabAt(0)).thenReturn(tab);
@@ -187,6 +197,11 @@ public class TabSwitcherPaneCoordinatorFactoryUnitTest {
 
         mActivityScenarioRule.getScenario().onActivity(this::onActivityReady);
         BookmarkModel.setInstanceForTesting(mBookmarkModel);
+    }
+
+    @After
+    public void tearDown() {
+        ArchivedTabModelOrchestrator.setInstanceForTesting(null);
     }
 
     private void onActivityReady(Activity activity) {
@@ -332,10 +347,27 @@ public class TabSwitcherPaneCoordinatorFactoryUnitTest {
     }
 
     @Test
-    public void testCreateTabGroupModelFilterSupplier() {
+    public void testCreateTabModelSupplier() {
+        SettableMonotonicObservableSupplier<TabModel> currentTabModelSupplier =
+                ObservableSuppliers.createMonotonic();
+        when(mTabModelSelector.getCurrentTabModelSupplier()).thenReturn(currentTabModelSupplier);
         when(mTabModelSelector.getModels()).thenReturn(List.of(mTabModel));
 
-        var supplier = mFactory.createTabGroupModelFilterSupplier(false);
-        assertEquals(mTabGroupModelFilter, supplier.get());
+        var supplier = mFactory.createTabModelSupplier(false);
+        assertNull(supplier.get());
+        assertTrue(currentTabModelSupplier.hasObservers());
+
+        currentTabModelSupplier.set(mTabModel);
+        assertEquals(mTabModel, supplier.get());
+        assertFalse(currentTabModelSupplier.hasObservers());
+    }
+
+    @Test
+    public void testCreateTabModelSupplier_AlreadySet() {
+        when(mTabModelSelector.getModels()).thenReturn(List.of(mTabModel));
+
+        var supplier = mFactory.createTabModelSupplier(false);
+        assertEquals(mTabModel, supplier.get());
+        assertFalse(mTabModelSupplier.hasObservers());
     }
 }

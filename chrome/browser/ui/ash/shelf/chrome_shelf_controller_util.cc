@@ -6,6 +6,7 @@
 
 #include <algorithm>
 
+#include "ash/constants/ash_pref_names.h"
 #include "ash/constants/web_app_id_constants.h"
 #include "ash/public/cpp/shelf_item_delegate.h"
 #include "ash/public/cpp/shelf_model.h"
@@ -19,8 +20,6 @@
 #include "chrome/browser/ash/app_list/arc/arc_app_list_prefs.h"
 #include "chrome/browser/ash/app_list/arc/arc_app_utils.h"
 #include "chrome/browser/ash/app_list/extension_app_utils.h"
-#include "chrome/browser/ash/browser_delegate/browser_delegate.h"
-#include "chrome/browser/ash/browser_delegate/browser_type.h"
 #include "chrome/browser/ash/eche_app/app_id.h"
 #include "chrome/browser/ash/login/demo_mode/demo_session.h"
 #include "chrome/browser/profiles/profile.h"
@@ -33,7 +32,8 @@
 #include "chrome/browser/web_applications/web_app_constants.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
-#include "chrome/common/pref_names.h"
+#include "chromeos/ash/components/browser_delegate/browser_delegate.h"
+#include "chromeos/ash/components/browser_delegate/browser_type.h"
 #include "components/account_id/account_id.h"
 #include "components/prefs/pref_service.h"
 #include "components/session_manager/core/session.h"
@@ -78,7 +78,7 @@ AppListControllerDelegate::Pinnable GetPinnableForAppID(
   }
 
   const base::ListValue& policy_apps =
-      profile->GetPrefs()->GetList(prefs::kPolicyPinnedLauncherApps);
+      profile->GetPrefs()->GetList(ash::prefs::kPolicyPinnedLauncherApps);
 
   for (const base::Value& policy_dict_entry : policy_apps) {
     if (!policy_dict_entry.is_dict()) {
@@ -153,16 +153,8 @@ bool IsAppPinEditable(apps::AppType app_type,
       }
       return false;
     }
-    case apps::AppType::kPluginVm: {
-      bool show_in_launcher = false;
-      apps::AppServiceProxyFactory::GetForProfile(profile)
-          ->AppRegistryCache()
-          .ForOneApp(
-              app_id, [&show_in_launcher](const apps::AppUpdate& update) {
-                show_in_launcher = update.ShowInLauncher().value_or(false);
-              });
-      return show_in_launcher;
-    }
+    case apps::AppType::kPluginVm:
+      return false;
     case apps::AppType::kCrostini:
     case apps::AppType::kBorealis:
     case apps::AppType::kChromeApp:

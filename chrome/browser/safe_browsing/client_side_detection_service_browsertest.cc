@@ -19,8 +19,8 @@
 #include "chrome/test/base/platform_browser_test.h"
 #include "components/metrics/content/subprocess_metrics_provider.h"
 #include "components/prefs/pref_service.h"
-#include "components/safe_browsing/content/browser/client_side_phishing_model.h"
 #include "components/safe_browsing/content/common/safe_browsing.mojom.h"
+#include "components/safe_browsing/core/browser/client_side_phishing_model.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/proto/client_model.pb.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
@@ -38,7 +38,7 @@
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
 #else
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/test/base/ui_test_utils.h"
 #endif  // defined (
 
@@ -206,6 +206,8 @@ IN_PROC_BROWSER_TEST_F(ClientSideDetectionServiceBrowserTest,
 
   // Case 1: ClientPhishingRequest's image embedding doesn't meet threshold.
   ClientPhishingRequest request = CreateMinimumClientPhishingRequest();
+  request.set_client_side_detection_type(
+      ClientSideDetectionType::IMAGE_EMBEDDING_MATCH);
 
   // Add an image_feature_embedding that will match.
   auto* features = request.mutable_image_feature_embedding();
@@ -221,6 +223,8 @@ IN_PROC_BROWSER_TEST_F(ClientSideDetectionServiceBrowserTest,
 
   // Case 2: Visual TFLite already flagged the page phishy.
   ClientPhishingRequest request2 = CreateMinimumClientPhishingRequest();
+  request2.set_client_side_detection_type(
+      ClientSideDetectionType::IMAGE_EMBEDDING_MATCH);
 
   // Add an image_feature_embedding that will match.
   auto* features2 = request2.mutable_image_feature_embedding();
@@ -251,6 +255,8 @@ IN_PROC_BROWSER_TEST_F(ClientSideDetectionServiceBrowserTest,
   LoadVisualTfLiteModel();
 
   ClientPhishingRequest request = CreateMinimumClientPhishingRequest();
+  request.set_client_side_detection_type(
+      ClientSideDetectionType::IMAGE_EMBEDDING_MATCH);
 
   // Setup TargetEmbeddings.
   float threshold = 0.95;

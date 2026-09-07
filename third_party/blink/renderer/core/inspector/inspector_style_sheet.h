@@ -28,6 +28,7 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/css_font_face_rule.h"
 #include "third_party/blink/renderer/core/css/css_font_feature_values_rule.h"
@@ -45,9 +46,11 @@
 
 namespace blink {
 
+class CSSCounterStyleRule;
 class CSSKeyframeRule;
 class CSSMediaRule;
 class CSSContainerRule;
+class CSSNavigationRule;
 class CSSPositionTryRule;
 class CSSPropertySourceData;
 class CSSPropertyRule;
@@ -149,7 +152,7 @@ class InspectorStyleSheetBase
   friend class InspectorStyle;
 
   String id_;
-  Listener* listener_;
+  raw_ptr<Listener, UnprotectedInRelease | DanglingUntriaged> listener_;
   std::unique_ptr<LineEndings> line_endings_;
 };
 
@@ -193,25 +196,35 @@ class InspectorStyleSheet : public InspectorStyleSheetBase {
                         StyleRuleFontFeature::FeatureType* font_feature_type,
                         ExceptionState&);
   CSSMediaRule* SetMediaRuleText(const SourceRange&,
-                                 const String& selector,
+                                 const String& text,
                                  SourceRange* new_range,
-                                 String* old_selector,
+                                 String* old_text,
                                  ExceptionState&);
   CSSContainerRule* SetContainerRuleText(const SourceRange&,
-                                         const String& selector,
+                                         const String& text,
                                          SourceRange* new_range,
-                                         String* old_selector,
+                                         String* old_text,
                                          ExceptionState&);
+  CSSContainerRule* SetContainerRuleConditionText(const SourceRange&,
+                                                  const String& text,
+                                                  SourceRange* new_range,
+                                                  String* old_text,
+                                                  ExceptionState&);
   CSSScopeRule* SetScopeRuleText(const SourceRange&,
-                                 const String& selector,
+                                 const String& text,
                                  SourceRange* new_range,
-                                 String* old_selector,
+                                 String* old_text,
                                  ExceptionState&);
   CSSSupportsRule* SetSupportsRuleText(const SourceRange&,
-                                       const String& selector,
+                                       const String& text,
                                        SourceRange* new_range,
-                                       String* old_selector,
+                                       String* old_text,
                                        ExceptionState&);
+  CSSNavigationRule* SetNavigationRuleText(const SourceRange&,
+                                           const String& text,
+                                           SourceRange* new_range,
+                                           String* old_text,
+                                           ExceptionState&);
   CSSStyleRule* AddRule(const String& rule_text,
                         const SourceRange& location,
                         SourceRange* added_range,
@@ -243,6 +256,8 @@ class InspectorStyleSheet : public InspectorStyleSheetBase {
   std::unique_ptr<protocol::CSS::CSSAtRule>
   BuildAtRuleObjectForFontFeatureValuesRule(CSSFontFeatureValuesRule*,
                                             StyleRuleFontFeature::FeatureType);
+  std::unique_ptr<protocol::CSS::CSSAtRule>
+  BuildAtRuleObjectForCounterStyleRule(CSSCounterStyleRule*);
   std::unique_ptr<protocol::CSS::CSSPropertyRule> BuildObjectForPropertyRule(
       CSSPropertyRule*);
   std::unique_ptr<protocol::CSS::CSSKeyframeRule> BuildObjectForKeyframeRule(
@@ -269,6 +284,9 @@ class InspectorStyleSheet : public InspectorStyleSheetBase {
   CSSRuleSourceData* FindRuleByHeaderRange(const SourceRange&);
   CSSRuleSourceData* FindRuleByDeclarationsRange(const SourceRange&);
   CSSRule* RuleForSourceData(CSSRuleSourceData*);
+  CSSContainerRule* ContainerRuleFromSourceData(const String& query_text,
+                                                CSSRuleSourceData*,
+                                                ExceptionState&);
   CSSStyleRule* InsertCSSOMRuleInStyleSheet(CSSRule* insert_before,
                                             const String& rule_text,
                                             ExceptionState&);

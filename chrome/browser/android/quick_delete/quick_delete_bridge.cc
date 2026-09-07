@@ -12,7 +12,6 @@
 #include "chrome/browser/ui/hats/hats_service.h"
 #include "chrome/browser/ui/hats/hats_service_factory.h"
 #include "chrome/browser/ui/hats/survey_config.h"
-#include "chrome/grit/generated_resources.h"
 #include "components/browsing_data/core/browsing_data_utils.h"
 #include "components/browsing_data/core/counters/history_counter.h"
 #include "components/history/core/browser/history_service.h"
@@ -24,10 +23,7 @@
 // Must come after all headers that specialize FromJniType() / ToJniType().
 #include "chrome/browser/quick_delete/jni_headers/QuickDeleteBridge_jni.h"
 
-using base::android::AttachCurrentThread;
-using base::android::ConvertUTF16ToJavaString;
-using base::android::JavaRef;
-using base::android::ScopedJavaGlobalRef;
+using jni_zero::AttachCurrentThread;
 
 namespace {
 
@@ -39,7 +35,7 @@ struct QuickDeleteDomainResult {
 QuickDeleteDomainResult GetLastVisitedDomainAndUniqueDomainCountFromResult(
     const browsing_data::HistoryCounter::HistoryResult* result) {
   browsing_data::BrowsingDataCounter::ResultInt unique_domains_count =
-      result->unique_domains_result();
+      result->Value();
   std::u16string last_visited_domain =
       base::UTF8ToUTF16(result->last_visited_domain());
 
@@ -54,8 +50,7 @@ QuickDeleteDomainResult GetLastVisitedDomainAndUniqueDomainCountFromResult(
 }
 }  // namespace
 
-QuickDeleteBridge::QuickDeleteBridge(JNIEnv* env,
-                                     const base::android::JavaRef<jobject>& obj,
+QuickDeleteBridge::QuickDeleteBridge(const base::android::JavaRef<jobject>& obj,
                                      Profile* profile)
     : jobject_(obj) {
   profile_ = profile;
@@ -70,20 +65,18 @@ QuickDeleteBridge::QuickDeleteBridge(JNIEnv* env,
       CalculateBeginDeleteTime(browsing_data::TimePeriod::LAST_15_MINUTES);
 
   history_counter_->InitWithoutPeriodPref(
-      profile_->GetPrefs(), browsing_data::ClearBrowsingDataTab::ADVANCED,
-      begin_time,
+      profile_->GetPrefs(), begin_time,
       base::BindRepeating(&QuickDeleteBridge::OnHistoryCounterResult,
                           weak_ptr_factory_.GetWeakPtr()));
 }
 
 QuickDeleteBridge::~QuickDeleteBridge() = default;
 
-void QuickDeleteBridge::Destroy(JNIEnv* env) {
+void QuickDeleteBridge::Destroy() {
   delete this;
 }
 
-void QuickDeleteBridge::RestartCounterForTimePeriod(JNIEnv* env,
-                                                    const int32_t time_period) {
+void QuickDeleteBridge::RestartCounterForTimePeriod(const int32_t time_period) {
   browsing_data::TimePeriod period =
       static_cast<browsing_data::TimePeriod>(time_period);
   base::Time begin_time = CalculateBeginDeleteTime(period);
@@ -104,16 +97,14 @@ void QuickDeleteBridge::OnHistoryCounterResult(
               result.get()));
 
   Java_QuickDeleteBridge_onLastVisitedDomainAndUniqueDomainCountReady(
-      env, jobject_,
-      ConvertUTF16ToJavaString(env, quickDeleteResult.last_visited_domain),
+      env, jobject_, quickDeleteResult.last_visited_domain,
       quickDeleteResult.domain_count);
 }
 
 static int64_t JNI_QuickDeleteBridge_Init(
-    JNIEnv* env,
     const base::android::JavaRef<jobject>& obj,
     Profile* profile) {
-  QuickDeleteBridge* bridge = new QuickDeleteBridge(env, obj, profile);
+  QuickDeleteBridge* bridge = new QuickDeleteBridge(obj, profile);
   return reinterpret_cast<intptr_t>(bridge);
 }
 

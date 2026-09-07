@@ -39,6 +39,7 @@ class PLATFORM_EXPORT PendingLayer {
 
   PendingLayer(const PaintArtifact&,
                const PaintChunk& first_chunk,
+               DOMNodeId canvas_child_id = kInvalidDOMNodeId,
                CompositingType = kOther);
 
   void Trace(Visitor*) const;
@@ -70,6 +71,8 @@ class PLATFORM_EXPORT PendingLayer {
   }
   bool HasText() const { return has_text_; }
 
+  bool HasVideo() const;
+
   void SetCompositingTypeToOverlap() {
     DCHECK_EQ(compositing_type_, kOther);
     compositing_type_ = kOverlap;
@@ -79,17 +82,35 @@ class PLATFORM_EXPORT PendingLayer {
     chunks_.SetPaintArtifact(paint_artifact);
   }
 
+  std::optional<CanvasChildPaintRecord> GetCanvasChildPaintRecord() const {
+    return content_layer_client_
+               ? content_layer_client_->GetCanvasChildPaintRecord()
+               : std::nullopt;
+  }
+  const CanvasChildPaintState* canvas_child_paint_state() const {
+    return content_layer_client_
+               ? content_layer_client_->canvas_child_paint_state()
+               : nullptr;
+  }
+
+  DOMNodeId CanvasChildId() const { return canvas_child_id_; }
+
   using IsCompositedScrollFunction =
       PropertyTreeState::IsCompositedScrollFunction;
 
-  // Merges |guest| into |this| if it can, by appending chunks of |guest|
-  // after chunks of |this|, with appropriate space conversion applied to
-  // both layers from their original property tree states to |merged_state|.
-  // Returns whether the merge is successful.
-  bool Merge(const PendingLayer& guest,
-             LCDTextPreference lcd_text_preference,
-             float device_pixel_ratio,
-             IsCompositedScrollFunction);
+  // Merges `guest` into `this` if it can, by appending chunks of `guest`
+  // after chunks of `this`, with appropriate space conversion applied to
+  // both layers from their original property tree states to the merged state.
+  struct MergeResult {
+    // Whether the merge is successful.
+    bool merged = false;
+    // See `PropertyTreeState::UpcastResult::scroll_range_dependent`.
+    bool scroll_range_dependent = false;
+  };
+  MergeResult Merge(const PendingLayer& guest,
+                    LCDTextPreference lcd_text_preference,
+                    float device_pixel_ratio,
+                    IsCompositedScrollFunction);
 
   // Returns true if `guest` that could be upcasted with decomposited blend
   // mode can be merged into `this`.
@@ -158,14 +179,17 @@ class PLATFORM_EXPORT PendingLayer {
   // one in |old_pending_layer|, and updates the layer according to the current
   // contents and properties of this PendingLayer.
   void UpdateCompositedLayer(PendingLayer* old_pending_layer,
+                             PropertyTreeState property_state_for_paint,
                              cc::LayerSelection&,
                              bool tracks_raster_invalidations,
                              cc::LayerTreeHost*);
 
   // A lighter version of UpdateCompositedLayer(). Called when the existing
   // composited layer has only repainted since the last update
-  void UpdateCompositedLayerForRepaint(const PaintArtifact& repainted_artifact,
-                                       cc::LayerSelection&);
+  void UpdateCompositedLayerForRepaint(
+      const PaintArtifact& repainted_artifact,
+      PropertyTreeState property_state_for_paint,
+      cc::LayerSelection&);
 
   // Another lighter version of UpdateCompositedLayers(). Called after
   // raster-inducing scrolls that don't need repaint or PaintArtifactCompositor
@@ -178,10 +202,14 @@ class PLATFORM_EXPORT PendingLayer {
   // draw a solid color (see comment above `solid_color_chunk_index_`).
   bool IsSolidColor() const { return solid_color_chunk_index_ != kNotFound; }
 
+  int MergedAcrossCompositingBoundaryCount() const {
+    return merged_across_compositing_boundary_count_;
+  }
+
  private:
   // Checks basic merge-ability with `guest` and calls
   // PropertyTreeState::CanUpcastWith().
-  std::optional<PropertyTreeState> CanUpcastWith(
+  std::optional<PropertyTreeState::UpcastResult> CanUpcastWith(
       const PendingLayer& guest,
       const PropertyTreeState& guest_state,
       IsCompositedScrollFunction is_comosited_scroll) const;
@@ -195,7 +223,8 @@ class PLATFORM_EXPORT PendingLayer {
                 gfx::RectF& merged_rect_known_to_be_opaque,
                 bool& merged_text_known_to_be_on_opaque_background,
                 wtf_size_t& merged_solid_color_chunk_index,
-                cc::HitTestOpaqueness& merged_hit_test_opaqueness) const;
+                cc::HitTestOpaqueness& merged_hit_test_opaqueness,
+                bool& scroll_range_dependent) const;
 
   gfx::RectF MapRectKnownToBeOpaque(
       const PropertyTreeState& new_state,
@@ -209,6 +238,7 @@ class PLATFORM_EXPORT PendingLayer {
   void UpdateScrollHitTestLayer(PendingLayer* old_pending_layer);
   void UpdateScrollbarLayer(PendingLayer* old_pending_layer);
   void UpdateContentLayer(PendingLayer* old_pending_layer,
+                          PropertyTreeState property_state_for_paint,
                           bool tracks_raster_invalidations);
   void UpdateSolidColorLayer(PendingLayer* old_pending_layer);
 
@@ -243,6 +273,11 @@ class PLATFORM_EXPORT PendingLayer {
   CompositingType compositing_type_ = kOther;
   cc::HitTestOpaqueness hit_test_opaqueness_ =
       cc::HitTestOpaqueness::kTransparent;
+
+  // For metrics.
+  int merged_across_compositing_boundary_count_ = 0;
+
+  DOMNodeId canvas_child_id_ = kInvalidDOMNodeId;
   bool has_text_ = false;
   bool draws_content_ = false;
   bool text_known_to_be_on_opaque_background_ = false;

@@ -11,10 +11,11 @@ import android.content.Context;
 import android.util.AttributeSet;
 import android.view.View;
 
-import androidx.fragment.app.FragmentManager;
 import androidx.preference.Preference;
 import androidx.preference.PreferenceViewHolder;
 
+import org.chromium.base.CallbackUtils;
+import org.chromium.base.DeviceInfo;
 import org.chromium.base.supplier.OneshotSupplier;
 import org.chromium.build.annotations.Initializer;
 import org.chromium.build.annotations.NullMarked;
@@ -23,7 +24,8 @@ import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
 import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 import org.chromium.components.browser_ui.widget.containment.ContainmentItem;
-import org.chromium.components.signin.identitymanager.ConsentLevel;
+import org.chromium.components.signin.SigninFeatureMap;
+import org.chromium.components.signin.SigninFeatures;
 import org.chromium.components.signin.metrics.SignoutReason;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.widget.ButtonCompat;
@@ -33,7 +35,6 @@ import org.chromium.ui.widget.ButtonCompat;
 public class SignoutButtonPreference extends Preference implements ContainmentItem {
     private Context mContext;
     private Profile mProfile;
-    private FragmentManager mFragmentManager;
     private ModalDialogManager mDialogManager;
     private @Nullable OneshotSupplier<SnackbarManager> mSnackbarManagerSupplier;
 
@@ -43,14 +44,9 @@ public class SignoutButtonPreference extends Preference implements ContainmentIt
     }
 
     @Initializer
-    public void initialize(
-            Context context,
-            Profile profile,
-            FragmentManager fragmentManager,
-            ModalDialogManager dialogManager) {
+    public void initialize(Context context, Profile profile, ModalDialogManager dialogManager) {
         mContext = context;
         mProfile = profile;
-        mFragmentManager = fragmentManager;
         mDialogManager = dialogManager;
     }
 
@@ -64,11 +60,14 @@ public class SignoutButtonPreference extends Preference implements ContainmentIt
         super.onBindViewHolder(holder);
 
         ButtonCompat button = (ButtonCompat) holder.findViewById(R.id.sign_out_button);
+        if (getTitle() != null) {
+            button.setText(getTitle());
+        }
         button.setOnClickListener(
                 (View v) -> {
                     assert !mProfile.isChild();
                     if (!assumeNonNull(IdentityServicesProvider.get().getIdentityManager(mProfile))
-                            .hasPrimaryAccount(ConsentLevel.SIGNIN)) {
+                            .hasPrimaryAccount()) {
                         // Clearing the primary account is happening asynchronously, so it is
                         // possible that a sign-out happened in the meantime.
                         return;
@@ -76,15 +75,20 @@ public class SignoutButtonPreference extends Preference implements ContainmentIt
                     // Snackbar won't be visible in the context of this activity, but there's
                     // special handling for it in MainSettings.
                     assumeNonNull(mSnackbarManagerSupplier);
+                    boolean showConfirmDialog =
+                            DeviceInfo.isDesktop()
+                                    && SigninFeatureMap.isEnabled(
+                                            SigninFeatures.SIGN_OUT_DELETES_BROWSING_DATA);
+                    boolean offerDataDeletionChoice = showConfirmDialog;
                     SignOutCoordinator.startSignOutFlow(
                             mContext,
                             mProfile,
-                            mFragmentManager,
                             mDialogManager,
                             assertNonNull(mSnackbarManagerSupplier.get()),
                             SignoutReason.USER_CLICKED_SIGNOUT_SETTINGS,
-                            /* showConfirmDialog= */ false,
-                            () -> {});
+                            showConfirmDialog,
+                            offerDataDeletionChoice,
+                            CallbackUtils.emptyRunnable());
                 });
     }
 

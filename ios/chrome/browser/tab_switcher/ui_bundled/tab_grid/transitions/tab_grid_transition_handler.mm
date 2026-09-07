@@ -6,6 +6,8 @@
 
 #import "base/check.h"
 #import "base/ios/block_types.h"
+#import "ios/chrome/browser/shared/coordinator/scene/state/browser_layout_state.h"
+#import "ios/chrome/browser/shared/public/commands/tab_grid_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
 #import "ios/chrome/browser/shared/ui/util/layout_guide_names.h"
 #import "ios/chrome/browser/shared/ui/util/named_guide.h"
@@ -20,14 +22,22 @@
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/transitions/tab_grid_transition_item.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/transitions/tab_grid_transition_layout.h"
 #import "ios/chrome/browser/tab_switcher/ui_bundled/tab_grid/transitions/tab_grid_transition_layout_providing.h"
+#import "ios/chrome/common/ui/util/constraints_ui_util.h"
+
+namespace {
+// Transition types available.
+enum class TabGridTransitionType {
+  kNormal,
+  kReducedMotion,
+  kDisabledAnimation,
+};
+}  // namespace
 
 @implementation TabGridTransitionHandler {
   TabGridTransitionType _transitionType;
-  TabGridTransitionDirection _direction;
 
-  UIViewController* _tabGridViewController;
-  UIViewController<TabGridTransitionContextProvider>*
-      _browserLayoutViewController;
+  // The common parameters for all transitions.
+  std::unique_ptr<TabGridTransitionHandlerInitParams> _params;
 
   // Transition layout provider for the tab grid.
   __weak id<TabGridTransitionLayoutProviding> _tabGridTransitionLayoutProvider;
@@ -44,54 +54,77 @@
   // Whether the active cell if from a pinned tab.
   BOOL _activeCellPinned;
 
-  // The tab grid transition animation to be performed.
-  id<TabGridTransitionAnimation> _animation;
-
   // The layout guide center associated to the current browser.
-  LayoutGuideCenter* _layoutGuideCenter;
+  LayoutGuideCenter* _browserLayoutGuideCenter;
 
   // Whether the transition is for a tab that is a regular (non-icongnito) NTP.
   BOOL _isRegularBrowserNTP;
 
   // Whether the transition is for an incognito tab.
   BOOL _incognito;
+  // The top and bottom toolbar snapshot views.
+  UIView* _topToolbarSnapshotView;
+  UIView* _bottomToolbarSnapshotView;
+
+  // The browser layout state.
+  __weak BrowserLayoutState* _browserLayoutState;
 }
 
 #pragma mark - Public
 
-- (instancetype)initWithTransitionType:(TabGridTransitionType)transitionType
-                             direction:(TabGridTransitionDirection)direction
-       tabGridTransitionLayoutProvider:
-           (id<TabGridTransitionLayoutProviding>)tabGridTransitionLayoutProvider
-                 tabGridViewController:(UIViewController*)tabGridViewController
-           browserLayoutViewController:
-               (UIViewController<TabGridTransitionContextProvider>*)
-                   browserLayoutViewController
-                     layoutGuideCenter:(LayoutGuideCenter*)layoutGuideCenter
-                   isRegularBrowserNTP:(BOOL)isRegularBrowserNTP
-                             incognito:(BOOL)incognito {
+- (instancetype)initWithCommonParams:
+                    (std::unique_ptr<TabGridTransitionHandlerInitParams>)params
+     tabGridTransitionLayoutProvider:
+         (id<TabGridTransitionLayoutProviding>)tabGridTransitionLayoutProvider
+            browserLayoutGuideCenter:
+                (LayoutGuideCenter*)browserLayoutGuideCenter
+                 isRegularBrowserNTP:(BOOL)isRegularBrowserNTP
+                           incognito:(BOOL)incognito
+                  browserLayoutState:(BrowserLayoutState*)browserLayoutState {
   self = [super init];
   if (self) {
+    _transitionType = TabGridTransitionType::kNormal;
+    _params = std::move(params);
+
+    // Full animation setup
     TabGridTransitionLayout* transitionLayout = [tabGridTransitionLayoutProvider
         transitionLayoutForIsIncognito:incognito];
-    _transitionType = transitionType;
-    _direction = direction;
     _tabGridTransitionLayoutProvider = tabGridTransitionLayoutProvider;
-    _tabGridViewController = tabGridViewController;
-    _browserLayoutViewController = browserLayoutViewController;
     _tabGridCellItem = transitionLayout.activeCell;
     _activeGrid = transitionLayout.activeGrid;
     _pinnedTabsViewController = transitionLayout.pinnedTabs;
     _activeCellPinned = transitionLayout.isActiveCellPinned;
-    _layoutGuideCenter = layoutGuideCenter;
+    _browserLayoutGuideCenter = browserLayoutGuideCenter;
     _isRegularBrowserNTP = isRegularBrowserNTP;
     _incognito = incognito;
+    _browserLayoutState = browserLayoutState;
+  }
+  return self;
+}
+
+- (instancetype)initWithReducedMotionCommonParams:
+    (std::unique_ptr<TabGridTransitionHandlerInitParams>)params {
+  self = [super init];
+  if (self) {
+    _transitionType = TabGridTransitionType::kReducedMotion;
+    _params = std::move(params);
+  }
+  return self;
+}
+
+- (instancetype)initWithNoAnimationCommonParams:
+    (std::unique_ptr<TabGridTransitionHandlerInitParams>)params {
+  self = [super init];
+  if (self) {
+    _transitionType = TabGridTransitionType::kDisabledAnimation;
+    _params = std::move(params);
   }
   return self;
 }
 
 - (void)performTransitionWithCompletion:(ProceduralBlock)completion {
-  switch (_direction) {
+  CHECK(_params);
+  switch (_params->direction) {
     case TabGridTransitionDirection::kFromBrowserToTabGrid:
       [self performBrowserToTabGridTransitionWithCompletion:completion];
       break;
@@ -103,6 +136,38 @@
 }
 
 #pragma mark - Private
+
+// Takes snapshots of the top and bottom toolbars, for normal transitions.
+- (void)takeToolbarSnapshots {
+  if (_transitionType != TabGridTransitionType::kNormal) {
+    return;
+  }
+
+  CGRect contentAreaFrame = [self contentAreaFrame];
+
+  // No top toolbar snapshot for regular browser NTPs in grid to tab
+  // animations. `shouldHideTopToolbar` is not directly used here as the
+  // screenshot of the content below the status bar is needed when doing a Tab
+  // to Grid transition.
+  BOOL shouldSkipTopToolbarSnapshot =
+      [self shouldHideTopToolbar] &&
+      _params->direction == TabGridTransitionDirection::kFromTabGridToBrowser;
+
+  UIViewController* browserLayout = _params->browser_layout_view_controller;
+  if (!shouldSkipTopToolbarSnapshot) {
+    _topToolbarSnapshotView =
+        [self snapshotOfViewPortionAboveRect:browserLayout.view
+                                  middleRect:contentAreaFrame];
+  }
+
+  CHECK(_browserLayoutState, base::NotFatalUntil::M155);
+  if (!IsChromeNextIaEnabled() ||
+      _browserLayoutState.toolbarPosition == ToolbarPosition::kBottom) {
+    _bottomToolbarSnapshotView =
+        [self snapshotOfViewPortionBelowRect:browserLayout.view
+                                  middleRect:contentAreaFrame];
+  }
+}
 
 // Performs the Browser to Tab Grid transition with a `completion` block.
 - (void)performBrowserToTabGridTransitionWithCompletion:
@@ -138,40 +203,116 @@
 
 // Prepares items for the Browser to Tab Grid transition.
 - (void)prepareBrowserToTabGridTransition {
-  [_browserLayoutViewController willMoveToParentViewController:nil];
+  // Take the toolbar snapshots before adding the `_browserLayoutViewController`
+  // to the hierarchy (since taking the snapshots forces a screen update). This
+  // fixes some transition issues.
+  [self takeToolbarSnapshots];
+
+  [_params->browser_layout_view_controller willMoveToParentViewController:nil];
 }
 
 // Prepares items for the Tab Grid to Browser transition.
 - (void)prepareTabGridToBrowserTransition {
-  [_tabGridViewController addChildViewController:_browserLayoutViewController];
-  if (IsChromeNextIaEnabled()) {
-    CGRect frame = _tabGridViewController.view.bounds;
-    // TODO(crbug.com/472279443): Use autolayout instead of fixed margins.
-    frame.size.height -= 50;
-    _browserLayoutViewController.view.frame = frame;
-  } else {
-    _browserLayoutViewController.view.frame =
-        _tabGridViewController.view.bounds;
-  }
-  [_tabGridViewController.view addSubview:_browserLayoutViewController.view];
+  UIViewController* tabGrid = _params->tab_grid_view_controller;
+  UIViewController* parentViewController = _params->parent_view_controller;
+  UIViewController* browserLayout = _params->browser_layout_view_controller;
+  UIView* appContentGuide = _params->app_content_view;
 
-  _browserLayoutViewController.view.accessibilityViewIsModal = YES;
+  if (IsChromeNextIaEnabled()) {
+    // Remove from superview to ensure all constraints are gone.
+    [browserLayout.view removeFromSuperview];
+
+    if (IsFullscreenRefactoringEnabled()) {
+      browserLayout.view.frame =
+          [tabGrid.view convertRect:appContentGuide.bounds
+                           fromView:appContentGuide];
+    } else {
+      browserLayout.view.frame = appContentGuide.bounds;
+    }
+  } else {
+    browserLayout.view.frame = tabGrid.view.bounds;
+  }
+
+  if (_transitionType != TabGridTransitionType::kDisabledAnimation) {
+    // Taking a snapshot can take a few milliseconds during which a screen
+    // refresh can occur. If the browserLayout is added to the final position
+    // before taking the snapshot, it means that it will be visible in its final
+    // position before the animation starts. But it is also necessary to add it
+    // to the view hierarchy before taking a snapshot otherwise
+    // `-viewWillAppear` and
+    // `-viewDidDisappear` are called during the snapshot. The compromise is to
+    // add it below all the views so it is part of the view hierarchy but hidden
+    // by all the views.
+    CGRect browserLayoutOriginalFrame = browserLayout.view.frame;
+    UIView* sourceView = tabGrid.view;
+    if (IsChromeNextIaEnabled() && !IsFullscreenRefactoringEnabled()) {
+      sourceView = appContentGuide;
+    }
+    UIViewController* rootViewController =
+        tabGrid.view.window.rootViewController;
+    if (IsFullscreenRefactoringEnabled()) {
+      // Temporarily re-enable autoresizing so that the frame can be manually
+      // set for the snapshot.
+      browserLayout.view.translatesAutoresizingMaskIntoConstraints = YES;
+    }
+    browserLayout.view.frame =
+        [sourceView convertRect:browserLayoutOriginalFrame
+                         toView:rootViewController.view];
+    [rootViewController addChildViewController:browserLayout];
+    [rootViewController.view insertSubview:browserLayout.view atIndex:0];
+    if (IsFullscreenRefactoringEnabled()) {
+      // Running a layout here ensures that the toolbar frames are correct for
+      // the snapshots.
+      [browserLayout.view layoutIfNeeded];
+    }
+    [self takeToolbarSnapshots];
+    browserLayout.view.frame = browserLayoutOriginalFrame;
+  }
+
+  if (IsChromeNextIaEnabled()) {
+    [parentViewController addChildViewController:browserLayout];
+    [appContentGuide addSubview:browserLayout.view];
+    if (IsFullscreenRefactoringEnabled()) {
+      browserLayout.view.translatesAutoresizingMaskIntoConstraints = NO;
+      AddSameConstraints(browserLayout.view, appContentGuide);
+      [parentViewController.view layoutIfNeeded];
+    }
+  } else {
+    [tabGrid addChildViewController:browserLayout];
+    [tabGrid.view addSubview:browserLayout.view];
+    if (IsFullscreenRefactoringEnabled()) {
+      browserLayout.view.translatesAutoresizingMaskIntoConstraints = NO;
+      AddSameConstraints(browserLayout.view, tabGrid.view);
+      [tabGrid.view layoutIfNeeded];
+    }
+  }
+
+  // `didMoveToParentViewController` is called in
+  // `finalizeTabGridToBrowserTransition`, no need to call here.
+  browserLayout.view.accessibilityViewIsModal = YES;
 }
 
 // Takes all necessary actions to finish Browser to TabGrid transition.
 - (void)finalizeBrowserToTabGridTransition {
-  [_browserLayoutViewController.view removeFromSuperview];
-  [_browserLayoutViewController removeFromParentViewController];
+  UIViewController* tabGrid = _params->tab_grid_view_controller;
+  UIViewController* browserLayout = _params->browser_layout_view_controller;
+  [browserLayout.view removeFromSuperview];
+  [browserLayout removeFromParentViewController];
 
-  [_tabGridViewController setNeedsStatusBarAppearanceUpdate];
+  [tabGrid setNeedsStatusBarAppearanceUpdate];
 }
 
 // Takes all necessary actions to finish TabGrid to Browser transition.
 - (void)finalizeTabGridToBrowserTransition {
-  [_browserLayoutViewController
-      didMoveToParentViewController:_tabGridViewController];
+  UIViewController* browserLayout = _params->browser_layout_view_controller;
+  UIViewController* parentViewController = _params->parent_view_controller;
+  [browserLayout didMoveToParentViewController:parentViewController];
 
-  [_browserLayoutViewController setNeedsStatusBarAppearanceUpdate];
+  if (_transitionType == TabGridTransitionType::kDisabledAnimation) {
+    [browserLayout.view layoutIfNeeded];
+  }
+
+  [browserLayout setNeedsStatusBarAppearanceUpdate];
 }
 
 // Performs transition animation.
@@ -182,20 +323,22 @@
     transitionType = TabGridTransitionType::kReducedMotion;
   }
 
+  // The tab grid transition animation to be performed.
+  id<TabGridTransitionAnimation> animation;
   switch (transitionType) {
     case TabGridTransitionType::kNormal: {
       TabGridAnimationParameters* animationParameters =
           [self createAnimationParameters];
 
-      switch (_direction) {
+      switch (_params->direction) {
         case TabGridTransitionDirection::kFromTabGridToBrowser: {
-          _animation = [[GridToTabAnimation alloc]
+          animation = [[GridToTabAnimation alloc]
               initWithAnimationParameters:animationParameters];
           break;
         }
 
         case TabGridTransitionDirection::kFromBrowserToTabGrid: {
-          _animation = [[TabToGridAnimation alloc]
+          animation = [[TabToGridAnimation alloc]
               initWithAnimationParameters:animationParameters];
           break;
         }
@@ -205,46 +348,39 @@
     }
 
     case TabGridTransitionType::kReducedMotion: {
-      _animation = [[TabGridReducedAnimation alloc]
-          initWithAnimatedView:_browserLayoutViewController.view
-                beingPresented:_direction == TabGridTransitionDirection::
-                                                 kFromTabGridToBrowser];
+      animation = [[TabGridReducedAnimation alloc]
+          initWithAnimatedView:_params->browser_layout_view_controller.view
+                beingPresented:_params->direction ==
+                               TabGridTransitionDirection::
+                                   kFromTabGridToBrowser];
       break;
     }
 
-    case TabGridTransitionType::kAnimationDisabled: {
-      break;
-    }
+    case TabGridTransitionType::kDisabledAnimation:
+      completion();
+      return;
   }
 
-  if (_animation) {
-    [_animation animateWithCompletion:completion];
-  } else if (completion) {
-    completion();
-  }
+  CHECK(animation);
+  [animation animateWithCompletion:completion];
 }
 
 // Creates animation parameters for the transition.
 - (TabGridAnimationParameters*)createAnimationParameters {
-  // Get the content area frame.
-  UIView* tabContentView = _browserLayoutViewController.view;
-  NamedGuide* contentAreaGuide =
-      [_browserLayoutViewController contentAreaGuide];
-  CGRect contentAreaFrame =
-      [contentAreaGuide.owningView convertRect:contentAreaGuide.layoutFrame
-                                        toView:tabContentView];
+  UIViewController* tabGrid = _params->tab_grid_view_controller;
+  UIViewController* browserLayout = _params->browser_layout_view_controller;
+  CGRect contentAreaFrame = [self contentAreaFrame];
 
   // Get the "top toolbar height" (everything above the web content area) by
   // using the `contentAreaFrame.origin.y`. This dynamically handles the
   // presence of the Tab Strip and Toolbar across different devices.
   BOOL topToolbarHidden = [self shouldHideTopToolbar];
-  CGFloat topToolbarHeight =
-      topToolbarHidden ? _tabGridViewController.view.safeAreaInsets.top
-                       : contentAreaFrame.origin.y;
+  CGFloat topToolbarHeight = topToolbarHidden ? tabGrid.view.safeAreaInsets.top
+                                              : contentAreaFrame.origin.y;
 
   // Get the "bottom toolbar height" (everything below the web content area).
-  UIView* bottomToolbarView =
-      [_layoutGuideCenter referencedViewUnderName:kSecondaryToolbarGuide];
+  UIView* bottomToolbarView = [_browserLayoutGuideCenter
+      referencedViewUnderName:kSecondaryToolbarGuide];
   CGRect bottomToolbarFrameInWindow =
       [bottomToolbarView.superview convertRect:bottomToolbarView.frame
                                         toView:nil];
@@ -256,26 +392,15 @@
   BOOL scaleTopToolbar =
       !_isRegularBrowserNTP && IsSplitToolbarMode(_activeGrid);
 
-  // No top toolbar snapshot for regular browser NTPs for grid to tab
-  // animations. `topToolbarHidden` is not directly used here as the screenshot
-  // of the content below the status bar is needed when doing a Tab to Grid
-  // transition.
-  UIView* topToolbarSnapshotView =
-      topToolbarHidden &&
-              _direction == TabGridTransitionDirection::kFromTabGridToBrowser
-          ? nil
-          : [self snapshotOfViewPortionAboveRect:tabContentView
-                                      middleRect:contentAreaFrame];
-
   // Get the animation's destination and origin frames.
   CGRect destinationFrame =
-      _direction == TabGridTransitionDirection::kFromBrowserToTabGrid
+      _params->direction == TabGridTransitionDirection::kFromBrowserToTabGrid
           ? _tabGridCellItem.originalFrame
-          : _browserLayoutViewController.view.frame;
+          : browserLayout.view.frame;
 
   CGRect originFrame =
-      _direction == TabGridTransitionDirection::kFromBrowserToTabGrid
-          ? _browserLayoutViewController.view.frame
+      _params->direction == TabGridTransitionDirection::kFromBrowserToTabGrid
+          ? browserLayout.view.frame
           : _tabGridCellItem.originalFrame;
 
   CHECK(_tabGridCellItem);
@@ -286,17 +411,16 @@
                      activeGrid:_activeGrid
                      pinnedTabs:_pinnedTabsViewController
                activeCellPinned:_activeCellPinned
-                   animatedView:_browserLayoutViewController.view
+                   animatedView:browserLayout.view
                 contentSnapshot:_tabGridCellItem.snapshot
                topToolbarHeight:topToolbarHeight
             bottomToolbarHeight:bottomToolbarHeight
-         topToolbarSnapshotView:topToolbarSnapshotView
-      bottomToolbarSnapshotView:
-          [self snapshotOfViewPortionBelowRect:tabContentView
-                                    middleRect:contentAreaFrame]
+         topToolbarSnapshotView:_topToolbarSnapshotView
+      bottomToolbarSnapshotView:_bottomToolbarSnapshotView
           shouldScaleTopToolbar:scaleTopToolbar
                       incognito:_incognito
-               topToolbarHidden:topToolbarHidden];
+               topToolbarHidden:topToolbarHidden
+                 commandHandler:_params->handler];
 }
 
 // Returns a snapshot of the portion of the view that is above the given rect.
@@ -337,8 +461,19 @@
 // Returns YES if the transition should hide the top toolbar (use the safe area
 // insets instead of the top toolbar LayoutGuide).
 - (BOOL)shouldHideTopToolbar {
-  return _isRegularBrowserNTP && !CanShowTabStrip(_tabGridViewController) &&
-         IsSplitToolbarMode(_tabGridViewController);
+  UIViewController* tabGrid = _params->tab_grid_view_controller;
+  return _isRegularBrowserNTP && !CanShowTabStrip(tabGrid) &&
+         IsSplitToolbarMode(tabGrid);
+}
+
+// Get the content area's frame.
+- (CGRect)contentAreaFrame {
+  UIViewController<TabGridTransitionContextProvider>* browserLayout =
+      _params->browser_layout_view_controller;
+
+  NamedGuide* contentAreaGuide = [browserLayout contentAreaGuide];
+  return [contentAreaGuide.owningView convertRect:contentAreaGuide.layoutFrame
+                                           toView:browserLayout.view];
 }
 
 @end

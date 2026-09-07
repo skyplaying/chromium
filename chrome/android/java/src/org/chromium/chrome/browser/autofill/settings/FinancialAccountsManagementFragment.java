@@ -15,6 +15,7 @@ import androidx.preference.Preference;
 import androidx.preference.PreferenceScreen;
 
 import org.chromium.base.Callback;
+import org.chromium.base.ResettersForTesting;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.supplier.MonotonicObservableSupplier;
 import org.chromium.base.supplier.ObservableSuppliers;
@@ -142,6 +143,7 @@ public class FinancialAccountsManagementFragment extends ChromeBaseSettingsFragm
                 mPersonalDataManager.getFacilitatedPaymentsPixPref();
         if (shouldShowEwalletPref(getProfile())) {
             ChromeSwitchPreference eWalletSwitch = new ChromeSwitchPreference(getStyledContext());
+            eWalletSwitch.setPersistent(false);
             eWalletSwitch.setChecked(isFacilitatedPaymentsEwalletEnabled);
             eWalletSwitch.setKey(PREFERENCE_KEY_EWALLET);
             eWalletSwitch.setTitle(R.string.settings_manage_other_financial_accounts_ewallet);
@@ -154,6 +156,7 @@ public class FinancialAccountsManagementFragment extends ChromeBaseSettingsFragm
 
         if (shouldShowPixPref(getProfile())) {
             ChromeSwitchPreference pixSwitch = new ChromeSwitchPreference(getStyledContext());
+            pixSwitch.setPersistent(false);
             pixSwitch.setChecked(isFacilitatedPaymentsPixEnabled);
             pixSwitch.setKey(PREFERENCE_KEY_PIX);
             pixSwitch.setTitle(R.string.settings_manage_other_financial_accounts_pix);
@@ -309,6 +312,7 @@ public class FinancialAccountsManagementFragment extends ChromeBaseSettingsFragm
     @VisibleForTesting
     static void setObserverForTest(Callback<Fragment> observerForTest) {
         sObserverForTest = observerForTest;
+        ResettersForTesting.register(() -> sObserverForTest = null);
     }
 
     @Override

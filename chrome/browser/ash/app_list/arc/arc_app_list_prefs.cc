@@ -13,6 +13,7 @@
 #include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/shell.h"
+#include "ash/strings/grit/ash_strings.h"
 #include "base/check.h"
 #include "base/containers/flat_set.h"
 #include "base/files/file_util.h"
@@ -44,8 +45,6 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
-#include "chrome/common/chrome_features.h"
-#include "chrome/grit/generated_resources.h"
 #include "chromeos/ash/components/demo_mode/utils/demo_session_utils.h"
 #include "chromeos/ash/experiences/arc/app/arc_app_constants.h"
 #include "chromeos/ash/experiences/arc/arc_features.h"
@@ -382,6 +381,7 @@ bool ignore_compare_app_info_install_time = false;
 
 // Reason for installation enumeration; Used for UMA counter for reason for
 // install.
+// LINT.IfChange(InstallationCounterReasonEnum)
 enum class InstallationCounterReasonEnum {
   USER = 0,     // Application installed by user.
   DEFAULT = 1,  // Application part of the default set.
@@ -390,12 +390,15 @@ enum class InstallationCounterReasonEnum {
   UNKNOWN = 4,
   kMaxValue = UNKNOWN,
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/arc/enums.xml:InstallationCounterReasonEnum)
 
 // Reasons for uninstalls. Only one, USER, for now.
+// LINT.IfChange(UninstallCounterReasonEnum)
 enum class UninstallCounterReasonEnum {
   USER = 0,  // Uninstall triggered by user.
   kMaxValue = USER
 };
+// LINT.ThenChange(//tools/metrics/histograms/metadata/arc/enums.xml:UninstallCounterReasonEnum)
 
 // Remove deprecated package prefs. Otherwise deprecated fields will stay on
 // disks.
@@ -504,7 +507,11 @@ void ArcAppListPrefs::RegisterProfilePrefs(
     user_prefs::PrefRegistrySyncable* registry) {
   registry->RegisterDictionaryPref(arc::prefs::kArcApps);
   registry->RegisterDictionaryPref(arc::prefs::kArcPackages);
-  registry->RegisterBooleanPref(arc::prefs::kArcPackagesIsUpToDate, false);
+  // Defaults to true as there are no in-progress app installations on a
+  // freshly created profile. This prevents ArcActivationNecessityChecker from
+  // unnecessarily activating ARC on post-OOBE user session start on 4GB
+  // devices.
+  registry->RegisterBooleanPref(arc::prefs::kArcPackagesIsUpToDate, true);
   registry->RegisterIntegerPref(arc::prefs::kArcFrameworkVersion,
                                 -1 /* default_value */);
   registry->RegisterDictionaryPref(
@@ -604,10 +611,8 @@ ArcAppListPrefs::ArcAppListPrefs(
     net_host->SetArcAppMetadataProvider(this);
   }
 
-  if (base::FeatureList::IsEnabled(arc::kSyncInstallPriority)) {
-    install_priority_handler_ =
-        std::make_unique<arc::ArcPackageInstallPriorityHandler>(profile);
-  }
+  install_priority_handler_ =
+      std::make_unique<arc::ArcPackageInstallPriorityHandler>(profile);
 }
 
 ArcAppListPrefs::~ArcAppListPrefs() {
@@ -1061,7 +1066,7 @@ std::unique_ptr<ArcAppListPrefs::AppInfo> ArcAppListPrefs::GetAppFromPrefs(
   std::string icon_resource_id =
       maybe_icon_resource_id ? *maybe_icon_resource_id : std::string();
 
-  std::optional<std::string> version_name = std::nullopt;
+  std::optional<std::string> version_name;
   if (maybe_version_name && *maybe_version_name != std::string())
     version_name = *maybe_version_name;
 
@@ -1502,7 +1507,7 @@ void ArcAppListPrefs::SetResizeLockState(const std::string& app_id,
   app_dict.Set(kResizeLockState, static_cast<int32_t>(state));
 
   // If the app is not "ready", we shouldn't fire the AppStatesChanged
-  // callbacks. Otherwise, it would cause a crash (See crbug.com/1276603). When
+  // callbacks. Otherwise, it would cause a crash (See crbug.com/40808991). When
   // the app is changed to "ready", ArcAppListPrefs sends the notifications
   // afterwards so it's fine not to fire it here.
   if (app_info->ready)
@@ -1562,10 +1567,7 @@ void ArcAppListPrefs::Shutdown() {
   if (policy_bridge)
     policy_bridge->RemoveObserver(this);
 
-  // TODO(lgcheng) remove the check once the feature is enabled.
-  if (install_priority_handler_) {
-    install_priority_handler_->Shutdown();
-  }
+  install_priority_handler_->Shutdown();
 
   arc::ArcSessionManager* arc_session_manager = arc::ArcSessionManager::Get();
   if (arc_session_manager) {
@@ -1676,10 +1678,7 @@ void ArcAppListPrefs::OnConnectionClosed() {
   package_list_initial_refreshed_ = false;
   app_list_refreshed_callback_.Reset();
 
-  // TODO(lgcheng) remove the check once the feature is enabled.
-  if (install_priority_handler_) {
-    install_priority_handler_->Clear();
-  }
+  install_priority_handler_->Clear();
 
   for (auto& observer : observer_list_)
     observer.OnAppConnectionClosed();
@@ -2488,10 +2487,7 @@ void ArcAppListPrefs::OnPackageAdded(
   packages_to_be_added_.erase(package_info->package_name);
   UpdateArcPackagesIsUpToDatePref();
 
-  // TODO(lgcheng) remove the check once the feature is enabled.
-  if (install_priority_handler_) {
-    install_priority_handler_->ClearPackage(package_info->package_name);
-  }
+  install_priority_handler_->ClearPackage(package_info->package_name);
 
   for (auto& observer : observer_list_)
     observer.OnPackageInstalled(*package_info);

@@ -78,6 +78,7 @@ android_library("javatests") {
     "//third_party/hamcrest:hamcrest_java",
     "//third_party/junit",
     "//third_party/mockito:mockito_java",
+    "//ui/android:ui_java",
   ]
 }
 
@@ -100,6 +101,20 @@ generate_jni("jni_headers") {
     ":*",
     "//chrome/android:jni_headers",
     "//chrome/browser",
+    "//chrome/browser/android",
   ]
   sources = [ "java/src/org/chromium/chrome/browser/prefetch/settings/PreloadPagesSettingsBridge.java" ]
+}
+
+source_set("android") {
+  sources = [ "preload_pages_settings_bridge.cc" ]
+  deps = [
+    ":jni_headers",
+    "//base",
+    "//chrome/browser/prefetch",
+    "//chrome/browser/preloading:prefs",
+    "//chrome/browser/profiles",
+    "//components/metrics:metrics_pref_names",
+    "//components/prefs",
+  ]
 }

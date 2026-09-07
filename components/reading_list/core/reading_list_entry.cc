@@ -10,7 +10,6 @@
 #include "base/memory/ptr_util.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
 #include "components/reading_list/core/offline_url_utils.h"
@@ -225,7 +224,7 @@ bool ReadingListEntry::IsSpecificsValid(
     return false;
   }
   GURL url(pb_entry.url());
-  if (url.is_empty() || !url.is_valid()) {
+  if (url.is_empty() || !url.is_valid() || !url.SchemeIsHTTPOrHTTPS()) {
     return false;
   }
   // Some crash reports indicate that some users have reading list entries with

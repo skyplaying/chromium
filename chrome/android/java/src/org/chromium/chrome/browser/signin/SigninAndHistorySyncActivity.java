@@ -30,6 +30,7 @@ import org.chromium.chrome.R;
 import org.chromium.chrome.browser.back_press.BackPressHelper;
 import org.chromium.chrome.browser.device_lock.DeviceLockActivityLauncherImpl;
 import org.chromium.chrome.browser.firstrun.FirstRunActivityBase;
+import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.init.ActivityProfileProvider;
 import org.chromium.chrome.browser.init.ChromeBrowserInitializer;
 import org.chromium.chrome.browser.privacy.settings.PrivacyPreferencesManagerImpl;
@@ -59,8 +60,6 @@ import org.chromium.ui.UiUtils;
 import org.chromium.ui.base.ActivityWindowAndroid;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modaldialog.ModalDialogManager.ModalDialogType;
-
-import java.util.function.Supplier;
 
 /**
  * The activity that host post-UNO sign-in flows. This activity is semi-transparent, and views for
@@ -175,7 +174,7 @@ public class SigninAndHistorySyncActivity extends FullscreenSigninAndHistorySync
                         DeviceLockActivityLauncherImpl.get(),
                         getProfileProviderSupplier(),
                         getBottomSheetController(containerView),
-                        (Supplier<@Nullable ModalDialogManager>) getModalDialogManagerSupplier(),
+                        getModalDialogManagerSupplier().asNonNull(),
                         config,
                         signinAccessPoint);
 
@@ -210,7 +209,7 @@ public class SigninAndHistorySyncActivity extends FullscreenSigninAndHistorySync
                 /* listenToActivityState= */ true,
                 getIntentRequestTracker(),
                 getInsetObserver(),
-                /* trackOcclusion= */ true);
+                /* occlusionTrackingAllowed= */ true);
     }
 
     @Override
@@ -334,16 +333,19 @@ public class SigninAndHistorySyncActivity extends FullscreenSigninAndHistorySync
         return intent;
     }
 
-    /**
-     * Implements {@link FullscreenSigninAndHistorySyncCoordinator.Delegate} and {@link
-     * BottomSheetSigninAndHistorySyncCoordinator.ActivityDelegate}
-     */
+    /** Implements {@link BottomSheetSigninAndHistorySyncCoordinator.ActivityDelegate} */
     @Override
     public void addAccount() {
+        addAccount(null);
+    }
+
+    /** Implements {@link FullscreenSigninAndHistorySyncCoordinator.Delegate} */
+    @Override
+    public void addAccount(@Nullable String accountEmail) {
         SigninMetricsUtils.logAddAccountStateHistogram(State.REQUESTED);
         AccountManagerFacadeProvider.getInstance()
                 .createAddAccountIntent(
-                        null,
+                        accountEmail,
                         intent -> {
                             final ActivityWindowAndroid windowAndroid = getWindowAndroid();
                             if (windowAndroid == null) {
@@ -414,12 +416,15 @@ public class SigninAndHistorySyncActivity extends FullscreenSigninAndHistorySync
         BottomSheetController bottomSheetController =
                 BottomSheetControllerFactory.createBottomSheetController(
                         () -> scrimManager,
-                        (sheet) -> {},
                         getWindow(),
                         KeyboardVisibilityDelegate.getInstance(),
                         () -> sheetContainer,
                         () -> 0,
-                        /* desktopWindowStateManager= */ null);
+                        /* desktopWindowStateManager= */ null,
+                        getInsetObserver(),
+                        /* enableLargeFormFactorUi= */ ChromeFeatureList
+                                .sBottomSheetOnDesktopWindowing
+                                .isEnabled());
         BackPressHandler bottomSheetBackPressHandler =
                 bottomSheetController.getBottomSheetBackPressHandler();
         BackPressHelper.create(this, getOnBackPressedDispatcher(), bottomSheetBackPressHandler);

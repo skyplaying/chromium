@@ -28,15 +28,11 @@ import {TileSource} from '//resources/mojo/components/ntp_tiles/tile_source.mojo
 import {TextDirection} from '//resources/mojo/mojo/public/mojom/base/text_direction.mojom-webui.js';
 import type {Url} from '//resources/mojo/url/mojom/url.mojom-webui.js';
 
-import {MostVisitedBrowserProxy} from './browser_proxy.js';
 import {getCss} from './most_visited.css.js';
 import {getHtml} from './most_visited.html.js';
-import type {MostVisitedInfo, MostVisitedPageCallbackRouter, MostVisitedPageHandlerRemote, MostVisitedTheme, MostVisitedTile} from './most_visited.mojom-webui.js';
+import {browserProxyFactory} from './most_visited.mojom-webui.js';
+import type {BrowserProxy, MostVisitedInfo, MostVisitedTheme, MostVisitedTile} from './most_visited.mojom-webui.js';
 import {MostVisitedWindowProxy} from './window_proxy.js';
-
-export const MAX_TILES_DEFAULT = 8;
-export const MAX_TILES_FOR_CUSTOM_LINKS = 10;
-const MAX_TILES_FOR_ENTERPRISE_SHORTCUTS = 10;
 
 function resetTilePosition(tile: HTMLElement) {
   tile.style.position = '';
@@ -70,6 +66,11 @@ function normalizeUrl(urlString: string): URL|null {
   return null;
 }
 
+export interface AutoRemovedEventDetail {
+  message: string;
+  undo: () => void;
+}
+
 const MostVisitedElementBase = I18nMixinLit(CrLitElement);
 
 export interface MostVisitedElement {
@@ -100,6 +101,19 @@ export class MostVisitedElement extends MostVisitedElementBase {
   static override get properties() {
     return {
       theme: {type: Object},
+      /**
+       * If true, disables editing/removing shortcuts, hides action buttons and
+       * the add shortcut button, and prevents tile dragging.
+       */
+      nonEditable: {
+        type: Boolean,
+        reflect: true,
+      },
+      /** If true, hides the text title under each tile/button. */
+      hideTitle: {
+        type: Boolean,
+        reflect: true,
+      },
       /**
        * If true, renders MV tiles in a single row up to 10 columns wide.
        * If false, renders MV tiles in up to 2 rows up to 5 columns wide.
@@ -162,14 +176,19 @@ export class MostVisitedElement extends MostVisitedElementBase {
       maxTiles_: {type: Number, state: true},
       maxVisibleTiles_: {type: Number, state: true},
       showAdd_: {type: Boolean, state: true},
-      showToastButtons_: {type: Boolean, state: true},
       maxVisibleColumnCount_: {type: Number, state: true},
       tiles_: {type: Array, state: true},
-      toastContent_: {type: String, state: true},
       toastSource_: {type: Number, state: true},
 
       expandableTilesEnabled: {type: Boolean, reflect: true},
-      maxTilesBeforeShowMore: {type: Number, reflect: true},
+      maxTilesInCollapsedState: {type: Number, reflect: true},
+      maxShortcutsInExpandedState: {type: Number, reflect: true},
+      maxMostVisitedTilesInExpandedState: {type: Number, reflect: true},
+      maxEnterpriseShortcuts: {type: Number, reflect: true},
+      /**
+       * If greater than 0, caps the total number of tiles to this value.
+       */
+      maxTiles: {type: Number, reflect: true},
       showAll_: {type: Boolean, state: true},
       showShowMore_: {type: Boolean, state: true},
       showShowLess_: {type: Boolean, state: true},
@@ -182,10 +201,16 @@ export class MostVisitedElement extends MostVisitedElementBase {
   }
 
   accessor theme: MostVisitedTheme|null = null;
+  accessor nonEditable: boolean = false;
+  accessor hideTitle: boolean = false;
   accessor reflowOnOverflow: boolean = false;
   accessor singleRow: boolean = false;
   accessor expandableTilesEnabled: boolean = false;
-  accessor maxTilesBeforeShowMore: number = 0;
+  accessor maxTilesInCollapsedState: number = 6;
+  accessor maxShortcutsInExpandedState: number = 10;
+  accessor maxMostVisitedTilesInExpandedState: number = 8;
+  accessor maxEnterpriseShortcuts: number = 10;
+  accessor maxTiles: number = 0;
   private accessor showAll_: boolean = false;
   protected accessor showShowMore_: boolean = false;
   protected accessor showShowLess_: boolean = false;
@@ -215,8 +240,7 @@ export class MostVisitedElement extends MostVisitedElementBase {
   protected accessor toastSource_: TileSource = TileSource.CUSTOM_LINKS;
   protected accessor visible_: boolean = false;
   private adding_: boolean = false;
-  private callbackRouter_: MostVisitedPageCallbackRouter;
-  private pageHandler_: MostVisitedPageHandlerRemote;
+  private browserProxy_: BrowserProxy;
   private windowProxy_: MostVisitedWindowProxy;
   private actionMenuTargetIndex_: number = -1;
   private dragOffset_: {x: number, y: number}|null;
@@ -228,6 +252,8 @@ export class MostVisitedElement extends MostVisitedElementBase {
   private prefetchTimer_: null|ReturnType<typeof setTimeout> = null;
   private preconnectTimer_: null|ReturnType<typeof setTimeout> = null;
   private dragImage_: HTMLImageElement;
+  private mostVisitedHighDpiFaviconsEnabled_: boolean =
+      loadTimeData.getBoolean('mostVisitedHighDpiFaviconsEnabled');
 
   private accessor info_: MostVisitedInfo|null = null;
 
@@ -240,9 +266,7 @@ export class MostVisitedElement extends MostVisitedElementBase {
     performance.mark('most-visited-creation-start');
     super();
 
-    this.callbackRouter_ = MostVisitedBrowserProxy.getInstance().callbackRouter;
-
-    this.pageHandler_ = MostVisitedBrowserProxy.getInstance().handler;
+    this.browserProxy_ = browserProxyFactory.getInstance();
 
     this.windowProxy_ = MostVisitedWindowProxy.getInstance();
 
@@ -269,28 +293,29 @@ export class MostVisitedElement extends MostVisitedElementBase {
 
     this.onSingleRowChange_();
 
-    this.callbackRouter_.setMostVisitedInfo.addListener(
-        (info: MostVisitedInfo) => {
-          performance.measure('most-visited-mojo', 'most-visited-mojo-start');
-          this.info_ = info;
+    this.browserProxy_.callbackRouter.setMostVisitedInfo.addListener(info => {
+      performance.measure('most-visited-mojo', 'most-visited-mojo-start');
+      this.info_ = info;
+    });
+
+    this.browserProxy_.callbackRouter.onMostVisitedTilesAutoRemoval.addListener(
+        () => {
+          this.autoRemovalToast_();
         });
 
-    this.callbackRouter_.onMostVisitedTilesAutoRemoval.addListener(() => {
-      this.autoRemovalToast_();
-    });
-
-    this.pageHandler_.getMostVisitedExpandedState().then(({isExpanded}) => {
-      this.showAll_ = isExpanded;
-    });
+    this.browserProxy_.handler.getMostVisitedExpandedState().then(
+        ({isExpanded}) => {
+          this.showAll_ = isExpanded;
+        });
     performance.mark('most-visited-mojo-start');
     this.eventTracker_.add(document, 'visibilitychange', () => {
       // This updates the most visited tiles every time the NTP tab gets
       // activated.
       if (document.visibilityState === 'visible') {
-        this.pageHandler_.updateMostVisitedInfo();
+        this.browserProxy_.handler.updateMostVisitedInfo();
       }
     });
-    this.pageHandler_.updateMostVisitedInfo();
+    this.browserProxy_.handler.updateMostVisitedInfo();
     FocusOutlineManager.forDocument(document);
   }
 
@@ -317,11 +342,12 @@ export class MostVisitedElement extends MostVisitedElementBase {
       this.visible_ = this.info_.visible;
       this.customLinksEnabled_ = this.info_.customLinksEnabled;
       this.enterpriseShortcutsEnabled_ = this.info_.enterpriseShortcutsEnabled;
-      this.maxTiles_ = (this.customLinksEnabled_ ? MAX_TILES_FOR_CUSTOM_LINKS :
-                                                   MAX_TILES_DEFAULT) +
-          (this.enterpriseShortcutsEnabled_ ?
-               MAX_TILES_FOR_ENTERPRISE_SHORTCUTS :
-               0);
+      const totalMax =
+          (this.customLinksEnabled_ ? this.maxShortcutsInExpandedState :
+                                      this.maxMostVisitedTilesInExpandedState) +
+          (this.enterpriseShortcutsEnabled_ ? this.maxEnterpriseShortcuts : 0);
+      this.maxTiles_ =
+          this.maxTiles > 0 ? Math.min(this.maxTiles, totalMax) : totalMax;
       this.tiles_ = this.info_.tiles.slice(0, this.maxTiles_);
     }
 
@@ -395,11 +421,11 @@ export class MostVisitedElement extends MostVisitedElementBase {
     const shortcutCount = this.tiles_ ? this.tiles_.length : 0;
     const canShowAdd = this.expandableTilesEnabled ?
         this.showAdd_ :
-        this.maxTiles_ > shortcutCount;
+        !this.nonEditable && this.maxTiles_ > shortcutCount;
     const canShowShowMore = this.expandableTilesEnabled && this.showShowMore_;
     const canShowShowLess = this.expandableTilesEnabled && this.showShowLess_;
     const visibleShortcutCount =
-        canShowShowMore ? this.maxTilesBeforeShowMore + 1 : shortcutCount;
+        canShowShowMore ? this.maxTilesInCollapsedState : shortcutCount;
     const totalTileCount = visibleShortcutCount + (canShowAdd ? 1 : 0) +
         (canShowShowMore || canShowShowLess ? 1 : 0);
     const columnCount = totalTileCount <= this.maxVisibleColumnCount_ ?
@@ -418,7 +444,7 @@ export class MostVisitedElement extends MostVisitedElementBase {
     if (this.reflowOnOverflow && this.tiles_) {
       const visibleShortcutCount =
           this.expandableTilesEnabled && this.showShowMore_ ?
-          this.maxTilesBeforeShowMore + 1 :
+          this.maxTilesInCollapsedState :
           this.tiles_.length;
       return Math.ceil(
           (visibleShortcutCount + (this.showAdd_ ? 1 : 0) +
@@ -436,7 +462,7 @@ export class MostVisitedElement extends MostVisitedElementBase {
 
   private computeMaxVisibleTiles_(): number {
     if (this.expandableTilesEnabled && this.showShowMore_) {
-      return this.maxTilesBeforeShowMore + 1;
+      return this.maxTilesInCollapsedState;
     }
 
     if (this.reflowOnOverflow) {
@@ -447,7 +473,7 @@ export class MostVisitedElement extends MostVisitedElementBase {
   }
 
   private computeShowAdd_(): boolean {
-    if (this.showShowMore_) {
+    if (this.nonEditable || this.showShowMore_) {
       return false;
     }
     if (!this.customLinksEnabled_) {
@@ -461,29 +487,29 @@ export class MostVisitedElement extends MostVisitedElementBase {
     return this.tiles_.length < (this.expandableTilesEnabled && this.showAll_ ?
                                      this.maxTiles_ :
                                      this.maxVisibleTiles_) &&
-        customLinkTilesCount < MAX_TILES_FOR_CUSTOM_LINKS;
+        customLinkTilesCount < this.maxShortcutsInExpandedState;
   }
 
   private computeShowShowMore_(): boolean {
     return this.expandableTilesEnabled && !this.showAll_ && this.tiles_ &&
-        this.tiles_.length > this.maxTilesBeforeShowMore;
+        this.tiles_.length >= this.maxTilesInCollapsedState;
   }
 
   private computeShowShowLess_(): boolean {
     return this.expandableTilesEnabled && this.showAll_ && this.tiles_ &&
-        this.tiles_.length > this.maxTilesBeforeShowMore;
+        this.tiles_.length >= this.maxTilesInCollapsedState;
   }
 
   protected async onShowMoreClick_() {
     this.showAll_ = true;
-    this.pageHandler_.setMostVisitedExpandedState(this.showAll_);
+    this.browserProxy_.handler.setMostVisitedExpandedState(this.showAll_);
     await this.updateComplete;
-    this.tileFocus_(this.maxTilesBeforeShowMore + 1);
+    this.tileFocus_(this.maxTilesInCollapsedState);
   }
 
   protected async onShowLessClick_() {
     this.showAll_ = false;
-    this.pageHandler_.setMostVisitedExpandedState(this.showAll_);
+    this.browserProxy_.handler.setMostVisitedExpandedState(this.showAll_);
     await this.updateComplete;
     this.$.showMore.focus();
   }
@@ -617,7 +643,8 @@ export class MostVisitedElement extends MostVisitedElementBase {
             this.tiles_.filter(t => this.isFromEnterpriseShortcut_(t.source))
                 .length;
       }
-      this.pageHandler_.reorderMostVisitedTile(draggingTile, newDropIndex);
+      this.browserProxy_.handler.reorderMostVisitedTile(
+          draggingTile, newDropIndex);
 
       // Remove the "dragging" class here to prevent flickering.
       dragElement.classList.remove('dragging');
@@ -723,7 +750,10 @@ export class MostVisitedElement extends MostVisitedElementBase {
   protected getFaviconUrl_(url: Url): string {
     const faviconUrl = new URL('chrome://favicon2/');
     faviconUrl.searchParams.set('size', '24');
-    faviconUrl.searchParams.set('scaleFactor', '1x');
+    const scaleFactor = this.mostVisitedHighDpiFaviconsEnabled_ ?
+        `${window.devicePixelRatio || 1}x` :
+        '1x';
+    faviconUrl.searchParams.set('scaleFactor', scaleFactor);
     faviconUrl.searchParams.set('showFallbackMonogram', '');
     faviconUrl.searchParams.set('pageUrl', url);
     return faviconUrl.href;
@@ -761,9 +791,14 @@ export class MostVisitedElement extends MostVisitedElementBase {
       this.maxVisibleColumnCount_ =
           3 + (index > -1 ? queryLists.length - index : 0);
     };
+    const tileSize =
+        parseInt(
+            getComputedStyle(this).getPropertyValue('--most-visited-tile-size'),
+            10) ||
+        112;
     const maxColumnCount = this.singleRow ? 10 : 5;
     for (let i = maxColumnCount; i >= 4; i--) {
-      const query = `(min-width: ${112 * (i + 1)}px)`;
+      const query = `(min-width: ${tileSize * (i + 1)}px)`;
       const queryList = this.windowProxy_.matchMedia(query);
       this.mediaEventTracker_.add(queryList, 'change', updateCount);
       queryLists.push(queryList);
@@ -771,7 +806,7 @@ export class MostVisitedElement extends MostVisitedElementBase {
     updateCount();
   }
 
-  protected onAdd_() {
+  protected onAddClick_() {
     this.dialogIsReadonly_ = false;
     this.dialogSource_ = TileSource.CUSTOM_LINKS;
     this.dialogTitle_ = loadTimeData.getString('addLinkTitle');
@@ -782,7 +817,7 @@ export class MostVisitedElement extends MostVisitedElementBase {
     this.$.dialog.showModal();
   }
 
-  protected onAddShortcutKeyDown_(e: KeyboardEvent) {
+  protected onAddShortcutKeydown_(e: KeyboardEvent) {
     if (hasKeyModifiers(e)) {
       return;
     }
@@ -803,18 +838,18 @@ export class MostVisitedElement extends MostVisitedElementBase {
     }
   }
 
-  protected onShowMoreKeyDown_(e: KeyboardEvent) {
+  protected onShowMoreKeydown_(e: KeyboardEvent) {
     if (hasKeyModifiers(e)) {
       return;
     }
 
     const backKey = this.isRtl_ ? 'ArrowRight' : 'ArrowLeft';
     if (e.key === backKey || e.key === 'ArrowUp') {
-      this.tileFocus_(this.maxTilesBeforeShowMore);
+      this.tileFocus_(this.maxTilesInCollapsedState - 1);
     }
   }
 
-  protected onShowLessKeyDown_(e: KeyboardEvent) {
+  protected onShowLessKeydown_(e: KeyboardEvent) {
     if (hasKeyModifiers(e)) {
       return;
     }
@@ -829,7 +864,7 @@ export class MostVisitedElement extends MostVisitedElementBase {
     }
   }
 
-  protected onDialogCancel_() {
+  protected onDialogCancelClick_() {
     this.actionMenuTargetIndex_ = -1;
     this.$.dialog.cancel();
   }
@@ -842,6 +877,31 @@ export class MostVisitedElement extends MostVisitedElementBase {
     this.adding_ = false;
   }
 
+  protected onDialogKeydown_(e: KeyboardEvent) {
+    if (e.key !== 'Tab') {
+      return;
+    }
+
+    const focusable = Array.from(this.$.dialog.querySelectorAll<HTMLElement>(
+        'cr-input, cr-button:not([disabled]):not([hidden])'));
+
+    if (focusable.length === 0) {
+      return;
+    }
+
+    const firstEl = focusable[0]!;
+    const lastEl = focusable[focusable.length - 1]!;
+    const path = e.composedPath();
+
+    if (e.shiftKey && path.includes(firstEl)) {
+      e.preventDefault();
+      lastEl.focus();
+    } else if (!e.shiftKey && path.includes(lastEl)) {
+      e.preventDefault();
+      firstEl.focus();
+    }
+  }
+
   protected onDialogTileUrlBlur_() {
     if (this.dialogTileUrl_.length > 0 &&
         (normalizeUrl(this.dialogTileUrl_) === null ||
@@ -850,17 +910,17 @@ export class MostVisitedElement extends MostVisitedElementBase {
     }
   }
 
-  protected onDialogTileUrlChange_(e: Event) {
+  protected onDialogTileUrlValueChanged_(e: Event) {
     this.dialogTileUrl_ = (e.target as HTMLInputElement).value;
     this.dialogTileUrlInvalid_ = false;
   }
 
-  protected onDialogTileNameChange_(e: Event) {
+  protected onDialogTileNameValueChanged_(e: Event) {
     this.dialogTileTitle_ = (e.target as HTMLInputElement).value;
   }
 
   protected onDocumentKeyDown_(e: KeyboardEvent) {
-    if (e.altKey || e.shiftKey) {
+    if (this.nonEditable || e.altKey || e.shiftKey) {
       return;
     }
 
@@ -872,7 +932,10 @@ export class MostVisitedElement extends MostVisitedElementBase {
     }
   }
 
-  protected onDragStart_(e: DragEvent) {
+  protected onDragstart_(e: DragEvent) {
+    if (this.nonEditable) {
+      return;
+    }
     const item = this.tiles_[this.getCurrentTargetIndex_(e)]!;
     assert(item);
     if (!this.customLinksEnabled_ &&
@@ -920,7 +983,7 @@ export class MostVisitedElement extends MostVisitedElementBase {
     }, {once: true});
   }
 
-  protected onViewOrEdit_() {
+  protected onViewOrEditClick_() {
     this.$.actionMenu.close();
     const tile = this.tiles_[this.actionMenuTargetIndex_]!;
     const isReadonly = !tile.allowUserEdit;
@@ -939,16 +1002,16 @@ export class MostVisitedElement extends MostVisitedElementBase {
       return;
     }
     this.$.toastManager.hide();
-    this.pageHandler_.restoreMostVisitedDefaults(this.toastSource_);
+    this.browserProxy_.handler.restoreMostVisitedDefaults(this.toastSource_);
   }
 
-  protected async onRemove_() {
+  protected async onRemoveClick_() {
     this.$.actionMenu.close();
     await this.tileRemove_(this.actionMenuTargetIndex_);
     this.actionMenuTargetIndex_ = -1;
   }
 
-  protected async onSave_() {
+  protected async onSaveClick_() {
     if (this.dialogIsReadonly_) {
       this.$.dialog.close();
       return;
@@ -961,15 +1024,16 @@ export class MostVisitedElement extends MostVisitedElementBase {
     }
     if (this.adding_) {
       const {success} =
-          await this.pageHandler_.addMostVisitedTile(newUrl, newTitle);
+          await this.browserProxy_.handler.addMostVisitedTile(newUrl, newTitle);
       this.toast_(
           success ? 'linkAddedMsg' : 'linkCantCreate', success,
           TileSource.TOP_SITES);
     } else {
       const oldTile = this.tiles_[this.actionMenuTargetIndex_]!;
       if (oldTile.url !== newUrl || oldTile.title !== newTitle) {
-        const {success} = await this.pageHandler_.updateMostVisitedTile(
-            oldTile, newUrl, newTitle);
+        const {success} =
+            await this.browserProxy_.handler.updateMostVisitedTile(
+                oldTile, newUrl, newTitle);
         this.toast_(
             success ? 'linkEditedMsg' : 'linkCantEdit', success,
             oldTile.source);
@@ -1009,11 +1073,11 @@ export class MostVisitedElement extends MostVisitedElementBase {
 
     const index = this.getCurrentTargetIndex_(e);
     const item = this.tiles_[index]!;
-    this.pageHandler_.onMostVisitedTileNavigation(
+    this.browserProxy_.handler.onMostVisitedTileNavigation(
         item, index, e.button || 0, e.altKey, e.ctrlKey, e.metaKey, e.shiftKey);
   }
 
-  protected onTileKeyDown_(e: KeyboardEvent) {
+  protected onTileKeydown_(e: KeyboardEvent) {
     if (hasKeyModifiers(e)) {
       return;
     }
@@ -1025,21 +1089,23 @@ export class MostVisitedElement extends MostVisitedElementBase {
 
     const index = this.getCurrentTargetIndex_(e);
     if (e.key === 'Delete') {
-      this.tileRemove_(index);
+      if (!this.nonEditable) {
+        this.tileRemove_(index);
+      }
       return;
     }
 
     const advanceKey = this.isRtl_ ? 'ArrowLeft' : 'ArrowRight';
     const delta = (e.key === advanceKey || e.key === 'ArrowDown') ? 1 : -1;
     const newIndex = Math.max(0, index + delta);
-    if (this.showShowMore_ && newIndex === this.maxTilesBeforeShowMore + 1) {
+    if (this.showShowMore_ && newIndex === this.maxTilesInCollapsedState) {
       this.$.showMore.focus();
     } else {
       this.tileFocus_(newIndex);
     }
   }
 
-  protected onTileHover_(e: Event) {
+  protected onTileMouseenter_(e: Event) {
     if (e.defaultPrevented) {
       // Ignore previously handled events.
       return;
@@ -1053,19 +1119,19 @@ export class MostVisitedElement extends MostVisitedElementBase {
     if (loadTimeData.getBoolean('prerenderOnPressEnabled') &&
         loadTimeData.getInteger('preconnectStartTimeThreshold') >= 0) {
       this.preconnectTimer_ = setTimeout(() => {
-        this.pageHandler_.preconnectMostVisitedTile(item);
+        this.browserProxy_.handler.preconnectMostVisitedTile(item);
       }, loadTimeData.getInteger('preconnectStartTimeThreshold'));
     }
 
     if (loadTimeData.getBoolean('prefetchTriggerEnabled') &&
         loadTimeData.getInteger('prefetchStartTimeThreshold') >= 0) {
       this.prefetchTimer_ = setTimeout(() => {
-        this.pageHandler_.prefetchMostVisitedTile(item);
+        this.browserProxy_.handler.prefetchMostVisitedTile(item);
       }, loadTimeData.getInteger('prefetchStartTimeThreshold'));
     }
   }
 
-  protected onTileMouseDown_(e: Event) {
+  protected onTileMousedown_(e: Event) {
     if (e.defaultPrevented) {
       // Ignore previously handled events.
       return;
@@ -1077,13 +1143,13 @@ export class MostVisitedElement extends MostVisitedElementBase {
       // ahead of prerender, and the duplicate prefetch requests will be
       // prevented at `StartPrefetch`.
       if (loadTimeData.getBoolean('prefetchTriggerEnabled')) {
-        this.pageHandler_.prefetchMostVisitedTile(item);
+        this.browserProxy_.handler.prefetchMostVisitedTile(item);
       }
-      this.pageHandler_.prerenderMostVisitedTile(item);
+      this.browserProxy_.handler.prerenderMostVisitedTile(item);
     }
   }
 
-  protected onTileExit_(e: Event) {
+  protected onTileMouseleave_(e: Event) {
     if (e.defaultPrevented) {
       // Ignore previously handled events.
       return;
@@ -1098,7 +1164,7 @@ export class MostVisitedElement extends MostVisitedElementBase {
     }
 
     if (loadTimeData.getBoolean('prerenderOnPressEnabled')) {
-      this.pageHandler_.cancelPrerender();
+      this.browserProxy_.handler.cancelPrerender();
     }
   }
 
@@ -1107,12 +1173,12 @@ export class MostVisitedElement extends MostVisitedElementBase {
       return false;
     }
     this.$.toastManager.hide();
-    this.pageHandler_.undoMostVisitedTileAction(this.toastSource_);
+    this.browserProxy_.handler.undoMostVisitedTileAction(this.toastSource_);
     return true;
   }
 
-  protected onTouchStart_(e: TouchEvent) {
-    if (this.reordering_) {
+  protected onTouchstart_(e: TouchEvent) {
+    if (this.nonEditable || this.reordering_) {
       return;
     }
     const item = this.tiles_[this.getCurrentTargetIndex_(e)]!;
@@ -1162,10 +1228,10 @@ export class MostVisitedElement extends MostVisitedElementBase {
   }
 
   private autoRemovalToast_() {
-    this.fire('most-visited-auto-removed', {
+    this.fire<AutoRemovedEventDetail>('most-visited-auto-removed', {
       message: loadTimeData.getString('shortcutsInactivityRemovalMsg'),
       undo: () => {
-        this.pageHandler_.undoMostVisitedAutoRemoval();
+        this.browserProxy_.handler.undoMostVisitedAutoRemoval();
       },
     });
   }
@@ -1177,7 +1243,7 @@ export class MostVisitedElement extends MostVisitedElementBase {
 
   private async tileRemove_(index: number) {
     const tile = this.tiles_[index]!;
-    this.pageHandler_.deleteMostVisitedTile(tile);
+    this.browserProxy_.handler.deleteMostVisitedTile(tile);
     // Do not show the toast buttons when a query tile is removed unless it is
     // a custom link. Removal is not reversible for non custom link query tiles.
     this.toast_(
@@ -1194,7 +1260,7 @@ export class MostVisitedElement extends MostVisitedElementBase {
   protected onTilesRendered_() {
     performance.measure('most-visited-rendered');
     assert(this.maxVisibleTiles_ > 0);
-    this.pageHandler_.onMostVisitedTilesRendered(
+    this.browserProxy_.handler.onMostVisitedTilesRendered(
         this.tiles_.slice(0, this.maxVisibleTiles_), this.windowProxy_.now());
   }
 

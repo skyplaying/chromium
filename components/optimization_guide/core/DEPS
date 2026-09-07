@@ -7,10 +7,13 @@ include_rules = [
   "+components/crx_file",
   "+components/download/public/background_service",
   "+components/page_content_annotations/core",
+  "+components/private_ai",
   "+components/services/unzip",
   "+components/signin/public",
+  "+components/streaming_client",
   "+components/policy/core",
   "+components/ukm/test_ukm_recorder.h",
+  "+components/variations",
   "+crypto",
   "+mojo/public/cpp",
   "+services/data_decoder/public/cpp",
@@ -31,5 +34,8 @@ specific_include_rules = {
   ".*_unittest.cc": [
     "+third_party/zlib/google/zip.h",
     "+ui/base",
+  ],
+  "fake_model_assets\.cc": [
+    "+third_party/dawn/include/dawn/dawn_proc.h",
   ],
 };

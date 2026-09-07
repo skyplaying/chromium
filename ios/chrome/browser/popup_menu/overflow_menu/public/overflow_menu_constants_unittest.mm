@@ -53,6 +53,15 @@ TEST_F(OverflowMenuConstantsTest, DestinationConversion) {
         finalExpectedDestination =
             overflow_menu::Destination::SpotlightDebugger;
         break;
+      case overflow_menu::Destination::Cobalt:
+        finalExpectedDestination = overflow_menu::Destination::Cobalt;
+        break;
+      case overflow_menu::Destination::LevelUp:
+        finalExpectedDestination = overflow_menu::Destination::LevelUp;
+        break;
+      case overflow_menu::Destination::DefaultBrowser:
+        finalExpectedDestination = overflow_menu::Destination::DefaultBrowser;
+        break;
     }
 
     // If there's no finalExpectedDestination, then the loop has looped through
@@ -138,14 +147,25 @@ TEST_F(OverflowMenuConstantsTest, ActionTypeConversion) {
       case overflow_menu::ActionType::AskBWG:
         finalExpectedActionType = overflow_menu::ActionType::AskBWG;
         break;
-      case overflow_menu::ActionType::HideToolbars:
-        finalExpectedActionType = overflow_menu::ActionType::HideToolbars;
-        break;
-      case overflow_menu::ActionType::TabGroup:
-        finalExpectedActionType = overflow_menu::ActionType::TabGroup;
-        break;
+      case overflow_menu::ActionType::HideToolbarsDeprecated:
+        // This is deprecated, so skip it.
+        continue;
+      case overflow_menu::ActionType::TabGroupDeprecated:
+        // This is deprecated, so skip it.
+        continue;
       case overflow_menu::ActionType::ShareThisPage:
         finalExpectedActionType = overflow_menu::ActionType::ShareThisPage;
+        break;
+      case overflow_menu::ActionType::Identity:
+        finalExpectedActionType = overflow_menu::ActionType::Identity;
+        break;
+      case overflow_menu::ActionType::SigninDeprecated:
+        continue;
+      case overflow_menu::ActionType::CustomizeHomePage:
+        finalExpectedActionType = overflow_menu::ActionType::CustomizeHomePage;
+        break;
+      case overflow_menu::ActionType::DefaultBrowser:
+        finalExpectedActionType = overflow_menu::ActionType::DefaultBrowser;
         break;
     }
 

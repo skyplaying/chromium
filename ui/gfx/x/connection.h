@@ -255,7 +255,7 @@ class COMPONENT_EXPORT(X11) Connection final : public XProto,
   // Indicates if the connection is able to sync with the WM, either because the
   // WM is on an allowlist or the connection successfully synced with the WM to
   // test support experimentally.
-  bool CanSyncWithWm() const;
+  bool CanSyncWithWm();
 
   // Returns the underlying socket's FD if the connection is valid, or -1
   // otherwise.
@@ -372,11 +372,14 @@ class COMPONENT_EXPORT(X11) Connection final : public XProto,
                 .long_length = static_cast<uint32_t>(
                     amount ? length : std::numeric_limits<lentype>::max())})
             .Sync();
-    if (!response || response->format / 8u != sizeof(T)) {
+    if (!response ||
+        (response->format != 8 && response->format != 16 &&
+         response->format != 32) ||
+        response->format / 8u != sizeof(T)) {
       return false;
     }
 
-    size_t byte_len = response->value_len * response->format / 8u;
+    size_t byte_len = response->value_len * sizeof(T);
     value->resize(response->value_len);
     if (byte_len > 0u) {
       UNSAFE_TODO(memcpy(value->data(), response->value->bytes(), byte_len));
@@ -406,6 +409,17 @@ class COMPONENT_EXPORT(X11) Connection final : public XProto,
     static_assert(sizeof(T) == 1 || sizeof(T) == 2 || sizeof(T) == 4, "");
     return SetArrayPropertyImpl(window, name, type, 8u * sizeof(T),
                                 base::as_byte_span(values));
+  }
+
+  template <typename T>
+  Future<void> SetArrayProperty(Window window,
+                                Atom name,
+                                Atom type,
+                                base::span<const T> values) {
+    static_assert(sizeof(T) == 1 || sizeof(T) == 2 || sizeof(T) == 4, "");
+    return SetArrayPropertyImpl(
+        window, name, type, 8u * sizeof(T),
+        base::subtle::reinterpret_span<const uint8_t>(values));
   }
 
   template <typename T>
@@ -448,11 +462,9 @@ class COMPONENT_EXPORT(X11) Connection final : public XProto,
   Atom GetAtom(const char* name) const;
 
   // Returns an empty string if there is no window manager or the WM is unnamed.
-  std::string GetWmName() const;
+  std::string GetWmName();
 
-  bool WmSupportsHint(Atom atom) const;
-
-  const std::map<std::string, std::string> GetXResources();
+  bool WmSupportsHint(Atom atom);
 
   // The viz compositor thread hangs a PlatformEventSource off the connection so
   // that it gets destroyed at the appropriate time.
@@ -537,7 +549,7 @@ class COMPONENT_EXPORT(X11) Connection final : public XProto,
 
   void OnRootPropertyChanged(Atom property, const GetPropertyResponse& value);
 
-  bool WmSupportsEwmh() const;
+  bool WmSupportsEwmh();
 
   void AttemptSyncWithWm();
 
@@ -606,8 +618,6 @@ class COMPONENT_EXPORT(X11) Connection final : public XProto,
 
   std::unique_ptr<PropertyCache> root_props_;
   std::unique_ptr<PropertyCache> wm_props_;
-
-  std::map<std::string, std::string> xresources_;
 };
 
 // Grab/release the X server connection within a scope. This can help avoid race

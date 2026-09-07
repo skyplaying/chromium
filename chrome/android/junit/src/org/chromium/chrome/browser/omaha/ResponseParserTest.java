@@ -9,11 +9,9 @@ import android.util.Xml;
 import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.robolectric.annotation.Config;
 import org.xmlpull.v1.XmlSerializer;
 
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.Feature;
 
 import java.io.IOException;
@@ -21,8 +19,6 @@ import java.io.StringWriter;
 
 /** Unit tests for the Omaha ResponseParser. */
 @RunWith(BaseRobolectricTestRunner.class)
-@Batch(Batch.UNIT_TESTS)
-@Config(manifest = Config.NONE)
 public class ResponseParserTest {
     // Note that the Omaha server appends "/" to the end of the URL codebase.
     private static final String STRIPPED_URL =
@@ -138,10 +134,10 @@ public class ResponseParserTest {
         //  </urls>
         //  <manifest garbage="attribute" version="NEXT_VERSION">
         //    <packages>
-        //      <package hash="0" name="dummy.apk" required="true" size="0" />
+        //      <package hash="0" name="placeholder.apk" required="true" size="0" />
         //    </packages>
         //    <actions>
-        //      <action event="install" run="dummy.apk" />
+        //      <action event="install" run="placeholder.apk" />
         //      <action event="postinstall" />
         //    </actions>
         //  </manifest>
@@ -166,7 +162,7 @@ public class ResponseParserTest {
         serializer.startTag(null, "packages");
         serializer.startTag(null, "package");
         serializer.attribute(null, "hash", "0");
-        serializer.attribute(null, "name", "dummy.apk");
+        serializer.attribute(null, "name", "placeholder.apk");
         serializer.attribute(null, "required", "true");
         serializer.attribute(null, "size", "0");
         serializer.endTag(null, "package");
@@ -176,7 +172,7 @@ public class ResponseParserTest {
         serializer.startTag(null, "actions");
         serializer.startTag(null, "action");
         serializer.attribute(null, "event", "install");
-        serializer.attribute(null, "run", "dummy.apk");
+        serializer.attribute(null, "run", "placeholder.apk");
         serializer.endTag(null, "action");
 
         serializer.startTag(null, "action");
@@ -185,10 +181,10 @@ public class ResponseParserTest {
         serializer.endTag(null, "actions");
         serializer.endTag(null, "manifest");
 
-        // Create a dummy element for testing to make sure it's ignored.
-        serializer.startTag(null, "dummy");
+        // Create a placeholder element for testing to make sure it's ignored.
+        serializer.startTag(null, "placeholder");
         serializer.attribute(null, "hopefully", "ignored");
-        serializer.endTag(null, "dummy");
+        serializer.endTag(null, "placeholder");
     }
 
     /**

@@ -11,7 +11,8 @@
 #include "chrome/browser/screen_ai/screen_ai_install_state.h"
 #include "chrome/browser/screen_ai/screen_ai_service_router.h"
 #include "chrome/browser/screen_ai/screen_ai_service_router_factory.h"
-#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/metrics/content/subprocess_metrics_provider.h"
@@ -98,14 +99,14 @@ class MainContentExtractionTest : public InProcessBrowserTest {
 
   void Connect() {
     base::test::TestFuture<bool> future;
-    ScreenAIServiceRouterFactory::GetForBrowserContext(browser()->profile())
+    ScreenAIServiceRouterFactory::GetForBrowserContext(browser()->GetProfile())
         ->GetServiceStateAsync(
             ScreenAIServiceRouter::Service::kMainContentExtraction,
             future.GetCallback());
     ASSERT_TRUE(future.Wait()) << "Service state callback not called.";
     ASSERT_TRUE(future.Get<bool>()) << "Service initialization failed.";
 
-    ScreenAIServiceRouterFactory::GetForBrowserContext(browser()->profile())
+    ScreenAIServiceRouterFactory::GetForBrowserContext(browser()->GetProfile())
         ->BindMainContentExtractor(
             main_content_extractor_.BindNewPipeAndPassReceiver());
     main_content_extractor_->SetClientType(
@@ -117,7 +118,7 @@ class MainContentExtractionTest : public InProcessBrowserTest {
     ui_test_utils::NavigateToURLBlockUntilNavigationsComplete(browser(), page,
                                                               1);
     content::WebContents* web_contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
+        browser()->GetTabStripModel()->GetActiveWebContents();
     EXPECT_EQ(web_contents->GetURL(), page);
 
     base::test::TestFuture<ui::AXTreeUpdate&> future;
@@ -175,8 +176,6 @@ IN_PROC_BROWSER_TEST_F(MainContentExtractionTest, EmptyInput) {
 
   metrics::SubprocessMetricsProvider::MergeHistogramDeltasForTesting();
 
-  histograms.ExpectTotalCount(
-      "Accessibility.ScreenAI.MainContentExtraction.Error.ResultNull", 1);
   histograms.ExpectUniqueSample(
       "Accessibility.ScreenAI.MainContentExtraction.Successful2", false, 1);
   histograms.ExpectTotalCount(

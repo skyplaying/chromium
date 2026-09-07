@@ -55,17 +55,14 @@ class InteractiveFeaturePromoTestApi
           InitialSessionState::kOutsideGracePeriod);
   ~InteractiveFeaturePromoTestApi() override;
 
-  // Changes the controller mode. Call before calling base class `SetUp()`.
-  void SetControllerMode(ControllerMode controller_mode);
-
   // Gets the mock tracker, if the tracker mode is `UseMockTracker`.
-  MockTracker* GetMockTrackerFor(Browser* browser);
+  MockTracker* GetMockTrackerFor(BrowserWindowInterface* browser);
 
   // Registers a test feature for use with a mock tracker.
   //
   // Note that since a promo specification can only be registered in one
   // registry, this method requires the `browser` to be specified.
-  void RegisterTestFeature(Browser* browser,
+  void RegisterTestFeature(BrowserWindowInterface* browser,
                            user_education::FeaturePromoSpecification spec);
 
   // Ensures that the feature engagement tracker is initialized and ready.
@@ -209,13 +206,13 @@ class InteractiveFeaturePromoTestMixin : public T,
 
  protected:
   void SetUp() override {
-    feature_promo_test_impl().CommitControllerMode();
+    feature_promo_test_impl().ConfigureController();
     T::SetUp();
   }
 
   void TearDown() override {
     T::TearDown();
-    feature_promo_test_impl().ResetControllerMode();
+    feature_promo_test_impl().ResetController();
   }
 
   void SetUpOnMainThread() override {
@@ -223,7 +220,7 @@ class InteractiveFeaturePromoTestMixin : public T,
     private_test_impl().DoTestSetUp();
     g_browser_process->local_state()->SetBoolean(
         chrome_urls::kInternalOnlyUisEnabled, true);
-    if (Browser* browser = T::browser()) {
+    if (BrowserWindowInterface* browser = T::browser()) {
       SetContextWidget(
           BrowserView::GetBrowserViewForBrowser(browser)->GetWidget());
       feature_promo_test_impl().MaybeWaitForTrackerInitialization(browser);

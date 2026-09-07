@@ -16,6 +16,8 @@
 #include "base/debug/dump_without_crashing.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
+#include "base/i18n/language_tag.h"
+#include "base/i18n/language_tag_value_converters.h"
 #include "base/json/values_util.h"
 #include "base/location.h"
 #include "base/logging.h"
@@ -28,10 +30,14 @@
 #include "base/values.h"
 #include "components/prefs/default_pref_store.h"
 #include "components/prefs/json_pref_store.h"
+#include "components/prefs/persistent_pref_store.h"
 #include "components/prefs/pref_notifier_impl.h"
 #include "components/prefs/pref_registry.h"
 
 #if BUILDFLAG(IS_ANDROID)
+#include <jni.h>
+
+#include "base/android/jni_android.h"
 #include "components/prefs/android/pref_service_android.h"
 #endif
 
@@ -85,7 +91,11 @@ PrefService::~PrefService() {
 void PrefService::InitFromStorage(bool async) {
   if (!async) {
     if (!user_pref_store_->IsInitializationComplete()) {
-      user_pref_store_->ReadPrefs();
+      PersistentPrefStore::PrefReadError error = user_pref_store_->ReadPrefs();
+      // Synchronous reads shouldn't have async errors.
+      CHECK_NE(
+          error,
+          PersistentPrefStore::PREF_READ_ERROR_ASYNCHRONOUS_TASK_INCOMPLETE);
     }
     CheckPrefsLoaded();
     return;
@@ -146,6 +156,12 @@ base::FilePath PrefService::GetFilePath(std::string_view path) const {
   std::optional<base::FilePath> result = base::ValueToFilePath(value);
   DCHECK(result);
   return *result;
+}
+
+base::i18n::LanguageTag PrefService::GetLanguageTag(
+    std::string_view path) const {
+  return base::i18n::ValueToLanguageTag(GetValue(path))
+      .value_or(base::i18n::GetKnownLanguageTag("und"));
 }
 
 bool PrefService::HasPrefPath(std::string_view path) const {
@@ -394,6 +410,11 @@ void PrefService::SetFilePath(std::string_view path,
   SetUserPrefValue(path, base::FilePathToValue(value));
 }
 
+void PrefService::SetLanguageTag(std::string_view path,
+                                 const base::i18n::LanguageTag& value) {
+  SetUserPrefValue(path, base::i18n::LanguageTagToValue(value));
+}
+
 void PrefService::SetInt64(std::string_view path, int64_t value) {
   CHECK_EQ(pref_registry_->GetRegisteredPrefType(path).value_or(
                PrefRegistry::RegisteredPrefType::kInt64),
@@ -486,6 +507,36 @@ base::Value* PrefService::GetMutableUserPref(std::string_view path,
   user_pref_store_->SetValueSilently(path, default_value->Clone(),
                                      GetWriteFlags(pref));
   user_pref_store_->GetMutableValue(path, &value);
+
+  if (!value) {
+    // TODO(crbug.com/40895218): This DumpWithoutCrashing is introduced to
+    // track occurrences of these cases where value is not found.
+    base::debug::DumpWithoutCrashing();
+
+    // Recovery: Check if any intermediate node is not a dict. If so, it's a
+    // type conflict. Clear the conflicting node and retry.
+    // For a path like "a.b.c", we check "a", then "a.b".
+    size_t prefix_length = path.find('.');
+    while (prefix_length != std::string_view::npos) {
+      std::string_view prefix = path.substr(0, prefix_length);
+      base::Value* prefix_value = nullptr;
+
+      // If the prefix exists but is not a dictionary, we have found the
+      // structural type conflict.
+      if (user_pref_store_->GetMutableValue(prefix, &prefix_value) &&
+          prefix_value && !prefix_value->is_dict()) {
+        user_pref_store_->RemoveValue(
+            prefix, WriteablePrefStore::DEFAULT_PREF_WRITE_FLAGS);
+        user_pref_store_->SetValueSilently(path, default_value->Clone(),
+                                           GetWriteFlags(pref));
+        user_pref_store_->GetMutableValue(path, &value);
+        break;
+      }
+
+      prefix_length = path.find('.', prefix_length + 1);
+    }
+  }
+
   return value;
 }
 
@@ -508,9 +559,20 @@ void PrefService::SetUserPrefValue(std::string_view path,
 
   const Preference* pref = FindPreference(path);
   if (!pref) {
+#if BUILDFLAG(IS_ANDROID)
+    // TODO(crbug.com/535326218): Throw Java exception so that we get a Java
+    // stack trace of the caller of the unregistered preference.
+    JNIEnv* env = base::android::AttachCurrentThread();
+    jclass clazz = env->FindClass("java/lang/RuntimeException");
+    std::string msg =
+        "Trying to write an unregistered pref: " + std::string(path);
+    env->ThrowNew(clazz, msg.c_str());
+    return;
+#else
     DUMP_WILL_BE_NOTREACHED()
         << "Trying to write an unregistered pref: " << path;
     return;
+#endif
   }
   if (pref->GetType() != new_value.type()) {
     NOTREACHED() << "Trying to set pref " << path << " of type "
@@ -520,12 +582,14 @@ void PrefService::SetUserPrefValue(std::string_view path,
   user_pref_store_->SetValue(path, std::move(new_value), GetWriteFlags(pref));
 }
 
-void PrefService::UpdateCommandLinePrefStore(PrefStore* command_line_store) {
-  pref_value_store_->UpdateCommandLinePrefStore(command_line_store);
+void PrefService::UpdateCommandLinePrefStore(
+    scoped_refptr<PrefStore> command_line_store) {
+  pref_value_store_->UpdateCommandLinePrefStore(std::move(command_line_store));
 }
 
-void PrefService::UpdateExtensionPrefStore(PrefStore* extension_store) {
-  pref_value_store_->UpdateExtensionPrefStore(extension_store);
+void PrefService::UpdateExtensionPrefStore(
+    scoped_refptr<PrefStore> extension_store) {
+  pref_value_store_->UpdateExtensionPrefStore(std::move(extension_store));
 }
 
 ///////////////////////////////////////////////////////////////////////////////

@@ -464,9 +464,11 @@ void PointingStickSettings::Apply(
 }
 
 // static
-bool InputDeviceSettings::ForceKeyboardDrivenUINavigation() {
-  if (policy::EnrollmentRequisitionManager::IsMeetDevice() ||
-      policy::EnrollmentRequisitionManager::IsSharkRequisition()) {
+bool InputDeviceSettings::ForceKeyboardDrivenUINavigation(
+    const PrefService& local_state) {
+  if (policy::EnrollmentRequisitionManager::IsMeetDevice(local_state) ||
+      policy::EnrollmentRequisitionManager::IsSharkRequisition(local_state) ||
+      policy::EnrollmentRequisitionManager::IsSquidDevice()) {
     return true;
   }
 

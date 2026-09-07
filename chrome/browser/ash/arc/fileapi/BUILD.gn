@@ -2,8 +2,6 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-import("//build/config/chromeos/ui_mode.gni")
-
 assert(is_chromeos)
 
 static_library("fileapi") {
@@ -20,6 +18,8 @@ static_library("fileapi") {
     "arc_content_file_system_size_util.h",
     "arc_content_file_system_url_util.cc",
     "arc_content_file_system_url_util.h",
+    "arc_content_url_allowlist.cc",
+    "arc_content_url_allowlist.h",
     "arc_documents_provider_async_file_util.cc",
     "arc_documents_provider_async_file_util.h",
     "arc_documents_provider_backend_delegate.cc",
@@ -75,6 +75,8 @@ static_library("fileapi") {
     "//chrome/browser/ash/policy/dlp",
     "//chrome/browser/chromeos/policy/dlp",
     "//chrome/browser/profiles:profile",
+    "//chrome/browser/profiles:profile_manager",
+    "//chrome/browser/ui/select_file_policy",
     "//chrome/common",
     "//chromeos/ash/components/dbus/concierge:concierge_proto",
     "//chromeos/ash/components/dbus/virtual_file_provider",
@@ -83,11 +85,13 @@ static_library("fileapi") {
     "//extensions/browser/api/file_handlers",
     "//mojo/public/cpp/bindings",
     "//net",
+    "//sql",
     "//third_party/re2",
     "//ui/shell_dialogs",
     "//url",
 
-    # TODO(crbug.com/353449539): Use //chrome/browser/ui instead after cyclic dependency from
+    # TODO(crbug.com/353449539): Use //chrome/browser/ui instead after cyclic
+    # dependency from
     # obj/chrome/browser/ash/arc/fileapi/fileapi/arc_select_files_handler.o.
     "//chrome/browser/apps/app_preload_service/proto",
   ]
@@ -127,6 +131,7 @@ source_set("unit_tests") {
     "//chrome/browser/ash/fusebox",
     "//chrome/browser/ash/guest_os",
     "//chrome/browser/ash/guest_os/public",
+    "//chrome/browser/ui/select_file_policy",
     "//chrome/test:test_support",
     "//chromeos/ash/components/dbus/seneschal",
     "//chromeos/ash/components/dbus/virtual_file_provider",

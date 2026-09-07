@@ -171,12 +171,14 @@ class MetricsServicesManager {
   // Called when loading state changed.
   void LoadingStateChanged(bool is_loading);
 
+
   // Used by |GetOnRendererUnresponsiveCb| to construct the callback that will
   // be run by |MetricsServicesWebContentsObserver|.
   void OnRendererUnresponsive();
 
   // The client passed in from the embedder.
   const std::unique_ptr<MetricsServicesManagerClient> client_;
+
 
   // Ensures that all functions are called from the same thread.
   base::ThreadChecker thread_checker_;

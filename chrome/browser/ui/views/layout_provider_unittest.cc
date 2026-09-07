@@ -16,7 +16,6 @@
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/gfx/font_list.h"
-#include "ui/gfx/font_util.h"
 #include "ui/strings/grit/app_locale_settings.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/styled_label.h"
@@ -60,7 +59,6 @@ class LayoutProviderTest : public testing::Test {
 
  protected:
   static void SetUpTestSuite() {
-    gfx::InitializeFonts();
     // Some previous test may have left the default font description set to an
     // unexpected state.
     gfx::FontList::SetDefaultFontDescription(std::string());
@@ -115,7 +113,7 @@ TEST_F(LayoutProviderTest, EnsuresDefaultSystemSettings) {
 // Check legacy font sizes. No new code should be using these constants, but if
 // these tests ever fail it probably means something in the old UI will have
 // changed by mistake.
-// https://crbug.com/961938
+// https://crbug.com/41458130
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_LegacyFontSizeConstants DISABLED_LegacyFontSizeConstants
 #else

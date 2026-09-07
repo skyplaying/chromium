@@ -12,12 +12,14 @@
 
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
+#include "base/notreached.h"
 #include "build/build_config.h"
+#include "content/browser/back_forward_cache/back_forward_cache_impl.h"
 #include "content/public/browser/cookie_access_details.h"
+#include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/trust_token_access_details.h"
 #include "services/network/public/cpp/permissions_policy/permissions_policy_declaration.h"
 #include "third_party/blink/public/mojom/frame/fullscreen.mojom.h"
-#include "third_party/blink/public/mojom/frame/text_autosizer_page_info.mojom.h"
 #include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
 #include "ui/base/clipboard/clipboard_metadata.h"
 #include "ui/gfx/native_ui_types.h"
@@ -69,12 +71,17 @@ ui::AXMode RenderFrameHostDelegate::GetAccessibilityMode() {
   return ui::AXMode();
 }
 
-bool RenderFrameHostDelegate::ShouldIgnoreA11yInputEvents() {
+bool RenderFrameHostDelegate::ShouldIgnoreInputEvents() {
   return false;
 }
 
 device::mojom::GeolocationContext*
 RenderFrameHostDelegate::GetGeolocationContext() {
+  return nullptr;
+}
+
+SurfaceEmbedConnector* RenderFrameHostDelegate::GetSurfaceEmbedConnector()
+    const {
   return nullptr;
 }
 
@@ -113,7 +120,7 @@ FrameTree* RenderFrameHostDelegate::CreateNewWindow(
     const mojom::CreateNewWindowParams& params,
     bool is_new_browsing_instance,
     bool has_user_gesture,
-    SessionStorageNamespace* session_storage_namespace) {
+    SessionStorageNamespaceHandle* session_storage_namespace) {
   return nullptr;
 }
 
@@ -178,7 +185,8 @@ RenderWidgetHostImpl* RenderFrameHostDelegate::CreateNewPopupWidget(
     mojo::PendingAssociatedReceiver<blink::mojom::PopupWidgetHost>
         blink_popup_widget_host,
     mojo::PendingAssociatedReceiver<blink::mojom::WidgetHost> blink_widget_host,
-    mojo::PendingAssociatedRemote<blink::mojom::Widget> blink_widget) {
+    mojo::PendingAssociatedRemote<blink::mojom::Widget> blink_widget,
+    GlobalRenderFrameHostId creator_frame_id) {
   return nullptr;
 }
 
@@ -186,6 +194,10 @@ std::vector<RenderFrameHostImpl*>
 RenderFrameHostDelegate::GetActiveTopLevelDocumentsInBrowsingContextGroup(
     RenderFrameHostImpl* render_frame_host) {
   return std::vector<RenderFrameHostImpl*>();
+}
+
+bool RenderFrameHostDelegate::IsBeingDestroyed() {
+  return false;
 }
 
 PrerenderHostRegistry* RenderFrameHostDelegate::GetPrerenderHostRegistry() {
@@ -215,6 +227,10 @@ gfx::NativeWindow RenderFrameHostDelegate::GetOwnerNativeWindow() {
 media::PictureInPictureEventsInfo::AutoPipInfo
 RenderFrameHostDelegate::GetAutoPipInfo() const {
   return media::PictureInPictureEventsInfo::AutoPipInfo();
+}
+
+BackForwardCacheImpl& RenderFrameHostDelegate::GetBackForwardCache() {
+  NOTREACHED();
 }
 
 }  // namespace content

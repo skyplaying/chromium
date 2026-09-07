@@ -28,6 +28,19 @@ public final class ToolbarFeatures {
     }
 
     /**
+     * Returns whether the history back and forward navigation menu uses ListMenu instead of legacy
+     * OS popups.
+     */
+    public static boolean isNavigationListMenuEnabled() {
+        return ChromeFeatureList.isEnabled(ChromeFeatureList.NAVIGATION_LIST_MENU);
+    }
+
+    /** Returns whether the AI overlay dialog is enabled. */
+    public static boolean isAiOverlayDialogEnabled() {
+        return ChromeFeatureList.sAiOverlayDialog.isEnabled();
+    }
+
+    /**
      * Returns if app header customization is supported. This feature enables rendering the tab
      * strip in the caption bar when applicable.
      */

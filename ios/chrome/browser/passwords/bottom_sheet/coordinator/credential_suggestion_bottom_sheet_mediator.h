@@ -9,6 +9,7 @@
 #import <vector>
 
 #import "base/memory/scoped_refptr.h"
+#import "components/webauthn/ios/ios_passkey_client.h"
 #import "ios/chrome/browser/passwords/bottom_sheet/coordinator/credential_suggestion_bottom_sheet_mediator_base.h"
 
 namespace autofill {
@@ -31,14 +32,13 @@ class PasswordStoreInterface;
 class FaviconLoader;
 class PrefService;
 class WebStateList;
-class GURL;
 
 @class FormSuggestion;
 
 @protocol CredentialSuggestionBottomSheetPresenter;
 @protocol ReauthenticationProtocol;
 
-// This mediator fetches a list suggestions to display in the bottom sheet.
+// This mediator fetches a list of suggestions to display in the bottom sheet.
 // It also manages filling the form when a suggestion is selected, as well
 // as showing the keyboard if requested when the bottom sheet is dismissed.
 @interface CredentialSuggestionBottomSheetMediator
@@ -50,7 +50,6 @@ class GURL;
                prefService:(PrefService*)prefService
                     params:(const autofill::FormActivityParams&)params
               reauthModule:(id<ReauthenticationProtocol>)reauthModule
-                       URL:(const GURL&)URL
       profilePasswordStore:
           (scoped_refptr<password_manager::PasswordStoreInterface>)
               profilePasswordStore
@@ -60,8 +59,16 @@ class GURL;
     sharedURLLoaderFactory:
         (scoped_refptr<network::SharedURLLoaderFactory>)sharedURLLoaderFactory
          engagementTracker:(feature_engagement::Tracker*)engagementTracker
-                 presenter:
-                     (id<CredentialSuggestionBottomSheetPresenter>)presenter;
+    NS_DESIGNATED_INITIALIZER;
+
+- (instancetype)
+    initWithWebStateList:(WebStateList*)webStateList
+            reauthModule:(id<ReauthenticationProtocol>)reauthModule
+             requestInfo:
+                 (std::optional<webauthn::IOSPasskeyClient::RequestInfo>)
+                     requestInfo NS_UNAVAILABLE;
+
+- (instancetype)init NS_UNAVAILABLE;
 
 // Returns the credential associated with the form suggestion. It is an
 // optional, in case the credential can't be found.
@@ -69,10 +76,10 @@ class GURL;
     getCredentialForFormSuggestion:(FormSuggestion*)formSuggestion;
 
 // Refocuses the login field that was blurred to show this bottom sheet, if
-// deemded needed.
+// deemed needed.
 - (void)refocus;
 
-// Set vector of credentials that is used for testing.
+// Sets the vector of credentials that is used for testing.
 - (void)setCredentialsForTesting:
     (std::vector<password_manager::CredentialUIEntry>)credentials;
 

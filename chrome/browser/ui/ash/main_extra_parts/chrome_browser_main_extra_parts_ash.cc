@@ -9,6 +9,7 @@
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_switches.h"
+#include "ash/constants/webui_url_constants.h"
 #include "ash/display/refresh_rate_controller.h"
 #include "ash/multi_user/multi_user_window_manager.h"
 #include "ash/public/cpp/new_window_delegate.h"
@@ -22,8 +23,6 @@
 #include "ash/system/video_conference/fake_video_conference_tray_controller.h"
 #include "ash/system/video_conference/video_conference_tray_controller.h"
 #include "ash/webui/annotator/annotator_client_impl.h"
-#include "ash/webui/sanitize_ui/url_constants.h"
-#include "ash/webui/system_apps/public/system_web_app_type.h"
 #include "base/check.h"
 #include "base/check_deref.h"
 #include "base/check_op.h"
@@ -106,6 +105,7 @@
 #include "chrome/browser/ui/views/select_file_dialog_extension/select_file_dialog_extension_factory.h"
 #include "chrome/browser/ui/webui/ash/settings/pref_names.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
+#include "chromeos/ash/components/browser_delegate/browser_controller.h"
 #include "chromeos/ash/components/dbus/dbus_thread_manager.h"
 #include "chromeos/ash/components/dbus/resourced/resourced_client.h"
 #include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
@@ -114,6 +114,7 @@
 #include "chromeos/ash/components/heatmap/heatmap_palm_detector_impl.h"
 #include "chromeos/ash/components/login/readahead/login_readahead_performer.h"
 #include "chromeos/ash/components/network/network_connect.h"
+#include "chromeos/ash/components/system_web_apps/system_web_app_type.h"
 #include "chromeos/ash/experiences/arc/arc_features.h"
 #include "chromeos/ash/experiences/arc/window/arc_window_watcher.h"
 #include "chromeos/ash/services/bluetooth_config/fast_pair_delegate.h"
@@ -297,7 +298,8 @@ void ChromeBrowserMainExtraPartsAsh::PreProfileInit() {
   if (ash::MultiUserWindowManager::IsEnabled()) {
     multi_user_window_manager_browser_adaptor_ =
         std::make_unique<ash::MultiUserWindowManagerBrowserAdaptor>(
-            ash::Shell::Get()->multi_user_window_manager());
+            ash::Shell::Get()->multi_user_window_manager(),
+            ash::BrowserController::GetInstance());
   }
   // Note: BrowserRestoreObserver needs to be instantiated after
   // MultiUserWindowManagerBrowserAdaptor.
@@ -314,8 +316,8 @@ void ChromeBrowserMainExtraPartsAsh::PreProfileInit() {
   screen_orientation_delegate_ =
       std::make_unique<ScreenOrientationDelegateChromeos>();
 
-  app_list_client_ =
-      std::make_unique<AppListClientImpl>(user_manager::UserManager::Get());
+  app_list_client_ = std::make_unique<AppListClientImpl>(
+      g_browser_process->local_state(), user_manager::UserManager::Get());
 
   // Must be available at login screen, so initialize before profile.
   accessibility_controller_client_ =
@@ -352,9 +354,14 @@ void ChromeBrowserMainExtraPartsAsh::PreProfileInit() {
   session_controller_client_ = std::make_unique<SessionControllerClientImpl>(
       CHECK_DEREF(g_browser_process->local_state()));
   session_controller_client_->Init();
-  // By this point ash shell should have initialized its D-Bus signal
-  // listeners, so inform the session manager that Ash is initialized.
-  session_controller_client_->EmitAshInitialized();
+
+  // Emit the ash-initialized upstart signal to start Chrome OS tasks that
+  // expect that Ash is listening to D-Bus signals they emit. For example,
+  // hammerd, which handles detachable base state, communicates the base state
+  // purely by emitting D-Bus signals, and thus has to be run whenever Ash is
+  // started so Ash (DetachableBaseHandler in particular) gets the proper view
+  // of the current detachable base state.
+  ash::SessionManagerClient::Get()->EmitAshInitialized();
 
   system_tray_client_ = std::make_unique<SystemTrayClientImpl>(
       CHECK_DEREF(g_browser_process->platform_part()->GetSystemClock()),
@@ -386,10 +393,6 @@ void ChromeBrowserMainExtraPartsAsh::PreProfileInit() {
     exo::WMHelper::GetInstance()->RegisterAppPropertyResolver(
         std::make_unique<ExoAppTypeResolver>());
   }
-
-  // Result is unused, but `TimezoneResolverManager` must be created here for
-  // its internal initialization to succeed.
-  g_browser_process->platform_part()->GetTimezoneResolverManager();
 
   annotator_client_ = std::make_unique<AnnotatorClientImpl>();
 
@@ -464,7 +467,8 @@ void ChromeBrowserMainExtraPartsAsh::PostProfileInit(Profile* profile,
     return;
   }
 
-  login_screen_client_ = std::make_unique<LoginScreenClientImpl>();
+  login_screen_client_ =
+      std::make_unique<LoginScreenClientImpl>(g_browser_process->local_state());
 
   management_disclosure_client_ =
       std::make_unique<ManagementDisclosureClientImpl>(
@@ -472,8 +476,8 @@ void ChromeBrowserMainExtraPartsAsh::PostProfileInit(Profile* profile,
           Profile::FromBrowserContext(
               ash::BrowserContextHelper::Get()->GetSigninBrowserContext())
               ->GetOriginalProfile());
-  // https://crbug.com/884127 ensuring that LoginScreenClientImpl is initialized
-  // before using it InitializeDeviceDisablingManager.
+  // https://crbug.com/41413838 ensuring that LoginScreenClientImpl is
+  // initialized before using it InitializeDeviceDisablingManager.
   g_browser_process->platform_part()->InitializeDeviceDisablingManager();
 
   media_client_ = std::make_unique<MediaClientImpl>();
@@ -509,6 +513,7 @@ void ChromeBrowserMainExtraPartsAsh::PostProfileInit(Profile* profile,
   ash_web_view_factory_ = std::make_unique<AshWebViewFactoryImpl>();
 
   quick_insert_client_ = std::make_unique<QuickInsertClientImpl>(
+      g_browser_process->local_state(),
       ash::Shell::Get()->quick_insert_controller(),
       user_manager::UserManager::Get());
 
@@ -528,13 +533,11 @@ void ChromeBrowserMainExtraPartsAsh::PostProfileInit(Profile* profile,
             g_browser_process->GetFeatures()->application_locale_storage());
   }
 
-  if (ash::features::IsWelcomeExperienceEnabled()) {
-    peripherals_app_delegate_ =
-        std::make_unique<ash::PeripheralsAppDelegateImpl>();
-    ash::Shell::Get()
-        ->input_device_settings_controller()
-        ->SetPeripheralsAppDelegate(peripherals_app_delegate_.get());
-  }
+  peripherals_app_delegate_ =
+      std::make_unique<ash::PeripheralsAppDelegateImpl>();
+  ash::Shell::Get()
+      ->input_device_settings_controller()
+      ->SetPeripheralsAppDelegate(peripherals_app_delegate_.get());
 
   // Initialize TabScrubber after the Ash Shell has been initialized.
   ash::TabScrubber::GetInstance();
@@ -582,8 +585,8 @@ void ChromeBrowserMainExtraPartsAsh::PostMainMessageLoopRun() {
   ash::bluetooth_config::Shutdown();
 
   // Disable event dispatch before Exo starts closing windows to prevent
-  // synthetic events from being dispatched. crbug.com/874156 and
-  // crbug.com/1163269.
+  // synthetic events from being dispatched. crbug.com/41408016 and
+  // crbug.com/40740041.
   ash::Shell::Get()->ShutdownEventDispatch();
 
   // ExoParts uses state from ash, delete it before ash so that exo can
@@ -606,6 +609,7 @@ void ChromeBrowserMainExtraPartsAsh::PostMainMessageLoopRun() {
 
   wallpaper_controller_client_.reset();
   vpn_list_forwarder_.reset();
+  tablet_mode_page_behavior_.reset();
 
   tab_cluster_ui_client_.reset();
 

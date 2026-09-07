@@ -5,7 +5,6 @@
 #include <string_view>
 
 #include "base/strings/escape.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/fuzzing/domato_html_fuzzer_grammar.h"
 #include "chrome/test/fuzzing/domato_html_fuzzer_grammar.pb.h"
@@ -60,6 +59,6 @@ int DomatoHtmlInProcessFuzzer::Fuzz(const uint8_t* data, size_t size) {
                   ->GetActiveWebContents()
                   ->GetPrimaryMainFrame();
   DisableUnloadTimerForTesting(rfh);
-  base::IgnoreResult(ui_test_utils::NavigateToURL(browser(), GURL(url_string)));
+  std::ignore = ui_test_utils::NavigateToURL(browser(), GURL(url_string));
   return 0;
 }

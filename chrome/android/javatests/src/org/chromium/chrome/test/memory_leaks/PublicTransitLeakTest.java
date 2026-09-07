@@ -4,10 +4,15 @@
 
 package org.chromium.chrome.test.memory_leaks;
 
+import android.content.Context;
+import android.content.Intent;
+
+import androidx.browser.customtabs.CustomTabsSessionToken;
 import androidx.test.core.app.ApplicationProvider;
 import androidx.test.filters.LargeTest;
 
 import org.junit.After;
+import org.junit.Assert;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -15,10 +20,13 @@ import org.junit.runner.RunWith;
 import org.chromium.base.test.util.Batch;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.DisableIf;
+import org.chromium.base.test.util.EnableLeakChecks;
+import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.ImportantFormFactors;
-import org.chromium.base.test.util.LeakCanaryChecker.EnableLeakChecks;
 import org.chromium.base.test.util.Restriction;
+import org.chromium.chrome.browser.customtabs.CustomTabsConnection;
 import org.chromium.chrome.browser.customtabs.CustomTabsIntentTestUtils;
+import org.chromium.chrome.browser.customtabs.CustomTabsTestUtils;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.ChromeSwitches;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
@@ -56,6 +64,10 @@ public class PublicTransitLeakTest {
 
     @Test
     @LargeTest
+    @DisableFeatures({
+        ChromeFeatureList.SETTINGS_IN_TAB, // crbug.com/521895796
+        ChromeFeatureList.SETTINGS_IN_TAB_DESKTOP // crbug.com/556881398
+    })
     public void settingsActivityTest() {
         WebPageStation page = mChromeTabbedActivityTestRule.startOnBlankPage();
         page.openRegularTabAppMenu()
@@ -96,6 +108,24 @@ public class PublicTransitLeakTest {
                         mChromeTabbedActivityTestRule
                                 .getTestServer()
                                 .getURL("/chrome/test/data/android/google.html")));
+    }
+
+    @Test
+    @LargeTest
+    public void customTabActivityWithSessionTest() throws TimeoutException {
+        final CustomTabsConnection connection = CustomTabsTestUtils.warmUpAndWait();
+        Context context = ApplicationProvider.getApplicationContext();
+        Intent intent =
+                CustomTabsIntentTestUtils.createMinimalCustomTabIntent(
+                        context,
+                        mChromeTabbedActivityTestRule
+                                .getTestServer()
+                                .getURL("/chrome/test/data/android/google.html"));
+        final CustomTabsSessionToken token =
+                CustomTabsSessionToken.getSessionTokenFromIntent(intent);
+        Assert.assertTrue(connection.newSession(token));
+
+        mCustomTabActivityTestRule.startCustomTabActivityWithIntent(intent);
     }
 
     @Test

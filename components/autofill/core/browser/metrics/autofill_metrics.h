@@ -6,26 +6,25 @@
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_METRICS_AUTOFILL_METRICS_H_
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include <memory>
-#include <set>
 #include <string>
 #include <string_view>
-#include <utility>
 #include <variant>
 #include <vector>
 
+#include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
-#include "base/memory/raw_ptr.h"
-#include "base/memory/raw_ref.h"
+#include "base/memory/stack_allocated.h"
 #include "base/time/time.h"
 #include "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #include "components/autofill/core/browser/data_model/payments/credit_card.h"
 #include "components/autofill/core/browser/field_types.h"
+#include "components/autofill/core/browser/filling/field_filling_skip_reason.h"
 #include "components/autofill/core/browser/filling/filling_product.h"
 #include "components/autofill/core/browser/form_types.h"
 #include "components/autofill/core/browser/metrics/form_events/form_events.h"
-#include "components/autofill/core/browser/metrics/log_event.h"
 #include "components/autofill/core/browser/payments/payments_autofill_client.h"
 #include "components/autofill/core/browser/suggestions/suggestion_hiding_reason.h"
 #include "components/autofill/core/browser/ui/autofill_image_fetcher_base.h"
@@ -33,15 +32,15 @@
 #include "components/autofill/core/browser/ui/popup_interaction.h"
 #include "components/autofill/core/common/dense_set.h"
 #include "components/autofill/core/common/mojom/autofill_types.mojom-forward.h"
-#include "components/autofill/core/common/signatures.h"
 #include "components/autofill/core/common/unique_ids.h"
-#include "components/security_state/core/security_state.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 
 namespace autofill {
 
 class AutofillField;
+class AutofillClient;
+class FormStructure;
 
 namespace autofill_metrics {
 class FormEventLoggerBase;
@@ -86,21 +85,20 @@ class AutofillMetrics {
     NUM_AUTOCOMPLETE_EVENTS
   };
 
-  // The user action that triggered the deletion of a suggestion entry.
-  // These values are used in enums.xml; do not reorder or renumber entries!
+  // Outcomes of interaction with an Autofill popup notice.
   // These values are persisted to logs. Entries should not be renumbered and
   // numeric values should never be reused.
-  enum class SingleEntryRemovalMethod {
-    // The user pressed shift delete while an Autofill popup menu entry was
-    // selected.
-    kKeyboardShiftDeletePressed = 0,
-    // The user clicked the delete button in the Autofill popup menu.
-    kDeleteButtonClicked = 1,
-    // The user confirmed the entry deletion via the dialog shown by the
-    // keyboard accessory.
-    kKeyboardAccessory = 2,
-    kMaxValue = kKeyboardAccessory
+  //
+  // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.autofill
+  // LINT.IfChange(PopupNoticeInteractions)
+  enum class PopupNoticeInteractions {
+    kShown = 0,
+    kAcknowledged = 1,
+    kDismissed = 2,
+    kLinkButtonClicked = 3,
+    kMaxValue = kLinkButtonClicked,
   };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/personal_context/enums.xml:PopupNoticeInteractions)
 
   // The user action that triggered the acceptance of a suggestion entry.
   // These values are used in enums.xml; do not reorder or renumber entries!
@@ -252,6 +250,26 @@ class AutofillMetrics {
     // The user selected something in the dropdown besides "scan card".
     SCAN_CARD_OTHER_ITEM_SELECTED = 2,
     NUM_SCAN_CREDIT_CARD_PROMPT_METRICS,
+  };
+
+  // Entry points for the scan credit card prompt.
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  enum class ScanCreditCardPromptEntryPoint {
+    kKeyboardAccessory = 0,
+    kBottomsheet = 1,
+    kSettingsPage = 2,
+    kMaxValue = kSettingsPage,
+  };
+
+  // Screen types for credit card scanner completion.
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  enum class ScanCreditCardScreenType {
+    kUnknown = 0,
+    kOcr = 1,
+    kNfc = 2,
+    kMaxValue = kNfc,
   };
 
   // Cardholder name fix flow prompt metrics.
@@ -456,6 +474,16 @@ class AutofillMetrics {
 
   // These values are persisted to logs. Entries should not be renumbered and
   // numeric values should never be reused.
+  enum class AtMemoryTriggerSource {
+    kTypedTrigger = 0,
+    kContextMenu = 1,
+    kKeyboardShortcut = 2,
+    kDoubleCtrl = 3,
+    kMaxValue = kDoubleCtrl
+  };
+
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
   //
   // Represents the status of Autofill prompts when at least one prompt can be
   // displayed.
@@ -597,6 +625,12 @@ class AutofillMetrics {
       bool is_uploading,
       payments::PaymentsAutofillClient::SaveCreditCardOptions options);
   static void LogScanCreditCardPromptMetric(ScanCreditCardPromptMetric metric);
+  static void LogScanCreditCardPromptShown(
+      ScanCreditCardPromptEntryPoint entry_point,
+      bool is_new_user);
+  static void LogScanCreditCardPromptSelected(
+      ScanCreditCardPromptEntryPoint entry_point,
+      bool is_new_user);
   static void LogProgressDialogResultMetric(
       bool is_canceled_by_user,
       AutofillProgressUiType autofill_progress_dialog_type);
@@ -614,6 +648,8 @@ class AutofillMetrics {
   // if the scan was cancelled.
   static void LogScanCreditCardCompleted(base::TimeDelta duration,
                                          bool completed);
+  static void LogScanCreditCardScreenType(ScanCreditCardScreenType screen_type);
+  static void LogScanCreditCardCompletedNewUser(bool is_new_user);
 
   static void LogServerQueryMetric(ServerQueryMetric metric);
 
@@ -748,11 +784,6 @@ class AutofillMetrics {
   // Logs the fact that an autocomplete popup was shown.
   static void OnAutocompleteSuggestionsShown();
 
-  // Logs that an autocomplete suggestion was deleted directly from the popup
-  // menu.
-  static void OnAutocompleteSuggestionDeleted(
-      SingleEntryRemovalMethod removal_method);
-
   // This should be called each time a server response is parsed for a form.
   static void LogServerResponseHasDataForForm(bool has_data);
 
@@ -768,7 +799,8 @@ class AutofillMetrics {
     autofill_metrics::FormEventLoggerBase& event_logger;
     const FormStructure& form;
     const AutofillField& field;
-    const base::flat_set<FieldGlobalId>& newly_filled_fields;
+    const base::flat_map<FieldGlobalId, DenseSet<FieldFillingSkipReason>>&
+        skip_reasons;
     const base::flat_set<FieldGlobalId>& safe_fields;
   };
 
@@ -880,7 +912,7 @@ class AutofillMetrics {
   // Returns the histogram string for the passed in
   // `payments::PaymentsAutofillClient::PaymentsRpcCardType` or
   // `CreditCard::RecordType`, starting with a period.
-  static std::string GetHistogramStringForCardType(
+  static std::string_view GetHistogramStringForCardType(
       std::variant<payments::PaymentsAutofillClient::PaymentsRpcCardType,
                    CreditCard::RecordType> card_type);
 
@@ -918,6 +950,14 @@ class AutofillMetrics {
 
   // Logs the status of Autofill prompts.
   static void LogAutofillPromptStatus(AutofillPromptStatus status);
+
+  // Logs the user action taken on the Autofill AI private inference notice.
+  static void LogAutofillAiPrivateInferenceNoticeInteraction(
+      PopupNoticeInteractions interaction);
+
+  // Logs metrics about the filling readiness of the submitted form.
+  static void LogFillingReadinessMetrics(const FormStructure& form,
+                                         AutofillClient& client);
 };
 
 #if defined(UNIT_TEST)
@@ -929,7 +969,7 @@ int GetFieldTypeUserEditStatusMetric(
 std::string GetCreditCardTypeSuffix(
     payments::PaymentsAutofillClient::PaymentsRpcCardType card_type);
 
-const std::string PaymentsRpcResultToMetricsSuffix(
+const std::string_view PaymentsRpcResultToMetricsSuffix(
     payments::PaymentsAutofillClient::PaymentsRpcResult result);
 
 }  // namespace autofill

@@ -10,7 +10,6 @@
 #include <limits>
 #include <string>
 
-#include "base/auto_reset.h"
 #include "base/command_line.h"
 #include "base/containers/span.h"
 #include "base/debug/alias.h"
@@ -58,7 +57,6 @@
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/gfx/skia_span_util.h"
-#include "ui/gl/trace_util.h"
 
 namespace cc {
 
@@ -316,44 +314,6 @@ bool DrawAndScaleImageYUV(
   return true;
 }
 
-// We use this below, instead of just a std::unique_ptr, so that we can run
-// a Finch experiment to check the impact of not using discardable memory on the
-// GPU decode path.
-class HeapDiscardableMemory : public base::DiscardableMemory {
- public:
-  explicit HeapDiscardableMemory(size_t size)
-      : memory_(base::HeapArray<char>::Uninit(size)), size_(size) {}
-  ~HeapDiscardableMemory() override = default;
-  [[nodiscard]] bool Lock() override {
-    // Locking only succeeds when we have not yet discarded the memory (i.e. if
-    // we have never called |Unlock()|.)
-    return !memory_.empty();
-  }
-  void Unlock() override { Discard(); }
-  void* data() const override {
-    DCHECK(!memory_.empty());
-    return const_cast<char*>(memory_.data());
-  }
-  void DiscardForTesting() override { Discard(); }
-  base::trace_event::MemoryAllocatorDump* CreateMemoryAllocatorDump(
-      const char* name,
-      base::trace_event::ProcessMemoryDump* pmd) const override {
-    auto* dump = pmd->CreateAllocatorDump(name);
-    dump->AddScalar(base::trace_event::MemoryAllocatorDump::kNameSize,
-                    base::trace_event::MemoryAllocatorDump::kUnitsBytes, size_);
-    return dump;
-  }
-
- private:
-  void Discard() {
-    memory_ = base::HeapArray<char>();
-    size_ = 0;
-  }
-
-  base::HeapArray<char> memory_;
-  size_t size_;
-};
-
 std::optional<SkYUVAPixmapInfo> GetYUVADecodeInfo(
     const DrawImage& draw_image,
     AuxImage aux_image,
@@ -469,13 +429,6 @@ class GpuImageDecodeTaskImpl : public TileTask {
   }
   void OnTaskCompleted() override {
     cache_->OnImageDecodeTaskCompleted(image_, task_type_, client_id_);
-  }
-
-  // Overridden from TileTask:
-  bool TaskContainsLCPCandidateImages() const override {
-    if (!HasCompleted() && image_.paint_image().may_be_lcp_candidate())
-      return true;
-    return TileTask::TaskContainsLCPCandidateImages();
   }
 
  protected:
@@ -793,9 +746,9 @@ void GpuImageDecodeCache::ImageData::
     RecordSpeculativeDecodeRasterTaskTakeover() {
   if (speculative_decode_usage_stats_.has_value()) {
     speculative_decode_usage_stats_->raster_task_takeover = true;
-    TRACE_EVENT_INSTANT1(TRACE_DISABLED_BY_DEFAULT("loading"),
-                         "SpeculativeImageDecodeRasterTaskTakeover",
-                         TRACE_EVENT_SCOPE_THREAD, "image_id", paint_image_id);
+    TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("loading"),
+                        "SpeculativeImageDecodeRasterTaskTakeover", "image_id",
+                        paint_image_id);
   }
 }
 
@@ -900,10 +853,10 @@ GpuImageDecodeCache::ImageData::ImageData(
     speculative_decode_usage_stats_.emplace();
     speculative_decode_usage_stats_->speculative_decode_mip_level =
         upload_scale_mip_level;
-    TRACE_EVENT_INSTANT2(TRACE_DISABLED_BY_DEFAULT("loading"),
-                         "SpeculativeImageDecodeTaskCreated",
-                         TRACE_EVENT_SCOPE_THREAD, "image_id", paint_image_id,
-                         "speculative_mip_level", upload_scale_mip_level);
+    TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("loading"),
+                        "SpeculativeImageDecodeTaskCreated", "image_id",
+                        paint_image_id, "speculative_mip_level",
+                        upload_scale_mip_level);
   }
 }
 
@@ -918,9 +871,9 @@ GpuImageDecodeCache::ImageData::~ImageData() {
   DCHECK(!HasUploadedData());
   if (IsSpeculativeDecode() &&
       speculative_decode_usage_stats_->min_raster_mip_level == INT_MAX) {
-    TRACE_EVENT_INSTANT1(TRACE_DISABLED_BY_DEFAULT("loading"),
-                         "SpeculativeImageDecodeUnused",
-                         TRACE_EVENT_SCOPE_THREAD, "image_id", paint_image_id);
+    TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("loading"),
+                        "SpeculativeImageDecodeUnused", "image_id",
+                        paint_image_id);
   }
   speculative_decode_usage_stats_.reset();
 }
@@ -996,10 +949,6 @@ GpuImageDecodeCache::GpuImageDecodeCache(
         this, "cc::GpuImageDecodeCache",
         base::SingleThreadTaskRunner::GetCurrentDefault());
   }
-  memory_pressure_listener_registration_ =
-      std::make_unique<base::AsyncMemoryPressureListenerRegistration>(
-          FROM_HERE, base::MemoryPressureListenerTag::kGpuImageDecodeCache,
-          this);
 
   TRACE_EVENT1(TRACE_DISABLED_BY_DEFAULT("cc.debug"),
                "GpuImageDecodeCache::DarkModeFilter", "dark_mode_filter",
@@ -1346,10 +1295,8 @@ void GpuImageDecodeCache::RecordStats() {
 
 void GpuImageDecodeCache::AddToPersistentCache(const DrawImage& draw_image,
                                                scoped_refptr<ImageData> data) {
-  if (features::EnablePurgeGpuImageDecodeCache()) {
-    DCHECK(persistent_cache_.empty() || has_pending_purge_task());
-    PostPurgeOldCacheEntriesTask();
-  }
+  DCHECK(persistent_cache_.empty() || has_pending_purge_task());
+  PostPurgeOldCacheEntriesTask();
 
   WillAddCacheEntry(draw_image);
   persistent_cache_memory_size_ += data->GetTotalSize();
@@ -1429,9 +1376,7 @@ bool GpuImageDecodeCache::TryFlushPendingWork() {
   // fully static, then no flush will come, and no entries will actually be
   // deleted. We only need a shallow flush because no glFlush() is required, we
   // merely need the deletion commands to be processed service-side.
-  if (features::EnablePurgeGpuImageDecodeCache()) {
-    context_->RasterInterface()->ShallowFlushCHROMIUM();
-  }
+  context_->RasterInterface()->ShallowFlushCHROMIUM();
   if (context_->GetLock()) {
     CheckContextLockAcquiredIfNecessary();
     context_->GetLock()->Release();
@@ -1603,8 +1548,6 @@ void GpuImageDecodeCache::OnImageDecodeTaskCompleted(
   // Decode task is complete, remove our reference to it.
   ImageData* image_data = GetImageDataForDrawImage(draw_image, cache_key);
   DCHECK(image_data);
-  UMA_HISTOGRAM_BOOLEAN("Compositing.DecodeLCPCandidateImage.Hardware",
-                        draw_image.paint_image().may_be_lcp_candidate());
   if (task_type == TaskType::kInRaster) {
     image_data->decode.task_map.erase(client_id);
   } else {
@@ -2013,9 +1956,9 @@ void GpuImageDecodeCache::DecodeImageIfNecessary(
   }
 
   if (image_data->IsSpeculativeDecode()) {
-    TRACE_EVENT_INSTANT1(TRACE_DISABLED_BY_DEFAULT("loading"),
-                         "SpeculativeImageDecodeRun", TRACE_EVENT_SCOPE_THREAD,
-                         "image_id", image_data->paint_image_id);
+    TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("loading"),
+                        "SpeculativeImageDecodeRun", "image_id",
+                        image_data->paint_image_id);
   }
   TRACE_EVENT1("cc,benchmark", "GpuImageDecodeCache::DecodeImage",
                "paint_image_id", image_data->paint_image_id);
@@ -2039,17 +1982,11 @@ void GpuImageDecodeCache::DecodeImageIfNecessary(
       const auto info = image_data->GetImageInfo(aux_image);
 
       // Allocate the backing memory for the decode.
-      std::unique_ptr<base::DiscardableMemory> backing_memory;
-      if (base::FeatureList::IsEnabled(
-              features::kNoDiscardableMemoryForGpuDecodePath)) {
-        backing_memory = std::make_unique<HeapDiscardableMemory>(info.size);
-      } else {
-        auto* allocator = base::DiscardableMemoryAllocator::GetInstance();
-        backing_memory =
-            allocator->AllocateLockedDiscardableMemoryWithRetryOrDie(
-                info.size, base::BindOnce(&GpuImageDecodeCache::ClearCache,
-                                          base::Unretained(this)));
-      }
+      auto* allocator = base::DiscardableMemoryAllocator::GetInstance();
+      std::unique_ptr<base::DiscardableMemory> backing_memory =
+          allocator->AllocateLockedDiscardableMemoryWithRetryOrDie(
+              info.size, base::BindOnce(&GpuImageDecodeCache::ClearCache,
+                                        base::Unretained(this)));
 
       // Do the decode.
       if (info.yuva.has_value()) {
@@ -2097,7 +2034,7 @@ void GpuImageDecodeCache::DecodeImageIfNecessary(
       const auto info = image_data->GetImageInfo(aux_image);
       int num_planes = 0;
       if (info.yuva) {
-        num_planes = image_data->info.yuva->numPlanes();
+        num_planes = info.yuva->numPlanes();
       }
       if (info.rgba) {
         num_planes = 1;
@@ -2215,11 +2152,11 @@ void GpuImageDecodeCache::UploadImageIfNecessary(const DrawImage& draw_image,
   // Do not color convert images that are YUV or might be tone mapped.
   if (image_data->info.yuva.has_value() ||
       draw_image.paint_image().HasGainmapInfo() ||
-      ToneMapUtil::UseGlobalToneMapFilter(decoded_color_space.get())) {
+      ToneMapUtil::UseGlobalToneMapFilter(
+          decoded_color_space.get(),
+          draw_image.paint_image().GetHDRMetadata())) {
     target_color_space = nullptr;
   }
-  const gfx::HDRMetadata& hdr_metadata =
-      draw_image.paint_image().GetHDRMetadata();
 
   std::array<ClientImageTransferCacheEntry::Image, kAuxImageCount> image;
   bool has_gainmap = false;
@@ -2255,7 +2192,7 @@ void GpuImageDecodeCache::UploadImageIfNecessary(const DrawImage& draw_image,
                 draw_image.paint_image().GetGainmapInfo(),
                 image_data->needs_mips)
           : ClientImageTransferCacheEntry(image[kAuxImageIndexDefault],
-                                          image_data->needs_mips, hdr_metadata,
+                                          image_data->needs_mips,
                                           target_color_space);
   if (!image_entry.IsValid())
     return;
@@ -2537,11 +2474,10 @@ GpuImageDecodeCache::ImageData* GpuImageDecodeCache::GetImageDataForDrawImage(
     scoped_refptr<ImageData>& image_data = found_in_use->second.image_data;
     if (image_data->IsSpeculativeDecode() && record_speculative_decode_stats) {
       if (!image_data->SpeculativeDecodeHasMatched()) {
-        TRACE_EVENT_INSTANT2(TRACE_DISABLED_BY_DEFAULT("loading"),
-                             "SpeculativeImageDecodeInUseMatch",
-                             TRACE_EVENT_SCOPE_THREAD, "image_id",
-                             image_data->paint_image_id, "raster_mip_level",
-                             key.mip_level());
+        TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("loading"),
+                            "SpeculativeImageDecodeInUseMatch", "image_id",
+                            image_data->paint_image_id, "raster_mip_level",
+                            key.mip_level());
       }
       image_data->RecordSpeculativeDecodeMatch(
           image_data->upload_scale_mip_level);
@@ -2561,22 +2497,20 @@ GpuImageDecodeCache::ImageData* GpuImageDecodeCache::GetImageDataForDrawImage(
       if (image_data->IsSpeculativeDecode() &&
           record_speculative_decode_stats) {
         if (first_match) {
-          TRACE_EVENT_INSTANT2(TRACE_DISABLED_BY_DEFAULT("loading"),
-                               "SpeculativeImageDecodeCompatibleMatch",
-                               TRACE_EVENT_SCOPE_THREAD, "image_id",
-                               image_data->paint_image_id, "raster_mip_level",
-                               key.mip_level());
+          TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("loading"),
+                              "SpeculativeImageDecodeCompatibleMatch",
+                              "image_id", image_data->paint_image_id,
+                              "raster_mip_level", key.mip_level());
         }
       }
       return image_data.get();
     } else {
       if (image_data->IsSpeculativeDecode() &&
           record_speculative_decode_stats) {
-        TRACE_EVENT_INSTANT2(TRACE_DISABLED_BY_DEFAULT("loading"),
-                             "SpeculativeImageDecodeIncompatibleMatch",
-                             TRACE_EVENT_SCOPE_THREAD, "image_id",
-                             image_data->paint_image_id, "raster_mip_level",
-                             key.mip_level());
+        TRACE_EVENT_INSTANT(TRACE_DISABLED_BY_DEFAULT("loading"),
+                            "SpeculativeImageDecodeIncompatibleMatch",
+                            "image_id", image_data->paint_image_id,
+                            "raster_mip_level", key.mip_level());
       }
       RemoveFromPersistentCache(found_persistent);
     }
@@ -2693,15 +2627,6 @@ void GpuImageDecodeCache::TouchCacheEntryForTesting(
   ImageData* image_data = GetImageDataForDrawImage(
       draw_image, InUseCacheKeyFromDrawImage(draw_image));
   image_data->last_use = base::TimeTicks::Now();
-}
-
-void GpuImageDecodeCache::OnMemoryPressure(base::MemoryPressureLevel level) {
-  if (!ImageDecodeCacheUtils::ShouldEvictCaches(level))
-    return;
-
-  base::AutoLock lock(lock_);
-  base::AutoReset<bool> reset(&aggressively_freeing_resources_, true);
-  ReduceCacheUsageLocked();
 }
 
 bool GpuImageDecodeCache::AcquireContextLockForTesting() {

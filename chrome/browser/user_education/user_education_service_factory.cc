@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 
+#include "base/command_line.h"
 #include "base/synchronization/lock.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
@@ -26,6 +27,10 @@
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chromeos/components/mgs/managed_guest_session_utils.h"
+#endif
+
+#if BUILDFLAG(CHROME_FOR_TESTING)
+#include "chrome/browser/chrome_for_testing/config.h"
 #endif
 
 namespace {
@@ -67,10 +72,8 @@ UserEducationServiceFactory::UserEducationServiceFactory()
     : ProfileKeyedServiceFactory(
           "UserEducationService",
           ProfileSelections::Builder()
-              .WithRegular(ProfileSelection::kOriginalOnly)
-              // TODO(crbug.com/40257657): Check if this service is needed in
-              // Guest mode.
-              .WithGuest(ProfileSelection::kOriginalOnly)
+              .WithRegular(ProfileSelection::kOwnInstance)
+              .WithGuest(ProfileSelection::kOwnInstance)
               // The service is needed by the System Profile OTR (that manages
               // the Profile Picker) to control the IPHs displayed in the
               // Profile Picker.
@@ -100,12 +103,10 @@ UserEducationServiceFactory::BuildServiceInstanceForBrowserContextImpl(
                            : CreatePollingIdleObserver(),
       std::make_unique<user_education::UserEducationIdlePolicy>());
 
-  // Possibly install a session observer. This isn't public, since it's
-  // self-contained and mostly for tracking state.
-  if (result->recent_session_tracker()) {
-    result->recent_session_observer_ = CreateRecentSessionObserver(*profile);
-    result->recent_session_observer_->Init(*result->recent_session_tracker());
-  }
+  // Install a session observer. This isn't public, since it's self-contained
+  // and mostly for tracking state.
+  result->recent_session_observer_ = CreateRecentSessionObserver(*profile);
+  result->recent_session_observer_->Init(result->recent_session_tracker());
 
   return result;
 }
@@ -113,15 +114,17 @@ UserEducationServiceFactory::BuildServiceInstanceForBrowserContextImpl(
 // static
 bool UserEducationServiceFactory::ProfileAllowsUserEducation(Profile* profile) {
 #if BUILDFLAG(CHROME_FOR_TESTING)
-  // IPH is always disabled in Chrome for Testing.
-  return false;
-#else
+  if (!chrome_for_testing::IsEnableUserEducationUI()) {
+    return false;
+  }
+#endif
 
   // In order to do user education, the browser must have a UI and not be an
   // "off-the-record" or in a demo or guest mode.
 
-  if (profile->IsIncognitoProfile() || profile->IsGuestSession() ||
-      profiles::IsDemoSession() || profiles::IsChromeAppKioskSession()) {
+  if (profile->IsPrimaryOTRProfileWithRegularParent() ||
+      profile->IsGuestSession() || profiles::IsDemoSession() ||
+      profiles::IsChromeAppKioskSession()) {
     return false;
   }
 
@@ -154,7 +157,6 @@ bool UserEducationServiceFactory::ProfileAllowsUserEducation(Profile* profile) {
   }
 
   return true;
-#endif  // BUILDFLAG(CHROME_FOR_TESTING)
 }
 
 std::unique_ptr<KeyedService>

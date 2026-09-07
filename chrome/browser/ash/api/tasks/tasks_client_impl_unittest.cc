@@ -32,6 +32,7 @@
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "chromeos/ash/components/policy/policy_blocklist_service/ash_policy_blocklist_service_factory.h"
+#include "components/policy/core/browser/url_list/url_list_policy_pref_names.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/services/app_service/public/cpp/app.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
@@ -48,6 +49,7 @@
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/test/test_shared_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -194,7 +196,8 @@ class TasksClientImplIsDisabledByAdminTest : public testing::Test {
   TasksClientImpl CreateClientForProfile(Profile* profile) const {
     return TasksClientImpl(
         profile->GetPrefs(),
-        apps::AppServiceProxyFactory::GetForProfile(profile),
+        &apps::AppServiceProxyFactory::GetForProfile(profile)
+             ->AppRegistryCache(),
         AshPolicyBlocklistServiceFactory::GetForBrowserContext(profile),
         base::BindLambdaForTesting(
             [&](signin::OAuthConsumerId oauth_consumer_id,
@@ -298,7 +301,8 @@ class TasksClientImplTest : public testing::Test {
         /*testing_factories=*/{}, url_loader_factory_);
     client_ = std::make_unique<TasksClientImpl>(
         profile->GetPrefs(),
-        apps::AppServiceProxyFactory::GetForProfile(profile),
+        &apps::AppServiceProxyFactory::GetForProfile(profile)
+             ->AppRegistryCache(),
         AshPolicyBlocklistServiceFactory::GetForBrowserContext(profile),
         create_request_sender_callback, TRAFFIC_ANNOTATION_FOR_TESTS);
 

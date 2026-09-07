@@ -33,6 +33,7 @@
 #include "third_party/blink/renderer/modules/webcodecs/encoded_audio_chunk.h"
 #include "third_party/blink/renderer/platform/audio/audio_utilities.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 
 namespace blink {
 
@@ -89,7 +90,7 @@ AudioDecoderConfig* CopyConfig(const AudioDecoderConfig& config) {
 }
 
 std::optional<media::AudioCodec> TryGetPcmCodec(const String& codec) {
-  String codecs_str = codec.LowerASCII();
+  String codecs_str = codec.ToAsciiLower();
   if (codecs_str == "ulaw") {
     return media::AudioCodec::kPCM_MULAW;
   }
@@ -108,7 +109,7 @@ std::optional<media::AudioCodec> TryGetPcmCodec(const String& codec) {
 }
 
 media::SampleFormat PcmCodecToSampleFormat(const String& codec) {
-  String codecs_str = codec.LowerASCII();
+  String codecs_str = codec.ToAsciiLower();
 
   if (codecs_str == "pcm-u8") {
     return media::SampleFormat::kSampleFormatU8;
@@ -213,15 +214,15 @@ std::optional<media::AudioType> AudioDecoder::IsValidAudioDecoderConfig(
     const AudioDecoderConfig& config,
     String* js_error_message) {
   if (config.numberOfChannels() == 0) {
-    *js_error_message = String::Format(
-        "Invalid channel count; channel count must be non-zero, received %d.",
+    *js_error_message = Format(
+        "Invalid channel count; channel count must be non-zero, received {}.",
         config.numberOfChannels());
     return std::nullopt;
   }
 
   if (config.sampleRate() == 0) {
-    *js_error_message = String::Format(
-        "Invalid sample rate; sample rate must be non-zero, received %d.",
+    *js_error_message = Format(
+        "Invalid sample rate; sample rate must be non-zero, received {}.",
         config.sampleRate());
     return std::nullopt;
   }
@@ -277,17 +278,24 @@ AudioDecoder::MakeMediaAudioDecoderConfig(const ConfigType& config,
       return std::nullopt;
     }
 
+    if (config.codec() == "opus") {
+      // A size of 19 bytes corresponds to the minimum length of an Opus
+      // Identification Header for a standard mono or stereo stream.
+      constexpr size_t kMinDescriptionSize = 19;
+      if (desc_wrapper.size() < kMinDescriptionSize) {
+        *js_error_message = "Invalid config; description is too short.";
+        return std::nullopt;
+      }
+    }
+
     if (!desc_wrapper.empty()) {
       extra_data.assign(base::to_address(desc_wrapper.begin()),
                         base::to_address(desc_wrapper.end()));
     }
   }
 
-  media::ChannelLayout channel_layout =
-      config.numberOfChannels() > 8
-          // GuesschannelLayout() doesn't know how to guess above 8 channels.
-          ? media::CHANNEL_LAYOUT_DISCRETE
-          : media::GuessChannelLayout(config.numberOfChannels());
+  media::ChannelLayoutConfig channel_layout =
+      media::ChannelLayoutConfig::Guess(config.numberOfChannels());
 
   auto encryption_scheme = media::EncryptionScheme::kUnencrypted;
   if (config.hasEncryptionScheme()) {
@@ -311,12 +319,18 @@ AudioDecoder::MakeMediaAudioDecoderConfig(const ConfigType& config,
       return std::nullopt;
     }
     format = PcmCodecToSampleFormat(config.codec());
+
+    // Both FFmpeg and Symphonia exclusively output S16 decoded buffers for ALAW
+    // and MULAW.
+  } else if (audio_type->codec == media::AudioCodec::kPCM_ALAW ||
+             audio_type->codec == media::AudioCodec::kPCM_MULAW) {
+    format = media::SampleFormat::kSampleFormatS16;
   }
 
   media_config.Initialize(audio_type->codec, format, channel_layout,
                           config.sampleRate(), extra_data, encryption_scheme,
-                          base::TimeDelta() /* seek preroll */,
-                          0 /* codec delay */);
+                          /*seek_preroll=*/base::TimeDelta(),
+                          /*codec_delay=*/0);
   if (!media_config.IsValidConfig()) {
     *js_error_message = "Unsupported config.";
     return std::nullopt;
@@ -360,11 +374,11 @@ media::DecoderStatus::Or<AudioDecoder::OutputType*> AudioDecoder::MakeOutput(
           output->sample_rate())) {
     return media::DecoderStatus(
         media::DecoderStatus::Codes::kInvalidArgument,
-        String::Format("Invalid decoded audio output sample rate. Got %u, "
-                       "which is outside [%f, %f]",
-                       output->sample_rate(),
-                       blink::audio_utilities::MinAudioBufferSampleRate(),
-                       blink::audio_utilities::MaxAudioBufferSampleRate())
+        Format("Invalid decoded audio output sample rate. Got {}, which is "
+               "outside [{:f}, {:f}]",
+               output->sample_rate(),
+               blink::audio_utilities::MinAudioBufferSampleRate(),
+               blink::audio_utilities::MaxAudioBufferSampleRate())
             .Ascii());
   }
 
@@ -372,10 +386,9 @@ media::DecoderStatus::Or<AudioDecoder::OutputType*> AudioDecoder::MakeOutput(
       BaseAudioContext::MaxNumberOfChannels()) {
     return media::DecoderStatus(
         media::DecoderStatus::Codes::kInvalidArgument,
-        String::Format("Invalid decoded audio output channel "
-                       "count. Got %u, which exceeds %u",
-                       output->channel_count(),
-                       BaseAudioContext::MaxNumberOfChannels())
+        Format("Invalid decoded audio output channel count. Got {}, which "
+               "exceeds {}",
+               output->channel_count(), BaseAudioContext::MaxNumberOfChannels())
             .Ascii());
   }
 

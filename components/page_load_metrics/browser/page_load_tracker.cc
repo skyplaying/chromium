@@ -14,10 +14,10 @@
 #include "base/feature_list.h"
 #include "base/memory/read_only_shared_memory_region.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/strings/stringprintf.h"
 #include "base/time/default_tick_clock.h"
+#include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "components/page_load_metrics/browser/features.h"
 #include "components/page_load_metrics/browser/observers/assert_page_load_metrics_observer.h"
@@ -239,9 +239,7 @@ internal::PageLoadTrackerPageType CalculatePageType(
              content::FrameType::kFencedFrameRoot) {
     return internal::PageLoadTrackerPageType::kFencedFramesPage;
   }
-  return navigation_handle->GetWebContents()->IsInPreviewMode()
-             ? internal::PageLoadTrackerPageType::kPreviewPrimaryPage
-             : internal::PageLoadTrackerPageType::kPrimaryPage;
+  return internal::PageLoadTrackerPageType::kPrimaryPage;
 }
 
 bool CalculateIsOriginVisit(bool is_first_navigation,
@@ -264,9 +262,7 @@ void RegisterObservers(PageLoadTracker* tracker,
   // orders fail.
   //
   // TODO(b:302999778): Reenable it.
-  if (!tracker->GetWebContents()->IsInPreviewMode()) {
-    tracker->AddObserver(std::make_unique<AssertPageLoadMetricsObserver>());
-  }
+  tracker->AddObserver(std::make_unique<AssertPageLoadMetricsObserver>());
 #endif
   embedder->RegisterObservers(tracker, navigation_handle);
 }
@@ -305,10 +301,14 @@ PageLoadTracker::PageLoadTracker(
       is_origin_visit_(
           CalculateIsOriginVisit(*is_first_navigation_in_web_contents,
                                  navigation_handle->GetPageTransition())),
-      soft_navigation_metrics_(CreateSoftNavigationMetrics()),
+      navigation_scenario_(
+          embedder_interface->GetNavigationScenario(navigation_handle)),
       page_type_(CalculatePageType(navigation_handle)),
       parent_tracker_(std::move(parent_tracker)) {
   DCHECK(!navigation_handle->HasCommitted());
+  if (!started_in_foreground_) {
+    metrics_update_dispatcher_.OnHidden(base::TimeDelta());
+  }
   RegisterObservers(this, embedder_interface, navigation_handle);
   switch (page_type_) {
     case internal::PageLoadTrackerPageType::kPrimaryPage:
@@ -361,21 +361,6 @@ PageLoadTracker::PageLoadTracker(
               navigation_handle, currently_committed_url),
           /*permit_forwarding=*/true);
       break;
-    case internal::PageLoadTrackerPageType::kPreviewPrimaryPage:
-      CHECK_NE(ukm::kInvalidSourceId, source_id_);
-      prerendering_state_ = PrerenderingState::kInPreview;
-      InvokeAndPruneObservers(
-          "PageLoadMetricsObserver::OnPreviewStart",
-          base::BindRepeating(
-              [](content::NavigationHandle* navigation_handle,
-                 const GURL& currently_committed_url,
-                 PageLoadMetricsObserverInterface* observer) {
-                return observer->OnPreviewStart(navigation_handle,
-                                                currently_committed_url);
-              },
-              navigation_handle, currently_committed_url),
-          /*permit_forwarding=*/false);
-      break;
   }
 }
 
@@ -414,6 +399,10 @@ PageLoadTracker::~PageLoadTracker() {
 }
 
 void PageLoadTracker::PageHidden() {
+  base::TimeTicks background_time = base::TimeTicks::Now();
+  ClampBrowserTimestampIfInterProcessTimeTickSkew(&background_time);
+  DCHECK_GE(background_time, navigation_start_);
+
   // Only log the first time we background in a given page load.
   if (!first_background_time_.has_value() ||
       (!back_forward_cache_restores_.empty() &&
@@ -431,26 +420,18 @@ void PageLoadTracker::PageHidden() {
     // where fg = foreground, bg = background. A and B are non prerendered and C
     // is prerendered.
     //
-    // PageShown and PgaeHidden are not called for navigation_start and
-    // actiivation_start; called when the visibility is changed after
+    // PageShown and PageHidden are not called for navigation_start and
+    // activation_start; called when the visibility is changed after
     // navigation_start (resp. activation_start) for non prerendered (resp.
     // prerendered) pages.
     //
     // Here we check that the first background follows some event in foreground.
     if (!first_background_time_.has_value()) {
-      if (prerendering_state_ == PrerenderingState::kNoPrerendering ||
-          prerendering_state_ == PrerenderingState::kInPreview) {
+      if (prerendering_state_ == PrerenderingState::kNoPrerendering) {
         DCHECK_EQ(!started_in_foreground_, first_foreground_time_.has_value());
       } else {
         DCHECK(!first_foreground_time_.has_value());
       }
-    }
-
-    base::TimeTicks background_time = base::TimeTicks::Now();
-    ClampBrowserTimestampIfInterProcessTimeTickSkew(&background_time);
-    DCHECK_GE(background_time, navigation_start_);
-
-    if (!first_background_time_.has_value()) {
       first_background_time_ = background_time;
     }
 
@@ -463,6 +444,8 @@ void PageLoadTracker::PageHidden() {
     }
   }
   visibility_tracker_.OnHidden();
+  metrics_update_dispatcher_.OnHidden(
+      DurationSinceNavigationStartForTime(background_time).value());
   InvokeAndPruneObservers("PageLoadMetricsObserver::OnHidden",
                           base::BindRepeating(
                               [](const mojom::PageLoadTiming* timing,
@@ -474,25 +457,34 @@ void PageLoadTracker::PageHidden() {
 }
 
 void PageLoadTracker::PageShown() {
+  base::TimeTicks foreground_time = base::TimeTicks::Now();
+  ClampBrowserTimestampIfInterProcessTimeTickSkew(&foreground_time);
+  DCHECK_GE(foreground_time, navigation_start_);
+
   // Only log the first time we foreground in a given page load.
   if (!first_foreground_time_.has_value()) {
     // See comment about visibility state transitions in PageHidden.
     //
     // Here we check that the first foreground follows some event in background.
-    if (prerendering_state_ == PrerenderingState::kNoPrerendering ||
-        prerendering_state_ == PrerenderingState::kInPreview) {
+    if (prerendering_state_ == PrerenderingState::kNoPrerendering) {
       DCHECK_EQ(started_in_foreground_, first_background_time_.has_value());
     } else {
-      DCHECK(first_background_time_.has_value());
+      // When a prerendered page is activated in a background tab (e.g.
+      // ctrl+click), PageHidden() is never called because there was no
+      // visible-to-hidden transition. In that case first_background_time_
+      // won't be set. Metrics observers handle this via
+      // GetNonPrerenderingBackgroundStartTiming() which uses activation_start
+      // for background-activated prerenders.
+      DCHECK(first_background_time_.has_value() ||
+             visibility_at_activation_ == PageVisibility::kBackground);
     }
 
-    base::TimeTicks foreground_time = base::TimeTicks::Now();
-    ClampBrowserTimestampIfInterProcessTimeTickSkew(&foreground_time);
-    DCHECK_GE(foreground_time, navigation_start_);
     first_foreground_time_ = foreground_time;
   }
 
   visibility_tracker_.OnShown();
+  metrics_update_dispatcher_.OnShown(
+      DurationSinceNavigationStartForTime(foreground_time).value());
   InvokeAndPruneObservers(
       "PageLoadMetricsObserver::OnShown",
       base::BindRepeating([](PageLoadMetricsObserverInterface* observer) {
@@ -609,9 +601,13 @@ void PageLoadTracker::DidActivatePrerenderedPage(
     case content::Visibility::HIDDEN:
     case content::Visibility::OCCLUDED:
       visibility_at_activation_ = PageVisibility::kBackground;
+      metrics_update_dispatcher_.OnHidden(
+          DurationSinceNavigationStartForTime(base::TimeTicks::Now()).value());
       break;
     case content::Visibility::VISIBLE:
       visibility_at_activation_ = PageVisibility::kForeground;
+      metrics_update_dispatcher_.OnShown(
+          DurationSinceNavigationStartForTime(base::TimeTicks::Now()).value());
       break;
   }
 
@@ -622,19 +618,6 @@ void PageLoadTracker::DidActivatePrerenderedPage(
   base::UmaHistogramEnumeration(
       internal::kPageLoadPrerender2Event,
       internal::PageLoadPrerenderEvent::kPrerenderActivationNavigation);
-}
-
-void PageLoadTracker::DidActivatePreviewedPage(
-    base::TimeTicks activation_time) {
-  CHECK_EQ(prerendering_state_, PrerenderingState::kInPreview);
-  prerendering_state_ = PrerenderingState::kNoPrerendering;
-
-  // We don't keep `activation_time` as `activation_start_` because we measure
-  // preview mode performance as navigation originated rather than activation.
-
-  for (const auto& observer : observers_) {
-    observer->DidActivatePreviewedPage(activation_time);
-  }
 }
 
 void PageLoadTracker::DidCommitSameDocumentNavigation(
@@ -771,6 +754,7 @@ void PageLoadTracker::OnInputEvent(const blink::WebInputEvent& event) {
 
 void PageLoadTracker::FlushMetricsOnAppEnterBackground() {
   metrics_update_dispatcher()->FlushPendingTimingUpdates();
+  metrics_update_dispatcher()->FlushSoftNavigationMetrics();
 
   InvokeAndPruneObservers(
       "PageLoadMetricsObserver::FlushMetricsOnAppEnterBackground",
@@ -787,6 +771,13 @@ void PageLoadTracker::OnLoadedResource(
     const ExtraRequestCompleteInfo& extra_request_complete_info) {
   for (const auto& observer : observers_) {
     observer->OnLoadedResource(extra_request_complete_info);
+  }
+}
+
+void PageLoadTracker::DidLoadResourceFromMemoryCache(
+    const MemoryResourceLoadInfo& memory_resource_load_info) {
+  for (const auto& observer : observers_) {
+    observer->DidLoadResourceFromMemoryCache(memory_resource_load_info);
   }
 }
 
@@ -1114,40 +1105,24 @@ void PageLoadTracker::OnSubframeMetadataChanged(
   }
 }
 
-void PageLoadTracker::OnSoftNavigationChanged(
-    const mojom::SoftNavigationMetrics& new_soft_navigation_metrics) {
-  if (new_soft_navigation_metrics.Equals(*soft_navigation_metrics_)) {
-    return;
-  }
-
-  // TODO(crbug.com/40065440): For soft navigation detections, the count and
-  // start time should be monotonically increasing and navigation id different
-  // each time. But we do see check failures on
-  // soft_navigation_metrics.count >= soft_navigation_metrics_->count when this
-  // OnSoftNavigationChanged is only invoked by soft navigation detection.
-  // we should investigate this issue.
-
+void PageLoadTracker::OnSoftNavigationFirstContentfulPaint(
+    const mojom::SoftNavigationMetrics& soft_navigation_metrics) {
   for (const auto& observer : observers_) {
-    observer->OnSoftNavigationUpdated(new_soft_navigation_metrics);
+    observer->OnSoftNavigationFirstContentfulPaint(soft_navigation_metrics);
   }
-
-  largest_contentful_paint_handler_.UpdateSoftNavigationLargestContentfulPaint(
-      *new_soft_navigation_metrics.largest_contentful_paint);
-
-  // Reset the soft_navigation_interval_interaction_to_next_paint_calculator_
-  // when a new soft nav comes in.
-  if (new_soft_navigation_metrics.count > soft_navigation_metrics_->count) {
-    metrics_update_dispatcher_
-        .ResetSoftNavigationIntervalInteractionToNextPaintCalculator();
-    metrics_update_dispatcher_.ResetSoftNavigationIntervalLayoutShift();
-  }
-
-  soft_navigation_metrics_ = new_soft_navigation_metrics.Clone();
 }
 
-void PageLoadTracker::OnPrefetchLikely() {
+void PageLoadTracker::OnSoftNavigationCompleted(
+    const SoftNavigationData& soft_navigation_data) {
   for (const auto& observer : observers_) {
-    observer->OnPrefetchLikely();
+    observer->OnSoftNavigationCompleted(soft_navigation_data);
+  }
+}
+
+void PageLoadTracker::OnSoftNavigationLargestContentfulPaint(
+    uint64_t num_soft_lcps) {
+  for (const auto& observer : observers_) {
+    observer->OnSoftNavigationLargestContentfulPaint(num_soft_lcps);
   }
 }
 
@@ -1156,14 +1131,6 @@ void PageLoadTracker::UpdateFeaturesUsage(
     const std::vector<blink::UseCounterFeature>& new_features) {
   for (const auto& observer : observers_) {
     observer->OnFeaturesUsageObserved(rfh, new_features);
-  }
-}
-
-void PageLoadTracker::SetUpSharedMemoryForDroppedFrames(
-    base::ReadOnlySharedMemoryRegion dropped_frames_memory) {
-  DCHECK(dropped_frames_memory.IsValid());
-  for (auto& observer : observers_) {
-    observer->SetUpSharedMemoryForDroppedFrames(dropped_frames_memory);
   }
 }
 
@@ -1184,12 +1151,9 @@ void PageLoadTracker::UpdateFrameCpuTiming(content::RenderFrameHost* rfh,
   }
 }
 
-void PageLoadTracker::OnMainFrameIntersectionRectChanged(
-    content::RenderFrameHost* rfh,
-    const gfx::Rect& main_frame_intersection_rect) {
+void PageLoadTracker::OnMainFrameRectChanged(const gfx::Rect& main_frame_rect) {
   for (const auto& observer : observers_) {
-    observer->OnMainFrameIntersectionRectChanged(rfh,
-                                                 main_frame_intersection_rect);
+    observer->OnMainFrameRectChanged(main_frame_rect);
   }
 }
 
@@ -1242,6 +1206,9 @@ std::optional<base::TimeDelta> PageLoadTracker::GetTimeToFirstForeground()
 const PageLoadMetricsObserverDelegate::BackForwardCacheRestore&
 PageLoadTracker::GetBackForwardCacheRestore(size_t index) const {
   return back_forward_cache_restores_[index];
+}
+size_t PageLoadTracker::GetNumBackForwardCacheRestores() const {
+  return back_forward_cache_restores_.size();
 }
 
 bool PageLoadTracker::StartedInForeground() const {
@@ -1321,27 +1288,19 @@ const NormalizedCLSData& PageLoadTracker::GetNormalizedCLSData(
   return metrics_update_dispatcher_.normalized_cls_data(bfcache_strategy);
 }
 
-const NormalizedCLSData&
-PageLoadTracker::GetSoftNavigationIntervalNormalizedCLSData() const {
-  return metrics_update_dispatcher_
-      .soft_navigation_interval_normalized_layout_shift();
-}
-
 const InteractionToNextPaintCalculator&
 PageLoadTracker::GetInteractionToNextPaintCalculator() const {
   return metrics_update_dispatcher_.interaction_to_next_paint_calculator();
 }
 
-const InteractionToNextPaintCalculator&
-PageLoadTracker::GetSoftNavigationIntervalInteractionToNextPaintCalculator()
-    const {
-  return metrics_update_dispatcher_
-      .soft_navigation_interval_interaction_to_next_paint_calculator();
-}
-
 const std::optional<blink::SubresourceLoadMetrics>&
 PageLoadTracker::GetSubresourceLoadMetrics() const {
   return metrics_update_dispatcher_.subresource_load_metrics();
+}
+
+const mojom::FontLoadingMetricsPtr& PageLoadTracker::GetFontLoadingMetrics()
+    const {
+  return metrics_update_dispatcher_.font_loading_metrics();
 }
 
 const PageRenderData& PageLoadTracker::GetMainFrameRenderData() const {
@@ -1374,11 +1333,6 @@ ukm::SourceId PageLoadTracker::GetPageUkmSourceId() const {
   return source_id_;
 }
 
-mojom::SoftNavigationMetrics& PageLoadTracker::GetSoftNavigationMetrics()
-    const {
-  return *soft_navigation_metrics_;
-}
-
 ukm::SourceId PageLoadTracker::GetUkmSourceIdForSameDocumentNavigation(
     base::UnguessableToken same_document_metrics_token) const {
   auto it = source_id_by_same_document_metrics_token_.find(
@@ -1391,6 +1345,10 @@ ukm::SourceId PageLoadTracker::GetUkmSourceIdForSameDocumentNavigation(
 
 bool PageLoadTracker::IsFirstNavigationInWebContents() const {
   return *is_first_navigation_in_web_contents_;
+}
+
+NavigationScenario PageLoadTracker::GetNavigationScenario() const {
+  return navigation_scenario_;
 }
 
 bool PageLoadTracker::IsOriginVisit() const {
@@ -1414,6 +1372,8 @@ void PageLoadTracker::RecordLinkNavigation() {
 }
 
 void PageLoadTracker::OnEnterBackForwardCache() {
+  metrics_update_dispatcher_.FlushPendingTimingUpdates();
+  metrics_update_dispatcher_.FlushSoftNavigationMetrics();
   // In case of BackForwardCache, invoke and update the
   // PageLoadMetricsUpdateDispatcher before the page is hidden to enable
   // recording metrics that requires the page to be in foreground before
@@ -1472,15 +1432,6 @@ void PageLoadTracker::OnSharedStorageSelectURLCalled() {
   }
 }
 
-void PageLoadTracker::OnAdAuctionComplete(bool is_server_auction,
-                                          bool is_on_device_auction,
-                                          content::AuctionResult result) {
-  for (const auto& observer : observers_) {
-    observer->OnAdAuctionComplete(is_server_auction, is_on_device_auction,
-                                  result);
-  }
-}
-
 void PageLoadTracker::UpdateMetrics(
     content::RenderFrameHost* render_frame_host,
     mojom::PageLoadTimingPtr new_timing,
@@ -1492,20 +1443,27 @@ void PageLoadTracker::UpdateMetrics(
     std::vector<mojom::EventTimingPtr> event_timings,
     const std::optional<blink::SubresourceLoadMetrics>&
         subresource_load_metrics,
-    mojom::SoftNavigationMetricsPtr soft_navigation_metrics) {
+    std::vector<mojom::SoftNavigationMetricsPtr> soft_navigation_metrics,
+    std::vector<mojom::LargestContentfulPaintTimingPtr>
+        soft_largest_contentful_paint,
+    mojom::FontLoadingMetricsPtr font_loading_metrics) {
   if (parent_tracker_) {
     parent_tracker_->UpdateMetrics(
         render_frame_host, new_timing.Clone(), new_metadata.Clone(), features,
         resources, render_data.Clone(), cpu_timing.Clone(),
         mojo::Clone(event_timings), subresource_load_metrics,
-        soft_navigation_metrics.Clone());
+        mojo::Clone(soft_navigation_metrics),
+        mojo::Clone(soft_largest_contentful_paint),
+        font_loading_metrics.Clone());
   }
 
   metrics_update_dispatcher_.UpdateMetrics(
       render_frame_host, std::move(new_timing), std::move(new_metadata),
       std::move(features), resources, std::move(render_data),
       std::move(cpu_timing), std::move(event_timings), subresource_load_metrics,
-      std::move(soft_navigation_metrics), page_type_);
+      std::move(soft_navigation_metrics),
+      std::move(soft_largest_contentful_paint), std::move(font_loading_metrics),
+      page_type_);
 }
 
 void PageLoadTracker::AddCustomUserTimings(

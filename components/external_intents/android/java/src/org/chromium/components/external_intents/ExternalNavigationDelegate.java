@@ -161,20 +161,10 @@ public interface ExternalNavigationDelegate {
     void returnAsActivityResult(GURL url);
 
     /**
-     * Records the scheme of the external navigation if this is likely a CCT launched for auth
-     * purposes.
-     *
-     * @param url The {@link GURL} of the external navigation.
-     */
-    void maybeRecordExternalNavigationSchemeHistogram(GURL url);
-
-    /**
      * Records metrics relevant to password saving in CCTs if the recorder exists. A recorder might
      * not exist if there was no form submission preceding the external navigation.
      */
     void notifyCctPasswordSavingRecorderOfExternalNavigation();
-
-    void reportIntentToSafeBrowsing(Intent intent);
 
     /**
      * Returns an intent that targets the embedder application if opening the url in incognito
@@ -209,24 +199,30 @@ public interface ExternalNavigationDelegate {
     boolean shouldSelfNavigationLaunchAsMultipleTask(ExternalNavigationParams params);
 
     /**
-     * Returns whether an app should be set for the current page to be opened by the user on demand
-     * at a later time.
-     */
-    boolean shouldSetAppForCurrentPage();
-
-    /**
-     * Set the app for the current page and stay in the embedder app. The provided runnable is going
-     * to be used to open the current page in the app when the user requests it.
+     * Sets the {@link ExternalNavigationHelper} to use.
      *
-     * @param resolveInfo The {@link ResolveInfo} to retrieve the name and icon for the app that
-     *     will open the page, null if multiple apps can open the page.
-     * @param openInApp A {@link Runnable} to be run to open the current page in the app.
+     * @param helper The {@link ExternalNavigationHelper} to set.
      */
-    void setAppForCurrentPage(@Nullable ResolveInfo resolveInfo, Runnable openInApp);
+    void setExternalNavigationHelper(ExternalNavigationHelper helper);
 
     /**
-     * Clears the app set for the page. This should be called when the app becomes invalid for the
-     * current page, e.g. navigation to another domain.
+     * Returns whether the external navigation should be allowed for HTTP protocols. If this returns
+     * true, normal external navigation checks will continue. If this returns false, the navigation
+     * will be kept inside the browser to be opened by the user on demand at a later time.
+     *
+     * @param url The {@link GURL} of the current page.
      */
-    void clearAppForCurrentPage();
+    boolean allowExternalNavigationForHttpProtocols(GURL url);
+
+    /**
+     * Returns whether the given URL is within the scope of the current PWA/TWA.
+     *
+     * @param url The {@link GURL} to check.
+     */
+    default boolean isUrlInPwaScope(GURL url) {
+        return false;
+    }
+
+    /** Reparents the tab associated with this delegate to a new instance of the same PWA. */
+    default void reparentTabToSamePwa() {}
 }

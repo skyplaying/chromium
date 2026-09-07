@@ -18,6 +18,7 @@
 #import "components/signin/public/identity_manager/identity_manager.h"
 #import "components/strings/grit/components_strings.h"
 #import "components/ukm/ios/ukm_url_recorder.h"
+#import "ios/chrome/browser/app_bar/ui/app_bar_constants.h"
 #import "ios/chrome/browser/authentication/ui_bundled/re_signin_infobar_delegate.h"
 #import "ios/chrome/browser/bookmarks/ui_bundled/home/bookmarks_coordinator.h"
 #import "ios/chrome/browser/browser_content/ui_bundled/browser_content_view_controller.h"
@@ -31,21 +32,23 @@
 #import "ios/chrome/browser/default_browser/promo/non_modal/coordinator/default_promo_non_modal_presentation_delegate.h"
 #import "ios/chrome/browser/discover_feed/model/feed_constants.h"
 #import "ios/chrome/browser/first_run/public/first_run_util.h"
+#import "ios/chrome/browser/fullscreen/model/fullscreen_browser_agent.h"
+#import "ios/chrome/browser/fullscreen/model/fullscreen_browser_agent_observer_bridge.h"
+#import "ios/chrome/browser/fullscreen/public/fullscreen_metrics.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_animator.h"
-#import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_reason.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_ui_element.h"
 #import "ios/chrome/browser/fullscreen/ui_bundled/fullscreen_ui_updater.h"
-#import "ios/chrome/browser/incognito_reauth/ui_bundled/features.h"
 #import "ios/chrome/browser/incognito_reauth/ui_bundled/incognito_reauth_constants.h"
 #import "ios/chrome/browser/incognito_reauth/ui_bundled/incognito_reauth_scene_agent.h"
 #import "ios/chrome/browser/incognito_reauth/ui_bundled/incognito_reauth_view.h"
-#import "ios/chrome/browser/intelligence/bwg/utils/bwg_constants.h"
+#import "ios/chrome/browser/intelligence/bwg/utils/gemini_constants.h"
 #import "ios/chrome/browser/intelligence/features/features.h"
 #import "ios/chrome/browser/intents/model/intents_donation_helper.h"
 #import "ios/chrome/browser/main_content/ui_bundled/main_content_ui.h"
 #import "ios/chrome/browser/main_content/ui_bundled/main_content_ui_broadcasting_util.h"
 #import "ios/chrome/browser/main_content/ui_bundled/main_content_ui_state.h"
 #import "ios/chrome/browser/main_content/ui_bundled/web_scroll_view_main_content_ui_forwarder.h"
+#import "ios/chrome/browser/metrics/model/activity_reporter.h"
 #import "ios/chrome/browser/metrics/model/tab_usage_recorder_browser_agent.h"
 #import "ios/chrome/browser/ntp/model/new_tab_page_util.h"
 #import "ios/chrome/browser/ntp/ui_bundled/logo_animation_controller.h"
@@ -53,12 +56,14 @@
 #import "ios/chrome/browser/omnibox/public/omnibox_ui_features.h"
 #import "ios/chrome/browser/popup_menu/coordinator/popup_menu_coordinator.h"
 #import "ios/chrome/browser/reading_list/model/reading_list_browser_agent.h"
+#import "ios/chrome/browser/shared/coordinator/layout_guide/layout_guide_util.h"
+#import "ios/chrome/browser/shared/coordinator/scene/state/scene_layout_state.h"
 #import "ios/chrome/browser/shared/model/application_context/application_context.h"
 #import "ios/chrome/browser/shared/model/url/chrome_url_constants.h"
 #import "ios/chrome/browser/shared/model/web_state_list/web_state_list.h"
 #import "ios/chrome/browser/shared/public/commands/browser_coordinator_commands.h"
-#import "ios/chrome/browser/shared/public/commands/bwg_commands.h"
 #import "ios/chrome/browser/shared/public/commands/find_in_page_commands.h"
+#import "ios/chrome/browser/shared/public/commands/gemini_commands.h"
 #import "ios/chrome/browser/shared/public/commands/help_commands.h"
 #import "ios/chrome/browser/shared/public/commands/omnibox_commands.h"
 #import "ios/chrome/browser/shared/public/commands/popup_menu_commands.h"
@@ -68,9 +73,11 @@
 #import "ios/chrome/browser/shared/public/commands/text_zoom_commands.h"
 #import "ios/chrome/browser/shared/public/commands/toolbar_commands.h"
 #import "ios/chrome/browser/shared/public/features/features.h"
+#import "ios/chrome/browser/shared/ui/util/layout_guide_names.h"
 #import "ios/chrome/browser/shared/ui/util/named_guide.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/shared/ui/util/url_with_title.h"
+#import "ios/chrome/browser/shared/ui/util/util_swift.h"
 #import "ios/chrome/browser/side_swipe/ui_bundled/card_swipe_view_delegate.h"
 #import "ios/chrome/browser/side_swipe/ui_bundled/side_swipe_coordinator.h"
 #import "ios/chrome/browser/side_swipe/ui_bundled/side_swipe_mediator.h"
@@ -83,12 +90,11 @@
 #import "ios/chrome/browser/tabs/ui_bundled/background_tab_animation_view.h"
 #import "ios/chrome/browser/tabs/ui_bundled/foreground_tab_animation_view.h"
 #import "ios/chrome/browser/tabs/ui_bundled/switch_to_tab_animation_view.h"
-#import "ios/chrome/browser/toolbar/coordinator/toolbar_coordinator.h"
+#import "ios/chrome/browser/toolbar/coordinator/main_toolbar_coordinator.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/accessory/toolbar_accessory_presenter.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/buttons/toolbar_configuration.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/fullscreen/toolbars_size.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/fullscreen/toolbars_size_broadcasting_util.h"
-#import "ios/chrome/browser/toolbar/legacy/ui_bundled/public/omnibox_position_util.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_browser_agent.h"
 #import "ios/chrome/browser/url_loading/model/url_loading_params.h"
 #import "ios/chrome/browser/voice/ui_bundled/voice_search_notification_names.h"
@@ -102,7 +108,6 @@
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
 #import "ios/chrome/common/ui/util/ui_util.h"
 #import "ios/chrome/grit/ios_strings.h"
-#import "ios/public/provider/chrome/browser/bwg/bwg_api.h"
 #import "ios/public/provider/chrome/browser/fullscreen/fullscreen_api.h"
 #import "ios/public/provider/chrome/browser/voice_search/voice_search_controller.h"
 #import "ios/web/public/ui/crw_web_view_proxy.h"
@@ -126,8 +131,10 @@ enum HeaderBehaviour {
 // dynamic island visible.
 const CGFloat kTopDynamicIslandInset = 24;
 
-// The animation duration of focusing/defocusing the multiline omnibox.
-const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
+// Returns true if Chrome Next IA layout and full-screen refactoring are active.
+bool IsFullscreenNextIAEnabled() {
+  return IsFullscreenRefactoringEnabled() && IsChromeNextIaEnabled();
+}
 
 }  // namespace
 
@@ -174,9 +181,11 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
 
 // Note other delegates defined in the Delegates category header.
 @interface BrowserViewController () <CardSwipeViewDelegate,
+                                     FullscreenBrowserAgentObserving,
                                      FullscreenUIElement,
                                      LogoAnimationControllerOwnerOwner,
                                      MainContentUI,
+                                     SceneLayoutStateObserver,
                                      SideSwipeUIControllerDelegate,
                                      UIGestureRecognizerDelegate> {
   // Identifier for each animation of an NTP opening.
@@ -195,6 +204,7 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
   // YES if Voice Search should be started when the new tab animation is
   // finished.
   BOOL _startVoiceSearchAfterNewTabAnimation;
+  ActivityReporterWithIncognito* _activityReporter;
 
   // Whether or not -shutdown has been called.
   BOOL _isShutdown;
@@ -231,6 +241,13 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
   // The updater that adjusts the toolbar's layout for fullscreen events.
   std::unique_ptr<FullscreenUIUpdater> _fullscreenUIUpdater;
 
+  // Bridge to observe the FullscreenBrowserAgent.
+  std::unique_ptr<FullscreenBrowserAgentObserverBridge>
+      _fullscreenBrowserAgentObserverBridge;
+
+  // The fullscreen browser agent.
+  raw_ptr<FullscreenBrowserAgent> _fullscreenBrowserAgent;
+
   // The service used to load url parameters in current or new tab.
   raw_ptr<UrlLoadingBrowserAgent> _urlLoadingBrowserAgent;
 
@@ -247,12 +264,25 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
   // Used to get the layout guide center.
   LayoutGuideCenter* _layoutGuideCenter;
 
+  // Left and right constraints for the toolbars. Physical left/right anchors
+  // are used instead of leading/trailing because `AppBarPosition::kLeft` and
+  // `kRight` refer to physical screen edges that do not flip in RTL.
+  NSLayoutConstraint* _toolbarLeftConstraint;
+  NSLayoutConstraint* _toolbarRightConstraint;
+
   // Whether the Lens Overlay is currently active and visible for the browser
   // view.
   BOOL _lensOverlayVisible;
 
+  // Tracks if the secondary toolbar is currently above the keyboard.
+  BOOL _isSecondaryToolbarAboveKeyboard;
+
   __weak id<BrowserCoordinatorCommands> _browserCoordinatorHandler;
   __weak id<ToolbarCommands> _toolbarHandler;
+
+  NSArray<NSLayoutConstraint*>* _NTPConstraints;
+  // The last recorded view size to avoid redundant updates on layout.
+  CGSize _lastViewSize;
 }
 
 // Activates/deactivates the object. This will enable/disable the ability for
@@ -263,8 +293,6 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
 // Browser content view controller.
 @property(nonatomic, strong)
     BrowserContentViewController* browserContentViewController;
-// Invisible button used to dismiss the keyboard.
-@property(nonatomic, strong) UIButton* typingShield;
 // The visibility state of the browser view. Value will be set to `kVisible` on
 // viewDidAppear and to `kNotInViewHierarchy` on viewWillDisappear.
 @property(nonatomic, assign) BrowserViewVisibilityState visibilityState;
@@ -315,7 +343,7 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
 @property(nonatomic, assign) FullscreenController* fullscreenController;
 
 // Coordinator of primary and secondary toolbars.
-@property(nonatomic, strong) ToolbarCoordinator* toolbarCoordinator;
+@property(nonatomic, strong) MainToolbarCoordinator* toolbarCoordinator;
 
 // Vertical offset for the primary toolbar, used for fullscreen.
 @property(nonatomic, strong) NSLayoutConstraint* primaryToolbarOffsetConstraint;
@@ -324,9 +352,12 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
 // Height constraint for the secondary toolbar.
 @property(nonatomic, strong)
     NSLayoutConstraint* secondaryToolbarHeightConstraint;
-// Keyboard height stored for the secondary toolbar, used when updating the
-// multiline omnibox height while editing.
-@property(nonatomic, assign) CGFloat secondaryToolbarKeyboardHeight;
+// Constraint anchoring the secondary toolbar to the bottom of the view.
+@property(nonatomic, strong)
+    NSLayoutConstraint* secondaryToolbarRegularBottomConstraint;
+// Constraint anchoring the secondary toolbar to the top of the App Bar.
+@property(nonatomic, strong)
+    NSLayoutConstraint* secondaryToolbarAppBarBottomConstraint;
 // Current Fullscreen progress for the footers.
 @property(nonatomic, assign) CGFloat footerFullscreenProgress;
 // Height of the header view.
@@ -348,6 +379,11 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
 // Whether the content area is currently blocked by another view.
 @property(nonatomic, readonly, getter=isContentAreaObstructed)
     BOOL contentAreaObstructed;
+
+// When YES, the Fullscreen progress may be dirty and should be applied at
+// next opportunity even if it appears to have not changed. This is only
+// used for the legacy fullscreen implementation.
+@property(nonatomic, assign) BOOL fullscreenProgressDirty;
 
 @end
 
@@ -386,6 +422,8 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
     self.findInPageCommandsHandler = dependencies.findInPageCommandsHandler;
     self.geminiHandler = dependencies.geminiHandler;
     _isOffTheRecord = dependencies.isOffTheRecord;
+    _activityReporter = [[ActivityReporterWithIncognito alloc]
+        initWithDomain:ActivityReportDomainTab];
     _visibilityState = BrowserViewVisibilityState::kNotInViewHierarchy;
     _urlLoadingBrowserAgent = dependencies.urlLoadingBrowserAgent;
     _tabUsageRecorderBrowserAgent = dependencies.tabUsageRecorderBrowserAgent;
@@ -398,6 +436,13 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
     self.inNewTabAnimation = NO;
     self.fullscreenController = dependencies.fullscreenController;
     _footerFullscreenProgress = 1.0;
+
+    if (IsFullscreenRefactoringEnabled()) {
+      _fullscreenBrowserAgent = dependencies.fullscreenBrowserAgent;
+      _fullscreenBrowserAgentObserverBridge =
+          std::make_unique<FullscreenBrowserAgentObserverBridge>(
+              self, dependencies.fullscreenBrowserAgent);
+    }
 
     // When starting the browser with an open tab, it is necessary to reset the
     // clipsToBounds property of the WKWebView so the page can bleed behind the
@@ -418,46 +463,6 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
 
 - (UIView*)contentArea {
   return self.browserContentViewController.view;
-}
-
-- (void)setInfobarBannerOverlayContainerViewController:
-    (UIViewController*)infobarBannerOverlayContainerViewController {
-  if (_infobarBannerOverlayContainerViewController ==
-      infobarBannerOverlayContainerViewController) {
-    return;
-  }
-
-  _infobarBannerOverlayContainerViewController =
-      infobarBannerOverlayContainerViewController;
-  if (!_infobarBannerOverlayContainerViewController) {
-    return;
-  }
-
-  DCHECK_EQ(_infobarBannerOverlayContainerViewController.parentViewController,
-            self);
-  DCHECK_EQ(_infobarBannerOverlayContainerViewController.view.superview,
-            self.view);
-  [self updateOverlayContainerOrder];
-}
-
-- (void)setInfobarModalOverlayContainerViewController:
-    (UIViewController*)infobarModalOverlayContainerViewController {
-  if (_infobarModalOverlayContainerViewController ==
-      infobarModalOverlayContainerViewController) {
-    return;
-  }
-
-  _infobarModalOverlayContainerViewController =
-      infobarModalOverlayContainerViewController;
-  if (!_infobarModalOverlayContainerViewController) {
-    return;
-  }
-
-  DCHECK_EQ(_infobarModalOverlayContainerViewController.parentViewController,
-            self);
-  DCHECK_EQ(_infobarModalOverlayContainerViewController.view.superview,
-            self.view);
-  [self updateOverlayContainerOrder];
 }
 
 - (const BrowserViewVisibilityStateChangedCallback&)
@@ -495,6 +500,14 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
 }
 
 - (void)setBroadcasting:(BOOL)broadcasting {
+  if (IsFullscreenRefactoringEnabled()) {
+    if (broadcasting && _fullscreenBrowserAgent) {
+      _fullscreenBrowserAgent->InvalidateInsetRange();
+    }
+    // Broadcasting is not needed for FullscreenRefactoring.
+    return;
+  }
+
   if (_broadcasting == broadcasting) {
     return;
   }
@@ -518,9 +531,12 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
            webStateList:self.webStateList];
     StartBroadcastingMainContentUI(self, broadcaster);
 
-    _fullscreenUIUpdater =
-        std::make_unique<FullscreenUIUpdater>(self.fullscreenController, self);
-    [self updateForFullscreenProgress:self.fullscreenController->GetProgress()];
+    if (!IsFullscreenRefactoringEnabled()) {
+      _fullscreenUIUpdater = std::make_unique<FullscreenUIUpdater>(
+          self.fullscreenController, self);
+      [self
+          updateForFullscreenProgress:self.fullscreenController->GetProgress()];
+    }
   } else {
     if (!IsRefactorToolbarsSize()) {
       StopBroadcastingToolbarsSize(broadcaster);
@@ -586,11 +602,17 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
   if (_isShutdown) {
     return UIEdgeInsetsZero;
   }
-  UIEdgeInsets safeArea = self.safeAreaProvider.safeArea;
 
-  return UIEdgeInsetsEqualToEdgeInsets(safeArea, UIEdgeInsetsZero)
-             ? self.view.safeAreaInsets
-             : safeArea;
+  UIEdgeInsets safeArea = self.safeAreaProvider.safeArea;
+  if (!UIEdgeInsetsEqualToEdgeInsets(safeArea, UIEdgeInsetsZero)) {
+    return safeArea;
+  }
+
+  if ([self isViewLoaded]) {
+    return self.view.safeAreaInsets;
+  }
+
+  return UIEdgeInsetsZero;
 }
 
 - (CGFloat)headerHeight {
@@ -638,19 +660,55 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
     return;
   }
   _topToolbarInset = inset;
+  self.primaryToolbarOffsetConstraint.constant = inset;
   [self updateToolbarState];
   [self.view setNeedsLayout];
 }
 
-#pragma mark - Public methods
-
-- (void)shieldWasTapped:(id)sender {
-  [_browserCoordinatorHandler hideComposebox];
+- (void)setLayoutState:(SceneLayoutState*)layoutState {
+  if (_layoutState == layoutState) {
+    return;
+  }
+  [_layoutState removeObserver:self];
+  _layoutState = layoutState;
+  [_layoutState addObserver:self];
+  if (layoutState) {
+    [self updateToolbarConstraints];
+    [self updateSecondaryToolbarBottomConstraint];
+  }
 }
+
+- (void)setLensOverlayStateNotifier:
+    (LensOverlayStateNotifier*)lensOverlayStateNotifier {
+  if (_lensOverlayStateNotifier == lensOverlayStateNotifier) {
+    return;
+  }
+  [_lensOverlayStateNotifier removeObserver:self];
+  _lensOverlayStateNotifier = lensOverlayStateNotifier;
+  [_lensOverlayStateNotifier addObserver:self];
+}
+
+#pragma mark - SceneLayoutStateObserver
+
+- (void)layoutState:(SceneLayoutState*)layoutState
+    didChangeAppBarPosition:(AppBarPosition)appBarPosition {
+  if (!self.view.window) {
+    return;
+  }
+
+  [self updateToolbarConstraints];
+  [self updateSecondaryToolbarBottomConstraint];
+  [self animateTransition];
+}
+
+#pragma mark - Public methods
 
 - (void)openNewTabFromOriginPoint:(CGPoint)originPoint
                      focusOmnibox:(BOOL)focusOmnibox
                     inheritOpener:(BOOL)inheritOpener {
+  if (self.inNewTabAnimation) {
+    return;
+  }
   const BOOL offTheRecord = _isOffTheRecord;
   ProceduralBlock oldForegroundTabWasAddedCompletionBlock =
       self.foregroundTabWasAddedCompletionBlock;
@@ -738,6 +796,7 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
     }
   }
   [self setNeedsStatusBarAppearanceUpdate];
+  [self updateTabActivityReporting];
 }
 
 // TODO(crbug.com/40842434): Federate ClearPresentedState.
@@ -747,6 +806,8 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
   [_bookmarksCoordinator dismissBookmarkModalControllerAnimated:NO];
   if (dismissOmnibox) {
     [_browserCoordinatorHandler hideComposebox];
+  } else {
+    [_browserCoordinatorHandler dismissMultimodalActionsMenu];
   }
   [self.helpHandler hideAllHelpBubbles];
   [_voiceSearchController dismissMicPermissionHelp];
@@ -794,7 +855,7 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
     self.inNewTabAnimation = YES;
     // Exit fullscreen if needed.
     self.fullscreenController->ExitFullscreen(
-        FullscreenExitReason::kForcedByCode);
+        FullscreenModeTransitionTrigger::kForcedByCode);
     const CGFloat kAnimatedViewSize = 50;
     BackgroundTabAnimationView* animatedView =
         [[BackgroundTabAnimationView alloc]
@@ -817,14 +878,25 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
   DCHECK(!_isShutdown);
   _isShutdown = YES;
 
+  _fullscreenUIUpdater = nullptr;
+  _fullscreenController = nullptr;
+  _fullscreenBrowserAgentObserverBridge = nullptr;
+  _fullscreenBrowserAgent = nullptr;
+
   [self.contentArea removeGestureRecognizer:self.contentAreaGestureRecognizer];
 
   [self.toolbarCoordinator stop];
   self.toolbarCoordinator = nil;
+  _toolbarHandler = nil;
+  [self cleanUpToolbarConstraints];
   _sideSwipeCoordinator = nil;
   [_voiceSearchController disconnect];
+  [_layoutState removeObserver:self];
+  [_lensOverlayStateNotifier removeObserver:self];
+  _layoutState = nil;
   [[NSNotificationCenter defaultCenter] removeObserver:self];
   _bookmarksCoordinator = nil;
+  self.popupMenuCoordinator = nil;
 
   // Clears the pointer to C++ objects.
   _urlLoadingBrowserAgent = nullptr;
@@ -879,6 +951,9 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
 #pragma mark - UIViewController
 
 - (void)viewDidLoad {
+  if (IsFullscreenRefactoringEnabled()) {
+    self.view.translatesAutoresizingMaskIntoConstraints = NO;
+  }
   [self registerNotifications];
 
   CGRect initialViewsRect = self.view.bounds;
@@ -887,30 +962,17 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
 
   self.contentArea.frame = initialViewsRect;
 
-  // Create the typing shield.  It is initially hidden, and is made visible when
-  // the keyboard appears.
-  if (!IsComposeboxIpadEnabled()) {
-    self.typingShield = [[UIButton alloc] initWithFrame:initialViewsRect];
-    self.typingShield.hidden = YES;
-    self.typingShield.autoresizingMask = initialViewAutoresizing;
-    self.typingShield.accessibilityIdentifier = @"Typing Shield";
-    self.typingShield.accessibilityLabel = l10n_util::GetNSString(IDS_CANCEL);
-    if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET) {
-      self.typingShield.backgroundColor =
-          [UIColor colorNamed:kOmniboxPopoutOverlayColor];
-    }
-    [self.typingShield addTarget:self
-                          action:@selector(shieldWasTapped:)
-                forControlEvents:UIControlEventTouchUpInside];
-  }
   self.view.autoresizingMask = initialViewAutoresizing;
 
   [self addChildViewController:self.browserContentViewController];
-  [self.view addSubview:self.contentArea];
-  [self.browserContentViewController didMoveToParentViewController:self];
-  if (!IsComposeboxIpadEnabled()) {
-    [self.view addSubview:self.typingShield];
+  if (IsFullscreenRefactoringEnabled()) {
+    self.contentArea.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:self.contentArea];
+    AddSameConstraints(self.view, self.contentArea);
+  } else {
+    [self.view addSubview:self.contentArea];
   }
+  [self.browserContentViewController didMoveToParentViewController:self];
   [super viewDidLoad];
 
   [self buildToolbarAndTabStrip];
@@ -940,14 +1002,6 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
     [weakSelf updateUIOnTraitChange:previousCollection];
   };
   [self registerForTraitChanges:traits withHandler:handler];
-
-  if (IsMultilineBrowserOmniboxEnabled()) {
-    [[NSNotificationCenter defaultCenter]
-        addObserver:self
-           selector:@selector(keyboardDidHide:)
-               name:UIKeyboardDidHideNotification
-             object:nil];
-  }
 }
 
 - (void)viewSafeAreaInsetsDidChange {
@@ -963,6 +1017,23 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
       setBottomOmniboxOffsetForPopup:secondaryToolbarHeightWithInset];
   self.secondaryToolbarHeightConstraint.constant =
       secondaryToolbarHeightWithInset;
+  if (IsChromeNextIaEnabled()) {
+    [self updateForFullscreenProgress:self.footerFullscreenProgress];
+  }
+}
+
+- (void)viewWillLayoutSubviews {
+  [super viewWillLayoutSubviews];
+  // Update the secondary toolbar bottom constraint once after the view is added
+  // to a window. The window is required to accurately determine the App
+  // Bar's position. This is done in `viewWillLayoutSubviews` rather than
+  // `viewDidLayoutSubviews` so that Auto Layout can resolve the new constraints
+  // in the upcoming pass, avoiding a redundant extra layout pass.
+  if (IsFullscreenNextIAEnabled() && self.view.window) {
+    [self addConstraintsToAppBar];
+    [self updateToolbarConstraints];
+    [self updateSecondaryToolbarBottomConstraint];
+  }
 }
 
 - (void)viewDidLayoutSubviews {
@@ -978,10 +1049,23 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
     [self updateToolbarState];
   }
 
-  if (self.ntpCoordinator.isNTPActiveForCurrentWebState &&
-      self.webUsageEnabled) {
-    self.ntpCoordinator.viewController.view.frame =
-        [self ntpFrameForCurrentWebState];
+  if (!IsFullscreenRefactoringEnabled()) {
+    if (self.ntpCoordinator.isNTPActiveForCurrentWebState &&
+        self.webUsageEnabled) {
+      self.ntpCoordinator.viewController.view.frame =
+          [self ntpFrameForCurrentWebState];
+    }
+    if (!ios::provider::IsFullscreenSmoothScrollingSupported()) {
+      if (!CGSizeEqualToSize(_lastViewSize, self.view.bounds.size)) {
+        _lastViewSize = self.view.bounds.size;
+        // When BVC view bounds size changes, UIKit automatically resizes the
+        // WebView via autoresizing mask, shifting its y-position (e.g., from 62
+        // to 77). In order to force Fullscreen to resize the WebView, we toggle
+        // the toolbar height to zero and force a recalculation of its size.
+        _toolbarsSize.expandedTopToolbarHeight = 0;
+        [self updateToolbarState];
+      }
+    }
   }
 }
 
@@ -1005,6 +1089,9 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
 }
 
 - (void)viewWillAppear:(BOOL)animated {
+  if (IsFullscreenRefactoringEnabled()) {
+    [self.view.superview layoutIfNeeded];
+  }
   [super viewWillAppear:animated];
 
   self.visibilityState = BrowserViewVisibilityState::kAppearing;
@@ -1019,6 +1106,14 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
   if (self.viewForCurrentWebState) {
     [self displayTabView];
   }
+}
+
+- (void)viewIsAppearing:(BOOL)animated {
+  [super viewIsAppearing:animated];
+  if (IsChromeNextIaEnabled()) {
+    return;
+  }
+  [self.toolbarCoordinator updateToolbarPositionForActiveBrowser];
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
@@ -1046,9 +1141,9 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
   [super didReceiveMemoryWarning];
 
   if (![self isViewLoaded]) {
-    self.typingShield = nil;
     [self.toolbarCoordinator stop];
     self.toolbarCoordinator = nil;
+    [self cleanUpToolbarConstraints];
     _toolbarsSize = nil;
     [_sideSwipeCoordinator stop];
     _sideSwipeCoordinator = nil;
@@ -1069,17 +1164,40 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
   // dialogs.
   [self.helpHandler hideAllHelpBubbles];
 
-  __weak BrowserViewController* weakSelf = self;
-
-  [coordinator
-      animateAlongsideTransition:^(
-          id<UIViewControllerTransitionCoordinatorContext>) {
-        [weakSelf animateTransition];
-      }
-                      completion:nil];
-
   crash_keys::SetCurrentOrientation(GetInterfaceOrientation(),
                                     [[UIDevice currentDevice] orientation]);
+
+  if (IsFullscreenNextIAEnabled()) {
+    __weak BrowserViewController* weakSelf = self;
+    [coordinator
+        animateAlongsideTransition:^(
+            id<UIViewControllerTransitionCoordinatorContext>) {
+          [weakSelf.popupMenuCommandsHandler adjustPopupSize];
+          [weakSelf invalidateFullscreenInsets];
+        }
+                        completion:nil];
+  } else {
+    __weak BrowserViewController* weakSelf = self;
+    [coordinator
+        animateAlongsideTransition:^(
+            id<UIViewControllerTransitionCoordinatorContext>) {
+          [weakSelf animateTransition];
+          [weakSelf invalidateFullscreenInsets];
+        }
+                        completion:nil];
+  }
+}
+
+- (void)invalidateFullscreenInsets {
+  if (!IsFullscreenRefactoringEnabled()) {
+    return;
+  }
+  CHECK(_fullscreenBrowserAgent);
+  // Reset the keyboard inset to 0 during rotation to avoid using a stale
+  // portrait height on the smaller landscape frame, which might be larger
+  // than the new viewport height.
+  _fullscreenBrowserAgent->SetKeyboardObscuredInset(0);
+  _fullscreenBrowserAgent->InvalidateInsetRange();
 }
 
 - (void)animateTransition {
@@ -1087,7 +1205,8 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
   // change on rotation.
   [self updateToolbarState];
   // Resize horizontal viewport if Smooth Scrolling is on.
-  if (ios::provider::IsFullscreenSmoothScrollingSupported()) {
+  if (!IsFullscreenRefactoringEnabled() &&
+      ios::provider::IsFullscreenSmoothScrollingSupported()) {
     self.fullscreenController->ResizeHorizontalViewport();
   }
 
@@ -1173,9 +1292,11 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
   // would be changed back to `kVisible` afterwards. Fix the bug and update the
   // visibility state.
 
-  [self.geminiHandler
-      hideFloatyIfInvokedAnimated:YES
-                       fromSource:gemini::FloatyUpdateSource::ViewTransition];
+  if (IsPageActionMenuEnabled()) {
+    [self.geminiHandler
+        hideFloatyIfInvokedAnimated:YES
+                         fromSource:gemini::FloatyUpdateSource::ViewTransition];
+  }
   void (^superCall)() = ^{
     [super presentViewController:viewControllerToPresent
                         animated:flag
@@ -1212,13 +1333,6 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
 - (UIStatusBarStyle)preferredStatusBarStyle {
   return _isOffTheRecord ? UIStatusBarStyleLightContent
                          : UIStatusBarStyleDefault;
-}
-
-- (void)keyboardDidHide:(NSNotification*)notification {
-  if (!IsMultilineBrowserOmniboxEnabled()) {
-    return;
-  }
-  self.secondaryToolbarKeyboardHeight = 0;
 }
 
 #pragma mark - ** Private BVC Methods **
@@ -1266,22 +1380,9 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
 // The height of the secondary toolbar with the bottom safe area inset included.
 // Returns 0 if the toolbar should be hidden.
 - (CGFloat)secondaryToolbarHeightWithInset {
-  if (omnibox::ForceBottomOmniboxInEditState() ||
-      omnibox::ShouldFocusedOmniboxFollowSteadyStatePosition()) {
-    if ([self.toolbarCoordinator inEditState]) {
-      CGFloat safeAreaBottom = self.view.safeAreaInsets.bottom;
-      if (IsMultilineBrowserOmniboxEnabled() &&
-          [self.toolbarCoordinator omniboxPosition] ==
-              ToolbarType::kSecondary) {
-        return MAX(safeAreaBottom, self.secondaryToolbarKeyboardHeight) +
-               self.toolbarCoordinator.keyboardAttachedBottomOmniboxHeight;
-      }
-      CGFloat locationBarDisplayHeight =
-          self.toolbarCoordinator.locationBarCompactDisplayHeight;
-      return safeAreaBottom + locationBarDisplayHeight;
-    }
+  if (IsChromeNextIaEnabled()) {
+    return self.toolbarCoordinator.expandedSecondaryToolbarHeight;
   }
-
   CGFloat height = self.toolbarCoordinator.expandedSecondaryToolbarHeight;
   if (!height) {
     return 0.0;
@@ -1298,10 +1399,15 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
       self.toolbarCoordinator.primaryToolbarViewController.view;
 
   UIView* view = self.view;
+  _toolbarLeftConstraint =
+      [primaryView.leftAnchor constraintEqualToAnchor:view.leftAnchor];
+  _toolbarRightConstraint =
+      [primaryView.rightAnchor constraintEqualToAnchor:view.rightAnchor];
   [NSLayoutConstraint activateConstraints:@[
-    [primaryView.leadingAnchor constraintEqualToAnchor:view.leadingAnchor],
-    [primaryView.trailingAnchor constraintEqualToAnchor:view.trailingAnchor],
+    _toolbarLeftConstraint,
+    _toolbarRightConstraint,
   ]];
+  [self updateToolbarConstraints];
 
   // Create a constraint for the vertical positioning of the toolbar.
   self.primaryToolbarOffsetConstraint =
@@ -1317,6 +1423,41 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
   self.primaryToolbarHeightConstraint.active = YES;
 }
 
+// Updates the physical left and right constraints of the toolbar based on the
+// App Bar position. Since `kLeft` and `kRight` correspond to physical screen
+// boundaries regardless of layout direction, left and right offsets are
+// updated directly.
+- (void)updateToolbarConstraints {
+  if (!IsFullscreenNextIAEnabled()) {
+    return;
+  }
+  AppBarPosition position = self.layoutState.appBarPosition;
+  switch (position) {
+    case AppBarPosition::kLeft:
+      _toolbarLeftConstraint.constant = AppBarHeightLandscape();
+      _toolbarRightConstraint.constant = 0;
+      break;
+    case AppBarPosition::kRight:
+      _toolbarLeftConstraint.constant = 0;
+      _toolbarRightConstraint.constant = -AppBarHeightLandscape();
+      break;
+    default:
+      _toolbarLeftConstraint.constant = 0;
+      _toolbarRightConstraint.constant = 0;
+      break;
+  }
+}
+
+// Cleans up the toolbar constraints.
+- (void)cleanUpToolbarConstraints {
+  self.primaryToolbarOffsetConstraint.active = NO;
+  self.primaryToolbarOffsetConstraint = nil;
+  self.primaryToolbarHeightConstraint.active = NO;
+  self.primaryToolbarHeightConstraint = nil;
+  self.secondaryToolbarHeightConstraint.active = NO;
+  self.secondaryToolbarHeightConstraint = nil;
+}
+
 - (void)addConstraintsToSecondaryToolbar {
   UIView* toolbarView =
       self.toolbarCoordinator.secondaryToolbarViewController.view;
@@ -1329,9 +1470,36 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
   // The bottom toolbar can be constraint to the keyboard in some cases.
   self.secondaryToolbarHeightConstraint.priority = UILayoutPriorityRequired - 1;
   self.secondaryToolbarHeightConstraint.active = YES;
-  AddSameConstraintsToSides(
-      self.view, toolbarView,
-      LayoutSides::kBottom | LayoutSides::kLeading | LayoutSides::kTrailing);
+  UIView* primaryToolbar =
+      self.toolbarCoordinator.primaryToolbarViewController.view;
+  AddSameConstraintsToSides(toolbarView, primaryToolbar,
+                            LayoutSides::kHorizontal);
+
+  if (IsFullscreenNextIAEnabled()) {
+    // Create constraint for when the App Bar is not active or on the side
+    // (Landscape).
+    self.secondaryToolbarRegularBottomConstraint = [toolbarView.bottomAnchor
+        constraintEqualToAnchor:self.view.bottomAnchor];
+    self.secondaryToolbarRegularBottomConstraint.active =
+        (self.layoutState.appBarPosition != AppBarPosition::kBottom);
+  } else {
+    [toolbarView.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor]
+        .active = YES;
+  }
+}
+
+// Create constraint for when the App Bar is at the bottom (Portrait).
+- (void)addConstraintsToAppBar {
+  if (self.secondaryToolbarAppBarBottomConstraint) {
+    return;
+  }
+  UIView* appBar = [_layoutGuideCenter referencedViewUnderName:kAppBarGuide];
+  CHECK(appBar);
+  UIView* toolbarView =
+      self.toolbarCoordinator.secondaryToolbarViewController.view;
+  self.secondaryToolbarAppBarBottomConstraint =
+      [toolbarView.bottomAnchor constraintEqualToAnchor:appBar.topAnchor];
+  [self updateSecondaryToolbarBottomConstraint];
 }
 
 // Adds constraints to the primary and secondary toolbars, anchoring them to the
@@ -1391,7 +1559,7 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
         constraintEqualToAnchor:primaryToolbarView.bottomAnchor]
         .active = YES;
 
-    LayoutSides contentSides = LayoutSides::kLeading | LayoutSides::kTrailing;
+    LayoutSides contentSides = LayoutSides::kHorizontal;
     // If there's a bottom toolbar, the content area guide is constrained to
     // its top.
     UIView* secondaryToolbarView =
@@ -1404,15 +1572,6 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
     AddSameConstraintsToSides(self.view, contentAreaGuide, contentSides);
   }
 
-  // Resize the typing shield to cover the entire browser view and bring it to
-  // the front.
-  self.typingShield.frame = self.contentArea.frame;
-  if (initialLayout) {
-    [self.view bringSubviewToFront:self.typingShield];
-  }
-
-  // Move the overlay containers in front of the hierarchy.
-  [self updateOverlayContainerOrder];
 }
 
 // Displays the current webState view.
@@ -1431,7 +1590,8 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
     // Make new content visible, resizing it first as the orientation may
     // have changed from the last time it was displayed.
     CGRect viewFrame = self.contentArea.bounds;
-    if (!ios::provider::IsFullscreenSmoothScrollingSupported()) {
+    if (!IsFullscreenRefactoringEnabled() &&
+        !ios::provider::IsFullscreenSmoothScrollingSupported()) {
       // If the Smooth Scrolling is on, the WebState view is not
       // resized, and should always match the bounds of the content area.  When
       // the provider is not initialized, viewport insets resize the webview, so
@@ -1447,19 +1607,30 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
     NewTabPageCoordinator* NTPCoordinator = self.ntpCoordinator;
     if (NTPCoordinator.isNTPActiveForCurrentWebState) {
       UIViewController* viewController = NTPCoordinator.viewController;
-      viewController.view.frame = [self ntpFrameForCurrentWebState];
-      [viewController.view layoutIfNeeded];
+      if (!IsFullscreenRefactoringEnabled()) {
+        viewController.view.frame = [self ntpFrameForCurrentWebState];
+        [viewController.view layoutIfNeeded];
+      }
       // TODO(crbug.com/41407753): For a newly created WebState, the session
       // will not be restored until LoadIfNecessary call. Remove when fixed.
       self.currentWebState->GetNavigationManager()->LoadIfNecessary();
       self.browserContentViewController.contentView = nil;
       self.browserContentViewController.contentViewController = viewController;
-      [NTPCoordinator constrainNamedGuideForFeedIPH];
+      if (IsFullscreenRefactoringEnabled()) {
+        viewController.view.translatesAutoresizingMaskIntoConstraints = NO;
+        [self updateNTPConstraints];
+      }
     } else {
       self.browserContentViewController.contentView = view;
+      if (IsFullscreenRefactoringEnabled()) {
+        view.translatesAutoresizingMaskIntoConstraints = NO;
+        AddSameConstraints(self.browserContentViewController.view, view);
+      }
+      [self invalidateFullscreenInsets];
     }
     // Resize horizontal viewport if Smooth Scrolling is on.
-    if (ios::provider::IsFullscreenSmoothScrollingSupported()) {
+    if (!IsFullscreenRefactoringEnabled() &&
+        ios::provider::IsFullscreenSmoothScrollingSupported()) {
       self.fullscreenController->ResizeHorizontalViewport();
     }
   }
@@ -1469,31 +1640,7 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
   [self.toolbarCoordinator updateToolbar];
 
   [self updateWebStateVisibility:YES];
-}
-
-- (void)updateOverlayContainerOrder {
-  // Both infobar overlay container views should exist in front of the entire
-  // browser UI, and the banner container should appear behind the modal
-  // container.
-  [self bringOverlayContainerToFront:
-            self.infobarBannerOverlayContainerViewController];
-  [self bringOverlayContainerToFront:
-            self.infobarModalOverlayContainerViewController];
-}
-
-- (void)bringOverlayContainerToFront:
-    (UIViewController*)containerViewController {
-  [self.view bringSubviewToFront:containerViewController.view];
-  // If `containerViewController` is presenting a view over its current context,
-  // its presentation container view is added as a sibling to
-  // `containerViewController`'s view. This presented view should be brought in
-  // front of the container view.
-  UIView* presentedContainerView =
-      containerViewController.presentedViewController.presentationController
-          .containerView;
-  if (presentedContainerView.superview == self.view) {
-    [self.view bringSubviewToFront:presentedContainerView];
-  }
+  [self updateTabActivityReporting];
 }
 
 // Invoked when voice search shows.
@@ -1506,39 +1653,16 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
   self.visibilityState = BrowserViewVisibilityState::kVisible;
 }
 
-// Animates hiding and showing the typing shield.
-- (void)animateTypingShieldHidden:(BOOL)hidden {
-  if (self.typingShield.hidden == hidden) {
-    return;
+// Calls `callback` for each edge that has a safe area inset.
+- (void)getSafeAreaInsets:(void (^)(UIRectEdge edge, CGFloat amount))callback {
+  callback(UIRectEdgeTop, [self topInset]);
+  if (IsSplitToolbarMode(self) && !IsChromeNextIaEnabled() &&
+      self.rootSafeAreaInsets.bottom > 0) {
+    // Avoid adding the bottom safe area inset when Chrome Next is enabled
+    // because the bottom UI elements report heights that already include the
+    // safe area.
+    callback(UIRectEdgeBottom, self.rootSafeAreaInsets.bottom);
   }
-
-  CGFloat finalAlpha = hidden ? 0.0 : 1.0;
-
-  if (!hidden) {
-    [self.typingShield setAlpha:0.0];
-    [self.typingShield setHidden:NO];
-  }
-
-  [UIView animateWithDuration:0.3
-      animations:^{
-        [self.typingShield setAlpha:finalAlpha];
-      }
-      completion:^(BOOL finished) {
-        if (!hidden) {
-          // Already revealed before the animation started.
-          return;
-        }
-
-        // This can happen if one quickly resigns the omnibox and then taps
-        // on the omnibox again during this animation. If the animation is
-        // interrupted and the toolbar controller is first responder, it's safe
-        // to assume `self.typingShield` shouldn't be hidden here.
-        if (!finished && [self.toolbarCoordinator isOmniboxFirstResponder]) {
-          return;
-        }
-
-        [self.typingShield setHidden:YES];
-      }];
 }
 
 #pragma mark - Private Methods: UI Configuration, update and Layout
@@ -1563,19 +1687,88 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
   [_browserCoordinatorHandler hideComposebox];
 }
 
+// Updates the constraints for the NTP view.
+- (void)updateNTPConstraints {
+  CHECK(IsFullscreenRefactoringEnabled());
+  UIViewController* NTPViewController = self.ntpCoordinator.viewController;
+  if (!NTPViewController.isViewLoaded || !NTPViewController.view.superview) {
+    return;
+  }
+  [NSLayoutConstraint deactivateConstraints:_NTPConstraints];
+  DCHECK(self.ntpCoordinator.isNTPActiveForCurrentWebState);
+
+  BOOL canShowTabStrip = CanShowTabStrip(self);
+  BOOL isSplitToolbarMode = IsSplitToolbarMode(self);
+
+  // Logic for pinning the top anchor to the UI view edge instead of the primary
+  // toolbar.
+  BOOL useTopViewEdge = NO;
+  if (IsChromeNextIaEnabled()) {
+    useTopViewEdge = !canShowTabStrip && !_isOffTheRecord;
+  } else {
+    useTopViewEdge = !canShowTabStrip && isSplitToolbarMode && !_isOffTheRecord;
+  }
+
+  // Logic for pinning the bottom anchor.
+  // If ChromeNextIa is disabled, it always pins to the view edge.
+  BOOL useBottomViewEdge = NO;
+  if (IsChromeNextIaEnabled()) {
+    useBottomViewEdge = !canShowTabStrip && !_isOffTheRecord;
+  }
+
+  NSLayoutYAxisAnchor* topAnchor =
+      useTopViewEdge ? self.view.topAnchor
+                     : self.toolbarCoordinator.primaryToolbarViewController.view
+                           .bottomAnchor;
+
+  NSLayoutYAxisAnchor* bottomAnchor =
+      useBottomViewEdge ? self.view.bottomAnchor
+                        : self.toolbarCoordinator.secondaryToolbarViewController
+                              .view.topAnchor;
+
+  UIView* primaryToolbarView =
+      self.toolbarCoordinator.primaryToolbarViewController.view;
+  _NTPConstraints = @[
+    [NTPViewController.view.topAnchor constraintEqualToAnchor:topAnchor],
+    [NTPViewController.view.bottomAnchor constraintEqualToAnchor:bottomAnchor],
+    [NTPViewController.view.leadingAnchor
+        constraintEqualToAnchor:primaryToolbarView.leadingAnchor],
+    [NTPViewController.view.trailingAnchor
+        constraintEqualToAnchor:primaryToolbarView.trailingAnchor],
+  ];
+  [NSLayoutConstraint activateConstraints:_NTPConstraints];
+}
+
 // Returns the appropriate frame for the NTP.
 - (CGRect)ntpFrameForCurrentWebState {
+  CHECK(!IsFullscreenRefactoringEnabled(), base::NotFatalUntil::M160);
   DCHECK(self.ntpCoordinator.isNTPActiveForCurrentWebState);
   // NTP is laid out only in the visible part of the screen.
   UIEdgeInsets viewportInsets = UIEdgeInsetsZero;
-  viewportInsets.bottom = [self secondaryToolbarHeightWithInset];
 
-  // Add toolbar margin to the frame for every scenario except compact-width
-  // non-otr, as that is the only case where there isn't a primary toolbar.
-  // (see crbug.com/1063173)
-  if (CanShowTabStrip(self) || !IsSplitToolbarMode(self) || _isOffTheRecord) {
+  BOOL canShowTabStrip = CanShowTabStrip(self);
+
+  if (!IsChromeNextIaEnabled() || canShowTabStrip || _isOffTheRecord) {
+    viewportInsets.bottom = [self secondaryToolbarHeightWithInset];
+  }
+
+  BOOL useTopToolbarEdgeAsInset = NO;
+  if (IsChromeNextIaEnabled()) {
+    // Toolbar is always visible when the tab strip can be shown or in
+    // incognito.
+    useTopToolbarEdgeAsInset = canShowTabStrip || _isOffTheRecord;
+  } else {
+    // Add toolbar margin to the frame for every scenario except compact-width
+    // non-otr, as that is the only case where there isn't a primary toolbar.
+    // (see crbug.com/1063173)
+    useTopToolbarEdgeAsInset =
+        canShowTabStrip || !IsSplitToolbarMode(self) || _isOffTheRecord;
+  }
+
+  if (useTopToolbarEdgeAsInset) {
     viewportInsets.top = [self expandedTopToolbarHeight];
   }
+
   return UIEdgeInsetsInsetRect(self.contentArea.bounds, viewportInsets);
 }
 
@@ -1646,12 +1839,18 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
     return;
   }
 
+  if (IsFullscreenRefactoringEnabled() &&
+      self.ntpCoordinator.isNTPActiveForCurrentWebState &&
+      self.webUsageEnabled) {
+    [self updateNTPConstraints];
+  }
+
   self.fullscreenController->BrowserTraitCollectionChangedBegin();
 
   if (self.currentWebState) {
     UIEdgeInsets contentPadding =
         self.currentWebState->GetWebViewProxy().contentInset;
-    contentPadding.bottom = AlignValueToPixel(
+    contentPadding.bottom = AlignValueToLowerPixel(
         self.footerFullscreenProgress * [self secondaryToolbarHeightWithInset]);
     self.currentWebState->GetWebViewProxy().contentInset = contentPadding;
   }
@@ -1679,8 +1878,7 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
   // TODO(crbug.com/40842406): Remove this and let
   // `PrimaryToolbarViewController` or `ToolbarCoordinator` call the update ?
   [self.toolbarCoordinator updateToolbar];
-
-  if (IsGeminiCopresenceEnabled()) {
+  if (IsPageActionMenuEnabled()) {
     [self.geminiHandler updateFloatyWithTraitCollection:self.traitCollection];
   }
 
@@ -1701,6 +1899,22 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
   return 0;
 }
 
+// The top inset.
+- (CGFloat)topInset {
+  CGFloat topInset = self.rootSafeAreaInsets.top;
+
+  // On iOS 26, the safe area layout guide doesn't automatically adjust for the
+  // control setting island's dimensions.
+  // If the app is windowed, the dynamic island is not included in the
+  // status bar. In that case, `topInset` should be updated.
+  CGFloat topInsetWithCornerAdaptation = [self topInsetWithCornerAdaptation];
+  if (topInsetWithCornerAdaptation - topInset > 0) {
+    topInset =
+        fmax(topInset, topInsetWithCornerAdaptation - kTopDynamicIslandInset);
+  }
+  return topInset;
+}
+
 // Helper method for dismissing view controller with `completion` block.
 - (void)viewControllerDismissedWithCompletion:(void (^)())completion {
   self.dismissingModal = NO;
@@ -1708,10 +1922,12 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
     completion();
   }
 
-  [self.geminiHandler
-      updateFloatyVisibilityIfEligibleAnimated:NO
-                                    fromSource:gemini::FloatyUpdateSource::
-                                                   ViewTransition];
+  if (IsPageActionMenuEnabled()) {
+    [self.geminiHandler
+        updateFloatyVisibilityIfEligibleAnimated:NO
+                                      fromSource:gemini::FloatyUpdateSource::
+                                                     ViewTransition];
+  }
 }
 
 #pragma mark - Private Methods: Tap handling
@@ -1824,46 +2040,30 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
   self.visibilityState = BrowserViewVisibilityState::kCoveredByOmniboxPopup;
   self.toolbarCoordinator.secondaryToolbarViewController.view
       .accessibilityElementsHidden = YES;
-
-  if (_lensOverlayVisible) {
-    // The typing shield has to be inserted right below the presented popup
-    // omnibox to avoid being obstructed by the Lens Overlay.
-    self.typingShield.frame = UIEdgeInsetsInsetRect(
-        self.contentArea.bounds,
-        UIEdgeInsetsMake([self expandedTopToolbarHeight], 0, 0, 0));
-    [self.view insertSubview:self.typingShield
-                belowSubview:presenter.popupContainerView];
-    [self animateTypingShieldHidden:NO];
-  }
 }
 
 - (void)popupDidCloseForPresenter:(OmniboxPopupPresenter*)presenter {
   self.visibilityState = BrowserViewVisibilityState::kVisible;
   self.toolbarCoordinator.secondaryToolbarViewController.view
       .accessibilityElementsHidden = NO;
-
-  // It's safe to revert the secondary toolbar to the initial size only if the
-  // user fully exited edit state.
-  if (omnibox::ForceBottomOmniboxInEditState() ||
-      omnibox::ShouldFocusedOmniboxFollowSteadyStatePosition() ||
-      IsMultilineBrowserOmniboxEnabled()) {
-    if (![self.toolbarCoordinator inEditState]) {
-      [self
-          adjustSecondaryToolbarForKeyboardHeight:0
-                                      isCollapsed:NO
-                                         duration:0.1
-                                            curve:
-                                                UIViewAnimationCurveEaseInOut];
-    }
+  if (IsPageActionMenuEnabled()) {
+    [self.geminiHandler
+        updateFloatyVisibilityIfEligibleAnimated:NO
+                                      fromSource:gemini::FloatyUpdateSource::
+                                                     ViewTransition];
   }
 }
 
 #pragma mark - FullscreenUIElement methods
 
 - (void)updateForFullscreenProgress:(CGFloat)progress {
+  if (_isShutdown) {
+    return;
+  }
   [self updateHeadersForFullscreenProgress:progress];
   [self updateFootersForFullscreenProgress:progress];
-  if (!ios::provider::IsFullscreenSmoothScrollingSupported()) {
+  if (!IsFullscreenRefactoringEnabled() &&
+      !ios::provider::IsFullscreenSmoothScrollingSupported()) {
     [self updateBrowserViewportForFullscreenProgress:progress];
   }
 }
@@ -1898,6 +2098,10 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
   [animator addAnimations:^{
     [weakSelf updateHeadersForFullscreenProgress:finalProgress];
     [weakSelf updateFootersForFullscreenProgress:finalProgress];
+    // This animation can be canceled in the middle, and there is no way to
+    // know when this happens. Setting `fullscreenProgressDirty` will force
+    // a layout to happen on the next fullscreen update.
+    weakSelf.fullscreenProgressDirty = YES;
   }];
 
   // Animating layout changes of the rendered content in the WKWebView is not
@@ -1910,9 +2114,43 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
   }];
 }
 
-- (void)updateForFullscreenMinViewportInsets:(UIEdgeInsets)minViewportInsets
-                           maxViewportInsets:(UIEdgeInsets)maxViewportInsets {
-  [self updateForFullscreenProgress:self.fullscreenController->GetProgress()];
+#pragma mark - FullscreenBrowserAgentObserving
+
+- (void)fullscreenWillUpdateObscuredInsetRange:(FullscreenBrowserAgent*)agent {
+  CHECK(IsFullscreenRefactoringEnabled());
+
+  [self getSafeAreaInsets:^(UIRectEdge edge, CGFloat amount) {
+    CGFloat min = amount, max = amount;
+    if (edge == UIRectEdgeBottom &&
+        [self collapsedBottomToolbarHeight] == 0.0) {
+      // If bottom toolbar collapses completely, then the safe area inset should
+      // collapse also.
+      min = 0;
+    }
+    agent->AddObscuredInsetRange(edge, min, max);
+  }];
+}
+
+- (void)fullscreenWillUpdateState:(FullscreenBrowserAgent*)agent {
+  CHECK(IsFullscreenRefactoringEnabled());
+  [self updateHeadersForFullscreenProgress:agent->top_progress()];
+  [self updateFootersForFullscreenProgress:agent->bottom_progress()];
+
+  [self getSafeAreaInsets:^(UIRectEdge edge, CGFloat amount) {
+    if (edge == UIRectEdgeBottom) {
+      if ([self collapsedBottomToolbarHeight] == 0.0) {
+        amount *= agent->bottom_progress();
+      }
+    }
+    agent->AddObscuredInset(edge, amount);
+  }];
+}
+
+- (void)fullscreenDidUpdateState:(FullscreenBrowserAgent*)agent {
+  // If this is inside an animation, layout immediately.
+  if (!agent->animation_duration().is_zero()) {
+    [self.view layoutIfNeeded];
+  }
 }
 
 #pragma mark - FullscreenUIElement helpers
@@ -1920,24 +2158,16 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
 // The minimum amount by which the top toolbar overlaps the browser content
 // area.
 - (CGFloat)collapsedTopToolbarHeight {
-  CGFloat topInset = self.rootSafeAreaInsets.top;
-
-  // On iOS 26, the safe area layout guide doesn't automatically adjust for the
-  // control setting island's dimensions.
-  // If the app is windowed, the dynamic island is not included in the
-  // status bar. In that case, `topInset` should be updated.
-  CGFloat topInsetWithCornerAdaptation = [self topInsetWithCornerAdaptation];
-  if (topInsetWithCornerAdaptation - topInset > 0) {
-    topInset =
-        fmax(topInset, topInsetWithCornerAdaptation - kTopDynamicIslandInset);
-  }
-
-  return topInset + self.toolbarCoordinator.collapsedPrimaryToolbarHeight;
+  return
+      [self topInset] + self.toolbarCoordinator.collapsedPrimaryToolbarHeight;
 }
 
 // The minimum amount by which the bottom toolbar overlaps the browser content
 // area.
 - (CGFloat)collapsedBottomToolbarHeight {
+  if (IsChromeNextIaEnabled()) {
+    return self.toolbarCoordinator.collapsedSecondaryToolbarHeight;
+  }
   CGFloat height = self.toolbarCoordinator.collapsedSecondaryToolbarHeight;
   if (!height) {
     return 0.0;
@@ -1969,11 +2199,51 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
     _toolbarsSize.expandedBottomToolbarHeight =
         [self secondaryToolbarHeightWithInset];
   }
+
+  if (IsFullscreenNextIAEnabled()) {
+    [self updateSecondaryToolbarBottomConstraint];
+  }
+}
+
+// Updates the bottom constraint of the secondary toolbar depending on the
+// AppBar's position.
+- (void)updateSecondaryToolbarBottomConstraint {
+  if (!self.isViewLoaded || !self.view.window) {
+    return;
+  }
+
+  BOOL shouldUseAppBar =
+      (self.layoutState.appBarPosition == AppBarPosition::kBottom) &&
+      (self.secondaryToolbarAppBarBottomConstraint != nil);
+
+  if (shouldUseAppBar) {
+    // Sometimes, `appBar` and `toolbarView` aren't in the same view hierarchy,
+    // which causes an exception when activating
+    // `secondaryToolbarAppBarBottomConstraint`. Ensure they share a common
+    // ancestor view before activating the constraint.
+    UIView* appBar = [_layoutGuideCenter referencedViewUnderName:kAppBarGuide];
+    UIView* toolbarView =
+        self.toolbarCoordinator.secondaryToolbarViewController.view;
+    if (appBar && toolbarView &&
+        ViewHierarchyRootForView(appBar) ==
+            ViewHierarchyRootForView(toolbarView)) {
+      self.secondaryToolbarRegularBottomConstraint.active = NO;
+      self.secondaryToolbarAppBarBottomConstraint.active = YES;
+      return;
+    }
+  }
+
+  self.secondaryToolbarAppBarBottomConstraint.active = NO;
+  self.secondaryToolbarRegularBottomConstraint.active = YES;
 }
 
 // Returns the height difference between the fully expanded and fully collapsed
 // primary toolbar.
 - (CGFloat)primaryToolbarHeightDelta {
+  if (IsFullscreenRefactoringEnabled()) {
+    return std::max(0.0, _fullscreenBrowserAgent->max_insets().top -
+                             _fullscreenBrowserAgent->min_insets().top);
+  }
   CGFloat fullyExpandedHeight =
       self.fullscreenController->GetMaxViewportInsets().top;
   CGFloat fullyCollapsedHeight =
@@ -1984,6 +2254,10 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
 // Returns the height difference between the fully expanded and fully collapsed
 // secondary toolbar.
 - (CGFloat)secondaryToolbarHeightDelta {
+  if (IsFullscreenRefactoringEnabled()) {
+    return std::max(0.0, _fullscreenBrowserAgent->max_insets().bottom -
+                             _fullscreenBrowserAgent->min_insets().bottom);
+  }
   CGFloat fullyExpandedHeight =
       self.fullscreenController->GetMaxViewportInsets().bottom;
   CGFloat fullyCollapsedHeight =
@@ -1995,9 +2269,41 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
 // progress of 1.0 fully shows the headers and a progress of 0.0 fully hides
 // them.
 - (void)updateHeadersForFullscreenProgress:(CGFloat)progress {
-  CGFloat offset =
-      AlignValueToPixel((1.0 - progress) * [self primaryToolbarHeightDelta]);
+  CGFloat offset = AlignValueToLowerPixel((1.0 - progress) *
+                                          [self primaryToolbarHeightDelta]);
   [self setFramesForHeaders:[self headerViews] atOffset:offset];
+}
+
+// Resizes the secondary toolbar according to `progress`, where a progress of
+// 1.0 fully expands the toolbar and a progress of 0.0 collapses it.
+- (void)updateNextIASecondaryToolbarForFullscreenProgress:(CGFloat)progress {
+  // Early return if the toolbar is currently managed by keyboard avoidance.
+  if (_isSecondaryToolbarAboveKeyboard) {
+    return;
+  }
+
+  const CGFloat expandedHeight = [self secondaryToolbarHeightWithInset];
+  if (expandedHeight <= 0.0) {
+    return;
+  }
+
+  CGFloat height = expandedHeight;
+  if (IsAppBarHiddenInFullscreen() &&
+      self.layoutState.appBarPosition == AppBarPosition::kBottom) {
+    CGFloat collapsedHeightWithSafeArea = [self collapsedBottomToolbarHeight];
+    CGFloat targetHeight =
+        collapsedHeightWithSafeArea +
+        progress * (expandedHeight - collapsedHeightWithSafeArea);
+    height = AlignValueToLowerPixel(targetHeight);
+  } else {
+    const CGFloat isolatedDelta =
+        std::max(0.0, expandedHeight - [self collapsedBottomToolbarHeight]);
+    const CGFloat offset =
+        AlignValueToLowerPixel((1.0 - progress) * isolatedDelta);
+    height = expandedHeight - offset;
+  }
+
+  self.secondaryToolbarHeightConstraint.constant = height;
 }
 
 // Translates the footer view up and down according to `progress`, where a
@@ -2005,21 +2311,31 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
 - (void)updateFootersForFullscreenProgress:(CGFloat)progress {
   self.footerFullscreenProgress = progress;
 
+  if (IsChromeNextIaEnabled()) {
+    [self updateNextIASecondaryToolbarForFullscreenProgress:progress];
+    return;
+  }
+
   // Don't update the height of the secondary toolbar if it is hidden.
   if (!IsSplitToolbarMode(self)) {
     return;
   }
 
-  const CGFloat expandedToolbarHeight =
-      self.fullscreenController->GetMaxViewportInsets().bottom;
+  CGFloat expandedToolbarHeight;
+  if (IsFullscreenRefactoringEnabled()) {
+    expandedToolbarHeight = _fullscreenBrowserAgent->max_insets().bottom;
+  } else {
+    expandedToolbarHeight =
+        self.fullscreenController->GetMaxViewportInsets().bottom;
+  }
   if (!expandedToolbarHeight) {
     // If `expandedToolbarHeight` is 0, secondary toolbar is hidden. In that
     // case don't update it's height on fullscreen progress.
     return;
   }
 
-  const CGFloat offset =
-      AlignValueToPixel((1.0 - progress) * [self secondaryToolbarHeightDelta]);
+  const CGFloat offset = AlignValueToLowerPixel(
+      (1.0 - progress) * [self secondaryToolbarHeightDelta]);
   // Update the height constraint and force a layout on the container view
   // so that the update is animatable.
   const CGFloat height = expandedToolbarHeight - offset;
@@ -2028,7 +2344,21 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
                      height <= (expandedToolbarHeight + FLT_EPSILON));
   if (IsChromeNextIaEnabled() ||
       ![self.toolbarCoordinator showingOmniboxPopup]) {
-    self.secondaryToolbarHeightConstraint.constant = height;
+    if (self.secondaryToolbarHeightConstraint.constant != height) {
+      self.secondaryToolbarHeightConstraint.constant = height;
+      // Force a layout to cause the frame to be recalculated.
+      if ([self isViewLoaded]) {
+        UIView* view = self.view;
+        [view setNeedsLayout];
+        [view layoutIfNeeded];
+      }
+    } else if (self.fullscreenProgressDirty) {
+      CHECK(!IsFullscreenRefactoringEnabled());
+      UIView* view = self.view;
+      [view setNeedsLayout];
+      [view layoutIfNeeded];
+      self.fullscreenProgressDirty = NO;
+    }
   }
 }
 
@@ -2042,11 +2372,11 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
   // Calculate the heights of the toolbars for `progress`.  `-toolbarHeight`
   // returns the height of the toolbar extending below this view controller's
   // safe area, so the unsafe top height must be added.
-  CGFloat top = AlignValueToPixel(
+  CGFloat top = AlignValueToLowerPixel(
       self.headerHeight + (progress - 1.0) * [self primaryToolbarHeightDelta]);
-  CGFloat bottom =
-      AlignValueToPixel([self secondaryToolbarHeightWithInset] +
-                        (progress - 1.0) * [self secondaryToolbarHeightDelta]);
+  CGFloat bottom = AlignValueToLowerPixel(
+      [self secondaryToolbarHeightWithInset] +
+      (progress - 1.0) * [self secondaryToolbarHeightDelta]);
 
   [self updateContentPaddingForTopToolbarHeight:top bottomToolbarHeight:bottom];
 }
@@ -2076,32 +2406,25 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
 #pragma mark - OmniboxFocusDelegate (Public)
 
 - (void)omniboxDidBecomeFirstResponder {
+  CHECK(!IsComposeboxIOSEnabled());
   if (self.ntpCoordinator.isNTPActiveForCurrentWebState) {
     [self.ntpCoordinator locationBarDidBecomeFirstResponder];
   }
   [_sideSwipeCoordinator setEnabled:NO];
-
-  if (!IsVisibleURLNewTabPage(self.currentWebState) ||
-      ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET) {
-    // Tapping on web content area should dismiss the keyboard. Tapping on NTP
-    // gesture should propagate to NTP view.
-
-    if (self.typingShield.hidden) {
-      [self.view insertSubview:self.typingShield aboveSubview:self.contentArea];
-      [self animateTypingShieldHidden:NO];
-    }
-  }
 
   [self.toolbarCoordinator transitionToLocationBarFocusedState:YES
                                                     completion:nil];
 }
 
 - (void)omniboxDidResignFirstResponder {
+  // NO-OP
+}
+
+- (void)omniboxDidEndEditing {
+  CHECK(!IsComposeboxIOSEnabled());
   [_sideSwipeCoordinator setEnabled:YES];
 
   [self.ntpCoordinator locationBarWillResignFirstResponder];
-
-  [self animateTypingShieldHidden:YES];
 
   ProceduralBlock completion = ^{
     // Show the NTP's fake toolbar after the defocus animation completes.
@@ -2219,7 +2542,8 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
 
   SwipeView* swipeView = [[SwipeView alloc]
       initWithFrame:self.contentArea.frame
-          topMargin:[self snapshotEdgeInsetsForWebState:webState].top];
+          topMargin:[self snapshotEdgeInsetsForWebState:webState].top
+       bottomMargin:[self snapshotEdgeInsetsForWebState:webState].bottom];
 
   [swipeView setTopToolbarImage:topToolbarImage];
   [swipeView setBottomToolbarImage:bottomToolbarImage];
@@ -2284,18 +2608,122 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
   }
 }
 
+// Returns the frame for the new tab page view for the given web state.
+- (CGRect)newPageFrameForWebState:(web::WebState*)webState {
+  CHECK(!IsFullscreenRefactoringEnabled(), base::NotFatalUntil::M160);
+  GURL tabURL = webState->GetVisibleURL();
+  BOOL isNTP = tabURL == kChromeUINewTabURL;
+
+  // The frame should cover the visible space: either the full view if it is a
+  // non-incognito NTP or the area between the toolbars.
+  if (isNTP && !_isOffTheRecord && !CanShowTabStrip(self)) {
+    return self.view.bounds;
+  }
+  if (self.ntpCoordinator.isNTPActiveForCurrentWebState &&
+      self.webUsageEnabled) {
+    return [self ntpFrameForCurrentWebState];
+  }
+  return self.contentArea.bounds;
+}
+
+// Returns the frame for the foreground tab animation view.
+- (CGRect)foregroundTabAnimationViewFrameForWebState:(web::WebState*)webState {
+  CHECK(!CanShowTabStrip(self), base::NotFatalUntil::M160);
+
+  GURL tabURL = webState->GetVisibleURL();
+  BOOL isNTP = tabURL == kChromeUINewTabURL;
+
+  UIEdgeInsets insets = UIEdgeInsetsZero;
+  // On iPhone landscape, the AppBar is covering part of screen under which the
+  // NTP is not displayed.
+  if (isNTP && !CanShowTabStrip(self) && IsChromeNextIaEnabled()) {
+    AppBarPosition position = self.layoutState.appBarPosition;
+
+    if (position == AppBarPosition::kLeft) {
+      insets.left = AppBarHeightLandscape();
+    } else if (position == AppBarPosition::kRight) {
+      insets.right = AppBarHeightLandscape();
+    }
+  }
+
+  if (isNTP && _isOffTheRecord) {
+    if (IsChromeNextIaEnabled()) {
+      insets.bottom = [self secondaryToolbarHeightWithInset];
+      insets.top = [self expandedTopToolbarHeight];
+      if (self.layoutState.appBarPosition == AppBarPosition::kBottom) {
+        insets.bottom += AppBarHeightPortrait();
+      }
+    } else {
+      insets.top = [self expandedTopToolbarHeight];
+      insets.bottom = [self secondaryToolbarHeightWithInset];
+    }
+  }
+  CGRect frameInView = UIEdgeInsetsInsetRect(self.view.bounds, insets);
+  return [self.contentArea convertRect:frameInView fromView:self.view];
+}
+
+// Completes the new tab animation.
+- (void)completeNewTabAnimationWithNewPage:(UIView*)newPage
+                              webStateView:(UIView*)webStateView
+                                identifier:(NSInteger)identifier
+                                     isNTP:(BOOL)isNTP
+                               isIncognito:(BOOL)isIncognito
+                                completion:(ProceduralBlock)completion {
+  newPage.userInteractionEnabled = YES;
+  if (IsFullscreenRefactoringEnabled()) {
+    newPage.translatesAutoresizingMaskIntoConstraints = NO;
+  }
+
+  // Do not resize the same view.
+  if (webStateView != newPage) {
+    webStateView.frame = self.contentArea.bounds;
+  }
+
+  if (identifier != _NTPAnimationIdentifier) {
+    // Prevent the completion block from being executed if a new animation has
+    // started in between. `self.foregroundTabWasAddedCompletionBlock` isn't
+    // called because it is overridden when a new animation is started.
+    // Calling it here would call the block from the lastest animation that
+    // haved started.
+    return;
+  }
+
+  self.inNewTabAnimation = NO;
+
+  [self webStateSelected];
+  if (completion) {
+    completion();
+  }
+
+  if (isNTP && isIncognito) {
+    [_toolbarHandler focusLocationBarForVoiceOver];
+  }
+
+  [self executeAndClearForegroundTabWasAddedCompletionBlock:YES];
+}
+
 - (void)animateNewTabForWebState:(web::WebState*)webState
       inForegroundWithCompletion:(ProceduralBlock)completion {
+  CHECK(!CanShowTabStrip(self), base::NotFatalUntil::M160);
+
   // Create the new page image, and load with the new tab snapshot except if
   // it is the NTP.
   UIView* newPage = [self viewForWebState:webState];
   DCHECK(newPage);
+  if (IsFullscreenRefactoringEnabled()) {
+    newPage.translatesAutoresizingMaskIntoConstraints = YES;
+  }
   GURL tabURL = webState->GetVisibleURL();
   // Toolbar snapshot is only used for the UIRefresh animation.
   UIView* toolbarSnapshot;
 
   BOOL isNTP = tabURL == kChromeUINewTabURL;
   BOOL isIncognito = _isOffTheRecord;
+  BOOL useDeviceCornerRadius = NO;
+
+  if (IsFullscreenRefactoringEnabled()) {
+    newPage.frame = [self foregroundTabAnimationViewFrameForWebState:webState];
+  }
 
   if (isNTP && !isIncognito && !CanShowTabStrip(self)) {
     // Add a snapshot of the primary toolbar to the background as the
@@ -2307,58 +2735,23 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
     toolbarSnapshot.frame = [self.contentArea convertRect:toolbarSnapshot.frame
                                                  fromView:self.view];
     [self.contentArea addSubview:toolbarSnapshot];
-    newPage.frame = self.view.bounds;
-  } else {
-    if (self.ntpCoordinator.isNTPActiveForCurrentWebState &&
-        self.webUsageEnabled) {
-      newPage.frame = [self ntpFrameForCurrentWebState];
-    } else {
-      newPage.frame = self.contentArea.bounds;
-    }
+    // `newPage` takes the full screen and the corner radius should be the same
+    // as the device's.
+    useDeviceCornerRadius = YES;
   }
+
   newPage.userInteractionEnabled = NO;
   NSInteger currentAnimationIdentifier = ++_NTPAnimationIdentifier;
 
-  __weak id<ToolbarCommands> toolbarHandler = _toolbarHandler;
-
-  // Cleanup steps needed for both UI Refresh and stack-view style animations.
   UIView* webStateView = [self viewForWebState:webState];
   __weak __typeof(self) weakSelf = self;
   auto commonCompletion = ^{
-    __strong __typeof(self) strongSelf = weakSelf;
-    newPage.userInteractionEnabled = YES;
-
-    // Check for nil because we need to access an ivar below.
-    if (!strongSelf) {
-      return;
-    }
-
-    // Do not resize the same view.
-    if (webStateView != newPage) {
-      webStateView.frame = strongSelf.contentArea.bounds;
-    }
-
-    if (currentAnimationIdentifier != strongSelf->_NTPAnimationIdentifier) {
-      // Prevent the completion block from being executed if a new animation has
-      // started in between. `self.foregroundTabWasAddedCompletionBlock` isn't
-      // called because it is overridden when a new animation is started.
-      // Calling it here would call the block from the lastest animation that
-      // haved started.
-      return;
-    }
-
-    strongSelf.inNewTabAnimation = NO;
-
-    [strongSelf webStateSelected];
-    if (completion) {
-      completion();
-    }
-
-    if (isNTP && isIncognito) {
-      [toolbarHandler focusLocationBarForVoiceOver];
-    }
-
-    [strongSelf executeAndClearForegroundTabWasAddedCompletionBlock:YES];
+    [weakSelf completeNewTabAnimationWithNewPage:newPage
+                                    webStateView:webStateView
+                                      identifier:currentAnimationIdentifier
+                                           isNTP:isNTP
+                                     isIncognito:isIncognito
+                                      completion:completion];
   };
 
   // Skip animation if animations are disabled (e.g. new search action from
@@ -2370,14 +2763,25 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
   }
 
   CGPoint origin = [self lastTapPoint];
+  CGRect frame = [self foregroundTabAnimationViewFrameForWebState:webState];
 
-  CGRect frame = [self.contentArea convertRect:self.view.bounds
-                                      fromView:self.view];
   ForegroundTabAnimationView* animatedView =
       [[ForegroundTabAnimationView alloc] initWithFrame:frame];
   animatedView.contentView = newPage;
-  animatedView.backgroundView =
-      [self.contentArea snapshotViewAfterScreenUpdates:NO];
+  newPage.frame = animatedView.bounds;
+  animatedView.useDeviceCornerRadius = useDeviceCornerRadius;
+  if (IsChromeNextIaEnabled()) {
+    animatedView.appBarPosition = self.layoutState.appBarPosition;
+  }
+  if (isNTP) {
+    animatedView.backgroundView =
+        [self.contentArea resizableSnapshotViewFromRect:frame
+                                     afterScreenUpdates:NO
+                                          withCapInsets:UIEdgeInsetsZero];
+  } else {
+    animatedView.backgroundView =
+        [self.contentArea snapshotViewAfterScreenUpdates:NO];
+  }
 
   __weak UIView* weakAnimatedView = animatedView;
   auto completionBlock = ^() {
@@ -2579,10 +2983,18 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
 }
 
 - (CGFloat)headerHeightForSideSwipe {
+  UIView* primaryToolbarView =
+      self.toolbarCoordinator.primaryToolbarViewController.view;
+  if (IsChromeNextIaEnabled() && primaryToolbarView.alpha == 0.0) {
+    // When Chrome Next is enabled, the toolbar on the NTP is hidden by
+    // setting its alpha to 0.0 instead of setting hidden to YES.
+    return 0;
+  }
+
   // If the toolbar is hidden, only inset the side swipe navigation view by
   // `safeAreaInsets.top`.  Otherwise insetting by `self.headerHeight` would
   // show a grey strip where the toolbar would normally be.
-  if (self.toolbarCoordinator.primaryToolbarViewController.view.hidden) {
+  if (primaryToolbarView.hidden) {
     return self.rootSafeAreaInsets.top;
   }
   return self.headerHeight;
@@ -2616,42 +3028,20 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
   self.secondaryToolbarHeightConstraint.constant =
       [self secondaryToolbarHeightWithInset];
 
-  const BOOL isBottomOmniboxInEditState =
-      (omnibox::ForceBottomOmniboxInEditState() ||
-       (omnibox::ShouldFocusedOmniboxFollowSteadyStatePosition() &&
-        [self.toolbarCoordinator omniboxPosition] == ToolbarType::kSecondary));
-
-  if (IsMultilineBrowserOmniboxEnabled() && isBottomOmniboxInEditState) {
-    [self.toolbarCoordinator
-        setBottomOmniboxOffsetForPopup:self.secondaryToolbarHeightConstraint
-                                           .constant];
-  }
   [self updateForFullscreenProgress:self.footerFullscreenProgress];
 }
 
-- (void)layoutToolbarHeightChangeWithAnimation:(BOOL)animated {
-  CHECK(!IsChromeNextIaEnabled());
-  if (!self.viewLoaded) {
-    return;
-  }
-
-  if (animated) {
-    [UIView animateWithDuration:kMultilineOmniboxAnimationDuration
-                     animations:^{
-                       [self.view layoutIfNeeded];
-                     }];
-  } else {
-    [self.view layoutIfNeeded];
-  }
-}
-
 - (void)secondaryToolbarMovedAboveKeyboard {
+  _isSecondaryToolbarAboveKeyboard = YES;
+
   // Lower the height constraint priority, allowing UIKeyboardLayoutGuide to
   // move the toolbar above the keyboard.
   self.secondaryToolbarHeightConstraint.priority = UILayoutPriorityDefaultHigh;
 }
 
 - (void)secondaryToolbarRemovedFromKeyboard {
+  _isSecondaryToolbarAboveKeyboard = NO;
+
   // Return to required priority, otherwise UIKeyboardLayoutGuide would set the
   // toolbar minimum height to the bottom safe area.
   self.secondaryToolbarHeightConstraint.priority = UILayoutPriorityRequired - 1;
@@ -2662,10 +3052,20 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
                                        duration:(NSTimeInterval)duration
                                           curve:(UIViewAnimationCurve)curve {
   CHECK(ui::GetDeviceFormFactor() != ui::DEVICE_FORM_FACTOR_TABLET);
-  self.secondaryToolbarKeyboardHeight = keyboardHeight;
+  _isSecondaryToolbarAboveKeyboard = (keyboardHeight > 0);
   CGFloat keyboardAttachedOffset =
       keyboardHeight +
       self.toolbarCoordinator.keyboardAttachedBottomOmniboxHeight;
+  if (IsChromeNextIaEnabled()) {
+    // When the App Bar is at the bottom (Portrait), the secondary toolbar is
+    // already taller by the height of the App Bar, so we subtract the App Bar
+    // height.
+    if (self.layoutState.appBarPosition == AppBarPosition::kBottom) {
+      CGFloat minHeight =
+          IsAppBarHiddenInFullscreen() ? 0 : kAppBarHeightFullscreen;
+      keyboardAttachedOffset -= minHeight;
+    }
+  }
   CGFloat baseHeight = [self secondaryToolbarHeightWithInset];
   CGFloat offsetRequired = isCollapsed
                                ? keyboardAttachedOffset
@@ -2680,11 +3080,6 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
   if (alreadyInPosition) {
     [self.toolbarCoordinator setBottomOmniboxOffsetForPopup:offsetRequired];
     return;
-  }
-
-  if (omnibox::ForceBottomOmniboxInEditState() ||
-      omnibox::ShouldFocusedOmniboxFollowSteadyStatePosition()) {
-    [self updateToolbarState];
   }
 
   // The shift converts an animation curve to animation options.
@@ -2719,44 +3114,49 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
        aboveSubview:self.toolbarCoordinator.primaryToolbarViewController.view];
 }
 
-#pragma mark - LensOverlayPresentationEnvironment
+#pragma mark - LensOverlayStateNotifierObserver
 
-- (void)lensOverlayDidPrepare {
-  if (!IsGeminiCopresenceEnabled()) {
-    return;
+- (void)lensOverlayDidPrepare:
+    (LensOverlayStateNotifier*)lensOverlayStateNotifier {
+  [self.sceneHandler hideAssistant];
+  if (IsPageActionMenuEnabled()) {
+    [self.geminiHandler
+        hideFloatyIfInvokedAnimated:NO
+                         fromSource:gemini::FloatyUpdateSource::Overlay];
   }
-
-  [self.geminiHandler
-      hideFloatyIfInvokedAnimated:NO
-                       fromSource:gemini::FloatyUpdateSource::Overlay];
 }
 
-- (void)lensOverlayWillAppear {
+- (void)lensOverlayWillAppear:
+    (LensOverlayStateNotifier*)lensOverlayStateNotifier {
   [_sideSwipeCoordinator setEnabled:NO];
   _lensOverlayVisible = YES;
   self.contentArea.accessibilityElementsHidden = self.contentAreaObstructed;
 }
 
-- (void)lensOverlayWillDisappear {
+- (void)lensOverlayWillDisappear:
+    (LensOverlayStateNotifier*)lensOverlayStateNotifier {
   [_sideSwipeCoordinator setEnabled:YES];
   _lensOverlayVisible = NO;
+  [self.sceneHandler revealAssistant];
   self.contentArea.accessibilityElementsHidden = self.contentAreaObstructed;
 }
 
-- (void)lensOverlayDidDisappear {
-  if (!IsGeminiCopresenceEnabled()) {
-    return;
+- (void)lensOverlayDidDisappear:
+    (LensOverlayStateNotifier*)lensOverlayStateNotifier {
+  if (IsPageActionMenuEnabled()) {
+    [self.geminiHandler
+        updateFloatyVisibilityIfEligibleAnimated:NO
+                                      fromSource:gemini::FloatyUpdateSource::
+                                                     Overlay];
   }
-
-  [self.geminiHandler
-      updateFloatyVisibilityIfEligibleAnimated:NO
-                                    fromSource:gemini::FloatyUpdateSource::
-                                                   Overlay];
 }
 
-- (void)lensOverlayDidReadjustPresentation {
+- (void)lensOverlayDidReadjustPresentation:
+    (LensOverlayStateNotifier*)lensOverlayStateNotifier {
   [_browserCoordinatorHandler hideComposebox];
 }
+
+#pragma mark - LensOverlayPresentationEnvironment
 
 - (NSDirectionalEdgeInsets)presentationInsetsForLensOverlay {
   if (IsRegularXRegularSizeClass(self)) {
@@ -2764,6 +3164,20 @@ const CGFloat kMultilineOmniboxAnimationDuration = 0.3f;
                                        0);
   }
   return NSDirectionalEdgeInsetsZero;
+}
+
+#pragma mark - Activity Reporting
+
+- (void)updateTabActivityReporting {
+  if (self.active && self.currentWebState) {
+    if (IsVisibleURLNewTabPage(self.currentWebState)) {
+      [_activityReporter reportInactive];
+    } else {
+      [_activityReporter reportActiveWithIncognito:_isOffTheRecord];
+    }
+  } else {
+    [_activityReporter reportInactive];
+  }
 }
 
 @end

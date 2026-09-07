@@ -4,6 +4,8 @@
 
 #import "ios/chrome/browser/authentication/account_menu/ui/account_menu_view_controller.h"
 
+#import <cmath>
+
 #import "base/apple/foundation_util.h"
 #import "base/check.h"
 #import "base/check_op.h"
@@ -16,6 +18,7 @@
 #import "ios/chrome/browser/authentication/account_menu/public/account_menu_constants.h"
 #import "ios/chrome/browser/authentication/account_menu/ui/account_menu_data_source.h"
 #import "ios/chrome/browser/authentication/account_menu/ui/account_menu_mutator.h"
+#import "ios/chrome/browser/authentication/account_menu/ui/ui_swift.h"
 #import "ios/chrome/browser/authentication/ui_bundled/cells/central_account_view.h"
 #import "ios/chrome/browser/keyboard/ui_bundled/UIKeyCommand+Chrome.h"
 #import "ios/chrome/browser/policy/model/management_state.h"
@@ -28,13 +31,20 @@
 #import "ios/chrome/browser/shared/ui/table_view/content_configuration/table_view_cell_content_configuration.h"
 #import "ios/chrome/browser/shared/ui/table_view/table_view_utils.h"
 #import "ios/chrome/browser/signin/model/constants.h"
+#import "ios/chrome/browser/signin/model/signin_util.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/common/ui/table_view/table_view_cells_constants.h"
+#import "ios/chrome/common/ui/util/constraints_ui_util.h"
 #import "ios/chrome/common/ui/util/image_util.h"
 #import "ios/chrome/grit/ios_strings.h"
+#import "ui/base/device_form_factor.h"
 #import "ui/base/l10n/l10n_util.h"
 
 namespace {
+
+// This height is used only if there is an issue with
+// self.tableView.contentSize.height. See crbug.com/499988947.
+constexpr CGFloat kViewControllerDefaultPreferredHeight = 200;
 
 // The margin between the cell and the sheet.
 constexpr CGFloat kSideMargins = 16.;
@@ -86,7 +96,8 @@ NSString* const kCustomExpandedDetentIdentifier = @"customExpandedDetent";
 
 }  // namespace
 
-@interface AccountMenuViewController () <UITableViewDelegate>
+@interface AccountMenuViewController () <CentralAccountViewDelegate,
+                                         UITableViewDelegate>
 
 @property(nonatomic, strong) UITableView* tableView;
 
@@ -107,6 +118,7 @@ NSString* const kCustomExpandedDetentIdentifier = @"customExpandedDetent";
   BOOL _resizeReady;
   // Whether or not to hide the ellipsis menu.
   BOOL _hideEllipsisMenu;
+  UIView* _blockingOverlay;
 }
 
 - (instancetype)initWithHideEllipsisMenu:(BOOL)hideEllipsisMenu {
@@ -136,12 +148,7 @@ NSString* const kCustomExpandedDetentIdentifier = @"customExpandedDetent";
 
   tableView.translatesAutoresizingMaskIntoConstraints = NO;
   [self.view addSubview:tableView];
-  [NSLayoutConstraint activateConstraints:@[
-    [self.view.topAnchor constraintEqualToAnchor:tableView.topAnchor],
-    [self.view.bottomAnchor constraintEqualToAnchor:tableView.bottomAnchor],
-    [self.view.trailingAnchor constraintEqualToAnchor:tableView.trailingAnchor],
-    [self.view.leadingAnchor constraintEqualToAnchor:tableView.leadingAnchor],
-  ]];
+  AddSameConstraints(self.view, tableView);
   tableView.delegate = self;
   tableView.accessibilityIdentifier = kAccountMenuTableViewId;
   tableView.backgroundColor =
@@ -196,23 +203,36 @@ NSString* const kCustomExpandedDetentIdentifier = @"customExpandedDetent";
   // before using its contentSize.
   [self.tableView setNeedsLayout];
   [self.tableView layoutIfNeeded];
+
   CGFloat height = self.tableView.contentSize.height;
-  self.preferredContentSize = CGSize(self.preferredContentSize.width, height);
+  if (!std::isfinite(height) || height <= 0) {
+    // To avoid crash with crbug.com/499988947, if the height is not valid, the
+    // preferred height is set at 200px.
+    height = kViewControllerDefaultPreferredHeight;
+  }
+  CGFloat width = self.tableView.frame.size.width;
+  // During initial layout passes or transitions (especially in Multi-window or
+  // Split-screen mode on iPad), the table view's frame width can be 0. Setting
+  // preferredContentSize with 0 width causes unsatisfiable constraints inside
+  // UIKit's popover layout engine, leading to crashes. See crbug.com/505638993.
+  if (width > 0) {
+    self.preferredContentSize = CGSize(width, height);
+  }
 }
 
 // Creates a button for the navigation bar.
-- (UIButton*)addTopButtonWithSymbolName:(NSString*)symbolName
-                    symbolConfiguration:
-                        (UIImageSymbolConfiguration*)symbolConfiguration
-                              isLeading:(BOOL)isLeading
-                accessibilityIdentifier:(NSString*)accessibilityIdentifier {
+- (UIButton*)addTopButtonWithSymbol:(Symbol)symbol
+                symbolConfiguration:
+                    (UIImageSymbolConfiguration*)symbolConfiguration
+                          isLeading:(BOOL)isLeading
+            accessibilityIdentifier:(NSString*)accessibilityIdentifier {
   NSArray<UIColor*>* colors = @[
     [UIColor colorNamed:kTextSecondaryColor],
     [UIColor colorNamed:kTertiaryBackgroundColor]
   ];
 
   UIImage* image = SymbolWithPalette(
-      DefaultSymbolWithConfiguration(symbolName, symbolConfiguration), colors);
+      SymbolWithConfiguration(symbol, symbolConfiguration), colors);
 
   // Add padding on all sides of the button, to make it a 44x44 touch target.
   CGFloat verticalInsets = (kMinimumTouchTargetSize - image.size.height) / 2.0;
@@ -269,8 +289,8 @@ NSString* const kCustomExpandedDetentIdentifier = @"customExpandedDetent";
       actionWithTitle:
           l10n_util::GetNSString(
               IDS_IOS_GOOGLE_ACCOUNT_SETTINGS_MANAGE_GOOGLE_ACCOUNT_ITEM)
-                image:DefaultSymbolWithConfiguration(@"arrow.up.right.square",
-                                                     symbolConfiguration)
+                image:SymbolWithConfiguration(SymbolOpenImageAction,
+                                              symbolConfiguration)
            identifier:kAccountMenuManageYourGoogleAccountId
               handler:^(UIAction* action) {
                 base::RecordAction(base::UserMetricsAction(
@@ -283,8 +303,8 @@ NSString* const kCustomExpandedDetentIdentifier = @"customExpandedDetent";
   UIAction* editAccountListAction =
       [UIAction actionWithTitle:l10n_util::GetNSString(
                                     IDS_IOS_ACCOUNT_MENU_EDIT_ACCOUNT_LIST)
-                          image:DefaultSymbolWithConfiguration(
-                                    @"pencil", symbolConfiguration)
+                          image:SymbolWithConfiguration(SymbolPencil,
+                                                        symbolConfiguration)
                      identifier:kAccountMenuEditAccountListId
                         handler:^(UIAction* action) {
                           base::RecordAction(base::UserMetricsAction(
@@ -295,7 +315,7 @@ NSString* const kCustomExpandedDetentIdentifier = @"customExpandedDetent";
       menuWithChildren:@[ manageYourAccountAction, editAccountListAction ]];
 
   _ellipsisButton = [[UIBarButtonItem alloc]
-      initWithImage:DefaultSymbolWithPointSize(kMenuSymbol, kButtonImageSize)
+      initWithImage:SymbolWithPointSize(SymbolMenu, kButtonImageSize)
                menu:ellipsisMenu];
   _ellipsisButton.accessibilityLabel =
       l10n_util::GetNSString(IDS_IOS_ICON_OPTION_MENU);
@@ -307,8 +327,7 @@ NSString* const kCustomExpandedDetentIdentifier = @"customExpandedDetent";
 
 // Decides if the Close button should be shown.
 - (BOOL)shouldShowCloseButton {
-  UIUserInterfaceIdiom idiom = [[UIDevice currentDevice] userInterfaceIdiom];
-  return idiom == UIUserInterfaceIdiomPhone ||
+  return ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_PHONE ||
          self.presentingViewController.traitCollection.horizontalSizeClass ==
              UIUserInterfaceSizeClassCompact;
 }
@@ -353,7 +372,6 @@ NSString* const kCustomExpandedDetentIdentifier = @"customExpandedDetent";
       base::apple::ObjCCastStrict<NSNumber>(itemIdentifier).integerValue);
   NSString* label = nil;
   NSString* accessibilityIdentifier = nil;
-  NSString* accessibilityLabel = nil;
   switch (rowIdentifier) {
     case RowIdentifierErrorExplanation: {
       return [self cellForErrorExplanationForTableView:tableView];
@@ -361,8 +379,6 @@ NSString* const kCustomExpandedDetentIdentifier = @"customExpandedDetent";
     case RowIdentifierErrorButton:
       label = l10n_util::GetNSString(
           self.dataSource.accountErrorUIInfo.buttonLabelID);
-      accessibilityLabel =
-          l10n_util::GetNSString(self.dataSource.accountErrorUIInfo.messageID);
       accessibilityIdentifier = kAccountMenuErrorActionButtonId;
       break;
     case RowIdentifierAddAccount:
@@ -395,7 +411,8 @@ NSString* const kCustomExpandedDetentIdentifier = @"customExpandedDetent";
   cell.contentConfiguration = configuration;
   cell.accessibilityTraits = UIAccessibilityTraitButton;
   cell.isAccessibilityElement = YES;
-  cell.accessibilityLabel = accessibilityLabel ? accessibilityLabel : label;
+  cell.accessibilityLabel = label;
+  cell.accessibilityUserInputLabels = @[ label ];
   cell.userInteractionEnabled = YES;
   cell.accessibilityIdentifier = accessibilityIdentifier;
 
@@ -407,16 +424,22 @@ NSString* const kCustomExpandedDetentIdentifier = @"customExpandedDetent";
                               gaiaID:(const GaiaId&)gaiaID
                            indexPath:(NSIndexPath*)indexPath {
   NSString* email = [self.dataSource emailForGaiaID:gaiaID];
+  NSString* name = [self.dataSource nameForGaiaID:gaiaID];
+  NSString* title = name ? name : email;
+
   BOOL isGaiaIDManaged = [self.dataSource isGaiaIDManaged:gaiaID];
 
   TableViewCellContentConfiguration* configuration =
       [[TableViewCellContentConfiguration alloc] init];
-  configuration.title = [self.dataSource nameForGaiaID:gaiaID];
+  configuration.title = title;
   configuration.titleNumberOfLines = 1;
   configuration.titleLineBreakMode = NSLineBreakByTruncatingTail;
-  configuration.subtitle = email;
-  configuration.subtitleNumberOfLines = 1;
-  configuration.subtitleLineBreakMode = NSLineBreakByTruncatingTail;
+  if (name) {
+    // If name is missing, the title is the email, so no need for this subtitle.
+    configuration.subtitle = email;
+    configuration.subtitleNumberOfLines = 1;
+    configuration.subtitleLineBreakMode = NSLineBreakByTruncatingTail;
+  }
 
   ImageContentConfiguration* imageConfiguration =
       [[ImageContentConfiguration alloc] init];
@@ -431,7 +454,7 @@ NSString* const kCustomExpandedDetentIdentifier = @"customExpandedDetent";
     ImageContentConfiguration* trailingImageConfiguration =
         [[ImageContentConfiguration alloc] init];
     trailingImageConfiguration.image = SymbolWithPalette(
-        CustomSymbolWithPointSize(kEnterpriseSymbol, kEnterpriseIconPointSize),
+        SymbolWithPointSize(SymbolEnterprise, kEnterpriseIconPointSize),
         @[ [UIColor colorNamed:kStaticGrey600Color] ]);
     configuration.trailingConfiguration = trailingImageConfiguration;
   }
@@ -439,7 +462,6 @@ NSString* const kCustomExpandedDetentIdentifier = @"customExpandedDetent";
   UITableViewCell* cell =
       [TableViewCellContentConfiguration dequeueTableViewCell:tableView];
 
-  NSString* name = [self.dataSource nameForGaiaID:gaiaID];
   if (name) {
     configuration.customAccessibilityLabel = l10n_util::GetNSStringF(
         isGaiaIDManaged
@@ -480,7 +502,7 @@ NSString* const kCustomExpandedDetentIdentifier = @"customExpandedDetent";
   ImageContentConfiguration* imageConfiguration =
       [[ImageContentConfiguration alloc] init];
   imageConfiguration.image =
-      DefaultSymbolWithPointSize(kErrorCircleFillSymbol, kErrorSymbolSize);
+      SymbolWithPointSize(SymbolErrorCircleFill, kErrorSymbolSize);
   imageConfiguration.imageTintColor = [UIColor colorNamed:kRed500Color];
 
   configuration.leadingConfiguration = imageConfiguration;
@@ -492,7 +514,6 @@ NSString* const kCustomExpandedDetentIdentifier = @"customExpandedDetent";
 
   cell.selectionStyle = UITableViewCellSelectionStyleNone;
   cell.accessibilityIdentifier = kAccountMenuErrorMessageId;
-  cell.accessibilityElementsHidden = YES;
   return cell;
 }
 
@@ -669,12 +690,35 @@ NSString* const kCustomExpandedDetentIdentifier = @"customExpandedDetent";
   return [[UIView alloc] initWithFrame:CGRectZero];
 }
 
+#pragma mark - CentralAccountViewDelegate
+
+- (void)centralAccountViewDidTapAISubscriptionChip:(CentralAccountView*)view {
+  base::RecordAction(
+      base::UserMetricsAction("Signin_AccountMenu_SubscriptionChip"));
+}
+
 #pragma mark - AccountMenuConsumer
 
 - (void)setUserInteractionsEnabled:(BOOL)enabled {
   self.tableView.allowsSelection = enabled;
+  _identityAccountView.userInteractionEnabled = enabled;
+  self.tableView.scrollEnabled = enabled;
   _closeButton.enabled = enabled;
   _ellipsisButton.enabled = enabled;
+  self.navigationController.modalInPresentation = !enabled;
+  self.modalInPresentation = !enabled;
+  self.tableView.accessibilityElementsHidden = !enabled;
+
+  if (enabled) {
+    [_blockingOverlay removeFromSuperview];
+    _blockingOverlay = nil;
+  } else if (!_blockingOverlay) {
+    _blockingOverlay = [[UIView alloc] init];
+    _blockingOverlay.translatesAutoresizingMaskIntoConstraints = NO;
+    _blockingOverlay.backgroundColor = UIColor.clearColor;
+    [self.view addSubview:_blockingOverlay];
+    AddSameConstraints(_blockingOverlay, self.view);
+  }
 }
 
 - (void)switchingStarted {
@@ -700,13 +744,26 @@ NSString* const kCustomExpandedDetentIdentifier = @"customExpandedDetent";
 }
 
 - (void)updatePrimaryAccount {
+  UIImage* avatarImage = [self.dataSource primaryAccountAvatar];
+  BOOL showsRing = [self.dataSource primaryAccountAvatarNeedsRing];
+  NSString* aiTierName = [self.dataSource primaryAccountAITierName];
+  UIView* subscriptionChipView = nil;
+  if (aiTierName.length > 0) {
+    subscriptionChipView =
+        [[AISubscriptionChipWrapperView alloc] initWithText:aiTierName];
+  }
+
   _identityAccountView = [[CentralAccountView alloc]
               initWithFrame:CGRectMake(0, 0, self.tableView.frame.size.width, 0)
-                avatarImage:self.dataSource.primaryAccountAvatar
+                avatarImage:avatarImage
+            showsAITierRing:showsRing
+             aiTierFullName:self.dataSource.primaryAccountAITierFullName
+       subscriptionChipView:subscriptionChipView
                        name:self.dataSource.primaryAccountUserFullName
                       email:self.dataSource.primaryAccountEmail
       managementDescription:self.dataSource.managementDescription
             useLargeMargins:NO];
+  _identityAccountView.delegate = self;
   [_identityAccountView updateTopPadding:[self navigationBarHeight]];
   self.tableView.tableHeaderView = _identityAccountView;
   [self.tableView reloadData];
@@ -716,24 +773,22 @@ NSString* const kCustomExpandedDetentIdentifier = @"customExpandedDetent";
 - (void)updateErrorSection:(AccountErrorUIInfo*)error {
   CHECK(!_selectedIndexPath);
   NSDiffableDataSourceSnapshot* snapshot = _accountMenuDataSource.snapshot;
-  if (error == nil) {
-    // The error disappeared.
-    CHECK_EQ([snapshot indexOfSectionIdentifier:@(SyncErrorsSectionIdentifier)],
-             0);
+  // Always remove existing error section if present.
+  if ([snapshot indexOfSectionIdentifier:@(SyncErrorsSectionIdentifier)] !=
+      NSNotFound) {
     [snapshot
         deleteSectionsWithIdentifiers:@[ @(SyncErrorsSectionIdentifier) ]];
-  } else {
+  }
+  // Insert updated error section before accounts section if an error is
+  // present.
+  if (error) {
     [self recordAccountMenuUserActionableError:error.errorType];
-    if ([snapshot indexOfSectionIdentifier:@(SyncErrorsSectionIdentifier)] ==
-        NSNotFound) {
-      [snapshot
-          insertSectionsWithIdentifiers:@[ @(SyncErrorsSectionIdentifier) ]
-            beforeSectionWithIdentifier:@(AccountsSectionIdentifier)];
-      [snapshot appendItemsWithIdentifiers:@[
-        @(RowIdentifierErrorExplanation), @(RowIdentifierErrorButton)
-      ]
-                 intoSectionWithIdentifier:@(SyncErrorsSectionIdentifier)];
-    }
+    [snapshot insertSectionsWithIdentifiers:@[ @(SyncErrorsSectionIdentifier) ]
+                beforeSectionWithIdentifier:@(AccountsSectionIdentifier)];
+    [snapshot appendItemsWithIdentifiers:@[
+      @(RowIdentifierErrorExplanation), @(RowIdentifierErrorButton)
+    ]
+               intoSectionWithIdentifier:@(SyncErrorsSectionIdentifier)];
   }
   [_accountMenuDataSource applySnapshot:snapshot animatingDifferences:YES];
   [self resize];

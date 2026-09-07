@@ -19,21 +19,18 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.junit.MockitoJUnit;
 import org.mockito.junit.MockitoRule;
-import org.robolectric.annotation.Config;
 
 import org.chromium.base.ContextUtils;
 import org.chromium.base.shared_preferences.SharedPreferencesManager;
 import org.chromium.base.test.BaseRobolectricTestRunner;
-import org.chromium.base.test.util.Batch;
+import org.chromium.build.BuildConfig;
 import org.chromium.chrome.browser.bookmarks.BookmarkUiPrefs.BookmarkRowDisplayPref;
 import org.chromium.chrome.browser.bookmarks.BookmarkUiPrefs.BookmarkRowSortOrder;
 import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
 import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
 
 /** Unit tests for {@link BookmarkUiPrefs}. */
-@Batch(Batch.UNIT_TESTS)
 @RunWith(BaseRobolectricTestRunner.class)
-@Config(manifest = Config.NONE)
 public class BookmarkUiPrefsUnitTest {
     @Rule public MockitoRule mMockitoRule = MockitoJUnit.rule();
 
@@ -56,8 +53,11 @@ public class BookmarkUiPrefsUnitTest {
     @Test
     public void initialBookmarkRowDisplayPref() {
         // Nothing has been written to shared prefs manager.
-        Assert.assertEquals(
-                BookmarkRowDisplayPref.VISUAL, mBookmarkUiPrefs.getBookmarkRowDisplayPref());
+        int expectedDefault =
+                BuildConfig.IS_DESKTOP_ANDROID
+                        ? BookmarkRowDisplayPref.COMPACT
+                        : BookmarkRowDisplayPref.VISUAL;
+        Assert.assertEquals(expectedDefault, mBookmarkUiPrefs.getBookmarkRowDisplayPref());
     }
 
     @Test
@@ -104,8 +104,11 @@ public class BookmarkUiPrefsUnitTest {
 
     @Test
     public void testRowDisplayPref_changesInBackground() {
-        Assert.assertEquals(
-                BookmarkRowDisplayPref.VISUAL, mBookmarkUiPrefs.getBookmarkRowDisplayPref());
+        int expectedDefault =
+                BuildConfig.IS_DESKTOP_ANDROID
+                        ? BookmarkRowDisplayPref.COMPACT
+                        : BookmarkRowDisplayPref.VISUAL;
+        Assert.assertEquals(expectedDefault, mBookmarkUiPrefs.getBookmarkRowDisplayPref());
 
         mBookmarkUiPrefs.addObserver(mObserver);
         mSharedPreferencesManager.writeInt(
@@ -164,5 +167,22 @@ public class BookmarkUiPrefsUnitTest {
                 "Showing compact view",
                 mBookmarkUiPrefs.getViewOptionsAccessibilityAnnouncementText(
                         context, BookmarkRowDisplayPref.COMPACT));
+    }
+
+    @Test
+    public void testGarbageCollectionDoesNotClearListener() {
+        Assert.assertEquals(
+                BookmarkRowSortOrder.MANUAL, mBookmarkUiPrefs.getBookmarkRowSortOrder());
+
+        mBookmarkUiPrefs.addObserver(mObserver);
+
+        // Force a garbage collection. Prior to the fix, the listener was stored in a WeakHashMap
+        // by SharedPreferences and the reference was stripped by R8, allowing it to be
+        // garbage-collected during active usage. This ensures we don't regress.
+        Runtime.getRuntime().gc();
+
+        mSharedPreferencesManager.writeInt(
+                ChromePreferenceKeys.BOOKMARKS_SORT_ORDER, BookmarkRowSortOrder.CHRONOLOGICAL);
+        verify(mObserver).onBookmarkRowSortOrderChanged(BookmarkRowSortOrder.CHRONOLOGICAL);
     }
 }

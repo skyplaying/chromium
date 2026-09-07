@@ -15,7 +15,7 @@ namespace content {
 class WebContents;
 }
 
-class Browser;
+class BrowserWindowInterface;
 class Profile;
 struct CoreAccountId;
 
@@ -40,7 +40,7 @@ class DiceWebSigninInterceptorDelegate : public WebSigninInterceptor::Delegate {
       base::OnceClosure dialog_closed_closure,
       base::RepeatingClosure retry_callback) override;
   void ShowFirstRunExperienceInNewProfile(
-      Browser* browser,
+      BrowserWindowInterface* browser,
       const CoreAccountId& account_id,
       WebSigninInterceptor::SigninInterceptionType interception_type) override;
   void ShowSigninError(content::WebContents* web_contents,
@@ -60,11 +60,12 @@ class DiceWebSigninInterceptorDelegate : public WebSigninInterceptor::Delegate {
   // Implemented in dice_web_signin_interception_bubble_view.cc
   std::unique_ptr<ScopedWebSigninInterceptionBubbleHandle>
   ShowSigninInterceptionBubbleInternal(
-      Browser* browser,
+      BrowserWindowInterface* browser,
       const BubbleParameters& bubble_parameters,
       base::OnceCallback<void(SigninInterceptionResult)> callback);
 
-  static bool IsSigninInterceptionSupportedInternal(const Browser& Browser);
+  static bool IsSigninInterceptionSupportedInternal(
+      const BrowserWindowInterface& browser);
 };
 
 #endif  // CHROME_BROWSER_UI_SIGNIN_DICE_WEB_SIGNIN_INTERCEPTOR_DELEGATE_H_

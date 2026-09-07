@@ -80,7 +80,7 @@ class MODULES_EXPORT MIDIAccessInitializer
  private:
   void StartSession();
 
-  void OnPermissionRequestResult(mojom::blink::PermissionStatus);
+  void OnPermissionRequestResult(mojom::blink::PermissionStatusWithDetailsPtr);
 
   Member<ScriptPromiseResolver<MIDIAccess>> resolver_;
   Member<MIDIDispatcher> dispatcher_;
@@ -88,7 +88,7 @@ class MODULES_EXPORT MIDIAccessInitializer
   Member<const MIDIOptions> options_;
 
   HeapMojoRemote<mojom::blink::PermissionService> permission_service_;
-  SelfKeepAlive<MIDIAccessInitializer> self_keep_alive_;
+  SelfKeepAlive<MIDIAccessInitializer> self_keep_alive_{{}};
 };
 
 }  // namespace blink

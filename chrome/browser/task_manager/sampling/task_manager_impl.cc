@@ -7,15 +7,15 @@
 #include <algorithm>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/command_line.h"
-#include "base/containers/adapters.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/notimplemented.h"
@@ -365,9 +365,8 @@ const TaskIdList& TaskManagerImpl::GetTaskIdsList() const {
 #if !BUILDFLAG(IS_ANDROID)
       // Move vm processes up over the arc tasks.
       should_make_adjustment =
-          base::FeatureList::IsEnabled(features::kTaskManagerDesktopRefresh) &&
-          ((a->GetType() == Task::ARC && b->GetType() == Task::CROSTINI) ||
-           (b->GetType() == Task::ARC && a->GetType() == Task::CROSTINI));
+          (a->GetType() == Task::ARC && b->GetType() == Task::CROSTINI) ||
+          (b->GetType() == Task::ARC && a->GetType() == Task::CROSTINI);
 #endif
       return std::make_tuple(
                  a->HasParentTask(),
@@ -449,7 +448,7 @@ const TaskIdList& TaskManagerImpl::GetTaskIdsList() const {
       // Find the children of the tasks we just added, and push them into
       // |tasks_to_visit|, so that we visit them soon. Work in reverse order,
       // so that we visit them in forward order.
-      for (Task* parent : base::Reversed(current_group_tasks)) {
+      for (Task* parent : std::views::reverse(current_group_tasks)) {
         auto children_of_parent = children.find(parent);
         if (children_of_parent != children.end()) {
           // Sort children[parent], and then append in reversed order.
@@ -615,7 +614,7 @@ void TaskManagerImpl::OnReceivedMemoryDump(
       if (it == task_groups_by_proc_id_.end()) {
         continue;
       }
-      it->second->set_footprint(base::KiBU(pmd.os_dump().private_footprint_kb));
+      it->second->set_footprint(base::KiB(pmd.os_dump().private_footprint_kb));
     }
   }
 
@@ -693,6 +692,9 @@ void TaskManagerImpl::StopUpdating() {
   arc_vm_task_groups_by_proc_id_.clear();
   task_groups_by_task_id_.clear();
   sorted_task_ids_.clear();
+
+  waiting_for_memory_dump_ = false;
+  weak_ptr_factory_.InvalidateWeakPtrs();
 }
 
 Task* TaskManagerImpl::GetTaskByRoute(

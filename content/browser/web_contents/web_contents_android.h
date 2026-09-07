@@ -191,6 +191,7 @@ class CONTENT_EXPORT WebContentsAndroid {
   void SetSize(JNIEnv* env, int32_t width, int32_t height);
   int GetWidth(JNIEnv* env);
   int GetHeight(JNIEnv* env);
+  bool IsBeingCaptured(JNIEnv* env);
 
   base::android::ScopedJavaLocalRef<jobject> GetOrCreateEventForwarder(
       JNIEnv* env);
@@ -299,11 +300,6 @@ class CONTENT_EXPORT WebContentsAndroid {
   raw_ptr<WebContentsImpl> web_contents_;
 
   NavigationControllerAndroid navigation_controller_;
-  // A weak reference to the Java object. The Java object will be kept alive by
-  // a static map in the Java code. ScopedJavaGlobalRef would scale poorly with
-  // a large number of WebContents as each entry would consume a slot in the
-  // finite global ref table.
-  JavaObjectWeakGlobalRef obj_;
 
   base::ObserverList<DestructionObserver> destruction_observers_;
 

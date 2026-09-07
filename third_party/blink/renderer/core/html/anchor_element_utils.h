@@ -8,6 +8,7 @@
 #include <cstdint>
 
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/core/dom/events/event.h"
 
 namespace blink {
 
@@ -51,6 +52,9 @@ class KURL;
 
 class CORE_EXPORT AnchorElementUtils {
  public:
+  // Update the HREF attribute and notify about pseudo state changes.
+  static void UpdateHref(Element&, const AtomicString& new_value);
+
   static void HandleDownloadAttribute(Element* element,
                                       const String& download_attr,
                                       const KURL& url,
@@ -78,6 +82,15 @@ class CORE_EXPORT AnchorElementUtils {
                                             const AtomicString& referrer_policy,
                                             uint32_t link_relations,
                                             Document& document);
+
+  static bool IsLinkClick(Event& event);
+
+  // Enforces noopener on blob: URL navigations when the blob URL's site
+  // differs from the initiator's top-level site, to prevent storage
+  // partitioning bypasses.
+  static void EnforceBlobUrlNoopenerIfNeeded(FrameLoadRequest& frame_request,
+                                             const KURL& url,
+                                             LocalDOMWindow& window);
 };
 
 }  // namespace blink

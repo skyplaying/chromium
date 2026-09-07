@@ -52,11 +52,12 @@ class PatchImplTest : public testing::Test {
 TEST_F(PatchImplTest, PuffPatch_InvalidOldFile) {
   base::RunLoop run_loop;
   patcher_->PatchPuffPatch(
-      base::File(), CreateTestFile("patch"), CreateTestFile(""),
+      /*is_foreground=*/true, base::File(), CreateTestFile("patch"),
+      CreateTestFile(""),
       base::BindOnce(
           [](base::OnceClosure quit_closure, int result) {
             EXPECT_EQ(result,
-                      static_cast<int>(UnpackerError::kPatchInvalidOldFile));
+                      std::to_underlying(UnpackerError::kPatchInvalidOldFile));
             std::move(quit_closure).Run();
           },
           run_loop.QuitClosure()));
@@ -66,11 +67,12 @@ TEST_F(PatchImplTest, PuffPatch_InvalidOldFile) {
 TEST_F(PatchImplTest, PuffPatch_InvalidPatchFile) {
   base::RunLoop run_loop;
   patcher_->PatchPuffPatch(
-      CreateTestFile("old"), base::File(), CreateTestFile(""),
+      /*is_foreground=*/true, CreateTestFile("old"), base::File(),
+      CreateTestFile(""),
       base::BindOnce(
           [](base::OnceClosure quit_closure, int result) {
-            EXPECT_EQ(result,
-                      static_cast<int>(UnpackerError::kPatchInvalidPatchFile));
+            EXPECT_EQ(result, std::to_underlying(
+                                  UnpackerError::kPatchInvalidPatchFile));
             std::move(quit_closure).Run();
           },
           run_loop.QuitClosure()));
@@ -80,11 +82,12 @@ TEST_F(PatchImplTest, PuffPatch_InvalidPatchFile) {
 TEST_F(PatchImplTest, PuffPatch_InvalidDestinationFile) {
   base::RunLoop run_loop;
   patcher_->PatchPuffPatch(
-      CreateTestFile("old"), CreateTestFile("patch"), base::File(),
+      /*is_foreground=*/true, CreateTestFile("old"), CreateTestFile("patch"),
+      base::File(),
       base::BindOnce(
           [](base::OnceClosure quit_closure, int result) {
             EXPECT_EQ(result,
-                      static_cast<int>(UnpackerError::kPatchInvalidNewFile));
+                      std::to_underlying(UnpackerError::kPatchInvalidNewFile));
             std::move(quit_closure).Run();
           },
           run_loop.QuitClosure()));
@@ -94,11 +97,12 @@ TEST_F(PatchImplTest, PuffPatch_InvalidDestinationFile) {
 TEST_F(PatchImplTest, ZucchiniPatch_InvalidOldFile) {
   base::RunLoop run_loop;
   patcher_->PatchZucchini(
-      base::File(), CreateTestFile("patch"), CreateTestFile(""),
+      /*is_foreground=*/true, base::File(), CreateTestFile("patch"),
+      CreateTestFile(""),
       base::BindOnce(
           [](base::OnceClosure quit_closure, int result) {
             EXPECT_EQ(result,
-                      static_cast<int>(UnpackerError::kPatchInvalidOldFile));
+                      std::to_underlying(UnpackerError::kPatchInvalidOldFile));
             std::move(quit_closure).Run();
           },
           run_loop.QuitClosure()));
@@ -108,11 +112,12 @@ TEST_F(PatchImplTest, ZucchiniPatch_InvalidOldFile) {
 TEST_F(PatchImplTest, ZucchiniPatch_InvalidPatchFile) {
   base::RunLoop run_loop;
   patcher_->PatchZucchini(
-      CreateTestFile("old"), base::File(), CreateTestFile(""),
+      /*is_foreground=*/true, CreateTestFile("old"), base::File(),
+      CreateTestFile(""),
       base::BindOnce(
           [](base::OnceClosure quit_closure, int result) {
-            EXPECT_EQ(result,
-                      static_cast<int>(UnpackerError::kPatchInvalidPatchFile));
+            EXPECT_EQ(result, std::to_underlying(
+                                  UnpackerError::kPatchInvalidPatchFile));
             std::move(quit_closure).Run();
           },
           run_loop.QuitClosure()));
@@ -122,11 +127,12 @@ TEST_F(PatchImplTest, ZucchiniPatch_InvalidPatchFile) {
 TEST_F(PatchImplTest, ZucchiniPatch_InvalidDestinationFile) {
   base::RunLoop run_loop;
   patcher_->PatchZucchini(
-      CreateTestFile("old"), CreateTestFile("patch"), base::File(),
+      /*is_foreground=*/true, CreateTestFile("old"), CreateTestFile("patch"),
+      base::File(),
       base::BindOnce(
           [](base::OnceClosure quit_closure, int result) {
             EXPECT_EQ(result,
-                      static_cast<int>(UnpackerError::kPatchInvalidNewFile));
+                      std::to_underlying(UnpackerError::kPatchInvalidNewFile));
             std::move(quit_closure).Run();
           },
           run_loop.QuitClosure()));

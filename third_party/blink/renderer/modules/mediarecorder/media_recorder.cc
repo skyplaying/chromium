@@ -22,6 +22,8 @@
 #include "third_party/blink/renderer/core/fileapi/blob.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
+#include "third_party/blink/renderer/core/timing/dom_window_performance.h"
+#include "third_party/blink/renderer/core/timing/window_performance.h"
 #include "third_party/blink/renderer/modules/event_target_modules.h"
 #include "third_party/blink/renderer/modules/mediarecorder/blob_event.h"
 #include "third_party/blink/renderer/modules/mediarecorder/media_recorder_handler.h"
@@ -31,6 +33,7 @@
 #include "third_party/blink/renderer/platform/mediastream/media_stream_descriptor.h"
 #include "third_party/blink/renderer/platform/network/mime/content_type.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
@@ -102,16 +105,16 @@ uint32_t ClampAudioBitRate(ExecutionContext* context, uint32_t audio_bps) {
   if (audio_bps > kLargestPossibleOpusBitRate) {
     LogConsoleMessage(
         context,
-        String::Format(
-            "Clamping calculated audio bitrate (%dbps) to the maximum (%dbps)",
+        Format(
+            "Clamping calculated audio bitrate ({}bps) to the maximum ({}bps)",
             audio_bps, kLargestPossibleOpusBitRate));
     return kLargestPossibleOpusBitRate;
   }
   if (audio_bps < kSmallestPossibleOpusBitRate) {
     LogConsoleMessage(
         context,
-        String::Format(
-            "Clamping calculated audio bitrate (%dbps) to the minimum (%dbps)",
+        Format(
+            "Clamping calculated audio bitrate ({}bps) to the minimum ({}bps)",
             audio_bps, kSmallestPossibleOpusBitRate));
     return kSmallestPossibleOpusBitRate;
   }
@@ -122,8 +125,8 @@ uint32_t ClampVideoBitRate(ExecutionContext* context, uint32_t video_bps) {
   if (video_bps < kSmallestPossibleVpxBitRate) {
     LogConsoleMessage(
         context,
-        String::Format(
-            "Clamping calculated video bitrate (%dbps) to the minimum (%dbps)",
+        Format(
+            "Clamping calculated video bitrate ({}bps) to the minimum ({}bps)",
             video_bps, kSmallestPossibleVpxBitRate));
     return kSmallestPossibleVpxBitRate;
   }
@@ -498,8 +501,15 @@ void MediaRecorder::CreateBlobEvent(Blob* blob) {
   if (!blob_event_first_chunk_timecode_.has_value()) {
     blob_event_first_chunk_timecode_ = now;
   } else {
-    timecode =
-        (now - blob_event_first_chunk_timecode_.value()).InMillisecondsF();
+    if (LocalDOMWindow* window =
+            DynamicTo<LocalDOMWindow>(GetExecutionContext())) {
+      if (WindowPerformance* performance =
+              DOMWindowPerformance::performance(*window)) {
+        timecode = performance->MonotonicTimeToDOMHighResTimeStamp(now) -
+                   performance->MonotonicTimeToDOMHighResTimeStamp(
+                       blob_event_first_chunk_timecode_.value());
+      }
+    }
   }
 
   ScheduleDispatchEvent(MakeGarbageCollected<BlobEvent>(

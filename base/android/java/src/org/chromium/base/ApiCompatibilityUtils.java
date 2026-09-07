@@ -29,7 +29,6 @@ import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 
 import java.io.IOException;
-import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
@@ -140,7 +139,7 @@ public class ApiCompatibilityUtils {
      * given {@link ActivityOptions}. The options can be used to send {@link PendingIntent} passed
      * to Chrome from a backgrounded app.
      *
-     * @param options {@ActivityOptions} to set the required mode to.
+     * @param options {@link ActivityOptions} to set the required mode to.
      */
     public static void setActivityOptionsBackgroundActivityStartAllowAlways(
             ActivityOptions options) {
@@ -151,20 +150,7 @@ public class ApiCompatibilityUtils {
                     ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED);
         } else {
             options.setPendingIntentBackgroundActivityStartMode(
-                    getBackgroundActivityStartAllowAlwaysMode());
-        }
-    }
-
-    private static int getBackgroundActivityStartAllowAlwaysMode() {
-        // TODO(crbug.com/366220935): Stop using reflection and inline this method once
-        // the constant becomes available in B.
-        try {
-            Class<?> clazz = ActivityOptions.class;
-            Field field = clazz.getDeclaredField("MODE_BACKGROUND_ACTIVITY_START_ALLOW_ALWAYS");
-            field.setAccessible(true);
-            return field.getInt(null);
-        } catch (NoSuchFieldException | IllegalAccessException e) {
-            throw new RuntimeException("Background start mode cannot be found.", e);
+                    ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_ALWAYS);
         }
     }
 
@@ -172,7 +158,7 @@ public class ApiCompatibilityUtils {
      * Sets the mode {@link ActivityOptions#MODE_BACKGROUND_ACTIVITY_START_ALLOWED} to the given
      * {@link ActivityOptions}. The options can be used to create {@link PendingIntent}.
      *
-     * @param options {@ActivityOptions} to set the required mode to.
+     * @param options {@link ActivityOptions} to set the required mode to.
      */
     public static void setCreatorActivityOptionsBackgroundActivityStartMode(
             ActivityOptions options) {

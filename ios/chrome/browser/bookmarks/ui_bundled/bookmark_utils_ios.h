@@ -44,6 +44,23 @@ const bookmarks::BookmarkNode* FindFolderById(
     const bookmarks::BookmarkModel* model,
     int64_t id);
 
+// Finds bookmark nodes corresponding to `ids` in the `model`. Returns a set
+// containing the nodes that are found and not null.
+std::set<raw_ptr<const bookmarks::BookmarkNode>> GetBookmarkNodesByIds(
+    const bookmarks::BookmarkModel* model,
+    const std::set<int64_t>& ids);
+
+// Finds bookmark nodes corresponding to `ids` in the `model`. Returns a vector
+// containing the nodes that are found and not null.
+std::vector<raw_ptr<const bookmarks::BookmarkNode>> GetBookmarkNodesByIds(
+    const bookmarks::BookmarkModel* model,
+    const std::vector<int64_t>& ids);
+
+// Returns a vector containing the IDs of `nodes`. Pointers are assumed to be
+// non-null.
+std::vector<int64_t> GetBookmarkNodeIds(
+    const std::vector<raw_ptr<const bookmarks::BookmarkNode>>& nodes);
+
 // The iOS code is doing some munging of the bookmark folder names in order
 // to display a slighly different wording for the default folders.
 NSString* TitleForBookmarkNode(const bookmarks::BookmarkNode* node);
@@ -152,21 +169,11 @@ void SortFolders(NodeVector* vector);
 // which are excluded, as well as their descendants. The returned list is
 // sorted depth-first, then alphabetically.
 // `search_terms` can be used to filter results.
-NodeVector VisibleNonDescendantNodes(
+std::vector<raw_ptr<const bookmarks::BookmarkNode>> VisibleNonDescendantNodes(
     const NodeSet& obstructions,
     const bookmarks::BookmarkModel* model,
     BookmarkStorageType type,
     const std::vector<std::u16string>& search_terms = {});
-
-// Whether `vector1` contains only elements of `vector2` in the same order.
-BOOL IsSubvectorOfNodes(const NodeVector& vector1, const NodeVector& vector2);
-
-// Returns the indices in `vector2` of the items in `vector2` that are not
-// present in `vector1`.
-// `vector1` MUST be a subvector of `vector2` in the sense of `IsSubvector`.
-std::vector<NodeVector::size_type> MissingNodesIndices(
-    const NodeVector& vector1,
-    const NodeVector& vector2);
 
 // Creates bookmark path for `folderId` passed in. For eg: for folderId = 76,
 // MobileBookmarks (3) --> Test1(76) will be returned as [3, 76], where the

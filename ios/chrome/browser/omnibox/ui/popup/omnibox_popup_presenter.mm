@@ -11,13 +11,11 @@
 #import "ios/chrome/browser/shared/ui/util/layout_guide_names.h"
 #import "ios/chrome/browser/shared/ui/util/uikit_ui_util.h"
 #import "ios/chrome/browser/shared/ui/util/util_swift.h"
-#import "ios/chrome/browser/toolbar/legacy/ui_bundled/public/omnibox_position_util.h"
 #import "ios/chrome/browser/toolbar/legacy/ui_bundled/public/toolbar_constants.h"
 #import "ios/chrome/common/ui/colors/semantic_color_names.h"
 #import "ios/chrome/common/ui/util/constraints_ui_util.h"
 #import "ios/chrome/common/ui/util/ui_util.h"
 #import "ui/base/device_form_factor.h"
-#import "ui/gfx/ios/uikit_util.h"
 
 namespace {
 const CGFloat kVerticalOffset = 6;
@@ -101,16 +99,15 @@ const CGFloat kFadeAnimationVerticalOffset = 12;
     _popupContainerView.overrideUserInterfaceStyle = userInterfaceStyle;
     viewController.overrideUserInterfaceStyle = userInterfaceStyle;
 
-    // TODO(crbug.com/469986429): The final state of this should be us exposing
-    // the presenter property OmniboxPopupPresenterDelegate and set it there.
+    if (IsComposeboxIOSEnabled()) {
+      if ([self.delegate
+              respondsToSelector:@selector(popupDidInitializePresenter:)]) {
+        [self.delegate popupDidInitializePresenter:self];
+      }
+    }
     if (ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_TABLET) {
-      if (IsComposeboxIpadEnabled()) {
-        _popupContainerView.backgroundColor =
-            [self.delegate popupBackgroundColorForPresenter:self];
-      } else {
         _popupContainerView.backgroundColor =
             [UIColor colorNamed:kPrimaryBackgroundColor];
-      }
     } else {
       _popupContainerView.backgroundColor =
           [self.delegate popupBackgroundColorForPresenter:self];
@@ -124,9 +121,9 @@ const CGFloat kFadeAnimationVerticalOffset = 12;
 
       AddSameConstraints(viewController.view, _popupContainerView);
     } else {
-      AddSameConstraintsToSides(viewController.view, _popupContainerView,
-                                LayoutSides::kLeading | LayoutSides::kTrailing |
-                                    LayoutSides::kBottom);
+      AddSameConstraintsToSides(
+          viewController.view, _popupContainerView,
+          LayoutSides::kBottom | LayoutSides::kHorizontal);
       _popupTopConstraint = [viewController.view.topAnchor
           constraintEqualToAnchor:_popupContainerView.topAnchor];
       _popupTopConstraint.active = YES;
@@ -163,9 +160,7 @@ const CGFloat kFadeAnimationVerticalOffset = 12;
     BOOL isBottomOmnibox =
         IsBottomOmniboxAvailable() &&
         _unfocusedOmniboxToolbarType == ToolbarType::kSecondary;
-    BOOL enableFocusAnimation =
-        isFocusingOmnibox &&
-        (isBottomOmnibox || IsMultilineBrowserOmniboxEnabled());
+    BOOL enableFocusAnimation = isFocusingOmnibox && isBottomOmnibox;
 
     [self initialLayoutAnimated:enableFocusAnimation];
 
@@ -182,6 +177,9 @@ const CGFloat kFadeAnimationVerticalOffset = 12;
 /// Therefore, on trait collection change, re-add the popup and recreate the
 /// constraints to make sure the correct ones are used.
 - (void)updatePopupAfterTraitCollectionChange {
+  if (!self.isOpen) {
+    return;
+  }
   // Re-add the popup container to break any existing constraints.
   [self.popupContainerView removeFromSuperview];
   [[self.delegate popupParentViewForPresenter:self]
@@ -195,8 +193,7 @@ const CGFloat kFadeAnimationVerticalOffset = 12;
 - (void)updatePopupConstraints {
     BOOL showRegularLayout =
         IsRegularXRegularSizeClass(self.popupContainerView.traitCollection);
-    if (IsComposeboxIpadEnabled() &&
-        _presentationContext == OmniboxPresentationContext::kComposebox) {
+    if (_presentationContext == OmniboxPresentationContext::kComposebox) {
       self.bottomConstraintComposeboxRegular.active = showRegularLayout;
       self.bottomConstraintPhone.active = !showRegularLayout;
     } else {
@@ -293,10 +290,9 @@ const CGFloat kFadeAnimationVerticalOffset = 12;
   // to defocus the omnibox.
   self.heightConstraintTablet = [popup.heightAnchor
       constraintLessThanOrEqualToAnchor:popup.superview.heightAnchor
-                             multiplier:IsComposeboxIpadEnabled() ? 1 : 0.7];
+                             multiplier:1];
 
-  if (IsComposeboxIpadEnabled() &&
-      _presentationContext == OmniboxPresentationContext::kComposebox) {
+  if (_presentationContext == OmniboxPresentationContext::kComposebox) {
     // Constraints the popup bottom to its container superview so composebox for
     // large size class is a completely containerized popup. Otherwise, the
     // iphone fullscreen layout will be used.
@@ -410,30 +406,8 @@ const CGFloat kFadeAnimationVerticalOffset = 12;
 }
 
 - (BOOL)useBottomOmniboxInPopup {
-  if (_presentationContext == OmniboxPresentationContext::kComposebox) {
-    return _preferredOmniboxPosition == ToolbarType::kSecondary;
-  }
-
-  if (_presentationContext == OmniboxPresentationContext::kLensOverlay) {
-    return NO;
-  }
-
-  BOOL inPortrait = IsPortrait(self.viewController.view.window);
-  if (omnibox::ForceBottomOmniboxInEditState()) {
-    return inPortrait;
-  }
-
-  BOOL unfocusedToolbarBottom =
-      _unfocusedOmniboxToolbarType == ToolbarType::kSecondary;
-  BOOL userPreferenceBottom =
-      _preferredOmniboxPosition == ToolbarType::kSecondary;
-  if (omnibox::ShouldFocusedOmniboxFollowSteadyStatePosition()) {
-    // NTP portrait with bottom omnibox has a special handling.
-    return (userPreferenceBottom && _isNTP && inPortrait) ||
-           unfocusedToolbarBottom;
-  }
-
-  return NO;
+  return _presentationContext == OmniboxPresentationContext::kComposebox &&
+         _preferredOmniboxPosition == ToolbarType::kSecondary;
 }
 
 @end

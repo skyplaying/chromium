@@ -9,7 +9,9 @@ import static org.chromium.chrome.browser.tasks.tab_management.TabSwitcherMessag
 
 import android.content.Context;
 import android.content.res.Resources;
+import android.view.LayoutInflater;
 import android.view.View;
+import android.view.View.OnLayoutChangeListener;
 import android.view.ViewGroup;
 import android.widget.ImageView;
 import android.widget.TextView;
@@ -23,10 +25,10 @@ import org.chromium.build.annotations.EnsuresNonNullIf;
 import org.chromium.build.annotations.Initializer;
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
-import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.tab_ui.R;
 import org.chromium.ui.modelutil.ListObservable;
 import org.chromium.ui.modelutil.ListObservable.ListObserver;
+import org.chromium.ui.util.CommonOnLayoutChangeListeners;
 
 /**
  * Empty coordinator that is responsible for showing an empty state view in tab switcher when we are
@@ -35,14 +37,14 @@ import org.chromium.ui.modelutil.ListObservable.ListObserver;
 // @TODO(crbug.com/40910476) Add instrumentation test for TabListEmptyCoordinator class.
 @NullMarked
 class TabListEmptyCoordinator {
-    public final long ILLUSTRATION_ANIMATION_DURATION_MS = 700L;
-
     private final TabListRecyclerView mRecyclerView;
     private final ViewGroup mRootView;
     private final Context mContext;
     private final TabListModel mModel;
     private final ListObserver<Void> mListObserver;
     private final Callback<Runnable> mRunOnItemAnimatorFinished;
+    private final OnLayoutChangeListener mLayoutChangeListener =
+            CommonOnLayoutChangeListeners.createSizeChangedListener(this::fixMargins);
 
     private @Nullable ViewGroup mEmptyView;
     private TextView mEmptyStateHeading;
@@ -50,7 +52,6 @@ class TabListEmptyCoordinator {
     private ImageView mImageView;
     private boolean mIsTabSwitcherShowing;
     private boolean mIsListObserverAttached;
-    private @Nullable TabListEmptyIllustrationAnimationManager mIllustrationAnimationManager;
 
     public TabListEmptyCoordinator(
             TabListRecyclerView recyclerView,
@@ -83,23 +84,11 @@ class TabListEmptyCoordinator {
             @DrawableRes int imageResId,
             @StringRes int emptyHeadingStringResId,
             @StringRes int emptySubheadingStringResId) {
-        if (mEmptyView != null) {
-            return;
-        }
+        if (mEmptyView != null) return;
+
         // Initialize empty state resource.
         mEmptyView =
-                (ViewGroup)
-                        android.view.LayoutInflater.from(mContext)
-                                .inflate(R.layout.empty_state_view, null);
-
-        // Padding for search box.
-        int searchBoxPadding =
-                mContext.getResources().getDimensionPixelSize(R.dimen.toolbar_height_no_shadow);
-        mEmptyView.setPadding(
-                mEmptyView.getPaddingLeft(),
-                searchBoxPadding,
-                mEmptyView.getPaddingRight(),
-                mEmptyView.getPaddingBottom());
+                (ViewGroup) LayoutInflater.from(mContext).inflate(R.layout.empty_state_view, null);
 
         mEmptyStateHeading = mEmptyView.findViewById(R.id.empty_state_text_title);
         mEmptyStateSubheading = mEmptyView.findViewById(R.id.empty_state_text_description);
@@ -109,17 +98,7 @@ class TabListEmptyCoordinator {
         setEmptyStateImageRes(imageResId);
         setEmptyStateViewText(emptyHeadingStringResId, emptySubheadingStringResId);
 
-        mIllustrationAnimationManager = tryGetAnimationManager(imageResId);
-        transformIllustrationIfPresent();
-    }
-
-    private @Nullable TabListEmptyIllustrationAnimationManager tryGetAnimationManager(
-            @DrawableRes int imageResId) {
-        return isDrawableForPhones(imageResId)
-                        && ChromeFeatureList.sEmptyTabListAnimationKillSwitch.isEnabled()
-                ? new PhoneTabListEmptyIllustrationAnimationManager(
-                        mImageView, mEmptyStateHeading, mEmptyStateSubheading)
-                : null;
+        mRootView.addOnLayoutChangeListener(mLayoutChangeListener);
     }
 
     private void setEmptyStateViewText(
@@ -148,17 +127,12 @@ class TabListEmptyCoordinator {
                         () -> {
                             // Re-check requirements since this is now async.
                             if (isEmptyViewAttached() && isInEmptyState()) {
-                                if (mIllustrationAnimationManager != null) {
-                                    mIllustrationAnimationManager.animate(
-                                            ILLUSTRATION_ANIMATION_DURATION_MS);
-                                }
                                 setEmptyViewVisibility(View.VISIBLE);
                                 fixMargins();
                             }
                         });
             } else {
                 setEmptyViewVisibility(View.GONE);
-                transformIllustrationIfPresent();
             }
         }
     }
@@ -166,24 +140,21 @@ class TabListEmptyCoordinator {
     private void fixMargins() {
         ViewGroup.MarginLayoutParams params =
                 (ViewGroup.MarginLayoutParams) assumeNonNull(mEmptyView).getLayoutParams();
+
         Resources resources = mContext.getResources();
         @Px int rowMargin = resources.getDimensionPixelSize(R.dimen.default_list_row_padding);
+        params.topMargin = rowMargin;
 
         if (isOnlyArchivedMsg(mModel)) {
             View msgCard = mRecyclerView.getChildAt(0);
 
-            // Account for the height of the message card.
-            params.topMargin = msgCard.getHeight() + rowMargin;
+            // Empty view should only begin after message card.
+            params.topMargin += msgCard.getMeasuredHeight() + msgCard.getTop();
         } else {
-            params.topMargin = 0;
+            // Account for hub UI elements, such as the search box.
+            params.topMargin += mRecyclerView.getTop();
         }
         mEmptyView.setLayoutParams(params);
-    }
-
-    private void transformIllustrationIfPresent() {
-        if (mIllustrationAnimationManager != null) {
-            mIllustrationAnimationManager.initialTransformation();
-        }
     }
 
     public void setIsTabSwitcherShowing(boolean isShowing) {
@@ -219,6 +190,7 @@ class TabListEmptyCoordinator {
     }
 
     public void destroyEmptyView() {
+        mRootView.removeOnLayoutChangeListener(mLayoutChangeListener);
         if (mEmptyView != null && mEmptyView.getParent() != null) {
             mRootView.removeView(mEmptyView);
         }
@@ -231,10 +203,5 @@ class TabListEmptyCoordinator {
 
     private boolean getIsListObserverAttached() {
         return mIsListObserverAttached;
-    }
-
-    // TODO(https://crbug.com/423697444): Clean up old animation class for GTS mobile.
-    private boolean isDrawableForPhones(@DrawableRes int drawableResId) {
-        return drawableResId == R.drawable.phone_tab_switcher_empty_state_illustration;
     }
 }

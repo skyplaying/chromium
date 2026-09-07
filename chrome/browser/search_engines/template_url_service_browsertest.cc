@@ -6,7 +6,6 @@
 
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/regional_capabilities/regional_capabilities_switches.h"
 #include "components/search_engines/template_url.h"
@@ -29,7 +28,7 @@ class TemplateURLServiceBrowserTest : public InProcessBrowserTest {
   }
 
   TemplateURLService* template_url_service() {
-    return TemplateURLServiceFactory::GetForProfile(browser()->profile());
+    return TemplateURLServiceFactory::GetForProfile(browser()->GetProfile());
   }
 };
 

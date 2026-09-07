@@ -7,6 +7,7 @@ package org.chromium.components.browser_ui.widget;
 import static org.chromium.components.browser_ui.widget.containment.ContainmentUiUtils.parseContainmentAttributes;
 
 import android.content.Context;
+import android.content.res.Resources;
 import android.content.res.TypedArray;
 import android.graphics.drawable.Drawable;
 import android.os.Bundle;
@@ -19,16 +20,19 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.View.OnClickListener;
 import android.view.ViewStub;
+import android.widget.ImageView;
 import android.widget.RadioButton;
 import android.widget.RelativeLayout;
 import android.widget.TextView;
+
+import androidx.annotation.StyleRes;
+import androidx.core.widget.TextViewCompat;
 
 import org.chromium.build.annotations.NullMarked;
 import org.chromium.build.annotations.Nullable;
 import org.chromium.components.browser_ui.widget.containment.ContainmentItem;
 import org.chromium.components.browser_ui.widget.containment.ContainmentUiUtils;
 import org.chromium.ui.UiUtils;
-import org.chromium.ui.widget.ChromeImageView;
 
 import java.util.List;
 
@@ -82,7 +86,7 @@ public class RadioButtonWithDescription extends RelativeLayout
     private RadioButton mRadioButton;
 
     @SuppressWarnings("NullAway.Init")
-    private ChromeImageView mIcon;
+    private ImageView mIcon;
 
     @SuppressWarnings("NullAway.Init")
     private TextView mPrimary;
@@ -175,7 +179,9 @@ public class RadioButtonWithDescription extends RelativeLayout
         }
     }
 
-    /** @return The layout resource id used for inflating this {@link RadioButtonWithDescription}. */
+    /**
+     * @return The layout resource id used for inflating this {@link RadioButtonWithDescription}.
+     */
     protected int getLayoutResource() {
         return R.layout.radio_button_with_description;
     }
@@ -188,9 +194,9 @@ public class RadioButtonWithDescription extends RelativeLayout
     }
 
     /**
-     * @return ChromeImageView inside this {@link RadioButtonWithDescription}.
+     * @return ImageView inside this {@link RadioButtonWithDescription}.
      */
-    protected ChromeImageView getIcon() {
+    protected ImageView getIcon() {
         return findViewById(R.id.icon);
     }
 
@@ -254,6 +260,15 @@ public class RadioButtonWithDescription extends RelativeLayout
         String primaryText = a.getString(R.styleable.RadioButtonWithDescription_primaryText);
         if (primaryText != null) mPrimary.setText(primaryText);
 
+        @StyleRes
+        int primaryTextAppearance =
+                a.getResourceId(
+                        R.styleable.RadioButtonWithDescription_primaryTextAppearance,
+                        Resources.ID_NULL);
+        if (primaryTextAppearance != Resources.ID_NULL) {
+            TextViewCompat.setTextAppearance(mPrimary, primaryTextAppearance);
+        }
+
         String descriptionText =
                 a.getString(R.styleable.RadioButtonWithDescription_descriptionText);
         if (descriptionText != null) {
@@ -261,6 +276,15 @@ public class RadioButtonWithDescription extends RelativeLayout
             mDescription.setVisibility(View.VISIBLE);
         } else {
             ((LayoutParams) mPrimary.getLayoutParams()).addRule(RelativeLayout.CENTER_VERTICAL);
+        }
+
+        @StyleRes
+        int descriptionTextAppearance =
+                a.getResourceId(
+                        R.styleable.RadioButtonWithDescription_descriptionTextAppearance,
+                        Resources.ID_NULL);
+        if (descriptionTextAppearance != Resources.ID_NULL) {
+            TextViewCompat.setTextAppearance(mDescription, descriptionTextAppearance);
         }
 
         a.recycle();

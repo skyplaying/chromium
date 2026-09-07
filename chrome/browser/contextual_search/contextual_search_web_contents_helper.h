@@ -9,6 +9,7 @@
 #include <optional>
 #include <vector>
 
+#include "base/no_destructor.h"
 #include "base/uuid.h"
 #include "components/contextual_search/contextual_search_session_handle.h"
 #include "components/contextual_search/input_state_model.h"
@@ -37,7 +38,17 @@ class ContextualSearchWebContentsHelper
   void SetTaskSession(
       std::optional<base::Uuid> task_id,
       std::unique_ptr<contextual_search::ContextualSearchSessionHandle> handle,
-      std::unique_ptr<contextual_search::InputStateModel> input_state_model) {
+      std::unique_ptr<contextual_search::InputStateModel> input_state_model,
+      std::vector<int32_t> selected_tab_ids = {}) {
+    if (!selected_tab_ids.empty()) {
+      selected_tab_ids_ = std::move(selected_tab_ids);
+    } else if (task_id_.has_value() && task_id != task_id_) {
+      // If the task ID is changing to a different non-null value and no new
+      // IDs are provided, clear the old restored IDs. This happens when
+      // starting a new thread in cobrowse.
+      selected_tab_ids_.clear();
+    }
+
     task_id_ = task_id;
     session_handle_ = std::move(handle);
     input_state_model_ = std::move(input_state_model);
@@ -47,8 +58,17 @@ class ContextualSearchWebContentsHelper
     return session_handle_.get();
   }
 
-  // Returns the input state model. May return nullptr.
+  // Returns the input state model. May return nullptr. This transfers
+  // ownership to the caller.
   std::unique_ptr<contextual_search::InputStateModel> TakeInputStateModel();
+
+  // Returns the session handle. May return nullptr. This transfers ownership
+  // to the caller.
+  std::unique_ptr<contextual_search::ContextualSearchSessionHandle>
+  TakeSessionHandle();
+
+  // Returns the selected tab IDs.
+  const std::vector<int32_t>& GetSelectedTabIds() const;
 
   // Returns the task ID associated with the current contextual search session.
   // std::nullopt if the web_contents isn't showing a contextual task.
@@ -59,11 +79,36 @@ class ContextualSearchWebContentsHelper
   // This will update the task ID to be `task_id` if it was previously empty.
   contextual_search::ContextualSearchSessionHandle* GetSessionForTask(
       const base::Uuid& task_id) {
-    if (!task_id_) {
+    if (!task_id_ && session_handle_) {
       task_id_ = std::make_optional(task_id);
     }
     return (session_handle_ && task_id_ == task_id) ? session_handle_.get()
                                                     : nullptr;
+  }
+
+  std::unique_ptr<contextual_search::InputStateModel>
+  TakeInputStateModelForTask(const base::Uuid& task_id) {
+    if (!task_id_ && input_state_model_) {
+      task_id_ = std::make_optional(task_id);
+    }
+    // Return and transfer ownership of the model if it matches the task.
+    if (task_id_ == task_id) {
+      return TakeInputStateModel();
+    }
+    return nullptr;
+  }
+
+  const std::vector<int32_t>& GetSelectedTabIdsForTask(
+      const base::Uuid& task_id) {
+    if (!task_id_ && !selected_tab_ids_.empty()) {
+      task_id_ = std::make_optional(task_id);
+    }
+
+    if (task_id_ == task_id) {
+      return GetSelectedTabIds();
+    }
+    static const base::NoDestructor<std::vector<int32_t>> empty_vector;
+    return *empty_vector;
   }
 
  private:
@@ -76,6 +121,7 @@ class ContextualSearchWebContentsHelper
   std::unique_ptr<contextual_search::ContextualSearchSessionHandle>
       session_handle_;
   std::unique_ptr<contextual_search::InputStateModel> input_state_model_;
+  std::vector<int32_t> selected_tab_ids_;
 
   WEB_CONTENTS_USER_DATA_KEY_DECL();
 };

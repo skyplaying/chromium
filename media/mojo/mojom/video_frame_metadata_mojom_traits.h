@@ -17,6 +17,10 @@
 #include "mojo/public/cpp/bindings/struct_traits.h"
 #include "ui/gfx/geometry/mojom/geometry_mojom_traits.h"
 
+#if BUILDFLAG(IS_ANDROID)
+#include "gpu/ipc/common/vulkan_ycbcr_info_mojom_traits.h"
+#endif
+
 namespace intermediate {
 // A type to be used by mojo serialization, because the generated serialization
 // code makes it impossible to map an optional object to a non-optional enum.
@@ -44,17 +48,12 @@ template <>
 struct EnumTraits<media::mojom::EffectState, intermediate::EffectState> {
   static media::mojom::EffectState ToMojom(intermediate::EffectState input);
 
-  static bool FromMojom(media::mojom::EffectState input,
-                        intermediate::EffectState* output);
+  static intermediate::EffectState FromMojom(media::mojom::EffectState input);
 };
 
 template <>
 struct StructTraits<media::mojom::VideoFrameMetadataDataView,
                     media::VideoFrameMetadata> {
-  static bool allow_overlay(const media::VideoFrameMetadata& input) {
-    return input.allow_overlay;
-  }
-
   static bool copy_required(const media::VideoFrameMetadata& input) {
     return input.copy_required;
   }
@@ -234,6 +233,13 @@ struct StructTraits<media::mojom::VideoFrameMetadataDataView,
                ? intermediate::EffectState::kEnabled
                : intermediate::EffectState::kDisabled;
   }
+
+#if BUILDFLAG(IS_ANDROID)
+  static const std::optional<gpu::VulkanYCbCrInfo>& ycbcr_info(
+      const media::VideoFrameMetadata& input) {
+    return input.ycbcr_info;
+  }
+#endif
 
   static bool Read(media::mojom::VideoFrameMetadataDataView input,
                    media::VideoFrameMetadata* output);

@@ -76,6 +76,25 @@
         }
       },
       {
+        "id": "NativeMessageTarget",
+        "type": "object",
+        "nocompile": true,
+        "nodoc": true,
+        "description": "Specifies an external application target for extension messages.",
+        "properties": {
+          "application": {
+            "type": "string",
+            "description": "The name of the native messaging host, or external Android app's package name."
+          },
+          "androidCertificates": {
+            "type": "array",
+            "items": { "type": "string" },
+            "optional": true,
+            "description": "List of expected signing certificates for the external Android app specified as SHA-256 fingerprints. If non-empty, the connection is established if the app is signed by at least one of the certificates provided. Must be non-empty for packed extensions on Android. Ignored for other platforms."
+          }
+        }
+      },
+      {
         "id": "PlatformOs",
         "type": "string",
         "description": "The operating system Chrome is running on.",
@@ -104,6 +123,7 @@
       },
       {
         "id": "PlatformNaclArch",
+        "deprecated": "This enum is deprecated following complete removal of Native Client.",
         "description": "The native client architecture. This may be different from arch on some platforms.",
         "type": "string",
         "enum": [
@@ -129,6 +149,7 @@
           },
           "nacl_arch" : {
             "optional": true,
+            "deprecated": "This attribute is deprecated following complete removal of Native Client.",
             "description": "The native client architecture. This may be different from arch on some platforms.",
             "$ref": "PlatformNaclArch"
           }
@@ -369,6 +390,19 @@
         }
       },
       {
+        "name": "markListenerRegistrationComplete",
+        "type": "function",
+        "nodoc": true,
+        "description": "Signals that the extension has finished registering its event listeners for the current service worker instance. The browser replaces persisted listener registrations with the newly registered listeners and dispatches any queued events. Only available in the service worker of extensions declaring <code>\"background.async_listener_registration\": true</code>.",
+        "parameters": [],
+        "returns_async": {
+          "name": "callback",
+          "optional": true,
+          "description": "Called once the browser has committed the listener registration. The promise is rejected if the extension is not opted in, the caller is not the service worker, or no listener registration is in progress.",
+          "parameters": []
+        }
+      },
+      {
         "name": "setUninstallURL",
         "type": "function",
         "description": "Sets the URL to be visited upon uninstallation. This may be used to clean up server-side data, do analytics, and implement surveys. Maximum 1023 characters.",
@@ -473,9 +507,18 @@
         "description": "Connects to a native application in the host machine. This method requires the <code>\"nativeMessaging\"</code> permission. See <a href=\"develop/concepts/native-messaging\">Native Messaging</a> for more information.",
         "parameters": [
           {
-            "type": "string",
             "name": "application",
-            "description": "The name of the registered application to connect to."
+            "description": "The name of the registered application to connect to.",
+            "choices": [
+              {
+                "type": "string",
+                "description": "The name of the registered application to connect to."
+              },
+              {
+                "$ref": "NativeMessageTarget",
+                "nodoc": true
+              }
+            ]
           }
         ],
         "returns": {
@@ -521,8 +564,17 @@
         "parameters": [
           {
             "name": "application",
-            "description": "The name of the native messaging host.",
-            "type": "string"
+            "description": "The name of the native messaging host, or target details.",
+            "choices": [
+              {
+                "type": "string",
+                "description": "The name of the native messaging host, or external Android app's package name. Packed extensions on Android must specify a $(ref:runtime.NativeMessageTarget)."
+              },
+              {
+                "$ref": "NativeMessageTarget",
+                "nodoc": true
+              }
+            ]
           },
           {
             "name": "message",
@@ -640,6 +692,11 @@
         ]
       },
       {
+        "name": "onEnabled",
+        "type": "function",
+        "description": "Fired when an extension goes from being in a disabled state to an enabled state."
+      },
+      {
         "name": "onSuspend",
         "type": "function",
         "description": "Sent to the event page just before it is unloaded. This gives the extension opportunity to do some clean up. Note that since the page is unloading, any asynchronous operations started while handling this event are not guaranteed to complete. If more activity for the event page occurs before it gets unloaded the onSuspendCanceled event will be sent and the page won't be unloaded. "
@@ -724,7 +781,7 @@
         "options": {
           "unmanaged": true
         },
-        "description": "Fired when a message is sent from either an extension process (by $(ref:runtime.sendMessage)) or a content script (by $(ref:tabs.sendMessage)).",
+        "description": "Fired when a message is sent from either $(ref:runtime.sendMessage) or $(ref:tabs.sendMessage).",
         "parameters": [
           {"name": "message", "type": "any", "optional": true, "description": "The message sent by the calling script."},
           {"name": "sender", "$ref": "MessageSender" },

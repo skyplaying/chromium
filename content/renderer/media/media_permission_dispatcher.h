@@ -58,7 +58,7 @@ class MediaPermissionDispatcher : public media::MediaPermission {
 
  private:
   // Map of request IDs and pending PermissionStatusCBs.
-  typedef std::map<uint32_t, PermissionStatusCB> RequestMap;
+  using RequestMap = std::map<uint32_t, PermissionStatusCB>;
 
   // Register PermissionStatusCBs. Returns |request_id| that can be used to make
   // PermissionService calls.
@@ -81,7 +81,7 @@ class MediaPermissionDispatcher : public media::MediaPermission {
 
   // Callback for |permission_service_| calls.
   void OnPermissionStatus(uint32_t request_id,
-                          blink::mojom::PermissionStatus status);
+                          blink::mojom::PermissionStatusWithDetailsPtr status);
 
   // Callback for |permission_service_| connection errors.
   void OnPermissionServiceConnectionError();

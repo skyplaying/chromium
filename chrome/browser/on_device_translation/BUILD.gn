@@ -22,6 +22,7 @@ source_set("on_device_translation") {
   public_deps = [
     "//chrome/browser:browser_public_dependencies",
     "//components/on_device_translation:public",
+    "//components/on_device_translation/service:service_launcher",
   ]
   deps = [
     "//base",
@@ -32,6 +33,7 @@ source_set("on_device_translation") {
     "//components/content_settings/core/browser",
     "//components/keyed_service/content",
     "//components/on_device_translation",
+    "//components/on_device_translation:metrics",
     "//components/on_device_translation/public/mojom",
     "//components/on_device_translation/service:on_device_translation_service",
     "//components/permissions",
@@ -56,7 +58,6 @@ source_set("unit_tests") {
     ":on_device_translation",
     "//base",
     "//base/test:test_support",
-    "//chrome/browser",
     "//chrome/test:test_support",
     "//components/component_updater:test_support",
     "//components/crx_file",

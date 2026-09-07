@@ -6,18 +6,20 @@
 
 #include <utility>
 
+#include "base/functional/bind.h"
 #include "base/notreached.h"
 #include "base/task/single_thread_task_runner.h"
 #include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
 #include "ui/accessibility/accessibility_features.h"
 #include "ui/accessibility/platform/ax_platform.h"
 #include "ui/accessibility/platform/browser_accessibility_manager.h"
+#include "ui/views/accessibility/ax_virtual_view.h"
 #include "ui/views/accessibility/tree/widget_view_ax_cache.h"
 #include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/view.h"
+#include "ui/views/widget/widget.h"
 
 #if BUILDFLAG(IS_WIN)
-#include <oleacc.h>
-
 #include "ui/views/win/hwnd_util.h"
 #endif  // BUILDFLAG(IS_WIN)
 
@@ -28,14 +30,19 @@
 namespace {
 
 using Event = ax::mojom::Event;
+
 bool ShouldSerializeEvent(Event event_type) {
   // Events that are serialized and forwarded to BrowserAccessibilityManager.
   switch (event_type) {
     // TODO(crbug.com/40672441): Add events that must be serialized directly.
+    case Event::kAlert:
+    case Event::kControlsChanged:
     case Event::kEndOfTest:
-    // TODO(crbug.com/40672441): kFocus is only needed here for tests while
-    // are migrating to ViewsAX.
-    case Event::kFocus:
+    case Event::kTooltipClosed:
+    case Event::kTooltipOpened:
+    case Event::kWindowActivated:
+    case Event::kWindowDeactivated:
+    case Event::kWindowVisibilityChanged:
       return true;
     default:
       break;
@@ -46,7 +53,19 @@ bool ShouldSerializeEvent(Event event_type) {
   switch (event_type) {
     // TODO(crbug.com/40672441): Add events here as needed.
     case Event::kActiveDescendantChanged:
+    case Event::kCheckedStateChanged:
     case Event::kChildrenChanged:
+    case Event::kEnabledChanged:
+    case Event::kExpandedChanged:
+    case Event::kFocus:
+    case Event::kMenuPopupEnd:
+    case Event::kMenuPopupStart:
+    case Event::kLiveRegionChanged:
+    case Event::kSelection:
+    case Event::kSelectedChildrenChanged:
+    case Event::kTextChanged:
+    case Event::kTextSelectionChanged:
+    case Event::kValueChanged:
       return false;
     default:
       break;
@@ -60,9 +79,12 @@ bool ShouldSerializeEvent(Event event_type) {
   switch (event_type) {
     // TODO(crbug.com/40672441): Add events here as needed.
     case Event::kLocationChanged:
-    case Event::kTreeChanged:
     case Event::kRowCollapsed:
+    case Event::kRowCountChanged:
     case Event::kRowExpanded:
+    case Event::kScrollPositionChanged:
+    case Event::kStateChanged:
+    case Event::kTreeChanged:
       return false;
     default:
       break;
@@ -71,28 +93,9 @@ bool ShouldSerializeEvent(Event event_type) {
   // Events fired by views on some platforms but not yet handled. These are
   // being addressed incrementally, one event at a time.
   switch (event_type) {
-    case Event::kAlert:
-    case Event::kCheckedStateChanged:
-    case Event::kControlsChanged:
-    case Event::kExpandedChanged:
     case Event::kFocusAfterMenuClose:
-    case Event::kFocusContext:
-    case Event::kLiveRegionChanged:
     case Event::kMenuEnd:
-    case Event::kMenuPopupEnd:
-    case Event::kMenuPopupStart:
     case Event::kMenuStart:
-    case Event::kSelection:
-    case Event::kSelectedChildrenChanged:
-    case Event::kStateChanged:
-    case Event::kTextChanged:
-    case Event::kTextSelectionChanged:
-    case Event::kTooltipClosed:
-    case Event::kTooltipOpened:
-    case Event::kValueChanged:
-    case Event::kWindowActivated:
-    case Event::kWindowDeactivated:
-    case Event::kWindowVisibilityChanged:
       return false;
     default:
       break;
@@ -114,11 +117,17 @@ WidgetAXManager::WidgetAXManager(Widget* widget)
       << "WidgetAXManager should only be created when the "
          "accessibility tree feature is enabled.";
 
-  ui::AXPlatform::GetInstance().AddModeObserver(this);
+  if (widget_) {
+    widget_created_ = widget_->IsNativeWidgetInitialized();
+    widget_observation_.Observe(widget_);
+  }
+  ax_mode_observation_.Observe(&ui::AXPlatform::GetInstance());
 }
 
 WidgetAXManager::~WidgetAXManager() {
-  ui::AXPlatform::GetInstance().RemoveModeObserver(this);
+  ClearAXTreeHost();
+  DetachFromParentTree();
+  ax_mode_observation_.Reset();
   ax_tree_manager_.reset();
 }
 
@@ -126,7 +135,7 @@ void WidgetAXManager::Init() {
   CHECK(widget_->GetRootView());
   if (ui::AXPlatform::GetInstance().GetMode().has_mode(
           ui::AXMode::kNativeAPIs)) {
-    Enable();
+    EnableWhenWidgetCreated();
   } else {
     if (widget_->is_top_level()) {
       InitAXTreeManager();
@@ -136,14 +145,52 @@ void WidgetAXManager::Init() {
 
 void WidgetAXManager::OnEvent(ViewAccessibility& view_ax,
                               ax::mojom::Event event_type) {
-  if (!is_enabled_ || !ShouldSerializeEvent(event_type)) {
+  if (!is_enabled_) {
+    return;
+  }
+
+  if (!ShouldSerializeEvent(event_type)) {
     return;
   }
 
   pending_events_.push_back({view_ax.GetUniqueId(), event_type});
   pending_data_updates_.insert(view_ax.GetUniqueId());
 
-  SchedulePendingUpdate();
+  // kTooltipClosed fires just before the tooltip widget is destroyed (see
+  // TooltipAura::Hide).  Since SchedulePendingUpdate uses PostTask with a weak
+  // pointer, the callback would be invalidated when the widget is destroyed,
+  // silently dropping the event.  Flush synchronously to ensure the event
+  // reaches BrowserAccessibilityManager before the widget is torn down.
+  //
+  // kTooltipOpened is also flushed synchronously.  The tooltip widget's views
+  // are already in place when Show() fires kTooltipOpened (`widget_->Show()`
+  // precedes the event in TooltipAura::Show), so the tree is ready for
+  // serialization.  Flushing synchronously ensures platform events
+  // (EVENT_OBJECT_SHOW / UIA_ToolTipOpenedEventId) fire before callers that
+  // check for them (e.g. event recorders in tests) run their next step.
+  //
+  // kMenuPopupEnd fires just before the menu widget is hidden. Flush it while
+  // the widget can still emit generated MENU_POPUP_END platform events.
+  if (event_type == ax::mojom::Event::kTooltipClosed ||
+      event_type == ax::mojom::Event::kTooltipOpened ||
+      event_type == ax::mojom::Event::kMenuPopupEnd) {
+    SendPendingUpdate();
+  } else {
+    SchedulePendingUpdate();
+  }
+}
+
+void WidgetAXManager::OnTransientFocusRequested(ViewAccessibility& view_ax) {
+  if (!is_enabled_) {
+    return;
+  }
+
+  CHECK(tree_source_);
+  pending_data_updates_.insert(view_ax.GetUniqueId());
+  tree_source_->SetTransientFocusIdForNextSerialization(view_ax.GetUniqueId());
+  auto clear_transient_focus = absl::MakeCleanup(
+      [this] { tree_source_->ClearTransientFocusIdForNextSerialization(); });
+  SendPendingUpdate();
 }
 
 void WidgetAXManager::OnDataChanged(ViewAccessibility& view_ax) {
@@ -181,11 +228,139 @@ void WidgetAXManager::OnChildRemoved(ViewAccessibility& child,
 }
 
 void WidgetAXManager::OnChildManagerAdded(WidgetAXManager& child_manager) {
-  child_manager.parent_ax_tree_id_ = ax_tree_id_;
+  child_manager.UpdateParentTreeConnection();
 }
 
 void WidgetAXManager::OnChildManagerRemoved(WidgetAXManager& child_manager) {
-  child_manager.parent_ax_tree_id_ = ui::AXTreeID();
+  RemoveChildWidgetTreeHost(child_manager.ax_tree_id_);
+  child_manager.SetParentAXTreeID(ui::AXTreeIDUnknown());
+}
+
+void WidgetAXManager::AppendChildWidgetTreeHosts(
+    std::vector<raw_ptr<ViewAccessibility>>& out) const {
+  for (const auto& host : child_widget_tree_hosts_) {
+    out.push_back(host.get());
+  }
+}
+
+void WidgetAXManager::UpdateParentTreeConnection() {
+  Widget* parent = widget_ ? widget_->parent() : nullptr;
+  WidgetAXManager* parent_manager = parent ? parent->ax_manager() : nullptr;
+
+  // A View that hosts this tree owns the connection, and that View can live in
+  // a widget that is not the parent widget.
+  if (ax_tree_host_tracker_.view()) {
+    if (parent_manager) {
+      parent_manager->RemoveChildWidgetTreeHost(ax_tree_id_);
+    }
+    return;
+  }
+
+  if (!parent_manager) {
+    DetachFromParentTree();
+    return;
+  }
+
+  SetParentAXTreeID(parent_manager->ax_tree_id_);
+
+  // A hidden widget stays out of the parent tree.
+  if (!widget_->IsVisible()) {
+    parent_manager->RemoveChildWidgetTreeHost(ax_tree_id_);
+    return;
+  }
+
+  parent_manager->AddChildWidgetTreeHost(ax_tree_id_);
+}
+
+void WidgetAXManager::DetachFromParentTree() {
+  Widget* parent = widget_ ? widget_->parent() : nullptr;
+  if (WidgetAXManager* parent_manager =
+          parent ? parent->ax_manager() : nullptr) {
+    parent_manager->RemoveChildWidgetTreeHost(ax_tree_id_);
+  }
+  SetParentAXTreeID(ui::AXTreeIDUnknown());
+}
+
+void WidgetAXManager::AddChildWidgetTreeHost(
+    const ui::AXTreeID& child_tree_id) {
+  View* root_view = widget_ ? widget_->GetRootView() : nullptr;
+  if (!root_view || FindChildWidgetTreeHost(child_tree_id)) {
+    return;
+  }
+
+  // An ignored host is transparent, thus the hosted tree takes its place.
+  auto owned_host = std::make_unique<AXVirtualView>();
+  owned_host->SetRole(ax::mojom::Role::kNone);
+  AXVirtualView* host = owned_host.get();
+  child_widget_tree_hosts_.push_back(std::move(owned_host));
+
+  ViewAccessibility& root_view_ax = root_view->GetViewAccessibility();
+  host->set_parent_view(&root_view_ax);
+  host->SetChildTreeID(child_tree_id);
+  OnChildAdded(*host, root_view_ax);
+}
+
+void WidgetAXManager::RemoveChildWidgetTreeHost(
+    const ui::AXTreeID& child_tree_id) {
+  AXVirtualView* host = FindChildWidgetTreeHost(child_tree_id);
+  if (!host) {
+    return;
+  }
+
+  if (ViewAccessibility* parent = host->parent_view()) {
+    OnChildRemoved(*host, *parent);
+    host->set_parent_view(nullptr);
+  }
+  std::erase_if(child_widget_tree_hosts_,
+                [host](const std::unique_ptr<AXVirtualView>& candidate) {
+                  return candidate.get() == host;
+                });
+}
+
+AXVirtualView* WidgetAXManager::FindChildWidgetTreeHost(
+    const ui::AXTreeID& child_tree_id) const {
+  for (const auto& host : child_widget_tree_hosts_) {
+    if (host->GetChildTreeID() == child_tree_id) {
+      return host.get();
+    }
+  }
+  return nullptr;
+}
+
+void WidgetAXManager::HostAXTreeInView(ViewAccessibility& host_view_ax) {
+  View* host_view = host_view_ax.view();
+  Widget* host_widget = host_view_ax.GetWidget();
+  WidgetAXManager* host_manager =
+      host_widget ? host_widget->ax_manager() : nullptr;
+  if (!host_view || !host_manager || host_manager == this) {
+    ClearAXTreeHost();
+    UpdateParentTreeConnection();
+    return;
+  }
+
+  if (View* current_host_view = ax_tree_host_tracker_.view();
+      current_host_view && current_host_view != host_view) {
+    ClearAXTreeHost();
+  }
+
+  ++ax_tree_host_generation_;
+  ax_tree_host_tracker_.SetView(host_view);
+  // Only one node may claim this tree, so drop the host in the parent widget.
+  UpdateParentTreeConnection();
+  SetParentAXTreeID(host_manager->ax_tree_id_);
+  host_view_ax.SetChildTreeID(ax_tree_id_);
+}
+
+void WidgetAXManager::ScheduleUnhostAXTree() {
+  if (!ax_tree_host_tracker_) {
+    UpdateParentTreeConnection();
+    return;
+  }
+
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(&WidgetAXManager::UnhostAXTreeAfterFlush,
+                                weak_factory_.GetWeakPtr(), ax_tree_id_,
+                                ax_tree_host_generation_));
 }
 
 void WidgetAXManager::AddObserver(WidgetAXManagerObserver* observer) {
@@ -198,8 +373,27 @@ void WidgetAXManager::RemoveObserver(WidgetAXManagerObserver* observer) {
 
 void WidgetAXManager::OnAXModeAdded(ui::AXMode mode) {
   if (mode.has_mode(ui::AXMode::kNativeAPIs)) {
+    EnableWhenWidgetCreated();
+  }
+}
+
+void WidgetAXManager::OnWidgetCreated(Widget* widget) {
+  CHECK_EQ(widget_, widget);
+  widget_created_ = true;
+  if (enable_on_widget_created_) {
+    enable_on_widget_created_ = false;
     Enable();
   }
+}
+
+void WidgetAXManager::OnWidgetDestroyed(Widget* widget) {
+  CHECK_EQ(widget_, widget);
+  widget_observation_.Reset();
+}
+
+void WidgetAXManager::OnWidgetVisibilityChanged(Widget* widget, bool visible) {
+  CHECK_EQ(widget_, widget);
+  UpdateParentTreeConnection();
 }
 
 gfx::NativeViewAccessible WidgetAXManager::GetNativeViewAccessibleForId(
@@ -212,6 +406,14 @@ gfx::NativeViewAccessible WidgetAXManager::GetNativeViewAccessibleForId(
     return gfx::NativeViewAccessible();
   }
   return browser_node->GetNativeViewAccessible();
+}
+
+ui::AXTreeID WidgetAXManager::GetAXTreeID() const {
+  if (!ax_tree_manager_) {
+    return ui::AXTreeIDUnknown();
+  }
+
+  return ax_tree_id_;
 }
 
 base::WeakPtr<ui::AXPlatformTreeManager>
@@ -253,7 +455,8 @@ gfx::Rect WidgetAXManager::AccessibilityGetViewBounds() {
   if (!widget_) {
     return gfx::Rect();
   }
-  return widget_->GetWindowBoundsInScreen();
+  // View-to-screen conversions are anchored at the client area, not the window.
+  return widget_->GetClientAreaBoundsInScreen();
 }
 
 float WidgetAXManager::AccessibilityGetDeviceScaleFactor() {
@@ -291,21 +494,12 @@ WidgetAXManager::AccessibilityGetNativeViewAccessible() {
           static_cast<NativeWidgetMac*>(widget_->native_widget())) {
     return native_widget->GetNativeViewAccessibleForNSView();
   }
-#elif BUILDFLAG(IS_WIN)
-  // Hold a reference to the parent in this instance to ensure that it lives
-  // long enough for the caller to take its own reference, if needed.
-  if (!parent_accessible_) {
-    HWND hwnd = HWNDForView(widget_->GetRootView());
-    if (!hwnd) {
-      return nullptr;
-    }
-    if (SUCCEEDED(::AccessibleObjectFromWindow(
-            hwnd, OBJID_WINDOW, IID_PPV_ARGS(&parent_accessible_)))) {
-      return parent_accessible_.Get();
-    }
-  }
-#endif
   return gfx::NativeViewAccessible();
+#elif BUILDFLAG(IS_WIN)
+  return HWNDNativeViewAccessibleForWidget(widget_);
+#else
+  return gfx::NativeViewAccessible();
+#endif
 }
 
 gfx::NativeViewAccessible
@@ -351,7 +545,14 @@ gfx::NativeWindow WidgetAXManager::GetTopLevelNativeWindow() {
 }
 
 bool WidgetAXManager::CanFireAccessibilityEvents() const {
-  return widget_ ? widget_->IsActive() : false;
+  // Use IsVisible() rather than IsActive().  Tooltip, menu, and other non-
+  // activatable widgets are visible to the user and must fire accessibility
+  // events for assistive technology to track them.  IsActive() is always false
+  // for TYPE_TOOLTIP widgets, which would silently drop all events.
+  // Also check IsNativeWidgetInitialized() because this method can be called
+  // during Widget::Init() before the native widget's window has a layer.
+  return widget_ && widget_->IsNativeWidgetInitialized() &&
+         widget_->IsVisible();
 }
 
 bool WidgetAXManager::AccessibilityIsRootFrame() const {
@@ -371,6 +572,55 @@ WidgetAXManager::AccessibilityGetWebContentsAccessibility() {
 
 bool WidgetAXManager::AccessibilityIsWebContentSource() {
   return false;
+}
+
+void WidgetAXManager::OnDidChangeFocus(View* focused_before,
+                                       View* focused_now) {
+  // focused_node_id_ persists when the widget deactivates, matching web
+  // content behavior. The BAM gates on AccessibilityViewHasFocus() to
+  // suppress events when the window isn't active.
+  focused_node_id_ = GetFocusedViewNodeId();
+  if (is_enabled_) {
+    CHECK(tree_source_);
+    tree_source_->SetFocusedNodeId(focused_node_id_);
+    SchedulePendingUpdate();
+  }
+}
+
+void WidgetAXManager::OnFocusManagerDestroying(FocusManager* focus_manager) {
+  focus_manager_observation_.Reset();
+  focused_node_id_ = ui::kInvalidAXNodeID;
+  CHECK(tree_source_);
+  tree_source_->SetFocusedNodeId(ui::kInvalidAXNodeID);
+}
+
+void WidgetAXManager::StartObservingFocus() {
+  if (focus_manager_observation_.IsObserving() || !widget_) {
+    return;
+  }
+  FocusManager* fm = widget_->GetFocusManager();
+  if (!fm) {
+    return;
+  }
+  focus_manager_observation_.Observe(fm);
+  focused_node_id_ = GetFocusedViewNodeId();
+  CHECK(tree_source_);
+  tree_source_->SetFocusedNodeId(focused_node_id_);
+}
+
+// Returns the focused view's AXNodeID, or kInvalidAXNodeID if no view
+// has focus. Active descendants are not resolved here; the AXTree
+// applies the activedescendant relationship when resolving focus,
+// matching how Blink populates focus_id.
+ui::AXNodeID WidgetAXManager::GetFocusedViewNodeId() const {
+  if (!widget_) {
+    return ui::kInvalidAXNodeID;
+  }
+  FocusManager* fm = widget_->GetFocusManager();
+  if (!fm || !fm->GetFocusedView()) {
+    return ui::kInvalidAXNodeID;
+  }
+  return fm->GetFocusedView()->GetViewAccessibility().GetUniqueId();
 }
 
 void WidgetAXManager::SchedulePendingUpdate() {
@@ -393,6 +643,10 @@ void WidgetAXManager::InitAXTreeManager() {
   update.root_id = root_data.id;
   update.nodes.push_back(root_data);
 
+  update.has_tree_data = true;
+  update.tree_data.tree_id = ax_tree_id_;
+  update.tree_data.parent_tree_id = parent_ax_tree_id_;
+
   cache_->Init(widget_->GetRootView()->GetViewAccessibility(),
                false /* full_tree */);
 
@@ -400,14 +654,34 @@ void WidgetAXManager::InitAXTreeManager() {
       ui::BrowserAccessibilityManager::Create(update, *this, this));
 }
 
+void WidgetAXManager::EnableWhenWidgetCreated() {
+  if (!widget_) {
+    return;
+  }
+
+  if (!widget_created_) {
+    // WidgetAXManager can be attached after OnWidgetCreated() has already fired.
+    widget_created_ = widget_->IsNativeWidgetInitialized();
+  }
+
+  if (widget_created_) {
+    Enable();
+    return;
+  }
+
+  enable_on_widget_created_ = true;
+}
+
 void WidgetAXManager::Enable() {
   if (is_enabled_) {
     return;
   }
+  UpdateParentTreeConnection();
   is_enabled_ = true;
   tree_source_ = std::make_unique<ViewAccessibilityAXTreeSource>(
       widget_->GetRootView()->GetViewAccessibility().GetUniqueId(), ax_tree_id_,
       cache_.get());
+  tree_source_->SetParentTreeId(parent_ax_tree_id_);
   tree_serializer_ =
       std::make_unique<ViewAccessibilityAXTreeSerializer>(tree_source_.get());
 
@@ -418,6 +692,8 @@ void WidgetAXManager::Enable() {
     InitAXTreeManager();
   }
   cache_->Init(widget_->GetRootView()->GetViewAccessibility());
+
+  StartObservingFocus();
 
   // Fully serialize the tree starting from the root immediately.
   pending_data_updates_.insert(
@@ -430,6 +706,63 @@ void WidgetAXManager::NotifyEnabled() {
   for (WidgetAXManagerObserver& observer : observers_) {
     observer.OnWidgetAXManagerEnabled();
   }
+}
+
+void WidgetAXManager::SetParentAXTreeID(const ui::AXTreeID& parent_ax_tree_id) {
+  if (parent_ax_tree_id_ == parent_ax_tree_id) {
+    return;
+  }
+
+  parent_ax_tree_id_ = parent_ax_tree_id;
+  if (!tree_source_) {
+    return;
+  }
+
+  tree_source_->SetParentTreeId(parent_ax_tree_id_);
+  if (!is_enabled_) {
+    return;
+  }
+
+  // The root view is already gone when the widget tears the manager down.
+  View* root_view = widget_->GetRootView();
+  if (!root_view) {
+    return;
+  }
+
+  pending_data_updates_.insert(root_view->GetViewAccessibility().GetUniqueId());
+  SchedulePendingUpdate();
+}
+
+void WidgetAXManager::ClearAXTreeHost() {
+  ++ax_tree_host_generation_;
+
+  if (View* host_view = ax_tree_host_tracker_.view()) {
+    ViewAccessibility& host_view_ax = host_view->GetViewAccessibility();
+    if (host_view_ax.GetChildTreeID() == ax_tree_id_) {
+      host_view_ax.RemoveChildTreeID();
+    }
+  }
+
+  ax_tree_host_tracker_.SetView(nullptr);
+}
+
+void WidgetAXManager::UnhostAXTreeAfterFlush(
+    base::WeakPtr<WidgetAXManager> manager,
+    ui::AXTreeID child_tree_id,
+    uint32_t host_generation) {
+  if (!manager || manager->ax_tree_host_generation_ != host_generation) {
+    return;
+  }
+
+  if (View* host_view = manager->ax_tree_host_tracker_.view()) {
+    ViewAccessibility& host_view_ax = host_view->GetViewAccessibility();
+    if (host_view_ax.GetChildTreeID() != child_tree_id) {
+      return;
+    }
+  }
+
+  manager->ClearAXTreeHost();
+  manager->UpdateParentTreeConnection();
 }
 
 void WidgetAXManager::SendPendingUpdate() {
@@ -529,22 +862,33 @@ void WidgetAXManager::SendPendingUpdate() {
     }
   }
 
-  // TODO(crbug.com/40672441): Make sure the focused node is serialized.
+  // Ensure the focused node is serialized so it is added to the accessibility
+  // tree cache before tree_data.focus_id refers to it.
+  if (focused_node_id_ != ui::kInvalidAXNodeID &&
+      !already_serialized_ids.contains(focused_node_id_)) {
+    if (ViewAccessibility* focused_ax = cache_->Get(focused_node_id_)) {
+      ui::AXTreeUpdate update;
+      if (tree_serializer_->SerializeChanges(focused_ax, &update)) {
+        for (auto& node : update.nodes) {
+          already_serialized_ids.insert(node.id);
+        }
+        tree_updates.push_back(std::move(update));
+      }
+    }
+  }
 
   if (tree_updates.empty() && events.empty()) {
     // Nothing to do, no updates or events.
     return;
   }
 
-#if DCHECK_IS_ON()
   for (const auto& update : tree_updates) {
     for (const auto& node : update.nodes) {
-      DCHECK(cache_->Get(node.id))
+      CHECK(cache_->Get(node.id))
           << "Unknown serialized node. All nodes we serialize should be known "
              "to the WidgetAXManager.";
     }
   }
-#endif  // DCHECK_IS_ON()
 
   maybe_updates_and_events.emplace();
   maybe_updates_and_events->ax_tree_id = ax_tree_id_;

@@ -129,6 +129,7 @@ bool IsOddSizeMultiPlanarBuffersAllowed();
 // Returns a span containing all mappable SharedImageFormats.
 COMPONENT_EXPORT(VIZ_SHARED_IMAGE_FORMAT)
 base::span<const SharedImageFormat> GetMappableSharedImageFormatForTesting();
+
 }  // namespace viz
 
 #endif  // COMPONENTS_VIZ_COMMON_RESOURCES_SHARED_IMAGE_FORMAT_UTILS_H_

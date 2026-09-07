@@ -5,38 +5,38 @@
 #ifndef CHROME_BROWSER_UI_WEBUI_DEFAULT_BROWSER_DEFAULT_BROWSER_MODAL_DIALOG_DELEGATE_H_
 #define CHROME_BROWSER_UI_WEBUI_DEFAULT_BROWSER_DEFAULT_BROWSER_MODAL_DIALOG_DELEGATE_H_
 
+#include <memory>
+
+#include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
 #include "ui/base/interaction/element_identifier.h"
+#include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/gfx/native_ui_types.h"
-#include "ui/web_dialogs/web_dialog_delegate.h"
+#include "ui/views/view.h"
+#include "ui/views/view_observer.h"
+#include "ui/views/window/dialog_delegate.h"
 
 class Profile;
 
+namespace views {
+class Widget;
+}
+
 namespace default_browser {
+
+DECLARE_ELEMENT_IDENTIFIER_VALUE(kDefaultBrowserModalDialogId);
 
 // The "Modal" entrypoint for the Windows Default Browser. This dialog
 // displays a WebUI page to provide prompts that help users navigate OS
-// settings to set Chrome as the default browser based the DefaultBrowserSetter
-// behavior.
-class DefaultBrowserModalDialog : public ui::WebDialogDelegate {
- public:
-  DECLARE_CLASS_ELEMENT_IDENTIFIER_VALUE(kDefaultBrowserModalDialogId);
-
-  // Shows the modal dialog. This is triggered by the DefaultBrowserManager when
-  // the STARTUP_MODAL entrypoint is selected.
-  // The modal have two variants, one with the Windows Settings illustration and
-  // the other without it. When `use_settings_illustration` is true, the modal
-  // will display the Windows Settings illustration.
-  static void Show(Profile* profile,
-                   gfx::NativeView parent,
-                   bool use_settings_illustration);
-
-  explicit DefaultBrowserModalDialog(bool use_settings_illustration);
-  ~DefaultBrowserModalDialog() override;
-
-  DefaultBrowserModalDialog(const DefaultBrowserModalDialog&) = delete;
-  DefaultBrowserModalDialog& operator=(const DefaultBrowserModalDialog&) =
-      delete;
-};
+// settings to set Chrome as the default browser based on the interaction
+// choice.
+// Shows the modal dialog. This is triggered by the DefaultBrowserManager when
+// the STARTUP_MODAL entrypoint is selected.
+std::unique_ptr<views::Widget> Show(Profile* profile,
+                                    gfx::NativeWindow parent,
+                                    bool use_settings_illustration,
+                                    bool can_pin_to_taskbar,
+                                    bool activate_on_show);
 
 }  // namespace default_browser
 

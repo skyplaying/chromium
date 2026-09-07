@@ -9,6 +9,9 @@
 #include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/ui/tab_contents/core_tab_helper.h"
 #include "chrome/browser/ui/tabs/split_tab_metrics.h"
+#include "chrome/browser/ui/tabs/tab_enums.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "components/sessions/core/session_id.h"
 #include "components/tab_groups/tab_group_id.h"
 
 TestTabStripModelDelegate::TestTabStripModelDelegate() = default;
@@ -22,7 +25,7 @@ void TestTabStripModelDelegate::AddTabAt(
     std::optional<tab_groups::TabGroupId> group,
     bool pinned) {}
 
-Browser* TestTabStripModelDelegate::CreateNewStripWithTabs(
+BrowserWindowInterface* TestTabStripModelDelegate::CreateNewStripWithTabs(
     std::vector<NewStripContents> tabs,
     const gfx::Rect& window_bounds,
     bool maximize) {
@@ -79,11 +82,23 @@ std::optional<SessionID> TestTabStripModelDelegate::CreateHistoricalTab(
 void TestTabStripModelDelegate::CreateHistoricalGroup(
     const tab_groups::TabGroupId& group) {}
 
+void TestTabStripModelDelegate::CreateHistoricalSplit(
+    const split_tabs::SplitTabId& split_id) {}
+
 void TestTabStripModelDelegate::GroupAdded(
     const tab_groups::TabGroupId& group) {}
 
 void TestTabStripModelDelegate::WillCloseGroup(
     const tab_groups::TabGroupId& group) {}
+
+void TestTabStripModelDelegate::WillCloseSplit(
+    const split_tabs::SplitTabId& split_id) {}
+
+void TestTabStripModelDelegate::SplitClosed(
+    const split_tabs::SplitTabId& split_id) {}
+
+void TestTabStripModelDelegate::SplitCloseStopped(
+    const split_tabs::SplitTabId& split_id) {}
 
 void TestTabStripModelDelegate::GroupCloseStopped(
     const tab_groups::TabGroupId& group) {}
@@ -127,6 +142,7 @@ bool TestTabStripModelDelegate::IsNormalWindow() {
 
 void TestTabStripModelDelegate::NewSplitTab(
     std::vector<int> indices,
+    split_tabs::SplitTabLayout layout,
     split_tabs::SplitTabCreatedSource source) {}
 
 BrowserWindowInterface* TestTabStripModelDelegate::GetBrowserWindowInterface() {
@@ -146,23 +162,10 @@ void TestTabStripModelDelegate::OnRemovingAllTabsFromGroups(
   std::move(callback).Run();
 }
 
-#if BUILDFLAG(ENABLE_GLIC)
-bool TestTabStripModelDelegate::IsTabGlicPinned(tabs::TabHandle tab_handle) {
-  return true;
-}
-
-bool TestTabStripModelDelegate::GlicPinTabs(
-    base::span<const tabs::TabHandle> tab_handles) {
-  return true;
-}
-
-bool TestTabStripModelDelegate::GlicUnpinTabs(
-    base::span<const tabs::TabHandle> tab_handles) {
-  return true;
-}
-
-void TestTabStripModelDelegate::OpenGlicWindowFromSharedTab() {}
-
 void TestTabStripModelDelegate::GlicUnpinTabsFromAllConversations(
     base::span<const tabs::TabHandle> tab_handles) {}
-#endif
+
+void TestTabStripModelDelegate::CloseTab(
+    const tabs::TabInterface* tab,
+    CloseTabSource source,
+    base::OnceCallback<void(CloseTabSource)> on_approved) {}

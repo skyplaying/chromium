@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import type {SkillSource} from '/glic/glic_api/glic_api.js';
+import type {SkillPreview, SkillSource} from '/glic/glic_api/glic_api.js';
 
-import {getBrowser, logMessage} from '../client.js';
+import {client, getBrowser, logMessage} from '../client.js';
 import {$} from '../page_element_types.js';
 
 $.createSkillBtn.addEventListener('click', async () => {
@@ -51,4 +51,97 @@ $.getSkillBtn.addEventListener('click', async () => {
 
 $.manageSkillsBtn.addEventListener('click', () => {
   getBrowser()!.showManageSkillsUi!();
+});
+
+$.browseSkillsBtn.addEventListener('click', () => {
+  getBrowser()!.showBrowseSkillsUi!();
+});
+
+function updateSkillsListUi(skillPreviews: SkillPreview[]) {
+  while ($.skillsList.childNodes.length > 0) {
+    $.skillsList.removeChild($.skillsList.firstChild!);
+  }
+
+  skillPreviews.forEach((skill: SkillPreview) => {
+    const li = document.createElement('LI');
+
+    // ID.
+    const id = document.createElement('SPAN');
+    id.className = 'skill-id';
+    id.setAttribute('value', skill.id);
+    id.innerText = skill.id;
+    li.appendChild(id);
+
+    // Divider.
+    const divider = document.createElement('SPAN');
+    divider.innerText = ' : ';
+    li.appendChild(divider);
+
+    // Name.
+    const name = document.createElement('SPAN');
+    name.innerText = skill.name;
+    name.className = 'skill-name';
+    name.setAttribute('value', skill.name);
+    li.appendChild(name);
+
+    // Creation Time.
+    if (skill.creationTime) {
+      const timeDivider = document.createElement('SPAN');
+      timeDivider.innerText = ' : ';
+      li.appendChild(timeDivider);
+
+      const creationTime = document.createElement('SPAN');
+      creationTime.className = 'skill-creation-time';
+      creationTime.setAttribute('value', skill.creationTime.toISOString());
+      creationTime.innerText = skill.creationTime.toISOString();
+      li.appendChild(creationTime);
+    }
+
+    $.skillsList.appendChild(li);
+  });
+}
+
+function initSkillPreviews() {
+  const browser = getBrowser()!;
+  if (browser.skills) {
+    let currentSubscription: {unsubscribe: () => void}|undefined;
+    browser.skills()?.subscribeObserver?.({
+      next: (skills) => {
+        if (currentSubscription) {
+          currentSubscription.unsubscribe();
+          currentSubscription = undefined;
+        }
+        if (!skills) {
+          updateSkillsListUi([]);
+          return;
+        }
+        currentSubscription = skills.getSkillPreviews?.()?.subscribeObserver?.({
+          next: (skillPreviews: SkillPreview[]) => {
+            logMessage(`skills previews updated.`);
+            updateSkillsListUi(skillPreviews);
+          },
+          error: (err: any) => {
+            logMessage(`skill previews update error: ${err}`);
+          },
+        });
+      },
+    });
+  } else if (browser.getSkillPreviews) {
+    const observableSkillPreviews = browser.getSkillPreviews()!;
+    observableSkillPreviews.subscribeObserver!({
+      next: (skillPreviews: SkillPreview[]) => {
+        logMessage(`skills previews updated.`);
+        updateSkillsListUi(skillPreviews);
+      },
+      error: (err: any) => {
+        logMessage(`skill previews update error: ${err}`);
+      },
+    });
+  } else {
+    logMessage('skills not supported');
+  }
+}
+
+client.getInitialized().then(() => {
+  initSkillPreviews();
 });

@@ -81,8 +81,8 @@ class ProxyResolvingClientSocketTest
     return builder;
   }
 
-  base::test::TaskEnvironment task_environment_;
   base::test::ScopedFeatureList feature_list_;
+  base::test::TaskEnvironment task_environment_;
   net::MockClientSocketFactory mock_client_socket_factory_;
   const bool use_tls_;
 };
@@ -128,7 +128,7 @@ TEST_P(ProxyResolvingClientSocketTest, NetworkIsolationKeyDirect) {
   std::unique_ptr<net::HostResolver::ResolveHostRequest> request1 =
       url_request_context->host_resolver()->CreateRequest(
           kDestinationHostPortPair, kNetworkAnonymizationKey,
-          net::NetLogWithSource(), params);
+          net::handles::kInvalidNetworkHandle, net::NetLogWithSource(), params);
   net::TestCompletionCallback callback2;
   int result = request1->Start(callback2.callback());
   EXPECT_EQ(net::OK, callback2.GetResult(result));
@@ -143,7 +143,8 @@ TEST_P(ProxyResolvingClientSocketTest, NetworkIsolationKeyDirect) {
   for (const auto& other_nak : kOtherNaks) {
     std::unique_ptr<net::HostResolver::ResolveHostRequest> request2 =
         url_request_context->host_resolver()->CreateRequest(
-            kDestinationHostPortPair, other_nak, net::NetLogWithSource(),
+            kDestinationHostPortPair, other_nak,
+            net::handles::kInvalidNetworkHandle, net::NetLogWithSource(),
             params);
     net::TestCompletionCallback callback3;
     result = request2->Start(callback3.callback());
@@ -287,9 +288,10 @@ TEST_P(ProxyResolvingClientSocketTest, NetworkIsolationKeyWithH2Proxy) {
 // (ClientSocketPoolManager::max_sockets_per_group) doesn't apply to this
 // type of sockets.
 TEST_P(ProxyResolvingClientSocketTest, SocketLimitNotApply) {
-  const int kNumSockets = net::ClientSocketPoolManager::max_sockets_per_group(
-                              net::HttpNetworkSession::NORMAL_SOCKET_POOL) +
-                          10;
+  const int kNumSockets =
+      net::ClientSocketPoolManager::max_sockets_per_group(
+          net::HttpNetworkSession::SocketPoolType::kNormal) +
+      10;
   const GURL kDestination("https://example.com:443");
   net::MockClientSocketFactory socket_factory;
   net::MockWrite writes[] = {

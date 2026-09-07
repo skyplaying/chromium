@@ -9,6 +9,7 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -27,6 +28,7 @@
 #include "content/public/browser/render_process_host.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "url/origin.h"
 
 class WebRtcLogUploader;
 class WebRtcRtpDumpHandler;
@@ -58,9 +60,14 @@ class WebRtcLoggingController
   // Argument #1: Indicate success/failure.
   // Argument #2: If success, the log's ID. Otherwise, empty.
   // Argument #3: If failure, the error message. Otherwise, empty.
-  typedef base::RepeatingCallback<
-      void(bool, const std::string&, const std::string&)>
+  typedef base::OnceCallback<void(bool, const std::string&, const std::string&)>
       StartEventLoggingCallback;
+
+  struct WebApiSettings {
+    bool should_upload_on_stop = false;
+    url::Origin origin;
+    std::string uuid;
+  };
 
   static void AttachToRenderProcessHost(content::RenderProcessHost* host);
   static WebRtcLoggingController* FromRenderProcessHost(
@@ -75,28 +82,37 @@ class WebRtcLoggingController
   void SetMetaData(std::unique_ptr<WebRtcLogMetaDataMap> meta_data,
                    GenericDoneCallback callback);
 
-  // Opens a log and starts logging. Must be called on the IO thread.
-  void StartLogging(GenericDoneCallback callback);
+  // Opens a log and starts logging. Must be called on the UI thread.
+  void StartLogging(
+      GenericDoneCallback callback,
+      std::optional<WebApiSettings> web_api_settings = std::nullopt);
 
   // Stops logging. Log will remain open until UploadLog or DiscardLog is
-  // called. Must be called on the IO thread.
+  // called. Must be called on the UI thread.
   void StopLogging(GenericDoneCallback callback);
 
   // Uploads the text log and the RTP dumps. Discards the local copy. May only
-  // be called after text logging has stopped. Must be called on the IO thread.
+  // be called after text logging has stopped. Must be called on the UI thread.
   void UploadLog(UploadDoneCallback callback);
 
   // Discards the log and the RTP dumps. May only be called after logging has
-  // stopped. Must be called on the IO thread.
+  // stopped. Must be called on the UI thread.
   void DiscardLog(GenericDoneCallback callback);
 
   // Stores the log locally using a hash of log_id + security origin.
   void StoreLog(const std::string& log_id, GenericDoneCallback callback);
-  // May be called on any thread. |upload_log_on_render_close_| is used
-  // for decision making and it's OK if it changes before the execution based
-  // on that decision has finished.
+  // |upload_log_on_render_close_| is used for decision making and it's OK if
+  // it changes before the execution based on that decision has finished.
   void set_upload_log_on_render_close(bool should_upload) {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     upload_log_on_render_close_ = should_upload;
+  }
+
+  void set_should_upload_on_stop(bool should_upload) {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+    if (web_api_settings_.has_value()) {
+      web_api_settings_->should_upload_on_stop = should_upload;
+    }
   }
 
   // Starts dumping the RTP headers for the specified direction. Must be called
@@ -123,11 +139,12 @@ class WebRtcLoggingController
   // arguments will be set to the log-ID. Otherwise, the second of the string
   // arguments will contain the error message.
   // This function must be called on the UI thread.
-  void StartEventLogging(const std::string& session_id,
+  void StartEventLogging(webrtc_logging::ApiType api_type,
+                         const std::string& session_id,
                          size_t max_log_size_bytes,
                          int output_period_ms,
                          size_t web_app_id,
-                         const StartEventLoggingCallback& callback);
+                         StartEventLoggingCallback callback);
 
   base::RepeatingCallback<void(const std::string&)> GetLogMessageCallback();
 
@@ -139,14 +156,22 @@ class WebRtcLoggingController
                         LogsDirectoryErrorCallback error_callback);
 #endif
 
+  const std::optional<WebApiSettings>& web_api_settings() {
+    return web_api_settings_;
+  }
+
   // chrome::mojom::WebRtcLoggingClient methods:
   void OnAddMessages(
       std::vector<chrome::mojom::WebRtcLoggingMessagePtr> messages) override;
   void OnStopped() override;
 
   // Checks whether WebRTC text-logs is permitted by
-  // the relevant policy (prefs::kWebRtcTextLogCollectionAllowed).
-  static bool IsWebRtcTextLogAllowed(content::BrowserContext* browser_context);
+  // the relevant policies (prefs::kWebRtcTextLogCollectionAllowed and
+  // prefs::kWebRTCDiagnosticLogCollectionAllowedForOrigins).
+  static bool IsWebRtcTextLogAllowed(
+      content::BrowserContext* browser_context,
+      webrtc_logging::ApiType api_type = webrtc_logging::ApiType::kExtension,
+      const url::Origin& origin = url::Origin());
 
  private:
   friend class base::RefCounted<WebRtcLoggingController>;
@@ -194,6 +219,14 @@ class WebRtcLoggingController
   content::BrowserContext* GetBrowserContext() const;
 
   webrtc_logging::ApiType GetApiType() const;
+  bool IsWebApiDiagnosticLoggingStarted() const;
+  WebRtcLogUploadSite GetUploadSite() const;
+  bool CanOperationProceedInWebApiMode() const;
+
+  // Returns true if the operation can proceed in Web API mode. If not, it
+  // runs the callback with an error and returns false.
+  bool CheckCanOperationProceed(GenericDoneCallback& callback);
+  bool CheckCanOperationProceed(UploadDoneCallback& callback);
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
   // Grants the render process access to the 'WebRTC Logs' directory, and
@@ -234,6 +267,8 @@ class WebRtcLoggingController
 
   // The callback to call when StopRtpDump is called.
   content::RenderProcessHost::WebRtcStopRtpDumpCallback stop_rtp_dump_callback_;
+
+  std::optional<WebApiSettings> web_api_settings_;
 
   // Web app id used for statistics. Created as the hash of the value of a
   // "client" meta data key, if exists. 0 means undefined, and is the hash of

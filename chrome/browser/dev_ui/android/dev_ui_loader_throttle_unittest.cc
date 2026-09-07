@@ -10,7 +10,6 @@
 
 #include "chrome/android/modules/dev_ui/provider/dev_ui_module_provider.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
-#include "content/public/browser/navigation_handle.h"
 #include "content/public/common/buildflags.h"
 #include "content/public/test/mock_navigation_handle.h"
 #include "content/public/test/mock_navigation_throttle_registry.h"
@@ -33,6 +32,16 @@ const char* const kNonDevUiUrls[] = {
 const char* const kDevUiUrls[] = {
     "chrome://bluetooth-internals",
     "chrome://bluetooth-internals/path?query#frag",
+    "chrome://chrome-finds-internals",
+    "chrome://chrome-finds-internals/path?query#frag",
+    "chrome://connectors-internals",
+    "chrome://connectors-internals/path?query#frag",
+    "chrome://private-ai-internals",
+    "chrome://private-ai-internals/path?query#frag",
+    "chrome://regional-capabilities-internals",
+    "chrome://regional-capabilities-internals/path?query#frag",
+    "chrome://segmentation-internals",
+    "chrome://segmentation-internals/path?query#frag",
 #if BUILDFLAG(ENABLE_DEVTOOLS_FRONTEND)
     "devtools://devtools/bundled/devtools_app.html",
 #endif
@@ -181,10 +190,13 @@ TEST_F(DevUiLoaderThrottleTest, PreventAccidentalInclusion) {
   EXPECT_FALSE(ShouldInstallDevUiDfm(GURL("chrome://dino")));
   // chrome://flags has relatively high usage.
   EXPECT_FALSE(ShouldInstallDevUiDfm(GURL("chrome://flags")));
-  // Useful for filing bugs.
+  // Useful for filing bugs and diagnosing crashes/metrics offline.
+  EXPECT_FALSE(ShouldInstallDevUiDfm(GURL("chrome://crashes")));
+  EXPECT_FALSE(ShouldInstallDevUiDfm(GURL("chrome://histograms")));
   EXPECT_FALSE(ShouldInstallDevUiDfm(GURL("chrome://version")));
   // Used by Android WebView.
   EXPECT_FALSE(ShouldInstallDevUiDfm(GURL("chrome://safe-browsing")));
+  EXPECT_FALSE(ShouldInstallDevUiDfm(GURL("chrome://user-actions")));
 }
 
 TEST_F(DevUiLoaderThrottleTest, MaybeCreateAndAdd) {

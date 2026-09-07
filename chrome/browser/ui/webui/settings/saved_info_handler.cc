@@ -9,8 +9,8 @@
 #include "chrome/browser/autofill/autofill_image_fetcher_factory.h"
 #include "chrome/browser/autofill/personal_data_manager_factory.h"
 #include "chrome/browser/autofill/valuables_data_manager_factory.h"
-#include "chrome/browser/password_manager/account_password_store_factory.h"
-#include "chrome/browser/password_manager/profile_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/account_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/hats/hats_service.h"
 #include "chrome/browser/ui/hats/hats_service_factory.h"
@@ -18,6 +18,7 @@
 #include "chrome/common/webui_url_constants.h"
 #include "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #include "components/autofill/core/browser/data_manager/valuables/valuables_data_manager.h"
+#include "components/autofill/core/common/autofill_features.h"
 #include "components/password_manager/core/browser/password_manager_util.h"
 #include "components/password_manager/core/browser/password_store/password_store_interface.h"
 #include "content/public/browser/web_ui.h"
@@ -155,7 +156,7 @@ enum class DataManagementSurvey {
   kIdentityDocs = 4,
   kTravel = 5,
 };
-// LINT.ThenChange(/chrome/browser/resources/settings/your_saved_info_page/saved_info_handler_proxy.ts:DataManagementSurvey)
+// LINT.ThenChange(/chrome/browser/resources/settings/autofill_page/saved_info_handler_proxy.ts:DataManagementSurvey)
 
 const std::string GetManagementSurveyTrigger(DataManagementSurvey survey) {
   switch (survey) {
@@ -201,9 +202,7 @@ void SavedInfoHandler::HandleRequestDataManagementSurvey(
   bool is_from_home_page = args[1].GetBool();
 
   auto& feature = GetManagementSurveyFeature(survey);
-  if (!base::FeatureList::IsEnabled(feature) ||
-      !base::FeatureList::IsEnabled(
-          autofill::features::kYourSavedInfoSettingsPage)) {
+  if (!base::FeatureList::IsEnabled(feature)) {
     return;
   }
 

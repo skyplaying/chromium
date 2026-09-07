@@ -5,6 +5,7 @@
 package org.chromium.printing;
 
 import android.app.Activity;
+import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.print.PrintAttributes;
 import android.print.PrintDocumentAdapter;
@@ -23,19 +24,31 @@ import java.util.List;
 @NullMarked
 public class PrintManagerDelegateImpl implements PrintManagerDelegate {
     private static final String TAG = "printing";
+    private final Activity mActivity;
     private final PrintManager mPrintManager;
 
     public PrintManagerDelegateImpl(Activity activity) {
+        mActivity = activity;
         mPrintManager = (PrintManager) activity.getSystemService(Context.PRINT_SERVICE);
     }
 
     @Override
-    public void print(
+    public boolean print(
             String printJobName,
             PrintDocumentAdapter documentAdapter,
             @Nullable PrintAttributes attributes) {
+        if (mActivity.isFinishing() || mActivity.isDestroyed()) {
+            Log.w(TAG, "Cannot start printing: activity is finishing or destroyed.");
+            return false;
+        }
         dumpJobStatesForDebug();
-        mPrintManager.print(printJobName, documentAdapter, attributes);
+        try {
+            mPrintManager.print(printJobName, documentAdapter, attributes);
+            return true;
+        } catch (ActivityNotFoundException | IllegalStateException e) {
+            Log.e(TAG, "Printing failed.", e);
+            return false;
+        }
     }
 
     private void dumpJobStatesForDebug() {

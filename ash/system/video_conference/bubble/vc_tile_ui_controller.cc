@@ -15,7 +15,6 @@
 #include "ash/system/video_conference/video_conference_utils.h"
 #include "base/barrier_callback.h"
 #include "base/containers/flat_set.h"
-#include "base/debug/crash_logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chromeos/ash/components/dbus/dlcservice/dlcservice.pb.h"
@@ -268,9 +267,6 @@ void VcTileUiController::OnDlcDownloadStateFetched(
     return;
   }
 
-  SCOPED_CRASH_KEY_STRING32("VCTileUIC", "label",
-                            base::UTF16ToUTF8(effect_state_label_for_debug_));
-
   CHECK(effect_state_)
       << "DLC State retrieved, but `effect_state_` is no longer valid for: "
       << effect_state_label_for_debug_;
@@ -287,11 +283,11 @@ void VcTileUiController::UpdateTooltip() {
     return;
   }
   tile_->SetTooltipText(l10n_util::GetStringFUTF16(
-      VIDEO_CONFERENCE_TOGGLE_BUTTON_TOOLTIP,
+      IDS_VIDEO_CONFERENCE_TOGGLE_BUTTON_TOOLTIP,
       l10n_util::GetStringUTF16(effect_state_->accessible_name_id()),
       l10n_util::GetStringUTF16(
-          tile_->IsToggled() ? VIDEO_CONFERENCE_TOGGLE_BUTTON_STATE_ON
-                             : VIDEO_CONFERENCE_TOGGLE_BUTTON_STATE_OFF)));
+          tile_->IsToggled() ? IDS_VIDEO_CONFERENCE_TOGGLE_BUTTON_STATE_ON
+                             : IDS_VIDEO_CONFERENCE_TOGGLE_BUTTON_STATE_OFF)));
 }
 
 }  // namespace ash::video_conference

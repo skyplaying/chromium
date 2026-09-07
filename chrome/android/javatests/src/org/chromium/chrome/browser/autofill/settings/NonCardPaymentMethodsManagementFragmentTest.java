@@ -26,20 +26,21 @@ import org.mockito.quality.Strictness;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.Batch;
+import org.chromium.base.test.util.DisabledTest;
 import org.chromium.base.test.util.Features.DisableFeatures;
 import org.chromium.base.test.util.Features.EnableFeatures;
 import org.chromium.base.test.util.HistogramWatcher;
 import org.chromium.base.test.util.RequiresRestart;
+import org.chromium.chrome.R;
 import org.chromium.chrome.browser.autofill.AutofillImageFetcher;
 import org.chromium.chrome.browser.autofill.AutofillTestHelper;
 import org.chromium.chrome.browser.autofill.AutofillUiUtils.IconSpecs;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.preferences.Pref;
 import org.chromium.chrome.browser.profiles.ProfileManager;
-import org.chromium.chrome.browser.settings.SettingsActivity;
-import org.chromium.chrome.browser.settings.SettingsActivityTestRule;
+import org.chromium.chrome.browser.settings.SettingsActivityInterface;
+import org.chromium.chrome.browser.settings.SettingsTestRule;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.R;
 import org.chromium.components.autofill.ImageSize;
 import org.chromium.components.autofill.ImageType;
 import org.chromium.components.autofill.payments.Ewallet;
@@ -60,9 +61,9 @@ public class NonCardPaymentMethodsManagementFragmentTest {
     @Rule public final AutofillTestRule rule = new AutofillTestRule();
 
     @Rule
-    public final SettingsActivityTestRule<NonCardPaymentMethodsManagementFragment>
+    public final SettingsTestRule<NonCardPaymentMethodsManagementFragment>
             mSettingsActivityTestRule =
-                    new SettingsActivityTestRule<>(NonCardPaymentMethodsManagementFragment.class);
+                    new SettingsTestRule<>(NonCardPaymentMethodsManagementFragment.class);
 
     @Rule
     public final MockitoRule mMockitoRule = MockitoJUnit.rule().strictness(Strictness.LENIENT);
@@ -125,7 +126,7 @@ public class NonCardPaymentMethodsManagementFragmentTest {
                     getPrefService().setBoolean(Pref.FACILITATED_PAYMENTS_A2A_TRIGGERED_ONCE, true);
                 });
 
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity();
+        SettingsActivityInterface activity = mSettingsActivityTestRule.startSettingsActivity();
 
         ChromeSwitchPreference a2aSwitch = getA2aSwitchPreference(activity);
         assertThat(a2aSwitch).isNotNull();
@@ -142,7 +143,7 @@ public class NonCardPaymentMethodsManagementFragmentTest {
                             .setBoolean(Pref.FACILITATED_PAYMENTS_A2A_TRIGGERED_ONCE, false);
                 });
 
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity();
+        SettingsActivityInterface activity = mSettingsActivityTestRule.startSettingsActivity();
 
         ChromeSwitchPreference a2aSwitch = getA2aSwitchPreference(activity);
         assertThat(a2aSwitch).isNull();
@@ -159,7 +160,7 @@ public class NonCardPaymentMethodsManagementFragmentTest {
                     getPrefService().setBoolean(Pref.FACILITATED_PAYMENTS_A2A_TRIGGERED_ONCE, true);
                 });
 
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity();
+        SettingsActivityInterface activity = mSettingsActivityTestRule.startSettingsActivity();
 
         ChromeSwitchPreference a2aSwitch = getA2aSwitchPreference(activity);
         assertThat(a2aSwitch).isNull();
@@ -170,7 +171,7 @@ public class NonCardPaymentMethodsManagementFragmentTest {
     @MediumTest
     public void testEwalletAccountAvailable_eWalletSwitchShown() throws Exception {
         AutofillTestHelper.addEwallet(EWALLET_ACCOUNT);
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity();
+        SettingsActivityInterface activity = mSettingsActivityTestRule.startSettingsActivity();
         ChromeSwitchPreference eWalletSwitch = getEwalletSwitchPreference(activity);
         assertThat(eWalletSwitch).isNotNull();
     }
@@ -179,7 +180,7 @@ public class NonCardPaymentMethodsManagementFragmentTest {
     @Test
     @MediumTest
     public void testEwalletAccountNotAvailable_eWalletSwitchNotShown() throws Exception {
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity();
+        SettingsActivityInterface activity = mSettingsActivityTestRule.startSettingsActivity();
         // Verify that the switch preference for eWallet is not displayed.
         ChromeSwitchPreference eWalletSwitch = getEwalletSwitchPreference(activity);
         assertThat(eWalletSwitch).isNull();
@@ -195,7 +196,7 @@ public class NonCardPaymentMethodsManagementFragmentTest {
                     getPrefService().setBoolean(Pref.FACILITATED_PAYMENTS_A2A_ENABLED, true);
                 });
 
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity();
+        SettingsActivityInterface activity = mSettingsActivityTestRule.startSettingsActivity();
         ChromeSwitchPreference a2aSwitch = getA2aSwitchPreference(activity);
         assertThat(a2aSwitch.isChecked()).isTrue();
     }
@@ -203,6 +204,7 @@ public class NonCardPaymentMethodsManagementFragmentTest {
     // Test that when the A2A preference is set to false, the A2A toggle is not checked.
     @Test
     @MediumTest
+    @DisabledTest(message = "Flaky. See crbug.com/514670265")
     @EnableFeatures({ChromeFeatureList.FACILITATED_PAYMENTS_ENABLE_A2A_PAYMENT})
     public void testA2aPrefDisabled_a2aSwitchDisabled() throws Exception {
         ThreadUtils.runOnUiThreadBlocking(
@@ -210,7 +212,7 @@ public class NonCardPaymentMethodsManagementFragmentTest {
                     getPrefService().setBoolean(Pref.FACILITATED_PAYMENTS_A2A_ENABLED, false);
                 });
 
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity();
+        SettingsActivityInterface activity = mSettingsActivityTestRule.startSettingsActivity();
         ChromeSwitchPreference a2aSwitch = getA2aSwitchPreference(activity);
         assertThat(a2aSwitch.isChecked()).isFalse();
     }
@@ -224,7 +226,7 @@ public class NonCardPaymentMethodsManagementFragmentTest {
                 () -> {
                     getPrefService().setBoolean(Pref.FACILITATED_PAYMENTS_EWALLET, true);
                 });
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity();
+        SettingsActivityInterface activity = mSettingsActivityTestRule.startSettingsActivity();
         ChromeSwitchPreference eWalletSwitch = getEwalletSwitchPreference(activity);
         assertThat(eWalletSwitch.isChecked()).isTrue();
     }
@@ -239,7 +241,7 @@ public class NonCardPaymentMethodsManagementFragmentTest {
                 () -> {
                     getPrefService().setBoolean(Pref.FACILITATED_PAYMENTS_EWALLET, false);
                 });
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity();
+        SettingsActivityInterface activity = mSettingsActivityTestRule.startSettingsActivity();
         ChromeSwitchPreference eWalletSwitch = getEwalletSwitchPreference(activity);
         assertThat(eWalletSwitch.isChecked()).isFalse();
     }
@@ -250,7 +252,7 @@ public class NonCardPaymentMethodsManagementFragmentTest {
     public void testEwalletAccountShown() {
 
         AutofillTestHelper.addEwallet(EWALLET_ACCOUNT);
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity();
+        SettingsActivityInterface activity = mSettingsActivityTestRule.startSettingsActivity();
         String expectedPrefSummary =
                 String.format("eWallet  •  %s", EWALLET_ACCOUNT.getAccountDisplayName());
         Preference eWalletPref = getEwalletPreference(activity, EWALLET_ACCOUNT);
@@ -272,7 +274,7 @@ public class NonCardPaymentMethodsManagementFragmentTest {
                     getPrefService().setBoolean(Pref.FACILITATED_PAYMENTS_A2A_ENABLED, true);
                 });
 
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity();
+        SettingsActivityInterface activity = mSettingsActivityTestRule.startSettingsActivity();
         ChromeSwitchPreference a2aSwitch = getA2aSwitchPreference(activity);
         assertThat(a2aSwitch.isChecked()).isTrue();
         ThreadUtils.runOnUiThreadBlocking(
@@ -296,7 +298,7 @@ public class NonCardPaymentMethodsManagementFragmentTest {
                     getPrefService().setBoolean(Pref.FACILITATED_PAYMENTS_EWALLET, true);
                 });
 
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity();
+        SettingsActivityInterface activity = mSettingsActivityTestRule.startSettingsActivity();
         ChromeSwitchPreference ewalletSwitch = getEwalletSwitchPreference(activity);
         assertThat(ewalletSwitch.isChecked()).isTrue();
         ThreadUtils.runOnUiThreadBlocking(
@@ -314,9 +316,10 @@ public class NonCardPaymentMethodsManagementFragmentTest {
     // off.
     @Test
     @MediumTest
+    @DisabledTest(message = "Flaky. See crbug.com/514670265")
     public void testEwalletSwitchDisabled_eWalletRowItemsRemoved() throws TimeoutException {
         AutofillTestHelper.addEwallet(EWALLET_ACCOUNT);
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity(new Bundle());
+        SettingsActivityInterface activity = mSettingsActivityTestRule.startSettingsActivity(new Bundle());
         ChromeSwitchPreference eWalletSwitch = getEwalletSwitchPreference(activity);
         Preference eWalletPref = getEwalletPreference(activity, EWALLET_ACCOUNT);
         assertThat(eWalletPref).isNotNull();
@@ -330,13 +333,14 @@ public class NonCardPaymentMethodsManagementFragmentTest {
     // Test that eWallet accounts are added when the eWallet toggle is turned on.
     @Test
     @MediumTest
+    @DisabledTest(message = "Flaky. See crbug.com/514670265")
     public void testEwalletSwitchEnabled_eWalletRowItemsAdded() throws TimeoutException {
         AutofillTestHelper.addEwallet(EWALLET_ACCOUNT);
         ThreadUtils.runOnUiThreadBlocking(
                 () -> {
                     getPrefService().setBoolean(Pref.FACILITATED_PAYMENTS_EWALLET, false);
                 });
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity(new Bundle());
+        SettingsActivityInterface activity = mSettingsActivityTestRule.startSettingsActivity(new Bundle());
         ChromeSwitchPreference eWalletSwitch = getEwalletSwitchPreference(activity);
         Preference eWalletPref = getEwalletPreference(activity, EWALLET_ACCOUNT);
         assertThat(eWalletPref).isNull();
@@ -370,7 +374,7 @@ public class NonCardPaymentMethodsManagementFragmentTest {
                         NonCardPaymentMethodsManagementFragment
                                 .NON_CARD_PAYMENT_METHODS_A2A_TOGGLE_UPDATED_HISTOGRAM,
                         true);
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity(new Bundle());
+        SettingsActivityInterface activity = mSettingsActivityTestRule.startSettingsActivity(new Bundle());
         ChromeSwitchPreference a2aSwitch = getA2aSwitchPreference(activity);
         assertThat(a2aSwitch.isChecked()).isFalse();
 
@@ -396,7 +400,7 @@ public class NonCardPaymentMethodsManagementFragmentTest {
                         NonCardPaymentMethodsManagementFragment
                                 .NON_CARD_PAYMENT_METHODS_A2A_TOGGLE_UPDATED_HISTOGRAM,
                         false);
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity(new Bundle());
+        SettingsActivityInterface activity = mSettingsActivityTestRule.startSettingsActivity(new Bundle());
         ChromeSwitchPreference a2aSwitch = getA2aSwitchPreference(activity);
         assertThat(a2aSwitch.isChecked()).isTrue();
 
@@ -420,7 +424,7 @@ public class NonCardPaymentMethodsManagementFragmentTest {
                         NonCardPaymentMethodsManagementFragment
                                 .NON_CARD_PAYMENT_METHODS_EWALLET_TOGGLE_UPDATED_HISTOGRAM,
                         true);
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity(new Bundle());
+        SettingsActivityInterface activity = mSettingsActivityTestRule.startSettingsActivity(new Bundle());
         ChromeSwitchPreference eWalletSwitch = getEwalletSwitchPreference(activity);
         assertThat(eWalletSwitch.isChecked()).isFalse();
         // Set the eWallet toggle to on.
@@ -440,7 +444,7 @@ public class NonCardPaymentMethodsManagementFragmentTest {
                         NonCardPaymentMethodsManagementFragment
                                 .NON_CARD_PAYMENT_METHODS_EWALLET_TOGGLE_UPDATED_HISTOGRAM,
                         false);
-        SettingsActivity activity = mSettingsActivityTestRule.startSettingsActivity(new Bundle());
+        SettingsActivityInterface activity = mSettingsActivityTestRule.startSettingsActivity(new Bundle());
         ChromeSwitchPreference eWalletSwitch = getEwalletSwitchPreference(activity);
         assertThat(eWalletSwitch.isChecked()).isTrue();
         // Set the eWallet toggle to off.
@@ -448,7 +452,7 @@ public class NonCardPaymentMethodsManagementFragmentTest {
         eWalletToggleEnabledHistogram.assertExpected();
     }
 
-    private static PreferenceScreen getPreferenceScreen(SettingsActivity activity) {
+    private static PreferenceScreen getPreferenceScreen(SettingsActivityInterface activity) {
         return ((NonCardPaymentMethodsManagementFragment) activity.getMainFragment())
                 .getPreferenceScreen();
     }
@@ -457,20 +461,20 @@ public class NonCardPaymentMethodsManagementFragmentTest {
         return UserPrefs.get(ProfileManager.getLastUsedRegularProfile());
     }
 
-    private static ChromeSwitchPreference getA2aSwitchPreference(SettingsActivity activity) {
+    private static ChromeSwitchPreference getA2aSwitchPreference(SettingsActivityInterface activity) {
         return (ChromeSwitchPreference)
                 getPreferenceScreen(activity)
                         .findPreference(NonCardPaymentMethodsManagementFragment.PREFERENCE_KEY_A2A);
     }
 
-    private static ChromeSwitchPreference getEwalletSwitchPreference(SettingsActivity activity) {
+    private static ChromeSwitchPreference getEwalletSwitchPreference(SettingsActivityInterface activity) {
         return (ChromeSwitchPreference)
                 getPreferenceScreen(activity)
                         .findPreference(
                                 NonCardPaymentMethodsManagementFragment.PREFERENCE_KEY_EWALLET);
     }
 
-    private static Preference getEwalletPreference(SettingsActivity activity, Ewallet eWallet) {
+    private static Preference getEwalletPreference(SettingsActivityInterface activity, Ewallet eWallet) {
         String eWalletPrefKey =
                 String.format(
                         NonCardPaymentMethodsManagementFragment.PREFERENCE_KEY_EWALLET_ACCOUNT,

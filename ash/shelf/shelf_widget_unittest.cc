@@ -10,6 +10,7 @@
 #include "ash/keyboard/ui/test/keyboard_test_util.h"
 #include "ash/public/cpp/keyboard/keyboard_switches.h"
 #include "ash/public/cpp/shelf_config.h"
+#include "ash/public/cpp/shelf_model.h"
 #include "ash/public/cpp/shelf_types.h"
 #include "ash/public/cpp/tablet_mode.h"
 #include "ash/root_window_controller.h"
@@ -214,7 +215,7 @@ TEST_F(ShelfWidgetDarkLightModeTest, TabletModeTransition) {
 
 TEST_F(ShelfWidgetDarkLightModeTest, TabletModeTransitionWithWindowOpen) {
   ShelfWidget* const shelf_widget = GetShelfWidget();
-  auto window = AshTestBase::CreateTestWindow(gfx::Rect(0, 0, 800, 800));
+  auto window = CreateWindowWithAppType(chromeos::AppType::NON_APP, {800, 800});
 
   TabletMode::Waiter enter_waiter(/*enable=*/true);
   TabletModeControllerTestApi().EnterTabletMode();
@@ -494,9 +495,14 @@ TEST_F(ShelfWidgetTest, HiddenShelfHitTestTouch) {
   }
 }
 
+class ShelfWidgetHitTest : public ShelfWidgetTest {
+ public:
+  ShelfWidgetHitTest() { set_add_default_shelf_icon(false); }
+};
+
 // Tests that the shelf lets mouse-events close to the edge fall through to the
 // window underneath.
-TEST_F(ShelfWidgetTest, ShelfEdgeOverlappingWindowHitTestMouse) {
+TEST_F(ShelfWidgetHitTest, ShelfEdgeOverlappingWindowHitTestMouse) {
   UpdateDisplay("500x400");
   ShelfWidget* shelf_widget = GetShelfWidget();
   gfx::Rect shelf_bounds = shelf_widget->GetWindowBoundsInScreen();
@@ -625,7 +631,7 @@ TEST_F(ShelfWidgetTest, OpaqueBackgroundAndDragHandleTransition) {
   ASSERT_FALSE(GetShelfWidget()->GetOpaqueBackground()->visible());
 
   // Create a window to transition to the in-app shelf.
-  auto window = AshTestBase::CreateTestWindow(gfx::Rect(0, 0, 800, 800));
+  auto window = CreateWindowWithAppType(chromeos::AppType::NON_APP, {800, 800});
 
   {
     TransitionAnimationWaiter waiter(
@@ -653,7 +659,7 @@ TEST_F(ShelfWidgetTest, OpaqueBackgroundAndDragHandleTransition) {
 TEST_F(ShelfWidgetTest, NoAnimatingBackgroundDuringTabletModeStartToInApp) {
   UpdateDisplay("800x700");
   // Create a window so tablet mode uses in-app shelf.
-  auto window = AshTestBase::CreateTestWindow(gfx::Rect(0, 0, 800, 800));
+  auto window = CreateWindowWithAppType(chromeos::AppType::NON_APP, {800, 800});
 
   EXPECT_TRUE(GetShelfWidget()->GetOpaqueBackground()->visible());
   EXPECT_FALSE(GetShelfWidget()->GetDragHandle()->GetVisible());
@@ -682,7 +688,7 @@ TEST_F(ShelfWidgetTest, NoAnimatingBackgroundDuringTabletModeEndFromInApp) {
   ash::TabletModeControllerTestApi().EnterTabletMode();
 
   // Create a window so tablet mode uses in-app shelf.
-  auto window = AshTestBase::CreateTestWindow(gfx::Rect(0, 0, 800, 800));
+  auto window = CreateWindowWithAppType(chromeos::AppType::NON_APP, {800, 800});
 
   EXPECT_TRUE(GetShelfWidget()->GetOpaqueBackground()->visible());
   EXPECT_TRUE(GetShelfWidget()->GetDragHandle()->GetVisible());
@@ -768,7 +774,7 @@ TEST_F(ShelfWidgetTest, NoAnimatingBackgroundOnLockScreen) {
   ASSERT_FALSE(GetShelfWidget()->GetOpaqueBackground()->visible());
 
   // Create a window to transition to the in-app shelf.
-  auto window = AshTestBase::CreateTestWindow(gfx::Rect(0, 0, 800, 800));
+  auto window = CreateWindowWithAppType(chromeos::AppType::NON_APP, {800, 800});
 
   // At this point animations have zero duration, so the transition happens
   // immediately.
@@ -856,7 +862,7 @@ TEST_F(ShelfWidgetTest, ScreenLockStopsHotseatTransitionAnimation) {
       gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   // Create a window to transition to the in-app shelf.
-  auto window = AshTestBase::CreateTestWindow(gfx::Rect(0, 0, 800, 800));
+  auto window = CreateWindowWithAppType(chromeos::AppType::NON_APP, {800, 800});
 
   ASSERT_FALSE(GetShelfWidget()->GetDragHandle()->GetVisible());
   ASSERT_FALSE(GetShelfWidget()->GetOpaqueBackground()->visible());
@@ -903,7 +909,7 @@ TEST_F(ShelfWidgetTest,
       gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
 
   // Create a window to transition to the in-app shelf.
-  auto window = AshTestBase::CreateTestWindow(gfx::Rect(0, 0, 800, 800));
+  auto window = CreateWindowWithAppType(chromeos::AppType::NON_APP, {800, 800});
 
   ASSERT_FALSE(GetShelfWidget()->GetDragHandle()->GetVisible());
   ASSERT_FALSE(GetShelfWidget()->GetOpaqueBackground()->visible());
@@ -1115,6 +1121,9 @@ TEST_F(ShelfWidgetViewsVisibilityTest, LoginViewsLockViews) {
 }
 
 class ShelfWidgetVirtualKeyboardTest : public AshTestBase {
+ public:
+  ShelfWidgetVirtualKeyboardTest() { set_add_default_shelf_icon(false); }
+
  protected:
   void SetUp() override {
     base::CommandLine::ForCurrentProcess()->AppendSwitch(

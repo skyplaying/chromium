@@ -10,13 +10,13 @@
 #include <string>
 #include <vector>
 
+#include "base/check.h"
 #include "base/containers/flat_map.h"
 #include "base/functional/callback_forward.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/ref_counted.h"
-#include "base/memory/scoped_refptr.h"
 #include "base/sequence_checker.h"
-#include "base/strings/string_util.h"
+#include "base/strings/to_string.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/updater/event_history.h"
@@ -264,6 +264,10 @@ class PolicyService : public base::RefCountedThreadSafe<PolicyService> {
                                                           app_policies);
       IsRollbackToTargetVersionAllowed(app_id).AddPolicyToContainer(
           "RollbackToTargetVersionAllowed", app_policies);
+      GetMajorVersionRolloutPolicy(app_id).AddPolicyToContainer(
+          "MajorVersionRolloutPolicy", app_policies);
+      GetMinorVersionRolloutPolicy(app_id).AddPolicyToContainer(
+          "MinorVersionRolloutPolicy", app_policies);
       policies.insert({app_id, std::move(app_policies)});
     }
 
@@ -271,7 +275,7 @@ class PolicyService : public base::RefCountedThreadSafe<PolicyService> {
   }
 
   std::string GetAllPoliciesAsString() const;
-  bool AreUpdatesSuppressedNow(base::Time now = base::Time::Now()) const;
+  bool AreUpdatesSuppressed(base::Time time) const;
 
   void SetManagersForTesting(
       std::vector<scoped_refptr<PolicyManagerInterface>> managers);
@@ -358,6 +362,11 @@ struct PolicyServiceProxyConfiguration {
 // Enterprise Core (formerly Chrome Enterprise Cloud Management). Performs
 // blocking IO.
 bool IsCloudManaged();
+
+// Determines whether `updates_suppressed_times` disallows updates from
+// occurring at the specified time.
+bool AreUpdatesSuppressed(UpdatesSuppressedTimes updates_suppressed_times,
+                          base::Time time);
 
 }  // namespace updater
 

@@ -66,6 +66,7 @@ public class LanguagesManager {
         LanguageSettingsActionType.REMOVE_SITE_FROM_NEVER_TRANSLATE,
         LanguageSettingsActionType.RESTART_CHROME
     })
+    // LINT.IfChange(LanguageSettingsActionType)
     @Retention(RetentionPolicy.SOURCE)
     @interface LanguageSettingsActionType {
         // int CLICK_ON_ADD_LANGUAGE = 1; // Removed M89
@@ -86,6 +87,10 @@ public class LanguagesManager {
         int RESTART_CHROME = 16;
         int NUM_ENTRIES = 17;
     }
+    // LINT.ThenChange(
+    //   //chrome/browser/resources/settings/languages_page/languages_settings_metrics_proxy.ts:LanguageSettingsActionType,
+    //   //tools/metrics/histograms/metadata/language/enums.xml:LanguageSettingsActionType
+    // )
 
     // Constants used to log UMA enum histogram, must stay in sync with
     // LanguageSettingsPageType. Further actions can only be appended, existing
@@ -103,6 +108,7 @@ public class LanguagesManager {
         LanguageSettingsPageType.ALWAYS_TRANSLATE_ADD_LANGUAGE,
         LanguageSettingsPageType.VIEW_NEVER_TRANSLATE_SITES
     })
+    // LINT.IfChange(LanguageSettingsPageType)
     @Retention(RetentionPolicy.SOURCE)
     @interface LanguageSettingsPageType {
         int PAGE_MAIN = 0;
@@ -119,6 +125,10 @@ public class LanguagesManager {
         int VIEW_NEVER_TRANSLATE_SITES = 11;
         int NUM_ENTRIES = 12;
     }
+    // LINT.ThenChange(
+    //   //chrome/browser/resources/settings/languages_page/languages_settings_metrics_proxy.ts:LanguageSettingsPageType,
+    //   //tools/metrics/histograms/metadata/language/enums.xml:LanguageSettingsPageType
+    // )
 
     // Int keys to determine the list of potential languages for different language preferences.
     @IntDef({
@@ -275,7 +285,7 @@ public class LanguagesManager {
      */
     private List<LanguageItem> getPotentialAcceptLanguages() {
         // Always read the latest user accept language code list from native.
-        HashSet<String> codesToSkip = new HashSet(TranslateBridge.getUserLanguageCodes(mProfile));
+        HashSet<String> codesToSkip = new HashSet<>(TranslateBridge.getUserLanguageCodes(mProfile));
         LinkedHashSet<LanguageItem> results = new LinkedHashSet<>();
         addItemsToResult(
                 results, mLanguagesMap.values(), (item) -> !codesToSkip.contains(item.getCode()));
@@ -309,7 +319,7 @@ public class LanguagesManager {
     public Collection<LanguageItem> getAlwaysTranslateLanguageItems() {
         // Get the latest always translate list from native. This list has no guaranteed order.
         List<String> codes = TranslateBridge.getAlwaysTranslateLanguages(mProfile);
-        TreeSet<LanguageItem> results = new TreeSet(LanguageItem.COMPARE_BY_DISPLAY_NAME);
+        TreeSet<LanguageItem> results = new TreeSet<>(LanguageItem.COMPARE_BY_DISPLAY_NAME);
         for (String code : codes) {
             if (mLanguagesMap.containsKey(code)) results.add(mLanguagesMap.get(code));
         }
@@ -325,7 +335,7 @@ public class LanguagesManager {
     public Collection<LanguageItem> getNeverTranslateLanguageItems() {
         // Get the latest never translate list from native. This list has no guaranteed order.
         List<String> codes = TranslateBridge.getNeverTranslateLanguages(mProfile);
-        TreeSet<LanguageItem> results = new TreeSet(LanguageItem.COMPARE_BY_DISPLAY_NAME);
+        TreeSet<LanguageItem> results = new TreeSet<>(LanguageItem.COMPARE_BY_DISPLAY_NAME);
         for (String code : codes) {
             if (mLanguagesMap.containsKey(code)) results.add(mLanguagesMap.get(code));
         }
@@ -410,7 +420,7 @@ public class LanguagesManager {
             sProfileMap =
                     new ProfileKeyedMap<>(
                             ProfileKeyedMap.ProfileSelection.REDIRECTED_TO_ORIGINAL,
-                            ProfileKeyedMap.NO_REQUIRED_CLEANUP_ACTION);
+                            ProfileKeyedMap.noRequiredCleanupAction());
         }
         return sProfileMap.getForProfile(profile, LanguagesManager::new);
     }

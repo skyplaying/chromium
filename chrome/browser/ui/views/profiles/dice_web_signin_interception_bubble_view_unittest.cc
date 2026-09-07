@@ -70,7 +70,7 @@ class DiceWebSigninInterceptionBubbleViewTestBase : public testing::Test {
     enterprise_account_ = AccountInfo::Builder(account_info)
                               .SetHostedDomain("example.com")
                               .Build();
-    AccountCapabilitiesTestMutator(&enterprise_account_.capabilities)
+    AccountCapabilitiesTestMutator(&enterprise_account_)
         .set_is_subject_to_enterprise_features(true);
     identity_test_env->UpdateAccountInfoForAccount(enterprise_account_);
     personal_account_ =
@@ -199,8 +199,8 @@ TEST_F(DiceWebSigninInterceptionBubbleViewTestBase, SyncHistograms) {
   }
 
   // Syncing.
-  identity_test_env()->SetPrimaryAccount(personal_account_.email,
-                                         signin::ConsentLevel::kSync);
+  identity_test_env()->SetPrimaryAccount(
+      std::string(personal_account_.GetEmail()), signin::ConsentLevel::kSync);
   {
     base::HistogramTester histogram_tester;
     DiceWebSigninInterceptionBubbleView::RecordInterceptionResult(
@@ -230,8 +230,8 @@ TEST_F(DiceWebSigninInterceptionBubbleViewTestBase, EnterpriseHistograms) {
   }
 
   // Primary account is Enterprise.
-  identity_test_env()->SetPrimaryAccount(personal_account_.email,
-                                         signin::ConsentLevel::kSync);
+  identity_test_env()->SetPrimaryAccount(
+      std::string(personal_account_.GetEmail()), signin::ConsentLevel::kSync);
   {
     base::HistogramTester histogram_tester;
     WebSigninInterceptor::Delegate::BubbleParameters bubble_parameters(
@@ -249,8 +249,8 @@ TEST_F(DiceWebSigninInterceptionBubbleViewTestBase, EnterpriseHistograms) {
 TEST_F(DiceWebSigninInterceptionBubbleViewTestBase, SigninPendingHistograms) {
   // The primary account is in sign in pending state. We are already signed into
   // web with different account, therefore inducing an inconsistent state.
-  identity_test_env()->SetPrimaryAccount(personal_account_.email,
-                                         signin::ConsentLevel::kSignin);
+  identity_test_env()->SetPrimaryAccount(
+      std::string(personal_account_.GetEmail()), signin::ConsentLevel::kSignin);
   identity_test_env()->SetInvalidRefreshTokenForPrimaryAccount();
 
   {

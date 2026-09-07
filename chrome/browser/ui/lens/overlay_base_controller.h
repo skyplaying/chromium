@@ -14,15 +14,17 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
+#include "chrome/browser/ui/immersive/immersive_mode_controller.h"
 #include "chrome/browser/ui/lens/lens_overlay_blur_layer_delegate.h"
-#include "chrome/browser/ui/views/frame/immersive_mode_controller.h"
-#include "chrome/browser/ui/views/side_panel/side_panel_entry.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/render_process_host_observer.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "ui/color/color_id.h"
+#include "ui/gfx/geometry/insets.h"
 #include "ui/views/view.h"
 #include "ui/views/view_observer.h"
 #include "ui/views/widget/widget.h"
@@ -31,6 +33,10 @@
 namespace views {
 class WebView;
 }  // namespace views
+
+namespace gfx {
+struct VectorIcon;
+}  // namespace gfx
 
 class PrefService;
 
@@ -120,9 +126,6 @@ class OverlayBaseController : public content::WebContentsDelegate,
   // this overlay controller.
   tabs::TabInterface* GetTabInterface();
 
-  // Called when the associated tab enters the foreground.
-  void TabForegrounded(tabs::TabInterface* tab);
-
   // Called when the associated tab will enter the background.
   void TabWillEnterBackground(tabs::TabInterface* tab);
 
@@ -156,6 +159,7 @@ class OverlayBaseController : public content::WebContentsDelegate,
   void RenderProcessExited(
       content::RenderProcessHost* host,
       const content::ChildProcessTerminationInfo& info) override;
+  void RenderProcessHostDestroyed(content::RenderProcessHost* host) override;
 
   // Called when the UI needs to create the view to show in the overlay.
   raw_ptr<views::View> CreateViewForOverlay();
@@ -203,10 +207,10 @@ class OverlayBaseController : public content::WebContentsDelegate,
   virtual int GetToolResourceId() = 0;
 
   // Return the ID of the view we attach this overlay to.
-  virtual ui::ElementIdentifier GetViewContainerId() = 0;
+  virtual ui::ElementIdentifier GetViewContainerId() const = 0;
 
   // The side panel type.
-  virtual SidePanelEntry::PanelType GetSidePanelType() = 0;
+  virtual SidePanelType GetSidePanelType() = 0;
 
   // Whether the side panel should be closed if it doesn't match
   // the desired type.
@@ -234,6 +238,28 @@ class OverlayBaseController : public content::WebContentsDelegate,
   // Notification that the tab was foregrounded.
   virtual void NotifyTabWillEnterBackground() = 0;
 
+ public:
+  // Public as used by LensPreselectionBubble.
+  struct CancelButtonConfig {
+    ui::ColorId color;
+    gfx::Insets padding;
+    gfx::Insets bubble_margins;
+  };
+
+  struct PreselectionUIConfig {
+    int message_string_id = -1;
+    ui::ColorId bubble_background_color = ui::kUiColorsLast;
+    raw_ptr<const gfx::VectorIcon> icon = nullptr;
+    std::optional<CancelButtonConfig> cancel_button_config;
+  };
+
+ protected:
+  // Returns the resources for the preselection bubble.
+  virtual PreselectionUIConfig GetPreselectionBubbleConfig() = 0;
+
+  // Returns if the overlay view can be shared between multiple tabs.
+  virtual bool IsOverlayViewShared() const = 0;
+
   // If the side panel was closed, we wait for the reflow before beginning
   // the screenshot flow.
   virtual void FinishedWaitingForReflow(base::TimeTicks reflow_start_time);
@@ -248,6 +274,13 @@ class OverlayBaseController : public content::WebContentsDelegate,
   // on the live page. The callee should call `ReshowScreenshot` when the
   // screenshot is ready.
   virtual void ReshowOverlay();
+
+  // Show preselection toast bubble. Creates a preselection bubble if it does
+  // not exist.
+  virtual void ShowPreselectionBubble();
+
+  // Called when the associated tab enters the foreground.
+  virtual void TabForegrounded(tabs::TabInterface* tab);
 
   // This is callwed when the webUI acknowledges the intent to reshow the
   // overlay. Since it already is showing an old screenshot the opacity is set
@@ -314,10 +347,6 @@ class OverlayBaseController : public content::WebContentsDelegate,
   // visible.
   void MaybeHideSharedOverlayView();
 
-  // Show preselection toast bubble. Creates a preselection bubble if it does
-  // not exist.
-  void ShowPreselectionBubble();
-
   // Closes the preselection bubble and reopens it. Used to prevent UI conflicts
   // between the preselection bubble and top chrome in fullscreen.
   void CloseAndReshowPreselectionBubble();
@@ -328,6 +357,12 @@ class OverlayBaseController : public content::WebContentsDelegate,
 
   // Close the preselection bubble.
   void ClosePreselectionBubbleImpl();
+
+  // Returns the host view that the overlay should be attached to. Can be null.
+  views::View* GetHostView() const;
+
+  // Detaches the overlay views and takes ownership to preserve state.
+  void PreserveOverlayViews();
 
   // content::WebContentsObserver:
   void PrimaryMainFrameRenderProcessGone(
@@ -375,6 +410,11 @@ class OverlayBaseController : public content::WebContentsDelegate,
                           ImmersiveModeController::Observer>
       immersive_mode_observer_{this};
 
+  // Observer to get notifications when the overlay's renderer process exits.
+  base::ScopedObservation<content::RenderProcessHost,
+                          content::RenderProcessHostObserver>
+      render_process_host_observation_{this};
+
   // Layer delegate that handles blurring the background behind the WebUI.
   std::unique_ptr<lens::LensOverlayBlurLayerDelegate>
       overlay_blur_layer_delegate_;
@@ -387,12 +427,16 @@ class OverlayBaseController : public content::WebContentsDelegate,
   // Pointer to the web view within the overlay view if it exists.
   raw_ptr<views::WebView> overlay_web_view_;
 
+  // Pointer to the anchor view for the top left corner. Used to anchor the
+  // mobile Lens promo bubble.
+  raw_ptr<views::View> promo_anchor_ = nullptr;
+
   // Preselection toast bubble. Weak; owns itself. NULL when closed.
   raw_ptr<views::Widget> preselection_widget_ = nullptr;
 
  private:
   // The anchor view to the preselection bubble. This anchor is an invisible
-  // sibling of the the `overlay_view_`, user to always keep the preselection
+  // sibling of the `overlay_view_`, user to always keep the preselection
   // bubble anchored to the top of the screen, while also maintaining focus
   // order.
   raw_ptr<views::View> preselection_widget_anchor_;
@@ -401,6 +445,12 @@ class OverlayBaseController : public content::WebContentsDelegate,
   // Used to observe the immersive mode pref on Mac, and the side panel
   // horizontal alignment pref.
   PrefChangeRegistrar pref_change_registrar_;
+
+  // Only used for the tab-scoped overlays. Holds the raw_ptr counterparts when
+  // the tab is backgrounded or hidden, preserving state.
+  std::unique_ptr<views::View> owned_preselection_widget_anchor_;
+  std::unique_ptr<views::View> owned_promo_anchor_;
+  std::unique_ptr<views::WebView> owned_overlay_web_view_;
 
   // --------------------Browser window scoped state: END---------------------
   // Must be the last member.

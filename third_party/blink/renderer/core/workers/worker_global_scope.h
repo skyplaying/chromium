@@ -29,9 +29,11 @@
 
 #include <memory>
 
+#include "base/memory/raw_ptr.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "services/network/public/mojom/fetch_api.mojom-blink-forward.h"
+#include "third_party/blink/public/common/permissions_policy/document_policy.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/mojom/loader/code_cache.mojom-blink-forward.h"
 #include "third_party/blink/public/mojom/script/script_type.mojom-blink-forward.h"
@@ -39,6 +41,7 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/frame_request_callback_collection.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
+#include "third_party/blink/renderer/core/frame/animation_frame_timing_monitor.h"
 #include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
 #include "third_party/blink/renderer/core/frame/policy_container.h"
 #include "third_party/blink/renderer/core/frame/universal_global_scope.h"
@@ -81,7 +84,8 @@ class CORE_EXPORT WorkerGlobalScope
       public WindowOrWorkerGlobalScope,
       public UniversalGlobalScope,
       public Supplementable<WorkerGlobalScope>,
-      public DOMOriginUtils {
+      public DOMOriginUtils,
+      public AnimationFrameTimingMonitor::Client {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
@@ -175,6 +179,7 @@ class CORE_EXPORT WorkerGlobalScope
       const KURL& response_url,
       network::mojom::ReferrerPolicy response_referrer_policy,
       Vector<network::mojom::blink::ContentSecurityPolicyPtr> response_csp,
+      DocumentPolicy::DocumentPolicyBundle response_document_policy,
       const Vector<String>* response_origin_trial_tokens) = 0;
 
   // These methods should be called in the scope of a pausable
@@ -227,6 +232,21 @@ class CORE_EXPORT WorkerGlobalScope
   base::TimeTicks TimeOrigin() const { return time_origin_; }
   WorkerSettings* GetWorkerSettings() const { return worker_settings_.get(); }
 
+  // AnimationFrameTimingMonitor::Client overrides. A worker has no rendering
+  // frame, so only congested-moment reporting is used.
+  void ReportLongTaskTiming(base::TimeTicks start,
+                            base::TimeTicks end,
+                            ExecutionContext* context) override {}
+  void ReportCongestedMoment(AnimationFrameTimingInfo*) override;
+  bool ShouldReportLongAnimationFrameTiming() const override { return true; }
+  bool RequestedMainFramePending() override { return false; }
+  ukm::UkmRecorder* MainFrameUkmRecorder() override { return nullptr; }
+  ukm::SourceId MainFrameUkmSourceId() override {
+    return ukm::kInvalidSourceId;
+  }
+
+  void CreateAnimationFrameTimingMonitor();
+
   void Trace(Visitor*) const override;
 
   virtual InstalledScriptsManager* GetInstalledScriptsManager() {
@@ -255,6 +275,10 @@ class CORE_EXPORT WorkerGlobalScope
   virtual WorkerToken GetWorkerToken() const = 0;
 
   bool IsUrlValid() { return url_.IsValid(); }
+
+  bool HasRunWorkerScript() {
+    return script_eval_state_ == ScriptEvalState::kEvaluated;
+  }
 
   void SetMainResoureIdentifier(uint64_t identifier) {
     DCHECK(!main_resource_identifier_.has_value());
@@ -326,7 +350,7 @@ class CORE_EXPORT WorkerGlobalScope
   mutable Member<WorkerNavigator> navigator_;
   mutable Member<TrustedTypePolicyFactory> trusted_types_;
 
-  WorkerThread* thread_;
+  raw_ptr<WorkerThread, UnprotectedInRelease | DanglingUntriaged> thread_;
 
   // The compositor task runner associated with the |AgentGroupScheduler| this
   // worker belongs to.
@@ -341,6 +365,8 @@ class CORE_EXPORT WorkerGlobalScope
   int last_pending_error_event_id_ = 0;
 
   Member<OffscreenFontSelector> font_selector_;
+
+  Member<AnimationFrameTimingMonitor> animation_frame_timing_monitor_;
 
   blink::BrowserInterfaceBrokerProxyImpl browser_interface_broker_proxy_;
 

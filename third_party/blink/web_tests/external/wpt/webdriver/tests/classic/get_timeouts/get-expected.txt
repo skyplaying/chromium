@@ -1,5 +1,0 @@
-This is a wdspec test.
-[FAIL] test_types_null
-  TypeError: unsupported operand type(s) for *: 'NoneType' and 'int'
-Harness: the test ran to completion.
-

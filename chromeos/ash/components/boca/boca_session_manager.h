@@ -5,6 +5,7 @@
 #ifndef CHROMEOS_ASH_COMPONENTS_BOCA_BOCA_SESSION_MANAGER_H_
 #define CHROMEOS_ASH_COMPONENTS_BOCA_BOCA_SESSION_MANAGER_H_
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -20,9 +21,11 @@
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "base/types/expected.h"
+#include "base/types/pass_key.h"
 #include "chromeos/ash/components/boca/babelorca/soda_installer.h"
 #include "chromeos/ash/components/boca/invalidations/invalidation_service_delegate.h"
 #include "chromeos/ash/components/boca/notifications/boca_notification_handler.h"
+#include "chromeos/ash/components/boca/proto/bundle.pb.h"
 #include "chromeos/ash/components/boca/proto/session.pb.h"
 #include "chromeos/ash/components/boca/session_api/session_client_impl.h"
 #include "chromeos/ash/components/boca/spotlight/spotlight_constants.h"
@@ -55,6 +58,7 @@ class SessionManager;
 
 namespace ash::boca {
 
+class BocaAppHandler;
 class ScreenPresenterFactory;
 class StudentScreenPresenter;
 class TeacherScreenPresenter;
@@ -117,6 +121,7 @@ class BocaSessionManager
   BocaSessionManager(SessionClientImpl* session_client_impl,
                      const PrefService* pref_service,
                      AccountId account_id,
+                     signin::IdentityManager* identity_manager,
                      bool is_producer,
                      std::unique_ptr<SpotlightRemotingClientManager>
                          remoting_client_manager = nullptr);
@@ -211,7 +216,7 @@ class BocaSessionManager
   virtual ::boca::Session* GetCurrentSession();
   virtual const ::boca::Session* GetPreviousSession();
 
-  virtual void UpdateTabActivity(std::u16string title);
+  virtual void UpdateTabActivity(const std::u16string& title);
 
   virtual void OnAppWindowOpened();
 
@@ -242,7 +247,7 @@ class BocaSessionManager
   }
   SodaStatus GetSodaStatus();
 
-  void StartCrdClient(
+  virtual void StartCrdClient(
       std::string crd_connection_code,
       base::OnceClosure done_callback,
       SpotlightFrameConsumer::FrameReceivedCallback frame_received_callback,
@@ -274,9 +279,19 @@ class BocaSessionManager
       std::string_view student_id);
   virtual void CleanupPresenters();
 
+  void OnNewTabAdded(int32_t id, ::boca::UrlType url_type);
+
+  void OnTabRemoved(int32_t id);
+
+  ::boca::UrlType GetTabUrlType(int32_t id);
+
   base::ObserverList<Observer>& observers() { return observers_; }
 
   AccountId& account_id() { return account_id_; }
+
+  signin::IdentityManager* GetIdentityManager(base::PassKey<BocaAppHandler>) {
+    return identity_manager_observation_.GetSource();
+  }
 
   SessionClientImpl* session_client_impl() { return session_client_impl_; }
 
@@ -293,6 +308,11 @@ class BocaSessionManager
   }
 
  private:
+  struct GeminiTab {
+    int32_t id;
+    ::boca::UrlType gemini_url_type;
+  };
+
   SEQUENCE_CHECKER(sequence_checker_);
 
   void LoadInitialNetworkState();
@@ -379,6 +399,11 @@ class BocaSessionManager
   std::unique_ptr<ScreenPresenterFactory> screen_presenter_factory_;
   std::unique_ptr<StudentScreenPresenter> student_screen_presenter_;
   std::unique_ptr<TeacherScreenPresenter> teacher_screen_presenter_;
+  std::optional<GeminiTab> gemini_tab_;
+
+  base::ScopedObservation<signin::IdentityManager,
+                          signin::IdentityManager::Observer>
+      identity_manager_observation_{this};
   base::ScopedObservation<session_manager::SessionManager,
                           session_manager::SessionManagerObserver>
       session_manager_observation_{this};

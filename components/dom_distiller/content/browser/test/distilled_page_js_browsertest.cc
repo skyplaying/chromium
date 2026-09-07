@@ -24,12 +24,7 @@ namespace {
 
 class DistilledPageJsTest : public content::ContentBrowserTest {
  protected:
-  explicit DistilledPageJsTest()
-      : content::ContentBrowserTest(), distilled_page_(nullptr) {
-#if BUILDFLAG(IS_ANDROID)
-    feature_list_.InitAndDisableFeature(kReaderModeDistillInApp);
-#endif
-  }
+  explicit DistilledPageJsTest() : distilled_page_(nullptr) {}
   ~DistilledPageJsTest() override = default;
 
   void SetUpOnMainThread() override {
@@ -91,9 +86,9 @@ IN_PROC_BROWSER_TEST_F(DistilledPageJsTest, AddClassesToYTIFramesTest) {
 }
 
 // Fails on Fuchsia ASAN.
-// Falky timeout on Linux MSAN, ASAN and TSAN.
+// Falky timeout on Linux and ChromeOS MSAN, ASAN and TSAN.
 #if BUILDFLAG(IS_FUCHSIA) && defined(ADDRESS_SANITIZER) ||          \
-    BUILDFLAG(IS_LINUX) &&                                          \
+    (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)) &&              \
         (defined(MEMORY_SANITIZER) || defined(ADDRESS_SANITIZER) || \
          defined(THREAD_SANITIZER))
 #define MAYBE_ImageClassifierTest DISABLED_ImageClassifierTest

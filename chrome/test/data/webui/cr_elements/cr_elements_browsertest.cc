@@ -2,17 +2,38 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/command_line.h"
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/web_ui_mocha_browser_test.h"
 #include "content/public/test/browser_test.h"
-#include "content/public/test/browser_test_base.h"
-#include "ui/compositor/compositor_switches.h"
 
 typedef WebUIMochaBrowserTest CrElementsTest;
 
+IN_PROC_BROWSER_TEST_F(CrElementsTest, CrAutoImg) {
+  RunTest("cr_elements/cr_auto_img_test.js", "mocha.run()");
+}
+
 IN_PROC_BROWSER_TEST_F(CrElementsTest, CrButton) {
   RunTest("cr_elements/cr_button_test.js", "mocha.run()");
+}
+
+IN_PROC_BROWSER_TEST_F(CrElementsTest, CrChip) {
+  RunTest("cr_elements/cr_chip_test.js", "mocha.run()");
+}
+
+IN_PROC_BROWSER_TEST_F(CrElementsTest, CrDialog) {
+  RunTest("cr_elements/cr_dialog_test.js", "mocha.run()");
+}
+
+IN_PROC_BROWSER_TEST_F(CrElementsTest, CrLazyRenderLit) {
+  RunTest("cr_elements/cr_lazy_render_lit_test.js", "mocha.run()");
+}
+
+IN_PROC_BROWSER_TEST_F(CrElementsTest, CrLitElement) {
+  RunTest("cr_elements/cr_lit_element_test.js", "mocha.run()");
+}
+
+IN_PROC_BROWSER_TEST_F(CrElementsTest, DedupingMixin) {
+  RunTest("cr_elements/deduping_mixin_test.js", "mocha.run()");
 }
 
 IN_PROC_BROWSER_TEST_F(CrElementsTest, CrRipple) {
@@ -23,16 +44,24 @@ IN_PROC_BROWSER_TEST_F(CrElementsTest, CrRippleMixin) {
   RunTest("cr_elements/cr_ripple_mixin_test.js", "mocha.run()");
 }
 
+IN_PROC_BROWSER_TEST_F(CrElementsTest, CrSlider) {
+  RunTest("cr_elements/cr_slider_test.js", "mocha.run()");
+}
+
 IN_PROC_BROWSER_TEST_F(CrElementsTest, CrSplitter) {
   RunTest("cr_elements/cr_splitter_test.js", "mocha.run()");
+}
+
+IN_PROC_BROWSER_TEST_F(CrElementsTest, CrTooltip) {
+  RunTest("cr_elements/cr_tooltip_test.js", "mocha.run()");
 }
 
 IN_PROC_BROWSER_TEST_F(CrElementsTest, CrTree) {
   RunTest("cr_elements/cr_tree_test.js", "mocha.run()");
 }
 
-IN_PROC_BROWSER_TEST_F(CrElementsTest, CrLitElement) {
-  RunTest("cr_elements/cr_lit_element_test.js", "mocha.run()");
+IN_PROC_BROWSER_TEST_F(CrElementsTest, CrUrlListItem) {
+  RunTest("cr_elements/cr_url_list_item_test.js", "mocha.run()");
 }
 
 #if !BUILDFLAG(IS_ANDROID)
@@ -40,23 +69,15 @@ IN_PROC_BROWSER_TEST_F(CrElementsTest, CrA11yAnnouncer) {
   RunTest("cr_elements/cr_a11y_announcer_test.js", "mocha.run()");
 }
 
-IN_PROC_BROWSER_TEST_F(CrElementsTest, CrChip) {
-  RunTest("cr_elements/cr_chip_test.js", "mocha.run()");
-}
-
 IN_PROC_BROWSER_TEST_F(CrElementsTest, CrCollapse) {
   RunTest("cr_elements/cr_collapse_test.js", "mocha.run()");
-}
-
-IN_PROC_BROWSER_TEST_F(CrElementsTest, CrDialog) {
-  RunTest("cr_elements/cr_dialog_test.js", "mocha.run()");
 }
 
 IN_PROC_BROWSER_TEST_F(CrElementsTest, CrScrollable) {
   RunTest("cr_elements/cr_scrollable_test.js", "mocha.run()");
 }
 
-// https://crbug.com/1008122 - Flaky on Mac.
+// https://crbug.com/40649836 - Flaky on Mac.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_CrDrawer DISABLED_CrDrawer
 #else
@@ -111,10 +132,6 @@ IN_PROC_BROWSER_TEST_F(CrElementsTest, CrLazyRender) {
   RunTest("cr_elements/cr_lazy_render_test.js", "mocha.run()");
 }
 
-IN_PROC_BROWSER_TEST_F(CrElementsTest, CrLazyRenderLit) {
-  RunTest("cr_elements/cr_lazy_render_lit_test.js", "mocha.run()");
-}
-
 IN_PROC_BROWSER_TEST_F(CrElementsTest, CrLinkRow) {
   RunTest("cr_elements/cr_link_row_test.js", "mocha.run()");
 }
@@ -147,10 +164,6 @@ IN_PROC_BROWSER_TEST_F(CrElementsTest, CrSelectableMixin) {
   RunTest("cr_elements/cr_selectable_mixin_test.js", "mocha.run()");
 }
 
-IN_PROC_BROWSER_TEST_F(CrElementsTest, CrSlider) {
-  RunTest("cr_elements/cr_slider_test.js", "mocha.run()");
-}
-
 IN_PROC_BROWSER_TEST_F(CrElementsTest, CrToast) {
   RunTest("cr_elements/cr_toast_test.js", "mocha.run()");
 }
@@ -175,16 +188,8 @@ IN_PROC_BROWSER_TEST_F(CrElementsTest, CrProgress) {
   RunTest("cr_elements/cr_progress_test.js", "mocha.run()");
 }
 
-IN_PROC_BROWSER_TEST_F(CrElementsTest, CrAutoImg) {
-  RunTest("cr_elements/cr_auto_img_test.js", "mocha.run()");
-}
-
 IN_PROC_BROWSER_TEST_F(CrElementsTest, CrToolbar) {
   RunTest("cr_elements/cr_toolbar_test.js", "mocha.run()");
-}
-
-IN_PROC_BROWSER_TEST_F(CrElementsTest, CrTooltip) {
-  RunTest("cr_elements/cr_tooltip_test.js", "mocha.run()");
 }
 
 IN_PROC_BROWSER_TEST_F(CrElementsTest, WebUiListenerMixin) {
@@ -193,10 +198,6 @@ IN_PROC_BROWSER_TEST_F(CrElementsTest, WebUiListenerMixin) {
 
 IN_PROC_BROWSER_TEST_F(CrElementsTest, WebUiListenerMixinLit) {
   RunTest("cr_elements/web_ui_listener_mixin_lit_test.js", "mocha.run()");
-}
-
-IN_PROC_BROWSER_TEST_F(CrElementsTest, CrUrlListItem) {
-  RunTest("cr_elements/cr_url_list_item_test.js", "mocha.run()");
 }
 
 IN_PROC_BROWSER_TEST_F(CrElementsTest, CrLoadingGradient) {
@@ -209,23 +210,6 @@ IN_PROC_BROWSER_TEST_F(CrElementsTest, CrFeedbackButtons) {
 
 IN_PROC_BROWSER_TEST_F(CrElementsTest, DomIf) {
   RunTest("cr_elements/dom_if_test.js", "mocha.run()");
-}
-
-class CrElementsWithPixelOutputTest : public WebUIMochaBrowserTest {
- public:
-  CrElementsWithPixelOutputTest() {
-    set_test_loader_host(chrome::kChromeUISettingsHost);
-  }
-
- protected:
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    command_line->AppendSwitch(switches::kEnablePixelOutputInTests);
-    WebUIMochaBrowserTest::SetUpCommandLine(command_line);
-  }
-};
-
-IN_PROC_BROWSER_TEST_F(CrElementsWithPixelOutputTest, CrLottie) {
-  RunTest("cr_elements/cr_lottie_test.js", "mocha.run()");
 }
 
 #endif  // !BUILDFLAG(IS_ANDROID)

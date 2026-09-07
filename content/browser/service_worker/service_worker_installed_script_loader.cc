@@ -55,9 +55,9 @@ void ServiceWorkerInstalledScriptLoader::OnStarted(
     std::optional<mojo_base::BigBuffer> metadata,
     mojo::ScopedDataPipeConsumerHandle body_handle,
     mojo::ScopedDataPipeConsumerHandle metadata_handle) {
-  DCHECK(response_head);
-  DCHECK(response_head->headers);
-  DCHECK(encoding_.empty());
+  CHECK(response_head, base::NotFatalUntil::M159);
+  CHECK(response_head->headers, base::NotFatalUntil::M159);
+  CHECK(encoding_.empty(), base::NotFatalUntil::M159);
   response_head->headers->GetCharset(&encoding_);
   body_size_ = response_head->content_length;
 
@@ -103,9 +103,7 @@ void ServiceWorkerInstalledScriptLoader::OnFinished(FinishedReason reason) {
 }
 
 void ServiceWorkerInstalledScriptLoader::FollowRedirect(
-    const std::vector<std::string>& removed_headers,
-    const net::HttpRequestHeaders& modified_headers,
-    const net::HttpRequestHeaders& modified_cors_exempt_headers,
+    network::HttpRequestHeadersUpdateParams headers_update_params,
     const std::optional<GURL>& new_url) {
   // This class never returns a redirect response to its client, so should never
   // be asked to follow one.

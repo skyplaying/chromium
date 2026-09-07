@@ -8,10 +8,12 @@
 #include <concepts>
 #include <utility>
 
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/test/interaction/interactive_browser_window_test.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/views/interaction/interactive_views_test.h"
+#include "ui/views/interaction/mouse/interactive_mouse_test.h"
 
 // Provides interactive test functionality for desktop browsers.
 //
@@ -51,10 +53,17 @@ class InteractiveBrowserTestApi
       AbsoluteViewSpecifier web_view,
       bool wait_for_ready = true);
 
+  // Instruments the WebContents containing `webui_element`, which should be a
+  // `TrackedElementWebUI` (i.e. a help bubble anchor or other named element in
+  // a WebUI). Otherwise functions the same as the other "instrument" verbs.
+  [[nodiscard]] StepBuilder InstrumentWebContentsContaining(
+      ui::ElementIdentifier id,
+      ElementSpecifier webui_element);
+
   // These are required so the following overloads don't hide the base class
   // variations.
-  using InteractiveViewsTestApi::DragMouseTo;
-  using InteractiveViewsTestApi::MoveMouseTo;
+  using InteractiveMouseTestApi::DragMouseTo;
+  using InteractiveMouseTestApi::MoveMouseTo;
 
   // Find the DOM element at the given path in the reference element, which
   // should be an instrumented WebContents; see Instrument*(). Move the mouse to
@@ -104,7 +113,7 @@ class InteractiveBrowserTestMixin : public T, public InteractiveBrowserTestApi {
   void SetUpOnMainThread() override {
     T::SetUpOnMainThread();
     private_test_impl().DoTestSetUp();
-    if (Browser* browser = T::browser()) {
+    if (BrowserWindowInterface* browser = T::browser()) {
       SetContextWidget(
           BrowserView::GetBrowserViewForBrowser(browser)->GetWidget());
     }

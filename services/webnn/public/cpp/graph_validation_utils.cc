@@ -32,6 +32,13 @@ namespace webnn {
 
 namespace {
 
+struct Conv2dInputOutputInfo {
+  uint32_t batches;
+  uint32_t channels;
+  uint32_t height;
+  uint32_t width;
+};
+
 // The error message labels for corresponding operands.
 static constexpr char kBiasParam[] = "bias";
 static constexpr char kCellStateParam[] = "cellState";
@@ -56,6 +63,51 @@ static constexpr char kUpdatesParam[] = "updates";
 static constexpr char kVarianceParam[] = "variance";
 static constexpr char kWeightParam[] = "weight";
 static constexpr char kZeroPointParam[] = "zeroPoint";
+
+// Validate that the intermediate padded shape is within the limits of
+// OperandDescriptor. This is useful for convolution and pooling operations
+// that may be implemented by padding the input tensor first.
+base::expected<void, std::string> ValidateIntermediatePaddedDescriptor(
+    const ContextProperties& context_properties,
+    const OperandDescriptor& input,
+    const Padding2d& padding,
+    const InputOperandLayout& input_layout,
+    const Conv2dInputOutputInfo& input_info,
+    std::string_view label) {
+  uint32_t padded_height;
+  uint32_t padded_width;
+  if (!(base::CheckedNumeric<uint32_t>(input_info.height) +
+        padding.beginning.height + padding.ending.height)
+           .AssignIfValid(&padded_height) ||
+      !(base::CheckedNumeric<uint32_t>(input_info.width) +
+        padding.beginning.width + padding.ending.width)
+           .AssignIfValid(&padded_width)) {
+    return base::unexpected(
+        ErrorWithLabel(label, "The padded intermediate shape is too large."));
+  }
+
+  std::array<uint32_t, 4> padded_shape;
+  switch (input_layout) {
+    case InputOperandLayout::kNchw:
+      padded_shape = {input_info.batches, input_info.channels, padded_height,
+                      padded_width};
+      break;
+    case InputOperandLayout::kNhwc:
+      padded_shape = {input_info.batches, padded_height, padded_width,
+                      input_info.channels};
+      break;
+  }
+
+  auto padded_descriptor = OperandDescriptor::Create(
+      context_properties, input.data_type(), padded_shape, label);
+  if (!padded_descriptor.has_value()) {
+    return base::unexpected(ErrorWithLabel(
+        label, base::StrCat({"The padded intermediate operand is invalid: ",
+                             padded_descriptor.error()})));
+  }
+
+  return base::ok();
+}
 
 // Validate and calculate the output spatial dimensions of convTranspose2d given
 // input sizes, filter sizes, padding, strides, dilations and output padding.
@@ -108,13 +160,6 @@ ValidateAndCalculateConvTranspose2dOutputSizes(
   return Size2d<uint32_t>{.height = output_height.value(),
                           .width = output_width.value()};
 }
-
-struct Conv2dInputOutputInfo {
-  uint32_t batches;
-  uint32_t channels;
-  uint32_t height;
-  uint32_t width;
-};
 
 // Get the input info of 2-D direct and transposed convolution
 // operation given input operand and attributes.
@@ -281,6 +326,19 @@ base::expected<double, std::string> CalculateConv2dOutputSize(
   if (!checked_effective_filter_size.IsValid()) {
     return base::unexpected(
         ErrorWithLabel(label, "The effective filter size is too large."));
+  }
+
+  // The effective (dilated) filter window must fit within the padded input;
+  // otherwise the window can never be fully placed and the operation has no
+  // valid output. Reject it here so that unbounded filter/dilation values can
+  // not flow unchecked into backends. Computed in 64-bit to avoid overflow.
+  const uint64_t padded_size =
+      uint64_t{input_size} + beginning_padding + ending_padding;
+  if (checked_effective_filter_size.ValueOrDie() > padded_size) {
+    return base::unexpected(ErrorWithLabel(
+        label,
+        "The effective filter size should not be larger than the padded input "
+        "size."));
   }
 
   // Calculate the output size in double precision floating point number that
@@ -538,6 +596,13 @@ base::expected<OperandDescriptor, std::string> ValidateConcatAndInferOutput(
         ErrorWithLabel(label, "The inputs should not be empty."));
   }
 
+  if (inputs.size() > kMaxValidTensorCount) {
+    return base::unexpected(ErrorWithLabel(
+        label, base::StringPrintf(
+                   "The number of inputs must be less than or equal to %u.",
+                   kMaxValidTensorCount)));
+  }
+
   for (const auto& input : inputs) {
     if (!context_properties.data_type_limits.concat_inputs.Supports(input)) {
       return base::unexpected(ErrorWithLabel(
@@ -625,6 +690,24 @@ ValidateAndCalculateConv2dOutputSizes(uint32_t input_height,
   if (dilations.height == 0 || dilations.width == 0) {
     return base::unexpected(
         ErrorWithLabel(label, "All dilations should be greater than 0."));
+  }
+
+  // A stride or dilation larger than the padded input spatial size can place
+  // the window at most once, so any such value is equivalent to a much smaller
+  // one and serves no legitimate purpose. Reject them here so that unbounded
+  // uint32 values can not flow unchecked into backends. Padding is included so
+  // that valid padded windows are not rejected.
+  const uint64_t padded_height =
+      uint64_t{input_height} + padding.beginning.height + padding.ending.height;
+  const uint64_t padded_width =
+      uint64_t{input_width} + padding.beginning.width + padding.ending.width;
+  if (strides.height > padded_height || strides.width > padded_width) {
+    return base::unexpected(ErrorWithLabel(
+        label, "Strides should not be larger than the padded input size."));
+  }
+  if (dilations.height > padded_height || dilations.width > padded_width) {
+    return base::unexpected(ErrorWithLabel(
+        label, "Dilations should not be larger than the padded input size."));
   }
 
   const auto float_output_height = CalculateConv2dOutputSize(
@@ -733,6 +816,14 @@ base::expected<OperandDescriptor, std::string> ValidateConv2dAndInferOutput(
         "The groups must evenly divide the input channels to filter input "
         "channels."));
   }
+  if (output_channels % attributes.groups != 0) {
+    return base::unexpected(ErrorWithLabel(
+        label, "The groups must evenly divide the output channels."));
+  }
+
+  RETURN_IF_ERROR(ValidateIntermediatePaddedDescriptor(
+      context_properties, input, attributes.padding, attributes.input_layout,
+      input_info, label));
 
   // Validate and calculate output sizes.
   ASSIGN_OR_RETURN(
@@ -840,6 +931,10 @@ ValidateConvTranspose2dAndInferOutput(
   }
   const uint32_t output_channels = checked_output_channels.ValueOrDie();
 
+  RETURN_IF_ERROR(ValidateIntermediatePaddedDescriptor(
+      context_properties, input, attributes.padding, attributes.input_layout,
+      input_info, label));
+
   // Validate and calculate output sizes.
   uint32_t output_height, output_width;
   if (attributes.output_sizes) {
@@ -895,6 +990,23 @@ ValidateConvTranspose2dAndInferOutput(
             attributes.output_padding, label));
     output_height = output_sizes.height;
     output_width = output_sizes.width;
+  }
+
+  // A stride or dilation larger than the resolved output size can only arise
+  // when input==1 or filter==1, where its value is a pure no-op. Reject such
+  // values so that unbounded uint32 strides/dilations cannot flow unchecked
+  // into backends. This is checked against the resolved output size rather than
+  // the minimum calculated size, so that a valid graph whose outputSizes lies
+  // in [calculated, calculated + stride - 1] is not wrongly rejected.
+  if (attributes.strides.height > output_height ||
+      attributes.strides.width > output_width) {
+    return base::unexpected(ErrorWithLabel(
+        label, "Strides should not be larger than the output size."));
+  }
+  if (attributes.dilations.height > output_height ||
+      attributes.dilations.width > output_width) {
+    return base::unexpected(ErrorWithLabel(
+        label, "Dilations should not be larger than the output size."));
   }
 
   Conv2dInputOutputInfo output_info{.batches = input_info.batches,
@@ -986,13 +1098,13 @@ ValidateDequantizeLinearAndInferOutput(
             context_properties.data_type_limits.dequantize_linear_input)));
   }
 
-  if (!context_properties.data_type_limits.dequantize_linear_zero_point
-           .Supports(zero_point)) {
+  if (!context_properties.data_type_limits.dequantize_linear_input.Supports(
+          zero_point)) {
     return base::unexpected(ErrorWithLabel(
         label,
         NotSupportedArgumentError(
             kZeroPointParam, zero_point,
-            context_properties.data_type_limits.dequantize_linear_zero_point)));
+            context_properties.data_type_limits.dequantize_linear_input)));
   }
 
   if (input.data_type() != zero_point.data_type()) {
@@ -1071,12 +1183,13 @@ base::expected<OperandDescriptor, std::string> ValidateExpandAndInferOutput(
                    input, context_properties.data_type_limits.expand_input)));
   }
 
+  uint32_t new_rank = base::checked_cast<uint32_t>(new_shape.size());
   if (!context_properties.data_type_limits.expand_input.ranks.Supports(
-          new_shape.size())) {
+          new_rank)) {
     return base::unexpected(ErrorWithLabel(
-        label, NotSupportedOpOutputRankError(
-                   static_cast<uint32_t>(new_shape.size()),
-                   context_properties.data_type_limits.expand_input.ranks)));
+        label,
+        NotSupportedOpOutputRankError(
+            new_rank, context_properties.data_type_limits.expand_input.ranks)));
   }
 
   std::optional<std::vector<uint32_t>> output_shape =
@@ -1239,10 +1352,12 @@ base::expected<OperandDescriptor, std::string> ValidateGatherNDAndInferOutput(
 
   std::vector<uint32_t> output_shape;
   output_shape.reserve(checked_output_rank.ValueOrDie());
-  std::ranges::copy(indices.shape().begin(), indices.shape().end() - 1,
+  base::span<const uint32_t> indices_shape = indices.shape();
+  std::ranges::copy(indices_shape.first(indices_shape.size() - 1),
                     std::back_inserter(output_shape));
-  std::ranges::copy(input.shape().begin() + indices_last_dimension_size,
-                    input.shape().end(), std::back_inserter(output_shape));
+  base::span<const uint32_t> input_shape = input.shape();
+  std::ranges::copy(input_shape.subspan(indices_last_dimension_size),
+                    std::back_inserter(output_shape));
 
   return OperandDescriptor::Create(context_properties, input.data_type(),
                                    output_shape, label);
@@ -1456,12 +1571,16 @@ ValidateGruAndInferOutput(const ContextProperties& context_properties,
           context_properties, input.data_type(),
           std::array{num_directions, batch_size, hidden_size}, label));
   outputs.push_back(std::move(output));
+
+  // Validate the full-sequence output tensor unconditionally since some
+  // backends may produce this output internally even when `return_sequence` is
+  // false.
+  ASSIGN_OR_RETURN(
+      OperandDescriptor return_sequence_output,
+      OperandDescriptor::Create(
+          context_properties, input.data_type(),
+          std::array{steps, num_directions, batch_size, hidden_size}, label));
   if (attributes.return_sequence) {
-    ASSIGN_OR_RETURN(
-        OperandDescriptor return_sequence_output,
-        OperandDescriptor::Create(
-            context_properties, input.data_type(),
-            std::array{steps, num_directions, batch_size, hidden_size}, label));
     outputs.push_back(std::move(return_sequence_output));
   }
 
@@ -1868,13 +1987,16 @@ ValidateLstmAndInferOutput(const ContextProperties& context_properties,
           std::array{direction_count, batch_size, hidden_size}, label));
   outputs.push_back(output);
   outputs.push_back(std::move(output));
+
+  // Validate the full-sequence output tensor unconditionally since some
+  // backends may produce this output internally even when `return_sequence` is
+  // false.
+  ASSIGN_OR_RETURN(
+      OperandDescriptor return_sequence_output,
+      OperandDescriptor::Create(
+          context_properties, input.data_type(),
+          std::array{steps, direction_count, batch_size, hidden_size}, label));
   if (attributes.return_sequence) {
-    ASSIGN_OR_RETURN(
-        OperandDescriptor return_sequence_output,
-        OperandDescriptor::Create(
-            context_properties, input.data_type(),
-            std::array{steps, direction_count, batch_size, hidden_size},
-            label));
     outputs.push_back(std::move(return_sequence_output));
   }
 
@@ -2241,6 +2363,14 @@ base::expected<OperandDescriptor, std::string> ValidatePool2dAndInferOutput(
     window_width = attributes.window_dimensions->width;
   }
 
+  RETURN_IF_ERROR(ValidateIntermediatePaddedDescriptor(
+      context_properties, input, attributes.padding, attributes.layout,
+      Conv2dInputOutputInfo{.batches = input_batches,
+                            .channels = input_channels,
+                            .height = input_height,
+                            .width = input_width},
+      label));
+
   // Reuse ValidateAndCalculateConv2dOutputSizes to calculate pool2d output
   // sizes.
   ASSIGN_OR_RETURN(
@@ -2290,7 +2420,7 @@ base::expected<OperandDescriptor, std::string> ValidatePool2dAndInferOutput(
                     ceil_output_width)));
     }
   } else {
-    switch (attributes.rounding_type) {
+    switch (attributes.output_shape_rounding) {
       case RoundingType::kFloor:
         output_height = floor_output_height;
         output_width = floor_output_width;
@@ -2342,16 +2472,17 @@ base::expected<OperandDescriptor, std::string> ValidatePreluAndInferOutput(
     return base::unexpected(ErrorWithLabel(
         label, "The data type of slope doesn't match the data type of input."));
   }
-  // TODO(crbug.com/387892103): Use bidirectional broadcasting.
-  // BroadcastShape unidirectionally broadcasts slope.dimensions to
-  // input.dimensions.
-  if (!BroadcastShapes(slope.shape(), input.shape(), /*bidirectional=*/false)) {
+  // WebNN allows input and slope to be bidirectionally broadcastable, producing
+  // an output whose shape is the broadcast of the two.
+  std::optional<std::vector<uint32_t>> output_shape =
+      BroadcastShapes(slope.shape(), input.shape(), /*bidirectional=*/true);
+  if (!output_shape) {
     return base::unexpected(ErrorWithLabel(
-        label,
-        "The shape of slope is not broadcastable to the shape of input."));
+        label, "The shapes of input and slope are not broadcastable."));
   }
 
-  return input;
+  return OperandDescriptor::Create(context_properties, input.data_type(),
+                                   *output_shape, label);
 }
 
 base::expected<OperandDescriptor, std::string> ValidateReduceAndInferOutput(
@@ -2399,9 +2530,9 @@ base::expected<OperandDescriptor, std::string> ValidateReduceAndInferOutput(
                                    output_shape, label);
 }
 
-// The current WebNN spec doesn't define the calculation formula of the output
-// size for resample2d. An issue has been filed to track it -
-// https://github.com/webmachinelearning/webnn/issues/360.
+// Per the WebNN spec, the output size for resample2d is
+// floor(input size * scale):
+// https://www.w3.org/TR/webnn/#api-mlgraphbuilder-resample2d-method
 base::expected<uint32_t, std::string> CalculateResample2dOutputSize(
     const uint32_t input_size,
     const float scale,
@@ -2635,10 +2766,11 @@ base::expected<OperandDescriptor, std::string> ValidateScatterNDAndInferOutput(
 
   std::vector<uint32_t> expected_updates_shape;
   expected_updates_shape.reserve(checked_updates_rank.ValueOrDie());
-  std::ranges::copy(indices.shape().begin(), indices.shape().end() - 1,
+  base::span<const uint32_t> indices_shape = indices.shape();
+  std::ranges::copy(indices_shape.first(indices_shape.size() - 1),
                     std::back_inserter(expected_updates_shape));
-  std::ranges::copy(input.shape().begin() + indices_last_dim_size,
-                    input.shape().end(),
+  base::span<const uint32_t> input_shape = input.shape();
+  std::ranges::copy(input_shape.subspan(indices_last_dim_size),
                     std::back_inserter(expected_updates_shape));
 
   if (expected_updates_shape != updates.shape()) {
@@ -2731,6 +2863,14 @@ base::expected<OperandDescriptor, std::string> ValidateSliceAndInferOutput(
                              i, input.shape()[i])));
     }
 
+    if (attributes.strides[i] > attributes.sizes[i]) {
+      return base::unexpected(ErrorWithLabel(
+          label,
+          base::StringPrintf("For dimension (%u): the stride (%u) must not be "
+                             "greater than the size to slice (%u).",
+                             i, attributes.strides[i], attributes.sizes[i])));
+    }
+
     uint32_t output_size = attributes.sizes[i] / attributes.strides[i] +
                            (attributes.sizes[i] % attributes.strides[i] != 0);
     output_shape.push_back(output_size);
@@ -2787,6 +2927,13 @@ ValidateSplitAndInferOutput(const ContextProperties& context_properties,
           ErrorWithLabel(label, "The splits must be greater than zero."));
     }
 
+    if (splits > kMaxValidTensorCount) {
+      return base::unexpected(ErrorWithLabel(
+          label,
+          base::StringPrintf("The splits must be less than or equal to %u.",
+                             kMaxValidTensorCount)));
+    }
+
     if (input.shape()[attributes.axis] % splits != 0) {
       return base::unexpected(
           ErrorWithLabel(label,
@@ -2811,6 +2958,18 @@ ValidateSplitAndInferOutput(const ContextProperties& context_properties,
                  attributes.splits)) {
     const auto& splits =
         std::get<base::span<const uint32_t>>(attributes.splits);
+    if (splits.empty()) {
+      return base::unexpected(
+          ErrorWithLabel(label, "The splits should not be empty."));
+    }
+
+    if (splits.size() > kMaxValidTensorCount) {
+      return base::unexpected(ErrorWithLabel(
+          label, base::StringPrintf(
+                     "The number of splits must be less than or equal to %u.",
+                     kMaxValidTensorCount)));
+    }
+
     if (std::ranges::any_of(splits,
                             [](uint32_t split) { return split == 0; })) {
       return base::unexpected(

@@ -17,7 +17,6 @@
 #include "components/optimization_guide/core/delivery/model_util.h"
 #include "components/optimization_guide/core/feature_registry/feature_registration.h"
 #include "components/optimization_guide/core/feature_registry/mqls_feature_registry.h"
-#include "components/optimization_guide/core/optimization_guide_constants.h"
 #include "components/optimization_guide/proto/models.pb.h"
 #include "components/prefs/testing_pref_service.h"
 #include "google_apis/gaia/gaia_constants.h"
@@ -45,14 +44,11 @@ TEST_F(OptimizationGuideFeaturesTest, ModelQualityLoggingDefault) {
 
   EXPECT_TRUE(features::IsModelQualityLoggingEnabled());
 
-  // Compose, wallpaper search and tab organization should be enabled by
+  // Compose and wallpaper search should be enabled by
   // default whereas product specifications should be disabled by default.
   MqlsFeatureRegistry& registry = MqlsFeatureRegistry::GetInstance();
   EXPECT_TRUE(features::IsModelQualityLoggingEnabledForFeature(
       registry.GetFeature(proto::LogAiDataRequest::FeatureCase::kCompose)));
-  EXPECT_TRUE(
-      features::IsModelQualityLoggingEnabledForFeature(registry.GetFeature(
-          proto::LogAiDataRequest::FeatureCase::kTabOrganization)));
   EXPECT_TRUE(
       features::IsModelQualityLoggingEnabledForFeature(registry.GetFeature(
           proto::LogAiDataRequest::FeatureCase::kWallpaperSearch)));
@@ -84,10 +80,10 @@ TEST_F(OptimizationGuideFeaturesTest, ComposeModelQualityLoggingDisabled) {
 
   EXPECT_TRUE(features::IsModelQualityLoggingEnabled());
   EXPECT_FALSE(features::IsModelQualityLoggingEnabledForFeature(metadata));
-  // TabOrganization should still be enabled.
+  // WallpaperSearch should still be enabled.
   EXPECT_TRUE(
       features::IsModelQualityLoggingEnabledForFeature(registry.GetFeature(
-          proto::LogAiDataRequest::FeatureCase::kTabOrganization)));
+          proto::LogAiDataRequest::FeatureCase::kWallpaperSearch)));
 }
 
 TEST_F(OptimizationGuideFeaturesTest, ModelQualityLoggingDisabled) {
@@ -100,9 +96,6 @@ TEST_F(OptimizationGuideFeaturesTest, ModelQualityLoggingDisabled) {
   MqlsFeatureRegistry& registry = MqlsFeatureRegistry::GetInstance();
   EXPECT_FALSE(features::IsModelQualityLoggingEnabledForFeature(
       registry.GetFeature(proto::LogAiDataRequest::FeatureCase::kCompose)));
-  EXPECT_FALSE(
-      features::IsModelQualityLoggingEnabledForFeature(registry.GetFeature(
-          proto::LogAiDataRequest::FeatureCase::kTabOrganization)));
   EXPECT_FALSE(
       features::IsModelQualityLoggingEnabledForFeature(registry.GetFeature(
           proto::LogAiDataRequest::FeatureCase::kWallpaperSearch)));
@@ -327,28 +320,6 @@ TEST_F(OptimizationGuideFeaturesTest, PredictionModelVersionInKillSwitch) {
                                   testing::ElementsAre(1, 3)),
                     testing::Pair(proto::OPTIMIZATION_TARGET_MODEL_VALIDATION,
                                   testing::ElementsAre(5))));
-  }
-}
-
-TEST_F(OptimizationGuideFeaturesTest, AllowedAdaptationRanks) {
-  // Default value
-  EXPECT_THAT(features::GetOnDeviceModelAllowedAdaptationRanks(),
-              testing::ElementsAre(32));
-  {
-    base::test::ScopedFeatureList scoped_feature_list;
-    scoped_feature_list.InitAndEnableFeatureWithParameters(
-        features::kOptimizationGuideOnDeviceModel,
-        {{"allowed_adaptation_ranks", "16,32"}});
-    EXPECT_THAT(features::GetOnDeviceModelAllowedAdaptationRanks(),
-                testing::ElementsAre(16, 32));
-  }
-  {
-    base::test::ScopedFeatureList scoped_feature_list;
-    scoped_feature_list.InitAndEnableFeatureWithParameters(
-        features::kOptimizationGuideOnDeviceModel,
-        {{"allowed_adaptation_ranks", "16,invalid,64"}});
-    EXPECT_THAT(features::GetOnDeviceModelAllowedAdaptationRanks(),
-                testing::ElementsAre(16, 64));
   }
 }
 

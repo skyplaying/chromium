@@ -16,10 +16,11 @@
 #include "chrome/browser/error_reporting/mock_chrome_js_error_report_processor.h"
 #include "chrome/browser/extensions/api/crash_report_private/crash_report_private_api.h"
 #include "chrome/browser/extensions/extension_apitest.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
-#include "chrome/common/chrome_features.h"
 #include "components/crash/content/browser/error_reporting/mock_crash_endpoint.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/browser_test.h"
@@ -323,7 +324,8 @@ IN_PROC_BROWSER_TEST_F(CrashReportPrivateApiTest, CalledFromWebContentsInTab) {
   )";
   // Run the script in the |web_content| that has loaded |extension_| instead of
   // |ExecuteScriptInBackgroundPage| so
-  // |chrome::FindBrowserWithTab(web_contents)| is not |nullptr|.
+  // |GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(web_contents)|
+  // is not |nullptr|.
   EXPECT_EQ(true, ExecJs(web_content, kTestScript));
 
   auto report = crash_endpoint_->WaitForReport();
@@ -369,10 +371,11 @@ IN_PROC_BROWSER_TEST_P(CrashReportPrivateCalledFromSwaTest,
       web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(start_url);
   webapps::AppId app_id =
       web_app::test::InstallWebApp(profile(), std::move(web_app_info));
-  Browser* app_browser = web_app::LaunchWebAppBrowserAndWait(profile(), app_id);
+  BrowserWindowInterface* app_browser =
+      web_app::LaunchWebAppBrowserAndWait(profile(), app_id);
 
   content::WebContents* web_content =
-      app_browser->tab_strip_model()->GetActiveWebContents();
+      app_browser->GetTabStripModel()->GetActiveWebContents();
   // Navigate to chrome://media-app which was access to |CrashReportPrivate|
   // from the |WebContents| in the web app window.
   const GURL extension_context_url("chrome://media-app");

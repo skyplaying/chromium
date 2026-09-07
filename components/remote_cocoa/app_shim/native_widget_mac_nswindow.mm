@@ -25,6 +25,7 @@
 #include "ui/accessibility/platform/ax_platform_node.h"
 #import "ui/base/cocoa/user_interface_item_command_handler.h"
 #import "ui/base/cocoa/window_size_constants.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/native_ui_types.h"
 
 namespace {
@@ -122,6 +123,11 @@ void OrderChildWindow(NSWindow* child_window,
 - (BOOL)_isConsideredOpenForPersistentState;
 - (void)_zoomToScreenEdge:(NSUInteger)edge;
 - (void)_removeFromGroups:(NSWindow*)window;
+- (void)_setFrame:(NSRect)frameRect
+    fromAdjustmentToScreen:(NSScreen*)screen
+            anchorIfNeeded:(const CGPoint*)anchor
+                   animate:(BOOL)animate;
+- (void)_setFrameAfterMove:(NSRect)frameRect;
 - (BOOL)_isNonactivatingPanel;
 @end
 
@@ -140,10 +146,18 @@ struct NSEdgeAndCornerThicknesses {
 - (void)_regularMinimizeToDock;
 @end
 
+// Private API for window fill.
+@interface NSWindow (NSWindow_Fill)
+- (void)_zoomFill:(id)sender;
+@end
+
 @interface NativeWidgetMacNSWindow () <NSKeyedArchiverDelegate>
 - (ViewsNSWindowDelegate*)viewsNSWindowDelegate;
 - (BOOL)hasViewsMenuActive;
 - (id<NSAccessibility>)rootAccessibilityObject;
+
+// The child window with the highest z-order that is visible and modal, if any.
+- (NSWindow*)topmostVisibleChildModalWindow;
 
 // Private API on NSWindow, determines whether the title is drawn on the title
 // bar. The title is still visible in menus, Expose, etc.
@@ -168,8 +182,9 @@ struct NSEdgeAndCornerThicknesses {
 
 @implementation NativeWidgetMacNSWindowTitledFrame
 - (void)mouseDown:(NSEvent*)event {
-  if (self.window.isMovable)
+  if (self.window.movable) {
     [self cr_mouseDownOnFrameView:event];
+  }
   [super mouseDown:event];
 }
 - (BOOL)usesCustomDrawing {
@@ -209,6 +224,7 @@ struct NSEdgeAndCornerThicknesses {
   BOOL _isTooltip;
   BOOL _isShufflingForOrdering;
   BOOL _miniaturizationInProgress;
+  BOOL _inSetFrameFromAdjustment;
   std::unique_ptr<NativeWidgetMacNSWindowHeadlessInfo> _headless_info;
 }
 @synthesize bridgedNativeWidgetId = _bridgedNativeWidgetId;
@@ -418,6 +434,83 @@ struct NSEdgeAndCornerThicknesses {
   return [super frameViewClassForStyleMask:windowStyle];
 }
 
+// Constrains the frame rect during an active window move loop so that the top
+// of the window does not exceed the menu bar / visible top of the display,
+// while allowing smooth unrestricted dragging across display boundaries without
+// AppKit snapping the window to screen edges.
+- (NSRect)constrainFrameRectForMoveLoop:(NSRect)frameRect {
+  NSArray<NSScreen*>* screens = [NSScreen screens];
+  if (screens.count == 0) {
+    return frameRect;
+  }
+
+  NSPoint mouse_location = [NSEvent mouseLocation];
+  NSScreen* target_screen = nil;
+
+  // First, prefer the screen containing the mouse cursor.
+  for (NSScreen* screen in screens) {
+    if (NSPointInRect(mouse_location, screen.frame)) {
+      target_screen = screen;
+      break;
+    }
+  }
+
+  // If the mouse is not inside any screen, find the screen with the largest
+  // intersection with the window frame.
+  if (!target_screen) {
+    CGFloat max_intersection_area = 0;
+    for (NSScreen* screen in screens) {
+      NSRect intersection = NSIntersectionRect(frameRect, screen.frame);
+      CGFloat area = intersection.size.width * intersection.size.height;
+      if (area > max_intersection_area) {
+        max_intersection_area = area;
+        target_screen = screen;
+      }
+    }
+  }
+
+  // Fallback to mainScreen or the first screen.
+  if (!target_screen) {
+    target_screen = [NSScreen mainScreen] ?: screens.firstObject;
+  }
+
+  if (!target_screen) {
+    return frameRect;
+  }
+
+  // Check if there is another screen positioned directly above target_screen
+  // covering the window's horizontal span, allowing the window to cross upward.
+  BOOL has_screen_above = NO;
+  for (NSScreen* other_screen in screens) {
+    if (other_screen == target_screen) {
+      continue;
+    }
+    if (NSMinY(other_screen.frame) >= NSMaxY(target_screen.frame) - 1.0 &&
+        NSMinX(other_screen.frame) < NSMaxX(frameRect) &&
+        NSMaxX(other_screen.frame) > NSMinX(frameRect)) {
+      has_screen_above = YES;
+      break;
+    }
+  }
+
+  NSRect constrained = frameRect;
+
+  // If there is no screen above, constrain the top of the window to the visible
+  // frame (below the menu bar).
+  if (!has_screen_above) {
+    CGFloat max_top = NSMaxY(target_screen.visibleFrame);
+    if (NSMaxY(constrained) > max_top) {
+      constrained.origin.y = max_top - constrained.size.height;
+    }
+  }
+
+  return constrained;
+}
+
+// AppKit calls constrainFrameRect:toScreen: to clamp window frames to screen
+// boundaries. When a window move loop is active, constrain the top edge to
+// respect the menu bar while avoiding AppKit's horizontal snapping across
+// display boundaries.
 - (NSRect)constrainFrameRect:(NSRect)frameRect toScreen:(NSScreen*)screen {
   if (self.isHeadless || self.parentWindow) {
     // AppKit's default implementation moves child windows down to avoid
@@ -428,7 +521,81 @@ struct NSEdgeAndCornerThicknesses {
     return frameRect;
   }
 
+  if (base::FeatureList::IsEnabled(
+          remote_cocoa::features::
+              kSuppressAppKitFrameAdjustmentsDuringMoveLoop) &&
+      _bridge && _bridge->window_move_loop()) {
+    return [self constrainFrameRectForMoveLoop:frameRect];
+  }
+
   return [super constrainFrameRect:frameRect toScreen:screen];
+}
+
+// AppKit's internal screen layout manager invokes
+// _setFrame:fromAdjustmentToScreen: and _setFrameAfterMove: asynchronously
+// during screen layout changes or display boundary transitions to adjust the
+// window origin. In headless mode or while CocoaWindowMoveLoop manually drives
+// window positioning during a tab drag, suppress these callbacks so that
+// headless window positioning is not constrained to physical display bounds
+// and stale AppKit callbacks do not overwrite the move loop's calculated
+// position.
+- (void)_setFrame:(NSRect)frameRect
+    fromAdjustmentToScreen:(NSScreen*)screen
+            anchorIfNeeded:(const CGPoint*)anchor
+                   animate:(BOOL)animate {
+  if (self.isHeadless ||
+      (base::FeatureList::IsEnabled(
+           remote_cocoa::features::
+               kSuppressAppKitFrameAdjustmentsDuringMoveLoop) &&
+       _bridge && _bridge->window_move_loop())) {
+    return;
+  }
+  if (_inSetFrameFromAdjustment) {
+    return;
+  }
+  base::AutoReset<BOOL> resetter(&_inSetFrameFromAdjustment, YES);
+  if ([NSWindow instancesRespondToSelector:_cmd]) {
+    [super _setFrame:frameRect
+        fromAdjustmentToScreen:screen
+                anchorIfNeeded:anchor
+                       animate:animate];
+  }
+}
+
+- (void)_setFrameAfterMove:(NSRect)frameRect {
+  if (self.isHeadless ||
+      (base::FeatureList::IsEnabled(
+           remote_cocoa::features::
+               kSuppressAppKitFrameAdjustmentsDuringMoveLoop) &&
+       _bridge && _bridge->window_move_loop())) {
+    return;
+  }
+  if (_inSetFrameFromAdjustment) {
+    return;
+  }
+  base::AutoReset<BOOL> resetter(&_inSetFrameFromAdjustment, YES);
+  if ([NSWindow instancesRespondToSelector:_cmd]) {
+    [super _setFrameAfterMove:frameRect];
+  }
+}
+
+- (NSWindow*)topmostVisibleChildModalWindow {
+  if (!_bridge) {
+    return nil;
+  }
+
+  for (remote_cocoa::NativeWidgetNSWindowBridge* child_bridge :
+       base::Reversed(_bridge->child_windows())) {
+    if (child_bridge->modal_type() == ui::mojom::ModalType::kNone) {
+      continue;
+    }
+    NSWindow* child_ns_window = child_bridge->ns_window();
+    if ([child_ns_window isVisible]) {
+      return child_ns_window;
+    }
+  }
+
+  return nil;
 }
 
 - (BOOL)_isTitleHidden {
@@ -532,11 +699,40 @@ struct NSEdgeAndCornerThicknesses {
 
   // Let CommandDispatcher check if this is a redispatched event.
   if ([_commandDispatcher preSendEvent:event]) {
-    TRACE_EVENT_INSTANT0("browser", "StopSendEvent", TRACE_EVENT_SCOPE_THREAD);
+    TRACE_EVENT_INSTANT("browser", "StopSendEvent");
     return;
   }
 
   NSEventType type = [event type];
+
+  // Handle double-click on custom draggable regions outside the native
+  // titlebar. macOS AppKit natively handles double-click-to-zoom for the
+  // native titlebar region (via _NSTitlebarContainerView), but not for custom
+  // draggable areas like the empty space in a vertical tab strip.
+  //
+  // Only intercept mouse-up events within contentLayoutRect (which excludes
+  // the native titlebar and the window resize handle) where hitTest: returns
+  // nil (indicating a custom draggable background). Performing the action on
+  // mouse-up matches the native titlebar behavior.
+  if (type == NSEventTypeLeftMouseUp && [event clickCount] == 2) {
+    const BOOL hitCustomDraggableArea =
+        NSPointInRect(event.locationInWindow, self.contentLayoutRect) &&
+        [[self contentView] hitTest:event.locationInWindow] == nil;
+    if (hitCustomDraggableArea) {
+      NSString* action = [[NSUserDefaults standardUserDefaults]
+          stringForKey:@"AppleActionOnDoubleClick"];
+      if ([action isEqualToString:@"Fill"] &&
+          [self respondsToSelector:@selector(_zoomFill:)]) {
+        [self _zoomFill:nil];
+      } else if (!action || [action isEqualToString:@"Maximize"]) {
+        [self performZoom:nil];
+      } else if ([action isEqualToString:@"Minimize"]) {
+        [self performMiniaturize:nil];
+      }
+      // "None" or unrecognized value => do nothing.
+      return;
+    }
+  }
 
   // Draggable regions only respond to left-click dragging, but the system will
   // still suppress right-clicks in a draggable region. Forwarding right-clicks
@@ -552,6 +748,32 @@ struct NSEdgeAndCornerThicknesses {
   } else if (type == NSEventTypeRightMouseUp) {
     if ([[self contentView] hitTest:event.locationInWindow] == nil) {
       [[self contentView] rightMouseUp:event];
+      return;
+    }
+  } else if (type == NSEventTypeLeftMouseDown) {
+    // Check whether the click was in a blocked area via a hit test.
+    bool is_blocked_by_modal = false;
+    if (_bridge) {
+      NSView* content_view = [self contentView];
+      NSPoint point_in_view = [content_view convertPoint:event.locationInWindow
+                                                fromView:nil];
+      gfx::Point flipped_point(
+          point_in_view.x, NSHeight([content_view frame]) - point_in_view.y);
+      remote_cocoa::mojom::HitTestResult hit_test_result =
+          remote_cocoa::mojom::HitTestResult::kOther;
+      _bridge->host()->GetHitTestResult(flipped_point, &hit_test_result);
+      is_blocked_by_modal = hit_test_result ==
+                            remote_cocoa::mojom::HitTestResult::kBlockedSubView;
+    }
+
+    NSWindow* child_modal_window = [self topmostVisibleChildModalWindow];
+    // If the click was in a blocked area and we're displaying a child modal
+    // window, swallow the event to prevent the web contents from processing it
+    // (and potentially triggering new dialogs).
+    if (is_blocked_by_modal && child_modal_window) {
+      if (![child_modal_window isKeyWindow]) {
+        [child_modal_window makeKeyWindow];
+      }
       return;
     }
   } else if ([self hasViewsMenuActive]) {
@@ -610,40 +832,45 @@ struct NSEdgeAndCornerThicknesses {
 // -orderWindowByShuffling:relativeTo: instead.
 - (void)orderWindow:(NSWindowOrderingMode)orderingMode
          relativeTo:(NSInteger)otherWindowNumber {
+  // Prevent a window that should never be visible from being ordered in.
+  // External frameworks (e.g., AuthenticationServicesCore presenting
+  // passkey/WebAuthn dialogs) can trigger window ordering on the invisible
+  // browser-side proxy window for app shims, causing a DumpWithoutCrashing.
+  // See https://crbug.com/325931972 and https://crbug.com/40626510.
+  if (_isEnforcingNeverMadeVisible && orderingMode != NSWindowOut) {
+    return;
+  }
   [super orderWindow:orderingMode relativeTo:otherWindowNumber];
   [[self viewsNSWindowDelegate] onWindowOrderChanged:nil];
 }
 
 - (void)miniaturize:(id)sender {
-  static const BOOL isMacOS13OrHigher = base::mac::MacOSMajorVersion() >= 13;
-  // On macOS 13, the miniaturize operation appears to no longer be "atomic"
-  // because of non-blocking roundtrip IPC with the Dock. We want to note here
-  // that miniaturization is in progress. The process completes when we
-  // reach -_regularMinimizeToDock:.
-  _miniaturizationInProgress = isMacOS13OrHigher;
+  // The miniaturize operation appears to not be "atomic" because of
+  // non-blocking roundtrip IPC with the Dock. We want to note here that
+  // miniaturization is in progress. The process completes when we reach
+  // -_regularMinimizeToDock:.
+  _miniaturizationInProgress = YES;
 
   [super miniaturize:sender];
 }
 
 - (void)_regularMinimizeToDock {
-  // On macOS 13, a call to -miniaturize: kicks of an async round-trip IPC with
-  // the Dock that ends up in this method. Unfortunately, it appears that if we
-  // immediately follow a call to -miniaturize: with -makeKeyAndOrderFront:,
-  // the AppKit doesn't cancel the in-flight round-trip IPC. As a result,
+  // A call to -miniaturize: kicks of an async round-trip IPC with the Dock that
+  // ends up in this method. Unfortunately, it appears that if we immediately
+  // follow a call to -miniaturize: with -makeKeyAndOrderFront:, the AppKit
+  // doesn't cancel the in-flight round-trip IPC. As a result,
   // _regularMinimizeToDock gets called sometime after -makeKeyAndOrderFront:
-  // and miniaturizes the window anyway. This is  a potential problem in
-  // session restore where we might restart with a single browser window
-  // sitting Dock. In that case, Session Restore creates the window,
-  // miniaturizes to the dock, and then brings it back out. With this new macOS
-  // 13 behavior (which seems like a bug), the browser window may not be
-  // restored from the Dock.
+  // and miniaturizes the window anyway. This is  a potential problem in session
+  // restore where we might restart with a single browser window sitting Dock.
+  // In that case, Session Restore creates the window, miniaturizes to the dock,
+  // and then brings it back out. With this behavior (which seems like a bug),
+  // the browser window may not be restored from the Dock.
   //
   // To get around this problem, if we arrive here and
-  // _miniaturizationInProgress is NO, the miniaturization process was
-  // cancelled by a call to -makeKeyAndOrderFront:. In that case, we don't want
-  // to proceed with miniaturization.
-  static const BOOL isMacOS13OrHigher = base::mac::MacOSMajorVersion() >= 13;
-  if (isMacOS13OrHigher && !_miniaturizationInProgress) {
+  // _miniaturizationInProgress is NO, the miniaturization process was cancelled
+  // by a call to -makeKeyAndOrderFront:. In that case, we don't want to proceed
+  // with miniaturization.
+  if (!_miniaturizationInProgress) {
     return;
   }
 
@@ -815,6 +1042,14 @@ struct NSEdgeAndCornerThicknesses {
     return NO;
   }
 
+  // Private AppKit frame adjustment methods should only be advertised if the
+  // superclass implements them on this macOS version.
+  if (aSelector ==
+          @selector(_setFrame:fromAdjustmentToScreen:anchorIfNeeded:animate:) ||
+      aSelector == @selector(_setFrameAfterMove:)) {
+    return [NSWindow instancesRespondToSelector:aSelector];
+  }
+
   return [super respondsToSelector:aSelector];
 }
 
@@ -947,19 +1182,13 @@ struct NSEdgeAndCornerThicknesses {
 // TODO(http://crbug.com/1454606): Remove this workaround once FB13529873 is
 // fixed in AppKit.
 - (void)maybeRemoveTreeFromOrderingGroups {
-  // This workaround only needed for macOS 13 and greater.
-  if (@available(macOS 13.0, *)) {
-  } else {
-    return;
-  }
-
   if (!base::FeatureList::IsEnabled(
           remote_cocoa::features::kImmersiveFullscreenSpaceSwitchMitigation)) {
     return;
   }
 
   // Only remove from groups if this window is not on the active space.
-  if (self.isOnActiveSpace) {
+  if (self.onActiveSpace) {
     return;
   }
 

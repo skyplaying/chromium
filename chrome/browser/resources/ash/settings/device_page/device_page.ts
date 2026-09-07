@@ -19,7 +19,6 @@ import '../settings_shared.css.js';
 import {getInstance as getAnnouncerInstance} from 'chrome://resources/ash/common/cr_elements/cr_a11y_announcer/cr_a11y_announcer.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {WebUiListenerMixin} from 'chrome://resources/ash/common/cr_elements/web_ui_listener_mixin.js';
-import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {isExternalStorageEnabled} from '../common/load_time_booleans.js';
@@ -93,17 +92,6 @@ export class SettingsDevicePageElement extends SettingsDevicePageElementBase {
         value: false,
       },
 
-      /**
-       * Whether users are allowed to customize buttons on their peripherals.
-       */
-      isPeripheralCustomizationEnabled: {
-        type: Boolean,
-        value() {
-          return loadTimeData.getBoolean('enablePeripheralCustomization');
-        },
-        readOnly: true,
-      },
-
       isExternalStorageEnabled_: {
         type: Boolean,
         value() {
@@ -167,26 +155,25 @@ export class SettingsDevicePageElement extends SettingsDevicePageElementBase {
     ];
   }
 
-  languages: LanguagesModel|undefined;
-  languageHelper: LanguageHelper|undefined;
-  prefs: PrefsState|undefined;
+  declare languages: LanguagesModel|undefined;
+  declare languageHelper: LanguageHelper|undefined;
+  declare prefs: PrefsState|undefined;
 
-  protected pointingSticks: PointingStick[];
-  protected keyboards: Keyboard[];
-  protected keyboardPolicies: KeyboardPolicies;
-  protected touchpads: Touchpad[];
-  protected mice: Mouse[];
-  protected mousePolicies: MousePolicies;
-  protected graphicsTablets: GraphicsTablet[];
+  declare protected pointingSticks: PointingStick[];
+  declare protected keyboards: Keyboard[];
+  declare protected keyboardPolicies: KeyboardPolicies;
+  declare protected touchpads: Touchpad[];
+  declare protected mice: Mouse[];
+  declare protected mousePolicies: MousePolicies;
+  declare protected graphicsTablets: GraphicsTablet[];
   private browserProxy_: DevicePageBrowserProxy;
-  private hasMouse_: boolean;
-  private hasPointingStick_: boolean;
-  private hasStylus_: boolean;
-  private hasTouchpad_: boolean;
-  private hasHapticTouchpad_: boolean;
-  private inputMethodDisplayName_: string;
-  private isExternalStorageEnabled_: boolean;
-  private isPeripheralCustomizationEnabled: boolean;
+  declare private hasMouse_: boolean;
+  declare private hasPointingStick_: boolean;
+  declare private hasStylus_: boolean;
+  declare private hasTouchpad_: boolean;
+  declare private hasHapticTouchpad_: boolean;
+  declare private inputMethodDisplayName_: string;
+  declare private isExternalStorageEnabled_: boolean;
   private pointingStickSettingsObserverReceiver:
       PointingStickSettingsObserverReceiver;
   private keyboardSettingsObserverReceiver: KeyboardSettingsObserverReceiver;
@@ -195,7 +182,7 @@ export class SettingsDevicePageElement extends SettingsDevicePageElementBase {
   private mouseSettingsObserverReceiver: MouseSettingsObserverReceiver;
   private graphicsTabletSettingsObserverReceiver:
       GraphicsTabletSettingsObserverReceiver;
-  private section_: Section;
+  declare private section_: Section;
 
   constructor() {
     super();
@@ -209,9 +196,7 @@ export class SettingsDevicePageElement extends SettingsDevicePageElementBase {
     this.observeKeyboardSettings();
     this.observeTouchpadSettings();
     this.observeMouseSettings();
-    if (this.isPeripheralCustomizationEnabled) {
-      this.observeGraphicsTabletSettings();
-    }
+    this.observeGraphicsTabletSettings();
   }
 
   override connectedCallback(): void {
@@ -498,9 +483,8 @@ export class SettingsDevicePageElement extends SettingsDevicePageElementBase {
     return this.pointingSticks && this.pointingSticks.length !== 0;
   }
 
-  private showGraphicsTabletRow_(): boolean {
-    return this.isPeripheralCustomizationEnabled && this.graphicsTablets &&
-        this.graphicsTablets.length !== 0;
+  private showGraphicsTabletRow_(graphicsTablets: GraphicsTablet[]): boolean {
+    return !!graphicsTablets && graphicsTablets.length !== 0;
   }
 
   protected restoreDefaults(): void {

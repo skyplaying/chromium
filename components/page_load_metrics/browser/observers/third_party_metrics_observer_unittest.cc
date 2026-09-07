@@ -4,7 +4,7 @@
 
 #include "components/page_load_metrics/browser/observers/third_party_metrics_observer.h"
 
-#include "base/byte_count.h"
+#include "base/byte_size.h"
 #include "base/memory/ptr_util.h"
 #include "components/page_load_metrics/browser/observers/page_load_metrics_observer_content_test_harness.h"
 #include "components/page_load_metrics/browser/page_load_tracker.h"
@@ -383,7 +383,7 @@ TEST_P(ThirdPartyMetricsObserverTest,
       {url::SchemeHostPort(GURL("https://bar.test")), net::IPEndPoint(),
        frame_tree_node_id, /*was_cached=*/false,
        /*raw_body_bytes=*/base::KiB(20),
-       /*original_network_content_length=*/base::ByteCount(0),
+       /*original_network_content_length=*/base::ByteSize(0),
        network::mojom::RequestDestination::kFont, 0,
        /*load_timing_info=*/nullptr},
       content::GlobalRequestID());
@@ -423,7 +423,7 @@ TEST_P(ThirdPartyMetricsObserverTest,
       {url::SchemeHostPort(GURL("http://b.foo.test")), net::IPEndPoint(),
        frame_tree_node_id, /*was_cached=*/false,
        /*raw_body_bytes=*/base::KiB(20),
-       /*original_network_content_length=*/base::ByteCount(0),
+       /*original_network_content_length=*/base::ByteSize(0),
        network::mojom::RequestDestination::kFont, 0,
        /*load_timing_info=*/nullptr},
       content::GlobalRequestID());
@@ -458,7 +458,7 @@ TEST_P(ThirdPartyMetricsObserverTest,
       {url::SchemeHostPort(GURL("https://bar.test")), net::IPEndPoint(),
        frame_tree_node_id, /*was_cached=*/false,
        /*raw_body_bytes=*/base::KiB(20),
-       /*original_network_content_length=*/base::ByteCount(0),
+       /*original_network_content_length=*/base::ByteSize(0),
        network::mojom::RequestDestination::kFont, 0,
        /*load_timing_info=*/nullptr},
       content::GlobalRequestID());

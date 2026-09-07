@@ -13,9 +13,11 @@
 #import "components/autofill/core/browser/data_manager/test_personal_data_manager.h"
 #import "components/autofill/core/browser/data_model/addresses/autofill_profile.h"
 #import "components/autofill/core/browser/data_model/payments/credit_card.h"
-#import "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#import "components/autofill/core/browser/test_utils/autofill_test_util.h"
 #import "components/password_manager/core/browser/password_form.h"
+#import "components/password_manager/core/browser/password_store/password_form_converters.h"
 #import "components/password_manager/core/browser/password_store/test_password_store.h"
+#import "components/password_manager/core/browser/password_string.h"
 #import "ios/web/public/test/web_task_environment.h"
 #import "ios/web_view/internal/autofill/cwv_autofill_data_manager_internal.h"
 #import "ios/web_view/internal/autofill/cwv_autofill_profile_internal.h"
@@ -62,8 +64,7 @@ class CWVAutofillDataManagerTest : public PlatformTest {
 
     password_store_ = new password_manager::TestPasswordStore(
         password_manager::IsAccountStore(true));
-    password_store_->Init(/*affiliated_match_helper=*/nullptr);
-
+    password_store_->Init();
 
     autofill_data_manager_ = [[CWVAutofillDataManager alloc]
          initWithPersonalDataManager:personal_data_manager_.get()
@@ -111,7 +112,8 @@ class CWVAutofillDataManagerTest : public PlatformTest {
     password_form.username_element = base::SysNSStringToUTF16(@"Email");
     password_form.username_value = base::SysNSStringToUTF16(@"test@egmail.com");
     password_form.password_element = base::SysNSStringToUTF16(@"Passwd");
-    password_form.password_value = base::SysNSStringToUTF16(@"test");
+    password_form.password_value =
+        password_manager::PasswordString(base::SysNSStringToUTF16(@"test"));
     password_form.submit_element = base::SysNSStringToUTF16(@"signIn");
     password_form.signon_realm = "http://www.example.com/";
     password_form.scheme = password_manager::PasswordForm::Scheme::kHtml;
@@ -263,7 +265,7 @@ TEST_F(CWVAutofillDataManagerTest, ReturnCreditCard) {
 // Tests CWVAutofillDataManager properly returns passwords.
 TEST_F(CWVAutofillDataManagerTest, ReturnPassword) {
   password_manager::PasswordForm test_password = GetTestPassword();
-  password_store_->AddLogin(test_password);
+  password_store_->AddLogin(password_manager::FromPasswordForm(test_password));
   NSArray<CWVPassword*>* fetched_passwords = FetchPasswords();
   EXPECT_EQ(1ul, fetched_passwords.count);
   EXPECT_THAT(test_password, password_manager::MatchesFormExceptStore(
@@ -272,7 +274,8 @@ TEST_F(CWVAutofillDataManagerTest, ReturnPassword) {
 
 // Tests CWVAutofillDataManager no ops when nil is passed to updatePassword.
 TEST_F(CWVAutofillDataManagerTest, UpdatePasswordNilArguments) {
-  password_store_->AddLogin(GetTestPassword());
+  password_store_->AddLogin(
+      password_manager::FromPasswordForm(GetTestPassword()));
 
   NSArray<CWVPassword*>* passwords = FetchPasswords();
   ASSERT_EQ(1ul, passwords.count);
@@ -292,7 +295,8 @@ TEST_F(CWVAutofillDataManagerTest, UpdatePasswordNilArguments) {
 
 // Tests CWVAutofillDataManager properly updates just the username.
 TEST_F(CWVAutofillDataManagerTest, UpdateUsernameOnly) {
-  password_store_->AddLogin(GetTestPassword());
+  password_store_->AddLogin(
+      password_manager::FromPasswordForm(GetTestPassword()));
 
   NSArray<CWVPassword*>* passwords = FetchPasswords();
   ASSERT_EQ(1ul, passwords.count);
@@ -316,7 +320,8 @@ TEST_F(CWVAutofillDataManagerTest, UpdateUsernameOnly) {
 
 // Tests CWVAutofillDataManager properly updates just the password.
 TEST_F(CWVAutofillDataManagerTest, UpdatePasswordOnly) {
-  password_store_->AddLogin(GetTestPassword());
+  password_store_->AddLogin(
+      password_manager::FromPasswordForm(GetTestPassword()));
 
   NSArray<CWVPassword*>* passwords = FetchPasswords();
   ASSERT_EQ(1ul, passwords.count);
@@ -341,7 +346,8 @@ TEST_F(CWVAutofillDataManagerTest, UpdatePasswordOnly) {
 
 // Tests CWVAutofillDataManager properly updates both the username and password.
 TEST_F(CWVAutofillDataManagerTest, UpdateUsernameAndPassword) {
-  password_store_->AddLogin(GetTestPassword());
+  password_store_->AddLogin(
+      password_manager::FromPasswordForm(GetTestPassword()));
 
   NSArray<CWVPassword*>* passwords = FetchPasswords();
   ASSERT_EQ(1ul, passwords.count);
@@ -366,7 +372,8 @@ TEST_F(CWVAutofillDataManagerTest, UpdateUsernameAndPassword) {
 
 // Tests CWVAutofillDataManager properly deletes passwords.
 TEST_F(CWVAutofillDataManagerTest, DeletePassword) {
-  password_store_->AddLogin(GetTestPassword());
+  password_store_->AddLogin(
+      password_manager::FromPasswordForm(GetTestPassword()));
   NSArray<CWVPassword*>* passwords = FetchPasswords();
   ASSERT_EQ(1ul, passwords.count);
   [autofill_data_manager_ deletePassword:passwords[0]];
@@ -439,7 +446,8 @@ TEST_F(CWVAutofillDataManagerTest, PasswordsDidChangeCallback) {
 
     // AddLogin is async, so the run loop needs to run until idle so the
     // callback will be invoked.
-    password_store_->AddLogin(test_password);
+    password_store_->AddLogin(
+        password_manager::FromPasswordForm(std::move(test_password)));
     base::RunLoop().RunUntilIdle();
 
     [observer verify];

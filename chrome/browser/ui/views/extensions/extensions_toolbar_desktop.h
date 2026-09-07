@@ -14,6 +14,7 @@
 
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/ui/extensions/extensions_toolbar_view_model.h"
 #include "chrome/browser/ui/toolbar/toolbar_actions_model.h"
@@ -29,7 +30,7 @@
 #include "ui/compositor/layer_tree_owner.h"
 #include "ui/views/widget/widget_observer.h"
 
-class Browser;
+class BrowserWindowInterface;
 class ExtensionsToolbarButton;
 class ToolbarActionViewModel;
 class ExtensionsMenuCoordinator;
@@ -40,7 +41,6 @@ class ExtensionsMenuCoordinator;
 class ExtensionsToolbarDesktop : public ToolbarIconContainerView,
                                  public ExtensionsContainerViews,
                                  public ToolbarActionView::Delegate,
-                                 public views::WidgetObserver,
                                  public ExtensionsToolbarViewModel::Delegate,
                                  public ExtensionsToolbarViewModel::Observer {
   METADATA_HEADER(ExtensionsToolbarDesktop, ToolbarIconContainerView)
@@ -72,12 +72,19 @@ class ExtensionsToolbarDesktop : public ToolbarIconContainerView,
 
   static void SetOnVisibleCallbackForTesting(base::OnceClosure callback);
 
+  // In a live environment, the Extensions Zero State Promo IPH will only open
+  // after at least 10 minutes into the browsing session.
+  //
+  // This function sets the Zero State Promo show timer so that the IPH can
+  // show immediately.
+  static void WakeZeroStatePromoForTesting();
+
   ExtensionsMenuCoordinator* GetExtensionsMenuCoordinatorForTesting() {
     return extensions_menu_coordinator_.get();
   }
 
   explicit ExtensionsToolbarDesktop(
-      Browser* browser,
+      BrowserWindowInterface* browser,
       DisplayMode display_mode = DisplayMode::kNormal);
   ExtensionsToolbarDesktop(const ExtensionsToolbarDesktop&) = delete;
   ExtensionsToolbarDesktop& operator=(const ExtensionsToolbarDesktop&) = delete;
@@ -131,12 +138,6 @@ class ExtensionsToolbarDesktop : public ToolbarIconContainerView,
   // Get the view corresponding to the extension |id|, if any.
   ToolbarActionView* GetViewForId(const std::string& id);
 
-  // Pop out and show the extension corresponding to |extension_id|, then show
-  // the Widget when the icon is visible. If the icon is already visible the
-  // action will be posted immediately (not run synchronously).
-  void ShowWidgetForExtension(views::Widget* widget,
-                              const std::string& extension_id);
-
   // Check if the extensions menu is showing.
   // TODO(crbug.com/40811196): This method will be removed once extensions menu
   // under kExtensionsMenuAccessControl feature is fully rolled out and we can
@@ -185,11 +186,14 @@ class ExtensionsToolbarDesktop : public ToolbarIconContainerView,
 
   // ExtensionsContainerViews:
   std::optional<extensions::ExtensionId> GetPoppedOutActionId() const override;
+  bool IsVisible() const override;
   bool IsActionVisibleOnToolbar(const std::string& action_id) const override;
   void UndoPopOut() override;
   void SetPopupOwner(ToolbarActionViewModel* popup_owner) override;
   void PopOutAction(const extensions::ExtensionId& action_id,
                     base::OnceClosure closure) override;
+  void ShowWidgetForExtension(views::Widget* widget,
+                              const std::string& extension_id) override;
   void CollapseConfirmation() override;
   void ShowContextMenuAsFallback(
       const extensions::ExtensionId& action_id) override;
@@ -199,6 +203,7 @@ class ExtensionsToolbarDesktop : public ToolbarIconContainerView,
   views::FocusManager* GetFocusManagerForAccelerator() override;
   views::BubbleAnchor GetReferenceButtonForPopup(
       const extensions::ExtensionId& action_id) override;
+  views::BubbleAnchor GetExtensionsButtonAnchor() override;
 
   // ToolbarActionView::Delegate:
   content::WebContents* GetCurrentWebContents() override;
@@ -216,13 +221,14 @@ class ExtensionsToolbarDesktop : public ToolbarIconContainerView,
   bool CanStartDragForView(View* sender,
                            const gfx::Point& press_pt,
                            const gfx::Point& p) override;
+  bool IsFocusOnExtensionAction() const override;
 
   // ExtensionsToolbarViewModel::Delegate:
   std::unique_ptr<ExtensionActionViewModel> CreateActionViewModel(
       const ToolbarActionsModel::ActionId& action_id,
       ExtensionsContainer* extensinos_container) override;
   void HideActivePopup() override;
-  bool CloseOverflowMenuIfOpen() override;
+  void CloseExtensionsMenuIfOpen() override;
   bool CanShowToolbarActionPopupForAPICall(
       const ToolbarActionsModel::ActionId&) override;
   void ToggleExtensionsMenu() override;
@@ -233,10 +239,13 @@ class ExtensionsToolbarDesktop : public ToolbarIconContainerView,
   void OnActionRemoved(const ToolbarActionsModel::ActionId& action_id) override;
   void OnActionUpdated(const ToolbarActionsModel::ActionId& action_id) override;
   void OnPinnedActionsChanged() override;
-  void OnActiveWebContentsChanged() override;
+  void OnActiveWebContentsChanged(bool is_same_document,
+                                  content::WebContents* web_contents) override;
   void OnRequestAccessButtonParamsChanged(
       content::WebContents* web_contents) override;
   void OnToolbarControlStateUpdated() override;
+  void ShowPinnedByDefaultIPH(
+      const extensions::ExtensionId& extension_id) override;
 
  private:
   friend class ToolbarActionHoverCardBubbleViewUITest;
@@ -328,7 +337,14 @@ class ExtensionsToolbarDesktop : public ToolbarIconContainerView,
   // Updates the `request_access_button_` given the current `web_contents`.
   void UpdateRequestAccessButton(content::WebContents& web_contents);
 
-  const raw_ptr<Browser> browser_;
+  // Maybe displays the In-Product-Help with a specific priority order.
+  void MaybeShowIPH();
+
+  // Tracks the previously active web contents to differentiate tab switches
+  // from navigations.
+  base::WeakPtr<content::WebContents> active_web_contents_;
+
+  const raw_ptr<BrowserWindowInterface> browser_;
   const raw_ptr<ToolbarActionsModel> model_;
 
   DisplayMode display_mode_;

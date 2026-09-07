@@ -13,6 +13,10 @@
 #import "ios/chrome/browser/account_picker/ui_bundled/account_picker_coordinator.h"
 #import "ios/chrome/browser/account_picker/ui_bundled/account_picker_coordinator_delegate.h"
 #import "ios/chrome/browser/account_picker/ui_bundled/account_picker_logger.h"
+#import "ios/chrome/browser/authentication/ui_bundled/continuation.h"
+#import "ios/chrome/browser/authentication/ui_bundled/signin/signin_constants.h"
+#import "ios/chrome/browser/authentication/ui_bundled/signin/signin_coordinator.h"
+#import "ios/chrome/browser/authentication/ui_bundled/signin/signin_utils.h"
 #import "ios/chrome/browser/download/model/download_manager_tab_helper.h"
 #import "ios/chrome/browser/drive/model/drive_metrics.h"
 #import "ios/chrome/browser/drive/model/drive_service_factory.h"
@@ -20,9 +24,9 @@
 #import "ios/chrome/browser/save_to_drive/ui_bundled/file_destination_picker_view_controller.h"
 #import "ios/chrome/browser/save_to_drive/ui_bundled/save_to_drive_mediator.h"
 #import "ios/chrome/browser/save_to_drive/ui_bundled/save_to_drive_util.h"
+#import "ios/chrome/browser/shared/coordinator/scene/scene_state.h"
 #import "ios/chrome/browser/shared/model/browser/browser.h"
 #import "ios/chrome/browser/shared/model/profile/profile_ios.h"
-#import "ios/chrome/browser/shared/public/commands/account_picker_commands.h"
 #import "ios/chrome/browser/shared/public/commands/command_dispatcher.h"
 #import "ios/chrome/browser/shared/public/commands/google_one_commands.h"
 #import "ios/chrome/browser/shared/public/commands/manage_storage_alert_commands.h"
@@ -40,8 +44,7 @@
 #import "ios/web/public/web_state.h"
 #import "ui/base/l10n/l10n_util_mac.h"
 
-@interface SaveToDriveCoordinator () <AccountPickerCommands,
-                                      AccountPickerCoordinatorDelegate,
+@interface SaveToDriveCoordinator () <AccountPickerCoordinatorDelegate,
                                       AccountPickerLogger,
                                       ManageStorageAlertCommands>
 
@@ -53,6 +56,8 @@
   AccountPickerCoordinator* _accountPickerCoordinator;
   FileDestinationPickerViewController* _destinationPicker;
   UIAlertController* _alertController;
+  SigninCoordinator* _signinCoordinator;
+  BOOL _shouldShowSignIn;
 }
 
 - (instancetype)initWithBaseViewController:(UIViewController*)viewController
@@ -70,8 +75,6 @@
 - (void)start {
   CommandDispatcher* dispatcher = self.browser->GetCommandDispatcher();
   [dispatcher startDispatchingToTarget:self
-                           forProtocol:@protocol(AccountPickerCommands)];
-  [dispatcher startDispatchingToTarget:self
                            forProtocol:@protocol(ManageStorageAlertCommands)];
   ProfileIOS* profile = self.profile;
   drive::DriveService* driveService =
@@ -87,7 +90,6 @@
            initWithDownloadTask:_downloadTask
              saveToDriveHandler:saveToDriveHandler
       manageStorageAlertHandler:self
-           accountPickerHandler:self
                     prefService:prefService
           authenticationService:AuthenticationServiceFactory::GetForProfile(
                                     self.profile)
@@ -120,7 +122,10 @@
   _mediator.destinationPickerConsumer = _destinationPicker;
 }
 
-- (void)stop {
+#pragma mark - AnimatedCoordinator
+
+- (void)stopAnimated:(BOOL)animated {
+  [super stopAnimated:animated];
   CommandDispatcher* dispatcher = self.browser->GetCommandDispatcher();
   [dispatcher stopDispatchingToTarget:self];
   [_mediator disconnect];
@@ -128,11 +133,15 @@
   [_destinationPicker willMoveToParentViewController:nil];
   [_destinationPicker removeFromParentViewController];
   _destinationPicker = nil;
-  [_alertController.presentingViewController dismissViewControllerAnimated:NO
-                                                                completion:nil];
+  [_alertController.presentingViewController
+      dismissViewControllerAnimated:animated
+                         completion:nil];
   _alertController = nil;
-  [_accountPickerCoordinator stop];
+  _accountPickerCoordinator.delegate = nil;
+  [_accountPickerCoordinator stopAnimated:animated];
   _accountPickerCoordinator = nil;
+  [_signinCoordinator stop];
+  _signinCoordinator = nil;
 }
 
 #pragma mark - AccountPickerCoordinatorDelegate
@@ -141,6 +150,22 @@
             (AccountPickerCoordinator*)accountPickerCoordinator
                didSelectIdentity:(id<SystemIdentity>)identity
                     askEveryTime:(BOOL)askEveryTime {
+  if (base::FeatureList::IsEnabled(kIOSSaveToDriveSignedOut)) {
+    if ([_mediator selectedFileDestinationRequiresSignin]) {
+      _shouldShowSignIn = YES;
+      [_accountPickerCoordinator stopAnimated:YES];
+      base::UmaHistogramEnumeration(
+          kSaveToDriveSignInStatus,
+          [_mediator hasIdentitiesOnDevice]
+              ? SaveToDriveSignInStatus::kSignedOutWithAccountOnDevice
+              : SaveToDriveSignInStatus::kSignedOutWithoutAccountOnDevice);
+      return;
+    }
+  }
+  if ([_mediator isSignedIn]) {
+    base::UmaHistogramEnumeration(kSaveToDriveSignInStatus,
+                                  SaveToDriveSignInStatus::kSignedIn);
+  }
   [_mediator saveWithSelectedIdentity:identity];
 }
 
@@ -157,9 +182,16 @@
 - (void)accountPickerCoordinatorDidStop:
     (AccountPickerCoordinator*)accountPickerCoordinator {
   _accountPickerCoordinator = nil;
+  if (base::FeatureList::IsEnabled(kIOSSaveToDriveSignedOut)) {
+    if (_shouldShowSignIn) {
+      _shouldShowSignIn = NO;
+      [self openSignIn];
+      return;
+    }
+  }
   id<SaveToDriveCommands> saveToDriveCommandsHandler = HandlerForProtocol(
       self.browser->GetCommandDispatcher(), SaveToDriveCommands);
-  [saveToDriveCommandsHandler hideSaveToDrive];
+  [saveToDriveCommandsHandler hideSaveToDriveAnimated:NO];
 }
 
 #pragma mark - AccountPickerLogger
@@ -223,11 +255,17 @@
   [_alertController addAction:manageStorageAction];
   [_alertController addAction:cancelAction];
   [_alertController setPreferredAction:manageStorageAction];
-  CHECK(_accountPickerCoordinator.viewController);
-  [_accountPickerCoordinator.viewController
-      presentViewController:_alertController
-                   animated:YES
-                 completion:nil];
+  UIViewController* presenter;
+  if (base::FeatureList::IsEnabled(kIOSSaveToDriveSignedOut) &&
+      _accountPickerCoordinator == nil) {
+    presenter = self.baseViewController;
+  } else {
+    presenter = _accountPickerCoordinator.viewController;
+  }
+  CHECK(presenter);
+  [presenter presentViewController:_alertController
+                          animated:YES
+                        completion:nil];
 }
 
 - (void)didTapManageStorageForIdentity:(id<SystemIdentity>)identity {
@@ -238,16 +276,134 @@
   CommandDispatcher* dispatcher = self.browser->GetCommandDispatcher();
   id<GoogleOneCommands> googleOneHandler =
       HandlerForProtocol(dispatcher, GoogleOneCommands);
+  UIViewController* presenter;
+  if (base::FeatureList::IsEnabled(kIOSSaveToDriveSignedOut) &&
+      _accountPickerCoordinator == nil) {
+    presenter = self.baseViewController;
+  } else {
+    presenter = _accountPickerCoordinator.viewController;
+  }
   [googleOneHandler
       showGoogleOneForIdentity:identity
                     entryPoint:GoogleOneEntryPoint::kSaveToDriveAlert
-            baseViewController:_accountPickerCoordinator.viewController];
+            baseViewController:presenter];
 }
 
-#pragma mark - AccountPickerCommands
+#pragma mark - Private
 
-- (void)hideAccountPickerAnimated:(BOOL)animated {
-  [_accountPickerCoordinator stopAnimated:animated];
+- (void)openSignIn {
+  if (_signinCoordinator.viewWillPersist) {
+    return;
+  }
+  [_signinCoordinator stop];
+
+  if ([self.browser->GetSceneState() isUIBlocked]) {
+    // If the UI is blocked in this scene, potentially because a sign-in flow
+    // is already ongoing in another scene, starting another sign-in flow in
+    // this scene will try to create a ScopedUIBlocker, which will fail a CHECK
+    // in ProfileState. This hides Save to Drive instead.
+    id<SaveToDriveCommands> saveToDriveHandler = HandlerForProtocol(
+        self.browser->GetCommandDispatcher(), SaveToDriveCommands);
+    [saveToDriveHandler hideSaveToDriveAnimated:NO];
+    return;
+  }
+
+  __weak __typeof(self) weakSelf = self;
+  ShowSigninCommand* command = [[ShowSigninCommand alloc]
+      initWithOperation:AuthenticationOperation::kSigninOnly
+               identity:nil
+            accessPoint:signin_metrics::AccessPoint::kSaveToDriveIos
+            promoAction:signin_metrics::PromoAction::
+                            PROMO_ACTION_NO_SIGNIN_PROMO
+             completion:^(SigninCoordinator* coordinator,
+                          SigninCoordinatorResult result,
+                          id<SystemIdentity> identity) {
+               [weakSelf doSigninCompletionWithResult:result identity:identity];
+             }];
+  command.confirmChangeProfile = ^(void (^completion)(BOOL)) {
+    [weakSelf confirmChangeProfileWithCompletion:completion];
+  };
+  _signinCoordinator =
+      [SigninCoordinator signinCoordinatorWithCommand:command
+                                              browser:self.browser
+                                   baseViewController:self.baseViewController];
+  [_signinCoordinator start];
+}
+
+- (void)doSigninCompletionWithResult:(SigninCoordinatorResult)result
+                            identity:(id<SystemIdentity>)identity {
+  [_signinCoordinator stop];
+  _signinCoordinator = nil;
+  switch (result) {
+    case SigninCoordinatorResultSuccess:
+      base::UmaHistogramEnumeration(kSaveToDriveSignInResult,
+                                    SaveToDriveSignInResult::kSignInSuccess);
+      [_mediator saveWithSelectedIdentity:identity];
+      return;
+    case SigninCoordinatorResultCanceledByUser:
+      base::UmaHistogramEnumeration(kSaveToDriveSignInResult,
+                                    SaveToDriveSignInResult::kSignInCanceled);
+      break;
+    case SigninCoordinatorProfileSwitch:
+      base::UmaHistogramEnumeration(
+          kSaveToDriveSignInResult,
+          SaveToDriveSignInResult::kSignInSuccessWithProfileSwitch);
+      break;
+    default:
+      base::UmaHistogramEnumeration(kSaveToDriveSignInResult,
+                                    SaveToDriveSignInResult::kSignInFailed);
+      break;
+  }
+  id<SaveToDriveCommands> saveToDriveHandler = HandlerForProtocol(
+      self.browser->GetCommandDispatcher(), SaveToDriveCommands);
+  [saveToDriveHandler hideSaveToDriveAnimated:NO];
+}
+
+// Shows an alert letting the user know that switching profiles will cancel the
+// current save operation and asking them to confirm.
+- (void)confirmChangeProfileWithCompletion:(void (^)(BOOL))completion {
+  _alertController = [UIAlertController
+      alertControllerWithTitle:
+          l10n_util::GetNSString(
+              IDS_IOS_SAVE_TO_DRIVE_CONFIRM_CHANGE_PROFILE_TITLE)
+                       message:
+                           l10n_util::GetNSString(
+                               IDS_IOS_SAVE_TO_DRIVE_CONFIRM_CHANGE_PROFILE_MESSAGE)
+                preferredStyle:UIAlertControllerStyleAlert];
+  __weak __typeof(self) weakSelf = self;
+  UIAlertAction* cancelAction = [UIAlertAction
+      actionWithTitle:l10n_util::GetNSString(IDS_CANCEL)
+                style:UIAlertActionStyleCancel
+              handler:^(UIAlertAction* action) {
+                [weakSelf handleConfirmChangeProfile:NO completion:completion];
+              }];
+  UIAlertAction* confirmChangeProfileAction = [UIAlertAction
+      actionWithTitle:l10n_util::GetNSString(
+                          IDS_IOS_SAVE_TO_DRIVE_CONFIRM_CHANGE_PROFILE_BUTTON)
+                style:UIAlertActionStyleDestructive
+              handler:^(UIAlertAction* action) {
+                [weakSelf handleConfirmChangeProfile:YES completion:completion];
+              }];
+  [_alertController addAction:cancelAction];
+  [_alertController addAction:confirmChangeProfileAction];
+  [self.baseViewController.presentedViewController
+      presentViewController:_alertController
+                   animated:YES
+                 completion:nil];
+}
+
+// Handles the user's response to the confirm change profile alert.
+- (void)handleConfirmChangeProfile:(BOOL)proceed
+                        completion:(void (^)(BOOL))completion {
+  CHECK(completion);
+  [_alertController dismissViewControllerAnimated:YES completion:nil];
+  _alertController = nil;
+  completion(proceed);
+  if (!proceed) {
+    id<SaveToDriveCommands> saveToDriveCommandsHandler = HandlerForProtocol(
+        self.browser->GetCommandDispatcher(), SaveToDriveCommands);
+    [saveToDriveCommandsHandler hideSaveToDriveAnimated:NO];
+  }
 }
 
 @end

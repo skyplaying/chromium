@@ -6,6 +6,7 @@
 
 #include <optional>
 
+#include "base/check_deref.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram_functions.h"
@@ -17,8 +18,8 @@
 #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/picture_in_picture/scoped_picture_in_picture_occlusion_observation.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/extensions/security_dialog_tracker.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -41,6 +42,7 @@
 #include "ui/base/models/image_model.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/base/mojom/ui_base_types.mojom-shared.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/image/image.h"
@@ -75,6 +77,9 @@ int GetDialogTitleMessageId(const WebAppIdentityUpdate& update) {
     case WebAppIdentityUpdate::kNameChange | WebAppIdentityUpdate::kIconChange:
       return IDS_WEBAPP_UPDATE_DIALOG_TITLE_NAME_AND_LOGO;
     case WebAppIdentityUpdate::kUrlChange:
+      if (update.is_forced_migration) {
+        return IDS_WEBAPP_UPDATE_DIALOG_TITLE_URL_FORCED_MIGRATION;
+      }
       return IDS_WEBAPP_UPDATE_DIALOG_TITLE_URL;
     case WebAppIdentityUpdate::kNameChange | WebAppIdentityUpdate::kUrlChange:
       return IDS_WEBAPP_UPDATE_DIALOG_TITLE_NAME_AND_URL;
@@ -130,16 +135,18 @@ class UpdateDialogDelegate : public ui::DialogModelDelegate,
  public:
   UpdateDialogDelegate(const webapps::AppId& app_id,
                        UpdateReviewDialogCallback callback,
-                       Browser& browser)
+                       BrowserWindowInterface& browser)
       : app_id_(app_id), callback_(std::move(callback)), browser_(browser) {
     install_manager_observation_.Observe(
-        &WebAppProvider::GetForWebApps(browser_->profile())->install_manager());
-    browser_->GetBrowserView().SetProperty(kIsPwaUpdateDialogShowingKey, true);
+        &WebAppProvider::GetForWebApps(browser_->GetProfile())
+             ->install_manager());
+    CHECK_DEREF(BrowserView::GetBrowserViewForBrowser(&browser_.get()))
+        .SetProperty(kIsPwaUpdateDialogShowingKey, true);
   }
   ~UpdateDialogDelegate() override {
-    if (browser_->window()) {
-      browser_->GetBrowserView().SetProperty(kIsPwaUpdateDialogShowingKey,
-                                             false);
+    if (browser_->GetWindow()) {
+      CHECK_DEREF(BrowserView::GetBrowserViewForBrowser(&browser_.get()))
+          .SetProperty(kIsPwaUpdateDialogShowingKey, false);
     }
   }
 
@@ -162,14 +169,13 @@ class UpdateDialogDelegate : public ui::DialogModelDelegate,
     std::move(callback_).Run(WebAppIdentityUpdateResult::kUninstallApp);
   }
 
-  void OnClose() {
-    // This should not be called, but due to lack of clarity with UI framework
-    // assumptions, we should still handle this even if we asked for the close
-    // button to be hidden.
+  void OnClose(bool is_forced_migration) {
     if (!callback_) {
       return;
     }
-    std::move(callback_).Run(WebAppIdentityUpdateResult::kUnexpectedError);
+    std::move(callback_).Run(
+        is_forced_migration ? WebAppIdentityUpdateResult::kCloseApp
+                            : WebAppIdentityUpdateResult::kUnexpectedError);
   }
   // This is called when the dialog has been either accepted, cancelled, closed
   // or destroyed without an user-action.
@@ -207,7 +213,7 @@ class UpdateDialogDelegate : public ui::DialogModelDelegate,
 
   // WebAppInstallManagerObserver overrides:
   void OnWebAppWillBeUninstalled(const webapps::AppId& app_id) override {
-    if (!dialog_model() || !dialog_model()->host()) {
+    if (!dialog_model() || !dialog_model()->host() || !callback_) {
       return;
     }
     if (app_id != app_id_) {
@@ -228,7 +234,7 @@ class UpdateDialogDelegate : public ui::DialogModelDelegate,
  private:
   const webapps::AppId app_id_;
   UpdateReviewDialogCallback callback_;
-  raw_ref<Browser> browser_;
+  raw_ref<BrowserWindowInterface> browser_;
   base::ScopedObservation<views::Widget, views::WidgetObserver>
       widget_observation_{this};
   base::ScopedObservation<WebAppInstallManager, WebAppInstallManagerObserver>
@@ -247,13 +253,14 @@ DEFINE_ELEMENT_IDENTIFIER_VALUE(kWebAppUpdateReviewIgnoreButton);
 
 void ShowWebAppReviewUpdateDialog(const webapps::AppId& app_id,
                                   const WebAppIdentityUpdate& update,
-                                  Browser* browser,
+                                  BrowserWindowInterface* browser,
                                   base::TimeTicks start_time,
                                   UpdateReviewDialogCallback callback) {
   CHECK(!callback.is_null());
 
   // Abort if a review update dialog is already being shown in this browser.
-  if (browser->GetBrowserView().GetProperty(kIsPwaUpdateDialogShowingKey)) {
+  if (CHECK_DEREF(BrowserView::GetBrowserViewForBrowser(browser))
+          .GetProperty(kIsPwaUpdateDialogShowingKey)) {
     std::move(callback).Run(WebAppIdentityUpdateResult::kUnexpectedError);
     return;
   }
@@ -261,7 +268,7 @@ void ShowWebAppReviewUpdateDialog(const webapps::AppId& app_id,
   // Some combination of changes should be existing if the update dialog needs
   // to be triggered.
   CHECK_GT(update.GetCombinationChangeIndex(), 0);
-  CHECK(AreWebAppsEnabled(browser->profile()));
+  CHECK(AreWebAppsEnabled(browser->GetProfile()));
   bool url_migration_only =
       (update.GetCombinationChangeIndex() == WebAppIdentityUpdate::kUrlChange);
 
@@ -299,8 +306,9 @@ void ShowWebAppReviewUpdateDialog(const webapps::AppId& app_id,
                   IDS_WEBAPP_UPDATE_REVIEW_UNINSTALL_BUTTON))
               .SetId(kWebAppUpdateReviewDialogUninstallButton))
       .OverrideDefaultButton(ui::mojom::DialogButton::kNone)
-      .SetCloseActionCallback(
-          base::BindOnce(&UpdateDialogDelegate::OnClose, delegate_weak_ptr))
+      .SetCloseActionCallback(base::BindOnce(&UpdateDialogDelegate::OnClose,
+                                             delegate_weak_ptr,
+                                             update.is_forced_migration))
       .SetDialogDestroyingCallback(
           base::BindOnce(&UpdateDialogDelegate::OnDestroyed, delegate_weak_ptr))
       .AddParagraph(ui::DialogModelLabel(
@@ -347,14 +355,18 @@ void ShowWebAppReviewUpdateDialog(const webapps::AppId& app_id,
                   // consistently.
                   .AddChild(views::Builder<WebAppUpdateIdentityView>(
                       std::make_unique<WebAppUpdateIdentityView>(
-                          update.MakeOldIdentity(), url_migration_only)))
+                          update.MakeOldIdentity(), url_migration_only,
+                          update.HasTitleChange())))
                   .AddChild(views::Builder<views::ImageView>().SetImage(
                       ui::ImageModel::FromVectorIcon(
-                          vector_icons::kForwardArrowIcon, ui::kColorIcon,
-                          kArrowIconSizeDp)))
+                          features::IsRoundedIconsEnabled()
+                              ? vector_icons::kArrowForwardIcon
+                              : vector_icons::kForwardArrowOldIcon,
+                          ui::kColorIcon, kArrowIconSizeDp)))
                   .AddChild(views::Builder<WebAppUpdateIdentityView>(
                       std::make_unique<WebAppUpdateIdentityView>(
-                          update.MakeNewIdentity(), url_migration_only)))
+                          update.MakeNewIdentity(), url_migration_only,
+                          update.HasTitleChange())))
                   .SetMinimumSize(gfx::Size(
                       layout_provider->GetDistanceMetric(
                           views::DISTANCE_MODAL_DIALOG_PREFERRED_WIDTH),
@@ -376,7 +388,7 @@ void ShowWebAppReviewUpdateDialog(const webapps::AppId& app_id,
   }
 
   views::Widget* widget = constrained_window::ShowBrowserModal(
-      dialog_model_builder.Build(), browser->window()->GetNativeWindow());
+      dialog_model_builder.Build(), browser->GetWindow()->GetNativeWindow());
   delegate_weak_ptr->OnWidgetShownStartTracking(widget);
 
   base::UmaHistogramTimes("WebApp.UpdateReviewDialog.TriggerToShowTime",

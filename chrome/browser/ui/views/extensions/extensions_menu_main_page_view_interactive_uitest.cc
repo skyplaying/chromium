@@ -2,27 +2,36 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/views/extensions/extensions_menu_main_page_view.h"
+
+#include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/extensions/browsertest_util.h"
 #include "chrome/browser/extensions/chrome_test_extension_loader.h"
 #include "chrome/browser/extensions/extension_action_runner.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/extensions/extension_context_menu_model.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
+#include "chrome/browser/metrics/critical_user_journeys/critical_user_journey_session.h"
+#include "chrome/browser/metrics/critical_user_journeys/features.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/browser_ui_controller/browser_ui_controller.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/extensions/reload_page_dialog_controller.h"
 #include "chrome/browser/ui/interaction/browser_elements.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/toolbar/toolbar_action_view_model.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/extensions/extensions_menu_coordinator.h"
 #include "chrome/browser/ui/views/extensions/extensions_menu_delegate_desktop.h"
 #include "chrome/browser/ui/views/extensions/extensions_menu_entry_view.h"
-#include "chrome/browser/ui/views/extensions/extensions_menu_main_page_view.h"
 #include "chrome/browser/ui/views/extensions/extensions_request_access_button.h"
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_button.h"
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_desktop.h"
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_interactive_uitest.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/interactive_test_utils.h"
@@ -34,18 +43,21 @@
 #include "content/public/test/test_navigation_observer.h"
 #include "extensions/browser/extension_host.h"
 #include "extensions/browser/extension_host_registry.h"
+#include "extensions/browser/host_access_request_helper.h"
 #include "extensions/browser/permissions/scripting_permissions_modifier.h"
 #include "extensions/browser/permissions/site_permissions_helper.h"
 #include "extensions/browser/permissions_manager.h"
 #include "extensions/common/extension_features.h"
 #include "extensions/test/permissions_manager_waiter.h"
 #include "extensions/test/test_extension_dir.h"
+#include "net/dns/mock_host_resolver.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "ui/base/interaction/state_observer.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/page_transition_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/controls/button/toggle_button.h"
-#include "ui/views/controls/label.h"
 #include "ui/views/view_utils.h"
 
 namespace {
@@ -120,6 +132,9 @@ class PermissionsUpdatesObserver
       const extensions::PermissionSet& permissions,
       PermissionsManager::UpdateReason reason) override {
     if (extension.id() == extension_id_) {
+      if (extension.permissions_data()->IsRestrictedUrl(url_, nullptr)) {
+        return;
+      }
       extensions::PermissionsManager::UserSiteAccess site_access =
           permissions_manager_->GetUserSiteAccess(extension, url_);
       OnStateObserverStateChanged(site_access);
@@ -193,7 +208,8 @@ ExtensionsMenuMainPageViewInteractiveUITest::
 }
 
 void ExtensionsMenuMainPageViewInteractiveUITest::ShowMenu() {
-  menu_coordinator()->Show(extensions_button(), GetExtensionsToolbarDesktop());
+  menu_coordinator()->Show(views::BubbleAnchor(extensions_button()),
+                           GetExtensionsToolbarDesktop());
   DCHECK(main_page());
 }
 
@@ -231,7 +247,7 @@ void ExtensionsMenuMainPageViewInteractiveUITest::ClickSiteSettingToggle() {
   DCHECK(main_page());
 
   extensions::PermissionsManagerWaiter waiter(
-      PermissionsManager::Get(browser()->profile()));
+      PermissionsManager::Get(browser()->GetProfile()));
   ClickButton(main_page()->GetSiteSettingsToggleForTesting());
   waiter.WaitForUserPermissionsSettingsChange();
 
@@ -257,7 +273,7 @@ void ExtensionsMenuMainPageViewInteractiveUITest::ShowUi(
     const std::string& name) {
 #if BUILDFLAG(IS_LINUX)
   // The extensions menu can appear offscreen on Linux, so verifying bounds
-  // makes the tests flaky (crbug.com/1050012).
+  // makes the tests flaky (crbug.com/40672885).
   set_should_verify_dialog_bounds(false);
 #endif
 
@@ -271,6 +287,10 @@ void ExtensionsMenuMainPageViewInteractiveUITest::ShowUi(
 // updated.
 IN_PROC_BROWSER_TEST_F(ExtensionsMenuMainPageViewInteractiveUITest,
                        SiteAccessToggle_RunAction) {
+  auto cooldown_reset =
+      extensions::HostAccessRequestsHelper::SetCooldownForTesting(
+          base::TimeDelta());
+
   ASSERT_TRUE(embedded_test_server()->Start());
 
   auto extension =
@@ -282,7 +302,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuMainPageViewInteractiveUITest,
   // Navigate to a.com and add a site access request for the extension.
   GURL urlA = embedded_test_server()->GetURL("a.com", "/title1.html");
   NavigateTo(urlA);
-  auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+  auto* web_contents = browser()->GetTabStripModel()->GetActiveWebContents();
   AddHostAccessRequest(*extension, web_contents);
 
   ShowUi("");
@@ -292,7 +312,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuMainPageViewInteractiveUITest,
 
   // Verify user site setting is "customize by extension" (default) and
   // the extension has "on click" site access.
-  auto* permissions_manager = PermissionsManager::Get(browser()->profile());
+  auto* permissions_manager = PermissionsManager::Get(browser()->GetProfile());
   ASSERT_EQ(permissions_manager->GetUserSiteSetting(url::Origin::Create(urlA)),
             PermissionsManager::UserSiteSetting::kCustomizeByExtension);
   ASSERT_EQ(permissions_manager->GetUserSiteAccess(*extension.get(), urlA),
@@ -317,7 +337,21 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuMainPageViewInteractiveUITest,
   //   - reload section is hidden.
   //   - requests section is hidden
   //   - request access button, in the toolbar, does not include extension.
+  //
+  // `WaitForActiveTabPermissionGranted` because `ActiveTabPermissionGranter` is
+  // responsible for granting the requested host permissions - see
+  // https://source.chromium.org/chromium/chromium/src/+/main:extensions/browser/permissions/active_tab_permission_granter.cc;l=148-178;drc=409b77a78792667eb4583c52aa9faf7fa321f4b8
+  extensions::PermissionsManagerWaiter waiter(
+      extensions::PermissionsManager::Get(browser()->GetProfile()));
   ClickButton(menu_entry->action_button_for_testing());
+  waiter.WaitForActiveTabPermissionGranted(extension_id);
+
+  // The menu might have closed after clicking the button. Re-open it.
+  ClickButton(extensions_button());
+  menu_entry = GetOnlyMenuEntry();
+  reload_section = main_page()->reload_section();
+  requests_section = main_page()->requests_section();
+
   EXPECT_TRUE(menu_entry->site_access_toggle_for_testing()->GetVisible());
   EXPECT_TRUE(menu_entry->site_access_toggle_for_testing()->GetIsOn());
   EXPECT_FALSE(reload_section->GetVisible());
@@ -363,7 +397,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuMainPageViewInteractiveUITest,
                             ui::PAGE_TRANSITION_TYPED));
   ASSERT_TRUE(
       AddTabAtIndex(1, GURL("chrome://extensions"), ui::PAGE_TRANSITION_TYPED));
-  browser()->tab_strip_model()->ActivateTabAt(1);
+  browser()->GetTabStripModel()->ActivateTabAt(1);
 
   ShowUi("");
 
@@ -371,9 +405,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuMainPageViewInteractiveUITest,
             u"Extensions are not allowed on chrome://extensions");
 
   // Update the title of the unfocused tab.
-  browser()->set_update_ui_immediately_for_testing();
+  BrowserUiController::From(browser())->set_update_ui_immediately_for_testing();
   content::WebContents* unfocused_tab =
-      browser()->tab_strip_model()->GetWebContentsAt(0);
+      browser()->GetTabStripModel()->GetWebContentsAt(0);
   std::u16string updated_title = u"Updated Title";
   content::TitleWatcher title_watcher(unfocused_tab, updated_title);
   ASSERT_TRUE(
@@ -386,7 +420,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuMainPageViewInteractiveUITest,
 
   // Verify extensions menu content wasn't affected by checking the site
   // displayed on the menu's subtitle.
-  ASSERT_EQ(browser()->tab_strip_model()->active_index(), 1);
+  ASSERT_EQ(browser()->GetTabStripModel()->active_index(), 1);
   EXPECT_EQ(main_page()->GetSiteSettingLabelForTesting(),
             u"Extensions are not allowed on chrome://extensions");
 }
@@ -419,22 +453,22 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuMainPageViewInteractiveUITest,
 
   // Retrieve tab's information.
   content::WebContents* tab1_web_contents =
-      browser()->tab_strip_model()->GetWebContentsAt(tab1_index);
+      browser()->GetTabStripModel()->GetWebContentsAt(tab1_index);
   content::WebContents* tab2_web_contents =
-      browser()->tab_strip_model()->GetWebContentsAt(tab2_index);
+      browser()->GetTabStripModel()->GetWebContentsAt(tab2_index);
   int tab1_id = extensions::ExtensionTabUtil::GetTabId(tab1_web_contents);
   int tab2_id = extensions::ExtensionTabUtil::GetTabId(tab2_web_contents);
 
   // Activate the first tab and open the menu. Verify there are no site access
   // requests on the menu.
-  browser()->tab_strip_model()->ActivateTabAt(tab1_index);
+  browser()->GetTabStripModel()->ActivateTabAt(tab1_index);
   ShowUi("");
   const views::View* requests_section = main_page()->requests_section();
   EXPECT_FALSE(requests_section->GetVisible());
 
   // Add a site access request for extension A on the (active) first tab.
   // Verify extension A site access request is visible on the menu.
-  auto* permissions_manager = PermissionsManager::Get(browser()->profile());
+  auto* permissions_manager = PermissionsManager::Get(browser()->GetProfile());
   permissions_manager->AddHostAccessRequest(tab1_web_contents, tab1_id,
                                             *extensionA);
   EXPECT_TRUE(requests_section->GetVisible());
@@ -470,8 +504,10 @@ class ExtensionsMenuMainPageViewInteractiveTest
     : public InteractiveBrowserTestMixin<extensions::ExtensionBrowserTest> {
  public:
   ExtensionsMenuMainPageViewInteractiveTest() {
-    scoped_feature_list_.InitAndEnableFeature(
-        extensions_features::kExtensionsMenuAccessControl);
+    scoped_feature_list_.InitWithFeatures(
+        {extensions_features::kExtensionsMenuAccessControl,
+         metrics::kCriticalUserJourneyService, metrics::kPinExtensionJourney},
+        {features::kExtensionsPinnedByDefault});
   }
   ExtensionsMenuMainPageViewInteractiveTest(
       const ExtensionsMenuMainPageViewInteractiveTest&) = delete;
@@ -499,11 +535,13 @@ class ExtensionsMenuMainPageViewInteractiveTest
   }
 
   ExtensionsToolbarDesktop* extensions_container() {
-    return browser()->GetBrowserView().toolbar()->extensions_container();
+    return BrowserView::GetBrowserViewForBrowser(browser())
+        ->toolbar()
+        ->extensions_container();
   }
 
   content::WebContents* active_web_contents() {
-    return browser()->tab_strip_model()->GetActiveWebContents();
+    return browser()->GetTabStripModel()->GetActiveWebContents();
   }
 
   extensions::ExtensionActionRunner* active_action_runner() {
@@ -536,6 +574,16 @@ class ExtensionsMenuMainPageViewInteractiveTest
     constexpr char kExtensionContextMenuButton[] =
         "extension_context_menu_button";
     return Steps(
+        Do([&]() {
+          if (auto* widget = extensions_container()
+                                 ->GetExtensionsMenuCoordinatorForTesting()
+                                 ->GetExtensionsMenuWidget()) {
+            if (auto* bubble =
+                    widget->widget_delegate()->AsBubbleDialogDelegate()) {
+              bubble->set_close_on_deactivate(false);
+            }
+          }
+        }),
         // Open the extension's context menu from its menu entry.
         NameDescendantViewByType<HoverButton>(menu_entry_element_id,
                                               kExtensionContextMenuButton, 1u),
@@ -575,10 +623,10 @@ class ExtensionsMenuMainPageViewInteractiveTest
       ui::test::StateIdentifier<PermissionsUpdatesObserver> state_identifier) {
     return Steps(
         OpenContextMenu(extension_id, menu_entry_element_id),
-        SelectMenuItem(
-            extensions::ExtensionContextMenuModel::kPageAccessMenuItem),
-        SelectMenuItem(GetSiteAccessCommandId(site_access)),
-        WaitForState(state_identifier, site_access));
+        InAnyContext(SelectMenuItem(
+            extensions::ExtensionContextMenuModel::kPageAccessMenuItem)),
+        InAnyContext(SelectMenuItem(GetSiteAccessCommandId(site_access))),
+        InAnyContext(WaitForState(state_identifier, site_access)));
   }
 
   // Verifies whether the context menu for `extension_id` opened from
@@ -627,22 +675,20 @@ class ExtensionsMenuMainPageViewInteractiveTest
 
   // Verifies whether the 'reload' section is hidden on the menu.
   auto CheckReloadSectionHidden() {
-    return CheckView(
-        kExtensionsMenuMainPageElementId,
-        [](ExtensionsMenuMainPageView* page) {
-          return !page->reload_section()->GetVisible();
-        },
-        "Reload section is hidden");
+    return CheckView(kExtensionsMenuMainPageElementId,
+                     [](ExtensionsMenuMainPageView* page) {
+                       return !page->reload_section()->GetVisible();
+                     })
+        .SetDescription("CheckReloadSectionHidden()");
   }
 
   // Verifies whether the 'requests' section is hidden on the menu.
   auto CheckRequestsSectionHidden() {
-    return CheckView(
-        kExtensionsMenuMainPageElementId,
-        [](ExtensionsMenuMainPageView* page) {
-          return !page->requests_section()->GetVisible();
-        },
-        "Requests section is hidden");
+    return CheckView(kExtensionsMenuMainPageElementId,
+                     [](ExtensionsMenuMainPageView* page) {
+                       return !page->requests_section()->GetVisible();
+                     })
+        .SetDescription("CheckRequestsSectionHidden()");
   }
 
   // Verifies whether `extension` has `expected_site_interaction` on the current
@@ -684,6 +730,7 @@ class ExtensionsMenuMainPageViewInteractiveTest
   void SetUpOnMainThread() override {
     InteractiveBrowserTestMixin<
         extensions::ExtensionBrowserTest>::SetUpOnMainThread();
+    host_resolver()->AddRule("example.com", "127.0.0.1");
     ASSERT_TRUE(embedded_test_server()->Start());
   }
 
@@ -722,9 +769,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuMainPageViewInteractiveTest,
 
 // Tests clicking on the 'context menu' button opens the extension's context
 // menu.
-// TODO(crbug.com/400536589): Re-enable this flaky test.
 IN_PROC_BROWSER_TEST_F(ExtensionsMenuMainPageViewInteractiveTest,
-                       DISABLED_ContextMenuButtonOpensContextMenu) {
+                       ContextMenuButtonOpensContextMenu) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTab);
   const extensions::Extension* extension =
       LoadExtension(test_data_dir_.AppendASCII("simple_with_icon"));
@@ -751,9 +797,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuMainPageViewInteractiveTest,
             return GetMenuEntryViewFor(extension->id())
                 ->IsContextMenuRunningForTesting();
           },
-          true)
-
-  );
+          true));
 }
 
 // Tests triggering the extension's action closes the extensions menu, even when
@@ -879,7 +923,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuMainPageViewInteractiveTest,
 
 // Tests that removing multiple extensions while one of the extension's action
 // is showing a popup removes such action from the toolbar.
-// Test for crbug.com/1099456.
+// Test for crbug.com/40702475.
 IN_PROC_BROWSER_TEST_F(ExtensionsMenuMainPageViewInteractiveTest,
                        RemoveMultipleExtensionsWhileShowingPopup) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTab);
@@ -1042,17 +1086,14 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuMainPageViewInteractiveTest,
           extension->id(),
           extensions::ExtensionContextMenuModel::ContextMenuSource::kMenuItem,
           extensions::ExtensionContextMenuModel::TOGGLE_VISIBILITY,
-          IDS_EXTENSIONS_CONTEXT_MENU_PIN_TO_TOOLBAR),
-
-      // TODO(crbug.com/378724154): Test crashes if popup is left opened at the
-      // end of the test. For now, close the popup so don't lose test coverage.
-      Do([&]() { extensions_container()->HideActivePopup(); }));
+          IDS_EXTENSIONS_CONTEXT_MENU_PIN_TO_TOOLBAR));
 }
 
 IN_PROC_BROWSER_TEST_F(ExtensionsMenuMainPageViewInteractiveTest,
                        PinningDisabledInIncognito) {
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kTab);
-  Browser* const incognito_browser = CreateIncognitoBrowser(profile());
+  BrowserWindowInterface* const incognito_browser =
+      CreateIncognitoBrowser(profile());
   ui_test_utils::BrowserActivationWaiter(incognito_browser).WaitForActivation();
 
   const extensions::Extension* extension =
@@ -1067,8 +1108,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuMainPageViewInteractiveTest,
                 [&]() {
                   auto* context_menu =
                       static_cast<extensions::ExtensionContextMenuModel*>(
-                          incognito_browser->GetBrowserView()
-                              .toolbar()
+                          BrowserView::GetBrowserViewForBrowser(
+                              incognito_browser)
+                              ->toolbar()
                               ->extensions_container()
                               ->GetToolbarViewModel()
                               ->GetActionForId(extension->id())
@@ -1104,7 +1146,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuMainPageViewInteractiveTest,
   extension_dir.WriteFile(FILE_PATH_LITERAL("script.js"),
                           "console.log('injected!');");
   scoped_refptr<const extensions::Extension> extension =
-      extensions::ChromeTestExtensionLoader(browser()->profile())
+      extensions::ChromeTestExtensionLoader(browser()->GetProfile())
           .LoadExtension(extension_dir.UnpackedPath());
 
   RunTestSequence(
@@ -1194,6 +1236,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuMainPageViewInteractiveTest,
   extensions::ScriptingPermissionsModifier(profile(), extension)
       .SetWithholdHostPermissions(true);
 
+  extensions::PermissionsManagerWaiter waiter(
+      PermissionsManager::Get(profile()));
   RunTestSequence(
       InstrumentTab(kTab),
       NavigateWebContents(kTab, embedded_test_server()->GetURL("/simple.html")),
@@ -1210,9 +1254,16 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuMainPageViewInteractiveTest,
       WaitForShow(extensions::kReloadPageDialogCancelButtonElementId),
       PressButton(extensions::kReloadPageDialogCancelButtonElementId),
 
-      // The extension permission should have been applied at this point, but
-      // the extension's script and blocked actions should not run since a
-      // reload is needed.
+      // Wait until the extension permissions have been applied.
+      //
+      // `WaitForActiveTabPermissionGranted` because
+      // `ActiveTabPermissionGranter` is responsible for granting the requested
+      // host permissions - see
+      // https://source.chromium.org/chromium/chromium/src/+/main:extensions/browser/permissions/active_tab_permission_granter.cc;l=148-178;drc=409b77a78792667eb4583c52aa9faf7fa321f4b8
+      Do([&]() { waiter.WaitForActiveTabPermissionGranted(extension->id()); }),
+
+      // Despite new extension permissions, the extension's script and blocked
+      // actions should not run since a reload is needed.
       CheckResult(
           [&]() {
             return extensions::browsertest_util::DidChangeTitle(
@@ -1305,6 +1356,10 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuMainPageViewInteractiveTest,
           extensions::PermissionsManager::UserSiteAccess::kOnSite,
           kPermissionsUpdates),
 
+      NameDescendantViewByType<HoverButton>(kExtensionsMenuEntryViewElementId,
+                                            kExtensionSitePermissionsButton,
+                                            /*index=*/2u),
+
       // Verify extension has "on site" site permissions label.
       CheckView(
           kExtensionSitePermissionsButton,
@@ -1319,6 +1374,10 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuMainPageViewInteractiveTest,
           extension->id(), kExtensionsMenuEntryViewElementId,
           extensions::PermissionsManager::UserSiteAccess::kOnClick,
           kPermissionsUpdates),
+
+      NameDescendantViewByType<HoverButton>(kExtensionsMenuEntryViewElementId,
+                                            kExtensionSitePermissionsButton,
+                                            /*index=*/2u),
 
       // Verify extension has "on click" site permissions label.
       CheckView(
@@ -1400,4 +1459,35 @@ IN_PROC_BROWSER_TEST_F(ExtensionsMenuMainPageViewInteractiveTest,
                         &views::ToggleButton::GetIsOn, true),
       WaitForHide(kExtensionsMenuReloadSectionElementId),
       CheckRequestsSectionHidden(), DidInjectScript(true));
+}
+
+IN_PROC_BROWSER_TEST_F(ExtensionsMenuMainPageViewInteractiveTest,
+                       PinExtensionViaExtensionsMenuJourneyCompletion) {
+  base::HistogramTester histograms;
+  const std::string step_reached =
+      base::StrCat({"CriticalUserJourney.", metrics::kPinExtensionJourney.name,
+                    ".StepReached"});
+  const std::string result = base::StrCat(
+      {"CriticalUserJourney.", metrics::kPinExtensionJourney.name, ".Result"});
+  const extensions::Extension* const extension =
+      LoadExtension(test_data_dir_.AppendASCII("simple_with_icon"));
+
+  histograms.ExpectBucketCount(step_reached, 1, 0);
+  histograms.ExpectBucketCount(step_reached, 2, 0);
+
+  RunTestSequence(
+      OpenExtensionsMenu(),
+      OpenContextMenu(extension->id(), kExtensionsMenuEntryViewElementId),
+      Do([&]() {
+        histograms.ExpectBucketCount(step_reached, 1, 1);
+        histograms.ExpectBucketCount(step_reached, 2, 0);
+      }),
+      SelectMenuItem(
+          extensions::ExtensionContextMenuModel::kToggleVisibilityMenuItem),
+      WaitForEvent(kBrowserViewElementId, kExtensionsMenuPinExtensionsEventId),
+      Do([&]() { histograms.ExpectBucketCount(step_reached, 2, 1); }));
+
+  histograms.ExpectUniqueSample(
+      result, metrics::CriticalUserJourneySession::JourneyResult::kCompleted,
+      1);
 }

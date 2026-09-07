@@ -4,7 +4,9 @@
 
 #include "content/browser/network/shared_dictionary_util.h"
 
-#include "base/byte_count.h"
+#include <optional>
+
+#include "base/byte_size.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/system/sys_info.h"
@@ -17,16 +19,17 @@ namespace content {
 
 namespace {
 
-constexpr base::ByteCount kDefaultCacheMaxSizeForInMemory = base::MiB(20);
-constexpr base::ByteCount kMaxCacheMaxSizeForInMemory = base::MiB(400);
-constexpr base::ByteCount kDefaultCacheMaxSizeForOnDisk = base::MiB(300);
-constexpr base::ByteCount kMaxCacheMaxSizeForOnDisk = base::MiB(400);
+constexpr base::ByteSize kDefaultCacheMaxSizeForInMemory = base::MiB(20);
+constexpr base::ByteSize kMaxCacheMaxSizeForInMemory = base::MiB(400);
+constexpr base::ByteSize kDefaultCacheMaxSizeForOnDisk = base::MiB(300);
+constexpr base::ByteSize kMaxCacheMaxSizeForOnDisk = base::MiB(400);
 
-uint64_t CaliculateCacheMaxSizeForInMemory() {
-  base::ByteCount cache_max_size = kDefaultCacheMaxSizeForInMemory;
-  const base::ByteCount total_memory = base::SysInfo::AmountOfPhysicalMemory();
+base::ByteSize CaliculateCacheMaxSizeForInMemory() {
+  base::ByteSize cache_max_size = kDefaultCacheMaxSizeForInMemory;
+  const base::ByteSize total_memory =
+      base::SysInfo::AmountOfTotalPhysicalMemory();
   if (total_memory.is_zero()) {
-    return cache_max_size.InBytesUnsigned();
+    return cache_max_size;
   }
 
   // We want to use up to 1% of the computer's memory, with a limit of 400 MB,
@@ -35,24 +38,24 @@ uint64_t CaliculateCacheMaxSizeForInMemory() {
   if (cache_max_size > kMaxCacheMaxSizeForInMemory) {
     cache_max_size = kMaxCacheMaxSizeForInMemory;
   }
-  return cache_max_size.InBytesUnsigned();
+  return cache_max_size;
 }
 
-uint64_t CaliculateCacheMaxSizeForOnDisk(const base::FilePath& path) {
-  base::ByteCount cache_max_size = kDefaultCacheMaxSizeForOnDisk;
-  const int64_t available_disk_space =
-      base::SysInfo::AmountOfFreeDiskSpace(path).value_or(-1);
-  if (available_disk_space <= 0) {
-    return cache_max_size.InBytes();
+base::ByteSize CaliculateCacheMaxSizeForOnDisk(const base::FilePath& path) {
+  base::ByteSize cache_max_size = kDefaultCacheMaxSizeForOnDisk;
+  const std::optional<base::SysInfo::DiskSpaceInfo> disk_space =
+      base::SysInfo::AmountOfDiskSpace(path);
+  if (!disk_space) {
+    return cache_max_size;
   }
 
   // We want to use up to 1% of the available disk space, with a limit of 400
   // MB, reached on system with more than 40 GB of available disk space.
-  cache_max_size = base::ByteCount(available_disk_space) / 100;
+  cache_max_size = disk_space->available / 100;
   if (cache_max_size > kMaxCacheMaxSizeForOnDisk) {
     cache_max_size = kMaxCacheMaxSizeForOnDisk;
   }
-  return cache_max_size.InBytesUnsigned();
+  return cache_max_size;
 }
 
 }  // namespace
@@ -68,7 +71,7 @@ void CalculateAndSetSharedDictionaryCacheMaxSize(
                        : base::BindOnce(&CaliculateCacheMaxSizeForOnDisk, path),
           base::BindOnce(
               [](base::WeakPtr<StoragePartition> storage_partition,
-                 uint64_t cache_max_size) {
+                 base::ByteSize cache_max_size) {
                 if (!storage_partition) {
                   return;
                 }

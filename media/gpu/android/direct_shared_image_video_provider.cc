@@ -13,7 +13,7 @@
 #include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
-#include "gpu/command_buffer/service/shared_image/android_video_image_backing.h"
+#include "gpu/command_buffer/common/shared_image_usage.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_factory.h"
 #include "gpu/command_buffer/service/texture_manager.h"
 #include "gpu/ipc/service/command_buffer_stub.h"
@@ -136,17 +136,42 @@ void GpuSharedImageVideoFactory::CreateImage(
     return;
   }
 
-  auto codec_image =
-      base::MakeRefCounted<CodecImage>(spec.coded_size, drdc_lock);
+  auto codec_image = base::MakeRefCounted<CodecImage>(drdc_lock);
 
   TRACE_EVENT0("media", "GpuSharedImageVideoFactory::CreateVideoFrame");
+
+  gpu::SharedImageUsageSet usage = {gpu::SHARED_IMAGE_USAGE_GLES2_READ,
+                                    gpu::SHARED_IMAGE_USAGE_RASTER_READ};
+  if (base::FeatureList::IsEnabled(
+          media::kUseSharedImageUsageForVideoFrameCopy)) {
+    const bool enable_threaded_texture_mailboxes =
+        stub_->channel()
+            ->gpu_channel_manager()
+            ->gpu_preferences()
+            .enable_threaded_texture_mailboxes;
+    const bool is_thread_safe = !drdc_lock;
+    // When threaded texture mailboxes are enabled and the SharedImage is not
+    // thread-safe, it cannot be shared directly between contexts of different
+    // share groups. Hence, DISPLAY_READ and SCANOUT usages are omitted so that
+    // the frame is copied before use.
+    const bool copy_required =
+        enable_threaded_texture_mailboxes && !is_thread_safe;
+    if (!copy_required) {
+      usage.PutAll({gpu::SHARED_IMAGE_USAGE_DISPLAY_READ,
+                    gpu::SHARED_IMAGE_USAGE_SCANOUT});
+    }
+  } else {
+    usage.PutAll({gpu::SHARED_IMAGE_USAGE_DISPLAY_READ,
+                  gpu::SHARED_IMAGE_USAGE_SCANOUT});
+  }
 
   scoped_refptr<gpu::GpuChannelSharedImageInterface>
       gpu_channel_shared_image_interface =
           stub_->channel()->shared_image_stub()->shared_image_interface();
+  CHECK(spec.color_space.IsValid());
   scoped_refptr<gpu::ClientSharedImage> shared_image =
       gpu_channel_shared_image_interface->CreateSharedImageForAndroidVideo(
-          spec.coded_size, spec.color_space, codec_image, drdc_lock);
+          spec.coded_size, spec.color_space, usage, codec_image, drdc_lock);
   if (!shared_image) {
     return;
   }
@@ -166,42 +191,6 @@ void GpuSharedImageVideoFactory::CreateImage(
       std::move(drdc_lock));
 
   std::move(image_ready_cb).Run(std::move(record));
-}
-
-bool GpuSharedImageVideoFactory::CreateImageInternal(
-    const SharedImageVideoProvider::ImageSpec& spec,
-    gpu::Mailbox mailbox,
-    scoped_refptr<CodecImage> image,
-    scoped_refptr<gpu::RefCountedLock> drdc_lock) {
-  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
-  if (!MakeContextCurrent(stub_))
-    return false;
-
-  const auto& coded_size = spec.coded_size;
-
-  auto shared_context = GetSharedContext(stub_);
-  if (!shared_context) {
-    DLOG(ERROR)
-        << "GpuSharedImageVideoFactory: Unable to get a shared context.";
-    return false;
-  }
-
-  // Create a shared image.
-  // TODO(vikassoni): This shared image need to be thread safe eventually for
-  // webview to work with shared images.
-  auto shared_image = gpu::AndroidVideoImageBacking::Create(
-      mailbox, coded_size, spec.color_space, kTopLeft_GrSurfaceOrigin,
-      kPremul_SkAlphaType, /*debug_label=*/"DirectSIVideo", std::move(image),
-      std::move(shared_context), std::move(drdc_lock));
-
-  // Register it with shared image mailbox. This keeps |shared_image| around
-  // until its destruction cb is called. NOTE: Currently none of the video
-  // mailbox consumer uses shared image mailbox.
-  DCHECK(stub_->channel()->gpu_channel_manager()->shared_image_manager());
-  stub_->channel()->shared_image_stub()->factory()->RegisterBacking(
-      std::move(shared_image));
-
-  return true;
 }
 
 void GpuSharedImageVideoFactory::OnWillDestroyStub(bool have_context) {
